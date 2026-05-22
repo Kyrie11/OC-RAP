@@ -43,6 +43,9 @@ def main():
     ap.add_argument("--bev-dir", default=None)
     ap.add_argument("--output", required=True)
     ap.add_argument("--max-roots", type=int, default=None)
+    ap.add_argument("--rollout-backend", choices=["auto", "synthetic", "metadrive"], default="auto")
+    ap.add_argument("--scenario-dir", default=None, help="ScenarioNet database directory for real MetaDrive rollouts; defaults to root metadata scenario_dir.")
+    ap.add_argument("--metadrive-reactive-traffic", type=str, default="true")
     args = ap.parse_args()
     cfg = load_config(args.config)
     K = int(cfg.get("planner", {}).get("K", 16 if cfg.get("implementation_level") == "mvp" else 32))
@@ -50,6 +53,20 @@ def main():
     M = int(cfg.get("planner", {}).get("M", 4 if cfg.get("implementation_level") == "mvp" else 8))
     H_p = int(cfg.get("planner", {}).get("H_p", 10)); H_r = int(cfg.get("planner", {}).get("H_r", 25)); dt = float(cfg.get("planner", {}).get("dt", 0.2))
     root_dir = Path(args.root_dir)
+    root_meta = {}
+    meta_path = root_dir / "metadata.json"
+    if meta_path.exists():
+        root_meta = json.loads(meta_path.read_text())
+    rollout_backend = args.rollout_backend
+    if rollout_backend == "auto":
+        rollout_backend = "synthetic" if root_meta.get("is_synthetic", True) else "metadrive"
+    md_runner = None
+    if rollout_backend == "metadrive":
+        from recap.teacher.metadrive_rollout import MetaDriveRolloutRunner
+        scenario_dir = args.scenario_dir or root_meta.get("scenario_dir")
+        if not scenario_dir:
+            raise ValueError("--rollout-backend metadrive requires --scenario-dir or root metadata scenario_dir")
+        md_runner = MetaDriveRolloutRunner(scenario_dir=str(scenario_dir), reactive_traffic=args.metadrive_reactive_traffic.lower() in ("1", "true", "yes"))
     if (root_dir / "splits.json").exists() and args.split != "all":
         ids = json.loads((root_dir / "splits.json").read_text()).get(args.split, [])
     else:
@@ -92,7 +109,10 @@ def main():
                     if not (a.valid and o.valid):
                         margins["margin_option"][a_i,r_i,m_i]=-1.0
                         continue
-                    trace = synthetic_rollout(a,o,mode,H_p,H_r,dt,obj["regime"])
+                    if rollout_backend == "metadrive":
+                        trace = md_runner.rollout(obj, ego, a, o, mode, H_p, H_r, dt)
+                    else:
+                        trace = synthetic_rollout(a,o,mode,H_p,H_r,dt,obj["regime"])
                     e = evidence_from_trace(trace,{"H_p":H_p,"dt":dt})
                     P[a_i,r_i,m_i]=e["P_star"]; Praw[a_i,r_i,m_i]=e["P_raw_star"]; G[a_i,r_i,m_i]=e["G_star"]; C[a_i,r_i,m_i]=e["C_star"]; Kdef[a_i,r_i,m_i]=e["K_star"]
                     for kmap,ekey in [("margin_option","M_option"),("M_path_raw","M_path_raw"),("M_path_rec","M_path_rec"),("M_path_pre_no_first_contact","M_path_pre_no_first_contact"),("M_secondary","M_secondary"),("M_return","M_return"),("M_post","M_post")]:
@@ -129,11 +149,8 @@ def main():
         root_ids.append(rid); regimes.append(obj["regime"])
     arrays={k:np.stack(v) for k,v in all_arrays.items()}
     arrays.update({"bev":np.stack(bevs),"ego_info":np.stack(ego_infos),"route_command":np.stack(route_cmds),"root_ids":np.asarray(root_ids),"regime":np.asarray(regimes)})
-    root_meta = {}
-    meta_path = root_dir / "metadata.json"
-    if meta_path.exists():
-        root_meta = json.loads(meta_path.read_text())
-    metadata={"dataset_version":"metadrive_recovery_v0_synthetic","split":args.split,"split_by":"root_scene_id","implementation_level":cfg.get("implementation_level","mvp"),"K":K,"L":L,"M":M,"H_p":H_p,"H_r":H_r,"dt":dt,"mode_slot_semantics":MODE_SLOT_SEMANTICS[:M],"mode_alignment":"fixed_semantic_index","root_shared_mode_is_latent_context_not_open_loop_trajectory":True,"root_backend":root_meta.get("backend","unknown"),"is_synthetic":root_meta.get("is_synthetic", True),"paper_final_ready":False}
+    is_synthetic = bool(root_meta.get("is_synthetic", rollout_backend != "metadrive"))
+    metadata={"dataset_version":"metadrive_recovery_v1_real" if rollout_backend == "metadrive" else "metadrive_recovery_v0_synthetic","split":args.split,"split_by":"root_scene_id","implementation_level":cfg.get("implementation_level","mvp"),"K":K,"L":L,"M":M,"H_p":H_p,"H_r":H_r,"dt":dt,"mode_slot_semantics":MODE_SLOT_SEMANTICS[:M],"mode_alignment":"fixed_semantic_index","root_shared_mode_is_latent_context_not_open_loop_trajectory":True,"root_backend":root_meta.get("backend","unknown"),"rollout_backend":rollout_backend,"scenario_dir":args.scenario_dir or root_meta.get("scenario_dir"),"is_synthetic":is_synthetic,"paper_final_ready":rollout_backend == "metadrive" and not is_synthetic}
     write_dataset(args.output, arrays, metadata)
     print(f"wrote teacher labels for {len(ids)} roots to {args.output}")
 

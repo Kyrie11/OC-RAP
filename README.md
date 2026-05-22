@@ -121,7 +121,7 @@ python scripts/build_teacher_labels.py \
   --output data/recap/test.zarr
 ```
 
-Teacher labels enforce: same-root latent context, fixed prefix/recovery boundary, first-contact harm separated from R, post-contact recovery not killed by first-contact collision clearance.
+Teacher labels enforce[dataset_construction.diff](../dataset_construction.diff): same-root latent context, fixed prefix/recovery boundary, first-contact harm separated from R, post-contact recovery not killed by first-contact collision clearance.
 
 ## 6. CARE training
 
