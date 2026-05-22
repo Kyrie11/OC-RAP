@@ -15,15 +15,17 @@ BEV history + ego state + route command
 
 The main method is a BEV-level privileged-state planner, not raw camera/LiDAR perception and not a scalar collision-risk planner. The code keeps simulator-specific state access behind adapters and unit-tests the algorithmic invariants without requiring MetaDrive to be installed.
 
+**Important:** `scripts/collect_roots.py` currently supports the synthetic smoke-test backend only. It is useful for checking tensor schemas and algorithmic invariants, but it does not yet collect real MetaDrive root snapshots or real closed-loop teacher rollouts. Do not use synthetic outputs as the paper-final MetaDrive-Recovery dataset.
+
 ## 1. Project overview
 
 Core modules:
 
-- `metadrive_recovery/raster`: privileged BEV rasterization with fixed channel order.
-- `metadrive_recovery/proposals`: lattice bootstrap, deterministic projection, recovery options.
-- `metadrive_recovery/teacher`: root-shared modes, synthetic/MetaDrive rollout hooks, margins, labels.
-- `metadrive_recovery/models`: CARE, MERO, selector, neural proposal head, ablation scalar critic.
-- `metadrive_recovery/evaluation`: paper metrics and baselines.
+- `recap/raster`: privileged BEV rasterization with fixed channel order.
+- `recap/proposals`: lattice bootstrap, deterministic projection, recovery options.
+- `recap/teacher`: root-shared modes, synthetic/MetaDrive rollout hooks, margins, labels.
+- `recap/models`: CARE, MERO, selector, neural proposal head, ablation scalar critic.
+- `recap/evaluation`: paper metrics and baselines.
 - `scripts`: dataset construction, training, calibration, evaluation, ablations, table export.
 
 ## 2. Installation
@@ -50,7 +52,7 @@ python scripts/rasterize_bev.py \
   --split debug \
   --bev-config configs/bev_160_debug.yaml \
   --output data/debug/bev.zarr \
-  --write-channel-png true
+  --write-channel-png
 
 python scripts/build_teacher_labels.py \
   --config configs/ablations/mvp_fast_debug.yaml \
@@ -65,10 +67,10 @@ python scripts/offline_eval.py \
   --method oracle \
   --output outputs/ci/oracle
 ```
-
+[recap_dataset_construction_patch.diff](../recap_dataset_construction_patch.diff)
 ## 4. BEV rasterization
 
-The main BEV is produced by `metadrive_recovery/raster/bev_builder.py`, not MetaDrive `TopDownObservation`.
+The main BEV is produced by `recap/raster/bev_builder.py`, not MetaDrive `TopDownObservation`.
 
 ```bash
 python scripts/rasterize_bev.py \
@@ -90,7 +92,7 @@ python scripts/rasterize_bev.py \
   --root-id ROOT_ID_HERE \
   --bev-config configs/bev_256.yaml \
   --output data/debug/single_root_bev.zarr \
-  --write-channel-png true \
+  --write-channel-png \
   --debug-dir outputs/debug_bev/ROOT_ID_HERE
 ```
 
@@ -211,7 +213,7 @@ python scripts/rasterize_bev.py \
   --bev-config configs/bev_160_debug.yaml \
   --output data/debug/bev_debug.zarr \
   --save-debug all \
-  --write-channel-png true
+  --write-channel-png
 ```
 
 ## 13. Unit tests

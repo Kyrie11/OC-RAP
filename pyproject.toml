@@ -9,7 +9,8 @@ description = "ReCAP: CARE + MERO recoverability-centered planning over MetaDriv
 requires-python = ">=3.10"
 
 [tool.setuptools.packages.find]
-include = ["metadrive_recovery*"]
+include = ["recap*"]
+namespaces = true
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

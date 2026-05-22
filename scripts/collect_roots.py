@@ -56,9 +56,18 @@ def main():
     ap.add_argument("--config", default=None)
     ap.add_argument("--output", default="data/recap/roots_raw")
     ap.add_argument("--max-roots", type=int, default=None)
-    ap.add_argument("--synthetic", type=str, default="true")
+    ap.add_argument("--synthetic", type=str, default="true", help="Backward-compatible flag. Only true is implemented by this script.")
+    ap.add_argument("--backend", choices=["synthetic", "metadrive"], default=None, help="Root collection backend. Real MetaDrive collection is not implemented in this script yet.")
     args = ap.parse_args()
     cfg = load_config(args.config)
+    synthetic_flag = args.synthetic.lower() in ("1", "true", "yes")
+    backend = args.backend or ("synthetic" if synthetic_flag else "metadrive")
+    if backend != "synthetic":
+        raise NotImplementedError(
+            "Real MetaDrive root collection is not implemented in scripts/collect_roots.py. "
+            "This script only creates synthetic schema/debug roots. Implement a ScenarioEnv/MetaDriveEnv "
+            "collector with true simulator snapshots before claiming paper-final MetaDrive-Recovery data."
+        )
     n = int(args.max_roots or cfg.get("dataset", {}).get("num_roots", 32))
     out = Path(args.output); out.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(int(cfg.get("seed", 0)))
@@ -74,7 +83,14 @@ def main():
         split_map[split].append(rid)
         write_json(out / f"{rid}.json", synthetic_root(rid, int(rng.integers(0, 10_000_000)), regime))
     write_json(out / "splits.json", split_map)
-    write_json(out / "metadata.json", {"backend": "metadrive_synthetic" if args.synthetic.lower() == "true" else "metadrive", "num_roots": n, "split_by": "root_scene_id", "implementation_level": cfg.get("implementation_level", "mvp")})
+    write_json(out / "metadata.json", {
+        "backend": "metadrive_synthetic",
+        "num_roots": n,
+        "split_by": "root_scene_id",
+        "implementation_level": cfg.get("implementation_level", "mvp"),
+        "is_synthetic": True,
+        "paper_final_ready": False,
+    })
     print(f"wrote {n} roots to {out}")
 
 if __name__ == "__main__":

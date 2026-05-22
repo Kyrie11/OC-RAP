@@ -59,10 +59,15 @@ def main():
     if args.bev_dir:
         try:
             bev_arrays, bev_meta = read_dataset(args.bev_dir)
-        except Exception:
-            bev_arrays = {}
+        except Exception as exc:
+            raise RuntimeError(f"Failed to read BEV dataset from {args.bev_dir}") from exc
     else:
-        bev_arrays = {}
+        bev_arrays, bev_meta = {}, {}
+    bev_index_by_root = {}
+    if "bev" in bev_arrays:
+        if "root_ids" not in bev_arrays:
+            raise ValueError("BEV dataset is missing root_ids; refusing positional root/BEV alignment.")
+        bev_index_by_root = {str(r): j for j, r in enumerate(bev_arrays["root_ids"])}
     all_arrays = {k: [] for k in ["actions_states","actions_controls","actions_params","action_mask","options_states_ref","options_controls_ref","options_params","option_mask","mode_probs","mode_seed_params","margin_option","Y_option","Y_action","R_star","witness","witness_gap","M_path_raw","M_path_rec","M_path_pre_no_first_contact","M_secondary","M_return","M_post","P_star","P_raw_star","G_star","C_star","U_star","U_scene","U_mode","U_interact","H_star","H_action_star","H_source","K_star"]}
     # Also pass through BEV arrays if available or zero-fill.
     bevs=[]; ego_infos=[]; route_cmds=[]; root_ids=[]; regimes=[]
@@ -114,14 +119,21 @@ def main():
         for k,v in ot.items(): all_arrays[k].append(v)
         for k,v in {"mode_probs":mode_probs,"mode_seed_params":mode_seed_params_array(modes[:M]),"margin_option":margins["margin_option"],"Y_option":Y,"Y_action":Y_action,"R_star":R_star,"witness":witness,"witness_gap":witness_gap,"M_path_raw":margins["M_path_raw"],"M_path_rec":margins["M_path_rec"],"M_path_pre_no_first_contact":margins["M_path_pre_no_first_contact"],"M_secondary":margins["M_secondary"],"M_return":margins["M_return"],"M_post":margins["M_post"],"P_star":P.astype(np.float16),"P_raw_star":Praw.astype(np.float16),"G_star":G.astype(np.float16),"C_star":C.astype(np.float16),"U_star":U.astype(np.float16),"U_scene":U_scene.astype(np.float16),"U_mode":U_mode.astype(np.float16),"U_interact":U_interact.astype(np.float16),"H_star":H.astype(np.float16),"H_action_star":H_action.astype(np.float16),"H_source":Hsrc,"K_star":Kdef.astype(np.float16)}.items():
             all_arrays[k].append(v)
-        if "bev" in bev_arrays and idx < len(bev_arrays["bev"]):
-            bevs.append(bev_arrays["bev"][idx]); ego_infos.append(bev_arrays["ego_info"][idx]); route_cmds.append(bev_arrays["route_command"][idx])
+        if "bev" in bev_arrays:
+            if rid not in bev_index_by_root:
+                raise KeyError(f"root_id {rid} is missing from BEV dataset {args.bev_dir}")
+            bidx = bev_index_by_root[rid]
+            bevs.append(bev_arrays["bev"][bidx]); ego_infos.append(bev_arrays["ego_info"][bidx]); route_cmds.append(bev_arrays["route_command"][bidx])
         else:
-            bevs.append(np.zeros((10,24,160,160),np.float16)); ego_infos.append(np.zeros(11,np.float32)); route_cmds.append(np.zeros((20,6),np.float32))
+            bevs.append(np.zeros((10,24,256,256),np.float16)); ego_infos.append(np.zeros(11,np.float32)); route_cmds.append(np.zeros((20,6),np.float32))
         root_ids.append(rid); regimes.append(obj["regime"])
     arrays={k:np.stack(v) for k,v in all_arrays.items()}
     arrays.update({"bev":np.stack(bevs),"ego_info":np.stack(ego_infos),"route_command":np.stack(route_cmds),"root_ids":np.asarray(root_ids),"regime":np.asarray(regimes)})
-    metadata={"dataset_version":"metadrive_recovery_v0_synthetic","split":args.split,"split_by":"root_scene_id","implementation_level":cfg.get("implementation_level","mvp"),"K":K,"L":L,"M":M,"H_p":H_p,"H_r":H_r,"dt":dt,"mode_slot_semantics":MODE_SLOT_SEMANTICS[:M],"mode_alignment":"fixed_semantic_index","root_shared_mode_is_latent_context_not_open_loop_trajectory":True}
+    root_meta = {}
+    meta_path = root_dir / "metadata.json"
+    if meta_path.exists():
+        root_meta = json.loads(meta_path.read_text())
+    metadata={"dataset_version":"metadrive_recovery_v0_synthetic","split":args.split,"split_by":"root_scene_id","implementation_level":cfg.get("implementation_level","mvp"),"K":K,"L":L,"M":M,"H_p":H_p,"H_r":H_r,"dt":dt,"mode_slot_semantics":MODE_SLOT_SEMANTICS[:M],"mode_alignment":"fixed_semantic_index","root_shared_mode_is_latent_context_not_open_loop_trajectory":True,"root_backend":root_meta.get("backend","unknown"),"is_synthetic":root_meta.get("is_synthetic", True),"paper_final_ready":False}
     write_dataset(args.output, arrays, metadata)
     print(f"wrote teacher labels for {len(ids)} roots to {args.output}")
 
