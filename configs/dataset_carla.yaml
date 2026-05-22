@@ -1,0 +1,19 @@
+implementation_level: final
+backend: carla
+carla:
+  recorder_file: null
+  map_name: null
+  carla_version: null
+  traffic_manager_seed: null
+  fork_support_required_for_teacher_labels: true
+schema:
+  reuse_metadrive_recovery_schema: true
+  model_inputs: [bev, ego_info, route_command]
+  forbid_model_inputs: [actor_log_table, future_trajectories, recorder_packets]
+planner:
+  K: 32
+  L: 12
+  M: 8
+  H_p: 10
+  H_r: 25
+  dt: 0.2

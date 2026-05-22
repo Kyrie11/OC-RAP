@@ -1,0 +1,11 @@
+numpy>=1.24
+scipy>=1.10
+pyyaml>=6.0
+torch>=2.0
+h5py>=3.8
+pillow>=9.0
+pytest>=7.0
+zarr>=2.16
+# Optional for real simulator runs:
+# metadrive-simulator
+# carla

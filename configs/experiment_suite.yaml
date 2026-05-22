@@ -1,0 +1,10 @@
+experiments:
+  - name: full_method
+    config: configs/ablations/final_main.yaml
+    method: ours
+  - name: mean_over_options
+    config: configs/ablations/mean_options.yaml
+    ablation: mean_over_options
+  - name: no_root_sharing
+    config: configs/ablations/no_root_sharing.yaml
+    ablation: no_root_sharing

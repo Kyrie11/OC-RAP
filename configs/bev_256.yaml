@@ -1,0 +1,34 @@
+bev:
+  H: 256
+  W: 256
+  range_x: [-40.0, 40.0]
+  range_y: [-40.0, 40.0]
+  history_steps: 10
+  dt: 0.2
+  mode: compact
+  velocity_scale: 20.0
+  speed_limit_scale: 20.0
+  ego_origin: vehicle_center
+  image_forward: row_decrease
+  image_left: col_increase
+channels:
+  required_order:
+    - drivable_area
+    - lane_boundary
+    - lane_centerline
+    - route_corridor
+    - speed_limit_map
+    - traffic_control_stop
+    - static_obstacle
+    - occlusion_mask
+    - free_space_pocket
+    - affordance_stop
+    - affordance_lane
+    - affordance_route
+    - affordance_escape
+    - ego_current
+    - ego_history_decay
+    - dyn_occ_t0
+    - dyn_vx_t0
+    - dyn_vy_t0
+  compact_history_occ_channels: 6
