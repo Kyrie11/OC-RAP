@@ -143,6 +143,7 @@ class MetaDriveRolloutRunner:
     log_level: int = 50
     strict_root_alignment: bool = True
     alignment_tolerance_m: float = 5.0
+    restore_root_time: bool = True
     controller: PurePursuitPID = field(default_factory=PurePursuitPID)
     adapter: MetaDriveStateAdapter = field(default_factory=lambda: MetaDriveStateAdapter(strict=False))
 
@@ -179,12 +180,82 @@ class MetaDriveRolloutRunner:
         _gym_reset(env, seed=start_index)
         return env
 
+    @staticmethod
+    def _root_tick(root_obj: Dict[str, Any]) -> int:
+        meta = root_obj.get("scenario_data", {}) or {}
+        for src in (meta, root_obj):
+            for key in ("current_time_index", "root_tick"):
+                if key in src:
+                    try:
+                        return max(0, int(src[key]))
+                    except Exception:
+                        pass
+        return 0
+
+    @staticmethod
+    def _history_ego_world_states(root_obj: Dict[str, Any]) -> np.ndarray:
+        rows: List[List[float]] = []
+        for item in root_obj.get("history", []) or []:
+            e = (item or {}).get("ego_state", {}) or {}
+            try:
+                rows.append([
+                    float(e.get("x", 0.0)),
+                    float(e.get("y", 0.0)),
+                    float(e.get("heading", 0.0)),
+                    float(e.get("v", 0.0)),
+                    float(e.get("a_long", 0.0)),
+                    0.0,
+                ])
+            except Exception:
+                continue
+        return np.asarray(rows, dtype=np.float32)
+
+    def _advance_env_to_root_tick(self, env, root_obj: Dict[str, Any], dt: float) -> None:
+        """Replay the observed ego history so ScenarioEnv reaches the stored root tick.
+
+        MetaDrive ScenarioEnv spawns the controllable ego from the first SDC state
+        in the centralized ScenarioDescription.  WOMD planning roots, however,
+        are usually at ``current_time_index`` (10 for the standard 1 s history).
+        Without this short replay, the subsequent action-prefix rollout starts
+        from the wrong time even when the coordinates are centralized correctly.
+
+        This is intentionally conservative: it only uses the root JSON history
+        that was already used for BEV construction, and the normal strict root
+        alignment check below remains the authority.
+        """
+        if not self.restore_root_time:
+            return
+        tick = self._root_tick(root_obj)
+        if tick <= 0:
+            return
+        hist = self._history_ego_world_states(root_obj)
+        if hist.size == 0:
+            return
+        # history_from_scenario(t, H) stores the most recent states ending at the
+        # root tick.  If H == tick this is exactly t=1..tick; if H is shorter, use
+        # the available suffix and let alignment decide whether this is adequate.
+        targets = hist[-min(len(hist), tick):]
+        zero_ctrl = np.zeros((max(1, len(targets)), 3), dtype=np.float32)
+        for k in range(len(targets)):
+            ego = self.adapter.get_ego_state(env)
+            ref_slice = targets[k : min(len(targets), k + 10)]
+            if len(ref_slice) == 0:
+                ref_slice = targets[k : k + 1]
+            action_md = self.controller.track(ego, ref_slice, zero_ctrl[: len(ref_slice)])
+            step_out = env.step(np.clip(action_md, -1.0, 1.0).astype(np.float32))
+            # Do not stop early on collision/offroad.  We are reconstructing an
+            # observed prefix before evaluating counterfactual recovery; the
+            # post-replay alignment check is the relevant guard.
+            if not isinstance(step_out, tuple):
+                continue
+
     def rollout(self, root_obj: Dict[str, Any], root_ego: EgoState, action: ActionPrefix, option: RecoveryOption, mode: RootModeSeed, H_p: int = 10, H_r: int = 25, dt: float = 0.2, root_map_features: Optional[MapFeatures] = None) -> RolloutTrace:
         ref_local_nominal = np.concatenate([action.states, option.states_ref[1:]], axis=0).astype(np.float32)
         ref_local = _apply_mode_to_reference(ref_local_nominal, mode)
         ref_world = local_states_to_world(root_ego, ref_local)
         ref_controls = np.concatenate([action.controls[:, :3], option.controls_ref[:, :3]], axis=0).astype(np.float32)
         env = self._make_env(root_obj, mode)
+        self._advance_env_to_root_tick(env, root_obj, dt)
         rng = np.random.default_rng(int(mode.rng_seed))
         delayed_actions: List[np.ndarray] = []
         delay_steps = max(0, int(round(float(mode.actuation_delay) / max(float(dt), 1e-6))))
@@ -196,11 +267,13 @@ class MetaDriveRolloutRunner:
                 tick = (root_obj.get("scenario_data", {}) or {}).get("current_time_index", root_obj.get("root_tick", "unknown"))
                 raise RuntimeError(
                     f"MetaDrive reset/root mismatch for {rid}: env ego is {d0:.2f} m from root ego "
-                    f"at root tick {tick}. This usually means roots were sampled from arbitrary "
-                    "temporal ticks (for example max-samples-per-log > 1) but ScenarioEnv was "
-                    "only reset by scenario index. Re-collect paper-final MetaDrive roots with "
-                    "--max-samples-per-log 1, or pass --allow-temporal-root-rollout only for "
-                    "debug after verifying installed MetaDrive can restore root time."
+                    f"at root tick {tick}. If this distance is thousands of meters, the root JSON "
+                    "was almost certainly collected from uncentralized ScenarioNet/WOMD coordinates; "
+                    "re-run collect_metadrive_roots.py with the patched read_scenario_data(..., "
+                    "centralize=True) path and regenerate BEV. If it is only tens of meters, root-time "
+                    "replay did not reproduce the WOMD current_time_index; reduce the root tick, "
+                    "increase alignment_tolerance_m only for diagnostics, or implement simulator-native "
+                    "root snapshot restore before using labels as paper-final."
                 )
         states_world: List[np.ndarray] = []
         controls: List[np.ndarray] = []
@@ -220,10 +293,10 @@ class MetaDriveRolloutRunner:
                 ego = self.adapter.get_ego_state(env)
                 actors = self.adapter.get_actor_states(env)
                 map_features = self.adapter.get_map_features(env)
-                if root_map_features is not None and not map_features.drivable_polygons:
+                if root_map_features is not None and (not map_features.drivable_polygons or "map_features" in self.adapter.unavailable):
                     # Some MetaDrive versions do not expose current_map internals through the adapter.
                     # Teacher margins should still be evaluated against the ScenarioNet/WOMD map stored in the root,
-                    # rather than silently treating drivable area as unknown.
+                    # rather than silently using the adapter's synthetic straight-road fallback.
                     map_features = root_map_features
                 local = world_states_to_local(root_ego, np.array([[ego.x, ego.y, ego.heading, ego.v, ego.a_long, 0.0]], dtype=np.float32))[0]
                 states_world.append(np.array([ego.x, ego.y, ego.heading, ego.v, ego.a_long, local[5]], dtype=np.float32))

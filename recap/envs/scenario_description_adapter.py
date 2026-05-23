@@ -183,14 +183,45 @@ def scenario_file_path(dataset_dir: str | Path, scenario_id: str, mapping: Optio
     return candidates[0]
 
 
-def read_scenario_description(path: str | Path) -> Dict[str, Any]:
+def _centralize_scenario_description(scenario: Any) -> Dict[str, Any]:
+    """Return a ScenarioDescription in the same coordinate frame used by ScenarioEnv.
+
+    MetaDrive's ScenarioEnv data manager loads ScenarioNet files with
+    ``read_scenario_data(..., centralize=True)``.  If roots are extracted from
+    the raw, uncentralized pickle coordinates, the stored root ego/map can be
+    kilometers away from the ego state produced by ``ScenarioEnv.reset()`` even
+    though both refer to the same WOMD scenario.  This helper mirrors
+    ScenarioEnv's loading convention and keeps root JSON, BEV rasterization, and
+    teacher rollouts in one coordinate system.
+    """
+    try:
+        from metadrive.scenario.scenario_description import ScenarioDescription as SD
+        scenario = SD.centralize_to_ego_car_initial_position(scenario)
+    except Exception:
+        # Older/non-MetaDrive test paths may only have plain pickles.  In that
+        # case return the scenario as-is; downstream alignment checks will still
+        # fail loudly if the coordinates do not match ScenarioEnv.
+        pass
+    return _scenario_dict(scenario)
+
+
+def read_scenario_description(path: str | Path, centralize: bool = True) -> Dict[str, Any]:
     try:
         from metadrive.scenario import utils as sd_utils
-        return _scenario_dict(sd_utils.read_scenario_data(str(path)))
+        try:
+            scenario = sd_utils.read_scenario_data(str(path), centralize=centralize)
+        except TypeError:
+            # Compatibility with older MetaDrive versions whose helper did not
+            # expose the centralize keyword.
+            scenario = sd_utils.read_scenario_data(str(path))
+            if centralize:
+                return _centralize_scenario_description(scenario)
+        return _scenario_dict(scenario)
     except Exception:
         import pickle
         with open(path, "rb") as f:
-            return _scenario_dict(pickle.load(f))
+            scenario = pickle.load(f)
+        return _centralize_scenario_description(scenario) if centralize else _scenario_dict(scenario)
 
 
 def load_scenarionet_summary(dataset_dir: str | Path):

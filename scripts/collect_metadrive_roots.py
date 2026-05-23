@@ -93,11 +93,14 @@ def _root_json(root_id: str, scenario_dir: Path, scenario_index: int, scenario_i
             "data_directory": str(scenario_dir),
             "scenario_index": int(scenario_index),
             "scenario_id": str(scenario_id),
+            "scenario_file_name": str(Path(scenario_pkl).name),
+            "waymo_scenario_id": str(summary.get("scenario_id", (scenario.get("metadata", {}) or {}).get("scenario_id", ""))),
             "scenario_pkl": str(scenario_pkl),
             "current_time_index": int(t),
             "source_dataset": (summary.get("dataset") or (scenario.get("metadata", {}) or {}).get("dataset") or "waymo"),
             "source_file": summary.get("source_file") or (scenario.get("metadata", {}) or {}).get("source_file"),
             "sdc_id": summary.get("sdc_id") or (scenario.get("metadata", {}) or {}).get("sdc_id"),
+            "coordinate_frame": "metadrive_centralized_sdc_initial",
         },
         "map_config": {"source": "scenarionet", "coordinate": (summary.get("coordinate") or (scenario.get("metadata", {}) or {}).get("coordinate"))},
         "traffic_config": {"source": "scenarionet_waymo", "num_objects": _num_objects(summary), "num_moving_objects": _moving_objects(summary)},
@@ -183,7 +186,11 @@ def main() -> None:
         if args.max_roots is not None and len(written) >= args.max_roots:
             break
         pkl = scenario_file_path(scenario_dir, sid, mapping)
-        scenario = read_scenario_description(pkl)
+        # Must match MetaDrive ScenarioEnv's data-loading convention.  ScenarioEnv
+        # centralizes ScenarioNet/WOMD coordinates to the SDC initial pose; root
+        # JSON extracted from raw global coordinates will be kilometers away from
+        # env.reset() and will fail teacher rollout alignment.
+        scenario = read_scenario_description(pkl, centralize=True)
         sm = summary.get(sid, {}) or {}
         ticks = _sample_root_ticks(scenario, sm, args.history_steps, args.max_samples_per_log, args.sample_stride)
         for sample_j, tick in enumerate(ticks):
@@ -214,6 +221,8 @@ def main() -> None:
         "requires_teacher_rollout": True,
         "max_samples_per_log_last_run": int(args.max_samples_per_log),
         "sample_stride_last_run": int(args.sample_stride),
+        "scenario_coordinate_frame": "metadrive_centralized_sdc_initial",
+        "read_scenario_data_centralize": True,
         "temporal_roots_require_state_restore_for_metadrive_rollout": bool(args.max_samples_per_log > 1),
         "regime_counts_last_run": regime_counts,
     }
