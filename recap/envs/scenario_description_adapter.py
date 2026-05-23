@@ -149,6 +149,23 @@ def _scenario_dict(scenario: Any) -> Dict[str, Any]:
         return scenario
 
 
+def _get_by_flexible_key(d: Dict[Any, Any], key: Any) -> Any:
+    if key is None:
+        return None
+    if key in d:
+        return d[key]
+    sk = str(key)
+    if sk in d:
+        return d[sk]
+    try:
+        ik = int(key)
+        if ik in d:
+            return d[ik]
+    except Exception:
+        pass
+    return None
+
+
 def scenario_file_path(dataset_dir: str | Path, scenario_id: str, mapping: Optional[Dict[str, str]] = None) -> Path:
     dataset_dir = Path(dataset_dir)
     rel = "" if mapping is None else mapping.get(scenario_id, "")
@@ -233,7 +250,7 @@ def extract_root_state_from_scenario(scenario: Dict[str, Any], t: Optional[int] 
     sdc_id = scenario_sdc_id(scenario, summary)
     if sdc_id is None and tracks:
         sdc_id = str(next(iter(tracks.keys())))
-    ego_track = tracks.get(sdc_id, None) if sdc_id is not None else None
+    ego_track = _get_by_flexible_key(tracks, sdc_id) if sdc_id is not None else None
     ego_actor = _track_to_actor(sdc_id or "sdc", ego_track, t) if ego_track else None
     if ego_actor is None:
         ego = EgoState()
@@ -331,8 +348,9 @@ def extract_route_info_from_scenario(scenario: Dict[str, Any], ego: EgoState, su
         t = scenario_current_time_index(scenario, summary)
     sdc_id = scenario_sdc_id(scenario, summary)
     tracks = scenario.get("tracks", {}) or {}
-    if sdc_id is not None and sdc_id in tracks:
-        state = tracks[sdc_id].get("state", {}) or {}
+    sdc_track = _get_by_flexible_key(tracks, sdc_id) if sdc_id is not None else None
+    if sdc_track is not None:
+        state = sdc_track.get("state", {}) or {}
         pos = _state_series(state, ["position", "pos", "center"])
         heading = _state_series(state, ["heading", "heading_theta", "yaw", "theta"])
         if pos is not None and pos.ndim >= 2 and pos.shape[0] > t + 1:

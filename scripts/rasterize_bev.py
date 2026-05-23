@@ -19,7 +19,8 @@ from recap.raster.bev_builder import BEVBuilder, HistoryBuffer
 from recap.raster.affordance_maps import AffordanceProvider
 from recap.raster.debug_draw import write_channel_pngs
 from recap.utils.datatypes import BEVSpec, EgoState, ActorState, MapFeatures, RouteInfo
-from recap.teacher.dataset_writer import write_dataset
+from recap.teacher.dataset_writer import ShardedDatasetWriter, write_dataset
+from recap.utils.progress import tqdm
 from scripts._common import load_config
 
 
@@ -59,8 +60,12 @@ def main():
     ap.add_argument("--bev-config", default="configs/bev_256.yaml")
     ap.add_argument("--channels", default="compact")
     ap.add_argument("--history-steps", type=int, default=None)
-    ap.add_argument("--num-workers", type=int, default=1)
+    ap.add_argument("--num-workers", type=int, default=1, help="Reserved for compatibility; rasterization is streamed in-process to keep memory bounded.")
     ap.add_argument("--output", required=True)
+    ap.add_argument("--max-roots", type=int, default=None)
+    ap.add_argument("--shard-size", type=int, default=8, help="Number of roots per output shard. 8 keeps 256x256x10x24 BEV memory below roughly 300 MB.")
+    ap.add_argument("--compress-shards", action="store_true", help="Use np.savez_compressed per shard. Saves disk but can be much slower.")
+    ap.add_argument("--single-npz", action="store_true", help="Legacy mode: materialize the full dataset in RAM and write one arrays.npz. Only use for tiny debug runs.")
     ap.add_argument("--save-debug", default="0")
     ap.add_argument("--write-channel-png", action="store_true")
     ap.add_argument("--debug-dir", default="outputs/debug_bev")
@@ -77,9 +82,19 @@ def main():
     elif split_file.exists() and args.split != "all":
         ids = json.loads(split_file.read_text()).get(args.split, [])
     else:
-        ids = sorted(p.stem for p in root_dir.glob("root_*.json"))
-    bevs=[]; ego_infos=[]; routes=[]; root_ids=[]
-    for n, rid in enumerate(ids):
+        ids = sorted(p.stem for p in root_dir.glob("*.json") if p.name not in ("metadata.json", "splits.json"))
+    if args.max_roots is not None:
+        ids = ids[: args.max_roots]
+    metadata = {
+        "bev_spec": spec.__dict__,
+        "channel_names": builder.channel_names,
+        "split": args.split,
+        "root_dir": str(root_dir),
+        "num_roots": len(ids),
+        "format_note": "sharded_npz keeps memory bounded; use read_dataset() for lazy loading.",
+    }
+
+    def build_one(n: int, rid: str) -> dict:
         obj, ego, actors, mf, route = load_root(root_dir / f"{rid}.json")
         hist = _load_history(obj, spec)
         if not hist.ego_history:
@@ -89,13 +104,27 @@ def main():
                 aa = [ActorState(a.actor_id, a.x - a.vx * spec.dt * h, a.y - a.vy * spec.dt * h, a.heading, a.vx, a.vy, a.length, a.width, a.actor_type, a.dynamic) for a in actors]
                 hist.push(e, aa)
         out = builder.build_from_state(ego, actors, mf, route, hist, AffordanceProvider())
-        bevs.append(out["bev"]); ego_infos.append(out["ego_info"]); routes.append(out["route_command"]); root_ids.append(rid)
         if args.write_channel_png and (args.save_debug == "all" or n < int(args.save_debug or 0)):
             write_channel_pngs(out["bev"], out["debug"]["channel_names"], Path(args.debug_dir) / rid)
-    arrays = {"bev": np.stack(bevs).astype(np.float16), "ego_info": np.stack(ego_infos).astype(np.float32), "route_command": np.stack(routes).astype(np.float32), "root_ids": np.asarray(root_ids)}
-    metadata = {"bev_spec": spec.__dict__, "channel_names": builder.channel_names, "split": args.split, "root_dir": str(root_dir)}
-    write_dataset(args.output, arrays, metadata)
-    print(f"rasterized {len(root_ids)} roots to {args.output}")
+        return {
+            "bev": out["bev"].astype(np.float16, copy=False),
+            "ego_info": out["ego_info"].astype(np.float32, copy=False),
+            "route_command": out["route_command"].astype(np.float32, copy=False),
+            "root_ids": str(rid),
+        }
+
+    if args.single_npz:
+        bevs=[]; ego_infos=[]; routes=[]; root_ids=[]
+        for n, rid in enumerate(tqdm(ids, desc="rasterize_bev", unit="root")):
+            sample = build_one(n, rid)
+            bevs.append(sample["bev"]); ego_infos.append(sample["ego_info"]); routes.append(sample["route_command"]); root_ids.append(sample["root_ids"])
+        arrays = {"bev": np.stack(bevs).astype(np.float16), "ego_info": np.stack(ego_infos).astype(np.float32), "route_command": np.stack(routes).astype(np.float32), "root_ids": np.asarray(root_ids)}
+        write_dataset(args.output, arrays, metadata)
+    else:
+        with ShardedDatasetWriter(args.output, metadata, shard_size=args.shard_size, compressed=args.compress_shards) as writer:
+            for n, rid in enumerate(tqdm(ids, desc="rasterize_bev", unit="root")):
+                writer.append(build_one(n, rid))
+    print(f"rasterized {len(ids)} roots to {args.output}")
 
 if __name__ == "__main__":
     main()
