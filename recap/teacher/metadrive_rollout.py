@@ -179,7 +179,7 @@ class MetaDriveRolloutRunner:
         _gym_reset(env, seed=start_index)
         return env
 
-    def rollout(self, root_obj: Dict[str, Any], root_ego: EgoState, action: ActionPrefix, option: RecoveryOption, mode: RootModeSeed, H_p: int = 10, H_r: int = 25, dt: float = 0.2) -> RolloutTrace:
+    def rollout(self, root_obj: Dict[str, Any], root_ego: EgoState, action: ActionPrefix, option: RecoveryOption, mode: RootModeSeed, H_p: int = 10, H_r: int = 25, dt: float = 0.2, root_map_features: Optional[MapFeatures] = None) -> RolloutTrace:
         ref_local_nominal = np.concatenate([action.states, option.states_ref[1:]], axis=0).astype(np.float32)
         ref_local = _apply_mode_to_reference(ref_local_nominal, mode)
         ref_world = local_states_to_world(root_ego, ref_local)
