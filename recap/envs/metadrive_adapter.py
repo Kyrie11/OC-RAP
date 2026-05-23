@@ -79,14 +79,15 @@ class MetaDriveStateAdapter:
         return actors
 
     def get_map_features(self, env) -> MapFeatures:
-        # MetaDrive exposes map/lane internals differently across versions.  The
-        # fallback builds a wide straight drivable corridor only for debug/smoke.
+        # MetaDrive exposes map/lane internals differently across versions. Until
+        # a version-specific extractor is implemented, return an explicit debug
+        # fallback instead of an empty MapFeatures object. Teacher rollouts pass
+        # ScenarioNet/WOMD root maps separately and prefer them for margins.
         try:
             current_map = getattr(getattr(env, "engine", None), "current_map", None)
             if current_map is None:
                 raise AttributeError("engine.current_map missing")
-            # Keep extraction conservative; exact lane geometry is version-specific.
-            # Users can extend this method for their installed MetaDrive release.
+            raise NotImplementedError("current_map extraction is version-specific")
         except Exception as e:
             self._mark("map_features", f"using synthetic straight corridor fallback: {e!r}")
             drivable = np.array([[-80, -8], [120, -8], [120, 8], [-80, 8]], dtype=np.float32)
@@ -94,7 +95,7 @@ class MetaDriveStateAdapter:
             left = center + np.array([0.0, 1.8], dtype=np.float32)
             right = center + np.array([0.0, -1.8], dtype=np.float32)
             return MapFeatures([drivable], [center], [left, right], [], 13.9)
-        return MapFeatures()
+
 
     def get_navigation_route(self, env) -> RouteInfo:
         try:

@@ -26,19 +26,31 @@ def _plot_poly(ax, arr, closed=True, **kw):
     ax.plot(a[:, 0], a[:, 1], **kw)
 
 
+def _find_root_index(root_ids, rid: str) -> int | None:
+    target = str(rid)
+    for i in range(len(root_ids)):
+        if str(root_ids[i]) == target:
+            return int(i)
+    return None
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Visualize one ReCAP root and optional action/recovery labels.")
     ap.add_argument("--root", required=True, help="Path to root JSON or root_id when --root-dir is provided.")
     ap.add_argument("--root-dir", default=None)
     ap.add_argument("--labels", default=None)
     ap.add_argument("--action-index", type=int, default=0)
+    ap.add_argument("--auto-action", choices=["none", "best_recovery", "worst_recovery", "least_harm", "largest_harm"],
+                    default="none",
+                    help="Select action index from labels instead of --action-index; useful for diagnostics galleries.")
+    ap.add_argument("--summary-output", default=None, help="Optional JSON summary for the visualized root/action/mode.")
     ap.add_argument("--option-index", type=int, default=None, help="If omitted, use witness option for mode 0 when labels exist.")
     ap.add_argument("--mode-index", type=int, default=0)
     ap.add_argument("--output", required=True)
     args = ap.parse_args()
     root_path = Path(args.root)
     if args.root_dir:
-        root_path = Path(args.root_dir) / f"{args.root}.json"
+        root_path = Path(args.root_dir) / f"{Path(args.root).stem}.json"
     root = json.loads(root_path.read_text())
     fig, ax = plt.subplots(figsize=(8, 8))
     mf = root.get("map_features", {})
@@ -58,9 +70,22 @@ def main() -> None:
     if args.labels:
         arrays, meta = read_dataset(args.labels)
         rid = root["root_id"]
-        idxs = np.where(arrays["root_ids"].astype(str) == rid)[0]
-        if len(idxs):
-            i = int(idxs[0]); ai = args.action_index; mi = args.mode_index
+        i = _find_root_index(arrays["root_ids"], rid) if "root_ids" in arrays else None
+        if i is not None:
+            ai = args.action_index; mi = args.mode_index
+            if args.auto_action != "none":
+                mask = np.asarray(arrays.get("action_mask", np.ones_like(arrays["R_star"][i], dtype=bool))[i],
+                                  dtype=bool) if "R_star" in arrays else None
+                if args.auto_action in ("best_recovery", "worst_recovery") and "R_star" in arrays:
+                    score = np.asarray(arrays["R_star"][i], dtype=np.float32).copy()
+                    if mask is not None and mask.shape == score.shape:
+                        score[~mask] = -np.inf if args.auto_action == "best_recovery" else np.inf
+                    ai = int(np.nanargmax(score) if args.auto_action == "best_recovery" else np.nanargmin(score))
+                elif args.auto_action in ("least_harm", "largest_harm") and "H_action_star" in arrays:
+                    score = np.asarray(arrays["H_action_star"][i], dtype=np.float32).copy()
+                    if mask is not None and mask.shape == score.shape:
+                        score[~mask] = np.inf if args.auto_action == "least_harm" else -np.inf
+                    ai = int(np.nanargmin(score) if args.auto_action == "least_harm" else np.nanargmax(score))
             act = arrays["actions_states"][i, ai]
             x0, y0, hd = float(ego["x"]), float(ego["y"]), float(ego["heading"])
             c, s = np.cos(hd), np.sin(hd)
@@ -79,8 +104,25 @@ def main() -> None:
                 ow[:, 0] = x0 + c * x - s * y
                 ow[:, 1] = y0 + s * x + c * y
                 ax.plot(ow[:, 0], ow[:, 1], linewidth=1.8, linestyle="--", label=f"option {oi}")
-            title_extra = f" R={arrays['R_star'][i, ai]:.3f}" if "R_star" in arrays else ""
-            ax.set_title(f"{rid}{title_extra}")
+            parts = []
+            if "R_star" in arrays:
+                parts.append(f"R={float(arrays['R_star'][i, ai]):.3f}")
+            if "H_action_star" in arrays:
+                parts.append(f"H={float(arrays['H_action_star'][i, ai]):.3f}")
+            title_extra = (" " + " ".join(parts)) if parts else ""
+            ax.set_title(f"{rid} action={ai} mode={mi}{title_extra}")
+            if args.summary_output:
+                summary = {"root_id": rid, "action_index": int(ai), "mode_index": int(mi)}
+                for key in ["R_star", "H_action_star", "Y_action", "witness", "witness_gap"]:
+                    if key in arrays:
+                        try:
+                            val = np.asarray(arrays[key][i])
+                            summary[key] = val.tolist() if val.ndim <= 2 else "omitted_high_dim"
+                        except Exception:
+                            pass
+                sp = Path(args.summary_output)
+                sp.parent.mkdir(parents=True, exist_ok=True)
+                sp.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     ax.set_aspect("equal", adjustable="box")
     ax.legend(loc="best")
     ax.grid(True, alpha=0.2)

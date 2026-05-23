@@ -28,7 +28,7 @@ Core modules:
 - `recap/evaluation`: paper metrics and baselines.
 - `scripts`: dataset construction, training, calibration, evaluation, ablations, table export.
 
-## 2. Installation
+## 2. Installa[关键指令.txt](../%E5%85%B3%E9%94%AE%E6%8C%87%E4%BB%A4.txt)tion
 
 ```bash
 pip install -r requirements.txt

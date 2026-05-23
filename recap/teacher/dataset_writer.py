@@ -47,6 +47,17 @@ class ShardedArray:
     def __len__(self) -> int:
         return self.shape[0]
 
+    def __iter__(self):
+        for i in range(len(self)):
+            yield self[i]
+
+    def tolist(self):
+        return [self[i].item() if np.asarray(self[i]).shape == () else self[i] for i in range(len(self))]
+
+    def iter_shard_arrays(self) -> Iterator[np.ndarray]:
+        for shard_idx in range(len(self.shards)):
+            yield self._load_shard(shard_idx)[self.name]
+
     def _load_shard(self, shard_idx: int) -> Dict[str, np.ndarray]:
         if shard_idx in self._cache:
             self._cache.move_to_end(shard_idx)

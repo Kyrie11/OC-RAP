@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 from typing import Dict, List
@@ -61,9 +62,11 @@ def _root_json(root_id: str, scenario_dir: Path, scenario_index: int, scenario_i
     ego, actors = extract_root_state_from_scenario(scenario, t=t, summary=summary)
     mf = extract_map_features_from_scenario(scenario)
     route = extract_route_info_from_scenario(scenario, ego, summary=summary, t=t)
-    hist = history_from_scenario(scenario, t, history_steps)
+    hist = history_from_scenario(scenario, t, history_steps, summary=summary)
     regime = _classify_regime(ego, actors, summary)
-    seed = abs(hash(str(scenario_id))) % (2**31 - 1)
+    # Python's built-in hash() is intentionally randomized across processes,
+    # which would make root-shared mode seeds non-reproducible.
+    seed = int.from_bytes(hashlib.blake2b(str(scenario_id).encode("utf-8"), digest_size=8).digest(), "little") % (2**31 - 1)
     return {
         "root_id": root_id,
         "seed": int(seed),
@@ -211,6 +214,7 @@ def main() -> None:
         "requires_teacher_rollout": True,
         "max_samples_per_log_last_run": int(args.max_samples_per_log),
         "sample_stride_last_run": int(args.sample_stride),
+        "temporal_roots_require_state_restore_for_metadrive_rollout": bool(args.max_samples_per_log > 1),
         "regime_counts_last_run": regime_counts,
     }
     write_json(meta_path, metadata)

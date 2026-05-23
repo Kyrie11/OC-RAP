@@ -62,6 +62,9 @@ def main():
     ap.add_argument("--rollout-backend", choices=["auto", "synthetic", "metadrive"], default="auto")
     ap.add_argument("--scenario-dir", default=None, help="ScenarioNet database directory for real MetaDrive rollouts; root metadata scenario_dir is used per-root when present.")
     ap.add_argument("--metadrive-reactive-traffic", type=str, default="true")
+    ap.add_argument("--allow-temporal-root-rollout", action="store_true", help="Allow real MetaDrive rollout on roots sampled at multiple ticks from the same scenario. This is unsafe unless your MetaDrive runner restores the exact root tick; default is to fail fast for paper-final labels.")
+    ap.add_argument("--disable-root-alignment-check", action="store_true", help="Debug only: do not verify that ScenarioEnv reset matches the stored root ego pose.")
+    ap.add_argument("--alignment-tolerance-m", type=float, default=5.0)
     ap.add_argument("--shard-size", type=int, default=4, help="Number of roots per label shard. Keep small because BEV is large.")
     ap.add_argument("--compress-shards", action="store_true", help="Use np.savez_compressed per shard. Saves disk but can be much slower.")
     ap.add_argument("--single-npz", action="store_true", help="Legacy mode: materialize all labels/BEV in RAM and write one arrays.npz. Only for tiny debug runs.")
@@ -91,7 +94,21 @@ def main():
         scenario_dir = args.scenario_dir or root_meta.get("scenario_dir")
         if not scenario_dir:
             raise ValueError("--rollout-backend metadrive requires --scenario-dir or root metadata scenario_dir")
-        md_runner = MetaDriveRolloutRunner(scenario_dir=str(scenario_dir), reactive_traffic=args.metadrive_reactive_traffic.lower() in ("1", "true", "yes"))
+        multi_tick_roots = int(root_meta.get("max_samples_per_log_last_run", 1) or 1) > 1 or bool(root_meta.get("temporal_roots_require_state_restore_for_metadrive_rollout", False))
+        if multi_tick_roots and not args.allow_temporal_root_rollout:
+            raise ValueError(
+                "This root set was collected with max-samples-per-log > 1. The current real MetaDrive "
+                "rollout runner resets ScenarioEnv by scenario index and cannot guarantee restoration to each "
+                "stored _tXXX root tick. For paper-final real teacher labels, re-run "
+                "collect_metadrive_roots.py with --max-samples-per-log 1. Use "
+                "--allow-temporal-root-rollout only for debug after independently verifying root-time restore."
+            )
+        md_runner = MetaDriveRolloutRunner(
+            scenario_dir=str(scenario_dir),
+            reactive_traffic=args.metadrive_reactive_traffic.lower() in ("1", "true", "yes"),
+            strict_root_alignment=not bool(args.disable_root_alignment_check or args.allow_temporal_root_rollout),
+            alignment_tolerance_m=float(args.alignment_tolerance_m),
+        )
 
     ids = _select_ids(root_dir, args.split, args.max_roots)
 
@@ -131,7 +148,12 @@ def main():
         "paper_final_ready": rollout_backend == "metadrive" and not is_synthetic,
         "num_roots": len(ids),
         "bev_dir": args.bev_dir,
+        "bev_metadata": bev_meta,
+        "channel_names": bev_meta.get("channel_names", []),
         "format_note": "sharded_npz keeps memory bounded; use read_dataset() for lazy loading.",
+        "allow_temporal_root_rollout": bool(args.allow_temporal_root_rollout),
+        "root_alignment_check": not bool(args.disable_root_alignment_check or args.allow_temporal_root_rollout),
+        "alignment_tolerance_m": float(args.alignment_tolerance_m),
     }
 
     def build_one(idx: int, rid: str) -> dict:
@@ -173,7 +195,7 @@ def main():
                         margins["margin_option"][a_i, r_i, m_i] = -1.0
                         continue
                     if rollout_backend == "metadrive":
-                        trace = md_runner.rollout(obj, ego, a, o, mode, H_p, H_r, dt)
+                        trace = md_runner.rollout(obj, ego, a, o, mode, H_p, H_r, dt, root_map_features=mf)
                     else:
                         trace = synthetic_rollout(a, o, mode, H_p, H_r, dt, obj["regime"])
                     e = evidence_from_trace(trace, {"H_p": H_p, "dt": dt})

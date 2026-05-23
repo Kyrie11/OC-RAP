@@ -1,0 +1,30 @@
+implementation_level: diagnostic
+seed: 0
+dataset:
+  num_roots: 32
+  split: {train: 0.70, calib: 0.15, test: 0.15}
+planner:
+  K_raw: 16
+  K: 8
+  L: 5
+  M: 4
+  H_p: 8
+  H_r: 12
+  dt: 0.2
+  alpha_R: 0.20
+selector:
+  eta_R: 0.70
+  epsilon_H: 0.05
+  delta_R: 0.05
+  delta_H: 0.05
+  xi: 0.05
+ablation:
+  enabled: false
+  name: diagnostic_fast
+  lattice_only: true
+  neural_proposal: false
+  K: 8
+  L: 5
+  M: 4
+  alpha_R: 0.20
+  alpha_H: 0.20

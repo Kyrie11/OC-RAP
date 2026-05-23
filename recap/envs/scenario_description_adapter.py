@@ -301,13 +301,13 @@ def extract_map_features_from_scenario(scenario: Dict[str, Any], default_speed_l
         poly = _poly_from_feature(feat)
         if poly is None:
             continue
-        speed = feat.get("speed_limit_mph", feat.get("speed_limit_kph", feat.get("speed_limit_mps", None)))
+        speed = feat.get("speed_limit_mps", feat.get("speed_limit_mph", feat.get("speed_limit_kph", None)))
         if speed is not None:
             try:
                 sp = float(speed)
-                if "mph" in feat:
+                if "speed_limit_mph" in feat:
                     sp *= 0.44704
-                elif "kph" in feat:
+                elif "speed_limit_kph" in feat:
                     sp /= 3.6
                 speeds.append(sp)
             except Exception:
@@ -374,10 +374,10 @@ def extract_route_info_from_scenario(scenario: Dict[str, Any], ego: EgoState, su
     return RouteInfo.straight(speed_limit_mps=mf.speed_limit_mps)
 
 
-def history_from_scenario(scenario: Dict[str, Any], t: int, history_steps: int) -> List[Tuple[EgoState, List[ActorState]]]:
+def history_from_scenario(scenario: Dict[str, Any], t: int, history_steps: int, summary: Optional[Dict[str, Any]] = None) -> List[Tuple[EgoState, List[ActorState]]]:
     out = []
     for j in range(max(0, t - history_steps + 1), t + 1):
-        out.append(extract_root_state_from_scenario(scenario, j))
+        out.append(extract_root_state_from_scenario(scenario, j, summary=summary))
     while len(out) < history_steps:
         out.insert(0, out[0] if out else (EgoState(), []))
     return out[-history_steps:]
