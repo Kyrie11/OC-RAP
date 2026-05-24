@@ -57,6 +57,30 @@ def _num_objects(summary: dict) -> int:
     return int((summary.get("number_summary", {}) or {}).get("num_objects", 0) or 0)
 
 
+def _parse_regime_counts(spec: str | None) -> Dict[str, int]:
+    if not spec:
+        return {}
+    out: Dict[str, int] = {}
+    aliases = {
+        "normal": "normal_high_headroom",
+        "low": "low_headroom",
+        "near": "near_contact",
+        "contact": "contact_post_contact",
+    }
+    for part in str(spec).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "=" not in part:
+            raise ValueError(f"Bad --target-regime-counts item {part!r}; expected name=count")
+        k, v = [x.strip() for x in part.split("=", 1)]
+        k = aliases.get(k, k)
+        if k not in REGIME_RATIOS:
+            raise ValueError(f"Unknown regime {k!r}; valid regimes are {sorted(REGIME_RATIOS)}")
+        out[k] = int(v)
+    return out
+
+
 def _root_json(root_id: str, scenario_dir: Path, scenario_index: int, scenario_id: str, scenario_pkl: Path, scenario: dict, summary: dict, history_steps: int, root_tick: int | None = None) -> dict:
     t = scenario_current_time_index(scenario, summary) if root_tick is None else int(root_tick)
     ego, actors = extract_root_state_from_scenario(scenario, t=t, summary=summary)
@@ -146,7 +170,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Collect ReCAP root JSON files from a MetaDrive/ScenarioNet real-world database.")
     ap.add_argument("--scenario-dir", required=True, help="ScenarioNet database containing dataset_summary.pkl.")
     ap.add_argument("--output", default="data/recap/roots_raw")
-    ap.add_argument("--split-name", choices=["train", "calib", "test", "debug"], default="train")
+    ap.add_argument("--split-name", choices=["train", "val", "calib", "test", "debug"], default="train")
     ap.add_argument("--max-roots", type=int, default=None)
     ap.add_argument("--start-index", type=int, default=0)
     ap.add_argument("--min-moving-objects", type=int, default=1)
@@ -154,16 +178,37 @@ def main() -> None:
     ap.add_argument("--history-steps", type=int, default=10)
     ap.add_argument("--max-samples-per-log", type=int, default=1, help="Number of temporal roots to sample from each scenario/log. Use 1 for ScenarioEnv-compatible paper-final closed-loop rollouts unless you have verified root-time restore.")
     ap.add_argument("--sample-stride", type=int, default=5, help="Minimum frame stride between temporal roots when max-samples-per-log > 1.")
+    ap.add_argument("--target-regime-counts", default="", help="Optional balanced collection target, e.g. normal=2000,low=2000,near=2000,contact=1000. When set, scanning continues until requested per-regime counts or --max-scenarios-to-scan is reached.")
+    ap.add_argument("--max-scenarios-to-scan", type=int, default=None, help="Optional cap on scenarios scanned when using --target-regime-counts.")
     ap.add_argument("--append", action="store_true", help="Append to existing root directory/splits instead of replacing split list.")
     args = ap.parse_args()
+    target_counts = _parse_regime_counts(args.target_regime_counts)
     scenario_dir = Path(args.scenario_dir)
     out = Path(args.output)
     out.mkdir(parents=True, exist_ok=True)
     summary, scenario_ids, mapping = load_scenarionet_summary(scenario_dir)
+    split_path = out / "splits.json"
+    existing_split_map = json.loads(split_path.read_text()) if args.append and split_path.exists() else {}
+    existing_scenario_ids = set()
+    for ids0 in existing_split_map.values():
+        for rid0 in ids0 or []:
+            p0 = out / f"{rid0}.json"
+            if not p0.exists():
+                continue
+            try:
+                sd0 = (json.loads(p0.read_text()).get("scenario_data", {}) or {})
+                if sd0.get("scenario_id"):
+                    existing_scenario_ids.add(str(sd0.get("scenario_id")))
+            except Exception:
+                continue
     candidates: List[tuple[int, str]] = []
     for idx, sid in enumerate(tqdm(scenario_ids, desc="scan_scenarios", unit="scenario")):
         if idx < args.start_index:
             continue
+        if str(sid) in existing_scenario_ids:
+            continue
+        if args.max_scenarios_to_scan is not None and len(candidates) >= int(args.max_scenarios_to_scan):
+            break
         sm = summary.get(sid, {}) or {}
         if _moving_objects(sm) < args.min_moving_objects:
             continue
@@ -171,19 +216,20 @@ def main() -> None:
             continue
         candidates.append((idx, sid))
         # max_roots is a cap on output root JSON files, not scenarios.  For multi-tick sampling, apply again while writing.
-        if args.max_roots is not None and len(candidates) * max(1, args.max_samples_per_log) >= args.max_roots:
+        if not target_counts and args.max_roots is not None and len(candidates) * max(1, args.max_samples_per_log) >= args.max_roots:
             break
-    split_path = out / "splits.json"
     if args.append and split_path.exists():
-        split_map = json.loads(split_path.read_text())
+        split_map = existing_split_map
     else:
-        split_map = {"train": [], "calib": [], "test": [], "debug": []}
+        split_map = {"train": [], "val": [], "calib": [], "test": [], "debug": []}
     regime_counts: Dict[str, int] = {k: 0 for k in REGIME_RATIOS}
     written = []
     split_entries = split_map.setdefault(args.split_name, [])
     split_seen = set(split_entries)
     for j, (scenario_index, sid) in enumerate(tqdm(candidates, desc="write_roots", unit="scenario")):
         if args.max_roots is not None and len(written) >= args.max_roots:
+            break
+        if target_counts and all(regime_counts.get(k, 0) >= v for k, v in target_counts.items()):
             break
         pkl = scenario_file_path(scenario_dir, sid, mapping)
         # Must match MetaDrive ScenarioEnv's data-loading convention.  ScenarioEnv
@@ -201,6 +247,8 @@ def main() -> None:
             else:
                 root_id = f"{args.split_name}_{scenario_index:08d}_t{int(tick):03d}"
             root = _root_json(root_id, scenario_dir, scenario_index, sid, pkl, scenario, sm, args.history_steps, root_tick=int(tick))
+            if target_counts and regime_counts.get(root["regime"], 0) >= target_counts.get(root["regime"], 0):
+                continue
             write_json(out / f"{root_id}.json", root)
             if root_id not in split_seen:
                 split_entries.append(root_id)
@@ -225,6 +273,7 @@ def main() -> None:
         "read_scenario_data_centralize": True,
         "temporal_roots_require_state_restore_for_metadrive_rollout": bool(args.max_samples_per_log > 1),
         "regime_counts_last_run": regime_counts,
+        "target_regime_counts_last_run": target_counts,
     }
     write_json(meta_path, metadata)
     print(json.dumps({"written": len(written), "split": args.split_name, "output": str(out), "regime_counts": regime_counts}, indent=2), flush=True)

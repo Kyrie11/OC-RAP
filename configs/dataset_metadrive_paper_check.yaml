@@ -1,0 +1,30 @@
+implementation_level: paper_check
+seed: 0
+dataset:
+  num_roots: 384
+  split: {train: 0.70, calib: 0.15, test: 0.15}
+planner:
+  K_raw: 64
+  K: 32
+  L: 12
+  M: 8
+  H_p: 10
+  H_r: 25
+  dt: 0.2
+  alpha_R: 0.20
+selector:
+  eta_R: 0.70
+  epsilon_H: 0.05
+  delta_R: 0.05
+  delta_H: 0.05
+  xi: 0.05
+ablation:
+  enabled: false
+  name: paper_check
+  lattice_only: true
+  neural_proposal: false
+  K: 32
+  L: 12
+  M: 8
+  alpha_R: 0.20
+  alpha_H: 0.20

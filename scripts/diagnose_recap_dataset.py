@@ -199,6 +199,60 @@ def _bev_health(arrays: dict, meta: dict, sample_roots: int) -> dict | None:
         "empty_channels_in_sample": suspicious,
     }
 
+
+def _mode_health(arrays: dict, max_roots: int | None = None) -> dict:
+    out = {}
+    if "Y_action" in arrays:
+        x = arrays["Y_action"]
+        n = len(x) if max_roots is None else min(len(x), int(max_roots))
+        vals = []
+        for i in range(n):
+            arr = np.asarray(x[i], dtype=np.float32)
+            if arr.ndim >= 2:
+                vals.append(float(np.nanmean(np.nanstd(arr, axis=-1))))
+        out["mode_label_disagreement"] = _stats(np.asarray(vals, dtype=np.float32)) if vals else {"count": 0}
+    if "margin_option" in arrays:
+        x = arrays["margin_option"]
+        n = len(x) if max_roots is None else min(len(x), int(max_roots))
+        vals = []
+        for i in range(n):
+            arr = np.asarray(x[i], dtype=np.float32)  # [K,L,M]
+            if arr.ndim >= 3:
+                best_per_mode = np.nanmax(arr, axis=1)  # [K,M]
+                vals.append(float(np.nanmean(np.nanstd(best_per_mode, axis=-1))))
+        out["mode_best_margin_disagreement"] = _stats(np.asarray(vals, dtype=np.float32)) if vals else {"count": 0}
+    return out
+
+
+def _paper_quality_gate(report: dict) -> dict:
+    """Conservative pre-full-generation checks, not final paper metrics."""
+    n = int(report.get("num_roots", 0) or 0)
+    lh = report.get("label_health") or {}
+    all_zero = int(lh.get("all_zero_R_roots", 0) or 0)
+    nontriv = float(lh.get("nontrivial_action_ranking_rate", 0.0) or 0.0)
+    pos_root_rate = 1.0 - float(all_zero) / max(n, 1)
+    regimes = report.get("regime_counts") or {}
+    mode_h = report.get("mode_health") or {}
+    mode_label = float(((mode_h.get("mode_label_disagreement") or {}).get("mean", 0.0) or 0.0))
+    mode_margin = float(((mode_h.get("mode_best_margin_disagreement") or {}).get("mean", 0.0) or 0.0))
+    margin_max = float(((report.get("margin_option") or {}).get("max", -1.0) or -1.0))
+    checks = {
+        "has_positive_recovery_roots": pos_root_rate >= 0.20,
+        "has_same_root_action_ranking": nontriv >= 0.20,
+        "has_root_shared_mode_variation": (mode_label > 0.01) or (mode_margin > 0.02),
+        "has_all_four_regimes": all(regimes.get(k, 0) > 0 for k in ["normal_high_headroom", "low_headroom", "near_contact", "contact_post_contact"]),
+        "has_positive_option_margin": margin_max > 0.0,
+    }
+    return {
+        "passed": bool(all(checks.values())),
+        "checks": checks,
+        "positive_recovery_root_rate": float(pos_root_rate),
+        "nontrivial_action_ranking_rate": float(nontriv),
+        "mode_label_disagreement_mean": float(mode_label),
+        "mode_best_margin_disagreement_mean": float(mode_margin),
+        "note": "Use as a pre-full-generation gate; final paper acceptance still requires held-out closed-loop evaluation.",
+    }
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Diagnostics for ReCAP/MetaDrive-Recovery label datasets.")
     ap.add_argument("--dataset", required=True)
@@ -224,10 +278,16 @@ def main() -> None:
                                          args.max_stat_values) if "H_action_star" in arrays else None,
         "margin_option": _stats(arrays["margin_option"],
                                          args.max_stat_values) if "margin_option" in arrays else None,
+        "M_path_raw": _stats(arrays["M_path_raw"], args.max_stat_values) if "M_path_raw" in arrays else None,
+        "M_path_rec": _stats(arrays["M_path_rec"], args.max_stat_values) if "M_path_rec" in arrays else None,
+        "M_return": _stats(arrays["M_return"], args.max_stat_values) if "M_return" in arrays else None,
+        "M_ctrl": _stats(arrays["M_ctrl"], args.max_stat_values) if "M_ctrl" in arrays else None,
+        "M_post": _stats(arrays["M_post"], args.max_stat_values) if "M_post" in arrays else None,
         "witness_gap": _stats(arrays["witness_gap"],
                                        args.max_stat_values) if "witness_gap" in arrays else None,
         "label_health": _label_health(arrays, root_ids, regimes,
                                                args.sample_roots) if "R_star" in arrays else None,
+        "mode_health": _mode_health(arrays, args.sample_roots),
         "bev_health": _bev_health(arrays, meta, args.sample_roots),
         "synthetic_guard": {
             "is_synthetic": bool(meta.get("is_synthetic", True)),
@@ -236,6 +296,12 @@ def main() -> None:
             "root_backend": meta.get("root_backend"),
         },
     }
+    report["paper_quality_gate"] = _paper_quality_gate(report)
+    if not report["paper_quality_gate"]["passed"]:
+        failed = [k for k, ok in report["paper_quality_gate"]["checks"].items() if not ok]
+        report.setdefault("warnings", []).append(
+            "Paper-quality gate failed: " + ", ".join(failed) + ". Do not start full training/generation until this passes on a paper-check sample."
+        )
     # Signature of a common MetaDrive adapter failure: the ego vehicle leaked into
     # the surrounding-actor list.  Its self-clearance is approximately
     # -0.5*(ego_length+ego_length)/8 = -4.7/8 = -0.5875, which exactly caps the

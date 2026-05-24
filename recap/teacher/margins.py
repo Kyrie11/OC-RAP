@@ -11,6 +11,9 @@ DEFAULT_MARGIN_PARAMS = {
     "grace_contact_steps": 2,
     "eta_A": {"stop": 0.35, "lane": 0.35, "route": 0.35, "escape": 0.35, "stabilize": 0.35},
     "hold_steps": 3,
+    "a_accel_max": 4.0,
+    "brake_max": 6.0,
+    "j_max": 8.0,
 }
 
 
@@ -70,8 +73,15 @@ def compute_margins(trace: RolloutTrace, params: dict | None = None) -> dict:
     else:
         a = controls[:, 0]
         jerk = np.gradient(a, p["dt"])
-        reserve_a = 1.0 - np.abs(a) / 4.0
-        reserve_j = 1.0 - np.abs(jerk) / 6.0
+        # Keep the control feasibility margin consistent with action projection:
+        # acceleration is limited to +4 m/s^2, but braking is allowed up to
+        # 6 m/s^2.  The previous symmetric abs(a)/4 rule incorrectly rejected
+        # many legitimate recovery-stop options and made labels almost all zero.
+        accel_den = max(float(p.get("a_accel_max", 4.0)), 1e-6)
+        brake_den = max(float(p.get("brake_max", 6.0)), 1e-6)
+        jerk_den = max(float(p.get("j_max", 8.0)), 1e-6)
+        reserve_a = np.where(a >= 0.0, 1.0 - a / accel_den, 1.0 - np.abs(a) / brake_den)
+        reserve_j = 1.0 - np.abs(jerk) / jerk_den
         M_ctrl = float(np.nanmin([np.nanmin(reserve_a), np.nanmin(reserve_j)]))
 
     if fc < 0:

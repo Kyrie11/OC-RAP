@@ -107,7 +107,10 @@ def main():
         md_runner = MetaDriveRolloutRunner(
             scenario_dir=str(scenario_dir),
             reactive_traffic=args.metadrive_reactive_traffic.lower() in ("1", "true", "yes"),
-            strict_root_alignment=not bool(args.disable_root_alignment_check or args.allow_temporal_root_rollout),
+            # Allowing temporal roots should not weaken alignment validation.  It
+            # only permits roots sampled at non-default ticks; the strict post-
+            # replay root-pose check remains on unless explicitly disabled.
+            strict_root_alignment=not bool(args.disable_root_alignment_check),
             alignment_tolerance_m=float(args.alignment_tolerance_m),
             restore_root_time=not bool(args.disable_root_time_replay),
         )
@@ -148,11 +151,11 @@ def main():
         "rollout_backend": rollout_backend,
         "scenario_dir": args.scenario_dir or root_meta.get("scenario_dir"),
         "is_synthetic": is_synthetic,
-        "paper_final_ready": rollout_backend == "metadrive" and not is_synthetic and implementation_level not in ("diagnostic", "mvp"),
+        "paper_final_ready": rollout_backend == "metadrive" and not is_synthetic and implementation_level == "final",
         "paper_final_ready_note": (
-            "diagnostic/mvp configs are for pipeline validation and idea debugging; use full K/L/M, full splits, "
+            "diagnostic/mvp/paper_check configs are for pipeline validation and idea debugging; use final config, full splits, "
             "and post-generation label-health checks for paper tables."
-            if implementation_level in ("diagnostic", "mvp") else "requires post-generation label-health validation"
+            if implementation_level != "final" else "requires post-generation label-health validation"
         ),
         "num_roots": len(ids),
         "bev_dir": args.bev_dir,
@@ -160,7 +163,7 @@ def main():
         "channel_names": bev_meta.get("channel_names", []),
         "format_note": "sharded_npz keeps memory bounded; use read_dataset() for lazy loading.",
         "allow_temporal_root_rollout": bool(args.allow_temporal_root_rollout),
-        "root_alignment_check": not bool(args.disable_root_alignment_check or args.allow_temporal_root_rollout),
+        "root_alignment_check": not bool(args.disable_root_alignment_check),
         "alignment_tolerance_m": float(args.alignment_tolerance_m),
         "root_time_replay": rollout_backend == "metadrive" and not bool(args.disable_root_time_replay),
     }
@@ -178,7 +181,7 @@ def main():
         G = np.zeros_like(P)
         C = np.zeros_like(P)
         Kdef = np.zeros_like(P)
-        margins = {name: np.zeros_like(P) for name in ["margin_option", "M_path_raw", "M_path_rec", "M_path_pre_no_first_contact", "M_secondary", "M_return", "M_post"]}
+        margins = {name: np.zeros_like(P) for name in ["margin_option", "M_path_raw", "M_path_rec", "M_path_pre_no_first_contact", "M_secondary", "M_return", "M_ctrl", "M_post"]}
         Y = np.zeros((K, L, M), bool)
         witness = np.zeros((K, M), np.int64)
         witness_gap = np.zeros((K, M), np.float32)
@@ -201,7 +204,8 @@ def main():
                 h_sources = []
                 for r_i, o in enumerate(opts[a_i]):
                     if not (a.valid and o.valid):
-                        margins["margin_option"][a_i, r_i, m_i] = -1.0
+                        for arr in margins.values():
+                            arr[a_i, r_i, m_i] = -1.0
                         continue
                     if rollout_backend == "metadrive":
                         trace = md_runner.rollout(obj, ego, a, o, mode, H_p, H_r, dt, root_map_features=mf)
@@ -213,7 +217,7 @@ def main():
                     G[a_i, r_i, m_i] = e["G_star"]
                     C[a_i, r_i, m_i] = e["C_star"]
                     Kdef[a_i, r_i, m_i] = e["K_star"]
-                    for kmap, ekey in [("margin_option", "M_option"), ("M_path_raw", "M_path_raw"), ("M_path_rec", "M_path_rec"), ("M_path_pre_no_first_contact", "M_path_pre_no_first_contact"), ("M_secondary", "M_secondary"), ("M_return", "M_return"), ("M_post", "M_post")]:
+                    for kmap, ekey in [("margin_option", "M_option"), ("M_path_raw", "M_path_raw"), ("M_path_rec", "M_path_rec"), ("M_path_pre_no_first_contact", "M_path_pre_no_first_contact"), ("M_secondary", "M_secondary"), ("M_return", "M_return"), ("M_ctrl", "M_ctrl"), ("M_post", "M_post")]:
                         margins[kmap][a_i, r_i, m_i] = e[ekey]
                     Y[a_i, r_i, m_i] = e["Y_option"]
                     h_values.append(e["H_star"])
@@ -255,6 +259,7 @@ def main():
             "M_path_pre_no_first_contact": margins["M_path_pre_no_first_contact"],
             "M_secondary": margins["M_secondary"],
             "M_return": margins["M_return"],
+            "M_ctrl": margins["M_ctrl"],
             "M_post": margins["M_post"],
             "P_star": P.astype(np.float16),
             "P_raw_star": Praw.astype(np.float16),
