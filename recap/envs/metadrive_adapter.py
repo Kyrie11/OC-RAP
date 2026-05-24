@@ -47,6 +47,13 @@ class MetaDriveStateAdapter:
     def get_actor_states(self, env) -> List[ActorState]:
         actors: List[ActorState] = []
         engine = getattr(env, "engine", None)
+        agent = getattr(env, "agent", None) or getattr(engine, "agent", None)
+        ego_ids = set()
+        if agent is not None:
+            for attr in ("id", "name", "agent_id"):
+                val = getattr(agent, attr, None)
+                if val is not None:
+                    ego_ids.add(str(val))
         manager = getattr(engine, "traffic_manager", None)
         objs = []
         try:
@@ -63,6 +70,18 @@ class MetaDriveStateAdapter:
         seen = set()
         for j, obj in enumerate(objs):
             oid = str(getattr(obj, "id", f"actor_{j}"))
+            # MetaDrive versions differ in what engine.get_objects() returns.
+            # Some include the controllable SDC/ego vehicle.  Treating that
+            # object as surrounding traffic makes every root start in collision
+            # with itself: _actor_clearance() becomes about -4.7/8 = -0.5875,
+            # which collapses all teacher recoverability labels to zero.  Filter
+            # by object identity and stable id/name fields, but do not use a
+            # loose position-only filter that could hide a genuine overlap with
+            # another vehicle.
+            if agent is not None and obj is agent:
+                continue
+            if oid in ego_ids:
+                continue
             if oid in seen:
                 continue
             seen.add(oid)

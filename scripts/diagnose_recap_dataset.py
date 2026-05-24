@@ -236,6 +236,18 @@ def main() -> None:
             "root_backend": meta.get("root_backend"),
         },
     }
+    # Signature of a common MetaDrive adapter failure: the ego vehicle leaked into
+    # the surrounding-actor list.  Its self-clearance is approximately
+    # -0.5*(ego_length+ego_length)/8 = -4.7/8 = -0.5875, which exactly caps the
+    # best option margin and makes every recoverability label false.
+    mo = report.get("margin_option") or {}
+    lh = report.get("label_health") or {}
+    if float(mo.get("max", 1.0)) <= -0.55 and int(lh.get("all_zero_R_roots", -1)) == int(report.get("num_roots", -2)):
+        report.setdefault("warnings", []).append(
+            "All roots have zero R_star and max margin_option is near -0.5875. "
+            "This is the signature of ego/self being included as a traffic actor in MetaDriveStateAdapter.get_actor_states(). "
+            "Regenerate teacher labels after filtering the ego from actor_states."
+        )
     if args.roots:
         root_dir = Path(args.roots)
         missing = [rid for rid in root_ids if not (root_dir / f"{rid}.json").exists()]

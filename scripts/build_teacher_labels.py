@@ -129,11 +129,12 @@ def main():
         bev_index_by_root = {str(r): j for j, r in enumerate(bev_root_ids)}
 
     is_synthetic = bool(root_meta.get("is_synthetic", rollout_backend != "metadrive"))
+    implementation_level = str(cfg.get("implementation_level", "mvp"))
     metadata = {
         "dataset_version": "metadrive_recovery_v1_real" if rollout_backend == "metadrive" else "metadrive_recovery_v0_synthetic",
         "split": args.split,
         "split_by": "root_scene_id",
-        "implementation_level": cfg.get("implementation_level", "mvp"),
+        "implementation_level": implementation_level,
         "K": K,
         "L": L,
         "M": M,
@@ -147,7 +148,12 @@ def main():
         "rollout_backend": rollout_backend,
         "scenario_dir": args.scenario_dir or root_meta.get("scenario_dir"),
         "is_synthetic": is_synthetic,
-        "paper_final_ready": rollout_backend == "metadrive" and not is_synthetic,
+        "paper_final_ready": rollout_backend == "metadrive" and not is_synthetic and implementation_level not in ("diagnostic", "mvp"),
+        "paper_final_ready_note": (
+            "diagnostic/mvp configs are for pipeline validation and idea debugging; use full K/L/M, full splits, "
+            "and post-generation label-health checks for paper tables."
+            if implementation_level in ("diagnostic", "mvp") else "requires post-generation label-health validation"
+        ),
         "num_roots": len(ids),
         "bev_dir": args.bev_dir,
         "bev_metadata": bev_meta,
