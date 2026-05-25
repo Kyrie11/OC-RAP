@@ -130,7 +130,7 @@ def _apply_mode_to_action(action_md: np.ndarray, mode: RootModeSeed, rng: np.ran
     out = np.asarray(action_md, dtype=np.float32).copy()
     if np.isfinite(mode.control_noise_std) and float(mode.control_noise_std) > 0.0:
         out += rng.normal(0.0, float(mode.control_noise_std), size=out.shape).astype(np.float32)
-    if np.isfinite(mode.braking_noise) and float(mode.braking_noise) > 0.0:
+    if np.isfinite(mode.braking_noise) and abs(float(mode.braking_noise)) > 0.0:
         out[1] = min(float(out[1]), -abs(float(mode.braking_noise)))
     return np.clip(out, -1.0, 1.0).astype(np.float32)
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,11 @@ if str(_ROOT) not in sys.path:
 import numpy as np
 
 from recap.teacher.dataset_writer import ShardedDatasetWriter, read_dataset
+from recap.utils.progress import tqdm
+
+
+def _natural_key(path: Path) -> list[Any]:
+    return [int(s) if s.isdigit() else s for s in re.split(r"(\d+)", path.name)]
 
 
 def _sample_at(arrays: dict[str, Any], idx: int) -> dict[str, Any]:
@@ -34,17 +40,23 @@ def main() -> None:
     ap.add_argument("--compress-shards", action="store_true")
     args = ap.parse_args()
 
-    inputs = [Path(p) for p in args.inputs]
+    inputs = sorted((Path(p) for p in args.inputs), key=_natural_key)
     if not inputs:
         raise ValueError("no input datasets")
+    missing = [str(p) for p in inputs if not p.exists()]
+    if missing:
+        raise FileNotFoundError(f"input datasets do not exist: {missing}")
     first_arrays, first_meta = read_dataset(inputs[0])
     expected_keys = set(first_arrays.keys())
     metadata = dict(first_meta)
     metadata.update({
         "merged_from": [str(p) for p in inputs],
         "merge_num_parts": len(inputs),
+        "root_start": 0,
+        "root_stride": 1,
     })
     total = 0
+    seen_root_ids: set[str] = set()
     with ShardedDatasetWriter(args.output, metadata, shard_size=args.shard_size, compressed=args.compress_shards) as writer:
         for p in inputs:
             arrays, meta = read_dataset(p)
@@ -52,14 +64,31 @@ def main() -> None:
             if keys != expected_keys:
                 raise ValueError(f"array key mismatch for {p}: missing={expected_keys-keys}, extra={keys-expected_keys}")
             n = len(next(iter(arrays.values()))) if arrays else 0
-            for i in range(n):
+            if "root_ids" in arrays:
+                root_ids = [str(x) for x in np.asarray(arrays["root_ids"]).astype(str).tolist()]
+                dup = sorted(r for r in root_ids if r in seen_root_ids)
+                if dup:
+                    raise ValueError(f"duplicate root_ids while merging {p}: {dup[:10]}")
+                seen_root_ids.update(root_ids)
+            for i in tqdm(range(n), desc=f"merge {p.name}", unit="root", leave=False):
                 writer.append(_sample_at(arrays, i))
             total += n
-    meta_path = Path(args.output) / "metadata.json"
+    out = Path(args.output)
+    meta_path = out / "metadata.json"
+    manifest_path = out / "shards.json"
     if meta_path.exists():
         meta = json.loads(meta_path.read_text())
         meta["num_roots"] = total
+        meta["root_end"] = total
         meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text())
+        manifest.setdefault("metadata", {})
+        manifest["metadata"]["num_roots"] = total
+        manifest["metadata"]["root_end"] = total
+        manifest["metadata"]["merged_from"] = [str(p) for p in inputs]
+        manifest["metadata"]["merge_num_parts"] = len(inputs)
+        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     print(json.dumps({"merged": total, "output": str(args.output), "parts": len(inputs)}, indent=2), flush=True)
 
 

@@ -89,8 +89,11 @@ def _root_json(root_id: str, scenario_dir: Path, scenario_index: int, scenario_i
     hist = history_from_scenario(scenario, t, history_steps, summary=summary)
     regime = _classify_regime(ego, actors, summary)
     # Python's built-in hash() is intentionally randomized across processes,
-    # which would make root-shared mode seeds non-reproducible.
-    seed = int.from_bytes(hashlib.blake2b(str(scenario_id).encode("utf-8"), digest_size=8).digest(), "little") % (2**31 - 1)
+    # which would make root-shared mode seeds non-reproducible.  Include the root
+    # tick so temporal roots from the same WOMD log remain distinct when
+    # --max-samples-per-log > 1 is used for diagnostics.
+    seed_key = f"{scenario_id}:{int(t)}"
+    seed = int.from_bytes(hashlib.blake2b(seed_key.encode("utf-8"), digest_size=8).digest(), "little") % (2**31 - 1)
     return {
         "root_id": root_id,
         "seed": int(seed),

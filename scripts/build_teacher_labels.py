@@ -11,6 +11,7 @@ if str(_ROOT) not in _sys.path:
 import argparse
 import json
 from pathlib import Path
+import time
 
 import numpy as np
 
@@ -24,6 +25,23 @@ from recap.teacher.dataset_writer import ShardedDatasetWriter, read_dataset, wri
 from recap.evaluation.metrics import weighted_lcvar_np
 from recap.utils.progress import tqdm
 from scripts._common import load_config
+
+
+def _append_progress(progress_file: str | None, record: dict) -> None:
+    """Append one JSONL progress record for external parallel supervisors.
+
+    Each build_teacher_labels process writes to its own progress file.  A parent
+    launcher can count these records and render a single global tqdm bar, while
+    the worker's normal stdout/stderr can still be redirected to a log file.
+    """
+    if not progress_file:
+        return
+    p = Path(progress_file)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    rec = {**record, "time": time.time()}
+    with p.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        f.flush()
 
 
 def load_root(path: Path):
@@ -73,6 +91,7 @@ def main():
     ap.add_argument("--root-start", type=int, default=0, help="Start index within the selected split. Useful for parallel CPU sharding.")
     ap.add_argument("--root-end", type=int, default=None, help="Exclusive end index within the selected split. Useful for parallel CPU sharding.")
     ap.add_argument("--root-stride", type=int, default=1, help="Keep every Nth root after root-start/root-end. Useful for parallel CPU sharding.")
+    ap.add_argument("--progress-file", default=None, help="Optional JSONL file updated once per completed root. Used by the parallel launcher to show a single tqdm bar.")
     ap.add_argument("--no-reuse-metadrive-env", action="store_true", help="Debug fallback: create a fresh ScenarioEnv for every rollout. Default reuses one env per root and calls reset(), which is much faster.")
     args = ap.parse_args()
 
@@ -123,7 +142,13 @@ def main():
     root_end = len(all_ids) if args.root_end is None else min(len(all_ids), int(args.root_end))
     root_start = max(0, int(args.root_start))
     root_stride = max(1, int(args.root_stride))
+    if root_start > root_end:
+        raise ValueError(f"--root-start ({root_start}) must be <= --root-end ({root_end})")
     ids = all_ids[root_start:root_end:root_stride]
+    if args.progress_file:
+        pf = Path(args.progress_file)
+        pf.parent.mkdir(parents=True, exist_ok=True)
+        pf.write_text("", encoding="utf-8")
 
     if args.bev_dir:
         try:
@@ -170,6 +195,7 @@ def main():
         "root_start": root_start,
         "root_end": root_end,
         "root_stride": root_stride,
+        "selected_root_count": len(ids),
         "bev_dir": args.bev_dir,
         "bev_metadata": bev_meta,
         "channel_names": bev_meta.get("channel_names", []),
@@ -312,13 +338,21 @@ def main():
         return sample
 
     if args.single_npz:
-        all_samples = [build_one(i, rid) for i, rid in enumerate(tqdm(ids, desc="teacher_labels", unit="root"))]
+        all_samples = []
+        pbar = tqdm(ids, desc=f"teacher_labels[{args.split}:{root_start}:{root_end}:{root_stride}]", unit="root", total=len(ids))
+        for idx, rid in enumerate(pbar):
+            sample = build_one(idx, rid)
+            all_samples.append(sample)
+            _append_progress(args.progress_file, {"event": "root_done", "split": args.split, "root_id": str(rid), "local_index": idx, "global_index": root_start + idx * root_stride, "done": idx + 1, "total": len(ids)})
         arrays = {k: np.stack([s[k] for s in all_samples]) if not isinstance(all_samples[0][k], str) else np.asarray([s[k] for s in all_samples]) for k in all_samples[0].keys()} if all_samples else {}
         write_dataset(args.output, arrays, metadata)
     else:
         with ShardedDatasetWriter(args.output, metadata, shard_size=args.shard_size, compressed=args.compress_shards) as writer:
-            for idx, rid in enumerate(tqdm(ids, desc="teacher_labels", unit="root")):
-                writer.append(build_one(idx, rid))
+            pbar = tqdm(ids, desc=f"teacher_labels[{args.split}:{root_start}:{root_end}:{root_stride}]", unit="root", total=len(ids))
+            for idx, rid in enumerate(pbar):
+                sample = build_one(idx, rid)
+                writer.append(sample)
+                _append_progress(args.progress_file, {"event": "root_done", "split": args.split, "root_id": str(rid), "local_index": idx, "global_index": root_start + idx * root_stride, "done": idx + 1, "total": len(ids)})
     print(f"wrote teacher labels for {len(ids)} roots to {args.output}")
 
 

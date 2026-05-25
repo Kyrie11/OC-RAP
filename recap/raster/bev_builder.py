@@ -32,6 +32,47 @@ class HistoryBuffer:
         self.actor_history = self.actor_history[-self.maxlen :]
 
 
+def _same_ego_state(a: EgoState, b: EgoState, atol: float = 1e-4) -> bool:
+    return bool(
+        abs(float(a.x) - float(b.x)) <= atol
+        and abs(float(a.y) - float(b.y)) <= atol
+        and abs(float(a.heading) - float(b.heading)) <= atol
+        and abs(float(a.v) - float(b.v)) <= atol
+    )
+
+
+def _same_actor_state(a: ActorState, b: ActorState, atol: float = 1e-4) -> bool:
+    return bool(
+        str(a.actor_id) == str(b.actor_id)
+        and abs(float(a.x) - float(b.x)) <= atol
+        and abs(float(a.y) - float(b.y)) <= atol
+        and abs(float(a.heading) - float(b.heading)) <= atol
+        and abs(float(a.vx) - float(b.vx)) <= atol
+        and abs(float(a.vy) - float(b.vy)) <= atol
+    )
+
+
+def _same_frame(ego_a: EgoState, actors_a: List[ActorState], ego_b: EgoState, actors_b: List[ActorState]) -> bool:
+    """Return True when a loaded history already ends at the current root.
+
+    The previous identity check (``history[-1] is ego``) duplicated the current
+    WOMD/ScenarioNet frame because ``rasterize_bev.py`` reconstructs `ego` and
+    history entries as distinct dataclass objects.  Duplicating the current frame
+    shifts out the oldest history frame and makes the decay/history channels less
+    faithful to the collected root.
+    """
+    if not _same_ego_state(ego_a, ego_b):
+        return False
+    if len(actors_a) != len(actors_b):
+        return False
+    by_id = {str(a.actor_id): a for a in actors_a}
+    for b in actors_b:
+        a = by_id.get(str(b.actor_id))
+        if a is None or not _same_actor_state(a, b):
+            return False
+    return True
+
+
 class BEVBuilder:
     def __init__(self, spec: BEVSpec, adapter: Optional[MetaDriveStateAdapter] = None, channel_names: Optional[List[str]] = None):
         self.spec = spec
@@ -54,7 +95,7 @@ class BEVBuilder:
     def build_from_state(self, ego: EgoState, actors: List[ActorState], map_features: MapFeatures, route_info: RouteInfo, history_buffer: Optional[HistoryBuffer] = None, affordance_provider: Optional[AffordanceProvider] = None) -> dict:
         if history_buffer is None:
             history_buffer = HistoryBuffer(self.spec.history_steps)
-        if len(history_buffer.ego_history) == 0 or history_buffer.ego_history[-1] is not ego:
+        if len(history_buffer.ego_history) == 0 or not _same_frame(history_buffer.ego_history[-1], history_buffer.actor_history[-1], ego, actors):
             history_buffer.push(ego, actors)
         C = len(self.channel_names)
         bev_frame = np.zeros((C, self.spec.H, self.spec.W), dtype=np.float32)

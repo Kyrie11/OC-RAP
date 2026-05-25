@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import numpy as np
-from recap.utils.datatypes import ActionPrefix, MapFeatures
+from recap.envs.scenario_motion import local_states_to_world
+from recap.utils.datatypes import ActionPrefix, EgoState, MapFeatures
 
 DEFAULT_BOUNDS = {
     "a_max": 4.0,
@@ -30,7 +31,7 @@ def project_controls(states: np.ndarray, controls: np.ndarray, speed_limit: floa
     return st, ct, violation
 
 
-def validate_prefix(prefix: ActionPrefix, map_features: MapFeatures | None = None, speed_limit: float = 13.9) -> ActionPrefix:
+def validate_prefix(prefix: ActionPrefix, map_features: MapFeatures | None = None, speed_limit: float = 13.9, ego: EgoState | None = None) -> ActionPrefix:
     st, ct, violation = project_controls(prefix.states, prefix.controls, speed_limit)
     valid = bool(prefix.valid)
     reason = prefix.mask_reason
@@ -43,9 +44,13 @@ def validate_prefix(prefix: ActionPrefix, map_features: MapFeatures | None = Non
     # Static collision rejection is only implemented for axis-aligned polygon bbox
     # overlap in this portable MVP. Dynamic conflicts are deliberately not rejected.
     if map_features is not None and map_features.static_obstacles:
+        # Prefix states are ego-local.  Map features from WOMD/ScenarioNet are in
+        # centralized world coordinates, so static-obstacle pruning must compare
+        # in world coordinates when the root ego pose is available.
+        check_states = local_states_to_world(ego, st) if ego is not None else st
         for obs in map_features.static_obstacles:
             omin, omax = np.min(obs, axis=0), np.max(obs, axis=0)
-            for x, y in st[:, :2]:
+            for x, y in check_states[:, :2]:
                 if omin[0] <= x <= omax[0] and omin[1] <= y <= omax[1]:
                     valid = False
                     reason = "static_collision"
