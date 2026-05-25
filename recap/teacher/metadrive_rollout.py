@@ -177,8 +177,21 @@ class MetaDriveRolloutRunner:
         cfg.update(_semantic_context_to_config(mode))
         cfg = _filter_supported_config(ScenarioEnv, cfg)
         env = ScenarioEnv(cfg)
-        _gym_reset(env, seed=start_index)
+        self.reset_env(env, root_obj)
         return env
+
+    def reset_env(self, env, root_obj: Dict[str, Any]) -> None:
+        """Reset an existing ScenarioEnv to the root scenario.
+
+        Creating a fresh ScenarioEnv for every (action, option, mode) rollout is
+        prohibitively slow.  ScenarioEnv.reset() is sufficient for this teacher
+        use case because mode perturbations are applied to the ego reference and
+        control stream, not through persistent simulator config.  The strict
+        root-alignment check in rollout() remains the correctness guard.
+        """
+        meta = root_obj.get("scenario_data", {}) or {}
+        start_index = int(meta.get("scenario_index", root_obj.get("scenario_index", 0)))
+        _gym_reset(env, seed=start_index)
 
     @staticmethod
     def _root_tick(root_obj: Dict[str, Any]) -> int:
@@ -249,12 +262,16 @@ class MetaDriveRolloutRunner:
             if not isinstance(step_out, tuple):
                 continue
 
-    def rollout(self, root_obj: Dict[str, Any], root_ego: EgoState, action: ActionPrefix, option: RecoveryOption, mode: RootModeSeed, H_p: int = 10, H_r: int = 25, dt: float = 0.2, root_map_features: Optional[MapFeatures] = None) -> RolloutTrace:
+    def rollout(self, root_obj: Dict[str, Any], root_ego: EgoState, action: ActionPrefix, option: RecoveryOption, mode: RootModeSeed, H_p: int = 10, H_r: int = 25, dt: float = 0.2, root_map_features: Optional[MapFeatures] = None, env=None) -> RolloutTrace:
         ref_local_nominal = np.concatenate([action.states, option.states_ref[1:]], axis=0).astype(np.float32)
         ref_local = _apply_mode_to_reference(ref_local_nominal, mode)
         ref_world = local_states_to_world(root_ego, ref_local)
         ref_controls = np.concatenate([action.controls[:, :3], option.controls_ref[:, :3]], axis=0).astype(np.float32)
-        env = self._make_env(root_obj, mode)
+        created_env = env is None
+        if created_env:
+            env = self._make_env(root_obj, mode)
+        else:
+            self.reset_env(env, root_obj)
         self._advance_env_to_root_tick(env, root_obj, dt)
         rng = np.random.default_rng(int(mode.rng_seed))
         delayed_actions: List[np.ndarray] = []
@@ -341,10 +358,11 @@ class MetaDriveRolloutRunner:
                 if offroad:
                     drivable_margin[-1] = min(drivable_margin[-1], -1.0)
         finally:
-            try:
-                env.close()
-            except Exception:
-                pass
+            if created_env:
+                try:
+                    env.close()
+                except Exception:
+                    pass
         states_world_arr = np.stack(states_world).astype(np.float32)
         states_local = world_states_to_local(root_ego, states_world_arr).astype(np.float32)
         if len(controls) < max(0, states_local.shape[0] - 1):

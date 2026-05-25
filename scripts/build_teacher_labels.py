@@ -70,6 +70,10 @@ def main():
     ap.add_argument("--compress-shards", action="store_true", help="Use np.savez_compressed per shard. Saves disk but can be much slower.")
     ap.add_argument("--single-npz", action="store_true", help="Legacy mode: materialize all labels/BEV in RAM and write one arrays.npz. Only for tiny debug runs.")
     ap.add_argument("--inner-progress", action="store_true", help="Show nested action-level progress for long real MetaDrive teacher generation.")
+    ap.add_argument("--root-start", type=int, default=0, help="Start index within the selected split. Useful for parallel CPU sharding.")
+    ap.add_argument("--root-end", type=int, default=None, help="Exclusive end index within the selected split. Useful for parallel CPU sharding.")
+    ap.add_argument("--root-stride", type=int, default=1, help="Keep every Nth root after root-start/root-end. Useful for parallel CPU sharding.")
+    ap.add_argument("--no-reuse-metadrive-env", action="store_true", help="Debug fallback: create a fresh ScenarioEnv for every rollout. Default reuses one env per root and calls reset(), which is much faster.")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
@@ -115,7 +119,11 @@ def main():
             restore_root_time=not bool(args.disable_root_time_replay),
         )
 
-    ids = _select_ids(root_dir, args.split, args.max_roots)
+    all_ids = _select_ids(root_dir, args.split, args.max_roots)
+    root_end = len(all_ids) if args.root_end is None else min(len(all_ids), int(args.root_end))
+    root_start = max(0, int(args.root_start))
+    root_stride = max(1, int(args.root_stride))
+    ids = all_ids[root_start:root_end:root_stride]
 
     if args.bev_dir:
         try:
@@ -158,6 +166,10 @@ def main():
             if implementation_level != "final" else "requires post-generation label-health validation"
         ),
         "num_roots": len(ids),
+        "num_roots_full_selected_split": len(all_ids),
+        "root_start": root_start,
+        "root_end": root_end,
+        "root_stride": root_stride,
         "bev_dir": args.bev_dir,
         "bev_metadata": bev_meta,
         "channel_names": bev_meta.get("channel_names", []),
@@ -194,45 +206,55 @@ def main():
         action_iter = range(len(actions))
         if args.inner_progress:
             action_iter = tqdm(action_iter, desc=f"{rid} actions", unit="action", leave=False)
-        for a_i in action_iter:
-            a = actions[a_i]
-            U_scene[a_i] = scene_uncertainty_from_action(a.states, 0.2 if obj["regime"] in ("near_contact", "contact_post_contact") else 0.0, len(actors) / 8)
-            for m_i, mode in enumerate(modes[:M]):
-                best = -1e9
-                second = -1e9
-                h_values = []
-                h_sources = []
-                for r_i, o in enumerate(opts[a_i]):
-                    if not (a.valid and o.valid):
-                        for arr in margins.values():
-                            arr[a_i, r_i, m_i] = -1.0
-                        continue
-                    if rollout_backend == "metadrive":
-                        trace = md_runner.rollout(obj, ego, a, o, mode, H_p, H_r, dt, root_map_features=mf)
-                    else:
-                        trace = synthetic_rollout(a, o, mode, H_p, H_r, dt, obj["regime"])
-                    e = evidence_from_trace(trace, {"H_p": H_p, "dt": dt})
-                    P[a_i, r_i, m_i] = e["P_star"]
-                    Praw[a_i, r_i, m_i] = e["P_raw_star"]
-                    G[a_i, r_i, m_i] = e["G_star"]
-                    C[a_i, r_i, m_i] = e["C_star"]
-                    Kdef[a_i, r_i, m_i] = e["K_star"]
-                    for kmap, ekey in [("margin_option", "M_option"), ("M_path_raw", "M_path_raw"), ("M_path_rec", "M_path_rec"), ("M_path_pre_no_first_contact", "M_path_pre_no_first_contact"), ("M_secondary", "M_secondary"), ("M_return", "M_return"), ("M_ctrl", "M_ctrl"), ("M_post", "M_post")]:
-                        margins[kmap][a_i, r_i, m_i] = e[ekey]
-                    Y[a_i, r_i, m_i] = e["Y_option"]
-                    h_values.append(e["H_star"])
-                    h_sources.append(e["H_source"])
-                    val = e["M_option"]
-                    if val > best:
-                        second = best
-                        best = val
-                        witness[a_i, m_i] = r_i
-                    elif val > second:
-                        second = val
-                H[a_i, m_i] = max(h_values) if h_values else 0.0
-                Hsrc[a_i, m_i] = max(h_sources) if h_sources else 0
-                witness_gap[a_i, m_i] = best - second if second > -1e8 else 0.0
-                U_interact[a_i, m_i] = 0.0
+        reusable_env = None
+        if rollout_backend == "metadrive" and not args.no_reuse_metadrive_env:
+            reusable_env = md_runner._make_env(obj, modes[0])
+        try:
+            for a_i in action_iter:
+                a = actions[a_i]
+                U_scene[a_i] = scene_uncertainty_from_action(a.states, 0.2 if obj["regime"] in ("near_contact", "contact_post_contact") else 0.0, len(actors) / 8)
+                for m_i, mode in enumerate(modes[:M]):
+                    best = -1e9
+                    second = -1e9
+                    h_values = []
+                    h_sources = []
+                    for r_i, o in enumerate(opts[a_i]):
+                        if not (a.valid and o.valid):
+                            for arr in margins.values():
+                                arr[a_i, r_i, m_i] = -1.0
+                            continue
+                        if rollout_backend == "metadrive":
+                            trace = md_runner.rollout(obj, ego, a, o, mode, H_p, H_r, dt, root_map_features=mf, env=reusable_env)
+                        else:
+                            trace = synthetic_rollout(a, o, mode, H_p, H_r, dt, obj["regime"])
+                        e = evidence_from_trace(trace, {"H_p": H_p, "dt": dt})
+                        P[a_i, r_i, m_i] = e["P_star"]
+                        Praw[a_i, r_i, m_i] = e["P_raw_star"]
+                        G[a_i, r_i, m_i] = e["G_star"]
+                        C[a_i, r_i, m_i] = e["C_star"]
+                        Kdef[a_i, r_i, m_i] = e["K_star"]
+                        for kmap, ekey in [("margin_option", "M_option"), ("M_path_raw", "M_path_raw"), ("M_path_rec", "M_path_rec"), ("M_path_pre_no_first_contact", "M_path_pre_no_first_contact"), ("M_secondary", "M_secondary"), ("M_return", "M_return"), ("M_ctrl", "M_ctrl"), ("M_post", "M_post")]:
+                            margins[kmap][a_i, r_i, m_i] = e[ekey]
+                        Y[a_i, r_i, m_i] = e["Y_option"]
+                        h_values.append(e["H_star"])
+                        h_sources.append(e["H_source"])
+                        val = e["M_option"]
+                        if val > best:
+                            second = best
+                            best = val
+                            witness[a_i, m_i] = r_i
+                        elif val > second:
+                            second = val
+                    H[a_i, m_i] = max(h_values) if h_values else 0.0
+                    Hsrc[a_i, m_i] = max(h_sources) if h_sources else 0
+                    witness_gap[a_i, m_i] = best - second if second > -1e8 else 0.0
+                    U_interact[a_i, m_i] = 0.0
+        finally:
+            if reusable_env is not None:
+                try:
+                    reusable_env.close()
+                except Exception:
+                    pass
 
         U = np.zeros((K, M), np.float32)
         for a_i in range(K):
