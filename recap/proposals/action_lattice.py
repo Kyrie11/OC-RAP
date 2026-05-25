@@ -77,7 +77,7 @@ def generate_lattice_actions(
                 offroute = abs(dy)
                 score = progress - 0.2 * jerk - 2.0 * curv - 0.3 * offroute
                 pref = ActionPrefix(aid, True, "lattice", states, controls, params, [], float(score))
-                candidates.append(validate_prefix(pref, map_features, speed_limit))
+                candidates.append(validate_prefix(pref, map_features, speed_limit, ego=ego))
                 aid += 1
     if K_raw and len(candidates) > int(K_raw):
         # K_raw is a cheap proposal-budget cap before final K pruning.

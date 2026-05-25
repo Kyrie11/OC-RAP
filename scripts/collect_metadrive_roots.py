@@ -31,23 +31,95 @@ from recap.utils.serialization import write_json
 from recap.utils.progress import tqdm
 
 
-def _min_actor_distance(ego, actors) -> float:
+
+def _actor_clearance(ego, actor) -> float:
+    center = float(np.hypot(actor.x - ego.x, actor.y - ego.y))
+    ego_radius = 0.5 * max(float(getattr(ego, "length", 4.7)), float(getattr(ego, "width", 1.9)))
+    actor_radius = 0.5 * max(float(getattr(actor, "length", 4.7)), float(getattr(actor, "width", 1.9)))
+    return center - ego_radius - actor_radius
+
+
+def _min_actor_clearance(ego, actors) -> float:
     if not actors:
         return float("inf")
-    return float(min(np.hypot(a.x - ego.x, a.y - ego.y) for a in actors))
+    return float(min(_actor_clearance(ego, a) for a in actors))
 
 
-def _classify_regime(ego, actors, summary: dict) -> str:
-    d = _min_actor_distance(ego, actors)
+def _closing_ttc(ego, actor) -> float:
+    rel_pos = np.asarray([actor.x - ego.x, actor.y - ego.y], dtype=np.float32)
+    d = float(np.linalg.norm(rel_pos))
+    if d < 1e-6:
+        return 0.0
+    ego_v = np.asarray([ego.v * np.cos(ego.heading), ego.v * np.sin(ego.heading)], dtype=np.float32)
+    actor_v = np.asarray([actor.vx, actor.vy], dtype=np.float32)
+    rel_v = actor_v - ego_v
+    closing = -float(np.dot(rel_pos / d, rel_v))
+    clearance = max(_actor_clearance(ego, actor), 0.0)
+    if closing <= 1e-3:
+        return float("inf")
+    return clearance / closing
+
+
+def _min_ttc(ego, actors) -> float:
+    if not actors:
+        return float("inf")
+    return float(min(_closing_ttc(ego, a) for a in actors))
+
+
+def _future_min_clearance(scenario: dict, summary: dict, t: int, horizon: int) -> tuple[float, float]:
+    T = _track_length(scenario, summary)
+    if T <= 0:
+        T = t + 1
+    hi = min(int(T) - 1, int(t) + max(0, int(horizon)))
+    best_clearance = float("inf")
+    best_ttc = float("inf")
+    for j in range(max(0, int(t)), hi + 1):
+        ego_j, actors_j = extract_root_state_from_scenario(scenario, t=j, summary=summary)
+        best_clearance = min(best_clearance, _min_actor_clearance(ego_j, actors_j))
+        best_ttc = min(best_ttc, _min_ttc(ego_j, actors_j))
+    return float(best_clearance), float(best_ttc)
+
+
+def _classify_regime(ego, actors, summary: dict, scenario: dict | None = None, t: int | None = None, lookahead_steps: int = 30) -> str:
+    # Use approximate actor-body clearance, not center distance.  Center-distance
+    # thresholds miss most vehicle contacts because two car centers can remain
+    # 4--6 m apart at body overlap.
+    clearance = _min_actor_clearance(ego, actors)
+    ttc = _min_ttc(ego, actors)
+    if scenario is not None and t is not None:
+        future_clearance, future_ttc = _future_min_clearance(scenario, summary, int(t), lookahead_steps)
+        clearance = min(clearance, future_clearance)
+        ttc = min(ttc, future_ttc)
     moving = int((summary.get("number_summary", {}) or {}).get("num_moving_objects", 0) or 0)
-    if d < 2.5:
+    if clearance <= 0.25:
         return "contact_post_contact"
-    if d < 8.0:
+    if clearance <= 2.0 or ttc <= 1.0:
         return "near_contact"
-    if d < 18.0 or moving >= 32:
+    if clearance <= 6.0 or ttc <= 2.5 or moving >= 32:
         return "low_headroom"
     return "normal_high_headroom"
 
+
+def _root_replay_history_ego(scenario: dict, summary: dict, t: int) -> list[dict]:
+    # Store the ego prefix from ScenarioEnv reset time to the root tick.  This is
+    # needed when roots are event-aligned later than current_time_index=10; the
+    # previous code only kept the last BEV history window, which is insufficient
+    # for replaying MetaDrive to the requested root time.
+    out = []
+    for j in range(0, max(0, int(t)) + 1):
+        e, _ = extract_root_state_from_scenario(scenario, t=j, summary=summary)
+        out.append(dataclass_to_jsonable(e))
+    return out
+
+
+def _tick_event_score(scenario: dict, summary: dict, t: int, lookahead_steps: int) -> tuple[int, float, float, float]:
+    ego, actors = extract_root_state_from_scenario(scenario, t=t, summary=summary)
+    clearance, ttc = _future_min_clearance(scenario, summary, int(t), lookahead_steps)
+    regime = _classify_regime(ego, actors, summary, scenario=scenario, t=int(t), lookahead_steps=lookahead_steps)
+    priority = {"contact_post_contact": 3, "near_contact": 2, "low_headroom": 1, "normal_high_headroom": 0}[regime]
+    # Higher is better: prioritize harder regimes, then smaller clearance/TTC.
+    severity = -min(clearance, 20.0) - 0.5 * min(ttc, 10.0)
+    return priority, severity, float(clearance), float(ttc)
 
 def _moving_objects(summary: dict) -> int:
     return int((summary.get("number_summary", {}) or {}).get("num_moving_objects", 0) or 0)
@@ -81,13 +153,13 @@ def _parse_regime_counts(spec: str | None) -> Dict[str, int]:
     return out
 
 
-def _root_json(root_id: str, scenario_dir: Path, scenario_index: int, scenario_id: str, scenario_pkl: Path, scenario: dict, summary: dict, history_steps: int, root_tick: int | None = None) -> dict:
+def _root_json(root_id: str, scenario_dir: Path, scenario_index: int, scenario_id: str, scenario_pkl: Path, scenario: dict, summary: dict, history_steps: int, root_tick: int | None = None, event_lookahead_steps: int = 30) -> dict:
     t = scenario_current_time_index(scenario, summary) if root_tick is None else int(root_tick)
     ego, actors = extract_root_state_from_scenario(scenario, t=t, summary=summary)
     mf = extract_map_features_from_scenario(scenario)
     route = extract_route_info_from_scenario(scenario, ego, summary=summary, t=t)
     hist = history_from_scenario(scenario, t, history_steps, summary=summary)
-    regime = _classify_regime(ego, actors, summary)
+    regime = _classify_regime(ego, actors, summary, scenario=scenario, t=t, lookahead_steps=event_lookahead_steps)
     # Python's built-in hash() is intentionally randomized across processes,
     # which would make root-shared mode seeds non-reproducible.  Include the root
     # tick so temporal roots from the same WOMD log remain distinct when
@@ -116,6 +188,7 @@ def _root_json(root_id: str, scenario_dir: Path, scenario_index: int, scenario_i
         "history": [
             {"ego_state": dataclass_to_jsonable(e), "actor_states": dataclass_to_jsonable(a)} for e, a in hist
         ],
+        "replay_history_ego": _root_replay_history_ego(scenario, summary, int(t)),
         "scenario_data": {
             "data_directory": str(scenario_dir),
             "scenario_index": int(scenario_index),
@@ -148,20 +221,31 @@ def _track_length(scenario: dict, summary: dict) -> int:
     return int(summary.get("track_length", summary.get("scenario_length", 0)) or 0)
 
 
-def _sample_root_ticks(scenario: dict, summary: dict, history_steps: int, max_samples: int, stride: int) -> list[int]:
+def _sample_root_ticks(scenario: dict, summary: dict, history_steps: int, max_samples: int, stride: int, event_aligned: bool = False, event_lookahead_steps: int = 30) -> list[int]:
     current = int(scenario_current_time_index(scenario, summary))
     max_samples = max(1, int(max_samples))
-    if max_samples == 1:
-        return [current]
     T = _track_length(scenario, summary)
     if T <= 0:
         return [current]
     lo = max(0, int(history_steps) - 1)
     hi = max(lo + 1, T - 2)
-    ticks = list(range(lo, hi + 1, max(1, int(stride))))
+    stride = max(1, int(stride))
+    ticks = list(range(lo, hi + 1, stride))
     if current not in ticks and lo <= current <= hi:
         ticks.append(current)
-        ticks = sorted(set(ticks))
+    ticks = sorted(set(ticks))
+    if not ticks:
+        return [current]
+    if event_aligned:
+        ranked = sorted(
+            ticks,
+            key=lambda tt: _tick_event_score(scenario, summary, int(tt), int(event_lookahead_steps))[:2],
+            reverse=True,
+        )
+        chosen = sorted(ranked[:max_samples])
+        return [int(x) for x in chosen]
+    if max_samples == 1:
+        return [current]
     if len(ticks) <= max_samples:
         return ticks
     # Deterministic uniform coverage of the log rather than adjacent highly-correlated frames.
@@ -179,8 +263,10 @@ def main() -> None:
     ap.add_argument("--min-moving-objects", type=int, default=1)
     ap.add_argument("--min-objects", type=int, default=2)
     ap.add_argument("--history-steps", type=int, default=10)
-    ap.add_argument("--max-samples-per-log", type=int, default=1, help="Number of temporal roots to sample from each scenario/log. Use 1 for ScenarioEnv-compatible paper-final closed-loop rollouts unless you have verified root-time restore.")
-    ap.add_argument("--sample-stride", type=int, default=5, help="Minimum frame stride between temporal roots when max-samples-per-log > 1.")
+    ap.add_argument("--max-samples-per-log", type=int, default=1, help="Number of temporal roots to sample from each scenario/log. Use 1 with --event-aligned-root for one event-rich root per log.")
+    ap.add_argument("--sample-stride", type=int, default=5, help="Minimum frame stride between temporal roots when max_samples_per_log > 1 or event-aligned scanning is enabled.")
+    ap.add_argument("--event-aligned-root", action="store_true", help="Choose the root tick with highest contact/near-contact/low-headroom score instead of always using current_time_index.")
+    ap.add_argument("--event-lookahead-steps", type=int, default=30, help="Future frames used to classify/scored event-aligned roots.")
     ap.add_argument("--target-regime-counts", default="", help="Optional balanced collection target, e.g. normal=2000,low=2000,near=2000,contact=1000. When set, scanning continues until requested per-regime counts or --max-scenarios-to-scan is reached.")
     ap.add_argument("--max-scenarios-to-scan", type=int, default=None, help="Optional cap on scenarios scanned when using --target-regime-counts.")
     ap.add_argument("--append", action="store_true", help="Append to existing root directory/splits instead of replacing split list.")
@@ -241,15 +327,15 @@ def main() -> None:
         # env.reset() and will fail teacher rollout alignment.
         scenario = read_scenario_description(pkl, centralize=True)
         sm = summary.get(sid, {}) or {}
-        ticks = _sample_root_ticks(scenario, sm, args.history_steps, args.max_samples_per_log, args.sample_stride)
+        ticks = _sample_root_ticks(scenario, sm, args.history_steps, args.max_samples_per_log, args.sample_stride, args.event_aligned_root, args.event_lookahead_steps)
         for sample_j, tick in enumerate(ticks):
             if args.max_roots is not None and len(written) >= args.max_roots:
                 break
-            if args.max_samples_per_log == 1:
+            if args.max_samples_per_log == 1 and not args.event_aligned_root:
                 root_id = f"{args.split_name}_{scenario_index:08d}"
             else:
                 root_id = f"{args.split_name}_{scenario_index:08d}_t{int(tick):03d}"
-            root = _root_json(root_id, scenario_dir, scenario_index, sid, pkl, scenario, sm, args.history_steps, root_tick=int(tick))
+            root = _root_json(root_id, scenario_dir, scenario_index, sid, pkl, scenario, sm, args.history_steps, root_tick=int(tick), event_lookahead_steps=args.event_lookahead_steps)
             if target_counts and regime_counts.get(root["regime"], 0) >= target_counts.get(root["regime"], 0):
                 continue
             write_json(out / f"{root_id}.json", root)
@@ -272,9 +358,11 @@ def main() -> None:
         "requires_teacher_rollout": True,
         "max_samples_per_log_last_run": int(args.max_samples_per_log),
         "sample_stride_last_run": int(args.sample_stride),
+        "event_aligned_root_last_run": bool(args.event_aligned_root),
+        "event_lookahead_steps_last_run": int(args.event_lookahead_steps),
         "scenario_coordinate_frame": "metadrive_centralized_sdc_initial",
         "read_scenario_data_centralize": True,
-        "temporal_roots_require_state_restore_for_metadrive_rollout": bool(args.max_samples_per_log > 1),
+        "temporal_roots_require_state_restore_for_metadrive_rollout": bool(args.max_samples_per_log > 1 or args.event_aligned_root),
         "regime_counts_last_run": regime_counts,
         "target_regime_counts_last_run": target_counts,
     }

@@ -80,12 +80,16 @@ def main() -> None:
         meta = json.loads(meta_path.read_text())
         meta["num_roots"] = total
         meta["root_end"] = total
+        meta["selected_root_count"] = total
+        meta["num_roots_full_selected_split"] = total
         meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     if manifest_path.exists():
         manifest = json.loads(manifest_path.read_text())
         manifest.setdefault("metadata", {})
         manifest["metadata"]["num_roots"] = total
         manifest["metadata"]["root_end"] = total
+        manifest["metadata"]["selected_root_count"] = total
+        manifest["metadata"]["num_roots_full_selected_split"] = total
         manifest["metadata"]["merged_from"] = [str(p) for p in inputs]
         manifest["metadata"]["merge_num_parts"] = len(inputs)
         manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")

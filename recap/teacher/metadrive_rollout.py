@@ -208,8 +208,15 @@ class MetaDriveRolloutRunner:
     @staticmethod
     def _history_ego_world_states(root_obj: Dict[str, Any]) -> np.ndarray:
         rows: List[List[float]] = []
-        for item in root_obj.get("history", []) or []:
-            e = (item or {}).get("ego_state", {}) or {}
+        replay = root_obj.get("replay_history_ego", None)
+        if replay:
+            src = replay
+            unpack = lambda item: item or {}
+        else:
+            src = root_obj.get("history", []) or []
+            unpack = lambda item: (item or {}).get("ego_state", {}) or {}
+        for item in src:
+            e = unpack(item)
             try:
                 rows.append([
                     float(e.get("x", 0.0)),
