@@ -28,7 +28,7 @@ Core modules:
 - `recap/evaluation`: paper metrics and baselines.
 - `scripts`: dataset construction, training, calibration, evaluation, ablations, table export.
 
-## 2. Installa[关键指令.txt](../%E5%85%B3%E9%94%AE%E6%8C%87%E4%BB%A4.txt)tion
+## 2. Installation
 
 ```bash
 pip install -r requirements.txt
@@ -40,34 +40,83 @@ The last command verifies a real MetaDrive installation. The CI/smoke path works
 
 ## 3. Dataset construction
 
-MVP smoke test:
+```bash
+export WOMD=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/scenario
+export RECAP=/data0/senzeyu2/dataset/ReCAP
+export SN=$RECAP/scenarionet/womd_1_3_1_full
+export FULL=$RECAP/full_womd131_recap_v1
+```
 
 ```bash
-python scripts/collect_roots.py \
-  --config configs/ablations/mvp_fast_debug.yaml \
-  --output data/debug/roots
-
-python scripts/rasterize_bev.py \
-  --root-dir data/debug/roots \
-  --split debug \
-  --bev-config configs/bev_160_debug.yaml \
-  --output data/debug/bev.zarr \
-  --write-channel-png
-
-python scripts/build_teacher_labels.py \
-  --config configs/ablations/mvp_fast_debug.yaml \
-  --split debug \
-  --root-dir data/debug/roots \
-  --bev-dir data/debug/bev.zarr \
-  --output data/debug/labels.zarr
-
-python scripts/offline_eval.py \
-  --config configs/ablations/mvp_fast_debug.yaml \
-  --dataset data/debug/labels.zarr \
-  --method oracle \
-  --output outputs/ci/oracle
+python scripts/convert_womd_to_scenarionet.py \
+  --womd-root $WOMD \
+  --output-root $SN \
+  --splits training validation testing_interactive \
+  --num-workers 24
 ```
-[recap_dataset_construction_patch.diff](../recap_dataset_construction_patch.diff)
+
+```bash
+python scripts/collect_metadrive_roots.py \
+  --scenario-dir $SN/training \
+  --output $FULL/roots_raw \
+  --split-name train \
+  --max-roots 6000 \
+  --target-regime-counts normal=1500,low=1500,near=2250,contact=750 \
+  --max-scenarios-to-scan 300000 \
+  --history-steps 10 \
+  --max-samples-per-log 1 \
+  --append
+
+python scripts/collect_metadrive_roots.py \
+  --scenario-dir $SN/validation \
+  --output $FULL/roots_raw \
+  --split-name val \
+  --max-roots 1000 \
+  --target-regime-counts normal=250,low=250,near=375,contact=125 \
+  --max-scenarios-to-scan 120000 \
+  --history-steps 10 \
+  --max-samples-per-log 1 \
+  --append
+  
+  
+python scripts/collect_metadrive_roots.py \
+    --scenario-dir $SN/validation \
+    --output $FULL/roots_raw \
+    --split-name calib \
+    --max-roots 1000 \
+    --target-regime-counts normal=250,low=250,near=375,contact=125 \
+    --max-scenarios-to-scan 120000 \
+    --history-steps 10 \
+    --max-samples-per-log 1 \
+    --append
+  
+python scripts/collect_metadrive_roots.py \
+  --scenario-dir $SN/testing_interactive \
+  --output $FULL/roots_raw \
+  --split-name test \
+  --max-roots 1000 \
+  --target-regime-counts normal=250,low=250,near=375,contact=125 \
+  --max-scenarios-to-scan 120000 \
+  --history-steps 10 \
+  --max-samples-per-log 1 \
+  --append
+  
+for SPLIT in train val calib test; do
+  python scripts/rasterize_bev.py \
+    --root-dir $FULL/roots_raw \
+    --split $SPLIT \
+    --bev-config configs/bev_256.yaml \
+    --channels compact \
+    --history-steps 10 \
+    --output $FULL/bev/${SPLIT}.zarr \
+    --shard-size 16 \
+    --save-debug 16 \
+    --write-channel-png \
+    --debug-dir outputs/diagnostics/full_bev_${SPLIT}
+done
+
+```
+
 ## 4. BEV rasterization
 
 The main BEV is produced by `recap/raster/bev_builder.py`, not MetaDrive `TopDownObservation`.
@@ -99,26 +148,136 @@ python scripts/rasterize_bev.py \
 ## 5. Teacher rollout and label generation
 
 ```bash
-python scripts/build_teacher_labels.py \
-  --config configs/dataset_metadrive.yaml \
+build_labels_split () {
+  local SPLIT=$1
+  local SCENARIO_DIR=$2
+  local PARTS=$3
+  local N
+  N=$(count_split "$SPLIT")
+
+  echo "Building teacher labels for split=$SPLIT roots=$N parts=$PARTS"
+
+  rm -rf "$CHECK/${SPLIT}_parts" "$CHECK/${SPLIT}.zarr"
+  mkdir -p "$CHECK/${SPLIT}_parts"
+
+  local pids=()
+
+  for i in $(seq 0 $((PARTS-1))); do
+    local START=$(( i * N / PARTS ))
+    local END=$(( (i + 1) * N / PARTS ))
+
+    if [ "$START" -ge "$END" ]; then
+      continue
+    fi
+
+    (
+      export CUDA_VISIBLE_DEVICES=""
+      export OMP_NUM_THREADS=2
+      export MKL_NUM_THREADS=1
+
+      python scripts/build_teacher_labels.py \
+        --config configs/dataset_metadrive_paper_check.yaml \
+        --split $SPLIT \
+        --root-dir $CHECK/roots_raw \
+        --bev-dir $CHECK/bev/${SPLIT}.zarr \
+        --output $CHECK/${SPLIT}_parts/part_${i}.zarr \
+        --rollout-backend metadrive \
+        --scenario-dir $SCENARIO_DIR \
+        --metadrive-reactive-traffic true \
+        --allow-temporal-root-rollout \
+        --root-start $START \
+        --root-end $END \
+        --root-stride 1 \
+        --shard-size 1
+    ) > "$CHECK/logs/build_${SPLIT}_part_${i}.log" 2>&1 &
+
+    pids+=($!)
+  done
+
+  local failed=0
+  for pid in "${pids[@]}"; do
+    if ! wait "$pid"; then
+      failed=1
+    fi
+  done
+
+  if [ "$failed" -ne 0 ]; then
+    echo "ERROR: split=$SPLIT 有分片失败，请检查 $CHECK/logs/build_${SPLIT}_part_*.log"
+    exit 1
+  fi
+
+  python scripts/merge_sharded_datasets.py \
+    --inputs $CHECK/${SPLIT}_parts/part_*.zarr \
+    --output $CHECK/${SPLIT}.zarr \
+    --shard-size 4
+}
+
+
+
+python scripts/parallel_build_teacher_labels.py \
+  --config configs/dataset_metadrive_paper_check.yaml \
   --split train \
-  --root-dir data/recap/roots_raw \
-  --bev-dir data/recap/bev/train.zarr \
-  --output data/recap/train.zarr
-
-python scripts/build_teacher_labels.py \
-  --config configs/dataset_metadrive.yaml \
+  --root-dir $CHECK/roots_raw \
+  --bev-dir $CHECK/bev/train.zarr \
+  --output $CHECK/train.zarr \
+  --rollout-backend metadrive \
+  --scenario-dir $SN/training \
+  --metadrive-reactive-traffic true \
+  --allow-temporal-root-rollout \
+  --parts 24 \
+  --shard-size 1 \
+  --merge-shard-size 4 \
+  --log-dir $CHECK/logs
+  
+  
+python scripts/parallel_build_teacher_labels.py \
+  --config configs/dataset_metadrive_paper_check.yaml \
+  --split val \
+  --root-dir $CHECK/roots_raw \
+  --bev-dir $CHECK/bev/val.zarr \
+  --output $CHECK/val.zarr \
+  --rollout-backend metadrive \
+  --scenario-dir $SN/validation \
+  --metadrive-reactive-traffic true \
+  --allow-temporal-root-rollout \
+  --parts 12 \
+  --shard-size 1 \
+  --merge-shard-size 4 \
+  --log-dir $CHECK/logs
+  
+  
+  
+  
+python scripts/parallel_build_teacher_labels.py \
+  --config configs/dataset_metadrive_paper_check.yaml \
   --split calib \
-  --root-dir data/recap/roots_raw \
-  --bev-dir data/recap/bev/calib.zarr \
-  --output data/recap/calib.zarr
-
-python scripts/build_teacher_labels.py \
-  --config configs/dataset_metadrive.yaml \
-  --split test \
-  --root-dir data/recap/roots_raw \
-  --bev-dir data/recap/bev/test.zarr \
-  --output data/recap/test.zarr
+  --root-dir $CHECK/roots_raw \
+  --bev-dir $CHECK/bev/calib.zarr \
+  --output $CHECK/calib.zarr \
+  --rollout-backend metadrive \
+  --scenario-dir $SN/validation \
+  --metadrive-reactive-traffic true \
+  --allow-temporal-root-rollout \
+  --parts 12 \
+  --shard-size 1 \
+  --merge-shard-size 4 \
+  --log-dir $CHECK/logs
+  
+  
+python scripts/parallel_build_teacher_labels.py \
+  --config configs/dataset_metadrive_paper_check.yaml \
+  --split calib \
+  --root-dir $CHECK/roots_raw \
+  --bev-dir $CHECK/bev/calib.zarr \
+  --output $CHECK/calib.zarr \
+  --rollout-backend metadrive \
+  --scenario-dir $SN/validation \
+  --metadrive-reactive-traffic true \
+  --allow-temporal-root-rollout \
+  --parts 12 \
+  --shard-size 1 \
+  --merge-shard-size 4 \
+  --log-dir $CHECK/logs
 ```
 
 Teacher labels enforce[dataset_construction.diff](../dataset_construction.diff): same-root latent context, fixed prefix/recovery boundary, first-contact harm separated from R, post-contact recovery not killed by first-contact collision clearance.
@@ -216,7 +375,44 @@ python scripts/rasterize_bev.py \
   --write-channel-png
 ```
 
-## 13. Unit tests
+## 13. Diagnose Dataset 
+
+```bash
+mkdir -p outputs/diagnostics
+
+for SPLIT in train val calib test; do
+  python scripts/diagnose_recap_dataset.py \
+    --dataset $CHECK/${SPLIT}.zarr \
+    --roots $CHECK/roots_raw \
+    --output outputs/diagnostics/papercheck_${SPLIT}_report.json \
+    --sample-roots 512
+done
+
+python - <<'PY'
+import json
+from pathlib import Path
+
+for split in ["train", "val", "calib", "test"]:
+    p = Path(f"outputs/diagnostics/papercheck_{split}_report.json")
+    print("\n===", split, "===")
+    if not p.exists():
+        print("missing", p)
+        continue
+    r = json.loads(p.read_text())
+    for k in [
+        "num_samples",
+        "paper_quality_gate",
+        "positive_recovery_root_rate",
+        "nontrivial_action_ranking_rate",
+        "mode_label_disagreement_mean",
+        "mode_best_margin_disagreement_mean",
+    ]:
+        if k in r:
+            print(k, "=", r[k])
+PY
+```
+
+## 14. Unit tests
 
 ```bash
 pytest tests -q
@@ -234,11 +430,11 @@ python scripts/build_teacher_labels.py --config configs/ablations/mvp_fast_debug
 python scripts/offline_eval.py --dataset data/ci/labels.zarr --method oracle --output outputs/ci/oracle
 ```
 
-## 14. Reproducibility checklist
+## 15. Reproducibility checklist
 
 Every run should log `implementation_level`, config hash, dataset version, split, ablation flags, calibration values, and `alignment_report.json`. Final main-table runs require all final alignment fields to be true.
 
-## 15. Dataset schema
+## 16. Dataset schema
 
 See `docs/DATASET_SCHEMA.md`. Main arrays include BEV, ego info, route command, actions, options, masks, mode probabilities, debug-only mode seed params, margins, evidence labels, `R_star`, and witness labels.
 
@@ -250,7 +446,7 @@ python scripts/export_tables.py \
   --output outputs/tables
 ```
 
-## 17. MVP vs Final mode
+## 18. MVP vs Final mode
 
 `implementation_level: mvp` allows lattice proposal, heuristic affordances, M=4, L=6, and synthetic teacher smoke tests.
 
@@ -274,6 +470,7 @@ python scripts/collect_carla_roots.py \
 
 If `--fork-support` is omitted, exported CARLA roots are marked valid for BEV pretraining/replay evaluation only, not MERO teacher-label generation.
 
-## 18. Known limitations
+## 19. Known limitations
 
 This generated code includes a synthetic teacher fallback so tests and smoke commands run without MetaDrive. For paper-grade results, replace or extend the adapter extraction in `MetaDriveStateAdapter`, run real MetaDrive root snapshots, and verify `test_root_restore_determinism` on the installed simulator. CARLA support is documented as a schema-compatible backend boundary; counterfactual fork support must be implemented per CARLA scenario setup.
+
