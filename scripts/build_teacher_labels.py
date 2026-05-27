@@ -23,6 +23,7 @@ from recap.teacher.rollout import synthetic_rollout
 from recap.teacher.evidence_labels import evidence_from_trace, scene_uncertainty_from_action, combine_uncertainty
 from recap.teacher.dataset_writer import ShardedDatasetWriter, read_dataset, write_dataset
 from recap.evaluation.metrics import weighted_lcvar_np
+from recap.teacher.observation_classes import build_obs_equivalence, beta_from_obs_equiv, class_consistent_witness
 from recap.utils.progress import tqdm
 from scripts._common import load_config
 
@@ -220,6 +221,10 @@ def main():
         C = np.zeros_like(P)
         Kdef = np.zeros_like(P)
         margins = {name: np.zeros_like(P) for name in ["margin_option", "M_path_raw", "M_path_rec", "M_path_pre_no_first_contact", "M_secondary", "M_return", "M_ctrl", "M_post"]}
+        g_star = np.zeros((K, L, M, 9), np.float32)
+        spec_margin_star = np.zeros((K, L, M, 3), np.float32)
+        spec_id_star = np.zeros((K, L, M), np.int64)
+        c_rule_star = np.zeros((K, M), np.float32)
         Y = np.zeros((K, L, M), bool)
         witness = np.zeros((K, M), np.int64)
         witness_gap = np.zeros((K, M), np.float32)
@@ -248,6 +253,9 @@ def main():
                         if not (a.valid and o.valid):
                             for arr in margins.values():
                                 arr[a_i, r_i, m_i] = -1.0
+                            g_star[a_i, r_i, m_i, :] = -1.0
+                            spec_margin_star[a_i, r_i, m_i, :] = -1.0
+                            c_rule_star[a_i, m_i] = max(c_rule_star[a_i, m_i], 1.0)
                             continue
                         if rollout_backend == "metadrive":
                             trace = md_runner.rollout(obj, ego, a, o, mode, H_p, H_r, dt, root_map_features=mf, env=reusable_env)
@@ -259,12 +267,16 @@ def main():
                         G[a_i, r_i, m_i] = e["G_star"]
                         C[a_i, r_i, m_i] = e["C_star"]
                         Kdef[a_i, r_i, m_i] = e["K_star"]
-                        for kmap, ekey in [("margin_option", "M_option"), ("M_path_raw", "M_path_raw"), ("M_path_rec", "M_path_rec"), ("M_path_pre_no_first_contact", "M_path_pre_no_first_contact"), ("M_secondary", "M_secondary"), ("M_return", "M_return"), ("M_ctrl", "M_ctrl"), ("M_post", "M_post")]:
+                        for kmap, ekey in [("margin_option", "margin_option"), ("M_path_raw", "M_path_raw"), ("M_path_rec", "M_path_rec"), ("M_path_pre_no_first_contact", "M_path_pre_no_first_contact"), ("M_secondary", "M_secondary"), ("M_return", "M_return"), ("M_ctrl", "M_ctrl"), ("M_post", "M_post")]:
                             margins[kmap][a_i, r_i, m_i] = e[ekey]
-                        Y[a_i, r_i, m_i] = e["Y_option"]
+                        g_star[a_i, r_i, m_i] = e["g_star"]
+                        spec_margin_star[a_i, r_i, m_i] = e["spec_margin_star"]
+                        spec_id_star[a_i, r_i, m_i] = e["spec_id_star"]
+                        c_rule_star[a_i, m_i] = max(c_rule_star[a_i, m_i], float(e["c_rule_star"]))
+                        Y[a_i, r_i, m_i] = bool(e["y_star"])
                         h_values.append(e["H_star"])
                         h_sources.append(e["H_source"])
-                        val = e["M_option"]
+                        val = e["margin_option"]
                         if val > best:
                             second = best
                             best = val
@@ -286,8 +298,21 @@ def main():
         for a_i in range(K):
             for m_i in range(M):
                 U[a_i, m_i] = combine_uncertainty(U_scene[a_i], U_mode[m_i], U_interact[a_i, m_i])
-        Y_action = Y.max(axis=1)
-        R_star = weighted_lcvar_np(Y_action.astype(np.float32), mode_probs, float(cfg.get("planner", {}).get("alpha_R", 0.2)))
+        obs_class = np.zeros((K, M), np.int64)
+        obs_equiv = np.zeros((K, M, M), bool)
+        beta_star = np.zeros((K, M, M), np.float32)
+        witness_oc = np.zeros((K, M), np.int64)
+        Y_oc = np.zeros((K, M), np.float32)
+        for a_i in range(K):
+            # Conservative deployable label: modes sharing the same post-prefix
+            # observable ego state must share one witness.  No teacher success or
+            # future trajectory is used in this signature.
+            signatures = [{"ego_post_prefix": actions[a_i].states[-1, :6]} for _ in range(M)]
+            obs_class[a_i], obs_equiv[a_i] = build_obs_equivalence(signatures, eps_o=float(cfg.get("planner", {}).get("eps_o", 1e-3)))
+            beta_star[a_i] = beta_from_obs_equiv(mode_probs, obs_equiv[a_i])
+            witness_oc[a_i], Y_oc[a_i], _ = class_consistent_witness(Y[a_i].astype(np.float32), margins["margin_option"][a_i], mode_probs, obs_class[a_i])
+        Y_action = Y.max(axis=1)  # oracle diagnostic only
+        R_star = weighted_lcvar_np(Y_oc.astype(np.float32), mode_probs, float(cfg.get("planner", {}).get("alpha_R", 0.2)))
         H_action = H.max(axis=-1) if H.ndim == 2 else H
 
         sample = {}
@@ -300,8 +325,22 @@ def main():
             "Y_option": Y,
             "Y_action": Y_action,
             "R_star": R_star,
-            "witness": witness,
+            "witness": witness_oc,
+            "witness_raw_oracle": witness,
+            "witness_oc": witness_oc,
             "witness_gap": witness_gap,
+            "Y_oc": Y_oc.astype(np.float32),
+            "obs_class": obs_class,
+            "obs_equiv": obs_equiv,
+            "beta_star": beta_star,
+            "g_star": g_star.astype(np.float16),
+            "y_star": Y.astype(np.float32),
+            "h_star": H.astype(np.float16),
+            "k_star": Kdef.astype(np.float16),
+            "u_star": U.astype(np.float16),
+            "c_rule_star": c_rule_star.astype(np.float16),
+            "spec_margin_star": spec_margin_star.astype(np.float16),
+            "spec_id_star": spec_id_star,
             "M_path_raw": margins["M_path_raw"],
             "M_path_rec": margins["M_path_rec"],
             "M_path_pre_no_first_contact": margins["M_path_pre_no_first_contact"],

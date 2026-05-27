@@ -12,11 +12,19 @@ planner:
   H_r: 25
   dt: 0.2
   alpha_R: 0.20
+  alpha_H: 0.20
+  alpha_K: 0.20
+  tau_R: 0.20
+  c_R: 0.0
+  eps_o: 0.001
 selector:
   eta_R: 0.70
+  eta_H: 0.50
   epsilon_H: 0.05
   delta_R: 0.05
   delta_H: 0.05
+  delta_delta: 0.05
+  delta_C: 0.05
   xi: 0.05
 ablation:
   enabled: false
@@ -26,6 +34,9 @@ ablation:
   direct_scalar_critic: false
   no_monotone_calibrator: false
   no_calibration: false
+  no_mu_weighted_existential: false
+  no_observation_consistency: false
+  no_rule_constraint: false
   no_harm_constraint: false
   no_controlled_relaxation: false
   bev_only: false
@@ -46,9 +57,34 @@ ablation:
   M: 8
   alpha_R: 0.20
   alpha_H: 0.20
+  alpha_K: 0.20
+  tau_R: 0.20
+  c_R: 0.0
+  eps_o: 0.001
+  alpha_H: 0.20
   use_mean_over_modes: false
   use_min_over_modes: false
   lattice_only: true
   neural_proposal: false
   K: 32
   L: 12
+
+model:
+  name: recot
+  hidden: 128
+  g_dim: 9
+  use_monotone_calibrator: true
+  use_observation_consistency: true
+
+loss:
+  lambda_g: 1.0
+  lambda_y: 1.0
+  lambda_h: 0.5
+  lambda_k: 0.5
+  lambda_u: 0.2
+  lambda_beta: 0.5
+  lambda_R: 1.0
+  lambda_rank: 0.2
+  lambda_w: 0.5
+  lambda_obs: 0.5
+  lambda_mono: 0.1

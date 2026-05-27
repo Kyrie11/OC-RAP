@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 from recap.utils.datatypes import RolloutTrace
 from .margins import compute_margins
+from .recovery_specs import compute_spec_margins
 
 
 def sigmoid(x):
@@ -21,7 +22,7 @@ def harm_from_trace(trace: RolloutTrace, H_p: int, dt: float = 0.2, T_h_guard: f
 
 def evidence_from_trace(trace: RolloutTrace, params: dict | None = None) -> dict:
     p = params or {}
-    m = compute_margins(trace, p)
+    m = compute_spec_margins(trace, None, p)
     tau_P = p.get("tau_P", 0.25)
     tau_G = p.get("tau_G", 0.25)
     tau_K = p.get("tau_K", 0.25)
@@ -36,6 +37,13 @@ def evidence_from_trace(trace: RolloutTrace, params: dict | None = None) -> dict
         "H_star": float(H),
         "H_source": int(H_source),
         "K_star": float(0.0 if trace.first_contact_idx < 0 else sigmoid(-m["M_post"] / tau_K)),
+        "g_star": np.asarray(m["g_vector"], dtype=np.float32),
+        "y_star": float(m["y_star"]),
+        "spec_margin_star": np.asarray(m["spec_margin_star"], dtype=np.float32),
+        "spec_id_star": int(m["spec_id_star"]),
+        "margin_option": float(m["margin_option"]),
+        "k_star": float(m["k_post"]),
+        "c_rule_star": float(m["c_rule"]),
     }
 
 

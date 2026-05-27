@@ -106,6 +106,54 @@ class ActionPrefix:
 
 
 @dataclass
+class RecoveryAffordanceToken:
+    token_id: int
+    action_id: int
+    tag: str
+    valid: bool
+    conditional: bool
+    anchor: np.ndarray
+    anchor_polyline: np.ndarray
+    controller_id: int
+    controller_params: np.ndarray
+    potential_params: np.ndarray
+    hard_shell_init: np.ndarray
+    metadata: np.ndarray
+    states_ref: np.ndarray
+    controls_ref: np.ndarray
+    swept_corridor: Optional[np.ndarray] = None
+    mask_reason: str = ""
+
+    @property
+    def option_id(self) -> int:
+        return self.token_id
+
+    @option_id.setter
+    def option_id(self, v: int) -> None:
+        self.token_id = int(v)
+
+    @property
+    def type(self) -> str:
+        return self.tag
+
+    @property
+    def horizon_steps(self) -> int:
+        return int(self.controls_ref.shape[0])
+
+    @property
+    def target_anchor(self) -> np.ndarray:
+        return self.anchor[:3]
+
+    @property
+    def target_speed(self) -> float:
+        return float(self.controller_params[1]) if self.controller_params.size > 1 else 0.0
+
+    @property
+    def params(self) -> np.ndarray:
+        return self.metadata
+
+
+@dataclass
 class RecoveryOption:
     option_id: int
     action_id: int

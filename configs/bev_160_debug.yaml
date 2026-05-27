@@ -32,3 +32,23 @@ channels:
     - dyn_vx_t0
     - dyn_vy_t0
   compact_history_occ_channels: 6
+
+model:
+  name: recot
+  hidden: 128
+  g_dim: 9
+  use_monotone_calibrator: true
+  use_observation_consistency: true
+
+loss:
+  lambda_g: 1.0
+  lambda_y: 1.0
+  lambda_h: 0.5
+  lambda_k: 0.5
+  lambda_u: 0.2
+  lambda_beta: 0.5
+  lambda_R: 1.0
+  lambda_rank: 0.2
+  lambda_w: 0.5
+  lambda_obs: 0.5
+  lambda_mono: 0.1

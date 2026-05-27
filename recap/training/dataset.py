@@ -15,9 +15,16 @@ class RecoveryDataset(Dataset):
 
     def __getitem__(self, idx):
         a = self.arrays
-        keys = ["bev", "ego_info", "route_command", "actions_states", "options_states_ref", "action_mask", "option_mask", "P_star", "G_star", "C_star", "U_star", "H_star", "K_star", "mode_probs", "witness"]
+        keys = ["bev", "ego_info", "route_command", "actions_states", "actions_controls", "actions_params", "token_states_ref", "token_controls_ref", "token_params", "token_anchor", "token_hard_shell", "options_states_ref", "options_controls_ref", "options_params", "action_mask", "option_mask", "mode_probs", "g_star", "y_star", "h_star", "k_star", "u_star", "c_rule_star", "spec_margin_star", "spec_id_star", "margin_option", "obs_class", "obs_equiv", "beta_star", "witness_oc", "Y_oc", "R_star", "P_star", "G_star", "C_star", "U_star", "H_star", "K_star", "witness"]
         out = {}
         for k in keys:
             if k in a:
                 out[k] = torch.as_tensor(a[k][idx])
+        # Map old option names to OC-RAP names for compatibility.
+        if "token_states_ref" not in out and "options_states_ref" in out:
+            out["token_states_ref"] = out["options_states_ref"]
+        if "token_controls_ref" not in out and "options_controls_ref" in out:
+            out["token_controls_ref"] = out["options_controls_ref"]
+        if "token_params" not in out and "options_params" in out:
+            out["token_params"] = out["options_params"]
         return out

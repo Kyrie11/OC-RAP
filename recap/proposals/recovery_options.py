@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import List
 import numpy as np
 
-from recap.utils.datatypes import ActionPrefix, RecoveryOption, RouteInfo, MapFeatures
+from recap.utils.datatypes import ActionPrefix, RecoveryOption, RecoveryAffordanceToken, RouteInfo, MapFeatures
 
 OPTION_TYPES = ["maintain", "stop", "lane", "route", "yield", "escape", "stabilize"]
 
@@ -43,8 +43,9 @@ def _reference_valid(st: np.ndarray, ct: np.ndarray, *, speed_limit: float) -> t
     # authority for option labels.
     if float(np.nanmax(ct[:, 0])) > 4.0 + 1e-4 or float(np.nanmin(ct[:, 0])) < -6.0 - 1e-4:
         return False, "accel_reference"
-    if float(np.nanmax(np.abs(ct[:, 2]))) > 8.0 + 1e-4:
-        return False, "jerk_reference"
+    # Jerk from a short polynomial reference is diagnostic, not an online mask:
+    # teacher rollout determines final success.  Keep acceleration/curvature as
+    # relaxed feasibility checks so stop/yield tokens are still evaluable.
     if float(np.nanmax(np.abs(st[:, 5]))) > 0.35 + 1e-4:
         return False, "curvature_reference"
     return True, ""
@@ -99,14 +100,15 @@ def generate_options_for_action(action: ActionPrefix, route_info: RouteInfo, map
     add("escape", escape_sign * 4.5, slow_speed)
     add("stabilize", 0.0, 0.0, conditional=True)
 
-    valid_by_type = {}
+    # First preserve one token per OC-RAP semantic tag when L allows.  Masking
+    # indicates relaxed executability, not teacher success.
+    required = ["maintain", "stop", "lane", "route", "yield", "escape", "stabilize"]
+    first_by_type = {}
     for opt in candidates:
-        if opt.valid and opt.type not in valid_by_type:
-            valid_by_type[opt.type] = opt
-    kept: List[RecoveryOption] = list(valid_by_type.values())
+        if opt.type not in first_by_type:
+            first_by_type[opt.type] = opt
+    kept: List[RecoveryOption] = [first_by_type[t] for t in required if t in first_by_type][:L]
     rest = [o for o in candidates if o not in kept]
-    # Prefer valid, dynamically easy references; then keep invalid entries before
-    # padding so masks diagnose why a semantic option was unavailable.
     rest = sorted(rest, key=lambda o: (not o.valid, abs(float(o.params[1])), -float(o.target_speed)))
     kept.extend(rest)
     kept = kept[:L]
@@ -129,3 +131,11 @@ def options_to_tensors(options: List[List[RecoveryOption]]) -> dict:
         "options_params": np.stack([[o.params for o in opts] for opts in options]).astype(np.float32),
         "option_mask": np.array([[o.valid for o in opts] for opts in options], dtype=bool),
     }
+
+
+def generate_recovery_affordances(actions: List[ActionPrefix], route_info: RouteInfo, map_features: MapFeatures | None = None, traffic_control=None, L: int = 12, H_r: int = 25, dt: float = 0.2) -> List[List[RecoveryOption]]:
+    """OC-RAP name for executable recovery affordance tokens.
+
+    Kept as RecoveryOption-compatible objects for older scripts/tests.
+    """
+    return generate_recovery_options(actions, route_info, map_features, L=L, H_r=H_r, dt=dt)

@@ -24,10 +24,29 @@ def weighted_lcvar_np(values: np.ndarray, weights: np.ndarray, alpha: float = 0.
     return (out / max(alpha, 1e-12)).astype(np.float32)
 
 
-def recovery_success(Y_option: np.ndarray, selected_action_idx: np.ndarray, option_mask: np.ndarray) -> float:
+def recovery_success(Y_option: np.ndarray, selected_action_idx: np.ndarray, option_mask: np.ndarray | None = None, witness_oc: np.ndarray | None = None, Y_oc: np.ndarray | None = None) -> float:
+    """Deployable recovery success.
+
+    Prefer Y_oc or witness_oc.  Using max over options is only an oracle
+    diagnostic and should be reported separately with oracle_recovery_success.
+    """
+    vals = []
+    if Y_oc is not None:
+        for i, a in enumerate(selected_action_idx):
+            vals.append(float(np.mean(Y_oc[i, a])))
+        return float(np.mean(vals)) if vals else 0.0
+    if witness_oc is not None:
+        for i, a in enumerate(selected_action_idx):
+            w = witness_oc[i, a]
+            vals.append(float(np.mean(Y_option[i, a, w, np.arange(Y_option.shape[-1])])))
+        return float(np.mean(vals)) if vals else 0.0
+    return oracle_recovery_success(Y_option, selected_action_idx, option_mask)
+
+
+def oracle_recovery_success(Y_option: np.ndarray, selected_action_idx: np.ndarray, option_mask: np.ndarray | None = None) -> float:
     vals = []
     for i, a in enumerate(selected_action_idx):
-        valid = option_mask[i, a]
+        valid = option_mask[i, a] if option_mask is not None else np.ones(Y_option.shape[2], dtype=bool)
         y = Y_option[i, a, valid, :]
         vals.append(float(y.max() == 1) if y.size else 0.0)
     return float(np.mean(vals)) if vals else 0.0
@@ -118,4 +137,21 @@ def minimal_intervention_regret(U_drv: np.ndarray, selected_action_idx: np.ndarr
         a_nom = int(np.argmax(U_drv[i]))
         if R_star[i, a_nom] >= eta_R and H_gap_star[i, a_nom] <= epsilon_H:
             vals.append(max(0.0, float(U_drv[i, a_nom] - U_drv[i, selected_action_idx[i]])))
+    return float(np.mean(vals)) if vals else 0.0
+
+
+def observation_consistency_violation(mu: np.ndarray, obs_equiv: np.ndarray, option_mask: np.ndarray, eps: float = 1e-8) -> float:
+    vals = []
+    B,K,L,M = mu.shape
+    for b in range(B):
+        for k in range(K):
+            valid = option_mask[b,k].astype(bool)
+            for m in range(M):
+                for n in range(m+1, M):
+                    if obs_equiv[b,k,m,n]:
+                        p = mu[b,k,valid,m].astype(float); q = mu[b,k,valid,n].astype(float)
+                        if p.size == 0: continue
+                        p = p / max(p.sum(), eps); q = q / max(q.sum(), eps)
+                        r = 0.5*(p+q)
+                        vals.append(0.5*np.sum(p*np.log((p+eps)/(r+eps))) + 0.5*np.sum(q*np.log((q+eps)/(r+eps))))
     return float(np.mean(vals)) if vals else 0.0
