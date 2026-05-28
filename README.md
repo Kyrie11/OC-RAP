@@ -352,3 +352,76 @@ The synthetic diagnostic generator is suitable for smoke tests and regression te
 - crash termination disabled in contact/post-contact closed-loop evaluation.
 
 If `--checkpoint` is omitted, evaluation uses teacher profiles for OC-RAP and sets `uses_teacher_profiles_for_ours=true`; this is acceptable only for debugging the selector and metric code, not for learned-inference paper tables.
+
+## Dataset health reports and hybrid WOMD stress roots
+
+This version adds explicit checks for the five paper-critical implementation issues: supervised `c_rule_hat`, token anchor/hard-shell tensors, learned monotone recovery scoring through ReCoT, closed-loop fallback metadata, and paper-final map/root alignment warnings.
+
+### Generate a dataset health report
+
+Run this after every root/BEV/teacher-label build and attach the JSON/Markdown output to experiment artifacts:
+
+```bash
+python scripts/generate_dataset_health_report.py \
+  --dataset data/recap/train.zarr \
+  --output outputs/health/train
+```
+
+The report checks deployable input fields, finite values, valid action/token ratios, regime balance, observation-equivalence class sizes, OC-vs-oracle recovery gap, `R_star`, `c_rule_star`, duplicated root IDs, and metadata such as `paper_final_ready`.
+
+### Create hybrid WOMD stress roots
+
+Hybrid stress roots start from natural WOMD/ScenarioNet roots and deterministically inject low-headroom or near-contact stressors. They are intended to improve coverage of lead braking, cut-in, occluded release, contact-proxy, and friction/delay regimes. Report them separately from natural WOMD/ScenarioNet results.
+
+```bash
+python scripts/generate_hybrid_womd_stress_roots.py \
+  --input-root-dir data/recap/roots_raw \
+  --output-root-dir data/recap/roots_hybrid_stress \
+  --split train \
+  --num-roots 5000 \
+  --copies-per-root 1 \
+  --seed 7
+```
+
+Then use the normal OC-RAP pipeline on the hybrid root directory:
+
+```bash
+python scripts/rasterize_bev.py \
+  --root-dir data/recap/roots_hybrid_stress \
+  --split train \
+  --bev-config configs/bev_256.yaml \
+  --channels compact \
+  --history-steps 10 \
+  --num-workers 8 \
+  --output data/recap/bev/hybrid_train.zarr
+
+python scripts/build_teacher_labels.py \
+  --config configs/dataset_hybrid_womd_stress.yaml \
+  --split train \
+  --root-dir data/recap/roots_hybrid_stress \
+  --bev-dir data/recap/bev/hybrid_train.zarr \
+  --rollout-backend metadrive \
+  --scenario-dir /path/to/scenarionet_database \
+  --output data/recap/hybrid_train.zarr
+
+python scripts/generate_dataset_health_report.py \
+  --dataset data/recap/hybrid_train.zarr \
+  --output outputs/health/hybrid_train
+```
+
+To train with natural + hybrid data, either train sequentially or merge sharded datasets first:
+
+```bash
+python scripts/merge_sharded_datasets.py \
+  --inputs data/recap/train.zarr data/recap/hybrid_train.zarr \
+  --output data/recap/train_plus_hybrid.zarr
+
+python scripts/train_care.py \
+  --config configs/train_care.yaml \
+  --dataset data/recap/train_plus_hybrid.zarr \
+  --output checkpoints/recot_plus_hybrid
+```
+
+### Paper-final dataset guardrails
+
+For paper tables, the health report should show non-empty `token_anchor` and `token_hard_shell`, a non-trivial observation-equivalence distribution, acceptable action/token validity, and no non-finite labels. Do not use `--disable-root-time-replay`, `--disable-root-alignment-check`, or offline same-candidate closed-loop fallback for final closed-loop claims. Hybrid stress metrics should be reported in a separate table or column from natural WOMD/ScenarioNet metrics.

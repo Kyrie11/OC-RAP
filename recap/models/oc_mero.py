@@ -87,7 +87,9 @@ def compute_ocmero_profiles(pred: Dict[str, torch.Tensor], masks: Dict[str, torc
         mode_probs = torch.ones(g_hat.shape[0], g_hat.shape[-2], device=g_hat.device, dtype=g_hat.dtype) / g_hat.shape[-2]
     action_mask = masks["action_mask"].bool()
     option_mask = masks["option_mask"].bool() & action_mask.unsqueeze(-1)
-    if calibrator is None:
+    if calibrator is None and "v_hat" in pred:
+        v = pred["v_hat"]
+    elif calibrator is None:
         v = _default_v(g_hat, h_hat, k_hat, u_hat)
     else:
         h = h_hat.unsqueeze(2).unsqueeze(-1).expand(*g_hat.shape[:-1], 1)

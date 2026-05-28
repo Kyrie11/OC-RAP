@@ -27,4 +27,13 @@ class RecoveryDataset(Dataset):
             out["token_controls_ref"] = out["options_controls_ref"]
         if "token_params" not in out and "options_params" in out:
             out["token_params"] = out["options_params"]
+        if "token_anchor" not in out and "options_params" in out:
+            # Backward-compatible fallback for old datasets: use terminal target
+            # x/y from option params and zero heading.  New datasets should carry
+            # explicit token_anchor from recovery_options.options_to_tensors().
+            p = out["options_params"].float()
+            out["token_anchor"] = torch.stack([p[..., 4], p[..., 5], torch.zeros_like(p[..., 4])], dim=-1)
+        if "token_hard_shell" not in out and "option_mask" in out:
+            valid = out["option_mask"].float()
+            out["token_hard_shell"] = torch.stack([valid, valid, valid, valid * 2.0 - 1.0], dim=-1)
         return out

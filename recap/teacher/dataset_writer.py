@@ -64,7 +64,13 @@ class ShardedArray:
             return self._cache[shard_idx]
         path = self.root / self.shards[shard_idx]["file"]
         with np.load(path, allow_pickle=True) as data:
-            loaded = {k: data[k] for k in data.files}
+            if self.name not in data.files:
+                raise KeyError(f"array {self.name!r} not found in shard {path}")
+            # Load only this array.  Earlier versions loaded every array in the
+            # shard, so asking for a scalar field such as root_ids also
+            # decompressed the full BEV tensor.  That made health reports and
+            # lazy training unexpectedly memory- and I/O-heavy.
+            loaded = {self.name: data[self.name]}
         self._cache[shard_idx] = loaded
         while len(self._cache) > self._cache_size:
             self._cache.popitem(last=False)

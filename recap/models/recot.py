@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 from .bev_encoder import TemporalBEVEncoder
 from .action_encoder import ActionEncoder, OptionEncoder
+from .oc_mero import MonotoneRecoveryCalibrator
 
 FORBIDDEN_FORWARD_KEYS = {
     "mode_seed_params", "future_actor_trajectories", "teacher_margins", "Y_option", "y_star", "Y_oc",
@@ -36,6 +37,7 @@ class ReCoT(nn.Module):
         self.head_c=nn.Sequential(nn.Linear(hidden*3,hidden),nn.ReLU(inplace=True),nn.Linear(hidden,1))
         self.head_beta=nn.Linear(hidden*3, M)
         self.mode_prob_head=nn.Linear(hidden,1)
+        self.recovery_calibrator=MonotoneRecoveryCalibrator(g_dim=g_dim, hidden=max(16, hidden//4))
 
     def forward(self, bev, ego_info, route_command, actions_states=None, actions_controls=None, token_states_ref=None, token_controls_ref=None, token_params=None, token_anchor=None, token_hard_shell=None, action_mask=None, option_mask=None, actions=None, options=None, **kwargs) -> Dict[str, torch.Tensor]:
         forbidden=FORBIDDEN_FORWARD_KEYS.intersection(kwargs.keys())
@@ -75,7 +77,10 @@ class ReCoT(nn.Module):
         u_hat=torch.sigmoid(self.head_u(h_am)).squeeze(-1)
         c_rule_hat=torch.relu(self.head_c(h_am)).squeeze(-1)
         beta_logits=self.head_beta(h_am)
-        return {"g_hat":g_hat,"y_logit":y_logit,"h_hat":h_hat,"k_hat":k_hat,"u_hat":u_hat,"c_rule_hat":c_rule_hat,"beta_logits":beta_logits,"mu_logits":mu_logits,"mode_probs":mode_probs}
+        h_e = h_hat.unsqueeze(2).unsqueeze(-1).expand(*g_hat.shape[:-1], 1)
+        u_e = u_hat.unsqueeze(2).unsqueeze(-1).expand(*g_hat.shape[:-1], 1)
+        v_hat = self.recovery_calibrator(torch.cat([g_hat, -h_e, -k_hat.unsqueeze(-1), -u_e], dim=-1))
+        return {"g_hat":g_hat,"y_logit":y_logit,"h_hat":h_hat,"k_hat":k_hat,"u_hat":u_hat,"c_rule_hat":c_rule_hat,"beta_logits":beta_logits,"mu_logits":mu_logits,"mode_probs":mode_probs,"v_hat":v_hat}
 
 # Backward compatibility
 CARE = ReCoT

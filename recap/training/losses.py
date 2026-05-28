@@ -36,6 +36,15 @@ def observation_consistency_loss(mu, obs_equiv, option_mask):
     return torch.cat([x.reshape(-1) for x in losses]).mean()
 
 
+def _loss_weight(params: dict | None, name: str, default: float) -> float:
+    if not params:
+        return float(default)
+    if name in params:
+        return float(params[name])
+    loss_cfg = params.get("loss", {}) if isinstance(params, dict) else {}
+    return float(loss_cfg.get(name, default))
+
+
 def ocrap_loss(outputs: dict, batch: dict, params: dict | None = None) -> torch.Tensor:
     option_mask = batch["option_mask"].bool().unsqueeze(-1)
     tuple_mask = option_mask.expand_as(outputs["k_hat"])
@@ -58,7 +67,15 @@ def ocrap_loss(outputs: dict, batch: dict, params: dict | None = None) -> torch.
     if "u_star" in batch:
         tgt=batch["u_star"].float()
         if tgt.shape == outputs["u_hat"].shape:
-            loss = loss + 0.2*masked_huber(outputs["u_hat"], tgt, action_mask.expand_as(outputs["u_hat"]))
+            loss = loss + _loss_weight(params, "lambda_u", 0.2)*masked_huber(outputs["u_hat"], tgt, action_mask.expand_as(outputs["u_hat"]))
+    if "c_rule_star" in batch and "c_rule_hat" in outputs:
+        loss = loss + _loss_weight(params, "lambda_c", 1.0)*masked_huber(outputs["c_rule_hat"], batch["c_rule_star"].float(), action_mask.expand_as(outputs["c_rule_hat"]))
+    elif "C_star" in batch and "c_rule_hat" in outputs:
+        C=batch["C_star"].float()
+        if C.dim()==4:
+            # Legacy option-level C labels: supervise action-level head through the valid-option max.
+            C = C.masked_fill(~batch["option_mask"].bool().unsqueeze(-1), -1e6).max(dim=2).values.clamp_min(0.0)
+        loss = loss + _loss_weight(params, "lambda_c", 1.0)*masked_huber(outputs["c_rule_hat"], C, action_mask.expand_as(outputs["c_rule_hat"]))
     if "beta_star" in batch:
         target=batch["beta_star"].float().clamp_min(1e-8)
         pred_log=torch.log_softmax(outputs["beta_logits"], dim=-1)

@@ -124,12 +124,54 @@ def generate_recovery_options(actions: List[ActionPrefix], route_info: RouteInfo
     return [generate_options_for_action(a, route_info, map_features, L, H_r, dt) for a in actions]
 
 
+def _token_anchor(o: RecoveryOption) -> np.ndarray:
+    """Observable recovery anchor used by ReCoT.
+
+    The anchor is deliberately compact and online-deployable: terminal target
+    pose of the fallback reference, not future success labels.
+    """
+    return np.asarray(o.target_anchor, dtype=np.float32).reshape(-1)[:3]
+
+
+def _token_hard_shell(o: RecoveryOption) -> np.ndarray:
+    """Four signed proxy hard-shell margins for the recovery token.
+
+    Positive is feasible/headroom; negative is a local shell violation.  These
+    values are reference-only and observable from the candidate prefix/token:
+    they do not use teacher rollout success, future actor trajectories, or root
+    mode outcomes.
+    """
+    st = np.asarray(o.states_ref, dtype=np.float32)
+    ct = np.asarray(o.controls_ref, dtype=np.float32)
+    if st.size == 0 or ct.size == 0 or not np.all(np.isfinite(st)) or not np.all(np.isfinite(ct)):
+        return np.array([-1.0, -1.0, -1.0, -1.0], dtype=np.float32)
+    speed_margin = 1.0 - float(np.nanmax(st[:, 3])) / 16.9
+    accel_margin = min(4.0 - float(np.nanmax(ct[:, 0])), float(np.nanmin(ct[:, 0])) + 6.0) / 6.0
+    curv_margin = 1.0 - float(np.nanmax(np.abs(st[:, 5]))) / 0.35
+    ref_valid_margin = 1.0 if o.valid else -1.0
+    if o.type == "pad":
+        ref_valid_margin = -1.0
+    return np.asarray([speed_margin, accel_margin, curv_margin, ref_valid_margin], dtype=np.float32)
+
+
 def options_to_tensors(options: List[List[RecoveryOption]]) -> dict:
+    states = np.stack([[o.states_ref for o in opts] for opts in options]).astype(np.float32)
+    controls = np.stack([[o.controls_ref for o in opts] for opts in options]).astype(np.float32)
+    params = np.stack([[o.params for o in opts] for opts in options]).astype(np.float32)
+    anchor = np.stack([[_token_anchor(o) for o in opts] for opts in options]).astype(np.float32)
+    hard_shell = np.stack([[_token_hard_shell(o) for o in opts] for opts in options]).astype(np.float32)
+    mask = np.array([[o.valid for o in opts] for opts in options], dtype=bool)
     return {
-        "options_states_ref": np.stack([[o.states_ref for o in opts] for opts in options]).astype(np.float32),
-        "options_controls_ref": np.stack([[o.controls_ref for o in opts] for opts in options]).astype(np.float32),
-        "options_params": np.stack([[o.params for o in opts] for opts in options]).astype(np.float32),
-        "option_mask": np.array([[o.valid for o in opts] for opts in options], dtype=bool),
+        "options_states_ref": states,
+        "options_controls_ref": controls,
+        "options_params": params,
+        # OC-RAP canonical token names.  Keep options_* aliases for older code.
+        "token_states_ref": states,
+        "token_controls_ref": controls,
+        "token_params": params,
+        "token_anchor": anchor,
+        "token_hard_shell": hard_shell,
+        "option_mask": mask,
     }
 
 
