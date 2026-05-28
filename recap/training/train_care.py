@@ -24,7 +24,9 @@ def train_care(dataset_path: str, output: str, epochs: int = 1, batch_size: int 
     print(f"[train_care] N={len(ds)}", flush=True)
     sample = ds[0]
     print("[train_care] building model", flush=True)
-    model = CARE(C_bev=sample["bev"].shape[1], H_h=sample["bev"].shape[0], M=sample["mode_probs"].shape[0], H_p1=sample["actions_states"].shape[1], H_r1=sample["options_states_ref"].shape[2], hidden=32)
+    token_key = "token_states_ref" if "token_states_ref" in sample else "options_states_ref"
+    control_key = "token_controls_ref" if "token_controls_ref" in sample else "options_controls_ref"
+    model = CARE(C_bev=sample["bev"].shape[1], H_h=sample["bev"].shape[0], M=sample["mode_probs"].shape[0], H_p1=sample["actions_states"].shape[1], H_r1=sample[token_key].shape[2], hidden=32)
     opt = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9)
     model.train()
     rng = np.random.default_rng(0)
@@ -36,7 +38,22 @@ def train_care(dataset_path: str, output: str, epochs: int = 1, batch_size: int 
             idx = order[start:start + batch_size]
             b = _stack_batch(ds, idx)
             print(f"[train_care] step {step} batch={len(idx)}", flush=True)
-            out = model(b["bev"].float(), b["ego_info"].float(), b["route_command"].float(), b["actions_states"].float(), b["options_states_ref"].float(), b["action_mask"].bool(), b["option_mask"].bool())
+            token_key = "token_states_ref" if "token_states_ref" in b else "options_states_ref"
+            control_key = "token_controls_ref" if "token_controls_ref" in b else "options_controls_ref"
+            out = model(
+                b["bev"].float(),
+                b["ego_info"].float(),
+                b["route_command"].float(),
+                actions_states=b["actions_states"].float(),
+                actions_controls=b.get("actions_controls", torch.empty(0)).float() if "actions_controls" in b else None,
+                token_states_ref=b[token_key].float(),
+                token_controls_ref=b[control_key].float() if control_key in b else None,
+                token_params=b.get("token_params", b.get("options_params", None)).float() if ("token_params" in b or "options_params" in b) else None,
+                token_anchor=b.get("token_anchor", None).float() if "token_anchor" in b else None,
+                token_hard_shell=b.get("token_hard_shell", None).float() if "token_hard_shell" in b else None,
+                action_mask=b["action_mask"].bool(),
+                option_mask=b["option_mask"].bool(),
+            )
             loss = care_supervised_loss(out, b)
             opt.zero_grad(); loss.backward(); opt.step()
             print(f"[train_care] loss={float(loss.detach()):.4f}", flush=True)

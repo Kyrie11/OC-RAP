@@ -308,6 +308,7 @@ class MetaDriveRolloutRunner:
         speed_margin: List[float] = []
         stability_margin: List[float] = []
         ttc_margin: List[float] = []
+        actor_obs: List[np.ndarray] = []
         first_contact_idx = -1
         secondary_collision_idx = -1
         contact_type = "none"
@@ -316,6 +317,13 @@ class MetaDriveRolloutRunner:
             for k in range(ref_world.shape[0]):
                 ego = self.adapter.get_ego_state(env)
                 actors = self.adapter.get_actor_states(env)
+                if actors:
+                    arr = np.asarray([[a.x, a.y, a.heading, a.vx, a.vy, a.length, a.width] for a in actors[:16]], dtype=np.float32)
+                    pad = np.zeros((16, 7), dtype=np.float32)
+                    pad[: arr.shape[0]] = arr
+                    actor_obs.append(pad.reshape(-1))
+                else:
+                    actor_obs.append(np.zeros(16 * 7, dtype=np.float32))
                 map_features = self.adapter.get_map_features(env)
                 if root_map_features is not None and (not map_features.drivable_polygons or "map_features" in self.adapter.unavailable):
                     # Some MetaDrive versions do not expose current_map internals through the adapter.
@@ -387,6 +395,7 @@ class MetaDriveRolloutRunner:
         return RolloutTrace(
             ego_states=states_local,
             ego_controls=controls_arr[:, :2] if controls_arr.shape[1] >= 2 else controls_arr,
+            actor_states=np.stack(actor_obs).astype(np.float32) if actor_obs else None,
             stage_boundary_idx=H_p,
             first_contact_idx=int(first_contact_idx),
             first_contact_stage=stage,

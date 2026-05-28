@@ -4,10 +4,13 @@ from .offline_eval import evaluate_offline
 
 
 def evaluate_closed_loop_or_offline(arrays: dict, method: str = "ours", **kwargs) -> dict:
-    """Closed-loop entrypoint.
+    """Evaluate a closed-loop run or fall back to same-candidate offline replay.
 
-    When a simulator backend is unavailable, this returns the offline teacher-label
-    evaluation using the same action candidates.  Real MetaDrive/CARLA closed-loop
-    loops should call this after each replanning step with backend-specific roots.
+    The fallback intentionally keeps `method="ours"` as OC-RAP/CRISP.  Older code
+    replaced it with oracle teacher selection, which made closed-loop smoke tests
+    non-deployable and inflated recovery metrics.
     """
-    return evaluate_offline(arrays, method="oracle" if method == "ours" else method, **kwargs)
+    res = evaluate_offline(arrays, method=method, **kwargs)
+    res["closed_loop_backend"] = "offline_same_candidate_fallback"
+    res["oracle_selector_used_for_ours"] = False
+    return res

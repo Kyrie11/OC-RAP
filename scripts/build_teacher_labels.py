@@ -23,7 +23,7 @@ from recap.teacher.rollout import synthetic_rollout
 from recap.teacher.evidence_labels import evidence_from_trace, scene_uncertainty_from_action, combine_uncertainty
 from recap.teacher.dataset_writer import ShardedDatasetWriter, read_dataset, write_dataset
 from recap.evaluation.metrics import weighted_lcvar_np
-from recap.teacher.observation_classes import build_obs_equivalence, beta_from_obs_equiv, class_consistent_witness
+from recap.teacher.observation_classes import build_obs_equivalence, beta_from_obs_equiv, class_consistent_witness, post_prefix_observation_signature
 from recap.utils.progress import tqdm
 from scripts._common import load_config
 
@@ -224,6 +224,11 @@ def main():
         g_star = np.zeros((K, L, M, 9), np.float32)
         spec_margin_star = np.zeros((K, L, M, 3), np.float32)
         spec_id_star = np.zeros((K, L, M), np.int64)
+        # c_rule is generated per option first, then reduced through the
+        # observation-consistent witness.  Initializing the action-level label
+        # directly and taking max over invalid tokens made almost every action
+        # look rule-violating whenever any padded/invalid token was present.
+        c_rule_option = np.full((K, L, M), np.inf, np.float32)
         c_rule_star = np.zeros((K, M), np.float32)
         Y = np.zeros((K, L, M), bool)
         witness = np.zeros((K, M), np.int64)
@@ -232,6 +237,11 @@ def main():
         Hsrc = np.zeros((K, M), np.int8)
         U_scene = np.zeros(K, np.float32)
         U_interact = np.zeros((K, M), np.float32)
+        # One post-prefix observable signature per (action, root mode).
+        # It must be observable-only but include mode-dependent visible actors
+        # when the rollout backend can expose them; otherwise OC labels collapse
+        # to an over-conservative single class for every action.
+        obs_signatures = [[None for _ in range(M)] for _ in range(K)]
         U_mode = normalized_mode_uncertainty(modes[:M])
 
         action_iter = range(len(actions))
@@ -255,7 +265,8 @@ def main():
                                 arr[a_i, r_i, m_i] = -1.0
                             g_star[a_i, r_i, m_i, :] = -1.0
                             spec_margin_star[a_i, r_i, m_i, :] = -1.0
-                            c_rule_star[a_i, m_i] = max(c_rule_star[a_i, m_i], 1.0)
+                            # Invalid/padded options should be excluded by option_mask
+                            # and must not contaminate the action-level CRISP rule label.
                             continue
                         if rollout_backend == "metadrive":
                             trace = md_runner.rollout(obj, ego, a, o, mode, H_p, H_r, dt, root_map_features=mf, env=reusable_env)
@@ -272,7 +283,9 @@ def main():
                         g_star[a_i, r_i, m_i] = e["g_star"]
                         spec_margin_star[a_i, r_i, m_i] = e["spec_margin_star"]
                         spec_id_star[a_i, r_i, m_i] = e["spec_id_star"]
-                        c_rule_star[a_i, m_i] = max(c_rule_star[a_i, m_i], float(e["c_rule_star"]))
+                        c_rule_option[a_i, r_i, m_i] = float(e["c_rule_star"])
+                        if obs_signatures[a_i][m_i] is None:
+                            obs_signatures[a_i][m_i] = post_prefix_observation_signature(trace, obj, mode)
                         Y[a_i, r_i, m_i] = bool(e["y_star"])
                         h_values.append(e["H_star"])
                         h_sources.append(e["H_source"])
@@ -304,13 +317,26 @@ def main():
         witness_oc = np.zeros((K, M), np.int64)
         Y_oc = np.zeros((K, M), np.float32)
         for a_i in range(K):
-            # Conservative deployable label: modes sharing the same post-prefix
-            # observable ego state must share one witness.  No teacher success or
-            # future trajectory is used in this signature.
-            signatures = [{"ego_post_prefix": actions[a_i].states[-1, :6]} for _ in range(M)]
+            # Observation-consistent labels are based on information available
+            # after executing the prefix: ego post-prefix state plus visible
+            # actor summary when the rollout backend provides it.  Do not use
+            # teacher success, future labels, or hidden mode parameters here.
+            signatures = []
+            for m_i in range(M):
+                sig = obs_signatures[a_i][m_i]
+                if sig is None:
+                    sig = {"ego": actions[a_i].states[-1, :6]}
+                signatures.append(sig)
             obs_class[a_i], obs_equiv[a_i] = build_obs_equivalence(signatures, eps_o=float(cfg.get("planner", {}).get("eps_o", 1e-3)))
             beta_star[a_i] = beta_from_obs_equiv(mode_probs, obs_equiv[a_i])
             witness_oc[a_i], Y_oc[a_i], _ = class_consistent_witness(Y[a_i].astype(np.float32), margins["margin_option"][a_i], mode_probs, obs_class[a_i])
+            for m_i in range(M):
+                j = int(witness_oc[a_i, m_i])
+                val = c_rule_option[a_i, j, m_i]
+                if not np.isfinite(val):
+                    finite = c_rule_option[a_i, :, m_i][np.isfinite(c_rule_option[a_i, :, m_i])]
+                    val = float(finite.min()) if finite.size else 1.0
+                c_rule_star[a_i, m_i] = float(max(0.0, val))
         Y_action = Y.max(axis=1)  # oracle diagnostic only
         R_star = weighted_lcvar_np(Y_oc.astype(np.float32), mode_probs, float(cfg.get("planner", {}).get("alpha_R", 0.2)))
         H_action = H.max(axis=-1) if H.ndim == 2 else H

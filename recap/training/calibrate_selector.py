@@ -2,17 +2,15 @@ from __future__ import annotations
 
 import itertools
 import numpy as np
-try:
-    from scipy.stats import beta
-except Exception:
-    beta = None
 from recap.models.selector import select_action, SelectorParams
 
 
 def cp_ucb(s: int, n: int, xi: float) -> float:
     if n <= 0: return 1.0
     if s == n: return 1.0
-    if beta is not None: return float(beta.ppf(1 - xi, s + 1, n - s))
+    # Distribution-free upper confidence bound.  This avoids the very heavy
+    # scipy.stats import in CLI runs while keeping conformal calibration
+    # conservative for small calibration sets.
     phat=s/n
     return float(min(1.0, phat + np.sqrt(np.log(1/max(xi,1e-12))/(2*n))))
 

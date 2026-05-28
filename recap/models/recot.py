@@ -34,7 +34,7 @@ class ReCoT(nn.Module):
         self.head_h=nn.Sequential(nn.Linear(hidden*3,hidden),nn.ReLU(inplace=True),nn.Linear(hidden,1))
         self.head_u=nn.Sequential(nn.Linear(hidden*3,hidden),nn.ReLU(inplace=True),nn.Linear(hidden,1))
         self.head_c=nn.Sequential(nn.Linear(hidden*3,hidden),nn.ReLU(inplace=True),nn.Linear(hidden,1))
-        self.head_beta=nn.Linear(hidden, M)
+        self.head_beta=nn.Linear(hidden*3, M)
         self.mode_prob_head=nn.Linear(hidden,1)
 
     def forward(self, bev, ego_info, route_command, actions_states=None, actions_controls=None, token_states_ref=None, token_controls_ref=None, token_params=None, token_anchor=None, token_hard_shell=None, action_mask=None, option_mask=None, actions=None, options=None, **kwargs) -> Dict[str, torch.Tensor]:
@@ -74,7 +74,7 @@ class ReCoT(nn.Module):
         h_hat=torch.sigmoid(self.head_h(h_am)).squeeze(-1)
         u_hat=torch.sigmoid(self.head_u(h_am)).squeeze(-1)
         c_rule_hat=torch.relu(self.head_c(h_am)).squeeze(-1)
-        beta_logits=self.head_beta(mode_f)[:,None,:,:].expand(B,K,M,M)
+        beta_logits=self.head_beta(h_am)
         return {"g_hat":g_hat,"y_logit":y_logit,"h_hat":h_hat,"k_hat":k_hat,"u_hat":u_hat,"c_rule_hat":c_rule_hat,"beta_logits":beta_logits,"mu_logits":mu_logits,"mode_probs":mode_probs}
 
 # Backward compatibility

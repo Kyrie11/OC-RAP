@@ -86,6 +86,15 @@ def select_action(actions, profiles: Dict[str, np.ndarray], U_drv: np.ndarray, q
         return pack(masked_argmax(score, S), "constrained")
     if params.no_controlled_relaxation:
         return pack(-1, "no_valid_action", used_fallback=True)
-    # minimum-risk controlled relaxation: choose smallest calibrated violation.
-    violation=(params.lambda_R*np.maximum(params.eta_R - R, 0.0) + params.lambda_H*np.maximum(dH - params.epsilon_H, 0.0) + params.lambda_C*np.maximum(C, 0.0) + params.lambda_K*K_post)
+    # minimum-risk controlled relaxation: choose the smallest calibrated violation,
+    # matching Eq. (relaxation) in the paper.  Earlier versions accidentally
+    # dropped q offsets and the absolute-harm term here, so the fallback could
+    # select an action that CRISP would never admit after calibration.
+    violation=(
+        params.lambda_R*np.maximum(params.eta_R - (R - qv["q_R"]), 0.0)
+        + params.lambda_H*np.maximum(H + qv["q_H"] - params.eta_H, 0.0)
+        + params.lambda_H*np.maximum(dH + qv["q_delta"] - params.epsilon_H, 0.0)
+        + params.lambda_C*np.maximum(C + qv["q_C"], 0.0)
+        + params.lambda_K*K_post
+    )
     return pack(int(np.argmin(np.where(valid, violation, np.inf))), "controlled_relaxation")

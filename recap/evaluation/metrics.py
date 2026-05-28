@@ -44,11 +44,17 @@ def recovery_success(Y_option: np.ndarray, selected_action_idx: np.ndarray, opti
 
 
 def oracle_recovery_success(Y_option: np.ndarray, selected_action_idx: np.ndarray, option_mask: np.ndarray | None = None) -> float:
+    """Non-deployable oracle option-max success averaged over modes.
+
+    This is intentionally separate from deployable OC success.  The old
+    implementation returned 1 if any option succeeded in any mode, which was too
+    optimistic and did not match the paper's mode-wise oracle diagnostic.
+    """
     vals = []
     for i, a in enumerate(selected_action_idx):
         valid = option_mask[i, a] if option_mask is not None else np.ones(Y_option.shape[2], dtype=bool)
         y = Y_option[i, a, valid, :]
-        vals.append(float(y.max() == 1) if y.size else 0.0)
+        vals.append(float(np.mean(y.max(axis=0))) if y.size else 0.0)
     return float(np.mean(vals)) if vals else 0.0
 
 
