@@ -84,6 +84,8 @@ def main():
     ap.add_argument("--allow-temporal-root-rollout", action="store_true", help="Allow real MetaDrive rollout on roots sampled at multiple ticks from the same scenario. This is unsafe unless your MetaDrive runner restores the exact root tick; default is to fail fast for paper-final labels.")
     ap.add_argument("--disable-root-alignment-check", action="store_true", help="Debug only: do not verify that ScenarioEnv reset matches the stored root ego pose.")
     ap.add_argument("--disable-root-time-replay", action="store_true", help="Debug only: do not replay the stored WOMD/ScenarioNet ego history before counterfactual rollout. Without this, ScenarioEnv starts from tick 0 while WOMD roots are usually current_time_index=10.")
+    ap.add_argument("--disable-root-state-restore", action="store_true", help="Debug only: do not snap the controllable MetaDrive SDC to the stored root pose after bounded root-time replay drift.")
+    ap.add_argument("--root-state-restore-max-m", type=float, default=25.0, help="Maximum pre-snap replay drift for root-state restore. Larger drift is treated as scenario/coordinate mismatch.")
     ap.add_argument("--alignment-tolerance-m", type=float, default=5.0)
     ap.add_argument("--shard-size", type=int, default=4, help="Number of roots per label shard. Keep small because BEV is large.")
     ap.add_argument("--compress-shards", action="store_true", help="Use np.savez_compressed per shard. Saves disk but can be much slower.")
@@ -137,6 +139,8 @@ def main():
             strict_root_alignment=not bool(args.disable_root_alignment_check),
             alignment_tolerance_m=float(args.alignment_tolerance_m),
             restore_root_time=not bool(args.disable_root_time_replay),
+            restore_root_state=not bool(args.disable_root_state_restore),
+            root_state_restore_max_m=float(args.root_state_restore_max_m),
         )
 
     all_ids = _select_ids(root_dir, args.split, args.max_roots)

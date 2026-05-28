@@ -44,6 +44,87 @@ class MetaDriveStateAdapter:
             self._mark("ego_state", repr(e))
             return EgoState()
 
+    def set_ego_state(self, env, ego: EgoState, *, set_velocity: bool = True) -> bool:
+        """Best-effort simulator-native restoration of the controllable SDC pose.
+
+        MetaDrive ScenarioEnv can reset by scenario index, but roots collected at
+        later WOMD/ScenarioNet ticks require starting the counterfactual rollout
+        from the stored root pose.  Public MetaDrive versions expose slightly
+        different vehicle APIs, so this method tries the common mutators and
+        validates the result through get_ego_state().  It returns False instead
+        of silently fabricating state if no supported API is available.
+        """
+        agent = getattr(env, "agent", None) or getattr(getattr(env, "engine", None), "agent", None)
+        if agent is None:
+            self._mark("set_ego_state", "env.agent not found")
+            return False
+        pos = np.asarray([float(ego.x), float(ego.y)], dtype=float)
+        heading = float(ego.heading)
+        pos_ok = False
+        for name in ("set_position", "set_pos", "setPosition"):
+            fn = getattr(agent, name, None)
+            if callable(fn):
+                try:
+                    fn(pos)
+                    pos_ok = True
+                    break
+                except Exception:
+                    try:
+                        fn(float(pos[0]), float(pos[1]))
+                        pos_ok = True
+                        break
+                    except Exception:
+                        pass
+        if not pos_ok:
+            try:
+                agent.position = pos
+                pos_ok = True
+            except Exception:
+                pass
+        heading_ok = False
+        for name in ("set_heading_theta", "set_heading", "setHeading"):
+            fn = getattr(agent, name, None)
+            if callable(fn):
+                try:
+                    fn(heading)
+                    heading_ok = True
+                    break
+                except Exception:
+                    pass
+        if not heading_ok:
+            for attr in ("heading_theta", "heading"):
+                try:
+                    setattr(agent, attr, heading)
+                    heading_ok = True
+                    break
+                except Exception:
+                    pass
+        if set_velocity:
+            vx = float(ego.v) * float(np.cos(heading))
+            vy = float(ego.v) * float(np.sin(heading))
+            for name in ("set_velocity", "set_linear_velocity"):
+                fn = getattr(agent, name, None)
+                if callable(fn):
+                    try:
+                        fn([vx, vy])
+                        break
+                    except Exception:
+                        try:
+                            fn(vx, vy)
+                            break
+                        except Exception:
+                            pass
+            else:
+                try:
+                    agent.speed = float(ego.v)
+                except Exception:
+                    pass
+        if not (pos_ok and heading_ok):
+            self._mark("set_ego_state", f"pose restore incomplete: pos_ok={pos_ok}, heading_ok={heading_ok}")
+            return False
+        restored = self.get_ego_state(env)
+        return float(np.hypot(restored.x - ego.x, restored.y - ego.y)) < 0.75
+
     def get_actor_states(self, env) -> List[ActorState]:
         actors: List[ActorState] = []
         engine = getattr(env, "engine", None)

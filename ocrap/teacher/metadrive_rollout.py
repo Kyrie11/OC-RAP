@@ -144,6 +144,8 @@ class MetaDriveRolloutRunner:
     strict_root_alignment: bool = True
     alignment_tolerance_m: float = 5.0
     restore_root_time: bool = True
+    restore_root_state: bool = True
+    root_state_restore_max_m: float = 25.0
     controller: PurePursuitPID = field(default_factory=PurePursuitPID)
     adapter: MetaDriveStateAdapter = field(default_factory=lambda: MetaDriveStateAdapter(strict=False))
 
@@ -286,6 +288,15 @@ class MetaDriveRolloutRunner:
         if self.strict_root_alignment:
             env_ego0 = self.adapter.get_ego_state(env)
             d0 = math.hypot(float(env_ego0.x - root_ego.x), float(env_ego0.y - root_ego.y))
+            # Event-aligned WOMD roots can be tens of ticks after ScenarioEnv reset.
+            # PID history replay often lands within several meters but not exactly
+            # on the stored root pose.  For this bounded case, restore the SDC pose
+            # through MetaDrive's vehicle API, then keep the strict alignment check.
+            # Very large offsets are still treated as centralization/scenario errors.
+            if d0 > float(self.alignment_tolerance_m) and self.restore_root_state and d0 <= float(self.root_state_restore_max_m):
+                if self.adapter.set_ego_state(env, root_ego):
+                    env_ego0 = self.adapter.get_ego_state(env)
+                    d0 = math.hypot(float(env_ego0.x - root_ego.x), float(env_ego0.y - root_ego.y))
             if d0 > float(self.alignment_tolerance_m):
                 rid = root_obj.get("root_id", "unknown")
                 tick = (root_obj.get("scenario_data", {}) or {}).get("current_time_index", root_obj.get("root_tick", "unknown"))
@@ -293,11 +304,11 @@ class MetaDriveRolloutRunner:
                     f"MetaDrive reset/root mismatch for {rid}: env ego is {d0:.2f} m from root ego "
                     f"at root tick {tick}. If this distance is thousands of meters, the root JSON "
                     "was almost certainly collected from uncentralized ScenarioNet/WOMD coordinates; "
-                    "re-run collect_metadrive_roots.py with the patched read_scenario_data(..., "
-                    "centralize=True) path and regenerate BEV. If it is only tens of meters, root-time "
-                    "replay did not reproduce the WOMD current_time_index; reduce the root tick, "
-                    "increase alignment_tolerance_m only for diagnostics, or implement simulator-native "
-                    "root snapshot restore before using labels as paper-final."
+                    "re-run collect_metadrive_roots.py with read_scenario_data(..., centralize=True) "
+                    "and regenerate BEV. If it is only several meters, root-time replay did not exactly "
+                    "reproduce current_time_index; keep --enable-root-state-restore/default restore on, "
+                    "or use --alignment-tolerance-m only for diagnostics. If it is tens of meters, "
+                    "collect earlier roots or implement full traffic snapshot restore before using labels as paper-final."
                 )
         states_world: List[np.ndarray] = []
         controls: List[np.ndarray] = []

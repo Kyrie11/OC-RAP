@@ -75,6 +75,8 @@ def main() -> None:
     ap.add_argument("--allow-temporal-root-rollout", action="store_true")
     ap.add_argument("--disable-root-alignment-check", action="store_true")
     ap.add_argument("--disable-root-time-replay", action="store_true")
+    ap.add_argument("--disable-root-state-restore", action="store_true")
+    ap.add_argument("--root-state-restore-max-m", type=float, default=25.0)
     ap.add_argument("--alignment-tolerance-m", type=float, default=5.0)
     ap.add_argument("--shard-size", type=int, default=1, help="Per-worker output shard size.")
     ap.add_argument("--merge-shard-size", type=int, default=4)
@@ -130,6 +132,7 @@ def main() -> None:
             "--rollout-backend", args.rollout_backend,
             "--metadrive-reactive-traffic", str(args.metadrive_reactive_traffic),
             "--alignment-tolerance-m", str(args.alignment_tolerance_m),
+            "--root-state-restore-max-m", str(args.root_state_restore_max_m),
             "--root-start", str(start),
             "--root-end", str(end),
             "--root-stride", "1",
@@ -143,6 +146,7 @@ def main() -> None:
         cmd += _bool_arg("--allow-temporal-root-rollout", args.allow_temporal_root_rollout)
         cmd += _bool_arg("--disable-root-alignment-check", args.disable_root_alignment_check)
         cmd += _bool_arg("--disable-root-time-replay", args.disable_root_time_replay)
+        cmd += _bool_arg("--disable-root-state-restore", args.disable_root_state_restore)
         cmd += _bool_arg("--compress-shards", args.compress_shards)
 
         env = os.environ.copy()
