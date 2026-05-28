@@ -1,5 +1,5 @@
 import copy
-from recap.envs.root_state import RootStateRestorer
+from ocrap.envs.root_state import RootStateRestorer
 
 class DummyEnv:
     def __init__(self):

@@ -9,13 +9,13 @@ if str(_ROOT) not in _sys.path:
 
 import argparse, json
 from pathlib import Path
-from recap.teacher.dataset_writer import read_dataset
-from recap.evaluation.closed_loop_eval import evaluate_closed_loop_or_offline
+from ocrap.teacher.dataset_writer import read_dataset
+from ocrap.evaluation.closed_loop_eval import evaluate_closed_loop_or_offline
 
 if __name__ == "__main__":
     ap=argparse.ArgumentParser()
     ap.add_argument("--config", default=None)
-    ap.add_argument("--dataset", default="data/recap/test.zarr")
+    ap.add_argument("--dataset", default="data/ocrap/test.zarr")
     ap.add_argument("--checkpoint", default=None)
     ap.add_argument("--calibration", default=None)
     ap.add_argument("--method", default="ours")
@@ -26,7 +26,7 @@ if __name__ == "__main__":
     args=ap.parse_args()
     arrays,meta=read_dataset(args.dataset); arrays=dict(arrays)
     if args.checkpoint and args.method.lower() in ("ours","ocrap","crisp"):
-        from recap.evaluation.inference import predict_profiles
+        from ocrap.evaluation.inference import predict_profiles
         arrays.update(predict_profiles(args.dataset, args.checkpoint, batch_size=args.batch_size))
     calib=None
     if args.calibration:

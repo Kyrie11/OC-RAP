@@ -1,4 +1,4 @@
-from recap.teacher.root_modes import generate_root_modes, build_latent_context, MODE_SLOT_SEMANTICS
+from ocrap.teacher.root_modes import generate_root_modes, build_latent_context, MODE_SLOT_SEMANTICS
 
 
 def test_same_root_mode_schedule_identical_across_actions():

@@ -15,7 +15,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from recap.utils.progress import tqdm
+from ocrap.utils.progress import tqdm
 
 
 def _split_ids(root_dir: Path, split: str, max_roots: int | None) -> list[str]:

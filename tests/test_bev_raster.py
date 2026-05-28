@@ -1,7 +1,7 @@
 import numpy as np
-from recap.raster.geometry import world_to_ego, ego_to_bev_pixel, bev_pixel_to_ego
-from recap.raster.bev_builder import BEVBuilder, HistoryBuffer, REQUIRED_CHANNELS
-from recap.utils.datatypes import BEVSpec, EgoState, ActorState, MapFeatures, RouteInfo
+from ocrap.raster.geometry import world_to_ego, ego_to_bev_pixel, bev_pixel_to_ego
+from ocrap.raster.bev_builder import BEVBuilder, HistoryBuffer, REQUIRED_CHANNELS
+from ocrap.utils.datatypes import BEVSpec, EgoState, ActorState, MapFeatures, RouteInfo
 
 
 def fixture_scene():

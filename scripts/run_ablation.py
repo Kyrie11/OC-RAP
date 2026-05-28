@@ -9,8 +9,8 @@ if str(_ROOT) not in _sys.path:
 
 import argparse, json
 from pathlib import Path
-from recap.teacher.dataset_writer import read_dataset
-from recap.evaluation.offline_eval import evaluate_offline
+from ocrap.teacher.dataset_writer import read_dataset
+from ocrap.evaluation.offline_eval import evaluate_offline
 
 ABLATIONS = {
     "full": None,
@@ -35,7 +35,7 @@ if __name__ == "__main__":
     args=ap.parse_args()
     arrays,meta=read_dataset(args.dataset); arrays=dict(arrays)
     if args.checkpoint:
-        from recap.evaluation.inference import predict_profiles
+        from ocrap.evaluation.inference import predict_profiles
         arrays.update(predict_profiles(args.dataset, args.checkpoint, batch_size=args.batch_size))
     calib=None
     if args.calibration:

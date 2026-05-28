@@ -15,12 +15,12 @@ import json
 import numpy as np
 import yaml
 
-from recap.raster.bev_builder import BEVBuilder, HistoryBuffer
-from recap.raster.affordance_maps import AffordanceProvider
-from recap.raster.debug_draw import write_channel_pngs
-from recap.utils.datatypes import BEVSpec, EgoState, ActorState, MapFeatures, RouteInfo
-from recap.teacher.dataset_writer import ShardedDatasetWriter, write_dataset
-from recap.utils.progress import tqdm
+from ocrap.raster.bev_builder import BEVBuilder, HistoryBuffer
+from ocrap.raster.affordance_maps import AffordanceProvider
+from ocrap.raster.debug_draw import write_channel_pngs
+from ocrap.utils.datatypes import BEVSpec, EgoState, ActorState, MapFeatures, RouteInfo
+from ocrap.teacher.dataset_writer import ShardedDatasetWriter, write_dataset
+from ocrap.utils.progress import tqdm
 from scripts._common import load_config
 
 

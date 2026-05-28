@@ -14,7 +14,7 @@ import sys
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from recap.teacher.dataset_writer import read_dataset, ShardedArray
+from ocrap.teacher.dataset_writer import read_dataset, ShardedArray
 
 
 def _iter_rows(arr):

@@ -12,7 +12,7 @@ import argparse
 import os, sys
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
-from recap.training.train_care import train_care
+from ocrap.training.train_care import train_care
 
 if __name__ == "__main__":
     ap=argparse.ArgumentParser(); ap.add_argument("--config", default=None); ap.add_argument("--dataset", required=True); ap.add_argument("--proposal-checkpoint", default=None); ap.add_argument("--output", required=True); ap.add_argument("--epochs", type=int, default=1); ap.add_argument("--batch-size", type=int, default=2)

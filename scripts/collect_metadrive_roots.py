@@ -15,7 +15,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in _sys.path:
     _sys.path.insert(0, str(_ROOT))
 
-from recap.envs.scenario_description_adapter import (
+from ocrap.envs.scenario_description_adapter import (
     extract_map_features_from_scenario,
     extract_root_state_from_scenario,
     extract_route_info_from_scenario,
@@ -25,10 +25,10 @@ from recap.envs.scenario_description_adapter import (
     scenario_current_time_index,
     scenario_file_path,
 )
-from recap.envs.scenario_regimes import REGIME_RATIOS
-from recap.utils.datatypes import dataclass_to_jsonable
-from recap.utils.serialization import write_json
-from recap.utils.progress import tqdm
+from ocrap.envs.scenario_regimes import REGIME_RATIOS
+from ocrap.utils.datatypes import dataclass_to_jsonable
+from ocrap.utils.serialization import write_json
+from ocrap.utils.progress import tqdm
 
 
 
@@ -208,7 +208,7 @@ def _root_json(root_id: str, scenario_dir: Path, scenario_index: int, scenario_i
 
 
 def _track_length(scenario: dict, summary: dict) -> int:
-    from recap.envs.scenario_description_adapter import scenario_sdc_id, _state_series, _get_by_flexible_key
+    from ocrap.envs.scenario_description_adapter import scenario_sdc_id, _state_series, _get_by_flexible_key
     tracks = scenario.get("tracks", {}) or {}
     sdc_id = scenario_sdc_id(scenario, summary)
     track = _get_by_flexible_key(tracks, sdc_id) if sdc_id is not None else None
@@ -256,7 +256,7 @@ def _sample_root_ticks(scenario: dict, summary: dict, history_steps: int, max_sa
 def main() -> None:
     ap = argparse.ArgumentParser(description="Collect ReCAP root JSON files from a MetaDrive/ScenarioNet real-world database.")
     ap.add_argument("--scenario-dir", required=True, help="ScenarioNet database containing dataset_summary.pkl.")
-    ap.add_argument("--output", default="data/recap/roots_raw")
+    ap.add_argument("--output", default="data/ocrap/roots_raw")
     ap.add_argument("--split-name", choices=["train", "val", "calib", "test", "debug"], default="train")
     ap.add_argument("--max-roots", type=int, default=None)
     ap.add_argument("--start-index", type=int, default=0)

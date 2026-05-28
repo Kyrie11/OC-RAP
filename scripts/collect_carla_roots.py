@@ -10,7 +10,7 @@ if str(_ROOT) not in _sys.path:
 
 import argparse, json
 from pathlib import Path
-from recap.backends.carla_adapter import CarlaRecorderAdapter
+from ocrap.backends.carla_adapter import CarlaRecorderAdapter
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()

@@ -1,7 +1,7 @@
 import numpy as np
-from recap.utils.datatypes import RolloutTrace
-from recap.teacher.margins import compute_margins
-from recap.teacher.evidence_labels import evidence_from_trace
+from ocrap.utils.datatypes import RolloutTrace
+from ocrap.teacher.margins import compute_margins
+from ocrap.teacher.evidence_labels import evidence_from_trace
 
 
 def trace(contact=False):

@@ -13,9 +13,9 @@ import argparse
 from pathlib import Path
 import numpy as np
 
-from recap.envs.scenario_regimes import sample_regime
-from recap.utils.datatypes import EgoState, ActorState, MapFeatures, RouteInfo, RootScene
-from recap.utils.serialization import write_json
+from ocrap.envs.scenario_regimes import sample_regime
+from ocrap.utils.datatypes import EgoState, ActorState, MapFeatures, RouteInfo, RootScene
+from ocrap.utils.serialization import write_json
 from scripts._common import load_config
 
 
@@ -54,7 +54,7 @@ def synthetic_root(root_id: str, seed: int, regime: str) -> dict:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default=None)
-    ap.add_argument("--output", default="data/recap/roots_raw")
+    ap.add_argument("--output", default="data/ocrap/roots_raw")
     ap.add_argument("--max-roots", type=int, default=None)
     ap.add_argument("--synthetic", type=str, default="true", help="Backward-compatible flag. Only true is implemented by this script.")
     ap.add_argument("--backend", choices=["synthetic", "metadrive"], default=None, help="Root collection backend. Real MetaDrive collection is not implemented in this script yet.")

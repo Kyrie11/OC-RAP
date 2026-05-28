@@ -14,7 +14,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in _sys.path:
     _sys.path.insert(0, str(_ROOT))
 
-from recap.teacher.dataset_writer import read_dataset
+from ocrap.teacher.dataset_writer import read_dataset
 
 
 def _plot_poly(ax, arr, closed=True, **kw):

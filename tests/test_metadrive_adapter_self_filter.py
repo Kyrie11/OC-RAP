@@ -1,4 +1,4 @@
-from recap.envs.metadrive_adapter import MetaDriveStateAdapter
+from ocrap.envs.metadrive_adapter import MetaDriveStateAdapter
 
 
 class Obj:

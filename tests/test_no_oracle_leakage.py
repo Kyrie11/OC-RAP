@@ -1,5 +1,5 @@
 import torch, pytest
-from recap.models.care import CARE
+from ocrap.models.care import CARE
 
 
 def batch():

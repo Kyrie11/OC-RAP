@@ -37,11 +37,11 @@ For paper-style datasets, prefer:
 python scripts/build_teacher_labels.py \
   --config configs/dataset_metadrive.yaml \
   --split train \
-  --root-dir data/recap/roots_raw \
-  --bev-dir data/recap/bev/train.zarr \
+  --root-dir data/ocrap/roots_raw \
+  --bev-dir data/ocrap/bev/train.zarr \
   --rollout-backend metadrive \
   --scenario-dir /path/to/scenarionet_database \
-  --output data/recap/train.zarr
+  --output data/ocrap/train.zarr
 ```
 
 Use `--disable-root-time-replay`, `--disable-root-alignment-check`, or `--allow-temporal-root-rollout` only for diagnostics.  They weaken assumptions needed for paper-final teacher labels.  Synthetic roots remain useful for smoke tests only.
@@ -73,7 +73,7 @@ Real MetaDrive/ScenarioNet roots use the existing collectors:
 ```bash
 python scripts/collect_metadrive_roots.py \
   --config configs/dataset_metadrive.yaml \
-  --output data/recap/roots_raw
+  --output data/ocrap/roots_raw
 ```
 
 For paper-final real teacher labels, avoid temporal root leakage unless the runner restores the exact root tick.  The label builder fails fast by default when real temporal roots are unsafe.
@@ -82,13 +82,13 @@ For paper-final real teacher labels, avoid temporal root leakage unless the runn
 
 ```bash
 python scripts/rasterize_bev.py \
-  --root-dir data/recap/roots_raw \
+  --root-dir data/ocrap/roots_raw \
   --split train \
   --bev-config configs/bev_256.yaml \
   --channels compact \
   --history-steps 10 \
   --num-workers 8 \
-  --output data/recap/bev/train.zarr
+  --output data/ocrap/bev/train.zarr
 ```
 
 ### 3. Build OC-RAP teacher labels
@@ -97,23 +97,23 @@ python scripts/rasterize_bev.py \
 python scripts/build_teacher_labels.py \
   --config configs/dataset_metadrive.yaml \
   --split train \
-  --root-dir data/recap/roots_raw \
-  --bev-dir data/recap/bev/train.zarr \
-  --output data/recap/train.zarr
+  --root-dir data/ocrap/roots_raw \
+  --bev-dir data/ocrap/bev/train.zarr \
+  --output data/ocrap/train.zarr
 
 python scripts/build_teacher_labels.py \
   --config configs/dataset_metadrive.yaml \
   --split calib \
-  --root-dir data/recap/roots_raw \
-  --bev-dir data/recap/bev/calib.zarr \
-  --output data/recap/calib.zarr
+  --root-dir data/ocrap/roots_raw \
+  --bev-dir data/ocrap/bev/calib.zarr \
+  --output data/ocrap/calib.zarr
 
 python scripts/build_teacher_labels.py \
   --config configs/dataset_metadrive.yaml \
   --split test \
-  --root-dir data/recap/roots_raw \
-  --bev-dir data/recap/bev/test.zarr \
-  --output data/recap/test.zarr
+  --root-dir data/ocrap/roots_raw \
+  --bev-dir data/ocrap/bev/test.zarr \
+  --output data/ocrap/test.zarr
 ```
 
 The builder writes both deployable OC labels and explicit oracle diagnostics.  Use `R_star`/`Y_oc`/`witness_oc` for OC-RAP metrics; use `Y_action`/`witness_raw_oracle` only for ablation diagnostics.
@@ -125,12 +125,12 @@ The legacy script name remains available, but it now imports the ReCoT/OC-RAP mo
 ```bash
 python scripts/train_action_proposal.py \
   --config configs/train_action_proposal.yaml \
-  --dataset data/recap/train.zarr \
+  --dataset data/ocrap/train.zarr \
   --output checkpoints/action_proposal
 
 python scripts/train_care.py \
   --config configs/train_care.yaml \
-  --dataset data/recap/train.zarr \
+  --dataset data/ocrap/train.zarr \
   --proposal-checkpoint checkpoints/action_proposal/best.pt \
   --output checkpoints/recot
 ```
@@ -142,7 +142,7 @@ When writing new experiments, prefer module names `recap.models.recot`, `recap.m
 ```bash
 python scripts/calibrate.py \
   --config configs/train_care.yaml \
-  --dataset data/recap/calib.zarr \
+  --dataset data/ocrap/calib.zarr \
   --checkpoint checkpoints/recot/best.pt \
   --split calib \
   --output outputs/calibration
@@ -155,7 +155,7 @@ python scripts/calibrate.py \
 ```bash
 python scripts/offline_eval.py \
   --config configs/train_care.yaml \
-  --dataset data/recap/test.zarr \
+  --dataset data/ocrap/test.zarr \
   --checkpoint checkpoints/recot/best.pt \
   --calibration outputs/calibration/q_values.json \
   --method ours \
@@ -169,7 +169,7 @@ The evaluation code reports deployable OC-RAP recovery metrics separately from o
 ```bash
 python scripts/eval_closed_loop.py \
   --config configs/eval_closed_loop.yaml \
-  --dataset data/recap/test.zarr \
+  --dataset data/ocrap/test.zarr \
   --checkpoint checkpoints/recot/best.pt \
   --calibration outputs/calibration/q_values.json \
   --method ours \
@@ -284,7 +284,7 @@ The paper's external baseline comparison can be omitted, but all OC-RAP metrics 
 ```bash
 # OC-RAP only, with all internal ablations
 python scripts/run_all_experiments.py \
-  --dataset data/recap/test.zarr \
+  --dataset data/ocrap/test.zarr \
   --checkpoint checkpoints/recot/best.pt \
   --calibration outputs/calibration/q_values.json \
   --output outputs/experiments/ocrap_suite \
@@ -293,7 +293,7 @@ python scripts/run_all_experiments.py \
 
 # Include built-in simple baselines: nominal, risk_aware, backup_filter, oracle diagnostic
 python scripts/run_all_experiments.py \
-  --dataset data/recap/test.zarr \
+  --dataset data/ocrap/test.zarr \
   --checkpoint checkpoints/recot/best.pt \
   --calibration outputs/calibration/q_values.json \
   --output outputs/experiments/all_builtin \
@@ -302,7 +302,7 @@ python scripts/run_all_experiments.py \
 # Single ablation switch
 python scripts/run_ablation.py \
   --ablation no_harm_constraint \
-  --dataset data/recap/test.zarr \
+  --dataset data/ocrap/test.zarr \
   --checkpoint checkpoints/recot/best.pt \
   --calibration outputs/calibration/q_values.json \
   --output outputs/ablations/no_harm_constraint \
@@ -363,7 +363,7 @@ Run this after every root/BEV/teacher-label build and attach the JSON/Markdown o
 
 ```bash
 python scripts/generate_dataset_health_report.py \
-  --dataset data/recap/train.zarr \
+  --dataset data/ocrap/train.zarr \
   --output outputs/health/train
 ```
 
@@ -375,8 +375,8 @@ Hybrid stress roots start from natural WOMD/ScenarioNet roots and deterministica
 
 ```bash
 python scripts/generate_hybrid_womd_stress_roots.py \
-  --input-root-dir data/recap/roots_raw \
-  --output-root-dir data/recap/roots_hybrid_stress \
+  --input-root-dir data/ocrap/roots_raw \
+  --output-root-dir data/ocrap/roots_hybrid_stress \
   --split train \
   --num-roots 5000 \
   --copies-per-root 1 \
@@ -387,25 +387,25 @@ Then use the normal OC-RAP pipeline on the hybrid root directory:
 
 ```bash
 python scripts/rasterize_bev.py \
-  --root-dir data/recap/roots_hybrid_stress \
+  --root-dir data/ocrap/roots_hybrid_stress \
   --split train \
   --bev-config configs/bev_256.yaml \
   --channels compact \
   --history-steps 10 \
   --num-workers 8 \
-  --output data/recap/bev/hybrid_train.zarr
+  --output data/ocrap/bev/hybrid_train.zarr
 
 python scripts/build_teacher_labels.py \
   --config configs/dataset_hybrid_womd_stress.yaml \
   --split train \
-  --root-dir data/recap/roots_hybrid_stress \
-  --bev-dir data/recap/bev/hybrid_train.zarr \
+  --root-dir data/ocrap/roots_hybrid_stress \
+  --bev-dir data/ocrap/bev/hybrid_train.zarr \
   --rollout-backend metadrive \
   --scenario-dir /path/to/scenarionet_database \
-  --output data/recap/hybrid_train.zarr
+  --output data/ocrap/hybrid_train.zarr
 
 python scripts/generate_dataset_health_report.py \
-  --dataset data/recap/hybrid_train.zarr \
+  --dataset data/ocrap/hybrid_train.zarr \
   --output outputs/health/hybrid_train
 ```
 
@@ -413,12 +413,12 @@ To train with natural + hybrid data, either train sequentially or merge sharded 
 
 ```bash
 python scripts/merge_sharded_datasets.py \
-  --inputs data/recap/train.zarr data/recap/hybrid_train.zarr \
-  --output data/recap/train_plus_hybrid.zarr
+  --inputs data/ocrap/train.zarr data/ocrap/hybrid_train.zarr \
+  --output data/ocrap/train_plus_hybrid.zarr
 
 python scripts/train_care.py \
   --config configs/train_care.yaml \
-  --dataset data/recap/train_plus_hybrid.zarr \
+  --dataset data/ocrap/train_plus_hybrid.zarr \
   --output checkpoints/recot_plus_hybrid
 ```
 

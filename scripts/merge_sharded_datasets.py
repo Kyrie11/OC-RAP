@@ -14,8 +14,8 @@ if str(_ROOT) not in sys.path:
 
 import numpy as np
 
-from recap.teacher.dataset_writer import ShardedDatasetWriter, read_dataset
-from recap.utils.progress import tqdm
+from ocrap.teacher.dataset_writer import ShardedDatasetWriter, read_dataset
+from ocrap.utils.progress import tqdm
 
 
 def _natural_key(path: Path) -> list[Any]:

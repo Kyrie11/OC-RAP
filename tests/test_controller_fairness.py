@@ -1,4 +1,4 @@
-from recap.controllers.pure_pursuit_pid import PurePursuitPID
+from ocrap.controllers.pure_pursuit_pid import PurePursuitPID
 
 
 def test_same_controller_config_for_all_methods():

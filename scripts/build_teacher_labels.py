@@ -15,16 +15,16 @@ import time
 
 import numpy as np
 
-from recap.utils.datatypes import EgoState, ActorState, MapFeatures, RouteInfo
-from recap.proposals.action_lattice import generate_lattice_actions, actions_to_tensors
-from recap.proposals.recovery_options import generate_recovery_options, options_to_tensors
-from recap.teacher.root_modes import generate_root_modes, mode_seed_params_array, normalized_mode_uncertainty, MODE_SLOT_SEMANTICS
-from recap.teacher.rollout import synthetic_rollout
-from recap.teacher.evidence_labels import evidence_from_trace, scene_uncertainty_from_action, combine_uncertainty
-from recap.teacher.dataset_writer import ShardedDatasetWriter, read_dataset, write_dataset
-from recap.evaluation.metrics import weighted_lcvar_np
-from recap.teacher.observation_classes import build_obs_equivalence, beta_from_obs_equiv, class_consistent_witness, post_prefix_observation_signature
-from recap.utils.progress import tqdm
+from ocrap.utils.datatypes import EgoState, ActorState, MapFeatures, RouteInfo
+from ocrap.proposals.action_lattice import generate_lattice_actions, actions_to_tensors
+from ocrap.proposals.recovery_options import generate_recovery_options, options_to_tensors
+from ocrap.teacher.root_modes import generate_root_modes, mode_seed_params_array, normalized_mode_uncertainty, MODE_SLOT_SEMANTICS
+from ocrap.teacher.rollout import synthetic_rollout
+from ocrap.teacher.evidence_labels import evidence_from_trace, scene_uncertainty_from_action, combine_uncertainty
+from ocrap.teacher.dataset_writer import ShardedDatasetWriter, read_dataset, write_dataset
+from ocrap.evaluation.metrics import weighted_lcvar_np
+from ocrap.teacher.observation_classes import build_obs_equivalence, beta_from_obs_equiv, class_consistent_witness, post_prefix_observation_signature
+from ocrap.utils.progress import tqdm
 from scripts._common import load_config
 
 
@@ -74,7 +74,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default=None)
     ap.add_argument("--split", default="train")
-    ap.add_argument("--root-dir", default="data/recap/roots_raw")
+    ap.add_argument("--root-dir", default="data/ocrap/roots_raw")
     ap.add_argument("--bev-dir", default=None)
     ap.add_argument("--output", required=True)
     ap.add_argument("--max-roots", type=int, default=None)
@@ -115,7 +115,7 @@ def main():
 
     md_runner = None
     if rollout_backend == "metadrive":
-        from recap.teacher.metadrive_rollout import MetaDriveRolloutRunner
+        from ocrap.teacher.metadrive_rollout import MetaDriveRolloutRunner
         scenario_dir = args.scenario_dir or root_meta.get("scenario_dir")
         if not scenario_dir:
             raise ValueError("--rollout-backend metadrive requires --scenario-dir or root metadata scenario_dir")

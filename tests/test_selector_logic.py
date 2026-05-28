@@ -1,6 +1,6 @@
 import numpy as np
 import pytest
-from recap.models.selector import select_action, SelectorParams
+from ocrap.models.selector import select_action, SelectorParams
 
 
 def prof():

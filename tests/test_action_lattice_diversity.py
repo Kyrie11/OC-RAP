@@ -1,7 +1,7 @@
 import numpy as np
 
-from recap.proposals.action_lattice import generate_lattice_actions
-from recap.utils.datatypes import EgoState, RouteInfo
+from ocrap.proposals.action_lattice import generate_lattice_actions
+from ocrap.utils.datatypes import EgoState, RouteInfo
 
 
 def test_paper_lattice_has_many_distinct_prefixes():

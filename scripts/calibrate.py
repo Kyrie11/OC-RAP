@@ -10,9 +10,9 @@ if str(_ROOT) not in _sys.path:
 import argparse, json
 from pathlib import Path
 import numpy as np
-from recap.teacher.dataset_writer import read_dataset
-from recap.training.calibrate_selector import calibrate_q
-from recap.evaluation.offline_eval import nominal_utility
+from ocrap.teacher.dataset_writer import read_dataset
+from ocrap.training.calibrate_selector import calibrate_q
+from ocrap.evaluation.offline_eval import nominal_utility
 
 if __name__ == "__main__":
     ap=argparse.ArgumentParser()
@@ -28,7 +28,7 @@ if __name__ == "__main__":
     args=ap.parse_args()
     arrays,meta=read_dataset(args.dataset); arrays=dict(arrays)
     if args.checkpoint:
-        from recap.evaluation.inference import predict_profiles
+        from ocrap.evaluation.inference import predict_profiles
         arrays.update(predict_profiles(args.dataset, args.checkpoint, batch_size=args.batch_size))
     R_star=np.asarray(arrays["R_star"])
     R_pred=np.asarray(arrays.get("R_pred", R_star))

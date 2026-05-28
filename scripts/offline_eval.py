@@ -9,8 +9,8 @@ if str(_ROOT) not in _sys.path:
 
 import argparse, json
 from pathlib import Path
-from recap.teacher.dataset_writer import read_dataset
-from recap.evaluation.offline_eval import evaluate_offline
+from ocrap.teacher.dataset_writer import read_dataset
+from ocrap.evaluation.offline_eval import evaluate_offline
 
 if __name__ == "__main__":
     ap=argparse.ArgumentParser()
@@ -30,7 +30,7 @@ if __name__ == "__main__":
     arrays=dict(arrays)
     pred_meta={}
     if args.checkpoint and args.method.lower() in ("ours","ocrap","crisp"):
-        from recap.evaluation.inference import predict_profiles
+        from ocrap.evaluation.inference import predict_profiles
         pred = predict_profiles(args.dataset, args.checkpoint, batch_size=args.batch_size)
         arrays.update(pred)
         pred_meta={"checkpoint": args.checkpoint, "prediction_arrays": sorted(pred.keys())}

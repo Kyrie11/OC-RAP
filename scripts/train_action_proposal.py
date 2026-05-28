@@ -9,7 +9,7 @@ if str(_ROOT) not in _sys.path:
     _sys.path.insert(0, str(_ROOT))
 
 import argparse
-from recap.training.train_action_proposal import train_action_proposal
+from ocrap.training.train_action_proposal import train_action_proposal
 
 if __name__ == "__main__":
     ap=argparse.ArgumentParser(); ap.add_argument("--config", default=None); ap.add_argument("--dataset", required=True); ap.add_argument("--output", required=True)

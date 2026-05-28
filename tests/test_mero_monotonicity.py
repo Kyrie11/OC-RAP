@@ -1,5 +1,5 @@
 import torch
-from recap.models.mero import compute_profiles, MEROParams, existential_option_aggregate
+from ocrap.models.mero import compute_profiles, MEROParams, existential_option_aggregate
 
 
 def pred(P=0.2,G=0.8,C=0.8,U=0.1,K=0.1,L=3):

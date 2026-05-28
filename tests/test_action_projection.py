@@ -1,7 +1,7 @@
 import numpy as np
-from recap.proposals.action_lattice import generate_lattice_actions
-from recap.proposals.action_projection import validate_prefix
-from recap.utils.datatypes import EgoState, RouteInfo, MapFeatures, ActionPrefix
+from ocrap.proposals.action_lattice import generate_lattice_actions
+from ocrap.proposals.action_projection import validate_prefix
+from ocrap.utils.datatypes import EgoState, RouteInfo, MapFeatures, ActionPrefix
 
 
 def test_dynamic_bounds_satisfied():

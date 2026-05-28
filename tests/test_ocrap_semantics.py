@@ -1,10 +1,10 @@
 import numpy as np
 import torch
-from recap.teacher.recovery_specs import option_margin_from_specs
-from recap.teacher.observation_classes import build_obs_equivalence, beta_from_obs_equiv, class_consistent_witness
-from recap.evaluation.metrics import weighted_lcvar_np
-from recap.models.oc_mero import existential_mu_aggregate
-from recap.models.recot import ReCoT
+from ocrap.teacher.recovery_specs import option_margin_from_specs
+from ocrap.teacher.observation_classes import build_obs_equivalence, beta_from_obs_equiv, class_consistent_witness
+from ocrap.evaluation.metrics import weighted_lcvar_np
+from ocrap.models.oc_mero import existential_mu_aggregate
+from ocrap.models.recot import ReCoT
 
 
 def test_option_margin_is_max_over_specs_not_min():

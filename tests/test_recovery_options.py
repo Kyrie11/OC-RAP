@@ -1,7 +1,7 @@
 import numpy as np
-from recap.proposals.action_lattice import generate_lattice_actions
-from recap.proposals.recovery_options import generate_options_for_action
-from recap.utils.datatypes import EgoState, RouteInfo
+from ocrap.proposals.action_lattice import generate_lattice_actions
+from ocrap.proposals.recovery_options import generate_options_for_action
+from ocrap.utils.datatypes import EgoState, RouteInfo
 
 
 def make_opts():
