@@ -24,6 +24,11 @@ def weighted_lcvar_np(values: np.ndarray, weights: np.ndarray, alpha: float = 0.
     return (out / max(alpha, 1e-12)).astype(np.float32)
 
 
+def upper_tail_cvar_np(values: np.ndarray, weights: np.ndarray, alpha: float = 0.2) -> np.ndarray:
+    """Upper-tail weighted CVaR along the final axis."""
+    return -weighted_lcvar_np(-np.asarray(values, dtype=np.float64), weights, alpha)
+
+
 def recovery_success(Y_option: np.ndarray, selected_action_idx: np.ndarray, option_mask: np.ndarray | None = None, witness_oc: np.ndarray | None = None, Y_oc: np.ndarray | None = None) -> float:
     """Deployable recovery success.
 
@@ -33,10 +38,14 @@ def recovery_success(Y_option: np.ndarray, selected_action_idx: np.ndarray, opti
     vals = []
     if Y_oc is not None:
         for i, a in enumerate(selected_action_idx):
+            if a < 0:
+                vals.append(0.0); continue
             vals.append(float(np.mean(Y_oc[i, a])))
         return float(np.mean(vals)) if vals else 0.0
     if witness_oc is not None:
         for i, a in enumerate(selected_action_idx):
+            if a < 0:
+                vals.append(0.0); continue
             w = witness_oc[i, a]
             vals.append(float(np.mean(Y_option[i, a, w, np.arange(Y_option.shape[-1])])))
         return float(np.mean(vals)) if vals else 0.0
@@ -52,6 +61,8 @@ def oracle_recovery_success(Y_option: np.ndarray, selected_action_idx: np.ndarra
     """
     vals = []
     for i, a in enumerate(selected_action_idx):
+        if a < 0:
+            vals.append(0.0); continue
         valid = option_mask[i, a] if option_mask is not None else np.ones(Y_option.shape[2], dtype=bool)
         y = Y_option[i, a, valid, :]
         vals.append(float(np.mean(y.max(axis=0))) if y.size else 0.0)
@@ -59,11 +70,11 @@ def oracle_recovery_success(Y_option: np.ndarray, selected_action_idx: np.ndarra
 
 
 def false_recoverability(R_star: np.ndarray, selected_action_idx: np.ndarray, eta_R: float = 0.70) -> float:
-    return float(np.mean([R_star[i, a] < eta_R for i, a in enumerate(selected_action_idx)]))
+    return float(np.mean([(True if a < 0 else R_star[i, a] < eta_R) for i, a in enumerate(selected_action_idx)]))
 
 
 def selected_lower_tail_recoverability(R_star: np.ndarray, selected_action_idx: np.ndarray) -> float:
-    return float(np.mean([R_star[i, a] for i, a in enumerate(selected_action_idx)]))
+    return float(np.mean([(0.0 if a < 0 else R_star[i, a]) for i, a in enumerate(selected_action_idx)]))
 
 
 def pairwise_ranking_accuracy(R_pred: np.ndarray, R_star: np.ndarray, action_mask: np.ndarray, eps: float = 1e-3) -> float:
@@ -85,7 +96,7 @@ def pairwise_ranking_accuracy(R_pred: np.ndarray, R_star: np.ndarray, action_mas
 def same_root_recoverability_regret(R_star: np.ndarray, selected_action_idx: np.ndarray, action_mask: np.ndarray) -> float:
     vals = []
     for i, a in enumerate(selected_action_idx):
-        vals.append(float(np.max(R_star[i][action_mask[i]]) - R_star[i, a]))
+        vals.append(float(np.max(R_star[i][action_mask[i]]) - (0.0 if a < 0 else R_star[i, a])))
     return float(np.mean(vals)) if vals else 0.0
 
 
@@ -130,10 +141,15 @@ def bottleneck_f1(pred_badness: np.ndarray, star_badness: np.ndarray) -> float:
     return float(np.mean(f1s))
 
 
-def harm_noninferiority_violation(H_action_star: np.ndarray, selected_action_idx: np.ndarray, epsilon_H: float = 0.05) -> float:
+def harm_noninferiority_violation(H_action_star: np.ndarray, selected_action_idx: np.ndarray, epsilon_H: float = 0.05, action_mask: np.ndarray | None = None) -> float:
     vals = []
+    H = np.asarray(H_action_star, dtype=float)
+    mask = np.ones_like(H, dtype=bool) if action_mask is None else np.asarray(action_mask, dtype=bool)
     for i, a in enumerate(selected_action_idx):
-        vals.append(float(H_action_star[i, a] > np.min(H_action_star[i]) + epsilon_H))
+        valid_vals = H[i][mask[i]]
+        if valid_vals.size == 0 or a < 0 or not mask[i, a]:
+            continue
+        vals.append(float(H[i, a] > np.min(valid_vals) + epsilon_H))
     return float(np.mean(vals)) if vals else 0.0
 
 
@@ -142,7 +158,8 @@ def minimal_intervention_regret(U_drv: np.ndarray, selected_action_idx: np.ndarr
     for i in range(U_drv.shape[0]):
         a_nom = int(np.argmax(U_drv[i]))
         if R_star[i, a_nom] >= eta_R and H_gap_star[i, a_nom] <= epsilon_H:
-            vals.append(max(0.0, float(U_drv[i, a_nom] - U_drv[i, selected_action_idx[i]])))
+            a_sel = int(selected_action_idx[i])
+            vals.append(max(0.0, float(U_drv[i, a_nom] - (U_drv[i, a_sel] if a_sel >= 0 else 0.0))))
     return float(np.mean(vals)) if vals else 0.0
 
 

@@ -4,10 +4,10 @@ dataset:
   num_roots: 32
   split: {train: 0.70, calib: 0.15, test: 0.15}
 planner:
-  K_raw: 32
-  K: 16
-  L: 6
-  M: 4
+  K_raw: 64
+  K: 32
+  L: 12
+  M: 8
   H_p: 10
   H_r: 25
   dt: 0.2
@@ -54,7 +54,7 @@ ablation:
   no_escape: false
   no_stabilize: false
   fixed_backup_only: false
-  M: 4
+  M: 8
   alpha_R: 0.20
   alpha_H: 0.20
   alpha_K: 0.20
@@ -66,8 +66,8 @@ ablation:
   use_min_over_modes: false
   lattice_only: true
   neural_proposal: false
-  K: 16
-  L: 6
+  K: 32
+  L: 12
 
 ablation:
   enabled: true

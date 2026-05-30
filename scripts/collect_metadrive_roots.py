@@ -29,6 +29,7 @@ from ocrap.envs.scenario_regimes import REGIME_RATIOS
 from ocrap.utils.datatypes import dataclass_to_jsonable
 from ocrap.utils.serialization import write_json
 from ocrap.utils.progress import tqdm
+from scripts._common import load_config
 
 
 
@@ -254,15 +255,16 @@ def _sample_root_ticks(scenario: dict, summary: dict, history_steps: int, max_sa
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Collect ReCAP root JSON files from a MetaDrive/ScenarioNet real-world database.")
-    ap.add_argument("--scenario-dir", required=True, help="ScenarioNet database containing dataset_summary.pkl.")
+    ap = argparse.ArgumentParser(description="Collect OC-RAP root JSON files from a MetaDrive/ScenarioNet real-world database.")
+    ap.add_argument("--config", default=None, help="Optional YAML config; CLI arguments override it.")
+    ap.add_argument("--scenario-dir", default=None, help="ScenarioNet database containing dataset_summary.pkl.")
     ap.add_argument("--output", default="data/ocrap/roots_raw")
     ap.add_argument("--split-name", choices=["train", "val", "calib", "test", "debug"], default="train")
     ap.add_argument("--max-roots", type=int, default=None)
     ap.add_argument("--start-index", type=int, default=0)
     ap.add_argument("--min-moving-objects", type=int, default=1)
     ap.add_argument("--min-objects", type=int, default=2)
-    ap.add_argument("--history-steps", type=int, default=10)
+    ap.add_argument("--history-steps", type=int, default=None)
     ap.add_argument("--max-samples-per-log", type=int, default=1, help="Number of temporal roots to sample from each scenario/log. Use 1 with --event-aligned-root for one event-rich root per log.")
     ap.add_argument("--sample-stride", type=int, default=5, help="Minimum frame stride between temporal roots when max_samples_per_log > 1 or event-aligned scanning is enabled.")
     ap.add_argument("--event-aligned-root", action="store_true", help="Choose the root tick with highest contact/near-contact/low-headroom score instead of always using current_time_index.")
@@ -271,6 +273,15 @@ def main() -> None:
     ap.add_argument("--max-scenarios-to-scan", type=int, default=None, help="Optional cap on scenarios scanned when using --target-regime-counts.")
     ap.add_argument("--append", action="store_true", help="Append to existing root directory/splits instead of replacing split list.")
     args = ap.parse_args()
+    cfg = load_config(args.config)
+    dcfg = cfg.get("dataset", {}) if isinstance(cfg.get("dataset", {}), dict) else {}
+    bcfg = cfg.get("bev", {}) if isinstance(cfg.get("bev", {}), dict) else {}
+    if args.scenario_dir is None:
+        args.scenario_dir = dcfg.get("scenario_dir") or cfg.get("scenario_dir")
+    if args.scenario_dir is None:
+        raise ValueError("--scenario-dir is required unless provided by --config")
+    if args.history_steps is None:
+        args.history_steps = int(bcfg.get("history_steps", dcfg.get("history_steps", 5)))
     target_counts = _parse_regime_counts(args.target_regime_counts)
     scenario_dir = Path(args.scenario_dir)
     out = Path(args.output)

@@ -74,7 +74,7 @@ class BEVSpec:
     W: int = 256
     range_x: tuple[float, float] = (-40.0, 40.0)
     range_y: tuple[float, float] = (-40.0, 40.0)
-    history_steps: int = 10
+    history_steps: int = 5
     dt: float = 0.2
     mode: str = "compact"
     velocity_scale: float = 20.0

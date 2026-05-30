@@ -15,7 +15,7 @@ FORBIDDEN_FORWARD_KEYS = {
 
 
 class ReCoT(nn.Module):
-    def __init__(self, C_bev: int = 24, H_h: int = 10, D_ego: int = 11, D_q: int = 6, N_q: int = 20, H_p1: int = 11, H_r1: int = 26, D_state: int = 6, M: int = 8, hidden: int = 128, g_dim: int = 9, D_token: int = 6, A_anchor: int = 3, D_shell: int = 4):
+    def __init__(self, C_bev: int = 24, H_h: int = 5, D_ego: int = 11, D_q: int = 6, N_q: int = 20, H_p1: int = 11, H_r1: int = 26, D_state: int = 6, M: int = 8, hidden: int = 128, g_dim: int = 9, D_token: int = 6, A_anchor: int = 3, D_shell: int = 12):
         super().__init__()
         self.M=M; self.hidden=hidden; self.g_dim=g_dim
         self.bev_encoder=TemporalBEVEncoder(C_bev,H_h,hidden)

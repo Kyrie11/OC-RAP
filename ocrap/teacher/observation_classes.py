@@ -36,12 +36,49 @@ def obs_distance(sig1, sig2, weights=None) -> float:
     return float(np.sqrt(np.mean(w * (aa - bb) ** 2)))
 
 
+
+
+def _angle_diff(a: float, b: float) -> float:
+    return float((float(a) - float(b) + np.pi) % (2 * np.pi) - np.pi)
+
+
+def obs_equivalent(sig1, sig2, eps_o: float = 1e-3) -> bool:
+    """Deployable post-prefix observation equivalence.
+
+    A single exact RMSE threshold makes OC labels either nearly oracle (too
+    small) or globally conservative (too large).  For dictionary signatures we
+    use typed tolerances matching the paper intent: ego pose/speed tolerance and
+    visible-actor summary tolerance.  ``eps_o`` still scales these tolerances for
+    sensitivity studies when set above the legacy 1e-3 default.
+    """
+    if isinstance(sig1, dict) and isinstance(sig2, dict):
+        scale = max(1.0, float(eps_o) / 1e-3) if eps_o <= 0.05 else float(eps_o) / 0.25
+        e1 = np.asarray(sig1.get("ego", []), dtype=np.float32).reshape(-1)
+        e2 = np.asarray(sig2.get("ego", []), dtype=np.float32).reshape(-1)
+        if e1.size >= 4 and e2.size >= 4:
+            if float(np.linalg.norm(e1[:2] - e2[:2])) > 0.20 * scale:
+                return False
+            if abs(_angle_diff(float(e1[2]), float(e2[2]))) > np.deg2rad(2.0) * scale:
+                return False
+            if abs(float(e1[3]) - float(e2[3])) > 0.30 * scale:
+                return False
+        a1 = np.asarray(sig1.get("visible_actor_summary", []), dtype=np.float32).reshape(-1)
+        a2 = np.asarray(sig2.get("visible_actor_summary", []), dtype=np.float32).reshape(-1)
+        n = max(a1.size, a2.size)
+        if n > 1:
+            aa = np.zeros(n, dtype=np.float32); bb = np.zeros(n, dtype=np.float32)
+            aa[:a1.size] = a1; bb[:a2.size] = a2
+            if float(np.sqrt(np.mean((aa - bb) ** 2))) > 0.50 * scale:
+                return False
+        return True
+    return obs_distance(sig1, sig2) <= eps_o
+
 def build_obs_equivalence(signatures: Iterable, eps_o: float = 1e-3) -> Tuple[np.ndarray, np.ndarray]:
     sigs=list(signatures); M=len(sigs)
     obs_equiv=np.eye(M, dtype=bool)
     for i in range(M):
         for j in range(i+1, M):
-            eq = obs_distance(sigs[i], sigs[j]) <= eps_o
+            eq = obs_equivalent(sigs[i], sigs[j], eps_o=eps_o)
             obs_equiv[i,j]=obs_equiv[j,i]=eq
     # Union-find for transitive classes.
     parent=list(range(M))

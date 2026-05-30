@@ -134,24 +134,47 @@ def _token_anchor(o: RecoveryOption) -> np.ndarray:
 
 
 def _token_hard_shell(o: RecoveryOption) -> np.ndarray:
-    """Four signed proxy hard-shell margins for the recovery token.
+    """Observable hard-shell and potential proxy margins for a recovery token.
 
-    Positive is feasible/headroom; negative is a local shell violation.  These
-    values are reference-only and observable from the candidate prefix/token:
-    they do not use teacher rollout success, future actor trajectories, or root
-    mode outcomes.
+    The paper's token shell contains physical, rule, stability and controller
+    feasibility terms.  This portable implementation exposes a richer 12-D
+    signed proxy vector instead of the old 4-D placeholder.  It is still
+    reference-only: no teacher success, future actor trajectory, or hidden root
+    mode outcome is used here.
     """
     st = np.asarray(o.states_ref, dtype=np.float32)
     ct = np.asarray(o.controls_ref, dtype=np.float32)
     if st.size == 0 or ct.size == 0 or not np.all(np.isfinite(st)) or not np.all(np.isfinite(ct)):
-        return np.array([-1.0, -1.0, -1.0, -1.0], dtype=np.float32)
+        return np.full(12, -1.0, dtype=np.float32)
+    dt = 0.2
     speed_margin = 1.0 - float(np.nanmax(st[:, 3])) / 16.9
     accel_margin = min(4.0 - float(np.nanmax(ct[:, 0])), float(np.nanmin(ct[:, 0])) + 6.0) / 6.0
+    jerk = np.gradient(ct[:, 0], dt) if len(ct) > 1 else np.zeros(1, dtype=np.float32)
+    jerk_margin = 1.0 - float(np.nanmax(np.abs(jerk))) / 6.0
     curv_margin = 1.0 - float(np.nanmax(np.abs(st[:, 5]))) / 0.35
+    dk = np.gradient(st[:, 5], dt) if len(st) > 1 else np.zeros(1, dtype=np.float32)
+    curv_rate_margin = 1.0 - float(np.nanmax(np.abs(dk))) / 0.20
+    lateral_margin = 1.0 - float(np.nanmax(np.abs(st[:, 1]))) / 5.5
+    heading_margin = 1.0 - float(np.nanmax(np.abs(st[:, 2]))) / np.deg2rad(55.0)
+    # Braking/stop feasibility and a simple analytic recovery-potential decrease.
+    v0 = float(max(st[0, 3], 0.0))
+    stop_dist = v0 * v0 / (2.0 * 6.0) + 1.0
+    realized_dist = float(max(st[-1, 0] - st[0, 0], 1e-3))
+    stop_margin = 1.0 - stop_dist / max(realized_dist + 1.0, 1e-3) if o.type in ("stop", "yield", "stabilize") else 0.5
     ref_valid_margin = 1.0 if o.valid else -1.0
+    controller_margin = 1.0 if o.type in OPTION_TYPES else -1.0
+    potential0 = abs(float(st[0, 1])) / 4.0 + abs(float(st[0, 2])) / np.pi + float(st[0, 3]) / 12.0
+    potentialT = abs(float(st[-1, 1])) / 4.0 + abs(float(st[-1, 2])) / np.pi + float(st[-1, 3]) / 12.0
+    potential_decrease_margin = float(potential0 - potentialT)
+    contact_regime_margin = 1.0 if (o.conditional or o.type != "stabilize") else -0.2
     if o.type == "pad":
         ref_valid_margin = -1.0
-    return np.asarray([speed_margin, accel_margin, curv_margin, ref_valid_margin], dtype=np.float32)
+        controller_margin = -1.0
+    return np.asarray([
+        speed_margin, accel_margin, jerk_margin, curv_margin, curv_rate_margin,
+        lateral_margin, heading_margin, stop_margin, ref_valid_margin,
+        controller_margin, potential_decrease_margin, contact_regime_margin,
+    ], dtype=np.float32)
 
 
 def options_to_tensors(options: List[List[RecoveryOption]]) -> dict:

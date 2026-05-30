@@ -10,10 +10,10 @@ DEFAULT_MARGIN_PARAMS = {
     "T_h_guard": 0.4,
     "grace_contact_steps": 2,
     "eta_A": {"stop": 0.35, "lane": 0.35, "route": 0.35, "escape": 0.35, "stabilize": 0.35},
-    "hold_steps": 3,
+    "hold_steps": 8,
     "a_accel_max": 4.0,
     "brake_max": 6.0,
-    "j_max": 8.0,
+    "j_max": 6.0,
 }
 
 

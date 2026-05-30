@@ -93,22 +93,49 @@ class BEVBuilder:
         return self.build_from_state(ego, actors, map_features, route, history_buffer, affordance_provider)
 
     def build_from_state(self, ego: EgoState, actors: List[ActorState], map_features: MapFeatures, route_info: RouteInfo, history_buffer: Optional[HistoryBuffer] = None, affordance_provider: Optional[AffordanceProvider] = None) -> dict:
+        """Rasterize a true temporal BEV stack in the current/root ego frame.
+
+        The paper defines ``I_{t-H_h:t}`` as a history tensor.  Earlier code
+        stacked identical copies of the current raster and hid the history in a
+        few decay channels.  That made the temporal encoder see no actual frame
+        changes.  The implementation below keeps the crop anchored at the
+        current ego pose, but each history slice contains that time slice's ego
+        and dynamic actors.  Static map/route/affordance channels remain tied to
+        the current planning frame, which is the deployed observation frame.
+        """
         if history_buffer is None:
             history_buffer = HistoryBuffer(self.spec.history_steps)
         if len(history_buffer.ego_history) == 0 or not _same_frame(history_buffer.ego_history[-1], history_buffer.actor_history[-1], ego, actors):
             history_buffer.push(ego, actors)
+
         C = len(self.channel_names)
-        bev_frame = np.zeros((C, self.spec.H, self.spec.W), dtype=np.float32)
-        self.rasterize_static_map(bev_frame, map_features, ego)
-        self.rasterize_route(bev_frame, route_info, ego)
-        self.rasterize_actors(bev_frame, actors, ego, history_buffer)
-        self.rasterize_ego(bev_frame, ego, history_buffer)
-        self.rasterize_affordances(bev_frame, affordance_provider or AffordanceProvider(), ego, route_info, map_features)
-        # Build history tensor by repeating static/current frame but with true historical dynamic/ego decay already encoded.
-        bev = np.stack([bev_frame for _ in range(self.spec.history_steps)], axis=0).astype(np.float16)
+        provider = affordance_provider or AffordanceProvider()
+        hist_egos = list(history_buffer.ego_history[-self.spec.history_steps :])
+        hist_actors = list(history_buffer.actor_history[-self.spec.history_steps :])
+        if not hist_egos:
+            hist_egos, hist_actors = [ego], [list(actors)]
+        # Left-pad with the earliest observed frame so every sample has exactly H_h frames.
+        while len(hist_egos) < self.spec.history_steps:
+            hist_egos.insert(0, hist_egos[0])
+            hist_actors.insert(0, list(hist_actors[0]))
+
+        frames: List[np.ndarray] = []
+        for t_idx, (frame_ego, frame_actors) in enumerate(zip(hist_egos, hist_actors)):
+            bev_frame = np.zeros((C, self.spec.H, self.spec.W), dtype=np.float32)
+            self.rasterize_static_map(bev_frame, map_features, ego)
+            self.rasterize_route(bev_frame, route_info, ego)
+            frame_hist = HistoryBuffer(self.spec.history_steps)
+            frame_hist.ego_history = list(hist_egos[: t_idx + 1])
+            frame_hist.actor_history = [list(x) for x in hist_actors[: t_idx + 1]]
+            self.rasterize_actors(bev_frame, frame_actors, ego, frame_hist)
+            self.rasterize_ego_temporal_frame(bev_frame, frame_ego, ego, frame_hist)
+            self.rasterize_affordances(bev_frame, provider, ego, route_info, map_features)
+            frames.append(bev_frame)
+
+        bev = np.stack(frames, axis=0).astype(np.float16)
         ego_info = self.ego_info(ego, route_info)
         route_command = route_command_from_route(route_info, ego, N_q=20, D_q=6)
-        debug = {"channel_names": self.channel_names, "unavailable": getattr(self.adapter, "unavailable", {})}
+        debug = {"channel_names": self.channel_names, "unavailable": getattr(self.adapter, "unavailable", {}), "temporal_bev": True}
         return {"bev": bev, "ego_info": ego_info, "route_command": route_command, "debug": debug}
 
     def _put_channel(self, bev_frame: np.ndarray, name: str, arr: np.ndarray) -> None:
@@ -181,6 +208,22 @@ class BEVBuilder:
                     rasterize_polygon(arr, ego_to_bev_pixel(box_ego, self.spec), decay)
             self._put_channel(bev_frame, name, arr)
         self._put_channel(bev_frame, "occlusion_mask", rasterize_occlusion_simple(self.spec, ego, actors, MapFeatures()))
+
+
+    def rasterize_ego_temporal_frame(self, bev_frame: np.ndarray, frame_ego: EgoState, root_ego: EgoState, history_buffer: HistoryBuffer) -> None:
+        """Rasterize ego pose for one history frame in the root ego frame."""
+        curr = np.zeros((self.spec.H, self.spec.W), dtype=np.float32)
+        center_ego = world_to_ego(np.array([[frame_ego.x, frame_ego.y]], dtype=np.float32), root_ego)[0]
+        box_ego = oriented_box(center_ego, frame_ego.heading - root_ego.heading, frame_ego.length, frame_ego.width)
+        rasterize_polygon(curr, ego_to_bev_pixel(box_ego, self.spec), 1.0)
+        self._put_channel(bev_frame, "ego_current", curr)
+        hist = np.zeros_like(curr)
+        for j, past in enumerate(reversed(history_buffer.ego_history[:-1])):
+            decay = float(np.exp(-(j + 1) / 2.0))
+            center_ego = world_to_ego(np.array([[past.x, past.y]], dtype=np.float32), root_ego)[0]
+            box_ego = oriented_box(center_ego, past.heading - root_ego.heading, past.length, past.width)
+            rasterize_polygon(hist, ego_to_bev_pixel(box_ego, self.spec), decay)
+        self._put_channel(bev_frame, "ego_history_decay", hist)
 
     def rasterize_ego(self, bev_frame: np.ndarray, ego: EgoState, history_buffer: HistoryBuffer) -> None:
         curr = np.zeros((self.spec.H, self.spec.W), dtype=np.float32)

@@ -22,7 +22,7 @@ from ocrap.teacher.root_modes import generate_root_modes, mode_seed_params_array
 from ocrap.teacher.rollout import synthetic_rollout
 from ocrap.teacher.evidence_labels import evidence_from_trace, scene_uncertainty_from_action, combine_uncertainty
 from ocrap.teacher.dataset_writer import ShardedDatasetWriter, read_dataset, write_dataset
-from ocrap.evaluation.metrics import weighted_lcvar_np
+from ocrap.evaluation.metrics import weighted_lcvar_np, upper_tail_cvar_np
 from ocrap.teacher.observation_classes import build_obs_equivalence, beta_from_obs_equiv, class_consistent_witness, post_prefix_observation_signature
 from ocrap.utils.progress import tqdm
 from scripts._common import load_config
@@ -96,9 +96,11 @@ def main():
     ap.add_argument("--root-stride", type=int, default=1, help="Keep every Nth root after root-start/root-end. Useful for parallel CPU sharding.")
     ap.add_argument("--progress-file", default=None, help="Optional JSONL file updated once per completed root. Used by the parallel launcher to show a single tqdm bar.")
     ap.add_argument("--no-reuse-metadrive-env", action="store_true", help="Debug fallback: create a fresh ScenarioEnv for every rollout. Default reuses one env per root and calls reset(), which is much faster.")
+    ap.add_argument("--allow-json-only-hybrid-stress", action="store_true", help="Debug only: permit hybrid stress roots whose added actors are not injected into ScenarioEnv.")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
+    K_raw = int(cfg.get("planner", {}).get("K_raw", 32 if cfg.get("implementation_level") == "mvp" else 64))
     K = int(cfg.get("planner", {}).get("K", 16 if cfg.get("implementation_level") == "mvp" else 32))
     L = int(cfg.get("planner", {}).get("L", 6 if cfg.get("implementation_level") == "mvp" else 12))
     M = int(cfg.get("planner", {}).get("M", 4 if cfg.get("implementation_level") == "mvp" else 8))
@@ -213,7 +215,12 @@ def main():
 
     def build_one(idx: int, rid: str) -> dict:
         obj, ego, actors, mf, route = load_root(root_dir / f"{rid}.json")
-        actions = generate_lattice_actions(ego, route, mf, K=K, H_p=H_p, dt=dt)
+        if rollout_backend == "metadrive" and (obj.get("scenario_data", {}) or {}).get("hybrid_stress_requires_simulator_injection", False) and not args.allow_json_only_hybrid_stress:
+            raise RuntimeError(
+                f"Root {rid} is a JSON-level hybrid stress perturbation. Its injected actors are not guaranteed to exist in MetaDrive ScenarioEnv. "
+                "Write the stress actor into the ScenarioNet file or spawn/control it in the rollout runner; use --allow-json-only-hybrid-stress only for diagnostics."
+            )
+        actions = generate_lattice_actions(ego, route, mf, K_raw=K_raw, K=K, H_p=H_p, dt=dt)
         opts = generate_recovery_options(actions, route, mf, L=L, H_r=H_r, dt=dt)
         at = actions_to_tensors(actions)
         ot = options_to_tensors(opts)
@@ -343,7 +350,7 @@ def main():
                 c_rule_star[a_i, m_i] = float(max(0.0, val))
         Y_action = Y.max(axis=1)  # oracle diagnostic only
         R_star = weighted_lcvar_np(Y_oc.astype(np.float32), mode_probs, float(cfg.get("planner", {}).get("alpha_R", 0.2)))
-        H_action = H.max(axis=-1) if H.ndim == 2 else H
+        H_action = upper_tail_cvar_np(H, mode_probs, float(cfg.get("planner", {}).get("alpha_H", 0.2))) if H.ndim == 2 else H
 
         sample = {}
         sample.update(at)
@@ -399,7 +406,7 @@ def main():
             sample["ego_info"] = bev_arrays["ego_info"][bidx]
             sample["route_command"] = bev_arrays["route_command"][bidx]
         else:
-            sample["bev"] = np.zeros((10, 24, 256, 256), np.float16)
+            sample["bev"] = np.zeros((5, 24, 256, 256), np.float16)
             sample["ego_info"] = np.zeros(11, np.float32)
             sample["route_command"] = np.zeros((20, 6), np.float32)
         sample["root_ids"] = str(rid)

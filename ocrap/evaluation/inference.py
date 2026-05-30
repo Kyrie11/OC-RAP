@@ -43,6 +43,10 @@ def predict_profiles(dataset_path: str | Path, checkpoint: str | Path, batch_siz
     sample = ds[0]
     state = _safe_load_state(checkpoint)
     token_key = "token_states_ref" if "token_states_ref" in sample else "options_states_ref"
+    D_token = int(sample.get("token_params", sample.get("options_params", torch.zeros(1, 6))).shape[-1]) if ("token_params" in sample or "options_params" in sample) else 6
+    A_anchor = int(sample.get("token_anchor", torch.zeros(1, 3)).shape[-1]) if "token_anchor" in sample else 3
+    D_shell = int(sample.get("token_hard_shell", torch.zeros(1, 12)).shape[-1]) if "token_hard_shell" in sample else 12
+    g_dim = int(state.get("head_g.weight", torch.zeros(9, 1)).shape[0]) if hasattr(state.get("head_g.weight", None), "shape") else 9
     model = ReCoT(
         C_bev=int(sample["bev"].shape[1]),
         H_h=int(sample["bev"].shape[0]),
@@ -50,14 +54,38 @@ def predict_profiles(dataset_path: str | Path, checkpoint: str | Path, batch_siz
         H_p1=int(sample["actions_states"].shape[1]),
         H_r1=int(sample[token_key].shape[2]),
         hidden=_hidden_from_state(state),
+        g_dim=g_dim,
+        D_token=D_token,
+        A_anchor=A_anchor,
+        D_shell=D_shell,
     )
-    missing, unexpected = model.load_state_dict(state, strict=False)
-    # Older checkpoints may not have the action-conditioned beta head.  Strictly
-    # requiring every key would break reproducibility for already-trained runs;
-    # the missing keys are reported in metadata by callers if needed.
+    model_state = model.state_dict()
+    filtered_state = {}
+    skipped_shape = []
+    unexpected = []
+    for k, v in state.items():
+        if k not in model_state:
+            unexpected.append(k)
+            continue
+        if tuple(model_state[k].shape) != tuple(v.shape):
+            skipped_shape.append(f"{k}: checkpoint{tuple(v.shape)} -> model{tuple(model_state[k].shape)}")
+            continue
+        filtered_state[k] = v
+    missing, load_unexpected = model.load_state_dict(filtered_state, strict=False)
+    unexpected.extend(load_unexpected)
+    if unexpected:
+        print(f"[predict_profiles] unexpected checkpoint keys: {unexpected}", flush=True)
+    if skipped_shape:
+        print(f"[predict_profiles] skipped checkpoint keys with incompatible shapes: {skipped_shape}", flush=True)
+    if missing:
+        print(f"[predict_profiles] missing checkpoint keys initialized randomly: {missing}", flush=True)
+    # Older checkpoints may not have the action-conditioned beta head or the richer
+    # 12-D token hard-shell encoder.  Incompatible keys are skipped instead of
+    # crashing, but paper-final evaluations should use a checkpoint retrained with
+    # the current dataset schema.
     model.eval()
     params = OCMEROParams(**{k: v for k, v in (ocmero_params or {}).items() if k in OCMEROParams.__annotations__})
-    out_chunks: dict[str, list[np.ndarray]] = {k: [] for k in ["R_pred", "B_pred", "U_pred", "H_pred", "dH_pred", "K_post_pred", "C_pred", "witness_pred", "W_pred", "pi_pred", "mu_pred"]}
+    out_chunks: dict[str, list[np.ndarray]] = {k: [] for k in ["R_pred", "B_pred", "U_pred", "H_pred", "dH_pred", "K_post_pred", "C_pred", "witness_pred", "W_pred", "pi_pred", "mu_pred", "beta_pred"]}
     with torch.no_grad():
         for start in range(0, len(ds), int(batch_size)):
             items = [ds[i] for i in range(start, min(len(ds), start + int(batch_size)))]
@@ -82,7 +110,7 @@ def predict_profiles(dataset_path: str | Path, checkpoint: str | Path, batch_siz
             mapping = {
                 "R_pred": prof["R"], "B_pred": prof["B"], "U_pred": prof["U"], "H_pred": prof["H"],
                 "dH_pred": prof["dH"], "K_post_pred": prof["K_post"], "C_pred": prof["C"],
-                "witness_pred": prof["witness"], "W_pred": prof["W"], "pi_pred": prof["pi_am"], "mu_pred": prof["mu"],
+                "witness_pred": prof["witness"], "W_pred": prof["W"], "pi_pred": prof["pi_am"], "mu_pred": prof["mu"], "beta_pred": prof["beta"],
             }
             for k, v in mapping.items():
                 out_chunks[k].append(v.detach().cpu().numpy())

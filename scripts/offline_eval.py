@@ -31,9 +31,10 @@ if __name__ == "__main__":
     pred_meta={}
     if args.checkpoint and args.method.lower() in ("ours","ocrap","crisp"):
         from ocrap.evaluation.inference import predict_profiles
-        pred = predict_profiles(args.dataset, args.checkpoint, batch_size=args.batch_size)
+        ocmero_params = {"use_observation_consistency": False} if args.ablation == "no_observation_consistency" else None
+        pred = predict_profiles(args.dataset, args.checkpoint, batch_size=args.batch_size, ocmero_params=ocmero_params)
         arrays.update(pred)
-        pred_meta={"checkpoint": args.checkpoint, "prediction_arrays": sorted(pred.keys())}
+        pred_meta={"checkpoint": args.checkpoint, "prediction_arrays": sorted(pred.keys()), "ocmero_params": ocmero_params or {}}
     calib = None
     if args.calibration:
         calib_path = Path(args.calibration)

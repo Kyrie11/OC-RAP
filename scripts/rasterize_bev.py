@@ -63,7 +63,7 @@ def main():
     ap.add_argument("--num-workers", type=int, default=1, help="Reserved for compatibility; rasterization is streamed in-process to keep memory bounded.")
     ap.add_argument("--output", required=True)
     ap.add_argument("--max-roots", type=int, default=None)
-    ap.add_argument("--shard-size", type=int, default=8, help="Number of roots per output shard. 8 keeps 256x256x10x24 BEV memory below roughly 300 MB.")
+    ap.add_argument("--shard-size", type=int, default=8, help="Number of roots per output shard. 8 keeps 256x256x5x24 BEV memory below roughly 300 MB.")
     ap.add_argument("--compress-shards", action="store_true", help="Use np.savez_compressed per shard. Saves disk but can be much slower.")
     ap.add_argument("--single-npz", action="store_true", help="Legacy mode: materialize the full dataset in RAM and write one arrays.npz. Only use for tiny debug runs.")
     ap.add_argument("--save-debug", default="0")
@@ -73,7 +73,7 @@ def main():
     args = ap.parse_args()
     cfg = load_config(args.bev_config)
     bcfg = cfg.get("bev", {})
-    spec = BEVSpec(H=int(bcfg.get("H", 256)), W=int(bcfg.get("W", 256)), range_x=tuple(bcfg.get("range_x", [-40.0, 40.0])), range_y=tuple(bcfg.get("range_y", [-40.0, 40.0])), history_steps=int(args.history_steps or bcfg.get("history_steps", 10)), dt=float(bcfg.get("dt", 0.2)), mode=bcfg.get("mode", args.channels))
+    spec = BEVSpec(H=int(bcfg.get("H", 256)), W=int(bcfg.get("W", 256)), range_x=tuple(bcfg.get("range_x", [-40.0, 40.0])), range_y=tuple(bcfg.get("range_y", [-40.0, 40.0])), history_steps=int(args.history_steps or bcfg.get("history_steps", 5)), dt=float(bcfg.get("dt", 0.2)), mode=bcfg.get("mode", args.channels))
     builder = BEVBuilder(spec)
     root_dir = Path(args.root_dir)
     split_file = root_dir / "splits.json"

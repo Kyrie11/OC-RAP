@@ -15,5 +15,5 @@ os.environ.setdefault("MKL_NUM_THREADS", "1")
 from ocrap.training.train_care import train_care
 
 if __name__ == "__main__":
-    ap=argparse.ArgumentParser(); ap.add_argument("--config", default=None); ap.add_argument("--dataset", required=True); ap.add_argument("--proposal-checkpoint", default=None); ap.add_argument("--output", required=True); ap.add_argument("--epochs", type=int, default=1); ap.add_argument("--batch-size", type=int, default=2)
-    args=ap.parse_args(); print(train_care(args.dataset, args.output, args.epochs, args.batch_size), flush=True)
+    ap=argparse.ArgumentParser(); ap.add_argument("--config", default=None); ap.add_argument("--dataset", required=True); ap.add_argument("--proposal-checkpoint", default=None); ap.add_argument("--output", required=True); ap.add_argument("--epochs", type=int, default=None); ap.add_argument("--batch-size", type=int, default=None); ap.add_argument("--lr", type=float, default=None)
+    args=ap.parse_args(); print(train_care(args.dataset, args.output, args.epochs, args.batch_size, args.lr, config=args.config, proposal_checkpoint=args.proposal_checkpoint), flush=True)

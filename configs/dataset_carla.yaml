@@ -11,6 +11,7 @@ schema:
   model_inputs: [bev, ego_info, route_command]
   forbid_model_inputs: [actor_log_table, future_trajectories, recorder_packets]
 planner:
+  K_raw: 64
   K: 32
   L: 12
   M: 8

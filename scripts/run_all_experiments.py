@@ -13,7 +13,7 @@ from ocrap.teacher.dataset_writer import read_dataset
 from ocrap.evaluation.offline_eval import evaluate_offline
 
 DEFAULT_METHODS = ["ours", "nominal", "risk_aware", "backup_filter", "oracle"]
-DEFAULT_ABLATIONS = ["no_harm_constraint", "no_rule_constraint", "no_controlled_relaxation", "no_recovery_constraint", "penalize_uncertainty"]
+DEFAULT_ABLATIONS = ["no_observation_consistency", "oracle_witness", "no_harm_constraint", "no_rule_constraint", "no_controlled_relaxation", "no_recovery_constraint", "penalize_uncertainty"]
 
 if __name__ == "__main__":
     ap=argparse.ArgumentParser()
@@ -26,9 +26,10 @@ if __name__ == "__main__":
     ap.add_argument("--skip-baselines", action="store_true", help="Run only OC-RAP and ablations; external baselines are out of scope.")
     args=ap.parse_args()
     arrays,meta=read_dataset(args.dataset); arrays=dict(arrays)
+    pred_func = None
     if args.checkpoint:
-        from ocrap.evaluation.inference import predict_profiles
-        arrays.update(predict_profiles(args.dataset, args.checkpoint, batch_size=args.batch_size))
+        from ocrap.evaluation.inference import predict_profiles as pred_func
+        arrays.update(pred_func(args.dataset, args.checkpoint, batch_size=args.batch_size))
     calib=None
     if args.calibration:
         cp=Path(args.calibration)
@@ -46,7 +47,11 @@ if __name__ == "__main__":
     for m in methods:
         results["methods"][m]=evaluate_offline(arrays,m,calibration=calib)
     for ab in ablations:
-        results["ablations"][ab]=evaluate_offline(arrays,"ours",calibration=calib,ablation=ab)
+        arr_ab = arrays
+        if ab == "no_observation_consistency" and args.checkpoint and pred_func is not None:
+            arr_ab = dict(arrays)
+            arr_ab.update(pred_func(args.dataset, args.checkpoint, batch_size=args.batch_size, ocmero_params={"use_observation_consistency": False}))
+        results["ablations"][ab]=evaluate_offline(arr_ab,"ours",calibration=calib,ablation=ab)
     (out/"all_metrics.json").write_text(json.dumps(results,indent=2))
     # Flat CSV for paper table export without requiring pandas.
     rows=["group,name,OCS,FAR,SLR,OLG,SRR,HNIV,MIR,utility_mean,uses_learned_profiles"]

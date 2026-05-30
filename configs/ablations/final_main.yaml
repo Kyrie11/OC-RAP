@@ -4,7 +4,7 @@ dataset:
   num_roots: 32
   split: {train: 0.70, calib: 0.15, test: 0.15}
 planner:
-  K_raw: 32
+  K_raw: 64
   K: 32
   L: 12
   M: 8

@@ -51,14 +51,29 @@ def _set_regime(root: dict, regime: str) -> None:
     root.setdefault("traffic_config", {})["hybrid_stress_regime"] = regime
 
 
-def _append_history_actor(root: dict, actor: dict) -> None:
-    # Keep history schema loadable.  We do not hallucinate exact past tracks; the
-    # BEV builder can still use the current actors and root metadata marks this
-    # as a hybrid stress perturbation.
-    for h in root.get("history", []) or []:
+def _append_history_actor(root: dict, actor: dict, *, visible_history: bool = True, dt: float = 0.2) -> None:
+    """Append a kinematically consistent stress-actor history.
+
+    The old generator copied the current stress actor into every past frame,
+    which made an occluded/cut-in actor appear frozen in the BEV history.  For
+    visible stressors we back-propagate with the actor velocity; for occluded
+    release we intentionally omit it from history so it is not observable before
+    release.
+    """
+    hist = root.get("history", []) or []
+    if not visible_history:
+        root.setdefault("traffic_config", {})["stress_actor_hidden_in_history"] = True
+        return
+    n = len(hist)
+    for idx, h in enumerate(hist):
         h.setdefault("actor_states", [])
-        if isinstance(h["actor_states"], list):
-            h["actor_states"].append(copy.deepcopy(actor))
+        if not isinstance(h["actor_states"], list):
+            continue
+        age = float(max(0, n - 1 - idx)) * float(dt)
+        past = copy.deepcopy(actor)
+        past["x"] = float(actor.get("x", 0.0) - actor.get("vx", 0.0) * age)
+        past["y"] = float(actor.get("y", 0.0) - actor.get("vy", 0.0) * age)
+        h["actor_states"].append(past)
 
 
 def _apply_lead_brake(root: dict, severity: float) -> str:
@@ -71,7 +86,7 @@ def _apply_lead_brake(root: dict, severity: float) -> str:
     v = max(0.0, ev * (0.65 - 0.35 * severity))
     actor = _actor_template(f"stress_lead_brake_{root.get('root_id','root')}", x, y, eh, v * math.cos(eh), v * math.sin(eh))
     _ensure_actors(root).append(actor)
-    _append_history_actor(root, actor)
+    _append_history_actor(root, actor, visible_history=True)
     root.setdefault("traffic_config", {})["stress_type"] = "lead_brake"
     root["traffic_config"]["lead_brake_decel_proxy"] = float(3.0 + 4.0 * severity)
     _set_regime(root, "near_contact" if severity >= 0.55 else "low_headroom")
@@ -91,7 +106,7 @@ def _apply_cut_in(root: dict, severity: float) -> str:
     actor["vy"] += -math.copysign(1.0 + 1.5 * severity, lane_offset) * math.cos(eh)
     actor["vx"] += math.copysign(1.0 + 1.5 * severity, lane_offset) * math.sin(eh)
     _ensure_actors(root).append(actor)
-    _append_history_actor(root, actor)
+    _append_history_actor(root, actor, visible_history=True)
     root.setdefault("traffic_config", {})["stress_type"] = "cut_in"
     root["traffic_config"]["cut_in_lateral_speed_proxy"] = float(1.0 + 1.5 * severity)
     _set_regime(root, "near_contact" if severity >= 0.5 else "low_headroom")
@@ -110,7 +125,7 @@ def _apply_occluded_release(root: dict, severity: float) -> str:
     actor = _actor_template(f"stress_occluded_release_{root.get('root_id','root')}", x, y, heading, v * math.cos(heading), v * math.sin(heading), length=1.8, width=0.8)
     actor["actor_type"] = "pedestrian" if severity > 0.65 else "cyclist"
     _ensure_actors(root).append(actor)
-    _append_history_actor(root, actor)
+    _append_history_actor(root, actor, visible_history=False)
     root.setdefault("traffic_config", {})["stress_type"] = "occluded_release"
     root["traffic_config"]["occlusion_release_time_proxy"] = float(max(0.1, 1.2 - severity))
     _set_regime(root, "near_contact")
@@ -125,7 +140,7 @@ def _apply_contact_proxy(root: dict, severity: float) -> str:
     y = ey + max(0.0, 0.3 * (1.0 - severity))
     actor = _actor_template(f"stress_contact_proxy_{root.get('root_id','root')}", x, y, eh, 0.25 * ev * math.cos(eh), 0.25 * ev * math.sin(eh))
     _ensure_actors(root).append(actor)
-    _append_history_actor(root, actor)
+    _append_history_actor(root, actor, visible_history=True)
     root.setdefault("traffic_config", {})["stress_type"] = "contact_proxy"
     root["traffic_config"]["post_contact_stabilization_required"] = True
     _set_regime(root, "contact_post_contact")
@@ -183,6 +198,8 @@ def main():
             root["scenario_data"]["hybrid_womd_stress"] = True
             root["scenario_data"]["hybrid_stress_type"] = stress_type
             root["scenario_data"]["hybrid_stress_severity"] = float(severity)
+            root["scenario_data"]["hybrid_stress_requires_simulator_injection"] = True
+            root["scenario_data"]["paper_final_ready"] = False
             root.setdefault("map_config", {})["source"] = root.get("map_config", {}).get("source", "scenarionet")
             (out_dir / f"{new_id}.json").write_text(json.dumps(root, indent=2), encoding="utf-8")
             ids.append(new_id)
@@ -200,7 +217,9 @@ def main():
         "num_roots": len(ids),
         "stress_counts": dict(counts),
         "backend": "metadrive_scenarionet_hybrid_stress",
-        "paper_final_note": "Hybrid stress roots are scenario perturbations for low-headroom/near-contact coverage; report separately from natural WOMD/ScenarioNet roots.",
+        "paper_final_ready": False,
+        "hybrid_stress_requires_simulator_injection": True,
+        "paper_final_note": "Hybrid stress roots are JSON-level scenario perturbations. For paper-final MetaDrive rollouts, write them into ScenarioNet files or spawn/control stress actors during rollout; report separately from natural WOMD/ScenarioNet roots.",
     }
     (out_dir / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     print(json.dumps({"output": str(out_dir), "num_roots": len(ids), "stress_counts": dict(counts)}, indent=2))

@@ -14,7 +14,7 @@ from ocrap.evaluation.offline_eval import evaluate_offline
 
 ABLATIONS = {
     "full": None,
-    "no_observation_consistency": "no_observation_consistency",  # diagnostic: still uses stored labels unless pred mu is supplied
+    "no_observation_consistency": "no_observation_consistency",  # recomputes OC-MERO without beta/equivalence witness tying when a checkpoint is supplied
     "oracle_witness": "oracle_witness",
     "no_harm_constraint": "no_harm_constraint",
     "no_rule_constraint": "no_rule_constraint",
@@ -36,7 +36,10 @@ if __name__ == "__main__":
     arrays,meta=read_dataset(args.dataset); arrays=dict(arrays)
     if args.checkpoint:
         from ocrap.evaluation.inference import predict_profiles
-        arrays.update(predict_profiles(args.dataset, args.checkpoint, batch_size=args.batch_size))
+        ocmero_params = {}
+        if args.ablation == "no_observation_consistency":
+            ocmero_params["use_observation_consistency"] = False
+        arrays.update(predict_profiles(args.dataset, args.checkpoint, batch_size=args.batch_size, ocmero_params=ocmero_params))
     calib=None
     if args.calibration:
         cp=Path(args.calibration)

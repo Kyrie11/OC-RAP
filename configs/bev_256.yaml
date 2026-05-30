@@ -3,7 +3,7 @@ bev:
   W: 256
   range_x: [-40.0, 40.0]
   range_y: [-40.0, 40.0]
-  history_steps: 10
+  history_steps: 5
   dt: 0.2
   mode: compact
   velocity_scale: 20.0

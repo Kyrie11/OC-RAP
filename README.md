@@ -68,11 +68,15 @@ python scripts/collect_roots.py \
   --output data/debug/roots
 ```
 
-Real MetaDrive/ScenarioNet roots use the existing collectors:
+Real MetaDrive/ScenarioNet roots require a ScenarioNet database path. The script also accepts `--config`; command-line flags override config values:
 
 ```bash
 python scripts/collect_metadrive_roots.py \
   --config configs/dataset_metadrive.yaml \
+  --scenario-dir /path/to/scenarionet_database \
+  --split-name train \
+  --history-steps 5 \
+  --max-samples-per-log 1 \
   --output data/ocrap/roots_raw
 ```
 
@@ -86,7 +90,7 @@ python scripts/rasterize_bev.py \
   --split train \
   --bev-config configs/bev_256.yaml \
   --channels compact \
-  --history-steps 10 \
+  --history-steps 5 \
   --num-workers 8 \
   --output data/ocrap/bev/train.zarr
 ```
@@ -177,7 +181,7 @@ python scripts/eval_closed_loop.py \
   --output outputs/eval/ocrap
 ```
 
-If the simulator backend is unavailable, closed-loop evaluation falls back to offline selected-action evaluation.
+If no live simulator backend is connected, this entrypoint explicitly reports `closed_loop_backend=offline_same_candidate_fallback` and `paper_final_closed_loop=false`. Add `--require-simulator` to fail fast instead of writing diagnostic fallback metrics.
 
 ## OC-RAP dataset schema
 
@@ -317,7 +321,8 @@ no_rule_constraint
 no_controlled_relaxation
 no_recovery_constraint
 penalize_uncertainty
-oracle_witness       # diagnostic flag; use OLG/ORS to quantify leakage
+no_observation_consistency  # disables runtime beta/equivalence witness tying when predictions are used
+oracle_witness              # non-deployable option-max diagnostic; use OLG/ORS to quantify leakage
 ```
 
 ### Metrics written by evaluation scripts
@@ -371,7 +376,7 @@ The report checks deployable input fields, finite values, valid action/token rat
 
 ### Create hybrid WOMD stress roots
 
-Hybrid stress roots start from natural WOMD/ScenarioNet roots and deterministically inject low-headroom or near-contact stressors. They are intended to improve coverage of lead braking, cut-in, occluded release, contact-proxy, and friction/delay regimes. Report them separately from natural WOMD/ScenarioNet results.
+Hybrid stress roots start from natural WOMD/ScenarioNet roots and deterministically inject low-headroom or near-contact stressors. They are intended to improve coverage of lead braking, cut-in, occluded release, contact-proxy, and friction/delay regimes. Report them separately from natural WOMD/ScenarioNet results. The generator now marks JSON-level stress roots as not paper-final until the stress actors are written into the ScenarioNet scenario or spawned/controlled by the rollout runner.
 
 ```bash
 python scripts/generate_hybrid_womd_stress_roots.py \
@@ -383,7 +388,7 @@ python scripts/generate_hybrid_womd_stress_roots.py \
   --seed 7
 ```
 
-Then use the normal OC-RAP pipeline on the hybrid root directory:
+Then use the normal OC-RAP pipeline on the hybrid root directory. For real MetaDrive labels, `build_teacher_labels.py` will fail fast unless the added stress actors are available to ScenarioEnv; `--allow-json-only-hybrid-stress` is for diagnostics only.
 
 ```bash
 python scripts/rasterize_bev.py \
@@ -391,7 +396,7 @@ python scripts/rasterize_bev.py \
   --split train \
   --bev-config configs/bev_256.yaml \
   --channels compact \
-  --history-steps 10 \
+  --history-steps 5 \
   --num-workers 8 \
   --output data/ocrap/bev/hybrid_train.zarr
 

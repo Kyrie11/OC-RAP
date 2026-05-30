@@ -5,7 +5,7 @@ import torch.nn as nn
 
 
 class TemporalBEVEncoder(nn.Module):
-    def __init__(self, in_channels: int = 24, history_steps: int = 10, hidden: int = 128):
+    def __init__(self, in_channels: int = 24, history_steps: int = 5, hidden: int = 128):
         super().__init__()
         self.in_channels = in_channels
         self.history_steps = history_steps
@@ -23,9 +23,9 @@ class TemporalBEVEncoder(nn.Module):
         B, Hh, C, H, W = bev.shape
         x = bev.reshape(B, Hh * C, H, W).float()
         # Training smoke tests often use CPU; downsample large BEV crops before
-        # the compact encoder. Full-resolution models can replace this encoder.
-        if H > 64 or W > 64:
-            stride_h = max(1, H // 64)
-            stride_w = max(1, W // 64)
+        # the compact encoder. The 128-pixel cap preserves more map/anchor detail than the earlier 64-pixel cap while keeping smoke tests CPU-friendly.
+        if H > 128 or W > 128:
+            stride_h = max(1, H // 128)
+            stride_w = max(1, W // 128)
             x = x[:, :, ::stride_h, ::stride_w]
         return self.net(x)

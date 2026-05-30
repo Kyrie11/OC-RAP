@@ -13,6 +13,7 @@ import numpy as np
 from ocrap.teacher.dataset_writer import read_dataset
 from ocrap.training.calibrate_selector import calibrate_q
 from ocrap.evaluation.offline_eval import nominal_utility
+from ocrap.evaluation.metrics import upper_tail_cvar_np
 
 if __name__ == "__main__":
     ap=argparse.ArgumentParser()
@@ -24,6 +25,10 @@ if __name__ == "__main__":
     ap.add_argument("--eta-R", type=float, default=0.70)
     ap.add_argument("--eta-H", type=float, default=0.50)
     ap.add_argument("--epsilon-H", type=float, default=0.05)
+    ap.add_argument("--delta-R", type=float, default=0.05)
+    ap.add_argument("--delta-H", type=float, default=0.05)
+    ap.add_argument("--delta-delta", type=float, default=0.05)
+    ap.add_argument("--delta-C", type=float, default=0.05)
     ap.add_argument("--output", required=True)
     args=ap.parse_args()
     arrays,meta=read_dataset(args.dataset); arrays=dict(arrays)
@@ -40,14 +45,18 @@ if __name__ == "__main__":
     if "C_pred" in arrays:
         C_pred=np.asarray(arrays["C_pred"])
     elif "c_rule_star" in arrays:
-        C_pred=np.asarray(arrays["c_rule_star"]).max(axis=-1)
+        c_modes=np.asarray(arrays["c_rule_star"], dtype=float)
+        mode_probs=np.asarray(arrays.get("mode_probs", np.ones(c_modes.shape[-1], dtype=np.float32)/c_modes.shape[-1]))
+        C_pred=upper_tail_cvar_np(c_modes, mode_probs, alpha=0.2)
     else:
         C_pred=np.zeros_like(R_pred)
     if "c_rule_star" in arrays:
-        C_star=np.asarray(arrays["c_rule_star"]).max(axis=-1)
+        c_modes=np.asarray(arrays["c_rule_star"], dtype=float)
+        mode_probs=np.asarray(arrays.get("mode_probs", np.ones(c_modes.shape[-1], dtype=np.float32)/c_modes.shape[-1]))
+        C_star=upper_tail_cvar_np(c_modes, mode_probs, alpha=0.2)
     else:
         C_star=np.zeros_like(R_star)
     U_drv=nominal_utility(np.asarray(arrays["actions_states"]), action_mask)
-    q=calibrate_q(R_pred,R_star,dH_pred,dH_star,action_mask,H_pred=H_pred,H_star=H_star,C_pred=C_pred,C_star=C_star,U_drv=U_drv,eta_R=args.eta_R,eta_H=args.eta_H,epsilon_H=args.epsilon_H)
+    q=calibrate_q(R_pred,R_star,dH_pred,dH_star,action_mask,H_pred=H_pred,H_star=H_star,C_pred=C_pred,C_star=C_star,U_drv=U_drv,eta_R=args.eta_R,eta_H=args.eta_H,epsilon_H=args.epsilon_H,delta_R=args.delta_R,delta_H=args.delta_H,delta_delta=args.delta_delta,delta_C=args.delta_C)
     q["dataset_version"]=meta.get("dataset_version",""); q["split"]=args.split; q["uses_learned_predictions"]=bool(args.checkpoint)
     out=Path(args.output); out.mkdir(parents=True,exist_ok=True); (out/"q_values.json").write_text(json.dumps(q,indent=2)); print(json.dumps(q,indent=2))

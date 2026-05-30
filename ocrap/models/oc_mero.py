@@ -61,7 +61,43 @@ class OCMEROParams:
     alpha_H: float = 0.20
     alpha_K: float = 0.20
     mean_over_options: bool = False
+    use_observation_consistency: bool = True
 
+
+
+
+def _beta_from_pred(pred: Dict[str, torch.Tensor], B: int, K: int, M: int, device, dtype) -> torch.Tensor:
+    beta_logits = pred.get("beta_logits")
+    if beta_logits is None:
+        eye = torch.eye(M, device=device, dtype=dtype)
+        return eye.view(1, 1, M, M).expand(B, K, M, M)
+    beta = torch.softmax(beta_logits, dim=-1)
+    if beta.shape != (B, K, M, M):
+        raise ValueError(f"beta_logits must have shape [B,K,M,M], got {tuple(beta_logits.shape)}")
+    return beta
+
+
+def observation_consistent_mu(mu_logits: torch.Tensor, option_mask: torch.Tensor, beta: torch.Tensor, v: torch.Tensor, tau_R: float = 0.2, c_R: float = 0.0) -> tuple[torch.Tensor, torch.Tensor]:
+    """Tie witness distributions across post-prefix observation classes.
+
+    ``mu_logits`` can vary by latent mode, but deployable witness selection may
+    only depend on the post-prefix observable posterior ``beta[m,n]``.  We first
+    form per-mode valid-option distributions and then mix them by beta,
+    ``mu_oc[j,m]=sum_n beta[m,n] mu[j,n]``.  This turns the beta head from a
+    supervised side output into the runtime witness-tying mechanism required by
+    OC-RAP.
+    """
+    mask = option_mask.bool().unsqueeze(-1).expand_as(v)
+    mu_raw = masked_softmax(mu_logits, mask, dim=2)
+    mu_oc = torch.einsum("bkln,bkmn->bklm", mu_raw, beta)
+    mu_oc = mu_oc.masked_fill(~mask, 0.0)
+    mu_oc = mu_oc / mu_oc.sum(dim=2, keepdim=True).clamp_min(1e-8)
+    combined = torch.log(mu_oc.clamp_min(1e-8)) + v / max(tau_R, 1e-8)
+    lse = tau_R * torch.logsumexp(combined.masked_fill(~mask, -1e9), dim=2)
+    pi = torch.sigmoid(lse - c_R)
+    any_valid = option_mask.any(dim=2).unsqueeze(-1)
+    pi = torch.where(any_valid, pi, torch.zeros_like(pi))
+    return pi, mu_oc
 
 def _gather_witness(x: torch.Tensor, witness: torch.Tensor) -> torch.Tensor:
     return torch.gather(x, 2, witness.unsqueeze(2)).squeeze(2)
@@ -99,9 +135,13 @@ def compute_ocmero_profiles(pred: Dict[str, torch.Tensor], masks: Dict[str, torc
         v = calibrator(x)
     mask = option_mask.unsqueeze(-1).expand_as(v)
     v = torch.where(mask, v, torch.full_like(v, -torch.inf))
+    beta = _beta_from_pred(pred, g_hat.shape[0], g_hat.shape[1], g_hat.shape[3], g_hat.device, g_hat.dtype)
     if params.mean_over_options:
-        pi_am = torch.sigmoid(torch.where(mask, v, torch.zeros_like(v))).sum(dim=2) / option_mask.float().sum(dim=2).clamp_min(1.0).unsqueeze(-1)
+        sig = torch.sigmoid(torch.where(mask, v, torch.full_like(v, -1e9))).masked_fill(~mask, 0.0)
+        pi_am = sig.sum(dim=2) / option_mask.float().sum(dim=2).clamp_min(1.0).unsqueeze(-1)
         mu = masked_softmax(torch.zeros_like(mu_logits), mask, dim=2)
+    elif params.use_observation_consistency:
+        pi_am, mu = observation_consistent_mu(mu_logits, option_mask, beta, v, params.tau_R, params.c_R)
     else:
         pi_am, mu = existential_mu_aggregate(v, mu_logits, option_mask, params.tau_R, params.c_R)
     R = weighted_lcvar(pi_am, mode_probs, params.alpha_R)
@@ -120,4 +160,4 @@ def compute_ocmero_profiles(pred: Dict[str, torch.Tensor], masks: Dict[str, torc
     W = (mu.max(dim=2).values * _normalize_weights(mode_probs).unsqueeze(1)).sum(dim=-1)
     for tname in ["R","B","U_prof","H","dH","K_post","C","W"]:
         pass
-    return {"R": torch.where(action_mask,R,torch.zeros_like(R)), "B": torch.where(action_mask,B,torch.zeros_like(B)), "U": torch.where(action_mask,U_prof,torch.zeros_like(U_prof)), "H": torch.where(action_mask,H,torch.zeros_like(H)), "dH": torch.where(action_mask,dH,torch.zeros_like(dH)), "K_post": torch.where(action_mask,K_post,torch.zeros_like(K_post)), "C": torch.where(action_mask,C,torch.zeros_like(C)), "witness": witness, "W": torch.where(action_mask,W,torch.zeros_like(W)), "pi_am": pi_am, "v": v, "mu": mu, "beta": torch.softmax(pred.get("beta_logits", torch.zeros(g_hat.shape[0], g_hat.shape[1], g_hat.shape[3], g_hat.shape[3], device=g_hat.device, dtype=g_hat.dtype)), dim=-1)}
+    return {"R": torch.where(action_mask,R,torch.zeros_like(R)), "B": torch.where(action_mask,B,torch.zeros_like(B)), "U": torch.where(action_mask,U_prof,torch.zeros_like(U_prof)), "H": torch.where(action_mask,H,torch.zeros_like(H)), "dH": torch.where(action_mask,dH,torch.zeros_like(dH)), "K_post": torch.where(action_mask,K_post,torch.zeros_like(K_post)), "C": torch.where(action_mask,C,torch.zeros_like(C)), "witness": witness, "W": torch.where(action_mask,W,torch.zeros_like(W)), "pi_am": pi_am, "v": v, "mu": mu, "beta": beta}

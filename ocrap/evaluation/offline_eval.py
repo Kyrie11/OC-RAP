@@ -41,7 +41,9 @@ def _profiles_for_ours(arrays: dict, H_action: np.ndarray, H_gap: np.ndarray) ->
     if "C_pred" in arrays:
         C = _arr(arrays["C_pred"])
     elif "c_rule_star" in arrays:
-        C = _arr(arrays["c_rule_star"]).max(axis=-1)
+        c_modes = _arr(arrays["c_rule_star"]).astype(float)
+        mode_probs = _arr(arrays.get("mode_probs", np.ones(c_modes.shape[-1], dtype=np.float32) / c_modes.shape[-1]))
+        C = metrics.upper_tail_cvar_np(c_modes, mode_probs, alpha=0.2)
     else:
         C = C_default
     prof = {
@@ -62,6 +64,22 @@ def _profiles_for_ours(arrays: dict, H_action: np.ndarray, H_gap: np.ndarray) ->
 
 def _selected_by_ours(arrays: dict, U: np.ndarray, H_action: np.ndarray, H_gap: np.ndarray, q: dict, eta_R: float, eta_H: float, epsilon_H: float, ablation: str | None) -> tuple[np.ndarray, dict, bool]:
     profiles, learned = _profiles_for_ours(arrays, H_action, H_gap)
+    if ablation == "oracle_witness" and "Y_option" in arrays:
+        Yopt = _arr(arrays["Y_option"]).astype(np.float32)
+        mode_probs = _arr(arrays.get("mode_probs", np.ones(Yopt.shape[-1], dtype=np.float32) / Yopt.shape[-1]))
+        profiles["R"] = metrics.weighted_lcvar_np(Yopt.max(axis=2), mode_probs, alpha=0.2)
+        if "witness_raw_oracle" in arrays:
+            profiles["witness"] = _arr(arrays["witness_raw_oracle"])
+        learned = learned or True
+    elif ablation == "no_observation_consistency" and "R_pred" not in arrays and "Y_option" in arrays:
+        # No checkpoint is available to recompute OC-MERO without beta tying.  Use
+        # the non-deployable per-mode option max as a clearly marked diagnostic
+        # approximation rather than pretending this is learned no-OC inference.
+        Yopt = _arr(arrays["Y_option"]).astype(np.float32)
+        mode_probs = _arr(arrays.get("mode_probs", np.ones(Yopt.shape[-1], dtype=np.float32) / Yopt.shape[-1]))
+        profiles["R"] = metrics.weighted_lcvar_np(Yopt.max(axis=2), mode_probs, alpha=0.2)
+        if "witness_raw_oracle" in arrays:
+            profiles["witness"] = _arr(arrays["witness_raw_oracle"])
     action_mask = _arr(arrays["action_mask"]).astype(bool)
     params = SelectorParams(eta_R=eta_R, eta_H=eta_H, epsilon_H=epsilon_H)
     if ablation in ("no_harm", "no_harm_constraint"):
@@ -80,7 +98,7 @@ def _selected_by_ours(arrays: dict, U: np.ndarray, H_action: np.ndarray, H_gap: 
     for i in range(action_mask.shape[0]):
         prof_i = {k: v[i] for k, v in profiles.items()}
         sel = select_action(actions, prof_i, U[i], q=q, masks={"action_mask": action_mask[i]}, params=params)
-        selected.append(sel["action_index"] if sel["action_index"] >= 0 else nominal_selector(U[i], action_mask[i]))
+        selected.append(sel["action_index"])
     return np.asarray(selected, dtype=np.int64), profiles, learned
 
 
@@ -130,11 +148,11 @@ def evaluate_offline(arrays: dict, method: str = "ours", eta_R: float = 0.70, et
         "ORS_oracle_option_success": metrics.oracle_recovery_success(Y_option, selected, option_mask),
         "FAR": metrics.false_recoverability(R_star, selected, eta_R),
         "SLR": metrics.selected_lower_tail_recoverability(R_star, selected),
-        "OLG": float(np.mean([oracle_R[i, a] - R_star[i, a] for i, a in enumerate(selected)])),
+        "OLG": float(np.mean([(oracle_R[i, a] - R_star[i, a]) if a >= 0 else 0.0 for i, a in enumerate(selected)])),
         "SRR": metrics.same_root_recoverability_regret(R_star, selected, action_mask),
-        "HNIV": metrics.harm_noninferiority_violation(H_action, selected, epsilon_H),
+        "HNIV": metrics.harm_noninferiority_violation(H_action, selected, epsilon_H, action_mask),
         "MIR": metrics.minimal_intervention_regret(U, selected, R_star, H_gap, eta_R, epsilon_H),
-        "utility_mean": float(np.mean([U[i, a] for i, a in enumerate(selected)])),
+        "utility_mean": float(np.mean([U[i, a] if a >= 0 else 0.0 for i, a in enumerate(selected)])),
         "selected_action_idx": selected.tolist(),
     }
     if profiles:
