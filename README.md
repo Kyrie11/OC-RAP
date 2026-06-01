@@ -71,7 +71,7 @@ python scripts/collect_roots.py \
 Real MetaDrive/ScenarioNet roots require a ScenarioNet database path. The script also accepts `--config`; command-line flags override config values:
 
 ```bash
-python scripts/collect_metadrive_roots.py \
+,python scripts/collect_metadrive_roots.py \
   --config configs/dataset_metadrive.yaml \
   --scenario-dir /path/to/scenarionet_database \
   --split-name train \
@@ -430,3 +430,33 @@ python scripts/train_care.py \
 ### Paper-final dataset guardrails
 
 For paper tables, the health report should show non-empty `token_anchor` and `token_hard_shell`, a non-trivial observation-equivalence distribution, acceptable action/token validity, and no non-finite labels. Do not use `--disable-root-time-replay`, `--disable-root-alignment-check`, or offline same-candidate closed-loop fallback for final closed-loop claims. Hybrid stress metrics should be reported in a separate table or column from natural WOMD/ScenarioNet metrics.
+
+
+python -m bdse.experiments.preprocess \
+  --config bdse/configs/paper.yaml \
+  --data-root /data0/senzeyu2/dataset/nuplan/data/cache/ \
+  --maps-root /data0/senzeyu2/dataset/nuplan/maps \
+  --map-version nuplan-maps-v1.0 \
+  --splits train_boston train_pittsburgh train_vegas_2 train_singapore \
+  --output-dir /data0/senzeyu2/dataset/nuplan/data/cache/bdse_train \
+  --scenario-stride 10 \
+  --scenario-iteration-policy initial \
+  --max-samples-per-log 512 \
+  --max-samples-per-log-strategy uniform_blocks \
+  --max-samples-per-log-block-size 64 \
+  --num-workers 6 \
+  --max-in-flight 6 \
+  --scenario-builder-workers 8 \
+  --teacher-cost-eval-stride 1 \
+  --resume \
+  --candidate-aware-agent-selection \
+  --include-drivable-polygons \
+  --no-include-crosswalks \
+  --cache-local-scheduler \
+  --cache-local-log-parallelism 1 \
+  --temporal-frame-cache-max-entries 262144 \
+  --temporal-frame-cache-individual-miss-threshold 32 \
+  --temporal-frame-cache-coalesce-bulk \
+  --skip-failed-samples \
+  --profile \
+  --profile-threshold-s 10.0

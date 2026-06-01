@@ -222,7 +222,17 @@ def _track_length(scenario: dict, summary: dict) -> int:
     return int(summary.get("track_length", summary.get("scenario_length", 0)) or 0)
 
 
-def _sample_root_ticks(scenario: dict, summary: dict, history_steps: int, max_samples: int, stride: int, event_aligned: bool = False, event_lookahead_steps: int = 30) -> list[int]:
+def _sample_root_ticks(
+    scenario: dict,
+    summary: dict,
+    history_steps: int,
+    max_samples: int,
+    stride: int,
+    event_aligned: bool = False,
+    event_lookahead_steps: int = 30,
+    event_root_preoffset_steps: int = 0,
+    event_root_jitter_steps: int = 0,
+) -> list[int]:
     current = int(scenario_current_time_index(scenario, summary))
     max_samples = max(1, int(max_samples))
     T = _track_length(scenario, summary)
@@ -243,8 +253,31 @@ def _sample_root_ticks(scenario: dict, summary: dict, history_steps: int, max_sa
             key=lambda tt: _tick_event_score(scenario, summary, int(tt), int(event_lookahead_steps))[:2],
             reverse=True,
         )
-        chosen = sorted(ranked[:max_samples])
-        return [int(x) for x in chosen]
+        # For learning OC-RAP, the root should usually be before the difficult
+        # interaction, not exactly at the minimum-clearance/contact frame.  If we
+        # root at/after the event, almost every candidate prefix is unrecoverable,
+        # giving all-zero R labels and no same-root ranking signal.  We therefore
+        # rank by future event severity, then shift the actual root earlier by a
+        # fixed offset while keeping the future event inside the lookahead window.
+        pre = max(0, int(event_root_preoffset_steps))
+        jit = max(0, int(event_root_jitter_steps))
+        chosen: list[int] = []
+        seen: set[int] = set()
+        for tt in ranked:
+            centers = [int(tt) - pre]
+            if jit > 0 and max_samples > 1:
+                centers = [int(tt) - pre - jit, int(tt) - pre, int(tt) - pre + jit]
+            for c in centers:
+                c = int(min(max(c, lo), hi))
+                if c in seen:
+                    continue
+                seen.add(c)
+                chosen.append(c)
+                if len(chosen) >= max_samples:
+                    break
+            if len(chosen) >= max_samples:
+                break
+        return sorted(chosen) if chosen else [current]
     if max_samples == 1:
         return [current]
     if len(ticks) <= max_samples:
@@ -269,6 +302,8 @@ def main() -> None:
     ap.add_argument("--sample-stride", type=int, default=5, help="Minimum frame stride between temporal roots when max_samples_per_log > 1 or event-aligned scanning is enabled.")
     ap.add_argument("--event-aligned-root", action="store_true", help="Choose the root tick with highest contact/near-contact/low-headroom score instead of always using current_time_index.")
     ap.add_argument("--event-lookahead-steps", type=int, default=30, help="Future frames used to classify/scored event-aligned roots.")
+    ap.add_argument("--event-root-preoffset-steps", type=int, default=0, help="When using --event-aligned-root, shift the selected root this many ticks before the highest-severity future event. This keeps labels recoverable/rankable instead of rooting exactly at contact.")
+    ap.add_argument("--event-root-jitter-steps", type=int, default=0, help="Optional +/- jitter around the pre-event root when max-samples-per-log > 1, useful for mining multiple pre-event roots from the same scenario.")
     ap.add_argument("--target-regime-counts", default="", help="Optional balanced collection target, e.g. normal=2000,low=2000,near=2000,contact=1000. When set, scanning continues until requested per-regime counts or --max-scenarios-to-scan is reached.")
     ap.add_argument("--max-scenarios-to-scan", type=int, default=None, help="Optional cap on scenarios scanned when using --target-regime-counts.")
     ap.add_argument("--append", action="store_true", help="Append to existing root directory/splits instead of replacing split list.")
@@ -338,7 +373,17 @@ def main() -> None:
         # env.reset() and will fail teacher rollout alignment.
         scenario = read_scenario_description(pkl, centralize=True)
         sm = summary.get(sid, {}) or {}
-        ticks = _sample_root_ticks(scenario, sm, args.history_steps, args.max_samples_per_log, args.sample_stride, args.event_aligned_root, args.event_lookahead_steps)
+        ticks = _sample_root_ticks(
+            scenario,
+            sm,
+            args.history_steps,
+            args.max_samples_per_log,
+            args.sample_stride,
+            args.event_aligned_root,
+            args.event_lookahead_steps,
+            args.event_root_preoffset_steps,
+            args.event_root_jitter_steps,
+        )
         for sample_j, tick in enumerate(ticks):
             if args.max_roots is not None and len(written) >= args.max_roots:
                 break
@@ -371,6 +416,8 @@ def main() -> None:
         "sample_stride_last_run": int(args.sample_stride),
         "event_aligned_root_last_run": bool(args.event_aligned_root),
         "event_lookahead_steps_last_run": int(args.event_lookahead_steps),
+        "event_root_preoffset_steps_last_run": int(args.event_root_preoffset_steps),
+        "event_root_jitter_steps_last_run": int(args.event_root_jitter_steps),
         "scenario_coordinate_frame": "metadrive_centralized_sdc_initial",
         "read_scenario_data_centralize": True,
         "temporal_roots_require_state_restore_for_metadrive_rollout": bool(args.max_samples_per_log > 1 or args.event_aligned_root),
