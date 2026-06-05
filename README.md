@@ -1,462 +1,620 @@
-# OC-RAP: Observation-Consistent Recoverability Planning
+# OC-RAP 完整实现说明
 
-This repository is a cleaned OC-RAP implementation migrated from the earlier ReCAP prototype.  The old package name `recap` is retained for import compatibility, but the main algorithmic path is now:
+本仓库实现论文中的 **Observation-Consistent Recovery-Affordance Planner, OC-RAP**，并用 `论文细节.md` 中的 implementation spec 修正论文正文里的概念化描述。代码把 recoverability 作为 candidate-prefix admission criterion，而不是普通 motion prediction：每个样本以 `(scene, time, candidate prefix)` 为单位，显式保存 `M_star / Y_obs / C_star / root_probs / R_orc_star / R_dep_star / I_art_star / regime_label`，用于训练 observation-consistent recovery admission。
 
-```text
-BEV history + ego state + route command
-  -> action prefix proposals
-  -> executable recovery affordance tokens
-  -> ReCoT root-shared counterfactual evidence
-  -> OC-MERO observation-consistent recoverability profiles
-  -> CRISP calibrated recovery-preserving selector
-```
+实现重点：
 
-The migration removes the old CARE/MERO core semantics from the deployable path.  Backward-compatible aliases remain (`CARE = ReCoT`, legacy `MERO` helpers), but the main outputs and labels are signed recovery margins, observation-consistent witnesses, and four-offset CRISP calibration.
+1. **Dataset construction**：从 WOMD TFRecord 或 synthetic smoke 数据构造 scene-prefix 样本；每个 prefix 生成 replay、reactive、targeted perturbation 三类 counterfactual futures。
+2. **Recovery teacher**：对每个 future 和 recovery option rollout，使用 active-mask corrected margin，分别计算 clearance、stop、control、route、harm、stability、secondary collision slacks。
+3. **Root clustering**：按 recovery signature 聚类，不按 raw trajectory 距离聚类。
+4. **Observation compatibility**：用 post-prefix observation renderer 生成 `Y_obs` 和 `C_star`，不把 pairwise threshold 当作严格 equivalence relation。
+5. **OC-MERO**：使用 `w_ij = normalize(C_ij * p_j)`，并用 weighted lower-tail LCVaR 计算 oracle/deployable recoverability。
+6. **CRISP selector**：先保留 admissible nominal；否则在 admissible set 内按 nominal utility 选；若无 admissible action，用 lexicographic fallback，而不是直接最大化 `R_dep - lambda * D`。
+7. **Calibration**：只使用 calibration split 中 `R_dep_star < 0` 的 negative deployability samples 估计 threshold。
+8. **Metrics**：同时报告 candidate-level FRA、executed-action FRA、ODG/ODG+、DRS、nominal regret、bounded NUP、intervention、collision/harm proxies，并支持 regime-wise 和 artifact subset 报告。
+9. **Ablation switches**：所有 Experiments 中的 w/o 设置都可以通过 CLI 开关运行。
 
-## What changed for OC-RAP
+---
 
-Key paper-alignment fixes implemented in this version:
-
-- Recovery specification margin is `max(G_no, G_mr, G_post)`, not `min(...)` across mutually exclusive regimes.
-- Dataset labels include `spec_margin_star`, `spec_id_star`, `margin_option`, `g_star`, `y_star`, `obs_class`, `obs_equiv`, `beta_star`, `witness_oc`, `Y_oc`, and `R_star` computed from `Y_oc`.
-- OC-MERO uses a μ-weighted existential operator:
-  `sigmoid(tau_R * logsumexp(log_mu + v/tau_R) - c_R)`, with default `c_R=0.0`.
-- ReCoT rejects oracle-only keys in forward: labels, root-mode seed params, observation classes, witnesses, teacher success, and future data are loss/eval only.
-- CRISP consumes all four offsets: `q_R`, `q_H`, `q_delta`, and `q_C`.
-- Recovery option generation distinguishes relaxed validity from teacher success and preserves one semantic token per required tag when `L` allows.
-- Offline metrics separate deployable OC-RAP recovery from oracle option-max diagnostics.
-
-
-## Alignment review and fixes in this zip
-
-This optimized zip includes `OC_RAP_ALIGNMENT_REVIEW.md`, which records the paper/code audit, remaining simplifications, dataset-generation caveats, and deployability concerns.  In this pass, the teacher-label builder was changed so observation-consistent labels use one observable post-prefix signature per `(action, root mode)` instead of collapsing all modes to the same ego-only signature.  Real MetaDrive rollouts now store compact visible-actor observations in `RolloutTrace`, and CRISP rule labels are reduced through the observation-consistent witness rather than being polluted by invalid/padded recovery tokens.
-
-For paper-style datasets, prefer:
+## 1. 安装
 
 ```bash
-python scripts/build_teacher_labels.py \
-  --config configs/dataset_metadrive.yaml \
-  --split train \
-  --root-dir data/ocrap/roots_raw \
-  --bev-dir data/ocrap/bev/train.zarr \
-  --rollout-backend metadrive \
-  --scenario-dir /path/to/scenarionet_database \
-  --output data/ocrap/train.zarr
-```
-
-Use `--disable-root-time-replay`, `--disable-root-alignment-check`, or `--allow-temporal-root-rollout` only for diagnostics.  They weaken assumptions needed for paper-final teacher labels.  Synthetic roots remain useful for smoke tests only.
-
-## Installation
-
-```bash
-pip install -r requirements.txt
+cd ocrap_impl
+python -m venv .venv
+source .venv/bin/activate
 pip install -e .
-pytest -q
 ```
 
-The test suite includes synthetic checks for observation-consistent witness selection, no oracle existential leakage, μ-weighted duplicate invariance, model forward leakage rejection, selector behavior, and recovery-token validity semantics.
+用于本地快速验证只需要基础依赖：`numpy`, `torch`, `PyYAML`, `tqdm`。
 
-## Dataset and training pipeline
-
-### 1. Collect roots
-
-Synthetic smoke-test roots:
+WOMD TFRecord 解析需要额外依赖：
 
 ```bash
-python scripts/collect_roots.py \
-  --config configs/dataset_metadrive_diagnostic.yaml \
-  --output data/debug/roots
+pip install -e '.[womd]'
 ```
 
-Real MetaDrive/ScenarioNet roots require a ScenarioNet database path. The script also accepts `--config`; command-line flags override config values:
+Waymax 场景加载/闭环仿真适配需要额外依赖：
 
 ```bash
-,python scripts/collect_metadrive_roots.py \
-  --config configs/dataset_metadrive.yaml \
-  --scenario-dir /path/to/scenarionet_database \
-  --split-name train \
-  --history-steps 5 \
-  --max-samples-per-log 1 \
-  --output data/ocrap/roots_raw
+pip install -e '.[waymax]'
 ```
 
-For paper-final real teacher labels, avoid temporal root leakage unless the runner restores the exact root tick.  The label builder fails fast by default when real temporal roots are unsafe.
+当前代码中 `womd.py` 提供 WOMD Scenario proto parser；`iter_waymax_scenarios` 使用 Waymax 官方 dataloader 入口，便于把本仓库的数据构造和 Waymax simulator state 接入同一实验环境。WOMD/Waymax 的数据访问权限和 Google Cloud 配置需要由本地环境完成。
 
-### 2. Rasterize BEV
+---
+
+## 2. 仓库结构
+
+```text
+ocrap_impl/
+  configs/
+    default.yaml                         # 默认实验参数
+    ablations/                           # 每个 w/o 实验的配置片段
+  src/ocrap/
+    cli.py                               # 统一命令入口
+    schema.py                            # RawScenario / SceneHistory / DatasetSample schema
+    womd.py                              # WOMD TFRecord parser 与 Waymax loader adapter
+    synth.py                             # synthetic smoke-test scenes
+    dataset_builder.py                   # Algorithm 1: dataset construction
+    prefix_generation.py                 # candidate prefix generation + utility
+    futures.py                           # replay / reactive / targeted futures
+    teacher.py                           # Algorithm 2: recovery teacher margins
+    observation.py                       # post-prefix observation renderer + compatibility labels
+    root_clustering.py                   # recovery-signature clustering
+    lcv.py                               # weighted lower-tail LCVaR + calibration quantile
+    ocmero.py                            # Algorithm 3: corrected OC-MERO
+    model.py                             # PyTorch OC-RAP model
+    losses.py                            # assign/sig/IB/obs/margin/anti-oracle/utility losses
+    train.py                             # training loop
+    calibrate.py                         # calibration threshold estimation
+    selector.py                          # CRISP selector
+    metrics.py                           # FRA/ODG/DRS/NUP/intervention metrics
+    evaluate.py                          # baseline and OC-RAP evaluation
+    deploy.py                            # deployment-time candidate selection
+    diagnose.py                          # dataset consistency checks
+  tests/test_core.py                     # unit tests for core formulas/operators
+```
+
+---
+
+## 3. 一键 smoke test
+
+Synthetic 数据只用于验证代码链路，不替代论文主实验。它会构造小规模 scene-prefix dataset，跑 diagnose、训练、评估和部署。
 
 ```bash
-python scripts/rasterize_bev.py \
-  --root-dir data/ocrap/roots_raw \
+# 1) 构造最小 dataset
+PYTHONPATH=src python -m ocrap.cli \
+  --set data_source=synthetic \
+  --set num_synthetic_scenarios=1 \
+  --set split_ratios.train=1.0 \
+  --set split_ratios.val=0.0 \
+  --set split_ratios.calibration=0.0 \
+  --set split_ratios.test=0.0 \
+  --set num_candidate_prefixes=2 \
+  --set num_reactive_futures=1 \
+  --set num_targeted_futures=1 \
+  --set num_roots=4 \
+  --set max_times_per_scenario=1 \
+  --set max_biased_times_per_scenario=0 \
+  --set bev_resolution_m=8.0 \
+  --set max_agents=8 \
+  build-dataset --output runs/smoke_dataset
+
+# 2) 诊断 dataset schema、source coverage、split leakage、compatibility labels
+PYTHONPATH=src python -m ocrap.cli \
+  diagnose --dataset runs/smoke_dataset --output runs/smoke_dataset/diagnose.json
+
+# 3) 训练 1 epoch
+PYTHONPATH=src python -m ocrap.cli \
+  --set training.epochs=1 \
+  --set training.batch_size=1 \
+  --set num_roots=4 \
+  train --dataset runs/smoke_dataset --output runs/smoke_train
+
+# 4) 在 train split 上做流程检查
+PYTHONPATH=src python -m ocrap.cli \
+  --set num_roots=4 \
+  evaluate --dataset runs/smoke_dataset \
+  --checkpoint runs/smoke_train/best.pt \
   --split train \
-  --bev-config configs/bev_256.yaml \
-  --channels compact \
-  --history-steps 5 \
-  --num-workers 8 \
-  --output data/ocrap/bev/train.zarr
+  --output runs/smoke_train/eval_train.json
+
+# 5) 部署式选择某个 scene-time 的 candidate prefix
+PYTHONPATH=src python -m ocrap.cli \
+  --set num_roots=4 \
+  deploy --dataset runs/smoke_dataset \
+  --checkpoint runs/smoke_train/best.pt \
+  --scene-id synthetic_000000 \
+  --time-index 10 \
+  --output runs/smoke_train/deploy.json
 ```
 
-### 3. Build OC-RAP teacher labels
+运行单元测试：
 
 ```bash
-python scripts/build_teacher_labels.py \
-  --config configs/dataset_metadrive.yaml \
-  --split train \
-  --root-dir data/ocrap/roots_raw \
-  --bev-dir data/ocrap/bev/train.zarr \
-  --output data/ocrap/train.zarr
+PYTHONPATH=src pytest -q
+```
 
-python scripts/build_teacher_labels.py \
-  --config configs/dataset_metadrive.yaml \
-  --split calib \
-  --root-dir data/ocrap/roots_raw \
-  --bev-dir data/ocrap/bev/calib.zarr \
-  --output data/ocrap/calib.zarr
+---
 
-python scripts/build_teacher_labels.py \
-  --config configs/dataset_metadrive.yaml \
+## 4. WOMD 数据集构造
+
+WOMD 模式使用 `waymo_open_dataset.protos.scenario_pb2.Scenario` 解析 Scenario proto。代码读取：
+
+- `scenario_id`
+- `timestamps_seconds`
+- `sdc_track_index`
+- `tracks[*].states`：position、velocity、heading、dimensions、valid flag、object type
+- `dynamic_map_states`
+- `map_features`：lane / road line / road edge / crosswalk / speed bump / stop sign / driveway
+- `sdc_paths`，若存在；不存在时退化为 SDC logged route proxy
+
+构造命令：
+
+```bash
+PYTHONPATH=src python -m ocrap.cli \
+  --set data_source=womd \
+  --set womd_patterns='/path/to/womd/training/*.tfrecord*' \
+  --set max_scenarios=1000 \
+  --set max_agents=64 \
+  --set max_map_polylines=256 \
+  --set max_polyline_points=64 \
+  --set local_radius_m=80.0 \
+  --set bev_resolution_m=0.5 \
+  --set num_candidate_prefixes=24 \
+  --set num_reactive_futures=4 \
+  --set num_targeted_futures=8 \
+  --set num_roots=8 \
+  build-dataset --output data/ocrap_womd
+```
+
+输出目录：
+
+```text
+data/ocrap_womd/
+  manifest.csv
+  dataset_summary.json
+  samples/*.npz
+```
+
+每个 `.npz` 是一个 `(scene_id, time_index, candidate_index)` 样本，核心字段包括：
+
+```text
+agent_history               [T_h, A, F_agent]
+agent_valid                 [T_h, A]
+map_polylines               [P, Q, F_map]
+map_valid                   [P, Q]
+dynamic_map                 [T_h, B, F_signal]
+route                       [R, F_route]
+bev_occ                     [C_occ, H_bev, W_bev]
+prefix_states              [T_p, F_ego]
+prefix_controls            [T_p-1, F_ctrl]
+prefix_macro_id            scalar
+prefix_param                [F_param]
+future_probs                [J]
+root_assignments            [J]
+root_probs                  [K]
+root_signature              [K, D_sig]
+root_future_signature       [K, D_future_sig]
+root_valid                  [K]
+future_to_root_weight       [J, K]
+y_obs                       [K, K]
+c_star                      [K, K]
+m_star                      [K, L]
+option_valid                [L]
+r_orc_star                  scalar
+r_dep_star                  scalar
+oracle_gap_star             scalar
+i_art_star                  scalar bool
+regime_label                dict
+split_id                    train / val / calibration / test
+```
+
+---
+
+## 5. Dataset diagnose
+
+构造后必须先诊断：
+
+```bash
+PYTHONPATH=src python -m ocrap.cli \
+  diagnose --dataset data/ocrap_womd \
+  --output data/ocrap_womd/diagnose.json
+```
+
+诊断会检查：
+
+- 必要 label 是否存在：`M_star / Y_obs / C_star / R_orc_star / R_dep_star / I_art_star / root_probs`
+- scenario-level split 是否泄漏
+- 每个样本是否包含 replay、reactive、targeted 三类 future source
+- `root_probs` 是否归一化
+- `C_star` 是否为方阵且对角为 1
+- `Y_obs` 是否对称
+- hidden emergence 是否标记 `from_unknown_mask=True`
+- artifact fraction 与 regime distribution
+
+---
+
+## 6. 模型训练
+
+完整训练：
+
+```bash
+PYTHONPATH=src python -m ocrap.cli \
+  --config configs/default.yaml \
+  train --dataset data/ocrap_womd \
+  --output runs/ocrap_full
+```
+
+常用训练 override：
+
+```bash
+PYTHONPATH=src python -m ocrap.cli \
+  --set training.epochs=20 \
+  --set training.batch_size=32 \
+  --set training.lr=0.0005 \
+  --set training.artifact_sampler_weight=0.30 \
+  train --dataset data/ocrap_womd \
+  --output runs/ocrap_full
+```
+
+训练输出：
+
+```text
+runs/ocrap_full/
+  config.yaml
+  train_history.json
+  best.pt
+  last.pt
+```
+
+训练 objective：
+
+```text
+L = lambda_assign * L_assign
+  + lambda_sig    * L_sig
+  + lambda_ib     * L_ib
+  + lambda_obs    * L_obs
+  + lambda_margin * L_margin
+  + lambda_art    * L_art
+  + lambda_util   * L_util
+```
+
+其中：
+
+- `L_assign = - sum_j p_j log p_hat[root_assignment_j]`
+- `L_sig = sum_k p_k ||s_hat_k - s_k_star||`
+- `L_obs` 使用 pairwise class-imbalance weighted BCE
+- `L_margin` 使用 Huber regression，按 `root_probs` 和 `option_valid` 加权
+- `L_art` 只在 `I_art_star=1` 的 oracle artifact 样本上惩罚过高 `R_dep_pred`
+- `L_ib` 是 root posterior 到 prefix-conditioned prior 的 KL
+
+---
+
+## 7. Calibration
+
+使用 calibration split 中 teacher deployability negative 的样本：
+
+```bash
+PYTHONPATH=src python -m ocrap.cli \
+  calibrate --dataset data/ocrap_womd \
+  --checkpoint runs/ocrap_full/best.pt \
+  --output runs/ocrap_full/calibration.json
+```
+
+输出示例：
+
+```json
+{
+  "num_calibration": 12000,
+  "num_negative": 2500,
+  "thresholds": {
+    "0.01": 0.83,
+    "0.05": 0.41,
+    "0.1": 0.22
+  },
+  "strict_finite_sample": true
+}
+```
+
+Finite-sample threshold 实现：
+
+```python
+scores = sorted(scores_neg)
+k = ceil((n + 1) * (1 - delta))
+if k > n:
+    gamma = +inf
+else:
+    gamma = scores[k - 1]
+```
+
+---
+
+## 8. Evaluation
+
+主评估：
+
+```bash
+PYTHONPATH=src python -m ocrap.cli \
+  evaluate --dataset data/ocrap_womd \
+  --checkpoint runs/ocrap_full/best.pt \
+  --calibration runs/ocrap_full/calibration.json \
   --split test \
-  --root-dir data/ocrap/roots_raw \
-  --bev-dir data/ocrap/bev/test.zarr \
-  --output data/ocrap/test.zarr
+  --output runs/ocrap_full/test_metrics.json
 ```
 
-The builder writes both deployable OC labels and explicit oracle diagnostics.  Use `R_star`/`Y_oc`/`witness_oc` for OC-RAP metrics; use `Y_action`/`witness_raw_oracle` only for ablation diagnostics.
+默认评估方法：
 
-### 4. Train action proposal and ReCoT
-
-The legacy script name remains available, but it now imports the ReCoT/OC-RAP model path through compatibility wrappers:
-
-```bash
-python scripts/train_action_proposal.py \
-  --config configs/train_action_proposal.yaml \
-  --dataset data/ocrap/train.zarr \
-  --output checkpoints/action_proposal
-
-python scripts/train_care.py \
-  --config configs/train_care.yaml \
-  --dataset data/ocrap/train.zarr \
-  --proposal-checkpoint checkpoints/action_proposal/best.pt \
-  --output checkpoints/recot
+```text
+nominal
+risk_aware
+backup_filter
+contingency
+oracle_filter
+ocrap
 ```
 
-When writing new experiments, prefer module names `recap.models.recot`, `recap.models.oc_mero`, and `recap.models.selector`.
+输出包括：
 
-### 5. Calibrate CRISP
-
-```bash
-python scripts/calibrate.py \
-  --config configs/train_care.yaml \
-  --dataset data/ocrap/calib.zarr \
-  --checkpoint checkpoints/recot/best.pt \
-  --split calib \
-  --output outputs/calibration
+```text
+FRA_cand                 candidate-level false recoverability admission
+FRA_exec                 selected-action false recoverability admission
+DRS                      root-probability weighted deployable recovery success
+ODG                      R_orc_star - R_dep_star
+ODG_pos                  max(0, R_orc_star - R_dep_star)
+nominal_regret           U(a0) - U(a*)
+NUP                      exp(-max(0, regret)/sigma_U)
+intervention_rate        selected action != nominal
+collision_rate           selected prefix hard violation proxy
+hard_violation           hard-rule violation score
+harm_proxy               severity proxy
+artifact_selection_rate  selected action is oracle artifact
 ```
 
-`q_values.json` now contains `q_R`, `q_H`, `q_delta`, `q_C`, thresholds, UCBs, and split metadata.  Calibration is selected-action based rather than merely checking whether any admitted set member is bad.
+Regime-wise 结果保存在：
 
-### 6. Offline evaluation
-
-```bash
-python scripts/offline_eval.py \
-  --config configs/train_care.yaml \
-  --dataset data/ocrap/test.zarr \
-  --checkpoint checkpoints/recot/best.pt \
-  --calibration outputs/calibration/q_values.json \
-  --method ours \
-  --output outputs/offline/ocrap
+```json
+{
+  "methods": {...},
+  "regime": {
+    "ocrap": {
+      "normal": {...},
+      "low_headroom": {...},
+      "occluded": {...},
+      "near_contact": {...},
+      "post_contact": {...},
+      "oracle_artifact": {...}
+    }
+  }
+}
 ```
 
-The evaluation code reports deployable OC-RAP recovery metrics separately from oracle option-max diagnostics.
+---
 
-### 7. Closed-loop evaluation
+## 9. Deployment / online prefix selection
+
+对一个 scene-time 的 candidate set 执行 CRISP selection：
 
 ```bash
-python scripts/eval_closed_loop.py \
-  --config configs/eval_closed_loop.yaml \
-  --dataset data/ocrap/test.zarr \
-  --checkpoint checkpoints/recot/best.pt \
-  --calibration outputs/calibration/q_values.json \
-  --method ours \
+PYTHONPATH=src python -m ocrap.cli \
+  deploy --dataset data/ocrap_womd \
+  --checkpoint runs/ocrap_full/best.pt \
+  --calibration runs/ocrap_full/calibration.json \
+  --scene-id '<scenario_id>' \
+  --time-index 42 \
+  --delta 0.05 \
+  --output runs/ocrap_full/deploy_scene42.json
+```
+
+输出：
+
+```json
+{
+  "selected_candidate_index": 0,
+  "admitted_indices": [0, 3, 7],
+  "reason": "nominal_admitted",
+  "candidates": [
+    {
+      "candidate_index": 0,
+      "macro_name": "nominal",
+      "utility": 8.4,
+      "r_dep_pred": 0.72,
+      "r_orc_pred": 0.91,
+      "hard_violation": 0.0,
+      "harm_proxy": 0.0,
+      "feasible": true
+    }
+  ]
+}
+```
+
+CRISP admission set：
+
+```text
+A_adm = { a : R_dep_pred(a) >= gamma_rec,
+              H(a) <= gamma_H,
+              D(a) <= gamma_D,
+              feasible(a) = 1 }
+```
+
+Fallback 顺序：
+
+```text
+1. 删除动态不可行 prefix
+2. 最小 hard violation H(a)
+3. 最小 harm D(a)
+4. 最大 R_dep_pred(a)
+5. 最大 U(a)
+```
+
+---
+
+## 10. Experiments 中 w/o 消融开关
+
+所有消融都可用全局 CLI switch，不需要改代码。
+
+### 10.1 OC-RAP w/o observation kernel
+
+Roots branch-wise evaluation，不使用 post-prefix observation compatibility：
+
+```bash
+PYTHONPATH=src python -m ocrap.cli \
+  --without-observation-kernel \
+  train --dataset data/ocrap_womd \
+  --output runs/wo_observation_kernel
+```
+
+评估同样加开关，确保 checkpoint flags 和 evaluation flags 一致：
+
+```bash
+PYTHONPATH=src python -m ocrap.cli \
+  --without-observation-kernel \
+  evaluate --dataset data/ocrap_womd \
+  --checkpoint runs/wo_observation_kernel/best.pt \
   --split test \
-  --output outputs/eval/ocrap
+  --output runs/wo_observation_kernel/test_metrics.json
 ```
 
-If no live simulator backend is connected, this entrypoint explicitly reports `closed_loop_backend=offline_same_candidate_fallback` and `paper_final_closed_loop=false`. Add `--require-simulator` to fail fast instead of writing diagnostic fallback metrics.
+### 10.2 OC-RAP w/o lower-tail aggregation
 
-## OC-RAP dataset schema
-
-Each training sample should expose these deployable inputs:
-
-```text
-bev, ego_info, route_command
-actions_states, actions_controls, actions_params, action_mask
-token_states_ref, token_controls_ref, token_params, token_anchor, token_hard_shell, option_mask
-mode_probs
-```
-
-Loss/eval-only teacher fields:
-
-```text
-g_star, y_star, h_star, k_star, u_star, c_rule_star
-spec_margin_star, spec_id_star, margin_option
-obs_class, obs_equiv, beta_star, witness_oc, Y_oc, R_star
-```
-
-Do not pass loss/eval-only fields to model forward.  `mode_seed_params` is stored for teacher debugging only and is also forbidden in forward.
-
-## Tests
+用 weighted mean 替代 LCVaR：
 
 ```bash
-pytest -q
+PYTHONPATH=src python -m ocrap.cli \
+  --without-lower-tail \
+  train --dataset data/ocrap_womd \
+  --output runs/wo_lower_tail
 ```
 
-Expected result after this migration: all tests pass.
+### 10.3 OC-RAP w/o calibration
 
-## Paper-aligned experiment support added in this optimized version
-
-This codebase now supports the deployable OC-RAP path described in `post-collision.tex` without silently replacing OC-RAP by oracle teacher selection.
-
-### Important alignment guarantees
-
-- `method=ours`, `method=ocrap`, and `method=crisp` use CRISP selection over OC-MERO profiles. They no longer call the oracle selector.
-- Closed-loop fallback keeps the OC-RAP selector. If a simulator backend is unavailable, the fallback is explicitly reported as `offline_same_candidate_fallback` and `oracle_selector_used_for_ours=false`.
-- CRISP controlled relaxation now uses all calibrated offsets from the paper equation: `q_R`, `q_H`, `q_delta`, and `q_C`, including absolute harm and relative harm-gap violations.
-- ReCoT posterior logits are action-conditioned through the prefix/root fused representation, instead of being copied across all candidate prefixes.
-- `train_care.py` now passes named tensors to `ReCoT.forward`; the previous positional call mis-routed `options_states_ref` into the `actions_controls` slot and could train/evaluate the wrong computational graph.
-- Calibration can use learned checkpoint predictions when `--checkpoint` is supplied; otherwise it falls back to teacher profiles and marks this in output metadata.
-- Offline and closed-loop metrics distinguish deployable observation-consistent success from non-deployable oracle option-max diagnostics.
-
-### Smoke-test pipeline
+使用 `selection.fixed_gamma_rec`，不读 calibration JSON：
 
 ```bash
-# 0. Install
-pip install -r requirements.txt
-pip install -e .
-
-# 1. Build a tiny synthetic diagnostic dataset
-python scripts/collect_roots.py \
-  --config configs/dataset_metadrive_diagnostic.yaml \
-  --output data/smoke/roots \
-  --max-roots 8
-
-python scripts/build_teacher_labels.py \
-  --config configs/dataset_metadrive_diagnostic.yaml \
-  --split all \
-  --root-dir data/smoke/roots \
-  --output data/smoke/dataset \
-  --max-roots 8 \
-  --shard-size 4
-
-# 2. Train ReCoT on the diagnostic data
-python scripts/train_care.py \
-  --dataset data/smoke/dataset \
-  --output checkpoints/smoke_recot \
-  --epochs 1 \
-  --batch-size 1
-
-# 3. Calibrate CRISP on a held-out calibration split in real runs.
-# For this tiny smoke test, the same dataset is reused only to verify plumbing.
-python scripts/calibrate.py \
-  --dataset data/smoke/dataset \
-  --checkpoint checkpoints/smoke_recot/best.pt \
-  --output outputs/smoke_calibration \
-  --batch-size 1
-
-# 4. Evaluate deployable OC-RAP/CRISP, not oracle selection
-python scripts/offline_eval.py \
-  --dataset data/smoke/dataset \
-  --checkpoint checkpoints/smoke_recot/best.pt \
-  --calibration outputs/smoke_calibration \
-  --method ours \
-  --output outputs/smoke_eval \
-  --batch-size 1
-
-# 5. Closed-loop entrypoint; falls back to same-candidate offline replay if no simulator backend is connected
-python scripts/eval_closed_loop.py \
-  --dataset data/smoke/dataset \
-  --checkpoint checkpoints/smoke_recot/best.pt \
-  --calibration outputs/smoke_calibration \
-  --method ours \
-  --output outputs/smoke_closed_loop \
-  --batch-size 1
+PYTHONPATH=src python -m ocrap.cli \
+  --without-calibration \
+  --set selection.fixed_gamma_rec=0.0 \
+  evaluate --dataset data/ocrap_womd \
+  --checkpoint runs/ocrap_full/best.pt \
+  --split test \
+  --output runs/wo_calibration/test_metrics.json
 ```
 
-### Full paper-style experiment commands
+### 10.4 OC-RAP w/o anti-oracle loss
 
-The paper's external baseline comparison can be omitted, but all OC-RAP metrics and ablations are supported through script flags.
+训练时去掉 `L_art`：
 
 ```bash
-# OC-RAP only, with all internal ablations
-python scripts/run_all_experiments.py \
-  --dataset data/ocrap/test.zarr \
-  --checkpoint checkpoints/recot/best.pt \
-  --calibration outputs/calibration/q_values.json \
-  --output outputs/experiments/ocrap_suite \
-  --skip-baselines \
-  --batch-size 4
-
-# Include built-in simple baselines: nominal, risk_aware, backup_filter, oracle diagnostic
-python scripts/run_all_experiments.py \
-  --dataset data/ocrap/test.zarr \
-  --checkpoint checkpoints/recot/best.pt \
-  --calibration outputs/calibration/q_values.json \
-  --output outputs/experiments/all_builtin \
-  --batch-size 4
-
-# Single ablation switch
-python scripts/run_ablation.py \
-  --ablation no_harm_constraint \
-  --dataset data/ocrap/test.zarr \
-  --checkpoint checkpoints/recot/best.pt \
-  --calibration outputs/calibration/q_values.json \
-  --output outputs/ablations/no_harm_constraint \
-  --batch-size 4
+PYTHONPATH=src python -m ocrap.cli \
+  --without-anti-oracle \
+  train --dataset data/ocrap_womd \
+  --output runs/wo_anti_oracle
 ```
 
-Supported ablations:
+### 10.5 Full-future root model
 
-```text
-no_harm_constraint
-no_rule_constraint
-no_controlled_relaxation
-no_recovery_constraint
-penalize_uncertainty
-no_observation_consistency  # disables runtime beta/equivalence witness tying when predictions are used
-oracle_witness              # non-deployable option-max diagnostic; use OLG/ORS to quantify leakage
-```
-
-### Metrics written by evaluation scripts
-
-`metrics.json` and `all_metrics.json` include the experiment metrics needed by the paper tables:
-
-```text
-OCS   observation-consistent selected recovery success
-ORS_oracle_option_success   non-deployable option-max diagnostic
-FAR   selected-action false admission rate relative to eta_R
-SLR   selected lower-tail recoverability
-OLG   oracle leakage gap, oracle option-max recoverability minus OC recoverability
-SRA   same-root pairwise ranking accuracy, when predicted profiles are available
-SRR   same-root recoverability regret
-R_MAE OC-MERO recoverability profile MAE
-WAcc  witness accuracy on non-ambiguous witness-gap samples
-OCV_JS observation-consistency JS violation, when predicted mu is available
-HNIV  harm non-inferiority violation rate
-MIR   minimal-intervention regret when nominal is admissible
-utility_mean selected nominal utility
-```
-
-### Dataset requirements for paper-final claims
-
-The synthetic diagnostic generator is suitable for smoke tests and regression tests only. Paper-final results require a real MetaDrive/ScenarioNet dataset with:
-
-- split-by-root and split-by-original-scenario leakage control;
-- `normal`, `low_headroom`, `near_contact`, and `contact_post_contact` strata;
-- root-shared modes reused across all candidate prefixes;
-- `Y_oc`, `witness_oc`, `obs_equiv`, `beta_star`, and `R_star` labels;
-- `H_action_star`, `c_rule_star`, and post-contact `K`/secondary-collision fields for CRISP constraints and post-contact metrics;
-- crash termination disabled in contact/post-contact closed-loop evaluation.
-
-If `--checkpoint` is omitted, evaluation uses teacher profiles for OC-RAP and sets `uses_teacher_profiles_for_ours=true`; this is acceptable only for debugging the selector and metric code, not for learned-inference paper tables.
-
-## Dataset health reports and hybrid WOMD stress roots
-
-This version adds explicit checks for the five paper-critical implementation issues: supervised `c_rule_hat`, token anchor/hard-shell tensors, learned monotone recovery scoring through ReCoT, closed-loop fallback metadata, and paper-final map/root alignment warnings.
-
-### Generate a dataset health report
-
-Run this after every root/BEV/teacher-label build and attach the JSON/Markdown output to experiment artifacts:
+Root signature head 改为 future-trajectory signature target，而不是 recovery signature：
 
 ```bash
-python scripts/generate_dataset_health_report.py \
-  --dataset data/ocrap/train.zarr \
-  --output outputs/health/train
+PYTHONPATH=src python -m ocrap.cli \
+  --full-future-roots \
+  train --dataset data/ocrap_womd \
+  --output runs/full_future_roots
 ```
 
-The report checks deployable input fields, finite values, valid action/token ratios, regime balance, observation-equivalence class sizes, OC-vs-oracle recovery gap, `R_star`, `c_rule_star`, duplicated root IDs, and metadata such as `paper_final_ready`.
+### 10.6 No occlusion BEV
 
-### Create hybrid WOMD stress roots
-
-Hybrid stress roots start from natural WOMD/ScenarioNet roots and deterministically inject low-headroom or near-contact stressors. They are intended to improve coverage of lead braking, cut-in, occluded release, contact-proxy, and friction/delay regimes. Report them separately from natural WOMD/ScenarioNet results. The generator now marks JSON-level stress roots as not paper-final until the stress actors are written into the ScenarioNet scenario or spawned/controlled by the rollout runner.
+模型忽略 BEV occlusion/unknown-space input：
 
 ```bash
-python scripts/generate_hybrid_womd_stress_roots.py \
-  --input-root-dir data/ocrap/roots_raw \
-  --output-root-dir data/ocrap/roots_hybrid_stress \
-  --split train \
-  --num-roots 5000 \
-  --copies-per-root 1 \
-  --seed 7
+PYTHONPATH=src python -m ocrap.cli \
+  --no-occlusion-bev \
+  train --dataset data/ocrap_womd \
+  --output runs/no_occlusion_bev
 ```
 
-Then use the normal OC-RAP pipeline on the hybrid root directory. For real MetaDrive labels, `build_teacher_labels.py` will fail fast unless the added stress actors are available to ScenarioEnv; `--allow-json-only-hybrid-stress` is for diagnostics only.
+也可以使用配置片段：
 
 ```bash
-python scripts/rasterize_bev.py \
-  --root-dir data/ocrap/roots_hybrid_stress \
-  --split train \
-  --bev-config configs/bev_256.yaml \
-  --channels compact \
-  --history-steps 5 \
-  --num-workers 8 \
-  --output data/ocrap/bev/hybrid_train.zarr
-
-python scripts/build_teacher_labels.py \
-  --config configs/dataset_hybrid_womd_stress.yaml \
-  --split train \
-  --root-dir data/ocrap/roots_hybrid_stress \
-  --bev-dir data/ocrap/bev/hybrid_train.zarr \
-  --rollout-backend metadrive \
-  --scenario-dir /path/to/scenarionet_database \
-  --output data/ocrap/hybrid_train.zarr
-
-python scripts/generate_dataset_health_report.py \
-  --dataset data/ocrap/hybrid_train.zarr \
-  --output outputs/health/hybrid_train
+PYTHONPATH=src python -m ocrap.cli \
+  --config configs/ablations/no_occlusion_bev.yaml \
+  train --dataset data/ocrap_womd \
+  --output runs/no_occlusion_bev
 ```
 
-To train with natural + hybrid data, either train sequentially or merge sharded datasets first:
+配置片段只包含消融字段；完整实验建议优先用 `configs/default.yaml` 加 CLI switch。
+
+---
+
+## 11. 关键实现对应关系
+
+| 论文/细节对象 | 代码位置 |
+|---|---|
+| scene-prefix dataset schema | `schema.py`, `dataset_builder.py` |
+| scenario-level split | `split.py` |
+| candidate prefixes | `prefix_generation.py` |
+| replay/reactive/targeted futures | `futures.py` |
+| recovery options `g_l=(r_l, theta_l)` | `recovery_options.py` |
+| teacher rollout and active-mask margins | `teacher.py` |
+| post-prefix observation renderer | `observation.py` |
+| pairwise compatibility labels | `observation.py::compatibility_labels` |
+| recovery-signature root clustering | `root_clustering.py` |
+| weighted lower-tail LCVaR | `lcv.py::weighted_lcvar` |
+| corrected OC-MERO | `ocmero.py::oc_mero` |
+| anti-oracle loss | `losses.py::anti_oracle_loss` |
+| CRISP selector | `selector.py::crisp_select` |
+| calibration threshold | `calibrate.py`, `lcv.py::finite_sample_upper_quantile` |
+| FRA/ODG/DRS/NUP metrics | `metrics.py`, `evaluate.py` |
+| deployment selection | `deploy.py` |
+
+---
+
+## 12. WOMD/Waymax 与 post-contact surrogate 边界
+
+WOMD/Waymax 输入是 tracked bounding boxes 和 map，不是 raw-sensor perception。代码中的 occlusion 是 synthetic/map/FOV/dynamic-box observation model。WOMD/Waymax 上的 contact、impact、secondary-collision、post-contact yaw/stability 都按 bounding-box + kinematic surrogate 计算。物理级 post-impact validation 应在 MetaDrive/CARLA/custom physics stress simulator 中单独报告，并且只有显式纳入 calibration 的 distribution 才能声明 calibration false-admission control。
+
+---
+
+## 13. 常用参数
+
+默认参数在 `configs/default.yaml`：
+
+```yaml
+sample_rate_hz: 10
+history_horizon_s: 1.0
+prefix_horizon_s: 1.0
+recovery_horizon_s: 4.0
+local_radius_m: 80.0
+bev_resolution_m: 1.0
+num_candidate_prefixes: 24
+num_reactive_futures: 4
+num_targeted_futures: 8
+num_roots: 8
+num_recovery_options: 24
+ocmero:
+  alpha: 0.2
+  beta: 0.2
+artifact:
+  gamma_orc: 0.0
+  gamma_dep: 0.0
+calibration:
+  deltas: [0.01, 0.05, 0.10]
+```
+
+提高构造速度可临时调大 `bev_resolution_m`、降低 `max_agents`、`num_candidate_prefixes`、`num_reactive_futures`、`num_targeted_futures`；论文主实验应使用默认或 appendix 中声明的正式参数。
+
+---
+
+## 14. 已验证命令
+
+在当前环境中完成了以下检查：
 
 ```bash
-python scripts/merge_sharded_datasets.py \
-  --inputs data/ocrap/train.zarr data/ocrap/hybrid_train.zarr \
-  --output data/ocrap/train_plus_hybrid.zarr
-
-python scripts/train_care.py \
-  --config configs/train_care.yaml \
-  --dataset data/ocrap/train_plus_hybrid.zarr \
-  --output checkpoints/recot_plus_hybrid
+python -m compileall -q src
+PYTHONPATH=src pytest -q
+PYTHONPATH=src python -m ocrap.cli ... build-dataset
+PYTHONPATH=src python -m ocrap.cli diagnose ...
+PYTHONPATH=src python -m ocrap.cli train ...
+PYTHONPATH=src python -m ocrap.cli evaluate ...
+PYTHONPATH=src python -m ocrap.cli deploy ...
 ```
-
-### Paper-final dataset guardrails
-
-For paper tables, the health report should show non-empty `token_anchor` and `token_hard_shell`, a non-trivial observation-equivalence distribution, acceptable action/token validity, and no non-finite labels. Do not use `--disable-root-time-replay`, `--disable-root-alignment-check`, or offline same-candidate closed-loop fallback for final closed-loop claims. Hybrid stress metrics should be reported in a separate table or column from natural WOMD/ScenarioNet metrics.
-
-
-python -m bdse.experiments.preprocess \
-  --config bdse/configs/paper.yaml \
-  --data-root /data0/senzeyu2/dataset/nuplan/data/cache/ \
-  --maps-root /data0/senzeyu2/dataset/nuplan/maps \
-  --map-version nuplan-maps-v1.0 \
-  --splits train_boston train_pittsburgh train_vegas_2 train_singapore \
-  --output-dir /data0/senzeyu2/dataset/nuplan/data/cache/bdse_train \
-  --scenario-stride 10 \
-  --scenario-iteration-policy initial \
-  --max-samples-per-log 512 \
-  --max-samples-per-log-strategy uniform_blocks \
-  --max-samples-per-log-block-size 64 \
-  --num-workers 6 \
-  --max-in-flight 6 \
-  --scenario-builder-workers 8 \
-  --teacher-cost-eval-stride 1 \
-  --resume \
-  --candidate-aware-agent-selection \
-  --include-drivable-polygons \
-  --no-include-crosswalks \
-  --cache-local-scheduler \
-  --cache-local-log-parallelism 1 \
-  --temporal-frame-cache-max-entries 262144 \
-  --temporal-frame-cache-individual-miss-threshold 32 \
-  --temporal-frame-cache-coalesce-bulk \
-  --skip-failed-samples \
-  --profile \
-  --profile-threshold-s 10.0

@@ -1,0 +1,58 @@
+import math
+
+import numpy as np
+
+from ocrap.lcv import finite_sample_upper_quantile, weighted_lcvar
+from ocrap.ocmero import oc_mero
+from ocrap.selector import crisp_select
+from ocrap.observation import compatibility_labels
+from ocrap.schema import Observation
+
+
+def test_weighted_lcvar_lower_tail_boundary_mass():
+    scores = np.array([-2.0, 0.0, 10.0])
+    weights = np.array([0.1, 0.4, 0.5])
+    # Lowest 20% mass = all of -2 with 0.1 mass plus half of 0 with 0.1 mass, divided by 0.2.
+    assert math.isclose(weighted_lcvar(scores, weights, 0.2), -1.0, rel_tol=1e-6)
+
+
+def test_ocmero_detects_oracle_artifact_under_shared_observation():
+    M = np.array([[1.0, -1.0], [-1.0, 1.0]], dtype=float)
+    p = np.array([0.5, 0.5])
+    C = np.ones((2, 2), dtype=float)
+    res = oc_mero(M, p, C, alpha=0.5, beta=0.5, option_valid=np.array([True, True]))
+    assert res.r_orc > 0.9
+    assert res.r_dep < -0.9
+    assert res.gap > 1.9
+
+
+def test_crisp_lexicographic_fallback():
+    utility = np.array([10.0, 12.0, 0.0])
+    r_dep = np.array([-1.0, -0.5, 3.0])
+    hard = np.array([2.0, 1.0, 0.5])
+    harm = np.array([1.0, 5.0, 3.0])
+    feasible = np.array([True, True, True])
+    sel = crisp_select(utility, r_dep, hard, harm, feasible, gamma_rec=5.0, gamma_H=0.0, gamma_D=0.0)
+    assert sel.selected_index == 2
+    assert sel.reason == "lexicographic_fallback"
+
+
+def test_finite_sample_quantile_strict_inf_when_underpowered():
+    scores = np.array([0.1, 0.2])
+    gamma = finite_sample_upper_quantile(scores, delta=0.01, strict=True)
+    assert math.isinf(gamma)
+
+
+def test_observation_compatibility_identity():
+    obs = Observation(
+        ego_state=np.zeros(9, dtype=np.float32),
+        boxes=np.zeros((0, 9), dtype=np.float32),
+        box_valid=np.zeros((0,), dtype=bool),
+        occ_mask=np.zeros((7, 4, 4), dtype=np.float32),
+        contact_flag=False,
+        stability_proxy=np.zeros(3, dtype=np.float32),
+    )
+    Y, C, D = compatibility_labels([obs, obs], {"epsilon_obs": 1.0})
+    assert np.allclose(Y, 1.0)
+    assert np.allclose(C, 1.0)
+    assert np.allclose(D, 0.0)

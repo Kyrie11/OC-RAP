@@ -1,17 +1,27 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "metadrive-recovery-recap"
+name = "ocrap"
 version = "0.1.0"
-description = "ReCAP: CARE + MERO recoverability-centered planning over MetaDrive/CARLA BEV roots"
+description = "Observation-Consistent Recovery-Affordance Planner implementation"
+readme = "README.md"
 requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.24",
+  "torch>=2.0",
+  "PyYAML>=6.0",
+  "tqdm>=4.65"
+]
+
+[project.optional-dependencies]
+womd = ["tensorflow>=2.12", "waymo-open-dataset-tf-2-12-0>=1.6.0"]
+waymax = ["waymax>=0.1.0", "jax>=0.4.0", "jaxlib>=0.4.0"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+ocrap = "ocrap.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["ocrap*", "recap*"]
-namespaces = true
-
-[tool.pytest.ini_options]
-pythonpath = ["."]
-testpaths = ["tests"]
+where = ["src"]
