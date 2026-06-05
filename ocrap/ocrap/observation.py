@@ -24,11 +24,49 @@ def render_base_occ_mask(history: SceneHistory, cfg: dict) -> np.ndarray:
     H, W = X.shape
     mask = np.zeros((C, H, W), dtype=np.float32)
     r = np.sqrt(X**2 + Y**2)
+    theta = np.arctan2(Y, X)
     in_range = r <= radius
     # channels: visible_free, occupied_visible, unknown, occluder, route, drivable, confidence
     mask[0] = in_range.astype(np.float32)
     mask[2] = (~in_range).astype(np.float32)
     mask[5] = in_range.astype(np.float32)
+
+    # Dynamic occlusion surrogate: mark vehicle-like boxes as occluders and cast
+    # an angular shadow behind them.  The old mask had no in-range unknown area,
+    # so hidden-emergence labels were metadata-only and the occluded regime was
+    # dominated by outside-range cells.
+    if history.agent_history.size and history.agent_history.shape[1] > 1:
+        current = history.agent_history[-1]
+        valid = history.agent_valid[-1].astype(bool)
+        ego_xy = np.zeros(2, dtype=np.float32)
+        for i in range(1, current.shape[0]):
+            if not valid[i]:
+                continue
+            b = agent_state_to_box(current[i])
+            dist = float(np.linalg.norm(b[:2] - ego_xy))
+            if dist <= 0.5 or dist > radius:
+                continue
+            ix = int((b[0] + radius) / res)
+            iy = int((b[1] + radius) / res)
+            rad = max(1, int(max(b[5], b[6]) / res / 2))
+            y0, y1 = max(0, iy - rad), min(H, iy + rad + 1)
+            x0, x1 = max(0, ix - rad), min(W, ix + rad + 1)
+            if 0 <= ix < W and 0 <= iy < H:
+                mask[1, y0:y1, x0:x1] = 1.0
+                mask[0, y0:y1, x0:x1] = 0.0
+                mask[2, y0:y1, x0:x1] = 0.0
+            vehicle_like = bool(b[-1] in (1, 2, 3) or b[5] > 4.5)
+            if not vehicle_like:
+                continue
+            a0, a1, d = angular_interval_for_box(b, ego_xy)
+            center = 0.5 * (a0 + a1)
+            width = max(abs(a1 - a0), math.atan2(max(b[5], b[6]), max(d, 1e-3)))
+            ang_diff = np.abs((theta - center + math.pi) % (2.0 * math.pi) - math.pi)
+            shadow = in_range & (r > d + 0.5 * max(b[5], b[6])) & (ang_diff <= 0.5 * width)
+            mask[2, shadow] = 1.0
+            mask[3, y0:y1, x0:x1] = 1.0
+            mask[0, shadow] = 0.0
+
     if history.route.size > 0:
         for pt in history.route[:, :2]:
             ix = int((pt[0] + radius) / res)
@@ -37,7 +75,7 @@ def render_base_occ_mask(history: SceneHistory, cfg: dict) -> np.ndarray:
                 y0, y1 = max(0, iy - 2), min(H, iy + 3)
                 x0, x1 = max(0, ix - 2), min(W, ix + 3)
                 mask[4, y0:y1, x0:x1] = 1.0
-    mask[6] = mask[0]
+    mask[6] = np.maximum(mask[0], mask[1])
     return mask
 
 
@@ -107,8 +145,9 @@ def paint_boxes_on_mask(mask: np.ndarray, boxes: np.ndarray, cfg: dict) -> np.nd
         if 0 <= ix < W and 0 <= iy < H:
             out[1, y0:y1, x0:x1] = 1.0
             out[0, y0:y1, x0:x1] = 0.0
-    # Unknown is range/occlusion not visible free or occupied; retain existing unknown.
-    out[6] = np.maximum(out[6], out[1])
+            out[2, y0:y1, x0:x1] = 0.0
+    # Confidence is high for visible free or occupied cells; unknown cells remain low confidence.
+    out[6] = np.maximum(out[0], out[1])
     return out
 
 

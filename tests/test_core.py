@@ -56,3 +56,43 @@ def test_observation_compatibility_identity():
     assert np.allclose(Y, 1.0)
     assert np.allclose(C, 1.0)
     assert np.allclose(D, 0.0)
+
+
+def test_root_margin_aggregation_is_lower_tail_by_default():
+    from ocrap.root_clustering import aggregate_root_margins
+
+    M_future = np.array([[1.0, 1.0], [-3.0, 1.0]], dtype=np.float32)
+    assignments = np.array([0, 0], dtype=np.int64)
+    probs = np.array([0.5, 0.5], dtype=np.float32)
+    M = aggregate_root_margins(M_future, assignments, probs, K=1, cfg={"intra_root_lcvar_alpha": 0.5})
+    assert M.shape == (1, 2)
+    assert M[0, 0] <= -2.99
+    assert math.isclose(float(M[0, 1]), 1.0, rel_tol=1e-6)
+
+
+def test_womd_parser_keeps_sdc_when_truncated():
+    from types import SimpleNamespace
+    from ocrap.womd import parse_scenario_proto
+
+    def state(x):
+        return SimpleNamespace(center_x=x, center_y=0.0, center_z=0.0, velocity_x=0.0, velocity_y=0.0, heading=0.0, length=4.0, width=2.0, height=1.5, valid=True)
+
+    tracks = [SimpleNamespace(id=i, object_type=1, states=[state(float(i))]) for i in range(5)]
+    scenario = SimpleNamespace(
+        scenario_id="sdc_truncation",
+        timestamps_seconds=[0.0],
+        sdc_track_index=4,
+        tracks=tracks,
+        map_features=[],
+        dynamic_map_states=[],
+    )
+    raw = parse_scenario_proto(scenario, max_agents=2)
+    assert raw.sdc_track_index == 0
+    assert raw.object_ids[0] == "4"
+    assert raw.agent_states.shape[1] == 2
+
+
+def test_papercheck_importable():
+    from ocrap.papercheck import papercheck_dataset
+
+    assert callable(papercheck_dataset)

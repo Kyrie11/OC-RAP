@@ -8,11 +8,11 @@ import torch
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
-from .config import save_config
-from .dataset import OCRAPDataset, collate_batch
-from .io import ensure_dir, write_json
-from .losses import compute_losses
-from .model import OCRAPModel
+from ocrap.ocrap.config import save_config
+from ocrap.data.dataset import OCRAPDataset, collate_batch
+from ocrap.ocrap.io import ensure_dir, write_json
+from ocrap.ocrap.losses import compute_losses
+from ocrap.ocrap.model import OCRAPModel
 
 
 def make_flags(cfg: dict[str, Any], **overrides) -> dict[str, Any]:

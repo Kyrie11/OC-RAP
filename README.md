@@ -52,6 +52,11 @@ ocrap_impl/
     ablations/                           # 每个 w/o 实验的配置片段
   src/ocrap/
     cli.py                               # 统一命令入口
+    data/                                # 数据构造/加载/诊断 namespace re-export
+    models/                              # 模型 namespace re-export
+    training/                            # 训练与 loss namespace re-export
+    evaluation/                          # 评估/校准/指标 namespace re-export
+    planning/                            # prefix 选择/部署 namespace re-export
     schema.py                            # RawScenario / SceneHistory / DatasetSample schema
     womd.py                              # WOMD TFRecord parser 与 Waymax loader adapter
     synth.py                             # synthetic smoke-test scenes
@@ -83,7 +88,7 @@ Synthetic 数据只用于验证代码链路，不替代论文主实验。它会�
 
 ```bash
 # 1) 构造最小 dataset
-PYTHONPATH=src python -m ocrap.cli \
+PYTHONPATH=ocrap python -m ocrap.cli \
   --set data_source=synthetic \
   --set num_synthetic_scenarios=1 \
   --set split_ratios.train=1.0 \
@@ -101,18 +106,18 @@ PYTHONPATH=src python -m ocrap.cli \
   build-dataset --output runs/smoke_dataset
 
 # 2) 诊断 dataset schema、source coverage、split leakage、compatibility labels
-PYTHONPATH=src python -m ocrap.cli \
+PYTHONPATH=ocrap python -m ocrap.cli \
   diagnose --dataset runs/smoke_dataset --output runs/smoke_dataset/diagnose.json
 
 # 3) 训练 1 epoch
-PYTHONPATH=src python -m ocrap.cli \
+PYTHONPATH=ocrap python -m ocrap.cli \
   --set training.epochs=1 \
   --set training.batch_size=1 \
   --set num_roots=4 \
   train --dataset runs/smoke_dataset --output runs/smoke_train
 
 # 4) 在 train split 上做流程检查
-PYTHONPATH=src python -m ocrap.cli \
+PYTHONPATH=ocrap python -m ocrap.cli \
   --set num_roots=4 \
   evaluate --dataset runs/smoke_dataset \
   --checkpoint runs/smoke_train/best.pt \
@@ -120,7 +125,7 @@ PYTHONPATH=src python -m ocrap.cli \
   --output runs/smoke_train/eval_train.json
 
 # 5) 部署式选择某个 scene-time 的 candidate prefix
-PYTHONPATH=src python -m ocrap.cli \
+PYTHONPATH=ocrap python -m ocrap.cli \
   --set num_roots=4 \
   deploy --dataset runs/smoke_dataset \
   --checkpoint runs/smoke_train/best.pt \
@@ -132,7 +137,7 @@ PYTHONPATH=src python -m ocrap.cli \
 运行单元测试：
 
 ```bash
-PYTHONPATH=src pytest -q
+PYTHONPATH=ocrap pytest -q
 ```
 
 ---
@@ -152,7 +157,7 @@ WOMD 模式使用 `waymo_open_dataset.protos.scenario_pb2.Scenario` 解析 Scena
 构造命令：
 
 ```bash
-PYTHONPATH=src python -m ocrap.cli \
+PYTHONPATH=ocrap python -m ocrap.cli \
   --set data_source=womd \
   --set womd_patterns='/path/to/womd/training/*.tfrecord*' \
   --set max_scenarios=1000 \
@@ -217,9 +222,14 @@ split_id                    train / val / calibration / test
 构造后必须先诊断：
 
 ```bash
-PYTHONPATH=src python -m ocrap.cli \
+PYTHONPATH=ocrap python -m ocrap.cli \
   diagnose --dataset data/ocrap_womd \
   --output data/ocrap_womd/diagnose.json
+
+# 更贴近论文 idea 的快速检查：oracle artifact、ODG、regime 分布和观测一致性是否足够支撑实验
+PYTHONPATH=ocrap python -m ocrap.cli \
+  papercheck --dataset data/ocrap_womd \
+  --output data/ocrap_womd/papercheck.json
 ```
 
 诊断会检查：
@@ -240,7 +250,7 @@ PYTHONPATH=src python -m ocrap.cli \
 完整训练：
 
 ```bash
-PYTHONPATH=src python -m ocrap.cli \
+PYTHONPATH=ocrap python -m ocrap.cli \
   --config configs/default.yaml \
   train --dataset data/ocrap_womd \
   --output runs/ocrap_full
@@ -249,7 +259,7 @@ PYTHONPATH=src python -m ocrap.cli \
 常用训练 override：
 
 ```bash
-PYTHONPATH=src python -m ocrap.cli \
+PYTHONPATH=ocrap python -m ocrap.cli \
   --set training.epochs=20 \
   --set training.batch_size=32 \
   --set training.lr=0.0005 \
@@ -296,7 +306,7 @@ L = lambda_assign * L_assign
 使用 calibration split 中 teacher deployability negative 的样本：
 
 ```bash
-PYTHONPATH=src python -m ocrap.cli \
+PYTHONPATH=ocrap python -m ocrap.cli \
   calibrate --dataset data/ocrap_womd \
   --checkpoint runs/ocrap_full/best.pt \
   --output runs/ocrap_full/calibration.json
@@ -335,7 +345,7 @@ else:
 主评估：
 
 ```bash
-PYTHONPATH=src python -m ocrap.cli \
+PYTHONPATH=ocrap python -m ocrap.cli \
   evaluate --dataset data/ocrap_womd \
   --checkpoint runs/ocrap_full/best.pt \
   --calibration runs/ocrap_full/calibration.json \
@@ -396,7 +406,7 @@ Regime-wise 结果保存在：
 对一个 scene-time 的 candidate set 执行 CRISP selection：
 
 ```bash
-PYTHONPATH=src python -m ocrap.cli \
+PYTHONPATH=ocrap python -m ocrap.cli \
   deploy --dataset data/ocrap_womd \
   --checkpoint runs/ocrap_full/best.pt \
   --calibration runs/ocrap_full/calibration.json \
@@ -458,7 +468,7 @@ Fallback 顺序：
 Roots branch-wise evaluation，不使用 post-prefix observation compatibility：
 
 ```bash
-PYTHONPATH=src python -m ocrap.cli \
+PYTHONPATH=ocrap python -m ocrap.cli \
   --without-observation-kernel \
   train --dataset data/ocrap_womd \
   --output runs/wo_observation_kernel
@@ -467,7 +477,7 @@ PYTHONPATH=src python -m ocrap.cli \
 评估同样加开关，确保 checkpoint flags 和 evaluation flags 一致：
 
 ```bash
-PYTHONPATH=src python -m ocrap.cli \
+PYTHONPATH=ocrap python -m ocrap.cli \
   --without-observation-kernel \
   evaluate --dataset data/ocrap_womd \
   --checkpoint runs/wo_observation_kernel/best.pt \
@@ -480,7 +490,7 @@ PYTHONPATH=src python -m ocrap.cli \
 用 weighted mean 替代 LCVaR：
 
 ```bash
-PYTHONPATH=src python -m ocrap.cli \
+PYTHONPATH=ocrap python -m ocrap.cli \
   --without-lower-tail \
   train --dataset data/ocrap_womd \
   --output runs/wo_lower_tail
@@ -491,7 +501,7 @@ PYTHONPATH=src python -m ocrap.cli \
 使用 `selection.fixed_gamma_rec`，不读 calibration JSON：
 
 ```bash
-PYTHONPATH=src python -m ocrap.cli \
+PYTHONPATH=ocrap python -m ocrap.cli \
   --without-calibration \
   --set selection.fixed_gamma_rec=0.0 \
   evaluate --dataset data/ocrap_womd \
@@ -505,7 +515,7 @@ PYTHONPATH=src python -m ocrap.cli \
 训练时去掉 `L_art`：
 
 ```bash
-PYTHONPATH=src python -m ocrap.cli \
+PYTHONPATH=ocrap python -m ocrap.cli \
   --without-anti-oracle \
   train --dataset data/ocrap_womd \
   --output runs/wo_anti_oracle
@@ -516,7 +526,7 @@ PYTHONPATH=src python -m ocrap.cli \
 Root signature head 改为 future-trajectory signature target，而不是 recovery signature：
 
 ```bash
-PYTHONPATH=src python -m ocrap.cli \
+PYTHONPATH=ocrap python -m ocrap.cli \
   --full-future-roots \
   train --dataset data/ocrap_womd \
   --output runs/full_future_roots
@@ -527,7 +537,7 @@ PYTHONPATH=src python -m ocrap.cli \
 模型忽略 BEV occlusion/unknown-space input：
 
 ```bash
-PYTHONPATH=src python -m ocrap.cli \
+PYTHONPATH=ocrap python -m ocrap.cli \
   --no-occlusion-bev \
   train --dataset data/ocrap_womd \
   --output runs/no_occlusion_bev
@@ -536,7 +546,7 @@ PYTHONPATH=src python -m ocrap.cli \
 也可以使用配置片段：
 
 ```bash
-PYTHONPATH=src python -m ocrap.cli \
+PYTHONPATH=ocrap python -m ocrap.cli \
   --config configs/ablations/no_occlusion_bev.yaml \
   train --dataset data/ocrap_womd \
   --output runs/no_occlusion_bev
@@ -610,11 +620,11 @@ calibration:
 在当前环境中完成了以下检查：
 
 ```bash
-python -m compileall -q src
-PYTHONPATH=src pytest -q
-PYTHONPATH=src python -m ocrap.cli ... build-dataset
-PYTHONPATH=src python -m ocrap.cli diagnose ...
-PYTHONPATH=src python -m ocrap.cli train ...
-PYTHONPATH=src python -m ocrap.cli evaluate ...
-PYTHONPATH=src python -m ocrap.cli deploy ...
+python -m compileall -q ocrap
+PYTHONPATH=ocrap pytest -q
+PYTHONPATH=ocrap python -m ocrap.cli ... build-dataset
+PYTHONPATH=ocrap python -m ocrap.cli diagnose ...
+PYTHONPATH=ocrap python -m ocrap.cli train ...
+PYTHONPATH=ocrap python -m ocrap.cli evaluate ...
+PYTHONPATH=ocrap python -m ocrap.cli deploy ...
 ```

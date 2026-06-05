@@ -8,11 +8,11 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Subset
 
-from .calibrate import predict_recoverability
-from .dataset import OCRAPDataset, collate_batch
-from .io import read_json, write_json
-from .selector import crisp_select
-from .train import load_checkpoint
+from ocrap.scripts.calibrate import predict_recoverability
+from ocrap.data.dataset import OCRAPDataset, collate_batch
+from ocrap.ocrap.io import read_json, write_json
+from ocrap.ocrap.selector import crisp_select
+from ocrap.scripts.train import load_checkpoint
 
 
 def _to_device(batch, device):

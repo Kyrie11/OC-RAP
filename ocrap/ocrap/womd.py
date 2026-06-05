@@ -79,12 +79,22 @@ def _parse_sdc_paths(scenario) -> np.ndarray:
 
 def parse_scenario_proto(scenario, max_agents: int = 128, max_polylines: int = 256, max_points: int = 32) -> RawScenario:
     T = len(scenario.timestamps_seconds)
-    A = min(len(scenario.tracks), max_agents)
+    # Keep the SDC at index 0 even when the proto's sdc_track_index is larger
+    # than max_agents.  The previous first-N truncation could silently drop the
+    # SDC and later crash or build samples around the wrong ego vehicle.
+    sdc = int(scenario.sdc_track_index)
+    all_indices = list(range(len(scenario.tracks)))
+    if not (0 <= sdc < len(all_indices)):
+        raise ValueError(f"Invalid sdc_track_index={sdc} for {len(all_indices)} tracks")
+    selected_indices = [sdc] + [i for i in all_indices if i != sdc]
+    selected_indices = selected_indices[: max(1, min(max_agents, len(selected_indices)))]
+    A = len(selected_indices)
     states = np.zeros((T, A, 10), dtype=np.float32)
     valid = np.zeros((T, A), dtype=bool)
     object_ids: list[str] = []
-    for a, tr in enumerate(scenario.tracks[:A]):
-        object_ids.append(str(getattr(tr, "id", a)))
+    for a, track_idx in enumerate(selected_indices):
+        tr = scenario.tracks[track_idx]
+        object_ids.append(str(getattr(tr, "id", track_idx)))
         obj_type = float(getattr(tr, "object_type", 0))
         for t, st in enumerate(tr.states[:T]):
             states[t, a] = [
@@ -116,7 +126,7 @@ def parse_scenario_proto(scenario, max_agents: int = 128, max_polylines: int = 2
                 lane = dms.lane_states[0]
                 dyn[t, 0, 0] = float(getattr(lane, "state", 0))
                 dyn[t, 0, 1] = float(getattr(lane, "lane", 0))
-    return RawScenario(str(scenario.scenario_id), np.asarray(scenario.timestamps_seconds, dtype=np.float32), int(scenario.sdc_track_index), states, valid, polylines, map_valid, route, dyn, object_ids)
+    return RawScenario(str(scenario.scenario_id), np.asarray(scenario.timestamps_seconds, dtype=np.float32), 0, states, valid, polylines, map_valid, route, dyn, object_ids)
 
 
 def iter_womd_tfrecords(patterns: str | list[str], max_scenarios: int | None = None, **kwargs) -> Iterator[RawScenario]:

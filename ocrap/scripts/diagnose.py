@@ -6,7 +6,7 @@ from typing import Any
 
 import numpy as np
 
-from .io import load_npz, write_json
+from ocrap.ocrap.io import load_npz, write_json
 
 
 REQUIRED_FIELDS = [

@@ -8,11 +8,11 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from .calibrate import predict_recoverability
-from .dataset import OCRAPDataset, collate_batch, group_by_scene_time
-from .io import load_npz, read_json, write_json
-from .metrics import aggregate_records, evaluate_group_teacher_outcome
-from .train import load_checkpoint, make_flags
+from ocrap.scripts.calibrate import predict_recoverability
+from ocrap.data.dataset import OCRAPDataset, collate_batch, group_by_scene_time
+from ocrap.ocrap.io import load_npz, read_json, write_json
+from ocrap.ocrap.metrics import aggregate_records, evaluate_group_teacher_outcome
+from ocrap.scripts.train import load_checkpoint, make_flags
 
 
 def _to_device(batch, device):

@@ -24,6 +24,10 @@ num_roots: 8
 num_recovery_options: 24
 prefix_param_dim: 4
 margin_clip: 5.0
+root_margin_aggregation: lcvar
+intra_root_lcvar_alpha: 0.2
+hidden_emergence_delay_steps: 2
+min_unknown_ratio_for_hidden: 0.01
 eps_signature: 0.30
 epsilon_obs: 1.0
 tau_obs: 1.4426950408889634

@@ -8,11 +8,11 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from .dataset import OCRAPDataset, collate_batch
-from .io import write_json
-from .lcv import finite_sample_upper_quantile
-from .ocmero import torch_oc_mero
-from .train import load_checkpoint, make_flags
+from ocrap.data.dataset import OCRAPDataset, collate_batch
+from ocrap.ocrap.io import write_json
+from ocrap.ocrap.lcv import finite_sample_upper_quantile
+from ocrap.ocrap.ocmero import torch_oc_mero
+from ocrap.scripts.train import load_checkpoint, make_flags
 
 
 def _to_device(batch, device):

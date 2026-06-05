@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from .lcv import weighted_lcvar
 from .schema import CounterfactualFuture
 
 
@@ -140,18 +141,30 @@ def cluster_roots(M_future: np.ndarray, future_probs: np.ndarray, futures: list[
     return RootClusteringResult(assignments, root_probs.astype(np.float32), root_signature, root_valid, representative, f2r)
 
 
-def aggregate_root_margins(M_future: np.ndarray, assignments: np.ndarray, future_probs: np.ndarray, K: int) -> np.ndarray:
+def aggregate_root_margins(M_future: np.ndarray, assignments: np.ndarray, future_probs: np.ndarray, K: int, cfg: dict | None = None) -> np.ndarray:
     J, L = M_future.shape
     M = np.full((K, L), -1e6, dtype=np.float32)
     probs = np.asarray(future_probs, dtype=np.float64)
     probs = probs / max(float(probs.sum()), 1e-8)
+    cfg = cfg or {}
+    # A root may contain several counterfactual futures.  Using a simple mean can
+    # hide a low-margin future inside the cluster and make teacher deployability
+    # overly optimistic.  Use a conservative lower-tail aggregate by default; set
+    # root_margin_aggregation=mean only for debugging.
+    mode = str(cfg.get("root_margin_aggregation", "lcvar")).lower()
+    alpha = float(cfg.get("intra_root_lcvar_alpha", cfg.get("ocmero", {}).get("beta", 0.2)))
     for k in range(K):
         idx = np.where(assignments == k)[0]
         if len(idx) == 0:
             continue
         w = probs[idx]
         w = w / max(float(w.sum()), 1e-8)
-        M[k] = np.average(M_future[idx], axis=0, weights=w).astype(np.float32)
+        if mode == "mean":
+            M[k] = np.average(M_future[idx], axis=0, weights=w).astype(np.float32)
+        elif mode == "min":
+            M[k] = np.min(M_future[idx], axis=0).astype(np.float32)
+        else:
+            M[k] = np.asarray([weighted_lcvar(M_future[idx, l], w, alpha) for l in range(L)], dtype=np.float32)
     return M
 
 

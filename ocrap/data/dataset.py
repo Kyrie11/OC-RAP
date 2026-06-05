@@ -8,7 +8,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from .io import load_npz
+from ocrap.ocrap.io import load_npz
 
 
 TENSOR_KEYS = [

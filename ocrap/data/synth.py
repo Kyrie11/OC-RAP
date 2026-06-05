@@ -5,7 +5,7 @@ from typing import Iterator
 
 import numpy as np
 
-from .schema import RawScenario
+from ocrap.ocrap.schema import RawScenario
 
 
 def make_synthetic_scenario(idx: int, T: int = 91, A: int = 16, seed: int = 0) -> RawScenario:

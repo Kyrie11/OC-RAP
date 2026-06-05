@@ -3,14 +3,15 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from .calibrate import calibrate
-from .config import deep_update, load_config, parse_cli_overrides
-from .dataset_builder import build_dataset
-from .deploy import deploy
-from .diagnose import diagnose_dataset
-from .evaluate import evaluate
-from .io import write_json
-from .train import train
+from ocrap.scripts.calibrate import calibrate
+from ocrap.ocrap.config import deep_update, load_config, parse_cli_overrides
+from ocrap.data.dataset_builder import build_dataset
+from ocrap.scripts.deploy import deploy
+from ocrap.scripts.diagnose import diagnose_dataset
+from ocrap.scripts.evaluate import evaluate
+from ocrap.ocrap.io import write_json
+from .papercheck import papercheck_dataset
+from ocrap.scripts.train import train
 
 
 def _cfg(args):
@@ -56,6 +57,11 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--output", required=True)
     p.add_argument("--max-samples", type=int, default=None)
 
+    p = sub.add_parser("papercheck", help="Fast paper-level dataset sanity check for oracle/deployable recoverability labels.")
+    p.add_argument("--dataset", required=True)
+    p.add_argument("--output", required=True)
+    p.add_argument("--max-samples", type=int, default=None)
+
     p = sub.add_parser("train")
     p.add_argument("--dataset", required=True)
     p.add_argument("--output", required=True)
@@ -87,6 +93,8 @@ def main(argv: list[str] | None = None) -> None:
         result = build_dataset(args.output, cfg)
     elif args.cmd == "diagnose":
         result = diagnose_dataset(args.dataset, args.output, args.max_samples)
+    elif args.cmd == "papercheck":
+        result = papercheck_dataset(args.dataset, args.output, args.max_samples)
     elif args.cmd == "train":
         result = train(args.dataset, args.output, cfg)
     elif args.cmd == "calibrate":

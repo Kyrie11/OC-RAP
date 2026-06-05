@@ -112,7 +112,8 @@ def _insert_agent(states: np.ndarray, valid: np.ndarray, slot: int, start_t: int
         valid[t, slot] = True
 
 
-def targeted_perturbation(history: SceneHistory, prefix: CandidatePrefix, total_steps: int, kind: str, idx: int, prior: float) -> CounterfactualFuture:
+def targeted_perturbation(history: SceneHistory, prefix: CandidatePrefix, total_steps: int, kind: str, idx: int, prior: float, cfg: dict | None = None) -> CounterfactualFuture:
+    cfg = cfg or {}
     states, valid = _copy_future(history, total_steps)
     _inject_ego_prefix(states, valid, prefix)
     rng = np.random.default_rng(abs(hash((history.scene_id, history.time_index, kind, idx))) % (2**32))
@@ -120,19 +121,20 @@ def targeted_perturbation(history: SceneHistory, prefix: CandidatePrefix, total_
     slot = _find_free_agent_slot(states, valid)
     T_p = prefix.prefix_states.shape[0]
     ego_end = prefix.prefix_states[-1]
+    hidden_start_t = min(total_steps - 1, T_p + int(cfg.get("hidden_emergence_delay_steps", 2)))
 
     if kind == "hidden_vehicle_yields":
-        _insert_agent(states, valid, slot, max(1, T_p - 2), ego_end[0] + 12.0, ego_end[1] - 3.0, max(0.0, ego_end[6] - 3.0), ego_end[4], 1.0, 4.8, 2.0)
+        _insert_agent(states, valid, slot, hidden_start_t, ego_end[0] + 12.0, ego_end[1] - 3.0, max(0.0, ego_end[6] - 3.0), ego_end[4], 1.0, 4.8, 2.0)
         meta.update({"hidden_emergence": True, "from_unknown_mask": True, "hidden_intent": "yield"})
     elif kind == "hidden_vehicle_accelerates":
-        _insert_agent(states, valid, slot, max(1, T_p - 2), ego_end[0] + 12.0, ego_end[1] - 3.0, ego_end[6] + 3.0, ego_end[4], 1.0, 4.8, 2.0)
-        for t in range(max(1, T_p - 2), total_steps):
+        _insert_agent(states, valid, slot, hidden_start_t, ego_end[0] + 12.0, ego_end[1] - 3.0, ego_end[6] + 3.0, ego_end[4], 1.0, 4.8, 2.0)
+        for t in range(hidden_start_t, total_steps):
             states[t, slot, 3] += 2.0 * math.cos(ego_end[4])
             states[t, slot, 4] += 2.0 * math.sin(ego_end[4])
         meta.update({"hidden_emergence": True, "from_unknown_mask": True, "hidden_intent": "accelerate"})
     elif kind == "occluded_pedestrian_emerges":
         heading = ego_end[4] + math.pi / 2.0
-        _insert_agent(states, valid, slot, max(1, T_p - 1), ego_end[0] + 8.0, ego_end[1] - 5.0, 1.6, heading, 2.0, 0.7, 0.7)
+        _insert_agent(states, valid, slot, hidden_start_t, ego_end[0] + 8.0, ego_end[1] - 5.0, 1.6, heading, 2.0, 0.7, 0.7)
         meta.update({"hidden_emergence": True, "from_unknown_mask": True})
     elif kind == "adjacent_vehicle_cut_in":
         _insert_agent(states, valid, slot, 0, ego_end[0] + 6.0, ego_end[1] + 3.5, max(ego_end[6], 3.0), ego_end[4], 1.0, 4.8, 2.0)
@@ -157,6 +159,17 @@ def targeted_perturbation(history: SceneHistory, prefix: CandidatePrefix, total_
     return CounterfactualFuture(idx, "targeted", prior, states, valid, meta)
 
 
+def _has_unknown_space(occ_mask: np.ndarray, min_ratio: float = 0.01) -> bool:
+    if occ_mask.size == 0 or occ_mask.shape[0] < 6:
+        return False
+    unknown = occ_mask[2] > 0.5
+    drivable = occ_mask[5] > 0.5
+    denom = int(drivable.sum())
+    if denom <= 0:
+        return False
+    return float(np.logical_and(unknown, drivable).sum() / denom) >= min_ratio
+
+
 def generate_counterfactual_futures(history: SceneHistory, prefix: CandidatePrefix, cfg: dict) -> list[CounterfactualFuture]:
     total_steps = int(round((float(cfg.get("prefix_horizon_s", 1.0)) + float(cfg.get("recovery_horizon_s", 4.0))) * float(cfg.get("sample_rate_hz", 10))))
     futures: list[CounterfactualFuture] = []
@@ -167,10 +180,12 @@ def generate_counterfactual_futures(history: SceneHistory, prefix: CandidatePref
     n_reactive = int(cfg.get("num_reactive_futures", 4))
     for i in range(n_reactive):
         futures.append(reactive_future(history, prefix, total_steps, i + 1, reactive_total / max(n_reactive, 1)))
-    kinds = [
+    hidden_kinds = [
         "hidden_vehicle_yields",
         "hidden_vehicle_accelerates",
         "occluded_pedestrian_emerges",
+    ]
+    stress_kinds = [
         "adjacent_vehicle_cut_in",
         "rejoin_corridor_blocked",
         "low_friction_braking",
@@ -178,10 +193,17 @@ def generate_counterfactual_futures(history: SceneHistory, prefix: CandidatePref
         "contact_impulse_surrogate",
         "secondary_collision_approach",
     ]
+    # Hidden-emergence futures should be sampled from actual unknown/occluded
+    # space.  Otherwise every sample becomes an "occluded" sample and the
+    # observation-consistency claim is tested against impossible hidden agents.
+    if _has_unknown_space(history.occ_mask, float(cfg.get("min_unknown_ratio_for_hidden", 0.01))):
+        kinds = hidden_kinds + stress_kinds
+    else:
+        kinds = stress_kinds
     n_targeted = int(cfg.get("num_targeted_futures", 8))
     for i in range(n_targeted):
         kind = kinds[i % len(kinds)]
-        futures.append(targeted_perturbation(history, prefix, total_steps, kind, len(futures), targeted_total / max(n_targeted, 1)))
+        futures.append(targeted_perturbation(history, prefix, total_steps, kind, len(futures), targeted_total / max(n_targeted, 1), cfg))
     priors = np.asarray([f.prior for f in futures], dtype=np.float64)
     priors = priors / max(float(priors.sum()), 1e-8)
     for f, p in zip(futures, priors):

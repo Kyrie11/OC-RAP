@@ -5,8 +5,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .geometry import agent_state_to_box, box_signed_clearance, fast_box_signed_clearance, ego_state_to_box, nearest_polyline_distance, wrap_angle
-from .schema import CandidatePrefix, CounterfactualFuture, RecoveryOption, SceneHistory
+from ocrap.ocrap.geometry import agent_state_to_box, box_signed_clearance, fast_box_signed_clearance, ego_state_to_box, nearest_polyline_distance, wrap_angle
+from ocrap.ocrap.schema import CandidatePrefix, CounterfactualFuture, RecoveryOption, SceneHistory
 
 
 @dataclass

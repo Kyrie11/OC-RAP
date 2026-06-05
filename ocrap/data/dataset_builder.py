@@ -8,19 +8,19 @@ from typing import Iterable, Iterator
 import numpy as np
 from tqdm import tqdm
 
-from .futures import generate_counterfactual_futures
-from .geometry import agent_state_to_box, compute_ttc, min_box_clearance, transform_points_to_ego, transform_states_to_ego
-from .io import ensure_dir, np_savez, write_json
-from .observation import compatibility_labels, render_base_occ_mask, render_observation
-from .ocmero import oc_mero
-from .prefix_generation import generate_candidate_prefixes
-from .recovery_options import default_recovery_options, option_valid_mask
-from .root_clustering import aggregate_root_margins, cluster_roots, future_trajectory_signature
-from .schema import CounterfactualFuture, DatasetSample, RawScenario, SceneHistory
-from .split import scenario_split
-from .synth import iter_synthetic_scenarios
-from .teacher import compute_future_option_margins
-from .womd import iter_womd_tfrecords
+from ocrap.ocrap.futures import generate_counterfactual_futures
+from ocrap.ocrap.geometry import agent_state_to_box, compute_ttc, min_box_clearance, transform_points_to_ego, transform_states_to_ego
+from ocrap.ocrap.io import ensure_dir, np_savez, write_json
+from ocrap.ocrap.observation import compatibility_labels, render_base_occ_mask, render_observation
+from ocrap.ocrap.ocmero import oc_mero
+from ocrap.ocrap.prefix_generation import generate_candidate_prefixes
+from ocrap.ocrap.recovery_options import default_recovery_options, option_valid_mask
+from ocrap.ocrap.root_clustering import aggregate_root_margins, cluster_roots, future_trajectory_signature
+from ocrap.ocrap.schema import CounterfactualFuture, DatasetSample, RawScenario, SceneHistory
+from ocrap.ocrap.split import scenario_split
+from ocrap.data.synth import iter_synthetic_scenarios
+from ocrap.data.teacher import compute_future_option_margins
+from ocrap.ocrap.womd import iter_womd_tfrecords
 
 
 def ego_from_agent_state(agent_state: np.ndarray) -> np.ndarray:
@@ -132,6 +132,17 @@ def construct_history(raw: RawScenario, t: int, cfg: dict) -> SceneHistory:
     return h
 
 
+def _unknown_ratio_in_drivable(occ_mask: np.ndarray) -> float:
+    if occ_mask.size == 0 or occ_mask.shape[0] < 6:
+        return 0.0
+    unknown = occ_mask[2] > 0.5
+    drivable = occ_mask[5] > 0.5
+    denom = int(drivable.sum())
+    if denom <= 0:
+        return 0.0
+    return float(np.logical_and(unknown, drivable).sum() / denom)
+
+
 def _assign_regimes(samples: list[DatasetSample], history: SceneHistory, cfg: dict) -> None:
     tau_high = float(cfg.get("regime_thresholds", {}).get("tau_high", 1.0))
     tau_d = float(cfg.get("regime_thresholds", {}).get("tau_d", 2.0))
@@ -146,14 +157,14 @@ def _assign_regimes(samples: list[DatasetSample], history: SceneHistory, cfg: di
     ego_box = agent_state_to_box(history.agent_history[-1, 0])
     dmin = min_box_clearance(ego_box, boxes, valids) if len(boxes) else 99.0
     ttc = compute_ttc(history.ego_state, boxes, valids) if len(boxes) else 99.0
-    unknown_ratio = float(np.mean(history.occ_mask[2] > 0.5)) if history.occ_mask.size else 0.0
+    unknown_ratio = _unknown_ratio_in_drivable(history.occ_mask)
     for s in samples:
         near = bool(dmin < tau_d or ttc < 1.5 or s.prefix.hard_violation > 0.0)
         post = bool(s.prefix.hard_violation > 0.0 or any(f.metadata.get("contact_surrogate", False) for f in s.futures))
         regimes = {
             "normal": bool(nominal_dep > tau_high and ttc > tau_ttc and dmin > tau_d),
             "low_headroom": bool(nominal_dep <= tau_high and max_dep > 0.0),
-            "occluded": bool(unknown_ratio > tau_occ or any(f.metadata.get("hidden_emergence", False) for f in s.futures)),
+            "occluded": bool(unknown_ratio > tau_occ),
             "near_contact": near,
             "post_contact": post,
             "oracle_artifact": bool(s.i_art_star),
@@ -174,7 +185,7 @@ def build_samples_for_history(history: SceneHistory, split_id: str, cfg: dict) -
         M_future, teacher_diags = compute_future_option_margins(history, prefix, futures, options, cfg)
         root = cluster_roots(M_future, future_probs, futures, cfg)
         K = int(cfg.get("num_roots", 8))
-        M_star = aggregate_root_margins(M_future, root.assignments, future_probs, K)
+        M_star = aggregate_root_margins(M_future, root.assignments, future_probs, K, cfg)
         root_future_signature = future_trajectory_signature(futures, root.assignments, future_probs, K, width=int(cfg.get("model", {}).get("d_future_signature", 32)))
         observations = []
         for k in range(K):
@@ -216,6 +227,7 @@ def build_samples_for_history(history: SceneHistory, split_id: str, cfg: dict) -
                 "future_sources": [f.source for f in futures],
                 "obs_distance": Dobs.tolist(),
                 "teacher_component_sample": teacher_diags[0][0].component_margins if teacher_diags and teacher_diags[0] else {},
+                "unknown_ratio_in_drivable": _unknown_ratio_in_drivable(history.occ_mask),
             },
         )
         samples.append(sample)
