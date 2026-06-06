@@ -159,7 +159,7 @@ WOMD 模式使用 `waymo_open_dataset.protos.scenario_pb2.Scenario` 解析 Scena
 ```bash
 PYTHONPATH=ocrap python -m ocrap.cli \
   --set data_source=womd \
-  --set womd_patterns='/path/to/womd/training/*.tfrecord*' \
+  --set womd_patterns='/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/scenario/training/*.tfrecord*' \
   --set max_scenarios=1000 \
   --set max_agents=64 \
   --set max_map_polylines=256 \
