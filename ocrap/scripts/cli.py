@@ -10,7 +10,6 @@ from ocrap.scripts.deploy import deploy
 from ocrap.scripts.diagnose import diagnose_dataset
 from ocrap.scripts.evaluate import evaluate
 from ocrap.ocrap.io import write_json
-from .papercheck import papercheck_dataset
 from ocrap.scripts.train import train
 
 
@@ -93,8 +92,6 @@ def main(argv: list[str] | None = None) -> None:
         result = build_dataset(args.output, cfg)
     elif args.cmd == "diagnose":
         result = diagnose_dataset(args.dataset, args.output, args.max_samples)
-    elif args.cmd == "papercheck":
-        result = papercheck_dataset(args.dataset, args.output, args.max_samples)
     elif args.cmd == "train":
         result = train(args.dataset, args.output, cfg)
     elif args.cmd == "calibrate":
