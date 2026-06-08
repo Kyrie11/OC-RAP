@@ -1,0 +1,116 @@
+from __future__ import annotations
+
+import argparse
+from typing import Any
+
+from ocrap.config import apply_overrides, load_config
+from ocrap.data.build.builder import build_dataset
+from ocrap.data.build.diagnose import diagnose_dataset
+from ocrap.data.build.papercheck import papercheck_dataset
+from ocrap.evaluation.evaluator import evaluate
+
+from .calibrate import calibrate
+from .deploy import deploy
+from .train import train
+
+
+def add_common(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--config", default=None, help="YAML config path. Defaults to configs/default.yaml.")
+    p.add_argument("--set", action="append", default=[], help="Override config with dotted.path=value. Can be repeated.")
+    p.add_argument("--without-observation-kernel", action="store_true")
+    p.add_argument("--without-lower-tail", action="store_true")
+    p.add_argument("--without-calibration", action="store_true")
+    p.add_argument("--without-anti-oracle", action="store_true")
+    p.add_argument("--full-future-roots", action="store_true")
+    p.add_argument("--no-occlusion-bev", action="store_true")
+
+
+def make_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="ocrap", description="OC-RAP dataset/model/evaluation pipeline")
+    add_common(parser)
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("build-dataset")
+    add_common(p)
+    p.add_argument("--output", required=True)
+    p = sub.add_parser("diagnose")
+    add_common(p)
+    p.add_argument("--dataset", required=True)
+    p.add_argument("--output", required=True)
+    p.add_argument("--max-samples", type=int, default=None)
+    p = sub.add_parser("papercheck")
+    add_common(p)
+    p.add_argument("--dataset", required=True)
+    p.add_argument("--output", required=True)
+    p.add_argument("--max-samples", type=int, default=None)
+    p = sub.add_parser("train")
+    add_common(p)
+    p.add_argument("--dataset", required=True)
+    p.add_argument("--output", required=True)
+    p = sub.add_parser("calibrate")
+    add_common(p)
+    p.add_argument("--dataset", required=True)
+    p.add_argument("--checkpoint", required=False, default=None)
+    p.add_argument("--output", required=True)
+    p = sub.add_parser("evaluate")
+    add_common(p)
+    p.add_argument("--dataset", required=True)
+    p.add_argument("--checkpoint", required=False, default=None)
+    p.add_argument("--calibration", default=None)
+    p.add_argument("--split", default="test")
+    p.add_argument("--output", required=True)
+    p = sub.add_parser("deploy")
+    add_common(p)
+    p.add_argument("--dataset", required=True)
+    p.add_argument("--checkpoint", required=False, default=None)
+    p.add_argument("--scene-id", required=True)
+    p.add_argument("--time-index", type=int, required=True)
+    p.add_argument("--output", required=True)
+    p.add_argument("--calibration", default=None)
+    p.add_argument("--delta", type=float, default=None)
+    return parser
+
+
+def build_cfg(args: argparse.Namespace) -> dict[str, Any]:
+    cfg = load_config(getattr(args, "config", None))
+    cfg = apply_overrides(cfg, getattr(args, "set", None))
+    ab = cfg.setdefault("ablation", {})
+    for attr, key in [
+        ("without_observation_kernel", "without_observation_kernel"),
+        ("without_lower_tail", "without_lower_tail"),
+        ("without_calibration", "without_calibration"),
+        ("without_anti_oracle", "without_anti_oracle"),
+        ("full_future_roots", "full_future_roots"),
+        ("no_occlusion_bev", "no_occlusion_bev"),
+    ]:
+        if getattr(args, attr, False):
+            ab[key] = True
+    if ab.get("no_occlusion_bev", False):
+        cfg.setdefault("model", {})["no_occlusion_bev"] = True
+    return cfg
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = make_parser()
+    args = parser.parse_args(argv)
+    cfg = build_cfg(args)
+    if args.cmd == "build-dataset":
+        result = build_dataset(args.output, cfg)
+    elif args.cmd == "diagnose":
+        result = diagnose_dataset(args.dataset, args.output, args.max_samples)
+    elif args.cmd == "papercheck":
+        result = papercheck_dataset(args.dataset, args.output, args.max_samples)
+    elif args.cmd == "train":
+        result = train(args.dataset, args.output, cfg)
+    elif args.cmd == "calibrate":
+        result = calibrate(args.dataset, args.checkpoint, args.output, cfg)
+    elif args.cmd == "evaluate":
+        result = evaluate(args.dataset, args.checkpoint, args.output, split=args.split, calibration_json=args.calibration, cfg=cfg)
+    elif args.cmd == "deploy":
+        result = deploy(args.dataset, args.checkpoint, args.scene_id, args.time_index, args.output, calibration_json=args.calibration, delta=args.delta, cfg=cfg)
+    else:
+        raise AssertionError(args.cmd)
+    print(result)
+
+
+if __name__ == "__main__":
+    main()

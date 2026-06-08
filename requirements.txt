@@ -1,31 +1,13 @@
-# ---- core deps compatible with Waymo + TensorFlow 2.13 ----
-numpy==1.23.5
-scipy==1.10.1
-pyyaml==6.0.1
-h5py==3.8.0
-pillow==9.2.0
-pytest==7.4.4
-tqdm==4.66.4
-zarr==2.16.1
+# Core runtime dependencies
+numpy>=1.23
+PyYAML>=6.0
+torch>=2.0
 
-# ---- PyTorch: use CUDA 11.8 wheel to avoid CUDA 12.x deps being pulled in ----
---extra-index-url https://download.pytorch.org/whl/cu118
-torch==2.0.1+cu118
+# Development / validation
+pytest>=8.0
 
-# ---- WOMD / Waymo stack ----
-tensorflow==2.13.0
-waymo-open-dataset-tf-2-12-0==1.6.7
-jax==0.4.13
-jaxlib==0.4.13
+# Optional acceleration for WOMD TFRecord CRC checks. The code has a pure Python fallback.
+crc32c>=2.3
 
-# ---- CUDA 11.8 runtime libs installed by pip ----
-nvidia-cuda-runtime-cu11==11.8.89
-nvidia-cuda-cupti-cu11==11.8.87
-nvidia-cuda-nvcc-cu11==11.8.89
-nvidia-cublas-cu11==11.11.3.6
-nvidia-cufft-cu11==10.9.0.58
-nvidia-cudnn-cu11==8.6.0.163
-nvidia-curand-cu11==10.3.0.86
-nvidia-cusolver-cu11==11.4.1.48
-nvidia-cusparse-cu11==11.7.5.86
-nvidia-nccl-cu11==2.16.5
+# Optional only when parsing real WOMD Scenario bytes:
+# provide waymo_open_dataset.protos.scenario_pb2 via your local WOMD/proto installation.
