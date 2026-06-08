@@ -9,6 +9,10 @@ from .margins import TeacherDiagnostics, teacher_margin
 
 
 def compute_future_option_margins(history: SceneHistory, prefix: CandidatePrefix, futures: list[CounterfactualFuture], options: list[RecoveryOption], cfg: dict) -> tuple[np.ndarray, list[list[TeacherDiagnostics]]]:
+    if str(cfg.get("simulation_backend", "ocrap_surrogate")) == "waymax_closed_loop":
+        from ocrap.simulation.waymax_rollout import compute_waymax_future_option_margins
+
+        return compute_waymax_future_option_margins(history, prefix, futures, options, cfg)
     horizon_steps = max(2, int(round(float(cfg.get("recovery_horizon_s", 4.0)) * float(cfg.get("sample_rate_hz", 10.0)))))
     M = np.zeros((len(futures), len(options)), dtype=np.float32)
     all_diag: list[list[TeacherDiagnostics]] = []

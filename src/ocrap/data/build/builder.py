@@ -191,12 +191,17 @@ def scenario_iterator(cfg: dict) -> Iterator[RawScenario]:
     if source in {"synthetic", "synthetic_artifact"}:
         yield from iter_synthetic_scenarios(int(cfg.get("num_synthetic_scenarios", 4)), seed=int(cfg.get("seed", 0)), cfg=cfg, artifact=(source == "synthetic_artifact"))
     elif source == "womd":
-        from ocrap.data.womd.scenario_parser import iter_womd_scenarios
-
         patterns = cfg.get("womd_patterns")
         if not patterns:
             raise ValueError("data_source=womd requires womd_patterns")
-        yield from iter_womd_scenarios(patterns, max_scenarios=cfg.get("max_scenarios"), parser_cfg=cfg)
+        if str(cfg.get("simulation_backend", "ocrap_surrogate")) == "waymax_closed_loop":
+            from ocrap.data.waymax_loader import iter_waymax_womd_scenarios
+
+            yield from iter_waymax_womd_scenarios(patterns, max_scenarios=cfg.get("max_scenarios"), parser_cfg=cfg)
+        else:
+            from ocrap.data.womd.scenario_parser import iter_womd_scenarios
+
+            yield from iter_womd_scenarios(patterns, max_scenarios=cfg.get("max_scenarios"), parser_cfg=cfg)
     else:
         raise ValueError(f"Unknown data_source {source}")
 
@@ -207,7 +212,15 @@ def build_dataset(output_dir: str | Path, cfg: dict) -> dict:
     manifest_rows: list[dict] = []
     split_counts: dict[str, int] = {"train": 0, "val": 0, "calibration": 0, "test": 0}
     total = 0
-    for raw in scenario_iterator(cfg):
+    raw_iter = scenario_iterator(cfg)
+    if bool(cfg.get("progress", True)):
+        try:
+            from tqdm.auto import tqdm
+
+            raw_iter = tqdm(raw_iter, total=cfg.get("max_scenarios"), desc="OC-RAP build scenarios", unit="scenario")
+        except Exception:
+            pass
+    for raw in raw_iter:
         split_id = scenario_split(raw.scenario_id, cfg.get("split_ratios"))
         times, reasons_by_time = select_planning_times_with_reasons(raw, cfg)
         for t in times:

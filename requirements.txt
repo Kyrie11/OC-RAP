@@ -5,9 +5,14 @@ torch>=2.0
 
 # Development / validation
 pytest>=8.0
+tqdm>=4.66
 
 # Optional acceleration for WOMD TFRecord CRC checks. The code has a pure Python fallback.
 crc32c>=2.3
 
 # Optional only when parsing real WOMD Scenario bytes:
 # provide waymo_open_dataset.protos.scenario_pb2 via your local WOMD/proto installation.
+
+# Optional strict Waymax closed-loop dataset backend:
+# pip install git+https://github.com/waymo-research/waymax.git@main#egg=waymo-waymax
+# Install a CUDA-enabled jax/jaxlib matching your local driver/CUDA stack.

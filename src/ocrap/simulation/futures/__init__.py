@@ -9,6 +9,10 @@ from .targeted import TARGETED_KINDS, mine_artifact_futures, targeted_perturbati
 
 
 def generate_counterfactual_futures(history: SceneHistory, prefix: CandidatePrefix, cfg: dict) -> list[CounterfactualFuture]:
+    if str(cfg.get("simulation_backend", "ocrap_surrogate")) == "waymax_closed_loop":
+        from ocrap.simulation.waymax_rollout import generate_waymax_counterfactual_futures
+
+        return generate_waymax_counterfactual_futures(history, prefix, cfg)
     total_steps = int(round((float(cfg.get("prefix_horizon_s", 1.0)) + float(cfg.get("recovery_horizon_s", 4.0))) * float(cfg.get("sample_rate_hz", 10))))
     futures: list[CounterfactualFuture] = []
     priors = cfg.get("future_priors", {})

@@ -121,6 +121,16 @@ def construct_history(raw: RawScenario, t: int, cfg: dict) -> SceneHistory:
             "adjacent_available": True,
             "time_sampling_reasons": [],
             "source": raw.metadata.get("source", "unknown"),
+            "agent_order": [int(i) for i in order],
+            "ego_global_xy": [float(ego_raw[0]), float(ego_raw[1])],
+            "ego_global_heading": float(ego_raw[7]),
+            "waymax_planning_timestep": int(t),
+            "waymax_sdc_original_index": int(sdc),
+            # Private runtime-only handles.  These are intentionally not written
+            # to NPZ; they are consumed by the Waymax rollout backend before
+            # DatasetSample.to_npz_dict serializes json-safe metadata.
+            "_waymax_state": raw.metadata.get("_waymax_state"),
+            "_waymax_scenario_index": raw.metadata.get("_waymax_scenario_index"),
             **route_meta,
         },
     )
