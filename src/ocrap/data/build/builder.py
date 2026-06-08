@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import csv
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 import numpy as np
 
@@ -103,7 +103,7 @@ def _compute_within_root_dispersion(root_assignments: np.ndarray, obs_by_future:
     return out
 
 
-def build_samples_for_history(history, split_id: str, cfg: dict) -> list[DatasetSample]:
+def build_samples_for_history(history, split_id: str, cfg: dict, progress_callback: Callable[[int], None] | None = None) -> list[DatasetSample]:
     prefixes = generate_candidate_prefixes(history, cfg)
     options = default_recovery_options(int(cfg.get("num_recovery_options", 24)), shoulder_available=bool(history.metadata.get("shoulder_available", True)), adjacent_available=bool(history.metadata.get("adjacent_available", True)))
     option_valid = option_valid_mask(options)
@@ -182,6 +182,8 @@ def build_samples_for_history(history, split_id: str, cfg: dict) -> list[Dataset
             },
         )
         samples.append(sample)
+        if progress_callback is not None:
+            progress_callback(1)
     assign_regimes(samples, history, cfg)
     return samples
 
@@ -213,41 +215,53 @@ def build_dataset(output_dir: str | Path, cfg: dict) -> dict:
     split_counts: dict[str, int] = {"train": 0, "val": 0, "calibration": 0, "test": 0}
     total = 0
     raw_iter = scenario_iterator(cfg)
+    prefix_bar = None
     if bool(cfg.get("progress", True)):
         try:
             from tqdm.auto import tqdm
 
-            raw_iter = tqdm(raw_iter, total=cfg.get("max_scenarios"), desc="OC-RAP build scenarios", unit="scenario")
+            max_scenarios = cfg.get("max_scenarios")
+            total_prefixes = None
+            if max_scenarios is not None:
+                total_prefixes = int(max_scenarios) * int(cfg.get("max_times_per_scenario", 8)) * int(cfg.get("num_candidate_prefixes", 24))
+            prefix_bar = tqdm(total=total_prefixes, desc="OC-RAP build prefixes", unit="prefix")
         except Exception:
-            pass
-    for raw in raw_iter:
-        split_id = scenario_split(raw.scenario_id, cfg.get("split_ratios"))
-        times, reasons_by_time = select_planning_times_with_reasons(raw, cfg)
-        for t in times:
-            history = construct_history(raw, t, cfg)
-            # Retain only the reasons that actually selected this planning instant.
-            history.metadata["time_sampling_reasons"] = reasons_by_time.get(int(t), ["uniform"])
-            samples = build_samples_for_history(history, split_id, cfg)
-            for sample in samples:
-                fname = f"{sample.scene_id}_t{sample.time_index:04d}_a{sample.candidate_index:02d}.npz".replace("/", "_")
-                path = sample_dir / fname
-                np_savez(path, **sample.to_npz_dict())
-                manifest_rows.append({
-                    "path": str(path.relative_to(out)),
-                    "scene_id": sample.scene_id,
-                    "original_scenario_id": sample.original_scenario_id,
-                    "time_index": sample.time_index,
-                    "candidate_index": sample.candidate_index,
-                    "split_id": sample.split_id,
-                    "is_nominal": int(sample.is_nominal),
-                    "r_orc_star": sample.r_orc_star,
-                    "r_dep_star": sample.r_dep_star,
-                    "oracle_gap_star": sample.oracle_gap_star,
-                    "i_art_star": int(sample.i_art_star),
-                    "regime_label": ";".join(k for k, v in sample.regime_label.items() if v),
-                })
-                split_counts[sample.split_id] = split_counts.get(sample.split_id, 0) + 1
-                total += 1
+            prefix_bar = None
+    def _progress(n: int) -> None:
+        if prefix_bar is not None:
+            prefix_bar.update(int(n))
+    try:
+        for raw in raw_iter:
+            split_id = scenario_split(raw.scenario_id, cfg.get("split_ratios"))
+            times, reasons_by_time = select_planning_times_with_reasons(raw, cfg)
+            for t in times:
+                history = construct_history(raw, t, cfg)
+                # Retain only the reasons that actually selected this planning instant.
+                history.metadata["time_sampling_reasons"] = reasons_by_time.get(int(t), ["uniform"])
+                samples = build_samples_for_history(history, split_id, cfg, progress_callback=_progress)
+                for sample in samples:
+                    fname = f"{sample.scene_id}_t{sample.time_index:04d}_a{sample.candidate_index:02d}.npz".replace("/", "_")
+                    path = sample_dir / fname
+                    np_savez(path, **sample.to_npz_dict())
+                    manifest_rows.append({
+                        "path": str(path.relative_to(out)),
+                        "scene_id": sample.scene_id,
+                        "original_scenario_id": sample.original_scenario_id,
+                        "time_index": sample.time_index,
+                        "candidate_index": sample.candidate_index,
+                        "split_id": sample.split_id,
+                        "is_nominal": int(sample.is_nominal),
+                        "r_orc_star": sample.r_orc_star,
+                        "r_dep_star": sample.r_dep_star,
+                        "oracle_gap_star": sample.oracle_gap_star,
+                        "i_art_star": int(sample.i_art_star),
+                        "regime_label": ";".join(k for k, v in sample.regime_label.items() if v),
+                    })
+                    split_counts[sample.split_id] = split_counts.get(sample.split_id, 0) + 1
+                    total += 1
+    finally:
+        if prefix_bar is not None:
+            prefix_bar.close()
     manifest_path = out / "manifest.csv"
     with manifest_path.open("w", newline="", encoding="utf-8") as f:
         fields = list(manifest_rows[0].keys()) if manifest_rows else ["path"]

@@ -87,6 +87,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "metrics_to_run": ["log_divergence", "overlap", "offroad", "sdc_wrongway", "sdc_off_route", "sdc_progression", "kinematic_infeasibility"],
         "jax_platforms": "cuda,cpu",
         "preallocate_gpu_memory": False,
+        "cache_identical_teacher_rollouts": True,
     },
     "ablation": {"without_observation_kernel": False, "without_lower_tail": False, "without_calibration": False, "without_anti_oracle": False, "full_future_roots": False, "no_occlusion_bev": False},
 }

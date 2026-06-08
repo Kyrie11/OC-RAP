@@ -165,11 +165,15 @@ def _local_from_global_xy(xy: np.ndarray, ego_xy: np.ndarray, ego_yaw: float) ->
 
 def _traj_to_local_agent_arrays(state: Any, start_t: int, total_steps: int, order: list[int], ego_xy: np.ndarray, ego_yaw: float) -> tuple[np.ndarray, np.ndarray]:
     tr = state.sim_trajectory
+    x_full = _as_np(tr.x)
+    total_T = int(x_full.shape[-1])
+    total_A = int(x_full.shape[0])
+    end_t = min(start_t + total_steps, total_T)
     num_objects = int(getattr(state, "num_objects", 0))
     x_all = _normalize_agent_time(_as_np(tr.x), num_objects, name="sim_trajectory.x")
     total_log_steps = int(x_all.shape[1])
-    end_t = min(start_t + total_steps, total_log_steps)
     idx = np.asarray(order, dtype=np.int64)
+    x = x_full[idx, start_t:end_t]
     y_all = _normalize_agent_time(_as_np(tr.y), num_objects, total_log_steps, name="sim_trajectory.y")
     z_all = _normalize_agent_time(_as_np(tr.z), num_objects, total_log_steps, name="sim_trajectory.z")
     vx_all = _normalize_agent_time(_as_np(tr.vel_x), num_objects, total_log_steps, name="sim_trajectory.vel_x")
@@ -518,17 +522,56 @@ def generate_waymax_counterfactual_futures(history: SceneHistory, prefix: Candid
     priors = cfg.get("future_priors", {})
     futures: list[CounterfactualFuture] = []
 
-    st_prefix, wx_env, dyn_name = _rollout_prefix(state0, history, prefix, cfg, allow_new=bool((cfg.get("waymax", {}) or {}).get("allow_new_objects_after_warmup", True)))
+    allow_new = bool((cfg.get("waymax", {}) or {}).get("allow_new_objects_after_warmup", True))
+    st_prefix, wx_env, dyn_name = _rollout_prefix(state0, history, prefix, cfg, allow_new=allow_new)
     st_roll = _rollout_future_after_prefix(st_prefix, wx_env, post_steps, cfg, coast_accel=0.0)
-    futures.append(_make_future_from_state(0, "replay", float(priors.get("replay", 0.25)), st_roll, history, prefix, cfg, wx_env, dyn_name, {"rollout_variant": "natural_log_playback", "scenario_augmented": False}, state_after_prefix=st_prefix))
+    futures.append(
+        _make_future_from_state(
+            0,
+            "replay",
+            float(priors.get("replay", 0.25)),
+            st_roll,
+            history,
+            prefix,
+            cfg,
+            wx_env,
+            dyn_name,
+            {"rollout_variant": "natural_log_playback", "scenario_augmented": False, "waymax_prefix_rollout_reused": False},
+            state_after_prefix=st_prefix,
+        )
+    )
 
+    # The prefix execution is identical for all non-augmented futures of this
+    # (history, prefix).  Reusing the post-prefix SimulatorState avoids repeating
+    # a JAX reset + T_p environment steps for every reactive/targeted branch.
+    # Branch-specific diversity is introduced only in the post-prefix rollout or
+    # in an augmented reference trajectory, so this reuse is semantically exact.
     n_reactive = int(cfg.get("num_reactive_futures", 4))
     reactive_total = float(priors.get("reactive", 0.35))
     for i in range(n_reactive):
         accel = [-1.0, -0.3, 0.3, 0.8][i % 4]
-        stp, env_i, dyn_i = _rollout_prefix(state0, history, prefix, cfg, allow_new=True)
-        str_i = _rollout_future_after_prefix(stp, env_i, post_steps, cfg, coast_accel=accel)
-        futures.append(_make_future_from_state(len(futures), "reactive", reactive_total / max(n_reactive, 1), str_i, history, prefix, cfg, env_i, dyn_i, {"rollout_variant": "waymax_log_playback_sdc_coast", "ego_after_prefix_accel": float(accel), "scenario_augmented": False}, state_after_prefix=stp))
+        str_i = _rollout_future_after_prefix(st_prefix, wx_env, post_steps, cfg, coast_accel=accel)
+        futures.append(
+            _make_future_from_state(
+                len(futures),
+                "reactive",
+                reactive_total / max(n_reactive, 1),
+                str_i,
+                history,
+                prefix,
+                cfg,
+                wx_env,
+                dyn_name,
+                {
+                    "rollout_variant": "waymax_log_playback_sdc_coast",
+                    "ego_after_prefix_accel": float(accel),
+                    "scenario_augmented": False,
+                    "waymax_prefix_rollout_reused": True,
+                    "teacher_base_reuses_replay_prefix_state": True,
+                },
+                state_after_prefix=st_prefix,
+            )
+        )
 
     wx = cfg.get("waymax", {}) if isinstance(cfg.get("waymax", {}), dict) else {}
     n_targeted = int(cfg.get("num_targeted_futures", 8))
@@ -547,12 +590,36 @@ def generate_waymax_counterfactual_futures(history: SceneHistory, prefix: Candid
             ameta.update({"scenario_augmented": True, "artifact_pair_key": f"{history.scene_id}:{history.time_index}:{prefix.macro_id}", "rollout_variant": "augmented_hidden_log_playback"})
             futures.append(_make_future_from_state(len(futures), "targeted", targeted_total / max(n_targeted, 1), str_a, history, prefix, cfg, env_a, dyn_a, ameta, state_after_prefix=stp))
             targeted_added += 1
-    # Fill remaining targeted slots with strictly Waymax-generated stress variants.
+    # Fill remaining targeted slots with strictly Waymax-generated SDC
+    # post-prefix control stress variants.  These do not change the latent
+    # background-agent branch, so they deliberately share the same teacher base
+    # state; the metadata exposes this to diagnose/papercheck instead of hiding
+    # the degeneracy.
     while targeted_added < n_targeted:
         accel = -2.0 if targeted_added % 2 == 0 else 1.2
-        stp, env_t, dyn_t = _rollout_prefix(state0, history, prefix, cfg, allow_new=True)
-        str_t = _rollout_future_after_prefix(stp, env_t, post_steps, cfg, coast_accel=accel)
-        futures.append(_make_future_from_state(len(futures), "targeted", targeted_total / max(n_targeted, 1), str_t, history, prefix, cfg, env_t, dyn_t, {"scenario_augmented": False, "targeted_type": "waymax_sdc_post_prefix_control_stress", "ego_after_prefix_accel": float(accel), "recovery_relevant": True}, state_after_prefix=stp))
+        str_t = _rollout_future_after_prefix(st_prefix, wx_env, post_steps, cfg, coast_accel=accel)
+        futures.append(
+            _make_future_from_state(
+                len(futures),
+                "targeted",
+                targeted_total / max(n_targeted, 1),
+                str_t,
+                history,
+                prefix,
+                cfg,
+                wx_env,
+                dyn_name,
+                {
+                    "scenario_augmented": False,
+                    "targeted_type": "waymax_sdc_post_prefix_control_stress",
+                    "ego_after_prefix_accel": float(accel),
+                    "recovery_relevant": True,
+                    "waymax_prefix_rollout_reused": True,
+                    "teacher_base_reuses_replay_prefix_state": True,
+                },
+                state_after_prefix=st_prefix,
+            )
+        )
         targeted_added += 1
     # Normalize priors without importing the surrogate package here.
     s = sum(max(float(f.prior), 0.0) for f in futures)
@@ -597,12 +664,27 @@ def compute_waymax_future_option_margins(history: SceneHistory, prefix: Candidat
     all_diag: list[list[TeacherDiagnostics]] = []
     controllers = [rollout_recovery_controller(prefix, opt, horizon_steps, cfg) for opt in options]
     sdc = _sdc_index(state0)
+    margin_cache: dict[tuple[int, int], tuple[np.ndarray, list[TeacherDiagnostics]]] = {}
     for j, fut in enumerate(futures):
         base_state = getattr(fut, "_waymax_state_after_prefix", None)
         waymax_env = getattr(fut, "_waymax_env", None)
         if base_state is None or waymax_env is None:
             # Strict mode means no silent surrogate labels.
             raise ValueError("Future is missing Waymax state_after_prefix; cannot compute strict Waymax recovery teacher margin.")
+        cache_key = (id(base_state), id(waymax_env))
+        if bool((cfg.get("waymax", {}) or {}).get("cache_identical_teacher_rollouts", True)) and cache_key in margin_cache:
+            cached_vals, cached_diag = margin_cache[cache_key]
+            M[j] = cached_vals
+            all_diag.append([
+                TeacherDiagnostics(
+                    active=dict(d.active),
+                    component_margins=dict(d.component_margins),
+                    controller_diagnostics={**dict(d.controller_diagnostics), "waymax_recovery_rollout_reused": True},
+                )
+                for d in cached_diag
+            ])
+            fut.metadata["waymax_teacher_rollout_reused"] = True
+            continue
         row: list[TeacherDiagnostics] = []
         for l, opt in enumerate(options):
             rec_states, rec_controls, cdiag = controllers[l]
@@ -628,5 +710,7 @@ def compute_waymax_future_option_margins(history: SceneHistory, prefix: Candidat
                     val = max(val, 1.0) if opt.mode in {"stop", "brake_lane", "avoid_secondary"} else min(val, -1.0)
             M[j, l] = float(val)
             row.append(TeacherDiagnostics(active=active, component_margins=comps, controller_diagnostics={**(cdiag or {}), "waymax_recovery_rollout": True, "waymax_metrics_last": metrics_over_time[-1] if metrics_over_time else {}}))
+        margin_cache[cache_key] = (M[j].copy(), row)
+        fut.metadata["waymax_teacher_rollout_reused"] = False
         all_diag.append(row)
     return M, all_diag

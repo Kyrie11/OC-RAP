@@ -273,10 +273,10 @@ def raw_scenario_from_waymax_state(state: Any, scenario_id: str, scenario_index:
     states[..., 7] = yaw.T
     states[..., 8] = np.sin(yaw).T
     states[..., 9] = np.cos(yaw).T
-    states[..., 10] = length.T
-    states[..., 11] = width.T
-    states[..., 12] = height.T
-    states[..., 13] = obj_type.T
+    states[..., 10] = _agent_time_array(length, A, T, "length").T
+    states[..., 11] = _agent_time_array(width, A, T, "width").T
+    states[..., 12] = _agent_time_array(height, A, T, "height").T
+    states[..., 13] = _agent_time_array(obj_type, A, T, "object_type").T
     states[..., 14] = valid.T.astype(np.float32)
     states[..., 15] = valid.T.astype(np.float32)
     timestamps = _as_np(tr.timestamp_micros)
