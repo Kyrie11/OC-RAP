@@ -101,6 +101,17 @@ def _normalize_agent_time(x: Any, num_agents: int, num_steps: int | None = None,
     raise ValueError(f"Cannot normalize {name} with shape {arr.shape}")
 
 
+def _agent_time_array(x: Any, num_agents: int, num_steps: int, name: str) -> np.ndarray:
+    """Compatibility wrapper for Waymax per-agent/per-time fields.
+
+    Older code paths used this helper when writing RawScenario feature
+    channels.  Keep it as a thin alias so metadata-like fields such as
+    length, width, height and object_type are consistently returned as
+    agent-time arrays with shape (A, T).
+    """
+    return _normalize_agent_time(x, num_agents, num_steps, name=name)
+
+
 def _scenario_id_from_payload(payload: dict[str, Any], idx: int, state: Any) -> str:
     sid = payload.get("scenario_id")
     try:
