@@ -96,7 +96,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.cmd == "build-dataset":
         result = build_dataset(args.output, cfg)
     elif args.cmd == "diagnose":
-        result = diagnose_dataset(args.dataset, args.output, args.max_samples)
+        result = diagnose_dataset(args.dataset, args.output, args.max_samples, cfg=cfg)
     elif args.cmd == "papercheck":
         result = papercheck_dataset(args.dataset, args.output, args.max_samples)
     elif args.cmd == "train":

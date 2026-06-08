@@ -97,7 +97,14 @@ def targeted_perturbation(history: SceneHistory, prefix: CandidatePrefix, total_
     hidden_start = min(total_steps - 1, T_p + int(cfg.get("hidden_emergence_delay_steps", 2)))
     ego_end = prefix.prefix_states[-1]
     slot = find_free_agent_slot(states, valid)
-    meta: dict[str, object] = {"targeted_type": kind, "recovery_relevant": True}
+    meta: dict[str, object] = {
+        "targeted_type": kind,
+        "recovery_relevant": True,
+        "prefix_steps": int(T_p),
+        "hidden_start_step": int(hidden_start),
+        "hidden_emergence_delay_steps": int(cfg.get("hidden_emergence_delay_steps", 2)),
+        "hidden_start_ge_prefix_plus_delay": bool(hidden_start >= T_p + int(cfg.get("hidden_emergence_delay_steps", 2))),
+    }
 
     hidden_kind = kind in {"hidden_vehicle_yields", "hidden_vehicle_accelerates", "occluded_pedestrian_emerges"}
     spawn = sample_unknown_spawn(history, cfg, rng) if hidden_kind else None

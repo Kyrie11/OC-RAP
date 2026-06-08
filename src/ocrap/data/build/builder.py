@@ -21,17 +21,18 @@ from .regimes import assign_regimes
 from .synthetic import iter_synthetic_scenarios
 
 
-def select_planning_times(raw: RawScenario, cfg: dict) -> list[int]:
+def _score_planning_times(raw: RawScenario, cfg: dict) -> tuple[list[int], dict[int, list[str]]]:
     sr = float(cfg.get("sample_rate_hz", 10))
     H = max(1, int(round(float(cfg.get("history_horizon_s", 1.0)) * sr)))
     T_future = max(2, int(round((float(cfg.get("prefix_horizon_s", 1.0)) + float(cfg.get("recovery_horizon_s", 4.0))) * sr)))
     start = H
     end = raw.agent_states.shape[0] - T_future - 1
     if end <= start:
-        return []
+        return [], {}
     stride = max(1, int(round(float(cfg.get("planning_time_stride_s", 0.5)) * sr)))
     all_times = np.arange(start, end, dtype=np.int64)
     chosen = set(all_times[::stride].tolist())
+    reasons_by_time: dict[int, set[str]] = {int(t): {"uniform"} for t in chosen}
     # Interaction/low-headroom/near-contact biased scores.
     scored: list[tuple[float, int, list[str]]] = []
     for t in all_times:
@@ -60,10 +61,20 @@ def select_planning_times(raw: RawScenario, cfg: dict) -> list[int]:
             reasons.append("uniform")
         scored.append((score, int(t), sorted(set(reasons))))
     scored.sort(reverse=True)
-    for _, t, _ in scored[: int(cfg.get("max_biased_times_per_scenario", 4))]:
+    for _, t, reasons in scored[: int(cfg.get("max_biased_times_per_scenario", 4))]:
         chosen.add(t)
+        reasons_by_time.setdefault(int(t), set()).update(reasons)
     times = sorted(chosen)[: int(cfg.get("max_times_per_scenario", 8))]
+    return times, {t: sorted(reasons_by_time.get(t, {"uniform"})) for t in times}
+
+
+def select_planning_times(raw: RawScenario, cfg: dict) -> list[int]:
+    times, _ = _score_planning_times(raw, cfg)
     return times
+
+
+def select_planning_times_with_reasons(raw: RawScenario, cfg: dict) -> tuple[list[int], dict[int, list[str]]]:
+    return _score_planning_times(raw, cfg)
 
 
 def _teacher_diag_to_jsonable(diags) -> dict:
@@ -198,11 +209,11 @@ def build_dataset(output_dir: str | Path, cfg: dict) -> dict:
     total = 0
     for raw in scenario_iterator(cfg):
         split_id = scenario_split(raw.scenario_id, cfg.get("split_ratios"))
-        times = select_planning_times(raw, cfg)
+        times, reasons_by_time = select_planning_times_with_reasons(raw, cfg)
         for t in times:
             history = construct_history(raw, t, cfg)
-            # Retain sampling reasons at sample time.
-            history.metadata["time_sampling_reasons"] = ["uniform", "interaction_biased", "occlusion_biased", "route_bottleneck_crosswalk"]
+            # Retain only the reasons that actually selected this planning instant.
+            history.metadata["time_sampling_reasons"] = reasons_by_time.get(int(t), ["uniform"])
             samples = build_samples_for_history(history, split_id, cfg)
             for sample in samples:
                 fname = f"{sample.scene_id}_t{sample.time_index:04d}_a{sample.candidate_index:02d}.npz".replace("/", "_")

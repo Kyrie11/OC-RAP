@@ -114,7 +114,7 @@ PYTHONPATH=src python -m ocrap.cli papercheck \
 ```bash
 PYTHONPATH=src python -m ocrap.cli build-dataset \
   --set data_source=womd \
-  --set womd_patterns='/path/to/womd/scenario/training/*.tfrecord*' \
+  --set womd_patterns='/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/scenario/training/*.tfrecord*' \
   --set max_scenarios=1000 \
   --set max_agents=64 \
   --set max_map_polylines=256 \
@@ -145,6 +145,27 @@ y_obs, c_star, m_star, option_valid,
 r_orc_star, r_dep_star, oracle_gap_star, i_art_star,
 regime_label, sample_metadata, split_id
 ```
+
+
+## Diagnose 数据集
+
+`diagnose` 用于检查生成数据集是否能支撑论文实验，而不只是检查文件能否读取。它会输出 schema/shape、split 泄漏、candidate coverage、future source coverage、hidden spawn 合法性、observation equivalence 退化、aliasing/incompatible recovery pair、OC-MERO label 可复算性、FRA/ODG/DRS 相关标签覆盖、regime 覆盖和 calibration/test split 可用性。
+
+```bash
+PYTHONPATH=src python -m ocrap.cli diagnose \
+  --dataset data/ocrap_womd \
+  --output data/ocrap_womd/diagnose.json
+```
+
+对于 smoke test fixture：
+
+```bash
+PYTHONPATH=src python -m ocrap.cli diagnose \
+  --dataset runs/artifact_fixture \
+  --output runs/artifact_fixture/diagnose.json
+```
+
+重点查看 `paper_support`、`failures`、`warnings`、`roots_and_observation.incompatible_alias_pair_fraction`、`recovery_labels.artifact_fraction`、`future_generation.hidden_from_unknown_count` 和 `splits`。
 
 ## 训练 / 校准 / 评估 smoke test
 

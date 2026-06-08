@@ -105,6 +105,9 @@ artifact:
   delta_neg: 0.0
   min_fraction_train_warning: 0.05
   force_mine: true
+  # Keep true for synthetic artifact fixtures. For primary WOMD labels, set to false
+  # to avoid hand-coded artifact-branch margins and rely on teacher rollouts.
+  use_margin_override: true
 selection:
   gamma_rec: 0.0
   fixed_gamma_rec: 0.0

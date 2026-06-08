@@ -54,9 +54,16 @@ def check_contact_surrogate_metadata(metadata: dict) -> bool:
 
 def run_plausibility_checks(states: np.ndarray, valid: np.ndarray, metadata: dict, occ_mask: np.ndarray, dt: float = 0.1) -> tuple[bool, list[str]]:
     failures: list[str] = []
-    if not check_no_teleportation(states, valid):
+    # The ego trajectory has already been replaced by the candidate prefix.
+    # Plausibility checks here are meant to validate generated counterfactual
+    # non-ego actors, especially hidden/targeted actors, not to reject a hard
+    # but dynamically feasible candidate prefix because it diverges from the
+    # logged SDC future at the stitch point.
+    other_states = states[:, 1:] if states.ndim >= 3 and states.shape[1] > 1 else states[:, :0]
+    other_valid = valid[:, 1:] if valid.ndim >= 2 and valid.shape[1] > 1 else valid[:, :0]
+    if not check_no_teleportation(other_states, other_valid):
         failures.append("teleportation")
-    if not check_speed_accel_bounds(states, valid, dt=dt):
+    if not check_speed_accel_bounds(other_states, other_valid, dt=dt):
         failures.append("speed_accel_bounds")
     if not check_spawn_from_unknown_if_hidden(metadata, occ_mask):
         failures.append("hidden_spawn_not_from_unknown")

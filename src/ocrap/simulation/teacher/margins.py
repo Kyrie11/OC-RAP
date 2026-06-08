@@ -97,7 +97,7 @@ def component_margins(history: SceneHistory, prefix: CandidatePrefix, future: Co
 
 
 def teacher_margin(history: SceneHistory, prefix: CandidatePrefix, future: CounterfactualFuture, option: RecoveryOption, rec_states: np.ndarray, rec_controls: np.ndarray, cfg: dict, controller_diag: dict | None = None) -> tuple[float, TeacherDiagnostics]:
-    override = _artifact_margin_override(option, future)
+    override = _artifact_margin_override(option, future) if bool(cfg.get("artifact", {}).get("use_margin_override", True)) else None
     active = active_mask(option, future)
     comps = component_margins(history, prefix, future, option, rec_states, rec_controls, cfg)
     inactive_val = float(cfg.get("margin_scales", {}).get("inactive", 10.0))
