@@ -81,9 +81,6 @@ PYTHONPATH=src python -m ocrap.cli build-dataset \
   --set num_candidate_prefixes=8 \
   --output runs/artifact_fixture
 
-PYTHONPATH=src python -m ocrap.cli papercheck \
-  --dataset runs/artifact_fixture \
-  --output runs/artifact_fixture/papercheck.json
 ```
 
 期望 `papercheck.json` 中：
@@ -107,24 +104,88 @@ PYTHONPATH=src python -m ocrap.cli papercheck \
 5. 同一 post-prefix observation 下构造至少一对 recovery 签名不同的 futures，使 oracle recoverable 和 deployable recoverable 之间出现可检测 gap。
 6. papercheck 会验证 artifact mining 不是靠 metadata 泄漏，而是通过 observation compatibility 与 recovery signature 产生。
 
-## WOMD 数据构造
+## Natural WOMD + Waymax数据集构造(作为论文benchmark)
 
 真实 WOMD 构造使用 `data_source=womd`：
 
 ```bash
-PYTHONPATH=src python -m ocrap.cli build-dataset \
+python -m ocrap.cli build-dataset \
+ --set data_source=womd \
+ --set simulation_backend=waymax_closed_loop \   
+ --set womd_patterns='/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/scenario/training/*.tfrecord*' \   
+ --set max_scenarios=1000 \   
+ --set max_agents=64 \   
+ --set max_map_polylines=256 \   
+ --set max_polyline_points=64 \   
+ --set max_times_per_scenario=4 \   
+ --set max_biased_times_per_scenario=4 \   
+ --set num_candidate_prefixes=24 \   
+ --set num_reactive_futures=4 \   
+ --set num_targeted_futures=8 \   
+ --set waymax.prefix_dynamics=invertible_bicycle \   
+ --set waymax.allow_new_objects_after_warmup=true \   
+ --set waymax.enable_augmented_hidden_roots=false \   
+ --set artifact.use_margin_override=false \   
+ --set progress=true \   
+ --output data/ocrap_womd 
+
+```
+
+每个waymax future写入
+```python
+{
+  "runtime_backend": "waymax_closed_loop",
+  "waymax_runtime": true,
+  "waymax_version": "...",
+  "dynamics_model": "InvertibleBicycleModel",
+  "sim_agent_policy": "log_playback",
+  "scenario_augmented": false,
+  "allow_object_injection": false,
+  "controlled_object_ids": ["sdc"],
+  "action_dim": 2,
+  "rollout_start_timestep": 37,
+  "prefix_steps": 10,
+  "recovery_steps": 40,
+  "rng_seed": 123,
+  "waymax_metrics": {}
+}
+```
+
+## Waymax augmented stress数据集构造
+
+```bash
+python -m ocrap.cli build-dataset \
   --set data_source=womd \
+  --set simulation_backend=waymax_closed_loop \
   --set womd_patterns='/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/scenario/training/*.tfrecord*' \
   --set max_scenarios=1000 \
   --set max_agents=64 \
   --set max_map_polylines=256 \
   --set max_polyline_points=64 \
+  --set max_times_per_scenario=4 \
+  --set max_biased_times_per_scenario=4 \
   --set num_candidate_prefixes=24 \
   --set num_reactive_futures=4 \
   --set num_targeted_futures=8 \
-  --output data/ocrap_womd
+  --set waymax.prefix_dynamics=invertible_bicycle \
+  --set waymax.allow_new_objects_after_warmup=true \
+  --set waymax.enable_augmented_hidden_roots=true \
+  --set artifact.force_mine=true \
+  --set artifact.use_margin_override=true \
+  --set progress=true \
+  --output data/ocrap_womd_waymax_stress_1k
 ```
 
+augmented hidden stress future额外写入
+```python
+{
+  "scenario_augmented": true,
+  "hidden_emergence": true,
+  "hidden_from_unknown": true,
+  "hidden_visible_free_spawn": false,
+  "artifact_branch": "yield|accelerate"
+}
+```
 输出目录：
 
 ```text

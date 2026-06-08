@@ -43,6 +43,64 @@ def _as_np(x: Any) -> np.ndarray:
         return np.asarray(x)
 
 
+def _normalize_agent_time(x: Any, num_agents: int, num_steps: int | None = None, *, name: str = "field") -> np.ndarray:
+    """Return an array in Waymax's agent-time layout ``(A, T)``.
+
+    Waymax trajectory fields are mostly stored as ``(num_objects,
+    num_timesteps)``, but some metadata-like fields can be ``(num_objects,)``
+    or have a singleton batch axis depending on the dataloader/JAX path.  The
+    OC-RAP raw schema expects time-major arrays later, so normalize once here
+    instead of relying on ad-hoc broadcasting.
+    """
+    arr = np.asarray(x)
+    while arr.ndim > 2 and arr.shape[0] == 1:
+        arr = arr[0]
+
+    if arr.ndim == 0:
+        if num_steps is None:
+            raise ValueError(f"Cannot infer time dimension for scalar {name}")
+        return np.full((num_agents, num_steps), arr, dtype=arr.dtype)
+
+    if arr.ndim == 1:
+        if arr.size == num_agents:
+            if num_steps is None:
+                raise ValueError(f"Cannot infer time dimension for per-agent {name} with shape {arr.shape}")
+            return np.broadcast_to(arr[:, None], (num_agents, num_steps))
+        if num_steps is not None and arr.size == num_steps:
+            return np.broadcast_to(arr[None, :], (num_agents, num_steps))
+        if arr.size == 1 and num_steps is not None:
+            return np.full((num_agents, num_steps), arr.reshape(()), dtype=arr.dtype)
+        raise ValueError(f"Cannot normalize {name} with shape {arr.shape}; expected agent dimension {num_agents}")
+
+    if arr.ndim == 2:
+        if arr.shape[0] == num_agents and (num_steps is None or arr.shape[1] == num_steps):
+            return arr
+        if arr.shape[1] == num_agents and (num_steps is None or arr.shape[0] == num_steps):
+            return arr.T
+        if num_steps is not None:
+            if arr.shape == (num_agents, 1):
+                return np.broadcast_to(arr, (num_agents, num_steps))
+            if arr.shape == (1, num_agents):
+                return np.broadcast_to(arr.reshape(num_agents, 1), (num_agents, num_steps))
+            if arr.shape == (1, num_steps):
+                return np.broadcast_to(arr, (num_agents, num_steps))
+            if arr.shape == (num_steps, 1):
+                return np.broadcast_to(arr.T, (num_agents, num_steps))
+        raise ValueError(
+            f"Cannot normalize {name} with shape {arr.shape}; expected "
+            f"({num_agents}, T) or (T, {num_agents})"
+        )
+
+    squeezed = np.squeeze(arr)
+    if squeezed.shape != arr.shape:
+        return _normalize_agent_time(squeezed, num_agents, num_steps, name=name)
+    if num_steps is not None and arr.shape[-2:] == (num_agents, num_steps):
+        return arr.reshape(-1, num_agents, num_steps)[0]
+    if num_steps is not None and arr.shape[-2:] == (num_steps, num_agents):
+        return arr.reshape(-1, num_steps, num_agents)[0].T
+    raise ValueError(f"Cannot normalize {name} with shape {arr.shape}")
+
+
 def _scenario_id_from_payload(payload: dict[str, Any], idx: int, state: Any) -> str:
     sid = payload.get("scenario_id")
     try:
@@ -188,19 +246,20 @@ def _map_from_waymax_roadgraph(state: Any, max_polylines: int, max_points: int) 
 def raw_scenario_from_waymax_state(state: Any, scenario_id: str, scenario_index: int, cfg: dict) -> RawScenario:
     tr = state.log_trajectory
     meta = state.object_metadata
-    x = _as_np(tr.x)
-    y = _as_np(tr.y)
-    z = _as_np(tr.z)
-    vx = _as_np(tr.vel_x)
-    vy = _as_np(tr.vel_y)
-    yaw = _as_np(tr.yaw)
-    valid = _as_np(tr.valid).astype(bool)
-    length = _as_np(tr.length)
-    width = _as_np(tr.width)
-    height = _as_np(tr.height)
-    obj_type = _as_np(meta.object_types)
-    T = x.shape[-1]
-    A = x.shape[0]
+    meta_ids = _as_np(meta.ids).reshape(-1)
+    A = int(meta_ids.size) if meta_ids.size else int(getattr(state, "num_objects", 0))
+    x = _normalize_agent_time(_as_np(tr.x), A, name="log_trajectory.x")
+    T = int(x.shape[1])
+    y = _normalize_agent_time(_as_np(tr.y), A, T, name="log_trajectory.y")
+    z = _normalize_agent_time(_as_np(tr.z), A, T, name="log_trajectory.z")
+    vx = _normalize_agent_time(_as_np(tr.vel_x), A, T, name="log_trajectory.vel_x")
+    vy = _normalize_agent_time(_as_np(tr.vel_y), A, T, name="log_trajectory.vel_y")
+    yaw = _normalize_agent_time(_as_np(tr.yaw), A, T, name="log_trajectory.yaw")
+    valid = _normalize_agent_time(_as_np(tr.valid), A, T, name="log_trajectory.valid").astype(bool)
+    length = _normalize_agent_time(_as_np(tr.length), A, T, name="log_trajectory.length")
+    width = _normalize_agent_time(_as_np(tr.width), A, T, name="log_trajectory.width")
+    height = _normalize_agent_time(_as_np(tr.height), A, T, name="log_trajectory.height")
+    obj_type = _normalize_agent_time(_as_np(meta.object_types), A, T, name="object_metadata.object_types")
     states = np.zeros((T, A, 16), dtype=np.float32)
     states[..., 0] = x.T
     states[..., 1] = y.T
@@ -214,21 +273,23 @@ def raw_scenario_from_waymax_state(state: Any, scenario_id: str, scenario_index:
     states[..., 7] = yaw.T
     states[..., 8] = np.sin(yaw).T
     states[..., 9] = np.cos(yaw).T
-    states[..., 10] = np.broadcast_to(length[:, None], (A, T)).T
-    states[..., 11] = np.broadcast_to(width[:, None], (A, T)).T
-    states[..., 12] = np.broadcast_to(height[:, None], (A, T)).T
-    states[..., 13] = np.broadcast_to(obj_type[:, None], (A, T)).T
+    states[..., 10] = length.T
+    states[..., 11] = width.T
+    states[..., 12] = height.T
+    states[..., 13] = obj_type.T
     states[..., 14] = valid.T.astype(np.float32)
     states[..., 15] = valid.T.astype(np.float32)
     timestamps = _as_np(tr.timestamp_micros)
-    if timestamps.ndim == 2 and timestamps.shape[0] > 0:
+    if timestamps.ndim >= 2 and timestamps.shape[-1] == T:
+        timestamps = timestamps.reshape(-1, T)[0]
+    elif timestamps.ndim >= 2 and timestamps.shape[0] > 0:
         timestamps = timestamps[0]
     timestamps_s = timestamps.astype(np.float64) * 1e-6 if timestamps.size else np.arange(T, dtype=np.float32) * 0.1
     maps, map_valid = _map_from_waymax_roadgraph(state, int(cfg.get("max_map_polylines", 256)), int(cfg.get("max_polyline_points", 64)))
     route = _route_from_sdc_paths(state, int(cfg.get("route_points", 80)))
     dyn = np.zeros((T, int(cfg.get("max_dynamic_signals", 16)), 8), dtype=np.float32)
     sdc_idx = int(np.argmax(_as_np(meta.is_sdc).astype(bool)))
-    object_ids = [str(int(v)) for v in _as_np(meta.ids).reshape(-1)]
+    object_ids = [str(int(v)) for v in meta_ids]
     return RawScenario(
         scenario_id=scenario_id,
         timestamps=timestamps_s[:T].astype(np.float32),

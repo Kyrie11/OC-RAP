@@ -44,6 +44,62 @@ def _as_np(x: Any) -> np.ndarray:
         return np.asarray(x)
 
 
+def _normalize_agent_time(x: Any, num_agents: int, num_steps: int | None = None, *, name: str = "field") -> np.ndarray:
+    """Return an array in agent-time layout ``(A, T)``.
+
+    Waymax can expose static fields such as length/width/height either as
+    ``(A,)`` or ``(A, T)``.  Closed-loop rollout conversion needs a consistent
+    layout before slicing by object and timestep.
+    """
+    arr = np.asarray(x)
+    while arr.ndim > 2 and arr.shape[0] == 1:
+        arr = arr[0]
+
+    if arr.ndim == 0:
+        if num_steps is None:
+            raise ValueError(f"Cannot infer time dimension for scalar {name}")
+        return np.full((num_agents, num_steps), arr, dtype=arr.dtype)
+
+    if arr.ndim == 1:
+        if arr.size == num_agents:
+            if num_steps is None:
+                raise ValueError(f"Cannot infer time dimension for per-agent {name} with shape {arr.shape}")
+            return np.broadcast_to(arr[:, None], (num_agents, num_steps))
+        if num_steps is not None and arr.size == num_steps:
+            return np.broadcast_to(arr[None, :], (num_agents, num_steps))
+        if arr.size == 1 and num_steps is not None:
+            return np.full((num_agents, num_steps), arr.reshape(()), dtype=arr.dtype)
+        raise ValueError(f"Cannot normalize {name} with shape {arr.shape}; expected agent dimension {num_agents}")
+
+    if arr.ndim == 2:
+        if arr.shape[0] == num_agents and (num_steps is None or arr.shape[1] == num_steps):
+            return arr
+        if arr.shape[1] == num_agents and (num_steps is None or arr.shape[0] == num_steps):
+            return arr.T
+        if num_steps is not None:
+            if arr.shape == (num_agents, 1):
+                return np.broadcast_to(arr, (num_agents, num_steps))
+            if arr.shape == (1, num_agents):
+                return np.broadcast_to(arr.reshape(num_agents, 1), (num_agents, num_steps))
+            if arr.shape == (1, num_steps):
+                return np.broadcast_to(arr, (num_agents, num_steps))
+            if arr.shape == (num_steps, 1):
+                return np.broadcast_to(arr.T, (num_agents, num_steps))
+        raise ValueError(
+            f"Cannot normalize {name} with shape {arr.shape}; expected "
+            f"({num_agents}, T) or (T, {num_agents})"
+        )
+
+    squeezed = np.squeeze(arr)
+    if squeezed.shape != arr.shape:
+        return _normalize_agent_time(squeezed, num_agents, num_steps, name=name)
+    if num_steps is not None and arr.shape[-2:] == (num_agents, num_steps):
+        return arr.reshape(-1, num_agents, num_steps)[0]
+    if num_steps is not None and arr.shape[-2:] == (num_steps, num_agents):
+        return arr.reshape(-1, num_steps, num_agents)[0].T
+    raise ValueError(f"Cannot normalize {name} with shape {arr.shape}")
+
+
 def _waymax_version() -> str:
     try:
         import waymax  # type: ignore
@@ -109,19 +165,32 @@ def _local_from_global_xy(xy: np.ndarray, ego_xy: np.ndarray, ego_yaw: float) ->
 
 def _traj_to_local_agent_arrays(state: Any, start_t: int, total_steps: int, order: list[int], ego_xy: np.ndarray, ego_yaw: float) -> tuple[np.ndarray, np.ndarray]:
     tr = state.sim_trajectory
-    end_t = min(start_t + total_steps, int(_as_np(tr.x).shape[-1]))
+    num_objects = int(getattr(state, "num_objects", 0))
+    x_all = _normalize_agent_time(_as_np(tr.x), num_objects, name="sim_trajectory.x")
+    total_log_steps = int(x_all.shape[1])
+    end_t = min(start_t + total_steps, total_log_steps)
     idx = np.asarray(order, dtype=np.int64)
-    x = _as_np(tr.x)[idx, start_t:end_t]
-    y = _as_np(tr.y)[idx, start_t:end_t]
-    z = _as_np(tr.z)[idx, start_t:end_t]
-    vx = _as_np(tr.vel_x)[idx, start_t:end_t]
-    vy = _as_np(tr.vel_y)[idx, start_t:end_t]
-    yaw = _as_np(tr.yaw)[idx, start_t:end_t]
-    valid = _as_np(tr.valid)[idx, start_t:end_t].astype(bool)
-    length = _as_np(tr.length)[idx]
-    width = _as_np(tr.width)[idx]
-    height = _as_np(tr.height)[idx]
-    typ = _as_np(state.object_metadata.object_types)[idx]
+    y_all = _normalize_agent_time(_as_np(tr.y), num_objects, total_log_steps, name="sim_trajectory.y")
+    z_all = _normalize_agent_time(_as_np(tr.z), num_objects, total_log_steps, name="sim_trajectory.z")
+    vx_all = _normalize_agent_time(_as_np(tr.vel_x), num_objects, total_log_steps, name="sim_trajectory.vel_x")
+    vy_all = _normalize_agent_time(_as_np(tr.vel_y), num_objects, total_log_steps, name="sim_trajectory.vel_y")
+    yaw_all = _normalize_agent_time(_as_np(tr.yaw), num_objects, total_log_steps, name="sim_trajectory.yaw")
+    valid_all = _normalize_agent_time(_as_np(tr.valid), num_objects, total_log_steps, name="sim_trajectory.valid").astype(bool)
+    length_all = _normalize_agent_time(_as_np(tr.length), num_objects, total_log_steps, name="sim_trajectory.length")
+    width_all = _normalize_agent_time(_as_np(tr.width), num_objects, total_log_steps, name="sim_trajectory.width")
+    height_all = _normalize_agent_time(_as_np(tr.height), num_objects, total_log_steps, name="sim_trajectory.height")
+    type_all = _normalize_agent_time(_as_np(state.object_metadata.object_types), num_objects, total_log_steps, name="object_metadata.object_types")
+    x = x_all[idx, start_t:end_t]
+    y = y_all[idx, start_t:end_t]
+    z = z_all[idx, start_t:end_t]
+    vx = vx_all[idx, start_t:end_t]
+    vy = vy_all[idx, start_t:end_t]
+    yaw = yaw_all[idx, start_t:end_t]
+    valid = valid_all[idx, start_t:end_t]
+    length = length_all[idx, start_t:end_t]
+    width = width_all[idx, start_t:end_t]
+    height = height_all[idx, start_t:end_t]
+    typ = type_all[idx, start_t:end_t]
     T = total_steps
     A = len(idx)
     out = np.zeros((T, A, 16), dtype=np.float32)
@@ -142,10 +211,10 @@ def _traj_to_local_agent_arrays(state: Any, start_t: int, total_steps: int, orde
     out[:n, :, 7] = yaw.T - float(ego_yaw)
     out[:n, :, 8] = np.sin(out[:n, :, 7])
     out[:n, :, 9] = np.cos(out[:n, :, 7])
-    out[:n, :, 10] = length[None, :]
-    out[:n, :, 11] = width[None, :]
-    out[:n, :, 12] = height[None, :]
-    out[:n, :, 13] = typ[None, :]
+    out[:n, :, 10] = length.T
+    out[:n, :, 11] = width.T
+    out[:n, :, 12] = height.T
+    out[:n, :, 13] = typ.T
     out[:n, :, 14] = valid.T.astype(np.float32)
     out[:n, :, 15] = valid.T.astype(np.float32)
     val[:n] = valid.T
