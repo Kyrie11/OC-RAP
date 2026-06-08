@@ -104,6 +104,8 @@ def targeted_perturbation(history: SceneHistory, prefix: CandidatePrefix, total_
         "hidden_start_step": int(hidden_start),
         "hidden_emergence_delay_steps": int(cfg.get("hidden_emergence_delay_steps", 2)),
         "hidden_start_ge_prefix_plus_delay": bool(hidden_start >= T_p + int(cfg.get("hidden_emergence_delay_steps", 2))),
+        "runtime_backend": "ocrap_targeted_surrogate",
+        "waymax_runtime": False,
     }
 
     hidden_kind = kind in {"hidden_vehicle_yields", "hidden_vehicle_accelerates", "occluded_pedestrian_emerges"}

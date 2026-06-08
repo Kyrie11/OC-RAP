@@ -234,6 +234,9 @@ def diagnose_dataset(dataset: str | Path, output: str | Path | None = None, max_
     hidden_start_checked = 0
     hidden_start_violation_count = 0
     plausibility_failed_futures = 0
+    waymax_runtime_futures = 0
+    total_metadata_futures = 0
+    runtime_backend_counts: Counter[str] = Counter()
     synthetic_scene_count = 0
 
     alpha = float(_cfg_get(cfg, ("ocmero", "alpha"), 0.2))
@@ -473,6 +476,11 @@ def diagnose_dataset(dataset: str | Path, output: str | Path | None = None, max_
                         hidden_start_checked += 1
                         if int(m.get("hidden_start_step", -1)) < int(m.get("prefix_steps", 0)) + hidden_delay:
                             hidden_start_violation_count += 1
+                total_metadata_futures += 1
+                if m.get("runtime_backend"):
+                    runtime_backend_counts[str(m.get("runtime_backend"))] += 1
+                if bool(m.get("waymax_runtime", False)):
+                    waymax_runtime_futures += 1
                 if m.get("plausibility_passed") is False:
                     plausibility_failed_futures += 1
                 if m.get("artifact_pair_key") and m.get("artifact_branch"):
@@ -524,6 +532,7 @@ def diagnose_dataset(dataset: str | Path, output: str | Path | None = None, max_
     oracle_recoverable_fraction = oracle_recoverable_count / max(num, 1)
     negative_deployable_fraction = negative_deployable_count / max(num, 1)
     source_complete_fraction = source_complete_samples / max(num, 1)
+    waymax_runtime_fraction = waymax_runtime_futures / max(total_metadata_futures, 1)
     alias_total = float(np.sum(alias_pair_vals)) if alias_pair_vals else 0.0
     incompatible_total = float(np.sum(incompatible_alias_vals)) if incompatible_alias_vals else 0.0
     incompatible_alias_fraction = incompatible_total / max(alias_total, 1.0)
@@ -568,6 +577,8 @@ def diagnose_dataset(dataset: str | Path, output: str | Path | None = None, max_
             warnings.append(f"regime count == 0: {regime}")
     if synthetic_scene_count == num and num > 0:
         warnings.append("all inspected samples look synthetic; run on real WOMD before making primary benchmark claims")
+    if waymax_runtime_fraction == 0.0 and synthetic_scene_count < num and num > 0:
+        warnings.append("no future metadata reports waymax_runtime=true; this is a WOMD-derived surrogate dataset, not a confirmed Waymax closed-loop rollout dataset")
 
     paper_support = {
         "supports_fra": bool(artifact_fraction > 0.0 and negative_deployable_fraction > 0.0 and source_complete_fraction > 0.0),
@@ -578,6 +589,7 @@ def diagnose_dataset(dataset: str | Path, output: str | Path | None = None, max_
         "supports_calibration_protocol": bool(sample_split_counts.get("calibration", 0) > 0),
         "supports_heldout_test_protocol": bool(sample_split_counts.get("test", 0) > 0),
         "supports_womd_primary_claim": bool(synthetic_scene_count < num and num > 0),
+        "supports_waymax_runtime_claim": bool(waymax_runtime_fraction >= 0.95 and synthetic_scene_count < num and num > 0),
     }
 
     result = {
@@ -627,6 +639,9 @@ def diagnose_dataset(dataset: str | Path, output: str | Path | None = None, max_
             "hidden_start_checked": int(hidden_start_checked),
             "hidden_start_violation_count": int(hidden_start_violation_count),
             "plausibility_failed_future_count": int(plausibility_failed_futures),
+            "runtime_backend_counts": _counter_dict(runtime_backend_counts),
+            "waymax_runtime_future_count": int(waymax_runtime_futures),
+            "waymax_runtime_fraction": float(waymax_runtime_fraction),
             "complete_artifact_pair_count": int(complete_artifact_pairs),
             "partial_artifact_pair_count": int(partial_artifact_pairs),
             "unknown_ratio_in_corridor": _stats(unknown_ratio_vals),

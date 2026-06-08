@@ -80,4 +80,4 @@ def reactive_future(history: SceneHistory, prefix: CandidatePrefix, total_steps:
             else:
                 states[t, a] = policy.step_ped_cyclist(prev, rng)
             valid[t, a] = True
-    return CounterfactualFuture(idx, "reactive", prior, states, valid, {"reactive_policy": "torch_idm_route_following_surrogate", "reactive_variant": int(idx)})
+    return CounterfactualFuture(idx, "reactive", prior, states, valid, {"reactive_policy": "ocrap_idm_route_following_surrogate", "reactive_variant": int(idx), "runtime_backend": "ocrap_surrogate_idm", "waymax_runtime": False})

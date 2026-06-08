@@ -5,9 +5,50 @@ import math
 import numpy as np
 
 from ocrap.data.schema import RawScenario, SceneHistory
+from ocrap.planning.route_lattice import project_to_route
 from ocrap.simulation.observation.bev import render_base_occ_mask
 from ocrap.utils.geometry import transform_points_to_ego, transform_states_to_ego
 
+
+
+def _future_route_proxy(future_ego: np.ndarray, future_valid: np.ndarray, max_points: int) -> np.ndarray:
+    if future_ego.size == 0 or future_valid.size == 0:
+        pts = np.stack([np.linspace(0, max_points - 1, max_points, dtype=np.float32), np.zeros(max_points, dtype=np.float32)], axis=-1)
+    else:
+        valid = future_valid[:, 0].astype(bool) if future_valid.ndim == 2 and future_valid.shape[1] else np.zeros((future_ego.shape[0],), dtype=bool)
+        pts = future_ego[valid, 0, :2].astype(np.float32)
+        if len(pts) < 2:
+            pts = np.stack([np.linspace(0, max_points - 1, max_points, dtype=np.float32), np.zeros(max_points, dtype=np.float32)], axis=-1)
+    if len(pts) < max_points:
+        pad = np.repeat(pts[-1:, :], max_points - len(pts), axis=0)
+        pts = np.concatenate([pts, pad], axis=0)
+    else:
+        idx = np.linspace(0, len(pts) - 1, max_points).round().astype(int)
+        pts = pts[idx]
+    route = np.zeros((max_points, 6), dtype=np.float32)
+    route[:, :2] = pts[:, :2]
+    d = np.diff(route[:, :2], axis=0, append=route[-1:, :2])
+    route[:, 2] = np.arctan2(d[:, 1], d[:, 0])
+    route[:, 3] = 13.4
+    route[:, 5] = 1.0
+    return route
+
+
+def _sanitize_route(route: np.ndarray, future_ego: np.ndarray, future_valid: np.ndarray, cfg: dict) -> tuple[np.ndarray, dict]:
+    max_points = int(cfg.get("route_points", route.shape[0] if route.size else 80))
+    meta = {"route_sanitized": False, "route_projection_distance_m": 0.0}
+    if route.size and len(route) >= 2:
+        try:
+            proj = project_to_route(np.zeros(2, dtype=np.float32), route)
+            meta["route_projection_distance_m"] = float(proj.distance)
+            length = float(np.sum(np.linalg.norm(np.diff(route[:, :2], axis=0), axis=1)))
+            if proj.distance <= float(cfg.get("max_route_projection_distance_m", 8.0)) and length >= float(cfg.get("min_route_length_m", 10.0)):
+                return route.astype(np.float32), meta
+        except Exception:
+            pass
+    meta["route_sanitized"] = True
+    meta["route_sanitize_reason"] = "route_not_near_ego_or_too_short"
+    return _future_route_proxy(future_ego, future_valid, max_points), meta
 
 def ego_from_agent_state(agent_state: np.ndarray) -> np.ndarray:
     return np.array([agent_state[0], agent_state[1], agent_state[3], agent_state[4], agent_state[7], 0.0, math.hypot(agent_state[3], agent_state[4]), agent_state[10], agent_state[11]], dtype=np.float32)
@@ -55,6 +96,7 @@ def construct_history(raw: RawScenario, t: int, cfg: dict) -> SceneHistory:
     hist_e = transform_states_to_ego(hist, ego_raw)
     fut_e = transform_states_to_ego(future, ego_raw)
     maps, map_valid, route = transform_map_and_route(raw, ego_raw)
+    route, route_meta = _sanitize_route(route, fut_e, future_valid, cfg)
     dyn = raw.dynamic_map[max(0, t - H + 1) : t + 1]
     if dyn.shape[0] < H:
         pad = np.zeros((H - dyn.shape[0],) + dyn.shape[1:], dtype=np.float32)
@@ -79,6 +121,7 @@ def construct_history(raw: RawScenario, t: int, cfg: dict) -> SceneHistory:
             "adjacent_available": True,
             "time_sampling_reasons": [],
             "source": raw.metadata.get("source", "unknown"),
+            **route_meta,
         },
     )
     h.occ_mask = render_base_occ_mask(h, cfg)

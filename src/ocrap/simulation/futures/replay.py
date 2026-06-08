@@ -59,4 +59,4 @@ def replay_future(history: SceneHistory, prefix: CandidatePrefix, total_steps: i
     if T > 0:
         logged = history.future_agent_states[:T, 0, :2]
         mismatch = bool(np.max(np.linalg.norm(logged - prefix.prefix_states[:T, :2], axis=-1)) > 3.0)
-    return CounterfactualFuture(0, "replay", prior, states, valid, {"anchor_logged": True, "replay_interaction_mismatch": mismatch})
+    return CounterfactualFuture(0, "replay", prior, states, valid, {"anchor_logged": True, "replay_interaction_mismatch": mismatch, "runtime_backend": "ocrap_surrogate_replay", "waymax_runtime": False})
