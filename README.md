@@ -155,7 +155,7 @@ regime_label, sample_metadata, split_id
 PYTHONPATH=src python -m ocrap.cli diagnose \
   --dataset data/ocrap_womd \
   --output data/ocrap_womd/diagnose.json
-```
+```[dff1.patch](../dff1.patch)
 
 对于 smoke test fixture：
 
