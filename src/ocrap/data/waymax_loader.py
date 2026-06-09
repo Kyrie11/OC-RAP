@@ -337,9 +337,18 @@ def iter_waymax_womd_scenarios(patterns: Any, max_scenarios: int | None, parser_
 
     parse = functools.partial(wx_dataloader.preprocess_serialized_womd_data, config=dataset_cfg)
     gen = wx_dataloader.get_data_generator(dataset_cfg, parse, _postprocess)
+    start_index = max(0, int(cfg.get("scenario_start_index", 0)))
+    stride = max(1, int(cfg.get("scenario_stride", 1)))
+    worker_index = int(cfg.get("scenario_worker_index", 0)) % stride
+    emitted = 0
     for i, payload in enumerate(gen):
-        if max_scenarios is not None and i >= int(max_scenarios):
+        if i < start_index:
+            continue
+        if ((i - start_index) % stride) != worker_index:
+            continue
+        if max_scenarios is not None and emitted >= int(max_scenarios):
             break
         state = payload["state"] if isinstance(payload, dict) else payload
         sid = _scenario_id_from_payload(payload if isinstance(payload, dict) else {}, i, state)
         yield raw_scenario_from_waymax_state(state, sid, i, cfg)
+        emitted += 1

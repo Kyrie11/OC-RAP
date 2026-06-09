@@ -409,6 +409,33 @@ def _sample_unknown_spawn(history: SceneHistory, cfg: dict, rng: np.random.Gener
     return loc, {"hidden_spawn_xy": [float(loc[0]), float(loc[1])], "hidden_spawn_cell": [int(iy), int(ix)], "from_unknown_mask": True, "spawn_in_visible_free": False}
 
 
+def can_mine_augmented_hidden_pair(history: SceneHistory, prefix: CandidatePrefix, cfg: dict) -> bool:
+    """Cheap preflight for artifact-pair mining before expensive Waymax rollouts.
+
+    The full hidden yield/accelerate branches are still validated after rollout;
+    this only rejects prefixes for which the pair is structurally impossible,
+    e.g. no legal unknown drivable spawn cell or no remaining log horizon.
+    """
+    if int(cfg.get("num_targeted_futures", 8)) < 2:
+        return False
+    state0 = history.metadata.get("_waymax_state")
+    if state0 is None:
+        return False
+    seed = stable_seed("waymax-hidden-preflight", history.scene_id, history.time_index, prefix.macro_id)
+    if _sample_unknown_spawn(history, cfg, np.random.default_rng(seed)) is None:
+        return False
+    try:
+        valid = _as_np(state0.log_trajectory.valid).astype(bool)
+        if valid.ndim < 2 or valid.shape[0] < 2:
+            return False
+        t0 = int(history.metadata.get("waymax_planning_timestep", history.time_index))
+        T_p = int(prefix.prefix_states.shape[0])
+        delay = int(cfg.get("hidden_emergence_delay_steps", 2))
+        return bool(t0 + T_p + delay < valid.shape[-1])
+    except Exception:
+        return True
+
+
 def _cfg_without_artifact_override(cfg: dict) -> dict:
     """Return a shallow config copy for structural margins without hard-coded artifact overrides."""
     local = dict(cfg)
@@ -791,7 +818,58 @@ def _waymax_margin_from_rollout(metrics_over_time: list[dict[str, float]], cfg: 
     return float(min(comps.values())), comps, active
 
 
+def _resolve_waymax_teacher_backend(cfg: dict) -> str:
+    wx = cfg.get("waymax", {}) if isinstance(cfg.get("waymax", {}), dict) else {}
+    raw = str(wx.get("teacher_backend", "auto")).lower()
+    if raw == "auto":
+        quality = cfg.get("dataset_quality", {}) if isinstance(cfg.get("dataset_quality", {}), dict) else {}
+        artifact = cfg.get("artifact", {}) if isinstance(cfg.get("artifact", {}), dict) else {}
+        if bool(quality.get("require_artifact_pairs", False)) and bool(artifact.get("use_margin_override", True)):
+            return "structural"
+        return "hybrid"
+    aliases = {"fast": "structural", "surrogate": "structural", "structural_fast": "structural"}
+    return aliases.get(raw, raw)
+
+
+def _compute_structural_future_option_margins(history: SceneHistory, prefix: CandidatePrefix, futures: list[CounterfactualFuture], options: list[RecoveryOption], cfg: dict, backend_name: str) -> tuple[np.ndarray, list[list[TeacherDiagnostics]]]:
+    horizon_steps = max(2, int(round(float(cfg.get("recovery_horizon_s", 4.0)) * float(cfg.get("sample_rate_hz", 10.0)))))
+    controllers = [rollout_recovery_controller(prefix, opt, horizon_steps, cfg) for opt in options]
+    M = np.zeros((len(futures), len(options)), dtype=np.float32)
+    all_diag: list[list[TeacherDiagnostics]] = []
+    for j, fut in enumerate(futures):
+        row: list[TeacherDiagnostics] = []
+        fut.metadata["waymax_teacher_backend"] = backend_name
+        fut.metadata["waymax_recovery_rollout_reused"] = False
+        for l, opt in enumerate(options):
+            rec_states, rec_controls, cdiag = controllers[l]
+            val, diag = teacher_margin(history, prefix, fut, opt, rec_states, rec_controls, cfg, cdiag)
+            M[j, l] = float(val)
+            row.append(
+                TeacherDiagnostics(
+                    active=diag.active,
+                    component_margins=diag.component_margins,
+                    controller_diagnostics={**(diag.controller_diagnostics or {}), "waymax_teacher_backend": backend_name, "waymax_recovery_rollout": False},
+                )
+            )
+        all_diag.append(row)
+    return M, all_diag
+
+
+def _should_record_teacher_metric(tt: int, horizon_steps: int, stride: int) -> bool:
+    if tt == horizon_steps - 1:
+        return True
+    if stride <= 0:
+        return False
+    return (tt % stride) == 0
+
+
 def compute_waymax_future_option_margins(history: SceneHistory, prefix: CandidatePrefix, futures: list[CounterfactualFuture], options: list[RecoveryOption], cfg: dict) -> tuple[np.ndarray, list[list[TeacherDiagnostics]]]:
+    teacher_backend = _resolve_waymax_teacher_backend(cfg)
+    if teacher_backend == "structural":
+        return _compute_structural_future_option_margins(history, prefix, futures, options, cfg, teacher_backend)
+    if teacher_backend not in {"hybrid", "waymax"}:
+        raise ValueError(f"Unsupported waymax.teacher_backend={teacher_backend!r}; expected auto, structural, hybrid, or waymax")
+
     state0 = history.metadata.get("_waymax_state")
     if state0 is None:
         raise ValueError("Waymax teacher requires runtime state from Waymax loader.")
@@ -802,7 +880,8 @@ def compute_waymax_future_option_margins(history: SceneHistory, prefix: Candidat
     sdc = _sdc_index(state0)
     margin_cache: dict[tuple[int, int, int], tuple[np.ndarray, list[TeacherDiagnostics]]] = {}
     wx = cfg.get("waymax", {}) if isinstance(cfg.get("waymax", {}), dict) else {}
-    hybrid_teacher = bool(wx.get("hybrid_teacher_margin", True))
+    hybrid_teacher = teacher_backend == "hybrid"
+    metric_stride = int(wx.get("teacher_metrics_stride", 1))
     structural_cfg = _cfg_without_artifact_override(cfg)
     for j, fut in enumerate(futures):
         base_state = getattr(fut, "_waymax_state_after_prefix", None)
@@ -837,7 +916,8 @@ def compute_waymax_future_option_margins(history: SceneHistory, prefix: Candidat
                 ctrl = rec_controls[min(tt, rec_controls.shape[0] - 1)] if rec_controls.size else np.zeros(4, dtype=np.float32)
                 action = _action_from_recovery_control(int(st.num_objects), sdc, ctrl, cfg)
                 st = waymax_env.step(st, action)
-                metrics_over_time.append(_metric_summary(waymax_env, st, sdc))
+                if _should_record_teacher_metric(tt, horizon_steps, metric_stride):
+                    metrics_over_time.append(_metric_summary(waymax_env, st, sdc))
             val, comps, active = _waymax_margin_from_rollout(metrics_over_time, cfg)
             if hybrid_teacher:
                 structural_val, structural_diag = teacher_margin(history, prefix, fut, opt, rec_states, rec_controls, structural_cfg, cdiag)
@@ -860,7 +940,7 @@ def compute_waymax_future_option_margins(history: SceneHistory, prefix: Candidat
                 elif branch == "accelerate":
                     val = max(val, 1.0) if opt.mode in {"stop", "brake_lane", "avoid_secondary"} else min(val, -1.0)
             M[j, l] = float(val)
-            row.append(TeacherDiagnostics(active=active, component_margins=comps, controller_diagnostics={**(cdiag or {}), "waymax_recovery_rollout": True, "waymax_hybrid_teacher_margin": bool(hybrid_teacher), "waymax_metrics_last": metrics_over_time[-1] if metrics_over_time else {}}))
+            row.append(TeacherDiagnostics(active=active, component_margins=comps, controller_diagnostics={**(cdiag or {}), "waymax_recovery_rollout": True, "waymax_hybrid_teacher_margin": bool(hybrid_teacher), "waymax_teacher_backend": teacher_backend, "waymax_teacher_metrics_stride": int(metric_stride), "waymax_metrics_last": metrics_over_time[-1] if metrics_over_time else {}}))
         margin_cache[cache_key] = (M[j].copy(), row)
         fut.metadata["waymax_teacher_rollout_reused"] = False
         all_diag.append(row)

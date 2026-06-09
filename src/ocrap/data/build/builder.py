@@ -129,6 +129,26 @@ def _has_complete_artifact_pair(sample: DatasetSample) -> bool:
             branches.add(branch)
     return {"yield", "accelerate"}.issubset(branches)
 
+
+def _max_accepted_prefixes_per_scene_time(cfg: dict) -> int:
+    quality = cfg.get("dataset_quality", {}) if isinstance(cfg.get("dataset_quality", {}), dict) else {}
+    return max(0, int(quality.get("max_accepted_prefixes_per_scene_time", 0)))
+
+
+def _artifact_pair_attempt_is_possible(history, prefix: CandidatePrefix, cfg: dict) -> bool:
+    if not _quality_requires_artifact_pair(cfg):
+        return True
+    if str(cfg.get("simulation_backend", "ocrap_surrogate")) != "waymax_closed_loop":
+        return True
+    try:
+        from ocrap.simulation.waymax_rollout import can_mine_augmented_hidden_pair
+
+        return bool(can_mine_augmented_hidden_pair(history, prefix, cfg))
+    except Exception:
+        # Do not silently discard data when the optional Waymax path changes.
+        # A later strict rollout/quality gate will fail or skip the sample.
+        return True
+
 def _compute_within_root_dispersion(root_assignments: np.ndarray, obs_by_future: list, K: int, cfg: dict) -> np.ndarray:
     from ocrap.simulation.observation.compatibility import observation_distance
 
@@ -151,7 +171,17 @@ def build_samples_for_history(history, split_id: str, cfg: dict, progress_callba
     option_valid = option_valid_mask(options)
     samples: list[DatasetSample] = []
     K = int(cfg.get("num_roots", 8))
+    accepted_for_scene_time = 0
+    max_accepted = _max_accepted_prefixes_per_scene_time(cfg)
     for a_idx, prefix in enumerate(prefixes):
+        if max_accepted > 0 and accepted_for_scene_time >= max_accepted:
+            if progress_callback is not None:
+                progress_callback(len(prefixes) - a_idx)
+            break
+        if not _artifact_pair_attempt_is_possible(history, prefix, cfg):
+            if progress_callback is not None:
+                progress_callback(1)
+            continue
         futures = generate_counterfactual_futures(history, prefix, cfg)
         future_probs = np.asarray([f.prior for f in futures], dtype=np.float32)
         future_probs = future_probs / max(float(future_probs.sum()), 1e-8)
@@ -228,6 +258,7 @@ def build_samples_for_history(history, split_id: str, cfg: dict, progress_callba
                 progress_callback(1)
             continue
         samples.append(sample)
+        accepted_for_scene_time += 1
         if progress_callback is not None:
             progress_callback(1)
     assign_regimes(samples, history, cfg)

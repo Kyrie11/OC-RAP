@@ -139,6 +139,10 @@ dataset_quality:
   # Off by default for broad natural-WOMD sweeps. Enable for artifact/stress
   # dataset builds that are intended to support FRA, ODG, and anti-oracle claims.
   require_artifact_pairs: false
+  # 0 means keep every accepted prefix. For artifact sanity/debug builds, a small
+  # value such as 4-8 avoids spending a full scene-time on redundant prefixes once
+  # enough artifact-bearing examples have been accepted.
+  max_accepted_prefixes_per_scene_time: 0
 training:
   device: auto
   batch_size: 16
@@ -171,6 +175,20 @@ baselines:
   risk_lambda: 1.0
 metrics:
   sigma_u: 1.0
+progress: true
+# Dataset-source sharding for multi-process builds, e.g. two GPUs with
+# CUDA_VISIBLE_DEVICES=0/1 and scenario_stride=2, scenario_worker_index=0/1.
+scenario_start_index: 0
+scenario_stride: 1
+scenario_worker_index: 0
+waymax:
+  # auto = structural teacher for artifact override sanity/stress builds, hybrid
+  # otherwise. Use waymax for a strict runtime-only teacher, or structural for
+  # fast label generation from the recovery-affordance teacher.
+  teacher_backend: auto
+  # 1 records metrics at every recovery step, preserving previous hybrid/strict
+  # semantics. Use 0 for final-step-only metric checks when debugging speed.
+  teacher_metrics_stride: 1
 ablation:
   without_observation_kernel: false
   without_lower_tail: false

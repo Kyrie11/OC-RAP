@@ -69,9 +69,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "evaluation": {"batch_size": 64, "delta": 0.05, "methods": ["nominal", "risk_aware", "backup_filter", "contingency", "oracle_filter", "ocrap"]},
     "baselines": {"risk_lambda": 1.0},
     "metrics": {"sigma_u": 1.0},
-    "dataset_quality": {"require_artifact_pairs": False},
+    "dataset_quality": {"require_artifact_pairs": False, "max_accepted_prefixes_per_scene_time": 0},
     "simulation_backend": "ocrap_surrogate",
     "progress": True,
+    "scenario_start_index": 0,
+    "scenario_stride": 1,
+    "scenario_worker_index": 0,
     "waymax": {
         "strict": True,
         "dataloader_include_sdc_paths": True,
@@ -89,6 +92,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "jax_platforms": "cuda,cpu",
         "preallocate_gpu_memory": False,
         "cache_identical_teacher_rollouts": True,
+        "teacher_backend": "auto",
+        "teacher_metrics_stride": 1,
     },
     "ablation": {"without_observation_kernel": False, "without_lower_tail": False, "without_calibration": False, "without_anti_oracle": False, "full_future_roots": False, "no_occlusion_bev": False},
 }
