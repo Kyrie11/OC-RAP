@@ -31,8 +31,8 @@ def _score_planning_times(raw: RawScenario, cfg: dict) -> tuple[list[int], dict[
         return [], {}
     stride = max(1, int(round(float(cfg.get("planning_time_stride_s", 0.5)) * sr)))
     all_times = np.arange(start, end, dtype=np.int64)
-    chosen = set(all_times[::stride].tolist())
-    reasons_by_time: dict[int, set[str]] = {int(t): {"uniform"} for t in chosen}
+    uniform_times = [int(t) for t in all_times[::stride].tolist()]
+    reasons_by_time: dict[int, set[str]] = {int(t): {"uniform"} for t in uniform_times}
     # Interaction/low-headroom/near-contact biased scores.
     scored: list[tuple[float, int, list[str]]] = []
     for t in all_times:
@@ -61,10 +61,35 @@ def _score_planning_times(raw: RawScenario, cfg: dict) -> tuple[list[int], dict[
             reasons.append("uniform")
         scored.append((score, int(t), sorted(set(reasons))))
     scored.sort(reverse=True)
-    for _, t, reasons in scored[: int(cfg.get("max_biased_times_per_scenario", 4))]:
-        chosen.add(t)
+    max_biased = max(0, int(cfg.get("max_biased_times_per_scenario", 4)))
+    biased_times: list[int] = []
+    for score, t, reasons in scored:
+        if len(biased_times) >= max_biased:
+            break
+        # Do not let zero-score frames consume the biased quota; uniform sampling
+        # already covers them.
+        if score <= 0.0:
+            continue
+        biased_times.append(int(t))
         reasons_by_time.setdefault(int(t), set()).update(reasons)
-    times = sorted(chosen)[: int(cfg.get("max_times_per_scenario", 8))]
+
+    max_times = max(0, int(cfg.get("max_times_per_scenario", 8)))
+    ordered: list[int] = []
+    seen: set[int] = set()
+    # Priority order matters when max_times_per_scenario is small: keep the
+    # interaction-biased frame instead of accidentally discarding it by sorting
+    # the union and taking the earliest timestamp.
+    for seq in (biased_times, uniform_times, [int(t) for _, t, _ in scored]):
+        for t in seq:
+            if t in seen:
+                continue
+            ordered.append(int(t))
+            seen.add(int(t))
+            if len(ordered) >= max_times:
+                break
+        if len(ordered) >= max_times:
+            break
+    times = ordered
     return times, {t: sorted(reasons_by_time.get(t, {"uniform"})) for t in times}
 
 
@@ -214,6 +239,9 @@ def build_dataset(output_dir: str | Path, cfg: dict) -> dict:
     manifest_rows: list[dict] = []
     split_counts: dict[str, int] = {"train": 0, "val": 0, "calibration": 0, "test": 0}
     total = 0
+    raw_scenarios_seen = 0
+    scene_time_groups = 0
+    skipped_no_planning_times = 0
     raw_iter = scenario_iterator(cfg)
     prefix_bar = None
     if bool(cfg.get("progress", True)):
@@ -232,9 +260,14 @@ def build_dataset(output_dir: str | Path, cfg: dict) -> dict:
             prefix_bar.update(int(n))
     try:
         for raw in raw_iter:
+            raw_scenarios_seen += 1
             split_id = scenario_split(raw.scenario_id, cfg.get("split_ratios"))
             times, reasons_by_time = select_planning_times_with_reasons(raw, cfg)
+            if not times:
+                skipped_no_planning_times += 1
+                continue
             for t in times:
+                scene_time_groups += 1
                 history = construct_history(raw, t, cfg)
                 # Retain only the reasons that actually selected this planning instant.
                 history.metadata["time_sampling_reasons"] = reasons_by_time.get(int(t), ["uniform"])
@@ -268,6 +301,14 @@ def build_dataset(output_dir: str | Path, cfg: dict) -> dict:
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         writer.writerows(manifest_rows)
-    summary = {"num_samples": total, "split_counts": split_counts, "manifest": str(manifest_path), "sample_dir": str(sample_dir)}
+    summary = {
+        "num_samples": total,
+        "split_counts": split_counts,
+        "manifest": str(manifest_path),
+        "sample_dir": str(sample_dir),
+        "raw_scenarios_seen": int(raw_scenarios_seen),
+        "scene_time_groups": int(scene_time_groups),
+        "skipped_no_planning_times": int(skipped_no_planning_times),
+    }
     write_json(summary, out / "dataset_summary.json")
     return summary

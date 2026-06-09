@@ -8,7 +8,7 @@ import numpy as np
 
 from ocrap.data.schema import CandidatePrefix, CounterfactualFuture, RecoveryOption, SceneHistory
 from ocrap.simulation.teacher.controllers import rollout_recovery_controller
-from ocrap.simulation.teacher.margins import TeacherDiagnostics
+from ocrap.simulation.teacher.margins import TeacherDiagnostics, teacher_margin
 from ocrap.utils.seed import stable_seed
 
 
@@ -409,6 +409,15 @@ def _sample_unknown_spawn(history: SceneHistory, cfg: dict, rng: np.random.Gener
     return loc, {"hidden_spawn_xy": [float(loc[0]), float(loc[1])], "hidden_spawn_cell": [int(iy), int(ix)], "from_unknown_mask": True, "spawn_in_visible_free": False}
 
 
+def _cfg_without_artifact_override(cfg: dict) -> dict:
+    """Return a shallow config copy for structural margins without hard-coded artifact overrides."""
+    local = dict(cfg)
+    art = dict(local.get("artifact", {}) or {})
+    art["use_margin_override"] = False
+    local["artifact"] = art
+    return local
+
+
 def _augment_hidden_reference(state: Any, history: SceneHistory, prefix: CandidatePrefix, cfg: dict, *, branch: str, seed: int):
     jax, jnp, _, _, _, _ = _require_waymax()
     rng = np.random.default_rng(seed)
@@ -488,6 +497,88 @@ def _augment_hidden_reference(state: Any, history: SceneHistory, prefix: Candida
         "injected_replaced_logged_agent": bool(not empty),
     })
     return state.replace(log_trajectory=new_tr, object_metadata=new_md), meta
+
+
+def _augment_visible_reference(state: Any, history: SceneHistory, prefix: CandidatePrefix, cfg: dict, *, branch: str, seed: int):
+    """Perturb a currently visible non-SDC actor so observation labels include negatives.
+
+    Hidden yield/accelerate roots create the oracle-artifact alias pairs needed by
+    OC-RAP, but they intentionally look identical at the post-prefix observation.
+    This augmentation adds a small set of visible counterfactual roots whose actor
+    is already observable at the planning instant and whose position/speed changes
+    during the executable prefix.  They are useful for training and diagnosing the
+    observation-equivalence kernel without leaking hidden branch identity.
+    """
+    _, jnp, _, _, _, _ = _require_waymax()
+    rng = np.random.default_rng(seed)
+    t0 = int(history.metadata.get("waymax_planning_timestep", history.time_index))
+    T_p = int(prefix.prefix_states.shape[0])
+    tr = state.log_trajectory
+    x = _normalize_agent_time(_as_np(tr.x), int(state.num_objects), name="log_trajectory.x")
+    y = _normalize_agent_time(_as_np(tr.y), int(state.num_objects), x.shape[1], name="log_trajectory.y")
+    vx = _normalize_agent_time(_as_np(tr.vel_x), int(state.num_objects), x.shape[1], name="log_trajectory.vel_x")
+    vy = _normalize_agent_time(_as_np(tr.vel_y), int(state.num_objects), x.shape[1], name="log_trajectory.vel_y")
+    yaw = _normalize_agent_time(_as_np(tr.yaw), int(state.num_objects), x.shape[1], name="log_trajectory.yaw")
+    valid = _normalize_agent_time(_as_np(tr.valid), int(state.num_objects), x.shape[1], name="log_trajectory.valid").astype(bool)
+    sdc = _sdc_index(state)
+    ego_xy = np.asarray(history.metadata.get("ego_global_xy", [0.0, 0.0]), dtype=np.float32)
+    ego_yaw = float(history.metadata.get("ego_global_heading", 0.0))
+    candidates: list[tuple[float, int]] = []
+    if 0 <= t0 < valid.shape[1]:
+        for a in range(valid.shape[0]):
+            if a == sdc or not valid[a, t0]:
+                continue
+            local = _local_from_global_xy(np.asarray([[[x[a, t0], y[a, t0]]]], dtype=np.float32), ego_xy, ego_yaw)[0, 0]
+            # Prefer actors that are within the ego observation region and not too far.
+            dist = float(np.linalg.norm(local))
+            if dist <= float(cfg.get("visible_root_max_distance_m", 45.0)) and local[0] > -10.0:
+                candidates.append((dist, a))
+    if not candidates:
+        return None, {"skip_reason": "no_visible_actor_for_perturbation"}
+    candidates.sort(key=lambda z: z[0])
+    # Pick among a few near actors deterministically but not always the closest.
+    _, slot = candidates[int(rng.integers(0, min(len(candidates), 3)))]
+    total_T = x.shape[1]
+    start = min(max(t0 + 1, 0), total_T - 1)
+    end = min(total_T, t0 + max(T_p, 2) + int(cfg.get("visible_root_extra_steps", 8)))
+    accel = -1.5 if branch == "visible_brake" else 1.5
+    lateral = -0.25 if branch == "visible_left" else (0.25 if branch == "visible_right" else 0.0)
+    xs = jnp.array(_as_np(tr.x))
+    ys = jnp.array(_as_np(tr.y))
+    vxs = jnp.array(_as_np(tr.vel_x))
+    vys = jnp.array(_as_np(tr.vel_y))
+    yaws = jnp.array(_as_np(tr.yaw))
+    # Use the actor's current heading as a local tangent and apply a modest speed
+    # perturbation over the prefix.  This keeps the branch plausible but visible.
+    heading0 = float(yaw[slot, t0])
+    speed0 = float(max(0.0, math.hypot(float(vx[slot, t0]), float(vy[slot, t0]))))
+    x0 = float(x[slot, t0])
+    y0 = float(y[slot, t0])
+    nx = -math.sin(heading0)
+    ny = math.cos(heading0)
+    for tau in range(start, end):
+        dt = (tau - t0) / float(cfg.get("sample_rate_hz", 10.0))
+        v = max(0.0, speed0 + accel * dt)
+        dist = speed0 * dt + 0.5 * accel * dt * dt
+        lat = lateral * dt
+        gx = x0 + dist * math.cos(heading0) + lat * nx
+        gy = y0 + dist * math.sin(heading0) + lat * ny
+        xs = xs.at[slot, tau].set(float(gx))
+        ys = ys.at[slot, tau].set(float(gy))
+        vxs = vxs.at[slot, tau].set(float(v * math.cos(heading0)))
+        vys = vys.at[slot, tau].set(float(v * math.sin(heading0)))
+        yaws = yaws.at[slot, tau].set(heading0)
+    new_tr = tr.replace(x=xs, y=ys, vel_x=vxs, vel_y=vys, yaw=yaws)
+    meta = {
+        "visible_perturbation": True,
+        "visible_actor_object_index": int(slot),
+        "visible_branch": branch,
+        "targeted_type": f"waymax_visible_actor_{branch}",
+        "observation_negative_candidate": True,
+        "hidden_emergence": False,
+        "artifact_mined": False,
+    }
+    return state.replace(log_trajectory=new_tr), meta
 
 
 def _make_future_from_state(fid: int, source: str, prior: float, st: Any, history: SceneHistory, prefix: CandidatePrefix, cfg: dict, waymax_env: Any, dyn_name: str, meta_extra: dict[str, Any] | None = None, state_after_prefix: Any | None = None) -> CounterfactualFuture:
@@ -590,6 +681,19 @@ def generate_waymax_counterfactual_futures(history: SceneHistory, prefix: Candid
             ameta.update({"scenario_augmented": True, "artifact_pair_key": f"{history.scene_id}:{history.time_index}:{prefix.macro_id}", "rollout_variant": "augmented_hidden_log_playback"})
             futures.append(_make_future_from_state(len(futures), "targeted", targeted_total / max(n_targeted, 1), str_a, history, prefix, cfg, env_a, dyn_a, ameta, state_after_prefix=stp))
             targeted_added += 1
+    if bool(wx.get("enable_visible_perturbation_roots", True)):
+        for branch in ["visible_brake", "visible_accelerate"]:
+            if targeted_added >= n_targeted:
+                break
+            seed = stable_seed("waymax-visible", history.scene_id, history.time_index, prefix.macro_id, branch)
+            aug_state, ameta = _augment_visible_reference(state0, history, prefix, cfg, branch=branch, seed=seed)
+            if aug_state is None:
+                continue
+            stp, env_v, dyn_v = _rollout_prefix(aug_state, history, prefix, cfg, allow_new=allow_new)
+            str_v = _rollout_future_after_prefix(stp, env_v, post_steps, cfg, coast_accel=0.0)
+            ameta.update({"scenario_augmented": True, "rollout_variant": "augmented_visible_actor_log_playback"})
+            futures.append(_make_future_from_state(len(futures), "targeted", targeted_total / max(n_targeted, 1), str_v, history, prefix, cfg, env_v, dyn_v, ameta, state_after_prefix=stp))
+            targeted_added += 1
     # Fill remaining targeted slots with strictly Waymax-generated SDC
     # post-prefix control stress variants.  These do not change the latent
     # background-agent branch, so they deliberately share the same teacher base
@@ -664,15 +768,22 @@ def compute_waymax_future_option_margins(history: SceneHistory, prefix: Candidat
     all_diag: list[list[TeacherDiagnostics]] = []
     controllers = [rollout_recovery_controller(prefix, opt, horizon_steps, cfg) for opt in options]
     sdc = _sdc_index(state0)
-    margin_cache: dict[tuple[int, int], tuple[np.ndarray, list[TeacherDiagnostics]]] = {}
+    margin_cache: dict[tuple[int, int, int], tuple[np.ndarray, list[TeacherDiagnostics]]] = {}
+    wx = cfg.get("waymax", {}) if isinstance(cfg.get("waymax", {}), dict) else {}
+    hybrid_teacher = bool(wx.get("hybrid_teacher_margin", True))
+    structural_cfg = _cfg_without_artifact_override(cfg)
     for j, fut in enumerate(futures):
         base_state = getattr(fut, "_waymax_state_after_prefix", None)
         waymax_env = getattr(fut, "_waymax_env", None)
         if base_state is None or waymax_env is None:
             # Strict mode means no silent surrogate labels.
             raise ValueError("Future is missing Waymax state_after_prefix; cannot compute strict Waymax recovery teacher margin.")
-        cache_key = (id(base_state), id(waymax_env))
-        if bool((cfg.get("waymax", {}) or {}).get("cache_identical_teacher_rollouts", True)) and cache_key in margin_cache:
+        # With hybrid teacher margins, the label depends on the future branch
+        # metadata/trajectory as well as the post-prefix Waymax state.  Caching only
+        # by (state, env) incorrectly collapses replay/reactive/targeted roots into
+        # identical rows and erases the oracle/deployability gap.
+        cache_key = (id(base_state), id(waymax_env), int(j) if hybrid_teacher else -1)
+        if bool(wx.get("cache_identical_teacher_rollouts", True)) and cache_key in margin_cache:
             cached_vals, cached_diag = margin_cache[cache_key]
             M[j] = cached_vals
             all_diag.append([
@@ -696,6 +807,14 @@ def compute_waymax_future_option_margins(history: SceneHistory, prefix: Candidat
                 st = waymax_env.step(st, action)
                 metrics_over_time.append(_metric_summary(waymax_env, st, sdc))
             val, comps, active = _waymax_margin_from_rollout(metrics_over_time, cfg)
+            if hybrid_teacher:
+                structural_val, structural_diag = teacher_margin(history, prefix, fut, opt, rec_states, rec_controls, structural_cfg, cdiag)
+                # Waymax metrics remain a hard safety cap, while the structural
+                # recovery teacher supplies option/root sensitivity when the metric
+                # suite is all-zero on benign WOMD snippets.
+                val = min(float(val), float(structural_val))
+                comps = {**{f"waymax_{k}": float(v) for k, v in comps.items()}, **{f"structural_{k}": float(v) for k, v in structural_diag.component_margins.items()}}
+                active = {**{f"waymax_{k}": bool(v) for k, v in active.items()}, **{f"structural_{k}": bool(v) for k, v in structural_diag.active.items()}}
             if not opt.valid:
                 val = -1e9
             # Preserve the deliberately augmented hidden pair's incompatibility,
@@ -709,7 +828,7 @@ def compute_waymax_future_option_margins(history: SceneHistory, prefix: Candidat
                 elif branch == "accelerate":
                     val = max(val, 1.0) if opt.mode in {"stop", "brake_lane", "avoid_secondary"} else min(val, -1.0)
             M[j, l] = float(val)
-            row.append(TeacherDiagnostics(active=active, component_margins=comps, controller_diagnostics={**(cdiag or {}), "waymax_recovery_rollout": True, "waymax_metrics_last": metrics_over_time[-1] if metrics_over_time else {}}))
+            row.append(TeacherDiagnostics(active=active, component_margins=comps, controller_diagnostics={**(cdiag or {}), "waymax_recovery_rollout": True, "waymax_hybrid_teacher_margin": bool(hybrid_teacher), "waymax_metrics_last": metrics_over_time[-1] if metrics_over_time else {}}))
         margin_cache[cache_key] = (M[j].copy(), row)
         fut.metadata["waymax_teacher_rollout_reused"] = False
         all_diag.append(row)
