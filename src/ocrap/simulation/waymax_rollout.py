@@ -580,6 +580,25 @@ def _augment_visible_reference(state: Any, history: SceneHistory, prefix: Candid
     }
     return state.replace(log_trajectory=new_tr), meta
 
+def _valid_hidden_provenance(meta: dict[str, Any]) -> bool:
+    if not bool(meta.get("hidden_emergence", False)):
+        return False
+    return (
+        bool(meta.get("from_unknown_mask", False))
+        and not bool(meta.get("spawn_in_visible_free", False))
+        and not bool(meta.get("hidden_invalid_spawn", False))
+    )
+
+def _demote_invalid_hidden_metadata(meta: dict[str, Any]) -> dict[str, Any]:
+    """Keep natural-emergence diagnostics without exposing them as hidden roots."""
+    out: dict[str, Any] = {"hidden_emergence": False}
+    for k, v in meta.items():
+        if k == "hidden_emergence":
+            continue
+        out[f"natural_{k}"] = v
+    out["natural_hidden_candidate"] = True
+    out["natural_hidden_rejected_reason"] = "not_from_unknown_mask"
+    return out
 
 def _make_future_from_state(fid: int, source: str, prior: float, st: Any, history: SceneHistory, prefix: CandidatePrefix, cfg: dict, waymax_env: Any, dyn_name: str, meta_extra: dict[str, Any] | None = None, state_after_prefix: Any | None = None) -> CounterfactualFuture:
     order = [int(i) for i in history.metadata.get("agent_order", list(range(int(st.num_objects))))]
@@ -592,7 +611,10 @@ def _make_future_from_state(fid: int, source: str, prior: float, st: Any, histor
     base = _base_metadata(history, prefix, source, policy="log_playback", scenario_augmented=bool(meta_extra and meta_extra.get("scenario_augmented", False)), allow_new=bool((cfg.get("waymax", {}) or {}).get("allow_new_objects_after_warmup", True)), dyn_name=dyn_name, seed=seed, extra=meta_extra)
     nat = _find_natural_hidden_metadata(st, history, cfg)
     if nat.get("hidden_emergence") and not base.get("hidden_emergence"):
-        base.update(nat)
+        if _valid_hidden_provenance(nat):
+            base.update(nat)
+        else:
+            base.update(_demote_invalid_hidden_metadata(nat))
     base["waymax_metrics"] = _metric_summary(waymax_env, st, _sdc_index(st))
     base["recovery_steps"] = int(round(float(cfg.get("recovery_horizon_s", 4.0)) * float(cfg.get("sample_rate_hz", 10.0))))
     fut = CounterfactualFuture(fid, source, prior, arr, val, base)
@@ -665,10 +687,14 @@ def generate_waymax_counterfactual_futures(history: SceneHistory, prefix: Candid
         )
 
     wx = cfg.get("waymax", {}) if isinstance(cfg.get("waymax", {}), dict) else {}
+    quality = cfg.get("dataset_quality", {}) if isinstance(cfg.get("dataset_quality", {}), dict) else {}
+    require_artifact_pair = bool(quality.get("require_artifact_pairs", False))
     n_targeted = int(cfg.get("num_targeted_futures", 8))
     targeted_total = float(priors.get("targeted", 0.40))
     targeted_added = 0
-    if bool(wx.get("enable_augmented_hidden_roots", True)):
+    hidden_branches_added: set[str] = set()
+    mine_hidden = bool(wx.get("enable_augmented_hidden_roots", True)) or require_artifact_pair
+    if mine_hidden:
         for branch in ["yield", "accelerate"]:
             if targeted_added >= n_targeted:
                 break
@@ -680,7 +706,13 @@ def generate_waymax_counterfactual_futures(history: SceneHistory, prefix: Candid
             str_a = _rollout_future_after_prefix(stp, env_a, post_steps, cfg, coast_accel=0.0)
             ameta.update({"scenario_augmented": True, "artifact_pair_key": f"{history.scene_id}:{history.time_index}:{prefix.macro_id}", "rollout_variant": "augmented_hidden_log_playback"})
             futures.append(_make_future_from_state(len(futures), "targeted", targeted_total / max(n_targeted, 1), str_a, history, prefix, cfg, env_a, dyn_a, ameta, state_after_prefix=stp))
+            hidden_branches_added.add(branch)
             targeted_added += 1
+    if require_artifact_pair and not {"yield", "accelerate"}.issubset(hidden_branches_added):
+        for f in futures:
+            f.metadata["artifact_pair_missing"] = True
+            f.metadata["artifact_pair_required"] = True
+            f.metadata["artifact_pair_branches_present"] = sorted(hidden_branches_added)
     if bool(wx.get("enable_visible_perturbation_roots", True)):
         for branch in ["visible_brake", "visible_accelerate"]:
             if targeted_added >= n_targeted:

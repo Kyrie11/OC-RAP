@@ -69,6 +69,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "evaluation": {"batch_size": 64, "delta": 0.05, "methods": ["nominal", "risk_aware", "backup_filter", "contingency", "oracle_filter", "ocrap"]},
     "baselines": {"risk_lambda": 1.0},
     "metrics": {"sigma_u": 1.0},
+    "dataset_quality": {"require_artifact_pairs": False},
     "simulation_backend": "ocrap_surrogate",
     "progress": True,
     "waymax": {

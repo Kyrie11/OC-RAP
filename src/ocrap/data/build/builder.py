@@ -111,6 +111,23 @@ def _teacher_diag_to_jsonable(diags) -> dict:
         "controller_sample": diags[0][0].controller_diagnostics,
     }
 
+def _quality_requires_artifact_pair(cfg: dict) -> bool:
+    quality = cfg.get("dataset_quality", {}) if isinstance(cfg.get("dataset_quality", {}), dict) else {}
+    return bool(quality.get("require_artifact_pairs", False))
+
+
+def _has_complete_artifact_pair(sample: DatasetSample) -> bool:
+    branches: set[str] = set()
+    for fut in sample.futures:
+        meta = fut.metadata or {}
+        if not meta.get("artifact_pair_key") or not meta.get("hidden_emergence", False):
+            continue
+        if not meta.get("from_unknown_mask", False) or meta.get("spawn_in_visible_free", False):
+            continue
+        branch = str(meta.get("artifact_branch", ""))
+        if branch:
+            branches.add(branch)
+    return {"yield", "accelerate"}.issubset(branches)
 
 def _compute_within_root_dispersion(root_assignments: np.ndarray, obs_by_future: list, K: int, cfg: dict) -> np.ndarray:
     from ocrap.simulation.observation.compatibility import observation_distance
@@ -206,6 +223,10 @@ def build_samples_for_history(history, split_id: str, cfg: dict, progress_callba
                 "odg_pos": res.odg_pos,
             },
         )
+        if _quality_requires_artifact_pair(cfg) and not _has_complete_artifact_pair(sample):
+            if progress_callback is not None:
+                progress_callback(1)
+            continue
         samples.append(sample)
         if progress_callback is not None:
             progress_callback(1)
