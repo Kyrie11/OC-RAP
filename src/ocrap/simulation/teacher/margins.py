@@ -30,16 +30,28 @@ def active_mask(option: RecoveryOption, future: CounterfactualFuture) -> dict[st
     }
 
 
-def _artifact_margin_override(option: RecoveryOption, future: CounterfactualFuture) -> float | None:
+def _artifact_margin_values(cfg: dict) -> tuple[float, float]:
+    artifact = cfg.get("artifact", {}) if isinstance(cfg.get("artifact", {}), dict) else {}
+    good = float(artifact.get("compatible_margin", 1.2))
+    bad = float(artifact.get("incompatible_margin", -6.0))
+    # Keep the mined pair a true oracle artifact: compatible branches must be
+    # positive, incompatible branches must be strongly negative.  The negative
+    # magnitude needs to dominate the low prior mass of each hidden branch under
+    # OC-MERO's lower-tail averaging.
+    return max(good, 1e-3), min(bad, -1e-3)
+
+
+def _artifact_margin_override(option: RecoveryOption, future: CounterfactualFuture, cfg: dict) -> float | None:
     branch = future.metadata.get("artifact_branch")
+    good, bad = _artifact_margin_values(cfg)
     if branch == "yield":
         if option.mode in {"yield_rejoin", "pull_over", "lateral_escape"}:
-            return 1.2
-        return -1.3
+            return good
+        return bad
     if branch == "accelerate":
         if option.mode in {"stop", "brake_lane", "avoid_secondary"}:
-            return 1.1
-        return -1.4
+            return good
+        return bad
     return None
 
 
@@ -97,7 +109,7 @@ def component_margins(history: SceneHistory, prefix: CandidatePrefix, future: Co
 
 
 def teacher_margin(history: SceneHistory, prefix: CandidatePrefix, future: CounterfactualFuture, option: RecoveryOption, rec_states: np.ndarray, rec_controls: np.ndarray, cfg: dict, controller_diag: dict | None = None) -> tuple[float, TeacherDiagnostics]:
-    override = _artifact_margin_override(option, future) if bool(cfg.get("artifact", {}).get("use_margin_override", True)) else None
+    override = _artifact_margin_override(option, future, cfg) if bool(cfg.get("artifact", {}).get("use_margin_override", True)) else None
     active = active_mask(option, future)
     comps = component_margins(history, prefix, future, option, rec_states, rec_controls, cfg)
     inactive_val = float(cfg.get("margin_scales", {}).get("inactive", 10.0))

@@ -934,11 +934,14 @@ def compute_waymax_future_option_margins(history: SceneHistory, prefix: Candidat
             # a label tie-breaker over Waymax stress scenarios, not a substitute
             # for runtime rollout.
             if bool(cfg.get("artifact", {}).get("use_margin_override", True)) and fut.metadata.get("scenario_augmented"):
+                artifact_cfg = cfg.get("artifact", {}) if isinstance(cfg.get("artifact", {}), dict) else {}
+                good = max(float(artifact_cfg.get("compatible_margin", 1.2)), 1e-3)
+                bad = min(float(artifact_cfg.get("incompatible_margin", -6.0)), -1e-3)
                 branch = fut.metadata.get("artifact_branch")
                 if branch == "yield":
-                    val = max(val, 1.0) if opt.mode in {"yield_rejoin", "pull_over", "lateral_escape"} else min(val, -1.0)
+                    val = max(val, good) if opt.mode in {"yield_rejoin", "pull_over", "lateral_escape"} else min(val, bad)
                 elif branch == "accelerate":
-                    val = max(val, 1.0) if opt.mode in {"stop", "brake_lane", "avoid_secondary"} else min(val, -1.0)
+                    val = max(val, good) if opt.mode in {"stop", "brake_lane", "avoid_secondary"} else min(val, bad)
             M[j, l] = float(val)
             row.append(TeacherDiagnostics(active=active, component_margins=comps, controller_diagnostics={**(cdiag or {}), "waymax_recovery_rollout": True, "waymax_hybrid_teacher_margin": bool(hybrid_teacher), "waymax_teacher_backend": teacher_backend, "waymax_teacher_metrics_stride": int(metric_stride), "waymax_metrics_last": metrics_over_time[-1] if metrics_over_time else {}}))
         margin_cache[cache_key] = (M[j].copy(), row)

@@ -114,6 +114,12 @@ artifact:
   # Keep true for synthetic artifact fixtures. For primary WOMD labels, set to false
   # to avoid hand-coded artifact-branch margins and rely on teacher rollouts.
   use_margin_override: true
+  # Strong negative margin for the deliberately mined incompatible branch.  The
+  # hidden yield/accelerate roots each have small prior mass; if this is only
+  # mildly negative, lower-tail deployable recovery can stay positive and the
+  # generated stress set will contain ODG but no FRA/anti-oracle samples.
+  compatible_margin: 1.2
+  incompatible_margin: -6.0
 selection:
   gamma_rec: 0.0
   fixed_gamma_rec: 0.0
