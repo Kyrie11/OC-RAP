@@ -515,6 +515,7 @@ def _augment_hidden_reference(state: Any, history: SceneHistory, prefix: Candida
         "hidden_emergence": True,
         "hidden_intent": branch,
         "artifact_branch": branch,
+        "targeted_type": f"waymax_hidden_vehicle_{branch}",
         "artifact_mined": True,
         "hidden_actor_object_index": int(slot),
         "hidden_start_step": int(start - t0),
@@ -720,7 +721,11 @@ def generate_waymax_counterfactual_futures(history: SceneHistory, prefix: Candid
     targeted_total = float(priors.get("targeted", 0.40))
     targeted_added = 0
     hidden_branches_added: set[str] = set()
-    mine_hidden = bool(wx.get("enable_augmented_hidden_roots", True)) or require_artifact_pair
+    artifact_cfg = cfg.get("artifact", {}) if isinstance(cfg.get("artifact", {}), dict) else {}
+    mine_prob = float(artifact_cfg.get("mine_probability", 1.0 if artifact_cfg.get("force_mine", True) else 0.0))
+    mine_rng = np.random.default_rng(stable_seed("waymax-hidden-mine", history.scene_id, history.time_index, prefix.macro_id))
+    stochastic_mine = float(mine_rng.random()) < max(0.0, min(1.0, mine_prob))
+    mine_hidden = (bool(wx.get("enable_augmented_hidden_roots", True)) or require_artifact_pair) and (require_artifact_pair or stochastic_mine)
     if mine_hidden:
         for branch in ["yield", "accelerate"]:
             if targeted_added >= n_targeted:
@@ -935,6 +940,7 @@ def compute_waymax_future_option_margins(history: SceneHistory, prefix: Candidat
             # for runtime rollout.
             if bool(cfg.get("artifact", {}).get("use_margin_override", True)) and fut.metadata.get("scenario_augmented"):
                 artifact_cfg = cfg.get("artifact", {}) if isinstance(cfg.get("artifact", {}), dict) else {}
+                fut.metadata["margin_override_applied"] = True
                 good = max(float(artifact_cfg.get("compatible_margin", 1.2)), 1e-3)
                 bad = min(float(artifact_cfg.get("incompatible_margin", -6.0)), -1e-3)
                 branch = fut.metadata.get("artifact_branch")

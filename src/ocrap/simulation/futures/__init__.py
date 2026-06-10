@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ocrap.data.schema import CandidatePrefix, CounterfactualFuture, SceneHistory
+from ocrap.utils.seed import stable_seed
 
 from .priors import normalize_future_priors
 from .reactive import reactive_future, ReactivePolicy
@@ -25,7 +26,11 @@ def generate_counterfactual_futures(history: SceneHistory, prefix: CandidatePref
         futures.append(reactive_future(history, prefix, total_steps, len(futures), reactive_total / max(n_reactive, 1), cfg))
     n_targeted = int(cfg.get("num_targeted_futures", 8))
     targeted_added = 0
-    mined = mine_artifact_futures(history, prefix, total_steps, len(futures), targeted_total / max(n_targeted, 1), cfg) if cfg.get("artifact", {}).get("force_mine", True) else []
+    artifact_cfg = cfg.get("artifact", {}) if isinstance(cfg.get("artifact", {}), dict) else {}
+    mine_prob = float(artifact_cfg.get("mine_probability", 1.0 if artifact_cfg.get("force_mine", True) else 0.0))
+    mine_rng = __import__("numpy").random.default_rng(stable_seed("surrogate-mine", history.scene_id, history.time_index, prefix.macro_id))
+    do_mine = bool(artifact_cfg.get("force_mine", True)) and float(mine_rng.random()) < max(0.0, min(1.0, mine_prob))
+    mined = mine_artifact_futures(history, prefix, total_steps, len(futures), targeted_total / max(n_targeted, 1), cfg) if do_mine else []
     for f in mined:
         futures.append(f)
         targeted_added += 1

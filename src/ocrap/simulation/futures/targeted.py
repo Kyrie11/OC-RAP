@@ -160,14 +160,14 @@ def targeted_perturbation(history: SceneHistory, prefix: CandidatePrefix, total_
         slot = reserve_injected_agent_slot(states, valid, hidden_start, meta)
         insert_agent(states, valid, slot, hidden_start, x, y, max(0.0, float(ego_end[6]) - 2.0), heading, 1.0, 4.8, 2.0, accel=-0.3)
         meta.update(smeta)  # type: ignore[arg-type]
-        meta.update({"hidden_emergence": True, "hidden_intent": "yield", "artifact_branch": "yield"})
+        meta.update({"hidden_emergence": True, "hidden_intent": "yield", "artifact_branch": "yield", "targeted_type": "hidden_vehicle_yields"})
     elif kind == "hidden_vehicle_accelerates":
         x, y, smeta = spawn  # type: ignore[misc]
         heading = float(ego_end[4])
         slot = reserve_injected_agent_slot(states, valid, hidden_start, meta)
         insert_agent(states, valid, slot, hidden_start, x, y, max(2.0, float(ego_end[6]) + 1.0), heading, 1.0, 4.8, 2.0, accel=1.2)
         meta.update(smeta)  # type: ignore[arg-type]
-        meta.update({"hidden_emergence": True, "hidden_intent": "accelerate", "artifact_branch": "accelerate"})
+        meta.update({"hidden_emergence": True, "hidden_intent": "accelerate", "artifact_branch": "accelerate", "targeted_type": "hidden_vehicle_accelerates"})
     elif kind == "occluded_pedestrian_emerges":
         x, y, smeta = spawn if spawn is not None else (float(ego_end[0] + 9.0), float(ego_end[1] + 4.5), {"from_unknown_mask": False, "hidden_invalid_spawn": True})
         slot = reserve_injected_agent_slot(states, valid, hidden_start, meta)

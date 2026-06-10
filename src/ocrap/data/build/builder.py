@@ -116,6 +116,21 @@ def _quality_requires_artifact_pair(cfg: dict) -> bool:
     return bool(quality.get("require_artifact_pairs", False))
 
 
+def _artifact_pair_mode(cfg: dict) -> str:
+    quality = cfg.get("dataset_quality", {}) if isinstance(cfg.get("dataset_quality", {}), dict) else {}
+    raw = str(quality.get("artifact_pair_mode", "filter" if _quality_requires_artifact_pair(cfg) else "tag")).lower()
+    aliases = {"strict": "filter", "only": "filter", "keep_all": "tag", "mixed": "balanced"}
+    mode = aliases.get(raw, raw)
+    if mode not in {"filter", "tag", "balanced"}:
+        raise ValueError(f"dataset_quality.artifact_pair_mode={raw!r} must be filter, tag, or balanced")
+    return mode
+
+
+def _quality_int(cfg: dict, key: str, default: int) -> int:
+    quality = cfg.get("dataset_quality", {}) if isinstance(cfg.get("dataset_quality", {}), dict) else {}
+    return max(0, int(quality.get(key, default)))
+
+
 def _has_complete_artifact_pair(sample: DatasetSample) -> bool:
     branches: set[str] = set()
     for fut in sample.futures:
@@ -165,105 +180,149 @@ def _compute_within_root_dispersion(root_assignments: np.ndarray, obs_by_future:
     return out
 
 
+def _materialize_sample(history, split_id: str, prefix: CandidatePrefix, a_idx: int, cfg: dict, options, option_valid, K: int) -> DatasetSample:
+    futures = generate_counterfactual_futures(history, prefix, cfg)
+    future_probs = np.asarray([f.prior for f in futures], dtype=np.float32)
+    future_probs = future_probs / max(float(future_probs.sum()), 1e-8)
+    M_future, teacher_diags = compute_future_option_margins(history, prefix, futures, options, cfg)
+    root = cluster_roots(M_future, future_probs, futures, cfg)
+    M_star = aggregate_root_margins(M_future, root.assignments, future_probs, K, cfg)
+    root_future_signature = future_trajectory_signature(futures, root.assignments, future_probs, K, width=int(cfg.get("model", {}).get("d_future_signature", 32)))
+    obs_by_future = [render_observation(history, prefix, f, cfg) for f in futures]
+    within_disp = _compute_within_root_dispersion(root.assignments, obs_by_future, K, cfg)
+    observations = []
+    for k in range(K):
+        rep = int(root.representative_indices[k]) if root.root_valid[k] and root.representative_indices[k] >= 0 else 0
+        observations.append(obs_by_future[rep])
+    Y, C, Dobs = compatibility_labels(observations, cfg)
+    use_lcvar = not bool(cfg.get("ablation", {}).get("without_lower_tail", False))
+    use_obs_kernel = not bool(cfg.get("ablation", {}).get("without_observation_kernel", False))
+    res = oc_mero(
+        M_star,
+        root.root_probs,
+        C,
+        alpha=float(cfg.get("ocmero", {}).get("alpha", 0.2)),
+        beta=float(cfg.get("ocmero", {}).get("beta", 0.2)),
+        option_valid=option_valid,
+        root_valid=root.root_valid,
+        use_lcvar=use_lcvar,
+        use_obs_kernel=use_obs_kernel,
+        top_m=int(cfg.get("ocmero", {}).get("top_m", 8)),
+    )
+    gamma_orc = float(cfg.get("artifact", {}).get("gamma_orc", 0.0))
+    gamma_dep = float(cfg.get("artifact", {}).get("gamma_dep", 0.0))
+    return DatasetSample(
+        scene_id=history.scene_id,
+        original_scenario_id=history.original_scenario_id,
+        time_index=history.time_index,
+        candidate_index=a_idx,
+        split_id=split_id,
+        is_nominal=(a_idx == 0),
+        h_t=history,
+        prefix=prefix,
+        futures=futures,
+        future_probs=future_probs,
+        root_assignments=root.assignments,
+        root_probs=root.root_probs,
+        root_signature=root.root_signature,
+        root_future_signature=root_future_signature,
+        root_valid=root.root_valid,
+        root_representative_future_id=root.representative_indices,
+        future_to_root_weight=root.future_to_root_weight,
+        within_root_obs_dispersion=within_disp,
+        obs_distance=Dobs,
+        y_obs=Y,
+        c_star=C,
+        recovery_options=options,
+        m_star=M_star,
+        option_valid=option_valid,
+        r_orc_star=res.r_orc,
+        r_dep_star=res.r_dep,
+        oracle_gap_star=res.gap,
+        i_art_star=bool(res.r_orc >= gamma_orc and res.r_dep < gamma_dep),
+        regime_label={},
+        valid_masks={"root_valid": root.root_valid.astype(bool).tolist(), "option_valid": option_valid.astype(bool).tolist()},
+        teacher_diagnostics=_teacher_diag_to_jsonable(teacher_diags),
+        diagnostics={
+            "future_sources": [f.source for f in futures],
+            "root_clustering": root.metadata,
+            "unknown_ratio_in_corridor": unknown_ratio_in_corridor(history.occ_mask),
+            "time_sampling_reasons": history.metadata.get("time_sampling_reasons", []),
+            "ocmero_best_option": res.best_option.tolist(),
+            "odg_pos": res.odg_pos,
+            "complete_artifact_pair": False,  # filled below
+        },
+    )
+
+
 def build_samples_for_history(history, split_id: str, cfg: dict, progress_callback: Callable[[int], None] | None = None) -> list[DatasetSample]:
     prefixes = generate_candidate_prefixes(history, cfg)
     options = default_recovery_options(int(cfg.get("num_recovery_options", 24)), shoulder_available=bool(history.metadata.get("shoulder_available", True)), adjacent_available=bool(history.metadata.get("adjacent_available", True)))
     option_valid = option_valid_mask(options)
-    samples: list[DatasetSample] = []
     K = int(cfg.get("num_roots", 8))
-    accepted_for_scene_time = 0
     max_accepted = _max_accepted_prefixes_per_scene_time(cfg)
+    mode = _artifact_pair_mode(cfg)
+    min_art = _quality_int(cfg, "min_artifact_prefixes_per_scene_time", 1 if mode == "balanced" else 0)
+    max_art = _quality_int(cfg, "max_artifact_prefixes_per_scene_time", max_accepted if max_accepted else len(prefixes))
+    min_non = _quality_int(cfg, "min_nonartifact_prefixes_per_scene_time", 1 if mode == "balanced" else 0)
+    max_non = _quality_int(cfg, "max_nonartifact_prefixes_per_scene_time", max_accepted if max_accepted else len(prefixes))
+    macro_diversity_first = bool((cfg.get("dataset_quality", {}) or {}).get("macro_diversity_first", True))
+
+    selected: list[DatasetSample] = []
+    deferred: list[DatasetSample] = []
+    n_art = 0
+    n_non = 0
+    macros_seen: set[str] = set()
+
     for a_idx, prefix in enumerate(prefixes):
-        if max_accepted > 0 and accepted_for_scene_time >= max_accepted:
+        if mode == "filter" and not _artifact_pair_attempt_is_possible(history, prefix, cfg):
+            if progress_callback is not None:
+                progress_callback(1)
+            continue
+        if max_accepted > 0 and len(selected) >= max_accepted and not (mode == "balanced" and (n_art < min_art or n_non < min_non)):
             if progress_callback is not None:
                 progress_callback(len(prefixes) - a_idx)
             break
-        if not _artifact_pair_attempt_is_possible(history, prefix, cfg):
+
+        sample = _materialize_sample(history, split_id, prefix, a_idx, cfg, options, option_valid, K)
+        has_pair = _has_complete_artifact_pair(sample)
+        sample.diagnostics["complete_artifact_pair"] = bool(has_pair)
+        if mode == "filter" and not has_pair:
             if progress_callback is not None:
                 progress_callback(1)
             continue
-        futures = generate_counterfactual_futures(history, prefix, cfg)
-        future_probs = np.asarray([f.prior for f in futures], dtype=np.float32)
-        future_probs = future_probs / max(float(future_probs.sum()), 1e-8)
-        M_future, teacher_diags = compute_future_option_margins(history, prefix, futures, options, cfg)
-        root = cluster_roots(M_future, future_probs, futures, cfg)
-        M_star = aggregate_root_margins(M_future, root.assignments, future_probs, K, cfg)
-        root_future_signature = future_trajectory_signature(futures, root.assignments, future_probs, K, width=int(cfg.get("model", {}).get("d_future_signature", 32)))
-        obs_by_future = [render_observation(history, prefix, f, cfg) for f in futures]
-        within_disp = _compute_within_root_dispersion(root.assignments, obs_by_future, K, cfg)
-        observations = []
-        for k in range(K):
-            rep = int(root.representative_indices[k]) if root.root_valid[k] and root.representative_indices[k] >= 0 else 0
-            observations.append(obs_by_future[rep])
-        Y, C, Dobs = compatibility_labels(observations, cfg)
-        use_lcvar = not bool(cfg.get("ablation", {}).get("without_lower_tail", False))
-        use_obs_kernel = not bool(cfg.get("ablation", {}).get("without_observation_kernel", False))
-        res = oc_mero(
-            M_star,
-            root.root_probs,
-            C,
-            alpha=float(cfg.get("ocmero", {}).get("alpha", 0.2)),
-            beta=float(cfg.get("ocmero", {}).get("beta", 0.2)),
-            option_valid=option_valid,
-            root_valid=root.root_valid,
-            use_lcvar=use_lcvar,
-            use_obs_kernel=use_obs_kernel,
-            top_m=int(cfg.get("ocmero", {}).get("top_m", 8)),
-        )
-        gamma_orc = float(cfg.get("artifact", {}).get("gamma_orc", 0.0))
-        gamma_dep = float(cfg.get("artifact", {}).get("gamma_dep", 0.0))
-        sample = DatasetSample(
-            scene_id=history.scene_id,
-            original_scenario_id=history.original_scenario_id,
-            time_index=history.time_index,
-            candidate_index=a_idx,
-            split_id=split_id,
-            is_nominal=(a_idx == 0),
-            h_t=history,
-            prefix=prefix,
-            futures=futures,
-            future_probs=future_probs,
-            root_assignments=root.assignments,
-            root_probs=root.root_probs,
-            root_signature=root.root_signature,
-            root_future_signature=root_future_signature,
-            root_valid=root.root_valid,
-            root_representative_future_id=root.representative_indices,
-            future_to_root_weight=root.future_to_root_weight,
-            within_root_obs_dispersion=within_disp,
-            obs_distance=Dobs,
-            y_obs=Y,
-            c_star=C,
-            recovery_options=options,
-            m_star=M_star,
-            option_valid=option_valid,
-            r_orc_star=res.r_orc,
-            r_dep_star=res.r_dep,
-            oracle_gap_star=res.gap,
-            i_art_star=bool(res.r_orc >= gamma_orc and res.r_dep < gamma_dep),
-            regime_label={},
-            valid_masks={"root_valid": root.root_valid.astype(bool).tolist(), "option_valid": option_valid.astype(bool).tolist()},
-            teacher_diagnostics=_teacher_diag_to_jsonable(teacher_diags),
-            diagnostics={
-                "future_sources": [f.source for f in futures],
-                "root_clustering": root.metadata,
-                "unknown_ratio_in_corridor": unknown_ratio_in_corridor(history.occ_mask),
-                "time_sampling_reasons": history.metadata.get("time_sampling_reasons", []),
-                "ocmero_best_option": res.best_option.tolist(),
-                "odg_pos": res.odg_pos,
-            },
-        )
-        if _quality_requires_artifact_pair(cfg) and not _has_complete_artifact_pair(sample):
-            if progress_callback is not None:
-                progress_callback(1)
-            continue
-        samples.append(sample)
-        accepted_for_scene_time += 1
+
+        is_art = bool(sample.i_art_star or has_pair)
+        keep_now = True
+        if mode == "balanced":
+            if is_art and max_art > 0 and n_art >= max_art:
+                keep_now = False
+            if (not is_art) and max_non > 0 and n_non >= max_non:
+                keep_now = False
+            if macro_diversity_first and prefix.macro_name in macros_seen and max_accepted > 0 and len(selected) >= max_accepted:
+                keep_now = False
+        elif max_accepted > 0 and len(selected) >= max_accepted:
+            keep_now = False
+
+        if keep_now:
+            selected.append(sample)
+            macros_seen.add(prefix.macro_name)
+            n_art += int(is_art)
+            n_non += int(not is_art)
+        else:
+            deferred.append(sample)
         if progress_callback is not None:
             progress_callback(1)
-    assign_regimes(samples, history, cfg)
-    return samples
 
+    if max_accepted > 0 and len(selected) < max_accepted:
+        for sample in deferred:
+            if len(selected) >= max_accepted:
+                break
+            selected.append(sample)
+    if max_accepted > 0:
+        selected = selected[:max_accepted]
+    assign_regimes(selected, history, cfg)
+    return selected
 
 def scenario_iterator(cfg: dict) -> Iterator[RawScenario]:
     source = str(cfg.get("data_source", "synthetic_artifact"))

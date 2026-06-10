@@ -190,6 +190,11 @@ def diagnose_dataset(dataset: str | Path, output: str | Path | None = None, max_
     hidden_intent_counts: Counter[str] = Counter()
     artifact_pair_branches: dict[str, set[str]] = defaultdict(set)
     root_cluster_meta_counts: Counter[str] = Counter()
+    teacher_backend_counts: Counter[str] = Counter()
+    margin_override_future_count = 0
+    complete_artifact_pair_sample_count = 0
+    artifact_by_macro: Counter[str] = Counter()
+    nonartifact_by_macro: Counter[str] = Counter()
 
     missing_field_counter: Counter[str] = Counter()
     missing_field_samples = 0
@@ -422,6 +427,9 @@ def diagnose_dataset(dataset: str | Path, output: str | Path | None = None, max_
         negative_deployable_count += int(r_dep < 0.0)
         if is_art:
             odg_art_vals.append(gap)
+            artifact_by_macro[macro] += 1
+        else:
+            nonartifact_by_macro[macro] += 1
 
         if M is not None and root_probs is not None and C is not None and M.ndim == 2 and C.ndim == 2 and K is not None and C.shape == (K, K):
             try:
@@ -480,6 +488,10 @@ def diagnose_dataset(dataset: str | Path, output: str | Path | None = None, max_
                 total_metadata_futures += 1
                 if m.get("runtime_backend"):
                     runtime_backend_counts[str(m.get("runtime_backend"))] += 1
+                if m.get("waymax_teacher_backend"):
+                    teacher_backend_counts[str(m.get("waymax_teacher_backend"))] += 1
+                if bool(m.get("margin_override_applied", False)):
+                    margin_override_future_count += 1
                 if bool(m.get("waymax_runtime", False)):
                     waymax_runtime_futures += 1
                 if m.get("plausibility_passed") is False:
@@ -510,6 +522,8 @@ def diagnose_dataset(dataset: str | Path, output: str | Path | None = None, max_
                 time_reason_counts[str(reason)] += 1
             if "unknown_ratio_in_corridor" in diagnostics:
                 unknown_ratio_vals.append(float(diagnostics.get("unknown_ratio_in_corridor", 0.0)))
+            if bool(diagnostics.get("complete_artifact_pair", False)):
+                complete_artifact_pair_sample_count += 1
             rc = diagnostics.get("root_clustering", {})
             if isinstance(rc, dict) and rc.get("scale_source"):
                 root_cluster_meta_counts[str(rc.get("scale_source"))] += 1
@@ -579,6 +593,15 @@ def diagnose_dataset(dataset: str | Path, output: str | Path | None = None, max_
         warnings.append("calibration split is empty; calibrated gamma_rec cannot be estimated")
     if sample_split_counts.get("test", 0) == 0 and num >= 20:
         warnings.append("test split is empty; final held-out claims cannot be evaluated")
+    quality_cfg = cfg.get("dataset_quality", {}) if isinstance(cfg, dict) and isinstance(cfg.get("dataset_quality", {}), dict) else {}
+    warn_art_hi = float(quality_cfg.get("warn_if_artifact_fraction_above", 0.80))
+    if num > 0 and artifact_fraction > warn_art_hi:
+        warnings.append(f"artifact_fraction > {warn_art_hi:.2f}; dataset is stress-only and cannot support primary NUP/calibration claims")
+    warn_scene_min = int(quality_cfg.get("warn_if_scene_count_below", 50))
+    if num > 0 and len(split_by_scene) < warn_scene_min:
+        warnings.append(f"num_scenes < {warn_scene_min}; use only as a smoke/stress dataset, not paper-scale evaluation")
+    if len(macro_counts) < 5 and num > 0:
+        warnings.append("candidate macro diversity is low; lane_shift/merge/pull_over/stabilize are absent or underrepresented")
     for regime in ["normal", "low_headroom", "occluded", "near_contact", "post_contact", "oracle_artifact"]:
         if regime_counts.get(regime, 0) == 0 and num > 0:
             warnings.append(f"regime count == 0: {regime}")
@@ -593,8 +616,8 @@ def diagnose_dataset(dataset: str | Path, output: str | Path | None = None, max_
         "supports_drs_labels": bool(option_count_vals and root_count_vals and negative_deployable_fraction > 0.0),
         "supports_observation_consistency": bool(alias_total > 0 and 0.02 < mean_off_y < 0.98),
         "supports_alias_incompatibility_cases": bool(incompatible_total > 0),
-        "supports_calibration_protocol": bool(sample_split_counts.get("calibration", 0) > 0),
-        "supports_heldout_test_protocol": bool(sample_split_counts.get("test", 0) > 0),
+        "supports_calibration_protocol": bool(sample_split_counts.get("calibration", 0) > 0 and artifact_fraction < 0.95),
+        "supports_heldout_test_protocol": bool(sample_split_counts.get("test", 0) > 0 and len(split_by_scene) >= 5),
         "supports_womd_primary_claim": bool(synthetic_scene_count < num and num > 0),
         "supports_waymax_runtime_claim": bool(waymax_runtime_fraction >= 0.95 and synthetic_scene_count < num and num > 0),
     }
@@ -626,6 +649,8 @@ def diagnose_dataset(dataset: str | Path, output: str | Path | None = None, max_
             "candidate_count_per_scene_time": _stats(candidate_counts),
             "nominal_count_per_scene_time": _stats(nominal_counts),
             "macro_counts": _counter_dict(macro_counts),
+            "artifact_by_macro": _counter_dict(artifact_by_macro),
+            "nonartifact_by_macro": _counter_dict(nonartifact_by_macro),
             "feasible_fraction": float(np.mean(feasible_vals)) if feasible_vals else 0.0,
             "utility": _stats(candidate_utility_vals),
             "hard_violation": _stats(hard_violation_vals),
@@ -647,6 +672,9 @@ def diagnose_dataset(dataset: str | Path, output: str | Path | None = None, max_
             "hidden_start_violation_count": int(hidden_start_violation_count),
             "plausibility_failed_future_count": int(plausibility_failed_futures),
             "runtime_backend_counts": _counter_dict(runtime_backend_counts),
+            "teacher_backend_counts": _counter_dict(teacher_backend_counts),
+            "margin_override_future_count": int(margin_override_future_count),
+            "complete_artifact_pair_sample_count": int(complete_artifact_pair_sample_count),
             "waymax_runtime_future_count": int(waymax_runtime_futures),
             "waymax_runtime_fraction": float(waymax_runtime_fraction),
             "complete_artifact_pair_count": int(complete_artifact_pairs),
