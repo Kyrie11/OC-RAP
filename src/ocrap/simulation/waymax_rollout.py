@@ -8,7 +8,7 @@ import numpy as np
 
 from ocrap.data.schema import CandidatePrefix, CounterfactualFuture, RecoveryOption, SceneHistory
 from ocrap.simulation.teacher.controllers import rollout_recovery_controller
-from ocrap.simulation.teacher.margins import TeacherDiagnostics, teacher_margin
+from ocrap.simulation.teacher.margins import TeacherDiagnostics, teacher_margin, _artifact_margin_override
 from ocrap.utils.seed import stable_seed
 
 
@@ -537,6 +537,25 @@ def _cfg_without_artifact_override(cfg: dict) -> dict:
     return local
 
 
+def _artifact_override_adjusted_value(val: float, option: RecoveryOption, future: CounterfactualFuture, cfg: dict) -> tuple[float, bool]:
+    """Apply the mined-pair branch label consistently to rolled and screened options."""
+    wx = cfg.get("waymax", {}) if isinstance(cfg.get("waymax", {}), dict) else {}
+    if not bool(cfg.get("artifact", {}).get("use_margin_override", True)):
+        return float(val), False
+    if not bool(future.metadata.get("scenario_augmented", False)):
+        return float(val), False
+    if not bool(wx.get("apply_artifact_override_to_screened_options", True)):
+        return float(val), False
+    override = _artifact_margin_override(option, future, cfg)
+    if override is None:
+        return float(val), False
+    # Keep the old post-rollout semantics: compatible branches are forced
+    # positive, incompatible branches are forced strongly negative.
+    if override >= 0.0:
+        return max(float(val), float(override)), True
+    return min(float(val), float(override)), True
+
+
 def _augment_hidden_reference(state: Any, history: SceneHistory, prefix: CandidatePrefix, cfg: dict, *, branch: str, seed: int):
     jax, jnp, _, _, _, _ = _require_waymax()
     rng = np.random.default_rng(seed)
@@ -996,6 +1015,7 @@ def compute_waymax_future_option_margins(history: SceneHistory, prefix: Candidat
     screened_hybrid = bool(hybrid_teacher and (rollout_top_k > 0 or rollout_modes))
 
     for j, fut in enumerate(futures):
+        fut.metadata["waymax_teacher_backend"] = teacher_backend
         base_state = getattr(fut, "_waymax_state_after_prefix", None)
         waymax_env = getattr(fut, "_waymax_env", None)
         if base_state is None or waymax_env is None:
@@ -1020,15 +1040,23 @@ def compute_waymax_future_option_margins(history: SceneHistory, prefix: Candidat
             fut.metadata["waymax_teacher_rollout_reused"] = True
             continue
 
-        structural_vals = np.zeros(len(options), dtype=np.float32)
+        structural_vals = np.zeros(len(options), dtype=np.float32)  # no-override values used only for screening/top-k
+        structural_label_vals = np.zeros(len(options), dtype=np.float32)  # values used when an option is screened out
         structural_diags: list[TeacherDiagnostics | None] = [None] * len(options)
+        structural_label_diags: list[TeacherDiagnostics | None] = [None] * len(options)
         rollout_indices: set[int] | None = None
         if hybrid_teacher:
             for l, opt in enumerate(options):
                 rec_states, rec_controls, cdiag = controllers[l]
                 sv, sd = teacher_margin(history, prefix, fut, opt, rec_states, rec_controls, structural_cfg, cdiag)
+                lv, ld = teacher_margin(history, prefix, fut, opt, rec_states, rec_controls, cfg, cdiag)
+                lv, applied = _artifact_override_adjusted_value(float(lv), opt, fut, cfg)
+                if applied:
+                    fut.metadata["margin_override_applied"] = True
                 structural_vals[l] = float(sv)
+                structural_label_vals[l] = float(lv)
                 structural_diags[l] = sd
+                structural_label_diags[l] = ld
             if screened_hybrid:
                 rollout_indices = set()
                 for l, opt in enumerate(options):
@@ -1048,9 +1076,9 @@ def compute_waymax_future_option_margins(history: SceneHistory, prefix: Candidat
         for l, opt in enumerate(options):
             rec_states, rec_controls, cdiag = controllers[l]
             if screened_hybrid and rollout_indices is not None and l not in rollout_indices:
-                sd = structural_diags[l]
+                sd = structural_label_diags[l] or structural_diags[l]
                 assert sd is not None
-                val = float(structural_vals[l])
+                val = float(structural_label_vals[l] if hybrid_teacher else structural_vals[l])
                 if not opt.valid:
                     val = -1e9
                 M[j, l] = float(val)
@@ -1074,6 +1102,35 @@ def compute_waymax_future_option_margins(history: SceneHistory, prefix: Candidat
 
             st = base_state
             metrics_over_time: list[dict[str, float]] = []
+            if (
+                hybrid_teacher
+                and bool(wx.get("skip_waymax_rollout_for_augmented_override", False))
+                and bool(fut.metadata.get("scenario_augmented", False))
+                and bool(cfg.get("artifact", {}).get("use_margin_override", True))
+            ):
+                sd = structural_label_diags[l] or structural_diags[l]
+                assert sd is not None
+                val = float(structural_label_vals[l])
+                if not opt.valid:
+                    val = -1e9
+                M[j, l] = float(val)
+                row.append(
+                    TeacherDiagnostics(
+                        active={f"structural_{k}": bool(v) for k, v in sd.active.items()},
+                        component_margins={f"structural_{k}": float(v) for k, v in sd.component_margins.items()},
+                        controller_diagnostics={
+                            **(cdiag or {}),
+                            "waymax_recovery_rollout": False,
+                            "waymax_recovery_rollout_skipped_augmented_override": True,
+                            "waymax_hybrid_teacher_margin": True,
+                            "waymax_teacher_backend": teacher_backend,
+                            "waymax_teacher_metrics_stride": int(metric_stride),
+                            "waymax_teacher_rollout_top_k_options": int(rollout_top_k),
+                            "waymax_teacher_rollout_option_modes": sorted(rollout_modes),
+                        },
+                    )
+                )
+                continue
             # When teacher_metrics_stride <= 0, only the final recovery metric is
             # used.  Roll the whole control sequence with one JAX scan dispatch.
             # For stride > 0 we keep the original Python loop because intermediate
@@ -1108,20 +1165,11 @@ def compute_waymax_future_option_margins(history: SceneHistory, prefix: Candidat
                 active = {**{f"waymax_{k}": bool(v) for k, v in active.items()}, **{f"structural_{k}": bool(v) for k, v in structural_diag.active.items()}}
             if not opt.valid:
                 val = -1e9
-            # Preserve the deliberately augmented hidden pair's incompatibility,
-            # but only after the actual Waymax rollout has been executed.  This is
-            # a label tie-breaker over Waymax stress scenarios, not a substitute
-            # for runtime rollout.
-            if bool(cfg.get("artifact", {}).get("use_margin_override", True)) and fut.metadata.get("scenario_augmented"):
-                artifact_cfg = cfg.get("artifact", {}) if isinstance(cfg.get("artifact", {}), dict) else {}
+            # Preserve the deliberately augmented hidden pair's incompatibility
+            # consistently for both rolled and screened options.
+            val, applied = _artifact_override_adjusted_value(float(val), opt, fut, cfg)
+            if applied:
                 fut.metadata["margin_override_applied"] = True
-                good = max(float(artifact_cfg.get("compatible_margin", 1.2)), 1e-3)
-                bad = min(float(artifact_cfg.get("incompatible_margin", -6.0)), -1e-3)
-                branch = fut.metadata.get("artifact_branch")
-                if branch == "yield":
-                    val = max(val, good) if opt.mode in {"yield_rejoin", "pull_over", "lateral_escape"} else min(val, bad)
-                elif branch == "accelerate":
-                    val = max(val, good) if opt.mode in {"stop", "brake_lane", "avoid_secondary"} else min(val, bad)
             M[j, l] = float(val)
             row.append(TeacherDiagnostics(active=active, component_margins=comps, controller_diagnostics={**(cdiag or {}), "waymax_recovery_rollout": True, "waymax_hybrid_teacher_margin": bool(hybrid_teacher), "waymax_teacher_backend": teacher_backend, "waymax_teacher_metrics_stride": int(metric_stride), "waymax_teacher_rollout_top_k_options": int(rollout_top_k), "waymax_teacher_rollout_option_modes": sorted(rollout_modes), "waymax_metrics_last": metrics_over_time[-1] if metrics_over_time else {}}))
         margin_cache[cache_key] = (M[j].copy(), row)

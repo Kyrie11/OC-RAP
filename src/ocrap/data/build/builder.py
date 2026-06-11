@@ -167,6 +167,15 @@ def _cfg_with_artifact_mining(cfg: dict, *, enable: bool) -> dict:
     art = dict(local.get("artifact", {}) or {})
     art["force_mine"] = bool(enable)
     art["mine_probability"] = 1.0 if enable else 0.0
+    quality_in = cfg.get("dataset_quality", {}) if isinstance(cfg.get("dataset_quality", {}), dict) else {}
+    if enable and bool(quality_in.get("artifact_pass_use_margin_override", False)):
+        # Primary mixed builds should keep the no-mine half natural, but the
+        # deliberately mined hidden yield/accelerate pair needs the same
+        # branch-specific oracle-artifact label used by the sanity dataset.
+        # Otherwise benign Waymax metrics can make r_dep_star positive for every
+        # mined sample, producing complete_artifact_pair_count>0 but
+        # artifact_fraction==0.
+        art["use_margin_override"] = True
     local["artifact"] = art
     quality = dict(local.get("dataset_quality", {}) or {})
     # The forced materialization itself must not be skipped by the strict
@@ -176,7 +185,10 @@ def _cfg_with_artifact_mining(cfg: dict, *, enable: bool) -> dict:
     return local
 
 
-def _sample_is_artifact(sample: DatasetSample) -> bool:
+def _sample_is_artifact(sample: DatasetSample, cfg: dict | None = None) -> bool:
+    quality = (cfg or {}).get("dataset_quality", {}) if isinstance((cfg or {}).get("dataset_quality", {}), dict) else {}
+    if bool(quality.get("artifact_quota_uses_label", True)):
+        return bool(sample.i_art_star)
     return bool(sample.i_art_star or sample.diagnostics.get("complete_artifact_pair", False))
 
 
@@ -349,14 +361,15 @@ def _try_add_sample(
     deferred: list[DatasetSample],
     sample: DatasetSample,
     *,
+    cfg: dict,
     max_accepted: int,
     max_art: int,
     max_non: int,
     macros_seen: set[str],
     macro_diversity_first: bool,
 ) -> tuple[int, int]:
-    is_art = _sample_is_artifact(sample)
-    n_art = sum(int(_sample_is_artifact(s)) for s in selected)
+    is_art = _sample_is_artifact(sample, cfg)
+    n_art = sum(int(_sample_is_artifact(s, cfg)) for s in selected)
     n_non = len(selected) - n_art
     keep_now = True
     if is_art and max_art > 0 and n_art >= max_art:
@@ -370,7 +383,8 @@ def _try_add_sample(
         macros_seen.add(sample.prefix.macro_name)
     else:
         deferred.append(sample)
-    return sum(int(_sample_is_artifact(s)) for s in selected), len(selected) - sum(int(_sample_is_artifact(s)) for s in selected)
+    n_art = sum(int(_sample_is_artifact(s, cfg)) for s in selected)
+    return n_art, len(selected) - n_art
 
 
 def build_samples_for_history(history, split_id: str, cfg: dict, progress_callback: Callable[[int], None] | None = None) -> list[DatasetSample]:
@@ -409,22 +423,22 @@ def build_samples_for_history(history, split_id: str, cfg: dict, progress_callba
         # a primary WOMD build from degenerating into the current stress-only set.
         no_mine_cfg = _cfg_with_artifact_mining(cfg, enable=False)
         for prefix in prefixes:
-            if max_accepted > 0 and len(selected) >= max_accepted and len(selected) - sum(int(_sample_is_artifact(s)) for s in selected) >= min_non:
+            if max_accepted > 0 and len(selected) >= max_accepted and len(selected) - sum(int(_sample_is_artifact(s, no_mine_cfg)) for s in selected) >= min_non:
                 break
             sample = materialize(prefix, no_mine_cfg)
             materialized_prefixes.add(int(prefix.macro_id))
-            if sample is not None and not _sample_is_artifact(sample):
-                _try_add_sample(selected, deferred, sample, max_accepted=max_accepted, max_art=max_art, max_non=max_non, macros_seen=macros_seen, macro_diversity_first=macro_diversity_first)
+            if sample is not None and not _sample_is_artifact(sample, no_mine_cfg):
+                _try_add_sample(selected, deferred, sample, cfg=no_mine_cfg, max_accepted=max_accepted, max_art=max_art, max_non=max_non, macros_seen=macros_seen, macro_diversity_first=macro_diversity_first)
             if progress_callback is not None:
                 progress_callback(1)
-            if len(selected) - sum(int(_sample_is_artifact(s)) for s in selected) >= max(min_non, min(max_non, max_accepted or max_non)):
+            if len(selected) - sum(int(_sample_is_artifact(s, no_mine_cfg)) for s in selected) >= max(min_non, min(max_non, max_accepted or max_non)):
                 break
 
         # Pass 2: add a bounded stress side by forcing hidden-pair mining on the
         # remaining prefixes.  The quota keeps artifact_fraction below 1.0.
         mine_cfg = _cfg_with_artifact_mining(cfg, enable=True)
         for prefix in prefixes:
-            n_art = sum(int(_sample_is_artifact(s)) for s in selected)
+            n_art = sum(int(_sample_is_artifact(s, mine_cfg)) for s in selected)
             if max_accepted > 0 and len(selected) >= max_accepted and n_art >= min_art:
                 break
             if max_art > 0 and n_art >= max_art:
@@ -433,8 +447,8 @@ def build_samples_for_history(history, split_id: str, cfg: dict, progress_callba
                 continue
             sample = materialize(prefix, mine_cfg)
             materialized_prefixes.add(int(prefix.macro_id))
-            if sample is not None and _sample_is_artifact(sample):
-                _try_add_sample(selected, deferred, sample, max_accepted=max_accepted, max_art=max_art, max_non=max_non, macros_seen=macros_seen, macro_diversity_first=macro_diversity_first)
+            if sample is not None and _sample_is_artifact(sample, mine_cfg):
+                _try_add_sample(selected, deferred, sample, cfg=mine_cfg, max_accepted=max_accepted, max_art=max_art, max_non=max_non, macros_seen=macros_seen, macro_diversity_first=macro_diversity_first)
             if progress_callback is not None:
                 progress_callback(1)
 
@@ -453,7 +467,7 @@ def build_samples_for_history(history, split_id: str, cfg: dict, progress_callba
                     progress_callback(1)
                 continue
             if mode == "balanced":
-                _try_add_sample(selected, deferred, sample, max_accepted=max_accepted, max_art=max_art, max_non=max_non, macros_seen=macros_seen, macro_diversity_first=macro_diversity_first)
+                _try_add_sample(selected, deferred, sample, cfg=cfg, max_accepted=max_accepted, max_art=max_art, max_non=max_non, macros_seen=macros_seen, macro_diversity_first=macro_diversity_first)
             else:
                 selected.append(sample)
             if progress_callback is not None:

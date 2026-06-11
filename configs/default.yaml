@@ -164,6 +164,8 @@ dataset_quality:
   # balanced mode can now deliberately materialize no-mine and mine variants
   # on distinct prefixes so a primary set does not collapse into stress-only data.
   balanced_two_pass: true
+  artifact_pass_use_margin_override: true
+  artifact_quota_uses_label: true
   warn_if_artifact_fraction_above: 0.80
   warn_if_scene_count_below: 50
 training:
@@ -239,6 +241,8 @@ waymax:
   teacher_rollout_top_k_options: 0
   # Additional option modes to always include in screened hybrid rollouts.
   teacher_rollout_option_modes: []
+  apply_artifact_override_to_screened_options: true
+  skip_waymax_rollout_for_augmented_override: false
 ablation:
   without_observation_kernel: false
   without_lower_tail: false
