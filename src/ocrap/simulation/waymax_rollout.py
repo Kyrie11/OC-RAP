@@ -888,6 +888,21 @@ def compute_waymax_future_option_margins(history: SceneHistory, prefix: Candidat
     hybrid_teacher = teacher_backend == "hybrid"
     metric_stride = int(wx.get("teacher_metrics_stride", 1))
     structural_cfg = _cfg_without_artifact_override(cfg)
+
+    # Screened hybrid mode is an explicit speed/diagnostic knob.  The default
+    # top_k=0 and modes=[] preserves the exact old behavior: every option is
+    # rolled out in Waymax.  When enabled, the structural teacher scores all
+    # options first, and Waymax recovery rollout is executed only for selected
+    # options.  This is intended for smoke/debug builds; final experiments should
+    # either keep it disabled or report the screened setting.
+    rollout_top_k = max(0, int(wx.get("teacher_rollout_top_k_options", 0)))
+    raw_modes = wx.get("teacher_rollout_option_modes", [])
+    if isinstance(raw_modes, str):
+        rollout_modes = {m.strip() for m in raw_modes.split(",") if m.strip()}
+    else:
+        rollout_modes = {str(m) for m in raw_modes}
+    screened_hybrid = bool(hybrid_teacher and (rollout_top_k > 0 or rollout_modes))
+
     for j, fut in enumerate(futures):
         base_state = getattr(fut, "_waymax_state_after_prefix", None)
         waymax_env = getattr(fut, "_waymax_env", None)
@@ -912,9 +927,59 @@ def compute_waymax_future_option_margins(history: SceneHistory, prefix: Candidat
             ])
             fut.metadata["waymax_teacher_rollout_reused"] = True
             continue
+
+        structural_vals = np.zeros(len(options), dtype=np.float32)
+        structural_diags: list[TeacherDiagnostics | None] = [None] * len(options)
+        rollout_indices: set[int] | None = None
+        if hybrid_teacher:
+            for l, opt in enumerate(options):
+                rec_states, rec_controls, cdiag = controllers[l]
+                sv, sd = teacher_margin(history, prefix, fut, opt, rec_states, rec_controls, structural_cfg, cdiag)
+                structural_vals[l] = float(sv)
+                structural_diags[l] = sd
+            if screened_hybrid:
+                rollout_indices = set()
+                for l, opt in enumerate(options):
+                    if opt.mode in rollout_modes:
+                        rollout_indices.add(l)
+                if rollout_top_k > 0:
+                    valid_idx = [i for i, opt in enumerate(options) if opt.valid]
+                    order = sorted(valid_idx, key=lambda i: float(structural_vals[i]), reverse=True)
+                    rollout_indices.update(order[:rollout_top_k])
+                if not rollout_indices:
+                    # Avoid accidentally creating a pure structural row when the
+                    # user intended screened hybrid but the selectors are empty.
+                    rollout_indices = set(range(len(options)))
+
         row: list[TeacherDiagnostics] = []
+        waymax_rollouts_executed = 0
         for l, opt in enumerate(options):
             rec_states, rec_controls, cdiag = controllers[l]
+            if screened_hybrid and rollout_indices is not None and l not in rollout_indices:
+                sd = structural_diags[l]
+                assert sd is not None
+                val = float(structural_vals[l])
+                if not opt.valid:
+                    val = -1e9
+                M[j, l] = float(val)
+                row.append(
+                    TeacherDiagnostics(
+                        active={f"structural_{k}": bool(v) for k, v in sd.active.items()},
+                        component_margins={f"structural_{k}": float(v) for k, v in sd.component_margins.items()},
+                        controller_diagnostics={
+                            **(cdiag or {}),
+                            "waymax_recovery_rollout": False,
+                            "waymax_recovery_rollout_screened_out": True,
+                            "waymax_hybrid_teacher_margin": True,
+                            "waymax_teacher_backend": teacher_backend,
+                            "waymax_teacher_metrics_stride": int(metric_stride),
+                            "waymax_teacher_rollout_top_k_options": int(rollout_top_k),
+                            "waymax_teacher_rollout_option_modes": sorted(rollout_modes),
+                        },
+                    )
+                )
+                continue
+
             st = base_state
             metrics_over_time: list[dict[str, float]] = []
             for tt in range(horizon_steps):
@@ -923,9 +988,15 @@ def compute_waymax_future_option_margins(history: SceneHistory, prefix: Candidat
                 st = waymax_env.step(st, action)
                 if _should_record_teacher_metric(tt, horizon_steps, metric_stride):
                     metrics_over_time.append(_metric_summary(waymax_env, st, sdc))
+            waymax_rollouts_executed += 1
             val, comps, active = _waymax_margin_from_rollout(metrics_over_time, cfg)
             if hybrid_teacher:
-                structural_val, structural_diag = teacher_margin(history, prefix, fut, opt, rec_states, rec_controls, structural_cfg, cdiag)
+                if structural_diags[l] is not None:
+                    structural_val = float(structural_vals[l])
+                    structural_diag = structural_diags[l]
+                    assert structural_diag is not None
+                else:
+                    structural_val, structural_diag = teacher_margin(history, prefix, fut, opt, rec_states, rec_controls, structural_cfg, cdiag)
                 # Waymax metrics remain a hard safety cap, while the structural
                 # recovery teacher supplies option/root sensitivity when the metric
                 # suite is all-zero on benign WOMD snippets.
@@ -949,8 +1020,11 @@ def compute_waymax_future_option_margins(history: SceneHistory, prefix: Candidat
                 elif branch == "accelerate":
                     val = max(val, good) if opt.mode in {"stop", "brake_lane", "avoid_secondary"} else min(val, bad)
             M[j, l] = float(val)
-            row.append(TeacherDiagnostics(active=active, component_margins=comps, controller_diagnostics={**(cdiag or {}), "waymax_recovery_rollout": True, "waymax_hybrid_teacher_margin": bool(hybrid_teacher), "waymax_teacher_backend": teacher_backend, "waymax_teacher_metrics_stride": int(metric_stride), "waymax_metrics_last": metrics_over_time[-1] if metrics_over_time else {}}))
+            row.append(TeacherDiagnostics(active=active, component_margins=comps, controller_diagnostics={**(cdiag or {}), "waymax_recovery_rollout": True, "waymax_hybrid_teacher_margin": bool(hybrid_teacher), "waymax_teacher_backend": teacher_backend, "waymax_teacher_metrics_stride": int(metric_stride), "waymax_teacher_rollout_top_k_options": int(rollout_top_k), "waymax_teacher_rollout_option_modes": sorted(rollout_modes), "waymax_metrics_last": metrics_over_time[-1] if metrics_over_time else {}}))
         margin_cache[cache_key] = (M[j].copy(), row)
         fut.metadata["waymax_teacher_rollout_reused"] = False
+        fut.metadata["waymax_teacher_rollouts_executed"] = int(waymax_rollouts_executed)
+        fut.metadata["waymax_teacher_rollouts_possible"] = int(len(options))
+        fut.metadata["waymax_teacher_screened_hybrid"] = bool(screened_hybrid)
         all_diag.append(row)
     return M, all_diag

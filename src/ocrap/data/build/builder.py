@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import time
 from pathlib import Path
 from typing import Callable, Iterator
 
@@ -19,6 +20,24 @@ from ocrap.simulation.teacher import compute_future_option_margins, default_reco
 from .history import construct_history
 from .regimes import assign_regimes
 from .synthetic import iter_synthetic_scenarios
+
+
+def _profiling_cfg(cfg: dict) -> dict:
+    prof = cfg.get("profiling", {}) if isinstance(cfg.get("profiling", {}), dict) else {}
+    return prof
+
+
+def _profiling_enabled(cfg: dict) -> bool:
+    return bool(_profiling_cfg(cfg).get("enabled", False))
+
+
+def _profile_log(cfg: dict, msg: str) -> None:
+    if _profiling_enabled(cfg):
+        print(f"[ocrap-profile] {msg}", flush=True)
+
+
+def _now() -> float:
+    return time.perf_counter()
 
 
 def _score_planning_times(raw: RawScenario, cfg: dict) -> tuple[list[int], dict[int, list[str]]]:
@@ -211,13 +230,27 @@ def _compute_within_root_dispersion(root_assignments: np.ndarray, obs_by_future:
 
 
 def _materialize_sample(history, split_id: str, prefix: CandidatePrefix, a_idx: int, cfg: dict, options, option_valid, K: int) -> DatasetSample:
+    prof = _profiling_cfg(cfg)
+    t_all = _now()
+    timings: dict[str, float] = {}
+
+    t = _now()
     futures = generate_counterfactual_futures(history, prefix, cfg)
+    timings["future_generation"] = _now() - t
+
+    t = _now()
     future_probs = np.asarray([f.prior for f in futures], dtype=np.float32)
     future_probs = future_probs / max(float(future_probs.sum()), 1e-8)
     M_future, teacher_diags = compute_future_option_margins(history, prefix, futures, options, cfg)
+    timings["teacher_margins"] = _now() - t
+
+    t = _now()
     root = cluster_roots(M_future, future_probs, futures, cfg)
     M_star = aggregate_root_margins(M_future, root.assignments, future_probs, K, cfg)
     root_future_signature = future_trajectory_signature(futures, root.assignments, future_probs, K, width=int(cfg.get("model", {}).get("d_future_signature", 32)))
+    timings["root_clustering"] = _now() - t
+
+    t = _now()
     obs_by_future = [render_observation(history, prefix, f, cfg) for f in futures]
     within_disp = _compute_within_root_dispersion(root.assignments, obs_by_future, K, cfg)
     observations = []
@@ -225,6 +258,9 @@ def _materialize_sample(history, split_id: str, prefix: CandidatePrefix, a_idx: 
         rep = int(root.representative_indices[k]) if root.root_valid[k] and root.representative_indices[k] >= 0 else 0
         observations.append(obs_by_future[rep])
     Y, C, Dobs = compatibility_labels(observations, cfg)
+    timings["observation"] = _now() - t
+
+    t = _now()
     use_lcvar = not bool(cfg.get("ablation", {}).get("without_lower_tail", False))
     use_obs_kernel = not bool(cfg.get("ablation", {}).get("without_observation_kernel", False))
     res = oc_mero(
@@ -239,9 +275,12 @@ def _materialize_sample(history, split_id: str, prefix: CandidatePrefix, a_idx: 
         use_obs_kernel=use_obs_kernel,
         top_m=int(cfg.get("ocmero", {}).get("top_m", 8)),
     )
+    timings["ocmero"] = _now() - t
+    timings["total"] = _now() - t_all
+
     gamma_orc = float(cfg.get("artifact", {}).get("gamma_orc", 0.0))
     gamma_dep = float(cfg.get("artifact", {}).get("gamma_dep", 0.0))
-    return DatasetSample(
+    sample = DatasetSample(
         scene_id=history.scene_id,
         original_scenario_id=history.original_scenario_id,
         time_index=history.time_index,
@@ -281,9 +320,29 @@ def _materialize_sample(history, split_id: str, prefix: CandidatePrefix, a_idx: 
             "ocmero_best_option": res.best_option.tolist(),
             "odg_pos": res.odg_pos,
             "complete_artifact_pair": False,  # filled below
+            "build_timing_s": {k: float(v) for k, v in timings.items()},
         },
     )
-
+    if bool(prof.get("enabled", False)) and (bool(prof.get("log_every_sample", False)) or timings["total"] >= float(prof.get("slow_sample_s", 30.0))):
+        _profile_log(
+            cfg,
+            "sample scene=%s t=%s prefix=%s/%s futures=%d opts=%d total=%.2fs future=%.2fs teacher=%.2fs obs=%.2fs root=%.2fs ocmero=%.2fs"
+            % (
+                history.scene_id,
+                history.time_index,
+                a_idx,
+                prefix.macro_name,
+                len(futures),
+                len(options),
+                timings["total"],
+                timings["future_generation"],
+                timings["teacher_margins"],
+                timings["observation"],
+                timings["root_clustering"],
+                timings["ocmero"],
+            ),
+        )
+    return sample
 
 def _try_add_sample(
     selected: list[DatasetSample],
@@ -461,19 +520,26 @@ def build_dataset(output_dir: str | Path, cfg: dict) -> dict:
             prefix_bar.update(int(n))
     try:
         for raw in raw_iter:
+            raw_scenario_t0 = _now()
             raw_scenarios_seen += 1
             raw_scene_ids.add(str(raw.scenario_id))
             split_id = scenario_split(raw.scenario_id, cfg.get("split_ratios"))
             times, reasons_by_time = select_planning_times_with_reasons(raw, cfg)
+            _profile_log(cfg, f"scenario {raw_scenarios_seen} id={raw.scenario_id} split={split_id} selected_times={len(times)}")
             if not times:
                 skipped_no_planning_times += 1
                 continue
             for t in times:
+                scene_time_t0 = _now()
                 scene_time_groups += 1
                 history = construct_history(raw, t, cfg)
+                _profile_log(cfg, f"scene_time start scene={history.scene_id} t={int(t)} group={scene_time_groups}")
                 # Retain only the reasons that actually selected this planning instant.
                 history.metadata["time_sampling_reasons"] = reasons_by_time.get(int(t), ["uniform"])
                 samples = build_samples_for_history(history, split_id, cfg, progress_callback=_progress)
+                scene_time_dt = _now() - scene_time_t0
+                if _profiling_enabled(cfg) or scene_time_dt >= float(_profiling_cfg(cfg).get("slow_scene_time_s", 120.0)):
+                    _profile_log(cfg, f"scene_time done scene={history.scene_id} t={int(t)} samples={len(samples)} elapsed={scene_time_dt:.2f}s")
                 for sample in samples:
                     fname = f"{sample.scene_id}_t{sample.time_index:04d}_a{sample.candidate_index:02d}.npz".replace("/", "_")
                     path = sample_dir / fname
@@ -494,6 +560,8 @@ def build_dataset(output_dir: str | Path, cfg: dict) -> dict:
                     })
                     split_counts[sample.split_id] = split_counts.get(sample.split_id, 0) + 1
                     total += 1
+                    if _profiling_enabled(cfg) and bool(_profiling_cfg(cfg).get("log_writes", True)):
+                        _profile_log(cfg, f"wrote sample #{total} path={path}")
     finally:
         if prefix_bar is not None:
             prefix_bar.close()

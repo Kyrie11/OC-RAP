@@ -204,6 +204,15 @@ progress: true
 scenario_start_index: 0
 scenario_stride: 1
 scenario_worker_index: 0
+profiling:
+  # Print per-scenario / per-scene-time / per-prefix build timings. Useful when
+  # no npz appears for a long time because samples are only written after a
+  # full scene-time group has finished materializing.
+  enabled: false
+  log_every_sample: false
+  slow_sample_s: 30.0
+  slow_scene_time_s: 120.0
+
 waymax:
   # Make scene ids robust even when the dataloader payload omits or repeats
   # scenario/id. This is required for scene-level train/calibration/test splits.
@@ -215,6 +224,14 @@ waymax:
   # 1 records metrics at every recovery step, preserving previous hybrid/strict
   # semantics. Use 0 for final-step-only metric checks when debugging speed.
   teacher_metrics_stride: 1
+  # Optional screened hybrid teacher: 0 keeps the exact current behavior and
+  # rolls every recovery option in Waymax.  A positive value first computes the
+  # structural teacher for all options, then runs expensive Waymax recovery
+  # rollouts only for the top-k options per future.  Use for smoke/debug builds;
+  # final strict benchmark should normally use 0 unless reported as screened.
+  teacher_rollout_top_k_options: 0
+  # Additional option modes to always include in screened hybrid rollouts.
+  teacher_rollout_option_modes: []
 ablation:
   without_observation_kernel: false
   without_lower_tail: false

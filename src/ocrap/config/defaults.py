@@ -93,6 +93,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "simulation_backend": "ocrap_surrogate",
     "progress": True,
+    "profiling": {"enabled": False, "log_every_sample": False, "slow_sample_s": 30.0, "slow_scene_time_s": 120.0},
     "scenario_start_index": 0,
     "scenario_stride": 1,
     "scenario_worker_index": 0,
@@ -116,6 +117,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "cache_identical_teacher_rollouts": True,
         "teacher_backend": "auto",
         "teacher_metrics_stride": 1,
+        "teacher_rollout_top_k_options": 0,
+        "teacher_rollout_option_modes": [],
     },
     "ablation": {"without_observation_kernel": False, "without_lower_tail": False, "without_calibration": False, "without_anti_oracle": False, "full_future_roots": False, "no_occlusion_bev": False},
 }
