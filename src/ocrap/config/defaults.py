@@ -88,6 +88,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "max_nonartifact_prefixes_per_scene_time": 6,
         "macro_diversity_first": True,
         "balanced_two_pass": True,
+        "balanced_rotate_prefix_order": True,
+        "balanced_keep_nominal_nonartifact": True,
+        "min_uniform_times_per_scenario": 0,
         # For primary mixed builds, non-mined pass stays natural/nominal while
         # the mined pass may use the branch-specific oracle-artifact label.
         # Without this, mined hidden pairs often remain r_dep >= 0 under benign
@@ -125,6 +128,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "cache_identical_teacher_rollouts": True,
         "cache_env_objects": False,
         "use_jit_scan_rollouts": False,
+        "compute_future_metrics": True,
+        "detect_natural_hidden_emergence": True,
         "teacher_backend": "auto",
         "teacher_metrics_stride": 1,
         "teacher_rollout_top_k_options": 0,

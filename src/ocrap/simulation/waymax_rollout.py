@@ -748,13 +748,18 @@ def _make_future_from_state(fid: int, source: str, prior: float, st: Any, histor
     arr, val = _traj_to_local_agent_arrays(st, t, total, order, ego_xy, ego_yaw)
     seed = stable_seed("waymax-future", history.scene_id, history.time_index, prefix.macro_id, fid)
     base = _base_metadata(history, prefix, source, policy="log_playback", scenario_augmented=bool(meta_extra and meta_extra.get("scenario_augmented", False)), allow_new=bool((cfg.get("waymax", {}) or {}).get("allow_new_objects_after_warmup", True)), dyn_name=dyn_name, seed=seed, extra=meta_extra)
-    nat = _find_natural_hidden_metadata(st, history, cfg)
-    if nat.get("hidden_emergence") and not base.get("hidden_emergence"):
-        if _valid_hidden_provenance(nat):
-            base.update(nat)
-        else:
-            base.update(_demote_invalid_hidden_metadata(nat))
-    base["waymax_metrics"] = _metric_summary(waymax_env, st, _sdc_index(st))
+    wx_cfg = cfg.get("waymax", {}) if isinstance(cfg.get("waymax", {}), dict) else {}
+    if bool(wx_cfg.get("detect_natural_hidden_emergence", True)):
+        nat = _find_natural_hidden_metadata(st, history, cfg)
+        if nat.get("hidden_emergence") and not base.get("hidden_emergence"):
+            if _valid_hidden_provenance(nat):
+                base.update(nat)
+            else:
+                base.update(_demote_invalid_hidden_metadata(nat))
+    if bool(wx_cfg.get("compute_future_metrics", True)):
+        base["waymax_metrics"] = _metric_summary(waymax_env, st, _sdc_index(st))
+    else:
+        base["waymax_metrics"] = {}
     base["recovery_steps"] = int(round(float(cfg.get("recovery_horizon_s", 4.0)) * float(cfg.get("sample_rate_hz", 10.0))))
     fut = CounterfactualFuture(fid, source, prior, arr, val, base)
     setattr(fut, "_waymax_state_after_prefix", state_after_prefix)

@@ -16,6 +16,7 @@ from ocrap.roots import aggregate_root_margins, cluster_roots, future_trajectory
 from ocrap.simulation.futures import generate_counterfactual_futures
 from ocrap.simulation.observation import compatibility_labels, render_observation, unknown_ratio_in_corridor
 from ocrap.simulation.teacher import compute_future_option_margins, default_recovery_options, option_valid_mask
+from ocrap.utils.seed import stable_seed
 
 from .history import construct_history
 from .regimes import assign_regimes
@@ -93,21 +94,31 @@ def _score_planning_times(raw: RawScenario, cfg: dict) -> tuple[list[int], dict[
         reasons_by_time.setdefault(int(t), set()).update(reasons)
 
     max_times = max(0, int(cfg.get("max_times_per_scenario", 8)))
+    quality = cfg.get("dataset_quality", {}) if isinstance(cfg.get("dataset_quality", {}), dict) else {}
+    min_uniform = max(0, int(cfg.get("min_uniform_times_per_scenario", quality.get("min_uniform_times_per_scenario", 0))))
+    min_uniform = min(min_uniform, max_times)
     ordered: list[int] = []
     seen: set[int] = set()
-    # Priority order matters when max_times_per_scenario is small: keep the
-    # interaction-biased frame instead of accidentally discarding it by sorting
-    # the union and taking the earliest timestamp.
-    for seq in (biased_times, uniform_times, [int(t) for _, t, _ in scored]):
+
+    def add_from(seq, limit: int | None = None) -> None:
+        added = 0
         for t in seq:
-            if t in seen:
+            if len(ordered) >= max_times:
+                break
+            if limit is not None and added >= limit:
+                break
+            if int(t) in seen:
                 continue
             ordered.append(int(t))
             seen.add(int(t))
-            if len(ordered) >= max_times:
-                break
-        if len(ordered) >= max_times:
-            break
+            added += 1
+
+    # Keep interaction-biased frames, but reserve a configurable number of
+    # uniform frames so primary mixed datasets contain normal/NUP examples.
+    add_from(biased_times, max(0, max_times - min_uniform) if min_uniform else None)
+    add_from(uniform_times, min_uniform)
+    add_from(uniform_times, None)
+    add_from([int(t) for _, t, _ in scored], None)
     times = ordered
     return times, {t: sorted(reasons_by_time.get(t, {"uniform"})) for t in times}
 
@@ -209,6 +220,29 @@ def _has_complete_artifact_pair(sample: DatasetSample) -> bool:
 def _max_accepted_prefixes_per_scene_time(cfg: dict) -> int:
     quality = cfg.get("dataset_quality", {}) if isinstance(cfg.get("dataset_quality", {}), dict) else {}
     return max(0, int(quality.get("max_accepted_prefixes_per_scene_time", 0)))
+
+
+def _balanced_prefix_order(history, prefixes: list[CandidatePrefix], cfg: dict, *, salt: str, nominal_first: bool) -> list[CandidatePrefix]:
+    """Return a deterministic per-scene-time prefix order for balanced builds.
+
+    Without this, a small ``max_accepted_prefixes_per_scene_time`` always
+    selects the first macros in ``generate_candidate_prefixes``.  That is why
+    4-sample smoke sets collapse to nominal/keep/brake/yield and all artifacts
+    can land on yield.  Rotating the non-nominal part preserves deterministic
+    reproducibility while spreading macro coverage across scene-times.
+    """
+    quality = cfg.get("dataset_quality", {}) if isinstance(cfg.get("dataset_quality", {}), dict) else {}
+    if not bool(quality.get("balanced_rotate_prefix_order", True)):
+        return list(prefixes)
+    nominal = [p for p in prefixes if p.macro_name == "nominal"]
+    rest = [p for p in prefixes if p.macro_name != "nominal"]
+    if not rest:
+        return list(prefixes)
+    start = stable_seed("balanced-prefix-order", history.scene_id, history.time_index, salt) % len(rest)
+    rest = rest[start:] + rest[:start]
+    if nominal_first and nominal:
+        return nominal[:1] + rest + nominal[1:]
+    return rest + nominal
 
 
 def _artifact_pair_attempt_is_possible(history, prefix: CandidatePrefix, cfg: dict) -> bool:
@@ -422,7 +456,8 @@ def build_samples_for_history(history, split_id: str, cfg: dict, progress_callba
         # off hidden-pair mining for this materialization.  This is what prevents
         # a primary WOMD build from degenerating into the current stress-only set.
         no_mine_cfg = _cfg_with_artifact_mining(cfg, enable=False)
-        for prefix in prefixes:
+        no_mine_prefixes = _balanced_prefix_order(history, prefixes, cfg, salt="nonartifact", nominal_first=bool((cfg.get("dataset_quality", {}) or {}).get("balanced_keep_nominal_nonartifact", True)))
+        for prefix in no_mine_prefixes:
             if max_accepted > 0 and len(selected) >= max_accepted and len(selected) - sum(int(_sample_is_artifact(s, no_mine_cfg)) for s in selected) >= min_non:
                 break
             sample = materialize(prefix, no_mine_cfg)
@@ -437,7 +472,8 @@ def build_samples_for_history(history, split_id: str, cfg: dict, progress_callba
         # Pass 2: add a bounded stress side by forcing hidden-pair mining on the
         # remaining prefixes.  The quota keeps artifact_fraction below 1.0.
         mine_cfg = _cfg_with_artifact_mining(cfg, enable=True)
-        for prefix in prefixes:
+        mine_prefixes = _balanced_prefix_order(history, prefixes, cfg, salt="artifact", nominal_first=False)
+        for prefix in mine_prefixes:
             n_art = sum(int(_sample_is_artifact(s, mine_cfg)) for s in selected)
             if max_accepted > 0 and len(selected) >= max_accepted and n_art >= min_art:
                 break

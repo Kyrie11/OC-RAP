@@ -164,6 +164,13 @@ dataset_quality:
   # balanced mode can now deliberately materialize no-mine and mine variants
   # on distinct prefixes so a primary set does not collapse into stress-only data.
   balanced_two_pass: true
+  # Rotate prefix order per scene-time in balanced builds. This prevents small
+  # smoke sets from always selecting only nominal/keep/brake/yield.
+  balanced_rotate_prefix_order: true
+  balanced_keep_nominal_nonartifact: true
+  # Reserve uniform planning frames when max_biased_times_per_scenario would
+  # otherwise fill every slot; set to 1-2 for primary WOMD benchmark builds.
+  min_uniform_times_per_scenario: 0
   artifact_pass_use_margin_override: true
   artifact_quota_uses_label: true
   warn_if_artifact_fraction_above: 0.80
@@ -226,6 +233,10 @@ waymax:
   # recovery-teacher rollouts into one jax.lax.scan dispatch. Default false keeps
   # exact legacy dispatch behavior; enable for profiling/smoke builds.
   use_jit_scan_rollouts: false
+  # Metadata diagnostics only; disabling them speeds smoke/profiling builds
+  # without changing OC-MERO labels.
+  compute_future_metrics: true
+  detect_natural_hidden_emergence: true
   # auto = structural teacher for artifact override sanity/stress builds, hybrid
   # otherwise. Use waymax for a strict runtime-only teacher, or structural for
   # fast label generation from the recovery-affordance teacher.
