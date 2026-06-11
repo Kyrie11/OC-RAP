@@ -12,6 +12,11 @@ from ocrap.simulation.teacher.margins import TeacherDiagnostics, teacher_margin
 from ocrap.utils.seed import stable_seed
 
 
+_JIT_CONTROL_ROLLOUT_CACHE: dict[tuple[int, int, int, int, float], Any] = {}
+_WAYMAX_ENV_CACHE: dict[tuple, tuple[Any, str]] = {}
+_JIT_CONTROL_ROLLOUT_WARNED = False
+
+
 def _require_waymax():
     try:
         import jax  # type: ignore
@@ -127,6 +132,21 @@ def _make_env(state: Any, cfg: dict, *, allow_new: bool = True, dynamics_name: s
     _, _, _, _, dynamics, env = _require_waymax()
     wx = cfg.get("waymax", {}) if isinstance(cfg.get("waymax", {}), dict) else {}
     name = str(dynamics_name or wx.get("prefix_dynamics", "invertible_bicycle"))
+    num_objects = int(getattr(state, "num_objects", 0))
+    init_steps = int(cfg.get("_waymax_init_steps_override", 1))
+    metrics_names = tuple(wx.get("metrics_to_run", ["log_divergence", "overlap", "offroad", "sdc_wrongway", "sdc_off_route", "sdc_progression", "kinematic_infeasibility"]))
+    cache_key = (
+        name,
+        num_objects,
+        init_steps,
+        bool(allow_new),
+        metrics_names,
+        float(cfg.get("sample_rate_hz", 10.0)),
+        float(cfg.get("control_limits", {}).get("a_max", 3.0)),
+        float((cfg.get("waymax", {}) or {}).get("max_steering_curvature", 0.3)),
+    )
+    if bool(wx.get("cache_env_objects", False)) and cache_key in _WAYMAX_ENV_CACHE:
+        return _WAYMAX_ENV_CACHE[cache_key]
     if name in {"state", "state_dynamics", "StateDynamics"}:
         dyn = dynamics.StateDynamics()
     elif name in {"invertible_bicycle", "bicycle", "InvertibleBicycleModel"}:
@@ -138,7 +158,10 @@ def _make_env(state: Any, cfg: dict, *, allow_new: bool = True, dynamics_name: s
         )
     else:
         raise ValueError(f"Unsupported Waymax dynamics {name}")
-    return env.BaseEnvironment(dyn, _env_config(state, cfg, allow_new=allow_new, metrics=True)), name
+    made = (env.BaseEnvironment(dyn, _env_config(state, cfg, allow_new=allow_new, metrics=True)), name)
+    if bool(wx.get("cache_env_objects", False)):
+        _WAYMAX_ENV_CACHE[cache_key] = made
+    return made
 
 
 def _sdc_index(state: Any) -> int:
@@ -261,6 +284,74 @@ def _state_action_from_local(prefix_state: np.ndarray, num_objects: int, sdc: in
     return datatypes.TrajectoryUpdate(x=x, y=y, yaw=yaw, vel_x=vx, vel_y=vy, valid=valid).as_action()
 
 
+def _use_jit_scan_rollouts(cfg: dict) -> bool:
+    wx = cfg.get("waymax", {}) if isinstance(cfg.get("waymax", {}), dict) else {}
+    return bool(wx.get("use_jit_scan_rollouts", False))
+
+
+def _rollout_bicycle_controls_loop(st: Any, waymax_env: Any, controls: np.ndarray, cfg: dict):
+    sdc = _sdc_index(st)
+    wheelbase = float(cfg.get("wheelbase_m", 2.8))
+    for k in range(int(controls.shape[0])):
+        ctrl = controls[k]
+        action = _bicycle_action(int(st.num_objects), sdc, float(ctrl[0]), float(ctrl[1]), wheelbase)
+        st = waymax_env.step(st, action)
+    return st
+
+
+def _rollout_bicycle_controls_scan(st: Any, waymax_env: Any, controls: np.ndarray, cfg: dict):
+    """Roll out a sequence of SDC bicycle controls with one JAX scan dispatch.
+
+    The old code called ``waymax_env.step`` once from Python for every recovery
+    step and for every option/future pair.  On real WOMD snippets this dominates
+    wall time even when CUDA is visible, because thousands of tiny JAX dispatches
+    keep the GPU under-utilized.  This helper preserves the same controls and
+    final SimulatorState but moves the inner time loop into ``jax.lax.scan``.
+
+    It is intentionally optional and falls back to the original loop on any JAX
+    tracing/Waymax incompatibility so existing behavior is preserved.
+    """
+    global _JIT_CONTROL_ROLLOUT_WARNED
+    if controls.size == 0:
+        return st
+    if not _use_jit_scan_rollouts(cfg):
+        return _rollout_bicycle_controls_loop(st, waymax_env, controls, cfg)
+    try:
+        jax, jnp, _, datatypes, _, _ = _require_waymax()
+        num_objects = int(st.num_objects)
+        sdc = _sdc_index(st)
+        steps = int(controls.shape[0])
+        wheelbase = float(cfg.get("wheelbase_m", 2.8))
+        key = (id(waymax_env), num_objects, sdc, steps, wheelbase)
+        fn = _JIT_CONTROL_ROLLOUT_CACHE.get(key)
+        if fn is None:
+            valid_template = jnp.zeros((num_objects, 1), dtype=jnp.bool_).at[sdc, 0].set(True)
+
+            def body(carry, ctrl):
+                accel = ctrl[0]
+                steer = ctrl[1]
+                curvature = jnp.tan(steer) / max(wheelbase, 1e-3)
+                data = jnp.zeros((num_objects, 2), dtype=jnp.float32)
+                data = data.at[sdc, 0].set(accel)
+                data = data.at[sdc, 1].set(curvature)
+                action = datatypes.Action(data=data, valid=valid_template)
+                return waymax_env.step(carry, action), None
+
+            def rollout_fn(state, controls_jnp):
+                final_state, _ = jax.lax.scan(body, state, controls_jnp, length=steps)
+                return final_state
+
+            fn = jax.jit(rollout_fn)
+            _JIT_CONTROL_ROLLOUT_CACHE[key] = fn
+        controls_jnp = jnp.asarray(np.asarray(controls[:, :2], dtype=np.float32))
+        return fn(st, controls_jnp)
+    except Exception as e:  # pragma: no cover - depends on optional Waymax/JAX versions
+        if not _JIT_CONTROL_ROLLOUT_WARNED:
+            print(f"[ocrap-profile] jit_scan_rollout disabled after fallback: {type(e).__name__}: {e}", flush=True)
+            _JIT_CONTROL_ROLLOUT_WARNED = True
+        return _rollout_bicycle_controls_loop(st, waymax_env, controls, cfg)
+
+
 def _rollout_prefix(state0: Any, history: SceneHistory, prefix: CandidatePrefix, cfg: dict, *, allow_new: bool, dynamics_name: str | None = None):
     jax, _, _, _, _, _ = _require_waymax()
     t = int(history.metadata.get("waymax_planning_timestep", history.time_index))
@@ -284,11 +375,12 @@ def _rollout_prefix(state0: Any, history: SceneHistory, prefix: CandidatePrefix,
 
 
 def _rollout_future_after_prefix(st: Any, waymax_env: Any, steps: int, cfg: dict, *, coast_accel: float = 0.0):
-    sdc = _sdc_index(st)
-    for _ in range(max(0, int(steps))):
-        action = _bicycle_action(int(st.num_objects), sdc, coast_accel, 0.0, float(cfg.get("wheelbase_m", 2.8)))
-        st = waymax_env.step(st, action)
-    return st
+    n = max(0, int(steps))
+    if n <= 0:
+        return st
+    controls = np.zeros((n, 2), dtype=np.float32)
+    controls[:, 0] = float(coast_accel)
+    return _rollout_bicycle_controls_scan(st, waymax_env, controls, cfg)
 
 
 def _metric_summary(waymax_env: Any, st: Any, sdc: int) -> dict[str, float]:
@@ -982,12 +1074,23 @@ def compute_waymax_future_option_margins(history: SceneHistory, prefix: Candidat
 
             st = base_state
             metrics_over_time: list[dict[str, float]] = []
-            for tt in range(horizon_steps):
-                ctrl = rec_controls[min(tt, rec_controls.shape[0] - 1)] if rec_controls.size else np.zeros(4, dtype=np.float32)
-                action = _action_from_recovery_control(int(st.num_objects), sdc, ctrl, cfg)
-                st = waymax_env.step(st, action)
-                if _should_record_teacher_metric(tt, horizon_steps, metric_stride):
-                    metrics_over_time.append(_metric_summary(waymax_env, st, sdc))
+            # When teacher_metrics_stride <= 0, only the final recovery metric is
+            # used.  Roll the whole control sequence with one JAX scan dispatch.
+            # For stride > 0 we keep the original Python loop because intermediate
+            # metrics are semantically required.
+            if metric_stride <= 0 and rec_controls.size:
+                controls = np.zeros((horizon_steps, 2), dtype=np.float32)
+                controls[:, 0] = rec_controls[np.minimum(np.arange(horizon_steps), rec_controls.shape[0] - 1), 0]
+                controls[:, 1] = rec_controls[np.minimum(np.arange(horizon_steps), rec_controls.shape[0] - 1), 1]
+                st = _rollout_bicycle_controls_scan(st, waymax_env, controls, cfg)
+                metrics_over_time.append(_metric_summary(waymax_env, st, sdc))
+            else:
+                for tt in range(horizon_steps):
+                    ctrl = rec_controls[min(tt, rec_controls.shape[0] - 1)] if rec_controls.size else np.zeros(4, dtype=np.float32)
+                    action = _action_from_recovery_control(int(st.num_objects), sdc, ctrl, cfg)
+                    st = waymax_env.step(st, action)
+                    if _should_record_teacher_metric(tt, horizon_steps, metric_stride):
+                        metrics_over_time.append(_metric_summary(waymax_env, st, sdc))
             waymax_rollouts_executed += 1
             val, comps, active = _waymax_margin_from_rollout(metrics_over_time, cfg)
             if hybrid_teacher:

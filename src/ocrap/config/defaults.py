@@ -115,6 +115,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "jax_platforms": "cuda,cpu",
         "preallocate_gpu_memory": False,
         "cache_identical_teacher_rollouts": True,
+        "cache_env_objects": False,
+        "use_jit_scan_rollouts": False,
         "teacher_backend": "auto",
         "teacher_metrics_stride": 1,
         "teacher_rollout_top_k_options": 0,
