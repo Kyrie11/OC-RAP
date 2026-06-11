@@ -112,21 +112,39 @@ def _agent_time_array(x: Any, num_agents: int, num_steps: int, name: str) -> np.
     return _normalize_agent_time(x, num_agents, num_steps, name=name)
 
 
-def _scenario_id_from_payload(payload: dict[str, Any], idx: int, state: Any) -> str:
+def _scenario_id_from_payload(payload: dict[str, Any], idx: int, state: Any, cfg: dict | None = None) -> str:
+    """Return a stable, scene-level id suitable for split assignment.
+
+    Some Waymax/WOMD input paths expose ``scenario/id`` as a scalar bytes tensor,
+    some as a length-1 tensor, and some omit it.  A repeated or malformed id
+    collapses all samples into one scene, which in turn makes calibration/test
+    splits empty.  Keep the original id when available, but append the dataloader
+    index by default so the saved sample id is unique at scene granularity.
+    """
+    cfg = cfg or {}
+    wx = cfg.get("waymax", {}) if isinstance(cfg.get("waymax", {}), dict) else {}
+    append_index = bool(wx.get("append_scenario_index_to_id", True))
+
+    base: str | None = None
     sid = payload.get("scenario_id")
     try:
         arr = _as_np(sid)
-        if arr.shape == ():
-            val = arr.item()
+        if arr.size == 1:
+            val = arr.reshape(()).item()
             if isinstance(val, bytes):
-                return val.decode("utf-8", errors="ignore") or f"waymax_{idx:08d}"
-            return str(val)
+                base = val.decode("utf-8", errors="ignore") or None
+            else:
+                base = str(val)
     except Exception:
-        pass
-    ids = _as_np(state.object_metadata.ids).reshape(-1)
-    ts = _as_np(state.log_trajectory.timestamp_micros).reshape(-1)
-    h = hashlib.sha1(ids.tobytes() + ts[: min(16, ts.size)].tobytes()).hexdigest()[:16]
-    return f"waymax_{idx:08d}_{h}"
+        base = None
+    if not base or base in {"None", "", "b''"}:
+        ids = _as_np(state.object_metadata.ids).reshape(-1)
+        ts = _as_np(state.log_trajectory.timestamp_micros).reshape(-1)
+        h = hashlib.sha1(ids.tobytes() + ts[: min(16, ts.size)].tobytes()).hexdigest()[:16]
+        base = f"waymax_{h}"
+    # Avoid path separators in filenames and make repeated payload ids harmless.
+    base = base.replace("/", "_").replace("\\", "_")
+    return f"{base}__wx{idx:08d}" if append_index else base
 
 
 def _paths_to_waymax_path(patterns: Any) -> str:
@@ -349,6 +367,6 @@ def iter_waymax_womd_scenarios(patterns: Any, max_scenarios: int | None, parser_
         if max_scenarios is not None and emitted >= int(max_scenarios):
             break
         state = payload["state"] if isinstance(payload, dict) else payload
-        sid = _scenario_id_from_payload(payload if isinstance(payload, dict) else {}, i, state)
+        sid = _scenario_id_from_payload(payload if isinstance(payload, dict) else {}, i, state, cfg)
         yield raw_scenario_from_waymax_state(state, sid, i, cfg)
         emitted += 1

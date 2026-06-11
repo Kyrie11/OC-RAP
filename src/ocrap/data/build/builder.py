@@ -131,6 +131,36 @@ def _quality_int(cfg: dict, key: str, default: int) -> int:
     return max(0, int(quality.get(key, default)))
 
 
+def _quality_bool(cfg: dict, key: str, default: bool) -> bool:
+    quality = cfg.get("dataset_quality", {}) if isinstance(cfg.get("dataset_quality", {}), dict) else {}
+    return bool(quality.get(key, default))
+
+
+def _cfg_with_artifact_mining(cfg: dict, *, enable: bool) -> dict:
+    """Copy cfg and force artifact mining on/off for one materialization.
+
+    In balanced primary builds, using only stochastic mining can still yield an
+    all-artifact or all-non-artifact scene-time by chance.  This helper lets the
+    builder intentionally create a non-mined branch set and a mined branch set
+    on different prefixes while leaving the caller's label mode intact.
+    """
+    local = dict(cfg)
+    art = dict(local.get("artifact", {}) or {})
+    art["force_mine"] = bool(enable)
+    art["mine_probability"] = 1.0 if enable else 0.0
+    local["artifact"] = art
+    quality = dict(local.get("dataset_quality", {}) or {})
+    # The forced materialization itself must not be skipped by the strict
+    # preflight gate unless we are creating the artifact half.
+    quality["require_artifact_pairs"] = bool(enable and quality.get("require_artifact_pairs", False))
+    local["dataset_quality"] = quality
+    return local
+
+
+def _sample_is_artifact(sample: DatasetSample) -> bool:
+    return bool(sample.i_art_star or sample.diagnostics.get("complete_artifact_pair", False))
+
+
 def _has_complete_artifact_pair(sample: DatasetSample) -> bool:
     branches: set[str] = set()
     for fut in sample.futures:
@@ -255,6 +285,35 @@ def _materialize_sample(history, split_id: str, prefix: CandidatePrefix, a_idx: 
     )
 
 
+def _try_add_sample(
+    selected: list[DatasetSample],
+    deferred: list[DatasetSample],
+    sample: DatasetSample,
+    *,
+    max_accepted: int,
+    max_art: int,
+    max_non: int,
+    macros_seen: set[str],
+    macro_diversity_first: bool,
+) -> tuple[int, int]:
+    is_art = _sample_is_artifact(sample)
+    n_art = sum(int(_sample_is_artifact(s)) for s in selected)
+    n_non = len(selected) - n_art
+    keep_now = True
+    if is_art and max_art > 0 and n_art >= max_art:
+        keep_now = False
+    if (not is_art) and max_non > 0 and n_non >= max_non:
+        keep_now = False
+    if macro_diversity_first and sample.prefix.macro_name in macros_seen and max_accepted > 0 and len(selected) >= max_accepted:
+        keep_now = False
+    if keep_now and (max_accepted <= 0 or len(selected) < max_accepted):
+        selected.append(sample)
+        macros_seen.add(sample.prefix.macro_name)
+    else:
+        deferred.append(sample)
+    return sum(int(_sample_is_artifact(s)) for s in selected), len(selected) - sum(int(_sample_is_artifact(s)) for s in selected)
+
+
 def build_samples_for_history(history, split_id: str, cfg: dict, progress_callback: Callable[[int], None] | None = None) -> list[DatasetSample]:
     prefixes = generate_candidate_prefixes(history, cfg)
     options = default_recovery_options(int(cfg.get("num_recovery_options", 24)), shoulder_available=bool(history.metadata.get("shoulder_available", True)), adjacent_available=bool(history.metadata.get("adjacent_available", True)))
@@ -266,54 +325,84 @@ def build_samples_for_history(history, split_id: str, cfg: dict, progress_callba
     max_art = _quality_int(cfg, "max_artifact_prefixes_per_scene_time", max_accepted if max_accepted else len(prefixes))
     min_non = _quality_int(cfg, "min_nonartifact_prefixes_per_scene_time", 1 if mode == "balanced" else 0)
     max_non = _quality_int(cfg, "max_nonartifact_prefixes_per_scene_time", max_accepted if max_accepted else len(prefixes))
-    macro_diversity_first = bool((cfg.get("dataset_quality", {}) or {}).get("macro_diversity_first", True))
+    macro_diversity_first = _quality_bool(cfg, "macro_diversity_first", True)
+    balanced_two_pass = _quality_bool(cfg, "balanced_two_pass", True)
 
     selected: list[DatasetSample] = []
     deferred: list[DatasetSample] = []
-    n_art = 0
-    n_non = 0
     macros_seen: set[str] = set()
+    materialized_prefixes: set[int] = set()
 
-    for a_idx, prefix in enumerate(prefixes):
-        if mode == "filter" and not _artifact_pair_attempt_is_possible(history, prefix, cfg):
-            if progress_callback is not None:
-                progress_callback(1)
-            continue
-        if max_accepted > 0 and len(selected) >= max_accepted and not (mode == "balanced" and (n_art < min_art or n_non < min_non)):
-            if progress_callback is not None:
-                progress_callback(len(prefixes) - a_idx)
-            break
-
-        sample = _materialize_sample(history, split_id, prefix, a_idx, cfg, options, option_valid, K)
+    def materialize(prefix, local_cfg: dict) -> DatasetSample | None:
+        a_idx = int(prefix.macro_id)
+        if mode == "filter" and not _artifact_pair_attempt_is_possible(history, prefix, local_cfg):
+            return None
+        sample = _materialize_sample(history, split_id, prefix, a_idx, local_cfg, options, option_valid, K)
         has_pair = _has_complete_artifact_pair(sample)
         sample.diagnostics["complete_artifact_pair"] = bool(has_pair)
         if mode == "filter" and not has_pair:
+            return None
+        return sample
+
+    if mode == "balanced" and balanced_two_pass:
+        # Pass 1: guarantee a non-artifact / nominal-preservation side by turning
+        # off hidden-pair mining for this materialization.  This is what prevents
+        # a primary WOMD build from degenerating into the current stress-only set.
+        no_mine_cfg = _cfg_with_artifact_mining(cfg, enable=False)
+        for prefix in prefixes:
+            if max_accepted > 0 and len(selected) >= max_accepted and len(selected) - sum(int(_sample_is_artifact(s)) for s in selected) >= min_non:
+                break
+            sample = materialize(prefix, no_mine_cfg)
+            materialized_prefixes.add(int(prefix.macro_id))
+            if sample is not None and not _sample_is_artifact(sample):
+                _try_add_sample(selected, deferred, sample, max_accepted=max_accepted, max_art=max_art, max_non=max_non, macros_seen=macros_seen, macro_diversity_first=macro_diversity_first)
             if progress_callback is not None:
                 progress_callback(1)
-            continue
+            if len(selected) - sum(int(_sample_is_artifact(s)) for s in selected) >= max(min_non, min(max_non, max_accepted or max_non)):
+                break
 
-        is_art = bool(sample.i_art_star or has_pair)
-        keep_now = True
-        if mode == "balanced":
-            if is_art and max_art > 0 and n_art >= max_art:
-                keep_now = False
-            if (not is_art) and max_non > 0 and n_non >= max_non:
-                keep_now = False
-            if macro_diversity_first and prefix.macro_name in macros_seen and max_accepted > 0 and len(selected) >= max_accepted:
-                keep_now = False
-        elif max_accepted > 0 and len(selected) >= max_accepted:
-            keep_now = False
+        # Pass 2: add a bounded stress side by forcing hidden-pair mining on the
+        # remaining prefixes.  The quota keeps artifact_fraction below 1.0.
+        mine_cfg = _cfg_with_artifact_mining(cfg, enable=True)
+        for prefix in prefixes:
+            n_art = sum(int(_sample_is_artifact(s)) for s in selected)
+            if max_accepted > 0 and len(selected) >= max_accepted and n_art >= min_art:
+                break
+            if max_art > 0 and n_art >= max_art:
+                break
+            if int(prefix.macro_id) in materialized_prefixes and len(prefixes) > max_accepted:
+                continue
+            sample = materialize(prefix, mine_cfg)
+            materialized_prefixes.add(int(prefix.macro_id))
+            if sample is not None and _sample_is_artifact(sample):
+                _try_add_sample(selected, deferred, sample, max_accepted=max_accepted, max_art=max_art, max_non=max_non, macros_seen=macros_seen, macro_diversity_first=macro_diversity_first)
+            if progress_callback is not None:
+                progress_callback(1)
 
-        if keep_now:
-            selected.append(sample)
-            macros_seen.add(prefix.macro_name)
-            n_art += int(is_art)
-            n_non += int(not is_art)
-        else:
-            deferred.append(sample)
+        # Account for prefixes not materialized because quotas were satisfied.
         if progress_callback is not None:
-            progress_callback(1)
+            progress_callback(max(0, len(prefixes) - len(materialized_prefixes)))
+    else:
+        for a_idx, prefix in enumerate(prefixes):
+            if max_accepted > 0 and len(selected) >= max_accepted:
+                if progress_callback is not None:
+                    progress_callback(len(prefixes) - a_idx)
+                break
+            sample = materialize(prefix, cfg)
+            if sample is None:
+                if progress_callback is not None:
+                    progress_callback(1)
+                continue
+            if mode == "balanced":
+                _try_add_sample(selected, deferred, sample, max_accepted=max_accepted, max_art=max_art, max_non=max_non, macros_seen=macros_seen, macro_diversity_first=macro_diversity_first)
+            else:
+                selected.append(sample)
+            if progress_callback is not None:
+                progress_callback(1)
 
+    # Fill underfull scene-times from deferred examples without violating the
+    # hard max_accepted cap.  This is a fallback for scenes where one side of the
+    # balanced quota is physically unavailable.
     if max_accepted > 0 and len(selected) < max_accepted:
         for sample in deferred:
             if len(selected) >= max_accepted:
@@ -353,6 +442,7 @@ def build_dataset(output_dir: str | Path, cfg: dict) -> dict:
     raw_scenarios_seen = 0
     scene_time_groups = 0
     skipped_no_planning_times = 0
+    raw_scene_ids: set[str] = set()
     raw_iter = scenario_iterator(cfg)
     prefix_bar = None
     if bool(cfg.get("progress", True)):
@@ -372,6 +462,7 @@ def build_dataset(output_dir: str | Path, cfg: dict) -> dict:
     try:
         for raw in raw_iter:
             raw_scenarios_seen += 1
+            raw_scene_ids.add(str(raw.scenario_id))
             split_id = scenario_split(raw.scenario_id, cfg.get("split_ratios"))
             times, reasons_by_time = select_planning_times_with_reasons(raw, cfg)
             if not times:
@@ -420,6 +511,10 @@ def build_dataset(output_dir: str | Path, cfg: dict) -> dict:
         "raw_scenarios_seen": int(raw_scenarios_seen),
         "scene_time_groups": int(scene_time_groups),
         "skipped_no_planning_times": int(skipped_no_planning_times),
+        "unique_raw_scene_ids": int(len(raw_scene_ids)),
+        "dataset_quality": cfg.get("dataset_quality", {}),
+        "artifact": cfg.get("artifact", {}),
+        "waymax": cfg.get("waymax", {}),
     }
     write_json(summary, out / "dataset_summary.json")
     return summary

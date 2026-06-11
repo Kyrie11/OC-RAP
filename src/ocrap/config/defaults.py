@@ -87,6 +87,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "min_nonartifact_prefixes_per_scene_time": 1,
         "max_nonartifact_prefixes_per_scene_time": 6,
         "macro_diversity_first": True,
+        "balanced_two_pass": True,
         "warn_if_artifact_fraction_above": 0.80,
         "warn_if_scene_count_below": 50,
     },
@@ -96,6 +97,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "scenario_stride": 1,
     "scenario_worker_index": 0,
     "waymax": {
+        "append_scenario_index_to_id": True,
         "strict": True,
         "dataloader_include_sdc_paths": True,
         "num_paths": 45,

@@ -618,7 +618,7 @@ def diagnose_dataset(dataset: str | Path, output: str | Path | None = None, max_
         "supports_alias_incompatibility_cases": bool(incompatible_total > 0),
         "supports_calibration_protocol": bool(sample_split_counts.get("calibration", 0) > 0 and artifact_fraction < 0.95),
         "supports_heldout_test_protocol": bool(sample_split_counts.get("test", 0) > 0 and len(split_by_scene) >= 5),
-        "supports_womd_primary_claim": bool(synthetic_scene_count < num and num > 0),
+        "supports_womd_primary_claim": bool(synthetic_scene_count < num and num > 0 and artifact_fraction < 0.80 and sample_split_counts.get("calibration", 0) > 0 and sample_split_counts.get("test", 0) > 0 and len(split_by_scene) >= 50),
         "supports_waymax_runtime_claim": bool(waymax_runtime_fraction >= 0.95 and synthetic_scene_count < num and num > 0),
     }
 
