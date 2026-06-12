@@ -32,6 +32,11 @@ def make_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("build-dataset")
     add_common(p)
     p.add_argument("--output", required=True)
+    p.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="Skip already materialized sample .npz files in the output directory and resume safely.",
+    )
     p = sub.add_parser("diagnose")
     add_common(p)
     p.add_argument("--dataset", required=True)
@@ -94,7 +99,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     cfg = build_cfg(args)
     if args.cmd == "build-dataset":
-        result = build_dataset(args.output, cfg)
+        result = build_dataset(args.output, cfg, skip_existing=args.skip_existing)
     elif args.cmd == "diagnose":
         result = diagnose_dataset(args.dataset, args.output, args.max_samples, cfg=cfg)
     elif args.cmd == "papercheck":

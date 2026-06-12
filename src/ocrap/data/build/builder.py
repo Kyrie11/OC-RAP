@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import csv
+import json
+import os
 import time
+from collections import defaultdict
 from pathlib import Path
 from typing import Callable, Iterator
 
@@ -21,6 +24,22 @@ from ocrap.utils.seed import stable_seed
 from .history import construct_history
 from .regimes import assign_regimes
 from .synthetic import iter_synthetic_scenarios
+
+
+MANIFEST_FIELDS = [
+    "path",
+    "scene_id",
+    "original_scenario_id",
+    "time_index",
+    "candidate_index",
+    "split_id",
+    "is_nominal",
+    "r_orc_star",
+    "r_dep_star",
+    "oracle_gap_star",
+    "i_art_star",
+    "regime_label",
+]
 
 
 def _profiling_cfg(cfg: dict) -> dict:
@@ -542,32 +561,229 @@ def scenario_iterator(cfg: dict) -> Iterator[RawScenario]:
         raise ValueError(f"Unknown data_source {source}")
 
 
-def build_dataset(output_dir: str | Path, cfg: dict) -> dict:
+def _sample_filename(scene_id: str, time_index: int, candidate_index: int) -> str:
+    return f"{scene_id}_t{int(time_index):04d}_a{int(candidate_index):02d}.npz".replace("/", "_")
+
+
+def _scene_time_key(scene_id: str, time_index: int) -> str:
+    return f"{scene_id}_t{int(time_index):04d}".replace("/", "_")
+
+
+def _scene_time_key_from_sample_name(name: str) -> str | None:
+    if not name.endswith(".npz"):
+        return None
+    stem = name[:-4]
+    idx = stem.rfind("_a")
+    if idx <= 0:
+        return None
+    return stem[:idx]
+
+
+def _expected_samples_per_scene_time(cfg: dict) -> int:
+    max_accepted = _max_accepted_prefixes_per_scene_time(cfg)
+    if max_accepted > 0:
+        return max_accepted
+    return max(0, int(cfg.get("num_candidate_prefixes", 24)))
+
+
+def _estimated_total_samples(cfg: dict) -> int | None:
+    max_scenarios = cfg.get("max_scenarios")
+    if max_scenarios is None:
+        return None
+    return int(max_scenarios) * int(cfg.get("max_times_per_scenario", 8)) * _expected_samples_per_scene_time(cfg)
+
+
+def _is_complete_npz(path: Path) -> bool:
+    try:
+        if not path.is_file() or path.stat().st_size <= 0:
+            return False
+        # This validates the npz container footer/central directory without
+        # reading every array payload, so the resume check stays cheap even for
+        # large datasets.  New writes are atomic, so a visible .npz should be a
+        # complete file unless it came from an older, interrupted run.
+        with np.load(path, allow_pickle=True) as z:
+            return bool(z.files)
+    except (OSError, EOFError, ValueError):
+        return False
+
+
+def _scalar_from_npz(z, key: str, default: object = "") -> object:
+    if key not in z.files:
+        return default
+    arr = np.asarray(z[key])
+    if arr.shape == ():
+        return arr.item()
+    return arr.tolist()
+
+
+def _manifest_regime_label(raw: object) -> str:
+    if raw is None:
+        return ""
+    try:
+        obj = json.loads(str(raw))
+        if isinstance(obj, dict):
+            return ";".join(k for k, v in obj.items() if v)
+    except Exception:
+        pass
+    return str(raw)
+
+
+def _manifest_row_from_npz(path: Path, out: Path) -> dict:
+    with np.load(path, allow_pickle=True) as z:
+        return {
+            "path": str(path.relative_to(out)),
+            "scene_id": _scalar_from_npz(z, "scene_id", ""),
+            "original_scenario_id": _scalar_from_npz(z, "original_scenario_id", ""),
+            "time_index": _scalar_from_npz(z, "time_index", ""),
+            "candidate_index": _scalar_from_npz(z, "candidate_index", ""),
+            "split_id": _scalar_from_npz(z, "split_id", ""),
+            "is_nominal": int(_scalar_from_npz(z, "is_nominal", 0)),
+            "r_orc_star": _scalar_from_npz(z, "r_orc_star", ""),
+            "r_dep_star": _scalar_from_npz(z, "r_dep_star", ""),
+            "oracle_gap_star": _scalar_from_npz(z, "oracle_gap_star", ""),
+            "i_art_star": int(_scalar_from_npz(z, "i_art_star", 0)),
+            "regime_label": _manifest_regime_label(_scalar_from_npz(z, "regime_label", "{}")),
+        }
+
+
+def _read_existing_manifest_rows(out: Path, existing_names: set[str]) -> list[dict]:
+    manifest_path = out / "manifest.csv"
+    if not manifest_path.exists():
+        return []
+    rows: list[dict] = []
+    try:
+        with manifest_path.open("r", newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                name = Path(row.get("path", "")).name
+                if name in existing_names:
+                    rows.append({field: row.get(field, "") for field in MANIFEST_FIELDS})
+    except Exception:
+        return []
+    return rows
+
+
+def _bootstrap_existing_samples(out: Path, sample_dir: Path) -> tuple[set[str], dict[str, int], list[dict]]:
+    existing_names: set[str] = set()
+    existing_paths: dict[str, Path] = {}
+    existing_counts_by_scene_time: dict[str, int] = defaultdict(int)
+    for path in sample_dir.glob("*.npz"):
+        if not _is_complete_npz(path):
+            continue
+        existing_names.add(path.name)
+        existing_paths[path.name] = path
+        key = _scene_time_key_from_sample_name(path.name)
+        if key is not None:
+            existing_counts_by_scene_time[key] += 1
+
+    manifest_rows = _read_existing_manifest_rows(out, existing_names)
+    manifest_names = {Path(row.get("path", "")).name for row in manifest_rows}
+    for name in sorted(existing_names - manifest_names):
+        try:
+            manifest_rows.append(_manifest_row_from_npz(existing_paths[name], out))
+        except Exception:
+            # A file can pass the cheap container check but still fail while
+            # reading metadata from an older corrupted run.  Do not treat it as
+            # resumable; the next write for the same deterministic name will
+            # atomically replace it.
+            existing_names.discard(name)
+            key = _scene_time_key_from_sample_name(name)
+            if key is not None and existing_counts_by_scene_time.get(key, 0) > 0:
+                existing_counts_by_scene_time[key] -= 1
+    return existing_names, dict(existing_counts_by_scene_time), manifest_rows
+
+
+def _append_manifest_row(manifest_rows: list[dict], out: Path, sample: DatasetSample, path: Path) -> None:
+    manifest_rows.append({
+        "path": str(path.relative_to(out)),
+        "scene_id": sample.scene_id,
+        "original_scenario_id": sample.original_scenario_id,
+        "time_index": sample.time_index,
+        "candidate_index": sample.candidate_index,
+        "split_id": sample.split_id,
+        "is_nominal": int(sample.is_nominal),
+        "r_orc_star": sample.r_orc_star,
+        "r_dep_star": sample.r_dep_star,
+        "oracle_gap_star": sample.oracle_gap_star,
+        "i_art_star": int(sample.i_art_star),
+        "regime_label": ";".join(k for k, v in sample.regime_label.items() if v),
+    })
+
+
+def _write_manifest_atomic(manifest_path: Path, rows: list[dict]) -> None:
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = manifest_path.with_name(f".{manifest_path.name}.tmp")
+    try:
+        with tmp.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=MANIFEST_FIELDS)
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({field: row.get(field, "") for field in MANIFEST_FIELDS})
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, manifest_path)
+    except Exception:
+        try:
+            tmp.unlink(missing_ok=True)
+        finally:
+            raise
+
+
+def _count_splits(rows: list[dict]) -> dict[str, int]:
+    split_counts: dict[str, int] = {"train": 0, "val": 0, "calibration": 0, "test": 0}
+    for row in rows:
+        split_id = str(row.get("split_id", ""))
+        if not split_id:
+            continue
+        split_counts[split_id] = split_counts.get(split_id, 0) + 1
+    return split_counts
+
+
+def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False) -> dict:
     out = ensure_dir(output_dir)
     sample_dir = ensure_dir(out / "samples")
+    skip_existing = bool(skip_existing or cfg.get("skip_existing", False))
+    existing_sample_names: set[str] = set()
+    existing_counts_by_scene_time: dict[str, int] = {}
     manifest_rows: list[dict] = []
-    split_counts: dict[str, int] = {"train": 0, "val": 0, "calibration": 0, "test": 0}
-    total = 0
+    if skip_existing:
+        existing_sample_names, existing_counts_by_scene_time, manifest_rows = _bootstrap_existing_samples(out, sample_dir)
+    split_counts: dict[str, int] = _count_splits(manifest_rows)
+    total = len(manifest_rows)
+    initial_existing_total = len(existing_sample_names)
+    skipped_existing_samples = 0
+    skipped_existing_scene_time_groups = 0
+    new_samples_written = 0
     raw_scenarios_seen = 0
     scene_time_groups = 0
     skipped_no_planning_times = 0
     raw_scene_ids: set[str] = set()
     raw_iter = scenario_iterator(cfg)
-    prefix_bar = None
+    progress_bar = None
+    progress_mode = "samples" if skip_existing else "prefixes"
     if bool(cfg.get("progress", True)):
         try:
             from tqdm.auto import tqdm
 
-            max_scenarios = cfg.get("max_scenarios")
-            total_prefixes = None
-            if max_scenarios is not None:
-                total_prefixes = int(max_scenarios) * int(cfg.get("max_times_per_scenario", 8)) * int(cfg.get("num_candidate_prefixes", 24))
-            prefix_bar = tqdm(total=total_prefixes, desc="OC-RAP build prefixes", unit="prefix")
+            if skip_existing:
+                total_samples = _estimated_total_samples(cfg)
+                if total_samples is not None:
+                    total_samples = max(int(total_samples), initial_existing_total)
+                    initial = min(initial_existing_total, total_samples)
+                else:
+                    initial = initial_existing_total
+                progress_bar = tqdm(total=total_samples, initial=initial, desc="OC-RAP build samples", unit="sample")
+            else:
+                max_scenarios = cfg.get("max_scenarios")
+                total_prefixes = None
+                if max_scenarios is not None:
+                    total_prefixes = int(max_scenarios) * int(cfg.get("max_times_per_scenario", 8)) * int(cfg.get("num_candidate_prefixes", 24))
+                progress_bar = tqdm(total=total_prefixes, desc="OC-RAP build prefixes", unit="prefix")
         except Exception:
-            prefix_bar = None
+            progress_bar = None
     def _progress(n: int) -> None:
-        if prefix_bar is not None:
-            prefix_bar.update(int(n))
+        if progress_bar is not None:
+            progress_bar.update(int(n))
     try:
         for raw in raw_iter:
             raw_scenario_t0 = _now()
@@ -586,46 +802,51 @@ def build_dataset(output_dir: str | Path, cfg: dict) -> dict:
                 _profile_log(cfg, f"scene_time start scene={history.scene_id} t={int(t)} group={scene_time_groups}")
                 # Retain only the reasons that actually selected this planning instant.
                 history.metadata["time_sampling_reasons"] = reasons_by_time.get(int(t), ["uniform"])
-                samples = build_samples_for_history(history, split_id, cfg, progress_callback=_progress)
+                if skip_existing:
+                    key = _scene_time_key(history.scene_id, int(t))
+                    expected = _expected_samples_per_scene_time(cfg)
+                    if expected > 0 and existing_counts_by_scene_time.get(key, 0) >= expected:
+                        skipped_existing_scene_time_groups += 1
+                        _profile_log(cfg, f"scene_time skip-existing scene={history.scene_id} t={int(t)} existing={existing_counts_by_scene_time.get(key, 0)} expected={expected}")
+                        continue
+                samples = build_samples_for_history(history, split_id, cfg, progress_callback=None if skip_existing else _progress)
                 scene_time_dt = _now() - scene_time_t0
                 if _profiling_enabled(cfg) or scene_time_dt >= float(_profiling_cfg(cfg).get("slow_scene_time_s", 120.0)):
                     _profile_log(cfg, f"scene_time done scene={history.scene_id} t={int(t)} samples={len(samples)} elapsed={scene_time_dt:.2f}s")
                 for sample in samples:
-                    fname = f"{sample.scene_id}_t{sample.time_index:04d}_a{sample.candidate_index:02d}.npz".replace("/", "_")
+                    fname = _sample_filename(sample.scene_id, sample.time_index, sample.candidate_index)
                     path = sample_dir / fname
+                    if skip_existing and fname in existing_sample_names:
+                        skipped_existing_samples += 1
+                        continue
                     np_savez(path, **sample.to_npz_dict())
-                    manifest_rows.append({
-                        "path": str(path.relative_to(out)),
-                        "scene_id": sample.scene_id,
-                        "original_scenario_id": sample.original_scenario_id,
-                        "time_index": sample.time_index,
-                        "candidate_index": sample.candidate_index,
-                        "split_id": sample.split_id,
-                        "is_nominal": int(sample.is_nominal),
-                        "r_orc_star": sample.r_orc_star,
-                        "r_dep_star": sample.r_dep_star,
-                        "oracle_gap_star": sample.oracle_gap_star,
-                        "i_art_star": int(sample.i_art_star),
-                        "regime_label": ";".join(k for k, v in sample.regime_label.items() if v),
-                    })
+                    _append_manifest_row(manifest_rows, out, sample, path)
+                    existing_sample_names.add(fname)
+                    key = _scene_time_key(sample.scene_id, sample.time_index)
+                    existing_counts_by_scene_time[key] = existing_counts_by_scene_time.get(key, 0) + 1
                     split_counts[sample.split_id] = split_counts.get(sample.split_id, 0) + 1
                     total += 1
+                    new_samples_written += 1
+                    if skip_existing:
+                        _progress(1)
                     if _profiling_enabled(cfg) and bool(_profiling_cfg(cfg).get("log_writes", True)):
                         _profile_log(cfg, f"wrote sample #{total} path={path}")
     finally:
-        if prefix_bar is not None:
-            prefix_bar.close()
+        if progress_bar is not None:
+            progress_bar.close()
     manifest_path = out / "manifest.csv"
-    with manifest_path.open("w", newline="", encoding="utf-8") as f:
-        fields = list(manifest_rows[0].keys()) if manifest_rows else ["path"]
-        writer = csv.DictWriter(f, fieldnames=fields)
-        writer.writeheader()
-        writer.writerows(manifest_rows)
+    _write_manifest_atomic(manifest_path, manifest_rows)
     summary = {
         "num_samples": total,
         "split_counts": split_counts,
         "manifest": str(manifest_path),
         "sample_dir": str(sample_dir),
+        "skip_existing": bool(skip_existing),
+        "existing_samples_seen": int(initial_existing_total),
+        "skipped_existing_samples": int(skipped_existing_samples),
+        "skipped_existing_scene_time_groups": int(skipped_existing_scene_time_groups),
+        "new_samples_written": int(new_samples_written),
+        "progress_mode": progress_mode,
         "raw_scenarios_seen": int(raw_scenarios_seen),
         "scene_time_groups": int(scene_time_groups),
         "skipped_no_planning_times": int(skipped_no_planning_times),

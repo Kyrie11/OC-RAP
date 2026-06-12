@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +30,21 @@ def read_json(path: str | Path) -> dict[str, Any]:
 def np_savez(path: str | Path, **arrays: Any) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(p, **arrays)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{p.name}.", suffix=".tmp", dir=p.parent)
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            # Passing an open file handle prevents NumPy from silently appending
+            # an extra .npz suffix to our temporary file name.
+            np.savez_compressed(f, **arrays)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, p)
+    except Exception:
+        try:
+            tmp.unlink(missing_ok=True)
+        finally:
+            raise
 
 
 def load_npz(path: str | Path) -> dict[str, Any]:
