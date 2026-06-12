@@ -101,6 +101,14 @@ regime_thresholds:
   tau_d: 2.0
   tau_ttc: 3.0
   tau_occ: 0.05
+  # Separate strict occlusion tagging from normal/NUP tagging. WOMD BEV crops
+  # commonly retain unknown cells in the route corridor, so tau_occ=0.05 should
+  # not make normal impossible.
+  tau_normal_occ: 0.75
+  tau_normal_dep: 0.50
+  tau_prefix_hard: 0.0
+  tau_prefix_harm: 0.05
+  require_uniform_for_normal: false
 ocmero:
   alpha: 0.2
   beta: 0.2

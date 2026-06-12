@@ -58,7 +58,20 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "obs_distance": {"s_c": 2.0, "s_v": 2.0, "s_p": 2.0, "s_yaw": 0.2, "lambda_psi": 0.5, "lambda_v": 0.5, "lambda_type": 2.0, "lambda_occ": 1.0, "lambda_ego": 0.5, "lambda_map": 0.5, "p_unmatch": 5.0},
     "utility_weights": {"progress": 1.0, "comfort": 0.05, "route": 0.5, "logdiv": 0.05, "offroad": 5.0, "wrongway": 5.0},
     "split_ratios": {"train": 0.70, "val": 0.10, "calibration": 0.10, "test": 0.10},
-    "regime_thresholds": {"tau_high": 1.0, "tau_d": 2.0, "tau_ttc": 3.0, "tau_occ": 0.05},
+    "regime_thresholds": {
+        "tau_high": 1.0,
+        "tau_d": 2.0,
+        "tau_ttc": 3.0,
+        "tau_occ": 0.05,
+        # Normal/NUP examples in WOMD should be safe, non-artifact samples, but
+        # they do not need a completely empty unknown corridor. Occlusion remains
+        # a separate overlapping regime through tau_occ.
+        "tau_normal_occ": 0.75,
+        "tau_normal_dep": 0.50,
+        "tau_prefix_hard": 0.0,
+        "tau_prefix_harm": 0.05,
+        "require_uniform_for_normal": False,
+    },
     "ocmero": {"alpha": 0.2, "beta": 0.2, "top_m": 8},
     "artifact": {
         "gamma_orc": 0.0,
