@@ -4,6 +4,7 @@ import csv
 import json
 import os
 import time
+import zipfile
 from collections import defaultdict
 from pathlib import Path
 from typing import Callable, Iterator
@@ -13,6 +14,7 @@ import numpy as np
 from ocrap.algorithms.ocmero import oc_mero
 from ocrap.data.schema import DatasetSample, RawScenario
 from ocrap.data.serialization import ensure_dir, np_savez, write_json
+from ocrap.data.validation import missing_fields
 from ocrap.data.split import scenario_split
 from ocrap.planning.prefix_generation import generate_candidate_prefixes
 from ocrap.roots import aggregate_root_margins, cluster_roots, future_trajectory_signature
@@ -597,14 +599,34 @@ def _is_complete_npz(path: Path) -> bool:
     try:
         if not path.is_file() or path.stat().st_size <= 0:
             return False
-        # This validates the npz container footer/central directory without
-        # reading every array payload, so the resume check stays cheap even for
-        # large datasets.  New writes are atomic, so a visible .npz should be a
-        # complete file unless it came from an older, interrupted run.
+        # Validate both the zip container and the OC-RAP sample schema.  The old
+        # resume check only required a readable npz with at least one field, so an
+        # interrupted/legacy partial file could be treated as complete and poison
+        # diagnose/papercheck under --skip-existing.
         with np.load(path, allow_pickle=True) as z:
-            return bool(z.files)
-    except (OSError, EOFError, ValueError):
+            return bool(z.files) and not missing_fields(set(z.files))
+    except (OSError, EOFError, ValueError, zipfile.BadZipFile):
         return False
+
+
+def _quarantine_incomplete_npz(path: Path) -> Path | None:
+    """Move an invalid resume artifact out of samples/*.npz.
+
+    This keeps diagnose/papercheck from seeing stale partial files and lets the
+    deterministic builder regenerate the same sample name on the next pass.  The
+    file is preserved for debugging instead of being deleted.
+    """
+    try:
+        quarantine_dir = ensure_dir(path.parent / "invalid_samples")
+        target = quarantine_dir / f"{path.name}.invalid"
+        i = 1
+        while target.exists():
+            target = quarantine_dir / f"{path.name}.invalid{i}"
+            i += 1
+        os.replace(path, target)
+        return target
+    except OSError:
+        return None
 
 
 def _scalar_from_npz(z, key: str, default: object = "") -> object:
@@ -663,12 +685,15 @@ def _read_existing_manifest_rows(out: Path, existing_names: set[str]) -> list[di
     return rows
 
 
-def _bootstrap_existing_samples(out: Path, sample_dir: Path) -> tuple[set[str], dict[str, int], list[dict]]:
+def _bootstrap_existing_samples(out: Path, sample_dir: Path) -> tuple[set[str], dict[str, int], list[dict], int]:
     existing_names: set[str] = set()
     existing_paths: dict[str, Path] = {}
     existing_counts_by_scene_time: dict[str, int] = defaultdict(int)
+    invalid_existing = 0
     for path in sample_dir.glob("*.npz"):
         if not _is_complete_npz(path):
+            invalid_existing += 1
+            _quarantine_incomplete_npz(path)
             continue
         existing_names.add(path.name)
         existing_paths[path.name] = path
@@ -682,15 +707,17 @@ def _bootstrap_existing_samples(out: Path, sample_dir: Path) -> tuple[set[str], 
         try:
             manifest_rows.append(_manifest_row_from_npz(existing_paths[name], out))
         except Exception:
-            # A file can pass the cheap container check but still fail while
-            # reading metadata from an older corrupted run.  Do not treat it as
-            # resumable; the next write for the same deterministic name will
-            # atomically replace it.
+            # A file can pass the schema-key check but still fail while reading
+            # metadata from an older corrupted run.  Do not treat it as
+            # resumable; move it away so the next write for the deterministic
+            # name can atomically replace it.
             existing_names.discard(name)
+            invalid_existing += 1
+            _quarantine_incomplete_npz(existing_paths[name])
             key = _scene_time_key_from_sample_name(name)
             if key is not None and existing_counts_by_scene_time.get(key, 0) > 0:
                 existing_counts_by_scene_time[key] -= 1
-    return existing_names, dict(existing_counts_by_scene_time), manifest_rows
+    return existing_names, dict(existing_counts_by_scene_time), manifest_rows, invalid_existing
 
 
 def _append_manifest_row(manifest_rows: list[dict], out: Path, sample: DatasetSample, path: Path) -> None:
@@ -746,8 +773,9 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
     existing_sample_names: set[str] = set()
     existing_counts_by_scene_time: dict[str, int] = {}
     manifest_rows: list[dict] = []
+    invalid_existing_samples = 0
     if skip_existing:
-        existing_sample_names, existing_counts_by_scene_time, manifest_rows = _bootstrap_existing_samples(out, sample_dir)
+        existing_sample_names, existing_counts_by_scene_time, manifest_rows, invalid_existing_samples = _bootstrap_existing_samples(out, sample_dir)
     split_counts: dict[str, int] = _count_splits(manifest_rows)
     total = len(manifest_rows)
     initial_existing_total = len(existing_sample_names)
@@ -845,6 +873,7 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
         "existing_samples_seen": int(initial_existing_total),
         "skipped_existing_samples": int(skipped_existing_samples),
         "skipped_existing_scene_time_groups": int(skipped_existing_scene_time_groups),
+        "invalid_existing_samples_quarantined": int(invalid_existing_samples),
         "new_samples_written": int(new_samples_written),
         "progress_mode": progress_mode,
         "raw_scenarios_seen": int(raw_scenarios_seen),
