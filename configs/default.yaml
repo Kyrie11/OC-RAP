@@ -23,6 +23,9 @@ bev_channels: 7
 num_candidate_prefixes: 24
 num_reactive_futures: 4
 num_targeted_futures: 8
+# Optional override for post-contact / secondary-collision stress builds.
+# Example: --set targeted_future_kinds=[contact_impulse_surrogate,secondary_collision_approach,low_friction_braking,control_delay_noise]
+targeted_future_kinds: null
 num_roots: 8
 num_recovery_options: 24
 prefix_param_dim: 5
@@ -149,6 +152,7 @@ model:
   d_model: 128
   d_z: 128
   d_obs: 64
+  tau_obs: 1.0
   d_signature: 32
   d_future_signature: 32
   num_macros: 16

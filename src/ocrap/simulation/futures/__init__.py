@@ -34,9 +34,13 @@ def generate_counterfactual_futures(history: SceneHistory, prefix: CandidatePref
     for f in mined:
         futures.append(f)
         targeted_added += 1
+    kinds = cfg.get("targeted_future_kinds", TARGETED_KINDS)
+    if not isinstance(kinds, (list, tuple)) or not kinds:
+        kinds = TARGETED_KINDS
+    kinds = [str(k) for k in kinds]
     kind_cursor = 0
     while targeted_added < n_targeted:
-        kind = TARGETED_KINDS[kind_cursor % len(TARGETED_KINDS)]
+        kind = kinds[kind_cursor % len(kinds)]
         kind_cursor += 1
         # Avoid duplicating the mined pair too heavily; stress futures create non-degenerate observations.
         if mined and kind in {"hidden_vehicle_yields", "hidden_vehicle_accelerates"}:
@@ -45,7 +49,7 @@ def generate_counterfactual_futures(history: SceneHistory, prefix: CandidatePref
         if fut is not None:
             futures.append(fut)
             targeted_added += 1
-        if kind_cursor > len(TARGETED_KINDS) * 4 and targeted_added == 0:
+        if kind_cursor > len(kinds) * 4 and targeted_added == 0:
             break
     normalize_future_priors(futures)
     return futures

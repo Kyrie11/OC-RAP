@@ -55,13 +55,15 @@ def _epoch(model: OCRAPModel, loader: DataLoader, cfg: dict, device: torch.devic
     for batch in loader:
         batch = {k: v.to(device) for k, v in batch.items()}
         out = model(batch["x"].float())
-        root_p = torch.softmax(out["root_logits"], dim=-1)
-        root_target = batch["root_probs"].float()
+        root_valid = batch["root_valid"].bool()
+        masked_logits = out["root_logits"].masked_fill(~root_valid, -1.0e4)
+        root_p = torch.softmax(masked_logits, dim=-1)
+        root_target = batch["root_probs"].float() * root_valid.float()
         root_target = root_target / root_target.sum(dim=-1, keepdim=True).clamp_min(1e-8)
         margin_target = torch.clamp(batch["m_star"].float(), min=-float(cfg.get("margin_clip", 5.0)), max=float(cfg.get("margin_clip", 5.0)))
         margin_mask = batch["root_valid"].unsqueeze(-1) & batch["option_valid"].unsqueeze(1)
 
-        loss_root = -(root_target * F.log_softmax(out["root_logits"], dim=-1)).sum(dim=-1).mean()
+        loss_root = -(root_target * F.log_softmax(masked_logits, dim=-1)).sum(dim=-1).mean()
         loss_margin = _masked_smooth_l1(out["margins"], margin_target, margin_mask)
         loss_obs = _obs_bce(out["c_star"], batch["y_obs"], batch["root_valid"])
         r_dep, r_orc, gap, _q = torch_oc_mero(
@@ -71,18 +73,21 @@ def _epoch(model: OCRAPModel, loader: DataLoader, cfg: dict, device: torch.devic
             alpha=float(ocfg.get("alpha", 0.2)),
             beta=float(ocfg.get("beta", 0.2)),
             option_valid=batch["option_valid"],
+            root_valid=root_valid,
             use_lcvar=not bool((cfg.get("ablation", {}) or {}).get("without_lower_tail", False)),
             use_obs_kernel=not bool((cfg.get("ablation", {}) or {}).get("without_observation_kernel", False)),
         )
         loss_dep = F.smooth_l1_loss(r_dep, batch["r_dep_star"].float())
         loss_orc = F.smooth_l1_loss(r_orc, batch["r_orc_star"].float())
         loss_art = anti_oracle_loss(r_orc, r_dep, batch["i_art_star"].float(), delta_neg=float(art_cfg.get("delta_neg", 0.0)))
+        loss_util = F.smooth_l1_loss(out["utility"], batch["utility"].float())
         total = (
             float(lw.get("assign", 1.0)) * loss_root
             + float(lw.get("margin", 2.0)) * loss_margin
             + float(lw.get("obs", 1.0)) * loss_obs
             + 0.5 * (loss_dep + loss_orc)
             + float(lw.get("anti_oracle", 1.0)) * loss_art
+            + float(lw.get("utility", 0.2)) * loss_util
         )
         if training:
             optimizer.zero_grad(set_to_none=True)
@@ -101,6 +106,7 @@ def _epoch(model: OCRAPModel, loader: DataLoader, cfg: dict, device: torch.devic
             "loss_dep": loss_dep.item(),
             "loss_orc": loss_orc.item(),
             "loss_art": loss_art.item(),
+            "loss_utility": loss_util.item(),
             "pred_r_dep_mean": r_dep.mean().item(),
             "teacher_r_dep_mean": batch["r_dep_star"].float().mean().item(),
         }
@@ -147,7 +153,15 @@ def train(dataset: str, output: str, cfg: dict) -> dict:
     num_roots = int(first["m_star"].shape[0])
     num_options = int(first["m_star"].shape[1])
     device = _device(cfg)
-    model = OCRAPModel(train_ds.feature_dim, num_roots=num_roots, num_options=num_options, d_model=int((cfg.get("model", {}) or {}).get("d_model", 128))).to(device)
+    model_cfg = cfg.get("model", {}) if isinstance(cfg.get("model", {}), dict) else {}
+    model = OCRAPModel(
+        train_ds.feature_dim,
+        num_roots=num_roots,
+        num_options=num_options,
+        d_model=int(model_cfg.get("d_model", 128)),
+        d_obs=int(model_cfg.get("d_obs", 64)),
+        tau_obs=float(model_cfg.get("tau_obs", (cfg.get("ocmero", {}) or {}).get("tau_obs", 1.0))),
+    ).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=float((cfg.get("training", {}) or {}).get("lr", 1e-3)), weight_decay=float((cfg.get("training", {}) or {}).get("weight_decay", 1e-4)))
     batch_size = int((cfg.get("training", {}) or {}).get("batch_size", 32))
     num_workers = int((cfg.get("training", {}) or {}).get("num_workers", 0))
@@ -171,6 +185,8 @@ def train(dataset: str, output: str, cfg: dict) -> dict:
                 "input_dim": train_ds.feature_dim,
                 "num_roots": num_roots,
                 "num_options": num_options,
+                "d_obs": int(model_cfg.get("d_obs", 64)),
+                "tau_obs": float(model_cfg.get("tau_obs", (cfg.get("ocmero", {}) or {}).get("tau_obs", 1.0))),
                 "model_state": model.state_dict(),
                 "epoch": ep,
                 "val_loss": best_val,

@@ -8,6 +8,7 @@ from ocrap.data.build.builder import build_dataset
 from ocrap.data.build.diagnose import diagnose_dataset
 from ocrap.data.build.papercheck import papercheck_dataset
 from ocrap.evaluation.evaluator import evaluate
+from ocrap.analysis.dataset_report import analyze_dataset
 
 from .calibrate import calibrate
 from .deploy import deploy
@@ -63,6 +64,12 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument("--calibration", default=None)
     p.add_argument("--split", default="test")
     p.add_argument("--output", required=True)
+    p = sub.add_parser("analyze-dataset")
+    add_common(p)
+    p.add_argument("--dataset", required=True)
+    p.add_argument("--output", required=True)
+    p.add_argument("--max-samples", type=int, default=None)
+    p.add_argument("--no-plots", action="store_true")
     p = sub.add_parser("deploy")
     add_common(p)
     p.add_argument("--dataset", required=True)
@@ -110,6 +117,8 @@ def main(argv: list[str] | None = None) -> None:
         result = calibrate(args.dataset, args.checkpoint, args.output, cfg)
     elif args.cmd == "evaluate":
         result = evaluate(args.dataset, args.checkpoint, args.output, split=args.split, calibration_json=args.calibration, cfg=cfg)
+    elif args.cmd == "analyze-dataset":
+        result = analyze_dataset(args.dataset, args.output, max_samples=args.max_samples, plots=not args.no_plots)
     elif args.cmd == "deploy":
         result = deploy(args.dataset, args.checkpoint, args.scene_id, args.time_index, args.output, calibration_json=args.calibration, delta=args.delta, cfg=cfg)
     else:

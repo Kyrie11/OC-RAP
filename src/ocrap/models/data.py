@@ -229,6 +229,7 @@ class OCRAPSampleDataset(Dataset):
             "r_dep_star": torch.tensor(float(np.asarray(d["r_dep_star"]).item()), dtype=torch.float32),
             "r_orc_star": torch.tensor(float(np.asarray(d["r_orc_star"]).item()), dtype=torch.float32),
             "i_art_star": torch.tensor(float(np.asarray(d["i_art_star"]).item()), dtype=torch.float32),
+            "utility": torch.tensor(float(np.asarray(d.get("utility", 0.0)).item()), dtype=torch.float32),
         }
         return out
 

@@ -90,6 +90,7 @@ def torch_oc_mero(
     alpha: float = 0.2,
     beta: float = 0.2,
     option_valid: torch.Tensor | None = None,
+    root_valid: torch.Tensor | None = None,
     use_lcvar: bool = True,
     use_obs_kernel: bool = True,
     eps: float = EPS,
@@ -99,6 +100,10 @@ def torch_oc_mero(
         option_valid = torch.ones((B, L), dtype=torch.bool, device=M.device)
     if option_valid.dim() == 1:
         option_valid = option_valid.unsqueeze(0).expand(B, -1)
+    if root_valid is not None:
+        if root_valid.dim() == 1:
+            root_valid = root_valid.unsqueeze(0).expand(B, -1)
+        p = torch.where(root_valid.bool(), p, torch.zeros_like(p))
     p_norm = torch_normalize_weights(p, eps)
     C_eff = torch.eye(K, dtype=M.dtype, device=M.device).unsqueeze(0).expand(B, -1, -1) if not use_obs_kernel else C
     M_masked = torch.where(option_valid.unsqueeze(1), M, torch.full_like(M, -1e9))

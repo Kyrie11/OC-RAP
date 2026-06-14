@@ -63,6 +63,8 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         num_roots=int(ckpt["num_roots"]),
         num_options=int(ckpt["num_options"]),
         d_model=int((cfg.get("model", {}) or {}).get("d_model", 128)),
+        d_obs=int(ckpt.get("d_obs", (cfg.get("model", {}) or {}).get("d_obs", 64))),
+        tau_obs=float(ckpt.get("tau_obs", (cfg.get("model", {}) or {}).get("tau_obs", (cfg.get("ocmero", {}) or {}).get("tau_obs", 1.0)))),
     ).to(device)
     model.load_state_dict(ckpt["model_state"])
     model.eval()
@@ -100,7 +102,8 @@ def predict_sample(d: dict[str, Any], bundle: ModelBundle | None, cfg: dict | No
         return teacher_prediction_from_sample(d, cfg)
     x = torch.from_numpy(sample_to_feature(d, bundle.cfg)).float().unsqueeze(0).to(bundle.device)
     out = bundle.model(x)
-    p = torch.softmax(out["root_logits"], dim=-1)
+    root_valid = torch.from_numpy(np.asarray(d.get("root_valid", np.ones(bundle.model.num_roots)), dtype=np.float32) > 0.5).unsqueeze(0).to(bundle.device)
+    p = torch.softmax(out["root_logits"].masked_fill(~root_valid, -1.0e4), dim=-1)
     option_valid = torch.from_numpy(np.asarray(d["option_valid"], dtype=np.float32) > 0.5).unsqueeze(0).to(bundle.device)
     r_dep, r_orc, gap, q = torch_oc_mero(
         out["margins"],
@@ -109,6 +112,7 @@ def predict_sample(d: dict[str, Any], bundle: ModelBundle | None, cfg: dict | No
         alpha=float((bundle.cfg.get("ocmero", {}) or {}).get("alpha", 0.2)),
         beta=float((bundle.cfg.get("ocmero", {}) or {}).get("beta", 0.2)),
         option_valid=option_valid,
+        root_valid=root_valid,
         use_lcvar=not bool((bundle.cfg.get("ablation", {}) or {}).get("without_lower_tail", False)),
         use_obs_kernel=not bool((bundle.cfg.get("ablation", {}) or {}).get("without_observation_kernel", False)),
     )
