@@ -204,6 +204,18 @@ def train(dataset: str, output: str, cfg: dict) -> dict:
     d_model = int(model_cfg.get("d_model", 128))
     d_obs = int(model_cfg.get("d_obs", 64))
     tau_obs = float(model_cfg.get("tau_obs", (cfg.get("ocmero", {}) or {}).get("tau_obs", 1.0)))
+    encoder_type = str(model_cfg.get("encoder_type", "mlp"))
+    feature_layout = {
+        "prefix_param_dim": int(cfg.get("prefix_param_dim", 5)),
+        "num_macros": int(model_cfg.get("num_macros", 16)),
+        "prefix_flat_dim": int(model_cfg.get("feature_prefix_flat_dim", 80)),
+        "control_flat_dim": int(model_cfg.get("feature_control_flat_dim", 40)),
+        "feature_max_agents": int(model_cfg.get("feature_max_agents", 32)),
+        "bev_channels": int(cfg.get("bev_channels", 7)),
+        "route_flat_dim": int(model_cfg.get("feature_route_flat_dim", 64)),
+        "map_flat_dim": int(model_cfg.get("feature_map_flat_dim", 64)),
+        "dyn_flat_dim": int(model_cfg.get("feature_dynamic_map_flat_dim", 32)),
+    }
     model = OCRAPModel(
         train_ds.feature_dim,
         num_roots=num_roots,
@@ -211,6 +223,11 @@ def train(dataset: str, output: str, cfg: dict) -> dict:
         d_model=d_model,
         d_obs=d_obs,
         tau_obs=tau_obs,
+        encoder_type=encoder_type,
+        feature_layout=feature_layout,
+        num_layers=int(model_cfg.get("transformer_layers", 2)),
+        num_heads=int(model_cfg.get("transformer_heads", 4)),
+        dropout=float(model_cfg.get("dropout", 0.1)),
     ).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=float((cfg.get("training", {}) or {}).get("lr", 1e-3)), weight_decay=float((cfg.get("training", {}) or {}).get("weight_decay", 1e-4)))
     batch_size = int((cfg.get("training", {}) or {}).get("batch_size", 32))
@@ -233,6 +250,7 @@ def train(dataset: str, output: str, cfg: dict) -> dict:
         "batch_size": batch_size,
         "d_model": d_model,
         "d_obs": d_obs,
+        "encoder_type": encoder_type,
     }, flush=True)
     t0 = perf_counter()
     for ep in range(1, epochs + 1):
@@ -253,6 +271,8 @@ def train(dataset: str, output: str, cfg: dict) -> dict:
                 "d_model": d_model,
                 "d_obs": d_obs,
                 "tau_obs": tau_obs,
+                "encoder_type": encoder_type,
+                "feature_layout": feature_layout,
                 "model_state": model.state_dict(),
                 "epoch": ep,
                 "val_loss": best_val,
@@ -277,6 +297,7 @@ def train(dataset: str, output: str, cfg: dict) -> dict:
         "num_options": num_options,
         "d_model": d_model,
         "d_obs": d_obs,
+        "encoder_type": encoder_type,
         "best_val_loss": float(best_val),
         "device_info": device_info,
         "train_batches_per_epoch": len(train_loader),

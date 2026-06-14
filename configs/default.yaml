@@ -157,6 +157,10 @@ model:
   d_future_signature: 32
   num_macros: 16
   no_occlusion_bev: false
+  encoder_type: mlp
+  transformer_layers: 2
+  transformer_heads: 4
+  dropout: 0.1
 dataset_quality:
   # Off by default for broad natural-WOMD sweeps. Enable only for artifact/stress
   # datasets that are intended to support FRA, ODG, and anti-oracle claims.
@@ -275,3 +279,7 @@ ablation:
   without_anti_oracle: false
   full_future_roots: false
   no_occlusion_bev: false
+  encoder_type: mlp
+  transformer_layers: 2
+  transformer_heads: 4
+  dropout: 0.1

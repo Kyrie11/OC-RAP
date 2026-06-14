@@ -46,6 +46,43 @@ def _records_summary(records: list[dict], split: str, gamma: float, source: str,
     return result
 
 
+
+
+def _write_method_tables(result: dict, output: str | Path) -> None:
+    """Write slide-friendly method comparison tables next to the JSON output."""
+    try:
+        out = Path(output)
+        methods = result.get("methods", {}) or {}
+        order = result.get("method_order", list(methods.keys()))
+        cols = [
+            "FRA_exec", "FRA_cand", "DRS", "bounded_NUP", "ODG",
+            "artifact_selection_rate", "mean_selected_teacher_R_dep", "mean_selected_utility",
+        ]
+        pretty = {
+            "FRA_exec": "Executed false recovery admission ↓",
+            "FRA_cand": "Admitted false-recoverable candidates ↓",
+            "DRS": "Deployable recovery success ↑",
+            "bounded_NUP": "Nominal utility preservation ↑",
+            "ODG": "Selected oracle-to-deployable gap ↓",
+            "artifact_selection_rate": "Oracle-artifact selection rate ↓",
+            "mean_selected_teacher_R_dep": "Selected deployable recovery score ↑",
+            "mean_selected_utility": "Selected utility ↑",
+        }
+        csv_lines = ["method," + ",".join(cols)]
+        md = ["| Method | " + " | ".join(pretty[c] for c in cols) + " |", "|---|" + "---|" * len(cols)]
+        for m in order:
+            row = methods.get(m, {}) or {}
+            vals = []
+            for c in cols:
+                v = row.get(c, None)
+                vals.append("" if v is None else f"{float(v):.4f}")
+            csv_lines.append(m + "," + ",".join(vals))
+            md.append("| " + m + " | " + " | ".join(vals) + " |")
+        out.with_suffix(".methods.csv").write_text("\n".join(csv_lines), encoding="utf-8")
+        out.with_suffix(".methods.md").write_text("\n".join(md), encoding="utf-8")
+    except Exception:
+        return
+
 def evaluate(dataset: str | Path, checkpoint: str | Path | None = None, output: str | Path | None = None, split: str = "test", calibration_json: str | Path | None = None, cfg: dict | None = None) -> dict:
     cfg = cfg or {}
     paths = iter_sample_paths_many(dataset)
@@ -114,4 +151,5 @@ def evaluate(dataset: str | Path, checkpoint: str | Path | None = None, output: 
     result["method_order"] = methods
     if output:
         write_json(result, output)
+        _write_method_tables(result, output)
     return result

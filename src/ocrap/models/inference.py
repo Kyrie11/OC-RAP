@@ -105,6 +105,9 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     d_model = _infer_d_model(ckpt, cfg)
     d_obs = int(ckpt.get("d_obs", (cfg.get("model", {}) or {}).get("d_obs", 64)))
     tau_obs = float(ckpt.get("tau_obs", (cfg.get("model", {}) or {}).get("tau_obs", (cfg.get("ocmero", {}) or {}).get("tau_obs", 1.0))))
+    model_cfg = cfg.get("model", {}) if isinstance(cfg.get("model", {}), dict) else {}
+    encoder_type = str(ckpt.get("encoder_type", model_cfg.get("encoder_type", "mlp")))
+    feature_layout = ckpt.get("feature_layout", None)
     model = OCRAPModel(
         int(ckpt["input_dim"]),
         num_roots=int(ckpt["num_roots"]),
@@ -112,6 +115,11 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         d_model=d_model,
         d_obs=d_obs,
         tau_obs=tau_obs,
+        encoder_type=encoder_type,
+        feature_layout=feature_layout,
+        num_layers=int(model_cfg.get("transformer_layers", 2)),
+        num_heads=int(model_cfg.get("transformer_heads", 4)),
+        dropout=float(model_cfg.get("dropout", 0.1)),
     ).to(device)
     model.load_state_dict(ckpt["model_state"])
     model.eval()
@@ -119,6 +127,7 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["d_model"] = d_model
     cfg["model"]["d_obs"] = d_obs
     cfg["model"]["tau_obs"] = tau_obs
+    cfg["model"]["encoder_type"] = encoder_type
     return ModelBundle(model=model, cfg=cfg, device=device)
 
 

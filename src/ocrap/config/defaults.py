@@ -85,7 +85,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "selection": {"gamma_rec": 0.0, "fixed_gamma_rec": 0.0, "gamma_H": 0.0, "gamma_D": 5.0},
     "calibration": {"deltas": [0.01, 0.05, 0.10], "numerical_margin": 0.0, "strict": True, "required_min_for_delta": 100},
-    "model": {"d_model": 128, "d_z": 128, "d_obs": 64, "d_signature": 32, "d_future_signature": 32, "num_macros": 16, "no_occlusion_bev": False},
+    "model": {"d_model": 128, "d_z": 128, "d_obs": 64, "d_signature": 32, "d_future_signature": 32, "num_macros": 16, "no_occlusion_bev": False, "encoder_type": "mlp", "transformer_layers": 2, "transformer_heads": 4, "dropout": 0.1},
     "training": {"device": "auto", "require_cuda": False, "progress": True, "batch_size": 16, "num_workers": 0, "epochs": 1, "lr": 0.001, "weight_decay": 0.0001, "grad_clip": 5.0, "artifact_sampler_weight": 0.25, "root_target_mode": "recovery_signature"},
     "loss_weights": {"assign": 1.0, "sig": 0.5, "ib": 0.01, "obs": 1.0, "margin": 2.0, "anti_oracle": 1.0, "utility": 0.2},
     "evaluation": {"batch_size": 64, "delta": 0.05, "methods": ["nominal", "risk_aware", "backup_filter", "contingency", "oracle_filter", "ocrap"]},
