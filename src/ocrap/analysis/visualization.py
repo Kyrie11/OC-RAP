@@ -30,6 +30,21 @@ def _mpl():
     return plt, Rectangle, Affine2D
 
 
+def _boxplot_with_labels(ax, data, labels, **kwargs):
+    """Draw a boxplot across Matplotlib versions.
+
+    Matplotlib versions before the tick_labels rename expect `labels=...`;
+    newer versions accept `tick_labels=...`.  Try the new spelling first,
+    then fall back only for that compatibility TypeError.
+    """
+    try:
+        return ax.boxplot(data, tick_labels=labels, **kwargs)
+    except TypeError as exc:
+        if "tick_labels" not in str(exc):
+            raise
+        return ax.boxplot(data, labels=labels, **kwargs)
+
+
 def _finite_arr(rows: list[dict[str, Any]], key: str) -> np.ndarray:
     a = np.asarray([r.get(key, np.nan) for r in rows], dtype=float)
     return a[np.isfinite(a)]
@@ -196,7 +211,7 @@ def plot_gap_by_category(rows: list[dict[str, Any]], out_dir: Path) -> str | Non
         return None
     fig = plt.figure(figsize=(9.8, 4.8))
     ax = fig.add_subplot(111)
-    ax.boxplot(data, tick_labels=labels, showfliers=False)
+    _boxplot_with_labels(ax, data, labels, showfliers=False)
     ax.set_ylabel("Oracle-to-deployable recovery gap")
     ax.set_title("Where is hindsight recovery most misleading?")
     ax.grid(axis="y", alpha=0.25)

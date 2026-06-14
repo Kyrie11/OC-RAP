@@ -112,7 +112,10 @@ def _maybe_plot(out_dir: Path, rows: list[dict[str, Any]]) -> list[str]:
     plt.close(fig)
     paths.append(str(p))
 
-    # Presentation-oriented figures.
+    # Presentation-oriented figures.  Keep each figure isolated: a failure in one
+    # optional visualization should not prevent later figures (especially the toy
+    # gallery) from being written.
+    warnings: list[str] = []
     try:
         from ocrap.analysis.visualization import (
             plot_criticality_ladder,
@@ -122,18 +125,29 @@ def _maybe_plot(out_dir: Path, rows: list[dict[str, Any]]) -> list[str]:
             write_toy_gallery,
         )
 
-        for maybe in (
-            plot_recoverability_story(rows, out_dir),
-            plot_criticality_ladder(rows, out_dir),
-            plot_regime_breakdown(rows, out_dir),
-            plot_gap_by_category(rows, out_dir),
+        for fn in (
+            plot_recoverability_story,
+            plot_criticality_ladder,
+            plot_regime_breakdown,
+            plot_gap_by_category,
         ):
-            if maybe:
-                paths.append(maybe)
-        paths.extend(write_toy_gallery(rows, out_dir, max_examples=4))
+            try:
+                maybe = fn(rows, out_dir)
+                if maybe:
+                    paths.append(maybe)
+            except Exception as exc:
+                warnings.append(f"{fn.__name__}: {exc}")
+
+        try:
+            paths.extend(write_toy_gallery(rows, out_dir, max_examples=4))
+        except Exception as exc:
+            warnings.append(f"write_toy_gallery: {exc}")
     except Exception as exc:
         # Keep analyze-dataset robust on machines without a display/matplotlib extras.
-        (out_dir / "visualization_warning.txt").write_text(str(exc), encoding="utf-8")
+        warnings.append(f"presentation_visualizations: {exc}")
+
+    if warnings:
+        (out_dir / "visualization_warning.txt").write_text("\n".join(warnings), encoding="utf-8")
     return paths
 
 
