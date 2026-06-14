@@ -189,6 +189,8 @@ dataset_quality:
   warn_if_scene_count_below: 50
 training:
   device: auto
+  require_cuda: false
+  progress: true
   batch_size: 16
   num_workers: 0
   epochs: 1

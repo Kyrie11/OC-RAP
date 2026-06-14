@@ -37,37 +37,88 @@ def _device_from_cfg(cfg: dict) -> torch.device:
     return torch.device(requested)
 
 
-def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = None) -> ModelBundle | None:
-    if not checkpoint:
-        return None
-    path = Path(checkpoint)
-    if not path.exists():
-        return None
-    ckpt = torch.load(path, map_location="cpu")
-    if "model_state" not in ckpt:
-        return None
-    cfg = dict(ckpt.get("cfg", {}) or {})
-    if runtime_cfg:
-        # Runtime cfg may override selection/calibration options, but checkpoint
-        # geometry must remain authoritative.
-        for k, v in runtime_cfg.items():
+def _merge_runtime_cfg_for_inference(ckpt_cfg: dict[str, Any], runtime_cfg: dict | None) -> dict[str, Any]:
+    """Merge only inference-safe runtime settings into checkpoint config.
+
+    The checkpoint owns model geometry and feature geometry.  A default runtime
+    config must not silently overwrite model.d_model, feature dimensions, or
+    other fields that affect the module shapes.  This was the cause of the
+    256-vs-128 load_state_dict mismatch seen after training with
+    ``--set model.d_model=256`` and calibrating with default config.
+    """
+    cfg = dict(ckpt_cfg or {})
+    if not runtime_cfg:
+        return cfg
+    allow_sections = {"selection", "calibration", "evaluation", "ablation", "ocmero", "baselines", "metrics", "artifact"}
+    for k, v in runtime_cfg.items():
+        if k in allow_sections:
             if isinstance(v, dict) and isinstance(cfg.get(k), dict):
                 tmp = dict(cfg[k])
                 tmp.update(v)
                 cfg[k] = tmp
             else:
                 cfg[k] = v
+    # Only device-related training overrides are inference-safe.
+    rt_train = runtime_cfg.get("training", {}) if isinstance(runtime_cfg.get("training", {}), dict) else {}
+    if rt_train:
+        train_cfg = dict(cfg.get("training", {}) or {})
+        for key in ("device", "require_cuda"):
+            if key in rt_train:
+                train_cfg[key] = rt_train[key]
+        cfg["training"] = train_cfg
+    return cfg
+
+
+def _infer_d_model(ckpt: dict[str, Any], cfg: dict[str, Any]) -> int:
+    if "d_model" in ckpt:
+        return int(ckpt["d_model"])
+    state = ckpt.get("model_state", {}) or {}
+    for key in ("encoder.net.0.weight", "root_logits.weight", "margin_head.weight"):
+        w = state.get(key)
+        if w is not None:
+            shape = tuple(w.shape)
+            if key == "encoder.net.0.weight" and len(shape) == 2:
+                return int(shape[0])
+            if len(shape) == 2:
+                return int(shape[1])
+    return int((cfg.get("model", {}) or {}).get("d_model", 128))
+
+
+def _load_checkpoint(path: Path) -> dict[str, Any]:
+    try:
+        return torch.load(path, map_location="cpu", weights_only=False)
+    except TypeError:  # older torch
+        return torch.load(path, map_location="cpu")
+
+
+def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = None) -> ModelBundle | None:
+    if not checkpoint:
+        return None
+    path = Path(checkpoint)
+    if not path.exists():
+        return None
+    ckpt = _load_checkpoint(path)
+    if "model_state" not in ckpt:
+        return None
+    cfg = _merge_runtime_cfg_for_inference(dict(ckpt.get("cfg", {}) or {}), runtime_cfg)
     device = _device_from_cfg(cfg)
+    d_model = _infer_d_model(ckpt, cfg)
+    d_obs = int(ckpt.get("d_obs", (cfg.get("model", {}) or {}).get("d_obs", 64)))
+    tau_obs = float(ckpt.get("tau_obs", (cfg.get("model", {}) or {}).get("tau_obs", (cfg.get("ocmero", {}) or {}).get("tau_obs", 1.0))))
     model = OCRAPModel(
         int(ckpt["input_dim"]),
         num_roots=int(ckpt["num_roots"]),
         num_options=int(ckpt["num_options"]),
-        d_model=int((cfg.get("model", {}) or {}).get("d_model", 128)),
-        d_obs=int(ckpt.get("d_obs", (cfg.get("model", {}) or {}).get("d_obs", 64))),
-        tau_obs=float(ckpt.get("tau_obs", (cfg.get("model", {}) or {}).get("tau_obs", (cfg.get("ocmero", {}) or {}).get("tau_obs", 1.0)))),
+        d_model=d_model,
+        d_obs=d_obs,
+        tau_obs=tau_obs,
     ).to(device)
     model.load_state_dict(ckpt["model_state"])
     model.eval()
+    cfg.setdefault("model", {})
+    cfg["model"]["d_model"] = d_model
+    cfg["model"]["d_obs"] = d_obs
+    cfg["model"]["tau_obs"] = tau_obs
     return ModelBundle(model=model, cfg=cfg, device=device)
 
 

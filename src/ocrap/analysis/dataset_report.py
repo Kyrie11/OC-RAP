@@ -74,38 +74,58 @@ def _maybe_plot(out_dir: Path, rows: list[dict[str, Any]]) -> list[str]:
     gap = np.array([r["gap"] for r in rows], dtype=float)
     art = np.array([r["artifact"] for r in rows], dtype=bool)
 
-    fig = plt.figure()
-    plt.hist(r_dep[np.isfinite(r_dep)], bins=50)
+    # Backward-compatible simple plots.
+    fig = plt.figure(figsize=(8.0, 4.8))
+    plt.hist(r_dep[np.isfinite(r_dep)], bins=50, alpha=0.85)
+    plt.axvline(0.0, color="k", lw=1.0)
     plt.xlabel("R_dep* / deployable recoverability")
     plt.ylabel("samples")
     plt.title("Deployable recoverability distribution")
     p = out_dir / "hist_r_dep.png"
-    fig.savefig(p, dpi=160, bbox_inches="tight")
+    fig.savefig(p, dpi=180, bbox_inches="tight")
     plt.close(fig)
     paths.append(str(p))
 
-    fig = plt.figure()
-    plt.hist(gap[np.isfinite(gap)], bins=50)
+    fig = plt.figure(figsize=(8.0, 4.8))
+    plt.hist(gap[np.isfinite(gap)], bins=50, alpha=0.85)
+    plt.axvline(0.0, color="k", lw=1.0)
     plt.xlabel("ODG* = R_orc* - R_dep*")
     plt.ylabel("samples")
     plt.title("Oracle-to-deployable gap distribution")
     p = out_dir / "hist_oracle_gap.png"
-    fig.savefig(p, dpi=160, bbox_inches="tight")
+    fig.savefig(p, dpi=180, bbox_inches="tight")
     plt.close(fig)
     paths.append(str(p))
 
-    fig = plt.figure()
+    fig = plt.figure(figsize=(8.0, 5.4))
     plt.scatter(r_dep[~art], r_orc[~art], s=6, alpha=0.5, label="non-artifact")
     if art.any():
         plt.scatter(r_dep[art], r_orc[art], s=8, alpha=0.7, label="oracle artifact")
+    plt.axvline(0.0, color="k", lw=1.0)
+    plt.axhline(0.0, color="k", lw=1.0)
     plt.xlabel("R_dep*")
     plt.ylabel("R_orc*")
     plt.title("Oracle vs deployable recoverability")
     plt.legend(loc="best")
     p = out_dir / "scatter_oracle_vs_deployable.png"
-    fig.savefig(p, dpi=160, bbox_inches="tight")
+    fig.savefig(p, dpi=180, bbox_inches="tight")
     plt.close(fig)
     paths.append(str(p))
+
+    # Presentation-oriented figures.
+    try:
+        from ocrap.analysis.visualization import plot_criticality_ladder, plot_recoverability_story, write_toy_gallery
+
+        for maybe in (
+            plot_recoverability_story(rows, out_dir),
+            plot_criticality_ladder(rows, out_dir),
+        ):
+            if maybe:
+                paths.append(maybe)
+        paths.extend(write_toy_gallery(rows, out_dir, max_examples=2))
+    except Exception as exc:
+        # Keep analyze-dataset robust on machines without a display/matplotlib extras.
+        (out_dir / "visualization_warning.txt").write_text(str(exc), encoding="utf-8")
     return paths
 
 
