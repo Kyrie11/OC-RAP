@@ -208,76 +208,427 @@ regime_label, sample_metadata, split_id
 ```
 
 
-## Diagnose 数据集
-
-`diagnose` 用于检查生成数据集是否能支撑论文实验，而不只是检查文件能否读取。它会输出 schema/shape、split 泄漏、candidate coverage、future source coverage、hidden spawn 合法性、observation equivalence 退化、aliasing/incompatible recovery pair、OC-MERO label 可复算性、FRA/ODG/DRS 相关标签覆盖、regime 覆盖和 calibration/test split 可用性。
-
+## 构建Train Set(三个互补训练子集)
+### Natural/normal train set
+这个子集用于补强自然 WOMD 场景，避免模型只学到 stress case。
 ```bash
-PYTHONPATH=src python -m ocrap.cli diagnose \
-  --dataset data/ocrap_womd \
-  --output data/ocrap_womd/diagnose.json
+for i in 0 1 2 3; do
+python -m ocrap.cli build-dataset \
+  --set data_source=womd \
+  --set simulation_backend=waymax_closed_loop \
+  --set womd_patterns=${WOMD_TRAIN}@1000 \
+  --set max_scenarios=1200 \
+  --set scenario_stride=4 \
+  --set scenario_worker_index=${i} \
+  --set max_agents=64 \
+  --set max_map_polylines=256 \
+  --set max_polyline_points=64 \
+  --set max_times_per_scenario=4 \
+  --set max_biased_times_per_scenario=0 \
+  --set dataset_quality.min_uniform_times_per_scenario=2 \
+  --set num_candidate_prefixes=24 \
+  --set num_reactive_futures=2 \
+  --set num_targeted_futures=2 \
+  --set num_recovery_options=12 \
+  --set waymax.compute_future_metrics=true \
+  --set waymax.detect_natural_hidden_emergence=true \
+  --set waymax.enable_augmented_hidden_roots=false \
+  --set waymax.enable_visible_perturbation_roots=false \
+  --set waymax.teacher_backend=hybrid \
+  --set waymax.teacher_rollout_top_k_options=2 \
+  --set artifact.force_mine=false \
+  --set artifact.mine_probability=0.0 \
+  --set artifact.use_margin_override=false \
+  --set dataset_quality.balanced_two_pass=false \
+  --set dataset_quality.artifact_pass_use_margin_override=false \
+  --set dataset_quality.max_accepted_prefixes_per_scene_time=8 \
+  --set dataset_quality.min_artifact_prefixes_per_scene_time=0 \
+  --set dataset_quality.max_artifact_prefixes_per_scene_time=1 \
+  --set dataset_quality.min_nonartifact_prefixes_per_scene_time=6 \
+  --set dataset_quality.max_nonartifact_prefixes_per_scene_time=8 \
+  --set split_ratios.train=0.75 \
+  --set split_ratios.val=0.10 \
+  --set split_ratios.calibration=0.05 \
+  --set split_ratios.test=0.10 \
+  --set progress=true \
+  --output ${OCRAP_ROOT}/train_natural_v1_w${i}
+done
 ```
 
-对于 smoke test fixture：
-
+### Strict oracle-artifact train set
+这个子集用于验证 “oracle recoverable ≠ deployable recoverable”。
+关键是关闭 override，尽量让 teacher label 来自真实 rollout / hybrid rollout，而不是人为 margin override。
 ```bash
-PYTHONPATH=src python -m ocrap.cli diagnose \
-  --dataset runs/artifact_fixture \
-  --output runs/artifact_fixture/diagnose.json
+for i in 0 1 2 3; do
+python -m ocrap.cli build-dataset \
+  --set data_source=womd \
+  --set simulation_backend=waymax_closed_loop \
+  --set womd_patterns=${WOMD_TRAIN}@1000 \
+  --set max_scenarios=800 \
+  --set scenario_stride=4 \
+  --set scenario_worker_index=${i} \
+  --set max_agents=64 \
+  --set max_map_polylines=256 \
+  --set max_polyline_points=64 \
+  --set max_times_per_scenario=3 \
+  --set max_biased_times_per_scenario=2 \
+  --set dataset_quality.min_uniform_times_per_scenario=1 \
+  --set num_candidate_prefixes=24 \
+  --set num_reactive_futures=2 \
+  --set num_targeted_futures=6 \
+  --set num_recovery_options=12 \
+  --set waymax.compute_future_metrics=true \
+  --set waymax.detect_natural_hidden_emergence=true \
+  --set waymax.enable_augmented_hidden_roots=true \
+  --set waymax.enable_visible_perturbation_roots=true \
+  --set waymax.teacher_backend=hybrid \
+  --set waymax.teacher_rollout_top_k_options=2 \
+  --set waymax.apply_artifact_override_to_screened_options=false \
+  --set waymax.skip_waymax_rollout_for_augmented_override=false \
+  --set artifact.force_mine=true \
+  --set artifact.mine_probability=0.20 \
+  --set artifact.use_margin_override=false \
+  --set dataset_quality.balanced_two_pass=true \
+  --set dataset_quality.balanced_rotate_prefix_order=true \
+  --set dataset_quality.balanced_keep_nominal_nonartifact=true \
+  --set dataset_quality.artifact_pass_use_margin_override=false \
+  --set dataset_quality.artifact_quota_uses_label=true \
+  --set dataset_quality.max_accepted_prefixes_per_scene_time=8 \
+  --set dataset_quality.min_artifact_prefixes_per_scene_time=0 \
+  --set dataset_quality.max_artifact_prefixes_per_scene_time=2 \
+  --set dataset_quality.min_nonartifact_prefixes_per_scene_time=4 \
+  --set dataset_quality.max_nonartifact_prefixes_per_scene_time=6 \
+  --set split_ratios.train=0.75 \
+  --set split_ratios.val=0.10 \
+  --set split_ratios.calibration=0.05 \
+  --set split_ratios.test=0.10 \
+  --set progress=true \
+  --output ${OCRAP_ROOT}/train_strict_artifact_v1_w${i}
+done
 ```
 
-重点查看 `paper_support`、`failures`、`warnings`、`roots_and_observation.incompatible_alias_pair_fraction`、`recovery_labels.artifact_fraction`、`future_generation.hidden_from_unknown_count` 和 `splits`。
-
-## 训练 / 校准 / 评估 smoke test
-
-```bash
-PYTHONPATH=src python -m ocrap.cli train \
-  --dataset runs/artifact_fixture \
-  --output runs/train_smoke
-
-PYTHONPATH=src python -m ocrap.cli calibrate \
-  --dataset runs/artifact_fixture \
-  --checkpoint runs/train_smoke/best.pt \
-  --output runs/train_smoke/calibration.json
-
-PYTHONPATH=src python -m ocrap.cli evaluate \
-  --dataset runs/artifact_fixture \
-  --checkpoint runs/train_smoke/best.pt \
-  --split train \
-  --output runs/train_smoke/eval_train.json
-```
-
-## Ablation switches
-
-CLI 支持论文实验中的主要 ablation：
+### Post-contact / near-contact stress train set
+这个子集用于补强论文里 post-contact、secondary collision、near-contact 的叙事。
 
 ```bash
---without-observation-kernel
---without-lower-tail
---without-calibration
---without-anti-oracle
---full-future-roots
---no-occlusion-bev
+for i in 0 1 2 3; do
+python -m ocrap.cli build-dataset \
+  --set data_source=womd \
+  --set simulation_backend=waymax_closed_loop \
+  --set womd_patterns=${WOMD_TRAIN}@1000 \
+  --set max_scenarios=800 \
+  --set scenario_stride=4 \
+  --set scenario_worker_index=${i} \
+  --set max_agents=64 \
+  --set max_map_polylines=256 \
+  --set max_polyline_points=64 \
+  --set max_times_per_scenario=4 \
+  --set max_biased_times_per_scenario=4 \
+  --set dataset_quality.min_uniform_times_per_scenario=0 \
+  --set num_candidate_prefixes=24 \
+  --set num_reactive_futures=2 \
+  --set num_targeted_futures=8 \
+  --set 'targeted_future_kinds=[contact_impulse_surrogate,secondary_collision_approach,low_friction_braking,control_delay_noise]' \
+  --set num_recovery_options=12 \
+  --set waymax.compute_future_metrics=true \
+  --set waymax.detect_natural_hidden_emergence=true \
+  --set waymax.enable_augmented_hidden_roots=true \
+  --set waymax.enable_visible_perturbation_roots=true \
+  --set waymax.teacher_backend=hybrid \
+  --set waymax.teacher_rollout_top_k_options=2 \
+  --set 'waymax.teacher_rollout_option_modes=[post_contact_stabilize,avoid_secondary]' \
+  --set waymax.apply_artifact_override_to_screened_options=false \
+  --set waymax.skip_waymax_rollout_for_augmented_override=false \
+  --set artifact.force_mine=false \
+  --set artifact.mine_probability=0.0 \
+  --set artifact.use_margin_override=false \
+  --set dataset_quality.balanced_two_pass=true \
+  --set dataset_quality.max_accepted_prefixes_per_scene_time=10 \
+  --set dataset_quality.min_artifact_prefixes_per_scene_time=0 \
+  --set dataset_quality.max_artifact_prefixes_per_scene_time=2 \
+  --set dataset_quality.min_nonartifact_prefixes_per_scene_time=4 \
+  --set dataset_quality.max_nonartifact_prefixes_per_scene_time=8 \
+  --set split_ratios.train=0.75 \
+  --set split_ratios.val=0.10 \
+  --set split_ratios.calibration=0.05 \
+  --set split_ratios.test=0.10 \
+  --set progress=true \
+  --output ${OCRAP_ROOT}/train_post_contact_v1_w${i}
+done
+```
+## 构建Val set
+### Natural Validation Set
+```bash
+python -m ocrap.cli build-dataset \
+  --set data_source=womd \
+  --set simulation_backend=waymax_closed_loop \
+  --set womd_patterns=${WOMD_VAL}@300 \
+  --set max_scenarios=600 \
+  --set max_agents=64 \
+  --set max_map_polylines=256 \
+  --set max_polyline_points=64 \
+  --set max_times_per_scenario=4 \
+  --set max_biased_times_per_scenario=0 \
+  --set dataset_quality.min_uniform_times_per_scenario=2 \
+  --set num_candidate_prefixes=24 \
+  --set num_reactive_futures=2 \
+  --set num_targeted_futures=2 \
+  --set num_recovery_options=12 \
+  --set waymax.compute_future_metrics=true \
+  --set waymax.detect_natural_hidden_emergence=true \
+  --set waymax.enable_augmented_hidden_roots=false \
+  --set waymax.enable_visible_perturbation_roots=false \
+  --set waymax.teacher_backend=hybrid \
+  --set waymax.teacher_rollout_top_k_options=2 \
+  --set artifact.force_mine=false \
+  --set artifact.mine_probability=0.0 \
+  --set artifact.use_margin_override=false \
+  --set dataset_quality.balanced_two_pass=false \
+  --set split_ratios.train=0.0 \
+  --set split_ratios.val=1.0 \
+  --set split_ratios.calibration=0.0 \
+  --set split_ratios.test=0.0 \
+  --set progress=true \
+  --output ${OCRAP_ROOT}/val_natural_v1
 ```
 
-也可通过 dotted override 修改任意配置：
+### Strict artifact validation set
+```bash
+python -m ocrap.cli build-dataset \
+  --set data_source=womd \
+  --set simulation_backend=waymax_closed_loop \
+  --set womd_patterns=${WOMD_VAL}@300 \
+  --set max_scenarios=500 \
+  --set max_agents=64 \
+  --set max_map_polylines=256 \
+  --set max_polyline_points=64 \
+  --set max_times_per_scenario=3 \
+  --set max_biased_times_per_scenario=2 \
+  --set dataset_quality.min_uniform_times_per_scenario=1 \
+  --set num_candidate_prefixes=24 \
+  --set num_reactive_futures=2 \
+  --set num_targeted_futures=6 \
+  --set num_recovery_options=12 \
+  --set waymax.compute_future_metrics=true \
+  --set waymax.detect_natural_hidden_emergence=true \
+  --set waymax.enable_augmented_hidden_roots=true \
+  --set waymax.enable_visible_perturbation_roots=true \
+  --set waymax.teacher_backend=hybrid \
+  --set waymax.teacher_rollout_top_k_options=2 \
+  --set waymax.apply_artifact_override_to_screened_options=false \
+  --set artifact.force_mine=true \
+  --set artifact.mine_probability=0.15 \
+  --set artifact.use_margin_override=false \
+  --set dataset_quality.artifact_pass_use_margin_override=false \
+  --set dataset_quality.artifact_quota_uses_label=true \
+  --set split_ratios.train=0.0 \
+  --set split_ratios.val=1.0 \
+  --set split_ratios.calibration=0.0 \
+  --set split_ratios.test=0.0 \
+  --set progress=true \
+  --output ${OCRAP_ROOT}/val_strict_artifact_v1
+```
+
+### Post-contact validation set
+```bash
+python -m ocrap.cli build-dataset \
+  --set data_source=womd \
+  --set simulation_backend=waymax_closed_loop \
+  --set womd_patterns=${WOMD_VAL}@300 \
+  --set max_scenarios=500 \
+  --set max_agents=64 \
+  --set max_map_polylines=256 \
+  --set max_polyline_points=64 \
+  --set max_times_per_scenario=4 \
+  --set max_biased_times_per_scenario=4 \
+  --set num_candidate_prefixes=24 \
+  --set num_reactive_futures=2 \
+  --set num_targeted_futures=8 \
+  --set 'targeted_future_kinds=[contact_impulse_surrogate,secondary_collision_approach,low_friction_braking,control_delay_noise]' \
+  --set num_recovery_options=12 \
+  --set waymax.compute_future_metrics=true \
+  --set waymax.detect_natural_hidden_emergence=true \
+  --set waymax.enable_augmented_hidden_roots=true \
+  --set waymax.enable_visible_perturbation_roots=true \
+  --set waymax.teacher_backend=hybrid \
+  --set waymax.teacher_rollout_top_k_options=2 \
+  --set 'waymax.teacher_rollout_option_modes=[post_contact_stabilize,avoid_secondary]' \
+  --set artifact.force_mine=false \
+  --set artifact.mine_probability=0.0 \
+  --set artifact.use_margin_override=false \
+  --set split_ratios.train=0.0 \
+  --set split_ratios.val=1.0 \
+  --set split_ratios.calibration=0.0 \
+  --set split_ratios.test=0.0 \
+  --set progress=true \
+  --output ${OCRAP_ROOT}/val_post_contact_v1
+```
+
+## 数据检查与可视化
+
+### 训练集拼接
+```bash
+export TRAIN_MIX="${OCRAP_ROOT}/train_natural_v1_w0,${OCRAP_ROOT}/train_natural_v1_w1,${OCRAP_ROOT}/train_natural_v1_w2,${OCRAP_ROOT}/train_natural_v1_w3,${OCRAP_ROOT}/train_strict_artifact_v1_w0,${OCRAP_ROOT}/train_strict_artifact_v1_w1,${OCRAP_ROOT}/train_strict_artifact_v1_w2,${OCRAP_ROOT}/train_strict_artifact_v1_w3,${OCRAP_ROOT}/train_post_contact_v1_w0,${OCRAP_ROOT}/train_post_contact_v1_w1,${OCRAP_ROOT}/train_post_contact_v1_w2,${OCRAP_ROOT}/train_post_contact_v1_w3"
+```
+
+### 验证集拼接
+```bash
+export VAL_MIX="${OCRAP_ROOT}/val_natural_v1,${OCRAP_ROOT}/val_strict_artifact_v1,${OCRAP_ROOT}/val_post_contact_v1"
+```
+
+### 检查训练集
+```bash
+python -m ocrap.cli diagnose \
+  --dataset "$TRAIN_MIX" \
+  --output ${OCRAP_ROOT}/reports/diagnose_train_mix_v1.json
+
+python -m ocrap.cli papercheck \
+  --dataset "$TRAIN_MIX" \
+  --output ${OCRAP_ROOT}/reports/papercheck_train_mix_v1.json
+
+python -m ocrap.cli analyze-dataset \
+  --dataset "$TRAIN_MIX" \
+  --output ${OCRAP_ROOT}/analysis/train_mix_v1
+```
+
+### 检查验证集
+```bash
+python -m ocrap.cli diagnose \
+  --dataset "$VAL_MIX" \
+  --output ${OCRAP_ROOT}/reports/diagnose_val_mix_v1.json
+
+python -m ocrap.cli papercheck \
+  --dataset "$VAL_MIX" \
+  --output ${OCRAP_ROOT}/reports/papercheck_val_mix_v1.json
+
+python -m ocrap.cli analyze-dataset \
+  --dataset "$VAL_MIX" \
+  --output ${OCRAP_ROOT}/analysis/val_mix_v1
+```
+
+## 模型训练
+```bash
+CUDA_VISIBLE_DEVICES=0 python -m ocrap.cli train \
+  --dataset "$TRAIN_MIX" \
+  --output ${OCRAP_ROOT}/runs/ocrap_structured_mix_v1 \
+  --set training.device=cuda:0 \
+  --set training.require_cuda=true \
+  --set training.progress=true \
+  --set training.epochs=40 \
+  --set training.batch_size=128 \
+  --set training.lr=3e-4 \
+  --set training.weight_decay=1e-4 \
+  --set training.num_workers=8 \
+  --set training.artifact_sampler_weight=1.0 \
+  --set model.encoder_type=structured_transformer \
+  --set model.transformer_layers=2 \
+  --set model.transformer_heads=4 \
+  --set model.d_model=256 \
+  --set model.d_obs=64 \
+  --set model.tau_obs=1.0
+```
+
+## Calibration
 
 ```bash
-PYTHONPATH=src python -m ocrap.cli build-dataset \
-  --set ocmero.alpha=0.1 \
-  --set root_margin_aggregation=mean \
-  --output runs/ablation_mean
+python -m ocrap.cli calibrate \
+  --dataset "$TRAIN_MIX" \
+  --checkpoint ${OCRAP_ROOT}/runs/ocrap_structured_mix_v1/best.pt \
+  --output ${OCRAP_ROOT}/runs/ocrap_structured_mix_v1/calibration.json
 ```
 
-## 已验证内容
+## 内部test split评估
+```bash
+python -m ocrap.cli calibrate \
+  --dataset "$TRAIN_MIX" \
+  --checkpoint ${OCRAP_ROOT}/runs/ocrap_structured_mix_v1/best.pt \
+  --output ${OCRAP_ROOT}/runs/ocrap_structured_mix_v1/calibration.json
+```
 
-本仓库已通过以下本地检查：
+## 外部validation set评估
 
 ```bash
-PYTHONPATH=src pytest -q
-python -m compileall -q src
-PYTHONPATH=src python -m ocrap.cli build-dataset --set data_source=synthetic_artifact --set num_synthetic_scenarios=4 --set num_candidate_prefixes=8 --output runs/artifact_fixture
-PYTHONPATH=src python -m ocrap.cli papercheck --dataset runs/artifact_fixture --output runs/artifact_fixture/papercheck.json
+python -m ocrap.cli evaluate \
+  --dataset "$TRAIN_MIX" \
+  --checkpoint ${OCRAP_ROOT}/runs/ocrap_structured_mix_v1/best.pt \
+  --calibration ${OCRAP_ROOT}/runs/ocrap_structured_mix_v1/calibration.json \
+  --split test \
+  --output ${OCRAP_ROOT}/runs/ocrap_structured_mix_v1/eval_internal_test.json \
+  --set 'evaluation.methods=[nominal,risk_aware,backup_filter,contingency,oracle_filter,ocrap,ocrap_teacher]'
 ```
 
-当前对话未提供真实 WOMD TFRecord，因此没有在真实 WOMD 文件上跑端到端构造；代码已包含 TFRecord reader/parser 单测和 synthetic artifact fixture 验证。
+## 消融实验
+
+### 无 observation kernel
+
+```bash
+python -m ocrap.cli evaluate \
+  --dataset "$VAL_MIX" \
+  --checkpoint ${OCRAP_ROOT}/runs/ocrap_structured_mix_v1/best.pt \
+  --calibration ${OCRAP_ROOT}/runs/ocrap_structured_mix_v1/calibration.json \
+  --split val \
+  --without-observation-kernel \
+  --output ${OCRAP_ROOT}/runs/ocrap_structured_mix_v1/ablation_without_obs_kernel.json \
+  --set 'evaluation.methods=[ocrap]'
+```
+对应论文 OC-RAP w/o observation kernel 
+
+### 无lower-tail aggregation 
+```bash
+python -m ocrap.cli evaluate \
+  --dataset "$VAL_MIX" \
+  --checkpoint ${OCRAP_ROOT}/runs/ocrap_structured_mix_v1/best.pt \
+  --calibration ${OCRAP_ROOT}/runs/ocrap_structured_mix_v1/calibration.json \
+  --split val \
+  --without-lower-tail \
+  --output ${OCRAP_ROOT}/runs/ocrap_structured_mix_v1/ablation_without_lower_tail.json \
+  --set 'evaluation.methods=[ocrap]'
+```
+### 无calibration
+```bash
+python -m ocrap.cli evaluate \
+  --dataset "$VAL_MIX" \
+  --checkpoint ${OCRAP_ROOT}/runs/ocrap_structured_mix_v1/best.pt \
+  --split val \
+  --output ${OCRAP_ROOT}/runs/ocrap_structured_mix_v1/ablation_without_calibration.json \
+  --set selection.gamma_rec=0.0 \
+  --set 'evaluation.methods=[ocrap]'
+```
+
+### 无anti-oracle loss，需要重新训练
+```bash
+CUDA_VISIBLE_DEVICES=0 python -m ocrap.cli train \
+  --dataset "$TRAIN_MIX" \
+  --output ${OCRAP_ROOT}/runs/ocrap_structured_no_anti_oracle_v1 \
+  --set training.device=cuda:0 \
+  --set training.require_cuda=true \
+  --set training.progress=true \
+  --set training.epochs=40 \
+  --set training.batch_size=128 \
+  --set training.lr=3e-4 \
+  --set training.weight_decay=1e-4 \
+  --set training.num_workers=8 \
+  --set training.artifact_sampler_weight=1.0 \
+  --set loss_weights.anti_oracle=0.0 \
+  --set model.encoder_type=structured_transformer \
+  --set model.transformer_layers=2 \
+  --set model.transformer_heads=4 \
+  --set model.d_model=128 \
+  --set model.d_obs=64 \
+  --set model.tau_obs=1.0
+```
+
+```bash
+python -m ocrap.cli calibrate \
+  --dataset "$TRAIN_MIX" \
+  --checkpoint ${OCRAP_ROOT}/runs/ocrap_structured_no_anti_oracle_v1/best.pt \
+  --output ${OCRAP_ROOT}/runs/ocrap_structured_no_anti_oracle_v1/calibration.json
+
+python -m ocrap.cli evaluate \
+  --dataset "$VAL_MIX" \
+  --checkpoint ${OCRAP_ROOT}/runs/ocrap_structured_no_anti_oracle_v1/best.pt \
+  --calibration ${OCRAP_ROOT}/runs/ocrap_structured_no_anti_oracle_v1/calibration.json \
+  --split val \
+  --output ${OCRAP_ROOT}/runs/ocrap_structured_no_anti_oracle_v1/eval_external_val.json \
+  --set 'evaluation.methods=[ocrap]'
+```
