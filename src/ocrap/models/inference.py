@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 from ocrap.algorithms.ocmero import oc_mero, torch_oc_mero
-from ocrap.models.data import sample_to_feature
+from ocrap.models.data import OPTION_FEATURE_DIM, option_features_from_sample, sample_to_feature
 from ocrap.models.ocrap import OCRAPModel
 
 
@@ -122,6 +122,7 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         dropout=float(model_cfg.get("dropout", 0.1)),
         d_signature=int(ckpt.get("d_signature", 0)),
         d_future_signature=int(ckpt.get("d_future_signature", 0)),
+        option_feature_dim=int(ckpt.get("option_feature_dim", OPTION_FEATURE_DIM)),
     ).to(device)
     model.load_state_dict(ckpt["model_state"])
     model.eval()
@@ -163,7 +164,8 @@ def predict_sample(d: dict[str, Any], bundle: ModelBundle | None, cfg: dict | No
     if bundle is None:
         return teacher_prediction_from_sample(d, cfg)
     x = torch.from_numpy(sample_to_feature(d, bundle.cfg)).float().unsqueeze(0).to(bundle.device)
-    out = bundle.model(x)
+    option_features = torch.from_numpy(option_features_from_sample(d, bundle.cfg)).float().unsqueeze(0).to(bundle.device)
+    out = bundle.model(x, option_features)
     root_valid = torch.from_numpy(np.asarray(d.get("root_valid", np.ones(bundle.model.num_roots)), dtype=np.float32) > 0.5).unsqueeze(0).to(bundle.device)
     p = torch.softmax(out["root_logits"].masked_fill(~root_valid, -1.0e4), dim=-1)
     option_valid = torch.from_numpy(np.asarray(d["option_valid"], dtype=np.float32) > 0.5).unsqueeze(0).to(bundle.device)
@@ -177,6 +179,7 @@ def predict_sample(d: dict[str, Any], bundle: ModelBundle | None, cfg: dict | No
         root_valid=root_valid,
         use_lcvar=not bool((bundle.cfg.get("ablation", {}) or {}).get("without_lower_tail", False)),
         use_obs_kernel=not bool((bundle.cfg.get("ablation", {}) or {}).get("without_observation_kernel", False)),
+        top_m=int((bundle.cfg.get("ocmero", {}) or {}).get("top_m", 8)),
     )
     return Prediction(
         r_dep=float(r_dep.squeeze(0).detach().cpu().item()),

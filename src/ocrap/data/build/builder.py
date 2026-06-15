@@ -813,6 +813,15 @@ def _append_profile_row(profile_path: Path, sample: DatasetSample, sample_index:
         os.fsync(f.fileno())
 
 
+def _write_running_status(out: Path, **kwargs) -> None:
+    """Write a lightweight status file while a long build is still running."""
+    try:
+        write_json({k: v for k, v in kwargs.items()}, out / "dataset_status.json")
+    except Exception:
+        # Status reporting must never make dataset generation fail.
+        return
+
+
 def _count_splits(rows: list[dict]) -> dict[str, int]:
     split_counts: dict[str, int] = {"train": 0, "val": 0, "calibration": 0, "test": 0}
     for row in rows:
@@ -919,6 +928,21 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
                         _progress(1)
                     if _profiling_enabled(cfg) and bool(_profiling_cfg(cfg).get("log_writes", True)):
                         _profile_log(cfg, f"wrote sample #{total} path={path}")
+                if _profiling_enabled(cfg) or bool(cfg.get("checkpoint_manifest_each_scene_time", False)):
+                    _write_manifest_atomic(out / "manifest.csv", manifest_rows)
+                    _write_running_status(
+                        out,
+                        num_samples=int(total),
+                        split_counts=split_counts,
+                        sample_dir=str(sample_dir),
+                        raw_scenarios_seen=int(raw_scenarios_seen),
+                        scene_time_groups=int(scene_time_groups),
+                        new_samples_written=int(new_samples_written),
+                        skipped_existing_samples=int(skipped_existing_samples),
+                        skipped_existing_scene_time_groups=int(skipped_existing_scene_time_groups),
+                        progress_mode=progress_mode,
+                        profile_csv=str(profile_path) if _profiling_enabled(cfg) else "",
+                    )
     finally:
         if progress_bar is not None:
             progress_bar.close()

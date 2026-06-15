@@ -47,7 +47,7 @@ def _f(row: dict[str, str], key: str) -> float:
 def _summary(out: Path, window: int) -> str:
     manifest = _read_csv(out / "manifest.csv")
     profile = _read_csv(out / "build_profile.csv")
-    ds = _read_json(out / "dataset_summary.json")
+    ds = _read_json(out / "dataset_summary.json") or _read_json(out / "dataset_status.json")
     n_manifest = len(manifest)
     n_npz = len(list((out / "samples").glob("*.npz"))) if (out / "samples").exists() else 0
     lines = [f"samples: manifest={n_manifest} npz={n_npz} raw_scenarios={ds.get('raw_scenarios_seen', '?')} scene_times={ds.get('scene_time_groups', '?')}"]

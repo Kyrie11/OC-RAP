@@ -93,6 +93,7 @@ def torch_oc_mero(
     root_valid: torch.Tensor | None = None,
     use_lcvar: bool = True,
     use_obs_kernel: bool = True,
+    top_m: int | None = None,
     eps: float = EPS,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     B, K, L = M.shape
@@ -105,7 +106,16 @@ def torch_oc_mero(
             root_valid = root_valid.unsqueeze(0).expand(B, -1)
         p = torch.where(root_valid.bool(), p, torch.zeros_like(p))
     p_norm = torch_normalize_weights(p, eps)
-    C_eff = torch.eye(K, dtype=M.dtype, device=M.device).unsqueeze(0).expand(B, -1, -1) if not use_obs_kernel else C
+    if not use_obs_kernel:
+        C_eff = torch.eye(K, dtype=M.dtype, device=M.device).unsqueeze(0).expand(B, -1, -1)
+    elif top_m is not None and int(top_m) > 0 and int(top_m) < K:
+        m = int(top_m)
+        vals, idx = torch.topk(C, k=m, dim=-1)
+        C_eff = torch.zeros_like(C).scatter(-1, idx, vals)
+        eye = torch.eye(K, dtype=torch.bool, device=M.device).unsqueeze(0)
+        C_eff = torch.where(eye, torch.maximum(C_eff, torch.ones_like(C_eff)), C_eff)
+    else:
+        C_eff = C
     M_masked = torch.where(option_valid.unsqueeze(1), M, torch.full_like(M, -1e9))
     oracle_per_root = M_masked.max(dim=-1).values
     r_orc = torch_weighted_lcvar(oracle_per_root, p_norm, beta, eps) if use_lcvar else torch_weighted_mean(oracle_per_root, p_norm, eps)

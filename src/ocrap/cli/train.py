@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 
 from ocrap.algorithms.ocmero import torch_oc_mero
 from ocrap.data.serialization import ensure_dir, write_json
-from ocrap.models.data import OCRAPSampleDataset, iter_sample_paths_many, split_paths_by_npz_split
+from ocrap.models.data import OCRAPSampleDataset, OPTION_FEATURE_DIM, iter_sample_paths_many, split_paths_by_npz_split
 from ocrap.models.losses import anti_oracle_loss
 from ocrap.models.ocrap import OCRAPModel
 from ocrap.utils.seed import seed_everything
@@ -114,7 +114,7 @@ def _epoch(
     desc = f"{stage} ep{epoch}" if epoch is not None else stage
     for batch in _progress_iter(loader, enabled=progress, desc=desc):
         batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
-        out = model(batch["x"].float())
+        out = model(batch["x"].float(), batch.get("option_features"))
         root_valid = batch["root_valid"].bool()
         masked_logits = out["root_logits"].masked_fill(~root_valid, -1.0e4)
         root_p = torch.softmax(masked_logits, dim=-1)
@@ -138,6 +138,7 @@ def _epoch(
             root_valid=root_valid,
             use_lcvar=not bool((cfg.get("ablation", {}) or {}).get("without_lower_tail", False)),
             use_obs_kernel=not bool((cfg.get("ablation", {}) or {}).get("without_observation_kernel", False)),
+            top_m=int(ocfg.get("top_m", 8)),
         )
         loss_dep = F.smooth_l1_loss(r_dep, batch["r_dep_star"].float())
         loss_orc = F.smooth_l1_loss(r_orc, batch["r_orc_star"].float())
@@ -249,6 +250,7 @@ def train(dataset: str, output: str, cfg: dict) -> dict:
         dropout=float(model_cfg.get("dropout", 0.1)),
         d_signature=d_signature,
         d_future_signature=d_future_signature,
+        option_feature_dim=OPTION_FEATURE_DIM,
     ).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=float((cfg.get("training", {}) or {}).get("lr", 1e-3)), weight_decay=float((cfg.get("training", {}) or {}).get("weight_decay", 1e-4)))
     batch_size = int((cfg.get("training", {}) or {}).get("batch_size", 32))
@@ -296,6 +298,7 @@ def train(dataset: str, output: str, cfg: dict) -> dict:
                 "feature_layout": feature_layout,
                 "d_signature": d_signature,
                 "d_future_signature": d_future_signature,
+                "option_feature_dim": OPTION_FEATURE_DIM,
                 "model_state": model.state_dict(),
                 "epoch": ep,
                 "val_loss": best_val,

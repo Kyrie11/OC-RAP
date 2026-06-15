@@ -36,6 +36,7 @@ class OCRAPModel(nn.Module):
         dropout: float = 0.1,
         d_signature: int = 0,
         d_future_signature: int = 0,
+        option_feature_dim: int = 0,
     ):
         super().__init__()
         self.num_roots = int(num_roots)
@@ -47,6 +48,7 @@ class OCRAPModel(nn.Module):
         self.d_model = int(d_model)
         self.d_signature = int(d_signature)
         self.d_future_signature = int(d_future_signature)
+        self.option_feature_dim = int(option_feature_dim)
 
         if self.encoder_type == "structured_transformer":
             layout = FlatFeatureLayout(**self.feature_layout)
@@ -77,6 +79,11 @@ class OCRAPModel(nn.Module):
         self.root_norm3 = nn.LayerNorm(d_model)
 
         self.option_embeddings = nn.Parameter(torch.randn(1, 1, self.num_options, d_model) * 0.02)
+        self.option_feature_proj = (
+            nn.Sequential(nn.Linear(self.option_feature_dim, d_model), nn.GELU(), nn.Linear(d_model, d_model))
+            if self.option_feature_dim > 0
+            else None
+        )
         self.root_logit_head = nn.Linear(d_model, 1)
         self.margin_head = nn.Sequential(
             nn.Linear(2 * d_model, d_model),
@@ -105,7 +112,24 @@ class OCRAPModel(nn.Module):
         q = self.root_norm3(q + self.root_ffn(q))
         return q
 
-    def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+    def _option_tokens(self, x: torch.Tensor, option_features: torch.Tensor | None) -> torch.Tensor:
+        learned = self.option_embeddings.expand(x.shape[0], self.num_roots, -1, -1)
+        if option_features is None or self.option_feature_proj is None:
+            return learned
+        opt_feat = option_features.to(dtype=x.dtype, device=x.device)
+        if opt_feat.dim() == 2:
+            opt_feat = opt_feat.unsqueeze(0).expand(x.shape[0], -1, -1)
+        if opt_feat.shape[1] != self.num_options:
+            # Keep inference robust when an older checkpoint/sample has a shorter
+            # option list: pad or truncate to the checkpoint geometry.
+            fixed = torch.zeros((opt_feat.shape[0], self.num_options, opt_feat.shape[-1]), dtype=opt_feat.dtype, device=opt_feat.device)
+            n = min(self.num_options, opt_feat.shape[1])
+            fixed[:, :n] = opt_feat[:, :n]
+            opt_feat = fixed
+        semantic = self.option_feature_proj(opt_feat).unsqueeze(1).expand(-1, self.num_roots, -1, -1)
+        return learned + semantic
+
+    def forward(self, x: torch.Tensor, option_features: torch.Tensor | None = None) -> dict[str, torch.Tensor]:
         memory = self._scene_tokens(x)
         scene_token = memory[:, 0]
         root_tokens = self._decode_roots(memory)
@@ -114,7 +138,7 @@ class OCRAPModel(nn.Module):
         obs_embeddings = self.obs_embed_head(root_tokens)
 
         root_expand = root_tokens.unsqueeze(2).expand(-1, -1, self.num_options, -1)
-        opt_expand = self.option_embeddings.expand(x.shape[0], self.num_roots, -1, -1)
+        opt_expand = self._option_tokens(x, option_features)
         margins = self.margin_head(torch.cat([root_expand, opt_expand], dim=-1)).squeeze(-1)
 
         diff = obs_embeddings.unsqueeze(2) - obs_embeddings.unsqueeze(1)

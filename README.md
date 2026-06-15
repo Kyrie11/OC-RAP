@@ -155,6 +155,7 @@ python -m ocrap.cli build-dataset \
 
 ```bash
 python -m ocrap.cli build-dataset \
+  --skip-existing \
   --set data_source=womd \
   --set simulation_backend=waymax_closed_loop \
   --set womd_patterns='/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/scenario/training/*.tfrecord*' \
@@ -215,11 +216,14 @@ export WOMD_VAL=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/u
 export OCRAP_ROOT=/data0/senzeyu2/dataset/OCRAP
 ```
 ## 构建Train Set(三个互补训练子集)
+
+测速后建议默认采用 screened hybrid teacher：`teacher_rollout_top_k_options=2`、`teacher_metrics_stride=0`、`use_jit_scan_rollouts=true`。它保留全量 structural recovery option 标签，同时只对最有希望的 recovery option 做 Waymax 闭环验证，训练集速度和标签质量折中最好。下面的 sharded 命令默认后台并行执行；如果只有一张显存较小的 GPU，可以去掉行尾 `&` 分批运行。
 ### Natural/normal train set
 这个子集用于补强自然 WOMD 场景，避免模型只学到 stress case。
 ```bash
 for i in 0 1 2 3; do
 python -m ocrap.cli build-dataset \
+  --skip-existing \
   --set data_source=womd \
   --set simulation_backend=waymax_closed_loop \
   --set womd_patterns=${WOMD_TRAIN}@1000 \
@@ -236,12 +240,15 @@ python -m ocrap.cli build-dataset \
   --set num_reactive_futures=2 \
   --set num_targeted_futures=2 \
   --set num_recovery_options=12 \
-  --set waymax.compute_future_metrics=true \
-  --set waymax.detect_natural_hidden_emergence=true \
+  --set waymax.compute_future_metrics=false \
+  --set waymax.detect_natural_hidden_emergence=false \
   --set waymax.enable_augmented_hidden_roots=false \
   --set waymax.enable_visible_perturbation_roots=false \
   --set waymax.teacher_backend=hybrid \
   --set waymax.teacher_rollout_top_k_options=2 \
+  --set waymax.teacher_metrics_stride=0 \
+  --set waymax.use_jit_scan_rollouts=true \
+  --set profiling.enabled=true \
   --set artifact.force_mine=false \
   --set artifact.mine_probability=0.0 \
   --set artifact.use_margin_override=false \
@@ -257,8 +264,9 @@ python -m ocrap.cli build-dataset \
   --set split_ratios.calibration=0.05 \
   --set split_ratios.test=0.10 \
   --set progress=true \
-  --output ${OCRAP_ROOT}/train_natural_v1_w${i}
+  --output ${OCRAP_ROOT}/train_natural_v1_w${i} &
 done
+wait
 ```
 
 ### Strict oracle-artifact train set
@@ -267,6 +275,7 @@ done
 ```bash
 for i in 0 1 2 3; do
 python -m ocrap.cli build-dataset \
+  --skip-existing \
   --set data_source=womd \
   --set simulation_backend=waymax_closed_loop \
   --set womd_patterns=${WOMD_TRAIN}@1000 \
@@ -289,6 +298,9 @@ python -m ocrap.cli build-dataset \
   --set waymax.enable_visible_perturbation_roots=true \
   --set waymax.teacher_backend=hybrid \
   --set waymax.teacher_rollout_top_k_options=2 \
+  --set waymax.teacher_metrics_stride=0 \
+  --set waymax.use_jit_scan_rollouts=true \
+  --set profiling.enabled=true \
   --set waymax.apply_artifact_override_to_screened_options=false \
   --set waymax.skip_waymax_rollout_for_augmented_override=false \
   --set artifact.force_mine=true \
@@ -309,8 +321,9 @@ python -m ocrap.cli build-dataset \
   --set split_ratios.calibration=0.05 \
   --set split_ratios.test=0.10 \
   --set progress=true \
-  --output ${OCRAP_ROOT}/train_strict_artifact_v1_w${i}
+  --output ${OCRAP_ROOT}/train_strict_artifact_v1_w${i} &
 done
+wait
 ```
 
 ### Post-contact / near-contact stress train set
@@ -319,6 +332,7 @@ done
 ```bash
 for i in 0 1 2 3; do
 python -m ocrap.cli build-dataset \
+  --skip-existing \
   --set data_source=womd \
   --set simulation_backend=waymax_closed_loop \
   --set womd_patterns=${WOMD_TRAIN}@1000 \
@@ -342,6 +356,9 @@ python -m ocrap.cli build-dataset \
   --set waymax.enable_visible_perturbation_roots=true \
   --set waymax.teacher_backend=hybrid \
   --set waymax.teacher_rollout_top_k_options=2 \
+  --set waymax.teacher_metrics_stride=0 \
+  --set waymax.use_jit_scan_rollouts=true \
+  --set profiling.enabled=true \
   --set 'waymax.teacher_rollout_option_modes=[post_contact_stabilize,avoid_secondary]' \
   --set waymax.apply_artifact_override_to_screened_options=false \
   --set waymax.skip_waymax_rollout_for_augmented_override=false \
@@ -359,13 +376,15 @@ python -m ocrap.cli build-dataset \
   --set split_ratios.calibration=0.05 \
   --set split_ratios.test=0.10 \
   --set progress=true \
-  --output ${OCRAP_ROOT}/train_post_contact_v1_w${i}
+  --output ${OCRAP_ROOT}/train_post_contact_v1_w${i} &
 done
+wait
 ```
 ## 构建Val set
 ### Natural Validation Set
 ```bash
 python -m ocrap.cli build-dataset \
+  --skip-existing \
   --set data_source=womd \
   --set simulation_backend=waymax_closed_loop \
   --set womd_patterns=${WOMD_VAL}@300 \
@@ -380,12 +399,15 @@ python -m ocrap.cli build-dataset \
   --set num_reactive_futures=2 \
   --set num_targeted_futures=2 \
   --set num_recovery_options=12 \
-  --set waymax.compute_future_metrics=true \
-  --set waymax.detect_natural_hidden_emergence=true \
+  --set waymax.compute_future_metrics=false \
+  --set waymax.detect_natural_hidden_emergence=false \
   --set waymax.enable_augmented_hidden_roots=false \
   --set waymax.enable_visible_perturbation_roots=false \
   --set waymax.teacher_backend=hybrid \
   --set waymax.teacher_rollout_top_k_options=2 \
+  --set waymax.teacher_metrics_stride=0 \
+  --set waymax.use_jit_scan_rollouts=true \
+  --set profiling.enabled=true \
   --set artifact.force_mine=false \
   --set artifact.mine_probability=0.0 \
   --set artifact.use_margin_override=false \
@@ -401,6 +423,7 @@ python -m ocrap.cli build-dataset \
 ### Strict artifact validation set
 ```bash
 python -m ocrap.cli build-dataset \
+  --skip-existing \
   --set data_source=womd \
   --set simulation_backend=waymax_closed_loop \
   --set womd_patterns=${WOMD_VAL}@300 \
@@ -421,6 +444,9 @@ python -m ocrap.cli build-dataset \
   --set waymax.enable_visible_perturbation_roots=true \
   --set waymax.teacher_backend=hybrid \
   --set waymax.teacher_rollout_top_k_options=2 \
+  --set waymax.teacher_metrics_stride=0 \
+  --set waymax.use_jit_scan_rollouts=true \
+  --set profiling.enabled=true \
   --set waymax.apply_artifact_override_to_screened_options=false \
   --set artifact.force_mine=true \
   --set artifact.mine_probability=0.15 \
@@ -438,6 +464,7 @@ python -m ocrap.cli build-dataset \
 ### Post-contact validation set
 ```bash
 python -m ocrap.cli build-dataset \
+  --skip-existing \
   --set data_source=womd \
   --set simulation_backend=waymax_closed_loop \
   --set womd_patterns=${WOMD_VAL}@300 \
@@ -458,6 +485,9 @@ python -m ocrap.cli build-dataset \
   --set waymax.enable_visible_perturbation_roots=true \
   --set waymax.teacher_backend=hybrid \
   --set waymax.teacher_rollout_top_k_options=2 \
+  --set waymax.teacher_metrics_stride=0 \
+  --set waymax.use_jit_scan_rollouts=true \
+  --set profiling.enabled=true \
   --set 'waymax.teacher_rollout_option_modes=[post_contact_stabilize,avoid_secondary]' \
   --set artifact.force_mine=false \
   --set artifact.mine_probability=0.0 \

@@ -28,3 +28,12 @@ This patch aligns the implementation more closely with the paper and adds build-
 ## Remaining scope notes
 
 The repository was validated without external WOMD/Waymax data. Full benchmark fidelity still depends on running the patched code in the target Waymax/WOMD environment and comparing the resulting metrics against the paper tables.
+
+## Additional pass after runtime profiling
+
+- Added semantic recovery-option features (`recovery_modes`, `recovery_params`, validity, option index) to the training/inference pipeline so the margin head is conditioned on `g_l`, not only on a learned option index.
+- Updated the OC-RAP model to fuse learned option embeddings with per-sample recovery-option features.
+- Made the PyTorch OC-MERO training path respect `ocmero.top_m`, matching the NumPy teacher/evaluation path.
+- Added running `manifest.csv` / `dataset_status.json` writes during profiled builds, so long WOMD builds can be watched and resumed with clearer state.
+- Updated README build commands according to the measured Waymax timings: screened hybrid top-k=2, `teacher_metrics_stride=0`, JIT scan rollouts, profiling enabled, resumable `--skip-existing`, and parallel sharded train builds.
+- Added tests for top-m PyTorch/NumPy OC-MERO consistency and option-conditioned margin decoding.

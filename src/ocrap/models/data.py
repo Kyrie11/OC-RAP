@@ -12,6 +12,21 @@ from ocrap.data.build.diagnose import iter_sample_paths
 from ocrap.data.serialization import load_npz
 
 
+RECOVERY_MODE_VOCAB = [
+    "stop",
+    "brake_lane",
+    "lateral_escape",
+    "yield_rejoin",
+    "pull_over",
+    "mitigate_contact",
+    "post_contact_stabilize",
+    "avoid_secondary",
+]
+RECOVERY_MODE_TO_ID = {name: i for i, name in enumerate(RECOVERY_MODE_VOCAB)}
+OPTION_PARAM_DIM = 3
+OPTION_FEATURE_DIM = len(RECOVERY_MODE_VOCAB) + OPTION_PARAM_DIM + 2
+
+
 def iter_sample_paths_many(dataset: str | Path, max_samples: int | None = None) -> list[Path]:
     """Return sample paths from one or more OC-RAP dataset directories.
 
@@ -85,6 +100,52 @@ def _one_hot(index: int, width: int) -> np.ndarray:
     if 0 <= int(index) < int(width):
         out[int(index)] = 1.0
     return out
+
+
+def _string_array(d: dict[str, Any], key: str) -> list[str]:
+    if key not in d:
+        return []
+    arr = np.asarray(d[key])
+    out: list[str] = []
+    for v in arr.reshape(-1).tolist():
+        if isinstance(v, bytes):
+            out.append(v.decode("utf-8", errors="ignore"))
+        else:
+            out.append(str(v))
+    return out
+
+
+def option_features_from_sample(d: dict[str, Any], cfg: dict | None = None) -> np.ndarray:
+    """Encode recovery option identity and parameters for the margin decoder.
+
+    The paper's margin head is conditioned on the recovery option ``g_l``.  Older
+    code used only learned option-index embeddings, which makes two runs with the
+    same option count but different option modes/parameters indistinguishable to
+    the model.  This compact feature keeps the model architecture independent of
+    Python dataclasses while preserving the semantic option conditioning saved in
+    each ``.npz`` sample.
+    """
+    del cfg  # reserved for future feature scaling knobs
+    params = _arr(d, "recovery_params")
+    if params.ndim == 1:
+        params = params.reshape(-1, OPTION_PARAM_DIM) if params.size else np.zeros((0, OPTION_PARAM_DIM), dtype=np.float32)
+    if params.ndim != 2:
+        params = np.zeros((0, OPTION_PARAM_DIM), dtype=np.float32)
+    L = int(params.shape[0]) if params.size else int(np.asarray(d.get("m_star", np.zeros((1, 0)))).shape[-1])
+    out = np.zeros((L, OPTION_FEATURE_DIM), dtype=np.float32)
+    modes = _string_array(d, "recovery_modes")
+    valid = np.asarray(d.get("option_valid", np.ones((L,), dtype=np.float32)), dtype=np.float32).reshape(-1)
+    for l in range(L):
+        mode = modes[l] if l < len(modes) else ""
+        mid = RECOVERY_MODE_TO_ID.get(mode, -1)
+        if mid >= 0:
+            out[l, mid] = 1.0
+        if l < params.shape[0]:
+            p = np.asarray(params[l], dtype=np.float32).reshape(-1)
+            out[l, len(RECOVERY_MODE_VOCAB) : len(RECOVERY_MODE_VOCAB) + OPTION_PARAM_DIM] = np.pad(p[:OPTION_PARAM_DIM], (0, max(0, OPTION_PARAM_DIM - min(OPTION_PARAM_DIM, p.size))))[:OPTION_PARAM_DIM]
+        out[l, -2] = float(valid[l] > 0.5) if l < valid.size else 1.0
+        out[l, -1] = float(l) / max(float(max(L - 1, 1)), 1.0)
+    return np.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
 
 
 def _agent_features(d: dict[str, Any], max_agents: int) -> np.ndarray:
@@ -236,6 +297,7 @@ class OCRAPSampleDataset(Dataset):
             "utility": torch.tensor(float(np.asarray(d.get("utility", 0.0)).item()), dtype=torch.float32),
             "root_signature": torch.from_numpy(np.asarray(d.get("root_signature", np.zeros((np.asarray(d["m_star"]).shape[0], 0))), dtype=np.float32)),
             "root_future_signature": torch.from_numpy(np.asarray(d.get("root_future_signature", np.zeros((np.asarray(d["m_star"]).shape[0], 0))), dtype=np.float32)),
+            "option_features": torch.from_numpy(option_features_from_sample(d, self.cfg)),
         }
         return out
 
