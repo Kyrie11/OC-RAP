@@ -90,6 +90,7 @@ def _rollout(history: SceneHistory, macro: str, params: np.ndarray, cfg: dict) -
             prefix_collision = bool(min_other < 1.8)
     hard_violation = float(prefix_collision) * 1.0 + float(offroad_hard) * 2.0 + float(wrong_way_hard) * 2.0
     diagnostics = {
+        "macro_type_id": int(MACROS.index(macro)) if macro in MACROS else -1,
         "control_limits_satisfied": control_ok,
         "route_topology_valid": route_topology_valid,
         "wrong_way_hard": wrong_way_hard,

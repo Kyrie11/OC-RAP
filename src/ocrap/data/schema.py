@@ -159,6 +159,7 @@ class DatasetSample:
             "prefix_states": p.prefix_states.astype(np.float32),
             "prefix_controls": p.prefix_controls.astype(np.float32),
             "prefix_macro_id": np.int64(p.macro_id),
+            "prefix_macro_type_id": np.int64(p.diagnostics.get("macro_type_id", p.macro_id)),
             "prefix_macro_name": p.macro_name,
             "prefix_param": p.params.astype(np.float32),
             "utility": np.float32(p.utility),

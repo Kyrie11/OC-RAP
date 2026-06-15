@@ -7,12 +7,18 @@ from .encoders import FlatFeatureLayout, MLPEncoder, StructuredTokenEncoder
 
 
 class OCRAPModel(nn.Module):
-    """Neural OC-RAP model.
+    """Neural OC-RAP model with a learned root-query decoder.
 
-    ``encoder_type=mlp`` keeps the compact baseline.  ``encoder_type=structured_transformer``
-    uses semantically grouped scene-prefix tokens and is closer to the paper's
-    agent/map/ego/BEV encoder design while remaining lightweight enough for the
-    current generated dataset.
+    The previous implementation predicted all roots from one global scene
+    embedding.  That was useful as a compact smoke model but did not match the
+    paper's pipeline, where learned root queries cross-attend to scene-prefix
+    tokens and each root obtains its own observation embedding and recovery
+    margins.  This module keeps the MLP fallback, but the default structured
+    path now implements the paper-aligned decoder:
+
+    scene/prefix tokens -> K learned root queries -> root probabilities,
+    post-prefix observation embeddings, recovery signatures, and per-option
+    margins conditioned on recovery-option embeddings.
     """
 
     def __init__(
@@ -28,6 +34,8 @@ class OCRAPModel(nn.Module):
         num_layers: int = 2,
         num_heads: int = 4,
         dropout: float = 0.1,
+        d_signature: int = 0,
+        d_future_signature: int = 0,
     ):
         super().__init__()
         self.num_roots = int(num_roots)
@@ -36,30 +44,94 @@ class OCRAPModel(nn.Module):
         self.tau_obs = float(max(tau_obs, 1e-6))
         self.encoder_type = str(encoder_type)
         self.feature_layout = feature_layout or {}
+        self.d_model = int(d_model)
+        self.d_signature = int(d_signature)
+        self.d_future_signature = int(d_future_signature)
+
         if self.encoder_type == "structured_transformer":
             layout = FlatFeatureLayout(**self.feature_layout)
-            self.encoder = StructuredTokenEncoder(layout=layout, d_model=d_model, num_layers=num_layers, num_heads=num_heads, dropout=dropout)
+            self.encoder = StructuredTokenEncoder(
+                layout=layout,
+                d_model=d_model,
+                num_layers=num_layers,
+                num_heads=num_heads,
+                dropout=dropout,
+            )
         else:
             self.encoder = MLPEncoder(input_dim, d_model)
-        self.root_logits = nn.Linear(d_model, self.num_roots)
-        self.margin_head = nn.Linear(d_model, self.num_roots * self.num_options)
-        self.obs_embed_head = nn.Linear(d_model, self.num_roots * self.d_obs)
+
+        # Root-query decoder: K learned latent root slots attend to the encoded
+        # scene-prefix tokens.  For the MLP fallback, the single global embedding
+        # is treated as a one-token memory.
+        self.root_queries = nn.Parameter(torch.randn(1, self.num_roots, d_model) * 0.02)
+        self.root_cross_attn = nn.MultiheadAttention(d_model, num_heads, dropout=dropout, batch_first=True)
+        self.root_self_attn = nn.MultiheadAttention(d_model, num_heads, dropout=dropout, batch_first=True)
+        self.root_norm1 = nn.LayerNorm(d_model)
+        self.root_norm2 = nn.LayerNorm(d_model)
+        self.root_ffn = nn.Sequential(
+            nn.Linear(d_model, 4 * d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(4 * d_model, d_model),
+        )
+        self.root_norm3 = nn.LayerNorm(d_model)
+
+        self.option_embeddings = nn.Parameter(torch.randn(1, 1, self.num_options, d_model) * 0.02)
+        self.root_logit_head = nn.Linear(d_model, 1)
+        self.margin_head = nn.Sequential(
+            nn.Linear(2 * d_model, d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_model, 1),
+        )
+        self.obs_embed_head = nn.Sequential(nn.Linear(d_model, d_model), nn.GELU(), nn.Linear(d_model, self.d_obs))
         self.utility_head = nn.Linear(d_model, 1)
+        self.root_signature_head = nn.Linear(d_model, self.d_signature) if self.d_signature > 0 else None
+        self.root_future_signature_head = nn.Linear(d_model, self.d_future_signature) if self.d_future_signature > 0 else None
+
+    def _scene_tokens(self, x: torch.Tensor) -> torch.Tensor:
+        if self.encoder_type == "structured_transformer" and hasattr(self.encoder, "forward_tokens"):
+            return self.encoder.forward_tokens(x)  # type: ignore[attr-defined]
+        h = self.encoder(x)
+        return h.unsqueeze(1)
+
+    def _decode_roots(self, memory: torch.Tensor) -> torch.Tensor:
+        B = memory.shape[0]
+        q0 = self.root_queries.expand(B, -1, -1)
+        q, _ = self.root_cross_attn(q0, memory, memory, need_weights=False)
+        q = self.root_norm1(q0 + q)
+        qs, _ = self.root_self_attn(q, q, q, need_weights=False)
+        q = self.root_norm2(q + qs)
+        q = self.root_norm3(q + self.root_ffn(q))
+        return q
 
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
-        h = self.encoder(x)
-        root_logits = self.root_logits(h)
-        margins = self.margin_head(h).reshape(x.shape[0], self.num_roots, self.num_options)
-        obs_embeddings = self.obs_embed_head(h).reshape(x.shape[0], self.num_roots, self.d_obs)
+        memory = self._scene_tokens(x)
+        scene_token = memory[:, 0]
+        root_tokens = self._decode_roots(memory)
+
+        root_logits = self.root_logit_head(root_tokens).squeeze(-1)
+        obs_embeddings = self.obs_embed_head(root_tokens)
+
+        root_expand = root_tokens.unsqueeze(2).expand(-1, -1, self.num_options, -1)
+        opt_expand = self.option_embeddings.expand(x.shape[0], self.num_roots, -1, -1)
+        margins = self.margin_head(torch.cat([root_expand, opt_expand], dim=-1)).squeeze(-1)
+
         diff = obs_embeddings.unsqueeze(2) - obs_embeddings.unsqueeze(1)
         dist2 = (diff * diff).mean(dim=-1)
         C = torch.exp(-dist2 / self.tau_obs).clamp(0.0, 1.0)
         eye = torch.eye(self.num_roots, dtype=C.dtype, device=C.device).unsqueeze(0)
         C = C * (1 - eye) + eye
-        return {
+
+        out: dict[str, torch.Tensor] = {
             "root_logits": root_logits,
             "margins": margins,
             "obs_embeddings": obs_embeddings,
             "c_star": C,
-            "utility": self.utility_head(h).squeeze(-1),
+            "utility": self.utility_head(scene_token).squeeze(-1),
         }
+        if self.root_signature_head is not None:
+            out["root_signature"] = self.root_signature_head(root_tokens)
+        if self.root_future_signature_head is not None:
+            out["root_future_signature"] = self.root_future_signature_head(root_tokens)
+        return out

@@ -156,7 +156,11 @@ def sample_to_feature(d: dict[str, Any], cfg: dict | None = None) -> np.ndarray:
 
     ego = _pad_flat(_arr(d, "ego_state", (9,)), 9)
     prefix_param = _pad_flat(_arr(d, "prefix_param", (5,)), int(cfg.get("prefix_param_dim", 5)))
-    macro = _one_hot(_int_scalar(d, "prefix_macro_id", 0), num_macros)
+    # ``prefix_macro_id`` is kept as the deterministic candidate index for
+    # filenames/seeding.  The semantic macro class is stored separately so the
+    # model does not lose every candidate whose index exceeds ``num_macros``.
+    macro_type_id = _int_scalar(d, "prefix_macro_type_id", _int_scalar(d, "prefix_macro_id", 0))
+    macro = _one_hot(macro_type_id, num_macros)
     prefix_states = _arr(d, "prefix_states")
     prefix_controls = _arr(d, "prefix_controls")
     bev = _arr(d, "bev_occ")
@@ -230,6 +234,8 @@ class OCRAPSampleDataset(Dataset):
             "r_orc_star": torch.tensor(float(np.asarray(d["r_orc_star"]).item()), dtype=torch.float32),
             "i_art_star": torch.tensor(float(np.asarray(d["i_art_star"]).item()), dtype=torch.float32),
             "utility": torch.tensor(float(np.asarray(d.get("utility", 0.0)).item()), dtype=torch.float32),
+            "root_signature": torch.from_numpy(np.asarray(d.get("root_signature", np.zeros((np.asarray(d["m_star"]).shape[0], 0))), dtype=np.float32)),
+            "root_future_signature": torch.from_numpy(np.asarray(d.get("root_future_signature", np.zeros((np.asarray(d["m_star"]).shape[0], 0))), dtype=np.float32)),
         }
         return out
 

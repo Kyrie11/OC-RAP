@@ -120,6 +120,8 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         num_layers=int(model_cfg.get("transformer_layers", 2)),
         num_heads=int(model_cfg.get("transformer_heads", 4)),
         dropout=float(model_cfg.get("dropout", 0.1)),
+        d_signature=int(ckpt.get("d_signature", 0)),
+        d_future_signature=int(ckpt.get("d_future_signature", 0)),
     ).to(device)
     model.load_state_dict(ckpt["model_state"])
     model.eval()

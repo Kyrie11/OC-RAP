@@ -20,6 +20,8 @@ def _device(cfg: dict) -> torch.device:
     tcfg = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
     requested = str(tcfg.get("device", "auto"))
     if requested == "auto":
+        if bool(tcfg.get("require_cuda", False)) and not torch.cuda.is_available():
+            raise RuntimeError("training.require_cuda=true, but torch.cuda.is_available() is false")
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
     device = torch.device(requested)
     if bool(tcfg.get("require_cuda", False)) and device.type != "cuda":
@@ -58,6 +60,16 @@ def _masked_smooth_l1(pred: torch.Tensor, target: torch.Tensor, mask: torch.Tens
     if not bool(mask.any()):
         return pred.sum() * 0.0
     return F.smooth_l1_loss(pred[mask], target[mask])
+
+
+def _root_signature_loss(out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], key: str, valid_key: str = "root_valid") -> torch.Tensor:
+    if key not in out or key not in batch or batch[key].shape[-1] == 0:
+        ref = next(iter(out.values()))
+        return ref.sum() * 0.0
+    pred = out[key]
+    target = batch[key].float()
+    mask = batch[valid_key].bool().unsqueeze(-1).expand_as(target)
+    return _masked_smooth_l1(pred, target, mask)
 
 
 def _obs_bce(pred_c: torch.Tensor, target_y: torch.Tensor, root_valid: torch.Tensor) -> torch.Tensor:
@@ -113,6 +125,8 @@ def _epoch(
 
         loss_root = -(root_target * F.log_softmax(masked_logits, dim=-1)).sum(dim=-1).mean()
         loss_margin = _masked_smooth_l1(out["margins"], margin_target, margin_mask)
+        loss_sig = _root_signature_loss(out, batch, "root_signature")
+        loss_future_sig = _root_signature_loss(out, batch, "root_future_signature")
         loss_obs = _obs_bce(out["c_star"], batch["y_obs"], batch["root_valid"])
         r_dep, r_orc, gap, _q = torch_oc_mero(
             out["margins"],
@@ -132,6 +146,7 @@ def _epoch(
         total = (
             float(lw.get("assign", 1.0)) * loss_root
             + float(lw.get("margin", 2.0)) * loss_margin
+            + float(lw.get("sig", 0.5)) * (loss_sig + loss_future_sig)
             + float(lw.get("obs", 1.0)) * loss_obs
             + 0.5 * (loss_dep + loss_orc)
             + float(lw.get("anti_oracle", 1.0)) * loss_art
@@ -150,6 +165,8 @@ def _epoch(
             "loss": total.item(),
             "loss_root": loss_root.item(),
             "loss_margin": loss_margin.item(),
+            "loss_sig": loss_sig.item(),
+            "loss_future_sig": loss_future_sig.item(),
             "loss_obs": loss_obs.item(),
             "loss_dep": loss_dep.item(),
             "loss_orc": loss_orc.item(),
@@ -198,6 +215,8 @@ def train(dataset: str, output: str, cfg: dict) -> dict:
     first = train_ds[0]
     num_roots = int(first["m_star"].shape[0])
     num_options = int(first["m_star"].shape[1])
+    d_signature = int(first.get("root_signature", torch.zeros((num_roots, 0))).shape[-1])
+    d_future_signature = int(first.get("root_future_signature", torch.zeros((num_roots, 0))).shape[-1])
     device = _device(cfg)
     device_info = _device_summary(device)
     model_cfg = cfg.get("model", {}) if isinstance(cfg.get("model", {}), dict) else {}
@@ -228,6 +247,8 @@ def train(dataset: str, output: str, cfg: dict) -> dict:
         num_layers=int(model_cfg.get("transformer_layers", 2)),
         num_heads=int(model_cfg.get("transformer_heads", 4)),
         dropout=float(model_cfg.get("dropout", 0.1)),
+        d_signature=d_signature,
+        d_future_signature=d_future_signature,
     ).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=float((cfg.get("training", {}) or {}).get("lr", 1e-3)), weight_decay=float((cfg.get("training", {}) or {}).get("weight_decay", 1e-4)))
     batch_size = int((cfg.get("training", {}) or {}).get("batch_size", 32))
@@ -273,6 +294,8 @@ def train(dataset: str, output: str, cfg: dict) -> dict:
                 "tau_obs": tau_obs,
                 "encoder_type": encoder_type,
                 "feature_layout": feature_layout,
+                "d_signature": d_signature,
+                "d_future_signature": d_future_signature,
                 "model_state": model.state_dict(),
                 "epoch": ep,
                 "val_loss": best_val,

@@ -42,6 +42,25 @@ MANIFEST_FIELDS = [
     "regime_label",
 ]
 
+PROFILE_FIELDS = [
+    "sample_index",
+    "scene_id",
+    "time_index",
+    "candidate_index",
+    "macro_name",
+    "num_futures",
+    "num_options",
+    "total_s",
+    "future_generation_s",
+    "teacher_margins_s",
+    "root_clustering_s",
+    "observation_s",
+    "ocmero_s",
+    "r_orc_star",
+    "r_dep_star",
+    "i_art_star",
+]
+
 
 def _profiling_cfg(cfg: dict) -> dict:
     prof = cfg.get("profiling", {}) if isinstance(cfg.get("profiling", {}), dict) else {}
@@ -760,6 +779,40 @@ def _write_manifest_atomic(manifest_path: Path, rows: list[dict]) -> None:
             raise
 
 
+def _append_profile_row(profile_path: Path, sample: DatasetSample, sample_index: int) -> None:
+    """Append one build-time row for external watch diagnostics."""
+    timings = sample.diagnostics.get("build_timing_s", {}) if isinstance(sample.diagnostics, dict) else {}
+    exists = profile_path.exists()
+    with profile_path.open("a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=PROFILE_FIELDS)
+        if not exists:
+            writer.writeheader()
+        row = {
+            "sample_index": int(sample_index),
+            "scene_id": sample.scene_id,
+            "time_index": int(sample.time_index),
+            "candidate_index": int(sample.candidate_index),
+            "macro_name": sample.prefix.macro_name,
+            "num_futures": int(len(sample.futures)),
+            "num_options": int(len(sample.recovery_options)),
+            "r_orc_star": float(sample.r_orc_star),
+            "r_dep_star": float(sample.r_dep_star),
+            "i_art_star": int(sample.i_art_star),
+        }
+        for src, dst in [
+            ("total", "total_s"),
+            ("future_generation", "future_generation_s"),
+            ("teacher_margins", "teacher_margins_s"),
+            ("root_clustering", "root_clustering_s"),
+            ("observation", "observation_s"),
+            ("ocmero", "ocmero_s"),
+        ]:
+            row[dst] = float(timings.get(src, 0.0))
+        writer.writerow({field: row.get(field, "") for field in PROFILE_FIELDS})
+        f.flush()
+        os.fsync(f.fileno())
+
+
 def _count_splits(rows: list[dict]) -> dict[str, int]:
     split_counts: dict[str, int] = {"train": 0, "val": 0, "calibration": 0, "test": 0}
     for row in rows:
@@ -792,6 +845,7 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
     raw_scene_ids: set[str] = set()
     raw_iter = scenario_iterator(cfg)
     progress_bar = None
+    profile_path = out / "build_profile.csv"
     progress_mode = "samples" if skip_existing else "prefixes"
     if bool(cfg.get("progress", True)):
         try:
@@ -859,6 +913,8 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
                     split_counts[sample.split_id] = split_counts.get(sample.split_id, 0) + 1
                     total += 1
                     new_samples_written += 1
+                    if _profiling_enabled(cfg):
+                        _append_profile_row(profile_path, sample, total)
                     if skip_existing:
                         _progress(1)
                     if _profiling_enabled(cfg) and bool(_profiling_cfg(cfg).get("log_writes", True)):
@@ -884,6 +940,7 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
         "scene_time_groups": int(scene_time_groups),
         "skipped_no_planning_times": int(skipped_no_planning_times),
         "unique_raw_scene_ids": int(len(raw_scene_ids)),
+        "profile_csv": str(profile_path) if _profiling_enabled(cfg) else "",
         "dataset_quality": cfg.get("dataset_quality", {}),
         "artifact": cfg.get("artifact", {}),
         "waymax": cfg.get("waymax", {}),

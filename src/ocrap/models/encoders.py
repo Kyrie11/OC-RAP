@@ -117,7 +117,7 @@ class StructuredTokenEncoder(nn.Module):
         dyn = take(L.dyn_stats_dim + L.dyn_flat_dim)
         return ego, prefix_param, macro, scalar, prefix_state, control, agent_summary, agents, bev, route, maps, dyn
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def _tokens(self, x: torch.Tensor) -> torch.Tensor:
         ego, prefix_param, macro, scalar, prefix_state, control, agent_summary, agents, bev, route, maps, dyn = self._split(x)
         B = x.shape[0]
         tokens = [
@@ -137,5 +137,18 @@ class StructuredTokenEncoder(nn.Module):
         cls = self.cls.expand(B, -1, -1)
         tok = torch.cat([cls, tok, agent_tok], dim=1)
         tok = tok + self.pos[:, :tok.shape[1], :]
-        h = self.encoder(tok)
-        return self.norm(h[:, 0])
+        return self.encoder(tok)
+
+    def forward_tokens(self, x: torch.Tensor) -> torch.Tensor:
+        """Return encoded semantic tokens, including the leading scene token.
+
+        The paper's encoder does not collapse the scene immediately: learned
+        root queries attend over agent, map, ego-prefix, and BEV tokens.  Keeping
+        this method separate preserves the previous ``forward`` API while giving
+        the OC-RAP model access to the token set needed by the root-query decoder.
+        """
+        return self.norm(self._tokens(x))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h = self.forward_tokens(x)
+        return h[:, 0]
