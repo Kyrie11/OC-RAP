@@ -208,7 +208,7 @@ r_orc_star, r_dep_star, oracle_gap_star, i_art_star,
 regime_label, sample_metadata, split_id
 ```
 
-# 所有指令集和1
+# 所有指令集
 ```bash
 export WOMD_TRAIN=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/training/training_tfexample.tfrecord
 export WOMD_VAL=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord
@@ -248,6 +248,9 @@ python -m ocrap.cli build-dataset \
   --set waymax.teacher_rollout_top_k_options=2 \
   --set waymax.teacher_metrics_stride=0 \
   --set waymax.use_jit_scan_rollouts=true \
+  --set waymax.cache_env_objects=true \
+  --set waymax.cache_postprefix_rollouts=true \
+  --set waymax.cache_teacher_metric_rollouts=true \
   --set profiling.enabled=true \
   --set artifact.force_mine=false \
   --set artifact.mine_probability=0.0 \
@@ -300,6 +303,9 @@ python -m ocrap.cli build-dataset \
   --set waymax.teacher_rollout_top_k_options=2 \
   --set waymax.teacher_metrics_stride=0 \
   --set waymax.use_jit_scan_rollouts=true \
+  --set waymax.cache_env_objects=true \
+  --set waymax.cache_postprefix_rollouts=true \
+  --set waymax.cache_teacher_metric_rollouts=true \
   --set profiling.enabled=true \
   --set waymax.apply_artifact_override_to_screened_options=false \
   --set waymax.skip_waymax_rollout_for_augmented_override=false \
@@ -358,6 +364,9 @@ python -m ocrap.cli build-dataset \
   --set waymax.teacher_rollout_top_k_options=2 \
   --set waymax.teacher_metrics_stride=0 \
   --set waymax.use_jit_scan_rollouts=true \
+  --set waymax.cache_env_objects=true \
+  --set waymax.cache_postprefix_rollouts=true \
+  --set waymax.cache_teacher_metric_rollouts=true \
   --set profiling.enabled=true \
   --set 'waymax.teacher_rollout_option_modes=[post_contact_stabilize,avoid_secondary]' \
   --set waymax.apply_artifact_override_to_screened_options=false \
@@ -387,8 +396,8 @@ python -m ocrap.cli build-dataset \
   --skip-existing \
   --set data_source=womd \
   --set simulation_backend=waymax_closed_loop \
-  --set womd_patterns=${WOMD_VAL}@300 \
-  --set max_scenarios=600 \
+  --set womd_patterns=${WOMD_VAL}@150 \
+  --set max_scenarios=400 \
   --set max_agents=64 \
   --set max_map_polylines=256 \
   --set max_polyline_points=64 \
@@ -407,6 +416,9 @@ python -m ocrap.cli build-dataset \
   --set waymax.teacher_rollout_top_k_options=2 \
   --set waymax.teacher_metrics_stride=0 \
   --set waymax.use_jit_scan_rollouts=true \
+  --set waymax.cache_env_objects=true \
+  --set waymax.cache_postprefix_rollouts=true \
+  --set waymax.cache_teacher_metric_rollouts=true \
   --set profiling.enabled=true \
   --set artifact.force_mine=false \
   --set artifact.mine_probability=0.0 \
@@ -426,8 +438,8 @@ python -m ocrap.cli build-dataset \
   --skip-existing \
   --set data_source=womd \
   --set simulation_backend=waymax_closed_loop \
-  --set womd_patterns=${WOMD_VAL}@300 \
-  --set max_scenarios=500 \
+  --set womd_patterns=${WOMD_VAL}@150 \
+  --set max_scenarios=300 \
   --set max_agents=64 \
   --set max_map_polylines=256 \
   --set max_polyline_points=64 \
@@ -446,6 +458,9 @@ python -m ocrap.cli build-dataset \
   --set waymax.teacher_rollout_top_k_options=2 \
   --set waymax.teacher_metrics_stride=0 \
   --set waymax.use_jit_scan_rollouts=true \
+  --set waymax.cache_env_objects=true \
+  --set waymax.cache_postprefix_rollouts=true \
+  --set waymax.cache_teacher_metric_rollouts=true \
   --set profiling.enabled=true \
   --set waymax.apply_artifact_override_to_screened_options=false \
   --set artifact.force_mine=true \
@@ -467,8 +482,8 @@ python -m ocrap.cli build-dataset \
   --skip-existing \
   --set data_source=womd \
   --set simulation_backend=waymax_closed_loop \
-  --set womd_patterns=${WOMD_VAL}@300 \
-  --set max_scenarios=500 \
+  --set womd_patterns=${WOMD_VAL}@150 \
+  --set max_scenarios=300 \
   --set max_agents=64 \
   --set max_map_polylines=256 \
   --set max_polyline_points=64 \
@@ -487,6 +502,9 @@ python -m ocrap.cli build-dataset \
   --set waymax.teacher_rollout_top_k_options=2 \
   --set waymax.teacher_metrics_stride=0 \
   --set waymax.use_jit_scan_rollouts=true \
+  --set waymax.cache_env_objects=true \
+  --set waymax.cache_postprefix_rollouts=true \
+  --set waymax.cache_teacher_metric_rollouts=true \
   --set profiling.enabled=true \
   --set 'waymax.teacher_rollout_option_modes=[post_contact_stabilize,avoid_secondary]' \
   --set artifact.force_mine=false \
@@ -575,21 +593,24 @@ python -m ocrap.cli calibrate \
 
 ## 内部test split评估
 ```bash
-python -m ocrap.cli calibrate \
-  --dataset "$TRAIN_MIX" \
-  --checkpoint ${OCRAP_ROOT}/runs/ocrap_structured_mix_v1/best.pt \
-  --output ${OCRAP_ROOT}/runs/ocrap_structured_mix_v1/calibration.json
-```
-
-## 外部validation set评估
-
-```bash
 python -m ocrap.cli evaluate \
   --dataset "$TRAIN_MIX" \
   --checkpoint ${OCRAP_ROOT}/runs/ocrap_structured_mix_v1/best.pt \
   --calibration ${OCRAP_ROOT}/runs/ocrap_structured_mix_v1/calibration.json \
   --split test \
   --output ${OCRAP_ROOT}/runs/ocrap_structured_mix_v1/eval_internal_test.json \
+  --set 'evaluation.methods=[nominal,risk_aware,backup_filter,contingency,oracle_filter,ocrap,ocrap_teacher]'
+```
+
+## 外部validation set评估
+
+```bash
+python -m ocrap.cli evaluate \
+  --dataset "$VAL_MIX" \
+  --checkpoint ${OCRAP_ROOT}/runs/ocrap_structured_mix_v1/best.pt \
+  --calibration ${OCRAP_ROOT}/runs/ocrap_structured_mix_v1/calibration.json \
+  --split val \
+  --output ${OCRAP_ROOT}/runs/ocrap_structured_mix_v1/eval_external_val.json \
   --set 'evaluation.methods=[nominal,risk_aware,backup_filter,contingency,oracle_filter,ocrap,ocrap_teacher]'
 ```
 

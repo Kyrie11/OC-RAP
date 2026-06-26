@@ -186,6 +186,16 @@ def _local_from_global_xy(xy: np.ndarray, ego_xy: np.ndarray, ego_yaw: float) ->
     return (xy - ego_xy[None, None, :]) @ R.T
 
 
+def _set_agent_constant(arr: np.ndarray, slot: int, value: float) -> np.ndarray:
+    """Set a per-agent or per-agent/time Waymax field without JAX .at loops."""
+    out = np.array(arr, copy=True)
+    if out.ndim == 0:
+        return out
+    if 0 <= slot < out.shape[0]:
+        out[slot, ...] = value
+    return out
+
+
 def _traj_to_local_agent_arrays(state: Any, start_t: int, total_steps: int, order: list[int], ego_xy: np.ndarray, ego_yaw: float) -> tuple[np.ndarray, np.ndarray]:
     tr = state.sim_trajectory
     x_full = _as_np(tr.x)
@@ -557,7 +567,7 @@ def _artifact_override_adjusted_value(val: float, option: RecoveryOption, future
 
 
 def _augment_hidden_reference(state: Any, history: SceneHistory, prefix: CandidatePrefix, cfg: dict, *, branch: str, seed: int):
-    jax, jnp, _, _, _, _ = _require_waymax()
+    _, jnp, _, _, _, _ = _require_waymax()
     rng = np.random.default_rng(seed)
     spawn = _sample_unknown_spawn(history, cfg, rng)
     if spawn is None:
@@ -578,40 +588,56 @@ def _augment_hidden_reference(state: Any, history: SceneHistory, prefix: Candida
     empty = [a for a in candidates if not valid_np[a].any()]
     slot = int(empty[0]) if empty else int(min(candidates, key=lambda a: int(valid_np[a].sum())))
     total_T = int(valid_np.shape[1])
-    xs = jnp.array(_as_np(tr.x))
-    ys = jnp.array(_as_np(tr.y))
-    zs = jnp.array(_as_np(tr.z))
-    vxs = jnp.array(_as_np(tr.vel_x))
-    vys = jnp.array(_as_np(tr.vel_y))
-    yaws = jnp.array(_as_np(tr.yaw))
-    valids = jnp.array(valid_np)
-    length = jnp.array(_as_np(tr.length))
-    width = jnp.array(_as_np(tr.width))
-    height = jnp.array(_as_np(tr.height))
-    valids = valids.at[slot, :].set(False)
-    xs = xs.at[slot, :].set(0.0)
-    ys = ys.at[slot, :].set(0.0)
-    zs = zs.at[slot, :].set(0.0)
-    vxs = vxs.at[slot, :].set(0.0)
-    vys = vys.at[slot, :].set(0.0)
-    yaws = yaws.at[slot, :].set(heading)
+    # Keep the augmentation logic identical to the old scalar update path, but
+    # perform all edits on host NumPy arrays and send one batched replacement to
+    # JAX.  Repeated ``jnp.ndarray.at[...].set`` calls inside a Python loop are a
+    # major source of dispatch/compile overhead during strict/stress generation.
+    xs = np.array(_as_np(tr.x), copy=True)
+    ys = np.array(_as_np(tr.y), copy=True)
+    zs = np.array(_as_np(tr.z), copy=True)
+    vxs = np.array(_as_np(tr.vel_x), copy=True)
+    vys = np.array(_as_np(tr.vel_y), copy=True)
+    yaws = np.array(_as_np(tr.yaw), copy=True)
+    valids = np.array(valid_np, copy=True)
+    xs[slot, :] = 0.0
+    ys[slot, :] = 0.0
+    zs[slot, :] = 0.0
+    vxs[slot, :] = 0.0
+    vys[slot, :] = 0.0
+    yaws[slot, :] = heading
+    valids[slot, :] = False
     speed0 = max(1.0, float(prefix.prefix_states[-1, 6]))
     accel = -0.5 if branch == "yield" else 1.2
     intent_speed = max(1.0, speed0 - 2.0) if branch == "yield" else max(3.0, speed0 + 2.0)
-    for tau in range(start, total_T):
-        dt = (tau - start) / float(cfg.get("sample_rate_hz", 10.0))
-        v = max(0.0, intent_speed + accel * dt)
+    if start < total_T:
+        taus = np.arange(start, total_T, dtype=np.float32)
+        dt = (taus - float(start)) / float(cfg.get("sample_rate_hz", 10.0))
+        v = np.maximum(0.0, intent_speed + accel * dt)
         dist = intent_speed * dt + 0.5 * accel * dt * dt
-        xs = xs.at[slot, tau].set(float(gxy[0] + dist * math.cos(heading)))
-        ys = ys.at[slot, tau].set(float(gxy[1] + dist * math.sin(heading)))
-        vxs = vxs.at[slot, tau].set(float(v * math.cos(heading)))
-        vys = vys.at[slot, tau].set(float(v * math.sin(heading)))
-        yaws = yaws.at[slot, tau].set(heading)
-        valids = valids.at[slot, tau].set(True)
-    length = length.at[slot].set(4.8)
-    width = width.at[slot].set(2.0)
-    height = height.at[slot].set(1.6)
-    new_tr = tr.replace(x=xs, y=ys, z=zs, vel_x=vxs, vel_y=vys, yaw=yaws, valid=valids, length=length, width=width, height=height)
+        c = math.cos(heading)
+        s = math.sin(heading)
+        idx = np.arange(start, total_T)
+        xs[slot, idx] = float(gxy[0]) + dist * c
+        ys[slot, idx] = float(gxy[1]) + dist * s
+        vxs[slot, idx] = v * c
+        vys[slot, idx] = v * s
+        yaws[slot, idx] = heading
+        valids[slot, idx] = True
+    length = _set_agent_constant(_as_np(tr.length), slot, 4.8)
+    width = _set_agent_constant(_as_np(tr.width), slot, 2.0)
+    height = _set_agent_constant(_as_np(tr.height), slot, 1.6)
+    new_tr = tr.replace(
+        x=jnp.asarray(xs),
+        y=jnp.asarray(ys),
+        z=jnp.asarray(zs),
+        vel_x=jnp.asarray(vxs),
+        vel_y=jnp.asarray(vys),
+        yaw=jnp.asarray(yaws),
+        valid=jnp.asarray(valids),
+        length=jnp.asarray(length),
+        width=jnp.asarray(width),
+        height=jnp.asarray(height),
+    )
     md = state.object_metadata
     obj_types = jnp.array(_as_np(md.object_types)).at[slot].set(1)
     is_valid = jnp.array(_as_np(md.is_valid)).at[slot].set(True)
@@ -682,11 +708,13 @@ def _augment_visible_reference(state: Any, history: SceneHistory, prefix: Candid
     end = min(total_T, t0 + max(T_p, 2) + int(cfg.get("visible_root_extra_steps", 8)))
     accel = -1.5 if branch == "visible_brake" else 1.5
     lateral = -0.25 if branch == "visible_left" else (0.25 if branch == "visible_right" else 0.0)
-    xs = jnp.array(_as_np(tr.x))
-    ys = jnp.array(_as_np(tr.y))
-    vxs = jnp.array(_as_np(tr.vel_x))
-    vys = jnp.array(_as_np(tr.vel_y))
-    yaws = jnp.array(_as_np(tr.yaw))
+    # Vectorized host-side edit; same trajectory as the old per-timestep JAX
+    # updates, with far fewer device dispatches.
+    xs = np.array(_as_np(tr.x), copy=True)
+    ys = np.array(_as_np(tr.y), copy=True)
+    vxs = np.array(_as_np(tr.vel_x), copy=True)
+    vys = np.array(_as_np(tr.vel_y), copy=True)
+    yaws = np.array(_as_np(tr.yaw), copy=True)
     # Use the actor's current heading as a local tangent and apply a modest speed
     # perturbation over the prefix.  This keeps the branch plausible but visible.
     heading0 = float(yaw[slot, t0])
@@ -695,19 +723,21 @@ def _augment_visible_reference(state: Any, history: SceneHistory, prefix: Candid
     y0 = float(y[slot, t0])
     nx = -math.sin(heading0)
     ny = math.cos(heading0)
-    for tau in range(start, end):
-        dt = (tau - t0) / float(cfg.get("sample_rate_hz", 10.0))
-        v = max(0.0, speed0 + accel * dt)
+    if start < end:
+        taus = np.arange(start, end, dtype=np.float32)
+        dt = (taus - float(t0)) / float(cfg.get("sample_rate_hz", 10.0))
+        v = np.maximum(0.0, speed0 + accel * dt)
         dist = speed0 * dt + 0.5 * accel * dt * dt
         lat = lateral * dt
-        gx = x0 + dist * math.cos(heading0) + lat * nx
-        gy = y0 + dist * math.sin(heading0) + lat * ny
-        xs = xs.at[slot, tau].set(float(gx))
-        ys = ys.at[slot, tau].set(float(gy))
-        vxs = vxs.at[slot, tau].set(float(v * math.cos(heading0)))
-        vys = vys.at[slot, tau].set(float(v * math.sin(heading0)))
-        yaws = yaws.at[slot, tau].set(heading0)
-    new_tr = tr.replace(x=xs, y=ys, vel_x=vxs, vel_y=vys, yaw=yaws)
+        c = math.cos(heading0)
+        s = math.sin(heading0)
+        idx = np.arange(start, end)
+        xs[slot, idx] = x0 + dist * c + lat * nx
+        ys[slot, idx] = y0 + dist * s + lat * ny
+        vxs[slot, idx] = v * c
+        vys[slot, idx] = v * s
+        yaws[slot, idx] = heading0
+    new_tr = tr.replace(x=jnp.asarray(xs), y=jnp.asarray(ys), vel_x=jnp.asarray(vxs), vel_y=jnp.asarray(vys), yaw=jnp.asarray(yaws))
     meta = {
         "visible_perturbation": True,
         "visible_actor_object_index": int(slot),
@@ -779,9 +809,23 @@ def generate_waymax_counterfactual_futures(history: SceneHistory, prefix: Candid
     priors = cfg.get("future_priors", {})
     futures: list[CounterfactualFuture] = []
 
-    allow_new = bool((cfg.get("waymax", {}) or {}).get("allow_new_objects_after_warmup", True))
+    wx = cfg.get("waymax", {}) if isinstance(cfg.get("waymax", {}), dict) else {}
+    allow_new = bool(wx.get("allow_new_objects_after_warmup", True))
     st_prefix, wx_env, dyn_name = _rollout_prefix(state0, history, prefix, cfg, allow_new=allow_new)
-    st_roll = _rollout_future_after_prefix(st_prefix, wx_env, post_steps, cfg, coast_accel=0.0)
+    postprefix_rollout_cache: dict[tuple[int, int, int, float], Any] = {}
+
+    def rollout_post_cached(st_after_prefix: Any, waymax_env: Any, accel: float) -> Any:
+        if not bool(wx.get("cache_postprefix_rollouts", True)):
+            return _rollout_future_after_prefix(st_after_prefix, waymax_env, post_steps, cfg, coast_accel=accel)
+        key = (id(st_after_prefix), id(waymax_env), int(post_steps), round(float(accel), 6))
+        cached = postprefix_rollout_cache.get(key)
+        if cached is not None:
+            return cached
+        out = _rollout_future_after_prefix(st_after_prefix, waymax_env, post_steps, cfg, coast_accel=accel)
+        postprefix_rollout_cache[key] = out
+        return out
+
+    st_roll = rollout_post_cached(st_prefix, wx_env, 0.0)
     futures.append(
         _make_future_from_state(
             0,
@@ -807,7 +851,7 @@ def generate_waymax_counterfactual_futures(history: SceneHistory, prefix: Candid
     reactive_total = float(priors.get("reactive", 0.35))
     for i in range(n_reactive):
         accel = [-1.0, -0.3, 0.3, 0.8][i % 4]
-        str_i = _rollout_future_after_prefix(st_prefix, wx_env, post_steps, cfg, coast_accel=accel)
+        str_i = rollout_post_cached(st_prefix, wx_env, accel)
         futures.append(
             _make_future_from_state(
                 len(futures),
@@ -830,7 +874,6 @@ def generate_waymax_counterfactual_futures(history: SceneHistory, prefix: Candid
             )
         )
 
-    wx = cfg.get("waymax", {}) if isinstance(cfg.get("waymax", {}), dict) else {}
     quality = cfg.get("dataset_quality", {}) if isinstance(cfg.get("dataset_quality", {}), dict) else {}
     require_artifact_pair = bool(quality.get("require_artifact_pairs", False))
     n_targeted = int(cfg.get("num_targeted_futures", 8))
@@ -851,7 +894,7 @@ def generate_waymax_counterfactual_futures(history: SceneHistory, prefix: Candid
             if aug_state is None:
                 continue
             stp, env_a, dyn_a = _rollout_prefix(aug_state, history, prefix, cfg, allow_new=True)
-            str_a = _rollout_future_after_prefix(stp, env_a, post_steps, cfg, coast_accel=0.0)
+            str_a = rollout_post_cached(stp, env_a, 0.0)
             ameta.update({"scenario_augmented": True, "artifact_pair_key": f"{history.scene_id}:{history.time_index}:{prefix.macro_id}", "rollout_variant": "augmented_hidden_log_playback"})
             futures.append(_make_future_from_state(len(futures), "targeted", targeted_total / max(n_targeted, 1), str_a, history, prefix, cfg, env_a, dyn_a, ameta, state_after_prefix=stp))
             hidden_branches_added.add(branch)
@@ -870,7 +913,7 @@ def generate_waymax_counterfactual_futures(history: SceneHistory, prefix: Candid
             if aug_state is None:
                 continue
             stp, env_v, dyn_v = _rollout_prefix(aug_state, history, prefix, cfg, allow_new=allow_new)
-            str_v = _rollout_future_after_prefix(stp, env_v, post_steps, cfg, coast_accel=0.0)
+            str_v = rollout_post_cached(stp, env_v, 0.0)
             ameta.update({"scenario_augmented": True, "rollout_variant": "augmented_visible_actor_log_playback"})
             futures.append(_make_future_from_state(len(futures), "targeted", targeted_total / max(n_targeted, 1), str_v, history, prefix, cfg, env_v, dyn_v, ameta, state_after_prefix=stp))
             targeted_added += 1
@@ -881,7 +924,7 @@ def generate_waymax_counterfactual_futures(history: SceneHistory, prefix: Candid
     # the degeneracy.
     while targeted_added < n_targeted:
         accel = -2.0 if targeted_added % 2 == 0 else 1.2
-        str_t = _rollout_future_after_prefix(st_prefix, wx_env, post_steps, cfg, coast_accel=accel)
+        str_t = rollout_post_cached(st_prefix, wx_env, accel)
         futures.append(
             _make_future_from_state(
                 len(futures),
@@ -1000,10 +1043,13 @@ def compute_waymax_future_option_margins(history: SceneHistory, prefix: Candidat
     controllers = [rollout_recovery_controller(prefix, opt, horizon_steps, cfg) for opt in options]
     sdc = _sdc_index(state0)
     margin_cache: dict[tuple[int, int, int], tuple[np.ndarray, list[TeacherDiagnostics]]] = {}
+    metric_rollout_cache: dict[tuple[int, int, int, int, int], tuple[float, dict[str, float], dict[str, bool], dict[str, float]]] = {}
     wx = cfg.get("waymax", {}) if isinstance(cfg.get("waymax", {}), dict) else {}
     hybrid_teacher = teacher_backend == "hybrid"
     metric_stride = int(wx.get("teacher_metrics_stride", 1))
     structural_cfg = _cfg_without_artifact_override(cfg)
+    artifact_cfg = cfg.get("artifact", {}) if isinstance(cfg.get("artifact", {}), dict) else {}
+    artifact_override_enabled = bool(artifact_cfg.get("use_margin_override", True))
 
     # Screened hybrid mode is an explicit speed/diagnostic knob.  The default
     # top_k=0 and modes=[] preserves the exact old behavior: every option is
@@ -1054,7 +1100,15 @@ def compute_waymax_future_option_margins(history: SceneHistory, prefix: Candidat
             for l, opt in enumerate(options):
                 rec_states, rec_controls, cdiag = controllers[l]
                 sv, sd = teacher_margin(history, prefix, fut, opt, rec_states, rec_controls, structural_cfg, cdiag)
-                lv, ld = teacher_margin(history, prefix, fut, opt, rec_states, rec_controls, cfg, cdiag)
+                # The label-side structural teacher differs from ``structural_cfg``
+                # only when the explicit artifact margin override can fire.  Avoid
+                # recomputing all pairwise structural components for the common
+                # non-artifact case (and for the paper-quality builds where
+                # artifact.use_margin_override=false).
+                if artifact_override_enabled and _artifact_margin_override(opt, fut, cfg) is not None:
+                    lv, ld = teacher_margin(history, prefix, fut, opt, rec_states, rec_controls, cfg, cdiag)
+                else:
+                    lv, ld = sv, sd
                 lv, applied = _artifact_override_adjusted_value(float(lv), opt, fut, cfg)
                 if applied:
                     fut.metadata["margin_override_applied"] = True
@@ -1078,6 +1132,7 @@ def compute_waymax_future_option_margins(history: SceneHistory, prefix: Candidat
 
         row: list[TeacherDiagnostics] = []
         waymax_rollouts_executed = 0
+        waymax_metric_cache_hits = 0
         for l, opt in enumerate(options):
             rec_states, rec_controls, cdiag = controllers[l]
             if screened_hybrid and rollout_indices is not None and l not in rollout_indices:
@@ -1140,21 +1195,32 @@ def compute_waymax_future_option_margins(history: SceneHistory, prefix: Candidat
             # used.  Roll the whole control sequence with one JAX scan dispatch.
             # For stride > 0 we keep the original Python loop because intermediate
             # metrics are semantically required.
-            if metric_stride <= 0 and rec_controls.size:
-                controls = np.zeros((horizon_steps, 2), dtype=np.float32)
-                controls[:, 0] = rec_controls[np.minimum(np.arange(horizon_steps), rec_controls.shape[0] - 1), 0]
-                controls[:, 1] = rec_controls[np.minimum(np.arange(horizon_steps), rec_controls.shape[0] - 1), 1]
-                st = _rollout_bicycle_controls_scan(st, waymax_env, controls, cfg)
-                metrics_over_time.append(_metric_summary(waymax_env, st, sdc))
+            metric_cache_hit = False
+            metric_cache_key = (id(base_state), id(waymax_env), int(l), int(metric_stride), int(horizon_steps))
+            cached_metric = metric_rollout_cache.get(metric_cache_key) if bool(wx.get("cache_teacher_metric_rollouts", True)) else None
+            if cached_metric is not None:
+                val, comps, active, metrics_last = cached_metric
+                metrics_over_time.append(dict(metrics_last))
+                metric_cache_hit = True
+                waymax_metric_cache_hits += 1
             else:
-                for tt in range(horizon_steps):
-                    ctrl = rec_controls[min(tt, rec_controls.shape[0] - 1)] if rec_controls.size else np.zeros(4, dtype=np.float32)
-                    action = _action_from_recovery_control(int(st.num_objects), sdc, ctrl, cfg)
-                    st = waymax_env.step(st, action)
-                    if _should_record_teacher_metric(tt, horizon_steps, metric_stride):
-                        metrics_over_time.append(_metric_summary(waymax_env, st, sdc))
-            waymax_rollouts_executed += 1
-            val, comps, active = _waymax_margin_from_rollout(metrics_over_time, cfg)
+                if metric_stride <= 0 and rec_controls.size:
+                    controls = np.zeros((horizon_steps, 2), dtype=np.float32)
+                    controls[:, 0] = rec_controls[np.minimum(np.arange(horizon_steps), rec_controls.shape[0] - 1), 0]
+                    controls[:, 1] = rec_controls[np.minimum(np.arange(horizon_steps), rec_controls.shape[0] - 1), 1]
+                    st = _rollout_bicycle_controls_scan(st, waymax_env, controls, cfg)
+                    metrics_over_time.append(_metric_summary(waymax_env, st, sdc))
+                else:
+                    for tt in range(horizon_steps):
+                        ctrl = rec_controls[min(tt, rec_controls.shape[0] - 1)] if rec_controls.size else np.zeros(4, dtype=np.float32)
+                        action = _action_from_recovery_control(int(st.num_objects), sdc, ctrl, cfg)
+                        st = waymax_env.step(st, action)
+                        if _should_record_teacher_metric(tt, horizon_steps, metric_stride):
+                            metrics_over_time.append(_metric_summary(waymax_env, st, sdc))
+                waymax_rollouts_executed += 1
+                val, comps, active = _waymax_margin_from_rollout(metrics_over_time, cfg)
+                if bool(wx.get("cache_teacher_metric_rollouts", True)):
+                    metric_rollout_cache[metric_cache_key] = (float(val), dict(comps), dict(active), metrics_over_time[-1] if metrics_over_time else {})
             if hybrid_teacher:
                 if structural_diags[l] is not None:
                     structural_val = float(structural_vals[l])
@@ -1176,10 +1242,11 @@ def compute_waymax_future_option_margins(history: SceneHistory, prefix: Candidat
             if applied:
                 fut.metadata["margin_override_applied"] = True
             M[j, l] = float(val)
-            row.append(TeacherDiagnostics(active=active, component_margins=comps, controller_diagnostics={**(cdiag or {}), "waymax_recovery_rollout": True, "waymax_hybrid_teacher_margin": bool(hybrid_teacher), "waymax_teacher_backend": teacher_backend, "waymax_teacher_metrics_stride": int(metric_stride), "waymax_teacher_rollout_top_k_options": int(rollout_top_k), "waymax_teacher_rollout_option_modes": sorted(rollout_modes), "waymax_metrics_last": metrics_over_time[-1] if metrics_over_time else {}}))
+            row.append(TeacherDiagnostics(active=active, component_margins=comps, controller_diagnostics={**(cdiag or {}), "waymax_recovery_rollout": True, "waymax_recovery_metric_cache_hit": bool(metric_cache_hit), "waymax_hybrid_teacher_margin": bool(hybrid_teacher), "waymax_teacher_backend": teacher_backend, "waymax_teacher_metrics_stride": int(metric_stride), "waymax_teacher_rollout_top_k_options": int(rollout_top_k), "waymax_teacher_rollout_option_modes": sorted(rollout_modes), "waymax_metrics_last": metrics_over_time[-1] if metrics_over_time else {}}))
         margin_cache[cache_key] = (M[j].copy(), row)
         fut.metadata["waymax_teacher_rollout_reused"] = False
         fut.metadata["waymax_teacher_rollouts_executed"] = int(waymax_rollouts_executed)
+        fut.metadata["waymax_teacher_metric_cache_hits"] = int(waymax_metric_cache_hits)
         fut.metadata["waymax_teacher_rollouts_possible"] = int(len(options))
         fut.metadata["waymax_teacher_screened_hybrid"] = bool(screened_hybrid)
         all_diag.append(row)

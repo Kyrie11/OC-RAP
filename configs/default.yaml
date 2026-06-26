@@ -246,7 +246,16 @@ waymax:
   append_scenario_index_to_id: true
   # Reuse stateless Waymax BaseEnvironment objects with identical config. This
   # also improves reuse of jitted scan rollout functions.
-  cache_env_objects: false
+  cache_env_objects: true
+  # Exact cache for repeated post-prefix constant-control futures produced from
+  # the same Waymax state/environment. This avoids rerolling duplicate SDC stress
+  # variants without changing their trajectory or priors.
+  cache_postprefix_rollouts: true
+  # Exact cache for the Waymax-metric part of hybrid teacher rows. Futures that
+  # share the same post-prefix simulator state/env still keep their own
+  # branch-specific structural margins; only the deterministic recovery metric
+  # rollout is reused.
+  cache_teacher_metric_rollouts: true
   # Optional speed path: moves constant-control future rollouts and final-metric
   # recovery-teacher rollouts into one jax.lax.scan dispatch. Default false keeps
   # exact legacy dispatch behavior; enable for profiling/smoke builds.
