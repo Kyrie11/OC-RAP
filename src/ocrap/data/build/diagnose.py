@@ -44,12 +44,34 @@ FINITE_ARRAY_FIELDS = [
 ]
 
 
+def _dataset_specs(dataset: str | Path) -> list[Path]:
+    """Parse one or more OC-RAP dataset directories.
+
+    ``diagnose`` historically accepted a single directory.  Training already
+    accepts comma-separated shard lists, so diagnostics should mirror that
+    behavior.  Commas are used instead of shell globs to avoid accidentally
+    mixing unrelated runs.
+    """
+    if isinstance(dataset, Path):
+        return [dataset]
+    raw = str(dataset).strip()
+    if not raw:
+        return []
+    parts = [x.strip() for x in raw.split(",") if x.strip()]
+    return [Path(x) for x in parts]
+
+
 def iter_sample_paths(dataset: str | Path, max_samples: int | None = None) -> list[Path]:
-    root = Path(dataset)
-    if (root / "samples").exists():
-        paths = sorted((root / "samples").glob("*.npz"))
-    else:
-        paths = sorted(root.glob("*.npz"))
+    paths: list[Path] = []
+    for root in _dataset_specs(dataset):
+        if (root / "samples").exists():
+            local = sorted((root / "samples").glob("*.npz"))
+        else:
+            local = sorted(root.glob("*.npz"))
+        paths.extend(local)
+    # Preserve deterministic order and remove duplicate paths when users pass the
+    # same shard twice.
+    paths = sorted(dict.fromkeys(paths))
     return paths[:max_samples] if max_samples else paths
 
 
@@ -624,6 +646,7 @@ def diagnose_dataset(dataset: str | Path, output: str | Path | None = None, max_
 
     result = {
         "dataset": str(dataset),
+        "dataset_roots": [str(x) for x in _dataset_specs(dataset)],
         "num_samples": num,
         "num_scenes": len(split_by_scene),
         "num_scene_time_groups": len(candidate_by_scene_time),
