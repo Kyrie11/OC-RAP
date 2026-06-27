@@ -16,14 +16,19 @@ from .train import train
 
 
 def add_common(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--config", default=None, help="YAML config path. Defaults to configs/default.yaml.")
-    p.add_argument("--set", action="append", default=[], help="Override config with dotted.path=value. Can be repeated.")
-    p.add_argument("--without-observation-kernel", action="store_true")
-    p.add_argument("--without-lower-tail", action="store_true")
-    p.add_argument("--without-calibration", action="store_true")
-    p.add_argument("--without-anti-oracle", action="store_true")
-    p.add_argument("--full-future-roots", action="store_true")
-    p.add_argument("--no-occlusion-bev", action="store_true")
+    # The same common flags are accepted both before and after the sub-command.
+    # Use SUPPRESS defaults so a sub-parser that omits a flag does not silently
+    # overwrite the value parsed by the top-level parser.  This fixes commands
+    # like ``ocrap --set a=b build-dataset ...`` while preserving the documented
+    # ``ocrap build-dataset --set a=b ...`` form.
+    p.add_argument("--config", default=argparse.SUPPRESS, help="YAML config path. Defaults to configs/default.yaml.")
+    p.add_argument("--set", action="append", default=argparse.SUPPRESS, help="Override config with dotted.path=value. Can be repeated.")
+    p.add_argument("--without-observation-kernel", action="store_true", default=argparse.SUPPRESS)
+    p.add_argument("--without-lower-tail", action="store_true", default=argparse.SUPPRESS)
+    p.add_argument("--without-calibration", action="store_true", default=argparse.SUPPRESS)
+    p.add_argument("--without-anti-oracle", action="store_true", default=argparse.SUPPRESS)
+    p.add_argument("--full-future-roots", action="store_true", default=argparse.SUPPRESS)
+    p.add_argument("--no-occlusion-bev", action="store_true", default=argparse.SUPPRESS)
 
 
 def make_parser() -> argparse.ArgumentParser:

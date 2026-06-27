@@ -16,16 +16,55 @@ def executed_false_admission(selected_idx: int, teacher_r_dep: np.ndarray) -> fl
     return float(r[int(selected_idx)] < 0.0)
 
 
-def deployable_recovery_success(m_star: np.ndarray, root_probs: np.ndarray, selected_options: np.ndarray | int) -> float:
+def deployable_recovery_success(
+    m_star: np.ndarray,
+    root_probs: np.ndarray,
+    selected_options: np.ndarray | int,
+    root_valid: np.ndarray | None = None,
+) -> float:
+    """Teacher deployable-recovery success for an executed candidate.
+
+    ``m_star[k,l]`` is the teacher margin of recovery option ``l`` under root
+    ``k``.  Earlier versions normalized all root probabilities, including
+    padded/invalid roots when a sample had fewer than ``num_roots`` valid roots.
+    That can under- or over-estimate DRS on heterogeneous datasets.  The metric
+    now masks invalid roots before normalization while remaining backward
+    compatible when ``root_valid`` is absent.
+    """
     M = np.asarray(m_star, dtype=float)
-    p = np.asarray(root_probs, dtype=float).reshape(-1)
+    if M.ndim != 2 or M.size == 0:
+        return 0.0
+    p = np.asarray(root_probs, dtype=float).reshape(-1)[: M.shape[0]]
+    if p.size < M.shape[0]:
+        p = np.pad(p, (0, M.shape[0] - p.size), constant_values=0.0)
+    if root_valid is not None:
+        valid = np.asarray(root_valid, dtype=float).reshape(-1)[: M.shape[0]] > 0.5
+        if valid.size < M.shape[0]:
+            valid = np.pad(valid, (0, M.shape[0] - valid.size), constant_values=False)
+        p = np.where(valid, p, 0.0)
     if isinstance(selected_options, (int, np.integer)):
         opt = np.full(M.shape[0], int(selected_options), dtype=int)
     else:
         opt = np.asarray(selected_options, dtype=int).reshape(-1)
-    vals = np.array([M[k, opt[min(k, len(opt)-1)]] >= 0.0 for k in range(M.shape[0])], dtype=float)
-    p = p / max(float(p.sum()), 1e-8)
-    return float(np.sum(p[: len(vals)] * vals))
+        if opt.size == 0:
+            opt = np.zeros(M.shape[0], dtype=int)
+    opt = np.clip(opt, 0, M.shape[1] - 1)
+    vals = np.array([M[k, opt[min(k, len(opt) - 1)]] >= 0.0 for k in range(M.shape[0])], dtype=float)
+    denom = float(p.sum())
+    if denom <= 1e-8:
+        # If all valid probability mass disappeared due to a malformed sample,
+        # fall back to a uniform distribution over valid rows instead of all rows.
+        if root_valid is not None:
+            valid = np.asarray(root_valid, dtype=float).reshape(-1)[: M.shape[0]] > 0.5
+            if valid.any():
+                p = valid.astype(float) / float(valid.sum())
+            else:
+                p = np.ones(M.shape[0], dtype=float) / float(M.shape[0])
+        else:
+            p = np.ones(M.shape[0], dtype=float) / float(M.shape[0])
+    else:
+        p = p / denom
+    return float(np.sum(p * vals))
 
 
 def nominal_utility_preservation(nominal_u: float, selected_u: float, sigma_u: float = 1.0) -> dict[str, float]:
