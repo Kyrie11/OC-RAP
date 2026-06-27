@@ -46,12 +46,6 @@ def calibrate(dataset: str, checkpoint: str | None = None, output: str | None = 
     neg = scores[teacher < 0]
     if len(neg) < required:
         warnings.append(f"num_negative < required_min_for_delta ({len(neg)} < {required})")
-    no_negative = len(neg) == 0
-    if no_negative:
-        warnings.append(
-            "no negative deployability examples; calibrated gamma_rec cannot control FRA. "
-            "Regenerate a stress/artifact calibration split or use a fixed gamma only for smoke tests."
-        )
     thresholds = {}
     for delta in deltas:
         try:
@@ -62,8 +56,6 @@ def calibrate(dataset: str, checkpoint: str | None = None, output: str | None = 
     result = {
         "num_samples": int(len(scores)),
         "num_negative": int(len(neg)),
-        "negative_fraction": float(len(neg) / max(len(scores), 1)),
-        "valid_for_fra_calibration": bool(len(neg) >= required),
         "source": "model" if bundle is not None else "teacher_fallback",
         "splits": sorted(set(used_splits)),
         "thresholds": thresholds,

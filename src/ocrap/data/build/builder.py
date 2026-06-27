@@ -205,6 +205,13 @@ def _quality_bool(cfg: dict, key: str, default: bool) -> bool:
     return bool(quality.get(key, default))
 
 
+def _quality_attempt_cap(cfg: dict, key: str, default: int) -> int:
+    # 0 or a missing value means no additional cap beyond the available prefix
+    # list.  Positive values bound expensive quota hunting per scene-time.
+    val = _quality_int(cfg, key, default)
+    return int(default) if val <= 0 else min(int(val), int(default))
+
+
 def _cfg_with_artifact_mining(cfg: dict, *, enable: bool) -> dict:
     """Copy cfg and force artifact mining on/off for one materialization.
 
@@ -226,6 +233,25 @@ def _cfg_with_artifact_mining(cfg: dict, *, enable: bool) -> dict:
         # mined sample, producing complete_artifact_pair_count>0 but
         # artifact_fraction==0.
         art["use_margin_override"] = True
+
+        # Speed path for proof-artifact / balanced mined passes.  The hidden
+        # augmented branch is explicitly labeled by the margin override, so a full
+        # Waymax recovery rollout for that branch is redundant for quick-proof
+        # label construction.  These knobs are local to the mined pass and keep
+        # the no-mine/natural half untouched.
+        wx = dict(local.get("waymax", {}) or {})
+        if bool(quality_in.get("artifact_pass_skip_augmented_waymax", True)):
+            wx["skip_waymax_rollout_for_augmented_override"] = True
+        if bool(quality_in.get("artifact_pass_apply_override_to_screened", True)):
+            wx["apply_artifact_override_to_screened_options"] = True
+        if not bool(quality_in.get("artifact_pass_compute_future_metrics", False)):
+            wx["compute_future_metrics"] = False
+        if bool(quality_in.get("artifact_pass_structural_teacher", False)):
+            # More aggressive debug/proof mode: no recovery-option Waymax rollout
+            # is executed for the mined pass.  Use only when the artifact set is
+            # reported as a proof/ablation set rather than strict rollout labels.
+            wx["teacher_backend"] = "structural"
+        local["waymax"] = wx
     local["artifact"] = art
     quality = dict(local.get("dataset_quality", {}) or {})
     # The forced materialization itself must not be skipped by the strict
@@ -473,6 +499,8 @@ def build_samples_for_history(history, split_id: str, cfg: dict, progress_callba
     max_non = _quality_int(cfg, "max_nonartifact_prefixes_per_scene_time", max_accepted if max_accepted else len(prefixes))
     macro_diversity_first = _quality_bool(cfg, "macro_diversity_first", True)
     balanced_two_pass = _quality_bool(cfg, "balanced_two_pass", True)
+    max_non_attempts = _quality_attempt_cap(cfg, "max_nonartifact_attempts_per_scene_time", len(prefixes))
+    max_art_attempts = _quality_attempt_cap(cfg, "max_artifact_attempts_per_scene_time", len(prefixes))
 
     selected: list[DatasetSample] = []
     deferred: list[DatasetSample] = []
@@ -496,9 +524,13 @@ def build_samples_for_history(history, split_id: str, cfg: dict, progress_callba
         # a primary WOMD build from degenerating into the current stress-only set.
         no_mine_cfg = _cfg_with_artifact_mining(cfg, enable=False)
         no_mine_prefixes = _balanced_prefix_order(history, prefixes, cfg, salt="nonartifact", nominal_first=bool((cfg.get("dataset_quality", {}) or {}).get("balanced_keep_nominal_nonartifact", True)))
+        non_attempts = 0
         for prefix in no_mine_prefixes:
+            if non_attempts >= max_non_attempts:
+                break
             if max_accepted > 0 and len(selected) >= max_accepted and len(selected) - sum(int(_sample_is_artifact(s, no_mine_cfg)) for s in selected) >= min_non:
                 break
+            non_attempts += 1
             sample = materialize(prefix, no_mine_cfg)
             materialized_prefixes.add(int(prefix.macro_id))
             if sample is not None and not _sample_is_artifact(sample, no_mine_cfg):
@@ -512,14 +544,18 @@ def build_samples_for_history(history, split_id: str, cfg: dict, progress_callba
         # remaining prefixes.  The quota keeps artifact_fraction below 1.0.
         mine_cfg = _cfg_with_artifact_mining(cfg, enable=True)
         mine_prefixes = _balanced_prefix_order(history, prefixes, cfg, salt="artifact", nominal_first=False)
+        art_attempts = 0
         for prefix in mine_prefixes:
             n_art = sum(int(_sample_is_artifact(s, mine_cfg)) for s in selected)
+            if art_attempts >= max_art_attempts:
+                break
             if max_accepted > 0 and len(selected) >= max_accepted and n_art >= min_art:
                 break
             if max_art > 0 and n_art >= max_art:
                 break
             if int(prefix.macro_id) in materialized_prefixes and len(prefixes) > max_accepted:
                 continue
+            art_attempts += 1
             sample = materialize(prefix, mine_cfg)
             materialized_prefixes.add(int(prefix.macro_id))
             if sample is not None and _sample_is_artifact(sample, mine_cfg):
