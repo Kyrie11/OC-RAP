@@ -189,6 +189,17 @@ dataset_quality:
   min_uniform_times_per_scenario: 0
   artifact_pass_use_margin_override: true
   artifact_quota_uses_label: true
+  # Optional regime gates.  Keep them false by default; enable for safe/NUP sets
+  # to avoid silently saving hard-violating or non-deployable candidates.
+  require_nonartifact_sample: false
+  require_feasible_prefix: false
+  require_deployable_recoverable_sample: false
+  min_deployable_margin: 0.0
+  require_oracle_recoverable_sample: false
+  min_oracle_margin: 0.0
+  max_prefix_hard_violation: null
+  max_prefix_harm_proxy: null
+  max_oracle_gap: null
   warn_if_artifact_fraction_above: 0.80
   warn_if_scene_count_below: 50
 training:

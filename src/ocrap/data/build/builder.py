@@ -353,17 +353,57 @@ def _sample_obs_negative_fraction(sample: DatasetSample) -> float:
 
 def _sample_passes_quality_gates(sample: DatasetSample, cfg: dict) -> bool:
     quality = cfg.get("dataset_quality", {}) if isinstance(cfg.get("dataset_quality", {}), dict) else {}
-    min_obs_neg = float(quality.get("min_obs_negative_fraction_per_sample", 0.0) or 0.0)
-    if min_obs_neg > 0.0 and _sample_obs_negative_fraction(sample) + 1e-12 < min_obs_neg:
-        sample.diagnostics["quality_drop_reason"] = "low_obs_negative_fraction"
-        sample.diagnostics["obs_negative_fraction"] = float(_sample_obs_negative_fraction(sample))
+
+    def drop(reason: str) -> bool:
+        sample.diagnostics["quality_drop_reason"] = reason
         return False
+
+    min_obs_neg = float(quality.get("min_obs_negative_fraction_per_sample", 0.0) or 0.0)
+    obs_neg = float(_sample_obs_negative_fraction(sample))
+    if min_obs_neg > 0.0 and obs_neg + 1e-12 < min_obs_neg:
+        sample.diagnostics["obs_negative_fraction"] = obs_neg
+        return drop("low_obs_negative_fraction")
+
+    # Dataset-regime gates.  These are deliberately optional because the same
+    # builder is used for safe, near-contact, contact, and artifact/stress sets.
+    # They are most useful for the safe regime, where keeping low-headroom or
+    # hard-violating candidates silently pollutes NUP/benign-driving labels.
+    if bool(quality.get("require_nonartifact_sample", False)) and bool(sample.i_art_star):
+        return drop("artifact_sample")
+
+    if bool(quality.get("require_feasible_prefix", False)) and not bool(sample.prefix.feasible):
+        return drop("infeasible_prefix")
+
+    max_hard = quality.get("max_prefix_hard_violation", None)
+    if max_hard is not None:
+        if float(sample.prefix.hard_violation) > float(max_hard):
+            return drop("prefix_hard_violation")
+
+    max_harm = quality.get("max_prefix_harm_proxy", None)
+    if max_harm is not None:
+        if float(sample.prefix.harm_proxy) > float(max_harm):
+            return drop("prefix_harm_proxy")
+
+    if bool(quality.get("require_deployable_recoverable_sample", False)):
+        thr = float(quality.get("min_deployable_margin", 0.0))
+        if not (float(sample.r_dep_star) >= thr):
+            return drop("not_deployable_recoverable")
+
+    if bool(quality.get("require_oracle_recoverable_sample", False)):
+        thr = float(quality.get("min_oracle_margin", 0.0))
+        if not (float(sample.r_orc_star) >= thr):
+            return drop("not_oracle_recoverable")
+
+    max_gap = quality.get("max_oracle_gap", None)
+    if max_gap is not None:
+        if float(sample.oracle_gap_star) > float(max_gap):
+            return drop("oracle_gap_too_large")
+
     if bool(quality.get("require_negative_deployable_sample", False)):
         thr = float(quality.get("negative_deployable_threshold", 0.0))
         if not (float(sample.r_dep_star) < thr):
-            sample.diagnostics["quality_drop_reason"] = "not_negative_deployable"
-            return False
-    sample.diagnostics["obs_negative_fraction"] = float(_sample_obs_negative_fraction(sample))
+            return drop("not_negative_deployable")
+    sample.diagnostics["obs_negative_fraction"] = obs_neg
     return True
 
 
