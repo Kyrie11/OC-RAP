@@ -27,7 +27,7 @@ def read_json(path: str | Path) -> dict[str, Any]:
         return json.load(f)
 
 
-def np_savez(path: str | Path, **arrays: Any) -> None:
+def np_savez(path: str | Path, *, compressed: bool = True, fsync: bool = True, **arrays: Any) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(prefix=f".{p.name}.", suffix=".tmp", dir=p.parent)
@@ -36,9 +36,11 @@ def np_savez(path: str | Path, **arrays: Any) -> None:
         with os.fdopen(fd, "wb") as f:
             # Passing an open file handle prevents NumPy from silently appending
             # an extra .npz suffix to our temporary file name.
-            np.savez_compressed(f, **arrays)
+            saver = np.savez_compressed if compressed else np.savez
+            saver(f, **arrays)
             f.flush()
-            os.fsync(f.fileno())
+            if fsync:
+                os.fsync(f.fileno())
         os.replace(tmp, p)
     except Exception:
         try:

@@ -6,7 +6,7 @@ import os
 import time
 from collections import defaultdict
 from pathlib import Path
-from typing import Callable, Iterator
+from typing import Any, Callable, Iterator
 
 import numpy as np
 
@@ -59,6 +59,31 @@ PROFILE_FIELDS = [
     "r_orc_star",
     "r_dep_star",
     "i_art_star",
+    "waymax_teacher_rollouts_executed",
+    "waymax_teacher_metric_cache_hits",
+    "waymax_teacher_screened_hybrid",
+]
+
+SCENE_PROFILE_FIELDS = [
+    "raw_scenario_index",
+    "scene_time_group",
+    "scene_id",
+    "original_scenario_id",
+    "time_index",
+    "split_id",
+    "num_selected_samples",
+    "construct_history_s",
+    "build_samples_s",
+    "sample_compute_sum_s",
+    "sample_future_generation_sum_s",
+    "sample_teacher_margins_sum_s",
+    "sample_observation_sum_s",
+    "sample_root_clustering_sum_s",
+    "sample_ocmero_sum_s",
+    "npz_serialize_s",
+    "npz_write_s",
+    "manifest_checkpoint_s",
+    "scene_time_total_s",
 ]
 
 
@@ -78,6 +103,47 @@ def _profile_log(cfg: dict, msg: str) -> None:
 
 def _now() -> float:
     return time.perf_counter()
+
+
+def _io_cfg(cfg: dict) -> dict:
+    io = cfg.get("io", cfg.get("dataset_io", {}))
+    return io if isinstance(io, dict) else {}
+
+
+def _stage_add(stage: dict[str, float], key: str, value: float) -> None:
+    stage[key] = float(stage.get(key, 0.0) + float(value))
+
+
+def _sample_timing_sum(samples: list[DatasetSample], key: str) -> float:
+    total = 0.0
+    for sample in samples:
+        try:
+            timings = sample.diagnostics.get("build_timing_s", {}) if isinstance(sample.diagnostics, dict) else {}
+            total += float(timings.get(key, 0.0))
+        except Exception:
+            continue
+    return float(total)
+
+
+def _future_metadata_sum(sample: DatasetSample, key: str) -> int:
+    vals: list[int] = []
+    for fut in sample.futures:
+        try:
+            if key in fut.metadata:
+                vals.append(int(fut.metadata.get(key, 0)))
+        except Exception:
+            continue
+    return int(sum(vals))
+
+
+def _future_metadata_any(sample: DatasetSample, key: str) -> bool:
+    for fut in sample.futures:
+        try:
+            if bool(fut.metadata.get(key, False)):
+                return True
+        except Exception:
+            continue
+    return False
 
 
 def _score_planning_times(raw: RawScenario, cfg: dict) -> tuple[list[int], dict[int, list[str]]]:
@@ -850,38 +916,54 @@ def _write_manifest_atomic(manifest_path: Path, rows: list[dict]) -> None:
             raise
 
 
-def _append_profile_row(profile_path: Path, sample: DatasetSample, sample_index: int) -> None:
-    """Append one build-time row for external watch diagnostics."""
+def _sample_profile_row(sample: DatasetSample, sample_index: int) -> dict[str, Any]:
     timings = sample.diagnostics.get("build_timing_s", {}) if isinstance(sample.diagnostics, dict) else {}
-    exists = profile_path.exists()
-    with profile_path.open("a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=PROFILE_FIELDS)
+    row = {
+        "sample_index": int(sample_index),
+        "scene_id": sample.scene_id,
+        "time_index": int(sample.time_index),
+        "candidate_index": int(sample.candidate_index),
+        "macro_name": sample.prefix.macro_name,
+        "num_futures": int(len(sample.futures)),
+        "num_options": int(len(sample.recovery_options)),
+        "r_orc_star": float(sample.r_orc_star),
+        "r_dep_star": float(sample.r_dep_star),
+        "i_art_star": int(sample.i_art_star),
+        "waymax_teacher_rollouts_executed": _future_metadata_sum(sample, "waymax_teacher_rollouts_executed"),
+        "waymax_teacher_metric_cache_hits": _future_metadata_sum(sample, "waymax_teacher_metric_cache_hits"),
+        "waymax_teacher_screened_hybrid": int(_future_metadata_any(sample, "waymax_teacher_screened_hybrid")),
+    }
+    for src, dst in [
+        ("total", "total_s"),
+        ("future_generation", "future_generation_s"),
+        ("teacher_margins", "teacher_margins_s"),
+        ("root_clustering", "root_clustering_s"),
+        ("observation", "observation_s"),
+        ("ocmero", "ocmero_s"),
+    ]:
+        row[dst] = float(timings.get(src, 0.0))
+    return row
+
+
+def _append_csv_rows(path: Path, rows: list[dict[str, Any]], fields: list[str], *, fsync_file: bool = False) -> None:
+    if not rows:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    exists = path.exists()
+    with path.open("a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fields)
         if not exists:
             writer.writeheader()
-        row = {
-            "sample_index": int(sample_index),
-            "scene_id": sample.scene_id,
-            "time_index": int(sample.time_index),
-            "candidate_index": int(sample.candidate_index),
-            "macro_name": sample.prefix.macro_name,
-            "num_futures": int(len(sample.futures)),
-            "num_options": int(len(sample.recovery_options)),
-            "r_orc_star": float(sample.r_orc_star),
-            "r_dep_star": float(sample.r_dep_star),
-            "i_art_star": int(sample.i_art_star),
-        }
-        for src, dst in [
-            ("total", "total_s"),
-            ("future_generation", "future_generation_s"),
-            ("teacher_margins", "teacher_margins_s"),
-            ("root_clustering", "root_clustering_s"),
-            ("observation", "observation_s"),
-            ("ocmero", "ocmero_s"),
-        ]:
-            row[dst] = float(timings.get(src, 0.0))
-        writer.writerow({field: row.get(field, "") for field in PROFILE_FIELDS})
+        for row in rows:
+            writer.writerow({field: row.get(field, "") for field in fields})
         f.flush()
-        os.fsync(f.fileno())
+        if fsync_file:
+            os.fsync(f.fileno())
+
+
+def _append_profile_row(profile_path: Path, sample: DatasetSample, sample_index: int) -> None:
+    """Append one build-time row for external watch diagnostics."""
+    _append_csv_rows(profile_path, [_sample_profile_row(sample, sample_index)], PROFILE_FIELDS, fsync_file=True)
 
 
 def _write_running_status(out: Path, **kwargs) -> None:
@@ -904,6 +986,7 @@ def _count_splits(rows: list[dict]) -> dict[str, int]:
 
 
 def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False) -> dict:
+    build_t0 = _now()
     out = ensure_dir(output_dir)
     sample_dir = ensure_dir(out / "samples")
     skip_existing = bool(skip_existing or cfg.get("skip_existing", False))
@@ -923,10 +1006,28 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
     scene_time_groups = 0
     skipped_no_planning_times = 0
     raw_scene_ids: set[str] = set()
-    raw_iter = scenario_iterator(cfg)
+    raw_iter = iter(scenario_iterator(cfg))
     progress_bar = None
     profile_path = out / "build_profile.csv"
+    scene_profile_path = out / "build_scene_time_profile.csv"
+    stage_profile_path = out / "build_stage_profile.json"
+    stage_totals: dict[str, float] = {}
     progress_mode = "samples" if skip_existing else "prefixes"
+    prof_cfg = _profiling_cfg(cfg)
+    profiling = _profiling_enabled(cfg)
+    profile_flush_scene_times = max(1, int(prof_cfg.get("profile_flush_scene_times", 1)))
+    profile_csv_fsync = bool(prof_cfg.get("profile_csv_fsync", False))
+    sample_profile_rows: list[dict[str, Any]] = []
+    scene_profile_rows: list[dict[str, Any]] = []
+    if profiling and not skip_existing:
+        for stale in [profile_path, scene_profile_path, stage_profile_path]:
+            try:
+                stale.unlink(missing_ok=True)
+            except Exception:
+                pass
+    io = _io_cfg(cfg)
+    compress_npz = bool(io.get("compress_npz", cfg.get("compress_npz", True)))
+    fsync_npz = bool(io.get("fsync_npz", cfg.get("fsync_npz", True)))
     if bool(cfg.get("progress", True)):
         try:
             from tqdm.auto import tqdm
@@ -947,16 +1048,52 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
                 progress_bar = tqdm(total=total_prefixes, desc="OC-RAP build prefixes", unit="prefix")
         except Exception:
             progress_bar = None
+
     def _progress(n: int) -> None:
         if progress_bar is not None:
             progress_bar.update(int(n))
+
+    def _flush_profiles() -> None:
+        nonlocal sample_profile_rows, scene_profile_rows
+        if not profiling:
+            return
+        _append_csv_rows(profile_path, sample_profile_rows, PROFILE_FIELDS, fsync_file=profile_csv_fsync)
+        _append_csv_rows(scene_profile_path, scene_profile_rows, SCENE_PROFILE_FIELDS, fsync_file=profile_csv_fsync)
+        sample_profile_rows = []
+        scene_profile_rows = []
+
+    def _write_stage_profile() -> None:
+        if not profiling:
+            return
+        elapsed = max(_now() - build_t0, 1e-9)
+        payload = {
+            "elapsed_wall_s": float(elapsed),
+            "num_samples_total": int(total),
+            "new_samples_written": int(new_samples_written),
+            "raw_scenarios_seen": int(raw_scenarios_seen),
+            "scene_time_groups": int(scene_time_groups),
+            "samples_per_hour": float(new_samples_written / elapsed * 3600.0),
+            "stage_totals_s": {k: float(v) for k, v in sorted(stage_totals.items())},
+            "io": {"compress_npz": bool(compress_npz), "fsync_npz": bool(fsync_npz)},
+            "profile_csv": str(profile_path),
+            "scene_profile_csv": str(scene_profile_path),
+        }
+        write_json(payload, stage_profile_path)
+
     try:
-        for raw in raw_iter:
-            raw_scenario_t0 = _now()
+        while True:
+            next_t0 = _now()
+            try:
+                raw = next(raw_iter)
+            except StopIteration:
+                break
+            _stage_add(stage_totals, "scenario_next_s", _now() - next_t0)
             raw_scenarios_seen += 1
             raw_scene_ids.add(str(raw.scenario_id))
             split_id = scenario_split(raw.scenario_id, cfg.get("split_ratios"))
+            select_t0 = _now()
             times, reasons_by_time = select_planning_times_with_reasons(raw, cfg)
+            _stage_add(stage_totals, "planning_time_selection_s", _now() - select_t0)
             _profile_log(cfg, f"scenario {raw_scenarios_seen} id={raw.scenario_id} split={split_id} selected_times={len(times)}")
             if not times:
                 skipped_no_planning_times += 1
@@ -964,7 +1101,10 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
             for t in times:
                 scene_time_t0 = _now()
                 scene_time_groups += 1
+                hist_t0 = _now()
                 history = construct_history(raw, t, cfg)
+                construct_history_s = _now() - hist_t0
+                _stage_add(stage_totals, "construct_history_s", construct_history_s)
                 _profile_log(cfg, f"scene_time start scene={history.scene_id} t={int(t)} group={scene_time_groups}")
                 # Retain only the reasons that actually selected this planning instant.
                 history.metadata["time_sampling_reasons"] = reasons_by_time.get(int(t), ["uniform"])
@@ -975,17 +1115,24 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
                         skipped_existing_scene_time_groups += 1
                         _profile_log(cfg, f"scene_time skip-existing scene={history.scene_id} t={int(t)} existing={existing_counts_by_scene_time.get(key, 0)} expected={expected}")
                         continue
+                build_samples_t0 = _now()
                 samples = build_samples_for_history(history, split_id, cfg, progress_callback=None if skip_existing else _progress)
-                scene_time_dt = _now() - scene_time_t0
-                if _profiling_enabled(cfg) or scene_time_dt >= float(_profiling_cfg(cfg).get("slow_scene_time_s", 120.0)):
-                    _profile_log(cfg, f"scene_time done scene={history.scene_id} t={int(t)} samples={len(samples)} elapsed={scene_time_dt:.2f}s")
+                build_samples_s = _now() - build_samples_t0
+                _stage_add(stage_totals, "build_samples_s", build_samples_s)
+                npz_serialize_s = 0.0
+                npz_write_s = 0.0
                 for sample in samples:
                     fname = _sample_filename(sample.scene_id, sample.time_index, sample.candidate_index)
                     path = sample_dir / fname
                     if skip_existing and fname in existing_sample_names:
                         skipped_existing_samples += 1
                         continue
-                    np_savez(path, **sample.to_npz_dict())
+                    ser_t0 = _now()
+                    sample_arrays = sample.to_npz_dict()
+                    npz_serialize_s += _now() - ser_t0
+                    write_t0 = _now()
+                    np_savez(path, compressed=compress_npz, fsync=fsync_npz, **sample_arrays)
+                    npz_write_s += _now() - write_t0
                     _append_manifest_row(manifest_rows, out, sample, path)
                     existing_sample_names.add(fname)
                     key = _scene_time_key(sample.scene_id, sample.time_index)
@@ -993,14 +1140,20 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
                     split_counts[sample.split_id] = split_counts.get(sample.split_id, 0) + 1
                     total += 1
                     new_samples_written += 1
-                    if _profiling_enabled(cfg):
-                        _append_profile_row(profile_path, sample, total)
+                    if profiling:
+                        sample_profile_rows.append(_sample_profile_row(sample, total))
                     if skip_existing:
                         _progress(1)
-                    if _profiling_enabled(cfg) and bool(_profiling_cfg(cfg).get("log_writes", True)):
+                    if profiling and bool(prof_cfg.get("log_writes", False)):
                         _profile_log(cfg, f"wrote sample #{total} path={path}")
-                if _profiling_enabled(cfg) or bool(cfg.get("checkpoint_manifest_each_scene_time", False)):
+                _stage_add(stage_totals, "npz_serialize_s", npz_serialize_s)
+                _stage_add(stage_totals, "npz_write_s", npz_write_s)
+                manifest_checkpoint_s = 0.0
+                if profiling or bool(cfg.get("checkpoint_manifest_each_scene_time", False)):
+                    manifest_t0 = _now()
                     _write_manifest_atomic(out / "manifest.csv", manifest_rows)
+                    manifest_checkpoint_s = _now() - manifest_t0
+                    _stage_add(stage_totals, "manifest_checkpoint_s", manifest_checkpoint_s)
                     _write_running_status(
                         out,
                         num_samples=int(total),
@@ -1012,13 +1165,60 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
                         skipped_existing_samples=int(skipped_existing_samples),
                         skipped_existing_scene_time_groups=int(skipped_existing_scene_time_groups),
                         progress_mode=progress_mode,
-                        profile_csv=str(profile_path) if _profiling_enabled(cfg) else "",
+                        profile_csv=str(profile_path) if profiling else "",
+                        scene_profile_csv=str(scene_profile_path) if profiling else "",
+                        stage_profile_json=str(stage_profile_path) if profiling else "",
+                        stage_totals_s={k: float(v) for k, v in sorted(stage_totals.items())},
                     )
+                scene_time_dt = _now() - scene_time_t0
+                if profiling or scene_time_dt >= float(prof_cfg.get("slow_scene_time_s", 120.0)):
+                    _profile_log(
+                        cfg,
+                        "scene_time done scene=%s t=%s samples=%d elapsed=%.2fs build=%.2fs write=%.2fs teacher_sum=%.2fs"
+                        % (
+                            history.scene_id,
+                            int(t),
+                            len(samples),
+                            scene_time_dt,
+                            build_samples_s,
+                            npz_write_s,
+                            _sample_timing_sum(samples, "teacher_margins"),
+                        ),
+                    )
+                if profiling:
+                    scene_profile_rows.append({
+                        "raw_scenario_index": int(raw_scenarios_seen),
+                        "scene_time_group": int(scene_time_groups),
+                        "scene_id": history.scene_id,
+                        "original_scenario_id": history.original_scenario_id,
+                        "time_index": int(t),
+                        "split_id": split_id,
+                        "num_selected_samples": int(len(samples)),
+                        "construct_history_s": float(construct_history_s),
+                        "build_samples_s": float(build_samples_s),
+                        "sample_compute_sum_s": _sample_timing_sum(samples, "total"),
+                        "sample_future_generation_sum_s": _sample_timing_sum(samples, "future_generation"),
+                        "sample_teacher_margins_sum_s": _sample_timing_sum(samples, "teacher_margins"),
+                        "sample_observation_sum_s": _sample_timing_sum(samples, "observation"),
+                        "sample_root_clustering_sum_s": _sample_timing_sum(samples, "root_clustering"),
+                        "sample_ocmero_sum_s": _sample_timing_sum(samples, "ocmero"),
+                        "npz_serialize_s": float(npz_serialize_s),
+                        "npz_write_s": float(npz_write_s),
+                        "manifest_checkpoint_s": float(manifest_checkpoint_s),
+                        "scene_time_total_s": float(scene_time_dt),
+                    })
+                    if scene_time_groups % profile_flush_scene_times == 0:
+                        _flush_profiles()
+                        _write_stage_profile()
     finally:
         if progress_bar is not None:
             progress_bar.close()
+    _flush_profiles()
     manifest_path = out / "manifest.csv"
+    final_manifest_t0 = _now()
     _write_manifest_atomic(manifest_path, manifest_rows)
+    _stage_add(stage_totals, "final_manifest_s", _now() - final_manifest_t0)
+    elapsed_wall_s = max(_now() - build_t0, 1e-9)
     summary = {
         "num_samples": total,
         "split_counts": split_counts,
@@ -1035,10 +1235,21 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
         "scene_time_groups": int(scene_time_groups),
         "skipped_no_planning_times": int(skipped_no_planning_times),
         "unique_raw_scene_ids": int(len(raw_scene_ids)),
-        "profile_csv": str(profile_path) if _profiling_enabled(cfg) else "",
+        "elapsed_wall_s": float(elapsed_wall_s),
+        "samples_per_hour": float(new_samples_written / elapsed_wall_s * 3600.0),
+        "seconds_per_new_sample": float(elapsed_wall_s / max(new_samples_written, 1)),
+        "profile_csv": str(profile_path) if profiling else "",
+        "scene_profile_csv": str(scene_profile_path) if profiling else "",
+        "stage_profile_json": str(stage_profile_path) if profiling else "",
+        "stage_totals_s": {k: float(v) for k, v in sorted(stage_totals.items())},
+        "io": {"compress_npz": bool(compress_npz), "fsync_npz": bool(fsync_npz)},
         "dataset_quality": cfg.get("dataset_quality", {}),
         "artifact": cfg.get("artifact", {}),
         "waymax": cfg.get("waymax", {}),
     }
+    summary_t0 = _now()
     write_json(summary, out / "dataset_summary.json")
+    _stage_add(stage_totals, "summary_write_s", _now() - summary_t0)
+    _write_stage_profile()
     return summary
+

@@ -228,6 +228,13 @@ baselines:
 metrics:
   sigma_u: 1.0
 progress: true
+io:
+  # Compression saves disk, but can become CPU-bound during dataset construction.
+  # For speed profiling on local NVMe, use --set io.compress_npz=false.
+  compress_npz: true
+  # Keep true for robust final runs. For local profiling/smoke runs, false avoids
+  # a synchronous disk flush after every sample.
+  fsync_npz: true
 # Dataset-source sharding for multi-process builds, e.g. two GPUs with
 # CUDA_VISIBLE_DEVICES=0/1 and scenario_stride=2, scenario_worker_index=0/1.
 scenario_start_index: 0
@@ -241,6 +248,8 @@ profiling:
   log_every_sample: false
   slow_sample_s: 30.0
   slow_scene_time_s: 120.0
+  profile_flush_scene_times: 1
+  profile_csv_fsync: false
 
 waymax:
   # Make scene ids robust even when the dataloader payload omits or repeats
