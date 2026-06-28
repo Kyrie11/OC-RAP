@@ -58,6 +58,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "obs_distance": {"s_c": 2.0, "s_v": 2.0, "s_p": 2.0, "s_yaw": 0.2, "lambda_psi": 0.5, "lambda_v": 0.5, "lambda_type": 2.0, "lambda_occ": 1.0, "lambda_ego": 0.5, "lambda_map": 0.5, "p_unmatch": 5.0},
     "utility_weights": {"progress": 1.0, "comfort": 0.05, "route": 0.5, "logdiv": 0.05, "offroad": 5.0, "wrongway": 5.0},
     "split_ratios": {"train": 0.70, "val": 0.10, "calibration": 0.10, "test": 0.10},
+    "split": {"force_id": None},
     "regime_thresholds": {
         "tau_high": 1.0,
         "tau_d": 2.0,
@@ -107,6 +108,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "balanced_two_pass": True,
         "balanced_rotate_prefix_order": True,
         "balanced_keep_nominal_nonartifact": True,
+        "require_nominal_per_scene_time": True,
+        "keep_nominal_even_if_quality_fails": True,
+        "min_accepted_prefixes_per_scene_time": 2,
         "min_uniform_times_per_scenario": 0,
         # For primary mixed builds, non-mined pass stays natural/nominal while
         # the mined pass may use the branch-specific oracle-artifact label.

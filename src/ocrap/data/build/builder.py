@@ -13,7 +13,7 @@ import numpy as np
 from ocrap.algorithms.ocmero import oc_mero
 from ocrap.data.schema import DatasetSample, RawScenario
 from ocrap.data.serialization import ensure_dir, np_savez, write_json
-from ocrap.data.split import scenario_split
+from ocrap.data.split import resolve_split
 from ocrap.data.validation import missing_fields
 from ocrap.planning.prefix_generation import generate_candidate_prefixes
 from ocrap.roots import aggregate_root_margins, cluster_roots, future_trajectory_signature
@@ -353,57 +353,17 @@ def _sample_obs_negative_fraction(sample: DatasetSample) -> float:
 
 def _sample_passes_quality_gates(sample: DatasetSample, cfg: dict) -> bool:
     quality = cfg.get("dataset_quality", {}) if isinstance(cfg.get("dataset_quality", {}), dict) else {}
-
-    def drop(reason: str) -> bool:
-        sample.diagnostics["quality_drop_reason"] = reason
-        return False
-
     min_obs_neg = float(quality.get("min_obs_negative_fraction_per_sample", 0.0) or 0.0)
-    obs_neg = float(_sample_obs_negative_fraction(sample))
-    if min_obs_neg > 0.0 and obs_neg + 1e-12 < min_obs_neg:
-        sample.diagnostics["obs_negative_fraction"] = obs_neg
-        return drop("low_obs_negative_fraction")
-
-    # Dataset-regime gates.  These are deliberately optional because the same
-    # builder is used for safe, near-contact, contact, and artifact/stress sets.
-    # They are most useful for the safe regime, where keeping low-headroom or
-    # hard-violating candidates silently pollutes NUP/benign-driving labels.
-    if bool(quality.get("require_nonartifact_sample", False)) and bool(sample.i_art_star):
-        return drop("artifact_sample")
-
-    if bool(quality.get("require_feasible_prefix", False)) and not bool(sample.prefix.feasible):
-        return drop("infeasible_prefix")
-
-    max_hard = quality.get("max_prefix_hard_violation", None)
-    if max_hard is not None:
-        if float(sample.prefix.hard_violation) > float(max_hard):
-            return drop("prefix_hard_violation")
-
-    max_harm = quality.get("max_prefix_harm_proxy", None)
-    if max_harm is not None:
-        if float(sample.prefix.harm_proxy) > float(max_harm):
-            return drop("prefix_harm_proxy")
-
-    if bool(quality.get("require_deployable_recoverable_sample", False)):
-        thr = float(quality.get("min_deployable_margin", 0.0))
-        if not (float(sample.r_dep_star) >= thr):
-            return drop("not_deployable_recoverable")
-
-    if bool(quality.get("require_oracle_recoverable_sample", False)):
-        thr = float(quality.get("min_oracle_margin", 0.0))
-        if not (float(sample.r_orc_star) >= thr):
-            return drop("not_oracle_recoverable")
-
-    max_gap = quality.get("max_oracle_gap", None)
-    if max_gap is not None:
-        if float(sample.oracle_gap_star) > float(max_gap):
-            return drop("oracle_gap_too_large")
-
+    if min_obs_neg > 0.0 and _sample_obs_negative_fraction(sample) + 1e-12 < min_obs_neg:
+        sample.diagnostics["quality_drop_reason"] = "low_obs_negative_fraction"
+        sample.diagnostics["obs_negative_fraction"] = float(_sample_obs_negative_fraction(sample))
+        return False
     if bool(quality.get("require_negative_deployable_sample", False)):
         thr = float(quality.get("negative_deployable_threshold", 0.0))
         if not (float(sample.r_dep_star) < thr):
-            return drop("not_negative_deployable")
-    sample.diagnostics["obs_negative_fraction"] = obs_neg
+            sample.diagnostics["quality_drop_reason"] = "not_negative_deployable"
+            return False
+    sample.diagnostics["obs_negative_fraction"] = float(_sample_obs_negative_fraction(sample))
     return True
 
 
@@ -646,6 +606,54 @@ def _try_add_sample(
     return n_art, len(selected) - n_art
 
 
+
+
+def _replace_or_append_sample(
+    selected: list[DatasetSample],
+    sample: DatasetSample,
+    *,
+    max_accepted: int,
+    macros_seen: set[str] | None = None,
+) -> None:
+    """Insert a mandatory anchor sample without exceeding the scene-time cap."""
+    if any(int(s.candidate_index) == int(sample.candidate_index) for s in selected):
+        return
+    if max_accepted <= 0 or len(selected) < max_accepted:
+        selected.append(sample)
+        if macros_seen is not None:
+            macros_seen.add(sample.prefix.macro_name)
+        return
+    # Keep the nominal anchor by evicting the least critical non-nominal sample.
+    for idx in range(len(selected) - 1, -1, -1):
+        if not bool(selected[idx].is_nominal):
+            selected[idx] = sample
+            if macros_seen is not None:
+                macros_seen.clear()
+                macros_seen.update(s.prefix.macro_name for s in selected)
+            return
+    # Degenerate case: all retained samples are nominal duplicates; replace tail.
+    selected[-1] = sample
+    if macros_seen is not None:
+        macros_seen.clear()
+        macros_seen.update(s.prefix.macro_name for s in selected)
+
+
+def _dedupe_nominal(selected: list[DatasetSample]) -> list[DatasetSample]:
+    out: list[DatasetSample] = []
+    seen_nominal = False
+    seen_candidate: set[int] = set()
+    for sample in selected:
+        cid = int(sample.candidate_index)
+        if cid in seen_candidate:
+            continue
+        if bool(sample.is_nominal):
+            if seen_nominal:
+                continue
+            seen_nominal = True
+        out.append(sample)
+        seen_candidate.add(cid)
+    return out
+
 def build_samples_for_history(history, split_id: str, cfg: dict, progress_callback: Callable[[int], None] | None = None) -> list[DatasetSample]:
     prefixes = generate_candidate_prefixes(history, cfg)
     options = default_recovery_options(int(cfg.get("num_recovery_options", 24)), shoulder_available=bool(history.metadata.get("shoulder_available", True)), adjacent_available=bool(history.metadata.get("adjacent_available", True)))
@@ -667,17 +675,20 @@ def build_samples_for_history(history, split_id: str, cfg: dict, progress_callba
     macros_seen: set[str] = set()
     materialized_prefixes: set[int] = set()
 
-    def materialize(prefix, local_cfg: dict) -> DatasetSample | None:
+    def materialize(prefix, local_cfg: dict, *, enforce_quality: bool = True, allow_filter_drop: bool = True) -> DatasetSample | None:
         a_idx = int(prefix.macro_id)
-        if mode == "filter" and not _artifact_pair_attempt_is_possible(history, prefix, local_cfg):
+        if allow_filter_drop and mode == "filter" and not _artifact_pair_attempt_is_possible(history, prefix, local_cfg):
             return None
         sample = _materialize_sample(history, split_id, prefix, a_idx, local_cfg, options, option_valid, K)
         has_pair = _has_complete_artifact_pair(sample)
         sample.diagnostics["complete_artifact_pair"] = bool(has_pair)
-        if mode == "filter" and not has_pair:
+        if allow_filter_drop and mode == "filter" and not has_pair:
             return None
-        if not _sample_passes_quality_gates(sample, local_cfg):
+        if enforce_quality and not _sample_passes_quality_gates(sample, local_cfg):
             return None
+        if not enforce_quality:
+            sample.diagnostics["quality_anchor_retained"] = True
+            sample.diagnostics["obs_negative_fraction"] = float(_sample_obs_negative_fraction(sample))
         return sample
 
     if mode == "balanced" and balanced_two_pass:
@@ -756,6 +767,50 @@ def build_samples_for_history(history, split_id: str, cfg: dict, progress_callba
             selected.append(sample)
     if max_accepted > 0:
         selected = selected[:max_accepted]
+
+    quality = cfg.get("dataset_quality", {}) if isinstance(cfg.get("dataset_quality", {}), dict) else {}
+    require_nominal = bool(quality.get("require_nominal_per_scene_time", True))
+    keep_nominal = bool(quality.get("keep_nominal_even_if_quality_fails", True))
+    min_accepted_required = int(quality.get("min_accepted_prefixes_per_scene_time", 0) or 0)
+    if require_nominal:
+        nominal_prefix = next((p for p in prefixes if p.macro_name == "nominal" or int(p.macro_id) == 0), None)
+        if nominal_prefix is not None and sum(int(bool(s.is_nominal)) for s in selected) != 1:
+            anchor_cfg = _cfg_with_artifact_mining(cfg, enable=False)
+            nominal = materialize(nominal_prefix, anchor_cfg, enforce_quality=not keep_nominal, allow_filter_drop=False)
+            if nominal is not None:
+                _replace_or_append_sample(selected, nominal, max_accepted=max_accepted, macros_seen=macros_seen)
+        selected = _dedupe_nominal(selected)
+
+    if min_accepted_required > 0 and (max_accepted <= 0 or min_accepted_required <= max_accepted):
+        used = {int(s.candidate_index) for s in selected}
+        # First use already materialized deferred examples.
+        for sample in deferred:
+            if len(selected) >= min_accepted_required:
+                break
+            if int(sample.candidate_index) in used:
+                continue
+            _replace_or_append_sample(selected, sample, max_accepted=max_accepted, macros_seen=macros_seen)
+            used.add(int(sample.candidate_index))
+        # If a strict per-sample quality gate made the group underfull, keep a
+        # small number of additional anchors so offline candidate selection is
+        # still well-defined.
+        if len(selected) < min_accepted_required:
+            anchor_cfg = _cfg_with_artifact_mining(cfg, enable=False)
+            for prefix in prefixes:
+                if len(selected) >= min_accepted_required:
+                    break
+                if int(prefix.macro_id) in used:
+                    continue
+                sample = materialize(prefix, anchor_cfg, enforce_quality=False, allow_filter_drop=False)
+                if sample is None:
+                    continue
+                _replace_or_append_sample(selected, sample, max_accepted=max_accepted, macros_seen=macros_seen)
+                used.add(int(sample.candidate_index))
+
+    if max_accepted > 0:
+        selected = selected[:max_accepted]
+    selected = _dedupe_nominal(selected)
+    selected.sort(key=lambda s: int(s.candidate_index))
     assign_regimes(selected, history, cfg)
     return selected
 
@@ -1159,7 +1214,7 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
             _stage_add(stage_totals, "scenario_next_s", _now() - next_t0)
             raw_scenarios_seen += 1
             raw_scene_ids.add(str(raw.scenario_id))
-            split_id = scenario_split(raw.scenario_id, cfg.get("split_ratios"))
+            split_id = resolve_split(raw.scenario_id, cfg)
             select_t0 = _now()
             times, reasons_by_time = select_planning_times_with_reasons(raw, cfg)
             _stage_add(stage_totals, "planning_time_selection_s", _now() - select_t0)

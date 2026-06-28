@@ -920,6 +920,65 @@ def generate_waymax_counterfactual_futures(history: SceneHistory, prefix: Candid
             ameta.update({"scenario_augmented": True, "rollout_variant": "augmented_visible_actor_log_playback"})
             futures.append(_make_future_from_state(len(futures), "targeted", targeted_total / max(n_targeted, 1), str_v, history, prefix, cfg, env_v, dyn_v, ameta, state_after_prefix=stp))
             targeted_added += 1
+    # Fill requested stress futures before generic SDC control stress.  The
+    # top-level surrogate path uses ``targeted_future_kinds``; older commands put
+    # the same list under ``waymax.targeted_future_kinds``.  Honor both so
+    # contact/post-contact shards do not silently degrade into ordinary
+    # near-contact SDC acceleration/braking futures.
+    requested_kinds = cfg.get("targeted_future_kinds", None)
+    if requested_kinds is None:
+        requested_kinds = wx.get("targeted_future_kinds", None)
+    if not isinstance(requested_kinds, (list, tuple)) or not requested_kinds:
+        requested_kinds = []
+    requested_kinds = [str(k) for k in requested_kinds]
+    kind_cursor = 0
+    while targeted_added < n_targeted and kind_cursor < max(1, len(requested_kinds)) * 3:
+        if not requested_kinds:
+            break
+        kind = requested_kinds[kind_cursor % len(requested_kinds)]
+        kind_cursor += 1
+        if kind in {"hidden_vehicle_yields", "hidden_vehicle_accelerates"}:
+            # Hidden branches are mined above because they require reference-log
+            # augmentation, not a simple post-prefix SDC rollout.
+            continue
+        meta = {
+            "scenario_augmented": False,
+            "targeted_type": f"waymax_{kind}",
+            "recovery_relevant": True,
+            "waymax_prefix_rollout_reused": True,
+            "teacher_base_reuses_replay_prefix_state": True,
+        }
+        accel = -2.0 if targeted_added % 2 == 0 else 1.2
+        if kind == "contact_impulse_surrogate":
+            # Waymax does not expose an API-level collision impulse perturbation
+            # here, but the margin teacher and regime tag need to know that this
+            # latent branch is a post-contact recovery branch.  Use a normal
+            # Waymax rollout state plus explicit contact-surrogate metadata.
+            accel = -0.5
+            rng = np.random.default_rng(stable_seed("waymax-contact-surrogate", history.scene_id, history.time_index, prefix.macro_id, targeted_added))
+            meta.update({
+                "contact_surrogate": True,
+                "yaw_rate_impulse": float(rng.choice([-0.55, 0.55])),
+                "lateral_velocity_impulse": float(rng.choice([-1.5, 1.5])),
+            })
+        elif kind == "secondary_collision_approach":
+            accel = -1.2
+            meta.update({"secondary_collision_approach": True, "contact_surrogate": bool(prefix.diagnostics.get("prefix_contact", False))})
+        elif kind == "low_friction_braking":
+            accel = -3.0
+            meta.update({"low_friction": True})
+        elif kind == "control_delay_noise":
+            accel = 0.8
+            meta.update({"control_delay_noise": True})
+        else:
+            # visible actor perturbations and generic SDC stress futures are
+            # already covered above/below; skip unknown non-Waymax stress kinds.
+            continue
+        str_t = rollout_post_cached(st_prefix, wx_env, accel)
+        meta["ego_after_prefix_accel"] = float(accel)
+        futures.append(_make_future_from_state(len(futures), "targeted", targeted_total / max(n_targeted, 1), str_t, history, prefix, cfg, wx_env, dyn_name, meta, state_after_prefix=st_prefix))
+        targeted_added += 1
+
     # Fill remaining targeted slots with strictly Waymax-generated SDC
     # post-prefix control stress variants.  These do not change the latent
     # background-agent branch, so they deliberately share the same teacher base

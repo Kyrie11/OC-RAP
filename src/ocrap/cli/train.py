@@ -143,6 +143,8 @@ def _epoch(
         loss_dep = F.smooth_l1_loss(r_dep, batch["r_dep_star"].float())
         loss_orc = F.smooth_l1_loss(r_orc, batch["r_orc_star"].float())
         loss_art = anti_oracle_loss(r_orc, r_dep, batch["i_art_star"].float(), delta_neg=float(art_cfg.get("delta_neg", 0.0)))
+        if bool((cfg.get("ablation", {}) or {}).get("without_anti_oracle", False)):
+            loss_art = loss_art * 0.0
         loss_util = F.smooth_l1_loss(out["utility"], batch["utility"].float())
         total = (
             float(lw.get("assign", 1.0)) * loss_root

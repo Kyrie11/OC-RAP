@@ -99,6 +99,10 @@ split_ratios:
   val: 0.1
   calibration: 0.1
   test: 0.1
+# Optional explicit split label for regime/shard builds.
+# Use --set split.force_id=train|val|calibration|test when building separate folders.
+split:
+  force_id: null
 regime_thresholds:
   tau_high: 1.0
   tau_d: 2.0
@@ -184,22 +188,14 @@ dataset_quality:
   # smoke sets from always selecting only nominal/keep/brake/yield.
   balanced_rotate_prefix_order: true
   balanced_keep_nominal_nonartifact: true
+  require_nominal_per_scene_time: true
+  keep_nominal_even_if_quality_fails: true
+  min_accepted_prefixes_per_scene_time: 2
   # Reserve uniform planning frames when max_biased_times_per_scenario would
   # otherwise fill every slot; set to 1-2 for primary WOMD benchmark builds.
   min_uniform_times_per_scenario: 0
   artifact_pass_use_margin_override: true
   artifact_quota_uses_label: true
-  # Optional regime gates.  Keep them false by default; enable for safe/NUP sets
-  # to avoid silently saving hard-violating or non-deployable candidates.
-  require_nonartifact_sample: false
-  require_feasible_prefix: false
-  require_deployable_recoverable_sample: false
-  min_deployable_margin: 0.0
-  require_oracle_recoverable_sample: false
-  min_oracle_margin: 0.0
-  max_prefix_hard_violation: null
-  max_prefix_harm_proxy: null
-  max_oracle_gap: null
   warn_if_artifact_fraction_above: 0.80
   warn_if_scene_count_below: 50
 training:
