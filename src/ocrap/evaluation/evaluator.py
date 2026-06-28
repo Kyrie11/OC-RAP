@@ -125,7 +125,7 @@ def evaluate(dataset: str | Path, checkpoint: str | Path | None = None, output: 
             # across rules that do not explicitly output a recovery option.
             q_eval = chosen["pred"].q if method == "ocrap" else chosen["teacher"].q
             selected_options = np.argmax(q_eval, axis=1) if getattr(q_eval, "ndim", 0) == 2 else 0
-            drs = deployable_recovery_success(sd["m_star"], sd["root_probs"], selected_options)
+            drs = deployable_recovery_success(sd["m_star"], sd["root_probs"], selected_options, sd.get("root_valid", None))
             nup = nominal_utility_preservation(utility[0] if len(utility) else 0.0, utility[selected_index], sigma_u=float((cfg or {}).get("metrics", {}).get("sigma_u", 1.0)))
             method_records[method].append({
                 "fra_cand": false_recoverability_admission(sel.admitted, teacher_r_dep),

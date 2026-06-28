@@ -268,6 +268,118 @@ def sample_to_feature(d: dict[str, Any], cfg: dict | None = None) -> np.ndarray:
     return np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
 
 
+def _target_dim_from_cfg(cfg: dict, key: str, default: int) -> int:
+    try:
+        return int(cfg.get(key, default))
+    except Exception:
+        return int(default)
+
+
+def _model_target_dim(cfg: dict, key: str, default: int) -> int:
+    model_cfg = cfg.get("model", {}) if isinstance(cfg.get("model", {}), dict) else {}
+    try:
+        return int(model_cfg.get(key, default))
+    except Exception:
+        return int(default)
+
+
+def _fix_1d(x: np.ndarray, n: int, *, fill: float = 0.0, dtype=np.float32) -> np.ndarray:
+    out = np.full((int(n),), fill, dtype=dtype)
+    if n <= 0:
+        return out
+    v = np.asarray(x, dtype=dtype).reshape(-1)
+    m = min(int(n), int(v.size))
+    if m > 0:
+        out[:m] = v[:m]
+    return np.nan_to_num(out, nan=fill, posinf=fill, neginf=fill)
+
+
+def _fix_bool_1d(x: np.ndarray, n: int, *, fill: bool = False) -> np.ndarray:
+    out = np.full((int(n),), bool(fill), dtype=bool)
+    if n <= 0:
+        return out
+    v = np.asarray(x).reshape(-1).astype(bool)
+    m = min(int(n), int(v.size))
+    if m > 0:
+        out[:m] = v[:m]
+    return out
+
+
+def _fix_2d(x: np.ndarray, shape: tuple[int, int], *, fill: float = 0.0, dtype=np.float32) -> np.ndarray:
+    rows, cols = int(shape[0]), int(shape[1])
+    out = np.full((rows, cols), fill, dtype=dtype)
+    if rows <= 0 or cols <= 0:
+        return out
+    v = np.asarray(x, dtype=dtype)
+    if v.ndim == 1:
+        if rows == 1:
+            v = v.reshape(1, -1)
+        else:
+            v = v.reshape(-1, cols) if v.size and v.size % cols == 0 else v.reshape(1, -1)
+    if v.ndim != 2:
+        return out
+    r = min(rows, v.shape[0])
+    c = min(cols, v.shape[1])
+    if r > 0 and c > 0:
+        out[:r, :c] = v[:r, :c]
+    return np.nan_to_num(out, nan=fill, posinf=fill, neginf=fill)
+
+
+def _fix_square(x: np.ndarray, n: int, *, fill_offdiag: float = 0.0, diag: float = 1.0, dtype=np.float32) -> np.ndarray:
+    out = np.full((int(n), int(n)), fill_offdiag, dtype=dtype)
+    if n > 0:
+        np.fill_diagonal(out, diag)
+    v = np.asarray(x, dtype=dtype)
+    if v.ndim == 2:
+        r = min(int(n), v.shape[0])
+        c = min(int(n), v.shape[1])
+        if r > 0 and c > 0:
+            out[:r, :c] = v[:r, :c]
+            np.fill_diagonal(out, diag)
+    return np.nan_to_num(out, nan=fill_offdiag, posinf=fill_offdiag, neginf=fill_offdiag)
+
+
+def _geometry_from_sample(d: dict[str, Any]) -> tuple[int, int, int, int]:
+    m = np.asarray(d.get("m_star", np.zeros((0, 0))), dtype=np.float32)
+    K = int(m.shape[0]) if m.ndim >= 1 else 0
+    L = int(m.shape[1]) if m.ndim >= 2 else 0
+    rs = np.asarray(d.get("root_signature", np.zeros((K, 0))), dtype=np.float32)
+    fs = np.asarray(d.get("root_future_signature", np.zeros((K, 0))), dtype=np.float32)
+    return K, L, int(rs.shape[-1]) if rs.ndim >= 2 else 0, int(fs.shape[-1]) if fs.ndim >= 2 else 0
+
+
+def fix_sample_geometry(d: dict[str, Any], *, num_roots: int, num_options: int, d_signature: int = 0, d_future_signature: int = 0) -> dict[str, np.ndarray]:
+    """Return training/evaluation arrays padded to checkpoint geometry.
+
+    The four intended OC-RAP dataset families are intentionally heterogeneous:
+    proof-artifact sets often use fewer roots/options than natural/strict/post
+    sets.  A single neural model still needs fixed tensor shapes, so padded roots
+    and options are marked invalid and excluded by masks, losses, OC-MERO, and
+    metrics.
+    """
+    K = int(num_roots)
+    L = int(num_options)
+    root_probs = _fix_1d(np.asarray(d.get("root_probs", []), dtype=np.float32), K, fill=0.0)
+    root_valid = _fix_bool_1d(np.asarray(d.get("root_valid", root_probs > 0), dtype=bool), K, fill=False)
+    if root_valid.any():
+        root_probs = np.where(root_valid, np.clip(root_probs, 0.0, None), 0.0).astype(np.float32)
+        s = float(root_probs.sum())
+        if s > 1e-8:
+            root_probs = (root_probs / s).astype(np.float32)
+    option_valid = _fix_bool_1d(np.asarray(d.get("option_valid", np.ones((L,), dtype=bool)), dtype=bool), L, fill=False)
+    return {
+        "root_probs": root_probs,
+        "m_star": _fix_2d(np.asarray(d.get("m_star", []), dtype=np.float32), (K, L), fill=-1e9),
+        "c_star": _fix_square(np.asarray(d.get("c_star", []), dtype=np.float32), K, fill_offdiag=0.0, diag=1.0),
+        "y_obs": _fix_square(np.asarray(d.get("y_obs", []), dtype=np.float32), K, fill_offdiag=0.0, diag=1.0),
+        "option_valid": option_valid,
+        "root_valid": root_valid,
+        "root_signature": _fix_2d(np.asarray(d.get("root_signature", []), dtype=np.float32), (K, int(d_signature)), fill=0.0),
+        "root_future_signature": _fix_2d(np.asarray(d.get("root_future_signature", []), dtype=np.float32), (K, int(d_future_signature)), fill=0.0),
+        "option_features": _fix_2d(option_features_from_sample(d), (L, OPTION_FEATURE_DIM), fill=0.0),
+    }
+
+
 class OCRAPSampleDataset(Dataset):
     def __init__(self, paths: list[Path], cfg: dict | None = None):
         self.paths = list(paths)
@@ -275,6 +387,14 @@ class OCRAPSampleDataset(Dataset):
         if not self.paths:
             raise ValueError("OCRAPSampleDataset requires at least one sample path")
         first = load_npz(self.paths[0])
+        first_K, first_L, first_sig, first_fsig = _geometry_from_sample(first)
+        # Default to the paper/build geometry in config, but never shrink below
+        # the first sample.  This makes the README's mixed proof/natural/stress
+        # training command work without requiring per-run shape bookkeeping.
+        self.num_roots = max(_target_dim_from_cfg(self.cfg, "num_roots", first_K or 1), first_K or 1)
+        self.num_options = max(_target_dim_from_cfg(self.cfg, "num_recovery_options", first_L or 1), first_L or 1)
+        self.d_signature = max(_model_target_dim(self.cfg, "d_signature", first_sig), first_sig)
+        self.d_future_signature = max(_model_target_dim(self.cfg, "d_future_signature", first_fsig), first_fsig)
         self.feature_dim = int(sample_to_feature(first, self.cfg).shape[0])
 
     def __len__(self) -> int:
@@ -283,21 +403,28 @@ class OCRAPSampleDataset(Dataset):
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         d = load_npz(self.paths[idx])
         x = sample_to_feature(d, self.cfg)
+        fixed = fix_sample_geometry(
+            d,
+            num_roots=self.num_roots,
+            num_options=self.num_options,
+            d_signature=self.d_signature,
+            d_future_signature=self.d_future_signature,
+        )
         out = {
             "x": torch.from_numpy(x),
-            "root_probs": torch.from_numpy(np.asarray(d["root_probs"], dtype=np.float32)),
-            "m_star": torch.from_numpy(np.asarray(d["m_star"], dtype=np.float32)),
-            "c_star": torch.from_numpy(np.asarray(d["c_star"], dtype=np.float32)),
-            "y_obs": torch.from_numpy(np.asarray(d["y_obs"], dtype=np.float32)),
-            "option_valid": torch.from_numpy(np.asarray(d["option_valid"], dtype=np.float32) > 0.5),
-            "root_valid": torch.from_numpy(np.asarray(d["root_valid"], dtype=np.float32) > 0.5),
+            "root_probs": torch.from_numpy(fixed["root_probs"]),
+            "m_star": torch.from_numpy(fixed["m_star"]),
+            "c_star": torch.from_numpy(fixed["c_star"]),
+            "y_obs": torch.from_numpy(fixed["y_obs"]),
+            "option_valid": torch.from_numpy(fixed["option_valid"]),
+            "root_valid": torch.from_numpy(fixed["root_valid"]),
             "r_dep_star": torch.tensor(float(np.asarray(d["r_dep_star"]).item()), dtype=torch.float32),
             "r_orc_star": torch.tensor(float(np.asarray(d["r_orc_star"]).item()), dtype=torch.float32),
             "i_art_star": torch.tensor(float(np.asarray(d["i_art_star"]).item()), dtype=torch.float32),
             "utility": torch.tensor(float(np.asarray(d.get("utility", 0.0)).item()), dtype=torch.float32),
-            "root_signature": torch.from_numpy(np.asarray(d.get("root_signature", np.zeros((np.asarray(d["m_star"]).shape[0], 0))), dtype=np.float32)),
-            "root_future_signature": torch.from_numpy(np.asarray(d.get("root_future_signature", np.zeros((np.asarray(d["m_star"]).shape[0], 0))), dtype=np.float32)),
-            "option_features": torch.from_numpy(option_features_from_sample(d, self.cfg)),
+            "root_signature": torch.from_numpy(fixed["root_signature"]),
+            "root_future_signature": torch.from_numpy(fixed["root_future_signature"]),
+            "option_features": torch.from_numpy(fixed["option_features"]),
         }
         return out
 

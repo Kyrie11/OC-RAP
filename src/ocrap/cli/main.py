@@ -8,6 +8,7 @@ from ocrap.data.build.builder import build_dataset
 from ocrap.data.build.diagnose import diagnose_dataset
 from ocrap.data.build.papercheck import papercheck_dataset
 from ocrap.evaluation.evaluator import evaluate
+from ocrap.simulation.closed_loop_runner import closed_loop_evaluate
 from ocrap.analysis.dataset_report import analyze_dataset
 
 from .calibrate import calibrate
@@ -16,14 +17,16 @@ from .train import train
 
 
 def add_common(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--config", default=None, help="YAML config path. Defaults to configs/default.yaml.")
-    p.add_argument("--set", action="append", default=[], help="Override config with dotted.path=value. Can be repeated.")
-    p.add_argument("--without-observation-kernel", action="store_true")
-    p.add_argument("--without-lower-tail", action="store_true")
-    p.add_argument("--without-calibration", action="store_true")
-    p.add_argument("--without-anti-oracle", action="store_true")
-    p.add_argument("--full-future-roots", action="store_true")
-    p.add_argument("--no-occlusion-bev", action="store_true")
+    # Use SUPPRESS so options supplied before the subcommand are not overwritten
+    # by the subparser defaults, while options after the subcommand still work.
+    p.add_argument("--config", default=argparse.SUPPRESS, help="YAML config path. Defaults to configs/default.yaml.")
+    p.add_argument("--set", action="append", default=argparse.SUPPRESS, help="Override config with dotted.path=value. Can be repeated.")
+    p.add_argument("--without-observation-kernel", action="store_true", default=argparse.SUPPRESS)
+    p.add_argument("--without-lower-tail", action="store_true", default=argparse.SUPPRESS)
+    p.add_argument("--without-calibration", action="store_true", default=argparse.SUPPRESS)
+    p.add_argument("--without-anti-oracle", action="store_true", default=argparse.SUPPRESS)
+    p.add_argument("--full-future-roots", action="store_true", default=argparse.SUPPRESS)
+    p.add_argument("--no-occlusion-bev", action="store_true", default=argparse.SUPPRESS)
 
 
 def make_parser() -> argparse.ArgumentParser:
@@ -63,6 +66,11 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument("--checkpoint", required=False, default=None)
     p.add_argument("--calibration", default=None)
     p.add_argument("--split", default="test")
+    p.add_argument("--output", required=True)
+    p = sub.add_parser("closed-loop")
+    add_common(p)
+    p.add_argument("--dataset", required=True, help="WOMD TFRecord path/pattern for Waymax closed-loop evaluation.")
+    p.add_argument("--checkpoint", required=False, default=None)
     p.add_argument("--output", required=True)
     p = sub.add_parser("analyze-dataset")
     add_common(p)
@@ -117,6 +125,8 @@ def main(argv: list[str] | None = None) -> None:
         result = calibrate(args.dataset, args.checkpoint, args.output, cfg)
     elif args.cmd == "evaluate":
         result = evaluate(args.dataset, args.checkpoint, args.output, split=args.split, calibration_json=args.calibration, cfg=cfg)
+    elif args.cmd == "closed-loop":
+        result = closed_loop_evaluate(args.dataset, args.checkpoint, args.output, cfg)
     elif args.cmd == "analyze-dataset":
         result = analyze_dataset(args.dataset, args.output, max_samples=args.max_samples, plots=not args.no_plots)
     elif args.cmd == "deploy":

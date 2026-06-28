@@ -16,16 +16,48 @@ def executed_false_admission(selected_idx: int, teacher_r_dep: np.ndarray) -> fl
     return float(r[int(selected_idx)] < 0.0)
 
 
-def deployable_recovery_success(m_star: np.ndarray, root_probs: np.ndarray, selected_options: np.ndarray | int) -> float:
+def deployable_recovery_success(
+    m_star: np.ndarray,
+    root_probs: np.ndarray,
+    selected_options: np.ndarray | int,
+    root_valid: np.ndarray | None = None,
+) -> float:
+    """Probability mass of valid roots whose selected shared option succeeds.
+
+    Padded/invalid roots must be removed before normalization; otherwise mixed
+    datasets with different root counts make DRS artificially low.  If a model
+    outputs an option index outside the sample's option range, that root is
+    counted as failed rather than raising an indexing error.
+    """
     M = np.asarray(m_star, dtype=float)
-    p = np.asarray(root_probs, dtype=float).reshape(-1)
+    if M.ndim != 2 or M.shape[0] == 0:
+        return 0.0
+    K, L = M.shape
+    p = np.asarray(root_probs, dtype=float).reshape(-1)[:K]
+    if p.size < K:
+        p = np.pad(p, (0, K - p.size))
+    valid = np.ones(K, dtype=bool) if root_valid is None else np.asarray(root_valid, dtype=bool).reshape(-1)[:K]
+    if valid.size < K:
+        valid = np.pad(valid, (0, K - valid.size), constant_values=False)
+    p = np.where(valid, np.clip(p, 0.0, None), 0.0)
+    denom = float(p.sum())
+    if denom <= 1e-8:
+        return 0.0
+    p = p / denom
     if isinstance(selected_options, (int, np.integer)):
-        opt = np.full(M.shape[0], int(selected_options), dtype=int)
+        opt = np.full(K, int(selected_options), dtype=int)
     else:
         opt = np.asarray(selected_options, dtype=int).reshape(-1)
-    vals = np.array([M[k, opt[min(k, len(opt)-1)]] >= 0.0 for k in range(M.shape[0])], dtype=float)
-    p = p / max(float(p.sum()), 1e-8)
-    return float(np.sum(p[: len(vals)] * vals))
+        if opt.size < K:
+            opt = np.pad(opt, (0, K - opt.size), mode="edge" if opt.size else "constant")
+        opt = opt[:K]
+    vals = np.zeros(K, dtype=float)
+    for k in range(K):
+        if not valid[k]:
+            continue
+        l = int(opt[k])
+        vals[k] = float(0 <= l < L and np.isfinite(M[k, l]) and M[k, l] >= 0.0)
+    return float(np.sum(p * vals))
 
 
 def nominal_utility_preservation(nominal_u: float, selected_u: float, sigma_u: float = 1.0) -> dict[str, float]:

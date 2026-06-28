@@ -214,10 +214,10 @@ def train(dataset: str, output: str, cfg: dict) -> dict:
     train_ds = OCRAPSampleDataset(train_paths, cfg)
     val_ds = OCRAPSampleDataset(val_paths, cfg)
     first = train_ds[0]
-    num_roots = int(first["m_star"].shape[0])
-    num_options = int(first["m_star"].shape[1])
-    d_signature = int(first.get("root_signature", torch.zeros((num_roots, 0))).shape[-1])
-    d_future_signature = int(first.get("root_future_signature", torch.zeros((num_roots, 0))).shape[-1])
+    num_roots = int(train_ds.num_roots)
+    num_options = int(train_ds.num_options)
+    d_signature = int(train_ds.d_signature)
+    d_future_signature = int(train_ds.d_future_signature)
     device = _device(cfg)
     device_info = _device_summary(device)
     model_cfg = cfg.get("model", {}) if isinstance(cfg.get("model", {}), dict) else {}
@@ -252,16 +252,41 @@ def train(dataset: str, output: str, cfg: dict) -> dict:
         d_future_signature=d_future_signature,
         option_feature_dim=OPTION_FEATURE_DIM,
     ).to(device)
-    opt = torch.optim.AdamW(model.parameters(), lr=float((cfg.get("training", {}) or {}).get("lr", 1e-3)), weight_decay=float((cfg.get("training", {}) or {}).get("weight_decay", 1e-4)))
-    batch_size = int((cfg.get("training", {}) or {}).get("batch_size", 32))
-    num_workers = int((cfg.get("training", {}) or {}).get("num_workers", 0))
+    tcfg = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
+    opt = torch.optim.AdamW(model.parameters(), lr=float(tcfg.get("lr", 1e-3)), weight_decay=float(tcfg.get("weight_decay", 1e-4)))
+    batch_size = int(tcfg.get("batch_size", 32))
+    num_workers = int(tcfg.get("num_workers", 0))
     sampler = _make_sampler(train_ds, cfg)
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=sampler is None, sampler=sampler, num_workers=num_workers, collate_fn=_collate, pin_memory=(device.type == "cuda"))
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers, collate_fn=_collate, pin_memory=(device.type == "cuda"))
-    epochs = int((cfg.get("training", {}) or {}).get("epochs", 10))
+    epochs = int(tcfg.get("epochs", 10))
     best_val = float("inf")
     history = []
     best_path = out / "best.pt"
+    latest_path = out / "latest.pt"
+    ckpt_dir = ensure_dir(out / "checkpoints")
+
+    def _checkpoint_payload(ep: int, val_loss: float) -> dict:
+        return {
+            "cfg": cfg,
+            "input_dim": train_ds.feature_dim,
+            "num_roots": num_roots,
+            "num_options": num_options,
+            "d_model": d_model,
+            "d_obs": d_obs,
+            "tau_obs": tau_obs,
+            "encoder_type": encoder_type,
+            "feature_layout": feature_layout,
+            "d_signature": d_signature,
+            "d_future_signature": d_future_signature,
+            "option_feature_dim": OPTION_FEATURE_DIM,
+            "model_state": model.state_dict(),
+            "optimizer_state": opt.state_dict(),
+            "epoch": int(ep),
+            "val_loss": float(val_loss),
+            "device_info_at_train": device_info,
+            "note": "OC-RAP neural checkpoint: predicts root probabilities, recovery margins, utility, and observation compatibility from scene-prefix features.",
+        }
     print({
         "event": "train_start",
         **device_info,
@@ -284,27 +309,17 @@ def train(dataset: str, output: str, cfg: dict) -> dict:
         row = {"epoch": ep, "train": tr, "val": va, "seconds": float(perf_counter() - ep_t0)}
         history.append(row)
         improved = va.get("loss", float("inf")) <= best_val
+        payload = _checkpoint_payload(ep, va.get("loss", float("inf")))
+        save_every = bool(tcfg.get("save_every_epoch", True))
+        if save_every:
+            torch.save(payload, ckpt_dir / f"epoch_{ep:04d}.pt")
+        if bool(tcfg.get("save_latest", True)):
+            torch.save(payload, latest_path)
         if improved:
             best_val = va["loss"]
-            torch.save({
-                "cfg": cfg,
-                "input_dim": train_ds.feature_dim,
-                "num_roots": num_roots,
-                "num_options": num_options,
-                "d_model": d_model,
-                "d_obs": d_obs,
-                "tau_obs": tau_obs,
-                "encoder_type": encoder_type,
-                "feature_layout": feature_layout,
-                "d_signature": d_signature,
-                "d_future_signature": d_future_signature,
-                "option_feature_dim": OPTION_FEATURE_DIM,
-                "model_state": model.state_dict(),
-                "epoch": ep,
-                "val_loss": best_val,
-                "device_info_at_train": device_info,
-                "note": "OC-RAP compact neural checkpoint: predicts root probabilities, recovery margins, utility, and observation compatibility from scene-prefix features.",
-            }, best_path)
+            payload["val_loss"] = float(best_val)
+            payload["is_best"] = True
+            torch.save(payload, best_path)
         print({
             "event": "epoch_end",
             "epoch": ep,
@@ -316,6 +331,8 @@ def train(dataset: str, output: str, cfg: dict) -> dict:
         }, flush=True)
     result = {
         "checkpoint": str(best_path),
+        "latest_checkpoint": str(latest_path),
+        "checkpoint_dir": str(ckpt_dir),
         "num_train_samples": len(train_paths),
         "num_val_samples": len(val_paths),
         "input_dim": train_ds.feature_dim,

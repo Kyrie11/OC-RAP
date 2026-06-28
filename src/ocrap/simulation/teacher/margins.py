@@ -27,6 +27,7 @@ def active_mask(option: RecoveryOption, future: CounterfactualFuture) -> dict[st
         "harm": contact_active or option.mode == "mitigate_contact",
         "stability": contact_active or option.mode == "post_contact_stabilize",
         "secondary": secondary,
+        "intent": future.metadata.get("artifact_branch") in {"yield", "accelerate"} or future.metadata.get("hidden_intent") in {"yield", "accelerate"},
     }
 
 
@@ -53,6 +54,30 @@ def _artifact_margin_override(option: RecoveryOption, future: CounterfactualFutu
             return good
         return bad
     return None
+
+
+def _hidden_intent_margin(option: RecoveryOption, future: CounterfactualFuture, cfg: dict) -> float | None:
+    """Branch-intent recovery adequacy for hidden-yield/hidden-accelerate futures.
+
+    This is not the hard proof margin override.  It adds one active teacher
+    component expressing whether a single shared recovery option is adequate
+    for the latent branch that generated the future.  It lets strict mined
+    hidden pairs produce oracle-vs-deployable gaps without replacing all
+    Waymax/structural margins.
+    """
+    artifact = cfg.get("artifact", {}) if isinstance(cfg.get("artifact", {}), dict) else {}
+    if not bool(artifact.get("enable_branch_intent_margin", False)):
+        return None
+    branch = future.metadata.get("artifact_branch") or future.metadata.get("hidden_intent")
+    if branch not in {"yield", "accelerate"}:
+        return None
+    good = float(artifact.get("branch_intent_compatible_margin", 1.0))
+    bad = float(artifact.get("branch_intent_incompatible_margin", -2.5))
+    if branch == "yield":
+        compatible = option.mode in {"yield_rejoin", "pull_over", "lateral_escape"}
+    else:
+        compatible = option.mode in {"stop", "brake_lane", "avoid_secondary"}
+    return float(good if compatible else bad)
 
 
 def component_margins(history: SceneHistory, prefix: CandidatePrefix, future: CounterfactualFuture, option: RecoveryOption, rec_states: np.ndarray, rec_controls: np.ndarray, cfg: dict) -> dict[str, float]:
@@ -105,7 +130,11 @@ def component_margins(history: SceneHistory, prefix: CandidatePrefix, future: Co
     yaw += abs(float(future.metadata.get("yaw_rate_impulse", 0.0)))
     m_stab = (float(cfg.get("yaw_rate_max_rps", 0.6)) - float(yaw)) / float(scales.get("yaw", 0.2))
     m_sec = (secondary_clear - d_safe) / float(scales.get("distance", 2.0))
-    return {"clearance": float(m_clr), "stop": float(m_stop), "control": float(m_ctrl), "route": float(m_route), "harm": float(m_harm), "stability": float(m_stab), "secondary": float(m_sec)}
+    comps = {"clearance": float(m_clr), "stop": float(m_stop), "control": float(m_ctrl), "route": float(m_route), "harm": float(m_harm), "stability": float(m_stab), "secondary": float(m_sec)}
+    m_intent = _hidden_intent_margin(option, future, cfg)
+    if m_intent is not None:
+        comps["intent"] = float(m_intent)
+    return comps
 
 
 def teacher_margin(history: SceneHistory, prefix: CandidatePrefix, future: CounterfactualFuture, option: RecoveryOption, rec_states: np.ndarray, rec_controls: np.ndarray, cfg: dict, controller_diag: dict | None = None) -> tuple[float, TeacherDiagnostics]:
@@ -125,7 +154,8 @@ def teacher_margin(history: SceneHistory, prefix: CandidatePrefix, future: Count
         # physically plausible recovery option; otherwise the lower-tail oracle
         # label would be dominated by generic controller conservatism rather than
         # by the oracle/deployability distinction being tested.
-        if option.mode in {"post_contact_stabilize", "yield_rejoin", "pull_over"}:
+        hidden_branch = future.metadata.get("artifact_branch") in {"yield", "accelerate"} or future.metadata.get("hidden_intent") in {"yield", "accelerate"}
+        if not hidden_branch and option.mode in {"post_contact_stabilize", "yield_rejoin", "pull_over"}:
             val = max(val, 0.6)
         if future.metadata.get("route_blocked", False) and option.mode == "yield_rejoin":
             val = min(val, -0.8)

@@ -277,118 +277,164 @@ wait
 关键是关闭 override，尽量让 teacher label 来自真实 rollout / hybrid rollout，而不是人为 margin override。
 ```bash
 for i in 0 1 2 3; do
-python -m ocrap.cli build-dataset \
-  --skip-existing \
-  --set data_source=womd \
-  --set simulation_backend=waymax_closed_loop \
-  --set womd_patterns=${WOMD_TRAIN}@1000 \
-  --set max_scenarios=800 \
-  --set scenario_stride=4 \
-  --set scenario_worker_index=${i} \
-  --set max_agents=64 \
-  --set max_map_polylines=256 \
-  --set max_polyline_points=64 \
-  --set max_times_per_scenario=3 \
-  --set max_biased_times_per_scenario=2 \
-  --set dataset_quality.min_uniform_times_per_scenario=1 \
-  --set num_candidate_prefixes=24 \
-  --set num_reactive_futures=2 \
-  --set num_targeted_futures=6 \
-  --set num_recovery_options=12 \
-  --set waymax.compute_future_metrics=true \
-  --set waymax.detect_natural_hidden_emergence=true \
-  --set waymax.enable_augmented_hidden_roots=true \
-  --set waymax.enable_visible_perturbation_roots=true \
-  --set waymax.teacher_backend=hybrid \
-  --set waymax.teacher_rollout_top_k_options=2 \
-  --set waymax.teacher_metrics_stride=0 \
-  --set waymax.use_jit_scan_rollouts=true \
-  --set waymax.cache_env_objects=true \
-  --set waymax.cache_postprefix_rollouts=true \
-  --set waymax.cache_teacher_metric_rollouts=true \
-  --set profiling.enabled=true \
-  --set waymax.apply_artifact_override_to_screened_options=false \
-  --set waymax.skip_waymax_rollout_for_augmented_override=false \
-  --set artifact.force_mine=true \
-  --set artifact.mine_probability=0.20 \
-  --set artifact.use_margin_override=false \
-  --set dataset_quality.balanced_two_pass=true \
-  --set dataset_quality.balanced_rotate_prefix_order=true \
-  --set dataset_quality.balanced_keep_nominal_nonartifact=true \
-  --set dataset_quality.artifact_pass_use_margin_override=false \
-  --set dataset_quality.artifact_quota_uses_label=true \
-  --set dataset_quality.max_accepted_prefixes_per_scene_time=8 \
-  --set dataset_quality.min_artifact_prefixes_per_scene_time=0 \
-  --set dataset_quality.max_artifact_prefixes_per_scene_time=2 \
-  --set dataset_quality.min_nonartifact_prefixes_per_scene_time=4 \
-  --set dataset_quality.max_nonartifact_prefixes_per_scene_time=6 \
-  --set split_ratios.train=0.75 \
-  --set split_ratios.val=0.10 \
-  --set split_ratios.calibration=0.05 \
-  --set split_ratios.test=0.10 \
-  --set progress=true \
-  --output ${OCRAP_ROOT}/train_strict_artifact_v1_w${i} &
+  nohup python -m ocrap.cli build-dataset \
+    --skip-existing \
+    --set data_source=womd \
+    --set simulation_backend=waymax_closed_loop \
+    --set womd_patterns=${WOMD_TRAIN}@1000 \
+    --set max_scenarios=800 \
+    --set scenario_stride=4 \
+    --set scenario_worker_index=${i} \
+    --set max_agents=64 \
+    --set max_map_polylines=256 \
+    --set max_polyline_points=64 \
+    --set max_times_per_scenario=3 \
+    --set max_biased_times_per_scenario=2 \
+    --set dataset_quality.min_uniform_times_per_scenario=1 \
+    --set num_candidate_prefixes=24 \
+    --set num_reactive_futures=2 \
+    --set num_targeted_futures=6 \
+    --set num_recovery_options=12 \
+    --set waymax.compute_future_metrics=true \
+    --set waymax.detect_natural_hidden_emergence=true \
+    --set waymax.enable_augmented_hidden_roots=true \
+    --set waymax.enable_visible_perturbation_roots=true \
+    --set waymax.teacher_backend=hybrid \
+    --set waymax.teacher_rollout_top_k_options=2 \
+    --set waymax.teacher_metrics_stride=0 \
+    --set waymax.use_jit_scan_rollouts=true \
+    --set profiling.enabled=true \
+    --set waymax.apply_artifact_override_to_screened_options=false \
+    --set waymax.skip_waymax_rollout_for_augmented_override=false \
+    --set artifact.force_mine=true \
+    --set artifact.mine_probability=0.20 \
+    --set artifact.use_margin_override=false \
+    --set dataset_quality.balanced_two_pass=true \
+    --set dataset_quality.balanced_rotate_prefix_order=true \
+    --set dataset_quality.balanced_keep_nominal_nonartifact=true \
+    --set dataset_quality.artifact_pass_use_margin_override=false \
+    --set dataset_quality.artifact_quota_uses_label=true \
+    --set dataset_quality.max_accepted_prefixes_per_scene_time=8 \
+    --set dataset_quality.min_artifact_prefixes_per_scene_time=0 \
+    --set dataset_quality.max_artifact_prefixes_per_scene_time=2 \
+    --set dataset_quality.min_nonartifact_prefixes_per_scene_time=4 \
+    --set dataset_quality.max_nonartifact_prefixes_per_scene_time=6 \
+    --set split_ratios.train=0.75 \
+    --set split_ratios.val=0.10 \
+    --set split_ratios.calibration=0.05 \
+    --set split_ratios.test=0.10 \
+    --set progress=true \
+    --output ~/code/OC-RAP/dataset/train_strict_artifact_v1_w${i} \
+    > build_strict_train_w${i}.log 2>&1 &
 done
-wait
 ```
 
 ### Post-contact / near-contact stress train set
 这个子集用于补强论文里 post-contact、secondary collision、near-contact 的叙事。
 
 ```bash
+ 
 for i in 0 1 2 3; do
-python -m ocrap.cli build-dataset \
-  --skip-existing \
-  --set data_source=womd \
-  --set simulation_backend=waymax_closed_loop \
-  --set womd_patterns=${WOMD_TRAIN}@1000 \
-  --set max_scenarios=800 \
-  --set scenario_stride=4 \
-  --set scenario_worker_index=${i} \
-  --set max_agents=64 \
-  --set max_map_polylines=256 \
-  --set max_polyline_points=64 \
-  --set max_times_per_scenario=4 \
-  --set max_biased_times_per_scenario=4 \
-  --set dataset_quality.min_uniform_times_per_scenario=0 \
-  --set num_candidate_prefixes=24 \
-  --set num_reactive_futures=2 \
-  --set num_targeted_futures=8 \
-  --set 'targeted_future_kinds=[contact_impulse_surrogate,secondary_collision_approach,low_friction_braking,control_delay_noise]' \
-  --set num_recovery_options=12 \
-  --set waymax.compute_future_metrics=true \
-  --set waymax.detect_natural_hidden_emergence=true \
-  --set waymax.enable_augmented_hidden_roots=true \
-  --set waymax.enable_visible_perturbation_roots=true \
-  --set waymax.teacher_backend=hybrid \
-  --set waymax.teacher_rollout_top_k_options=2 \
-  --set waymax.teacher_metrics_stride=0 \
-  --set waymax.use_jit_scan_rollouts=true \
-  --set waymax.cache_env_objects=true \
-  --set waymax.cache_postprefix_rollouts=true \
-  --set waymax.cache_teacher_metric_rollouts=true \
-  --set profiling.enabled=true \
-  --set 'waymax.teacher_rollout_option_modes=[post_contact_stabilize,avoid_secondary]' \
-  --set waymax.apply_artifact_override_to_screened_options=false \
-  --set waymax.skip_waymax_rollout_for_augmented_override=false \
-  --set artifact.force_mine=false \
-  --set artifact.mine_probability=0.0 \
-  --set artifact.use_margin_override=false \
-  --set dataset_quality.balanced_two_pass=true \
-  --set dataset_quality.max_accepted_prefixes_per_scene_time=10 \
-  --set dataset_quality.min_artifact_prefixes_per_scene_time=0 \
-  --set dataset_quality.max_artifact_prefixes_per_scene_time=2 \
-  --set dataset_quality.min_nonartifact_prefixes_per_scene_time=4 \
-  --set dataset_quality.max_nonartifact_prefixes_per_scene_time=8 \
-  --set split_ratios.train=0.75 \
-  --set split_ratios.val=0.10 \
-  --set split_ratios.calibration=0.05 \
-  --set split_ratios.test=0.10 \
-  --set progress=true \
-  --output ${OCRAP_ROOT}/train_post_contact_v1_w${i} &
+  nohup python -m ocrap.cli build-dataset \
+    --skip-existing \
+    --set data_source=womd \
+    --set simulation_backend=waymax_closed_loop \
+    --set womd_patterns=${WOMD_TRAIN}@1000 \
+    --set scenario_stride=4 \
+    --set scenario_worker_index=${i} \
+    --set max_scenarios=800 \
+    --set max_agents=64 \
+    --set max_map_polylines=256 \
+    --set max_polyline_points=64 \
+    --set max_times_per_scenario=4 \
+    --set max_biased_times_per_scenario=4 \
+    --set dataset_quality.min_uniform_times_per_scenario=0 \
+    --set num_candidate_prefixes=24 \
+    --set num_reactive_futures=2 \
+    --set num_targeted_futures=8 \
+    --set 'targeted_future_kinds=[contact_impulse_surrogate,secondary_collision_approach,low_friction_braking,control_delay_noise]' \
+    --set num_recovery_options=12 \
+    --set waymax.compute_future_metrics=true \
+    --set waymax.detect_natural_hidden_emergence=true \
+    --set waymax.enable_augmented_hidden_roots=true \
+    --set waymax.enable_visible_perturbation_roots=true \
+    --set waymax.teacher_backend=hybrid \
+    --set waymax.teacher_rollout_top_k_options=2 \
+    --set waymax.teacher_metrics_stride=0 \
+    --set waymax.use_jit_scan_rollouts=true \
+    --set 'waymax.teacher_rollout_option_modes=[post_contact_stabilize,avoid_secondary]' \
+    --set waymax.apply_artifact_override_to_screened_options=false \
+    --set waymax.skip_waymax_rollout_for_augmented_override=false \
+    --set artifact.force_mine=false \
+    --set artifact.mine_probability=0.0 \
+    --set artifact.use_margin_override=false \
+    --set dataset_quality.balanced_two_pass=true \
+    --set dataset_quality.max_accepted_prefixes_per_scene_time=10 \
+    --set dataset_quality.min_artifact_prefixes_per_scene_time=0 \
+    --set dataset_quality.max_artifact_prefixes_per_scene_time=2 \
+    --set dataset_quality.min_nonartifact_prefixes_per_scene_time=4 \
+    --set dataset_quality.max_nonartifact_prefixes_per_scene_time=8 \
+    --set split_ratios.train=0.75 \
+    --set split_ratios.val=0.10 \
+    --set split_ratios.calibration=0.05 \
+    --set split_ratios.test=0.10 \
+    --set progress=true \
+    --output ~/code/OC-RAP/dataset/train_post_contact_v1_w${i} \
+    > build_stress_train_w${i}.log 2>&1 &
 done
-wait
 ```
+### Proof artifact train dataset
+```bash
+for i in 0 1 2 3; do
+  python -m ocrap.cli build-dataset \
+    --output ~/code/OC-RAP/dataset/train_proof_artifact_v3_w${i} \
+    --skip-existing \
+    --set data_source=womd \
+    --set womd_patterns="${WOMD_TRAIN}@1000" \
+    --set simulation_backend=waymax_closed_loop \
+    --set max_scenarios=800 \
+    --set scenario_stride=4 \
+    --set scenario_worker_index=$i \
+    --set max_times_per_scenario=2 \
+    --set max_biased_times_per_scenario=2 \
+    --set num_candidate_prefixes=16 \
+    --set num_reactive_futures=1 \
+    --set num_targeted_futures=4 \
+    --set num_recovery_options=8 \
+    --set num_roots=6 \
+    --set waymax.enable_augmented_hidden_roots=true \
+    --set waymax.detect_natural_hidden_emergence=false \
+    --set waymax.enable_visible_perturbation_roots=false \
+    --set waymax.teacher_backend=hybrid \
+    --set waymax.teacher_rollout_top_k_options=1 \
+    --set waymax.teacher_metrics_stride=0 \
+    --set waymax.use_jit_scan_rollouts=true \
+    --set waymax.skip_waymax_rollout_for_augmented_override=true \
+    --set waymax.compute_future_metrics=false \
+    --set artifact.force_mine=true \
+    --set artifact.mine_probability=0.40 \
+    --set artifact.use_margin_override=true \
+    --set artifact.compatible_margin=1.2 \
+    --set artifact.incompatible_margin=-6.0 \
+    --set dataset_quality.artifact_pair_mode=balanced \
+    --set dataset_quality.balanced_two_pass=true \
+    --set dataset_quality.artifact_pass_use_margin_override=true \
+    --set dataset_quality.artifact_quota_uses_label=true \
+    --set dataset_quality.max_accepted_prefixes_per_scene_time=6 \
+    --set dataset_quality.min_artifact_prefixes_per_scene_time=1 \
+    --set dataset_quality.max_artifact_prefixes_per_scene_time=2 \
+    --set dataset_quality.min_nonartifact_prefixes_per_scene_time=3 \
+    --set dataset_quality.max_nonartifact_prefixes_per_scene_time=4 \
+    --set dataset_quality.max_artifact_attempts_per_scene_time=6 \
+    --set dataset_quality.max_nonartifact_attempts_per_scene_time=4 \
+    --set split_ratios.train=0.55 \
+    --set split_ratios.val=0.10 \
+    --set split_ratios.calibration=0.25 \
+    --set split_ratios.test=0.10
+done
+```
+
+
 ## 构建Val set
 ### Natural Validation Set
 ```bash
@@ -434,7 +480,7 @@ python -m ocrap.cli build-dataset \
 
 ### Strict artifact validation set
 ```bash
-python -m ocrap.cli build-dataset \
+nohup python -m ocrap.cli build-dataset \
   --skip-existing \
   --set data_source=womd \
   --set simulation_backend=waymax_closed_loop \
@@ -458,9 +504,6 @@ python -m ocrap.cli build-dataset \
   --set waymax.teacher_rollout_top_k_options=2 \
   --set waymax.teacher_metrics_stride=0 \
   --set waymax.use_jit_scan_rollouts=true \
-  --set waymax.cache_env_objects=true \
-  --set waymax.cache_postprefix_rollouts=true \
-  --set waymax.cache_teacher_metric_rollouts=true \
   --set profiling.enabled=true \
   --set waymax.apply_artifact_override_to_screened_options=false \
   --set artifact.force_mine=true \
@@ -473,12 +516,13 @@ python -m ocrap.cli build-dataset \
   --set split_ratios.calibration=0.0 \
   --set split_ratios.test=0.0 \
   --set progress=true \
-  --output ${OCRAP_ROOT}/val_strict_artifact_v1
+  --output ~/code/OC-RAP/dataset/val_strict_artifact_v1 \
+  > build_strict_val.log 2>&1 &
 ```
 
 ### Post-contact validation set
 ```bash
-python -m ocrap.cli build-dataset \
+nohup python -m ocrap.cli build-dataset \
   --skip-existing \
   --set data_source=womd \
   --set simulation_backend=waymax_closed_loop \
@@ -502,9 +546,6 @@ python -m ocrap.cli build-dataset \
   --set waymax.teacher_rollout_top_k_options=2 \
   --set waymax.teacher_metrics_stride=0 \
   --set waymax.use_jit_scan_rollouts=true \
-  --set waymax.cache_env_objects=true \
-  --set waymax.cache_postprefix_rollouts=true \
-  --set waymax.cache_teacher_metric_rollouts=true \
   --set profiling.enabled=true \
   --set 'waymax.teacher_rollout_option_modes=[post_contact_stabilize,avoid_secondary]' \
   --set artifact.force_mine=false \
@@ -515,7 +556,59 @@ python -m ocrap.cli build-dataset \
   --set split_ratios.calibration=0.0 \
   --set split_ratios.test=0.0 \
   --set progress=true \
-  --output ${OCRAP_ROOT}/val_post_contact_v1
+  --output ~/code/OC-RAP/dataset/val_post_contact_v1 \
+  > build_stress_val.log 2>&1 &
+ 
+```
+
+### proof artifact val dataset
+
+```bash
+python -m ocrap.cli build-dataset \
+  --output ~/code/OC-RAP/dataset/val_proof_artifact_v3 \
+  --skip-existing \
+  --set data_source=womd \
+  --set womd_patterns="${WOMD_VAL}@150" \
+  --set simulation_backend=waymax_closed_loop \
+  --set max_scenarios=150 \
+  --set scenario_stride=4 \
+  --set scenario_worker_index=$i \
+  --set max_times_per_scenario=2 \
+  --set max_biased_times_per_scenario=2 \
+  --set num_candidate_prefixes=16 \
+  --set num_reactive_futures=1 \
+  --set num_targeted_futures=4 \
+  --set num_recovery_options=8 \
+  --set num_roots=6 \
+  --set waymax.enable_augmented_hidden_roots=true \
+  --set waymax.detect_natural_hidden_emergence=false \
+  --set waymax.enable_visible_perturbation_roots=false \
+  --set waymax.teacher_backend=hybrid \
+  --set waymax.teacher_rollout_top_k_options=1 \
+  --set waymax.teacher_metrics_stride=0 \
+  --set waymax.use_jit_scan_rollouts=true \
+  --set waymax.skip_waymax_rollout_for_augmented_override=true \
+  --set waymax.compute_future_metrics=false \
+  --set artifact.force_mine=true \
+  --set artifact.mine_probability=0.40 \
+  --set artifact.use_margin_override=true \
+  --set artifact.compatible_margin=1.2 \
+  --set artifact.incompatible_margin=-6.0 \
+  --set dataset_quality.artifact_pair_mode=balanced \
+  --set dataset_quality.balanced_two_pass=true \
+  --set dataset_quality.artifact_pass_use_margin_override=true \
+  --set dataset_quality.artifact_quota_uses_label=true \
+  --set dataset_quality.max_accepted_prefixes_per_scene_time=6 \
+  --set dataset_quality.min_artifact_prefixes_per_scene_time=1 \
+  --set dataset_quality.max_artifact_prefixes_per_scene_time=2 \
+  --set dataset_quality.min_nonartifact_prefixes_per_scene_time=3 \
+  --set dataset_quality.max_nonartifact_prefixes_per_scene_time=4 \
+  --set dataset_quality.max_artifact_attempts_per_scene_time=6 \
+  --set dataset_quality.max_nonartifact_attempts_per_scene_time=4 \
+  --set split_ratios.train=0.55 \
+  --set split_ratios.val=0.10 \
+  --set split_ratios.calibration=0.25
+
 ```
 
 ## 数据检查与可视化

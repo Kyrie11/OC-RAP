@@ -369,7 +369,10 @@ def _rollout_prefix(state0: Any, history: SceneHistory, prefix: CandidatePrefix,
     local_cfg["_waymax_init_steps_override"] = t + 1
     waymax_env, dyn_name = _make_env(state0, local_cfg, allow_new=allow_new, dynamics_name=dynamics_name)
     rng = jax.random.PRNGKey(stable_seed("waymax", history.scene_id, history.time_index, prefix.macro_id) & 0x7FFFFFFF)
-    st = waymax_env.reset(state0, rng=rng)
+    if bool(history.metadata.get("_waymax_branch_from_current", False)):
+        st = state0
+    else:
+        st = waymax_env.reset(state0, rng=rng)
     sdc = _sdc_index(state0)
     ego_xy = np.asarray(history.metadata.get("ego_global_xy", [0.0, 0.0]), dtype=np.float32)
     ego_yaw = float(history.metadata.get("ego_global_heading", 0.0))

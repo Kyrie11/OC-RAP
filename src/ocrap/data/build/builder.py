@@ -268,6 +268,39 @@ def _sample_is_artifact(sample: DatasetSample, cfg: dict | None = None) -> bool:
     return bool(sample.i_art_star or sample.diagnostics.get("complete_artifact_pair", False))
 
 
+def _sample_obs_negative_fraction(sample: DatasetSample) -> float:
+    try:
+        y = np.asarray(sample.y_obs, dtype=float)
+        valid = np.asarray(getattr(sample, "root_valid", np.ones(y.shape[0], dtype=bool)), dtype=bool).reshape(-1)[: y.shape[0]]
+        idx = np.where(valid)[0]
+        if idx.size <= 1:
+            return 0.0
+        sub = y[np.ix_(idx, idx)]
+        mask = ~np.eye(idx.size, dtype=bool)
+        denom = int(mask.sum())
+        if denom <= 0:
+            return 0.0
+        return float(np.mean(sub[mask] < 0.5))
+    except Exception:
+        return 0.0
+
+
+def _sample_passes_quality_gates(sample: DatasetSample, cfg: dict) -> bool:
+    quality = cfg.get("dataset_quality", {}) if isinstance(cfg.get("dataset_quality", {}), dict) else {}
+    min_obs_neg = float(quality.get("min_obs_negative_fraction_per_sample", 0.0) or 0.0)
+    if min_obs_neg > 0.0 and _sample_obs_negative_fraction(sample) + 1e-12 < min_obs_neg:
+        sample.diagnostics["quality_drop_reason"] = "low_obs_negative_fraction"
+        sample.diagnostics["obs_negative_fraction"] = float(_sample_obs_negative_fraction(sample))
+        return False
+    if bool(quality.get("require_negative_deployable_sample", False)):
+        thr = float(quality.get("negative_deployable_threshold", 0.0))
+        if not (float(sample.r_dep_star) < thr):
+            sample.diagnostics["quality_drop_reason"] = "not_negative_deployable"
+            return False
+    sample.diagnostics["obs_negative_fraction"] = float(_sample_obs_negative_fraction(sample))
+    return True
+
+
 def _has_complete_artifact_pair(sample: DatasetSample) -> bool:
     branches: set[str] = set()
     for fut in sample.futures:
@@ -515,6 +548,8 @@ def build_samples_for_history(history, split_id: str, cfg: dict, progress_callba
         has_pair = _has_complete_artifact_pair(sample)
         sample.diagnostics["complete_artifact_pair"] = bool(has_pair)
         if mode == "filter" and not has_pair:
+            return None
+        if not _sample_passes_quality_gates(sample, local_cfg):
             return None
         return sample
 

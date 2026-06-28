@@ -4,6 +4,7 @@ import functools
 import hashlib
 import os
 from typing import Any, Iterator
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -272,8 +273,51 @@ def _map_from_waymax_roadgraph(state: Any, max_polylines: int, max_points: int) 
     return arr, valid_out
 
 
-def raw_scenario_from_waymax_state(state: Any, scenario_id: str, scenario_index: int, cfg: dict) -> RawScenario:
-    tr = state.log_trajectory
+def _trajectory_for_raw_export(state: Any, mode: str = "log", splice_until: int | None = None) -> Any:
+    """Choose/export trajectory used to construct RawScenario.
+
+    `log` preserves dataset construction behavior.  `sim` exports the current
+    simulated trajectory.  `closed_loop_splice` uses simulated history up to the
+    current replanning timestep and log trajectory for the remaining future so
+    candidate generation starts from the closed-loop state without losing future
+    context.
+    """
+    if mode == "log" or not hasattr(state, "sim_trajectory"):
+        return state.log_trajectory
+    if mode == "sim":
+        return state.sim_trajectory
+    if mode != "closed_loop_splice":
+        raise ValueError(f"Unknown trajectory export mode {mode!r}")
+    log = state.log_trajectory
+    sim = state.sim_trajectory
+    fields = ["x", "y", "z", "vel_x", "vel_y", "yaw", "valid", "length", "width", "height", "timestamp_micros"]
+    out = {}
+    cut = int(splice_until if splice_until is not None else _as_np(getattr(state, "timestep", 0)).reshape(-1)[0])
+    for name in fields:
+        if not hasattr(log, name):
+            continue
+        lv = np.array(_as_np(getattr(log, name)))
+        if not hasattr(sim, name):
+            out[name] = lv
+            continue
+        sv = np.array(_as_np(getattr(sim, name)))
+        if lv.shape != sv.shape or lv.ndim == 0:
+            out[name] = lv
+            continue
+        arr = lv.copy()
+        if arr.ndim >= 2:
+            t_axis = -1 if arr.shape[-1] >= cut + 1 else 0
+            sl = [slice(None)] * arr.ndim
+            sl[t_axis] = slice(0, max(0, min(cut + 1, arr.shape[t_axis])))
+            arr[tuple(sl)] = sv[tuple(sl)]
+        else:
+            arr[: max(0, min(cut + 1, arr.shape[0]))] = sv[: max(0, min(cut + 1, arr.shape[0]))]
+        out[name] = arr
+    return SimpleNamespace(**out)
+
+
+def raw_scenario_from_waymax_state(state: Any, scenario_id: str, scenario_index: int, cfg: dict, trajectory_mode: str = "log", splice_until: int | None = None) -> RawScenario:
+    tr = _trajectory_for_raw_export(state, trajectory_mode, splice_until)
     meta = state.object_metadata
     meta_ids = _as_np(meta.ids).reshape(-1)
     A = int(meta_ids.size) if meta_ids.size else int(getattr(state, "num_objects", 0))
@@ -336,6 +380,9 @@ def raw_scenario_from_waymax_state(state: Any, scenario_id: str, scenario_index:
             "_waymax_state": state,
             "_waymax_scenario_index": int(scenario_index),
             "waymax_sdc_paths_available": getattr(state, "sdc_paths", None) is not None,
+            "_waymax_trajectory_mode": trajectory_mode,
+            "_waymax_splice_until": -1 if splice_until is None else int(splice_until),
+            "_waymax_branch_from_current": trajectory_mode in {"sim", "closed_loop_splice"},
         },
     )
 

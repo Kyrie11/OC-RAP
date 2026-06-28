@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 from ocrap.algorithms.ocmero import oc_mero, torch_oc_mero
-from ocrap.models.data import OPTION_FEATURE_DIM, option_features_from_sample, sample_to_feature
+from ocrap.models.data import OPTION_FEATURE_DIM, fix_sample_geometry, sample_to_feature
 from ocrap.models.ocrap import OCRAPModel
 
 
@@ -164,11 +164,18 @@ def predict_sample(d: dict[str, Any], bundle: ModelBundle | None, cfg: dict | No
     if bundle is None:
         return teacher_prediction_from_sample(d, cfg)
     x = torch.from_numpy(sample_to_feature(d, bundle.cfg)).float().unsqueeze(0).to(bundle.device)
-    option_features = torch.from_numpy(option_features_from_sample(d, bundle.cfg)).float().unsqueeze(0).to(bundle.device)
+    fixed = fix_sample_geometry(
+        d,
+        num_roots=bundle.model.num_roots,
+        num_options=bundle.model.num_options,
+        d_signature=int(getattr(bundle.model, "d_signature", 0)),
+        d_future_signature=int(getattr(bundle.model, "d_future_signature", 0)),
+    )
+    option_features = torch.from_numpy(fixed["option_features"]).float().unsqueeze(0).to(bundle.device)
     out = bundle.model(x, option_features)
-    root_valid = torch.from_numpy(np.asarray(d.get("root_valid", np.ones(bundle.model.num_roots)), dtype=np.float32) > 0.5).unsqueeze(0).to(bundle.device)
+    root_valid = torch.from_numpy(fixed["root_valid"]).bool().unsqueeze(0).to(bundle.device)
     p = torch.softmax(out["root_logits"].masked_fill(~root_valid, -1.0e4), dim=-1)
-    option_valid = torch.from_numpy(np.asarray(d["option_valid"], dtype=np.float32) > 0.5).unsqueeze(0).to(bundle.device)
+    option_valid = torch.from_numpy(fixed["option_valid"]).bool().unsqueeze(0).to(bundle.device)
     r_dep, r_orc, gap, q = torch_oc_mero(
         out["margins"],
         p,
