@@ -267,10 +267,11 @@ waymax:
   # branch-specific structural margins; only the deterministic recovery metric
   # rollout is reused.
   cache_teacher_metric_rollouts: true
-  # Optional speed path: moves constant-control future rollouts and final-metric
-  # recovery-teacher rollouts into one jax.lax.scan dispatch. Default false keeps
-  # exact legacy dispatch behavior; enable for profiling/smoke builds.
-  use_jit_scan_rollouts: false
+  # Speed path: moves constant-control future rollouts and final-metric
+  # recovery-teacher rollouts into one jax.lax.scan dispatch. This is now the
+  # default because per-step Python/JAX Waymax dispatch is prohibitively slow on
+  # WOMD smoke builds; set false only when debugging Waymax/JAX compatibility.
+  use_jit_scan_rollouts: true
   # Metadata diagnostics only; disabling them speeds smoke/profiling builds
   # without changing OC-MERO labels.
   compute_future_metrics: true
@@ -279,9 +280,10 @@ waymax:
   # otherwise. Use waymax for a strict runtime-only teacher, or structural for
   # fast label generation from the recovery-affordance teacher.
   teacher_backend: auto
-  # 1 records metrics at every recovery step, preserving previous hybrid/strict
-  # semantics. Use 0 for final-step-only metric checks when debugging speed.
-  teacher_metrics_stride: 1
+  # 0 records only the final recovery metric and enables one-scan recovery
+  # rollout. This is the recommended dataset-build default; set 1 to restore
+  # legacy every-step metrics when running a deliberately strict audit.
+  teacher_metrics_stride: 0
   # Optional screened hybrid teacher: 0 keeps the exact current behavior and
   # rolls every recovery option in Waymax.  A positive value first computes the
   # structural teacher for all options, then runs expensive Waymax recovery

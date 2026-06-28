@@ -150,11 +150,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "cache_env_objects": True,
         "cache_postprefix_rollouts": True,
         "cache_teacher_metric_rollouts": True,
-        "use_jit_scan_rollouts": False,
+        "use_jit_scan_rollouts": True,
         "compute_future_metrics": True,
         "detect_natural_hidden_emergence": True,
         "teacher_backend": "auto",
-        "teacher_metrics_stride": 1,
+        "teacher_metrics_stride": 0,
         "teacher_rollout_top_k_options": 0,
         "teacher_rollout_option_modes": [],
         # In screened-hybrid mode, screened-out options still need the same

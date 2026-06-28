@@ -533,25 +533,46 @@ def _materialize_sample(history, split_id: str, prefix: CandidatePrefix, a_idx: 
             "build_timing_s": {k: float(v) for k, v in timings.items()},
         },
     )
-    if bool(prof.get("enabled", False)) and (bool(prof.get("log_every_sample", False)) or timings["total"] >= float(prof.get("slow_sample_s", 30.0))):
-        _profile_log(
-            cfg,
-            "sample scene=%s t=%s prefix=%s/%s futures=%d opts=%d total=%.2fs future=%.2fs teacher=%.2fs obs=%.2fs root=%.2fs ocmero=%.2fs"
-            % (
-                history.scene_id,
-                history.time_index,
-                a_idx,
-                prefix.macro_name,
-                len(futures),
-                len(options),
-                timings["total"],
-                timings["future_generation"],
-                timings["teacher_margins"],
-                timings["observation"],
-                timings["root_clustering"],
-                timings["ocmero"],
-            ),
-        )
+    if bool(prof.get("enabled", False)):
+        # Write a live per-sample CSV immediately, before the full scene-time group
+        # finishes.  On real Waymax builds a single scene-time can take many
+        # minutes, so waiting until samples are returned/written can leave users
+        # with no machine-readable profile while the build is still running.
+        live_path = cfg.get("_profile_live_path")
+        if live_path:
+            try:
+                live_idx = int(cfg.get("_profile_live_sample_counter", 0)) + 1
+                cfg["_profile_live_sample_counter"] = live_idx
+                _append_csv_rows(
+                    Path(str(live_path)),
+                    [_sample_profile_row(sample, live_idx)],
+                    PROFILE_FIELDS,
+                    fsync_file=bool(prof.get("profile_csv_fsync", False)),
+                )
+            except Exception:
+                pass
+        if bool(prof.get("log_every_sample", False)) or timings["total"] >= float(prof.get("slow_sample_s", 30.0)):
+            _profile_log(
+                cfg,
+                "sample scene=%s t=%s prefix=%s/%s futures=%d opts=%d total=%.2fs future=%.2fs teacher=%.2fs obs=%.2fs root=%.2fs ocmero=%.2fs wx_rollouts=%d wx_cache_hits=%d screened=%d"
+                % (
+                    history.scene_id,
+                    history.time_index,
+                    a_idx,
+                    prefix.macro_name,
+                    len(futures),
+                    len(options),
+                    timings["total"],
+                    timings["future_generation"],
+                    timings["teacher_margins"],
+                    timings["observation"],
+                    timings["root_clustering"],
+                    timings["ocmero"],
+                    _future_metadata_sum(sample, "waymax_teacher_rollouts_executed"),
+                    _future_metadata_sum(sample, "waymax_teacher_metric_cache_hits"),
+                    int(_future_metadata_any(sample, "waymax_teacher_screened_hybrid")),
+                ),
+            )
     return sample
 
 def _try_add_sample(
@@ -986,6 +1007,9 @@ def _count_splits(rows: list[dict]) -> dict[str, int]:
 
 
 def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False) -> dict:
+    # Use a shallow copy so live profiling counters/private paths do not leak back
+    # into caller-owned config objects, while nested user config remains intact.
+    cfg = dict(cfg)
     build_t0 = _now()
     out = ensure_dir(output_dir)
     sample_dir = ensure_dir(out / "samples")
@@ -1010,6 +1034,7 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
     progress_bar = None
     profile_path = out / "build_profile.csv"
     scene_profile_path = out / "build_scene_time_profile.csv"
+    live_profile_path = out / "build_profile_live.csv"
     stage_profile_path = out / "build_stage_profile.json"
     stage_totals: dict[str, float] = {}
     progress_mode = "samples" if skip_existing else "prefixes"
@@ -1019,8 +1044,11 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
     profile_csv_fsync = bool(prof_cfg.get("profile_csv_fsync", False))
     sample_profile_rows: list[dict[str, Any]] = []
     scene_profile_rows: list[dict[str, Any]] = []
+    if profiling:
+        cfg["_profile_live_path"] = str(live_profile_path)
+        cfg["_profile_live_sample_counter"] = 0
     if profiling and not skip_existing:
-        for stale in [profile_path, scene_profile_path, stage_profile_path]:
+        for stale in [profile_path, scene_profile_path, live_profile_path, stage_profile_path]:
             try:
                 stale.unlink(missing_ok=True)
             except Exception:
@@ -1076,6 +1104,7 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
             "stage_totals_s": {k: float(v) for k, v in sorted(stage_totals.items())},
             "io": {"compress_npz": bool(compress_npz), "fsync_npz": bool(fsync_npz)},
             "profile_csv": str(profile_path),
+            "profile_live_csv": str(live_profile_path),
             "scene_profile_csv": str(scene_profile_path),
         }
         write_json(payload, stage_profile_path)
@@ -1166,6 +1195,7 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
                         skipped_existing_scene_time_groups=int(skipped_existing_scene_time_groups),
                         progress_mode=progress_mode,
                         profile_csv=str(profile_path) if profiling else "",
+                        profile_live_csv=str(live_profile_path) if profiling else "",
                         scene_profile_csv=str(scene_profile_path) if profiling else "",
                         stage_profile_json=str(stage_profile_path) if profiling else "",
                         stage_totals_s={k: float(v) for k, v in sorted(stage_totals.items())},
@@ -1239,6 +1269,7 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
         "samples_per_hour": float(new_samples_written / elapsed_wall_s * 3600.0),
         "seconds_per_new_sample": float(elapsed_wall_s / max(new_samples_written, 1)),
         "profile_csv": str(profile_path) if profiling else "",
+        "profile_live_csv": str(live_profile_path) if profiling else "",
         "scene_profile_csv": str(scene_profile_path) if profiling else "",
         "stage_profile_json": str(stage_profile_path) if profiling else "",
         "stage_totals_s": {k: float(v) for k, v in sorted(stage_totals.items())},
