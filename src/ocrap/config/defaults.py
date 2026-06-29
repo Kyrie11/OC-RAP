@@ -71,6 +71,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "tau_normal_dep": 0.50,
         "tau_prefix_hard": 0.0,
         "tau_prefix_harm": 0.05,
+        "tau_contact": 0.8,
+        "include_prefix_collision_in_near": False,
+        "include_prefix_contact_in_post": False,
+        "use_paper_regime_definitions": True,
         "require_uniform_for_normal": False,
     },
     "ocmero": {"alpha": 0.2, "beta": 0.2, "top_m": 8},
@@ -111,6 +115,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "require_nominal_per_scene_time": True,
         "keep_nominal_even_if_quality_fails": True,
         "min_accepted_prefixes_per_scene_time": 2,
+        "require_nominal_regimes": [],
+        "forbid_nominal_regimes": [],
+        "require_any_regimes": [],
+        "forbid_any_regimes": [],
         "min_uniform_times_per_scenario": 0,
         # For primary mixed builds, non-mined pass stays natural/nominal while
         # the mined pass may use the branch-specific oracle-artifact label.

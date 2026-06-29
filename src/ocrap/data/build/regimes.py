@@ -25,9 +25,15 @@ def assign_regimes(samples: list[DatasetSample], history: SceneHistory, cfg: dic
     tau_normal_dep = float(thresholds.get("tau_normal_dep", 0.50))
     tau_prefix_hard = float(thresholds.get("tau_prefix_hard", 0.0))
     tau_prefix_harm = float(thresholds.get("tau_prefix_harm", 0.05))
+    tau_contact = float(thresholds.get("tau_contact", 0.8))
     require_uniform_for_normal = bool(thresholds.get("require_uniform_for_normal", False))
+    include_prefix_collision_in_near = bool(thresholds.get("include_prefix_collision_in_near", False))
+    include_prefix_contact_in_post = bool(thresholds.get("include_prefix_contact_in_post", False))
+    use_paper_regime_definitions = bool(thresholds.get("use_paper_regime_definitions", True))
+    dep_vals = [float(s.r_dep_star) for s in samples]
+    min_dep = min(dep_vals)
+    max_dep = max(dep_vals)
     nominal_dep = float(samples[0].r_dep_star)
-    max_dep = max(float(s.r_dep_star) for s in samples)
     boxes = np.asarray([agent_state_to_box(a) for a in history.agent_history[-1, 1:]], dtype=np.float32) if history.agent_history.shape[1] > 1 else np.zeros((0, 9), dtype=np.float32)
     valids = history.agent_valid[-1, 1:] if history.agent_history.shape[1] > 1 else np.zeros((0,), dtype=bool)
     ego_box = agent_state_to_box(history.agent_history[-1, 0])
@@ -35,9 +41,21 @@ def assign_regimes(samples: list[DatasetSample], history: SceneHistory, cfg: dic
     ttc = compute_ttc(history.ego_state, boxes, valids) if len(boxes) else 99.0
     occ_ratio = unknown_ratio_in_corridor(history.occ_mask)
     time_reasons = set(str(x) for x in history.metadata.get("time_sampling_reasons", []) if x is not None)
+    history_near = bool(dmin < tau_d or ttc < tau_ttc)
+    history_contact = bool(dmin < tau_contact)
+    # Paper-level regimes are scenario/scene-time attributes.  Prefix-induced
+    # collisions are still recorded as hard_violation / harm_proxy, but should
+    # not by default turn an otherwise normal scene-time into a near-contact or
+    # post-contact regime.  This keeps normal/safe background sets from being
+    # mislabeled merely because one deliberately generated candidate prefix is
+    # bad.  The legacy behavior can be restored with the include_* flags.
+    scene_low_headroom = bool((max_dep > 0.0 and max_dep <= tau_high) if use_paper_regime_definitions else (nominal_dep <= tau_high and max_dep > 0.0))
+    scene_high_headroom = bool((min_dep > tau_high) if use_paper_regime_definitions else True)
     for s in samples:
-        near = bool(dmin < tau_d or ttc < tau_ttc or s.prefix.diagnostics.get("prefix_collision", False))
-        post = bool(s.prefix.diagnostics.get("prefix_contact", False) or any(f.metadata.get("contact_surrogate", False) for f in s.futures))
+        prefix_collision = bool(s.prefix.diagnostics.get("prefix_collision", False))
+        prefix_contact = bool(s.prefix.diagnostics.get("prefix_contact", False))
+        near = bool(history_near or (include_prefix_collision_in_near and prefix_collision))
+        post = bool(history_contact or (include_prefix_contact_in_post and prefix_contact) or any(f.metadata.get("contact_surrogate", False) for f in s.futures))
         prefix_safe = bool(
             s.prefix.feasible
             and float(s.prefix.hard_violation) <= tau_prefix_hard
@@ -47,6 +65,7 @@ def assign_regimes(samples: list[DatasetSample], history: SceneHistory, cfg: dic
         uniform_ok = bool((not require_uniform_for_normal) or ("uniform" in time_reasons))
         normal = bool(
             (not s.i_art_star)
+            and scene_high_headroom
             and sample_headroom
             and prefix_safe
             and not near
@@ -56,11 +75,15 @@ def assign_regimes(samples: list[DatasetSample], history: SceneHistory, cfg: dic
         )
         regimes = {
             "normal": normal,
-            "low_headroom": bool(nominal_dep <= tau_high and max_dep > 0.0),
+            "low_headroom": scene_low_headroom,
             "occluded": bool(occ_ratio > tau_occ),
             "near_contact": near,
             "post_contact": post,
             "oracle_artifact": bool(s.i_art_star),
         }
+        # Extra diagnostics for auditing; downstream diagnose ignores unknown
+        # keys unless explicitly requested.
+        regimes["prefix_collision"] = prefix_collision
+        regimes["prefix_contact"] = prefix_contact
         s.regime_label.clear()
         s.regime_label.update(regimes)

@@ -654,6 +654,49 @@ def _dedupe_nominal(selected: list[DatasetSample]) -> list[DatasetSample]:
         seen_candidate.add(cid)
     return out
 
+
+def _quality_list(cfg: dict, key: str) -> list[str]:
+    quality = cfg.get("dataset_quality", {}) if isinstance(cfg.get("dataset_quality", {}), dict) else {}
+    raw = quality.get(key, [])
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        return [x.strip() for x in raw.split(",") if x.strip()]
+    if isinstance(raw, (list, tuple, set)):
+        return [str(x).strip() for x in raw if str(x).strip()]
+    return []
+
+
+def _apply_scene_time_regime_filter(selected: list[DatasetSample], cfg: dict) -> list[DatasetSample]:
+    """Optionally drop an entire scene-time group by regime labels.
+
+    This is primarily for building clean background/normal shards.  Regime labels
+    are assigned after candidate materialization, so this filter is intentionally
+    a group-level gate rather than a per-sample pruning step: a normal scene-time
+    may still contain deliberately bad candidate prefixes that are useful as
+    negative actions, while the nominal candidate/history must satisfy the
+    requested regime constraints.
+    """
+    if not selected:
+        return selected
+    require_nominal = _quality_list(cfg, "require_nominal_regimes")
+    forbid_nominal = _quality_list(cfg, "forbid_nominal_regimes")
+    require_any = _quality_list(cfg, "require_any_regimes")
+    forbid_any = _quality_list(cfg, "forbid_any_regimes")
+    if not (require_nominal or forbid_nominal or require_any or forbid_any):
+        return selected
+    nominal = next((s for s in selected if bool(s.is_nominal)), selected[0])
+    nlab = nominal.regime_label or {}
+    if require_nominal and not all(bool(nlab.get(k, False)) for k in require_nominal):
+        return []
+    if forbid_nominal and any(bool(nlab.get(k, False)) for k in forbid_nominal):
+        return []
+    if require_any and not all(any(bool(s.regime_label.get(k, False)) for s in selected) for k in require_any):
+        return []
+    if forbid_any and any(any(bool(s.regime_label.get(k, False)) for k in forbid_any) for s in selected):
+        return []
+    return selected
+
 def build_samples_for_history(history, split_id: str, cfg: dict, progress_callback: Callable[[int], None] | None = None) -> list[DatasetSample]:
     prefixes = generate_candidate_prefixes(history, cfg)
     options = default_recovery_options(int(cfg.get("num_recovery_options", 24)), shoulder_available=bool(history.metadata.get("shoulder_available", True)), adjacent_available=bool(history.metadata.get("adjacent_available", True)))
@@ -812,6 +855,7 @@ def build_samples_for_history(history, split_id: str, cfg: dict, progress_callba
     selected = _dedupe_nominal(selected)
     selected.sort(key=lambda s: int(s.candidate_index))
     assign_regimes(selected, history, cfg)
+    selected = _apply_scene_time_regime_filter(selected, cfg)
     return selected
 
 def scenario_iterator(cfg: dict) -> Iterator[RawScenario]:

@@ -115,6 +115,12 @@ regime_thresholds:
   tau_normal_dep: 0.50
   tau_prefix_hard: 0.0
   tau_prefix_harm: 0.05
+  tau_contact: 0.8
+  # Paper-level regimes are scene-time properties. Keep prefix-induced
+  # collision/contact as candidate diagnostics unless explicitly requested.
+  include_prefix_collision_in_near: false
+  include_prefix_contact_in_post: false
+  use_paper_regime_definitions: true
   require_uniform_for_normal: false
 ocmero:
   alpha: 0.2
@@ -191,6 +197,12 @@ dataset_quality:
   require_nominal_per_scene_time: true
   keep_nominal_even_if_quality_fails: true
   min_accepted_prefixes_per_scene_time: 2
+  # Optional group-level regime gates. Useful for clean normal/background shards.
+  # Example: require_nominal_regimes=[normal] or forbid_nominal_regimes=[near_contact,post_contact,oracle_artifact].
+  require_nominal_regimes: []
+  forbid_nominal_regimes: []
+  require_any_regimes: []
+  forbid_any_regimes: []
   # Reserve uniform planning frames when max_biased_times_per_scenario would
   # otherwise fill every slot; set to 1-2 for primary WOMD benchmark builds.
   min_uniform_times_per_scenario: 0
