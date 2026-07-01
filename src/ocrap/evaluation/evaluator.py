@@ -86,9 +86,12 @@ def _write_method_tables(result: dict, output: str | Path) -> None:
 def evaluate(dataset: str | Path, checkpoint: str | Path | None = None, output: str | Path | None = None, split: str = "test", calibration_json: str | Path | None = None, cfg: dict | None = None) -> dict:
     cfg = cfg or {}
     paths = iter_sample_paths_many(dataset)
+    print({"event": "evaluate_start", "num_npz_paths": len(paths), "split": split, "dataset": str(dataset)}, flush=True)
     bundle = load_model_bundle(checkpoint, cfg)
     grouped: dict[tuple[str, int], list[dict]] = {}
-    for p in paths:
+    for idx, p in enumerate(paths, 1):
+        if idx == 1 or idx % 1000 == 0:
+            print({"event": "evaluate_progress", "seen": idx, "groups": len(grouped)}, flush=True)
         d = load_npz(p)
         if split and str(np.asarray(d.get("split_id", "")).item()) != split and split != "all":
             continue
@@ -97,6 +100,7 @@ def evaluate(dataset: str | Path, checkpoint: str | Path | None = None, output: 
         teacher = teacher_prediction_from_sample(d, cfg)
         grouped.setdefault(key, []).append({"path": p, "data": d, "pred": pred, "teacher": teacher})
 
+    print({"event": "evaluate_grouping_done", "num_scene_time_groups": len(grouped)}, flush=True)
     gamma = _load_gamma(calibration_json, cfg)
     sel_cfg = cfg.get("selection", {}) if isinstance(cfg.get("selection", {}), dict) else {}
     gamma_H = float(sel_cfg.get("gamma_H", 0.0))

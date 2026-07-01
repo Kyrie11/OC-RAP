@@ -212,6 +212,7 @@ regime_label, sample_metadata, split_id
 ```bash
 export WOMD_TRAIN=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/training/training_tfexample.tfrecord
 export WOMD_VAL=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord
+export WOMD_TEST=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/testing_interactive/testing_interactive_tfexample.tfrecord
 
 export OCRAP_ROOT=/data0/senzeyu2/dataset/OCRAP
 ```

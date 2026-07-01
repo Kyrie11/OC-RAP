@@ -203,11 +203,15 @@ def _make_sampler(ds: OCRAPSampleDataset, cfg: dict) -> WeightedRandomSampler | 
 def train(dataset: str, output: str, cfg: dict) -> dict:
     seed_everything(int(cfg.get("seed", 7)))
     out = ensure_dir(output)
+    print({"event": "dataset_scan_start", "dataset": str(dataset)}, flush=True)
     paths = iter_sample_paths_many(dataset)
+    print({"event": "dataset_scan_done", "num_npz_paths": len(paths)}, flush=True)
     if not paths:
         raise ValueError(f"No OC-RAP sample .npz files found under {dataset}")
+    print({"event": "split_scan_start", "splits": ["train", "val"]}, flush=True)
     train_paths = split_paths_by_npz_split(paths, "train")
     val_paths = split_paths_by_npz_split(paths, "val")
+    print({"event": "split_scan_done", "num_train_paths": len(train_paths), "num_val_paths": len(val_paths)}, flush=True)
     if not train_paths:
         train_paths = paths
     if not val_paths:
@@ -258,7 +262,9 @@ def train(dataset: str, output: str, cfg: dict) -> dict:
     opt = torch.optim.AdamW(model.parameters(), lr=float(tcfg.get("lr", 1e-3)), weight_decay=float(tcfg.get("weight_decay", 1e-4)))
     batch_size = int(tcfg.get("batch_size", 32))
     num_workers = int(tcfg.get("num_workers", 0))
+    print({"event": "sampler_scan_start", "artifact_sampler_weight": float(tcfg.get("artifact_sampler_weight", 0.25))}, flush=True)
     sampler = _make_sampler(train_ds, cfg)
+    print({"event": "sampler_scan_done", "sampler": "weighted" if sampler is not None else "none"}, flush=True)
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=sampler is None, sampler=sampler, num_workers=num_workers, collate_fn=_collate, pin_memory=(device.type == "cuda"))
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers, collate_fn=_collate, pin_memory=(device.type == "cuda"))
     epochs = int(tcfg.get("epochs", 10))

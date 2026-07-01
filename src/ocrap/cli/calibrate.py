@@ -17,10 +17,14 @@ def calibrate(dataset: str, checkpoint: str | None = None, output: str | None = 
     numerical_margin = float(cfg.get("calibration", {}).get("numerical_margin", 0.0))
     required = int(cfg.get("calibration", {}).get("required_min_for_delta", 100))
     bundle = load_model_bundle(checkpoint, cfg)
+    paths = iter_sample_paths_many(dataset)
+    print({"event": "calibrate_start", "num_npz_paths": len(paths), "dataset": str(dataset)}, flush=True)
     scores = []
     teacher = []
     used_splits = []
-    for p in iter_sample_paths_many(dataset):
+    for idx, p in enumerate(paths, 1):
+        if idx == 1 or idx % 1000 == 0:
+            print({"event": "calibrate_progress", "seen": idx, "kept": len(scores)}, flush=True)
         d = load_npz(p)
         split = str(np.asarray(d.get("split_id", "")).item())
         if split != "calibration":
@@ -32,7 +36,9 @@ def calibrate(dataset: str, checkpoint: str | None = None, output: str | None = 
     warnings = []
     if not scores:
         warnings.append("no calibration split found; falling back to validation split")
-        for p in iter_sample_paths_many(dataset):
+        for idx, p in enumerate(paths, 1):
+            if idx == 1 or idx % 1000 == 0:
+                print({"event": "calibrate_val_fallback_progress", "seen": idx, "kept": len(scores)}, flush=True)
             d = load_npz(p)
             split = str(np.asarray(d.get("split_id", "")).item())
             if split != "val":
@@ -44,6 +50,8 @@ def calibrate(dataset: str, checkpoint: str | None = None, output: str | None = 
     scores = np.asarray(scores, dtype=float)
     teacher = np.asarray(teacher, dtype=float)
     neg = scores[teacher < 0]
+    if len(scores) == 0:
+        warnings.append("no calibration or validation samples were found in the supplied dataset argument")
     if len(neg) < required:
         warnings.append(f"num_negative < required_min_for_delta ({len(neg)} < {required})")
     thresholds = {}
