@@ -54,19 +54,29 @@ def calibrate(dataset: str, checkpoint: str | None = None, output: str | None = 
         warnings.append("no calibration or validation samples were found in the supplied dataset argument")
     if len(neg) < required:
         warnings.append(f"num_negative < required_min_for_delta ({len(neg)} < {required})")
+    def _delta_key(x) -> str:
+        try:
+            return f"{float(x):g}"
+        except Exception:
+            return str(x)
+
     thresholds = {}
     for delta in deltas:
         try:
-            thresholds[str(delta)] = finite_sample_upper_quantile(neg, float(delta), numerical_margin, strict)
+            thresholds[_delta_key(delta)] = finite_sample_upper_quantile(neg, float(delta), numerical_margin, strict)
         except ValueError:
-            thresholds[str(delta)] = float("inf")
-    default_delta = str(deltas[0]) if deltas else "0.05"
+            thresholds[_delta_key(delta)] = float("inf")
+    eval_delta = (cfg.get("evaluation", {}) or {}).get("delta", None) if isinstance(cfg.get("evaluation", {}), dict) else None
+    default_delta = _delta_key(eval_delta if eval_delta is not None else (deltas[0] if deltas else 0.05))
+    if default_delta not in thresholds and thresholds:
+        default_delta = next(iter(thresholds.keys()))
     result = {
         "num_samples": int(len(scores)),
         "num_negative": int(len(neg)),
         "source": "model" if bundle is not None else "teacher_fallback",
         "splits": sorted(set(used_splits)),
         "thresholds": thresholds,
+        "default_delta": default_delta,
         "gamma_rec": thresholds.get(default_delta, 0.0),
         "warnings": warnings,
     }

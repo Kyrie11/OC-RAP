@@ -235,6 +235,7 @@ loss_weights:
 evaluation:
   batch_size: 64
   delta: 0.05
+  allow_infinite_gamma: false
   methods:
   - nominal
   - risk_aware
@@ -246,6 +247,27 @@ baselines:
   risk_lambda: 1.0
 metrics:
   sigma_u: 1.0
+closed_loop:
+  max_scenarios: 8
+  start_time_index: null
+  max_steps: 40
+  replan_interval_steps: 1
+  method: ocrap
+  # fast = online inference only; skips per-candidate counterfactual teacher
+  # labels at every replan. Use all/full only for small strict audits.
+  label_mode: fast
+  # Optional closed-loop-only candidate cap. Leave null to use num_candidate_prefixes.
+  num_candidate_prefixes: null
+  # Optional closed-loop-only recovery-option count. Set to the option count used
+  # during dataset construction, e.g. 12 for the commands in 数据集构建指令.txt.
+  num_recovery_options: null
+  artifact_mine_probability: 0.0
+  render: false
+  save_trace_npz: false
+  save_partial: true
+  progress: true
+  progress_every_steps: 5
+  allow_infinite_gamma: false
 progress: true
 io:
   # Compression saves disk, but can become CPU-bound during dataset construction.

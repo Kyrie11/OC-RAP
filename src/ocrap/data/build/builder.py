@@ -11,7 +11,7 @@ from typing import Any, Callable, Iterator
 import numpy as np
 
 from ocrap.algorithms.ocmero import oc_mero
-from ocrap.data.schema import DatasetSample, RawScenario
+from ocrap.data.schema import CounterfactualFuture, DatasetSample, RawScenario
 from ocrap.data.serialization import ensure_dir, np_savez, write_json
 from ocrap.data.split import resolve_split
 from ocrap.data.validation import missing_fields
@@ -574,6 +574,102 @@ def _materialize_sample(history, split_id: str, prefix: CandidatePrefix, a_idx: 
                 ),
             )
     return sample
+
+
+def _feature_only_sample(history, split_id: str, prefix: CandidatePrefix, a_idx: int, cfg: dict, options, option_valid, K: int) -> DatasetSample:
+    """Create an inference sample without generating counterfactual teacher labels.
+
+    Dataset construction must materialize futures, root clusters, observation
+    compatibility, and recovery-option teacher margins.  A closed-loop planner,
+    however, only needs the features consumed by the trained model plus a valid
+    root/option geometry.  Reusing ``build_samples_for_history`` inside the
+    online loop was therefore doing expensive label generation at every replan.
+
+    The dummy OC-MERO arrays below are intentionally marked as feature-only in
+    diagnostics and must not be used as ground-truth labels.  The closed-loop
+    runner reports label-based metrics only when it explicitly requests full
+    labels.
+    """
+    K = max(1, int(K))
+    L = max(1, int(len(options)))
+    model_cfg = cfg.get("model", {}) if isinstance(cfg.get("model", {}), dict) else {}
+    d_sig = int(model_cfg.get("d_signature", 32) or 0)
+    d_fsig = int(model_cfg.get("d_future_signature", 32) or 0)
+    root_probs = np.full((K,), 1.0 / float(K), dtype=np.float32)
+    root_valid = np.ones((K,), dtype=bool)
+    m_star = np.zeros((K, L), dtype=np.float32)
+    c_star = np.eye(K, dtype=np.float32)
+    future_to_root_weight = np.zeros((1, K), dtype=np.float32)
+    future_to_root_weight[0, 0] = 1.0
+    future = CounterfactualFuture(
+        future_id=0,
+        source="closed_loop_feature_only",
+        prior=1.0,
+        agent_states=history.future_agent_states,
+        agent_valid=history.future_agent_valid,
+        metadata={"feature_only": True, "labels_available": False},
+    )
+    return DatasetSample(
+        scene_id=history.scene_id,
+        original_scenario_id=history.original_scenario_id,
+        time_index=history.time_index,
+        candidate_index=a_idx,
+        split_id=split_id,
+        is_nominal=(a_idx == 0),
+        h_t=history,
+        prefix=prefix,
+        futures=[future],
+        future_probs=np.ones((1,), dtype=np.float32),
+        root_assignments=np.zeros((1,), dtype=np.int64),
+        root_probs=root_probs,
+        root_signature=np.zeros((K, d_sig), dtype=np.float32),
+        root_future_signature=np.zeros((K, d_fsig), dtype=np.float32),
+        root_valid=root_valid,
+        root_representative_future_id=np.zeros((K,), dtype=np.int64),
+        future_to_root_weight=future_to_root_weight,
+        within_root_obs_dispersion=np.zeros((K,), dtype=np.float32),
+        obs_distance=np.zeros((K, K), dtype=np.float32),
+        y_obs=c_star.copy(),
+        c_star=c_star,
+        recovery_options=options,
+        m_star=m_star,
+        option_valid=option_valid,
+        r_orc_star=float("nan"),
+        r_dep_star=float("nan"),
+        oracle_gap_star=float("nan"),
+        i_art_star=False,
+        regime_label={},
+        valid_masks={"root_valid": root_valid.astype(bool).tolist(), "option_valid": option_valid.astype(bool).tolist()},
+        teacher_diagnostics={},
+        diagnostics={
+            "feature_only": True,
+            "labels_available": False,
+            "future_sources": [future.source],
+            "unknown_ratio_in_corridor": unknown_ratio_in_corridor(history.occ_mask),
+            "time_sampling_reasons": history.metadata.get("time_sampling_reasons", []),
+        },
+    )
+
+
+def build_feature_only_samples_for_history(
+    history,
+    split_id: str,
+    cfg: dict,
+    *,
+    num_roots: int | None = None,
+    num_options: int | None = None,
+) -> list[DatasetSample]:
+    """Fast closed-loop candidate materialization for model inference only."""
+    prefixes = generate_candidate_prefixes(history, cfg)
+    n_options = int(num_options if num_options is not None else cfg.get("num_recovery_options", 24))
+    options = default_recovery_options(
+        n_options,
+        shoulder_available=bool(history.metadata.get("shoulder_available", True)),
+        adjacent_available=bool(history.metadata.get("adjacent_available", True)),
+    )
+    opt_valid = option_valid_mask(options)
+    K = int(num_roots if num_roots is not None else cfg.get("num_roots", 8))
+    return [_feature_only_sample(history, split_id, p, int(p.macro_id), cfg, options, opt_valid, K) for p in prefixes]
 
 def _try_add_sample(
     selected: list[DatasetSample],

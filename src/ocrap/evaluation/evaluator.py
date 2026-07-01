@@ -11,6 +11,28 @@ from ocrap.models.data import iter_sample_paths_many
 from ocrap.models.inference import load_model_bundle, predict_sample, teacher_prediction_from_sample
 
 
+def _threshold_lookup(thresholds: dict, delta: float | str | None) -> tuple[float | None, str | None]:
+    if not thresholds or delta is None or str(delta) == "":
+        return None, None
+    candidates = [str(delta)]
+    try:
+        fd = float(delta)
+        candidates.extend([str(fd), f"{fd:g}", f"{fd:.12g}"])
+    except Exception:
+        fd = None
+    for key in candidates:
+        if key in thresholds:
+            return float(thresholds[key]), key
+    if fd is not None:
+        for key, val in thresholds.items():
+            try:
+                if abs(float(key) - fd) <= 1e-12:
+                    return float(val), str(key)
+            except Exception:
+                continue
+    return None, None
+
+
 def _load_gamma(calibration_json: str | Path | None, cfg: dict | None = None) -> float:
     gamma = float(((cfg or {}).get("selection", {}) or {}).get("gamma_rec", 0.0))
     if calibration_json:
@@ -18,11 +40,17 @@ def _load_gamma(calibration_json: str | Path | None, cfg: dict | None = None) ->
 
         with Path(calibration_json).open("r", encoding="utf-8") as f:
             cal = json.load(f)
-        delta = str(((cfg or {}).get("evaluation", {}) or {}).get("delta", ""))
-        if delta and "thresholds" in cal and delta in cal["thresholds"]:
-            gamma = float(cal["thresholds"][delta])
+        delta = ((cfg or {}).get("evaluation", {}) or {}).get("delta", "")
+        found, _key = _threshold_lookup(cal.get("thresholds", {}) or {}, delta)
+        if found is not None:
+            gamma = float(found)
         else:
             gamma = float(cal.get("gamma_rec", cal.get("gamma", gamma)))
+    if not np.isfinite(gamma) and not bool(((cfg or {}).get("evaluation", {}) or {}).get("allow_infinite_gamma", False)):
+        raise ValueError(
+            "Loaded gamma_rec is not finite. Check calibration.thresholds for the requested evaluation.delta, "
+            "increase calibration set size / delta, or pass --set evaluation.allow_infinite_gamma=true for debugging only."
+        )
     return gamma
 
 

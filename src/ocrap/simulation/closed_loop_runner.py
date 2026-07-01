@@ -6,13 +6,13 @@ from typing import Any
 
 import numpy as np
 
-from ocrap.data.build.builder import build_samples_for_history
+from ocrap.data.build.builder import build_feature_only_samples_for_history, build_samples_for_history
 from ocrap.data.build.history import construct_history
 from ocrap.data.serialization import write_json
 from ocrap.data.waymax_loader import iter_waymax_womd_scenarios, raw_scenario_from_waymax_state
 from ocrap.evaluation.baselines import select_baseline
 from ocrap.evaluation.metrics import deployable_recovery_success, false_recoverability_admission, nominal_utility_preservation
-from ocrap.models.inference import load_model_bundle, predict_sample, teacher_prediction_from_sample
+from ocrap.models.inference import ModelBundle, load_model_bundle, predict_sample, predict_samples, teacher_prediction_from_sample
 from ocrap.simulation.waymax_rollout import _as_np, _bicycle_action, _make_env, _metric_summary, _sdc_index
 
 
@@ -26,13 +26,13 @@ class ClosedLoopDecision:
     selected_macro: str
     selected_candidate_index: int
     selected_utility: float
-    selected_teacher_r_dep: float
-    selected_teacher_r_orc: float
-    selected_odg: float
-    selected_artifact: bool
-    fra_exec: float
-    fra_cand: float
-    drs: float
+    selected_teacher_r_dep: float | None
+    selected_teacher_r_orc: float | None
+    selected_odg: float | None
+    selected_artifact: bool | None
+    fra_exec: float | None
+    fra_cand: float | None
+    drs: float | None
     nup: float
     metrics_after_step: dict[str, float]
 
@@ -43,6 +43,30 @@ def _safe_float(x: Any, default: float = 0.0) -> float:
         return v if np.isfinite(v) else default
     except Exception:
         return default
+
+
+def _safe_optional_float(x: Any) -> float | None:
+    try:
+        v = float(np.asarray(x).reshape(-1)[0])
+        return v if np.isfinite(v) else None
+    except Exception:
+        return None
+
+
+def _mean_finite(values: list[Any], default: float | None = None) -> float | None:
+    vals: list[float] = []
+    for x in values:
+        if x is None:
+            continue
+        try:
+            v = float(x)
+        except Exception:
+            continue
+        if np.isfinite(v):
+            vals.append(v)
+    if not vals:
+        return default
+    return float(np.mean(vals))
 
 
 def _current_timestep(state: Any) -> int:
@@ -66,17 +90,30 @@ def _sample_to_dict(sample) -> dict[str, Any]:
     return sample.to_npz_dict()
 
 
-def _select_prefix(samples: list, bundle, cfg: dict, method: str, gamma: float) -> tuple[int, dict[str, Any]]:
+def _select_prefix(
+    samples: list,
+    bundle: ModelBundle | None,
+    cfg: dict,
+    method: str,
+    gamma: float,
+    *,
+    compute_teacher_labels: bool = True,
+) -> tuple[int, dict[str, Any]]:
+    dicts = [_sample_to_dict(s) for s in samples]
+    preds = predict_samples(dicts, bundle, cfg) if bundle is not None else [predict_sample(d, None, cfg) for d in dicts]
     items = []
-    for s in samples:
-        d = _sample_to_dict(s)
-        pred = predict_sample(d, bundle, cfg)
-        teacher = teacher_prediction_from_sample(d, cfg)
+    for s, d, pred in zip(samples, dicts, preds):
+        teacher = teacher_prediction_from_sample(d, cfg) if compute_teacher_labels else None
         items.append({"sample": s, "data": d, "pred": pred, "teacher": teacher})
+
     utility = np.asarray([_safe_float(x["data"].get("utility", 0.0)) for x in items], dtype=np.float32)
     pred_r_dep = np.asarray([float(x["pred"].r_dep) for x in items], dtype=np.float32)
-    teacher_r_dep = np.asarray([_safe_float(x["data"].get("r_dep_star", 0.0)) for x in items], dtype=np.float32)
-    teacher_r_orc = np.asarray([_safe_float(x["data"].get("r_orc_star", 0.0)) for x in items], dtype=np.float32)
+    if compute_teacher_labels:
+        teacher_r_dep = np.asarray([_safe_float(x["data"].get("r_dep_star", 0.0)) for x in items], dtype=np.float32)
+        teacher_r_orc = np.asarray([_safe_float(x["data"].get("r_orc_star", 0.0)) for x in items], dtype=np.float32)
+    else:
+        teacher_r_dep = np.full((len(items),), np.nan, dtype=np.float32)
+        teacher_r_orc = np.full((len(items),), np.nan, dtype=np.float32)
     hard = np.asarray([_safe_float(x["data"].get("hard_violation", 0.0)) for x in items], dtype=np.float32)
     harm = np.asarray([_safe_float(x["data"].get("harm_proxy", 0.0)) for x in items], dtype=np.float32)
     feasible = np.asarray([bool(int(_safe_float(x["data"].get("feasible", 1.0), 1.0))) for x in items], dtype=bool)
@@ -97,25 +134,32 @@ def _select_prefix(samples: list, bundle, cfg: dict, method: str, gamma: float) 
     )
     idx = int(selected.selected_index)
     chosen = items[idx]
-    q_eval = chosen["pred"].q if method == "ocrap" else chosen["teacher"].q
-    selected_options = np.argmax(q_eval, axis=1) if getattr(q_eval, "ndim", 0) == 2 else 0
-    d = chosen["data"]
-    drs = deployable_recovery_success(d["m_star"], d["root_probs"], selected_options, d.get("root_valid", None))
     nup = nominal_utility_preservation(utility[0] if len(utility) else 0.0, utility[idx], sigma_u=float((cfg.get("metrics", {}) or {}).get("sigma_u", 1.0)))
+
+    if compute_teacher_labels:
+        q_eval = chosen["pred"].q if method == "ocrap" else chosen["teacher"].q
+        selected_options = np.argmax(q_eval, axis=1) if getattr(q_eval, "ndim", 0) == 2 else 0
+        d = chosen["data"]
+        drs = deployable_recovery_success(d["m_star"], d["root_probs"], selected_options, d.get("root_valid", None))
+        fra_cand = false_recoverability_admission(selected.admitted, teacher_r_dep)
+    else:
+        drs = None
+        fra_cand = None
+
     info = {
         "items": items,
         "utility": utility,
         "teacher_r_dep": teacher_r_dep,
         "teacher_r_orc": teacher_r_orc,
         "selection": selected,
-        "drs": float(drs),
+        "labels_available": bool(compute_teacher_labels),
+        "drs": None if drs is None else float(drs),
         "nup": float(nup["bounded_NUP"]),
-        "fra_cand": false_recoverability_admission(selected.admitted, teacher_r_dep),
+        "fra_cand": None if fra_cand is None else float(fra_cand),
     }
     return idx, info
 
-
-def _rollout_one_scene(raw, scenario_rank: int, checkpoint: str | Path | None, cfg: dict, method: str, gamma: float) -> dict[str, Any]:
+def _rollout_one_scene(raw, scenario_rank: int, bundle: ModelBundle | None, cfg: dict, method: str, gamma: float) -> dict[str, Any]:
     import jax  # type: ignore
 
     cl_cfg = cfg.get("closed_loop", {}) if isinstance(cfg.get("closed_loop", {}), dict) else {}
@@ -125,6 +169,14 @@ def _rollout_one_scene(raw, scenario_rank: int, checkpoint: str | Path | None, c
     if start_t is None:
         start_t = int((cfg.get("waymax", {}) or {}).get("init_history_steps", 11)) - 1
     start_t = int(start_t)
+    requested_label_mode = str(cl_cfg.get("label_mode", "fast")).lower()
+    label_mode = requested_label_mode
+    if method != "ocrap" or bundle is None:
+        # Dataset-label baselines and teacher fallback require real OC-MERO labels.
+        label_mode = "all"
+    compute_teacher_labels = label_mode in {"all", "full", "teacher", "labels"}
+    progress = bool(cl_cfg.get("progress", True))
+    progress_every = max(1, int(cl_cfg.get("progress_every_steps", 5)))
 
     state0 = raw.metadata.get("_waymax_state")
     if state0 is None:
@@ -133,7 +185,6 @@ def _rollout_one_scene(raw, scenario_rank: int, checkpoint: str | Path | None, c
     local_cfg["_waymax_init_steps_override"] = start_t + 1
     wx_env, _dyn_name = _make_env(state0, local_cfg, allow_new=bool((cfg.get("waymax", {}) or {}).get("allow_new_objects_after_warmup", True)))
     state = wx_env.reset(state0, rng=jax.random.PRNGKey(int((cfg.get("seed", 7) + scenario_rank) & 0x7FFFFFFF)))
-    bundle = load_model_bundle(checkpoint, cfg)
     sdc = _sdc_index(state)
     decisions: list[ClosedLoopDecision] = []
     metric_trace: list[dict[str, float]] = []
@@ -143,6 +194,8 @@ def _rollout_one_scene(raw, scenario_rank: int, checkpoint: str | Path | None, c
         if _scene_done(state):
             break
         t = _current_timestep(state)
+        if progress and (step_idx == 0 or step_idx % progress_every == 0):
+            print({"event": "closed_loop_step", "scene_rank": scenario_rank, "scene_id": str(raw.scenario_id), "step": step_idx, "time_index": int(t), "label_mode": label_mode}, flush=True)
         spliced_raw = raw_scenario_from_waymax_state(
             state,
             f"{raw.scenario_id}__cl{scenario_rank:04d}",
@@ -156,6 +209,8 @@ def _rollout_one_scene(raw, scenario_rank: int, checkpoint: str | Path | None, c
         hist.metadata["_waymax_branch_from_current"] = True
         hist.metadata["waymax_planning_timestep"] = int(t)
         eval_cfg = dict(cfg)
+        if cl_cfg.get("num_candidate_prefixes", None) is not None:
+            eval_cfg["num_candidate_prefixes"] = int(cl_cfg["num_candidate_prefixes"])
         quality = dict(eval_cfg.get("dataset_quality", {}) or {})
         quality.update({
             "balanced_two_pass": False,
@@ -168,10 +223,21 @@ def _rollout_one_scene(raw, scenario_rank: int, checkpoint: str | Path | None, c
             "artifact_pair_mode": "tag",
         })
         eval_cfg["dataset_quality"] = quality
-        samples = build_samples_for_history(hist, "closed_loop", eval_cfg)
+        if compute_teacher_labels:
+            samples = build_samples_for_history(hist, "closed_loop", eval_cfg)
+        else:
+            cl_num_options = cl_cfg.get("num_recovery_options", None)
+            feature_num_options = int(cl_num_options) if cl_num_options is not None else int(eval_cfg.get("num_recovery_options", getattr(bundle.model, "num_options", 24) if bundle is not None else 24))
+            samples = build_feature_only_samples_for_history(
+                hist,
+                "closed_loop",
+                eval_cfg,
+                num_roots=int(getattr(bundle.model, "num_roots", int(cfg.get("num_roots", 8)))) if bundle is not None else int(cfg.get("num_roots", 8)),
+                num_options=feature_num_options,
+            )
         if not samples:
             break
-        sel_idx, info = _select_prefix(samples, bundle, cfg, method, gamma)
+        sel_idx, info = _select_prefix(samples, bundle, cfg, method, gamma, compute_teacher_labels=compute_teacher_labels)
         selected_sample = samples[sel_idx]
         prefix = selected_sample.prefix
         controls = prefix.prefix_controls if prefix.prefix_controls.size else np.zeros((1, 4), dtype=np.float32)
@@ -193,6 +259,10 @@ def _rollout_one_scene(raw, scenario_rank: int, checkpoint: str | Path | None, c
         teacher_r_dep = info["teacher_r_dep"]
         teacher_r_orc = info["teacher_r_orc"]
         utility = info["utility"]
+        selected_teacher_r_dep = _safe_optional_float(teacher_r_dep[sel_idx]) if compute_teacher_labels else None
+        selected_teacher_r_orc = _safe_optional_float(teacher_r_orc[sel_idx]) if compute_teacher_labels else None
+        selected_odg = _safe_optional_float(selected_sample.oracle_gap_star) if compute_teacher_labels else None
+        selected_artifact = bool(selected_sample.i_art_star) if compute_teacher_labels else None
         decisions.append(
             ClosedLoopDecision(
                 scene_id=str(raw.scenario_id),
@@ -203,13 +273,13 @@ def _rollout_one_scene(raw, scenario_rank: int, checkpoint: str | Path | None, c
                 selected_macro=str(prefix.macro_name),
                 selected_candidate_index=int(selected_sample.candidate_index),
                 selected_utility=float(utility[sel_idx]),
-                selected_teacher_r_dep=float(teacher_r_dep[sel_idx]),
-                selected_teacher_r_orc=float(teacher_r_orc[sel_idx]),
-                selected_odg=float(selected_sample.oracle_gap_star),
-                selected_artifact=bool(selected_sample.i_art_star),
-                fra_exec=float(teacher_r_dep[sel_idx] < 0.0),
-                fra_cand=float(info["fra_cand"]),
-                drs=float(info["drs"]),
+                selected_teacher_r_dep=selected_teacher_r_dep,
+                selected_teacher_r_orc=selected_teacher_r_orc,
+                selected_odg=selected_odg,
+                selected_artifact=selected_artifact,
+                fra_exec=None if selected_teacher_r_dep is None else float(selected_teacher_r_dep < 0.0),
+                fra_cand=info["fra_cand"],
+                drs=info["drs"],
                 nup=float(info["nup"]),
                 metrics_after_step=metrics_after,
             )
@@ -229,12 +299,14 @@ def _rollout_one_scene(raw, scenario_rank: int, checkpoint: str | Path | None, c
         "num_decisions": int(len(decisions)),
         "num_metric_steps": int(len(metric_trace)),
         "method": method,
-        "closed_loop_FRA_exec": float(np.mean([d.fra_exec for d in decisions])) if decisions else 0.0,
-        "closed_loop_FRA_cand": float(np.mean([d.fra_cand for d in decisions])) if decisions else 0.0,
-        "closed_loop_DRS": float(np.mean([d.drs for d in decisions])) if decisions else 0.0,
-        "closed_loop_ODG": float(np.mean([d.selected_odg for d in decisions])) if decisions else 0.0,
-        "closed_loop_artifact_selection_rate": float(np.mean([float(d.selected_artifact) for d in decisions])) if decisions else 0.0,
-        "closed_loop_bounded_NUP": float(np.mean([d.nup for d in decisions])) if decisions else 0.0,
+        "label_mode": label_mode,
+        "labels_available": bool(compute_teacher_labels),
+        "closed_loop_FRA_exec": _mean_finite([d.fra_exec for d in decisions]),
+        "closed_loop_FRA_cand": _mean_finite([d.fra_cand for d in decisions]),
+        "closed_loop_DRS": _mean_finite([d.drs for d in decisions]),
+        "closed_loop_ODG": _mean_finite([d.selected_odg for d in decisions]),
+        "closed_loop_artifact_selection_rate": _mean_finite([float(d.selected_artifact) for d in decisions if d.selected_artifact is not None]),
+        "closed_loop_bounded_NUP": _mean_finite([d.nup for d in decisions], default=0.0),
         "metric_summary": metric_summary,
         "macro_counts": {m: int(sum(d.selected_macro == m for d in decisions)) for m in sorted({d.selected_macro for d in decisions})},
         "decisions": decision_dicts,
@@ -242,7 +314,6 @@ def _rollout_one_scene(raw, scenario_rank: int, checkpoint: str | Path | None, c
     if bool(cl_cfg.get("save_trace_npz", False)):
         out["state_xy_trace"] = state_xy_trace
     return out
-
 
 def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, source: str) -> dict[str, Any]:
     keys = ["closed_loop_FRA_exec", "closed_loop_FRA_cand", "closed_loop_DRS", "closed_loop_ODG", "closed_loop_artifact_selection_rate", "closed_loop_bounded_NUP"]
@@ -252,15 +323,16 @@ def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, s
         "num_scenes": int(len(scene_results)),
         "num_decisions": int(sum(int(s.get("num_decisions", 0)) for s in scene_results)),
         "num_metric_steps": int(sum(int(s.get("num_metric_steps", 0)) for s in scene_results)),
+        "label_modes": sorted({str(s.get("label_mode", "unknown")) for s in scene_results}),
     }
     for k in keys:
-        vals = [float(s.get(k, 0.0)) for s in scene_results if int(s.get("num_decisions", 0)) > 0]
-        agg[k] = float(np.mean(vals)) if vals else 0.0
+        vals = [s.get(k, None) for s in scene_results if int(s.get("num_decisions", 0)) > 0]
+        agg[k] = _mean_finite(vals)
     metric_names = sorted({mk for s in scene_results for mk in (s.get("metric_summary", {}) or {}).keys()})
     agg["waymax_metrics"] = {}
     for mk in metric_names:
-        vals = [float((s.get("metric_summary", {}) or {}).get(mk, 0.0)) for s in scene_results]
-        agg["waymax_metrics"][mk] = float(np.mean(vals)) if vals else 0.0
+        vals = [(s.get("metric_summary", {}) or {}).get(mk, None) for s in scene_results]
+        agg["waymax_metrics"][mk] = _mean_finite(vals, default=0.0)
     macro_counts: dict[str, int] = {}
     for s in scene_results:
         for m, c in (s.get("macro_counts", {}) or {}).items():
@@ -270,10 +342,20 @@ def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, s
 
 
 def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, output: str | Path, cfg: dict) -> dict[str, Any]:
+    if not str(dataset_patterns).strip() or str(dataset_patterns).strip().startswith("@"):
+        raise ValueError(
+            "closed-loop --dataset is empty or only contains an @limit suffix. "
+            "Pass an explicit WOMD TFRecord path, e.g. ${WOMD_VAL}@150 after exporting WOMD_VAL."
+        )
     cl_cfg = cfg.get("closed_loop", {}) if isinstance(cfg.get("closed_loop", {}), dict) else {}
     max_scenes = int(cl_cfg.get("max_scenarios", cfg.get("max_scenarios") or 8))
     method = str(cl_cfg.get("method", "ocrap")).lower()
     gamma = float((cfg.get("selection", {}) or {}).get("gamma_rec", 0.0))
+    if not np.isfinite(gamma) and not bool(cl_cfg.get("allow_infinite_gamma", False)):
+        raise ValueError(
+            "closed-loop selection.gamma_rec is not finite. Re-read calibration.json with the requested delta "
+            "or pass --set closed_loop.allow_infinite_gamma=true only for debugging."
+        )
     local = dict(cfg)
     local["data_source"] = "womd"
     local["simulation_backend"] = "waymax_closed_loop"
@@ -284,14 +366,32 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
     art["force_mine"] = mine_p > 0.0
     art["mine_probability"] = max(0.0, min(1.0, mine_p))
     local["artifact"] = art
+    bundle = load_model_bundle(checkpoint, local)
+    if checkpoint and bundle is None:
+        raise FileNotFoundError(f"Could not load model checkpoint for closed-loop evaluation: {checkpoint}")
+    source = "model" if bundle is not None else "teacher_fallback"
+    output_path = Path(output)
+    partial_path = output_path.with_suffix(output_path.suffix + ".partial")
+    save_partial = bool(cl_cfg.get("save_partial", True))
+    progress = bool(cl_cfg.get("progress", True))
     scene_results = []
     for i, raw in enumerate(iter_waymax_womd_scenarios(dataset_patterns, max_scenarios=max_scenes, parser_cfg=local)):
-        scene_results.append(_rollout_one_scene(raw, i, checkpoint, local, method, gamma))
-    source = "model" if checkpoint else "teacher_fallback"
+        if progress:
+            print({"event": "closed_loop_scene_start", "scene_rank": i, "scene_id": str(raw.scenario_id), "max_scenes": max_scenes}, flush=True)
+        scene_results.append(_rollout_one_scene(raw, i, bundle, local, method, gamma))
+        if save_partial:
+            partial = _aggregate_scene_results(scene_results, method, source)
+            partial["scenes"] = scene_results
+            partial["partial"] = True
+            write_json(partial, partial_path)
+        if progress:
+            print({"event": "closed_loop_scene_done", "scene_rank": i, "num_decisions": scene_results[-1].get("num_decisions", 0)}, flush=True)
     result = _aggregate_scene_results(scene_results, method, source)
     result["scenes"] = scene_results
+    result["gamma_rec"] = gamma
     result["notes"] = [
         "This is a true Waymax receding-horizon loop: reset once, select an action from current SimulatorState, step the environment, then replan from the updated SimulatorState.",
+        "closed_loop.label_mode=fast skips expensive per-candidate OC-MERO teacher labels inside the online loop. It reports Waymax closed-loop metrics and predicted selection/NUP; label-based FRA/DRS/ODG require --set closed_loop.label_mode=all or a separate offline audit.",
         "Non-SDC actors use Waymax/default log-playback dynamics unless controlled by the environment configuration.",
     ]
     write_json(result, output)

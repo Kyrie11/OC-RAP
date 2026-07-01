@@ -160,6 +160,73 @@ def teacher_prediction_from_sample(d: dict[str, Any], cfg: dict | None = None) -
 
 
 @torch.no_grad()
+def predict_samples(ds: list[dict[str, Any]], bundle: ModelBundle | None, cfg: dict | None = None) -> list[Prediction]:
+    """Vectorized version of :func:`predict_sample`.
+
+    Closed-loop evaluation replans many times and scores every candidate prefix at
+    each replan.  Calling ``predict_sample`` once per prefix is correct but pays a
+    Python/GPU dispatch cost for every candidate.  This helper keeps the exact
+    same inference path while batching all candidates from a single replan into
+    one model call.
+    """
+    if not ds:
+        return []
+    if bundle is None:
+        return [teacher_prediction_from_sample(d, cfg) for d in ds]
+
+    xs = torch.from_numpy(np.stack([sample_to_feature(d, bundle.cfg) for d in ds], axis=0)).float().to(bundle.device)
+    fixed = [
+        fix_sample_geometry(
+            d,
+            num_roots=bundle.model.num_roots,
+            num_options=bundle.model.num_options,
+            d_signature=int(getattr(bundle.model, "d_signature", 0)),
+            d_future_signature=int(getattr(bundle.model, "d_future_signature", 0)),
+        )
+        for d in ds
+    ]
+    option_features = torch.from_numpy(np.stack([f["option_features"] for f in fixed], axis=0)).float().to(bundle.device)
+    out = bundle.model(xs, option_features)
+    root_valid = torch.from_numpy(np.stack([f["root_valid"] for f in fixed], axis=0)).bool().to(bundle.device)
+    p = torch.softmax(out["root_logits"].masked_fill(~root_valid, -1.0e4), dim=-1)
+    option_valid = torch.from_numpy(np.stack([f["option_valid"] for f in fixed], axis=0)).bool().to(bundle.device)
+    r_dep, r_orc, gap, q = torch_oc_mero(
+        out["margins"],
+        p,
+        out["c_star"],
+        alpha=float((bundle.cfg.get("ocmero", {}) or {}).get("alpha", 0.2)),
+        beta=float((bundle.cfg.get("ocmero", {}) or {}).get("beta", 0.2)),
+        option_valid=option_valid,
+        root_valid=root_valid,
+        use_lcvar=not bool((bundle.cfg.get("ablation", {}) or {}).get("without_lower_tail", False)),
+        use_obs_kernel=not bool((bundle.cfg.get("ablation", {}) or {}).get("without_observation_kernel", False)),
+        top_m=int((bundle.cfg.get("ocmero", {}) or {}).get("top_m", 8)),
+    )
+
+    r_dep_np = r_dep.detach().cpu().numpy().astype(np.float32)
+    r_orc_np = r_orc.detach().cpu().numpy().astype(np.float32)
+    gap_np = gap.detach().cpu().numpy().astype(np.float32)
+    q_np = q.detach().cpu().numpy().astype(np.float32)
+    p_np = p.detach().cpu().numpy().astype(np.float32)
+    c_np = out["c_star"].detach().cpu().numpy().astype(np.float32)
+    m_np = out["margins"].detach().cpu().numpy().astype(np.float32)
+    preds: list[Prediction] = []
+    for i in range(len(ds)):
+        preds.append(
+            Prediction(
+                r_dep=float(r_dep_np[i]),
+                r_orc=float(r_orc_np[i]),
+                gap=float(gap_np[i]),
+                q=q_np[i],
+                root_probs=p_np[i],
+                c_star=c_np[i],
+                margins=m_np[i],
+            )
+        )
+    return preds
+
+
+@torch.no_grad()
 def predict_sample(d: dict[str, Any], bundle: ModelBundle | None, cfg: dict | None = None) -> Prediction:
     if bundle is None:
         return teacher_prediction_from_sample(d, cfg)
