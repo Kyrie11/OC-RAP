@@ -224,6 +224,8 @@ training:
   save_every_epoch: true
   save_latest: true
   root_target_mode: recovery_signature
+  val_dataset: null
+  balanced_obs_loss: true
 loss_weights:
   assign: 1.0
   sig: 0.5
@@ -231,11 +233,14 @@ loss_weights:
   obs: 1.0
   margin: 2.0
   anti_oracle: 1.0
+  artifact_gap: 0.5
+  admission: 0.2
   utility: 0.2
 evaluation:
   batch_size: 64
   delta: 0.05
   allow_infinite_gamma: false
+  group_by_dataset: true
   methods:
   - nominal
   - risk_aware

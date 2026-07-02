@@ -55,6 +55,7 @@ def make_parser() -> argparse.ArgumentParser:
     add_common(p)
     p.add_argument("--dataset", required=True)
     p.add_argument("--output", required=True)
+    p.add_argument("--val-dataset", default=None, help="Optional explicit validation/calibration dataset root(s) for best checkpoint selection.")
     p = sub.add_parser("calibrate")
     add_common(p)
     p.add_argument("--dataset", required=True)
@@ -120,7 +121,7 @@ def main(argv: list[str] | None = None) -> None:
     elif args.cmd == "papercheck":
         result = papercheck_dataset(args.dataset, args.output, args.max_samples)
     elif args.cmd == "train":
-        result = train(args.dataset, args.output, cfg)
+        result = train(args.dataset, args.output, cfg, val_dataset=getattr(args, "val_dataset", None))
     elif args.cmd == "calibrate":
         result = calibrate(args.dataset, args.checkpoint, args.output, cfg)
     elif args.cmd == "evaluate":

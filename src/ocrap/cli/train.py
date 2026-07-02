@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 from ocrap.algorithms.ocmero import torch_oc_mero
 from ocrap.data.serialization import ensure_dir, write_json
 from ocrap.models.data import OCRAPSampleDataset, OPTION_FEATURE_DIM, iter_sample_paths_many, split_paths_by_npz_split
-from ocrap.models.losses import anti_oracle_loss
+from ocrap.models.losses import anti_oracle_loss, artifact_gap_loss, deployability_classification_loss
 from ocrap.models.ocrap import OCRAPModel
 from ocrap.utils.seed import seed_everything
 
@@ -72,14 +72,22 @@ def _root_signature_loss(out: dict[str, torch.Tensor], batch: dict[str, torch.Te
     return _masked_smooth_l1(pred, target, mask)
 
 
-def _obs_bce(pred_c: torch.Tensor, target_y: torch.Tensor, root_valid: torch.Tensor) -> torch.Tensor:
+def _obs_bce(pred_c: torch.Tensor, target_y: torch.Tensor, root_valid: torch.Tensor, *, balanced: bool = True) -> torch.Tensor:
     B, K, _ = pred_c.shape
     eye = torch.eye(K, dtype=torch.bool, device=pred_c.device).unsqueeze(0)
     pair_mask = root_valid.unsqueeze(1) & root_valid.unsqueeze(2) & (~eye)
     if not bool(pair_mask.any()):
         return pred_c.sum() * 0.0
-    pred = pred_c.clamp(1e-5, 1.0 - 1e-5)
-    return F.binary_cross_entropy(pred[pair_mask], target_y[pair_mask].float())
+    pred = pred_c.clamp(1e-5, 1.0 - 1e-5)[pair_mask]
+    target = target_y[pair_mask].float().clamp(0.0, 1.0)
+    if not balanced:
+        return F.binary_cross_entropy(pred, target)
+    pos = target >= 0.5
+    neg = ~pos
+    if not bool(pos.any()) or not bool(neg.any()):
+        return F.binary_cross_entropy(pred, target)
+    weights = torch.where(pos, 0.5 / pos.float().mean().clamp_min(1e-6), 0.5 / neg.float().mean().clamp_min(1e-6))
+    return F.binary_cross_entropy(pred, target, weight=weights)
 
 
 def _progress_iter(loader: DataLoader, *, enabled: bool, desc: str):
@@ -127,7 +135,12 @@ def _epoch(
         loss_margin = _masked_smooth_l1(out["margins"], margin_target, margin_mask)
         loss_sig = _root_signature_loss(out, batch, "root_signature")
         loss_future_sig = _root_signature_loss(out, batch, "root_future_signature")
-        loss_obs = _obs_bce(out["c_star"], batch["y_obs"], batch["root_valid"])
+        loss_obs = _obs_bce(
+            out["c_star"],
+            batch["y_obs"],
+            batch["root_valid"],
+            balanced=bool(tcfg.get("balanced_obs_loss", True)),
+        )
         r_dep, r_orc, gap, _q = torch_oc_mero(
             out["margins"],
             root_p,
@@ -143,8 +156,11 @@ def _epoch(
         loss_dep = F.smooth_l1_loss(r_dep, batch["r_dep_star"].float())
         loss_orc = F.smooth_l1_loss(r_orc, batch["r_orc_star"].float())
         loss_art = anti_oracle_loss(r_orc, r_dep, batch["i_art_star"].float(), delta_neg=float(art_cfg.get("delta_neg", 0.0)))
+        loss_gap = artifact_gap_loss(gap, (batch["r_orc_star"].float() - batch["r_dep_star"].float()).clamp_min(0.0), batch["i_art_star"].float(), margin=float(art_cfg.get("gap_margin", 0.5)))
+        loss_admit = deployability_classification_loss(r_dep, batch["r_dep_star"].float(), gamma=float(art_cfg.get("admission_gamma", 0.0)))
         if bool((cfg.get("ablation", {}) or {}).get("without_anti_oracle", False)):
             loss_art = loss_art * 0.0
+            loss_gap = loss_gap * 0.0
         loss_util = F.smooth_l1_loss(out["utility"], batch["utility"].float())
         total = (
             float(lw.get("assign", 1.0)) * loss_root
@@ -153,6 +169,8 @@ def _epoch(
             + float(lw.get("obs", 1.0)) * loss_obs
             + 0.5 * (loss_dep + loss_orc)
             + float(lw.get("anti_oracle", 1.0)) * loss_art
+            + float(lw.get("artifact_gap", 0.5)) * loss_gap
+            + float(lw.get("admission", 0.2)) * loss_admit
             + float(lw.get("utility", 0.2)) * loss_util
         )
         if training:
@@ -174,6 +192,8 @@ def _epoch(
             "loss_dep": loss_dep.item(),
             "loss_orc": loss_orc.item(),
             "loss_art": loss_art.item(),
+            "loss_gap": loss_gap.item(),
+            "loss_admission": loss_admit.item(),
             "loss_utility": loss_util.item(),
             "pred_r_dep_mean": r_dep.mean().item(),
             "teacher_r_dep_mean": batch["r_dep_star"].float().mean().item(),
@@ -200,7 +220,7 @@ def _make_sampler(ds: OCRAPSampleDataset, cfg: dict) -> WeightedRandomSampler | 
     return WeightedRandomSampler(torch.as_tensor(weights, dtype=torch.double), num_samples=len(weights), replacement=True)
 
 
-def train(dataset: str, output: str, cfg: dict) -> dict:
+def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) -> dict:
     seed_everything(int(cfg.get("seed", 7)))
     out = ensure_dir(output)
     print({"event": "dataset_scan_start", "dataset": str(dataset)}, flush=True)
@@ -208,13 +228,22 @@ def train(dataset: str, output: str, cfg: dict) -> dict:
     print({"event": "dataset_scan_done", "num_npz_paths": len(paths)}, flush=True)
     if not paths:
         raise ValueError(f"No OC-RAP sample .npz files found under {dataset}")
-    print({"event": "split_scan_start", "splits": ["train", "val"]}, flush=True)
+    tcfg_for_split = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
+    explicit_val_dataset = val_dataset or tcfg_for_split.get("val_dataset") or tcfg_for_split.get("validation_dataset")
+    print({"event": "split_scan_start", "splits": ["train", "val"], "explicit_val_dataset": bool(explicit_val_dataset)}, flush=True)
     train_paths = split_paths_by_npz_split(paths, "train")
-    val_paths = split_paths_by_npz_split(paths, "val")
+    if explicit_val_dataset:
+        val_all_paths = iter_sample_paths_many(str(explicit_val_dataset))
+        val_paths = split_paths_by_npz_split(val_all_paths, {"val", "calibration"})
+        if not val_paths:
+            val_paths = val_all_paths
+    else:
+        val_paths = split_paths_by_npz_split(paths, "val")
     print({"event": "split_scan_done", "num_train_paths": len(train_paths), "num_val_paths": len(val_paths)}, flush=True)
     if not train_paths:
         train_paths = paths
     if not val_paths:
+        print({"event": "validation_fallback_warning", "reason": "no explicit validation split; using first 10pct of training paths"}, flush=True)
         val_paths = train_paths[: max(1, min(len(train_paths), len(train_paths) // 10 or 1))]
 
     train_ds = OCRAPSampleDataset(train_paths, cfg)

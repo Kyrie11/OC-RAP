@@ -111,29 +111,17 @@ def _write_method_tables(result: dict, output: str | Path) -> None:
     except Exception:
         return
 
-def evaluate(dataset: str | Path, checkpoint: str | Path | None = None, output: str | Path | None = None, split: str = "test", calibration_json: str | Path | None = None, cfg: dict | None = None) -> dict:
-    cfg = cfg or {}
-    paths = iter_sample_paths_many(dataset)
-    print({"event": "evaluate_start", "num_npz_paths": len(paths), "split": split, "dataset": str(dataset)}, flush=True)
-    bundle = load_model_bundle(checkpoint, cfg)
-    grouped: dict[tuple[str, int], list[dict]] = {}
-    for idx, p in enumerate(paths, 1):
-        if idx == 1 or idx % 1000 == 0:
-            print({"event": "evaluate_progress", "seen": idx, "groups": len(grouped)}, flush=True)
-        d = load_npz(p)
-        if split and str(np.asarray(d.get("split_id", "")).item()) != split and split != "all":
-            continue
-        key = (str(np.asarray(d["scene_id"]).item()), int(np.asarray(d["time_index"]).item()))
-        pred = predict_sample(d, bundle, cfg)
-        teacher = teacher_prediction_from_sample(d, cfg)
-        grouped.setdefault(key, []).append({"path": p, "data": d, "pred": pred, "teacher": teacher})
+def _dataset_label_for_path(path: Path) -> str:
+    try:
+        # samples/foo.npz -> dataset root name; fallback to parent.
+        if path.parent.name == "samples":
+            return path.parent.parent.name
+        return path.parent.name
+    except Exception:
+        return "dataset"
 
-    print({"event": "evaluate_grouping_done", "num_scene_time_groups": len(grouped)}, flush=True)
-    gamma = _load_gamma(calibration_json, cfg)
-    sel_cfg = cfg.get("selection", {}) if isinstance(cfg.get("selection", {}), dict) else {}
-    gamma_H = float(sel_cfg.get("gamma_H", 0.0))
-    gamma_D = float(sel_cfg.get("gamma_D", 5.0))
-    methods = _method_list(cfg)
+
+def _evaluate_grouped_items(grouped: dict[tuple, list[dict]], methods: list[str], gamma: float, gamma_H: float, gamma_D: float, cfg: dict, split: str, source: str) -> tuple[dict[str, dict], dict[str, list[dict]]]:
     method_records: dict[str, list[dict]] = {m: [] for m in methods}
 
     for key, items in grouped.items():
@@ -175,12 +163,55 @@ def evaluate(dataset: str | Path, checkpoint: str | Path | None = None, output: 
                 "selected_teacher_r_orc": float(teacher_r_orc[selected_index]),
             })
 
-    source = "model" if bundle is not None else "teacher_fallback"
     summaries = {m: _records_summary(rs, split, gamma, source if m == "ocrap" else "dataset_label_baseline", len(grouped)) for m, rs in method_records.items()}
+    return summaries, method_records
+
+
+def evaluate(dataset: str | Path, checkpoint: str | Path | None = None, output: str | Path | None = None, split: str = "test", calibration_json: str | Path | None = None, cfg: dict | None = None) -> dict:
+    cfg = cfg or {}
+    paths = iter_sample_paths_many(dataset)
+    print({"event": "evaluate_start", "num_npz_paths": len(paths), "split": split, "dataset": str(dataset)}, flush=True)
+    bundle = load_model_bundle(checkpoint, cfg)
+    eval_cfg = cfg.get("evaluation", {}) if isinstance(cfg.get("evaluation", {}), dict) else {}
+    group_by_dataset = bool(eval_cfg.get("group_by_dataset", True))
+    grouped: dict[tuple, list[dict]] = {}
+    dataset_grouped: dict[str, dict[tuple, list[dict]]] = {}
+    for idx, p in enumerate(paths, 1):
+        if idx == 1 or idx % 1000 == 0:
+            print({"event": "evaluate_progress", "seen": idx, "groups": len(grouped)}, flush=True)
+        d = load_npz(p)
+        if split and str(np.asarray(d.get("split_id", "")).item()) != split and split != "all":
+            continue
+        dataset_label = _dataset_label_for_path(Path(p))
+        key_base = (str(np.asarray(d["scene_id"]).item()), int(np.asarray(d["time_index"]).item()))
+        key = (dataset_label, *key_base) if group_by_dataset else key_base
+        pred = predict_sample(d, bundle, cfg)
+        teacher = teacher_prediction_from_sample(d, cfg)
+        record = {"path": p, "dataset_label": dataset_label, "data": d, "pred": pred, "teacher": teacher}
+        grouped.setdefault(key, []).append(record)
+        dataset_grouped.setdefault(dataset_label, {}).setdefault(key_base, []).append(record)
+
+    print({"event": "evaluate_grouping_done", "num_scene_time_groups": len(grouped), "group_by_dataset": group_by_dataset, "dataset_labels": sorted(dataset_grouped)}, flush=True)
+    gamma = _load_gamma(calibration_json, cfg)
+    sel_cfg = cfg.get("selection", {}) if isinstance(cfg.get("selection", {}), dict) else {}
+    gamma_H = float(sel_cfg.get("gamma_H", 0.0))
+    gamma_D = float(sel_cfg.get("gamma_D", 5.0))
+    methods = _method_list(cfg)
+    source = "model" if bundle is not None else "teacher_fallback"
+    summaries, _records = _evaluate_grouped_items(grouped, methods, gamma, gamma_H, gamma_D, cfg, split, source)
     result = summaries.get("ocrap", next(iter(summaries.values()), {}))
     result = dict(result)
     result["methods"] = summaries
     result["method_order"] = methods
+    result["group_by_dataset"] = group_by_dataset
+    result["dataset_group_count"] = {k: len(v) for k, v in sorted(dataset_grouped.items())}
+    result["per_dataset"] = {}
+    for label, sub_grouped in sorted(dataset_grouped.items()):
+        sub_summaries, _ = _evaluate_grouped_items(sub_grouped, methods, gamma, gamma_H, gamma_D, cfg, split, source)
+        sub_result = dict(sub_summaries.get("ocrap", next(iter(sub_summaries.values()), {})))
+        sub_result["methods"] = sub_summaries
+        sub_result["method_order"] = methods
+        result["per_dataset"][label] = sub_result
     if output:
         write_json(result, output)
         _write_method_tables(result, output)

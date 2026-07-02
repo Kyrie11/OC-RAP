@@ -493,6 +493,8 @@ def _sample_unknown_spawn(history: SceneHistory, cfg: dict, rng: np.random.Gener
     mask = history.occ_mask
     if mask.size == 0 or mask.shape[0] < 6:
         return None
+    wx_cfg = cfg.get("waymax", {}) if isinstance(cfg.get("waymax", {}), dict) else {}
+    unknown_only = bool(wx_cfg.get("augmented_hidden_from_unknown_only", True))
     unknown = mask[2] > 0.5
     drivable = mask[5] > 0.5
     visible_free = mask[0] > 0.5
@@ -501,6 +503,20 @@ def _sample_unknown_spawn(history: SceneHistory, cfg: dict, rng: np.random.Gener
     legal = unknown & drivable & ~visible_free & ~occupied
     route_legal = legal & route
     cells = np.argwhere(route_legal if route_legal.any() else legal)
+    from_unknown = True
+    fallback_visible_free = False
+    if cells.size == 0 and not unknown_only:
+        # Some WOMD/test shards have almost no legal unknown-drivable cells, which
+        # silently disables hidden-yield/accelerate artifact mining.  For explicit
+        # stress-test builds, allow a deterministic route/drivable fallback while
+        # tagging provenance so paper-scale occlusion-only claims can still filter
+        # these examples out.
+        fallback = drivable & ~occupied
+        route_fallback = fallback & route
+        cells = np.argwhere(route_fallback if route_fallback.any() else fallback)
+        from_unknown = False
+        if cells.size == 0:
+            return None
     if cells.size == 0:
         return None
     radius = float(cfg.get("local_radius_m", 80.0))
@@ -511,7 +527,15 @@ def _sample_unknown_spawn(history: SceneHistory, cfg: dict, rng: np.random.Gener
     k = int(rng.choice(order))
     iy, ix = cells[k]
     loc = xy[k]
-    return loc, {"hidden_spawn_xy": [float(loc[0]), float(loc[1])], "hidden_spawn_cell": [int(iy), int(ix)], "from_unknown_mask": True, "spawn_in_visible_free": False}
+    if not from_unknown:
+        fallback_visible_free = bool(visible_free[int(iy), int(ix)])
+    return loc, {
+        "hidden_spawn_xy": [float(loc[0]), float(loc[1])],
+        "hidden_spawn_cell": [int(iy), int(ix)],
+        "from_unknown_mask": bool(from_unknown),
+        "spawn_in_visible_free": bool(fallback_visible_free),
+        "synthetic_hidden_spawn_fallback": bool(not from_unknown),
+    }
 
 
 def can_mine_augmented_hidden_pair(history: SceneHistory, prefix: CandidatePrefix, cfg: dict) -> bool:

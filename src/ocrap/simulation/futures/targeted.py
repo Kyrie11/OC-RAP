@@ -84,6 +84,8 @@ def sample_unknown_spawn(history: SceneHistory, cfg: dict, rng: np.random.Genera
     mask = history.occ_mask
     if mask.size == 0 or mask.shape[0] < 6:
         return None
+    wx_cfg = cfg.get("waymax", {}) if isinstance(cfg.get("waymax", {}), dict) else {}
+    unknown_only = bool(wx_cfg.get("augmented_hidden_from_unknown_only", True))
     unknown = mask[2] > 0.5
     drivable = mask[5] > 0.5
     visible_free = mask[0] > 0.5
@@ -92,6 +94,13 @@ def sample_unknown_spawn(history: SceneHistory, cfg: dict, rng: np.random.Genera
     legal = unknown & drivable & ~visible_free & ~occupied
     route_legal = legal & route
     cells = np.argwhere(route_legal if route_legal.any() else legal)
+    from_unknown = True
+    fallback_visible_free = False
+    if len(cells) == 0 and not unknown_only:
+        fallback = drivable & ~occupied
+        route_fallback = fallback & route
+        cells = np.argwhere(route_fallback if route_fallback.any() else fallback)
+        from_unknown = False
     if len(cells) == 0:
         return None
     # Prefer cells ahead and near the route, but sample stably.
@@ -101,7 +110,16 @@ def sample_unknown_spawn(history: SceneHistory, cfg: dict, rng: np.random.Genera
     k = int(rng.choice(order))
     iy, ix = cells[k]
     x, y = _cell_to_xy(int(iy), int(ix), mask, cfg)
-    meta = {"hidden_spawn_xy": [x, y], "hidden_spawn_cell": [int(iy), int(ix)], "from_unknown_mask": True, "hidden_invalid_spawn": False, "spawn_in_visible_free": False}
+    if not from_unknown:
+        fallback_visible_free = bool(visible_free[int(iy), int(ix)])
+    meta = {
+        "hidden_spawn_xy": [x, y],
+        "hidden_spawn_cell": [int(iy), int(ix)],
+        "from_unknown_mask": bool(from_unknown),
+        "hidden_invalid_spawn": False,
+        "spawn_in_visible_free": bool(fallback_visible_free),
+        "synthetic_hidden_spawn_fallback": bool(not from_unknown),
+    }
     return x, y, meta
 
 
