@@ -7,7 +7,7 @@ import numpy as np
 from ocrap.data.serialization import load_npz, write_json
 from ocrap.evaluation.baselines import BASELINES, select_baseline
 from ocrap.evaluation.metrics import deployable_recovery_success, false_recoverability_admission, nominal_utility_preservation, summarize_selection_metrics
-from ocrap.models.data import iter_sample_paths_many
+from ocrap.models.data import iter_sample_paths_many, scalar_metadata_for_path
 from ocrap.models.inference import load_model_bundle, predict_sample, teacher_prediction_from_sample
 
 
@@ -179,9 +179,11 @@ def evaluate(dataset: str | Path, checkpoint: str | Path | None = None, output: 
     for idx, p in enumerate(paths, 1):
         if idx == 1 or idx % 1000 == 0:
             print({"event": "evaluate_progress", "seen": idx, "groups": len(grouped)}, flush=True)
+        if split and split != "all":
+            sid = str(scalar_metadata_for_path(p, "split_id", ""))
+            if sid != split:
+                continue
         d = load_npz(p)
-        if split and str(np.asarray(d.get("split_id", "")).item()) != split and split != "all":
-            continue
         dataset_label = _dataset_label_for_path(Path(p))
         key_base = (str(np.asarray(d["scene_id"]).item()), int(np.asarray(d["time_index"]).item()))
         key = (dataset_label, *key_base) if group_by_dataset else key_base

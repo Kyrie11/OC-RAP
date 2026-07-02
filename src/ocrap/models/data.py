@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import csv
 import os
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +27,82 @@ RECOVERY_MODE_VOCAB = [
 RECOVERY_MODE_TO_ID = {name: i for i, name in enumerate(RECOVERY_MODE_VOCAB)}
 OPTION_PARAM_DIM = 3
 OPTION_FEATURE_DIM = len(RECOVERY_MODE_VOCAB) + OPTION_PARAM_DIM + 2
+
+
+def _path_key(path: str | Path) -> str:
+    """Stable absolute key for matching sample paths to manifest rows."""
+    return os.path.abspath(os.fspath(path))
+
+
+def _dataset_root_for_sample(path: str | Path) -> Path:
+    """Return the OC-RAP dataset root for either root/samples/x.npz or root/x.npz."""
+    p = Path(path)
+    return p.parent.parent if p.parent.name == "samples" else p.parent
+
+
+@lru_cache(maxsize=128)
+def _manifest_metadata_map(dataset_root_key: str) -> dict[str, dict[str, str]]:
+    """Load lightweight per-sample metadata from dataset_root/manifest.csv.
+
+    Training only needs metadata such as split_id and i_art_star for pre-flight
+    filtering/sampling.  Reading those fields from the manifest avoids opening
+    every compressed .npz before the first epoch.
+    """
+    root = Path(dataset_root_key)
+    manifest = root / "manifest.csv"
+    if not manifest.exists():
+        return {}
+    out: dict[str, dict[str, str]] = {}
+    try:
+        with manifest.open("r", newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                raw_path = str(row.get("path", "")).strip()
+                if not raw_path:
+                    continue
+                sample_path = Path(raw_path)
+                if not sample_path.is_absolute():
+                    sample_path = root / sample_path
+                out[_path_key(sample_path)] = {str(k): "" if v is None else str(v) for k, v in row.items()}
+    except Exception:
+        return {}
+    return out
+
+
+def manifest_metadata_for_path(path: str | Path) -> dict[str, str] | None:
+    """Return manifest metadata for a sample path when available."""
+    root = _dataset_root_for_sample(path)
+    table = _manifest_metadata_map(_path_key(root))
+    return table.get(_path_key(path)) if table else None
+
+
+def npz_scalar(path: str | Path, key: str, default: Any = None) -> Any:
+    """Read a single scalar-like value from an .npz without materializing arrays.
+
+    This is intentionally different from load_npz(), which expands every array in
+    the archive.  It keeps split filtering and sampler construction cheap even
+    for large compressed samples containing BEV/map/history tensors.
+    """
+    try:
+        with np.load(path, allow_pickle=True) as z:
+            if key not in z.files:
+                return default
+            arr = np.asarray(z[key])
+            if arr.shape == ():
+                return arr.item()
+            if arr.size == 1:
+                return arr.reshape(-1)[0].item()
+            return arr.tolist()
+    except Exception:
+        return default
+
+
+def scalar_metadata_for_path(path: str | Path, key: str, default: Any = None) -> Any:
+    """Read metadata from manifest.csv first, falling back to one-key NPZ read."""
+    row = manifest_metadata_for_path(path)
+    if row is not None and key in row and row.get(key, "") != "":
+        return row.get(key, default)
+    return npz_scalar(path, key, default)
 
 
 def iter_sample_paths_many(dataset: str | Path, max_samples: int | None = None) -> list[Path]:
@@ -431,13 +509,11 @@ class OCRAPSampleDataset(Dataset):
 
 def split_paths_by_npz_split(paths: list[Path], split: str | set[str]) -> list[Path]:
     splits = {split} if isinstance(split, str) else set(split)
+    if "all" in splits:
+        return list(paths)
     keep: list[Path] = []
     for p in paths:
-        try:
-            d = load_npz(p)
-            sid = str(np.asarray(d.get("split_id", "")).item())
-            if sid in splits or "all" in splits:
-                keep.append(p)
-        except Exception:
-            continue
+        sid = str(scalar_metadata_for_path(p, "split_id", ""))
+        if sid in splits:
+            keep.append(p)
     return keep

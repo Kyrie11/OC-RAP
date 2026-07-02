@@ -6,7 +6,7 @@ import numpy as np
 
 from ocrap.algorithms.lcv import finite_sample_upper_quantile
 from ocrap.data.serialization import load_npz, write_json
-from ocrap.models.data import iter_sample_paths_many
+from ocrap.models.data import iter_sample_paths_many, scalar_metadata_for_path
 from ocrap.models.inference import load_model_bundle, predict_sample
 
 
@@ -25,10 +25,10 @@ def calibrate(dataset: str, checkpoint: str | None = None, output: str | None = 
     for idx, p in enumerate(paths, 1):
         if idx == 1 or idx % 1000 == 0:
             print({"event": "calibrate_progress", "seen": idx, "kept": len(scores)}, flush=True)
-        d = load_npz(p)
-        split = str(np.asarray(d.get("split_id", "")).item())
+        split = str(scalar_metadata_for_path(p, "split_id", ""))
         if split != "calibration":
             continue
+        d = load_npz(p)
         pred = predict_sample(d, bundle, cfg)
         scores.append(float(pred.r_dep))
         teacher.append(float(np.asarray(d["r_dep_star"]).item()))
@@ -39,10 +39,10 @@ def calibrate(dataset: str, checkpoint: str | None = None, output: str | None = 
         for idx, p in enumerate(paths, 1):
             if idx == 1 or idx % 1000 == 0:
                 print({"event": "calibrate_val_fallback_progress", "seen": idx, "kept": len(scores)}, flush=True)
-            d = load_npz(p)
-            split = str(np.asarray(d.get("split_id", "")).item())
+            split = str(scalar_metadata_for_path(p, "split_id", ""))
             if split != "val":
                 continue
+            d = load_npz(p)
             pred = predict_sample(d, bundle, cfg)
             scores.append(float(pred.r_dep))
             teacher.append(float(np.asarray(d["r_dep_star"]).item()))

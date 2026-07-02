@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 
 from ocrap.algorithms.ocmero import torch_oc_mero
 from ocrap.data.serialization import ensure_dir, write_json
-from ocrap.models.data import OCRAPSampleDataset, OPTION_FEATURE_DIM, iter_sample_paths_many, split_paths_by_npz_split
+from ocrap.models.data import OCRAPSampleDataset, OPTION_FEATURE_DIM, iter_sample_paths_many, scalar_metadata_for_path, split_paths_by_npz_split
 from ocrap.models.losses import anti_oracle_loss, artifact_gap_loss, deployability_classification_loss
 from ocrap.models.ocrap import OCRAPModel
 from ocrap.utils.seed import seed_everything
@@ -208,15 +208,18 @@ def _make_sampler(ds: OCRAPSampleDataset, cfg: dict) -> WeightedRandomSampler | 
     if weight_art <= 0:
         return None
     weights = []
-    for p in ds.paths:
+    num_artifacts = 0
+    total = len(ds.paths)
+    for idx, p in enumerate(ds.paths, 1):
+        if idx == 1 or idx % 5000 == 0 or idx == total:
+            print({"event": "sampler_scan_progress", "seen": idx, "total": total}, flush=True)
         try:
-            from ocrap.data.serialization import load_npz
-
-            d = load_npz(p)
-            is_art = float(np.asarray(d.get("i_art_star", 0)).item()) > 0.5
+            is_art = float(np.asarray(scalar_metadata_for_path(p, "i_art_star", 0)).item()) > 0.5
+            num_artifacts += int(is_art)
             weights.append(1.0 + (weight_art if is_art else 0.0))
         except Exception:
             weights.append(1.0)
+    print({"event": "sampler_scan_stats", "num_artifacts": int(num_artifacts), "artifact_fraction": float(num_artifacts / max(total, 1))}, flush=True)
     return WeightedRandomSampler(torch.as_tensor(weights, dtype=torch.double), num_samples=len(weights), replacement=True)
 
 
