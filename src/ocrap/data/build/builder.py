@@ -1116,36 +1116,77 @@ def _read_existing_manifest_rows(out: Path, existing_names: set[str]) -> list[di
     return rows
 
 
-def _bootstrap_existing_samples(out: Path, sample_dir: Path) -> tuple[set[str], dict[str, int], list[dict], int]:
+def _bootstrap_existing_samples(out: Path, sample_dir: Path, *, show_progress: bool = False) -> tuple[set[str], dict[str, int], list[dict], int]:
+    """Validate and index existing samples for a safe resumable build.
+
+    This intentionally validates the NPZ container and required OC-RAP fields
+    before a file is considered resumable.  For large partially-built datasets
+    that scan can take a while on network storage, so show a separate progress
+    bar instead of looking like the build is stuck before the main tqdm starts.
+    """
     existing_names: set[str] = set()
     existing_paths: dict[str, Path] = {}
     existing_counts_by_scene_time: dict[str, int] = defaultdict(int)
     invalid_quarantined = 0
-    for path in sample_dir.glob("*.npz"):
-        if not _is_complete_npz(path):
-            invalid_quarantined += int(_quarantine_invalid_existing_sample(path, sample_dir))
-            continue
-        existing_names.add(path.name)
-        existing_paths[path.name] = path
-        key = _scene_time_key_from_sample_name(path.name)
-        if key is not None:
-            existing_counts_by_scene_time[key] += 1
+    paths = sorted(sample_dir.glob("*.npz"))
+    iterator = paths
+    progress_bar = None
+    if show_progress and paths:
+        try:
+            from tqdm.auto import tqdm
+
+            progress_bar = tqdm(total=len(paths), desc="OC-RAP scan existing", unit="npz", leave=False)
+        except Exception:
+            progress_bar = None
+    try:
+        for path in iterator:
+            if not _is_complete_npz(path):
+                invalid_quarantined += int(_quarantine_invalid_existing_sample(path, sample_dir))
+                if progress_bar is not None:
+                    progress_bar.update(1)
+                continue
+            existing_names.add(path.name)
+            existing_paths[path.name] = path
+            key = _scene_time_key_from_sample_name(path.name)
+            if key is not None:
+                existing_counts_by_scene_time[key] += 1
+            if progress_bar is not None:
+                progress_bar.update(1)
+    finally:
+        if progress_bar is not None:
+            progress_bar.close()
 
     manifest_rows = _read_existing_manifest_rows(out, existing_names)
     manifest_names = {Path(row.get("path", "")).name for row in manifest_rows}
-    for name in sorted(existing_names - manifest_names):
+    missing_manifest = sorted(existing_names - manifest_names)
+    progress_bar = None
+    if show_progress and missing_manifest:
         try:
-            manifest_rows.append(_manifest_row_from_npz(existing_paths[name], out))
+            from tqdm.auto import tqdm
+
+            progress_bar = tqdm(total=len(missing_manifest), desc="OC-RAP rebuild manifest", unit="npz", leave=False)
         except Exception:
-            # A file can pass the container/schema check but still fail while
-            # reading metadata from an older incompatible run.  Remove it from the
-            # resumable set and quarantine it so direct samples/*.npz validation
-            # will not see the bad file.
-            existing_names.discard(name)
-            invalid_quarantined += int(_quarantine_invalid_existing_sample(existing_paths[name], sample_dir))
-            key = _scene_time_key_from_sample_name(name)
-            if key is not None and existing_counts_by_scene_time.get(key, 0) > 0:
-                existing_counts_by_scene_time[key] -= 1
+            progress_bar = None
+    try:
+        for name in missing_manifest:
+            try:
+                manifest_rows.append(_manifest_row_from_npz(existing_paths[name], out))
+            except Exception:
+                # A file can pass the container/schema check but still fail while
+                # reading metadata from an older incompatible run.  Remove it from the
+                # resumable set and quarantine it so direct samples/*.npz validation
+                # will not see the bad file.
+                existing_names.discard(name)
+                invalid_quarantined += int(_quarantine_invalid_existing_sample(existing_paths[name], sample_dir))
+                key = _scene_time_key_from_sample_name(name)
+                if key is not None and existing_counts_by_scene_time.get(key, 0) > 0:
+                    existing_counts_by_scene_time[key] -= 1
+            finally:
+                if progress_bar is not None:
+                    progress_bar.update(1)
+    finally:
+        if progress_bar is not None:
+            progress_bar.close()
     return existing_names, dict(existing_counts_by_scene_time), manifest_rows, invalid_quarantined
 
 
@@ -1267,7 +1308,9 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
     manifest_rows: list[dict] = []
     invalid_existing_samples_quarantined = 0
     if skip_existing:
-        existing_sample_names, existing_counts_by_scene_time, manifest_rows, invalid_existing_samples_quarantined = _bootstrap_existing_samples(out, sample_dir)
+        existing_sample_names, existing_counts_by_scene_time, manifest_rows, invalid_existing_samples_quarantined = _bootstrap_existing_samples(
+            out, sample_dir, show_progress=bool(cfg.get("progress", True))
+        )
     split_counts: dict[str, int] = _count_splits(manifest_rows)
     total = len(manifest_rows)
     initial_existing_total = len(existing_sample_names)
@@ -1334,9 +1377,56 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
         except Exception:
             progress_bar = None
 
+    last_status_write_s = 0.0
+
     def _progress(n: int) -> None:
         if progress_bar is not None:
             progress_bar.update(int(n))
+
+    def _heartbeat(*, force: bool = False) -> None:
+        """Lightweight liveness update for long resume runs.
+
+        In --skip-existing mode the main progress bar counts existing/new samples,
+        while expensive partial scene-times may spend minutes recomputing prefixes
+        before any new sample is written.  This heartbeat updates the tqdm postfix
+        and dataset_status.json without changing the sample count.
+        """
+        nonlocal last_status_write_s
+        now = _now()
+        if not force and (now - last_status_write_s) < 10.0:
+            return
+        last_status_write_s = now
+        if progress_bar is not None and skip_existing:
+            try:
+                progress_bar.set_postfix({
+                    "raw": int(raw_scenarios_seen),
+                    "groups": int(scene_time_groups),
+                    "new": int(new_samples_written),
+                    "skip_g": int(skipped_existing_scene_time_groups),
+                    "skip_s": int(skipped_existing_samples),
+                }, refresh=True)
+            except Exception:
+                pass
+        _write_running_status(
+            out,
+            num_samples=int(total),
+            split_counts=split_counts,
+            sample_dir=str(sample_dir),
+            raw_scenarios_seen=int(raw_scenarios_seen),
+            scene_time_groups=int(scene_time_groups),
+            new_samples_written=int(new_samples_written),
+            skipped_existing_samples=int(skipped_existing_samples),
+            skipped_existing_scene_time_groups=int(skipped_existing_scene_time_groups),
+            progress_mode=progress_mode,
+            profile_csv=str(profile_path) if profiling else "",
+            profile_live_csv=str(live_profile_path) if profiling else "",
+            scene_profile_csv=str(scene_profile_path) if profiling else "",
+            stage_profile_json=str(stage_profile_path) if profiling else "",
+            stage_totals_s={k: float(v) for k, v in sorted(stage_totals.items())},
+        )
+
+    def _resume_activity(_n: int) -> None:
+        _heartbeat()
 
     def _flush_profiles() -> None:
         nonlocal sample_profile_rows, scene_profile_rows
@@ -1376,6 +1466,7 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
             _stage_add(stage_totals, "scenario_next_s", _now() - next_t0)
             raw_scenarios_seen += 1
             raw_scene_ids.add(str(raw.scenario_id))
+            _heartbeat()
             split_id = resolve_split(raw.scenario_id, cfg)
             select_t0 = _now()
             times, reasons_by_time = select_planning_times_with_reasons(raw, cfg)
@@ -1400,9 +1491,10 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
                     if expected > 0 and existing_counts_by_scene_time.get(key, 0) >= expected:
                         skipped_existing_scene_time_groups += 1
                         _profile_log(cfg, f"scene_time skip-existing scene={history.scene_id} t={int(t)} existing={existing_counts_by_scene_time.get(key, 0)} expected={expected}")
+                        _heartbeat(force=True)
                         continue
                 build_samples_t0 = _now()
-                samples = build_samples_for_history(history, split_id, cfg, progress_callback=None if skip_existing else _progress)
+                samples = build_samples_for_history(history, split_id, cfg, progress_callback=_resume_activity if skip_existing else _progress)
                 build_samples_s = _now() - build_samples_t0
                 _stage_add(stage_totals, "build_samples_s", build_samples_s)
                 npz_serialize_s = 0.0
@@ -1430,6 +1522,7 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
                         sample_profile_rows.append(_sample_profile_row(sample, total))
                     if skip_existing:
                         _progress(1)
+                        _heartbeat()
                     if profiling and bool(prof_cfg.get("log_writes", False)):
                         _profile_log(cfg, f"wrote sample #{total} path={path}")
                 _stage_add(stage_totals, "npz_serialize_s", npz_serialize_s)
