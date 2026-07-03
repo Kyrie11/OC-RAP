@@ -1,0 +1,28 @@
+{
+  "new_samples_written": 0,
+  "num_samples": 2058,
+  "profile_csv": "",
+  "profile_live_csv": "",
+  "progress_mode": "samples",
+  "raw_scenarios_seen": 2,
+  "sample_dir": "/data0/senzeyu2/dataset/OCRAP/test_near_contact/samples",
+  "scene_profile_csv": "",
+  "scene_time_groups": 5,
+  "skipped_existing_samples": 0,
+  "skipped_existing_scene_time_groups": 3,
+  "split_counts": {
+    "calibration": 0,
+    "test": 2058,
+    "train": 0,
+    "val": 0
+  },
+  "stage_profile_json": "",
+  "stage_totals_s": {
+    "build_samples_s": 295.5292269368656,
+    "construct_history_s": 0.09422037051990628,
+    "npz_serialize_s": 0.0,
+    "npz_write_s": 0.0,
+    "planning_time_selection_s": 0.013207681011408567,
+    "scenario_next_s": 10.307391598820686
+  }
+}

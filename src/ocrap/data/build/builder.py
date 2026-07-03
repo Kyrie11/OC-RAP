@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import itertools
 import json
 import os
@@ -1295,6 +1296,117 @@ def _count_splits(rows: list[dict]) -> dict[str, int]:
     return split_counts
 
 
+_RESUME_VOLATILE_CFG_KEYS = {
+    "progress",
+    "skip_existing",
+    "profiling",
+    "io",
+    "dataset_io",
+    "compress_npz",
+    "fsync_npz",
+    "checkpoint_manifest_each_scene_time",
+}
+
+
+def _resume_jsonable(obj: Any) -> Any:
+    """Return a stable JSON representation for resume-marker fingerprints."""
+    if isinstance(obj, dict):
+        out: dict[str, Any] = {}
+        for key in sorted(obj.keys(), key=lambda x: str(x)):
+            skey = str(key)
+            if skey.startswith("_") or skey in _RESUME_VOLATILE_CFG_KEYS:
+                continue
+            out[skey] = _resume_jsonable(obj[key])
+        return out
+    if isinstance(obj, (list, tuple)):
+        return [_resume_jsonable(v) for v in obj]
+    if isinstance(obj, set):
+        return sorted(_resume_jsonable(v) for v in obj)
+    if isinstance(obj, (str, int, float, bool)) or obj is None:
+        return obj
+    return str(obj)
+
+
+def _resume_config_fingerprint(cfg: dict) -> str:
+    """Fingerprint sample-generation config for safe scene-time completion markers.
+
+    The marker is intentionally tied to generation/selection parameters.  It
+    excludes progress/profiling/I/O-only settings so changing a tqdm or fsync flag
+    does not invalidate resume state, but changing regimes, futures, thresholds,
+    teacher settings, or scenario source does.
+    """
+    payload = json.dumps(_resume_jsonable(cfg), sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def _scene_time_done_path(out: Path) -> Path:
+    return out / "resume_scene_time_done.jsonl"
+
+
+def _load_completed_scene_time_keys(out: Path, existing_names: set[str], fingerprint: str) -> set[str]:
+    """Load scene-time completion markers that are valid for this config.
+
+    A marker is trusted only when its config fingerprint matches.  For non-empty
+    scene-times, all marked sample files must still be present in the validated
+    existing sample set.  Empty scene-times are also useful: they record that this
+    cfg deterministically produced no accepted samples for that scene-time, so a
+    future --skip-existing run can avoid recomputing it forever.
+    """
+    path = _scene_time_done_path(out)
+    if not path.exists():
+        return set()
+    keys: set[str] = set()
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except Exception:
+                    continue
+                if str(row.get("fingerprint", "")) != str(fingerprint):
+                    continue
+                key = str(row.get("key", ""))
+                if not key:
+                    continue
+                sample_names = [str(x) for x in row.get("sample_names", []) if str(x)]
+                if sample_names and not all(name in existing_names for name in sample_names):
+                    continue
+                keys.add(key)
+    except Exception:
+        return set()
+    return keys
+
+
+def _append_completed_scene_time_marker(out: Path, *, key: str, fingerprint: str, sample_names: list[str]) -> None:
+    """Append a best-effort completion marker after a scene-time is fully processed.
+
+    The marker is not used as a source of truth for samples.  It only lets a later
+    --skip-existing run skip expensive recomputation for underfull-but-complete
+    scene-times.  If writing the marker fails, dataset generation must continue;
+    the next run will simply recompute that scene-time once more.
+    """
+    if not key:
+        return
+    row = {
+        "key": str(key),
+        "fingerprint": str(fingerprint),
+        "sample_count": int(len(sample_names)),
+        "sample_names": [str(name) for name in sample_names],
+        "written_unix_s": float(time.time()),
+    }
+    try:
+        path = _scene_time_done_path(out)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row, sort_keys=True, ensure_ascii=False) + "\n")
+            f.flush()
+    except Exception:
+        return
+
+
 def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False) -> dict:
     # Use a shallow copy so live profiling counters/private paths do not leak back
     # into caller-owned config objects, while nested user config remains intact.
@@ -1307,16 +1419,22 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
     existing_counts_by_scene_time: dict[str, int] = {}
     manifest_rows: list[dict] = []
     invalid_existing_samples_quarantined = 0
+    resume_fingerprint = _resume_config_fingerprint(cfg)
+    completed_scene_time_keys: set[str] = set()
     if skip_existing:
         existing_sample_names, existing_counts_by_scene_time, manifest_rows, invalid_existing_samples_quarantined = _bootstrap_existing_samples(
             out, sample_dir, show_progress=bool(cfg.get("progress", True))
         )
+        completed_scene_time_keys = _load_completed_scene_time_keys(out, existing_sample_names, resume_fingerprint)
+    completed_scene_time_markers_indexed = len(completed_scene_time_keys)
     split_counts: dict[str, int] = _count_splits(manifest_rows)
     total = len(manifest_rows)
     initial_existing_total = len(existing_sample_names)
     skipped_existing_samples = 0
     skipped_existing_scene_time_groups = 0
+    skipped_completed_scene_time_groups = 0
     new_samples_written = 0
+    current_scene_time_key = ""
     raw_scenarios_seen = 0
     scene_time_groups = 0
     skipped_no_planning_times = 0
@@ -1403,6 +1521,7 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
                     "groups": int(scene_time_groups),
                     "new": int(new_samples_written),
                     "skip_g": int(skipped_existing_scene_time_groups),
+                    "done_g": int(skipped_completed_scene_time_groups),
                     "skip_s": int(skipped_existing_samples),
                 }, refresh=True)
             except Exception:
@@ -1417,6 +1536,10 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
             new_samples_written=int(new_samples_written),
             skipped_existing_samples=int(skipped_existing_samples),
             skipped_existing_scene_time_groups=int(skipped_existing_scene_time_groups),
+            skipped_completed_scene_time_groups=int(skipped_completed_scene_time_groups),
+            completed_scene_time_markers_indexed=int(completed_scene_time_markers_indexed),
+            current_scene_time_key=str(current_scene_time_key),
+            scene_time_done_path=str(_scene_time_done_path(out)) if skip_existing else "",
             progress_mode=progress_mode,
             profile_csv=str(profile_path) if profiling else "",
             profile_live_csv=str(live_profile_path) if profiling else "",
@@ -1485,8 +1608,14 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
                 _profile_log(cfg, f"scene_time start scene={history.scene_id} t={int(t)} group={scene_time_groups}")
                 # Retain only the reasons that actually selected this planning instant.
                 history.metadata["time_sampling_reasons"] = reasons_by_time.get(int(t), ["uniform"])
+                key = _scene_time_key(history.scene_id, int(t))
+                current_scene_time_key = key
                 if skip_existing:
-                    key = _scene_time_key(history.scene_id, int(t))
+                    if key in completed_scene_time_keys:
+                        skipped_completed_scene_time_groups += 1
+                        _profile_log(cfg, f"scene_time skip-existing completed-marker scene={history.scene_id} t={int(t)}")
+                        _heartbeat(force=True)
+                        continue
                     expected = _expected_samples_per_scene_time(cfg)
                     if expected > 0 and existing_counts_by_scene_time.get(key, 0) >= expected:
                         skipped_existing_scene_time_groups += 1
@@ -1525,6 +1654,10 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
                         _heartbeat()
                     if profiling and bool(prof_cfg.get("log_writes", False)):
                         _profile_log(cfg, f"wrote sample #{total} path={path}")
+                if skip_existing:
+                    completed_names = [_sample_filename(s.scene_id, s.time_index, s.candidate_index) for s in samples]
+                    _append_completed_scene_time_marker(out, key=key, fingerprint=resume_fingerprint, sample_names=completed_names)
+                    completed_scene_time_keys.add(key)
                 _stage_add(stage_totals, "npz_serialize_s", npz_serialize_s)
                 _stage_add(stage_totals, "npz_write_s", npz_write_s)
                 manifest_checkpoint_s = 0.0
@@ -1609,6 +1742,9 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
         "invalid_existing_samples_quarantined": int(invalid_existing_samples_quarantined),
         "skipped_existing_samples": int(skipped_existing_samples),
         "skipped_existing_scene_time_groups": int(skipped_existing_scene_time_groups),
+        "skipped_completed_scene_time_groups": int(skipped_completed_scene_time_groups),
+        "completed_scene_time_markers_indexed": int(completed_scene_time_markers_indexed),
+        "scene_time_done_path": str(_scene_time_done_path(out)) if skip_existing else "",
         "new_samples_written": int(new_samples_written),
         "progress_mode": progress_mode,
         "raw_scenarios_seen": int(raw_scenarios_seen),
