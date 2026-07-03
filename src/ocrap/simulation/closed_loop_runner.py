@@ -12,6 +12,7 @@ from ocrap.data.serialization import write_json
 from ocrap.data.waymax_loader import iter_waymax_womd_scenarios, raw_scenario_from_waymax_state
 from ocrap.evaluation.baselines import select_baseline
 from ocrap.evaluation.metrics import deployable_recovery_success, false_recoverability_admission, nominal_utility_preservation
+from ocrap.models.data import iter_sample_paths_many, scalar_metadata_for_path
 from ocrap.models.inference import ModelBundle, load_model_bundle, predict_sample, predict_samples, teacher_prediction_from_sample
 from ocrap.simulation.waymax_rollout import _as_np, _bicycle_action, _make_env, _metric_summary, _sdc_index
 
@@ -159,20 +160,34 @@ def _select_prefix(
     }
     return idx, info
 
-def _rollout_one_scene(raw, scenario_rank: int, bundle: ModelBundle | None, cfg: dict, method: str, gamma: float) -> dict[str, Any]:
+def _rollout_one_scene(
+    raw,
+    scenario_rank: int,
+    bundle: ModelBundle | None,
+    cfg: dict,
+    method: str,
+    gamma: float,
+    *,
+    start_time_index_override: int | None = None,
+    bucket_name: str | None = None,
+    target_key: str | None = None,
+) -> dict[str, Any]:
     import jax  # type: ignore
 
     cl_cfg = cfg.get("closed_loop", {}) if isinstance(cfg.get("closed_loop", {}), dict) else {}
     max_steps = int(cl_cfg.get("max_steps", 40))
     replan_interval = max(1, int(cl_cfg.get("replan_interval_steps", 1)))
-    start_t = cl_cfg.get("start_time_index", None)
+    start_t = start_time_index_override if start_time_index_override is not None else cl_cfg.get("start_time_index", None)
     if start_t is None:
         start_t = int((cfg.get("waymax", {}) or {}).get("init_history_steps", 11)) - 1
     start_t = int(start_t)
     requested_label_mode = str(cl_cfg.get("label_mode", "fast")).lower()
     label_mode = requested_label_mode
-    if method != "ocrap" or bundle is None:
-        # Dataset-label baselines and teacher fallback require real OC-MERO labels.
+    teacher_required_methods = {"backup_filter", "oracle_filter", "contingency", "ocrap_teacher"}
+    if method in teacher_required_methods or (method == "ocrap" and bundle is None):
+        # Branch-wise/oracle baselines require real OC-MERO labels for selection.
+        # Nominal/log-replay/IDM/MPC/risk-aware can run in fast mode; use
+        # closed_loop.label_mode=all only when a small label audit is desired.
         label_mode = "all"
     compute_teacher_labels = label_mode in {"all", "full", "teacher", "labels"}
     progress = bool(cl_cfg.get("progress", True))
@@ -296,6 +311,9 @@ def _rollout_one_scene(raw, scenario_rank: int, bundle: ModelBundle | None, cfg:
             metric_summary[f"{name}_any"] = float(np.max(vals) > 0.0)
     out = {
         "scene_id": str(raw.scenario_id),
+        "bucket_name": bucket_name,
+        "target_key": target_key,
+        "target_time_index": int(start_time_index_override) if start_time_index_override is not None else None,
         "num_decisions": int(len(decisions)),
         "num_metric_steps": int(len(metric_trace)),
         "method": method,
@@ -341,6 +359,67 @@ def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, s
     return agg
 
 
+
+
+def _dataset_label_for_sample_path(path: Path) -> str:
+    try:
+        return path.parent.parent.name if path.parent.name == "samples" else path.parent.name
+    except Exception:
+        return "dataset"
+
+
+def _load_closed_loop_targets(dataset_spec: str | None, cfg: dict) -> list[dict[str, Any]]:
+    """Load unique (bucket, scene_id, time_index) targets from OC-RAP offline roots."""
+    if not dataset_spec:
+        return []
+    cl_cfg = cfg.get("closed_loop", {}) if isinstance(cfg.get("closed_loop", {}), dict) else {}
+    split_filter = str(cl_cfg.get("bucket_split", "") or "").strip()
+    max_targets = int(cl_cfg.get("max_bucket_targets", 0) or 0)
+    max_per_scene = int(cl_cfg.get("max_targets_per_scene", 1) or 1)
+    paths = iter_sample_paths_many(dataset_spec)
+    seen: set[tuple[str, str, int]] = set()
+    per_scene: dict[str, int] = {}
+    targets: list[dict[str, Any]] = []
+    for p in paths:
+        split = str(scalar_metadata_for_path(p, "split_id", ""))
+        if split_filter and split != split_filter:
+            continue
+        scene_id = str(scalar_metadata_for_path(p, "scene_id", ""))
+        if not scene_id:
+            continue
+        try:
+            time_index = int(float(scalar_metadata_for_path(p, "time_index", 0)))
+        except Exception:
+            continue
+        bucket = _dataset_label_for_sample_path(Path(p))
+        key = (bucket, scene_id, time_index)
+        if key in seen:
+            continue
+        if per_scene.get(scene_id, 0) >= max_per_scene:
+            continue
+        seen.add(key)
+        per_scene[scene_id] = per_scene.get(scene_id, 0) + 1
+        targets.append({
+            "bucket_name": bucket,
+            "scene_id": scene_id,
+            "time_index": int(time_index),
+            "target_key": f"{bucket}:{scene_id}:t{int(time_index)}",
+        })
+        if max_targets > 0 and len(targets) >= max_targets:
+            break
+    return targets
+
+
+def _aggregate_with_buckets(scene_results: list[dict[str, Any]], method: str, source: str) -> dict[str, Any]:
+    result = _aggregate_scene_results(scene_results, method, source)
+    buckets = sorted({str(s.get("bucket_name")) for s in scene_results if s.get("bucket_name")})
+    if buckets:
+        result["per_bucket"] = {}
+        for b in buckets:
+            sub = [s for s in scene_results if str(s.get("bucket_name")) == b]
+            result["per_bucket"][b] = _aggregate_scene_results(sub, method, source)
+    return result
+
 def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, output: str | Path, cfg: dict) -> dict[str, Any]:
     if not str(dataset_patterns).strip() or str(dataset_patterns).strip().startswith("@"):
         raise ValueError(
@@ -349,6 +428,9 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
         )
     cl_cfg = cfg.get("closed_loop", {}) if isinstance(cfg.get("closed_loop", {}), dict) else {}
     max_scenes = int(cl_cfg.get("max_scenarios", cfg.get("max_scenarios") or 8))
+    max_rollouts = int(cl_cfg.get("max_rollouts", max_scenes) or max_scenes)
+    raw_max_scenarios = cl_cfg.get("raw_max_scenarios", cfg.get("max_scenarios", None))
+    raw_max_scenarios = None if raw_max_scenarios in {None, "", 0, "0"} else int(raw_max_scenarios)
     method = str(cl_cfg.get("method", "ocrap")).lower()
     gamma = float((cfg.get("selection", {}) or {}).get("gamma_rec", 0.0))
     if not np.isfinite(gamma) and not bool(cl_cfg.get("allow_infinite_gamma", False)):
@@ -374,19 +456,49 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
     partial_path = output_path.with_suffix(output_path.suffix + ".partial")
     save_partial = bool(cl_cfg.get("save_partial", True))
     progress = bool(cl_cfg.get("progress", True))
+    target_spec = str(cl_cfg.get("bucket_dataset", cl_cfg.get("target_dataset", "")) or "").strip()
+    targets = _load_closed_loop_targets(target_spec, local)
+    target_map: dict[str, list[dict[str, Any]]] = {}
+    for t in targets:
+        target_map.setdefault(str(t["scene_id"]), []).append(t)
     scene_results = []
-    for i, raw in enumerate(iter_waymax_womd_scenarios(dataset_patterns, max_scenarios=max_scenes, parser_cfg=local)):
-        if progress:
-            print({"event": "closed_loop_scene_start", "scene_rank": i, "scene_id": str(raw.scenario_id), "max_scenes": max_scenes}, flush=True)
-        scene_results.append(_rollout_one_scene(raw, i, bundle, local, method, gamma))
-        if save_partial:
-            partial = _aggregate_scene_results(scene_results, method, source)
-            partial["scenes"] = scene_results
-            partial["partial"] = True
-            write_json(partial, partial_path)
-        if progress:
-            print({"event": "closed_loop_scene_done", "scene_rank": i, "num_decisions": scene_results[-1].get("num_decisions", 0)}, flush=True)
-    result = _aggregate_scene_results(scene_results, method, source)
+    raw_seen = 0
+    matched_targets = 0
+    if progress and targets:
+        print({"event": "closed_loop_bucket_targets_loaded", "num_targets": len(targets), "num_target_scenes": len(target_map), "max_rollouts": max_rollouts, "raw_max_scenarios": raw_max_scenarios}, flush=True)
+    for i, raw in enumerate(iter_waymax_womd_scenarios(dataset_patterns, max_scenarios=raw_max_scenarios if targets else max_scenes, parser_cfg=local)):
+        raw_seen += 1
+        raw_targets = target_map.get(str(raw.scenario_id), []) if targets else [{"bucket_name": None, "time_index": None, "target_key": None}]
+        if targets and not raw_targets:
+            continue
+        for target in raw_targets:
+            if len(scene_results) >= (max_rollouts if targets else max_scenes):
+                break
+            rank = len(scene_results)
+            if progress:
+                print({"event": "closed_loop_scene_start", "scene_rank": rank, "raw_rank": i, "scene_id": str(raw.scenario_id), "bucket": target.get("bucket_name"), "start_time_index": target.get("time_index"), "max_rollouts": max_rollouts if targets else max_scenes}, flush=True)
+            scene_results.append(_rollout_one_scene(raw, rank, bundle, local, method, gamma, start_time_index_override=target.get("time_index"), bucket_name=target.get("bucket_name"), target_key=target.get("target_key")))
+            matched_targets += int(bool(targets))
+            if save_partial:
+                partial = _aggregate_with_buckets(scene_results, method, source)
+                partial["scenes"] = scene_results
+                partial["partial"] = True
+                partial["bucket_dataset"] = target_spec or None
+                partial["bucket_target_count"] = len(targets)
+                partial["bucket_matched_rollouts"] = matched_targets
+                partial["raw_scenarios_seen"] = raw_seen
+                write_json(partial, partial_path)
+            if progress:
+                print({"event": "closed_loop_scene_done", "scene_rank": rank, "num_decisions": scene_results[-1].get("num_decisions", 0)}, flush=True)
+        if len(scene_results) >= (max_rollouts if targets else max_scenes):
+            break
+    result = _aggregate_with_buckets(scene_results, method, source)
+    result["bucket_dataset"] = target_spec or None
+    result["bucket_target_count"] = len(targets)
+    result["bucket_matched_rollouts"] = matched_targets
+    result["raw_scenarios_seen"] = raw_seen
+    if targets and matched_targets == 0:
+        result.setdefault("warnings", []).append("No offline bucket scene_id matched the supplied WOMD raw dataset/pattern. Check WOMD_VAL vs WOMD_VAL_INTERACTIVE and scenario_start_index/raw_max_scenarios.")
     result["scenes"] = scene_results
     result["gamma_rec"] = gamma
     result["notes"] = [

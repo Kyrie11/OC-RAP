@@ -243,6 +243,9 @@ evaluation:
   group_by_dataset: true
   methods:
   - nominal
+  - log_replay
+  - idm_proxy
+  - mpc_proxy
   - risk_aware
   - backup_filter
   - contingency
@@ -250,10 +253,23 @@ evaluation:
   - ocrap
 baselines:
   risk_lambda: 1.0
+  idm_harm_lambda: 2.0
+  idm_hard_lambda: 15.0
 metrics:
   sigma_u: 1.0
 closed_loop:
   max_scenarios: 8
+  # In normal mode, max_scenarios is the number of WOMD scenes to roll out.
+  # In bucket mode, max_rollouts is the number of scene/time starts to evaluate,
+  # while raw_max_scenarios controls how far to scan the raw WOMD stream.
+  max_rollouts: null
+  raw_max_scenarios: null
+  # Optional OC-RAP offline dataset root(s). When set, closed-loop evaluation
+  # starts only from scene_id/time_index pairs mined into those regime datasets.
+  bucket_dataset: null
+  bucket_split: ''
+  max_bucket_targets: 0
+  max_targets_per_scene: 1
   start_time_index: null
   max_steps: 40
   replan_interval_steps: 1

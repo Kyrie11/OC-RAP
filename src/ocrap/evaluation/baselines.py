@@ -7,7 +7,18 @@ import numpy as np
 from ocrap.planning.selector import SelectionResult, crisp_select
 
 
-BASELINES = ["nominal", "risk_aware", "backup_filter", "contingency", "oracle_filter", "ocrap", "ocrap_teacher"]
+BASELINES = [
+    "nominal",
+    "log_replay",
+    "idm_proxy",
+    "mpc_proxy",
+    "risk_aware",
+    "backup_filter",
+    "contingency",
+    "oracle_filter",
+    "ocrap",
+    "ocrap_teacher",
+]
 
 
 @dataclass
@@ -84,6 +95,41 @@ def select_baseline(
         idx = 0 if len(feasible) and feasible[0] else _best_by_score(utility, feasible)
         admitted[idx] = True
         return BaselineSelection(idx, "nominal_prefix", admitted, utility)
+
+    if method == "log_replay":
+        # Explicit logged/nominal rollout baseline. Candidate generation writes
+        # the nominal/log-following prefix as candidate 0 when available; if it is
+        # infeasible, fall back to the best feasible utility candidate so the
+        # closed-loop runner can continue on degenerate frames.
+        admitted = np.zeros_like(feasible, dtype=bool)
+        idx = 0 if len(feasible) and feasible[0] else _best_by_score(utility, feasible)
+        admitted[idx] = True
+        return BaselineSelection(idx, "log_replay_prefix", admitted, utility)
+
+    if method == "idm_proxy":
+        # Lightweight IDM-style heuristic over OC-RAP candidates. It does not
+        # reimplement a full car-following simulator; it prefers feasible,
+        # low-hard-violation and low-harm candidates while keeping utility.
+        bcfg = cfg.get("baselines", {}) if isinstance(cfg.get("baselines", {}), dict) else {}
+        lam_harm = float(bcfg.get("idm_harm_lambda", 2.0))
+        lam_hard = float(bcfg.get("idm_hard_lambda", 15.0))
+        score = utility - lam_harm * harm - lam_hard * hard
+        idx = _best_by_score(score, feasible)
+        admitted = feasible.copy()
+        return BaselineSelection(idx, "idm_proxy_utility_safety", admitted, score)
+
+    if method == "mpc_proxy":
+        # Lightweight constrained-MPC proxy over the same candidate lattice. The
+        # hard safety mask is applied first; inside it the controller maximizes
+        # nominal utility. This is a sanity baseline, not a reproduction of a
+        # specific published MPC implementation.
+        admitted = safe_mask.copy()
+        if admitted.any():
+            idx = _admit_then_utility(admitted, utility)
+        else:
+            score = utility - 25.0 * hard - 5.0 * harm
+            idx = _best_by_score(score, feasible)
+        return BaselineSelection(idx, "mpc_proxy_constrained_lattice", admitted, utility)
 
     if method == "risk_aware":
         bcfg = cfg.get("baselines", {}) if isinstance(cfg.get("baselines", {}), dict) else {}
