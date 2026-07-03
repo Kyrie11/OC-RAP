@@ -1,0 +1,29 @@
+--- OC-RAP/src/ocrap/data/build/builder.py
++++ OC-RAP_patched/src/ocrap/data/build/builder.py
+@@ -816,12 +816,24 @@
+ 
+     def materialize(prefix, local_cfg: dict, *, enforce_quality: bool = True, allow_filter_drop: bool = True) -> DatasetSample | None:
+         a_idx = int(prefix.macro_id)
+-        if allow_filter_drop and mode == "filter" and not _artifact_pair_attempt_is_possible(history, prefix, local_cfg):
++
++        # Speed-critical strict/balanced artifact builds:
++        # ``artifact_pair_mode=balanced`` uses a mined second pass with
++        # ``require_artifact_pairs=True`` in ``local_cfg``.  The old guard only
++        # preflighted ``mode == "filter"``, so balanced near/contact construction
++        # still paid full Waymax future + teacher rollout cost for prefixes whose
++        # hidden yield/accelerate pair was structurally impossible.  Gate on the
++        # *local* require_artifact_pairs flag instead; the non-mined half has this
++        # flag forced off by _cfg_with_artifact_mining(..., enable=False), so it is
++        # unaffected.
++        strict_pair_required = allow_filter_drop and _quality_requires_artifact_pair(local_cfg)
++        if strict_pair_required and not _artifact_pair_attempt_is_possible(history, prefix, local_cfg):
+             return None
++
+         sample = _materialize_sample(history, split_id, prefix, a_idx, local_cfg, options, option_valid, K)
+         has_pair = _has_complete_artifact_pair(sample)
+         sample.diagnostics["complete_artifact_pair"] = bool(has_pair)
+-        if allow_filter_drop and mode == "filter" and not has_pair:
++        if strict_pair_required and not has_pair:
+             return None
+         if enforce_quality and not _sample_passes_quality_gates(sample, local_cfg):
+             return None

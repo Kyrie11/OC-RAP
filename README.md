@@ -208,7 +208,7 @@ r_orc_star, r_dep_star, oracle_gap_star, i_art_star,
 regime_label, sample_metadata, split_id
 ```
 
-# 所有指令集
+# 所有指令集 
 ```bash
 export WOMD_TRAIN=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/training/training_tfexample.tfrecord
 export WOMD_VAL=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord

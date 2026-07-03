@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import itertools
 import json
 import os
 import time
@@ -1277,7 +1278,16 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
     scene_time_groups = 0
     skipped_no_planning_times = 0
     raw_scene_ids: set[str] = set()
-    raw_iter = iter(scenario_iterator(cfg))
+    scenario_start_index = max(0, int(cfg.get("scenario_start_index", 0)))
+    iter_cfg = dict(cfg)
+    # Allow disjoint subsets within the same WOMD shard pattern, e.g. use
+    # ${WOMD_VAL}@150 for both validation and held-out safe testing while
+    # skipping the first N scenarios consumed by val_safe.  The loader-level
+    # max_scenarios cap must be expanded before islice; otherwise skipping
+    # would consume the entire capped iterator and yield no data.
+    if scenario_start_index > 0 and cfg.get("max_scenarios") is not None:
+        iter_cfg["max_scenarios"] = scenario_start_index + int(cfg.get("max_scenarios"))
+    raw_iter = iter(itertools.islice(scenario_iterator(iter_cfg), scenario_start_index, None))
     progress_bar = None
     profile_path = out / "build_profile.csv"
     scene_profile_path = out / "build_scene_time_profile.csv"
@@ -1509,6 +1519,7 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
         "new_samples_written": int(new_samples_written),
         "progress_mode": progress_mode,
         "raw_scenarios_seen": int(raw_scenarios_seen),
+        "scenario_start_index": int(scenario_start_index),
         "scene_time_groups": int(scene_time_groups),
         "skipped_no_planning_times": int(skipped_no_planning_times),
         "unique_raw_scene_ids": int(len(raw_scene_ids)),
