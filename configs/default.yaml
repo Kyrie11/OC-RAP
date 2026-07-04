@@ -283,6 +283,9 @@ closed_loop:
   # during dataset construction, e.g. 12 for the commands in 数据集构建指令.txt.
   num_recovery_options: null
   artifact_mine_probability: 0.0
+  # Set true only when the raw WOMD shards contain path_samples/* SDC-route
+  # features; otherwise Waymax parsing will require path_samples/arc_length.
+  use_sdc_paths: false
   render: false
   save_trace_npz: false
   save_partial: true

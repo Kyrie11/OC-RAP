@@ -443,6 +443,23 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
     local["simulation_backend"] = "waymax_closed_loop"
     local["womd_patterns"] = dataset_patterns
     local["max_scenarios"] = max_scenes
+
+    # Closed-loop evaluation is frequently run on WOMD TFExample shards whose
+    # records do not contain `path_samples/*` route features.  The offline
+    # OC-RAP dataset-build commands already disable SDC-path parsing for the
+    # held-out test buckets; keep the online evaluator consistent by default.
+    # Set `--set closed_loop.use_sdc_paths=true` only when the raw WOMD shards
+    # are known to contain path_samples/{xyz,valid,id,arc_length,on_route}.
+    wx = dict(local.get("waymax", {}) or {})
+    use_sdc_paths = bool(cl_cfg.get("use_sdc_paths", False))
+    wx["dataloader_include_sdc_paths"] = use_sdc_paths
+    if not use_sdc_paths:
+        route_metrics = {"sdc_wrongway", "sdc_off_route", "sdc_progression"}
+        metrics = wx.get("metrics_to_run", [])
+        if metrics:
+            wx["metrics_to_run"] = [str(m) for m in metrics if str(m) not in route_metrics]
+    local["waymax"] = wx
+
     art = dict(local.get("artifact", {}) or {})
     mine_p = float(cl_cfg.get("artifact_mine_probability", 0.0) or 0.0)
     art["force_mine"] = mine_p > 0.0
