@@ -150,6 +150,14 @@ selection:
   fixed_gamma_rec: 0.0
   gamma_H: 0.0
   gamma_D: 5.0
+  ocrap_selector: lcb_constrained
+  lcb_beta: 0.10
+  nominal_slack: 0.03
+  nominal_slack_gap_limit: 0.50
+  intervention_penalty: 0.03
+  deviation_penalty: 0.15
+  recovery_bonus: 0.02
+  fallback_rec_weight: 0.10
 calibration:
   deltas:
   - 0.01
@@ -292,6 +300,7 @@ closed_loop:
   progress: true
   progress_every_steps: 5
   allow_infinite_gamma: false
+  force_teacher_baselines: false
 progress: true
 io:
   # Compression saves disk, but can become CPU-bound during dataset construction.

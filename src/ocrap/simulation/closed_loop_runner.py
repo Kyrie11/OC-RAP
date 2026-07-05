@@ -29,6 +29,10 @@ class ClosedLoopDecision:
     selected_utility: float
     selected_teacher_r_dep: float | None
     selected_teacher_r_orc: float | None
+    selected_pred_r_dep: float | None
+    selected_pred_r_orc: float | None
+    selected_pred_gap: float | None
+    selected_nominal_deviation: float | None
     selected_odg: float | None
     selected_artifact: bool | None
     fra_exec: float | None
@@ -52,6 +56,24 @@ def _safe_optional_float(x: Any) -> float | None:
         return v if np.isfinite(v) else None
     except Exception:
         return None
+
+
+def _prefix_nominal_deviation(samples: list) -> np.ndarray:
+    if not samples:
+        return np.zeros((0,), dtype=np.float32)
+    try:
+        ref = np.asarray(samples[0].prefix.prefix_states, dtype=float)[:, :2]
+    except Exception:
+        return np.zeros((len(samples),), dtype=np.float32)
+    vals: list[float] = []
+    for sample in samples:
+        try:
+            xy = np.asarray(sample.prefix.prefix_states, dtype=float)[:, :2]
+            T = min(len(ref), len(xy))
+            vals.append(0.0 if T <= 0 else float(np.sqrt(np.mean(np.sum((xy[:T] - ref[:T]) ** 2, axis=-1))) / 5.0))
+        except Exception:
+            vals.append(0.0)
+    return np.asarray(vals, dtype=np.float32)
 
 
 def _mean_finite(values: list[Any], default: float | None = None) -> float | None:
@@ -109,6 +131,9 @@ def _select_prefix(
 
     utility = np.asarray([_safe_float(x["data"].get("utility", 0.0)) for x in items], dtype=np.float32)
     pred_r_dep = np.asarray([float(x["pred"].r_dep) for x in items], dtype=np.float32)
+    pred_r_orc = np.asarray([float(x["pred"].r_orc) for x in items], dtype=np.float32)
+    pred_gap = np.asarray([float(x["pred"].gap) for x in items], dtype=np.float32)
+    nominal_deviation = _prefix_nominal_deviation(samples)
     if compute_teacher_labels:
         teacher_r_dep = np.asarray([_safe_float(x["data"].get("r_dep_star", 0.0)) for x in items], dtype=np.float32)
         teacher_r_orc = np.asarray([_safe_float(x["data"].get("r_orc_star", 0.0)) for x in items], dtype=np.float32)
@@ -132,6 +157,9 @@ def _select_prefix(
         float(sel_cfg.get("gamma_H", 0.0)),
         float(sel_cfg.get("gamma_D", 5.0)),
         cfg,
+        pred_r_orc=pred_r_orc,
+        pred_gap=pred_gap,
+        nominal_deviation=nominal_deviation,
     )
     idx = int(selected.selected_index)
     chosen = items[idx]
@@ -153,6 +181,10 @@ def _select_prefix(
         "teacher_r_dep": teacher_r_dep,
         "teacher_r_orc": teacher_r_orc,
         "selection": selected,
+        "pred_r_dep": pred_r_dep,
+        "pred_r_orc": pred_r_orc,
+        "pred_gap": pred_gap,
+        "nominal_deviation": nominal_deviation,
         "labels_available": bool(compute_teacher_labels),
         "drs": None if drs is None else float(drs),
         "nup": float(nup["bounded_NUP"]),
@@ -183,11 +215,13 @@ def _rollout_one_scene(
     start_t = int(start_t)
     requested_label_mode = str(cl_cfg.get("label_mode", "fast")).lower()
     label_mode = requested_label_mode
-    teacher_required_methods = {"backup_filter", "oracle_filter", "contingency", "ocrap_teacher"}
-    if method in teacher_required_methods or (method == "ocrap" and bundle is None):
-        # Branch-wise/oracle baselines require real OC-MERO labels for selection.
-        # Nominal/log-replay/IDM/MPC/risk-aware can run in fast mode; use
-        # closed_loop.label_mode=all only when a small label audit is desired.
+    teacher_required_methods = {"ocrap_teacher"}
+    branchwise_methods = {"backup_filter", "oracle_filter", "contingency"}
+    force_teacher_baselines = bool(cl_cfg.get("force_teacher_baselines", False))
+    if method in teacher_required_methods or (method == "ocrap" and bundle is None) or (force_teacher_baselines and method in branchwise_methods):
+        # Full teacher labels are very expensive online. Branch-wise/oracle
+        # baselines therefore run as predicted-oracle proxies in fast mode by
+        # default, and use true teacher labels only when explicitly requested.
         label_mode = "all"
     compute_teacher_labels = label_mode in {"all", "full", "teacher", "labels"}
     progress = bool(cl_cfg.get("progress", True))
@@ -276,6 +310,10 @@ def _rollout_one_scene(
         utility = info["utility"]
         selected_teacher_r_dep = _safe_optional_float(teacher_r_dep[sel_idx]) if compute_teacher_labels else None
         selected_teacher_r_orc = _safe_optional_float(teacher_r_orc[sel_idx]) if compute_teacher_labels else None
+        selected_pred_r_dep = _safe_optional_float(info["pred_r_dep"][sel_idx])
+        selected_pred_r_orc = _safe_optional_float(info["pred_r_orc"][sel_idx])
+        selected_pred_gap = _safe_optional_float(info["pred_gap"][sel_idx])
+        selected_nominal_deviation = _safe_optional_float(info["nominal_deviation"][sel_idx])
         selected_odg = _safe_optional_float(selected_sample.oracle_gap_star) if compute_teacher_labels else None
         selected_artifact = bool(selected_sample.i_art_star) if compute_teacher_labels else None
         decisions.append(
@@ -290,6 +328,10 @@ def _rollout_one_scene(
                 selected_utility=float(utility[sel_idx]),
                 selected_teacher_r_dep=selected_teacher_r_dep,
                 selected_teacher_r_orc=selected_teacher_r_orc,
+                selected_pred_r_dep=selected_pred_r_dep,
+                selected_pred_r_orc=selected_pred_r_orc,
+                selected_pred_gap=selected_pred_gap,
+                selected_nominal_deviation=selected_nominal_deviation,
                 selected_odg=selected_odg,
                 selected_artifact=selected_artifact,
                 fra_exec=None if selected_teacher_r_dep is None else float(selected_teacher_r_dep < 0.0),
@@ -325,6 +367,10 @@ def _rollout_one_scene(
         "closed_loop_ODG": _mean_finite([d.selected_odg for d in decisions]),
         "closed_loop_artifact_selection_rate": _mean_finite([float(d.selected_artifact) for d in decisions if d.selected_artifact is not None]),
         "closed_loop_bounded_NUP": _mean_finite([d.nup for d in decisions], default=0.0),
+        "closed_loop_pred_r_dep": _mean_finite([d.selected_pred_r_dep for d in decisions]),
+        "closed_loop_pred_gap": _mean_finite([d.selected_pred_gap for d in decisions]),
+        "closed_loop_nominal_deviation": _mean_finite([d.selected_nominal_deviation for d in decisions]),
+        "intervention_rate": _mean_finite([float(d.selected_candidate_index != 0) for d in decisions], default=0.0),
         "metric_summary": metric_summary,
         "macro_counts": {m: int(sum(d.selected_macro == m for d in decisions)) for m in sorted({d.selected_macro for d in decisions})},
         "decisions": decision_dicts,
@@ -334,7 +380,7 @@ def _rollout_one_scene(
     return out
 
 def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, source: str) -> dict[str, Any]:
-    keys = ["closed_loop_FRA_exec", "closed_loop_FRA_cand", "closed_loop_DRS", "closed_loop_ODG", "closed_loop_artifact_selection_rate", "closed_loop_bounded_NUP"]
+    keys = ["closed_loop_FRA_exec", "closed_loop_FRA_cand", "closed_loop_DRS", "closed_loop_ODG", "closed_loop_artifact_selection_rate", "closed_loop_bounded_NUP", "closed_loop_pred_r_dep", "closed_loop_pred_gap", "closed_loop_nominal_deviation", "intervention_rate"]
     agg: dict[str, Any] = {
         "source": source,
         "method": method,
@@ -520,7 +566,7 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
     result["gamma_rec"] = gamma
     result["notes"] = [
         "This is a true Waymax receding-horizon loop: reset once, select an action from current SimulatorState, step the environment, then replan from the updated SimulatorState.",
-        "closed_loop.label_mode=fast skips expensive per-candidate OC-MERO teacher labels inside the online loop. It reports Waymax closed-loop metrics and predicted selection/NUP; label-based FRA/DRS/ODG require --set closed_loop.label_mode=all or a separate offline audit.",
+        "closed_loop.label_mode=fast skips expensive per-candidate OC-MERO teacher labels inside the online loop. Branch-wise/oracle baselines use predicted oracle-recoverability proxies in fast mode; use --set closed_loop.force_teacher_baselines=true together with label_mode=all only for a small audit.",
         "Non-SDC actors use Waymax/default log-playback dynamics unless controlled by the environment configuration.",
     ]
     write_json(result, output)

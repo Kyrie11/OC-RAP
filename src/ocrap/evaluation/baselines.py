@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ocrap.planning.selector import SelectionResult, crisp_select
+from ocrap.planning.selector import SelectionResult, constrained_lcb_select, crisp_select
 
 
 BASELINES = [
@@ -49,6 +49,24 @@ def _admit_then_utility(admitted: np.ndarray, utility: np.ndarray, nominal_index
     return _best_by_score(utility, np.ones_like(admitted, dtype=bool))
 
 
+def _finite_or_proxy(primary: np.ndarray, proxy: np.ndarray | None, fallback: np.ndarray) -> np.ndarray:
+    primary = np.asarray(primary, dtype=float)
+    out = primary.copy()
+    bad = ~np.isfinite(out)
+    if proxy is not None:
+        p = np.asarray(proxy, dtype=float)
+        if p.shape != out.shape:
+            p = np.resize(p, out.shape)
+        out[bad] = p[bad]
+    bad = ~np.isfinite(out)
+    if bad.any():
+        fb = np.asarray(fallback, dtype=float)
+        if fb.shape != out.shape:
+            fb = np.resize(fb, out.shape)
+        out[bad] = fb[bad]
+    return out
+
+
 def select_baseline(
     method: str,
     utility: np.ndarray,
@@ -62,6 +80,10 @@ def select_baseline(
     gamma_H: float,
     gamma_D: float,
     cfg: dict | None = None,
+    *,
+    pred_r_orc: np.ndarray | None = None,
+    pred_gap: np.ndarray | None = None,
+    nominal_deviation: np.ndarray | None = None,
 ) -> BaselineSelection:
     """Select one candidate with a paper-baseline-style rule.
 
@@ -81,10 +103,30 @@ def select_baseline(
     harm = np.asarray(harm, dtype=float)
     feasible = np.asarray(feasible, dtype=bool)
     safe_mask = feasible & (hard <= gamma_H) & (harm <= gamma_D)
+    oracle_signal = _finite_or_proxy(teacher_r_orc, pred_r_orc, pred_r_dep)
 
     if method == "ocrap":
-        sel: SelectionResult = crisp_select(utility, pred_r_dep, hard, harm, feasible, gamma_rec=gamma_rec, gamma_H=gamma_H, gamma_D=gamma_D)
-        return BaselineSelection(sel.selected_index, sel.reason, sel.admitted, pred_r_dep)
+        scfg = cfg.get("selection", {}) if isinstance(cfg.get("selection", {}), dict) else {}
+        selector_name = str(scfg.get("ocrap_selector", scfg.get("selector", "lcb_constrained"))).lower()
+        if selector_name in {"crisp", "hard", "hard_threshold"}:
+            sel: SelectionResult = crisp_select(utility, pred_r_dep, hard, harm, feasible, gamma_rec=gamma_rec, gamma_H=gamma_H, gamma_D=gamma_D)
+            return BaselineSelection(sel.selected_index, sel.reason, sel.admitted, pred_r_dep)
+        beta = float(scfg.get("lcb_beta", 0.10))
+        sel = constrained_lcb_select(
+            utility, pred_r_dep, hard, harm, feasible,
+            gamma_rec=gamma_rec, gamma_H=gamma_H, gamma_D=gamma_D,
+            pred_gap=pred_gap, nominal_deviation=nominal_deviation,
+            lcb_beta=beta,
+            nominal_slack=float(scfg.get("nominal_slack", 0.03)),
+            nominal_slack_gap_limit=float(scfg.get("nominal_slack_gap_limit", 0.50)),
+            intervention_penalty=float(scfg.get("intervention_penalty", 0.03)),
+            deviation_penalty=float(scfg.get("deviation_penalty", 0.15)),
+            recovery_bonus=float(scfg.get("recovery_bonus", 0.02)),
+            fallback_rec_weight=float(scfg.get("fallback_rec_weight", 0.10)),
+        )
+        gap_arr = np.asarray(pred_gap if pred_gap is not None else np.zeros_like(pred_r_dep), dtype=float)
+        score = pred_r_dep - beta * np.maximum(0.0, gap_arr)
+        return BaselineSelection(sel.selected_index, sel.reason, sel.admitted, score)
 
     if method == "ocrap_teacher":
         sel = crisp_select(utility, teacher_r_dep, hard, harm, feasible, gamma_rec=gamma_rec, gamma_H=gamma_H, gamma_D=gamma_D)
@@ -143,28 +185,28 @@ def select_baseline(
     if method == "backup_filter":
         # A conventional safety backup admits actions when some branch-wise
         # recovery appears feasible, without enforcing observation consistency.
-        admitted = safe_mask & (teacher_r_orc >= gamma_rec)
+        admitted = safe_mask & (oracle_signal >= gamma_rec)
         idx = _admit_then_utility(admitted, utility)
-        return BaselineSelection(idx, "branchwise_backup_filter", admitted, teacher_r_orc)
+        return BaselineSelection(idx, "branchwise_backup_filter", admitted, oracle_signal)
 
     if method == "oracle_filter":
         # Strong oracle-recoverability baseline: same admission as branch-wise
         # recovery, but scored by oracle recoverability before utility.
-        admitted = safe_mask & (teacher_r_orc >= gamma_rec)
+        admitted = safe_mask & (oracle_signal >= gamma_rec)
+        score = oracle_signal + 1.0e-3 * utility
         if admitted.any():
             idxs = np.where(admitted)[0]
-            score = teacher_r_orc + 1.0e-3 * utility
             idx = int(idxs[np.argmax(score[idxs])])
         else:
-            idx = _best_by_score(teacher_r_orc + 1.0e-3 * utility, feasible)
-        return BaselineSelection(idx, "oracle_recoverability_filter", admitted, teacher_r_orc)
+            idx = _best_by_score(score, feasible)
+        return BaselineSelection(idx, "oracle_recoverability_filter", admitted, oracle_signal)
 
     if method == "contingency":
         # Branch-specific contingency planner: maximize oracle recovery headroom,
         # then nominal utility.  It is expected to fail on oracle artifacts.
-        score = teacher_r_orc + 1.0e-3 * utility
+        score = oracle_signal + 1.0e-3 * utility
         idx = _best_by_score(score, feasible)
-        admitted = safe_mask & (teacher_r_orc >= gamma_rec)
+        admitted = safe_mask & (oracle_signal >= gamma_rec)
         return BaselineSelection(idx, "branch_specific_contingency", admitted, score)
 
     raise ValueError(f"Unknown evaluation method {method!r}; valid methods: {BASELINES}")

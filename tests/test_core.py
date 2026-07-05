@@ -4,7 +4,7 @@ import numpy as np
 
 from ocrap.lcv import finite_sample_upper_quantile, weighted_lcvar
 from ocrap.ocmero import oc_mero
-from ocrap.selector import crisp_select
+from ocrap.selector import constrained_lcb_select, crisp_select
 from ocrap.observation import compatibility_labels
 from ocrap.schema import Observation
 
@@ -96,3 +96,24 @@ def test_papercheck_importable():
     from ocrap.papercheck import papercheck_dataset
 
     assert callable(papercheck_dataset)
+
+
+def test_constrained_lcb_selector_prefers_nominal_with_slack():
+    utility = np.array([1.0, 0.6])
+    r_dep = np.array([0.04, 0.20])
+    hard = np.array([0.0, 0.0])
+    harm = np.array([0.0, 0.0])
+    feasible = np.array([True, True])
+    sel = constrained_lcb_select(utility, r_dep, hard, harm, feasible, gamma_rec=0.05, nominal_slack=0.02, pred_gap=np.array([0.0, 0.0]))
+    assert sel.selected_index == 0
+    assert sel.reason == "nominal_slack_lcb_admitted"
+
+
+def test_constrained_lcb_selector_penalizes_oracle_deployable_gap():
+    utility = np.array([0.9, 0.85])
+    r_dep = np.array([0.2, 0.18])
+    hard = np.array([0.0, 0.0])
+    harm = np.array([0.0, 0.0])
+    feasible = np.array([True, True])
+    sel = constrained_lcb_select(utility, r_dep, hard, harm, feasible, gamma_rec=0.1, lcb_beta=1.0, pred_gap=np.array([0.2, 0.0]), intervention_penalty=0.0, deviation_penalty=0.0)
+    assert sel.selected_index == 1
