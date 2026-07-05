@@ -117,3 +117,45 @@ def test_constrained_lcb_selector_penalizes_oracle_deployable_gap():
     feasible = np.array([True, True])
     sel = constrained_lcb_select(utility, r_dep, hard, harm, feasible, gamma_rec=0.1, lcb_beta=1.0, pred_gap=np.array([0.2, 0.0]), intervention_penalty=0.0, deviation_penalty=0.0)
     assert sel.selected_index == 1
+
+
+def test_constrained_lcb_fallback_is_recovery_guarded_not_utility_only():
+    # No candidate reaches gamma_rec. Candidate 1 has much higher utility but
+    # substantially worse deployable-recovery LCB and gap; fallback must keep
+    # the recovery-consistent candidate instead of chasing utility.
+    utility = np.array([1.0, 10.0, 0.8])
+    r_dep = np.array([0.00, -1.00, -0.02])
+    hard = np.array([0.0, 0.0, 0.0])
+    harm = np.array([0.0, 0.0, 0.0])
+    feasible = np.array([True, True, True])
+    sel = constrained_lcb_select(
+        utility, r_dep, hard, harm, feasible,
+        gamma_rec=0.5,
+        lcb_beta=0.5,
+        pred_gap=np.array([0.1, 2.0, 0.1]),
+        intervention_penalty=0.0,
+        deviation_penalty=0.0,
+        nominal_fallback_lcb_slack=0.01,
+    )
+    assert sel.selected_index == 0
+    assert sel.reason == "nominal_recovery_guarded_fallback"
+
+
+def test_constrained_lcb_fallback_uses_utility_only_inside_near_best_recovery_set():
+    utility = np.array([1.0, 2.0, 10.0])
+    r_dep = np.array([-0.01, 0.00, -0.5])
+    hard = np.array([0.0, 0.0, 0.0])
+    harm = np.array([0.0, 0.0, 0.0])
+    feasible = np.array([True, True, True])
+    sel = constrained_lcb_select(
+        utility, r_dep, hard, harm, feasible,
+        gamma_rec=0.5,
+        lcb_beta=0.0,
+        pred_gap=np.array([0.1, 0.1, 0.1]),
+        intervention_penalty=0.0,
+        deviation_penalty=0.0,
+        nominal_fallback_lcb_slack=0.0,
+        fallback_lcb_margin=0.05,
+    )
+    assert sel.selected_index == 1
+    assert sel.reason == "recovery_guarded_fallback"

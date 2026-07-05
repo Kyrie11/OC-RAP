@@ -58,6 +58,9 @@ def constrained_lcb_select(
     deviation_penalty: float = 0.15,
     recovery_bonus: float = 0.02,
     fallback_rec_weight: float = 0.10,
+    fallback_lcb_margin: float = 0.05,
+    fallback_gap_margin: float = 0.25,
+    nominal_fallback_lcb_slack: float = 0.05,
 ) -> SelectionResult:
     """Calibrated constrained selector used by OC-RAP in closed loop.
 
@@ -95,10 +98,50 @@ def constrained_lcb_select(
     if admitted.any():
         cand = np.where(admitted)[0]
         return SelectionResult(int(cand[np.argmax(score[cand])]), "best_admitted_lcb_score", admitted)
+    # No candidate satisfies the calibrated recovery constraint.  This branch is
+    # deliberately recovery-first.  Earlier versions used a utility-dominated
+    # soft fallback, which could pick high-utility prefixes with lower predicted
+    # deployable recoverability and larger oracle--deployable gap.  That defeats
+    # the purpose of OC-RAP exactly in low-headroom regimes.  We therefore:
+    #   1. keep hard/harm safety as the first gate;
+    #   2. restrict fallback candidates to the near-best recovery LCB set;
+    #   3. within that set, reject candidates with much larger predicted gap;
+    #   4. use utility/intervention/deviation only as a final tie-breaker.
+    if safe.any():
+        fallback_pool = safe.copy()
+    elif feasible.any():
+        cand = np.where(feasible)[0]
+        min_hard = float(np.min(hard[cand]))
+        near_hard = feasible & (hard <= min_hard + 1e-6)
+        cand2 = np.where(near_hard)[0]
+        min_harm = float(np.min(harm[cand2])) if cand2.size else float(np.min(harm[cand]))
+        fallback_pool = near_hard & (harm <= min_harm + 1e-6)
+    else:
+        fallback_pool = np.ones((n,), dtype=bool)
+
+    cand = np.where(fallback_pool)[0]
+    if cand.size == 0:
+        cand = np.arange(n)
+    best_lcb = float(np.max(rec_lcb[cand])) if cand.size else -np.inf
+
+    if 0 <= nominal_index < n and fallback_pool[nominal_index]:
+        nom_lcb = float(rec_lcb[nominal_index])
+        nom_gap = float(gap[nominal_index])
+        best_gap = float(np.min(gap[cand])) if cand.size else nom_gap
+        if nom_lcb >= best_lcb - float(nominal_fallback_lcb_slack) and nom_gap <= best_gap + float(fallback_gap_margin):
+            return SelectionResult(int(nominal_index), "nominal_recovery_guarded_fallback", admitted)
+
+    near_best_lcb = fallback_pool & (rec_lcb >= best_lcb - float(fallback_lcb_margin))
+    cand = np.where(near_best_lcb)[0]
+    if cand.size:
+        best_gap = float(np.min(gap[cand]))
+        gap_guarded = near_best_lcb & (gap <= best_gap + float(fallback_gap_margin))
+        if gap_guarded.any():
+            cand = np.where(gap_guarded)[0]
+    else:
+        cand = np.where(fallback_pool)[0]
+
     rec_shortfall = np.maximum(0.0, float(gamma_rec) - rec_lcb)
     fallback_score = score - float(fallback_rec_weight) * rec_shortfall - 10.0 * np.maximum(0.0, hard - float(gamma_H)) - 2.0 * np.maximum(0.0, harm - float(gamma_D))
-    if feasible.any():
-        cand = np.where(feasible)[0]
-        return SelectionResult(int(cand[np.argmax(fallback_score[cand])]), "soft_constrained_fallback", admitted)
-    return SelectionResult(int(np.argmax(fallback_score)) if n else 0, "soft_constrained_no_feasible_fallback", admitted)
+    return SelectionResult(int(cand[np.argmax(fallback_score[cand])]) if cand.size else 0, "recovery_guarded_fallback", admitted)
 

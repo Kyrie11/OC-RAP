@@ -123,6 +123,9 @@ def select_baseline(
             deviation_penalty=float(scfg.get("deviation_penalty", 0.15)),
             recovery_bonus=float(scfg.get("recovery_bonus", 0.02)),
             fallback_rec_weight=float(scfg.get("fallback_rec_weight", 0.10)),
+            fallback_lcb_margin=float(scfg.get("fallback_lcb_margin", 0.05)),
+            fallback_gap_margin=float(scfg.get("fallback_gap_margin", 0.25)),
+            nominal_fallback_lcb_slack=float(scfg.get("nominal_fallback_lcb_slack", 0.05)),
         )
         gap_arr = np.asarray(pred_gap if pred_gap is not None else np.zeros_like(pred_r_dep), dtype=float)
         score = pred_r_dep - beta * np.maximum(0.0, gap_arr)

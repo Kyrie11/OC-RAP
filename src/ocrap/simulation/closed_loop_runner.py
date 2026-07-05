@@ -26,6 +26,7 @@ class ClosedLoopDecision:
     selected_index: int
     selected_macro: str
     selected_candidate_index: int
+    selection_reason: str
     selected_utility: float
     selected_teacher_r_dep: float | None
     selected_teacher_r_orc: float | None
@@ -192,6 +193,24 @@ def _select_prefix(
     }
     return idx, info
 
+
+def _gamma_for_bucket(base_gamma: float, cfg: dict, bucket_name: str | None) -> float:
+    """Return a regime/bucket-specific calibrated recovery threshold when set."""
+    sel_cfg = cfg.get("selection", {}) if isinstance(cfg.get("selection", {}), dict) else {}
+    mapping = sel_cfg.get("gamma_rec_by_bucket", {})
+    if not isinstance(mapping, dict) or not bucket_name:
+        return float(base_gamma)
+    keys = [str(bucket_name), str(bucket_name).replace("test_", ""), str(bucket_name).replace("val_", ""), str(bucket_name).replace("train_", "")]
+    for key in keys:
+        if key in mapping and mapping[key] not in {None, ""}:
+            try:
+                val = float(mapping[key])
+                if np.isfinite(val):
+                    return val
+            except Exception:
+                continue
+    return float(base_gamma)
+
 def _rollout_one_scene(
     raw,
     scenario_rank: int,
@@ -325,6 +344,7 @@ def _rollout_one_scene(
                 selected_index=int(sel_idx),
                 selected_macro=str(prefix.macro_name),
                 selected_candidate_index=int(selected_sample.candidate_index),
+                selection_reason=str(info["selection"].reason),
                 selected_utility=float(utility[sel_idx]),
                 selected_teacher_r_dep=selected_teacher_r_dep,
                 selected_teacher_r_orc=selected_teacher_r_orc,
@@ -359,6 +379,7 @@ def _rollout_one_scene(
         "num_decisions": int(len(decisions)),
         "num_metric_steps": int(len(metric_trace)),
         "method": method,
+        "gamma_rec": float(gamma),
         "label_mode": label_mode,
         "labels_available": bool(compute_teacher_labels),
         "closed_loop_FRA_exec": _mean_finite([d.fra_exec for d in decisions]),
@@ -373,6 +394,7 @@ def _rollout_one_scene(
         "intervention_rate": _mean_finite([float(d.selected_candidate_index != 0) for d in decisions], default=0.0),
         "metric_summary": metric_summary,
         "macro_counts": {m: int(sum(d.selected_macro == m for d in decisions)) for m in sorted({d.selected_macro for d in decisions})},
+        "selection_reason_counts": {r: int(sum(d.selection_reason == r for d in decisions)) for r in sorted({d.selection_reason for d in decisions})},
         "decisions": decision_dicts,
     }
     if bool(cl_cfg.get("save_trace_npz", False)):
@@ -398,10 +420,14 @@ def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, s
         vals = [(s.get("metric_summary", {}) or {}).get(mk, None) for s in scene_results]
         agg["waymax_metrics"][mk] = _mean_finite(vals, default=0.0)
     macro_counts: dict[str, int] = {}
+    reason_counts: dict[str, int] = {}
     for s in scene_results:
         for m, c in (s.get("macro_counts", {}) or {}).items():
             macro_counts[m] = macro_counts.get(m, 0) + int(c)
+        for r, c in (s.get("selection_reason_counts", {}) or {}).items():
+            reason_counts[r] = reason_counts.get(r, 0) + int(c)
     agg["macro_counts"] = macro_counts
+    agg["selection_reason_counts"] = reason_counts
     return agg
 
 
@@ -540,7 +566,8 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
             rank = len(scene_results)
             if progress:
                 print({"event": "closed_loop_scene_start", "scene_rank": rank, "raw_rank": i, "scene_id": str(raw.scenario_id), "bucket": target.get("bucket_name"), "start_time_index": target.get("time_index"), "max_rollouts": max_rollouts if targets else max_scenes}, flush=True)
-            scene_results.append(_rollout_one_scene(raw, rank, bundle, local, method, gamma, start_time_index_override=target.get("time_index"), bucket_name=target.get("bucket_name"), target_key=target.get("target_key")))
+            gamma_i = _gamma_for_bucket(gamma, local, target.get("bucket_name"))
+            scene_results.append(_rollout_one_scene(raw, rank, bundle, local, method, gamma_i, start_time_index_override=target.get("time_index"), bucket_name=target.get("bucket_name"), target_key=target.get("target_key")))
             matched_targets += int(bool(targets))
             if save_partial:
                 partial = _aggregate_with_buckets(scene_results, method, source)
@@ -564,6 +591,7 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
         result.setdefault("warnings", []).append("No offline bucket scene_id matched the supplied WOMD raw dataset/pattern. Check WOMD_VAL vs WOMD_VAL_INTERACTIVE and scenario_start_index/raw_max_scenarios.")
     result["scenes"] = scene_results
     result["gamma_rec"] = gamma
+    result["gamma_rec_by_bucket"] = (local.get("selection", {}) or {}).get("gamma_rec_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {}
     result["notes"] = [
         "This is a true Waymax receding-horizon loop: reset once, select an action from current SimulatorState, step the environment, then replan from the updated SimulatorState.",
         "closed_loop.label_mode=fast skips expensive per-candidate OC-MERO teacher labels inside the online loop. Branch-wise/oracle baselines use predicted oracle-recoverability proxies in fast mode; use --set closed_loop.force_teacher_baselines=true together with label_mode=all only for a small audit.",
