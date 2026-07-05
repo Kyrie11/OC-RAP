@@ -293,6 +293,8 @@ closed_loop:
   # fast: no teacher labels. selected: label only executed candidate. all: label every candidate.
   audit_every_n_steps: 1
   audit_max_labels: 0
+  audit_top_k: 4
+  audit_max_extra_candidates: 5
   # Optional closed-loop-only candidate cap. Leave null to use num_candidate_prefixes.
   num_candidate_prefixes: null
   # Optional closed-loop-only recovery-option count. Set to the option count used

@@ -123,6 +123,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "label_mode": "fast",
         "audit_every_n_steps": 1,
         "audit_max_labels": 0,
+        "audit_top_k": 4,
+        "audit_max_extra_candidates": 5,
         "num_candidate_prefixes": None,
         "num_recovery_options": None,
         "artifact_mine_probability": 0.0,

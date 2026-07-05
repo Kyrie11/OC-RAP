@@ -37,6 +37,13 @@ class ClosedLoopDecision:
     selected_nominal_deviation: float | None
     selected_odg: float | None
     selected_artifact: bool | None
+    audit_candidate_count: int | None
+    audit_best_candidate_index: int | None
+    audit_best_teacher_r_dep: float | None
+    audit_best_drs: float | None
+    audit_selected_r_dep_regret: float | None
+    audit_has_recoverable_candidate: bool | None
+    audit_selector_miss: bool | None
     fra_exec: float | None
     fra_cand: float | None
     drs: float | None
@@ -77,6 +84,98 @@ def _prefix_nominal_deviation(samples: list) -> np.ndarray:
             vals.append(0.0)
     return np.asarray(vals, dtype=np.float32)
 
+
+
+
+def _candidate_lookup(samples: list) -> dict[int, int]:
+    out: dict[int, int] = {}
+    for i, sample in enumerate(samples):
+        try:
+            out[int(sample.candidate_index)] = int(i)
+        except Exception:
+            continue
+    return out
+
+
+def _select_audit_candidate_indices(samples: list, info: dict[str, Any], selected_sample, cfg: dict) -> list[int]:
+    """Choose a small, diagnostic candidate set for online label audit.
+
+    The selected-only audit answers whether the executed action was deployably
+    recoverable, but not whether OC-RAP missed a better candidate.  This helper
+    adds a few high-value alternatives without falling back to expensive
+    all-candidate teacher labeling.
+    """
+    if not samples:
+        return []
+    cl_cfg = cfg.get("closed_loop", {}) if isinstance(cfg.get("closed_loop", {}), dict) else {}
+    k = max(1, int(cl_cfg.get("audit_top_k", 4) or 4))
+    max_extra = max(0, int(cl_cfg.get("audit_max_extra_candidates", k) or k))
+    selected_cid = int(getattr(selected_sample, "candidate_index", 0))
+    out: list[int] = []
+
+    def add(cid: int | None) -> None:
+        if cid is None:
+            return
+        try:
+            c = int(cid)
+        except Exception:
+            return
+        if c not in out:
+            out.append(c)
+
+    add(selected_cid)
+    add(0)  # nominal anchor
+    lookup = _candidate_lookup(samples)
+    utility = np.asarray(info.get("utility", []), dtype=float).reshape(-1)
+    pred_r = np.asarray(info.get("pred_r_dep", []), dtype=float).reshape(-1)
+    pred_gap = np.maximum(0.0, np.asarray(info.get("pred_gap", np.zeros_like(pred_r)), dtype=float).reshape(-1))
+    dev = np.maximum(0.0, np.asarray(info.get("nominal_deviation", np.zeros_like(pred_r)), dtype=float).reshape(-1))
+    sel_cfg = cfg.get("selection", {}) if isinstance(cfg.get("selection", {}), dict) else {}
+    beta = float(sel_cfg.get("lcb_beta", 0.10))
+    rec_lcb = pred_r - beta * pred_gap
+
+    def add_ranked(score: np.ndarray, largest: bool = True, count: int = 1) -> None:
+        if score.size == 0:
+            return
+        vals = np.asarray(score, dtype=float)
+        vals = np.where(np.isfinite(vals), vals, -np.inf if largest else np.inf)
+        order = np.argsort(vals)
+        if largest:
+            order = order[::-1]
+        added = 0
+        for idx in order.tolist():
+            if idx < 0 or idx >= len(samples):
+                continue
+            add(int(getattr(samples[idx], "candidate_index", idx)))
+            added += 1
+            if added >= count:
+                break
+
+    add_ranked(rec_lcb, largest=True, count=k)
+    add_ranked(pred_r, largest=True, count=max(1, k // 2))
+    add_ranked(utility - float(sel_cfg.get("deviation_penalty", 0.15)) * dev, largest=True, count=max(1, k // 2))
+    add_ranked(pred_gap, largest=False, count=1)
+
+    # Keep macro diversity among audited alternatives, which is helpful for
+    # diagnosing whether failures come from candidate coverage or selection.
+    seen_macro = {str(getattr(samples[lookup[c]], "prefix", None).macro_name) for c in out if c in lookup and getattr(samples[lookup[c]], "prefix", None) is not None}
+    for sample in samples:
+        if len(out) >= 1 + max_extra:
+            break
+        macro = str(getattr(sample.prefix, "macro_name", ""))
+        if macro and macro not in seen_macro:
+            add(int(sample.candidate_index))
+            seen_macro.add(macro)
+    return out[: 1 + max_extra]
+
+
+def _prediction_q_for_candidate(samples: list, info: dict[str, Any], candidate_index: int, selected_fallback_idx: int) -> np.ndarray | int:
+    lookup = _candidate_lookup(samples)
+    idx = lookup.get(int(candidate_index), int(selected_fallback_idx))
+    try:
+        return info["items"][idx]["pred"].q
+    except Exception:
+        return 0
 
 def _mean_finite(values: list[Any], default: float | None = None) -> float | None:
     vals: list[float] = []
@@ -286,6 +385,7 @@ def _rollout_one_scene(
         # default, and use true teacher labels only when explicitly requested.
         label_mode = "all"
     selected_label_audit = label_mode in {"selected", "selected_only", "audit_selected", "executed"}
+    coverage_label_audit = label_mode in {"selected_topk", "topk", "coverage", "audit_topk", "selected_coverage"}
     compute_teacher_labels = label_mode in {"all", "full", "teacher", "labels"}
     audit_every_n_steps = max(1, int(cl_cfg.get("audit_every_n_steps", 1) or 1))
     audit_max_labels = int(cl_cfg.get("audit_max_labels", 0) or 0)
@@ -359,20 +459,29 @@ def _rollout_one_scene(
         selected_audit_data = None
         selected_audit_drs = None
         selected_audit_fra_exec = None
-        if selected_label_audit and (step_idx % audit_every_n_steps == 0) and (audit_max_labels <= 0 or audit_labels_done < audit_max_labels):
+        audit_candidate_count = None
+        audit_best_candidate_index = None
+        audit_best_teacher_r_dep = None
+        audit_best_drs = None
+        audit_selected_r_dep_regret = None
+        audit_has_recoverable_candidate = None
+        audit_selector_miss = None
+        if (selected_label_audit or coverage_label_audit) and (step_idx % audit_every_n_steps == 0) and (audit_max_labels <= 0 or audit_labels_done < audit_max_labels):
             try:
                 cl_num_options = cl_cfg.get("num_recovery_options", None)
                 feature_num_options = int(cl_num_options) if cl_num_options is not None else int(eval_cfg.get("num_recovery_options", getattr(bundle.model, "num_options", 24) if bundle is not None else 24))
+                audit_indices = ([int(selected_sample.candidate_index)] if selected_label_audit else _select_audit_candidate_indices(samples, info, selected_sample, cfg))
                 labeled = build_labeled_samples_for_candidate_indices(
                     hist,
                     "closed_loop",
                     eval_cfg,
-                    [int(selected_sample.candidate_index)],
+                    audit_indices,
                     num_roots=int(getattr(bundle.model, "num_roots", int(cfg.get("num_roots", 8)))) if bundle is not None else int(cfg.get("num_roots", 8)),
                     num_options=feature_num_options,
                 )
                 if labeled:
-                    selected_audit_sample = labeled[0]
+                    by_cid = {int(s.candidate_index): s for s in labeled}
+                    selected_audit_sample = by_cid.get(int(selected_sample.candidate_index), labeled[0])
                     selected_audit_data = selected_audit_sample.to_npz_dict()
                     pred_q = info["items"][sel_idx]["pred"].q
                     selected_options = np.argmax(pred_q, axis=1) if getattr(pred_q, "ndim", 0) == 2 else 0
@@ -382,8 +491,33 @@ def _rollout_one_scene(
                         selected_options,
                         selected_audit_data.get("root_valid", None),
                     )
-                    selected_audit_fra_exec = float(_safe_float(selected_audit_data.get("r_dep_star", 0.0)) < 0.0)
-                    audit_labels_done += 1
+                    selected_r_dep_star = _safe_float(selected_audit_data.get("r_dep_star", 0.0))
+                    selected_audit_fra_exec = float(selected_r_dep_star < 0.0)
+                    audit_candidate_count = int(len(labeled))
+                    # Coverage audit: among a small top-k subset, determine
+                    # whether any alternative had better deployable headroom.
+                    best_r = -float("inf")
+                    best_drs = None
+                    best_cid = None
+                    for lab in labeled:
+                        ld = lab.to_npz_dict()
+                        cid = int(lab.candidate_index)
+                        r_star = _safe_float(ld.get("r_dep_star", -float("inf")), -float("inf"))
+                        pred_q_i = _prediction_q_for_candidate(samples, info, cid, sel_idx)
+                        opt_i = np.argmax(pred_q_i, axis=1) if getattr(pred_q_i, "ndim", 0) == 2 else 0
+                        drs_i = deployable_recovery_success(ld["m_star"], ld["root_probs"], opt_i, ld.get("root_valid", None))
+                        if r_star > best_r:
+                            best_r = float(r_star)
+                            best_drs = float(drs_i)
+                            best_cid = int(cid)
+                    if best_cid is not None and np.isfinite(best_r):
+                        audit_best_candidate_index = int(best_cid)
+                        audit_best_teacher_r_dep = float(best_r)
+                        audit_best_drs = None if best_drs is None else float(best_drs)
+                        audit_selected_r_dep_regret = float(best_r - selected_r_dep_star)
+                        audit_has_recoverable_candidate = bool(best_r >= 0.0)
+                        audit_selector_miss = bool(selected_r_dep_star < 0.0 and best_r >= 0.0)
+                    audit_labels_done += int(len(labeled))
             except Exception as exc:
                 if progress:
                     print({"event": "closed_loop_selected_label_audit_failed", "scene_rank": scenario_rank, "step": step_idx, "error": str(exc)}, flush=True)
@@ -433,6 +567,13 @@ def _rollout_one_scene(
                 selected_nominal_deviation=selected_nominal_deviation,
                 selected_odg=selected_odg,
                 selected_artifact=selected_artifact,
+                audit_candidate_count=audit_candidate_count,
+                audit_best_candidate_index=audit_best_candidate_index,
+                audit_best_teacher_r_dep=audit_best_teacher_r_dep,
+                audit_best_drs=audit_best_drs,
+                audit_selected_r_dep_regret=audit_selected_r_dep_regret,
+                audit_has_recoverable_candidate=audit_has_recoverable_candidate,
+                audit_selector_miss=audit_selector_miss,
                 fra_exec=(selected_audit_fra_exec if selected_audit_fra_exec is not None else (None if selected_teacher_r_dep is None else float(selected_teacher_r_dep < 0.0))),
                 fra_cand=info["fra_cand"],
                 drs=(None if selected_audit_drs is None else float(selected_audit_drs)) if selected_label_audit else info["drs"],
@@ -460,8 +601,9 @@ def _rollout_one_scene(
         "method": method,
         "gamma_rec": float(gamma),
         "label_mode": label_mode,
-        "labels_available": bool(compute_teacher_labels or selected_label_audit),
-        "selected_label_audit": bool(selected_label_audit),
+        "labels_available": bool(compute_teacher_labels or selected_label_audit or coverage_label_audit),
+        "selected_label_audit": bool(selected_label_audit or coverage_label_audit),
+        "coverage_label_audit": bool(coverage_label_audit),
         "audit_every_n_steps": int(audit_every_n_steps),
         "audit_labels_done": int(audit_labels_done),
         "closed_loop_FRA_exec": _mean_finite([d.fra_exec for d in decisions]),
@@ -469,6 +611,12 @@ def _rollout_one_scene(
         "closed_loop_DRS": _mean_finite([d.drs for d in decisions]),
         "closed_loop_ODG": _mean_finite([d.selected_odg for d in decisions]),
         "closed_loop_artifact_selection_rate": _mean_finite([float(d.selected_artifact) for d in decisions if d.selected_artifact is not None]),
+        "closed_loop_audit_candidate_count": _mean_finite([d.audit_candidate_count for d in decisions]),
+        "closed_loop_audit_best_R_dep": _mean_finite([d.audit_best_teacher_r_dep for d in decisions]),
+        "closed_loop_audit_best_DRS": _mean_finite([d.audit_best_drs for d in decisions]),
+        "closed_loop_audit_selected_R_dep_regret": _mean_finite([d.audit_selected_r_dep_regret for d in decisions]),
+        "closed_loop_audit_recoverable_candidate_rate": _mean_finite([float(d.audit_has_recoverable_candidate) for d in decisions if d.audit_has_recoverable_candidate is not None]),
+        "closed_loop_audit_selector_miss_rate": _mean_finite([float(d.audit_selector_miss) for d in decisions if d.audit_selector_miss is not None]),
         "closed_loop_bounded_NUP": _mean_finite([d.nup for d in decisions], default=0.0),
         "closed_loop_pred_r_dep": _mean_finite([d.selected_pred_r_dep for d in decisions]),
         "closed_loop_pred_gap": _mean_finite([d.selected_pred_gap for d in decisions]),
@@ -484,7 +632,7 @@ def _rollout_one_scene(
     return out
 
 def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, source: str) -> dict[str, Any]:
-    keys = ["closed_loop_FRA_exec", "closed_loop_FRA_cand", "closed_loop_DRS", "closed_loop_ODG", "closed_loop_artifact_selection_rate", "closed_loop_bounded_NUP", "closed_loop_pred_r_dep", "closed_loop_pred_gap", "closed_loop_nominal_deviation", "intervention_rate"]
+    keys = ["closed_loop_FRA_exec", "closed_loop_FRA_cand", "closed_loop_DRS", "closed_loop_ODG", "closed_loop_artifact_selection_rate", "closed_loop_audit_candidate_count", "closed_loop_audit_best_R_dep", "closed_loop_audit_best_DRS", "closed_loop_audit_selected_R_dep_regret", "closed_loop_audit_recoverable_candidate_rate", "closed_loop_audit_selector_miss_rate", "closed_loop_bounded_NUP", "closed_loop_pred_r_dep", "closed_loop_pred_gap", "closed_loop_nominal_deviation", "intervention_rate"]
     agg: dict[str, Any] = {
         "source": source,
         "method": method,
@@ -676,7 +824,7 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
     result["gamma_rec_by_bucket"] = (local.get("selection", {}) or {}).get("gamma_rec_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {}
     result["notes"] = [
         "This is a true Waymax receding-horizon loop: reset once, select an action from current SimulatorState, step the environment, then replan from the updated SimulatorState.",
-        "closed_loop.label_mode=fast skips expensive per-candidate OC-MERO teacher labels inside the online loop. Use closed_loop.label_mode=selected to label only the executed candidate for a much faster audit; use label_mode=all only for tiny exhaustive audits.",
+        "closed_loop.label_mode=fast skips expensive per-candidate OC-MERO teacher labels inside the online loop. Use closed_loop.label_mode=selected to label only the executed candidate; use label_mode=selected_topk/coverage to label selected plus a small diagnostic top-k subset; use label_mode=all only for tiny exhaustive audits.",
         "Non-SDC actors use Waymax/default log-playback dynamics unless controlled by the environment configuration.",
     ]
     write_json(result, output)
