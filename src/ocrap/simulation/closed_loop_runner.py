@@ -3,10 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+import json
 
 import numpy as np
 
-from ocrap.data.build.builder import build_feature_only_samples_for_history, build_samples_for_history
+from ocrap.data.build.builder import build_feature_only_samples_for_history, build_labeled_samples_for_candidate_indices, build_samples_for_history
 from ocrap.data.build.history import construct_history
 from ocrap.data.serialization import write_json
 from ocrap.data.waymax_loader import iter_waymax_womd_scenarios, raw_scenario_from_waymax_state
@@ -91,6 +92,48 @@ def _mean_finite(values: list[Any], default: float | None = None) -> float | Non
     if not vals:
         return default
     return float(np.mean(vals))
+
+
+
+def _load_json_mapping(path: str | Path) -> dict[str, float]:
+    p = Path(path)
+    if not p.exists():
+        return {}
+    try:
+        raw = json.loads(p.read_text())
+    except Exception:
+        return {}
+    if isinstance(raw, dict) and isinstance(raw.get("gamma_rec_by_bucket"), dict):
+        raw = raw["gamma_rec_by_bucket"]
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, float] = {}
+    for k, v in raw.items():
+        try:
+            fv = float(v)
+            if np.isfinite(fv):
+                out[str(k)] = fv
+        except Exception:
+            continue
+    return out
+
+
+def _apply_gamma_rec_by_bucket_file(cfg: dict) -> dict:
+    sel = cfg.get("selection", {}) if isinstance(cfg.get("selection", {}), dict) else {}
+    path = sel.get("gamma_rec_by_bucket_file", sel.get("gamma_rec_by_bucket_path", None))
+    if not path:
+        return cfg
+    mapping = _load_json_mapping(path)
+    if not mapping:
+        return cfg
+    local = dict(cfg)
+    new_sel = dict(sel)
+    existing = new_sel.get("gamma_rec_by_bucket", {})
+    merged = dict(existing) if isinstance(existing, dict) else {}
+    merged.update(mapping)
+    new_sel["gamma_rec_by_bucket"] = merged
+    local["selection"] = new_sel
+    return local
 
 
 def _current_timestep(state: Any) -> int:
@@ -242,7 +285,11 @@ def _rollout_one_scene(
         # baselines therefore run as predicted-oracle proxies in fast mode by
         # default, and use true teacher labels only when explicitly requested.
         label_mode = "all"
+    selected_label_audit = label_mode in {"selected", "selected_only", "audit_selected", "executed"}
     compute_teacher_labels = label_mode in {"all", "full", "teacher", "labels"}
+    audit_every_n_steps = max(1, int(cl_cfg.get("audit_every_n_steps", 1) or 1))
+    audit_max_labels = int(cl_cfg.get("audit_max_labels", 0) or 0)
+    audit_labels_done = 0
     progress = bool(cl_cfg.get("progress", True))
     progress_every = max(1, int(cl_cfg.get("progress_every_steps", 5)))
 
@@ -308,6 +355,38 @@ def _rollout_one_scene(
         sel_idx, info = _select_prefix(samples, bundle, cfg, method, gamma, compute_teacher_labels=compute_teacher_labels)
         selected_sample = samples[sel_idx]
         prefix = selected_sample.prefix
+        selected_audit_sample = None
+        selected_audit_data = None
+        selected_audit_drs = None
+        selected_audit_fra_exec = None
+        if selected_label_audit and (step_idx % audit_every_n_steps == 0) and (audit_max_labels <= 0 or audit_labels_done < audit_max_labels):
+            try:
+                cl_num_options = cl_cfg.get("num_recovery_options", None)
+                feature_num_options = int(cl_num_options) if cl_num_options is not None else int(eval_cfg.get("num_recovery_options", getattr(bundle.model, "num_options", 24) if bundle is not None else 24))
+                labeled = build_labeled_samples_for_candidate_indices(
+                    hist,
+                    "closed_loop",
+                    eval_cfg,
+                    [int(selected_sample.candidate_index)],
+                    num_roots=int(getattr(bundle.model, "num_roots", int(cfg.get("num_roots", 8)))) if bundle is not None else int(cfg.get("num_roots", 8)),
+                    num_options=feature_num_options,
+                )
+                if labeled:
+                    selected_audit_sample = labeled[0]
+                    selected_audit_data = selected_audit_sample.to_npz_dict()
+                    pred_q = info["items"][sel_idx]["pred"].q
+                    selected_options = np.argmax(pred_q, axis=1) if getattr(pred_q, "ndim", 0) == 2 else 0
+                    selected_audit_drs = deployable_recovery_success(
+                        selected_audit_data["m_star"],
+                        selected_audit_data["root_probs"],
+                        selected_options,
+                        selected_audit_data.get("root_valid", None),
+                    )
+                    selected_audit_fra_exec = float(_safe_float(selected_audit_data.get("r_dep_star", 0.0)) < 0.0)
+                    audit_labels_done += 1
+            except Exception as exc:
+                if progress:
+                    print({"event": "closed_loop_selected_label_audit_failed", "scene_rank": scenario_rank, "step": step_idx, "error": str(exc)}, flush=True)
         controls = prefix.prefix_controls if prefix.prefix_controls.size else np.zeros((1, 4), dtype=np.float32)
         metrics_after: dict[str, float] = {}
         for k in range(min(replan_interval, max(1, controls.shape[0]))):
@@ -327,14 +406,14 @@ def _rollout_one_scene(
         teacher_r_dep = info["teacher_r_dep"]
         teacher_r_orc = info["teacher_r_orc"]
         utility = info["utility"]
-        selected_teacher_r_dep = _safe_optional_float(teacher_r_dep[sel_idx]) if compute_teacher_labels else None
-        selected_teacher_r_orc = _safe_optional_float(teacher_r_orc[sel_idx]) if compute_teacher_labels else None
+        selected_teacher_r_dep = _safe_optional_float(teacher_r_dep[sel_idx]) if compute_teacher_labels else (_safe_optional_float(selected_audit_data.get("r_dep_star")) if selected_audit_data is not None else None)
+        selected_teacher_r_orc = _safe_optional_float(teacher_r_orc[sel_idx]) if compute_teacher_labels else (_safe_optional_float(selected_audit_data.get("r_orc_star")) if selected_audit_data is not None else None)
         selected_pred_r_dep = _safe_optional_float(info["pred_r_dep"][sel_idx])
         selected_pred_r_orc = _safe_optional_float(info["pred_r_orc"][sel_idx])
         selected_pred_gap = _safe_optional_float(info["pred_gap"][sel_idx])
         selected_nominal_deviation = _safe_optional_float(info["nominal_deviation"][sel_idx])
-        selected_odg = _safe_optional_float(selected_sample.oracle_gap_star) if compute_teacher_labels else None
-        selected_artifact = bool(selected_sample.i_art_star) if compute_teacher_labels else None
+        selected_odg = _safe_optional_float(selected_sample.oracle_gap_star) if compute_teacher_labels else (_safe_optional_float(selected_audit_data.get("oracle_gap_star")) if selected_audit_data is not None else None)
+        selected_artifact = bool(selected_sample.i_art_star) if compute_teacher_labels else (bool(int(_safe_float(selected_audit_data.get("i_art_star", 0.0)))) if selected_audit_data is not None else None)
         decisions.append(
             ClosedLoopDecision(
                 scene_id=str(raw.scenario_id),
@@ -354,9 +433,9 @@ def _rollout_one_scene(
                 selected_nominal_deviation=selected_nominal_deviation,
                 selected_odg=selected_odg,
                 selected_artifact=selected_artifact,
-                fra_exec=None if selected_teacher_r_dep is None else float(selected_teacher_r_dep < 0.0),
+                fra_exec=(selected_audit_fra_exec if selected_audit_fra_exec is not None else (None if selected_teacher_r_dep is None else float(selected_teacher_r_dep < 0.0))),
                 fra_cand=info["fra_cand"],
-                drs=info["drs"],
+                drs=(None if selected_audit_drs is None else float(selected_audit_drs)) if selected_label_audit else info["drs"],
                 nup=float(info["nup"]),
                 metrics_after_step=metrics_after,
             )
@@ -381,7 +460,10 @@ def _rollout_one_scene(
         "method": method,
         "gamma_rec": float(gamma),
         "label_mode": label_mode,
-        "labels_available": bool(compute_teacher_labels),
+        "labels_available": bool(compute_teacher_labels or selected_label_audit),
+        "selected_label_audit": bool(selected_label_audit),
+        "audit_every_n_steps": int(audit_every_n_steps),
+        "audit_labels_done": int(audit_labels_done),
         "closed_loop_FRA_exec": _mean_finite([d.fra_exec for d in decisions]),
         "closed_loop_FRA_cand": _mean_finite([d.fra_cand for d in decisions]),
         "closed_loop_DRS": _mean_finite([d.drs for d in decisions]),
@@ -510,7 +592,7 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
             "closed-loop selection.gamma_rec is not finite. Re-read calibration.json with the requested delta "
             "or pass --set closed_loop.allow_infinite_gamma=true only for debugging."
         )
-    local = dict(cfg)
+    local = _apply_gamma_rec_by_bucket_file(dict(cfg))
     local["data_source"] = "womd"
     local["simulation_backend"] = "waymax_closed_loop"
     local["womd_patterns"] = dataset_patterns
@@ -594,7 +676,7 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
     result["gamma_rec_by_bucket"] = (local.get("selection", {}) or {}).get("gamma_rec_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {}
     result["notes"] = [
         "This is a true Waymax receding-horizon loop: reset once, select an action from current SimulatorState, step the environment, then replan from the updated SimulatorState.",
-        "closed_loop.label_mode=fast skips expensive per-candidate OC-MERO teacher labels inside the online loop. Branch-wise/oracle baselines use predicted oracle-recoverability proxies in fast mode; use --set closed_loop.force_teacher_baselines=true together with label_mode=all only for a small audit.",
+        "closed_loop.label_mode=fast skips expensive per-candidate OC-MERO teacher labels inside the online loop. Use closed_loop.label_mode=selected to label only the executed candidate for a much faster audit; use label_mode=all only for tiny exhaustive audits.",
         "Non-SDC actors use Waymax/default log-playback dynamics unless controlled by the environment configuration.",
     ]
     write_json(result, output)

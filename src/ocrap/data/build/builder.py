@@ -968,6 +968,67 @@ def build_samples_for_history(history, split_id: str, cfg: dict, progress_callba
     selected = _apply_scene_time_regime_filter(selected, cfg)
     return selected
 
+
+def build_labeled_samples_for_candidate_indices(
+    history,
+    split_id: str,
+    cfg: dict,
+    candidate_indices: list[int] | tuple[int, ...] | set[int],
+    *,
+    num_roots: int | None = None,
+    num_options: int | None = None,
+) -> list[DatasetSample]:
+    """Materialize full teacher/OC-MERO labels for a small candidate subset.
+
+    This is intended for closed-loop label audit. Building full labels for every
+    candidate at every receding-horizon step is often much slower than the
+    planner itself because each candidate requires counterfactual futures,
+    recovery rollouts, root clustering, and observation compatibility. For audit
+    metrics that only need the executed action, first select with the fast
+    feature-only candidate set and then call this helper for the selected
+    candidate index only.
+    """
+    wanted = {int(x) for x in candidate_indices}
+    if not wanted:
+        return []
+    prefixes = generate_candidate_prefixes(history, cfg)
+    n_options = int(num_options if num_options is not None else cfg.get("num_recovery_options", 24))
+    options = default_recovery_options(
+        n_options,
+        shoulder_available=bool(history.metadata.get("shoulder_available", True)),
+        adjacent_available=bool(history.metadata.get("adjacent_available", True)),
+    )
+    option_valid = option_valid_mask(options)
+    K = int(num_roots if num_roots is not None else cfg.get("num_roots", 8))
+    audit_cfg = dict(cfg)
+    quality = dict(audit_cfg.get("dataset_quality", {}) or {})
+    quality.update({
+        "balanced_two_pass": False,
+        "max_accepted_prefixes_per_scene_time": 0,
+        "min_artifact_prefixes_per_scene_time": 0,
+        "min_nonartifact_prefixes_per_scene_time": 0,
+        "min_obs_negative_fraction_per_sample": 0.0,
+        "require_negative_deployable_sample": False,
+        "require_artifact_pairs": False,
+        "artifact_pair_mode": "tag",
+        "require_nominal_per_scene_time": False,
+        "keep_nominal_even_if_quality_fails": True,
+    })
+    audit_cfg["dataset_quality"] = quality
+    selected: list[DatasetSample] = []
+    for prefix in prefixes:
+        cid = int(prefix.macro_id)
+        if cid not in wanted:
+            continue
+        sample = _materialize_sample(history, split_id, prefix, cid, audit_cfg, options, option_valid, K)
+        sample.diagnostics["closed_loop_selected_label_audit"] = True
+        selected.append(sample)
+    if selected:
+        assign_regimes(selected, history, cfg)
+    selected.sort(key=lambda sample: int(sample.candidate_index))
+    return selected
+
+
 def scenario_iterator(cfg: dict) -> Iterator[RawScenario]:
     source = str(cfg.get("data_source", "synthetic_artifact"))
     if source in {"synthetic", "synthetic_artifact"}:

@@ -162,6 +162,7 @@ selection:
   fallback_gap_margin: 0.25
   nominal_fallback_lcb_slack: 0.05
   gamma_rec_by_bucket: {}
+  gamma_rec_by_bucket_file: null
 calibration:
   deltas:
   - 0.01
@@ -289,6 +290,9 @@ closed_loop:
   # fast = online inference only; skips per-candidate counterfactual teacher
   # labels at every replan. Use all/full only for small strict audits.
   label_mode: fast
+  # fast: no teacher labels. selected: label only executed candidate. all: label every candidate.
+  audit_every_n_steps: 1
+  audit_max_labels: 0
   # Optional closed-loop-only candidate cap. Leave null to use num_candidate_prefixes.
   num_candidate_prefixes: null
   # Optional closed-loop-only recovery-option count. Set to the option count used
