@@ -404,6 +404,7 @@ def _rollout_one_scene(
     decisions: list[ClosedLoopDecision] = []
     metric_trace: list[dict[str, float]] = []
     state_xy_trace: list[list[float]] = []
+    interventions_used = 0
 
     for step_idx in range(max_steps):
         if _scene_done(state):
@@ -452,8 +453,25 @@ def _rollout_one_scene(
             )
         if not samples:
             break
-        sel_idx, info = _select_prefix(samples, bundle, cfg, method, gamma, compute_teacher_labels=compute_teacher_labels)
+        select_cfg = cfg
+        if method == "ocrap":
+            # Give the selector the active regime/bucket and the running
+            # intervention count.  This is intentionally not written back into
+            # the top-level config so each scene rollout remains independent.
+            select_cfg = dict(cfg)
+            sel_local = dict(select_cfg.get("selection", {}) or {}) if isinstance(select_cfg.get("selection", {}), dict) else {}
+            sel_local["active_bucket_name"] = bucket_name or ""
+            sel_local["intervention_budget_used"] = int(interventions_used)
+            sel_local["intervention_budget_steps"] = max(1, int(step_idx))
+            select_cfg["selection"] = sel_local
+        sel_idx, info = _select_prefix(samples, bundle, select_cfg, method, gamma, compute_teacher_labels=compute_teacher_labels)
         selected_sample = samples[sel_idx]
+        try:
+            if int(getattr(selected_sample, "candidate_index", sel_idx)) != 0:
+                interventions_used += 1
+        except Exception:
+            if int(sel_idx) != 0:
+                interventions_used += 1
         prefix = selected_sample.prefix
         selected_audit_sample = None
         selected_audit_data = None
@@ -576,7 +594,7 @@ def _rollout_one_scene(
                 audit_selector_miss=audit_selector_miss,
                 fra_exec=(selected_audit_fra_exec if selected_audit_fra_exec is not None else (None if selected_teacher_r_dep is None else float(selected_teacher_r_dep < 0.0))),
                 fra_cand=info["fra_cand"],
-                drs=(None if selected_audit_drs is None else float(selected_audit_drs)) if selected_label_audit else info["drs"],
+                drs=(None if selected_audit_drs is None else float(selected_audit_drs)) if (selected_label_audit or coverage_label_audit) else info["drs"],
                 nup=float(info["nup"]),
                 metrics_after_step=metrics_after,
             )

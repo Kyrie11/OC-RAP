@@ -161,6 +161,16 @@ selection:
   fallback_lcb_margin: 0.05
   fallback_gap_margin: 0.25
   nominal_fallback_lcb_slack: 0.05
+  # Optional selector: --set selection.ocrap_selector=calibrated_constrained
+  # Keeps hard/harm feasibility, but penalizes calibrated-recovery shortfall
+  # continuously instead of sending all below-gamma candidates to a hard fallback.
+  calibrated_shortfall_penalty: 1.0
+  calibrated_gap_penalty: 0.05
+  calibrated_admission_bonus: 0.02
+  nominal_utility_slack: 0.05
+  safe_nominal_slack: 0.12
+  intervention_budget_rate: null
+  intervention_budget_penalty: 0.25
   gamma_rec_by_bucket: {}
   gamma_rec_by_bucket_file: null
 calibration:

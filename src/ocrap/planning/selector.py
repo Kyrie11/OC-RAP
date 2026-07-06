@@ -145,3 +145,131 @@ def constrained_lcb_select(
     fallback_score = score - float(fallback_rec_weight) * rec_shortfall - 10.0 * np.maximum(0.0, hard - float(gamma_H)) - 2.0 * np.maximum(0.0, harm - float(gamma_D))
     return SelectionResult(int(cand[np.argmax(fallback_score[cand])]) if cand.size else 0, "recovery_guarded_fallback", admitted)
 
+
+def calibrated_constrained_select(
+    utility: np.ndarray,
+    r_dep: np.ndarray,
+    hard: np.ndarray,
+    harm: np.ndarray,
+    feasible: np.ndarray,
+    gamma_rec: float = 0.0,
+    gamma_H: float = 0.0,
+    gamma_D: float = 0.0,
+    nominal_index: int = 0,
+    *,
+    pred_gap: np.ndarray | None = None,
+    nominal_deviation: np.ndarray | None = None,
+    lcb_beta: float = 0.10,
+    shortfall_penalty: float = 1.0,
+    gap_penalty: float = 0.05,
+    intervention_penalty: float = 0.03,
+    deviation_penalty: float = 0.15,
+    recovery_bonus: float = 0.02,
+    admission_bonus: float = 0.02,
+    nominal_slack: float = 0.03,
+    nominal_slack_gap_limit: float = 0.50,
+    nominal_utility_slack: float = 0.05,
+    safe_nominal_slack: float = 0.12,
+    regime_name: str | None = None,
+    intervention_budget_rate: float | None = None,
+    intervention_budget_used: float | None = None,
+    intervention_budget_steps: float | None = None,
+    intervention_budget_penalty: float = 0.25,
+) -> SelectionResult:
+    """Soft calibrated OC-RAP selector.
+
+    ``constrained_lcb_select`` is deliberately hard-gated: candidates below the
+    calibrated recovery threshold all fall into a recovery-first fallback.  That
+    is useful for stress tests, but in natural/safe scenes it can over-intervene
+    because a candidate that misses gamma by a tiny amount is treated like one
+    that misses it by a large amount.  This selector keeps hard/harm feasibility
+    as a constraint, then turns recovery-threshold shortfall into a continuous
+    penalty.  It also has an optional intervention budget and a stronger
+    nominal-preservation rule for safe/background buckets.
+    """
+    utility = np.asarray(utility, dtype=float).reshape(-1)
+    n = int(utility.size)
+    if n <= 0:
+        return SelectionResult(0, "empty_calibrated_selector", np.zeros((0,), dtype=bool))
+    r_dep = _as_1d_float(r_dep, n, default=-np.inf)
+    hard = _as_1d_float(hard, n, default=np.inf)
+    harm = _as_1d_float(harm, n, default=np.inf)
+    feasible = np.asarray(feasible, dtype=bool).reshape(-1)
+    if feasible.size < n:
+        feasible = np.pad(feasible, (0, n - feasible.size), constant_values=False)
+    feasible = feasible[:n]
+    gap = np.maximum(0.0, _as_1d_float(pred_gap, n, default=0.0))
+    dev = np.maximum(0.0, _as_1d_float(nominal_deviation, n, default=0.0))
+
+    rec_lcb = r_dep - float(lcb_beta) * gap
+    safe = feasible & (hard <= float(gamma_H)) & (harm <= float(gamma_D))
+    admitted = safe & (rec_lcb >= float(gamma_rec))
+    idxs = np.arange(n)
+    intervention = (idxs != int(nominal_index)).astype(float)
+
+    # Continuous recovery shortfall; finite guard prevents NaNs from dominating.
+    rec_shortfall = np.maximum(0.0, float(gamma_rec) - rec_lcb)
+    rec_shortfall = np.where(np.isfinite(rec_shortfall), rec_shortfall, 1.0e6)
+    score = (
+        utility
+        - float(shortfall_penalty) * rec_shortfall
+        - float(gap_penalty) * gap
+        - float(intervention_penalty) * intervention
+        - float(deviation_penalty) * dev
+        + float(recovery_bonus) * (rec_lcb - float(gamma_rec))
+        + float(admission_bonus) * admitted.astype(float)
+    )
+
+    # If the current rollout already exceeded the intervention budget, increase
+    # the marginal cost of deviating from nominal.  This is intentionally a soft
+    # budget because emergency recovery should still be selectable.
+    if intervention_budget_rate is not None and intervention_budget_steps not in {None, 0}:
+        try:
+            used = float(intervention_budget_used or 0.0)
+            steps = max(1.0, float(intervention_budget_steps or 1.0))
+            target = float(intervention_budget_rate)
+            over = max(0.0, (used / steps) - target)
+            if over > 0.0:
+                score = score - float(intervention_budget_penalty) * over * intervention
+        except Exception:
+            pass
+
+    if safe.any():
+        pool = safe.copy()
+    elif feasible.any():
+        # Preserve the original hard/harm safety priority when no fully safe
+        # candidate exists.
+        cand = np.where(feasible)[0]
+        min_hard = float(np.min(hard[cand]))
+        near_hard = feasible & (hard <= min_hard + 1.0e-6)
+        cand2 = np.where(near_hard)[0]
+        min_harm = float(np.min(harm[cand2])) if cand2.size else float(np.min(harm[cand]))
+        pool = near_hard & (harm <= min_harm + 1.0e-6)
+    else:
+        pool = np.ones((n,), dtype=bool)
+
+    cand = np.where(pool)[0]
+    if cand.size == 0:
+        cand = np.arange(n)
+    best_idx = int(cand[np.argmax(score[cand])])
+
+    # Nominal-preserving calibration.  In safe/background regimes, recovery
+    # shortfall by itself should not trigger large behavior changes unless the
+    # alternative is clearly better in calibrated score.
+    regime = (regime_name or "").lower()
+    is_safe_regime = "safe" in regime or "normal" in regime or "background" in regime
+    nominal_extra_slack = float(safe_nominal_slack if is_safe_regime else nominal_slack)
+    if 0 <= nominal_index < n and pool[nominal_index]:
+        nom_gap_ok = gap[nominal_index] <= float(nominal_slack_gap_limit)
+        nom_near_gamma = rec_lcb[nominal_index] >= float(gamma_rec) - nominal_extra_slack
+        nom_near_score = score[nominal_index] >= score[best_idx] - float(nominal_utility_slack)
+        if admitted[nominal_index]:
+            return SelectionResult(int(nominal_index), "nominal_calibrated_admitted", admitted)
+        if nom_gap_ok and nom_near_gamma and nom_near_score:
+            admitted = admitted.copy()
+            admitted[nominal_index] = True
+            return SelectionResult(int(nominal_index), "nominal_calibrated_preserved", admitted)
+
+    reason = "best_calibrated_admitted_score" if admitted[best_idx] else "best_calibrated_soft_constraint"
+    return SelectionResult(best_idx, reason, admitted)
+

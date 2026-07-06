@@ -54,6 +54,85 @@ def _load_gamma(calibration_json: str | Path | None, cfg: dict | None = None) ->
     return gamma
 
 
+def _load_json_mapping(path: str | Path) -> dict[str, float]:
+    import json
+
+    p = Path(path)
+    if not p.exists():
+        return {}
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if isinstance(raw, dict) and isinstance(raw.get("gamma_rec_by_bucket"), dict):
+        raw = raw["gamma_rec_by_bucket"]
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, float] = {}
+    for k, v in raw.items():
+        try:
+            fv = float(v)
+            if np.isfinite(fv):
+                out[str(k)] = fv
+        except Exception:
+            continue
+    return out
+
+
+def _apply_gamma_rec_by_bucket_file(cfg: dict) -> dict:
+    sel = cfg.get("selection", {}) if isinstance(cfg.get("selection", {}), dict) else {}
+    path = sel.get("gamma_rec_by_bucket_file", sel.get("gamma_rec_by_bucket_path", None))
+    if not path:
+        return cfg
+    mapping = _load_json_mapping(path)
+    if not mapping:
+        return cfg
+    local = dict(cfg)
+    new_sel = dict(sel)
+    existing = new_sel.get("gamma_rec_by_bucket", {})
+    merged = dict(existing) if isinstance(existing, dict) else {}
+    merged.update(mapping)
+    new_sel["gamma_rec_by_bucket"] = merged
+    local["selection"] = new_sel
+    return local
+
+
+def _gamma_for_dataset(base_gamma: float, cfg: dict, dataset_label: str | None) -> float:
+    sel_cfg = cfg.get("selection", {}) if isinstance(cfg.get("selection", {}), dict) else {}
+    mapping = sel_cfg.get("gamma_rec_by_bucket", {})
+    if not isinstance(mapping, dict) or not dataset_label:
+        return float(base_gamma)
+    raw = str(dataset_label)
+    keys = [raw, raw.replace("test_", ""), raw.replace("val_", ""), raw.replace("train_", "")]
+    for key in keys:
+        if key in mapping and mapping[key] not in {None, ""}:
+            try:
+                val = float(mapping[key])
+                if np.isfinite(val):
+                    return val
+            except Exception:
+                continue
+    return float(base_gamma)
+
+
+def _prefix_nominal_deviation_items(items: list[dict]) -> np.ndarray:
+    if not items:
+        return np.zeros((0,), dtype=np.float32)
+    try:
+        ref = np.asarray(items[0]["data"]["prefix_states"], dtype=float)[:, :2]
+    except Exception:
+        return np.zeros((len(items),), dtype=np.float32)
+    vals: list[float] = []
+    for x in items:
+        try:
+            xy = np.asarray(x["data"]["prefix_states"], dtype=float)[:, :2]
+            T = min(len(ref), len(xy))
+            vals.append(0.0 if T <= 0 else float(np.sqrt(np.mean(np.sum((xy[:T] - ref[:T]) ** 2, axis=-1))) / 5.0))
+        except Exception:
+            vals.append(0.0)
+    return np.asarray(vals, dtype=np.float32)
+
+
 def _method_list(cfg: dict | None) -> list[str]:
     cfg = cfg or {}
     methods = ((cfg.get("evaluation", {}) or {}).get("methods", None) if isinstance(cfg.get("evaluation", {}), dict) else None)
@@ -71,6 +150,11 @@ def _records_summary(records: list[dict], split: str, gamma: float, source: str,
         result["mean_selected_teacher_R_orc"] = float(np.mean([r["selected_teacher_r_orc"] for r in records]))
         result["mean_selected_utility"] = float(np.mean([r["selected_utility"] for r in records]))
     result.update({"num_scene_time_groups": int(num_groups), "num_records": int(len(records)), "split": split, "gamma_rec": gamma, "source": source})
+    if records:
+        gammas = [float(r.get("gamma_rec", gamma)) for r in records if np.isfinite(float(r.get("gamma_rec", gamma)))]
+        if gammas and (max(gammas) - min(gammas) > 1.0e-9):
+            result["gamma_rec_min"] = float(min(gammas))
+            result["gamma_rec_max"] = float(max(gammas))
     return result
 
 
@@ -129,14 +213,31 @@ def _evaluate_grouped_items(grouped: dict[tuple, list[dict]], methods: list[str]
         utility = np.array([float(np.asarray(x["data"].get("utility", 0.0)).item()) for x in items])
         pred_r_dep = np.array([float(x["pred"].r_dep) for x in items])
         pred_r_orc = np.array([float(x["pred"].r_orc) for x in items])
+        pred_gap = np.array([float(getattr(x["pred"], "gap", x["pred"].r_orc - x["pred"].r_dep)) for x in items])
+        nominal_deviation = _prefix_nominal_deviation_items(items)
         teacher_r_dep = np.array([float(np.asarray(x["data"]["r_dep_star"]).item()) for x in items])
         teacher_r_orc = np.array([float(np.asarray(x["data"]["r_orc_star"]).item()) for x in items])
         hard = np.array([float(np.asarray(x["data"].get("hard_violation", 0.0)).item()) for x in items])
         harm = np.array([float(np.asarray(x["data"].get("harm_proxy", 0.0)).item()) for x in items])
         feasible = np.array([bool(int(np.asarray(x["data"].get("feasible", 1)).item())) for x in items])
+        dataset_label = str(items[0].get("dataset_label", "")) if items else ""
+        gamma_i = _gamma_for_dataset(gamma, cfg, dataset_label)
+        if dataset_label:
+            local_cfg = dict(cfg)
+            local_sel = dict(local_cfg.get("selection", {}) or {}) if isinstance(local_cfg.get("selection", {}), dict) else {}
+            local_sel["active_bucket_name"] = dataset_label
+            local_cfg["selection"] = local_sel
+        else:
+            local_cfg = cfg
 
         for method in methods:
-            sel = select_baseline(method, utility, pred_r_dep, teacher_r_dep, teacher_r_orc, hard, harm, feasible, gamma, gamma_H, gamma_D, cfg)
+            sel = select_baseline(
+                method, utility, pred_r_dep, teacher_r_dep, teacher_r_orc, hard, harm, feasible,
+                gamma_i, gamma_H, gamma_D, local_cfg,
+                pred_r_orc=pred_r_orc,
+                pred_gap=pred_gap,
+                nominal_deviation=nominal_deviation,
+            )
             selected_index = int(sel.selected_index)
             chosen = items[selected_index]
             sd = chosen["data"]
@@ -157,6 +258,7 @@ def _evaluate_grouped_items(grouped: dict[tuple, list[dict]], methods: list[str]
                 "artifact": bool(int(np.asarray(sd.get("i_art_star", 0)).item())),
                 "selected_artifact": bool(int(np.asarray(sd.get("i_art_star", 0)).item())),
                 "selection_reason": sel.reason,
+                "gamma_rec": float(gamma_i),
                 "selected_index": selected_index,
                 "selected_utility": float(utility[selected_index]),
                 "selected_teacher_r_dep": float(teacher_r_dep[selected_index]),
@@ -168,7 +270,7 @@ def _evaluate_grouped_items(grouped: dict[tuple, list[dict]], methods: list[str]
 
 
 def evaluate(dataset: str | Path, checkpoint: str | Path | None = None, output: str | Path | None = None, split: str = "test", calibration_json: str | Path | None = None, cfg: dict | None = None) -> dict:
-    cfg = cfg or {}
+    cfg = _apply_gamma_rec_by_bucket_file(dict(cfg or {}))
     paths = iter_sample_paths_many(dataset)
     print({"event": "evaluate_start", "num_npz_paths": len(paths), "split": split, "dataset": str(dataset)}, flush=True)
     bundle = load_model_bundle(checkpoint, cfg)
@@ -206,6 +308,7 @@ def evaluate(dataset: str | Path, checkpoint: str | Path | None = None, output: 
     result["methods"] = summaries
     result["method_order"] = methods
     result["group_by_dataset"] = group_by_dataset
+    result["gamma_rec_by_bucket"] = (cfg.get("selection", {}) or {}).get("gamma_rec_by_bucket", {}) if isinstance(cfg.get("selection", {}), dict) else {}
     result["dataset_group_count"] = {k: len(v) for k, v in sorted(dataset_grouped.items())}
     result["per_dataset"] = {}
     for label, sub_grouped in sorted(dataset_grouped.items()):
