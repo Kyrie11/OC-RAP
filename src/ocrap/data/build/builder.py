@@ -353,12 +353,32 @@ def _sample_obs_negative_fraction(sample: DatasetSample) -> float:
         return 0.0
 
 
+def _optional_quality_float(quality: dict, key: str) -> float | None:
+    raw = quality.get(key, None)
+    if raw is None or raw == "":
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def _sample_passes_quality_gates(sample: DatasetSample, cfg: dict) -> bool:
     quality = cfg.get("dataset_quality", {}) if isinstance(cfg.get("dataset_quality", {}), dict) else {}
     min_obs_neg = float(quality.get("min_obs_negative_fraction_per_sample", 0.0) or 0.0)
     if min_obs_neg > 0.0 and _sample_obs_negative_fraction(sample) + 1e-12 < min_obs_neg:
         sample.diagnostics["quality_drop_reason"] = "low_obs_negative_fraction"
         sample.diagnostics["obs_negative_fraction"] = float(_sample_obs_negative_fraction(sample))
+        return False
+    min_dep = _optional_quality_float(quality, "min_deployable_score_per_sample")
+    if min_dep is not None and float(sample.r_dep_star) + 1e-12 < min_dep:
+        sample.diagnostics["quality_drop_reason"] = "low_deployable_score"
+        sample.diagnostics["min_deployable_score_per_sample"] = float(min_dep)
+        return False
+    min_orc = _optional_quality_float(quality, "min_oracle_score_per_sample")
+    if min_orc is not None and float(sample.r_orc_star) + 1e-12 < min_orc:
+        sample.diagnostics["quality_drop_reason"] = "low_oracle_score"
+        sample.diagnostics["min_oracle_score_per_sample"] = float(min_orc)
         return False
     if bool(quality.get("require_negative_deployable_sample", False)):
         thr = float(quality.get("negative_deployable_threshold", 0.0))
@@ -944,9 +964,16 @@ def build_samples_for_history(history, split_id: str, cfg: dict, progress_callba
                 continue
             _replace_or_append_sample(selected, sample, max_accepted=max_accepted, macros_seen=macros_seen)
             used.add(int(sample.candidate_index))
+        # For clean safe/normal shards, do not backfill an underfull scene-time
+        # with samples that failed the requested quality gate.  Dropping the
+        # scene-time is better than teaching the selector that nominal scenes
+        # are usually unrecoverable.
+        if len(selected) < min_accepted_required and bool(quality.get("drop_scene_time_if_under_min_quality", False)):
+            return []
         # If a strict per-sample quality gate made the group underfull, keep a
         # small number of additional anchors so offline candidate selection is
-        # still well-defined.
+        # still well-defined.  This legacy fallback remains available for broad
+        # sweeps where coverage is more important than strict sample quality.
         if len(selected) < min_accepted_required:
             anchor_cfg = _cfg_with_artifact_mining(cfg, enable=False)
             for prefix in prefixes:

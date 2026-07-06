@@ -33,7 +33,9 @@ def assign_regimes(samples: list[DatasetSample], history: SceneHistory, cfg: dic
     dep_vals = [float(s.r_dep_star) for s in samples]
     min_dep = min(dep_vals)
     max_dep = max(dep_vals)
-    nominal_dep = float(samples[0].r_dep_star)
+    nominal_sample = next((s for s in samples if bool(s.is_nominal)), samples[0])
+    nominal_dep = float(nominal_sample.r_dep_star)
+    nominal_orc = float(nominal_sample.r_orc_star)
     boxes = np.asarray([agent_state_to_box(a) for a in history.agent_history[-1, 1:]], dtype=np.float32) if history.agent_history.shape[1] > 1 else np.zeros((0, 9), dtype=np.float32)
     valids = history.agent_valid[-1, 1:] if history.agent_history.shape[1] > 1 else np.zeros((0,), dtype=bool)
     ego_box = agent_state_to_box(history.agent_history[-1, 0])
@@ -49,8 +51,30 @@ def assign_regimes(samples: list[DatasetSample], history: SceneHistory, cfg: dic
     # post-contact regime.  This keeps normal/safe background sets from being
     # mislabeled merely because one deliberately generated candidate prefix is
     # bad.  The legacy behavior can be restored with the include_* flags.
-    scene_low_headroom = bool((max_dep > 0.0 and max_dep <= tau_high) if use_paper_regime_definitions else (nominal_dep <= tau_high and max_dep > 0.0))
-    scene_high_headroom = bool((min_dep > tau_high) if use_paper_regime_definitions else True)
+    nominal_prefix_collision = bool(nominal_sample.prefix.diagnostics.get("prefix_collision", False))
+    nominal_prefix_contact = bool(nominal_sample.prefix.diagnostics.get("prefix_contact", False))
+    nominal_prefix_safe = bool(
+        nominal_sample.prefix.feasible
+        and float(nominal_sample.prefix.hard_violation) <= tau_prefix_hard
+        and float(nominal_sample.prefix.harm_proxy) <= tau_prefix_harm
+        and not nominal_prefix_collision
+        and not nominal_prefix_contact
+    )
+    uniform_ok = bool((not require_uniform_for_normal) or ("uniform" in time_reasons))
+    nominal_headroom = bool(nominal_dep > tau_normal_dep and nominal_orc > tau_normal_dep)
+    scene_normal_anchor = bool(
+        (not bool(nominal_sample.i_art_star))
+        and nominal_headroom
+        and nominal_prefix_safe
+        and not history_near
+        and not history_contact
+        and occ_ratio <= tau_normal_occ
+        and uniform_ok
+    )
+    if use_paper_regime_definitions:
+        scene_low_headroom = bool((not scene_normal_anchor) and max_dep > 0.0 and nominal_dep <= tau_high)
+    else:
+        scene_low_headroom = bool(nominal_dep <= tau_high and max_dep > 0.0)
     for s in samples:
         prefix_collision = bool(s.prefix.diagnostics.get("prefix_collision", False))
         prefix_contact = bool(s.prefix.diagnostics.get("prefix_contact", False))
@@ -62,16 +86,13 @@ def assign_regimes(samples: list[DatasetSample], history: SceneHistory, cfg: dic
             and float(s.prefix.harm_proxy) <= tau_prefix_harm
         )
         sample_headroom = bool(float(s.r_dep_star) > tau_normal_dep and float(s.r_orc_star) > tau_normal_dep)
-        uniform_ok = bool((not require_uniform_for_normal) or ("uniform" in time_reasons))
         normal = bool(
-            (not s.i_art_star)
-            and scene_high_headroom
+            scene_normal_anchor
+            and (not s.i_art_star)
             and sample_headroom
             and prefix_safe
             and not near
             and not post
-            and occ_ratio <= tau_normal_occ
-            and uniform_ok
         )
         regimes = {
             "normal": normal,

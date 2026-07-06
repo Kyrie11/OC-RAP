@@ -21,6 +21,9 @@ local_radius_m: 80.0
 bev_resolution_m: 2.0
 bev_channels: 7
 num_candidate_prefixes: 24
+# Optional macro whitelist for clean safe/normal shards, e.g.
+# --set prefix_macro_whitelist=[nominal,keep,stabilize,perturb_nominal,brake]
+prefix_macro_whitelist: null
 num_reactive_futures: 4
 num_targeted_futures: 8
 # Optional override for post-contact / secondary-collision stress builds.
@@ -233,6 +236,17 @@ dataset_quality:
   artifact_quota_uses_label: true
   warn_if_artifact_fraction_above: 0.80
   warn_if_scene_count_below: 50
+  min_obs_negative_fraction_per_sample: 0.0
+  # Optional strict per-sample quality gates for clean safe/normal shards.
+  # null means disabled. Setting both to 0.0 keeps only non-negative
+  # deployable/oracle-recoverable samples.
+  min_deployable_score_per_sample: null
+  min_oracle_score_per_sample: null
+  # When true, an underfull scene-time is dropped instead of being backfilled
+  # with samples that failed quality gates.
+  drop_scene_time_if_under_min_quality: false
+  require_negative_deployable_sample: false
+  negative_deployable_threshold: 0.0
 training:
   device: auto
   require_cuda: false

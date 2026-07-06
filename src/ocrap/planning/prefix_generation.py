@@ -12,6 +12,37 @@ from ocrap.utils.seed import stable_seed
 MACROS = ["nominal", "keep", "brake", "yield", "lane_shift", "merge", "pull_over", "stabilize", "perturb_nominal"]
 
 
+def _list_cfg(value) -> list[str]:
+    if value is None or value == "":
+        return []
+    if isinstance(value, str):
+        raw = value.strip()
+        if raw.startswith("[") and raw.endswith("]"):
+            raw = raw[1:-1]
+        return [x.strip().strip("'\"") for x in raw.split(",") if x.strip().strip("'\"")]
+    if isinstance(value, (list, tuple, set)):
+        return [str(x).strip() for x in value if str(x).strip()]
+    return []
+
+
+def _macro_bank_from_cfg(cfg: dict) -> list[str]:
+    """Return the prefix macro bank, optionally narrowed by prefix_macro_whitelist.
+
+    Clean safe/normal shards can use this whitelist to retain nominal-like
+    candidates without changing the global MACROS ids used by saved datasets.
+    """
+    allowed = _list_cfg(cfg.get("prefix_macro_whitelist", None))
+    if not allowed:
+        return list(MACROS)
+    seen: set[str] = set()
+    bank: list[str] = []
+    for macro in ["nominal", *allowed]:
+        if macro in MACROS and macro not in seen:
+            bank.append(macro)
+            seen.add(macro)
+    return bank or ["nominal"]
+
+
 def _macro_params(macro: str, variant: int, ego_speed: float, cfg: dict) -> np.ndarray:
     if macro in ("nominal", "keep"):
         return np.array([ego_speed, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
@@ -111,16 +142,18 @@ def generate_candidate_prefixes(history: SceneHistory, cfg: dict) -> list[Candid
     n = int(cfg.get("num_candidate_prefixes", 24))
     ego_speed = float(history.ego_state[6])
     prefixes: list[CandidatePrefix] = []
+    macro_bank = _macro_bank_from_cfg(cfg)
     macro_seq: list[tuple[str, int]] = [("nominal", 0)]
     for rep in range(max(1, n)):
-        for m in MACROS[1:]:
+        for m in macro_bank[1:]:
             macro_seq.append((m, rep))
             if len(macro_seq) >= n:
                 break
         if len(macro_seq) >= n:
             break
+    pad_macro = "perturb_nominal" if "perturb_nominal" in macro_bank else macro_bank[-1]
     while len(macro_seq) < n:
-        macro_seq.append(("perturb_nominal", len(macro_seq)))
+        macro_seq.append((pad_macro, len(macro_seq)))
     for i, (macro, variant) in enumerate(macro_seq[:n]):
         params = _macro_params(macro, variant, ego_speed, cfg)
         states, controls, diag = _rollout(history, macro, params, cfg)
