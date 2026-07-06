@@ -616,6 +616,20 @@ def diagnose_dataset(dataset: str | Path, output: str | Path | None = None, max_
     if sample_split_counts.get("test", 0) == 0 and num >= 20:
         warnings.append("test split is empty; final held-out claims cannot be evaluated")
     quality_cfg = cfg.get("dataset_quality", {}) if isinstance(cfg, dict) and isinstance(cfg.get("dataset_quality", {}), dict) else {}
+    require_nominal_cfg = quality_cfg.get("require_nominal_regimes", []) if isinstance(quality_cfg, dict) else []
+    if isinstance(require_nominal_cfg, str):
+        require_nominal_set = {x.strip() for x in require_nominal_cfg.strip("[]").split(",") if x.strip()}
+    else:
+        require_nominal_set = {str(x).strip() for x in require_nominal_cfg} if isinstance(require_nominal_cfg, (list, tuple, set)) else set()
+    artifact_cfg = cfg.get("artifact", {}) if isinstance(cfg, dict) and isinstance(cfg.get("artifact", {}), dict) else {}
+    nominal_regime_dataset = bool(quality_cfg.get("nominal_regime_dataset", False) or ("normal" in require_nominal_set and not bool(artifact_cfg.get("force_mine", False)) and float(artifact_cfg.get("mine_probability", 0.0) or 0.0) <= 0.0))
+    if nominal_regime_dataset:
+        warnings = [w for w in warnings if not (
+            w.startswith("artifact_fraction == 0")
+            or w.startswith("odg_pos_mean <=")
+            or w.startswith("no complete hidden yield/accelerate artifact pair")
+            or w.startswith("regime count == 0: oracle_artifact")
+        )]
     warn_art_hi = float(quality_cfg.get("warn_if_artifact_fraction_above", 0.80))
     if num > 0 and artifact_fraction > warn_art_hi:
         warnings.append(f"artifact_fraction > {warn_art_hi:.2f}; dataset is stress-only and cannot support primary NUP/calibration claims")

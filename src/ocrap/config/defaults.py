@@ -166,6 +166,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "require_any_regimes": [],
         "forbid_any_regimes": [],
         "min_uniform_times_per_scenario": 0,
+        "nominal_regime_dataset": False,
+        "early_nominal_regime_filter": True,
+        "skip_forbidden_prefix_diagnostics": True,
+        "max_quality_attempts_per_scene_time": 0,
         # For primary mixed builds, non-mined pass stays natural/nominal while
         # the mined pass may use the branch-specific oracle-artifact label.
         # Without this, mined hidden pairs often remain r_dep >= 0 under benign

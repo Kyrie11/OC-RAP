@@ -25,7 +25,8 @@ python -m ocrap.cli build-dataset \
   --set num_recovery_options=12 \
   --set waymax.compute_future_metrics=true \
   --set waymax.teacher_backend=hybrid \
-  --set waymax.teacher_rollout_top_k_options=0 \
+  --set waymax.teacher_rollout_top_k_options=4 \
+  --set 'waymax.teacher_rollout_option_modes=[stop,brake_lane,yield_rejoin,pull_over]' \
   --set waymax.teacher_metrics_stride=0 \
   --set waymax.use_jit_scan_rollouts=true \
   --set waymax.enable_augmented_hidden_roots=false \
@@ -42,6 +43,10 @@ python -m ocrap.cli build-dataset \
   --set dataset_quality.min_deployable_score_per_sample=0.0 \
   --set dataset_quality.min_oracle_score_per_sample=0.0 \
   --set dataset_quality.drop_scene_time_if_under_min_quality=true \
+  --set dataset_quality.nominal_regime_dataset=true \
+  --set dataset_quality.early_nominal_regime_filter=true \
+  --set dataset_quality.skip_forbidden_prefix_diagnostics=true \
+  --set dataset_quality.max_quality_attempts_per_scene_time=10 \
   --set 'dataset_quality.require_nominal_regimes=[normal]' \
   --set 'dataset_quality.forbid_nominal_regimes=[near_contact,post_contact,oracle_artifact,prefix_collision,prefix_contact]' \
   --set 'dataset_quality.forbid_any_regimes=[oracle_artifact,prefix_collision,prefix_contact]' \
@@ -74,7 +79,8 @@ python -m ocrap.cli build-dataset \
   --set num_recovery_options=12 \
   --set waymax.compute_future_metrics=true \
   --set waymax.teacher_backend=hybrid \
-  --set waymax.teacher_rollout_top_k_options=0 \
+  --set waymax.teacher_rollout_top_k_options=4 \
+  --set 'waymax.teacher_rollout_option_modes=[stop,brake_lane,yield_rejoin,pull_over]' \
   --set waymax.teacher_metrics_stride=0 \
   --set waymax.use_jit_scan_rollouts=true \
   --set waymax.enable_augmented_hidden_roots=false \
@@ -91,6 +97,10 @@ python -m ocrap.cli build-dataset \
   --set dataset_quality.min_deployable_score_per_sample=0.0 \
   --set dataset_quality.min_oracle_score_per_sample=0.0 \
   --set dataset_quality.drop_scene_time_if_under_min_quality=true \
+  --set dataset_quality.nominal_regime_dataset=true \
+  --set dataset_quality.early_nominal_regime_filter=true \
+  --set dataset_quality.skip_forbidden_prefix_diagnostics=true \
+  --set dataset_quality.max_quality_attempts_per_scene_time=10 \
   --set 'dataset_quality.require_nominal_regimes=[normal]' \
   --set 'dataset_quality.forbid_nominal_regimes=[near_contact,post_contact,oracle_artifact,prefix_collision,prefix_contact]' \
   --set 'dataset_quality.forbid_any_regimes=[oracle_artifact,prefix_collision,prefix_contact]' \
@@ -126,7 +136,8 @@ python -m ocrap.cli build-dataset \
   --set 'waymax.metrics_to_run=[log_divergence,overlap,offroad,kinematic_infeasibility]' \
   --set waymax.compute_future_metrics=true \
   --set waymax.teacher_backend=hybrid \
-  --set waymax.teacher_rollout_top_k_options=0 \
+  --set waymax.teacher_rollout_top_k_options=4 \
+  --set 'waymax.teacher_rollout_option_modes=[stop,brake_lane,yield_rejoin,pull_over]' \
   --set waymax.teacher_metrics_stride=0 \
   --set waymax.use_jit_scan_rollouts=true \
   --set waymax.enable_augmented_hidden_roots=false \
@@ -143,6 +154,10 @@ python -m ocrap.cli build-dataset \
   --set dataset_quality.min_deployable_score_per_sample=0.0 \
   --set dataset_quality.min_oracle_score_per_sample=0.0 \
   --set dataset_quality.drop_scene_time_if_under_min_quality=true \
+  --set dataset_quality.nominal_regime_dataset=true \
+  --set dataset_quality.early_nominal_regime_filter=true \
+  --set dataset_quality.skip_forbidden_prefix_diagnostics=true \
+  --set dataset_quality.max_quality_attempts_per_scene_time=10 \
   --set 'dataset_quality.require_nominal_regimes=[normal]' \
   --set 'dataset_quality.forbid_nominal_regimes=[near_contact,post_contact,oracle_artifact,prefix_collision,prefix_contact]' \
   --set 'dataset_quality.forbid_any_regimes=[oracle_artifact,prefix_collision,prefix_contact]' \

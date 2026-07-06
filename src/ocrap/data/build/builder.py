@@ -22,6 +22,7 @@ from ocrap.roots import aggregate_root_margins, cluster_roots, future_trajectory
 from ocrap.simulation.futures import generate_counterfactual_futures
 from ocrap.simulation.observation import compatibility_labels, render_observation, unknown_ratio_in_corridor
 from ocrap.simulation.teacher import compute_future_option_margins, default_recovery_options, option_valid_mask
+from ocrap.utils.geometry import agent_state_to_box, compute_ttc, min_box_clearance
 from ocrap.utils.seed import stable_seed
 
 from .history import construct_history
@@ -785,6 +786,100 @@ def _quality_list(cfg: dict, key: str) -> list[str]:
     return []
 
 
+
+_PREFIX_DIAGNOSTIC_REGIMES = {"prefix_collision", "prefix_contact"}
+
+
+def _regime_constraints_requested(cfg: dict) -> bool:
+    return bool(
+        _quality_list(cfg, "require_nominal_regimes")
+        or _quality_list(cfg, "forbid_nominal_regimes")
+        or _quality_list(cfg, "require_any_regimes")
+        or _quality_list(cfg, "forbid_any_regimes")
+    )
+
+
+def _nominal_regime_constraints_pass(sample: DatasetSample, cfg: dict) -> bool:
+    require_nominal = _quality_list(cfg, "require_nominal_regimes")
+    forbid_nominal = _quality_list(cfg, "forbid_nominal_regimes")
+    forbid_any = _quality_list(cfg, "forbid_any_regimes")
+    nlab = sample.regime_label or {}
+    if require_nominal and not all(bool(nlab.get(k, False)) for k in require_nominal):
+        return False
+    if forbid_nominal and any(bool(nlab.get(k, False)) for k in forbid_nominal):
+        return False
+    if forbid_any and any(bool(nlab.get(k, False)) for k in forbid_any):
+        return False
+    return True
+
+
+def _prefix_forbidden_by_diagnostics(prefix: CandidatePrefix, cfg: dict, *, nominal: bool = False) -> str | None:
+    """Return a cheap prefix-level forbidden-regime reason, if any.
+
+    ``assign_regimes`` is called after expensive futures/teacher labels are built.
+    For safe/normal shards, however, prefix_collision and prefix_contact are known
+    immediately from prefix generation.  Skipping those prefixes before Waymax
+    rollout preserves the final ``forbid_any_regimes`` contract while avoiding
+    doomed recovery-label computation.
+    """
+    quality = cfg.get("dataset_quality", {}) if isinstance(cfg.get("dataset_quality", {}), dict) else {}
+    if not bool(quality.get("skip_forbidden_prefix_diagnostics", True)):
+        return None
+    keys = set(_quality_list(cfg, "forbid_any_regimes"))
+    if nominal:
+        keys.update(_quality_list(cfg, "forbid_nominal_regimes"))
+    keys &= _PREFIX_DIAGNOSTIC_REGIMES
+    if not keys:
+        return None
+    diag = prefix.diagnostics or {}
+    for key in sorted(keys):
+        if bool(diag.get(key, False)):
+            return key
+    return None
+
+
+def _history_rejects_required_nominal_regime(history, cfg: dict) -> str | None:
+    """Cheap scene-time prefilter for ``require_nominal_regimes=[normal]``.
+
+    The full normal decision also depends on nominal OC-MERO scores, so this is
+    deliberately only a rejector for conditions that cannot be repaired by any
+    prefix: non-uniform sampling when uniform is required, near/contact geometry,
+    and excessive unknown corridor ratio.  It prevents paying Waymax cost for all
+    prefixes in scene-times that are guaranteed to fail the final normal filter.
+    """
+    quality = cfg.get("dataset_quality", {}) if isinstance(cfg.get("dataset_quality", {}), dict) else {}
+    if not bool(quality.get("early_nominal_regime_filter", True)):
+        return None
+    if "normal" not in set(_quality_list(cfg, "require_nominal_regimes")):
+        return None
+    thresholds = cfg.get("regime_thresholds", {}) if isinstance(cfg.get("regime_thresholds", {}), dict) else {}
+    if bool(thresholds.get("require_uniform_for_normal", False)):
+        reasons = set(str(x) for x in history.metadata.get("time_sampling_reasons", []) if x is not None)
+        if "uniform" not in reasons:
+            return "normal_requires_uniform_time"
+    occ_ratio = unknown_ratio_in_corridor(history.occ_mask)
+    tau_normal_occ = float(thresholds.get("tau_normal_occ", 0.75))
+    if float(occ_ratio) > tau_normal_occ:
+        return "normal_unknown_ratio_too_high"
+    tau_d = float(thresholds.get("tau_d", 2.0))
+    tau_ttc = float(thresholds.get("tau_ttc", 3.0))
+    tau_contact = float(thresholds.get("tau_contact", 0.8))
+    if history.agent_history.shape[1] > 1:
+        boxes = np.asarray([agent_state_to_box(a) for a in history.agent_history[-1, 1:]], dtype=np.float32)
+        valids = history.agent_valid[-1, 1:].astype(bool)
+    else:
+        boxes = np.zeros((0, 9), dtype=np.float32)
+        valids = np.zeros((0,), dtype=bool)
+    if len(boxes):
+        ego_box = agent_state_to_box(history.agent_history[-1, 0])
+        dmin = min_box_clearance(ego_box, boxes, valids)
+        ttc = compute_ttc(history.ego_state, boxes, valids)
+        if float(dmin) < tau_contact:
+            return "normal_history_contact"
+        if float(dmin) < tau_d or float(ttc) < tau_ttc:
+            return "normal_history_near_contact"
+    return None
+
 def _apply_scene_time_regime_filter(selected: list[DatasetSample], cfg: dict) -> list[DatasetSample]:
     """Optionally drop an entire scene-time group by regime labels.
 
@@ -816,6 +911,14 @@ def _apply_scene_time_regime_filter(selected: list[DatasetSample], cfg: dict) ->
     return selected
 
 def build_samples_for_history(history, split_id: str, cfg: dict, progress_callback: Callable[[int], None] | None = None) -> list[DatasetSample]:
+    n_prefix_budget = max(0, int(cfg.get("num_candidate_prefixes", 24)))
+    early_history_reason = _history_rejects_required_nominal_regime(history, cfg)
+    if early_history_reason is not None:
+        history.metadata["quality_fast_reject_reason"] = early_history_reason
+        if progress_callback is not None:
+            progress_callback(n_prefix_budget)
+        return []
+
     prefixes = generate_candidate_prefixes(history, cfg)
     options = default_recovery_options(int(cfg.get("num_recovery_options", 24)), shoulder_available=bool(history.metadata.get("shoulder_available", True)), adjacent_available=bool(history.metadata.get("adjacent_available", True)))
     option_valid = option_valid_mask(options)
@@ -830,14 +933,28 @@ def build_samples_for_history(history, split_id: str, cfg: dict, progress_callba
     balanced_two_pass = _quality_bool(cfg, "balanced_two_pass", True)
     max_non_attempts = _quality_attempt_cap(cfg, "max_nonartifact_attempts_per_scene_time", len(prefixes))
     max_art_attempts = _quality_attempt_cap(cfg, "max_artifact_attempts_per_scene_time", len(prefixes))
+    max_quality_attempts = _quality_int(cfg, "max_quality_attempts_per_scene_time", 0)
 
     selected: list[DatasetSample] = []
     deferred: list[DatasetSample] = []
     macros_seen: set[str] = set()
     materialized_prefixes: set[int] = set()
 
+    def progress_unmaterialized() -> None:
+        if progress_callback is not None:
+            progress_callback(max(0, len(prefixes) - len(materialized_prefixes)))
+
     def materialize(prefix, local_cfg: dict, *, enforce_quality: bool = True, allow_filter_drop: bool = True) -> DatasetSample | None:
         a_idx = int(prefix.macro_id)
+
+        # Drop prefix-level forbidden regimes before futures/teacher labels.  This
+        # is especially important for safe shards with forbid_any_regimes including
+        # prefix_collision/prefix_contact: those labels are already known from the
+        # cheap prefix rollout.
+        if allow_filter_drop:
+            forbidden = _prefix_forbidden_by_diagnostics(prefix, local_cfg, nominal=bool(prefix.macro_name == "nominal" or a_idx == 0))
+            if forbidden is not None:
+                return None
 
         # Speed-critical strict/balanced artifact builds:
         # ``artifact_pair_mode=balanced`` uses a mined second pass with
@@ -864,6 +981,39 @@ def build_samples_for_history(history, split_id: str, cfg: dict, progress_callba
             sample.diagnostics["obs_negative_fraction"] = float(_sample_obs_negative_fraction(sample))
         return sample
 
+    quality = cfg.get("dataset_quality", {}) if isinstance(cfg.get("dataset_quality", {}), dict) else {}
+    require_nominal = bool(quality.get("require_nominal_per_scene_time", True))
+    keep_nominal = bool(quality.get("keep_nominal_even_if_quality_fails", True))
+    min_accepted_required = int(quality.get("min_accepted_prefixes_per_scene_time", 0) or 0)
+    nominal_prefix = next((p for p in prefixes if p.macro_name == "nominal" or int(p.macro_id) == 0), None)
+
+    # If the requested safe/normal split constrains the nominal regime, evaluate
+    # the nominal anchor first.  Scene-times that fail normal/forbidden-nominal
+    # constraints are rejected after one labeled sample instead of after all
+    # candidate prefixes have been fully rolled out.
+    nominal_gate_needed = bool(require_nominal and nominal_prefix is not None and _regime_constraints_requested(cfg) and _quality_bool(cfg, "early_nominal_regime_filter", True))
+    if nominal_gate_needed:
+        forbidden = _prefix_forbidden_by_diagnostics(nominal_prefix, cfg, nominal=True)
+        if forbidden is not None:
+            history.metadata["quality_fast_reject_reason"] = f"nominal_{forbidden}"
+            progress_unmaterialized()
+            return []
+        anchor_cfg = _cfg_with_artifact_mining(cfg, enable=False)
+        nominal = materialize(nominal_prefix, anchor_cfg, enforce_quality=not keep_nominal, allow_filter_drop=False)
+        materialized_prefixes.add(int(nominal_prefix.macro_id))
+        if progress_callback is not None:
+            progress_callback(1)
+        if nominal is None:
+            progress_unmaterialized()
+            return []
+        assign_regimes([nominal], history, cfg)
+        if not _nominal_regime_constraints_pass(nominal, cfg):
+            nominal.diagnostics["quality_fast_reject_reason"] = "nominal_regime_constraints_failed"
+            progress_unmaterialized()
+            return []
+        selected.append(nominal)
+        macros_seen.add(nominal.prefix.macro_name)
+
     if mode == "balanced" and balanced_two_pass:
         # Pass 1: guarantee a non-artifact / nominal-preservation side by turning
         # off hidden-pair mining for this materialization.  This is what prevents
@@ -872,6 +1022,8 @@ def build_samples_for_history(history, split_id: str, cfg: dict, progress_callba
         no_mine_prefixes = _balanced_prefix_order(history, prefixes, cfg, salt="nonartifact", nominal_first=bool((cfg.get("dataset_quality", {}) or {}).get("balanced_keep_nominal_nonartifact", True)))
         non_attempts = 0
         for prefix in no_mine_prefixes:
+            if int(prefix.macro_id) in materialized_prefixes:
+                continue
             if non_attempts >= max_non_attempts:
                 break
             if max_accepted > 0 and len(selected) >= max_accepted and len(selected) - sum(int(_sample_is_artifact(s, no_mine_cfg)) for s in selected) >= min_non:
@@ -892,6 +1044,8 @@ def build_samples_for_history(history, split_id: str, cfg: dict, progress_callba
         mine_prefixes = _balanced_prefix_order(history, prefixes, cfg, salt="artifact", nominal_first=False)
         art_attempts = 0
         for prefix in mine_prefixes:
+            if int(prefix.macro_id) in materialized_prefixes and len(prefixes) > max_accepted:
+                continue
             n_art = sum(int(_sample_is_artifact(s, mine_cfg)) for s in selected)
             if art_attempts >= max_art_attempts:
                 break
@@ -899,8 +1053,6 @@ def build_samples_for_history(history, split_id: str, cfg: dict, progress_callba
                 break
             if max_art > 0 and n_art >= max_art:
                 break
-            if int(prefix.macro_id) in materialized_prefixes and len(prefixes) > max_accepted:
-                continue
             art_attempts += 1
             sample = materialize(prefix, mine_cfg)
             materialized_prefixes.add(int(prefix.macro_id))
@@ -910,15 +1062,23 @@ def build_samples_for_history(history, split_id: str, cfg: dict, progress_callba
                 progress_callback(1)
 
         # Account for prefixes not materialized because quotas were satisfied.
-        if progress_callback is not None:
-            progress_callback(max(0, len(prefixes) - len(materialized_prefixes)))
+        progress_unmaterialized()
     else:
+        quality_attempts = 0
         for a_idx, prefix in enumerate(prefixes):
+            if int(prefix.macro_id) in materialized_prefixes:
+                continue
             if max_accepted > 0 and len(selected) >= max_accepted:
                 if progress_callback is not None:
-                    progress_callback(len(prefixes) - a_idx)
+                    progress_callback(sum(1 for q in prefixes[a_idx:] if int(q.macro_id) not in materialized_prefixes))
                 break
+            if max_quality_attempts > 0 and quality_attempts >= max_quality_attempts:
+                if progress_callback is not None:
+                    progress_callback(sum(1 for q in prefixes[a_idx:] if int(q.macro_id) not in materialized_prefixes))
+                break
+            quality_attempts += 1
             sample = materialize(prefix, cfg)
+            materialized_prefixes.add(int(prefix.macro_id))
             if sample is None:
                 if progress_callback is not None:
                     progress_callback(1)
@@ -941,15 +1101,14 @@ def build_samples_for_history(history, split_id: str, cfg: dict, progress_callba
     if max_accepted > 0:
         selected = selected[:max_accepted]
 
-    quality = cfg.get("dataset_quality", {}) if isinstance(cfg.get("dataset_quality", {}), dict) else {}
-    require_nominal = bool(quality.get("require_nominal_per_scene_time", True))
-    keep_nominal = bool(quality.get("keep_nominal_even_if_quality_fails", True))
-    min_accepted_required = int(quality.get("min_accepted_prefixes_per_scene_time", 0) or 0)
     if require_nominal:
-        nominal_prefix = next((p for p in prefixes if p.macro_name == "nominal" or int(p.macro_id) == 0), None)
+        nominal_prefix = nominal_prefix or next((p for p in prefixes if p.macro_name == "nominal" or int(p.macro_id) == 0), None)
         if nominal_prefix is not None and sum(int(bool(s.is_nominal)) for s in selected) != 1:
             anchor_cfg = _cfg_with_artifact_mining(cfg, enable=False)
-            nominal = materialize(nominal_prefix, anchor_cfg, enforce_quality=not keep_nominal, allow_filter_drop=False)
+            if int(nominal_prefix.macro_id) in materialized_prefixes and any(bool(s.is_nominal) for s in selected):
+                nominal = next((s for s in selected if bool(s.is_nominal)), None)
+            else:
+                nominal = materialize(nominal_prefix, anchor_cfg, enforce_quality=not keep_nominal, allow_filter_drop=False)
             if nominal is not None:
                 _replace_or_append_sample(selected, nominal, max_accepted=max_accepted, macros_seen=macros_seen)
         selected = _dedupe_nominal(selected)
