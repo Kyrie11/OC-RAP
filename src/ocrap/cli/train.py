@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from time import perf_counter
+from collections import Counter
 
 import numpy as np
 import torch
@@ -18,6 +19,7 @@ from ocrap.models.losses import (
     deployability_classification_loss,
     shared_option_admission_loss,
     shared_option_q_regression_loss,
+    shared_option_success_regression_loss,
 )
 from ocrap.models.ocrap import OCRAPModel
 from ocrap.utils.seed import seed_everything
@@ -107,6 +109,50 @@ def _progress_iter(loader: DataLoader, *, enabled: bool, desc: str):
         return loader
 
 
+def _dataset_root_name(p: Path) -> str:
+    parts = list(p.parts)
+    for i in range(len(parts) - 2, -1, -1):
+        name = parts[i]
+        low = name.lower()
+        if any(tok in low for tok in ("safe", "near", "contact", "train_", "val_", "test_")):
+            return name
+    return p.parent.parent.name if p.parent.name == "samples" else p.parent.name
+
+
+def _profile_paths(paths: list[Path], *, stage: str, max_scalar_scan: int | None = None) -> dict[str, object]:
+    total = len(paths)
+    roots = Counter(_dataset_root_name(p) for p in paths)
+    limit = total if max_scalar_scan is None or max_scalar_scan <= 0 else min(total, int(max_scalar_scan))
+    num_art = num_neg = num_safe_pos = 0
+    r_sum = 0.0
+    scanned = 0
+    for p in paths[:limit]:
+        try:
+            is_art = float(np.asarray(scalar_metadata_for_path(p, "i_art_star", 0)).item()) > 0.5
+            r_dep = float(np.asarray(scalar_metadata_for_path(p, "r_dep_star", 0)).item())
+            is_neg = r_dep < 0.0
+            root = _dataset_root_name(p).lower()
+            is_safe_pos = ("safe" in root) and (not is_neg) and (not is_art)
+            num_art += int(is_art)
+            num_neg += int(is_neg)
+            num_safe_pos += int(is_safe_pos)
+            r_sum += r_dep
+            scanned += 1
+        except Exception:
+            pass
+    return {
+        "event": "dataset_profile",
+        "stage": stage,
+        "num_paths": int(total),
+        "roots": dict(sorted(roots.items())),
+        "scalar_scanned": int(scanned),
+        "artifact_fraction": float(num_art / max(scanned, 1)),
+        "negative_deployable_fraction": float(num_neg / max(scanned, 1)),
+        "safe_positive_fraction": float(num_safe_pos / max(scanned, 1)),
+        "r_dep_mean": float(r_sum / max(scanned, 1)),
+    }
+
+
 def _epoch(
     model: OCRAPModel,
     loader: DataLoader,
@@ -178,6 +224,8 @@ def _epoch(
         loss_art = anti_oracle_loss(r_orc, r_dep, batch["i_art_star"].float(), delta_neg=float(art_cfg.get("delta_neg", 0.0)))
         loss_gap = artifact_gap_loss(gap, (batch["r_orc_star"].float() - batch["r_dep_star"].float()).clamp_min(0.0), batch["i_art_star"].float(), margin=float(art_cfg.get("gap_margin", 0.5)))
         loss_admit = deployability_classification_loss(r_dep, batch["r_dep_star"].float(), gamma=float(art_cfg.get("admission_gamma", 0.0)))
+        option_gamma = float(art_cfg.get("admission_gamma", 0.0))
+        option_temperature = float(tcfg.get("option_success_temperature", 0.35))
         loss_option_q = shared_option_q_regression_loss(pred_q, teacher_q, batch["root_valid"], batch["option_valid"])
         loss_option_admit = shared_option_admission_loss(
             pred_q,
@@ -185,9 +233,26 @@ def _epoch(
             batch["root_probs"].float(),
             batch["root_valid"],
             batch["option_valid"],
-            gamma=float(art_cfg.get("admission_gamma", 0.0)),
+            gamma=option_gamma,
         )
-        loss_option_best = best_shared_option_loss(pred_q, teacher_q, batch["root_probs"].float(), batch["root_valid"], batch["option_valid"])
+        loss_option_success = shared_option_success_regression_loss(
+            pred_q,
+            teacher_q,
+            batch["root_probs"].float(),
+            batch["root_valid"],
+            batch["option_valid"],
+            gamma=option_gamma,
+            temperature=option_temperature,
+        )
+        loss_option_best = best_shared_option_loss(
+            pred_q,
+            teacher_q,
+            batch["root_probs"].float(),
+            batch["root_valid"],
+            batch["option_valid"],
+            gamma=option_gamma,
+            temperature=option_temperature,
+        )
         if bool((cfg.get("ablation", {}) or {}).get("without_anti_oracle", False)):
             loss_art = loss_art * 0.0
             loss_gap = loss_gap * 0.0
@@ -203,6 +268,7 @@ def _epoch(
             + float(lw.get("admission", 0.2)) * loss_admit
             + float(lw.get("option_q", 0.5)) * loss_option_q
             + float(lw.get("option_admission", 0.4)) * loss_option_admit
+            + float(lw.get("option_success", 0.0)) * loss_option_success
             + float(lw.get("option_best", 0.2)) * loss_option_best
             + float(lw.get("utility", 0.2)) * loss_util
         )
@@ -229,6 +295,7 @@ def _epoch(
             "loss_admission": loss_admit.item(),
             "loss_option_q": loss_option_q.item(),
             "loss_option_admission": loss_option_admit.item(),
+            "loss_option_success": loss_option_success.item(),
             "loss_option_best": loss_option_best.item(),
             "loss_utility": loss_util.item(),
             "pred_r_dep_mean": r_dep.mean().item(),
@@ -244,13 +311,24 @@ def _make_sampler(ds: OCRAPSampleDataset, cfg: dict) -> WeightedRandomSampler | 
     weight_art = float(tcfg.get("artifact_sampler_weight", 0.25))
     weight_neg = float(tcfg.get("negative_deployable_sampler_weight", 0.75))
     weight_safe_pos = float(tcfg.get("safe_positive_sampler_weight", 0.25))
-    if max(weight_art, weight_neg, weight_safe_pos) <= 0:
+    regime_balance_power = float(tcfg.get("regime_balance_power", 0.0))
+    if max(weight_art, weight_neg, weight_safe_pos, regime_balance_power) <= 0:
         return None
     weights = []
     num_artifacts = 0
     num_negative = 0
     num_safe_pos = 0
     total = len(ds.paths)
+    roots = [_dataset_root_name(p) for p in ds.paths]
+    root_counts = Counter(roots)
+    print({
+        "event": "sampler_weight_config",
+        "artifact_sampler_weight": weight_art,
+        "negative_deployable_sampler_weight": weight_neg,
+        "safe_positive_sampler_weight": weight_safe_pos,
+        "regime_balance_power": regime_balance_power,
+        "root_counts": dict(sorted(root_counts.items())),
+    }, flush=True)
     for idx, p in enumerate(ds.paths, 1):
         if idx == 1 or idx % 5000 == 0 or idx == total:
             print({"event": "sampler_scan_progress", "seen": idx, "total": total}, flush=True)
@@ -258,12 +336,15 @@ def _make_sampler(ds: OCRAPSampleDataset, cfg: dict) -> WeightedRandomSampler | 
             is_art = float(np.asarray(scalar_metadata_for_path(p, "i_art_star", 0)).item()) > 0.5
             r_dep = float(np.asarray(scalar_metadata_for_path(p, "r_dep_star", 0)).item())
             is_neg = r_dep < 0.0
-            root_name = str(p.parent.parent.name if p.parent.name == "samples" else p.parent.name).lower()
+            root_name = _dataset_root_name(p).lower()
             is_safe_pos = ("safe" in root_name) and (not is_neg) and (not is_art)
             num_artifacts += int(is_art)
             num_negative += int(is_neg)
             num_safe_pos += int(is_safe_pos)
             w = 1.0
+            if regime_balance_power > 0:
+                root_count = max(1, int(root_counts.get(_dataset_root_name(p), 1)))
+                w *= float((total / max(len(root_counts), 1) / root_count) ** regime_balance_power)
             if is_art:
                 w += weight_art
             if is_neg:
@@ -305,6 +386,10 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
     else:
         val_paths = split_paths_by_npz_split(paths, "val")
     print({"event": "split_scan_done", "num_train_paths": len(train_paths), "num_val_paths": len(val_paths)}, flush=True)
+    profile_max = int(tcfg_for_split.get("dataset_profile_max_scalar_scan", 0))
+    if bool(tcfg_for_split.get("dataset_profile", True)):
+        print(_profile_paths(train_paths, stage="train", max_scalar_scan=profile_max), flush=True)
+        print(_profile_paths(val_paths, stage="val", max_scalar_scan=profile_max), flush=True)
     if not train_paths:
         train_paths = paths
     if not val_paths:
@@ -363,6 +448,8 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers, collate_fn=_collate, pin_memory=(device.type == "cuda"))
     epochs = int(tcfg.get("epochs", 10))
     best_val = float("inf")
+    best_epoch = 0
+    no_improve_epochs = 0
     history = []
     best_path = out / "best.pt"
     latest_path = out / "latest.pt"
@@ -419,18 +506,35 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             torch.save(payload, latest_path)
         if improved:
             best_val = va["loss"]
+            best_epoch = ep
+            no_improve_epochs = 0
             payload["val_loss"] = float(best_val)
             payload["is_best"] = True
             torch.save(payload, best_path)
+        else:
+            no_improve_epochs += 1
         print({
             "event": "epoch_end",
             "epoch": ep,
             "train_loss": round(float(tr.get("loss", 0.0)), 6),
             "val_loss": round(float(va.get("loss", 0.0)), 6),
             "best_val_loss": round(float(best_val), 6),
+            "best_epoch": int(best_epoch),
             "improved": bool(improved),
             "seconds": round(float(row["seconds"]), 2),
         }, flush=True)
+        patience = int(tcfg.get("early_stop_patience", 0) or 0)
+        if patience > 0 and no_improve_epochs >= patience:
+            print({
+                "event": "early_stop",
+                "epoch": ep,
+                "best_epoch": int(best_epoch),
+                "best_val_loss": float(best_val),
+        "best_epoch": int(best_epoch),
+        "epochs_completed": int(len(history)),
+                "patience": patience,
+            }, flush=True)
+            break
     result = {
         "checkpoint": str(best_path),
         "latest_checkpoint": str(latest_path),
