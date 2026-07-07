@@ -9,6 +9,7 @@ import numpy as np
 
 from ocrap.data.build.builder import build_feature_only_samples_for_history, build_labeled_samples_for_candidate_indices, build_samples_for_history
 from ocrap.data.build.history import construct_history
+from ocrap.data.schema import pad_recovery_params
 from ocrap.data.serialization import write_json
 from ocrap.data.waymax_loader import iter_waymax_womd_scenarios, raw_scenario_from_waymax_state
 from ocrap.evaluation.baselines import select_baseline
@@ -256,6 +257,60 @@ def _sample_to_dict(sample) -> dict[str, Any]:
     return sample.to_npz_dict()
 
 
+def _sample_to_inference_dict(sample) -> dict[str, Any]:
+    """Return only the fields needed by online model inference/selection.
+
+    ``DatasetSample.to_npz_dict()`` is intentionally complete because it is used
+    for persisted training/evaluation samples.  In closed-loop fast mode, however,
+    calling it for every candidate at every replan repeatedly copies large shared
+    history/map/BEV arrays and serializes diagnostics/future metadata that the
+    model never reads.  This lightweight view preserves the exact model features
+    and selector inputs while avoiding those extra CPU allocations.
+    """
+    h = sample.h_t
+    p = sample.prefix
+    return {
+        "scene_id": sample.scene_id,
+        "original_scenario_id": sample.original_scenario_id,
+        "time_index": np.int64(sample.time_index),
+        "candidate_index": np.int64(sample.candidate_index),
+        "split_id": sample.split_id,
+        "is_nominal": np.int64(sample.is_nominal),
+        "agent_history": np.asarray(h.agent_history, dtype=np.float32),
+        "agent_valid": np.asarray(h.agent_valid, dtype=np.float32),
+        "map_polylines": np.asarray(h.map_polylines, dtype=np.float32),
+        "map_valid": np.asarray(h.map_valid, dtype=np.float32),
+        "dynamic_map": np.asarray(h.dynamic_map, dtype=np.float32),
+        "route": np.asarray(h.route, dtype=np.float32),
+        "bev_occ": np.asarray(h.occ_mask, dtype=np.float32),
+        "ego_state": np.asarray(h.ego_state, dtype=np.float32),
+        "prefix_states": np.asarray(p.prefix_states, dtype=np.float32),
+        "prefix_controls": np.asarray(p.prefix_controls, dtype=np.float32),
+        "prefix_macro_id": np.int64(p.macro_id),
+        "prefix_macro_type_id": np.int64((p.diagnostics or {}).get("macro_type_id", p.macro_id)),
+        "prefix_macro_name": p.macro_name,
+        "prefix_param": np.asarray(p.params, dtype=np.float32),
+        "utility": np.float32(p.utility),
+        "hard_violation": np.float32(p.hard_violation),
+        "harm_proxy": np.float32(p.harm_proxy),
+        "feasible": np.int64(p.feasible),
+        "root_probs": np.asarray(sample.root_probs, dtype=np.float32),
+        "root_signature": np.asarray(sample.root_signature, dtype=np.float32),
+        "root_future_signature": np.asarray(sample.root_future_signature, dtype=np.float32),
+        "root_valid": np.asarray(sample.root_valid, dtype=np.float32),
+        "y_obs": np.asarray(sample.y_obs, dtype=np.float32),
+        "c_star": np.asarray(sample.c_star, dtype=np.float32),
+        "m_star": np.asarray(sample.m_star, dtype=np.float32),
+        "option_valid": np.asarray(sample.option_valid, dtype=np.float32),
+        "recovery_modes": np.asarray([g.mode for g in sample.recovery_options]),
+        "recovery_params": pad_recovery_params(sample.recovery_options).astype(np.float32, copy=False),
+        "r_orc_star": np.float32(sample.r_orc_star),
+        "r_dep_star": np.float32(sample.r_dep_star),
+        "oracle_gap_star": np.float32(sample.oracle_gap_star),
+        "i_art_star": np.int64(sample.i_art_star),
+    }
+
+
 def _select_prefix(
     samples: list,
     bundle: ModelBundle | None,
@@ -265,7 +320,10 @@ def _select_prefix(
     *,
     compute_teacher_labels: bool = True,
 ) -> tuple[int, dict[str, Any]]:
-    dicts = [_sample_to_dict(s) for s in samples]
+    if compute_teacher_labels:
+        dicts = [_sample_to_dict(s) for s in samples]
+    else:
+        dicts = [_sample_to_inference_dict(s) for s in samples]
     preds = predict_samples(dicts, bundle, cfg) if bundle is not None else [predict_sample(d, None, cfg) for d in dicts]
     items = []
     for s, d, pred in zip(samples, dicts, preds):
@@ -519,6 +577,7 @@ def _rollout_one_scene(
                     audit_indices,
                     num_roots=int(getattr(bundle.model, "num_roots", int(cfg.get("num_roots", 8)))) if bundle is not None else int(cfg.get("num_roots", 8)),
                     num_options=feature_num_options,
+                    prefixes=[s.prefix for s in samples],
                 )
                 if labeled:
                     by_cid = {int(s.candidate_index): s for s in labeled}
@@ -540,11 +599,16 @@ def _rollout_one_scene(
                     best_r = -float("inf")
                     best_drs = None
                     best_cid = None
+                    pred_q_by_cid = {
+                        int(getattr(item["sample"], "candidate_index", i)): item["pred"].q
+                        for i, item in enumerate(info.get("items", []))
+                    }
+                    selected_pred_q = info["items"][sel_idx]["pred"].q
                     for lab in labeled:
                         ld = lab.to_npz_dict()
                         cid = int(lab.candidate_index)
                         r_star = _safe_float(ld.get("r_dep_star", -float("inf")), -float("inf"))
-                        pred_q_i = _prediction_q_for_candidate(samples, info, cid, sel_idx)
+                        pred_q_i = pred_q_by_cid.get(cid, selected_pred_q)
                         opt_i = np.argmax(pred_q_i, axis=1) if getattr(pred_q_i, "ndim", 0) == 2 else 0
                         drs_i = deployable_recovery_success(ld["m_star"], ld["root_probs"], opt_i, ld.get("root_valid", None))
                         if r_star > best_r:

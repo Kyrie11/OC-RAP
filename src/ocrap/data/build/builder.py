@@ -1163,6 +1163,7 @@ def build_labeled_samples_for_candidate_indices(
     *,
     num_roots: int | None = None,
     num_options: int | None = None,
+    prefixes: list | tuple | None = None,
 ) -> list[DatasetSample]:
     """Materialize full teacher/OC-MERO labels for a small candidate subset.
 
@@ -1177,7 +1178,7 @@ def build_labeled_samples_for_candidate_indices(
     wanted = {int(x) for x in candidate_indices}
     if not wanted:
         return []
-    prefixes = generate_candidate_prefixes(history, cfg)
+    prefixes = list(prefixes) if prefixes is not None else generate_candidate_prefixes(history, cfg)
     n_options = int(num_options if num_options is not None else cfg.get("num_recovery_options", 24))
     options = default_recovery_options(
         n_options,
