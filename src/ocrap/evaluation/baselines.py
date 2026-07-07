@@ -161,6 +161,7 @@ def select_baseline(
     pred_r_orc: np.ndarray | None = None,
     pred_gap: np.ndarray | None = None,
     nominal_deviation: np.ndarray | None = None,
+    pred_drs: np.ndarray | None = None,
 ) -> BaselineSelection:
     """Select one candidate with a paper-baseline-style rule.
 
@@ -218,6 +219,14 @@ def select_baseline(
                 safe_min_gap_reduction=_cfg_float(scfg, "safe_min_gap_reduction", 0.15, bucket_name),
                 budget_preserve_nominal=_cfg_bool(scfg, "budget_preserve_nominal", True, bucket_name),
                 budget_nominal_slack=_cfg_float(scfg, "budget_nominal_slack", 0.08, bucket_name),
+                pred_drs=pred_drs,
+                deployability_bonus=_cfg_float(scfg, "deployability_bonus", 0.0, bucket_name),
+                contact_deployability_bonus=_cfg_float(scfg, "contact_deployability_bonus", 0.0, bucket_name),
+                contact_gap_penalty=_cfg_float(scfg, "contact_gap_penalty", 0.0, bucket_name),
+                safe_hard_nominal_guard=_cfg_bool(scfg, "safe_hard_nominal_guard", True, bucket_name),
+                safe_nominal_max_gap=_cfg_float(scfg, "safe_nominal_max_gap", 0.20, bucket_name),
+                safe_override_require_both=_cfg_bool(scfg, "safe_override_require_both", True, bucket_name),
+                safe_min_drs_gain=_cfg_float(scfg, "safe_min_drs_gain", 0.10, bucket_name),
             )
             gap_arr = np.asarray(pred_gap if pred_gap is not None else np.zeros_like(pred_r_dep), dtype=float)
             score = pred_r_dep - beta * np.maximum(0.0, gap_arr)

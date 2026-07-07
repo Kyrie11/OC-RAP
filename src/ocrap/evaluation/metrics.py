@@ -60,6 +60,45 @@ def deployable_recovery_success(
     return float(np.sum(p * vals))
 
 
+def predicted_shared_option_success(q: np.ndarray, root_probs: np.ndarray, gamma: float = 0.0, root_valid: np.ndarray | None = None) -> float:
+    """Predicted DRS proxy: root probability mass whose best shared option clears gamma."""
+    Q = np.asarray(q, dtype=float)
+    if Q.ndim != 2 or Q.shape[0] == 0:
+        return 0.0
+    K = Q.shape[0]
+    p = np.asarray(root_probs, dtype=float).reshape(-1)[:K]
+    if p.size < K:
+        p = np.pad(p, (0, K - p.size))
+    valid = np.ones(K, dtype=bool) if root_valid is None else np.asarray(root_valid, dtype=bool).reshape(-1)[:K]
+    if valid.size < K:
+        valid = np.pad(valid, (0, K - valid.size), constant_values=False)
+    p = np.where(valid, np.clip(p, 0.0, None), 0.0)
+    denom = float(p.sum())
+    if denom <= 1e-8:
+        return 0.0
+    best = np.max(np.where(np.isfinite(Q), Q, -1e9), axis=-1)
+    return float(np.sum((p / denom) * (best >= float(gamma))))
+
+
+def post_contact_deployability_score(drs: float, r_dep: float, odg: float) -> float:
+    """Compact post-contact recovery score for unavoidable-contact regimes.
+
+    It rewards actual shared-option deployability, then discounts large
+    oracle--deployable gaps and negative deployable margin.  This is not a
+    replacement for reporting DRS/FRA/ODG separately; it is a contact-regime
+    summary for ranking operating points.
+    """
+    try:
+        drs_f = float(drs)
+        r_f = float(r_dep)
+        gap_f = max(0.0, float(odg))
+    except Exception:
+        return 0.0
+    margin_gate = 1.0 / (1.0 + np.exp(-r_f))
+    gap_discount = np.exp(-gap_f)
+    return float(np.clip(drs_f, 0.0, 1.0) * margin_gate * gap_discount)
+
+
 def nominal_utility_preservation(nominal_u: float, selected_u: float, sigma_u: float = 1.0) -> dict[str, float]:
     regret = float(nominal_u - selected_u)
     return {"nominal_regret": regret, "bounded_NUP": float(np.exp(-max(0.0, regret) / max(float(sigma_u), 1e-6)))}
@@ -76,6 +115,9 @@ def summarize_selection_metrics(records: list[dict], sigma_u: float = 1.0) -> di
     nup = np.mean([r["nup"] for r in records])
     art = [r for r in records if r.get("artifact", False)]
     out = {"FRA_cand": float(fra_cand), "FRA_exec": float(fra_exec), "DRS": float(drs), "ODG": float(odg), "ODG_pos": float(odg_pos), "bounded_NUP": float(nup), "artifact_selection_rate": float(np.mean([r.get("selected_artifact", False) for r in records]))}
+    if any("post_contact_deployability" in r for r in records):
+        vals = [float(r["post_contact_deployability"]) for r in records if "post_contact_deployability" in r and np.isfinite(float(r["post_contact_deployability"]))]
+        out["post_contact_deployability"] = float(np.mean(vals)) if vals else None
     if art:
         out.update({"ODG_artifact": float(np.mean([r["odg"] for r in art])), "FRA_exec_artifact": float(np.mean([r["fra_exec"] for r in art])), "DRS_artifact": float(np.mean([r["drs"] for r in art]))})
     else:

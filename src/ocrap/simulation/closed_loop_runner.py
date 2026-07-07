@@ -13,7 +13,7 @@ from ocrap.data.schema import pad_recovery_params
 from ocrap.data.serialization import write_json
 from ocrap.data.waymax_loader import iter_waymax_womd_scenarios, raw_scenario_from_waymax_state
 from ocrap.evaluation.baselines import select_baseline
-from ocrap.evaluation.metrics import deployable_recovery_success, false_recoverability_admission, nominal_utility_preservation
+from ocrap.evaluation.metrics import deployable_recovery_success, false_recoverability_admission, nominal_utility_preservation, post_contact_deployability_score, predicted_shared_option_success
 from ocrap.models.data import iter_sample_paths_many, scalar_metadata_for_path
 from ocrap.models.inference import ModelBundle, load_model_bundle, predict_sample, predict_samples, teacher_prediction_from_sample
 from ocrap.simulation.waymax_rollout import _as_np, _bicycle_action, _make_env, _metric_summary, _sdc_index
@@ -35,8 +35,10 @@ class ClosedLoopDecision:
     selected_pred_r_dep: float | None
     selected_pred_r_orc: float | None
     selected_pred_gap: float | None
+    selected_pred_drs: float | None
     selected_nominal_deviation: float | None
     selected_odg: float | None
+    selected_post_contact_deployability: float | None
     selected_artifact: bool | None
     audit_candidate_count: int | None
     audit_best_candidate_index: int | None
@@ -334,6 +336,7 @@ def _select_prefix(
     pred_r_dep = np.asarray([float(x["pred"].r_dep) for x in items], dtype=np.float32)
     pred_r_orc = np.asarray([float(x["pred"].r_orc) for x in items], dtype=np.float32)
     pred_gap = np.asarray([float(x["pred"].gap) for x in items], dtype=np.float32)
+    pred_drs = np.asarray([predicted_shared_option_success(x["pred"].q, x["pred"].root_probs, gamma=gamma) for x in items], dtype=np.float32)
     nominal_deviation = _prefix_nominal_deviation(samples)
     if compute_teacher_labels:
         teacher_r_dep = np.asarray([_safe_float(x["data"].get("r_dep_star", 0.0)) for x in items], dtype=np.float32)
@@ -361,6 +364,7 @@ def _select_prefix(
         pred_r_orc=pred_r_orc,
         pred_gap=pred_gap,
         nominal_deviation=nominal_deviation,
+        pred_drs=pred_drs,
     )
     idx = int(selected.selected_index)
     chosen = items[idx]
@@ -385,6 +389,7 @@ def _select_prefix(
         "pred_r_dep": pred_r_dep,
         "pred_r_orc": pred_r_orc,
         "pred_gap": pred_gap,
+        "pred_drs": pred_drs,
         "nominal_deviation": nominal_deviation,
         "labels_available": bool(compute_teacher_labels),
         "drs": None if drs is None else float(drs),
@@ -467,6 +472,12 @@ def _rollout_one_scene(
     compute_teacher_labels = label_mode in {"all", "full", "teacher", "labels"}
     audit_every_n_steps = max(1, int(cl_cfg.get("audit_every_n_steps", 1) or 1))
     audit_max_labels = int(cl_cfg.get("audit_max_labels", 0) or 0)
+    audit_auto_capped = False
+    if coverage_label_audit and audit_max_labels <= 0:
+        auto_cap = int(cl_cfg.get("audit_auto_max_labels", 256) or 0)
+        if auto_cap > 0:
+            audit_max_labels = auto_cap
+            audit_auto_capped = True
     audit_labels_done = 0
     progress = bool(cl_cfg.get("progress", True))
     progress_every = max(1, int(cl_cfg.get("progress_every_steps", 5)))
@@ -558,6 +569,7 @@ def _rollout_one_scene(
         selected_audit_data = None
         selected_audit_drs = None
         selected_audit_fra_exec = None
+        selected_audit_pcds = None
         audit_candidate_count = None
         audit_best_candidate_index = None
         audit_best_teacher_r_dep = None
@@ -592,6 +604,8 @@ def _rollout_one_scene(
                         selected_audit_data.get("root_valid", None),
                     )
                     selected_r_dep_star = _safe_float(selected_audit_data.get("r_dep_star", 0.0))
+                    selected_odg_star = _safe_float(selected_audit_data.get("oracle_gap_star", 0.0))
+                    selected_audit_pcds = post_contact_deployability_score(selected_audit_drs, selected_r_dep_star, selected_odg_star)
                     selected_audit_fra_exec = float(selected_r_dep_star < 0.0)
                     audit_candidate_count = int(len(labeled))
                     # Coverage audit: among a small top-k subset, determine
@@ -650,8 +664,12 @@ def _rollout_one_scene(
         selected_pred_r_dep = _safe_optional_float(info["pred_r_dep"][sel_idx])
         selected_pred_r_orc = _safe_optional_float(info["pred_r_orc"][sel_idx])
         selected_pred_gap = _safe_optional_float(info["pred_gap"][sel_idx])
+        selected_pred_drs = _safe_optional_float(info["pred_drs"][sel_idx])
         selected_nominal_deviation = _safe_optional_float(info["nominal_deviation"][sel_idx])
         selected_odg = _safe_optional_float(selected_sample.oracle_gap_star) if compute_teacher_labels else (_safe_optional_float(selected_audit_data.get("oracle_gap_star")) if selected_audit_data is not None else None)
+        selected_post_contact_deployability = selected_audit_pcds
+        if selected_post_contact_deployability is None and compute_teacher_labels and info["drs"] is not None and selected_teacher_r_dep is not None and selected_odg is not None:
+            selected_post_contact_deployability = post_contact_deployability_score(float(info["drs"]), float(selected_teacher_r_dep), float(selected_odg))
         selected_artifact = bool(selected_sample.i_art_star) if compute_teacher_labels else (bool(int(_safe_float(selected_audit_data.get("i_art_star", 0.0)))) if selected_audit_data is not None else None)
         decisions.append(
             ClosedLoopDecision(
@@ -669,8 +687,10 @@ def _rollout_one_scene(
                 selected_pred_r_dep=selected_pred_r_dep,
                 selected_pred_r_orc=selected_pred_r_orc,
                 selected_pred_gap=selected_pred_gap,
+                selected_pred_drs=selected_pred_drs,
                 selected_nominal_deviation=selected_nominal_deviation,
                 selected_odg=selected_odg,
+                selected_post_contact_deployability=selected_post_contact_deployability,
                 selected_artifact=selected_artifact,
                 audit_candidate_count=audit_candidate_count,
                 audit_best_candidate_index=audit_best_candidate_index,
@@ -711,10 +731,13 @@ def _rollout_one_scene(
         "coverage_label_audit": bool(coverage_label_audit),
         "audit_every_n_steps": int(audit_every_n_steps),
         "audit_labels_done": int(audit_labels_done),
+        "audit_max_labels": int(audit_max_labels),
+        "audit_auto_capped": bool(audit_auto_capped),
         "closed_loop_FRA_exec": _mean_finite([d.fra_exec for d in decisions]),
         "closed_loop_FRA_cand": _mean_finite([d.fra_cand for d in decisions]),
         "closed_loop_DRS": _mean_finite([d.drs for d in decisions]),
         "closed_loop_ODG": _mean_finite([d.selected_odg for d in decisions]),
+        "closed_loop_post_contact_deployability": _mean_finite([d.selected_post_contact_deployability for d in decisions]),
         "closed_loop_artifact_selection_rate": _mean_finite([float(d.selected_artifact) for d in decisions if d.selected_artifact is not None]),
         "closed_loop_audit_candidate_count": _mean_finite([d.audit_candidate_count for d in decisions]),
         "closed_loop_audit_best_R_dep": _mean_finite([d.audit_best_teacher_r_dep for d in decisions]),
@@ -725,6 +748,7 @@ def _rollout_one_scene(
         "closed_loop_bounded_NUP": _mean_finite([d.nup for d in decisions], default=0.0),
         "closed_loop_pred_r_dep": _mean_finite([d.selected_pred_r_dep for d in decisions]),
         "closed_loop_pred_gap": _mean_finite([d.selected_pred_gap for d in decisions]),
+        "closed_loop_pred_DRS_proxy": _mean_finite([d.selected_pred_drs for d in decisions]),
         "closed_loop_nominal_deviation": _mean_finite([d.selected_nominal_deviation for d in decisions]),
         "intervention_rate": _mean_finite([float(d.selected_candidate_index != 0) for d in decisions], default=0.0),
         "metric_summary": metric_summary,
@@ -737,7 +761,7 @@ def _rollout_one_scene(
     return out
 
 def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, source: str) -> dict[str, Any]:
-    keys = ["closed_loop_FRA_exec", "closed_loop_FRA_cand", "closed_loop_DRS", "closed_loop_ODG", "closed_loop_artifact_selection_rate", "closed_loop_audit_candidate_count", "closed_loop_audit_best_R_dep", "closed_loop_audit_best_DRS", "closed_loop_audit_selected_R_dep_regret", "closed_loop_audit_recoverable_candidate_rate", "closed_loop_audit_selector_miss_rate", "closed_loop_bounded_NUP", "closed_loop_pred_r_dep", "closed_loop_pred_gap", "closed_loop_nominal_deviation", "intervention_rate"]
+    keys = ["closed_loop_FRA_exec", "closed_loop_FRA_cand", "closed_loop_DRS", "closed_loop_ODG", "closed_loop_post_contact_deployability", "closed_loop_artifact_selection_rate", "closed_loop_audit_candidate_count", "closed_loop_audit_best_R_dep", "closed_loop_audit_best_DRS", "closed_loop_audit_selected_R_dep_regret", "closed_loop_audit_recoverable_candidate_rate", "closed_loop_audit_selector_miss_rate", "closed_loop_bounded_NUP", "closed_loop_pred_r_dep", "closed_loop_pred_gap", "closed_loop_pred_DRS_proxy", "closed_loop_nominal_deviation", "intervention_rate"]
     agg: dict[str, Any] = {
         "source": source,
         "method": method,

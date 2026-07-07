@@ -6,7 +6,7 @@ import numpy as np
 
 from ocrap.data.serialization import load_npz, write_json
 from ocrap.evaluation.baselines import BASELINES, select_baseline
-from ocrap.evaluation.metrics import deployable_recovery_success, false_recoverability_admission, nominal_utility_preservation, summarize_selection_metrics
+from ocrap.evaluation.metrics import deployable_recovery_success, false_recoverability_admission, nominal_utility_preservation, post_contact_deployability_score, predicted_shared_option_success, summarize_selection_metrics
 from ocrap.models.data import iter_sample_paths_many, scalar_metadata_for_path
 from ocrap.models.inference import load_model_bundle, predict_sample, teacher_prediction_from_sample
 
@@ -187,7 +187,7 @@ def _write_method_tables(result: dict, output: str | Path) -> None:
         order = result.get("method_order", list(methods.keys()))
         cols = [
             "FRA_exec", "FRA_cand", "DRS", "bounded_NUP", "ODG",
-            "artifact_selection_rate", "mean_selected_teacher_R_dep", "mean_selected_utility",
+            "artifact_selection_rate", "post_contact_deployability", "mean_selected_teacher_R_dep", "mean_selected_utility",
         ]
         pretty = {
             "FRA_exec": "Executed false recovery admission ↓",
@@ -196,6 +196,7 @@ def _write_method_tables(result: dict, output: str | Path) -> None:
             "bounded_NUP": "Nominal utility preservation ↑",
             "ODG": "Selected oracle-to-deployable gap ↓",
             "artifact_selection_rate": "Oracle-artifact selection rate ↓",
+            "post_contact_deployability": "Post-contact deployability ↑",
             "mean_selected_teacher_R_dep": "Selected deployable recovery score ↑",
             "mean_selected_utility": "Selected utility ↑",
         }
@@ -233,6 +234,7 @@ def _evaluate_grouped_items(grouped: dict[tuple, list[dict]], methods: list[str]
         pred_r_dep = np.array([float(x["pred"].r_dep) for x in items])
         pred_r_orc = np.array([float(x["pred"].r_orc) for x in items])
         pred_gap = np.array([float(getattr(x["pred"], "gap", x["pred"].r_orc - x["pred"].r_dep)) for x in items])
+        pred_drs = np.array([predicted_shared_option_success(x["pred"].q, x["pred"].root_probs, gamma=gamma) for x in items])
         nominal_deviation = _prefix_nominal_deviation_items(items)
         teacher_r_dep = np.array([float(np.asarray(x["data"]["r_dep_star"]).item()) for x in items])
         teacher_r_orc = np.array([float(np.asarray(x["data"]["r_orc_star"]).item()) for x in items])
@@ -256,6 +258,7 @@ def _evaluate_grouped_items(grouped: dict[tuple, list[dict]], methods: list[str]
                 pred_r_orc=pred_r_orc,
                 pred_gap=pred_gap,
                 nominal_deviation=nominal_deviation,
+                pred_drs=pred_drs,
             )
             selected_index = int(sel.selected_index)
             chosen = items[selected_index]
@@ -266,13 +269,17 @@ def _evaluate_grouped_items(grouped: dict[tuple, list[dict]], methods: list[str]
             q_eval = chosen["pred"].q if method == "ocrap" else chosen["teacher"].q
             selected_options = np.argmax(q_eval, axis=1) if getattr(q_eval, "ndim", 0) == 2 else 0
             drs = deployable_recovery_success(sd["m_star"], sd["root_probs"], selected_options, sd.get("root_valid", None))
+            odg_val = float(np.asarray(sd.get("oracle_gap_star", teacher_r_orc[selected_index] - teacher_r_dep[selected_index])).item())
+            pcds = post_contact_deployability_score(drs, teacher_r_dep[selected_index], odg_val)
             nup = nominal_utility_preservation(utility[0] if len(utility) else 0.0, utility[selected_index], sigma_u=float((cfg or {}).get("metrics", {}).get("sigma_u", 1.0)))
             method_records[method].append({
                 "fra_cand": false_recoverability_admission(sel.admitted, teacher_r_dep),
                 "fra_exec": float(teacher_r_dep[selected_index] < 0.0),
                 "drs": drs,
-                "odg": float(np.asarray(sd.get("oracle_gap_star", teacher_r_orc[selected_index] - teacher_r_dep[selected_index])).item()),
+                "odg": odg_val,
                 "pred_odg": float(pred_r_orc[selected_index] - pred_r_dep[selected_index]),
+                "pred_drs": float(pred_drs[selected_index]),
+                "post_contact_deployability": float(pcds),
                 "nup": nup["bounded_NUP"],
                 "artifact": bool(int(np.asarray(sd.get("i_art_star", 0)).item())),
                 "selected_artifact": bool(int(np.asarray(sd.get("i_art_star", 0)).item())),

@@ -182,6 +182,14 @@ def calibrated_constrained_select(
     safe_min_gap_reduction: float = 0.15,
     budget_preserve_nominal: bool = True,
     budget_nominal_slack: float = 0.08,
+    pred_drs: np.ndarray | None = None,
+    deployability_bonus: float = 0.0,
+    contact_deployability_bonus: float = 0.0,
+    contact_gap_penalty: float = 0.0,
+    safe_hard_nominal_guard: bool = True,
+    safe_nominal_max_gap: float = 0.20,
+    safe_override_require_both: bool = True,
+    safe_min_drs_gain: float = 0.10,
 ) -> SelectionResult:
     """Soft calibrated OC-RAP selector.
 
@@ -207,12 +215,16 @@ def calibrated_constrained_select(
     feasible = feasible[:n]
     gap = np.maximum(0.0, _as_1d_float(pred_gap, n, default=0.0))
     dev = np.maximum(0.0, _as_1d_float(nominal_deviation, n, default=0.0))
+    drs_proxy = np.clip(_as_1d_float(pred_drs, n, default=0.0), 0.0, 1.0)
 
     rec_lcb = r_dep - float(lcb_beta) * gap
     safe = feasible & (hard <= float(gamma_H)) & (harm <= float(gamma_D))
     admitted = safe & (rec_lcb >= float(gamma_rec))
     idxs = np.arange(n)
     intervention = (idxs != int(nominal_index)).astype(float)
+    regime = (regime_name or "").lower()
+    is_safe_regime = "safe" in regime or "normal" in regime or "background" in regime
+    is_contact_regime = "contact" in regime
 
     # Continuous recovery shortfall; finite guard prevents NaNs from dominating.
     rec_shortfall = np.maximum(0.0, float(gamma_rec) - rec_lcb)
@@ -225,7 +237,10 @@ def calibrated_constrained_select(
         - float(deviation_penalty) * dev
         + float(recovery_bonus) * (rec_lcb - float(gamma_rec))
         + float(admission_bonus) * admitted.astype(float)
+        + float(deployability_bonus) * drs_proxy
     )
+    if is_contact_regime:
+        score = score + float(contact_deployability_bonus) * drs_proxy - float(contact_gap_penalty) * gap
 
     # If the current rollout already exceeded the intervention budget, increase
     # the marginal cost of deviating from nominal.  This is intentionally a soft
@@ -270,8 +285,6 @@ def calibrated_constrained_select(
     # shortfall by itself should not trigger large behavior changes unless the
     # alternative is clearly better in calibrated score and materially improves
     # deployable-recovery LCB or oracle-deployable gap.
-    regime = (regime_name or "").lower()
-    is_safe_regime = "safe" in regime or "normal" in regime or "background" in regime
     nominal_extra_slack = float(safe_nominal_slack if is_safe_regime else nominal_slack)
     budget_exceeded = False
     if intervention_budget_rate is not None and intervention_budget_steps not in {None, 0}:
@@ -294,13 +307,24 @@ def calibrated_constrained_select(
             score_gain = float(score[best_idx] - score[nominal_index])
             rec_gain = float(rec_lcb[best_idx] - rec_lcb[nominal_index])
             gap_reduction = float(gap[nominal_index] - gap[best_idx])
+            drs_gain = float(drs_proxy[best_idx] - drs_proxy[nominal_index])
             material_recovery_gain = rec_gain >= float(safe_min_rec_lcb_gain)
             material_gap_gain = gap_reduction >= float(safe_min_gap_reduction)
+            material_drs_gain = drs_gain >= float(safe_min_drs_gain)
+            if bool(safe_hard_nominal_guard) and gap[nominal_index] <= float(safe_nominal_max_gap):
+                # Safe_v2 is the nominal-preservation regime.  Do not switch for
+                # a single noisy headroom advantage; require a score improvement
+                # plus consistent recovery/gap evidence.
+                enough_evidence = (material_recovery_gain and material_gap_gain) if bool(safe_override_require_both) else (material_recovery_gain or material_gap_gain or material_drs_gain)
+                if (not enough_evidence) or score_gain < float(safe_switch_score_margin):
+                    admitted = admitted.copy()
+                    admitted[nominal_index] = True
+                    return SelectionResult(int(nominal_index), "nominal_safe_switch_guard", admitted)
             # Safe/background is a nominal-preserving operating region.  Switch
             # away from nominal only when the alternative is not just higher
             # scoring, but meaningfully improves calibrated recoverability or
             # reduces oracle-deployable gap.
-            if (not material_recovery_gain and not material_gap_gain) or score_gain < float(safe_switch_score_margin):
+            if (not material_recovery_gain and not material_gap_gain and not material_drs_gain) or score_gain < float(safe_switch_score_margin):
                 admitted = admitted.copy()
                 admitted[nominal_index] = True
                 return SelectionResult(int(nominal_index), "nominal_safe_switch_guard", admitted)

@@ -54,3 +54,73 @@ def deployability_classification_loss(pred_r_dep: torch.Tensor, teacher_r_dep: t
         return F.binary_cross_entropy_with_logits(logits, target)
     weight = torch.where(pos, 0.5 / pos.float().mean().clamp_min(1e-6), 0.5 / neg.float().mean().clamp_min(1e-6))
     return F.binary_cross_entropy_with_logits(logits, target, weight=weight)
+
+
+def shared_option_q_regression_loss(pred_q: torch.Tensor, teacher_q: torch.Tensor, root_valid: torch.Tensor, option_valid: torch.Tensor) -> torch.Tensor:
+    """Smooth-L1 supervision for the shared recovery-option value Q(i,l).
+
+    Earlier training supervised only aggregated R_dep/R_orc and raw margins.
+    That lets the model learn that a prefix is less oracle-artifact-like, but it
+    can still pick the wrong shared recovery option at execution time.  This
+    auxiliary target directly teaches the option table used by the selector and
+    by DRS evaluation.
+    """
+    mask = root_valid.bool().unsqueeze(-1) & option_valid.bool().unsqueeze(1) & torch.isfinite(teacher_q)
+    if not bool(mask.any()):
+        return pred_q.sum() * 0.0
+    target = torch.clamp(torch.nan_to_num(teacher_q.detach(), nan=0.0, posinf=5.0, neginf=-5.0), min=-5.0, max=5.0)
+    pred = torch.clamp(torch.nan_to_num(pred_q, nan=0.0, posinf=5.0, neginf=-5.0), min=-5.0, max=5.0)
+    return F.smooth_l1_loss(pred[mask], target[mask])
+
+
+def shared_option_admission_loss(
+    pred_q: torch.Tensor,
+    teacher_q: torch.Tensor,
+    root_probs: torch.Tensor,
+    root_valid: torch.Tensor,
+    option_valid: torch.Tensor,
+    gamma: float = 0.0,
+) -> torch.Tensor:
+    """Balanced BCE for whether each shared option is deployably admissible.
+
+    This is the supervision missing when offline results show low ODG/FRA_cand
+    but poor executed DRS: the model knows which prefix is less artifact-prone,
+    but not which shared option is actually executable across compatible roots.
+    """
+    mask = root_valid.bool().unsqueeze(-1) & option_valid.bool().unsqueeze(1) & torch.isfinite(teacher_q)
+    if not bool(mask.any()):
+        return pred_q.sum() * 0.0
+    target = (teacher_q.detach() >= float(gamma)).float()
+    logits = torch.nan_to_num(pred_q - float(gamma), nan=-20.0, posinf=20.0, neginf=-20.0)
+    weights = torch.clamp(root_probs.float(), min=0.0).unsqueeze(-1).expand_as(logits)
+    weights = torch.where(mask, weights, torch.zeros_like(weights))
+    # Balance positives and negatives so rare deployable options are not washed out.
+    pos = (target > 0.5) & mask
+    neg = (target <= 0.5) & mask
+    if bool(pos.any()) and bool(neg.any()):
+        pos_scale = 0.5 / pos.float().mean().clamp_min(1e-6)
+        neg_scale = 0.5 / neg.float().mean().clamp_min(1e-6)
+        weights = weights * torch.where(pos, pos_scale, torch.where(neg, neg_scale, torch.zeros_like(weights)))
+    denom = weights.sum().clamp_min(1.0)
+    loss = F.binary_cross_entropy_with_logits(logits, target, reduction='none')
+    return (loss * weights).sum() / denom
+
+
+def best_shared_option_loss(
+    pred_q: torch.Tensor,
+    teacher_q: torch.Tensor,
+    root_probs: torch.Tensor,
+    root_valid: torch.Tensor,
+    option_valid: torch.Tensor,
+) -> torch.Tensor:
+    """Root-weighted CE for the best shared option under the teacher OC-MERO table."""
+    B, K, L = pred_q.shape
+    valid = root_valid.bool()
+    if not bool(valid.any()):
+        return pred_q.sum() * 0.0
+    tq = torch.where(option_valid.bool().unsqueeze(1), teacher_q.detach(), torch.full_like(teacher_q, -1.0e9))
+    target = torch.argmax(tq, dim=-1)
+    logits = torch.where(option_valid.bool().unsqueeze(1), pred_q, torch.full_like(pred_q, -1.0e4))
+    ce = F.cross_entropy(logits.reshape(B * K, L), target.reshape(B * K), reduction='none').reshape(B, K)
+    weights = torch.clamp(root_probs.float(), min=0.0) * valid.float()
+    return (ce * weights).sum() / weights.sum().clamp_min(1.0)

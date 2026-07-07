@@ -11,7 +11,14 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 from ocrap.algorithms.ocmero import torch_oc_mero
 from ocrap.data.serialization import ensure_dir, write_json
 from ocrap.models.data import OCRAPSampleDataset, OPTION_FEATURE_DIM, iter_sample_paths_many, scalar_metadata_for_path, split_paths_by_npz_split
-from ocrap.models.losses import anti_oracle_loss, artifact_gap_loss, deployability_classification_loss
+from ocrap.models.losses import (
+    anti_oracle_loss,
+    artifact_gap_loss,
+    best_shared_option_loss,
+    deployability_classification_loss,
+    shared_option_admission_loss,
+    shared_option_q_regression_loss,
+)
 from ocrap.models.ocrap import OCRAPModel
 from ocrap.utils.seed import seed_everything
 
@@ -141,7 +148,7 @@ def _epoch(
             batch["root_valid"],
             balanced=bool(tcfg.get("balanced_obs_loss", True)),
         )
-        r_dep, r_orc, gap, _q = torch_oc_mero(
+        r_dep, r_orc, gap, pred_q = torch_oc_mero(
             out["margins"],
             root_p,
             out["c_star"],
@@ -153,11 +160,34 @@ def _epoch(
             use_obs_kernel=not bool((cfg.get("ablation", {}) or {}).get("without_observation_kernel", False)),
             top_m=int(ocfg.get("top_m", 8)),
         )
+        with torch.no_grad():
+            _teacher_r_dep, _teacher_r_orc, _teacher_gap, teacher_q = torch_oc_mero(
+                batch["m_star"].float(),
+                batch["root_probs"].float(),
+                batch["c_star"].float(),
+                alpha=float(ocfg.get("alpha", 0.2)),
+                beta=float(ocfg.get("beta", 0.2)),
+                option_valid=batch["option_valid"],
+                root_valid=root_valid,
+                use_lcvar=not bool((cfg.get("ablation", {}) or {}).get("without_lower_tail", False)),
+                use_obs_kernel=not bool((cfg.get("ablation", {}) or {}).get("without_observation_kernel", False)),
+                top_m=int(ocfg.get("top_m", 8)),
+            )
         loss_dep = F.smooth_l1_loss(r_dep, batch["r_dep_star"].float())
         loss_orc = F.smooth_l1_loss(r_orc, batch["r_orc_star"].float())
         loss_art = anti_oracle_loss(r_orc, r_dep, batch["i_art_star"].float(), delta_neg=float(art_cfg.get("delta_neg", 0.0)))
         loss_gap = artifact_gap_loss(gap, (batch["r_orc_star"].float() - batch["r_dep_star"].float()).clamp_min(0.0), batch["i_art_star"].float(), margin=float(art_cfg.get("gap_margin", 0.5)))
         loss_admit = deployability_classification_loss(r_dep, batch["r_dep_star"].float(), gamma=float(art_cfg.get("admission_gamma", 0.0)))
+        loss_option_q = shared_option_q_regression_loss(pred_q, teacher_q, batch["root_valid"], batch["option_valid"])
+        loss_option_admit = shared_option_admission_loss(
+            pred_q,
+            teacher_q,
+            batch["root_probs"].float(),
+            batch["root_valid"],
+            batch["option_valid"],
+            gamma=float(art_cfg.get("admission_gamma", 0.0)),
+        )
+        loss_option_best = best_shared_option_loss(pred_q, teacher_q, batch["root_probs"].float(), batch["root_valid"], batch["option_valid"])
         if bool((cfg.get("ablation", {}) or {}).get("without_anti_oracle", False)):
             loss_art = loss_art * 0.0
             loss_gap = loss_gap * 0.0
@@ -171,6 +201,9 @@ def _epoch(
             + float(lw.get("anti_oracle", 1.0)) * loss_art
             + float(lw.get("artifact_gap", 0.5)) * loss_gap
             + float(lw.get("admission", 0.2)) * loss_admit
+            + float(lw.get("option_q", 0.5)) * loss_option_q
+            + float(lw.get("option_admission", 0.4)) * loss_option_admit
+            + float(lw.get("option_best", 0.2)) * loss_option_best
             + float(lw.get("utility", 0.2)) * loss_util
         )
         if training:
@@ -194,6 +227,9 @@ def _epoch(
             "loss_art": loss_art.item(),
             "loss_gap": loss_gap.item(),
             "loss_admission": loss_admit.item(),
+            "loss_option_q": loss_option_q.item(),
+            "loss_option_admission": loss_option_admit.item(),
+            "loss_option_best": loss_option_best.item(),
             "loss_utility": loss_util.item(),
             "pred_r_dep_mean": r_dep.mean().item(),
             "teacher_r_dep_mean": batch["r_dep_star"].float().mean().item(),
@@ -204,22 +240,48 @@ def _epoch(
 
 
 def _make_sampler(ds: OCRAPSampleDataset, cfg: dict) -> WeightedRandomSampler | None:
-    weight_art = float((cfg.get("training", {}) or {}).get("artifact_sampler_weight", 0.25))
-    if weight_art <= 0:
+    tcfg = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
+    weight_art = float(tcfg.get("artifact_sampler_weight", 0.25))
+    weight_neg = float(tcfg.get("negative_deployable_sampler_weight", 0.75))
+    weight_safe_pos = float(tcfg.get("safe_positive_sampler_weight", 0.25))
+    if max(weight_art, weight_neg, weight_safe_pos) <= 0:
         return None
     weights = []
     num_artifacts = 0
+    num_negative = 0
+    num_safe_pos = 0
     total = len(ds.paths)
     for idx, p in enumerate(ds.paths, 1):
         if idx == 1 or idx % 5000 == 0 or idx == total:
             print({"event": "sampler_scan_progress", "seen": idx, "total": total}, flush=True)
         try:
             is_art = float(np.asarray(scalar_metadata_for_path(p, "i_art_star", 0)).item()) > 0.5
+            r_dep = float(np.asarray(scalar_metadata_for_path(p, "r_dep_star", 0)).item())
+            is_neg = r_dep < 0.0
+            root_name = str(p.parent.parent.name if p.parent.name == "samples" else p.parent.name).lower()
+            is_safe_pos = ("safe" in root_name) and (not is_neg) and (not is_art)
             num_artifacts += int(is_art)
-            weights.append(1.0 + (weight_art if is_art else 0.0))
+            num_negative += int(is_neg)
+            num_safe_pos += int(is_safe_pos)
+            w = 1.0
+            if is_art:
+                w += weight_art
+            if is_neg:
+                w += weight_neg
+            if is_safe_pos:
+                w += weight_safe_pos
+            weights.append(w)
         except Exception:
             weights.append(1.0)
-    print({"event": "sampler_scan_stats", "num_artifacts": int(num_artifacts), "artifact_fraction": float(num_artifacts / max(total, 1))}, flush=True)
+    print({
+        "event": "sampler_scan_stats",
+        "num_artifacts": int(num_artifacts),
+        "artifact_fraction": float(num_artifacts / max(total, 1)),
+        "num_negative_deployable": int(num_negative),
+        "negative_deployable_fraction": float(num_negative / max(total, 1)),
+        "num_safe_positive": int(num_safe_pos),
+        "safe_positive_fraction": float(num_safe_pos / max(total, 1)),
+    }, flush=True)
     return WeightedRandomSampler(torch.as_tensor(weights, dtype=torch.double), num_samples=len(weights), replacement=True)
 
 
