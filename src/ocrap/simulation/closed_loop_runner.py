@@ -336,14 +336,34 @@ def _select_prefix(
     return idx, info
 
 
+def _strip_version_suffix(name: str) -> str:
+    base, sep, version = str(name).rpartition("_v")
+    return base if sep and version.isdigit() and base else str(name)
+
+
+def _bucket_gamma_aliases(name: str | None) -> list[str]:
+    if not name:
+        return []
+    raw = str(name)
+    aliases = [raw]
+    for p in ("test_", "val_", "train_"):
+        if raw.startswith(p):
+            aliases.append(raw[len(p):])
+    aliases.extend([_strip_version_suffix(x) for x in list(aliases)])
+    out: list[str] = []
+    for x in aliases:
+        if x and x not in out:
+            out.append(x)
+    return out
+
+
 def _gamma_for_bucket(base_gamma: float, cfg: dict, bucket_name: str | None) -> float:
     """Return a regime/bucket-specific calibrated recovery threshold when set."""
     sel_cfg = cfg.get("selection", {}) if isinstance(cfg.get("selection", {}), dict) else {}
     mapping = sel_cfg.get("gamma_rec_by_bucket", {})
     if not isinstance(mapping, dict) or not bucket_name:
         return float(base_gamma)
-    keys = [str(bucket_name), str(bucket_name).replace("test_", ""), str(bucket_name).replace("val_", ""), str(bucket_name).replace("train_", "")]
-    for key in keys:
+    for key in _bucket_gamma_aliases(bucket_name):
         if key in mapping and mapping[key] not in {None, ""}:
             try:
                 val = float(mapping[key])
@@ -462,7 +482,10 @@ def _rollout_one_scene(
             sel_local = dict(select_cfg.get("selection", {}) or {}) if isinstance(select_cfg.get("selection", {}), dict) else {}
             sel_local["active_bucket_name"] = bucket_name or ""
             sel_local["intervention_budget_used"] = int(interventions_used)
-            sel_local["intervention_budget_steps"] = max(1, int(step_idx))
+            # Number of decisions considered before the current selection.
+            # Use step_idx + 1 so the early rollout does not look artificially
+            # over-budget after a single intervention.
+            sel_local["intervention_budget_steps"] = max(1, int(step_idx) + 1)
             select_cfg["selection"] = sel_local
         sel_idx, info = _select_prefix(samples, bundle, select_cfg, method, gamma, compute_teacher_labels=compute_teacher_labels)
         selected_sample = samples[sel_idx]

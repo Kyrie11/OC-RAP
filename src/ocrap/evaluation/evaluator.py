@@ -97,14 +97,33 @@ def _apply_gamma_rec_by_bucket_file(cfg: dict) -> dict:
     return local
 
 
+def _strip_version_suffix(name: str) -> str:
+    base, sep, version = str(name).rpartition("_v")
+    return base if sep and version.isdigit() and base else str(name)
+
+
+def _gamma_aliases(name: str | None) -> list[str]:
+    if not name:
+        return []
+    raw = str(name)
+    aliases = [raw]
+    for p in ("test_", "val_", "train_"):
+        if raw.startswith(p):
+            aliases.append(raw[len(p):])
+    aliases.extend([_strip_version_suffix(x) for x in list(aliases)])
+    out: list[str] = []
+    for x in aliases:
+        if x and x not in out:
+            out.append(x)
+    return out
+
+
 def _gamma_for_dataset(base_gamma: float, cfg: dict, dataset_label: str | None) -> float:
     sel_cfg = cfg.get("selection", {}) if isinstance(cfg.get("selection", {}), dict) else {}
     mapping = sel_cfg.get("gamma_rec_by_bucket", {})
     if not isinstance(mapping, dict) or not dataset_label:
         return float(base_gamma)
-    raw = str(dataset_label)
-    keys = [raw, raw.replace("test_", ""), raw.replace("val_", ""), raw.replace("train_", "")]
-    for key in keys:
+    for key in _gamma_aliases(dataset_label):
         if key in mapping and mapping[key] not in {None, ""}:
             try:
                 val = float(mapping[key])

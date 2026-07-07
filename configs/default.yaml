@@ -172,6 +172,15 @@ selection:
   calibrated_admission_bonus: 0.02
   nominal_utility_slack: 0.05
   safe_nominal_slack: 0.12
+  # Optional selector switches. Safe/background should be nominal-preserving;
+  # stress buckets may set prefer_admitted_by_bucket=true.
+  prefer_admitted: false
+  switch_score_margin: 0.0
+  safe_switch_score_margin: 0.10
+  safe_min_rec_lcb_gain: 0.05
+  safe_min_gap_reduction: 0.15
+  budget_preserve_nominal: true
+  budget_nominal_slack: 0.08
   intervention_budget_rate: null
   intervention_budget_penalty: 0.25
   gamma_rec_by_bucket: {}

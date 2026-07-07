@@ -1,0 +1,80 @@
+import numpy as np
+
+from ocrap.evaluation.baselines import select_baseline
+from ocrap.planning.selector import calibrated_constrained_select
+
+
+def test_budget_rate_by_bucket_is_applied_without_global_scalar():
+    utility = np.array([1.0, 1.5])
+    pred_r_dep = np.array([-0.01, 0.05])
+    teacher = np.array([0.1, 0.1])
+    hard = np.array([0.0, 0.0])
+    harm = np.array([0.0, 0.0])
+    feasible = np.array([True, True])
+    cfg = {
+        "selection": {
+            "ocrap_selector": "calibrated_constrained",
+            "active_bucket_name": "test_safe_v2",
+            "intervention_budget_rate_by_bucket": {"safe": 0.05},
+            "intervention_budget_used": 10,
+            "intervention_budget_steps": 20,
+            "intervention_budget_penalty": 100.0,
+            "budget_nominal_slack": 0.20,
+            "safe_nominal_slack": 0.20,
+        }
+    }
+    sel = select_baseline(
+        "ocrap",
+        utility,
+        pred_r_dep,
+        teacher,
+        teacher,
+        hard,
+        harm,
+        feasible,
+        gamma_rec=0.0,
+        gamma_H=0.0,
+        gamma_D=5.0,
+        cfg=cfg,
+        pred_gap=np.zeros(2),
+        nominal_deviation=np.zeros(2),
+    )
+    assert sel.selected_index == 0
+    assert sel.reason == "nominal_budget_preserved"
+
+
+def test_safe_switch_guard_requires_material_recovery_gain():
+    sel = calibrated_constrained_select(
+        utility=np.array([1.00, 1.40]),
+        r_dep=np.array([-0.01, 0.00]),
+        hard=np.zeros(2),
+        harm=np.zeros(2),
+        feasible=np.array([True, True]),
+        gamma_rec=0.0,
+        pred_gap=np.array([0.05, 0.05]),
+        nominal_deviation=np.array([0.0, 0.02]),
+        regime_name="test_safe",
+        safe_nominal_slack=0.15,
+        safe_switch_score_margin=0.10,
+        safe_min_rec_lcb_gain=0.10,
+        safe_min_gap_reduction=0.20,
+    )
+    assert sel.selected_index == 0
+    assert sel.reason == "nominal_safe_switch_guard"
+
+
+def test_prefer_admitted_ranks_within_admitted_candidates():
+    sel = calibrated_constrained_select(
+        utility=np.array([1.0, 4.0, 2.0]),
+        r_dep=np.array([-0.4, -0.3, 0.2]),
+        hard=np.zeros(3),
+        harm=np.zeros(3),
+        feasible=np.array([True, True, True]),
+        gamma_rec=0.0,
+        pred_gap=np.zeros(3),
+        nominal_deviation=np.zeros(3),
+        regime_name="test_contact",
+        prefer_admitted=True,
+    )
+    assert sel.selected_index == 2
+    assert sel.reason == "best_calibrated_prefer_admitted"

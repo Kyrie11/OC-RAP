@@ -67,6 +67,11 @@ def _finite_or_proxy(primary: np.ndarray, proxy: np.ndarray | None, fallback: np
     return out
 
 
+def _strip_version_suffix(name: str) -> str:
+    base, sep, version = str(name).rpartition("_v")
+    return base if sep and version.isdigit() and base else str(name)
+
+
 def _bucket_aliases(name: str | None) -> list[str]:
     if not name:
         return []
@@ -75,6 +80,10 @@ def _bucket_aliases(name: str | None) -> list[str]:
     for p in ("test_", "val_", "train_"):
         if raw.startswith(p):
             aliases.append(raw[len(p):])
+    # Treat normal shard versions such as test_safe_v2 as safe unless a more
+    # specific override is provided.  This keeps regime-conditioned selector
+    # knobs usable after rebuilding safe_v2/safe_v3.
+    aliases.extend([_strip_version_suffix(x) for x in list(aliases)])
     aliases.extend([raw.replace("-", "_"), raw.replace("_", "-")])
     out: list[str] = []
     for x in aliases:
@@ -97,6 +106,42 @@ def _cfg_float(scfg: dict, key: str, default: float, bucket_name: str | None = N
         return float(value)
     except Exception:
         return float(default)
+
+
+def _cfg_bool(scfg: dict, key: str, default: bool, bucket_name: str | None = None) -> bool:
+    """Read boolean config with optional bucket/regime overrides."""
+    value = scfg.get(key, default)
+    for map_key in (f"{key}_by_bucket", f"{key}_by_regime"):
+        mapping = scfg.get(map_key, None)
+        if isinstance(mapping, dict):
+            for alias in _bucket_aliases(bucket_name):
+                if alias in mapping and mapping[alias] not in {None, ""}:
+                    value = mapping[alias]
+                    break
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _cfg_has_value(scfg: dict, key: str, bucket_name: str | None = None) -> bool:
+    """Return True when a scalar or bucket-specific override is configured.
+
+    This matters for optional parameters whose scalar default is None.  The
+    previous code checked only ``selection.intervention_budget_rate`` before
+    reading the bucket map, so ``intervention_budget_rate_by_bucket.safe=...``
+    was silently ignored unless the global scalar was also set.
+    """
+    if scfg.get(key, None) not in {None, ""}:
+        return True
+    for map_key in (f"{key}_by_bucket", f"{key}_by_regime"):
+        mapping = scfg.get(map_key, None)
+        if isinstance(mapping, dict):
+            for alias in _bucket_aliases(bucket_name):
+                if alias in mapping and mapping[alias] not in {None, ""}:
+                    return True
+    return False
 
 
 def select_baseline(
@@ -162,10 +207,17 @@ def select_baseline(
                 nominal_utility_slack=_cfg_float(scfg, "nominal_utility_slack", 0.05, bucket_name),
                 safe_nominal_slack=_cfg_float(scfg, "safe_nominal_slack", 0.12, bucket_name),
                 regime_name=bucket_name,
-                intervention_budget_rate=(None if scfg.get("intervention_budget_rate", None) in {None, ""} else _cfg_float(scfg, "intervention_budget_rate", 0.20, bucket_name)),
-                intervention_budget_used=(None if scfg.get("intervention_budget_used", None) in {None, ""} else _cfg_float(scfg, "intervention_budget_used", 0.0, bucket_name)),
-                intervention_budget_steps=(None if scfg.get("intervention_budget_steps", None) in {None, ""} else _cfg_float(scfg, "intervention_budget_steps", 1.0, bucket_name)),
+                intervention_budget_rate=(None if not _cfg_has_value(scfg, "intervention_budget_rate", bucket_name) else _cfg_float(scfg, "intervention_budget_rate", 0.20, bucket_name)),
+                intervention_budget_used=(None if not _cfg_has_value(scfg, "intervention_budget_used", bucket_name) else _cfg_float(scfg, "intervention_budget_used", 0.0, bucket_name)),
+                intervention_budget_steps=(None if not _cfg_has_value(scfg, "intervention_budget_steps", bucket_name) else _cfg_float(scfg, "intervention_budget_steps", 1.0, bucket_name)),
                 intervention_budget_penalty=_cfg_float(scfg, "intervention_budget_penalty", 0.25, bucket_name),
+                prefer_admitted=_cfg_bool(scfg, "prefer_admitted", False, bucket_name),
+                switch_score_margin=_cfg_float(scfg, "switch_score_margin", 0.0, bucket_name),
+                safe_switch_score_margin=_cfg_float(scfg, "safe_switch_score_margin", 0.10, bucket_name),
+                safe_min_rec_lcb_gain=_cfg_float(scfg, "safe_min_rec_lcb_gain", 0.05, bucket_name),
+                safe_min_gap_reduction=_cfg_float(scfg, "safe_min_gap_reduction", 0.15, bucket_name),
+                budget_preserve_nominal=_cfg_bool(scfg, "budget_preserve_nominal", True, bucket_name),
+                budget_nominal_slack=_cfg_float(scfg, "budget_nominal_slack", 0.08, bucket_name),
             )
             gap_arr = np.asarray(pred_gap if pred_gap is not None else np.zeros_like(pred_r_dep), dtype=float)
             score = pred_r_dep - beta * np.maximum(0.0, gap_arr)
