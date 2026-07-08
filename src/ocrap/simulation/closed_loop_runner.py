@@ -13,7 +13,7 @@ from ocrap.data.schema import pad_recovery_params
 from ocrap.data.serialization import write_json
 from ocrap.data.waymax_loader import iter_waymax_womd_scenarios, raw_scenario_from_waymax_state
 from ocrap.evaluation.baselines import select_baseline
-from ocrap.evaluation.metrics import deployable_recovery_success, false_recoverability_admission, nominal_utility_preservation, post_contact_deployability_score, predicted_shared_option_success
+from ocrap.evaluation.metrics import best_shared_option_index, deployable_recovery_success, false_recoverability_admission, nominal_utility_preservation, post_contact_deployability_score, predicted_shared_option_success
 from ocrap.models.data import iter_sample_paths_many, scalar_metadata_for_path
 from ocrap.models.inference import ModelBundle, load_model_bundle, predict_sample, predict_samples, teacher_prediction_from_sample
 from ocrap.simulation.waymax_rollout import _as_np, _bicycle_action, _make_env, _metric_summary, _sdc_index
@@ -339,7 +339,7 @@ def _select_prefix(
     sel_tmp = cfg.get("selection", {}) if isinstance(cfg.get("selection", {}), dict) else {}
     active_bucket = str(sel_tmp.get("active_bucket_name", sel_tmp.get("regime_name", "")) or "")
     drs_gamma = _drs_success_gamma_for_bucket(gamma, cfg, active_bucket)
-    pred_drs = np.asarray([predicted_shared_option_success(x["pred"].q, x["pred"].root_probs, gamma=drs_gamma) for x in items], dtype=np.float32)
+    pred_drs = np.asarray([predicted_shared_option_success(x["pred"].q, x["pred"].root_probs, gamma=drs_gamma, root_valid=x["data"].get("root_valid", None), option_valid=x["data"].get("option_valid", None)) for x in items], dtype=np.float32)
     nominal_deviation = _prefix_nominal_deviation(samples)
     if compute_teacher_labels:
         teacher_r_dep = np.asarray([_safe_float(x["data"].get("r_dep_star", 0.0)) for x in items], dtype=np.float32)
@@ -374,10 +374,16 @@ def _select_prefix(
     nup = nominal_utility_preservation(utility[0] if len(utility) else 0.0, utility[idx], sigma_u=float((cfg.get("metrics", {}) or {}).get("sigma_u", 1.0)))
 
     if compute_teacher_labels:
-        q_eval = chosen["pred"].q if method == "ocrap" else chosen["teacher"].q
-        selected_options = np.argmax(q_eval, axis=1) if getattr(q_eval, "ndim", 0) == 2 else 0
         d = chosen["data"]
-        drs = deployable_recovery_success(d["m_star"], d["root_probs"], selected_options, d.get("root_valid", None))
+        # Evaluate one globally shared option.  If OC-RAP did not intervene
+        # (nominal index 0), use the teacher option for a nominal-prefix
+        # diagnostic; if it intervened, evaluate the model-selected shared
+        # recovery option against the teacher margins.
+        use_model_option = bool(method == "ocrap" and idx != 0)
+        q_eval = chosen["pred"].q if use_model_option else chosen["teacher"].q
+        opt_gamma = drs_gamma if use_model_option else 0.0
+        selected_option = best_shared_option_index(q_eval, d["root_probs"], gamma=opt_gamma, root_valid=d.get("root_valid", None), option_valid=d.get("option_valid", None))
+        drs = deployable_recovery_success(d["m_star"], d["root_probs"], int(selected_option), d.get("root_valid", None))
         fra_cand = false_recoverability_admission(selected.admitted, teacher_r_dep)
     else:
         drs = None
@@ -990,6 +996,9 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
         "drs_success_gamma": (local.get("selection", {}) or {}).get("drs_success_gamma", None) if isinstance(local.get("selection", {}), dict) else None,
         "safe_force_nominal_when_feasible": (local.get("selection", {}) or {}).get("safe_force_nominal_when_feasible", None) if isinstance(local.get("selection", {}), dict) else None,
         "safe_force_nominal_mode": (local.get("selection", {}) or {}).get("safe_force_nominal_mode", None) if isinstance(local.get("selection", {}), dict) else None,
+        "safe_force_nominal_when_feasible_by_bucket": (local.get("selection", {}) or {}).get("safe_force_nominal_when_feasible_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {},
+        "safe_force_nominal_mode_by_bucket": (local.get("selection", {}) or {}).get("safe_force_nominal_mode_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {},
+        "stress_preserve_nominal_min_drs_drop_by_bucket": (local.get("selection", {}) or {}).get("stress_preserve_nominal_min_drs_drop_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {},
     }
     result["notes"] = [
         "This is a true Waymax receding-horizon loop: reset once, select an action from current SimulatorState, step the environment, then replan from the updated SimulatorState.",

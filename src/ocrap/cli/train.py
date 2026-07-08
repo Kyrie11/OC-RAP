@@ -279,6 +279,7 @@ def _epoch(
             + float(lw.get("option_q", 0.5)) * loss_option_q
             + float(lw.get("option_admission", 0.4)) * loss_option_admit
             + float(lw.get("option_success", 0.0)) * loss_option_success
+            + float(lw.get("option_success_bce", 0.0)) * loss_option_success_bce
             + float(lw.get("option_best", 0.2)) * loss_option_best
             + float(lw.get("utility", 0.2)) * loss_util
         )
@@ -306,6 +307,7 @@ def _epoch(
             "loss_option_q": loss_option_q.item(),
             "loss_option_admission": loss_option_admit.item(),
             "loss_option_success": loss_option_success.item(),
+            "loss_option_success_bce": loss_option_success_bce.item(),
             "loss_option_best": loss_option_best.item(),
             "loss_utility": loss_util.item(),
             "pred_r_dep_mean": r_dep.mean().item(),
@@ -540,8 +542,7 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
                 "epoch": ep,
                 "best_epoch": int(best_epoch),
                 "best_val_loss": float(best_val),
-        "best_epoch": int(best_epoch),
-        "epochs_completed": int(len(history)),
+                "epochs_completed": int(len(history)),
                 "patience": patience,
             }, flush=True)
             break
@@ -561,7 +562,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         "device_info": device_info,
         "train_batches_per_epoch": len(train_loader),
         "val_batches_per_epoch": len(val_loader),
-        "total_train_steps": int(len(train_loader) * epochs),
+        "best_epoch": int(best_epoch),
+        "epochs_completed": int(len(history)),
+        "total_train_steps": int(len(train_loader) * len(history)),
         "elapsed_seconds": float(perf_counter() - t0),
         "history": history,
     }

@@ -60,24 +60,73 @@ def deployable_recovery_success(
     return float(np.sum(p * vals))
 
 
-def predicted_shared_option_success(q: np.ndarray, root_probs: np.ndarray, gamma: float = 0.0, root_valid: np.ndarray | None = None) -> float:
-    """Predicted DRS proxy: root probability mass whose best shared option clears gamma."""
-    Q = np.asarray(q, dtype=float)
-    if Q.ndim != 2 or Q.shape[0] == 0:
-        return 0.0
-    K = Q.shape[0]
-    p = np.asarray(root_probs, dtype=float).reshape(-1)[:K]
-    if p.size < K:
-        p = np.pad(p, (0, K - p.size))
-    valid = np.ones(K, dtype=bool) if root_valid is None else np.asarray(root_valid, dtype=bool).reshape(-1)[:K]
-    if valid.size < K:
-        valid = np.pad(valid, (0, K - valid.size), constant_values=False)
+def _valid_root_weights(root_probs: np.ndarray, k: int, root_valid: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
+    p = np.asarray(root_probs, dtype=float).reshape(-1)[:k]
+    if p.size < k:
+        p = np.pad(p, (0, k - p.size))
+    valid = np.ones(k, dtype=bool) if root_valid is None else np.asarray(root_valid, dtype=bool).reshape(-1)[:k]
+    if valid.size < k:
+        valid = np.pad(valid, (0, k - valid.size), constant_values=False)
     p = np.where(valid, np.clip(p, 0.0, None), 0.0)
     denom = float(p.sum())
     if denom <= 1e-8:
+        return np.zeros(k, dtype=float), valid
+    return p / denom, valid
+
+
+def best_shared_option_index(
+    q: np.ndarray,
+    root_probs: np.ndarray,
+    gamma: float = 0.0,
+    root_valid: np.ndarray | None = None,
+    option_valid: np.ndarray | None = None,
+) -> int:
+    """Return one globally shared recovery-option index.
+
+    DRS is supposed to evaluate a deployable *shared* action.  The previous
+    implementation used ``argmax`` independently for each root, which inflated
+    diagnostics and did not match the executed recovery-action claim.  This
+    helper picks one option that maximizes the root-probability mass whose
+    option value clears ``gamma``; mean value is only a small tie-breaker.
+    """
+    Q = np.asarray(q, dtype=float)
+    if Q.ndim != 2 or Q.shape[0] == 0 or Q.shape[1] == 0:
+        return 0
+    K, L = Q.shape
+    w, valid = _valid_root_weights(root_probs, K, root_valid)
+    if float(w.sum()) <= 1e-8:
+        return 0
+    opt_valid = np.ones(L, dtype=bool) if option_valid is None else np.asarray(option_valid, dtype=bool).reshape(-1)[:L]
+    if opt_valid.size < L:
+        opt_valid = np.pad(opt_valid, (0, L - opt_valid.size), constant_values=False)
+    finite = np.isfinite(Q) & valid[:, None] & opt_valid[None, :]
+    success = ((Q >= float(gamma)) & finite).astype(float)
+    success_mass = (success * w[:, None]).sum(axis=0)
+    value = np.where(finite, np.clip(Q, -5.0, 5.0), 0.0)
+    value_score = (value * w[:, None]).sum(axis=0)
+    score = success_mass + 0.01 * value_score
+    score = np.where(opt_valid, score, -1.0e9)
+    return int(np.argmax(score))
+
+
+def predicted_shared_option_success(
+    q: np.ndarray,
+    root_probs: np.ndarray,
+    gamma: float = 0.0,
+    root_valid: np.ndarray | None = None,
+    option_valid: np.ndarray | None = None,
+) -> float:
+    """Predicted DRS proxy for one globally shared option."""
+    Q = np.asarray(q, dtype=float)
+    if Q.ndim != 2 or Q.shape[0] == 0 or Q.shape[1] == 0:
         return 0.0
-    best = np.max(np.where(np.isfinite(Q), Q, -1e9), axis=-1)
-    return float(np.sum((p / denom) * (best >= float(gamma))))
+    K, _L = Q.shape
+    w, valid = _valid_root_weights(root_probs, K, root_valid)
+    if float(w.sum()) <= 1e-8:
+        return 0.0
+    opt = best_shared_option_index(Q, root_probs, gamma=gamma, root_valid=root_valid, option_valid=option_valid)
+    col = Q[:, int(opt)]
+    return float(np.sum(w * (valid & np.isfinite(col) & (col >= float(gamma)))))
 
 
 def post_contact_deployability_score(drs: float, r_dep: float, odg: float) -> float:

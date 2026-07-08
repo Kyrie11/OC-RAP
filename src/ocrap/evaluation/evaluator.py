@@ -6,7 +6,7 @@ import numpy as np
 
 from ocrap.data.serialization import load_npz, write_json
 from ocrap.evaluation.baselines import BASELINES, select_baseline, _bucket_aliases
-from ocrap.evaluation.metrics import deployable_recovery_success, false_recoverability_admission, nominal_utility_preservation, post_contact_deployability_score, predicted_shared_option_success, summarize_selection_metrics
+from ocrap.evaluation.metrics import best_shared_option_index, deployable_recovery_success, false_recoverability_admission, nominal_utility_preservation, post_contact_deployability_score, predicted_shared_option_success, summarize_selection_metrics
 from ocrap.models.data import iter_sample_paths_many, scalar_metadata_for_path
 from ocrap.models.inference import load_model_bundle, predict_sample, teacher_prediction_from_sample
 
@@ -317,7 +317,7 @@ def _evaluate_grouped_items(grouped: dict[tuple, list[dict]], methods: list[str]
         dataset_label = str(items[0].get("dataset_label", "")) if items else ""
         gamma_i = _gamma_for_dataset(gamma, cfg, dataset_label)
         drs_gamma_i = _drs_success_gamma_for_dataset(gamma_i, cfg, dataset_label)
-        pred_drs = np.array([predicted_shared_option_success(x["pred"].q, x["pred"].root_probs, gamma=drs_gamma_i) for x in items])
+        pred_drs = np.array([predicted_shared_option_success(x["pred"].q, x["pred"].root_probs, gamma=drs_gamma_i, root_valid=x["data"].get("root_valid", None), option_valid=x["data"].get("option_valid", None)) for x in items])
         teacher_r_dep = np.array([float(np.asarray(x["data"]["r_dep_star"]).item()) for x in items])
         teacher_r_orc = np.array([float(np.asarray(x["data"]["r_orc_star"]).item()) for x in items])
         hard = np.array([float(np.asarray(x["data"].get("hard_violation", 0.0)).item()) for x in items])
@@ -343,12 +343,16 @@ def _evaluate_grouped_items(grouped: dict[tuple, list[dict]], methods: list[str]
             selected_index = int(sel.selected_index)
             chosen = items[selected_index]
             sd = chosen["data"]
-            # For deployable execution success, evaluate the best shared recovery
-            # option under the teacher OC-MERO kernel.  This keeps DRS comparable
-            # across rules that do not explicitly output a recovery option.
-            q_eval = chosen["pred"].q if method == "ocrap" else chosen["teacher"].q
-            selected_options = np.argmax(q_eval, axis=1) if getattr(q_eval, "ndim", 0) == 2 else 0
-            drs = deployable_recovery_success(sd["m_star"], sd["root_probs"], selected_options, sd.get("root_valid", None))
+            # DRS must evaluate one globally shared recovery action.  When
+            # OC-RAP actually switches away from nominal, the option is chosen
+            # from the model q-table and then evaluated against teacher margins.
+            # If no intervention happened (selected_index == 0), DRS is a
+            # nominal-prefix diagnostic rather than a learned recovery-action
+            # claim, so use the teacher option just like the nominal baseline.
+            q_eval = chosen["pred"].q if (method == "ocrap" and selected_index != 0) else chosen["teacher"].q
+            opt_gamma = drs_gamma_i if (method == "ocrap" and selected_index != 0) else 0.0
+            selected_option = best_shared_option_index(q_eval, sd["root_probs"], gamma=opt_gamma, root_valid=sd.get("root_valid", None), option_valid=sd.get("option_valid", None))
+            drs = deployable_recovery_success(sd["m_star"], sd["root_probs"], int(selected_option), sd.get("root_valid", None))
             odg_val = float(np.asarray(sd.get("oracle_gap_star", teacher_r_orc[selected_index] - teacher_r_dep[selected_index])).item())
             pcds = post_contact_deployability_score(drs, teacher_r_dep[selected_index], odg_val)
             nup = nominal_utility_preservation(utility[0] if len(utility) else 0.0, utility[selected_index], sigma_u=float((cfg or {}).get("metrics", {}).get("sigma_u", 1.0)))
@@ -435,6 +439,9 @@ def evaluate(dataset: str | Path, checkpoint: str | Path | None = None, output: 
         "drs_success_gamma": (cfg.get("selection", {}) or {}).get("drs_success_gamma", None) if isinstance(cfg.get("selection", {}), dict) else None,
         "safe_force_nominal_when_feasible": (cfg.get("selection", {}) or {}).get("safe_force_nominal_when_feasible", None) if isinstance(cfg.get("selection", {}), dict) else None,
         "safe_force_nominal_mode": (cfg.get("selection", {}) or {}).get("safe_force_nominal_mode", None) if isinstance(cfg.get("selection", {}), dict) else None,
+        "safe_force_nominal_when_feasible_by_bucket": (cfg.get("selection", {}) or {}).get("safe_force_nominal_when_feasible_by_bucket", {}) if isinstance(cfg.get("selection", {}), dict) else {},
+        "safe_force_nominal_mode_by_bucket": (cfg.get("selection", {}) or {}).get("safe_force_nominal_mode_by_bucket", {}) if isinstance(cfg.get("selection", {}), dict) else {},
+        "stress_preserve_nominal_min_drs_drop_by_bucket": (cfg.get("selection", {}) or {}).get("stress_preserve_nominal_min_drs_drop_by_bucket", {}) if isinstance(cfg.get("selection", {}), dict) else {},
     }
     result["dataset_group_count"] = {k: len(v) for k, v in sorted(dataset_grouped.items())}
     result["per_dataset"] = {}
