@@ -193,6 +193,16 @@ def calibrated_constrained_select(
     safe_force_nominal_when_feasible: bool = False,
     safe_force_nominal_mode: str = "feasible",
     stress_preserve_nominal_min_drs_drop: float = -1.0,
+    safe_cert_min_pred_drs: float = 0.95,
+    safe_cert_max_pred_gap: float = 0.20,
+    safe_cert_rec_slack: float = 0.15,
+    stress_nominal_anchor: bool = False,
+    stress_anchor_drs_floor: float = 0.90,
+    stress_anchor_max_gap: float = 0.30,
+    stress_anchor_rec_slack: float = 0.10,
+    stress_anchor_min_drs_gain: float = 0.06,
+    stress_anchor_min_rec_gain: float = 0.08,
+    stress_anchor_min_gap_reduction: float = 0.05,
 ) -> SelectionResult:
     """Soft calibrated OC-RAP selector.
 
@@ -280,18 +290,28 @@ def calibrated_constrained_select(
     # and the active regime is safe/background, allow an explicit hard lock that
     # bypasses noisy recovery-head shortfall.
     if bool(safe_force_nominal_when_feasible) and is_safe_regime and 0 <= nominal_index < n:
-        # In the safe regime, the paper claim is nominal-utility preservation.
-        # The per-candidate feasibility/hard/harm metadata can be conservative or
-        # stale in online audits (especially when feature-only samples are used).
-        # `mode=always` therefore locks nominal whenever the nominal candidate is
-        # present.  `mode=feasible` preserves the previous behavior and requires
-        # the nominal candidate to be in the hard/harm-feasible pool.
+        # In safe/background regimes, nominal preservation should be a certifiable
+        # behavior, not just an unconditional heuristic.  `always` keeps the old
+        # hard lock for ablation/papercheck; `certified` locks nominal only when
+        # the learned heads and feasibility metadata agree that nominal is already
+        # deployable and low-gap.
         force_mode = str(safe_force_nominal_mode or "feasible").strip().lower()
-        allow_force = force_mode in {"always", "present", "nominal", "hard"} or (pool[nominal_index] and force_mode in {"", "feasible", "safe"})
+        certified = (
+            pool[nominal_index]
+            and drs_proxy[nominal_index] >= float(safe_cert_min_pred_drs)
+            and gap[nominal_index] <= float(safe_cert_max_pred_gap)
+            and rec_lcb[nominal_index] >= float(gamma_rec) - float(safe_cert_rec_slack)
+        )
+        allow_force = (
+            force_mode in {"always", "present", "nominal", "hard"}
+            or (pool[nominal_index] and force_mode in {"", "feasible", "safe"})
+            or (certified and force_mode in {"cert", "certified", "learned", "model", "guarded"})
+        )
         if allow_force:
             admitted = admitted.copy()
             admitted[nominal_index] = True
-            return SelectionResult(int(nominal_index), "nominal_safe_force_locked", admitted)
+            reason = "nominal_safe_certified_locked" if force_mode in {"cert", "certified", "learned", "model", "guarded"} else "nominal_safe_force_locked"
+            return SelectionResult(int(nominal_index), reason, admitted)
 
     # Stress-regime option: when calibrated-admitted candidates exist, rank only
     # within them.  The default remains soft-constrained for backward
@@ -315,6 +335,31 @@ def calibrated_constrained_select(
             admitted = admitted.copy()
             admitted[nominal_index] = True
             return SelectionResult(int(nominal_index), "nominal_stress_drs_guard", admitted)
+
+    # Stress-regime nominal anchor.  Near-contact scenes are still benign until
+    # impact, and contact scenes often have a high-quality nominal recovery
+    # baseline.  Avoid switching away from a predicted-good nominal prefix unless
+    # the learned candidate brings a material deployability/gap advantage.  This
+    # is intentionally optional and should be reported as a cautious-selector
+    # ablation, not hidden as a universal rule.
+    if bool(stress_nominal_anchor) and (not is_safe_regime) and 0 <= nominal_index < n and pool[nominal_index]:
+        nominal_anchor_ok = (
+            drs_proxy[nominal_index] >= float(stress_anchor_drs_floor)
+            and gap[nominal_index] <= float(stress_anchor_max_gap)
+            and rec_lcb[nominal_index] >= float(gamma_rec) - float(stress_anchor_rec_slack)
+        )
+        if nominal_anchor_ok and best_idx != int(nominal_index):
+            drs_gain = float(drs_proxy[best_idx] - drs_proxy[nominal_index])
+            rec_gain = float(rec_lcb[best_idx] - rec_lcb[nominal_index])
+            gap_reduction = float(gap[nominal_index] - gap[best_idx])
+            if (
+                drs_gain < float(stress_anchor_min_drs_gain)
+                and rec_gain < float(stress_anchor_min_rec_gain)
+                and gap_reduction < float(stress_anchor_min_gap_reduction)
+            ):
+                admitted = admitted.copy()
+                admitted[nominal_index] = True
+                return SelectionResult(int(nominal_index), "nominal_stress_anchor_preserved", admitted)
 
     # Nominal-preserving calibration.  In safe/background regimes, recovery
     # shortfall by itself should not trigger large behavior changes unless the

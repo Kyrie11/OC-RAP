@@ -293,3 +293,146 @@ def groupwise_candidate_ranking_loss(
     if not losses:
         return pred_r_dep.sum() * 0.0
     return torch.stack(losses).mean()
+
+def groupwise_candidate_ce_loss(
+    pred_r_dep: torch.Tensor,
+    pred_gap: torch.Tensor,
+    utility: torch.Tensor,
+    teacher_r_dep: torch.Tensor,
+    teacher_r_orc: torch.Tensor,
+    scene_hash: torch.Tensor,
+    time_index: torch.Tensor,
+    *,
+    temperature: float = 0.35,
+    pred_gap_weight: float = 0.35,
+    teacher_gap_weight: float = 0.35,
+    utility_weight: float = 0.03,
+    require_deployable_target: bool = True,
+) -> torch.Tensor:
+    """Cross-entropy over candidates in each scene-time group.
+
+    Pairwise artifact ranking is not enough for contact recovery: the selected
+    teacher action can be a non-artifact candidate whose advantage is higher
+    post-contact deployability, not merely avoiding an oracle artifact.  This
+    loss treats the scene-time candidate set as the decision space and directly
+    teaches the learned candidate score to put its probability mass on the
+    teacher-best observation-consistent deployable candidate.
+    """
+    if pred_r_dep.numel() <= 1:
+        return pred_r_dep.sum() * 0.0
+    pr = torch.nan_to_num(pred_r_dep.float().reshape(-1), nan=-20.0, posinf=20.0, neginf=-20.0)
+    pg = torch.clamp(torch.nan_to_num(pred_gap.float().reshape(-1), nan=0.0, posinf=20.0, neginf=0.0), min=0.0)
+    u = torch.nan_to_num(utility.float().reshape(-1), nan=0.0, posinf=0.0, neginf=0.0)
+    trd = teacher_r_dep.float().reshape(-1)
+    tro = teacher_r_orc.float().reshape(-1)
+    sh = scene_hash.reshape(-1)
+    ti = time_index.reshape(-1)
+    n = min(pr.numel(), pg.numel(), u.numel(), trd.numel(), tro.numel(), sh.numel(), ti.numel())
+    if n <= 1:
+        return pred_r_dep.sum() * 0.0
+    pr, pg, u, trd, tro, sh, ti = pr[:n], pg[:n], u[:n], trd[:n], tro[:n], sh[:n], ti[:n]
+    finite = torch.isfinite(pr) & torch.isfinite(pg) & torch.isfinite(u) & torch.isfinite(trd) & torch.isfinite(tro)
+    if not bool(finite.any()):
+        return pred_r_dep.sum() * 0.0
+    teacher_gap = torch.clamp(tro - trd, min=0.0)
+    # Utility is deliberately weak here.  The teacher decision should primarily
+    # reflect deployable recovery, but small utility ties keep benign scenes
+    # nominal-preserving.
+    teacher_score = trd - float(teacher_gap_weight) * teacher_gap + float(utility_weight) * u
+    pred_score = pr - float(pred_gap_weight) * pg + float(utility_weight) * u
+    tau = max(float(temperature), 1.0e-3)
+    losses: list[torch.Tensor] = []
+    keys = torch.stack([sh, ti], dim=1)
+    unique = torch.unique(keys[finite], dim=0)
+    for key in unique:
+        mask = finite & (sh == key[0]) & (ti == key[1])
+        if int(mask.sum().item()) < 2:
+            continue
+        idx = torch.where(mask)[0]
+        target_pool = idx[trd[idx] >= 0.0] if bool(require_deployable_target) else idx
+        if target_pool.numel() == 0:
+            target_pool = idx
+        best = target_pool[torch.argmax(teacher_score[target_pool])]
+        local_target = int((idx == best).nonzero(as_tuple=False).reshape(-1)[0].item())
+        logits = pred_score[idx].reshape(1, -1) / tau
+        target = torch.tensor([local_target], device=pred_r_dep.device, dtype=torch.long)
+        losses.append(F.cross_entropy(logits, target))
+    if not losses:
+        return pred_r_dep.sum() * 0.0
+    return torch.stack(losses).mean()
+
+
+def nominal_switch_consistency_loss(
+    pred_r_dep: torch.Tensor,
+    pred_gap: torch.Tensor,
+    utility: torch.Tensor,
+    teacher_r_dep: torch.Tensor,
+    teacher_r_orc: torch.Tensor,
+    scene_hash: torch.Tensor,
+    time_index: torch.Tensor,
+    is_nominal: torch.Tensor,
+    *,
+    margin: float = 0.12,
+    pred_gap_weight: float = 0.30,
+    teacher_gap_weight: float = 0.35,
+    utility_weight: float = 0.03,
+    teacher_gain_margin: float = 0.06,
+    nominal_deployable_gamma: float = 0.0,
+    nominal_gap_max: float = 0.30,
+) -> torch.Tensor:
+    """Teach the model when *not* to leave the logged nominal prefix.
+
+    This is a learned nominal-preservation objective, not a hard rule.  If the
+    nominal prefix is teacher-deployable and no alternative has a material
+    teacher advantage, its learned score should dominate.  If an alternative has
+    a material deployability/gap advantage, it should outrank nominal.
+    """
+    if pred_r_dep.numel() <= 1:
+        return pred_r_dep.sum() * 0.0
+    pr = torch.nan_to_num(pred_r_dep.float().reshape(-1), nan=-20.0, posinf=20.0, neginf=-20.0)
+    pg = torch.clamp(torch.nan_to_num(pred_gap.float().reshape(-1), nan=0.0, posinf=20.0, neginf=0.0), min=0.0)
+    u = torch.nan_to_num(utility.float().reshape(-1), nan=0.0, posinf=0.0, neginf=0.0)
+    trd = teacher_r_dep.float().reshape(-1)
+    tro = teacher_r_orc.float().reshape(-1)
+    sh = scene_hash.reshape(-1)
+    ti = time_index.reshape(-1)
+    isn = is_nominal.float().reshape(-1) > 0.5
+    n = min(pr.numel(), pg.numel(), u.numel(), trd.numel(), tro.numel(), sh.numel(), ti.numel(), isn.numel())
+    if n <= 1:
+        return pred_r_dep.sum() * 0.0
+    pr, pg, u, trd, tro, sh, ti, isn = pr[:n], pg[:n], u[:n], trd[:n], tro[:n], sh[:n], ti[:n], isn[:n]
+    finite = torch.isfinite(pr) & torch.isfinite(pg) & torch.isfinite(u) & torch.isfinite(trd) & torch.isfinite(tro)
+    teacher_gap = torch.clamp(tro - trd, min=0.0)
+    teacher_score = trd - float(teacher_gap_weight) * teacher_gap + float(utility_weight) * u
+    pred_score = pr - float(pred_gap_weight) * pg + float(utility_weight) * u
+    losses: list[torch.Tensor] = []
+    keys = torch.stack([sh, ti], dim=1)
+    unique = torch.unique(keys[finite], dim=0)
+    for key in unique:
+        mask = finite & (sh == key[0]) & (ti == key[1])
+        if int(mask.sum().item()) < 2:
+            continue
+        idx = torch.where(mask)[0]
+        nom_local = idx[isn[idx]]
+        if nom_local.numel() == 0:
+            continue
+        nom = nom_local[0]
+        nom_good = (trd[nom] >= float(nominal_deployable_gamma)) and (teacher_gap[nom] <= float(nominal_gap_max))
+        if not bool(nom_good):
+            continue
+        others = idx[idx != nom]
+        if others.numel() == 0:
+            continue
+        adv = teacher_score[others] - teacher_score[nom]
+        should_switch = (adv >= float(teacher_gain_margin)) & (trd[others] >= float(nominal_deployable_gamma))
+        should_stay = ~should_switch
+        if bool(should_stay.any()):
+            diff_stay = pred_score[nom] - pred_score[others[should_stay]]
+            losses.append(F.relu(float(margin) - diff_stay).mean())
+        if bool(should_switch.any()):
+            diff_switch = pred_score[others[should_switch]] - pred_score[nom]
+            losses.append(F.relu(float(margin) - diff_switch).mean())
+    if not losses:
+        return pred_r_dep.sum() * 0.0
+    return torch.stack(losses).mean()
+

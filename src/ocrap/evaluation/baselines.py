@@ -243,6 +243,16 @@ def select_baseline(
                 safe_force_nominal_when_feasible=_cfg_bool(scfg, "safe_force_nominal_when_feasible", False, bucket_name),
                 safe_force_nominal_mode=str(_cfg_value(scfg, "safe_force_nominal_mode", "feasible", bucket_name)),
                 stress_preserve_nominal_min_drs_drop=_cfg_float(scfg, "stress_preserve_nominal_min_drs_drop", -1.0, bucket_name),
+                safe_cert_min_pred_drs=_cfg_float(scfg, "safe_cert_min_pred_drs", 0.95, bucket_name),
+                safe_cert_max_pred_gap=_cfg_float(scfg, "safe_cert_max_pred_gap", 0.20, bucket_name),
+                safe_cert_rec_slack=_cfg_float(scfg, "safe_cert_rec_slack", 0.15, bucket_name),
+                stress_nominal_anchor=_cfg_bool(scfg, "stress_nominal_anchor", False, bucket_name),
+                stress_anchor_drs_floor=_cfg_float(scfg, "stress_anchor_drs_floor", 0.90, bucket_name),
+                stress_anchor_max_gap=_cfg_float(scfg, "stress_anchor_max_gap", 0.30, bucket_name),
+                stress_anchor_rec_slack=_cfg_float(scfg, "stress_anchor_rec_slack", 0.10, bucket_name),
+                stress_anchor_min_drs_gain=_cfg_float(scfg, "stress_anchor_min_drs_gain", 0.06, bucket_name),
+                stress_anchor_min_rec_gain=_cfg_float(scfg, "stress_anchor_min_rec_gain", 0.08, bucket_name),
+                stress_anchor_min_gap_reduction=_cfg_float(scfg, "stress_anchor_min_gap_reduction", 0.05, bucket_name),
             )
             gap_arr = np.asarray(pred_gap if pred_gap is not None else np.zeros_like(pred_r_dep), dtype=float)
             score = pred_r_dep - beta * np.maximum(0.0, gap_arr)
