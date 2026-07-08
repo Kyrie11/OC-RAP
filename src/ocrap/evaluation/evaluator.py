@@ -165,6 +165,11 @@ def _records_summary(records: list[dict], split: str, gamma: float, source: str,
     result = summarize_selection_metrics(records)
     if records:
         result["pred_ODG"] = float(np.mean([r["pred_odg"] for r in records]))
+        result["mean_selected_pred_R_dep"] = float(np.mean([r.get("pred_r_dep", 0.0) for r in records]))
+        result["mean_selected_pred_gap"] = float(np.mean([r.get("pred_gap", 0.0) for r in records]))
+        result["mean_selected_pred_DRS_proxy"] = float(np.mean([r.get("pred_drs", 0.0) for r in records]))
+        from collections import Counter
+        result["selection_reason_counts"] = dict(Counter(str(r.get("selection_reason", "")) for r in records))
         result["mean_selected_teacher_R_dep"] = float(np.mean([r["selected_teacher_r_dep"] for r in records]))
         result["mean_selected_teacher_R_orc"] = float(np.mean([r["selected_teacher_r_orc"] for r in records]))
         result["mean_selected_utility"] = float(np.mean([r["selected_utility"] for r in records]))
@@ -225,6 +230,45 @@ def _dataset_label_for_path(path: Path) -> str:
         return "dataset"
 
 
+def _normalise_split_id(value) -> str:
+    try:
+        if isinstance(value, bytes):
+            value = value.decode("utf-8", errors="ignore")
+        if hasattr(value, "item"):
+            value = value.item()
+            if isinstance(value, bytes):
+                value = value.decode("utf-8", errors="ignore")
+        s = str(value).strip()
+        # Some manifests/NPZ scalars may stringify bytes as b'test'.
+        if (s.startswith("b'") and s.endswith("'")) or (s.startswith('b"') and s.endswith('"')):
+            s = s[2:-1]
+        return s.strip().lower()
+    except Exception:
+        return ""
+
+
+def _path_implied_split(path: Path) -> str:
+    label = _dataset_label_for_path(path).lower()
+    for prefix in ("train", "val", "test"):
+        if label == prefix or label.startswith(prefix + "_") or label.startswith(prefix + "-"):
+            return prefix
+    return ""
+
+
+def _split_matches_path(path: Path, split: str) -> bool:
+    want = _normalise_split_id(split)
+    if not want or want == "all":
+        return True
+    got = _normalise_split_id(scalar_metadata_for_path(path, "split_id", ""))
+    if got == want:
+        return True
+    # If split_id metadata is missing or stale after renaming/copying dataset
+    # roots, use the dataset root name as a conservative fallback.
+    if got in {"", "none", "nan"}:
+        return _path_implied_split(path) == want
+    return False
+
+
 def _evaluate_grouped_items(grouped: dict[tuple, list[dict]], methods: list[str], gamma: float, gamma_H: float, gamma_D: float, cfg: dict, split: str, source: str) -> tuple[dict[str, dict], dict[str, list[dict]]]:
     method_records: dict[str, list[dict]] = {m: [] for m in methods}
 
@@ -278,6 +322,8 @@ def _evaluate_grouped_items(grouped: dict[tuple, list[dict]], methods: list[str]
                 "drs": drs,
                 "odg": odg_val,
                 "pred_odg": float(pred_r_orc[selected_index] - pred_r_dep[selected_index]),
+                "pred_r_dep": float(pred_r_dep[selected_index]),
+                "pred_gap": float(pred_gap[selected_index]),
                 "pred_drs": float(pred_drs[selected_index]),
                 "post_contact_deployability": float(pcds),
                 "nup": nup["bounded_NUP"],
@@ -307,10 +353,8 @@ def evaluate(dataset: str | Path, checkpoint: str | Path | None = None, output: 
     for idx, p in enumerate(paths, 1):
         if idx == 1 or idx % 1000 == 0:
             print({"event": "evaluate_progress", "seen": idx, "groups": len(grouped)}, flush=True)
-        if split and split != "all":
-            sid = str(scalar_metadata_for_path(p, "split_id", ""))
-            if sid != split:
-                continue
+        if not _split_matches_path(Path(p), split):
+            continue
         d = load_npz(p)
         dataset_label = _dataset_label_for_path(Path(p))
         key_base = (str(np.asarray(d["scene_id"]).item()), int(np.asarray(d["time_index"]).item()))
@@ -321,6 +365,20 @@ def evaluate(dataset: str | Path, checkpoint: str | Path | None = None, output: 
         grouped.setdefault(key, []).append(record)
         dataset_grouped.setdefault(dataset_label, {}).setdefault(key_base, []).append(record)
 
+    if not grouped and split and str(split).lower() != "all" and bool(eval_cfg.get("fallback_to_all_if_empty_split", True)) and paths:
+        print({"event": "evaluate_empty_split_retry_all", "requested_split": str(split), "num_npz_paths": len(paths)}, flush=True)
+        grouped = {}
+        dataset_grouped = {}
+        for p in paths:
+            d = load_npz(p)
+            dataset_label = _dataset_label_for_path(Path(p))
+            key_base = (str(np.asarray(d["scene_id"]).item()), int(np.asarray(d["time_index"]).item()))
+            key = (dataset_label, *key_base) if group_by_dataset else key_base
+            pred = predict_sample(d, bundle, cfg)
+            teacher = teacher_prediction_from_sample(d, cfg)
+            record = {"path": p, "dataset_label": dataset_label, "data": d, "pred": pred, "teacher": teacher}
+            grouped.setdefault(key, []).append(record)
+            dataset_grouped.setdefault(dataset_label, {}).setdefault(key_base, []).append(record)
     print({"event": "evaluate_grouping_done", "num_scene_time_groups": len(grouped), "group_by_dataset": group_by_dataset, "dataset_labels": sorted(dataset_grouped)}, flush=True)
     gamma = _load_gamma(calibration_json, cfg)
     sel_cfg = cfg.get("selection", {}) if isinstance(cfg.get("selection", {}), dict) else {}

@@ -190,6 +190,8 @@ def calibrated_constrained_select(
     safe_nominal_max_gap: float = 0.20,
     safe_override_require_both: bool = True,
     safe_min_drs_gain: float = 0.10,
+    safe_force_nominal_when_feasible: bool = False,
+    stress_preserve_nominal_min_drs_drop: float = -1.0,
 ) -> SelectionResult:
     """Soft calibrated OC-RAP selector.
 
@@ -270,6 +272,17 @@ def calibrated_constrained_select(
     else:
         pool = np.ones((n,), dtype=bool)
 
+    # Safe/NUP gate.  In benign regimes the paper claim is nominal utility
+    # preservation, not recovery maximization.  The learned recovery heads can be
+    # pessimistic on safe_v2 because the stress regimes dominate negative
+    # deployability.  Therefore, when the nominal prefix is dynamically feasible
+    # and the active regime is safe/background, allow an explicit hard lock that
+    # bypasses noisy recovery-head shortfall.
+    if bool(safe_force_nominal_when_feasible) and is_safe_regime and 0 <= nominal_index < n and pool[nominal_index]:
+        admitted = admitted.copy()
+        admitted[nominal_index] = True
+        return SelectionResult(int(nominal_index), "nominal_safe_force_locked", admitted)
+
     # Stress-regime option: when calibrated-admitted candidates exist, rank only
     # within them.  The default remains soft-constrained for backward
     # compatibility, but near-contact/contact experiments should set
@@ -280,6 +293,18 @@ def calibrated_constrained_select(
     if cand.size == 0:
         cand = np.arange(n)
     best_idx = int(cand[np.argmax(score[cand])])
+
+    # Stress DRS guard.  A recurring failure mode in the current results is that
+    # learned OC-RAP lowers FRA/ODG but sacrifices executed DRS.  When configured,
+    # do not switch away from a feasible nominal prefix to a candidate whose
+    # predicted shared-option success is materially worse than nominal.  Keep the
+    # default disabled because early recovery may deliberately trade nominal
+    # behavior for safety.
+    if (not is_safe_regime) and float(stress_preserve_nominal_min_drs_drop) >= 0.0 and 0 <= nominal_index < n and pool[nominal_index]:
+        if drs_proxy[best_idx] + float(stress_preserve_nominal_min_drs_drop) < drs_proxy[nominal_index]:
+            admitted = admitted.copy()
+            admitted[nominal_index] = True
+            return SelectionResult(int(nominal_index), "nominal_stress_drs_guard", admitted)
 
     # Nominal-preserving calibration.  In safe/background regimes, recovery
     # shortfall by itself should not trigger large behavior changes unless the

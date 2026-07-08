@@ -227,6 +227,8 @@ def select_baseline(
                 safe_nominal_max_gap=_cfg_float(scfg, "safe_nominal_max_gap", 0.20, bucket_name),
                 safe_override_require_both=_cfg_bool(scfg, "safe_override_require_both", True, bucket_name),
                 safe_min_drs_gain=_cfg_float(scfg, "safe_min_drs_gain", 0.10, bucket_name),
+                safe_force_nominal_when_feasible=_cfg_bool(scfg, "safe_force_nominal_when_feasible", False, bucket_name),
+                stress_preserve_nominal_min_drs_drop=_cfg_float(scfg, "stress_preserve_nominal_min_drs_drop", -1.0, bucket_name),
             )
             gap_arr = np.asarray(pred_gap if pred_gap is not None else np.zeros_like(pred_r_dep), dtype=float)
             score = pred_r_dep - beta * np.maximum(0.0, gap_arr)
