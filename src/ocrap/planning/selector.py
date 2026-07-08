@@ -193,6 +193,10 @@ def calibrated_constrained_select(
     safe_force_nominal_when_feasible: bool = False,
     safe_force_nominal_mode: str = "feasible",
     stress_preserve_nominal_min_drs_drop: float = -1.0,
+    require_admitted_intervention: bool = False,
+    unadmitted_fallback_to_nominal: bool = True,
+    intervention_min_pred_drs: float = -1.0,
+    intervention_max_pred_gap: float = -1.0,
     safe_cert_min_pred_drs: float = 0.95,
     safe_cert_max_pred_gap: float = 0.20,
     safe_cert_rec_slack: float = 0.15,
@@ -323,6 +327,34 @@ def calibrated_constrained_select(
     if cand.size == 0:
         cand = np.arange(n)
     best_idx = int(cand[np.argmax(score[cand])])
+
+    # Admitted-intervention abstention.  OC-RAP's claim is deployable recovery,
+    # so executing a recovery prefix that the calibrated selector itself did not
+    # admit is hard to defend in paper experiments.  When enabled, intervention
+    # is allowed only if a candidate passes calibrated admission and optional
+    # predicted shared-action DRS/gap guards.  If none is certified, preserve
+    # nominal rather than taking a high-utility but uncertified recovery action.
+    if bool(require_admitted_intervention):
+        certified_intervention = admitted.copy()
+        if float(intervention_min_pred_drs) >= 0.0:
+            certified_intervention &= drs_proxy >= float(intervention_min_pred_drs)
+        if float(intervention_max_pred_gap) >= 0.0:
+            certified_intervention &= gap <= float(intervention_max_pred_gap)
+        certified_intervention &= pool
+        certified_non_nom = certified_intervention.copy()
+        if 0 <= nominal_index < n:
+            certified_non_nom[int(nominal_index)] = False
+        if bool(certified_non_nom.any()):
+            cc = np.where(certified_non_nom)[0]
+            best_idx = int(cc[np.argmax(score[cc])])
+        elif 0 <= nominal_index < n and pool[nominal_index] and bool(unadmitted_fallback_to_nominal):
+            admitted = admitted.copy()
+            admitted[nominal_index] = True
+            return SelectionResult(int(nominal_index), "nominal_no_admitted_intervention_preserved", admitted)
+        elif not admitted[best_idx]:
+            admitted_pool = np.where(pool & admitted)[0]
+            if admitted_pool.size > 0:
+                best_idx = int(admitted_pool[np.argmax(score[admitted_pool])])
 
     # Stress DRS guard.  A recurring failure mode in the current results is that
     # learned OC-RAP lowers FRA/ODG but sacrifices executed DRS.  When configured,

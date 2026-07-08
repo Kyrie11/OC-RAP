@@ -442,6 +442,8 @@ def evaluate(dataset: str | Path, checkpoint: str | Path | None = None, output: 
         "safe_force_nominal_when_feasible_by_bucket": (cfg.get("selection", {}) or {}).get("safe_force_nominal_when_feasible_by_bucket", {}) if isinstance(cfg.get("selection", {}), dict) else {},
         "safe_force_nominal_mode_by_bucket": (cfg.get("selection", {}) or {}).get("safe_force_nominal_mode_by_bucket", {}) if isinstance(cfg.get("selection", {}), dict) else {},
         "stress_preserve_nominal_min_drs_drop_by_bucket": (cfg.get("selection", {}) or {}).get("stress_preserve_nominal_min_drs_drop_by_bucket", {}) if isinstance(cfg.get("selection", {}), dict) else {},
+        "require_admitted_intervention": (cfg.get("selection", {}) or {}).get("require_admitted_intervention", None) if isinstance(cfg.get("selection", {}), dict) else None,
+        "require_admitted_intervention_by_bucket": (cfg.get("selection", {}) or {}).get("require_admitted_intervention_by_bucket", {}) if isinstance(cfg.get("selection", {}), dict) else {},
     }
     result["dataset_group_count"] = {k: len(v) for k, v in sorted(dataset_grouped.items())}
     result["per_dataset"] = {}

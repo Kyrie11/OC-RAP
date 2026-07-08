@@ -26,6 +26,7 @@ RECOVERY_MODE_VOCAB = [
     "avoid_secondary",
 ]
 RECOVERY_MODE_TO_ID = {name: i for i, name in enumerate(RECOVERY_MODE_VOCAB)}
+BUCKET_TO_ID = {"safe": 0, "near_contact": 1, "contact": 2, "other": 3}
 OPTION_PARAM_DIM = 3
 OPTION_FEATURE_DIM = len(RECOVERY_MODE_VOCAB) + OPTION_PARAM_DIM + 2
 
@@ -420,6 +421,26 @@ def _fix_square(x: np.ndarray, n: int, *, fill_offdiag: float = 0.0, diag: float
 
 
 
+def bucket_id_for_path(path: str | Path) -> int:
+    """Coarse regime id inferred from the current dataset root path.
+
+    This is used only for regime-aware training losses and diagnostics.  The
+    selector must still make decisions from model predictions and candidate
+    metadata; it should not require teacher labels at test time.
+    """
+    try:
+        name = str(_dataset_root_for_sample(path).name).lower()
+    except Exception:
+        name = str(path).lower()
+    if "near" in name:
+        return int(BUCKET_TO_ID["near_contact"])
+    if "contact" in name:
+        return int(BUCKET_TO_ID["contact"])
+    if "safe" in name or "normal" in name or "background" in name:
+        return int(BUCKET_TO_ID["safe"])
+    return int(BUCKET_TO_ID["other"])
+
+
 def stable_scene_hash(scene_id: object) -> int:
     """Stable non-negative 31-bit hash for grouping scene-time candidates."""
     b = str(scene_id).encode("utf-8", errors="ignore")
@@ -515,6 +536,7 @@ class OCRAPSampleDataset(Dataset):
             "time_index": torch.tensor(int(np.asarray(d.get("time_index", 0)).item()), dtype=torch.long),
             "candidate_index": torch.tensor(int(np.asarray(d.get("candidate_index", 0)).item()), dtype=torch.long),
             "is_nominal": torch.tensor(float(np.asarray(d.get("is_nominal", 0)).item()), dtype=torch.float32),
+            "bucket_id": torch.tensor(bucket_id_for_path(self.paths[idx]), dtype=torch.long),
             "root_signature": torch.from_numpy(fixed["root_signature"]),
             "root_future_signature": torch.from_numpy(fixed["root_future_signature"]),
             "option_features": torch.from_numpy(fixed["option_features"]),

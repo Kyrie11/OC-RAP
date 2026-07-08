@@ -24,6 +24,8 @@ from ocrap.models.losses import (
     groupwise_candidate_ranking_loss,
     groupwise_candidate_ce_loss,
     nominal_switch_consistency_loss,
+    groupwise_score_distillation_loss,
+    safe_nominal_preservation_loss,
 )
 from ocrap.models.ocrap import OCRAPModel
 from ocrap.utils.seed import seed_everything
@@ -311,6 +313,40 @@ def _epoch(
             nominal_deployable_gamma=float(tcfg.get("nominal_switch_deployable_gamma", 0.0)),
             nominal_gap_max=float(tcfg.get("nominal_switch_gap_max", 0.30)),
         )
+        loss_group_distill = groupwise_score_distillation_loss(
+            r_dep,
+            gap,
+            batch["utility"].float(),
+            batch["r_dep_star"].float(),
+            batch["r_orc_star"].float(),
+            batch["scene_hash"],
+            batch["time_index"],
+            pred_gap_weight=float(tcfg.get("group_distill_pred_gap_weight", 0.45)),
+            teacher_gap_weight=float(tcfg.get("group_distill_teacher_gap_weight", 0.45)),
+            utility_weight=float(tcfg.get("group_distill_utility_weight", 0.02)),
+            teacher_temperature=float(tcfg.get("group_distill_teacher_temperature", 0.20)),
+            pred_temperature=float(tcfg.get("group_distill_pred_temperature", 0.30)),
+        )
+        loss_safe_nominal = safe_nominal_preservation_loss(
+            r_dep,
+            gap,
+            batch["utility"].float(),
+            pred_q,
+            batch["root_probs"].float(),
+            batch["root_valid"],
+            batch["option_valid"],
+            batch["scene_hash"],
+            batch["time_index"],
+            batch["is_nominal"].float(),
+            batch.get("bucket_id", torch.full_like(batch["time_index"], 3)),
+            margin=float(tcfg.get("safe_nominal_margin", 0.18)),
+            pred_gap_weight=float(tcfg.get("safe_nominal_pred_gap_weight", 0.35)),
+            utility_weight=float(tcfg.get("safe_nominal_utility_weight", 0.03)),
+            drs_weight=float(tcfg.get("safe_nominal_drs_weight", 0.30)),
+            min_nominal_success=float(tcfg.get("safe_nominal_min_success", 0.90)),
+            success_gamma=option_gamma,
+            success_temperature=option_temperature,
+        )
         if bool((cfg.get("ablation", {}) or {}).get("without_anti_oracle", False)):
             loss_art = loss_art * 0.0
             loss_gap = loss_gap * 0.0
@@ -332,6 +368,8 @@ def _epoch(
             + float(lw.get("group_ranking", 0.0)) * loss_group_rank
             + float(lw.get("group_ce", 0.0)) * loss_group_ce
             + float(lw.get("nominal_switch", 0.0)) * loss_nominal_switch
+            + float(lw.get("group_distill", 0.0)) * loss_group_distill
+            + float(lw.get("safe_nominal", 0.0)) * loss_safe_nominal
             + float(lw.get("utility", 0.2)) * loss_util
         )
         if training:
@@ -363,6 +401,8 @@ def _epoch(
             "loss_group_ranking": loss_group_rank.item(),
             "loss_group_ce": loss_group_ce.item(),
             "loss_nominal_switch": loss_nominal_switch.item(),
+            "loss_group_distill": loss_group_distill.item(),
+            "loss_safe_nominal": loss_safe_nominal.item(),
             "loss_utility": loss_util.item(),
             "pred_r_dep_mean": r_dep.mean().item(),
             "teacher_r_dep_mean": batch["r_dep_star"].float().mean().item(),
