@@ -92,6 +92,19 @@ def _bucket_aliases(name: str | None) -> list[str]:
     return out
 
 
+
+def _cfg_value(scfg: dict, key: str, default, bucket_name: str | None = None):
+    """Read raw selection config with optional bucket/regime overrides."""
+    value = scfg.get(key, default)
+    for map_key in (f"{key}_by_bucket", f"{key}_by_regime"):
+        mapping = scfg.get(map_key, None)
+        if isinstance(mapping, dict):
+            for alias in _bucket_aliases(bucket_name):
+                if alias in mapping and mapping[alias] not in {None, ""}:
+                    value = mapping[alias]
+                    break
+    return value
+
 def _cfg_float(scfg: dict, key: str, default: float, bucket_name: str | None = None) -> float:
     """Read scalar selection config with optional bucket/regime overrides."""
     value = scfg.get(key, default)
@@ -228,6 +241,7 @@ def select_baseline(
                 safe_override_require_both=_cfg_bool(scfg, "safe_override_require_both", True, bucket_name),
                 safe_min_drs_gain=_cfg_float(scfg, "safe_min_drs_gain", 0.10, bucket_name),
                 safe_force_nominal_when_feasible=_cfg_bool(scfg, "safe_force_nominal_when_feasible", False, bucket_name),
+                safe_force_nominal_mode=str(_cfg_value(scfg, "safe_force_nominal_mode", "feasible", bucket_name)),
                 stress_preserve_nominal_min_drs_drop=_cfg_float(scfg, "stress_preserve_nominal_min_drs_drop", -1.0, bucket_name),
             )
             gap_arr = np.asarray(pred_gap if pred_gap is not None else np.zeros_like(pred_r_dep), dtype=float)

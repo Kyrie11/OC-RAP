@@ -20,6 +20,7 @@ from ocrap.models.losses import (
     shared_option_admission_loss,
     shared_option_q_regression_loss,
     shared_option_success_regression_loss,
+    shared_option_success_bce_loss,
 )
 from ocrap.models.ocrap import OCRAPModel
 from ocrap.utils.seed import seed_everything
@@ -236,6 +237,15 @@ def _epoch(
             gamma=option_gamma,
         )
         loss_option_success = shared_option_success_regression_loss(
+            pred_q,
+            teacher_q,
+            batch["root_probs"].float(),
+            batch["root_valid"],
+            batch["option_valid"],
+            gamma=option_gamma,
+            temperature=option_temperature,
+        )
+        loss_option_success_bce = shared_option_success_bce_loss(
             pred_q,
             teacher_q,
             batch["root_probs"].float(),

@@ -269,6 +269,41 @@ def _split_matches_path(path: Path, split: str) -> bool:
     return False
 
 
+
+def _drs_success_gamma_for_dataset(base_gamma: float, cfg: dict, dataset_label: str | None) -> float:
+    sel = cfg.get("selection", {}) if isinstance(cfg.get("selection", {}), dict) else {}
+    # Deployability success should be evaluated at a fixed physical threshold by
+    # default.  The calibrated recovery gamma is an admission threshold and can
+    # be negative in contact, which makes predicted DRS proxies spuriously high.
+    default = sel.get("drs_success_gamma", 0.0)
+    for map_key in ("drs_success_gamma_by_bucket", "drs_success_gamma_by_regime"):
+        m = sel.get(map_key, None)
+        if isinstance(m, dict):
+            for key in _bucket_aliases(dataset_label or ""):
+                if key in m and m[key] not in {None, ""}:
+                    try:
+                        return float(m[key])
+                    except Exception:
+                        pass
+    try:
+        return float(default)
+    except Exception:
+        return 0.0
+
+
+def _validate_eval_selector_config(cfg: dict, methods: list[str]) -> None:
+    if "ocrap" not in [str(m).lower() for m in methods]:
+        return
+    eval_cfg = cfg.get("evaluation", {}) if isinstance(cfg.get("evaluation", {}), dict) else {}
+    sel = cfg.get("selection", {}) if isinstance(cfg.get("selection", {}), dict) else {}
+    selector = str(sel.get("ocrap_selector", sel.get("selector", "lcb_constrained"))).lower()
+    if bool(eval_cfg.get("require_calibrated_selector", False)) and selector not in {"calibrated", "calibrated_constrained", "soft_constrained", "budgeted_calibrated"}:
+        raise ValueError(f"evaluation requires calibrated OC-RAP selector, but selection.ocrap_selector={selector!r}")
+    if bool(eval_cfg.get("require_gamma_by_bucket", False)) and not isinstance(sel.get("gamma_rec_by_bucket", None), dict):
+        raise ValueError("evaluation requires selection.gamma_rec_by_bucket to be loaded")
+    if bool(eval_cfg.get("require_gamma_by_bucket", False)) and not sel.get("gamma_rec_by_bucket", {}):
+        raise ValueError("evaluation requires non-empty selection.gamma_rec_by_bucket; check gamma_rec_by_bucket_file path")
+
 def _evaluate_grouped_items(grouped: dict[tuple, list[dict]], methods: list[str], gamma: float, gamma_H: float, gamma_D: float, cfg: dict, split: str, source: str) -> tuple[dict[str, dict], dict[str, list[dict]]]:
     method_records: dict[str, list[dict]] = {m: [] for m in methods}
 
@@ -278,15 +313,16 @@ def _evaluate_grouped_items(grouped: dict[tuple, list[dict]], methods: list[str]
         pred_r_dep = np.array([float(x["pred"].r_dep) for x in items])
         pred_r_orc = np.array([float(x["pred"].r_orc) for x in items])
         pred_gap = np.array([float(getattr(x["pred"], "gap", x["pred"].r_orc - x["pred"].r_dep)) for x in items])
-        pred_drs = np.array([predicted_shared_option_success(x["pred"].q, x["pred"].root_probs, gamma=gamma) for x in items])
         nominal_deviation = _prefix_nominal_deviation_items(items)
+        dataset_label = str(items[0].get("dataset_label", "")) if items else ""
+        gamma_i = _gamma_for_dataset(gamma, cfg, dataset_label)
+        drs_gamma_i = _drs_success_gamma_for_dataset(gamma_i, cfg, dataset_label)
+        pred_drs = np.array([predicted_shared_option_success(x["pred"].q, x["pred"].root_probs, gamma=drs_gamma_i) for x in items])
         teacher_r_dep = np.array([float(np.asarray(x["data"]["r_dep_star"]).item()) for x in items])
         teacher_r_orc = np.array([float(np.asarray(x["data"]["r_orc_star"]).item()) for x in items])
         hard = np.array([float(np.asarray(x["data"].get("hard_violation", 0.0)).item()) for x in items])
         harm = np.array([float(np.asarray(x["data"].get("harm_proxy", 0.0)).item()) for x in items])
         feasible = np.array([bool(int(np.asarray(x["data"].get("feasible", 1)).item())) for x in items])
-        dataset_label = str(items[0].get("dataset_label", "")) if items else ""
-        gamma_i = _gamma_for_dataset(gamma, cfg, dataset_label)
         if dataset_label:
             local_cfg = dict(cfg)
             local_sel = dict(local_cfg.get("selection", {}) or {}) if isinstance(local_cfg.get("selection", {}), dict) else {}
@@ -385,6 +421,7 @@ def evaluate(dataset: str | Path, checkpoint: str | Path | None = None, output: 
     gamma_H = float(sel_cfg.get("gamma_H", 0.0))
     gamma_D = float(sel_cfg.get("gamma_D", 5.0))
     methods = _method_list(cfg)
+    _validate_eval_selector_config(cfg, methods)
     source = "model" if bundle is not None else "teacher_fallback"
     summaries, _records = _evaluate_grouped_items(grouped, methods, gamma, gamma_H, gamma_D, cfg, split, source)
     result = summaries.get("ocrap", next(iter(summaries.values()), {}))
@@ -393,6 +430,12 @@ def evaluate(dataset: str | Path, checkpoint: str | Path | None = None, output: 
     result["method_order"] = methods
     result["group_by_dataset"] = group_by_dataset
     result["gamma_rec_by_bucket"] = (cfg.get("selection", {}) or {}).get("gamma_rec_by_bucket", {}) if isinstance(cfg.get("selection", {}), dict) else {}
+    result["selector_config"] = {
+        "ocrap_selector": (cfg.get("selection", {}) or {}).get("ocrap_selector", None) if isinstance(cfg.get("selection", {}), dict) else None,
+        "drs_success_gamma": (cfg.get("selection", {}) or {}).get("drs_success_gamma", None) if isinstance(cfg.get("selection", {}), dict) else None,
+        "safe_force_nominal_when_feasible": (cfg.get("selection", {}) or {}).get("safe_force_nominal_when_feasible", None) if isinstance(cfg.get("selection", {}), dict) else None,
+        "safe_force_nominal_mode": (cfg.get("selection", {}) or {}).get("safe_force_nominal_mode", None) if isinstance(cfg.get("selection", {}), dict) else None,
+    }
     result["dataset_group_count"] = {k: len(v) for k, v in sorted(dataset_grouped.items())}
     result["per_dataset"] = {}
     for label, sub_grouped in sorted(dataset_grouped.items()):

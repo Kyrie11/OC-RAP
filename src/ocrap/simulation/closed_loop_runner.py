@@ -336,7 +336,10 @@ def _select_prefix(
     pred_r_dep = np.asarray([float(x["pred"].r_dep) for x in items], dtype=np.float32)
     pred_r_orc = np.asarray([float(x["pred"].r_orc) for x in items], dtype=np.float32)
     pred_gap = np.asarray([float(x["pred"].gap) for x in items], dtype=np.float32)
-    pred_drs = np.asarray([predicted_shared_option_success(x["pred"].q, x["pred"].root_probs, gamma=gamma) for x in items], dtype=np.float32)
+    sel_tmp = cfg.get("selection", {}) if isinstance(cfg.get("selection", {}), dict) else {}
+    active_bucket = str(sel_tmp.get("active_bucket_name", sel_tmp.get("regime_name", "")) or "")
+    drs_gamma = _drs_success_gamma_for_bucket(gamma, cfg, active_bucket)
+    pred_drs = np.asarray([predicted_shared_option_success(x["pred"].q, x["pred"].root_probs, gamma=drs_gamma) for x in items], dtype=np.float32)
     nominal_deviation = _prefix_nominal_deviation(samples)
     if compute_teacher_labels:
         teacher_r_dep = np.asarray([_safe_float(x["data"].get("r_dep_star", 0.0)) for x in items], dtype=np.float32)
@@ -435,6 +438,36 @@ def _gamma_for_bucket(base_gamma: float, cfg: dict, bucket_name: str | None) -> 
             except Exception:
                 continue
     return float(base_gamma)
+
+
+def _drs_success_gamma_for_bucket(base_gamma: float, cfg: dict, bucket_name: str | None) -> float:
+    sel_cfg = cfg.get("selection", {}) if isinstance(cfg.get("selection", {}), dict) else {}
+    default = sel_cfg.get("drs_success_gamma", 0.0)
+    for map_key in ("drs_success_gamma_by_bucket", "drs_success_gamma_by_regime"):
+        mapping = sel_cfg.get(map_key, None)
+        if isinstance(mapping, dict):
+            for key in _bucket_gamma_aliases(bucket_name):
+                if key in mapping and mapping[key] not in {None, ""}:
+                    try:
+                        return float(mapping[key])
+                    except Exception:
+                        pass
+    try:
+        return float(default)
+    except Exception:
+        return 0.0
+
+
+def _validate_closed_loop_selector_config(cfg: dict, method: str) -> None:
+    if str(method).lower() != "ocrap":
+        return
+    cl_cfg = cfg.get("closed_loop", {}) if isinstance(cfg.get("closed_loop", {}), dict) else {}
+    sel = cfg.get("selection", {}) if isinstance(cfg.get("selection", {}), dict) else {}
+    selector = str(sel.get("ocrap_selector", sel.get("selector", "lcb_constrained"))).lower()
+    if bool(cl_cfg.get("require_calibrated_selector", False)) and selector not in {"calibrated", "calibrated_constrained", "soft_constrained", "budgeted_calibrated"}:
+        raise ValueError(f"closed-loop requires calibrated OC-RAP selector, but selection.ocrap_selector={selector!r}")
+    if bool(cl_cfg.get("require_gamma_by_bucket", False)) and not sel.get("gamma_rec_by_bucket", {}):
+        raise ValueError("closed-loop requires non-empty selection.gamma_rec_by_bucket; check gamma_rec_by_bucket_file path")
 
 def _rollout_one_scene(
     raw,
@@ -870,6 +903,7 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
             "or pass --set closed_loop.allow_infinite_gamma=true only for debugging."
         )
     local = _apply_gamma_rec_by_bucket_file(dict(cfg))
+    _validate_closed_loop_selector_config(local, method)
     local["data_source"] = "womd"
     local["simulation_backend"] = "waymax_closed_loop"
     local["womd_patterns"] = dataset_patterns
@@ -951,6 +985,12 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
     result["scenes"] = scene_results
     result["gamma_rec"] = gamma
     result["gamma_rec_by_bucket"] = (local.get("selection", {}) or {}).get("gamma_rec_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {}
+    result["selector_config"] = {
+        "ocrap_selector": (local.get("selection", {}) or {}).get("ocrap_selector", None) if isinstance(local.get("selection", {}), dict) else None,
+        "drs_success_gamma": (local.get("selection", {}) or {}).get("drs_success_gamma", None) if isinstance(local.get("selection", {}), dict) else None,
+        "safe_force_nominal_when_feasible": (local.get("selection", {}) or {}).get("safe_force_nominal_when_feasible", None) if isinstance(local.get("selection", {}), dict) else None,
+        "safe_force_nominal_mode": (local.get("selection", {}) or {}).get("safe_force_nominal_mode", None) if isinstance(local.get("selection", {}), dict) else None,
+    }
     result["notes"] = [
         "This is a true Waymax receding-horizon loop: reset once, select an action from current SimulatorState, step the environment, then replan from the updated SimulatorState.",
         "closed_loop.label_mode=fast skips expensive per-candidate OC-MERO teacher labels inside the online loop. Use closed_loop.label_mode=selected to label only the executed candidate; use label_mode=selected_topk/coverage to label selected plus a small diagnostic top-k subset; use label_mode=all only for tiny exhaustive audits.",

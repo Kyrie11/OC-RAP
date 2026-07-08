@@ -144,6 +144,45 @@ def shared_option_success_regression_loss(
     return F.smooth_l1_loss(pred_success[valid_opt], teacher_success[valid_opt])
 
 
+def shared_option_success_bce_loss(
+    pred_q: torch.Tensor,
+    teacher_q: torch.Tensor,
+    root_probs: torch.Tensor,
+    root_valid: torch.Tensor,
+    option_valid: torch.Tensor,
+    gamma: float = 0.0,
+    temperature: float = 0.35,
+) -> torch.Tensor:
+    """Stronger BCE supervision for shared-option success probability.
+
+    Smooth-L1 on success probability is often numerically small even when the
+    ranking is poor.  This BCE target gives larger gradients when the model is
+    over-confident about low-success shared recovery options, which was the
+    failure mode observed in v8: predicted DRS proxy was high while executed DRS
+    remained low.
+    """
+    root_w = _root_weights(root_probs, root_valid).unsqueeze(-1)
+    finite = torch.isfinite(teacher_q)
+    opt_mask = option_valid.bool()
+    mask = root_valid.bool().unsqueeze(-1) & opt_mask.unsqueeze(1) & finite
+    if not bool(mask.any()):
+        return pred_q.sum() * 0.0
+    tau = max(float(temperature), 1.0e-3)
+    pred_prob = torch.sigmoid((torch.nan_to_num(pred_q, nan=-20.0, posinf=20.0, neginf=-20.0) - float(gamma)) / tau)
+    teacher_prob = (teacher_q.detach() >= float(gamma)).float()
+    pred_success = (pred_prob * root_w * mask.float()).sum(dim=1).clamp(1.0e-4, 1.0 - 1.0e-4)
+    teacher_success = (teacher_prob * root_w * mask.float()).sum(dim=1).clamp(0.0, 1.0)
+    valid_opt = opt_mask & mask.any(dim=1)
+    if not bool(valid_opt.any()):
+        return pred_q.sum() * 0.0
+    # Upweight ambiguous/intervention-critical options where success is neither
+    # trivially 0 nor trivially 1.
+    t = teacher_success[valid_opt]
+    p = pred_success[valid_opt]
+    w = 1.0 + 2.0 * torch.minimum(t, 1.0 - t)
+    return (F.binary_cross_entropy(p, t, reduction="none") * w).mean()
+
+
 def best_shared_option_loss(
     pred_q: torch.Tensor,
     teacher_q: torch.Tensor,

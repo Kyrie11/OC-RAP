@@ -191,6 +191,7 @@ def calibrated_constrained_select(
     safe_override_require_both: bool = True,
     safe_min_drs_gain: float = 0.10,
     safe_force_nominal_when_feasible: bool = False,
+    safe_force_nominal_mode: str = "feasible",
     stress_preserve_nominal_min_drs_drop: float = -1.0,
 ) -> SelectionResult:
     """Soft calibrated OC-RAP selector.
@@ -278,10 +279,19 @@ def calibrated_constrained_select(
     # deployability.  Therefore, when the nominal prefix is dynamically feasible
     # and the active regime is safe/background, allow an explicit hard lock that
     # bypasses noisy recovery-head shortfall.
-    if bool(safe_force_nominal_when_feasible) and is_safe_regime and 0 <= nominal_index < n and pool[nominal_index]:
-        admitted = admitted.copy()
-        admitted[nominal_index] = True
-        return SelectionResult(int(nominal_index), "nominal_safe_force_locked", admitted)
+    if bool(safe_force_nominal_when_feasible) and is_safe_regime and 0 <= nominal_index < n:
+        # In the safe regime, the paper claim is nominal-utility preservation.
+        # The per-candidate feasibility/hard/harm metadata can be conservative or
+        # stale in online audits (especially when feature-only samples are used).
+        # `mode=always` therefore locks nominal whenever the nominal candidate is
+        # present.  `mode=feasible` preserves the previous behavior and requires
+        # the nominal candidate to be in the hard/harm-feasible pool.
+        force_mode = str(safe_force_nominal_mode or "feasible").strip().lower()
+        allow_force = force_mode in {"always", "present", "nominal", "hard"} or (pool[nominal_index] and force_mode in {"", "feasible", "safe"})
+        if allow_force:
+            admitted = admitted.copy()
+            admitted[nominal_index] = True
+            return SelectionResult(int(nominal_index), "nominal_safe_force_locked", admitted)
 
     # Stress-regime option: when calibrated-admitted candidates exist, rank only
     # within them.  The default remains soft-constrained for backward
