@@ -533,6 +533,8 @@ def _rollout_one_scene(
     metric_trace: list[dict[str, float]] = []
     state_xy_trace: list[list[float]] = []
     interventions_used = 0
+    audit_bucket_name = bucket_name or str((cfg.get("selection", {}) or {}).get("active_bucket_name", "") or "")
+    drs_gamma = _drs_success_gamma_for_bucket(gamma, cfg, audit_bucket_name)
 
     for step_idx in range(max_steps):
         if _scene_done(state):
@@ -635,11 +637,20 @@ def _rollout_one_scene(
                     selected_audit_sample = by_cid.get(int(selected_sample.candidate_index), labeled[0])
                     selected_audit_data = selected_audit_sample.to_npz_dict()
                     pred_q = info["items"][sel_idx]["pred"].q
-                    selected_options = np.argmax(pred_q, axis=1) if getattr(pred_q, "ndim", 0) == 2 else 0
+                    use_model_option = bool(method == "ocrap" and int(selected_sample.candidate_index) != 0)
+                    q_eval = pred_q if use_model_option else selected_audit_data["m_star"]
+                    opt_gamma = drs_gamma if use_model_option else 0.0
+                    selected_option = best_shared_option_index(
+                        q_eval,
+                        selected_audit_data["root_probs"],
+                        gamma=opt_gamma,
+                        root_valid=selected_audit_data.get("root_valid", None),
+                        option_valid=selected_audit_data.get("option_valid", None),
+                    )
                     selected_audit_drs = deployable_recovery_success(
                         selected_audit_data["m_star"],
                         selected_audit_data["root_probs"],
-                        selected_options,
+                        int(selected_option),
                         selected_audit_data.get("root_valid", None),
                     )
                     selected_r_dep_star = _safe_float(selected_audit_data.get("r_dep_star", 0.0))
@@ -662,8 +673,17 @@ def _rollout_one_scene(
                         cid = int(lab.candidate_index)
                         r_star = _safe_float(ld.get("r_dep_star", -float("inf")), -float("inf"))
                         pred_q_i = pred_q_by_cid.get(cid, selected_pred_q)
-                        opt_i = np.argmax(pred_q_i, axis=1) if getattr(pred_q_i, "ndim", 0) == 2 else 0
-                        drs_i = deployable_recovery_success(ld["m_star"], ld["root_probs"], opt_i, ld.get("root_valid", None))
+                        use_model_option_i = bool(method == "ocrap" and cid != 0)
+                        q_eval_i = pred_q_i if use_model_option_i else ld["m_star"]
+                        opt_gamma_i = drs_gamma if use_model_option_i else 0.0
+                        opt_i = best_shared_option_index(
+                            q_eval_i,
+                            ld["root_probs"],
+                            gamma=opt_gamma_i,
+                            root_valid=ld.get("root_valid", None),
+                            option_valid=ld.get("option_valid", None),
+                        )
+                        drs_i = deployable_recovery_success(ld["m_star"], ld["root_probs"], int(opt_i), ld.get("root_valid", None))
                         if r_star > best_r:
                             best_r = float(r_star)
                             best_drs = float(drs_i)

@@ -7,11 +7,11 @@ from collections import Counter
 import numpy as np
 import torch
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data import DataLoader, Sampler, WeightedRandomSampler
 
 from ocrap.algorithms.ocmero import torch_oc_mero
 from ocrap.data.serialization import ensure_dir, write_json
-from ocrap.models.data import OCRAPSampleDataset, OPTION_FEATURE_DIM, iter_sample_paths_many, scalar_metadata_for_path, split_paths_by_npz_split
+from ocrap.models.data import OCRAPSampleDataset, OPTION_FEATURE_DIM, iter_sample_paths_many, scalar_metadata_for_path, split_paths_by_npz_split, stable_scene_hash
 from ocrap.models.losses import (
     anti_oracle_loss,
     artifact_gap_loss,
@@ -21,6 +21,7 @@ from ocrap.models.losses import (
     shared_option_q_regression_loss,
     shared_option_success_regression_loss,
     shared_option_success_bce_loss,
+    groupwise_candidate_ranking_loss,
 )
 from ocrap.models.ocrap import OCRAPModel
 from ocrap.utils.seed import seed_everything
@@ -263,6 +264,20 @@ def _epoch(
             gamma=option_gamma,
             temperature=option_temperature,
         )
+        loss_group_rank = groupwise_candidate_ranking_loss(
+            r_dep,
+            gap,
+            batch["r_dep_star"].float(),
+            batch["r_orc_star"].float(),
+            batch["i_art_star"].float(),
+            batch["scene_hash"],
+            batch["time_index"],
+            batch["candidate_index"],
+            margin=float(tcfg.get("group_ranking_margin", 0.25)),
+            gap_weight=float(tcfg.get("group_ranking_gap_weight", 0.25)),
+            teacher_gap_weight=float(tcfg.get("group_ranking_teacher_gap_weight", 0.25)),
+            artifact_only=bool(tcfg.get("group_ranking_artifact_only", True)),
+        )
         if bool((cfg.get("ablation", {}) or {}).get("without_anti_oracle", False)):
             loss_art = loss_art * 0.0
             loss_gap = loss_gap * 0.0
@@ -281,6 +296,7 @@ def _epoch(
             + float(lw.get("option_success", 0.0)) * loss_option_success
             + float(lw.get("option_success_bce", 0.0)) * loss_option_success_bce
             + float(lw.get("option_best", 0.2)) * loss_option_best
+            + float(lw.get("group_ranking", 0.0)) * loss_group_rank
             + float(lw.get("utility", 0.2)) * loss_util
         )
         if training:
@@ -309,6 +325,7 @@ def _epoch(
             "loss_option_success": loss_option_success.item(),
             "loss_option_success_bce": loss_option_success_bce.item(),
             "loss_option_best": loss_option_best.item(),
+            "loss_group_ranking": loss_group_rank.item(),
             "loss_utility": loss_util.item(),
             "pred_r_dep_mean": r_dep.mean().item(),
             "teacher_r_dep_mean": batch["r_dep_star"].float().mean().item(),
@@ -317,6 +334,122 @@ def _epoch(
             totals[k] = totals.get(k, 0.0) + float(v) * bsz
     return {k: float(v / max(n, 1)) for k, v in totals.items()} | {"num_samples": int(n), "num_batches": int(len(loader))}
 
+
+
+class SceneTimeBatchSampler(Sampler[list[int]]):
+    """Batch sampler that keeps scene-time candidate sets together.
+
+    Group-wise ranking losses need multiple candidates from the same scene-time
+    in the same mini-batch.  Standard random sampling destroys that structure.
+    """
+
+    def __init__(self, groups: list[list[int]], batch_size: int, *, group_weights: list[float] | None = None, replacement: bool = True, shuffle_within_group: bool = True):
+        self.groups = [list(g) for g in groups if g]
+        self.batch_size = max(1, int(batch_size))
+        self.replacement = bool(replacement)
+        self.shuffle_within_group = bool(shuffle_within_group)
+        if group_weights is None or len(group_weights) != len(self.groups):
+            self.group_weights = torch.ones((len(self.groups),), dtype=torch.double)
+        else:
+            self.group_weights = torch.as_tensor(group_weights, dtype=torch.double).clamp_min(1.0e-8)
+
+    def __len__(self) -> int:
+        if not self.groups:
+            return 0
+        total = sum(len(g) for g in self.groups)
+        return max(1, int(np.ceil(total / float(self.batch_size))))
+
+    def __iter__(self):
+        if not self.groups:
+            return
+        if self.replacement:
+            order = torch.multinomial(self.group_weights, num_samples=len(self.groups), replacement=True).tolist()
+        else:
+            order = torch.randperm(len(self.groups)).tolist()
+        batch: list[int] = []
+        for gi in order:
+            inds = list(self.groups[int(gi)])
+            if self.shuffle_within_group and len(inds) > 1:
+                perm = torch.randperm(len(inds)).tolist()
+                inds = [inds[i] for i in perm]
+            if len(batch) + len(inds) > self.batch_size and batch:
+                yield batch
+                batch = []
+            if len(inds) > self.batch_size:
+                for j in range(0, len(inds), self.batch_size):
+                    chunk = inds[j : j + self.batch_size]
+                    if chunk:
+                        yield chunk
+            else:
+                batch.extend(inds)
+        if batch:
+            yield batch
+
+
+def _sampler_weight_for_path(p: Path, cfg: dict, root_counts: Counter, total: int) -> tuple[float, bool, bool, bool]:
+    tcfg = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
+    weight_art = float(tcfg.get("artifact_sampler_weight", 0.25))
+    weight_neg = float(tcfg.get("negative_deployable_sampler_weight", 0.75))
+    weight_safe_pos = float(tcfg.get("safe_positive_sampler_weight", 0.25))
+    regime_balance_power = float(tcfg.get("regime_balance_power", 0.0))
+    try:
+        is_art = float(np.asarray(scalar_metadata_for_path(p, "i_art_star", 0)).item()) > 0.5
+        r_dep = float(np.asarray(scalar_metadata_for_path(p, "r_dep_star", 0)).item())
+        is_neg = r_dep < 0.0
+        root_name = _dataset_root_name(p).lower()
+        is_safe_pos = ("safe" in root_name) and (not is_neg) and (not is_art)
+        w = 1.0
+        if regime_balance_power > 0:
+            root_count = max(1, int(root_counts.get(_dataset_root_name(p), 1)))
+            w *= float((total / max(len(root_counts), 1) / root_count) ** regime_balance_power)
+        if is_art:
+            w += weight_art
+        if is_neg:
+            w += weight_neg
+        if is_safe_pos:
+            w += weight_safe_pos
+        return float(w), bool(is_art), bool(is_neg), bool(is_safe_pos)
+    except Exception:
+        return 1.0, False, False, False
+
+
+def _make_group_batch_sampler(ds: OCRAPSampleDataset, cfg: dict, batch_size: int) -> SceneTimeBatchSampler | None:
+    tcfg = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
+    if not bool(tcfg.get("group_batching", False)):
+        return None
+    total = len(ds.paths)
+    roots = [_dataset_root_name(p) for p in ds.paths]
+    root_counts = Counter(roots)
+    groups_by_key: dict[tuple[int, int], list[int]] = {}
+    sample_weights: list[float] = []
+    num_artifacts = num_negative = num_safe_pos = 0
+    for i, p in enumerate(ds.paths):
+        try:
+            scene = scalar_metadata_for_path(p, "scene_id", "")
+            t = int(np.asarray(scalar_metadata_for_path(p, "time_index", 0)).item())
+            key = (stable_scene_hash(scene), t)
+        except Exception:
+            key = (i, 0)
+        groups_by_key.setdefault(key, []).append(i)
+        w, is_art, is_neg, is_safe_pos = _sampler_weight_for_path(p, cfg, root_counts, total)
+        sample_weights.append(w)
+        num_artifacts += int(is_art)
+        num_negative += int(is_neg)
+        num_safe_pos += int(is_safe_pos)
+    groups = list(groups_by_key.values())
+    group_weights = [float(max(sample_weights[i] for i in g)) for g in groups]
+    print({
+        "event": "group_batch_sampler_stats",
+        "num_groups": int(len(groups)),
+        "num_samples": int(total),
+        "mean_group_size": float(np.mean([len(g) for g in groups])) if groups else 0.0,
+        "max_group_size": int(max([len(g) for g in groups], default=0)),
+        "replacement": bool(tcfg.get("group_batching_replacement", True)),
+        "num_artifacts": int(num_artifacts),
+        "num_negative_deployable": int(num_negative),
+        "num_safe_positive": int(num_safe_pos),
+    }, flush=True)
+    return SceneTimeBatchSampler(groups, batch_size, group_weights=group_weights, replacement=bool(tcfg.get("group_batching_replacement", True)))
 
 def _make_sampler(ds: OCRAPSampleDataset, cfg: dict) -> WeightedRandomSampler | None:
     tcfg = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
@@ -453,10 +586,15 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
     opt = torch.optim.AdamW(model.parameters(), lr=float(tcfg.get("lr", 1e-3)), weight_decay=float(tcfg.get("weight_decay", 1e-4)))
     batch_size = int(tcfg.get("batch_size", 32))
     num_workers = int(tcfg.get("num_workers", 0))
-    print({"event": "sampler_scan_start", "artifact_sampler_weight": float(tcfg.get("artifact_sampler_weight", 0.25))}, flush=True)
-    sampler = _make_sampler(train_ds, cfg)
-    print({"event": "sampler_scan_done", "sampler": "weighted" if sampler is not None else "none"}, flush=True)
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=sampler is None, sampler=sampler, num_workers=num_workers, collate_fn=_collate, pin_memory=(device.type == "cuda"))
+    group_batch_sampler = _make_group_batch_sampler(train_ds, cfg, batch_size)
+    if group_batch_sampler is not None:
+        print({"event": "sampler_scan_done", "sampler": "scene_time_group_batch"}, flush=True)
+        train_loader = DataLoader(train_ds, batch_sampler=group_batch_sampler, num_workers=num_workers, collate_fn=_collate, pin_memory=(device.type == "cuda"))
+    else:
+        print({"event": "sampler_scan_start", "artifact_sampler_weight": float(tcfg.get("artifact_sampler_weight", 0.25))}, flush=True)
+        sampler = _make_sampler(train_ds, cfg)
+        print({"event": "sampler_scan_done", "sampler": "weighted" if sampler is not None else "none"}, flush=True)
+        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=sampler is None, sampler=sampler, num_workers=num_workers, collate_fn=_collate, pin_memory=(device.type == "cuda"))
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers, collate_fn=_collate, pin_memory=(device.type == "cuda"))
     epochs = int(tcfg.get("epochs", 10))
     best_val = float("inf")

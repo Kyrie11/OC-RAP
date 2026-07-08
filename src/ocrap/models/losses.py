@@ -221,3 +221,75 @@ def best_shared_option_loss(
     if not bool(valid_row.any()):
         return pred_q.sum() * 0.0
     return F.cross_entropy(logits[valid_row], target[valid_row])
+
+
+
+def groupwise_candidate_ranking_loss(
+    pred_r_dep: torch.Tensor,
+    pred_gap: torch.Tensor,
+    teacher_r_dep: torch.Tensor,
+    teacher_r_orc: torch.Tensor,
+    teacher_artifact: torch.Tensor,
+    scene_hash: torch.Tensor,
+    time_index: torch.Tensor,
+    candidate_index: torch.Tensor,
+    *,
+    margin: float = 0.25,
+    gap_weight: float = 0.25,
+    teacher_gap_weight: float = 0.25,
+    artifact_only: bool = True,
+) -> torch.Tensor:
+    """Rank candidates within the same scene-time group.
+
+    The selector must choose a prefix in a scene-time candidate set, but the
+    pointwise losses only teach absolute margins.  This loss pushes the learned
+    score of the teacher-best deployable candidate above false-recoverable /
+    oracle-artifact candidates from the same scene-time group.
+    """
+    if pred_r_dep.numel() <= 1:
+        return pred_r_dep.sum() * 0.0
+    pr = pred_r_dep.float().reshape(-1)
+    pg = torch.clamp(torch.nan_to_num(pred_gap.float().reshape(-1), nan=0.0, posinf=5.0, neginf=0.0), min=0.0)
+    trd = teacher_r_dep.float().reshape(-1)
+    tro = teacher_r_orc.float().reshape(-1)
+    ta = teacher_artifact.float().reshape(-1) > 0.5
+    sh = scene_hash.reshape(-1)
+    ti = time_index.reshape(-1)
+    ci = candidate_index.reshape(-1)
+    n = min(pr.numel(), pg.numel(), trd.numel(), tro.numel(), ta.numel(), sh.numel(), ti.numel(), ci.numel())
+    if n <= 1:
+        return pred_r_dep.sum() * 0.0
+    pr, pg, trd, tro, ta, sh, ti, ci = pr[:n], pg[:n], trd[:n], tro[:n], ta[:n], sh[:n], ti[:n], ci[:n]
+    finite = torch.isfinite(pr) & torch.isfinite(pg) & torch.isfinite(trd) & torch.isfinite(tro)
+    if not bool(finite.any()):
+        return pred_r_dep.sum() * 0.0
+    teacher_gap = torch.clamp(tro - trd, min=0.0)
+    teacher_score = trd - float(teacher_gap_weight) * teacher_gap
+    pred_score = pr - float(gap_weight) * pg
+    losses: list[torch.Tensor] = []
+    # Batch sizes are small; explicit grouping keeps the logic readable and CPU/GPU safe.
+    keys = torch.stack([sh, ti], dim=1)
+    unique = torch.unique(keys[finite], dim=0)
+    for key in unique:
+        mask = finite & (sh == key[0]) & (ti == key[1])
+        if int(mask.sum().item()) < 2:
+            continue
+        idx = torch.where(mask)[0]
+        # Prefer deployable teacher candidates; if none exists, rank by least-bad teacher score.
+        deployable = idx[trd[idx] >= 0.0]
+        pool = deployable if deployable.numel() > 0 else idx
+        best_local = pool[torch.argmax(teacher_score[pool])]
+        neg = idx[(tro[idx] >= 0.0) & (trd[idx] < 0.0)]
+        if bool(artifact_only):
+            neg = idx[ta[idx] | ((tro[idx] >= 0.0) & (trd[idx] < 0.0))]
+        else:
+            worse = teacher_score[idx] < teacher_score[best_local] - 1.0e-6
+            neg = idx[worse | ta[idx] | ((tro[idx] >= 0.0) & (trd[idx] < 0.0))]
+        neg = neg[neg != best_local]
+        if neg.numel() == 0:
+            continue
+        diff = pred_score[best_local] - pred_score[neg]
+        losses.append(F.relu(float(margin) - diff).mean())
+    if not losses:
+        return pred_r_dep.sum() * 0.0
+    return torch.stack(losses).mean()

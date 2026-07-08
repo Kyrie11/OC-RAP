@@ -272,6 +272,12 @@ training:
   root_target_mode: recovery_signature
   val_dataset: null
   balanced_obs_loss: true
+  group_batching: false
+  group_batching_replacement: true
+  group_ranking_margin: 0.25
+  group_ranking_gap_weight: 0.25
+  group_ranking_teacher_gap_weight: 0.25
+  group_ranking_artifact_only: true
 loss_weights:
   assign: 1.0
   sig: 0.5
@@ -281,6 +287,7 @@ loss_weights:
   anti_oracle: 1.0
   artifact_gap: 0.5
   admission: 0.2
+  group_ranking: 0.0
   utility: 0.2
 evaluation:
   batch_size: 64

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import os
+import zlib
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -417,6 +418,13 @@ def _fix_square(x: np.ndarray, n: int, *, fill_offdiag: float = 0.0, diag: float
     return np.nan_to_num(out, nan=fill_offdiag, posinf=fill_offdiag, neginf=fill_offdiag)
 
 
+
+
+def stable_scene_hash(scene_id: object) -> int:
+    """Stable non-negative 31-bit hash for grouping scene-time candidates."""
+    b = str(scene_id).encode("utf-8", errors="ignore")
+    return int(zlib.adler32(b) & 0x7FFFFFFF)
+
 def _geometry_from_sample(d: dict[str, Any]) -> tuple[int, int, int, int]:
     m = np.asarray(d.get("m_star", np.zeros((0, 0))), dtype=np.float32)
     K = int(m.shape[0]) if m.ndim >= 1 else 0
@@ -500,6 +508,13 @@ class OCRAPSampleDataset(Dataset):
             "r_orc_star": torch.tensor(float(np.asarray(d["r_orc_star"]).item()), dtype=torch.float32),
             "i_art_star": torch.tensor(float(np.asarray(d["i_art_star"]).item()), dtype=torch.float32),
             "utility": torch.tensor(float(np.asarray(d.get("utility", 0.0)).item()), dtype=torch.float32),
+            "hard_violation": torch.tensor(float(np.asarray(d.get("hard_violation", 0.0)).item()), dtype=torch.float32),
+            "harm_proxy": torch.tensor(float(np.asarray(d.get("harm_proxy", 0.0)).item()), dtype=torch.float32),
+            "feasible": torch.tensor(float(np.asarray(d.get("feasible", 1.0)).item()), dtype=torch.float32),
+            "scene_hash": torch.tensor(stable_scene_hash(d.get("scene_id", "")), dtype=torch.long),
+            "time_index": torch.tensor(int(np.asarray(d.get("time_index", 0)).item()), dtype=torch.long),
+            "candidate_index": torch.tensor(int(np.asarray(d.get("candidate_index", 0)).item()), dtype=torch.long),
+            "is_nominal": torch.tensor(float(np.asarray(d.get("is_nominal", 0)).item()), dtype=torch.float32),
             "root_signature": torch.from_numpy(fixed["root_signature"]),
             "root_future_signature": torch.from_numpy(fixed["root_future_signature"]),
             "option_features": torch.from_numpy(fixed["option_features"]),
