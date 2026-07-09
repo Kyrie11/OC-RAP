@@ -78,3 +78,28 @@ def test_prefer_admitted_ranks_within_admitted_candidates():
     )
     assert sel.selected_index == 2
     assert sel.reason == "best_calibrated_prefer_admitted"
+
+
+def test_option_drs_certificate_can_admit_conservative_scalar_candidate():
+    sel = calibrated_constrained_select(
+        utility=np.array([1.0, 1.2]),
+        r_dep=np.array([0.0, -0.15]),
+        hard=np.zeros(2),
+        harm=np.zeros(2),
+        feasible=np.array([True, True]),
+        gamma_rec=0.2,
+        pred_gap=np.array([0.9, 0.4]),
+        pred_drs=np.array([0.55, 0.88]),
+        nominal_deviation=np.zeros(2),
+        regime_name="test_contact",
+        prefer_admitted=True,
+        require_admitted_intervention=True,
+        require_intervention_evidence=True,
+        option_drs_certificate=True,
+        option_drs_certificate_threshold=0.8,
+        option_drs_certificate_max_gap=0.6,
+        option_drs_certificate_rec_slack=0.5,
+    )
+    assert sel.selected_index == 1
+    assert sel.admitted[1]
+    assert sel.reason == "best_option_drs_certified_prefer_admitted"

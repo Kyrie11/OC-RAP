@@ -8,6 +8,23 @@ from ocrap.algorithms.lcv import finite_sample_upper_quantile
 from ocrap.data.serialization import load_npz, write_json
 from ocrap.models.data import iter_sample_paths_many, scalar_metadata_for_path
 from ocrap.models.inference import load_model_bundle, predict_sample
+from ocrap.evaluation.metrics import predicted_shared_option_success
+
+
+def _calibration_score(d: dict, pred, cfg: dict) -> float:
+    mode = str((cfg.get("calibration", {}) or {}).get("score", "r_dep")).strip().lower()
+    if mode in {"r_dep", "rec", "recoverability"}:
+        return float(pred.r_dep)
+    if mode in {"rec_lcb", "lcb", "r_dep_lcb"}:
+        beta = float((cfg.get("selection", {}) or {}).get("lcb_beta", 0.10))
+        return float(pred.r_dep - beta * max(0.0, pred.gap))
+    if mode in {"pred_drs", "drs", "shared_option_success", "option_drs"}:
+        gamma = float((cfg.get("selection", {}) or {}).get("drs_success_gamma", 0.0))
+        return float(predicted_shared_option_success(
+            pred.q, pred.root_probs, gamma=gamma,
+            root_valid=d.get("root_valid", None), option_valid=d.get("option_valid", None)
+        ))
+    raise ValueError(f"Unknown calibration.score={mode!r}; expected r_dep, rec_lcb, or pred_drs")
 
 
 def calibrate(dataset: str, checkpoint: str | None = None, output: str | None = None, cfg: dict | None = None) -> dict:
@@ -30,7 +47,7 @@ def calibrate(dataset: str, checkpoint: str | None = None, output: str | None = 
             continue
         d = load_npz(p)
         pred = predict_sample(d, bundle, cfg)
-        scores.append(float(pred.r_dep))
+        scores.append(_calibration_score(d, pred, cfg))
         teacher.append(float(np.asarray(d["r_dep_star"]).item()))
         used_splits.append(split)
     warnings = []
@@ -44,7 +61,7 @@ def calibrate(dataset: str, checkpoint: str | None = None, output: str | None = 
                 continue
             d = load_npz(p)
             pred = predict_sample(d, bundle, cfg)
-            scores.append(float(pred.r_dep))
+            scores.append(_calibration_score(d, pred, cfg))
             teacher.append(float(np.asarray(d["r_dep_star"]).item()))
             used_splits.append(split)
     scores = np.asarray(scores, dtype=float)
@@ -74,6 +91,7 @@ def calibrate(dataset: str, checkpoint: str | None = None, output: str | None = 
         "num_samples": int(len(scores)),
         "num_negative": int(len(neg)),
         "source": "model" if bundle is not None else "teacher_fallback",
+        "score_mode": str((cfg.get("calibration", {}) or {}).get("score", "r_dep")),
         "splits": sorted(set(used_splits)),
         "thresholds": thresholds,
         "default_delta": default_delta,

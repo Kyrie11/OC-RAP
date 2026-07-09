@@ -222,22 +222,44 @@ def _load_json_mapping(path: str | Path) -> dict[str, float]:
 
 def _apply_gamma_rec_by_bucket_file(cfg: dict) -> dict:
     sel = cfg.get("selection", {}) if isinstance(cfg.get("selection", {}), dict) else {}
-    path = sel.get("gamma_rec_by_bucket_file", sel.get("gamma_rec_by_bucket_path", None))
-    if not path:
-        return cfg
-    mapping = _load_json_mapping(path)
-    if not mapping:
-        return cfg
     local = dict(cfg)
     new_sel = dict(sel)
-    existing = new_sel.get("gamma_rec_by_bucket", {})
-    merged = dict(existing) if isinstance(existing, dict) else {}
-    merged.update(mapping)
-    new_sel["gamma_rec_by_bucket"] = merged
-    local["selection"] = new_sel
-    return local
+    changed = False
 
+    # Backward-compatible scalar recovery threshold map.
+    path = sel.get("gamma_rec_by_bucket_file", sel.get("gamma_rec_by_bucket_path", None))
+    if path:
+        mapping = _load_json_mapping(path)
+        if mapping:
+            existing = new_sel.get("gamma_rec_by_bucket", {})
+            merged = dict(existing) if isinstance(existing, dict) else {}
+            merged.update(mapping)
+            new_sel["gamma_rec_by_bucket"] = merged
+            changed = True
 
+    # v15: allow calibrated auxiliary selector maps to be supplied as JSON files
+    # using the same bucket-name format as gamma_rec_by_bucket_file.
+    for file_key, target_key in [
+        ("option_drs_certificate_threshold_by_bucket_file", "option_drs_certificate_threshold_by_bucket"),
+        ("option_drs_certificate_max_gap_by_bucket_file", "option_drs_certificate_max_gap_by_bucket"),
+        ("option_drs_certificate_rec_slack_by_bucket_file", "option_drs_certificate_rec_slack_by_bucket"),
+    ]:
+        path = sel.get(file_key, None)
+        if not path:
+            continue
+        mapping = _load_json_mapping(path)
+        if not mapping:
+            continue
+        existing = new_sel.get(target_key, {})
+        merged = dict(existing) if isinstance(existing, dict) else {}
+        merged.update(mapping)
+        new_sel[target_key] = merged
+        changed = True
+
+    if changed:
+        local["selection"] = new_sel
+        return local
+    return cfg
 def _current_timestep(state: Any) -> int:
     try:
         return int(_as_np(state.timestep).reshape(()).item())
@@ -1026,6 +1048,11 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
         "intervention_min_rec_lcb_gain_by_bucket": (local.get("selection", {}) or {}).get("intervention_min_rec_lcb_gain_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {},
         "intervention_min_drs_gain_by_bucket": (local.get("selection", {}) or {}).get("intervention_min_drs_gain_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {},
         "intervention_min_gap_reduction_by_bucket": (local.get("selection", {}) or {}).get("intervention_min_gap_reduction_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {},
+        "option_drs_certificate": (local.get("selection", {}) or {}).get("option_drs_certificate", None) if isinstance(local.get("selection", {}), dict) else None,
+        "option_drs_certificate_by_bucket": (local.get("selection", {}) or {}).get("option_drs_certificate_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {},
+        "option_drs_certificate_threshold_by_bucket": (local.get("selection", {}) or {}).get("option_drs_certificate_threshold_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {},
+        "option_drs_certificate_max_gap_by_bucket": (local.get("selection", {}) or {}).get("option_drs_certificate_max_gap_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {},
+        "option_drs_certificate_rec_slack_by_bucket": (local.get("selection", {}) or {}).get("option_drs_certificate_rec_slack_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {},
     }
     result["notes"] = [
         "This is a true Waymax receding-horizon loop: reset once, select an action from current SimulatorState, step the environment, then replan from the updated SimulatorState.",

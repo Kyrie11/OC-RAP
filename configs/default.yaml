@@ -183,6 +183,32 @@ selection:
   budget_nominal_slack: 0.08
   intervention_budget_rate: null
   intervention_budget_penalty: 0.25
+  require_admitted_intervention: false
+  unadmitted_fallback_to_nominal: true
+  intervention_min_pred_drs: -1.0
+  intervention_max_pred_gap: -1.0
+  require_intervention_evidence: false
+  intervention_min_rec_lcb_gain: 0.0
+  intervention_min_drs_gain: 0.0
+  intervention_min_gap_reduction: 0.0
+  option_drs_certificate: false
+  option_drs_certificate_threshold: 1.01
+  option_drs_certificate_max_gap: -1.0
+  option_drs_certificate_rec_slack: 0.0
+  option_drs_certificate_min_rec_lcb: -1000000000.0
+  option_drs_certificate_counts_as_evidence: true
+  safe_force_nominal_when_feasible: false
+  safe_force_nominal_mode: feasible
+  safe_cert_min_pred_drs: 0.95
+  safe_cert_max_pred_gap: 0.20
+  safe_cert_rec_slack: 0.15
+  stress_nominal_anchor: false
+  stress_anchor_drs_floor: 0.90
+  stress_anchor_max_gap: 0.30
+  stress_anchor_rec_slack: 0.10
+  stress_anchor_min_drs_gain: 0.06
+  stress_anchor_min_rec_gain: 0.08
+  stress_anchor_min_gap_reduction: 0.05
   gamma_rec_by_bucket: {}
   gamma_rec_by_bucket_file: null
 calibration:

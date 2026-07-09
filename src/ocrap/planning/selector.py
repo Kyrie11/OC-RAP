@@ -211,6 +211,12 @@ def calibrated_constrained_select(
     intervention_min_rec_lcb_gain: float = 0.00,
     intervention_min_drs_gain: float = 0.00,
     intervention_min_gap_reduction: float = 0.00,
+    option_drs_certificate: bool = False,
+    option_drs_certificate_threshold: float = 1.01,
+    option_drs_certificate_max_gap: float = -1.0,
+    option_drs_certificate_rec_slack: float = 0.0,
+    option_drs_certificate_min_rec_lcb: float = -1.0e9,
+    option_drs_certificate_counts_as_evidence: bool = True,
 ) -> SelectionResult:
     """Soft calibrated OC-RAP selector.
 
@@ -240,7 +246,26 @@ def calibrated_constrained_select(
 
     rec_lcb = r_dep - float(lcb_beta) * gap
     safe = feasible & (hard <= float(gamma_H)) & (harm <= float(gamma_D))
-    admitted = safe & (rec_lcb >= float(gamma_rec))
+    scalar_admitted = safe & (rec_lcb >= float(gamma_rec))
+
+    # v15 dual certificate.  The scalar OC-MERO LCB can be overly pessimistic
+    # under the closed-loop distribution shift observed in v14, while the
+    # observation-consistent shared-option head can still identify a deployable
+    # recovery option.  A non-nominal prefix may therefore be certified either by
+    # the calibrated scalar recovery LCB, or by a directly predicted shared
+    # recovery-option success certificate with gap/LCB guards.  This keeps the
+    # paper claim intact: interventions still require an observation-consistent
+    # deployability certificate; they are no longer blocked solely because the
+    # aggregate scalar head is conservative.
+    option_certified = np.zeros((n,), dtype=bool)
+    if bool(option_drs_certificate):
+        option_certified = safe & (drs_proxy >= float(option_drs_certificate_threshold))
+        if float(option_drs_certificate_max_gap) >= 0.0:
+            option_certified &= gap <= float(option_drs_certificate_max_gap)
+        option_certified &= rec_lcb >= float(gamma_rec) - float(option_drs_certificate_rec_slack)
+        option_certified &= rec_lcb >= float(option_drs_certificate_min_rec_lcb)
+
+    admitted = scalar_admitted | option_certified
     idxs = np.arange(n)
     intervention = (idxs != int(nominal_index)).astype(float)
     regime = (regime_name or "").lower()
@@ -364,6 +389,8 @@ def calibrated_constrained_select(
                 | (drs_gain >= float(intervention_min_drs_gain))
                 | (gap_reduction >= float(intervention_min_gap_reduction))
             )
+            if bool(option_drs_certificate_counts_as_evidence):
+                evidence = evidence | option_certified
             certified_non_nom &= evidence
 
         if bool(certified_non_nom.any()):
@@ -482,7 +509,12 @@ def calibrated_constrained_select(
             return SelectionResult(int(nominal_index), "nominal_switch_margin_preserved", admitted)
 
     reason = "best_calibrated_admitted_score" if admitted[best_idx] else "best_calibrated_soft_constraint"
+    if admitted[best_idx] and option_certified[best_idx] and not scalar_admitted[best_idx]:
+        reason = "best_option_drs_certified_score"
     if bool(prefer_admitted) and bool((pool & admitted).any()) and admitted[best_idx]:
-        reason = "best_calibrated_prefer_admitted"
+        if option_certified[best_idx] and not scalar_admitted[best_idx]:
+            reason = "best_option_drs_certified_prefer_admitted"
+        else:
+            reason = "best_calibrated_prefer_admitted"
     return SelectionResult(best_idx, reason, admitted)
 
