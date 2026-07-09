@@ -16,7 +16,7 @@ from ocrap.evaluation.metrics import (
     post_contact_deployability_score,
     summarize_selection_metrics,
 )
-from ocrap.external_baselines.data import group_sample_paths, _branch_arrays
+from ocrap.external_baselines.data import group_sample_paths
 from ocrap.external_baselines.models import build_model_from_cfg
 from ocrap.external_baselines.policies import ExternalSelection, select_external_policy
 from ocrap.models.data import sample_to_feature
@@ -58,14 +58,6 @@ def _load_checkpoint(checkpoint: str | Path | None, cfg: dict[str, Any]) -> tupl
         # but not for reconstructing the learned positional parameter.  Keep the
         # checkpoint value when model_state is loaded.
         merged["external_baselines"] = eb
-    eb = merged.setdefault("external_baselines", {})
-    mcfg = eb.setdefault("model", {})
-    if "max_candidates" in ckpt:
-        eb["max_candidates"] = int(ckpt.get("max_candidates"))
-        mcfg["max_candidates"] = int(ckpt.get("max_candidates"))
-    for ck, mk in [("num_roots", "num_roots"), ("num_options", "num_options"), ("root_feature_dim", "root_feature_dim")]:
-        if ck in ckpt:
-            mcfg[mk] = int(ckpt[ck])
     device_req = str(((merged.get("external_baselines", {}) or {}).get("training", {}) or {}).get("device", (merged.get("training", {}) or {}).get("device", "auto")))
     device = torch.device("cuda" if device_req == "auto" and torch.cuda.is_available() else ("cpu" if device_req == "auto" else device_req))
     model = build_model_from_cfg(int(ckpt["input_dim"]), merged).to(device)
@@ -83,40 +75,14 @@ def _predict_group(model: torch.nn.Module | None, samples: list[dict[str, Any]],
     if not feats:
         return None
     D = int(feats[0].shape[0])
-    bm0, rf0, _, _, ov0 = _branch_arrays(samples[0], cfg)
-    K, L, Fdim = int(bm0.shape[0]), int(bm0.shape[1]), int(rf0.shape[-1])
     x = np.zeros((1, max_candidates, D), dtype=np.float32)
     mask = np.zeros((1, max_candidates), dtype=bool)
-    branch_margins = np.zeros((1, max_candidates, K, L), dtype=np.float32)
-    root_features = np.zeros((1, max_candidates, K, Fdim), dtype=np.float32)
-    root_probs = np.zeros((1, max_candidates, K), dtype=np.float32)
-    root_valid = np.zeros((1, max_candidates, K), dtype=bool)
-    option_valid = np.zeros((1, max_candidates, L), dtype=bool)
     for i, f in enumerate(feats):
         x[0, i] = f
         mask[0, i] = True
-        bm, rf, rp, rv, ov = _branch_arrays(samples[i], cfg)
-        branch_margins[0, i] = bm
-        root_features[0, i] = rf
-        root_probs[0, i] = rp
-        root_valid[0, i] = rv
-        option_valid[0, i] = ov
     with torch.no_grad():
-        out = model(
-            torch.from_numpy(x).to(device),
-            torch.from_numpy(mask).to(device),
-            branch_margins=torch.from_numpy(branch_margins).to(device),
-            root_features=torch.from_numpy(root_features).to(device),
-            root_probs=torch.from_numpy(root_probs).to(device),
-            root_valid=torch.from_numpy(root_valid).to(device),
-            option_valid=torch.from_numpy(option_valid).to(device),
-        )
-    result: dict[str, np.ndarray] = {}
-    for k, v in out.items():
-        if isinstance(v, list):
-            continue
-        result[k] = v.squeeze(0).detach().cpu().numpy()[:n]
-    return result
+        out = model(torch.from_numpy(x).to(device), torch.from_numpy(mask).to(device))
+    return {k: v.squeeze(0).detach().cpu().numpy()[:n] for k, v in out.items()}
 
 
 def _yaw_rate_violation_proxy(d: dict[str, Any], yaw_rate_max: float = 0.6) -> float:
@@ -230,7 +196,7 @@ def evaluate_external_baselines(
             records_by_method[method].append(_record_for_selection(method, samples, sel, model_cfg))
         if gi == 1 or gi % 500 == 0:
             print({"event": "external_eval_progress", "groups_done": gi, "num_groups": len(groups)}, flush=True)
-    learned_methods = {"route_bc", "route_bc_lite", "waymax_bc", "waymax_bc_lite", "route_bc_wayformer", "gameformer", "gameformer_lite", "gameformer_levelk"}
+    learned_methods = {"route_bc", "route_bc_lite", "waymax_bc", "waymax_bc_lite", "gameformer", "gameformer_lite"}
     summaries = {
         m: _summarize(
             records_by_method[m],

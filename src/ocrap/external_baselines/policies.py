@@ -115,68 +115,6 @@ def _control_proxy(d: dict[str, Any]) -> tuple[float, float]:
     return accel, steer
 
 
-def _postimpact_mpc_cost(d: dict[str, Any], cfg: dict[str, Any]) -> tuple[float, dict[str, float]]:
-    """Planning-integrated post-impact MPC surrogate over OC-RAP candidates.
-
-    The paper controller optimizes stability recovery and secondary-collision
-    avoidance with vehicle-dynamics/road-adhesion constraints.  Here the action
-    space is the already-built prefix/recovery lattice, so MPC is solved by
-    evaluating that finite horizon lattice with the same ingredients: yaw-rate
-    damping, acceleration/steer effort, terminal stable-stop, obstacle/hard
-    violation, and route rejoin utility.
-    """
-    pcfg = ((cfg.get("external_baselines", {}) or {}).get("policy", {}) or {})
-    states = np.asarray(d.get("prefix_states", np.zeros((0, 0))), dtype=float)
-    controls = np.asarray(d.get("prefix_controls", np.zeros((0, 0))), dtype=float)
-    hard = _scalar(d, "hard_violation", 0.0)
-    harm = _scalar(d, "harm_proxy", 0.0)
-    utility = _scalar(d, "utility", 0.0)
-    shared_opt, shared = _shared_option_success_score(d, gamma=float(pcfg.get("postimpact_gamma", 0.0)))
-    dt = float(pcfg.get("postimpact_dt", 0.1))
-    yaw_rate = yaw_acc = speed_terminal = accel_effort = steer_effort = jerk = 0.0
-    if states.ndim == 2 and states.shape[0] >= 2:
-        if states.shape[1] >= 3:
-            yaw = np.unwrap(states[:, 2])
-            yr = np.diff(yaw) / max(dt, 1e-3)
-            yaw_rate = float(np.nanmax(np.abs(yr))) if yr.size else 0.0
-            yaw_acc = float(np.nanmax(np.abs(np.diff(yr) / max(dt, 1e-3)))) if yr.size >= 2 else 0.0
-        if states.shape[1] >= 5:
-            speed = np.hypot(states[:, 3], states[:, 4])
-        elif states.shape[1] >= 4:
-            speed = np.abs(states[:, 3])
-        else:
-            speed = np.zeros((states.shape[0],), dtype=float)
-        speed_terminal = float(speed[-1]) if speed.size else 0.0
-    if controls.ndim == 2 and controls.size:
-        if controls.shape[1] >= 1:
-            a = controls[:, 0]
-            accel_effort = float(np.nanmean(np.abs(a)))
-            jerk = float(np.nanmax(np.abs(np.diff(a) / max(dt, 1e-3)))) if a.size >= 2 else 0.0
-        if controls.shape[1] >= 2:
-            steer_effort = float(np.nanmean(np.abs(controls[:, 1])))
-    stable_stop_cost = (
-        float(pcfg.get("postimpact_yaw_rate_weight", 1.4)) * yaw_rate
-        + float(pcfg.get("postimpact_yaw_acc_weight", 0.15)) * yaw_acc
-        + float(pcfg.get("postimpact_terminal_speed_weight", 0.45)) * speed_terminal
-        + float(pcfg.get("postimpact_accel_weight", 0.08)) * accel_effort
-        + float(pcfg.get("postimpact_steer_weight", 0.08)) * steer_effort
-        + float(pcfg.get("postimpact_jerk_weight", 0.02)) * jerk
-    )
-    obstacle_cost = float(pcfg.get("postimpact_hard_weight", 8.0)) * hard + float(pcfg.get("postimpact_harm_weight", 2.5)) * harm
-    rejoin_reward = float(pcfg.get("postimpact_rejoin_weight", 0.20)) * utility + float(pcfg.get("postimpact_shared_drs_weight", 3.0)) * shared
-    total = stable_stop_cost + obstacle_cost - rejoin_reward
-    return float(total), {
-        "shared_option": float(shared_opt),
-        "shared_success": float(shared),
-        "yaw_rate": yaw_rate,
-        "yaw_acc": yaw_acc,
-        "terminal_speed": speed_terminal,
-        "stable_stop_cost": float(stable_stop_cost),
-        "obstacle_cost": float(obstacle_cost),
-        "rejoin_reward": float(rejoin_reward),
-    }
-
-
 def select_external_policy(
     baseline: str,
     samples: list[dict[str, Any]],
@@ -197,7 +135,7 @@ def select_external_policy(
     r_dep = np.asarray([_scalar(d, "r_dep_star", 0.0) for d in samples], dtype=float)
     safe = feasible & (hard <= float(pcfg.get("gamma_H", 0.0))) & (harm <= float(pcfg.get("gamma_D", 5.0)))
 
-    if baseline in {"route_bc", "route_bc_lite", "waymax_bc", "waymax_bc_lite", "route_bc_wayformer"}:
+    if baseline in {"route_bc", "route_bc_lite", "waymax_bc", "waymax_bc_lite"}:
         admitted = np.zeros(n, dtype=bool)
         if model_outputs and "logits" in model_outputs:
             score = np.asarray(model_outputs["logits"], dtype=float)[:n]
@@ -213,7 +151,7 @@ def select_external_policy(
         admitted[idx] = True
         return ExternalSelection(idx, reason, admitted, score)
 
-    if baseline in {"gameformer", "gameformer_lite", "gameformer_levelk"}:
+    if baseline in {"gameformer", "gameformer_lite"}:
         if model_outputs:
             u = np.asarray(model_outputs.get("utility", utility), dtype=float)[:n]
             h = np.maximum(0.0, np.asarray(model_outputs.get("hard", hard), dtype=float)[:n])
@@ -272,20 +210,17 @@ def select_external_policy(
         idx = _best(score, admitted if admitted.any() else feasible)
         return ExternalSelection(idx, "distributionally_robust_cvar_filter", admitted, score)
 
-    if baseline in {"postimpact_mpc", "postimpact_mpc_lite", "post_impact_mpc_lite", "postimpact_mpc_paper"}:
-        costs = []
-        opts = []
-        for d in samples:
-            c, details = _postimpact_mpc_cost(d, cfg)
-            costs.append(c)
-            opts.append(int(details.get("shared_option", 0)))
-        cost = np.asarray(costs, dtype=float) if costs else np.zeros(n, dtype=float)
-        score = -cost
-        yaw_gate = float(pcfg.get("postimpact_yaw_rate_gate", 2.2))
-        stable_gate = np.asarray([_postimpact_mpc_cost(d, cfg)[1].get("yaw_rate", 0.0) <= yaw_gate for d in samples], dtype=bool) if samples else np.zeros(n, dtype=bool)
-        admitted = feasible & stable_gate & (hard <= float(pcfg.get("postimpact_hard_gate", 0.0)))
-        idx = _best(score, admitted if admitted.any() else feasible)
-        opt = int(opts[idx]) if opts else 0
-        return ExternalSelection(idx, "planning_integrated_postimpact_mpc", admitted, score, selected_option=opt)
+    if baseline in {"postimpact_mpc", "postimpact_mpc_lite", "post_impact_mpc_lite"}:
+        shared = np.asarray([_shared_option_success_score(d)[1] for d in samples], dtype=float)
+        ctrl = np.asarray([_control_proxy(d) for d in samples], dtype=float) if samples else np.zeros((0, 2))
+        accel = ctrl[:, 0] if ctrl.size else np.zeros(n)
+        steer = ctrl[:, 1] if ctrl.size else np.zeros(n)
+        stable_stop = shared - 0.10 * accel - 0.10 * steer - 0.50 * hard - 0.20 * harm
+        rejoin = 0.15 * utility - 0.25 * harm
+        score = float(pcfg.get("postimpact_stable_weight", 2.0)) * stable_stop + float(pcfg.get("postimpact_rejoin_weight", 0.3)) * rejoin
+        admitted = feasible.copy()
+        idx = _best(score, feasible)
+        opt, _ = _shared_option_success_score(samples[idx]) if samples else (0, 0.0)
+        return ExternalSelection(idx, "postimpact_stabilize_avoid_mpc_proxy", admitted, score, selected_option=opt)
 
     raise ValueError(f"Unknown external baseline {baseline!r}")
