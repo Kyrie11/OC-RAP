@@ -1,0 +1,28 @@
+external_baselines:
+  baseline: route_bc_lite
+  methods: [route_bc_lite]
+  max_candidates: 24
+  model:
+    max_candidates: 24
+    d_model: 192
+    num_layers: 2
+    num_heads: 4
+    dropout: 0.15
+  training:
+    device: auto
+    batch_size: 64
+    num_workers: 4
+    epochs: 20
+    lr: 0.0002
+    weight_decay: 0.0001
+    grad_clip: 5.0
+  loss_weights:
+    policy: 1.0
+    utility: 0.05
+    hard: 0.20
+    harm: 0.10
+    oracle_rec: 0.10
+    deploy_rec: 0.05
+  policy:
+    gamma_H: 0.0
+    gamma_D: 5.0

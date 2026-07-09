@@ -1,0 +1,64 @@
+external_baselines:
+  baseline: gameformer_lite
+  methods:
+    - route_bc_lite
+    - gameformer_lite
+    - marc_lite
+    - racp_lite
+    - expected_risk_filter
+    - cvar_risk_filter
+    - dro_cvar_filter
+    - postimpact_mpc_lite
+  max_candidates: 24
+  hard_weight: 12.0
+  harm_weight: 2.0
+  oracle_weight: 1.0
+  model:
+    max_candidates: 24
+    d_model: 256
+    num_layers: 3
+    num_heads: 4
+    dropout: 0.15
+  training:
+    device: auto
+    batch_size: 48
+    num_workers: 4
+    epochs: 24
+    lr: 0.00015
+    weight_decay: 0.0002
+    grad_clip: 5.0
+  loss_weights:
+    policy: 1.0
+    utility: 0.10
+    hard: 0.50
+    harm: 0.25
+    oracle_rec: 0.75
+    deploy_rec: 0.10
+  policy:
+    gamma_H: 0.0
+    gamma_D: 5.0
+    gamma_oracle_rec: 0.0
+    gamma_branch_rec: 0.0
+    cvar_alpha: 0.20
+    gameformer_hard_weight: 12.0
+    gameformer_harm_weight: 2.0
+    gameformer_oracle_weight: 1.0
+    marc_risk_tolerance: 0.35
+    marc_branch_rec_weight: 1.0
+    marc_hard_weight: 10.0
+    marc_harm_weight: 1.5
+    racp_risk_tolerance: 0.60
+    racp_branch_rec_weight: 1.0
+    racp_hard_weight: 10.0
+    racp_harm_weight: 1.5
+    risk_hard_weight: 1.0
+    risk_harm_weight: 0.25
+    expected_risk_threshold: 0.45
+    expected_risk_weight: 3.0
+    cvar_risk_threshold: 0.35
+    cvar_risk_weight: 3.0
+    dro_ambiguity_radius: 0.10
+    dro_cvar_threshold: 0.40
+    dro_cvar_risk_weight: 3.5
+    postimpact_stable_weight: 2.0
+    postimpact_rejoin_weight: 0.3

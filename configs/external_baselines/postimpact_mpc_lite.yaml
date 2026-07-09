@@ -1,0 +1,8 @@
+external_baselines:
+  methods: [postimpact_mpc_lite]
+  max_candidates: 24
+  policy:
+    gamma_H: 0.0
+    gamma_D: 5.0
+    postimpact_stable_weight: 2.0
+    postimpact_rejoin_weight: 0.3

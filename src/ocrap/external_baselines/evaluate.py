@@ -1,0 +1,218 @@
+from __future__ import annotations
+
+from collections import Counter
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import torch
+
+from ocrap.data.serialization import load_npz, write_json
+from ocrap.evaluation.metrics import (
+    best_shared_option_index,
+    deployable_recovery_success,
+    false_recoverability_admission,
+    nominal_utility_preservation,
+    post_contact_deployability_score,
+    summarize_selection_metrics,
+)
+from ocrap.external_baselines.data import group_sample_paths
+from ocrap.external_baselines.models import build_model_from_cfg
+from ocrap.external_baselines.policies import ExternalSelection, select_external_policy
+from ocrap.models.data import sample_to_feature
+
+
+def _scalar(d: dict[str, Any], key: str, default: float = 0.0) -> float:
+    try:
+        return float(np.asarray(d.get(key, default)).item())
+    except Exception:
+        return float(default)
+
+
+def _load_checkpoint(checkpoint: str | Path | None, cfg: dict[str, Any]) -> tuple[torch.nn.Module | None, dict[str, Any], torch.device]:
+    if not checkpoint:
+        return None, cfg, torch.device("cpu")
+    path = Path(checkpoint)
+    if not path.exists():
+        return None, cfg, torch.device("cpu")
+    try:
+        ckpt = torch.load(path, map_location="cpu", weights_only=False)
+    except TypeError:
+        ckpt = torch.load(path, map_location="cpu")
+    ckpt_cfg = ckpt.get("cfg", cfg) or cfg
+    merged = dict(ckpt_cfg)
+    # Runtime evaluation knobs may override policy thresholds and method lists,
+    # but the checkpoint owns model geometry (d_model/layers/heads/max tokens).
+    if isinstance(cfg.get("external_baselines", {}), dict):
+        eb = dict(merged.get("external_baselines", {}) or {})
+        rt = cfg.get("external_baselines", {}) or {}
+        for key in ("methods", "policy", "baseline"):
+            if key in rt:
+                if key == "policy" and isinstance(rt.get(key), dict) and isinstance(eb.get(key), dict):
+                    tmp = dict(eb.get(key) or {})
+                    tmp.update(rt.get(key) or {})
+                    eb[key] = tmp
+                else:
+                    eb[key] = rt[key]
+        # max_candidates is safe to increase/decrease for padding at inference,
+        # but not for reconstructing the learned positional parameter.  Keep the
+        # checkpoint value when model_state is loaded.
+        merged["external_baselines"] = eb
+    device_req = str(((merged.get("external_baselines", {}) or {}).get("training", {}) or {}).get("device", (merged.get("training", {}) or {}).get("device", "auto")))
+    device = torch.device("cuda" if device_req == "auto" and torch.cuda.is_available() else ("cpu" if device_req == "auto" else device_req))
+    model = build_model_from_cfg(int(ckpt["input_dim"]), merged).to(device)
+    model.load_state_dict(ckpt["model_state"])
+    model.eval()
+    return model, merged, device
+
+
+def _predict_group(model: torch.nn.Module | None, samples: list[dict[str, Any]], cfg: dict[str, Any], device: torch.device) -> dict[str, np.ndarray] | None:
+    if model is None or not samples:
+        return None
+    max_candidates = int(((cfg.get("external_baselines", {}) or {}).get("max_candidates", len(samples))))
+    n = min(len(samples), max_candidates)
+    feats = [sample_to_feature(d, cfg) for d in samples[:n]]
+    if not feats:
+        return None
+    D = int(feats[0].shape[0])
+    x = np.zeros((1, max_candidates, D), dtype=np.float32)
+    mask = np.zeros((1, max_candidates), dtype=bool)
+    for i, f in enumerate(feats):
+        x[0, i] = f
+        mask[0, i] = True
+    with torch.no_grad():
+        out = model(torch.from_numpy(x).to(device), torch.from_numpy(mask).to(device))
+    return {k: v.squeeze(0).detach().cpu().numpy()[:n] for k, v in out.items()}
+
+
+def _yaw_rate_violation_proxy(d: dict[str, Any], yaw_rate_max: float = 0.6) -> float:
+    states = np.asarray(d.get("prefix_states", np.zeros((0, 0))), dtype=float)
+    if states.ndim != 2 or states.shape[0] < 2:
+        return 0.0
+    # Most OC-RAP prefix_states are [x,y,yaw,v,...] or similar.  If yaw is not
+    # present, this proxy safely returns zero.
+    if states.shape[1] < 3:
+        return 0.0
+    yaw = np.unwrap(states[:, 2])
+    dyaw = np.abs(np.diff(yaw)) * 10.0  # dataset is 10 Hz in WOMD/Waymax builds
+    return float(np.max(dyaw) > float(yaw_rate_max)) if dyaw.size else 0.0
+
+
+def _contact_extra_metrics(records: list[dict[str, Any]]) -> dict[str, float | None]:
+    if not records:
+        return {}
+    out: dict[str, float | None] = {}
+    out["secondary_collision_rate"] = float(np.mean([r.get("selected_hard_violation", 0.0) > 0.0 or r.get("selected_harm_proxy", 0.0) > 0.05 for r in records]))
+    out["stable_stop_success"] = float(np.mean([r.get("drs", 0.0) >= 0.5 and r.get("selected_hard_violation", 0.0) <= 0.0 for r in records]))
+    out["max_yaw_rate_violation"] = float(np.mean([r.get("yaw_rate_violation_proxy", 0.0) > 0.0 for r in records]))
+    out["route_rejoin_success"] = float(np.mean([r.get("nup", 0.0) >= 0.5 and r.get("selected_harm_proxy", 0.0) <= 0.5 for r in records]))
+    out["mean_harm_proxy"] = float(np.mean([r.get("selected_harm_proxy", 0.0) for r in records]))
+    out["post_contact_deployability_score"] = float(np.mean([r.get("post_contact_deployability", 0.0) for r in records]))
+    return out
+
+
+def _record_for_selection(method: str, samples: list[dict[str, Any]], sel: ExternalSelection, cfg: dict[str, Any]) -> dict[str, Any]:
+    idx = int(np.clip(sel.selected_index, 0, max(len(samples) - 1, 0)))
+    chosen = samples[idx]
+    utility = np.asarray([_scalar(d, "utility", 0.0) for d in samples], dtype=float)
+    r_dep = np.asarray([_scalar(d, "r_dep_star", 0.0) for d in samples], dtype=float)
+    r_orc = np.asarray([_scalar(d, "r_orc_star", 0.0) for d in samples], dtype=float)
+    odg = float(np.asarray(chosen.get("oracle_gap_star", r_orc[idx] - r_dep[idx])).item()) if samples else 0.0
+    selected_option = sel.selected_option
+    if selected_option is None:
+        selected_option = best_shared_option_index(chosen.get("m_star", np.zeros((0, 0))), chosen.get("root_probs", np.zeros((0,))), gamma=0.0, root_valid=chosen.get("root_valid", None), option_valid=chosen.get("option_valid", None))
+    drs = deployable_recovery_success(chosen.get("m_star", np.zeros((0, 0))), chosen.get("root_probs", np.zeros((0,))), int(selected_option), chosen.get("root_valid", None))
+    nup = nominal_utility_preservation(utility[0] if utility.size else 0.0, utility[idx] if utility.size else 0.0, sigma_u=float((cfg.get("metrics", {}) or {}).get("sigma_u", 1.0)))
+    return {
+        "method": method,
+        "fra_cand": false_recoverability_admission(sel.admitted, r_dep),
+        "fra_exec": float(r_dep[idx] < 0.0) if r_dep.size else 0.0,
+        "drs": float(drs),
+        "odg": float(odg),
+        "post_contact_deployability": float(post_contact_deployability_score(float(drs), float(r_dep[idx]) if r_dep.size else 0.0, float(odg))),
+        "nup": float(nup["bounded_NUP"]),
+        "artifact": bool(_scalar(chosen, "i_art_star", 0.0) > 0.5),
+        "selected_artifact": bool(_scalar(chosen, "i_art_star", 0.0) > 0.5),
+        "selection_reason": sel.reason,
+        "selected_index": idx,
+        "selected_option": int(selected_option),
+        "selected_utility": float(utility[idx]) if utility.size else 0.0,
+        "selected_teacher_r_dep": float(r_dep[idx]) if r_dep.size else 0.0,
+        "selected_teacher_r_orc": float(r_orc[idx]) if r_orc.size else 0.0,
+        "selected_admitted": bool(sel.admitted[idx]) if len(sel.admitted) > idx else False,
+        "num_admitted": int(np.asarray(sel.admitted, dtype=bool).sum()),
+        "num_admitted_interventions": int(np.asarray(sel.admitted, dtype=bool)[1:].sum()) if len(sel.admitted) > 1 else 0,
+        "selected_hard_violation": _scalar(chosen, "hard_violation", 0.0),
+        "selected_harm_proxy": _scalar(chosen, "harm_proxy", 0.0),
+        "yaw_rate_violation_proxy": _yaw_rate_violation_proxy(chosen, yaw_rate_max=float(cfg.get("yaw_rate_max_rps", 0.6))),
+    }
+
+
+def _summarize(records: list[dict[str, Any]], method: str, num_groups: int, source: str) -> dict[str, Any]:
+    result = summarize_selection_metrics(records)
+    if records:
+        result.update({
+            "intervention_rate": float(np.mean([int(r.get("selected_index", 0)) != 0 for r in records])),
+            "selected_admitted_rate": float(np.mean([bool(r.get("selected_admitted", False)) for r in records])),
+            "mean_num_admitted": float(np.mean([float(r.get("num_admitted", 0.0)) for r in records])),
+            "mean_num_admitted_interventions": float(np.mean([float(r.get("num_admitted_interventions", 0.0)) for r in records])),
+            "mean_selected_teacher_R_dep": float(np.mean([r.get("selected_teacher_r_dep", 0.0) for r in records])),
+            "mean_selected_teacher_R_orc": float(np.mean([r.get("selected_teacher_r_orc", 0.0) for r in records])),
+            "mean_selected_utility": float(np.mean([r.get("selected_utility", 0.0) for r in records])),
+            "selection_reason_counts": dict(Counter(str(r.get("selection_reason", "")) for r in records)),
+        })
+        result.update(_contact_extra_metrics(records))
+    result.update({"method": method, "num_scene_time_groups": int(num_groups), "num_records": int(len(records)), "source": source})
+    return result
+
+
+def evaluate_external_baselines(
+    dataset: str,
+    output: str,
+    cfg: dict[str, Any],
+    *,
+    split: str = "test",
+    checkpoint: str | None = None,
+    baselines: str | list[str] | None = None,
+) -> dict[str, Any]:
+    bcfg = cfg.setdefault("external_baselines", {})
+    if baselines is None:
+        baselines = bcfg.get("methods", [bcfg.get("baseline", "route_bc_lite")])
+    if isinstance(baselines, str):
+        methods = [m.strip() for m in baselines.split(",") if m.strip()]
+    else:
+        methods = [str(m).strip() for m in baselines if str(m).strip()]
+    if not methods:
+        raise ValueError("No external baselines requested")
+    model, model_cfg, device = _load_checkpoint(checkpoint, cfg)
+    groups = group_sample_paths(dataset, split=split)
+    records_by_method: dict[str, list[dict[str, Any]]] = {m: [] for m in methods}
+    for gi, paths in enumerate(groups, 1):
+        samples = [load_npz(p) for p in paths]
+        samples = sorted(samples, key=lambda d: int(np.asarray(d.get("candidate_index", 0)).item()))
+        model_outputs = _predict_group(model, samples, model_cfg, device)
+        for method in methods:
+            sel = select_external_policy(method, samples, model_cfg, model_outputs=model_outputs)
+            records_by_method[method].append(_record_for_selection(method, samples, sel, model_cfg))
+        if gi == 1 or gi % 500 == 0:
+            print({"event": "external_eval_progress", "groups_done": gi, "num_groups": len(groups)}, flush=True)
+    learned_methods = {"route_bc", "route_bc_lite", "waymax_bc", "waymax_bc_lite", "gameformer", "gameformer_lite"}
+    summaries = {
+        m: _summarize(
+            records_by_method[m],
+            m,
+            len(groups),
+            "learned_checkpoint" if (model is not None and m.lower() in learned_methods) else "dataset_teacher_labels",
+        )
+        for m in methods
+    }
+    result = {
+        "dataset": str(dataset),
+        "split": split,
+        "checkpoint": str(checkpoint) if checkpoint else None,
+        "method_order": methods,
+        "methods": summaries,
+    }
+    if output:
+        write_json(result, output)
+    return result

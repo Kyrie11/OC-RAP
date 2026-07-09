@@ -14,6 +14,7 @@ from ocrap.analysis.dataset_report import analyze_dataset
 from .calibrate import calibrate
 from .deploy import deploy
 from .train import train
+from ocrap.external_baselines import train_external_baseline, evaluate_external_baselines
 
 
 def add_common(p: argparse.ArgumentParser) -> None:
@@ -68,6 +69,19 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument("--calibration", default=None)
     p.add_argument("--split", default="test")
     p.add_argument("--output", required=True)
+    p = sub.add_parser("train-baseline")
+    add_common(p)
+    p.add_argument("--dataset", required=True)
+    p.add_argument("--output", required=True)
+    p.add_argument("--val-dataset", default=None)
+    p.add_argument("--baseline", default=None, help="External baseline name, e.g. route_bc_lite or gameformer_lite.")
+    p = sub.add_parser("evaluate-baseline")
+    add_common(p)
+    p.add_argument("--dataset", required=True)
+    p.add_argument("--checkpoint", required=False, default=None)
+    p.add_argument("--split", default="test")
+    p.add_argument("--output", required=True)
+    p.add_argument("--baselines", default=None, help="Comma-separated external baselines to evaluate.")
     p = sub.add_parser("closed-loop")
     add_common(p)
     p.add_argument("--dataset", required=True, help="WOMD TFRecord path/pattern for Waymax closed-loop evaluation.")
@@ -124,6 +138,10 @@ def main(argv: list[str] | None = None) -> None:
         result = train(args.dataset, args.output, cfg, val_dataset=getattr(args, "val_dataset", None))
     elif args.cmd == "calibrate":
         result = calibrate(args.dataset, args.checkpoint, args.output, cfg)
+    elif args.cmd == "train-baseline":
+        result = train_external_baseline(args.dataset, args.output, cfg, val_dataset=getattr(args, "val_dataset", None), baseline=getattr(args, "baseline", None))
+    elif args.cmd == "evaluate-baseline":
+        result = evaluate_external_baselines(args.dataset, args.output, cfg, split=getattr(args, "split", "test"), checkpoint=getattr(args, "checkpoint", None), baselines=getattr(args, "baselines", None))
     elif args.cmd == "evaluate":
         result = evaluate(args.dataset, args.checkpoint, args.output, split=args.split, calibration_json=args.calibration, cfg=cfg)
     elif args.cmd == "closed-loop":
