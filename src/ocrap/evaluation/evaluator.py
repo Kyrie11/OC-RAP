@@ -173,6 +173,10 @@ def _records_summary(records: list[dict], split: str, gamma: float, source: str,
         result["mean_selected_teacher_R_dep"] = float(np.mean([r["selected_teacher_r_dep"] for r in records]))
         result["mean_selected_teacher_R_orc"] = float(np.mean([r["selected_teacher_r_orc"] for r in records]))
         result["mean_selected_utility"] = float(np.mean([r["selected_utility"] for r in records]))
+        result["intervention_rate"] = float(np.mean([int(r.get("selected_index", 0)) != 0 for r in records]))
+        result["selected_admitted_rate"] = float(np.mean([bool(r.get("selected_admitted", False)) for r in records]))
+        result["mean_num_admitted"] = float(np.mean([float(r.get("num_admitted", 0.0)) for r in records]))
+        result["mean_num_admitted_interventions"] = float(np.mean([float(r.get("num_admitted_interventions", 0.0)) for r in records]))
     result.update({"num_scene_time_groups": int(num_groups), "num_records": int(len(records)), "split": split, "gamma_rec": gamma, "source": source})
     if records:
         gammas = [float(r.get("gamma_rec", gamma)) for r in records if np.isfinite(float(r.get("gamma_rec", gamma)))]
@@ -192,7 +196,7 @@ def _write_method_tables(result: dict, output: str | Path) -> None:
         order = result.get("method_order", list(methods.keys()))
         cols = [
             "FRA_exec", "FRA_cand", "DRS", "bounded_NUP", "ODG",
-            "artifact_selection_rate", "post_contact_deployability", "mean_selected_teacher_R_dep", "mean_selected_utility",
+            "artifact_selection_rate", "post_contact_deployability", "intervention_rate", "selected_admitted_rate", "mean_num_admitted_interventions", "mean_selected_teacher_R_dep", "mean_selected_utility",
         ]
         pretty = {
             "FRA_exec": "Executed false recovery admission ↓",
@@ -202,6 +206,9 @@ def _write_method_tables(result: dict, output: str | Path) -> None:
             "ODG": "Selected oracle-to-deployable gap ↓",
             "artifact_selection_rate": "Oracle-artifact selection rate ↓",
             "post_contact_deployability": "Post-contact deployability ↑",
+            "intervention_rate": "Intervention rate ↓",
+            "selected_admitted_rate": "Selected admitted rate ↑",
+            "mean_num_admitted_interventions": "Certified intervention candidates ↑",
             "mean_selected_teacher_R_dep": "Selected deployable recovery score ↑",
             "mean_selected_utility": "Selected utility ↑",
         }
@@ -375,6 +382,9 @@ def _evaluate_grouped_items(grouped: dict[tuple, list[dict]], methods: list[str]
                 "selected_utility": float(utility[selected_index]),
                 "selected_teacher_r_dep": float(teacher_r_dep[selected_index]),
                 "selected_teacher_r_orc": float(teacher_r_orc[selected_index]),
+                "selected_admitted": bool(sel.admitted[selected_index]) if 0 <= selected_index < len(sel.admitted) else False,
+                "num_admitted": int(np.asarray(sel.admitted, dtype=bool).sum()),
+                "num_admitted_interventions": int(np.asarray(sel.admitted, dtype=bool)[1:].sum()) if len(sel.admitted) > 1 else 0,
             })
 
     summaries = {m: _records_summary(rs, split, gamma, source if m == "ocrap" else "dataset_label_baseline", len(grouped)) for m, rs in method_records.items()}
@@ -444,6 +454,11 @@ def evaluate(dataset: str | Path, checkpoint: str | Path | None = None, output: 
         "stress_preserve_nominal_min_drs_drop_by_bucket": (cfg.get("selection", {}) or {}).get("stress_preserve_nominal_min_drs_drop_by_bucket", {}) if isinstance(cfg.get("selection", {}), dict) else {},
         "require_admitted_intervention": (cfg.get("selection", {}) or {}).get("require_admitted_intervention", None) if isinstance(cfg.get("selection", {}), dict) else None,
         "require_admitted_intervention_by_bucket": (cfg.get("selection", {}) or {}).get("require_admitted_intervention_by_bucket", {}) if isinstance(cfg.get("selection", {}), dict) else {},
+        "require_intervention_evidence": (cfg.get("selection", {}) or {}).get("require_intervention_evidence", None) if isinstance(cfg.get("selection", {}), dict) else None,
+        "require_intervention_evidence_by_bucket": (cfg.get("selection", {}) or {}).get("require_intervention_evidence_by_bucket", {}) if isinstance(cfg.get("selection", {}), dict) else {},
+        "intervention_min_rec_lcb_gain_by_bucket": (cfg.get("selection", {}) or {}).get("intervention_min_rec_lcb_gain_by_bucket", {}) if isinstance(cfg.get("selection", {}), dict) else {},
+        "intervention_min_drs_gain_by_bucket": (cfg.get("selection", {}) or {}).get("intervention_min_drs_gain_by_bucket", {}) if isinstance(cfg.get("selection", {}), dict) else {},
+        "intervention_min_gap_reduction_by_bucket": (cfg.get("selection", {}) or {}).get("intervention_min_gap_reduction_by_bucket", {}) if isinstance(cfg.get("selection", {}), dict) else {},
     }
     result["dataset_group_count"] = {k: len(v) for k, v in sorted(dataset_grouped.items())}
     result["per_dataset"] = {}

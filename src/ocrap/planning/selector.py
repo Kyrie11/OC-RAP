@@ -207,6 +207,10 @@ def calibrated_constrained_select(
     stress_anchor_min_drs_gain: float = 0.06,
     stress_anchor_min_rec_gain: float = 0.08,
     stress_anchor_min_gap_reduction: float = 0.05,
+    require_intervention_evidence: bool = False,
+    intervention_min_rec_lcb_gain: float = 0.00,
+    intervention_min_drs_gain: float = 0.00,
+    intervention_min_gap_reduction: float = 0.00,
 ) -> SelectionResult:
     """Soft calibrated OC-RAP selector.
 
@@ -344,17 +348,45 @@ def calibrated_constrained_select(
         certified_non_nom = certified_intervention.copy()
         if 0 <= nominal_index < n:
             certified_non_nom[int(nominal_index)] = False
+
+        # v14: certified intervention must not merely pass an absolute
+        # threshold; it should have some predicted evidence that switching away
+        # from nominal improves deployable recoverability or closes the
+        # oracle--deployability gap.  This keeps OC-RAP from reducing FRA/ODG by
+        # taking low-DRS recovery prefixes and turns abstention into an explicit
+        # learned/certified decision.
+        if bool(require_intervention_evidence) and 0 <= nominal_index < n:
+            rec_gain = rec_lcb - rec_lcb[int(nominal_index)]
+            drs_gain = drs_proxy - drs_proxy[int(nominal_index)]
+            gap_reduction = gap[int(nominal_index)] - gap
+            evidence = (
+                (rec_gain >= float(intervention_min_rec_lcb_gain))
+                | (drs_gain >= float(intervention_min_drs_gain))
+                | (gap_reduction >= float(intervention_min_gap_reduction))
+            )
+            certified_non_nom &= evidence
+
         if bool(certified_non_nom.any()):
             cc = np.where(certified_non_nom)[0]
             best_idx = int(cc[np.argmax(score[cc])])
-        elif 0 <= nominal_index < n and pool[nominal_index] and bool(unadmitted_fallback_to_nominal):
+        elif 0 <= nominal_index < n and bool(unadmitted_fallback_to_nominal):
+            # Important: do not require nominal to be in the temporary hard/harm
+            # pool.  In closed-loop feature-only runs the nominal metadata can
+            # be noisy; executing an uncertified recovery is harder to defend
+            # than abstaining to nominal.  This fixes the v13 failure where
+            # require_admitted_intervention=true still produced
+            # best_calibrated_soft_constraint interventions.
             admitted = admitted.copy()
-            admitted[nominal_index] = True
-            return SelectionResult(int(nominal_index), "nominal_no_admitted_intervention_preserved", admitted)
+            admitted[int(nominal_index)] = True
+            return SelectionResult(int(nominal_index), "nominal_no_certified_intervention_preserved", admitted)
         elif not admitted[best_idx]:
             admitted_pool = np.where(pool & admitted)[0]
             if admitted_pool.size > 0:
                 best_idx = int(admitted_pool[np.argmax(score[admitted_pool])])
+            elif 0 <= nominal_index < n:
+                admitted = admitted.copy()
+                admitted[int(nominal_index)] = True
+                return SelectionResult(int(nominal_index), "nominal_no_certified_intervention_preserved", admitted)
 
     # Stress DRS guard.  A recurring failure mode in the current results is that
     # learned OC-RAP lowers FRA/ODG but sacrifices executed DRS.  When configured,
