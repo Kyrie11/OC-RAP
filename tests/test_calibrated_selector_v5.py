@@ -103,3 +103,32 @@ def test_option_drs_certificate_can_admit_conservative_scalar_candidate():
     assert sel.selected_index == 1
     assert sel.admitted[1]
     assert sel.reason == "best_option_drs_certified_prefer_admitted"
+
+
+def test_relative_recovery_certificate_admits_contact_opportunity_without_soft_fallback():
+    sel = calibrated_constrained_select(
+        utility=np.array([1.0, 0.8, 0.7]),
+        r_dep=np.array([-0.95, -0.55, -0.90]),
+        hard=np.zeros(3),
+        harm=np.zeros(3),
+        feasible=np.array([True, True, True]),
+        gamma_rec=0.2,
+        pred_gap=np.array([1.30, 1.25, 1.50]),
+        pred_drs=np.array([0.76, 0.78, 0.91]),
+        nominal_deviation=np.zeros(3),
+        regime_name="test_contact",
+        prefer_admitted=True,
+        require_admitted_intervention=True,
+        require_intervention_evidence=True,
+        relative_recovery_certificate=True,
+        relative_recovery_nominal_rec_lcb_max=-0.60,
+        relative_recovery_nominal_gap_min=1.10,
+        relative_recovery_min_rec_gain=0.25,
+        relative_recovery_min_drs=0.70,
+        relative_recovery_max_gap=1.40,
+        relative_recovery_max_gap_increase=0.20,
+        relative_recovery_bonus=1.0,
+    )
+    assert sel.selected_index == 1
+    assert sel.admitted[1]
+    assert sel.reason == "best_relative_recovery_certified_prefer_admitted"

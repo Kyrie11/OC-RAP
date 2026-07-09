@@ -1053,6 +1053,11 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
         "option_drs_certificate_threshold_by_bucket": (local.get("selection", {}) or {}).get("option_drs_certificate_threshold_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {},
         "option_drs_certificate_max_gap_by_bucket": (local.get("selection", {}) or {}).get("option_drs_certificate_max_gap_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {},
         "option_drs_certificate_rec_slack_by_bucket": (local.get("selection", {}) or {}).get("option_drs_certificate_rec_slack_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {},
+        "relative_recovery_certificate": (local.get("selection", {}) or {}).get("relative_recovery_certificate", None) if isinstance(local.get("selection", {}), dict) else None,
+        "relative_recovery_certificate_by_bucket": (local.get("selection", {}) or {}).get("relative_recovery_certificate_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {},
+        "relative_recovery_min_rec_gain_by_bucket": (local.get("selection", {}) or {}).get("relative_recovery_min_rec_gain_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {},
+        "relative_recovery_min_drs_by_bucket": (local.get("selection", {}) or {}).get("relative_recovery_min_drs_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {},
+        "relative_recovery_max_gap_by_bucket": (local.get("selection", {}) or {}).get("relative_recovery_max_gap_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {},
     }
     result["notes"] = [
         "This is a true Waymax receding-horizon loop: reset once, select an action from current SimulatorState, step the environment, then replan from the updated SimulatorState.",

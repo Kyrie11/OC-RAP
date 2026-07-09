@@ -486,6 +486,11 @@ def evaluate(dataset: str | Path, checkpoint: str | Path | None = None, output: 
         "option_drs_certificate_threshold_by_bucket": (cfg.get("selection", {}) or {}).get("option_drs_certificate_threshold_by_bucket", {}) if isinstance(cfg.get("selection", {}), dict) else {},
         "option_drs_certificate_max_gap_by_bucket": (cfg.get("selection", {}) or {}).get("option_drs_certificate_max_gap_by_bucket", {}) if isinstance(cfg.get("selection", {}), dict) else {},
         "option_drs_certificate_rec_slack_by_bucket": (cfg.get("selection", {}) or {}).get("option_drs_certificate_rec_slack_by_bucket", {}) if isinstance(cfg.get("selection", {}), dict) else {},
+        "relative_recovery_certificate": (cfg.get("selection", {}) or {}).get("relative_recovery_certificate", None) if isinstance(cfg.get("selection", {}), dict) else None,
+        "relative_recovery_certificate_by_bucket": (cfg.get("selection", {}) or {}).get("relative_recovery_certificate_by_bucket", {}) if isinstance(cfg.get("selection", {}), dict) else {},
+        "relative_recovery_min_rec_gain_by_bucket": (cfg.get("selection", {}) or {}).get("relative_recovery_min_rec_gain_by_bucket", {}) if isinstance(cfg.get("selection", {}), dict) else {},
+        "relative_recovery_min_drs_by_bucket": (cfg.get("selection", {}) or {}).get("relative_recovery_min_drs_by_bucket", {}) if isinstance(cfg.get("selection", {}), dict) else {},
+        "relative_recovery_max_gap_by_bucket": (cfg.get("selection", {}) or {}).get("relative_recovery_max_gap_by_bucket", {}) if isinstance(cfg.get("selection", {}), dict) else {},
     }
     result["dataset_group_count"] = {k: len(v) for k, v in sorted(dataset_grouped.items())}
     result["per_dataset"] = {}

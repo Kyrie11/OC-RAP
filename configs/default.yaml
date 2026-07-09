@@ -197,6 +197,17 @@ selection:
   option_drs_certificate_rec_slack: 0.0
   option_drs_certificate_min_rec_lcb: -1000000000.0
   option_drs_certificate_counts_as_evidence: true
+  relative_recovery_certificate: false
+  relative_recovery_nominal_rec_lcb_max: -1000000000.0
+  relative_recovery_nominal_gap_min: 1000000000.0
+  relative_recovery_nominal_drs_max: -1.0
+  relative_recovery_min_rec_gain: 0.10
+  relative_recovery_min_drs: 0.70
+  relative_recovery_min_drs_gain: -1.0
+  relative_recovery_max_gap: -1.0
+  relative_recovery_max_gap_increase: 0.20
+  relative_recovery_bonus: 0.0
+  relative_recovery_counts_as_evidence: true
   safe_force_nominal_when_feasible: false
   safe_force_nominal_mode: feasible
   safe_cert_min_pred_drs: 0.95

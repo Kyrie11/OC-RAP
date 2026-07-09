@@ -1,8 +1,19 @@
 external_baselines:
+  baseline: postimpact_mpc_lite
   methods: [postimpact_mpc_lite]
   max_candidates: 24
   policy:
-    gamma_H: 0.0
-    gamma_D: 5.0
-    postimpact_stable_weight: 2.0
-    postimpact_rejoin_weight: 0.3
+    postimpact_gamma: 0.0
+    postimpact_dt: 0.1
+    postimpact_yaw_rate_weight: 1.4
+    postimpact_yaw_acc_weight: 0.15
+    postimpact_terminal_speed_weight: 0.45
+    postimpact_accel_weight: 0.08
+    postimpact_steer_weight: 0.08
+    postimpact_jerk_weight: 0.02
+    postimpact_hard_weight: 8.0
+    postimpact_harm_weight: 2.5
+    postimpact_rejoin_weight: 0.20
+    postimpact_shared_drs_weight: 3.0
+    postimpact_yaw_rate_gate: 2.2
+    postimpact_hard_gate: 0.0

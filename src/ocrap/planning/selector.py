@@ -217,6 +217,17 @@ def calibrated_constrained_select(
     option_drs_certificate_rec_slack: float = 0.0,
     option_drs_certificate_min_rec_lcb: float = -1.0e9,
     option_drs_certificate_counts_as_evidence: bool = True,
+    relative_recovery_certificate: bool = False,
+    relative_recovery_nominal_rec_lcb_max: float = -1.0e9,
+    relative_recovery_nominal_gap_min: float = 1.0e9,
+    relative_recovery_nominal_drs_max: float = -1.0,
+    relative_recovery_min_rec_gain: float = 0.10,
+    relative_recovery_min_drs: float = 0.70,
+    relative_recovery_min_drs_gain: float = -1.0,
+    relative_recovery_max_gap: float = -1.0,
+    relative_recovery_max_gap_increase: float = 0.20,
+    relative_recovery_bonus: float = 0.0,
+    relative_recovery_counts_as_evidence: bool = True,
 ) -> SelectionResult:
     """Soft calibrated OC-RAP selector.
 
@@ -265,7 +276,40 @@ def calibrated_constrained_select(
         option_certified &= rec_lcb >= float(gamma_rec) - float(option_drs_certificate_rec_slack)
         option_certified &= rec_lcb >= float(option_drs_certificate_min_rec_lcb)
 
-    admitted = scalar_admitted | option_certified
+    # v16 relative-recovery certificate.  The v15 result showed that a single
+    # absolute scalar/DRS threshold can still abstain throughout contact scenes
+    # where nominal is clearly low-headroom but one of the current candidates is
+    # relatively better.  This certificate is deliberately counterfactual: it is
+    # enabled only in a nominal-opportunity state, and it admits non-nominal
+    # prefixes that improve predicted deployable recovery over nominal while
+    # satisfying DRS and gap guards.  This keeps the method certifiable without
+    # returning to the v13 soft fallback.
+    relative_certified = np.zeros((n,), dtype=bool)
+    rec_gain_vs_nom = np.zeros((n,), dtype=float)
+    drs_gain_vs_nom = np.zeros((n,), dtype=float)
+    gap_reduction_vs_nom = np.zeros((n,), dtype=float)
+    if bool(relative_recovery_certificate) and 0 <= int(nominal_index) < n:
+        ni = int(nominal_index)
+        rec_gain_vs_nom = rec_lcb - rec_lcb[ni]
+        drs_gain_vs_nom = drs_proxy - drs_proxy[ni]
+        gap_reduction_vs_nom = gap[ni] - gap
+        nominal_opportunity = (
+            rec_lcb[ni] <= float(relative_recovery_nominal_rec_lcb_max)
+            or gap[ni] >= float(relative_recovery_nominal_gap_min)
+            or (float(relative_recovery_nominal_drs_max) >= 0.0 and drs_proxy[ni] <= float(relative_recovery_nominal_drs_max))
+        )
+        if bool(nominal_opportunity):
+            relative_certified = safe & (rec_gain_vs_nom >= float(relative_recovery_min_rec_gain))
+            relative_certified &= drs_proxy >= float(relative_recovery_min_drs)
+            if float(relative_recovery_min_drs_gain) >= 0.0:
+                relative_certified &= drs_gain_vs_nom >= float(relative_recovery_min_drs_gain)
+            if float(relative_recovery_max_gap) >= 0.0:
+                relative_certified &= gap <= float(relative_recovery_max_gap)
+            if float(relative_recovery_max_gap_increase) >= 0.0:
+                relative_certified &= gap <= gap[ni] + float(relative_recovery_max_gap_increase)
+            relative_certified[ni] = False
+
+    admitted = scalar_admitted | option_certified | relative_certified
     idxs = np.arange(n)
     intervention = (idxs != int(nominal_index)).astype(float)
     regime = (regime_name or "").lower()
@@ -285,6 +329,9 @@ def calibrated_constrained_select(
         + float(admission_bonus) * admitted.astype(float)
         + float(deployability_bonus) * drs_proxy
     )
+    if bool(relative_recovery_certificate) and float(relative_recovery_bonus) != 0.0:
+        rel_adv = np.maximum(0.0, rec_gain_vs_nom) + 0.25 * np.maximum(0.0, drs_gain_vs_nom) + 0.10 * np.maximum(0.0, gap_reduction_vs_nom)
+        score = score + float(relative_recovery_bonus) * rel_adv * relative_certified.astype(float)
     if is_contact_regime:
         score = score + float(contact_deployability_bonus) * drs_proxy - float(contact_gap_penalty) * gap
 
@@ -391,6 +438,8 @@ def calibrated_constrained_select(
             )
             if bool(option_drs_certificate_counts_as_evidence):
                 evidence = evidence | option_certified
+            if bool(relative_recovery_counts_as_evidence):
+                evidence = evidence | relative_certified
             certified_non_nom &= evidence
 
         if bool(certified_non_nom.any()):
@@ -509,10 +558,14 @@ def calibrated_constrained_select(
             return SelectionResult(int(nominal_index), "nominal_switch_margin_preserved", admitted)
 
     reason = "best_calibrated_admitted_score" if admitted[best_idx] else "best_calibrated_soft_constraint"
-    if admitted[best_idx] and option_certified[best_idx] and not scalar_admitted[best_idx]:
+    if admitted[best_idx] and relative_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx]:
+        reason = "best_relative_recovery_certified_score"
+    elif admitted[best_idx] and option_certified[best_idx] and not scalar_admitted[best_idx]:
         reason = "best_option_drs_certified_score"
     if bool(prefer_admitted) and bool((pool & admitted).any()) and admitted[best_idx]:
-        if option_certified[best_idx] and not scalar_admitted[best_idx]:
+        if relative_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx]:
+            reason = "best_relative_recovery_certified_prefer_admitted"
+        elif option_certified[best_idx] and not scalar_admitted[best_idx]:
             reason = "best_option_drs_certified_prefer_admitted"
         else:
             reason = "best_calibrated_prefer_admitted"
