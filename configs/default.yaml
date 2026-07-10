@@ -206,6 +206,11 @@ selection:
   relative_recovery_min_drs_gain: -1.0
   relative_recovery_max_gap: -1.0
   relative_recovery_max_gap_increase: 0.20
+  relative_recovery_min_gap_reduction: -1.0
+  relative_recovery_gate: rec_gain
+  relative_recovery_use_recovery_pool: false
+  recovery_cert_max_hard: 0.0
+  recovery_cert_max_harm: 5.0
   relative_recovery_bonus: 0.0
   relative_recovery_counts_as_evidence: true
   safe_force_nominal_when_feasible: false

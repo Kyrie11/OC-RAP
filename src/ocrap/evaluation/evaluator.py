@@ -491,6 +491,11 @@ def evaluate(dataset: str | Path, checkpoint: str | Path | None = None, output: 
         "relative_recovery_min_rec_gain_by_bucket": (cfg.get("selection", {}) or {}).get("relative_recovery_min_rec_gain_by_bucket", {}) if isinstance(cfg.get("selection", {}), dict) else {},
         "relative_recovery_min_drs_by_bucket": (cfg.get("selection", {}) or {}).get("relative_recovery_min_drs_by_bucket", {}) if isinstance(cfg.get("selection", {}), dict) else {},
         "relative_recovery_max_gap_by_bucket": (cfg.get("selection", {}) or {}).get("relative_recovery_max_gap_by_bucket", {}) if isinstance(cfg.get("selection", {}), dict) else {},
+        "relative_recovery_min_gap_reduction_by_bucket": (cfg.get("selection", {}) or {}).get("relative_recovery_min_gap_reduction_by_bucket", {}) if isinstance(cfg.get("selection", {}), dict) else {},
+        "relative_recovery_gate_by_bucket": (cfg.get("selection", {}) or {}).get("relative_recovery_gate_by_bucket", {}) if isinstance(cfg.get("selection", {}), dict) else {},
+        "relative_recovery_use_recovery_pool_by_bucket": (cfg.get("selection", {}) or {}).get("relative_recovery_use_recovery_pool_by_bucket", {}) if isinstance(cfg.get("selection", {}), dict) else {},
+        "recovery_cert_max_hard_by_bucket": (cfg.get("selection", {}) or {}).get("recovery_cert_max_hard_by_bucket", {}) if isinstance(cfg.get("selection", {}), dict) else {},
+        "recovery_cert_max_harm_by_bucket": (cfg.get("selection", {}) or {}).get("recovery_cert_max_harm_by_bucket", {}) if isinstance(cfg.get("selection", {}), dict) else {},
     }
     result["dataset_group_count"] = {k: len(v) for k, v in sorted(dataset_grouped.items())}
     result["per_dataset"] = {}

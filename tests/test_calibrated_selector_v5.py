@@ -132,3 +132,72 @@ def test_relative_recovery_certificate_admits_contact_opportunity_without_soft_f
     assert sel.selected_index == 1
     assert sel.admitted[1]
     assert sel.reason == "best_relative_recovery_certified_prefer_admitted"
+
+
+def test_relative_recovery_certificate_uses_recovery_pool_in_contact():
+    # Candidate 1 is a plausible post-contact recovery: it has a nominal hard-rule
+    # violation, so v16's `safe & ...` gate would reject it.  The v17 recovery
+    # pool allows it only under explicit contact-regime hard/harm bounds.
+    sel = calibrated_constrained_select(
+        utility=np.array([2.0, 0.6]),
+        r_dep=np.array([-1.0, -0.82]),
+        hard=np.array([0.0, 2.0]),
+        harm=np.array([0.0, 0.2]),
+        feasible=np.array([True, True]),
+        gamma_rec=0.2,
+        pred_gap=np.array([1.30, 1.10]),
+        pred_drs=np.array([0.70, 0.78]),
+        nominal_deviation=np.array([0.0, 0.4]),
+        regime_name="test_contact",
+        prefer_admitted=True,
+        require_admitted_intervention=True,
+        require_intervention_evidence=True,
+        relative_recovery_certificate=True,
+        relative_recovery_use_recovery_pool=True,
+        recovery_cert_max_hard=2.0,
+        recovery_cert_max_harm=1.0,
+        relative_recovery_nominal_rec_lcb_max=-0.5,
+        relative_recovery_nominal_gap_min=1.0,
+        relative_recovery_min_rec_gain=0.02,
+        relative_recovery_min_gap_reduction=0.05,
+        relative_recovery_gate="any_gain",
+        relative_recovery_min_drs=0.70,
+        relative_recovery_max_gap=1.35,
+        relative_recovery_max_gap_increase=0.20,
+    )
+    assert sel.selected_index == 1
+    assert sel.admitted[1]
+    assert sel.reason == "best_relative_recovery_certified_prefer_admitted"
+
+
+def test_relative_recovery_gap_dominance_can_rescue_overconfident_nominal():
+    # The model sometimes saturates DRS for a nominal action that has high gap and
+    # low teacher recovery.  A candidate that materially reduces the predicted
+    # oracle-deployability gap should be certifiable even when scalar R_dep gain is
+    # small, but only when the explicit dominance gate is requested.
+    sel = calibrated_constrained_select(
+        utility=np.array([5.0, 0.5]),
+        r_dep=np.array([-0.80, -0.79]),
+        hard=np.zeros(2),
+        harm=np.zeros(2),
+        feasible=np.array([True, True]),
+        gamma_rec=0.2,
+        pred_gap=np.array([1.50, 1.05]),
+        pred_drs=np.array([0.82, 0.83]),
+        nominal_deviation=np.array([0.0, 0.2]),
+        regime_name="test_contact",
+        prefer_admitted=True,
+        require_admitted_intervention=True,
+        require_intervention_evidence=True,
+        relative_recovery_certificate=True,
+        relative_recovery_nominal_rec_lcb_max=-0.5,
+        relative_recovery_nominal_gap_min=1.0,
+        relative_recovery_min_rec_gain=0.10,
+        relative_recovery_min_gap_reduction=0.20,
+        relative_recovery_gate="any_gain",
+        relative_recovery_min_drs=0.70,
+        relative_recovery_max_gap=1.35,
+        relative_recovery_max_gap_increase=0.20,
+    )
+    assert sel.selected_index == 1
+    assert sel.admitted[1]

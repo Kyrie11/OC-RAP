@@ -42,8 +42,14 @@ class ClosedLoopDecision:
     selected_artifact: bool | None
     audit_candidate_count: int | None
     audit_best_candidate_index: int | None
+    audit_best_macro: str | None
     audit_best_teacher_r_dep: float | None
     audit_best_drs: float | None
+    audit_best_pred_r_dep: float | None
+    audit_best_pred_gap: float | None
+    audit_best_pred_drs: float | None
+    audit_best_hard: float | None
+    audit_best_harm: float | None
     audit_selected_r_dep_regret: float | None
     audit_has_recoverable_candidate: bool | None
     audit_selector_miss: bool | None
@@ -635,8 +641,14 @@ def _rollout_one_scene(
         selected_audit_pcds = None
         audit_candidate_count = None
         audit_best_candidate_index = None
+        audit_best_macro = None
         audit_best_teacher_r_dep = None
         audit_best_drs = None
+        audit_best_pred_r_dep = None
+        audit_best_pred_gap = None
+        audit_best_pred_drs = None
+        audit_best_hard = None
+        audit_best_harm = None
         audit_selected_r_dep_regret = None
         audit_has_recoverable_candidate = None
         audit_selector_miss = None
@@ -685,10 +697,8 @@ def _rollout_one_scene(
                     best_r = -float("inf")
                     best_drs = None
                     best_cid = None
-                    pred_q_by_cid = {
-                        int(getattr(item["sample"], "candidate_index", i)): item["pred"].q
-                        for i, item in enumerate(info.get("items", []))
-                    }
+                    item_by_cid = {int(getattr(item["sample"], "candidate_index", i)): (i, item) for i, item in enumerate(info.get("items", []))}
+                    pred_q_by_cid = {cid: item["pred"].q for cid, (_, item) in item_by_cid.items()}
                     selected_pred_q = info["items"][sel_idx]["pred"].q
                     for lab in labeled:
                         ld = lab.to_npz_dict()
@@ -714,6 +724,15 @@ def _rollout_one_scene(
                         audit_best_candidate_index = int(best_cid)
                         audit_best_teacher_r_dep = float(best_r)
                         audit_best_drs = None if best_drs is None else float(best_drs)
+                        bi_item = item_by_cid.get(int(best_cid), None)
+                        if bi_item is not None:
+                            bi, bit = bi_item
+                            audit_best_macro = str(getattr(getattr(bit.get("sample"), "prefix", None), "macro_name", "")) or None
+                            audit_best_pred_r_dep = _safe_optional_float(info.get("pred_r_dep", [])[bi])
+                            audit_best_pred_gap = _safe_optional_float(info.get("pred_gap", [])[bi])
+                            audit_best_pred_drs = _safe_optional_float(info.get("pred_drs", [])[bi])
+                            audit_best_hard = _safe_optional_float(bit.get("data", {}).get("hard_violation", None))
+                            audit_best_harm = _safe_optional_float(bit.get("data", {}).get("harm_proxy", None))
                         audit_selected_r_dep_regret = float(best_r - selected_r_dep_star)
                         audit_has_recoverable_candidate = bool(best_r >= 0.0)
                         audit_selector_miss = bool(selected_r_dep_star < 0.0 and best_r >= 0.0)
@@ -775,8 +794,14 @@ def _rollout_one_scene(
                 selected_artifact=selected_artifact,
                 audit_candidate_count=audit_candidate_count,
                 audit_best_candidate_index=audit_best_candidate_index,
+                audit_best_macro=audit_best_macro,
                 audit_best_teacher_r_dep=audit_best_teacher_r_dep,
                 audit_best_drs=audit_best_drs,
+                audit_best_pred_r_dep=audit_best_pred_r_dep,
+                audit_best_pred_gap=audit_best_pred_gap,
+                audit_best_pred_drs=audit_best_pred_drs,
+                audit_best_hard=audit_best_hard,
+                audit_best_harm=audit_best_harm,
                 audit_selected_r_dep_regret=audit_selected_r_dep_regret,
                 audit_has_recoverable_candidate=audit_has_recoverable_candidate,
                 audit_selector_miss=audit_selector_miss,
@@ -1058,6 +1083,11 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
         "relative_recovery_min_rec_gain_by_bucket": (local.get("selection", {}) or {}).get("relative_recovery_min_rec_gain_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {},
         "relative_recovery_min_drs_by_bucket": (local.get("selection", {}) or {}).get("relative_recovery_min_drs_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {},
         "relative_recovery_max_gap_by_bucket": (local.get("selection", {}) or {}).get("relative_recovery_max_gap_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {},
+        "relative_recovery_min_gap_reduction_by_bucket": (local.get("selection", {}) or {}).get("relative_recovery_min_gap_reduction_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {},
+        "relative_recovery_gate_by_bucket": (local.get("selection", {}) or {}).get("relative_recovery_gate_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {},
+        "relative_recovery_use_recovery_pool_by_bucket": (local.get("selection", {}) or {}).get("relative_recovery_use_recovery_pool_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {},
+        "recovery_cert_max_hard_by_bucket": (local.get("selection", {}) or {}).get("recovery_cert_max_hard_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {},
+        "recovery_cert_max_harm_by_bucket": (local.get("selection", {}) or {}).get("recovery_cert_max_harm_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {},
     }
     result["notes"] = [
         "This is a true Waymax receding-horizon loop: reset once, select an action from current SimulatorState, step the environment, then replan from the updated SimulatorState.",

@@ -226,6 +226,11 @@ def calibrated_constrained_select(
     relative_recovery_min_drs_gain: float = -1.0,
     relative_recovery_max_gap: float = -1.0,
     relative_recovery_max_gap_increase: float = 0.20,
+    relative_recovery_min_gap_reduction: float = -1.0,
+    relative_recovery_gate: str = "rec_gain",
+    relative_recovery_use_recovery_pool: bool = False,
+    recovery_cert_max_hard: float = 0.0,
+    recovery_cert_max_harm: float | None = None,
     relative_recovery_bonus: float = 0.0,
     relative_recovery_counts_as_evidence: bool = True,
 ) -> SelectionResult:
@@ -257,6 +262,19 @@ def calibrated_constrained_select(
 
     rec_lcb = r_dep - float(lcb_beta) * gap
     safe = feasible & (hard <= float(gamma_H)) & (harm <= float(gamma_D))
+
+    # CRISP's nominal admission uses hard-rule/harm feasibility.  In near-contact
+    # and post-contact regimes, however, the *recovery* prefix may deliberately
+    # violate a nominal lane/comfort rule while reducing deployable recovery loss
+    # (e.g. stabilize after contact, pull over, or brake/yield into a low-utility
+    # state).  Keep scalar admission strict, but optionally allow relative
+    # recovery certificates to use a regime-specific recovery-feasibility pool.
+    recovery_hard_limit = float(gamma_H)
+    if bool(relative_recovery_use_recovery_pool):
+        recovery_hard_limit = max(float(gamma_H), float(recovery_cert_max_hard))
+    recovery_harm_limit = float(gamma_D) if recovery_cert_max_harm is None else float(recovery_cert_max_harm)
+    recovery_safe = feasible & (hard <= recovery_hard_limit) & (harm <= recovery_harm_limit)
+
     scalar_admitted = safe & (rec_lcb >= float(gamma_rec))
 
     # v15 dual certificate.  The scalar OC-MERO LCB can be overly pessimistic
@@ -299,9 +317,35 @@ def calibrated_constrained_select(
             or (float(relative_recovery_nominal_drs_max) >= 0.0 and drs_proxy[ni] <= float(relative_recovery_nominal_drs_max))
         )
         if bool(nominal_opportunity):
-            relative_certified = safe & (rec_gain_vs_nom >= float(relative_recovery_min_rec_gain))
-            relative_certified &= drs_proxy >= float(relative_recovery_min_drs)
+            # v17: use a dominance-style relative certificate instead of only an
+            # absolute rec-LCB gain.  The v16 audits showed that nominal can be
+            # falsely overconfident in contact scenes: recoverable alternatives
+            # exist, but many are blocked because the scalar head is conservative
+            # or because the maneuver has a nominal hard-rule flag.  A relative
+            # recovery certificate is valid when it is observation-consistent,
+            # has enough predicted shared-option success, does not create an
+            # excessive oracle--deployability gap, and improves at least one
+            # deployability axis over nominal (recovery LCB, DRS proxy, or gap).
+            base_pool = recovery_safe if bool(relative_recovery_use_recovery_pool) else safe
+            rec_ok = rec_gain_vs_nom >= float(relative_recovery_min_rec_gain)
+            drs_gain_ok = np.zeros((n,), dtype=bool)
             if float(relative_recovery_min_drs_gain) >= 0.0:
+                drs_gain_ok = drs_gain_vs_nom >= float(relative_recovery_min_drs_gain)
+            gap_ok_gain = np.zeros((n,), dtype=bool)
+            if float(relative_recovery_min_gap_reduction) >= 0.0:
+                gap_ok_gain = gap_reduction_vs_nom >= float(relative_recovery_min_gap_reduction)
+            gate = str(relative_recovery_gate or "rec_gain").strip().lower()
+            if gate in {"any", "any_gain", "dominance", "or"}:
+                improvement_ok = rec_ok | drs_gain_ok | gap_ok_gain
+            elif gate in {"two", "two_of_three", "2of3"}:
+                improvement_ok = (rec_ok.astype(int) + drs_gain_ok.astype(int) + gap_ok_gain.astype(int)) >= 2
+            elif gate in {"rec_or_gap", "headroom_or_gap"}:
+                improvement_ok = rec_ok | gap_ok_gain
+            else:
+                improvement_ok = rec_ok
+            relative_certified = base_pool & improvement_ok
+            relative_certified &= drs_proxy >= float(relative_recovery_min_drs)
+            if float(relative_recovery_min_drs_gain) >= 0.0 and gate not in {"any", "any_gain", "dominance", "or", "two", "two_of_three", "2of3"}:
                 relative_certified &= drs_gain_vs_nom >= float(relative_recovery_min_drs_gain)
             if float(relative_recovery_max_gap) >= 0.0:
                 relative_certified &= gap <= float(relative_recovery_max_gap)
@@ -416,7 +460,11 @@ def calibrated_constrained_select(
             certified_intervention &= drs_proxy >= float(intervention_min_pred_drs)
         if float(intervention_max_pred_gap) >= 0.0:
             certified_intervention &= gap <= float(intervention_max_pred_gap)
-        certified_intervention &= pool
+        # For relative recovery in post-contact/near-contact regimes, a certified
+        # recovery maneuver may lie outside the nominal hard-rule pool (e.g. a
+        # stabilization/pull-over action).  Do not discard such a candidate after
+        # certifying it via the explicit recovery pool above.
+        certified_intervention &= (pool | relative_certified)
         certified_non_nom = certified_intervention.copy()
         if 0 <= nominal_index < n:
             certified_non_nom[int(nominal_index)] = False
@@ -562,7 +610,8 @@ def calibrated_constrained_select(
         reason = "best_relative_recovery_certified_score"
     elif admitted[best_idx] and option_certified[best_idx] and not scalar_admitted[best_idx]:
         reason = "best_option_drs_certified_score"
-    if bool(prefer_admitted) and bool((pool & admitted).any()) and admitted[best_idx]:
+    admitted_rank_pool = pool | relative_certified
+    if bool(prefer_admitted) and bool((admitted_rank_pool & admitted).any()) and admitted[best_idx]:
         if relative_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx]:
             reason = "best_relative_recovery_certified_prefer_admitted"
         elif option_certified[best_idx] and not scalar_admitted[best_idx]:
