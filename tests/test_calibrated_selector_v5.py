@@ -201,3 +201,79 @@ def test_relative_recovery_gap_dominance_can_rescue_overconfident_nominal():
     )
     assert sel.selected_index == 1
     assert sel.admitted[1]
+
+def test_v18_relative_certificate_requires_drs_gain_when_configured():
+    utility = np.array([0.0, -0.1, -0.2], dtype=float)
+    r_dep = np.array([-0.70, -0.65, -0.68], dtype=float)
+    hard = np.zeros(3, dtype=float)
+    harm = np.zeros(3, dtype=float)
+    feasible = np.ones(3, dtype=bool)
+    gap = np.array([1.20, 1.00, 0.90], dtype=float)
+    drs = np.array([0.80, 0.79, 0.83], dtype=float)
+    sel = calibrated_constrained_select(
+        utility, r_dep, hard, harm, feasible,
+        gamma_rec=0.0, gamma_H=0.0, gamma_D=0.0,
+        pred_gap=gap, pred_drs=drs,
+        lcb_beta=0.1,
+        prefer_admitted=True,
+        require_admitted_intervention=True,
+        relative_recovery_certificate=True,
+        relative_recovery_use_recovery_pool=True,
+        relative_recovery_nominal_gap_min=1.0,
+        relative_recovery_gate="drs_or_gap",
+        relative_recovery_min_drs=0.60,
+        relative_recovery_min_drs_gain=0.02,
+        relative_recovery_max_drs_drop=0.0,
+        relative_recovery_max_gap=1.50,
+        relative_recovery_max_gap_increase=0.50,
+        relative_recovery_min_gap_reduction=0.05,
+        relative_recovery_min_rec_gain=0.0,
+        recovery_cert_max_hard=2.0,
+        recovery_cert_max_harm=2.0,
+        intervention_min_pred_drs=0.60,
+        intervention_max_pred_gap=1.50,
+        require_intervention_evidence=True,
+        relative_recovery_counts_as_evidence=True,
+        unadmitted_fallback_to_nominal=True,
+    )
+    # Candidate 1 closes the gap but lowers DRS, so it is blocked; candidate 2
+    # improves DRS and is certified.
+    assert sel.selected_index == 2
+    assert "relative_recovery" in sel.reason
+
+
+def test_v18_relative_certificate_abstains_when_only_gap_improves_but_drs_drops():
+    utility = np.array([0.0, 1.0], dtype=float)
+    r_dep = np.array([-0.70, -0.65], dtype=float)
+    hard = np.zeros(2, dtype=float)
+    harm = np.zeros(2, dtype=float)
+    feasible = np.ones(2, dtype=bool)
+    gap = np.array([1.20, 0.80], dtype=float)
+    drs = np.array([0.80, 0.75], dtype=float)
+    sel = calibrated_constrained_select(
+        utility, r_dep, hard, harm, feasible,
+        gamma_rec=0.0, gamma_H=0.0, gamma_D=0.0,
+        pred_gap=gap, pred_drs=drs,
+        lcb_beta=0.1,
+        prefer_admitted=True,
+        require_admitted_intervention=True,
+        relative_recovery_certificate=True,
+        relative_recovery_use_recovery_pool=True,
+        relative_recovery_nominal_gap_min=1.0,
+        relative_recovery_gate="drs_or_gap",
+        relative_recovery_min_drs=0.60,
+        relative_recovery_min_drs_gain=0.01,
+        relative_recovery_max_drs_drop=0.0,
+        relative_recovery_max_gap=1.50,
+        relative_recovery_max_gap_increase=0.50,
+        relative_recovery_min_gap_reduction=0.05,
+        recovery_cert_max_hard=2.0,
+        recovery_cert_max_harm=2.0,
+        intervention_min_pred_drs=0.60,
+        intervention_max_pred_gap=1.50,
+        require_intervention_evidence=True,
+        relative_recovery_counts_as_evidence=True,
+        unadmitted_fallback_to_nominal=True,
+    )
+    assert sel.selected_index == 0
+    assert sel.reason == "nominal_no_certified_intervention_preserved"

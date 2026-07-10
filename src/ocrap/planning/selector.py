@@ -224,6 +224,9 @@ def calibrated_constrained_select(
     relative_recovery_min_rec_gain: float = 0.10,
     relative_recovery_min_drs: float = 0.70,
     relative_recovery_min_drs_gain: float = -1.0,
+    relative_recovery_max_drs_drop: float = -1.0,
+    relative_recovery_max_rec_lcb_drop: float = -1.0,
+    relative_recovery_min_improvement_axes: int = 1,
     relative_recovery_max_gap: float = -1.0,
     relative_recovery_max_gap_increase: float = 0.20,
     relative_recovery_min_gap_reduction: float = -1.0,
@@ -335,18 +338,40 @@ def calibrated_constrained_select(
             if float(relative_recovery_min_gap_reduction) >= 0.0:
                 gap_ok_gain = gap_reduction_vs_nom >= float(relative_recovery_min_gap_reduction)
             gate = str(relative_recovery_gate or "rec_gain").strip().lower()
+            # v18: Pareto lower-envelope certificate.  v17's rec_or_gap gate
+            # improved contact audits, but it could certify a recovery prefix that
+            # merely reduced predicted gap while lowering the shared deployability
+            # proxy.  That created offline false admissions and one bad contact
+            # pull-over.  The certificate below separates *which axis shows
+            # opportunity* from *which axes must not deteriorate*: a candidate may
+            # be admitted by recovery, DRS, or gap improvement, but configurable
+            # non-inferiority guards keep it on the deployability Pareto frontier
+            # relative to nominal.
+            improve_count = rec_ok.astype(int) + drs_gain_ok.astype(int) + gap_ok_gain.astype(int)
             if gate in {"any", "any_gain", "dominance", "or"}:
-                improvement_ok = rec_ok | drs_gain_ok | gap_ok_gain
+                improvement_ok = improve_count >= max(1, int(relative_recovery_min_improvement_axes))
             elif gate in {"two", "two_of_three", "2of3"}:
-                improvement_ok = (rec_ok.astype(int) + drs_gain_ok.astype(int) + gap_ok_gain.astype(int)) >= 2
+                improvement_ok = improve_count >= max(2, int(relative_recovery_min_improvement_axes))
             elif gate in {"rec_or_gap", "headroom_or_gap"}:
                 improvement_ok = rec_ok | gap_ok_gain
+            elif gate in {"drs", "drs_gain", "shared_option"}:
+                improvement_ok = drs_gain_ok
+            elif gate in {"drs_or_gap", "shared_or_gap"}:
+                improvement_ok = drs_gain_ok | gap_ok_gain
+            elif gate in {"pareto", "pareto_lcb", "pareto_frontier"}:
+                improvement_ok = improve_count >= max(1, int(relative_recovery_min_improvement_axes))
             else:
                 improvement_ok = rec_ok
             relative_certified = base_pool & improvement_ok
             relative_certified &= drs_proxy >= float(relative_recovery_min_drs)
-            if float(relative_recovery_min_drs_gain) >= 0.0 and gate not in {"any", "any_gain", "dominance", "or", "two", "two_of_three", "2of3"}:
+            # DRS non-inferiority can now be enforced for every gate.  Setting the
+            # gain threshold negative preserves the old behavior.
+            if float(relative_recovery_min_drs_gain) >= 0.0:
                 relative_certified &= drs_gain_vs_nom >= float(relative_recovery_min_drs_gain)
+            if float(relative_recovery_max_drs_drop) >= 0.0:
+                relative_certified &= drs_gain_vs_nom >= -float(relative_recovery_max_drs_drop)
+            if float(relative_recovery_max_rec_lcb_drop) >= 0.0:
+                relative_certified &= rec_gain_vs_nom >= -float(relative_recovery_max_rec_lcb_drop)
             if float(relative_recovery_max_gap) >= 0.0:
                 relative_certified &= gap <= float(relative_recovery_max_gap)
             if float(relative_recovery_max_gap_increase) >= 0.0:

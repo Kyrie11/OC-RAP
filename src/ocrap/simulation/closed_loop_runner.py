@@ -859,6 +859,9 @@ def _rollout_one_scene(
         "intervention_rate": _mean_finite([float(d.selected_candidate_index != 0) for d in decisions], default=0.0),
         "metric_summary": metric_summary,
         "macro_counts": {m: int(sum(d.selected_macro == m for d in decisions)) for m in sorted({d.selected_macro for d in decisions})},
+        "audit_best_macro_counts": {m: int(sum(d.audit_best_macro == m for d in decisions)) for m in sorted({d.audit_best_macro for d in decisions if d.audit_best_macro is not None})},
+        "audit_miss_best_macro_counts": {m: int(sum((d.audit_selector_miss is True) and d.audit_best_macro == m for d in decisions)) for m in sorted({d.audit_best_macro for d in decisions if d.audit_best_macro is not None})},
+        "audit_miss_selected_macro_counts": {m: int(sum((d.audit_selector_miss is True) and d.selected_macro == m for d in decisions)) for m in sorted({d.selected_macro for d in decisions})},
         "selection_reason_counts": {r: int(sum(d.selection_reason == r for d in decisions)) for r in sorted({d.selection_reason for d in decisions})},
         "decisions": decision_dicts,
     }
@@ -886,12 +889,24 @@ def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, s
         agg["waymax_metrics"][mk] = _mean_finite(vals, default=0.0)
     macro_counts: dict[str, int] = {}
     reason_counts: dict[str, int] = {}
+    audit_best_macro_counts: dict[str, int] = {}
+    audit_miss_best_macro_counts: dict[str, int] = {}
+    audit_miss_selected_macro_counts: dict[str, int] = {}
     for s in scene_results:
         for m, c in (s.get("macro_counts", {}) or {}).items():
             macro_counts[m] = macro_counts.get(m, 0) + int(c)
+        for m, c in (s.get("audit_best_macro_counts", {}) or {}).items():
+            audit_best_macro_counts[m] = audit_best_macro_counts.get(m, 0) + int(c)
+        for m, c in (s.get("audit_miss_best_macro_counts", {}) or {}).items():
+            audit_miss_best_macro_counts[m] = audit_miss_best_macro_counts.get(m, 0) + int(c)
+        for m, c in (s.get("audit_miss_selected_macro_counts", {}) or {}).items():
+            audit_miss_selected_macro_counts[m] = audit_miss_selected_macro_counts.get(m, 0) + int(c)
         for r, c in (s.get("selection_reason_counts", {}) or {}).items():
             reason_counts[r] = reason_counts.get(r, 0) + int(c)
     agg["macro_counts"] = macro_counts
+    agg["audit_best_macro_counts"] = audit_best_macro_counts
+    agg["audit_miss_best_macro_counts"] = audit_miss_best_macro_counts
+    agg["audit_miss_selected_macro_counts"] = audit_miss_selected_macro_counts
     agg["selection_reason_counts"] = reason_counts
     return agg
 
