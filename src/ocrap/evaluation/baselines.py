@@ -175,6 +175,7 @@ def select_baseline(
     pred_gap: np.ndarray | None = None,
     nominal_deviation: np.ndarray | None = None,
     pred_drs: np.ndarray | None = None,
+    candidate_macro_names=None,
 ) -> BaselineSelection:
     """Select one candidate with a paper-baseline-style rule.
 
@@ -276,6 +277,11 @@ def select_baseline(
                 recovery_cert_max_harm=_cfg_float(scfg, "recovery_cert_max_harm", gamma_D, bucket_name),
                 relative_recovery_bonus=_cfg_float(scfg, "relative_recovery_bonus", 0.0, bucket_name),
                 relative_recovery_counts_as_evidence=_cfg_bool(scfg, "relative_recovery_counts_as_evidence", True, bucket_name),
+                candidate_macro_names=candidate_macro_names,
+                relative_recovery_macro_allowlist=_cfg_value(scfg, "relative_recovery_macro_allowlist", "", bucket_name),
+                relative_recovery_macro_blocklist=_cfg_value(scfg, "relative_recovery_macro_blocklist", "", bucket_name),
+                relative_recovery_require_macro=_cfg_bool(scfg, "relative_recovery_require_macro", False, bucket_name),
+                relative_recovery_max_intervention_score_gain=_cfg_float(scfg, "relative_recovery_max_intervention_score_gain", -1.0, bucket_name),
                 safe_cert_min_pred_drs=_cfg_float(scfg, "safe_cert_min_pred_drs", 0.95, bucket_name),
                 safe_cert_max_pred_gap=_cfg_float(scfg, "safe_cert_max_pred_gap", 0.20, bucket_name),
                 safe_cert_rec_slack=_cfg_float(scfg, "safe_cert_rec_slack", 0.15, bucket_name),

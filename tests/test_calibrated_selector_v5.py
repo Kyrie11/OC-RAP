@@ -277,3 +277,75 @@ def test_v18_relative_certificate_abstains_when_only_gap_improves_but_drs_drops(
     )
     assert sel.selected_index == 0
     assert sel.reason == "nominal_no_certified_intervention_preserved"
+
+
+def test_v19_relative_recovery_blocks_nominal_like_macro_even_when_certificate_passes():
+    sel = calibrated_constrained_select(
+        utility=np.array([0.0, 2.0, 0.1], dtype=float),
+        r_dep=np.array([-0.70, -0.62, -0.66], dtype=float),
+        hard=np.zeros(3, dtype=float),
+        harm=np.zeros(3, dtype=float),
+        feasible=np.ones(3, dtype=bool),
+        gamma_rec=0.0, gamma_H=0.0, gamma_D=0.0,
+        pred_gap=np.array([1.20, 0.90, 1.00], dtype=float),
+        pred_drs=np.array([0.80, 0.84, 0.83], dtype=float),
+        nominal_deviation=np.array([0.0, 0.1, 0.1], dtype=float),
+        candidate_macro_names=["nominal", "perturb_nominal", "brake"],
+        prefer_admitted=True,
+        require_admitted_intervention=True,
+        require_intervention_evidence=True,
+        relative_recovery_certificate=True,
+        relative_recovery_use_recovery_pool=True,
+        relative_recovery_nominal_gap_min=1.0,
+        relative_recovery_gate="drs_or_gap",
+        relative_recovery_min_drs=0.60,
+        relative_recovery_min_drs_gain=0.02,
+        relative_recovery_min_gap_reduction=0.05,
+        recovery_cert_max_hard=2.0,
+        recovery_cert_max_harm=2.0,
+        intervention_min_pred_drs=0.60,
+        intervention_max_pred_gap=1.50,
+        relative_recovery_macro_blocklist="perturb_nominal,keep,pull_over",
+        relative_recovery_require_macro=True,
+        relative_recovery_counts_as_evidence=True,
+        relative_recovery_bonus=1.0,
+        unadmitted_fallback_to_nominal=True,
+    )
+    assert sel.selected_index == 2
+    assert sel.admitted[2]
+    assert not sel.admitted[1]
+    assert "relative_recovery" in sel.reason
+
+
+def test_v19_relative_recovery_macro_allowlist_abstains_without_recovery_macro():
+    sel = calibrated_constrained_select(
+        utility=np.array([0.0, 2.0], dtype=float),
+        r_dep=np.array([-0.70, -0.62], dtype=float),
+        hard=np.zeros(2, dtype=float),
+        harm=np.zeros(2, dtype=float),
+        feasible=np.ones(2, dtype=bool),
+        gamma_rec=0.0, gamma_H=0.0, gamma_D=0.0,
+        pred_gap=np.array([1.20, 0.90], dtype=float),
+        pred_drs=np.array([0.80, 0.84], dtype=float),
+        candidate_macro_names=["nominal", "perturb_nominal"],
+        prefer_admitted=True,
+        require_admitted_intervention=True,
+        require_intervention_evidence=True,
+        relative_recovery_certificate=True,
+        relative_recovery_use_recovery_pool=True,
+        relative_recovery_nominal_gap_min=1.0,
+        relative_recovery_gate="drs_or_gap",
+        relative_recovery_min_drs=0.60,
+        relative_recovery_min_drs_gain=0.02,
+        relative_recovery_min_gap_reduction=0.05,
+        recovery_cert_max_hard=2.0,
+        recovery_cert_max_harm=2.0,
+        intervention_min_pred_drs=0.60,
+        intervention_max_pred_gap=1.50,
+        relative_recovery_macro_allowlist="brake,stabilize,yield,merge",
+        relative_recovery_require_macro=True,
+        relative_recovery_counts_as_evidence=True,
+        unadmitted_fallback_to_nominal=True,
+    )
+    assert sel.selected_index == 0
+    assert sel.reason == "nominal_no_certified_intervention_preserved"

@@ -347,6 +347,7 @@ def _evaluate_grouped_items(grouped: dict[tuple, list[dict]], methods: list[str]
         gamma_i = _gamma_for_dataset(gamma, cfg, dataset_label)
         drs_gamma_i = _drs_success_gamma_for_dataset(gamma_i, cfg, dataset_label)
         pred_drs = np.array([predicted_shared_option_success(x["pred"].q, x["pred"].root_probs, gamma=drs_gamma_i, root_valid=x["data"].get("root_valid", None), option_valid=x["data"].get("option_valid", None)) for x in items])
+        macro_names = [str(np.asarray(x["data"].get("prefix_macro_name", "")).item() if np.asarray(x["data"].get("prefix_macro_name", "")).shape == () else x["data"].get("prefix_macro_name", "")) for x in items]
         teacher_r_dep = np.array([float(np.asarray(x["data"]["r_dep_star"]).item()) for x in items])
         teacher_r_orc = np.array([float(np.asarray(x["data"]["r_orc_star"]).item()) for x in items])
         hard = np.array([float(np.asarray(x["data"].get("hard_violation", 0.0)).item()) for x in items])
@@ -368,6 +369,7 @@ def _evaluate_grouped_items(grouped: dict[tuple, list[dict]], methods: list[str]
                 pred_gap=pred_gap,
                 nominal_deviation=nominal_deviation,
                 pred_drs=pred_drs,
+                candidate_macro_names=macro_names,
             )
             selected_index = int(sel.selected_index)
             chosen = items[selected_index]

@@ -368,6 +368,7 @@ def _select_prefix(
     active_bucket = str(sel_tmp.get("active_bucket_name", sel_tmp.get("regime_name", "")) or "")
     drs_gamma = _drs_success_gamma_for_bucket(gamma, cfg, active_bucket)
     pred_drs = np.asarray([predicted_shared_option_success(x["pred"].q, x["pred"].root_probs, gamma=drs_gamma, root_valid=x["data"].get("root_valid", None), option_valid=x["data"].get("option_valid", None)) for x in items], dtype=np.float32)
+    macro_names = [str(x["data"].get("prefix_macro_name", "")) for x in items]
     nominal_deviation = _prefix_nominal_deviation(samples)
     if compute_teacher_labels:
         teacher_r_dep = np.asarray([_safe_float(x["data"].get("r_dep_star", 0.0)) for x in items], dtype=np.float32)
@@ -396,6 +397,7 @@ def _select_prefix(
         pred_gap=pred_gap,
         nominal_deviation=nominal_deviation,
         pred_drs=pred_drs,
+        candidate_macro_names=macro_names,
     )
     idx = int(selected.selected_index)
     chosen = items[idx]

@@ -38,6 +38,39 @@ def _as_1d_float(x: np.ndarray | None, n: int, default: float = 0.0) -> np.ndarr
     return np.where(np.isfinite(arr[:n]), arr[:n], float(default))
 
 
+def _split_name_set(value) -> set[str]:
+    """Parse a comma/space separated macro-name config into a normalized set.
+
+    The selector normally operates on numeric certificates.  v18 showed that
+    certificate-only relative recovery can admit `perturb_nominal` and `keep` as
+    if they were post-contact recovery maneuvers.  Name sets let the experiment
+    explicitly define which non-nominal macro families are allowed to use the
+    recovery-feasibility pool, without affecting ordinary scalar admission.
+    """
+    if value is None:
+        return set()
+    if isinstance(value, (list, tuple, set)):
+        raw = []
+        for x in value:
+            raw.extend(str(x).replace(";", ",").replace("|", ",").split(","))
+    else:
+        raw = str(value).replace(";", ",").replace("|", ",").replace(" ", ",").split(",")
+    return {str(x).strip().lower() for x in raw if str(x).strip()}
+
+
+def _as_macro_names(candidate_macro_names, n: int) -> list[str]:
+    if candidate_macro_names is None:
+        return [""] * int(n)
+    try:
+        vals = list(candidate_macro_names)
+    except TypeError:
+        vals = [candidate_macro_names]
+    out = [str(x).strip().lower() for x in vals[:n]]
+    if len(out) < n:
+        out.extend([""] * (n - len(out)))
+    return out
+
+
 def constrained_lcb_select(
     utility: np.ndarray,
     r_dep: np.ndarray,
@@ -236,6 +269,11 @@ def calibrated_constrained_select(
     recovery_cert_max_harm: float | None = None,
     relative_recovery_bonus: float = 0.0,
     relative_recovery_counts_as_evidence: bool = True,
+    candidate_macro_names=None,
+    relative_recovery_macro_allowlist=None,
+    relative_recovery_macro_blocklist=None,
+    relative_recovery_require_macro: bool = False,
+    relative_recovery_max_intervention_score_gain: float = -1.0,
 ) -> SelectionResult:
     """Soft calibrated OC-RAP selector.
 
@@ -262,6 +300,7 @@ def calibrated_constrained_select(
     gap = np.maximum(0.0, _as_1d_float(pred_gap, n, default=0.0))
     dev = np.maximum(0.0, _as_1d_float(nominal_deviation, n, default=0.0))
     drs_proxy = np.clip(_as_1d_float(pred_drs, n, default=0.0), 0.0, 1.0)
+    macro_names = _as_macro_names(candidate_macro_names, n)
 
     rec_lcb = r_dep - float(lcb_beta) * gap
     safe = feasible & (hard <= float(gamma_H)) & (harm <= float(gamma_D))
@@ -362,7 +401,17 @@ def calibrated_constrained_select(
                 improvement_ok = improve_count >= max(1, int(relative_recovery_min_improvement_axes))
             else:
                 improvement_ok = rec_ok
-            relative_certified = base_pool & improvement_ok
+            macro_allow = _split_name_set(relative_recovery_macro_allowlist)
+            macro_block = _split_name_set(relative_recovery_macro_blocklist)
+            macro_mask = np.ones((n,), dtype=bool)
+            if macro_allow:
+                macro_mask &= np.asarray([m in macro_allow for m in macro_names], dtype=bool)
+            if macro_block:
+                macro_mask &= ~np.asarray([m in macro_block for m in macro_names], dtype=bool)
+            if bool(relative_recovery_require_macro):
+                macro_mask &= np.asarray([bool(m) for m in macro_names], dtype=bool)
+
+            relative_certified = base_pool & improvement_ok & macro_mask
             relative_certified &= drs_proxy >= float(relative_recovery_min_drs)
             # DRS non-inferiority can now be enforced for every gate.  Setting the
             # gain threshold negative preserves the old behavior.
@@ -376,6 +425,11 @@ def calibrated_constrained_select(
                 relative_certified &= gap <= float(relative_recovery_max_gap)
             if float(relative_recovery_max_gap_increase) >= 0.0:
                 relative_certified &= gap <= gap[ni] + float(relative_recovery_max_gap_increase)
+            # v19: relative recovery is not an aggressive trigger.  When enabled,
+            # reject candidates whose final learned score advantage is so large
+            # that the decision is effectively a utility/deployability bonus rather
+            # than a recovery-certificate decision.  The score itself is computed
+            # below, so this guard is applied later after score construction.
             relative_certified[ni] = False
 
     admitted = scalar_admitted | option_certified | relative_certified
@@ -403,6 +457,13 @@ def calibrated_constrained_select(
         score = score + float(relative_recovery_bonus) * rel_adv * relative_certified.astype(float)
     if is_contact_regime:
         score = score + float(contact_deployability_bonus) * drs_proxy - float(contact_gap_penalty) * gap
+
+    if bool(relative_recovery_certificate) and float(relative_recovery_max_intervention_score_gain) >= 0.0 and 0 <= int(nominal_index) < n:
+        # Cap the admission frontier, not the final ranking pool.  A candidate that
+        # only looks attractive because of a large learned-score bonus should not
+        # bypass the nominal-preserving abstention rule.
+        relative_certified &= (score - score[int(nominal_index)]) <= float(relative_recovery_max_intervention_score_gain)
+        admitted = scalar_admitted | option_certified | relative_certified
 
     # If the current rollout already exceeded the intervention budget, increase
     # the marginal cost of deviating from nominal.  This is intentionally a soft
