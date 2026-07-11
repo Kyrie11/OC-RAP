@@ -274,6 +274,25 @@ def calibrated_constrained_select(
     relative_recovery_macro_blocklist=None,
     relative_recovery_require_macro: bool = False,
     relative_recovery_max_intervention_score_gain: float = -1.0,
+    protective_macro_certificate: bool = False,
+    protective_macro_allowlist=None,
+    protective_macro_blocklist=None,
+    protective_macro_nominal_rec_lcb_max: float = -1.0e9,
+    protective_macro_nominal_gap_min: float = 1.0e9,
+    protective_macro_nominal_drs_max: float = -1.0,
+    protective_macro_min_drs: float = 0.60,
+    protective_macro_min_rec_gain: float = -1.0,
+    protective_macro_min_gap_reduction: float = -1.0,
+    protective_macro_min_drs_gain: float = -1.0,
+    protective_macro_max_drs_drop: float = 0.05,
+    protective_macro_max_rec_lcb_drop: float = 0.10,
+    protective_macro_max_gap: float = -1.0,
+    protective_macro_max_gap_increase: float = 0.20,
+    protective_macro_max_hard: float = 0.0,
+    protective_macro_max_harm: float = 5.0,
+    protective_macro_min_improvement_axes: int = 1,
+    protective_macro_bonus: float = 0.0,
+    protective_macro_counts_as_evidence: bool = True,
 ) -> SelectionResult:
     """Soft calibrated OC-RAP selector.
 
@@ -345,14 +364,18 @@ def calibrated_constrained_select(
     # satisfying DRS and gap guards.  This keeps the method certifiable without
     # returning to the v13 soft fallback.
     relative_certified = np.zeros((n,), dtype=bool)
+    protective_certified = np.zeros((n,), dtype=bool)
     rec_gain_vs_nom = np.zeros((n,), dtype=float)
     drs_gain_vs_nom = np.zeros((n,), dtype=float)
     gap_reduction_vs_nom = np.zeros((n,), dtype=float)
-    if bool(relative_recovery_certificate) and 0 <= int(nominal_index) < n:
+    if 0 <= int(nominal_index) < n:
         ni = int(nominal_index)
         rec_gain_vs_nom = rec_lcb - rec_lcb[ni]
         drs_gain_vs_nom = drs_proxy - drs_proxy[ni]
         gap_reduction_vs_nom = gap[ni] - gap
+
+    if bool(relative_recovery_certificate) and 0 <= int(nominal_index) < n:
+        ni = int(nominal_index)
         nominal_opportunity = (
             rec_lcb[ni] <= float(relative_recovery_nominal_rec_lcb_max)
             or gap[ni] >= float(relative_recovery_nominal_gap_min)
@@ -432,7 +455,58 @@ def calibrated_constrained_select(
             # below, so this guard is applied later after score construction.
             relative_certified[ni] = False
 
-    admitted = scalar_admitted | option_certified | relative_certified
+    # v20 protective-macro certificate.  v19 correctly blocked nominal-like
+    # perturbations, but it also became too conservative and kept missing contact
+    # cases whose audited best candidate was a brake/stabilize maneuver.  This
+    # certificate is a second, narrower channel: only explicitly protective macro
+    # families may use it, and they must be in a low-headroom nominal state while
+    # satisfying non-inferiority guards.  It does not certify generic lane/utility
+    # changes and therefore keeps the paper claim that interventions are semantic
+    # recovery maneuvers, not aggressive trigger actions.
+    if bool(protective_macro_certificate) and 0 <= int(nominal_index) < n:
+        ni = int(nominal_index)
+        protective_opportunity = (
+            rec_lcb[ni] <= float(protective_macro_nominal_rec_lcb_max)
+            or gap[ni] >= float(protective_macro_nominal_gap_min)
+            or (float(protective_macro_nominal_drs_max) >= 0.0 and drs_proxy[ni] <= float(protective_macro_nominal_drs_max))
+        )
+        if bool(protective_opportunity):
+            macro_allow = _split_name_set(protective_macro_allowlist)
+            macro_block = _split_name_set(protective_macro_blocklist)
+            macro_mask = np.ones((n,), dtype=bool)
+            if macro_allow:
+                macro_mask &= np.asarray([m in macro_allow for m in macro_names], dtype=bool)
+            if macro_block:
+                macro_mask &= ~np.asarray([m in macro_block for m in macro_names], dtype=bool)
+            # An empty macro name should never pass this semantic certificate.
+            macro_mask &= np.asarray([bool(m) for m in macro_names], dtype=bool)
+
+            protective_pool = feasible & (hard <= float(protective_macro_max_hard)) & (harm <= float(protective_macro_max_harm))
+            rec_ok = np.zeros((n,), dtype=bool)
+            if float(protective_macro_min_rec_gain) >= 0.0:
+                rec_ok = rec_gain_vs_nom >= float(protective_macro_min_rec_gain)
+            drs_ok = np.zeros((n,), dtype=bool)
+            if float(protective_macro_min_drs_gain) >= 0.0:
+                drs_ok = drs_gain_vs_nom >= float(protective_macro_min_drs_gain)
+            gap_ok = np.zeros((n,), dtype=bool)
+            if float(protective_macro_min_gap_reduction) >= 0.0:
+                gap_ok = gap_reduction_vs_nom >= float(protective_macro_min_gap_reduction)
+            improve_count = rec_ok.astype(int) + drs_ok.astype(int) + gap_ok.astype(int)
+            improvement_ok = improve_count >= max(1, int(protective_macro_min_improvement_axes))
+
+            protective_certified = protective_pool & macro_mask & improvement_ok
+            protective_certified &= drs_proxy >= float(protective_macro_min_drs)
+            if float(protective_macro_max_drs_drop) >= 0.0:
+                protective_certified &= drs_gain_vs_nom >= -float(protective_macro_max_drs_drop)
+            if float(protective_macro_max_rec_lcb_drop) >= 0.0:
+                protective_certified &= rec_gain_vs_nom >= -float(protective_macro_max_rec_lcb_drop)
+            if float(protective_macro_max_gap) >= 0.0:
+                protective_certified &= gap <= float(protective_macro_max_gap)
+            if float(protective_macro_max_gap_increase) >= 0.0:
+                protective_certified &= gap <= gap[ni] + float(protective_macro_max_gap_increase)
+            protective_certified[ni] = False
+
+    admitted = scalar_admitted | option_certified | relative_certified | protective_certified
     idxs = np.arange(n)
     intervention = (idxs != int(nominal_index)).astype(float)
     regime = (regime_name or "").lower()
@@ -455,6 +529,9 @@ def calibrated_constrained_select(
     if bool(relative_recovery_certificate) and float(relative_recovery_bonus) != 0.0:
         rel_adv = np.maximum(0.0, rec_gain_vs_nom) + 0.25 * np.maximum(0.0, drs_gain_vs_nom) + 0.10 * np.maximum(0.0, gap_reduction_vs_nom)
         score = score + float(relative_recovery_bonus) * rel_adv * relative_certified.astype(float)
+    if bool(protective_macro_certificate) and float(protective_macro_bonus) != 0.0:
+        prot_adv = 0.35 * np.maximum(0.0, rec_gain_vs_nom) + 0.20 * np.maximum(0.0, drs_gain_vs_nom) + 0.45 * np.maximum(0.0, gap_reduction_vs_nom)
+        score = score + float(protective_macro_bonus) * prot_adv * protective_certified.astype(float)
     if is_contact_regime:
         score = score + float(contact_deployability_bonus) * drs_proxy - float(contact_gap_penalty) * gap
 
@@ -463,7 +540,7 @@ def calibrated_constrained_select(
         # only looks attractive because of a large learned-score bonus should not
         # bypass the nominal-preserving abstention rule.
         relative_certified &= (score - score[int(nominal_index)]) <= float(relative_recovery_max_intervention_score_gain)
-        admitted = scalar_admitted | option_certified | relative_certified
+        admitted = scalar_admitted | option_certified | relative_certified | protective_certified
 
     # If the current rollout already exceeded the intervention budget, increase
     # the marginal cost of deviating from nominal.  This is intentionally a soft
@@ -550,7 +627,7 @@ def calibrated_constrained_select(
         # recovery maneuver may lie outside the nominal hard-rule pool (e.g. a
         # stabilization/pull-over action).  Do not discard such a candidate after
         # certifying it via the explicit recovery pool above.
-        certified_intervention &= (pool | relative_certified)
+        certified_intervention &= (pool | relative_certified | protective_certified)
         certified_non_nom = certified_intervention.copy()
         if 0 <= nominal_index < n:
             certified_non_nom[int(nominal_index)] = False
@@ -574,6 +651,8 @@ def calibrated_constrained_select(
                 evidence = evidence | option_certified
             if bool(relative_recovery_counts_as_evidence):
                 evidence = evidence | relative_certified
+            if bool(protective_macro_counts_as_evidence):
+                evidence = evidence | protective_certified
             certified_non_nom &= evidence
 
         if bool(certified_non_nom.any()):
@@ -692,13 +771,17 @@ def calibrated_constrained_select(
             return SelectionResult(int(nominal_index), "nominal_switch_margin_preserved", admitted)
 
     reason = "best_calibrated_admitted_score" if admitted[best_idx] else "best_calibrated_soft_constraint"
-    if admitted[best_idx] and relative_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx]:
+    if admitted[best_idx] and protective_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx] and not relative_certified[best_idx]:
+        reason = "best_protective_macro_recovery_certified_score"
+    elif admitted[best_idx] and relative_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx]:
         reason = "best_relative_recovery_certified_score"
     elif admitted[best_idx] and option_certified[best_idx] and not scalar_admitted[best_idx]:
         reason = "best_option_drs_certified_score"
-    admitted_rank_pool = pool | relative_certified
+    admitted_rank_pool = pool | relative_certified | protective_certified
     if bool(prefer_admitted) and bool((admitted_rank_pool & admitted).any()) and admitted[best_idx]:
-        if relative_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx]:
+        if protective_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx] and not relative_certified[best_idx]:
+            reason = "best_protective_macro_recovery_certified_prefer_admitted"
+        elif relative_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx]:
             reason = "best_relative_recovery_certified_prefer_admitted"
         elif option_certified[best_idx] and not scalar_admitted[best_idx]:
             reason = "best_option_drs_certified_prefer_admitted"

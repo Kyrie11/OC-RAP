@@ -349,3 +349,85 @@ def test_v19_relative_recovery_macro_allowlist_abstains_without_recovery_macro()
     )
     assert sel.selected_index == 0
     assert sel.reason == "nominal_no_certified_intervention_preserved"
+
+
+def test_v20_protective_macro_certificate_rescues_brake_when_relative_is_strict():
+    sel = calibrated_constrained_select(
+        utility=np.array([0.0, 0.2, 2.0], dtype=float),
+        r_dep=np.array([-0.80, -0.82, -0.70], dtype=float),
+        hard=np.zeros(3, dtype=float),
+        harm=np.zeros(3, dtype=float),
+        feasible=np.ones(3, dtype=bool),
+        gamma_rec=0.0, gamma_H=0.0, gamma_D=0.0,
+        pred_gap=np.array([1.30, 1.15, 0.80], dtype=float),
+        pred_drs=np.array([0.76, 0.74, 0.84], dtype=float),
+        candidate_macro_names=["nominal", "brake", "perturb_nominal"],
+        prefer_admitted=True,
+        require_admitted_intervention=True,
+        require_intervention_evidence=True,
+        # v19-style relative gate is strict and would not admit candidate 1.
+        relative_recovery_certificate=True,
+        relative_recovery_nominal_gap_min=1.0,
+        relative_recovery_gate="pareto",
+        relative_recovery_min_improvement_axes=2,
+        relative_recovery_min_rec_gain=0.04,
+        relative_recovery_min_drs_gain=0.04,
+        relative_recovery_min_gap_reduction=0.20,
+        relative_recovery_min_drs=0.70,
+        relative_recovery_macro_allowlist="brake,stabilize,merge",
+        relative_recovery_macro_blocklist="perturb_nominal,keep,pull_over",
+        relative_recovery_require_macro=True,
+        # v20 protective channel admits the semantic brake with gap improvement and
+        # bounded DRS/LCB non-inferiority, but still blocks perturb_nominal.
+        protective_macro_certificate=True,
+        protective_macro_allowlist="brake,stabilize",
+        protective_macro_blocklist="nominal,keep,perturb_nominal,pull_over",
+        protective_macro_nominal_gap_min=1.0,
+        protective_macro_min_gap_reduction=0.10,
+        protective_macro_min_drs=0.70,
+        protective_macro_max_drs_drop=0.05,
+        protective_macro_max_rec_lcb_drop=0.15,
+        protective_macro_max_gap=1.40,
+        protective_macro_max_hard=0.0,
+        protective_macro_max_harm=0.0,
+        protective_macro_counts_as_evidence=True,
+        intervention_min_pred_drs=0.70,
+        intervention_max_pred_gap=1.40,
+        unadmitted_fallback_to_nominal=True,
+    )
+    assert sel.selected_index == 1
+    assert sel.admitted[1]
+    assert not sel.admitted[2]
+    assert sel.reason == "best_protective_macro_recovery_certified_prefer_admitted"
+
+
+def test_v20_protective_macro_certificate_does_not_admit_pull_over_or_perturbation():
+    sel = calibrated_constrained_select(
+        utility=np.array([0.0, 2.0, 1.5], dtype=float),
+        r_dep=np.array([-0.80, -0.70, -0.68], dtype=float),
+        hard=np.zeros(3, dtype=float),
+        harm=np.zeros(3, dtype=float),
+        feasible=np.ones(3, dtype=bool),
+        gamma_rec=0.0, gamma_H=0.0, gamma_D=0.0,
+        pred_gap=np.array([1.30, 0.80, 0.75], dtype=float),
+        pred_drs=np.array([0.76, 0.80, 0.82], dtype=float),
+        candidate_macro_names=["nominal", "pull_over", "perturb_nominal"],
+        prefer_admitted=True,
+        require_admitted_intervention=True,
+        require_intervention_evidence=True,
+        protective_macro_certificate=True,
+        protective_macro_allowlist="brake,stabilize",
+        protective_macro_blocklist="nominal,keep,perturb_nominal,pull_over",
+        protective_macro_nominal_gap_min=1.0,
+        protective_macro_min_gap_reduction=0.10,
+        protective_macro_min_drs=0.70,
+        protective_macro_max_gap=1.40,
+        protective_macro_max_hard=0.0,
+        protective_macro_max_harm=0.0,
+        protective_macro_counts_as_evidence=True,
+        intervention_min_pred_drs=0.70,
+        intervention_max_pred_gap=1.40,
+        unadmitted_fallback_to_nominal=True,
+    )
+    assert sel.selected_index == 0
+    assert sel.reason == "nominal_no_certified_intervention_preserved"
