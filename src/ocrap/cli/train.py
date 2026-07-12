@@ -26,6 +26,7 @@ from ocrap.models.losses import (
     nominal_switch_consistency_loss,
     groupwise_score_distillation_loss,
     safe_nominal_preservation_loss,
+    protective_macro_recovery_loss,
 )
 from ocrap.models.ocrap import OCRAPModel
 from ocrap.utils.seed import seed_everything
@@ -123,6 +124,34 @@ def _dataset_root_name(p: Path) -> str:
         if any(tok in low for tok in ("safe", "near", "contact", "train_", "val_", "test_")):
             return name
     return p.parent.parent.name if p.parent.name == "samples" else p.parent.name
+
+
+
+
+def _parse_int_tuple(value, default: tuple[int, ...]) -> tuple[int, ...]:
+    if value is None or value == "":
+        return tuple(default)
+    if isinstance(value, (list, tuple, set)):
+        out = []
+        for x in value:
+            try:
+                out.append(int(x))
+            except Exception:
+                continue
+        return tuple(out) if out else tuple(default)
+    text = str(value).strip()
+    if text.startswith("[") and text.endswith("]"):
+        text = text[1:-1]
+    out = []
+    for part in text.replace(";", ",").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            out.append(int(part))
+        except Exception:
+            continue
+    return tuple(out) if out else tuple(default)
 
 
 def _profile_paths(paths: list[Path], *, stage: str, max_scalar_scan: int | None = None) -> dict[str, object]:
@@ -347,6 +376,38 @@ def _epoch(
             success_gamma=option_gamma,
             success_temperature=option_temperature,
         )
+        loss_protective_macro = protective_macro_recovery_loss(
+            r_dep,
+            gap,
+            batch["utility"].float(),
+            pred_q,
+            batch["r_dep_star"].float(),
+            batch["r_orc_star"].float(),
+            teacher_q,
+            batch["root_probs"].float(),
+            batch["root_valid"],
+            batch["option_valid"],
+            batch["scene_hash"],
+            batch["time_index"],
+            batch.get("prefix_macro_type_id", batch.get("candidate_index", torch.zeros_like(batch["time_index"]))),
+            batch["is_nominal"].float(),
+            batch.get("bucket_id", torch.full_like(batch["time_index"], 3)),
+            macro_ids=_parse_int_tuple(tcfg.get("protective_macro_ids", "2,7"), (2, 7)),
+            bucket_ids=_parse_int_tuple(tcfg.get("protective_macro_bucket_ids", "2"), (2,)),
+            margin=float(tcfg.get("protective_macro_margin", 0.14)),
+            min_teacher_r_dep=float(tcfg.get("protective_macro_min_teacher_r_dep", 0.0)),
+            min_teacher_drs=float(tcfg.get("protective_macro_min_teacher_drs", 0.50)),
+            min_teacher_pcd_gain=float(tcfg.get("protective_macro_min_teacher_pcd_gain", 0.02)),
+            max_nominal_teacher_pcd=float(tcfg.get("protective_macro_max_nominal_teacher_pcd", 0.90)),
+            pred_gap_weight=float(tcfg.get("protective_macro_pred_gap_weight", 0.18)),
+            pred_drs_weight=float(tcfg.get("protective_macro_pred_drs_weight", 0.65)),
+            utility_weight=float(tcfg.get("protective_macro_utility_weight", 0.02)),
+            teacher_gap_weight=float(tcfg.get("protective_macro_teacher_gap_weight", 0.10)),
+            teacher_drs_weight=float(tcfg.get("protective_macro_teacher_drs_weight", 0.70)),
+            success_gamma=option_gamma,
+            success_temperature=option_temperature,
+            target_min_pred_drs=float(tcfg.get("protective_macro_target_min_pred_drs", 0.62)),
+        )
         if bool((cfg.get("ablation", {}) or {}).get("without_anti_oracle", False)):
             loss_art = loss_art * 0.0
             loss_gap = loss_gap * 0.0
@@ -370,6 +431,7 @@ def _epoch(
             + float(lw.get("nominal_switch", 0.0)) * loss_nominal_switch
             + float(lw.get("group_distill", 0.0)) * loss_group_distill
             + float(lw.get("safe_nominal", 0.0)) * loss_safe_nominal
+            + float(lw.get("protective_macro", 0.0)) * loss_protective_macro
             + float(lw.get("utility", 0.2)) * loss_util
         )
         if training:
@@ -403,6 +465,7 @@ def _epoch(
             "loss_nominal_switch": loss_nominal_switch.item(),
             "loss_group_distill": loss_group_distill.item(),
             "loss_safe_nominal": loss_safe_nominal.item(),
+            "loss_protective_macro": loss_protective_macro.item(),
             "loss_utility": loss_util.item(),
             "pred_r_dep_mean": r_dep.mean().item(),
             "teacher_r_dep_mean": batch["r_dep_star"].float().mean().item(),

@@ -535,6 +535,13 @@ class OCRAPSampleDataset(Dataset):
             "scene_hash": torch.tensor(stable_scene_hash(d.get("scene_id", "")), dtype=torch.long),
             "time_index": torch.tensor(int(np.asarray(d.get("time_index", 0)).item()), dtype=torch.long),
             "candidate_index": torch.tensor(int(np.asarray(d.get("candidate_index", 0)).item()), dtype=torch.long),
+            # Semantic macro id used by macro-conditioned recovery losses.
+            # Older datasets only stored prefix_macro_id, so keep the same
+            # fallback convention as sample_to_feature().
+            "prefix_macro_type_id": torch.tensor(
+                int(np.asarray(d.get("prefix_macro_type_id", d.get("prefix_macro_id", 0))).item()),
+                dtype=torch.long,
+            ),
             "is_nominal": torch.tensor(float(np.asarray(d.get("is_nominal", 0)).item()), dtype=torch.float32),
             "bucket_id": torch.tensor(bucket_id_for_path(self.paths[idx]), dtype=torch.long),
             "root_signature": torch.from_numpy(fixed["root_signature"]),

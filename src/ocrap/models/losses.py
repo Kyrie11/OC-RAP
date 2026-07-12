@@ -447,6 +447,137 @@ def _differentiable_shared_success(
     return torch.clamp(shared.max(dim=-1).values, min=0.0, max=1.0)
 
 
+
+
+def _torch_pcd_score(drs: torch.Tensor, r_dep: torch.Tensor, gap: torch.Tensor) -> torch.Tensor:
+    """Torch analogue of evaluation.metrics.post_contact_deployability_score."""
+    return torch.clamp(drs, 0.0, 1.0) * torch.sigmoid(r_dep.float()) * torch.exp(-torch.clamp(gap.float(), min=0.0, max=20.0))
+
+
+def protective_macro_recovery_loss(
+    pred_r_dep: torch.Tensor,
+    pred_gap: torch.Tensor,
+    utility: torch.Tensor,
+    pred_q: torch.Tensor,
+    teacher_r_dep: torch.Tensor,
+    teacher_r_orc: torch.Tensor,
+    teacher_q: torch.Tensor,
+    root_probs: torch.Tensor,
+    root_valid: torch.Tensor,
+    option_valid: torch.Tensor,
+    scene_hash: torch.Tensor,
+    time_index: torch.Tensor,
+    macro_type_id: torch.Tensor,
+    is_nominal: torch.Tensor,
+    bucket_id: torch.Tensor,
+    *,
+    macro_ids: tuple[int, ...] = (2, 7),
+    bucket_ids: tuple[int, ...] = (2,),
+    margin: float = 0.14,
+    min_teacher_r_dep: float = 0.0,
+    min_teacher_drs: float = 0.50,
+    min_teacher_pcd_gain: float = 0.02,
+    max_nominal_teacher_pcd: float = 0.90,
+    pred_gap_weight: float = 0.18,
+    pred_drs_weight: float = 0.65,
+    utility_weight: float = 0.02,
+    teacher_gap_weight: float = 0.10,
+    teacher_drs_weight: float = 0.70,
+    success_gamma: float = 0.0,
+    success_temperature: float = 0.25,
+    target_min_pred_drs: float = 0.62,
+) -> torch.Tensor:
+    """Macro-conditioned supervision for low-headroom protective recovery.
+
+    The selector in contact regimes is supposed to admit brake/stabilize only
+    when they are semantically protective *and* deployably recoverable.  Pointwise
+    R_dep regression under-trains this case because the useful brake/stabilize
+    candidate is rare inside each scene-time candidate set.  This loss activates
+    only when the teacher-labelled group contains a protective macro whose
+    post-contact deployability (DRS * margin gate * oracle-gap discount) is better
+    than nominal.  It then ranks that macro above nominal and non-protective
+    alternatives using the same deployability coordinates used by the selector.
+    """
+    if pred_r_dep.numel() <= 1 or not macro_ids or not bucket_ids:
+        return pred_r_dep.sum() * 0.0
+    pr = torch.nan_to_num(pred_r_dep.float().reshape(-1), nan=-20.0, posinf=20.0, neginf=-20.0)
+    pg = torch.clamp(torch.nan_to_num(pred_gap.float().reshape(-1), nan=0.0, posinf=20.0, neginf=0.0), min=0.0)
+    u = torch.nan_to_num(utility.float().reshape(-1), nan=0.0, posinf=0.0, neginf=0.0)
+    trd = torch.nan_to_num(teacher_r_dep.float().reshape(-1), nan=-20.0, posinf=20.0, neginf=-20.0)
+    tro = torch.nan_to_num(teacher_r_orc.float().reshape(-1), nan=-20.0, posinf=20.0, neginf=-20.0)
+    pred_drs = _differentiable_shared_success(
+        pred_q, root_probs, root_valid, option_valid, gamma=success_gamma, temperature=success_temperature
+    ).reshape(-1)
+    with torch.no_grad():
+        teacher_drs = _differentiable_shared_success(
+            teacher_q, root_probs, root_valid, option_valid, gamma=success_gamma, temperature=max(0.08, success_temperature * 0.5)
+        ).reshape(-1)
+    sh = scene_hash.reshape(-1)
+    ti = time_index.reshape(-1)
+    mac = macro_type_id.reshape(-1)
+    isn = is_nominal.float().reshape(-1) > 0.5
+    bid = bucket_id.reshape(-1)
+    n = min(pr.numel(), pg.numel(), u.numel(), trd.numel(), tro.numel(), pred_drs.numel(), teacher_drs.numel(), sh.numel(), ti.numel(), mac.numel(), isn.numel(), bid.numel())
+    if n <= 1:
+        return pred_r_dep.sum() * 0.0
+    pr, pg, u, trd, tro, pred_drs, teacher_drs = pr[:n], pg[:n], u[:n], trd[:n], tro[:n], pred_drs[:n], teacher_drs[:n]
+    sh, ti, mac, isn, bid = sh[:n], ti[:n], mac[:n], isn[:n], bid[:n]
+    finite = torch.isfinite(pr) & torch.isfinite(pg) & torch.isfinite(u) & torch.isfinite(trd) & torch.isfinite(tro) & torch.isfinite(pred_drs) & torch.isfinite(teacher_drs)
+    bucket_mask = torch.zeros_like(finite)
+    for b in tuple(int(x) for x in bucket_ids):
+        bucket_mask |= bid == int(b)
+    macro_mask_all = torch.zeros_like(finite)
+    for m in tuple(int(x) for x in macro_ids):
+        macro_mask_all |= mac == int(m)
+    finite = finite & bucket_mask
+    if not bool(finite.any()):
+        return pred_r_dep.sum() * 0.0
+    teacher_gap = torch.clamp(tro - trd, min=0.0)
+    teacher_pcd = _torch_pcd_score(teacher_drs, trd, teacher_gap)
+    pred_pcd = _torch_pcd_score(pred_drs, pr, pg)
+    teacher_score = trd - float(teacher_gap_weight) * teacher_gap + float(teacher_drs_weight) * teacher_drs + teacher_pcd
+    pred_score = pr - float(pred_gap_weight) * pg + float(pred_drs_weight) * pred_drs + pred_pcd + float(utility_weight) * u
+    losses: list[torch.Tensor] = []
+    keys = torch.stack([sh, ti], dim=1)
+    unique = torch.unique(keys[finite], dim=0)
+    for key in unique:
+        mask = finite & (sh == key[0]) & (ti == key[1])
+        if int(mask.sum().item()) < 2:
+            continue
+        idx = torch.where(mask)[0]
+        nom_idx = idx[isn[idx]]
+        if nom_idx.numel() == 0:
+            continue
+        nom = nom_idx[0]
+        prot_idx = idx[macro_mask_all[idx]]
+        if prot_idx.numel() == 0:
+            continue
+        teacher_ok = (
+            (trd[prot_idx] >= float(min_teacher_r_dep))
+            & (teacher_drs[prot_idx] >= float(min_teacher_drs))
+            & (teacher_pcd[prot_idx] >= teacher_pcd[nom] + float(min_teacher_pcd_gain))
+            & (teacher_pcd[nom] <= float(max_nominal_teacher_pcd))
+        )
+        if not bool(teacher_ok.any()):
+            continue
+        cand = prot_idx[teacher_ok]
+        target = cand[torch.argmax(teacher_score[cand])]
+        # Rank the teacher-certified protective macro above nominal.
+        losses.append(F.relu(float(margin) - (pred_score[target] - pred_score[nom])))
+        # Also separate it from non-protective alternatives in the same group,
+        # but do not punish other protective candidates (they may be ties).
+        nonprot = idx[(idx != target) & (~macro_mask_all[idx])]
+        if nonprot.numel() > 0:
+            losses.append(F.relu(float(margin) - (pred_score[target] - pred_score[nonprot])).mean())
+        # The target should look deployable to the selector in both aggregate
+        # margin and shared-option success coordinates.
+        losses.append(F.relu(float(min_teacher_r_dep) - pr[target]))
+        losses.append(F.relu(float(target_min_pred_drs) - pred_drs[target]))
+    if not losses:
+        return pred_r_dep.sum() * 0.0
+    return torch.stack(losses).mean()
+
+
 def safe_nominal_preservation_loss(
     pred_r_dep: torch.Tensor,
     pred_gap: torch.Tensor,

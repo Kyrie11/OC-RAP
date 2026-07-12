@@ -291,6 +291,11 @@ def calibrated_constrained_select(
     protective_macro_max_hard: float = 0.0,
     protective_macro_max_harm: float = 5.0,
     protective_macro_min_improvement_axes: int = 1,
+    protective_macro_gate: str = "axes",
+    protective_macro_score_min_gain: float = 0.00,
+    protective_macro_score_rec_weight: float = 0.30,
+    protective_macro_score_drs_weight: float = 0.55,
+    protective_macro_score_gap_weight: float = 0.15,
     protective_macro_bonus: float = 0.0,
     protective_macro_counts_as_evidence: bool = True,
 ) -> SelectionResult:
@@ -492,7 +497,26 @@ def calibrated_constrained_select(
             if float(protective_macro_min_gap_reduction) >= 0.0:
                 gap_ok = gap_reduction_vs_nom >= float(protective_macro_min_gap_reduction)
             improve_count = rec_ok.astype(int) + drs_ok.astype(int) + gap_ok.astype(int)
-            improvement_ok = improve_count >= max(1, int(protective_macro_min_improvement_axes))
+            # v21: support a calibrated deployability-vector gate for protective
+            # macros.  Brake/stabilize can legitimately trade geometric gap for
+            # shared-option robustness immediately after contact, so requiring a
+            # pure gap reduction (v20) can suppress exactly the macro we want to
+            # test.  The score gate still requires semantic macro eligibility,
+            # hard/harm feasibility, absolute DRS, and non-inferiority guards.
+            protective_score_gain = (
+                float(protective_macro_score_rec_weight) * rec_gain_vs_nom
+                + float(protective_macro_score_drs_weight) * drs_gain_vs_nom
+                + float(protective_macro_score_gap_weight) * gap_reduction_vs_nom
+            )
+            gate = str(protective_macro_gate or "axes").lower()
+            if gate == "score":
+                improvement_ok = protective_score_gain >= float(protective_macro_score_min_gain)
+            elif gate == "drs_or_score":
+                improvement_ok = drs_ok | (protective_score_gain >= float(protective_macro_score_min_gain))
+            elif gate == "any":
+                improvement_ok = rec_ok | drs_ok | gap_ok
+            else:
+                improvement_ok = improve_count >= max(1, int(protective_macro_min_improvement_axes))
 
             protective_certified = protective_pool & macro_mask & improvement_ok
             protective_certified &= drs_proxy >= float(protective_macro_min_drs)
@@ -530,7 +554,11 @@ def calibrated_constrained_select(
         rel_adv = np.maximum(0.0, rec_gain_vs_nom) + 0.25 * np.maximum(0.0, drs_gain_vs_nom) + 0.10 * np.maximum(0.0, gap_reduction_vs_nom)
         score = score + float(relative_recovery_bonus) * rel_adv * relative_certified.astype(float)
     if bool(protective_macro_certificate) and float(protective_macro_bonus) != 0.0:
-        prot_adv = 0.35 * np.maximum(0.0, rec_gain_vs_nom) + 0.20 * np.maximum(0.0, drs_gain_vs_nom) + 0.45 * np.maximum(0.0, gap_reduction_vs_nom)
+        prot_adv = (
+            float(protective_macro_score_rec_weight) * np.maximum(0.0, rec_gain_vs_nom)
+            + float(protective_macro_score_drs_weight) * np.maximum(0.0, drs_gain_vs_nom)
+            + float(protective_macro_score_gap_weight) * np.maximum(0.0, gap_reduction_vs_nom)
+        )
         score = score + float(protective_macro_bonus) * prot_adv * protective_certified.astype(float)
     if is_contact_regime:
         score = score + float(contact_deployability_bonus) * drs_proxy - float(contact_gap_penalty) * gap
