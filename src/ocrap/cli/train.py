@@ -27,6 +27,7 @@ from ocrap.models.losses import (
     groupwise_score_distillation_loss,
     safe_nominal_preservation_loss,
     protective_macro_recovery_loss,
+    macro_shared_success_calibration_loss,
 )
 from ocrap.models.ocrap import OCRAPModel
 from ocrap.utils.seed import seed_everything
@@ -408,6 +409,23 @@ def _epoch(
             success_temperature=option_temperature,
             target_min_pred_drs=float(tcfg.get("protective_macro_target_min_pred_drs", 0.62)),
         )
+        loss_macro_drs = macro_shared_success_calibration_loss(
+            pred_q,
+            teacher_q,
+            batch["root_probs"].float(),
+            batch["root_valid"],
+            batch["option_valid"],
+            batch.get("prefix_macro_type_id", batch.get("candidate_index", torch.zeros_like(batch["time_index"]))),
+            batch.get("bucket_id", torch.full_like(batch["time_index"], 3)),
+            macro_ids=_parse_int_tuple(tcfg.get("macro_drs_ids", "2,3,5,7"), (2, 3, 5, 7)),
+            bucket_ids=_parse_int_tuple(tcfg.get("macro_drs_bucket_ids", "1,2"), (1, 2)),
+            gamma=option_gamma,
+            temperature=option_temperature,
+            pos_threshold=float(tcfg.get("macro_drs_pos_threshold", 0.80)),
+            neg_threshold=float(tcfg.get("macro_drs_neg_threshold", 0.05)),
+            pos_weight=float(tcfg.get("macro_drs_pos_weight", 4.0)),
+            neg_weight=float(tcfg.get("macro_drs_neg_weight", 1.0)),
+        )
         if bool((cfg.get("ablation", {}) or {}).get("without_anti_oracle", False)):
             loss_art = loss_art * 0.0
             loss_gap = loss_gap * 0.0
@@ -432,6 +450,7 @@ def _epoch(
             + float(lw.get("group_distill", 0.0)) * loss_group_distill
             + float(lw.get("safe_nominal", 0.0)) * loss_safe_nominal
             + float(lw.get("protective_macro", 0.0)) * loss_protective_macro
+            + float(lw.get("macro_drs", 0.0)) * loss_macro_drs
             + float(lw.get("utility", 0.2)) * loss_util
         )
         if training:
@@ -466,6 +485,7 @@ def _epoch(
             "loss_group_distill": loss_group_distill.item(),
             "loss_safe_nominal": loss_safe_nominal.item(),
             "loss_protective_macro": loss_protective_macro.item(),
+            "loss_macro_drs": loss_macro_drs.item(),
             "loss_utility": loss_util.item(),
             "pred_r_dep_mean": r_dep.mean().item(),
             "teacher_r_dep_mean": batch["r_dep_star"].float().mean().item(),

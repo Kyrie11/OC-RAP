@@ -449,6 +449,67 @@ def _differentiable_shared_success(
 
 
 
+
+def macro_shared_success_calibration_loss(
+    pred_q: torch.Tensor,
+    teacher_q: torch.Tensor,
+    root_probs: torch.Tensor,
+    root_valid: torch.Tensor,
+    option_valid: torch.Tensor,
+    macro_type_id: torch.Tensor,
+    bucket_id: torch.Tensor,
+    *,
+    macro_ids: tuple[int, ...] = (2, 3, 5, 7),
+    bucket_ids: tuple[int, ...] = (1, 2),
+    gamma: float = 0.0,
+    temperature: float = 0.25,
+    pos_threshold: float = 0.80,
+    neg_threshold: float = 0.05,
+    pos_weight: float = 4.0,
+    neg_weight: float = 1.0,
+) -> torch.Tensor:
+    """Macro-conditioned calibration for the shared recovery-option success head.
+
+    v21 could rank a few protective macros, but the selector still missed true
+    brake cases because their predicted shared-option success sometimes stayed
+    near zero even when the teacher shared option succeeded.  This loss supervises
+    the candidate-level DRS proxy used by the selector, only for semantic recovery
+    macros in near/contact buckets.  Ambiguous middle-success cases are ignored so
+    the gradients focus on high-confidence deployable and non-deployable macros.
+    """
+    if pred_q.ndim != 3 or pred_q.shape[0] == 0 or not macro_ids or not bucket_ids:
+        return pred_q.reshape(pred_q.shape[0], -1).sum() * 0.0
+    pred_drs = _differentiable_shared_success(
+        pred_q, root_probs, root_valid, option_valid, gamma=gamma, temperature=temperature
+    ).reshape(-1)
+    with torch.no_grad():
+        teacher_drs = _differentiable_shared_success(
+            teacher_q, root_probs, root_valid, option_valid, gamma=gamma, temperature=max(0.08, temperature * 0.5)
+        ).reshape(-1)
+    mac = macro_type_id.reshape(-1)
+    bid = bucket_id.reshape(-1)
+    n = min(pred_drs.numel(), teacher_drs.numel(), mac.numel(), bid.numel())
+    if n <= 0:
+        return pred_q.sum() * 0.0
+    pred_drs, teacher_drs, mac, bid = pred_drs[:n], teacher_drs[:n], mac[:n], bid[:n]
+    finite = torch.isfinite(pred_drs) & torch.isfinite(teacher_drs)
+    macro_mask = torch.zeros_like(finite)
+    for m in tuple(int(x) for x in macro_ids):
+        macro_mask |= mac == int(m)
+    bucket_mask = torch.zeros_like(finite)
+    for b in tuple(int(x) for x in bucket_ids):
+        bucket_mask |= bid == int(b)
+    high = teacher_drs >= float(pos_threshold)
+    low = teacher_drs <= float(neg_threshold)
+    mask = finite & macro_mask & bucket_mask & (high | low)
+    if not bool(mask.any()):
+        return pred_q.sum() * 0.0
+    target = high.float()
+    p = pred_drs.clamp(1.0e-4, 1.0 - 1.0e-4)
+    weights = torch.where(high, torch.full_like(p, float(pos_weight)), torch.full_like(p, float(neg_weight)))
+    loss = F.binary_cross_entropy(p[mask], target[mask], weight=weights[mask], reduction="mean")
+    return loss
+
 def _torch_pcd_score(drs: torch.Tensor, r_dep: torch.Tensor, gap: torch.Tensor) -> torch.Tensor:
     """Torch analogue of evaluation.metrics.post_contact_deployability_score."""
     return torch.clamp(drs, 0.0, 1.0) * torch.sigmoid(r_dep.float()) * torch.exp(-torch.clamp(gap.float(), min=0.0, max=20.0))

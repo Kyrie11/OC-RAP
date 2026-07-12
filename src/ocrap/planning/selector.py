@@ -228,6 +228,13 @@ def calibrated_constrained_select(
     stress_preserve_nominal_min_drs_drop: float = -1.0,
     require_admitted_intervention: bool = False,
     unadmitted_fallback_to_nominal: bool = True,
+    intervention_macro_allowlist=None,
+    intervention_macro_blocklist=None,
+    intervention_require_macro: bool = False,
+    intervention_budget_hard: bool = False,
+    intervention_budget_hard_min_rec_gain: float = 0.0,
+    intervention_budget_hard_min_drs_gain: float = 0.0,
+    intervention_budget_hard_min_gap_reduction: float = 0.0,
     intervention_min_pred_drs: float = -1.0,
     intervention_max_pred_gap: float = -1.0,
     safe_cert_min_pred_drs: float = 0.95,
@@ -281,6 +288,7 @@ def calibrated_constrained_select(
     protective_macro_nominal_gap_min: float = 1.0e9,
     protective_macro_nominal_drs_max: float = -1.0,
     protective_macro_min_drs: float = 0.60,
+    protective_macro_min_rec_lcb: float = -1.0e9,
     protective_macro_min_rec_gain: float = -1.0,
     protective_macro_min_gap_reduction: float = -1.0,
     protective_macro_min_drs_gain: float = -1.0,
@@ -325,6 +333,24 @@ def calibrated_constrained_select(
     dev = np.maximum(0.0, _as_1d_float(nominal_deviation, n, default=0.0))
     drs_proxy = np.clip(_as_1d_float(pred_drs, n, default=0.0), 0.0, 1.0)
     macro_names = _as_macro_names(candidate_macro_names, n)
+
+    # v22: separate candidate-family coverage from recovery-maneuver semantics.
+    # Scalar/option certificates are purely numerical, so without a global
+    # intervention macro gate they can still execute perturb_nominal, lane_shift,
+    # or other exploration families as if they were paper-valid recoveries.
+    # Nominal is always allowed; non-nominal interventions must satisfy this
+    # semantic mask whenever configured.
+    intervention_macro_allow = _split_name_set(intervention_macro_allowlist)
+    intervention_macro_block = _split_name_set(intervention_macro_blocklist)
+    intervention_macro_mask = np.ones((n,), dtype=bool)
+    if intervention_macro_allow:
+        intervention_macro_mask &= np.asarray([m in intervention_macro_allow for m in macro_names], dtype=bool)
+    if intervention_macro_block:
+        intervention_macro_mask &= ~np.asarray([m in intervention_macro_block for m in macro_names], dtype=bool)
+    if bool(intervention_require_macro):
+        intervention_macro_mask &= np.asarray([bool(m) for m in macro_names], dtype=bool)
+    if 0 <= int(nominal_index) < n:
+        intervention_macro_mask[int(nominal_index)] = True
 
     rec_lcb = r_dep - float(lcb_beta) * gap
     safe = feasible & (hard <= float(gamma_H)) & (harm <= float(gamma_D))
@@ -520,6 +546,7 @@ def calibrated_constrained_select(
 
             protective_certified = protective_pool & macro_mask & improvement_ok
             protective_certified &= drs_proxy >= float(protective_macro_min_drs)
+            protective_certified &= rec_lcb >= float(protective_macro_min_rec_lcb)
             if float(protective_macro_max_drs_drop) >= 0.0:
                 protective_certified &= drs_gain_vs_nom >= -float(protective_macro_max_drs_drop)
             if float(protective_macro_max_rec_lcb_drop) >= 0.0:
@@ -531,6 +558,10 @@ def calibrated_constrained_select(
             protective_certified[ni] = False
 
     admitted = scalar_admitted | option_certified | relative_certified | protective_certified
+    if intervention_macro_allow or intervention_macro_block or bool(intervention_require_macro):
+        admitted = admitted & intervention_macro_mask
+        if 0 <= int(nominal_index) < n and (scalar_admitted[int(nominal_index)] or safe[int(nominal_index)]):
+            admitted[int(nominal_index)] = True
     idxs = np.arange(n)
     intervention = (idxs != int(nominal_index)).astype(float)
     regime = (regime_name or "").lower()
@@ -569,6 +600,10 @@ def calibrated_constrained_select(
         # bypass the nominal-preserving abstention rule.
         relative_certified &= (score - score[int(nominal_index)]) <= float(relative_recovery_max_intervention_score_gain)
         admitted = scalar_admitted | option_certified | relative_certified | protective_certified
+        if intervention_macro_allow or intervention_macro_block or bool(intervention_require_macro):
+            admitted = admitted & intervention_macro_mask
+            if 0 <= int(nominal_index) < n and (scalar_admitted[int(nominal_index)] or safe[int(nominal_index)]):
+                admitted[int(nominal_index)] = True
 
     # If the current rollout already exceeded the intervention budget, increase
     # the marginal cost of deviating from nominal.  This is intentionally a soft
@@ -647,6 +682,8 @@ def calibrated_constrained_select(
     # nominal rather than taking a high-utility but uncertified recovery action.
     if bool(require_admitted_intervention):
         certified_intervention = admitted.copy()
+        if intervention_macro_allow or intervention_macro_block or bool(intervention_require_macro):
+            certified_intervention &= intervention_macro_mask
         if float(intervention_min_pred_drs) >= 0.0:
             certified_intervention &= drs_proxy >= float(intervention_min_pred_drs)
         if float(intervention_max_pred_gap) >= 0.0:
@@ -682,6 +719,26 @@ def calibrated_constrained_select(
             if bool(protective_macro_counts_as_evidence):
                 evidence = evidence | protective_certified
             certified_non_nom &= evidence
+
+        if bool(intervention_budget_hard) and intervention_budget_rate is not None and intervention_budget_steps not in {None, 0} and 0 <= nominal_index < n:
+            try:
+                used = float(intervention_budget_used or 0.0)
+                steps = max(1.0, float(intervention_budget_steps or 1.0))
+                budget_exceeded_now = (used / steps) >= float(intervention_budget_rate)
+            except Exception:
+                budget_exceeded_now = False
+            if budget_exceeded_now:
+                rec_gain = rec_lcb - rec_lcb[int(nominal_index)]
+                drs_gain = drs_proxy - drs_proxy[int(nominal_index)]
+                gap_reduction = gap[int(nominal_index)] - gap
+                hard_budget_evidence = (
+                    (rec_gain >= float(intervention_budget_hard_min_rec_gain))
+                    | (drs_gain >= float(intervention_budget_hard_min_drs_gain))
+                    | (gap_reduction >= float(intervention_budget_hard_min_gap_reduction))
+                    | protective_certified
+                    | relative_certified
+                )
+                certified_non_nom &= hard_budget_evidence
 
         if bool(certified_non_nom.any()):
             cc = np.where(certified_non_nom)[0]
