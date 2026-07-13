@@ -326,6 +326,33 @@ def calibrated_constrained_select(
     brake_rescue_nominal_gap_min: float = 0.02,
     brake_rescue_nominal_drs_max: float = 1.01,
     brake_rescue_counts_as_evidence: bool = True,
+    brake_rescue_budget_bypass: bool = True,
+    # v24: Budgeted Macro-Rescue Certificate (BMRC).  This generalizes the
+    # v23 brake rescue from a fixed macro threshold into a predicted
+    # post-contact-deployability admission test.  It can be enabled per bucket
+    # and per macro family, and it is explicitly budget-aware so repeated
+    # interventions cannot silently consume nominal utility.
+    pcd_rescue_certificate: bool = False,
+    pcd_rescue_macro_allowlist=None,
+    pcd_rescue_macro_blocklist=None,
+    pcd_rescue_min_pred_pcd: float = 0.35,
+    pcd_rescue_min_pcd_gain: float = -1.0,
+    pcd_rescue_min_pred_drs: float = 0.70,
+    pcd_rescue_min_pred_r_dep: float = -0.70,
+    pcd_rescue_min_candidate_gap: float = 0.0,
+    pcd_rescue_max_candidate_gap: float = 0.50,
+    pcd_rescue_max_hard: float = 1.0,
+    pcd_rescue_max_harm: float = 0.70,
+    pcd_rescue_require_nominal_low_headroom: bool = True,
+    pcd_rescue_require_nominal_unadmitted: bool = False,
+    pcd_rescue_nominal_rec_lcb_max: float = 0.65,
+    pcd_rescue_nominal_gap_min: float = 0.02,
+    pcd_rescue_nominal_drs_max: float = 1.01,
+    pcd_rescue_max_utility_drop: float = -1.0,
+    pcd_rescue_large_pcd_gain: float = 0.06,
+    pcd_rescue_bonus: float = 0.0,
+    pcd_rescue_counts_as_evidence: bool = True,
+    pcd_rescue_budget_bypass: bool = False,
 ) -> SelectionResult:
     """Soft calibrated OC-RAP selector.
 
@@ -417,6 +444,9 @@ def calibrated_constrained_select(
     relative_certified = np.zeros((n,), dtype=bool)
     protective_certified = np.zeros((n,), dtype=bool)
     brake_rescue_certified = np.zeros((n,), dtype=bool)
+    pcd_rescue_certified = np.zeros((n,), dtype=bool)
+    pcd_proxy = np.clip(drs_proxy, 0.0, 1.0) * (1.0 / (1.0 + np.exp(-np.clip(r_dep, -40.0, 40.0)))) * np.exp(-np.clip(gap, 0.0, 20.0))
+    pcd_gain_vs_nom = np.zeros((n,), dtype=float)
     rec_gain_vs_nom = np.zeros((n,), dtype=float)
     drs_gain_vs_nom = np.zeros((n,), dtype=float)
     gap_reduction_vs_nom = np.zeros((n,), dtype=float)
@@ -425,6 +455,7 @@ def calibrated_constrained_select(
         rec_gain_vs_nom = rec_lcb - rec_lcb[ni]
         drs_gain_vs_nom = drs_proxy - drs_proxy[ni]
         gap_reduction_vs_nom = gap[ni] - gap
+        pcd_gain_vs_nom = pcd_proxy - pcd_proxy[ni]
 
     if bool(relative_recovery_certificate) and 0 <= int(nominal_index) < n:
         ni = int(nominal_index)
@@ -611,7 +642,59 @@ def calibrated_constrained_select(
         if intervention_macro_allow or intervention_macro_block or bool(intervention_require_macro):
             brake_rescue_certified &= intervention_macro_mask
 
-    admitted = scalar_admitted | option_certified | relative_certified | protective_certified | brake_rescue_certified
+    # v24 BMRC: predicted post-contact deployability certificate.  This is used
+    # as an intermediate channel between strict scalar LCB admission and the
+    # macro-only v23 rescue.  The score is the same compact deployability proxy
+    # used in the paper-facing PCD metric: DRS * sigmoid(R_dep) * exp(-gap).
+    # Unlike the v23 certificate, this channel can be applied to near-contact
+    # as well as contact, and it can require a bounded utility cost so the
+    # selector does not repeatedly brake just because the macro family is safe.
+    if bool(pcd_rescue_certificate) and 0 <= int(nominal_index) < n:
+        ni = int(nominal_index)
+        pcd_macro_allow = _split_name_set(pcd_rescue_macro_allowlist)
+        pcd_macro_block = _split_name_set(pcd_rescue_macro_blocklist)
+        pcd_macro_mask = np.ones((n,), dtype=bool)
+        if pcd_macro_allow:
+            pcd_macro_mask &= np.asarray([m in pcd_macro_allow for m in macro_names], dtype=bool)
+        if pcd_macro_block:
+            pcd_macro_mask &= ~np.asarray([m in pcd_macro_block for m in macro_names], dtype=bool)
+        pcd_macro_mask &= np.asarray([bool(m) for m in macro_names], dtype=bool)
+
+        nominal_gate = True
+        if bool(pcd_rescue_require_nominal_low_headroom):
+            nominal_gate = (
+                rec_lcb[ni] <= float(pcd_rescue_nominal_rec_lcb_max)
+                or gap[ni] >= float(pcd_rescue_nominal_gap_min)
+                or drs_proxy[ni] <= float(pcd_rescue_nominal_drs_max)
+            )
+        if bool(pcd_rescue_require_nominal_unadmitted):
+            nominal_gate = bool(nominal_gate) and (not bool(scalar_admitted[ni] or option_certified[ni] or relative_certified[ni] or protective_certified[ni] or brake_rescue_certified[ni]))
+
+        utility_drop = utility[ni] - utility
+        utility_ok = np.ones((n,), dtype=bool)
+        if float(pcd_rescue_max_utility_drop) >= 0.0:
+            utility_ok = (utility_drop <= float(pcd_rescue_max_utility_drop)) | (pcd_gain_vs_nom >= float(pcd_rescue_large_pcd_gain))
+
+        pcd_rescue_certified = (
+            feasible
+            & (hard <= float(pcd_rescue_max_hard))
+            & (harm <= float(pcd_rescue_max_harm))
+            & pcd_macro_mask
+            & (pcd_proxy >= float(pcd_rescue_min_pred_pcd))
+            & (drs_proxy >= float(pcd_rescue_min_pred_drs))
+            & (r_dep >= float(pcd_rescue_min_pred_r_dep))
+            & (gap >= float(pcd_rescue_min_candidate_gap))
+            & (gap <= float(pcd_rescue_max_candidate_gap))
+            & utility_ok
+            & bool(nominal_gate)
+        )
+        if float(pcd_rescue_min_pcd_gain) >= 0.0:
+            pcd_rescue_certified &= pcd_gain_vs_nom >= float(pcd_rescue_min_pcd_gain)
+        pcd_rescue_certified[ni] = False
+        if intervention_macro_allow or intervention_macro_block or bool(intervention_require_macro):
+            pcd_rescue_certified &= intervention_macro_mask
+
+    admitted = scalar_admitted | option_certified | relative_certified | protective_certified | brake_rescue_certified | pcd_rescue_certified
     if intervention_macro_allow or intervention_macro_block or bool(intervention_require_macro):
         admitted = admitted & intervention_macro_mask
         if 0 <= int(nominal_index) < n and (scalar_admitted[int(nominal_index)] or safe[int(nominal_index)]):
@@ -645,6 +728,8 @@ def calibrated_constrained_select(
             + float(protective_macro_score_gap_weight) * np.maximum(0.0, gap_reduction_vs_nom)
         )
         score = score + float(protective_macro_bonus) * prot_adv * protective_certified.astype(float)
+    if bool(pcd_rescue_certificate) and float(pcd_rescue_bonus) != 0.0:
+        score = score + float(pcd_rescue_bonus) * np.maximum(0.0, pcd_gain_vs_nom) * pcd_rescue_certified.astype(float)
     if is_contact_regime:
         score = score + float(contact_deployability_bonus) * drs_proxy - float(contact_gap_penalty) * gap
 
@@ -653,7 +738,7 @@ def calibrated_constrained_select(
         # only looks attractive because of a large learned-score bonus should not
         # bypass the nominal-preserving abstention rule.
         relative_certified &= (score - score[int(nominal_index)]) <= float(relative_recovery_max_intervention_score_gain)
-        admitted = scalar_admitted | option_certified | relative_certified | protective_certified | brake_rescue_certified
+        admitted = scalar_admitted | option_certified | relative_certified | protective_certified | brake_rescue_certified | pcd_rescue_certified
         if intervention_macro_allow or intervention_macro_block or bool(intervention_require_macro):
             admitted = admitted & intervention_macro_mask
             if 0 <= int(nominal_index) < n and (scalar_admitted[int(nominal_index)] or safe[int(nominal_index)]):
@@ -746,7 +831,7 @@ def calibrated_constrained_select(
         # recovery maneuver may lie outside the nominal hard-rule pool (e.g. a
         # stabilization/pull-over action).  Do not discard such a candidate after
         # certifying it via the explicit recovery pool above.
-        certified_intervention &= (pool | relative_certified | protective_certified | brake_rescue_certified)
+        certified_intervention &= (pool | relative_certified | protective_certified | brake_rescue_certified | pcd_rescue_certified)
         certified_non_nom = certified_intervention.copy()
         if 0 <= nominal_index < n:
             certified_non_nom[int(nominal_index)] = False
@@ -774,6 +859,8 @@ def calibrated_constrained_select(
                 evidence = evidence | protective_certified
             if bool(brake_rescue_counts_as_evidence):
                 evidence = evidence | brake_rescue_certified
+            if bool(pcd_rescue_counts_as_evidence):
+                evidence = evidence | pcd_rescue_certified
             certified_non_nom &= evidence
 
         if bool(intervention_budget_hard) and intervention_budget_rate is not None and intervention_budget_steps not in {None, 0} and 0 <= nominal_index < n:
@@ -793,8 +880,11 @@ def calibrated_constrained_select(
                     | (gap_reduction >= float(intervention_budget_hard_min_gap_reduction))
                     | protective_certified
                     | relative_certified
-                    | brake_rescue_certified
                 )
+                if bool(brake_rescue_budget_bypass):
+                    hard_budget_evidence = hard_budget_evidence | brake_rescue_certified
+                if bool(pcd_rescue_budget_bypass):
+                    hard_budget_evidence = hard_budget_evidence | pcd_rescue_certified
                 certified_non_nom &= hard_budget_evidence
 
         if bool(certified_non_nom.any()):
@@ -913,7 +1003,9 @@ def calibrated_constrained_select(
             return SelectionResult(int(nominal_index), "nominal_switch_margin_preserved", admitted)
 
     reason = "best_calibrated_admitted_score" if admitted[best_idx] else "best_calibrated_soft_constraint"
-    if admitted[best_idx] and brake_rescue_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx] and not relative_certified[best_idx] and not protective_certified[best_idx]:
+    if admitted[best_idx] and pcd_rescue_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx] and not relative_certified[best_idx] and not protective_certified[best_idx] and not brake_rescue_certified[best_idx]:
+        reason = "best_pcd_rescue_certified_score"
+    elif admitted[best_idx] and brake_rescue_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx] and not relative_certified[best_idx] and not protective_certified[best_idx]:
         reason = "best_brake_rescue_certified_score"
     elif admitted[best_idx] and protective_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx] and not relative_certified[best_idx]:
         reason = "best_protective_macro_recovery_certified_score"
@@ -921,9 +1013,11 @@ def calibrated_constrained_select(
         reason = "best_relative_recovery_certified_score"
     elif admitted[best_idx] and option_certified[best_idx] and not scalar_admitted[best_idx]:
         reason = "best_option_drs_certified_score"
-    admitted_rank_pool = pool | relative_certified | protective_certified | brake_rescue_certified
+    admitted_rank_pool = pool | relative_certified | protective_certified | brake_rescue_certified | pcd_rescue_certified
     if bool(prefer_admitted) and bool((admitted_rank_pool & admitted).any()) and admitted[best_idx]:
-        if brake_rescue_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx] and not relative_certified[best_idx] and not protective_certified[best_idx]:
+        if pcd_rescue_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx] and not relative_certified[best_idx] and not protective_certified[best_idx] and not brake_rescue_certified[best_idx]:
+            reason = "best_pcd_rescue_certified_prefer_admitted"
+        elif brake_rescue_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx] and not relative_certified[best_idx] and not protective_certified[best_idx]:
             reason = "best_brake_rescue_certified_prefer_admitted"
         elif protective_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx] and not relative_certified[best_idx]:
             reason = "best_protective_macro_recovery_certified_prefer_admitted"
