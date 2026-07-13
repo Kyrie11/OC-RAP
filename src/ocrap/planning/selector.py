@@ -306,6 +306,26 @@ def calibrated_constrained_select(
     protective_macro_score_gap_weight: float = 0.15,
     protective_macro_bonus: float = 0.0,
     protective_macro_counts_as_evidence: bool = True,
+    # v23: contact-specific brake rescue channel. This is intentionally not a
+    # generic threshold relaxation: it only applies to the physically protective
+    # brake macro in contact buckets, after the semantic intervention firewall,
+    # and only when nominal itself has failed calibrated admission.  The gate is
+    # designed for the v22 failure mode where teacher-audited brake improves PCD
+    # but the scalar rec-LCB is under-confident because braking raises the
+    # predicted oracle/deployability gap.
+    brake_rescue_certificate: bool = False,
+    brake_rescue_macro_name: str = "brake",
+    brake_rescue_min_pred_drs: float = 0.65,
+    brake_rescue_min_pred_r_dep: float = -0.65,
+    brake_rescue_min_candidate_gap: float = 0.12,
+    brake_rescue_max_candidate_gap: float = 0.34,
+    brake_rescue_max_hard: float = 1.0,
+    brake_rescue_max_harm: float = 0.70,
+    brake_rescue_require_nominal_unadmitted: bool = True,
+    brake_rescue_nominal_rec_lcb_max: float = 0.60,
+    brake_rescue_nominal_gap_min: float = 0.02,
+    brake_rescue_nominal_drs_max: float = 1.01,
+    brake_rescue_counts_as_evidence: bool = True,
 ) -> SelectionResult:
     """Soft calibrated OC-RAP selector.
 
@@ -396,6 +416,7 @@ def calibrated_constrained_select(
     # returning to the v13 soft fallback.
     relative_certified = np.zeros((n,), dtype=bool)
     protective_certified = np.zeros((n,), dtype=bool)
+    brake_rescue_certified = np.zeros((n,), dtype=bool)
     rec_gain_vs_nom = np.zeros((n,), dtype=float)
     drs_gain_vs_nom = np.zeros((n,), dtype=float)
     gap_reduction_vs_nom = np.zeros((n,), dtype=float)
@@ -557,7 +578,40 @@ def calibrated_constrained_select(
                 protective_certified &= gap <= gap[ni] + float(protective_macro_max_gap_increase)
             protective_certified[ni] = False
 
-    admitted = scalar_admitted | option_certified | relative_certified | protective_certified
+    # v23 brake rescue certificate.  Unlike v21/v22 protective_macro_score, this
+    # does not trust the scalar recovery LCB to rank contact braking.  It uses a
+    # macro-specific physical prior plus calibrated shared-option evidence: a
+    # brake rescue is admissible only in contact-like low-headroom states, only
+    # if nominal is not already calibrated-admitted, and only when the brake
+    # candidate lies in a moderate uncertainty band (large enough gap to indicate
+    # recovery ambiguity, not so large that it is an unbounded artifact).
+    if bool(brake_rescue_certificate) and 0 <= int(nominal_index) < n:
+        ni = int(nominal_index)
+        brake_name = str(brake_rescue_macro_name or "brake").strip().lower()
+        macro_arr = np.asarray([str(m).strip().lower() for m in macro_names], dtype=object)
+        nominal_gate = (
+            rec_lcb[ni] <= float(brake_rescue_nominal_rec_lcb_max)
+            or gap[ni] >= float(brake_rescue_nominal_gap_min)
+            or drs_proxy[ni] <= float(brake_rescue_nominal_drs_max)
+        )
+        if bool(brake_rescue_require_nominal_unadmitted):
+            nominal_gate = nominal_gate and (not bool(scalar_admitted[ni] or option_certified[ni] or relative_certified[ni] or protective_certified[ni]))
+        brake_rescue_certified = (
+            feasible
+            & (hard <= float(brake_rescue_max_hard))
+            & (harm <= float(brake_rescue_max_harm))
+            & (macro_arr == brake_name)
+            & (drs_proxy >= float(brake_rescue_min_pred_drs))
+            & (r_dep >= float(brake_rescue_min_pred_r_dep))
+            & (gap >= float(brake_rescue_min_candidate_gap))
+            & (gap <= float(brake_rescue_max_candidate_gap))
+            & bool(nominal_gate)
+        )
+        # Keep the global semantic firewall as the final arbiter.
+        if intervention_macro_allow or intervention_macro_block or bool(intervention_require_macro):
+            brake_rescue_certified &= intervention_macro_mask
+
+    admitted = scalar_admitted | option_certified | relative_certified | protective_certified | brake_rescue_certified
     if intervention_macro_allow or intervention_macro_block or bool(intervention_require_macro):
         admitted = admitted & intervention_macro_mask
         if 0 <= int(nominal_index) < n and (scalar_admitted[int(nominal_index)] or safe[int(nominal_index)]):
@@ -599,7 +653,7 @@ def calibrated_constrained_select(
         # only looks attractive because of a large learned-score bonus should not
         # bypass the nominal-preserving abstention rule.
         relative_certified &= (score - score[int(nominal_index)]) <= float(relative_recovery_max_intervention_score_gain)
-        admitted = scalar_admitted | option_certified | relative_certified | protective_certified
+        admitted = scalar_admitted | option_certified | relative_certified | protective_certified | brake_rescue_certified
         if intervention_macro_allow or intervention_macro_block or bool(intervention_require_macro):
             admitted = admitted & intervention_macro_mask
             if 0 <= int(nominal_index) < n and (scalar_admitted[int(nominal_index)] or safe[int(nominal_index)]):
@@ -692,7 +746,7 @@ def calibrated_constrained_select(
         # recovery maneuver may lie outside the nominal hard-rule pool (e.g. a
         # stabilization/pull-over action).  Do not discard such a candidate after
         # certifying it via the explicit recovery pool above.
-        certified_intervention &= (pool | relative_certified | protective_certified)
+        certified_intervention &= (pool | relative_certified | protective_certified | brake_rescue_certified)
         certified_non_nom = certified_intervention.copy()
         if 0 <= nominal_index < n:
             certified_non_nom[int(nominal_index)] = False
@@ -718,6 +772,8 @@ def calibrated_constrained_select(
                 evidence = evidence | relative_certified
             if bool(protective_macro_counts_as_evidence):
                 evidence = evidence | protective_certified
+            if bool(brake_rescue_counts_as_evidence):
+                evidence = evidence | brake_rescue_certified
             certified_non_nom &= evidence
 
         if bool(intervention_budget_hard) and intervention_budget_rate is not None and intervention_budget_steps not in {None, 0} and 0 <= nominal_index < n:
@@ -737,6 +793,7 @@ def calibrated_constrained_select(
                     | (gap_reduction >= float(intervention_budget_hard_min_gap_reduction))
                     | protective_certified
                     | relative_certified
+                    | brake_rescue_certified
                 )
                 certified_non_nom &= hard_budget_evidence
 
@@ -856,15 +913,19 @@ def calibrated_constrained_select(
             return SelectionResult(int(nominal_index), "nominal_switch_margin_preserved", admitted)
 
     reason = "best_calibrated_admitted_score" if admitted[best_idx] else "best_calibrated_soft_constraint"
-    if admitted[best_idx] and protective_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx] and not relative_certified[best_idx]:
+    if admitted[best_idx] and brake_rescue_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx] and not relative_certified[best_idx] and not protective_certified[best_idx]:
+        reason = "best_brake_rescue_certified_score"
+    elif admitted[best_idx] and protective_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx] and not relative_certified[best_idx]:
         reason = "best_protective_macro_recovery_certified_score"
     elif admitted[best_idx] and relative_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx]:
         reason = "best_relative_recovery_certified_score"
     elif admitted[best_idx] and option_certified[best_idx] and not scalar_admitted[best_idx]:
         reason = "best_option_drs_certified_score"
-    admitted_rank_pool = pool | relative_certified | protective_certified
+    admitted_rank_pool = pool | relative_certified | protective_certified | brake_rescue_certified
     if bool(prefer_admitted) and bool((admitted_rank_pool & admitted).any()) and admitted[best_idx]:
-        if protective_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx] and not relative_certified[best_idx]:
+        if brake_rescue_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx] and not relative_certified[best_idx] and not protective_certified[best_idx]:
+            reason = "best_brake_rescue_certified_prefer_admitted"
+        elif protective_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx] and not relative_certified[best_idx]:
             reason = "best_protective_macro_recovery_certified_prefer_admitted"
         elif relative_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx]:
             reason = "best_relative_recovery_certified_prefer_admitted"

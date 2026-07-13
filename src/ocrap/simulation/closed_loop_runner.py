@@ -63,6 +63,12 @@ class ClosedLoopDecision:
     audit_best_pcd_pred_drs: float | None
     audit_selected_pcd_regret: float | None
     audit_pcd_selector_miss: bool | None
+    audit_paper_best_pcd_macro: str | None
+    audit_paper_best_pcd: float | None
+    audit_paper_best_pcd_drs: float | None
+    audit_paper_best_pcd_teacher_r_dep: float | None
+    audit_paper_selected_pcd_regret: float | None
+    audit_paper_pcd_selector_miss: bool | None
     fra_exec: float | None
     fra_cand: float | None
     drs: float | None
@@ -674,6 +680,12 @@ def _rollout_one_scene(
         audit_best_pcd_pred_drs = None
         audit_selected_pcd_regret = None
         audit_pcd_selector_miss = None
+        audit_paper_best_pcd_macro = None
+        audit_paper_best_pcd = None
+        audit_paper_best_pcd_drs = None
+        audit_paper_best_pcd_teacher_r_dep = None
+        audit_paper_selected_pcd_regret = None
+        audit_paper_pcd_selector_miss = None
         if (selected_label_audit or coverage_label_audit) and (step_idx % audit_every_n_steps == 0) and (audit_max_labels <= 0 or audit_labels_done < audit_max_labels):
             try:
                 cl_num_options = cl_cfg.get("num_recovery_options", None)
@@ -723,12 +735,24 @@ def _rollout_one_scene(
                     best_pcd_drs = None
                     best_pcd_r = None
                     best_pcd_cid = None
+                    best_paper_pcd = -float("inf")
+                    best_paper_pcd_drs = None
+                    best_paper_pcd_r = None
+                    best_paper_pcd_macro = None
                     item_by_cid = {int(getattr(item["sample"], "candidate_index", i)): (i, item) for i, item in enumerate(info.get("items", []))}
                     pred_q_by_cid = {cid: item["pred"].q for cid, (_, item) in item_by_cid.items()}
                     selected_pred_q = info["items"][sel_idx]["pred"].q
                     for lab in labeled:
                         ld = lab.to_npz_dict()
                         cid = int(lab.candidate_index)
+                        macro_i = None
+                        try:
+                            macro_i = str(getattr(getattr(item_by_cid.get(cid, (None, {}))[1].get("sample", None), "prefix", None), "macro_name", "")) or None
+                        except Exception:
+                            try:
+                                macro_i = str(getattr(getattr(lab, "prefix", None), "macro_name", "")) or None
+                            except Exception:
+                                macro_i = None
                         r_star = _safe_float(ld.get("r_dep_star", -float("inf")), -float("inf"))
                         pred_q_i = pred_q_by_cid.get(cid, selected_pred_q)
                         use_model_option_i = bool(method == "ocrap" and cid != 0)
@@ -744,6 +768,18 @@ def _rollout_one_scene(
                         drs_i = deployable_recovery_success(ld["m_star"], ld["root_probs"], int(opt_i), ld.get("root_valid", None))
                         odg_i = _safe_float(ld.get("oracle_gap_star", 0.0), 0.0)
                         pcd_i = post_contact_deployability_score(float(drs_i), float(r_star), float(odg_i))
+                        # v23 paper-eligible audit upper bound.  The global top-k
+                        # audit can choose exploratory families such as lane_shift.
+                        # This upper bound keeps nominal plus the paper's
+                        # recovery-eligible macro families only, so the reported
+                        # miss rate matches the executable action set.
+                        mi = str(macro_i or "").strip().lower()
+                        paper_eligible = mi in {"nominal", "brake", "stabilize", "yield", "merge"}
+                        if paper_eligible and pcd_i > best_paper_pcd:
+                            best_paper_pcd = float(pcd_i)
+                            best_paper_pcd_drs = float(drs_i)
+                            best_paper_pcd_r = float(r_star)
+                            best_paper_pcd_macro = macro_i
                         if r_star > best_r:
                             best_r = float(r_star)
                             best_drs = float(drs_i)
@@ -784,6 +820,14 @@ def _rollout_one_scene(
                         audit_selected_pcd_regret = float(best_pcd - float(selected_audit_pcds))
                         pcd_eps = float(cl_cfg.get("audit_pcd_miss_epsilon", 0.02) or 0.02)
                         audit_pcd_selector_miss = bool(float(selected_audit_pcds) + pcd_eps < best_pcd)
+                    if np.isfinite(best_paper_pcd):
+                        audit_paper_best_pcd_macro = None if best_paper_pcd_macro is None else str(best_paper_pcd_macro)
+                        audit_paper_best_pcd = float(best_paper_pcd)
+                        audit_paper_best_pcd_drs = None if best_paper_pcd_drs is None else float(best_paper_pcd_drs)
+                        audit_paper_best_pcd_teacher_r_dep = None if best_paper_pcd_r is None else float(best_paper_pcd_r)
+                        audit_paper_selected_pcd_regret = float(best_paper_pcd - float(selected_audit_pcds))
+                        pcd_eps = float(cl_cfg.get("audit_pcd_miss_epsilon", 0.02) or 0.02)
+                        audit_paper_pcd_selector_miss = bool(float(selected_audit_pcds) + pcd_eps < best_paper_pcd)
                     audit_labels_done += int(len(labeled))
             except Exception as exc:
                 if progress:
@@ -863,6 +907,12 @@ def _rollout_one_scene(
                 audit_best_pcd_pred_drs=audit_best_pcd_pred_drs,
                 audit_selected_pcd_regret=audit_selected_pcd_regret,
                 audit_pcd_selector_miss=audit_pcd_selector_miss,
+                audit_paper_best_pcd_macro=audit_paper_best_pcd_macro,
+                audit_paper_best_pcd=audit_paper_best_pcd,
+                audit_paper_best_pcd_drs=audit_paper_best_pcd_drs,
+                audit_paper_best_pcd_teacher_r_dep=audit_paper_best_pcd_teacher_r_dep,
+                audit_paper_selected_pcd_regret=audit_paper_selected_pcd_regret,
+                audit_paper_pcd_selector_miss=audit_paper_pcd_selector_miss,
                 fra_exec=(selected_audit_fra_exec if selected_audit_fra_exec is not None else (None if selected_teacher_r_dep is None else float(selected_teacher_r_dep < 0.0))),
                 fra_cand=info["fra_cand"],
                 drs=(None if selected_audit_drs is None else float(selected_audit_drs)) if (selected_label_audit or coverage_label_audit) else info["drs"],
@@ -912,6 +962,9 @@ def _rollout_one_scene(
         "closed_loop_audit_recoverable_candidate_rate": _mean_finite([float(d.audit_has_recoverable_candidate) for d in decisions if d.audit_has_recoverable_candidate is not None]),
         "closed_loop_audit_selector_miss_rate": _mean_finite([float(d.audit_selector_miss) for d in decisions if d.audit_selector_miss is not None]),
         "closed_loop_audit_pcd_selector_miss_rate": _mean_finite([float(d.audit_pcd_selector_miss) for d in decisions if d.audit_pcd_selector_miss is not None]),
+        "closed_loop_audit_paper_best_PCD": _mean_finite([d.audit_paper_best_pcd for d in decisions]),
+        "closed_loop_audit_paper_selected_PCD_regret": _mean_finite([d.audit_paper_selected_pcd_regret for d in decisions]),
+        "closed_loop_audit_paper_pcd_selector_miss_rate": _mean_finite([float(d.audit_paper_pcd_selector_miss) for d in decisions if d.audit_paper_pcd_selector_miss is not None]),
         "closed_loop_bounded_NUP": _mean_finite([d.nup for d in decisions], default=0.0),
         "closed_loop_pred_r_dep": _mean_finite([d.selected_pred_r_dep for d in decisions]),
         "closed_loop_pred_gap": _mean_finite([d.selected_pred_gap for d in decisions]),
@@ -925,6 +978,8 @@ def _rollout_one_scene(
         "audit_miss_selected_macro_counts": {m: int(sum((d.audit_selector_miss is True) and d.selected_macro == m for d in decisions)) for m in sorted({d.selected_macro for d in decisions})},
         "audit_pcd_best_macro_counts": {m: int(sum(d.audit_best_pcd_macro == m for d in decisions)) for m in sorted({d.audit_best_pcd_macro for d in decisions if d.audit_best_pcd_macro is not None})},
         "audit_pcd_miss_best_macro_counts": {m: int(sum((d.audit_pcd_selector_miss is True) and d.audit_best_pcd_macro == m for d in decisions)) for m in sorted({d.audit_best_pcd_macro for d in decisions if d.audit_best_pcd_macro is not None})},
+        "audit_paper_pcd_best_macro_counts": {m: int(sum(d.audit_paper_best_pcd_macro == m for d in decisions)) for m in sorted({d.audit_paper_best_pcd_macro for d in decisions if d.audit_paper_best_pcd_macro is not None})},
+        "audit_paper_pcd_miss_best_macro_counts": {m: int(sum((d.audit_paper_pcd_selector_miss is True) and d.audit_paper_best_pcd_macro == m for d in decisions)) for m in sorted({d.audit_paper_best_pcd_macro for d in decisions if d.audit_paper_best_pcd_macro is not None})},
         "selection_reason_counts": {r: int(sum(d.selection_reason == r for d in decisions)) for r in sorted({d.selection_reason for d in decisions})},
         "decisions": decision_dicts,
     }
@@ -933,7 +988,7 @@ def _rollout_one_scene(
     return out
 
 def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, source: str) -> dict[str, Any]:
-    keys = ["closed_loop_FRA_exec", "closed_loop_FRA_cand", "closed_loop_DRS", "closed_loop_ODG", "closed_loop_post_contact_deployability", "closed_loop_artifact_selection_rate", "closed_loop_audit_candidate_count", "closed_loop_audit_best_R_dep", "closed_loop_audit_best_DRS", "closed_loop_audit_selected_R_dep_regret", "closed_loop_audit_best_PCD", "closed_loop_audit_selected_PCD_regret", "closed_loop_audit_recoverable_candidate_rate", "closed_loop_audit_selector_miss_rate", "closed_loop_audit_pcd_selector_miss_rate", "closed_loop_bounded_NUP", "closed_loop_pred_r_dep", "closed_loop_pred_gap", "closed_loop_pred_DRS_proxy", "closed_loop_nominal_deviation", "intervention_rate"]
+    keys = ["closed_loop_FRA_exec", "closed_loop_FRA_cand", "closed_loop_DRS", "closed_loop_ODG", "closed_loop_post_contact_deployability", "closed_loop_artifact_selection_rate", "closed_loop_audit_candidate_count", "closed_loop_audit_best_R_dep", "closed_loop_audit_best_DRS", "closed_loop_audit_selected_R_dep_regret", "closed_loop_audit_best_PCD", "closed_loop_audit_selected_PCD_regret", "closed_loop_audit_recoverable_candidate_rate", "closed_loop_audit_selector_miss_rate", "closed_loop_audit_pcd_selector_miss_rate", "closed_loop_audit_paper_best_PCD", "closed_loop_audit_paper_selected_PCD_regret", "closed_loop_audit_paper_pcd_selector_miss_rate", "closed_loop_bounded_NUP", "closed_loop_pred_r_dep", "closed_loop_pred_gap", "closed_loop_pred_DRS_proxy", "closed_loop_nominal_deviation", "intervention_rate"]
     agg: dict[str, Any] = {
         "source": source,
         "method": method,
@@ -957,6 +1012,8 @@ def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, s
     audit_miss_selected_macro_counts: dict[str, int] = {}
     audit_pcd_best_macro_counts: dict[str, int] = {}
     audit_pcd_miss_best_macro_counts: dict[str, int] = {}
+    audit_paper_pcd_best_macro_counts: dict[str, int] = {}
+    audit_paper_pcd_miss_best_macro_counts: dict[str, int] = {}
     for s in scene_results:
         for m, c in (s.get("macro_counts", {}) or {}).items():
             macro_counts[m] = macro_counts.get(m, 0) + int(c)
@@ -970,6 +1027,10 @@ def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, s
             audit_pcd_best_macro_counts[m] = audit_pcd_best_macro_counts.get(m, 0) + int(c)
         for m, c in (s.get("audit_pcd_miss_best_macro_counts", {}) or {}).items():
             audit_pcd_miss_best_macro_counts[m] = audit_pcd_miss_best_macro_counts.get(m, 0) + int(c)
+        for m, c in (s.get("audit_paper_pcd_best_macro_counts", {}) or {}).items():
+            audit_paper_pcd_best_macro_counts[m] = audit_paper_pcd_best_macro_counts.get(m, 0) + int(c)
+        for m, c in (s.get("audit_paper_pcd_miss_best_macro_counts", {}) or {}).items():
+            audit_paper_pcd_miss_best_macro_counts[m] = audit_paper_pcd_miss_best_macro_counts.get(m, 0) + int(c)
         for r, c in (s.get("selection_reason_counts", {}) or {}).items():
             reason_counts[r] = reason_counts.get(r, 0) + int(c)
     agg["macro_counts"] = macro_counts
@@ -978,6 +1039,8 @@ def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, s
     agg["audit_miss_selected_macro_counts"] = audit_miss_selected_macro_counts
     agg["audit_pcd_best_macro_counts"] = audit_pcd_best_macro_counts
     agg["audit_pcd_miss_best_macro_counts"] = audit_pcd_miss_best_macro_counts
+    agg["audit_paper_pcd_best_macro_counts"] = audit_paper_pcd_best_macro_counts
+    agg["audit_paper_pcd_miss_best_macro_counts"] = audit_paper_pcd_miss_best_macro_counts
     agg["selection_reason_counts"] = reason_counts
     return agg
 
