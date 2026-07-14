@@ -8,11 +8,16 @@ external_baselines:
   model:
     arch: gameformer_levelk
     max_candidates: 24
+    # Matches the uploaded GameFormer design scale where possible.
     d_model: 256
-    num_layers: 3
+    num_layers: 4
     num_heads: 8
-    dropout: 0.15
+    dropout: 0.10
     num_levels: 4
+    modalities: 6
+    future_len: 20
+    history_len: 11
+    neighbors_to_predict: 8
     num_roots: 10
     num_options: 12
     root_feature_dim: 18
@@ -21,16 +26,17 @@ external_baselines:
     distributed: auto
     batch_size: 64
     num_workers: 8
-    epochs: 28
-    lr: 0.00015
+    epochs: 30
+    lr: 0.0001
     weight_decay: 0.0002
     grad_clip: 5.0
     tqdm: true
     pin_memory: true
   loss_weights:
     policy: 1.0
-    levelk: 0.35
+    levelk: 0.50
     level_response: 0.10
+    gameformer_traj: 0.35
     utility: 0.10
     hard: 0.50
     harm: 0.25

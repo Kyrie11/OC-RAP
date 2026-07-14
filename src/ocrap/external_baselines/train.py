@@ -96,8 +96,71 @@ def _forward_model(model: torch.nn.Module, batch: dict[str, torch.Tensor]) -> di
         root_probs=batch.get("root_probs", None),
         root_valid=batch.get("root_valid", None),
         option_valid=batch.get("option_valid", None),
+        topology_features=batch.get("topology_features", None),
+        topology_mask=batch.get("topology_mask", None),
+        ego_history=batch.get("ego_history", None),
+        neighbor_history=batch.get("neighbor_history", None),
+        neighbor_valid=batch.get("neighbor_valid", None),
+        prefix_traj=batch.get("prefix_traj", None),
+        prefix_valid=batch.get("prefix_valid", None),
+        actor_topology_features=batch.get("actor_topology_features", None),
+        actor_topology_mask=batch.get("actor_topology_mask", None),
+        map_topology_features=batch.get("map_topology_features", None),
+        map_topology_mask=batch.get("map_topology_mask", None),
     )
 
+
+
+
+def _gameformer_traj_loss(out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor]) -> torch.Tensor:
+    traj_levels = out.get("gameformer_level_trajs")
+    score_levels = out.get("gameformer_level_scores")
+    if not isinstance(traj_levels, list) or not isinstance(score_levels, list) or "prefix_traj" not in batch:
+        return out["logits"].sum() * 0.0
+    gt = batch["prefix_traj"].float()
+    valid = batch.get("prefix_valid", torch.ones_like(gt[..., 0])).bool() & batch["mask"].bool().unsqueeze(-1)
+    losses = []
+    for traj, scores in zip(traj_levels, score_levels):
+        pred = traj[..., :2]  # [B,N,M,T,2]
+        B, N, M, T, _ = pred.shape
+        g = gt[:, :, None, :T, :]
+        v = valid[:, :, None, :T]
+        dist = torch.linalg.norm(pred - g, dim=-1)
+        masked_dist = (dist * v.float()).sum(dim=-1) / v.float().sum(dim=-1).clamp_min(1.0)
+        best = masked_dist.argmin(dim=-1)  # [B,N]
+        bidx = torch.arange(B, device=pred.device)[:, None]
+        nidx = torch.arange(N, device=pred.device)[None, :]
+        best_pred = pred[bidx, nidx, best]
+        reg = F.smooth_l1_loss(best_pred[valid], gt[:, :, :T, :][valid]) if bool(valid.any()) else pred.sum() * 0.0
+        flat_mask = batch["mask"].bool().reshape(-1)
+        cls = F.cross_entropy(scores.reshape(B * N, M)[flat_mask], best.reshape(-1)[flat_mask]) if bool(flat_mask.any()) else pred.sum() * 0.0
+        losses.append(reg + 0.25 * cls)
+    return torch.stack(losses).mean() if losses else out["logits"].sum() * 0.0
+
+
+def _focal_topk_loss(logits: torch.Tensor, target: torch.Tensor, valid: torch.Tensor, *, top_k_ratio: float = 0.25) -> torch.Tensor:
+    # logits [B,N,K,1] or [B,N,K]; target/valid [B,N,K]
+    if logits.dim() == target.dim() + 1:
+        logits = logits.squeeze(-1)
+    target = target.float()
+    valid = valid.bool()
+    if not bool(valid.any()):
+        return logits.sum() * 0.0
+    p = torch.sigmoid(logits)
+    ce = F.binary_cross_entropy_with_logits(logits, target, reduction="none")
+    pt = p * target + (1.0 - p) * (1.0 - target)
+    loss = ce * (1.0 - pt).pow(2.0)
+    loss = loss.masked_fill(~valid, 0.0)
+    B, N, K = loss.shape
+    flat = loss.reshape(B, N * K)
+    vflat = valid.reshape(B, N * K)
+    k = max(1, int(float(top_k_ratio) * max(N * K, 1)))
+    # Follow BeTop's hard-topology mining: sort all valid topology terms and keep the hardest top-k.
+    flat = flat.masked_fill(~vflat, -1.0)
+    vals = torch.topk(flat, k=min(k, flat.shape[-1]), dim=-1).values
+    vals = vals.clamp_min(0.0)
+    denom = (vals > 0).float().sum(dim=-1).clamp_min(1.0)
+    return (vals.sum(dim=-1) / denom).mean()
 
 def _loss_dict(out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], cfg: dict[str, Any]) -> dict[str, torch.Tensor]:
     bcfg = cfg.get("external_baselines", {}) if isinstance(cfg.get("external_baselines", {}), dict) else {}
@@ -129,10 +192,29 @@ def _loss_dict(out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], cfg
     losses["loss_harm"] = _masked_mse(out["harm"], batch["harm"].float(), mask)
     losses["loss_oracle_rec"] = _masked_mse(out["r_orc"], batch["r_orc"].float(), mask)
     losses["loss_deploy_rec"] = _masked_mse(out["r_dep"], batch["r_dep"].float(), mask)
+    losses["loss_gameformer_traj"] = _gameformer_traj_loss(out, batch)
+    actor_topo = out.get("actor_topo_logits")
+    map_topo = out.get("map_topo_logits")
+    topo_losses = []
+    if actor_topo is not None and "actor_topology_target" in batch and "actor_topology_mask" in batch:
+        topo_losses.append(_focal_topk_loss(actor_topo, batch["actor_topology_target"].float(), batch["actor_topology_mask"].bool() & mask.unsqueeze(-1), top_k_ratio=float(lw.get("topology_topk_ratio", 0.25))))
+    if map_topo is not None and "map_topology_target" in batch and "map_topology_mask" in batch:
+        topo_losses.append(_focal_topk_loss(map_topo, batch["map_topology_target"].float(), batch["map_topology_mask"].bool() & mask.unsqueeze(-1), top_k_ratio=float(lw.get("topology_topk_ratio", 0.25))))
+    if topo_losses:
+        losses["loss_topology"] = torch.stack(topo_losses).mean()
+    else:
+        topo_logits = out.get("topology_logits")
+        if topo_logits is not None and "topology_target" in batch and "topology_mask" in batch and topo_logits.shape[-1] > 1:
+            topo_mask = batch["topology_mask"].bool() & mask.unsqueeze(-1)
+            losses["loss_topology"] = F.cross_entropy(topo_logits[topo_mask], batch["topology_target"].long()[topo_mask]) if bool(topo_mask.any()) else out["logits"].sum() * 0.0
+        else:
+            losses["loss_topology"] = out["logits"].sum() * 0.0
     losses["loss"] = (
         float(lw.get("policy", 1.0)) * losses["loss_policy"]
         + float(lw.get("levelk", 0.35)) * losses["loss_levelk"]
         + float(lw.get("level_response", 0.10)) * losses["loss_level_response"]
+        + float(lw.get("topology", 0.0)) * losses["loss_topology"]
+        + float(lw.get("gameformer_traj", 0.25)) * losses["loss_gameformer_traj"]
         + float(lw.get("utility", 0.10)) * losses["loss_utility"]
         + float(lw.get("hard", 0.50)) * losses["loss_hard"]
         + float(lw.get("harm", 0.25)) * losses["loss_harm"]
@@ -234,6 +316,14 @@ def train_external_baseline(dataset: str, output: str, cfg: dict[str, Any], *, v
                     "num_roots": int(train_ds.num_roots),
                     "num_options": int(train_ds.num_options),
                     "root_feature_dim": int(train_ds.root_feature_dim),
+                    "num_topology_agents": int(getattr(train_ds, "num_topology_agents", 0)),
+                    "topology_feature_dim": int(getattr(train_ds, "topology_feature_dim", 0)),
+                    "actor_topology_feature_dim": int(getattr(train_ds, "actor_topology_feature_dim", 0)),
+                    "num_topology_map": int(getattr(train_ds, "num_topology_map", 0)),
+                    "map_topology_feature_dim": int(getattr(train_ds, "map_topology_feature_dim", 0)),
+                    "history_len": int(getattr(train_ds, "history_len", 0)),
+                    "neighbors_to_predict": int(getattr(train_ds, "neighbors_to_predict", 0)),
+                    "future_len": int(getattr(train_ds, "future_len", 0)),
                     "model_state": _model_state(model),
                     "epoch": int(ep),
                     "val_loss": float(va.get("loss", 0.0)),
@@ -254,6 +344,14 @@ def train_external_baseline(dataset: str, output: str, cfg: dict[str, Any], *, v
             "num_roots": int(train_ds.num_roots),
             "num_options": int(train_ds.num_options),
             "root_feature_dim": int(train_ds.root_feature_dim),
+            "num_topology_agents": int(getattr(train_ds, "num_topology_agents", 0)),
+            "topology_feature_dim": int(getattr(train_ds, "topology_feature_dim", 0)),
+            "actor_topology_feature_dim": int(getattr(train_ds, "actor_topology_feature_dim", 0)),
+            "num_topology_map": int(getattr(train_ds, "num_topology_map", 0)),
+            "map_topology_feature_dim": int(getattr(train_ds, "map_topology_feature_dim", 0)),
+            "history_len": int(getattr(train_ds, "history_len", 0)),
+            "neighbors_to_predict": int(getattr(train_ds, "neighbors_to_predict", 0)),
+            "future_len": int(getattr(train_ds, "future_len", 0)),
             "best_epoch": int(best_epoch),
             "best_val_loss": float(best_val),
             "seconds": float(perf_counter() - t0),

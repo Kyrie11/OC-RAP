@@ -197,12 +197,22 @@ def select_external_policy(
     r_dep = np.asarray([_scalar(d, "r_dep_star", 0.0) for d in samples], dtype=float)
     safe = feasible & (hard <= float(pcfg.get("gamma_H", 0.0))) & (harm <= float(pcfg.get("gamma_D", 5.0)))
 
-    if baseline in {"route_bc", "route_bc_lite", "waymax_bc", "waymax_bc_lite", "route_bc_wayformer"}:
+    if baseline in {"nominal", "nominal_replay", "log_replay"}:
+        admitted = np.zeros(n, dtype=bool)
+        score = utility.copy()
+        nominal = [i for i, d in enumerate(samples) if _scalar(d, "is_nominal", 0.0) > 0.5]
+        idx = int(nominal[0] if nominal else 0)
+        if not feasible[idx]:
+            idx = _best(score, feasible)
+        admitted[idx] = True
+        return ExternalSelection(idx, "logged_nominal_replay", admitted, score)
+
+    if baseline in {"route_bc", "route_bc_lite", "waymax_bc", "waymax_bc_lite", "wayformer_bc", "wayformer_style_bc", "route_bc_wayformer"}:
         admitted = np.zeros(n, dtype=bool)
         if model_outputs and "logits" in model_outputs:
             score = np.asarray(model_outputs["logits"], dtype=float)[:n]
             idx = _best(score, feasible)
-            reason = "learned_route_conditioned_bc"
+            reason = "learned_route_conditioned_wayformer_bc"
         else:
             score = utility.copy()
             nominal = [i for i, d in enumerate(samples) if _scalar(d, "is_nominal", 0.0) > 0.5]
@@ -226,6 +236,38 @@ def select_external_policy(
             reason = "teacher_interaction_oracle_risk"
         idx = _best(score, feasible)
         admitted = safe & (r_orc >= float(pcfg.get("gamma_oracle_rec", 0.0)))
+        return ExternalSelection(idx, reason, admitted, score)
+
+    if baseline in {"betop", "betop_lite", "betopnet", "betopnet_lite"}:
+        if model_outputs:
+            logits = np.asarray(model_outputs.get("logits", utility), dtype=float)[:n]
+            u = np.asarray(model_outputs.get("utility", utility), dtype=float)[:n]
+            h = np.maximum(0.0, np.asarray(model_outputs.get("hard", hard), dtype=float)[:n])
+            hp = np.maximum(0.0, np.asarray(model_outputs.get("harm", harm), dtype=float)[:n])
+            topo_logits = model_outputs.get("actor_topo_logits", model_outputs.get("topology_logits"))
+            if topo_logits is not None:
+                topo = np.asarray(topo_logits, dtype=float)[:n]
+                # BeTop predicts binary behavioral-topology occupancies.  Use a
+                # topology confidence/interaction prior from the strongest actor
+                # relation, rather than a deployability certificate.
+                if topo.shape[-1] == 1:
+                    prob = 1.0 / (1.0 + np.exp(-np.clip(topo[..., 0], -40.0, 40.0)))
+                    topo_conf = prob.max(axis=-1)
+                else:
+                    topo_prob = np.exp(topo - np.max(topo, axis=-1, keepdims=True))
+                    topo_prob = topo_prob / np.maximum(topo_prob.sum(axis=-1, keepdims=True), 1e-9)
+                    topo_conf = topo_prob.max(axis=-1).mean(axis=-1)
+            else:
+                topo_conf = np.ones(n, dtype=float)
+            score = logits + float(pcfg.get("betop_utility_weight", 0.25)) * u - float(pcfg.get("betop_hard_weight", 10.0)) * h - float(pcfg.get("betop_harm_weight", 1.5)) * hp + float(pcfg.get("betop_topology_conf_weight", 0.25)) * topo_conf
+            reason = "learned_behavioral_topology_planner"
+        else:
+            branch_tmp = [_branchwise_values(d, alpha=float(pcfg.get("cvar_alpha", 0.2))) for d in samples]
+            branch_expected_tmp = np.asarray([b["expected"] for b in branch_tmp], dtype=float)
+            score = utility + float(pcfg.get("betop_branch_weight", 0.5)) * branch_expected_tmp - float(pcfg.get("betop_hard_weight", 10.0)) * hard - float(pcfg.get("betop_harm_weight", 1.5)) * harm
+            reason = "teacher_behavioral_topology_surrogate"
+        idx = _best(score, feasible)
+        admitted = safe
         return ExternalSelection(idx, reason, admitted, score)
 
     branch = [_branchwise_values(d, alpha=float(pcfg.get("cvar_alpha", 0.2))) for d in samples]

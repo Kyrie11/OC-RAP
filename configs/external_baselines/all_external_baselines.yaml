@@ -1,8 +1,11 @@
 external_baselines:
   baseline: gameformer_lite
   methods:
+    - nominal_replay
+    - wayformer_bc
     - route_bc_lite
     - gameformer_lite
+    - betopnet_lite
     - marc_lite
     - racp_lite
     - expected_risk_filter
@@ -17,13 +20,22 @@ external_baselines:
     arch: gameformer_levelk
     max_candidates: 24
     d_model: 256
-    num_layers: 3
+    num_layers: 4
     num_heads: 8
-    dropout: 0.15
+    dropout: 0.10
     num_levels: 4
+    modalities: 6
+    future_len: 20
+    history_len: 11
+    neighbors_to_predict: 8
     num_roots: 10
     num_options: 12
     root_feature_dim: 18
+    num_topology_agents: 16
+    actor_topology_feature_dim: 16
+    num_topology_map: 64
+    map_topology_feature_dim: 14
+    num_topo: 16
   training:
     device: auto
     distributed: auto
@@ -39,6 +51,9 @@ external_baselines:
     policy: 1.0
     levelk: 0.35
     level_response: 0.10
+    gameformer_traj: 0.35
+    topology: 1.0
+    topology_topk_ratio: 0.25
     utility: 0.10
     hard: 0.50
     harm: 0.25
@@ -53,6 +68,11 @@ external_baselines:
     gameformer_hard_weight: 12.0
     gameformer_harm_weight: 2.0
     gameformer_oracle_weight: 1.0
+    betop_hard_weight: 10.0
+    betop_harm_weight: 1.5
+    betop_utility_weight: 0.25
+    betop_branch_weight: 0.5
+    betop_topology_conf_weight: 0.25
     marc_risk_tolerance: 0.35
     marc_branch_rec_weight: 1.0
     marc_hard_weight: 10.0

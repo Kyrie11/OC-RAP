@@ -1,6 +1,6 @@
 external_baselines:
   baseline: wayformer_bc
-  methods: [wayformer_bc, route_bc_lite]
+  methods: [wayformer_bc]
   max_candidates: 24
   model:
     arch: route_bc_wayformer

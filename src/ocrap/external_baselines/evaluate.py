@@ -16,7 +16,7 @@ from ocrap.evaluation.metrics import (
     post_contact_deployability_score,
     summarize_selection_metrics,
 )
-from ocrap.external_baselines.data import group_sample_paths, _branch_arrays
+from ocrap.external_baselines.data import group_sample_paths, _branch_arrays, _topology_arrays, _history_arrays, _actor_topology_arrays, _map_topology_arrays
 from ocrap.external_baselines.models import build_model_from_cfg
 from ocrap.external_baselines.policies import ExternalSelection, select_external_policy
 from ocrap.models.data import sample_to_feature
@@ -63,7 +63,13 @@ def _load_checkpoint(checkpoint: str | Path | None, cfg: dict[str, Any]) -> tupl
     if "max_candidates" in ckpt:
         eb["max_candidates"] = int(ckpt.get("max_candidates"))
         mcfg["max_candidates"] = int(ckpt.get("max_candidates"))
-    for ck, mk in [("num_roots", "num_roots"), ("num_options", "num_options"), ("root_feature_dim", "root_feature_dim")]:
+    for ck, mk in [
+        ("num_roots", "num_roots"), ("num_options", "num_options"), ("root_feature_dim", "root_feature_dim"),
+        ("num_topology_agents", "num_topology_agents"), ("topology_feature_dim", "topology_feature_dim"),
+        ("actor_topology_feature_dim", "actor_topology_feature_dim"), ("num_topology_map", "num_topology_map"),
+        ("map_topology_feature_dim", "map_topology_feature_dim"), ("history_len", "history_len"),
+        ("neighbors_to_predict", "neighbors_to_predict"), ("future_len", "future_len"),
+    ]:
         if ck in ckpt:
             mcfg[mk] = int(ckpt[ck])
     device_req = str(((merged.get("external_baselines", {}) or {}).get("training", {}) or {}).get("device", (merged.get("training", {}) or {}).get("device", "auto")))
@@ -83,8 +89,15 @@ def _predict_group(model: torch.nn.Module | None, samples: list[dict[str, Any]],
     if not feats:
         return None
     D = int(feats[0].shape[0])
-    bm0, rf0, _, _, ov0 = _branch_arrays(samples[0], cfg)
+    bm0, rf0, _, _, _ = _branch_arrays(samples[0], cfg)
+    ego0, neigh0, _, pref0, _ = _history_arrays(samples[0], cfg)
+    actor0, _, _ = _actor_topology_arrays(samples[0], cfg)
+    map0, _, _ = _map_topology_arrays(samples[0], cfg)
     K, L, Fdim = int(bm0.shape[0]), int(bm0.shape[1]), int(rf0.shape[-1])
+    H, A_hist, T = int(ego0.shape[0]), int(neigh0.shape[0]), int(pref0.shape[0])
+    A_top, AF = int(actor0.shape[0]), int(actor0.shape[-1])
+    M_top, MF = int(map0.shape[0]), int(map0.shape[-1])
+
     x = np.zeros((1, max_candidates, D), dtype=np.float32)
     mask = np.zeros((1, max_candidates), dtype=bool)
     branch_margins = np.zeros((1, max_candidates, K, L), dtype=np.float32)
@@ -92,6 +105,16 @@ def _predict_group(model: torch.nn.Module | None, samples: list[dict[str, Any]],
     root_probs = np.zeros((1, max_candidates, K), dtype=np.float32)
     root_valid = np.zeros((1, max_candidates, K), dtype=bool)
     option_valid = np.zeros((1, max_candidates, L), dtype=bool)
+    ego_history = np.zeros((1, max_candidates, H, 9), dtype=np.float32)
+    neighbor_history = np.zeros((1, max_candidates, A_hist, H, 9), dtype=np.float32)
+    neighbor_valid = np.zeros((1, max_candidates, A_hist, H), dtype=bool)
+    prefix_traj = np.zeros((1, max_candidates, T, 2), dtype=np.float32)
+    prefix_valid = np.zeros((1, max_candidates, T), dtype=bool)
+    actor_topology_features = np.zeros((1, max_candidates, A_top, AF), dtype=np.float32)
+    actor_topology_mask = np.zeros((1, max_candidates, A_top), dtype=bool)
+    map_topology_features = np.zeros((1, max_candidates, M_top, MF), dtype=np.float32)
+    map_topology_mask = np.zeros((1, max_candidates, M_top), dtype=bool)
+
     for i, f in enumerate(feats):
         x[0, i] = f
         mask[0, i] = True
@@ -101,6 +124,18 @@ def _predict_group(model: torch.nn.Module | None, samples: list[dict[str, Any]],
         root_probs[0, i] = rp
         root_valid[0, i] = rv
         option_valid[0, i] = ov
+        eh, nh, nv, pt, pv = _history_arrays(samples[i], cfg)
+        ego_history[0, i] = eh
+        neighbor_history[0, i] = nh
+        neighbor_valid[0, i] = nv
+        prefix_traj[0, i] = pt
+        prefix_valid[0, i] = pv
+        af, _, am = _actor_topology_arrays(samples[i], cfg)
+        mf, _, mm = _map_topology_arrays(samples[i], cfg)
+        actor_topology_features[0, i] = af
+        actor_topology_mask[0, i] = am
+        map_topology_features[0, i] = mf
+        map_topology_mask[0, i] = mm
     with torch.no_grad():
         out = model(
             torch.from_numpy(x).to(device),
@@ -110,6 +145,15 @@ def _predict_group(model: torch.nn.Module | None, samples: list[dict[str, Any]],
             root_probs=torch.from_numpy(root_probs).to(device),
             root_valid=torch.from_numpy(root_valid).to(device),
             option_valid=torch.from_numpy(option_valid).to(device),
+            ego_history=torch.from_numpy(ego_history).to(device),
+            neighbor_history=torch.from_numpy(neighbor_history).to(device),
+            neighbor_valid=torch.from_numpy(neighbor_valid).to(device),
+            prefix_traj=torch.from_numpy(prefix_traj).to(device),
+            prefix_valid=torch.from_numpy(prefix_valid).to(device),
+            actor_topology_features=torch.from_numpy(actor_topology_features).to(device),
+            actor_topology_mask=torch.from_numpy(actor_topology_mask).to(device),
+            map_topology_features=torch.from_numpy(map_topology_features).to(device),
+            map_topology_mask=torch.from_numpy(map_topology_mask).to(device),
         )
     result: dict[str, np.ndarray] = {}
     for k, v in out.items():
@@ -230,7 +274,7 @@ def evaluate_external_baselines(
             records_by_method[method].append(_record_for_selection(method, samples, sel, model_cfg))
         if gi == 1 or gi % 500 == 0:
             print({"event": "external_eval_progress", "groups_done": gi, "num_groups": len(groups)}, flush=True)
-    learned_methods = {"route_bc", "route_bc_lite", "waymax_bc", "waymax_bc_lite", "route_bc_wayformer", "gameformer", "gameformer_lite", "gameformer_levelk"}
+    learned_methods = {"route_bc", "route_bc_lite", "waymax_bc", "waymax_bc_lite", "wayformer_bc", "wayformer_style_bc", "route_bc_wayformer", "gameformer", "gameformer_lite", "gameformer_levelk", "betop", "betop_lite", "betopnet", "betopnet_lite"}
     summaries = {
         m: _summarize(
             records_by_method[m],
