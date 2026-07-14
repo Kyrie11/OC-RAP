@@ -193,13 +193,29 @@ def _loss_dict(out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], cfg
     losses["loss_oracle_rec"] = _masked_mse(out["r_orc"], batch["r_orc"].float(), mask)
     losses["loss_deploy_rec"] = _masked_mse(out["r_dep"], batch["r_dep"].float(), mask)
     losses["loss_gameformer_traj"] = _gameformer_traj_loss(out, batch)
-    actor_topo = out.get("actor_topo_logits")
-    map_topo = out.get("map_topo_logits")
     topo_losses = []
-    if actor_topo is not None and "actor_topology_target" in batch and "actor_topology_mask" in batch:
-        topo_losses.append(_focal_topk_loss(actor_topo, batch["actor_topology_target"].float(), batch["actor_topology_mask"].bool() & mask.unsqueeze(-1), top_k_ratio=float(lw.get("topology_topk_ratio", 0.25))))
-    if map_topo is not None and "map_topology_target" in batch and "map_topology_mask" in batch:
-        topo_losses.append(_focal_topk_loss(map_topo, batch["map_topology_target"].float(), batch["map_topology_mask"].bool() & mask.unsqueeze(-1), top_k_ratio=float(lw.get("topology_topk_ratio", 0.25))))
+
+    def _as_level_list(value: Any) -> list[torch.Tensor]:
+        if isinstance(value, list):
+            return [v for v in value if torch.is_tensor(v)]
+        return [value] if torch.is_tensor(value) else []
+
+    # BeTopNet-style topology reasoning has a topology decoder at every fusion
+    # layer.  In the source-adapted model the earlier decoder logits are returned
+    # as *_levels.  They must all participate in the loss; otherwise DDP sees the
+    # early decoder parameters as unused and fails on the next iteration.
+    actor_levels = _as_level_list(out.get("actor_topo_logits_levels")) or _as_level_list(out.get("actor_topo_logits"))
+    map_levels = _as_level_list(out.get("map_topo_logits_levels")) or _as_level_list(out.get("map_topo_logits"))
+    if actor_levels and "actor_topology_target" in batch and "actor_topology_mask" in batch:
+        target = batch["actor_topology_target"].float()
+        valid = batch["actor_topology_mask"].bool() & mask.unsqueeze(-1)
+        for z in actor_levels:
+            topo_losses.append(_focal_topk_loss(z, target, valid, top_k_ratio=float(lw.get("topology_topk_ratio", 0.25))))
+    if map_levels and "map_topology_target" in batch and "map_topology_mask" in batch:
+        target = batch["map_topology_target"].float()
+        valid = batch["map_topology_mask"].bool() & mask.unsqueeze(-1)
+        for z in map_levels:
+            topo_losses.append(_focal_topk_loss(z, target, valid, top_k_ratio=float(lw.get("topology_topk_ratio", 0.25))))
     if topo_losses:
         losses["loss_topology"] = torch.stack(topo_losses).mean()
     else:
@@ -316,7 +332,13 @@ def train_external_baseline(dataset: str, output: str, cfg: dict[str, Any], *, v
         device = _device(cfg, use_ddp=use_ddp, local_rank=local_rank)
         model = build_model_from_cfg(train_ds.feature_dim, cfg).to(device)
         if use_ddp:
-            model = DDP(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=bool(tcfg.get("find_unused_parameters", False)))
+            fup = tcfg.get("find_unused_parameters", "auto")
+            if isinstance(fup, str):
+                fup_s = fup.lower()
+                find_unused = baseline_name.lower() in {"betop", "betop_lite", "betopnet", "betopnet_lite"} if fup_s == "auto" else fup_s in {"1", "true", "yes"}
+            else:
+                find_unused = bool(fup)
+            model = DDP(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=find_unused)
         opt = torch.optim.AdamW(model.parameters(), lr=float(tcfg.get("lr", 2.0e-4)), weight_decay=float(tcfg.get("weight_decay", 1.0e-4)))
         batch_size = int(tcfg.get("batch_size", 32))
         num_workers = int(tcfg.get("num_workers", 0))

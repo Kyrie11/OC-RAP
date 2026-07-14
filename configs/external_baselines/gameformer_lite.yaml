@@ -32,6 +32,7 @@ external_baselines:
     grad_clip: 5.0
     tqdm: true
     pin_memory: true
+    find_unused_parameters: auto
   loss_weights:
     policy: 1.0
     levelk: 0.50
