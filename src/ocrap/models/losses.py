@@ -515,6 +515,126 @@ def _torch_pcd_score(drs: torch.Tensor, r_dep: torch.Tensor, gap: torch.Tensor) 
     return torch.clamp(drs, 0.0, 1.0) * torch.sigmoid(r_dep.float()) * torch.exp(-torch.clamp(gap.float(), min=0.0, max=20.0))
 
 
+
+
+def deployability_dominance_calibration_loss(
+    pred_r_dep: torch.Tensor,
+    pred_gap: torch.Tensor,
+    utility: torch.Tensor,
+    pred_q: torch.Tensor,
+    teacher_r_dep: torch.Tensor,
+    teacher_r_orc: torch.Tensor,
+    teacher_q: torch.Tensor,
+    root_probs: torch.Tensor,
+    root_valid: torch.Tensor,
+    option_valid: torch.Tensor,
+    scene_hash: torch.Tensor,
+    time_index: torch.Tensor,
+    macro_type_id: torch.Tensor,
+    is_nominal: torch.Tensor,
+    bucket_id: torch.Tensor,
+    *,
+    macro_ids: tuple[int, ...] = (2, 3, 5, 7),
+    bucket_ids: tuple[int, ...] = (2,),
+    margin: float = 0.12,
+    min_teacher_pcd_gain: float = 0.04,
+    min_teacher_best_pcd: float = 0.50,
+    max_nominal_teacher_pcd: float = 0.62,
+    pred_gap_weight: float = 0.20,
+    pred_drs_weight: float = 0.35,
+    utility_weight: float = 0.00,
+    success_gamma: float = 0.0,
+    success_temperature: float = 0.25,
+    target_min_pred_pcd: float = 0.45,
+    nominal_max_pred_pcd: float = 0.55,
+) -> torch.Tensor:
+    """Regime-conditioned deployability-dominance calibration.
+
+    Selector-only rescue can only use learned deployability heads.  The v26
+    audits show that those heads still rank a high-confidence nominal prefix
+    above teacher-deployable recovery macros in some post-contact states, while
+    in near-contact they over-admit brake when merge/yield/nominal is the true
+    deployable choice.  This loss distills the *group-wise* teacher PCD ordering
+    directly into the model: when a paper-eligible recovery macro has materially
+    higher teacher PCD than nominal, its predicted PCD score must outrank nominal;
+    when nominal teacher PCD is poor, the nominal predicted PCD is also capped.
+    """
+    if pred_r_dep.numel() <= 1 or not macro_ids or not bucket_ids:
+        return pred_r_dep.sum() * 0.0
+    pr = torch.nan_to_num(pred_r_dep.float().reshape(-1), nan=-20.0, posinf=20.0, neginf=-20.0)
+    pg = torch.clamp(torch.nan_to_num(pred_gap.float().reshape(-1), nan=0.0, posinf=20.0, neginf=0.0), min=0.0)
+    u = torch.nan_to_num(utility.float().reshape(-1), nan=0.0, posinf=0.0, neginf=0.0)
+    trd = torch.nan_to_num(teacher_r_dep.float().reshape(-1), nan=-20.0, posinf=20.0, neginf=-20.0)
+    tro = torch.nan_to_num(teacher_r_orc.float().reshape(-1), nan=-20.0, posinf=20.0, neginf=-20.0)
+    pred_drs = _differentiable_shared_success(
+        pred_q, root_probs, root_valid, option_valid, gamma=success_gamma, temperature=success_temperature
+    ).reshape(-1)
+    with torch.no_grad():
+        teacher_drs = _differentiable_shared_success(
+            teacher_q, root_probs, root_valid, option_valid, gamma=success_gamma, temperature=max(0.08, success_temperature * 0.5)
+        ).reshape(-1)
+    sh = scene_hash.reshape(-1)
+    ti = time_index.reshape(-1)
+    mac = macro_type_id.reshape(-1)
+    isn = is_nominal.float().reshape(-1) > 0.5
+    bid = bucket_id.reshape(-1)
+    n = min(pr.numel(), pg.numel(), u.numel(), trd.numel(), tro.numel(), pred_drs.numel(), teacher_drs.numel(), sh.numel(), ti.numel(), mac.numel(), isn.numel(), bid.numel())
+    if n <= 1:
+        return pred_r_dep.sum() * 0.0
+    pr, pg, u, trd, tro = pr[:n], pg[:n], u[:n], trd[:n], tro[:n]
+    pred_drs, teacher_drs = pred_drs[:n], teacher_drs[:n]
+    sh, ti, mac, isn, bid = sh[:n], ti[:n], mac[:n], isn[:n], bid[:n]
+    finite = torch.isfinite(pr) & torch.isfinite(pg) & torch.isfinite(u) & torch.isfinite(trd) & torch.isfinite(tro) & torch.isfinite(pred_drs) & torch.isfinite(teacher_drs)
+    bucket_mask = torch.zeros_like(finite)
+    for b in tuple(int(x) for x in bucket_ids):
+        bucket_mask |= bid == int(b)
+    macro_mask = torch.zeros_like(finite)
+    for m in tuple(int(x) for x in macro_ids):
+        macro_mask |= mac == int(m)
+    finite = finite & bucket_mask
+    if not bool(finite.any()):
+        return pred_r_dep.sum() * 0.0
+    teacher_gap = torch.clamp(tro - trd, min=0.0)
+    teacher_pcd = _torch_pcd_score(teacher_drs, trd, teacher_gap)
+    pred_pcd = _torch_pcd_score(pred_drs, pr, pg)
+    # PCD is the primary target; the auxiliary score retains margin/gap/utility
+    # signals so gradients do not collapse when PCD values tie near 0 or 0.62.
+    pred_score = pred_pcd + pred_drs_weight * pred_drs + pr - pred_gap_weight * pg + utility_weight * u
+    teacher_score = teacher_pcd + 0.25 * teacher_drs + trd - 0.10 * teacher_gap
+    losses: list[torch.Tensor] = []
+    keys = torch.stack([sh, ti], dim=1)
+    for key in torch.unique(keys[finite], dim=0):
+        mask = finite & (sh == key[0]) & (ti == key[1])
+        if int(mask.sum().item()) < 2:
+            continue
+        idx = torch.where(mask)[0]
+        nom_idx = idx[isn[idx]]
+        if nom_idx.numel() == 0:
+            continue
+        nom = nom_idx[0]
+        rec_idx = idx[macro_mask[idx]]
+        if rec_idx.numel() == 0:
+            continue
+        good = rec_idx[
+            (teacher_pcd[rec_idx] >= float(min_teacher_best_pcd))
+            & (teacher_pcd[rec_idx] >= teacher_pcd[nom] + float(min_teacher_pcd_gain))
+            & (teacher_pcd[nom] <= float(max_nominal_teacher_pcd))
+        ]
+        if good.numel() == 0:
+            continue
+        target = good[torch.argmax(teacher_score[good])]
+        losses.append(F.relu(float(margin) - (pred_score[target] - pred_score[nom])))
+        losses.append(F.relu(float(target_min_pred_pcd) - pred_pcd[target]))
+        losses.append(F.relu(pred_pcd[nom] - float(nominal_max_pred_pcd)))
+        # Separate from other non-target candidates in the group, but with a
+        # smaller margin so legitimate ties among recovery families are allowed.
+        others = idx[idx != target]
+        if others.numel() > 0:
+            losses.append(F.relu(0.5 * float(margin) - (pred_score[target] - pred_score[others])).mean())
+    if not losses:
+        return pred_r_dep.sum() * 0.0
+    return torch.stack(losses).mean()
+
 def protective_macro_recovery_loss(
     pred_r_dep: torch.Tensor,
     pred_gap: torch.Tensor,

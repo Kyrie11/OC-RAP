@@ -348,6 +348,7 @@ def calibrated_constrained_select(
     pcd_rescue_nominal_rec_lcb_max: float = 0.65,
     pcd_rescue_nominal_gap_min: float = 0.02,
     pcd_rescue_nominal_drs_max: float = 1.01,
+    pcd_rescue_nominal_low_headroom_min_axes: int = 1,
     pcd_rescue_max_utility_drop: float = -1.0,
     pcd_rescue_large_pcd_gain: float = 0.06,
     pcd_rescue_bonus: float = 0.0,
@@ -370,6 +371,12 @@ def calibrated_constrained_select(
     rescue_challenge_min_pred_drs: float = -1.0,
     rescue_challenge_min_pred_pcd: float = -1.0,
     rescue_challenge_min_pcd_gain: float = -1.0,
+    rescue_challenge_min_rec_lcb_gain: float = -1.0,
+    rescue_challenge_min_drs_gain: float = -1.0,
+    rescue_challenge_min_gap_reduction: float = -1.0,
+    rescue_challenge_min_improvement_axes: int = 0,
+    rescue_challenge_macro_allowlist=None,
+    rescue_challenge_macro_blocklist=None,
     rescue_challenge_max_pred_utility: float = -1.0,
     rescue_challenge_max_used: int = -1,
     rescue_challenge_score_pcd_weight: float = 1.0,
@@ -692,11 +699,20 @@ def calibrated_constrained_select(
 
         nominal_gate = True
         if bool(pcd_rescue_require_nominal_low_headroom):
-            nominal_gate = (
-                rec_lcb[ni] <= float(pcd_rescue_nominal_rec_lcb_max)
-                or gap[ni] >= float(pcd_rescue_nominal_gap_min)
-                or drs_proxy[ni] <= float(pcd_rescue_nominal_drs_max)
-            )
+            # v27 DDC: the old BMRC low-headroom gate used a pure OR over
+            # rec/gap/DRS.  With pcd_rescue_nominal_drs_max=1.01 this was
+            # effectively always true, so a rescue certificate could trigger
+            # even when nominal looked deployable.  Use a configurable
+            # k-of-3 evidence gate while keeping k=1 as the backward-compatible
+            # default.
+            low_axes = 0
+            if rec_lcb[ni] <= float(pcd_rescue_nominal_rec_lcb_max):
+                low_axes += 1
+            if gap[ni] >= float(pcd_rescue_nominal_gap_min):
+                low_axes += 1
+            if drs_proxy[ni] <= float(pcd_rescue_nominal_drs_max):
+                low_axes += 1
+            nominal_gate = low_axes >= max(1, int(pcd_rescue_nominal_low_headroom_min_axes or 1))
         if bool(pcd_rescue_require_nominal_unadmitted):
             nominal_gate = bool(nominal_gate) and (not bool(scalar_admitted[ni] or option_certified[ni] or relative_certified[ni] or protective_certified[ni] or brake_rescue_certified[ni]))
 
@@ -1020,8 +1036,37 @@ def calibrated_constrained_select(
                     challenge_mask &= drs_proxy >= float(rescue_challenge_min_pred_drs)
                 if float(rescue_challenge_min_pred_pcd) >= 0.0:
                     challenge_mask &= pcd_proxy >= float(rescue_challenge_min_pred_pcd)
+                # v27 DDC: challenge is a stronger act than certification.
+                # A candidate can be rescue-certified when nominal is not
+                # admitted, but replacing an already admitted nominal prefix
+                # requires regime-conditioned dominance in the same coordinates
+                # used by the paper metrics: PCD, deployable margin, DRS, and
+                # oracle-to-deployable gap.
+                ch_allow = _split_name_set(rescue_challenge_macro_allowlist)
+                ch_block = _split_name_set(rescue_challenge_macro_blocklist)
+                if ch_allow:
+                    challenge_mask &= np.asarray([m in ch_allow for m in macro_names], dtype=bool)
+                if ch_block:
+                    challenge_mask &= ~np.asarray([m in ch_block for m in macro_names], dtype=bool)
+                axis_count = np.zeros((n,), dtype=int)
                 if float(rescue_challenge_min_pcd_gain) >= 0.0:
-                    challenge_mask &= pcd_gain_vs_nom >= float(rescue_challenge_min_pcd_gain)
+                    ok = pcd_gain_vs_nom >= float(rescue_challenge_min_pcd_gain)
+                    challenge_mask &= ok
+                    axis_count += ok.astype(int)
+                if float(rescue_challenge_min_rec_lcb_gain) >= 0.0:
+                    ok = rec_gain_vs_nom >= float(rescue_challenge_min_rec_lcb_gain)
+                    challenge_mask &= ok if int(rescue_challenge_min_improvement_axes or 0) <= 0 else challenge_mask
+                    axis_count += ok.astype(int)
+                if float(rescue_challenge_min_drs_gain) >= 0.0:
+                    ok = drs_gain_vs_nom >= float(rescue_challenge_min_drs_gain)
+                    challenge_mask &= ok if int(rescue_challenge_min_improvement_axes or 0) <= 0 else challenge_mask
+                    axis_count += ok.astype(int)
+                if float(rescue_challenge_min_gap_reduction) >= 0.0:
+                    ok = gap_reduction_vs_nom >= float(rescue_challenge_min_gap_reduction)
+                    challenge_mask &= ok if int(rescue_challenge_min_improvement_axes or 0) <= 0 else challenge_mask
+                    axis_count += ok.astype(int)
+                if int(rescue_challenge_min_improvement_axes or 0) > 0:
+                    challenge_mask &= axis_count >= int(rescue_challenge_min_improvement_axes)
                 if float(rescue_challenge_max_pred_utility) >= 0.0:
                     challenge_mask &= utility <= float(rescue_challenge_max_pred_utility)
                 if int(rescue_challenge_max_used) >= 0:

@@ -456,6 +456,8 @@ make_sel() {
       --set selection.pcd_rescue_min_pcd_gain_by_bucket.test_near_contact=0.020
       --set selection.pcd_rescue_max_utility_drop_by_bucket.near_contact=0.12
       --set selection.pcd_rescue_max_utility_drop_by_bucket.test_near_contact=0.12
+      --set selection.pcd_rescue_nominal_low_headroom_min_axes_by_bucket.near_contact=2
+      --set selection.pcd_rescue_nominal_low_headroom_min_axes_by_bucket.test_near_contact=2
       --set selection.intervention_budget_rate_by_bucket.near_contact=0.035
       --set selection.intervention_budget_rate_by_bucket.test_near_contact=0.035
       --set selection.intervention_budget_hard_by_bucket.near_contact=true
@@ -485,6 +487,8 @@ make_sel() {
       --set selection.pcd_rescue_min_pcd_gain_by_bucket.test_contact=0.010
       --set selection.pcd_rescue_max_utility_drop_by_bucket.contact=0.22
       --set selection.pcd_rescue_max_utility_drop_by_bucket.test_contact=0.22
+      --set selection.pcd_rescue_nominal_low_headroom_min_axes_by_bucket.contact=1
+      --set selection.pcd_rescue_nominal_low_headroom_min_axes_by_bucket.test_contact=1
       --set selection.relative_recovery_macro_allowlist_by_bucket.contact=yield,merge,stabilize
       --set selection.relative_recovery_macro_allowlist_by_bucket.test_contact=yield,merge,stabilize
       --set selection.relative_recovery_macro_blocklist_by_bucket.contact=nominal,keep,perturb_nominal,pull_over,lane_shift,brake
