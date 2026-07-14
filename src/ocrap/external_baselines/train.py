@@ -265,6 +265,37 @@ def _model_state(model: torch.nn.Module) -> dict[str, torch.Tensor]:
 
 
 def train_external_baseline(dataset: str, output: str, cfg: dict[str, Any], *, val_dataset: str | None = None, baseline: str | None = None) -> dict[str, Any]:
+    deterministic = {
+        "marc", "marc_lite", "marc_contingency",
+        "racp", "racp_lite", "risk_aware_contingency",
+        "expected_risk", "expected_risk_filter", "expected_risk_planner",
+        "cvar_risk", "cvar_risk_filter", "cvar_planner",
+        "dro_cvar", "dro_cvar_filter", "dro_cvar_safety_filter", "dr_cvar_filter",
+        "predictive_safety_filter", "psf", "cbf_backup_filter", "predictive_cbf_backup", "backup_cbf_filter",
+        "oracle_filter", "oracle_recovery_filter", "branchwise_oracle_filter", "oracle_branchwise_recovery",
+    }
+    bcfg0 = cfg.setdefault("external_baselines", {})
+    if baseline:
+        bcfg0["baseline"] = baseline
+    baseline_name0 = str(bcfg0.get("baseline", "route_bc_lite")).lower()
+    if baseline_name0 in deterministic:
+        out_dir = ensure_dir(output)
+        # These papers define optimization/sampling/filter baselines rather than
+        # learned policy networks.  "Training" registers the config and validates
+        # that the OC-RAP grouped dataset can be read; thresholds are explicit in
+        # the YAML so there is no hidden fitting to test labels.
+        train_ds = ExternalGroupDataset(dataset, cfg, split="train", baseline=baseline_name0)
+        summary = {
+            "baseline": baseline_name0,
+            "training_mode": "non_learning_filter_or_planner",
+            "num_train_groups": len(train_ds),
+            "feature_dim": int(train_ds.feature_dim),
+            "max_candidates": int(train_ds.max_candidates),
+            "notes": "No neural weights are trained for MARC/RACP/risk/PSF/oracle filters; the paper core is an optimization or safety-filter rule over the candidate lattice.",
+            "cfg": cfg,
+        }
+        write_json(summary, out_dir / "train_summary.json")
+        return summary
     seed_everything(int(cfg.get("seed", 7)))
     use_ddp, rank, local_rank, world_size = _setup_distributed(cfg)
     try:

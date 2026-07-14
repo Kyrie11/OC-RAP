@@ -74,6 +74,141 @@ def _weighted_lower_cvar(values: np.ndarray, weights: np.ndarray, alpha: float) 
     return float(acc / max(total, 1e-8))
 
 
+
+def _weighted_upper_cvar(values: np.ndarray, weights: np.ndarray, alpha: float) -> float:
+    """Weighted CVaR of the upper tail of a nonnegative loss."""
+    values = np.asarray(values, dtype=float).reshape(-1)
+    weights = np.asarray(weights, dtype=float).reshape(-1)
+    mask = np.isfinite(values) & np.isfinite(weights) & (weights > 0)
+    if not mask.any():
+        return 0.0
+    values, weights = values[mask], weights[mask]
+    order = np.argsort(values)[::-1]
+    values, weights = values[order], weights[order]
+    alpha = float(np.clip(alpha, 1e-4, 1.0))
+    acc = 0.0
+    total = 0.0
+    for v, w in zip(values, weights):
+        take = min(float(w), alpha - total)
+        if take <= 0:
+            break
+        acc += float(v) * take
+        total += take
+    return float(acc / max(total, 1e-8))
+
+
+def _effective_root_outcomes(d: dict[str, Any], alpha: float = 0.2, gamma: float = 0.0) -> dict[str, Any]:
+    """Branch-wise existential margins and risk-loss samples.
+
+    For a latent root z_k, branch-wise recovery is existential in the option
+    dimension: the branch succeeds if any option g_l has margin m_{k,l} >= gamma.
+    This is exactly the oracle order in the OC-RAP paper: max over options first,
+    then aggregate over latent roots.
+    """
+    base = _branchwise_values(d, alpha=alpha)
+    best = np.asarray(base.get("best_margins", np.zeros((0,), dtype=float)), dtype=float).reshape(-1)
+    K = int(best.size)
+    w, valid = _valid_root_weights(d, K)
+    if K == 0:
+        return {**base, "losses": np.zeros((0,), dtype=float), "risk_expected": 1.0, "risk_cvar": 1.0, "risk_worst": 1.0, "oracle_all_roots": False, "oracle_mass": 0.0}
+    clipped = np.clip(best, -5.0, 5.0)
+    losses = np.where(valid, np.maximum(0.0, float(gamma) - clipped), 5.0)
+    risk_expected = float(np.sum(w * losses)) if w.size else float(np.mean(losses))
+    risk_cvar = _weighted_upper_cvar(losses, w if w.size else np.ones_like(losses) / max(len(losses), 1), alpha=float(alpha))
+    risk_worst = float(np.max(losses[valid])) if valid.any() else float(np.max(losses))
+    oracle_ok = valid & (clipped >= float(gamma))
+    all_roots = bool(valid.any() and np.all(oracle_ok[valid]))
+    mass = float(np.sum(w * oracle_ok.astype(float))) if w.size else 0.0
+    return {**base, "losses": losses, "risk_expected": risk_expected, "risk_cvar": risk_cvar, "risk_worst": risk_worst, "oracle_all_roots": all_roots, "oracle_mass": mass}
+
+
+def _prefix_common_horizon(candidate: dict[str, Any], reference: dict[str, Any] | None, *, threshold: float = 1.0, max_fraction: float = 0.6) -> float:
+    """Dynamic branch-point proxy: latest prefix time before scenario divergence."""
+    if reference is None:
+        return 0.0
+    a = np.asarray(candidate.get("prefix_states", np.zeros((0, 0))), dtype=float)
+    b = np.asarray(reference.get("prefix_states", np.zeros((0, 0))), dtype=float)
+    if a.ndim != 2 or b.ndim != 2 or a.shape[0] == 0 or b.shape[0] == 0 or a.shape[1] < 2 or b.shape[1] < 2:
+        return 0.0
+    T = min(a.shape[0], b.shape[0])
+    if T <= 1:
+        return 0.0
+    dist = np.linalg.norm(a[:T, :2] - b[:T, :2], axis=-1)
+    ok = np.where(dist <= float(threshold))[0]
+    if ok.size == 0:
+        return 0.0
+    latest = int(ok[-1])
+    cap = int(max(1, round(float(max_fraction) * (T - 1))))
+    return float(min(latest, cap) / max(T - 1, 1))
+
+
+def _control_smoothness_cost(d: dict[str, Any], dt: float = 0.2) -> float:
+    states = np.asarray(d.get("prefix_states", np.zeros((0, 0))), dtype=float)
+    controls = np.asarray(d.get("prefix_controls", np.zeros((0, 0))), dtype=float)
+    cost = 0.0
+    if controls.ndim == 2 and controls.size:
+        if controls.shape[1] >= 1:
+            a = controls[:, 0]
+            cost += float(np.nanmean(np.abs(a))) / 4.0
+            if a.size > 1:
+                cost += 0.25 * float(np.nanmax(np.abs(np.diff(a) / max(dt, 1e-3)))) / 8.0
+        if controls.shape[1] >= 2:
+            steer = controls[:, 1]
+            cost += 0.5 * float(np.nanmean(np.abs(steer))) / 0.6
+            if steer.size > 1:
+                cost += 0.15 * float(np.nanmax(np.abs(np.diff(steer) / max(dt, 1e-3)))) / 1.0
+    if states.ndim == 2 and states.shape[0] > 1 and states.shape[1] >= 3:
+        yaw = np.unwrap(states[:, 2])
+        yr = np.diff(yaw) / max(dt, 1e-3)
+        if yr.size:
+            cost += 0.3 * float(np.nanmax(np.abs(yr))) / 1.0
+    return float(np.nan_to_num(cost, nan=0.0, posinf=10.0, neginf=0.0))
+
+
+def _nominal_deviation(samples: list[dict[str, Any]]) -> np.ndarray:
+    if not samples:
+        return np.zeros((0,), dtype=float)
+    ref = np.asarray(samples[0].get("prefix_states", np.zeros((0, 0))), dtype=float)
+    vals = []
+    for d in samples:
+        xy = np.asarray(d.get("prefix_states", np.zeros((0, 0))), dtype=float)
+        if ref.ndim != 2 or xy.ndim != 2 or ref.shape[0] == 0 or xy.shape[0] == 0 or ref.shape[1] < 2 or xy.shape[1] < 2:
+            vals.append(0.0)
+            continue
+        T = min(ref.shape[0], xy.shape[0])
+        vals.append(float(np.sqrt(np.mean(np.sum((xy[:T, :2] - ref[:T, :2]) ** 2, axis=-1))) / 5.0))
+    return np.asarray(vals, dtype=float)
+
+
+def _macro_names(samples: list[dict[str, Any]]) -> list[str]:
+    out = []
+    for d in samples:
+        v = d.get("prefix_macro_name", d.get("macro_name", ""))
+        try:
+            v = np.asarray(v).item()
+            if isinstance(v, bytes):
+                v = v.decode("utf-8", errors="ignore")
+        except Exception:
+            pass
+        out.append(str(v))
+    return out
+
+
+def _posterior_root_values(d: dict[str, Any], alpha: float, temperature: float = 0.7) -> dict[str, Any]:
+    eff = _effective_root_outcomes(d, alpha=alpha)
+    margins = np.asarray(eff.get("best_margins", np.zeros((0,), dtype=float)), dtype=float)
+    K = margins.size
+    w, valid = _valid_root_weights(d, K)
+    if K == 0 or not valid.any():
+        return {**eff, "posterior_expected": 0.0, "entropy": 0.0, "posterior": w}
+    logits = np.clip(margins / max(float(temperature), 1e-3), -20.0, 20.0)
+    likelihood = np.exp(logits - np.nanmax(logits[valid]))
+    post = np.where(valid, w * likelihood, 0.0)
+    den = float(post.sum())
+    post = post / den if den > 1e-8 else w
+    entropy = float(-np.sum(post[post > 0] * np.log(post[post > 0])) / max(np.log(max(int(valid.sum()), 2)), 1e-8))
+    return {**eff, "posterior_expected": float(np.sum(post * np.clip(margins, -5.0, 5.0))), "entropy": entropy, "posterior": post}
+
 def _branchwise_values(d: dict[str, Any], alpha: float = 0.2) -> dict[str, Any]:
     M = np.asarray(d.get("m_star", np.zeros((0, 0))), dtype=float)
     if M.ndim != 2 or M.size == 0:
@@ -276,43 +411,156 @@ def select_external_policy(
     branch_worst = np.asarray([b["worst"] for b in branch], dtype=float)
     branch_fail = np.asarray([b["fail_prob"] for b in branch], dtype=float)
 
-    if baseline in {"marc", "marc_lite"}:
-        risk_tol = float(pcfg.get("marc_risk_tolerance", 0.35))
-        score = utility + float(pcfg.get("marc_branch_rec_weight", 1.0)) * branch_expected - float(pcfg.get("marc_hard_weight", 10.0)) * hard - float(pcfg.get("marc_harm_weight", 1.5)) * harm - risk_tol * branch_fail
-        admitted = safe & (branch_expected >= float(pcfg.get("gamma_branch_rec", 0.0)))
-        idx = _best(score, feasible)
-        return ExternalSelection(idx, "multipolicy_branchwise_contingency", admitted, score)
+    nominal_d = samples[0] if samples else None
+    branch_eff = [_effective_root_outcomes(d, alpha=float(pcfg.get("cvar_alpha", 0.2)), gamma=float(pcfg.get("gamma_branch_rec", 0.0))) for d in samples]
+    branch_expected = np.asarray([b["expected"] for b in branch_eff], dtype=float)
+    branch_cvar = np.asarray([b["cvar"] for b in branch_eff], dtype=float)
+    branch_worst = np.asarray([b["worst"] for b in branch_eff], dtype=float)
+    branch_fail = np.asarray([b["fail_prob"] for b in branch_eff], dtype=float)
+    risk_expected = np.asarray([b["risk_expected"] for b in branch_eff], dtype=float)
+    risk_cvar = np.asarray([b["risk_cvar"] for b in branch_eff], dtype=float)
+    risk_worst = np.asarray([b["risk_worst"] for b in branch_eff], dtype=float)
+    oracle_mass = np.asarray([b["oracle_mass"] for b in branch_eff], dtype=float)
+    oracle_all = np.asarray([bool(b["oracle_all_roots"]) for b in branch_eff], dtype=bool)
+    common = np.asarray([_prefix_common_horizon(d, nominal_d, threshold=float(pcfg.get("branch_divergence_threshold_m", 1.0)), max_fraction=float(pcfg.get("max_branch_fraction", 0.6))) for d in samples], dtype=float)
+    smooth = np.asarray([_control_smoothness_cost(d, dt=float(pcfg.get("dt", 0.2))) for d in samples], dtype=float)
+    dev = _nominal_deviation(samples)
+    macros = _macro_names(samples)
 
-    if baseline in {"racp", "racp_lite"}:
+    if baseline in {"marc", "marc_lite", "marc_contingency"}:
+        # MARC core: evaluate semantic ego policies, render policy-conditioned
+        # critical scenarios, construct a dynamic branch point, then solve a
+        # risk-aware contingency score.  OC-RAP's candidate lattice already
+        # materializes semantic policies and counterfactual roots; this block
+        # therefore keeps MARC's order of operations over that lattice.
+        risk_tol = float(pcfg.get("marc_risk_tolerance", 0.35))
+        rec = (1.0 - risk_tol) * branch_expected + risk_tol * branch_cvar
+        score = (
+            float(pcfg.get("marc_utility_weight", 1.0)) * utility
+            + float(pcfg.get("marc_branch_rec_weight", 1.0)) * rec
+            + float(pcfg.get("marc_common_prefix_weight", 0.35)) * common
+            + float(pcfg.get("marc_oracle_mass_weight", 0.25)) * oracle_mass
+            - float(pcfg.get("marc_expected_risk_weight", 2.0)) * risk_expected
+            - float(pcfg.get("marc_fail_weight", 1.0)) * branch_fail
+            - float(pcfg.get("marc_smoothness_weight", 0.15)) * smooth
+            - float(pcfg.get("marc_deviation_weight", 0.10)) * dev
+            - float(pcfg.get("marc_hard_weight", 10.0)) * hard
+            - float(pcfg.get("marc_harm_weight", 1.5)) * harm
+        )
+        # Policy-level selection: keep the best candidate under each semantic
+        # macro, then select among policies.  This avoids collapsing MARC into a
+        # single trajectory scorer while still returning an executable prefix.
+        idxs = []
+        for m in sorted(set(macros)):
+            ids = np.asarray([i for i, mm in enumerate(macros) if mm == m], dtype=int)
+            if ids.size:
+                ids = ids[feasible[ids]] if feasible[ids].any() else ids
+                idxs.append(int(ids[np.argmax(score[ids])]))
+        if idxs:
+            cand = np.asarray(idxs, dtype=int)
+            idx = int(cand[np.argmax(score[cand])])
+        else:
+            idx = _best(score, feasible)
+        admitted = safe & (rec >= float(pcfg.get("gamma_branch_rec", 0.0))) & (risk_expected <= float(pcfg.get("marc_risk_threshold", 1.0)))
+        return ExternalSelection(idx, "marc_policy_conditioned_risk_aware_contingency", admitted, score)
+
+    if baseline in {"racp", "racp_lite", "risk_aware_contingency"}:
+        # RACP core: maintain Bayesian beliefs over prediction modes, split the
+        # plan into shared and contingent parts, and constrain the worst
+        # discounted probabilistic risk.  Root probabilities become the prior;
+        # branch recovery likelihoods produce a posterior used in the cost.
+        post = [_posterior_root_values(d, alpha=float(pcfg.get("cvar_alpha", 0.2)), temperature=float(pcfg.get("racp_belief_temperature", 0.7))) for d in samples]
+        posterior_expected = np.asarray([b["posterior_expected"] for b in post], dtype=float)
+        entropy = np.asarray([b["entropy"] for b in post], dtype=float)
         rho = float(pcfg.get("racp_risk_tolerance", 0.6))
-        # RACP-lite trades expected branch value and lower-tail branch value.
-        risk_value = rho * branch_expected + (1.0 - rho) * branch_cvar
-        score = utility + float(pcfg.get("racp_branch_rec_weight", 1.0)) * risk_value - float(pcfg.get("racp_hard_weight", 10.0)) * hard - float(pcfg.get("racp_harm_weight", 1.5)) * harm
-        admitted = safe & (risk_value >= float(pcfg.get("gamma_branch_rec", 0.0)))
-        idx = _best(score, feasible)
-        return ExternalSelection(idx, "risk_aware_multimodal_contingency", admitted, score)
+        risk_value = rho * posterior_expected + (1.0 - rho) * branch_cvar
+        eta = risk_expected + float(pcfg.get("racp_tail_weight", 0.5)) * risk_cvar + float(pcfg.get("risk_harm_weight", 0.25)) * harm + float(pcfg.get("risk_hard_weight", 1.0)) * hard
+        branch_bonus = common * (1.0 - entropy)
+        score = (
+            float(pcfg.get("racp_utility_weight", 1.0)) * utility
+            + float(pcfg.get("racp_branch_rec_weight", 1.0)) * risk_value
+            + float(pcfg.get("racp_belief_branch_weight", 0.45)) * branch_bonus
+            - float(pcfg.get("racp_risk_weight", 2.5)) * eta
+            - float(pcfg.get("racp_smoothness_weight", 0.10)) * smooth
+            - float(pcfg.get("racp_hard_weight", 10.0)) * hard
+            - float(pcfg.get("racp_harm_weight", 1.5)) * harm
+        )
+        admitted = safe & (eta <= float(pcfg.get("racp_risk_threshold", pcfg.get("racp_delta", 0.75)))) & (risk_value >= float(pcfg.get("gamma_branch_rec", 0.0)))
+        idx = _best(score, admitted if admitted.any() else feasible)
+        return ExternalSelection(idx, "racp_bayesian_belief_contingency", admitted, score)
 
     if baseline in {"expected_risk", "expected_risk_filter", "expected_risk_planner"}:
-        risk = branch_fail + float(pcfg.get("risk_harm_weight", 0.25)) * harm + float(pcfg.get("risk_hard_weight", 1.0)) * hard
+        # Expected-risk filter: bound the expected signed collision/recovery loss.
+        risk = risk_expected + float(pcfg.get("risk_harm_weight", 0.25)) * harm + float(pcfg.get("risk_hard_weight", 1.0)) * hard
         admitted = feasible & (risk <= float(pcfg.get("expected_risk_threshold", 0.45)))
-        score = utility - float(pcfg.get("expected_risk_weight", 3.0)) * risk
+        score = utility - float(pcfg.get("expected_risk_weight", 3.0)) * risk - float(pcfg.get("risk_deviation_weight", 0.05)) * dev
         idx = _best(score, admitted if admitted.any() else feasible)
-        return ExternalSelection(idx, "expected_branch_risk_filter", admitted, score)
+        return ExternalSelection(idx, "expected_signed_collision_risk_filter", admitted, score)
 
     if baseline in {"cvar_risk", "cvar_risk_filter", "cvar_planner"}:
-        risk = -branch_cvar + float(pcfg.get("risk_harm_weight", 0.25)) * harm + float(pcfg.get("risk_hard_weight", 1.0)) * hard
-        admitted = feasible & (risk <= float(pcfg.get("cvar_risk_threshold", 0.35)))
-        score = utility - float(pcfg.get("cvar_risk_weight", 3.0)) * risk
+        # CVaR filter: upper-tail risk over root-conditioned losses.
+        risk = risk_cvar + float(pcfg.get("risk_harm_weight", 0.25)) * harm + float(pcfg.get("risk_hard_weight", 1.0)) * hard
+        admitted = feasible & (risk <= float(pcfg.get("cvar_risk_threshold", 0.55)))
+        score = utility - float(pcfg.get("cvar_risk_weight", 3.0)) * risk - float(pcfg.get("risk_deviation_weight", 0.05)) * dev
         idx = _best(score, admitted if admitted.any() else feasible)
-        return ExternalSelection(idx, "cvar_branch_risk_filter", admitted, score)
+        return ExternalSelection(idx, "cvar_tail_signed_collision_risk_filter", admitted, score)
 
-    if baseline in {"dro_cvar", "dro_cvar_filter", "dro_cvar_safety_filter"}:
+    if baseline in {"dro_cvar", "dro_cvar_filter", "dro_cvar_safety_filter", "dr_cvar_filter"}:
+        # DR-CVaR filter: CVaR plus a Wasserstein-ball ambiguity penalty.  This
+        # mirrors the paper's safe-halfspace relaxation when only finite samples
+        # of future obstacle/root outcomes are available in the OC-RAP dataset.
         ambiguity = float(pcfg.get("dro_ambiguity_radius", 0.10))
-        risk = np.maximum(-branch_cvar, -branch_worst) + ambiguity * np.sqrt(np.maximum(branch_fail, 0.0)) + float(pcfg.get("risk_harm_weight", 0.25)) * harm + float(pcfg.get("risk_hard_weight", 1.0)) * hard
-        admitted = feasible & (risk <= float(pcfg.get("dro_cvar_threshold", 0.40)))
-        score = utility - float(pcfg.get("dro_cvar_risk_weight", 3.5)) * risk
+        dispersion = np.sqrt(np.maximum(risk_worst - risk_expected, 0.0) ** 2 + np.maximum(branch_fail, 0.0))
+        risk = risk_cvar + ambiguity * dispersion / max(float(pcfg.get("cvar_alpha", 0.2)), 1e-3) + float(pcfg.get("risk_harm_weight", 0.25)) * harm + float(pcfg.get("risk_hard_weight", 1.0)) * hard
+        admitted = feasible & (risk <= float(pcfg.get("dro_cvar_threshold", 0.65)))
+        score = utility - float(pcfg.get("dro_cvar_risk_weight", 3.5)) * risk - float(pcfg.get("risk_deviation_weight", 0.05)) * dev
         idx = _best(score, admitted if admitted.any() else feasible)
-        return ExternalSelection(idx, "distributionally_robust_cvar_filter", admitted, score)
+        return ExternalSelection(idx, "distributionally_robust_cvar_safe_halfspace_filter", admitted, score)
+
+    if baseline in {"predictive_safety_filter", "psf", "cbf_backup_filter", "predictive_cbf_backup", "backup_cbf_filter"}:
+        # Predictive Safety Filter / CBF backup baseline.  Treat candidate 0 as
+        # the nominal learning/reference input u_L.  Certify it when there is a
+        # finite-horizon branch-wise backup to a safe set; otherwise apply the
+        # smallest feasible modification that improves the CBF-like recovery
+        # barrier and respects control/comfort bounds.
+        gamma_b = float(pcfg.get("psf_gamma_branch_rec", pcfg.get("gamma_branch_rec", 0.0)))
+        accel = np.zeros(n, dtype=float)
+        steer = np.zeros(n, dtype=float)
+        for i, d in enumerate(samples):
+            accel[i], steer[i] = _control_proxy(d)
+        ctrl_ok = (accel <= float(pcfg.get("psf_accel_gate", 6.0))) & (steer <= float(pcfg.get("psf_steer_gate", 0.75)))
+        backup_ok = oracle_all | (branch_worst >= gamma_b)
+        cbf_value = branch_worst - float(pcfg.get("psf_hard_barrier_weight", 1.0)) * hard - float(pcfg.get("psf_harm_barrier_weight", 0.25)) * harm
+        nominal_cbf = cbf_value[0] if cbf_value.size else 0.0
+        cbf_ok = cbf_value >= (1.0 - float(pcfg.get("psf_cbf_kappa", 0.5))) * nominal_cbf - float(pcfg.get("psf_cbf_slack", 0.05))
+        admitted = feasible & ctrl_ok & backup_ok & cbf_ok & (hard <= float(pcfg.get("psf_hard_gate", 0.0))) & (harm <= float(pcfg.get("psf_harm_gate", 5.0)))
+        # Minimal modification objective: stay close to u_L/nominal, then prefer
+        # utility and recovery margin.
+        score = (
+            -float(pcfg.get("psf_deviation_weight", 2.0)) * dev
+            + float(pcfg.get("psf_utility_weight", 0.35)) * utility
+            + float(pcfg.get("psf_barrier_weight", 1.0)) * cbf_value
+            - float(pcfg.get("psf_smoothness_weight", 0.15)) * smooth
+        )
+        if admitted.size and admitted[0]:
+            idx = 0
+        else:
+            idx = _best(score, admitted if admitted.any() else feasible)
+        return ExternalSelection(idx, "predictive_safety_filter_cbf_backup", admitted, score)
+
+    if baseline in {"oracle_filter", "oracle_recovery_filter", "branchwise_oracle_filter", "oracle_branchwise_recovery"}:
+        gamma_o = float(pcfg.get("gamma_oracle_rec", pcfg.get("gamma_branch_rec", 0.0)))
+        # Strict existential-by-root certificate: every valid root must have some
+        # option above gamma.  The score uses the LCVaR oracle headroom to break
+        # ties, exactly matching Eq. oracle_recovery in the paper.
+        admitted = safe & oracle_all & (branch_cvar >= gamma_o)
+        score = branch_cvar + float(pcfg.get("oracle_utility_tiebreak", 1.0e-3)) * utility
+        idx = _best(score, admitted if admitted.any() else feasible)
+        opt = None
+        if 0 <= idx < len(branch_eff):
+            opts = np.asarray(branch_eff[idx].get("best_options", np.zeros((0,), dtype=int)))
+            opt = int(opts[0]) if opts.size else None
+        return ExternalSelection(idx, "branchwise_existential_oracle_recovery_filter", admitted, score, selected_option=opt)
 
     if baseline in {"postimpact_mpc", "postimpact_mpc_lite", "post_impact_mpc_lite", "postimpact_mpc_paper"}:
         costs = []

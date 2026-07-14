@@ -16,7 +16,23 @@ from ocrap.evaluation.baselines import select_baseline
 from ocrap.evaluation.metrics import best_shared_option_index, deployable_recovery_success, false_recoverability_admission, nominal_utility_preservation, post_contact_deployability_score, predicted_shared_option_success
 from ocrap.models.data import iter_sample_paths_many, scalar_metadata_for_path
 from ocrap.models.inference import ModelBundle, load_model_bundle, predict_sample, predict_samples, teacher_prediction_from_sample
+from ocrap.external_baselines.policies import select_external_policy
+from ocrap.external_baselines.evaluate import _load_checkpoint as _load_external_checkpoint, _predict_group as _predict_external_group
 from ocrap.simulation.waymax_rollout import _as_np, _bicycle_action, _make_env, _metric_summary, _sdc_index
+
+
+EXTERNAL_CLOSED_LOOP_METHODS = {
+    "marc", "marc_lite", "marc_contingency",
+    "racp", "racp_lite", "risk_aware_contingency",
+    "expected_risk", "expected_risk_filter", "expected_risk_planner",
+    "cvar_risk", "cvar_risk_filter", "cvar_planner",
+    "dro_cvar", "dro_cvar_filter", "dro_cvar_safety_filter", "dr_cvar_filter",
+    "predictive_safety_filter", "psf", "cbf_backup_filter", "predictive_cbf_backup", "backup_cbf_filter",
+    "oracle_filter", "oracle_recovery_filter", "branchwise_oracle_filter", "oracle_branchwise_recovery",
+    "gameformer", "gameformer_lite", "gameformer_levelk",
+}
+EXTERNAL_TEACHER_REQUIRED_METHODS = EXTERNAL_CLOSED_LOOP_METHODS - {"gameformer", "gameformer_lite", "gameformer_levelk"}
+
 
 
 @dataclass
@@ -365,6 +381,9 @@ def _select_prefix(
     gamma: float,
     *,
     compute_teacher_labels: bool = True,
+    external_model: Any | None = None,
+    external_model_cfg: dict | None = None,
+    external_device: Any | None = None,
 ) -> tuple[int, dict[str, Any]]:
     if compute_teacher_labels:
         dicts = [_sample_to_dict(s) for s in samples]
@@ -375,6 +394,17 @@ def _select_prefix(
     for s, d, pred in zip(samples, dicts, preds):
         teacher = teacher_prediction_from_sample(d, cfg) if compute_teacher_labels else None
         items.append({"sample": s, "data": d, "pred": pred, "teacher": teacher})
+
+    method_l = str(method).lower()
+    if method_l in EXTERNAL_CLOSED_LOOP_METHODS:
+        ext_cfg = external_model_cfg if isinstance(external_model_cfg, dict) else cfg
+        ext_outputs = _predict_external_group(external_model, dicts, ext_cfg, external_device) if external_model is not None else {}
+        selected_ext = select_external_policy(method_l, dicts, ext_cfg, model_outputs=ext_outputs)
+        # Continue through the common metric/audit path by exposing the external
+        # selection through the same fields used by built-in baselines.
+        external_selected = selected_ext
+    else:
+        external_selected = None
 
     utility = np.asarray([_safe_float(x["data"].get("utility", 0.0)) for x in items], dtype=np.float32)
     pred_r_dep = np.asarray([float(x["pred"].r_dep) for x in items], dtype=np.float32)
@@ -396,25 +426,28 @@ def _select_prefix(
     harm = np.asarray([_safe_float(x["data"].get("harm_proxy", 0.0)) for x in items], dtype=np.float32)
     feasible = np.asarray([bool(int(_safe_float(x["data"].get("feasible", 1.0), 1.0))) for x in items], dtype=bool)
     sel_cfg = cfg.get("selection", {}) if isinstance(cfg.get("selection", {}), dict) else {}
-    selected = select_baseline(
-        method,
-        utility,
-        pred_r_dep,
-        teacher_r_dep,
-        teacher_r_orc,
-        hard,
-        harm,
-        feasible,
-        gamma,
-        float(sel_cfg.get("gamma_H", 0.0)),
-        float(sel_cfg.get("gamma_D", 5.0)),
-        cfg,
-        pred_r_orc=pred_r_orc,
-        pred_gap=pred_gap,
-        nominal_deviation=nominal_deviation,
-        pred_drs=pred_drs,
-        candidate_macro_names=macro_names,
-    )
+    if external_selected is not None:
+        selected = external_selected
+    else:
+        selected = select_baseline(
+            method,
+            utility,
+            pred_r_dep,
+            teacher_r_dep,
+            teacher_r_orc,
+            hard,
+            harm,
+            feasible,
+            gamma,
+            float(sel_cfg.get("gamma_H", 0.0)),
+            float(sel_cfg.get("gamma_D", 5.0)),
+            cfg,
+            pred_r_orc=pred_r_orc,
+            pred_gap=pred_gap,
+            nominal_deviation=nominal_deviation,
+            pred_drs=pred_drs,
+            candidate_macro_names=macro_names,
+        )
     idx = int(selected.selected_index)
     chosen = items[idx]
     nup = nominal_utility_preservation(utility[0] if len(utility) else 0.0, utility[idx], sigma_u=float((cfg.get("metrics", {}) or {}).get("sigma_u", 1.0)))
@@ -532,6 +565,9 @@ def _rollout_one_scene(
     start_time_index_override: int | None = None,
     bucket_name: str | None = None,
     target_key: str | None = None,
+    external_model: Any | None = None,
+    external_model_cfg: dict | None = None,
+    external_device: Any | None = None,
 ) -> dict[str, Any]:
     import jax  # type: ignore
 
@@ -544,8 +580,8 @@ def _rollout_one_scene(
     start_t = int(start_t)
     requested_label_mode = str(cl_cfg.get("label_mode", "fast")).lower()
     label_mode = requested_label_mode
-    teacher_required_methods = {"ocrap_teacher"}
-    branchwise_methods = {"backup_filter", "oracle_filter", "contingency"}
+    teacher_required_methods = {"ocrap_teacher"} | set(EXTERNAL_TEACHER_REQUIRED_METHODS)
+    branchwise_methods = {"backup_filter", "oracle_filter", "contingency"} | set(EXTERNAL_TEACHER_REQUIRED_METHODS)
     force_teacher_baselines = bool(cl_cfg.get("force_teacher_baselines", False))
     if method in teacher_required_methods or (method == "ocrap" and bundle is None) or (force_teacher_baselines and method in branchwise_methods):
         # Full teacher labels are very expensive online. Branch-wise/oracle
@@ -645,7 +681,17 @@ def _rollout_one_scene(
             sel_local["intervention_budget_steps"] = max(1, int(step_idx) + 1)
             sel_local["steps_since_last_intervention"] = int(step_idx) - int(last_intervention_step)
             select_cfg["selection"] = sel_local
-        sel_idx, info = _select_prefix(samples, bundle, select_cfg, method, gamma, compute_teacher_labels=compute_teacher_labels)
+        sel_idx, info = _select_prefix(
+            samples,
+            bundle,
+            select_cfg,
+            method,
+            gamma,
+            compute_teacher_labels=compute_teacher_labels,
+            external_model=external_model,
+            external_model_cfg=external_model_cfg,
+            external_device=external_device,
+        )
         selected_sample = samples[sel_idx]
         try:
             if int(getattr(selected_sample, "candidate_index", sel_idx)) != 0:
@@ -1156,10 +1202,22 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
     art["force_mine"] = mine_p > 0.0
     art["mine_probability"] = max(0.0, min(1.0, mine_p))
     local["artifact"] = art
-    bundle = load_model_bundle(checkpoint, local)
-    if checkpoint and bundle is None:
-        raise FileNotFoundError(f"Could not load model checkpoint for closed-loop evaluation: {checkpoint}")
-    source = "model" if bundle is not None else "teacher_fallback"
+    external_model = None
+    external_model_cfg = None
+    external_device = None
+    if method in EXTERNAL_CLOSED_LOOP_METHODS:
+        bundle = None
+        external_ckpt = checkpoint or cl_cfg.get("external_checkpoint", None)
+        if external_ckpt:
+            external_model, external_model_cfg, external_device = _load_external_checkpoint(external_ckpt, local)
+            if external_model is None and method in {"gameformer", "gameformer_lite", "gameformer_levelk"}:
+                raise FileNotFoundError(f"Could not load external baseline checkpoint for closed-loop evaluation: {external_ckpt}")
+        source = "external_checkpoint" if external_model is not None else "dataset_teacher_labels"
+    else:
+        bundle = load_model_bundle(checkpoint, local)
+        if checkpoint and bundle is None:
+            raise FileNotFoundError(f"Could not load model checkpoint for closed-loop evaluation: {checkpoint}")
+        source = "model" if bundle is not None else "teacher_fallback"
     output_path = Path(output)
     partial_path = output_path.with_suffix(output_path.suffix + ".partial")
     save_partial = bool(cl_cfg.get("save_partial", True))
@@ -1186,7 +1244,20 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
             if progress:
                 print({"event": "closed_loop_scene_start", "scene_rank": rank, "raw_rank": i, "scene_id": str(raw.scenario_id), "bucket": target.get("bucket_name"), "start_time_index": target.get("time_index"), "max_rollouts": max_rollouts if targets else max_scenes}, flush=True)
             gamma_i = _gamma_for_bucket(gamma, local, target.get("bucket_name"))
-            scene_results.append(_rollout_one_scene(raw, rank, bundle, local, method, gamma_i, start_time_index_override=target.get("time_index"), bucket_name=target.get("bucket_name"), target_key=target.get("target_key")))
+            scene_results.append(_rollout_one_scene(
+                raw,
+                rank,
+                bundle,
+                local,
+                method,
+                gamma_i,
+                start_time_index_override=target.get("time_index"),
+                bucket_name=target.get("bucket_name"),
+                target_key=target.get("target_key"),
+                external_model=external_model,
+                external_model_cfg=external_model_cfg,
+                external_device=external_device,
+            ))
             matched_targets += int(bool(targets))
             if save_partial:
                 partial = _aggregate_with_buckets(scene_results, method, source)
