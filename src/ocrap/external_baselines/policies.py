@@ -250,66 +250,368 @@ def _control_proxy(d: dict[str, Any]) -> tuple[float, float]:
     return accel, steer
 
 
-def _postimpact_mpc_cost(d: dict[str, Any], cfg: dict[str, Any]) -> tuple[float, dict[str, float]]:
-    """Planning-integrated post-impact MPC surrogate over OC-RAP candidates.
+def _motion_stats(d: dict[str, Any], cfg: dict[str, Any]) -> dict[str, float | np.ndarray]:
+    """Kinematic/actuation statistics for finite-lattice contact baselines.
 
-    The paper controller optimizes stability recovery and secondary-collision
-    avoidance with vehicle-dynamics/road-adhesion constraints.  Here the action
-    space is the already-built prefix/recovery lattice, so MPC is solved by
-    evaluating that finite horizon lattice with the same ingredients: yaw-rate
-    damping, acceleration/steer effort, terminal stable-stop, obstacle/hard
-    violation, and route rejoin utility.
+    OC-RAP prefix states follow F_EGO=[x,y,vx,vy,heading,yaw_rate,speed,length,width].
+    Older adapters inferred yaw-rate from column 2, which is vx in this schema.
+    This helper uses heading/yaw-rate columns when present and gracefully falls
+    back to finite differences when samples are feature-only in closed loop.
     """
     pcfg = ((cfg.get("external_baselines", {}) or {}).get("policy", {}) or {})
+    dt = float(pcfg.get("contact_dt", pcfg.get("postimpact_dt", 1.0 / float(cfg.get("sample_rate_hz", 10.0) or 10.0))))
     states = np.asarray(d.get("prefix_states", np.zeros((0, 0))), dtype=float)
     controls = np.asarray(d.get("prefix_controls", np.zeros((0, 0))), dtype=float)
+    out: dict[str, float | np.ndarray] = {
+        "dt": dt,
+        "yaw_rate": 0.0,
+        "yaw_acc": 0.0,
+        "terminal_speed": 0.0,
+        "initial_speed": 0.0,
+        "mean_speed": 0.0,
+        "lateral_span": 0.0,
+        "terminal_lateral_delta": 0.0,
+        "heading_delta": 0.0,
+        "accel_effort": 0.0,
+        "brake_effort": 0.0,
+        "steer_effort": 0.0,
+        "jerk": 0.0,
+        "steer_rate": 0.0,
+        "adhesion_proxy": 0.0,
+        "speed": np.zeros((0,), dtype=float),
+        "yaw_rate_series": np.zeros((0,), dtype=float),
+        "controls": controls,
+        "states": states,
+    }
+    if states.ndim == 2 and states.shape[0] > 0:
+        if states.shape[1] >= 7:
+            speed = np.maximum(0.0, states[:, 6])
+        elif states.shape[1] >= 4:
+            speed = np.hypot(states[:, 2], states[:, 3])
+        else:
+            speed = np.zeros((states.shape[0],), dtype=float)
+        out["speed"] = np.asarray(np.nan_to_num(speed, nan=0.0, posinf=0.0, neginf=0.0), dtype=float)
+        out["initial_speed"] = float(speed[0]) if speed.size else 0.0
+        out["terminal_speed"] = float(speed[-1]) if speed.size else 0.0
+        out["mean_speed"] = float(np.nanmean(speed)) if speed.size else 0.0
+        if states.shape[1] >= 6:
+            yr = np.asarray(states[:, 5], dtype=float)
+            yr = np.nan_to_num(yr, nan=0.0, posinf=0.0, neginf=0.0)
+        elif states.shape[1] >= 5 and states.shape[0] >= 2:
+            heading = np.unwrap(states[:, 4])
+            yr = np.gradient(heading, dt)
+        else:
+            yr = np.zeros((states.shape[0],), dtype=float)
+        out["yaw_rate_series"] = yr
+        out["yaw_rate"] = float(np.nanmax(np.abs(yr))) if yr.size else 0.0
+        out["yaw_acc"] = float(np.nanmax(np.abs(np.diff(yr) / max(dt, 1e-3)))) if yr.size >= 2 else 0.0
+        if states.shape[1] >= 2:
+            y = np.asarray(states[:, 1], dtype=float)
+            out["lateral_span"] = float(np.nanmax(y) - np.nanmin(y)) if y.size else 0.0
+            out["terminal_lateral_delta"] = float(y[-1] - y[0]) if y.size else 0.0
+        if states.shape[1] >= 5:
+            heading = np.unwrap(np.asarray(states[:, 4], dtype=float))
+            out["heading_delta"] = float(heading[-1] - heading[0]) if heading.size else 0.0
+    if controls.ndim == 2 and controls.size:
+        if controls.shape[1] >= 1:
+            a = np.asarray(controls[:, 0], dtype=float)
+            out["accel_effort"] = float(np.nanmean(np.abs(a))) if a.size else 0.0
+            out["brake_effort"] = float(np.nanmean(np.maximum(0.0, -a))) if a.size else 0.0
+            out["jerk"] = float(np.nanmax(np.abs(np.diff(a) / max(dt, 1e-3)))) if a.size >= 2 else 0.0
+        if controls.shape[1] >= 2:
+            steer = np.asarray(controls[:, 1], dtype=float)
+            out["steer_effort"] = float(np.nanmean(np.abs(steer))) if steer.size else 0.0
+            out["steer_rate"] = float(np.nanmax(np.abs(np.diff(steer) / max(dt, 1e-3)))) if steer.size >= 2 else 0.0
+        # A compact friction/road-adhesion proxy: longitudinal acceleration plus
+        # lateral acceleration implied by steering/yaw-rate should not exceed mu*g.
+        mu = float(pcfg.get("postimpact_mu", pcfg.get("contact_mu", 0.75)))
+        g = 9.81
+        a_long = np.abs(controls[:, 0]) if controls.shape[1] >= 1 else np.zeros((controls.shape[0],), dtype=float)
+        if states.ndim == 2 and states.shape[0] > 0:
+            speed = np.asarray(out["speed"], dtype=float)
+            yr = np.asarray(out["yaw_rate_series"], dtype=float)
+            T = min(a_long.size, speed.size, yr.size)
+            a_lat = np.abs(speed[:T] * yr[:T]) if T else np.zeros_like(a_long)
+            a_long = a_long[:T] if T else a_long
+        else:
+            a_lat = np.zeros_like(a_long)
+        usage = np.sqrt(a_long ** 2 + a_lat ** 2) / max(mu * g, 1e-3)
+        out["adhesion_proxy"] = float(np.nanmax(usage)) if usage.size else 0.0
+    return out
+
+
+def _macro_is(d: dict[str, Any], names: set[str]) -> bool:
+    v = d.get("prefix_macro_name", d.get("macro_name", ""))
+    try:
+        v = np.asarray(v).item()
+        if isinstance(v, bytes):
+            v = v.decode("utf-8", errors="ignore")
+    except Exception:
+        pass
+    return str(v).strip().lower() in {str(x).lower() for x in names}
+
+
+def _preferred_option_index(d: dict[str, Any], modes: list[str], gamma: float = 0.0) -> int:
+    M = np.asarray(d.get("m_star", np.zeros((0, 0))), dtype=float)
+    L = int(M.shape[1]) if M.ndim == 2 else 0
+    if L <= 0:
+        return 0
+    modes_arr = np.asarray(d.get("recovery_modes", np.asarray([], dtype=object))).reshape(-1)
+    preferred: list[int] = []
+    wanted = {m.lower() for m in modes}
+    for i, raw in enumerate(modes_arr.tolist()):
+        val = raw.decode("utf-8", errors="ignore") if isinstance(raw, bytes) else str(raw)
+        if val.lower() in wanted and i < L:
+            preferred.append(i)
+    opt_valid = _option_valid(d, L)
+    if preferred:
+        w, valid = _valid_root_weights(d, int(M.shape[0]))
+        scores = []
+        for i in preferred:
+            if not opt_valid[i]:
+                scores.append(-1.0e9)
+                continue
+            col = M[:, i]
+            succ = float(np.sum(w * (valid & np.isfinite(col) & (col >= float(gamma)))))
+            val = float(np.sum(w * np.where(valid & np.isfinite(col), np.clip(col, -5.0, 5.0), 0.0)))
+            scores.append(succ + 0.01 * val)
+        if scores:
+            return int(preferred[int(np.argmax(scores))])
+    return int(_shared_option_success_score(d, gamma=gamma)[0])
+
+
+def _front_obstacle_gap_and_speed(d: dict[str, Any]) -> tuple[float, float]:
+    hist = np.asarray(d.get("agent_history", np.zeros((0, 0, 0))), dtype=float)
+    valid = np.asarray(d.get("agent_valid", np.zeros((0, 0))), dtype=float)
+    ego = np.asarray(d.get("ego_state", np.zeros((9,))), dtype=float).reshape(-1)
+    if hist.ndim != 3 or hist.shape[0] == 0 or hist.shape[1] <= 1 or ego.size < 5:
+        return float("inf"), 0.0
+    last = hist[-1]
+    vmask = valid[-1].astype(bool) if valid.ndim >= 2 and valid.shape[0] else np.ones((last.shape[0],), dtype=bool)
+    if not bool(vmask[1:].any()):
+        return float("inf"), 0.0
+    ego_xy = ego[:2]
+    heading = float(ego[4])
+    forward = np.array([np.cos(heading), np.sin(heading)], dtype=float)
+    rel = last[1:, :2] - ego_xy[None, :]
+    lon = rel @ forward
+    lat = np.abs(rel @ np.array([-forward[1], forward[0]], dtype=float))
+    mask = vmask[1:] & (lon > 0.0) & (lat < 3.5)
+    if not bool(mask.any()):
+        return float("inf"), 0.0
+    ids = np.where(mask)[0]
+    j = int(ids[np.argmin(lon[mask])]) + 1
+    gap = float(lon[j - 1])
+    speed = float(np.hypot(last[j, 3], last[j, 4])) if last.shape[1] >= 5 else 0.0
+    return gap, speed
+
+
+def _safe_braking_distance_proxy(d: dict[str, Any], stats: dict[str, float | np.ndarray], cfg: dict[str, Any]) -> tuple[float, bool]:
+    pcfg = ((cfg.get("external_baselines", {}) or {}).get("policy", {}) or {})
+    m = float(pcfg.get("vehicle_mass", 1750.0))
+    iz = float(pcfg.get("vehicle_iz", 2350.0))
+    mu = float(pcfg.get("postimpact_mu", pcfg.get("contact_mu", 0.75)))
+    gap, obstacle_v = _front_obstacle_gap_and_speed(d)
+    v = float(stats.get("initial_speed", 0.0))
+    yaw_rate = float(np.asarray(stats.get("yaw_rate_series", np.zeros((0,)))).reshape(-1)[0]) if np.asarray(stats.get("yaw_rate_series", np.zeros((0,)))).size else float(stats.get("yaw_rate", 0.0))
+    exy = max(0.0, 0.5 * m * (v * v - obstacle_v * obstacle_v))
+    ez = 0.5 * iz * yaw_rate * yaw_rate
+    sbd = (exy + ez) / max(m * 9.81 * mu, 1e-3)
+    feasible = bool(np.isfinite(gap) and (sbd + float(pcfg.get("postimpact_sbd_margin", 4.0)) <= gap))
+    return float(sbd), feasible
+
+
+def _postimpact_mpc_cost(d: dict[str, Any], cfg: dict[str, Any]) -> tuple[float, dict[str, float]]:
+    """Planning-integrated post-impact MPC adapter over OC-RAP candidates.
+
+    Wang et al.'s controller optimizes longitudinal/lateral/yaw motion for a
+    post-impact unstable vehicle with roll/adhesion and obstacle constraints,
+    chooses braking vs lane-change using safe braking distance, and then
+    allocates forces to actuators.  Under OC-RAP's finite candidate-prefix
+    lattice we cannot run the original continuous QP/PSO loop directly, so this
+    adapter evaluates every candidate as a receding-horizon MPC proposal using
+    the same ingredients: stability recovery, tire-adhesion usage, rhombus-like
+    obstacle/hard constraints, SBD braking/lane-change decision, and shared
+    recovery-option deployability.
+    """
+    pcfg = ((cfg.get("external_baselines", {}) or {}).get("policy", {}) or {})
+    stats = _motion_stats(d, cfg)
     hard = _scalar(d, "hard_violation", 0.0)
     harm = _scalar(d, "harm_proxy", 0.0)
     utility = _scalar(d, "utility", 0.0)
     shared_opt, shared = _shared_option_success_score(d, gamma=float(pcfg.get("postimpact_gamma", 0.0)))
-    dt = float(pcfg.get("postimpact_dt", 0.1))
-    yaw_rate = yaw_acc = speed_terminal = accel_effort = steer_effort = jerk = 0.0
-    if states.ndim == 2 and states.shape[0] >= 2:
-        if states.shape[1] >= 3:
-            yaw = np.unwrap(states[:, 2])
-            yr = np.diff(yaw) / max(dt, 1e-3)
-            yaw_rate = float(np.nanmax(np.abs(yr))) if yr.size else 0.0
-            yaw_acc = float(np.nanmax(np.abs(np.diff(yr) / max(dt, 1e-3)))) if yr.size >= 2 else 0.0
-        if states.shape[1] >= 5:
-            speed = np.hypot(states[:, 3], states[:, 4])
-        elif states.shape[1] >= 4:
-            speed = np.abs(states[:, 3])
-        else:
-            speed = np.zeros((states.shape[0],), dtype=float)
-        speed_terminal = float(speed[-1]) if speed.size else 0.0
-    if controls.ndim == 2 and controls.size:
-        if controls.shape[1] >= 1:
-            a = controls[:, 0]
-            accel_effort = float(np.nanmean(np.abs(a)))
-            jerk = float(np.nanmax(np.abs(np.diff(a) / max(dt, 1e-3)))) if a.size >= 2 else 0.0
-        if controls.shape[1] >= 2:
-            steer_effort = float(np.nanmean(np.abs(controls[:, 1])))
-    stable_stop_cost = (
+    sbd, brake_feasible = _safe_braking_distance_proxy(d, stats, cfg)
+    terminal_speed = float(stats["terminal_speed"])
+    yaw_rate = float(stats["yaw_rate"])
+    yaw_acc = float(stats["yaw_acc"])
+    adhesion = float(stats["adhesion_proxy"])
+    lateral_span = abs(float(stats["lateral_span"]))
+    brake_macro = _macro_is(d, {"brake", "yield", "pull_over", "stabilize"})
+    lane_macro = _macro_is(d, {"lane_shift", "merge", "pull_over"})
+    if brake_feasible:
+        decision_penalty = 0.0 if brake_macro else float(pcfg.get("postimpact_sbd_wrong_mode_penalty", 1.5))
+        sbd_mode_cost = float(pcfg.get("postimpact_sbd_terminal_speed_weight", 0.35)) * terminal_speed
+    else:
+        decision_penalty = 0.0 if lane_macro else float(pcfg.get("postimpact_sbd_wrong_mode_penalty", 1.5))
+        sbd_mode_cost = float(pcfg.get("postimpact_lane_change_lateral_weight", 0.08)) * max(0.0, 3.0 - lateral_span)
+    stability_cost = (
         float(pcfg.get("postimpact_yaw_rate_weight", 1.4)) * yaw_rate
         + float(pcfg.get("postimpact_yaw_acc_weight", 0.15)) * yaw_acc
-        + float(pcfg.get("postimpact_terminal_speed_weight", 0.45)) * speed_terminal
-        + float(pcfg.get("postimpact_accel_weight", 0.08)) * accel_effort
-        + float(pcfg.get("postimpact_steer_weight", 0.08)) * steer_effort
-        + float(pcfg.get("postimpact_jerk_weight", 0.02)) * jerk
+        + float(pcfg.get("postimpact_terminal_speed_weight", 0.25)) * terminal_speed
+        + float(pcfg.get("postimpact_accel_weight", 0.08)) * float(stats["accel_effort"])
+        + float(pcfg.get("postimpact_steer_weight", 0.08)) * float(stats["steer_effort"])
+        + float(pcfg.get("postimpact_jerk_weight", 0.02)) * float(stats["jerk"])
+        + float(pcfg.get("postimpact_adhesion_weight", 1.1)) * max(0.0, adhesion - 1.0)
     )
     obstacle_cost = float(pcfg.get("postimpact_hard_weight", 8.0)) * hard + float(pcfg.get("postimpact_harm_weight", 2.5)) * harm
     rejoin_reward = float(pcfg.get("postimpact_rejoin_weight", 0.20)) * utility + float(pcfg.get("postimpact_shared_drs_weight", 3.0)) * shared
-    total = stable_stop_cost + obstacle_cost - rejoin_reward
+    total = stability_cost + obstacle_cost + decision_penalty + sbd_mode_cost - rejoin_reward
     return float(total), {
         "shared_option": float(shared_opt),
         "shared_success": float(shared),
         "yaw_rate": yaw_rate,
         "yaw_acc": yaw_acc,
-        "terminal_speed": speed_terminal,
-        "stable_stop_cost": float(stable_stop_cost),
+        "terminal_speed": terminal_speed,
+        "stable_stop_cost": float(stability_cost),
         "obstacle_cost": float(obstacle_cost),
+        "sbd": float(sbd),
+        "sbd_brake_feasible": float(brake_feasible),
+        "adhesion_proxy": float(adhesion),
         "rejoin_reward": float(rejoin_reward),
     }
+
+
+def _stable_stop_cost(d: dict[str, Any], cfg: dict[str, Any]) -> tuple[float, dict[str, float]]:
+    """Post-crash braking / stable-stop adapter.
+
+    This mirrors industrial post-crash braking logic: once a crash/contact is
+    detected, prefer a controlled brake-to-stop command that suppresses yaw and
+    avoids extra secondary contacts.  It deliberately ignores route utility
+    except as a weak tie-breaker.
+    """
+    pcfg = ((cfg.get("external_baselines", {}) or {}).get("policy", {}) or {})
+    stats = _motion_stats(d, cfg)
+    hard = _scalar(d, "hard_violation", 0.0)
+    harm = _scalar(d, "harm_proxy", 0.0)
+    utility = _scalar(d, "utility", 0.0)
+    stop_macro = _macro_is(d, {"brake", "yield", "pull_over", "stabilize"})
+    cost = (
+        float(pcfg.get("stable_stop_terminal_speed_weight", 1.8)) * float(stats["terminal_speed"])
+        + float(pcfg.get("stable_stop_yaw_rate_weight", 2.0)) * float(stats["yaw_rate"])
+        + float(pcfg.get("stable_stop_yaw_acc_weight", 0.20)) * float(stats["yaw_acc"])
+        + float(pcfg.get("stable_stop_hard_weight", 12.0)) * hard
+        + float(pcfg.get("stable_stop_harm_weight", 4.0)) * harm
+        + float(pcfg.get("stable_stop_steer_weight", 0.20)) * float(stats["steer_effort"])
+        + float(pcfg.get("stable_stop_jerk_weight", 0.04)) * float(stats["jerk"])
+        + (0.0 if stop_macro else float(pcfg.get("stable_stop_non_stop_macro_penalty", 2.0)))
+        - float(pcfg.get("stable_stop_utility_tiebreak", 0.03)) * utility
+    )
+    return float(cost), {"terminal_speed": float(stats["terminal_speed"]), "yaw_rate": float(stats["yaw_rate"]), "stop_macro": float(stop_macro)}
+
+
+def _trajectory_restoration_cost(d: dict[str, Any], cfg: dict[str, Any]) -> tuple[float, dict[str, float]]:
+    """Ghosh et al. steering/tractive-force heuristic adapter.
+
+    The original method uses two sinusoidal steering windows to first return the
+    vehicle to the desired trajectory and then hold direction, plus a sinusoidal
+    tractive-force pulse rather than full braking.  We score OC-RAP prefixes by
+    matching this open-loop steering/traction shape while rewarding lateral/yaw
+    restoration and route rejoin.
+    """
+    pcfg = ((cfg.get("external_baselines", {}) or {}).get("policy", {}) or {})
+    stats = _motion_stats(d, cfg)
+    controls = np.asarray(stats["controls"], dtype=float)
+    states = np.asarray(stats["states"], dtype=float)
+    dt = float(stats["dt"])
+    T = int(controls.shape[0]) if controls.ndim == 2 else 0
+    t = np.arange(T, dtype=float) * dt
+    tau0 = float(pcfg.get("restoration_tau0", 0.1))
+    tau1 = float(pcfg.get("restoration_tau1", 0.45))
+    tau2 = float(pcfg.get("restoration_tau2", 0.65))
+    tau3 = float(pcfg.get("restoration_tau3", 0.95))
+    tc1 = float(pcfg.get("restoration_tauc1", 0.35))
+    tc2 = float(pcfg.get("restoration_tauc2", 0.85))
+    A1 = float(pcfg.get("restoration_A1", 0.175))
+    A2 = float(pcfg.get("restoration_A2", -0.10))
+    Ac = float(pcfg.get("restoration_accel_pulse", 0.9))
+    kdir = float(pcfg.get("restoration_kdir", 1.0))
+    # Direction is chosen from the initial lateral/yaw transient, as in a
+    # post-impact state initialization.  This keeps the heuristic responsive to
+    # left/right lateral impacts while remaining open-loop over the prefix.
+    sign_src = 0.0
+    if states.ndim == 2 and states.shape[0] > 0:
+        sign_src += float(states[0, 1]) if states.shape[1] >= 2 else 0.0
+        sign_src += float(states[0, 5]) if states.shape[1] >= 6 else 0.0
+    direction = -np.sign(sign_src) if abs(sign_src) > 1e-6 else 1.0
+    def window_sine(tt: np.ndarray, a: float, lo: float, hi: float) -> np.ndarray:
+        if hi <= lo:
+            return np.zeros_like(tt)
+        mask = (tt >= lo) & (tt <= hi)
+        out = np.zeros_like(tt)
+        out[mask] = a * np.sin(np.pi * (tt[mask] - lo) / max(hi - lo, 1e-3))
+        return out
+    steer_ref = kdir * direction * (window_sine(t, A1, tau0, tau1) + window_sine(t, A2, tau2, tau3))
+    accel_ref = window_sine(t, Ac, tc1, tc2)
+    steer = controls[:, 1] if controls.ndim == 2 and controls.shape[1] >= 2 and T else np.zeros((T,), dtype=float)
+    accel = controls[:, 0] if controls.ndim == 2 and controls.shape[1] >= 1 and T else np.zeros((T,), dtype=float)
+    shape_cost = 0.0
+    if T > 0:
+        shape_cost = float(np.nanmean((steer - steer_ref) ** 2) / max(A1 * A1, 1e-4) + 0.25 * np.nanmean((accel - accel_ref) ** 2) / max(Ac * Ac, 1e-4))
+    hard = _scalar(d, "hard_violation", 0.0)
+    harm = _scalar(d, "harm_proxy", 0.0)
+    utility = _scalar(d, "utility", 0.0)
+    terminal_y = abs(float(stats["terminal_lateral_delta"]))
+    # Encourage recovery without complete braking.
+    v0 = max(float(stats["initial_speed"]), 1e-3)
+    speed_preservation_penalty = max(0.0, float(pcfg.get("restoration_min_speed_fraction", 0.45)) * v0 - float(stats["terminal_speed"])) / v0
+    cost = (
+        float(pcfg.get("restoration_shape_weight", 0.8)) * shape_cost
+        + float(pcfg.get("restoration_yaw_rate_weight", 1.1)) * float(stats["yaw_rate"])
+        + float(pcfg.get("restoration_lateral_weight", 0.25)) * terminal_y
+        + float(pcfg.get("restoration_hard_weight", 9.0)) * hard
+        + float(pcfg.get("restoration_harm_weight", 2.0)) * harm
+        + float(pcfg.get("restoration_speed_preservation_weight", 2.0)) * speed_preservation_penalty
+        + float(pcfg.get("restoration_adhesion_weight", 0.75)) * max(0.0, float(stats["adhesion_proxy"]) - 1.0)
+        - float(pcfg.get("restoration_utility_weight", 0.25)) * utility
+    )
+    return float(cost), {"shape_cost": float(shape_cost), "terminal_speed": float(stats["terminal_speed"]), "yaw_rate": float(stats["yaw_rate"])}
+
+
+def _severity_minimization_cost(d: dict[str, Any], cfg: dict[str, Any]) -> tuple[float, dict[str, float]]:
+    """Unavoidable-collision severity-minimization adapter.
+
+    The planner assumes contact may be unavoidable and chooses the prefix that
+    minimizes a crash-severity proxy instead of insisting on zero contact.  The
+    proxy combines harm/hard labels, impact-energy/delta-v surrogates, post-
+    impact yaw instability, road-boundary/secondary-collision penalties, and a
+    weak reward for deployable recovery after the impact.
+    """
+    pcfg = ((cfg.get("external_baselines", {}) or {}).get("policy", {}) or {})
+    stats = _motion_stats(d, cfg)
+    hard = _scalar(d, "hard_violation", 0.0)
+    harm = _scalar(d, "harm_proxy", 0.0)
+    utility = _scalar(d, "utility", 0.0)
+    r_dep = _scalar(d, "r_dep_star", 0.0)
+    odg = max(0.0, _scalar(d, "oracle_gap_star", 0.0))
+    shared_opt, shared = _shared_option_success_score(d, gamma=float(pcfg.get("severity_gamma", 0.0)))
+    v0 = max(float(stats["initial_speed"]), 1e-3)
+    dv_proxy = max(0.0, v0 - float(stats["terminal_speed"])) / v0
+    residual_energy = (float(stats["terminal_speed"]) / v0) ** 2
+    instability = float(stats["yaw_rate"]) + 0.15 * float(stats["yaw_acc"]) + max(0.0, float(stats["adhesion_proxy"]) - 1.0)
+    contact_mode_bonus = float(_macro_is(d, {"brake", "yield", "lane_shift", "pull_over", "stabilize"}))
+    cost = (
+        float(pcfg.get("severity_harm_weight", 10.0)) * harm
+        + float(pcfg.get("severity_hard_weight", 5.0)) * hard
+        + float(pcfg.get("severity_delta_v_weight", 2.0)) * dv_proxy
+        + float(pcfg.get("severity_residual_energy_weight", 0.8)) * residual_energy
+        + float(pcfg.get("severity_instability_weight", 1.2)) * instability
+        + float(pcfg.get("severity_odg_weight", 0.6)) * odg
+        - float(pcfg.get("severity_deployability_weight", 1.5)) * shared
+        - float(pcfg.get("severity_rdep_weight", 0.25)) * max(-2.0, min(2.0, r_dep))
+        - float(pcfg.get("severity_utility_tiebreak", 0.05)) * utility
+        - float(pcfg.get("severity_contact_macro_bonus", 0.20)) * contact_mode_bonus
+    )
+    return float(cost), {"shared_option": float(shared_opt), "shared_success": float(shared), "delta_v_proxy": float(dv_proxy), "instability": float(instability)}
 
 
 def select_external_policy(
@@ -562,20 +864,81 @@ def select_external_policy(
             opt = int(opts[0]) if opts.size else None
         return ExternalSelection(idx, "branchwise_existential_oracle_recovery_filter", admitted, score, selected_option=opt)
 
-    if baseline in {"postimpact_mpc", "postimpact_mpc_lite", "post_impact_mpc_lite", "postimpact_mpc_paper"}:
+    if baseline in {"postimpact_mpc", "postimpact_mpc_lite", "post_impact_mpc_lite", "postimpact_mpc_paper", "integrated_postimpact_mpc"}:
         costs = []
-        opts = []
+        details_list = []
         for d in samples:
             c, details = _postimpact_mpc_cost(d, cfg)
             costs.append(c)
-            opts.append(int(details.get("shared_option", 0)))
+            details_list.append(details)
         cost = np.asarray(costs, dtype=float) if costs else np.zeros(n, dtype=float)
         score = -cost
         yaw_gate = float(pcfg.get("postimpact_yaw_rate_gate", 2.2))
-        stable_gate = np.asarray([_postimpact_mpc_cost(d, cfg)[1].get("yaw_rate", 0.0) <= yaw_gate for d in samples], dtype=bool) if samples else np.zeros(n, dtype=bool)
+        adhesion_gate = float(pcfg.get("postimpact_adhesion_gate", 1.25))
+        stable_gate = np.asarray([x.get("yaw_rate", 0.0) <= yaw_gate and x.get("adhesion_proxy", 0.0) <= adhesion_gate for x in details_list], dtype=bool) if samples else np.zeros(n, dtype=bool)
         admitted = feasible & stable_gate & (hard <= float(pcfg.get("postimpact_hard_gate", 0.0)))
         idx = _best(score, admitted if admitted.any() else feasible)
-        opt = int(opts[idx]) if opts else 0
-        return ExternalSelection(idx, "planning_integrated_postimpact_mpc", admitted, score, selected_option=opt)
+        opt = int(details_list[idx].get("shared_option", 0)) if details_list else 0
+        return ExternalSelection(idx, "planning_integrated_postimpact_mpc_sbd_adhesion", admitted, score, selected_option=opt)
+
+    if baseline in {"post_crash_braking", "post_crash_braking_rule", "stable_stop", "stable_stop_rule", "postcrash_stable_stop"}:
+        costs = []
+        details_list = []
+        for d in samples:
+            c, details = _stable_stop_cost(d, cfg)
+            costs.append(c)
+            details_list.append(details)
+        cost = np.asarray(costs, dtype=float) if costs else np.zeros(n, dtype=float)
+        score = -cost
+        stop_gate_speed = float(pcfg.get("stable_stop_terminal_speed_gate", 2.0))
+        yaw_gate = float(pcfg.get("stable_stop_yaw_rate_gate", 1.4))
+        stop_macro = np.asarray([_macro_is(d, {"brake", "yield", "pull_over", "stabilize"}) for d in samples], dtype=bool) if samples else np.zeros(n, dtype=bool)
+        stable_gate = np.asarray([x.get("terminal_speed", 0.0) <= stop_gate_speed and x.get("yaw_rate", 0.0) <= yaw_gate for x in details_list], dtype=bool) if samples else np.zeros(n, dtype=bool)
+        admitted = feasible & stop_macro & stable_gate & (hard <= float(pcfg.get("stable_stop_hard_gate", 0.0)))
+        idx = _best(score, admitted if admitted.any() else feasible)
+        opt = _preferred_option_index(samples[idx], ["stop", "brake_lane", "post_contact_stabilize"], gamma=float(pcfg.get("stable_stop_gamma", 0.0))) if samples else 0
+        return ExternalSelection(idx, "post_crash_braking_stable_stop_rule", admitted, score, selected_option=opt)
+
+    if baseline in {"post_collision_restoration", "trajectory_restoration", "post_collision_trajectory_restoration", "post_collision_restoration_heuristic", "ackermann_restoration"}:
+        costs = []
+        details_list = []
+        for d in samples:
+            c, details = _trajectory_restoration_cost(d, cfg)
+            costs.append(c)
+            details_list.append(details)
+        cost = np.asarray(costs, dtype=float) if costs else np.zeros(n, dtype=float)
+        score = -cost
+        restoration_macro = np.asarray([_macro_is(d, {"stabilize", "lane_shift", "merge", "yield", "pull_over", "keep"}) for d in samples], dtype=bool) if samples else np.zeros(n, dtype=bool)
+        yaw_gate = float(pcfg.get("restoration_yaw_rate_gate", 2.2))
+        speed_frac = float(pcfg.get("restoration_admit_min_speed_fraction", 0.30))
+        speed_ok = []
+        yaw_ok = []
+        for d, det in zip(samples, details_list):
+            st = _motion_stats(d, cfg)
+            speed_ok.append(float(st.get("terminal_speed", 0.0)) >= speed_frac * max(float(st.get("initial_speed", 0.0)), 1e-3))
+            yaw_ok.append(float(det.get("yaw_rate", 0.0)) <= yaw_gate)
+        admitted = feasible & restoration_macro & np.asarray(speed_ok, dtype=bool) & np.asarray(yaw_ok, dtype=bool) & (hard <= float(pcfg.get("restoration_hard_gate", 0.0)))
+        idx = _best(score, admitted if admitted.any() else feasible)
+        opt = _preferred_option_index(samples[idx], ["post_contact_stabilize", "yield_rejoin", "avoid_secondary"], gamma=float(pcfg.get("restoration_gamma", 0.0))) if samples else 0
+        return ExternalSelection(idx, "post_collision_trajectory_restoration_heuristic", admitted, score, selected_option=opt)
+
+    if baseline in {"severity_minimization", "severity_minimization_planner", "unavoidable_collision_planner", "crash_mitigation_planner", "uc_severity_planner"}:
+        costs = []
+        details_list = []
+        for d in samples:
+            c, details = _severity_minimization_cost(d, cfg)
+            costs.append(c)
+            details_list.append(details)
+        cost = np.asarray(costs, dtype=float) if costs else np.zeros(n, dtype=float)
+        score = -cost
+        # In unavoidable-contact planning, hard contact is not a blanket reject;
+        # admission means the candidate is dynamically feasible and below a
+        # configurable crash-severity envelope.
+        finite = np.isfinite(cost)
+        threshold = float(pcfg.get("severity_admit_threshold", np.nanpercentile(cost[finite], 60.0) if finite.any() else 1.0))
+        admitted = feasible & finite & (cost <= threshold)
+        idx = _best(score, admitted if admitted.any() else feasible)
+        opt = _preferred_option_index(samples[idx], ["mitigate_contact", "avoid_secondary", "post_contact_stabilize", "brake_lane"], gamma=float(pcfg.get("severity_gamma", 0.0))) if samples else 0
+        return ExternalSelection(idx, "unavoidable_collision_severity_minimization", admitted, score, selected_option=opt)
 
     raise ValueError(f"Unknown external baseline {baseline!r}")
