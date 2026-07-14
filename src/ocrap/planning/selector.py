@@ -370,6 +370,16 @@ def calibrated_constrained_select(
     rescue_challenge_min_pred_drs: float = -1.0,
     rescue_challenge_min_pred_pcd: float = -1.0,
     rescue_challenge_min_pcd_gain: float = -1.0,
+    # v27 DDC: deployability-dominance challenge guards.  A recovery macro may
+    # challenge an already-admitted nominal prefix only when it improves enough
+    # deployment-facing axes relative to nominal.  This keeps near-contact
+    # nominal-preserving while still allowing true post-contact recovery.
+    rescue_challenge_min_rec_lcb_gain: float = -1.0,
+    rescue_challenge_min_drs_gain: float = -1.0,
+    rescue_challenge_min_gap_reduction: float = -1.0,
+    rescue_challenge_min_improvement_axes: int = 0,
+    rescue_challenge_macro_allowlist=None,
+    rescue_challenge_macro_blocklist=None,
     rescue_challenge_max_pred_utility: float = -1.0,
     rescue_challenge_max_used: int = -1,
     rescue_challenge_score_pcd_weight: float = 1.0,
@@ -1022,6 +1032,35 @@ def calibrated_constrained_select(
                     challenge_mask &= pcd_proxy >= float(rescue_challenge_min_pred_pcd)
                 if float(rescue_challenge_min_pcd_gain) >= 0.0:
                     challenge_mask &= pcd_gain_vs_nom >= float(rescue_challenge_min_pcd_gain)
+                if float(rescue_challenge_min_rec_lcb_gain) >= 0.0:
+                    challenge_mask &= rec_gain_vs_nom >= float(rescue_challenge_min_rec_lcb_gain)
+                if float(rescue_challenge_min_drs_gain) >= 0.0:
+                    challenge_mask &= drs_gain_vs_nom >= float(rescue_challenge_min_drs_gain)
+                if float(rescue_challenge_min_gap_reduction) >= 0.0:
+                    challenge_mask &= gap_reduction_vs_nom >= float(rescue_challenge_min_gap_reduction)
+                if int(rescue_challenge_min_improvement_axes) > 0:
+                    axes = np.zeros((n,), dtype=int)
+                    # If an axis threshold is disabled, use a weak non-inferiority
+                    # test so the axis can still count only when it is not worse
+                    # than nominal.  If enabled, count only material gains.
+                    pcd_thr = float(rescue_challenge_min_pcd_gain) if float(rescue_challenge_min_pcd_gain) >= 0.0 else 0.0
+                    rec_thr = float(rescue_challenge_min_rec_lcb_gain) if float(rescue_challenge_min_rec_lcb_gain) >= 0.0 else 0.0
+                    drs_thr = float(rescue_challenge_min_drs_gain) if float(rescue_challenge_min_drs_gain) >= 0.0 else 0.0
+                    gap_thr = float(rescue_challenge_min_gap_reduction) if float(rescue_challenge_min_gap_reduction) >= 0.0 else 0.0
+                    axes += (pcd_gain_vs_nom >= pcd_thr).astype(int)
+                    axes += (rec_gain_vs_nom >= rec_thr).astype(int)
+                    axes += (drs_gain_vs_nom >= drs_thr).astype(int)
+                    axes += (gap_reduction_vs_nom >= gap_thr).astype(int)
+                    challenge_mask &= axes >= int(rescue_challenge_min_improvement_axes)
+                challenge_macro_allow = _split_name_set(rescue_challenge_macro_allowlist)
+                challenge_macro_block = _split_name_set(rescue_challenge_macro_blocklist)
+                if challenge_macro_allow or challenge_macro_block:
+                    challenge_macro_mask = np.ones((n,), dtype=bool)
+                    if challenge_macro_allow:
+                        challenge_macro_mask &= np.asarray([m in challenge_macro_allow for m in macro_names], dtype=bool)
+                    if challenge_macro_block:
+                        challenge_macro_mask &= ~np.asarray([m in challenge_macro_block for m in macro_names], dtype=bool)
+                    challenge_mask &= challenge_macro_mask
                 if float(rescue_challenge_max_pred_utility) >= 0.0:
                     challenge_mask &= utility <= float(rescue_challenge_max_pred_utility)
                 if int(rescue_challenge_max_used) >= 0:
