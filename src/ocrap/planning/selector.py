@@ -359,6 +359,25 @@ def calibrated_constrained_select(
     # learned nominal LCB was over-confident.  This switch is intentionally
     # disabled by default and should only be enabled for near/contact buckets.
     stress_rescue_challenge_nominal: bool = False,
+    # v26: guarded nominal challenge.  v25 showed that merely allowing every
+    # rescue-certified brake/PCD candidate to challenge nominal over-selected
+    # high-utility but non-deployable brakes in contact.  These guards define a
+    # second, stricter challenge frontier that is applied only when nominal is
+    # already calibrated-admitted.  The ordinary rescue certificates are still
+    # available for the easier case where nominal is not admitted.
+    rescue_challenge_min_candidate_gap: float = -1.0,
+    rescue_challenge_max_candidate_gap: float = -1.0,
+    rescue_challenge_min_pred_drs: float = -1.0,
+    rescue_challenge_min_pred_pcd: float = -1.0,
+    rescue_challenge_min_pcd_gain: float = -1.0,
+    rescue_challenge_max_pred_utility: float = -1.0,
+    rescue_challenge_max_used: int = -1,
+    rescue_challenge_score_pcd_weight: float = 1.0,
+    rescue_challenge_score_drs_weight: float = 0.15,
+    rescue_challenge_score_gap_weight: float = 0.25,
+    rescue_challenge_score_utility_weight: float = 0.02,
+    rescue_challenge_nominal_guard_min_pcd: float = -1.0,
+    rescue_challenge_nominal_guard_max_gap: float = -1.0,
     # Closed-loop exposure control: minimum number of decisions since the last
     # non-nominal action before another recovery prefix may be executed.  This
     # is stronger than a soft rate penalty and prevents repeated braking bursts.
@@ -986,16 +1005,60 @@ def calibrated_constrained_select(
         nom_near_gamma = rec_lcb[nominal_index] >= float(gamma_rec) - nominal_extra_slack
         nom_near_score = score[nominal_index] >= score[best_idx] - float(nominal_utility_slack)
         if admitted[nominal_index]:
-            if (
-                bool(stress_rescue_challenge_nominal)
-                and (not is_safe_regime)
-                and int(best_idx) != int(nominal_index)
-                and bool(admitted[best_idx])
-                and bool(brake_rescue_certified[best_idx] or pcd_rescue_certified[best_idx])
-            ):
-                if pcd_rescue_certified[best_idx] and not brake_rescue_certified[best_idx]:
-                    return SelectionResult(int(best_idx), "best_pcd_rescue_challenged_nominal_admitted", admitted)
-                return SelectionResult(int(best_idx), "best_brake_rescue_challenged_nominal_admitted", admitted)
+            if bool(stress_rescue_challenge_nominal) and (not is_safe_regime):
+                challenge_mask = (brake_rescue_certified | pcd_rescue_certified) & admitted
+                challenge_mask[int(nominal_index)] = False
+                # Apply the v26 guarded challenge frontier.  This is deliberately
+                # separate from certification: a rescue can still be admitted when
+                # nominal is unadmitted, but challenging an already-admitted nominal
+                # requires stronger evidence and bounded exposure.
+                if float(rescue_challenge_min_candidate_gap) >= 0.0:
+                    challenge_mask &= gap >= float(rescue_challenge_min_candidate_gap)
+                if float(rescue_challenge_max_candidate_gap) >= 0.0:
+                    challenge_mask &= gap <= float(rescue_challenge_max_candidate_gap)
+                if float(rescue_challenge_min_pred_drs) >= 0.0:
+                    challenge_mask &= drs_proxy >= float(rescue_challenge_min_pred_drs)
+                if float(rescue_challenge_min_pred_pcd) >= 0.0:
+                    challenge_mask &= pcd_proxy >= float(rescue_challenge_min_pred_pcd)
+                if float(rescue_challenge_min_pcd_gain) >= 0.0:
+                    challenge_mask &= pcd_gain_vs_nom >= float(rescue_challenge_min_pcd_gain)
+                if float(rescue_challenge_max_pred_utility) >= 0.0:
+                    challenge_mask &= utility <= float(rescue_challenge_max_pred_utility)
+                if int(rescue_challenge_max_used) >= 0:
+                    try:
+                        challenge_mask &= float(intervention_budget_used or 0.0) < float(rescue_challenge_max_used)
+                    except Exception:
+                        pass
+                if bool(cooldown_active):
+                    challenge_mask[:] = False
+                # Optional nominal guard: if nominal already has a very high
+                # learned PCD proxy and low predicted gap, do not challenge it.
+                # This prevents v25's failure mode where a brake with lower
+                # predicted deployability replaced a good nominal prefix.
+                nom_pcd = float(pcd_proxy[int(nominal_index)])
+                nom_gap = float(gap[int(nominal_index)])
+                if (
+                    float(rescue_challenge_nominal_guard_min_pcd) >= 0.0
+                    and float(rescue_challenge_nominal_guard_max_gap) >= 0.0
+                    and nom_pcd >= float(rescue_challenge_nominal_guard_min_pcd)
+                    and nom_gap <= float(rescue_challenge_nominal_guard_max_gap)
+                ):
+                    # Let only candidates with a material learned PCD advantage
+                    # break this strong nominal certificate.
+                    min_gain = max(float(rescue_challenge_min_pcd_gain), 0.035)
+                    challenge_mask &= pcd_gain_vs_nom >= min_gain
+                if bool(challenge_mask.any()):
+                    cc = np.where(challenge_mask)[0]
+                    challenge_score = (
+                        float(rescue_challenge_score_pcd_weight) * pcd_proxy
+                        + float(rescue_challenge_score_drs_weight) * drs_proxy
+                        - float(rescue_challenge_score_gap_weight) * gap
+                        - float(rescue_challenge_score_utility_weight) * np.maximum(0.0, utility - utility[int(nominal_index)])
+                    )
+                    chosen = int(cc[np.argmax(challenge_score[cc])])
+                    if pcd_rescue_certified[chosen] and not brake_rescue_certified[chosen]:
+                        return SelectionResult(chosen, "best_pcd_rescue_guarded_challenge", admitted)
+                    return SelectionResult(chosen, "best_brake_rescue_guarded_challenge", admitted)
             return SelectionResult(int(nominal_index), "nominal_calibrated_admitted", admitted)
         if bool(budget_preserve_nominal) and budget_exceeded and nom_gap_ok and rec_lcb[nominal_index] >= float(gamma_rec) - float(budget_nominal_slack):
             admitted = admitted.copy()
