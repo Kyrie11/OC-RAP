@@ -579,6 +579,7 @@ def _rollout_one_scene(
     metric_trace: list[dict[str, float]] = []
     state_xy_trace: list[list[float]] = []
     interventions_used = 0
+    last_intervention_step = -10**9
     audit_bucket_name = bucket_name or str((cfg.get("selection", {}) or {}).get("active_bucket_name", "") or "")
     drs_gamma = _drs_success_gamma_for_bucket(gamma, cfg, audit_bucket_name)
 
@@ -642,15 +643,18 @@ def _rollout_one_scene(
             # Use step_idx + 1 so the early rollout does not look artificially
             # over-budget after a single intervention.
             sel_local["intervention_budget_steps"] = max(1, int(step_idx) + 1)
+            sel_local["steps_since_last_intervention"] = int(step_idx) - int(last_intervention_step)
             select_cfg["selection"] = sel_local
         sel_idx, info = _select_prefix(samples, bundle, select_cfg, method, gamma, compute_teacher_labels=compute_teacher_labels)
         selected_sample = samples[sel_idx]
         try:
             if int(getattr(selected_sample, "candidate_index", sel_idx)) != 0:
                 interventions_used += 1
+                last_intervention_step = int(step_idx)
         except Exception:
             if int(sel_idx) != 0:
                 interventions_used += 1
+                last_intervention_step = int(step_idx)
         prefix = selected_sample.prefix
         selected_audit_sample = None
         selected_audit_data = None

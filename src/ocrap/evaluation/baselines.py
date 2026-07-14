@@ -359,6 +359,9 @@ def select_baseline(
                 stress_anchor_min_drs_gain=_cfg_float(scfg, "stress_anchor_min_drs_gain", 0.06, bucket_name),
                 stress_anchor_min_rec_gain=_cfg_float(scfg, "stress_anchor_min_rec_gain", 0.08, bucket_name),
                 stress_anchor_min_gap_reduction=_cfg_float(scfg, "stress_anchor_min_gap_reduction", 0.05, bucket_name),
+                stress_rescue_challenge_nominal=_cfg_bool(scfg, "stress_rescue_challenge_nominal", False, bucket_name),
+                intervention_cooldown_steps=int(_cfg_float(scfg, "intervention_cooldown_steps", 0.0, bucket_name)),
+                steps_since_last_intervention=(None if not _cfg_has_value(scfg, "steps_since_last_intervention", bucket_name) else _cfg_float(scfg, "steps_since_last_intervention", 1.0e9, bucket_name)),
             )
             gap_arr = np.asarray(pred_gap if pred_gap is not None else np.zeros_like(pred_r_dep), dtype=float)
             score = pred_r_dep - beta * np.maximum(0.0, gap_arr)

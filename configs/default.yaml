@@ -225,6 +225,9 @@ selection:
   stress_anchor_min_drs_gain: 0.06
   stress_anchor_min_rec_gain: 0.08
   stress_anchor_min_gap_reduction: 0.05
+  stress_rescue_challenge_nominal: false
+  intervention_cooldown_steps: 0
+  steps_since_last_intervention: null
   gamma_rec_by_bucket: {}
   gamma_rec_by_bucket_file: null
 calibration:

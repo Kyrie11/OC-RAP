@@ -353,6 +353,17 @@ def calibrated_constrained_select(
     pcd_rescue_bonus: float = 0.0,
     pcd_rescue_counts_as_evidence: bool = True,
     pcd_rescue_budget_bypass: bool = False,
+    # v25: let a certified recovery macro challenge an already admitted nominal
+    # prefix in stress buckets.  v24 fixed missing brake candidates, but the
+    # nominal-preserving return still short-circuited the selector whenever the
+    # learned nominal LCB was over-confident.  This switch is intentionally
+    # disabled by default and should only be enabled for near/contact buckets.
+    stress_rescue_challenge_nominal: bool = False,
+    # Closed-loop exposure control: minimum number of decisions since the last
+    # non-nominal action before another recovery prefix may be executed.  This
+    # is stronger than a soft rate penalty and prevents repeated braking bursts.
+    intervention_cooldown_steps: int = 0,
+    steps_since_last_intervention: float | None = None,
 ) -> SelectionResult:
     """Soft calibrated OC-RAP selector.
 
@@ -704,6 +715,10 @@ def calibrated_constrained_select(
     regime = (regime_name or "").lower()
     is_safe_regime = "safe" in regime or "normal" in regime or "background" in regime
     is_contact_regime = "contact" in regime
+    try:
+        cooldown_active = int(intervention_cooldown_steps or 0) > 0 and steps_since_last_intervention is not None and float(steps_since_last_intervention) < float(intervention_cooldown_steps)
+    except Exception:
+        cooldown_active = False
 
     # Continuous recovery shortfall; finite guard prevents NaNs from dominating.
     rec_shortfall = np.maximum(0.0, float(gamma_rec) - rec_lcb)
@@ -887,6 +902,14 @@ def calibrated_constrained_select(
                     hard_budget_evidence = hard_budget_evidence | pcd_rescue_certified
                 certified_non_nom &= hard_budget_evidence
 
+        # v25 closed-loop exposure gate.  A rescue certificate may override a
+        # single over-confident nominal decision, but it should not create a
+        # burst of brake prefixes at consecutive replanning steps.  The gate is
+        # applied after semantic/evidence certification so nominal is preserved
+        # when the exposure budget says another intervention is premature.
+        if bool(cooldown_active):
+            certified_non_nom[:] = False
+
         if bool(certified_non_nom.any()):
             cc = np.where(certified_non_nom)[0]
             best_idx = int(cc[np.argmax(score[cc])])
@@ -963,6 +986,16 @@ def calibrated_constrained_select(
         nom_near_gamma = rec_lcb[nominal_index] >= float(gamma_rec) - nominal_extra_slack
         nom_near_score = score[nominal_index] >= score[best_idx] - float(nominal_utility_slack)
         if admitted[nominal_index]:
+            if (
+                bool(stress_rescue_challenge_nominal)
+                and (not is_safe_regime)
+                and int(best_idx) != int(nominal_index)
+                and bool(admitted[best_idx])
+                and bool(brake_rescue_certified[best_idx] or pcd_rescue_certified[best_idx])
+            ):
+                if pcd_rescue_certified[best_idx] and not brake_rescue_certified[best_idx]:
+                    return SelectionResult(int(best_idx), "best_pcd_rescue_challenged_nominal_admitted", admitted)
+                return SelectionResult(int(best_idx), "best_brake_rescue_challenged_nominal_admitted", admitted)
             return SelectionResult(int(nominal_index), "nominal_calibrated_admitted", admitted)
         if bool(budget_preserve_nominal) and budget_exceeded and nom_gap_ok and rec_lcb[nominal_index] >= float(gamma_rec) - float(budget_nominal_slack):
             admitted = admitted.copy()
