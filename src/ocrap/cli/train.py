@@ -776,7 +776,50 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         option_feature_dim=OPTION_FEATURE_DIM,
     ).to(device)
     tcfg = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
-    opt = torch.optim.AdamW(model.parameters(), lr=float(tcfg.get("lr", 1e-3)), weight_decay=float(tcfg.get("weight_decay", 1e-4)))
+
+    # v28: residual DDC should fine-tune an already calibrated selector model
+    # rather than relearning all heads from scratch.  The v27 trained run showed
+    # that scratch training can minimize train loss while destroying the runtime
+    # calibration scale used by the selector.
+    init_checkpoint = str(tcfg.get("init_checkpoint", "") or "").strip()
+    init_load_info: dict[str, object] = {}
+    if init_checkpoint:
+        init_path = Path(init_checkpoint)
+        if not init_path.exists():
+            raise FileNotFoundError(f"training.init_checkpoint does not exist: {init_checkpoint}")
+        ckpt = torch.load(init_path, map_location=device)
+        state = ckpt.get("model_state", ckpt) if isinstance(ckpt, dict) else ckpt
+        missing, unexpected = model.load_state_dict(state, strict=False)
+        init_load_info = {
+            "event": "init_checkpoint_loaded",
+            "path": str(init_path),
+            "missing_keys": list(missing),
+            "unexpected_keys": list(unexpected),
+        }
+        print(init_load_info, flush=True)
+
+    freeze_prefixes = tuple(
+        x.strip() for x in str(tcfg.get("freeze_param_prefixes", "") or "").split(",") if x.strip()
+    )
+    if freeze_prefixes:
+        frozen = 0
+        trainable = 0
+        for name, param in model.named_parameters():
+            if any(name.startswith(prefix) for prefix in freeze_prefixes):
+                param.requires_grad_(False)
+                frozen += int(param.numel())
+            else:
+                trainable += int(param.numel())
+        print({
+            "event": "freeze_param_prefixes",
+            "prefixes": list(freeze_prefixes),
+            "frozen_params": int(frozen),
+            "trainable_params": int(trainable),
+        }, flush=True)
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    if not trainable_params:
+        raise ValueError("No trainable parameters remain after training.freeze_param_prefixes")
+    opt = torch.optim.AdamW(trainable_params, lr=float(tcfg.get("lr", 1e-3)), weight_decay=float(tcfg.get("weight_decay", 1e-4)))
     batch_size = int(tcfg.get("batch_size", 32))
     num_workers = int(tcfg.get("num_workers", 0))
     group_batch_sampler = _make_group_batch_sampler(train_ds, cfg, batch_size)
@@ -818,6 +861,8 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "val_loss": float(val_loss),
             "device_info_at_train": device_info,
             "note": "OC-RAP neural checkpoint: predicts root probabilities, recovery margins, utility, and observation compatibility from scene-prefix features.",
+            "init_checkpoint": init_checkpoint,
+            "freeze_param_prefixes": list(freeze_prefixes),
         }
     print({
         "event": "train_start",
@@ -831,6 +876,8 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         "d_model": d_model,
         "d_obs": d_obs,
         "encoder_type": encoder_type,
+        "init_checkpoint": init_checkpoint or None,
+        "freeze_param_prefixes": list(freeze_prefixes),
     }, flush=True)
     t0 = perf_counter()
     for ep in range(1, epochs + 1):
@@ -889,6 +936,8 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         "d_model": d_model,
         "d_obs": d_obs,
         "encoder_type": encoder_type,
+        "init_checkpoint": init_checkpoint,
+        "freeze_param_prefixes": list(freeze_prefixes),
         "best_val_loss": float(best_val),
         "device_info": device_info,
         "train_batches_per_epoch": len(train_loader),
