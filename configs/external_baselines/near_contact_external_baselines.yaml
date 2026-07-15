@@ -69,3 +69,16 @@ external_baselines:
     device: auto
     batch_size: 64
     epochs: 1
+
+closed_loop:
+  external_sparse_labels: true
+  external_label_max_candidates: 8
+  external_label_macro_diversity: true
+  exhaustive_teacher_labels: false
+  num_recovery_options: 12
+  save_partial: false
+
+waymax:
+  compute_future_metrics: false
+  teacher_metrics_stride: 0
+  teacher_rollout_top_k_options: 4

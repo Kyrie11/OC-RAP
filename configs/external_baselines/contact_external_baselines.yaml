@@ -101,6 +101,12 @@ external_baselines:
     # candidate-set 60th percentile, avoiding test-label fitting.
 
 closed_loop:
+  external_sparse_labels: true
+  external_label_max_candidates: 10
+  external_label_macro_diversity: true
+  exhaustive_teacher_labels: false
+  num_recovery_options: 12
+  save_partial: false
   num_candidate_prefixes: 24
   replan_interval_steps: 1
   label_mode: all
@@ -108,6 +114,8 @@ closed_loop:
   artifact_mine_probability: 0.0
 
 waymax:
-  compute_future_metrics: true
+  compute_future_metrics: false
+  teacher_metrics_stride: 0
+  teacher_rollout_top_k_options: 4
   dataloader_include_sdc_paths: false
   metrics_to_run: [log_divergence, overlap, offroad, kinematic_infeasibility]

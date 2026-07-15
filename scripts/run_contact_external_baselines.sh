@@ -10,6 +10,14 @@ set -euo pipefail
 : "${CL_WOMD:=${WOMD_VAL_INTERACTIVE}@150}"
 : "${CL_MAX_SCENARIOS:=50}"
 : "${CL_MAX_STEPS:=40}"
+: "${CL_LABEL_MAX_CANDIDATES:=10}"
+: "${CL_NUM_RECOVERY_OPTIONS:=12}"
+: "${CL_TEACHER_TOP_K_OPTIONS:=4}"
+: "${CL_EXHAUSTIVE_TEACHER_LABELS:=false}"
+: "${CL_SAVE_PARTIAL:=false}"
+: "${OMP_NUM_THREADS:=8}"
+: "${MKL_NUM_THREADS:=8}"
+export OMP_NUM_THREADS MKL_NUM_THREADS
 
 mkdir -p "$RUN"
 
@@ -56,8 +64,16 @@ for method in "${CONTACT_METHODS[@]}"; do
     --set closed_loop.max_steps="$CL_MAX_STEPS" \
     --set closed_loop.replan_interval_steps=1 \
     --set closed_loop.label_mode=all \
+    --set closed_loop.external_sparse_labels=true \
+    --set closed_loop.external_label_max_candidates="$CL_LABEL_MAX_CANDIDATES" \
+    --set closed_loop.external_label_macro_diversity=true \
+    --set closed_loop.exhaustive_teacher_labels="$CL_EXHAUSTIVE_TEACHER_LABELS" \
     --set closed_loop.num_candidate_prefixes=24 \
-    --set waymax.compute_future_metrics=true \
+    --set closed_loop.num_recovery_options="$CL_NUM_RECOVERY_OPTIONS" \
+    --set closed_loop.save_partial="$CL_SAVE_PARTIAL" \
+    --set waymax.compute_future_metrics=false \
+    --set waymax.teacher_metrics_stride=0 \
+    --set waymax.teacher_rollout_top_k_options="$CL_TEACHER_TOP_K_OPTIONS" \
     2>&1 | tee "$RUN/closed_loop_${method}.log"
 done
 

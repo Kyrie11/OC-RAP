@@ -132,6 +132,159 @@ def _prefix_nominal_deviation(samples: list) -> np.ndarray:
 
 
 
+def _external_label_budget_for_method(method: str, cfg: dict, n: int) -> int:
+    """Budget for exact teacher-label materialization in external closed-loop runs.
+
+    External rule/optimization baselines still use their paper-defined
+    branch/root/contact scores; the speedup is to evaluate those scores on a
+    small macro-diverse candidate lattice instead of rebuilding full OC-RAP
+    labels for every generated prefix at every replan.  Set
+    closed_loop.exhaustive_teacher_labels=true or external_label_max_candidates<=0
+    to recover the previous exhaustive path.
+    """
+    if n <= 0:
+        return 0
+    cl_cfg = cfg.get("closed_loop", {}) if isinstance(cfg.get("closed_loop", {}), dict) else {}
+    raw = cl_cfg.get("external_label_max_candidates", None)
+    if raw is None:
+        # Near-contact filters mainly need nominal plus one representative per
+        # semantic macro. Contact planners benefit from a slightly wider lattice
+        # because brake/stabilize/restore/severity candidates can trade off.
+        ml = str(method).lower()
+        if ml in {
+            "postimpact_mpc", "postimpact_mpc_lite", "post_impact_mpc_lite",
+            "postimpact_mpc_paper", "integrated_postimpact_mpc",
+            "post_crash_braking", "post_crash_braking_rule", "stable_stop",
+            "stable_stop_rule", "postcrash_stable_stop",
+            "post_collision_restoration", "trajectory_restoration",
+            "post_collision_trajectory_restoration", "post_collision_restoration_heuristic",
+            "ackermann_restoration", "severity_minimization",
+            "severity_minimization_planner", "unavoidable_collision_planner",
+            "crash_mitigation_planner", "uc_severity_planner",
+        }:
+            raw = 10
+        else:
+            raw = 8
+    try:
+        budget = int(raw)
+    except Exception:
+        budget = 8
+    if budget <= 0:
+        return n
+    return int(max(1, min(n, budget)))
+
+
+def _sample_macro_name(sample: Any) -> str:
+    try:
+        return str(getattr(sample.prefix, "macro_name", "") or "").strip().lower()
+    except Exception:
+        return ""
+
+
+def _prefix_deviation_from_nominal(samples: list) -> np.ndarray:
+    if not samples:
+        return np.zeros((0,), dtype=np.float32)
+    try:
+        ref = np.asarray(samples[0].prefix.prefix_states, dtype=float)[:, :2]
+    except Exception:
+        return np.zeros((len(samples),), dtype=np.float32)
+    vals: list[float] = []
+    for s in samples:
+        try:
+            xy = np.asarray(s.prefix.prefix_states, dtype=float)[:, :2]
+            T = min(ref.shape[0], xy.shape[0])
+            vals.append(0.0 if T <= 0 else float(np.sqrt(np.mean(np.sum((xy[:T] - ref[:T]) ** 2, axis=-1))) / 5.0))
+        except Exception:
+            vals.append(0.0)
+    return np.asarray(vals, dtype=np.float32)
+
+
+def _contact_macro_priority(method: str) -> list[str]:
+    ml = str(method).lower()
+    if ml in {"post_crash_braking", "post_crash_braking_rule", "stable_stop", "stable_stop_rule", "postcrash_stable_stop"}:
+        return ["nominal", "brake", "stabilize", "yield", "pull_over"]
+    if ml in {"post_collision_restoration", "trajectory_restoration", "post_collision_trajectory_restoration", "post_collision_restoration_heuristic", "ackermann_restoration"}:
+        return ["nominal", "stabilize", "lane_shift", "merge", "yield", "pull_over", "keep"]
+    if ml in {"severity_minimization", "severity_minimization_planner", "unavoidable_collision_planner", "crash_mitigation_planner", "uc_severity_planner"}:
+        return ["nominal", "brake", "stabilize", "yield", "lane_shift", "merge", "pull_over"]
+    if ml in {"postimpact_mpc", "postimpact_mpc_lite", "post_impact_mpc_lite", "postimpact_mpc_paper", "integrated_postimpact_mpc"}:
+        return ["nominal", "brake", "stabilize", "yield", "lane_shift", "merge", "pull_over"]
+    return ["nominal", "brake", "yield", "stabilize", "merge", "lane_shift", "pull_over", "keep"]
+
+
+def _preselect_external_label_candidate_indices(samples: list, method: str, cfg: dict) -> list[int]:
+    """Macro-diverse candidate subset for exact teacher labels.
+
+    The expensive part of near/contact closed-loop external baselines is not the
+    MARC/RACP/CVaR/MPC logic itself; it is materializing full Waymax/OC-MERO
+    labels for every prefix.  This helper keeps the exact same downstream policy
+    functions but chooses a small candidate lattice to label: nominal anchor,
+    paper-relevant macro families, then high-utility/low-deviation backups.
+    """
+    n = len(samples)
+    if n <= 0:
+        return []
+    cl_cfg = cfg.get("closed_loop", {}) if isinstance(cfg.get("closed_loop", {}), dict) else {}
+    budget = _external_label_budget_for_method(method, cfg, n)
+    if budget >= n or bool(cl_cfg.get("exhaustive_teacher_labels", False)):
+        return [int(getattr(s, "candidate_index", i)) for i, s in enumerate(samples)]
+
+    selected: list[int] = []
+    selected_pos: set[int] = set()
+
+    def add_pos(pos: int | None) -> None:
+        if pos is None or pos < 0 or pos >= n or pos in selected_pos:
+            return
+        try:
+            cid = int(getattr(samples[pos], "candidate_index", pos))
+        except Exception:
+            cid = int(pos)
+        selected.append(cid)
+        selected_pos.add(pos)
+
+    # Always include nominal/log replay anchor.
+    nominal_pos = next((i for i, s in enumerate(samples) if int(getattr(s, "candidate_index", i)) == 0 or _sample_macro_name(s) == "nominal"), 0)
+    add_pos(int(nominal_pos))
+
+    macros = [_sample_macro_name(s) for s in samples]
+    utility = np.asarray([_safe_float(getattr(s.prefix, "utility", 0.0)) for s in samples], dtype=float)
+    hard = np.asarray([_safe_float(getattr(s.prefix, "hard_violation", 0.0)) for s in samples], dtype=float)
+    harm = np.asarray([_safe_float(getattr(s.prefix, "harm_proxy", 0.0)) for s in samples], dtype=float)
+    dev = _prefix_deviation_from_nominal(samples).astype(float)
+    pcfg = ((cfg.get("external_baselines", {}) or {}).get("policy", {}) or {})
+    geom_score = utility - float(pcfg.get("label_preselect_hard_weight", 4.0)) * np.maximum(0.0, hard) - float(pcfg.get("label_preselect_harm_weight", 0.75)) * np.maximum(0.0, harm) - float(pcfg.get("label_preselect_deviation_weight", 0.20)) * dev
+
+    # Add one best candidate from each paper-relevant macro family.
+    for macro in _contact_macro_priority(method):
+        if len(selected) >= budget:
+            break
+        idxs = [i for i, m in enumerate(macros) if m == macro]
+        if not idxs:
+            continue
+        best = max(idxs, key=lambda i: float(geom_score[i]))
+        add_pos(int(best))
+
+    # Preserve diversity for any remaining generated macro not listed above.
+    if bool(cl_cfg.get("external_label_macro_diversity", True)):
+        for macro in sorted(set(macros)):
+            if len(selected) >= budget:
+                break
+            if not macro or any(macros[i] == macro for i in selected_pos):
+                continue
+            idxs = [i for i, m in enumerate(macros) if m == macro]
+            if idxs:
+                add_pos(int(max(idxs, key=lambda i: float(geom_score[i]))))
+
+    # Fill remaining budget by score.
+    order = np.argsort(np.where(np.isfinite(geom_score), geom_score, -np.inf))[::-1]
+    for pos in order.tolist():
+        if len(selected) >= budget:
+            break
+        add_pos(int(pos))
+    return selected[:budget]
+
+
+
 def _candidate_lookup(samples: list) -> dict[int, int]:
     out: dict[int, int] = {}
     for i, sample in enumerate(samples):
@@ -595,6 +748,15 @@ def _rollout_one_scene(
     selected_label_audit = label_mode in {"selected", "selected_only", "audit_selected", "executed"}
     coverage_label_audit = label_mode in {"selected_topk", "topk", "coverage", "audit_topk", "selected_coverage"}
     compute_teacher_labels = label_mode in {"all", "full", "teacher", "labels"}
+    external_sparse_labels = (
+        compute_teacher_labels
+        and method in EXTERNAL_TEACHER_REQUIRED_METHODS
+        and bool(cl_cfg.get("external_sparse_labels", True))
+        and not bool(cl_cfg.get("exhaustive_teacher_labels", False))
+    )
+    sparse_label_decisions = 0
+    sparse_label_candidates_total = 0
+    sparse_label_full_candidates_total = 0
     audit_every_n_steps = max(1, int(cl_cfg.get("audit_every_n_steps", 1) or 1))
     audit_max_labels = int(cl_cfg.get("audit_max_labels", 0) or 0)
     audit_auto_capped = False
@@ -657,7 +819,31 @@ def _rollout_one_scene(
         })
         eval_cfg["dataset_quality"] = quality
         if compute_teacher_labels:
-            samples = build_samples_for_history(hist, "closed_loop", eval_cfg)
+            if external_sparse_labels:
+                cl_num_options = cl_cfg.get("num_recovery_options", None)
+                feature_num_options = int(cl_num_options) if cl_num_options is not None else int(eval_cfg.get("num_recovery_options", getattr(bundle.model, "num_options", 24) if bundle is not None else 24))
+                feature_samples = build_feature_only_samples_for_history(
+                    hist,
+                    "closed_loop",
+                    eval_cfg,
+                    num_roots=int(getattr(bundle.model, "num_roots", int(cfg.get("num_roots", 8)))) if bundle is not None else int(cfg.get("num_roots", 8)),
+                    num_options=feature_num_options,
+                )
+                audit_indices = _preselect_external_label_candidate_indices(feature_samples, method, cfg)
+                sparse_label_decisions += 1
+                sparse_label_full_candidates_total += int(len(feature_samples))
+                sparse_label_candidates_total += int(len(audit_indices))
+                samples = build_labeled_samples_for_candidate_indices(
+                    hist,
+                    "closed_loop",
+                    eval_cfg,
+                    audit_indices,
+                    num_roots=int(getattr(bundle.model, "num_roots", int(cfg.get("num_roots", 8)))) if bundle is not None else int(cfg.get("num_roots", 8)),
+                    num_options=feature_num_options,
+                    prefixes=[s.prefix for s in feature_samples],
+                )
+            else:
+                samples = build_samples_for_history(hist, "closed_loop", eval_cfg)
         else:
             cl_num_options = cl_cfg.get("num_recovery_options", None)
             feature_num_options = int(cl_num_options) if cl_num_options is not None else int(eval_cfg.get("num_recovery_options", getattr(bundle.model, "num_options", 24) if bundle is not None else 24))
@@ -995,6 +1181,10 @@ def _rollout_one_scene(
         "gamma_rec": float(gamma),
         "label_mode": label_mode,
         "labels_available": bool(compute_teacher_labels or selected_label_audit or coverage_label_audit),
+        "external_sparse_labels": bool(external_sparse_labels),
+        "external_sparse_label_decisions": int(sparse_label_decisions),
+        "external_sparse_label_candidates_mean": (float(sparse_label_candidates_total) / max(float(sparse_label_decisions), 1.0)) if sparse_label_decisions else None,
+        "external_sparse_full_candidates_mean": (float(sparse_label_full_candidates_total) / max(float(sparse_label_decisions), 1.0)) if sparse_label_decisions else None,
         "selected_label_audit": bool(selected_label_audit or coverage_label_audit),
         "coverage_label_audit": bool(coverage_label_audit),
         "audit_every_n_steps": int(audit_every_n_steps),
@@ -1042,7 +1232,7 @@ def _rollout_one_scene(
     return out
 
 def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, source: str) -> dict[str, Any]:
-    keys = ["closed_loop_FRA_exec", "closed_loop_FRA_cand", "closed_loop_DRS", "closed_loop_ODG", "closed_loop_post_contact_deployability", "closed_loop_artifact_selection_rate", "closed_loop_audit_candidate_count", "closed_loop_audit_best_R_dep", "closed_loop_audit_best_DRS", "closed_loop_audit_selected_R_dep_regret", "closed_loop_audit_best_PCD", "closed_loop_audit_selected_PCD_regret", "closed_loop_audit_recoverable_candidate_rate", "closed_loop_audit_selector_miss_rate", "closed_loop_audit_pcd_selector_miss_rate", "closed_loop_audit_paper_best_PCD", "closed_loop_audit_paper_selected_PCD_regret", "closed_loop_audit_paper_pcd_selector_miss_rate", "closed_loop_bounded_NUP", "closed_loop_pred_r_dep", "closed_loop_pred_gap", "closed_loop_pred_DRS_proxy", "closed_loop_nominal_deviation", "intervention_rate"]
+    keys = ["closed_loop_FRA_exec", "closed_loop_FRA_cand", "closed_loop_DRS", "closed_loop_ODG", "closed_loop_post_contact_deployability", "closed_loop_artifact_selection_rate", "closed_loop_audit_candidate_count", "closed_loop_audit_best_R_dep", "closed_loop_audit_best_DRS", "closed_loop_audit_selected_R_dep_regret", "closed_loop_audit_best_PCD", "closed_loop_audit_selected_PCD_regret", "closed_loop_audit_recoverable_candidate_rate", "closed_loop_audit_selector_miss_rate", "closed_loop_audit_pcd_selector_miss_rate", "closed_loop_audit_paper_best_PCD", "closed_loop_audit_paper_selected_PCD_regret", "closed_loop_audit_paper_pcd_selector_miss_rate", "closed_loop_bounded_NUP", "closed_loop_pred_r_dep", "closed_loop_pred_gap", "closed_loop_pred_DRS_proxy", "closed_loop_nominal_deviation", "intervention_rate", "external_sparse_label_candidates_mean", "external_sparse_full_candidates_mean"]
     agg: dict[str, Any] = {
         "source": source,
         "method": method,
