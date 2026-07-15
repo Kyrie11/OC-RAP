@@ -323,6 +323,20 @@ training:
   group_ranking_gap_weight: 0.25
   group_ranking_teacher_gap_weight: 0.25
   group_ranking_artifact_only: true
+  teacher_pcd_direct_macro_ids: 2,3,5,7
+  teacher_pcd_direct_bucket_ids: '2'
+  teacher_pcd_direct_regression_weight: 1.0
+  teacher_pcd_direct_ranking_weight: 2.5
+  teacher_pcd_direct_nominal_penalty_weight: 1.0
+  teacher_pcd_direct_false_positive_weight: 1.5
+  teacher_pcd_direct_margin: 0.18
+  teacher_pcd_direct_min_teacher_pcd_gain: 0.015
+  teacher_pcd_direct_min_teacher_best_pcd: 0.50
+  teacher_pcd_direct_max_nominal_teacher_pcd: 0.68
+  teacher_pcd_direct_target_min_pred_pcd: 0.52
+  teacher_pcd_direct_nominal_max_pred_pcd: 0.50
+  teacher_pcd_direct_focus_non_nominal_weight: 2.0
+  teacher_pcd_direct_false_positive_margin: 0.03
 loss_weights:
   assign: 1.0
   sig: 0.5
@@ -333,6 +347,7 @@ loss_weights:
   artifact_gap: 0.5
   admission: 0.2
   group_ranking: 0.0
+  teacher_pcd_direct: 0.0
   utility: 0.2
 evaluation:
   batch_size: 64

@@ -28,6 +28,7 @@ from ocrap.models.losses import (
     safe_nominal_preservation_loss,
     protective_macro_recovery_loss,
     deployability_dominance_calibration_loss,
+    direct_teacher_pcd_loss,
     macro_shared_success_calibration_loss,
 )
 from ocrap.models.ocrap import OCRAPModel
@@ -457,6 +458,39 @@ def _epoch(
             target_min_pred_pcd=float(tcfg.get("ddc_target_min_pred_pcd", 0.45)),
             nominal_max_pred_pcd=float(tcfg.get("ddc_nominal_max_pred_pcd", 0.55)),
         )
+        loss_teacher_pcd_direct = direct_teacher_pcd_loss(
+            r_dep,
+            gap,
+            batch["utility"].float(),
+            pred_q,
+            batch["r_dep_star"].float(),
+            batch["r_orc_star"].float(),
+            teacher_q,
+            batch["root_probs"].float(),
+            batch["root_valid"],
+            batch["option_valid"],
+            batch["scene_hash"],
+            batch["time_index"],
+            batch.get("prefix_macro_type_id", batch.get("candidate_index", torch.zeros_like(batch["time_index"]))),
+            batch["is_nominal"].float(),
+            batch.get("bucket_id", torch.full_like(batch["time_index"], 3)),
+            macro_ids=_parse_int_tuple(tcfg.get("teacher_pcd_direct_macro_ids", "2,3,5,7"), (2, 3, 5, 7)),
+            bucket_ids=_parse_int_tuple(tcfg.get("teacher_pcd_direct_bucket_ids", "2"), (2,)),
+            success_gamma=option_gamma,
+            success_temperature=option_temperature,
+            regression_weight=float(tcfg.get("teacher_pcd_direct_regression_weight", 1.0)),
+            ranking_weight=float(tcfg.get("teacher_pcd_direct_ranking_weight", 2.5)),
+            nominal_penalty_weight=float(tcfg.get("teacher_pcd_direct_nominal_penalty_weight", 1.0)),
+            false_positive_weight=float(tcfg.get("teacher_pcd_direct_false_positive_weight", 1.5)),
+            margin=float(tcfg.get("teacher_pcd_direct_margin", 0.18)),
+            min_teacher_pcd_gain=float(tcfg.get("teacher_pcd_direct_min_teacher_pcd_gain", 0.015)),
+            min_teacher_best_pcd=float(tcfg.get("teacher_pcd_direct_min_teacher_best_pcd", 0.50)),
+            max_nominal_teacher_pcd=float(tcfg.get("teacher_pcd_direct_max_nominal_teacher_pcd", 0.68)),
+            target_min_pred_pcd=float(tcfg.get("teacher_pcd_direct_target_min_pred_pcd", 0.52)),
+            nominal_max_pred_pcd=float(tcfg.get("teacher_pcd_direct_nominal_max_pred_pcd", 0.50)),
+            focus_non_nominal_weight=float(tcfg.get("teacher_pcd_direct_focus_non_nominal_weight", 2.0)),
+            false_positive_margin=float(tcfg.get("teacher_pcd_direct_false_positive_margin", 0.03)),
+        )
         if bool((cfg.get("ablation", {}) or {}).get("without_anti_oracle", False)):
             loss_art = loss_art * 0.0
             loss_gap = loss_gap * 0.0
@@ -483,6 +517,7 @@ def _epoch(
             + float(lw.get("protective_macro", 0.0)) * loss_protective_macro
             + float(lw.get("macro_drs", 0.0)) * loss_macro_drs
             + float(lw.get("ddc", 0.0)) * loss_ddc
+            + float(lw.get("teacher_pcd_direct", 0.0)) * loss_teacher_pcd_direct
             + float(lw.get("utility", 0.2)) * loss_util
         )
         if training:
@@ -519,6 +554,7 @@ def _epoch(
             "loss_protective_macro": loss_protective_macro.item(),
             "loss_macro_drs": loss_macro_drs.item(),
             "loss_ddc": loss_ddc.item(),
+            "loss_teacher_pcd_direct": loss_teacher_pcd_direct.item(),
             "loss_utility": loss_util.item(),
             "pred_r_dep_mean": r_dep.mean().item(),
             "teacher_r_dep_mean": batch["r_dep_star"].float().mean().item(),
