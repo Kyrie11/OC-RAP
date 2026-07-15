@@ -1389,6 +1389,21 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
         metrics = wx.get("metrics_to_run", [])
         if metrics:
             wx["metrics_to_run"] = [str(m) for m in metrics if str(m) not in route_metrics]
+
+    # The external near-contact/contact baselines only need branch/root teacher
+    # labels for the candidate lattice they score.  Online future-metric rows are
+    # useful for dataset diagnostics, but they are redundant in true Waymax
+    # receding-horizon evaluation because executed-step metrics are already
+    # collected from the simulator after each env.step().  Keep this disabled for
+    # external closed-loop speed even if old shell commands still pass
+    # --set waymax.compute_future_metrics=true.  Re-enable explicitly with
+    # --set closed_loop.external_online_future_metrics=true when doing a small
+    # exhaustive diagnostic run.
+    if method in EXTERNAL_TEACHER_REQUIRED_METHODS and not bool(cl_cfg.get("external_online_future_metrics", False)):
+        wx["compute_future_metrics"] = False
+        if int(wx.get("teacher_rollout_top_k_options", 0) or 0) <= 0:
+            wx["teacher_rollout_top_k_options"] = int(cl_cfg.get("external_teacher_rollout_top_k_options", 4) or 4)
+        wx["teacher_metrics_stride"] = int(wx.get("teacher_metrics_stride", 0) or 0)
     local["waymax"] = wx
 
     art = dict(local.get("artifact", {}) or {})
@@ -1475,6 +1490,17 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
         result.setdefault("warnings", []).append("No offline bucket scene_id matched the supplied WOMD raw dataset/pattern. Check WOMD_VAL vs WOMD_VAL_INTERACTIVE and scenario_start_index/raw_max_scenarios.")
     result["scenes"] = scene_results
     result["gamma_rec"] = gamma
+    eff_wx = local.get("waymax", {}) if isinstance(local.get("waymax", {}), dict) else {}
+    eff_cl = local.get("closed_loop", {}) if isinstance(local.get("closed_loop", {}), dict) else {}
+    result["closed_loop_speed_config"] = {
+        "external_sparse_labels": bool(eff_cl.get("external_sparse_labels", False)),
+        "external_label_max_candidates": eff_cl.get("external_label_max_candidates", None),
+        "num_recovery_options": eff_cl.get("num_recovery_options", None),
+        "compute_future_metrics": bool(eff_wx.get("compute_future_metrics", False)),
+        "teacher_metrics_stride": int(eff_wx.get("teacher_metrics_stride", 0) or 0),
+        "teacher_rollout_top_k_options": int(eff_wx.get("teacher_rollout_top_k_options", 0) or 0),
+        "dataloader_include_sdc_paths": bool(eff_wx.get("dataloader_include_sdc_paths", False)),
+    }
     result["gamma_rec_by_bucket"] = (local.get("selection", {}) or {}).get("gamma_rec_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {}
     result["selector_config"] = {
         "ocrap_selector": (local.get("selection", {}) or {}).get("ocrap_selector", None) if isinstance(local.get("selection", {}), dict) else None,
