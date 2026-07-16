@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader, Sampler, WeightedRandomSampler
 
 from ocrap.algorithms.ocmero import torch_oc_mero
 from ocrap.data.serialization import ensure_dir, write_json
-from ocrap.models.data import OCRAPSampleDataset, OPTION_FEATURE_DIM, iter_sample_paths_many, scalar_metadata_for_path, split_paths_by_npz_split, stable_scene_hash
+from ocrap.models.data import OCRAPSampleDataset, OPTION_FEATURE_DIM, bucket_id_for_path, iter_sample_paths_many, scalar_metadata_for_path, split_paths_by_npz_split, stable_scene_hash
 from ocrap.models.losses import (
     anti_oracle_loss,
     artifact_gap_loss,
@@ -475,6 +475,7 @@ def _epoch(
             batch["is_nominal"].float(),
             batch.get("bucket_id", torch.full_like(batch["time_index"], 3)),
             macro_ids=_parse_int_tuple(tcfg.get("teacher_pcd_direct_macro_ids", "2,3,5,7"), (2, 3, 5, 7)),
+            positive_macro_ids=_parse_int_tuple(tcfg.get("teacher_pcd_direct_positive_macro_ids", tcfg.get("teacher_pcd_direct_macro_ids", "2,3,5,7")), (2, 3, 5, 7)),
             bucket_ids=_parse_int_tuple(tcfg.get("teacher_pcd_direct_bucket_ids", "2"), (2,)),
             success_gamma=option_gamma,
             success_temperature=option_temperature,
@@ -490,6 +491,9 @@ def _epoch(
             nominal_max_pred_pcd=float(tcfg.get("teacher_pcd_direct_nominal_max_pred_pcd", 0.50)),
             focus_non_nominal_weight=float(tcfg.get("teacher_pcd_direct_focus_non_nominal_weight", 2.0)),
             false_positive_margin=float(tcfg.get("teacher_pcd_direct_false_positive_margin", 0.03)),
+            component_weight=float(tcfg.get("teacher_pcd_direct_component_weight", 0.0)),
+            positive_component_weight=float(tcfg.get("teacher_pcd_direct_positive_component_weight", 0.0)),
+            nominal_cap_weight=float(tcfg.get("teacher_pcd_direct_nominal_cap_weight", 1.0)),
         )
         if bool((cfg.get("ablation", {}) or {}).get("without_anti_oracle", False)):
             loss_art = loss_art * 0.0
@@ -666,7 +670,31 @@ def _make_group_batch_sampler(ds: OCRAPSampleDataset, cfg: dict, batch_size: int
         num_negative += int(is_neg)
         num_safe_pos += int(is_safe_pos)
     groups = list(groups_by_key.values())
-    group_weights = [float(max(sample_weights[i] for i in g)) for g in groups]
+    hard_macro_ids = set(_parse_int_tuple(tcfg.get("group_batch_hard_macro_ids", ""), ()))
+    hard_bucket_ids = set(_parse_int_tuple(tcfg.get("group_batch_hard_bucket_ids", ""), ()))
+    hard_r_dep_min = float(tcfg.get("group_batch_hard_min_r_dep", 0.35))
+    hard_boost = float(tcfg.get("group_batch_hard_boost", 0.0))
+    group_weights = []
+    hard_groups = 0
+    for g in groups:
+        gw = float(max(sample_weights[i] for i in g))
+        if hard_boost > 0.0 and hard_macro_ids:
+            is_hard = False
+            for i in g:
+                p = ds.paths[i]
+                try:
+                    mac = int(float(np.asarray(scalar_metadata_for_path(p, "prefix_macro_type_id", scalar_metadata_for_path(p, "prefix_macro_id", -1))).item()))
+                    bid = bucket_id_for_path(p)
+                    rdep = float(np.asarray(scalar_metadata_for_path(p, "r_dep_star", -99.0)).item())
+                    if mac in hard_macro_ids and (not hard_bucket_ids or bid in hard_bucket_ids) and rdep >= hard_r_dep_min:
+                        is_hard = True
+                        break
+                except Exception:
+                    continue
+            if is_hard:
+                gw *= hard_boost
+                hard_groups += 1
+        group_weights.append(gw)
     print({
         "event": "group_batch_sampler_stats",
         "num_groups": int(len(groups)),
@@ -677,6 +705,8 @@ def _make_group_batch_sampler(ds: OCRAPSampleDataset, cfg: dict, batch_size: int
         "num_artifacts": int(num_artifacts),
         "num_negative_deployable": int(num_negative),
         "num_safe_positive": int(num_safe_pos),
+        "hard_group_boost": float(hard_boost),
+        "hard_groups": int(hard_groups),
     }, flush=True)
     return SceneTimeBatchSampler(groups, batch_size, group_weights=group_weights, replacement=bool(tcfg.get("group_batching_replacement", True)))
 
@@ -923,18 +953,24 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             va = _epoch(model, val_loader, cfg, device, None, stage="val", epoch=ep)
         row = {"epoch": ep, "train": tr, "val": va, "seconds": float(perf_counter() - ep_t0)}
         history.append(row)
-        improved = va.get("loss", float("inf")) <= best_val
-        payload = _checkpoint_payload(ep, va.get("loss", float("inf")))
+        best_metric_name = str(tcfg.get("best_metric", "loss") or "loss")
+        best_metric_mode = str(tcfg.get("best_metric_mode", "min") or "min").lower()
+        current_metric = float(va.get(best_metric_name, va.get("loss", float("inf"))))
+        compare_metric = current_metric if best_metric_mode != "max" else -current_metric
+        improved = compare_metric <= best_val
+        payload = _checkpoint_payload(ep, current_metric)
         save_every = bool(tcfg.get("save_every_epoch", True))
         if save_every:
             torch.save(payload, ckpt_dir / f"epoch_{ep:04d}.pt")
         if bool(tcfg.get("save_latest", True)):
             torch.save(payload, latest_path)
         if improved:
-            best_val = va["loss"]
+            best_val = compare_metric
             best_epoch = ep
             no_improve_epochs = 0
-            payload["val_loss"] = float(best_val)
+            payload["val_loss"] = float(va.get("loss", current_metric))
+            payload["best_metric_name"] = best_metric_name
+            payload["best_metric_value"] = float(current_metric)
             payload["is_best"] = True
             torch.save(payload, best_path)
         else:
@@ -956,6 +992,7 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
                 "epoch": ep,
                 "best_epoch": int(best_epoch),
                 "best_val_loss": float(best_val),
+        "best_metric": str(tcfg.get("best_metric", "loss") or "loss"),
                 "epochs_completed": int(len(history)),
                 "patience": patience,
             }, flush=True)
@@ -975,6 +1012,7 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         "init_checkpoint": init_checkpoint,
         "freeze_param_prefixes": list(freeze_prefixes),
         "best_val_loss": float(best_val),
+        "best_metric": str(tcfg.get("best_metric", "loss") or "loss"),
         "device_info": device_info,
         "train_batches_per_epoch": len(train_loader),
         "val_batches_per_epoch": len(val_loader),

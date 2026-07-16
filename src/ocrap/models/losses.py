@@ -654,6 +654,7 @@ def direct_teacher_pcd_loss(
     bucket_id: torch.Tensor,
     *,
     macro_ids: tuple[int, ...] = (2, 3, 5, 7),
+    positive_macro_ids: tuple[int, ...] | None = None,
     bucket_ids: tuple[int, ...] = (2,),
     success_gamma: float = 0.0,
     success_temperature: float = 0.25,
@@ -669,6 +670,9 @@ def direct_teacher_pcd_loss(
     nominal_max_pred_pcd: float = 0.50,
     focus_non_nominal_weight: float = 2.0,
     false_positive_margin: float = 0.03,
+    component_weight: float = 0.0,
+    positive_component_weight: float = 0.0,
+    nominal_cap_weight: float = 1.0,
 ) -> torch.Tensor:
     """Directly distill teacher post-contact deployability into learned PCD.
 
@@ -682,6 +686,12 @@ def direct_teacher_pcd_loss(
 
     Macro ids follow prefix_generation.MACROS:
     nominal=0, brake=2, yield=3, merge=5, stabilize=7.
+
+    v32 adds a separate positive_macro_ids argument.  macro_ids still controls
+    dense regression and anti-false-positive suppression, while positive_macro_ids
+    controls which recovery families are allowed to be promoted above nominal.
+    This lets us keep merge/stabilize calibrated low without letting them compete
+    with the contact brake/yield frontier.
     """
     if pred_r_dep.numel() <= 1 or not bucket_ids:
         return pred_r_dep.sum() * 0.0
@@ -717,6 +727,10 @@ def direct_teacher_pcd_loss(
     macro_mask = torch.zeros_like(finite)
     for m in tuple(int(x) for x in macro_ids):
         macro_mask |= mac == int(m)
+    pos_ids = macro_ids if positive_macro_ids is None else positive_macro_ids
+    positive_macro_mask = torch.zeros_like(finite)
+    for m in tuple(int(x) for x in pos_ids):
+        positive_macro_mask |= mac == int(m)
     finite = finite & bucket_mask
     if not bool(finite.any()):
         return pred_r_dep.sum() * 0.0
@@ -734,6 +748,18 @@ def direct_teacher_pcd_loss(
     reg = F.smooth_l1_loss(pred_pcd[reg_mask], teacher_pcd[reg_mask], reduction="none")
     reg_loss = (reg * reg_w[reg_mask]).sum() / reg_w[reg_mask].sum().clamp_min(1.0e-6)
 
+    # Component-level supervision keeps gradients alive when the multiplicative
+    # PCD proxy is wrong for several reasons at once (the v31 contact misses had
+    # brake DRS high but learned R_dep too low and gap too high).
+    comp_mask = finite & (macro_mask | isn)
+    if bool(comp_mask.any()):
+        comp = F.smooth_l1_loss(pr[comp_mask], trd[comp_mask], reduction="none")
+        comp = comp + 0.5 * F.smooth_l1_loss(pg[comp_mask], teacher_gap[comp_mask], reduction="none")
+        comp = comp + F.smooth_l1_loss(pred_drs[comp_mask], teacher_drs[comp_mask], reduction="none")
+        comp_loss = comp.mean()
+    else:
+        comp_loss = pred_r_dep.sum() * 0.0
+
     rank_losses: list[torch.Tensor] = []
     nominal_losses: list[torch.Tensor] = []
     false_pos_losses: list[torch.Tensor] = []
@@ -749,19 +775,24 @@ def direct_teacher_pcd_loss(
             continue
         nom = nom_idx[0]
         rec_idx = idx[macro_mask[idx]]
-        if rec_idx.numel() == 0:
+        pos_rec_idx = idx[positive_macro_mask[idx]]
+        if rec_idx.numel() == 0 or pos_rec_idx.numel() == 0:
             continue
 
-        good = rec_idx[
-            (teacher_pcd[rec_idx] >= float(min_teacher_best_pcd))
-            & (teacher_pcd[rec_idx] >= teacher_pcd[nom] + float(min_teacher_pcd_gain))
+        good = pos_rec_idx[
+            (teacher_pcd[pos_rec_idx] >= float(min_teacher_best_pcd))
+            & (teacher_pcd[pos_rec_idx] >= teacher_pcd[nom] + float(min_teacher_pcd_gain))
             & (teacher_pcd[nom] <= float(max_nominal_teacher_pcd))
         ]
         if good.numel() > 0:
             target = good[torch.argmax(teacher_pcd[good])]
             rank_losses.append(F.relu(float(margin) - (pred_score[target] - pred_score[nom])))
             rank_losses.append(F.relu(float(target_min_pred_pcd) - pred_pcd[target]))
-            nominal_losses.append(F.relu(pred_pcd[nom] - float(nominal_max_pred_pcd)))
+            if float(positive_component_weight) > 0.0:
+                rank_losses.append(float(positive_component_weight) * F.smooth_l1_loss(pr[target], trd[target]))
+                rank_losses.append(float(positive_component_weight) * 0.5 * F.smooth_l1_loss(pg[target], teacher_gap[target]))
+                rank_losses.append(float(positive_component_weight) * F.smooth_l1_loss(pred_drs[target], teacher_drs[target]))
+            nominal_losses.append(float(nominal_cap_weight) * F.relu(pred_pcd[nom] - float(nominal_max_pred_pcd)))
             worse = idx[(idx != target) & (teacher_pcd[idx] <= teacher_pcd[target] - float(min_teacher_pcd_gain))]
             if worse.numel() > 0:
                 rank_losses.append(F.relu(0.5 * float(margin) - (pred_score[target] - pred_score[worse])).mean())
@@ -782,6 +813,7 @@ def direct_teacher_pcd_loss(
         + float(ranking_weight) * rank_loss
         + float(nominal_penalty_weight) * nominal_loss
         + float(false_positive_weight) * false_pos_loss
+        + float(component_weight) * comp_loss
     )
 
 def protective_macro_recovery_loss(
