@@ -344,6 +344,7 @@ def select_baseline(
                 brake_tail_nominal_drs_max=_cfg_float(scfg, "brake_tail_nominal_drs_max", 1.01, bucket_name),
                 brake_tail_counts_as_evidence=_cfg_bool(scfg, "brake_tail_counts_as_evidence", True, bucket_name),
                 brake_tail_budget_bypass=_cfg_bool(scfg, "brake_tail_budget_bypass", False, bucket_name),
+                brake_tail_challenge_bypass_pcd_gain=_cfg_bool(scfg, "brake_tail_challenge_bypass_pcd_gain", False, bucket_name),
                 pcd_rescue_certificate=_cfg_bool(scfg, "pcd_rescue_certificate", False, bucket_name),
                 pcd_rescue_macro_allowlist=_cfg_value(scfg, "pcd_rescue_macro_allowlist", "", bucket_name),
                 pcd_rescue_macro_blocklist=_cfg_value(scfg, "pcd_rescue_macro_blocklist", "", bucket_name),

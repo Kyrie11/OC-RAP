@@ -350,6 +350,12 @@ def calibrated_constrained_select(
     brake_tail_nominal_drs_max: float = 1.01,
     brake_tail_counts_as_evidence: bool = True,
     brake_tail_budget_bypass: bool = False,
+    # v34: when a residual brake-tail candidate has already passed the absolute
+    # certificate, let it challenge an admitted nominal even if learned relative
+    # PCD gain is negative. This is deliberately contact-only via config and
+    # targets the remaining v33 failure mode: nominal has over-confident low gap
+    # while paper-best brake has high absolute recoverability.
+    brake_tail_challenge_bypass_pcd_gain: bool = False,
     # v24: Budgeted Macro-Rescue Certificate (BMRC).  This generalizes the
     # v23 brake rescue from a fixed macro threshold into a predicted
     # post-contact-deployability admission test.  It can be enabled per bucket
@@ -1107,6 +1113,13 @@ def calibrated_constrained_select(
                 axis_count = np.zeros((n,), dtype=int)
                 if float(rescue_challenge_min_pcd_gain) >= 0.0:
                     ok = pcd_gain_vs_nom >= float(rescue_challenge_min_pcd_gain)
+                    # Residual brake-tail is specifically designed for cases where
+                    # relative learned PCD is inverted by nominal over-confidence.
+                    # Keep the absolute tail certificate gates, but do not require
+                    # positive relative PCD gain for these already-certified brake
+                    # candidates when explicitly enabled.
+                    if bool(brake_tail_challenge_bypass_pcd_gain):
+                        ok = ok | brake_tail_rescue_certified
                     challenge_mask &= ok
                     axis_count += ok.astype(int)
                 if float(rescue_challenge_min_rec_lcb_gain) >= 0.0:

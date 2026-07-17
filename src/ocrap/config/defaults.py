@@ -218,6 +218,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "brake_tail_nominal_drs_max": 1.01,
         "brake_tail_counts_as_evidence": True,
         "brake_tail_budget_bypass": False,
+        "brake_tail_challenge_bypass_pcd_gain": False,
         "pcd_rescue_certificate": False,
         "pcd_rescue_macro_allowlist": "",
         "pcd_rescue_macro_blocklist": "",
