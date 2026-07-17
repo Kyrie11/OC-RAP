@@ -335,8 +335,26 @@ def _validate_eval_selector_config(cfg: dict, methods: list[str]) -> None:
 
 def _evaluate_grouped_items(grouped: dict[tuple, list[dict]], methods: list[str], gamma: float, gamma_H: float, gamma_D: float, cfg: dict, split: str, source: str) -> tuple[dict[str, dict], dict[str, list[dict]]]:
     method_records: dict[str, list[dict]] = {m: [] for m in methods}
+    eval_cfg = cfg.get("evaluation", {}) if isinstance(cfg.get("evaluation", {}), dict) else {}
+    use_running_budget = bool(eval_cfg.get("use_running_intervention_budget", False))
+    # Stateless offline evaluation hid the selector's exposure-control behavior:
+    # the same residual-tail certificate could fire independently on many
+    # scene-time groups, making the policy look like frequent braking even when
+    # the closed-loop selector was budgeted.  When enabled, mirror the closed-loop
+    # runner by passing a running intervention count and cooldown state to the
+    # OC-RAP selector.  Counters are separated by method and dataset label so
+    # regime-specific budgets remain comparable and deterministic.
+    budget_state: dict[tuple[str, str], dict[str, int]] = {
+        (str(m).lower(), ""): {"seen": 0, "used": 0, "last": -10**9} for m in methods
+    }
 
-    for key, items in grouped.items():
+    def _group_sort_key(k):
+        if isinstance(k, tuple):
+            return tuple(str(x) if not isinstance(x, (int, float)) else x for x in k)
+        return (str(k),)
+
+    for key in sorted(grouped.keys(), key=_group_sort_key):
+        items = grouped[key]
         items.sort(key=lambda x: int(np.asarray(x["data"]["candidate_index"]).item()))
         utility = np.array([float(np.asarray(x["data"].get("utility", 0.0)).item()) for x in items])
         pred_r_dep = np.array([float(x["pred"].r_dep) for x in items])
@@ -353,15 +371,25 @@ def _evaluate_grouped_items(grouped: dict[tuple, list[dict]], methods: list[str]
         hard = np.array([float(np.asarray(x["data"].get("hard_violation", 0.0)).item()) for x in items])
         harm = np.array([float(np.asarray(x["data"].get("harm_proxy", 0.0)).item()) for x in items])
         feasible = np.array([bool(int(np.asarray(x["data"].get("feasible", 1)).item())) for x in items])
+        base_local_cfg = dict(cfg) if dataset_label else cfg
         if dataset_label:
-            local_cfg = dict(cfg)
-            local_sel = dict(local_cfg.get("selection", {}) or {}) if isinstance(local_cfg.get("selection", {}), dict) else {}
-            local_sel["active_bucket_name"] = dataset_label
-            local_cfg["selection"] = local_sel
-        else:
-            local_cfg = cfg
+            local_sel0 = dict(base_local_cfg.get("selection", {}) or {}) if isinstance(base_local_cfg.get("selection", {}), dict) else {}
+            local_sel0["active_bucket_name"] = dataset_label
+            base_local_cfg["selection"] = local_sel0
 
         for method in methods:
+            method_l = str(method).lower()
+            local_cfg = base_local_cfg
+            state_key = (method_l, dataset_label or "")
+            if use_running_budget and method_l == "ocrap":
+                st = budget_state.setdefault(state_key, {"seen": 0, "used": 0, "last": -10**9})
+                local_cfg = dict(base_local_cfg)
+                local_sel = dict(local_cfg.get("selection", {}) or {}) if isinstance(local_cfg.get("selection", {}), dict) else {}
+                local_sel["active_bucket_name"] = dataset_label
+                local_sel["intervention_budget_used"] = int(st.get("used", 0))
+                local_sel["intervention_budget_steps"] = max(1, int(st.get("seen", 0)) + 1)
+                local_sel["steps_since_last_intervention"] = int(st.get("seen", 0)) - int(st.get("last", -10**9))
+                local_cfg["selection"] = local_sel
             sel = select_baseline(
                 method, utility, pred_r_dep, teacher_r_dep, teacher_r_orc, hard, harm, feasible,
                 gamma_i, gamma_H, gamma_D, local_cfg,
@@ -410,6 +438,12 @@ def _evaluate_grouped_items(grouped: dict[tuple, list[dict]], methods: list[str]
                 "num_admitted": int(np.asarray(sel.admitted, dtype=bool).sum()),
                 "num_admitted_interventions": int(np.asarray(sel.admitted, dtype=bool)[1:].sum()) if len(sel.admitted) > 1 else 0,
             })
+            if use_running_budget and method_l == "ocrap":
+                st = budget_state.setdefault(state_key, {"seen": 0, "used": 0, "last": -10**9})
+                if selected_index != 0:
+                    st["used"] = int(st.get("used", 0)) + 1
+                    st["last"] = int(st.get("seen", 0))
+                st["seen"] = int(st.get("seen", 0)) + 1
 
     summaries = {m: _records_summary(rs, split, gamma, source if m == "ocrap" else "dataset_label_baseline", len(grouped)) for m, rs in method_records.items()}
     return summaries, method_records
