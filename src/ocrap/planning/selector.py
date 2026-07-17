@@ -350,6 +350,9 @@ def calibrated_constrained_select(
     brake_tail_nominal_drs_max: float = 1.01,
     brake_tail_counts_as_evidence: bool = True,
     brake_tail_budget_bypass: bool = False,
+    # v36: permit only strict residual-tail challenges to override the hard
+    # exposure budget; broad brake rescue remains budget-limited.
+    brake_tail_challenge_budget_bypass: bool = False,
     # v34: when a residual brake-tail candidate has already passed the absolute
     # certificate, let it challenge an admitted nominal even if learned relative
     # PCD gain is negative. This is deliberately contact-only via config and
@@ -1032,6 +1035,12 @@ def calibrated_constrained_select(
                     hard_budget_evidence = hard_budget_evidence | brake_rescue_certified
                 if bool(pcd_rescue_budget_bypass):
                     hard_budget_evidence = hard_budget_evidence | pcd_rescue_certified
+                # v36: only the strict residual-tail challenge certificate may
+                # override a consumed exposure budget.  The broad brake rescue
+                # certificate is intentionally not enough because it caused the
+                # v34/v35 offline high-frequency brake policy.
+                if bool(brake_tail_challenge_budget_bypass):
+                    hard_budget_evidence = hard_budget_evidence | brake_tail_challenge_certified
                 certified_non_nom &= hard_budget_evidence
 
         # v25 closed-loop exposure gate.  A rescue certificate may override a
