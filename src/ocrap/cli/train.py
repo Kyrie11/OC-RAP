@@ -494,6 +494,11 @@ def _epoch(
             component_weight=float(tcfg.get("teacher_pcd_direct_component_weight", 0.0)),
             positive_component_weight=float(tcfg.get("teacher_pcd_direct_positive_component_weight", 0.0)),
             nominal_cap_weight=float(tcfg.get("teacher_pcd_direct_nominal_cap_weight", 1.0)),
+            positive_rank_all_weight=float(tcfg.get("teacher_pcd_direct_positive_rank_all_weight", 0.0)),
+            positive_floor_weight=float(tcfg.get("teacher_pcd_direct_positive_floor_weight", 0.0)),
+            positive_min_pred_r_dep=float(tcfg.get("teacher_pcd_direct_positive_min_pred_r_dep", -1.0e9)),
+            positive_max_pred_gap=float(tcfg.get("teacher_pcd_direct_positive_max_pred_gap", -1.0)),
+            positive_min_pred_drs=float(tcfg.get("teacher_pcd_direct_positive_min_pred_drs", -1.0)),
         )
         if bool((cfg.get("ablation", {}) or {}).get("without_anti_oracle", False)):
             loss_art = loss_art * 0.0

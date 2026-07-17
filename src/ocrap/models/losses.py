@@ -673,6 +673,11 @@ def direct_teacher_pcd_loss(
     component_weight: float = 0.0,
     positive_component_weight: float = 0.0,
     nominal_cap_weight: float = 1.0,
+    positive_rank_all_weight: float = 0.0,
+    positive_floor_weight: float = 0.0,
+    positive_min_pred_r_dep: float = -1.0e9,
+    positive_max_pred_gap: float = -1.0,
+    positive_min_pred_drs: float = -1.0,
 ) -> torch.Tensor:
     """Directly distill teacher post-contact deployability into learned PCD.
 
@@ -788,6 +793,17 @@ def direct_teacher_pcd_loss(
             target = good[torch.argmax(teacher_pcd[good])]
             rank_losses.append(F.relu(float(margin) - (pred_score[target] - pred_score[nom])))
             rank_losses.append(F.relu(float(target_min_pred_pcd) - pred_pcd[target]))
+            if float(positive_rank_all_weight) > 0.0:
+                rank_losses.append(float(positive_rank_all_weight) * F.relu(float(margin) - (pred_score[good] - pred_score[nom])).mean())
+            if float(positive_floor_weight) > 0.0:
+                floor_terms = [F.relu(float(target_min_pred_pcd) - pred_pcd[good])]
+                if float(positive_min_pred_r_dep) > -1.0e8:
+                    floor_terms.append(F.relu(float(positive_min_pred_r_dep) - pr[good]))
+                if float(positive_max_pred_gap) >= 0.0:
+                    floor_terms.append(F.relu(pg[good] - float(positive_max_pred_gap)))
+                if float(positive_min_pred_drs) >= 0.0:
+                    floor_terms.append(F.relu(float(positive_min_pred_drs) - pred_drs[good]))
+                rank_losses.append(float(positive_floor_weight) * torch.stack([t.mean() for t in floor_terms]).mean())
             if float(positive_component_weight) > 0.0:
                 rank_losses.append(float(positive_component_weight) * F.smooth_l1_loss(pr[target], trd[target]))
                 rank_losses.append(float(positive_component_weight) * 0.5 * F.smooth_l1_loss(pg[target], teacher_gap[target]))

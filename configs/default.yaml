@@ -188,6 +188,22 @@ selection:
   intervention_min_pred_drs: -1.0
   intervention_max_pred_gap: -1.0
   require_intervention_evidence: false
+  brake_tail_rescue_certificate: false
+  brake_tail_min_pred_drs: 0.78
+  brake_tail_min_pred_r_dep: -0.55
+  brake_tail_min_pred_pcd: 0.24
+  brake_tail_min_candidate_gap: 0.10
+  brake_tail_max_candidate_gap: 0.42
+  brake_tail_high_gap_min: 0.34
+  brake_tail_low_r_dep_max: 0.00
+  brake_tail_max_hard: 1.0
+  brake_tail_max_harm: 0.70
+  brake_tail_require_nominal_low_headroom: true
+  brake_tail_nominal_rec_lcb_max: 0.65
+  brake_tail_nominal_gap_min: 0.02
+  brake_tail_nominal_drs_max: 1.01
+  brake_tail_counts_as_evidence: true
+  brake_tail_budget_bypass: false
   intervention_min_rec_lcb_gain: 0.0
   intervention_min_drs_gain: 0.0
   intervention_min_gap_reduction: 0.0
@@ -337,6 +353,11 @@ training:
   teacher_pcd_direct_nominal_max_pred_pcd: 0.50
   teacher_pcd_direct_focus_non_nominal_weight: 2.0
   teacher_pcd_direct_false_positive_margin: 0.03
+  teacher_pcd_direct_positive_rank_all_weight: 0.0
+  teacher_pcd_direct_positive_floor_weight: 0.0
+  teacher_pcd_direct_positive_min_pred_r_dep: -1000000000.0
+  teacher_pcd_direct_positive_max_pred_gap: -1.0
+  teacher_pcd_direct_positive_min_pred_drs: -1.0
 loss_weights:
   assign: 1.0
   sig: 0.5

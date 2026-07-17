@@ -327,6 +327,29 @@ def calibrated_constrained_select(
     brake_rescue_nominal_drs_max: float = 1.01,
     brake_rescue_counts_as_evidence: bool = True,
     brake_rescue_budget_bypass: bool = True,
+    # v33: residual/tail brake certificate.  v32 showed that the learned PCD head
+    # can still under-rank paper-best brake in contact: brake has high DRS and a
+    # plausible absolute PCD, but nominal's over-confident low gap makes the
+    # relative PCD-gain gate negative.  This optional certificate admits only
+    # brake candidates in a narrow residual-shape band: either a high predicted
+    # oracle-deployable gap (tail uncertainty) or low learned R_dep with high DRS.
+    # It does not use teacher/audit labels at inference time.
+    brake_tail_rescue_certificate: bool = False,
+    brake_tail_min_pred_drs: float = 0.78,
+    brake_tail_min_pred_r_dep: float = -0.55,
+    brake_tail_min_pred_pcd: float = 0.24,
+    brake_tail_min_candidate_gap: float = 0.10,
+    brake_tail_max_candidate_gap: float = 0.42,
+    brake_tail_high_gap_min: float = 0.34,
+    brake_tail_low_r_dep_max: float = 0.00,
+    brake_tail_max_hard: float = 1.0,
+    brake_tail_max_harm: float = 0.70,
+    brake_tail_require_nominal_low_headroom: bool = True,
+    brake_tail_nominal_rec_lcb_max: float = 0.65,
+    brake_tail_nominal_gap_min: float = 0.02,
+    brake_tail_nominal_drs_max: float = 1.01,
+    brake_tail_counts_as_evidence: bool = True,
+    brake_tail_budget_bypass: bool = False,
     # v24: Budgeted Macro-Rescue Certificate (BMRC).  This generalizes the
     # v23 brake rescue from a fixed macro threshold into a predicted
     # post-contact-deployability admission test.  It can be enabled per bucket
@@ -481,6 +504,7 @@ def calibrated_constrained_select(
     relative_certified = np.zeros((n,), dtype=bool)
     protective_certified = np.zeros((n,), dtype=bool)
     brake_rescue_certified = np.zeros((n,), dtype=bool)
+    brake_tail_rescue_certified = np.zeros((n,), dtype=bool)
     pcd_rescue_certified = np.zeros((n,), dtype=bool)
     pcd_proxy = np.clip(drs_proxy, 0.0, 1.0) * (1.0 / (1.0 + np.exp(-np.clip(r_dep, -40.0, 40.0)))) * np.exp(-np.clip(gap, 0.0, 20.0))
     pcd_gain_vs_nom = np.zeros((n,), dtype=float)
@@ -678,6 +702,38 @@ def calibrated_constrained_select(
         # Keep the global semantic firewall as the final arbiter.
         if intervention_macro_allow or intervention_macro_block or bool(intervention_require_macro):
             brake_rescue_certified &= intervention_macro_mask
+
+    if bool(brake_tail_rescue_certificate) and 0 <= int(nominal_index) < n:
+        ni = int(nominal_index)
+        brake_name = str(brake_rescue_macro_name or "brake").strip().lower()
+        macro_arr = np.asarray([str(m).strip().lower() for m in macro_names], dtype=object)
+        nominal_gate = True
+        if bool(brake_tail_require_nominal_low_headroom):
+            nominal_gate = (
+                rec_lcb[ni] <= float(brake_tail_nominal_rec_lcb_max)
+                or gap[ni] >= float(brake_tail_nominal_gap_min)
+                or drs_proxy[ni] <= float(brake_tail_nominal_drs_max)
+            )
+        tail_shape = (gap >= float(brake_tail_high_gap_min)) | (r_dep <= float(brake_tail_low_r_dep_max))
+        brake_tail_rescue_certified = (
+            feasible
+            & (hard <= float(brake_tail_max_hard))
+            & (harm <= float(brake_tail_max_harm))
+            & (macro_arr == brake_name)
+            & (drs_proxy >= float(brake_tail_min_pred_drs))
+            & (r_dep >= float(brake_tail_min_pred_r_dep))
+            & (pcd_proxy >= float(brake_tail_min_pred_pcd))
+            & (gap >= float(brake_tail_min_candidate_gap))
+            & (gap <= float(brake_tail_max_candidate_gap))
+            & tail_shape
+            & bool(nominal_gate)
+        )
+        brake_tail_rescue_certified[ni] = False
+        if intervention_macro_allow or intervention_macro_block or bool(intervention_require_macro):
+            brake_tail_rescue_certified &= intervention_macro_mask
+        # Treat residual brake as a brake-family certificate for admission, but
+        # retain the separate mask for diagnostics/reason strings.
+        brake_rescue_certified = brake_rescue_certified | brake_tail_rescue_certified
 
     # v24 BMRC: predicted post-contact deployability certificate.  This is used
     # as an intermediate channel between strict scalar LCB admission and the
@@ -1103,6 +1159,8 @@ def calibrated_constrained_select(
                     chosen = int(cc[np.argmax(challenge_score[cc])])
                     if pcd_rescue_certified[chosen] and not brake_rescue_certified[chosen]:
                         return SelectionResult(chosen, "best_pcd_rescue_guarded_challenge", admitted)
+                    if brake_tail_rescue_certified[chosen] and not (brake_rescue_certified[chosen] and not brake_tail_rescue_certified[chosen]):
+                        return SelectionResult(chosen, "best_brake_tail_rescue_guarded_challenge", admitted)
                     return SelectionResult(chosen, "best_brake_rescue_guarded_challenge", admitted)
             return SelectionResult(int(nominal_index), "nominal_calibrated_admitted", admitted)
         if bool(budget_preserve_nominal) and budget_exceeded and nom_gap_ok and rec_lcb[nominal_index] >= float(gamma_rec) - float(budget_nominal_slack):
@@ -1146,6 +1204,8 @@ def calibrated_constrained_select(
     reason = "best_calibrated_admitted_score" if admitted[best_idx] else "best_calibrated_soft_constraint"
     if admitted[best_idx] and pcd_rescue_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx] and not relative_certified[best_idx] and not protective_certified[best_idx] and not brake_rescue_certified[best_idx]:
         reason = "best_pcd_rescue_certified_score"
+    elif admitted[best_idx] and brake_tail_rescue_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx] and not relative_certified[best_idx] and not protective_certified[best_idx]:
+        reason = "best_brake_tail_rescue_certified_score"
     elif admitted[best_idx] and brake_rescue_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx] and not relative_certified[best_idx] and not protective_certified[best_idx]:
         reason = "best_brake_rescue_certified_score"
     elif admitted[best_idx] and protective_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx] and not relative_certified[best_idx]:
@@ -1158,6 +1218,8 @@ def calibrated_constrained_select(
     if bool(prefer_admitted) and bool((admitted_rank_pool & admitted).any()) and admitted[best_idx]:
         if pcd_rescue_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx] and not relative_certified[best_idx] and not protective_certified[best_idx] and not brake_rescue_certified[best_idx]:
             reason = "best_pcd_rescue_certified_prefer_admitted"
+        elif brake_tail_rescue_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx] and not relative_certified[best_idx] and not protective_certified[best_idx]:
+            reason = "best_brake_tail_rescue_certified_prefer_admitted"
         elif brake_rescue_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx] and not relative_certified[best_idx] and not protective_certified[best_idx]:
             reason = "best_brake_rescue_certified_prefer_admitted"
         elif protective_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx] and not relative_certified[best_idx]:
