@@ -356,6 +356,20 @@ def calibrated_constrained_select(
     # targets the remaining v33 failure mode: nominal has over-confident low gap
     # while paper-best brake has high absolute recoverability.
     brake_tail_challenge_bypass_pcd_gain: bool = False,
+    # v35: split the residual-tail *certificate* from the more aggressive
+    # admitted-nominal *challenge bypass*.  v34 proved the bypass can clear the
+    # contact brake tail, but it also over-fired because every broad tail
+    # certificate could bypass the relative learned-PCD gain.  These stricter
+    # challenge-only gates keep the broad certificate available for ordinary
+    # admission while allowing PCD-gain bypass only for high-confidence tail
+    # shapes: high DRS/PCD plus either a material predicted gap or clearly low
+    # learned R_dep.
+    brake_tail_challenge_min_pred_drs: float = 0.86,
+    brake_tail_challenge_min_pred_pcd: float = 0.30,
+    brake_tail_challenge_min_candidate_gap: float = 0.085,
+    brake_tail_challenge_max_candidate_gap: float = 0.42,
+    brake_tail_challenge_high_gap_min: float = 0.115,
+    brake_tail_challenge_low_r_dep_max: float = -0.14,
     # v24: Budgeted Macro-Rescue Certificate (BMRC).  This generalizes the
     # v23 brake rescue from a fixed macro threshold into a predicted
     # post-contact-deployability admission test.  It can be enabled per bucket
@@ -741,6 +755,27 @@ def calibrated_constrained_select(
         # retain the separate mask for diagnostics/reason strings.
         brake_rescue_certified = brake_rescue_certified | brake_tail_rescue_certified
 
+    # v35: strict subset of residual-tail certificates allowed to bypass the
+    # relative learned-PCD gain when challenging an already admitted nominal.
+    # This is deliberately narrower than ``brake_tail_rescue_certified`` so the
+    # selector does not reopen the v34 failure mode of frequent nominal-best
+    # brake overrides.
+    brake_tail_challenge_certified = brake_tail_rescue_certified.copy()
+    if bool(brake_tail_challenge_bypass_pcd_gain):
+        challenge_tail_shape = (
+            (gap >= float(brake_tail_challenge_high_gap_min))
+            | (r_dep <= float(brake_tail_challenge_low_r_dep_max))
+        )
+        brake_tail_challenge_certified &= (
+            (drs_proxy >= float(brake_tail_challenge_min_pred_drs))
+            & (pcd_proxy >= float(brake_tail_challenge_min_pred_pcd))
+            & (gap >= float(brake_tail_challenge_min_candidate_gap))
+            & (gap <= float(brake_tail_challenge_max_candidate_gap))
+            & challenge_tail_shape
+        )
+    else:
+        brake_tail_challenge_certified[:] = False
+
     # v24 BMRC: predicted post-contact deployability certificate.  This is used
     # as an intermediate channel between strict scalar LCB admission and the
     # macro-only v23 rescue.  The score is the same compact deployability proxy
@@ -1119,7 +1154,7 @@ def calibrated_constrained_select(
                     # positive relative PCD gain for these already-certified brake
                     # candidates when explicitly enabled.
                     if bool(brake_tail_challenge_bypass_pcd_gain):
-                        ok = ok | brake_tail_rescue_certified
+                        ok = ok | brake_tail_challenge_certified
                     challenge_mask &= ok
                     axis_count += ok.astype(int)
                 if float(rescue_challenge_min_rec_lcb_gain) >= 0.0:

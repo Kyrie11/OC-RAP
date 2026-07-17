@@ -205,6 +205,12 @@ selection:
   brake_tail_counts_as_evidence: true
   brake_tail_budget_bypass: false
   brake_tail_challenge_bypass_pcd_gain: false
+  brake_tail_challenge_min_pred_drs: 0.86
+  brake_tail_challenge_min_pred_pcd: 0.30
+  brake_tail_challenge_min_candidate_gap: 0.085
+  brake_tail_challenge_max_candidate_gap: 0.42
+  brake_tail_challenge_high_gap_min: 0.115
+  brake_tail_challenge_low_r_dep_max: -0.14
   intervention_min_rec_lcb_gain: 0.0
   intervention_min_drs_gain: 0.0
   intervention_min_gap_reduction: 0.0
