@@ -353,6 +353,11 @@ def calibrated_constrained_select(
     # v36: permit only strict residual-tail challenges to override the hard
     # exposure budget; broad brake rescue remains budget-limited.
     brake_tail_challenge_budget_bypass: bool = False,
+    # v38: allow only the strict residual-tail challenge subset to continue
+    # through the ordinary cooldown. This prevents wasting a one-step brake
+    # just before an audited low-headroom state while preserving cooldown for
+    # broad brake-rescue and generic recovery macros.
+    brake_tail_challenge_cooldown_bypass: bool = False,
     # v34: when a residual brake-tail candidate has already passed the absolute
     # certificate, let it challenge an admitted nominal even if learned relative
     # PCD gain is negative. This is deliberately contact-only via config and
@@ -1049,7 +1054,10 @@ def calibrated_constrained_select(
         # applied after semantic/evidence certification so nominal is preserved
         # when the exposure budget says another intervention is premature.
         if bool(cooldown_active):
-            certified_non_nom[:] = False
+            if bool(brake_tail_challenge_cooldown_bypass):
+                certified_non_nom &= brake_tail_challenge_certified
+            else:
+                certified_non_nom[:] = False
 
         if bool(certified_non_nom.any()):
             cc = np.where(certified_non_nom)[0]
@@ -1188,7 +1196,10 @@ def calibrated_constrained_select(
                     except Exception:
                         pass
                 if bool(cooldown_active):
-                    challenge_mask[:] = False
+                    if bool(brake_tail_challenge_cooldown_bypass):
+                        challenge_mask &= brake_tail_challenge_certified
+                    else:
+                        challenge_mask[:] = False
                 # Optional nominal guard: if nominal already has a very high
                 # learned PCD proxy and low predicted gap, do not challenge it.
                 # This prevents v25's failure mode where a brake with lower

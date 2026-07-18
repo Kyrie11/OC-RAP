@@ -345,6 +345,7 @@ def select_baseline(
                 brake_tail_counts_as_evidence=_cfg_bool(scfg, "brake_tail_counts_as_evidence", True, bucket_name),
                 brake_tail_budget_bypass=_cfg_bool(scfg, "brake_tail_budget_bypass", False, bucket_name),
                 brake_tail_challenge_budget_bypass=_cfg_bool(scfg, "brake_tail_challenge_budget_bypass", False, bucket_name),
+                brake_tail_challenge_cooldown_bypass=_cfg_bool(scfg, "brake_tail_challenge_cooldown_bypass", False, bucket_name),
                 brake_tail_challenge_bypass_pcd_gain=_cfg_bool(scfg, "brake_tail_challenge_bypass_pcd_gain", False, bucket_name),
                 brake_tail_challenge_min_pred_drs=_cfg_float(scfg, "brake_tail_challenge_min_pred_drs", 0.86, bucket_name),
                 brake_tail_challenge_min_pred_pcd=_cfg_float(scfg, "brake_tail_challenge_min_pred_pcd", 0.30, bucket_name),

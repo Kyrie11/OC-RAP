@@ -798,6 +798,7 @@ def _rollout_one_scene(
             cfg,
             trajectory_mode="closed_loop_splice",
             splice_until=t,
+            static_template=raw,
         )
         hist = construct_history(spliced_raw, t, cfg)
         hist.metadata["_waymax_state"] = state

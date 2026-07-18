@@ -316,7 +316,7 @@ def _trajectory_for_raw_export(state: Any, mode: str = "log", splice_until: int 
     return SimpleNamespace(**out)
 
 
-def raw_scenario_from_waymax_state(state: Any, scenario_id: str, scenario_index: int, cfg: dict, trajectory_mode: str = "log", splice_until: int | None = None) -> RawScenario:
+def raw_scenario_from_waymax_state(state: Any, scenario_id: str, scenario_index: int, cfg: dict, trajectory_mode: str = "log", splice_until: int | None = None, static_template: RawScenario | None = None) -> RawScenario:
     tr = _trajectory_for_raw_export(state, trajectory_mode, splice_until)
     meta = state.object_metadata
     meta_ids = _as_np(meta.ids).reshape(-1)
@@ -358,11 +358,23 @@ def raw_scenario_from_waymax_state(state: Any, scenario_id: str, scenario_index:
     elif timestamps.ndim >= 2 and timestamps.shape[0] > 0:
         timestamps = timestamps[0]
     timestamps_s = timestamps.astype(np.float64) * 1e-6 if timestamps.size else np.arange(T, dtype=np.float32) * 0.1
-    maps, map_valid = _map_from_waymax_roadgraph(state, int(cfg.get("max_map_polylines", 256)), int(cfg.get("max_polyline_points", 64)))
-    route = _route_from_sdc_paths(state, int(cfg.get("route_points", 80)))
-    dyn = np.zeros((T, int(cfg.get("max_dynamic_signals", 16)), 8), dtype=np.float32)
-    sdc_idx = int(np.argmax(_as_np(meta.is_sdc).astype(bool)))
-    object_ids = [str(int(v)) for v in meta_ids]
+    # Roadgraph, route, object ids and dynamic-map tensors are scenario-static.
+    # Closed-loop replanning used to rebuild/copy them from JAX on every step,
+    # which is especially expensive for ~30k roadgraph points.  Reuse the raw
+    # scenario produced by the loader when supplied; only trajectories change.
+    if static_template is not None:
+        maps = static_template.map_polylines
+        map_valid = static_template.map_valid
+        route = static_template.route
+        dyn = static_template.dynamic_map
+        sdc_idx = int(static_template.sdc_track_index)
+        object_ids = static_template.object_ids
+    else:
+        maps, map_valid = _map_from_waymax_roadgraph(state, int(cfg.get("max_map_polylines", 256)), int(cfg.get("max_polyline_points", 64)))
+        route = _route_from_sdc_paths(state, int(cfg.get("route_points", 80)))
+        dyn = np.zeros((T, int(cfg.get("max_dynamic_signals", 16)), 8), dtype=np.float32)
+        sdc_idx = int(np.argmax(_as_np(meta.is_sdc).astype(bool)))
+        object_ids = [str(int(v)) for v in meta_ids]
     return RawScenario(
         scenario_id=scenario_id,
         timestamps=timestamps_s[:T].astype(np.float32),
