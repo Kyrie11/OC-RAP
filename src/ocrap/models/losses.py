@@ -1100,3 +1100,137 @@ def nominal_switch_consistency_loss(
         return pred_r_dep.sum() * 0.0
     return torch.stack(losses).mean()
 
+
+
+
+def observation_consistent_recovery_advantage_loss(
+    pred_r_dep: torch.Tensor,
+    pred_gap: torch.Tensor,
+    pred_q: torch.Tensor,
+    teacher_r_dep: torch.Tensor,
+    teacher_r_orc: torch.Tensor,
+    teacher_q: torch.Tensor,
+    root_probs: torch.Tensor,
+    root_valid: torch.Tensor,
+    option_valid: torch.Tensor,
+    scene_hash: torch.Tensor,
+    time_index: torch.Tensor,
+    macro_type_id: torch.Tensor,
+    is_nominal: torch.Tensor,
+    bucket_id: torch.Tensor,
+    *,
+    macro_ids: tuple[int, ...] = (2, 3, 5, 7),
+    bucket_ids: tuple[int, ...] = (1, 2),
+    positive_gain: float = 0.03,
+    negative_gain: float = 0.03,
+    advantage_margin: float = 0.10,
+    regression_weight: float = 1.0,
+    ranking_weight: float = 1.0,
+    component_inversion_weight: float = 0.5,
+    false_positive_weight: float = 0.75,
+    nominal_failure_pcd_max: float = 0.20,
+    target_min_pred_pcd: float = 0.50,
+    nominal_max_pred_pcd: float = 0.48,
+    near_weight: float = 1.5,
+    contact_weight: float = 1.0,
+    success_gamma: float = 0.0,
+    success_temperature: float = 0.25,
+) -> torch.Tensor:
+    """Observation-consistent counterfactual recovery-advantage calibration.
+
+    Absolute PCD regression is not enough when the learned heads make a *paired
+    inversion*: nominal is predicted highly deployable although its teacher PCD
+    is near zero, while a shared recovery macro is predicted worse despite being
+    the teacher-best action.  This loss operates on complete scene-time candidate
+    groups and directly calibrates the counterfactual advantage
+
+        Delta_PCD = PCD(best shared recovery) - PCD(nominal).
+
+    Positive rescue groups receive advantage regression, pairwise ranking, a
+    target floor, and component-wise anti-inversion supervision.  Negative rescue
+    groups receive an anti-false-positive ranking term.  Bucket-specific weights
+    make near-contact calibration explicit instead of inheriting a contact-only
+    brake-tail objective.
+    """
+    if pred_r_dep.numel() <= 1 or not macro_ids or not bucket_ids:
+        return pred_r_dep.sum() * 0.0
+    pr = torch.nan_to_num(pred_r_dep.float().reshape(-1), nan=-20.0, posinf=20.0, neginf=-20.0)
+    pg = torch.clamp(torch.nan_to_num(pred_gap.float().reshape(-1), nan=0.0, posinf=20.0, neginf=0.0), min=0.0)
+    trd = torch.nan_to_num(teacher_r_dep.float().reshape(-1), nan=-20.0, posinf=20.0, neginf=-20.0)
+    tro = torch.nan_to_num(teacher_r_orc.float().reshape(-1), nan=-20.0, posinf=20.0, neginf=-20.0)
+    pred_drs = _differentiable_shared_success(
+        pred_q, root_probs, root_valid, option_valid,
+        gamma=success_gamma, temperature=success_temperature,
+    ).reshape(-1)
+    with torch.no_grad():
+        teacher_drs = _differentiable_shared_success(
+            teacher_q, root_probs, root_valid, option_valid,
+            gamma=success_gamma, temperature=max(0.08, success_temperature * 0.5),
+        ).reshape(-1)
+    sh, ti = scene_hash.reshape(-1), time_index.reshape(-1)
+    mac = macro_type_id.reshape(-1)
+    isn = is_nominal.float().reshape(-1) > 0.5
+    bid = bucket_id.reshape(-1)
+    n = min(pr.numel(), pg.numel(), trd.numel(), tro.numel(), pred_drs.numel(), teacher_drs.numel(), sh.numel(), ti.numel(), mac.numel(), isn.numel(), bid.numel())
+    if n <= 1:
+        return pred_r_dep.sum() * 0.0
+    pr, pg, trd, tro = pr[:n], pg[:n], trd[:n], tro[:n]
+    pred_drs, teacher_drs = pred_drs[:n], teacher_drs[:n]
+    sh, ti, mac, isn, bid = sh[:n], ti[:n], mac[:n], isn[:n], bid[:n]
+    finite = torch.isfinite(pr) & torch.isfinite(pg) & torch.isfinite(trd) & torch.isfinite(tro) & torch.isfinite(pred_drs) & torch.isfinite(teacher_drs)
+    bucket_mask = torch.zeros_like(finite)
+    for b in tuple(int(x) for x in bucket_ids):
+        bucket_mask |= bid == b
+    macro_mask = torch.zeros_like(finite)
+    for m in tuple(int(x) for x in macro_ids):
+        macro_mask |= mac == m
+    finite &= bucket_mask
+    if not bool(finite.any()):
+        return pred_r_dep.sum() * 0.0
+
+    teacher_gap = torch.clamp(tro - trd, min=0.0)
+    teacher_pcd = _torch_pcd_score(teacher_drs, trd, teacher_gap).detach()
+    pred_pcd = _torch_pcd_score(pred_drs, pr, pg)
+    losses: list[torch.Tensor] = []
+    weights: list[float] = []
+    keys = torch.stack([sh, ti], dim=1)
+    for key in torch.unique(keys[finite], dim=0):
+        group = finite & (sh == key[0]) & (ti == key[1])
+        idx = torch.where(group)[0]
+        if idx.numel() < 2:
+            continue
+        noms = idx[isn[idx]]
+        recs = idx[macro_mask[idx]]
+        if noms.numel() == 0 or recs.numel() == 0:
+            continue
+        nom = noms[0]
+        target = recs[torch.argmax(teacher_pcd[recs])]
+        teacher_adv = teacher_pcd[target] - teacher_pcd[nom]
+        pred_adv = pred_pcd[target] - pred_pcd[nom]
+        bw = float(near_weight if int(bid[nom].item()) == 1 else contact_weight)
+        group_terms: list[torch.Tensor] = []
+        if float(teacher_adv.item()) >= float(positive_gain):
+            group_terms.append(float(regression_weight) * F.smooth_l1_loss(pred_adv, teacher_adv))
+            group_terms.append(float(ranking_weight) * F.relu(float(advantage_margin) - pred_adv))
+            group_terms.append(float(ranking_weight) * 0.5 * F.relu(float(target_min_pred_pcd) - pred_pcd[target]))
+            if float(teacher_pcd[nom].item()) <= float(nominal_failure_pcd_max):
+                group_terms.append(float(ranking_weight) * 0.5 * F.relu(pred_pcd[nom] - float(nominal_max_pred_pcd)))
+            # Anti-inversion on the three deployability components.  The teacher
+            # deltas, rather than fixed semantic assumptions, define the sign.
+            component = F.smooth_l1_loss(pred_drs[target] - pred_drs[nom], teacher_drs[target] - teacher_drs[nom])
+            component = component + F.smooth_l1_loss(pr[target] - pr[nom], trd[target] - trd[nom])
+            component = component + 0.5 * F.smooth_l1_loss(pg[nom] - pg[target], teacher_gap[nom] - teacher_gap[target])
+            group_terms.append(float(component_inversion_weight) * component)
+        elif float(teacher_adv.item()) <= -float(negative_gain):
+            group_terms.append(float(false_positive_weight) * F.relu(float(advantage_margin) + pred_adv))
+        else:
+            # Ambiguous ties still receive gentle advantage regression; this
+            # stabilizes the decision boundary without forcing intervention.
+            group_terms.append(0.25 * float(regression_weight) * F.smooth_l1_loss(pred_adv, teacher_adv))
+        losses.append(torch.stack(group_terms).mean())
+        weights.append(bw)
+    if not losses:
+        return pred_r_dep.sum() * 0.0
+    w = torch.as_tensor(weights, dtype=losses[0].dtype, device=losses[0].device)
+    stacked = torch.stack(losses)
+    return (stacked * w).sum() / w.sum().clamp_min(1.0e-6)

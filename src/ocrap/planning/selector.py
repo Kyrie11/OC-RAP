@@ -378,6 +378,11 @@ def calibrated_constrained_select(
     brake_tail_challenge_max_candidate_gap: float = 0.42,
     brake_tail_challenge_high_gap_min: float = 0.115,
     brake_tail_challenge_low_r_dep_max: float = -0.14,
+    # v39: bound repeated cooldown-bypass brake decisions. Consecutive brake
+    # controls are one recovery episode, not independent tail discoveries.
+    brake_tail_challenge_max_consecutive: int = -1,
+    previous_selected_macro: str | None = None,
+    same_macro_run_length: int | None = None,
     # v24: Budgeted Macro-Rescue Certificate (BMRC).  This generalizes the
     # v23 brake rescue from a fixed macro threshold into a predicted
     # post-contact-deployability admission test.  It can be enabled per bucket
@@ -1195,6 +1200,17 @@ def calibrated_constrained_select(
                         challenge_mask &= float(intervention_budget_used or 0.0) < float(rescue_challenge_max_used)
                     except Exception:
                         pass
+                if int(brake_tail_challenge_max_consecutive) >= 0:
+                    prev_macro = str(previous_selected_macro or "").strip().lower()
+                    try:
+                        prev_run = int(same_macro_run_length or 0)
+                    except Exception:
+                        prev_run = 0
+                    if prev_macro == str(brake_rescue_macro_name).strip().lower() and prev_run >= int(brake_tail_challenge_max_consecutive):
+                        # Cooldown bypass in v38 can otherwise produce a long run
+                        # of fresh brake selections. Cap only the strict tail
+                        # challenge; ordinary admitted/recovery logic remains.
+                        challenge_mask &= ~brake_tail_challenge_certified
                 if bool(cooldown_active):
                     if bool(brake_tail_challenge_cooldown_bypass):
                         challenge_mask &= brake_tail_challenge_certified

@@ -19,6 +19,7 @@ from ocrap.models.inference import ModelBundle, load_model_bundle, predict_sampl
 from ocrap.external_baselines.policies import select_external_policy
 from ocrap.external_baselines.evaluate import _load_checkpoint as _load_external_checkpoint, _predict_group as _predict_external_group
 from ocrap.simulation.waymax_rollout import _as_np, _bicycle_action, _make_env, _metric_summary, _sdc_index
+from ocrap.utils.geometry import compute_ttc, min_box_clearance
 
 
 EXTERNAL_CLOSED_LOOP_METHODS = {
@@ -462,6 +463,46 @@ def _current_timestep(state: Any) -> int:
         return 0
 
 
+def _state_geometry_metrics(state: Any, sdc: int) -> dict[str, float]:
+    """Current-step physical margins used to interpret near/contact behavior.
+
+    The paper defines near-contact using clearance/TTC, but earlier closed-loop
+    reports exposed only generic Waymax metrics.  These fields make the regime
+    claim observable at execution time without changing the planner inputs.
+    """
+    try:
+        tr = state.sim_trajectory
+        t = _current_timestep(state)
+        x = _as_np(tr.x)[:, t]
+        y = _as_np(tr.y)[:, t]
+        vx = _as_np(tr.vel_x)[:, t]
+        vy = _as_np(tr.vel_y)[:, t]
+        yaw = _as_np(tr.yaw)[:, t]
+        length = _as_np(tr.length)[:, t]
+        width = _as_np(tr.width)[:, t]
+        height = _as_np(tr.height)[:, t]
+        valid = _as_np(tr.valid)[:, t].astype(bool)
+        if sdc < 0 or sdc >= len(x) or not bool(valid[sdc]):
+            return {}
+        ego_box = np.asarray([x[sdc], y[sdc], vx[sdc], vy[sdc], yaw[sdc], length[sdc], width[sdc], height[sdc], 1.0], dtype=np.float32)
+        keep = np.arange(len(x)) != int(sdc)
+        boxes = np.stack([x, y, vx, vy, yaw, length, width, height, np.ones_like(x)], axis=-1).astype(np.float32)[keep]
+        other_valid = valid[keep]
+        ego_state = np.zeros((16,), dtype=np.float32)
+        ego_state[0], ego_state[1] = float(x[sdc]), float(y[sdc])
+        ego_state[3], ego_state[4] = float(vx[sdc]), float(vy[sdc])
+        ego_state[7] = float(yaw[sdc])
+        ego_state[10], ego_state[11], ego_state[12] = float(length[sdc]), float(width[sdc]), float(height[sdc])
+        return {
+            "min_clearance_m": float(min_box_clearance(ego_box, boxes, other_valid)),
+            "ttc_s": float(compute_ttc(ego_state, boxes, other_valid)),
+            "ego_speed_mps": float(np.hypot(vx[sdc], vy[sdc])),
+            "ego_yaw_rad": float(yaw[sdc]),
+        }
+    except Exception:
+        return {}
+
+
 def _scene_done(state: Any) -> bool:
     try:
         return bool(_as_np(state.is_done).reshape(()).item())
@@ -782,6 +823,8 @@ def _rollout_one_scene(
     state_xy_trace: list[list[float]] = []
     interventions_used = 0
     last_intervention_step = -10**9
+    previous_selected_macro = "nominal"
+    same_macro_run_length = 0
     audit_bucket_name = bucket_name or str((cfg.get("selection", {}) or {}).get("active_bucket_name", "") or "")
     drs_gamma = _drs_success_gamma_for_bucket(gamma, cfg, audit_bucket_name)
 
@@ -871,6 +914,8 @@ def _rollout_one_scene(
             # over-budget after a single intervention.
             sel_local["intervention_budget_steps"] = max(1, int(step_idx) + 1)
             sel_local["steps_since_last_intervention"] = int(step_idx) - int(last_intervention_step)
+            sel_local["previous_selected_macro"] = str(previous_selected_macro)
+            sel_local["same_macro_run_length"] = int(same_macro_run_length)
             select_cfg["selection"] = sel_local
         sel_idx, info = _select_prefix(
             samples,
@@ -893,6 +938,12 @@ def _rollout_one_scene(
                 interventions_used += 1
                 last_intervention_step = int(step_idx)
         prefix = selected_sample.prefix
+        current_macro = str(prefix.macro_name)
+        if current_macro == previous_selected_macro:
+            same_macro_run_length += 1
+        else:
+            previous_selected_macro = current_macro
+            same_macro_run_length = 1
         selected_audit_sample = None
         selected_audit_data = None
         selected_audit_drs = None
@@ -1080,6 +1131,7 @@ def _rollout_one_scene(
             action = _bicycle_action(int(state.num_objects), sdc, float(ctrl[0]), float(ctrl[1]), float(cfg.get("wheelbase_m", 2.8)))
             state = wx_env.step(state, action)
             metrics_after = _metric_summary(wx_env, state, sdc)
+            metrics_after.update(_state_geometry_metrics(state, sdc))
             metric_trace.append(metrics_after)
             try:
                 tr = state.sim_trajectory
@@ -1171,6 +1223,33 @@ def _rollout_one_scene(
             metric_summary[f"{name}_mean"] = float(np.mean(vals))
             metric_summary[f"{name}_max"] = float(np.max(vals))
             metric_summary[f"{name}_any"] = float(np.max(vals) > 0.0)
+            if name in {"min_clearance_m", "ttc_s", "ego_speed_mps"}:
+                metric_summary[f"{name}_min"] = float(np.min(vals))
+                metric_summary[f"{name}_p05"] = float(np.quantile(vals, 0.05))
+    clearance_vals = [float(m["min_clearance_m"]) for m in metric_trace if "min_clearance_m" in m and np.isfinite(float(m["min_clearance_m"]))]
+    ttc_vals = [float(m["ttc_s"]) for m in metric_trace if "ttc_s" in m and np.isfinite(float(m["ttc_s"]))]
+    speed_vals = [float(m["ego_speed_mps"]) for m in metric_trace if "ego_speed_mps" in m and np.isfinite(float(m["ego_speed_mps"]))]
+    overlap_flags = [bool(float(m.get("overlap", 0.0)) > 0.0) for m in metric_trace]
+    overlap_episode_count = int(sum(flag and (i == 0 or not overlap_flags[i - 1]) for i, flag in enumerate(overlap_flags)))
+    metric_summary["near_contact_exposure_rate"] = float(np.mean([c <= 2.0 for c in clearance_vals])) if clearance_vals else 0.0
+    metric_summary["critical_ttc_exposure_rate"] = float(np.mean([t <= 3.0 for t in ttc_vals])) if ttc_vals else 0.0
+    metric_summary["contact_exposure_rate"] = float(np.mean([c <= 0.05 for c in clearance_vals])) if clearance_vals else 0.0
+    metric_summary["overlap_episode_count"] = overlap_episode_count
+    metric_summary["secondary_overlap_event"] = float(overlap_episode_count >= 2)
+    tail_speeds = speed_vals[-3:] if speed_vals else []
+    tail_overlaps = overlap_flags[-3:] if overlap_flags else []
+    metric_summary["stable_stop_event"] = float(bool(tail_speeds) and max(tail_speeds) <= 0.5 and not any(tail_overlaps))
+    intervention_flags = [bool(d.selected_candidate_index != 0) for d in decisions]
+    intervention_episode_count = int(sum(flag and (i == 0 or not intervention_flags[i - 1]) for i, flag in enumerate(intervention_flags)))
+    intervention_run_lengths: list[int] = []
+    run_len = 0
+    for flag in intervention_flags + [False]:
+        if flag:
+            run_len += 1
+        elif run_len > 0:
+            intervention_run_lengths.append(run_len)
+            run_len = 0
+    macro_switch_count = int(sum(decisions[i].selected_macro != decisions[i - 1].selected_macro for i in range(1, len(decisions))))
     out = {
         "scene_id": str(raw.scenario_id),
         "bucket_name": bucket_name,
@@ -1216,6 +1295,11 @@ def _rollout_one_scene(
         "closed_loop_pred_DRS_proxy": _mean_finite([d.selected_pred_drs for d in decisions]),
         "closed_loop_nominal_deviation": _mean_finite([d.selected_nominal_deviation for d in decisions]),
         "intervention_rate": _mean_finite([float(d.selected_candidate_index != 0) for d in decisions], default=0.0),
+        "intervention_episode_count": intervention_episode_count,
+        "intervention_episode_rate": float(intervention_episode_count / max(len(decisions), 1)),
+        "mean_intervention_run_length": float(np.mean(intervention_run_lengths)) if intervention_run_lengths else 0.0,
+        "max_intervention_run_length": int(max(intervention_run_lengths)) if intervention_run_lengths else 0,
+        "macro_switch_rate": float(macro_switch_count / max(len(decisions) - 1, 1)),
         "metric_summary": metric_summary,
         "macro_counts": {m: int(sum(d.selected_macro == m for d in decisions)) for m in sorted({d.selected_macro for d in decisions})},
         "audit_best_macro_counts": {m: int(sum(d.audit_best_macro == m for d in decisions)) for m in sorted({d.audit_best_macro for d in decisions if d.audit_best_macro is not None})},
@@ -1233,7 +1317,7 @@ def _rollout_one_scene(
     return out
 
 def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, source: str) -> dict[str, Any]:
-    keys = ["closed_loop_FRA_exec", "closed_loop_FRA_cand", "closed_loop_DRS", "closed_loop_ODG", "closed_loop_post_contact_deployability", "closed_loop_artifact_selection_rate", "closed_loop_audit_candidate_count", "closed_loop_audit_best_R_dep", "closed_loop_audit_best_DRS", "closed_loop_audit_selected_R_dep_regret", "closed_loop_audit_best_PCD", "closed_loop_audit_selected_PCD_regret", "closed_loop_audit_recoverable_candidate_rate", "closed_loop_audit_selector_miss_rate", "closed_loop_audit_pcd_selector_miss_rate", "closed_loop_audit_paper_best_PCD", "closed_loop_audit_paper_selected_PCD_regret", "closed_loop_audit_paper_pcd_selector_miss_rate", "closed_loop_bounded_NUP", "closed_loop_pred_r_dep", "closed_loop_pred_gap", "closed_loop_pred_DRS_proxy", "closed_loop_nominal_deviation", "intervention_rate", "external_sparse_label_candidates_mean", "external_sparse_full_candidates_mean"]
+    keys = ["closed_loop_FRA_exec", "closed_loop_FRA_cand", "closed_loop_DRS", "closed_loop_ODG", "closed_loop_post_contact_deployability", "closed_loop_artifact_selection_rate", "closed_loop_audit_candidate_count", "closed_loop_audit_best_R_dep", "closed_loop_audit_best_DRS", "closed_loop_audit_selected_R_dep_regret", "closed_loop_audit_best_PCD", "closed_loop_audit_selected_PCD_regret", "closed_loop_audit_recoverable_candidate_rate", "closed_loop_audit_selector_miss_rate", "closed_loop_audit_pcd_selector_miss_rate", "closed_loop_audit_paper_best_PCD", "closed_loop_audit_paper_selected_PCD_regret", "closed_loop_audit_paper_pcd_selector_miss_rate", "closed_loop_bounded_NUP", "closed_loop_pred_r_dep", "closed_loop_pred_gap", "closed_loop_pred_DRS_proxy", "closed_loop_nominal_deviation", "intervention_rate", "intervention_episode_rate", "mean_intervention_run_length", "max_intervention_run_length", "macro_switch_rate", "external_sparse_label_candidates_mean", "external_sparse_full_candidates_mean"]
     agg: dict[str, Any] = {
         "source": source,
         "method": method,

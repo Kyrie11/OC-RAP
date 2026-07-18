@@ -30,6 +30,7 @@ from ocrap.models.losses import (
     deployability_dominance_calibration_loss,
     direct_teacher_pcd_loss,
     macro_shared_success_calibration_loss,
+    observation_consistent_recovery_advantage_loss,
 )
 from ocrap.models.ocrap import OCRAPModel
 from ocrap.utils.seed import seed_everything
@@ -500,6 +501,31 @@ def _epoch(
             positive_max_pred_gap=float(tcfg.get("teacher_pcd_direct_positive_max_pred_gap", -1.0)),
             positive_min_pred_drs=float(tcfg.get("teacher_pcd_direct_positive_min_pred_drs", -1.0)),
         )
+        loss_recovery_advantage = observation_consistent_recovery_advantage_loss(
+            r_dep, gap, pred_q,
+            batch["r_dep_star"].float(), batch["r_orc_star"].float(), teacher_q,
+            batch["root_probs"].float(), batch["root_valid"], batch["option_valid"],
+            batch["scene_hash"], batch["time_index"],
+            batch.get("prefix_macro_type_id", batch.get("candidate_index", torch.zeros_like(batch["time_index"]))),
+            batch["is_nominal"].float(),
+            batch.get("bucket_id", torch.full_like(batch["time_index"], 3)),
+            macro_ids=_parse_int_tuple(tcfg.get("recovery_advantage_macro_ids", "2,3,5,7"), (2, 3, 5, 7)),
+            bucket_ids=_parse_int_tuple(tcfg.get("recovery_advantage_bucket_ids", "1,2"), (1, 2)),
+            positive_gain=float(tcfg.get("recovery_advantage_positive_gain", 0.03)),
+            negative_gain=float(tcfg.get("recovery_advantage_negative_gain", 0.03)),
+            advantage_margin=float(tcfg.get("recovery_advantage_margin", 0.10)),
+            regression_weight=float(tcfg.get("recovery_advantage_regression_weight", 1.0)),
+            ranking_weight=float(tcfg.get("recovery_advantage_ranking_weight", 1.0)),
+            component_inversion_weight=float(tcfg.get("recovery_advantage_component_weight", 0.5)),
+            false_positive_weight=float(tcfg.get("recovery_advantage_false_positive_weight", 0.75)),
+            nominal_failure_pcd_max=float(tcfg.get("recovery_advantage_nominal_failure_pcd_max", 0.20)),
+            target_min_pred_pcd=float(tcfg.get("recovery_advantage_target_min_pred_pcd", 0.50)),
+            nominal_max_pred_pcd=float(tcfg.get("recovery_advantage_nominal_max_pred_pcd", 0.48)),
+            near_weight=float(tcfg.get("recovery_advantage_near_weight", 1.5)),
+            contact_weight=float(tcfg.get("recovery_advantage_contact_weight", 1.0)),
+            success_gamma=option_gamma,
+            success_temperature=option_temperature,
+        )
         if bool((cfg.get("ablation", {}) or {}).get("without_anti_oracle", False)):
             loss_art = loss_art * 0.0
             loss_gap = loss_gap * 0.0
@@ -527,6 +553,7 @@ def _epoch(
             + float(lw.get("macro_drs", 0.0)) * loss_macro_drs
             + float(lw.get("ddc", 0.0)) * loss_ddc
             + float(lw.get("teacher_pcd_direct", 0.0)) * loss_teacher_pcd_direct
+            + float(lw.get("recovery_advantage", 0.0)) * loss_recovery_advantage
             + float(lw.get("utility", 0.2)) * loss_util
         )
         if training:
@@ -564,6 +591,7 @@ def _epoch(
             "loss_macro_drs": loss_macro_drs.item(),
             "loss_ddc": loss_ddc.item(),
             "loss_teacher_pcd_direct": loss_teacher_pcd_direct.item(),
+            "loss_recovery_advantage": loss_recovery_advantage.item(),
             "loss_utility": loss_util.item(),
             "pred_r_dep_mean": r_dep.mean().item(),
             "teacher_r_dep_mean": batch["r_dep_star"].float().mean().item(),
