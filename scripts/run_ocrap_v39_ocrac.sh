@@ -18,6 +18,12 @@ export CAL=${CAL:-$BASE_RUN/calibration/calibration_mix_v39.json}
 export GAMMA=${GAMMA:-$BASE_RUN/calibration/gamma_rec_by_bucket_v39.json}
 mkdir -p "$RUN"
 
+# Exact closed-loop persistence controls. Reusing the same RUN/output filenames
+# resumes completed scene/target rollouts from *.json.partial or *.scenes.jsonl.
+export CL_RESUME=${CL_RESUME:-true}
+export CL_PARTIAL_EVERY=${CL_PARTIAL_EVERY:-4}
+export CL_RESUME_FSYNC=${CL_RESUME_FSYNC:-false}
+
 [[ -f "$CKPT" ]] || { echo "missing checkpoint $CKPT; set CKPT=/path/to/best.pt" >&2; exit 2; }
 [[ -f "$GAMMA" ]] || { echo "missing gamma map $GAMMA; set GAMMA=/path/to/gamma.json" >&2; exit 2; }
 [[ -f "$CAL" ]] || { echo "missing calibration $CAL; set CAL=/path/to/calibration.json" >&2; exit 2; }
@@ -648,6 +654,11 @@ run_audit() {
     --output "$RUN/audit_${b}_selected_topk_v39_${tag}.json" \
     "${COMMON_SEL[@]}" \
     --set closed_loop.method=ocrap \
+    --set closed_loop.resume="$CL_RESUME" \
+    --set closed_loop.resume_allow_legacy_partial=true \
+    --set closed_loop.partial_write_every_scenes="$CL_PARTIAL_EVERY" \
+    --set closed_loop.resume_fsync="$CL_RESUME_FSYNC" \
+    --set closed_loop.save_partial=true \
     --set closed_loop.bucket_dataset="$bucket" \
     --set closed_loop.bucket_split=test \
     --set closed_loop.max_bucket_targets="$targets" \
@@ -662,7 +673,7 @@ run_audit() {
     --set closed_loop.audit_top_k=10 \
     --set closed_loop.audit_max_extra_candidates=9 \
     --set closed_loop.progress_every_steps=1 \
-    | tee "$RUN/audit_${b}_selected_topk_v39_${tag}.log"
+    | tee -a "$RUN/audit_${b}_selected_topk_v39_${tag}.log"
   assert_json "$RUN/audit_${b}_selected_topk_v39_${tag}.json"
 }
 
@@ -687,6 +698,11 @@ run_safe_closed_loop() {
     --output "$RUN/closed_loop_safe_fast_v39.json" \
     "${COMMON_SEL[@]}" \
     --set closed_loop.method=ocrap \
+    --set closed_loop.resume="$CL_RESUME" \
+    --set closed_loop.resume_allow_legacy_partial=true \
+    --set closed_loop.partial_write_every_scenes="$CL_PARTIAL_EVERY" \
+    --set closed_loop.resume_fsync="$CL_RESUME_FSYNC" \
+    --set closed_loop.save_partial=true \
     --set closed_loop.bucket_dataset="$SAFE_TEST" \
     --set closed_loop.bucket_split=test \
     --set closed_loop.max_bucket_targets=80 \
@@ -699,7 +715,7 @@ run_safe_closed_loop() {
     --set closed_loop.num_recovery_options=8 \
     --set closed_loop.label_mode=fast \
     --set closed_loop.progress_every_steps=5 \
-    | tee "$RUN/closed_loop_safe_fast_v39.log"
+    | tee -a "$RUN/closed_loop_safe_fast_v39.log"
   assert_json "$RUN/closed_loop_safe_fast_v39.json"
 }
 

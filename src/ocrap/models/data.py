@@ -284,32 +284,56 @@ def _agent_features(d: dict[str, Any], max_agents: int) -> np.ndarray:
     return np.concatenate([summary, packed.reshape(-1)], axis=0)
 
 
-def sample_to_feature(d: dict[str, Any], cfg: dict | None = None) -> np.ndarray:
+def _feature_layout_values(cfg: dict | None = None) -> dict[str, int]:
     cfg = cfg or {}
     model_cfg = cfg.get("model", {}) if isinstance(cfg.get("model", {}), dict) else {}
-    max_agents = int(model_cfg.get("feature_max_agents", 32))
-    num_macros = int(model_cfg.get("num_macros", 16))
-    prefix_flat = int(model_cfg.get("feature_prefix_flat_dim", 80))
-    control_flat = int(model_cfg.get("feature_control_flat_dim", 40))
-    route_flat = int(model_cfg.get("feature_route_flat_dim", 64))
-    map_flat = int(model_cfg.get("feature_map_flat_dim", 64))
-    dyn_flat = int(model_cfg.get("feature_dynamic_map_flat_dim", 32))
+    return {
+        "max_agents": int(model_cfg.get("feature_max_agents", 32)),
+        "num_macros": int(model_cfg.get("num_macros", 16)),
+        "prefix_flat": int(model_cfg.get("feature_prefix_flat_dim", 80)),
+        "control_flat": int(model_cfg.get("feature_control_flat_dim", 40)),
+        "route_flat": int(model_cfg.get("feature_route_flat_dim", 64)),
+        "map_flat": int(model_cfg.get("feature_map_flat_dim", 64)),
+        "dyn_flat": int(model_cfg.get("feature_dynamic_map_flat_dim", 32)),
+    }
 
+
+def _candidate_feature_parts(d: dict[str, Any], cfg: dict | None = None) -> list[np.ndarray]:
+    """Candidate-dependent prefix features in the exact historical layout."""
+    cfg = cfg or {}
+    layout = _feature_layout_values(cfg)
     ego = _pad_flat(_arr(d, "ego_state", (9,)), 9)
     prefix_param = _pad_flat(_arr(d, "prefix_param", (5,)), int(cfg.get("prefix_param_dim", 5)))
-    # ``prefix_macro_id`` is kept as the deterministic candidate index for
-    # filenames/seeding.  The semantic macro class is stored separately so the
-    # model does not lose every candidate whose index exceeds ``num_macros``.
     macro_type_id = _int_scalar(d, "prefix_macro_type_id", _int_scalar(d, "prefix_macro_id", 0))
-    macro = _one_hot(macro_type_id, num_macros)
-    prefix_states = _arr(d, "prefix_states")
-    prefix_controls = _arr(d, "prefix_controls")
+    macro = _one_hot(macro_type_id, layout["num_macros"])
+    scalar_feat = np.array([
+        _scalar(d, "utility") / 20.0,
+        _scalar(d, "hard_violation") / 5.0,
+        _scalar(d, "harm_proxy") / 5.0,
+        _scalar(d, "feasible"),
+        _scalar(d, "is_nominal"),
+        _scalar(d, "time_index") / 1000.0,
+    ], dtype=np.float32)
+    return [
+        ego,
+        prefix_param,
+        macro,
+        scalar_feat,
+        _pad_flat(_arr(d, "prefix_states"), layout["prefix_flat"]),
+        _pad_flat(_arr(d, "prefix_controls"), layout["control_flat"]),
+    ]
+
+
+def _shared_scene_feature_parts(d: dict[str, Any], cfg: dict | None = None) -> list[np.ndarray]:
+    """History/map/BEV features shared by all candidates of one replan."""
+    cfg = cfg or {}
+    layout = _feature_layout_values(cfg)
     bev = _arr(d, "bev_occ")
     route = _arr(d, "route")
     maps = _arr(d, "map_polylines")
     dyn = _arr(d, "dynamic_map")
 
-    bev_stats = []
+    bev_stats: list[np.ndarray] = []
     if bev.ndim >= 3:
         ch = bev.reshape(bev.shape[0], -1)
         bev_stats.append(ch.mean(axis=1))
@@ -319,33 +343,50 @@ def sample_to_feature(d: dict[str, Any], cfg: dict | None = None) -> np.ndarray:
         bev_stats.append(np.zeros(int(cfg.get("bev_channels", 7)), dtype=np.float32))
     bev_feat = _pad_flat(np.concatenate(bev_stats, axis=0), 2 * int(cfg.get("bev_channels", 7)))
 
-    scalar_feat = np.array([
-        _scalar(d, "utility") / 20.0,
-        _scalar(d, "hard_violation") / 5.0,
-        _scalar(d, "harm_proxy") / 5.0,
-        _scalar(d, "feasible"),
-        _scalar(d, "is_nominal"),
-        _scalar(d, "time_index") / 1000.0,
-    ], dtype=np.float32)
-
-    parts = [
-        ego,
-        prefix_param,
-        macro,
-        scalar_feat,
-        _pad_flat(prefix_states, prefix_flat),
-        _pad_flat(prefix_controls, control_flat),
-        _agent_features(d, max_agents),
+    return [
+        _agent_features(d, layout["max_agents"]),
         bev_feat,
         _finite_stats(route),
-        _pad_flat(route[..., :2] if route.ndim >= 2 else route, route_flat),
+        _pad_flat(route[..., :2] if route.ndim >= 2 else route, layout["route_flat"]),
         _finite_stats(maps),
-        _pad_flat(maps[..., :2] if maps.ndim >= 3 else maps, map_flat),
+        _pad_flat(maps[..., :2] if maps.ndim >= 3 else maps, layout["map_flat"]),
         _finite_stats(dyn),
-        _pad_flat(dyn, dyn_flat),
+        _pad_flat(dyn, layout["dyn_flat"]),
     ]
+
+
+def sample_to_feature(d: dict[str, Any], cfg: dict | None = None) -> np.ndarray:
+    """Convert one sample to the flat model feature without changing layout."""
+    parts = [*_candidate_feature_parts(d, cfg), *_shared_scene_feature_parts(d, cfg)]
     x = np.concatenate(parts, axis=0).astype(np.float32)
     return np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def samples_to_feature_matrix(
+    ds: list[dict[str, Any]],
+    cfg: dict | None = None,
+    *,
+    shared_scene: bool = False,
+) -> np.ndarray:
+    """Vectorize feature extraction and optionally reuse scene-static work.
+
+    All candidates created at one closed-loop replan share history, map, route,
+    BEV and dynamic-map tensors.  The previous implementation recomputed agent
+    sorting, BEV statistics, map statistics and flattening once per candidate.
+    ``shared_scene=True`` computes those exact arrays once and concatenates them
+    with each candidate's prefix-dependent features.  The resulting rows are
+    numerically identical to repeated :func:`sample_to_feature` calls.
+    """
+    if not ds:
+        return np.zeros((0, 0), dtype=np.float32)
+    if not shared_scene:
+        return np.stack([sample_to_feature(d, cfg) for d in ds], axis=0)
+    shared = _shared_scene_feature_parts(ds[0], cfg)
+    rows = []
+    for d in ds:
+        x = np.concatenate([*_candidate_feature_parts(d, cfg), *shared], axis=0).astype(np.float32)
+        rows.append(np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0))
+    return np.stack(rows, axis=0)
 
 
 def _target_dim_from_cfg(cfg: dict, key: str, default: int) -> int:

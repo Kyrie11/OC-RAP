@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 from ocrap.algorithms.ocmero import oc_mero, torch_oc_mero
-from ocrap.models.data import OPTION_FEATURE_DIM, fix_sample_geometry, sample_to_feature
+from ocrap.models.data import OPTION_FEATURE_DIM, fix_sample_geometry, sample_to_feature, samples_to_feature_matrix
 from ocrap.models.ocrap import OCRAPModel
 
 
@@ -160,7 +160,13 @@ def teacher_prediction_from_sample(d: dict[str, Any], cfg: dict | None = None) -
 
 
 @torch.no_grad()
-def predict_samples(ds: list[dict[str, Any]], bundle: ModelBundle | None, cfg: dict | None = None) -> list[Prediction]:
+def predict_samples(
+    ds: list[dict[str, Any]],
+    bundle: ModelBundle | None,
+    cfg: dict | None = None,
+    *,
+    shared_scene_features: bool = False,
+) -> list[Prediction]:
     """Vectorized version of :func:`predict_sample`.
 
     Closed-loop evaluation replans many times and scores every candidate prefix at
@@ -174,7 +180,7 @@ def predict_samples(ds: list[dict[str, Any]], bundle: ModelBundle | None, cfg: d
     if bundle is None:
         return [teacher_prediction_from_sample(d, cfg) for d in ds]
 
-    xs = torch.from_numpy(np.stack([sample_to_feature(d, bundle.cfg) for d in ds], axis=0)).float().to(bundle.device)
+    xs = torch.from_numpy(samples_to_feature_matrix(ds, bundle.cfg, shared_scene=shared_scene_features)).float().to(bundle.device)
     fixed = [
         fix_sample_geometry(
             d,

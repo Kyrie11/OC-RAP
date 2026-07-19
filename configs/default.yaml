@@ -436,6 +436,17 @@ closed_loop:
   render: false
   save_trace_npz: false
   save_partial: true
+  # Scene/target-level resume. Completed rollouts are skipped; an interrupted
+  # in-progress scene is rerun from its deterministic Waymax reset state.
+  resume: true
+  resume_force: false
+  # Allows resuming old *.json.partial files created before fingerprints/journals.
+  resume_allow_legacy_partial: true
+  # fsync every scene journal record only when maximum crash durability is needed.
+  resume_fsync: false
+  # Full aggregate JSON snapshots are O(number_of_completed_scenes); write them
+  # every few scenes while the append-only journal records every completed scene.
+  partial_write_every_scenes: 4
   progress: true
   progress_every_steps: 5
   allow_infinite_gamma: false

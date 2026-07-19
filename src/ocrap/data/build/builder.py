@@ -1164,6 +1164,9 @@ def build_labeled_samples_for_candidate_indices(
     num_roots: int | None = None,
     num_options: int | None = None,
     prefixes: list | tuple | None = None,
+    recovery_options: list | tuple | None = None,
+    recovery_option_valid: np.ndarray | None = None,
+    assign_regime_labels: bool = True,
 ) -> list[DatasetSample]:
     """Materialize full teacher/OC-MERO labels for a small candidate subset.
 
@@ -1180,12 +1183,20 @@ def build_labeled_samples_for_candidate_indices(
         return []
     prefixes = list(prefixes) if prefixes is not None else generate_candidate_prefixes(history, cfg)
     n_options = int(num_options if num_options is not None else cfg.get("num_recovery_options", 24))
-    options = default_recovery_options(
-        n_options,
-        shoulder_available=bool(history.metadata.get("shoulder_available", True)),
-        adjacent_available=bool(history.metadata.get("adjacent_available", True)),
+    if recovery_options is None:
+        options = default_recovery_options(
+            n_options,
+            shoulder_available=bool(history.metadata.get("shoulder_available", True)),
+            adjacent_available=bool(history.metadata.get("adjacent_available", True)),
+        )
+    else:
+        options = list(recovery_options)
+        n_options = len(options)
+    option_valid = (
+        np.asarray(recovery_option_valid, dtype=bool)
+        if recovery_option_valid is not None
+        else option_valid_mask(options)
     )
-    option_valid = option_valid_mask(options)
     K = int(num_roots if num_roots is not None else cfg.get("num_roots", 8))
     audit_cfg = dict(cfg)
     quality = dict(audit_cfg.get("dataset_quality", {}) or {})
@@ -1210,7 +1221,7 @@ def build_labeled_samples_for_candidate_indices(
         sample = _materialize_sample(history, split_id, prefix, cid, audit_cfg, options, option_valid, K)
         sample.diagnostics["closed_loop_selected_label_audit"] = True
         selected.append(sample)
-    if selected:
+    if selected and assign_regime_labels:
         assign_regimes(selected, history, cfg)
     selected.sort(key=lambda sample: int(sample.candidate_index))
     return selected

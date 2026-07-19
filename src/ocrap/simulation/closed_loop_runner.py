@@ -3,7 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+import hashlib
 import json
+import os
 
 import numpy as np
 
@@ -571,6 +573,25 @@ def _sample_to_inference_dict(sample) -> dict[str, Any]:
     }
 
 
+def _sample_to_audit_dict(sample) -> dict[str, Any]:
+    """Small teacher-label view used by closed-loop audit metrics.
+
+    Audit metrics only consume root probabilities, margins, option validity and
+    the precomputed OC-MERO scalars.  Avoid copying history/map/BEV/future
+    diagnostics through ``to_npz_dict`` for every audited candidate.
+    """
+    return {
+        "candidate_index": np.int64(sample.candidate_index),
+        "root_probs": np.asarray(sample.root_probs, dtype=np.float32),
+        "root_valid": np.asarray(sample.root_valid, dtype=np.float32),
+        "m_star": np.asarray(sample.m_star, dtype=np.float32),
+        "option_valid": np.asarray(sample.option_valid, dtype=np.float32),
+        "r_dep_star": np.float32(sample.r_dep_star),
+        "r_orc_star": np.float32(sample.r_orc_star),
+        "oracle_gap_star": np.float32(sample.oracle_gap_star),
+    }
+
+
 def _select_prefix(
     samples: list,
     bundle: ModelBundle | None,
@@ -587,7 +608,7 @@ def _select_prefix(
         dicts = [_sample_to_dict(s) for s in samples]
     else:
         dicts = [_sample_to_inference_dict(s) for s in samples]
-    preds = predict_samples(dicts, bundle, cfg) if bundle is not None else [predict_sample(d, None, cfg) for d in dicts]
+    preds = predict_samples(dicts, bundle, cfg, shared_scene_features=True) if bundle is not None else [predict_sample(d, None, cfg) for d in dicts]
     items = []
     for s, d, pred in zip(samples, dicts, preds):
         teacher = teacher_prediction_from_sample(d, cfg) if compute_teacher_labels else None
@@ -828,6 +849,29 @@ def _rollout_one_scene(
     audit_bucket_name = bucket_name or str((cfg.get("selection", {}) or {}).get("active_bucket_name", "") or "")
     drs_gamma = _drs_success_gamma_for_bucket(gamma, cfg, audit_bucket_name)
 
+    # These settings are invariant across replans.  Constructing/deep-copying
+    # them at every simulator step was pure overhead.
+    eval_cfg = dict(cfg)
+    if cl_cfg.get("num_candidate_prefixes", None) is not None:
+        eval_cfg["num_candidate_prefixes"] = int(cl_cfg["num_candidate_prefixes"])
+    quality = dict(eval_cfg.get("dataset_quality", {}) or {})
+    quality.update({
+        "balanced_two_pass": False,
+        "max_accepted_prefixes_per_scene_time": 0,
+        "min_artifact_prefixes_per_scene_time": 0,
+        "min_nonartifact_prefixes_per_scene_time": 0,
+        "min_obs_negative_fraction_per_sample": 0.0,
+        "require_negative_deployable_sample": False,
+        "require_artifact_pairs": False,
+        "artifact_pair_mode": "tag",
+    })
+    eval_cfg["dataset_quality"] = quality
+    cl_num_options = cl_cfg.get("num_recovery_options", None)
+    feature_num_options = int(cl_num_options) if cl_num_options is not None else int(
+        eval_cfg.get("num_recovery_options", getattr(bundle.model, "num_options", 24) if bundle is not None else 24)
+    )
+    feature_num_roots = int(getattr(bundle.model, "num_roots", int(cfg.get("num_roots", 8)))) if bundle is not None else int(cfg.get("num_roots", 8))
+
     for step_idx in range(max_steps):
         if _scene_done(state):
             break
@@ -847,30 +891,13 @@ def _rollout_one_scene(
         hist.metadata["_waymax_state"] = state
         hist.metadata["_waymax_branch_from_current"] = True
         hist.metadata["waymax_planning_timestep"] = int(t)
-        eval_cfg = dict(cfg)
-        if cl_cfg.get("num_candidate_prefixes", None) is not None:
-            eval_cfg["num_candidate_prefixes"] = int(cl_cfg["num_candidate_prefixes"])
-        quality = dict(eval_cfg.get("dataset_quality", {}) or {})
-        quality.update({
-            "balanced_two_pass": False,
-            "max_accepted_prefixes_per_scene_time": 0,
-            "min_artifact_prefixes_per_scene_time": 0,
-            "min_nonartifact_prefixes_per_scene_time": 0,
-            "min_obs_negative_fraction_per_sample": 0.0,
-            "require_negative_deployable_sample": False,
-            "require_artifact_pairs": False,
-            "artifact_pair_mode": "tag",
-        })
-        eval_cfg["dataset_quality"] = quality
         if compute_teacher_labels:
             if external_sparse_labels:
-                cl_num_options = cl_cfg.get("num_recovery_options", None)
-                feature_num_options = int(cl_num_options) if cl_num_options is not None else int(eval_cfg.get("num_recovery_options", getattr(bundle.model, "num_options", 24) if bundle is not None else 24))
                 feature_samples = build_feature_only_samples_for_history(
                     hist,
                     "closed_loop",
                     eval_cfg,
-                    num_roots=int(getattr(bundle.model, "num_roots", int(cfg.get("num_roots", 8)))) if bundle is not None else int(cfg.get("num_roots", 8)),
+                    num_roots=feature_num_roots,
                     num_options=feature_num_options,
                 )
                 audit_indices = _preselect_external_label_candidate_indices(feature_samples, method, cfg)
@@ -882,20 +909,21 @@ def _rollout_one_scene(
                     "closed_loop",
                     eval_cfg,
                     audit_indices,
-                    num_roots=int(getattr(bundle.model, "num_roots", int(cfg.get("num_roots", 8)))) if bundle is not None else int(cfg.get("num_roots", 8)),
+                    num_roots=feature_num_roots,
                     num_options=feature_num_options,
                     prefixes=[s.prefix for s in feature_samples],
+                    recovery_options=feature_samples[0].recovery_options if feature_samples else None,
+                    recovery_option_valid=feature_samples[0].option_valid if feature_samples else None,
+                    assign_regime_labels=False,
                 )
             else:
                 samples = build_samples_for_history(hist, "closed_loop", eval_cfg)
         else:
-            cl_num_options = cl_cfg.get("num_recovery_options", None)
-            feature_num_options = int(cl_num_options) if cl_num_options is not None else int(eval_cfg.get("num_recovery_options", getattr(bundle.model, "num_options", 24) if bundle is not None else 24))
             samples = build_feature_only_samples_for_history(
                 hist,
                 "closed_loop",
                 eval_cfg,
-                num_roots=int(getattr(bundle.model, "num_roots", int(cfg.get("num_roots", 8)))) if bundle is not None else int(cfg.get("num_roots", 8)),
+                num_roots=feature_num_roots,
                 num_options=feature_num_options,
             )
         if not samples:
@@ -980,22 +1008,24 @@ def _rollout_one_scene(
         audit_paper_pcd_selector_miss = None
         if (selected_label_audit or coverage_label_audit) and (step_idx % audit_every_n_steps == 0) and (audit_max_labels <= 0 or audit_labels_done < audit_max_labels):
             try:
-                cl_num_options = cl_cfg.get("num_recovery_options", None)
-                feature_num_options = int(cl_num_options) if cl_num_options is not None else int(eval_cfg.get("num_recovery_options", getattr(bundle.model, "num_options", 24) if bundle is not None else 24))
                 audit_indices = ([int(selected_sample.candidate_index)] if selected_label_audit else _select_audit_candidate_indices(samples, info, selected_sample, cfg))
                 labeled = build_labeled_samples_for_candidate_indices(
                     hist,
                     "closed_loop",
                     eval_cfg,
                     audit_indices,
-                    num_roots=int(getattr(bundle.model, "num_roots", int(cfg.get("num_roots", 8)))) if bundle is not None else int(cfg.get("num_roots", 8)),
+                    num_roots=feature_num_roots,
                     num_options=feature_num_options,
                     prefixes=[s.prefix for s in samples],
+                    recovery_options=samples[0].recovery_options if samples else None,
+                    recovery_option_valid=samples[0].option_valid if samples else None,
+                    assign_regime_labels=False,
                 )
                 if labeled:
                     by_cid = {int(s.candidate_index): s for s in labeled}
+                    audit_data_by_cid = {int(s.candidate_index): _sample_to_audit_dict(s) for s in labeled}
                     selected_audit_sample = by_cid.get(int(selected_sample.candidate_index), labeled[0])
-                    selected_audit_data = selected_audit_sample.to_npz_dict()
+                    selected_audit_data = audit_data_by_cid[int(selected_audit_sample.candidate_index)]
                     pred_q = info["items"][sel_idx]["pred"].q
                     use_model_option = bool(method == "ocrap" and int(selected_sample.candidate_index) != 0)
                     q_eval = pred_q if use_model_option else selected_audit_data["m_star"]
@@ -1035,8 +1065,8 @@ def _rollout_one_scene(
                     pred_q_by_cid = {cid: item["pred"].q for cid, (_, item) in item_by_cid.items()}
                     selected_pred_q = info["items"][sel_idx]["pred"].q
                     for lab in labeled:
-                        ld = lab.to_npz_dict()
                         cid = int(lab.candidate_index)
+                        ld = audit_data_by_cid[cid]
                         macro_i = None
                         try:
                             macro_i = str(getattr(getattr(item_by_cid.get(cid, (None, {}))[1].get("sample", None), "prefix", None), "macro_name", "")) or None
@@ -1435,6 +1465,256 @@ def _aggregate_with_buckets(scene_results: list[dict[str, Any]], method: str, so
             result["per_bucket"][b] = _aggregate_scene_results(sub, method, source)
     return result
 
+_RESUME_OPERATIONAL_KEYS = {
+    "resume",
+    "resume_force",
+    "resume_allow_legacy_partial",
+    "resume_fsync",
+    "save_partial",
+    "partial_write_every_scenes",
+    "progress",
+    "progress_every_steps",
+    "keep_resume_files_after_success",
+}
+
+
+def _closed_loop_fingerprint(
+    dataset_patterns: str,
+    checkpoint: str | Path | None,
+    method: str,
+    target_spec: str,
+    cfg: dict,
+) -> str:
+    """Fingerprint all result-affecting inputs, excluding persistence controls."""
+    local = dict(cfg)
+    cl = dict(local.get("closed_loop", {}) or {})
+    for key in _RESUME_OPERATIONAL_KEYS:
+        cl.pop(key, None)
+    local["closed_loop"] = cl
+    ckpt_info: dict[str, Any] | None = None
+    if checkpoint:
+        cp = Path(checkpoint)
+        ckpt_info = {"path": str(cp.resolve())}
+        try:
+            st = cp.stat()
+            ckpt_info.update({"size": int(st.st_size), "mtime_ns": int(st.st_mtime_ns)})
+        except OSError:
+            ckpt_info["missing"] = True
+    payload = {
+        "version": 1,
+        "dataset_patterns": str(dataset_patterns),
+        "checkpoint": ckpt_info,
+        "method": str(method),
+        "target_spec": str(target_spec or ""),
+        "config": local,
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str, ensure_ascii=False)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _scene_resume_key(scene: dict[str, Any]) -> str:
+    target_key = str(scene.get("target_key", "") or "").strip()
+    if target_key:
+        return f"target:{target_key}"
+    scene_id = str(scene.get("scene_id", "") or "").strip()
+    bucket = str(scene.get("bucket_name", "") or "").strip()
+    time_index = scene.get("target_time_index", None)
+    if bucket or time_index is not None:
+        return f"bucket:{bucket}|scene:{scene_id}|t:{time_index}"
+    return f"scene:{scene_id}"
+
+
+def _expected_resume_key(scene_id: str, target: dict[str, Any]) -> str:
+    target_key = str(target.get("target_key", "") or "").strip()
+    if target_key:
+        return f"target:{target_key}"
+    bucket = str(target.get("bucket_name", "") or "").strip()
+    time_index = target.get("time_index", None)
+    if bucket or time_index is not None:
+        return f"bucket:{bucket}|scene:{scene_id}|t:{time_index}"
+    return f"scene:{scene_id}"
+
+
+def _read_json_if_valid(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return None
+
+
+def _resume_metadata_compatible(
+    data: dict[str, Any],
+    *,
+    fingerprint: str,
+    method: str,
+    target_spec: str,
+    force: bool,
+    allow_legacy: bool,
+    source_name: str,
+) -> tuple[bool, bool]:
+    """Return (compatible, legacy_without_fingerprint)."""
+    saved_fp = str(data.get("run_fingerprint", "") or "")
+    if saved_fp:
+        if saved_fp == fingerprint or force:
+            return True, False
+        raise ValueError(
+            f"Refusing to resume {source_name}: run_fingerprint differs. "
+            "Use a new --output path, or set closed_loop.resume_force=true only after verifying the configs are evaluation-equivalent."
+        )
+    if not allow_legacy and not force:
+        return False, True
+    saved_method = str(data.get("method", method) or method).lower()
+    saved_target = str(data.get("bucket_dataset", target_spec) or "")
+    compatible = (saved_method == str(method).lower()) and (saved_target == str(target_spec or ""))
+    if not compatible and not force:
+        raise ValueError(
+            f"Refusing to resume legacy {source_name}: method or bucket_dataset differs. "
+            "Use a new --output path or set closed_loop.resume_force=true after manual verification."
+        )
+    return bool(compatible or force), True
+
+
+def _load_resume_scene_results(
+    *,
+    output_path: Path,
+    partial_path: Path,
+    journal_path: Path,
+    fingerprint: str,
+    method: str,
+    target_spec: str,
+    force: bool,
+    allow_legacy: bool,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Load completed scenes from final/partial snapshots and append-only journal."""
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    meta: dict[str, Any] = {"sources": [], "legacy_sources": [], "prior_raw_scenarios_seen": 0}
+
+    def add_scenes(data: dict[str, Any], source_name: str) -> None:
+        compatible, legacy = _resume_metadata_compatible(
+            data,
+            fingerprint=fingerprint,
+            method=method,
+            target_spec=target_spec,
+            force=force,
+            allow_legacy=allow_legacy,
+            source_name=source_name,
+        )
+        if not compatible:
+            return
+        scenes = data.get("scenes", [])
+        if not isinstance(scenes, list):
+            return
+        meta["sources"].append(source_name)
+        if legacy:
+            meta["legacy_sources"].append(source_name)
+        try:
+            meta["prior_raw_scenarios_seen"] = max(
+                int(meta["prior_raw_scenarios_seen"]), int(data.get("raw_scenarios_seen", 0) or 0)
+            )
+        except Exception:
+            pass
+        for scene in scenes:
+            if not isinstance(scene, dict):
+                continue
+            key = _scene_resume_key(scene)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            merged.append(scene)
+
+    # A legacy interrupted run may coexist with an older completed final file at
+    # the same output path. Prefer the partial snapshot in that case; new files
+    # carry fingerprints and can be safely merged in either order.
+    partial_data = _read_json_if_valid(partial_path)
+    final_data = _read_json_if_valid(output_path)
+    if partial_data is not None:
+        add_scenes(partial_data, "partial")
+    if final_data is not None:
+        final_has_fp = bool(str(final_data.get("run_fingerprint", "") or ""))
+        if final_has_fp or partial_data is None:
+            add_scenes(final_data, "final")
+
+    if journal_path.exists():
+        loaded_any = False
+        legacy_journal = False
+        try:
+            with journal_path.open("r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError:
+                        # A kill during append can leave only the final line torn.
+                        continue
+                    if not isinstance(record, dict) or not isinstance(record.get("scene"), dict):
+                        continue
+                    saved_fp = str(record.get("run_fingerprint", "") or "")
+                    if saved_fp and saved_fp != fingerprint and not force:
+                        raise ValueError(
+                            "Refusing to resume scene journal: run_fingerprint differs. "
+                            "Use a new --output path or closed_loop.resume_force=true after verification."
+                        )
+                    if not saved_fp:
+                        if not allow_legacy and not force:
+                            continue
+                        legacy_journal = True
+                    scene = record["scene"]
+                    key = _scene_resume_key(scene)
+                    if key and key not in seen:
+                        seen.add(key)
+                        merged.append(scene)
+                        loaded_any = True
+        except OSError:
+            pass
+        if loaded_any:
+            meta["sources"].append("journal")
+        if legacy_journal:
+            meta["legacy_sources"].append("journal")
+    return merged, meta
+
+
+def _append_scene_journal(path: Path, fingerprint: str, scene: dict[str, Any], *, fsync: bool = False) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {"version": 1, "run_fingerprint": fingerprint, "resume_key": _scene_resume_key(scene), "scene": scene}
+    encoded = json.dumps(record, sort_keys=True, ensure_ascii=False, default=str) + "\n"
+    with path.open("a", encoding="utf-8") as f:
+        f.write(encoded)
+        f.flush()
+        if fsync:
+            os.fsync(f.fileno())
+
+
+def _write_closed_loop_progress(
+    path: Path,
+    *,
+    fingerprint: str,
+    status: str,
+    completed: int,
+    total: int,
+    current: dict[str, Any] | None = None,
+    resumed: int = 0,
+) -> None:
+    write_json(
+        {
+            "version": 1,
+            "run_fingerprint": fingerprint,
+            "status": status,
+            "completed_rollouts": int(completed),
+            "requested_rollouts": int(total),
+            "resumed_rollouts": int(resumed),
+            "current": current,
+        },
+        path,
+    )
+
+
 def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, output: str | Path, cfg: dict) -> dict[str, Any]:
     if not str(dataset_patterns).strip() or str(dataset_patterns).strip().startswith("@"):
         raise ValueError(
@@ -1514,31 +1794,107 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
         source = "model" if bundle is not None else "teacher_fallback"
     output_path = Path(output)
     partial_path = output_path.with_suffix(output_path.suffix + ".partial")
+    journal_path = output_path.with_suffix(output_path.suffix + ".scenes.jsonl")
+    progress_path = output_path.with_suffix(output_path.suffix + ".progress.json")
     save_partial = bool(cl_cfg.get("save_partial", True))
     progress = bool(cl_cfg.get("progress", True))
+    resume = bool(cl_cfg.get("resume", True))
+    resume_force = bool(cl_cfg.get("resume_force", False))
+    resume_allow_legacy = bool(cl_cfg.get("resume_allow_legacy_partial", True))
+    resume_fsync = bool(cl_cfg.get("resume_fsync", False))
+    partial_every = max(1, int(cl_cfg.get("partial_write_every_scenes", 4) or 4))
     target_spec = str(cl_cfg.get("bucket_dataset", cl_cfg.get("target_dataset", "")) or "").strip()
     targets = _load_closed_loop_targets(target_spec, local)
     target_map: dict[str, list[dict[str, Any]]] = {}
     for t in targets:
         target_map.setdefault(str(t["scene_id"]), []).append(t)
-    scene_results = []
-    raw_seen = 0
-    matched_targets = 0
+    run_fingerprint = _closed_loop_fingerprint(dataset_patterns, checkpoint, method, target_spec, local)
+    total_rollouts = max_rollouts if targets else max_scenes
+    resume_meta: dict[str, Any] = {"sources": [], "legacy_sources": [], "prior_raw_scenarios_seen": 0}
+    if resume:
+        scene_results, resume_meta = _load_resume_scene_results(
+            output_path=output_path,
+            partial_path=partial_path,
+            journal_path=journal_path,
+            fingerprint=run_fingerprint,
+            method=method,
+            target_spec=target_spec,
+            force=resume_force,
+            allow_legacy=resume_allow_legacy,
+        )
+    else:
+        scene_results = []
+        for stale in (partial_path, journal_path, progress_path):
+            try:
+                stale.unlink(missing_ok=True)
+            except OSError:
+                pass
+    completed_keys = {_scene_resume_key(scene) for scene in scene_results}
+    resumed_rollouts = len(scene_results)
+    raw_seen_this_run = 0
+    raw_seen = int(resume_meta.get("prior_raw_scenarios_seen", 0) or 0)
+    matched_targets = sum(1 for scene in scene_results if scene.get("target_key") or scene.get("bucket_name")) if targets else 0
+    _write_closed_loop_progress(
+        progress_path,
+        fingerprint=run_fingerprint,
+        status="resuming" if resumed_rollouts else "running",
+        completed=len(scene_results),
+        total=total_rollouts,
+        resumed=resumed_rollouts,
+    )
+    if progress and resumed_rollouts:
+        print({
+            "event": "closed_loop_resume_loaded",
+            "completed_rollouts": resumed_rollouts,
+            "sources": resume_meta.get("sources", []),
+            "legacy_sources": resume_meta.get("legacy_sources", []),
+            "journal": str(journal_path),
+        }, flush=True)
     if progress and targets:
         print({"event": "closed_loop_bucket_targets_loaded", "num_targets": len(targets), "num_target_scenes": len(target_map), "max_rollouts": max_rollouts, "raw_max_scenarios": raw_max_scenarios}, flush=True)
+    new_scenes_since_partial = 0
     for i, raw in enumerate(iter_waymax_womd_scenarios(dataset_patterns, max_scenarios=raw_max_scenarios if targets else max_scenes, parser_cfg=local)):
-        raw_seen += 1
+        raw_seen_this_run += 1
+        raw_seen = max(raw_seen, raw_seen_this_run)
         raw_targets = target_map.get(str(raw.scenario_id), []) if targets else [{"bucket_name": None, "time_index": None, "target_key": None}]
         if targets and not raw_targets:
             continue
         for target in raw_targets:
-            if len(scene_results) >= (max_rollouts if targets else max_scenes):
+            if len(scene_results) >= total_rollouts:
                 break
+            resume_key = _expected_resume_key(str(raw.scenario_id), target)
+            if resume_key in completed_keys:
+                if progress:
+                    print({
+                        "event": "closed_loop_scene_resume_skip",
+                        "scene_id": str(raw.scenario_id),
+                        "bucket": target.get("bucket_name"),
+                        "start_time_index": target.get("time_index"),
+                        "resume_key": resume_key,
+                    }, flush=True)
+                continue
             rank = len(scene_results)
+            current_progress = {
+                "scene_rank": rank,
+                "raw_rank": i,
+                "scene_id": str(raw.scenario_id),
+                "bucket": target.get("bucket_name"),
+                "start_time_index": target.get("time_index"),
+                "resume_key": resume_key,
+            }
+            _write_closed_loop_progress(
+                progress_path,
+                fingerprint=run_fingerprint,
+                status="running_scene",
+                completed=len(scene_results),
+                total=total_rollouts,
+                current=current_progress,
+                resumed=resumed_rollouts,
+            )
             if progress:
-                print({"event": "closed_loop_scene_start", "scene_rank": rank, "raw_rank": i, "scene_id": str(raw.scenario_id), "bucket": target.get("bucket_name"), "start_time_index": target.get("time_index"), "max_rollouts": max_rollouts if targets else max_scenes}, flush=True)
+                print({"event": "closed_loop_scene_start", **current_progress, "max_rollouts": total_rollouts}, flush=True)
             gamma_i = _gamma_for_bucket(gamma, local, target.get("bucket_name"))
-            scene_results.append(_rollout_one_scene(
+            scene_result = _rollout_one_scene(
                 raw,
                 rank,
                 bundle,
@@ -1551,26 +1907,83 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
                 external_model=external_model,
                 external_model_cfg=external_model_cfg,
                 external_device=external_device,
-            ))
+            )
+            scene_results.append(scene_result)
+            completed_keys.add(_scene_resume_key(scene_result))
             matched_targets += int(bool(targets))
-            if save_partial:
+            new_scenes_since_partial += 1
+
+            # The JSONL journal records every completed rollout in O(scene_size)
+            # time.  Full aggregate snapshots are deliberately less frequent so
+            # a long run does not repeatedly serialize all previous scenes.
+            if resume or save_partial:
+                _append_scene_journal(journal_path, run_fingerprint, scene_result, fsync=resume_fsync)
+            if save_partial and new_scenes_since_partial >= partial_every:
                 partial = _aggregate_with_buckets(scene_results, method, source)
-                partial["scenes"] = scene_results
-                partial["partial"] = True
-                partial["bucket_dataset"] = target_spec or None
-                partial["bucket_target_count"] = len(targets)
-                partial["bucket_matched_rollouts"] = matched_targets
-                partial["raw_scenarios_seen"] = raw_seen
-                write_json(partial, partial_path)
+                partial.update({
+                    "scenes": scene_results,
+                    "partial": True,
+                    "run_fingerprint": run_fingerprint,
+                    "resume_supported": True,
+                    "bucket_dataset": target_spec or None,
+                    "bucket_target_count": len(targets),
+                    "bucket_matched_rollouts": matched_targets,
+                    "raw_scenarios_seen": raw_seen,
+                    "raw_scenarios_seen_this_run": raw_seen_this_run,
+                })
+                write_json(partial, partial_path, fsync=resume_fsync)
+                new_scenes_since_partial = 0
+            _write_closed_loop_progress(
+                progress_path,
+                fingerprint=run_fingerprint,
+                status="running",
+                completed=len(scene_results),
+                total=total_rollouts,
+                resumed=resumed_rollouts,
+            )
             if progress:
-                print({"event": "closed_loop_scene_done", "scene_rank": rank, "num_decisions": scene_results[-1].get("num_decisions", 0)}, flush=True)
-        if len(scene_results) >= (max_rollouts if targets else max_scenes):
+                print({"event": "closed_loop_scene_done", "scene_rank": rank, "num_decisions": scene_result.get("num_decisions", 0), "completed_rollouts": len(scene_results)}, flush=True)
+        if len(scene_results) >= total_rollouts:
             break
+
+    # Always leave a final valid partial snapshot, even when the last group has
+    # fewer than partial_write_every_scenes rollouts.
+    if save_partial:
+        partial = _aggregate_with_buckets(scene_results, method, source)
+        partial.update({
+            "scenes": scene_results,
+            "partial": True,
+            "run_fingerprint": run_fingerprint,
+            "resume_supported": True,
+            "bucket_dataset": target_spec or None,
+            "bucket_target_count": len(targets),
+            "bucket_matched_rollouts": matched_targets,
+            "raw_scenarios_seen": raw_seen,
+            "raw_scenarios_seen_this_run": raw_seen_this_run,
+        })
+        write_json(partial, partial_path, fsync=resume_fsync)
     result = _aggregate_with_buckets(scene_results, method, source)
     result["bucket_dataset"] = target_spec or None
     result["bucket_target_count"] = len(targets)
     result["bucket_matched_rollouts"] = matched_targets
     result["raw_scenarios_seen"] = raw_seen
+    result["raw_scenarios_seen_this_run"] = raw_seen_this_run
+    result["run_fingerprint"] = run_fingerprint
+    result["resume_supported"] = True
+    result["resume"] = {
+        "enabled": resume,
+        "resumed_rollouts": int(resumed_rollouts),
+        "sources": list(resume_meta.get("sources", [])),
+        "legacy_sources": list(resume_meta.get("legacy_sources", [])),
+        "partial_path": str(partial_path),
+        "journal_path": str(journal_path),
+        "progress_path": str(progress_path),
+        "granularity": "completed_scene_or_bucket_target",
+    }
+    if resume_meta.get("legacy_sources"):
+        result.setdefault("warnings", []).append(
+            "Resumed from a legacy snapshot without run_fingerprint. Method and bucket_dataset were checked, but use a new output path when checkpoint/result-affecting config changed."
+        )
     if targets and matched_targets == 0:
         result.setdefault("warnings", []).append("No offline bucket scene_id matched the supplied WOMD raw dataset/pattern. Check WOMD_VAL vs WOMD_VAL_INTERACTIVE and scenario_start_index/raw_max_scenarios.")
     result["scenes"] = scene_results
@@ -1585,6 +1998,10 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
         "teacher_metrics_stride": int(eff_wx.get("teacher_metrics_stride", 0) or 0),
         "teacher_rollout_top_k_options": int(eff_wx.get("teacher_rollout_top_k_options", 0) or 0),
         "dataloader_include_sdc_paths": bool(eff_wx.get("dataloader_include_sdc_paths", False)),
+        "shared_scene_feature_extraction": True,
+        "audit_lightweight_serialization": True,
+        "partial_write_every_scenes": int(partial_every),
+        "scene_journal": True,
     }
     result["gamma_rec_by_bucket"] = (local.get("selection", {}) or {}).get("gamma_rec_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {}
     result["selector_config"] = {
@@ -1623,5 +2040,13 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
         "closed_loop.label_mode=fast skips expensive per-candidate OC-MERO teacher labels inside the online loop. Use closed_loop.label_mode=selected to label only the executed candidate; use label_mode=selected_topk/coverage to label selected plus a small diagnostic top-k subset; use label_mode=all only for tiny exhaustive audits.",
         "Non-SDC actors use Waymax/default log-playback dynamics unless controlled by the environment configuration.",
     ]
-    write_json(result, output)
+    write_json(result, output_path, fsync=resume_fsync)
+    _write_closed_loop_progress(
+        progress_path,
+        fingerprint=run_fingerprint,
+        status="complete",
+        completed=len(scene_results),
+        total=total_rollouts,
+        resumed=resumed_rollouts,
+    )
     return result
