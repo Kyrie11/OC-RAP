@@ -1234,3 +1234,114 @@ def observation_consistent_recovery_advantage_loss(
     w = torch.as_tensor(weights, dtype=losses[0].dtype, device=losses[0].device)
     stacked = torch.stack(losses)
     return (stacked * w).sum() / w.sum().clamp_min(1.0e-6)
+
+
+
+def direct_uncertainty_recovery_value_loss(
+    pred_logit: torch.Tensor,
+    pred_logvar: torch.Tensor,
+    teacher_r_dep: torch.Tensor,
+    teacher_r_orc: torch.Tensor,
+    teacher_q: torch.Tensor,
+    root_probs: torch.Tensor,
+    root_valid: torch.Tensor,
+    option_valid: torch.Tensor,
+    scene_hash: torch.Tensor,
+    time_index: torch.Tensor,
+    macro_type_id: torch.Tensor,
+    is_nominal: torch.Tensor,
+    bucket_id: torch.Tensor,
+    *,
+    macro_ids: tuple[int, ...] = (2, 3, 5, 7),
+    bucket_ids: tuple[int, ...] = (1, 2),
+    temperature: float = 0.12,
+    positive_gain: float = 0.03,
+    negative_gain: float = 0.02,
+    rank_margin: float = 0.04,
+    point_weight: float = 1.0,
+    listwise_weight: float = 1.0,
+    advantage_weight: float = 1.0,
+    false_positive_weight: float = 1.0,
+    variance_floor: float = 0.0025,
+    success_gamma: float = 0.0,
+    success_temperature: float = 0.25,
+) -> torch.Tensor:
+    """Direct, uncertainty-aware observation-consistent recovery value.
+
+    OC-MERO answers whether a candidate has a deployable shared recovery option;
+    this head answers a different question: among already feasible candidates,
+    which prefix has the better *counterfactual deployable outcome*?  Decoupling
+    the two prevents ranking gradients from corrupting R_dep/gap calibration.
+
+    The target is the same observation-consistent teacher PCD used by the audit.
+    Pointwise heteroscedastic regression learns calibrated uncertainty, listwise
+    distillation learns the full candidate ordering, and the nominal/recovery
+    term provides an asymmetric intervention boundary.
+    """
+    if pred_logit.numel() <= 1:
+        return pred_logit.sum() * 0.0
+    mean = torch.sigmoid(pred_logit.float().reshape(-1))
+    logvar = pred_logvar.float().reshape(-1).clamp(-7.0, 2.0)
+    trd = torch.nan_to_num(teacher_r_dep.float().reshape(-1), nan=-20.0, posinf=20.0, neginf=-20.0)
+    tro = torch.nan_to_num(teacher_r_orc.float().reshape(-1), nan=-20.0, posinf=20.0, neginf=-20.0)
+    with torch.no_grad():
+        teacher_drs = _differentiable_shared_success(
+            teacher_q, root_probs, root_valid, option_valid,
+            gamma=success_gamma, temperature=max(0.08, success_temperature * 0.5),
+        ).reshape(-1)
+    sh, ti = scene_hash.reshape(-1), time_index.reshape(-1)
+    mac = macro_type_id.reshape(-1)
+    isn = is_nominal.float().reshape(-1) > 0.5
+    bid = bucket_id.reshape(-1)
+    n = min(mean.numel(), logvar.numel(), trd.numel(), tro.numel(), teacher_drs.numel(), sh.numel(), ti.numel(), mac.numel(), isn.numel(), bid.numel())
+    mean, logvar, trd, tro, teacher_drs = mean[:n], logvar[:n], trd[:n], tro[:n], teacher_drs[:n]
+    sh, ti, mac, isn, bid = sh[:n], ti[:n], mac[:n], isn[:n], bid[:n]
+    bucket_mask = torch.zeros((n,), dtype=torch.bool, device=mean.device)
+    for b in tuple(int(x) for x in bucket_ids):
+        bucket_mask |= bid == b
+    finite = bucket_mask & torch.isfinite(mean) & torch.isfinite(logvar) & torch.isfinite(trd) & torch.isfinite(tro) & torch.isfinite(teacher_drs)
+    if not bool(finite.any()):
+        return pred_logit.sum() * 0.0
+    teacher_gap = torch.clamp(tro - trd, min=0.0)
+    target = _torch_pcd_score(teacher_drs, trd, teacher_gap).detach().clamp(0.0, 1.0)
+    variance = torch.exp(logvar).clamp_min(float(variance_floor))
+    point = 0.5 * ((mean - target) ** 2 / variance + torch.log(variance))
+    point_loss = point[finite].mean()
+
+    macro_mask = torch.zeros((n,), dtype=torch.bool, device=mean.device)
+    for m in tuple(int(x) for x in macro_ids):
+        macro_mask |= mac == m
+    list_losses: list[torch.Tensor] = []
+    adv_losses: list[torch.Tensor] = []
+    keys = torch.stack([sh, ti], dim=1)
+    tau = max(float(temperature), 1.0e-3)
+    for key in torch.unique(keys[finite], dim=0):
+        idx = torch.where(finite & (sh == key[0]) & (ti == key[1]))[0]
+        if idx.numel() < 2:
+            continue
+        # Soft listwise targets retain information from all candidates rather
+        # than only the teacher-best pair.
+        teacher_prob = torch.softmax(target[idx] / tau, dim=0)
+        pred_log_prob = torch.log_softmax(mean[idx] / tau, dim=0)
+        list_losses.append(-(teacher_prob * pred_log_prob).sum())
+        noms = idx[isn[idx]]
+        recs = idx[macro_mask[idx]]
+        if noms.numel() == 0 or recs.numel() == 0:
+            continue
+        nom = noms[0]
+        rec = recs[torch.argmax(target[recs])]
+        t_adv = target[rec] - target[nom]
+        p_adv = mean[rec] - mean[nom]
+        pair_var = variance[rec] + variance[nom]
+        # The learned standard deviation raises the bar for intervention rather
+        # than becoming an unconstrained confidence score.
+        p_adv_lcb = p_adv - torch.sqrt(pair_var.clamp_min(float(variance_floor)))
+        if float(t_adv.item()) >= float(positive_gain):
+            adv_losses.append(F.smooth_l1_loss(p_adv, t_adv) + F.relu(float(rank_margin) - p_adv_lcb))
+        elif float(t_adv.item()) <= -float(negative_gain):
+            adv_losses.append(float(false_positive_weight) * F.relu(float(rank_margin) + p_adv_lcb))
+        else:
+            adv_losses.append(0.25 * F.smooth_l1_loss(p_adv, t_adv))
+    list_loss = torch.stack(list_losses).mean() if list_losses else pred_logit.sum() * 0.0
+    adv_loss = torch.stack(adv_losses).mean() if adv_losses else pred_logit.sum() * 0.0
+    return float(point_weight) * point_loss + float(listwise_weight) * list_loss + float(advantage_weight) * adv_loss

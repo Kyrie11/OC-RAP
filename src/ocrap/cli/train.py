@@ -31,6 +31,7 @@ from ocrap.models.losses import (
     direct_teacher_pcd_loss,
     macro_shared_success_calibration_loss,
     observation_consistent_recovery_advantage_loss,
+    direct_uncertainty_recovery_value_loss,
 )
 from ocrap.models.ocrap import OCRAPModel
 from ocrap.utils.seed import seed_everything
@@ -526,6 +527,31 @@ def _epoch(
             success_gamma=option_gamma,
             success_temperature=option_temperature,
         )
+        if "direct_recovery_value_logit" in out:
+            loss_direct_value = direct_uncertainty_recovery_value_loss(
+                out["direct_recovery_value_logit"], out["direct_recovery_value_logvar"],
+                batch["r_dep_star"].float(), batch["r_orc_star"].float(), teacher_q,
+                batch["root_probs"].float(), batch["root_valid"], batch["option_valid"],
+                batch["scene_hash"], batch["time_index"],
+                batch.get("prefix_macro_type_id", batch.get("candidate_index", torch.zeros_like(batch["time_index"]))),
+                batch["is_nominal"].float(),
+                batch.get("bucket_id", torch.full_like(batch["time_index"], 3)),
+                macro_ids=_parse_int_tuple(tcfg.get("direct_value_macro_ids", "2,3,5,7"), (2, 3, 5, 7)),
+                bucket_ids=_parse_int_tuple(tcfg.get("direct_value_bucket_ids", "1,2"), (1, 2)),
+                temperature=float(tcfg.get("direct_value_temperature", 0.12)),
+                positive_gain=float(tcfg.get("direct_value_positive_gain", 0.03)),
+                negative_gain=float(tcfg.get("direct_value_negative_gain", 0.02)),
+                rank_margin=float(tcfg.get("direct_value_rank_margin", 0.04)),
+                point_weight=float(tcfg.get("direct_value_point_weight", 1.0)),
+                listwise_weight=float(tcfg.get("direct_value_listwise_weight", 1.0)),
+                advantage_weight=float(tcfg.get("direct_value_advantage_weight", 1.0)),
+                false_positive_weight=float(tcfg.get("direct_value_false_positive_weight", 1.0)),
+                variance_floor=float(tcfg.get("direct_value_variance_floor", 0.0025)),
+                success_gamma=option_gamma,
+                success_temperature=option_temperature,
+            )
+        else:
+            loss_direct_value = r_dep.sum() * 0.0
         if bool((cfg.get("ablation", {}) or {}).get("without_anti_oracle", False)):
             loss_art = loss_art * 0.0
             loss_gap = loss_gap * 0.0
@@ -554,6 +580,7 @@ def _epoch(
             + float(lw.get("ddc", 0.0)) * loss_ddc
             + float(lw.get("teacher_pcd_direct", 0.0)) * loss_teacher_pcd_direct
             + float(lw.get("recovery_advantage", 0.0)) * loss_recovery_advantage
+            + float(lw.get("direct_recovery_value", 0.0)) * loss_direct_value
             + float(lw.get("utility", 0.2)) * loss_util
         )
         if training:
@@ -592,6 +619,7 @@ def _epoch(
             "loss_ddc": loss_ddc.item(),
             "loss_teacher_pcd_direct": loss_teacher_pcd_direct.item(),
             "loss_recovery_advantage": loss_recovery_advantage.item(),
+            "loss_direct_recovery_value": loss_direct_value.item(),
             "loss_utility": loss_util.item(),
             "pred_r_dep_mean": r_dep.mean().item(),
             "teacher_r_dep_mean": batch["r_dep_star"].float().mean().item(),
@@ -609,11 +637,12 @@ class SceneTimeBatchSampler(Sampler[list[int]]):
     in the same mini-batch.  Standard random sampling destroys that structure.
     """
 
-    def __init__(self, groups: list[list[int]], batch_size: int, *, group_weights: list[float] | None = None, replacement: bool = True, shuffle_within_group: bool = True):
+    def __init__(self, groups: list[list[int]], batch_size: int, *, group_weights: list[float] | None = None, replacement: bool = True, shuffle_within_group: bool = True, shuffle_groups: bool = True):
         self.groups = [list(g) for g in groups if g]
         self.batch_size = max(1, int(batch_size))
         self.replacement = bool(replacement)
         self.shuffle_within_group = bool(shuffle_within_group)
+        self.shuffle_groups = bool(shuffle_groups)
         if group_weights is None or len(group_weights) != len(self.groups):
             self.group_weights = torch.ones((len(self.groups),), dtype=torch.double)
         else:
@@ -630,8 +659,10 @@ class SceneTimeBatchSampler(Sampler[list[int]]):
             return
         if self.replacement:
             order = torch.multinomial(self.group_weights, num_samples=len(self.groups), replacement=True).tolist()
-        else:
+        elif self.shuffle_groups:
             order = torch.randperm(len(self.groups)).tolist()
+        else:
+            order = list(range(len(self.groups)))
         batch: list[int] = []
         for gi in order:
             inds = list(self.groups[int(gi)])
@@ -873,6 +904,7 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         d_signature=d_signature,
         d_future_signature=d_future_signature,
         option_feature_dim=OPTION_FEATURE_DIM,
+        direct_recovery_value_head=bool(model_cfg.get("direct_recovery_value_head", False)),
     ).to(device)
     tcfg = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
 
@@ -930,7 +962,21 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         sampler = _make_sampler(train_ds, cfg)
         print({"event": "sampler_scan_done", "sampler": "weighted" if sampler is not None else "none"}, flush=True)
         train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=sampler is None, sampler=sampler, num_workers=num_workers, collate_fn=_collate, pin_memory=(device.type == "cuda"))
-    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers, collate_fn=_collate, pin_memory=(device.type == "cuda"))
+    if bool(tcfg.get("group_batching", False)):
+        val_cfg = dict(cfg)
+        val_tcfg = dict(tcfg)
+        val_tcfg["group_batching_replacement"] = False
+        val_tcfg["group_batch_hard_boost"] = 0.0
+        val_cfg["training"] = val_tcfg
+        val_group_sampler = _make_group_batch_sampler(val_ds, val_cfg, batch_size)
+        if val_group_sampler is not None:
+            val_group_sampler.shuffle_within_group = False
+            val_group_sampler.shuffle_groups = False
+            val_loader = DataLoader(val_ds, batch_sampler=val_group_sampler, num_workers=num_workers, collate_fn=_collate, pin_memory=(device.type == "cuda"))
+        else:
+            val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers, collate_fn=_collate, pin_memory=(device.type == "cuda"))
+    else:
+        val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers, collate_fn=_collate, pin_memory=(device.type == "cuda"))
     epochs = int(tcfg.get("epochs", 10))
     best_val = float("inf")
     best_epoch = 0
@@ -954,6 +1000,7 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "d_signature": d_signature,
             "d_future_signature": d_future_signature,
             "option_feature_dim": OPTION_FEATURE_DIM,
+            "direct_recovery_value_head": bool(model_cfg.get("direct_recovery_value_head", False)),
             "model_state": model.state_dict(),
             "optimizer_state": opt.state_dict(),
             "epoch": int(ep),

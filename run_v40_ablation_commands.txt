@@ -1,0 +1,62 @@
+# Development-scale v40 ablations. Run after choosing CHOSEN=head_only or adapter_light.
+# Each invocation internally uses both GPUs, so run these sequentially.
+set -euo pipefail
+CHOSEN=${CHOSEN:-head_only}
+BASE="runs/ocrap_v40_ocuvra_${CHOSEN}"
+COMMON_ENV=(
+  BASE_RUN="$BASE"
+  RUN_SCALAR_BASELINES=1
+  AUDIT_TARGETS=32
+  AUDIT_LABELS=384
+  AUDIT_MAX_ROLLOUTS=12
+  AUDIT_MAX_STEPS=20
+  AUDIT_EVERY_N_STEPS=4
+  RUN_NEAR_TAIL=true
+  RUN_NEAR_CHALLENGE=true
+  CONTACT_BRAKE_TAIL=true
+  CONTACT_TAIL_BYPASS_PCD_GAIN=false
+)
+
+# A0: certificate-only control. Same checkpoint, direct value never enters selection.
+env "${COMMON_ENV[@]}" \
+  RUN="runs/ocrap_v40_ablate_no_direct" \
+  RUN_DIRECT_VALUE=false \
+  bash scripts/run_ocrap_v40_ocuvra.sh
+
+# A1: direct point estimate without uncertainty. Tests whether the LCB is needed.
+env "${COMMON_ENV[@]}" \
+  RUN="runs/ocrap_v40_ablate_no_uncertainty" \
+  RUN_DIRECT_VALUE=true \
+  NEAR_DIRECT_LCB_Z=0 \
+  CONTACT_DIRECT_LCB_Z=0 \
+  bash scripts/run_ocrap_v40_ocuvra.sh
+
+# A2: uncalibrated fixed-z uncertainty. Compare against validation-calibrated z.
+env "${COMMON_ENV[@]}" \
+  RUN="runs/ocrap_v40_ablate_fixed_z" \
+  RUN_DIRECT_VALUE=true \
+  NEAR_DIRECT_LCB_Z=1.0 \
+  CONTACT_DIRECT_LCB_Z=1.0 \
+  bash scripts/run_ocrap_v40_ocuvra.sh
+
+# A3 (main method): automatically reads scene-time conformal z from BASE/calibration.
+env "${COMMON_ENV[@]}" \
+  RUN="runs/ocrap_v40_main_calibrated_lcb" \
+  RUN_DIRECT_VALUE=true \
+  bash scripts/run_ocrap_v40_ocuvra.sh
+
+# Pair each ablation against its own scalar output before comparing effects.
+for RUN in \
+  runs/ocrap_v40_ablate_no_direct \
+  runs/ocrap_v40_ablate_no_uncertainty \
+  runs/ocrap_v40_ablate_fixed_z \
+  runs/ocrap_v40_main_calibrated_lcb; do
+  python tools/compare_paired_closed_loop.py \
+    "$RUN/audit_near_contact_selected_topk_v40_scalar.json" \
+    "$RUN/audit_near_contact_selected_topk_v40_v40.json" \
+    --output "$RUN/paired_near_v40.json"
+  python tools/compare_paired_closed_loop.py \
+    "$RUN/audit_contact_selected_topk_v40_scalar.json" \
+    "$RUN/audit_contact_selected_topk_v40_v40.json" \
+    --output "$RUN/paired_contact_v40.json"
+done

@@ -633,6 +633,8 @@ def _select_prefix(
     active_bucket = str(sel_tmp.get("active_bucket_name", sel_tmp.get("regime_name", "")) or "")
     drs_gamma = _drs_success_gamma_for_bucket(gamma, cfg, active_bucket)
     pred_drs = np.asarray([predicted_shared_option_success(x["pred"].q, x["pred"].root_probs, gamma=drs_gamma, root_valid=x["data"].get("root_valid", None), option_valid=x["data"].get("option_valid", None)) for x in items], dtype=np.float32)
+    pred_direct_value = np.asarray([np.nan if x["pred"].direct_recovery_value is None else float(x["pred"].direct_recovery_value) for x in items], dtype=np.float32)
+    pred_direct_std = np.asarray([np.nan if x["pred"].direct_recovery_std is None else float(x["pred"].direct_recovery_std) for x in items], dtype=np.float32)
     macro_names = [str(x["data"].get("prefix_macro_name", "")) for x in items]
     nominal_deviation = _prefix_nominal_deviation(samples)
     if compute_teacher_labels:
@@ -665,6 +667,8 @@ def _select_prefix(
             pred_gap=pred_gap,
             nominal_deviation=nominal_deviation,
             pred_drs=pred_drs,
+            pred_direct_value=pred_direct_value,
+            pred_direct_std=pred_direct_std,
             candidate_macro_names=macro_names,
         )
     idx = int(selected.selected_index)
@@ -697,6 +701,8 @@ def _select_prefix(
         "pred_r_orc": pred_r_orc,
         "pred_gap": pred_gap,
         "pred_drs": pred_drs,
+        "pred_direct_value": pred_direct_value,
+        "pred_direct_std": pred_direct_std,
         "nominal_deviation": nominal_deviation,
         "labels_available": bool(compute_teacher_labels),
         "drs": None if drs is None else float(drs),
@@ -1261,14 +1267,36 @@ def _rollout_one_scene(
     speed_vals = [float(m["ego_speed_mps"]) for m in metric_trace if "ego_speed_mps" in m and np.isfinite(float(m["ego_speed_mps"]))]
     overlap_flags = [bool(float(m.get("overlap", 0.0)) > 0.0) for m in metric_trace]
     overlap_episode_count = int(sum(flag and (i == 0 or not overlap_flags[i - 1]) for i, flag in enumerate(overlap_flags)))
-    metric_summary["near_contact_exposure_rate"] = float(np.mean([c <= 2.0 for c in clearance_vals])) if clearance_vals else 0.0
-    metric_summary["critical_ttc_exposure_rate"] = float(np.mean([t <= 3.0 for t in ttc_vals])) if ttc_vals else 0.0
-    metric_summary["contact_exposure_rate"] = float(np.mean([c <= 0.05 for c in clearance_vals])) if clearance_vals else 0.0
+    metric_steps = int(len(metric_trace))
+    near_count = int(sum(c <= 2.0 for c in clearance_vals))
+    critical_ttc_count = int(sum(t <= 3.0 for t in ttc_vals))
+    near_zero_clearance_count = int(sum(c <= 0.05 for c in clearance_vals))
+    metric_summary["num_metric_steps"] = metric_steps
+    metric_summary["near_contact_exposure_count"] = near_count
+    metric_summary["critical_ttc_exposure_count"] = critical_ttc_count
+    metric_summary["near_zero_clearance_exposure_count"] = near_zero_clearance_count
+    metric_summary["near_contact_exposure_rate"] = float(near_count / max(len(clearance_vals), 1)) if clearance_vals else 0.0
+    metric_summary["critical_ttc_exposure_rate"] = float(critical_ttc_count / max(len(ttc_vals), 1)) if ttc_vals else 0.0
+    # A radius-based clearance <= 5 cm is not equivalent to simulator contact.
+    # Keep the legacy key for compatibility, but publish the unambiguous name.
+    metric_summary["near_zero_clearance_exposure_rate"] = float(near_zero_clearance_count / max(len(clearance_vals), 1)) if clearance_vals else 0.0
+    metric_summary["contact_exposure_rate"] = metric_summary["near_zero_clearance_exposure_rate"]
     metric_summary["overlap_episode_count"] = overlap_episode_count
     metric_summary["secondary_overlap_event"] = float(overlap_episode_count >= 2)
     tail_speeds = speed_vals[-3:] if speed_vals else []
     tail_overlaps = overlap_flags[-3:] if overlap_flags else []
-    metric_summary["stable_stop_event"] = float(bool(tail_speeds) and max(tail_speeds) <= 0.5 and not any(tail_overlaps))
+    stable_tail = bool(tail_speeds) and max(tail_speeds) <= 0.5 and not any(tail_overlaps)
+    initial_moving = bool(speed_vals) and max(speed_vals[: min(3, len(speed_vals))]) > 0.5
+    metric_summary["stable_stop_event"] = float(stable_tail)
+    metric_summary["stable_stop_eligible"] = float(initial_moving)
+    metric_summary["new_stable_stop_event"] = float(initial_moving and stable_tail)
+    stable_idx = None
+    if initial_moving and len(speed_vals) >= 3:
+        for j in range(2, len(speed_vals)):
+            if max(speed_vals[j - 2 : j + 1]) <= 0.5 and not any(overlap_flags[j - 2 : j + 1]):
+                stable_idx = j
+                break
+    metric_summary["time_to_stable_stop_steps"] = float(stable_idx + 1) if stable_idx is not None else float("nan")
     intervention_flags = [bool(d.selected_candidate_index != 0) for d in decisions]
     intervention_episode_count = int(sum(flag and (i == 0 or not intervention_flags[i - 1]) for i, flag in enumerate(intervention_flags)))
     intervention_run_lengths: list[int] = []
@@ -1358,12 +1386,44 @@ def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, s
     }
     for k in keys:
         vals = [s.get(k, None) for s in scene_results if int(s.get("num_decisions", 0)) > 0]
-        agg[k] = _mean_finite(vals)
+        if k == "max_intervention_run_length":
+            finite = [float(v) for v in vals if v is not None and np.isfinite(float(v))]
+            agg[k] = int(max(finite, default=0.0))
+        elif k == "mean_intervention_run_length":
+            total_interventions = sum(int(round(float(s.get("intervention_rate", 0.0)) * int(s.get("num_decisions", 0)))) for s in scene_results)
+            total_episodes = sum(int(s.get("intervention_episode_count", 0)) for s in scene_results)
+            agg[k] = float(total_interventions / max(total_episodes, 1)) if total_episodes else 0.0
+        else:
+            agg[k] = _mean_finite(vals)
+    agg["intervention_episode_count"] = int(sum(int(s.get("intervention_episode_count", 0)) for s in scene_results))
+    agg["intervention_scene_rate"] = float(np.mean([int(s.get("intervention_episode_count", 0)) > 0 for s in scene_results])) if scene_results else 0.0
     metric_names = sorted({mk for s in scene_results for mk in (s.get("metric_summary", {}) or {}).keys()})
     agg["waymax_metrics"] = {}
     for mk in metric_names:
-        vals = [(s.get("metric_summary", {}) or {}).get(mk, None) for s in scene_results]
-        agg["waymax_metrics"][mk] = _mean_finite(vals, default=0.0)
+        pairs = [((s.get("metric_summary", {}) or {}).get(mk, None), int(s.get("num_metric_steps", 0))) for s in scene_results]
+        finite = [(float(v), w) for v, w in pairs if v is not None and np.isfinite(float(v))]
+        if not finite:
+            agg["waymax_metrics"][mk] = 0.0
+        elif mk.endswith("_count") or mk in {"overlap_episode_count", "num_metric_steps"}:
+            agg["waymax_metrics"][mk] = float(sum(v for v, _ in finite))
+        elif mk.endswith("_any") or mk in {"secondary_overlap_event"}:
+            agg["waymax_metrics"][mk] = float(max(v for v, _ in finite))
+        elif mk.endswith("_max"):
+            agg["waymax_metrics"][mk] = float(max(v for v, _ in finite))
+        elif mk.endswith("_min"):
+            agg["waymax_metrics"][mk] = float(min(v for v, _ in finite))
+        elif mk.endswith("_rate"):
+            denom = sum(max(w, 0) for _, w in finite)
+            agg["waymax_metrics"][mk] = float(sum(v * max(w, 0) for v, w in finite) / max(denom, 1))
+        else:
+            agg["waymax_metrics"][mk] = float(np.mean([v for v, _ in finite]))
+    # Distribution across scenes is the publication-level unit; do not average
+    # per-scene p05 values and call it a global p05.
+    for base in ("min_clearance_m", "ttc_s"):
+        vals = [float((s.get("metric_summary", {}) or {}).get(f"{base}_min")) for s in scene_results if (s.get("metric_summary", {}) or {}).get(f"{base}_min") is not None and np.isfinite(float((s.get("metric_summary", {}) or {}).get(f"{base}_min")))]
+        if vals:
+            agg["waymax_metrics"][f"scene_{base}_median"] = float(np.median(vals))
+            agg["waymax_metrics"][f"scene_{base}_p05"] = float(np.quantile(vals, 0.05))
     macro_counts: dict[str, int] = {}
     reason_counts: dict[str, int] = {}
     audit_best_macro_counts: dict[str, int] = {}

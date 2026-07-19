@@ -1,0 +1,183 @@
+# Run from the OC-RAP repository root.
+set -euo pipefail
+export OCRAP_ROOT=/data0/senzeyu2/dataset/OCRAP
+export BASE_V39=runs/ocrap_v39_ocrac_balanced
+
+# ---------------------------------------------------------------------------
+# Stage 1: train two candidates concurrently, one per GPU.
+# head_only is the primary candidate: it preserves every v39 OC-MERO head.
+# adapter_light is a fallback if the fixed representation is insufficient.
+# ---------------------------------------------------------------------------
+TRAIN_GPU=0 \
+VARIANT=head_only \
+RUN=runs/ocrap_v40_ocuvra_head_only \
+BASE_RUN="$BASE_V39" \
+INIT_CKPT="$BASE_V39/model_v39_ocrac/best.pt" \
+DIRECT_VALUE_WEIGHT=10.0 \
+DIRECT_POSITIVE_GAIN=0.025 \
+DIRECT_RANK_MARGIN=0.035 \
+bash scripts/train_ocrap_v40_ocuvra.sh \
+  > runs/ocrap_v40_ocuvra_head_only.launch.log 2>&1 &
+PID0=$!
+
+TRAIN_GPU=1 \
+VARIANT=adapter_light \
+RUN=runs/ocrap_v40_ocuvra_adapter_light \
+BASE_RUN="$BASE_V39" \
+INIT_CKPT="$BASE_V39/model_v39_ocrac/best.pt" \
+DIRECT_VALUE_WEIGHT=12.0 \
+DIRECT_POSITIVE_GAIN=0.020 \
+DIRECT_RANK_MARGIN=0.030 \
+DIRECT_LISTWISE_WEIGHT=1.5 \
+DIRECT_FALSE_POSITIVE_WEIGHT=2.0 \
+bash scripts/train_ocrap_v40_ocuvra.sh \
+  > runs/ocrap_v40_ocuvra_adapter_light.launch.log 2>&1 &
+PID1=$!
+wait "$PID0" "$PID1"
+
+# ---------------------------------------------------------------------------
+# Stage 2: development evaluation of the safe primary candidate.
+# The run script pairs scalar controls on GPU0 with OC-UVRA on GPU1.
+# ---------------------------------------------------------------------------
+BASE_RUN=runs/ocrap_v40_ocuvra_head_only \
+RUN=runs/ocrap_v40_ocuvra_head_only_eval \
+RUN_SCALAR_BASELINES=1 \
+RUN_NEAR_TAIL=true \
+RUN_NEAR_CHALLENGE=true \
+CONTACT_BRAKE_TAIL=true \
+CONTACT_TAIL_BYPASS_PCD_GAIN=false \
+NEAR_DIRECT_MIN_ADV=0.045 \
+CONTACT_DIRECT_MIN_ADV=0.035 \
+AUDIT_TARGETS=32 \
+AUDIT_LABELS=384 \
+AUDIT_MAX_ROLLOUTS=12 \
+bash scripts/run_ocrap_v40_ocuvra.sh
+
+python tools/compare_paired_closed_loop.py \
+  runs/ocrap_v40_ocuvra_head_only_eval/audit_near_contact_selected_topk_v40_scalar.json \
+  runs/ocrap_v40_ocuvra_head_only_eval/audit_near_contact_selected_topk_v40_v40.json \
+  --output runs/ocrap_v40_ocuvra_head_only_eval/paired_near_v40.json
+python tools/compare_paired_closed_loop.py \
+  runs/ocrap_v40_ocuvra_head_only_eval/audit_contact_selected_topk_v40_scalar.json \
+  runs/ocrap_v40_ocuvra_head_only_eval/audit_contact_selected_topk_v40_v40.json \
+  --output runs/ocrap_v40_ocuvra_head_only_eval/paired_contact_v40.json
+python tools/check_v40_regime_targets.py \
+  runs/ocrap_v40_ocuvra_head_only_eval \
+  --near-paired runs/ocrap_v40_ocuvra_head_only_eval/paired_near_v40.json \
+  --contact-paired runs/ocrap_v40_ocuvra_head_only_eval/paired_contact_v40.json \
+  | tee runs/ocrap_v40_ocuvra_head_only_eval/target_check_v40.txt
+
+# ---------------------------------------------------------------------------
+# Stage 3: evaluate adapter_light only if head_only fails development targets.
+# Scalar results are reusable only for identical target order/seed. This run
+# therefore keeps RUN_SCALAR_BASELINES=1 to preserve an exact paired comparison.
+# ---------------------------------------------------------------------------
+if ! python tools/check_v40_regime_targets.py \
+  runs/ocrap_v40_ocuvra_head_only_eval \
+  --near-paired runs/ocrap_v40_ocuvra_head_only_eval/paired_near_v40.json \
+  --contact-paired runs/ocrap_v40_ocuvra_head_only_eval/paired_contact_v40.json >/dev/null; then
+  BASE_RUN=runs/ocrap_v40_ocuvra_adapter_light \
+  RUN=runs/ocrap_v40_ocuvra_adapter_light_eval \
+  RUN_SCALAR_BASELINES=1 \
+  RUN_NEAR_TAIL=true \
+  RUN_NEAR_CHALLENGE=true \
+  CONTACT_BRAKE_TAIL=true \
+  CONTACT_TAIL_BYPASS_PCD_GAIN=false \
+  AUDIT_TARGETS=32 \
+  AUDIT_LABELS=384 \
+  AUDIT_MAX_ROLLOUTS=12 \
+  bash scripts/run_ocrap_v40_ocuvra.sh
+
+  python tools/compare_paired_closed_loop.py \
+    runs/ocrap_v40_ocuvra_adapter_light_eval/audit_near_contact_selected_topk_v40_scalar.json \
+    runs/ocrap_v40_ocuvra_adapter_light_eval/audit_near_contact_selected_topk_v40_v40.json \
+    --output runs/ocrap_v40_ocuvra_adapter_light_eval/paired_near_v40.json
+  python tools/compare_paired_closed_loop.py \
+    runs/ocrap_v40_ocuvra_adapter_light_eval/audit_contact_selected_topk_v40_scalar.json \
+    runs/ocrap_v40_ocuvra_adapter_light_eval/audit_contact_selected_topk_v40_v40.json \
+    --output runs/ocrap_v40_ocuvra_adapter_light_eval/paired_contact_v40.json
+  python tools/check_v40_regime_targets.py \
+    runs/ocrap_v40_ocuvra_adapter_light_eval \
+    --near-paired runs/ocrap_v40_ocuvra_adapter_light_eval/paired_near_v40.json \
+    --contact-paired runs/ocrap_v40_ocuvra_adapter_light_eval/paired_contact_v40.json \
+    | tee runs/ocrap_v40_ocuvra_adapter_light_eval/target_check_v40.txt
+fi
+
+# ---------------------------------------------------------------------------
+# Stage 4: medium confirmation before committing to three expensive seeds.
+# Replace CHOSEN with head_only or adapter_light after Stage 2/3.
+# ---------------------------------------------------------------------------
+CHOSEN=${CHOSEN:-head_only}
+SEED=2027 \
+BASE_RUN="runs/ocrap_v40_ocuvra_${CHOSEN}" \
+RUN="runs/ocrap_v40_ocuvra_${CHOSEN}_medium_s2027" \
+RUN_SCALAR_BASELINES=1 \
+RUN_NEAR_TAIL=true \
+RUN_NEAR_CHALLENGE=true \
+CONTACT_BRAKE_TAIL=true \
+CONTACT_TAIL_BYPASS_PCD_GAIN=false \
+AUDIT_TARGETS=64 \
+AUDIT_LABELS=900 \
+AUDIT_MAX_ROLLOUTS=24 \
+AUDIT_MAX_STEPS=20 \
+AUDIT_EVERY_N_STEPS=4 \
+bash scripts/run_ocrap_v40_ocuvra.sh
+
+MEDIUM="runs/ocrap_v40_ocuvra_${CHOSEN}_medium_s2027"
+python tools/compare_paired_closed_loop.py \
+  "$MEDIUM/audit_near_contact_selected_topk_v40_scalar.json" \
+  "$MEDIUM/audit_near_contact_selected_topk_v40_v40.json" \
+  --output "$MEDIUM/paired_near_v40.json" --bootstrap 5000 --seed 2027
+python tools/compare_paired_closed_loop.py \
+  "$MEDIUM/audit_contact_selected_topk_v40_scalar.json" \
+  "$MEDIUM/audit_contact_selected_topk_v40_v40.json" \
+  --output "$MEDIUM/paired_contact_v40.json" --bootstrap 5000 --seed 2027
+python tools/check_v40_regime_targets.py "$MEDIUM" \
+  --near-paired "$MEDIUM/paired_near_v40.json" \
+  --contact-paired "$MEDIUM/paired_contact_v40.json" \
+  | tee "$MEDIUM/target_check_v40.txt"
+
+# ---------------------------------------------------------------------------
+# Stage 5: publication confirmation only after the medium run passes.
+# Each seed uses both GPUs concurrently: scalar on GPU0, OC-UVRA on GPU1.
+# 48 rollouts x 20 decisions, audit every 4 steps gives about 240 audit points.
+# ---------------------------------------------------------------------------
+if ! python tools/check_v40_regime_targets.py "$MEDIUM" \
+  --near-paired "$MEDIUM/paired_near_v40.json" \
+  --contact-paired "$MEDIUM/paired_contact_v40.json" >/dev/null; then
+  echo "Medium confirmation failed; skip the expensive three-seed run." >&2
+  exit 1
+fi
+
+for SEED in 2027 2028 2029; do
+  BASE_RUN="runs/ocrap_v40_ocuvra_${CHOSEN}" \
+  RUN="runs/ocrap_v40_ocuvra_${CHOSEN}_confirm_s${SEED}" \
+  RUN_SCALAR_BASELINES=1 \
+  RUN_NEAR_TAIL=true \
+  RUN_NEAR_CHALLENGE=true \
+  CONTACT_BRAKE_TAIL=true \
+  CONTACT_TAIL_BYPASS_PCD_GAIN=false \
+  AUDIT_TARGETS=96 \
+  AUDIT_LABELS=1600 \
+  AUDIT_MAX_ROLLOUTS=48 \
+  AUDIT_MAX_STEPS=20 \
+  AUDIT_EVERY_N_STEPS=4 \
+  bash scripts/run_ocrap_v40_ocuvra.sh
+
+  python tools/compare_paired_closed_loop.py \
+    "runs/ocrap_v40_ocuvra_${CHOSEN}_confirm_s${SEED}/audit_near_contact_selected_topk_v40_scalar.json" \
+    "runs/ocrap_v40_ocuvra_${CHOSEN}_confirm_s${SEED}/audit_near_contact_selected_topk_v40_v40.json" \
+    --output "runs/ocrap_v40_ocuvra_${CHOSEN}_confirm_s${SEED}/paired_near_v40.json" \
+    --bootstrap 10000 --seed "$SEED"
+  python tools/compare_paired_closed_loop.py \
+    "runs/ocrap_v40_ocuvra_${CHOSEN}_confirm_s${SEED}/audit_contact_selected_topk_v40_scalar.json" \
+    "runs/ocrap_v40_ocuvra_${CHOSEN}_confirm_s${SEED}/audit_contact_selected_topk_v40_v40.json" \
+    --output "runs/ocrap_v40_ocuvra_${CHOSEN}_confirm_s${SEED}/paired_contact_v40.json" \
+    --bootstrap 10000 --seed "$SEED"
+  python tools/check_v40_regime_targets.py \
+    "runs/ocrap_v40_ocuvra_${CHOSEN}_confirm_s${SEED}" \
+    --near-paired "runs/ocrap_v40_ocuvra_${CHOSEN}_confirm_s${SEED}/paired_near_v40.json" \
+    --contact-paired "runs/ocrap_v40_ocuvra_${CHOSEN}_confirm_s${SEED}/paired_contact_v40.json" \
+    --publication \
+    | tee "runs/ocrap_v40_ocuvra_${CHOSEN}_confirm_s${SEED}/target_check_v40.txt"
+done

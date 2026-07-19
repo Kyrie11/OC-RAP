@@ -37,6 +37,7 @@ class OCRAPModel(nn.Module):
         d_signature: int = 0,
         d_future_signature: int = 0,
         option_feature_dim: int = 0,
+        direct_recovery_value_head: bool = False,
     ):
         super().__init__()
         self.num_roots = int(num_roots)
@@ -49,6 +50,7 @@ class OCRAPModel(nn.Module):
         self.d_signature = int(d_signature)
         self.d_future_signature = int(d_future_signature)
         self.option_feature_dim = int(option_feature_dim)
+        self.direct_recovery_value_head = bool(direct_recovery_value_head)
 
         if self.encoder_type == "structured_transformer":
             layout = FlatFeatureLayout(**self.feature_layout)
@@ -93,6 +95,21 @@ class OCRAPModel(nn.Module):
         )
         self.obs_embed_head = nn.Sequential(nn.Linear(d_model, d_model), nn.GELU(), nn.Linear(d_model, self.d_obs))
         self.utility_head = nn.Linear(d_model, 1)
+        # v40 OC-UVRA: decouple the calibrated OC-MERO certificate from the
+        # candidate preference signal.  The head predicts a bounded deployable
+        # recovery value and aleatoric log-variance for each executable prefix.
+        # This avoids forcing R_dep, DRS, and the oracle gap to absorb a separate
+        # counterfactual ranking objective.
+        self.direct_value_head = (
+            nn.Sequential(
+                nn.Linear(d_model, d_model),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(d_model, 2),
+            )
+            if self.direct_recovery_value_head
+            else None
+        )
         self.root_signature_head = nn.Linear(d_model, self.d_signature) if self.d_signature > 0 else None
         self.root_future_signature_head = nn.Linear(d_model, self.d_future_signature) if self.d_future_signature > 0 else None
 
@@ -154,6 +171,10 @@ class OCRAPModel(nn.Module):
             "c_star": C,
             "utility": self.utility_head(scene_token).squeeze(-1),
         }
+        if self.direct_value_head is not None:
+            direct = self.direct_value_head(scene_token)
+            out["direct_recovery_value_logit"] = direct[:, 0]
+            out["direct_recovery_value_logvar"] = direct[:, 1].clamp(-7.0, 2.0)
         if self.root_signature_head is not None:
             out["root_signature"] = self.root_signature_head(root_tokens)
         if self.root_future_signature_head is not None:

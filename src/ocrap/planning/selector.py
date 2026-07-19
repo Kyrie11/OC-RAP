@@ -216,6 +216,20 @@ def calibrated_constrained_select(
     budget_preserve_nominal: bool = True,
     budget_nominal_slack: float = 0.08,
     pred_drs: np.ndarray | None = None,
+    pred_direct_value: np.ndarray | None = None,
+    pred_direct_std: np.ndarray | None = None,
+    direct_value_certificate: bool = False,
+    direct_value_macro_allowlist=None,
+    direct_value_lcb_z: float = 1.0,
+    direct_value_min_advantage_lcb: float = 0.035,
+    direct_value_min_candidate_value: float = 0.45,
+    direct_value_max_candidate_std: float = 0.35,
+    direct_value_max_hard: float = 0.0,
+    direct_value_max_harm: float = 0.70,
+    direct_value_bonus: float = 0.15,
+    direct_value_counts_as_evidence: bool = True,
+    direct_value_challenge_nominal: bool = True,
+    direct_value_max_consecutive: int = 2,
     deployability_bonus: float = 0.0,
     contact_deployability_bonus: float = 0.0,
     contact_gap_penalty: float = 0.0,
@@ -472,6 +486,8 @@ def calibrated_constrained_select(
     gap = np.maximum(0.0, _as_1d_float(pred_gap, n, default=0.0))
     dev = np.maximum(0.0, _as_1d_float(nominal_deviation, n, default=0.0))
     drs_proxy = np.clip(_as_1d_float(pred_drs, n, default=0.0), 0.0, 1.0)
+    direct_value = np.clip(_as_1d_float(pred_direct_value, n, default=0.0), 0.0, 1.0)
+    direct_std = np.maximum(0.0, _as_1d_float(pred_direct_std, n, default=1.0))
     macro_names = _as_macro_names(candidate_macro_names, n)
 
     # v22: separate candidate-family coverage from recovery-maneuver semantics.
@@ -550,6 +566,39 @@ def calibrated_constrained_select(
         drs_gain_vs_nom = drs_proxy - drs_proxy[ni]
         gap_reduction_vs_nom = gap[ni] - gap
         pcd_gain_vs_nom = pcd_proxy - pcd_proxy[ni]
+
+    # v40 OC-UVRA: uncertainty-aware counterfactual value is a preference
+    # certificate, never a replacement for OC-MERO feasibility/admission.  It
+    # may challenge nominal only when its lower-confidence advantage is positive
+    # and the candidate is physically/semantically bounded.
+    direct_advantage_lcb = np.full((n,), -np.inf, dtype=float)
+    direct_value_challenge = np.zeros((n,), dtype=bool)
+    if bool(direct_value_certificate) and 0 <= int(nominal_index) < n and pred_direct_value is not None:
+        ni = int(nominal_index)
+        pair_std = np.sqrt(np.maximum(0.0, direct_std * direct_std + direct_std[ni] * direct_std[ni]))
+        direct_advantage_lcb = direct_value - direct_value[ni] - float(direct_value_lcb_z) * pair_std
+        direct_macro_allow = _split_name_set(direct_value_macro_allowlist)
+        direct_macro_mask = np.asarray([bool(m) for m in macro_names], dtype=bool)
+        if direct_macro_allow:
+            direct_macro_mask &= np.asarray([m in direct_macro_allow for m in macro_names], dtype=bool)
+        direct_value_challenge = (
+            feasible
+            & (hard <= float(direct_value_max_hard))
+            & (harm <= float(direct_value_max_harm))
+            & direct_macro_mask
+            & (direct_value >= float(direct_value_min_candidate_value))
+            & (direct_std <= float(direct_value_max_candidate_std))
+            & (direct_advantage_lcb >= float(direct_value_min_advantage_lcb))
+        )
+        direct_value_challenge[ni] = False
+        if int(direct_value_max_consecutive) >= 0:
+            prev_macro = str(previous_selected_macro or "").strip().lower()
+            try:
+                prev_run = int(same_macro_run_length or 0)
+            except Exception:
+                prev_run = 0
+            if prev_run >= int(direct_value_max_consecutive):
+                direct_value_challenge &= np.asarray([m != prev_macro for m in macro_names], dtype=bool)
 
     if bool(relative_recovery_certificate) and 0 <= int(nominal_index) < n:
         ni = int(nominal_index)
@@ -890,6 +939,8 @@ def calibrated_constrained_select(
         score = score + float(protective_macro_bonus) * prot_adv * protective_certified.astype(float)
     if bool(pcd_rescue_certificate) and float(pcd_rescue_bonus) != 0.0:
         score = score + float(pcd_rescue_bonus) * np.maximum(0.0, pcd_gain_vs_nom) * pcd_rescue_certified.astype(float)
+    if bool(direct_value_certificate) and float(direct_value_bonus) != 0.0:
+        score = score + float(direct_value_bonus) * np.maximum(0.0, direct_advantage_lcb) * direct_value_challenge.astype(float)
     if is_contact_regime:
         score = score + float(contact_deployability_bonus) * drs_proxy - float(contact_gap_penalty) * gap
 
@@ -1021,6 +1072,8 @@ def calibrated_constrained_select(
                 evidence = evidence | brake_rescue_certified
             if bool(pcd_rescue_counts_as_evidence):
                 evidence = evidence | pcd_rescue_certified
+            if bool(direct_value_counts_as_evidence):
+                evidence = evidence | direct_value_challenge
             certified_non_nom &= evidence
 
         if bool(intervention_budget_hard) and intervention_budget_rate is not None and intervention_budget_steps not in {None, 0} and 0 <= nominal_index < n:
@@ -1051,6 +1104,8 @@ def calibrated_constrained_select(
                 # v34/v35 offline high-frequency brake policy.
                 if bool(brake_tail_challenge_budget_bypass):
                     hard_budget_evidence = hard_budget_evidence | brake_tail_challenge_certified
+                if bool(direct_value_counts_as_evidence):
+                    hard_budget_evidence = hard_budget_evidence | direct_value_challenge
                 certified_non_nom &= hard_budget_evidence
 
         # v25 closed-loop exposure gate.  A rescue certificate may override a
@@ -1118,6 +1173,7 @@ def calibrated_constrained_select(
                 drs_gain < float(stress_anchor_min_drs_gain)
                 and rec_gain < float(stress_anchor_min_rec_gain)
                 and gap_reduction < float(stress_anchor_min_gap_reduction)
+                and not bool(direct_value_challenge[best_idx])
             ):
                 admitted = admitted.copy()
                 admitted[nominal_index] = True
@@ -1141,20 +1197,20 @@ def calibrated_constrained_select(
         nom_near_score = score[nominal_index] >= score[best_idx] - float(nominal_utility_slack)
         if admitted[nominal_index]:
             if bool(stress_rescue_challenge_nominal) and (not is_safe_regime):
-                challenge_mask = (brake_rescue_certified | pcd_rescue_certified) & admitted
+                challenge_mask = (brake_rescue_certified | pcd_rescue_certified | (direct_value_challenge & bool(direct_value_challenge_nominal))) & admitted
                 challenge_mask[int(nominal_index)] = False
                 # Apply the v26 guarded challenge frontier.  This is deliberately
                 # separate from certification: a rescue can still be admitted when
                 # nominal is unadmitted, but challenging an already-admitted nominal
                 # requires stronger evidence and bounded exposure.
                 if float(rescue_challenge_min_candidate_gap) >= 0.0:
-                    challenge_mask &= gap >= float(rescue_challenge_min_candidate_gap)
+                    challenge_mask &= (gap >= float(rescue_challenge_min_candidate_gap)) | direct_value_challenge
                 if float(rescue_challenge_max_candidate_gap) >= 0.0:
-                    challenge_mask &= gap <= float(rescue_challenge_max_candidate_gap)
+                    challenge_mask &= (gap <= float(rescue_challenge_max_candidate_gap)) | direct_value_challenge
                 if float(rescue_challenge_min_pred_drs) >= 0.0:
-                    challenge_mask &= drs_proxy >= float(rescue_challenge_min_pred_drs)
+                    challenge_mask &= (drs_proxy >= float(rescue_challenge_min_pred_drs)) | direct_value_challenge
                 if float(rescue_challenge_min_pred_pcd) >= 0.0:
-                    challenge_mask &= pcd_proxy >= float(rescue_challenge_min_pred_pcd)
+                    challenge_mask &= (pcd_proxy >= float(rescue_challenge_min_pred_pcd)) | direct_value_challenge
                 # v27 DDC: challenge is a stronger act than certification.
                 # A candidate can be rescue-certified when nominal is not
                 # admitted, but replacing an already admitted nominal prefix
@@ -1176,23 +1232,23 @@ def calibrated_constrained_select(
                     # positive relative PCD gain for these already-certified brake
                     # candidates when explicitly enabled.
                     if bool(brake_tail_challenge_bypass_pcd_gain):
-                        ok = ok | brake_tail_challenge_certified
+                        ok = ok | brake_tail_challenge_certified | direct_value_challenge
                     challenge_mask &= ok
                     axis_count += ok.astype(int)
                 if float(rescue_challenge_min_rec_lcb_gain) >= 0.0:
-                    ok = rec_gain_vs_nom >= float(rescue_challenge_min_rec_lcb_gain)
+                    ok = (rec_gain_vs_nom >= float(rescue_challenge_min_rec_lcb_gain)) | direct_value_challenge
                     challenge_mask &= ok if int(rescue_challenge_min_improvement_axes or 0) <= 0 else challenge_mask
                     axis_count += ok.astype(int)
                 if float(rescue_challenge_min_drs_gain) >= 0.0:
-                    ok = drs_gain_vs_nom >= float(rescue_challenge_min_drs_gain)
+                    ok = (drs_gain_vs_nom >= float(rescue_challenge_min_drs_gain)) | direct_value_challenge
                     challenge_mask &= ok if int(rescue_challenge_min_improvement_axes or 0) <= 0 else challenge_mask
                     axis_count += ok.astype(int)
                 if float(rescue_challenge_min_gap_reduction) >= 0.0:
-                    ok = gap_reduction_vs_nom >= float(rescue_challenge_min_gap_reduction)
+                    ok = (gap_reduction_vs_nom >= float(rescue_challenge_min_gap_reduction)) | direct_value_challenge
                     challenge_mask &= ok if int(rescue_challenge_min_improvement_axes or 0) <= 0 else challenge_mask
                     axis_count += ok.astype(int)
                 if int(rescue_challenge_min_improvement_axes or 0) > 0:
-                    challenge_mask &= axis_count >= int(rescue_challenge_min_improvement_axes)
+                    challenge_mask &= (axis_count >= int(rescue_challenge_min_improvement_axes)) | direct_value_challenge
                 if float(rescue_challenge_max_pred_utility) >= 0.0:
                     challenge_mask &= utility <= float(rescue_challenge_max_pred_utility)
                 if int(rescue_challenge_max_used) >= 0:
@@ -1231,16 +1287,19 @@ def calibrated_constrained_select(
                     # Let only candidates with a material learned PCD advantage
                     # break this strong nominal certificate.
                     min_gain = max(float(rescue_challenge_min_pcd_gain), 0.035)
-                    challenge_mask &= pcd_gain_vs_nom >= min_gain
+                    challenge_mask &= (pcd_gain_vs_nom >= min_gain) | direct_value_challenge
                 if bool(challenge_mask.any()):
                     cc = np.where(challenge_mask)[0]
                     challenge_score = (
                         float(rescue_challenge_score_pcd_weight) * pcd_proxy
+                        + float(direct_value_bonus) * np.maximum(0.0, direct_advantage_lcb)
                         + float(rescue_challenge_score_drs_weight) * drs_proxy
                         - float(rescue_challenge_score_gap_weight) * gap
                         - float(rescue_challenge_score_utility_weight) * np.maximum(0.0, utility - utility[int(nominal_index)])
                     )
                     chosen = int(cc[np.argmax(challenge_score[cc])])
+                    if direct_value_challenge[chosen]:
+                        return SelectionResult(chosen, "best_direct_value_lcb_guarded_challenge", admitted)
                     if pcd_rescue_certified[chosen] and not brake_rescue_certified[chosen]:
                         return SelectionResult(chosen, "best_pcd_rescue_guarded_challenge", admitted)
                     if brake_tail_rescue_certified[chosen] and not (brake_rescue_certified[chosen] and not brake_tail_rescue_certified[chosen]):
@@ -1286,7 +1345,9 @@ def calibrated_constrained_select(
             return SelectionResult(int(nominal_index), "nominal_switch_margin_preserved", admitted)
 
     reason = "best_calibrated_admitted_score" if admitted[best_idx] else "best_calibrated_soft_constraint"
-    if admitted[best_idx] and pcd_rescue_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx] and not relative_certified[best_idx] and not protective_certified[best_idx] and not brake_rescue_certified[best_idx]:
+    if admitted[best_idx] and direct_value_challenge[best_idx]:
+        reason = "best_direct_value_lcb_score"
+    elif admitted[best_idx] and pcd_rescue_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx] and not relative_certified[best_idx] and not protective_certified[best_idx] and not brake_rescue_certified[best_idx]:
         reason = "best_pcd_rescue_certified_score"
     elif admitted[best_idx] and brake_tail_rescue_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx] and not relative_certified[best_idx] and not protective_certified[best_idx]:
         reason = "best_brake_tail_rescue_certified_score"
@@ -1298,9 +1359,11 @@ def calibrated_constrained_select(
         reason = "best_relative_recovery_certified_score"
     elif admitted[best_idx] and option_certified[best_idx] and not scalar_admitted[best_idx]:
         reason = "best_option_drs_certified_score"
-    admitted_rank_pool = pool | relative_certified | protective_certified | brake_rescue_certified | pcd_rescue_certified
+    admitted_rank_pool = pool | relative_certified | protective_certified | brake_rescue_certified | pcd_rescue_certified | direct_value_challenge
     if bool(prefer_admitted) and bool((admitted_rank_pool & admitted).any()) and admitted[best_idx]:
-        if pcd_rescue_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx] and not relative_certified[best_idx] and not protective_certified[best_idx] and not brake_rescue_certified[best_idx]:
+        if direct_value_challenge[best_idx]:
+            reason = "best_direct_value_lcb_prefer_admitted"
+        elif pcd_rescue_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx] and not relative_certified[best_idx] and not protective_certified[best_idx] and not brake_rescue_certified[best_idx]:
             reason = "best_pcd_rescue_certified_prefer_admitted"
         elif brake_tail_rescue_certified[best_idx] and not scalar_admitted[best_idx] and not option_certified[best_idx] and not relative_certified[best_idx] and not protective_certified[best_idx]:
             reason = "best_brake_tail_rescue_certified_prefer_admitted"

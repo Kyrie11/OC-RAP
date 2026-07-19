@@ -21,6 +21,8 @@ class Prediction:
     root_probs: np.ndarray
     c_star: np.ndarray
     margins: np.ndarray
+    direct_recovery_value: float | None = None
+    direct_recovery_std: float | None = None
 
 
 @dataclass
@@ -123,7 +125,11 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         d_signature=int(ckpt.get("d_signature", 0)),
         d_future_signature=int(ckpt.get("d_future_signature", 0)),
         option_feature_dim=int(ckpt.get("option_feature_dim", OPTION_FEATURE_DIM)),
+        direct_recovery_value_head=bool(ckpt.get("direct_recovery_value_head", model_cfg.get("direct_recovery_value_head", False))),
     ).to(device)
+    # Strict loading remains the default for checkpoints with matching geometry.
+    # A v39 checkpoint can initialize v40 training through train.py's explicit
+    # strict=False path; inference should never silently use an untrained head.
     model.load_state_dict(ckpt["model_state"])
     model.eval()
     cfg.setdefault("model", {})
@@ -216,6 +222,11 @@ def predict_samples(
     p_np = p.detach().cpu().numpy().astype(np.float32)
     c_np = out["c_star"].detach().cpu().numpy().astype(np.float32)
     m_np = out["margins"].detach().cpu().numpy().astype(np.float32)
+    direct_mean_np = None
+    direct_std_np = None
+    if "direct_recovery_value_logit" in out:
+        direct_mean_np = torch.sigmoid(out["direct_recovery_value_logit"]).detach().cpu().numpy().astype(np.float32)
+        direct_std_np = torch.exp(0.5 * out["direct_recovery_value_logvar"]).detach().cpu().numpy().astype(np.float32)
     preds: list[Prediction] = []
     for i in range(len(ds)):
         preds.append(
@@ -227,6 +238,8 @@ def predict_samples(
                 root_probs=p_np[i],
                 c_star=c_np[i],
                 margins=m_np[i],
+                direct_recovery_value=(None if direct_mean_np is None else float(direct_mean_np[i])),
+                direct_recovery_std=(None if direct_std_np is None else float(direct_std_np[i])),
             )
         )
     return preds
@@ -269,4 +282,6 @@ def predict_sample(d: dict[str, Any], bundle: ModelBundle | None, cfg: dict | No
         root_probs=p.squeeze(0).detach().cpu().numpy().astype(np.float32),
         c_star=out["c_star"].squeeze(0).detach().cpu().numpy().astype(np.float32),
         margins=out["margins"].squeeze(0).detach().cpu().numpy().astype(np.float32),
+        direct_recovery_value=(None if "direct_recovery_value_logit" not in out else float(torch.sigmoid(out["direct_recovery_value_logit"]).squeeze(0).detach().cpu().item())),
+        direct_recovery_std=(None if "direct_recovery_value_logvar" not in out else float(torch.exp(0.5 * out["direct_recovery_value_logvar"]).squeeze(0).detach().cpu().item())),
     )
