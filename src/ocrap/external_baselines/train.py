@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
 from ocrap.data.serialization import ensure_dir, write_json
-from ocrap.external_baselines.data import ExternalGroupDataset
+from ocrap.external_baselines.data import ExternalGroupDataset, use_teacher_branch_context
 from ocrap.external_baselines.models import build_model_from_cfg
 from ocrap.utils.seed import seed_everything
 
@@ -87,14 +87,18 @@ def _batch_to_device(batch: dict[str, torch.Tensor], device: torch.device) -> di
     return {k: v.to(device, non_blocking=True) for k, v in batch.items()}
 
 
-def _forward_model(model: torch.nn.Module, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+def _forward_model(model: torch.nn.Module, batch: dict[str, torch.Tensor], cfg: dict[str, Any]) -> dict[str, torch.Tensor]:
+    deployable_only = not use_teacher_branch_context(cfg)
     return model(
         batch["x"].float(),
         batch["mask"].bool(),
-        branch_margins=batch.get("branch_margins", None),
-        root_features=batch.get("root_features", None),
-        root_probs=batch.get("root_probs", None),
-        root_valid=batch.get("root_valid", None),
+        # Keep the branch encoder active on a fixed neutral context when the
+        # teacher tensors are unavailable. This avoids both label leakage and
+        # DDP unused-parameter failures.
+        branch_margins=None if deployable_only else batch.get("branch_margins", None),
+        root_features=None if deployable_only else batch.get("root_features", None),
+        root_probs=None if deployable_only else batch.get("root_probs", None),
+        root_valid=None if deployable_only else batch.get("root_valid", None),
         option_valid=batch.get("option_valid", None),
         topology_features=batch.get("topology_features", None),
         topology_mask=batch.get("topology_mask", None),
@@ -253,7 +257,7 @@ def _epoch(model, loader, opt, device, cfg: dict[str, Any], train: bool, *, rank
     for batch in iterator:
         batch = _batch_to_device(batch, device)
         with torch.set_grad_enabled(train):
-            out = _forward_model(model, batch)
+            out = _forward_model(model, batch, cfg)
             losses = _loss_dict(out, batch, cfg)
             loss = losses["loss"]
             if train:
@@ -304,13 +308,16 @@ def train_external_baseline(dataset: str, output: str, cfg: dict[str, Any], *, v
         # learned policy networks.  "Training" registers the config and validates
         # that the OC-RAP grouped dataset can be read; thresholds are explicit in
         # the YAML so there is no hidden fitting to test labels.
-        train_ds = ExternalGroupDataset(dataset, cfg, split="train", baseline=baseline_name0)
+        tcfg0 = bcfg0.get("training", {}) if isinstance(bcfg0.get("training", {}), dict) else {}
+        validate_dataset = bool(tcfg0.get("validate_dataset", True))
+        train_ds = ExternalGroupDataset(dataset, cfg, split="train", baseline=baseline_name0) if validate_dataset else None
         summary = {
             "baseline": baseline_name0,
             "training_mode": "non_learning_filter_or_planner",
-            "num_train_groups": len(train_ds),
-            "feature_dim": int(train_ds.feature_dim),
-            "max_candidates": int(train_ds.max_candidates),
+            "dataset_validated": bool(validate_dataset),
+            "num_train_groups": (len(train_ds) if train_ds is not None else None),
+            "feature_dim": (int(train_ds.feature_dim) if train_ds is not None else None),
+            "max_candidates": (int(train_ds.max_candidates) if train_ds is not None else int(bcfg0.get("max_candidates", 0))),
             "notes": "No neural weights are trained for MARC/RACP/risk/PSF/oracle filters; the paper core is an optimization or safety-filter rule over the candidate lattice.",
             "cfg": cfg,
         }
@@ -381,6 +388,10 @@ def train_external_baseline(dataset: str, output: str, cfg: dict[str, Any], *, v
                     "history_len": int(getattr(train_ds, "history_len", 0)),
                     "neighbors_to_predict": int(getattr(train_ds, "neighbors_to_predict", 0)),
                     "future_len": int(getattr(train_ds, "future_len", 0)),
+                    "input_contract": {
+                        "use_teacher_branch_context": bool(use_teacher_branch_context(cfg)),
+                        "deployable_feature_only": bool(not use_teacher_branch_context(cfg)),
+                    },
                     "model_state": _model_state(model),
                     "epoch": int(ep),
                     "val_loss": float(va.get("loss", 0.0)),

@@ -20,6 +20,10 @@ external_baselines:
     num_roots: 10
     num_options: 12
     root_feature_dim: 18
+    # Teacher root/margin tensors are unavailable in a deployable feature-only
+    # closed loop. Old checkpoints without this key retain legacy behavior;
+    # checkpoints trained with this config must be retrained.
+    use_teacher_branch_context: false
   training:
     device: auto
     distributed: auto

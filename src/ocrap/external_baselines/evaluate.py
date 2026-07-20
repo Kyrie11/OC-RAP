@@ -16,7 +16,7 @@ from ocrap.evaluation.metrics import (
     post_contact_deployability_score,
     summarize_selection_metrics,
 )
-from ocrap.external_baselines.data import group_sample_paths, _branch_arrays, _topology_arrays, _history_arrays, _actor_topology_arrays, _map_topology_arrays
+from ocrap.external_baselines.data import group_sample_paths, _branch_arrays, _topology_arrays, _history_arrays, _actor_topology_arrays, _map_topology_arrays, use_teacher_branch_context
 from ocrap.external_baselines.models import build_model_from_cfg
 from ocrap.external_baselines.policies import ExternalSelection, select_external_policy
 from ocrap.models.data import sample_to_feature
@@ -89,6 +89,7 @@ def _predict_group(model: torch.nn.Module | None, samples: list[dict[str, Any]],
     if not feats:
         return None
     D = int(feats[0].shape[0])
+    use_branch_context = use_teacher_branch_context(cfg)
     bm0, rf0, _, _, _ = _branch_arrays(samples[0], cfg)
     ego0, neigh0, _, pref0, _ = _history_arrays(samples[0], cfg)
     actor0, _, _ = _actor_topology_arrays(samples[0], cfg)
@@ -118,12 +119,13 @@ def _predict_group(model: torch.nn.Module | None, samples: list[dict[str, Any]],
     for i, f in enumerate(feats):
         x[0, i] = f
         mask[0, i] = True
-        bm, rf, rp, rv, ov = _branch_arrays(samples[i], cfg)
-        branch_margins[0, i] = bm
-        root_features[0, i] = rf
-        root_probs[0, i] = rp
-        root_valid[0, i] = rv
-        option_valid[0, i] = ov
+        if use_branch_context:
+            bm, rf, rp, rv, ov = _branch_arrays(samples[i], cfg)
+            branch_margins[0, i] = bm
+            root_features[0, i] = rf
+            root_probs[0, i] = rp
+            root_valid[0, i] = rv
+            option_valid[0, i] = ov
         eh, nh, nv, pt, pv = _history_arrays(samples[i], cfg)
         ego_history[0, i] = eh
         neighbor_history[0, i] = nh
@@ -140,11 +142,11 @@ def _predict_group(model: torch.nn.Module | None, samples: list[dict[str, Any]],
         out = model(
             torch.from_numpy(x).to(device),
             torch.from_numpy(mask).to(device),
-            branch_margins=torch.from_numpy(branch_margins).to(device),
-            root_features=torch.from_numpy(root_features).to(device),
-            root_probs=torch.from_numpy(root_probs).to(device),
-            root_valid=torch.from_numpy(root_valid).to(device),
-            option_valid=torch.from_numpy(option_valid).to(device),
+            branch_margins=(torch.from_numpy(branch_margins).to(device) if use_branch_context else None),
+            root_features=(torch.from_numpy(root_features).to(device) if use_branch_context else None),
+            root_probs=(torch.from_numpy(root_probs).to(device) if use_branch_context else None),
+            root_valid=(torch.from_numpy(root_valid).to(device) if use_branch_context else None),
+            option_valid=(torch.from_numpy(option_valid).to(device) if use_branch_context else None),
             ego_history=torch.from_numpy(ego_history).to(device),
             neighbor_history=torch.from_numpy(neighbor_history).to(device),
             neighbor_valid=torch.from_numpy(neighbor_valid).to(device),

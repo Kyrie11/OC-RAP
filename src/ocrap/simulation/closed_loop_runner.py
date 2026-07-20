@@ -6,6 +6,7 @@ from typing import Any
 import hashlib
 import json
 import os
+from time import perf_counter
 
 import numpy as np
 
@@ -836,6 +837,16 @@ def _rollout_one_scene(
     audit_labels_done = 0
     progress = bool(cl_cfg.get("progress", True))
     progress_every = max(1, int(cl_cfg.get("progress_every_steps", 5)))
+    profile_timing = bool(cl_cfg.get("profile_timing", True))
+    timing_totals = {
+        "state_history": 0.0,
+        "candidate_features": 0.0,
+        "teacher_labels": 0.0,
+        "policy_selection": 0.0,
+        "audit_labels": 0.0,
+        "waymax_step_metrics": 0.0,
+    }
+    scene_wall_t0 = perf_counter()
 
     state0 = raw.metadata.get("_waymax_state")
     if state0 is None:
@@ -884,6 +895,7 @@ def _rollout_one_scene(
         t = _current_timestep(state)
         if progress and (step_idx == 0 or step_idx % progress_every == 0):
             print({"event": "closed_loop_step", "scene_rank": scenario_rank, "scene_id": str(raw.scenario_id), "step": step_idx, "time_index": int(t), "label_mode": label_mode}, flush=True)
+        timing_t0 = perf_counter()
         spliced_raw = raw_scenario_from_waymax_state(
             state,
             f"{raw.scenario_id}__cl{scenario_rank:04d}",
@@ -897,8 +909,11 @@ def _rollout_one_scene(
         hist.metadata["_waymax_state"] = state
         hist.metadata["_waymax_branch_from_current"] = True
         hist.metadata["waymax_planning_timestep"] = int(t)
+        if profile_timing:
+            timing_totals["state_history"] += perf_counter() - timing_t0
         if compute_teacher_labels:
             if external_sparse_labels:
+                timing_t0 = perf_counter()
                 feature_samples = build_feature_only_samples_for_history(
                     hist,
                     "closed_loop",
@@ -906,10 +921,13 @@ def _rollout_one_scene(
                     num_roots=feature_num_roots,
                     num_options=feature_num_options,
                 )
+                if profile_timing:
+                    timing_totals["candidate_features"] += perf_counter() - timing_t0
                 audit_indices = _preselect_external_label_candidate_indices(feature_samples, method, cfg)
                 sparse_label_decisions += 1
                 sparse_label_full_candidates_total += int(len(feature_samples))
                 sparse_label_candidates_total += int(len(audit_indices))
+                timing_t0 = perf_counter()
                 samples = build_labeled_samples_for_candidate_indices(
                     hist,
                     "closed_loop",
@@ -922,9 +940,15 @@ def _rollout_one_scene(
                     recovery_option_valid=feature_samples[0].option_valid if feature_samples else None,
                     assign_regime_labels=False,
                 )
+                if profile_timing:
+                    timing_totals["teacher_labels"] += perf_counter() - timing_t0
             else:
+                timing_t0 = perf_counter()
                 samples = build_samples_for_history(hist, "closed_loop", eval_cfg)
+                if profile_timing:
+                    timing_totals["teacher_labels"] += perf_counter() - timing_t0
         else:
+            timing_t0 = perf_counter()
             samples = build_feature_only_samples_for_history(
                 hist,
                 "closed_loop",
@@ -932,6 +956,8 @@ def _rollout_one_scene(
                 num_roots=feature_num_roots,
                 num_options=feature_num_options,
             )
+            if profile_timing:
+                timing_totals["candidate_features"] += perf_counter() - timing_t0
         if not samples:
             break
         select_cfg = cfg
@@ -951,6 +977,7 @@ def _rollout_one_scene(
             sel_local["previous_selected_macro"] = str(previous_selected_macro)
             sel_local["same_macro_run_length"] = int(same_macro_run_length)
             select_cfg["selection"] = sel_local
+        timing_t0 = perf_counter()
         sel_idx, info = _select_prefix(
             samples,
             bundle,
@@ -962,6 +989,8 @@ def _rollout_one_scene(
             external_model_cfg=external_model_cfg,
             external_device=external_device,
         )
+        if profile_timing:
+            timing_totals["policy_selection"] += perf_counter() - timing_t0
         selected_sample = samples[sel_idx]
         try:
             if int(getattr(selected_sample, "candidate_index", sel_idx)) != 0:
@@ -1013,6 +1042,7 @@ def _rollout_one_scene(
         audit_paper_selected_pcd_regret = None
         audit_paper_pcd_selector_miss = None
         if (selected_label_audit or coverage_label_audit) and (step_idx % audit_every_n_steps == 0) and (audit_max_labels <= 0 or audit_labels_done < audit_max_labels):
+            timing_t0 = perf_counter()
             try:
                 audit_indices = ([int(selected_sample.candidate_index)] if selected_label_audit else _select_audit_candidate_indices(samples, info, selected_sample, cfg))
                 labeled = build_labeled_samples_for_candidate_indices(
@@ -1160,8 +1190,11 @@ def _rollout_one_scene(
             except Exception as exc:
                 if progress:
                     print({"event": "closed_loop_selected_label_audit_failed", "scene_rank": scenario_rank, "step": step_idx, "error": str(exc)}, flush=True)
+            if profile_timing:
+                timing_totals["audit_labels"] += perf_counter() - timing_t0
         controls = prefix.prefix_controls if prefix.prefix_controls.size else np.zeros((1, 4), dtype=np.float32)
         metrics_after: dict[str, float] = {}
+        timing_t0 = perf_counter()
         for k in range(min(replan_interval, max(1, controls.shape[0]))):
             ctrl = controls[min(k, controls.shape[0] - 1)]
             action = _bicycle_action(int(state.num_objects), sdc, float(ctrl[0]), float(ctrl[1]), float(cfg.get("wheelbase_m", 2.8)))
@@ -1177,6 +1210,8 @@ def _rollout_one_scene(
                 pass
             if _scene_done(state):
                 break
+        if profile_timing:
+            timing_totals["waymax_step_metrics"] += perf_counter() - timing_t0
         teacher_r_dep = info["teacher_r_dep"]
         teacher_r_orc = info["teacher_r_orc"]
         utility = info["utility"]
@@ -1308,6 +1343,16 @@ def _rollout_one_scene(
             intervention_run_lengths.append(run_len)
             run_len = 0
     macro_switch_count = int(sum(decisions[i].selected_macro != decisions[i - 1].selected_macro for i in range(1, len(decisions))))
+    wall_s = perf_counter() - scene_wall_t0
+    measured_s = float(sum(timing_totals.values()))
+    timing_summary = {
+        "enabled": bool(profile_timing),
+        "wall_s": float(wall_s),
+        "measured_s": measured_s,
+        "other_overhead_s": float(max(0.0, wall_s - measured_s)),
+        "totals_s": {k: float(v) for k, v in timing_totals.items()},
+        "per_decision_s": {k: float(v / max(len(decisions), 1)) for k, v in timing_totals.items()},
+    }
     out = {
         "scene_id": str(raw.scenario_id),
         "bucket_name": bucket_name,
@@ -1368,6 +1413,7 @@ def _rollout_one_scene(
         "audit_paper_pcd_best_macro_counts": {m: int(sum(d.audit_paper_best_pcd_macro == m for d in decisions)) for m in sorted({d.audit_paper_best_pcd_macro for d in decisions if d.audit_paper_best_pcd_macro is not None})},
         "audit_paper_pcd_miss_best_macro_counts": {m: int(sum((d.audit_paper_pcd_selector_miss is True) and d.audit_paper_best_pcd_macro == m for d in decisions)) for m in sorted({d.audit_paper_best_pcd_macro for d in decisions if d.audit_paper_best_pcd_macro is not None})},
         "selection_reason_counts": {r: int(sum(d.selection_reason == r for d in decisions)) for r in sorted({d.selection_reason for d in decisions})},
+        "timing": timing_summary,
         "decisions": decision_dicts,
     }
     if bool(cl_cfg.get("save_trace_npz", False)):
@@ -1461,6 +1507,18 @@ def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, s
     agg["audit_paper_pcd_best_macro_counts"] = audit_paper_pcd_best_macro_counts
     agg["audit_paper_pcd_miss_best_macro_counts"] = audit_paper_pcd_miss_best_macro_counts
     agg["selection_reason_counts"] = reason_counts
+    timing_names = sorted({name for s in scene_results for name in ((s.get("timing", {}) or {}).get("totals_s", {}) or {}).keys()})
+    timing_totals = {
+        name: float(sum(float((((s.get("timing", {}) or {}).get("totals_s", {}) or {}).get(name, 0.0))) for s in scene_results))
+        for name in timing_names
+    }
+    timing_wall = float(sum(float((s.get("timing", {}) or {}).get("wall_s", 0.0)) for s in scene_results))
+    agg["timing"] = {
+        "scene_wall_sum_s": timing_wall,
+        "totals_s": timing_totals,
+        "per_decision_s": {name: float(value / max(int(agg["num_decisions"]), 1)) for name, value in timing_totals.items()},
+        "measured_fraction": float(sum(timing_totals.values()) / max(timing_wall, 1.0e-9)),
+    }
     return agg
 
 
