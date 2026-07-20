@@ -419,6 +419,10 @@ closed_loop:
   # fast = online inference only; skips per-candidate counterfactual teacher
   # labels at every replan. Use all/full only for small strict audits.
   label_mode: fast
+  # Slice only the history/future window required by OC-RAP on the accelerator,
+  # then transfer it once. The exact legacy full-trajectory conversion remains
+  # an automatic fallback for unfamiliar Waymax layouts.
+  fast_waymax_history: true
   # fast: no teacher labels. selected: label only executed candidate. all: label every candidate.
   audit_every_n_steps: 1
   audit_max_labels: 0
@@ -482,6 +486,9 @@ waymax:
   # Reuse stateless Waymax BaseEnvironment objects with identical config. This
   # also improves reuse of jitted scan rollout functions.
   cache_env_objects: true
+  # Optional persistent XLA compilation cache. The optimized run script sets
+  # this to a run-local directory so repeated processes reuse compiled kernels.
+  jax_compilation_cache_dir: null
   # Exact cache for repeated post-prefix constant-control futures produced from
   # the same Waymax state/environment. This avoids rerolling duplicate SDC stress
   # variants without changing their trajectory or priors.

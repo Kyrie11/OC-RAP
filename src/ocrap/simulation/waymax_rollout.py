@@ -38,6 +38,10 @@ def _configure_jax(cfg: dict) -> None:
     os.environ.setdefault("JAX_PLATFORMS", str(wx.get("jax_platforms", "cuda,cpu")))
     if not bool(wx.get("preallocate_gpu_memory", False)):
         os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+    cache_dir = str(wx.get("jax_compilation_cache_dir", "") or os.environ.get("JAX_COMPILATION_CACHE_DIR", "")).strip()
+    if cache_dir:
+        os.makedirs(cache_dir, exist_ok=True)
+        os.environ.setdefault("JAX_COMPILATION_CACHE_DIR", cache_dir)
 
 
 def _as_np(x: Any) -> np.ndarray:
@@ -400,12 +404,19 @@ def _metric_summary(waymax_env: Any, st: Any, sdc: int) -> dict[str, float]:
     out: dict[str, float] = {}
     try:
         metrics = waymax_env.metrics(st)
-        for name, res in metrics.items():
-            val = _as_np(getattr(res, "value", res))
+        values = {str(name): getattr(res, "value", res) for name, res in metrics.items()}
+        try:
+            import jax  # type: ignore
+
+            values = jax.device_get(values)
+        except Exception:
+            pass
+        for name, value in values.items():
+            val = np.asarray(value)
             if val.ndim > 0 and val.shape[-1] > sdc:
                 out[str(name)] = float(val.reshape(-1, val.shape[-1])[-1, sdc])
             else:
-                out[str(name)] = float(np.asarray(val).reshape(-1)[-1])
+                out[str(name)] = float(val.reshape(-1)[-1])
     except Exception as e:
         out["metrics_error"] = float("nan")
         out["metrics_error_present"] = 1.0

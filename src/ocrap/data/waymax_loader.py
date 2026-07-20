@@ -33,6 +33,10 @@ def _apply_jax_env(cfg: dict) -> None:
     os.environ.setdefault("JAX_PLATFORMS", platforms)
     if not bool(wx.get("preallocate_gpu_memory", False)):
         os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+    cache_dir = str(wx.get("jax_compilation_cache_dir", "") or os.environ.get("JAX_COMPILATION_CACHE_DIR", "")).strip()
+    if cache_dir:
+        os.makedirs(cache_dir, exist_ok=True)
+        os.environ.setdefault("JAX_COMPILATION_CACHE_DIR", cache_dir)
 
 
 def _as_np(x: Any) -> np.ndarray:

@@ -5,9 +5,10 @@ import numpy as np
 from ocrap.data.schema import SceneHistory
 from ocrap.utils.geometry import agent_state_to_box
 
-from .visibility import box_grid_mask, grid_coords, project_occlusion_shadow
+from .visibility import box_grid_mask, ego_centered_grid_geometry, project_occlusion_shadow
 
 # Channel convention: 0 visible_free, 1 occupied_visible, 2 unknown, 3 occluder, 4 route, 5 drivable, 6 confidence.
+
 
 
 def paint_route_and_drivable(mask: np.ndarray, history: SceneHistory, grid: tuple[np.ndarray, np.ndarray], cfg: dict) -> None:
@@ -17,17 +18,18 @@ def paint_route_and_drivable(mask: np.ndarray, history: SceneHistory, grid: tupl
         route_xy = history.route[:, :2]
     else:
         route_xy = np.stack([np.linspace(-10, 80, 50), np.zeros(50)], axis=-1)
+    sampled_route = route_xy[:: max(1, len(route_xy) // 80)]
     route_mask = np.zeros_like(X, dtype=bool)
     drivable = np.zeros_like(X, dtype=bool)
-    for pt in route_xy[:: max(1, len(route_xy) // 80)]:
-        d2 = (X - pt[0]) ** 2 + (Y - pt[1]) ** 2
+    for p in sampled_route:
+        d2 = (X - p[0]) ** 2 + (Y - p[1]) ** 2
         route_mask |= d2 <= (route_width * 0.75) ** 2
         drivable |= d2 <= (route_width * 2.2) ** 2
     # Include map polyline lanes/crosswalks when available.
     if history.map_polylines.size:
         valid_pts = history.map_polylines[..., :2][history.map_valid.astype(bool)]
-        for pt in valid_pts[:: max(1, len(valid_pts) // 250)]:
-            d2 = (X - pt[0]) ** 2 + (Y - pt[1]) ** 2
+        for p in valid_pts[:: max(1, len(valid_pts) // 250)]:
+            d2 = (X - p[0]) ** 2 + (Y - p[1]) ** 2
             drivable |= d2 <= (route_width * 1.5) ** 2
     mask[4, route_mask] = 1.0
     mask[5, drivable] = 1.0
@@ -37,12 +39,10 @@ def render_base_occ_mask(history: SceneHistory, cfg: dict) -> np.ndarray:
     radius = float(cfg.get("local_radius_m", 80.0))
     res = float(cfg.get("bev_resolution_m", 1.0))
     C = int(cfg.get("bev_channels", 7))
-    X, Y = grid_coords(radius, res)
+    X, Y, radial_distance, polar_angle, in_range = ego_centered_grid_geometry(radius, res)
     H, W = X.shape
     mask = np.zeros((C, H, W), dtype=np.float32)
     grid = (X, Y)
-    r = np.sqrt(X**2 + Y**2)
-    in_range = r <= radius
     paint_route_and_drivable(mask, history, grid, cfg)
     # If map is sparse, keep a broad ego-centered drivable ribbon so unknown ratios are meaningful.
     if mask[5].sum() < 10:
@@ -66,7 +66,7 @@ def render_base_occ_mask(history: SceneHistory, cfg: dict) -> np.ndarray:
         vehicle_like = bool(box[-1] in (1, 2, 3) or box[5] > 4.5)
         if vehicle_like:
             mask[3, occ_cells] = 1.0
-            shadow = project_occlusion_shadow(ego_xy, box, grid, radius)
+            shadow = project_occlusion_shadow(ego_xy, box, grid, radius, polar_grid=(radial_distance, polar_angle))
             shadow &= mask[5] > 0.5
             mask[2, shadow] = 1.0
             mask[0, shadow] = 0.0

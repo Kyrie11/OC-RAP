@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import math
+from functools import lru_cache
 
 import numpy as np
 
 from ocrap.utils.geometry import agent_state_to_box, wrap_angle
 
 
+@lru_cache(maxsize=16)
 def grid_coords(radius: float, resolution: float) -> tuple[np.ndarray, np.ndarray]:
     # Use an ego-centred lattice that contains (0, 0).  This makes the
     # visibility geometry symmetric and avoids losing the exact route centreline
@@ -14,7 +16,26 @@ def grid_coords(radius: float, resolution: float) -> tuple[np.ndarray, np.ndarra
     n = max(3, int(round(2 * radius / resolution)) + 1)
     xs = np.linspace(-radius, radius, n, dtype=np.float32)
     ys = np.linspace(-radius, radius, n, dtype=np.float32)
-    return np.meshgrid(xs, ys, indexing="xy")
+    X, Y = np.meshgrid(xs, ys, indexing="xy")
+    # Callers only read these arrays. Marking the cached lattice read-only makes
+    # accidental cross-replan mutation fail loudly instead of corrupting future
+    # occupancy renders.
+    X.setflags(write=False)
+    Y.setflags(write=False)
+    return X, Y
+
+
+@lru_cache(maxsize=16)
+def ego_centered_grid_geometry(radius: float, resolution: float) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Cached ego-centred Cartesian/polar lattice used by every replan."""
+    X, Y = grid_coords(float(radius), float(resolution))
+    R = np.sqrt(X**2 + Y**2)
+    Theta = np.arctan2(Y, X)
+    in_range = R <= float(radius)
+    R.setflags(write=False)
+    Theta.setflags(write=False)
+    in_range.setflags(write=False)
+    return X, Y, R, Theta, in_range
 
 
 def angular_interval_for_box(box: np.ndarray, ego_xy: np.ndarray) -> tuple[float, float, float]:
@@ -26,10 +47,13 @@ def angular_interval_for_box(box: np.ndarray, ego_xy: np.ndarray) -> tuple[float
     return center - half, center + half, dist
 
 
-def project_occlusion_shadow(ego_xy: np.ndarray, occluder_box: np.ndarray, grid: tuple[np.ndarray, np.ndarray], max_range: float) -> np.ndarray:
+def project_occlusion_shadow(ego_xy: np.ndarray, occluder_box: np.ndarray, grid: tuple[np.ndarray, np.ndarray], max_range: float, *, polar_grid: tuple[np.ndarray, np.ndarray] | None = None) -> np.ndarray:
     X, Y = grid
-    r = np.sqrt((X - ego_xy[0]) ** 2 + (Y - ego_xy[1]) ** 2)
-    theta = np.arctan2(Y - ego_xy[1], X - ego_xy[0])
+    if polar_grid is not None and float(ego_xy[0]) == 0.0 and float(ego_xy[1]) == 0.0:
+        r, theta = polar_grid
+    else:
+        r = np.sqrt((X - ego_xy[0]) ** 2 + (Y - ego_xy[1]) ** 2)
+        theta = np.arctan2(Y - ego_xy[1], X - ego_xy[0])
     a0, a1, d = angular_interval_for_box(occluder_box, ego_xy)
     center = 0.5 * (a0 + a1)
     width = max(abs(a1 - a0), math.atan2(max(float(occluder_box[5]), float(occluder_box[6])), max(d, 1e-3)))
