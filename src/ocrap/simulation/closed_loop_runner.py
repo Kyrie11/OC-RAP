@@ -11,7 +11,7 @@ from time import perf_counter
 import numpy as np
 
 from ocrap.data.build.builder import build_feature_only_samples_for_history, build_labeled_samples_for_candidate_indices, build_samples_for_history
-from ocrap.data.build.history import construct_history, construct_history_from_waymax_state
+from ocrap.data.build.history import construct_history
 from ocrap.data.schema import pad_recovery_params
 from ocrap.data.serialization import write_json
 from ocrap.data.waymax_loader import iter_waymax_womd_scenarios, raw_scenario_from_waymax_state
@@ -21,7 +21,7 @@ from ocrap.models.data import iter_sample_paths_many, scalar_metadata_for_path
 from ocrap.models.inference import ModelBundle, load_model_bundle, predict_sample, predict_samples, teacher_prediction_from_sample
 from ocrap.external_baselines.policies import select_external_policy
 from ocrap.external_baselines.evaluate import _load_checkpoint as _load_external_checkpoint, _predict_group as _predict_external_group
-from ocrap.simulation.waymax_rollout import _as_np, _bicycle_action, _make_env, _sdc_index
+from ocrap.simulation.waymax_rollout import _as_np, _bicycle_action, _make_env, _metric_summary, _sdc_index
 from ocrap.utils.geometry import compute_ttc, min_box_clearance
 
 
@@ -60,6 +60,10 @@ class ClosedLoopDecision:
     selected_pred_r_orc: float | None
     selected_pred_gap: float | None
     selected_pred_drs: float | None
+    selected_direct_recovery_value: float | None
+    selected_direct_recovery_std: float | None
+    nominal_direct_recovery_value: float | None
+    direct_recovery_advantage: float | None
     selected_nominal_deviation: float | None
     selected_odg: float | None
     selected_post_contact_deployability: float | None
@@ -459,140 +463,62 @@ def _apply_gamma_rec_by_bucket_file(cfg: dict) -> dict:
         local["selection"] = new_sel
         return local
     return cfg
-def _state_status(state: Any) -> tuple[int, bool]:
-    """Fetch the scalar Waymax timestep/done flag with one device sync."""
-    try:
-        import jax  # type: ignore
-
-        timestep, is_done = jax.device_get((state.timestep, state.is_done))
-        return int(np.asarray(timestep).reshape(()).item()), bool(np.asarray(is_done).reshape(()).item())
-    except Exception:
-        try:
-            t = int(np.asarray(state.timestep).reshape(()).item())
-        except Exception:
-            t = 0
-        try:
-            done = bool(np.asarray(state.is_done).reshape(()).item())
-        except Exception:
-            try:
-                done = t >= int(np.asarray(state.log_trajectory.valid).shape[-1]) - 2
-            except Exception:
-                done = False
-        return t, done
-
-
 def _current_timestep(state: Any) -> int:
-    return _state_status(state)[0]
-
-
-def _current_agent_slice(field: Any, timestep: Any, num_agents: int) -> Any:
-    """Slice one trajectory field without first transferring its full history."""
-    out = field
-    shape = tuple(getattr(out, "shape", ()))
-    while len(shape) > 2 and shape[0] == 1:
-        out = out[0]
-        shape = tuple(getattr(out, "shape", ()))
-    if len(shape) == 1:
-        if shape[0] == int(num_agents):
-            return out
-        raise ValueError(f"Unexpected trajectory field shape {shape}")
-    if len(shape) == 2:
-        if shape[0] == int(num_agents):
-            return out[:, timestep if shape[1] > 1 else 0]
-        if shape[1] == int(num_agents):
-            return out[timestep if shape[0] > 1 else 0, :]
-    raise ValueError(f"Unexpected trajectory field shape {shape}")
-
-
-def _decode_geometry_slices(sliced: tuple[Any, ...], sdc: int) -> tuple[dict[str, float], list[float] | None]:
-    x, y, vx, vy, yaw, length, width, height, valid = [np.asarray(v).reshape(-1) for v in sliced]
-    valid = valid.astype(bool)
-    if sdc < 0 or sdc >= len(x) or not bool(valid[sdc]):
-        return {}, None
-    ego_box = np.asarray([x[sdc], y[sdc], vx[sdc], vy[sdc], yaw[sdc], length[sdc], width[sdc], height[sdc], 1.0], dtype=np.float32)
-    keep = np.arange(len(x)) != int(sdc)
-    boxes = np.stack([x, y, vx, vy, yaw, length, width, height, np.ones_like(x)], axis=-1).astype(np.float32)[keep]
-    other_valid = valid[keep]
-    ego_state = np.zeros((16,), dtype=np.float32)
-    ego_state[0], ego_state[1] = float(x[sdc]), float(y[sdc])
-    ego_state[3], ego_state[4] = float(vx[sdc]), float(vy[sdc])
-    ego_state[7] = float(yaw[sdc])
-    ego_state[10], ego_state[11], ego_state[12] = float(length[sdc]), float(width[sdc]), float(height[sdc])
-    metrics = {
-        "min_clearance_m": float(min_box_clearance(ego_box, boxes, other_valid)),
-        "ttc_s": float(compute_ttc(ego_state, boxes, other_valid)),
-        "ego_speed_mps": float(np.hypot(vx[sdc], vy[sdc])),
-        "ego_yaw_rad": float(yaw[sdc]),
-    }
-    return metrics, [float(x[sdc]), float(y[sdc])]
-
-
-def _geometry_device_slices(state: Any, timestep: Any) -> tuple[Any, ...]:
-    tr = state.sim_trajectory
-    n = int(state.num_objects)
-    return tuple(
-        _current_agent_slice(getattr(tr, name), timestep, n)
-        for name in ("x", "y", "vel_x", "vel_y", "yaw", "length", "width", "height", "valid")
-    )
-
-
-def _state_geometry_snapshot(state: Any, sdc: int, *, timestep: int | None = None) -> tuple[dict[str, float], list[float] | None]:
-    """Return current physical margins and ego XY with one sliced device transfer."""
     try:
-        t = int(timestep) if timestep is not None else _current_timestep(state)
-        sliced = _geometry_device_slices(state, t)
-        try:
-            import jax  # type: ignore
-
-            sliced = jax.device_get(sliced)
-        except Exception:
-            pass
-        return _decode_geometry_slices(sliced, sdc)
+        return int(_as_np(state.timestep).reshape(()).item())
     except Exception:
-        return {}, None
-
-
-def _step_metrics_geometry_snapshot(waymax_env: Any, state: Any, sdc: int) -> tuple[dict[str, float], list[float] | None, int, bool]:
-    """Fetch Waymax metrics, current geometry, timestep and done in one sync."""
-    try:
-        t_device = state.timestep
-        metric_results = waymax_env.metrics(state)
-        payload = {
-            "timestep": t_device,
-            "is_done": state.is_done,
-            "metrics": {str(name): getattr(res, "value", res) for name, res in metric_results.items()},
-            "geometry": _geometry_device_slices(state, t_device),
-        }
-        try:
-            import jax  # type: ignore
-
-            payload = jax.device_get(payload)
-        except Exception:
-            pass
-        t = int(np.asarray(payload["timestep"]).reshape(()).item())
-        done = bool(np.asarray(payload["is_done"]).reshape(()).item())
-        metrics: dict[str, float] = {}
-        for name, value in payload["metrics"].items():
-            val = np.asarray(value)
-            if val.ndim > 0 and val.shape[-1] > sdc:
-                metrics[str(name)] = float(val.reshape(-1, val.shape[-1])[-1, sdc])
-            else:
-                metrics[str(name)] = float(val.reshape(-1)[-1])
-        geometry_metrics, ego_xy = _decode_geometry_slices(tuple(payload["geometry"]), sdc)
-        metrics.update(geometry_metrics)
-        return metrics, ego_xy, t, done
-    except Exception:
-        t, done = _state_status(state)
-        geometry_metrics, ego_xy = _state_geometry_snapshot(state, sdc, timestep=t)
-        return geometry_metrics, ego_xy, t, done
+        return 0
 
 
 def _state_geometry_metrics(state: Any, sdc: int) -> dict[str, float]:
-    return _state_geometry_snapshot(state, sdc)[0]
+    """Current-step physical margins used to interpret near/contact behavior.
+
+    The paper defines near-contact using clearance/TTC, but earlier closed-loop
+    reports exposed only generic Waymax metrics.  These fields make the regime
+    claim observable at execution time without changing the planner inputs.
+    """
+    try:
+        tr = state.sim_trajectory
+        t = _current_timestep(state)
+        x = _as_np(tr.x)[:, t]
+        y = _as_np(tr.y)[:, t]
+        vx = _as_np(tr.vel_x)[:, t]
+        vy = _as_np(tr.vel_y)[:, t]
+        yaw = _as_np(tr.yaw)[:, t]
+        length = _as_np(tr.length)[:, t]
+        width = _as_np(tr.width)[:, t]
+        height = _as_np(tr.height)[:, t]
+        valid = _as_np(tr.valid)[:, t].astype(bool)
+        if sdc < 0 or sdc >= len(x) or not bool(valid[sdc]):
+            return {}
+        ego_box = np.asarray([x[sdc], y[sdc], vx[sdc], vy[sdc], yaw[sdc], length[sdc], width[sdc], height[sdc], 1.0], dtype=np.float32)
+        keep = np.arange(len(x)) != int(sdc)
+        boxes = np.stack([x, y, vx, vy, yaw, length, width, height, np.ones_like(x)], axis=-1).astype(np.float32)[keep]
+        other_valid = valid[keep]
+        ego_state = np.zeros((16,), dtype=np.float32)
+        ego_state[0], ego_state[1] = float(x[sdc]), float(y[sdc])
+        ego_state[3], ego_state[4] = float(vx[sdc]), float(vy[sdc])
+        ego_state[7] = float(yaw[sdc])
+        ego_state[10], ego_state[11], ego_state[12] = float(length[sdc]), float(width[sdc]), float(height[sdc])
+        return {
+            "min_clearance_m": float(min_box_clearance(ego_box, boxes, other_valid)),
+            "ttc_s": float(compute_ttc(ego_state, boxes, other_valid)),
+            "ego_speed_mps": float(np.hypot(vx[sdc], vy[sdc])),
+            "ego_yaw_rad": float(yaw[sdc]),
+        }
+    except Exception:
+        return {}
 
 
 def _scene_done(state: Any) -> bool:
-    return _state_status(state)[1]
+    try:
+        return bool(_as_np(state.is_done).reshape(()).item())
+    except Exception:
+        try:
+            return _current_timestep(state) >= int(_as_np(state.log_trajectory.valid).shape[-1]) - 2
+        except Exception:
+            return False
+
 
 def _sample_to_dict(sample) -> dict[str, Any]:
     return sample.to_npz_dict()
@@ -652,42 +578,6 @@ def _sample_to_inference_dict(sample) -> dict[str, Any]:
     }
 
 
-def _samples_to_inference_dicts(samples: list) -> list[dict[str, Any]]:
-    """Build feature-only candidate views while reusing invariant scene geometry."""
-    if not samples:
-        return []
-    first = _sample_to_inference_dict(samples[0])
-    out = [first]
-    invariant_keys = {
-        "scene_id", "original_scenario_id", "time_index", "split_id",
-        "agent_history", "agent_valid", "map_polylines", "map_valid",
-        "dynamic_map", "route", "bev_occ", "ego_state", "root_probs",
-        "root_signature", "root_future_signature", "root_valid", "y_obs",
-        "c_star", "m_star", "option_valid", "recovery_modes", "recovery_params",
-        "r_orc_star", "r_dep_star", "oracle_gap_star", "i_art_star",
-    }
-    shared = {k: first[k] for k in invariant_keys}
-    for sample in samples[1:]:
-        p = sample.prefix
-        d = dict(shared)
-        d.update({
-            "candidate_index": np.int64(sample.candidate_index),
-            "is_nominal": np.int64(sample.is_nominal),
-            "prefix_states": np.asarray(p.prefix_states, dtype=np.float32),
-            "prefix_controls": np.asarray(p.prefix_controls, dtype=np.float32),
-            "prefix_macro_id": np.int64(p.macro_id),
-            "prefix_macro_type_id": np.int64((p.diagnostics or {}).get("macro_type_id", p.macro_id)),
-            "prefix_macro_name": p.macro_name,
-            "prefix_param": np.asarray(p.params, dtype=np.float32),
-            "utility": np.float32(p.utility),
-            "hard_violation": np.float32(p.hard_violation),
-            "harm_proxy": np.float32(p.harm_proxy),
-            "feasible": np.int64(p.feasible),
-        })
-        out.append(d)
-    return out
-
-
 def _sample_to_audit_dict(sample) -> dict[str, Any]:
     """Small teacher-label view used by closed-loop audit metrics.
 
@@ -722,14 +612,8 @@ def _select_prefix(
     if compute_teacher_labels:
         dicts = [_sample_to_dict(s) for s in samples]
     else:
-        dicts = _samples_to_inference_dicts(samples)
-    preds = predict_samples(
-        dicts,
-        bundle,
-        cfg,
-        shared_scene_features=True,
-        shared_geometry=not compute_teacher_labels,
-    ) if bundle is not None else [predict_sample(d, None, cfg) for d in dicts]
+        dicts = [_sample_to_inference_dict(s) for s in samples]
+    preds = predict_samples(dicts, bundle, cfg, shared_scene_features=True) if bundle is not None else [predict_sample(d, None, cfg) for d in dicts]
     items = []
     for s, d, pred in zip(samples, dicts, preds):
         teacher = teacher_prediction_from_sample(d, cfg) if compute_teacher_labels else None
@@ -966,10 +850,6 @@ def _rollout_one_scene(
         "audit_labels": 0.0,
         "waymax_step_metrics": 0.0,
     }
-    fast_history_enabled = bool(cl_cfg.get("fast_waymax_history", True))
-    fast_history_used = 0
-    fast_history_fallbacks = 0
-    fast_history_first_error: str | None = None
     scene_wall_t0 = perf_counter()
 
     state0 = raw.metadata.get("_waymax_state")
@@ -1014,41 +894,22 @@ def _rollout_one_scene(
     feature_num_roots = int(getattr(bundle.model, "num_roots", int(cfg.get("num_roots", 8)))) if bundle is not None else int(cfg.get("num_roots", 8))
 
     for step_idx in range(max_steps):
-        t, scene_done = _state_status(state)
-        if scene_done:
+        if _scene_done(state):
             break
+        t = _current_timestep(state)
         if progress and (step_idx == 0 or step_idx % progress_every == 0):
             print({"event": "closed_loop_step", "scene_rank": scenario_rank, "scene_id": str(raw.scenario_id), "step": step_idx, "time_index": int(t), "label_mode": label_mode}, flush=True)
         timing_t0 = perf_counter()
-        hist = None
-        if fast_history_enabled:
-            try:
-                hist = construct_history_from_waymax_state(
-                    state,
-                    raw,
-                    t,
-                    cfg,
-                    scenario_id=f"{raw.scenario_id}__cl{scenario_rank:04d}",
-                    scenario_index=scenario_rank,
-                )
-                fast_history_used += 1
-            except Exception as exc:
-                fast_history_fallbacks += 1
-                if fast_history_first_error is None:
-                    fast_history_first_error = f"{type(exc).__name__}: {exc}"
-                    if progress:
-                        print({"event": "closed_loop_fast_history_fallback", "scene_rank": scenario_rank, "error": fast_history_first_error}, flush=True)
-        if hist is None:
-            spliced_raw = raw_scenario_from_waymax_state(
-                state,
-                f"{raw.scenario_id}__cl{scenario_rank:04d}",
-                scenario_rank,
-                cfg,
-                trajectory_mode="closed_loop_splice",
-                splice_until=t,
-                static_template=raw,
-            )
-            hist = construct_history(spliced_raw, t, cfg)
+        spliced_raw = raw_scenario_from_waymax_state(
+            state,
+            f"{raw.scenario_id}__cl{scenario_rank:04d}",
+            scenario_rank,
+            cfg,
+            trajectory_mode="closed_loop_splice",
+            splice_until=t,
+            static_template=raw,
+        )
+        hist = construct_history(spliced_raw, t, cfg)
         hist.metadata["_waymax_state"] = state
         hist.metadata["_waymax_branch_from_current"] = True
         hist.metadata["waymax_planning_timestep"] = int(t)
@@ -1342,11 +1203,16 @@ def _rollout_one_scene(
             ctrl = controls[min(k, controls.shape[0] - 1)]
             action = _bicycle_action(int(state.num_objects), sdc, float(ctrl[0]), float(ctrl[1]), float(cfg.get("wheelbase_m", 2.8)))
             state = wx_env.step(state, action)
-            metrics_after, ego_xy, tt, done_after_step = _step_metrics_geometry_snapshot(wx_env, state, sdc)
+            metrics_after = _metric_summary(wx_env, state, sdc)
+            metrics_after.update(_state_geometry_metrics(state, sdc))
             metric_trace.append(metrics_after)
-            if ego_xy is not None:
-                state_xy_trace.append(ego_xy)
-            if done_after_step:
+            try:
+                tr = state.sim_trajectory
+                tt = _current_timestep(state)
+                state_xy_trace.append([float(_as_np(tr.x)[sdc, tt]), float(_as_np(tr.y)[sdc, tt])])
+            except Exception:
+                pass
+            if _scene_done(state):
                 break
         if profile_timing:
             timing_totals["waymax_step_metrics"] += perf_counter() - timing_t0
@@ -1359,6 +1225,12 @@ def _rollout_one_scene(
         selected_pred_r_orc = _safe_optional_float(info["pred_r_orc"][sel_idx])
         selected_pred_gap = _safe_optional_float(info["pred_gap"][sel_idx])
         selected_pred_drs = _safe_optional_float(info["pred_drs"][sel_idx])
+        direct_values = info.get("pred_direct_value", None)
+        direct_stds = info.get("pred_direct_std", None)
+        selected_direct_recovery_value = _safe_optional_float(direct_values[sel_idx]) if direct_values is not None else None
+        selected_direct_recovery_std = _safe_optional_float(direct_stds[sel_idx]) if direct_stds is not None else None
+        nominal_direct_recovery_value = _safe_optional_float(direct_values[0]) if direct_values is not None and len(direct_values) else None
+        direct_recovery_advantage = (selected_direct_recovery_value - nominal_direct_recovery_value) if selected_direct_recovery_value is not None and nominal_direct_recovery_value is not None else None
         selected_nominal_deviation = _safe_optional_float(info["nominal_deviation"][sel_idx])
         selected_odg = _safe_optional_float(selected_sample.oracle_gap_star) if compute_teacher_labels else (_safe_optional_float(selected_audit_data.get("oracle_gap_star")) if selected_audit_data is not None else None)
         selected_post_contact_deployability = selected_audit_pcds
@@ -1382,6 +1254,10 @@ def _rollout_one_scene(
                 selected_pred_r_orc=selected_pred_r_orc,
                 selected_pred_gap=selected_pred_gap,
                 selected_pred_drs=selected_pred_drs,
+                selected_direct_recovery_value=selected_direct_recovery_value,
+                selected_direct_recovery_std=selected_direct_recovery_std,
+                nominal_direct_recovery_value=nominal_direct_recovery_value,
+                direct_recovery_advantage=direct_recovery_advantage,
                 selected_nominal_deviation=selected_nominal_deviation,
                 selected_odg=selected_odg,
                 selected_post_contact_deployability=selected_post_contact_deployability,
@@ -1534,6 +1410,9 @@ def _rollout_one_scene(
         "closed_loop_pred_r_dep": _mean_finite([d.selected_pred_r_dep for d in decisions]),
         "closed_loop_pred_gap": _mean_finite([d.selected_pred_gap for d in decisions]),
         "closed_loop_pred_DRS_proxy": _mean_finite([d.selected_pred_drs for d in decisions]),
+        "closed_loop_direct_recovery_value": _mean_finite([d.selected_direct_recovery_value for d in decisions]),
+        "closed_loop_direct_recovery_std": _mean_finite([d.selected_direct_recovery_std for d in decisions]),
+        "closed_loop_direct_recovery_advantage": _mean_finite([d.direct_recovery_advantage for d in decisions]),
         "closed_loop_nominal_deviation": _mean_finite([d.selected_nominal_deviation for d in decisions]),
         "intervention_rate": _mean_finite([float(d.selected_candidate_index != 0) for d in decisions], default=0.0),
         "intervention_episode_count": intervention_episode_count,
@@ -1551,12 +1430,6 @@ def _rollout_one_scene(
         "audit_paper_pcd_best_macro_counts": {m: int(sum(d.audit_paper_best_pcd_macro == m for d in decisions)) for m in sorted({d.audit_paper_best_pcd_macro for d in decisions if d.audit_paper_best_pcd_macro is not None})},
         "audit_paper_pcd_miss_best_macro_counts": {m: int(sum((d.audit_paper_pcd_selector_miss is True) and d.audit_paper_best_pcd_macro == m for d in decisions)) for m in sorted({d.audit_paper_best_pcd_macro for d in decisions if d.audit_paper_best_pcd_macro is not None})},
         "selection_reason_counts": {r: int(sum(d.selection_reason == r for d in decisions)) for r in sorted({d.selection_reason for d in decisions})},
-        "fast_waymax_history": {
-            "enabled": bool(fast_history_enabled),
-            "used": int(fast_history_used),
-            "fallbacks": int(fast_history_fallbacks),
-            "first_error": fast_history_first_error,
-        },
         "timing": timing_summary,
         "decisions": decision_dicts,
     }
@@ -1565,7 +1438,7 @@ def _rollout_one_scene(
     return out
 
 def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, source: str) -> dict[str, Any]:
-    keys = ["closed_loop_FRA_exec", "closed_loop_FRA_cand", "closed_loop_DRS", "closed_loop_ODG", "closed_loop_post_contact_deployability", "closed_loop_artifact_selection_rate", "closed_loop_audit_candidate_count", "closed_loop_audit_best_R_dep", "closed_loop_audit_best_DRS", "closed_loop_audit_selected_R_dep_regret", "closed_loop_audit_best_PCD", "closed_loop_audit_selected_PCD_regret", "closed_loop_audit_recoverable_candidate_rate", "closed_loop_audit_selector_miss_rate", "closed_loop_audit_pcd_selector_miss_rate", "closed_loop_audit_paper_best_PCD", "closed_loop_audit_paper_selected_PCD_regret", "closed_loop_audit_paper_pcd_selector_miss_rate", "closed_loop_bounded_NUP", "closed_loop_pred_r_dep", "closed_loop_pred_gap", "closed_loop_pred_DRS_proxy", "closed_loop_nominal_deviation", "intervention_rate", "intervention_episode_rate", "mean_intervention_run_length", "max_intervention_run_length", "macro_switch_rate", "external_sparse_label_candidates_mean", "external_sparse_full_candidates_mean"]
+    keys = ["closed_loop_FRA_exec", "closed_loop_FRA_cand", "closed_loop_DRS", "closed_loop_ODG", "closed_loop_post_contact_deployability", "closed_loop_artifact_selection_rate", "closed_loop_audit_candidate_count", "closed_loop_audit_best_R_dep", "closed_loop_audit_best_DRS", "closed_loop_audit_selected_R_dep_regret", "closed_loop_audit_best_PCD", "closed_loop_audit_selected_PCD_regret", "closed_loop_audit_recoverable_candidate_rate", "closed_loop_audit_selector_miss_rate", "closed_loop_audit_pcd_selector_miss_rate", "closed_loop_audit_paper_best_PCD", "closed_loop_audit_paper_selected_PCD_regret", "closed_loop_audit_paper_pcd_selector_miss_rate", "closed_loop_bounded_NUP", "closed_loop_pred_r_dep", "closed_loop_pred_gap", "closed_loop_pred_DRS_proxy", "closed_loop_direct_recovery_value", "closed_loop_direct_recovery_std", "closed_loop_direct_recovery_advantage", "closed_loop_nominal_deviation", "intervention_rate", "intervention_episode_rate", "mean_intervention_run_length", "max_intervention_run_length", "macro_switch_rate", "external_sparse_label_candidates_mean", "external_sparse_full_candidates_mean"]
     agg: dict[str, Any] = {
         "source": source,
         "method": method,
@@ -1662,13 +1535,6 @@ def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, s
         "totals_s": timing_totals,
         "per_decision_s": {name: float(value / max(int(agg["num_decisions"]), 1)) for name, value in timing_totals.items()},
         "measured_fraction": float(sum(timing_totals.values()) / max(timing_wall, 1.0e-9)),
-    }
-    fast_history_records = [s.get("fast_waymax_history", {}) or {} for s in scene_results]
-    agg["fast_waymax_history"] = {
-        "enabled_scene_count": int(sum(bool(x.get("enabled", False)) for x in fast_history_records)),
-        "used": int(sum(int(x.get("used", 0) or 0) for x in fast_history_records)),
-        "fallbacks": int(sum(int(x.get("fallbacks", 0) or 0) for x in fast_history_records)),
-        "first_errors": sorted({str(x.get("first_error")) for x in fast_history_records if x.get("first_error")}),
     }
     return agg
 

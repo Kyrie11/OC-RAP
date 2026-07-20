@@ -62,21 +62,13 @@ def _macro_params(macro: str, variant: int, ego_speed: float, cfg: dict) -> np.n
     return np.array([max(0.0, ego_speed + (-1) ** variant * 0.8), 0.4 * ((variant % 3) - 1), 0.0, 0.0, 0.0], dtype=np.float32)
 
 
-def _rollout(
-    history: SceneHistory,
-    macro: str,
-    params: np.ndarray,
-    cfg: dict,
-    *,
-    route_projection=None,
-    current_other_xy: np.ndarray | None = None,
-) -> tuple[np.ndarray, np.ndarray, dict]:
+def _rollout(history: SceneHistory, macro: str, params: np.ndarray, cfg: dict) -> tuple[np.ndarray, np.ndarray, dict]:
     sr = float(cfg.get("sample_rate_hz", 10.0))
     dt = 1.0 / sr
     T_p = max(2, int(round(float(cfg.get("prefix_horizon_s", 1.0)) * sr)))
     ego = history.ego_state.astype(np.float32)
     route = history.route
-    proj = route_projection if route_projection is not None else project_to_route(ego[:2], route)
+    proj = project_to_route(ego[:2], route)
     v0 = max(0.0, float(ego[6]))
     target_v, d_lat, a_bias, stop_s, topology_required = [float(x) for x in params]
     a_nom = np.clip((target_v - v0) / max((T_p - 1) * dt, 1e-3) + 0.3 * a_bias, float(cfg.get("control_limits", {}).get("a_min", -6.0)), float(cfg.get("control_limits", {}).get("a_max", 3.0)))
@@ -120,14 +112,13 @@ def _rollout(
     # Prefix-level collision/contact labels: keep them as labels, not blanket filters.
     prefix_collision = False
     min_other = 99.0
-    if current_other_xy is None and history.agent_history.shape[1] > 1:
+    if history.agent_history.shape[1] > 1:
         cur = history.agent_history[-1, 1:, :2]
         val = history.agent_valid[-1, 1:].astype(bool)
-        current_other_xy = cur[val] if val.any() else np.zeros((0, 2), dtype=np.float32)
-    if current_other_xy is not None and len(current_other_xy):
-        d = np.linalg.norm(np.asarray(current_other_xy, dtype=np.float32)[None, :, :] - states[:, None, :2], axis=-1)
-        min_other = float(np.min(d))
-        prefix_collision = bool(min_other < 1.8)
+        if val.any():
+            d = np.linalg.norm(cur[val][None, :, :] - states[:, None, :2], axis=-1)
+            min_other = float(np.min(d))
+            prefix_collision = bool(min_other < 1.8)
     hard_violation = float(prefix_collision) * 1.0 + float(offroad_hard) * 2.0 + float(wrong_way_hard) * 2.0
     diagnostics = {
         "macro_type_id": int(MACROS.index(macro)) if macro in MACROS else -1,
@@ -152,16 +143,6 @@ def generate_candidate_prefixes(history: SceneHistory, cfg: dict) -> list[Candid
     ego_speed = float(history.ego_state[6])
     prefixes: list[CandidatePrefix] = []
     macro_bank = _macro_bank_from_cfg(cfg)
-    # All candidates in one replan share the same ego-to-route projection and
-    # current surrounding-agent positions. Computing them once removes repeated
-    # route scans and boolean indexing without changing any prefix equations.
-    route_projection = project_to_route(history.ego_state[:2], history.route)
-    current_other_xy = np.zeros((0, 2), dtype=np.float32)
-    if history.agent_history.shape[1] > 1:
-        current = history.agent_history[-1, 1:, :2]
-        current_valid = history.agent_valid[-1, 1:].astype(bool)
-        if current_valid.any():
-            current_other_xy = np.asarray(current[current_valid], dtype=np.float32)
     macro_seq: list[tuple[str, int]] = [("nominal", 0)]
     for rep in range(max(1, n)):
         for m in macro_bank[1:]:
@@ -175,14 +156,7 @@ def generate_candidate_prefixes(history: SceneHistory, cfg: dict) -> list[Candid
         macro_seq.append((pad_macro, len(macro_seq)))
     for i, (macro, variant) in enumerate(macro_seq[:n]):
         params = _macro_params(macro, variant, ego_speed, cfg)
-        states, controls, diag = _rollout(
-            history,
-            macro,
-            params,
-            cfg,
-            route_projection=route_projection,
-            current_other_xy=current_other_xy,
-        )
+        states, controls, diag = _rollout(history, macro, params, cfg)
         if i >= len(MACROS) * max(1, variant):
             diag["padded_duplicate"] = i >= len(set(m for m, _ in macro_seq[:i+1]))
         util = nominal_utility(states, controls, diag, cfg)

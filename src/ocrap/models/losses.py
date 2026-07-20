@@ -1258,25 +1258,33 @@ def direct_uncertainty_recovery_value_loss(
     positive_gain: float = 0.03,
     negative_gain: float = 0.02,
     rank_margin: float = 0.04,
-    point_weight: float = 1.0,
-    listwise_weight: float = 1.0,
+    point_weight: float = 0.15,
+    listwise_weight: float = 0.35,
     advantage_weight: float = 1.0,
+    centered_weight: float = 1.0,
+    positive_group_weight: float = 4.0,
+    negative_group_weight: float = 1.0,
+    ambiguous_group_weight: float = 0.25,
+    near_weight: float = 1.5,
+    contact_weight: float = 1.0,
+    min_group_range: float = 0.01,
     false_positive_weight: float = 1.0,
     variance_floor: float = 0.0025,
     success_gamma: float = 0.0,
     success_temperature: float = 0.25,
 ) -> torch.Tensor:
-    """Direct, uncertainty-aware observation-consistent recovery value.
+    """Learn candidate value *relative to nominal* without corrupting OC-MERO.
 
-    OC-MERO answers whether a candidate has a deployable shared recovery option;
-    this head answers a different question: among already feasible candidates,
-    which prefix has the better *counterfactual deployable outcome*?  Decoupling
-    the two prevents ranking gradients from corrupting R_dep/gap calibration.
+    v40 used an absolute heteroscedastic PCD target.  Positive recovery groups
+    are rare, so that objective is dominated by easy negative/tied groups and a
+    frozen scene CLS can converge to an almost constant prediction.  v41 keeps a
+    small absolute anchor but makes the primary target the scene-time centred
+    advantage ``PCD(candidate)-PCD(nominal)``.  Positive and negative groups are
+    balanced explicitly, and listwise supervision is skipped for true ties.
 
-    The target is the same observation-consistent teacher PCD used by the audit.
-    Pointwise heteroscedastic regression learns calibrated uncertainty, listwise
-    distillation learns the full candidate ordering, and the nominal/recovery
-    term provides an asymmetric intervention boundary.
+    The variance output remains available for diagnostics/backward compatibility;
+    selection uses a validation-calibrated additive residual bound instead of
+    trusting the model's self-reported standard deviation.
     """
     if pred_logit.numel() <= 1:
         return pred_logit.sum() * 0.0
@@ -1311,37 +1319,47 @@ def direct_uncertainty_recovery_value_loss(
     macro_mask = torch.zeros((n,), dtype=torch.bool, device=mean.device)
     for m in tuple(int(x) for x in macro_ids):
         macro_mask |= mac == m
-    list_losses: list[torch.Tensor] = []
-    adv_losses: list[torch.Tensor] = []
     keys = torch.stack([sh, ti], dim=1)
     tau = max(float(temperature), 1.0e-3)
+    group_losses: list[torch.Tensor] = []
+    group_weights: list[float] = []
     for key in torch.unique(keys[finite], dim=0):
         idx = torch.where(finite & (sh == key[0]) & (ti == key[1]))[0]
-        if idx.numel() < 2:
-            continue
-        # Soft listwise targets retain information from all candidates rather
-        # than only the teacher-best pair.
-        teacher_prob = torch.softmax(target[idx] / tau, dim=0)
-        pred_log_prob = torch.log_softmax(mean[idx] / tau, dim=0)
-        list_losses.append(-(teacher_prob * pred_log_prob).sum())
         noms = idx[isn[idx]]
-        recs = idx[macro_mask[idx]]
+        recs = idx[macro_mask[idx] & (~isn[idx])]
         if noms.numel() == 0 or recs.numel() == 0:
             continue
         nom = noms[0]
-        rec = recs[torch.argmax(target[recs])]
-        t_adv = target[rec] - target[nom]
-        p_adv = mean[rec] - mean[nom]
-        pair_var = variance[rec] + variance[nom]
-        # The learned standard deviation raises the bar for intervention rather
-        # than becoming an unconstrained confidence score.
-        p_adv_lcb = p_adv - torch.sqrt(pair_var.clamp_min(float(variance_floor)))
+        t_delta = target[recs] - target[nom]
+        p_delta = mean[recs] - mean[nom]
+        # Emphasise decision-relevant deltas while retaining all candidates.
+        mag_w = 1.0 + torch.clamp(t_delta.abs() / max(float(positive_gain), 1.0e-3), max=4.0)
+        centered = (mag_w * F.smooth_l1_loss(p_delta, t_delta, reduction='none')).sum() / mag_w.sum().clamp_min(1.0e-6)
+        terms = [float(centered_weight) * centered]
+        group_range = float((target[idx].max() - target[idx].min()).item())
+        if group_range >= float(min_group_range) and float(listwise_weight) > 0.0:
+            teacher_prob = torch.softmax((target[idx] - target[idx].mean()) / tau, dim=0)
+            pred_log_prob = torch.log_softmax((mean[idx] - mean[idx].mean()) / tau, dim=0)
+            terms.append(float(listwise_weight) * F.kl_div(pred_log_prob, teacher_prob, reduction='sum'))
+        best_j = int(torch.argmax(t_delta).item())
+        t_adv = t_delta[best_j]
+        p_adv = p_delta[best_j]
         if float(t_adv.item()) >= float(positive_gain):
-            adv_losses.append(F.smooth_l1_loss(p_adv, t_adv) + F.relu(float(rank_margin) - p_adv_lcb))
+            cls_w = float(positive_group_weight)
+            terms.append(float(advantage_weight) * (F.smooth_l1_loss(p_adv, t_adv) + F.softplus((float(rank_margin) - p_adv) / tau) * tau))
         elif float(t_adv.item()) <= -float(negative_gain):
-            adv_losses.append(float(false_positive_weight) * F.relu(float(rank_margin) + p_adv_lcb))
+            cls_w = float(negative_group_weight)
+            max_pred = torch.max(p_delta)
+            terms.append(float(advantage_weight) * float(false_positive_weight) * F.softplus((max_pred + float(rank_margin)) / tau) * tau)
         else:
-            adv_losses.append(0.25 * F.smooth_l1_loss(p_adv, t_adv))
-    list_loss = torch.stack(list_losses).mean() if list_losses else pred_logit.sum() * 0.0
-    adv_loss = torch.stack(adv_losses).mean() if adv_losses else pred_logit.sum() * 0.0
-    return float(point_weight) * point_loss + float(listwise_weight) * list_loss + float(advantage_weight) * adv_loss
+            cls_w = float(ambiguous_group_weight)
+            terms.append(0.25 * float(advantage_weight) * F.smooth_l1_loss(p_adv, t_adv))
+        b = int(bid[nom].item())
+        bucket_w = float(near_weight) if b == 1 else (float(contact_weight) if b == 2 else 1.0)
+        group_losses.append(torch.stack(terms).sum())
+        group_weights.append(max(1.0e-6, cls_w * bucket_w))
+    if not group_losses:
+        return float(point_weight) * point_loss
+    gw = torch.as_tensor(group_weights, dtype=group_losses[0].dtype, device=group_losses[0].device)
+    grouped = (torch.stack(group_losses) * gw).sum() / gw.sum().clamp_min(1.0e-6)
+    return float(point_weight) * point_loss + grouped

@@ -126,6 +126,7 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         d_future_signature=int(ckpt.get("d_future_signature", 0)),
         option_feature_dim=int(ckpt.get("option_feature_dim", OPTION_FEATURE_DIM)),
         direct_recovery_value_head=bool(ckpt.get("direct_recovery_value_head", model_cfg.get("direct_recovery_value_head", False))),
+        direct_recovery_value_pooling=str(ckpt.get("direct_recovery_value_pooling", model_cfg.get("direct_recovery_value_pooling", "scene"))),
     ).to(device)
     # Strict loading remains the default for checkpoints with matching geometry.
     # A v39 checkpoint can initialize v40 training through train.py's explicit
@@ -137,6 +138,7 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["d_obs"] = d_obs
     cfg["model"]["tau_obs"] = tau_obs
     cfg["model"]["encoder_type"] = encoder_type
+    cfg["model"]["direct_recovery_value_pooling"] = str(ckpt.get("direct_recovery_value_pooling", model_cfg.get("direct_recovery_value_pooling", "scene")))
     return ModelBundle(model=model, cfg=cfg, device=device)
 
 
@@ -172,7 +174,6 @@ def predict_samples(
     cfg: dict | None = None,
     *,
     shared_scene_features: bool = False,
-    shared_geometry: bool = False,
 ) -> list[Prediction]:
     """Vectorized version of :func:`predict_sample`.
 
@@ -188,24 +189,21 @@ def predict_samples(
         return [teacher_prediction_from_sample(d, cfg) for d in ds]
 
     xs = torch.from_numpy(samples_to_feature_matrix(ds, bundle.cfg, shared_scene=shared_scene_features)).float().to(bundle.device)
-    geometry_kwargs = {
-        "num_roots": bundle.model.num_roots,
-        "num_options": bundle.model.num_options,
-        "d_signature": int(getattr(bundle.model, "d_signature", 0)),
-        "d_future_signature": int(getattr(bundle.model, "d_future_signature", 0)),
-    }
-    if shared_geometry:
-        fixed0 = fix_sample_geometry(ds[0], **geometry_kwargs)
-        option_features = torch.from_numpy(fixed0["option_features"]).float().to(bundle.device).unsqueeze(0).expand(len(ds), -1, -1)
-        root_valid = torch.from_numpy(fixed0["root_valid"]).bool().to(bundle.device).unsqueeze(0).expand(len(ds), -1)
-        option_valid = torch.from_numpy(fixed0["option_valid"]).bool().to(bundle.device).unsqueeze(0).expand(len(ds), -1)
-    else:
-        fixed = [fix_sample_geometry(d, **geometry_kwargs) for d in ds]
-        option_features = torch.from_numpy(np.stack([f["option_features"] for f in fixed], axis=0)).float().to(bundle.device)
-        root_valid = torch.from_numpy(np.stack([f["root_valid"] for f in fixed], axis=0)).bool().to(bundle.device)
-        option_valid = torch.from_numpy(np.stack([f["option_valid"] for f in fixed], axis=0)).bool().to(bundle.device)
+    fixed = [
+        fix_sample_geometry(
+            d,
+            num_roots=bundle.model.num_roots,
+            num_options=bundle.model.num_options,
+            d_signature=int(getattr(bundle.model, "d_signature", 0)),
+            d_future_signature=int(getattr(bundle.model, "d_future_signature", 0)),
+        )
+        for d in ds
+    ]
+    option_features = torch.from_numpy(np.stack([f["option_features"] for f in fixed], axis=0)).float().to(bundle.device)
     out = bundle.model(xs, option_features)
+    root_valid = torch.from_numpy(np.stack([f["root_valid"] for f in fixed], axis=0)).bool().to(bundle.device)
     p = torch.softmax(out["root_logits"].masked_fill(~root_valid, -1.0e4), dim=-1)
+    option_valid = torch.from_numpy(np.stack([f["option_valid"] for f in fixed], axis=0)).bool().to(bundle.device)
     r_dep, r_orc, gap, q = torch_oc_mero(
         out["margins"],
         p,
@@ -219,38 +217,18 @@ def predict_samples(
         top_m=int((bundle.cfg.get("ocmero", {}) or {}).get("top_m", 8)),
     )
 
-    # One accelerator-to-host synchronization for the complete candidate batch.
-    # The previous implementation performed 7-9 independent ``cpu().numpy()``
-    # transfers, each of which can serialize the CUDA stream.
-    batch = len(ds)
-    pieces = [
-        r_dep.reshape(batch, 1),
-        r_orc.reshape(batch, 1),
-        gap.reshape(batch, 1),
-        q.reshape(batch, -1),
-        p.reshape(batch, -1),
-        out["c_star"].reshape(batch, -1),
-        out["margins"].reshape(batch, -1),
-    ]
-    has_direct = "direct_recovery_value_logit" in out
-    if has_direct:
-        pieces.extend([
-            torch.sigmoid(out["direct_recovery_value_logit"]).reshape(batch, 1),
-            torch.exp(0.5 * out["direct_recovery_value_logvar"]).reshape(batch, 1),
-        ])
-    packed = torch.cat(pieces, dim=1).detach().cpu().numpy().astype(np.float32, copy=False)
-    pos = 0
-    r_dep_np = packed[:, pos]; pos += 1
-    r_orc_np = packed[:, pos]; pos += 1
-    gap_np = packed[:, pos]; pos += 1
-    q_width = int(q.shape[1]); q_np = packed[:, pos:pos + q_width]; pos += q_width
-    p_width = int(p.shape[1]); p_np = packed[:, pos:pos + p_width]; pos += p_width
-    c_shape = tuple(out["c_star"].shape[1:]); c_width = int(np.prod(c_shape)); c_np = packed[:, pos:pos + c_width].reshape((batch,) + c_shape); pos += c_width
-    m_shape = tuple(out["margins"].shape[1:]); m_width = int(np.prod(m_shape)); m_np = packed[:, pos:pos + m_width].reshape((batch,) + m_shape); pos += m_width
-    direct_mean_np = packed[:, pos] if has_direct else None
-    if has_direct:
-        pos += 1
-    direct_std_np = packed[:, pos] if has_direct else None
+    r_dep_np = r_dep.detach().cpu().numpy().astype(np.float32)
+    r_orc_np = r_orc.detach().cpu().numpy().astype(np.float32)
+    gap_np = gap.detach().cpu().numpy().astype(np.float32)
+    q_np = q.detach().cpu().numpy().astype(np.float32)
+    p_np = p.detach().cpu().numpy().astype(np.float32)
+    c_np = out["c_star"].detach().cpu().numpy().astype(np.float32)
+    m_np = out["margins"].detach().cpu().numpy().astype(np.float32)
+    direct_mean_np = None
+    direct_std_np = None
+    if "direct_recovery_value_logit" in out:
+        direct_mean_np = torch.sigmoid(out["direct_recovery_value_logit"]).detach().cpu().numpy().astype(np.float32)
+        direct_std_np = torch.exp(0.5 * out["direct_recovery_value_logvar"]).detach().cpu().numpy().astype(np.float32)
     preds: list[Prediction] = []
     for i in range(len(ds)):
         preds.append(

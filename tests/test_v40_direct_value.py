@@ -100,3 +100,48 @@ def test_scene_time_validation_sampler_is_deterministic():
     first = list(iter(sampler))
     second = list(iter(sampler))
     assert first == second == [[0, 1], [2, 3, 4, 5]]
+
+
+def test_additive_conformal_bound_ignores_self_reported_std_and_challenges():
+    sel = calibrated_constrained_select(
+        utility=np.array([1.0, 0.9]), r_dep=np.array([0.3, 0.25]),
+        hard=np.zeros(2), harm=np.zeros(2), feasible=np.array([True, True]),
+        gamma_rec=0.0, pred_gap=np.array([0.05, 0.08]), pred_drs=np.array([0.95, 0.92]),
+        nominal_deviation=np.array([0.0, 0.02]),
+        pred_direct_value=np.array([0.20, 0.50]), pred_direct_std=np.array([9.0, 9.0]),
+        candidate_macro_names=["nominal", "brake"], regime_name="test_near_contact",
+        direct_value_certificate=True, direct_value_macro_allowlist="brake",
+        direct_value_uncertainty_mode="additive", direct_value_additive_q=0.10,
+        direct_value_min_nominal_deviation=0.002, direct_value_min_advantage_lcb=0.05,
+        direct_value_min_candidate_value=0.40, direct_value_challenge_nominal=True,
+        stress_rescue_challenge_nominal=True, direct_value_bonus=0.5,
+    )
+    assert sel.selected_index == 1
+    assert "direct_value" in sel.reason
+
+
+def test_actionability_gate_blocks_nominal_equivalent_direct_candidate():
+    sel = calibrated_constrained_select(
+        utility=np.array([1.0, 0.9]), r_dep=np.array([0.3, 0.25]),
+        hard=np.zeros(2), harm=np.zeros(2), feasible=np.array([True, True]),
+        gamma_rec=0.0, pred_gap=np.array([0.05, 0.08]), pred_drs=np.array([0.95, 0.92]),
+        nominal_deviation=np.array([0.0, 1.0e-5]),
+        pred_direct_value=np.array([0.20, 0.80]), pred_direct_std=np.array([0.01, 0.01]),
+        candidate_macro_names=["nominal", "brake"], regime_name="test_near_contact",
+        direct_value_certificate=True, direct_value_macro_allowlist="brake",
+        direct_value_uncertainty_mode="additive", direct_value_additive_q=0.0,
+        direct_value_min_nominal_deviation=0.002, direct_value_min_advantage_lcb=0.05,
+        direct_value_min_candidate_value=0.40, direct_value_challenge_nominal=True,
+        stress_rescue_challenge_nominal=True, direct_value_bonus=0.5,
+    )
+    assert sel.selected_index == 0
+
+
+def test_candidate_concat_direct_head_output_shape():
+    model = OCRAPModel(
+        input_dim=12, num_roots=2, num_options=3, d_model=16, d_obs=8,
+        num_heads=2, direct_recovery_value_head=True,
+        direct_recovery_value_pooling="candidate_concat",
+    )
+    out = model(torch.randn(3, 12))
+    assert out["direct_recovery_value_logit"].shape == (3,)

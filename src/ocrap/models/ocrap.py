@@ -38,6 +38,7 @@ class OCRAPModel(nn.Module):
         d_future_signature: int = 0,
         option_feature_dim: int = 0,
         direct_recovery_value_head: bool = False,
+        direct_recovery_value_pooling: str = "scene",
     ):
         super().__init__()
         self.num_roots = int(num_roots)
@@ -51,6 +52,7 @@ class OCRAPModel(nn.Module):
         self.d_future_signature = int(d_future_signature)
         self.option_feature_dim = int(option_feature_dim)
         self.direct_recovery_value_head = bool(direct_recovery_value_head)
+        self.direct_recovery_value_pooling = str(direct_recovery_value_pooling or "scene").strip().lower()
 
         if self.encoder_type == "structured_transformer":
             layout = FlatFeatureLayout(**self.feature_layout)
@@ -100,12 +102,24 @@ class OCRAPModel(nn.Module):
         # recovery value and aleatoric log-variance for each executable prefix.
         # This avoids forcing R_dep, DRS, and the oracle gap to absorb a separate
         # counterfactual ranking objective.
+        # v41 OC-CAVA: the v40 head consumed only the frozen CLS token.  The
+        # measured validation loss stayed close to a uniform candidate ranking,
+        # which means the frozen v39 CLS representation discarded much of the
+        # prefix-specific signal needed for counterfactual action comparison.
+        # ``candidate_concat`` exposes the encoded ego/prefix/macro/state/control
+        # tokens to a small trainable adapter without changing any OC-MERO head.
+        direct_in_dim = d_model
+        if self.direct_recovery_value_pooling in {"candidate_concat", "prefix_concat", "action_concat"}:
+            direct_in_dim = 6 * d_model
         self.direct_value_head = (
             nn.Sequential(
-                nn.Linear(d_model, d_model),
+                nn.LayerNorm(direct_in_dim),
+                nn.Linear(direct_in_dim, d_model),
                 nn.GELU(),
                 nn.Dropout(dropout),
-                nn.Linear(d_model, 2),
+                nn.Linear(d_model, d_model // 2),
+                nn.GELU(),
+                nn.Linear(d_model // 2, 2),
             )
             if self.direct_recovery_value_head
             else None
@@ -172,7 +186,16 @@ class OCRAPModel(nn.Module):
             "utility": self.utility_head(scene_token).squeeze(-1),
         }
         if self.direct_value_head is not None:
-            direct = self.direct_value_head(scene_token)
+            direct_features = scene_token
+            if self.direct_recovery_value_pooling in {"candidate_concat", "prefix_concat", "action_concat"}:
+                # Token order from StructuredTokenEncoder is
+                # [CLS, ego, prefix_param, macro+scalar, prefix_state, control, ...].
+                # For the MLP fallback, repeat the only token to retain geometry.
+                if memory.shape[1] >= 6:
+                    direct_features = torch.cat([memory[:, i] for i in range(6)], dim=-1)
+                else:
+                    direct_features = scene_token.repeat(1, 6)
+            direct = self.direct_value_head(direct_features)
             out["direct_recovery_value_logit"] = direct[:, 0]
             out["direct_recovery_value_logvar"] = direct[:, 1].clamp(-7.0, 2.0)
         if self.root_signature_head is not None:

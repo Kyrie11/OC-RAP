@@ -599,19 +599,7 @@ def _materialize_sample(history, split_id: str, prefix: CandidatePrefix, a_idx: 
     return sample
 
 
-def _feature_only_sample(
-    history,
-    split_id: str,
-    prefix: CandidatePrefix,
-    a_idx: int,
-    cfg: dict,
-    options,
-    option_valid,
-    K: int,
-    *,
-    shared_geometry: dict | None = None,
-    unknown_ratio: float | None = None,
-) -> DatasetSample:
+def _feature_only_sample(history, split_id: str, prefix: CandidatePrefix, a_idx: int, cfg: dict, options, option_valid, K: int) -> DatasetSample:
     """Create an inference sample without generating counterfactual teacher labels.
 
     Dataset construction must materialize futures, root clusters, observation
@@ -630,43 +618,20 @@ def _feature_only_sample(
     model_cfg = cfg.get("model", {}) if isinstance(cfg.get("model", {}), dict) else {}
     d_sig = int(model_cfg.get("d_signature", 32) or 0)
     d_fsig = int(model_cfg.get("d_future_signature", 32) or 0)
-    if shared_geometry is None:
-        root_probs = np.full((K,), 1.0 / float(K), dtype=np.float32)
-        root_valid = np.ones((K,), dtype=bool)
-        m_star = np.zeros((K, L), dtype=np.float32)
-        c_star = np.eye(K, dtype=np.float32)
-        future_to_root_weight = np.zeros((1, K), dtype=np.float32)
-        future_to_root_weight[0, 0] = 1.0
-        future = CounterfactualFuture(
-            future_id=0,
-            source="closed_loop_feature_only",
-            prior=1.0,
-            agent_states=history.future_agent_states,
-            agent_valid=history.future_agent_valid,
-            metadata={"feature_only": True, "labels_available": False},
-        )
-        shared_geometry = {
-            "root_probs": root_probs,
-            "root_valid": root_valid,
-            "m_star": m_star,
-            "c_star": c_star,
-            "future_to_root_weight": future_to_root_weight,
-            "future": future,
-            "future_probs": np.ones((1,), dtype=np.float32),
-            "root_assignments": np.zeros((1,), dtype=np.int64),
-            "root_signature": np.zeros((K, d_sig), dtype=np.float32),
-            "root_future_signature": np.zeros((K, d_fsig), dtype=np.float32),
-            "root_representative_future_id": np.zeros((K,), dtype=np.int64),
-            "within_root_obs_dispersion": np.zeros((K,), dtype=np.float32),
-            "obs_distance": np.zeros((K, K), dtype=np.float32),
-            "y_obs": c_star.copy(),
-        }
-    root_probs = shared_geometry["root_probs"]
-    root_valid = shared_geometry["root_valid"]
-    m_star = shared_geometry["m_star"]
-    c_star = shared_geometry["c_star"]
-    future_to_root_weight = shared_geometry["future_to_root_weight"]
-    future = shared_geometry["future"]
+    root_probs = np.full((K,), 1.0 / float(K), dtype=np.float32)
+    root_valid = np.ones((K,), dtype=bool)
+    m_star = np.zeros((K, L), dtype=np.float32)
+    c_star = np.eye(K, dtype=np.float32)
+    future_to_root_weight = np.zeros((1, K), dtype=np.float32)
+    future_to_root_weight[0, 0] = 1.0
+    future = CounterfactualFuture(
+        future_id=0,
+        source="closed_loop_feature_only",
+        prior=1.0,
+        agent_states=history.future_agent_states,
+        agent_valid=history.future_agent_valid,
+        metadata={"feature_only": True, "labels_available": False},
+    )
     return DatasetSample(
         scene_id=history.scene_id,
         original_scenario_id=history.original_scenario_id,
@@ -677,17 +642,17 @@ def _feature_only_sample(
         h_t=history,
         prefix=prefix,
         futures=[future],
-        future_probs=shared_geometry["future_probs"],
-        root_assignments=shared_geometry["root_assignments"],
+        future_probs=np.ones((1,), dtype=np.float32),
+        root_assignments=np.zeros((1,), dtype=np.int64),
         root_probs=root_probs,
-        root_signature=shared_geometry["root_signature"],
-        root_future_signature=shared_geometry["root_future_signature"],
+        root_signature=np.zeros((K, d_sig), dtype=np.float32),
+        root_future_signature=np.zeros((K, d_fsig), dtype=np.float32),
         root_valid=root_valid,
-        root_representative_future_id=shared_geometry["root_representative_future_id"],
+        root_representative_future_id=np.zeros((K,), dtype=np.int64),
         future_to_root_weight=future_to_root_weight,
-        within_root_obs_dispersion=shared_geometry["within_root_obs_dispersion"],
-        obs_distance=shared_geometry["obs_distance"],
-        y_obs=shared_geometry["y_obs"],
+        within_root_obs_dispersion=np.zeros((K,), dtype=np.float32),
+        obs_distance=np.zeros((K, K), dtype=np.float32),
+        y_obs=c_star.copy(),
         c_star=c_star,
         recovery_options=options,
         m_star=m_star,
@@ -703,7 +668,7 @@ def _feature_only_sample(
             "feature_only": True,
             "labels_available": False,
             "future_sources": [future.source],
-            "unknown_ratio_in_corridor": float(unknown_ratio if unknown_ratio is not None else unknown_ratio_in_corridor(history.occ_mask)),
+            "unknown_ratio_in_corridor": unknown_ratio_in_corridor(history.occ_mask),
             "time_sampling_reasons": history.metadata.get("time_sampling_reasons", []),
         },
     )
@@ -727,53 +692,7 @@ def build_feature_only_samples_for_history(
     )
     opt_valid = option_valid_mask(options)
     K = int(num_roots if num_roots is not None else cfg.get("num_roots", 8))
-    model_cfg = cfg.get("model", {}) if isinstance(cfg.get("model", {}), dict) else {}
-    d_sig = int(model_cfg.get("d_signature", 32) or 0)
-    d_fsig = int(model_cfg.get("d_future_signature", 32) or 0)
-    K_eff = max(1, K)
-    L = max(1, len(options))
-    c_star = np.eye(K_eff, dtype=np.float32)
-    future_to_root_weight = np.zeros((1, K_eff), dtype=np.float32)
-    future_to_root_weight[0, 0] = 1.0
-    shared_geometry = {
-        "root_probs": np.full((K_eff,), 1.0 / float(K_eff), dtype=np.float32),
-        "root_valid": np.ones((K_eff,), dtype=bool),
-        "m_star": np.zeros((K_eff, L), dtype=np.float32),
-        "c_star": c_star,
-        "future_to_root_weight": future_to_root_weight,
-        "future": CounterfactualFuture(
-            future_id=0,
-            source="closed_loop_feature_only",
-            prior=1.0,
-            agent_states=history.future_agent_states,
-            agent_valid=history.future_agent_valid,
-            metadata={"feature_only": True, "labels_available": False},
-        ),
-        "future_probs": np.ones((1,), dtype=np.float32),
-        "root_assignments": np.zeros((1,), dtype=np.int64),
-        "root_signature": np.zeros((K_eff, d_sig), dtype=np.float32),
-        "root_future_signature": np.zeros((K_eff, d_fsig), dtype=np.float32),
-        "root_representative_future_id": np.zeros((K_eff,), dtype=np.int64),
-        "within_root_obs_dispersion": np.zeros((K_eff,), dtype=np.float32),
-        "obs_distance": np.zeros((K_eff, K_eff), dtype=np.float32),
-        "y_obs": c_star.copy(),
-    }
-    unknown_ratio = unknown_ratio_in_corridor(history.occ_mask)
-    return [
-        _feature_only_sample(
-            history,
-            split_id,
-            p,
-            int(p.macro_id),
-            cfg,
-            options,
-            opt_valid,
-            K_eff,
-            shared_geometry=shared_geometry,
-            unknown_ratio=unknown_ratio,
-        )
-        for p in prefixes
-    ]
+    return [_feature_only_sample(history, split_id, p, int(p.macro_id), cfg, options, opt_valid, K) for p in prefixes]
 
 def _try_add_sample(
     selected: list[DatasetSample],

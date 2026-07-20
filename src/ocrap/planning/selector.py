@@ -221,6 +221,9 @@ def calibrated_constrained_select(
     direct_value_certificate: bool = False,
     direct_value_macro_allowlist=None,
     direct_value_lcb_z: float = 1.0,
+    direct_value_uncertainty_mode: str = "scaled",
+    direct_value_additive_q: float = 0.0,
+    direct_value_min_nominal_deviation: float = 0.0,
     direct_value_min_advantage_lcb: float = 0.035,
     direct_value_min_candidate_value: float = 0.45,
     direct_value_max_candidate_std: float = 0.35,
@@ -395,6 +398,7 @@ def calibrated_constrained_select(
     # v39: bound repeated cooldown-bypass brake decisions. Consecutive brake
     # controls are one recovery episode, not independent tail discoveries.
     brake_tail_challenge_max_consecutive: int = -1,
+    brake_tail_min_nominal_deviation: float = 0.0,
     previous_selected_macro: str | None = None,
     same_macro_run_length: int | None = None,
     # v24: Budgeted Macro-Rescue Certificate (BMRC).  This generalizes the
@@ -575,8 +579,18 @@ def calibrated_constrained_select(
     direct_value_challenge = np.zeros((n,), dtype=bool)
     if bool(direct_value_certificate) and 0 <= int(nominal_index) < n and pred_direct_value is not None:
         ni = int(nominal_index)
-        pair_std = np.sqrt(np.maximum(0.0, direct_std * direct_std + direct_std[ni] * direct_std[ni]))
-        direct_advantage_lcb = direct_value - direct_value[ni] - float(direct_value_lcb_z) * pair_std
+        raw_direct_advantage = direct_value - direct_value[ni]
+        uncertainty_mode = str(direct_value_uncertainty_mode or "scaled").strip().lower()
+        if uncertainty_mode in {"additive", "conformal_additive", "residual"}:
+            # v41: q is calibrated on max candidate over-estimation within the
+            # deterministic actionable candidate set.  This remains valid after
+            # selecting the best candidate and does not trust self-reported std.
+            direct_advantage_lcb = raw_direct_advantage - float(direct_value_additive_q)
+        elif uncertainty_mode in {"none", "raw"}:
+            direct_advantage_lcb = raw_direct_advantage
+        else:
+            pair_std = np.sqrt(np.maximum(0.0, direct_std * direct_std + direct_std[ni] * direct_std[ni]))
+            direct_advantage_lcb = raw_direct_advantage - float(direct_value_lcb_z) * pair_std
         direct_macro_allow = _split_name_set(direct_value_macro_allowlist)
         direct_macro_mask = np.asarray([bool(m) for m in macro_names], dtype=bool)
         if direct_macro_allow:
@@ -586,8 +600,9 @@ def calibrated_constrained_select(
             & (hard <= float(direct_value_max_hard))
             & (harm <= float(direct_value_max_harm))
             & direct_macro_mask
+            & (dev >= float(direct_value_min_nominal_deviation))
             & (direct_value >= float(direct_value_min_candidate_value))
-            & (direct_std <= float(direct_value_max_candidate_std))
+            & ((direct_std <= float(direct_value_max_candidate_std)) if uncertainty_mode not in {"additive", "conformal_additive", "residual", "none", "raw"} else np.ones((n,), dtype=bool))
             & (direct_advantage_lcb >= float(direct_value_min_advantage_lcb))
         )
         direct_value_challenge[ni] = False
@@ -807,6 +822,7 @@ def calibrated_constrained_select(
             & (pcd_proxy >= float(brake_tail_min_pred_pcd))
             & (gap >= float(brake_tail_min_candidate_gap))
             & (gap <= float(brake_tail_max_candidate_gap))
+            & (dev >= float(brake_tail_min_nominal_deviation))
             & tail_shape
             & bool(nominal_gate)
         )
