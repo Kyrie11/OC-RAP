@@ -963,6 +963,8 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_value_num_regimes=int(model_cfg.get("direct_recovery_value_num_regimes", 4)),
         direct_recovery_value_regime_dim=int(model_cfg.get("direct_recovery_value_regime_dim", 16)),
         direct_recovery_opportunity_head=bool(model_cfg.get("direct_recovery_opportunity_head", False)),
+        direct_recovery_value_experts=bool(model_cfg.get("direct_recovery_value_experts", False)),
+        direct_recovery_value_num_experts=int(model_cfg.get("direct_recovery_value_num_experts", 2)),
     ).to(device)
     tcfg = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
 
@@ -1065,6 +1067,8 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "direct_recovery_value_num_regimes": int(model_cfg.get("direct_recovery_value_num_regimes", 4)),
             "direct_recovery_value_regime_dim": int(model_cfg.get("direct_recovery_value_regime_dim", 16)),
             "direct_recovery_opportunity_head": bool(model_cfg.get("direct_recovery_opportunity_head", False)),
+            "direct_recovery_value_experts": bool(model_cfg.get("direct_recovery_value_experts", False)),
+            "direct_recovery_value_num_experts": int(model_cfg.get("direct_recovery_value_num_experts", 2)),
             "model_state": model.state_dict(),
             "optimizer_state": opt.state_dict(),
             "epoch": int(ep),

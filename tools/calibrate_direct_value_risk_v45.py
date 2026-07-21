@@ -198,7 +198,7 @@ def main() -> int:
     if bundle is None:
         raise FileNotFoundError(args.checkpoint)
     if not bool(getattr(bundle.model, "direct_recovery_opportunity_head", False)):
-        raise ValueError("v44 calibration requires model.direct_recovery_opportunity_head=true")
+        raise ValueError("v45 calibration requires model.direct_recovery_opportunity_head=true")
 
     alpha = float((bundle.cfg.get("ocmero", {}) or {}).get("alpha", 0.2))
     beta = float((bundle.cfg.get("ocmero", {}) or {}).get("beta", 0.2))
@@ -212,7 +212,7 @@ def main() -> int:
         d = load_npz(path)
         pred = predict_sample(d, bundle, runtime_cfg)
         if pred.direct_recovery_value is None or pred.direct_recovery_opportunity is None:
-            raise ValueError("checkpoint does not expose v44 score and opportunity outputs")
+            raise ValueError("checkpoint does not expose v45 score and opportunity outputs")
         row = {
             "data": d,
             "scene": str(_scalar(d, "scene_id", path.stem)),
@@ -230,7 +230,7 @@ def main() -> int:
         }
         raw_groups[(row["scene"], row["time"])].append(row)
         if i == 1 or i % 1000 == 0:
-            print({"event": "v44_risk_calibration_progress", "bucket": args.bucket, "seen": i, "total": len(paths)}, flush=True)
+            print({"event": "v45_risk_calibration_progress", "bucket": args.bucket, "seen": i, "total": len(paths)}, flush=True)
 
     groups: list[dict[str, Any]] = []
     pair_errors: list[float] = []

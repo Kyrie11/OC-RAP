@@ -702,6 +702,11 @@ def _select_prefix(
     pred_direct_value = np.asarray([np.nan if x["pred"].direct_recovery_value is None else float(x["pred"].direct_recovery_value) for x in items], dtype=np.float32)
     pred_direct_std = np.asarray([np.nan if x["pred"].direct_recovery_std is None else float(x["pred"].direct_recovery_std) for x in items], dtype=np.float32)
     pred_direct_opportunity = np.asarray([np.nan if x["pred"].direct_recovery_opportunity is None else float(x["pred"].direct_recovery_opportunity) for x in items], dtype=np.float32)
+    opp_logits = np.asarray([np.nan if x["pred"].direct_recovery_opportunity_logit is None else float(x["pred"].direct_recovery_opportunity_logit) for x in items], dtype=np.float32)
+    nominal_ids = [i for i, x in enumerate(items) if _safe_float(x["data"].get("is_nominal", 0.0)) > 0.5]
+    if nominal_ids and np.isfinite(opp_logits[nominal_ids[0]]):
+        delta = np.clip(opp_logits - opp_logits[nominal_ids[0]], -30.0, 30.0)
+        pred_direct_opportunity = (1.0 / (1.0 + np.exp(-delta))).astype(np.float32)
     macro_names = [str(x["data"].get("prefix_macro_name", "")) for x in items]
     nominal_deviation = _prefix_nominal_deviation(samples)
     if compute_teacher_labels:

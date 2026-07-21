@@ -1367,7 +1367,13 @@ def direct_uncertainty_recovery_value_loss(
         neg_mask = t_delta <= 0.0
         if opportunity_logits is not None and float(opportunity_weight) > 0.0:
             labels = pos_mask.to(dtype=opportunity_logits.dtype)
-            logits = opportunity_logits[recs]
+            # v45: opportunity means "this candidate improves over this group's
+            # nominal", not "this candidate is globally good".  The absolute
+            # candidate logit used in v44 had no access to the varying nominal
+            # quality and collapsed below the hard 0.05 calibration floor.  Use
+            # a paired logit difference so the same head is trained on the exact
+            # deployment comparison.
+            logits = opportunity_logits[recs] - opportunity_logits[nom]
             pos_w = torch.as_tensor(max(float(opportunity_pos_weight), 1.0), dtype=logits.dtype, device=logits.device)
             opp = F.binary_cross_entropy_with_logits(logits, labels, pos_weight=pos_w)
             terms.append(float(opportunity_weight) * opp)

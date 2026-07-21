@@ -44,6 +44,8 @@ class OCRAPModel(nn.Module):
         direct_recovery_value_num_regimes: int = 4,
         direct_recovery_value_regime_dim: int = 16,
         direct_recovery_opportunity_head: bool = False,
+        direct_recovery_value_experts: bool = False,
+        direct_recovery_value_num_experts: int = 2,
     ):
         super().__init__()
         self.num_roots = int(num_roots)
@@ -63,6 +65,8 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_value_num_regimes = max(1, int(direct_recovery_value_num_regimes))
         self.direct_recovery_value_regime_dim = max(1, int(direct_recovery_value_regime_dim))
         self.direct_recovery_opportunity_head = bool(direct_recovery_opportunity_head)
+        self.direct_recovery_value_experts = bool(direct_recovery_value_experts)
+        self.direct_recovery_value_num_experts = max(1, int(direct_recovery_value_num_experts))
         if self.direct_recovery_value_output not in {"probability", "score"}:
             raise ValueError(f"Unsupported direct_recovery_value_output={direct_recovery_value_output!r}")
 
@@ -151,8 +155,9 @@ class OCRAPModel(nn.Module):
         if self.direct_regime_embedding is not None:
             direct_in_dim += self.direct_recovery_value_regime_dim
         direct_out_dim = 3 if self.direct_recovery_opportunity_head else 2
-        self.direct_value_head = (
-            nn.Sequential(
+
+        def _make_direct_head() -> nn.Sequential:
+            return nn.Sequential(
                 nn.LayerNorm(direct_in_dim),
                 nn.Linear(direct_in_dim, d_model),
                 nn.GELU(),
@@ -161,7 +166,22 @@ class OCRAPModel(nn.Module):
                 nn.GELU(),
                 nn.Linear(d_model // 2, direct_out_dim),
             )
-            if self.direct_recovery_value_head
+
+        # v45 OC-RAVE: Near-contact and Contact share the observation encoder but
+        # use lightweight task experts.  The two datasets may contain the same
+        # current observation with different pressure-future teachers, so one
+        # unconditional head receives contradictory labels even after groups are
+        # separated.  Experts are selected during training by bucket_id and at
+        # deployment by the observation-derived regime router, never by teacher
+        # labels.  Safe does not use the direct branch.
+        self.direct_value_heads = (
+            nn.ModuleList([_make_direct_head() for _ in range(self.direct_recovery_value_num_experts)])
+            if self.direct_recovery_value_head and self.direct_recovery_value_experts
+            else None
+        )
+        self.direct_value_head = (
+            _make_direct_head()
+            if self.direct_recovery_value_head and not self.direct_recovery_value_experts
             else None
         )
         self.root_signature_head = nn.Linear(d_model, self.d_signature) if self.d_signature > 0 else None
@@ -239,7 +259,7 @@ class OCRAPModel(nn.Module):
             "c_star": C,
             "utility": self.utility_head(scene_token).squeeze(-1),
         }
-        if self.direct_value_head is not None:
+        if self.direct_value_head is not None or self.direct_value_heads is not None:
             direct_features = scene_token
             if self.direct_recovery_value_pooling in {"candidate_concat", "prefix_concat", "action_concat", "candidate_concat_raw", "action_concat_raw", "certificate_action_adapter"}:
                 # Token order from StructuredTokenEncoder is
@@ -264,7 +284,22 @@ class OCRAPModel(nn.Module):
                 regime_id = bucket_id.to(device=x.device, dtype=torch.long).reshape(-1)
                 regime_id = regime_id.clamp(0, self.direct_recovery_value_num_regimes - 1)
                 direct_features = torch.cat([direct_features, self.direct_regime_embedding(regime_id)], dim=-1)
-            direct = self.direct_value_head(direct_features)
+            if self.direct_value_heads is not None:
+                # bucket ids: safe=0, near=1, contact=2, other=3.  Map near to
+                # expert 0 and contact to expert 1.  Safe/other are mapped to 0
+                # only for tensor completeness; the direct selector is disabled
+                # for those states.
+                if bucket_id is None:
+                    bucket_id = torch.ones((x.shape[0],), dtype=torch.long, device=x.device)
+                expert_idx = (bucket_id.to(device=x.device, dtype=torch.long).reshape(-1) - 1)
+                expert_idx = expert_idx.clamp(0, self.direct_recovery_value_num_experts - 1)
+                all_direct = torch.stack([head(direct_features) for head in self.direct_value_heads], dim=1)
+                gather_idx = expert_idx.view(-1, 1, 1).expand(-1, 1, all_direct.shape[-1])
+                direct = all_direct.gather(1, gather_idx).squeeze(1)
+            elif self.direct_value_head is not None:
+                direct = self.direct_value_head(direct_features)
+            else:
+                raise RuntimeError("direct recovery branch configured without a head")
             out["direct_recovery_value_logit"] = direct[:, 0]
             out["direct_recovery_value_logvar"] = direct[:, 1].clamp(-7.0, 2.0)
             if self.direct_recovery_opportunity_head:

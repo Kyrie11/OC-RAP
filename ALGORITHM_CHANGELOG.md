@@ -117,3 +117,50 @@ The older `+0.02/+0.03 PCD` targets exceed the empirical selector-only headroom 
 ### Statistical validity note for v44
 
 The main neural head is observation-only, but threshold verification data must still be independent of training and checkpoint selection for a paper claim. Development scripts use `val_near_contact` and `val_contact`; publication runs must set dedicated `RAVA_CAL_NEAR_DATA` and `RAVA_CAL_CONTACT_DATA` roots that were not used for training, early stopping, or architecture selection.
+
+## v44 observed result and decision (2026-07-21, completed; failed before offline)
+
+- **Pipeline outcome:** both `rava_balanced` and `rava_precision` failed the opportunity+score calibration gate; offline evaluation and Waymax were correctly skipped.
+- **Training:** both variants selected epoch 3. Balanced validation direct loss was `5.3875`; precision was `9.5148`. The lower balanced loss did not translate into a deployable selective rule.
+- **Calibration evidence:**
+  - Balanced Near/Contact pair MAE: `0.3124 / 0.3078`.
+  - Precision Near/Contact pair MAE: `0.3291 / 0.3289`.
+  - Near had `246` eligible scene-time groups and `30` positive-opportunity groups across fit+verify; Contact had `357` groups and `43` opportunities.
+  - In all four calibrations, `num_top1_after_opportunity_gate=0`, fitted thresholds were infinite, and held-out selections were zero.
+- **Calibration implementation defect:** v44 imposed a fixed minimum opportunity probability of `0.05`. Every learned candidate opportunity was below this floor, so all candidates were removed before the score-risk rule was fitted. A fixed probability floor is rejected; future calibration must search the observed score support and report distributions even when no rule is valid.
+- **Model/target defect:** v44 predicted an absolute per-candidate opportunity logit but supervised the relative event `PCD(candidate)-PCD(nominal) >= positive_gain`. The nominal quality changes by group, so an absolute candidate probability is not the deployment quantity. Future opportunity supervision and inference must use candidate-minus-nominal logit differences.
+- **Remaining task conflict:** fixing `(bucket, scene, time)` grouping prevented within-group cross-regime comparisons, but one unconditional Near/Contact head still received different pressure-future targets for observationally similar scene-prefixes. A single head is rejected until an observation-derived task representation or lightweight regime experts are tested.
+- **Sampling decision:** do not restore proxy `r_dep` positive-group oversampling. It is misaligned with the PCD target. Use exhaustive non-replacement group epochs and target-aligned positive/negative loss weights.
+- **Do not repeat:** fixed `0.05` opportunity floors, absolute opportunity logits for relative events, threshold-only relaxation after zero pre-gate coverage, or `r_dep`-proxy oversampling.
+
+## Dataset diagnostic contract discovered with v44 results
+
+- **Train/validation semantic separation is mostly usable for development:**
+  - `train_near_contact` post-contact fraction `1.88%`; `val_near_contact` `1.70%`.
+  - `train_contact` and `val_contact` are `100%` post-contact.
+- **Current test roots are not valid for the paper three-regime comparison:**
+  - `test_near_contact` contains `1270/2058 = 61.71%` post-contact samples, so it is primarily a Contact set despite its name.
+  - Near `|test-val r_dep mean shift| = 1.474` and hard-violation mean shift `0.409`.
+  - Contact `|test-val r_dep mean shift| = 1.582` and hard-violation mean shift `0.371`.
+  - Safe validation/test diagnostics contain only `22/28` scenes, below a paper-scale target.
+- **Decision:** development calibration/training may use current train/val roots, but paper claims and final baseline comparisons are blocked until clean disjoint Safe/Near/Contact test roots are rebuilt. `tools/check_regime_dataset_contract.py` enforces this contract.
+
+### v45 — OC-RAVE (current)
+
+- **Name:** Observation-Consistent Regime-Expert Value Abstention.
+- **Root-level changes:**
+  1. Keep one frozen shared OC-MERO scene encoder, but replace the contradictory unconditional value branch with two lightweight task experts: Near-contact and Contact. Safe never invokes the direct branch.
+  2. Train and deploy opportunity as a **relative-to-nominal logit difference**. The candidate opportunity probability is `sigmoid(logit(candidate)-logit(nominal))`, matching the deployment event.
+  3. Remove the fixed `0.05` probability floor. Calibration searches the empirical opportunity support from `0.0` upward and writes diagnostic top-1 rows even when no deployment rule passes.
+  4. Broaden the learned candidate audit to `brake,yield,merge,pull_over,stabilize` so calibration can identify which macros contain real PCD opportunities instead of hard-coding the v43 merge bias.
+  5. Use exhaustive group epochs (`group_batching_replacement=false`) and PCD-target loss weighting. Proxy `r_dep` oversampling is disabled.
+  6. Preserve physical actionability, held-out risk verification, Safe lock, and the `2 -> 4 -> 8` closed-loop cost ladder.
+  7. Add a dataset contract preflight. Because uploaded test diagnostics fail, Stage 2 uses validation roots only for development zero-use screening and explicitly forbids treating that result as held-out paper evidence.
+- **Regime routing:** training selects the Near/Contact expert by the clean dataset task. Closed-loop selects it from current observable clearance/TTC/contact using `auto_regime_from_observation`; no teacher outcome is supplied to the neural input. This is a hard task router, not three full models and not an oracle regime embedding.
+- **Smooth switching decision:** soft routing / continuous risk-token attention is postponed until both experts show positive held-out score-teacher correlation and nonzero verified use. Adding a soft mixture before basic expert learnability is established would confound target failure with routing failure. A later version should compare hard routing, hysteresis, and soft risk-token mixing on boundary scenes.
+- **Falsification rules:**
+  - If either expert has non-positive or unstable held-out score-teacher relation and no finite opportunity+score rule, stop before offline/Waymax.
+  - If calibration succeeds but offline direct reasons remain zero, stop before Waymax.
+  - If the 2-rollout execution probe has no real direct action or violates actionability/NUP, do not expand.
+  - Do not use contaminated `test_near_contact` for final claims, regardless of model result.
+- **Implementation validation:** `87 passed, 2 warnings`; all Python modules compile and v45 shell scripts pass syntax checks. Warnings are existing PyTorch nested-tensor notices.
