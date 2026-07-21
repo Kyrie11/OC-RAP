@@ -303,6 +303,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "direct_value_max_consecutive": 2,
         "direct_value_score_mode": False,
         "direct_value_top1_only": False,
+        "direct_value_risk_controlled_admission": False,
         "gamma_rec_by_bucket": {},
         "gamma_rec_by_bucket_file": None,
     },

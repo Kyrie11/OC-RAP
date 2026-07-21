@@ -235,6 +235,7 @@ def calibrated_constrained_select(
     direct_value_max_consecutive: int = 2,
     direct_value_score_mode: bool = False,
     direct_value_top1_only: bool = False,
+    direct_value_risk_controlled_admission: bool = False,
     deployability_bonus: float = 0.0,
     contact_deployability_bonus: float = 0.0,
     contact_gap_penalty: float = 0.0,
@@ -591,7 +592,10 @@ def calibrated_constrained_select(
             # deterministic actionable candidate set.  This remains valid after
             # selecting the best candidate and does not trust self-reported std.
             direct_advantage_lcb = raw_direct_advantage - float(direct_value_additive_q)
-        elif uncertainty_mode in {"none", "raw"}:
+        elif uncertainty_mode in {"none", "raw", "risk_selective", "selective", "risk_controlled"}:
+            # v43 OC-RSC uses a deterministic score threshold fitted and
+            # verified on disjoint scene-time folds. The threshold is applied
+            # through direct_value_min_advantage_lcb below.
             direct_advantage_lcb = raw_direct_advantage
         else:
             pair_std = np.sqrt(np.maximum(0.0, direct_std * direct_std + direct_std[ni] * direct_std[ni]))
@@ -608,7 +612,7 @@ def calibrated_constrained_select(
             & direct_macro_mask
             & (dev >= float(direct_value_min_nominal_deviation))
             & candidate_floor_ok
-            & ((direct_std <= float(direct_value_max_candidate_std)) if uncertainty_mode not in {"additive", "conformal_additive", "residual", "none", "raw"} else np.ones((n,), dtype=bool))
+            & ((direct_std <= float(direct_value_max_candidate_std)) if uncertainty_mode not in {"additive", "conformal_additive", "residual", "none", "raw", "risk_selective", "selective", "risk_controlled"} else np.ones((n,), dtype=bool))
         )
         direct_actionable[ni] = False
         # The top-1 rule is applied here, before any direct-value reward enters
@@ -985,11 +989,16 @@ def calibrated_constrained_select(
             if 0 <= int(nominal_index) < n and (scalar_admitted[int(nominal_index)] or safe[int(nominal_index)]):
                 admitted[int(nominal_index)] = True
 
-    # OC-SAVA is preference-only: its score cannot create, remove, or otherwise
-    # perturb the independently computed OC-MERO admission set.  Only after that
-    # set is finalized do we permit the calibrated top-1 action to receive a
-    # ranking bonus; if it is not admitted, the selector abstains.
-    direct_value_challenge &= admitted
+    # v42 kept the value head preference-only, which made it unusable whenever
+    # the independent admission set contained nominal alone. v43 OC-RSC may
+    # promote exactly the deterministic top-1 actionable candidate when its
+    # score crosses a separately fitted and held-out-verified risk threshold.
+    # Feasibility, hard/harm, macro and trajectory-actionability gates have
+    # already been applied above. Safe buckets keep this switch disabled.
+    if bool(direct_value_risk_controlled_admission):
+        admitted = admitted | direct_value_challenge
+    else:
+        direct_value_challenge &= admitted
     if bool(direct_value_certificate) and float(direct_value_bonus) != 0.0:
         score = score + float(direct_value_bonus) * np.maximum(0.0, direct_advantage_lcb) * direct_value_challenge.astype(float)
 

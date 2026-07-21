@@ -750,8 +750,19 @@ def _make_group_batch_sampler(ds: OCRAPSampleDataset, cfg: dict, batch_size: int
     hard_bucket_ids = set(_parse_int_tuple(tcfg.get("group_batch_hard_bucket_ids", ""), ()))
     hard_r_dep_min = float(tcfg.get("group_batch_hard_min_r_dep", 0.35))
     hard_boost = float(tcfg.get("group_batch_hard_boost", 0.0))
+
+    # v43: oversample groups that contain a recovery candidate whose teacher
+    # deployable value improves over the group's nominal candidate. v42 boosted
+    # high absolute r_dep, which included many groups where nominal was equally
+    # good or better and therefore diluted the rare positive-advantage signal.
+    positive_macro_ids = set(_parse_int_tuple(tcfg.get("group_batch_positive_macro_ids", ""), ()))
+    positive_bucket_ids = set(_parse_int_tuple(tcfg.get("group_batch_positive_bucket_ids", ""), ()))
+    positive_gain_min = float(tcfg.get("group_batch_positive_r_dep_gain", 0.025))
+    positive_boost = float(tcfg.get("group_batch_positive_advantage_boost", 0.0))
+
     group_weights = []
     hard_groups = 0
+    positive_advantage_groups = 0
     for g in groups:
         gw = float(max(sample_weights[i] for i in g))
         if hard_boost > 0.0 and hard_macro_ids:
@@ -770,6 +781,29 @@ def _make_group_batch_sampler(ds: OCRAPSampleDataset, cfg: dict, batch_size: int
             if is_hard:
                 gw *= hard_boost
                 hard_groups += 1
+
+        if positive_boost > 0.0 and positive_macro_ids:
+            nominal_rdep = None
+            best_recovery_rdep = None
+            for i in g:
+                p = ds.paths[i]
+                try:
+                    bid = bucket_id_for_path(p)
+                    if positive_bucket_ids and bid not in positive_bucket_ids:
+                        continue
+                    is_nominal = bool(float(np.asarray(scalar_metadata_for_path(p, "is_nominal", 0.0)).item()) > 0.5)
+                    rdep = float(np.asarray(scalar_metadata_for_path(p, "r_dep_star", -99.0)).item())
+                    if is_nominal:
+                        nominal_rdep = rdep if nominal_rdep is None else max(nominal_rdep, rdep)
+                        continue
+                    mac = int(float(np.asarray(scalar_metadata_for_path(p, "prefix_macro_type_id", scalar_metadata_for_path(p, "prefix_macro_id", -1))).item()))
+                    if mac in positive_macro_ids:
+                        best_recovery_rdep = rdep if best_recovery_rdep is None else max(best_recovery_rdep, rdep)
+                except Exception:
+                    continue
+            if nominal_rdep is not None and best_recovery_rdep is not None and (best_recovery_rdep - nominal_rdep) >= positive_gain_min:
+                gw *= positive_boost
+                positive_advantage_groups += 1
         group_weights.append(gw)
     print({
         "event": "group_batch_sampler_stats",
@@ -783,6 +817,9 @@ def _make_group_batch_sampler(ds: OCRAPSampleDataset, cfg: dict, batch_size: int
         "num_safe_positive": int(num_safe_pos),
         "hard_group_boost": float(hard_boost),
         "hard_groups": int(hard_groups),
+        "positive_advantage_boost": float(positive_boost),
+        "positive_advantage_gain_min": float(positive_gain_min),
+        "positive_advantage_groups": int(positive_advantage_groups),
     }, flush=True)
     return SceneTimeBatchSampler(groups, batch_size, group_weights=group_weights, replacement=bool(tcfg.get("group_batching_replacement", True)))
 
