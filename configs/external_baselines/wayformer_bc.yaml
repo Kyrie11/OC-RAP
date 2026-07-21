@@ -2,6 +2,8 @@ external_baselines:
   baseline: wayformer_bc
   methods: [wayformer_bc]
   max_candidates: 24
+  supervision_target: logged_nominal
+  allow_teacher_supervision: false
   model:
     arch: route_bc_wayformer
     max_candidates: 24
@@ -26,8 +28,8 @@ external_baselines:
     find_unused_parameters: auto
   loss_weights:
     policy: 1.0
-    utility: 0.05
-    hard: 0.10
-    harm: 0.05
-    oracle_rec: 0.05
-    deploy_rec: 0.05
+    utility: 0.0
+    hard: 0.0
+    harm: 0.0
+    oracle_rec: 0.0
+    deploy_rec: 0.0

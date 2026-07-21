@@ -38,8 +38,19 @@ EXTERNAL_CLOSED_LOOP_METHODS = {
     "post_collision_restoration", "trajectory_restoration", "post_collision_trajectory_restoration", "post_collision_restoration_heuristic", "ackermann_restoration",
     "severity_minimization", "severity_minimization_planner", "unavoidable_collision_planner", "crash_mitigation_planner", "uc_severity_planner",
     "gameformer", "gameformer_lite", "gameformer_levelk",
+    "route_bc", "route_bc_lite", "waymax_bc", "waymax_bc_lite", "wayformer_bc", "wayformer_style_bc", "route_bc_wayformer",
+    "betop", "betop_lite", "betopnet", "betopnet_lite",
 }
-EXTERNAL_TEACHER_REQUIRED_METHODS = EXTERNAL_CLOSED_LOOP_METHODS - {"gameformer", "gameformer_lite", "gameformer_levelk"}
+# Only the deliberately non-deployable oracle upper bound consumes OC-RAP
+# counterfactual teacher tensors during action selection.
+EXTERNAL_TEACHER_REQUIRED_METHODS = {
+    "oracle_filter", "oracle_recovery_filter", "branchwise_oracle_filter", "oracle_branchwise_recovery",
+}
+EXTERNAL_LEARNED_METHODS = {
+    "gameformer", "gameformer_lite", "gameformer_levelk",
+    "route_bc", "route_bc_lite", "waymax_bc", "waymax_bc_lite", "wayformer_bc", "wayformer_style_bc", "route_bc_wayformer",
+    "betop", "betop_lite", "betopnet", "betopnet_lite",
+}
 
 
 
@@ -864,7 +875,7 @@ def _rollout_one_scene(
     requested_label_mode = str(cl_cfg.get("label_mode", "fast")).lower()
     label_mode = requested_label_mode
     teacher_required_methods = {"ocrap_teacher"} | set(EXTERNAL_TEACHER_REQUIRED_METHODS)
-    branchwise_methods = {"backup_filter", "oracle_filter", "contingency"} | set(EXTERNAL_TEACHER_REQUIRED_METHODS)
+    branchwise_methods = {"backup_filter", "oracle_filter", "contingency"}
     force_teacher_baselines = bool(cl_cfg.get("force_teacher_baselines", False))
     if method in teacher_required_methods or (method == "ocrap" and bundle is None) or (force_teacher_baselines and method in branchwise_methods):
         # Full teacher labels are very expensive online. Branch-wise/oracle
@@ -1962,7 +1973,7 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
     # --set waymax.compute_future_metrics=true.  Re-enable explicitly with
     # --set closed_loop.external_online_future_metrics=true when doing a small
     # exhaustive diagnostic run.
-    if method in EXTERNAL_TEACHER_REQUIRED_METHODS and not bool(cl_cfg.get("external_online_future_metrics", False)):
+    if method in EXTERNAL_CLOSED_LOOP_METHODS and not bool(cl_cfg.get("external_online_future_metrics", False)):
         wx["compute_future_metrics"] = False
         if int(wx.get("teacher_rollout_top_k_options", 0) or 0) <= 0:
             wx["teacher_rollout_top_k_options"] = int(cl_cfg.get("external_teacher_rollout_top_k_options", 4) or 4)
@@ -1982,9 +1993,14 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
         external_ckpt = checkpoint or cl_cfg.get("external_checkpoint", None)
         if external_ckpt:
             external_model, external_model_cfg, external_device = _load_external_checkpoint(external_ckpt, local)
-            if external_model is None and method in {"gameformer", "gameformer_lite", "gameformer_levelk"}:
+            if external_model is None and method in EXTERNAL_LEARNED_METHODS:
                 raise FileNotFoundError(f"Could not load external baseline checkpoint for closed-loop evaluation: {external_ckpt}")
-        source = "external_checkpoint" if external_model is not None else "dataset_teacher_labels"
+        if external_model is not None:
+            source = "external_checkpoint_observation_only_policy"
+        elif method in EXTERNAL_TEACHER_REQUIRED_METHODS:
+            source = "teacher_only_oracle_upper_bound"
+        else:
+            source = "observation_only_external_policy"
     else:
         bundle = load_model_bundle(checkpoint, local)
         if checkpoint and bundle is None:

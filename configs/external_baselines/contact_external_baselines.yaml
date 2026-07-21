@@ -7,18 +7,22 @@ external_baselines:
     - severity_minimization
   max_candidates: 24
   policy:
-    # Shared contact-regime numerical assumptions.  These match the uploaded
-    # post-impact papers' passenger-car scale and keep the finite-lattice
-    # adapters independent of any hidden test labels.
     contact_dt: 0.1
     contact_mu: 0.75
     vehicle_mass: 1750.0
     vehicle_iz: 2350.0
 
-    # Wang et al. Integrated Post-Impact Planning and Active Safety Control.
-    # Finite-lattice MPC adapter: stability + obstacle constraints + SBD mode
-    # decision + adhesion proxy + shared post-contact recovery option.
-    postimpact_gamma: 0.0
+    # Observation-only multi-modal future-risk model.
+    risk_dt: 0.1
+    risk_clearance_buffer_m: 0.75
+    risk_clearance_scale_m: 2.0
+    risk_collision_temperature_m: 0.8
+    risk_severity_speed_mps: 12.0
+    backup_deceleration_mps2: 5.0
+    backup_reaction_time_s: 0.25
+    cvar_alpha: 0.20
+
+    # Planning-integrated post-impact MPC finite-lattice adapter.
     postimpact_dt: 0.1
     postimpact_mu: 0.75
     postimpact_sbd_margin: 4.0
@@ -32,34 +36,29 @@ external_baselines:
     postimpact_steer_weight: 0.08
     postimpact_jerk_weight: 0.02
     postimpact_adhesion_weight: 1.1
-    postimpact_hard_weight: 8.0
-    postimpact_harm_weight: 2.5
+    postimpact_expected_risk_weight: 5.0
+    postimpact_cvar_risk_weight: 2.5
+    postimpact_severity_weight: 1.5
     postimpact_rejoin_weight: 0.20
-    postimpact_shared_drs_weight: 3.0
     postimpact_yaw_rate_gate: 2.2
     postimpact_adhesion_gate: 1.25
-    postimpact_hard_gate: 0.0
+    postimpact_risk_gate: 1.25
 
-    # Post-crash braking / stable-stop rule, based on post-crash braking systems
-    # that trigger after a crash/contact and slow the vehicle to a controlled stop
-    # to prevent secondary collisions.
-    stable_stop_gamma: 0.0
+    # Post-crash braking / stable-stop controller.
     stable_stop_terminal_speed_weight: 1.8
     stable_stop_yaw_rate_weight: 2.0
     stable_stop_yaw_acc_weight: 0.20
-    stable_stop_hard_weight: 12.0
-    stable_stop_harm_weight: 4.0
+    stable_stop_expected_risk_weight: 6.0
+    stable_stop_cvar_risk_weight: 3.0
     stable_stop_steer_weight: 0.20
     stable_stop_jerk_weight: 0.04
     stable_stop_non_stop_macro_penalty: 2.0
     stable_stop_utility_tiebreak: 0.03
     stable_stop_terminal_speed_gate: 2.0
     stable_stop_yaw_rate_gate: 1.4
-    stable_stop_hard_gate: 0.0
+    stable_stop_risk_gate: 1.25
 
-    # Ghosh et al. post-collision trajectory restoration heuristic: two-stage
-    # sinusoidal steering and tractive-force shaping without full braking.
-    restoration_gamma: 0.0
+    # Two-stage sinusoidal steering/tractive-force restoration heuristic.
     restoration_tau0: 0.1
     restoration_tau1: 0.45
     restoration_tau2: 0.65
@@ -73,44 +72,37 @@ external_baselines:
     restoration_shape_weight: 0.8
     restoration_yaw_rate_weight: 1.1
     restoration_lateral_weight: 0.25
-    restoration_hard_weight: 9.0
-    restoration_harm_weight: 2.0
+    restoration_expected_risk_weight: 4.0
+    restoration_cvar_risk_weight: 2.0
     restoration_speed_preservation_weight: 2.0
     restoration_min_speed_fraction: 0.45
     restoration_admit_min_speed_fraction: 0.30
     restoration_adhesion_weight: 0.75
     restoration_utility_weight: 0.25
     restoration_yaw_rate_gate: 2.2
-    restoration_hard_gate: 0.0
+    restoration_risk_gate: 1.5
 
-    # Severity-minimization / unavoidable-collision planner: choose the lowest
-    # crash-severity and post-impact instability candidate rather than imposing a
-    # zero-contact filter when contact is unavoidable.
-    severity_gamma: 0.0
-    severity_harm_weight: 10.0
-    severity_hard_weight: 5.0
+    # Unavoidable-contact severity minimization.
+    severity_collision_probability_weight: 8.0
+    severity_observed_risk_weight: 5.0
+    severity_tail_risk_weight: 2.5
+    severity_relative_speed_weight: 3.0
     severity_delta_v_weight: 2.0
     severity_residual_energy_weight: 0.8
     severity_instability_weight: 1.2
-    severity_odg_weight: 0.6
-    severity_deployability_weight: 1.5
-    severity_rdep_weight: 0.25
+    severity_backup_margin_weight: 0.08
     severity_utility_tiebreak: 0.05
     severity_contact_macro_bonus: 0.20
-    # Omit severity_admit_threshold by default: the selector uses the current
-    # candidate-set 60th percentile, avoiding test-label fitting.
 
 closed_loop:
-  external_sparse_labels: true
-  external_label_max_candidates: 10
-  external_label_macro_diversity: true
+  label_mode: selected
+  force_teacher_baselines: false
+  external_sparse_labels: false
   exhaustive_teacher_labels: false
   num_recovery_options: 12
   save_partial: false
   num_candidate_prefixes: 24
   replan_interval_steps: 1
-  label_mode: all
-  force_teacher_baselines: true
   artifact_mine_probability: 0.0
 
 waymax:

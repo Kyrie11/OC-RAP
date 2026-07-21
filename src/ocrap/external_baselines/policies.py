@@ -5,6 +5,8 @@ from typing import Any
 
 import numpy as np
 
+from .observed_risk import ObservedRiskProfile, observed_risk_profile
+
 
 @dataclass
 class ExternalSelection:
@@ -421,25 +423,18 @@ def _safe_braking_distance_proxy(d: dict[str, Any], stats: dict[str, float | np.
     return float(sbd), feasible
 
 
-def _postimpact_mpc_cost(d: dict[str, Any], cfg: dict[str, Any]) -> tuple[float, dict[str, float]]:
-    """Planning-integrated post-impact MPC adapter over OC-RAP candidates.
+def _postimpact_mpc_cost(d: dict[str, Any], cfg: dict[str, Any], risk: ObservedRiskProfile | None = None) -> tuple[float, dict[str, float]]:
+    """Finite-lattice adapter of planning-integrated post-impact MPC.
 
-    Wang et al.'s controller optimizes longitudinal/lateral/yaw motion for a
-    post-impact unstable vehicle with roll/adhesion and obstacle constraints,
-    chooses braking vs lane-change using safe braking distance, and then
-    allocates forces to actuators.  Under OC-RAP's finite candidate-prefix
-    lattice we cannot run the original continuous QP/PSO loop directly, so this
-    adapter evaluates every candidate as a receding-horizon MPC proposal using
-    the same ingredients: stability recovery, tire-adhesion usage, rhombus-like
-    obstacle/hard constraints, SBD braking/lane-change decision, and shared
-    recovery-option deployability.
+    The score uses only quantities available online: candidate kinematics,
+    tire-adhesion/stability proxies, safe-braking-distance mode selection, and
+    an observation-conditioned multi-modal collision-risk forecast.  Teacher
+    recoverability/harm tensors are intentionally excluded from action choice.
     """
     pcfg = ((cfg.get("external_baselines", {}) or {}).get("policy", {}) or {})
     stats = _motion_stats(d, cfg)
-    hard = _scalar(d, "hard_violation", 0.0)
-    harm = _scalar(d, "harm_proxy", 0.0)
+    risk = risk or observed_risk_profile(d, cfg)
     utility = _scalar(d, "utility", 0.0)
-    shared_opt, shared = _shared_option_success_score(d, gamma=float(pcfg.get("postimpact_gamma", 0.0)))
     sbd, brake_feasible = _safe_braking_distance_proxy(d, stats, cfg)
     terminal_speed = float(stats["terminal_speed"])
     yaw_rate = float(stats["yaw_rate"])
@@ -463,12 +458,14 @@ def _postimpact_mpc_cost(d: dict[str, Any], cfg: dict[str, Any]) -> tuple[float,
         + float(pcfg.get("postimpact_jerk_weight", 0.02)) * float(stats["jerk"])
         + float(pcfg.get("postimpact_adhesion_weight", 1.1)) * max(0.0, adhesion - 1.0)
     )
-    obstacle_cost = float(pcfg.get("postimpact_hard_weight", 8.0)) * hard + float(pcfg.get("postimpact_harm_weight", 2.5)) * harm
-    rejoin_reward = float(pcfg.get("postimpact_rejoin_weight", 0.20)) * utility + float(pcfg.get("postimpact_shared_drs_weight", 3.0)) * shared
+    obstacle_cost = (
+        float(pcfg.get("postimpact_expected_risk_weight", 5.0)) * risk.expected_loss
+        + float(pcfg.get("postimpact_cvar_risk_weight", 2.5)) * risk.cvar_loss
+        + float(pcfg.get("postimpact_severity_weight", 1.5)) * risk.severity_proxy
+    )
+    rejoin_reward = float(pcfg.get("postimpact_rejoin_weight", 0.20)) * utility
     total = stability_cost + obstacle_cost + decision_penalty + sbd_mode_cost - rejoin_reward
     return float(total), {
-        "shared_option": float(shared_opt),
-        "shared_success": float(shared),
         "yaw_rate": yaw_rate,
         "yaw_acc": yaw_acc,
         "terminal_speed": terminal_speed,
@@ -477,49 +474,45 @@ def _postimpact_mpc_cost(d: dict[str, Any], cfg: dict[str, Any]) -> tuple[float,
         "sbd": float(sbd),
         "sbd_brake_feasible": float(brake_feasible),
         "adhesion_proxy": float(adhesion),
+        "observed_expected_risk": float(risk.expected_loss),
+        "observed_cvar_risk": float(risk.cvar_loss),
+        "backup_margin": float(risk.backup_margin),
         "rejoin_reward": float(rejoin_reward),
     }
 
 
-def _stable_stop_cost(d: dict[str, Any], cfg: dict[str, Any]) -> tuple[float, dict[str, float]]:
-    """Post-crash braking / stable-stop adapter.
-
-    This mirrors industrial post-crash braking logic: once a crash/contact is
-    detected, prefer a controlled brake-to-stop command that suppresses yaw and
-    avoids extra secondary contacts.  It deliberately ignores route utility
-    except as a weak tie-breaker.
-    """
+def _stable_stop_cost(d: dict[str, Any], cfg: dict[str, Any], risk: ObservedRiskProfile | None = None) -> tuple[float, dict[str, float]]:
+    """Post-crash braking/stable-stop controller scored without oracle labels."""
     pcfg = ((cfg.get("external_baselines", {}) or {}).get("policy", {}) or {})
     stats = _motion_stats(d, cfg)
-    hard = _scalar(d, "hard_violation", 0.0)
-    harm = _scalar(d, "harm_proxy", 0.0)
+    risk = risk or observed_risk_profile(d, cfg)
     utility = _scalar(d, "utility", 0.0)
     stop_macro = _macro_is(d, {"brake", "yield", "pull_over", "stabilize"})
     cost = (
         float(pcfg.get("stable_stop_terminal_speed_weight", 1.8)) * float(stats["terminal_speed"])
         + float(pcfg.get("stable_stop_yaw_rate_weight", 2.0)) * float(stats["yaw_rate"])
         + float(pcfg.get("stable_stop_yaw_acc_weight", 0.20)) * float(stats["yaw_acc"])
-        + float(pcfg.get("stable_stop_hard_weight", 12.0)) * hard
-        + float(pcfg.get("stable_stop_harm_weight", 4.0)) * harm
+        + float(pcfg.get("stable_stop_expected_risk_weight", 6.0)) * risk.expected_loss
+        + float(pcfg.get("stable_stop_cvar_risk_weight", 3.0)) * risk.cvar_loss
         + float(pcfg.get("stable_stop_steer_weight", 0.20)) * float(stats["steer_effort"])
         + float(pcfg.get("stable_stop_jerk_weight", 0.04)) * float(stats["jerk"])
         + (0.0 if stop_macro else float(pcfg.get("stable_stop_non_stop_macro_penalty", 2.0)))
         - float(pcfg.get("stable_stop_utility_tiebreak", 0.03)) * utility
     )
-    return float(cost), {"terminal_speed": float(stats["terminal_speed"]), "yaw_rate": float(stats["yaw_rate"]), "stop_macro": float(stop_macro)}
+    return float(cost), {
+        "terminal_speed": float(stats["terminal_speed"]),
+        "yaw_rate": float(stats["yaw_rate"]),
+        "stop_macro": float(stop_macro),
+        "observed_expected_risk": float(risk.expected_loss),
+        "backup_margin": float(risk.backup_margin),
+    }
 
 
-def _trajectory_restoration_cost(d: dict[str, Any], cfg: dict[str, Any]) -> tuple[float, dict[str, float]]:
-    """Ghosh et al. steering/tractive-force heuristic adapter.
-
-    The original method uses two sinusoidal steering windows to first return the
-    vehicle to the desired trajectory and then hold direction, plus a sinusoidal
-    tractive-force pulse rather than full braking.  We score OC-RAP prefixes by
-    matching this open-loop steering/traction shape while rewarding lateral/yaw
-    restoration and route rejoin.
-    """
+def _trajectory_restoration_cost(d: dict[str, Any], cfg: dict[str, Any], risk: ObservedRiskProfile | None = None) -> tuple[float, dict[str, float]]:
+    """Steering/tractive-force post-collision restoration heuristic adapter."""
     pcfg = ((cfg.get("external_baselines", {}) or {}).get("policy", {}) or {})
     stats = _motion_stats(d, cfg)
+    risk = risk or observed_risk_profile(d, cfg)
     controls = np.asarray(stats["controls"], dtype=float)
     states = np.asarray(stats["states"], dtype=float)
     dt = float(stats["dt"])
@@ -535,14 +528,12 @@ def _trajectory_restoration_cost(d: dict[str, Any], cfg: dict[str, Any]) -> tupl
     A2 = float(pcfg.get("restoration_A2", -0.10))
     Ac = float(pcfg.get("restoration_accel_pulse", 0.9))
     kdir = float(pcfg.get("restoration_kdir", 1.0))
-    # Direction is chosen from the initial lateral/yaw transient, as in a
-    # post-impact state initialization.  This keeps the heuristic responsive to
-    # left/right lateral impacts while remaining open-loop over the prefix.
     sign_src = 0.0
     if states.ndim == 2 and states.shape[0] > 0:
         sign_src += float(states[0, 1]) if states.shape[1] >= 2 else 0.0
         sign_src += float(states[0, 5]) if states.shape[1] >= 6 else 0.0
     direction = -np.sign(sign_src) if abs(sign_src) > 1e-6 else 1.0
+
     def window_sine(tt: np.ndarray, a: float, lo: float, hi: float) -> np.ndarray:
         if hi <= lo:
             return np.zeros_like(tt)
@@ -550,6 +541,7 @@ def _trajectory_restoration_cost(d: dict[str, Any], cfg: dict[str, Any]) -> tupl
         out = np.zeros_like(tt)
         out[mask] = a * np.sin(np.pi * (tt[mask] - lo) / max(hi - lo, 1e-3))
         return out
+
     steer_ref = kdir * direction * (window_sine(t, A1, tau0, tau1) + window_sine(t, A2, tau2, tau3))
     accel_ref = window_sine(t, Ac, tc1, tc2)
     steer = controls[:, 1] if controls.ndim == 2 and controls.shape[1] >= 2 and T else np.zeros((T,), dtype=float)
@@ -557,62 +549,60 @@ def _trajectory_restoration_cost(d: dict[str, Any], cfg: dict[str, Any]) -> tupl
     shape_cost = 0.0
     if T > 0:
         shape_cost = float(np.nanmean((steer - steer_ref) ** 2) / max(A1 * A1, 1e-4) + 0.25 * np.nanmean((accel - accel_ref) ** 2) / max(Ac * Ac, 1e-4))
-    hard = _scalar(d, "hard_violation", 0.0)
-    harm = _scalar(d, "harm_proxy", 0.0)
     utility = _scalar(d, "utility", 0.0)
     terminal_y = abs(float(stats["terminal_lateral_delta"]))
-    # Encourage recovery without complete braking.
     v0 = max(float(stats["initial_speed"]), 1e-3)
     speed_preservation_penalty = max(0.0, float(pcfg.get("restoration_min_speed_fraction", 0.45)) * v0 - float(stats["terminal_speed"])) / v0
     cost = (
         float(pcfg.get("restoration_shape_weight", 0.8)) * shape_cost
         + float(pcfg.get("restoration_yaw_rate_weight", 1.1)) * float(stats["yaw_rate"])
         + float(pcfg.get("restoration_lateral_weight", 0.25)) * terminal_y
-        + float(pcfg.get("restoration_hard_weight", 9.0)) * hard
-        + float(pcfg.get("restoration_harm_weight", 2.0)) * harm
+        + float(pcfg.get("restoration_expected_risk_weight", 4.0)) * risk.expected_loss
+        + float(pcfg.get("restoration_cvar_risk_weight", 2.0)) * risk.cvar_loss
         + float(pcfg.get("restoration_speed_preservation_weight", 2.0)) * speed_preservation_penalty
         + float(pcfg.get("restoration_adhesion_weight", 0.75)) * max(0.0, float(stats["adhesion_proxy"]) - 1.0)
         - float(pcfg.get("restoration_utility_weight", 0.25)) * utility
     )
-    return float(cost), {"shape_cost": float(shape_cost), "terminal_speed": float(stats["terminal_speed"]), "yaw_rate": float(stats["yaw_rate"])}
+    return float(cost), {
+        "shape_cost": float(shape_cost),
+        "terminal_speed": float(stats["terminal_speed"]),
+        "yaw_rate": float(stats["yaw_rate"]),
+        "observed_expected_risk": float(risk.expected_loss),
+        "backup_margin": float(risk.backup_margin),
+    }
 
 
-def _severity_minimization_cost(d: dict[str, Any], cfg: dict[str, Any]) -> tuple[float, dict[str, float]]:
-    """Unavoidable-collision severity-minimization adapter.
-
-    The planner assumes contact may be unavoidable and chooses the prefix that
-    minimizes a crash-severity proxy instead of insisting on zero contact.  The
-    proxy combines harm/hard labels, impact-energy/delta-v surrogates, post-
-    impact yaw instability, road-boundary/secondary-collision penalties, and a
-    weak reward for deployable recovery after the impact.
-    """
+def _severity_minimization_cost(d: dict[str, Any], cfg: dict[str, Any], risk: ObservedRiskProfile | None = None) -> tuple[float, dict[str, float]]:
+    """Unavoidable-contact severity minimization using online observables only."""
     pcfg = ((cfg.get("external_baselines", {}) or {}).get("policy", {}) or {})
     stats = _motion_stats(d, cfg)
-    hard = _scalar(d, "hard_violation", 0.0)
-    harm = _scalar(d, "harm_proxy", 0.0)
+    risk = risk or observed_risk_profile(d, cfg)
     utility = _scalar(d, "utility", 0.0)
-    r_dep = _scalar(d, "r_dep_star", 0.0)
-    odg = max(0.0, _scalar(d, "oracle_gap_star", 0.0))
-    shared_opt, shared = _shared_option_success_score(d, gamma=float(pcfg.get("severity_gamma", 0.0)))
     v0 = max(float(stats["initial_speed"]), 1e-3)
     dv_proxy = max(0.0, v0 - float(stats["terminal_speed"])) / v0
     residual_energy = (float(stats["terminal_speed"]) / v0) ** 2
     instability = float(stats["yaw_rate"]) + 0.15 * float(stats["yaw_acc"]) + max(0.0, float(stats["adhesion_proxy"]) - 1.0)
     contact_mode_bonus = float(_macro_is(d, {"brake", "yield", "lane_shift", "pull_over", "stabilize"}))
     cost = (
-        float(pcfg.get("severity_harm_weight", 10.0)) * harm
-        + float(pcfg.get("severity_hard_weight", 5.0)) * hard
+        float(pcfg.get("severity_collision_probability_weight", 8.0)) * risk.collision_probability
+        + float(pcfg.get("severity_observed_risk_weight", 5.0)) * risk.expected_loss
+        + float(pcfg.get("severity_tail_risk_weight", 2.5)) * risk.cvar_loss
+        + float(pcfg.get("severity_relative_speed_weight", 3.0)) * risk.severity_proxy
         + float(pcfg.get("severity_delta_v_weight", 2.0)) * dv_proxy
         + float(pcfg.get("severity_residual_energy_weight", 0.8)) * residual_energy
         + float(pcfg.get("severity_instability_weight", 1.2)) * instability
-        + float(pcfg.get("severity_odg_weight", 0.6)) * odg
-        - float(pcfg.get("severity_deployability_weight", 1.5)) * shared
-        - float(pcfg.get("severity_rdep_weight", 0.25)) * max(-2.0, min(2.0, r_dep))
+        - float(pcfg.get("severity_backup_margin_weight", 0.08)) * np.clip(risk.backup_margin, -20.0, 20.0)
         - float(pcfg.get("severity_utility_tiebreak", 0.05)) * utility
         - float(pcfg.get("severity_contact_macro_bonus", 0.20)) * contact_mode_bonus
     )
-    return float(cost), {"shared_option": float(shared_opt), "shared_success": float(shared), "delta_v_proxy": float(dv_proxy), "instability": float(instability)}
-
+    return float(cost), {
+        "delta_v_proxy": float(dv_proxy),
+        "instability": float(instability),
+        "observed_expected_risk": float(risk.expected_loss),
+        "observed_cvar_risk": float(risk.cvar_loss),
+        "observed_severity": float(risk.severity_proxy),
+        "backup_margin": float(risk.backup_margin),
+    }
 
 def select_external_policy(
     baseline: str,
@@ -621,324 +611,277 @@ def select_external_policy(
     *,
     model_outputs: dict[str, np.ndarray] | None = None,
 ) -> ExternalSelection:
+    """Select a candidate for an external baseline.
+
+    Except for the explicitly named oracle upper bound, every selector uses only
+    online-observable candidate/model quantities.  OC-RAP teacher labels remain
+    available to the evaluator *after* selection, never as policy inputs.
+    """
     cfg = cfg or {}
     bcfg = cfg.get("external_baselines", {}) if isinstance(cfg.get("external_baselines", {}), dict) else {}
     pcfg = bcfg.get("policy", {}) if isinstance(bcfg.get("policy", {}), dict) else {}
     baseline = str(baseline).lower()
     n = len(samples)
+    if n == 0:
+        return ExternalSelection(0, "empty_candidate_set", np.zeros((0,), dtype=bool), np.zeros((0,), dtype=float))
+
     utility = np.asarray([_scalar(d, "utility", 0.0) for d in samples], dtype=float)
-    hard = np.asarray([_scalar(d, "hard_violation", 0.0) for d in samples], dtype=float)
-    harm = np.asarray([_scalar(d, "harm_proxy", 0.0) for d in samples], dtype=float)
     feasible = np.asarray([_scalar(d, "feasible", 1.0) > 0.5 for d in samples], dtype=bool)
-    r_orc = np.asarray([_scalar(d, "r_orc_star", 0.0) for d in samples], dtype=float)
-    r_dep = np.asarray([_scalar(d, "r_dep_star", 0.0) for d in samples], dtype=float)
-    safe = feasible & (hard <= float(pcfg.get("gamma_H", 0.0))) & (harm <= float(pcfg.get("gamma_D", 5.0)))
+    nominal_d = samples[0]
+    dev = _nominal_deviation(samples)
+    common = np.asarray([
+        _prefix_common_horizon(
+            d,
+            nominal_d,
+            threshold=float(pcfg.get("branch_divergence_threshold_m", 1.0)),
+            max_fraction=float(pcfg.get("max_branch_fraction", 0.6)),
+        )
+        for d in samples
+    ], dtype=float)
+    smooth = np.asarray([_control_smoothness_cost(d, dt=float(pcfg.get("dt", 0.2))) for d in samples], dtype=float)
+    macros = _macro_names(samples)
 
     if baseline in {"nominal", "nominal_replay", "log_replay"}:
         admitted = np.zeros(n, dtype=bool)
-        score = utility.copy()
         nominal = [i for i, d in enumerate(samples) if _scalar(d, "is_nominal", 0.0) > 0.5]
         idx = int(nominal[0] if nominal else 0)
         if not feasible[idx]:
-            idx = _best(score, feasible)
+            idx = _best(utility, feasible)
         admitted[idx] = True
-        return ExternalSelection(idx, "logged_nominal_replay", admitted, score)
+        return ExternalSelection(idx, "logged_nominal_replay", admitted, utility.copy())
 
     if baseline in {"route_bc", "route_bc_lite", "waymax_bc", "waymax_bc_lite", "wayformer_bc", "wayformer_style_bc", "route_bc_wayformer"}:
         admitted = np.zeros(n, dtype=bool)
-        if model_outputs and "logits" in model_outputs:
-            score = np.asarray(model_outputs["logits"], dtype=float)[:n]
-            idx = _best(score, feasible)
+        if model_outputs is not None and "logits" in model_outputs:
+            score = np.asarray(model_outputs["logits"], dtype=float).reshape(-1)[:n]
             reason = "learned_route_conditioned_wayformer_bc"
+            idx = _best(score, feasible)
         else:
-            score = utility.copy()
-            nominal = [i for i, d in enumerate(samples) if _scalar(d, "is_nominal", 0.0) > 0.5]
-            idx = int(nominal[0] if nominal else 0)
-            if not feasible[idx]:
-                idx = _best(score, feasible)
-            reason = "log_replay_or_nominal_bc"
+            score = -dev
+            idx = 0 if feasible[0] else _best(score, feasible)
+            reason = "wayformer_checkpoint_missing_nominal_fallback"
         admitted[idx] = True
         return ExternalSelection(idx, reason, admitted, score)
 
     if baseline in {"gameformer", "gameformer_lite", "gameformer_levelk"}:
-        if model_outputs:
-            u = np.asarray(model_outputs.get("utility", utility), dtype=float)[:n]
-            h = np.maximum(0.0, np.asarray(model_outputs.get("hard", hard), dtype=float)[:n])
-            hp = np.maximum(0.0, np.asarray(model_outputs.get("harm", harm), dtype=float)[:n])
-            ro = np.asarray(model_outputs.get("r_orc", r_orc), dtype=float)[:n]
-            score = u - float(pcfg.get("gameformer_hard_weight", 12.0)) * h - float(pcfg.get("gameformer_harm_weight", 2.0)) * hp + float(pcfg.get("gameformer_oracle_weight", 1.0)) * ro
-            reason = "learned_interaction_oracle_risk"
+        admitted = np.zeros(n, dtype=bool)
+        if model_outputs is not None and "logits" in model_outputs:
+            score = np.asarray(model_outputs["logits"], dtype=float).reshape(-1)[:n]
+            idx = _best(score, feasible)
+            reason = "learned_gameformer_levelk_policy"
         else:
-            score = utility - float(pcfg.get("gameformer_hard_weight", 12.0)) * hard - float(pcfg.get("gameformer_harm_weight", 2.0)) * harm + float(pcfg.get("gameformer_oracle_weight", 1.0)) * r_orc
-            reason = "teacher_interaction_oracle_risk"
-        idx = _best(score, feasible)
-        admitted = safe & (r_orc >= float(pcfg.get("gamma_oracle_rec", 0.0)))
+            score = -dev
+            idx = 0 if feasible[0] else _best(score, feasible)
+            reason = "gameformer_checkpoint_missing_nominal_fallback"
+        admitted[idx] = True
         return ExternalSelection(idx, reason, admitted, score)
 
     if baseline in {"betop", "betop_lite", "betopnet", "betopnet_lite"}:
-        if model_outputs:
-            logits = np.asarray(model_outputs.get("logits", utility), dtype=float)[:n]
-            u = np.asarray(model_outputs.get("utility", utility), dtype=float)[:n]
-            h = np.maximum(0.0, np.asarray(model_outputs.get("hard", hard), dtype=float)[:n])
-            hp = np.maximum(0.0, np.asarray(model_outputs.get("harm", harm), dtype=float)[:n])
-            topo_logits = model_outputs.get("actor_topo_logits", model_outputs.get("topology_logits"))
-            if topo_logits is not None:
-                topo = np.asarray(topo_logits, dtype=float)[:n]
-                # BeTop predicts binary behavioral-topology occupancies.  Use a
-                # topology confidence/interaction prior from the strongest actor
-                # relation, rather than a deployability certificate.
-                if topo.shape[-1] == 1:
-                    prob = 1.0 / (1.0 + np.exp(-np.clip(topo[..., 0], -40.0, 40.0)))
-                    topo_conf = prob.max(axis=-1)
-                else:
-                    topo_prob = np.exp(topo - np.max(topo, axis=-1, keepdims=True))
-                    topo_prob = topo_prob / np.maximum(topo_prob.sum(axis=-1, keepdims=True), 1e-9)
-                    topo_conf = topo_prob.max(axis=-1).mean(axis=-1)
-            else:
-                topo_conf = np.ones(n, dtype=float)
-            score = logits + float(pcfg.get("betop_utility_weight", 0.25)) * u - float(pcfg.get("betop_hard_weight", 10.0)) * h - float(pcfg.get("betop_harm_weight", 1.5)) * hp + float(pcfg.get("betop_topology_conf_weight", 0.25)) * topo_conf
-            reason = "learned_behavioral_topology_planner"
+        admitted = np.zeros(n, dtype=bool)
+        if model_outputs is not None and "logits" in model_outputs:
+            # Topology predictions already enter BeTop's topology-aware decoder;
+            # using only final policy logits avoids double-counting confidence.
+            score = np.asarray(model_outputs["logits"], dtype=float).reshape(-1)[:n]
+            idx = _best(score, feasible)
+            reason = "learned_betop_behavioral_topology_policy"
         else:
-            branch_tmp = [_branchwise_values(d, alpha=float(pcfg.get("cvar_alpha", 0.2))) for d in samples]
-            branch_expected_tmp = np.asarray([b["expected"] for b in branch_tmp], dtype=float)
-            score = utility + float(pcfg.get("betop_branch_weight", 0.5)) * branch_expected_tmp - float(pcfg.get("betop_hard_weight", 10.0)) * hard - float(pcfg.get("betop_harm_weight", 1.5)) * harm
-            reason = "teacher_behavioral_topology_surrogate"
-        idx = _best(score, feasible)
-        admitted = safe
+            score = -dev
+            idx = 0 if feasible[0] else _best(score, feasible)
+            reason = "betop_checkpoint_missing_nominal_fallback"
+        admitted[idx] = True
         return ExternalSelection(idx, reason, admitted, score)
 
-    branch = [_branchwise_values(d, alpha=float(pcfg.get("cvar_alpha", 0.2))) for d in samples]
-    branch_expected = np.asarray([b["expected"] for b in branch], dtype=float)
-    branch_cvar = np.asarray([b["cvar"] for b in branch], dtype=float)
-    branch_worst = np.asarray([b["worst"] for b in branch], dtype=float)
-    branch_fail = np.asarray([b["fail_prob"] for b in branch], dtype=float)
-
-    nominal_d = samples[0] if samples else None
-    branch_eff = [_effective_root_outcomes(d, alpha=float(pcfg.get("cvar_alpha", 0.2)), gamma=float(pcfg.get("gamma_branch_rec", 0.0))) for d in samples]
-    branch_expected = np.asarray([b["expected"] for b in branch_eff], dtype=float)
-    branch_cvar = np.asarray([b["cvar"] for b in branch_eff], dtype=float)
-    branch_worst = np.asarray([b["worst"] for b in branch_eff], dtype=float)
-    branch_fail = np.asarray([b["fail_prob"] for b in branch_eff], dtype=float)
-    risk_expected = np.asarray([b["risk_expected"] for b in branch_eff], dtype=float)
-    risk_cvar = np.asarray([b["risk_cvar"] for b in branch_eff], dtype=float)
-    risk_worst = np.asarray([b["risk_worst"] for b in branch_eff], dtype=float)
-    oracle_mass = np.asarray([b["oracle_mass"] for b in branch_eff], dtype=float)
-    oracle_all = np.asarray([bool(b["oracle_all_roots"]) for b in branch_eff], dtype=bool)
-    common = np.asarray([_prefix_common_horizon(d, nominal_d, threshold=float(pcfg.get("branch_divergence_threshold_m", 1.0)), max_fraction=float(pcfg.get("max_branch_fraction", 0.6))) for d in samples], dtype=float)
-    smooth = np.asarray([_control_smoothness_cost(d, dt=float(pcfg.get("dt", 0.2))) for d in samples], dtype=float)
-    dev = _nominal_deviation(samples)
-    macros = _macro_names(samples)
+    # Deployable scenario-risk profiles shared by all non-oracle planning/filter
+    # baselines.  They are derived from candidate trajectories and observed agent
+    # histories, not from m_star/r_orc/r_dep/harm labels.
+    profiles = [observed_risk_profile(d, cfg) for d in samples]
+    exp_risk = np.asarray([p.expected_loss for p in profiles], dtype=float)
+    cvar_risk = np.asarray([p.cvar_loss for p in profiles], dtype=float)
+    worst_risk = np.asarray([p.worst_loss for p in profiles], dtype=float)
+    collision_prob = np.asarray([p.collision_probability for p in profiles], dtype=float)
+    backup_margin = np.asarray([p.backup_margin for p in profiles], dtype=float)
+    min_clearance = np.asarray([p.min_clearance for p in profiles], dtype=float)
+    severity = np.asarray([p.severity_proxy for p in profiles], dtype=float)
 
     if baseline in {"marc", "marc_lite", "marc_contingency"}:
-        # MARC core: evaluate semantic ego policies, render policy-conditioned
-        # critical scenarios, construct a dynamic branch point, then solve a
-        # risk-aware contingency score.  OC-RAP's candidate lattice already
-        # materializes semantic policies and counterfactual roots; this block
-        # therefore keeps MARC's order of operations over that lattice.
+        # Semantic-policy contingency planning: retain the best candidate within
+        # each macro policy and then compare policy-level representatives.
         risk_tol = float(pcfg.get("marc_risk_tolerance", 0.35))
-        rec = (1.0 - risk_tol) * branch_expected + risk_tol * branch_cvar
+        mixed_risk = (1.0 - risk_tol) * exp_risk + risk_tol * cvar_risk
         score = (
             float(pcfg.get("marc_utility_weight", 1.0)) * utility
-            + float(pcfg.get("marc_branch_rec_weight", 1.0)) * rec
             + float(pcfg.get("marc_common_prefix_weight", 0.35)) * common
-            + float(pcfg.get("marc_oracle_mass_weight", 0.25)) * oracle_mass
-            - float(pcfg.get("marc_expected_risk_weight", 2.0)) * risk_expected
-            - float(pcfg.get("marc_fail_weight", 1.0)) * branch_fail
+            + float(pcfg.get("marc_backup_margin_weight", 0.08)) * np.clip(backup_margin, -20.0, 20.0)
+            - float(pcfg.get("marc_expected_risk_weight", 2.0)) * mixed_risk
+            - float(pcfg.get("marc_collision_probability_weight", 1.0)) * collision_prob
             - float(pcfg.get("marc_smoothness_weight", 0.15)) * smooth
             - float(pcfg.get("marc_deviation_weight", 0.10)) * dev
-            - float(pcfg.get("marc_hard_weight", 10.0)) * hard
-            - float(pcfg.get("marc_harm_weight", 1.5)) * harm
         )
-        # Policy-level selection: keep the best candidate under each semantic
-        # macro, then select among policies.  This avoids collapsing MARC into a
-        # single trajectory scorer while still returning an executable prefix.
-        idxs = []
-        for m in sorted(set(macros)):
-            ids = np.asarray([i for i, mm in enumerate(macros) if mm == m], dtype=int)
+        representatives: list[int] = []
+        for macro in sorted(set(macros)):
+            ids = np.asarray([i for i, name in enumerate(macros) if name == macro], dtype=int)
             if ids.size:
-                ids = ids[feasible[ids]] if feasible[ids].any() else ids
-                idxs.append(int(ids[np.argmax(score[ids])]))
-        if idxs:
-            cand = np.asarray(idxs, dtype=int)
-            idx = int(cand[np.argmax(score[cand])])
+                valid_ids = ids[feasible[ids]]
+                use = valid_ids if valid_ids.size else ids
+                representatives.append(int(use[np.argmax(score[use])]))
+        if representatives:
+            ids = np.asarray(representatives, dtype=int)
+            idx = int(ids[np.argmax(score[ids])])
         else:
             idx = _best(score, feasible)
-        admitted = safe & (rec >= float(pcfg.get("gamma_branch_rec", 0.0))) & (risk_expected <= float(pcfg.get("marc_risk_threshold", 1.0)))
-        return ExternalSelection(idx, "marc_policy_conditioned_risk_aware_contingency", admitted, score)
+        admitted = feasible & (mixed_risk <= float(pcfg.get("marc_risk_threshold", 1.0)))
+        return ExternalSelection(idx, "marc_observation_conditioned_multipolicy_contingency", admitted, score)
 
     if baseline in {"racp", "racp_lite", "risk_aware_contingency"}:
-        # RACP core: maintain Bayesian beliefs over prediction modes, split the
-        # plan into shared and contingent parts, and constrain the worst
-        # discounted probabilistic risk.  Root probabilities become the prior;
-        # branch recovery likelihoods produce a posterior used in the cost.
-        post = [_posterior_root_values(d, alpha=float(pcfg.get("cvar_alpha", 0.2)), temperature=float(pcfg.get("racp_belief_temperature", 0.7))) for d in samples]
-        posterior_expected = np.asarray([b["posterior_expected"] for b in post], dtype=float)
-        entropy = np.asarray([b["entropy"] for b in post], dtype=float)
+        # RACP-style beliefs are the normalized observation-conditioned mode
+        # weights.  At planning time there is no future evidence with which to
+        # update them using teacher margins; posterior risk is therefore the
+        # honest prior-predictive risk over the multimodal forecast.
+        entropy = np.asarray([
+            -np.sum(p.weights[p.weights > 0] * np.log(p.weights[p.weights > 0])) / max(np.log(max(p.weights.size, 2)), 1e-8)
+            for p in profiles
+        ], dtype=float)
         rho = float(pcfg.get("racp_risk_tolerance", 0.6))
-        risk_value = rho * posterior_expected + (1.0 - rho) * branch_cvar
-        eta = risk_expected + float(pcfg.get("racp_tail_weight", 0.5)) * risk_cvar + float(pcfg.get("risk_harm_weight", 0.25)) * harm + float(pcfg.get("risk_hard_weight", 1.0)) * hard
+        contingent_risk = rho * exp_risk + (1.0 - rho) * cvar_risk
         branch_bonus = common * (1.0 - entropy)
         score = (
             float(pcfg.get("racp_utility_weight", 1.0)) * utility
-            + float(pcfg.get("racp_branch_rec_weight", 1.0)) * risk_value
             + float(pcfg.get("racp_belief_branch_weight", 0.45)) * branch_bonus
-            - float(pcfg.get("racp_risk_weight", 2.5)) * eta
+            + float(pcfg.get("racp_backup_margin_weight", 0.06)) * np.clip(backup_margin, -20.0, 20.0)
+            - float(pcfg.get("racp_risk_weight", 2.5)) * contingent_risk
+            - float(pcfg.get("racp_collision_probability_weight", 1.0)) * collision_prob
             - float(pcfg.get("racp_smoothness_weight", 0.10)) * smooth
-            - float(pcfg.get("racp_hard_weight", 10.0)) * hard
-            - float(pcfg.get("racp_harm_weight", 1.5)) * harm
         )
-        admitted = safe & (eta <= float(pcfg.get("racp_risk_threshold", pcfg.get("racp_delta", 0.75)))) & (risk_value >= float(pcfg.get("gamma_branch_rec", 0.0)))
+        admitted = feasible & (contingent_risk <= float(pcfg.get("racp_risk_threshold", pcfg.get("racp_delta", 0.75))))
         idx = _best(score, admitted if admitted.any() else feasible)
-        return ExternalSelection(idx, "racp_bayesian_belief_contingency", admitted, score)
+        return ExternalSelection(idx, "racp_prior_predictive_multimodal_contingency", admitted, score)
 
     if baseline in {"expected_risk", "expected_risk_filter", "expected_risk_planner"}:
-        # Expected-risk filter: bound the expected signed collision/recovery loss.
-        risk = risk_expected + float(pcfg.get("risk_harm_weight", 0.25)) * harm + float(pcfg.get("risk_hard_weight", 1.0)) * hard
-        admitted = feasible & (risk <= float(pcfg.get("expected_risk_threshold", 0.45)))
-        score = utility - float(pcfg.get("expected_risk_weight", 3.0)) * risk - float(pcfg.get("risk_deviation_weight", 0.05)) * dev
+        admitted = feasible & (exp_risk <= float(pcfg.get("expected_risk_threshold", 0.45)))
+        score = utility - float(pcfg.get("expected_risk_weight", 3.0)) * exp_risk - float(pcfg.get("risk_deviation_weight", 0.05)) * dev
         idx = _best(score, admitted if admitted.any() else feasible)
-        return ExternalSelection(idx, "expected_signed_collision_risk_filter", admitted, score)
+        return ExternalSelection(idx, "expected_observation_conditioned_collision_risk_filter", admitted, score)
 
     if baseline in {"cvar_risk", "cvar_risk_filter", "cvar_planner"}:
-        # CVaR filter: upper-tail risk over root-conditioned losses.
-        risk = risk_cvar + float(pcfg.get("risk_harm_weight", 0.25)) * harm + float(pcfg.get("risk_hard_weight", 1.0)) * hard
-        admitted = feasible & (risk <= float(pcfg.get("cvar_risk_threshold", 0.55)))
-        score = utility - float(pcfg.get("cvar_risk_weight", 3.0)) * risk - float(pcfg.get("risk_deviation_weight", 0.05)) * dev
+        admitted = feasible & (cvar_risk <= float(pcfg.get("cvar_risk_threshold", 0.55)))
+        score = utility - float(pcfg.get("cvar_risk_weight", 3.0)) * cvar_risk - float(pcfg.get("risk_deviation_weight", 0.05)) * dev
         idx = _best(score, admitted if admitted.any() else feasible)
-        return ExternalSelection(idx, "cvar_tail_signed_collision_risk_filter", admitted, score)
+        return ExternalSelection(idx, "cvar_observation_conditioned_tail_risk_filter", admitted, score)
 
     if baseline in {"dro_cvar", "dro_cvar_filter", "dro_cvar_safety_filter", "dr_cvar_filter"}:
-        # DR-CVaR filter: CVaR plus a Wasserstein-ball ambiguity penalty.  This
-        # mirrors the paper's safe-halfspace relaxation when only finite samples
-        # of future obstacle/root outcomes are available in the OC-RAP dataset.
         ambiguity = float(pcfg.get("dro_ambiguity_radius", 0.10))
-        dispersion = np.sqrt(np.maximum(risk_worst - risk_expected, 0.0) ** 2 + np.maximum(branch_fail, 0.0))
-        risk = risk_cvar + ambiguity * dispersion / max(float(pcfg.get("cvar_alpha", 0.2)), 1e-3) + float(pcfg.get("risk_harm_weight", 0.25)) * harm + float(pcfg.get("risk_hard_weight", 1.0)) * hard
+        dispersion = np.asarray([float(np.sqrt(np.sum(p.weights * (p.losses - p.expected_loss) ** 2))) for p in profiles], dtype=float)
+        risk = cvar_risk + ambiguity * dispersion / max(float(pcfg.get("cvar_alpha", 0.2)), 1e-3)
         admitted = feasible & (risk <= float(pcfg.get("dro_cvar_threshold", 0.65)))
         score = utility - float(pcfg.get("dro_cvar_risk_weight", 3.5)) * risk - float(pcfg.get("risk_deviation_weight", 0.05)) * dev
         idx = _best(score, admitted if admitted.any() else feasible)
-        return ExternalSelection(idx, "distributionally_robust_cvar_safe_halfspace_filter", admitted, score)
+        return ExternalSelection(idx, "distributionally_robust_cvar_observed_risk_filter", admitted, score)
 
     if baseline in {"predictive_safety_filter", "psf", "cbf_backup_filter", "predictive_cbf_backup", "backup_cbf_filter"}:
-        # Predictive Safety Filter / CBF backup baseline.  Treat candidate 0 as
-        # the nominal learning/reference input u_L.  Certify it when there is a
-        # finite-horizon branch-wise backup to a safe set; otherwise apply the
-        # smallest feasible modification that improves the CBF-like recovery
-        # barrier and respects control/comfort bounds.
-        gamma_b = float(pcfg.get("psf_gamma_branch_rec", pcfg.get("gamma_branch_rec", 0.0)))
         accel = np.zeros(n, dtype=float)
         steer = np.zeros(n, dtype=float)
         for i, d in enumerate(samples):
             accel[i], steer[i] = _control_proxy(d)
         ctrl_ok = (accel <= float(pcfg.get("psf_accel_gate", 6.0))) & (steer <= float(pcfg.get("psf_steer_gate", 0.75)))
-        backup_ok = oracle_all | (branch_worst >= gamma_b)
-        cbf_value = branch_worst - float(pcfg.get("psf_hard_barrier_weight", 1.0)) * hard - float(pcfg.get("psf_harm_barrier_weight", 0.25)) * harm
-        nominal_cbf = cbf_value[0] if cbf_value.size else 0.0
-        cbf_ok = cbf_value >= (1.0 - float(pcfg.get("psf_cbf_kappa", 0.5))) * nominal_cbf - float(pcfg.get("psf_cbf_slack", 0.05))
-        admitted = feasible & ctrl_ok & backup_ok & cbf_ok & (hard <= float(pcfg.get("psf_hard_gate", 0.0))) & (harm <= float(pcfg.get("psf_harm_gate", 5.0)))
-        # Minimal modification objective: stay close to u_L/nominal, then prefer
-        # utility and recovery margin.
+        gamma_b = float(pcfg.get("psf_backup_margin_m", 0.0))
+        backup_ok = backup_margin >= gamma_b
+        nominal_barrier = backup_margin[0]
+        cbf_ok = backup_margin >= (1.0 - float(pcfg.get("psf_cbf_kappa", 0.5))) * nominal_barrier - float(pcfg.get("psf_cbf_slack_m", 0.5))
+        admitted = feasible & ctrl_ok & backup_ok & cbf_ok
         score = (
             -float(pcfg.get("psf_deviation_weight", 2.0)) * dev
             + float(pcfg.get("psf_utility_weight", 0.35)) * utility
-            + float(pcfg.get("psf_barrier_weight", 1.0)) * cbf_value
+            + float(pcfg.get("psf_barrier_weight", 0.25)) * np.clip(backup_margin, -20.0, 20.0)
+            - float(pcfg.get("psf_risk_weight", 2.0)) * cvar_risk
             - float(pcfg.get("psf_smoothness_weight", 0.15)) * smooth
         )
-        if admitted.size and admitted[0]:
-            idx = 0
-        else:
-            idx = _best(score, admitted if admitted.any() else feasible)
-        return ExternalSelection(idx, "predictive_safety_filter_cbf_backup", admitted, score)
+        idx = 0 if admitted[0] else _best(score, admitted if admitted.any() else feasible)
+        return ExternalSelection(idx, "predictive_safety_filter_observed_backup_barrier", admitted, score)
 
     if baseline in {"oracle_filter", "oracle_recovery_filter", "branchwise_oracle_filter", "oracle_branchwise_recovery"}:
+        # Deliberate non-deployable upper bound.  This is the only selector that
+        # may consume OC-RAP teacher tensors.
+        alpha = float(pcfg.get("cvar_alpha", 0.2))
         gamma_o = float(pcfg.get("gamma_oracle_rec", pcfg.get("gamma_branch_rec", 0.0)))
-        # Strict existential-by-root certificate: every valid root must have some
-        # option above gamma.  The score uses the LCVaR oracle headroom to break
-        # ties, exactly matching Eq. oracle_recovery in the paper.
-        admitted = safe & oracle_all & (branch_cvar >= gamma_o)
+        hard = np.asarray([_scalar(d, "hard_violation", 0.0) for d in samples], dtype=float)
+        harm = np.asarray([_scalar(d, "harm_proxy", 0.0) for d in samples], dtype=float)
+        branch_eff = [_effective_root_outcomes(d, alpha=alpha, gamma=gamma_o) for d in samples]
+        oracle_all = np.asarray([bool(b["oracle_all_roots"]) for b in branch_eff], dtype=bool)
+        branch_cvar = np.asarray([b["cvar"] for b in branch_eff], dtype=float)
+        teacher_safe = feasible & (hard <= float(pcfg.get("gamma_H", 0.0))) & (harm <= float(pcfg.get("gamma_D", 5.0)))
+        admitted = teacher_safe & oracle_all & (branch_cvar >= gamma_o)
         score = branch_cvar + float(pcfg.get("oracle_utility_tiebreak", 1.0e-3)) * utility
         idx = _best(score, admitted if admitted.any() else feasible)
-        opt = None
-        if 0 <= idx < len(branch_eff):
-            opts = np.asarray(branch_eff[idx].get("best_options", np.zeros((0,), dtype=int)))
-            opt = int(opts[0]) if opts.size else None
-        return ExternalSelection(idx, "branchwise_existential_oracle_recovery_filter", admitted, score, selected_option=opt)
+        opts = np.asarray(branch_eff[idx].get("best_options", np.zeros((0,), dtype=int)))
+        opt = int(opts[0]) if opts.size else None
+        return ExternalSelection(idx, "teacher_only_branchwise_oracle_upper_bound", admitted, score, selected_option=opt)
 
     if baseline in {"postimpact_mpc", "postimpact_mpc_lite", "post_impact_mpc_lite", "postimpact_mpc_paper", "integrated_postimpact_mpc"}:
-        costs = []
         details_list = []
-        for d in samples:
-            c, details = _postimpact_mpc_cost(d, cfg)
-            costs.append(c)
-            details_list.append(details)
-        cost = np.asarray(costs, dtype=float) if costs else np.zeros(n, dtype=float)
+        costs = []
+        for d, p in zip(samples, profiles):
+            c, details = _postimpact_mpc_cost(d, cfg, p)
+            costs.append(c); details_list.append(details)
+        cost = np.asarray(costs, dtype=float)
         score = -cost
         yaw_gate = float(pcfg.get("postimpact_yaw_rate_gate", 2.2))
         adhesion_gate = float(pcfg.get("postimpact_adhesion_gate", 1.25))
-        stable_gate = np.asarray([x.get("yaw_rate", 0.0) <= yaw_gate and x.get("adhesion_proxy", 0.0) <= adhesion_gate for x in details_list], dtype=bool) if samples else np.zeros(n, dtype=bool)
-        admitted = feasible & stable_gate & (hard <= float(pcfg.get("postimpact_hard_gate", 0.0)))
+        stable_gate = np.asarray([x["yaw_rate"] <= yaw_gate and x["adhesion_proxy"] <= adhesion_gate for x in details_list], dtype=bool)
+        risk_gate = exp_risk <= float(pcfg.get("postimpact_risk_gate", 1.25))
+        admitted = feasible & stable_gate & risk_gate
         idx = _best(score, admitted if admitted.any() else feasible)
-        opt = int(details_list[idx].get("shared_option", 0)) if details_list else 0
-        return ExternalSelection(idx, "planning_integrated_postimpact_mpc_sbd_adhesion", admitted, score, selected_option=opt)
+        return ExternalSelection(idx, "planning_integrated_postimpact_mpc_observed_risk", admitted, score)
 
     if baseline in {"post_crash_braking", "post_crash_braking_rule", "stable_stop", "stable_stop_rule", "postcrash_stable_stop"}:
-        costs = []
         details_list = []
-        for d in samples:
-            c, details = _stable_stop_cost(d, cfg)
-            costs.append(c)
-            details_list.append(details)
-        cost = np.asarray(costs, dtype=float) if costs else np.zeros(n, dtype=float)
+        costs = []
+        for d, p in zip(samples, profiles):
+            c, details = _stable_stop_cost(d, cfg, p)
+            costs.append(c); details_list.append(details)
+        cost = np.asarray(costs, dtype=float)
         score = -cost
         stop_gate_speed = float(pcfg.get("stable_stop_terminal_speed_gate", 2.0))
         yaw_gate = float(pcfg.get("stable_stop_yaw_rate_gate", 1.4))
-        stop_macro = np.asarray([_macro_is(d, {"brake", "yield", "pull_over", "stabilize"}) for d in samples], dtype=bool) if samples else np.zeros(n, dtype=bool)
-        stable_gate = np.asarray([x.get("terminal_speed", 0.0) <= stop_gate_speed and x.get("yaw_rate", 0.0) <= yaw_gate for x in details_list], dtype=bool) if samples else np.zeros(n, dtype=bool)
-        admitted = feasible & stop_macro & stable_gate & (hard <= float(pcfg.get("stable_stop_hard_gate", 0.0)))
+        stop_macro = np.asarray([_macro_is(d, {"brake", "yield", "pull_over", "stabilize"}) for d in samples], dtype=bool)
+        stable_gate = np.asarray([x["terminal_speed"] <= stop_gate_speed and x["yaw_rate"] <= yaw_gate for x in details_list], dtype=bool)
+        admitted = feasible & stop_macro & stable_gate & (exp_risk <= float(pcfg.get("stable_stop_risk_gate", 1.25)))
         idx = _best(score, admitted if admitted.any() else feasible)
-        opt = _preferred_option_index(samples[idx], ["stop", "brake_lane", "post_contact_stabilize"], gamma=float(pcfg.get("stable_stop_gamma", 0.0))) if samples else 0
-        return ExternalSelection(idx, "post_crash_braking_stable_stop_rule", admitted, score, selected_option=opt)
+        return ExternalSelection(idx, "post_crash_braking_stable_stop_observed_risk", admitted, score)
 
     if baseline in {"post_collision_restoration", "trajectory_restoration", "post_collision_trajectory_restoration", "post_collision_restoration_heuristic", "ackermann_restoration"}:
-        costs = []
         details_list = []
-        for d in samples:
-            c, details = _trajectory_restoration_cost(d, cfg)
-            costs.append(c)
-            details_list.append(details)
-        cost = np.asarray(costs, dtype=float) if costs else np.zeros(n, dtype=float)
+        costs = []
+        for d, p in zip(samples, profiles):
+            c, details = _trajectory_restoration_cost(d, cfg, p)
+            costs.append(c); details_list.append(details)
+        cost = np.asarray(costs, dtype=float)
         score = -cost
-        restoration_macro = np.asarray([_macro_is(d, {"stabilize", "lane_shift", "merge", "yield", "pull_over", "keep"}) for d in samples], dtype=bool) if samples else np.zeros(n, dtype=bool)
+        restoration_macro = np.asarray([_macro_is(d, {"stabilize", "lane_shift", "merge", "yield", "pull_over", "keep"}) for d in samples], dtype=bool)
         yaw_gate = float(pcfg.get("restoration_yaw_rate_gate", 2.2))
         speed_frac = float(pcfg.get("restoration_admit_min_speed_fraction", 0.30))
         speed_ok = []
         yaw_ok = []
         for d, det in zip(samples, details_list):
             st = _motion_stats(d, cfg)
-            speed_ok.append(float(st.get("terminal_speed", 0.0)) >= speed_frac * max(float(st.get("initial_speed", 0.0)), 1e-3))
-            yaw_ok.append(float(det.get("yaw_rate", 0.0)) <= yaw_gate)
-        admitted = feasible & restoration_macro & np.asarray(speed_ok, dtype=bool) & np.asarray(yaw_ok, dtype=bool) & (hard <= float(pcfg.get("restoration_hard_gate", 0.0)))
+            speed_ok.append(float(st["terminal_speed"]) >= speed_frac * max(float(st["initial_speed"]), 1e-3))
+            yaw_ok.append(float(det["yaw_rate"]) <= yaw_gate)
+        admitted = feasible & restoration_macro & np.asarray(speed_ok, dtype=bool) & np.asarray(yaw_ok, dtype=bool) & (cvar_risk <= float(pcfg.get("restoration_risk_gate", 1.5)))
         idx = _best(score, admitted if admitted.any() else feasible)
-        opt = _preferred_option_index(samples[idx], ["post_contact_stabilize", "yield_rejoin", "avoid_secondary"], gamma=float(pcfg.get("restoration_gamma", 0.0))) if samples else 0
-        return ExternalSelection(idx, "post_collision_trajectory_restoration_heuristic", admitted, score, selected_option=opt)
+        return ExternalSelection(idx, "post_collision_trajectory_restoration_observed_risk", admitted, score)
 
     if baseline in {"severity_minimization", "severity_minimization_planner", "unavoidable_collision_planner", "crash_mitigation_planner", "uc_severity_planner"}:
-        costs = []
         details_list = []
-        for d in samples:
-            c, details = _severity_minimization_cost(d, cfg)
-            costs.append(c)
-            details_list.append(details)
-        cost = np.asarray(costs, dtype=float) if costs else np.zeros(n, dtype=float)
+        costs = []
+        for d, p in zip(samples, profiles):
+            c, details = _severity_minimization_cost(d, cfg, p)
+            costs.append(c); details_list.append(details)
+        cost = np.asarray(costs, dtype=float)
         score = -cost
-        # In unavoidable-contact planning, hard contact is not a blanket reject;
-        # admission means the candidate is dynamically feasible and below a
-        # configurable crash-severity envelope.
         finite = np.isfinite(cost)
         threshold = float(pcfg.get("severity_admit_threshold", np.nanpercentile(cost[finite], 60.0) if finite.any() else 1.0))
         admitted = feasible & finite & (cost <= threshold)
         idx = _best(score, admitted if admitted.any() else feasible)
-        opt = _preferred_option_index(samples[idx], ["mitigate_contact", "avoid_secondary", "post_contact_stabilize", "brake_lane"], gamma=float(pcfg.get("severity_gamma", 0.0))) if samples else 0
-        return ExternalSelection(idx, "unavoidable_collision_severity_minimization", admitted, score, selected_option=opt)
+        return ExternalSelection(idx, "unavoidable_collision_observed_severity_minimization", admitted, score)
 
     raise ValueError(f"Unknown external baseline {baseline!r}")
+

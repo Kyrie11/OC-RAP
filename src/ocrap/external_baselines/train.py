@@ -117,6 +117,7 @@ def _forward_model(model: torch.nn.Module, batch: dict[str, torch.Tensor], cfg: 
 
 
 def _gameformer_traj_loss(out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor]) -> torch.Tensor:
+    """Best-of-M Gaussian trajectory loss with deep level-k supervision."""
     traj_levels = out.get("gameformer_level_trajs")
     score_levels = out.get("gameformer_level_scores")
     if not isinstance(traj_levels, list) or not isinstance(score_levels, list) or "prefix_traj" not in batch:
@@ -125,18 +126,21 @@ def _gameformer_traj_loss(out: dict[str, torch.Tensor], batch: dict[str, torch.T
     valid = batch.get("prefix_valid", torch.ones_like(gt[..., 0])).bool() & batch["mask"].bool().unsqueeze(-1)
     losses = []
     for traj, scores in zip(traj_levels, score_levels):
-        pred = traj[..., :2]  # [B,N,M,T,2]
+        pred = traj[..., :2]
+        log_sigma = traj[..., 2:4].clamp(-5.0, 3.0)
         B, N, M, T, _ = pred.shape
-        g = gt[:, :, None, :T, :]
-        v = valid[:, :, None, :T]
-        dist = torch.linalg.norm(pred - g, dim=-1)
-        masked_dist = (dist * v.float()).sum(dim=-1) / v.float().sum(dim=-1).clamp_min(1.0)
-        best = masked_dist.argmin(dim=-1)  # [B,N]
+        target = gt[:, :, None, :T, :]
+        mask = valid[:, :, None, :T]
+        inv_var = torch.exp(-2.0 * log_sigma)
+        point_nll = 0.5 * ((pred - target) ** 2 * inv_var).sum(dim=-1) + log_sigma.sum(dim=-1)
+        mode_nll = (point_nll * mask.float()).sum(dim=-1) / mask.float().sum(dim=-1).clamp_min(1.0)
+        best = mode_nll.argmin(dim=-1)
         bidx = torch.arange(B, device=pred.device)[:, None]
         nidx = torch.arange(N, device=pred.device)[None, :]
-        best_pred = pred[bidx, nidx, best]
-        reg = F.smooth_l1_loss(best_pred[valid], gt[:, :, :T, :][valid]) if bool(valid.any()) else pred.sum() * 0.0
-        flat_mask = batch["mask"].bool().reshape(-1)
+        best_nll = mode_nll[bidx, nidx, best]
+        cand_mask = batch["mask"].bool()
+        reg = best_nll[cand_mask].mean() if bool(cand_mask.any()) else pred.sum() * 0.0
+        flat_mask = cand_mask.reshape(-1)
         cls = F.cross_entropy(scores.reshape(B * N, M)[flat_mask], best.reshape(-1)[flat_mask]) if bool(flat_mask.any()) else pred.sum() * 0.0
         losses.append(reg + 0.25 * cls)
     return torch.stack(losses).mean() if losses else out["logits"].sum() * 0.0
@@ -389,8 +393,11 @@ def train_external_baseline(dataset: str, output: str, cfg: dict[str, Any], *, v
                     "neighbors_to_predict": int(getattr(train_ds, "neighbors_to_predict", 0)),
                     "future_len": int(getattr(train_ds, "future_len", 0)),
                     "input_contract": {
+                        "version": 2,
                         "use_teacher_branch_context": bool(use_teacher_branch_context(cfg)),
                         "deployable_feature_only": bool(not use_teacher_branch_context(cfg)),
+                        "coordinate_frame": "current_ego_relative",
+                        "selection_supervision": str((cfg.get("external_baselines", {}) or {}).get("supervision_target", "logged_nominal")),
                     },
                     "model_state": _model_state(model),
                     "epoch": int(ep),

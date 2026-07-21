@@ -40,14 +40,20 @@ def test_deployable_input_contract_masks_teacher_branch_tensors() -> None:
     assert model.kwargs["root_valid"] is None
 
 
-def test_legacy_input_contract_is_checkpoint_compatible() -> None:
+def test_teacher_branch_context_is_opt_in_only() -> None:
     cfg = {"external_baselines": {"model": {}}}
-    batch = _batch()
     model = _CaptureModel()
-    _forward_model(model, batch, cfg)
-    assert use_teacher_branch_context(cfg) is True
+    _forward_model(model, _batch(), cfg)
+    assert use_teacher_branch_context(cfg) is False
     assert model.kwargs is not None
-    assert model.kwargs["branch_margins"] is batch["branch_margins"]
+    assert model.kwargs["branch_margins"] is None
+
+    diagnostic_cfg = {"external_baselines": {"model": {"use_teacher_branch_context": True}}}
+    batch = _batch()
+    diagnostic_model = _CaptureModel()
+    _forward_model(diagnostic_model, batch, diagnostic_cfg)
+    assert use_teacher_branch_context(diagnostic_cfg) is True
+    assert diagnostic_model.kwargs["branch_margins"] is batch["branch_margins"]
 
 
 def test_nonlearning_registration_can_skip_redundant_dataset_scan(tmp_path) -> None:

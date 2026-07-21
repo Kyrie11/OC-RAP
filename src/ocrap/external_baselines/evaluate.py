@@ -18,6 +18,7 @@ from ocrap.evaluation.metrics import (
 )
 from ocrap.external_baselines.data import group_sample_paths, _branch_arrays, _topology_arrays, _history_arrays, _actor_topology_arrays, _map_topology_arrays, use_teacher_branch_context
 from ocrap.external_baselines.models import build_model_from_cfg
+from ocrap.external_baselines.observed_risk import observed_risk_profile
 from ocrap.external_baselines.policies import ExternalSelection, select_external_policy
 from ocrap.models.data import sample_to_feature
 
@@ -166,16 +167,24 @@ def _predict_group(model: torch.nn.Module | None, samples: list[dict[str, Any]],
 
 
 def _yaw_rate_violation_proxy(d: dict[str, Any], yaw_rate_max: float = 0.6) -> float:
+    """Return whether the candidate exceeds the configured yaw-rate limit.
+
+    OC-RAP's ego prefix schema is [x,y,vx,vy,heading,yaw_rate,speed,length,width].
+    Prefer the stored yaw-rate channel; fall back to a heading derivative only
+    for legacy samples without that channel.
+    """
     states = np.asarray(d.get("prefix_states", np.zeros((0, 0))), dtype=float)
-    if states.ndim != 2 or states.shape[0] < 2:
+    if states.ndim != 2 or states.shape[0] == 0:
         return 0.0
-    # Most OC-RAP prefix_states are [x,y,yaw,v,...] or similar.  If yaw is not
-    # present, this proxy safely returns zero.
-    if states.shape[1] < 3:
+    if states.shape[1] >= 6:
+        rate = np.abs(np.nan_to_num(states[:, 5], nan=0.0))
+    elif states.shape[1] >= 5 and states.shape[0] >= 2:
+        heading = np.unwrap(states[:, 4])
+        dt = float(((d.get("dt", 0.1) if not isinstance(d.get("dt", 0.1), np.ndarray) else np.asarray(d.get("dt", 0.1)).item())))
+        rate = np.abs(np.diff(heading)) / max(dt, 1e-3)
+    else:
         return 0.0
-    yaw = np.unwrap(states[:, 2])
-    dyaw = np.abs(np.diff(yaw)) * 10.0  # dataset is 10 Hz in WOMD/Waymax builds
-    return float(np.max(dyaw) > float(yaw_rate_max)) if dyaw.size else 0.0
+    return float(np.max(rate) > float(yaw_rate_max)) if rate.size else 0.0
 
 
 def _contact_extra_metrics(records: list[dict[str, Any]]) -> dict[str, float | None]:
@@ -203,6 +212,7 @@ def _record_for_selection(method: str, samples: list[dict[str, Any]], sel: Exter
         selected_option = best_shared_option_index(chosen.get("m_star", np.zeros((0, 0))), chosen.get("root_probs", np.zeros((0,))), gamma=0.0, root_valid=chosen.get("root_valid", None), option_valid=chosen.get("option_valid", None))
     drs = deployable_recovery_success(chosen.get("m_star", np.zeros((0, 0))), chosen.get("root_probs", np.zeros((0,))), int(selected_option), chosen.get("root_valid", None))
     nup = nominal_utility_preservation(utility[0] if utility.size else 0.0, utility[idx] if utility.size else 0.0, sigma_u=float((cfg.get("metrics", {}) or {}).get("sigma_u", 1.0)))
+    observed = observed_risk_profile(chosen, cfg)
     return {
         "method": method,
         "fra_cand": false_recoverability_admission(sel.admitted, r_dep),
@@ -224,6 +234,11 @@ def _record_for_selection(method: str, samples: list[dict[str, Any]], sel: Exter
         "num_admitted_interventions": int(np.asarray(sel.admitted, dtype=bool)[1:].sum()) if len(sel.admitted) > 1 else 0,
         "selected_hard_violation": _scalar(chosen, "hard_violation", 0.0),
         "selected_harm_proxy": _scalar(chosen, "harm_proxy", 0.0),
+        "selected_observed_expected_risk": float(observed.expected_loss),
+        "selected_observed_cvar_risk": float(observed.cvar_loss),
+        "selected_observed_collision_probability": float(observed.collision_probability),
+        "selected_observed_min_clearance_m": float(observed.min_clearance),
+        "selected_observed_backup_margin_m": float(observed.backup_margin),
         "yaw_rate_violation_proxy": _yaw_rate_violation_proxy(chosen, yaw_rate_max=float(cfg.get("yaw_rate_max_rps", 0.6))),
     }
 
@@ -239,6 +254,11 @@ def _summarize(records: list[dict[str, Any]], method: str, num_groups: int, sour
             "mean_selected_teacher_R_dep": float(np.mean([r.get("selected_teacher_r_dep", 0.0) for r in records])),
             "mean_selected_teacher_R_orc": float(np.mean([r.get("selected_teacher_r_orc", 0.0) for r in records])),
             "mean_selected_utility": float(np.mean([r.get("selected_utility", 0.0) for r in records])),
+            "mean_selected_observed_expected_risk": float(np.mean([r.get("selected_observed_expected_risk", 0.0) for r in records])),
+            "mean_selected_observed_cvar_risk": float(np.mean([r.get("selected_observed_cvar_risk", 0.0) for r in records])),
+            "mean_selected_observed_collision_probability": float(np.mean([r.get("selected_observed_collision_probability", 0.0) for r in records])),
+            "mean_selected_observed_min_clearance_m": float(np.mean([r.get("selected_observed_min_clearance_m", 0.0) for r in records])),
+            "mean_selected_observed_backup_margin_m": float(np.mean([r.get("selected_observed_backup_margin_m", 0.0) for r in records])),
             "selection_reason_counts": dict(Counter(str(r.get("selection_reason", "")) for r in records)),
         })
         result.update(_contact_extra_metrics(records))
@@ -277,15 +297,17 @@ def evaluate_external_baselines(
         if gi == 1 or gi % 500 == 0:
             print({"event": "external_eval_progress", "groups_done": gi, "num_groups": len(groups)}, flush=True)
     learned_methods = {"route_bc", "route_bc_lite", "waymax_bc", "waymax_bc_lite", "wayformer_bc", "wayformer_style_bc", "route_bc_wayformer", "gameformer", "gameformer_lite", "gameformer_levelk", "betop", "betop_lite", "betopnet", "betopnet_lite"}
-    summaries = {
-        m: _summarize(
-            records_by_method[m],
-            m,
-            len(groups),
-            "learned_checkpoint" if (model is not None and m.lower() in learned_methods) else "dataset_teacher_labels",
-        )
-        for m in methods
-    }
+    oracle_methods = {"oracle_filter", "oracle_recovery_filter", "branchwise_oracle_filter", "oracle_branchwise_recovery"}
+    summaries = {}
+    for m in methods:
+        ml = m.lower()
+        if model is not None and ml in learned_methods:
+            source = "learned_checkpoint_observation_only_inputs"
+        elif ml in oracle_methods:
+            source = "teacher_only_oracle_upper_bound"
+        else:
+            source = "observation_only_rule_or_optimizer"
+        summaries[m] = _summarize(records_by_method[m], m, len(groups), source)
     result = {
         "dataset": str(dataset),
         "split": split,

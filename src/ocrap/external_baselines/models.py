@@ -171,7 +171,7 @@ class GameFormerLevelK(nn.Module):
     pattern over OC-RAP grouped candidate-prefix tensors.
     """
 
-    def __init__(self, input_dim: int, max_candidates: int = 32, d_model: int = 256, num_layers: int = 3, num_heads: int = 8, dropout: float = 0.15, num_levels: int = 4, modalities: int = 6, future_len: int = 20, history_len: int = 11, neighbors_to_predict: int = 8, root_feature_dim: int = 18, num_roots: int = 10, num_options: int = 12) -> None:
+    def __init__(self, input_dim: int, max_candidates: int = 32, d_model: int = 256, num_layers: int = 3, num_heads: int = 8, dropout: float = 0.15, num_levels: int = 4, modalities: int = 6, future_len: int = 20, history_len: int = 11, neighbors_to_predict: int = 8, root_feature_dim: int = 18, num_roots: int = 10, num_options: int = 12, use_teacher_branch_context: bool = False, traj_step_scale: float = 1.5) -> None:
         super().__init__()
         self.input_dim = int(input_dim)
         self.max_candidates = int(max_candidates)
@@ -184,6 +184,8 @@ class GameFormerLevelK(nn.Module):
         self.num_roots = int(num_roots)
         self.num_options = int(num_options)
         self.root_feature_dim = int(root_feature_dim)
+        self.use_teacher_branch_context = bool(use_teacher_branch_context)
+        self.traj_step_scale = float(traj_step_scale)
 
         self.candidate_proj = nn.Sequential(nn.LayerNorm(input_dim), nn.Linear(input_dim, d_model), nn.GELU(), nn.Dropout(dropout))
         self.pos = nn.Parameter(torch.zeros(1, self.max_candidates, d_model))
@@ -194,8 +196,13 @@ class GameFormerLevelK(nn.Module):
         self.fusion_encoder = nn.TransformerEncoder(enc_layer, num_layers=int(num_layers))
 
         branch_in = self.root_feature_dim + self.num_options + 2
-        self.branch_point = nn.Sequential(nn.LayerNorm(branch_in), nn.Linear(branch_in, d_model), nn.GELU(), nn.Dropout(dropout), nn.Linear(d_model, d_model))
-        self.branch_pool = nn.Linear(d_model, d_model)
+        if self.use_teacher_branch_context:
+            self.branch_point = nn.Sequential(nn.LayerNorm(branch_in), nn.Linear(branch_in, d_model), nn.GELU(), nn.Dropout(dropout), nn.Linear(d_model, d_model))
+            self.branch_pool = nn.Linear(d_model, d_model)
+        else:
+            self.branch_point = None
+            self.branch_pool = None
+        self.neighbor_token_proj = nn.Sequential(nn.LayerNorm(d_model // 2), nn.Linear(d_model // 2, d_model), nn.GELU(), nn.Dropout(dropout))
 
         self.modal_query = nn.Embedding(self.modalities, d_model)
         self.level0_cross = nn.MultiheadAttention(d_model, int(num_heads), dropout=float(dropout), batch_first=True)
@@ -216,7 +223,7 @@ class GameFormerLevelK(nn.Module):
         B, N, _ = x.shape
         key_padding_mask = None if mask is None else ~mask.bool()
         scene = self.candidate_proj(x) + self._position(N)
-        hist_ctx = self._encode_history(B, N, x.device, ego_history, neighbor_history, neighbor_valid)
+        hist_ctx, neighbor_tokens, neighbor_mask = self._encode_history(B, N, x.device, ego_history, neighbor_history, neighbor_valid)
         branch_ctx = self._encode_branch(B, N, x.device, branch_margins, root_features, root_probs, root_valid)
         scene = scene + hist_ctx + branch_ctx
         scene = self.fusion_encoder(scene, src_key_padding_mask=key_padding_mask)
@@ -231,12 +238,30 @@ class GameFormerLevelK(nn.Module):
         level_scores.append(scores)
 
         for k in range(1, self.num_levels + 1):
+            # GameFormer level-k reasoning: the ego response at level k is
+            # conditioned on the observed neighboring-agent tokens and on the
+            # previous level's multimodal ego future.  Candidate alternatives are
+            # not incorrectly treated as traffic agents.
             future_ctx = self.future_encoder(traj[..., :2], scores)
-            inter_ctx = self.level_self[k - 1](future_ctx, src_key_padding_mask=key_padding_mask)
-            q = content + scene[:, :, None, :] + inter_ctx[:, :, None, :]
-            q = q.reshape(B * N, self.modalities, self.d_model)
-            mem = scene[:, None, :, :].expand(B, N, N, self.d_model).reshape(B * N, N, self.d_model)
-            kmask = key_padding_mask[:, None, :].expand(B, N, N).reshape(B * N, N) if key_padding_mask is not None else None
+            interaction_tokens = torch.cat([future_ctx.unsqueeze(2), neighbor_tokens], dim=2)
+            interaction_mask = torch.cat([
+                torch.ones(B, N, 1, dtype=torch.bool, device=x.device), neighbor_mask
+            ], dim=2)
+            flat_tokens = interaction_tokens.reshape(B * N, interaction_tokens.shape[2], self.d_model)
+            flat_mask = ~interaction_mask.reshape(B * N, interaction_mask.shape[2])
+            inter = self.level_self[k - 1](flat_tokens, src_key_padding_mask=flat_mask)
+            inter_ctx = inter[:, 0].reshape(B, N, self.d_model)
+            q = (content + scene[:, :, None, :] + inter_ctx[:, :, None, :]).reshape(B * N, self.modalities, self.d_model)
+            mem = neighbor_tokens.reshape(B * N, self.neighbors_to_predict, self.d_model)
+            kmask = ~neighbor_mask.reshape(B * N, self.neighbors_to_predict)
+            # MultiheadAttention cannot attend to an all-masked row. Keep one
+            # neutral token active when no neighbor is observed.
+            empty = kmask.all(dim=-1)
+            if bool(empty.any()):
+                kmask = kmask.clone()
+                kmask[empty, 0] = False
+                mem = mem.clone()
+                mem[empty, 0] = 0.0
             q2, _ = self.level_cross[k - 1](q, mem, mem, key_padding_mask=kmask, need_weights=False)
             content = self.content_norm((q + q2).reshape(B, N, self.modalities, self.d_model))
             traj, scores = self._predict_traj(content, k)
@@ -260,32 +285,37 @@ class GameFormerLevelK(nn.Module):
             return torch.cat([self.pos, extra], dim=1)[:, :N]
         return self.pos[:, :N]
 
-    def _encode_history(self, B: int, N: int, device: torch.device, ego_history: torch.Tensor | None, neighbor_history: torch.Tensor | None, neighbor_valid: torch.Tensor | None) -> torch.Tensor:
+    def _encode_history(self, B: int, N: int, device: torch.device, ego_history: torch.Tensor | None, neighbor_history: torch.Tensor | None, neighbor_valid: torch.Tensor | None) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         if ego_history is None:
-            return torch.zeros(B, N, self.d_model, device=device)
-        ego = ego_history.to(device=device, dtype=torch.float32)
-        ego = self._pad_last2(ego, self.history_len, GAMEFORMER_STATE_DIM)
+            zeros = torch.zeros(B, N, self.d_model, device=device)
+            return zeros, torch.zeros(B, N, self.neighbors_to_predict, self.d_model, device=device), torch.zeros(B, N, self.neighbors_to_predict, dtype=torch.bool, device=device)
+        ego = self._pad_last2(ego_history.to(device=device, dtype=torch.float32), self.history_len, GAMEFORMER_STATE_DIM)
         ego_flat = ego.reshape(B * N, self.history_len, GAMEFORMER_STATE_DIM)
         _, (ego_h, _) = self.ego_encoder(ego_flat)
         ego_ctx = ego_h[-1].reshape(B, N, -1)
         if neighbor_history is None:
-            neigh_ctx = torch.zeros(B, N, self.d_model // 2, device=device)
+            nh = torch.zeros(B, N, self.neighbors_to_predict, self.d_model // 2, device=device)
+            valid_actor = torch.zeros(B, N, self.neighbors_to_predict, dtype=torch.bool, device=device)
         else:
-            neigh = neighbor_history.to(device=device, dtype=torch.float32)
-            neigh = self._pad_last3(neigh, self.neighbors_to_predict, self.history_len, GAMEFORMER_STATE_DIM)
+            neigh = self._pad_last3(neighbor_history.to(device=device, dtype=torch.float32), self.neighbors_to_predict, self.history_len, GAMEFORMER_STATE_DIM)
             neigh_flat = neigh.reshape(B * N * self.neighbors_to_predict, self.history_len, GAMEFORMER_STATE_DIM)
-            _, (nh, _) = self.agent_encoder(neigh_flat)
-            nh = nh[-1].reshape(B, N, self.neighbors_to_predict, -1)
+            _, (encoded, _) = self.agent_encoder(neigh_flat)
+            nh = encoded[-1].reshape(B, N, self.neighbors_to_predict, -1)
             if neighbor_valid is not None:
                 nv = self._pad_last2(neighbor_valid.to(device=device, dtype=torch.float32), self.neighbors_to_predict, self.history_len)
-                w = (nv.sum(dim=-1) > 0).float().unsqueeze(-1)
+                valid_actor = nv.sum(dim=-1) > 0
             else:
-                w = torch.ones(B, N, self.neighbors_to_predict, 1, device=device)
-            neigh_ctx = (nh * w).sum(dim=2) / w.sum(dim=2).clamp_min(1.0)
-        return self.history_fuse(torch.cat([ego_ctx, neigh_ctx], dim=-1))
+                valid_actor = torch.ones(B, N, self.neighbors_to_predict, dtype=torch.bool, device=device)
+        w = valid_actor.float().unsqueeze(-1)
+        neigh_ctx = (nh * w).sum(dim=2) / w.sum(dim=2).clamp_min(1.0)
+        fused = self.history_fuse(torch.cat([ego_ctx, neigh_ctx], dim=-1))
+        tokens = self.neighbor_token_proj(nh) * w
+        return fused, tokens, valid_actor
 
     def _encode_branch(self, B: int, N: int, device: torch.device, branch_margins: torch.Tensor | None, root_features: torch.Tensor | None, root_probs: torch.Tensor | None, root_valid: torch.Tensor | None) -> torch.Tensor:
         K, L, Fdim = self.num_roots, self.num_options, self.root_feature_dim
+        if not self.use_teacher_branch_context or self.branch_point is None or self.branch_pool is None:
+            return torch.zeros(B, N, self.d_model, device=device)
         if root_features is None:
             root_features = torch.zeros(B, N, K, Fdim, device=device)
         else:
@@ -326,7 +356,7 @@ class GameFormerLevelK(nn.Module):
         raw = self.traj_heads[level](content).view(B, N, M, self.future_len, 4)
         # Cumulative displacement gives dynamically smoother trajectories than
         # unconstrained absolute points and mirrors GameFormer's trajectory head.
-        xy = torch.cumsum(raw[..., :2], dim=-2)
+        xy = torch.cumsum(torch.tanh(raw[..., :2]) * self.traj_step_scale, dim=-2)
         logsig = raw[..., 2:4].clamp(-5.0, 5.0)
         traj = torch.cat([xy, logsig], dim=-1)
         scores = self.score_heads[level](content).squeeze(-1)
@@ -492,13 +522,18 @@ class BeTopNetLite(nn.Module):
     def _apply_topo_attention(self, h: torch.Tensor, mem: torch.Tensor, logits: torch.Tensor, valid_mask: torch.Tensor, attn: nn.MultiheadAttention, cand_mask: torch.Tensor | None) -> torch.Tensor:
         B, N, Kall, D = mem.shape
         k = min(max(1, self.num_topo), Kall)
-        score = torch.sigmoid(logits).masked_fill(~valid_mask.bool(), -1.0)
+        score = torch.sigmoid(logits).masked_fill(~valid_mask.bool(), -1.0e4)
         idx = torch.topk(score, k=k, dim=-1).indices
         gather = idx.unsqueeze(-1).expand(B, N, k, D)
         selected = torch.gather(mem, dim=2, index=gather).reshape(B * N, k, D)
+        selected_valid = torch.gather(valid_mask.bool(), dim=2, index=idx).reshape(B * N, k)
+        empty = ~selected_valid.any(dim=-1)
+        if bool(empty.any()):
+            selected = selected.clone(); selected_valid = selected_valid.clone()
+            selected[empty, 0] = 0.0
+            selected_valid[empty, 0] = True
         q = h.reshape(B * N, 1, D)
-        attn_mask = None
-        out, _ = attn(q, selected, selected, key_padding_mask=attn_mask, need_weights=False)
+        out, _ = attn(q, selected, selected, key_padding_mask=~selected_valid, need_weights=False)
         out = out.reshape(B, N, D)
         if cand_mask is not None:
             out = out * cand_mask.bool().unsqueeze(-1).float()
@@ -553,6 +588,8 @@ def build_model_from_cfg(input_dim: int, cfg: dict[str, Any]) -> nn.Module:
             root_feature_dim=int(mcfg.get("root_feature_dim", 18)),
             num_roots=int(mcfg.get("num_roots", cfg.get("num_roots", 10))),
             num_options=int(mcfg.get("num_options", cfg.get("num_recovery_options", 12))),
+            use_teacher_branch_context=bool(mcfg.get("use_teacher_branch_context", False)),
+            traj_step_scale=float(mcfg.get("traj_step_scale", 1.5)),
         )
     if arch in {"betop", "betop_lite", "betopnet", "betopnet_lite"} or "betop" in baseline:
         return BeTopNetLite(
