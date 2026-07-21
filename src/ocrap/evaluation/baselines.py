@@ -177,6 +177,7 @@ def select_baseline(
     pred_drs: np.ndarray | None = None,
     pred_direct_value: np.ndarray | None = None,
     pred_direct_std: np.ndarray | None = None,
+    pred_direct_opportunity: np.ndarray | None = None,
     candidate_macro_names=None,
 ) -> BaselineSelection:
     """Select one candidate with a paper-baseline-style rule.
@@ -238,6 +239,7 @@ def select_baseline(
                 pred_drs=pred_drs,
                 pred_direct_value=pred_direct_value,
                 pred_direct_std=pred_direct_std,
+                pred_direct_opportunity=pred_direct_opportunity,
                 direct_value_certificate=_cfg_bool(scfg, "direct_value_certificate", False, bucket_name),
                 direct_value_macro_allowlist=_cfg_value(scfg, "direct_value_macro_allowlist", "brake,yield,merge,stabilize", bucket_name),
                 direct_value_lcb_z=_cfg_float(scfg, "direct_value_lcb_z", 1.0, bucket_name),
@@ -254,6 +256,7 @@ def select_baseline(
                 direct_value_challenge_nominal=_cfg_bool(scfg, "direct_value_challenge_nominal", True, bucket_name),
                 direct_value_max_consecutive=int(_cfg_float(scfg, "direct_value_max_consecutive", 2.0, bucket_name)),
                 direct_value_score_mode=_cfg_bool(scfg, "direct_value_score_mode", False, bucket_name),
+                direct_value_opportunity_threshold=_cfg_float(scfg, "direct_value_opportunity_threshold", 0.0, bucket_name),
                 direct_value_top1_only=_cfg_bool(scfg, "direct_value_top1_only", False, bucket_name),
                 direct_value_risk_controlled_admission=_cfg_bool(scfg, "direct_value_risk_controlled_admission", False, bucket_name),
                 deployability_bonus=_cfg_float(scfg, "deployability_bonus", 0.0, bucket_name),

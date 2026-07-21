@@ -218,6 +218,7 @@ def calibrated_constrained_select(
     pred_drs: np.ndarray | None = None,
     pred_direct_value: np.ndarray | None = None,
     pred_direct_std: np.ndarray | None = None,
+    pred_direct_opportunity: np.ndarray | None = None,
     direct_value_certificate: bool = False,
     direct_value_macro_allowlist=None,
     direct_value_lcb_z: float = 1.0,
@@ -234,6 +235,7 @@ def calibrated_constrained_select(
     direct_value_challenge_nominal: bool = True,
     direct_value_max_consecutive: int = 2,
     direct_value_score_mode: bool = False,
+    direct_value_opportunity_threshold: float = 0.0,
     direct_value_top1_only: bool = False,
     direct_value_risk_controlled_admission: bool = False,
     deployability_bonus: float = 0.0,
@@ -497,6 +499,9 @@ def calibrated_constrained_select(
     if not bool(direct_value_score_mode):
         direct_value = np.clip(direct_value, 0.0, 1.0)
     direct_std = np.maximum(0.0, _as_1d_float(pred_direct_std, n, default=1.0))
+    # Backward-compatible default 1.0 keeps v40-v43 checkpoints usable when the
+    # v44 opportunity gate is disabled (threshold=0).
+    direct_opportunity = np.clip(_as_1d_float(pred_direct_opportunity, n, default=1.0), 0.0, 1.0)
     macro_names = _as_macro_names(candidate_macro_names, n)
 
     # v22: separate candidate-family coverage from recovery-maneuver semantics.
@@ -612,6 +617,7 @@ def calibrated_constrained_select(
             & direct_macro_mask
             & (dev >= float(direct_value_min_nominal_deviation))
             & candidate_floor_ok
+            & (direct_opportunity >= float(direct_value_opportunity_threshold))
             & ((direct_std <= float(direct_value_max_candidate_std)) if uncertainty_mode not in {"additive", "conformal_additive", "residual", "none", "raw", "risk_selective", "selective", "risk_controlled"} else np.ones((n,), dtype=bool))
         )
         direct_actionable[ni] = False
@@ -1000,7 +1006,21 @@ def calibrated_constrained_select(
     else:
         direct_value_challenge &= admitted
     if bool(direct_value_certificate) and float(direct_value_bonus) != 0.0:
-        score = score + float(direct_value_bonus) * np.maximum(0.0, direct_advantage_lcb) * direct_value_challenge.astype(float)
+        # v44: reward certificate margin above its fitted regime-specific
+        # threshold, not raw advantage above zero. A valid selective rule may
+        # legitimately use a negative score threshold, and v43's max(0, raw)
+        # bonus could then admit a verified candidate without ever letting it
+        # beat nominal. The unit offset makes certificate use observable while
+        # preserving all physical, opportunity and held-out risk gates.
+        cert_margin = np.maximum(0.0, direct_advantage_lcb - float(direct_value_min_advantage_lcb))
+        score = score + float(direct_value_bonus) * (1.0 + cert_margin) * direct_value_challenge.astype(float)
+        if bool(direct_value_risk_controlled_admission) and 0 <= int(nominal_index) < n and bool(direct_value_challenge.any()):
+            # Reproduce the calibrated deployment event exactly: a verified
+            # deterministic top-1 challenge must outrank nominal. It can still
+            # lose to a stronger independently certified recovery candidate.
+            ni = int(nominal_index)
+            floor = float(score[ni]) + max(1.0e-4, float(switch_score_margin) + 1.0e-4)
+            score[direct_value_challenge] = np.maximum(score[direct_value_challenge], floor)
 
     # If the current rollout already exceeded the intervention budget, increase
     # the marginal cost of deviating from nominal.  This is intentionally a soft

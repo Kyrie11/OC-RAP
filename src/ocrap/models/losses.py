@@ -1275,6 +1275,9 @@ def direct_uncertainty_recovery_value_loss(
     top_rank_weight: float = 0.0,
     success_gamma: float = 0.0,
     success_temperature: float = 0.25,
+    pred_opportunity_logit: torch.Tensor | None = None,
+    opportunity_weight: float = 0.0,
+    opportunity_pos_weight: float = 6.0,
 ) -> torch.Tensor:
     """Learn candidate value *relative to nominal* without corrupting OC-MERO.
 
@@ -1330,12 +1333,17 @@ def direct_uncertainty_recovery_value_loss(
     macro_mask = torch.zeros((n,), dtype=torch.bool, device=score.device)
     for m in tuple(int(x) for x in macro_ids):
         macro_mask |= mac == m
-    keys = torch.stack([sh, ti], dim=1)
+    # v44: include regime in the group key; Near and Contact may share the
+    # same WOMD scene-time but have different pressure-future teacher targets.
+    keys = torch.stack([bid, sh, ti], dim=1)
     tau = max(float(temperature), 1.0e-3)
+    opportunity_logits = None
+    if pred_opportunity_logit is not None:
+        opportunity_logits = pred_opportunity_logit.float().reshape(-1)[:n]
     group_losses: list[torch.Tensor] = []
     group_weights: list[float] = []
     for key in torch.unique(keys[finite], dim=0):
-        idx = torch.where(finite & (sh == key[0]) & (ti == key[1]))[0]
+        idx = torch.where(finite & (bid == key[0]) & (sh == key[1]) & (ti == key[2]))[0]
         noms = idx[isn[idx]]
         recs = idx[macro_mask[idx] & (~isn[idx])]
         if noms.numel() == 0 or recs.numel() == 0:
@@ -1357,6 +1365,12 @@ def direct_uncertainty_recovery_value_loss(
         p_adv = p_delta[best_j]
         pos_mask = t_delta >= float(positive_gain)
         neg_mask = t_delta <= 0.0
+        if opportunity_logits is not None and float(opportunity_weight) > 0.0:
+            labels = pos_mask.to(dtype=opportunity_logits.dtype)
+            logits = opportunity_logits[recs]
+            pos_w = torch.as_tensor(max(float(opportunity_pos_weight), 1.0), dtype=logits.dtype, device=logits.device)
+            opp = F.binary_cross_entropy_with_logits(logits, labels, pos_weight=pos_w)
+            terms.append(float(opportunity_weight) * opp)
         if float(pairwise_weight) > 0.0:
             pair_terms = []
             if bool(pos_mask.any()):

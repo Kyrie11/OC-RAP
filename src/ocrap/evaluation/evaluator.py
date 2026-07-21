@@ -259,6 +259,17 @@ def _dataset_label_for_path(path: Path) -> str:
         return "dataset"
 
 
+
+def _prediction_cfg_for_dataset(cfg: dict, dataset_label: str) -> dict:
+    """Supply the active regime to the v44 value expert at prediction time."""
+    if not dataset_label:
+        return cfg
+    local = dict(cfg)
+    sel = dict(local.get("selection", {}) or {}) if isinstance(local.get("selection", {}), dict) else {}
+    sel["active_bucket_name"] = dataset_label
+    local["selection"] = sel
+    return local
+
 def _normalise_split_id(value) -> str:
     try:
         if isinstance(value, bytes):
@@ -367,6 +378,7 @@ def _evaluate_grouped_items(grouped: dict[tuple, list[dict]], methods: list[str]
         pred_drs = np.array([predicted_shared_option_success(x["pred"].q, x["pred"].root_probs, gamma=drs_gamma_i, root_valid=x["data"].get("root_valid", None), option_valid=x["data"].get("option_valid", None)) for x in items])
         pred_direct_value = np.array([np.nan if x["pred"].direct_recovery_value is None else float(x["pred"].direct_recovery_value) for x in items])
         pred_direct_std = np.array([np.nan if x["pred"].direct_recovery_std is None else float(x["pred"].direct_recovery_std) for x in items])
+        pred_direct_opportunity = np.array([np.nan if x["pred"].direct_recovery_opportunity is None else float(x["pred"].direct_recovery_opportunity) for x in items])
         macro_names = [str(np.asarray(x["data"].get("prefix_macro_name", "")).item() if np.asarray(x["data"].get("prefix_macro_name", "")).shape == () else x["data"].get("prefix_macro_name", "")) for x in items]
         teacher_r_dep = np.array([float(np.asarray(x["data"]["r_dep_star"]).item()) for x in items])
         teacher_r_orc = np.array([float(np.asarray(x["data"]["r_orc_star"]).item()) for x in items])
@@ -401,6 +413,7 @@ def _evaluate_grouped_items(grouped: dict[tuple, list[dict]], methods: list[str]
                 pred_drs=pred_drs,
                 pred_direct_value=pred_direct_value,
                 pred_direct_std=pred_direct_std,
+                pred_direct_opportunity=pred_direct_opportunity,
                 candidate_macro_names=macro_names,
             )
             selected_index = int(sel.selected_index)
@@ -471,7 +484,8 @@ def evaluate(dataset: str | Path, checkpoint: str | Path | None = None, output: 
         dataset_label = _dataset_label_for_path(Path(p))
         key_base = (str(np.asarray(d["scene_id"]).item()), int(np.asarray(d["time_index"]).item()))
         key = (dataset_label, *key_base) if group_by_dataset else key_base
-        pred = predict_sample(d, bundle, cfg)
+        pred_cfg = _prediction_cfg_for_dataset(cfg, dataset_label)
+        pred = predict_sample(d, bundle, pred_cfg)
         teacher = teacher_prediction_from_sample(d, cfg)
         record = {"path": p, "dataset_label": dataset_label, "data": d, "pred": pred, "teacher": teacher}
         grouped.setdefault(key, []).append(record)
@@ -486,7 +500,8 @@ def evaluate(dataset: str | Path, checkpoint: str | Path | None = None, output: 
             dataset_label = _dataset_label_for_path(Path(p))
             key_base = (str(np.asarray(d["scene_id"]).item()), int(np.asarray(d["time_index"]).item()))
             key = (dataset_label, *key_base) if group_by_dataset else key_base
-            pred = predict_sample(d, bundle, cfg)
+            pred_cfg = _prediction_cfg_for_dataset(cfg, dataset_label)
+            pred = predict_sample(d, bundle, pred_cfg)
             teacher = teacher_prediction_from_sample(d, cfg)
             record = {"path": p, "dataset_label": dataset_label, "data": d, "pred": pred, "teacher": teacher}
             grouped.setdefault(key, []).append(record)

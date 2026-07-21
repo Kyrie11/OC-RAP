@@ -62,6 +62,7 @@ class ClosedLoopDecision:
     selected_pred_drs: float | None
     selected_direct_recovery_value: float | None
     selected_direct_recovery_std: float | None
+    selected_direct_recovery_opportunity: float | None
     nominal_direct_recovery_value: float | None
     direct_recovery_advantage: float | None
     selected_nominal_deviation: float | None
@@ -510,6 +511,33 @@ def _state_geometry_metrics(state: Any, sdc: int) -> dict[str, float]:
         return {}
 
 
+def _observable_regime_name(state: Any, sdc: int, cfg: dict, fallback: str = "") -> str:
+    """Infer the runtime policy regime from current observable geometry only.
+
+    This prevents the closed-loop planner from receiving the evaluation bucket
+    as an oracle neural input. Contact takes priority over near-contact; all
+    remaining states use the Safe policy. Thresholds match the paper's regime
+    definitions and can be overridden through ``regime_thresholds``.
+    """
+    sel = cfg.get("selection", {}) if isinstance(cfg.get("selection", {}), dict) else {}
+    if not bool(sel.get("auto_regime_from_observation", False)):
+        return str(fallback or "")
+    thresholds = cfg.get("regime_thresholds", {}) if isinstance(cfg.get("regime_thresholds", {}), dict) else {}
+    tau_d = float(thresholds.get("tau_d", 2.0))
+    tau_ttc = float(thresholds.get("tau_ttc", 3.0))
+    tau_contact = float(thresholds.get("tau_contact", 0.8))
+    metrics = _state_geometry_metrics(state, sdc)
+    if not metrics:
+        return str(fallback or "safe")
+    clearance = float(metrics.get("min_clearance_m", float("inf")))
+    ttc = float(metrics.get("ttc_s", float("inf")))
+    if clearance < tau_contact:
+        return "contact"
+    if clearance < tau_d or ttc < tau_ttc:
+        return "near_contact"
+    return "safe"
+
+
 def _state_geometry_snapshot(state: Any, sdc: int, *, timestep: int | None = None) -> tuple[dict[str, float], list[float]]:
     """Return current geometry metrics and ego XY in one trajectory read."""
     try:
@@ -662,6 +690,7 @@ def _select_prefix(
     pred_drs = np.asarray([predicted_shared_option_success(x["pred"].q, x["pred"].root_probs, gamma=drs_gamma, root_valid=x["data"].get("root_valid", None), option_valid=x["data"].get("option_valid", None)) for x in items], dtype=np.float32)
     pred_direct_value = np.asarray([np.nan if x["pred"].direct_recovery_value is None else float(x["pred"].direct_recovery_value) for x in items], dtype=np.float32)
     pred_direct_std = np.asarray([np.nan if x["pred"].direct_recovery_std is None else float(x["pred"].direct_recovery_std) for x in items], dtype=np.float32)
+    pred_direct_opportunity = np.asarray([np.nan if x["pred"].direct_recovery_opportunity is None else float(x["pred"].direct_recovery_opportunity) for x in items], dtype=np.float32)
     macro_names = [str(x["data"].get("prefix_macro_name", "")) for x in items]
     nominal_deviation = _prefix_nominal_deviation(samples)
     if compute_teacher_labels:
@@ -696,6 +725,7 @@ def _select_prefix(
             pred_drs=pred_drs,
             pred_direct_value=pred_direct_value,
             pred_direct_std=pred_direct_std,
+            pred_direct_opportunity=pred_direct_opportunity,
             candidate_macro_names=macro_names,
         )
     idx = int(selected.selected_index)
@@ -730,6 +760,7 @@ def _select_prefix(
         "pred_drs": pred_drs,
         "pred_direct_value": pred_direct_value,
         "pred_direct_std": pred_direct_std,
+        "pred_direct_opportunity": pred_direct_opportunity,
         "nominal_deviation": nominal_deviation,
         "labels_available": bool(compute_teacher_labels),
         "drs": None if drs is None else float(drs),
@@ -883,6 +914,7 @@ def _rollout_one_scene(
     state = wx_env.reset(state0, rng=jax.random.PRNGKey(int((cfg.get("seed", 7) + scenario_rank) & 0x7FFFFFFF)))
     sdc = _sdc_index(state)
     decisions: list[ClosedLoopDecision] = []
+    active_regime_trace: list[str] = []
     metric_trace: list[dict[str, float]] = []
     state_xy_trace: list[list[float]] = []
     interventions_used = 0
@@ -993,7 +1025,9 @@ def _rollout_one_scene(
             # the top-level config so each scene rollout remains independent.
             select_cfg = dict(cfg)
             sel_local = dict(select_cfg.get("selection", {}) or {}) if isinstance(select_cfg.get("selection", {}), dict) else {}
-            sel_local["active_bucket_name"] = bucket_name or ""
+            active_bucket_name = _observable_regime_name(state, sdc, cfg, fallback=bucket_name or "")
+            active_regime_trace.append(str(active_bucket_name))
+            sel_local["active_bucket_name"] = active_bucket_name
             sel_local["intervention_budget_used"] = int(interventions_used)
             # Number of decisions considered before the current selection.
             # Use step_idx + 1 so the early rollout does not look artificially
@@ -1003,6 +1037,8 @@ def _rollout_one_scene(
             sel_local["previous_selected_macro"] = str(previous_selected_macro)
             sel_local["same_macro_run_length"] = int(same_macro_run_length)
             select_cfg["selection"] = sel_local
+        if method != "ocrap":
+            active_regime_trace.append(_observable_regime_name(state, sdc, cfg, fallback=bucket_name or ""))
         timing_t0 = perf_counter()
         sel_idx, info = _select_prefix(
             samples,
@@ -1249,8 +1285,10 @@ def _rollout_one_scene(
         selected_pred_drs = _safe_optional_float(info["pred_drs"][sel_idx])
         direct_values = info.get("pred_direct_value", None)
         direct_stds = info.get("pred_direct_std", None)
+        direct_opportunities = info.get("pred_direct_opportunity", None)
         selected_direct_recovery_value = _safe_optional_float(direct_values[sel_idx]) if direct_values is not None else None
         selected_direct_recovery_std = _safe_optional_float(direct_stds[sel_idx]) if direct_stds is not None else None
+        selected_direct_recovery_opportunity = _safe_optional_float(direct_opportunities[sel_idx]) if direct_opportunities is not None else None
         nominal_direct_recovery_value = _safe_optional_float(direct_values[0]) if direct_values is not None and len(direct_values) else None
         direct_recovery_advantage = (selected_direct_recovery_value - nominal_direct_recovery_value) if selected_direct_recovery_value is not None and nominal_direct_recovery_value is not None else None
         selected_nominal_deviation = _safe_optional_float(info["nominal_deviation"][sel_idx])
@@ -1278,6 +1316,7 @@ def _rollout_one_scene(
                 selected_pred_drs=selected_pred_drs,
                 selected_direct_recovery_value=selected_direct_recovery_value,
                 selected_direct_recovery_std=selected_direct_recovery_std,
+                selected_direct_recovery_opportunity=selected_direct_recovery_opportunity,
                 nominal_direct_recovery_value=nominal_direct_recovery_value,
                 direct_recovery_advantage=direct_recovery_advantage,
                 selected_nominal_deviation=selected_nominal_deviation,
@@ -1434,8 +1473,10 @@ def _rollout_one_scene(
         "closed_loop_pred_DRS_proxy": _mean_finite([d.selected_pred_drs for d in decisions]),
         "closed_loop_direct_recovery_value": _mean_finite([d.selected_direct_recovery_value for d in decisions]),
         "closed_loop_direct_recovery_std": _mean_finite([d.selected_direct_recovery_std for d in decisions]),
+        "closed_loop_direct_recovery_opportunity": _mean_finite([d.selected_direct_recovery_opportunity for d in decisions]),
         "closed_loop_direct_recovery_advantage": _mean_finite([d.direct_recovery_advantage for d in decisions]),
         "closed_loop_nominal_deviation": _mean_finite([d.selected_nominal_deviation for d in decisions]),
+        "active_regime_counts": {name: int(active_regime_trace.count(name)) for name in sorted(set(active_regime_trace))},
         "intervention_rate": _mean_finite([float(d.selected_candidate_index != 0) for d in decisions], default=0.0),
         "intervention_episode_count": intervention_episode_count,
         "intervention_episode_rate": float(intervention_episode_count / max(len(decisions), 1)),

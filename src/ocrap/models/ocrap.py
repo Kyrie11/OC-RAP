@@ -40,6 +40,10 @@ class OCRAPModel(nn.Module):
         direct_recovery_value_head: bool = False,
         direct_recovery_value_pooling: str = "scene",
         direct_recovery_value_output: str = "probability",
+        direct_recovery_value_regime_conditioning: bool = False,
+        direct_recovery_value_num_regimes: int = 4,
+        direct_recovery_value_regime_dim: int = 16,
+        direct_recovery_opportunity_head: bool = False,
     ):
         super().__init__()
         self.num_roots = int(num_roots)
@@ -55,6 +59,10 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_value_head = bool(direct_recovery_value_head)
         self.direct_recovery_value_pooling = str(direct_recovery_value_pooling or "scene").strip().lower()
         self.direct_recovery_value_output = str(direct_recovery_value_output or "probability").strip().lower()
+        self.direct_recovery_value_regime_conditioning = bool(direct_recovery_value_regime_conditioning)
+        self.direct_recovery_value_num_regimes = max(1, int(direct_recovery_value_num_regimes))
+        self.direct_recovery_value_regime_dim = max(1, int(direct_recovery_value_regime_dim))
+        self.direct_recovery_opportunity_head = bool(direct_recovery_opportunity_head)
         if self.direct_recovery_value_output not in {"probability", "score"}:
             raise ValueError(f"Unsupported direct_recovery_value_output={direct_recovery_value_output!r}")
 
@@ -130,6 +138,19 @@ class OCRAPModel(nn.Module):
                 + layout.prefix_flat_dim + layout.control_flat_dim
             )
             direct_in_dim = 6 * d_model + self.direct_candidate_raw_dim
+        # Optional regime embedding retained only for controlled ablations. The
+        # v44 OC-RAVA default disables it: deployment uses one observation-only
+        # value/opportunity model and never receives the evaluation bucket as a
+        # neural input. Bucket ids remain available solely to separate training
+        # groups and to support an explicit leakage ablation if needed.
+        self.direct_regime_embedding = (
+            nn.Embedding(self.direct_recovery_value_num_regimes, self.direct_recovery_value_regime_dim)
+            if self.direct_recovery_value_head and self.direct_recovery_value_regime_conditioning
+            else None
+        )
+        if self.direct_regime_embedding is not None:
+            direct_in_dim += self.direct_recovery_value_regime_dim
+        direct_out_dim = 3 if self.direct_recovery_opportunity_head else 2
         self.direct_value_head = (
             nn.Sequential(
                 nn.LayerNorm(direct_in_dim),
@@ -138,7 +159,7 @@ class OCRAPModel(nn.Module):
                 nn.Dropout(dropout),
                 nn.Linear(d_model, d_model // 2),
                 nn.GELU(),
-                nn.Linear(d_model // 2, 2),
+                nn.Linear(d_model // 2, direct_out_dim),
             )
             if self.direct_recovery_value_head
             else None
@@ -188,7 +209,12 @@ class OCRAPModel(nn.Module):
         # contiguous and does not include future/audit labels.
         return x[:, : self.direct_candidate_raw_dim]
 
-    def forward(self, x: torch.Tensor, option_features: torch.Tensor | None = None) -> dict[str, torch.Tensor]:
+    def forward(
+        self,
+        x: torch.Tensor,
+        option_features: torch.Tensor | None = None,
+        bucket_id: torch.Tensor | None = None,
+    ) -> dict[str, torch.Tensor]:
         memory = self._scene_tokens(x)
         scene_token = memory[:, 0]
         root_tokens = self._decode_roots(memory)
@@ -225,9 +251,24 @@ class OCRAPModel(nn.Module):
                     direct_features = scene_token.repeat(1, 6)
                 if self.direct_recovery_value_pooling in {"candidate_concat_raw", "action_concat_raw", "certificate_action_adapter"}:
                     direct_features = torch.cat([direct_features, self._candidate_raw_features(x)], dim=-1)
+            if self.direct_regime_embedding is not None:
+                if bucket_id is None:
+                    # "other" is the backward-compatible fallback. v44 runtime
+                    # code supplies the active regime explicitly for stress runs.
+                    bucket_id = torch.full(
+                        (x.shape[0],),
+                        min(3, self.direct_recovery_value_num_regimes - 1),
+                        dtype=torch.long,
+                        device=x.device,
+                    )
+                regime_id = bucket_id.to(device=x.device, dtype=torch.long).reshape(-1)
+                regime_id = regime_id.clamp(0, self.direct_recovery_value_num_regimes - 1)
+                direct_features = torch.cat([direct_features, self.direct_regime_embedding(regime_id)], dim=-1)
             direct = self.direct_value_head(direct_features)
             out["direct_recovery_value_logit"] = direct[:, 0]
             out["direct_recovery_value_logvar"] = direct[:, 1].clamp(-7.0, 2.0)
+            if self.direct_recovery_opportunity_head:
+                out["direct_recovery_opportunity_logit"] = direct[:, 2]
         if self.root_signature_head is not None:
             out["root_signature"] = self.root_signature_head(root_tokens)
         if self.root_future_signature_head is not None:

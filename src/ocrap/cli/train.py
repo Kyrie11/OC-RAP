@@ -216,7 +216,7 @@ def _epoch(
     desc = f"{stage} ep{epoch}" if epoch is not None else stage
     for batch in _progress_iter(loader, enabled=progress, desc=desc):
         batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
-        out = model(batch["x"].float(), batch.get("option_features"))
+        out = model(batch["x"].float(), batch.get("option_features"), bucket_id=batch.get("bucket_id"))
         root_valid = batch["root_valid"].bool()
         masked_logits = out["root_logits"].masked_fill(~root_valid, -1.0e4)
         root_p = torch.softmax(masked_logits, dim=-1)
@@ -560,6 +560,9 @@ def _epoch(
                 top_rank_weight=float(tcfg.get("direct_value_top_rank_weight", 0.0)),
                 success_gamma=option_gamma,
                 success_temperature=option_temperature,
+                pred_opportunity_logit=out.get("direct_recovery_opportunity_logit"),
+                opportunity_weight=float(tcfg.get("direct_value_opportunity_weight", 0.0)),
+                opportunity_pos_weight=float(tcfg.get("direct_value_opportunity_pos_weight", 6.0)),
             )
         else:
             loss_direct_value = r_dep.sum() * 0.0
@@ -729,16 +732,16 @@ def _make_group_batch_sampler(ds: OCRAPSampleDataset, cfg: dict, batch_size: int
     total = len(ds.paths)
     roots = [_dataset_root_name(p) for p in ds.paths]
     root_counts = Counter(roots)
-    groups_by_key: dict[tuple[int, int], list[int]] = {}
+    groups_by_key: dict[tuple[int, int, int], list[int]] = {}
     sample_weights: list[float] = []
     num_artifacts = num_negative = num_safe_pos = 0
     for i, p in enumerate(ds.paths):
         try:
             scene = scalar_metadata_for_path(p, "scene_id", "")
             t = int(np.asarray(scalar_metadata_for_path(p, "time_index", 0)).item())
-            key = (stable_scene_hash(scene), t)
+            key = (bucket_id_for_path(p), stable_scene_hash(scene), t)
         except Exception:
-            key = (i, 0)
+            key = (3, i, 0)
         groups_by_key.setdefault(key, []).append(i)
         w, is_art, is_neg, is_safe_pos = _sampler_weight_for_path(p, cfg, root_counts, total)
         sample_weights.append(w)
@@ -956,6 +959,10 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_value_head=bool(model_cfg.get("direct_recovery_value_head", False)),
         direct_recovery_value_pooling=str(model_cfg.get("direct_recovery_value_pooling", "scene")),
         direct_recovery_value_output=str(model_cfg.get("direct_recovery_value_output", "probability")),
+        direct_recovery_value_regime_conditioning=bool(model_cfg.get("direct_recovery_value_regime_conditioning", False)),
+        direct_recovery_value_num_regimes=int(model_cfg.get("direct_recovery_value_num_regimes", 4)),
+        direct_recovery_value_regime_dim=int(model_cfg.get("direct_recovery_value_regime_dim", 16)),
+        direct_recovery_opportunity_head=bool(model_cfg.get("direct_recovery_opportunity_head", False)),
     ).to(device)
     tcfg = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
 
@@ -1054,6 +1061,10 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "direct_recovery_value_head": bool(model_cfg.get("direct_recovery_value_head", False)),
             "direct_recovery_value_pooling": str(model_cfg.get("direct_recovery_value_pooling", "scene")),
             "direct_recovery_value_output": str(model_cfg.get("direct_recovery_value_output", "probability")),
+            "direct_recovery_value_regime_conditioning": bool(model_cfg.get("direct_recovery_value_regime_conditioning", False)),
+            "direct_recovery_value_num_regimes": int(model_cfg.get("direct_recovery_value_num_regimes", 4)),
+            "direct_recovery_value_regime_dim": int(model_cfg.get("direct_recovery_value_regime_dim", 16)),
+            "direct_recovery_opportunity_head": bool(model_cfg.get("direct_recovery_opportunity_head", False)),
             "model_state": model.state_dict(),
             "optimizer_state": opt.state_dict(),
             "epoch": int(ep),

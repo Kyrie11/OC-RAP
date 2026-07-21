@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export OCRAP_ROOT=${OCRAP_ROOT:-/data0/senzeyu2/dataset/OCRAP}
+export WOMD_VAL=${WOMD_VAL:-/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord}
+export WOMD_VAL_INTERACTIVE=${WOMD_VAL_INTERACTIVE:-/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation_interactive/validation_interactive_tfexample.tfrecord}
+export BASE_V39=${BASE_V39:-runs/ocrap_v39_ocrac_balanced}
+mkdir -p runs
+
+# ---------------------------------------------------------------------------
+# Stage 1: train two shared observation-only opportunity/value heads.
+# Near and Contact groups are separated by bucket in the sampler/loss, but the
+# bucket label is NOT provided to the neural head. One deployable model is used.
+# ---------------------------------------------------------------------------
+TRAIN_GPU=0 VARIANT=shared_balanced RUN=runs/ocrap_v44_rava_balanced \
+BASE_RUN="$BASE_V39" INIT_CKPT="$BASE_V39/model_v39_ocrac/best.pt" \
+  bash scripts/train_ocrap_v44_rava.sh > runs/ocrap_v44_rava_balanced.launch.log 2>&1 &
+P0=$!
+TRAIN_GPU=1 VARIANT=shared_precision RUN=runs/ocrap_v44_rava_precision \
+BASE_RUN="$BASE_V39" INIT_CKPT="$BASE_V39/model_v39_ocrac/best.pt" \
+  bash scripts/train_ocrap_v44_rava.sh > runs/ocrap_v44_rava_precision.launch.log 2>&1 &
+P1=$!
+set +e
+wait "$P0"; S0=$?
+wait "$P1"; S1=$?
+set -e
+echo "v44 training/calibration exit status: balanced=$S0 precision=$S1"
+
+# Keep only checkpoints with valid Near and Contact held-out rules. Invalid
+# candidates are not sent to offline evaluation or Waymax.
+mapfile -t VALID_RUNS < <(python - <<'PY'
+import json, pathlib
+for name in ('balanced','precision'):
+    root=pathlib.Path(f'runs/ocrap_v44_rava_{name}')
+    ok=True
+    for bucket in ('near','contact'):
+        p=root/'calibration'/f'direct_value_risk_{bucket}_v44.json'
+        try: d=json.load(open(p))
+        except Exception: ok=False; continue
+        ok &= bool(d.get('valid_for_deployment',False))
+        print(name,bucket,{k:d.get(k) for k in ['valid_for_deployment','direct_value_opportunity_threshold','direct_value_threshold','all_pair_advantage_mae','warnings']},file=__import__('sys').stderr)
+    if ok: print(root)
+PY
+)
+if [[ ${#VALID_RUNS[@]} -eq 0 ]]; then
+  echo 'v44: no checkpoint passed opportunity+score calibration; do not run offline or Waymax.' >&2
+  exit 3
+fi
+printf 'valid v44 candidates:\n'; printf '  %s\n' "${VALID_RUNS[@]}"
+
+# ---------------------------------------------------------------------------
+# Stage 2: offline zero-use/safety gate. One candidate per GPU, sequential
+# Safe/Near/Contact on that GPU to avoid two evaluations competing for memory.
+# ---------------------------------------------------------------------------
+OFFLINE_RUNS=()
+PIDS=()
+for i in "${!VALID_RUNS[@]}"; do
+  base=${VALID_RUNS[$i]}
+  gpu=$((i % 2))
+  tag=$(basename "$base")
+  out="runs/${tag}_offline"
+  OFFLINE_RUNS+=("$out")
+  BASE_RUN="$base" RUN="$out" RUN_OFFLINE_EVAL=1 RUN_AUDITS=0 RUN_SAFE_CLOSED_LOOP=0 \
+  RUN_SCALAR_BASELINES=0 OFFLINE_SINGLE_GPU=1 GPU_SAFE="$gpu" GPU_NEAR="$gpu" GPU_CONTACT="$gpu" \
+  CONTACT_BRAKE_TAIL=false RUN_NEAR_TAIL=false CONTACT_TAIL_BYPASS_PCD_GAIN=false \
+    bash scripts/run_ocrap_v44_rava.sh > "${out}.launch.log" 2>&1 &
+  PIDS+=("$!")
+done
+for p in "${PIDS[@]}"; do wait "$p"; done
+
+PYTHONPATH=src python tools/select_v44_candidate.py "${VALID_RUNS[@]}" \
+  --offline-runs "${OFFLINE_RUNS[@]}" --write-choice runs/v44_chosen_base_run.txt \
+  | tee runs/v44_candidate_selection.txt
+CHOSEN_BASE_RUN=$(cat runs/v44_chosen_base_run.txt)
+CHOSEN=$(basename "$CHOSEN_BASE_RUN")
+echo "chosen: $CHOSEN_BASE_RUN"
+
+# ---------------------------------------------------------------------------
+# Stage 3: cheapest real-execution probe. No scalar baseline yet. Only selected
+# candidates are teacher-labelled; two rollouts, six steps, and two-step replans.
+# This stage asks only whether the certified path actually executes safely.
+# ---------------------------------------------------------------------------
+PROBE_RUN="runs/${CHOSEN}_probe2"
+BASE_RUN="$CHOSEN_BASE_RUN" RUN="$PROBE_RUN" \
+RUN_OFFLINE_EVAL=0 RUN_AUDITS=1 RUN_SAFE_CLOSED_LOOP=0 RUN_SCALAR_BASELINES=0 \
+PAIR_BUCKETS_ON_TWO_GPUS=1 GPU_NEAR=0 GPU_CONTACT=1 \
+AUDIT_MAX_ROLLOUTS=2 AUDIT_MAX_STEPS=6 AUDIT_EVERY_N_STEPS=3 \
+AUDIT_TARGETS=4 AUDIT_LABELS=32 AUDIT_LABEL_MODE=selected_only \
+AUDIT_NUM_CANDIDATES=8 AUDIT_NUM_RECOVERY_OPTIONS=6 AUDIT_REPLAN_INTERVAL=2 \
+AUDIT_TOP_K=2 AUDIT_MAX_EXTRA_CANDIDATES=1 \
+CONTACT_BRAKE_TAIL=false RUN_NEAR_TAIL=false CONTACT_TAIL_BYPASS_PCD_GAIN=false \
+  bash scripts/run_ocrap_v44_rava.sh
+PYTHONPATH=src python tools/check_v44_quick_gate.py "$PROBE_RUN" --base-run "$CHOSEN_BASE_RUN" \
+  --mode execution --near-intervention-cap 0.15 --contact-intervention-cap 0.20 \
+  | tee "$PROBE_RUN/quick_gate_v44_execution.txt"
+
+# ---------------------------------------------------------------------------
+# Stage 4: four-rollout paired mechanism gate. Near/scalar+v44 runs on GPU0 and
+# Contact/scalar+v44 on GPU1. This rejects regressions before a longer run.
+# ---------------------------------------------------------------------------
+MICRO_RUN="runs/${CHOSEN}_micro4"
+BASE_RUN="$CHOSEN_BASE_RUN" RUN="$MICRO_RUN" \
+RUN_OFFLINE_EVAL=0 RUN_AUDITS=1 RUN_SAFE_CLOSED_LOOP=0 RUN_SCALAR_BASELINES=1 \
+PAIR_BUCKETS_ON_TWO_GPUS=1 GPU_NEAR=0 GPU_CONTACT=1 \
+AUDIT_MAX_ROLLOUTS=4 AUDIT_MAX_STEPS=10 AUDIT_EVERY_N_STEPS=2 \
+AUDIT_TARGETS=8 AUDIT_LABELS=128 AUDIT_LABEL_MODE=selected_topk \
+AUDIT_NUM_CANDIDATES=10 AUDIT_NUM_RECOVERY_OPTIONS=8 AUDIT_REPLAN_INTERVAL=1 \
+AUDIT_TOP_K=4 AUDIT_MAX_EXTRA_CANDIDATES=3 \
+CONTACT_BRAKE_TAIL=false RUN_NEAR_TAIL=false CONTACT_TAIL_BYPASS_PCD_GAIN=false \
+  bash scripts/run_ocrap_v44_rava.sh
+PYTHONPATH=src python tools/check_v44_quick_gate.py "$MICRO_RUN" --base-run "$CHOSEN_BASE_RUN" \
+  --mode mechanism --near-intervention-cap 0.10 --contact-intervention-cap 0.15 \
+  | tee "$MICRO_RUN/quick_gate_v44_mechanism.txt"
+
+# ---------------------------------------------------------------------------
+# Stage 5: eight-rollout confirmation. Safe closed loop is deferred until both
+# stress regimes pass. This remains development scale; paper runs need 3 seeds.
+# ---------------------------------------------------------------------------
+CONFIRM_RUN="runs/${CHOSEN}_confirm8"
+BASE_RUN="$CHOSEN_BASE_RUN" RUN="$CONFIRM_RUN" \
+RUN_OFFLINE_EVAL=0 RUN_AUDITS=1 RUN_SAFE_CLOSED_LOOP=1 RUN_SCALAR_BASELINES=1 \
+PAIR_BUCKETS_ON_TWO_GPUS=1 GPU_NEAR=0 GPU_CONTACT=1 GPU_SAFE=0 \
+AUDIT_MAX_ROLLOUTS=8 AUDIT_MAX_STEPS=14 AUDIT_EVERY_N_STEPS=2 \
+AUDIT_TARGETS=16 AUDIT_LABELS=256 AUDIT_LABEL_MODE=selected_topk \
+AUDIT_NUM_CANDIDATES=12 AUDIT_NUM_RECOVERY_OPTIONS=8 AUDIT_REPLAN_INTERVAL=1 \
+AUDIT_TOP_K=5 AUDIT_MAX_EXTRA_CANDIDATES=4 \
+SAFE_MAX_ROLLOUTS=8 SAFE_MAX_STEPS=24 SAFE_MAX_TARGETS=16 \
+CONTACT_BRAKE_TAIL=false RUN_NEAR_TAIL=false CONTACT_TAIL_BYPASS_PCD_GAIN=false \
+  bash scripts/run_ocrap_v44_rava.sh
+PYTHONPATH=src python tools/check_v44_quick_gate.py "$CONFIRM_RUN" --base-run "$CHOSEN_BASE_RUN" \
+  --mode confirmation --min-improvement 0.005 --near-intervention-cap 0.08 --contact-intervention-cap 0.12 \
+  | tee "$CONFIRM_RUN/quick_gate_v44_confirmation.txt"
+
+echo 'v44 development gates passed. Run targeted ablations next; do not yet claim publication-scale significance.'

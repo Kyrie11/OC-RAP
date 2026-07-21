@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Run only after v44 confirm8 passes. These are mechanism diagnostics, not the
+# final 3-seed paper experiment.
+BASE_RUN=${BASE_RUN:-$(cat runs/v44_chosen_base_run.txt)}
+TAG=$(basename "$BASE_RUN")
+COMMON="RUN_OFFLINE_EVAL=0 RUN_AUDITS=1 RUN_SAFE_CLOSED_LOOP=0 RUN_SCALAR_BASELINES=0 PAIR_BUCKETS_ON_TWO_GPUS=1 GPU_NEAR=0 GPU_CONTACT=1 AUDIT_MAX_ROLLOUTS=3 AUDIT_MAX_STEPS=8 AUDIT_EVERY_N_STEPS=2 AUDIT_TARGETS=6 AUDIT_LABELS=96 AUDIT_LABEL_MODE=selected_topk AUDIT_NUM_CANDIDATES=10 AUDIT_NUM_RECOVERY_OPTIONS=8 CONTACT_BRAKE_TAIL=false RUN_NEAR_TAIL=false CONTACT_TAIL_BYPASS_PCD_GAIN=false"
+
+# A1: remove the entire opportunity/value certificate.
+env $COMMON BASE_RUN="$BASE_RUN" RUN="runs/${TAG}_ablate_no_direct_value" RUN_DIRECT_VALUE=false \
+  bash scripts/run_ocrap_v44_rava.sh
+
+# A2: remove the learned opportunity abstention gate while retaining score-risk calibration.
+env $COMMON BASE_RUN="$BASE_RUN" RUN="runs/${TAG}_ablate_no_opportunity_gate" \
+  NEAR_DIRECT_OPPORTUNITY_THRESHOLD=0 CONTACT_DIRECT_OPPORTUNITY_THRESHOLD=0 \
+  bash scripts/run_ocrap_v44_rava.sh
+
+# A3: remove the score-risk threshold after opportunity gating.
+env $COMMON BASE_RUN="$BASE_RUN" RUN="runs/${TAG}_ablate_no_score_risk_gate" \
+  NEAR_DIRECT_MIN_ADV=-1000000000 CONTACT_DIRECT_MIN_ADV=-1000000000 \
+  bash scripts/run_ocrap_v44_rava.sh
+
+# A4: remove trajectory actionability. Reappearance of tiny/no-op actions
+# isolates the practical value of the physical effect certificate.
+env $COMMON BASE_RUN="$BASE_RUN" RUN="runs/${TAG}_ablate_no_actionability" \
+  NEAR_DIRECT_MIN_DEVIATION=0 CONTACT_DIRECT_MIN_DEVIATION=0 \
+  bash scripts/run_ocrap_v44_rava.sh
+
+# A5 (diagnostic upper bound only, not a deployable method): use the target
+# evaluation bucket instead of the observation-derived online regime manager.
+env $COMMON BASE_RUN="$BASE_RUN" RUN="runs/${TAG}_diagnostic_oracle_bucket" \
+  AUTO_REGIME_FROM_OBSERVATION=false \
+  bash scripts/run_ocrap_v44_rava.sh

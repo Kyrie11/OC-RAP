@@ -23,6 +23,7 @@ class Prediction:
     margins: np.ndarray
     direct_recovery_value: float | None = None
     direct_recovery_std: float | None = None
+    direct_recovery_opportunity: float | None = None
 
 
 @dataclass
@@ -86,6 +87,25 @@ def _infer_d_model(ckpt: dict[str, Any], cfg: dict[str, Any]) -> int:
     return int((cfg.get("model", {}) or {}).get("d_model", 128))
 
 
+def regime_id_from_cfg(cfg: dict | None) -> int:
+    """Map the runtime active bucket to the value expert id.
+
+    The planner still infers the operational regime from the dataset/closed-loop
+    bucket configured by the evaluator. This id conditions only the v44 value
+    branch and never exposes teacher labels or future outcomes.
+    """
+    cfg = cfg or {}
+    sel = cfg.get("selection", {}) if isinstance(cfg.get("selection", {}), dict) else {}
+    raw = str(sel.get("active_bucket_name", sel.get("regime_name", "")) or "").lower().replace("-", "_")
+    if "near" in raw:
+        return 1
+    if "contact" in raw or "post_contact" in raw:
+        return 2
+    if "safe" in raw or "normal" in raw or "background" in raw:
+        return 0
+    return 3
+
+
 def _load_checkpoint(path: Path) -> dict[str, Any]:
     try:
         return torch.load(path, map_location="cpu", weights_only=False)
@@ -128,6 +148,10 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         direct_recovery_value_head=bool(ckpt.get("direct_recovery_value_head", model_cfg.get("direct_recovery_value_head", False))),
         direct_recovery_value_pooling=str(ckpt.get("direct_recovery_value_pooling", model_cfg.get("direct_recovery_value_pooling", "scene"))),
         direct_recovery_value_output=str(ckpt.get("direct_recovery_value_output", model_cfg.get("direct_recovery_value_output", "probability"))),
+        direct_recovery_value_regime_conditioning=bool(ckpt.get("direct_recovery_value_regime_conditioning", model_cfg.get("direct_recovery_value_regime_conditioning", False))),
+        direct_recovery_value_num_regimes=int(ckpt.get("direct_recovery_value_num_regimes", model_cfg.get("direct_recovery_value_num_regimes", 4))),
+        direct_recovery_value_regime_dim=int(ckpt.get("direct_recovery_value_regime_dim", model_cfg.get("direct_recovery_value_regime_dim", 16))),
+        direct_recovery_opportunity_head=bool(ckpt.get("direct_recovery_opportunity_head", model_cfg.get("direct_recovery_opportunity_head", False))),
     ).to(device)
     # Strict loading remains the default for checkpoints with matching geometry.
     # A v39 checkpoint can initialize v40 training through train.py's explicit
@@ -141,6 +165,8 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["encoder_type"] = encoder_type
     cfg["model"]["direct_recovery_value_pooling"] = str(ckpt.get("direct_recovery_value_pooling", model_cfg.get("direct_recovery_value_pooling", "scene")))
     cfg["model"]["direct_recovery_value_output"] = str(ckpt.get("direct_recovery_value_output", model_cfg.get("direct_recovery_value_output", "probability")))
+    cfg["model"]["direct_recovery_value_regime_conditioning"] = bool(ckpt.get("direct_recovery_value_regime_conditioning", model_cfg.get("direct_recovery_value_regime_conditioning", False)))
+    cfg["model"]["direct_recovery_opportunity_head"] = bool(ckpt.get("direct_recovery_opportunity_head", model_cfg.get("direct_recovery_opportunity_head", False)))
     return ModelBundle(model=model, cfg=cfg, device=device)
 
 
@@ -206,7 +232,9 @@ def predict_samples(
         for d in ds
     ]
     option_features = torch.from_numpy(np.stack([f["option_features"] for f in fixed], axis=0)).float().to(bundle.device)
-    out = bundle.model(xs, option_features)
+    runtime_cfg = cfg or bundle.cfg
+    bucket_ids = torch.full((len(ds),), regime_id_from_cfg(runtime_cfg), dtype=torch.long, device=bundle.device)
+    out = bundle.model(xs, option_features, bucket_id=bucket_ids)
     root_valid = torch.from_numpy(np.stack([f["root_valid"] for f in fixed], axis=0)).bool().to(bundle.device)
     p = torch.softmax(out["root_logits"].masked_fill(~root_valid, -1.0e4), dim=-1)
     option_valid = torch.from_numpy(np.stack([f["option_valid"] for f in fixed], axis=0)).bool().to(bundle.device)
@@ -232,12 +260,15 @@ def predict_samples(
     m_np = out["margins"].detach().cpu().numpy().astype(np.float32)
     direct_mean_np = None
     direct_std_np = None
+    direct_opp_np = None
     if "direct_recovery_value_logit" in out:
         direct_tensor = out["direct_recovery_value_logit"]
         if str(getattr(bundle.model, "direct_recovery_value_output", "probability")) != "score":
             direct_tensor = torch.sigmoid(direct_tensor)
         direct_mean_np = direct_tensor.detach().cpu().numpy().astype(np.float32)
         direct_std_np = torch.exp(0.5 * out["direct_recovery_value_logvar"]).detach().cpu().numpy().astype(np.float32)
+        if "direct_recovery_opportunity_logit" in out:
+            direct_opp_np = torch.sigmoid(out["direct_recovery_opportunity_logit"]).detach().cpu().numpy().astype(np.float32)
     preds: list[Prediction] = []
     for i in range(len(ds)):
         preds.append(
@@ -251,6 +282,7 @@ def predict_samples(
                 margins=m_np[i],
                 direct_recovery_value=(None if direct_mean_np is None else float(direct_mean_np[i])),
                 direct_recovery_std=(None if direct_std_np is None else float(direct_std_np[i])),
+                direct_recovery_opportunity=(None if direct_opp_np is None else float(direct_opp_np[i])),
             )
         )
     return preds
@@ -269,7 +301,9 @@ def predict_sample(d: dict[str, Any], bundle: ModelBundle | None, cfg: dict | No
         d_future_signature=int(getattr(bundle.model, "d_future_signature", 0)),
     )
     option_features = torch.from_numpy(fixed["option_features"]).float().unsqueeze(0).to(bundle.device)
-    out = bundle.model(x, option_features)
+    runtime_cfg = cfg or bundle.cfg
+    bucket_id = torch.tensor([regime_id_from_cfg(runtime_cfg)], dtype=torch.long, device=bundle.device)
+    out = bundle.model(x, option_features, bucket_id=bucket_id)
     root_valid = torch.from_numpy(fixed["root_valid"]).bool().unsqueeze(0).to(bundle.device)
     p = torch.softmax(out["root_logits"].masked_fill(~root_valid, -1.0e4), dim=-1)
     option_valid = torch.from_numpy(fixed["option_valid"]).bool().unsqueeze(0).to(bundle.device)
@@ -295,4 +329,5 @@ def predict_sample(d: dict[str, Any], bundle: ModelBundle | None, cfg: dict | No
         margins=out["margins"].squeeze(0).detach().cpu().numpy().astype(np.float32),
         direct_recovery_value=(None if "direct_recovery_value_logit" not in out else float((out["direct_recovery_value_logit"] if str(getattr(bundle.model, "direct_recovery_value_output", "probability")) == "score" else torch.sigmoid(out["direct_recovery_value_logit"])).squeeze(0).detach().cpu().item())),
         direct_recovery_std=(None if "direct_recovery_value_logvar" not in out else float(torch.exp(0.5 * out["direct_recovery_value_logvar"]).squeeze(0).detach().cpu().item())),
+        direct_recovery_opportunity=(None if "direct_recovery_opportunity_logit" not in out else float(torch.sigmoid(out["direct_recovery_opportunity_logit"]).squeeze(0).detach().cpu().item())),
     )

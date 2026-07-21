@@ -7,8 +7,8 @@ This file records algorithm changes, hypotheses, observed evidence, failures, an
 | Regime | Development gate | Publication-scale target |
 |---|---|---|
 | Safe | intervention = 0, bounded NUP >= 0.999 | 3 seeds; intervention <= 0.5%; NUP >= 0.999; no degradation in physical metrics |
-| Near-contact | direct path used; NUP >= 0.995; no no-op action; PCD/regret improves | >=15% relative reduction in FRA/miss/escalation or about +0.02 PCD, with hundreds of audited decisions |
-| Contact | direct path used; NUP >= 0.985; no no-op action; PCD/regret improves | >=15-25% relative reduction in secondary-collision failures or about +0.03 PCD, with stable-stop/yaw/rejoin evidence |
+| Near-contact | direct path used; NUP >= 0.995; no no-op action; paired PCD/regret gain >= 0.005 | >=15% relative FRA/miss reduction or about +0.007~0.010 PCD on the current candidate set, with hundreds of audited decisions |
+| Contact | direct path used; NUP >= 0.985; no no-op action; paired PCD/regret gain >= 0.005 | >=20% relative secondary-failure/FRA reduction or about +0.009~0.012 PCD on the current candidate set, with stable-stop/yaw/rejoin evidence |
 
 ## Version history
 
@@ -33,7 +33,7 @@ This file records algorithm changes, hypotheses, observed evidence, failures, an
   - Removing the raw adapter improved top-1 capture (Near 87.5%, Contact 88.6%) with similar calibration error. Its 48.7-minute run was faster than balanced (81.2 minutes) but slower than hard (25.4 minutes); therefore speed alone is inconclusive, while the raw adapter still has no accuracy justification and is rejected.
 - **Root causes:** additive q remained larger than all deployable score advantages; direct value was preference-only while the base admission set usually contained only nominal; raw flattened trajectories added noise; group sampler boosted absolute r_dep rather than positive advantage versus nominal.
 
-### v43 — OC-RSC (current)
+### v43 — OC-RSC (completed; failed development gate)
 - **Name:** Observation-Consistent Risk-controlled Selective Certificate.
 - **Change:**
   1. Replace the zero-coverage additive LCB deployment rule with a deterministic top-1 selective threshold calibrated on scene-time groups.
@@ -57,3 +57,63 @@ This file records algorithm changes, hypotheses, observed evidence, failures, an
 ### Statistical validity note
 
 The hash-disjoint folds prevent threshold fitting and verification from sharing scene-time groups, but a publication claim still requires the verification/calibration data to be independent of checkpoint selection. The scripts accept `RSC_CAL_NEAR_DATA` and `RSC_CAL_CONTACT_DATA`; paper-scale runs should point these to dedicated calibration roots not used for training or early stopping. The default validation roots are intended only for development screening.
+
+## v43 observed result and decision (2026-07-21, completed)
+
+- **Training:** `selective_balanced` stopped at epoch 1 (`val direct loss=0.4022`, 25.2 min); `selective_precision` stopped at epoch 2 (`0.4817`, 9.4 min).
+- **Calibration:** neither checkpoint produced a finite selective rule in Near or Contact. All four held-out evaluations had `num_selected=0`, `challenge_precision=null`, and `valid_for_deployment=false`.
+- **Ranking diagnostics:**
+  - Balanced Near/Contact pair MAE: `0.2820 / 0.2639`.
+  - Precision Near/Contact pair MAE: `0.2839 / 0.2692`.
+  - Top-ranked score was negatively associated with teacher advantage; merge was systematically over-scored while many selected merge candidates had non-positive teacher advantage.
+- **Correct pipeline behavior:** `v43: no checkpoint passed calibration + offline-use gates; do not run Waymax.` The falsification rule prevented an expensive closed-loop run and should be retained.
+- **Primary implementation defect discovered:** the group sampler and direct-value loss grouped candidates by `(scene_hash,time)` but omitted the dataset bucket. The same WOMD scene-time appears in Safe/Near/Contact roots. The logged maximum group size was `25`, exactly compatible with concatenating the per-regime candidate sets, and multiple regime-specific nominals/teachers were compared inside one ranking group.
+- **Additional causes:**
+  1. The direct head received no regime/state indicator, so cross-regime pressure-future labels were contradictory for observationally identical candidates.
+  2. The positive-group sampler used `r_dep` gain while the direct target was PCD advantage, creating objective/sampling mismatch.
+  3. Safe samples contributed no direct-value gradient but consumed batches.
+  4. A forced top-1 score had no explicit probability that the current group should intervene; rare positive groups were mixed with predominantly negative/tied groups.
+  5. Relaxing the v43 risk threshold is rejected because the score-teacher relationship was directionally wrong, not merely under-covered.
+- **Do not repeat:** no more additive-q tuning, threshold-only relaxation, raw flattened action adapter, or bucket-agnostic scene-time grouping without new evidence.
+
+## External baseline snapshot available with the v43 analysis
+
+- **Safe offline:** OC-RAP's nominal-preserving behavior (`NUP=1`, `FRA=0`, `PCD=0.6163`, intervention `0`) matches log replay, nominal replay, and Wayformer-BC-lite. GameFormer-lite increased PCD only to `0.6189` but reduced NUP to `0.9468` with `39.2%` intervention. BeTopNet-lite intervened `17.6%` without PCD gain.
+- **Near-contact offline:** the existing OC-RAP nominal/old-certificate result (`NUP=1`, `FRA=0.0761`, `PCD=0.5735`) is stronger than the completed uploaded lite baselines; the strongest external PCD was predictive-safety-filter at `0.5466` with `44.6%` intervention. This does **not** validate the new value module because its direct path was unused.
+- **Contact offline:** the existing OC-RAP result (`NUP=1`, `FRA=0.0780`, `PCD=0.5723`) exceeds the uploaded post-impact lite baselines in PCD/NUP. Severity minimization achieved lower FRA (`0.0557`) but at `NUP=0.7212`, `PCD=0.4159`, and `80.0%` intervention.
+- **Comparability warning:** uploaded methods are implementation-level `*_lite` baselines, not official reproduced SOTA checkpoints. Near MARC closed-loop lacks a matched bucket (`bucket_dataset=null`); Contact post-impact closed-loop is incomplete (`18/50`). Use them as diagnostic baselines until matched, completed runs exist.
+
+### v44 — OC-RAVA (current)
+
+- **Name:** Observation-Consistent Risk-Aware Value Abstention.
+- **Design objective:** one deployable shared planner should preserve Safe behavior and selectively intervene in Near/Contact without receiving the evaluation regime label as a neural input.
+- **Changes:**
+  1. Group sampler key and direct-loss key are now `(bucket_id, scene_hash, time)`, preventing multiple regime-specific nominals and teachers from entering one ranking group.
+  2. Safe is removed from direct-head training. The frozen v39 OC-MERO backbone remains the Safe policy and is checked independently.
+  3. The default neural value branch is observation-only (`direct_recovery_value_regime_conditioning=false`). Optional bucket embedding code is retained only for an explicitly labelled leakage/upper-bound ablation and is not used by the main method.
+  4. Add a candidate opportunity head estimating whether a recovery candidate has positive PCD advantage over nominal. Deployment first applies opportunity abstention, then selects deterministic top-1 score advantage, then applies a held-out score-risk threshold.
+  5. Default direct macros are `merge` and `stabilize`; brake/yield remain under the established certificate paths until the learned head demonstrates reliable macro-specific evidence.
+  6. Risk-controlled direct admission now guarantees that a verified challenge outranks nominal; v43 could admit a negative-score-threshold candidate yet give it zero score bonus, producing another zero-use path.
+  7. Closed-loop policy regime can be inferred online from observable current clearance/TTC/contact thresholds (`selection.auto_regime_from_observation=true`) rather than from the targeted evaluation bucket. Per-decision `active_regime_counts` are saved for audit.
+  8. Closed-loop development is reduced to `2 -> 4 -> 8` rollouts: selected-only execution proof, paired mechanism gate, then confirmation plus compact Safe. Teacher labels and candidate counts are minimized at early gates.
+- **Falsification rules:**
+  - No finite opportunity+score rule in both Near and Contact: stop before offline evaluation.
+  - Offline direct reason is zero, Safe intervention is non-zero, or NUP fails: stop before Waymax.
+  - Two-rollout probe has no direct execution, a deviation below `0.002`, or unacceptable NUP/intervention: stop.
+  - Four-rollout paired test degrades PCD/regret by more than `0.01`: stop.
+  - Eight-rollout confirmation must improve paired PCD or paper regret by at least `0.005` in both stress regimes before ablations or paper-scale seeds.
+- **Implementation validation:** `81 passed, 2 warnings`; all Python modules compile and all new shell scripts pass `bash -n`. Warnings are the existing PyTorch nested-tensor notice.
+
+### Updated development targets after observing the candidate-set teacher frontier
+
+The older `+0.02/+0.03 PCD` targets exceed the empirical selector-only headroom of the current candidate set and are retained only as longer-term goals after candidate-generation improvements.
+
+| Regime | Immediate development target | Publication-scale target on current candidate set |
+|---|---|---|
+| Safe | intervention `0`; NUP `>=0.999`; no physical regression | 3 seeds; intervention `<=0.5%`; statistically non-inferior to nominal/log replay and competitive with complete learned planners |
+| Near-contact | direct path non-zero; no no-op; paired PCD/regret gain `>=0.005` | FRA relative reduction about `>=15%` or PCD `+0.007~0.010`, hundreds of paired audited decisions |
+| Contact | direct path non-zero; NUP `>=0.985`; paired gain `>=0.005` | secondary-failure/FRA relative reduction about `>=20%` or PCD `+0.009~0.012`, plus stable-stop/yaw/rejoin evidence |
+
+### Statistical validity note for v44
+
+The main neural head is observation-only, but threshold verification data must still be independent of training and checkpoint selection for a paper claim. Development scripts use `val_near_contact` and `val_contact`; publication runs must set dedicated `RAVA_CAL_NEAR_DATA` and `RAVA_CAL_CONTACT_DATA` roots that were not used for training, early stopping, or architecture selection.
