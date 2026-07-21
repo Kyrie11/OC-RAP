@@ -209,6 +209,7 @@ def _epoch(
     ocfg = cfg.get("ocmero", {}) if isinstance(cfg.get("ocmero", {}), dict) else {}
     art_cfg = cfg.get("artifact", {}) if isinstance(cfg.get("artifact", {}), dict) else {}
     tcfg = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
+    model_cfg = cfg.get("model", {}) if isinstance(cfg.get("model", {}), dict) else {}
     progress = bool(tcfg.get("progress", cfg.get("progress", True)))
     totals: dict[str, float] = {}
     n = 0
