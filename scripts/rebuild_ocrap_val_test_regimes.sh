@@ -20,9 +20,21 @@ set -euo pipefail
 #   They are not observed real post-collision datasets.
 # =============================================================================
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+export OCRAP_REPO="${OCRAP_REPO:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
 export WOMD_ROOT="${WOMD_ROOT:-/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example}"
 export OCRAP_ROOT="${OCRAP_ROOT:-/data0/senzeyu2/dataset/OCRAP}"
-export OCRAP_REPO="${OCRAP_REPO:-$(pwd)}"
+PYTHON_BIN="${PYTHON_BIN:-python}"
+
+# Always import the source tree beside this script.  Without this, an older
+# editable/global OC-RAP installation can be imported even though the files in
+# the current repository were updated.
+export PYTHONPATH="${OCRAP_REPO}/src${PYTHONPATH:+:${PYTHONPATH}}"
+cd "${OCRAP_REPO}"
+
+run_ocrap() {
+  "${PYTHON_BIN}" -m ocrap.cli "$@"
+}
 
 WOMD_VAL_BASE="${WOMD_ROOT}/validation/validation_tfexample.tfrecord"
 WOMD_VAL="${WOMD_VAL_BASE}@150"
@@ -57,6 +69,7 @@ MIN_VAL_CONTACT="${MIN_VAL_CONTACT:-100}"
 MIN_TEST_CONTACT="${MIN_TEST_CONTACT:-150}"
 
 RUN_DIAGNOSTICS="${RUN_DIAGNOSTICS:-1}"
+PREFLIGHT_ONLY="${PREFLIGHT_ONLY:-0}"
 
 die() {
   echo "ERROR: $*" >&2
@@ -71,7 +84,7 @@ die() {
   || die "Missing WOMD validation directory: ${WOMD_ROOT}/validation"
 
 VAL_SHARD_COUNT="$(
-  python - "${WOMD_ROOT}/validation" <<'PY'
+  "${PYTHON_BIN}" - "${WOMD_ROOT}/validation" <<'PY'
 from pathlib import Path
 import sys
 
@@ -89,7 +102,7 @@ echo "Waymax input pattern: ${WOMD_VAL}"
 
 if [[ -d "${WOMD_ROOT}/validation_interactive" ]]; then
   INTERACTIVE_COUNT="$(
-    python - "${WOMD_ROOT}/validation_interactive" <<'PY'
+    "${PYTHON_BIN}" - "${WOMD_ROOT}/validation_interactive" <<'PY'
 from pathlib import Path
 import sys
 root = Path(sys.argv[1])
@@ -100,26 +113,49 @@ PY
   echo "it is intentionally excluded from the primary IID val/test build."
 fi
 
-# The strict contact gate requires the integrity patch that separates observed
-# contact from generated contact-surrogate branches.
+# The clean contact gate requires two explicit labels.  Verify both the source
+# file and the module Python will actually import before starting a long build.
 REGIME_FILE="${OCRAP_REPO}/src/ocrap/data/build/regimes.py"
-if [[ -f "${REGIME_FILE}" ]]; then
-  grep -q "post_contact_counterfactual" "${REGIME_FILE}" \
-    || die "The contact-regime integrity patch is not applied to ${REGIME_FILE}."
-else
-  python - <<'PY' || exit 1
+[[ -f "${REGIME_FILE}" ]] || die "Missing source file: ${REGIME_FILE}"
+grep -q '"post_contact_observed"' "${REGIME_FILE}" \
+  || die "${REGIME_FILE} does not define post_contact_observed. Use the synchronized code package."
+grep -q '"post_contact_counterfactual"' "${REGIME_FILE}" \
+  || die "${REGIME_FILE} does not define post_contact_counterfactual. Use the synchronized code package."
+
+"${PYTHON_BIN}" - "${OCRAP_REPO}" <<'PY'
+from pathlib import Path
 import inspect
 import ocrap.data.build.regimes as regimes
+import ocrap.data.build.builder as builder
+import sys
 
-src = inspect.getsource(regimes)
-if "post_contact_counterfactual" not in src:
+repo = Path(sys.argv[1]).resolve()
+regime_path = Path(inspect.getsourcefile(regimes) or "").resolve()
+builder_path = Path(inspect.getsourcefile(builder) or "").resolve()
+expected_regime = (repo / "src/ocrap/data/build/regimes.py").resolve()
+expected_builder = (repo / "src/ocrap/data/build/builder.py").resolve()
+
+if regime_path != expected_regime or builder_path != expected_builder:
     raise SystemExit(
-        "ERROR: installed ocrap.data.build.regimes does not contain "
-        "post_contact_counterfactual. Apply ocrap_dataset_integrity.patch first."
+        "ERROR: Python is importing a different OC-RAP installation. "
+        f"regimes={regime_path}, builder={builder_path}, expected_repo={repo}"
     )
-print("Using installed OC-RAP package; contact-regime integrity patch detected.")
+
+src = inspect.getsource(regimes.assign_regimes)
+required = {"post_contact_observed", "post_contact_counterfactual"}
+missing = sorted(k for k in required if k not in src)
+if missing:
+    raise SystemExit(f"ERROR: assign_regimes is missing labels: {missing}")
+
+builder_src = inspect.getsource(builder.build_dataset)
+if 'iter_cfg["scenario_start_index"] = 0' not in builder_src:
+    raise SystemExit(
+        "ERROR: builder.py is missing the single-application "
+        "scenario_start_index fix."
+    )
+
+print(f"OC-RAP source preflight passed: {repo}")
 PY
-fi
 
 for d in \
   val_safe test_safe \
@@ -131,6 +167,11 @@ do
 done
 
 mkdir -p "${OCRAP_ROOT}"
+
+if [[ "${PREFLIGHT_ONLY}" == "1" ]]; then
+  echo "Preflight-only mode passed; no dataset was built."
+  exit 0
+fi
 
 # -----------------------------------------------------------------------------
 # Shared configuration
@@ -175,7 +216,7 @@ build_safe() {
   echo
   echo "==== Building ${output} from validation worker ${worker}/${PARTITION_STRIDE} ===="
 
-  python -m ocrap.cli build-dataset \
+  run_ocrap build-dataset \
     "${COMMON[@]}" \
     --set scenario_worker_index="${worker}" \
     --set max_scenarios="${max_scenarios}" \
@@ -212,7 +253,7 @@ build_near() {
   echo
   echo "==== Building ${output} from validation worker ${worker}/${PARTITION_STRIDE} ===="
 
-  python -m ocrap.cli build-dataset \
+  run_ocrap build-dataset \
     "${COMMON[@]}" \
     --set scenario_worker_index="${worker}" \
     --set max_scenarios="${max_scenarios}" \
@@ -263,7 +304,7 @@ build_contact() {
   echo
   echo "==== Building ${output} from validation worker ${worker}/${PARTITION_STRIDE} ===="
 
-  python -m ocrap.cli build-dataset \
+  run_ocrap build-dataset \
     "${COMMON[@]}" \
     --set scenario_worker_index="${worker}" \
     --set max_scenarios="${max_scenarios}" \
@@ -345,11 +386,11 @@ if [[ "${RUN_DIAGNOSTICS}" == "1" ]]; then
     val_near_contact test_near_contact \
     val_contact test_contact
   do
-    python -m ocrap.cli diagnose \
+    run_ocrap diagnose \
       --dataset "${OCRAP_ROOT}/${d}" \
       --output "${OCRAP_ROOT}/reports/diagnose_${d}.json"
 
-    python -m ocrap.cli papercheck \
+    run_ocrap papercheck \
       --dataset "${OCRAP_ROOT}/${d}" \
       --output "${OCRAP_ROOT}/reports/papercheck_${d}.json"
   done
@@ -359,7 +400,7 @@ fi
 # Hard audit: scene isolation, minimum counts, and regime purity
 # -----------------------------------------------------------------------------
 
-python - \
+"${PYTHON_BIN}" - \
   "${OCRAP_ROOT}" \
   "${MIN_VAL_SAFE}" "${MIN_TEST_SAFE}" \
   "${MIN_VAL_NEAR}" "${MIN_TEST_NEAR}" \

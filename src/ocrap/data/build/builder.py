@@ -1700,6 +1700,11 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
     raw_scene_ids: set[str] = set()
     scenario_start_index = max(0, int(cfg.get("scenario_start_index", 0)))
     iter_cfg = dict(cfg)
+    # ``scenario_start_index`` is a builder-level offset.  The Waymax loader
+    # also supports the same option, so forwarding it unchanged and then using
+    # ``itertools.islice`` below skips the requested prefix twice.  Clear the
+    # delegated value and apply the offset exactly once in this function.
+    iter_cfg["scenario_start_index"] = 0
     # Allow disjoint subsets within the same WOMD shard pattern, e.g. use
     # ${WOMD_VAL}@150 for both validation and held-out safe testing while
     # skipping the first N scenarios consumed by val_safe.  The loader-level

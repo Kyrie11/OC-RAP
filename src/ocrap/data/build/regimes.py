@@ -79,7 +79,24 @@ def assign_regimes(samples: list[DatasetSample], history: SceneHistory, cfg: dic
         prefix_collision = bool(s.prefix.diagnostics.get("prefix_collision", False))
         prefix_contact = bool(s.prefix.diagnostics.get("prefix_contact", False))
         near = bool(history_near or (include_prefix_collision_in_near and prefix_collision))
-        post = bool(history_contact or (include_prefix_contact_in_post and prefix_contact) or any(f.metadata.get("contact_surrogate", False) for f in s.futures))
+        # Keep the public paper-level ``post_contact`` union for backward
+        # compatibility, but expose its two semantically different sources.
+        #
+        # * observed: the logged history is already in contact (or, when the
+        #   legacy flag is enabled, the candidate prefix itself makes contact);
+        # * counterfactual: at least one generated future is explicitly tagged
+        #   as a contact-surrogate recovery branch.
+        #
+        # This separation is required for clean contact-surrogate datasets:
+        # they may require counterfactual contact while forbidding logged/prefix
+        # contact, instead of silently accepting a mixture of both.
+        post_observed = bool(
+            history_contact or (include_prefix_contact_in_post and prefix_contact)
+        )
+        post_counterfactual = bool(
+            any(bool(f.metadata.get("contact_surrogate", False)) for f in s.futures)
+        )
+        post = bool(post_observed or post_counterfactual)
         prefix_safe = bool(
             s.prefix.feasible
             and float(s.prefix.hard_violation) <= tau_prefix_hard
@@ -100,6 +117,8 @@ def assign_regimes(samples: list[DatasetSample], history: SceneHistory, cfg: dic
             "occluded": bool(occ_ratio > tau_occ),
             "near_contact": near,
             "post_contact": post,
+            "post_contact_observed": post_observed,
+            "post_contact_counterfactual": post_counterfactual,
             "oracle_artifact": bool(s.i_art_star),
         }
         # Extra diagnostics for auditing; downstream diagnose ignores unknown
