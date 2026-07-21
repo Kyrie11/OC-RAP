@@ -352,23 +352,23 @@ build_contact() {
 
 build_safe val \
   "${VAL_SAFE_WORKER}" "${VAL_SAFE_RAW}" \
-  "${OCRAP_ROOT}/val_safe"
+  "${OCRAP_ROOT}/val_safe" &
 
 build_safe test \
   "${TEST_SAFE_WORKER}" "${TEST_SAFE_RAW}" \
-  "${OCRAP_ROOT}/test_safe"
+  "${OCRAP_ROOT}/test_safe" &
 
 build_near val \
   "${VAL_NEAR_WORKER}" "${VAL_NEAR_RAW}" \
-  "${OCRAP_ROOT}/val_near_contact"
+  "${OCRAP_ROOT}/val_near_contact" &
 
 build_near test \
   "${TEST_NEAR_WORKER}" "${TEST_NEAR_RAW}" \
-  "${OCRAP_ROOT}/test_near_contact"
+  "${OCRAP_ROOT}/test_near_contact" &
 
 build_contact val \
   "${VAL_CONTACT_WORKER}" "${VAL_CONTACT_RAW}" \
-  "${OCRAP_ROOT}/val_contact"
+  "${OCRAP_ROOT}/val_contact" &
 
 build_contact test \
   "${TEST_CONTACT_WORKER}" "${TEST_CONTACT_RAW}" \
