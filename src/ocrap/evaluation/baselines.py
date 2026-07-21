@@ -253,6 +253,8 @@ def select_baseline(
                 direct_value_counts_as_evidence=_cfg_bool(scfg, "direct_value_counts_as_evidence", True, bucket_name),
                 direct_value_challenge_nominal=_cfg_bool(scfg, "direct_value_challenge_nominal", True, bucket_name),
                 direct_value_max_consecutive=int(_cfg_float(scfg, "direct_value_max_consecutive", 2.0, bucket_name)),
+                direct_value_score_mode=_cfg_bool(scfg, "direct_value_score_mode", False, bucket_name),
+                direct_value_top1_only=_cfg_bool(scfg, "direct_value_top1_only", False, bucket_name),
                 deployability_bonus=_cfg_float(scfg, "deployability_bonus", 0.0, bucket_name),
                 contact_deployability_bonus=_cfg_float(scfg, "contact_deployability_bonus", 0.0, bucket_name),
                 contact_gap_penalty=_cfg_float(scfg, "contact_gap_penalty", 0.0, bucket_name),

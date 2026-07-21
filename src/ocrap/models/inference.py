@@ -127,6 +127,7 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         option_feature_dim=int(ckpt.get("option_feature_dim", OPTION_FEATURE_DIM)),
         direct_recovery_value_head=bool(ckpt.get("direct_recovery_value_head", model_cfg.get("direct_recovery_value_head", False))),
         direct_recovery_value_pooling=str(ckpt.get("direct_recovery_value_pooling", model_cfg.get("direct_recovery_value_pooling", "scene"))),
+        direct_recovery_value_output=str(ckpt.get("direct_recovery_value_output", model_cfg.get("direct_recovery_value_output", "probability"))),
     ).to(device)
     # Strict loading remains the default for checkpoints with matching geometry.
     # A v39 checkpoint can initialize v40 training through train.py's explicit
@@ -139,6 +140,7 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["tau_obs"] = tau_obs
     cfg["model"]["encoder_type"] = encoder_type
     cfg["model"]["direct_recovery_value_pooling"] = str(ckpt.get("direct_recovery_value_pooling", model_cfg.get("direct_recovery_value_pooling", "scene")))
+    cfg["model"]["direct_recovery_value_output"] = str(ckpt.get("direct_recovery_value_output", model_cfg.get("direct_recovery_value_output", "probability")))
     return ModelBundle(model=model, cfg=cfg, device=device)
 
 
@@ -174,8 +176,12 @@ def predict_samples(
     cfg: dict | None = None,
     *,
     shared_scene_features: bool = False,
+    shared_geometry: bool = False,
 ) -> list[Prediction]:
     """Vectorized version of :func:`predict_sample`.
+
+    ``shared_geometry`` is retained as a backward-compatible no-op flag; geometry
+    canonicalization is already deterministic in ``fix_sample_geometry``.
 
     Closed-loop evaluation replans many times and scores every candidate prefix at
     each replan.  Calling ``predict_sample`` once per prefix is correct but pays a
@@ -227,7 +233,10 @@ def predict_samples(
     direct_mean_np = None
     direct_std_np = None
     if "direct_recovery_value_logit" in out:
-        direct_mean_np = torch.sigmoid(out["direct_recovery_value_logit"]).detach().cpu().numpy().astype(np.float32)
+        direct_tensor = out["direct_recovery_value_logit"]
+        if str(getattr(bundle.model, "direct_recovery_value_output", "probability")) != "score":
+            direct_tensor = torch.sigmoid(direct_tensor)
+        direct_mean_np = direct_tensor.detach().cpu().numpy().astype(np.float32)
         direct_std_np = torch.exp(0.5 * out["direct_recovery_value_logvar"]).detach().cpu().numpy().astype(np.float32)
     preds: list[Prediction] = []
     for i in range(len(ds)):
@@ -284,6 +293,6 @@ def predict_sample(d: dict[str, Any], bundle: ModelBundle | None, cfg: dict | No
         root_probs=p.squeeze(0).detach().cpu().numpy().astype(np.float32),
         c_star=out["c_star"].squeeze(0).detach().cpu().numpy().astype(np.float32),
         margins=out["margins"].squeeze(0).detach().cpu().numpy().astype(np.float32),
-        direct_recovery_value=(None if "direct_recovery_value_logit" not in out else float(torch.sigmoid(out["direct_recovery_value_logit"]).squeeze(0).detach().cpu().item())),
+        direct_recovery_value=(None if "direct_recovery_value_logit" not in out else float((out["direct_recovery_value_logit"] if str(getattr(bundle.model, "direct_recovery_value_output", "probability")) == "score" else torch.sigmoid(out["direct_recovery_value_logit"])).squeeze(0).detach().cpu().item())),
         direct_recovery_std=(None if "direct_recovery_value_logvar" not in out else float(torch.exp(0.5 * out["direct_recovery_value_logvar"]).squeeze(0).detach().cpu().item())),
     )

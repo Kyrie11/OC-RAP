@@ -554,6 +554,9 @@ def _epoch(
                 min_group_range=float(tcfg.get("direct_value_min_group_range", 0.01)),
                 false_positive_weight=float(tcfg.get("direct_value_false_positive_weight", 1.0)),
                 variance_floor=float(tcfg.get("direct_value_variance_floor", 0.0025)),
+                output_mode=str(tcfg.get("direct_value_output_mode", model_cfg.get("direct_recovery_value_output", "probability"))),
+                pairwise_weight=float(tcfg.get("direct_value_pairwise_weight", 0.0)),
+                top_rank_weight=float(tcfg.get("direct_value_top_rank_weight", 0.0)),
                 success_gamma=option_gamma,
                 success_temperature=option_temperature,
             )
@@ -568,7 +571,8 @@ def _epoch(
             + float(lw.get("margin", 2.0)) * loss_margin
             + float(lw.get("sig", 0.5)) * (loss_sig + loss_future_sig)
             + float(lw.get("obs", 1.0)) * loss_obs
-            + 0.5 * (loss_dep + loss_orc)
+            + float(lw.get("dep", 0.5)) * loss_dep
+            + float(lw.get("orc", 0.5)) * loss_orc
             + float(lw.get("anti_oracle", 1.0)) * loss_art
             + float(lw.get("artifact_gap", 0.5)) * loss_gap
             + float(lw.get("admission", 0.2)) * loss_admit
@@ -913,6 +917,7 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         option_feature_dim=OPTION_FEATURE_DIM,
         direct_recovery_value_head=bool(model_cfg.get("direct_recovery_value_head", False)),
         direct_recovery_value_pooling=str(model_cfg.get("direct_recovery_value_pooling", "scene")),
+        direct_recovery_value_output=str(model_cfg.get("direct_recovery_value_output", "probability")),
     ).to(device)
     tcfg = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
 
@@ -1010,6 +1015,7 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "option_feature_dim": OPTION_FEATURE_DIM,
             "direct_recovery_value_head": bool(model_cfg.get("direct_recovery_value_head", False)),
             "direct_recovery_value_pooling": str(model_cfg.get("direct_recovery_value_pooling", "scene")),
+            "direct_recovery_value_output": str(model_cfg.get("direct_recovery_value_output", "probability")),
             "model_state": model.state_dict(),
             "optimizer_state": opt.state_dict(),
             "epoch": int(ep),

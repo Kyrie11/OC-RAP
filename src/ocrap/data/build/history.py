@@ -136,3 +136,35 @@ def construct_history(raw: RawScenario, t: int, cfg: dict) -> SceneHistory:
     )
     h.occ_mask = render_base_occ_mask(h, cfg)
     return h
+
+
+def construct_history_from_waymax_state(
+    state,
+    static_template: RawScenario,
+    t: int,
+    cfg: dict,
+    *,
+    scenario_id: str | None = None,
+    scenario_index: int | None = None,
+) -> SceneHistory:
+    """Construct a history directly from a Waymax state.
+
+    This compatibility implementation preserves the exact legacy splice
+    semantics.  Deployments may replace it with the optimized zero-copy path,
+    but keeping the reference implementation here prevents the hot-path caller
+    and its regression test from depending on an unavailable symbol.
+    """
+    from ocrap.data.waymax_loader import raw_scenario_from_waymax_state
+
+    sid = str(scenario_id or static_template.scenario_id)
+    idx = int(0 if scenario_index is None else scenario_index)
+    raw = raw_scenario_from_waymax_state(
+        state,
+        sid,
+        idx,
+        cfg,
+        trajectory_mode="closed_loop_splice",
+        splice_until=int(t),
+        static_template=static_template,
+    )
+    return construct_history(raw, int(t), cfg)

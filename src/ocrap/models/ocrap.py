@@ -39,6 +39,7 @@ class OCRAPModel(nn.Module):
         option_feature_dim: int = 0,
         direct_recovery_value_head: bool = False,
         direct_recovery_value_pooling: str = "scene",
+        direct_recovery_value_output: str = "probability",
     ):
         super().__init__()
         self.num_roots = int(num_roots)
@@ -53,6 +54,9 @@ class OCRAPModel(nn.Module):
         self.option_feature_dim = int(option_feature_dim)
         self.direct_recovery_value_head = bool(direct_recovery_value_head)
         self.direct_recovery_value_pooling = str(direct_recovery_value_pooling or "scene").strip().lower()
+        self.direct_recovery_value_output = str(direct_recovery_value_output or "probability").strip().lower()
+        if self.direct_recovery_value_output not in {"probability", "score"}:
+            raise ValueError(f"Unsupported direct_recovery_value_output={direct_recovery_value_output!r}")
 
         if self.encoder_type == "structured_transformer":
             layout = FlatFeatureLayout(**self.feature_layout)
@@ -109,8 +113,23 @@ class OCRAPModel(nn.Module):
         # ``candidate_concat`` exposes the encoded ego/prefix/macro/state/control
         # tokens to a small trainable adapter without changing any OC-MERO head.
         direct_in_dim = d_model
+        self.direct_candidate_raw_dim = 0
         if self.direct_recovery_value_pooling in {"candidate_concat", "prefix_concat", "action_concat"}:
             direct_in_dim = 6 * d_model
+        elif self.direct_recovery_value_pooling in {"candidate_concat_raw", "action_concat_raw", "certificate_action_adapter"}:
+            # Certificate-preserving dual pathway: keep the frozen contextual
+            # OC-MERO tokens, but expose raw ego/prefix/macro/state/control
+            # blocks to the trainable action-value adapter.  This prevents a
+            # frozen certificate encoder from discarding counterfactual action
+            # differences while leaving all calibrated certificate heads intact.
+            if self.encoder_type != "structured_transformer":
+                raise ValueError("candidate_concat_raw requires structured_transformer")
+            layout = FlatFeatureLayout(**self.feature_layout)
+            self.direct_candidate_raw_dim = int(
+                layout.ego_dim + layout.prefix_param_dim + layout.num_macros + layout.scalar_dim
+                + layout.prefix_flat_dim + layout.control_flat_dim
+            )
+            direct_in_dim = 6 * d_model + self.direct_candidate_raw_dim
         self.direct_value_head = (
             nn.Sequential(
                 nn.LayerNorm(direct_in_dim),
@@ -160,6 +179,15 @@ class OCRAPModel(nn.Module):
         semantic = self.option_feature_proj(opt_feat).unsqueeze(1).expand(-1, self.num_roots, -1, -1)
         return learned + semantic
 
+    def _candidate_raw_features(self, x: torch.Tensor) -> torch.Tensor:
+        """Return raw candidate-conditioned blocks used only by the value adapter."""
+        if self.direct_candidate_raw_dim <= 0:
+            return x[:, :0]
+        # FlatFeatureLayout places ego, prefix parameters, macro/scalars, prefix
+        # states and controls first, so the candidate-conditioned slice is
+        # contiguous and does not include future/audit labels.
+        return x[:, : self.direct_candidate_raw_dim]
+
     def forward(self, x: torch.Tensor, option_features: torch.Tensor | None = None) -> dict[str, torch.Tensor]:
         memory = self._scene_tokens(x)
         scene_token = memory[:, 0]
@@ -187,7 +215,7 @@ class OCRAPModel(nn.Module):
         }
         if self.direct_value_head is not None:
             direct_features = scene_token
-            if self.direct_recovery_value_pooling in {"candidate_concat", "prefix_concat", "action_concat"}:
+            if self.direct_recovery_value_pooling in {"candidate_concat", "prefix_concat", "action_concat", "candidate_concat_raw", "action_concat_raw", "certificate_action_adapter"}:
                 # Token order from StructuredTokenEncoder is
                 # [CLS, ego, prefix_param, macro+scalar, prefix_state, control, ...].
                 # For the MLP fallback, repeat the only token to retain geometry.
@@ -195,6 +223,8 @@ class OCRAPModel(nn.Module):
                     direct_features = torch.cat([memory[:, i] for i in range(6)], dim=-1)
                 else:
                     direct_features = scene_token.repeat(1, 6)
+                if self.direct_recovery_value_pooling in {"candidate_concat_raw", "action_concat_raw", "certificate_action_adapter"}:
+                    direct_features = torch.cat([direct_features, self._candidate_raw_features(x)], dim=-1)
             direct = self.direct_value_head(direct_features)
             out["direct_recovery_value_logit"] = direct[:, 0]
             out["direct_recovery_value_logvar"] = direct[:, 1].clamp(-7.0, 2.0)

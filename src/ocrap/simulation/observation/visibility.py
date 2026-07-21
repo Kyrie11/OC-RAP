@@ -1,20 +1,35 @@
 from __future__ import annotations
 
 import math
+from functools import lru_cache
 
 import numpy as np
 
 from ocrap.utils.geometry import agent_state_to_box, wrap_angle
 
 
+@lru_cache(maxsize=32)
 def grid_coords(radius: float, resolution: float) -> tuple[np.ndarray, np.ndarray]:
-    # Use an ego-centred lattice that contains (0, 0).  This makes the
-    # visibility geometry symmetric and avoids losing the exact route centreline
-    # when the resolution divides the radius.
+    # Use an ego-centred lattice that contains (0, 0).  Cache read-only arrays
+    # because BEV construction repeatedly requests the same geometry.
+    radius = float(radius); resolution = float(resolution)
     n = max(3, int(round(2 * radius / resolution)) + 1)
     xs = np.linspace(-radius, radius, n, dtype=np.float32)
     ys = np.linspace(-radius, radius, n, dtype=np.float32)
-    return np.meshgrid(xs, ys, indexing="xy")
+    X, Y = np.meshgrid(xs, ys, indexing="xy")
+    X.setflags(write=False); Y.setflags(write=False)
+    return X, Y
+
+
+@lru_cache(maxsize=32)
+def ego_centered_grid_geometry(radius: float, resolution: float) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Cached XY, polar radius/angle and in-range mask for ego-centred BEV."""
+    X, Y = grid_coords(float(radius), float(resolution))
+    R = np.sqrt(X * X + Y * Y).astype(np.float32)
+    T = np.arctan2(Y, X).astype(np.float32)
+    M = (R <= float(radius))
+    R.setflags(write=False); T.setflags(write=False); M.setflags(write=False)
+    return X, Y, R, T, M
 
 
 def angular_interval_for_box(box: np.ndarray, ego_xy: np.ndarray) -> tuple[float, float, float]:

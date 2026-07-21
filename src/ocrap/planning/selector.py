@@ -233,6 +233,8 @@ def calibrated_constrained_select(
     direct_value_counts_as_evidence: bool = True,
     direct_value_challenge_nominal: bool = True,
     direct_value_max_consecutive: int = 2,
+    direct_value_score_mode: bool = False,
+    direct_value_top1_only: bool = False,
     deployability_bonus: float = 0.0,
     contact_deployability_bonus: float = 0.0,
     contact_gap_penalty: float = 0.0,
@@ -490,7 +492,9 @@ def calibrated_constrained_select(
     gap = np.maximum(0.0, _as_1d_float(pred_gap, n, default=0.0))
     dev = np.maximum(0.0, _as_1d_float(nominal_deviation, n, default=0.0))
     drs_proxy = np.clip(_as_1d_float(pred_drs, n, default=0.0), 0.0, 1.0)
-    direct_value = np.clip(_as_1d_float(pred_direct_value, n, default=0.0), 0.0, 1.0)
+    direct_value = _as_1d_float(pred_direct_value, n, default=0.0)
+    if not bool(direct_value_score_mode):
+        direct_value = np.clip(direct_value, 0.0, 1.0)
     direct_std = np.maximum(0.0, _as_1d_float(pred_direct_std, n, default=1.0))
     macro_names = _as_macro_names(candidate_macro_names, n)
 
@@ -577,6 +581,7 @@ def calibrated_constrained_select(
     # and the candidate is physically/semantically bounded.
     direct_advantage_lcb = np.full((n,), -np.inf, dtype=float)
     direct_value_challenge = np.zeros((n,), dtype=bool)
+    direct_actionable = np.zeros((n,), dtype=bool)
     if bool(direct_value_certificate) and 0 <= int(nominal_index) < n and pred_direct_value is not None:
         ni = int(nominal_index)
         raw_direct_advantage = direct_value - direct_value[ni]
@@ -595,17 +600,28 @@ def calibrated_constrained_select(
         direct_macro_mask = np.asarray([bool(m) for m in macro_names], dtype=bool)
         if direct_macro_allow:
             direct_macro_mask &= np.asarray([m in direct_macro_allow for m in macro_names], dtype=bool)
-        direct_value_challenge = (
+        candidate_floor_ok = np.ones((n,), dtype=bool) if bool(direct_value_score_mode) else (direct_value >= float(direct_value_min_candidate_value))
+        direct_actionable = (
             feasible
             & (hard <= float(direct_value_max_hard))
             & (harm <= float(direct_value_max_harm))
             & direct_macro_mask
             & (dev >= float(direct_value_min_nominal_deviation))
-            & (direct_value >= float(direct_value_min_candidate_value))
+            & candidate_floor_ok
             & ((direct_std <= float(direct_value_max_candidate_std)) if uncertainty_mode not in {"additive", "conformal_additive", "residual", "none", "raw"} else np.ones((n,), dtype=bool))
-            & (direct_advantage_lcb >= float(direct_value_min_advantage_lcb))
         )
-        direct_value_challenge[ni] = False
+        direct_actionable[ni] = False
+        # The top-1 rule is applied here, before any direct-value reward enters
+        # the selector score.  This exactly mirrors the selection-conditional
+        # conformal calibration rule.  Admission remains an independent OC-MERO
+        # requirement later; an unadmitted top-1 candidate therefore causes
+        # abstention rather than an uncalibrated fall-through to rank 2.
+        if bool(direct_value_top1_only) and bool(direct_actionable.any()):
+            chosen = int(np.argmax(np.where(direct_actionable, raw_direct_advantage, -np.inf)))
+            keep = np.zeros((n,), dtype=bool)
+            keep[chosen] = True
+            direct_actionable &= keep
+        direct_value_challenge = direct_actionable & (direct_advantage_lcb >= float(direct_value_min_advantage_lcb))
         if int(direct_value_max_consecutive) >= 0:
             prev_macro = str(previous_selected_macro or "").strip().lower()
             try:
@@ -955,8 +971,6 @@ def calibrated_constrained_select(
         score = score + float(protective_macro_bonus) * prot_adv * protective_certified.astype(float)
     if bool(pcd_rescue_certificate) and float(pcd_rescue_bonus) != 0.0:
         score = score + float(pcd_rescue_bonus) * np.maximum(0.0, pcd_gain_vs_nom) * pcd_rescue_certified.astype(float)
-    if bool(direct_value_certificate) and float(direct_value_bonus) != 0.0:
-        score = score + float(direct_value_bonus) * np.maximum(0.0, direct_advantage_lcb) * direct_value_challenge.astype(float)
     if is_contact_regime:
         score = score + float(contact_deployability_bonus) * drs_proxy - float(contact_gap_penalty) * gap
 
@@ -970,6 +984,14 @@ def calibrated_constrained_select(
             admitted = admitted & intervention_macro_mask
             if 0 <= int(nominal_index) < n and (scalar_admitted[int(nominal_index)] or safe[int(nominal_index)]):
                 admitted[int(nominal_index)] = True
+
+    # OC-SAVA is preference-only: its score cannot create, remove, or otherwise
+    # perturb the independently computed OC-MERO admission set.  Only after that
+    # set is finalized do we permit the calibrated top-1 action to receive a
+    # ranking bonus; if it is not admitted, the selector abstains.
+    direct_value_challenge &= admitted
+    if bool(direct_value_certificate) and float(direct_value_bonus) != 0.0:
+        score = score + float(direct_value_bonus) * np.maximum(0.0, direct_advantage_lcb) * direct_value_challenge.astype(float)
 
     # If the current rollout already exceeded the intervention budget, increase
     # the marginal cost of deviating from nominal.  This is intentionally a soft

@@ -510,6 +510,28 @@ def _state_geometry_metrics(state: Any, sdc: int) -> dict[str, float]:
         return {}
 
 
+def _state_geometry_snapshot(state: Any, sdc: int, *, timestep: int | None = None) -> tuple[dict[str, float], list[float]]:
+    """Return current geometry metrics and ego XY in one trajectory read."""
+    try:
+        tr = state.sim_trajectory
+        t = _current_timestep(state) if timestep is None else int(timestep)
+        # _state_geometry_metrics intentionally uses state's current timestep.
+        # Test/runtime calls pass the current value, so this preserves semantics.
+        metrics = _state_geometry_metrics(state, sdc)
+        xy = [float(_as_np(tr.x)[sdc, t]), float(_as_np(tr.y)[sdc, t])]
+        return metrics, xy
+    except Exception:
+        return _state_geometry_metrics(state, sdc), []
+
+
+def _step_metrics_geometry_snapshot(waymax_env: Any, state: Any, sdc: int) -> tuple[dict[str, float], list[float], int, bool]:
+    """Collect Waymax metrics, physical margins, trace point and state flags."""
+    metrics = _metric_summary(waymax_env, state, sdc)
+    geom, xy = _state_geometry_snapshot(state, sdc)
+    metrics.update(geom)
+    return metrics, xy, _current_timestep(state), _scene_done(state)
+
+
 def _scene_done(state: Any) -> bool:
     try:
         return bool(_as_np(state.is_done).reshape(()).item())

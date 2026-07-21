@@ -1270,6 +1270,9 @@ def direct_uncertainty_recovery_value_loss(
     min_group_range: float = 0.01,
     false_positive_weight: float = 1.0,
     variance_floor: float = 0.0025,
+    output_mode: str = "probability",
+    pairwise_weight: float = 0.0,
+    top_rank_weight: float = 0.0,
     success_gamma: float = 0.0,
     success_temperature: float = 0.25,
 ) -> torch.Tensor:
@@ -1288,7 +1291,15 @@ def direct_uncertainty_recovery_value_loss(
     """
     if pred_logit.numel() <= 1:
         return pred_logit.sum() * 0.0
-    mean = torch.sigmoid(pred_logit.float().reshape(-1))
+    raw_score = pred_logit.float().reshape(-1)
+    mode = str(output_mode or "probability").strip().lower()
+    if mode not in {"probability", "score"}:
+        raise ValueError(f"Unsupported direct value output mode: {output_mode!r}")
+    # v42 OCSAVA predicts an unbounded preference score. Only the optional
+    # absolute anchor is mapped through sigmoid; pairwise/listwise objectives
+    # operate on the raw score so candidate advantages are not compressed.
+    score = raw_score if mode == "score" else torch.sigmoid(raw_score)
+    point_mean = torch.sigmoid(raw_score)
     logvar = pred_logvar.float().reshape(-1).clamp(-7.0, 2.0)
     trd = torch.nan_to_num(teacher_r_dep.float().reshape(-1), nan=-20.0, posinf=20.0, neginf=-20.0)
     tro = torch.nan_to_num(teacher_r_orc.float().reshape(-1), nan=-20.0, posinf=20.0, neginf=-20.0)
@@ -1301,22 +1312,22 @@ def direct_uncertainty_recovery_value_loss(
     mac = macro_type_id.reshape(-1)
     isn = is_nominal.float().reshape(-1) > 0.5
     bid = bucket_id.reshape(-1)
-    n = min(mean.numel(), logvar.numel(), trd.numel(), tro.numel(), teacher_drs.numel(), sh.numel(), ti.numel(), mac.numel(), isn.numel(), bid.numel())
-    mean, logvar, trd, tro, teacher_drs = mean[:n], logvar[:n], trd[:n], tro[:n], teacher_drs[:n]
+    n = min(score.numel(), point_mean.numel(), logvar.numel(), trd.numel(), tro.numel(), teacher_drs.numel(), sh.numel(), ti.numel(), mac.numel(), isn.numel(), bid.numel())
+    score, point_mean, logvar, trd, tro, teacher_drs = score[:n], point_mean[:n], logvar[:n], trd[:n], tro[:n], teacher_drs[:n]
     sh, ti, mac, isn, bid = sh[:n], ti[:n], mac[:n], isn[:n], bid[:n]
-    bucket_mask = torch.zeros((n,), dtype=torch.bool, device=mean.device)
+    bucket_mask = torch.zeros((n,), dtype=torch.bool, device=score.device)
     for b in tuple(int(x) for x in bucket_ids):
         bucket_mask |= bid == b
-    finite = bucket_mask & torch.isfinite(mean) & torch.isfinite(logvar) & torch.isfinite(trd) & torch.isfinite(tro) & torch.isfinite(teacher_drs)
+    finite = bucket_mask & torch.isfinite(score) & torch.isfinite(point_mean) & torch.isfinite(logvar) & torch.isfinite(trd) & torch.isfinite(tro) & torch.isfinite(teacher_drs)
     if not bool(finite.any()):
         return pred_logit.sum() * 0.0
     teacher_gap = torch.clamp(tro - trd, min=0.0)
     target = _torch_pcd_score(teacher_drs, trd, teacher_gap).detach().clamp(0.0, 1.0)
     variance = torch.exp(logvar).clamp_min(float(variance_floor))
-    point = 0.5 * ((mean - target) ** 2 / variance + torch.log(variance))
+    point = 0.5 * ((point_mean - target) ** 2 / variance + torch.log(variance))
     point_loss = point[finite].mean()
 
-    macro_mask = torch.zeros((n,), dtype=torch.bool, device=mean.device)
+    macro_mask = torch.zeros((n,), dtype=torch.bool, device=score.device)
     for m in tuple(int(x) for x in macro_ids):
         macro_mask |= mac == m
     keys = torch.stack([sh, ti], dim=1)
@@ -1331,7 +1342,7 @@ def direct_uncertainty_recovery_value_loss(
             continue
         nom = noms[0]
         t_delta = target[recs] - target[nom]
-        p_delta = mean[recs] - mean[nom]
+        p_delta = score[recs] - score[nom]
         # Emphasise decision-relevant deltas while retaining all candidates.
         mag_w = 1.0 + torch.clamp(t_delta.abs() / max(float(positive_gain), 1.0e-3), max=4.0)
         centered = (mag_w * F.smooth_l1_loss(p_delta, t_delta, reduction='none')).sum() / mag_w.sum().clamp_min(1.0e-6)
@@ -1339,11 +1350,25 @@ def direct_uncertainty_recovery_value_loss(
         group_range = float((target[idx].max() - target[idx].min()).item())
         if group_range >= float(min_group_range) and float(listwise_weight) > 0.0:
             teacher_prob = torch.softmax((target[idx] - target[idx].mean()) / tau, dim=0)
-            pred_log_prob = torch.log_softmax((mean[idx] - mean[idx].mean()) / tau, dim=0)
+            pred_log_prob = torch.log_softmax((score[idx] - score[idx].mean()) / tau, dim=0)
             terms.append(float(listwise_weight) * F.kl_div(pred_log_prob, teacher_prob, reduction='sum'))
         best_j = int(torch.argmax(t_delta).item())
         t_adv = t_delta[best_j]
         p_adv = p_delta[best_j]
+        pos_mask = t_delta >= float(positive_gain)
+        neg_mask = t_delta <= 0.0
+        if float(pairwise_weight) > 0.0:
+            pair_terms = []
+            if bool(pos_mask.any()):
+                pair_terms.append(F.softplus((float(rank_margin) - p_delta[pos_mask]) / tau).mean() * tau)
+            if bool(neg_mask.any()):
+                pair_terms.append(float(false_positive_weight) * F.softplus((p_delta[neg_mask] + float(rank_margin)) / tau).mean() * tau)
+            if pair_terms:
+                terms.append(float(pairwise_weight) * torch.stack(pair_terms).sum())
+        if float(top_rank_weight) > 0.0 and bool(pos_mask.any()) and bool(neg_mask.any()):
+            best_pos = p_delta[best_j]
+            strongest_neg = torch.max(p_delta[neg_mask])
+            terms.append(float(top_rank_weight) * F.softplus((float(rank_margin) - (best_pos - strongest_neg)) / tau) * tau)
         if float(t_adv.item()) >= float(positive_gain):
             cls_w = float(positive_group_weight)
             terms.append(float(advantage_weight) * (F.smooth_l1_loss(p_adv, t_adv) + F.softplus((float(rank_margin) - p_adv) / tau) * tau))
