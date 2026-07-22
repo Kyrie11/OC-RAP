@@ -3,8 +3,8 @@
 
 Example:
   python tools/merge_dataset_shards.py \
-    --output dataset/smoke/train_safe_v2_merged \
-    dataset/smoke/train_safe_v2_w0 dataset/smoke/train_safe_v2_w1
+    --replace-output --output dataset/train_safe \
+    dataset/.train_safe_shards/worker0 dataset/.train_safe_shards/worker1
 """
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ import csv
 import json
 import os
 import shutil
+import time
 from pathlib import Path
 from typing import Any
 
@@ -114,13 +115,60 @@ def merge_shards(output: Path, shards: list[Path], *, copy: bool = True) -> dict
     return summary
 
 
+def merge_shards_replace(output: Path, shards: list[Path], *, copy: bool = True) -> dict[str, Any]:
+    """Build a clean sibling directory, then atomically replace the output.
+
+    Re-merging directly into an existing samples/ directory can leave stale NPZ
+    files that are not present in the new manifest.  A temporary complete merge
+    followed by a same-filesystem rename prevents that class of contamination.
+    """
+    output = output.expanduser().resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    token = f"{os.getpid()}_{int(time.time() * 1e6)}"
+    temp = output.parent / f".{output.name}.merge_tmp_{token}"
+    backup = output.parent / f".{output.name}.merge_backup_{token}"
+    shutil.rmtree(temp, ignore_errors=True)
+    summary = merge_shards(temp, shards, copy=copy)
+    moved_old = False
+    installed_new = False
+    try:
+        if output.exists() or output.is_symlink():
+            os.replace(output, backup)
+            moved_old = True
+        os.replace(temp, output)
+        installed_new = True
+        summary["manifest"] = str(output / "manifest.csv")
+        summary["sample_dir"] = str(output / "samples")
+        with (output / "dataset_summary.json").open("w", encoding="utf-8") as f:
+            json.dump(summary, f, indent=2, sort_keys=True, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        if moved_old:
+            shutil.rmtree(backup, ignore_errors=True)
+        return summary
+    except Exception:
+        if installed_new and output.exists():
+            shutil.rmtree(output, ignore_errors=True)
+        if moved_old and backup.exists():
+            os.replace(backup, output)
+        raise
+    finally:
+        shutil.rmtree(temp, ignore_errors=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Merge OC-RAP dataset shards into one manifest/sample directory.")
     parser.add_argument("shards", nargs="+", help="Shard dataset directories containing manifest.csv and samples/.")
     parser.add_argument("--output", required=True, help="Merged dataset output directory.")
     parser.add_argument("--symlink", action="store_true", help="Symlink samples instead of copying them.")
+    parser.add_argument(
+        "--replace-output",
+        action="store_true",
+        help="Merge into a clean temporary directory and atomically replace the output.",
+    )
     args = parser.parse_args()
-    summary = merge_shards(Path(args.output), [Path(s) for s in args.shards], copy=not args.symlink)
+    fn = merge_shards_replace if args.replace_output else merge_shards
+    summary = fn(Path(args.output), [Path(s) for s in args.shards], copy=not args.symlink)
     print(summary)
 
 

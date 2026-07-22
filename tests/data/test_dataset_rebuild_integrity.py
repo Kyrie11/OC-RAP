@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from ocrap.config.defaults import DEFAULT_CONFIG
 from ocrap.data.build import builder, regimes
@@ -88,3 +89,28 @@ def test_builder_applies_scenario_start_index_once(tmp_path, monkeypatch):
     assert result["num_samples"] == 0
     assert captured["scenario_start_index"] == 0
     assert captured["max_scenarios"] == 5
+
+
+def test_resume_fingerprint_ignores_scan_scope_but_not_teacher_semantics():
+    cfg_a = dict(DEFAULT_CONFIG)
+    cfg_a.update({"max_scenarios": 100, "scenario_worker_index": 0, "scenario_stride": 2})
+    cfg_b = dict(cfg_a)
+    cfg_b.update({"max_scenarios": 1000, "scenario_worker_index": 1, "scenario_stride": 6})
+    assert builder._resume_config_fingerprint(cfg_a) == builder._resume_config_fingerprint(cfg_b)
+
+    cfg_c = dict(cfg_a)
+    cfg_c["num_targeted_futures"] = int(cfg_a.get("num_targeted_futures", 0)) + 1
+    assert builder._resume_config_fingerprint(cfg_a) != builder._resume_config_fingerprint(cfg_c)
+
+
+def test_resume_contract_rejects_semantic_mismatch(tmp_path, monkeypatch):
+    monkeypatch.setattr(builder, "scenario_iterator", lambda _cfg: iter(()))
+    cfg = dict(DEFAULT_CONFIG)
+    cfg.update({"progress": False, "io": {"compress_npz": False, "fsync_npz": False}})
+    out = tmp_path / "contract"
+    builder.build_dataset(out, cfg)
+
+    changed = dict(cfg)
+    changed["num_targeted_futures"] = int(cfg.get("num_targeted_futures", 0)) + 1
+    with pytest.raises(RuntimeError, match="different semantic build config"):
+        builder.build_dataset(out, changed, skip_existing=True)

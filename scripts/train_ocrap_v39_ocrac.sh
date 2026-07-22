@@ -11,6 +11,7 @@ export RUN=${RUN:-runs/ocrap_v39_ocrac_${VARIANT}}
 export MODEL_DIR=${MODEL_DIR:-$RUN/model_v39_ocrac}
 export CAL_DIR=${CAL_DIR:-$RUN/calibration}
 export TRAIN_GPU=${TRAIN_GPU:-0}
+export FREEZE_PREFIXES=${FREEZE_PREFIXES:-encoder,root_queries,root_cross_attn,root_self_attn,root_norm1,root_norm2,root_norm3,root_ffn}
 mkdir -p "$MODEL_DIR" "$CAL_DIR"
 [[ -f "$INIT_CKPT" ]] || { echo "missing INIT_CKPT=$INIT_CKPT" >&2; exit 2; }
 
@@ -24,7 +25,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" PYTHONUNBUFFERED=1 python -u -m ocrap.cli trai
   --val-dataset "$VAL_MIX" \
   --output "$MODEL_DIR" \
   --set training.init_checkpoint="$INIT_CKPT" \
-  --set training.freeze_param_prefixes=encoder,root_queries,root_cross_attn,root_self_attn,root_norm1,root_norm2,root_norm3,root_ffn \
+  --set training.freeze_param_prefixes="$FREEZE_PREFIXES" \
   --set training.epochs=${EPOCHS:-14} \
   --set training.early_stop_patience=${PATIENCE:-4} \
   --set training.batch_size=${BATCH_SIZE:-64} \

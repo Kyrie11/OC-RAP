@@ -67,8 +67,13 @@ def _group_deviation(items: list[dict[str, Any]]) -> list[float]:
     return out
 
 
-def _fold(scene: str, time_index: int) -> int:
-    payload = f"{scene}|{int(time_index)}".encode("utf-8", errors="replace")
+def _fold(scene: str, time_index: int, fold_unit: str = "scene") -> int:
+    # Scene-disjoint calibration is the default.  Splitting by scene-time lets
+    # different planning instants from the same WOMD scenario leak into fit and
+    # verification folds, substantially overstating held-out evidence when the
+    # number of independent contact scenes is small.
+    key = scene if fold_unit == "scene" else f"{scene}|{int(time_index)}"
+    payload = key.encode("utf-8", errors="replace")
     return int.from_bytes(hashlib.sha1(payload).digest()[:8], "big") % 2
 
 
@@ -177,6 +182,8 @@ def main() -> int:
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--rows-output", type=Path)
     ap.add_argument("--required-min-groups", type=int, default=60)
+    ap.add_argument("--required-min-scenes", type=int, default=20)
+    ap.add_argument("--fold-unit", choices=["scene", "scene_time"], default="scene")
     ap.add_argument("--macro-ids", default="5,7")
     ap.add_argument("--min-nominal-deviation", type=float, default=0.002)
     ap.add_argument("--max-hard", type=float, default=1.0)
@@ -264,12 +271,16 @@ def main() -> int:
             })
             pair_errors.append(abs(pred_adv - teacher_adv))
         groups.append({
-            "scene": scene, "time": int(time_index), "fold": _fold(scene, time_index),
+            "scene": scene, "time": int(time_index), "fold": _fold(scene, time_index, args.fold_unit),
             "pairs": pairs, "oracle_best_teacher_adv": float(max(r["teacher_adv"] for r in pairs)),
         })
 
     fit_groups = [g for g in groups if g["fold"] == 0]
     verify_groups = [g for g in groups if g["fold"] == 1]
+    all_scenes = {str(g["scene"]) for g in groups}
+    fit_scenes = {str(g["scene"]) for g in fit_groups}
+    verify_scenes = {str(g["scene"]) for g in verify_groups}
+    scene_overlap = sorted(fit_scenes & verify_scenes)
     opp_thr, score_thr, fit_metrics, top_candidates = _fit_rule(fit_groups, args)
     verify_top1 = _select_top1(verify_groups, opp_thr) if np.isfinite(opp_thr) else []
     all_top1 = _select_top1(groups, opp_thr) if np.isfinite(opp_thr) else []
@@ -279,6 +290,10 @@ def main() -> int:
     warnings: list[str] = []
     if len(groups) < args.required_min_groups:
         warnings.append(f"num_groups < required_min_groups ({len(groups)} < {args.required_min_groups})")
+    if len(all_scenes) < args.required_min_scenes:
+        warnings.append(f"num_scenes < required_min_scenes ({len(all_scenes)} < {args.required_min_scenes})")
+    if scene_overlap:
+        warnings.append(f"fit/verify scene leakage detected ({len(scene_overlap)} overlapping scenes)")
     if not np.isfinite(opp_thr) or not np.isfinite(score_thr):
         warnings.append("no fit-fold opportunity+score rule satisfied precision/risk/coverage constraints")
     if verify_metrics["num_selected"] < args.min_verify_selected:
@@ -314,7 +329,10 @@ def main() -> int:
         }
 
     valid = (
-        len(groups) >= args.required_min_groups and np.isfinite(opp_thr) and np.isfinite(score_thr)
+        len(groups) >= args.required_min_groups
+        and len(all_scenes) >= args.required_min_scenes
+        and not scene_overlap
+        and np.isfinite(opp_thr) and np.isfinite(score_thr)
         and verify_metrics["num_selected"] >= args.min_verify_selected
         and verify_metrics["challenge_precision"] is not None
         and verify_metrics["challenge_precision"] >= args.min_verify_precision
@@ -334,6 +352,11 @@ def main() -> int:
         "direct_value_risk_controlled_admission": True,
         "num_scene_time_groups": len(raw_groups), "num_calibration_groups": len(groups),
         "fit_groups": len(fit_groups), "verify_groups": len(verify_groups),
+        "fold_unit": args.fold_unit,
+        "num_scenes": len(all_scenes),
+        "fit_scenes": len(fit_scenes),
+        "verify_scenes": len(verify_scenes),
+        "fit_verify_scene_overlap": len(scene_overlap),
         "all_pair_advantage_mae": float(np.mean(pair_errors)) if pair_errors else None,
         "positive_gain": args.positive_gain, "min_nominal_deviation": args.min_nominal_deviation,
         "max_hard": args.max_hard, "max_harm": args.max_harm, "macro_ids": sorted(macro_ids),
@@ -342,6 +365,8 @@ def main() -> int:
             "max_fit_harmful_selected_rate": args.max_fit_harmful_selected_rate,
             "min_verify_selected": args.min_verify_selected, "min_verify_precision": args.min_verify_precision,
             "max_verify_harmful_group_ucb": args.max_verify_harmful_group_ucb,
+            "required_min_groups": args.required_min_groups,
+            "required_min_scenes": args.required_min_scenes,
         },
         "fit": fit_metrics, "verify": verify_metrics, "all": all_metrics,
         "opportunity_distribution": _dist(opp_values),

@@ -7,6 +7,7 @@ import json
 import os
 import time
 from collections import defaultdict
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
@@ -1364,13 +1365,15 @@ def _read_existing_manifest_rows(out: Path, existing_names: set[str]) -> list[di
     if not manifest_path.exists():
         return []
     rows: list[dict] = []
+    seen_names: set[str] = set()
     try:
         with manifest_path.open("r", newline="", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
                 name = Path(row.get("path", "")).name
-                if name in existing_names:
+                if name in existing_names and name not in seen_names:
                     rows.append({field: row.get(field, "") for field in MANIFEST_FIELDS})
+                    seen_names.add(name)
     except Exception:
         return []
     return rows
@@ -1566,8 +1569,21 @@ _RESUME_VOLATILE_CFG_KEYS = {
     "checkpoint_manifest_each_scene_time",
 }
 
+# Scan-scope controls change which deterministic part of the source is visited,
+# not how a scene-time group is materialized.  Excluding them allows a user to
+# safely increase max_scenarios or append another disjoint worker partition
+# without invalidating already completed groups.
+_RESUME_SCAN_SCOPE_CFG_KEYS = {
+    "max_scenarios",
+    "scenario_start_index",
+    "scenario_stride",
+    "scenario_worker_index",
+}
 
-def _resume_jsonable(obj: Any) -> Any:
+_DATASET_GENERATOR_VERSION = "ocrap-dataset-resume-v2-20260722"
+
+
+def _resume_jsonable(obj: Any, *, _depth: int = 0) -> Any:
     """Return a stable JSON representation for resume-marker fingerprints."""
     if isinstance(obj, dict):
         out: dict[str, Any] = {}
@@ -1575,12 +1591,14 @@ def _resume_jsonable(obj: Any) -> Any:
             skey = str(key)
             if skey.startswith("_") or skey in _RESUME_VOLATILE_CFG_KEYS:
                 continue
-            out[skey] = _resume_jsonable(obj[key])
+            if _depth == 0 and skey in _RESUME_SCAN_SCOPE_CFG_KEYS:
+                continue
+            out[skey] = _resume_jsonable(obj[key], _depth=_depth + 1)
         return out
     if isinstance(obj, (list, tuple)):
-        return [_resume_jsonable(v) for v in obj]
+        return [_resume_jsonable(v, _depth=_depth + 1) for v in obj]
     if isinstance(obj, set):
-        return sorted(_resume_jsonable(v) for v in obj)
+        return sorted(_resume_jsonable(v, _depth=_depth + 1) for v in obj)
     if isinstance(obj, (str, int, float, bool)) or obj is None:
         return obj
     return str(obj)
@@ -1594,15 +1612,135 @@ def _resume_config_fingerprint(cfg: dict) -> str:
     does not invalidate resume state, but changing regimes, futures, thresholds,
     teacher settings, or scenario source does.
     """
-    payload = json.dumps(_resume_jsonable(cfg), sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    payload = json.dumps(
+        {
+            "generator_version": _DATASET_GENERATOR_VERSION,
+            "semantic_config": _resume_jsonable(cfg),
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def _resume_contract_path(out: Path) -> Path:
+    return out / "resume_contract.json"
+
+
+def _dataset_has_materialized_content(out: Path) -> bool:
+    sample_dir = out / "samples"
+    return bool(
+        (out / "manifest.csv").exists()
+        or (out / "dataset_summary.json").exists()
+        or (sample_dir.exists() and next(sample_dir.glob("*.npz"), None) is not None)
+    )
+
+
+def _ensure_resume_contract(
+    out: Path,
+    cfg: dict,
+    *,
+    skip_existing: bool,
+    adopt_legacy_resume: bool,
+) -> tuple[str, bool]:
+    """Create or verify the dataset-level semantic resume contract.
+
+    Sample writes are atomic, but atomic files alone cannot prevent a user from
+    resuming the same directory with different teacher/regime parameters.  This
+    contract makes semantic configuration mismatch a hard error.  Legacy
+    partial datasets can be adopted only through an explicit CLI flag.
+    """
+    fingerprint = _resume_config_fingerprint(cfg)
+    path = _resume_contract_path(out)
+    has_content = _dataset_has_materialized_content(out)
+    adopted_legacy = False
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise RuntimeError(f"Invalid resume contract: {path}") from exc
+        existing_fp = str(existing.get("fingerprint", ""))
+        if existing_fp != fingerprint:
+            raise RuntimeError(
+                "Refusing to resume dataset with a different semantic build config: "
+                f"output={out}, existing_fingerprint={existing_fp}, "
+                f"requested_fingerprint={fingerprint}. Use a clean output directory."
+            )
+        if has_content and not skip_existing:
+            raise RuntimeError(
+                f"Output already contains dataset files: {out}. "
+                "Use --resume with the identical semantic configuration, or remove the directory."
+            )
+        return fingerprint, bool(existing.get("adopted_legacy", False))
+
+    if has_content and not skip_existing:
+        raise RuntimeError(
+            f"Output already contains dataset files: {out}. "
+            "Use --resume with the identical semantic configuration, or remove the directory."
+        )
+    if has_content and skip_existing and not adopt_legacy_resume:
+        raise RuntimeError(
+            f"Legacy partial dataset has no resume contract: {out}. "
+            "Re-run once with --resume --adopt-resume-contract after verifying that the "
+            "command matches the original build. Subsequent resumes need only --resume."
+        )
+    adopted_legacy = bool(has_content and skip_existing and adopt_legacy_resume)
+    write_json(
+        {
+            "generator_version": _DATASET_GENERATOR_VERSION,
+            "fingerprint": fingerprint,
+            "semantic_config": _resume_jsonable(cfg),
+            "adopted_legacy": adopted_legacy,
+            "created_unix_s": float(time.time()),
+        },
+        path,
+        fsync=True,
+    )
+    return fingerprint, adopted_legacy
+
+
+@contextmanager
+def _dataset_output_lock(out: Path):
+    """Prevent two builders from mutating one output directory concurrently."""
+    out.mkdir(parents=True, exist_ok=True)
+    lock_path = out / ".build.lock"
+    lock_file = lock_path.open("a+", encoding="utf-8")
+    try:
+        try:
+            import fcntl
+
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError(
+                f"Another dataset builder is already using output directory: {out}"
+            ) from exc
+        lock_file.seek(0)
+        lock_file.truncate()
+        lock_file.write(f"pid={os.getpid()} started_unix_s={time.time():.6f}\n")
+        lock_file.flush()
+        yield
+    finally:
+        try:
+            import fcntl
+
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+        lock_file.close()
 
 
 def _scene_time_done_path(out: Path) -> Path:
     return out / "resume_scene_time_done.jsonl"
 
 
-def _load_completed_scene_time_keys(out: Path, existing_names: set[str], fingerprint: str) -> set[str]:
+def _load_completed_scene_time_keys(
+    out: Path,
+    existing_names: set[str],
+    fingerprint: str,
+    *,
+    accept_legacy_markers: bool = False,
+) -> set[str]:
     """Load scene-time completion markers that are valid for this config.
 
     A marker is trusted only when its config fingerprint matches.  For non-empty
@@ -1625,7 +1763,10 @@ def _load_completed_scene_time_keys(out: Path, existing_names: set[str], fingerp
                     row = json.loads(line)
                 except Exception:
                     continue
-                if str(row.get("fingerprint", "")) != str(fingerprint):
+                if (
+                    str(row.get("fingerprint", "")) != str(fingerprint)
+                    and not accept_legacy_markers
+                ):
                     continue
                 key = str(row.get("key", ""))
                 if not key:
@@ -1662,11 +1803,17 @@ def _append_completed_scene_time_marker(out: Path, *, key: str, fingerprint: str
         with path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(row, sort_keys=True, ensure_ascii=False) + "\n")
             f.flush()
+            os.fsync(f.fileno())
     except Exception:
         return
 
 
-def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False) -> dict:
+def _build_dataset_unlocked(
+    output_dir: str | Path,
+    cfg: dict,
+    skip_existing: bool = False,
+    adopt_legacy_resume: bool = False,
+) -> dict:
     # Use a shallow copy so live profiling counters/private paths do not leak back
     # into caller-owned config objects, while nested user config remains intact.
     cfg = dict(cfg)
@@ -1678,13 +1825,23 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
     existing_counts_by_scene_time: dict[str, int] = {}
     manifest_rows: list[dict] = []
     invalid_existing_samples_quarantined = 0
-    resume_fingerprint = _resume_config_fingerprint(cfg)
+    resume_fingerprint, adopted_legacy_resume = _ensure_resume_contract(
+        out,
+        cfg,
+        skip_existing=skip_existing,
+        adopt_legacy_resume=bool(adopt_legacy_resume),
+    )
     completed_scene_time_keys: set[str] = set()
     if skip_existing:
         existing_sample_names, existing_counts_by_scene_time, manifest_rows, invalid_existing_samples_quarantined = _bootstrap_existing_samples(
             out, sample_dir, show_progress=bool(cfg.get("progress", True))
         )
-        completed_scene_time_keys = _load_completed_scene_time_keys(out, existing_sample_names, resume_fingerprint)
+        completed_scene_time_keys = _load_completed_scene_time_keys(
+            out,
+            existing_sample_names,
+            resume_fingerprint,
+            accept_legacy_markers=bool(adopted_legacy_resume),
+        )
     completed_scene_time_markers_indexed = len(completed_scene_time_keys)
     split_counts: dict[str, int] = _count_splits(manifest_rows)
     total = len(manifest_rows)
@@ -1925,7 +2082,10 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
                 _stage_add(stage_totals, "npz_serialize_s", npz_serialize_s)
                 _stage_add(stage_totals, "npz_write_s", npz_write_s)
                 manifest_checkpoint_s = 0.0
-                if profiling or bool(cfg.get("checkpoint_manifest_each_scene_time", False)):
+                # NPZ files are atomic and resume bootstrap can reconstruct
+                # missing manifest rows.  Profiling must not force an O(N^2)
+                # manifest rewrite after every scene-time group.
+                if bool(cfg.get("checkpoint_manifest_each_scene_time", False)):
                     manifest_t0 = _now()
                     _write_manifest_atomic(out / "manifest.csv", manifest_rows)
                     manifest_checkpoint_s = _now() - manifest_t0
@@ -2009,6 +2169,9 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
         "skipped_completed_scene_time_groups": int(skipped_completed_scene_time_groups),
         "completed_scene_time_markers_indexed": int(completed_scene_time_markers_indexed),
         "scene_time_done_path": str(_scene_time_done_path(out)) if skip_existing else "",
+        "resume_contract_path": str(_resume_contract_path(out)),
+        "resume_fingerprint": str(resume_fingerprint),
+        "adopted_legacy_resume": bool(adopted_legacy_resume),
         "new_samples_written": int(new_samples_written),
         "progress_mode": progress_mode,
         "raw_scenarios_seen": int(raw_scenarios_seen),
@@ -2028,10 +2191,35 @@ def build_dataset(output_dir: str | Path, cfg: dict, skip_existing: bool = False
         "dataset_quality": cfg.get("dataset_quality", {}),
         "artifact": cfg.get("artifact", {}),
         "waymax": cfg.get("waymax", {}),
+        "regime_thresholds": cfg.get("regime_thresholds", {}),
+        "generation": {
+            "num_candidate_prefixes": int(cfg.get("num_candidate_prefixes", 0) or 0),
+            "num_reactive_futures": int(cfg.get("num_reactive_futures", 0) or 0),
+            "num_targeted_futures": int(cfg.get("num_targeted_futures", 0) or 0),
+            "targeted_future_kinds": cfg.get("targeted_future_kinds", []),
+            "num_roots": int(cfg.get("num_roots", 0) or 0),
+            "num_recovery_options": int(cfg.get("num_recovery_options", 0) or 0),
+        },
     }
     summary_t0 = _now()
     write_json(summary, out / "dataset_summary.json")
     _stage_add(stage_totals, "summary_write_s", _now() - summary_t0)
     _write_stage_profile()
     return summary
+
+
+def build_dataset(
+    output_dir: str | Path,
+    cfg: dict,
+    skip_existing: bool = False,
+    adopt_legacy_resume: bool = False,
+) -> dict:
+    out = Path(output_dir)
+    with _dataset_output_lock(out):
+        return _build_dataset_unlocked(
+            out,
+            cfg,
+            skip_existing=skip_existing,
+            adopt_legacy_resume=adopt_legacy_resume,
+        )
 

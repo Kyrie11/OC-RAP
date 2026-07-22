@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 export OCRAP_ROOT=${OCRAP_ROOT:-/data0/senzeyu2/dataset/OCRAP}
-# v45 trains two lightweight Near/Contact experts on one frozen shared encoder.
-# Safe has no direct-value branch and remains protected by the frozen OC-MERO selector.
+# v45 trains two lightweight recovery-value experts on one frozen shared
+# encoder, but combines them with an observation-conditioned soft router.  The
+# model never consumes the dataset directory or a hand-authored regime id to
+# choose a neural policy.  Safe remains protected by the frozen OC-MERO path.
 export TRAIN_MIX=${TRAIN_MIX:-$OCRAP_ROOT/train_near_contact,$OCRAP_ROOT/train_contact}
 export VAL_MIX=${VAL_MIX:-$OCRAP_ROOT/val_near_contact,$OCRAP_ROOT/val_contact}
 export BASE_RUN=${BASE_RUN:-runs/ocrap_v39_ocrac_balanced}
@@ -49,6 +51,8 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" PYTHONUNBUFFERED=1 python -u -m ocrap.cli trai
   --set model.direct_recovery_value_regime_conditioning=false \
   --set model.direct_recovery_value_experts=true \
   --set model.direct_recovery_value_num_experts=2 \
+  --set model.direct_recovery_value_expert_routing=soft_observation \
+  --set model.direct_recovery_value_router_temperature=${ROUTER_TEMPERATURE:-0.85} \
   --set model.direct_recovery_opportunity_head=true \
   --set loss_weights.dep=0 --set loss_weights.orc=0 --set loss_weights.assign=0 --set loss_weights.sig=0 \
   --set loss_weights.margin=0 --set loss_weights.obs=0 --set loss_weights.anti_oracle=0 \
@@ -59,6 +63,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" PYTHONUNBUFFERED=1 python -u -m ocrap.cli trai
   --set loss_weights.protective_macro=0 --set loss_weights.macro_drs=0 --set loss_weights.ddc=0 \
   --set loss_weights.teacher_pcd_direct=0 --set loss_weights.recovery_advantage=0 \
   --set loss_weights.direct_recovery_value=${DIRECT_VALUE_WEIGHT:-10.0} \
+  --set loss_weights.direct_router_balance=${ROUTER_BALANCE_WEIGHT:-0.02} \
   --set training.direct_value_macro_ids=${DIRECT_MACRO_IDS:-2,3,5,6,7} --set training.direct_value_bucket_ids=1,2 \
   --set training.direct_value_temperature=${DIRECT_TEMPERATURE:-0.10} \
   --set training.direct_value_positive_gain=${DIRECT_POSITIVE_GAIN:-0.015} \
@@ -77,8 +82,9 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" PYTHONUNBUFFERED=1 python -u -m ocrap.cli trai
   --set training.direct_value_opportunity_pos_weight="$OPP_POS_W" \
   2>&1 | tee "$MODEL_DIR/train_v45_rave.log"
 
-# OC-MERO heads are frozen. The expert id is a task head selected from the
-# observation-derived runtime regime; it is not a teacher label feature.
+# OC-MERO heads are frozen. Expert fusion is continuous and observation-only;
+# the calibration buckets below are evaluation/safety-envelope strata, not
+# neural expert selectors.
 for bucket in mix safe near contact; do
   case "$bucket" in
     mix) data="$VAL_MIX"; min=100;; safe) data="$OCRAP_ROOT/val_safe"; min=50;;

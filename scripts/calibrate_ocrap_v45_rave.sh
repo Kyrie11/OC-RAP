@@ -19,6 +19,8 @@ for bucket in near contact; do
     --output "$CAL_DIR/direct_value_risk_${bucket}_v45.json" \
     --rows-output "$CAL_DIR/direct_value_risk_${bucket}_v45.rows.jsonl" \
     --required-min-groups ${RAVE_MIN_GROUPS:-60} \
+    --required-min-scenes ${RAVE_MIN_SCENES:-20} \
+    --fold-unit ${RAVE_FOLD_UNIT:-scene} \
     --macro-ids ${RAVE_DIRECT_MACRO_IDS:-2,3,5,6,7} \
     --min-nominal-deviation ${RAVE_MIN_DEVIATION:-0.002} \
     --max-hard "$hard" --max-harm "$harm" \

@@ -275,6 +275,8 @@ model:
   transformer_layers: 2
   transformer_heads: 4
   dropout: 0.1
+  direct_recovery_value_expert_routing: bucket
+  direct_recovery_value_router_temperature: 1.0
 dataset_quality:
   # Off by default for broad natural-WOMD sweeps. Enable only for artifact/stress
   # datasets that are intended to support FRA, ODG, and anti-oracle claims.
@@ -377,6 +379,7 @@ loss_weights:
   admission: 0.2
   group_ranking: 0.0
   teacher_pcd_direct: 0.0
+  direct_router_balance: 0.0
   utility: 0.2
 evaluation:
   batch_size: 64

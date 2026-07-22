@@ -566,6 +566,20 @@ def _epoch(
             )
         else:
             loss_direct_value = r_dep.sum() * 0.0
+        if "direct_expert_weights" in out:
+            # Small unsupervised anti-collapse regularizer.  It does not teach a
+            # regime label; it only prevents one observation-conditioned expert
+            # from receiving all traffic before the value loss differentiates
+            # the experts.  Per-sample weights remain free to be sharp.
+            mean_expert_weight = out["direct_expert_weights"].mean(dim=0)
+            target_expert_weight = torch.full_like(
+                mean_expert_weight, 1.0 / float(mean_expert_weight.numel())
+            )
+            loss_direct_router_balance = F.mse_loss(
+                mean_expert_weight, target_expert_weight
+            )
+        else:
+            loss_direct_router_balance = r_dep.sum() * 0.0
         if bool((cfg.get("ablation", {}) or {}).get("without_anti_oracle", False)):
             loss_art = loss_art * 0.0
             loss_gap = loss_gap * 0.0
@@ -596,6 +610,7 @@ def _epoch(
             + float(lw.get("teacher_pcd_direct", 0.0)) * loss_teacher_pcd_direct
             + float(lw.get("recovery_advantage", 0.0)) * loss_recovery_advantage
             + float(lw.get("direct_recovery_value", 0.0)) * loss_direct_value
+            + float(lw.get("direct_router_balance", 0.0)) * loss_direct_router_balance
             + float(lw.get("utility", 0.2)) * loss_util
         )
         if training:
@@ -635,6 +650,7 @@ def _epoch(
             "loss_teacher_pcd_direct": loss_teacher_pcd_direct.item(),
             "loss_recovery_advantage": loss_recovery_advantage.item(),
             "loss_direct_recovery_value": loss_direct_value.item(),
+            "loss_direct_router_balance": loss_direct_router_balance.item(),
             "loss_utility": loss_util.item(),
             "pred_r_dep_mean": r_dep.mean().item(),
             "teacher_r_dep_mean": batch["r_dep_star"].float().mean().item(),
@@ -965,6 +981,8 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_opportunity_head=bool(model_cfg.get("direct_recovery_opportunity_head", False)),
         direct_recovery_value_experts=bool(model_cfg.get("direct_recovery_value_experts", False)),
         direct_recovery_value_num_experts=int(model_cfg.get("direct_recovery_value_num_experts", 2)),
+        direct_recovery_value_expert_routing=str(model_cfg.get("direct_recovery_value_expert_routing", "bucket")),
+        direct_recovery_value_router_temperature=float(model_cfg.get("direct_recovery_value_router_temperature", 1.0)),
     ).to(device)
     tcfg = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
 
@@ -1069,6 +1087,8 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "direct_recovery_opportunity_head": bool(model_cfg.get("direct_recovery_opportunity_head", False)),
             "direct_recovery_value_experts": bool(model_cfg.get("direct_recovery_value_experts", False)),
             "direct_recovery_value_num_experts": int(model_cfg.get("direct_recovery_value_num_experts", 2)),
+            "direct_recovery_value_expert_routing": str(model_cfg.get("direct_recovery_value_expert_routing", "bucket")),
+            "direct_recovery_value_router_temperature": float(model_cfg.get("direct_recovery_value_router_temperature", 1.0)),
             "model_state": model.state_dict(),
             "optimizer_state": opt.state_dict(),
             "epoch": int(ep),

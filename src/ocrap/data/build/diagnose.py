@@ -7,7 +7,7 @@ from typing import Any, Iterable
 import numpy as np
 
 from ocrap.algorithms.ocmero import oc_mero
-from ocrap.data.serialization import load_npz, parse_json_field, write_json
+from ocrap.data.serialization import load_npz, parse_json_field, read_json, write_json
 from ocrap.data.validation import missing_fields
 
 
@@ -59,6 +59,74 @@ def _dataset_specs(dataset: str | Path) -> list[Path]:
         return []
     parts = [x.strip() for x in raw.split(",") if x.strip()]
     return [Path(x) for x in parts]
+
+
+def _summary_nodes(summary: dict[str, Any]) -> Iterable[dict[str, Any]]:
+    """Yield one dataset summary and any summaries embedded by shard merging."""
+    if not isinstance(summary, dict):
+        return
+    yield summary
+    for child in summary.get("shard_summaries", []) or []:
+        if isinstance(child, dict):
+            yield from _summary_nodes(child)
+
+
+def _dataset_contract_metadata(dataset: str | Path, cfg: dict | None) -> dict[str, Any]:
+    """Recover the build-time regime contract from dataset summaries.
+
+    ``ocrap diagnose`` is normally invoked without repeating every build
+    override.  The CLI therefore supplies the global defaults, which used to
+    make a clean Safe dataset look like a generic stress dataset.  Builder
+    summaries already retain the relevant quality/artifact settings, so merge
+    those over the CLI defaults and keep a path-name fallback for legacy data.
+    """
+    quality = dict(_cfg_get(cfg, ("dataset_quality",), {}) or {})
+    artifact = dict(_cfg_get(cfg, ("artifact",), {}) or {})
+    generation: dict[str, Any] = {}
+    summary_paths: list[str] = []
+    for root in _dataset_specs(dataset):
+        summary_path = root / "dataset_summary.json"
+        if not summary_path.exists():
+            continue
+        try:
+            summary = read_json(summary_path)
+        except Exception:
+            continue
+        summary_paths.append(str(summary_path))
+        for node in _summary_nodes(summary):
+            if isinstance(node.get("dataset_quality"), dict):
+                quality.update(node["dataset_quality"])
+            if isinstance(node.get("artifact"), dict):
+                artifact.update(node["artifact"])
+            if isinstance(node.get("generation"), dict):
+                generation.update(node["generation"])
+
+    raw_required = quality.get("require_nominal_regimes", [])
+    if isinstance(raw_required, str):
+        required = {x.strip() for x in raw_required.strip("[]").split(",") if x.strip()}
+    elif isinstance(raw_required, (list, tuple, set)):
+        required = {str(x).strip() for x in raw_required if str(x).strip()}
+    else:
+        required = set()
+    roots = _dataset_specs(dataset)
+    legacy_safe_name = bool(roots) and all("safe" in root.name.lower() for root in roots)
+    nominal_regime_dataset = bool(
+        quality.get("nominal_regime_dataset", False)
+        or (
+            "normal" in required
+            and not bool(artifact.get("force_mine", False))
+            and float(artifact.get("mine_probability", 0.0) or 0.0) <= 0.0
+        )
+        or legacy_safe_name
+    )
+    return {
+        "dataset_quality": quality,
+        "artifact": artifact,
+        "generation": generation,
+        "summary_paths": summary_paths,
+        "nominal_regime_dataset": nominal_regime_dataset,
+        "legacy_safe_name_fallback": bool(legacy_safe_name and "normal" not in required),
+    }
 
 
 def iter_sample_paths(dataset: str | Path, max_samples: int | None = None) -> list[Path]:
@@ -198,6 +266,11 @@ def diagnose_dataset(dataset: str | Path, output: str | Path | None = None, max_
     paths = iter_sample_paths(dataset, max_samples)
     failures: list[str] = []
     warnings: list[str] = []
+    contract_meta = _dataset_contract_metadata(dataset, cfg)
+    quality_cfg = contract_meta["dataset_quality"]
+    artifact_cfg = contract_meta["artifact"]
+    generation_cfg = contract_meta["generation"]
+    nominal_regime_dataset = bool(contract_meta["nominal_regime_dataset"])
 
     split_by_scene: dict[str, set[str]] = defaultdict(set)
     sample_split_counts: Counter[str] = Counter()
@@ -207,6 +280,8 @@ def diagnose_dataset(dataset: str | Path, output: str | Path | None = None, max_
     macro_counts: Counter[str] = Counter()
     time_reason_counts: Counter[str] = Counter()
     regime_counts: Counter[str] = Counter()
+    nominal_regime_counts: Counter[str] = Counter()
+    nominal_sample_count = 0
     source_counts: Counter[str] = Counter()
     targeted_type_counts: Counter[str] = Counter()
     hidden_intent_counts: Counter[str] = Counter()
@@ -299,8 +374,10 @@ def diagnose_dataset(dataset: str | Path, output: str | Path | None = None, max_
         split_by_scene[scene].add(split)
         scene_split_counts[split].add(scene)
         candidate_by_scene_time[(scene, time)].add(cand)
-        if bool(_int_scalar(d.get("is_nominal", 0), 0)):
+        is_nominal = bool(_int_scalar(d.get("is_nominal", 0), 0))
+        if is_nominal:
             nominal_by_scene_time[(scene, time)] += 1
+            nominal_sample_count += 1
 
         macro = _str_scalar(d.get("prefix_macro_name", "unknown"), "unknown")
         macro_counts[macro] += 1
@@ -532,6 +609,8 @@ def diagnose_dataset(dataset: str | Path, output: str | Path | None = None, max_
             for k, v in regimes.items():
                 if v:
                     regime_counts[str(k)] += 1
+                    if is_nominal:
+                        nominal_regime_counts[str(k)] += 1
 
         prefix_diag = _json_field(d, "prefix_diagnostics", {})
         if isinstance(prefix_diag, dict):
@@ -593,10 +672,10 @@ def diagnose_dataset(dataset: str | Path, output: str | Path | None = None, max_
         failures.append("hidden_start_step violates prefix + delay constraint")
     if plausibility_failed_futures > 0:
         warnings.append("some future metadata reports plausibility_passed=false")
-    if num > 0 and (mean_off_y <= 0.02 or mean_off_y >= 0.98):
+    if num > 0 and (mean_off_y <= 0.02 or mean_off_y >= 0.98) and not nominal_regime_dataset:
         failures.append("mean_offdiag_y_obs near 0 or near 1 for almost all samples")
     if negative_deployable_fraction == 0.0 and num > 0:
-        failures.append("negative_deployable_fraction == 0")
+        (warnings if nominal_regime_dataset else failures).append("negative_deployable_fraction == 0")
     if artifact_fraction == 0.0 and num > 0:
         warnings.append("artifact_fraction == 0; FRA/anti-oracle claims will not be stress-tested")
     if mean_odg_pos <= 1e-6 and num > 0:
@@ -605,7 +684,8 @@ def diagnose_dataset(dataset: str | Path, output: str | Path | None = None, max_
         failures.append("no observation-equivalent root pairs detected")
     if incompatible_total == 0 and artifact_count > 0:
         warnings.append("artifact samples exist but no incompatible alias pairs were detected by m_star argmax")
-    if source_complete_fraction < 0.95 and num > 0:
+    expected_targeted = int(generation_cfg.get("num_targeted_futures", 0) or 0)
+    if source_complete_fraction < 0.95 and num > 0 and not nominal_regime_dataset and expected_targeted != 0:
         warnings.append("less than 95% of samples contain replay/reactive/targeted futures")
     if complete_artifact_pairs == 0 and hidden_emergence_count > 0:
         warnings.append("no complete hidden yield/accelerate artifact pair found")
@@ -615,14 +695,6 @@ def diagnose_dataset(dataset: str | Path, output: str | Path | None = None, max_
         warnings.append("calibration split is empty; calibrated gamma_rec cannot be estimated")
     if sample_split_counts.get("test", 0) == 0 and num >= 20:
         warnings.append("test split is empty; final held-out claims cannot be evaluated")
-    quality_cfg = cfg.get("dataset_quality", {}) if isinstance(cfg, dict) and isinstance(cfg.get("dataset_quality", {}), dict) else {}
-    require_nominal_cfg = quality_cfg.get("require_nominal_regimes", []) if isinstance(quality_cfg, dict) else []
-    if isinstance(require_nominal_cfg, str):
-        require_nominal_set = {x.strip() for x in require_nominal_cfg.strip("[]").split(",") if x.strip()}
-    else:
-        require_nominal_set = {str(x).strip() for x in require_nominal_cfg} if isinstance(require_nominal_cfg, (list, tuple, set)) else set()
-    artifact_cfg = cfg.get("artifact", {}) if isinstance(cfg, dict) and isinstance(cfg.get("artifact", {}), dict) else {}
-    nominal_regime_dataset = bool(quality_cfg.get("nominal_regime_dataset", False) or ("normal" in require_nominal_set and not bool(artifact_cfg.get("force_mine", False)) and float(artifact_cfg.get("mine_probability", 0.0) or 0.0) <= 0.0))
     if nominal_regime_dataset:
         warnings = [w for w in warnings if not (
             w.startswith("artifact_fraction == 0")
@@ -749,7 +821,25 @@ def diagnose_dataset(dataset: str | Path, output: str | Path | None = None, max_
         },
         "regimes": {
             "counts": _counter_dict(regime_counts),
+            "sample_fractions": {
+                str(k): float(v) / max(num, 1)
+                for k, v in sorted(regime_counts.items())
+            },
+            "nominal_counts": _counter_dict(nominal_regime_counts),
+            "nominal_sample_count": int(nominal_sample_count),
+            "nominal_fractions": {
+                str(k): float(v) / max(nominal_sample_count, 1)
+                for k, v in sorted(nominal_regime_counts.items())
+            },
             "fra_relevant_regime_count": int(regime_counts.get("oracle_artifact", 0) + regime_counts.get("occluded", 0) + regime_counts.get("low_headroom", 0)),
+        },
+        "dataset_contract": {
+            "nominal_regime_dataset": bool(nominal_regime_dataset),
+            "legacy_safe_name_fallback": bool(contract_meta["legacy_safe_name_fallback"]),
+            "summary_paths": list(contract_meta["summary_paths"]),
+            "require_nominal_regimes": quality_cfg.get("require_nominal_regimes", []),
+            "forbid_nominal_regimes": quality_cfg.get("forbid_nominal_regimes", []),
+            "forbid_any_regimes": quality_cfg.get("forbid_any_regimes", []),
         },
         "paper_support": paper_support,
     }

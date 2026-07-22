@@ -9,8 +9,9 @@ export WOMD_VAL=${WOMD_VAL:-/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_moti
 export WOMD_VAL_INTERACTIVE=${WOMD_VAL_INTERACTIVE:-/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation_interactive/validation_interactive_tfexample.tfrecord}
 
 # v45 OC-RAVE evaluation. The frozen OC-MERO backbone remains unchanged.
-# A frozen shared encoder with Near/Contact value experts plus a relative-opportunity gate may augment admission
-# for held-out verified recoveries in stress regimes; Safe remains nominal-locked.
+# A frozen shared encoder with observation-conditioned soft recovery-value
+# experts plus a relative-opportunity gate may augment admission in stress
+# regimes; no regime id selects a neural head. Safe remains nominal-locked.
 export RUN=${RUN:-runs/ocrap_v45_rave_eval}
 export BASE_RUN=${BASE_RUN:-runs/ocrap_v45_rave_regime_balanced}
 if [[ -z "${CKPT:-}" ]]; then

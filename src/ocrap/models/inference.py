@@ -89,11 +89,11 @@ def _infer_d_model(ckpt: dict[str, Any], cfg: dict[str, Any]) -> int:
 
 
 def regime_id_from_cfg(cfg: dict | None) -> int:
-    """Map the runtime active bucket to the value expert id.
+    """Map the runtime calibration bucket to a legacy integer id.
 
-    The planner still infers the operational regime from the dataset/closed-loop
-    bucket configured by the evaluator. This id conditions only the v44 value
-    branch and never exposes teacher labels or future outcomes.
+    Observation-conditioned soft expert routing ignores this id.  It is retained
+    for old checkpoints, hard-routing ablations, and bucket-specific selector
+    calibration envelopes; it is never a teacher-future label.
     """
     cfg = cfg or {}
     sel = cfg.get("selection", {}) if isinstance(cfg.get("selection", {}), dict) else {}
@@ -155,6 +155,8 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         direct_recovery_opportunity_head=bool(ckpt.get("direct_recovery_opportunity_head", model_cfg.get("direct_recovery_opportunity_head", False))),
         direct_recovery_value_experts=bool(ckpt.get("direct_recovery_value_experts", model_cfg.get("direct_recovery_value_experts", False))),
         direct_recovery_value_num_experts=int(ckpt.get("direct_recovery_value_num_experts", model_cfg.get("direct_recovery_value_num_experts", 2))),
+        direct_recovery_value_expert_routing=str(ckpt.get("direct_recovery_value_expert_routing", model_cfg.get("direct_recovery_value_expert_routing", "bucket"))),
+        direct_recovery_value_router_temperature=float(ckpt.get("direct_recovery_value_router_temperature", model_cfg.get("direct_recovery_value_router_temperature", 1.0))),
     ).to(device)
     # Strict loading remains the default for checkpoints with matching geometry.
     # A v39 checkpoint can initialize v40 training through train.py's explicit
@@ -172,6 +174,8 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_opportunity_head"] = bool(ckpt.get("direct_recovery_opportunity_head", model_cfg.get("direct_recovery_opportunity_head", False)))
     cfg["model"]["direct_recovery_value_experts"] = bool(ckpt.get("direct_recovery_value_experts", model_cfg.get("direct_recovery_value_experts", False)))
     cfg["model"]["direct_recovery_value_num_experts"] = int(ckpt.get("direct_recovery_value_num_experts", model_cfg.get("direct_recovery_value_num_experts", 2)))
+    cfg["model"]["direct_recovery_value_expert_routing"] = str(ckpt.get("direct_recovery_value_expert_routing", model_cfg.get("direct_recovery_value_expert_routing", "bucket")))
+    cfg["model"]["direct_recovery_value_router_temperature"] = float(ckpt.get("direct_recovery_value_router_temperature", model_cfg.get("direct_recovery_value_router_temperature", 1.0)))
     return ModelBundle(model=model, cfg=cfg, device=device)
 
 

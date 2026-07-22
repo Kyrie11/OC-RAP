@@ -796,16 +796,41 @@ def _demote_invalid_hidden_metadata(meta: dict[str, Any]) -> dict[str, Any]:
     out["natural_hidden_rejected_reason"] = "not_from_unknown_mask"
     return out
 
-def _make_future_from_state(fid: int, source: str, prior: float, st: Any, history: SceneHistory, prefix: CandidatePrefix, cfg: dict, waymax_env: Any, dyn_name: str, meta_extra: dict[str, Any] | None = None, state_after_prefix: Any | None = None) -> CounterfactualFuture:
+def _make_future_from_state(
+    fid: int,
+    source: str,
+    prior: float,
+    st: Any,
+    history: SceneHistory,
+    prefix: CandidatePrefix,
+    cfg: dict,
+    waymax_env: Any,
+    dyn_name: str,
+    meta_extra: dict[str, Any] | None = None,
+    state_after_prefix: Any | None = None,
+    materialization_cache: dict[tuple[int, int], tuple[np.ndarray, np.ndarray, dict[str, float]]] | None = None,
+) -> CounterfactualFuture:
     order = [int(i) for i in history.metadata.get("agent_order", list(range(int(st.num_objects))))]
     ego_xy = np.asarray(history.metadata.get("ego_global_xy", [0.0, 0.0]), dtype=np.float32)
     ego_yaw = float(history.metadata.get("ego_global_heading", 0.0))
     t = int(history.metadata.get("waymax_planning_timestep", history.time_index))
     total = int(round((float(cfg.get("prefix_horizon_s", 1.0)) + float(cfg.get("recovery_horizon_s", 4.0))) * float(cfg.get("sample_rate_hz", 10.0))))
-    arr, val = _traj_to_local_agent_arrays(st, t, total, order, ego_xy, ego_yaw)
+    wx_cfg = cfg.get("waymax", {}) if isinstance(cfg.get("waymax", {}), dict) else {}
+    cache_key = (id(st), id(waymax_env))
+    cached = materialization_cache.get(cache_key) if materialization_cache is not None else None
+    if cached is None:
+        arr, val = _traj_to_local_agent_arrays(st, t, total, order, ego_xy, ego_yaw)
+        metrics = _metric_summary(waymax_env, st, _sdc_index(st)) if bool(wx_cfg.get("compute_future_metrics", True)) else {}
+        if materialization_cache is not None:
+            # Futures may intentionally share the same Waymax rollout state but
+            # differ in latent metadata (e.g. low-friction vs control-delay
+            # teacher branches).  Reuse only trajectory extraction and simulator
+            # metrics; metadata remains future-specific.
+            materialization_cache[cache_key] = (arr, val, dict(metrics))
+    else:
+        arr, val, metrics = cached
     seed = stable_seed("waymax-future", history.scene_id, history.time_index, prefix.macro_id, fid)
     base = _base_metadata(history, prefix, source, policy="log_playback", scenario_augmented=bool(meta_extra and meta_extra.get("scenario_augmented", False)), allow_new=bool((cfg.get("waymax", {}) or {}).get("allow_new_objects_after_warmup", True)), dyn_name=dyn_name, seed=seed, extra=meta_extra)
-    wx_cfg = cfg.get("waymax", {}) if isinstance(cfg.get("waymax", {}), dict) else {}
     if bool(wx_cfg.get("detect_natural_hidden_emergence", True)):
         nat = _find_natural_hidden_metadata(st, history, cfg)
         if nat.get("hidden_emergence") and not base.get("hidden_emergence"):
@@ -813,10 +838,7 @@ def _make_future_from_state(fid: int, source: str, prior: float, st: Any, histor
                 base.update(nat)
             else:
                 base.update(_demote_invalid_hidden_metadata(nat))
-    if bool(wx_cfg.get("compute_future_metrics", True)):
-        base["waymax_metrics"] = _metric_summary(waymax_env, st, _sdc_index(st))
-    else:
-        base["waymax_metrics"] = {}
+    base["waymax_metrics"] = dict(metrics)
     base["recovery_steps"] = int(round(float(cfg.get("recovery_horizon_s", 4.0)) * float(cfg.get("sample_rate_hz", 10.0))))
     fut = CounterfactualFuture(fid, source, prior, arr, val, base)
     setattr(fut, "_waymax_state_after_prefix", state_after_prefix)
@@ -840,6 +862,7 @@ def generate_waymax_counterfactual_futures(history: SceneHistory, prefix: Candid
     allow_new = bool(wx.get("allow_new_objects_after_warmup", True))
     st_prefix, wx_env, dyn_name = _rollout_prefix(state0, history, prefix, cfg, allow_new=allow_new)
     postprefix_rollout_cache: dict[tuple[int, int, int, float], Any] = {}
+    future_materialization_cache: dict[tuple[int, int], tuple[np.ndarray, np.ndarray, dict[str, float]]] = {}
 
     def rollout_post_cached(st_after_prefix: Any, waymax_env: Any, accel: float) -> Any:
         if not bool(wx.get("cache_postprefix_rollouts", True)):
@@ -866,6 +889,7 @@ def generate_waymax_counterfactual_futures(history: SceneHistory, prefix: Candid
             dyn_name,
             {"rollout_variant": "natural_log_playback", "scenario_augmented": False, "waymax_prefix_rollout_reused": False},
             state_after_prefix=st_prefix,
+            materialization_cache=future_materialization_cache,
         )
     )
 
@@ -898,6 +922,7 @@ def generate_waymax_counterfactual_futures(history: SceneHistory, prefix: Candid
                     "teacher_base_reuses_replay_prefix_state": True,
                 },
                 state_after_prefix=st_prefix,
+                materialization_cache=future_materialization_cache,
             )
         )
 
@@ -923,7 +948,7 @@ def generate_waymax_counterfactual_futures(history: SceneHistory, prefix: Candid
             stp, env_a, dyn_a = _rollout_prefix(aug_state, history, prefix, cfg, allow_new=True)
             str_a = rollout_post_cached(stp, env_a, 0.0)
             ameta.update({"scenario_augmented": True, "artifact_pair_key": f"{history.scene_id}:{history.time_index}:{prefix.macro_id}", "rollout_variant": "augmented_hidden_log_playback"})
-            futures.append(_make_future_from_state(len(futures), "targeted", targeted_total / max(n_targeted, 1), str_a, history, prefix, cfg, env_a, dyn_a, ameta, state_after_prefix=stp))
+            futures.append(_make_future_from_state(len(futures), "targeted", targeted_total / max(n_targeted, 1), str_a, history, prefix, cfg, env_a, dyn_a, ameta, state_after_prefix=stp, materialization_cache=future_materialization_cache))
             hidden_branches_added.add(branch)
             targeted_added += 1
     if require_artifact_pair and not {"yield", "accelerate"}.issubset(hidden_branches_added):
@@ -942,7 +967,7 @@ def generate_waymax_counterfactual_futures(history: SceneHistory, prefix: Candid
             stp, env_v, dyn_v = _rollout_prefix(aug_state, history, prefix, cfg, allow_new=allow_new)
             str_v = rollout_post_cached(stp, env_v, 0.0)
             ameta.update({"scenario_augmented": True, "rollout_variant": "augmented_visible_actor_log_playback"})
-            futures.append(_make_future_from_state(len(futures), "targeted", targeted_total / max(n_targeted, 1), str_v, history, prefix, cfg, env_v, dyn_v, ameta, state_after_prefix=stp))
+            futures.append(_make_future_from_state(len(futures), "targeted", targeted_total / max(n_targeted, 1), str_v, history, prefix, cfg, env_v, dyn_v, ameta, state_after_prefix=stp, materialization_cache=future_materialization_cache))
             targeted_added += 1
     # Fill requested stress futures before generic SDC control stress.  The
     # top-level surrogate path uses ``targeted_future_kinds``; older commands put
@@ -1000,7 +1025,7 @@ def generate_waymax_counterfactual_futures(history: SceneHistory, prefix: Candid
             continue
         str_t = rollout_post_cached(st_prefix, wx_env, accel)
         meta["ego_after_prefix_accel"] = float(accel)
-        futures.append(_make_future_from_state(len(futures), "targeted", targeted_total / max(n_targeted, 1), str_t, history, prefix, cfg, wx_env, dyn_name, meta, state_after_prefix=st_prefix))
+        futures.append(_make_future_from_state(len(futures), "targeted", targeted_total / max(n_targeted, 1), str_t, history, prefix, cfg, wx_env, dyn_name, meta, state_after_prefix=st_prefix, materialization_cache=future_materialization_cache))
         targeted_added += 1
 
     # Fill remaining targeted slots with strictly Waymax-generated SDC
@@ -1031,6 +1056,7 @@ def generate_waymax_counterfactual_futures(history: SceneHistory, prefix: Candid
                     "teacher_base_reuses_replay_prefix_state": True,
                 },
                 state_after_prefix=st_prefix,
+                materialization_cache=future_materialization_cache,
             )
         )
         targeted_added += 1

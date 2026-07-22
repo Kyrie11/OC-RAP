@@ -39,8 +39,18 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument("--output", required=True)
     p.add_argument(
         "--skip-existing",
+        "--resume",
+        dest="skip_existing",
         action="store_true",
         help="Skip already materialized sample .npz files in the output directory and resume safely.",
+    )
+    p.add_argument(
+        "--adopt-resume-contract",
+        action="store_true",
+        help=(
+            "Explicitly adopt a legacy partial output that predates resume_contract.json. "
+            "Use once with --resume and the original semantic build parameters."
+        ),
     )
     p = sub.add_parser("diagnose")
     add_common(p)
@@ -129,7 +139,12 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     cfg = build_cfg(args)
     if args.cmd == "build-dataset":
-        result = build_dataset(args.output, cfg, skip_existing=args.skip_existing)
+        result = build_dataset(
+            args.output,
+            cfg,
+            skip_existing=args.skip_existing,
+            adopt_legacy_resume=bool(getattr(args, "adopt_resume_contract", False)),
+        )
     elif args.cmd == "diagnose":
         result = diagnose_dataset(args.dataset, args.output, args.max_samples, cfg=cfg)
     elif args.cmd == "papercheck":

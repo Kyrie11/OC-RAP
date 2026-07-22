@@ -5,6 +5,10 @@ export OCRAP_ROOT=${OCRAP_ROOT:-/data0/senzeyu2/dataset/OCRAP}
 export WOMD_VAL=${WOMD_VAL:-/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord}
 export WOMD_VAL_INTERACTIVE=${WOMD_VAL_INTERACTIVE:-/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation_interactive/validation_interactive_tfexample.tfrecord}
 export BASE_V39=${BASE_V39:-runs/ocrap_v39_ocrac_balanced}
+export FINAL_RUN=${FINAL_RUN:-0}
+export RETRAIN_CLEAN_BASE=${RETRAIN_CLEAN_BASE:-0}
+export TRAIN_SAFE_DATA=${TRAIN_SAFE_DATA:-$OCRAP_ROOT/train_safe}
+export CLEAN_BASE_RUN=${CLEAN_BASE_RUN:-runs/ocrap_v39_ocrac_clean_safe}
 mkdir -p runs
 
 # Optional dataset-diagnostic preflight. Training/validation must satisfy the
@@ -12,20 +16,57 @@ mkdir -p runs
 # contract, so development offline screening below intentionally uses val roots;
 # do not treat it as held-out paper evidence.
 if [[ -n "${DATASET_DIAGNOSTICS_DIR:-}" ]]; then
-  PYTHONPATH=src python tools/check_regime_dataset_contract.py "$DATASET_DIAGNOSTICS_DIR" --scope trainval --mode development
-  set +e
-  PYTHONPATH=src python tools/check_regime_dataset_contract.py "$DATASET_DIAGNOSTICS_DIR" --scope all --mode development
-  TEST_CONTRACT_STATUS=$?
-  set -e
-  if [[ "$TEST_CONTRACT_STATUS" -ne 0 ]]; then
-    echo 'v45 warning: current test roots violate the regime contract; using val roots only for development zero-use screening.' >&2
+  if [[ "${FINAL_RUN}" == "1" ]]; then
+    PYTHONPATH=src python tools/check_regime_dataset_contract.py "$DATASET_DIAGNOSTICS_DIR" --scope all --mode paper
+  else
+    PYTHONPATH=src python tools/check_regime_dataset_contract.py "$DATASET_DIAGNOSTICS_DIR" --scope v45dev --mode development
+    echo 'v45 development mode: train_safe is intentionally excluded from the head-only data preflight; final claims require a clean base retrain.' >&2
   fi
 fi
 
 # ---------------------------------------------------------------------------
-# Stage 1: train two shared-encoder Near/Contact expert heads.
-# Near and Contact share the frozen encoder but use separate lightweight heads.
-# Runtime head selection comes from the observable regime router; Safe stays locked.
+# Optional Stage 0: refresh the shared base on the corrected Safe distribution.
+# Reusing an old v30/v39 checkpoint as initialization is allowed; freezing it as
+# the final backbone is not.  An empty FREEZE_PREFIXES string unfreezes the full
+# base model for this clean-data refresh.
+# ---------------------------------------------------------------------------
+if [[ "${RETRAIN_CLEAN_BASE}" == "1" ]]; then
+  [[ -d "${TRAIN_SAFE_DATA}" ]] || { echo "missing clean TRAIN_SAFE_DATA=${TRAIN_SAFE_DATA}" >&2; exit 2; }
+  TRAIN_MIX="${TRAIN_SAFE_DATA},${OCRAP_ROOT}/train_contact,${OCRAP_ROOT}/train_near_contact" \
+  VAL_MIX="${OCRAP_ROOT}/val_safe,${OCRAP_ROOT}/val_contact,${OCRAP_ROOT}/val_near_contact" \
+  BASE_RUN="${BASE_V39}" INIT_CKPT="${BASE_V39}/model_v39_ocrac/best.pt" \
+  RUN="${CLEAN_BASE_RUN}" VARIANT=clean_safe_refresh \
+  FREEZE_PREFIXES="${CLEAN_FREEZE_PREFIXES:-}" \
+  EPOCHS="${CLEAN_EPOCHS:-10}" PATIENCE="${CLEAN_PATIENCE:-3}" LR="${CLEAN_LR:-0.000006}" \
+    bash scripts/train_ocrap_v39_ocrac.sh
+  printf '%s\n' "clean train_safe refresh completed from ${TRAIN_SAFE_DATA}" > "${CLEAN_BASE_RUN}/CLEAN_DATASET_RETRAINED"
+  BASE_V39="${CLEAN_BASE_RUN}"
+fi
+
+if [[ "${FINAL_RUN}" == "1" && ! -f "${BASE_V39}/CLEAN_DATASET_RETRAINED" ]]; then
+  echo "FINAL_RUN=1 requires a clean-base marker at ${BASE_V39}/CLEAN_DATASET_RETRAINED" >&2
+  echo "Run with RETRAIN_CLEAN_BASE=1 or point BASE_V39 at a verified clean refresh." >&2
+  exit 4
+fi
+
+# A 0.06 one-sided Wilson harmful-exposure bound requires at least 43 held-out
+# challenged groups even when zero harmful selections are observed.  The current
+# partial contact validation set has only 84 groups total, so the paper threshold
+# can be mathematically unattainable after a scene-disjoint split.  Development
+# mode uses an explicitly weaker gate; FINAL_RUN restores the paper contract.
+if [[ "${FINAL_RUN}" == "1" ]]; then
+  export RAVE_MIN_SCENES=${RAVE_MIN_SCENES:-100}
+  export RAVE_MAX_VERIFY_HARMFUL_UCB=${RAVE_MAX_VERIFY_HARMFUL_UCB:-0.06}
+else
+  export RAVE_MIN_SCENES=${RAVE_MIN_SCENES:-20}
+  export RAVE_MAX_VERIFY_HARMFUL_UCB=${RAVE_MAX_VERIFY_HARMFUL_UCB:-0.12}
+  echo 'v45 development calibration: harmful-exposure UCB cap relaxed to 0.12 because the contact validation set is partial.' >&2
+fi
+
+# ---------------------------------------------------------------------------
+# Stage 1: train two shared-encoder recovery-value experts.
+# The experts are fused continuously by an observation-conditioned soft router;
+# no dataset/regime id selects a neural head. Safe stays locked to OC-MERO.
 # ---------------------------------------------------------------------------
 TRAIN_GPU=0 VARIANT=expert_balanced RUN=runs/ocrap_v45_rave_balanced \
 BASE_RUN="$BASE_V39" INIT_CKPT="$BASE_V39/model_v39_ocrac/best.pt" \
@@ -147,4 +188,21 @@ PYTHONPATH=src python tools/check_v45_quick_gate.py "$CONFIRM_RUN" --base-run "$
   --mode confirmation --min-improvement 0.005 --near-intervention-cap 0.08 --contact-intervention-cap 0.12 \
   | tee "$CONFIRM_RUN/quick_gate_v45_confirmation.txt"
 
-echo 'v45 development gates passed. Rebuild contract-valid test roots before paper-scale offline claims, then run targeted ablations.'
+if [[ "${FINAL_RUN}" == "1" ]]; then
+  echo 'v45 final gates passed under the clean-base and paper dataset contract.'
+else
+  echo 'v45 development gates passed. Results are preliminary until clean-base retraining and paper-scale stress sets are complete.'
+fi
+
+# Optional one-shot held-out offline evaluation.  Candidate selection above is
+# still performed on validation only; the chosen model is evaluated on test
+# exactly once and test results never feed back into selection.
+if [[ "${RUN_HELDOUT_TEST:-0}" == "1" ]]; then
+  HELDOUT_RUN="runs/${CHOSEN}_heldout_test"
+  BASE_RUN="$CHOSEN_BASE_RUN" RUN="$HELDOUT_RUN" \
+  RUN_OFFLINE_EVAL=1 RUN_AUDITS=0 RUN_SAFE_CLOSED_LOOP=0 \
+  SAFE_TEST="$OCRAP_ROOT/test_safe" NEAR_TEST="$OCRAP_ROOT/test_near_contact" CONTACT_TEST="$OCRAP_ROOT/test_contact" \
+  RUN_SCALAR_BASELINES=1 OFFLINE_SINGLE_GPU=1 GPU_SAFE=0 GPU_NEAR=0 GPU_CONTACT=0 \
+    bash scripts/run_ocrap_v45_rave.sh
+  echo "held-out test evaluation written to ${HELDOUT_RUN}"
+fi

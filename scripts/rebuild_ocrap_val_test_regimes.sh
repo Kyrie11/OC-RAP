@@ -70,10 +70,37 @@ MIN_TEST_CONTACT="${MIN_TEST_CONTACT:-150}"
 
 RUN_DIAGNOSTICS="${RUN_DIAGNOSTICS:-1}"
 PREFLIGHT_ONLY="${PREFLIGHT_ONLY:-0}"
+RESUME="${RESUME:-1}"
+ADOPT_LEGACY_RESUME="${ADOPT_LEGACY_RESUME:-0}"
+GPU0="${GPU0:-0}"
+GPU1="${GPU1:-1}"
+REQUIRE_JAX_GPU="${REQUIRE_JAX_GPU:-1}"
+PROFILE_BUILD="${PROFILE_BUILD:-0}"
+# Keep 0 for an exact continuation of datasets originally built with the full
+# Waymax teacher.  A positive value enables screened-hybrid acceleration but is
+# a semantic contract change and therefore requires clean outputs/shards.
+NEAR_TEACHER_TOP_K="${NEAR_TEACHER_TOP_K:-0}"
+CONTACT_TEACHER_TOP_K="${CONTACT_TEACHER_TOP_K:-0}"
+NEAR_TEACHER_ROLLOUT_MODES="${NEAR_TEACHER_ROLLOUT_MODES:-}"
+CONTACT_TEACHER_ROLLOUT_MODES="${CONTACT_TEACHER_ROLLOUT_MODES:-}"
+STRESS_COMPUTE_FUTURE_METRICS="${STRESS_COMPUTE_FUTURE_METRICS:-true}"
 
 die() {
   echo "ERROR: $*" >&2
   exit 1
+}
+
+verify_jax_gpu() {
+  local gpu="$1"
+  [[ "${REQUIRE_JAX_GPU}" == "1" ]] || return 0
+  CUDA_VISIBLE_DEVICES="${gpu}" XLA_PYTHON_CLIENT_PREALLOCATE=false \
+    "${PYTHON_BIN}" - <<'PY'
+import jax
+devices = jax.devices()
+print({"jax_devices": [str(d) for d in devices]})
+if not any(getattr(d, "platform", "") == "gpu" for d in devices):
+    raise SystemExit("JAX cannot see a GPU. Install a CUDA-enabled jaxlib before the long Waymax build.")
+PY
 }
 
 # -----------------------------------------------------------------------------
@@ -99,6 +126,8 @@ PY
 
 echo "WOMD standard validation: ${VAL_SHARD_COUNT} shards"
 echo "Waymax input pattern: ${WOMD_VAL}"
+verify_jax_gpu "${GPU0}"
+verify_jax_gpu "${GPU1}"
 
 if [[ -d "${WOMD_ROOT}/validation_interactive" ]]; then
   INTERACTIVE_COUNT="$(
@@ -157,14 +186,16 @@ if 'iter_cfg["scenario_start_index"] = 0' not in builder_src:
 print(f"OC-RAP source preflight passed: {repo}")
 PY
 
-for d in \
-  val_safe test_safe \
-  val_near_contact test_near_contact \
-  val_contact test_contact
-do
-  [[ ! -e "${OCRAP_ROOT}/${d}" ]] \
-    || die "${OCRAP_ROOT}/${d} already exists. Remove or rename it before rebuilding."
-done
+if [[ "${RESUME}" != "1" ]]; then
+  for d in \
+    val_safe test_safe \
+    val_near_contact test_near_contact \
+    val_contact test_contact
+  do
+    [[ ! -e "${OCRAP_ROOT}/${d}" ]] \
+      || die "${OCRAP_ROOT}/${d} already exists. Remove it or set RESUME=1."
+  done
+fi
 
 mkdir -p "${OCRAP_ROOT}"
 
@@ -193,6 +224,11 @@ COMMON=(
   --set 'waymax.metrics_to_run=[log_divergence,overlap,offroad,sdc_wrongway,sdc_off_route,sdc_progression,kinematic_infeasibility]'
   --set waymax.teacher_backend=hybrid
   --set waymax.use_jit_scan_rollouts=true
+  --set waymax.teacher_metrics_stride=0
+  --set waymax.cache_env_objects=true
+  --set waymax.cache_postprefix_rollouts=true
+  --set waymax.cache_teacher_metric_rollouts=true
+  --set waymax.cache_identical_teacher_rollouts=true
   --set waymax.augmented_hidden_from_unknown_only=true
 
   --set dataset_quality.require_nominal_per_scene_time=true
@@ -205,18 +241,33 @@ COMMON=(
 
   --set io.compress_npz=false
   --set io.fsync_npz=false
+  --set profiling.enabled="${PROFILE_BUILD}"
 )
+
+resume_args_for() {
+  local output="$1"
+  RESUME_ARGS=()
+  if [[ "${RESUME}" == "1" ]]; then
+    RESUME_ARGS+=(--resume)
+  fi
+  if [[ "${ADOPT_LEGACY_RESUME}" == "1" && -d "${output}" && ! -f "${output}/resume_contract.json" ]]; then
+    RESUME_ARGS+=(--adopt-resume-contract)
+  fi
+}
 
 build_safe() {
   local split="$1"
   local worker="$2"
   local max_scenarios="$3"
   local output="$4"
+  local gpu="$5"
 
   echo
   echo "==== Building ${output} from validation worker ${worker}/${PARTITION_STRIDE} ===="
 
-  run_ocrap build-dataset \
+  resume_args_for "${output}"
+  CUDA_VISIBLE_DEVICES="${gpu}" XLA_PYTHON_CLIENT_PREALLOCATE=false \
+    run_ocrap build-dataset "${RESUME_ARGS[@]}" \
     "${COMMON[@]}" \
     --set scenario_worker_index="${worker}" \
     --set max_scenarios="${max_scenarios}" \
@@ -234,6 +285,9 @@ build_safe() {
     --set artifact.use_margin_override=false \
     --set dataset_quality.balanced_two_pass=false \
     --set dataset_quality.artifact_pair_mode=tag \
+    --set dataset_quality.nominal_regime_dataset=true \
+    --set dataset_quality.keep_nominal_even_if_quality_fails=false \
+    --set dataset_quality.drop_scene_time_if_under_min_quality=true \
     --set dataset_quality.max_accepted_prefixes_per_scene_time=8 \
     --set 'dataset_quality.require_nominal_regimes=[normal]' \
     --set 'dataset_quality.forbid_nominal_regimes=[near_contact,post_contact,oracle_artifact,prefix_collision,prefix_contact]' \
@@ -249,11 +303,14 @@ build_near() {
   local worker="$2"
   local max_scenarios="$3"
   local output="$4"
+  local gpu="$5"
 
   echo
   echo "==== Building ${output} from validation worker ${worker}/${PARTITION_STRIDE} ===="
 
-  run_ocrap build-dataset \
+  resume_args_for "${output}"
+  CUDA_VISIBLE_DEVICES="${gpu}" XLA_PYTHON_CLIENT_PREALLOCATE=false \
+    run_ocrap build-dataset "${RESUME_ARGS[@]}" \
     "${COMMON[@]}" \
     --set scenario_worker_index="${worker}" \
     --set max_scenarios="${max_scenarios}" \
@@ -262,8 +319,9 @@ build_near() {
     --set max_biased_times_per_scenario=3 \
     --set num_targeted_futures=8 \
     --set 'targeted_future_kinds=[hidden_vehicle_yields,hidden_vehicle_accelerates,low_friction_braking,control_delay_noise]' \
-    --set waymax.compute_future_metrics=true \
-    --set waymax.teacher_rollout_top_k_options=0 \
+    --set waymax.compute_future_metrics="${STRESS_COMPUTE_FUTURE_METRICS}" \
+    --set waymax.teacher_rollout_top_k_options="${NEAR_TEACHER_TOP_K}" \
+    --set "waymax.teacher_rollout_option_modes=[${NEAR_TEACHER_ROLLOUT_MODES}]" \
     --set waymax.teacher_metrics_stride=0 \
     --set waymax.enable_augmented_hidden_roots=true \
     --set waymax.enable_visible_perturbation_roots=true \
@@ -300,11 +358,14 @@ build_contact() {
   local worker="$2"
   local max_scenarios="$3"
   local output="$4"
+  local gpu="$5"
 
   echo
   echo "==== Building ${output} from validation worker ${worker}/${PARTITION_STRIDE} ===="
 
-  run_ocrap build-dataset \
+  resume_args_for "${output}"
+  CUDA_VISIBLE_DEVICES="${gpu}" XLA_PYTHON_CLIENT_PREALLOCATE=false \
+    run_ocrap build-dataset "${RESUME_ARGS[@]}" \
     "${COMMON[@]}" \
     --set scenario_worker_index="${worker}" \
     --set max_scenarios="${max_scenarios}" \
@@ -313,8 +374,9 @@ build_contact() {
     --set max_biased_times_per_scenario=4 \
     --set num_targeted_futures=10 \
     --set 'targeted_future_kinds=[hidden_vehicle_yields,hidden_vehicle_accelerates,contact_impulse_surrogate,secondary_collision_approach,low_friction_braking,control_delay_noise]' \
-    --set waymax.compute_future_metrics=true \
-    --set waymax.teacher_rollout_top_k_options=0 \
+    --set waymax.compute_future_metrics="${STRESS_COMPUTE_FUTURE_METRICS}" \
+    --set waymax.teacher_rollout_top_k_options="${CONTACT_TEACHER_TOP_K}" \
+    --set "waymax.teacher_rollout_option_modes=[${CONTACT_TEACHER_ROLLOUT_MODES}]" \
     --set waymax.teacher_metrics_stride=0 \
     --set waymax.enable_augmented_hidden_roots=true \
     --set waymax.enable_visible_perturbation_roots=true \
@@ -347,32 +409,40 @@ build_contact() {
 }
 
 # -----------------------------------------------------------------------------
-# Build six mutually exclusive datasets
+# Build six mutually exclusive datasets.  Run exactly one process per GPU;
+# launching all six together causes JAX compilation and rollout contention.
 # -----------------------------------------------------------------------------
 
-build_safe val \
-  "${VAL_SAFE_WORKER}" "${VAL_SAFE_RAW}" \
-  "${OCRAP_ROOT}/val_safe" &
+wait_pair() {
+  local p0="$1" p1="$2" name0="$3" name1="$4"
+  local s0=0 s1=0
+  set +e
+  wait "${p0}"; s0=$?
+  wait "${p1}"; s1=$?
+  set -e
+  [[ "${s0}" == 0 ]] || die "${name0} build failed; see ${OCRAP_ROOT}/.${name0}.build.log"
+  [[ "${s1}" == 0 ]] || die "${name1} build failed; see ${OCRAP_ROOT}/.${name1}.build.log"
+}
 
-build_safe test \
-  "${TEST_SAFE_WORKER}" "${TEST_SAFE_RAW}" \
-  "${OCRAP_ROOT}/test_safe" &
+mkdir -p "${OCRAP_ROOT}/reports"
 
-build_near val \
-  "${VAL_NEAR_WORKER}" "${VAL_NEAR_RAW}" \
-  "${OCRAP_ROOT}/val_near_contact" &
+build_safe val "${VAL_SAFE_WORKER}" "${VAL_SAFE_RAW}" \
+  "${OCRAP_ROOT}/val_safe" "${GPU0}" >"${OCRAP_ROOT}/.val_safe.build.log" 2>&1 & P0=$!
+build_safe test "${TEST_SAFE_WORKER}" "${TEST_SAFE_RAW}" \
+  "${OCRAP_ROOT}/test_safe" "${GPU1}" >"${OCRAP_ROOT}/.test_safe.build.log" 2>&1 & P1=$!
+wait_pair "${P0}" "${P1}" val_safe test_safe
 
-build_near test \
-  "${TEST_NEAR_WORKER}" "${TEST_NEAR_RAW}" \
-  "${OCRAP_ROOT}/test_near_contact" &
+build_near val "${VAL_NEAR_WORKER}" "${VAL_NEAR_RAW}" \
+  "${OCRAP_ROOT}/val_near_contact" "${GPU0}" >"${OCRAP_ROOT}/.val_near_contact.build.log" 2>&1 & P0=$!
+build_near test "${TEST_NEAR_WORKER}" "${TEST_NEAR_RAW}" \
+  "${OCRAP_ROOT}/test_near_contact" "${GPU1}" >"${OCRAP_ROOT}/.test_near_contact.build.log" 2>&1 & P1=$!
+wait_pair "${P0}" "${P1}" val_near_contact test_near_contact
 
-build_contact val \
-  "${VAL_CONTACT_WORKER}" "${VAL_CONTACT_RAW}" \
-  "${OCRAP_ROOT}/val_contact" &
-
-build_contact test \
-  "${TEST_CONTACT_WORKER}" "${TEST_CONTACT_RAW}" \
-  "${OCRAP_ROOT}/test_contact"
+build_contact val "${VAL_CONTACT_WORKER}" "${VAL_CONTACT_RAW}" \
+  "${OCRAP_ROOT}/val_contact" "${GPU0}" >"${OCRAP_ROOT}/.val_contact.build.log" 2>&1 & P0=$!
+build_contact test "${TEST_CONTACT_WORKER}" "${TEST_CONTACT_RAW}" \
+  "${OCRAP_ROOT}/test_contact" "${GPU1}" >"${OCRAP_ROOT}/.test_contact.build.log" 2>&1 & P1=$!
+wait_pair "${P0}" "${P1}" val_contact test_contact
 
 # -----------------------------------------------------------------------------
 # Diagnose each dataset
@@ -386,9 +456,17 @@ if [[ "${RUN_DIAGNOSTICS}" == "1" ]]; then
     val_near_contact test_near_contact \
     val_contact test_contact
   do
-    run_ocrap diagnose \
-      --dataset "${OCRAP_ROOT}/${d}" \
-      --output "${OCRAP_ROOT}/reports/diagnose_${d}.json"
+    if [[ "${d}" == *safe ]]; then
+      run_ocrap diagnose \
+        --dataset "${OCRAP_ROOT}/${d}" \
+        --set dataset_quality.nominal_regime_dataset=true \
+        --set 'dataset_quality.require_nominal_regimes=[normal]' \
+        --output "${OCRAP_ROOT}/reports/diagnose_${d}.json"
+    else
+      run_ocrap diagnose \
+        --dataset "${OCRAP_ROOT}/${d}" \
+        --output "${OCRAP_ROOT}/reports/diagnose_${d}.json"
+    fi
 
     run_ocrap papercheck \
       --dataset "${OCRAP_ROOT}/${d}" \

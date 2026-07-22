@@ -46,6 +46,8 @@ class OCRAPModel(nn.Module):
         direct_recovery_opportunity_head: bool = False,
         direct_recovery_value_experts: bool = False,
         direct_recovery_value_num_experts: int = 2,
+        direct_recovery_value_expert_routing: str = "bucket",
+        direct_recovery_value_router_temperature: float = 1.0,
     ):
         super().__init__()
         self.num_roots = int(num_roots)
@@ -67,6 +69,24 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_opportunity_head = bool(direct_recovery_opportunity_head)
         self.direct_recovery_value_experts = bool(direct_recovery_value_experts)
         self.direct_recovery_value_num_experts = max(1, int(direct_recovery_value_num_experts))
+        self.direct_recovery_value_expert_routing = str(
+            direct_recovery_value_expert_routing or "bucket"
+        ).strip().lower()
+        self.direct_recovery_value_router_temperature = float(
+            max(direct_recovery_value_router_temperature, 1.0e-3)
+        )
+        if self.direct_recovery_value_expert_routing not in {
+            "bucket",
+            "hard_bucket",
+            "soft_observation",
+            "soft",
+            "moe",
+            "uniform",
+        }:
+            raise ValueError(
+                "Unsupported direct_recovery_value_expert_routing="
+                f"{direct_recovery_value_expert_routing!r}"
+            )
         if self.direct_recovery_value_output not in {"probability", "score"}:
             raise ValueError(f"Unsupported direct_recovery_value_output={direct_recovery_value_output!r}")
 
@@ -152,6 +172,7 @@ class OCRAPModel(nn.Module):
             if self.direct_recovery_value_head and self.direct_recovery_value_regime_conditioning
             else None
         )
+        direct_router_in_dim = direct_in_dim
         if self.direct_regime_embedding is not None:
             direct_in_dim += self.direct_recovery_value_regime_dim
         direct_out_dim = 3 if self.direct_recovery_opportunity_head else 2
@@ -170,10 +191,12 @@ class OCRAPModel(nn.Module):
         # v45 OC-RAVE: Near-contact and Contact share the observation encoder but
         # use lightweight task experts.  The two datasets may contain the same
         # current observation with different pressure-future teachers, so one
-        # unconditional head receives contradictory labels even after groups are
-        # separated.  Experts are selected during training by bucket_id and at
-        # deployment by the observation-derived regime router, never by teacher
-        # labels.  Safe does not use the direct branch.
+        # unconditional head can receive contradictory labels even after groups
+        # are separated.  In soft-observation mode every expert is evaluated and
+        # continuously fused from observable scene/prefix features; dataset
+        # buckets remain available only for loss stratification/calibration and
+        # for the explicit legacy hard-routing ablation.  Safe does not use the
+        # direct branch.
         self.direct_value_heads = (
             nn.ModuleList([_make_direct_head() for _ in range(self.direct_recovery_value_num_experts)])
             if self.direct_recovery_value_head and self.direct_recovery_value_experts
@@ -182,6 +205,22 @@ class OCRAPModel(nn.Module):
         self.direct_value_head = (
             _make_direct_head()
             if self.direct_recovery_value_head and not self.direct_recovery_value_experts
+            else None
+        )
+        # Observation-conditioned soft routing avoids treating a hand-authored
+        # regime id as a policy input.  The router consumes the same observable
+        # scene/prefix representation as the experts and produces continuous
+        # mixture weights.  Legacy hard bucket routing remains available as an
+        # explicit ablation and for loading older checkpoints.
+        self.direct_value_router = (
+            nn.Sequential(
+                nn.LayerNorm(direct_router_in_dim),
+                nn.Linear(direct_router_in_dim, max(16, d_model // 2)),
+                nn.GELU(),
+                nn.Linear(max(16, d_model // 2), self.direct_recovery_value_num_experts),
+            )
+            if self.direct_value_heads is not None
+            and self.direct_recovery_value_expert_routing in {"soft_observation", "soft", "moe"}
             else None
         )
         self.root_signature_head = nn.Linear(d_model, self.d_signature) if self.d_signature > 0 else None
@@ -271,6 +310,7 @@ class OCRAPModel(nn.Module):
                     direct_features = scene_token.repeat(1, 6)
                 if self.direct_recovery_value_pooling in {"candidate_concat_raw", "action_concat_raw", "certificate_action_adapter"}:
                     direct_features = torch.cat([direct_features, self._candidate_raw_features(x)], dim=-1)
+            router_features = direct_features
             if self.direct_regime_embedding is not None:
                 if bucket_id is None:
                     # "other" is the backward-compatible fallback. v44 runtime
@@ -285,17 +325,36 @@ class OCRAPModel(nn.Module):
                 regime_id = regime_id.clamp(0, self.direct_recovery_value_num_regimes - 1)
                 direct_features = torch.cat([direct_features, self.direct_regime_embedding(regime_id)], dim=-1)
             if self.direct_value_heads is not None:
-                # bucket ids: safe=0, near=1, contact=2, other=3.  Map near to
-                # expert 0 and contact to expert 1.  Safe/other are mapped to 0
-                # only for tensor completeness; the direct selector is disabled
-                # for those states.
-                if bucket_id is None:
-                    bucket_id = torch.ones((x.shape[0],), dtype=torch.long, device=x.device)
-                expert_idx = (bucket_id.to(device=x.device, dtype=torch.long).reshape(-1) - 1)
-                expert_idx = expert_idx.clamp(0, self.direct_recovery_value_num_experts - 1)
                 all_direct = torch.stack([head(direct_features) for head in self.direct_value_heads], dim=1)
-                gather_idx = expert_idx.view(-1, 1, 1).expand(-1, 1, all_direct.shape[-1])
-                direct = all_direct.gather(1, gather_idx).squeeze(1)
+                routing = self.direct_recovery_value_expert_routing
+                if routing in {"bucket", "hard_bucket"}:
+                    # Backward-compatible ablation: bucket ids safe=0, near=1,
+                    # contact=2, other=3; near maps to expert 0 and contact to 1.
+                    if bucket_id is None:
+                        bucket_id = torch.ones((x.shape[0],), dtype=torch.long, device=x.device)
+                    expert_idx = (bucket_id.to(device=x.device, dtype=torch.long).reshape(-1) - 1)
+                    expert_idx = expert_idx.clamp(0, self.direct_recovery_value_num_experts - 1)
+                    weights = torch.nn.functional.one_hot(
+                        expert_idx, num_classes=self.direct_recovery_value_num_experts
+                    ).to(dtype=all_direct.dtype)
+                elif routing == "uniform":
+                    weights = torch.full(
+                        (x.shape[0], self.direct_recovery_value_num_experts),
+                        1.0 / float(self.direct_recovery_value_num_experts),
+                        dtype=all_direct.dtype,
+                        device=x.device,
+                    )
+                else:
+                    if self.direct_value_router is None:
+                        raise RuntimeError("soft expert routing configured without a router")
+                    router_logits = self.direct_value_router(router_features)
+                    weights = torch.softmax(
+                        router_logits / self.direct_recovery_value_router_temperature, dim=-1
+                    )
+                    out["direct_expert_logits"] = router_logits
+                direct = (all_direct * weights.unsqueeze(-1)).sum(dim=1)
+                out["direct_expert_weights"] = weights
+                out["direct_expert_outputs"] = all_direct
             elif self.direct_value_head is not None:
                 direct = self.direct_value_head(direct_features)
             else:
