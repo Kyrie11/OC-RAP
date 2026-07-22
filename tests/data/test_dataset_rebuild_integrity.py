@@ -66,7 +66,7 @@ def test_assign_regimes_separates_observed_contact(monkeypatch):
     assert sample.regime_label["post_contact_counterfactual"] is False
 
 
-def test_builder_applies_scenario_start_index_once(tmp_path, monkeypatch):
+def test_builder_applies_scenario_scan_controls_once(tmp_path, monkeypatch):
     captured: dict = {}
 
     def fake_iterator(cfg):
@@ -79,6 +79,8 @@ def test_builder_applies_scenario_start_index_once(tmp_path, monkeypatch):
         {
             "progress": False,
             "scenario_start_index": 3,
+            "scenario_stride": 2,
+            "scenario_worker_index": 1,
             "max_scenarios": 2,
             "io": {"compress_npz": False, "fsync_npz": False},
         }
@@ -88,7 +90,35 @@ def test_builder_applies_scenario_start_index_once(tmp_path, monkeypatch):
 
     assert result["num_samples"] == 0
     assert captured["scenario_start_index"] == 0
-    assert captured["max_scenarios"] == 5
+    assert captured["scenario_stride"] == 1
+    assert captured["scenario_worker_index"] == 0
+    # Selected global source indices are 4 and 6, so the neutral source needs
+    # exactly seven items (indices 0..6).
+    assert captured["max_scenarios"] == 7
+    assert result["scenario_start_index"] == 3
+    assert result["scenario_stride"] == 2
+    assert result["scenario_worker_index"] == 1
+
+
+def test_scenario_scan_partitions_are_disjoint_and_start_relative():
+    source = list(range(40))
+    partitions = [
+        list(
+            builder._apply_scenario_scan_controls(
+                iter(source),
+                start_index=3,
+                stride=6,
+                worker_index=worker,
+                max_scenarios=4,
+            )
+        )
+        for worker in range(6)
+    ]
+    assert partitions[0] == [3, 9, 15, 21]
+    assert partitions[4] == [7, 13, 19, 25]
+    flattened = [x for part in partitions for x in part]
+    assert len(flattened) == len(set(flattened))
+    assert set(flattened) == set(range(3, 27))
 
 
 def test_resume_fingerprint_ignores_scan_scope_but_not_teacher_semantics():

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import csv
 import hashlib
-import itertools
 import json
 import os
 import time
@@ -1248,6 +1247,75 @@ def scenario_iterator(cfg: dict) -> Iterator[RawScenario]:
         raise ValueError(f"Unknown data_source {source}")
 
 
+def _apply_scenario_scan_controls(
+    source_iter: Iterator[Any],
+    *,
+    start_index: int = 0,
+    stride: int = 1,
+    worker_index: int = 0,
+    max_scenarios: int | None = None,
+) -> Iterator[Any]:
+    """Apply deterministic source-index selection exactly once.
+
+    ``scenario_start_index`` is interpreted in the global deterministic source
+    enumeration.  ``scenario_worker_index`` selects one residue class relative
+    to that start, and ``max_scenarios`` is the number emitted for this worker.
+    Keeping this operation in the builder prevents the Waymax loader and the
+    builder from independently applying the same offset/partition controls.
+    """
+    start = max(0, int(start_index))
+    step = max(1, int(stride))
+    worker = int(worker_index) % step
+    limit = None if max_scenarios is None else max(0, int(max_scenarios))
+    if limit == 0:
+        return
+    emitted = 0
+    for source_index, item in enumerate(source_iter):
+        if source_index < start:
+            continue
+        if ((source_index - start) % step) != worker:
+            continue
+        yield item
+        emitted += 1
+        if limit is not None and emitted >= limit:
+            return
+
+
+def _scenario_source_config(cfg: dict) -> dict:
+    """Return a source config with neutral scan controls and a sufficient cap."""
+    start = max(0, int(cfg.get("scenario_start_index", 0)))
+    stride = max(1, int(cfg.get("scenario_stride", 1)))
+    worker = int(cfg.get("scenario_worker_index", 0)) % stride
+    requested = cfg.get("max_scenarios")
+
+    source_cfg = dict(cfg)
+    source_cfg["scenario_start_index"] = 0
+    source_cfg["scenario_stride"] = 1
+    source_cfg["scenario_worker_index"] = 0
+    if requested is not None:
+        requested_i = max(0, int(requested))
+        if requested_i == 0:
+            source_cfg["max_scenarios"] = 0
+        else:
+            # The last requested global source index is
+            # start + worker + (requested_i - 1) * stride.  Source iterators cap
+            # by item count, hence +1.
+            source_cfg["max_scenarios"] = start + worker + (requested_i - 1) * stride + 1
+    return source_cfg
+
+
+def _selected_scenario_iterator(cfg: dict) -> Iterator[RawScenario]:
+    source_cfg = _scenario_source_config(cfg)
+    source_iter = scenario_iterator(source_cfg)
+    yield from _apply_scenario_scan_controls(
+        source_iter,
+        start_index=int(cfg.get("scenario_start_index", 0)),
+        stride=int(cfg.get("scenario_stride", 1)),
+        worker_index=int(cfg.get("scenario_worker_index", 0)),
+        max_scenarios=cfg.get("max_scenarios"),
+    )
+
+
 def _sample_filename(scene_id: str, time_index: int, candidate_index: int) -> str:
     return f"{scene_id}_t{int(time_index):04d}_a{int(candidate_index):02d}.npz".replace("/", "_")
 
@@ -1856,20 +1924,12 @@ def _build_dataset_unlocked(
     skipped_no_planning_times = 0
     raw_scene_ids: set[str] = set()
     scenario_start_index = max(0, int(cfg.get("scenario_start_index", 0)))
-    iter_cfg = dict(cfg)
-    # ``scenario_start_index`` is a builder-level offset.  The Waymax loader
-    # also supports the same option, so forwarding it unchanged and then using
-    # ``itertools.islice`` below skips the requested prefix twice.  Clear the
-    # delegated value and apply the offset exactly once in this function.
-    iter_cfg["scenario_start_index"] = 0
-    # Allow disjoint subsets within the same WOMD shard pattern, e.g. use
-    # ${WOMD_VAL}@150 for both validation and held-out safe testing while
-    # skipping the first N scenarios consumed by val_safe.  The loader-level
-    # max_scenarios cap must be expanded before islice; otherwise skipping
-    # would consume the entire capped iterator and yield no data.
-    if scenario_start_index > 0 and cfg.get("max_scenarios") is not None:
-        iter_cfg["max_scenarios"] = scenario_start_index + int(cfg.get("max_scenarios"))
-    raw_iter = iter(itertools.islice(scenario_iterator(iter_cfg), scenario_start_index, None))
+    scenario_stride = max(1, int(cfg.get("scenario_stride", 1)))
+    scenario_worker_index = int(cfg.get("scenario_worker_index", 0)) % scenario_stride
+    # Apply start/stride/worker controls centrally and exactly once.  The source
+    # iterator receives neutral controls plus a cap large enough to reach the
+    # requested global source indices.
+    raw_iter = iter(_selected_scenario_iterator(cfg))
     progress_bar = None
     profile_path = out / "build_profile.csv"
     scene_profile_path = out / "build_scene_time_profile.csv"
@@ -2176,6 +2236,9 @@ def _build_dataset_unlocked(
         "progress_mode": progress_mode,
         "raw_scenarios_seen": int(raw_scenarios_seen),
         "scenario_start_index": int(scenario_start_index),
+        "scenario_stride": int(scenario_stride),
+        "scenario_worker_index": int(scenario_worker_index),
+        "source_max_scenarios": _scenario_source_config(cfg).get("max_scenarios"),
         "scene_time_groups": int(scene_time_groups),
         "skipped_no_planning_times": int(skipped_no_planning_times),
         "unique_raw_scene_ids": int(len(raw_scene_ids)),

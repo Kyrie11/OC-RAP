@@ -75,7 +75,10 @@ ADOPT_LEGACY_RESUME="${ADOPT_LEGACY_RESUME:-0}"
 GPU0="${GPU0:-0}"
 GPU1="${GPU1:-1}"
 REQUIRE_JAX_GPU="${REQUIRE_JAX_GPU:-1}"
+REQUIRE_WAYMAX_STACK="${REQUIRE_WAYMAX_STACK:-1}"
 PROFILE_BUILD="${PROFILE_BUILD:-0}"
+RESET_DATASETS="${RESET_DATASETS:-}"
+LOG_TAIL_LINES="${LOG_TAIL_LINES:-160}"
 # Keep 0 for an exact continuation of datasets originally built with the full
 # Waymax teacher.  A positive value enables screened-hybrid acceleration but is
 # a semantic contract change and therefore requires clean outputs/shards.
@@ -126,8 +129,25 @@ PY
 
 echo "WOMD standard validation: ${VAL_SHARD_COUNT} shards"
 echo "Waymax input pattern: ${WOMD_VAL}"
+[[ "${GPU0}" != "${GPU1}" ]] \
+  || die "GPU0 and GPU1 both resolve to ${GPU0}. Use two distinct CUDA device ids."
 verify_jax_gpu "${GPU0}"
 verify_jax_gpu "${GPU1}"
+verify_waymax_stack() {
+  [[ "${REQUIRE_WAYMAX_STACK}" == "1" ]] || return 0
+  CUDA_VISIBLE_DEVICES="${GPU0}" XLA_PYTHON_CLIENT_PREALLOCATE=false \
+    "${PYTHON_BIN}" - <<'PY'
+import importlib
+mods = ["jax", "tensorflow", "waymax", "waymax.config", "waymax.dataloader"]
+loaded = {}
+for name in mods:
+    module = importlib.import_module(name)
+    loaded[name] = getattr(module, "__version__", "available")
+print({"waymax_stack": loaded})
+PY
+}
+
+verify_waymax_stack
 
 if [[ -d "${WOMD_ROOT}/validation_interactive" ]]; then
   INTERACTIVE_COUNT="$(
@@ -176,15 +196,86 @@ missing = sorted(k for k in required if k not in src)
 if missing:
     raise SystemExit(f"ERROR: assign_regimes is missing labels: {missing}")
 
-builder_src = inspect.getsource(builder.build_dataset)
-if 'iter_cfg["scenario_start_index"] = 0' not in builder_src:
+required_builder_symbols = {
+    "_apply_scenario_scan_controls",
+    "_scenario_source_config",
+    "_selected_scenario_iterator",
+}
+missing_builder = sorted(name for name in required_builder_symbols if not hasattr(builder, name))
+if missing_builder:
     raise SystemExit(
-        "ERROR: builder.py is missing the single-application "
-        "scenario_start_index fix."
+        "ERROR: builder.py is missing centralized WOMD scan-control helpers: "
+        f"{missing_builder}"
     )
 
-print(f"OC-RAP source preflight passed: {repo}")
+selected = list(
+    builder._apply_scenario_scan_controls(
+        iter(range(40)),
+        start_index=3,
+        stride=6,
+        worker_index=4,
+        max_scenarios=3,
+    )
+)
+if selected != [7, 13, 19]:
+    raise SystemExit(
+        "ERROR: builder WOMD scan controls failed the functional single-application test: "
+        f"got={selected}, expected=[7, 13, 19]"
+    )
+source_cfg = builder._scenario_source_config(
+    {
+        "scenario_start_index": 3,
+        "scenario_stride": 6,
+        "scenario_worker_index": 4,
+        "max_scenarios": 3,
+    }
+)
+expected_source = {
+    "scenario_start_index": 0,
+    "scenario_stride": 1,
+    "scenario_worker_index": 0,
+    "max_scenarios": 20,
+}
+for key, expected in expected_source.items():
+    if source_cfg.get(key) != expected:
+        raise SystemExit(
+            "ERROR: builder source scan neutralization is incorrect: "
+            f"key={key}, got={source_cfg.get(key)}, expected={expected}"
+        )
+
+print(f"OC-RAP source and WOMD partition preflight passed: {repo}")
 PY
+
+if [[ "${PREFLIGHT_ONLY}" == "1" ]]; then
+  echo "Preflight-only mode passed; no dataset was built."
+  exit 0
+fi
+
+reset_one_dataset() {
+  local name="$1"
+  case "${name}" in
+    val_safe|test_safe|val_near_contact|test_near_contact|val_contact|test_contact) ;;
+    *) die "RESET_DATASETS contains unsupported dataset name: ${name}" ;;
+  esac
+  "${PYTHON_BIN}" - "${OCRAP_ROOT}" "${OCRAP_ROOT}/${name}" <<'PY'
+from pathlib import Path
+import shutil, sys
+root = Path(sys.argv[1]).resolve()
+target = Path(sys.argv[2]).resolve()
+if target.parent != root:
+    raise SystemExit(f"Refusing unsafe reset outside OCRAP_ROOT: {target}")
+shutil.rmtree(target, ignore_errors=True)
+PY
+  rm -f -- "${OCRAP_ROOT}/.${name}.build.log"
+  echo "reset dataset output: ${OCRAP_ROOT}/${name}"
+}
+
+if [[ -n "${RESET_DATASETS//[[:space:],]/}" ]]; then
+  RESET_NORMALIZED="${RESET_DATASETS//,/ }"
+  for d in ${RESET_NORMALIZED}; do
+    reset_one_dataset "${d}"
+  done
+fi
 
 if [[ "${RESUME}" != "1" ]]; then
   for d in \
@@ -198,11 +289,6 @@ if [[ "${RESUME}" != "1" ]]; then
 fi
 
 mkdir -p "${OCRAP_ROOT}"
-
-if [[ "${PREFLIGHT_ONLY}" == "1" ]]; then
-  echo "Preflight-only mode passed; no dataset was built."
-  exit 0
-fi
 
 # -----------------------------------------------------------------------------
 # Shared configuration
@@ -413,6 +499,19 @@ build_contact() {
 # launching all six together causes JAX compilation and rollout contention.
 # -----------------------------------------------------------------------------
 
+show_build_log() {
+  local name="$1"
+  local log="${OCRAP_ROOT}/.${name}.build.log"
+  echo >&2
+  echo "----- ${name} log tail (${log}) -----" >&2
+  if [[ -f "${log}" ]]; then
+    tail -n "${LOG_TAIL_LINES}" "${log}" >&2 || true
+  else
+    echo "log file does not exist" >&2
+  fi
+  echo "----- end ${name} log -----" >&2
+}
+
 wait_pair() {
   local p0="$1" p1="$2" name0="$3" name1="$4"
   local s0=0 s1=0
@@ -420,8 +519,15 @@ wait_pair() {
   wait "${p0}"; s0=$?
   wait "${p1}"; s1=$?
   set -e
-  [[ "${s0}" == 0 ]] || die "${name0} build failed; see ${OCRAP_ROOT}/.${name0}.build.log"
-  [[ "${s1}" == 0 ]] || die "${name1} build failed; see ${OCRAP_ROOT}/.${name1}.build.log"
+  if [[ "${s0}" != 0 || "${s1}" != 0 ]]; then
+    [[ "${s0}" == 0 ]] || show_build_log "${name0}"
+    [[ "${s1}" == 0 ]] || show_build_log "${name1}"
+    echo >&2
+    echo "ERROR: dataset workers failed: ${name0}=${s0}, ${name1}=${s1}" >&2
+    echo "Common causes are shown above: WOMD path/shard mismatch, Waymax API/import failure," >&2
+    echo "CUDA/JAX failure, or an incompatible legacy resume contract." >&2
+    exit 3
+  fi
 }
 
 mkdir -p "${OCRAP_ROOT}/reports"
