@@ -536,13 +536,13 @@ build_safe val "${VAL_SAFE_WORKER}" "${VAL_SAFE_RAW}" \
   "${OCRAP_ROOT}/val_safe" "${GPU0}" >"${OCRAP_ROOT}/.val_safe.build.log" 2>&1 & P0=$!
 build_safe test "${TEST_SAFE_WORKER}" "${TEST_SAFE_RAW}" \
   "${OCRAP_ROOT}/test_safe" "${GPU1}" >"${OCRAP_ROOT}/.test_safe.build.log" 2>&1 & P1=$!
-wait_pair "${P0}" "${P1}" val_safe test_safe
+#wait_pair "${P0}" "${P1}" val_safe test_safe
 
 build_near val "${VAL_NEAR_WORKER}" "${VAL_NEAR_RAW}" \
   "${OCRAP_ROOT}/val_near_contact" "${GPU0}" >"${OCRAP_ROOT}/.val_near_contact.build.log" 2>&1 & P0=$!
 build_near test "${TEST_NEAR_WORKER}" "${TEST_NEAR_RAW}" \
   "${OCRAP_ROOT}/test_near_contact" "${GPU1}" >"${OCRAP_ROOT}/.test_near_contact.build.log" 2>&1 & P1=$!
-wait_pair "${P0}" "${P1}" val_near_contact test_near_contact
+#wait_pair "${P0}" "${P1}" val_near_contact test_near_contact
 
 build_contact val "${VAL_CONTACT_WORKER}" "${VAL_CONTACT_RAW}" \
   "${OCRAP_ROOT}/val_contact" "${GPU0}" >"${OCRAP_ROOT}/.val_contact.build.log" 2>&1 & P0=$!
