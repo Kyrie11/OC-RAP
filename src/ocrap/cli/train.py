@@ -121,6 +121,21 @@ def _progress_iter(loader: DataLoader, *, enabled: bool, desc: str):
         return loader
 
 
+def _keep_fully_frozen_modules_in_eval(model: torch.nn.Module) -> None:
+    """Disable train-time dropout in modules whose parameters are all frozen.
+
+    Head-only recovery-value training freezes the OC-MERO encoder. Calling
+    ``model.train()`` nevertheless re-enabled dropout inside that frozen
+    encoder, so the new head was trained on stochastic features that disappear
+    at calibration/inference time. Keep only fully frozen subtrees in eval
+    mode; trainable direct heads and routers remain in training mode.
+    """
+    for module in list(model.modules())[1:]:
+        params = list(module.parameters())
+        if params and all(not p.requires_grad for p in params):
+            module.eval()
+
+
 def _dataset_root_name(p: Path) -> str:
     parts = list(p.parts)
     for i in range(len(parts) - 2, -1, -1):
@@ -210,6 +225,8 @@ def _epoch(
     art_cfg = cfg.get("artifact", {}) if isinstance(cfg.get("artifact", {}), dict) else {}
     tcfg = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
     model_cfg = cfg.get("model", {}) if isinstance(cfg.get("model", {}), dict) else {}
+    if training and bool(tcfg.get("frozen_modules_eval", False)):
+        _keep_fully_frozen_modules_in_eval(model)
     progress = bool(tcfg.get("progress", cfg.get("progress", True)))
     totals: dict[str, float] = {}
     n = 0
@@ -528,9 +545,15 @@ def _epoch(
             success_gamma=option_gamma,
             success_temperature=option_temperature,
         )
-        if "direct_recovery_value_logit" in out:
-            loss_direct_value = direct_uncertainty_recovery_value_loss(
-                out["direct_recovery_value_logit"], out["direct_recovery_value_logvar"],
+        def _direct_value_loss(
+            pred_logit: torch.Tensor,
+            pred_logvar: torch.Tensor,
+            pred_opportunity_logit: torch.Tensor | None,
+            *,
+            direct_bucket_ids: tuple[int, ...] | None = None,
+        ) -> torch.Tensor:
+            return direct_uncertainty_recovery_value_loss(
+                pred_logit, pred_logvar,
                 batch["r_dep_star"].float(), batch["r_orc_star"].float(), teacher_q,
                 batch["root_probs"].float(), batch["root_valid"], batch["option_valid"],
                 batch["scene_hash"], batch["time_index"],
@@ -538,7 +561,7 @@ def _epoch(
                 batch["is_nominal"].float(),
                 batch.get("bucket_id", torch.full_like(batch["time_index"], 3)),
                 macro_ids=_parse_int_tuple(tcfg.get("direct_value_macro_ids", "2,3,5,7"), (2, 3, 5, 7)),
-                bucket_ids=_parse_int_tuple(tcfg.get("direct_value_bucket_ids", "1,2"), (1, 2)),
+                bucket_ids=(direct_bucket_ids if direct_bucket_ids is not None else _parse_int_tuple(tcfg.get("direct_value_bucket_ids", "1,2"), (1, 2))),
                 temperature=float(tcfg.get("direct_value_temperature", 0.12)),
                 positive_gain=float(tcfg.get("direct_value_positive_gain", 0.03)),
                 negative_gain=float(tcfg.get("direct_value_negative_gain", 0.02)),
@@ -560,12 +583,68 @@ def _epoch(
                 top_rank_weight=float(tcfg.get("direct_value_top_rank_weight", 0.0)),
                 success_gamma=option_gamma,
                 success_temperature=option_temperature,
-                pred_opportunity_logit=out.get("direct_recovery_opportunity_logit"),
+                pred_opportunity_logit=pred_opportunity_logit,
                 opportunity_weight=float(tcfg.get("direct_value_opportunity_weight", 0.0)),
                 opportunity_pos_weight=float(tcfg.get("direct_value_opportunity_pos_weight", 6.0)),
             )
+
+        zero_direct = r_dep.sum() * 0.0
+        loss_direct_value_mixture = zero_direct
+        loss_direct_value_near = zero_direct
+        loss_direct_value_contact = zero_direct
+        if "direct_recovery_value_logit" in out:
+            loss_direct_value_mixture = _direct_value_loss(
+                out["direct_recovery_value_logit"],
+                out["direct_recovery_value_logvar"],
+                out.get("direct_recovery_opportunity_logit"),
+            )
+            expert_supervision = bool(tcfg.get("direct_value_expert_supervision", False))
+            all_expert = out.get("direct_expert_outputs")
+            expert_bucket_ids = _parse_int_tuple(
+                tcfg.get("direct_value_expert_bucket_ids", "1,2"), (1, 2)
+            )
+            if expert_supervision and all_expert is not None:
+                expert_losses: list[torch.Tensor] = []
+                for expert_idx, direct_bucket in enumerate(expert_bucket_ids):
+                    if expert_idx >= int(all_expert.shape[1]):
+                        break
+                    expert_out = all_expert[:, expert_idx]
+                    opp = expert_out[:, 2] if expert_out.shape[-1] >= 3 else None
+                    expert_loss = _direct_value_loss(
+                        expert_out[:, 0], expert_out[:, 1], opp,
+                        direct_bucket_ids=(int(direct_bucket),),
+                    )
+                    expert_losses.append(expert_loss)
+                    if int(direct_bucket) == 1:
+                        loss_direct_value_near = expert_loss
+                    elif int(direct_bucket) == 2:
+                        loss_direct_value_contact = expert_loss
+                if expert_losses:
+                    loss_expert = torch.stack(expert_losses).mean()
+                    mixture_weight = float(tcfg.get("direct_value_mixture_weight", 0.25))
+                    loss_direct_value = loss_expert + mixture_weight * loss_direct_value_mixture
+                else:
+                    loss_direct_value = loss_direct_value_mixture
+            else:
+                loss_direct_value = loss_direct_value_mixture
         else:
-            loss_direct_value = r_dep.sum() * 0.0
+            loss_direct_value = zero_direct
+        loss_direct_value_worst = torch.maximum(loss_direct_value_near, loss_direct_value_contact)
+
+        loss_direct_router_supervision = zero_direct
+        direct_router_accuracy = zero_direct
+        if "direct_expert_logits" in out and bool(tcfg.get("direct_router_supervision", False)):
+            router_logits = out["direct_expert_logits"]
+            bucket = batch.get("bucket_id", torch.full_like(batch["time_index"], 3)).long().reshape(-1)
+            router_target = bucket - 1
+            router_valid = (router_target >= 0) & (router_target < router_logits.shape[-1])
+            if bool(router_valid.any()):
+                loss_direct_router_supervision = F.cross_entropy(
+                    router_logits[router_valid], router_target[router_valid]
+                )
+                direct_router_accuracy = (
+                    router_logits[router_valid].argmax(dim=-1) == router_target[router_valid]
+                ).float().mean()
         if "direct_expert_weights" in out:
             # Small unsupervised anti-collapse regularizer.  It does not teach a
             # regime label; it only prevents one observation-conditioned expert
@@ -611,6 +690,7 @@ def _epoch(
             + float(lw.get("recovery_advantage", 0.0)) * loss_recovery_advantage
             + float(lw.get("direct_recovery_value", 0.0)) * loss_direct_value
             + float(lw.get("direct_router_balance", 0.0)) * loss_direct_router_balance
+            + float(lw.get("direct_router_supervision", 0.0)) * loss_direct_router_supervision
             + float(lw.get("utility", 0.2)) * loss_util
         )
         if training:
@@ -650,14 +730,28 @@ def _epoch(
             "loss_teacher_pcd_direct": loss_teacher_pcd_direct.item(),
             "loss_recovery_advantage": loss_recovery_advantage.item(),
             "loss_direct_recovery_value": loss_direct_value.item(),
+            "loss_direct_recovery_value_mixture": loss_direct_value_mixture.item(),
+            "loss_direct_recovery_value_near": loss_direct_value_near.item(),
+            "loss_direct_recovery_value_contact": loss_direct_value_contact.item(),
+            "loss_direct_recovery_value_worst": loss_direct_value_worst.item(),
             "loss_direct_router_balance": loss_direct_router_balance.item(),
+            "loss_direct_router_supervision": loss_direct_router_supervision.item(),
+            "direct_router_accuracy": direct_router_accuracy.item(),
             "loss_utility": loss_util.item(),
             "pred_r_dep_mean": r_dep.mean().item(),
             "teacher_r_dep_mean": batch["r_dep_star"].float().mean().item(),
         }
         for k, v in vals.items():
             totals[k] = totals.get(k, 0.0) + float(v) * bsz
-    return {k: float(v / max(n, 1)) for k, v in totals.items()} | {"num_samples": int(n), "num_batches": int(len(loader))}
+    metrics = {k: float(v / max(n, 1)) for k, v in totals.items()}
+    # Checkpoint selection must not hide a failing regime behind the mixed
+    # validation average.  Recompute the worst expert loss from the epoch-level
+    # Near/Contact aggregates (rather than averaging per-batch maxima).
+    metrics["loss_direct_recovery_value_worst"] = max(
+        float(metrics.get("loss_direct_recovery_value_near", 0.0)),
+        float(metrics.get("loss_direct_recovery_value_contact", 0.0)),
+    )
+    return metrics | {"num_samples": int(n), "num_batches": int(len(loader))}
 
 
 
@@ -983,6 +1077,7 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_value_num_experts=int(model_cfg.get("direct_recovery_value_num_experts", 2)),
         direct_recovery_value_expert_routing=str(model_cfg.get("direct_recovery_value_expert_routing", "bucket")),
         direct_recovery_value_router_temperature=float(model_cfg.get("direct_recovery_value_router_temperature", 1.0)),
+        direct_recovery_value_router_pooling=str(model_cfg.get("direct_recovery_value_router_pooling", "candidate")),
     ).to(device)
     tcfg = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
 
@@ -1089,6 +1184,7 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "direct_recovery_value_num_experts": int(model_cfg.get("direct_recovery_value_num_experts", 2)),
             "direct_recovery_value_expert_routing": str(model_cfg.get("direct_recovery_value_expert_routing", "bucket")),
             "direct_recovery_value_router_temperature": float(model_cfg.get("direct_recovery_value_router_temperature", 1.0)),
+            "direct_recovery_value_router_pooling": str(model_cfg.get("direct_recovery_value_router_pooling", "candidate")),
             "model_state": model.state_dict(),
             "optimizer_state": opt.state_dict(),
             "epoch": int(ep),

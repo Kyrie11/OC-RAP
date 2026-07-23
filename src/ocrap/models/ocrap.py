@@ -48,6 +48,7 @@ class OCRAPModel(nn.Module):
         direct_recovery_value_num_experts: int = 2,
         direct_recovery_value_expert_routing: str = "bucket",
         direct_recovery_value_router_temperature: float = 1.0,
+        direct_recovery_value_router_pooling: str = "candidate",
     ):
         super().__init__()
         self.num_roots = int(num_roots)
@@ -75,6 +76,9 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_value_router_temperature = float(
             max(direct_recovery_value_router_temperature, 1.0e-3)
         )
+        self.direct_recovery_value_router_pooling = str(
+            direct_recovery_value_router_pooling or "candidate"
+        ).strip().lower()
         if self.direct_recovery_value_expert_routing not in {
             "bucket",
             "hard_bucket",
@@ -89,6 +93,11 @@ class OCRAPModel(nn.Module):
             )
         if self.direct_recovery_value_output not in {"probability", "score"}:
             raise ValueError(f"Unsupported direct_recovery_value_output={direct_recovery_value_output!r}")
+        if self.direct_recovery_value_router_pooling not in {"candidate", "scene", "shared_raw"}:
+            raise ValueError(
+                "Unsupported direct_recovery_value_router_pooling="
+                f"{direct_recovery_value_router_pooling!r}"
+            )
 
         if self.encoder_type == "structured_transformer":
             layout = FlatFeatureLayout(**self.feature_layout)
@@ -146,6 +155,13 @@ class OCRAPModel(nn.Module):
         # tokens to a small trainable adapter without changing any OC-MERO head.
         direct_in_dim = d_model
         self.direct_candidate_raw_dim = 0
+        self.direct_candidate_feature_dim = 0
+        if self.encoder_type == "structured_transformer":
+            layout = FlatFeatureLayout(**self.feature_layout)
+            self.direct_candidate_feature_dim = int(
+                layout.ego_dim + layout.prefix_param_dim + layout.num_macros + layout.scalar_dim
+                + layout.prefix_flat_dim + layout.control_flat_dim
+            )
         if self.direct_recovery_value_pooling in {"candidate_concat", "prefix_concat", "action_concat"}:
             direct_in_dim = 6 * d_model
         elif self.direct_recovery_value_pooling in {"candidate_concat_raw", "action_concat_raw", "certificate_action_adapter"}:
@@ -156,11 +172,7 @@ class OCRAPModel(nn.Module):
             # differences while leaving all calibrated certificate heads intact.
             if self.encoder_type != "structured_transformer":
                 raise ValueError("candidate_concat_raw requires structured_transformer")
-            layout = FlatFeatureLayout(**self.feature_layout)
-            self.direct_candidate_raw_dim = int(
-                layout.ego_dim + layout.prefix_param_dim + layout.num_macros + layout.scalar_dim
-                + layout.prefix_flat_dim + layout.control_flat_dim
-            )
+            self.direct_candidate_raw_dim = self.direct_candidate_feature_dim
             direct_in_dim = 6 * d_model + self.direct_candidate_raw_dim
         # Optional regime embedding retained only for controlled ablations. The
         # v44 OC-RAVA default disables it: deployment uses one observation-only
@@ -172,7 +184,16 @@ class OCRAPModel(nn.Module):
             if self.direct_recovery_value_head and self.direct_recovery_value_regime_conditioning
             else None
         )
-        direct_router_in_dim = direct_in_dim
+        if self.direct_recovery_value_router_pooling == "scene":
+            direct_router_in_dim = d_model
+        elif self.direct_recovery_value_router_pooling == "shared_raw":
+            if self.encoder_type != "structured_transformer" or self.direct_candidate_feature_dim <= 0:
+                raise ValueError("shared_raw router pooling requires structured_transformer")
+            direct_router_in_dim = int(input_dim) - self.direct_candidate_feature_dim
+            if direct_router_in_dim <= 0:
+                raise ValueError("shared_raw router pooling produced an empty observation feature")
+        else:
+            direct_router_in_dim = direct_in_dim
         if self.direct_regime_embedding is not None:
             direct_in_dim += self.direct_recovery_value_regime_dim
         direct_out_dim = 3 if self.direct_recovery_opportunity_head else 2
@@ -310,7 +331,17 @@ class OCRAPModel(nn.Module):
                     direct_features = scene_token.repeat(1, 6)
                 if self.direct_recovery_value_pooling in {"candidate_concat_raw", "action_concat_raw", "certificate_action_adapter"}:
                     direct_features = torch.cat([direct_features, self._candidate_raw_features(x)], dim=-1)
-            router_features = direct_features
+            # v46 OC-RACE can route from the raw shared observation block. This
+            # excludes prefix parameters, macro identity, planned states and
+            # controls, so every candidate from one scene-time receives the same
+            # expert mixture. The legacy candidate-conditioned router remains an
+            # explicit ablation for older checkpoints.
+            if self.direct_recovery_value_router_pooling == "shared_raw":
+                router_features = x[:, self.direct_candidate_feature_dim:]
+            elif self.direct_recovery_value_router_pooling == "scene":
+                router_features = scene_token
+            else:
+                router_features = direct_features
             if self.direct_regime_embedding is not None:
                 if bucket_id is None:
                     # "other" is the backward-compatible fallback. v44 runtime

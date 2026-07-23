@@ -1355,16 +1355,29 @@ def direct_uncertainty_recovery_value_loss(
         mag_w = 1.0 + torch.clamp(t_delta.abs() / max(float(positive_gain), 1.0e-3), max=4.0)
         centered = (mag_w * F.smooth_l1_loss(p_delta, t_delta, reduction='none')).sum() / mag_w.sum().clamp_min(1.0e-6)
         terms = [float(centered_weight) * centered]
-        group_range = float((target[idx].max() - target[idx].min()).item())
+        # The deployable decision set is nominal plus the macros that can
+        # actually be admitted by this head.  v45 applied the listwise term to
+        # every candidate in ``idx`` (including disallowed keep/lane-shift or
+        # perturbation candidates), so the value head was optimized against a
+        # ranking that deployment could never execute.
+        decision_idx = torch.cat([nom.reshape(1), recs])
+        group_range = float((target[decision_idx].max() - target[decision_idx].min()).item())
         if group_range >= float(min_group_range) and float(listwise_weight) > 0.0:
-            teacher_prob = torch.softmax((target[idx] - target[idx].mean()) / tau, dim=0)
-            pred_log_prob = torch.log_softmax((score[idx] - score[idx].mean()) / tau, dim=0)
+            teacher_prob = torch.softmax((target[decision_idx] - target[decision_idx].mean()) / tau, dim=0)
+            pred_log_prob = torch.log_softmax((score[decision_idx] - score[decision_idx].mean()) / tau, dim=0)
             terms.append(float(listwise_weight) * F.kl_div(pred_log_prob, teacher_prob, reduction='sum'))
         best_j = int(torch.argmax(t_delta).item())
         t_adv = t_delta[best_j]
         p_adv = p_delta[best_j]
         pos_mask = t_delta >= float(positive_gain)
-        neg_mask = t_delta <= 0.0
+        # A large fraction of OC-RAP candidate pairs have exactly tied teacher
+        # PCD (the v45 Near/Contact medians and q75 are both zero).  Treating all
+        # ties as hard negatives forced every tied candidate below a negative
+        # margin and collapsed the predicted advantage distribution.  Only
+        # statistically meaningful negative deltas receive the hard negative
+        # ranking penalty; the dead-zone is handled by gentle regression.
+        neg_mask = t_delta <= -float(negative_gain)
+        tie_mask = (~pos_mask) & (~neg_mask)
         if opportunity_logits is not None and float(opportunity_weight) > 0.0:
             labels = pos_mask.to(dtype=opportunity_logits.dtype)
             # v45: opportunity means "this candidate improves over this group's
@@ -1383,6 +1396,11 @@ def direct_uncertainty_recovery_value_loss(
                 pair_terms.append(F.softplus((float(rank_margin) - p_delta[pos_mask]) / tau).mean() * tau)
             if bool(neg_mask.any()):
                 pair_terms.append(float(false_positive_weight) * F.softplus((p_delta[neg_mask] + float(rank_margin)) / tau).mean() * tau)
+            if bool(tie_mask.any()):
+                pair_terms.append(
+                    float(ambiguous_group_weight)
+                    * F.smooth_l1_loss(p_delta[tie_mask], t_delta[tie_mask])
+                )
             if pair_terms:
                 terms.append(float(pairwise_weight) * torch.stack(pair_terms).sum())
         if float(top_rank_weight) > 0.0 and bool(pos_mask.any()) and bool(neg_mask.any()):

@@ -157,6 +157,7 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         direct_recovery_value_num_experts=int(ckpt.get("direct_recovery_value_num_experts", model_cfg.get("direct_recovery_value_num_experts", 2))),
         direct_recovery_value_expert_routing=str(ckpt.get("direct_recovery_value_expert_routing", model_cfg.get("direct_recovery_value_expert_routing", "bucket"))),
         direct_recovery_value_router_temperature=float(ckpt.get("direct_recovery_value_router_temperature", model_cfg.get("direct_recovery_value_router_temperature", 1.0))),
+        direct_recovery_value_router_pooling=str(ckpt.get("direct_recovery_value_router_pooling", model_cfg.get("direct_recovery_value_router_pooling", "candidate"))),
     ).to(device)
     # Strict loading remains the default for checkpoints with matching geometry.
     # A v39 checkpoint can initialize v40 training through train.py's explicit
@@ -176,6 +177,7 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_value_num_experts"] = int(ckpt.get("direct_recovery_value_num_experts", model_cfg.get("direct_recovery_value_num_experts", 2)))
     cfg["model"]["direct_recovery_value_expert_routing"] = str(ckpt.get("direct_recovery_value_expert_routing", model_cfg.get("direct_recovery_value_expert_routing", "bucket")))
     cfg["model"]["direct_recovery_value_router_temperature"] = float(ckpt.get("direct_recovery_value_router_temperature", model_cfg.get("direct_recovery_value_router_temperature", 1.0)))
+    cfg["model"]["direct_recovery_value_router_pooling"] = str(ckpt.get("direct_recovery_value_router_pooling", model_cfg.get("direct_recovery_value_router_pooling", "candidate")))
     return ModelBundle(model=model, cfg=cfg, device=device)
 
 

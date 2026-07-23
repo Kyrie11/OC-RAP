@@ -164,3 +164,48 @@ The main neural head is observation-only, but threshold verification data must s
   - If the 2-rollout execution probe has no real direct action or violates actionability/NUP, do not expand.
   - Do not use contaminated `test_near_contact` for final claims, regardless of model result.
 - **Implementation validation:** `87 passed, 2 warnings`; all Python modules compile and v45 shell scripts pass syntax checks. Warnings are existing PyTorch nested-tensor notices.
+
+## v45 observed result and decision (2026-07-23, completed)
+
+- **Natural gate outcome:** both archived checkpoints failed the joint Near+Contact contract because Near produced no finite opportunity+score rule and `verify.num_selected=0`. The pipeline correctly stopped before offline evaluation and Waymax.
+- **Balanced checkpoint:** best epoch 1, validation direct loss `2.5666`; Near correlation/MAE `0.1570/0.2863`, predicted advantage median `-0.2495`, no verified selections. Contact correlation/MAE `0.2726/0.2761`, 7 verified selections, 5 positive and 2 harmful.
+- **Precision checkpoint:** best epoch 1, validation direct loss `4.2477`; Near correlation/MAE `0.1533/0.3052`, predicted advantage median `-0.3832`, no verified selections. Contact correlation/MAE `0.2939/0.2794`, 9 verified selections, 6 positive and 3 harmful.
+- **Primary target defect:** teacher advantage median and q75 are exactly zero in both Near and Contact. The v45 loss used `t_delta <= 0` as a hard negative mask, so tied candidates were forced below a negative margin. This explains the systematic negative predicted-advantage shift.
+- **Expert identifiability defect:** despite the v45 design note describing task experts, the implementation trained only the soft mixture plus a balance regularizer. No expert-specific Near/Contact loss was present, so the two heads could collapse to exchangeable/duplicated solutions.
+- **Risk-denominator defect:** Contact was marked valid by controlling harmful selections divided by all groups. The actually executed conditional harmful rates were `2/7=28.6%` and `3/9=33.3%`; group-exposure UCBs hid this because coverage was low.
+- **Optimization evidence:** both variants deteriorated after epoch 1. The head-only LR/direct-loss scale was too aggressive for the sparse/tied target.
+- **Contract ambiguity:** archived JSON uses the development constraints (`required_min_scenes=20`, harmful group UCB cap `0.12`) even though the supplied launch command states `FINAL_RUN=1`. Treat the artifacts as development evidence only.
+- **Do not repeat:** do not relax the Near threshold, count ties as negative, accept group-exposure-only safety, or call a val-derived rule final.
+
+## v46 — OC-RACE (implemented, awaiting GPU/Waymax results)
+
+- **Name:** Observation-Consistent Regime-Adaptive Calibrated Experts.
+- **Role in the paper:** a selective residual-admission extension of OC-RAP/OC-MERO, not a replacement for observation-consistent recoverability.
+- **Learning changes:**
+  1. Use a positive / dead-zone tie / meaningful-negative target with separate `positive_gain` and `negative_gain`.
+  2. Restrict listwise ranking to nominal plus deployment-eligible recovery macros.
+  3. Directly supervise expert 0 on Near and expert 1 on Contact; retain a small loss on the deployable soft mixture.
+  4. Route from candidate-independent shared observation features. Macro, prefix parameters, states, and controls are excluded from the router input, so all candidates in one scene-time share expert weights.
+  5. Select checkpoints by worst-regime validation loss rather than mixed average loss.
+  6. Reduce LR/direct loss scale and add gradient clipping.
+- **Calibration changes:**
+  1. Select supported macro families only from the fit fold, then freeze them before verification.
+  2. Use scene-disjoint folds by default.
+  3. Report and enforce both harmful/all-group exposure UCB and harmful/selected-action conditional UCB.
+  4. Enforce positive pred/teacher advantage correlation in both development and final gates.
+  5. Stamp `contract_mode`, `valid_for_development`, `valid_for_deployment`, and `valid_for_active_contract` in every artifact.
+  6. Final mode requires dedicated calibration roots and forbids the default validation roots.
+- **Engineering fixes:**
+  1. Fix `FREEZE_PREFIXES=""`: `${VAR-default}` now preserves an explicit empty value for full clean-base unfreezing.
+  2. Stage-0 reads `train_summary.json` and writes the clean marker only when `freeze_param_prefixes=[]`.
+  3. Fully frozen module subtrees remain in eval mode so dropout does not create train/calibration feature shift.
+- **Cost control:** retain calibration -> offline-use -> 2 -> 4 -> 8 Waymax gates; no checkpoint enters Waymax unless both regimes pass the active calibration contract.
+- **Validation:** full local test suite `100 passed, 3 warnings`; warnings are existing PyTorch nested-tensor notices. Python compilation and shell syntax are rechecked at packaging time.
+- **Falsification rules:**
+  - If Near or Contact has no finite rule, stop.
+  - If correlation is below the active threshold, stop.
+  - If conditional harmful-selection UCB exceeds budget, stop even when harmful/all-group exposure is small.
+  - If offline direct reasons are zero, stop.
+  - If the oracle candidate frontier has too few positive opportunities, modify candidate generation rather than the admission threshold.
+- **Required ablations:** v45; +tie dead zone; +expert supervision; +shared-observation router; +deployable listwise set; +fit-supported macros; +dual-risk contract; full v46. Also compare hard bucket, uniform, candidate-conditioned, and shared-observation routing.
+- **Publication blockers still open:** independent calibration roots; paper-scale Contact scenes; actual/validated post-contact states rather than only counterfactual labels; complete official/matched baseline runs; multi-seed closed-loop confidence intervals; alignment of the paper's five regimes with implemented evidence.
