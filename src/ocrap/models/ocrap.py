@@ -49,6 +49,7 @@ class OCRAPModel(nn.Module):
         direct_recovery_value_num_experts: int = 2,
         direct_recovery_value_expert_routing: str = "bucket",
         direct_recovery_value_router_temperature: float = 1.0,
+        direct_recovery_value_router_pooling: str = "candidate",
         direct_recovery_expert_disagreement_penalty: float = 0.5,
     ):
         super().__init__()
@@ -78,6 +79,9 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_value_router_temperature = float(
             max(direct_recovery_value_router_temperature, 1.0e-3)
         )
+        self.direct_recovery_value_router_pooling = str(
+            direct_recovery_value_router_pooling or "candidate"
+        ).strip().lower()
         self.direct_recovery_expert_disagreement_penalty = float(
             max(direct_recovery_expert_disagreement_penalty, 0.0)
         )
@@ -88,6 +92,8 @@ class OCRAPModel(nn.Module):
             "soft",
             "moe",
             "uniform",
+            "uniform_robust",
+            "robust_observation",
             "robust_ensemble",
             "risk_ensemble",
         }:
@@ -97,6 +103,11 @@ class OCRAPModel(nn.Module):
             )
         if self.direct_recovery_value_output not in {"probability", "score"}:
             raise ValueError(f"Unsupported direct_recovery_value_output={direct_recovery_value_output!r}")
+        if self.direct_recovery_value_router_pooling not in {"candidate", "scene", "shared_raw", "ego_shared_raw"}:
+            raise ValueError(
+                "Unsupported direct_recovery_value_router_pooling="
+                f"{direct_recovery_value_router_pooling!r}"
+            )
 
         if self.encoder_type == "structured_transformer":
             layout = FlatFeatureLayout(**self.feature_layout)
@@ -154,6 +165,15 @@ class OCRAPModel(nn.Module):
         # tokens to a small trainable adapter without changing any OC-MERO head.
         direct_in_dim = d_model
         self.direct_candidate_raw_dim = 0
+        self.direct_candidate_feature_dim = 0
+        self.direct_ego_feature_dim = 0
+        if self.encoder_type == "structured_transformer":
+            layout = FlatFeatureLayout(**self.feature_layout)
+            self.direct_ego_feature_dim = int(layout.ego_dim)
+            self.direct_candidate_feature_dim = int(
+                layout.ego_dim + layout.prefix_param_dim + layout.num_macros + layout.scalar_dim
+                + layout.prefix_flat_dim + layout.control_flat_dim
+            )
         if self.direct_recovery_value_pooling in {"candidate_concat", "prefix_concat", "action_concat"}:
             direct_in_dim = 6 * d_model
         elif self.direct_recovery_value_pooling in {"candidate_concat_raw", "action_concat_raw", "certificate_action_adapter"}:
@@ -164,11 +184,7 @@ class OCRAPModel(nn.Module):
             # differences while leaving all calibrated certificate heads intact.
             if self.encoder_type != "structured_transformer":
                 raise ValueError("candidate_concat_raw requires structured_transformer")
-            layout = FlatFeatureLayout(**self.feature_layout)
-            self.direct_candidate_raw_dim = int(
-                layout.ego_dim + layout.prefix_param_dim + layout.num_macros + layout.scalar_dim
-                + layout.prefix_flat_dim + layout.control_flat_dim
-            )
+            self.direct_candidate_raw_dim = self.direct_candidate_feature_dim
             direct_in_dim = 6 * d_model + self.direct_candidate_raw_dim
         # Optional regime embedding retained only for controlled ablations. The
         # v44 OC-RAVA default disables it: deployment uses one observation-only
@@ -180,7 +196,18 @@ class OCRAPModel(nn.Module):
             if self.direct_recovery_value_head and self.direct_recovery_value_regime_conditioning
             else None
         )
-        direct_router_in_dim = direct_in_dim
+        if self.direct_recovery_value_router_pooling == "scene":
+            direct_router_in_dim = d_model
+        elif self.direct_recovery_value_router_pooling in {"shared_raw", "ego_shared_raw"}:
+            if self.encoder_type != "structured_transformer" or self.direct_candidate_feature_dim <= 0:
+                raise ValueError("shared raw router pooling requires structured_transformer")
+            direct_router_in_dim = int(input_dim) - self.direct_candidate_feature_dim
+            if self.direct_recovery_value_router_pooling == "ego_shared_raw":
+                direct_router_in_dim += self.direct_ego_feature_dim
+            if direct_router_in_dim <= 0:
+                raise ValueError("shared raw router pooling produced an empty observation feature")
+        else:
+            direct_router_in_dim = direct_in_dim
         if self.direct_regime_embedding is not None:
             direct_in_dim += self.direct_recovery_value_regime_dim
         direct_out_dim = 2 + int(self.direct_recovery_opportunity_head) + int(self.direct_recovery_harm_head)
@@ -228,7 +255,7 @@ class OCRAPModel(nn.Module):
                 nn.Linear(max(16, d_model // 2), self.direct_recovery_value_num_experts),
             )
             if self.direct_value_heads is not None
-            and self.direct_recovery_value_expert_routing in {"soft_observation", "soft", "moe"}
+            and self.direct_recovery_value_expert_routing in {"soft_observation", "soft", "moe", "robust_observation"}
             else None
         )
         self.root_signature_head = nn.Linear(d_model, self.d_signature) if self.d_signature > 0 else None
@@ -305,7 +332,17 @@ class OCRAPModel(nn.Module):
                 "candidate_concat_raw", "action_concat_raw", "certificate_action_adapter"
             }:
                 direct_features = torch.cat([direct_features, self._candidate_raw_features(x)], dim=-1)
-        router_features = direct_features
+        if self.direct_recovery_value_router_pooling == "shared_raw":
+            router_features = x[:, self.direct_candidate_feature_dim:]
+        elif self.direct_recovery_value_router_pooling == "ego_shared_raw":
+            router_features = torch.cat(
+                [x[:, : self.direct_ego_feature_dim], x[:, self.direct_candidate_feature_dim:]],
+                dim=-1,
+            )
+        elif self.direct_recovery_value_router_pooling == "scene":
+            router_features = scene_token
+        else:
+            router_features = direct_features
         if self.direct_regime_embedding is not None:
             if bucket_id is None:
                 bucket_id = torch.full(
@@ -329,7 +366,7 @@ class OCRAPModel(nn.Module):
                     expert_idx, num_classes=self.direct_recovery_value_num_experts
                 ).to(dtype=all_direct.dtype)
                 direct = (all_direct * weights.unsqueeze(-1)).sum(dim=1)
-            elif routing in {"uniform", "robust_ensemble", "risk_ensemble"}:
+            elif routing in {"uniform", "uniform_robust", "robust_ensemble", "risk_ensemble"}:
                 weights = torch.full(
                     (x.shape[0], self.direct_recovery_value_num_experts),
                     1.0 / float(self.direct_recovery_value_num_experts),
@@ -337,7 +374,7 @@ class OCRAPModel(nn.Module):
                 )
                 mean = all_direct.mean(dim=1)
                 std = all_direct.std(dim=1, unbiased=False)
-                if routing in {"robust_ensemble", "risk_ensemble"}:
+                if routing in {"uniform_robust", "robust_ensemble", "risk_ensemble"}:
                     direct = mean.clone()
                     lam = self.direct_recovery_expert_disagreement_penalty
                     direct[:, 0] = mean[:, 0] - lam * std[:, 0]
@@ -350,6 +387,7 @@ class OCRAPModel(nn.Module):
                     if self.direct_recovery_harm_head:
                         direct[:, cursor] = mean[:, cursor] + lam * std[:, cursor]
                     out["direct_expert_disagreement"] = std
+                    out["direct_expert_output_std"] = std
                 else:
                     direct = mean
             else:
@@ -359,7 +397,24 @@ class OCRAPModel(nn.Module):
                 weights = torch.softmax(
                     router_logits / self.direct_recovery_value_router_temperature, dim=-1
                 )
-                direct = (all_direct * weights.unsqueeze(-1)).sum(dim=1)
+                mean = (all_direct * weights.unsqueeze(-1)).sum(dim=1)
+                if routing == "robust_observation":
+                    centered = all_direct - mean.unsqueeze(1)
+                    std = torch.sqrt((weights.unsqueeze(-1) * centered.square()).sum(dim=1).clamp_min(1.0e-8))
+                    direct = mean.clone()
+                    lam = self.direct_recovery_expert_disagreement_penalty
+                    direct[:, 0] = mean[:, 0] - lam * std[:, 0]
+                    direct[:, 1] = mean[:, 1] + lam * std[:, 1]
+                    cursor = 2
+                    if self.direct_recovery_opportunity_head:
+                        direct[:, cursor] = mean[:, cursor] - lam * std[:, cursor]
+                        cursor += 1
+                    if self.direct_recovery_harm_head:
+                        direct[:, cursor] = mean[:, cursor] + lam * std[:, cursor]
+                    out["direct_expert_disagreement"] = std
+                    out["direct_expert_output_std"] = std
+                else:
+                    direct = mean
                 out["direct_expert_logits"] = router_logits
             out["direct_expert_weights"] = weights
             out["direct_expert_outputs"] = all_direct

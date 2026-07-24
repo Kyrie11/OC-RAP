@@ -11,8 +11,8 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Sampler, WeightedRandomSampler
 
-from ocrap.algorithms.ocmero import torch_oc_mero
-from ocrap.data.serialization import ensure_dir, write_json
+from ocrap.algorithms.ocmero import oc_mero, torch_oc_mero
+from ocrap.data.serialization import ensure_dir, load_npz, write_json
 from ocrap.models.data import OCRAPSampleDataset, OPTION_FEATURE_DIM, bucket_id_for_path, iter_sample_paths_many, scalar_metadata_for_path, split_paths_by_npz_split, stable_scene_hash
 from ocrap.models.losses import (
     anti_oracle_loss,
@@ -34,6 +34,11 @@ from ocrap.models.losses import (
     macro_shared_success_calibration_loss,
     observation_consistent_recovery_advantage_loss,
     direct_uncertainty_recovery_value_loss,
+)
+from ocrap.evaluation.metrics import (
+    best_shared_option_index,
+    deployable_recovery_success,
+    post_contact_deployability_score,
 )
 from ocrap.models.ocrap import OCRAPModel
 from ocrap.utils.seed import seed_everything
@@ -121,6 +126,14 @@ def _progress_iter(loader: DataLoader, *, enabled: bool, desc: str):
         return tqdm(loader, desc=desc, leave=False, dynamic_ncols=True)
     except Exception:
         return loader
+
+
+def _keep_fully_frozen_modules_in_eval(model: torch.nn.Module) -> None:
+    """Keep fully frozen subtrees deterministic while trainable heads train."""
+    for module in list(model.modules())[1:]:
+        params = list(module.parameters())
+        if params and all(not p.requires_grad for p in params):
+            module.eval()
 
 
 def _dataset_root_name(p: Path) -> str:
@@ -324,6 +337,8 @@ def _epoch(
     art_cfg = cfg.get("artifact", {}) if isinstance(cfg.get("artifact", {}), dict) else {}
     tcfg = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
     model_cfg = cfg.get("model", {}) if isinstance(cfg.get("model", {}), dict) else {}
+    if training and bool(tcfg.get("frozen_modules_eval", False)):
+        _keep_fully_frozen_modules_in_eval(model)
     progress = bool(tcfg.get("progress", cfg.get("progress", True)))
     direct_only_fast = bool(tcfg.get("direct_only_fast_path", False))
     amp_enabled = bool(tcfg.get("amp", False)) and device.type == "cuda"
@@ -910,6 +925,34 @@ def _sampler_weight_for_path(p: Path, cfg: dict, root_counts: Counter, total: in
         return 1.0, False, False, False
 
 
+def _sampler_teacher_pcd(path: Path, cfg: dict) -> float:
+    """Compute the exact composite PCD target used by training/calibration."""
+    d = load_npz(path)
+    m = np.asarray(d["m_star"], dtype=np.float64)
+    probs = np.asarray(d["root_probs"], dtype=np.float64)
+    c = np.asarray(d.get("c_star", np.eye(m.shape[0])), dtype=np.float64)
+    root_valid = np.asarray(d.get("root_valid", np.ones(m.shape[0])), dtype=bool)
+    option_valid = np.asarray(d.get("option_valid", np.ones(m.shape[1])), dtype=bool)
+    ocfg = cfg.get("ocmero", {}) if isinstance(cfg.get("ocmero", {}), dict) else {}
+    res = oc_mero(
+        m, probs, c,
+        alpha=float(ocfg.get("alpha", 0.2)),
+        beta=float(ocfg.get("beta", 0.2)),
+        option_valid=option_valid,
+        root_valid=root_valid,
+        use_lcvar=bool(ocfg.get("use_lcvar", True)),
+        use_obs_kernel=bool(ocfg.get("use_obs_kernel", True)),
+        top_m=int(ocfg.get("top_m", 8)),
+    )
+    option = best_shared_option_index(
+        res.q, probs, gamma=0.0, root_valid=root_valid, option_valid=option_valid
+    )
+    drs = deployable_recovery_success(m, probs, option, root_valid=root_valid)
+    r_dep = float(np.asarray(d.get("r_dep_star", res.r_dep)).reshape(()))
+    r_orc = float(np.asarray(d.get("r_orc_star", res.r_orc)).reshape(()))
+    return float(post_contact_deployability_score(drs, r_dep, max(0.0, r_orc - r_dep)))
+
+
 def _make_group_batch_sampler(ds: OCRAPSampleDataset, cfg: dict, batch_size: int) -> SceneTimeBatchSampler | None:
     tcfg = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
     if not bool(tcfg.get("group_batching", False)):
@@ -1195,6 +1238,7 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_value_num_experts=int(model_cfg.get("direct_recovery_value_num_experts", 2)),
         direct_recovery_value_expert_routing=str(model_cfg.get("direct_recovery_value_expert_routing", "bucket")),
         direct_recovery_value_router_temperature=float(model_cfg.get("direct_recovery_value_router_temperature", 1.0)),
+        direct_recovery_value_router_pooling=str(model_cfg.get("direct_recovery_value_router_pooling", "candidate")),
         direct_recovery_expert_disagreement_penalty=float(model_cfg.get("direct_recovery_expert_disagreement_penalty", 0.5)),
     ).to(device)
     tcfg = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
@@ -1348,6 +1392,7 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "direct_recovery_value_num_experts": int(model_cfg.get("direct_recovery_value_num_experts", 2)),
             "direct_recovery_value_expert_routing": str(model_cfg.get("direct_recovery_value_expert_routing", "bucket")),
             "direct_recovery_value_router_temperature": float(model_cfg.get("direct_recovery_value_router_temperature", 1.0)),
+            "direct_recovery_value_router_pooling": str(model_cfg.get("direct_recovery_value_router_pooling", "candidate")),
             "direct_recovery_expert_disagreement_penalty": float(model_cfg.get("direct_recovery_expert_disagreement_penalty", 0.5)),
             "model_state": model.state_dict(),
             "optimizer_state": opt.state_dict(),

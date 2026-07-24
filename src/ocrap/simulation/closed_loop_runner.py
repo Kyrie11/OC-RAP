@@ -1552,15 +1552,33 @@ def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, s
             agg["waymax_metrics"][mk] = float(sum(v for v, _ in finite))
         elif mk.endswith("_any") or mk in {"secondary_overlap_event"}:
             agg["waymax_metrics"][mk] = float(max(v for v, _ in finite))
-        elif mk.endswith("_max"):
+        elif mk.endswith("_max") or "_max_" in mk:
             agg["waymax_metrics"][mk] = float(max(v for v, _ in finite))
-        elif mk.endswith("_min"):
+        elif mk.endswith("_min") or "_min_" in mk:
             agg["waymax_metrics"][mk] = float(min(v for v, _ in finite))
         elif mk.endswith("_rate"):
             denom = sum(max(w, 0) for _, w in finite)
             agg["waymax_metrics"][mk] = float(sum(v * max(w, 0) for v, w in finite) / max(denom, 1))
         else:
             agg["waymax_metrics"][mk] = float(np.mean([v for v, _ in finite]))
+    wm = agg["waymax_metrics"]
+    def _scene_mean(name: str) -> float:
+        vals = [float((sc.get("metric_summary", {}) or {}).get(name)) for sc in scene_results
+                if (sc.get("metric_summary", {}) or {}).get(name) is not None
+                and np.isfinite(float((sc.get("metric_summary", {}) or {}).get(name)))]
+        return float(np.mean(vals)) if vals else 0.0
+    def _step_weighted(name: str) -> float:
+        vals = [(float((sc.get("metric_summary", {}) or {}).get(name)), int(sc.get("num_metric_steps", 0)))
+                for sc in scene_results if (sc.get("metric_summary", {}) or {}).get(name) is not None
+                and np.isfinite(float((sc.get("metric_summary", {}) or {}).get(name)))]
+        den = sum(max(w, 0) for _, w in vals)
+        return float(sum(v * max(w, 0) for v, w in vals) / max(den, 1)) if vals else 0.0
+    agg["collision_scene_rate"] = _scene_mean("overlap_any")
+    agg["collision_step_rate"] = _step_weighted("overlap_mean")
+    agg["offroad_scene_rate"] = _scene_mean("offroad_any")
+    agg["offroad_step_rate"] = _step_weighted("offroad_mean")
+    agg["minimum_clearance_m"] = float(wm.get("min_clearance_m_min", 0.0))
+    agg["minimum_ttc_s"] = float(wm.get("ttc_s_min", 0.0))
     # Distribution across scenes is the publication-level unit; do not average
     # per-scene p05 values and call it a global p05.
     for base in ("min_clearance_m", "ttc_s"):

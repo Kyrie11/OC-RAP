@@ -5,6 +5,12 @@ REPO="${OCRAP_REPO:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$REPO"
 export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONUNBUFFERED=1
+# Two concurrent A30 jobs share a Xeon Gold 5220R. Limit intra-op pools so
+# dataloader workers do not oversubscribe the CPU.
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}"
+export MKL_NUM_THREADS="${MKL_NUM_THREADS:-4}"
+export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-4}"
+export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-4}"
 
 TRAIN_OCRAP_ROOT="${TRAIN_OCRAP_ROOT:-/data0/senzeyu2/dataset/OCRAP_v48_train}"
 EVAL_OCRAP_ROOT="${EVAL_OCRAP_ROOT:-/data0/senzeyu2/dataset/OCRAP}"
@@ -50,8 +56,8 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.amp=true --set training.amp_dtype=bfloat16 \
   --set training.allow_tf32=true --set training.matmul_precision=high \
   --set training.cudnn_benchmark=true --set training.pin_memory=true \
-  --set training.num_workers="${NUM_WORKERS:-8}" --set training.persistent_workers=true \
-  --set training.prefetch_factor="${PREFETCH_FACTOR:-3}" --set training.progress=true \
+  --set training.num_workers="${NUM_WORKERS:-6}" --set training.persistent_workers=true \
+  --set training.prefetch_factor="${PREFETCH_FACTOR:-2}" --set training.progress=true \
   --set training.save_every_epoch=false --set training.best_metric=loss_direct_recovery_value_worst \
   --set training.best_metric_mode=min \
   --set training.group_batching=true --set training.group_batching_replacement=true \

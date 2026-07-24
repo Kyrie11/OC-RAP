@@ -59,6 +59,10 @@ def main() -> int:
     ap.add_argument("--min-positive-groups-contact", type=int, default=0)
     ap.add_argument("--min-positive-scenes-near", type=int, default=0)
     ap.add_argument("--min-positive-scenes-contact", type=int, default=0)
+    ap.add_argument(
+        "--quality-mode", choices=["strict", "warn", "off"], default="strict",
+        help="strict exits non-zero on requested coverage shortfalls; warn records them but continues; off skips target checks",
+    )
     args = ap.parse_args()
 
     paths = iter_sample_paths_many(args.dataset)
@@ -118,6 +122,37 @@ def main() -> int:
         }
 
     by_bucket = {"near": bucket_summary(1), "contact": bucket_summary(2)}
+
+    # Development-screening heuristics are deliberately weaker than the final
+    # publication coverage targets. They answer whether an algorithm-direction
+    # experiment is worth running before paying for a multi-day rebuild.
+    screening_thresholds = {
+        "near": {"adequate_groups": 80, "adequate_scenes": 40, "marginal_groups": 20, "marginal_scenes": 10},
+        "contact": {"adequate_groups": 60, "adequate_scenes": 30, "marginal_groups": 15, "marginal_scenes": 8},
+    }
+    for name, lim in screening_thresholds.items():
+        got = by_bucket[name]
+        groups_n = int(got["positive_groups"])
+        scenes_n = int(got["positive_scenes"])
+        macro_share = got.get("max_positive_macro_share")
+        top10_share = got.get("top10_positive_scene_share")
+        concentrated = bool(
+            (macro_share is not None and float(macro_share) > 0.80)
+            or (top10_share is not None and float(top10_share) > 0.60)
+        )
+        if groups_n >= lim["adequate_groups"] and scenes_n >= lim["adequate_scenes"] and not concentrated:
+            status = "adequate_for_direction_screening"
+            action = "reuse_existing_dataset"
+        elif groups_n >= lim["marginal_groups"] and scenes_n >= lim["marginal_scenes"]:
+            status = "marginal_debug_only"
+            action = "run_screening_but_do_not_make_strong_claims"
+        else:
+            status = "data_limited"
+            action = "consider_targeted_increment_or_rebuild_after_audit"
+        got["screening_status"] = status
+        got["screening_concentration_warning"] = concentrated
+        got["screening_recommended_action"] = action
+
     summary = {
         "event": "teacher_pcd_index_complete",
         "output": str(args.output),
@@ -129,11 +164,8 @@ def main() -> int:
         "positive_gain": args.positive_gain,
         "positive_advantage_groups": len(positive),
         "by_bucket": by_bucket,
+        "quality_mode": args.quality_mode,
     }
-    if args.summary_output:
-        args.summary_output.parent.mkdir(parents=True, exist_ok=True)
-        args.summary_output.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(summary, flush=True)
 
     failures: list[str] = []
     limits = {
@@ -146,9 +178,19 @@ def main() -> int:
             failures.append(f"{name}: positive groups {got['positive_groups']} < {min_groups}")
         if int(got["positive_scenes"]) < min_scenes:
             failures.append(f"{name}: positive scenes {got['positive_scenes']} < {min_scenes}")
+    if args.quality_mode == "off":
+        failures = []
+    summary["quality_failures"] = failures
+    summary["quality_passed"] = not failures
+    if args.summary_output:
+        args.summary_output.parent.mkdir(parents=True, exist_ok=True)
+        args.summary_output.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(summary, flush=True)
     if failures:
-        print({"event": "teacher_pcd_index_quality_failure", "failures": failures}, flush=True)
-        return 4
+        event = "teacher_pcd_index_quality_failure" if args.quality_mode == "strict" else "teacher_pcd_index_quality_warning"
+        print({"event": event, "failures": failures}, flush=True)
+        if args.quality_mode == "strict":
+            return 4
     return 0
 
 

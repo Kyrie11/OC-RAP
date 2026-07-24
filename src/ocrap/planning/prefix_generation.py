@@ -43,6 +43,45 @@ def _macro_bank_from_cfg(cfg: dict) -> list[str]:
     return bank or ["nominal"]
 
 
+def _macro_sequence_from_cfg(cfg: dict, n: int) -> list[tuple[str, int]]:
+    """Build a candidate macro/variant schedule without hidden duplicates.
+
+    An explicit ``prefix_macro_schedule`` can front-load several distinct
+    variants of important recovery macros. Variant ids are counted per macro.
+    Without a schedule, preserve the historical round-robin behavior.
+    """
+    n = max(1, int(n))
+    bank = _macro_bank_from_cfg(cfg)
+    requested = _list_cfg(cfg.get("prefix_macro_schedule", None))
+    if not requested:
+        seq: list[tuple[str, int]] = [("nominal", 0)]
+        for rep in range(max(1, n)):
+            for macro in bank[1:]:
+                seq.append((macro, rep))
+                if len(seq) >= n:
+                    return seq[:n]
+        pad_macro = "perturb_nominal" if "perturb_nominal" in bank else bank[-1]
+        while len(seq) < n:
+            seq.append((pad_macro, len(seq)))
+        return seq[:n]
+
+    schedule = [m for m in requested if m in bank and m != "nominal"]
+    if not schedule:
+        schedule = [m for m in bank if m != "nominal"]
+    if not schedule:
+        return [("nominal", 0)] * n
+    counts: dict[str, int] = {}
+    seq = [("nominal", 0)]
+    idx = 0
+    while len(seq) < n:
+        macro = schedule[idx % len(schedule)]
+        variant = counts.get(macro, 0)
+        counts[macro] = variant + 1
+        seq.append((macro, variant))
+        idx += 1
+    return seq[:n]
+
+
 def _macro_params(macro: str, variant: int, ego_speed: float, cfg: dict) -> np.ndarray:
     """Generate a finite, deliberately diverse recovery frontier.
 
@@ -169,18 +208,7 @@ def generate_candidate_prefixes(history: SceneHistory, cfg: dict) -> list[Candid
     n = int(cfg.get("num_candidate_prefixes", 24))
     ego_speed = float(history.ego_state[6])
     prefixes: list[CandidatePrefix] = []
-    macro_bank = _macro_bank_from_cfg(cfg)
-    macro_seq: list[tuple[str, int]] = [("nominal", 0)]
-    for rep in range(max(1, n)):
-        for m in macro_bank[1:]:
-            macro_seq.append((m, rep))
-            if len(macro_seq) >= n:
-                break
-        if len(macro_seq) >= n:
-            break
-    pad_macro = "perturb_nominal" if "perturb_nominal" in macro_bank else macro_bank[-1]
-    while len(macro_seq) < n:
-        macro_seq.append((pad_macro, len(macro_seq)))
+    macro_seq = _macro_sequence_from_cfg(cfg, n)
     seen_signatures: set[tuple[str, tuple[float, ...]]] = set()
     for i, (macro, variant) in enumerate(macro_seq[:n]):
         params = _macro_params(macro, variant, ego_speed, cfg)

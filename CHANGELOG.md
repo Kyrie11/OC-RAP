@@ -33,3 +33,7 @@
 - Fixed OC-MERO masking and removed unsafe unconditional `R_orc >= R_dep` assumptions.
 - Fixed hidden-agent spawning so it is restricted to unknown, drivable, non-visible cells and delayed after prefix execution.
 - Fixed paper artifact fixture generation so artifact fraction, negative deployability, oracle recoverability, hidden emergence counts, and off-diagonal observation compatibility are all non-degenerate.
+
+## v48.1
+
+See `ALGORITHM_CHANGELOG_V48_1.md`. The default workflow now reuses the existing datasets, isolates proxy calibration from development validation by scene, seals test roots, and permits later dedicated recalibration without retraining.

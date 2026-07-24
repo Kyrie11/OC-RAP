@@ -1374,7 +1374,11 @@ def direct_uncertainty_recovery_value_loss(
         p_adv = p_delta[best_j]
         pos_mask = t_delta >= float(positive_gain)
         harmful_mask = t_delta <= -float(negative_gain)
-        neg_mask = t_delta <= 0.0
+        # Only deltas beyond the negative margin are harmful negatives. Exact
+        # and near ties form the tri-state dead zone and should be regressed
+        # gently toward their teacher delta rather than forced below a margin.
+        neg_mask = harmful_mask
+        tie_mask = (~pos_mask) & (~harmful_mask)
         opp_delta_logits = None
         if opportunity_logits is not None:
             opp_delta_logits = opportunity_logits[recs] - opportunity_logits[nom]
@@ -1416,6 +1420,11 @@ def direct_uncertainty_recovery_value_loss(
                 pair_terms.append(F.softplus((float(rank_margin) - p_delta[pos_mask]) / tau).mean() * tau)
             if bool(neg_mask.any()):
                 pair_terms.append(float(false_positive_weight) * F.softplus((p_delta[neg_mask] + float(rank_margin)) / tau).mean() * tau)
+            if bool(tie_mask.any()):
+                pair_terms.append(
+                    float(ambiguous_group_weight)
+                    * F.smooth_l1_loss(p_delta[tie_mask], t_delta[tie_mask])
+                )
             if pair_terms:
                 terms.append(float(pairwise_weight) * torch.stack(pair_terms).sum())
         if float(top_rank_weight) > 0.0 and bool(pos_mask.any()) and bool(neg_mask.any()):

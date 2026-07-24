@@ -1,0 +1,17 @@
+OC-RAP v48.1 REUSE-CAL validation status
+Date: 2026-07-24
+
+- Full pytest suite: 112 passed, 4 warnings
+- Python compileall: passed for src/ and tools/
+- Shell syntax: passed
+  - run_v48_two_gpu_fast_commands.txt
+  - scripts/build_v48_calibration_regimes.sh
+  - scripts/recalibrate_v48_on_dedicated_set.sh
+  - scripts/train_ocrap_v48_trac_sr.sh
+- build_teacher_pcd_index_v48.py CLI smoke test: passed
+- Import/function smoke test: passed
+
+Important scope note:
+No WOMD/Waymax GPU training, dataset construction, calibration, offline evaluation,
+or closed-loop rollout was executed in this environment. Algorithm effectiveness and
+Natural gate status remain to be established on the user's two NVIDIA A30 GPUs.
