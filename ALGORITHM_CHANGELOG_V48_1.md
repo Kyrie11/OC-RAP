@@ -19,3 +19,10 @@
 - Reconnected configurable macro/variant scheduling to candidate generation.
 - Fixed closed-loop aggregation of embedded max/min metric names and explicit collision/offroad aliases.
 - Final regression: 112 tests passed; compile and shell syntax checks passed.
+
+## v48.1.1 manifest preflight repair
+
+- Added `tools/ensure_manifest_v48.py` and `tools/manifest_repair_v48.py`.
+- Existing NPZ samples can now reconstruct a missing/stale `manifest.csv` without rebuilding datasets.
+- `run_v48_two_gpu_fast_commands.txt` performs this metadata-only preflight before scene-overlap auditing and proxy calibration splitting.
+- Reconstruction is atomic and aborts if the dataset changes during scanning, avoiding a silent partial snapshot of an active build.

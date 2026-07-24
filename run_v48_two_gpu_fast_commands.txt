@@ -64,6 +64,21 @@ for d in train_near_contact train_contact; do
   [[ -d "$TRAIN_OCRAP_ROOT/$d" ]] || { echo "missing training root: $TRAIN_OCRAP_ROOT/$d" >&2; exit 2; }
 done
 
+# Dataset generation writes NPZ files atomically but normally writes manifest.csv
+# only at clean shutdown.  Reconstruct missing/stale metadata manifests without
+# rebuilding any samples, so interrupted legacy builds remain usable for the
+# scene-disjoint proxy split.  The repair aborts if files change during scanning.
+if [[ "${AUTO_ENSURE_MANIFESTS:-1}" == "1" ]]; then
+  python tools/ensure_manifest_v48.py \
+    --dataset-root "$TRAIN_OCRAP_ROOT/train_near_contact" \
+    --dataset-root "$TRAIN_OCRAP_ROOT/train_contact" \
+    --dataset-root "$EVAL_OCRAP_ROOT/val_safe" \
+    --dataset-root "$EVAL_OCRAP_ROOT/val_near_contact" \
+    --dataset-root "$EVAL_OCRAP_ROOT/val_contact" \
+    --workers="${MANIFEST_WORKERS:-6}" --rebuild-if-stale \
+    2>&1 | tee "$LOG_DIR/ensure_manifests.log"
+fi
+
 python tools/check_scene_overlap_v48.py \
   --train-root "$TRAIN_OCRAP_ROOT/train_near_contact" \
   --train-root "$TRAIN_OCRAP_ROOT/train_contact" \
