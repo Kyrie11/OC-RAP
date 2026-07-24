@@ -16,10 +16,7 @@ from typing import Iterable
 def scenes(root: Path) -> set[str]:
     manifest = root / "manifest.csv"
     if not manifest.exists():
-        raise FileNotFoundError(
-            f"{manifest} is missing. Reconstruct metadata only with: "
-            f"python tools/ensure_manifest_v48.py --dataset-root {root} --rebuild-if-stale"
-        )
+        raise FileNotFoundError(manifest)
     out: set[str] = set()
     with manifest.open(newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):

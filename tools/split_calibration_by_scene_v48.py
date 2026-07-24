@@ -53,10 +53,7 @@ def main() -> int:
 
     manifest = args.input / "manifest.csv"
     if not manifest.exists():
-        raise FileNotFoundError(
-            f"{manifest} is missing. Reconstruct metadata only with: "
-            f"python tools/ensure_manifest_v48.py --dataset-root {args.input} --rebuild-if-stale"
-        )
+        raise FileNotFoundError(manifest)
     with manifest.open(newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
         fields = list(rows[0].keys()) if rows else []
