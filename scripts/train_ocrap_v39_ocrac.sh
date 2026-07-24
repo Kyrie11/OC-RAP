@@ -11,10 +11,7 @@ export RUN=${RUN:-runs/ocrap_v39_ocrac_${VARIANT}}
 export MODEL_DIR=${MODEL_DIR:-$RUN/model_v39_ocrac}
 export CAL_DIR=${CAL_DIR:-$RUN/calibration}
 export TRAIN_GPU=${TRAIN_GPU:-0}
-# Use ${VAR-default}, not ${VAR:-default}: an explicitly empty value is the
-# supported contract for a full clean-base refresh.  The previous form silently
-# replaced FREEZE_PREFIXES="" with the default frozen encoder list.
-export FREEZE_PREFIXES=${FREEZE_PREFIXES-encoder,root_queries,root_cross_attn,root_self_attn,root_norm1,root_norm2,root_norm3,root_ffn}
+export FREEZE_PREFIXES=${FREEZE_PREFIXES:-encoder,root_queries,root_cross_attn,root_self_attn,root_norm1,root_norm2,root_norm3,root_ffn}
 mkdir -p "$MODEL_DIR" "$CAL_DIR"
 [[ -f "$INIT_CKPT" ]] || { echo "missing INIT_CKPT=$INIT_CKPT" >&2; exit 2; }
 

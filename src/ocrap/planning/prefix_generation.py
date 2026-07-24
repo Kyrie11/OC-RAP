@@ -43,86 +43,50 @@ def _macro_bank_from_cfg(cfg: dict) -> list[str]:
     return bank or ["nominal"]
 
 
-
-def _macro_sequence_from_cfg(cfg: dict, n: int) -> list[tuple[str, int]]:
-    """Build a candidate macro/variant schedule without hidden duplicates.
-
-    ``prefix_macro_schedule`` may repeat a macro to front-load several distinct
-    parameter variants before dataset-quality pruning.  Variant ids are counted
-    per macro, so a schedule such as ``merge,brake,merge,brake`` yields merge
-    variants 0/1 and brake variants 0/1.  When unset, retain the historical
-    round-robin bank for backward compatibility.
-    """
-    bank = _macro_bank_from_cfg(cfg)
-    requested = _list_cfg(cfg.get("prefix_macro_schedule", None))
-    if not requested:
-        seq: list[tuple[str, int]] = [("nominal", 0)]
-        for rep in range(max(1, n)):
-            for macro in bank[1:]:
-                seq.append((macro, rep))
-                if len(seq) >= n:
-                    return seq[:n]
-        pad_macro = "perturb_nominal" if "perturb_nominal" in bank else bank[-1]
-        while len(seq) < n:
-            seq.append((pad_macro, len(seq)))
-        return seq[:n]
-
-    schedule = [m for m in requested if m in bank and m != "nominal"]
-    if not schedule:
-        schedule = [m for m in bank if m != "nominal"]
-    if not schedule:
-        return [("nominal", 0)] * max(1, n)
-    counts: dict[str, int] = {}
-    seq = [("nominal", 0)]
-    idx = 0
-    while len(seq) < n:
-        macro = schedule[idx % len(schedule)]
-        variant = counts.get(macro, 0)
-        counts[macro] = variant + 1
-        seq.append((macro, variant))
-        idx += 1
-    return seq[:n]
-
 def _macro_params(macro: str, variant: int, ego_speed: float, cfg: dict) -> np.ndarray:
-    if macro in ("nominal", "keep"):
+    """Generate a finite, deliberately diverse recovery frontier.
+
+    Older versions changed ``variant`` for several macro names without changing
+    their parameters, so candidate slots were consumed by exact duplicates.
+    v48 uses bounded variant banks whose geometry/control meaning is distinct.
+    """
+    v = int(max(0, variant))
+    if macro == "nominal":
         return np.array([ego_speed, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    if macro == "keep":
+        dv = (-0.6, 0.0, 0.6)[v % 3]
+        return np.array([max(0.0, ego_speed + dv), 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
     if macro == "brake":
-        return np.array([max(0.0, ego_speed - 2.0 - variant), 0.0, -2.0 - 0.5 * variant, 15.0, 0.0], dtype=np.float32)
+        decel = (1.5, 2.5, 3.5, 4.5)[v % 4]
+        stop_s = (8.0, 12.0, 18.0, 25.0)[(v // 4) % 4]
+        return np.array([max(0.0, ego_speed - decel), 0.0, -decel, stop_s, 0.0], dtype=np.float32)
     if macro == "yield":
-        level = min(max(int(variant), 0), 5)
-        return np.array([
-            max(0.0, ego_speed - (2.0 + 0.75 * level)),
-            0.0,
-            -1.5 - 0.4 * level,
-            8.0 + 2.0 * level,
-            0.0,
-        ], dtype=np.float32)
+        decel = (1.5, 2.5, 3.5)[v % 3]
+        stop_s = (8.0, 12.0, 18.0, 24.0)[(v // 3) % 4]
+        return np.array([max(0.0, ego_speed - decel), 0.0, -decel, stop_s, 0.0], dtype=np.float32)
     if macro == "lane_shift":
-        return np.array([ego_speed, (-1.0 if variant % 2 else 1.0) * 3.5, 0.0, 0.0, 1.0], dtype=np.float32)
+        side = -1.0 if v % 2 else 1.0
+        magnitude = (1.5, 2.5, 3.5)[(v // 2) % 3]
+        speed_delta = (-0.5, 0.0)[(v // 6) % 2]
+        return np.array([max(0.0, ego_speed + speed_delta), side * magnitude, 0.0, 0.0, 1.0], dtype=np.float32)
     if macro == "merge":
-        level = min(max(int(variant) // 2, 0), 4)
-        side = -1.0 if int(variant) % 2 else 1.0
-        speed_delta = (0.0, 0.5, -0.5, 1.0, -1.0)[level]
-        return np.array([
-            max(0.0, ego_speed + speed_delta),
-            side * (1.5 + 0.45 * level),
-            0.2 + 0.15 * level,
-            0.0,
-            1.0,
-        ], dtype=np.float32)
+        side = -1.0 if v % 2 else 1.0
+        magnitude = (1.2, 2.0, 2.8)[(v // 2) % 3]
+        speed_delta = (-0.5, 0.5, 1.2)[(v // 6) % 3]
+        return np.array([max(0.0, ego_speed + speed_delta), side * magnitude, 0.4 * speed_delta, 0.0, 1.0], dtype=np.float32)
     if macro == "pull_over":
-        return np.array([max(0.0, ego_speed - 3.0), -4.0, -2.0, 20.0, 1.0], dtype=np.float32)
+        side = -1.0 if v % 2 == 0 else 1.0
+        magnitude = (3.5, 4.5)[(v // 2) % 2]
+        decel = (2.0, 3.0)[(v // 4) % 2]
+        return np.array([max(0.0, ego_speed - decel), side * magnitude, -decel, 18.0 + 6.0 * ((v // 8) % 2), 1.0], dtype=np.float32)
     if macro == "stabilize":
-        level = min(max(int(variant), 0), 5)
-        return np.array([
-            max(0.0, ego_speed - (0.5 + 0.75 * level)),
-            0.0,
-            -0.5 - 0.35 * level,
-            0.0,
-            0.0,
-        ], dtype=np.float32)
+        decel = (0.5, 1.0, 1.8, 2.5)[v % 4]
+        lateral = (-0.6, 0.0, 0.6)[(v // 4) % 3]
+        return np.array([max(0.0, ego_speed - decel), lateral, -0.5 * decel, 0.0, 0.0], dtype=np.float32)
     # perturb nominal
-    return np.array([max(0.0, ego_speed + (-1) ** variant * 0.8), 0.4 * ((variant % 3) - 1), 0.0, 0.0, 0.0], dtype=np.float32)
+    speed_delta = (-1.0, -0.5, 0.5, 1.0)[v % 4]
+    lateral = (-0.6, -0.3, 0.3, 0.6)[(v // 4) % 4]
+    return np.array([max(0.0, ego_speed + speed_delta), lateral, 0.0, 0.0, 0.0], dtype=np.float32)
 
 
 def _rollout(history: SceneHistory, macro: str, params: np.ndarray, cfg: dict) -> tuple[np.ndarray, np.ndarray, dict]:
@@ -205,12 +169,25 @@ def generate_candidate_prefixes(history: SceneHistory, cfg: dict) -> list[Candid
     n = int(cfg.get("num_candidate_prefixes", 24))
     ego_speed = float(history.ego_state[6])
     prefixes: list[CandidatePrefix] = []
-    macro_seq = _macro_sequence_from_cfg(cfg, n)
+    macro_bank = _macro_bank_from_cfg(cfg)
+    macro_seq: list[tuple[str, int]] = [("nominal", 0)]
+    for rep in range(max(1, n)):
+        for m in macro_bank[1:]:
+            macro_seq.append((m, rep))
+            if len(macro_seq) >= n:
+                break
+        if len(macro_seq) >= n:
+            break
+    pad_macro = "perturb_nominal" if "perturb_nominal" in macro_bank else macro_bank[-1]
+    while len(macro_seq) < n:
+        macro_seq.append((pad_macro, len(macro_seq)))
+    seen_signatures: set[tuple[str, tuple[float, ...]]] = set()
     for i, (macro, variant) in enumerate(macro_seq[:n]):
         params = _macro_params(macro, variant, ego_speed, cfg)
         states, controls, diag = _rollout(history, macro, params, cfg)
-        if i >= len(MACROS) * max(1, variant):
-            diag["padded_duplicate"] = i >= len(set(m for m, _ in macro_seq[:i+1]))
+        signature = (macro, tuple(float(x) for x in np.round(params, 4)))
+        diag["padded_duplicate"] = signature in seen_signatures
+        seen_signatures.add(signature)
         util = nominal_utility(states, controls, diag, cfg)
         harm_proxy = float(diag.get("prefix_contact", False)) + 0.2 * float(diag.get("prefix_collision", False))
         prefixes.append(CandidatePrefix(i, macro, params, states, controls, util, bool(diag["feasible"]), float(diag["hard_violation"]), harm_proxy, diag))

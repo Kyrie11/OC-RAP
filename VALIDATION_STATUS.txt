@@ -1,0 +1,7 @@
+OC-RAP v48 OC-TRAC-SR validation status
+
+- python -m compileall -q src tools: PASS
+- bash -n on v48/rebuild scripts: PASS
+- PYTHONPATH=src pytest -q: 97 passed, 2 non-failing warnings
+- new tool --help smoke tests with PYTHONPATH=src: PASS
+- real WOMD/JAX/GPU long experiment: NOT RUN in this environment

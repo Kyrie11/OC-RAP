@@ -504,7 +504,7 @@ def calibrated_constrained_select(
     # Backward-compatible default 1.0 keeps v40-v43 checkpoints usable when the
     # v44 opportunity gate is disabled (threshold=0).
     direct_opportunity = np.clip(_as_1d_float(pred_direct_opportunity, n, default=1.0), 0.0, 1.0)
-    direct_harm = np.clip(_as_1d_float(pred_direct_harm, n, default=0.0), 0.0, 1.0)
+    direct_pred_harm = np.clip(_as_1d_float(pred_direct_harm, n, default=0.0), 0.0, 1.0)
     macro_names = _as_macro_names(candidate_macro_names, n)
 
     # v22: separate candidate-family coverage from recovery-maneuver semantics.
@@ -621,7 +621,7 @@ def calibrated_constrained_select(
             & (dev >= float(direct_value_min_nominal_deviation))
             & candidate_floor_ok
             & (direct_opportunity >= float(direct_value_opportunity_threshold))
-            & (direct_harm <= float(direct_value_harm_threshold))
+            & (direct_pred_harm <= float(direct_value_harm_threshold))
             & ((direct_std <= float(direct_value_max_candidate_std)) if uncertainty_mode not in {"additive", "conformal_additive", "residual", "none", "raw", "risk_selective", "selective", "risk_controlled"} else np.ones((n,), dtype=bool))
         )
         direct_actionable[ni] = False

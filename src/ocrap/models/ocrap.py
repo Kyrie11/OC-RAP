@@ -49,8 +49,7 @@ class OCRAPModel(nn.Module):
         direct_recovery_value_num_experts: int = 2,
         direct_recovery_value_expert_routing: str = "bucket",
         direct_recovery_value_router_temperature: float = 1.0,
-        direct_recovery_value_router_pooling: str = "candidate",
-        direct_recovery_expert_disagreement_penalty: float = 0.0,
+        direct_recovery_expert_disagreement_penalty: float = 0.5,
     ):
         super().__init__()
         self.num_roots = int(num_roots)
@@ -79,9 +78,6 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_value_router_temperature = float(
             max(direct_recovery_value_router_temperature, 1.0e-3)
         )
-        self.direct_recovery_value_router_pooling = str(
-            direct_recovery_value_router_pooling or "candidate"
-        ).strip().lower()
         self.direct_recovery_expert_disagreement_penalty = float(
             max(direct_recovery_expert_disagreement_penalty, 0.0)
         )
@@ -92,8 +88,8 @@ class OCRAPModel(nn.Module):
             "soft",
             "moe",
             "uniform",
-            "uniform_robust",
-            "robust_observation",
+            "robust_ensemble",
+            "risk_ensemble",
         }:
             raise ValueError(
                 "Unsupported direct_recovery_value_expert_routing="
@@ -101,11 +97,6 @@ class OCRAPModel(nn.Module):
             )
         if self.direct_recovery_value_output not in {"probability", "score"}:
             raise ValueError(f"Unsupported direct_recovery_value_output={direct_recovery_value_output!r}")
-        if self.direct_recovery_value_router_pooling not in {"candidate", "scene", "shared_raw", "ego_shared_raw"}:
-            raise ValueError(
-                "Unsupported direct_recovery_value_router_pooling="
-                f"{direct_recovery_value_router_pooling!r}"
-            )
 
         if self.encoder_type == "structured_transformer":
             layout = FlatFeatureLayout(**self.feature_layout)
@@ -163,15 +154,6 @@ class OCRAPModel(nn.Module):
         # tokens to a small trainable adapter without changing any OC-MERO head.
         direct_in_dim = d_model
         self.direct_candidate_raw_dim = 0
-        self.direct_candidate_feature_dim = 0
-        self.direct_ego_feature_dim = 0
-        if self.encoder_type == "structured_transformer":
-            layout = FlatFeatureLayout(**self.feature_layout)
-            self.direct_ego_feature_dim = int(layout.ego_dim)
-            self.direct_candidate_feature_dim = int(
-                layout.ego_dim + layout.prefix_param_dim + layout.num_macros + layout.scalar_dim
-                + layout.prefix_flat_dim + layout.control_flat_dim
-            )
         if self.direct_recovery_value_pooling in {"candidate_concat", "prefix_concat", "action_concat"}:
             direct_in_dim = 6 * d_model
         elif self.direct_recovery_value_pooling in {"candidate_concat_raw", "action_concat_raw", "certificate_action_adapter"}:
@@ -182,7 +164,11 @@ class OCRAPModel(nn.Module):
             # differences while leaving all calibrated certificate heads intact.
             if self.encoder_type != "structured_transformer":
                 raise ValueError("candidate_concat_raw requires structured_transformer")
-            self.direct_candidate_raw_dim = self.direct_candidate_feature_dim
+            layout = FlatFeatureLayout(**self.feature_layout)
+            self.direct_candidate_raw_dim = int(
+                layout.ego_dim + layout.prefix_param_dim + layout.num_macros + layout.scalar_dim
+                + layout.prefix_flat_dim + layout.control_flat_dim
+            )
             direct_in_dim = 6 * d_model + self.direct_candidate_raw_dim
         # Optional regime embedding retained only for controlled ablations. The
         # v44 OC-RAVA default disables it: deployment uses one observation-only
@@ -194,18 +180,7 @@ class OCRAPModel(nn.Module):
             if self.direct_recovery_value_head and self.direct_recovery_value_regime_conditioning
             else None
         )
-        if self.direct_recovery_value_router_pooling == "scene":
-            direct_router_in_dim = d_model
-        elif self.direct_recovery_value_router_pooling in {"shared_raw", "ego_shared_raw"}:
-            if self.encoder_type != "structured_transformer" or self.direct_candidate_feature_dim <= 0:
-                raise ValueError("shared raw router pooling requires structured_transformer")
-            direct_router_in_dim = int(input_dim) - self.direct_candidate_feature_dim
-            if self.direct_recovery_value_router_pooling == "ego_shared_raw":
-                direct_router_in_dim += self.direct_ego_feature_dim
-            if direct_router_in_dim <= 0:
-                raise ValueError("shared_raw router pooling produced an empty observation feature")
-        else:
-            direct_router_in_dim = direct_in_dim
+        direct_router_in_dim = direct_in_dim
         if self.direct_regime_embedding is not None:
             direct_in_dim += self.direct_recovery_value_regime_dim
         direct_out_dim = 2 + int(self.direct_recovery_opportunity_head) + int(self.direct_recovery_harm_head)
@@ -253,7 +228,7 @@ class OCRAPModel(nn.Module):
                 nn.Linear(max(16, d_model // 2), self.direct_recovery_value_num_experts),
             )
             if self.direct_value_heads is not None
-            and self.direct_recovery_value_expert_routing in {"soft_observation", "soft", "moe", "robust_observation"}
+            and self.direct_recovery_value_expert_routing in {"soft_observation", "soft", "moe"}
             else None
         )
         self.root_signature_head = nn.Linear(d_model, self.d_signature) if self.d_signature > 0 else None
@@ -301,13 +276,118 @@ class OCRAPModel(nn.Module):
         # contiguous and does not include future/audit labels.
         return x[:, : self.direct_candidate_raw_dim]
 
+    def _direct_outputs(
+        self,
+        memory: torch.Tensor,
+        x: torch.Tensor,
+        bucket_id: torch.Tensor | None,
+    ) -> dict[str, torch.Tensor]:
+        """Evaluate the policy-level recovery branch.
+
+        v48 keeps experts observation-only and uses their disagreement as a
+        conservative certificate: recovery gain and opportunity receive a lower
+        confidence adjustment, while harmful-switch risk receives an upper
+        confidence adjustment.  No hidden regime label is needed.
+        """
+        if self.direct_value_head is None and self.direct_value_heads is None:
+            return {}
+        scene_token = memory[:, 0]
+        direct_features = scene_token
+        if self.direct_recovery_value_pooling in {
+            "candidate_concat", "prefix_concat", "action_concat",
+            "candidate_concat_raw", "action_concat_raw", "certificate_action_adapter",
+        }:
+            if memory.shape[1] >= 6:
+                direct_features = torch.cat([memory[:, i] for i in range(6)], dim=-1)
+            else:
+                direct_features = scene_token.repeat(1, 6)
+            if self.direct_recovery_value_pooling in {
+                "candidate_concat_raw", "action_concat_raw", "certificate_action_adapter"
+            }:
+                direct_features = torch.cat([direct_features, self._candidate_raw_features(x)], dim=-1)
+        router_features = direct_features
+        if self.direct_regime_embedding is not None:
+            if bucket_id is None:
+                bucket_id = torch.full(
+                    (x.shape[0],), min(3, self.direct_recovery_value_num_regimes - 1),
+                    dtype=torch.long, device=x.device,
+                )
+            regime_id = bucket_id.to(device=x.device, dtype=torch.long).reshape(-1)
+            regime_id = regime_id.clamp(0, self.direct_recovery_value_num_regimes - 1)
+            direct_features = torch.cat([direct_features, self.direct_regime_embedding(regime_id)], dim=-1)
+
+        out: dict[str, torch.Tensor] = {}
+        if self.direct_value_heads is not None:
+            all_direct = torch.stack([head(direct_features) for head in self.direct_value_heads], dim=1)
+            routing = self.direct_recovery_value_expert_routing
+            if routing in {"bucket", "hard_bucket"}:
+                if bucket_id is None:
+                    bucket_id = torch.ones((x.shape[0],), dtype=torch.long, device=x.device)
+                expert_idx = (bucket_id.to(device=x.device, dtype=torch.long).reshape(-1) - 1)
+                expert_idx = expert_idx.clamp(0, self.direct_recovery_value_num_experts - 1)
+                weights = torch.nn.functional.one_hot(
+                    expert_idx, num_classes=self.direct_recovery_value_num_experts
+                ).to(dtype=all_direct.dtype)
+                direct = (all_direct * weights.unsqueeze(-1)).sum(dim=1)
+            elif routing in {"uniform", "robust_ensemble", "risk_ensemble"}:
+                weights = torch.full(
+                    (x.shape[0], self.direct_recovery_value_num_experts),
+                    1.0 / float(self.direct_recovery_value_num_experts),
+                    dtype=all_direct.dtype, device=x.device,
+                )
+                mean = all_direct.mean(dim=1)
+                std = all_direct.std(dim=1, unbiased=False)
+                if routing in {"robust_ensemble", "risk_ensemble"}:
+                    direct = mean.clone()
+                    lam = self.direct_recovery_expert_disagreement_penalty
+                    direct[:, 0] = mean[:, 0] - lam * std[:, 0]
+                    # Keep aleatoric log-variance conservative as well.
+                    direct[:, 1] = mean[:, 1] + lam * std[:, 1]
+                    cursor = 2
+                    if self.direct_recovery_opportunity_head:
+                        direct[:, cursor] = mean[:, cursor] - lam * std[:, cursor]
+                        cursor += 1
+                    if self.direct_recovery_harm_head:
+                        direct[:, cursor] = mean[:, cursor] + lam * std[:, cursor]
+                    out["direct_expert_disagreement"] = std
+                else:
+                    direct = mean
+            else:
+                if self.direct_value_router is None:
+                    raise RuntimeError("soft expert routing configured without a router")
+                router_logits = self.direct_value_router(router_features)
+                weights = torch.softmax(
+                    router_logits / self.direct_recovery_value_router_temperature, dim=-1
+                )
+                direct = (all_direct * weights.unsqueeze(-1)).sum(dim=1)
+                out["direct_expert_logits"] = router_logits
+            out["direct_expert_weights"] = weights
+            out["direct_expert_outputs"] = all_direct
+        elif self.direct_value_head is not None:
+            direct = self.direct_value_head(direct_features)
+        else:
+            raise RuntimeError("direct recovery branch configured without a head")
+
+        out["direct_recovery_value_logit"] = direct[:, 0]
+        out["direct_recovery_value_logvar"] = direct[:, 1].clamp(-7.0, 2.0)
+        cursor = 2
+        if self.direct_recovery_opportunity_head:
+            out["direct_recovery_opportunity_logit"] = direct[:, cursor]
+            cursor += 1
+        if self.direct_recovery_harm_head:
+            out["direct_recovery_harm_logit"] = direct[:, cursor]
+        return out
+
     def forward(
         self,
         x: torch.Tensor,
         option_features: torch.Tensor | None = None,
         bucket_id: torch.Tensor | None = None,
+        direct_only: bool = False,
     ) -> dict[str, torch.Tensor]:
         memory = self._scene_tokens(x)
+        if direct_only:
+            return self._direct_outputs(memory, x, bucket_id)
         scene_token = memory[:, 0]
         root_tokens = self._decode_roots(memory)
 
@@ -331,119 +411,7 @@ class OCRAPModel(nn.Module):
             "c_star": C,
             "utility": self.utility_head(scene_token).squeeze(-1),
         }
-        if self.direct_value_head is not None or self.direct_value_heads is not None:
-            direct_features = scene_token
-            if self.direct_recovery_value_pooling in {"candidate_concat", "prefix_concat", "action_concat", "candidate_concat_raw", "action_concat_raw", "certificate_action_adapter"}:
-                # Token order from StructuredTokenEncoder is
-                # [CLS, ego, prefix_param, macro+scalar, prefix_state, control, ...].
-                # For the MLP fallback, repeat the only token to retain geometry.
-                if memory.shape[1] >= 6:
-                    direct_features = torch.cat([memory[:, i] for i in range(6)], dim=-1)
-                else:
-                    direct_features = scene_token.repeat(1, 6)
-                if self.direct_recovery_value_pooling in {"candidate_concat_raw", "action_concat_raw", "certificate_action_adapter"}:
-                    direct_features = torch.cat([direct_features, self._candidate_raw_features(x)], dim=-1)
-            # v46 OC-RACE can route from the raw shared observation block. This
-            # excludes prefix parameters, macro identity, planned states and
-            # controls, so every candidate from one scene-time receives the same
-            # expert mixture. The legacy candidate-conditioned router remains an
-            # explicit ablation for older checkpoints.
-            if self.direct_recovery_value_router_pooling == "shared_raw":
-                router_features = x[:, self.direct_candidate_feature_dim:]
-            elif self.direct_recovery_value_router_pooling == "ego_shared_raw":
-                # Current ego kinematics are observable and identical across all
-                # candidates in a scene-time group.  v46 accidentally removed
-                # them together with candidate prefix features, leaving the
-                # router unable to distinguish benign from critical geometry.
-                router_features = torch.cat(
-                    [x[:, : self.direct_ego_feature_dim], x[:, self.direct_candidate_feature_dim:]],
-                    dim=-1,
-                )
-            elif self.direct_recovery_value_router_pooling == "scene":
-                router_features = scene_token
-            else:
-                router_features = direct_features
-            if self.direct_regime_embedding is not None:
-                if bucket_id is None:
-                    # "other" is the backward-compatible fallback. v44 runtime
-                    # code supplies the active regime explicitly for stress runs.
-                    bucket_id = torch.full(
-                        (x.shape[0],),
-                        min(3, self.direct_recovery_value_num_regimes - 1),
-                        dtype=torch.long,
-                        device=x.device,
-                    )
-                regime_id = bucket_id.to(device=x.device, dtype=torch.long).reshape(-1)
-                regime_id = regime_id.clamp(0, self.direct_recovery_value_num_regimes - 1)
-                direct_features = torch.cat([direct_features, self.direct_regime_embedding(regime_id)], dim=-1)
-            if self.direct_value_heads is not None:
-                all_direct = torch.stack([head(direct_features) for head in self.direct_value_heads], dim=1)
-                routing = self.direct_recovery_value_expert_routing
-                if routing in {"bucket", "hard_bucket"}:
-                    # Backward-compatible ablation: bucket ids safe=0, near=1,
-                    # contact=2, other=3; near maps to expert 0 and contact to 1.
-                    if bucket_id is None:
-                        bucket_id = torch.ones((x.shape[0],), dtype=torch.long, device=x.device)
-                    expert_idx = (bucket_id.to(device=x.device, dtype=torch.long).reshape(-1) - 1)
-                    expert_idx = expert_idx.clamp(0, self.direct_recovery_value_num_experts - 1)
-                    weights = torch.nn.functional.one_hot(
-                        expert_idx, num_classes=self.direct_recovery_value_num_experts
-                    ).to(dtype=all_direct.dtype)
-                elif routing in {"uniform", "uniform_robust"}:
-                    weights = torch.full(
-                        (x.shape[0], self.direct_recovery_value_num_experts),
-                        1.0 / float(self.direct_recovery_value_num_experts),
-                        dtype=all_direct.dtype,
-                        device=x.device,
-                    )
-                else:
-                    if self.direct_value_router is None:
-                        raise RuntimeError("soft expert routing configured without a router")
-                    router_logits = self.direct_value_router(router_features)
-                    weights = torch.softmax(
-                        router_logits / self.direct_recovery_value_router_temperature, dim=-1
-                    )
-                    out["direct_expert_logits"] = router_logits
-                direct_mean = (all_direct * weights.unsqueeze(-1)).sum(dim=1)
-                direct = direct_mean
-                if routing in {"uniform_robust", "robust_observation"}:
-                    # The experts represent future-pressure hypotheses that may
-                    # be observationally indistinguishable.  Do not pretend the
-                    # hidden regime can be identified.  Instead, turn expert
-                    # disagreement into a conservative certificate: lower-bound
-                    # benefit/value and upper-bound harm.  This is candidate-wise
-                    # but observation-consistent because weights are shared.
-                    centered = all_direct - direct_mean.unsqueeze(1)
-                    expert_std = torch.sqrt(
-                        (weights.unsqueeze(-1) * centered.square()).sum(dim=1).clamp_min(1.0e-8)
-                    )
-                    lam = self.direct_recovery_expert_disagreement_penalty
-                    direct = direct_mean.clone()
-                    direct[:, 0] = direct_mean[:, 0] - lam * expert_std[:, 0]
-                    if self.direct_recovery_opportunity_head:
-                        direct[:, 2] = direct_mean[:, 2] - lam * expert_std[:, 2]
-                    if self.direct_recovery_harm_head:
-                        harm_idx = 2 + int(self.direct_recovery_opportunity_head)
-                        direct[:, harm_idx] = direct_mean[:, harm_idx] + lam * expert_std[:, harm_idx]
-                    # Aleatoric variance plus between-expert disagreement.
-                    direct[:, 1] = torch.log(
-                        torch.exp(direct_mean[:, 1]).clamp_min(1.0e-7)
-                        + expert_std[:, 0].square()
-                    ).clamp(-7.0, 2.0)
-                    out["direct_expert_output_std"] = expert_std
-                out["direct_expert_weights"] = weights
-                out["direct_expert_outputs"] = all_direct
-            elif self.direct_value_head is not None:
-                direct = self.direct_value_head(direct_features)
-            else:
-                raise RuntimeError("direct recovery branch configured without a head")
-            out["direct_recovery_value_logit"] = direct[:, 0]
-            out["direct_recovery_value_logvar"] = direct[:, 1].clamp(-7.0, 2.0)
-            if self.direct_recovery_opportunity_head:
-                out["direct_recovery_opportunity_logit"] = direct[:, 2]
-            if self.direct_recovery_harm_head:
-                harm_idx = 2 + int(self.direct_recovery_opportunity_head)
-                out["direct_recovery_harm_logit"] = direct[:, harm_idx]
+        out.update(self._direct_outputs(memory, x, bucket_id))
         if self.root_signature_head is not None:
             out["root_signature"] = self.root_signature_head(root_tokens)
         if self.root_future_signature_head is not None:

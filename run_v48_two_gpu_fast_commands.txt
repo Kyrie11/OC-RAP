@@ -1,0 +1,227 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO="${OCRAP_REPO:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)}"
+cd "$REPO"
+export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONUNBUFFERED=1
+
+OUTPUTDIR="${OUTPUTDIR:-runs/ocrap_v48_trac_sr_screening}"
+LOG_DIR="$OUTPUTDIR/logs"
+mkdir -p "$LOG_DIR"
+
+# Experiments run in the background by default. Set FOREGROUND=1 for an
+# interactive controller while child GPU jobs still write to OUTPUTDIR/logs.
+if [[ "${FOREGROUND:-0}" != "1" && "${V48_CONTROLLER_CHILD:-0}" != "1" ]]; then
+  nohup env V48_CONTROLLER_CHILD=1 FOREGROUND=1 bash "$0" \
+    >"$LOG_DIR/controller.log" 2>&1 </dev/null &
+  echo $! > "$OUTPUTDIR/controller.pid"
+  echo "v48 controller started: PID=$(cat "$OUTPUTDIR/controller.pid")"
+  echo "log: $LOG_DIR/controller.log"
+  exit 0
+fi
+
+TRAIN_OCRAP_ROOT="${TRAIN_OCRAP_ROOT:-/data0/senzeyu2/dataset/OCRAP_v48_train}"
+EVAL_OCRAP_ROOT="${EVAL_OCRAP_ROOT:-/data0/senzeyu2/dataset/OCRAP}"
+INIT_CKPT="${INIT_CKPT:-runs/ocrap_v47_trac_balanced/model_v47_trac/best.pt}"
+GPU0="${GPU0:-0}"
+GPU1="${GPU1:-1}"
+SPLIT_ROOT="$OUTPUTDIR/dataset_splits"
+CALIBRATION_OCRAP_ROOT="${CALIBRATION_OCRAP_ROOT:-}"
+DEV_NEAR="$EVAL_OCRAP_ROOT/val_near_contact"
+DEV_CONTACT="$EVAL_OCRAP_ROOT/val_contact"
+if [[ -n "$CALIBRATION_OCRAP_ROOT" ]]; then
+  CAL_NEAR="$CALIBRATION_OCRAP_ROOT/calibration_near_contact"
+  CAL_CONTACT="$CALIBRATION_OCRAP_ROOT/calibration_contact"
+else
+  CAL_NEAR="$SPLIT_ROOT/calibration_near_contact"
+  DEV_NEAR="$SPLIT_ROOT/dev_val_near_contact"
+  CAL_CONTACT="$SPLIT_ROOT/calibration_contact"
+  DEV_CONTACT="$SPLIT_ROOT/dev_val_contact"
+fi
+TRAIN_MIX="$TRAIN_OCRAP_ROOT/train_near_contact,$TRAIN_OCRAP_ROOT/train_contact"
+GROUP_INDEX="$OUTPUTDIR/teacher_pcd_train_index.jsonl"
+
+# Validate immutable evaluation inputs and initialization first.  Training roots
+# may be created below when BUILD_TRAIN=1.
+for d in "$EVAL_OCRAP_ROOT/val_near_contact" "$EVAL_OCRAP_ROOT/val_contact" "$EVAL_OCRAP_ROOT/val_safe"; do
+  [[ -d "$d" ]] || { echo "missing dataset root: $d" >&2; exit 2; }
+done
+[[ -f "$INIT_CKPT" ]] || { echo "missing INIT_CKPT=$INIT_CKPT" >&2; exit 2; }
+
+if [[ "${BUILD_TRAIN:-0}" == "1" ]]; then
+  OUTPUT_ROOT="$TRAIN_OCRAP_ROOT" GPU0="$GPU0" GPU1="$GPU1" \
+    bash scripts/build_v48_train_regimes.sh >"$LOG_DIR/build_v48_train_regimes.log" 2>&1
+fi
+for d in "$TRAIN_OCRAP_ROOT/train_near_contact" "$TRAIN_OCRAP_ROOT/train_contact"; do
+  [[ -d "$d" ]] || { echo "missing training root: $d (set BUILD_TRAIN=1 or TRAIN_OCRAP_ROOT)" >&2; exit 2; }
+done
+
+# Fail early if a custom root accidentally mixes WOMD training scenes into the
+# validation-derived development data.
+python tools/check_scene_overlap_v48.py \
+  --train-root "$TRAIN_OCRAP_ROOT/train_near_contact" \
+  --train-root "$TRAIN_OCRAP_ROOT/train_contact" \
+  --development-root "$EVAL_OCRAP_ROOT/val_near_contact" \
+  --development-root "$EVAL_OCRAP_ROOT/val_contact" \
+  --output "$OUTPUTDIR/scene_overlap_audit.json" \
+  --fail-on-train-development-overlap \
+  2>&1 | tee "$LOG_DIR/scene_overlap_audit.log"
+
+# Prefer a dedicated validation-derived calibration root.  If it is not
+# supplied, create a cheap scene-disjoint calibration/development split from
+# the existing val_* roots without modifying them.
+if [[ "${BUILD_CALIBRATION:-0}" == "1" ]]; then
+  CALIBRATION_OCRAP_ROOT="${CALIBRATION_OCRAP_ROOT:-/data0/senzeyu2/dataset/OCRAP_v48_calibration}"
+  OUTPUT_ROOT="$CALIBRATION_OCRAP_ROOT" EVAL_OCRAP_ROOT="$EVAL_OCRAP_ROOT" GPU0="$GPU0" GPU1="$GPU1" \
+    bash scripts/build_v48_calibration_regimes.sh >"$LOG_DIR/build_v48_calibration_regimes.log" 2>&1
+  CAL_NEAR="$CALIBRATION_OCRAP_ROOT/calibration_near_contact"
+  CAL_CONTACT="$CALIBRATION_OCRAP_ROOT/calibration_contact"
+  DEV_NEAR="$EVAL_OCRAP_ROOT/val_near_contact"
+  DEV_CONTACT="$EVAL_OCRAP_ROOT/val_contact"
+fi
+if [[ -n "$CALIBRATION_OCRAP_ROOT" ]]; then
+  [[ -d "$CAL_NEAR" && -d "$CAL_CONTACT" ]] || { echo "missing dedicated calibration roots under $CALIBRATION_OCRAP_ROOT" >&2; exit 2; }
+else
+  python tools/split_calibration_by_scene_v48.py \
+    --input "$EVAL_OCRAP_ROOT/val_near_contact" \
+    --calibration-output "$CAL_NEAR" --validation-output "$DEV_NEAR" \
+    --calibration-fraction="${CALIBRATION_FRACTION:-0.45}" --seed="${CALIBRATION_SEED:-4801}" \
+    --overwrite 2>&1 | tee "$LOG_DIR/split_near.log"
+  python tools/split_calibration_by_scene_v48.py \
+    --input "$EVAL_OCRAP_ROOT/val_contact" \
+    --calibration-output "$CAL_CONTACT" --validation-output "$DEV_CONTACT" \
+    --calibration-fraction="${CALIBRATION_FRACTION:-0.45}" --seed="${CALIBRATION_SEED:-4801}" \
+    --overwrite 2>&1 | tee "$LOG_DIR/split_contact.log"
+fi
+python tools/check_scene_overlap_v48.py \
+  --development-root "$DEV_NEAR" --development-root "$DEV_CONTACT" \
+  --test-root "$CAL_NEAR" --test-root "$CAL_CONTACT" \
+  --output "$OUTPUTDIR/development_calibration_overlap_audit.json" \
+  --fail-on-development-test-overlap \
+  2>&1 | tee "$LOG_DIR/development_calibration_overlap_audit.log"
+
+# Exact teacher-PCD index aligns rare-group oversampling with the final gate.
+python tools/build_teacher_pcd_index_v48.py \
+  --dataset "$TRAIN_MIX" --output "$GROUP_INDEX" \
+  --summary-output "$OUTPUTDIR/teacher_pcd_train_index_summary.json" \
+  --alpha="${OCMERO_ALPHA:-0.2}" --beta="${OCMERO_BETA:-0.2}" --top-m="${OCMERO_TOP_M:-8}" \
+  --positive-gain="${POSITIVE_GAIN:-0.015}" \
+  --min-positive-groups-near="${MIN_POSITIVE_GROUPS_NEAR:-200}" \
+  --min-positive-groups-contact="${MIN_POSITIVE_GROUPS_CONTACT:-120}" \
+  --min-positive-scenes-near="${MIN_POSITIVE_SCENES_NEAR:-80}" \
+  --min-positive-scenes-contact="${MIN_POSITIVE_SCENES_CONTACT:-60}" \
+  2>&1 | tee "$LOG_DIR/build_teacher_pcd_index.log"
+
+launch_variant() {
+  local variant="$1" gpu="$2"
+  local run="$OUTPUTDIR/candidates/$variant"
+  mkdir -p "$run/logs"
+  TRAIN_GPU="$gpu" VARIANT="$variant" RUN="$run" \
+  TRAIN_OCRAP_ROOT="$TRAIN_OCRAP_ROOT" EVAL_OCRAP_ROOT="$EVAL_OCRAP_ROOT" \
+  TRAIN_MIX="$TRAIN_MIX" VAL_MIX="$DEV_NEAR,$DEV_CONTACT" \
+  CAL_MIX="$CAL_NEAR,$CAL_CONTACT" VAL_NEAR="$CAL_NEAR" VAL_CONTACT="$CAL_CONTACT" \
+  INIT_CKPT="$INIT_CKPT" GROUP_INDEX="$GROUP_INDEX" \
+    bash scripts/train_ocrap_v48_trac_sr.sh >"$LOG_DIR/train_${variant}.launch.log" 2>&1 &
+  LAST_PID=$!
+}
+
+launch_variant balanced "$GPU0"; P0=$LAST_PID
+launch_variant precision "$GPU1"; P1=$LAST_PID
+set +e
+wait "$P0"; S0=$?
+wait "$P1"; S1=$?
+set -e
+echo "training status: balanced=$S0 precision=$S1" | tee "$LOG_DIR/training_status.log"
+[[ "$S0" -eq 0 || "$S1" -eq 0 ]] || exit 3
+
+calibrate_variant() {
+  local variant="$1" gpu="$2"
+  local run="$OUTPUTDIR/candidates/$variant"
+  local ckpt="$run/model_v48_trac_sr/best.pt"
+  [[ -f "$ckpt" ]] || return 0
+  set +e
+  CUDA_VISIBLE_DEVICES="$gpu" python -u tools/calibrate_policy_risk_v48.py \
+    --dataset "$CAL_NEAR" --checkpoint "$ckpt" --bucket near \
+    --output "$run/calibration/direct_value_risk_near_v48.json" \
+    --rows-output "$run/calibration/direct_value_risk_near_v48.rows.jsonl" \
+    --required-min-groups="${NEAR_MIN_GROUPS:-80}" --required-min-scenes="${NEAR_MIN_SCENES:-45}" \
+    --min-fit-selected="${NEAR_MIN_FIT_SELECTED:-10}" --min-verify-selected="${NEAR_MIN_VERIFY_SELECTED:-7}" \
+    --max-fit-harmful-group-ucb="${NEAR_MAX_FIT_HARM_UCB:-0.14}" \
+    --max-verify-harmful-group-ucb="${NEAR_MAX_VERIFY_HARM_UCB:-0.16}" \
+    2>&1 | tee "$run/logs/calibrate_policy_near.log"
+  local sn=${PIPESTATUS[0]}
+  CUDA_VISIBLE_DEVICES="$gpu" python -u tools/calibrate_policy_risk_v48.py \
+    --dataset "$CAL_CONTACT" --checkpoint "$ckpt" --bucket contact \
+    --output "$run/calibration/direct_value_risk_contact_v48.json" \
+    --rows-output "$run/calibration/direct_value_risk_contact_v48.rows.jsonl" \
+    --required-min-groups="${CONTACT_MIN_GROUPS:-90}" --required-min-scenes="${CONTACT_MIN_SCENES:-45}" \
+    --min-fit-selected="${CONTACT_MIN_FIT_SELECTED:-10}" --min-verify-selected="${CONTACT_MIN_VERIFY_SELECTED:-7}" \
+    --max-fit-harmful-group-ucb="${CONTACT_MAX_FIT_HARM_UCB:-0.16}" \
+    --max-verify-harmful-group-ucb="${CONTACT_MAX_VERIFY_HARM_UCB:-0.18}" \
+    2>&1 | tee "$run/logs/calibrate_policy_contact.log"
+  local sc=${PIPESTATUS[0]}
+  set -e
+  echo "$variant near=$sn contact=$sc" >> "$LOG_DIR/policy_calibration_status.log"
+}
+calibrate_variant balanced "$GPU0" & C0=$!
+calibrate_variant precision "$GPU1" & C1=$!
+wait "$C0" || true
+wait "$C1" || true
+
+# Choose only a checkpoint with valid scene-disjoint Near and Contact rules.
+python - "$OUTPUTDIR" <<'PY' | tee "$LOG_DIR/candidate_selection.log"
+import json, pathlib, sys
+root=pathlib.Path(sys.argv[1])
+valid=[]
+for name in ('balanced','precision'):
+    r=root/'candidates'/name
+    docs=[]; ok=True
+    for bucket in ('near','contact'):
+        p=r/'calibration'/f'direct_value_risk_{bucket}_v48.json'
+        try: d=json.load(open(p))
+        except Exception as e:
+            print(name,bucket,'missing',e); ok=False; continue
+        docs.append(d); ok &= bool(d.get('valid_for_deployment',False))
+        print(name,bucket,{
+            'valid':d.get('valid_for_deployment'),
+            'candidate_auc':d.get('candidate_positive_auc'),
+            'top1_corr':d.get('unconstrained_group_top1_correlation'),
+            'verify':d.get('verify'),
+            'warnings':d.get('warnings')})
+    if ok:
+        # Prefer fewer harmful selections, then stronger top-1 correlation.
+        harm=sum(float((d.get('verify') or {}).get('harmful_rate_selected') or 0.0) for d in docs)
+        corr=sum(float(d.get('unconstrained_group_top1_correlation') or -1.0) for d in docs)
+        valid.append((harm,-corr,name,r))
+if not valid:
+    raise SystemExit('no v48 candidate passed both policy-risk certificates')
+valid.sort()
+chosen=valid[0][3]
+(root/'chosen_base_run.txt').write_text(str(chosen)+'\n')
+print('chosen',chosen)
+PY
+
+CHOSEN_BASE_RUN=$(cat "$OUTPUTDIR/chosen_base_run.txt")
+CHOSEN=$(basename "$CHOSEN_BASE_RUN")
+OFFLINE_RUN="$OUTPUTDIR/offline_${CHOSEN}"
+BASE_RUN="$CHOSEN_BASE_RUN" RUN="$OFFLINE_RUN" \
+RUN_OFFLINE_EVAL=1 RUN_AUDITS=0 RUN_SAFE_CLOSED_LOOP=0 \
+SAFE_TEST="$EVAL_OCRAP_ROOT/val_safe" NEAR_TEST="$DEV_NEAR" CONTACT_TEST="$DEV_CONTACT" \
+RUN_SCALAR_BASELINES=1 OFFLINE_SINGLE_GPU=1 GPU_SAFE="$GPU0" GPU_NEAR="$GPU0" GPU_CONTACT="$GPU0" \
+  bash scripts/run_ocrap_v48_trac_sr.sh >"$LOG_DIR/offline_${CHOSEN}.log" 2>&1
+
+cat > "$OUTPUTDIR/NEXT_COMMANDS.txt" <<NEXT
+# Development closed-loop probe after inspecting the offline gate:
+OUTPUTDIR=$OUTPUTDIR
+CHOSEN_BASE_RUN=$CHOSEN_BASE_RUN
+BASE_RUN=\$CHOSEN_BASE_RUN RUN=\$OUTPUTDIR/closed_loop_probe \\
+RUN_OFFLINE_EVAL=0 RUN_AUDITS=1 RUN_SAFE_CLOSED_LOOP=1 RUN_SCALAR_BASELINES=1 \\
+PAIR_BUCKETS_ON_TWO_GPUS=1 GPU_NEAR=$GPU0 GPU_CONTACT=$GPU1 GPU_SAFE=$GPU0 \\
+AUDIT_MAX_ROLLOUTS=8 AUDIT_MAX_STEPS=16 AUDIT_TARGETS=16 AUDIT_LABELS=256 \\
+SAFE_MAX_ROLLOUTS=8 SAFE_MAX_STEPS=24 \\
+nohup bash scripts/run_ocrap_v48_trac_sr.sh >\$OUTPUTDIR/logs/closed_loop_probe.log 2>&1 &
+NEXT
+
+echo "v48 screening complete. chosen=$CHOSEN_BASE_RUN" | tee "$LOG_DIR/complete.log"
+echo "next commands: $OUTPUTDIR/NEXT_COMMANDS.txt"
