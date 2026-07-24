@@ -7,6 +7,7 @@ from ocrap.config import apply_overrides, load_config
 from ocrap.data.build.builder import build_dataset
 from ocrap.data.build.diagnose import diagnose_dataset
 from ocrap.data.build.papercheck import papercheck_dataset
+from ocrap.data.build.manifest import rebuild_manifest
 from ocrap.evaluation.evaluator import evaluate
 from ocrap.simulation.closed_loop_runner import closed_loop_evaluate
 from ocrap.analysis.dataset_report import analyze_dataset
@@ -52,6 +53,11 @@ def make_parser() -> argparse.ArgumentParser:
             "Use once with --resume and the original semantic build parameters."
         ),
     )
+    p = sub.add_parser("rebuild-manifest", help="Reconstruct manifest.csv from an existing OC-RAP dataset.")
+    p.add_argument("--dataset", required=True)
+    p.add_argument("--require-complete", action="store_true", help="Fail if invalid or uncommitted scene-time samples are detected.")
+    p.add_argument("--quarantine-uncommitted", action="store_true", help="Move samples from scene-times without a valid completion marker out of samples/ before writing the manifest.")
+    p.add_argument("--quarantine-invalid", action="store_true", help="Move invalid/incomplete NPZ files out of samples/ before writing the manifest.")
     p = sub.add_parser("diagnose")
     add_common(p)
     p.add_argument("--dataset", required=True)
@@ -144,6 +150,13 @@ def main(argv: list[str] | None = None) -> None:
             cfg,
             skip_existing=args.skip_existing,
             adopt_legacy_resume=bool(getattr(args, "adopt_resume_contract", False)),
+        )
+    elif args.cmd == "rebuild-manifest":
+        result = rebuild_manifest(
+            args.dataset,
+            require_complete=bool(args.require_complete),
+            quarantine_uncommitted=bool(args.quarantine_uncommitted),
+            quarantine_invalid=bool(args.quarantine_invalid),
         )
     elif args.cmd == "diagnose":
         result = diagnose_dataset(args.dataset, args.output, args.max_samples, cfg=cfg)
