@@ -9,8 +9,13 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Sampler, WeightedRandomSampler
 
-from ocrap.algorithms.ocmero import torch_oc_mero
-from ocrap.data.serialization import ensure_dir, write_json
+from ocrap.algorithms.ocmero import oc_mero, torch_oc_mero
+from ocrap.data.serialization import ensure_dir, load_npz, write_json
+from ocrap.evaluation.metrics import (
+    best_shared_option_index,
+    deployable_recovery_success,
+    post_contact_deployability_score,
+)
 from ocrap.models.data import OCRAPSampleDataset, OPTION_FEATURE_DIM, bucket_id_for_path, iter_sample_paths_many, scalar_metadata_for_path, split_paths_by_npz_split, stable_scene_hash
 from ocrap.models.losses import (
     anti_oracle_loss,
@@ -146,6 +151,32 @@ def _dataset_root_name(p: Path) -> str:
     return p.parent.parent.name if p.parent.name == "samples" else p.parent.name
 
 
+
+
+def _parse_float_tuple(value, default: tuple[float, ...]) -> tuple[float, ...]:
+    if value is None or value == "":
+        return tuple(default)
+    if isinstance(value, (list, tuple, set)):
+        out = []
+        for x in value:
+            try:
+                out.append(float(x))
+            except Exception:
+                continue
+        return tuple(out) if out else tuple(default)
+    text = str(value).strip()
+    if text.startswith("[") and text.endswith("]"):
+        text = text[1:-1]
+    out = []
+    for part in text.replace(";", ",").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            out.append(float(part))
+        except Exception:
+            continue
+    return tuple(out) if out else tuple(default)
 
 
 def _parse_int_tuple(value, default: tuple[int, ...]) -> tuple[int, ...]:
@@ -549,8 +580,14 @@ def _epoch(
             pred_logit: torch.Tensor,
             pred_logvar: torch.Tensor,
             pred_opportunity_logit: torch.Tensor | None,
+            pred_harm_logit: torch.Tensor | None,
             *,
             direct_bucket_ids: tuple[int, ...] | None = None,
+            positive_group_weight_override: float | None = None,
+            false_positive_weight_override: float | None = None,
+            opportunity_weight_override: float | None = None,
+            harm_weight_override: float | None = None,
+            setwise_admission_weight_override: float | None = None,
         ) -> torch.Tensor:
             return direct_uncertainty_recovery_value_loss(
                 pred_logit, pred_logvar,
@@ -570,13 +607,21 @@ def _epoch(
                 listwise_weight=float(tcfg.get("direct_value_listwise_weight", 0.35)),
                 advantage_weight=float(tcfg.get("direct_value_advantage_weight", 1.0)),
                 centered_weight=float(tcfg.get("direct_value_centered_weight", 1.0)),
-                positive_group_weight=float(tcfg.get("direct_value_positive_group_weight", 4.0)),
+                positive_group_weight=(
+                    float(positive_group_weight_override)
+                    if positive_group_weight_override is not None
+                    else float(tcfg.get("direct_value_positive_group_weight", 4.0))
+                ),
                 negative_group_weight=float(tcfg.get("direct_value_negative_group_weight", 1.0)),
                 ambiguous_group_weight=float(tcfg.get("direct_value_ambiguous_group_weight", 0.25)),
                 near_weight=float(tcfg.get("direct_value_near_weight", 1.5)),
                 contact_weight=float(tcfg.get("direct_value_contact_weight", 1.0)),
                 min_group_range=float(tcfg.get("direct_value_min_group_range", 0.01)),
-                false_positive_weight=float(tcfg.get("direct_value_false_positive_weight", 1.0)),
+                false_positive_weight=(
+                    float(false_positive_weight_override)
+                    if false_positive_weight_override is not None
+                    else float(tcfg.get("direct_value_false_positive_weight", 1.0))
+                ),
                 variance_floor=float(tcfg.get("direct_value_variance_floor", 0.0025)),
                 output_mode=str(tcfg.get("direct_value_output_mode", model_cfg.get("direct_recovery_value_output", "probability"))),
                 pairwise_weight=float(tcfg.get("direct_value_pairwise_weight", 0.0)),
@@ -584,8 +629,25 @@ def _epoch(
                 success_gamma=option_gamma,
                 success_temperature=option_temperature,
                 pred_opportunity_logit=pred_opportunity_logit,
-                opportunity_weight=float(tcfg.get("direct_value_opportunity_weight", 0.0)),
+                opportunity_weight=(
+                    float(opportunity_weight_override)
+                    if opportunity_weight_override is not None
+                    else float(tcfg.get("direct_value_opportunity_weight", 0.0))
+                ),
                 opportunity_pos_weight=float(tcfg.get("direct_value_opportunity_pos_weight", 6.0)),
+                pred_harm_logit=pred_harm_logit,
+                harm_weight=(
+                    float(harm_weight_override)
+                    if harm_weight_override is not None
+                    else float(tcfg.get("direct_value_harm_weight", 0.0))
+                ),
+                harm_pos_weight=float(tcfg.get("direct_value_harm_pos_weight", 6.0)),
+                class_balanced_centered=bool(tcfg.get("direct_value_class_balanced_centered", False)),
+                setwise_admission_weight=(
+                    float(setwise_admission_weight_override)
+                    if setwise_admission_weight_override is not None
+                    else float(tcfg.get("direct_value_setwise_admission_weight", 0.0))
+                ),
             )
 
         zero_direct = r_dep.sum() * 0.0
@@ -597,6 +659,7 @@ def _epoch(
                 out["direct_recovery_value_logit"],
                 out["direct_recovery_value_logvar"],
                 out.get("direct_recovery_opportunity_logit"),
+                out.get("direct_recovery_harm_logit"),
             )
             expert_supervision = bool(tcfg.get("direct_value_expert_supervision", False))
             all_expert = out.get("direct_expert_outputs")
@@ -605,26 +668,93 @@ def _epoch(
             )
             if expert_supervision and all_expert is not None:
                 expert_losses: list[torch.Tensor] = []
-                for expert_idx, direct_bucket in enumerate(expert_bucket_ids):
-                    if expert_idx >= int(all_expert.shape[1]):
-                        break
+                expert_mode = str(
+                    tcfg.get("direct_value_expert_supervision_mode", "bucket") or "bucket"
+                ).strip().lower()
+                if expert_mode not in {"bucket", "all_asymmetric"}:
+                    raise ValueError(
+                        "training.direct_value_expert_supervision_mode must be "
+                        f"'bucket' or 'all_asymmetric', got {expert_mode!r}"
+                    )
+                positive_ws = _parse_float_tuple(
+                    tcfg.get("direct_value_expert_positive_group_weights", ""),
+                    (7.0, 4.0),
+                )
+                false_positive_ws = _parse_float_tuple(
+                    tcfg.get("direct_value_expert_false_positive_weights", ""),
+                    (1.5, 4.0),
+                )
+                opportunity_ws = _parse_float_tuple(
+                    tcfg.get("direct_value_expert_opportunity_weights", ""),
+                    (1.5, 1.0),
+                )
+                harm_ws = _parse_float_tuple(
+                    tcfg.get("direct_value_expert_harm_weights", ""),
+                    (1.0, 2.5),
+                )
+                setwise_ws = _parse_float_tuple(
+                    tcfg.get("direct_value_expert_setwise_weights", ""),
+                    (2.5, 1.5),
+                )
+                all_direct_buckets = _parse_int_tuple(
+                    tcfg.get("direct_value_bucket_ids", "1,2"), (1, 2)
+                )
+                for expert_idx in range(int(all_expert.shape[1])):
                     expert_out = all_expert[:, expert_idx]
                     opp = expert_out[:, 2] if expert_out.shape[-1] >= 3 else None
+                    harm_idx = 2 + int(bool(model_cfg.get("direct_recovery_opportunity_head", False)))
+                    harm = expert_out[:, harm_idx] if bool(model_cfg.get("direct_recovery_harm_head", False)) and expert_out.shape[-1] > harm_idx else None
+                    if expert_mode == "all_asymmetric":
+                        direct_buckets = all_direct_buckets
+                        def pick(values: tuple[float, ...]) -> float:
+                            return float(values[min(expert_idx, len(values) - 1)])
+                        overrides = {
+                            "positive_group_weight_override": pick(positive_ws),
+                            "false_positive_weight_override": pick(false_positive_ws),
+                            "opportunity_weight_override": pick(opportunity_ws),
+                            "harm_weight_override": pick(harm_ws),
+                            "setwise_admission_weight_override": pick(setwise_ws),
+                        }
+                    else:
+                        if expert_idx >= len(expert_bucket_ids):
+                            break
+                        direct_buckets = (int(expert_bucket_ids[expert_idx]),)
+                        overrides = {}
                     expert_loss = _direct_value_loss(
-                        expert_out[:, 0], expert_out[:, 1], opp,
-                        direct_bucket_ids=(int(direct_bucket),),
+                        expert_out[:, 0], expert_out[:, 1], opp, harm,
+                        direct_bucket_ids=direct_buckets,
+                        **overrides,
                     )
                     expert_losses.append(expert_loss)
-                    if int(direct_bucket) == 1:
-                        loss_direct_value_near = expert_loss
-                    elif int(direct_bucket) == 2:
-                        loss_direct_value_contact = expert_loss
+                    if expert_mode == "bucket":
+                        if int(direct_buckets[0]) == 1:
+                            loss_direct_value_near = expert_loss
+                        elif int(direct_buckets[0]) == 2:
+                            loss_direct_value_contact = expert_loss
                 if expert_losses:
                     loss_expert = torch.stack(expert_losses).mean()
                     mixture_weight = float(tcfg.get("direct_value_mixture_weight", 0.25))
                     loss_direct_value = loss_expert + mixture_weight * loss_direct_value_mixture
                 else:
                     loss_direct_value = loss_direct_value_mixture
+                if expert_mode == "all_asymmetric":
+                    # Keep per-regime checkpoint diagnostics tied to the deployed
+                    # robust aggregate. Expert identities are uncertainty attitudes,
+                    # not hidden Near/Contact labels.
+                    loss_direct_value_near = _direct_value_loss(
+                        out["direct_recovery_value_logit"],
+                        out["direct_recovery_value_logvar"],
+                        out.get("direct_recovery_opportunity_logit"),
+                        out.get("direct_recovery_harm_logit"),
+                        direct_bucket_ids=(1,),
+                    )
+                    loss_direct_value_contact = _direct_value_loss(
+                        out["direct_recovery_value_logit"],
+                        out["direct_recovery_value_logvar"],
+                        out.get("direct_recovery_opportunity_logit"),
+                        out.get("direct_recovery_harm_logit"),
+                        direct_bucket_ids=(2,),
+                    )
             else:
                 loss_direct_value = loss_direct_value_mixture
         else:
@@ -835,6 +965,34 @@ def _sampler_weight_for_path(p: Path, cfg: dict, root_counts: Counter, total: in
         return 1.0, False, False, False
 
 
+def _sampler_teacher_pcd(path: Path, cfg: dict) -> float:
+    """Compute the exact PCD target used by training and calibration."""
+    d = load_npz(path)
+    m = np.asarray(d["m_star"], dtype=np.float64)
+    probs = np.asarray(d["root_probs"], dtype=np.float64)
+    c = np.asarray(d.get("c_star", np.eye(m.shape[0])), dtype=np.float64)
+    root_valid = np.asarray(d.get("root_valid", np.ones(m.shape[0])), dtype=bool)
+    option_valid = np.asarray(d.get("option_valid", np.ones(m.shape[1])), dtype=bool)
+    ocfg = cfg.get("ocmero", {}) if isinstance(cfg.get("ocmero", {}), dict) else {}
+    res = oc_mero(
+        m, probs, c,
+        alpha=float(ocfg.get("alpha", 0.2)),
+        beta=float(ocfg.get("beta", 0.2)),
+        option_valid=option_valid,
+        root_valid=root_valid,
+        use_lcvar=bool(ocfg.get("use_lcvar", True)),
+        use_obs_kernel=bool(ocfg.get("use_obs_kernel", True)),
+        top_m=int(ocfg.get("top_m", 8)),
+    )
+    option = best_shared_option_index(
+        res.q, probs, gamma=0.0, root_valid=root_valid, option_valid=option_valid
+    )
+    drs = deployable_recovery_success(m, probs, option, root_valid=root_valid)
+    r_dep = float(np.asarray(d.get("r_dep_star", res.r_dep)).reshape(()))
+    r_orc = float(np.asarray(d.get("r_orc_star", res.r_orc)).reshape(()))
+    return float(post_contact_deployability_score(drs, r_dep, max(0.0, r_orc - r_dep)))
+
+
 def _make_group_batch_sampler(ds: OCRAPSampleDataset, cfg: dict, batch_size: int) -> SceneTimeBatchSampler | None:
     tcfg = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
     if not bool(tcfg.get("group_batching", False)):
@@ -870,8 +1028,13 @@ def _make_group_batch_sampler(ds: OCRAPSampleDataset, cfg: dict, batch_size: int
     # good or better and therefore diluted the rare positive-advantage signal.
     positive_macro_ids = set(_parse_int_tuple(tcfg.get("group_batch_positive_macro_ids", ""), ()))
     positive_bucket_ids = set(_parse_int_tuple(tcfg.get("group_batch_positive_bucket_ids", ""), ()))
-    positive_gain_min = float(tcfg.get("group_batch_positive_r_dep_gain", 0.025))
+    positive_gain_min = float(tcfg.get("group_batch_positive_gain", tcfg.get("group_batch_positive_r_dep_gain", 0.025)))
     positive_boost = float(tcfg.get("group_batch_positive_advantage_boost", 0.0))
+    positive_target = str(tcfg.get("group_batch_positive_target", "r_dep") or "r_dep").strip().lower()
+    if positive_target not in {"r_dep", "pcd"}:
+        raise ValueError(f"unsupported training.group_batch_positive_target={positive_target!r}")
+    pcd_cache: dict[Path, float] = {}
+    positive_target_failures = 0
 
     group_weights = []
     hard_groups = 0
@@ -896,8 +1059,8 @@ def _make_group_batch_sampler(ds: OCRAPSampleDataset, cfg: dict, batch_size: int
                 hard_groups += 1
 
         if positive_boost > 0.0 and positive_macro_ids:
-            nominal_rdep = None
-            best_recovery_rdep = None
+            nominal_target = None
+            best_recovery_target = None
             for i in g:
                 p = ds.paths[i]
                 try:
@@ -905,16 +1068,22 @@ def _make_group_batch_sampler(ds: OCRAPSampleDataset, cfg: dict, batch_size: int
                     if positive_bucket_ids and bid not in positive_bucket_ids:
                         continue
                     is_nominal = bool(float(np.asarray(scalar_metadata_for_path(p, "is_nominal", 0.0)).item()) > 0.5)
-                    rdep = float(np.asarray(scalar_metadata_for_path(p, "r_dep_star", -99.0)).item())
+                    if positive_target == "pcd":
+                        if p not in pcd_cache:
+                            pcd_cache[p] = _sampler_teacher_pcd(p, cfg)
+                        target_value = float(pcd_cache[p])
+                    else:
+                        target_value = float(np.asarray(scalar_metadata_for_path(p, "r_dep_star", -99.0)).item())
                     if is_nominal:
-                        nominal_rdep = rdep if nominal_rdep is None else max(nominal_rdep, rdep)
+                        nominal_target = target_value if nominal_target is None else max(nominal_target, target_value)
                         continue
                     mac = int(float(np.asarray(scalar_metadata_for_path(p, "prefix_macro_type_id", scalar_metadata_for_path(p, "prefix_macro_id", -1))).item()))
                     if mac in positive_macro_ids:
-                        best_recovery_rdep = rdep if best_recovery_rdep is None else max(best_recovery_rdep, rdep)
+                        best_recovery_target = target_value if best_recovery_target is None else max(best_recovery_target, target_value)
                 except Exception:
+                    positive_target_failures += 1
                     continue
-            if nominal_rdep is not None and best_recovery_rdep is not None and (best_recovery_rdep - nominal_rdep) >= positive_gain_min:
+            if nominal_target is not None and best_recovery_target is not None and (best_recovery_target - nominal_target) >= positive_gain_min:
                 gw *= positive_boost
                 positive_advantage_groups += 1
         group_weights.append(gw)
@@ -932,7 +1101,9 @@ def _make_group_batch_sampler(ds: OCRAPSampleDataset, cfg: dict, batch_size: int
         "hard_groups": int(hard_groups),
         "positive_advantage_boost": float(positive_boost),
         "positive_advantage_gain_min": float(positive_gain_min),
+        "positive_advantage_target": positive_target,
         "positive_advantage_groups": int(positive_advantage_groups),
+        "positive_target_failures": int(positive_target_failures),
     }, flush=True)
     return SceneTimeBatchSampler(groups, batch_size, group_weights=group_weights, replacement=bool(tcfg.get("group_batching_replacement", True)))
 
@@ -1073,11 +1244,13 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_value_num_regimes=int(model_cfg.get("direct_recovery_value_num_regimes", 4)),
         direct_recovery_value_regime_dim=int(model_cfg.get("direct_recovery_value_regime_dim", 16)),
         direct_recovery_opportunity_head=bool(model_cfg.get("direct_recovery_opportunity_head", False)),
+        direct_recovery_harm_head=bool(model_cfg.get("direct_recovery_harm_head", False)),
         direct_recovery_value_experts=bool(model_cfg.get("direct_recovery_value_experts", False)),
         direct_recovery_value_num_experts=int(model_cfg.get("direct_recovery_value_num_experts", 2)),
         direct_recovery_value_expert_routing=str(model_cfg.get("direct_recovery_value_expert_routing", "bucket")),
         direct_recovery_value_router_temperature=float(model_cfg.get("direct_recovery_value_router_temperature", 1.0)),
         direct_recovery_value_router_pooling=str(model_cfg.get("direct_recovery_value_router_pooling", "candidate")),
+        direct_recovery_expert_disagreement_penalty=float(model_cfg.get("direct_recovery_expert_disagreement_penalty", 0.0)),
     ).to(device)
     tcfg = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
 
@@ -1180,11 +1353,13 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "direct_recovery_value_num_regimes": int(model_cfg.get("direct_recovery_value_num_regimes", 4)),
             "direct_recovery_value_regime_dim": int(model_cfg.get("direct_recovery_value_regime_dim", 16)),
             "direct_recovery_opportunity_head": bool(model_cfg.get("direct_recovery_opportunity_head", False)),
+            "direct_recovery_harm_head": bool(model_cfg.get("direct_recovery_harm_head", False)),
             "direct_recovery_value_experts": bool(model_cfg.get("direct_recovery_value_experts", False)),
             "direct_recovery_value_num_experts": int(model_cfg.get("direct_recovery_value_num_experts", 2)),
             "direct_recovery_value_expert_routing": str(model_cfg.get("direct_recovery_value_expert_routing", "bucket")),
             "direct_recovery_value_router_temperature": float(model_cfg.get("direct_recovery_value_router_temperature", 1.0)),
             "direct_recovery_value_router_pooling": str(model_cfg.get("direct_recovery_value_router_pooling", "candidate")),
+            "direct_recovery_expert_disagreement_penalty": float(model_cfg.get("direct_recovery_expert_disagreement_penalty", 0.0)),
             "model_state": model.state_dict(),
             "optimizer_state": opt.state_dict(),
             "epoch": int(ep),

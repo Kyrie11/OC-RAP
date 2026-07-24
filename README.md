@@ -1,5 +1,16 @@
 # OC-RAP：Observation-Consistent Recovery-Affordance Planner
 
+## v47 OC-TRAC recommended entry point
+
+The current experimental path is `run_v47_two_gpu_fast_commands.txt`.  It trains an observation-consistent tri-state recovery admission certificate with exact teacher-PCD sampling, explicit harmful-switch prediction, setwise abstention, and all-regime closed-loop references.  See `V46_FAILURE_ANALYSIS_AND_V47_OC_TRAC_ZH.md` and `V47_RUN_INSTRUCTIONS_ZH.md`.
+
+```bash
+FINAL_RUN=0 RETRAIN_CLEAN_BASE=1 RUN_HELDOUT_TEST=0 \
+  bash run_v47_two_gpu_fast_commands.txt
+```
+
+Do not report the certificate-independent nominal reference rollouts as learned OC-TRAC results.  Final claims require independent calibration roots and a one-shot held-out test.
+
 本仓库是对论文 `post-collision.tex` 中 OC-RAP 方法的可运行实现。实现以论文的 `abstract -> introduction -> method -> appendix -> experiments` 逻辑为主线，并按照 `代码完善指令.md` 对原始代码进行了重构、补全和修复：数据构造、candidate prefix 生成、counterfactual future mining、observation-consistent root 聚类、recovery teacher、OC-MERO、CRISP selector、训练、校准、评估和 papercheck 都已落到 `src/ocrap` 包结构中。
 
 核心目标不是做普通 motion prediction，而是为每个 `(scene, time, candidate_prefix)` 判断：在 prefix 执行后、只基于 post-prefix observation 可区分的未来簇中，是否存在可恢复的 recovery option；以及是否存在 oracle recoverable 但 deployable 不可恢复的 observation aliasing artifact。

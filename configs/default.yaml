@@ -24,6 +24,9 @@ num_candidate_prefixes: 24
 # Optional macro whitelist for clean safe/normal shards, e.g.
 # --set prefix_macro_whitelist=[nominal,keep,stabilize,perturb_nominal,brake]
 prefix_macro_whitelist: null
+# Optional ordered/repeated stress frontier, e.g. [merge,brake,stabilize,yield].
+# Repeating a macro requests distinct per-macro parameter variants before pruning.
+prefix_macro_schedule: null
 num_reactive_futures: 4
 num_targeted_futures: 8
 # Optional override for post-contact / secondary-collision stress builds.

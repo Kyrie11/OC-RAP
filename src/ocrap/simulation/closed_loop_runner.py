@@ -74,6 +74,7 @@ class ClosedLoopDecision:
     selected_direct_recovery_value: float | None
     selected_direct_recovery_std: float | None
     selected_direct_recovery_opportunity: float | None
+    selected_direct_recovery_harm: float | None
     nominal_direct_recovery_value: float | None
     direct_recovery_advantage: float | None
     selected_nominal_deviation: float | None
@@ -703,10 +704,15 @@ def _select_prefix(
     pred_direct_std = np.asarray([np.nan if x["pred"].direct_recovery_std is None else float(x["pred"].direct_recovery_std) for x in items], dtype=np.float32)
     pred_direct_opportunity = np.asarray([np.nan if x["pred"].direct_recovery_opportunity is None else float(x["pred"].direct_recovery_opportunity) for x in items], dtype=np.float32)
     opp_logits = np.asarray([np.nan if x["pred"].direct_recovery_opportunity_logit is None else float(x["pred"].direct_recovery_opportunity_logit) for x in items], dtype=np.float32)
+    pred_direct_harm = np.asarray([np.nan if x["pred"].direct_recovery_harm is None else float(x["pred"].direct_recovery_harm) for x in items], dtype=np.float32)
+    harm_logits = np.asarray([np.nan if x["pred"].direct_recovery_harm_logit is None else float(x["pred"].direct_recovery_harm_logit) for x in items], dtype=np.float32)
     nominal_ids = [i for i, x in enumerate(items) if _safe_float(x["data"].get("is_nominal", 0.0)) > 0.5]
     if nominal_ids and np.isfinite(opp_logits[nominal_ids[0]]):
         delta = np.clip(opp_logits - opp_logits[nominal_ids[0]], -30.0, 30.0)
         pred_direct_opportunity = (1.0 / (1.0 + np.exp(-delta))).astype(np.float32)
+    if nominal_ids and np.isfinite(harm_logits[nominal_ids[0]]):
+        delta = np.clip(harm_logits - harm_logits[nominal_ids[0]], -30.0, 30.0)
+        pred_direct_harm = (1.0 / (1.0 + np.exp(-delta))).astype(np.float32)
     macro_names = [str(x["data"].get("prefix_macro_name", "")) for x in items]
     nominal_deviation = _prefix_nominal_deviation(samples)
     if compute_teacher_labels:
@@ -742,6 +748,7 @@ def _select_prefix(
             pred_direct_value=pred_direct_value,
             pred_direct_std=pred_direct_std,
             pred_direct_opportunity=pred_direct_opportunity,
+            pred_direct_harm=pred_direct_harm,
             candidate_macro_names=macro_names,
         )
     idx = int(selected.selected_index)
@@ -777,6 +784,7 @@ def _select_prefix(
         "pred_direct_value": pred_direct_value,
         "pred_direct_std": pred_direct_std,
         "pred_direct_opportunity": pred_direct_opportunity,
+        "pred_direct_harm": pred_direct_harm,
         "nominal_deviation": nominal_deviation,
         "labels_available": bool(compute_teacher_labels),
         "drs": None if drs is None else float(drs),
@@ -933,6 +941,12 @@ def _rollout_one_scene(
     active_regime_trace: list[str] = []
     metric_trace: list[dict[str, float]] = []
     state_xy_trace: list[list[float]] = []
+    try:
+        tr0 = state.sim_trajectory
+        tt0 = _current_timestep(state)
+        state_xy_trace.append([float(_as_np(tr0.x)[sdc, tt0]), float(_as_np(tr0.y)[sdc, tt0])])
+    except Exception:
+        pass
     interventions_used = 0
     last_intervention_step = -10**9
     previous_selected_macro = "nominal"
@@ -1302,9 +1316,11 @@ def _rollout_one_scene(
         direct_values = info.get("pred_direct_value", None)
         direct_stds = info.get("pred_direct_std", None)
         direct_opportunities = info.get("pred_direct_opportunity", None)
+        direct_harms = info.get("pred_direct_harm", None)
         selected_direct_recovery_value = _safe_optional_float(direct_values[sel_idx]) if direct_values is not None else None
         selected_direct_recovery_std = _safe_optional_float(direct_stds[sel_idx]) if direct_stds is not None else None
         selected_direct_recovery_opportunity = _safe_optional_float(direct_opportunities[sel_idx]) if direct_opportunities is not None else None
+        selected_direct_recovery_harm = _safe_optional_float(direct_harms[sel_idx]) if direct_harms is not None else None
         nominal_direct_recovery_value = _safe_optional_float(direct_values[0]) if direct_values is not None and len(direct_values) else None
         direct_recovery_advantage = (selected_direct_recovery_value - nominal_direct_recovery_value) if selected_direct_recovery_value is not None and nominal_direct_recovery_value is not None else None
         selected_nominal_deviation = _safe_optional_float(info["nominal_deviation"][sel_idx])
@@ -1333,6 +1349,7 @@ def _rollout_one_scene(
                 selected_direct_recovery_value=selected_direct_recovery_value,
                 selected_direct_recovery_std=selected_direct_recovery_std,
                 selected_direct_recovery_opportunity=selected_direct_recovery_opportunity,
+                selected_direct_recovery_harm=selected_direct_recovery_harm,
                 nominal_direct_recovery_value=nominal_direct_recovery_value,
                 direct_recovery_advantage=direct_recovery_advantage,
                 selected_nominal_deviation=selected_nominal_deviation,
@@ -1391,6 +1408,7 @@ def _rollout_one_scene(
     clearance_vals = [float(m["min_clearance_m"]) for m in metric_trace if "min_clearance_m" in m and np.isfinite(float(m["min_clearance_m"]))]
     ttc_vals = [float(m["ttc_s"]) for m in metric_trace if "ttc_s" in m and np.isfinite(float(m["ttc_s"]))]
     speed_vals = [float(m["ego_speed_mps"]) for m in metric_trace if "ego_speed_mps" in m and np.isfinite(float(m["ego_speed_mps"]))]
+    yaw_vals = [float(m["ego_yaw_rad"]) for m in metric_trace if "ego_yaw_rad" in m and np.isfinite(float(m["ego_yaw_rad"]))]
     overlap_flags = [bool(float(m.get("overlap", 0.0)) > 0.0) for m in metric_trace]
     overlap_episode_count = int(sum(flag and (i == 0 or not overlap_flags[i - 1]) for i, flag in enumerate(overlap_flags)))
     metric_steps = int(len(metric_trace))
@@ -1423,6 +1441,38 @@ def _rollout_one_scene(
                 stable_idx = j
                 break
     metric_summary["time_to_stable_stop_steps"] = float(stable_idx + 1) if stable_idx is not None else float("nan")
+    # Route-free execution quality is available for every WOMD shard, even if
+    # path_samples/sdc_paths were not loaded.  These metrics make Safe and
+    # Near-contact closed-loop comparisons publishable instead of reporting
+    # only collision/contact indicators.
+    dt_s = float(cl_cfg.get("metric_dt_s", 0.1) or 0.1)
+    dt_s = max(dt_s, 1.0e-3)
+    if len(state_xy_trace) >= 2:
+        xy_arr = np.asarray(state_xy_trace, dtype=float)
+        step_dist = np.linalg.norm(np.diff(xy_arr, axis=0), axis=1)
+        metric_summary["route_free_path_length_m"] = float(np.sum(step_dist))
+        metric_summary["route_free_net_displacement_m"] = float(np.linalg.norm(xy_arr[-1] - xy_arr[0]))
+        metric_summary["route_free_progress_efficiency"] = float(
+            metric_summary["route_free_net_displacement_m"] / max(metric_summary["route_free_path_length_m"], 1.0e-6)
+        )
+    else:
+        metric_summary["route_free_path_length_m"] = 0.0
+        metric_summary["route_free_net_displacement_m"] = 0.0
+        metric_summary["route_free_progress_efficiency"] = 0.0
+    if len(speed_vals) >= 2:
+        accel = np.diff(np.asarray(speed_vals, dtype=float)) / dt_s
+        metric_summary["longitudinal_accel_abs_mean_mps2"] = float(np.mean(np.abs(accel)))
+        metric_summary["longitudinal_accel_abs_max_mps2"] = float(np.max(np.abs(accel)))
+        metric_summary["hard_brake_rate"] = float(np.mean(accel <= -3.0))
+        if accel.size >= 2:
+            jerk = np.diff(accel) / dt_s
+            metric_summary["longitudinal_jerk_abs_mean_mps3"] = float(np.mean(np.abs(jerk)))
+            metric_summary["longitudinal_jerk_abs_max_mps3"] = float(np.max(np.abs(jerk)))
+    if len(yaw_vals) >= 2:
+        yaw_unwrapped = np.unwrap(np.asarray(yaw_vals, dtype=float))
+        yaw_rate = np.diff(yaw_unwrapped) / dt_s
+        metric_summary["yaw_rate_abs_mean_radps"] = float(np.mean(np.abs(yaw_rate)))
+        metric_summary["yaw_rate_abs_max_radps"] = float(np.max(np.abs(yaw_rate)))
     intervention_flags = [bool(d.selected_candidate_index != 0) for d in decisions]
     intervention_episode_count = int(sum(flag and (i == 0 or not intervention_flags[i - 1]) for i, flag in enumerate(intervention_flags)))
     intervention_run_lengths: list[int] = []
@@ -1490,6 +1540,7 @@ def _rollout_one_scene(
         "closed_loop_direct_recovery_value": _mean_finite([d.selected_direct_recovery_value for d in decisions]),
         "closed_loop_direct_recovery_std": _mean_finite([d.selected_direct_recovery_std for d in decisions]),
         "closed_loop_direct_recovery_opportunity": _mean_finite([d.selected_direct_recovery_opportunity for d in decisions]),
+        "closed_loop_direct_recovery_harm": _mean_finite([d.selected_direct_recovery_harm for d in decisions]),
         "closed_loop_direct_recovery_advantage": _mean_finite([d.direct_recovery_advantage for d in decisions]),
         "closed_loop_nominal_deviation": _mean_finite([d.selected_nominal_deviation for d in decisions]),
         "active_regime_counts": {name: int(active_regime_trace.count(name)) for name in sorted(set(active_regime_trace))},
@@ -1517,7 +1568,7 @@ def _rollout_one_scene(
     return out
 
 def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, source: str) -> dict[str, Any]:
-    keys = ["closed_loop_FRA_exec", "closed_loop_FRA_cand", "closed_loop_DRS", "closed_loop_ODG", "closed_loop_post_contact_deployability", "closed_loop_artifact_selection_rate", "closed_loop_audit_candidate_count", "closed_loop_audit_best_R_dep", "closed_loop_audit_best_DRS", "closed_loop_audit_selected_R_dep_regret", "closed_loop_audit_best_PCD", "closed_loop_audit_selected_PCD_regret", "closed_loop_audit_recoverable_candidate_rate", "closed_loop_audit_selector_miss_rate", "closed_loop_audit_pcd_selector_miss_rate", "closed_loop_audit_paper_best_PCD", "closed_loop_audit_paper_selected_PCD_regret", "closed_loop_audit_paper_pcd_selector_miss_rate", "closed_loop_bounded_NUP", "closed_loop_pred_r_dep", "closed_loop_pred_gap", "closed_loop_pred_DRS_proxy", "closed_loop_direct_recovery_value", "closed_loop_direct_recovery_std", "closed_loop_direct_recovery_advantage", "closed_loop_nominal_deviation", "intervention_rate", "intervention_episode_rate", "mean_intervention_run_length", "max_intervention_run_length", "macro_switch_rate", "external_sparse_label_candidates_mean", "external_sparse_full_candidates_mean"]
+    keys = ["closed_loop_FRA_exec", "closed_loop_FRA_cand", "closed_loop_DRS", "closed_loop_ODG", "closed_loop_post_contact_deployability", "closed_loop_artifact_selection_rate", "closed_loop_audit_candidate_count", "closed_loop_audit_best_R_dep", "closed_loop_audit_best_DRS", "closed_loop_audit_selected_R_dep_regret", "closed_loop_audit_best_PCD", "closed_loop_audit_selected_PCD_regret", "closed_loop_audit_recoverable_candidate_rate", "closed_loop_audit_selector_miss_rate", "closed_loop_audit_pcd_selector_miss_rate", "closed_loop_audit_paper_best_PCD", "closed_loop_audit_paper_selected_PCD_regret", "closed_loop_audit_paper_pcd_selector_miss_rate", "closed_loop_bounded_NUP", "closed_loop_pred_r_dep", "closed_loop_pred_gap", "closed_loop_pred_DRS_proxy", "closed_loop_direct_recovery_value", "closed_loop_direct_recovery_std", "closed_loop_direct_recovery_opportunity", "closed_loop_direct_recovery_harm", "closed_loop_direct_recovery_advantage", "closed_loop_nominal_deviation", "intervention_rate", "intervention_episode_rate", "mean_intervention_run_length", "max_intervention_run_length", "macro_switch_rate", "external_sparse_label_candidates_mean", "external_sparse_full_candidates_mean"]
     agg: dict[str, Any] = {
         "source": source,
         "method": method,
@@ -1550,15 +1601,45 @@ def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, s
             agg["waymax_metrics"][mk] = float(sum(v for v, _ in finite))
         elif mk.endswith("_any") or mk in {"secondary_overlap_event"}:
             agg["waymax_metrics"][mk] = float(max(v for v, _ in finite))
-        elif mk.endswith("_max"):
+        elif mk.endswith("_max") or "_max_" in mk:
             agg["waymax_metrics"][mk] = float(max(v for v, _ in finite))
-        elif mk.endswith("_min"):
+        elif mk.endswith("_min") or "_min_" in mk:
             agg["waymax_metrics"][mk] = float(min(v for v, _ in finite))
         elif mk.endswith("_rate"):
             denom = sum(max(w, 0) for _, w in finite)
             agg["waymax_metrics"][mk] = float(sum(v * max(w, 0) for v, w in finite) / max(denom, 1))
         else:
             agg["waymax_metrics"][mk] = float(np.mean([v for v, _ in finite]))
+    # Explicit closed-loop aliases for all three regimes. Waymax reports overlap
+    # and offroad per step; expose both scene incidence and step exposure so Safe
+    # and Near-contact are directly comparable even when no collision is expected.
+    def _scene_metric_values(name: str) -> list[float]:
+        vals: list[float] = []
+        for scene in scene_results:
+            value = (scene.get("metric_summary", {}) or {}).get(name, None)
+            if value is not None and np.isfinite(float(value)):
+                vals.append(float(value))
+        return vals
+
+    def _weighted_step_metric(name: str) -> float:
+        pairs: list[tuple[float, int]] = []
+        for scene in scene_results:
+            value = (scene.get("metric_summary", {}) or {}).get(name, None)
+            steps = int(scene.get("num_metric_steps", 0) or 0)
+            if value is not None and steps > 0 and np.isfinite(float(value)):
+                pairs.append((float(value), steps))
+        denom = sum(w for _, w in pairs)
+        return float(sum(v * w for v, w in pairs) / max(denom, 1)) if pairs else 0.0
+
+    collision_scene_values = _scene_metric_values("overlap_any")
+    offroad_scene_values = _scene_metric_values("offroad_any")
+    agg["collision_scene_rate"] = float(np.mean(collision_scene_values)) if collision_scene_values else 0.0
+    agg["collision_step_rate"] = _weighted_step_metric("overlap_mean")
+    agg["offroad_scene_rate"] = float(np.mean(offroad_scene_values)) if offroad_scene_values else 0.0
+    agg["offroad_step_rate"] = _weighted_step_metric("offroad_mean")
+    agg["minimum_clearance_m"] = float(min(_scene_metric_values("min_clearance_m_min"), default=float("nan")))
+    agg["minimum_ttc_s"] = float(min(_scene_metric_values("ttc_s_min"), default=float("nan")))
+
     # Distribution across scenes is the publication-level unit; do not average
     # per-scene p05 values and call it a global p05.
     for base in ("min_clearance_m", "ttc_s"):

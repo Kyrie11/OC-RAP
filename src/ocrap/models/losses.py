@@ -1278,6 +1278,11 @@ def direct_uncertainty_recovery_value_loss(
     pred_opportunity_logit: torch.Tensor | None = None,
     opportunity_weight: float = 0.0,
     opportunity_pos_weight: float = 6.0,
+    pred_harm_logit: torch.Tensor | None = None,
+    harm_weight: float = 0.0,
+    harm_pos_weight: float = 6.0,
+    class_balanced_centered: bool = False,
+    setwise_admission_weight: float = 0.0,
 ) -> torch.Tensor:
     """Learn candidate value *relative to nominal* without corrupting OC-MERO.
 
@@ -1340,6 +1345,9 @@ def direct_uncertainty_recovery_value_loss(
     opportunity_logits = None
     if pred_opportunity_logit is not None:
         opportunity_logits = pred_opportunity_logit.float().reshape(-1)[:n]
+    harm_logits = None
+    if pred_harm_logit is not None:
+        harm_logits = pred_harm_logit.float().reshape(-1)[:n]
     group_losses: list[torch.Tensor] = []
     group_weights: list[float] = []
     for key in torch.unique(keys[finite], dim=0):
@@ -1351,9 +1359,24 @@ def direct_uncertainty_recovery_value_loss(
         nom = noms[0]
         t_delta = target[recs] - target[nom]
         p_delta = score[recs] - score[nom]
-        # Emphasise decision-relevant deltas while retaining all candidates.
-        mag_w = 1.0 + torch.clamp(t_delta.abs() / max(float(positive_gain), 1.0e-3), max=4.0)
-        centered = (mag_w * F.smooth_l1_loss(p_delta, t_delta, reduction='none')).sum() / mag_w.sum().clamp_min(1.0e-6)
+        pos_mask = t_delta >= float(positive_gain)
+        neg_mask = t_delta <= -float(negative_gain)
+        tie_mask = (~pos_mask) & (~neg_mask)
+        # v47 OC-TRAC: candidate counts are highly imbalanced inside a positive
+        # group (typically one useful recovery versus many tied/harmful ones).
+        # A flat candidate average lets negatives dominate even after the group
+        # receives a large positive weight.  Average each tri-state class first,
+        # then combine classes, so the rare useful option contributes equally.
+        raw_centered = F.smooth_l1_loss(p_delta, t_delta, reduction='none')
+        if bool(class_balanced_centered):
+            class_terms = []
+            for mask in (pos_mask, tie_mask, neg_mask):
+                if bool(mask.any()):
+                    class_terms.append(raw_centered[mask].mean())
+            centered = torch.stack(class_terms).mean() if class_terms else raw_centered.mean()
+        else:
+            mag_w = 1.0 + torch.clamp(t_delta.abs() / max(float(positive_gain), 1.0e-3), max=4.0)
+            centered = (mag_w * raw_centered).sum() / mag_w.sum().clamp_min(1.0e-6)
         terms = [float(centered_weight) * centered]
         # The deployable decision set is nominal plus the macros that can
         # actually be admitted by this head.  v45 applied the listwise term to
@@ -1369,15 +1392,28 @@ def direct_uncertainty_recovery_value_loss(
         best_j = int(torch.argmax(t_delta).item())
         t_adv = t_delta[best_j]
         p_adv = p_delta[best_j]
-        pos_mask = t_delta >= float(positive_gain)
         # A large fraction of OC-RAP candidate pairs have exactly tied teacher
         # PCD (the v45 Near/Contact medians and q75 are both zero).  Treating all
         # ties as hard negatives forced every tied candidate below a negative
         # margin and collapsed the predicted advantage distribution.  Only
         # statistically meaningful negative deltas receive the hard negative
         # ranking penalty; the dead-zone is handled by gentle regression.
-        neg_mask = t_delta <= -float(negative_gain)
-        tie_mask = (~pos_mask) & (~neg_mask)
+        if float(setwise_admission_weight) > 0.0:
+            # Directly train the deployed set decision: either abstain on the
+            # nominal action, or choose the best truly beneficial recovery.
+            # This closes the mismatch where candidate AUC looked reasonable
+            # while the per-group predicted top-1 was anti-correlated.
+            admission_logits = torch.cat([score[nom].reshape(1), score[recs]], dim=0) / tau
+            if bool(pos_mask.any()):
+                positive_indices = torch.where(pos_mask)[0]
+                best_positive_local = positive_indices[torch.argmax(t_delta[positive_indices])]
+                target_index = 1 + best_positive_local
+            else:
+                target_index = torch.zeros((), dtype=torch.long, device=score.device)
+            terms.append(
+                float(setwise_admission_weight)
+                * F.cross_entropy(admission_logits.reshape(1, -1), target_index.reshape(1))
+            )
         if opportunity_logits is not None and float(opportunity_weight) > 0.0:
             labels = pos_mask.to(dtype=opportunity_logits.dtype)
             # v45: opportunity means "this candidate improves over this group's
@@ -1390,6 +1426,12 @@ def direct_uncertainty_recovery_value_loss(
             pos_w = torch.as_tensor(max(float(opportunity_pos_weight), 1.0), dtype=logits.dtype, device=logits.device)
             opp = F.binary_cross_entropy_with_logits(logits, labels, pos_weight=pos_w)
             terms.append(float(opportunity_weight) * opp)
+        if harm_logits is not None and float(harm_weight) > 0.0:
+            harm_labels = neg_mask.to(dtype=harm_logits.dtype)
+            logits = harm_logits[recs] - harm_logits[nom]
+            pos_w = torch.as_tensor(max(float(harm_pos_weight), 1.0), dtype=logits.dtype, device=logits.device)
+            harm = F.binary_cross_entropy_with_logits(logits, harm_labels, pos_weight=pos_w)
+            terms.append(float(harm_weight) * harm)
         if float(pairwise_weight) > 0.0:
             pair_terms = []
             if bool(pos_mask.any()):

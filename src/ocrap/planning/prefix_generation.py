@@ -43,21 +43,84 @@ def _macro_bank_from_cfg(cfg: dict) -> list[str]:
     return bank or ["nominal"]
 
 
+
+def _macro_sequence_from_cfg(cfg: dict, n: int) -> list[tuple[str, int]]:
+    """Build a candidate macro/variant schedule without hidden duplicates.
+
+    ``prefix_macro_schedule`` may repeat a macro to front-load several distinct
+    parameter variants before dataset-quality pruning.  Variant ids are counted
+    per macro, so a schedule such as ``merge,brake,merge,brake`` yields merge
+    variants 0/1 and brake variants 0/1.  When unset, retain the historical
+    round-robin bank for backward compatibility.
+    """
+    bank = _macro_bank_from_cfg(cfg)
+    requested = _list_cfg(cfg.get("prefix_macro_schedule", None))
+    if not requested:
+        seq: list[tuple[str, int]] = [("nominal", 0)]
+        for rep in range(max(1, n)):
+            for macro in bank[1:]:
+                seq.append((macro, rep))
+                if len(seq) >= n:
+                    return seq[:n]
+        pad_macro = "perturb_nominal" if "perturb_nominal" in bank else bank[-1]
+        while len(seq) < n:
+            seq.append((pad_macro, len(seq)))
+        return seq[:n]
+
+    schedule = [m for m in requested if m in bank and m != "nominal"]
+    if not schedule:
+        schedule = [m for m in bank if m != "nominal"]
+    if not schedule:
+        return [("nominal", 0)] * max(1, n)
+    counts: dict[str, int] = {}
+    seq = [("nominal", 0)]
+    idx = 0
+    while len(seq) < n:
+        macro = schedule[idx % len(schedule)]
+        variant = counts.get(macro, 0)
+        counts[macro] = variant + 1
+        seq.append((macro, variant))
+        idx += 1
+    return seq[:n]
+
 def _macro_params(macro: str, variant: int, ego_speed: float, cfg: dict) -> np.ndarray:
     if macro in ("nominal", "keep"):
         return np.array([ego_speed, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
     if macro == "brake":
         return np.array([max(0.0, ego_speed - 2.0 - variant), 0.0, -2.0 - 0.5 * variant, 15.0, 0.0], dtype=np.float32)
     if macro == "yield":
-        return np.array([max(0.0, ego_speed - 3.0), 0.0, -2.5, 10.0 + 2.0 * variant, 0.0], dtype=np.float32)
+        level = min(max(int(variant), 0), 5)
+        return np.array([
+            max(0.0, ego_speed - (2.0 + 0.75 * level)),
+            0.0,
+            -1.5 - 0.4 * level,
+            8.0 + 2.0 * level,
+            0.0,
+        ], dtype=np.float32)
     if macro == "lane_shift":
         return np.array([ego_speed, (-1.0 if variant % 2 else 1.0) * 3.5, 0.0, 0.0, 1.0], dtype=np.float32)
     if macro == "merge":
-        return np.array([ego_speed + 1.0, (-1.0 if variant % 2 else 1.0) * 2.0, 0.5, 0.0, 1.0], dtype=np.float32)
+        level = min(max(int(variant) // 2, 0), 4)
+        side = -1.0 if int(variant) % 2 else 1.0
+        speed_delta = (0.0, 0.5, -0.5, 1.0, -1.0)[level]
+        return np.array([
+            max(0.0, ego_speed + speed_delta),
+            side * (1.5 + 0.45 * level),
+            0.2 + 0.15 * level,
+            0.0,
+            1.0,
+        ], dtype=np.float32)
     if macro == "pull_over":
         return np.array([max(0.0, ego_speed - 3.0), -4.0, -2.0, 20.0, 1.0], dtype=np.float32)
     if macro == "stabilize":
-        return np.array([max(0.0, ego_speed - 1.0), 0.0, -0.5, 0.0, 0.0], dtype=np.float32)
+        level = min(max(int(variant), 0), 5)
+        return np.array([
+            max(0.0, ego_speed - (0.5 + 0.75 * level)),
+            0.0,
+            -0.5 - 0.35 * level,
+            0.0,
+            0.0,
+        ], dtype=np.float32)
     # perturb nominal
     return np.array([max(0.0, ego_speed + (-1) ** variant * 0.8), 0.4 * ((variant % 3) - 1), 0.0, 0.0, 0.0], dtype=np.float32)
 
@@ -142,18 +205,7 @@ def generate_candidate_prefixes(history: SceneHistory, cfg: dict) -> list[Candid
     n = int(cfg.get("num_candidate_prefixes", 24))
     ego_speed = float(history.ego_state[6])
     prefixes: list[CandidatePrefix] = []
-    macro_bank = _macro_bank_from_cfg(cfg)
-    macro_seq: list[tuple[str, int]] = [("nominal", 0)]
-    for rep in range(max(1, n)):
-        for m in macro_bank[1:]:
-            macro_seq.append((m, rep))
-            if len(macro_seq) >= n:
-                break
-        if len(macro_seq) >= n:
-            break
-    pad_macro = "perturb_nominal" if "perturb_nominal" in macro_bank else macro_bank[-1]
-    while len(macro_seq) < n:
-        macro_seq.append((pad_macro, len(macro_seq)))
+    macro_seq = _macro_sequence_from_cfg(cfg, n)
     for i, (macro, variant) in enumerate(macro_seq[:n]):
         params = _macro_params(macro, variant, ego_speed, cfg)
         states, controls, diag = _rollout(history, macro, params, cfg)

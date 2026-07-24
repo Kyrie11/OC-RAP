@@ -380,10 +380,15 @@ def _evaluate_grouped_items(grouped: dict[tuple, list[dict]], methods: list[str]
         pred_direct_std = np.array([np.nan if x["pred"].direct_recovery_std is None else float(x["pred"].direct_recovery_std) for x in items])
         pred_direct_opportunity = np.array([np.nan if x["pred"].direct_recovery_opportunity is None else float(x["pred"].direct_recovery_opportunity) for x in items])
         opp_logits = np.array([np.nan if x["pred"].direct_recovery_opportunity_logit is None else float(x["pred"].direct_recovery_opportunity_logit) for x in items])
+        pred_direct_harm = np.array([np.nan if x["pred"].direct_recovery_harm is None else float(x["pred"].direct_recovery_harm) for x in items])
+        harm_logits = np.array([np.nan if x["pred"].direct_recovery_harm_logit is None else float(x["pred"].direct_recovery_harm_logit) for x in items])
         nominal_ids = [i for i, x in enumerate(items) if float(np.asarray(x["data"].get("is_nominal", 0.0)).item()) > 0.5]
         if nominal_ids and np.isfinite(opp_logits[nominal_ids[0]]):
             delta = np.clip(opp_logits - opp_logits[nominal_ids[0]], -30.0, 30.0)
             pred_direct_opportunity = (1.0 / (1.0 + np.exp(-delta))).astype(np.float32)
+        if nominal_ids and np.isfinite(harm_logits[nominal_ids[0]]):
+            delta = np.clip(harm_logits - harm_logits[nominal_ids[0]], -30.0, 30.0)
+            pred_direct_harm = (1.0 / (1.0 + np.exp(-delta))).astype(np.float32)
         macro_names = [str(np.asarray(x["data"].get("prefix_macro_name", "")).item() if np.asarray(x["data"].get("prefix_macro_name", "")).shape == () else x["data"].get("prefix_macro_name", "")) for x in items]
         teacher_r_dep = np.array([float(np.asarray(x["data"]["r_dep_star"]).item()) for x in items])
         teacher_r_orc = np.array([float(np.asarray(x["data"]["r_orc_star"]).item()) for x in items])
@@ -419,6 +424,7 @@ def _evaluate_grouped_items(grouped: dict[tuple, list[dict]], methods: list[str]
                 pred_direct_value=pred_direct_value,
                 pred_direct_std=pred_direct_std,
                 pred_direct_opportunity=pred_direct_opportunity,
+                pred_direct_harm=pred_direct_harm,
                 candidate_macro_names=macro_names,
             )
             selected_index = int(sel.selected_index)

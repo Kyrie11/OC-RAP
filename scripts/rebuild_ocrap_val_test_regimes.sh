@@ -87,6 +87,10 @@ CONTACT_TEACHER_TOP_K="${CONTACT_TEACHER_TOP_K:-0}"
 NEAR_TEACHER_ROLLOUT_MODES="${NEAR_TEACHER_ROLLOUT_MODES:-}"
 CONTACT_TEACHER_ROLLOUT_MODES="${CONTACT_TEACHER_ROLLOUT_MODES:-}"
 STRESS_COMPUTE_FUTURE_METRICS="${STRESS_COMPUTE_FUTURE_METRICS:-true}"
+# Front-load diverse deployable recovery variants before the 8/9-candidate
+# quality cap. Repeated names request distinct per-macro parameter variants.
+NEAR_PREFIX_MACRO_SCHEDULE="${NEAR_PREFIX_MACRO_SCHEDULE:-merge,brake,stabilize,yield,merge,brake,stabilize,yield}"
+CONTACT_PREFIX_MACRO_SCHEDULE="${CONTACT_PREFIX_MACRO_SCHEDULE:-stabilize,brake,merge,yield,stabilize,brake,merge,yield}"
 
 die() {
   echo "ERROR: $*" >&2
@@ -403,6 +407,8 @@ build_near() {
     --set split.force_id="${split}" \
     --set max_times_per_scenario=3 \
     --set max_biased_times_per_scenario=3 \
+    --set "prefix_macro_whitelist=[brake,yield,merge,stabilize]" \
+    --set "prefix_macro_schedule=[${NEAR_PREFIX_MACRO_SCHEDULE}]" \
     --set num_targeted_futures=8 \
     --set 'targeted_future_kinds=[hidden_vehicle_yields,hidden_vehicle_accelerates,low_friction_braking,control_delay_noise]' \
     --set waymax.compute_future_metrics="${STRESS_COMPUTE_FUTURE_METRICS}" \
@@ -458,6 +464,8 @@ build_contact() {
     --set split.force_id="${split}" \
     --set max_times_per_scenario=4 \
     --set max_biased_times_per_scenario=4 \
+    --set "prefix_macro_whitelist=[brake,yield,merge,stabilize]" \
+    --set "prefix_macro_schedule=[${CONTACT_PREFIX_MACRO_SCHEDULE}]" \
     --set num_targeted_futures=10 \
     --set 'targeted_future_kinds=[hidden_vehicle_yields,hidden_vehicle_accelerates,contact_impulse_surrogate,secondary_collision_approach,low_friction_braking,control_delay_noise]' \
     --set waymax.compute_future_metrics="${STRESS_COMPUTE_FUTURE_METRICS}" \
@@ -536,13 +544,13 @@ build_safe val "${VAL_SAFE_WORKER}" "${VAL_SAFE_RAW}" \
   "${OCRAP_ROOT}/val_safe" "${GPU0}" >"${OCRAP_ROOT}/.val_safe.build.log" 2>&1 & P0=$!
 build_safe test "${TEST_SAFE_WORKER}" "${TEST_SAFE_RAW}" \
   "${OCRAP_ROOT}/test_safe" "${GPU1}" >"${OCRAP_ROOT}/.test_safe.build.log" 2>&1 & P1=$!
-#wait_pair "${P0}" "${P1}" val_safe test_safe
+wait_pair "${P0}" "${P1}" val_safe test_safe
 
 build_near val "${VAL_NEAR_WORKER}" "${VAL_NEAR_RAW}" \
   "${OCRAP_ROOT}/val_near_contact" "${GPU0}" >"${OCRAP_ROOT}/.val_near_contact.build.log" 2>&1 & P0=$!
 build_near test "${TEST_NEAR_WORKER}" "${TEST_NEAR_RAW}" \
   "${OCRAP_ROOT}/test_near_contact" "${GPU1}" >"${OCRAP_ROOT}/.test_near_contact.build.log" 2>&1 & P1=$!
-#wait_pair "${P0}" "${P1}" val_near_contact test_near_contact
+wait_pair "${P0}" "${P1}" val_near_contact test_near_contact
 
 build_contact val "${VAL_CONTACT_WORKER}" "${VAL_CONTACT_RAW}" \
   "${OCRAP_ROOT}/val_contact" "${GPU0}" >"${OCRAP_ROOT}/.val_contact.build.log" 2>&1 & P0=$!

@@ -25,6 +25,8 @@ class Prediction:
     direct_recovery_std: float | None = None
     direct_recovery_opportunity: float | None = None
     direct_recovery_opportunity_logit: float | None = None
+    direct_recovery_harm: float | None = None
+    direct_recovery_harm_logit: float | None = None
 
 
 @dataclass
@@ -153,11 +155,13 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         direct_recovery_value_num_regimes=int(ckpt.get("direct_recovery_value_num_regimes", model_cfg.get("direct_recovery_value_num_regimes", 4))),
         direct_recovery_value_regime_dim=int(ckpt.get("direct_recovery_value_regime_dim", model_cfg.get("direct_recovery_value_regime_dim", 16))),
         direct_recovery_opportunity_head=bool(ckpt.get("direct_recovery_opportunity_head", model_cfg.get("direct_recovery_opportunity_head", False))),
+        direct_recovery_harm_head=bool(ckpt.get("direct_recovery_harm_head", model_cfg.get("direct_recovery_harm_head", False))),
         direct_recovery_value_experts=bool(ckpt.get("direct_recovery_value_experts", model_cfg.get("direct_recovery_value_experts", False))),
         direct_recovery_value_num_experts=int(ckpt.get("direct_recovery_value_num_experts", model_cfg.get("direct_recovery_value_num_experts", 2))),
         direct_recovery_value_expert_routing=str(ckpt.get("direct_recovery_value_expert_routing", model_cfg.get("direct_recovery_value_expert_routing", "bucket"))),
         direct_recovery_value_router_temperature=float(ckpt.get("direct_recovery_value_router_temperature", model_cfg.get("direct_recovery_value_router_temperature", 1.0))),
         direct_recovery_value_router_pooling=str(ckpt.get("direct_recovery_value_router_pooling", model_cfg.get("direct_recovery_value_router_pooling", "candidate"))),
+        direct_recovery_expert_disagreement_penalty=float(ckpt.get("direct_recovery_expert_disagreement_penalty", model_cfg.get("direct_recovery_expert_disagreement_penalty", 0.0))),
     ).to(device)
     # Strict loading remains the default for checkpoints with matching geometry.
     # A v39 checkpoint can initialize v40 training through train.py's explicit
@@ -173,11 +177,13 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_value_output"] = str(ckpt.get("direct_recovery_value_output", model_cfg.get("direct_recovery_value_output", "probability")))
     cfg["model"]["direct_recovery_value_regime_conditioning"] = bool(ckpt.get("direct_recovery_value_regime_conditioning", model_cfg.get("direct_recovery_value_regime_conditioning", False)))
     cfg["model"]["direct_recovery_opportunity_head"] = bool(ckpt.get("direct_recovery_opportunity_head", model_cfg.get("direct_recovery_opportunity_head", False)))
+    cfg["model"]["direct_recovery_harm_head"] = bool(ckpt.get("direct_recovery_harm_head", model_cfg.get("direct_recovery_harm_head", False)))
     cfg["model"]["direct_recovery_value_experts"] = bool(ckpt.get("direct_recovery_value_experts", model_cfg.get("direct_recovery_value_experts", False)))
     cfg["model"]["direct_recovery_value_num_experts"] = int(ckpt.get("direct_recovery_value_num_experts", model_cfg.get("direct_recovery_value_num_experts", 2)))
     cfg["model"]["direct_recovery_value_expert_routing"] = str(ckpt.get("direct_recovery_value_expert_routing", model_cfg.get("direct_recovery_value_expert_routing", "bucket")))
     cfg["model"]["direct_recovery_value_router_temperature"] = float(ckpt.get("direct_recovery_value_router_temperature", model_cfg.get("direct_recovery_value_router_temperature", 1.0)))
     cfg["model"]["direct_recovery_value_router_pooling"] = str(ckpt.get("direct_recovery_value_router_pooling", model_cfg.get("direct_recovery_value_router_pooling", "candidate")))
+    cfg["model"]["direct_recovery_expert_disagreement_penalty"] = float(ckpt.get("direct_recovery_expert_disagreement_penalty", model_cfg.get("direct_recovery_expert_disagreement_penalty", 0.0)))
     return ModelBundle(model=model, cfg=cfg, device=device)
 
 
@@ -273,6 +279,8 @@ def predict_samples(
     direct_std_np = None
     direct_opp_np = None
     direct_opp_logit_np = None
+    direct_harm_np = None
+    direct_harm_logit_np = None
     if "direct_recovery_value_logit" in out:
         direct_tensor = out["direct_recovery_value_logit"]
         if str(getattr(bundle.model, "direct_recovery_value_output", "probability")) != "score":
@@ -282,6 +290,9 @@ def predict_samples(
         if "direct_recovery_opportunity_logit" in out:
             direct_opp_logit_np = out["direct_recovery_opportunity_logit"].detach().cpu().numpy().astype(np.float32)
             direct_opp_np = torch.sigmoid(out["direct_recovery_opportunity_logit"]).detach().cpu().numpy().astype(np.float32)
+        if "direct_recovery_harm_logit" in out:
+            direct_harm_logit_np = out["direct_recovery_harm_logit"].detach().cpu().numpy().astype(np.float32)
+            direct_harm_np = torch.sigmoid(out["direct_recovery_harm_logit"]).detach().cpu().numpy().astype(np.float32)
     preds: list[Prediction] = []
     for i in range(len(ds)):
         preds.append(
@@ -297,6 +308,8 @@ def predict_samples(
                 direct_recovery_std=(None if direct_std_np is None else float(direct_std_np[i])),
                 direct_recovery_opportunity=(None if direct_opp_np is None else float(direct_opp_np[i])),
                 direct_recovery_opportunity_logit=(None if direct_opp_logit_np is None else float(direct_opp_logit_np[i])),
+                direct_recovery_harm=(None if direct_harm_np is None else float(direct_harm_np[i])),
+                direct_recovery_harm_logit=(None if direct_harm_logit_np is None else float(direct_harm_logit_np[i])),
             )
         )
     return preds
@@ -345,4 +358,6 @@ def predict_sample(d: dict[str, Any], bundle: ModelBundle | None, cfg: dict | No
         direct_recovery_std=(None if "direct_recovery_value_logvar" not in out else float(torch.exp(0.5 * out["direct_recovery_value_logvar"]).squeeze(0).detach().cpu().item())),
         direct_recovery_opportunity=(None if "direct_recovery_opportunity_logit" not in out else float(torch.sigmoid(out["direct_recovery_opportunity_logit"]).squeeze(0).detach().cpu().item())),
         direct_recovery_opportunity_logit=(None if "direct_recovery_opportunity_logit" not in out else float(out["direct_recovery_opportunity_logit"].squeeze(0).detach().cpu().item())),
+        direct_recovery_harm=(None if "direct_recovery_harm_logit" not in out else float(torch.sigmoid(out["direct_recovery_harm_logit"]).squeeze(0).detach().cpu().item())),
+        direct_recovery_harm_logit=(None if "direct_recovery_harm_logit" not in out else float(out["direct_recovery_harm_logit"].squeeze(0).detach().cpu().item())),
     )

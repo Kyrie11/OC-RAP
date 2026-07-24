@@ -209,3 +209,60 @@ The main neural head is observation-only, but threshold verification data must s
   - If the oracle candidate frontier has too few positive opportunities, modify candidate generation rather than the admission threshold.
 - **Required ablations:** v45; +tie dead zone; +expert supervision; +shared-observation router; +deployable listwise set; +fit-supported macros; +dual-risk contract; full v46. Also compare hard bucket, uniform, candidate-conditioned, and shared-observation routing.
 - **Publication blockers still open:** independent calibration roots; paper-scale Contact scenes; actual/validated post-contact states rather than only counterfactual labels; complete official/matched baseline runs; multi-seed closed-loop confidence intervals; alignment of the paper's five regimes with implemented evidence.
+
+## v46 observed result and decision (2026-07-23, completed)
+
+- **Natural gate:** both `ocrap_v46_race_balanced` and `ocrap_v46_race_precision` failed the joint Near+Contact contract. The pipeline correctly blocked learned-policy offline evaluation and Waymax.
+- **Near-contact evidence:** candidate-level positive AUC remained informative (`0.6725/0.6652` for balanced/precision), but unconstrained per-group predicted top-1 teacher-advantage correlation was negative (`-0.0792/-0.0701`). Mean teacher advantage of the predicted top-1 was `-0.1618/-0.1559`, with harmful rates `31.2%/30.4%`. No fit-fold rule existed and verify selected zero actions.
+- **Contact evidence:** balanced degraded from fit `20 selections, 55% precision, +0.0915 mean advantage` to verify `25 selections, 48% precision, 44% harmful, -0.1333 mean advantage`. Precision degraded from fit `6/6 positive, +0.3489` to verify `12 selections, 66.7% precision, 33.3% harmful, -0.0465 mean advantage`.
+- **Checkpoint provenance defect:** both archives initialized from `runs/ocrap_v39_ocrac_balanced/model_v39_ocrac/best.pt` and froze the shared encoder/certificate stack. The intended current clean-base refresh was not used.
+- **Sampler defect:** logs recorded `replacement=false`, `positive_advantage_boost=0`, and `positive_advantage_groups=0`. Rare recovery-improving groups were not emphasized, and the historical proxy target was not the deployed PCD objective.
+- **Router result:** validation router accuracy stayed around `0.52-0.56`, insufficient to identify a hidden Near/Contact task and conceptually misaligned with observation-indistinguishable future handling.
+- **Closed-loop control-flow defect:** calibration failure exited before any learned-policy rollouts, and the nominal all-regime reference was not separated from certificate gating.
+- **Bucket split defect discovered in follow-up:** development passed `val_*` roots while `run_ocrap_v46/v47` hard-coded `closed_loop.bucket_split=test`; strict target filtering could produce zero Safe/Near/Contact bucket targets. Development and held-out split propagation must be explicit.
+- **Dataset rebuild concurrency defect:** Safe and Near `wait_pair` calls were commented while PIDs were overwritten by later launches. Up to six Waymax/JAX workers could contend, and the script only waited for Contact. This can leave nominal/stress roots incomplete or silently failed.
+- **Raw-source mismatch:** the synchronized bucket rebuild intentionally uses standard WOMD validation for Near/Contact, while the closed-loop audit default scanned `validation_interactive`. Scene ids can therefore have zero matches even after fixing the split. v47 introduces `WOMD_STRESS`, defaulting to the standard validation source used by the rebuild.
+- **Decision:** do not relax opportunity/score thresholds. The failure is policy-level setwise ranking and false-admission control, not a small coverage deficit.
+
+## v47 — OC-TRAC (implemented; GPU/Waymax results pending)
+
+- **Name:** Observation-Consistent Tri-state Risk-Calibrated Recovery Admission Certificate.
+- **Paper role:** selective recovery admission on top of OC-MERO and CRISP. The novelty claim remains observation-consistent recovery affordance and the oracle-to-deployable gap; MoE itself is not claimed as novel.
+- **Learning changes:**
+  1. Train positive-gain, dead-zone/tie, and harmful-switch states explicitly rather than reducing every non-positive delta to a hard negative.
+  2. Add a dedicated harmful-admission head and propagate it through inference, calibration, evaluation, and the selector.
+  3. Add nominal-relative setwise admission/abstention loss over deployment-eligible macros; nominal is the correct class when no positive recovery exists.
+  4. Scan groups using the exact teacher PCD composite used by calibration and enable weighted replacement sampling for rare positive PCD groups.
+  5. Replace hidden regime experts with two all-stress risk-attitude experts: recovery-seeking and harm-averse. Both see Near and Contact; asymmetric loss weights create complementary hypotheses without oracle bucket routing.
+  6. Aggregate experts with candidate-invariant uniform weights and an uncertainty certificate: mean-minus-disagreement for benefit/opportunity, mean-plus-disagreement for harm.
+  7. Retain structured `candidate_concat` as the default. Raw flattened state/control features remain an ablation only because previous versions did not justify them.
+  8. Select checkpoints with a worst-regime direct objective and keep frozen subtrees in eval mode.
+  9. Add a configurable stress macro schedule and per-macro variant numbering. Near/Contact rebuilds front-load distinct merge/brake/stabilize/yield variants before the 8/9-candidate quality cap; repeated merge/stabilize/yield variants are no longer parameter duplicates.
+- **Calibration changes:**
+  1. Search a joint opportunity, predicted-harm, and score rule on fit scenes and freeze it before verification.
+  2. Require positive policy-level selected teacher advantage, precision/precision-LCB, selection support, harmful/all-group UCB, and harmful/selected-action UCB.
+  3. Report candidate AUC separately from unconstrained group-top1 correlation so pointwise success cannot hide setwise failure.
+  4. Separate network `predicted_harm` from physical/data `harm_proxy`.
+  5. Keep global pair correlation diagnostic by default; it can be a final-contract requirement but is not allowed to replace policy-level verification.
+- **Closed-loop changes:**
+  1. Add explicit `SAFE_BUCKET_SPLIT`, `NEAR_BUCKET_SPLIT`, and `CONTACT_BUCKET_SPLIT`; development uses `val`, held-out uses `test`.
+  2. Add a certificate-independent nominal reference runner for Safe/Near/Contact when all learned checkpoints fail. These outputs are reference physics only and must not be reported as learned OC-TRAC results.
+  2a. Use `WOMD_STRESS` to bind Near/Contact closed-loop replay to the same raw WOMD source used during bucket construction; default to standard validation for the synchronized rebuild.
+  3. Add all-regime collision/offroad scene and step rates, minimum clearance/TTC, path length, net displacement, progress efficiency, acceleration, hard braking, jerk, and yaw-rate metrics.
+  4. Keep FRA/DRS/ODG for regimes whose stress data supports observation-consistent recovery labels. Safe is compared with physical, comfort, progress, intervention, and NUP metrics.
+  5. Add metadata/WOMD preflight and report actual matched/missing scene-time targets at runtime.
+- **Engineering guards:**
+  - separate `TRAIN_OCRAP_ROOT` from `EVAL_OCRAP_ROOT`, because the synchronized rebuild creates val/test roots only;
+  - enforce full-unfreeze clean-base marker;
+  - enforce v47 initialization from that exact clean checkpoint;
+  - block test feedback until the optional one-shot held-out stage;
+  - fail closed on invalid calibration artifacts;
+  - keep learned-policy Waymax behind the natural gate while preserving nominal reference evaluation.
+- **Validation:** `110 passed, 4 warnings`; warnings are existing PyTorch nested-tensor notices. Python compilation and shell syntax are verified at packaging time.
+- **Falsification rules:**
+  - If exact-PCD sampler still reports zero positive groups, inspect teacher PCD construction or the candidate frontier; do not tune thresholds.
+  - If candidate AUC is positive but group-top1 correlation remains non-positive, improve setwise candidate representation/generation rather than lowering calibration gates.
+  - If Contact verify harmful UCB remains high, collect more independent calibration scenes and/or improve harm features; do not hide it with all-group exposure.
+  - If the learned certificate fails, report nominal references separately and do not call them OC-TRAC results.
+- **Required ablations:** v46; +exact-PCD sampler; +tri-state loss; +setwise abstention; +harm head/veto; +asymmetric all-stress experts; +disagreement certificate; full v47. Also compare single head, hard bucket router, shared-observation router, and uniform robust aggregation.
+- **Publication blockers:** independent calibration roots; larger Contact calibration/test sets; at least three seeds; paired scene bootstrap; completed matched external baselines; no repeated tuning on held-out test.
