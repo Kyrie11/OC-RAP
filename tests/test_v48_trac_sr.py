@@ -165,3 +165,74 @@ def test_encoder_anchor_is_zero_then_increases_after_drift() -> None:
     with torch.no_grad():
         layer.weight.add_(0.5)
     assert _parameter_anchor_loss(layer).item() > 0.0
+
+
+def test_nasc_set_context_is_permutation_equivariant_and_singleton_safe() -> None:
+    torch.manual_seed(5)
+    model = OCRAPModel(
+        input_dim=12,
+        num_roots=2,
+        num_options=3,
+        d_model=8,
+        d_obs=4,
+        encoder_type="mlp",
+        num_layers=1,
+        num_heads=2,
+        dropout=0.0,
+        direct_recovery_value_head=True,
+        direct_recovery_value_pooling="scene",
+        direct_recovery_value_output="score",
+        direct_recovery_set_context=True,
+        direct_recovery_set_context_hidden=16,
+        direct_recovery_set_context_dropout=0.0,
+    ).eval()
+    x = torch.randn(3, 12)
+    group = torch.zeros((3, 1), dtype=torch.long)
+    nominal = torch.tensor([1.0, 0.0, 0.0])
+    with torch.no_grad():
+        base = model(x, group_index=group, is_nominal=nominal, direct_only=True)["direct_recovery_value_logit"]
+        perm = torch.tensor([0, 2, 1])
+        shuffled = model(
+            x[perm], group_index=group, is_nominal=nominal[perm], direct_only=True
+        )["direct_recovery_value_logit"]
+        inverse = torch.argsort(perm)
+        singleton = model(
+            x[:1], group_index=torch.zeros((1, 1), dtype=torch.long),
+            is_nominal=torch.ones(1), direct_only=True,
+        )["direct_recovery_value_logit"]
+        pointwise = model(x[:1], direct_only=True)["direct_recovery_value_logit"]
+    assert torch.allclose(base, shuffled[inverse], atol=1.0e-6)
+    assert torch.allclose(singleton, pointwise, atol=1.0e-6)
+
+
+def test_regret_consistent_distillation_prefers_teacher_best_candidate() -> None:
+    def loss(pred: torch.Tensor) -> torch.Tensor:
+        from ocrap.models.losses import direct_uncertainty_recovery_value_loss
+        return direct_uncertainty_recovery_value_loss(
+            pred_logit=pred,
+            pred_logvar=torch.zeros_like(pred),
+            teacher_r_dep=torch.tensor([0.0, 2.0, 1.0]),
+            teacher_r_orc=torch.tensor([0.0, 2.0, 1.0]),
+            teacher_q=torch.ones((3, 1, 1)),
+            root_probs=torch.ones((3, 1)),
+            root_valid=torch.ones((3, 1), dtype=torch.bool),
+            option_valid=torch.ones((3, 1), dtype=torch.bool),
+            scene_hash=torch.tensor([19, 19, 19]),
+            time_index=torch.tensor([3, 3, 3]),
+            macro_type_id=torch.tensor([0, 5, 5]),
+            is_nominal=torch.tensor([1.0, 0.0, 0.0]),
+            bucket_id=torch.tensor([1, 1, 1]),
+            macro_ids=(5,), bucket_ids=(1,), output_mode="score",
+            positive_gain=0.10, negative_gain=0.10, temperature=0.10,
+            point_weight=0.0, centered_weight=0.0, listwise_weight=0.0,
+            advantage_weight=0.0, pairwise_weight=0.0, top_rank_weight=0.0,
+            opportunity_weight=0.0, harm_weight=0.0,
+            setwise_admission_weight=1.0e-6,
+            policy_distill_weight=2.0,
+            policy_teacher_temperature=0.05,
+            policy_regret_weight=2.0,
+        )
+
+    correct = torch.tensor([0.0, 2.0, 0.5])
+    wrong = torch.tensor([0.0, 0.5, 2.0])
+    assert loss(correct).item() + 0.1 < loss(wrong).item()

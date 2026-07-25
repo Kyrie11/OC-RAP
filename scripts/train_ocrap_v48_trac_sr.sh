@@ -85,6 +85,9 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set model.direct_recovery_expert_disagreement_penalty="$DISAGREE" \
   --set model.direct_recovery_opportunity_head=true \
   --set model.direct_recovery_harm_head=true \
+  --set model.direct_recovery_set_context="${SET_CONTEXT_ENABLED:-true}" \
+  --set model.direct_recovery_set_context_hidden="${SET_CONTEXT_HIDDEN:-192}" \
+  --set model.direct_recovery_set_context_dropout="${SET_CONTEXT_DROPOUT:-0.10}" \
   --set loss_weights.dep=0 --set loss_weights.orc=0 --set loss_weights.assign=0 \
   --set loss_weights.sig=0 --set loss_weights.margin=0 --set loss_weights.obs=0 \
   --set loss_weights.anti_oracle=0 --set loss_weights.artifact_gap=0 \
@@ -127,6 +130,10 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.direct_value_selective_harm_budget="${SELECTIVE_HARM_BUDGET:-0.05}" \
   --set training.direct_value_selective_coverage_weight="${SELECTIVE_COVERAGE_WEIGHT:-1.0}" \
   --set training.direct_value_selective_coverage_target="${SELECTIVE_COVERAGE_TARGET:-0.65}" \
+  --set training.direct_value_policy_distill_weight="${POLICY_DISTILL_WEIGHT:-1.0}" \
+  --set training.direct_value_policy_teacher_temperature="${POLICY_TEACHER_TEMPERATURE:-0.06}" \
+  --set training.direct_value_policy_regret_weight="${POLICY_REGRET_WEIGHT:-1.0}" \
+  --set training.direct_value_policy_regret_margin="${POLICY_REGRET_MARGIN:-0.005}" \
   --set training.direct_value_expert_specialization_weight=0.40 \
   2>&1 | tee "$LOG_DIR/train_v48_trac_sr.log"
 

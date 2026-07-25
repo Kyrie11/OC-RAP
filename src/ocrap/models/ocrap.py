@@ -51,6 +51,9 @@ class OCRAPModel(nn.Module):
         direct_recovery_value_router_temperature: float = 1.0,
         direct_recovery_value_router_pooling: str = "candidate",
         direct_recovery_expert_disagreement_penalty: float = 0.5,
+        direct_recovery_set_context: bool = False,
+        direct_recovery_set_context_hidden: int = 192,
+        direct_recovery_set_context_dropout: float = 0.1,
     ):
         super().__init__()
         self.num_roots = int(num_roots)
@@ -85,6 +88,9 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_expert_disagreement_penalty = float(
             max(direct_recovery_expert_disagreement_penalty, 0.0)
         )
+        self.direct_recovery_set_context = bool(direct_recovery_set_context)
+        self.direct_recovery_set_context_hidden = max(16, int(direct_recovery_set_context_hidden))
+        self.direct_recovery_set_context_dropout = float(max(0.0, direct_recovery_set_context_dropout))
         if self.direct_recovery_value_expert_routing not in {
             "bucket",
             "hard_bucket",
@@ -208,6 +214,27 @@ class OCRAPModel(nn.Module):
                 raise ValueError("shared raw router pooling produced an empty observation feature")
         else:
             direct_router_in_dim = direct_in_dim
+        # v48.3 OC-TRAC-NASC: candidate value is intrinsically set-relative.
+        # The adapter is permutation-equivariant within a scene-time candidate set,
+        # explicitly anchored to nominal, and leaves the base pointwise path intact
+        # when a complete candidate set is unavailable.
+        self.direct_set_context_adapter = (
+            nn.Sequential(
+                nn.LayerNorm(4 * direct_in_dim),
+                nn.Linear(4 * direct_in_dim, self.direct_recovery_set_context_hidden),
+                nn.GELU(),
+                nn.Dropout(self.direct_recovery_set_context_dropout),
+                nn.Linear(self.direct_recovery_set_context_hidden, direct_in_dim),
+                nn.LayerNorm(direct_in_dim),
+            )
+            if self.direct_recovery_value_head and self.direct_recovery_set_context
+            else None
+        )
+        # Start conservatively so v47/v48 pointwise knowledge remains the initial
+        # solution and the set residual is learned only when it improves ranking.
+        self.direct_set_context_gate = (
+            nn.Parameter(torch.tensor(-1.5)) if self.direct_set_context_adapter is not None else None
+        )
         if self.direct_regime_embedding is not None:
             direct_in_dim += self.direct_recovery_value_regime_dim
         direct_out_dim = 2 + int(self.direct_recovery_opportunity_head) + int(self.direct_recovery_harm_head)
@@ -303,11 +330,58 @@ class OCRAPModel(nn.Module):
         # contiguous and does not include future/audit labels.
         return x[:, : self.direct_candidate_raw_dim]
 
+    def _apply_direct_set_context(
+        self,
+        direct_features: torch.Tensor,
+        group_index: torch.Tensor | None,
+        is_nominal: torch.Tensor | None,
+    ) -> torch.Tensor:
+        """Nominal-anchored, permutation-equivariant candidate-set adapter.
+
+        Each candidate is represented relative to the nominal candidate and to
+        exchangeable mean/max summaries of recovery alternatives.  Singleton or
+        malformed groups deliberately fall back to the original pointwise feature.
+        """
+        if self.direct_set_context_adapter is None or group_index is None or is_nominal is None:
+            return direct_features
+        if direct_features.shape[0] <= 1:
+            return direct_features
+        groups = group_index.to(device=direct_features.device)
+        if groups.dim() == 1:
+            groups = groups.reshape(-1, 1)
+        else:
+            groups = groups.reshape(groups.shape[0], -1)
+        nominal_mask = is_nominal.to(device=direct_features.device).reshape(-1) > 0.5
+        if groups.shape[0] != direct_features.shape[0] or nominal_mask.shape[0] != direct_features.shape[0]:
+            return direct_features
+        adapted = direct_features.clone()
+        unique_groups = torch.unique(groups, dim=0)
+        gate = torch.sigmoid(self.direct_set_context_gate) if self.direct_set_context_gate is not None else 1.0
+        for key in unique_groups:
+            idx = torch.where((groups == key.unsqueeze(0)).all(dim=1))[0]
+            if idx.numel() <= 1:
+                continue
+            noms = idx[nominal_mask[idx]]
+            recs = idx[~nominal_mask[idx]]
+            if noms.numel() == 0 or recs.numel() == 0:
+                continue
+            nom_feat = direct_features[noms[0]:noms[0] + 1]
+            rel = direct_features[idx] - nom_feat
+            rec_rel = direct_features[recs] - nom_feat
+            mean_rel = rec_rel.mean(dim=0, keepdim=True).expand(idx.numel(), -1)
+            max_rel = rec_rel.max(dim=0, keepdim=True).values.expand(idx.numel(), -1)
+            context_input = torch.cat([direct_features[idx], rel, mean_rel, max_rel], dim=-1)
+            residual = self.direct_set_context_adapter(context_input)
+            adapted[idx] = direct_features[idx] + gate * residual
+        return adapted
+
     def _direct_outputs(
         self,
         memory: torch.Tensor,
         x: torch.Tensor,
         bucket_id: torch.Tensor | None,
+        group_index: torch.Tensor | None = None,
+        is_nominal: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """Evaluate the policy-level recovery branch.
 
@@ -332,6 +406,7 @@ class OCRAPModel(nn.Module):
                 "candidate_concat_raw", "action_concat_raw", "certificate_action_adapter"
             }:
                 direct_features = torch.cat([direct_features, self._candidate_raw_features(x)], dim=-1)
+        direct_features = self._apply_direct_set_context(direct_features, group_index, is_nominal)
         if self.direct_recovery_value_router_pooling == "shared_raw":
             router_features = x[:, self.direct_candidate_feature_dim:]
         elif self.direct_recovery_value_router_pooling == "ego_shared_raw":
@@ -438,11 +513,13 @@ class OCRAPModel(nn.Module):
         x: torch.Tensor,
         option_features: torch.Tensor | None = None,
         bucket_id: torch.Tensor | None = None,
+        group_index: torch.Tensor | None = None,
+        is_nominal: torch.Tensor | None = None,
         direct_only: bool = False,
     ) -> dict[str, torch.Tensor]:
         memory = self._scene_tokens(x)
         if direct_only:
-            return self._direct_outputs(memory, x, bucket_id)
+            return self._direct_outputs(memory, x, bucket_id, group_index, is_nominal)
         scene_token = memory[:, 0]
         root_tokens = self._decode_roots(memory)
 
@@ -466,7 +543,7 @@ class OCRAPModel(nn.Module):
             "c_star": C,
             "utility": self.utility_head(scene_token).squeeze(-1),
         }
-        out.update(self._direct_outputs(memory, x, bucket_id))
+        out.update(self._direct_outputs(memory, x, bucket_id, group_index, is_nominal))
         if self.root_signature_head is not None:
             out["root_signature"] = self.root_signature_head(root_tokens)
         if self.root_future_signature_head is not None:

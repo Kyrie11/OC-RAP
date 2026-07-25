@@ -1,12 +1,60 @@
 # OC-RAP Algorithm Changelog
 
+## v48.3 — OC-TRAC-NASC/RCD (2026-07-25)
+
+### Evidence motivating this iteration
+
+The uploaded screening run completed training and calibration diagnostics despite its
+`v48_1` output-directory name. Checkpoint configs show the v48.2 SRC, encoder anchor,
+exact teacher-PCD sampler and robust experts were active. Candidate AUC remained useful
+(Near 0.696–0.729; Contact 0.786–0.822), but unconstrained group top-1 correlation was
+near zero or negative and every calibrated policy abstained. Therefore this is not a
+threshold problem: the pointwise direct head still lacks explicit candidate-set context.
+
+### New algorithmic contribution
+
+- **NASC (Nominal-Anchored Set Context):** a permutation-equivariant adapter compares
+  every recovery candidate with the nominal embedding and exchangeable mean/max
+  summaries of the recovery set. A learned conservative residual gate preserves the
+  prior pointwise solution at initialization.
+- **RCD (Regret-Consistent Distillation):** the composite admission policy is trained
+  against the full teacher advantage distribution, not only a hard argmax, and directly
+  minimizes expected teacher top-1 regret while retaining SRC harmful-mass and coverage
+  constraints.
+- Calibration now scores a complete scene-time candidate set in one batched call, matching
+  training and closed-loop deployment semantics. Singleton APIs deliberately fall back to
+  the legacy pointwise path.
+
+### Engineering changes
+
+- Added checkpoint/config support for the NASC adapter.
+- Passed `(bucket, scene, time)` group keys and nominal masks through training.
+- Updated `calibrate_policy_risk_v48.py` to batch each group via `predict_samples`.
+- Enabled NASC/RCD in `train_ocrap_v48_trac_sr.sh`; existing v48.2 can be reproduced by
+  setting `model.direct_recovery_set_context=false`, `POLICY_DISTILL_WEIGHT=0`, and
+  `POLICY_REGRET_WEIGHT=0`.
+
+### Required ablations
+
+1. v48.2 SRC baseline.
+2. NASC only.
+3. RCD only.
+4. NASC + RCD (main).
+5. Remove harm/SRC constraint from NASC + RCD.
+
+### Non-repetition note
+
+This does not repeat prior pointwise, pairwise, listwise, top-rank, expert-routing, or
+threshold-search attempts. The new element is architectural cross-candidate interaction
+plus policy-level expected-regret supervision.
+
 This root log is the canonical index for future iterations. Historical detail is retained in `ALGORITHM_CHANGELOG_V48.md` and `ALGORITHM_CHANGELOG_V48_1.md`; do not repeat an item below unless its implementation or experimental conclusion changed.
 
 ## v48.2 — OC-TRAC-SRC (2026-07-24)
 
 ### Why this iteration was necessary
 
-The uploaded v48.1 screening did not enter the first training batch. Both `balanced` and `precision` jobs failed in `_make_group_batch_sampler` because `src/ocrap/cli/train.py` used `os.path.abspath` without importing `os`. A second audit found that the training script emitted `group_batch_positive_advantage_*` keys while the sampler read older `group_batch_positive_*` keys, silently disabling the intended exact teacher-PCD positive-group oversampling.
+An earlier static audit of the pre-fix v48.1 source found a missing `os` import and sampler-key mismatch. The uploaded screening artifacts now prove those fixes were already present in the executed job: both variants trained, the exact teacher-PCD sampler reported positive-group coverage, and v48.2 SRC settings were stored in the checkpoints. The historical engineering fixes below therefore describe prerequisites that were effective in this run, not a failure of the uploaded run itself.
 
 ### Engineering correctness fixes
 

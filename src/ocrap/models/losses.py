@@ -1288,6 +1288,10 @@ def direct_uncertainty_recovery_value_loss(
     selective_harm_budget: float = 0.05,
     selective_coverage_weight: float = 0.0,
     selective_coverage_target: float = 0.65,
+    policy_distill_weight: float = 0.0,
+    policy_teacher_temperature: float = 0.08,
+    policy_regret_weight: float = 0.0,
+    policy_regret_margin: float = 0.0,
 ) -> torch.Tensor:
     """Learn a tri-state, nominal-relative, policy-level recovery certificate.
 
@@ -1438,6 +1442,37 @@ def direct_uncertainty_recovery_value_loss(
                     positive_mass = (recovery_prob * pos_mask.to(recovery_prob.dtype)).sum()
                     coverage_shortfall = F.relu(float(selective_coverage_target) - positive_mass)
                     terms.append(float(selective_coverage_weight) * coverage_shortfall.square())
+
+            # v48.3 OC-TRAC-NASC/RCD: distil the complete teacher utility
+            # distribution rather than only the argmax class, then minimize
+            # expected top-1 teacher regret under the deployed composite policy.
+            # This is robust to near-tied positive candidates and directly targets
+            # the failure observed in v48: good candidate AUC but wrong group top-1.
+            if float(policy_distill_weight) > 0.0 or float(policy_regret_weight) > 0.0:
+                policy_prob = torch.softmax(class_logits.squeeze(0), dim=0)
+                if bool(pos_mask.any()):
+                    teacher_util = torch.cat([
+                        torch.zeros((1,), dtype=t_delta.dtype, device=t_delta.device),
+                        t_delta,
+                    ], dim=0)
+                    teacher_prob = torch.softmax(
+                        teacher_util / max(float(policy_teacher_temperature), 1.0e-3), dim=0
+                    ).detach()
+                else:
+                    teacher_prob = torch.zeros_like(policy_prob)
+                    teacher_prob[0] = 1.0
+                if float(policy_distill_weight) > 0.0:
+                    terms.append(
+                        float(policy_distill_weight)
+                        * F.kl_div(torch.log(policy_prob.clamp_min(1.0e-8)), teacher_prob, reduction="sum")
+                    )
+                if float(policy_regret_weight) > 0.0:
+                    expected_teacher_adv = (policy_prob[1:] * t_delta).sum()
+                    oracle_teacher_adv = torch.maximum(
+                        torch.zeros((), dtype=t_delta.dtype, device=t_delta.device), t_delta.max()
+                    )
+                    regret = F.relu(oracle_teacher_adv - expected_teacher_adv - float(policy_regret_margin))
+                    terms.append(float(policy_regret_weight) * regret.square())
         if float(pairwise_weight) > 0.0:
             pair_terms = []
             if bool(pos_mask.any()):

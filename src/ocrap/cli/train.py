@@ -287,6 +287,10 @@ def _direct_value_loss_from_outputs(
         selective_harm_budget=float(tcfg.get("direct_value_selective_harm_budget", 0.05)),
         selective_coverage_weight=float(tcfg.get("direct_value_selective_coverage_weight", 0.0)),
         selective_coverage_target=float(tcfg.get("direct_value_selective_coverage_target", 0.65)),
+        policy_distill_weight=float(tcfg.get("direct_value_policy_distill_weight", 0.0)),
+        policy_teacher_temperature=float(tcfg.get("direct_value_policy_teacher_temperature", 0.08)),
+        policy_regret_weight=float(tcfg.get("direct_value_policy_regret_weight", 0.0)),
+        policy_regret_margin=float(tcfg.get("direct_value_policy_regret_margin", 0.0)),
     )
 
     def compute(
@@ -379,9 +383,14 @@ def _epoch(
         if direct_only_fast:
             amp_ctx = torch.autocast(device_type="cuda", dtype=amp_dtype) if amp_enabled else nullcontext()
             with amp_ctx:
+                group_index = torch.stack([
+                    batch.get("bucket_id", torch.zeros_like(batch["time_index"])),
+                    batch["scene_hash"], batch["time_index"],
+                ], dim=-1)
                 out = model(
                     batch["x"].float(), batch.get("option_features"),
-                    bucket_id=batch.get("bucket_id"), direct_only=True,
+                    bucket_id=batch.get("bucket_id"), group_index=group_index,
+                    is_nominal=batch.get("is_nominal"), direct_only=True,
                 )
             root_valid = batch["root_valid"].bool()
             option_gamma = float(art_cfg.get("admission_gamma", 0.0))
@@ -426,7 +435,14 @@ def _epoch(
                 totals[k] = totals.get(k, 0.0) + float(v) * bsz
             continue
 
-        out = model(batch["x"].float(), batch.get("option_features"), bucket_id=batch.get("bucket_id"))
+        group_index = torch.stack([
+            batch.get("bucket_id", torch.zeros_like(batch["time_index"])),
+            batch["scene_hash"], batch["time_index"],
+        ], dim=-1)
+        out = model(
+            batch["x"].float(), batch.get("option_features"), bucket_id=batch.get("bucket_id"),
+            group_index=group_index, is_nominal=batch.get("is_nominal"),
+        )
         root_valid = batch["root_valid"].bool()
         masked_logits = out["root_logits"].masked_fill(~root_valid, -1.0e4)
         root_p = torch.softmax(masked_logits, dim=-1)
@@ -1294,6 +1310,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_value_router_temperature=float(model_cfg.get("direct_recovery_value_router_temperature", 1.0)),
         direct_recovery_value_router_pooling=str(model_cfg.get("direct_recovery_value_router_pooling", "candidate")),
         direct_recovery_expert_disagreement_penalty=float(model_cfg.get("direct_recovery_expert_disagreement_penalty", 0.5)),
+        direct_recovery_set_context=bool(model_cfg.get("direct_recovery_set_context", False)),
+        direct_recovery_set_context_hidden=int(model_cfg.get("direct_recovery_set_context_hidden", d_model)),
+        direct_recovery_set_context_dropout=float(model_cfg.get("direct_recovery_set_context_dropout", model_cfg.get("dropout", 0.1))),
     ).to(device)
     tcfg = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
 
@@ -1464,6 +1483,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "direct_recovery_value_router_temperature": float(model_cfg.get("direct_recovery_value_router_temperature", 1.0)),
             "direct_recovery_value_router_pooling": str(model_cfg.get("direct_recovery_value_router_pooling", "candidate")),
             "direct_recovery_expert_disagreement_penalty": float(model_cfg.get("direct_recovery_expert_disagreement_penalty", 0.5)),
+            "direct_recovery_set_context": bool(model_cfg.get("direct_recovery_set_context", False)),
+            "direct_recovery_set_context_hidden": int(model_cfg.get("direct_recovery_set_context_hidden", d_model)),
+            "direct_recovery_set_context_dropout": float(model_cfg.get("direct_recovery_set_context_dropout", model_cfg.get("dropout", 0.1))),
             "model_state": model.state_dict(),
             "optimizer_state": opt.state_dict(),
             "epoch": int(ep),

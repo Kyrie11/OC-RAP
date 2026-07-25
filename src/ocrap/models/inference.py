@@ -162,6 +162,9 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         direct_recovery_value_router_temperature=float(ckpt.get("direct_recovery_value_router_temperature", model_cfg.get("direct_recovery_value_router_temperature", 1.0))),
         direct_recovery_value_router_pooling=str(ckpt.get("direct_recovery_value_router_pooling", model_cfg.get("direct_recovery_value_router_pooling", "candidate"))),
         direct_recovery_expert_disagreement_penalty=float(ckpt.get("direct_recovery_expert_disagreement_penalty", model_cfg.get("direct_recovery_expert_disagreement_penalty", 0.5))),
+        direct_recovery_set_context=bool(ckpt.get("direct_recovery_set_context", model_cfg.get("direct_recovery_set_context", False))),
+        direct_recovery_set_context_hidden=int(ckpt.get("direct_recovery_set_context_hidden", model_cfg.get("direct_recovery_set_context_hidden", d_model))),
+        direct_recovery_set_context_dropout=float(ckpt.get("direct_recovery_set_context_dropout", model_cfg.get("direct_recovery_set_context_dropout", model_cfg.get("dropout", 0.1)))),
     ).to(device)
     # Strict loading remains the default for checkpoints with matching geometry.
     # A v39 checkpoint can initialize v40 training through train.py's explicit
@@ -184,6 +187,9 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_value_router_temperature"] = float(ckpt.get("direct_recovery_value_router_temperature", model_cfg.get("direct_recovery_value_router_temperature", 1.0)))
     cfg["model"]["direct_recovery_value_router_pooling"] = str(ckpt.get("direct_recovery_value_router_pooling", model_cfg.get("direct_recovery_value_router_pooling", "candidate")))
     cfg["model"]["direct_recovery_expert_disagreement_penalty"] = float(ckpt.get("direct_recovery_expert_disagreement_penalty", model_cfg.get("direct_recovery_expert_disagreement_penalty", 0.5)))
+    cfg["model"]["direct_recovery_set_context"] = bool(ckpt.get("direct_recovery_set_context", model_cfg.get("direct_recovery_set_context", False)))
+    cfg["model"]["direct_recovery_set_context_hidden"] = int(ckpt.get("direct_recovery_set_context_hidden", model_cfg.get("direct_recovery_set_context_hidden", d_model)))
+    cfg["model"]["direct_recovery_set_context_dropout"] = float(ckpt.get("direct_recovery_set_context_dropout", model_cfg.get("direct_recovery_set_context_dropout", model_cfg.get("dropout", 0.1))))
     return ModelBundle(model=model, cfg=cfg, device=device)
 
 
@@ -251,7 +257,15 @@ def predict_samples(
     option_features = torch.from_numpy(np.stack([f["option_features"] for f in fixed], axis=0)).float().to(bundle.device)
     runtime_cfg = cfg or bundle.cfg
     bucket_ids = torch.full((len(ds),), regime_id_from_cfg(runtime_cfg), dtype=torch.long, device=bundle.device)
-    out = bundle.model(xs, option_features, bucket_id=bucket_ids)
+    # predict_samples is normally called on one complete scene-time candidate set
+    # (closed-loop replan or calibration group), so all candidates share a group id.
+    group_index = torch.zeros((len(ds), 1), dtype=torch.long, device=bundle.device)
+    is_nominal = torch.tensor([
+        1.0 if float(np.asarray(d.get("is_nominal", 0)).reshape(-1)[0]) > 0.5 else 0.0 for d in ds
+    ], dtype=torch.float32, device=bundle.device)
+    out = bundle.model(
+        xs, option_features, bucket_id=bucket_ids, group_index=group_index, is_nominal=is_nominal
+    )
     root_valid = torch.from_numpy(np.stack([f["root_valid"] for f in fixed], axis=0)).bool().to(bundle.device)
     p = torch.softmax(out["root_logits"].masked_fill(~root_valid, -1.0e4), dim=-1)
     option_valid = torch.from_numpy(np.stack([f["option_valid"] for f in fixed], axis=0)).bool().to(bundle.device)
@@ -330,7 +344,13 @@ def predict_sample(d: dict[str, Any], bundle: ModelBundle | None, cfg: dict | No
     option_features = torch.from_numpy(fixed["option_features"]).float().unsqueeze(0).to(bundle.device)
     runtime_cfg = cfg or bundle.cfg
     bucket_id = torch.tensor([regime_id_from_cfg(runtime_cfg)], dtype=torch.long, device=bundle.device)
-    out = bundle.model(x, option_features, bucket_id=bucket_id)
+    singleton_group = torch.zeros((1, 1), dtype=torch.long, device=bundle.device)
+    singleton_nominal = torch.tensor([
+        1.0 if float(np.asarray(d.get("is_nominal", 0)).reshape(-1)[0]) > 0.5 else 0.0
+    ], dtype=torch.float32, device=bundle.device)
+    out = bundle.model(
+        x, option_features, bucket_id=bucket_id, group_index=singleton_group, is_nominal=singleton_nominal
+    )
     root_valid = torch.from_numpy(fixed["root_valid"]).bool().unsqueeze(0).to(bundle.device)
     p = torch.softmax(out["root_logits"].masked_fill(~root_valid, -1.0e4), dim=-1)
     option_valid = torch.from_numpy(fixed["option_valid"]).bool().unsqueeze(0).to(bundle.device)

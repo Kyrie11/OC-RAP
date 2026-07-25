@@ -21,7 +21,7 @@ from ocrap.algorithms.ocmero import oc_mero
 from ocrap.data.serialization import load_npz
 from ocrap.evaluation.metrics import best_shared_option_index, deployable_recovery_success, post_contact_deployability_score
 from ocrap.models.data import iter_sample_paths_many, scalar_metadata_for_path
-from ocrap.models.inference import load_model_bundle, predict_sample
+from ocrap.models.inference import load_model_bundle, predict_samples
 
 
 def _scalar(d: dict[str, Any], key: str, default: Any) -> Any:
@@ -228,9 +228,6 @@ def main() -> int:
         if split and split not in {"calibration", "val"}:
             continue
         d = load_npz(path)
-        pred = predict_sample(d, bundle, runtime_cfg)
-        if pred.direct_recovery_value is None or pred.direct_recovery_opportunity_logit is None or pred.direct_recovery_harm_logit is None:
-            raise ValueError("checkpoint does not expose v48 score/opportunity/harm outputs")
         row = {
             "data": d,
             "scene": str(_scalar(d, "scene_id", path.stem)),
@@ -238,16 +235,27 @@ def main() -> int:
             "candidate": int(_scalar(d, "candidate_index", 0)),
             "macro": int(_scalar(d, "prefix_macro_type_id", _scalar(d, "prefix_macro_id", -1))),
             "nominal": bool(float(_scalar(d, "is_nominal", 0)) > 0.5),
-            "pred": float(pred.direct_recovery_value),
-            "opp_logit": float(pred.direct_recovery_opportunity_logit),
-            "harm_logit": float(pred.direct_recovery_harm_logit),
             "teacher": _teacher_pcd(d, alpha, beta, top_m),
             "hard": float(_scalar(d, "hard_violation", 0.0)),
             "feasible": bool(int(_scalar(d, "feasible", 1))),
         }
         raw[(row["scene"], row["time"])].append(row)
         if i == 1 or i % 1000 == 0 or i == len(paths):
-            print({"event": "v48_calibration_progress", "bucket": args.bucket, "seen": i, "total": len(paths)}, flush=True)
+            print({"event": "v48_calibration_load_progress", "bucket": args.bucket, "seen": i, "total": len(paths)}, flush=True)
+
+    # v48.3: score complete candidate sets jointly so the nominal-anchored set
+    # context used during training is also present during calibration/deployment.
+    for gi, items in enumerate(raw.values(), 1):
+        items.sort(key=lambda x: x["candidate"])
+        preds = predict_samples([x["data"] for x in items], bundle, runtime_cfg, shared_scene_features=True)
+        for row, pred in zip(items, preds):
+            if pred.direct_recovery_value is None or pred.direct_recovery_opportunity_logit is None or pred.direct_recovery_harm_logit is None:
+                raise ValueError("checkpoint does not expose v48 score/opportunity/harm outputs")
+            row["pred"] = float(pred.direct_recovery_value)
+            row["opp_logit"] = float(pred.direct_recovery_opportunity_logit)
+            row["harm_logit"] = float(pred.direct_recovery_harm_logit)
+        if gi == 1 or gi % 200 == 0 or gi == len(raw):
+            print({"event": "v48_calibration_group_score_progress", "bucket": args.bucket, "groups": gi, "total_groups": len(raw)}, flush=True)
 
     groups: list[dict[str, Any]] = []
     skipped = Counter()
