@@ -54,6 +54,9 @@ class OCRAPModel(nn.Module):
         direct_recovery_set_context: bool = False,
         direct_recovery_set_context_hidden: int = 192,
         direct_recovery_set_context_dropout: float = 0.1,
+        direct_recovery_preference_head: bool = False,
+        direct_recovery_preference_hidden: int = 96,
+        direct_recovery_preference_dropout: float = 0.05,
     ):
         super().__init__()
         self.num_roots = int(num_roots)
@@ -91,6 +94,9 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_set_context = bool(direct_recovery_set_context)
         self.direct_recovery_set_context_hidden = max(16, int(direct_recovery_set_context_hidden))
         self.direct_recovery_set_context_dropout = float(max(0.0, direct_recovery_set_context_dropout))
+        self.direct_recovery_preference_head = bool(direct_recovery_preference_head)
+        self.direct_recovery_preference_hidden = max(16, int(direct_recovery_preference_hidden))
+        self.direct_recovery_preference_dropout = float(max(0.0, direct_recovery_preference_dropout))
         if self.direct_recovery_value_expert_routing not in {
             "bucket",
             "hard_bucket",
@@ -249,6 +255,28 @@ class OCRAPModel(nn.Module):
         if self.direct_regime_embedding is not None:
             direct_in_dim += self.direct_recovery_value_regime_dim
         direct_out_dim = 2 + int(self.direct_recovery_opportunity_head) + int(self.direct_recovery_harm_head)
+
+        # v48.5 ECPR: ranking and admission are separate tasks.  The value head
+        # estimates candidate-vs-nominal gain and uncertainty, while this
+        # zero-initialized residual preference head learns only the within-set
+        # ordering.  At warm start rank == value exactly, preserving v48.1/v48.4
+        # checkpoint behaviour until ranking evidence is observed.
+        self.direct_preference_adapter = (
+            nn.Sequential(
+                nn.LayerNorm(direct_in_dim),
+                nn.Linear(direct_in_dim, self.direct_recovery_preference_hidden),
+                nn.GELU(),
+                nn.Dropout(self.direct_recovery_preference_dropout),
+                nn.Linear(self.direct_recovery_preference_hidden, 1),
+            )
+            if self.direct_recovery_value_head and self.direct_recovery_preference_head
+            else None
+        )
+        if self.direct_preference_adapter is not None:
+            pref_projection = self.direct_preference_adapter[-1]
+            if isinstance(pref_projection, nn.Linear):
+                nn.init.zeros_(pref_projection.weight)
+                nn.init.zeros_(pref_projection.bias)
 
         def _make_direct_head() -> nn.Sequential:
             return nn.Sequential(
@@ -440,6 +468,7 @@ class OCRAPModel(nn.Module):
             direct_features = torch.cat([direct_features, self.direct_regime_embedding(regime_id)], dim=-1)
 
         out: dict[str, torch.Tensor] = {}
+        rank_base: torch.Tensor | None = None
         if self.direct_value_heads is not None:
             all_direct = torch.stack([head(direct_features) for head in self.direct_value_heads], dim=1)
             routing = self.direct_recovery_value_expert_routing
@@ -452,6 +481,7 @@ class OCRAPModel(nn.Module):
                     expert_idx, num_classes=self.direct_recovery_value_num_experts
                 ).to(dtype=all_direct.dtype)
                 direct = (all_direct * weights.unsqueeze(-1)).sum(dim=1)
+                rank_base = direct[:, 0]
             elif routing in {"uniform", "uniform_robust", "robust_ensemble", "risk_ensemble"}:
                 weights = torch.full(
                     (x.shape[0], self.direct_recovery_value_num_experts),
@@ -460,6 +490,7 @@ class OCRAPModel(nn.Module):
                 )
                 mean = all_direct.mean(dim=1)
                 std = all_direct.std(dim=1, unbiased=False)
+                rank_base = mean[:, 0]
                 if routing in {"uniform_robust", "robust_ensemble", "risk_ensemble"}:
                     direct = mean.clone()
                     lam = self.direct_recovery_expert_disagreement_penalty
@@ -484,6 +515,7 @@ class OCRAPModel(nn.Module):
                     router_logits / self.direct_recovery_value_router_temperature, dim=-1
                 )
                 mean = (all_direct * weights.unsqueeze(-1)).sum(dim=1)
+                rank_base = mean[:, 0]
                 if routing == "robust_observation":
                     centered = all_direct - mean.unsqueeze(1)
                     std = torch.sqrt((weights.unsqueeze(-1) * centered.square()).sum(dim=1).clamp_min(1.0e-8))
@@ -506,6 +538,7 @@ class OCRAPModel(nn.Module):
             out["direct_expert_outputs"] = all_direct
         elif self.direct_value_head is not None:
             direct = self.direct_value_head(direct_features)
+            rank_base = direct[:, 0]
         else:
             raise RuntimeError("direct recovery branch configured without a head")
 
@@ -517,6 +550,14 @@ class OCRAPModel(nn.Module):
             cursor += 1
         if self.direct_recovery_harm_head:
             out["direct_recovery_harm_logit"] = direct[:, cursor]
+        if rank_base is None:
+            rank_base = direct[:, 0]
+        if self.direct_preference_adapter is not None:
+            rank_residual = self.direct_preference_adapter(direct_features).squeeze(-1)
+            out["direct_recovery_rank_residual"] = rank_residual
+            out["direct_recovery_rank_logit"] = rank_base + rank_residual
+        else:
+            out["direct_recovery_rank_logit"] = rank_base
         return out
 
     def forward(

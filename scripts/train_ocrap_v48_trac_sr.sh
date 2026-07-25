@@ -32,12 +32,12 @@ mkdir -p "$MODEL_DIR" "$CAL_DIR" "$LOG_DIR"
 case "$VARIANT" in
   balanced)
     LR="${LR:-0.00012}"; ENCODER_LR_SCALE="${ENCODER_LR_SCALE:-0.18}"
-    POS_W="${POS_W:-6.0}"; FP_W="${FP_W:-2.2}"; HARM_W="${HARM_W:-2.0}"
-    SETWISE_W="${SETWISE_W:-2.0}"; DISAGREE="${DISAGREE:-0.50}" ;;
+    POS_W="${POS_W:-6.0}"; FP_W="${FP_W:-2.2}"; HARM_W="${HARM_W:-0.20}"
+    SETWISE_W="${SETWISE_W:-0.40}"; DISAGREE="${DISAGREE:-0.50}" ;;
   precision)
     LR="${LR:-0.00009}"; ENCODER_LR_SCALE="${ENCODER_LR_SCALE:-0.12}"
-    POS_W="${POS_W:-5.0}"; FP_W="${FP_W:-3.5}"; HARM_W="${HARM_W:-3.0}"
-    SETWISE_W="${SETWISE_W:-2.5}"; DISAGREE="${DISAGREE:-0.70}" ;;
+    POS_W="${POS_W:-5.0}"; FP_W="${FP_W:-3.5}"; HARM_W="${HARM_W:-0.35}"
+    SETWISE_W="${SETWISE_W:-0.60}"; DISAGREE="${DISAGREE:-0.70}" ;;
   *) echo "unknown VARIANT=$VARIANT" >&2; exit 2 ;;
 esac
 
@@ -61,7 +61,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.cudnn_benchmark=true --set training.pin_memory=true \
   --set training.num_workers="${NUM_WORKERS:-6}" --set training.persistent_workers=true \
   --set training.prefetch_factor="${PREFETCH_FACTOR:-2}" --set training.progress=true \
-  --set training.save_every_epoch=false --set training.best_metric=direct_group_regret_mean_worst \
+  --set training.save_every_epoch=true --set training.best_metric=direct_policy_risk_mean_worst \
   --set training.best_metric_mode=min \
   --set training.group_batching=true --set training.group_batching_replacement=true \
   --set training.group_batch_positive_advantage_boost="${POSITIVE_GROUP_BOOST:-5.0}" \
@@ -88,6 +88,9 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set model.direct_recovery_set_context="${SET_CONTEXT_ENABLED:-true}" \
   --set model.direct_recovery_set_context_hidden="${SET_CONTEXT_HIDDEN:-192}" \
   --set model.direct_recovery_set_context_dropout="${SET_CONTEXT_DROPOUT:-0.05}" \
+  --set model.direct_recovery_preference_head="${PREFERENCE_HEAD_ENABLED:-true}" \
+  --set model.direct_recovery_preference_hidden="${PREFERENCE_HIDDEN:-96}" \
+  --set model.direct_recovery_preference_dropout="${PREFERENCE_DROPOUT:-0.05}" \
   --set loss_weights.dep=0 --set loss_weights.orc=0 --set loss_weights.assign=0 \
   --set loss_weights.sig=0 --set loss_weights.margin=0 --set loss_weights.obs=0 \
   --set loss_weights.anti_oracle=0 --set loss_weights.artifact_gap=0 \
@@ -110,16 +113,26 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.direct_value_centered_weight=1.0 \
   --set training.direct_value_advantage_weight=1.0 \
   --set training.direct_value_output_mode=score \
-  --set training.direct_value_pairwise_weight=1.5 \
-  --set training.direct_value_top_rank_weight=1.5 \
+  --set training.direct_value_pairwise_weight="${LEGACY_PAIRWISE_WEIGHT:-0.0}" \
+  --set training.direct_value_top_rank_weight="${LEGACY_TOP_RANK_WEIGHT:-0.0}" \
   --set training.direct_value_positive_group_weight="$POS_W" \
   --set training.direct_value_negative_group_weight=1.5 \
   --set training.direct_value_ambiguous_group_weight=0.08 \
   --set training.direct_value_near_weight=1.4 \
   --set training.direct_value_contact_weight=1.6 \
   --set training.direct_value_min_group_range=0.004 \
+  --set training.direct_value_exact_teacher_pcd="${EXACT_TEACHER_PCD:-true}" \
+  --set training.direct_value_preference_weight="${PREFERENCE_WEIGHT:-1.50}" \
+  --set training.direct_value_preference_temperature="${PREFERENCE_TEMPERATURE:-0.06}" \
+  --set training.direct_value_preference_min_gap="${PREFERENCE_MIN_GAP:-0.010}" \
+  --set training.direct_value_preference_margin="${PREFERENCE_MARGIN:-0.030}" \
+  --set training.direct_value_preference_confidence_scale="${PREFERENCE_CONFIDENCE_SCALE:-0.040}" \
+  --set training.direct_value_preference_regret_weight="${PREFERENCE_REGRET_WEIGHT:-0.50}" \
+  --set training.direct_value_delta_nll_weight="${DELTA_NLL_WEIGHT:-0.50}" \
+  --set training.direct_policy_metric_harm_weight="${POLICY_METRIC_HARM_WEIGHT:-0.35}" \
+  --set training.direct_policy_metric_false_intervention_weight="${POLICY_METRIC_FALSE_WEIGHT:-0.15}" \
   --set training.direct_value_false_positive_weight="$FP_W" \
-  --set training.direct_value_opportunity_weight=1.5 \
+  --set training.direct_value_opportunity_weight="${OPPORTUNITY_AUX_WEIGHT:-0.25}" \
   --set training.direct_value_opportunity_pos_weight=8.0 \
   --set training.direct_value_harm_weight="$HARM_W" \
   --set training.direct_value_harm_pos_weight=7.0 \
@@ -130,15 +143,15 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.direct_value_selective_harm_budget="${SELECTIVE_HARM_BUDGET:-0.05}" \
   --set training.direct_value_selective_coverage_weight="${SELECTIVE_COVERAGE_WEIGHT:-1.0}" \
   --set training.direct_value_selective_coverage_target="${SELECTIVE_COVERAGE_TARGET:-0.65}" \
-  --set training.direct_value_policy_distill_weight="${POLICY_DISTILL_WEIGHT:-1.0}" \
+  --set training.direct_value_policy_distill_weight="${POLICY_DISTILL_WEIGHT:-0.0}" \
   --set training.direct_value_policy_teacher_temperature="${POLICY_TEACHER_TEMPERATURE:-0.06}" \
-  --set training.direct_value_policy_regret_weight="${POLICY_REGRET_WEIGHT:-1.0}" \
+  --set training.direct_value_policy_regret_weight="${POLICY_REGRET_WEIGHT:-0.0}" \
   --set training.direct_value_policy_regret_margin="${POLICY_REGRET_MARGIN:-0.005}" \
   --set training.direct_value_policy_decouple_admission="${POLICY_DECOUPLE_ADMISSION:-true}" \
-  --set training.direct_value_policy_admission_distill_weight="${POLICY_ADMISSION_DISTILL_WEIGHT:-0.15}" \
+  --set training.direct_value_policy_admission_distill_weight="${POLICY_ADMISSION_DISTILL_WEIGHT:-0.05}" \
   --set training.direct_value_opportunity_soft_label_temperature="${OPPORTUNITY_SOFT_LABEL_TEMPERATURE:-0.02}" \
   --set training.direct_value_harm_soft_label_temperature="${HARM_SOFT_LABEL_TEMPERATURE:-0.02}" \
-  --set training.direct_value_group_dro_weight="${GROUP_DRO_WEIGHT:-0.35}" \
+  --set training.direct_value_group_dro_weight="${GROUP_DRO_WEIGHT:-0.0}" \
   --set training.direct_value_group_dro_temperature="${GROUP_DRO_TEMPERATURE:-0.35}" \
   --set training.direct_value_group_dro_severity_thresholds="${GROUP_DRO_SEVERITY_THRESHOLDS:-0.25,0.55}" \
   --set training.direct_value_expert_specialization_weight="${EXPERT_SPECIALIZATION_WEIGHT:-0.30}" \
@@ -164,3 +177,11 @@ python tools/write_gamma_by_bucket.py \
   --contact "$CAL_DIR/calibration_contact_v48.json" \
   --delta 0.05 --output "$CAL_DIR/gamma_rec_by_bucket_v48.json" \
   2>&1 | tee "$LOG_DIR/write_gamma_v48.log"
+
+python - "$MODEL_DIR/best.pt" "$MODEL_DIR/train_summary.json" "$RUN/TRAINING_COMPLETE.json" <<'PYDONE'
+import hashlib,json,pathlib,sys,time
+ckpt,summary,out=map(pathlib.Path,sys.argv[1:])
+if not ckpt.is_file() or not summary.is_file(): raise SystemExit("missing completed training artifacts")
+d=json.loads(summary.read_text()); doc={"event":"variant_training_complete","created_unix":time.time(),"checkpoint":str(ckpt),"checkpoint_sha256":hashlib.sha256(ckpt.read_bytes()).hexdigest(),"best_epoch":d.get("best_epoch"),"epochs_completed":d.get("epochs_completed"),"best_metric":d.get("best_metric")}
+out.write_text(json.dumps(doc,indent=2)+"\n")
+PYDONE

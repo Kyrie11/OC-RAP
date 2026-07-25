@@ -27,6 +27,7 @@ class Prediction:
     direct_recovery_opportunity_logit: float | None = None
     direct_recovery_harm: float | None = None
     direct_recovery_harm_logit: float | None = None
+    direct_recovery_rank: float | None = None
 
 
 @dataclass
@@ -165,6 +166,9 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         direct_recovery_set_context=bool(ckpt.get("direct_recovery_set_context", model_cfg.get("direct_recovery_set_context", False))),
         direct_recovery_set_context_hidden=int(ckpt.get("direct_recovery_set_context_hidden", model_cfg.get("direct_recovery_set_context_hidden", d_model))),
         direct_recovery_set_context_dropout=float(ckpt.get("direct_recovery_set_context_dropout", model_cfg.get("direct_recovery_set_context_dropout", model_cfg.get("dropout", 0.1)))),
+        direct_recovery_preference_head=bool(ckpt.get("direct_recovery_preference_head", model_cfg.get("direct_recovery_preference_head", False))),
+        direct_recovery_preference_hidden=int(ckpt.get("direct_recovery_preference_hidden", model_cfg.get("direct_recovery_preference_hidden", max(16, d_model // 2)))),
+        direct_recovery_preference_dropout=float(ckpt.get("direct_recovery_preference_dropout", model_cfg.get("direct_recovery_preference_dropout", 0.05))),
     ).to(device)
     # Strict loading remains the default for checkpoints with matching geometry.
     # A v39 checkpoint can initialize v40 training through train.py's explicit
@@ -190,6 +194,9 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_set_context"] = bool(ckpt.get("direct_recovery_set_context", model_cfg.get("direct_recovery_set_context", False)))
     cfg["model"]["direct_recovery_set_context_hidden"] = int(ckpt.get("direct_recovery_set_context_hidden", model_cfg.get("direct_recovery_set_context_hidden", d_model)))
     cfg["model"]["direct_recovery_set_context_dropout"] = float(ckpt.get("direct_recovery_set_context_dropout", model_cfg.get("direct_recovery_set_context_dropout", model_cfg.get("dropout", 0.1))))
+    cfg["model"]["direct_recovery_preference_head"] = bool(ckpt.get("direct_recovery_preference_head", model_cfg.get("direct_recovery_preference_head", False)))
+    cfg["model"]["direct_recovery_preference_hidden"] = int(ckpt.get("direct_recovery_preference_hidden", model_cfg.get("direct_recovery_preference_hidden", max(16, d_model // 2))))
+    cfg["model"]["direct_recovery_preference_dropout"] = float(ckpt.get("direct_recovery_preference_dropout", model_cfg.get("direct_recovery_preference_dropout", 0.05)))
     return ModelBundle(model=model, cfg=cfg, device=device)
 
 
@@ -295,6 +302,7 @@ def predict_samples(
     direct_opp_logit_np = None
     direct_harm_np = None
     direct_harm_logit_np = None
+    direct_rank_np = None
     if "direct_recovery_value_logit" in out:
         direct_tensor = out["direct_recovery_value_logit"]
         if str(getattr(bundle.model, "direct_recovery_value_output", "probability")) != "score":
@@ -307,6 +315,8 @@ def predict_samples(
         if "direct_recovery_harm_logit" in out:
             direct_harm_logit_np = out["direct_recovery_harm_logit"].detach().cpu().numpy().astype(np.float32)
             direct_harm_np = torch.sigmoid(out["direct_recovery_harm_logit"]).detach().cpu().numpy().astype(np.float32)
+        if "direct_recovery_rank_logit" in out:
+            direct_rank_np = out["direct_recovery_rank_logit"].detach().cpu().numpy().astype(np.float32)
     preds: list[Prediction] = []
     for i in range(len(ds)):
         preds.append(
@@ -324,6 +334,7 @@ def predict_samples(
                 direct_recovery_opportunity_logit=(None if direct_opp_logit_np is None else float(direct_opp_logit_np[i])),
                 direct_recovery_harm=(None if direct_harm_np is None else float(direct_harm_np[i])),
                 direct_recovery_harm_logit=(None if direct_harm_logit_np is None else float(direct_harm_logit_np[i])),
+                direct_recovery_rank=(None if direct_rank_np is None else float(direct_rank_np[i])),
             )
         )
     return preds
@@ -380,4 +391,5 @@ def predict_sample(d: dict[str, Any], bundle: ModelBundle | None, cfg: dict | No
         direct_recovery_opportunity_logit=(None if "direct_recovery_opportunity_logit" not in out else float(out["direct_recovery_opportunity_logit"].squeeze(0).detach().cpu().item())),
         direct_recovery_harm=(None if "direct_recovery_harm_logit" not in out else float(torch.sigmoid(out["direct_recovery_harm_logit"]).squeeze(0).detach().cpu().item())),
         direct_recovery_harm_logit=(None if "direct_recovery_harm_logit" not in out else float(out["direct_recovery_harm_logit"].squeeze(0).detach().cpu().item())),
+        direct_recovery_rank=(None if "direct_recovery_rank_logit" not in out else float(out["direct_recovery_rank_logit"].squeeze(0).detach().cpu().item())),
     )

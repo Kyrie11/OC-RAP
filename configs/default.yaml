@@ -277,6 +277,9 @@ model:
   dropout: 0.1
   direct_recovery_value_expert_routing: bucket
   direct_recovery_value_router_temperature: 1.0
+  direct_recovery_preference_head: false
+  direct_recovery_preference_hidden: 96
+  direct_recovery_preference_dropout: 0.05
 dataset_quality:
   # Off by default for broad natural-WOMD sweeps. Enable only for artifact/stress
   # datasets that are intended to support FRA, ODG, and anti-oracle claims.
@@ -368,6 +371,17 @@ training:
   teacher_pcd_direct_positive_min_pred_r_dep: -1000000000.0
   teacher_pcd_direct_positive_max_pred_gap: -1.0
   teacher_pcd_direct_positive_min_pred_drs: -1.0
+  # v48.5 ECPR exact-contract and independent preference defaults.
+  direct_value_exact_teacher_pcd: false
+  direct_value_preference_weight: 0.0
+  direct_value_preference_temperature: 0.06
+  direct_value_preference_min_gap: 0.01
+  direct_value_preference_margin: 0.03
+  direct_value_preference_confidence_scale: 0.04
+  direct_value_preference_regret_weight: 0.0
+  direct_value_delta_nll_weight: 0.0
+  direct_policy_metric_harm_weight: 0.35
+  direct_policy_metric_false_intervention_weight: 0.15
 loss_weights:
   assign: 1.0
   sig: 0.5

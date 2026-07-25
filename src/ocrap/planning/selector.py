@@ -217,6 +217,7 @@ def calibrated_constrained_select(
     budget_nominal_slack: float = 0.08,
     pred_drs: np.ndarray | None = None,
     pred_direct_value: np.ndarray | None = None,
+    pred_direct_rank: np.ndarray | None = None,
     pred_direct_std: np.ndarray | None = None,
     pred_direct_opportunity: np.ndarray | None = None,
     pred_direct_harm: np.ndarray | None = None,
@@ -500,6 +501,7 @@ def calibrated_constrained_select(
     direct_value = _as_1d_float(pred_direct_value, n, default=0.0)
     if not bool(direct_value_score_mode):
         direct_value = np.clip(direct_value, 0.0, 1.0)
+    direct_rank = _as_1d_float(pred_direct_rank, n, default=0.0) if pred_direct_rank is not None else direct_value.copy()
     direct_std = np.maximum(0.0, _as_1d_float(pred_direct_std, n, default=1.0))
     # Backward-compatible default 1.0 keeps v40-v43 checkpoints usable when the
     # v44 opportunity gate is disabled (threshold=0).
@@ -631,7 +633,8 @@ def calibrated_constrained_select(
         # requirement later; an unadmitted top-1 candidate therefore causes
         # abstention rather than an uncalibrated fall-through to rank 2.
         if bool(direct_value_top1_only) and bool(direct_actionable.any()):
-            chosen = int(np.argmax(np.where(direct_actionable, raw_direct_advantage, -np.inf)))
+            raw_rank_advantage = direct_rank - direct_rank[ni]
+            chosen = int(np.argmax(np.where(direct_actionable, raw_rank_advantage, -np.inf)))
             keep = np.zeros((n,), dtype=bool)
             keep[chosen] = True
             direct_actionable &= keep

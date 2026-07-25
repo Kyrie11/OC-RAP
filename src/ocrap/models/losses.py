@@ -450,6 +450,53 @@ def _differentiable_shared_success(
 
 
 
+
+
+def _exact_teacher_shared_success(
+    teacher_q: torch.Tensor,
+    teacher_m_star: torch.Tensor,
+    root_probs: torch.Tensor,
+    root_valid: torch.Tensor,
+    option_valid: torch.Tensor,
+    *,
+    gamma: float = 0.0,
+) -> torch.Tensor:
+    """Exact hard shared-option DRS used by calibration, in batched Torch form.
+
+    The selected option maximizes root-probability success mass under teacher-q,
+    with the same 0.01 mean-value tie-break as ``best_shared_option_index``.
+    Success is then evaluated on teacher ``m_star`` exactly as deployment
+    calibration does.  The result is a detached supervision target.
+    """
+    if teacher_q.ndim != 3 or teacher_m_star.ndim != 3:
+        return teacher_q.reshape(teacher_q.shape[0], -1).mean(dim=-1) * 0.0
+    q = torch.nan_to_num(teacher_q.float(), nan=-1.0e9, posinf=5.0, neginf=-5.0)
+    m = torch.nan_to_num(teacher_m_star.float(), nan=-1.0e9, posinf=5.0, neginf=-5.0)
+    b, k, l = q.shape
+    if m.shape[:2] != (b, k):
+        raise ValueError(f"teacher_m_star shape {tuple(m.shape)} incompatible with teacher_q {tuple(q.shape)}")
+    if m.shape[2] != l:
+        ll = min(l, m.shape[2])
+        q = q[:, :, :ll]
+        m = m[:, :, :ll]
+        l = ll
+    w = torch.clamp(root_probs.float()[:, :k], min=0.0)
+    rv = root_valid.bool()[:, :k]
+    w = w * rv.float()
+    w = w / w.sum(dim=-1, keepdim=True).clamp_min(1.0e-8)
+    ov = option_valid.bool()[:, :l]
+    finite = rv.unsqueeze(-1) & ov.unsqueeze(1) & torch.isfinite(q)
+    success_mass = (((q >= float(gamma)) & finite).float() * w.unsqueeze(-1)).sum(dim=1)
+    value_score = (torch.where(finite, q.clamp(-5.0, 5.0), torch.zeros_like(q)) * w.unsqueeze(-1)).sum(dim=1)
+    option_score = success_mass + 0.01 * value_score
+    option_score = torch.where(ov, option_score, torch.full_like(option_score, -1.0e9))
+    opt = option_score.argmax(dim=-1)
+    gather_idx = opt.view(b, 1, 1).expand(-1, k, 1)
+    selected_margin = torch.gather(m, dim=2, index=gather_idx).squeeze(-1)
+    selected_valid = rv & torch.gather(ov.unsqueeze(1).expand(-1, k, -1), 2, gather_idx).squeeze(-1)
+    success = selected_valid & torch.isfinite(selected_margin) & (selected_margin >= 0.0)
+    return (w * success.float()).sum(dim=-1).clamp(0.0, 1.0).detach()
+
 def macro_shared_success_calibration_loss(
     pred_q: torch.Tensor,
     teacher_q: torch.Tensor,
@@ -1299,6 +1346,16 @@ def direct_uncertainty_recovery_value_loss(
     group_dro_weight: float = 0.0,
     group_dro_temperature: float = 0.35,
     group_dro_severity_thresholds: tuple[float, ...] = (0.25, 0.55),
+    teacher_m_star: torch.Tensor | None = None,
+    exact_teacher_pcd: bool = False,
+    pred_rank_logit: torch.Tensor | None = None,
+    preference_weight: float = 0.0,
+    preference_temperature: float = 0.08,
+    preference_min_gap: float = 0.01,
+    preference_margin: float = 0.02,
+    preference_confidence_scale: float = 0.05,
+    preference_regret_weight: float = 0.0,
+    delta_nll_weight: float = 0.0,
 ) -> torch.Tensor:
     """Learn a tri-state, nominal-relative, policy-level recovery certificate.
 
@@ -1323,26 +1380,34 @@ def direct_uncertainty_recovery_value_loss(
     # absolute anchor is mapped through sigmoid; pairwise/listwise objectives
     # operate on the raw score so candidate advantages are not compressed.
     score = raw_score if mode == "score" else torch.sigmoid(raw_score)
+    rank_score = score if pred_rank_logit is None else pred_rank_logit.float().reshape(-1)
     point_mean = torch.sigmoid(raw_score)
     logvar = pred_logvar.float().reshape(-1).clamp(-7.0, 2.0)
     trd = torch.nan_to_num(teacher_r_dep.float().reshape(-1), nan=-20.0, posinf=20.0, neginf=-20.0)
     tro = torch.nan_to_num(teacher_r_orc.float().reshape(-1), nan=-20.0, posinf=20.0, neginf=-20.0)
     with torch.no_grad():
-        teacher_drs = _differentiable_shared_success(
-            teacher_q, root_probs, root_valid, option_valid,
-            gamma=success_gamma, temperature=max(0.08, success_temperature * 0.5),
-        ).reshape(-1)
+        if bool(exact_teacher_pcd):
+            if teacher_m_star is None:
+                raise ValueError("exact_teacher_pcd=true requires teacher_m_star")
+            teacher_drs = _exact_teacher_shared_success(
+                teacher_q, teacher_m_star, root_probs, root_valid, option_valid, gamma=success_gamma
+            ).reshape(-1)
+        else:
+            teacher_drs = _differentiable_shared_success(
+                teacher_q, root_probs, root_valid, option_valid,
+                gamma=success_gamma, temperature=max(0.08, success_temperature * 0.5),
+            ).reshape(-1)
     sh, ti = scene_hash.reshape(-1), time_index.reshape(-1)
     mac = macro_type_id.reshape(-1)
     isn = is_nominal.float().reshape(-1) > 0.5
     bid = bucket_id.reshape(-1)
-    n = min(score.numel(), point_mean.numel(), logvar.numel(), trd.numel(), tro.numel(), teacher_drs.numel(), sh.numel(), ti.numel(), mac.numel(), isn.numel(), bid.numel())
-    score, point_mean, logvar, trd, tro, teacher_drs = score[:n], point_mean[:n], logvar[:n], trd[:n], tro[:n], teacher_drs[:n]
+    n = min(score.numel(), rank_score.numel(), point_mean.numel(), logvar.numel(), trd.numel(), tro.numel(), teacher_drs.numel(), sh.numel(), ti.numel(), mac.numel(), isn.numel(), bid.numel())
+    score, rank_score, point_mean, logvar, trd, tro, teacher_drs = score[:n], rank_score[:n], point_mean[:n], logvar[:n], trd[:n], tro[:n], teacher_drs[:n]
     sh, ti, mac, isn, bid = sh[:n], ti[:n], mac[:n], isn[:n], bid[:n]
     bucket_mask = torch.zeros((n,), dtype=torch.bool, device=score.device)
     for b in tuple(int(x) for x in bucket_ids):
         bucket_mask |= bid == b
-    finite = bucket_mask & torch.isfinite(score) & torch.isfinite(point_mean) & torch.isfinite(logvar) & torch.isfinite(trd) & torch.isfinite(tro) & torch.isfinite(teacher_drs)
+    finite = bucket_mask & torch.isfinite(score) & torch.isfinite(rank_score) & torch.isfinite(point_mean) & torch.isfinite(logvar) & torch.isfinite(trd) & torch.isfinite(tro) & torch.isfinite(teacher_drs)
     if not bool(finite.any()):
         return pred_logit.sum() * 0.0
     teacher_gap = torch.clamp(tro - trd, min=0.0)
@@ -1376,10 +1441,15 @@ def direct_uncertainty_recovery_value_loss(
         nom = noms[0]
         t_delta = target[recs] - target[nom]
         p_delta = score[recs] - score[nom]
+        r_delta = rank_score[recs] - rank_score[nom]
         # Emphasise decision-relevant deltas while retaining all candidates.
         mag_w = 1.0 + torch.clamp(t_delta.abs() / max(float(positive_gain), 1.0e-3), max=4.0)
         centered = (mag_w * F.smooth_l1_loss(p_delta, t_delta, reduction='none')).sum() / mag_w.sum().clamp_min(1.0e-6)
         terms = [float(centered_weight) * centered]
+        if float(delta_nll_weight) > 0.0:
+            delta_var = (variance[recs] + variance[nom]).clamp_min(float(variance_floor))
+            delta_nll = 0.5 * (((p_delta - t_delta).square() / delta_var) + torch.log(delta_var))
+            terms.append(float(delta_nll_weight) * (mag_w * delta_nll).sum() / mag_w.sum().clamp_min(1.0e-6))
         group_range = float((target[idx].max() - target[idx].min()).item())
         if group_range >= float(min_group_range) and float(listwise_weight) > 0.0:
             teacher_prob = torch.softmax((target[idx] - target[idx].mean()) / tau, dim=0)
@@ -1395,6 +1465,31 @@ def direct_uncertainty_recovery_value_loss(
         # gently toward their teacher delta rather than forced below a margin.
         neg_mask = harmful_mask
         tie_mask = (~pos_mask) & (~harmful_mask)
+        # v48.5 ECPR: confidence-paced exact best-vs-rest preference.  It is
+        # applied only when the exact teacher has a material recovery opportunity,
+        # and downweights near-ties whose ordering is not stable across splits.
+        if bool(pos_mask.any()) and (float(preference_weight) > 0.0 or float(preference_regret_weight) > 0.0):
+            best_rank_j = int(torch.argmax(t_delta).item())
+            best_teacher = t_delta[best_rank_j]
+            gaps = (best_teacher - t_delta).detach()
+            competitor = torch.arange(recs.numel(), device=recs.device) != best_rank_j
+            competitor &= gaps >= float(preference_min_gap)
+            pref_tau = max(float(preference_temperature), 1.0e-3)
+            if bool(competitor.any()) and float(preference_weight) > 0.0:
+                confidence = torch.clamp(gaps[competitor] / max(float(preference_confidence_scale), 1.0e-4), 0.0, 1.0)
+                pred_gap = r_delta[best_rank_j] - r_delta[competitor]
+                required = float(preference_margin) + torch.clamp(gaps[competitor], max=0.25)
+                pref = F.softplus((required - pred_gap) / pref_tau) * pref_tau
+                terms.append(float(preference_weight) * (confidence * pref).sum() / confidence.sum().clamp_min(1.0e-6))
+            # Exact expected-regret term over nominal plus recovery candidates.
+            if float(preference_regret_weight) > 0.0:
+                pref_logits = torch.cat([r_delta.new_zeros(1), r_delta], dim=0) / pref_tau
+                pref_prob = torch.softmax(pref_logits, dim=0)
+                teacher_util_pref = torch.cat([t_delta.new_zeros(1), t_delta], dim=0)
+                expected = (pref_prob * teacher_util_pref).sum()
+                regret_pref = torch.clamp(best_teacher - expected, min=0.0)
+                confidence_group = torch.clamp((best_teacher - float(positive_gain)) / max(float(preference_confidence_scale), 1.0e-4), 0.0, 1.0)
+                terms.append(float(preference_regret_weight) * confidence_group * regret_pref.square())
         opp_delta_logits = None
         if opportunity_logits is not None:
             opp_delta_logits = opportunity_logits[recs] - opportunity_logits[nom]
@@ -1434,7 +1529,7 @@ def direct_uncertainty_recovery_value_loss(
         if harm_delta_logits is not None:
             recovery_admission_logits = recovery_admission_logits + float(harm_admission_weight) * F.logsigmoid(-harm_delta_logits)
         admission_class_logits = torch.cat([score[nom:nom + 1] * 0.0, recovery_admission_logits], dim=0) / tau
-        rank_class_logits = torch.cat([score[nom:nom + 1] * 0.0, p_delta], dim=0) / tau
+        rank_class_logits = torch.cat([rank_score[nom:nom + 1] * 0.0, r_delta], dim=0) / tau
         if bool(pos_mask.any()):
             target_class = 1 + int(torch.argmax(t_delta).item())
         else:
@@ -1490,19 +1585,19 @@ def direct_uncertainty_recovery_value_loss(
         if float(pairwise_weight) > 0.0:
             pair_terms = []
             if bool(pos_mask.any()):
-                pair_terms.append(F.softplus((float(rank_margin) - p_delta[pos_mask]) / tau).mean() * tau)
+                pair_terms.append(F.softplus((float(rank_margin) - r_delta[pos_mask]) / tau).mean() * tau)
             if bool(neg_mask.any()):
-                pair_terms.append(float(false_positive_weight) * F.softplus((p_delta[neg_mask] + float(rank_margin)) / tau).mean() * tau)
+                pair_terms.append(float(false_positive_weight) * F.softplus((r_delta[neg_mask] + float(rank_margin)) / tau).mean() * tau)
             if bool(tie_mask.any()):
                 pair_terms.append(
                     float(ambiguous_group_weight)
-                    * F.smooth_l1_loss(p_delta[tie_mask], t_delta[tie_mask])
+                    * F.smooth_l1_loss(r_delta[tie_mask], t_delta[tie_mask])
                 )
             if pair_terms:
                 terms.append(float(pairwise_weight) * torch.stack(pair_terms).sum())
         if float(top_rank_weight) > 0.0 and bool(pos_mask.any()) and bool(neg_mask.any()):
-            best_pos = p_delta[best_j]
-            strongest_neg = torch.max(p_delta[neg_mask])
+            best_pos = r_delta[best_j]
+            strongest_neg = torch.max(r_delta[neg_mask])
             terms.append(float(top_rank_weight) * F.softplus((float(rank_margin) - (best_pos - strongest_neg)) / tau) * tau)
         if float(t_adv.item()) >= float(positive_gain):
             cls_w = float(positive_group_weight)

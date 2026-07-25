@@ -21,11 +21,25 @@ if [[ "${FOREGROUND:-0}" != "1" && "${V48_CONTROLLER_CHILD:-0}" != "1" ]]; then
   exit 0
 fi
 
+# Prevent two controllers from writing the same output tree.
+exec 9>"$OUTPUTDIR/.controller.lock"
+if command -v flock >/dev/null 2>&1; then
+  flock -n 9 || { echo "another controller already owns OUTPUTDIR=$OUTPUTDIR" >&2; exit 73; }
+fi
+
 TRAIN_OCRAP_ROOT="${TRAIN_OCRAP_ROOT:-/data0/senzeyu2/dataset/OCRAP}"
 EVAL_OCRAP_ROOT="${EVAL_OCRAP_ROOT:-/data0/senzeyu2/dataset/OCRAP}"
 INIT_CKPT="${INIT_CKPT:-runs/ocrap_v47_trac_balanced/model_v47_trac/best.pt}"
 GPU0="${GPU0:-0}"
 GPU1="${GPU1:-1}"
+if command -v flock >/dev/null 2>&1; then
+  exec 8>"/tmp/ocrap_gpu_${GPU0}.lock"
+  flock -n 8 || { echo "GPU $GPU0 is reserved by another OC-RAP controller" >&2; exit 74; }
+  if [[ "$GPU1" != "$GPU0" ]]; then
+    exec 7>"/tmp/ocrap_gpu_${GPU1}.lock"
+    flock -n 7 || { echo "GPU $GPU1 is reserved by another OC-RAP controller" >&2; exit 74; }
+  fi
+fi
 SPLIT_ROOT="$OUTPUTDIR/dataset_splits"
 CALIBRATION_OCRAP_ROOT="${CALIBRATION_OCRAP_ROOT:-}"
 CALIBRATION_MODE="${CALIBRATION_MODE:-proxy_val_split}"  # proxy_val_split | dedicated
@@ -205,6 +219,18 @@ wait "$P1"; S1=$?
 set -e
 echo "training status: balanced=$S0 precision=$S1" | tee "$LOG_DIR/training_status.log"
 [[ "$S0" -eq 0 || "$S1" -eq 0 ]] || exit 3
+python - "$OUTPUTDIR" "$S0" "$S1" <<'PYMARK'
+import hashlib,json,pathlib,sys,time
+root=pathlib.Path(sys.argv[1]); status={"balanced":int(sys.argv[2]),"precision":int(sys.argv[3])}; variants={}
+for name,code in status.items():
+    p=root/'candidates'/name/'model_v48_trac_sr'/'best.pt'
+    if code==0 and p.is_file():
+        h=hashlib.sha256(p.read_bytes()).hexdigest()
+        variants[name]={"checkpoint":str(p),"sha256":h,"size":p.stat().st_size}
+doc={"event":"training_complete","created_unix":time.time(),"variants":variants,"exit_codes":status}
+(root/'TRAINING_COMPLETE.json').write_text(json.dumps(doc,indent=2)+'\n')
+if not variants: raise SystemExit('no completed variant checkpoint')
+PYMARK
 
 calibrate_variant() {
   local variant="$1" gpu="$2"
@@ -213,7 +239,7 @@ calibrate_variant() {
   [[ -f "$ckpt" ]] || return 0
   set +e
   CUDA_VISIBLE_DEVICES="$gpu" python -u tools/calibrate_policy_risk_v48.py \
-    --dataset "$CAL_NEAR" --checkpoint "$ckpt" --bucket near \
+    --dataset "$CAL_NEAR" --checkpoint "$ckpt" --bucket near --risk-source="${RISK_SOURCE:-delta_distribution}" \
     --output "$run/calibration/direct_value_risk_near_v48.json" \
     --rows-output "$run/calibration/direct_value_risk_near_v48.rows.jsonl" \
     --required-min-groups="${NEAR_MIN_GROUPS:-80}" --required-min-scenes="${NEAR_MIN_SCENES:-40}" \
@@ -223,7 +249,7 @@ calibrate_variant() {
     2>&1 | tee "$run/logs/calibrate_policy_near.log"
   local sn=${PIPESTATUS[0]}
   CUDA_VISIBLE_DEVICES="$gpu" python -u tools/calibrate_policy_risk_v48.py \
-    --dataset "$CAL_CONTACT" --checkpoint "$ckpt" --bucket contact \
+    --dataset "$CAL_CONTACT" --checkpoint "$ckpt" --bucket contact --risk-source="${RISK_SOURCE:-delta_distribution}" \
     --output "$run/calibration/direct_value_risk_contact_v48.json" \
     --rows-output "$run/calibration/direct_value_risk_contact_v48.rows.jsonl" \
     --required-min-groups="${CONTACT_MIN_GROUPS:-100}" --required-min-scenes="${CONTACT_MIN_SCENES:-45}" \
@@ -260,7 +286,7 @@ for name in ('balanced','precision'):
             'verify':d.get('verify'), 'warnings':d.get('warnings')}
         print(name,bucket,summary[name][bucket])
     if ok:
-        harm=sum(float((d.get('verify') or {}).get('harmful_rate_selected') or 0.0) for d in docs)
+        harm=sum(float((d.get('verify') or {}).get('harmful_selected_rate') or 0.0) for d in docs)
         corr=sum(float(d.get('unconstrained_group_top1_correlation') or -1.0) for d in docs)
         valid.append((harm,-corr,name,r))
 status={'calibration_mode':json.load(open(root/'dataset_role_manifest.json'))['calibration_mode'],
@@ -295,5 +321,10 @@ SAFE_MAX_ROLLOUTS=8 SAFE_MAX_STEPS=24 \\
 nohup bash scripts/run_ocrap_v48_trac_sr.sh >\$OUTPUTDIR/logs/closed_loop_probe.log 2>&1 &
 NEXT
 
-echo "v48.1 screening complete. chosen=$CHOSEN_BASE_RUN" | tee "$LOG_DIR/complete.log"
+python - "$OUTPUTDIR" <<'PYDONE'
+import json,pathlib,time,sys
+r=pathlib.Path(sys.argv[1]); p=r/'RUN_COMPLETE.json'
+p.write_text(json.dumps({"event":"run_complete","created_unix":time.time(),"chosen_base_run":(r/'chosen_base_run.txt').read_text().strip()},indent=2)+'\n')
+PYDONE
+echo "v48.5 screening complete. chosen=$CHOSEN_BASE_RUN" | tee "$LOG_DIR/complete.log"
 echo "next commands: $OUTPUTDIR/NEXT_COMMANDS.txt"

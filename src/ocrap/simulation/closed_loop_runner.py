@@ -700,14 +700,34 @@ def _select_prefix(
     drs_gamma = _drs_success_gamma_for_bucket(gamma, cfg, active_bucket)
     pred_drs = np.asarray([predicted_shared_option_success(x["pred"].q, x["pred"].root_probs, gamma=drs_gamma, root_valid=x["data"].get("root_valid", None), option_valid=x["data"].get("option_valid", None)) for x in items], dtype=np.float32)
     pred_direct_value = np.asarray([np.nan if x["pred"].direct_recovery_value is None else float(x["pred"].direct_recovery_value) for x in items], dtype=np.float32)
+    pred_direct_rank = np.asarray([np.nan if x["pred"].direct_recovery_rank is None else float(x["pred"].direct_recovery_rank) for x in items], dtype=np.float32)
+    pred_direct_rank = np.where(np.isfinite(pred_direct_rank), pred_direct_rank, pred_direct_value).astype(np.float32)
     pred_direct_std = np.asarray([np.nan if x["pred"].direct_recovery_std is None else float(x["pred"].direct_recovery_std) for x in items], dtype=np.float32)
     pred_direct_opportunity = np.asarray([np.nan if x["pred"].direct_recovery_opportunity is None else float(x["pred"].direct_recovery_opportunity) for x in items], dtype=np.float32)
     pred_direct_harm = np.asarray([np.nan if x["pred"].direct_recovery_harm is None else float(x["pred"].direct_recovery_harm) for x in items], dtype=np.float32)
     opp_logits = np.asarray([np.nan if x["pred"].direct_recovery_opportunity_logit is None else float(x["pred"].direct_recovery_opportunity_logit) for x in items], dtype=np.float32)
+    harm_logits = np.asarray([np.nan if x["pred"].direct_recovery_harm_logit is None else float(x["pred"].direct_recovery_harm_logit) for x in items], dtype=np.float32)
     nominal_ids = [i for i, x in enumerate(items) if _safe_float(x["data"].get("is_nominal", 0.0)) > 0.5]
-    if nominal_ids and np.isfinite(opp_logits[nominal_ids[0]]):
-        delta = np.clip(opp_logits - opp_logits[nominal_ids[0]], -30.0, 30.0)
-        pred_direct_opportunity = (1.0 / (1.0 + np.exp(-delta))).astype(np.float32)
+    risk_source = str(sel_tmp.get("direct_value_risk_source", "heads") or "heads").strip().lower()
+    if nominal_ids:
+        ni = nominal_ids[0]
+        if risk_source == "delta_distribution" and np.isfinite(pred_direct_value[ni]):
+            from math import erf, sqrt
+            delta_mean = pred_direct_value - pred_direct_value[ni]
+            delta_std = np.sqrt(np.maximum(1.0e-6, pred_direct_std ** 2 + pred_direct_std[ni] ** 2))
+            pos_gain = float(sel_tmp.get("direct_value_positive_gain", 0.015))
+            neg_gain = float(sel_tmp.get("direct_value_negative_gain", 0.010))
+            z_opp = np.clip((delta_mean - pos_gain) / delta_std, -12.0, 12.0)
+            z_harm = np.clip((-neg_gain - delta_mean) / delta_std, -12.0, 12.0)
+            normal_cdf = np.vectorize(lambda z: 0.5 * (1.0 + erf(float(z) / sqrt(2.0))))
+            pred_direct_opportunity = normal_cdf(z_opp).astype(np.float32)
+            pred_direct_harm = normal_cdf(z_harm).astype(np.float32)
+        elif np.isfinite(opp_logits[ni]):
+            delta = np.clip(opp_logits - opp_logits[ni], -30.0, 30.0)
+            pred_direct_opportunity = (1.0 / (1.0 + np.exp(-delta))).astype(np.float32)
+            if np.isfinite(harm_logits[ni]):
+                hdelta = np.clip(harm_logits - harm_logits[ni], -30.0, 30.0)
+                pred_direct_harm = (1.0 / (1.0 + np.exp(-hdelta))).astype(np.float32)
     macro_names = [str(x["data"].get("prefix_macro_name", "")) for x in items]
     nominal_deviation = _prefix_nominal_deviation(samples)
     if compute_teacher_labels:
@@ -741,6 +761,7 @@ def _select_prefix(
             nominal_deviation=nominal_deviation,
             pred_drs=pred_drs,
             pred_direct_value=pred_direct_value,
+            pred_direct_rank=pred_direct_rank,
             pred_direct_std=pred_direct_std,
             pred_direct_opportunity=pred_direct_opportunity,
             pred_direct_harm=pred_direct_harm,
@@ -779,6 +800,7 @@ def _select_prefix(
         "pred_direct_value": pred_direct_value,
         "pred_direct_std": pred_direct_std,
         "pred_direct_opportunity": pred_direct_opportunity,
+        "pred_direct_rank": pred_direct_rank,
         "nominal_deviation": nominal_deviation,
         "labels_available": bool(compute_teacher_labels),
         "drs": None if drs is None else float(drs),
