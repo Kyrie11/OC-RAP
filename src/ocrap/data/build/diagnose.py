@@ -348,6 +348,11 @@ def diagnose_dataset(dataset: str | Path, output: str | Path | None = None, max_
     use_lcvar = not bool(_cfg_get(cfg, ("ablation", "without_lower_tail"), False))
     use_obs_kernel = not bool(_cfg_get(cfg, ("ablation", "without_observation_kernel"), False))
     hidden_delay = int(_cfg_get(cfg, ("hidden_emergence_delay_steps",), 2))
+    expected_targeted = int(generation_cfg.get("num_targeted_futures", 0) or 0)
+    required_sources = {"replay", "reactive"}
+    if expected_targeted > 0 and not nominal_regime_dataset:
+        required_sources.add("targeted")
+    incomplete_source_samples = 0
 
     for p in paths:
         try:
@@ -557,10 +562,10 @@ def diagnose_dataset(dataset: str | Path, output: str | Path | None = None, max_
         sources = [str(x) for x in np.asarray(d.get("future_sources", []), dtype=str).reshape(-1)]
         for s in sources:
             source_counts[s] += 1
-        if REQUIRED_FUTURE_SOURCES.issubset(set(sources)):
+        if required_sources.issubset(set(sources)):
             source_complete_samples += 1
         else:
-            warnings.append(f"missing one of replay/reactive/targeted futures in {p.name}")
+            incomplete_source_samples += 1
 
         metas = _json_field(d, "future_metadata", [])
         if isinstance(metas, list):
@@ -684,7 +689,10 @@ def diagnose_dataset(dataset: str | Path, output: str | Path | None = None, max_
         failures.append("no observation-equivalent root pairs detected")
     if incompatible_total == 0 and artifact_count > 0:
         warnings.append("artifact samples exist but no incompatible alias pairs were detected by m_star argmax")
-    expected_targeted = int(generation_cfg.get("num_targeted_futures", 0) or 0)
+    if incomplete_source_samples > 0:
+        warnings.append(
+            f"{incomplete_source_samples} samples miss required future sources: {sorted(required_sources)}"
+        )
     if source_complete_fraction < 0.95 and num > 0 and not nominal_regime_dataset and expected_targeted != 0:
         warnings.append("less than 95% of samples contain replay/reactive/targeted futures")
     if complete_artifact_pairs == 0 and hidden_emergence_count > 0:

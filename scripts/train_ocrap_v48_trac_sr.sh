@@ -45,13 +45,16 @@ esac
 # frozen representation could not turn that signal into a correct setwise top-1.
 CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --dataset "$TRAIN_MIX" --val-dataset "$VAL_MIX" --output "$MODEL_DIR" \
+  --set seed="${SEED:-7}" \
   --set training.init_checkpoint="$INIT_CKPT" \
   --set training.freeze_param_prefixes='' \
   --set training.direct_only_fast_path=true \
   --set training.group_index_path="$GROUP_INDEX" \
   --set training.epochs="${EPOCHS:-12}" --set training.early_stop_patience="${PATIENCE:-3}" \
   --set training.batch_size="${BATCH_SIZE:-96}" --set training.lr="$LR" \
-  --set training.encoder_lr_scale="$ENCODER_LR_SCALE" --set training.weight_decay=0.00002 \
+  --set training.encoder_lr_scale="$ENCODER_LR_SCALE" \
+  --set training.encoder_anchor_weight="${ENCODER_ANCHOR_WEIGHT:-0.02}" \
+  --set training.weight_decay=0.00002 \
   --set training.grad_clip=3.0 --set training.require_cuda=true \
   --set training.amp=true --set training.amp_dtype=bfloat16 \
   --set training.allow_tf32=true --set training.matmul_precision=high \
@@ -65,6 +68,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.group_batch_positive_advantage_gain_min="${POSITIVE_GAIN:-0.015}" \
   --set training.group_batch_positive_advantage_macro_ids=2,3,5,6,7 \
   --set training.group_batch_positive_advantage_bucket_ids=1,2 \
+  --set training.group_batch_require_positive_advantage_groups=true \
   --set training.group_batch_scene_balance_power="${SCENE_BALANCE_POWER:-0.50}" \
   --set training.group_batch_hard_boost=0 \
   --set training.artifact_sampler_weight=0 --set training.negative_deployable_sampler_weight=0 \
@@ -119,6 +123,10 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.direct_value_setwise_admission_weight="$SETWISE_W" \
   --set training.direct_value_opportunity_admission_weight=0.50 \
   --set training.direct_value_harm_admission_weight=1.00 \
+  --set training.direct_value_selective_risk_weight="${SELECTIVE_RISK_WEIGHT:-2.0}" \
+  --set training.direct_value_selective_harm_budget="${SELECTIVE_HARM_BUDGET:-0.05}" \
+  --set training.direct_value_selective_coverage_weight="${SELECTIVE_COVERAGE_WEIGHT:-1.0}" \
+  --set training.direct_value_selective_coverage_target="${SELECTIVE_COVERAGE_TARGET:-0.65}" \
   --set training.direct_value_expert_specialization_weight=0.40 \
   2>&1 | tee "$LOG_DIR/train_v48_trac_sr.log"
 

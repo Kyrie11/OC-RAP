@@ -26,3 +26,7 @@
 - Existing NPZ samples can now reconstruct a missing/stale `manifest.csv` without rebuilding datasets.
 - `run_v48_two_gpu_fast_commands.txt` performs this metadata-only preflight before scene-overlap auditing and proxy calibration splitting.
 - Reconstruction is atomic and aborts if the dataset changes during scanning, avoiding a silent partial snapshot of an active build.
+
+## v48.2 audit correction
+
+The uploaded v48.1 screening logs revealed a pre-epoch `NameError` (`os` not imported) and a sampler configuration-key mismatch. Consequently, v48.1 did not experimentally validate its model-level modifications. These defects and the follow-on OC-TRAC-SRC algorithm are documented in the root `ALGORITHM_CHANGELOG.md`.

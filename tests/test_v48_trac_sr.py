@@ -79,3 +79,89 @@ def test_robust_expert_aggregation_is_conservative_and_bucket_free():
     assert torch.allclose(out["direct_recovery_opportunity_logit"], torch.tensor([0.5, 0.5]))
     assert torch.allclose(out["direct_recovery_harm_logit"], torch.tensor([1.0, 1.0]))
     assert torch.allclose(out["direct_expert_weights"], torch.full((2, 2), 0.5))
+
+
+def _src_loss(pred: torch.Tensor, *, risk_weight: float) -> torch.Tensor:
+    from ocrap.models.losses import direct_uncertainty_recovery_value_loss
+
+    # nominal, teacher-positive recovery, teacher-harmful recovery
+    return direct_uncertainty_recovery_value_loss(
+        pred_logit=pred,
+        pred_logvar=torch.zeros_like(pred),
+        teacher_r_dep=torch.tensor([0.0, 2.0, -2.0]),
+        teacher_r_orc=torch.tensor([0.0, 2.0, -2.0]),
+        teacher_q=torch.ones((3, 1, 1)),
+        root_probs=torch.ones((3, 1)),
+        root_valid=torch.ones((3, 1), dtype=torch.bool),
+        option_valid=torch.ones((3, 1), dtype=torch.bool),
+        scene_hash=torch.tensor([17, 17, 17]),
+        time_index=torch.tensor([5, 5, 5]),
+        macro_type_id=torch.tensor([0, 5, 5]),
+        is_nominal=torch.tensor([1.0, 0.0, 0.0]),
+        bucket_id=torch.tensor([1, 1, 1]),
+        macro_ids=(5,), bucket_ids=(1,), output_mode="score",
+        positive_gain=0.10, negative_gain=0.10, temperature=0.10,
+        point_weight=0.0, centered_weight=0.0, listwise_weight=0.0,
+        advantage_weight=0.0, pairwise_weight=0.0, top_rank_weight=0.0,
+        opportunity_weight=0.0, harm_weight=0.0,
+        setwise_admission_weight=1.0e-6,
+        selective_risk_weight=risk_weight,
+        selective_harm_budget=0.05,
+        selective_coverage_weight=0.0,
+    )
+
+
+def test_selective_risk_penalizes_policy_mass_on_harmful_candidate() -> None:
+    positive_high = torch.tensor([0.0, 1.0, -1.0])
+    harmful_high = torch.tensor([0.0, -1.0, 1.0])
+    base_gap = _src_loss(harmful_high, risk_weight=0.0) - _src_loss(positive_high, risk_weight=0.0)
+    risk_gap = _src_loss(harmful_high, risk_weight=4.0) - _src_loss(positive_high, risk_weight=4.0)
+    assert risk_gap.item() > base_gap.item() + 0.5
+
+
+def test_sampler_uses_canonical_positive_advantage_config_names(tmp_path) -> None:
+    import json
+    from types import SimpleNamespace
+    from ocrap.cli.train import _make_group_batch_sampler
+
+    paths = [tmp_path / f"candidate_{i}.npz" for i in range(4)]
+    for path in paths:
+        path.touch()
+    rows = [
+        {"path": str(paths[0]), "scene": "positive", "time": 0, "bucket": 1, "nominal": True, "macro": 0, "teacher_pcd": 0.10},
+        {"path": str(paths[1]), "scene": "positive", "time": 0, "bucket": 1, "nominal": False, "macro": 5, "teacher_pcd": 0.40},
+        {"path": str(paths[2]), "scene": "negative", "time": 0, "bucket": 1, "nominal": True, "macro": 0, "teacher_pcd": 0.30},
+        {"path": str(paths[3]), "scene": "negative", "time": 0, "bucket": 1, "nominal": False, "macro": 5, "teacher_pcd": 0.20},
+    ]
+    index = tmp_path / "index.jsonl"
+    index.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    cfg = {"training": {
+        "group_batching": True,
+        "group_index_path": str(index),
+        "group_batching_replacement": False,
+        "group_batch_positive_advantage_boost": 5.0,
+        "group_batch_positive_advantage_gain_min": 0.05,
+        "group_batch_positive_advantage_macro_ids": "5",
+        "group_batch_positive_advantage_bucket_ids": "1",
+        "group_batch_require_positive_advantage_groups": True,
+        "artifact_sampler_weight": 0.0,
+        "negative_deployable_sampler_weight": 0.0,
+        "safe_positive_sampler_weight": 0.0,
+        "regime_balance_power": 0.0,
+    }}
+    sampler = _make_group_batch_sampler(SimpleNamespace(paths=paths), cfg, batch_size=4)
+    assert sampler is not None
+    assert sorted(sampler.group_weights.tolist()) == [1.0, 5.0]
+
+
+def test_encoder_anchor_is_zero_then_increases_after_drift() -> None:
+    from ocrap.cli.train import _parameter_anchor_loss
+    layer = torch.nn.Linear(3, 2)
+    layer._encoder_anchor_tensors = {
+        "weight": layer.weight.detach().clone(),
+        "bias": layer.bias.detach().clone(),
+    }
+    assert _parameter_anchor_loss(layer).item() == 0.0
+    with torch.no_grad():
+        layer.weight.add_(0.5)
+    assert _parameter_anchor_loss(layer).item() > 0.0

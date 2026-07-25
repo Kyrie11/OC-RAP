@@ -1,166 +1,60 @@
-# OC-RAP Algorithm Update Log
+# OC-RAP Algorithm Changelog
 
-This file records algorithm changes, hypotheses, observed evidence, failures, and next actions. Do not repeat a previously failed change without new evidence.
+This root log is the canonical index for future iterations. Historical detail is retained in `ALGORITHM_CHANGELOG_V48.md` and `ALGORITHM_CHANGELOG_V48_1.md`; do not repeat an item below unless its implementation or experimental conclusion changed.
 
-## Experiment targets used during development
+## v48.2 — OC-TRAC-SRC (2026-07-24)
 
-| Regime | Development gate | Publication-scale target |
-|---|---|---|
-| Safe | intervention = 0, bounded NUP >= 0.999 | 3 seeds; intervention <= 0.5%; NUP >= 0.999; no degradation in physical metrics |
-| Near-contact | direct path used; NUP >= 0.995; no no-op action; paired PCD/regret gain >= 0.005 | >=15% relative FRA/miss reduction or about +0.007~0.010 PCD on the current candidate set, with hundreds of audited decisions |
-| Contact | direct path used; NUP >= 0.985; no no-op action; paired PCD/regret gain >= 0.005 | >=20% relative secondary-failure/FRA reduction or about +0.009~0.012 PCD on the current candidate set, with stable-stop/yaw/rejoin evidence |
+### Why this iteration was necessary
 
-## Version history
+The uploaded v48.1 screening did not enter the first training batch. Both `balanced` and `precision` jobs failed in `_make_group_batch_sampler` because `src/ocrap/cli/train.py` used `os.path.abspath` without importing `os`. A second audit found that the training script emitted `group_batch_positive_advantage_*` keys while the sampler read older `group_batch_positive_*` keys, silently disabling the intended exact teacher-PCD positive-group oversampling.
 
-### v40 — OC-UVRA
-- **Change:** Added a direct recovery-value head while freezing OC-MERO certificate modules.
-- **Hypothesis:** A separate value preference could improve Near/Contact without damaging Safe calibration.
-- **Observed:** Direct-value selection reason was 0; Near closed-loop physics did not improve; legacy brake-tail produced tiny-deviation/zero-speed interventions.
-- **Decision:** Keep certificate/preference separation, but do not reuse CLS-only absolute-value learning.
+### Engineering correctness fixes
 
-### v41 — OC-CAVA
-- **Change:** Candidate token pooling, group-centred advantage loss, additive conformal correction, and minimum trajectory-deviation actionability.
-- **Observed:** No-op brake was filtered, but challenge rate and positive-sign recall were 0; the direct path still never entered final decisions.
-- **Decision:** Actionability is retained. Max-residual additive conformal gating is not reused as the only deployment gate.
+- Added the missing `import os` in `src/ocrap/cli/train.py`.
+- Made `group_batch_positive_advantage_{macro_ids,bucket_ids,gain_min}` the canonical sampler keys, retaining legacy aliases only for backward compatibility.
+- Fixed the positive-group scanner to use the bucket stored in the exact teacher-PCD index instead of re-inferring it from the file path.
+- Added `training.group_batch_require_positive_advantage_groups`; v48.2 training fails before epoch 1 when a requested positive boost resolves to zero groups.
+- Added regression tests covering the canonical sampler configuration and exact-index bucket routing.
+- Added atomic `calibration_build_status.json` breadcrumbs for `preflight`, `build_safe`, `build_near_contact`, `build_contact`, `merge_filter_audit`, failure, and completion.
+- Added `START_STAGE=safe|near|contact|merge` to resume a failed dedicated calibration build without unnecessarily restarting completed stages; merge preflight now requires all six shard manifests.
+- Replaced per-sample Safe diagnostic spam about missing targeted futures with regime-aware source requirements and one aggregate warning. Safe/nominal datasets require replay+reactive; targeted futures are required only when configured.
 
-### v42 — OCSAVA
-- **Change:** Unbounded candidate score, pairwise/top-rank losses, raw candidate/action adapter, top-1 selection-conditional additive conformal calibration.
-- **Observed on 2026-07-21:**
-  - Balanced: Near q=0.5223, Contact q=0.4983, both challenge_rate=0.
-  - Hard: Near q=0.4842, Contact q=0.4495, both challenge_rate=0.
-  - Top-1 opportunity capture was non-random (70.5%-84.4%), but selected mean teacher advantage stayed negative.
-  - Offline Near used nominal in 276/276 groups; Contact intervened only 1/449 and not through the direct-value reason.
-  - Removing the raw adapter improved top-1 capture (Near 87.5%, Contact 88.6%) with similar calibration error. Its 48.7-minute run was faster than balanced (81.2 minutes) but slower than hard (25.4 minutes); therefore speed alone is inconclusive, while the raw adapter still has no accuracy justification and is rejected.
-- **Root causes:** additive q remained larger than all deployable score advantages; direct value was preference-only while the base admission set usually contained only nominal; raw flattened trajectories added noise; group sampler boosted absolute r_dep rather than positive advantage versus nominal.
+### New algorithm: Selective Risk-Coverage regularization (SRC)
 
-### v43 — OC-RSC (completed; failed development gate)
-- **Name:** Observation-Consistent Risk-controlled Selective Certificate.
-- **Change:**
-  1. Replace the zero-coverage additive LCB deployment rule with a deterministic top-1 selective threshold calibrated on scene-time groups.
-  2. Calibrate and verify the threshold on disjoint deterministic folds; report precision and an upper confidence bound on bad challenge exposure.
-  3. Permit a threshold-passing, actionable top-1 candidate to augment admission in Near/Contact only; Safe remains locked and the certificate is disabled there.
-  4. Default retraining removes the raw adapter and oversamples groups with positive r_dep gain relative to nominal rather than merely high absolute r_dep.
-  5. Use a 3-rollout selected-only probe before 6- and 12-rollout top-k audits; reuse/resume outputs and defer Safe closed-loop.
-- **Falsification rule:** If no candidate obtains a finite verified threshold with nonzero held-out selections, do not run Waymax. If offline direct reasons remain zero, do not run Waymax. If the 3-rollout probe has no direct selection or violates actionability/NUP, do not expand.
+- Added a differentiable policy distribution over the explicit nominal abstention class and all recovery candidates using the same score/opportunity/harm composition as setwise admission.
+- Added a harmful-selection probability budget: probability mass assigned to teacher-harmful recovery candidates is penalized above `direct_value_selective_harm_budget`.
+- Added a positive-group recovery-coverage floor so risk minimization cannot collapse to always selecting nominal.
+- New controls:
+  - `training.direct_value_selective_risk_weight`
+  - `training.direct_value_selective_harm_budget`
+  - `training.direct_value_selective_coverage_weight`
+  - `training.direct_value_selective_coverage_target`
+- Default v48.2 settings are risk weight 2.0, harm budget 0.05, coverage weight 1.0, and positive-group coverage target 0.65.
+- The contribution is policy-level rather than another candidate classifier: it optimizes the calibrated risk/coverage trade-off under explicit abstention and complements the existing tri-state, harm-head, and robust-expert design.
 
-## v43 implementation status (2026-07-21)
+### Required ablation protocol
 
-- Added `tools/calibrate_direct_value_risk_v43.py`: deterministic top-1 scene-time selection, hash-disjoint fit/verification folds, selective threshold search, held-out precision, and a one-sided 90% Wilson upper bound on harmful challenge group exposure.
-- Added `selection.direct_value_risk_controlled_admission`. It is disabled by default and explicitly disabled for Safe. When enabled in Near/Contact, only a feasible, hard/harm-bounded, allowed-macro, actionable deterministic top-1 candidate above the verified threshold can augment admission.
-- Added positive-advantage group sampling based on `r_dep(candidate)-r_dep(nominal)`, replacing v42's absolute-`r_dep` hard-group boost in the v43 training scripts.
-- Rejected `candidate_concat_raw` as the v43 default. The default is `candidate_concat`.
-- Added a reuse-first pipeline: recalibrate existing v42 checkpoints before retraining. Retraining starts only if calibration or offline direct-use gates fail.
-- Added 3 -> 6 -> 12 rollout gates. The 3-rollout probe uses selected-only labels, eight candidates, six recovery options, and two-step replanning. Safe closed-loop is deferred until stress gates pass.
-- Added tests for stress-only admission augmentation, v42 preference-only abstention, and selective threshold fitting.
-- Validation completed locally: `77 passed, 1 warning`; compile and shell syntax checks passed.
+Run both of the following from the same initialization and data split:
 
-### Statistical validity note
+1. Fixed v48 baseline: `SELECTIVE_RISK_WEIGHT=0 SELECTIVE_COVERAGE_WEIGHT=0`.
+2. v48.2 OC-TRAC-SRC: defaults enabled.
 
-The hash-disjoint folds prevent threshold fitting and verification from sharing scene-time groups, but a publication claim still requires the verification/calibration data to be independent of checkpoint selection. The scripts accept `RSC_CAL_NEAR_DATA` and `RSC_CAL_CONTACT_DATA`; paper-scale runs should point these to dedicated calibration roots not used for training or early stopping. The default validation roots are intended only for development screening.
+Do not attribute gains to SRC unless both runs pass the same fit/verify Natural gate and are compared on scene-paired closed-loop evaluation.
 
-## v43 observed result and decision (2026-07-21, completed)
+### Local validation
 
-- **Training:** `selective_balanced` stopped at epoch 1 (`val direct loss=0.4022`, 25.2 min); `selective_precision` stopped at epoch 2 (`0.4817`, 9.4 min).
-- **Calibration:** neither checkpoint produced a finite selective rule in Near or Contact. All four held-out evaluations had `num_selected=0`, `challenge_precision=null`, and `valid_for_deployment=false`.
-- **Ranking diagnostics:**
-  - Balanced Near/Contact pair MAE: `0.2820 / 0.2639`.
-  - Precision Near/Contact pair MAE: `0.2839 / 0.2692`.
-  - Top-ranked score was negatively associated with teacher advantage; merge was systematically over-scored while many selected merge candidates had non-positive teacher advantage.
-- **Correct pipeline behavior:** `v43: no checkpoint passed calibration + offline-use gates; do not run Waymax.` The falsification rule prevented an expensive closed-loop run and should be retained.
-- **Primary implementation defect discovered:** the group sampler and direct-value loss grouped candidates by `(scene_hash,time)` but omitted the dataset bucket. The same WOMD scene-time appears in Safe/Near/Contact roots. The logged maximum group size was `25`, exactly compatible with concatenating the per-regime candidate sets, and multiple regime-specific nominals/teachers were compared inside one ranking group.
-- **Additional causes:**
-  1. The direct head received no regime/state indicator, so cross-regime pressure-future labels were contradictory for observationally identical candidates.
-  2. The positive-group sampler used `r_dep` gain while the direct target was PCD advantage, creating objective/sampling mismatch.
-  3. Safe samples contributed no direct-value gradient but consumed batches.
-  4. A forced top-1 score had no explicit probability that the current group should intervene; rare positive groups were mixed with predominantly negative/tied groups.
-  5. Relaxing the v43 risk threshold is rejected because the score-teacher relationship was directionally wrong, not merely under-covered.
-- **Do not repeat:** no more additive-q tuning, threshold-only relaxation, raw flattened action adapter, or bucket-agnostic scene-time grouping without new evidence.
+- Targeted v48/v46 tests pass, including new SRC and sampler-regression tests.
+- Full test-suite, compile, and shell validation status is recorded in `V48_2_VALIDATION_STATUS.txt` in the delivered package.
+- Real WOMD/JAX/GPU results are not available in the local audit environment.
 
-## External baseline snapshot available with the v43 analysis
+## v48.1 — Existing-data-first and calibration isolation
 
-- **Safe offline:** OC-RAP's nominal-preserving behavior (`NUP=1`, `FRA=0`, `PCD=0.6163`, intervention `0`) matches log replay, nominal replay, and Wayformer-BC-lite. GameFormer-lite increased PCD only to `0.6189` but reduced NUP to `0.9468` with `39.2%` intervention. BeTopNet-lite intervened `17.6%` without PCD gain.
-- **Near-contact offline:** the existing OC-RAP nominal/old-certificate result (`NUP=1`, `FRA=0.0761`, `PCD=0.5735`) is stronger than the completed uploaded lite baselines; the strongest external PCD was predictive-safety-filter at `0.5466` with `44.6%` intervention. This does **not** validate the new value module because its direct path was unused.
-- **Contact offline:** the existing OC-RAP result (`NUP=1`, `FRA=0.0780`, `PCD=0.5723`) exceeds the uploaded post-impact lite baselines in PCD/NUP. Severity minimization achieved lower FRA (`0.0557`) but at `NUP=0.7212`, `PCD=0.4159`, and `80.0%` intervention.
-- **Comparability warning:** uploaded methods are implementation-level `*_lite` baselines, not official reproduced SOTA checkpoints. Near MARC closed-loop lacks a matched bucket (`bucket_dataset=null`); Contact post-impact closed-loop is incomplete (`18/50`). Use them as diagnostic baselines until matched, completed runs exist.
+See `ALGORITHM_CHANGELOG_V48_1.md`. Key items already tried: proxy scene-disjoint calibration/dev split, dedicated validation-tail calibration construction, exact teacher-PCD coverage indexing, manifest repair, and existing-data-first screening.
 
-### v44 — OC-RAVA (current)
+## v48 — OC-TRAC-SR
 
-- **Name:** Observation-Consistent Risk-Aware Value Abstention.
-- **Design objective:** one deployable shared planner should preserve Safe behavior and selectively intervene in Near/Contact without receiving the evaluation regime label as a neural input.
-- **Changes:**
-  1. Group sampler key and direct-loss key are now `(bucket_id, scene_hash, time)`, preventing multiple regime-specific nominals and teachers from entering one ranking group.
-  2. Safe is removed from direct-head training. The frozen v39 OC-MERO backbone remains the Safe policy and is checked independently.
-  3. The default neural value branch is observation-only (`direct_recovery_value_regime_conditioning=false`). Optional bucket embedding code is retained only for an explicitly labelled leakage/upper-bound ablation and is not used by the main method.
-  4. Add a candidate opportunity head estimating whether a recovery candidate has positive PCD advantage over nominal. Deployment first applies opportunity abstention, then selects deterministic top-1 score advantage, then applies a held-out score-risk threshold.
-  5. Default direct macros are `merge` and `stabilize`; brake/yield remain under the established certificate paths until the learned head demonstrates reliable macro-specific evidence.
-  6. Risk-controlled direct admission now guarantees that a verified challenge outranks nominal; v43 could admit a negative-score-threshold candidate yet give it zero score bonus, producing another zero-use path.
-  7. Closed-loop policy regime can be inferred online from observable current clearance/TTC/contact thresholds (`selection.auto_regime_from_observation=true`) rather than from the targeted evaluation bucket. Per-decision `active_regime_counts` are saved for audit.
-  8. Closed-loop development is reduced to `2 -> 4 -> 8` rollouts: selected-only execution proof, paired mechanism gate, then confirmation plus compact Safe. Teacher labels and candidate counts are minimized at early gates.
-- **Falsification rules:**
-  - No finite opportunity+score rule in both Near and Contact: stop before offline evaluation.
-  - Offline direct reason is zero, Safe intervention is non-zero, or NUP fails: stop before Waymax.
-  - Two-rollout probe has no direct execution, a deviation below `0.002`, or unacceptable NUP/intervention: stop.
-  - Four-rollout paired test degrades PCD/regret by more than `0.01`: stop.
-  - Eight-rollout confirmation must improve paired PCD or paper regret by at least `0.005` in both stress regimes before ablations or paper-scale seeds.
-- **Implementation validation:** `81 passed, 2 warnings`; all Python modules compile and all new shell scripts pass `bash -n`. Warnings are the existing PyTorch nested-tensor notice.
-
-### Updated development targets after observing the candidate-set teacher frontier
-
-The older `+0.02/+0.03 PCD` targets exceed the empirical selector-only headroom of the current candidate set and are retained only as longer-term goals after candidate-generation improvements.
-
-| Regime | Immediate development target | Publication-scale target on current candidate set |
-|---|---|---|
-| Safe | intervention `0`; NUP `>=0.999`; no physical regression | 3 seeds; intervention `<=0.5%`; statistically non-inferior to nominal/log replay and competitive with complete learned planners |
-| Near-contact | direct path non-zero; no no-op; paired PCD/regret gain `>=0.005` | FRA relative reduction about `>=15%` or PCD `+0.007~0.010`, hundreds of paired audited decisions |
-| Contact | direct path non-zero; NUP `>=0.985`; paired gain `>=0.005` | secondary-failure/FRA relative reduction about `>=20%` or PCD `+0.009~0.012`, plus stable-stop/yaw/rejoin evidence |
-
-### Statistical validity note for v44
-
-The main neural head is observation-only, but threshold verification data must still be independent of training and checkpoint selection for a paper claim. Development scripts use `val_near_contact` and `val_contact`; publication runs must set dedicated `RAVA_CAL_NEAR_DATA` and `RAVA_CAL_CONTACT_DATA` roots that were not used for training, early stopping, or architecture selection.
-
-## v44 observed result and decision (2026-07-21, completed; failed before offline)
-
-- **Pipeline outcome:** both `rava_balanced` and `rava_precision` failed the opportunity+score calibration gate; offline evaluation and Waymax were correctly skipped.
-- **Training:** both variants selected epoch 3. Balanced validation direct loss was `5.3875`; precision was `9.5148`. The lower balanced loss did not translate into a deployable selective rule.
-- **Calibration evidence:**
-  - Balanced Near/Contact pair MAE: `0.3124 / 0.3078`.
-  - Precision Near/Contact pair MAE: `0.3291 / 0.3289`.
-  - Near had `246` eligible scene-time groups and `30` positive-opportunity groups across fit+verify; Contact had `357` groups and `43` opportunities.
-  - In all four calibrations, `num_top1_after_opportunity_gate=0`, fitted thresholds were infinite, and held-out selections were zero.
-- **Calibration implementation defect:** v44 imposed a fixed minimum opportunity probability of `0.05`. Every learned candidate opportunity was below this floor, so all candidates were removed before the score-risk rule was fitted. A fixed probability floor is rejected; future calibration must search the observed score support and report distributions even when no rule is valid.
-- **Model/target defect:** v44 predicted an absolute per-candidate opportunity logit but supervised the relative event `PCD(candidate)-PCD(nominal) >= positive_gain`. The nominal quality changes by group, so an absolute candidate probability is not the deployment quantity. Future opportunity supervision and inference must use candidate-minus-nominal logit differences.
-- **Remaining task conflict:** fixing `(bucket, scene, time)` grouping prevented within-group cross-regime comparisons, but one unconditional Near/Contact head still received different pressure-future targets for observationally similar scene-prefixes. A single head is rejected until an observation-derived task representation or lightweight regime experts are tested.
-- **Sampling decision:** do not restore proxy `r_dep` positive-group oversampling. It is misaligned with the PCD target. Use exhaustive non-replacement group epochs and target-aligned positive/negative loss weights.
-- **Do not repeat:** fixed `0.05` opportunity floors, absolute opportunity logits for relative events, threshold-only relaxation after zero pre-gate coverage, or `r_dep`-proxy oversampling.
-
-## Dataset diagnostic contract discovered with v44 results
-
-- **Train/validation semantic separation is mostly usable for development:**
-  - `train_near_contact` post-contact fraction `1.88%`; `val_near_contact` `1.70%`.
-  - `train_contact` and `val_contact` are `100%` post-contact.
-- **Current test roots are not valid for the paper three-regime comparison:**
-  - `test_near_contact` contains `1270/2058 = 61.71%` post-contact samples, so it is primarily a Contact set despite its name.
-  - Near `|test-val r_dep mean shift| = 1.474` and hard-violation mean shift `0.409`.
-  - Contact `|test-val r_dep mean shift| = 1.582` and hard-violation mean shift `0.371`.
-  - Safe validation/test diagnostics contain only `22/28` scenes, below a paper-scale target.
-- **Decision:** development calibration/training may use current train/val roots, but paper claims and final baseline comparisons are blocked until clean disjoint Safe/Near/Contact test roots are rebuilt. `tools/check_regime_dataset_contract.py` enforces this contract.
-
-### v45 — OC-RAVE (current)
-
-- **Name:** Observation-Consistent Regime-Expert Value Abstention.
-- **Root-level changes:**
-  1. Keep one frozen shared OC-MERO scene encoder, but replace the contradictory unconditional value branch with two lightweight task experts: Near-contact and Contact. Safe never invokes the direct branch.
-  2. Train and deploy opportunity as a **relative-to-nominal logit difference**. The candidate opportunity probability is `sigmoid(logit(candidate)-logit(nominal))`, matching the deployment event.
-  3. Remove the fixed `0.05` probability floor. Calibration searches the empirical opportunity support from `0.0` upward and writes diagnostic top-1 rows even when no deployment rule passes.
-  4. Broaden the learned candidate audit to `brake,yield,merge,pull_over,stabilize` so calibration can identify which macros contain real PCD opportunities instead of hard-coding the v43 merge bias.
-  5. Use exhaustive group epochs (`group_batching_replacement=false`) and PCD-target loss weighting. Proxy `r_dep` oversampling is disabled.
-  6. Preserve physical actionability, held-out risk verification, Safe lock, and the `2 -> 4 -> 8` closed-loop cost ladder.
-  7. Add a dataset contract preflight. Because uploaded test diagnostics fail, Stage 2 uses validation roots only for development zero-use screening and explicitly forbids treating that result as held-out paper evidence.
-- **Regime routing:** training selects the Near/Contact expert by the clean dataset task. Closed-loop selects it from current observable clearance/TTC/contact using `auto_regime_from_observation`; no teacher outcome is supplied to the neural input. This is a hard task router, not three full models and not an oracle regime embedding.
-- **Smooth switching decision:** soft routing / continuous risk-token attention is postponed until both experts show positive held-out score-teacher correlation and nonzero verified use. Adding a soft mixture before basic expert learnability is established would confound target failure with routing failure. A later version should compare hard routing, hysteresis, and soft risk-token mixing on boundary scenes.
-- **Falsification rules:**
-  - If either expert has non-positive or unstable held-out score-teacher relation and no finite opportunity+score rule, stop before offline/Waymax.
-  - If calibration succeeds but offline direct reasons remain zero, stop before Waymax.
-  - If the 2-rollout execution probe has no real direct action or violates actionability/NUP, do not expand.
-  - Do not use contaminated `test_near_contact` for final claims, regardless of model result.
-- **Implementation validation:** `87 passed, 2 warnings`; all Python modules compile and v45 shell scripts pass syntax checks. Warnings are existing PyTorch nested-tensor notices.
+See `ALGORITHM_CHANGELOG_V48.md`. Key items already tried: tri-state supervision, nominal setwise abstention, harm head, conservative two-expert aggregation, encoder fine-tuning, exact teacher-PCD alignment, joint calibration, and disabling handwritten rescue rules in the main v48 policy.
+- Added `tools/inspect_calibration_build_v48.py` to classify the first incomplete stage from shard manifests and explain whether contact logs are expected.
+- Added an explicit `SEED` override to the v48.2 training command so multi-seed publication experiments are reproducible rather than relying on an implicit config default.
+- Added normalized L2-SP encoder anchoring during direct-only fine-tuning (`training.encoder_anchor_weight`, default 0.02). This limits drift of the shared representation away from the loaded OC-MERO/root-margin model while still allowing policy-level adaptation; without it, zero-weight root/margin losses and an unfrozen encoder could silently invalidate the pretrained core heads.
+- Added an output-root `flock` guard to the dedicated calibration controller. The two commands in the supplied request are identical; launching both concurrently against the same shard/log paths can corrupt or race the build, so v48.2 rejects a second controller.

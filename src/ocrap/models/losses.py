@@ -1284,6 +1284,10 @@ def direct_uncertainty_recovery_value_loss(
     setwise_admission_weight: float = 0.0,
     opportunity_admission_weight: float = 0.35,
     harm_admission_weight: float = 0.75,
+    selective_risk_weight: float = 0.0,
+    selective_harm_budget: float = 0.05,
+    selective_coverage_weight: float = 0.0,
+    selective_coverage_target: float = 0.65,
 ) -> torch.Tensor:
     """Learn a tri-state, nominal-relative, policy-level recovery certificate.
 
@@ -1414,6 +1418,26 @@ def direct_uncertainty_recovery_value_loss(
                 target_class = 0
             target_tensor = torch.tensor([target_class], dtype=torch.long, device=class_logits.device)
             terms.append(float(setwise_admission_weight) * F.cross_entropy(class_logits, target_tensor))
+
+            # v48.2 OC-TRAC-SRC: optimize the same selective risk/coverage
+            # trade-off that calibration enforces.  Cross entropy identifies a
+            # best class, but it does not explicitly bound probability mass on
+            # harmful alternatives when positive and harmful candidates coexist.
+            # The differentiable policy distribution includes nominal as the
+            # abstention action, so the risk term cannot be satisfied by merely
+            # swapping one recovery macro for another unsafe one.  A positive-
+            # group coverage floor prevents the degenerate always-nominal policy.
+            if float(selective_risk_weight) > 0.0 or float(selective_coverage_weight) > 0.0:
+                policy_prob = torch.softmax(class_logits.squeeze(0), dim=0)
+                recovery_prob = policy_prob[1:]
+                harmful_mass = (recovery_prob * harmful_mask.to(recovery_prob.dtype)).sum()
+                risk_excess = F.relu(harmful_mass - float(selective_harm_budget))
+                if float(selective_risk_weight) > 0.0:
+                    terms.append(float(selective_risk_weight) * risk_excess.square())
+                if float(selective_coverage_weight) > 0.0 and bool(pos_mask.any()):
+                    positive_mass = (recovery_prob * pos_mask.to(recovery_prob.dtype)).sum()
+                    coverage_shortfall = F.relu(float(selective_coverage_target) - positive_mass)
+                    terms.append(float(selective_coverage_weight) * coverage_shortfall.square())
         if float(pairwise_weight) > 0.0:
             pair_terms = []
             if bool(pos_mask.any()):

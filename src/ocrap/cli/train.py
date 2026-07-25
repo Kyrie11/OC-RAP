@@ -4,6 +4,7 @@ from pathlib import Path
 from time import perf_counter
 from collections import Counter
 import json
+import os
 from contextlib import nullcontext
 
 import numpy as np
@@ -127,6 +128,28 @@ def _progress_iter(loader: DataLoader, *, enabled: bool, desc: str):
     except Exception:
         return loader
 
+
+
+
+def _parameter_anchor_loss(model: torch.nn.Module, attribute: str = "_encoder_anchor_tensors") -> torch.Tensor:
+    """L2-SP penalty to the loaded encoder, normalized by parameter count."""
+    anchors = getattr(model, attribute, None)
+    if not isinstance(anchors, dict) or not anchors:
+        ref = next(model.parameters())
+        return ref.sum() * 0.0
+    total = None
+    count = 0
+    for name, param in model.named_parameters():
+        target = anchors.get(name)
+        if target is None or not param.requires_grad:
+            continue
+        term = (param - target).pow(2).sum()
+        total = term if total is None else total + term
+        count += int(param.numel())
+    if total is None or count <= 0:
+        ref = next(model.parameters())
+        return ref.sum() * 0.0
+    return total / float(count)
 
 def _keep_fully_frozen_modules_in_eval(model: torch.nn.Module) -> None:
     """Keep fully frozen subtrees deterministic while trainable heads train."""
@@ -260,6 +283,10 @@ def _direct_value_loss_from_outputs(
         setwise_admission_weight=float(tcfg.get("direct_value_setwise_admission_weight", 0.0)),
         opportunity_admission_weight=float(tcfg.get("direct_value_opportunity_admission_weight", 0.35)),
         harm_admission_weight=float(tcfg.get("direct_value_harm_admission_weight", 0.75)),
+        selective_risk_weight=float(tcfg.get("direct_value_selective_risk_weight", 0.0)),
+        selective_harm_budget=float(tcfg.get("direct_value_selective_harm_budget", 0.05)),
+        selective_coverage_weight=float(tcfg.get("direct_value_selective_coverage_weight", 0.0)),
+        selective_coverage_target=float(tcfg.get("direct_value_selective_coverage_target", 0.65)),
     )
 
     def compute(
@@ -372,7 +399,11 @@ def _epoch(
                 out, batch, tcfg, model_cfg, teacher_q,
                 option_gamma=option_gamma, option_temperature=option_temperature,
             )
-            total = float(lw.get("direct_recovery_value", 1.0)) * loss_direct_value
+            loss_encoder_anchor = _parameter_anchor_loss(model)
+            total = (
+                float(lw.get("direct_recovery_value", 1.0)) * loss_direct_value
+                + float(tcfg.get("encoder_anchor_weight", 0.0)) * loss_encoder_anchor
+            )
             if training:
                 optimizer.zero_grad(set_to_none=True)
                 total.backward()
@@ -385,6 +416,7 @@ def _epoch(
             vals = {
                 "loss": float(total.item()),
                 "loss_direct_recovery_value": float(loss_direct_value.item()),
+                "loss_encoder_anchor": float(loss_encoder_anchor.item()),
                 "direct_score_mean": float(out["direct_recovery_value_logit"].float().mean().item()),
                 "direct_opportunity_mean": float(torch.sigmoid(out["direct_recovery_opportunity_logit"]).float().mean().item()) if "direct_recovery_opportunity_logit" in out else 0.0,
                 "direct_harm_mean": float(torch.sigmoid(out["direct_recovery_harm_logit"]).float().mean().item()) if "direct_recovery_harm_logit" in out else 0.0,
@@ -1013,10 +1045,27 @@ def _make_group_batch_sampler(ds: OCRAPSampleDataset, cfg: dict, batch_size: int
     # deployable value improves over the group's nominal candidate. v42 boosted
     # high absolute r_dep, which included many groups where nominal was equally
     # good or better and therefore diluted the rare positive-advantage signal.
-    positive_macro_ids = set(_parse_int_tuple(tcfg.get("group_batch_positive_macro_ids", ""), ()))
-    positive_bucket_ids = set(_parse_int_tuple(tcfg.get("group_batch_positive_bucket_ids", ""), ()))
-    positive_gain_min = float(tcfg.get("group_batch_positive_r_dep_gain", 0.025))
+    # v48.2: the public training script has always used the explicit
+    # ``positive_advantage_*`` names.  Accept the older v43 aliases as a
+    # backwards-compatible fallback, but make the canonical names win.  The
+    # previous mismatch silently disabled exact teacher-PCD positive-group
+    # oversampling even when the command line requested it.
+    positive_macro_ids = set(_parse_int_tuple(
+        tcfg.get("group_batch_positive_advantage_macro_ids", tcfg.get("group_batch_positive_macro_ids", "")), ()
+    ))
+    positive_bucket_ids = set(_parse_int_tuple(
+        tcfg.get("group_batch_positive_advantage_bucket_ids", tcfg.get("group_batch_positive_bucket_ids", "")), ()
+    ))
+    positive_gain_min = float(tcfg.get(
+        "group_batch_positive_advantage_gain_min", tcfg.get("group_batch_positive_r_dep_gain", 0.025)
+    ))
     positive_boost = float(tcfg.get("group_batch_positive_advantage_boost", 0.0))
+    require_positive_groups = bool(tcfg.get("group_batch_require_positive_advantage_groups", False))
+    if positive_boost > 0.0 and not positive_macro_ids:
+        raise ValueError(
+            "positive group boost is enabled but no recovery macro ids were configured; "
+            "set training.group_batch_positive_advantage_macro_ids"
+        )
 
     group_weights = []
     hard_groups = 0
@@ -1047,10 +1096,10 @@ def _make_group_batch_sampler(ds: OCRAPSampleDataset, cfg: dict, batch_size: int
             for i in g:
                 p = ds.paths[i]
                 try:
-                    bid = bucket_id_for_path(p)
+                    idx_row = group_index.get(os.path.abspath(os.fspath(p)))
+                    bid = int(idx_row.get("bucket", bucket_id_for_path(p))) if idx_row is not None else bucket_id_for_path(p)
                     if positive_bucket_ids and bid not in positive_bucket_ids:
                         continue
-                    idx_row = group_index.get(os.path.abspath(os.fspath(p)))
                     if idx_row is not None:
                         is_nominal = bool(idx_row.get("nominal", False))
                         target_value = float(idx_row.get("teacher_pcd", -99.0))
@@ -1075,6 +1124,11 @@ def _make_group_batch_sampler(ds: OCRAPSampleDataset, cfg: dict, batch_size: int
             scene_count = max(1, int(scene_group_counts[(group_key[0], group_key[1])]))
             gw *= float((mean_groups_per_scene / scene_count) ** scene_balance_power)
         group_weights.append(gw)
+    if require_positive_groups and positive_boost > 0.0 and positive_advantage_groups == 0:
+        raise RuntimeError(
+            "exact teacher-PCD sampler found zero positive-advantage groups; "
+            "check GROUP_INDEX path matching and positive-advantage configuration"
+        )
     print({
         "event": "group_batch_sampler_stats",
         "num_groups": int(len(groups)),
@@ -1279,6 +1333,22 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "shape_mismatch_keys": shape_mismatch,
         }
         print(init_load_info, flush=True)
+
+    encoder_anchor_weight = float(tcfg.get("encoder_anchor_weight", 0.0))
+    if encoder_anchor_weight > 0.0:
+        if not init_checkpoint:
+            raise ValueError("training.encoder_anchor_weight requires training.init_checkpoint")
+        model._encoder_anchor_tensors = {
+            name: param.detach().clone()
+            for name, param in model.named_parameters()
+            if name.startswith("encoder.")
+        }
+        print({
+            "event": "encoder_anchor_enabled",
+            "weight": encoder_anchor_weight,
+            "num_tensors": len(model._encoder_anchor_tensors),
+            "num_params": int(sum(x.numel() for x in model._encoder_anchor_tensors.values())),
+        }, flush=True)
 
     freeze_prefixes = tuple(
         x.strip() for x in str(tcfg.get("freeze_param_prefixes", "") or "").split(",") if x.strip()

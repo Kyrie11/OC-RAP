@@ -28,12 +28,40 @@ MIN_CAL_NEAR_SCENES="${MIN_CAL_NEAR_SCENES:-120}"
 MIN_CAL_CONTACT_SCENES="${MIN_CAL_CONTACT_SCENES:-120}"
 RUN_DIAGNOSTICS="${RUN_DIAGNOSTICS:-1}"
 REQUIRE_JAX_GPU="${REQUIRE_JAX_GPU:-1}"
+START_STAGE="${START_STAGE:-safe}"  # safe | near | contact | merge
+case "$START_STAGE" in safe|near|contact|merge) ;; *) echo "invalid START_STAGE=$START_STAGE" >&2; exit 2 ;; esac
+stage_rank(){ case "$1" in safe) echo 0;; near) echo 1;; contact) echo 2;; merge) echo 3;; esac; }
+SHOULD_START_RANK="$(stage_rank "$START_STAGE")"
+should_run(){ [[ "$(stage_rank "$1")" -ge "$SHOULD_START_RANK" ]]; }
 LOG_DIR="$OUTPUT_ROOT/logs"
 SHARD_DIR="$OUTPUT_ROOT/shards"
 mkdir -p "$LOG_DIR" "$SHARD_DIR"
+STATUS_FILE="$OUTPUT_ROOT/calibration_build_status.json"
+CURRENT_STAGE="preflight"
+write_status(){
+  local state="$1" stage="${2:-$CURRENT_STAGE}" detail="${3:-}"
+  "$PYTHON_BIN" - "$STATUS_FILE" "$state" "$stage" "$detail" <<'PY_STATUS'
+import json, os, sys, tempfile
+from datetime import datetime, timezone
+path, state, stage, detail = sys.argv[1:]
+payload = {"state": state, "stage": stage, "detail": detail,
+           "updated_at_utc": datetime.now(timezone.utc).isoformat()}
+os.makedirs(os.path.dirname(path), exist_ok=True)
+fd, tmp = tempfile.mkstemp(prefix='.calibration-status-', dir=os.path.dirname(path), text=True)
+with os.fdopen(fd, 'w', encoding='utf-8') as f:
+    json.dump(payload, f, ensure_ascii=False, indent=2); f.write('\n')
+os.replace(tmp, path)
+PY_STATUS
+}
+trap 'rc=$?; write_status failed "$CURRENT_STAGE" "line=$LINENO exit=$rc"; exit $rc' ERR
+write_status running "$CURRENT_STAGE" "controller started"
 
 run_ocrap(){ "$PYTHON_BIN" -m ocrap.cli "$@"; }
-die(){ echo "ERROR: $*" >&2; exit 1; }
+die(){ write_status failed "$CURRENT_STAGE" "$*"; echo "ERROR: $*" >&2; exit 1; }
+if command -v flock >/dev/null 2>&1; then
+  exec 9>"$OUTPUT_ROOT/.calibration_build.lock"
+  flock -n 9 || die "another calibration controller already holds $OUTPUT_ROOT/.calibration_build.lock"
+fi
 resume_args=(); [[ "$RESUME" == 1 ]] && resume_args+=(--resume)
 
 [[ -d "$WOMD_ROOT/validation" ]] || die "missing standard validation directory: $WOMD_ROOT/validation"
@@ -153,16 +181,29 @@ build_contact(){ local worker="$1" out="$2" gpu="$3";
 wait_pair(){ local p0="$1" p1="$2" n0="$3" n1="$4" s0=0 s1=0; set +e; wait "$p0"; s0=$?; wait "$p1"; s1=$?; set -e;
   [[ "$s0" == 0 && "$s1" == 0 ]] || die "calibration workers failed: $n0=$s0 $n1=$s1"; }
 
-build_safe 0 "$SHARD_DIR/calibration_safe_w0" "$GPU0" >"$LOG_DIR/calibration_safe_w0.log" 2>&1 & P0=$!
-build_safe 1 "$SHARD_DIR/calibration_safe_w1" "$GPU1" >"$LOG_DIR/calibration_safe_w1.log" 2>&1 & P1=$!
-wait_pair "$P0" "$P1" safe_w0 safe_w1
-build_near 2 "$SHARD_DIR/calibration_near_w2" "$GPU0" >"$LOG_DIR/calibration_near_w2.log" 2>&1 & P0=$!
-build_near 3 "$SHARD_DIR/calibration_near_w3" "$GPU1" >"$LOG_DIR/calibration_near_w3.log" 2>&1 & P1=$!
-wait_pair "$P0" "$P1" near_w2 near_w3
-build_contact 4 "$SHARD_DIR/calibration_contact_w4" "$GPU0" >"$LOG_DIR/calibration_contact_w4.log" 2>&1 & P0=$!
-build_contact 5 "$SHARD_DIR/calibration_contact_w5" "$GPU1" >"$LOG_DIR/calibration_contact_w5.log" 2>&1 & P1=$!
-wait_pair "$P0" "$P1" contact_w4 contact_w5
+if should_run safe; then
+  CURRENT_STAGE="build_safe"; write_status running "$CURRENT_STAGE" "workers 0,1"
+  build_safe 0 "$SHARD_DIR/calibration_safe_w0" "$GPU0" >"$LOG_DIR/calibration_safe_w0.log" 2>&1 & P0=$!
+  build_safe 1 "$SHARD_DIR/calibration_safe_w1" "$GPU1" >"$LOG_DIR/calibration_safe_w1.log" 2>&1 & P1=$!
+  wait_pair "$P0" "$P1" safe_w0 safe_w1
+fi
+if should_run near; then
+  CURRENT_STAGE="build_near_contact"; write_status running "$CURRENT_STAGE" "workers 2,3; contact logs are not expected yet"
+  build_near 2 "$SHARD_DIR/calibration_near_w2" "$GPU0" >"$LOG_DIR/calibration_near_w2.log" 2>&1 & P0=$!
+  build_near 3 "$SHARD_DIR/calibration_near_w3" "$GPU1" >"$LOG_DIR/calibration_near_w3.log" 2>&1 & P1=$!
+  wait_pair "$P0" "$P1" near_w2 near_w3
+fi
+if should_run contact; then
+  CURRENT_STAGE="build_contact"; write_status running "$CURRENT_STAGE" "workers 4,5"
+  build_contact 4 "$SHARD_DIR/calibration_contact_w4" "$GPU0" >"$LOG_DIR/calibration_contact_w4.log" 2>&1 & P0=$!
+  build_contact 5 "$SHARD_DIR/calibration_contact_w5" "$GPU1" >"$LOG_DIR/calibration_contact_w5.log" 2>&1 & P1=$!
+  wait_pair "$P0" "$P1" contact_w4 contact_w5
+fi
 
+CURRENT_STAGE="merge_filter_audit"; write_status running "$CURRENT_STAGE" "merging and enforcing scene disjointness"
+for required in calibration_safe_w0 calibration_safe_w1 calibration_near_w2 calibration_near_w3 calibration_contact_w4 calibration_contact_w5; do
+  [[ -f "$SHARD_DIR/$required/manifest.csv" ]] || die "missing completed shard manifest: $SHARD_DIR/$required/manifest.csv"
+done
 for d in raw_calibration_safe raw_calibration_near_contact raw_calibration_contact calibration_safe calibration_near_contact calibration_contact; do
   rm -rf "$OUTPUT_ROOT/$d"
 done
@@ -220,4 +261,6 @@ for name, minimum in mins.items():
 print({'event':'dedicated_calibration_complete','counts':counts})
 PY
 
+CURRENT_STAGE="complete"; write_status complete "$CURRENT_STAGE" "dedicated calibration roots complete"
+trap - ERR
 echo "dedicated calibration roots complete: $OUTPUT_ROOT"
