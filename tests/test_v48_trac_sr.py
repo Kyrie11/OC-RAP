@@ -236,3 +236,64 @@ def test_regret_consistent_distillation_prefers_teacher_best_candidate() -> None
     correct = torch.tensor([0.0, 2.0, 0.5])
     wrong = torch.tensor([0.0, 0.5, 2.0])
     assert loss(correct).item() + 0.1 < loss(wrong).item()
+
+
+def test_zi_nasc_is_exact_pointwise_identity_at_initialization() -> None:
+    torch.manual_seed(11)
+    model = OCRAPModel(
+        input_dim=12, num_roots=2, num_options=3, d_model=8, d_obs=4,
+        encoder_type="mlp", num_layers=1, num_heads=2, dropout=0.0,
+        direct_recovery_value_head=True, direct_recovery_value_pooling="scene",
+        direct_recovery_value_output="score", direct_recovery_set_context=True,
+        direct_recovery_set_context_hidden=16, direct_recovery_set_context_dropout=0.0,
+    ).eval()
+    x = torch.randn(3, 12)
+    group = torch.zeros((3, 1), dtype=torch.long)
+    nominal = torch.tensor([1.0, 0.0, 0.0])
+    with torch.no_grad():
+        pointwise = model(x, direct_only=True)["direct_recovery_value_logit"]
+        setwise = model(x, group_index=group, is_nominal=nominal, direct_only=True)["direct_recovery_value_logit"]
+    assert torch.allclose(pointwise, setwise, atol=1.0e-7)
+
+
+def test_decoupled_ranking_distillation_is_not_corrupted_by_harm_logits() -> None:
+    from ocrap.models.losses import direct_uncertainty_recovery_value_loss
+
+    def loss(harm: torch.Tensor) -> torch.Tensor:
+        return direct_uncertainty_recovery_value_loss(
+            pred_logit=torch.tensor([0.0, 1.5, 0.5]),
+            pred_logvar=torch.zeros(3),
+            teacher_r_dep=torch.tensor([0.0, 2.0, 1.0]),
+            teacher_r_orc=torch.tensor([0.0, 2.0, 1.0]),
+            teacher_q=torch.ones((3, 1, 1)), root_probs=torch.ones((3, 1)),
+            root_valid=torch.ones((3, 1), dtype=torch.bool),
+            option_valid=torch.ones((3, 1), dtype=torch.bool),
+            scene_hash=torch.tensor([23, 23, 23]), time_index=torch.tensor([4, 4, 4]),
+            macro_type_id=torch.tensor([0, 5, 5]), is_nominal=torch.tensor([1.0, 0.0, 0.0]),
+            bucket_id=torch.tensor([1, 1, 1]), macro_ids=(5,), bucket_ids=(1,),
+            output_mode="score", positive_gain=0.1, negative_gain=0.1,
+            point_weight=0.0, centered_weight=0.0, listwise_weight=0.0,
+            advantage_weight=0.0, pairwise_weight=0.0, top_rank_weight=0.0,
+            opportunity_weight=0.0, harm_weight=0.0, pred_harm_logit=harm,
+            setwise_admission_weight=0.0, selective_risk_weight=0.0,
+            selective_coverage_weight=0.0, policy_distill_weight=1.0,
+            policy_regret_weight=1.0, policy_decouple_admission=True,
+            policy_admission_distill_weight=0.0,
+        )
+
+    assert torch.allclose(loss(torch.tensor([0.0, -8.0, 8.0])), loss(torch.tensor([0.0, 8.0, -8.0])), atol=1.0e-7)
+
+
+def test_validation_policy_stats_exposes_worst_regime_regret() -> None:
+    from ocrap.cli.train import _finalize_direct_policy_stats
+    result = _finalize_direct_policy_stats({
+        "regret_sum_all": 0.5, "group_count_all": 4,
+        "top1_hit_all": 2, "harmful_switch_all": 1,
+        "regret_sum_near": 0.1, "group_count_near": 2,
+        "top1_hit_near": 1, "harmful_switch_near": 0,
+        "regret_sum_contact": 0.4, "group_count_contact": 2,
+        "top1_hit_contact": 1, "harmful_switch_contact": 1,
+    })
+    assert result["direct_group_regret_mean_near"] == 0.05
+    assert result["direct_group_regret_mean_contact"] == 0.2
+    assert result["direct_group_regret_mean_worst"] == 0.2

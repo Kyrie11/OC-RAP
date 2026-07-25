@@ -61,7 +61,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.cudnn_benchmark=true --set training.pin_memory=true \
   --set training.num_workers="${NUM_WORKERS:-6}" --set training.persistent_workers=true \
   --set training.prefetch_factor="${PREFETCH_FACTOR:-2}" --set training.progress=true \
-  --set training.save_every_epoch=false --set training.best_metric=loss_direct_recovery_value_worst \
+  --set training.save_every_epoch=false --set training.best_metric=direct_group_regret_mean_worst \
   --set training.best_metric_mode=min \
   --set training.group_batching=true --set training.group_batching_replacement=true \
   --set training.group_batch_positive_advantage_boost="${POSITIVE_GROUP_BOOST:-5.0}" \
@@ -87,7 +87,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set model.direct_recovery_harm_head=true \
   --set model.direct_recovery_set_context="${SET_CONTEXT_ENABLED:-true}" \
   --set model.direct_recovery_set_context_hidden="${SET_CONTEXT_HIDDEN:-192}" \
-  --set model.direct_recovery_set_context_dropout="${SET_CONTEXT_DROPOUT:-0.10}" \
+  --set model.direct_recovery_set_context_dropout="${SET_CONTEXT_DROPOUT:-0.05}" \
   --set loss_weights.dep=0 --set loss_weights.orc=0 --set loss_weights.assign=0 \
   --set loss_weights.sig=0 --set loss_weights.margin=0 --set loss_weights.obs=0 \
   --set loss_weights.anti_oracle=0 --set loss_weights.artifact_gap=0 \
@@ -134,7 +134,14 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.direct_value_policy_teacher_temperature="${POLICY_TEACHER_TEMPERATURE:-0.06}" \
   --set training.direct_value_policy_regret_weight="${POLICY_REGRET_WEIGHT:-1.0}" \
   --set training.direct_value_policy_regret_margin="${POLICY_REGRET_MARGIN:-0.005}" \
-  --set training.direct_value_expert_specialization_weight=0.40 \
+  --set training.direct_value_policy_decouple_admission="${POLICY_DECOUPLE_ADMISSION:-true}" \
+  --set training.direct_value_policy_admission_distill_weight="${POLICY_ADMISSION_DISTILL_WEIGHT:-0.15}" \
+  --set training.direct_value_opportunity_soft_label_temperature="${OPPORTUNITY_SOFT_LABEL_TEMPERATURE:-0.02}" \
+  --set training.direct_value_harm_soft_label_temperature="${HARM_SOFT_LABEL_TEMPERATURE:-0.02}" \
+  --set training.direct_value_group_dro_weight="${GROUP_DRO_WEIGHT:-0.35}" \
+  --set training.direct_value_group_dro_temperature="${GROUP_DRO_TEMPERATURE:-0.35}" \
+  --set training.direct_value_group_dro_severity_thresholds="${GROUP_DRO_SEVERITY_THRESHOLDS:-0.25,0.55}" \
+  --set training.direct_value_expert_specialization_weight="${EXPERT_SPECIALIZATION_WEIGHT:-0.30}" \
   2>&1 | tee "$LOG_DIR/train_v48_trac_sr.log"
 
 # Standard OC-MERO calibration is retained for the base feasibility certificate.

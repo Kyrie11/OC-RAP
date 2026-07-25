@@ -233,8 +233,19 @@ class OCRAPModel(nn.Module):
         # Start conservatively so v47/v48 pointwise knowledge remains the initial
         # solution and the set residual is learned only when it improves ranking.
         self.direct_set_context_gate = (
-            nn.Parameter(torch.tensor(-1.5)) if self.direct_set_context_adapter is not None else None
+            nn.Parameter(torch.tensor(-2.5)) if self.direct_set_context_adapter is not None else None
         )
+        # v48.4 ZI-NASC: a warm-started checkpoint must initially reproduce the
+        # inherited pointwise policy exactly.  A merely small sigmoid gate still
+        # injects a random LayerNorm residual and can destroy candidate AUC before
+        # the set adapter learns anything.  Zero-initialize the residual projection;
+        # gradients still flow into it on the first update and into earlier adapter
+        # layers thereafter.
+        if self.direct_set_context_adapter is not None:
+            residual_projection = self.direct_set_context_adapter[4]
+            if isinstance(residual_projection, nn.Linear):
+                nn.init.zeros_(residual_projection.weight)
+                nn.init.zeros_(residual_projection.bias)
         if self.direct_regime_embedding is not None:
             direct_in_dim += self.direct_recovery_value_regime_dim
         direct_out_dim = 2 + int(self.direct_recovery_opportunity_head) + int(self.direct_recovery_harm_head)

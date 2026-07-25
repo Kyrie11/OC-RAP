@@ -1292,6 +1292,13 @@ def direct_uncertainty_recovery_value_loss(
     policy_teacher_temperature: float = 0.08,
     policy_regret_weight: float = 0.0,
     policy_regret_margin: float = 0.0,
+    opportunity_soft_label_temperature: float = 0.0,
+    harm_soft_label_temperature: float = 0.0,
+    policy_decouple_admission: bool = True,
+    policy_admission_distill_weight: float = 0.0,
+    group_dro_weight: float = 0.0,
+    group_dro_temperature: float = 0.35,
+    group_dro_severity_thresholds: tuple[float, ...] = (0.25, 0.55),
 ) -> torch.Tensor:
     """Learn a tri-state, nominal-relative, policy-level recovery certificate.
 
@@ -1359,6 +1366,7 @@ def direct_uncertainty_recovery_value_loss(
         harm_logits = pred_harm_logit.float().reshape(-1)[:n]
     group_losses: list[torch.Tensor] = []
     group_weights: list[float] = []
+    group_domains: list[tuple[int, int, int, int]] = []
     for key in torch.unique(keys[finite], dim=0):
         idx = torch.where(finite & (bid == key[0]) & (sh == key[1]) & (ti == key[2]))[0]
         noms = idx[isn[idx]]
@@ -1394,85 +1402,91 @@ def direct_uncertainty_recovery_value_loss(
         if harm_logits is not None:
             harm_delta_logits = harm_logits[recs] - harm_logits[nom]
         if opp_delta_logits is not None and float(opportunity_weight) > 0.0:
-            labels = pos_mask.to(dtype=opp_delta_logits.dtype)
+            opp_temp = float(opportunity_soft_label_temperature)
+            labels = (
+                torch.sigmoid((t_delta - float(positive_gain)) / max(opp_temp, 1.0e-4))
+                if opp_temp > 0.0 else pos_mask.to(dtype=opp_delta_logits.dtype)
+            ).to(dtype=opp_delta_logits.dtype)
             # Opportunity is explicitly candidate-vs-nominal, matching the
             # deployed admission decision rather than an absolute candidate tag.
+            # Soft labels avoid treating tiny cross-split teacher perturbations at
+            # the gain margin as contradictory supervision.
             pos_w = torch.as_tensor(max(float(opportunity_pos_weight), 1.0), dtype=opp_delta_logits.dtype, device=opp_delta_logits.device)
             opp = F.binary_cross_entropy_with_logits(opp_delta_logits, labels, pos_weight=pos_w)
             terms.append(float(opportunity_weight) * opp)
         if harm_delta_logits is not None and float(harm_weight) > 0.0:
-            harm_labels = harmful_mask.to(dtype=harm_delta_logits.dtype)
+            harm_temp = float(harm_soft_label_temperature)
+            harm_labels = (
+                torch.sigmoid((-t_delta - float(negative_gain)) / max(harm_temp, 1.0e-4))
+                if harm_temp > 0.0 else harmful_mask.to(dtype=harm_delta_logits.dtype)
+            ).to(dtype=harm_delta_logits.dtype)
             harm_pos_w = torch.as_tensor(max(float(harm_pos_weight), 1.0), dtype=harm_delta_logits.dtype, device=harm_delta_logits.device)
             harm_loss = F.binary_cross_entropy_with_logits(harm_delta_logits, harm_labels, pos_weight=harm_pos_w)
             terms.append(float(harm_weight) * harm_loss)
+        # v48.4 DRA-RCD: separate candidate ranking from action admission.
+        # Candidate ordering must not be trained through a harm head whose labels
+        # are currently the least transferable part of the dataset.  The value-only
+        # distribution learns *which* recovery is best; opportunity/harm remain in
+        # the admission distribution that decides whether to leave nominal.
+        recovery_admission_logits = p_delta
+        if opp_delta_logits is not None:
+            recovery_admission_logits = recovery_admission_logits + float(opportunity_admission_weight) * F.logsigmoid(opp_delta_logits)
+        if harm_delta_logits is not None:
+            recovery_admission_logits = recovery_admission_logits + float(harm_admission_weight) * F.logsigmoid(-harm_delta_logits)
+        admission_class_logits = torch.cat([score[nom:nom + 1] * 0.0, recovery_admission_logits], dim=0) / tau
+        rank_class_logits = torch.cat([score[nom:nom + 1] * 0.0, p_delta], dim=0) / tau
+        if bool(pos_mask.any()):
+            target_class = 1 + int(torch.argmax(t_delta).item())
+        else:
+            target_class = 0
+        target_tensor = torch.tensor([target_class], dtype=torch.long, device=score.device)
         if float(setwise_admission_weight) > 0.0:
-            # Nominal is an explicit class.  When no recovery candidate clears
-            # the positive teacher margin, abstaining is the correct policy-level
-            # target.  This directly addresses pointwise learnability vs setwise
-            # deployability.
-            recovery_policy_logits = p_delta
-            if opp_delta_logits is not None:
-                recovery_policy_logits = recovery_policy_logits + float(opportunity_admission_weight) * F.logsigmoid(opp_delta_logits)
-            if harm_delta_logits is not None:
-                recovery_policy_logits = recovery_policy_logits + float(harm_admission_weight) * F.logsigmoid(-harm_delta_logits)
-            class_logits = torch.cat([score[nom:nom + 1] * 0.0, recovery_policy_logits], dim=0).unsqueeze(0) / tau
+            terms.append(float(setwise_admission_weight) * F.cross_entropy(admission_class_logits.unsqueeze(0), target_tensor))
+
+        if float(selective_risk_weight) > 0.0 or float(selective_coverage_weight) > 0.0:
+            policy_prob = torch.softmax(admission_class_logits, dim=0)
+            recovery_prob = policy_prob[1:]
+            harmful_mass = (recovery_prob * harmful_mask.to(recovery_prob.dtype)).sum()
+            risk_excess = F.relu(harmful_mass - float(selective_harm_budget))
+            if float(selective_risk_weight) > 0.0:
+                terms.append(float(selective_risk_weight) * risk_excess.square())
+            if float(selective_coverage_weight) > 0.0 and bool(pos_mask.any()):
+                positive_mass = (recovery_prob * pos_mask.to(recovery_prob.dtype)).sum()
+                coverage_shortfall = F.relu(float(selective_coverage_target) - positive_mass)
+                terms.append(float(selective_coverage_weight) * coverage_shortfall.square())
+
+        if float(policy_distill_weight) > 0.0 or float(policy_regret_weight) > 0.0 or float(policy_admission_distill_weight) > 0.0:
+            teacher_util = torch.cat([
+                torch.zeros((1,), dtype=t_delta.dtype, device=t_delta.device),
+                t_delta,
+            ], dim=0)
             if bool(pos_mask.any()):
-                target_class = 1 + int(torch.argmax(t_delta).item())
+                teacher_prob = torch.softmax(
+                    teacher_util / max(float(policy_teacher_temperature), 1.0e-3), dim=0
+                ).detach()
             else:
-                target_class = 0
-            target_tensor = torch.tensor([target_class], dtype=torch.long, device=class_logits.device)
-            terms.append(float(setwise_admission_weight) * F.cross_entropy(class_logits, target_tensor))
-
-            # v48.2 OC-TRAC-SRC: optimize the same selective risk/coverage
-            # trade-off that calibration enforces.  Cross entropy identifies a
-            # best class, but it does not explicitly bound probability mass on
-            # harmful alternatives when positive and harmful candidates coexist.
-            # The differentiable policy distribution includes nominal as the
-            # abstention action, so the risk term cannot be satisfied by merely
-            # swapping one recovery macro for another unsafe one.  A positive-
-            # group coverage floor prevents the degenerate always-nominal policy.
-            if float(selective_risk_weight) > 0.0 or float(selective_coverage_weight) > 0.0:
-                policy_prob = torch.softmax(class_logits.squeeze(0), dim=0)
-                recovery_prob = policy_prob[1:]
-                harmful_mass = (recovery_prob * harmful_mask.to(recovery_prob.dtype)).sum()
-                risk_excess = F.relu(harmful_mass - float(selective_harm_budget))
-                if float(selective_risk_weight) > 0.0:
-                    terms.append(float(selective_risk_weight) * risk_excess.square())
-                if float(selective_coverage_weight) > 0.0 and bool(pos_mask.any()):
-                    positive_mass = (recovery_prob * pos_mask.to(recovery_prob.dtype)).sum()
-                    coverage_shortfall = F.relu(float(selective_coverage_target) - positive_mass)
-                    terms.append(float(selective_coverage_weight) * coverage_shortfall.square())
-
-            # v48.3 OC-TRAC-NASC/RCD: distil the complete teacher utility
-            # distribution rather than only the argmax class, then minimize
-            # expected top-1 teacher regret under the deployed composite policy.
-            # This is robust to near-tied positive candidates and directly targets
-            # the failure observed in v48: good candidate AUC but wrong group top-1.
-            if float(policy_distill_weight) > 0.0 or float(policy_regret_weight) > 0.0:
-                policy_prob = torch.softmax(class_logits.squeeze(0), dim=0)
-                if bool(pos_mask.any()):
-                    teacher_util = torch.cat([
-                        torch.zeros((1,), dtype=t_delta.dtype, device=t_delta.device),
-                        t_delta,
-                    ], dim=0)
-                    teacher_prob = torch.softmax(
-                        teacher_util / max(float(policy_teacher_temperature), 1.0e-3), dim=0
-                    ).detach()
-                else:
-                    teacher_prob = torch.zeros_like(policy_prob)
-                    teacher_prob[0] = 1.0
-                if float(policy_distill_weight) > 0.0:
-                    terms.append(
-                        float(policy_distill_weight)
-                        * F.kl_div(torch.log(policy_prob.clamp_min(1.0e-8)), teacher_prob, reduction="sum")
-                    )
-                if float(policy_regret_weight) > 0.0:
-                    expected_teacher_adv = (policy_prob[1:] * t_delta).sum()
-                    oracle_teacher_adv = torch.maximum(
-                        torch.zeros((), dtype=t_delta.dtype, device=t_delta.device), t_delta.max()
-                    )
-                    regret = F.relu(oracle_teacher_adv - expected_teacher_adv - float(policy_regret_margin))
-                    terms.append(float(policy_regret_weight) * regret.square())
+                teacher_prob = torch.zeros_like(teacher_util)
+                teacher_prob[0] = 1.0
+            ranking_logits = rank_class_logits if bool(policy_decouple_admission) else admission_class_logits
+            ranking_prob = torch.softmax(ranking_logits, dim=0)
+            if float(policy_distill_weight) > 0.0:
+                terms.append(
+                    float(policy_distill_weight)
+                    * F.kl_div(torch.log(ranking_prob.clamp_min(1.0e-8)), teacher_prob, reduction="sum")
+                )
+            if float(policy_admission_distill_weight) > 0.0:
+                admission_prob = torch.softmax(admission_class_logits, dim=0)
+                terms.append(
+                    float(policy_admission_distill_weight)
+                    * F.kl_div(torch.log(admission_prob.clamp_min(1.0e-8)), teacher_prob, reduction="sum")
+                )
+            if float(policy_regret_weight) > 0.0:
+                expected_teacher_adv = (ranking_prob[1:] * t_delta).sum()
+                oracle_teacher_adv = torch.maximum(
+                    torch.zeros((), dtype=t_delta.dtype, device=t_delta.device), t_delta.max()
+                )
+                regret = F.relu(oracle_teacher_adv - expected_teacher_adv - float(policy_regret_margin))
+                terms.append(float(policy_regret_weight) * regret.square())
         if float(pairwise_weight) > 0.0:
             pair_terms = []
             if bool(pos_mask.any()):
@@ -1504,8 +1518,31 @@ def direct_uncertainty_recovery_value_loss(
         bucket_w = float(near_weight) if b == 1 else (float(contact_weight) if b == 2 else 1.0)
         group_losses.append(torch.stack(terms).sum())
         group_weights.append(max(1.0e-6, cls_w * bucket_w))
+        # Pseudo-environments use only training-observable grouping plus teacher
+        # state for supervision: regime, nominal severity, opportunity state, and
+        # teacher-best macro.  This prevents a single train-specific severity/macro
+        # pocket from dominating without peeking at calibration or test data.
+        severity_value = float(target[nom].detach().item())
+        severity_bin = sum(severity_value > float(x) for x in tuple(group_dro_severity_thresholds))
+        state_bin = 2 if bool(pos_mask.any()) else (0 if bool(harmful_mask.all()) else 1)
+        best_macro = int(mac[recs[best_j]].detach().item()) if recs.numel() else -1
+        group_domains.append((b, int(severity_bin), int(state_bin), best_macro))
     if not group_losses:
         return float(point_weight) * point_loss
-    gw = torch.as_tensor(group_weights, dtype=group_losses[0].dtype, device=group_losses[0].device)
-    grouped = (torch.stack(group_losses) * gw).sum() / gw.sum().clamp_min(1.0e-6)
+    gl = torch.stack(group_losses)
+    gw = torch.as_tensor(group_weights, dtype=gl.dtype, device=gl.device)
+    erm_grouped = (gl * gw).sum() / gw.sum().clamp_min(1.0e-6)
+    dro_mix = min(max(float(group_dro_weight), 0.0), 1.0)
+    grouped = erm_grouped
+    if dro_mix > 0.0 and group_domains:
+        domain_means: list[torch.Tensor] = []
+        for domain in sorted(set(group_domains)):
+            mask = torch.as_tensor([d == domain for d in group_domains], dtype=torch.bool, device=gl.device)
+            dw = gw[mask]
+            domain_means.append((gl[mask] * dw).sum() / dw.sum().clamp_min(1.0e-6))
+        if domain_means:
+            dm = torch.stack(domain_means)
+            dro_tau = max(float(group_dro_temperature), 1.0e-3)
+            robust_grouped = dro_tau * (torch.logsumexp(dm / dro_tau, dim=0) - torch.log(torch.as_tensor(float(dm.numel()), dtype=dm.dtype, device=dm.device)))
+            grouped = (1.0 - dro_mix) * erm_grouped + dro_mix * robust_grouped
     return float(point_weight) * point_loss + grouped

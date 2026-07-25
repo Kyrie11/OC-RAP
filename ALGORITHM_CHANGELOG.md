@@ -1,5 +1,75 @@
 # OC-RAP Algorithm Changelog
 
+## v48.4 — OC-TRAC-SRGR (2026-07-25)
+
+### Evidence motivating this iteration
+
+The uploaded v48.3 proxy-calibration run did **not** resolve the policy-level failure.
+Candidate-positive AUC remained informative (Near 0.7249–0.7268; Contact 0.7634–0.7906),
+but group top-1 correlation stayed negative (Near about -0.02; Contact -0.14 to -0.068),
+and every fit/verify policy selected zero recovery actions. Relative to v48.1, v48.3 improved
+only balanced-Near candidate AUC and slightly reduced the precision-Contact top-1 error; it
+regressed precision-Near top-1 and Contact candidate AUC. Natural-gate abstention remained
+correct, but no Near/Contact recovery benefit was demonstrated.
+
+Two implementation defects were found in the executed v48.3 path:
+
+- NASC used a non-zero random residual at warm start (`sigmoid(-1.5)≈0.18`), so loading the
+  v48.1 checkpoint did not initially reproduce the inherited selector.
+- `training.best_metric=loss_direct_recovery_value_worst` was never emitted by validation;
+  the trainer silently fell back to total loss, so checkpoint selection did not optimize
+  the intended worst-regime policy objective.
+
+### New algorithmic contribution: Shift-Robust Groupwise Recovery (SRGR)
+
+- **ZI-NASC:** zero-initialized nominal-anchored set context. The inherited pointwise policy
+  is now an exact initialization, while the set residual learns only evidence-supported
+  corrections. The gate is also made more conservative.
+- **DRA-RCD:** decoupled ranking-admission regret distillation. Value-only logits learn the
+  within-group teacher ordering and expected regret; opportunity/harm logits remain in a
+  separate admission distribution. A weak/non-transferable harm head can therefore block
+  unsafe execution without corrupting candidate ranking gradients.
+- **Soft opportunity/downside supervision:** continuous teacher advantage is converted to
+  soft labels around the positive/negative margins, reducing contradictory labels caused
+  by small train/dev contract shifts.
+- **Pseudo-environment GroupDRO:** group losses are robustly aggregated over
+  `(regime, nominal-severity bin, opportunity state, teacher-best macro)` environments.
+  This reduces domination by train-specific severity or macro pockets without using
+  calibration/test distributions for training.
+- **Policy-regret checkpointing:** validation now reports exact teacher-PCD group regret,
+  top-1 accuracy, positive recall and harmful-switch rate for Near and Contact. Early
+  stopping uses worst-regime mean regret and raises an error if the configured metric is
+  absent; silent fallback is removed.
+
+### Engineering and experiment protocol
+
+- The v48.1 precision checkpoint loads into v48.4 with no shape mismatch; training from
+  scratch or from v47 is not recommended for this iteration.
+- Added `scripts/run_v48_4_core_ablations.sh` with four explicit runs: SRC reference,
+  ZI-NASC only, DRA-RCD only, and full SRGR. Each run has its own output directory.
+- Added `scripts/recalibrate_v48_4_multiseed.sh`. `CALIBRATION_SEED` values 4801/4802/4803
+  produce separate proxy splits and separate output roots while reusing the same trained
+  checkpoint; checkpoints are not retrained for calibration-seed robustness.
+- Added aggregation tools for ablation and multi-seed summaries.
+- Direct-only and full training paths now call the same direct-value loss helper.
+
+### Required decision gates before closed loop
+
+- Near and Contact group top-1 correlation should become positive and preferably exceed 0.10
+  in screening; publication readiness remains >=0.20.
+- At least one variant must produce non-zero verify selections in both regimes with finite
+  precision/harm bounds.
+- Candidate AUC should not fall more than 0.03 below v48.1 while group regret improves.
+- The same checkpoint should be stable across calibration seeds 4801/4802/4803; output
+  directories must not be shared.
+
+### Non-repetition note
+
+This iteration does not repeat threshold relaxation, handwritten rescue rules, ordinary
+pairwise/listwise ranking, or bucket-conditioned routing. Its new contribution is the
+combination of warm-start-safe set interaction, ranking/admission gradient separation,
+shift-robust pseudo-environment optimization, and policy-regret checkpoint selection.
+
 ## v48.3 — OC-TRAC-NASC/RCD (2026-07-25)
 
 ### Evidence motivating this iteration

@@ -35,6 +35,8 @@ from ocrap.models.losses import (
     macro_shared_success_calibration_loss,
     observation_consistent_recovery_advantage_loss,
     direct_uncertainty_recovery_value_loss,
+    _differentiable_shared_success,
+    _torch_pcd_score,
 )
 from ocrap.evaluation.metrics import (
     best_shared_option_index,
@@ -291,6 +293,15 @@ def _direct_value_loss_from_outputs(
         policy_teacher_temperature=float(tcfg.get("direct_value_policy_teacher_temperature", 0.08)),
         policy_regret_weight=float(tcfg.get("direct_value_policy_regret_weight", 0.0)),
         policy_regret_margin=float(tcfg.get("direct_value_policy_regret_margin", 0.0)),
+        opportunity_soft_label_temperature=float(tcfg.get("direct_value_opportunity_soft_label_temperature", 0.0)),
+        harm_soft_label_temperature=float(tcfg.get("direct_value_harm_soft_label_temperature", 0.0)),
+        policy_decouple_admission=bool(tcfg.get("direct_value_policy_decouple_admission", True)),
+        policy_admission_distill_weight=float(tcfg.get("direct_value_policy_admission_distill_weight", 0.0)),
+        group_dro_weight=float(tcfg.get("direct_value_group_dro_weight", 0.0)),
+        group_dro_temperature=float(tcfg.get("direct_value_group_dro_temperature", 0.35)),
+        group_dro_severity_thresholds=tuple(
+            float(x) for x in str(tcfg.get("direct_value_group_dro_severity_thresholds", "0.25,0.55")).split(",") if str(x).strip()
+        ),
     )
 
     def compute(
@@ -351,6 +362,98 @@ def _direct_value_loss_from_outputs(
         expert_losses.append(compute(eo[:, 0], eo[:, 1], opp, harm, overrides))
     return aggregate + specialist_weight * torch.stack(expert_losses).mean()
 
+
+def _direct_policy_batch_stats(
+    out: dict[str, torch.Tensor],
+    batch: dict[str, torch.Tensor],
+    tcfg: dict,
+    teacher_q: torch.Tensor,
+    *,
+    option_gamma: float,
+    option_temperature: float,
+) -> dict[str, float]:
+    """Exact teacher-PCD group decision metrics for checkpoint selection.
+
+    These metrics are computed on the validation groups with the same nominal
+    anchor used by calibration.  They are intentionally value-ranking metrics:
+    admission thresholds remain a later calibration problem and cannot hide a
+    wrong within-group ordering behind an always-nominal solution.
+    """
+    if "direct_recovery_value_logit" not in out:
+        return {}
+    score = out["direct_recovery_value_logit"].float().reshape(-1)
+    trd = torch.nan_to_num(batch["r_dep_star"].float().reshape(-1), nan=-20.0, posinf=20.0, neginf=-20.0)
+    tro = torch.nan_to_num(batch["r_orc_star"].float().reshape(-1), nan=-20.0, posinf=20.0, neginf=-20.0)
+    teacher_drs = _differentiable_shared_success(
+        teacher_q, batch["root_probs"].float(), batch["root_valid"], batch["option_valid"],
+        gamma=option_gamma, temperature=max(0.08, option_temperature * 0.5),
+    ).reshape(-1)
+    target = _torch_pcd_score(teacher_drs, trd, torch.clamp(tro - trd, min=0.0)).detach().clamp(0.0, 1.0)
+    bid = batch.get("bucket_id", torch.full_like(batch["time_index"], 3)).reshape(-1)
+    sh = batch["scene_hash"].reshape(-1)
+    ti = batch["time_index"].reshape(-1)
+    isn = batch["is_nominal"].reshape(-1) > 0.5
+    mac = batch.get("prefix_macro_type_id", batch.get("candidate_index", torch.zeros_like(ti))).reshape(-1)
+    allowed = torch.zeros_like(isn)
+    for m in _parse_int_tuple(tcfg.get("direct_value_macro_ids", "2,3,5,7"), (2, 3, 5, 7)):
+        allowed |= mac == int(m)
+    positive_gain = float(tcfg.get("direct_value_positive_gain", 0.03))
+    negative_gain = float(tcfg.get("direct_value_negative_gain", 0.02))
+    stats: dict[str, float] = {}
+
+    def add(name: str, value: float) -> None:
+        stats[name] = stats.get(name, 0.0) + float(value)
+
+    keys = torch.stack([bid, sh, ti], dim=1)
+    for key in torch.unique(keys, dim=0):
+        idx = torch.where((keys == key.unsqueeze(0)).all(dim=1))[0]
+        noms = idx[isn[idx]]
+        recs = idx[(~isn[idx]) & allowed[idx]]
+        if noms.numel() == 0 or recs.numel() == 0:
+            continue
+        nom = noms[0]
+        teacher_delta = target[recs] - target[nom]
+        pred_delta = score[recs] - score[nom]
+        teacher_class = 1 + int(torch.argmax(teacher_delta).item()) if bool((teacher_delta >= positive_gain).any()) else 0
+        pred_class = int(torch.argmax(torch.cat([score[nom:nom + 1] * 0.0, pred_delta], dim=0)).item())
+        chosen_teacher_adv = 0.0 if pred_class == 0 else float(teacher_delta[pred_class - 1].item())
+        oracle_adv = max(0.0, float(teacher_delta.max().item()))
+        regret = max(0.0, oracle_adv - chosen_teacher_adv)
+        bucket = int(bid[nom].item())
+        suffix = "near" if bucket == 1 else ("contact" if bucket == 2 else "other")
+        for name in ("all", suffix):
+            add(f"regret_sum_{name}", regret)
+            add(f"group_count_{name}", 1.0)
+            add(f"top1_hit_{name}", float(pred_class == teacher_class))
+            add(f"harmful_switch_{name}", float(chosen_teacher_adv <= -negative_gain))
+        if oracle_adv >= positive_gain:
+            for name in ("all", suffix):
+                add(f"positive_count_{name}", 1.0)
+                add(f"positive_hit_{name}", float(chosen_teacher_adv >= positive_gain))
+    return stats
+
+
+def _finalize_direct_policy_stats(stats: dict[str, float]) -> dict[str, float]:
+    out: dict[str, float] = {}
+    for suffix in ("all", "near", "contact"):
+        count = stats.get(f"group_count_{suffix}", 0.0)
+        if count > 0:
+            tag = "" if suffix == "all" else f"_{suffix}"
+            out[f"direct_group_regret_mean{tag}"] = stats.get(f"regret_sum_{suffix}", 0.0) / count
+            out[f"direct_group_top1_accuracy{tag}"] = stats.get(f"top1_hit_{suffix}", 0.0) / count
+            out[f"direct_harmful_switch_rate{tag}"] = stats.get(f"harmful_switch_{suffix}", 0.0) / count
+        pos_count = stats.get(f"positive_count_{suffix}", 0.0)
+        if pos_count > 0:
+            tag = "" if suffix == "all" else f"_{suffix}"
+            out[f"direct_positive_recall{tag}"] = stats.get(f"positive_hit_{suffix}", 0.0) / pos_count
+    regime_regrets = [out[k] for k in ("direct_group_regret_mean_near", "direct_group_regret_mean_contact") if k in out]
+    if regime_regrets:
+        out["direct_group_regret_mean_worst"] = max(regime_regrets)
+    elif "direct_group_regret_mean" in out:
+        out["direct_group_regret_mean_worst"] = out["direct_group_regret_mean"]
+    return out
+
+
 def _epoch(
     model: OCRAPModel,
     loader: DataLoader,
@@ -376,6 +479,7 @@ def _epoch(
     amp_dtype_name = str(tcfg.get("amp_dtype", "bfloat16")).strip().lower()
     amp_dtype = torch.float16 if amp_dtype_name in {"float16", "fp16", "half"} else torch.bfloat16
     totals: dict[str, float] = {}
+    policy_totals: dict[str, float] = {}
     n = 0
     desc = f"{stage} ep{epoch}" if epoch is not None else stage
     for batch in _progress_iter(loader, enabled=progress, desc=desc):
@@ -408,6 +512,13 @@ def _epoch(
                 out, batch, tcfg, model_cfg, teacher_q,
                 option_gamma=option_gamma, option_temperature=option_temperature,
             )
+            if not training:
+                batch_policy_stats = _direct_policy_batch_stats(
+                    out, batch, tcfg, teacher_q,
+                    option_gamma=option_gamma, option_temperature=option_temperature,
+                )
+                for key, value in batch_policy_stats.items():
+                    policy_totals[key] = policy_totals.get(key, 0.0) + float(value)
             loss_encoder_anchor = _parameter_anchor_loss(model)
             total = (
                 float(lw.get("direct_recovery_value", 1.0)) * loss_direct_value
@@ -755,46 +866,9 @@ def _epoch(
             success_temperature=option_temperature,
         )
         if "direct_recovery_value_logit" in out:
-            loss_direct_value = direct_uncertainty_recovery_value_loss(
-                out["direct_recovery_value_logit"], out["direct_recovery_value_logvar"],
-                batch["r_dep_star"].float(), batch["r_orc_star"].float(), teacher_q,
-                batch["root_probs"].float(), batch["root_valid"], batch["option_valid"],
-                batch["scene_hash"], batch["time_index"],
-                batch.get("prefix_macro_type_id", batch.get("candidate_index", torch.zeros_like(batch["time_index"]))),
-                batch["is_nominal"].float(),
-                batch.get("bucket_id", torch.full_like(batch["time_index"], 3)),
-                macro_ids=_parse_int_tuple(tcfg.get("direct_value_macro_ids", "2,3,5,7"), (2, 3, 5, 7)),
-                bucket_ids=_parse_int_tuple(tcfg.get("direct_value_bucket_ids", "1,2"), (1, 2)),
-                temperature=float(tcfg.get("direct_value_temperature", 0.12)),
-                positive_gain=float(tcfg.get("direct_value_positive_gain", 0.03)),
-                negative_gain=float(tcfg.get("direct_value_negative_gain", 0.02)),
-                rank_margin=float(tcfg.get("direct_value_rank_margin", 0.04)),
-                point_weight=float(tcfg.get("direct_value_point_weight", 0.15)),
-                listwise_weight=float(tcfg.get("direct_value_listwise_weight", 0.35)),
-                advantage_weight=float(tcfg.get("direct_value_advantage_weight", 1.0)),
-                centered_weight=float(tcfg.get("direct_value_centered_weight", 1.0)),
-                positive_group_weight=float(tcfg.get("direct_value_positive_group_weight", 4.0)),
-                negative_group_weight=float(tcfg.get("direct_value_negative_group_weight", 1.0)),
-                ambiguous_group_weight=float(tcfg.get("direct_value_ambiguous_group_weight", 0.25)),
-                near_weight=float(tcfg.get("direct_value_near_weight", 1.5)),
-                contact_weight=float(tcfg.get("direct_value_contact_weight", 1.0)),
-                min_group_range=float(tcfg.get("direct_value_min_group_range", 0.01)),
-                false_positive_weight=float(tcfg.get("direct_value_false_positive_weight", 1.0)),
-                variance_floor=float(tcfg.get("direct_value_variance_floor", 0.0025)),
-                output_mode=str(tcfg.get("direct_value_output_mode", model_cfg.get("direct_recovery_value_output", "probability"))),
-                pairwise_weight=float(tcfg.get("direct_value_pairwise_weight", 0.0)),
-                top_rank_weight=float(tcfg.get("direct_value_top_rank_weight", 0.0)),
-                success_gamma=option_gamma,
-                success_temperature=option_temperature,
-                pred_opportunity_logit=out.get("direct_recovery_opportunity_logit"),
-                opportunity_weight=float(tcfg.get("direct_value_opportunity_weight", 0.0)),
-                opportunity_pos_weight=float(tcfg.get("direct_value_opportunity_pos_weight", 6.0)),
-                pred_harm_logit=out.get("direct_recovery_harm_logit"),
-                harm_weight=float(tcfg.get("direct_value_harm_weight", 0.0)),
-                harm_pos_weight=float(tcfg.get("direct_value_harm_pos_weight", 4.0)),
-                setwise_admission_weight=float(tcfg.get("direct_value_setwise_admission_weight", 0.0)),
-                opportunity_admission_weight=float(tcfg.get("direct_value_opportunity_admission_weight", 0.35)),
-                harm_admission_weight=float(tcfg.get("direct_value_harm_admission_weight", 0.75)),
+            loss_direct_value = _direct_value_loss_from_outputs(
+                out, batch, tcfg, model_cfg, teacher_q,
+                option_gamma=option_gamma, option_temperature=option_temperature,
             )
         else:
             loss_direct_value = r_dep.sum() * 0.0
@@ -889,7 +963,10 @@ def _epoch(
         }
         for k, v in vals.items():
             totals[k] = totals.get(k, 0.0) + float(v) * bsz
-    return {k: float(v / max(n, 1)) for k, v in totals.items()} | {"num_samples": int(n), "num_batches": int(len(loader))}
+    epoch_metrics = {k: float(v / max(n, 1)) for k, v in totals.items()}
+    epoch_metrics.update(_finalize_direct_policy_stats(policy_totals))
+    epoch_metrics.update({"num_samples": int(n), "num_batches": int(len(loader))})
+    return epoch_metrics
 
 
 
@@ -1520,7 +1597,12 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         history.append(row)
         best_metric_name = str(tcfg.get("best_metric", "loss") or "loss")
         best_metric_mode = str(tcfg.get("best_metric_mode", "min") or "min").lower()
-        current_metric = float(va.get(best_metric_name, va.get("loss", float("inf"))))
+        if best_metric_name not in va:
+            raise KeyError(
+                f"Configured training.best_metric={best_metric_name!r} was not produced by validation. "
+                f"Available metrics: {sorted(va)}"
+            )
+        current_metric = float(va[best_metric_name])
         compare_metric = current_metric if best_metric_mode != "max" else -current_metric
         improved = compare_metric <= best_val
         payload = _checkpoint_payload(ep, current_metric)
@@ -1546,6 +1628,8 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "train_loss": round(float(tr.get("loss", 0.0)), 6),
             "val_loss": round(float(va.get("loss", 0.0)), 6),
             "best_val_loss": round(float(best_val), 6),
+            "best_metric_name": best_metric_name,
+            "current_best_metric": round(float(current_metric), 6),
             "best_epoch": int(best_epoch),
             "improved": bool(improved),
             "seconds": round(float(row["seconds"]), 2),
