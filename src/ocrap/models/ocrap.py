@@ -57,6 +57,11 @@ class OCRAPModel(nn.Module):
         direct_recovery_preference_head: bool = False,
         direct_recovery_preference_hidden: int = 96,
         direct_recovery_preference_dropout: float = 0.05,
+        direct_recovery_preference_context: bool = False,
+        direct_recovery_preference_context_hidden: int = 128,
+        direct_recovery_delta_head: bool = False,
+        direct_recovery_delta_hidden: int = 128,
+        direct_recovery_delta_dropout: float = 0.05,
     ):
         super().__init__()
         self.num_roots = int(num_roots)
@@ -97,6 +102,11 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_preference_head = bool(direct_recovery_preference_head)
         self.direct_recovery_preference_hidden = max(16, int(direct_recovery_preference_hidden))
         self.direct_recovery_preference_dropout = float(max(0.0, direct_recovery_preference_dropout))
+        self.direct_recovery_preference_context = bool(direct_recovery_preference_context)
+        self.direct_recovery_preference_context_hidden = max(16, int(direct_recovery_preference_context_hidden))
+        self.direct_recovery_delta_head = bool(direct_recovery_delta_head)
+        self.direct_recovery_delta_hidden = max(16, int(direct_recovery_delta_hidden))
+        self.direct_recovery_delta_dropout = float(max(0.0, direct_recovery_delta_dropout))
         if self.direct_recovery_value_expert_routing not in {
             "bucket",
             "hard_bucket",
@@ -278,6 +288,53 @@ class OCRAPModel(nn.Module):
                 nn.init.zeros_(pref_projection.weight)
                 nn.init.zeros_(pref_projection.bias)
 
+        # v48.6 RPGC: do not let a set adapter rewrite the value representation.
+        # A separate, zero-initialized relative-context residual augments only the
+        # ranking score.  This preserves the v48.5 pointwise preference solution
+        # while exposing candidate-minus-nominal and group summaries to ranking.
+        relative_in_dim = 4 * direct_in_dim
+        self.direct_preference_context_adapter = (
+            nn.Sequential(
+                nn.LayerNorm(relative_in_dim),
+                nn.Linear(relative_in_dim, self.direct_recovery_preference_context_hidden),
+                nn.GELU(),
+                nn.Dropout(self.direct_recovery_preference_dropout),
+                nn.Linear(self.direct_recovery_preference_context_hidden, 1),
+            )
+            if self.direct_recovery_value_head and self.direct_recovery_preference_context
+            else None
+        )
+        if self.direct_preference_context_adapter is not None:
+            ctx_projection = self.direct_preference_context_adapter[-1]
+            if isinstance(ctx_projection, nn.Linear):
+                nn.init.zeros_(ctx_projection.weight)
+                nn.init.zeros_(ctx_projection.bias)
+
+        # Directly estimate candidate-minus-nominal PCD gain and uncertainty.
+        # Subtracting two absolute predictions and adding their variances assumes
+        # independent errors, even though both candidates share a scene encoder;
+        # that assumption made v48.5 admission probabilities excessively diffuse.
+        self.direct_delta_adapter = (
+            nn.Sequential(
+                nn.LayerNorm(relative_in_dim),
+                nn.Linear(relative_in_dim, self.direct_recovery_delta_hidden),
+                nn.GELU(),
+                nn.Dropout(self.direct_recovery_delta_dropout),
+                nn.Linear(self.direct_recovery_delta_hidden, 2),
+            )
+            if self.direct_recovery_value_head and self.direct_recovery_delta_head
+            else None
+        )
+        if self.direct_delta_adapter is not None:
+            delta_projection = self.direct_delta_adapter[-1]
+            if isinstance(delta_projection, nn.Linear):
+                nn.init.zeros_(delta_projection.weight)
+                nn.init.zeros_(delta_projection.bias)
+                # A moderate initial standard deviation keeps the new head
+                # conservative without saturating opportunity/harm probabilities.
+                with torch.no_grad():
+                    delta_projection.bias[1] = -3.5
+
         def _make_direct_head() -> nn.Sequential:
             return nn.Sequential(
                 nn.LayerNorm(direct_in_dim),
@@ -414,6 +471,45 @@ class OCRAPModel(nn.Module):
             adapted[idx] = direct_features[idx] + gate * residual
         return adapted
 
+    def _direct_group_relative_features(
+        self,
+        direct_features: torch.Tensor,
+        group_index: torch.Tensor | None,
+        is_nominal: torch.Tensor | None,
+    ) -> torch.Tensor:
+        """Return permutation-equivariant candidate-relative features.
+
+        The output concatenates the pointwise feature, candidate-minus-nominal,
+        mean recovery-relative feature and max recovery-relative feature.  It is
+        used only by the v48.6 preference-context and delta heads, so the value
+        branch remains pointwise and warm-start compatible.
+        """
+        zeros = torch.zeros_like(direct_features)
+        relative = torch.cat([direct_features, zeros, zeros, zeros], dim=-1)
+        if group_index is None or is_nominal is None or direct_features.shape[0] <= 1:
+            return relative
+        groups = group_index.to(device=direct_features.device)
+        groups = groups.reshape(-1, 1) if groups.dim() == 1 else groups.reshape(groups.shape[0], -1)
+        nominal_mask = is_nominal.to(device=direct_features.device).reshape(-1) > 0.5
+        if groups.shape[0] != direct_features.shape[0] or nominal_mask.shape[0] != direct_features.shape[0]:
+            return relative
+        out = relative.clone()
+        for key in torch.unique(groups, dim=0):
+            idx = torch.where((groups == key.unsqueeze(0)).all(dim=1))[0]
+            if idx.numel() <= 1:
+                continue
+            noms = idx[nominal_mask[idx]]
+            recs = idx[~nominal_mask[idx]]
+            if noms.numel() == 0 or recs.numel() == 0:
+                continue
+            nominal = direct_features[noms[0]:noms[0] + 1]
+            rel = direct_features[idx] - nominal
+            rec_rel = direct_features[recs] - nominal
+            mean_rel = rec_rel.mean(dim=0, keepdim=True).expand(idx.numel(), -1)
+            max_rel = rec_rel.max(dim=0, keepdim=True).values.expand(idx.numel(), -1)
+            out[idx] = torch.cat([direct_features[idx], rel, mean_rel, max_rel], dim=-1)
+        return out
+
     def _direct_outputs(
         self,
         memory: torch.Tensor,
@@ -445,7 +541,11 @@ class OCRAPModel(nn.Module):
                 "candidate_concat_raw", "action_concat_raw", "certificate_action_adapter"
             }:
                 direct_features = torch.cat([direct_features, self._candidate_raw_features(x)], dim=-1)
-        direct_features = self._apply_direct_set_context(direct_features, group_index, is_nominal)
+        # Preserve an untouched pointwise path for the ranking/delta heads.  The
+        # legacy NASC adapter may still be enabled as an ablation for the value
+        # experts, but cannot silently contaminate the new relative certificate.
+        pointwise_direct_features = direct_features
+        direct_features = self._apply_direct_set_context(pointwise_direct_features, group_index, is_nominal)
         if self.direct_recovery_value_router_pooling == "shared_raw":
             router_features = x[:, self.direct_candidate_feature_dim:]
         elif self.direct_recovery_value_router_pooling == "ego_shared_raw":
@@ -465,7 +565,13 @@ class OCRAPModel(nn.Module):
                 )
             regime_id = bucket_id.to(device=x.device, dtype=torch.long).reshape(-1)
             regime_id = regime_id.clamp(0, self.direct_recovery_value_num_regimes - 1)
-            direct_features = torch.cat([direct_features, self.direct_regime_embedding(regime_id)], dim=-1)
+            regime_features = self.direct_regime_embedding(regime_id)
+            direct_features = torch.cat([direct_features, regime_features], dim=-1)
+            pointwise_direct_features = torch.cat([pointwise_direct_features, regime_features], dim=-1)
+
+        relative_features = self._direct_group_relative_features(
+            pointwise_direct_features, group_index, is_nominal
+        )
 
         out: dict[str, torch.Tensor] = {}
         rank_base: torch.Tensor | None = None
@@ -552,12 +658,27 @@ class OCRAPModel(nn.Module):
             out["direct_recovery_harm_logit"] = direct[:, cursor]
         if rank_base is None:
             rank_base = direct[:, 0]
+        rank_residual = torch.zeros_like(rank_base)
         if self.direct_preference_adapter is not None:
-            rank_residual = self.direct_preference_adapter(direct_features).squeeze(-1)
-            out["direct_recovery_rank_residual"] = rank_residual
-            out["direct_recovery_rank_logit"] = rank_base + rank_residual
-        else:
-            out["direct_recovery_rank_logit"] = rank_base
+            pointwise_rank_residual = self.direct_preference_adapter(pointwise_direct_features).squeeze(-1)
+            out["direct_recovery_rank_pointwise_residual"] = pointwise_rank_residual
+            rank_residual = rank_residual + pointwise_rank_residual
+        if self.direct_preference_context_adapter is not None:
+            context_rank_residual = self.direct_preference_context_adapter(relative_features).squeeze(-1)
+            out["direct_recovery_rank_context_residual"] = context_rank_residual
+            rank_residual = rank_residual + context_rank_residual
+        out["direct_recovery_rank_residual"] = rank_residual
+        out["direct_recovery_rank_logit"] = rank_base + rank_residual
+
+        if self.direct_delta_adapter is not None:
+            delta = self.direct_delta_adapter(relative_features)
+            delta_mean = torch.tanh(delta[:, 0])
+            delta_logvar = delta[:, 1].clamp(-7.0, 2.0)
+            if is_nominal is not None and is_nominal.numel() == delta_mean.numel():
+                nominal_mask = is_nominal.to(device=delta_mean.device).reshape(-1) > 0.5
+                delta_mean = torch.where(nominal_mask, torch.zeros_like(delta_mean), delta_mean)
+            out["direct_recovery_delta_mean"] = delta_mean
+            out["direct_recovery_delta_logvar"] = delta_logvar
         return out
 
     def forward(

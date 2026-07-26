@@ -310,6 +310,8 @@ def _direct_value_loss_from_outputs(
         preference_margin=float(tcfg.get("direct_value_preference_margin", 0.03)),
         preference_confidence_scale=float(tcfg.get("direct_value_preference_confidence_scale", 0.04)),
         preference_regret_weight=float(tcfg.get("direct_value_preference_regret_weight", 0.0)),
+        preference_listwise_weight=float(tcfg.get("direct_value_preference_listwise_weight", 0.0)),
+        preference_gap_weight=float(tcfg.get("direct_value_preference_gap_weight", 0.0)),
         delta_nll_weight=float(tcfg.get("direct_value_delta_nll_weight", 0.0)),
     )
 
@@ -319,6 +321,8 @@ def _direct_value_loss_from_outputs(
         opportunity_logit: torch.Tensor | None,
         harm_logit: torch.Tensor | None,
         rank_logit: torch.Tensor | None,
+        delta_mean: torch.Tensor | None,
+        delta_logvar: torch.Tensor | None,
         overrides: dict[str, float] | None = None,
     ) -> torch.Tensor:
         kwargs = dict(base_kwargs)
@@ -335,6 +339,8 @@ def _direct_value_loss_from_outputs(
             pred_opportunity_logit=opportunity_logit,
             pred_harm_logit=harm_logit,
             pred_rank_logit=rank_logit,
+            pred_delta_mean=delta_mean,
+            pred_delta_logvar=delta_logvar,
             teacher_m_star=batch["m_star"].float(),
             **kwargs,
         )
@@ -343,6 +349,7 @@ def _direct_value_loss_from_outputs(
         out["direct_recovery_value_logit"], out["direct_recovery_value_logvar"],
         out.get("direct_recovery_opportunity_logit"), out.get("direct_recovery_harm_logit"),
         out.get("direct_recovery_rank_logit"),
+        out.get("direct_recovery_delta_mean"), out.get("direct_recovery_delta_logvar"),
     )
     expert_outputs = out.get("direct_expert_outputs")
     specialist_weight = float(tcfg.get("direct_value_expert_specialization_weight", 0.35))
@@ -375,9 +382,11 @@ def _direct_value_loss_from_outputs(
         overrides.update({
             "preference_weight": 0.0,
             "preference_regret_weight": 0.0,
+            "preference_listwise_weight": 0.0,
+            "preference_gap_weight": 0.0,
             "delta_nll_weight": 0.0,
         })
-        expert_losses.append(compute(eo[:, 0], eo[:, 1], opp, harm, None, overrides))
+        expert_losses.append(compute(eo[:, 0], eo[:, 1], opp, harm, None, None, None, overrides))
     return aggregate + specialist_weight * torch.stack(expert_losses).mean()
 
 
@@ -399,6 +408,16 @@ def _direct_policy_batch_stats(
     if "direct_recovery_value_logit" not in out:
         return {}
     value_score = out["direct_recovery_value_logit"].float().reshape(-1)
+    # Keep validation admission on the same declared output scale as training
+    # and calibration.  The executed v48.5 configuration used score mode and was
+    # already consistent; this explicit branch protects probability-mode
+    # ablations from silently mixing logits and probabilities.
+    output_mode = str(tcfg.get("direct_value_output_mode", "probability") or "probability").strip().lower()
+    if output_mode != "score":
+        value_score = torch.sigmoid(value_score)
+    direct_delta = out.get("direct_recovery_delta_mean")
+    if direct_delta is not None:
+        direct_delta = direct_delta.float().reshape(-1)
     rank_score = out.get("direct_recovery_rank_logit", out["direct_recovery_value_logit"]).float().reshape(-1)
     trd = torch.nan_to_num(batch["r_dep_star"].float().reshape(-1), nan=-20.0, posinf=20.0, neginf=-20.0)
     tro = torch.nan_to_num(batch["r_orc_star"].float().reshape(-1), nan=-20.0, posinf=20.0, neginf=-20.0)
@@ -447,22 +466,31 @@ def _direct_policy_batch_stats(
         # measured separately so an always-nominal policy cannot obtain good top-1.
         regret = max(0.0, oracle_adv - chosen_teacher_adv) if positive_group else 0.0
         harmful = chosen_teacher_adv <= -negative_gain
-        value_adv = float((value_score[recs[pred_j]] - value_score[nom]).item())
+        value_adv = float(
+            direct_delta[recs[pred_j]].item()
+            if direct_delta is not None
+            else (value_score[recs[pred_j]] - value_score[nom]).item()
+        )
         false_intervention = (not positive_group) and value_adv >= positive_gain
         positive_admission = positive_group and value_adv >= positive_gain
         bucket = int(bid[nom].item())
         suffix = "near" if bucket == 1 else ("contact" if bucket == 2 else "other")
-        for name in ("all", suffix):
+        scene_fold = int(abs(int(sh[nom].item())) % 3)
+        for name in ("all", suffix, f"{suffix}_fold{scene_fold}"):
             add(f"group_count_{name}", 1.0)
             add(f"harmful_switch_{name}", float(harmful))
             add(f"false_intervention_{name}", float(false_intervention))
             add(f"admission_count_{name}", float(value_adv >= positive_gain))
         if positive_group:
-            for name in ("all", suffix):
+            rank_candidates = torch.cat([pred_rank_delta.new_zeros(1), pred_rank_delta], dim=0)
+            top_values = torch.topk(rank_candidates, k=min(2, int(rank_candidates.numel()))).values
+            rank_margin = float((top_values[0] - top_values[1]).item()) if top_values.numel() > 1 else 0.0
+            for name in ("all", suffix, f"{suffix}_fold{scene_fold}"):
                 add(f"positive_count_{name}", 1.0)
                 add(f"positive_regret_sum_{name}", regret)
                 add(f"positive_top1_hit_{name}", float(pred_j == oracle_j))
                 add(f"positive_admission_hit_{name}", float(positive_admission))
+                add(f"positive_rank_margin_sum_{name}", rank_margin)
     return stats
 
 
@@ -471,7 +499,8 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
     out: dict[str, float] = {}
     harm_lambda = float(tcfg.get("direct_policy_metric_harm_weight", 0.35))
     false_lambda = float(tcfg.get("direct_policy_metric_false_intervention_weight", 0.15))
-    for suffix in ("all", "near", "contact"):
+    suffixes = ["all", "near", "contact"] + [f"{regime}_fold{fold}" for regime in ("near", "contact") for fold in range(3)]
+    for suffix in suffixes:
         tag = "" if suffix == "all" else f"_{suffix}"
         count = stats.get(f"group_count_{suffix}", 0.0)
         pos_count = stats.get(f"positive_count_{suffix}", 0.0)
@@ -487,6 +516,7 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
             out[f"direct_positive_group_regret_mean{tag}"] = stats.get(f"positive_regret_sum_{suffix}", 0.0) / pos_count
             out[f"direct_positive_group_top1_accuracy{tag}"] = stats.get(f"positive_top1_hit_{suffix}", 0.0) / pos_count
             out[f"direct_positive_admission_recall{tag}"] = stats.get(f"positive_admission_hit_{suffix}", 0.0) / pos_count
+            out[f"direct_positive_rank_margin_mean{tag}"] = stats.get(f"positive_rank_margin_sum_{suffix}", 0.0) / pos_count
         if count > 0 and pos_count > 0:
             out[f"direct_policy_risk_mean{tag}"] = (
                 out[f"direct_positive_group_regret_mean{tag}"]
@@ -501,6 +531,12 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
     legacy_regrets = [out[k] for k in ("direct_group_regret_mean_near", "direct_group_regret_mean_contact") if k in out]
     if legacy_regrets:
         out["direct_group_regret_mean_worst"] = max(legacy_regrets)
+    fold_risks = [
+        value for key, value in out.items()
+        if key.startswith("direct_policy_risk_mean_near_fold") or key.startswith("direct_policy_risk_mean_contact_fold")
+    ]
+    if fold_risks:
+        out["direct_policy_risk_fold_worst"] = max(fold_risks)
     return out
 
 def _epoch(
@@ -1202,6 +1238,7 @@ def _make_group_batch_sampler(ds: OCRAPSampleDataset, cfg: dict, batch_size: int
         "group_batch_positive_advantage_gain_min", tcfg.get("group_batch_positive_r_dep_gain", 0.025)
     ))
     positive_boost = float(tcfg.get("group_batch_positive_advantage_boost", 0.0))
+    positive_best_macro_balance_power = float(tcfg.get("group_batch_positive_best_macro_balance_power", 0.0))
     require_positive_groups = bool(tcfg.get("group_batch_require_positive_advantage_groups", False))
     if positive_boost > 0.0 and not positive_macro_ids:
         raise ValueError(
@@ -1210,6 +1247,7 @@ def _make_group_batch_sampler(ds: OCRAPSampleDataset, cfg: dict, batch_size: int
         )
 
     group_weights = []
+    positive_best_macros: list[int | None] = []
     hard_groups = 0
     positive_advantage_groups = 0
     for g in groups:
@@ -1231,7 +1269,8 @@ def _make_group_batch_sampler(ds: OCRAPSampleDataset, cfg: dict, batch_size: int
                 gw *= hard_boost
                 hard_groups += 1
 
-        if positive_boost > 0.0 and positive_macro_ids:
+        positive_best_macro: int | None = None
+        if (positive_boost > 0.0 or positive_best_macro_balance_power > 0.0) and positive_macro_ids:
             nominal_target = None
             best_recovery_target = None
             used_exact_pcd = bool(group_index)
@@ -1255,17 +1294,37 @@ def _make_group_batch_sampler(ds: OCRAPSampleDataset, cfg: dict, batch_size: int
                         nominal_target = target_value if nominal_target is None else max(nominal_target, target_value)
                         continue
                     if mac in positive_macro_ids:
-                        best_recovery_target = target_value if best_recovery_target is None else max(best_recovery_target, target_value)
+                        if best_recovery_target is None or target_value > best_recovery_target:
+                            best_recovery_target = target_value
+                            positive_best_macro = mac
                 except Exception:
                     continue
             if nominal_target is not None and best_recovery_target is not None and (best_recovery_target - nominal_target) >= positive_gain_min:
-                gw *= positive_boost
+                if positive_boost > 0.0:
+                    gw *= positive_boost
                 positive_advantage_groups += 1
+            else:
+                positive_best_macro = None
         if scene_balance_power > 0.0:
             group_key = group_keys[len(group_weights)]
             scene_count = max(1, int(scene_group_counts[(group_key[0], group_key[1])]))
             gw *= float((mean_groups_per_scene / scene_count) ** scene_balance_power)
         group_weights.append(gw)
+        positive_best_macros.append(positive_best_macro)
+
+    # v48.6: exact positive opportunities were concentrated in one recovery
+    # macro, and calibrated near-miss rules selected that macro in >90% of
+    # cases.  Reweight only positive groups by inverse teacher-best-macro
+    # frequency.  This uses the training teacher index, not validation/test
+    # statistics, and is substantially less noisy than minibatch GroupDRO.
+    positive_macro_counts = Counter(m for m in positive_best_macros if m is not None)
+    if positive_best_macro_balance_power > 0.0 and positive_macro_counts:
+        mean_positive_per_macro = sum(positive_macro_counts.values()) / max(1, len(positive_macro_counts))
+        for i, macro in enumerate(positive_best_macros):
+            if macro is None:
+                continue
+            factor = (mean_positive_per_macro / max(1, positive_macro_counts[macro])) ** positive_best_macro_balance_power
+            group_weights[i] *= float(np.clip(factor, 0.5, 3.0))
     if require_positive_groups and positive_boost > 0.0 and positive_advantage_groups == 0:
         raise RuntimeError(
             "exact teacher-PCD sampler found zero positive-advantage groups; "
@@ -1287,6 +1346,8 @@ def _make_group_batch_sampler(ds: OCRAPSampleDataset, cfg: dict, batch_size: int
         "positive_advantage_gain_min": float(positive_gain_min),
         "positive_advantage_groups": int(positive_advantage_groups),
         "positive_advantage_target": "teacher_pcd" if group_index else "r_dep_fallback",
+        "positive_best_macro_balance_power": float(positive_best_macro_balance_power),
+        "positive_best_macro_counts": dict(sorted(positive_macro_counts.items())),
         "group_index_rows": int(len(group_index)),
         "scene_balance_power": float(scene_balance_power),
     }, flush=True)
@@ -1442,6 +1503,11 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_preference_head=bool(model_cfg.get("direct_recovery_preference_head", False)),
         direct_recovery_preference_hidden=int(model_cfg.get("direct_recovery_preference_hidden", max(16, d_model // 2))),
         direct_recovery_preference_dropout=float(model_cfg.get("direct_recovery_preference_dropout", 0.05)),
+        direct_recovery_preference_context=bool(model_cfg.get("direct_recovery_preference_context", False)),
+        direct_recovery_preference_context_hidden=int(model_cfg.get("direct_recovery_preference_context_hidden", d_model)),
+        direct_recovery_delta_head=bool(model_cfg.get("direct_recovery_delta_head", False)),
+        direct_recovery_delta_hidden=int(model_cfg.get("direct_recovery_delta_hidden", d_model)),
+        direct_recovery_delta_dropout=float(model_cfg.get("direct_recovery_delta_dropout", 0.05)),
     ).to(device)
     tcfg = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
 
@@ -1618,6 +1684,11 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "direct_recovery_preference_head": bool(model_cfg.get("direct_recovery_preference_head", False)),
             "direct_recovery_preference_hidden": int(model_cfg.get("direct_recovery_preference_hidden", max(16, d_model // 2))),
             "direct_recovery_preference_dropout": float(model_cfg.get("direct_recovery_preference_dropout", 0.05)),
+            "direct_recovery_preference_context": bool(model_cfg.get("direct_recovery_preference_context", False)),
+            "direct_recovery_preference_context_hidden": int(model_cfg.get("direct_recovery_preference_context_hidden", d_model)),
+            "direct_recovery_delta_head": bool(model_cfg.get("direct_recovery_delta_head", False)),
+            "direct_recovery_delta_hidden": int(model_cfg.get("direct_recovery_delta_hidden", d_model)),
+            "direct_recovery_delta_dropout": float(model_cfg.get("direct_recovery_delta_dropout", 0.05)),
             "model_state": model.state_dict(),
             "optimizer_state": opt.state_dict(),
             "epoch": int(ep),

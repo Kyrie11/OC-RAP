@@ -263,6 +263,7 @@ def select_baseline(
                 direct_value_opportunity_threshold=_cfg_float(scfg, "direct_value_opportunity_threshold", 0.0, bucket_name),
                 direct_value_harm_threshold=_cfg_float(scfg, "direct_value_harm_threshold", 1.0, bucket_name),
                 direct_value_top1_only=_cfg_bool(scfg, "direct_value_top1_only", False, bucket_name),
+                direct_value_min_rank_margin=_cfg_float(scfg, "direct_value_min_rank_margin", 0.0, bucket_name),
                 direct_value_risk_controlled_admission=_cfg_bool(scfg, "direct_value_risk_controlled_admission", False, bucket_name),
                 deployability_bonus=_cfg_float(scfg, "deployability_bonus", 0.0, bucket_name),
                 contact_deployability_bonus=_cfg_float(scfg, "contact_deployability_bonus", 0.0, bucket_name),

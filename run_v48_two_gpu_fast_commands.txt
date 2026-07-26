@@ -16,7 +16,7 @@ if [[ "${FOREGROUND:-0}" != "1" && "${V48_CONTROLLER_CHILD:-0}" != "1" ]]; then
   nohup env V48_CONTROLLER_CHILD=1 FOREGROUND=1 bash "$0" \
     >"$LOG_DIR/controller.log" 2>&1 </dev/null &
   echo $! > "$OUTPUTDIR/controller.pid"
-  echo "v48.1 controller started: PID=$(cat "$OUTPUTDIR/controller.pid")"
+  echo "v48.6 controller started: PID=$(cat "$OUTPUTDIR/controller.pid")"
   echo "log: $LOG_DIR/controller.log"
   exit 0
 fi
@@ -239,7 +239,7 @@ calibrate_variant() {
   [[ -f "$ckpt" ]] || return 0
   set +e
   CUDA_VISIBLE_DEVICES="$gpu" python -u tools/calibrate_policy_risk_v48.py \
-    --dataset "$CAL_NEAR" --checkpoint "$ckpt" --bucket near --risk-source="${RISK_SOURCE:-delta_distribution}" \
+    --dataset "$CAL_NEAR" --checkpoint "$ckpt" --bucket near --risk-source="${RISK_SOURCE:-direct_delta}" \
     --output "$run/calibration/direct_value_risk_near_v48.json" \
     --rows-output "$run/calibration/direct_value_risk_near_v48.rows.jsonl" \
     --required-min-groups="${NEAR_MIN_GROUPS:-80}" --required-min-scenes="${NEAR_MIN_SCENES:-40}" \
@@ -249,7 +249,7 @@ calibrate_variant() {
     2>&1 | tee "$run/logs/calibrate_policy_near.log"
   local sn=${PIPESTATUS[0]}
   CUDA_VISIBLE_DEVICES="$gpu" python -u tools/calibrate_policy_risk_v48.py \
-    --dataset "$CAL_CONTACT" --checkpoint "$ckpt" --bucket contact --risk-source="${RISK_SOURCE:-delta_distribution}" \
+    --dataset "$CAL_CONTACT" --checkpoint "$ckpt" --bucket contact --risk-source="${RISK_SOURCE:-direct_delta}" \
     --output "$run/calibration/direct_value_risk_contact_v48.json" \
     --rows-output "$run/calibration/direct_value_risk_contact_v48.rows.jsonl" \
     --required-min-groups="${CONTACT_MIN_GROUPS:-100}" --required-min-scenes="${CONTACT_MIN_SCENES:-45}" \
@@ -293,7 +293,7 @@ status={'calibration_mode':json.load(open(root/'dataset_role_manifest.json'))['c
         'valid_candidates':[x[2] for x in valid], 'candidates':summary}
 (root/'screening_status.json').write_text(json.dumps(status,ensure_ascii=False,indent=2)+'\n')
 if not valid:
-    raise SystemExit('no v48.1 candidate passed both policy-risk certificates; diagnostics were retained and test was not touched')
+    raise SystemExit('no v48.6 candidate passed both policy-risk certificates; diagnostics were retained and test was not touched')
 valid.sort(); chosen=valid[0][3]
 (root/'chosen_base_run.txt').write_text(str(chosen)+'\n')
 print('chosen',chosen)
@@ -326,5 +326,5 @@ import json,pathlib,time,sys
 r=pathlib.Path(sys.argv[1]); p=r/'RUN_COMPLETE.json'
 p.write_text(json.dumps({"event":"run_complete","created_unix":time.time(),"chosen_base_run":(r/'chosen_base_run.txt').read_text().strip()},indent=2)+'\n')
 PYDONE
-echo "v48.5 screening complete. chosen=$CHOSEN_BASE_RUN" | tee "$LOG_DIR/complete.log"
+echo "v48.6 screening complete. chosen=$CHOSEN_BASE_RUN" | tee "$LOG_DIR/complete.log"
 echo "next commands: $OUTPUTDIR/NEXT_COMMANDS.txt"

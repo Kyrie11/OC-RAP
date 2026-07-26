@@ -380,6 +380,8 @@ def _evaluate_grouped_items(grouped: dict[tuple, list[dict]], methods: list[str]
         pred_direct_rank = np.array([np.nan if x["pred"].direct_recovery_rank is None else float(x["pred"].direct_recovery_rank) for x in items])
         pred_direct_rank = np.where(np.isfinite(pred_direct_rank), pred_direct_rank, pred_direct_value)
         pred_direct_std = np.array([np.nan if x["pred"].direct_recovery_std is None else float(x["pred"].direct_recovery_std) for x in items])
+        pred_direct_delta = np.array([np.nan if x["pred"].direct_recovery_delta is None else float(x["pred"].direct_recovery_delta) for x in items])
+        pred_direct_delta_std = np.array([np.nan if x["pred"].direct_recovery_delta_std is None else float(x["pred"].direct_recovery_delta_std) for x in items])
         pred_direct_opportunity = np.array([np.nan if x["pred"].direct_recovery_opportunity is None else float(x["pred"].direct_recovery_opportunity) for x in items])
         pred_direct_harm = np.array([np.nan if x["pred"].direct_recovery_harm is None else float(x["pred"].direct_recovery_harm) for x in items])
         opp_logits = np.array([np.nan if x["pred"].direct_recovery_opportunity_logit is None else float(x["pred"].direct_recovery_opportunity_logit) for x in items])
@@ -388,7 +390,17 @@ def _evaluate_grouped_items(grouped: dict[tuple, list[dict]], methods: list[str]
         sel0=(cfg.get("selection",{}) or {}) if isinstance(cfg.get("selection",{}),dict) else {}
         if nominal_ids:
             ni=nominal_ids[0]; risk_source=str(sel0.get("direct_value_risk_source","heads") or "heads").lower()
-            if risk_source=="delta_distribution" and np.isfinite(pred_direct_value[ni]):
+            if risk_source=="direct_delta" and np.isfinite(pred_direct_delta).any():
+                import math
+                pred_direct_value = np.where(np.isfinite(pred_direct_delta), pred_direct_delta, -np.inf)
+                pred_direct_value[ni] = 0.0
+                pred_direct_std = np.where(np.isfinite(pred_direct_delta_std), pred_direct_delta_std, np.inf)
+                pred_direct_std[ni] = 0.0
+                dm=pred_direct_value; ds=np.maximum(1e-6,pred_direct_std)
+                pg=float(sel0.get("direct_value_positive_gain",0.015)); ng=float(sel0.get("direct_value_negative_gain",0.010))
+                cdf=np.vectorize(lambda z:0.5*(1.0+math.erf(float(np.clip(z,-12,12))/math.sqrt(2.0))))
+                pred_direct_opportunity=cdf((dm-pg)/ds).astype(np.float32); pred_direct_harm=cdf((-ng-dm)/ds).astype(np.float32)
+            elif risk_source=="delta_distribution" and np.isfinite(pred_direct_value[ni]):
                 import math
                 dm=pred_direct_value-pred_direct_value[ni]; ds=np.sqrt(np.maximum(1e-6,pred_direct_std**2+pred_direct_std[ni]**2))
                 pg=float(sel0.get("direct_value_positive_gain",0.015)); ng=float(sel0.get("direct_value_negative_gain",0.010))

@@ -703,6 +703,8 @@ def _select_prefix(
     pred_direct_rank = np.asarray([np.nan if x["pred"].direct_recovery_rank is None else float(x["pred"].direct_recovery_rank) for x in items], dtype=np.float32)
     pred_direct_rank = np.where(np.isfinite(pred_direct_rank), pred_direct_rank, pred_direct_value).astype(np.float32)
     pred_direct_std = np.asarray([np.nan if x["pred"].direct_recovery_std is None else float(x["pred"].direct_recovery_std) for x in items], dtype=np.float32)
+    pred_direct_delta = np.asarray([np.nan if x["pred"].direct_recovery_delta is None else float(x["pred"].direct_recovery_delta) for x in items], dtype=np.float32)
+    pred_direct_delta_std = np.asarray([np.nan if x["pred"].direct_recovery_delta_std is None else float(x["pred"].direct_recovery_delta_std) for x in items], dtype=np.float32)
     pred_direct_opportunity = np.asarray([np.nan if x["pred"].direct_recovery_opportunity is None else float(x["pred"].direct_recovery_opportunity) for x in items], dtype=np.float32)
     pred_direct_harm = np.asarray([np.nan if x["pred"].direct_recovery_harm is None else float(x["pred"].direct_recovery_harm) for x in items], dtype=np.float32)
     opp_logits = np.asarray([np.nan if x["pred"].direct_recovery_opportunity_logit is None else float(x["pred"].direct_recovery_opportunity_logit) for x in items], dtype=np.float32)
@@ -711,7 +713,22 @@ def _select_prefix(
     risk_source = str(sel_tmp.get("direct_value_risk_source", "heads") or "heads").strip().lower()
     if nominal_ids:
         ni = nominal_ids[0]
-        if risk_source == "delta_distribution" and np.isfinite(pred_direct_value[ni]):
+        if risk_source == "direct_delta" and np.isfinite(pred_direct_delta).any():
+            from math import erf, sqrt
+            pred_direct_value = np.where(np.isfinite(pred_direct_delta), pred_direct_delta, -np.inf).astype(np.float32)
+            pred_direct_value[ni] = 0.0
+            pred_direct_std = np.where(np.isfinite(pred_direct_delta_std), pred_direct_delta_std, np.inf).astype(np.float32)
+            pred_direct_std[ni] = 0.0
+            delta_mean = pred_direct_value
+            delta_std = np.maximum(1.0e-6, pred_direct_std)
+            pos_gain = float(sel_tmp.get("direct_value_positive_gain", 0.015))
+            neg_gain = float(sel_tmp.get("direct_value_negative_gain", 0.010))
+            z_opp = np.clip((delta_mean - pos_gain) / delta_std, -12.0, 12.0)
+            z_harm = np.clip((-neg_gain - delta_mean) / delta_std, -12.0, 12.0)
+            normal_cdf = np.vectorize(lambda z: 0.5 * (1.0 + erf(float(z) / sqrt(2.0))))
+            pred_direct_opportunity = normal_cdf(z_opp).astype(np.float32)
+            pred_direct_harm = normal_cdf(z_harm).astype(np.float32)
+        elif risk_source == "delta_distribution" and np.isfinite(pred_direct_value[ni]):
             from math import erf, sqrt
             delta_mean = pred_direct_value - pred_direct_value[ni]
             delta_std = np.sqrt(np.maximum(1.0e-6, pred_direct_std ** 2 + pred_direct_std[ni] ** 2))

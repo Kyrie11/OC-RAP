@@ -32,11 +32,11 @@ mkdir -p "$MODEL_DIR" "$CAL_DIR" "$LOG_DIR"
 case "$VARIANT" in
   balanced)
     LR="${LR:-0.00012}"; ENCODER_LR_SCALE="${ENCODER_LR_SCALE:-0.18}"
-    POS_W="${POS_W:-6.0}"; FP_W="${FP_W:-2.2}"; HARM_W="${HARM_W:-0.20}"
+    POS_W="${POS_W:-6.0}"; FP_W="${FP_W:-2.2}"; HARM_W="${HARM_W:-0.10}"
     SETWISE_W="${SETWISE_W:-0.40}"; DISAGREE="${DISAGREE:-0.50}" ;;
   precision)
     LR="${LR:-0.00009}"; ENCODER_LR_SCALE="${ENCODER_LR_SCALE:-0.12}"
-    POS_W="${POS_W:-5.0}"; FP_W="${FP_W:-3.5}"; HARM_W="${HARM_W:-0.35}"
+    POS_W="${POS_W:-5.0}"; FP_W="${FP_W:-3.5}"; HARM_W="${HARM_W:-0.15}"
     SETWISE_W="${SETWISE_W:-0.60}"; DISAGREE="${DISAGREE:-0.70}" ;;
   *) echo "unknown VARIANT=$VARIANT" >&2; exit 2 ;;
 esac
@@ -61,10 +61,11 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.cudnn_benchmark=true --set training.pin_memory=true \
   --set training.num_workers="${NUM_WORKERS:-6}" --set training.persistent_workers=true \
   --set training.prefetch_factor="${PREFETCH_FACTOR:-2}" --set training.progress=true \
-  --set training.save_every_epoch=true --set training.best_metric=direct_policy_risk_mean_worst \
+  --set training.save_every_epoch=true --set training.best_metric=direct_policy_risk_fold_worst \
   --set training.best_metric_mode=min \
   --set training.group_batching=true --set training.group_batching_replacement=true \
   --set training.group_batch_positive_advantage_boost="${POSITIVE_GROUP_BOOST:-5.0}" \
+  --set training.group_batch_positive_best_macro_balance_power="${POSITIVE_MACRO_BALANCE_POWER:-0.5}" \
   --set training.group_batch_positive_advantage_gain_min="${POSITIVE_GAIN:-0.015}" \
   --set training.group_batch_positive_advantage_macro_ids=2,3,5,6,7 \
   --set training.group_batch_positive_advantage_bucket_ids=1,2 \
@@ -85,12 +86,17 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set model.direct_recovery_expert_disagreement_penalty="$DISAGREE" \
   --set model.direct_recovery_opportunity_head=true \
   --set model.direct_recovery_harm_head=true \
-  --set model.direct_recovery_set_context="${SET_CONTEXT_ENABLED:-true}" \
+  --set model.direct_recovery_set_context="${SET_CONTEXT_ENABLED:-false}" \
   --set model.direct_recovery_set_context_hidden="${SET_CONTEXT_HIDDEN:-192}" \
   --set model.direct_recovery_set_context_dropout="${SET_CONTEXT_DROPOUT:-0.05}" \
   --set model.direct_recovery_preference_head="${PREFERENCE_HEAD_ENABLED:-true}" \
   --set model.direct_recovery_preference_hidden="${PREFERENCE_HIDDEN:-96}" \
   --set model.direct_recovery_preference_dropout="${PREFERENCE_DROPOUT:-0.05}" \
+  --set model.direct_recovery_preference_context="${PREFERENCE_CONTEXT_ENABLED:-true}" \
+  --set model.direct_recovery_preference_context_hidden="${PREFERENCE_CONTEXT_HIDDEN:-128}" \
+  --set model.direct_recovery_delta_head="${DELTA_HEAD_ENABLED:-true}" \
+  --set model.direct_recovery_delta_hidden="${DELTA_HIDDEN:-128}" \
+  --set model.direct_recovery_delta_dropout="${DELTA_DROPOUT:-0.05}" \
   --set loss_weights.dep=0 --set loss_weights.orc=0 --set loss_weights.assign=0 \
   --set loss_weights.sig=0 --set loss_weights.margin=0 --set loss_weights.obs=0 \
   --set loss_weights.anti_oracle=0 --set loss_weights.artifact_gap=0 \
@@ -128,17 +134,19 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.direct_value_preference_margin="${PREFERENCE_MARGIN:-0.030}" \
   --set training.direct_value_preference_confidence_scale="${PREFERENCE_CONFIDENCE_SCALE:-0.040}" \
   --set training.direct_value_preference_regret_weight="${PREFERENCE_REGRET_WEIGHT:-0.50}" \
-  --set training.direct_value_delta_nll_weight="${DELTA_NLL_WEIGHT:-0.50}" \
+  --set training.direct_value_preference_listwise_weight="${PREFERENCE_LISTWISE_WEIGHT:-0.75}" \
+  --set training.direct_value_preference_gap_weight="${PREFERENCE_GAP_WEIGHT:-0.25}" \
+  --set training.direct_value_delta_nll_weight="${DELTA_NLL_WEIGHT:-1.00}" \
   --set training.direct_policy_metric_harm_weight="${POLICY_METRIC_HARM_WEIGHT:-0.35}" \
   --set training.direct_policy_metric_false_intervention_weight="${POLICY_METRIC_FALSE_WEIGHT:-0.15}" \
   --set training.direct_value_false_positive_weight="$FP_W" \
-  --set training.direct_value_opportunity_weight="${OPPORTUNITY_AUX_WEIGHT:-0.25}" \
+  --set training.direct_value_opportunity_weight="${OPPORTUNITY_AUX_WEIGHT:-0.15}" \
   --set training.direct_value_opportunity_pos_weight=8.0 \
   --set training.direct_value_harm_weight="$HARM_W" \
   --set training.direct_value_harm_pos_weight=7.0 \
   --set training.direct_value_setwise_admission_weight="$SETWISE_W" \
-  --set training.direct_value_opportunity_admission_weight=0.50 \
-  --set training.direct_value_harm_admission_weight=1.00 \
+  --set training.direct_value_opportunity_admission_weight="${OPPORTUNITY_ADMISSION_WEIGHT:-0.0}" \
+  --set training.direct_value_harm_admission_weight="${HARM_ADMISSION_WEIGHT:-0.0}" \
   --set training.direct_value_selective_risk_weight="${SELECTIVE_RISK_WEIGHT:-2.0}" \
   --set training.direct_value_selective_harm_budget="${SELECTIVE_HARM_BUDGET:-0.05}" \
   --set training.direct_value_selective_coverage_weight="${SELECTIVE_COVERAGE_WEIGHT:-1.0}" \

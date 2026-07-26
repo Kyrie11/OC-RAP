@@ -280,6 +280,11 @@ model:
   direct_recovery_preference_head: false
   direct_recovery_preference_hidden: 96
   direct_recovery_preference_dropout: 0.05
+  direct_recovery_preference_context: false
+  direct_recovery_preference_context_hidden: 128
+  direct_recovery_delta_head: false
+  direct_recovery_delta_hidden: 128
+  direct_recovery_delta_dropout: 0.05
 dataset_quality:
   # Off by default for broad natural-WOMD sweeps. Enable only for artifact/stress
   # datasets that are intended to support FRA, ODG, and anti-oracle claims.
@@ -348,6 +353,7 @@ training:
   balanced_obs_loss: true
   group_batching: false
   group_batching_replacement: true
+  group_batch_positive_best_macro_balance_power: 0.0
   group_ranking_margin: 0.25
   group_ranking_gap_weight: 0.25
   group_ranking_teacher_gap_weight: 0.25
@@ -379,6 +385,8 @@ training:
   direct_value_preference_margin: 0.03
   direct_value_preference_confidence_scale: 0.04
   direct_value_preference_regret_weight: 0.0
+  direct_value_preference_listwise_weight: 0.0
+  direct_value_preference_gap_weight: 0.0
   direct_value_delta_nll_weight: 0.0
   direct_policy_metric_harm_weight: 0.35
   direct_policy_metric_false_intervention_weight: 0.15

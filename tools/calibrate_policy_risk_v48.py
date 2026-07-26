@@ -117,14 +117,17 @@ def _top1(groups: list[dict[str, Any]], opp_thr: float, harm_thr: float, support
         if not eligible:
             continue
         best = sorted(eligible, key=lambda r: (-r.get("rank_adv", r["pred_adv"]), r["candidate"]))[0]
+        alternatives = [0.0] + [float(r.get("rank_adv", r["pred_adv"])) for r in eligible if r is not best]
+        rank_margin = float(best.get("rank_adv", best["pred_adv"]) - max(alternatives))
         row = dict(best)
+        row["rank_margin"] = rank_margin
         row.update(scene=g["scene"], time=g["time"], fold=g["fold"], oracle_best_teacher_adv=g["oracle_best_teacher_adv"])
         out.append(row)
     return out
 
 
-def _metrics(groups: list[dict[str, Any]], top1: list[dict[str, Any]], score_thr: float, pos_gain: float, neg_gain: float) -> dict[str, Any]:
-    selected = [r for r in top1 if r["pred_adv"] >= score_thr]
+def _metrics(groups: list[dict[str, Any]], top1: list[dict[str, Any]], score_thr: float, rank_margin_thr: float, pos_gain: float, neg_gain: float) -> dict[str, Any]:
+    selected = [r for r in top1 if r["pred_adv"] >= score_thr and r.get("rank_margin", 0.0) >= rank_margin_thr]
     positive = [r for r in selected if r["teacher_adv"] >= pos_gain]
     harmful = [r for r in selected if r["teacher_adv"] <= -neg_gain]
     opportunities = [g for g in groups if g["oracle_best_teacher_adv"] >= pos_gain]
@@ -152,49 +155,97 @@ def _metrics(groups: list[dict[str, Any]], top1: list[dict[str, Any]], score_thr
     }
 
 
-def _fit(groups: list[dict[str, Any]], args: argparse.Namespace, supported_macros: set[int]) -> tuple[dict[str, float] | None, dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+def _fit(
+    groups: list[dict[str, Any]],
+    args: argparse.Namespace,
+    supported_macros: set[int],
+) -> tuple[dict[str, float] | None, dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     pairs = [r for g in groups for r in g["pairs"] if r["macro"] in supported_macros]
-    opp_grid = _grid([r["opportunity"] for r in pairs], minimum=args.min_opportunity, n=args.grid_size, reverse=True)
-    harm_grid = _grid([r["harm"] for r in pairs], maximum=args.max_harm_probability, n=args.grid_size, reverse=False)
+    opp_grid = _grid(
+        [r["opportunity"] for r in pairs],
+        minimum=args.min_opportunity,
+        n=args.grid_size,
+        reverse=True,
+    )
+    harm_grid = _grid(
+        [r["harm"] for r in pairs],
+        maximum=args.max_harm_probability,
+        n=args.grid_size,
+        reverse=False,
+    )
     candidates: list[dict[str, Any]] = []
     frontier: list[dict[str, Any]] = []
     for opp_thr in opp_grid:
         for harm_thr in harm_grid:
             top1 = _top1(groups, opp_thr, harm_thr, supported_macros)
-            score_grid = _grid([r["pred_adv"] for r in top1], minimum=args.min_score_advantage, n=args.grid_size, reverse=True)
+            score_grid = _grid(
+                [r["pred_adv"] for r in top1],
+                minimum=args.min_score_advantage,
+                n=args.grid_size,
+                reverse=True,
+            )
+            rank_grid = _grid(
+                [r.get("rank_margin", 0.0) for r in top1],
+                minimum=args.min_rank_margin,
+                n=max(7, args.grid_size // 2),
+                reverse=True,
+            )
             for score_thr in score_grid:
-                m = _metrics(groups, top1, score_thr, args.positive_gain, args.negative_gain)
-                lcb = float(m["precision_wilson_lcb90"] or 0.0)
-                harm_ucb = float(m["harmful_group_exposure_ucb90"])
-                mean_adv = float(m["teacher_advantage_mean"] or -1.0)
-                deficit = (
-                    max(0, args.min_fit_selected - int(m["num_selected"])) / max(args.min_fit_selected, 1)
-                    + max(0.0, args.min_fit_precision_lcb - lcb)
-                    + max(0.0, harm_ucb - args.max_fit_harmful_group_ucb)
-                    + max(0.0, -mean_adv)
-                )
-                row = dict(m)
-                row.update(opportunity_threshold=opp_thr, harm_threshold=harm_thr, score_threshold=score_thr, constraint_deficit=float(deficit))
-                frontier.append(row)
-                if (
-                    m["num_selected"] >= args.min_fit_selected
-                    and m["precision_wilson_lcb90"] is not None
-                    and m["precision_wilson_lcb90"] >= args.min_fit_precision_lcb
-                    and m["harmful_group_exposure_ucb90"] <= args.max_fit_harmful_group_ucb
-                    and m["teacher_advantage_mean"] is not None
-                    and m["teacher_advantage_mean"] > 0.0
-                ):
-                    candidates.append(row)
+                for rank_margin_thr in rank_grid:
+                    m = _metrics(
+                        groups, top1, score_thr, rank_margin_thr,
+                        args.positive_gain, args.negative_gain,
+                    )
+                    lcb = float(m["precision_wilson_lcb90"] or 0.0)
+                    harm_ucb = float(m["harmful_group_exposure_ucb90"])
+                    mean_adv = float(m["teacher_advantage_mean"] or -1.0)
+                    deficit = (
+                        max(0, args.min_fit_selected - int(m["num_selected"])) / max(args.min_fit_selected, 1)
+                        + max(0.0, args.min_fit_precision_lcb - lcb)
+                        + max(0.0, harm_ucb - args.max_fit_harmful_group_ucb)
+                        + max(0.0, float(m["max_selected_macro_share"]) - args.max_selected_macro_share)
+                        + max(0.0, -mean_adv)
+                    )
+                    row = dict(m)
+                    row.update(
+                        opportunity_threshold=opp_thr,
+                        harm_threshold=harm_thr,
+                        score_threshold=score_thr,
+                        rank_margin_threshold=rank_margin_thr,
+                        constraint_deficit=float(deficit),
+                    )
+                    frontier.append(row)
+                    if (
+                        m["num_selected"] >= args.min_fit_selected
+                        and m["precision_wilson_lcb90"] is not None
+                        and m["precision_wilson_lcb90"] >= args.min_fit_precision_lcb
+                        and m["harmful_group_exposure_ucb90"] <= args.max_fit_harmful_group_ucb
+                        and m["max_selected_macro_share"] <= args.max_selected_macro_share
+                        and m["teacher_advantage_mean"] is not None
+                        and m["teacher_advantage_mean"] > 0.0
+                    ):
+                        candidates.append(row)
     frontier.sort(key=lambda x: (x["constraint_deficit"], -x["num_positive_selected"], -x["num_selected"]))
     if not candidates:
-        empty = _metrics(groups, [], float("inf"), args.positive_gain, args.negative_gain)
+        empty = _metrics(groups, [], float("inf"), float("inf"), args.positive_gain, args.negative_gain)
         return None, empty, [], frontier[:40]
-    candidates.sort(key=lambda x: (
-        x["num_positive_selected"], x["precision_wilson_lcb90"], -x["harmful_group_exposure_ucb90"],
-        x["num_selected"], -x["max_selected_macro_share"],
-    ), reverse=True)
+    candidates.sort(
+        key=lambda x: (
+            x["num_positive_selected"],
+            x["precision_wilson_lcb90"],
+            -x["harmful_group_exposure_ucb90"],
+            x["num_selected"],
+            -x["max_selected_macro_share"],
+        ),
+        reverse=True,
+    )
     best = candidates[0]
-    rule = {"opportunity_threshold": best["opportunity_threshold"], "harm_threshold": best["harm_threshold"], "score_threshold": best["score_threshold"]}
+    rule = {
+        "opportunity_threshold": best["opportunity_threshold"],
+        "harm_threshold": best["harm_threshold"],
+        "score_threshold": best["score_threshold"],
+        "rank_margin_threshold": best["rank_margin_threshold"],
+    }
     return rule, best, candidates[:40], frontier[:40]
 
 def main() -> int:
@@ -224,8 +275,9 @@ def main() -> int:
     ap.add_argument("--min-verify-precision-lcb", type=float, default=0.40)
     ap.add_argument("--max-verify-harmful-group-ucb", type=float, default=0.10)
     ap.add_argument("--max-selected-macro-share", type=float, default=0.85)
-    ap.add_argument("--risk-source", choices=["delta_distribution", "heads"], default="delta_distribution")
+    ap.add_argument("--risk-source", choices=["direct_delta", "delta_distribution", "heads"], default="direct_delta")
     ap.add_argument("--delta-std-floor", type=float, default=0.03)
+    ap.add_argument("--min-rank-margin", type=float, default=0.0)
     args = ap.parse_args()
 
     supported_macros = {int(x) for x in args.macro_ids.split(",") if x.strip()}
@@ -272,6 +324,8 @@ def main() -> int:
             row["pred"] = float(pred.direct_recovery_value)
             row["pred_std"] = max(float(args.delta_std_floor), float(pred.direct_recovery_std))
             row["rank"] = float(pred.direct_recovery_rank if pred.direct_recovery_rank is not None else pred.direct_recovery_value)
+            row["delta"] = None if pred.direct_recovery_delta is None else float(pred.direct_recovery_delta)
+            row["delta_std"] = None if pred.direct_recovery_delta_std is None else max(float(args.delta_std_floor), float(pred.direct_recovery_delta_std))
             row["opp_logit"] = None if pred.direct_recovery_opportunity_logit is None else float(pred.direct_recovery_opportunity_logit)
             row["harm_logit"] = None if pred.direct_recovery_harm_logit is None else float(pred.direct_recovery_harm_logit)
             if args.risk_source == "heads" and (row["opp_logit"] is None or row["harm_logit"] is None):
@@ -296,19 +350,31 @@ def main() -> int:
             continue
         pairs = []
         for r in recs:
-            pred_adv = r["pred"] - nom["pred"]
+            if args.risk_source == "direct_delta":
+                if r["delta"] is None or r["delta_std"] is None:
+                    raise ValueError("risk-source=direct_delta requires direct delta mean/std outputs")
+                pred_adv = float(r["delta"])
+            else:
+                pred_adv = r["pred"] - nom["pred"]
             rank_adv = r["rank"] - nom["rank"]
-            delta_std = max(float(args.delta_std_floor), math.sqrt(r["pred_std"] ** 2 + nom["pred_std"] ** 2))
-            if args.risk_source == "delta_distribution":
+            delta_std = (
+                float(r["delta_std"])
+                if args.risk_source == "direct_delta"
+                else max(float(args.delta_std_floor), math.sqrt(r["pred_std"] ** 2 + nom["pred_std"] ** 2))
+            )
+            if args.risk_source in {"direct_delta", "delta_distribution"}:
                 opportunity = _normal_cdf((pred_adv - args.positive_gain) / delta_std)
                 harm = _normal_cdf((-args.negative_gain - pred_adv) / delta_std)
             else:
                 opportunity = _sigmoid(float(r["opp_logit"]) - float(nom["opp_logit"]))
                 harm = _sigmoid(float(r["harm_logit"]) - float(nom["harm_logit"]))
+            head_harm = None
+            if r["harm_logit"] is not None and nom["harm_logit"] is not None:
+                head_harm = _sigmoid(float(r["harm_logit"]) - float(nom["harm_logit"]))
             pairs.append({
                 "candidate": r["candidate"], "macro": r["macro"], "deviation": r["deviation"],
                 "pred_adv": pred_adv, "rank_adv": rank_adv, "delta_std": delta_std,
-                "opportunity": opportunity, "harm": harm,
+                "opportunity": opportunity, "harm": harm, "head_harm": head_harm,
                 "teacher_adv": r["teacher"] - nom["teacher"],
             })
         groups.append({
@@ -327,8 +393,9 @@ def main() -> int:
         verify_top1 = _top1(verify, rule["opportunity_threshold"], rule["harm_threshold"], supported_macros)
         all_top1 = _top1(groups, rule["opportunity_threshold"], rule["harm_threshold"], supported_macros)
         score_thr = rule["score_threshold"]
-    verify_metrics = _metrics(verify, verify_top1, score_thr, args.positive_gain, args.negative_gain)
-    all_metrics = _metrics(groups, all_top1, score_thr, args.positive_gain, args.negative_gain)
+    rank_margin_thr = float("inf") if rule is None else rule["rank_margin_threshold"]
+    verify_metrics = _metrics(verify, verify_top1, score_thr, rank_margin_thr, args.positive_gain, args.negative_gain)
+    all_metrics = _metrics(groups, all_top1, score_thr, rank_margin_thr, args.positive_gain, args.negative_gain)
 
     pairs = [r for g in groups for r in g["pairs"]]
     pred = [r["pred_adv"] for r in pairs]
@@ -336,7 +403,20 @@ def main() -> int:
     teacher = [r["teacher_adv"] for r in pairs]
     corr = float(np.corrcoef(pred, teacher)[0, 1]) if len(pred) > 1 and np.std(pred) > 1e-12 and np.std(teacher) > 1e-12 else None
     rank_corr = float(np.corrcoef(rank, teacher)[0, 1]) if len(rank) > 1 and np.std(rank) > 1e-12 and np.std(teacher) > 1e-12 else None
-    unconstrained_top1 = [max(g["pairs"], key=lambda r: r["rank_adv"]) for g in groups]
+    unconstrained_top1: list[dict[str, Any]] = []
+    top1_correct_labels: list[bool] = []
+    top1_rank_margins: list[float] = []
+    for g in groups:
+        ordered = sorted(g["pairs"], key=lambda r: (-r["rank_adv"], r["candidate"]))
+        chosen = ordered[0]
+        alternative_scores = [0.0] + [float(r["rank_adv"]) for r in ordered[1:]]
+        chosen = dict(chosen)
+        chosen["rank_margin"] = float(chosen["rank_adv"] - max(alternative_scores))
+        unconstrained_top1.append(chosen)
+        if g["oracle_best_teacher_adv"] >= args.positive_gain:
+            oracle = max(g["pairs"], key=lambda r: r["teacher_adv"])
+            top1_correct_labels.append(chosen["candidate"] == oracle["candidate"])
+            top1_rank_margins.append(chosen["rank_margin"])
     top1_pred = [r["rank_adv"] for r in unconstrained_top1]
     top1_teacher = [r["teacher_adv"] for r in unconstrained_top1]
     top1_corr = float(np.corrcoef(top1_pred, top1_teacher)[0, 1]) if len(top1_pred) > 1 and np.std(top1_pred) > 1e-12 and np.std(top1_teacher) > 1e-12 else None
@@ -345,8 +425,8 @@ def main() -> int:
     top1_regrets = []
     for g in positive_groups:
         chosen = max(g["pairs"], key=lambda r: r["rank_adv"])
-        oracle = max(g["pairs"], key=lambda r: r["teacher_adv"] )
-        top1_hits.append(chosen["candidate"] == oracle["candidate"] )
+        oracle = max(g["pairs"], key=lambda r: r["teacher_adv"])
+        top1_hits.append(chosen["candidate"] == oracle["candidate"])
         top1_regrets.append(max(0.0, oracle["teacher_adv"] - chosen["teacher_adv"]))
 
     scenes = {g["scene"] for g in groups}
@@ -392,17 +472,24 @@ def main() -> int:
             "direct_value_opportunity_threshold": rule["opportunity_threshold"],
             "direct_value_harm_threshold": rule["harm_threshold"],
             "direct_value_min_advantage_lcb": rule["score_threshold"],
+            "direct_value_min_rank_margin": rule["rank_margin_threshold"],
         }),
         "num_groups": len(groups), "num_scenes": len(scenes), "fit_groups": len(fit), "verify_groups": len(verify),
         "fit_scenes": len(fit_scenes), "verify_scenes": len(verify_scenes), "scene_overlap": len(fit_scenes & verify_scenes),
         "fit": fit_metrics, "verify": verify_metrics, "all": all_metrics,
         "candidate_positive_auc": _auc([r["teacher_adv"] >= args.positive_gain for r in pairs], [r["pred_adv"] for r in pairs]),
         "candidate_harm_auc": _auc([r["teacher_adv"] <= -args.negative_gain for r in pairs], [r["harm"] for r in pairs]),
+        "candidate_risk_harm_auc": _auc([r["teacher_adv"] <= -args.negative_gain for r in pairs], [r["harm"] for r in pairs]),
+        "candidate_head_harm_auc": _auc(
+            [r["teacher_adv"] <= -args.negative_gain for r in pairs if r.get("head_harm") is not None],
+            [float(r["head_harm"]) for r in pairs if r.get("head_harm") is not None],
+        ),
         "candidate_pred_teacher_correlation": corr,
         "candidate_rank_teacher_correlation": rank_corr,
         "unconstrained_group_top1_correlation": top1_corr,
         "positive_group_top1_accuracy": (float(np.mean(top1_hits)) if top1_hits else None),
         "positive_group_top1_regret_mean": (float(np.mean(top1_regrets)) if top1_regrets else None),
+        "top1_correctness_rank_margin_auc": _auc(top1_correct_labels, top1_rank_margins),
         "top_fit_candidates": candidates,
         "near_miss_frontier": near_miss,
         "skipped": dict(skipped),
@@ -416,7 +503,7 @@ def main() -> int:
         with args.rows_output.open("w", encoding="utf-8") as f:
             for row in all_top1:
                 row = dict(row)
-                row["selected"] = bool(row["pred_adv"] >= score_thr)
+                row["selected"] = bool(row["pred_adv"] >= score_thr and row.get("rank_margin", 0.0) >= rank_margin_thr)
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
     print(json.dumps(result, ensure_ascii=False), flush=True)
     return 0 if valid else 3

@@ -1355,7 +1355,11 @@ def direct_uncertainty_recovery_value_loss(
     preference_margin: float = 0.02,
     preference_confidence_scale: float = 0.05,
     preference_regret_weight: float = 0.0,
+    preference_listwise_weight: float = 0.0,
+    preference_gap_weight: float = 0.0,
     delta_nll_weight: float = 0.0,
+    pred_delta_mean: torch.Tensor | None = None,
+    pred_delta_logvar: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Learn a tri-state, nominal-relative, policy-level recovery certificate.
 
@@ -1381,6 +1385,8 @@ def direct_uncertainty_recovery_value_loss(
     # operate on the raw score so candidate advantages are not compressed.
     score = raw_score if mode == "score" else torch.sigmoid(raw_score)
     rank_score = score if pred_rank_logit is None else pred_rank_logit.float().reshape(-1)
+    direct_delta = None if pred_delta_mean is None else pred_delta_mean.float().reshape(-1)
+    direct_delta_logvar = None if pred_delta_logvar is None else pred_delta_logvar.float().reshape(-1).clamp(-7.0, 2.0)
     point_mean = torch.sigmoid(raw_score)
     logvar = pred_logvar.float().reshape(-1).clamp(-7.0, 2.0)
     trd = torch.nan_to_num(teacher_r_dep.float().reshape(-1), nan=-20.0, posinf=20.0, neginf=-20.0)
@@ -1401,9 +1407,18 @@ def direct_uncertainty_recovery_value_loss(
     mac = macro_type_id.reshape(-1)
     isn = is_nominal.float().reshape(-1) > 0.5
     bid = bucket_id.reshape(-1)
-    n = min(score.numel(), rank_score.numel(), point_mean.numel(), logvar.numel(), trd.numel(), tro.numel(), teacher_drs.numel(), sh.numel(), ti.numel(), mac.numel(), isn.numel(), bid.numel())
+    sizes = [score.numel(), rank_score.numel(), point_mean.numel(), logvar.numel(), trd.numel(), tro.numel(), teacher_drs.numel(), sh.numel(), ti.numel(), mac.numel(), isn.numel(), bid.numel()]
+    if direct_delta is not None:
+        sizes.append(direct_delta.numel())
+    if direct_delta_logvar is not None:
+        sizes.append(direct_delta_logvar.numel())
+    n = min(sizes)
     score, rank_score, point_mean, logvar, trd, tro, teacher_drs = score[:n], rank_score[:n], point_mean[:n], logvar[:n], trd[:n], tro[:n], teacher_drs[:n]
     sh, ti, mac, isn, bid = sh[:n], ti[:n], mac[:n], isn[:n], bid[:n]
+    if direct_delta is not None:
+        direct_delta = direct_delta[:n]
+    if direct_delta_logvar is not None:
+        direct_delta_logvar = direct_delta_logvar[:n]
     bucket_mask = torch.zeros((n,), dtype=torch.bool, device=score.device)
     for b in tuple(int(x) for x in bucket_ids):
         bucket_mask |= bid == b
@@ -1441,13 +1456,18 @@ def direct_uncertainty_recovery_value_loss(
         nom = noms[0]
         t_delta = target[recs] - target[nom]
         p_delta = score[recs] - score[nom]
+        if direct_delta is not None:
+            p_delta = direct_delta[recs]
         r_delta = rank_score[recs] - rank_score[nom]
         # Emphasise decision-relevant deltas while retaining all candidates.
         mag_w = 1.0 + torch.clamp(t_delta.abs() / max(float(positive_gain), 1.0e-3), max=4.0)
         centered = (mag_w * F.smooth_l1_loss(p_delta, t_delta, reduction='none')).sum() / mag_w.sum().clamp_min(1.0e-6)
         terms = [float(centered_weight) * centered]
         if float(delta_nll_weight) > 0.0:
-            delta_var = (variance[recs] + variance[nom]).clamp_min(float(variance_floor))
+            if direct_delta_logvar is not None:
+                delta_var = torch.exp(direct_delta_logvar[recs]).clamp_min(float(variance_floor))
+            else:
+                delta_var = (variance[recs] + variance[nom]).clamp_min(float(variance_floor))
             delta_nll = 0.5 * (((p_delta - t_delta).square() / delta_var) + torch.log(delta_var))
             terms.append(float(delta_nll_weight) * (mag_w * delta_nll).sum() / mag_w.sum().clamp_min(1.0e-6))
         group_range = float((target[idx].max() - target[idx].min()).item())
@@ -1490,6 +1510,28 @@ def direct_uncertainty_recovery_value_loss(
                 regret_pref = torch.clamp(best_teacher - expected, min=0.0)
                 confidence_group = torch.clamp((best_teacher - float(positive_gain)) / max(float(preference_confidence_scale), 1.0e-4), 0.0, 1.0)
                 terms.append(float(preference_regret_weight) * confidence_group * regret_pref.square())
+            if float(preference_listwise_weight) > 0.0:
+                teacher_pref = torch.softmax(t_delta.detach() / pref_tau, dim=0)
+                pred_pref_log = torch.log_softmax(r_delta / pref_tau, dim=0)
+                confidence_group = torch.clamp((best_teacher - float(positive_gain)) / max(float(preference_confidence_scale), 1.0e-4), 0.0, 1.0)
+                terms.append(
+                    float(preference_listwise_weight)
+                    * confidence_group
+                    * F.kl_div(pred_pref_log, teacher_pref, reduction="sum")
+                )
+            if float(preference_gap_weight) > 0.0 and recs.numel() > 1:
+                teacher_others = t_delta[torch.arange(recs.numel(), device=recs.device) != best_rank_j]
+                teacher_second = teacher_others.max()
+                teacher_best_gap = (best_teacher - teacher_second).detach().clamp(min=0.0, max=0.25)
+                pred_others = r_delta[torch.arange(recs.numel(), device=recs.device) != best_rank_j]
+                pred_alt = torch.maximum(pred_others.max(), r_delta.new_zeros(()))
+                pred_best_gap = r_delta[best_rank_j] - pred_alt
+                confidence_gap = torch.clamp(teacher_best_gap / max(float(preference_confidence_scale), 1.0e-4), 0.0, 1.0)
+                terms.append(
+                    float(preference_gap_weight)
+                    * confidence_gap
+                    * F.smooth_l1_loss(pred_best_gap, teacher_best_gap, reduction="mean")
+                )
         opp_delta_logits = None
         if opportunity_logits is not None:
             opp_delta_logits = opportunity_logits[recs] - opportunity_logits[nom]

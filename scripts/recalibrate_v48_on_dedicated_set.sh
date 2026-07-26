@@ -41,7 +41,7 @@ recalibrate_variant(){
 
   set +e
   CUDA_VISIBLE_DEVICES="$gpu" python -u tools/calibrate_policy_risk_v48.py \
-    --dataset "$CAL_NEAR" --checkpoint "$ckpt" --bucket near \
+    --dataset "$CAL_NEAR" --checkpoint "$ckpt" --bucket near --risk-source "${RISK_SOURCE:-direct_delta}" \
     --output "$cal/direct_value_risk_near_v48.json" --rows-output "$cal/direct_value_risk_near_v48.rows.jsonl" \
     --required-min-groups="${DEDICATED_NEAR_MIN_GROUPS:-120}" --required-min-scenes="${DEDICATED_NEAR_MIN_SCENES:-60}" \
     --min-fit-selected="${DEDICATED_NEAR_MIN_FIT_SELECTED:-12}" --min-verify-selected="${DEDICATED_NEAR_MIN_VERIFY_SELECTED:-8}" \
@@ -49,7 +49,7 @@ recalibrate_variant(){
     --max-verify-harmful-group-ucb="${DEDICATED_NEAR_MAX_VERIFY_HARM_UCB:-0.14}" \
     2>&1 | tee "$src/logs/dedicated_policy_near.log"; sn=${PIPESTATUS[0]}
   CUDA_VISIBLE_DEVICES="$gpu" python -u tools/calibrate_policy_risk_v48.py \
-    --dataset "$CAL_CONTACT" --checkpoint "$ckpt" --bucket contact \
+    --dataset "$CAL_CONTACT" --checkpoint "$ckpt" --bucket contact --risk-source "${RISK_SOURCE:-direct_delta}" \
     --output "$cal/direct_value_risk_contact_v48.json" --rows-output "$cal/direct_value_risk_contact_v48.rows.jsonl" \
     --required-min-groups="${DEDICATED_CONTACT_MIN_GROUPS:-150}" --required-min-scenes="${DEDICATED_CONTACT_MIN_SCENES:-60}" \
     --min-fit-selected="${DEDICATED_CONTACT_MIN_FIT_SELECTED:-12}" --min-verify-selected="${DEDICATED_CONTACT_MIN_VERIFY_SELECTED:-8}" \
@@ -83,7 +83,7 @@ for name in ('balanced','precision'):
           'candidate_auc':d.get('candidate_positive_auc'),'top1_corr':d.get('unconstrained_group_top1_correlation'),
           'warnings':d.get('warnings')}
     if ok:
-        harm=sum(float((d.get('verify') or {}).get('harmful_rate_selected') or 0.0) for d in docs)
+        harm=sum(float((d.get('verify') or {}).get('harmful_selected_rate') or 0.0) for d in docs)
         corr=sum(float(d.get('unconstrained_group_top1_correlation') or -1.0) for d in docs)
         valid.append((harm,-corr,name,r))
 (root/'dedicated_recalibration_status.json').write_text(json.dumps({'valid_candidates':[x[2] for x in valid],'candidates':report},ensure_ascii=False,indent=2)+'\n')

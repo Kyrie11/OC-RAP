@@ -1,5 +1,96 @@
 # OC-RAP Algorithm Changelog
 
+## v48.6 — OC-TRAC-RPGC (2026-07-26)
+
+### Evidence from the completed v48.5 experiments
+
+The completed main run, four controlled ablations, and fixed-checkpoint calibration seeds
+4801/4802/4803 change the diagnosis from “ranking is uniformly broken” to a more specific
+two-stage failure. The independent ECPR preference design is directionally valid: Contact
+within-group top-1 correlation is positive for both variants on every calibration seed
+(approximately 0.124–0.174), whereas v48.4 Contact ranking was negative on every seed.
+Near remains split-sensitive (-0.092 to 0.062 balanced and -0.070 to 0.028 precision), and
+no calibrated rule selects a recovery action. Candidate-positive AUC remains useful but is
+not sufficient (multi-seed mean about 0.682/0.728 for Near and 0.781/0.796 for Contact).
+The calibrated downside AUC is only moderate (roughly 0.54–0.62), and the closest Contact
+rules still have low precision, high harmful selection, and >0.93 single-macro share.
+
+The ablations identify the source of the ranking improvement. `C_exact_ecpr` is the only
+standalone module that makes Contact top-1 correlation positive. Legacy NASC alone does not
+improve ranking, and combining shared NASC with ECPR restores candidate AUC but drives
+policy top-1 back toward zero or negative. Therefore v48.6 retains independent preference
+learning and removes legacy shared-feature set context from the main path.
+
+### Engineering conclusions and fixes
+
+- Verified that the executed v48.5 configuration used `direct_value_output_mode=score` in
+  both validation and calibration. A suspected raw-logit/probability mismatch was ruled out
+  as the root cause; the generic validation path is nevertheless made mode-explicit.
+- The v48.5 “delta distribution” subtracts two absolute value predictions and adds their
+  variances as if their errors were independent. Candidate and nominal share the same scene
+  encoder, so this approximation can overestimate uncertainty and collapse opportunity/harm
+  gates to zero coverage.
+- Calibration now enforces the macro-concentration constraint on the fit fold, not only as a
+  held-out warning. Near-miss optimisation also includes macro-share deficit.
+- Added explicit rank-margin abstention to calibration and runtime, plus diagnostics for
+  rank-margin correctness AUC, direct-risk harm AUC, and the legacy Harm-head AUC.
+- Checkpoint selection uses the worst scene-hash fold across Near and Contact rather than a
+  single pooled development mean, reducing sensitivity to the proxy calibration split.
+
+### New algorithmic contribution: Relative Preference and Gain Certificate (RPGC)
+
+- **Preference-only relative context:** nominal-relative, recovery-mean, and recovery-max
+  context augments only the independent rank residual. The absolute value representation is
+  no longer rewritten by NASC. The new residual projection is zero-initialized, preserving
+  the v48.5 checkpoint exactly at warm start.
+- **Direct relative-gain distribution:** a dedicated head predicts
+  `PCD(candidate)-PCD(nominal)` mean and log-variance from paired relative features. This
+  replaces the independence approximation formed by subtracting two absolute predictions.
+  The same output drives delta NLL training, checkpoint admission metrics, calibration, and
+  closed-loop risk control.
+- **Confidence-paced listwise preference and rank-gap calibration:** exact teacher-PCD
+  supervises the complete recovery ordering and the best-vs-runner-up margin. Near-ties are
+  downweighted; high-confidence positive groups receive stronger gradients. The learned
+  margin becomes a deployable abstention certificate rather than an uncalibrated score.
+- **Exact-opportunity macro-balanced sampling:** positive groups are reweighted by inverse
+  teacher-best-macro frequency using only the training teacher index. This addresses the
+  observed macro-5 shortcut without the high variance of minibatch GroupDRO or any use of
+  validation/test distribution statistics.
+- **Fold-robust policy checkpointing:** early stopping minimises the worst Near/Contact
+  scene-hash-fold policy risk, combining positive-group exact regret, harmful switches, and
+  false interventions.
+
+### Required attribution protocol
+
+1. `A_v485_ecpr_reference`: effective v48.5 ECPR path, no legacy NASC and no direct delta.
+2. `B_preference_context_only`: A plus preference-only relative context.
+3. `C_direct_delta_only`: A plus the direct candidate-vs-nominal gain distribution.
+4. `D_full_rpgc`: preference context plus direct gain distribution (v48.6 main).
+
+All runs use the same exact teacher-PCD, initialization, scene split, macro-balanced
+positive sampler, and Natural-gate constraints. The main, multi-seed calibration, ablations,
+and closed-loop probes must run sequentially and only immutable completed checkpoints may
+be compared.
+
+### Decision gates
+
+- Near and Contact top-1 correlation should be positive on all three proxy seeds; initial
+  target >0.10 and publication target >=0.20.
+- Rank-margin correctness AUC should exceed 0.65 before margin-based coverage is trusted.
+- At least one variant must produce non-zero held-out selections in both regimes with
+  precision LCB90 >=0.40 during development, then >=0.60 for paper readiness.
+- Positive recall should reach >=0.35, harmful-selection UCB90 <=0.10, and selected macro
+  share <=0.85 before development closed loop.
+- Safe, Near, and Contact paper targets remain closed-loop requirements; zero-action
+  abstention is safe but supplies no evidence of recovery benefit.
+
+### Non-repetition note
+
+This iteration does not repeat shared NASC, threshold relaxation, Harm-head-driven ranking,
+minibatch GroupDRO, or another generic pairwise loss. It deepens the experimentally supported
+independent preference idea and makes relative gain, uncertainty, confidence, and macro
+coverage separately identifiable.
+
 ## v48.5 — OC-TRAC-ECPR (2026-07-25)
 
 ### Evidence motivating this iteration
