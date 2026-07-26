@@ -1378,8 +1378,29 @@ def direct_uncertainty_recovery_value_loss(
     selection uses a validation-calibrated additive residual bound instead of
     trusting the model's self-reported standard deviation.
     """
+    # Keep an autograd connection to every optional direct branch.  Staged
+    # training intentionally freezes most heads and some perfectly valid group
+    # batches contain no supervision for the currently trainable head (for
+    # example, a preference-only batch with no positive recovery opportunity).
+    # In that case the mathematical loss is exactly zero, but returning a zero
+    # made only from a frozen value tensor produces ``requires_grad=False`` and
+    # makes ``backward()`` fail.  Adding this zero-valued anchor preserves the
+    # objective and optimizer behaviour while turning such batches into proper
+    # zero-gradient no-ops.
+    grad_anchor = pred_logit.float().sum() * 0.0
+    for optional_output in (
+        pred_logvar,
+        pred_opportunity_logit,
+        pred_harm_logit,
+        pred_rank_logit,
+        pred_delta_mean,
+        pred_delta_logvar,
+    ):
+        if optional_output is not None:
+            grad_anchor = grad_anchor + optional_output.float().sum() * 0.0
+
     if pred_logit.numel() <= 1:
-        return pred_logit.sum() * 0.0
+        return grad_anchor
     raw_score = pred_logit.float().reshape(-1)
     mode = str(output_mode or "probability").strip().lower()
     if mode not in {"probability", "score"}:
@@ -1428,7 +1449,7 @@ def direct_uncertainty_recovery_value_loss(
         bucket_mask |= bid == b
     finite = bucket_mask & torch.isfinite(score) & torch.isfinite(rank_score) & torch.isfinite(point_mean) & torch.isfinite(logvar) & torch.isfinite(trd) & torch.isfinite(tro) & torch.isfinite(teacher_drs)
     if not bool(finite.any()):
-        return pred_logit.sum() * 0.0
+        return grad_anchor
     teacher_gap = torch.clamp(tro - trd, min=0.0)
     target = _torch_pcd_score(teacher_drs, trd, teacher_gap).detach().clamp(0.0, 1.0)
     variance = torch.exp(logvar).clamp_min(float(variance_floor))
@@ -1703,7 +1724,7 @@ def direct_uncertainty_recovery_value_loss(
         best_macro = int(mac[recs[best_j]].detach().item()) if recs.numel() else -1
         group_domains.append((b, int(severity_bin), int(state_bin), best_macro))
     if not group_losses:
-        return float(point_weight) * point_loss
+        return float(point_weight) * point_loss + grad_anchor
     gl = torch.stack(group_losses)
     gw = torch.as_tensor(group_weights, dtype=gl.dtype, device=gl.device)
     erm_grouped = (gl * gw).sum() / gw.sum().clamp_min(1.0e-6)
@@ -1720,4 +1741,4 @@ def direct_uncertainty_recovery_value_loss(
             dro_tau = max(float(group_dro_temperature), 1.0e-3)
             robust_grouped = dro_tau * (torch.logsumexp(dm / dro_tau, dim=0) - torch.log(torch.as_tensor(float(dm.numel()), dtype=dm.dtype, device=dm.device)))
             grouped = (1.0 - dro_mix) * erm_grouped + dro_mix * robust_grouped
-    return float(point_weight) * point_loss + grouped
+    return float(point_weight) * point_loss + grouped + grad_anchor
