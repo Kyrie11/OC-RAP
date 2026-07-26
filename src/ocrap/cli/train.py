@@ -312,6 +312,10 @@ def _direct_value_loss_from_outputs(
         preference_regret_weight=float(tcfg.get("direct_value_preference_regret_weight", 0.0)),
         preference_listwise_weight=float(tcfg.get("direct_value_preference_listwise_weight", 0.0)),
         preference_gap_weight=float(tcfg.get("direct_value_preference_gap_weight", 0.0)),
+        preference_set_weight=float(tcfg.get("direct_value_preference_set_weight", 0.0)),
+        preference_set_margin=float(tcfg.get("direct_value_preference_set_margin", 0.02)),
+        preference_tie_epsilon_near=float(tcfg.get("direct_value_preference_tie_epsilon_near", 0.025)),
+        preference_tie_epsilon_contact=float(tcfg.get("direct_value_preference_tie_epsilon_contact", 0.010)),
         delta_nll_weight=float(tcfg.get("direct_value_delta_nll_weight", 0.0)),
     )
 
@@ -399,25 +403,33 @@ def _direct_policy_batch_stats(
     option_gamma: float,
     option_temperature: float,
 ) -> dict[str, float]:
-    """Group-level exact-contract policy metrics used for checkpoint selection.
+    """Exact-contract ranking and deployment-aligned certificate metrics.
 
-    v48.5 ECPR deliberately measures the same exact teacher-PCD contract used by
-    calibration. Candidate ordering is taken from the independent preference
-    head when enabled; the value distribution remains the admission/gain model.
+    v48.7 separates two validation questions:
+      1) preference risk: did the rank head choose an exact-PCD acceptable
+         recovery candidate, allowing regime-specific near-ties;
+      2) certificate risk: would the fixed validation certificate actually
+         admit that candidate, and what harmful/false/missed-opportunity cost
+         would result.
+
+    The latter uses the same Gaussian delta CDF semantics as calibration rather
+    than comparing a raw logit/delta to a probability threshold.
     """
     if "direct_recovery_value_logit" not in out:
         return {}
     value_score = out["direct_recovery_value_logit"].float().reshape(-1)
-    # Keep validation admission on the same declared output scale as training
-    # and calibration.  The executed v48.5 configuration used score mode and was
-    # already consistent; this explicit branch protects probability-mode
-    # ablations from silently mixing logits and probabilities.
     output_mode = str(tcfg.get("direct_value_output_mode", "probability") or "probability").strip().lower()
     if output_mode != "score":
         value_score = torch.sigmoid(value_score)
+    value_logvar = out.get("direct_recovery_value_logvar")
+    if value_logvar is not None:
+        value_logvar = value_logvar.float().reshape(-1).clamp(-7.0, 2.0)
     direct_delta = out.get("direct_recovery_delta_mean")
+    direct_delta_logvar = out.get("direct_recovery_delta_logvar")
     if direct_delta is not None:
         direct_delta = direct_delta.float().reshape(-1)
+    if direct_delta_logvar is not None:
+        direct_delta_logvar = direct_delta_logvar.float().reshape(-1).clamp(-7.0, 2.0)
     rank_score = out.get("direct_recovery_rank_logit", out["direct_recovery_value_logit"]).float().reshape(-1)
     trd = torch.nan_to_num(batch["r_dep_star"].float().reshape(-1), nan=-20.0, posinf=20.0, neginf=-20.0)
     tro = torch.nan_to_num(batch["r_orc_star"].float().reshape(-1), nan=-20.0, posinf=20.0, neginf=-20.0)
@@ -438,14 +450,21 @@ def _direct_policy_batch_stats(
     isn = batch["is_nominal"].reshape(-1) > 0.5
     mac = batch.get("prefix_macro_type_id", batch.get("candidate_index", torch.zeros_like(ti))).reshape(-1)
     allowed = torch.zeros_like(isn)
-    for m in _parse_int_tuple(tcfg.get("direct_value_macro_ids", "2,3,5,7"), (2, 3, 5, 7)):
+    for m in _parse_int_tuple(tcfg.get("direct_value_macro_ids", "2,3,5,6,7"), (2, 3, 5, 6, 7)):
         allowed |= mac == int(m)
     positive_gain = float(tcfg.get("direct_value_positive_gain", 0.03))
     negative_gain = float(tcfg.get("direct_value_negative_gain", 0.02))
+    opp_threshold = float(tcfg.get("direct_policy_metric_opportunity_threshold", 0.65))
+    harm_threshold = float(tcfg.get("direct_policy_metric_harm_threshold", 0.30))
+    rank_margin_threshold = float(tcfg.get("direct_policy_metric_rank_margin_threshold", 0.02))
+    min_delta_mean = float(tcfg.get("direct_policy_metric_min_delta_mean", 0.0))
     stats: dict[str, float] = {}
 
     def add(name: str, value: float) -> None:
         stats[name] = stats.get(name, 0.0) + float(value)
+
+    def normal_cdf(z: torch.Tensor) -> torch.Tensor:
+        return 0.5 * (1.0 + torch.erf(z / (2.0 ** 0.5)))
 
     keys = torch.stack([bid, sh, ti], dim=1)
     for key in torch.unique(keys, dim=0):
@@ -458,37 +477,69 @@ def _direct_policy_batch_stats(
         teacher_delta = target[recs] - target[nom]
         pred_rank_delta = rank_score[recs] - rank_score[nom]
         oracle_j = int(torch.argmax(teacher_delta).item())
-        oracle_adv = max(0.0, float(teacher_delta[oracle_j].item()))
+        oracle_adv_raw = float(teacher_delta[oracle_j].item())
+        oracle_adv = max(0.0, oracle_adv_raw)
         pred_j = int(torch.argmax(pred_rank_delta).item())
         chosen_teacher_adv = float(teacher_delta[pred_j].item())
         positive_group = oracle_adv >= positive_gain
-        # Ranking is evaluated among recovery candidates. Admission/abstention is
-        # measured separately so an always-nominal policy cannot obtain good top-1.
-        regret = max(0.0, oracle_adv - chosen_teacher_adv) if positive_group else 0.0
-        harmful = chosen_teacher_adv <= -negative_gain
-        value_adv = float(
-            direct_delta[recs[pred_j]].item()
-            if direct_delta is not None
-            else (value_score[recs[pred_j]] - value_score[nom]).item()
-        )
-        false_intervention = (not positive_group) and value_adv >= positive_gain
-        positive_admission = positive_group and value_adv >= positive_gain
         bucket = int(bid[nom].item())
         suffix = "near" if bucket == 1 else ("contact" if bucket == 2 else "other")
+        tie_eps = float(
+            tcfg.get(
+                "direct_value_preference_tie_epsilon_near" if bucket == 1 else "direct_value_preference_tie_epsilon_contact",
+                0.025 if bucket == 1 else 0.010,
+            )
+        )
+        acceptable = bool(chosen_teacher_adv >= oracle_adv_raw - tie_eps)
+        regret = max(0.0, oracle_adv - chosen_teacher_adv - tie_eps) if positive_group else 0.0
+        rank_harmful = chosen_teacher_adv <= -negative_gain
+
+        recovery_scores = pred_rank_delta
+        if recovery_scores.numel() > 1:
+            sorted_scores = torch.topk(recovery_scores, k=2).values
+            runner = torch.maximum(sorted_scores[1], recovery_scores.new_zeros(()))
+        else:
+            runner = recovery_scores.new_zeros(())
+        rank_margin = float((recovery_scores[pred_j] - runner).item())
+
+        chosen_idx = recs[pred_j]
+        if direct_delta is not None:
+            delta_mean = direct_delta[chosen_idx]
+            if direct_delta_logvar is not None:
+                delta_std = torch.exp(0.5 * direct_delta_logvar[chosen_idx]).clamp_min(1.0e-3)
+            else:
+                delta_std = delta_mean.new_tensor(0.10)
+        else:
+            delta_mean = value_score[chosen_idx] - value_score[nom]
+            if value_logvar is not None:
+                delta_std = torch.sqrt(
+                    torch.exp(value_logvar[chosen_idx]) + torch.exp(value_logvar[nom])
+                ).clamp_min(1.0e-3)
+            else:
+                delta_std = delta_mean.new_tensor(0.10)
+        opportunity_prob = float(normal_cdf((delta_mean - positive_gain) / delta_std).item())
+        harm_prob = float(normal_cdf((-negative_gain - delta_mean) / delta_std).item())
+        admitted = bool(
+            opportunity_prob >= opp_threshold
+            and harm_prob <= harm_threshold
+            and rank_margin >= rank_margin_threshold
+            and float(delta_mean.item()) >= min_delta_mean
+        )
+        admitted_harmful = admitted and rank_harmful
+        false_intervention = admitted and (not positive_group)
+        positive_admission = admitted and positive_group
         scene_fold = int(abs(int(sh[nom].item())) % 3)
         for name in ("all", suffix, f"{suffix}_fold{scene_fold}"):
             add(f"group_count_{name}", 1.0)
-            add(f"harmful_switch_{name}", float(harmful))
+            add(f"rank_harmful_{name}", float(rank_harmful))
+            add(f"admitted_harmful_{name}", float(admitted_harmful))
             add(f"false_intervention_{name}", float(false_intervention))
-            add(f"admission_count_{name}", float(value_adv >= positive_gain))
+            add(f"admission_count_{name}", float(admitted))
         if positive_group:
-            rank_candidates = torch.cat([pred_rank_delta.new_zeros(1), pred_rank_delta], dim=0)
-            top_values = torch.topk(rank_candidates, k=min(2, int(rank_candidates.numel()))).values
-            rank_margin = float((top_values[0] - top_values[1]).item()) if top_values.numel() > 1 else 0.0
             for name in ("all", suffix, f"{suffix}_fold{scene_fold}"):
                 add(f"positive_count_{name}", 1.0)
                 add(f"positive_regret_sum_{name}", regret)
-                add(f"positive_top1_hit_{name}", float(pred_j == oracle_j))
+                add(f"positive_top1_hit_{name}", float(acceptable))
                 add(f"positive_admission_hit_{name}", float(positive_admission))
                 add(f"positive_rank_margin_sum_{name}", rank_margin)
     return stats
@@ -499,45 +550,67 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
     out: dict[str, float] = {}
     harm_lambda = float(tcfg.get("direct_policy_metric_harm_weight", 0.35))
     false_lambda = float(tcfg.get("direct_policy_metric_false_intervention_weight", 0.15))
+    miss_lambda = float(tcfg.get("direct_policy_metric_missed_opportunity_weight", 0.25))
+    rank_miss_lambda = float(tcfg.get("direct_policy_metric_rank_miss_weight", 0.10))
     suffixes = ["all", "near", "contact"] + [f"{regime}_fold{fold}" for regime in ("near", "contact") for fold in range(3)]
     for suffix in suffixes:
         tag = "" if suffix == "all" else f"_{suffix}"
         count = stats.get(f"group_count_{suffix}", 0.0)
         pos_count = stats.get(f"positive_count_{suffix}", 0.0)
-        # Backward-compatible reporting for pre-v48.5 tests and old logs.
-        if count > 0 and f"regret_sum_{suffix}" in stats:
-            out[f"direct_group_regret_mean{tag}"] = stats.get(f"regret_sum_{suffix}", 0.0) / count
-            out[f"direct_group_top1_accuracy{tag}"] = stats.get(f"top1_hit_{suffix}", 0.0) / count
         if count > 0:
-            out[f"direct_harmful_switch_rate{tag}"] = stats.get(f"harmful_switch_{suffix}", 0.0) / count
+            # Preserve pre-v48.5 diagnostics consumed by historical tests and
+            # dashboards when legacy aggregate keys are supplied.
+            if f"regret_sum_{suffix}" in stats:
+                out[f"direct_group_regret_mean{tag}"] = stats.get(f"regret_sum_{suffix}", 0.0) / count
+            if f"top1_hit_{suffix}" in stats:
+                out[f"direct_group_top1_accuracy{tag}"] = stats.get(f"top1_hit_{suffix}", 0.0) / count
+            out[f"direct_rank_harmful_top1_rate{tag}"] = stats.get(f"rank_harmful_{suffix}", stats.get(f"harmful_switch_{suffix}", 0.0)) / count
+            out[f"direct_harmful_switch_rate{tag}"] = stats.get(f"admitted_harmful_{suffix}", stats.get(f"harmful_switch_{suffix}", 0.0)) / count
             out[f"direct_false_intervention_rate{tag}"] = stats.get(f"false_intervention_{suffix}", 0.0) / count
             out[f"direct_raw_admission_rate{tag}"] = stats.get(f"admission_count_{suffix}", 0.0) / count
         if pos_count > 0:
-            out[f"direct_positive_group_regret_mean{tag}"] = stats.get(f"positive_regret_sum_{suffix}", 0.0) / pos_count
-            out[f"direct_positive_group_top1_accuracy{tag}"] = stats.get(f"positive_top1_hit_{suffix}", 0.0) / pos_count
-            out[f"direct_positive_admission_recall{tag}"] = stats.get(f"positive_admission_hit_{suffix}", 0.0) / pos_count
+            regret = stats.get(f"positive_regret_sum_{suffix}", 0.0) / pos_count
+            top1 = stats.get(f"positive_top1_hit_{suffix}", 0.0) / pos_count
+            recall = stats.get(f"positive_admission_hit_{suffix}", 0.0) / pos_count
+            out[f"direct_positive_group_regret_mean{tag}"] = regret
+            out[f"direct_positive_group_top1_accuracy{tag}"] = top1
+            out[f"direct_positive_admission_recall{tag}"] = recall
             out[f"direct_positive_rank_margin_mean{tag}"] = stats.get(f"positive_rank_margin_sum_{suffix}", 0.0) / pos_count
+            out[f"direct_preference_risk_mean{tag}"] = regret + rank_miss_lambda * (1.0 - top1)
         if count > 0 and pos_count > 0:
-            out[f"direct_policy_risk_mean{tag}"] = (
+            cert_risk = (
                 out[f"direct_positive_group_regret_mean{tag}"]
                 + harm_lambda * out[f"direct_harmful_switch_rate{tag}"]
                 + false_lambda * out[f"direct_false_intervention_rate{tag}"]
+                + miss_lambda * (1.0 - out[f"direct_positive_admission_recall{tag}"])
             )
-    regime_risks = [out[k] for k in ("direct_policy_risk_mean_near", "direct_policy_risk_mean_contact") if k in out]
-    if regime_risks:
-        out["direct_policy_risk_mean_worst"] = max(regime_risks)
-    elif "direct_policy_risk_mean" in out:
-        out["direct_policy_risk_mean_worst"] = out["direct_policy_risk_mean"]
+            out[f"direct_certificate_risk_mean{tag}"] = cert_risk
+            # Backward-compatible alias used by older dashboards.
+            out[f"direct_policy_risk_mean{tag}"] = cert_risk
     legacy_regrets = [out[k] for k in ("direct_group_regret_mean_near", "direct_group_regret_mean_contact") if k in out]
     if legacy_regrets:
         out["direct_group_regret_mean_worst"] = max(legacy_regrets)
-    fold_risks = [
-        value for key, value in out.items()
-        if key.startswith("direct_policy_risk_mean_near_fold") or key.startswith("direct_policy_risk_mean_contact_fold")
-    ]
-    if fold_risks:
-        out["direct_policy_risk_fold_worst"] = max(fold_risks)
+    for metric in ("direct_preference_risk_mean", "direct_certificate_risk_mean", "direct_policy_risk_mean"):
+        regime_vals = [out[k] for k in (f"{metric}_near", f"{metric}_contact") if k in out]
+        if regime_vals:
+            out[f"{metric}_worst"] = max(regime_vals)
+        fold_vals = [
+            value for key, value in out.items()
+            if key.startswith(f"{metric}_near_fold") or key.startswith(f"{metric}_contact_fold")
+        ]
+        if fold_vals:
+            out[f"{metric.replace('_mean', '')}_fold_worst"] = max(fold_vals)
+    # Exact names consumed by v48.7 staged training.
+    if "direct_preference_risk_fold_worst" not in out:
+        vals = [v for k, v in out.items() if k.startswith("direct_preference_risk_mean_") and "fold" in k]
+        if vals:
+            out["direct_preference_risk_fold_worst"] = max(vals)
+    if "direct_certificate_risk_fold_worst" not in out:
+        vals = [v for k, v in out.items() if k.startswith("direct_certificate_risk_mean_") and "fold" in k]
+        if vals:
+            out["direct_certificate_risk_fold_worst"] = max(vals)
     return out
+
 
 def _epoch(
     model: OCRAPModel,
@@ -1567,7 +1640,28 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
     freeze_prefixes = tuple(
         x.strip() for x in str(tcfg.get("freeze_param_prefixes", "") or "").split(",") if x.strip()
     )
-    if freeze_prefixes:
+    trainable_prefixes = tuple(
+        x.strip() for x in str(tcfg.get("trainable_param_prefixes", "") or "").split(",") if x.strip()
+    )
+    if freeze_prefixes and trainable_prefixes:
+        raise ValueError("Configure either training.freeze_param_prefixes or training.trainable_param_prefixes, not both")
+    if trainable_prefixes:
+        frozen = 0
+        trainable = 0
+        for name, param in model.named_parameters():
+            keep = any(name.startswith(prefix) for prefix in trainable_prefixes)
+            param.requires_grad_(keep)
+            if keep:
+                trainable += int(param.numel())
+            else:
+                frozen += int(param.numel())
+        print({
+            "event": "trainable_param_prefixes",
+            "prefixes": list(trainable_prefixes),
+            "frozen_params": int(frozen),
+            "trainable_params": int(trainable),
+        }, flush=True)
+    elif freeze_prefixes:
         frozen = 0
         trainable = 0
         for name, param in model.named_parameters():
@@ -1697,6 +1791,7 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "note": "OC-RAP neural checkpoint: predicts root probabilities, recovery margins, utility, and observation compatibility from scene-prefix features.",
             "init_checkpoint": init_checkpoint,
             "freeze_param_prefixes": list(freeze_prefixes),
+            "trainable_param_prefixes": list(trainable_prefixes),
         }
     print({
         "event": "train_start",

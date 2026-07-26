@@ -198,11 +198,13 @@ def _fit(
                     )
                     lcb = float(m["precision_wilson_lcb90"] or 0.0)
                     harm_ucb = float(m["harmful_group_exposure_ucb90"])
+                    conditional_harm_ucb = float(m["harmful_selected_ucb90"])
                     mean_adv = float(m["teacher_advantage_mean"] or -1.0)
                     deficit = (
                         max(0, args.min_fit_selected - int(m["num_selected"])) / max(args.min_fit_selected, 1)
                         + max(0.0, args.min_fit_precision_lcb - lcb)
                         + max(0.0, harm_ucb - args.max_fit_harmful_group_ucb)
+                        + max(0.0, conditional_harm_ucb - args.max_fit_harmful_selected_ucb)
                         + max(0.0, float(m["max_selected_macro_share"]) - args.max_selected_macro_share)
                         + max(0.0, -mean_adv)
                     )
@@ -220,6 +222,7 @@ def _fit(
                         and m["precision_wilson_lcb90"] is not None
                         and m["precision_wilson_lcb90"] >= args.min_fit_precision_lcb
                         and m["harmful_group_exposure_ucb90"] <= args.max_fit_harmful_group_ucb
+                        and m["harmful_selected_ucb90"] <= args.max_fit_harmful_selected_ucb
                         and m["max_selected_macro_share"] <= args.max_selected_macro_share
                         and m["teacher_advantage_mean"] is not None
                         and m["teacher_advantage_mean"] > 0.0
@@ -234,6 +237,7 @@ def _fit(
             x["num_positive_selected"],
             x["precision_wilson_lcb90"],
             -x["harmful_group_exposure_ucb90"],
+            -x["harmful_selected_ucb90"],
             x["num_selected"],
             -x["max_selected_macro_share"],
         ),
@@ -270,14 +274,22 @@ def main() -> int:
     ap.add_argument("--grid-size", type=int, default=15)
     ap.add_argument("--min-fit-selected", type=int, default=12)
     ap.add_argument("--min-fit-precision-lcb", type=float, default=0.50)
-    ap.add_argument("--max-fit-harmful-group-ucb", type=float, default=0.08)
+    ap.add_argument("--max-fit-harmful-group-ucb", type=float, default=0.08,
+                    help="Maximum population harmful-exposure UCB")
+    ap.add_argument("--max-fit-harmful-selected-ucb", type=float, default=1.0,
+                    help="Maximum conditional harmful-switch UCB among selected actions")
     ap.add_argument("--min-verify-selected", type=int, default=8)
     ap.add_argument("--min-verify-precision-lcb", type=float, default=0.40)
-    ap.add_argument("--max-verify-harmful-group-ucb", type=float, default=0.10)
+    ap.add_argument("--max-verify-harmful-group-ucb", type=float, default=0.10,
+                    help="Maximum population harmful-exposure UCB")
+    ap.add_argument("--max-verify-harmful-selected-ucb", type=float, default=1.0,
+                    help="Maximum conditional harmful-switch UCB among selected actions")
     ap.add_argument("--max-selected-macro-share", type=float, default=0.85)
     ap.add_argument("--risk-source", choices=["direct_delta", "delta_distribution", "heads"], default="direct_delta")
     ap.add_argument("--delta-std-floor", type=float, default=0.03)
     ap.add_argument("--min-rank-margin", type=float, default=0.0)
+    ap.add_argument("--preference-tie-epsilon-near", type=float, default=0.025)
+    ap.add_argument("--preference-tie-epsilon-contact", type=float, default=0.010)
     args = ap.parse_args()
 
     supported_macros = {int(x) for x in args.macro_ids.split(",") if x.strip()}
@@ -405,7 +417,9 @@ def main() -> int:
     rank_corr = float(np.corrcoef(rank, teacher)[0, 1]) if len(rank) > 1 and np.std(rank) > 1e-12 and np.std(teacher) > 1e-12 else None
     unconstrained_top1: list[dict[str, Any]] = []
     top1_correct_labels: list[bool] = []
+    top1_strict_labels: list[bool] = []
     top1_rank_margins: list[float] = []
+    tie_epsilon = args.preference_tie_epsilon_near if args.bucket == "near" else args.preference_tie_epsilon_contact
     for g in groups:
         ordered = sorted(g["pairs"], key=lambda r: (-r["rank_adv"], r["candidate"]))
         chosen = ordered[0]
@@ -415,19 +429,22 @@ def main() -> int:
         unconstrained_top1.append(chosen)
         if g["oracle_best_teacher_adv"] >= args.positive_gain:
             oracle = max(g["pairs"], key=lambda r: r["teacher_adv"])
-            top1_correct_labels.append(chosen["candidate"] == oracle["candidate"])
+            top1_strict_labels.append(chosen["candidate"] == oracle["candidate"])
+            top1_correct_labels.append(chosen["teacher_adv"] >= oracle["teacher_adv"] - tie_epsilon)
             top1_rank_margins.append(chosen["rank_margin"])
     top1_pred = [r["rank_adv"] for r in unconstrained_top1]
     top1_teacher = [r["teacher_adv"] for r in unconstrained_top1]
     top1_corr = float(np.corrcoef(top1_pred, top1_teacher)[0, 1]) if len(top1_pred) > 1 and np.std(top1_pred) > 1e-12 and np.std(top1_teacher) > 1e-12 else None
     positive_groups = [g for g in groups if g["oracle_best_teacher_adv"] >= args.positive_gain]
     top1_hits = []
+    top1_strict_hits = []
     top1_regrets = []
     for g in positive_groups:
         chosen = max(g["pairs"], key=lambda r: r["rank_adv"])
         oracle = max(g["pairs"], key=lambda r: r["teacher_adv"])
-        top1_hits.append(chosen["candidate"] == oracle["candidate"])
-        top1_regrets.append(max(0.0, oracle["teacher_adv"] - chosen["teacher_adv"]))
+        top1_strict_hits.append(chosen["candidate"] == oracle["candidate"])
+        top1_hits.append(chosen["teacher_adv"] >= oracle["teacher_adv"] - tie_epsilon)
+        top1_regrets.append(max(0.0, oracle["teacher_adv"] - chosen["teacher_adv"] - tie_epsilon))
 
     scenes = {g["scene"] for g in groups}
     fit_scenes = {g["scene"] for g in fit}
@@ -447,6 +464,8 @@ def main() -> int:
         warnings.append("held-out precision LCB below requirement")
     if verify_metrics["harmful_group_exposure_ucb90"] > args.max_verify_harmful_group_ucb:
         warnings.append("held-out harmful exposure UCB above budget")
+    if verify_metrics["harmful_selected_ucb90"] > args.max_verify_harmful_selected_ucb:
+        warnings.append("held-out conditional harmful-switch UCB above budget")
     if verify_metrics["max_selected_macro_share"] > args.max_selected_macro_share:
         warnings.append("held-out selections are dominated by one macro")
 
@@ -488,8 +507,11 @@ def main() -> int:
         "candidate_rank_teacher_correlation": rank_corr,
         "unconstrained_group_top1_correlation": top1_corr,
         "positive_group_top1_accuracy": (float(np.mean(top1_hits)) if top1_hits else None),
+        "positive_group_strict_top1_accuracy": (float(np.mean(top1_strict_hits)) if top1_strict_hits else None),
         "positive_group_top1_regret_mean": (float(np.mean(top1_regrets)) if top1_regrets else None),
         "top1_correctness_rank_margin_auc": _auc(top1_correct_labels, top1_rank_margins),
+        "strict_top1_correctness_rank_margin_auc": _auc(top1_strict_labels, top1_rank_margins),
+        "preference_tie_epsilon": tie_epsilon,
         "top_fit_candidates": candidates,
         "near_miss_frontier": near_miss,
         "skipped": dict(skipped),

@@ -54,6 +54,8 @@ def main() -> int:
     ap.add_argument("--top-m", type=int, default=8)
     ap.add_argument("--progress-every", type=int, default=1000)
     ap.add_argument("--positive-gain", type=float, default=0.015)
+    ap.add_argument("--deployable-macro-ids", default="2,3,5,6,7",
+                    help="Comma-separated recovery macros permitted by the deployed selector")
     ap.add_argument("--summary-output", type=Path)
     ap.add_argument("--min-positive-groups-near", type=int, default=0)
     ap.add_argument("--min-positive-groups-contact", type=int, default=0)
@@ -64,6 +66,7 @@ def main() -> int:
         help="strict exits non-zero on requested coverage shortfalls; warn records them but continues; off skips target checks",
     )
     args = ap.parse_args()
+    deployable_macro_ids = {int(x.strip()) for x in str(args.deployable_macro_ids).split(",") if x.strip()}
 
     paths = iter_sample_paths_many(args.dataset)
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -90,28 +93,38 @@ def main() -> int:
             groups.add(key)
             stats = group_targets.setdefault(key, {
                 "nominal": float("-inf"), "best_recovery": float("-inf"),
-                "best_macro": -1, "scene": scene, "bucket": bucket,
+                "best_macro": -1, "best_deployable_recovery": float("-inf"),
+                "best_deployable_macro": -1, "scene": scene, "bucket": bucket,
             })
             if row["nominal"]:
                 stats["nominal"] = max(stats["nominal"], row["teacher_pcd"])
-            elif row["teacher_pcd"] > stats["best_recovery"]:
-                stats["best_recovery"] = row["teacher_pcd"]
-                stats["best_macro"] = row["macro"]
+            else:
+                if row["teacher_pcd"] > stats["best_recovery"]:
+                    stats["best_recovery"] = row["teacher_pcd"]
+                    stats["best_macro"] = row["macro"]
+                if row["macro"] in deployable_macro_ids and row["teacher_pcd"] > stats["best_deployable_recovery"]:
+                    stats["best_deployable_recovery"] = row["teacher_pcd"]
+                    stats["best_deployable_macro"] = row["macro"]
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
             if i == 1 or i % max(1, args.progress_every) == 0 or i == len(paths):
                 print({"event": "teacher_pcd_index_progress", "seen": i, "total": len(paths), "groups": len(groups)}, flush=True)
     tmp.replace(args.output)
-    positive = [
+    positive_all = [
         stats for stats in group_targets.values()
         if np.isfinite(stats["nominal"]) and np.isfinite(stats["best_recovery"])
         and stats["best_recovery"] - stats["nominal"] >= args.positive_gain
     ]
+    positive = [
+        stats for stats in group_targets.values()
+        if np.isfinite(stats["nominal"]) and np.isfinite(stats["best_deployable_recovery"])
+        and stats["best_deployable_recovery"] - stats["nominal"] >= args.positive_gain
+    ]
 
-    def bucket_summary(bucket: int) -> dict[str, Any]:
+    def bucket_summary(bucket: int, rows_source: list[dict[str, Any]], macro_key: str) -> dict[str, Any]:
         from collections import Counter
-        rows = [x for x in positive if int(x["bucket"]) == bucket]
+        rows = [x for x in rows_source if int(x["bucket"]) == bucket]
         scenes = Counter(str(x["scene"]) for x in rows)
-        macros = Counter(int(x["best_macro"]) for x in rows)
+        macros = Counter(int(x[macro_key]) for x in rows)
         n = len(rows)
         return {
             "positive_groups": n,
@@ -121,7 +134,10 @@ def main() -> int:
             "top10_positive_scene_share": (sum(v for _, v in scenes.most_common(10)) / n) if n else None,
         }
 
-    by_bucket = {"near": bucket_summary(1), "contact": bucket_summary(2)}
+    by_bucket = {"near": bucket_summary(1, positive, "best_deployable_macro"),
+                 "contact": bucket_summary(2, positive, "best_deployable_macro")}
+    all_macro_by_bucket = {"near": bucket_summary(1, positive_all, "best_macro"),
+                           "contact": bucket_summary(2, positive_all, "best_macro")}
 
     # Development-screening heuristics are deliberately weaker than the final
     # publication coverage targets. They answer whether an algorithm-direction
@@ -162,8 +178,11 @@ def main() -> int:
         "beta": args.beta,
         "top_m": args.top_m,
         "positive_gain": args.positive_gain,
+        "deployable_macro_ids": sorted(deployable_macro_ids),
         "positive_advantage_groups": len(positive),
+        "positive_advantage_groups_all_macros": len(positive_all),
         "by_bucket": by_bucket,
+        "all_macro_by_bucket": all_macro_by_bucket,
         "quality_mode": args.quality_mode,
     }
 

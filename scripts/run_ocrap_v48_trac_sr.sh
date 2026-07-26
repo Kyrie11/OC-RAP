@@ -14,14 +14,18 @@ export WOMD_VAL_INTERACTIVE=${WOMD_VAL_INTERACTIVE:-/data0/senzeyu2/dataset/WOMD
 # hand-written rescue certificates are retained as disabled ablations.  Safe
 # remains nominal-locked.
 export RUN=${RUN:-runs/ocrap_v48_trac_sr_eval}
-export BASE_RUN=${BASE_RUN:-runs/ocrap_v48_trac_sr_regime_balanced}
+export BASE_RUN=${BASE_RUN:-}
+export SAFE_NOMINAL_ONLY=${SAFE_NOMINAL_ONLY:-0}
 if [[ -z "${CKPT:-}" ]]; then
+  [[ -n "$BASE_RUN" ]] || { echo "BASE_RUN or CKPT must be set explicitly; refusing legacy fallback" >&2; exit 2; }
   CKPT="$BASE_RUN/model_v48_trac_sr/best.pt"
 fi
 if [[ -z "${CAL:-}" ]]; then
+  [[ -n "$BASE_RUN" ]] || { echo "CAL or BASE_RUN must be set explicitly" >&2; exit 2; }
   CAL="$BASE_RUN/calibration/calibration_mix_v48.json"
 fi
 if [[ -z "${GAMMA:-}" ]]; then
+  [[ -n "$BASE_RUN" ]] || { echo "GAMMA or BASE_RUN must be set explicitly" >&2; exit 2; }
   GAMMA="$BASE_RUN/calibration/gamma_rec_by_bucket_v48.json"
 fi
 export CKPT CAL GAMMA
@@ -53,11 +57,24 @@ if not d.get('valid_for_deployment', False) or not math.isfinite(s) or not math.
 print(s, o, h)
 PYQ
 }
-if [[ -z "${NEAR_DIRECT_THRESHOLD:-}" || -z "${NEAR_DIRECT_OPPORTUNITY_THRESHOLD:-}" || -z "${NEAR_DIRECT_HARM_THRESHOLD:-}" ]]; then
-  read -r NEAR_DIRECT_THRESHOLD NEAR_DIRECT_OPPORTUNITY_THRESHOLD NEAR_DIRECT_HARM_THRESHOLD < <(read_direct_rule "$BASE_RUN/calibration/direct_value_risk_near_v48.json")
-fi
-if [[ -z "${CONTACT_DIRECT_THRESHOLD:-}" || -z "${CONTACT_DIRECT_OPPORTUNITY_THRESHOLD:-}" || -z "${CONTACT_DIRECT_HARM_THRESHOLD:-}" ]]; then
-  read -r CONTACT_DIRECT_THRESHOLD CONTACT_DIRECT_OPPORTUNITY_THRESHOLD CONTACT_DIRECT_HARM_THRESHOLD < <(read_direct_rule "$BASE_RUN/calibration/direct_value_risk_contact_v48.json")
+if [[ "$SAFE_NOMINAL_ONLY" == "1" ]]; then
+  # Safe is nominal-locked by the selector. Stress certificates are irrelevant
+  # for this paired non-inferiority probe, so do not require a failed Near/Contact gate.
+  export RUN_DIRECT_VALUE=false
+  NEAR_DIRECT_THRESHOLD=1000000000
+  NEAR_DIRECT_OPPORTUNITY_THRESHOLD=1.0
+  NEAR_DIRECT_HARM_THRESHOLD=0.0
+  CONTACT_DIRECT_THRESHOLD=1000000000
+  CONTACT_DIRECT_OPPORTUNITY_THRESHOLD=1.0
+  CONTACT_DIRECT_HARM_THRESHOLD=0.0
+else
+  [[ -n "$BASE_RUN" ]] || { echo "BASE_RUN is required for stress certificate loading" >&2; exit 2; }
+  if [[ -z "${NEAR_DIRECT_THRESHOLD:-}" || -z "${NEAR_DIRECT_OPPORTUNITY_THRESHOLD:-}" || -z "${NEAR_DIRECT_HARM_THRESHOLD:-}" ]]; then
+    read -r NEAR_DIRECT_THRESHOLD NEAR_DIRECT_OPPORTUNITY_THRESHOLD NEAR_DIRECT_HARM_THRESHOLD < <(read_direct_rule "$BASE_RUN/calibration/direct_value_risk_near_v48.json")
+  fi
+  if [[ -z "${CONTACT_DIRECT_THRESHOLD:-}" || -z "${CONTACT_DIRECT_OPPORTUNITY_THRESHOLD:-}" || -z "${CONTACT_DIRECT_HARM_THRESHOLD:-}" ]]; then
+    read -r CONTACT_DIRECT_THRESHOLD CONTACT_DIRECT_OPPORTUNITY_THRESHOLD CONTACT_DIRECT_HARM_THRESHOLD < <(read_direct_rule "$BASE_RUN/calibration/direct_value_risk_contact_v48.json")
+  fi
 fi
 export NEAR_DIRECT_THRESHOLD CONTACT_DIRECT_THRESHOLD NEAR_DIRECT_OPPORTUNITY_THRESHOLD CONTACT_DIRECT_OPPORTUNITY_THRESHOLD NEAR_DIRECT_HARM_THRESHOLD CONTACT_DIRECT_HARM_THRESHOLD
 echo "direct-value OC-TRAC-SR rules: near(score=$NEAR_DIRECT_THRESHOLD,opp=$NEAR_DIRECT_OPPORTUNITY_THRESHOLD,harm=$NEAR_DIRECT_HARM_THRESHOLD) contact(score=$CONTACT_DIRECT_THRESHOLD,opp=$CONTACT_DIRECT_OPPORTUNITY_THRESHOLD,harm=$CONTACT_DIRECT_HARM_THRESHOLD)"

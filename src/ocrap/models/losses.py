@@ -1357,6 +1357,10 @@ def direct_uncertainty_recovery_value_loss(
     preference_regret_weight: float = 0.0,
     preference_listwise_weight: float = 0.0,
     preference_gap_weight: float = 0.0,
+    preference_set_weight: float = 0.0,
+    preference_set_margin: float = 0.02,
+    preference_tie_epsilon_near: float = 0.025,
+    preference_tie_epsilon_contact: float = 0.010,
     delta_nll_weight: float = 0.0,
     pred_delta_mean: torch.Tensor | None = None,
     pred_delta_logvar: torch.Tensor | None = None,
@@ -1532,6 +1536,40 @@ def direct_uncertainty_recovery_value_loss(
                     * confidence_gap
                     * F.smooth_l1_loss(pred_best_gap, teacher_best_gap, reduction="mean")
                 )
+            # v48.7 SPIRE: Near-contact often contains several teacher-equivalent
+            # recovery candidates.  Forcing an arbitrary single winner creates
+            # cross-seed label flips.  Learn an acceptable *set* within a
+            # regime-specific exact-PCD epsilon, while still separating that set
+            # from nominal and materially worse recovery candidates.
+            if float(preference_set_weight) > 0.0:
+                tie_eps = (
+                    float(preference_tie_epsilon_near)
+                    if int(bid[nom].item()) == 1
+                    else float(preference_tie_epsilon_contact)
+                )
+                acceptable = t_delta >= (best_teacher - tie_eps)
+                unacceptable = ~acceptable
+                if bool(acceptable.any()):
+                    set_target = acceptable.to(dtype=r_delta.dtype)
+                    set_target = set_target / set_target.sum().clamp_min(1.0)
+                    pred_set_log = torch.log_softmax(r_delta / pref_tau, dim=0)
+                    set_kl = F.kl_div(pred_set_log, set_target, reduction="sum")
+                    set_conf = torch.clamp(
+                        (best_teacher - float(positive_gain))
+                        / max(float(preference_confidence_scale), 1.0e-4),
+                        0.0, 1.0,
+                    )
+                    set_term = set_kl
+                    if bool(unacceptable.any()):
+                        accept_score = torch.logsumexp(r_delta[acceptable] / pref_tau, dim=0) * pref_tau
+                        reject_score = torch.maximum(
+                            torch.logsumexp(r_delta[unacceptable] / pref_tau, dim=0) * pref_tau,
+                            r_delta.new_zeros(()),
+                        )
+                        set_term = set_term + F.softplus(
+                            (float(preference_set_margin) - (accept_score - reject_score)) / pref_tau
+                        ) * pref_tau
+                    terms.append(float(preference_set_weight) * set_conf * set_term)
         opp_delta_logits = None
         if opportunity_logits is not None:
             opp_delta_logits = opportunity_logits[recs] - opportunity_logits[nom]

@@ -47,7 +47,8 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --dataset "$TRAIN_MIX" --val-dataset "$VAL_MIX" --output "$MODEL_DIR" \
   --set seed="${SEED:-7}" \
   --set training.init_checkpoint="$INIT_CKPT" \
-  --set training.freeze_param_prefixes='' \
+  --set training.freeze_param_prefixes="${FREEZE_PARAM_PREFIXES:-}" \
+  --set training.trainable_param_prefixes="${TRAINABLE_PARAM_PREFIXES:-}" \
   --set training.direct_only_fast_path=true \
   --set training.group_index_path="$GROUP_INDEX" \
   --set training.epochs="${EPOCHS:-12}" --set training.early_stop_patience="${PATIENCE:-3}" \
@@ -61,7 +62,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.cudnn_benchmark=true --set training.pin_memory=true \
   --set training.num_workers="${NUM_WORKERS:-6}" --set training.persistent_workers=true \
   --set training.prefetch_factor="${PREFETCH_FACTOR:-2}" --set training.progress=true \
-  --set training.save_every_epoch=true --set training.best_metric=direct_policy_risk_fold_worst \
+  --set training.save_every_epoch=true --set training.best_metric="${BEST_METRIC:-direct_policy_risk_fold_worst}" \
   --set training.best_metric_mode=min \
   --set training.group_batching=true --set training.group_batching_replacement=true \
   --set training.group_batch_positive_advantage_boost="${POSITIVE_GROUP_BOOST:-5.0}" \
@@ -114,10 +115,10 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.direct_value_positive_gain="${POSITIVE_GAIN:-0.015}" \
   --set training.direct_value_negative_gain="${NEGATIVE_GAIN:-0.010}" \
   --set training.direct_value_rank_margin="${RANK_MARGIN:-0.020}" \
-  --set training.direct_value_point_weight=0.05 \
-  --set training.direct_value_listwise_weight=0.15 \
-  --set training.direct_value_centered_weight=1.0 \
-  --set training.direct_value_advantage_weight=1.0 \
+  --set training.direct_value_point_weight="${POINT_WEIGHT:-0.05}" \
+  --set training.direct_value_listwise_weight="${VALUE_LISTWISE_WEIGHT:-0.15}" \
+  --set training.direct_value_centered_weight="${CENTERED_WEIGHT:-1.0}" \
+  --set training.direct_value_advantage_weight="${ADVANTAGE_WEIGHT:-1.0}" \
   --set training.direct_value_output_mode=score \
   --set training.direct_value_pairwise_weight="${LEGACY_PAIRWISE_WEIGHT:-0.0}" \
   --set training.direct_value_top_rank_weight="${LEGACY_TOP_RANK_WEIGHT:-0.0}" \
@@ -136,9 +137,19 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.direct_value_preference_regret_weight="${PREFERENCE_REGRET_WEIGHT:-0.50}" \
   --set training.direct_value_preference_listwise_weight="${PREFERENCE_LISTWISE_WEIGHT:-0.75}" \
   --set training.direct_value_preference_gap_weight="${PREFERENCE_GAP_WEIGHT:-0.25}" \
+  --set training.direct_value_preference_set_weight="${PREFERENCE_SET_WEIGHT:-0.0}" \
+  --set training.direct_value_preference_set_margin="${PREFERENCE_SET_MARGIN:-0.020}" \
+  --set training.direct_value_preference_tie_epsilon_near="${PREFERENCE_TIE_EPS_NEAR:-0.025}" \
+  --set training.direct_value_preference_tie_epsilon_contact="${PREFERENCE_TIE_EPS_CONTACT:-0.010}" \
   --set training.direct_value_delta_nll_weight="${DELTA_NLL_WEIGHT:-1.00}" \
   --set training.direct_policy_metric_harm_weight="${POLICY_METRIC_HARM_WEIGHT:-0.35}" \
   --set training.direct_policy_metric_false_intervention_weight="${POLICY_METRIC_FALSE_WEIGHT:-0.15}" \
+  --set training.direct_policy_metric_missed_opportunity_weight="${POLICY_METRIC_MISS_WEIGHT:-0.25}" \
+  --set training.direct_policy_metric_rank_miss_weight="${POLICY_METRIC_RANK_MISS_WEIGHT:-0.10}" \
+  --set training.direct_policy_metric_opportunity_threshold="${POLICY_METRIC_OPP_THRESHOLD:-0.65}" \
+  --set training.direct_policy_metric_harm_threshold="${POLICY_METRIC_HARM_THRESHOLD:-0.30}" \
+  --set training.direct_policy_metric_rank_margin_threshold="${POLICY_METRIC_RANK_MARGIN:-0.020}" \
+  --set training.direct_policy_metric_min_delta_mean="${POLICY_METRIC_MIN_DELTA:-0.0}" \
   --set training.direct_value_false_positive_weight="$FP_W" \
   --set training.direct_value_opportunity_weight="${OPPORTUNITY_AUX_WEIGHT:-0.15}" \
   --set training.direct_value_opportunity_pos_weight=8.0 \
@@ -166,6 +177,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   2>&1 | tee "$LOG_DIR/train_v48_trac_sr.log"
 
 # Standard OC-MERO calibration is retained for the base feasibility certificate.
+if [[ "${SKIP_POST_TRAIN_CALIBRATION:-0}" != "1" ]]; then
 for bucket in mix safe near contact; do
   case "$bucket" in
     mix) data="$CAL_MIX"; min=100 ;;
@@ -185,6 +197,8 @@ python tools/write_gamma_by_bucket.py \
   --contact "$CAL_DIR/calibration_contact_v48.json" \
   --delta 0.05 --output "$CAL_DIR/gamma_rec_by_bucket_v48.json" \
   2>&1 | tee "$LOG_DIR/write_gamma_v48.log"
+
+fi
 
 python - "$MODEL_DIR/best.pt" "$MODEL_DIR/train_summary.json" "$RUN/TRAINING_COMPLETE.json" <<'PYDONE'
 import hashlib,json,pathlib,sys,time

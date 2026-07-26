@@ -1,3 +1,62 @@
+## v48.7 — OC-TRAC-SPIRE (2026-07-26)
+
+### Evidence from the completed v48.6 experiment
+
+- All v48.6 training, three-seed recalibration, and four core ablations were audited.
+- Candidate recovery signal remained usable (three-seed mean AUC: Near 0.702–0.706, Contact 0.818–0.824), but the policy layer regressed: Near top-1 correlation was -0.039 to -0.002 and Contact was -0.087 to -0.054; every verify fold selected zero actions.
+- The only positive ablation was preference-only relative context: it improved rank correlation and made balanced Contact top-1 slightly positive on seed 4801. Direct-delta-only and the full joint RPGC objective worsened Contact ordering, demonstrating negative transfer from certificate learning into the shared preference representation.
+- Rank-margin correctness AUC was informative only for Contact (about 0.63–0.65) and weak for Near (about 0.42–0.43). The direct-delta/harm channel remained insufficiently transferable (risk-harm AUC about 0.55–0.58).
+
+### Engineering corrections before further algorithm attribution
+
+- Validation checkpointing now computes opportunity/harm from the same Gaussian direct-delta CDF used by calibration; the v48.6 raw-delta threshold was not deployment-equivalent.
+- Harmful *population exposure* UCB and conditional harmful-switch UCB among selected actions are now reported and constrained separately. A low exposure UCB caused by zero/rare selections can no longer be mistaken for a low harmful-switch rate.
+- `run_ocrap_v48_trac_sr.sh` no longer silently falls back to the obsolete `runs/ocrap_v48_trac_sr_regime_balanced` path. `BASE_RUN` or explicit checkpoint/calibration paths are mandatory.
+- Natural-gate failure writes `GATE_FAILED.json` and exits before producing closed-loop commands. It does not imply that the trained candidate checkpoints are missing.
+- Added a Safe-only nominal-locked probe that does not require Near/Contact certificates and cannot authorize stress-regime intervention.
+- Added partial dedicated-calibration merge support so completed Safe/Near worker pairs can be filtered and atomically installed under the evaluation root before Contact is finished.
+- Teacher-PCD data-quality reports now distinguish all-macro opportunities from deployable-macro opportunities; quality gates use the actual selector allowlist.
+- Added parameter allow-list freezing for auditable staged optimization.
+
+### New algorithm: SPIRE
+
+**SPIRE = Set-valued Preference with Isolated Relative-gain Evidence.** It explicitly separates the three policy objects that v48.6 failed to identify jointly.
+
+1. **Preference stage — who should be selected?**
+   - The encoder and value surface are frozen. Only the pointwise and nominal-relative preference residuals are trainable.
+   - Exact teacher-PCD supervision is ambiguity-aware: Near and Contact use regime-specific acceptable sets around the teacher optimum rather than forcing arbitrary single winners in near-tied groups.
+   - The loss combines acceptable-set KL, set-versus-nominal/worse-candidate margin, confidence-paced best-vs-rest preference, exact expected regret, and a small rank-gap term.
+   - Early stopping uses worst-fold tie-aware preference risk, not candidate AUC or total loss.
+
+2. **Certificate stage — should the selected recovery be executed?**
+   - The complete preference path, encoder, and value heads are frozen. Only the direct candidate-minus-nominal delta adapter is trained.
+   - This removes the v48.6 negative transfer in which delta-NLL gradients degraded Contact ordering.
+   - Early stopping uses a fixed deployment-aligned certificate risk based on direct-delta opportunity probability, harm probability, rank margin, harmful admitted actions, false interventions, and missed positive opportunities. Always-abstain therefore no longer receives a deceptively good checkpoint score.
+
+3. **Evidence and gate semantics**
+   - Calibration keeps exact preference top-1 and direct-delta admission separate.
+   - It reports both strict single-winner accuracy and acceptable-set accuracy/tie-aware regret.
+   - Proxy calibration may use development conditional-harm UCB limits; paper promotion requires the larger dedicated set and substantially tighter conditional harmful-switch bounds.
+
+### Required ablations
+
+1. Joint single-winner v48.6 objective.
+2. Staged optimization with the old single-winner preference target.
+3. Joint optimization with set-valued preference.
+4. Full SPIRE: staged optimization plus set-valued preference.
+
+This design isolates whether gains come from ambiguity-aware supervision, gradient isolation, or their combination.
+
+### Closed-loop promotion requirements
+
+- Stress closed loop remains forbidden unless both Near and Contact certificates pass.
+- First screening target: all three seeds positive top-1 correlation, mean >=0.10, non-zero verify selections, and no uncontrolled conditional harmful-switch UCB.
+- Paper-readiness remains stricter: top-1 correlation >=0.20, precision LCB90 >=0.60, positive recall >=0.35, conditional harmful-switch rate/UCB approaching the 5–10% target on a sufficiently large dedicated calibration set, and scene-paired closed-loop improvements without Safe degradation.
+
+### Non-repetition note
+
+SPIRE does not repeat joint value/rank/delta optimization, stronger Harm-head weighting, ordinary single-winner listwise training, GroupDRO, threshold relaxation, or handwritten rescue rules. The new contribution is ambiguity-aware set preference plus stage-isolated evidence certification under a deployment-aligned checkpoint and Natural gate.
+
 # OC-RAP Algorithm Changelog
 
 ## v48.6 — OC-TRAC-RPGC (2026-07-26)

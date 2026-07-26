@@ -16,7 +16,7 @@ if [[ "${FOREGROUND:-0}" != "1" && "${V48_CONTROLLER_CHILD:-0}" != "1" ]]; then
   nohup env V48_CONTROLLER_CHILD=1 FOREGROUND=1 bash "$0" \
     >"$LOG_DIR/controller.log" 2>&1 </dev/null &
   echo $! > "$OUTPUTDIR/controller.pid"
-  echo "v48.6 controller started: PID=$(cat "$OUTPUTDIR/controller.pid")"
+  echo "v48.7 controller started: PID=$(cat "$OUTPUTDIR/controller.pid")"
   echo "log: $LOG_DIR/controller.log"
   exit 0
 fi
@@ -48,6 +48,7 @@ CALIBRATION_SEED="${CALIBRATION_SEED:-4801}"
 TRAIN_MIX="$TRAIN_OCRAP_ROOT/train_near_contact,$TRAIN_OCRAP_ROOT/train_contact"
 GROUP_INDEX="$OUTPUTDIR/teacher_pcd_train_index.jsonl"
 GROUP_SUMMARY="$OUTPUTDIR/teacher_pcd_train_index_summary.json"
+TRAIN_SCRIPT="${TRAIN_SCRIPT:-scripts/train_ocrap_v48_trac_sr.sh}"
 
 case "$CALIBRATION_MODE" in
   proxy_val_split|dedicated) ;;
@@ -207,7 +208,7 @@ launch_variant() {
   VAL_SAFE="$CAL_SAFE" VAL_NEAR="$CAL_NEAR" VAL_CONTACT="$CAL_CONTACT" \
   INIT_CKPT="$INIT_CKPT" GROUP_INDEX="$GROUP_INDEX" \
   NUM_WORKERS="${NUM_WORKERS:-6}" PREFETCH_FACTOR="${PREFETCH_FACTOR:-2}" \
-    bash scripts/train_ocrap_v48_trac_sr.sh >"$LOG_DIR/train_${variant}.launch.log" 2>&1 &
+    bash "$TRAIN_SCRIPT" >"$LOG_DIR/train_${variant}.launch.log" 2>&1 &
   LAST_PID=$!
 }
 
@@ -246,6 +247,8 @@ calibrate_variant() {
     --min-fit-selected="${NEAR_MIN_FIT_SELECTED:-8}" --min-verify-selected="${NEAR_MIN_VERIFY_SELECTED:-6}" \
     --max-fit-harmful-group-ucb="${NEAR_MAX_FIT_HARM_UCB:-0.16}" \
     --max-verify-harmful-group-ucb="${NEAR_MAX_VERIFY_HARM_UCB:-0.18}" \
+    --max-fit-harmful-selected-ucb="${NEAR_MAX_FIT_SELECTED_HARM_UCB:-0.40}" \
+    --max-verify-harmful-selected-ucb="${NEAR_MAX_VERIFY_SELECTED_HARM_UCB:-0.45}" \
     2>&1 | tee "$run/logs/calibrate_policy_near.log"
   local sn=${PIPESTATUS[0]}
   CUDA_VISIBLE_DEVICES="$gpu" python -u tools/calibrate_policy_risk_v48.py \
@@ -256,6 +259,8 @@ calibrate_variant() {
     --min-fit-selected="${CONTACT_MIN_FIT_SELECTED:-9}" --min-verify-selected="${CONTACT_MIN_VERIFY_SELECTED:-6}" \
     --max-fit-harmful-group-ucb="${CONTACT_MAX_FIT_HARM_UCB:-0.18}" \
     --max-verify-harmful-group-ucb="${CONTACT_MAX_VERIFY_HARM_UCB:-0.20}" \
+    --max-fit-harmful-selected-ucb="${CONTACT_MAX_FIT_SELECTED_HARM_UCB:-0.40}" \
+    --max-verify-harmful-selected-ucb="${CONTACT_MAX_VERIFY_SELECTED_HARM_UCB:-0.45}" \
     2>&1 | tee "$run/logs/calibrate_policy_contact.log"
   local sc=${PIPESTATUS[0]}
   set -e
@@ -293,7 +298,14 @@ status={'calibration_mode':json.load(open(root/'dataset_role_manifest.json'))['c
         'valid_candidates':[x[2] for x in valid], 'candidates':summary}
 (root/'screening_status.json').write_text(json.dumps(status,ensure_ascii=False,indent=2)+'\n')
 if not valid:
-    raise SystemExit('no v48.6 candidate passed both policy-risk certificates; diagnostics were retained and test was not touched')
+    failure={
+      'event':'natural_gate_failed','message':'No candidate passed both Near and Contact policy-risk certificates.',
+      'next_action':'Do not run stress closed-loop. Inspect near-miss frontier or run SAFE_NOMINAL_ONLY probe only.',
+      'candidates':summary,
+    }
+    (root/'GATE_FAILED.json').write_text(json.dumps(failure,ensure_ascii=False,indent=2)+'\n')
+    print(failure)
+    raise SystemExit(20)
 valid.sort(); chosen=valid[0][3]
 (root/'chosen_base_run.txt').write_text(str(chosen)+'\n')
 print('chosen',chosen)
@@ -326,5 +338,5 @@ import json,pathlib,time,sys
 r=pathlib.Path(sys.argv[1]); p=r/'RUN_COMPLETE.json'
 p.write_text(json.dumps({"event":"run_complete","created_unix":time.time(),"chosen_base_run":(r/'chosen_base_run.txt').read_text().strip()},indent=2)+'\n')
 PYDONE
-echo "v48.6 screening complete. chosen=$CHOSEN_BASE_RUN" | tee "$LOG_DIR/complete.log"
+echo "v48.7 screening complete. chosen=$CHOSEN_BASE_RUN" | tee "$LOG_DIR/complete.log"
 echo "next commands: $OUTPUTDIR/NEXT_COMMANDS.txt"
