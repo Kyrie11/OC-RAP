@@ -1368,12 +1368,18 @@ def direct_uncertainty_recovery_value_loss(
     preference_set_mass_loss: bool = False,
     preference_noop_nominal_only: bool = False,
     preference_deadzone_margin: float = 0.008,
+    preference_conditional_set_weight: float = 0.0,
+    preference_conditional_noop_weight: float = 0.35,
+    preference_conditional_regret_weight: float = 0.5,
     delta_nll_weight: float = 0.0,
     delta_sign_weight: float = 0.0,
     delta_sign_temperature: float = 0.04,
     certificate_policy_top1_weight: float = 0.0,
     certificate_policy_top1_sign_weight: float = 0.0,
     certificate_policy_top1_temperature: float = 0.04,
+    ordinal_evidence_policy_top1_weight: float = 0.0,
+    ordinal_evidence_all_candidate_weight: float = 0.0,
+    ordinal_evidence_focal_gamma: float = 1.5,
     pred_delta_mean: torch.Tensor | None = None,
     pred_delta_logvar: torch.Tensor | None = None,
 ) -> torch.Tensor:
@@ -1562,6 +1568,59 @@ def direct_uncertainty_recovery_value_loss(
         # gently toward their teacher delta rather than forced below a margin.
         neg_mask = harmful_mask
         tie_mask = (~pos_mask) & (~harmful_mask)
+
+        # v48.10 COPE: conditional option preference.  Preference answers
+        # "which recovery option is best, conditional on intervening" and is
+        # therefore trained only over recovery candidates.  Nominal admission is
+        # handled by the separate ordinal evidence certificate.  This prevents
+        # abundant no-op groups from turning Stage P into another gate classifier.
+        if float(preference_conditional_set_weight) > 0.0:
+            pref_tau = max(float(preference_temperature), 1.0e-3)
+            tie_eps = (
+                float(preference_tie_epsilon_near)
+                if int(bid[nom].item()) == 1
+                else float(preference_tie_epsilon_contact)
+            )
+            best_recovery_teacher = t_delta.max().detach()
+            acceptable_recovery = t_delta >= (best_recovery_teacher - tie_eps)
+            conditional_logits = r_delta / pref_tau
+            set_mass = torch.logsumexp(conditional_logits, dim=0) - torch.logsumexp(
+                conditional_logits[acceptable_recovery], dim=0
+            )
+            rejected_recovery = ~acceptable_recovery
+            if bool(rejected_recovery.any()):
+                accept_score = torch.logsumexp(
+                    conditional_logits[acceptable_recovery], dim=0
+                ) * pref_tau
+                reject_score = torch.logsumexp(
+                    conditional_logits[rejected_recovery], dim=0
+                ) * pref_tau
+                set_mass = set_mass + F.softplus(
+                    (float(preference_set_margin) - (accept_score - reject_score)) / pref_tau
+                ) * pref_tau
+            teacher_prob_cond = torch.softmax(t_delta.detach() / pref_tau, dim=0)
+            pred_prob_cond = torch.softmax(conditional_logits, dim=0)
+            expected_teacher_cond = (pred_prob_cond * t_delta.detach()).sum()
+            conditional_regret = torch.clamp(
+                best_recovery_teacher - expected_teacher_cond, min=0.0
+            )
+            material_weight = (
+                1.0
+                if float(best_recovery_teacher.item()) >= float(positive_gain)
+                else max(0.0, float(preference_conditional_noop_weight))
+            )
+            conditional_term = set_mass
+            if float(preference_conditional_regret_weight) > 0.0:
+                conditional_term = conditional_term + float(preference_conditional_regret_weight) * conditional_regret.square()
+            # A low-weight teacher distribution term stabilizes close recovery
+            # options without imposing a uniform ordering inside the acceptable set.
+            conditional_term = conditional_term + 0.15 * F.kl_div(
+                torch.log_softmax(conditional_logits, dim=0),
+                teacher_prob_cond, reduction="sum"
+            )
+            terms.append(
+                float(preference_conditional_set_weight) * material_weight * conditional_term
+            )
 
         # v48.8 SCOPE: conflict-free nominal-inclusive set preference.  v48.7
         # simultaneously treated near-tied candidates as both equivalent (set
@@ -1761,6 +1820,43 @@ def direct_uncertainty_recovery_value_loss(
             harm_pos_w = torch.as_tensor(max(float(harm_pos_weight), 1.0), dtype=harm_delta_logits.dtype, device=harm_delta_logits.device)
             harm_loss = F.binary_cross_entropy_with_logits(harm_delta_logits, harm_labels, pos_weight=harm_pos_w)
             terms.append(float(harm_weight) * harm_loss)
+        # v48.10 COPE ordinal evidence.  The exact-PDC advantage is
+        # tri-state; train ordered benefit/non-harm logits primarily on the
+        # frozen policy's top-1 candidate, with an optional weak all-candidate
+        # regularizer.  This avoids the regression-to-zero failure of v48.9.
+        if opp_delta_logits is not None and harm_delta_logits is not None and (
+            float(ordinal_evidence_policy_top1_weight) > 0.0
+            or float(ordinal_evidence_all_candidate_weight) > 0.0
+        ):
+            evidence_tau = max(float(certificate_policy_top1_temperature), 1.0e-4)
+            benefit_target = torch.sigmoid(
+                (t_delta.detach() - float(positive_gain)) / evidence_tau
+            )
+            harm_target = torch.sigmoid(
+                (-float(negative_gain) - t_delta.detach()) / evidence_tau
+            )
+            gamma = max(0.0, float(ordinal_evidence_focal_gamma))
+
+            def _focal_bce(logit: torch.Tensor, target_soft: torch.Tensor) -> torch.Tensor:
+                raw = F.binary_cross_entropy_with_logits(logit, target_soft, reduction="none")
+                prob = torch.sigmoid(logit)
+                pt = target_soft * prob + (1.0 - target_soft) * (1.0 - prob)
+                return (((1.0 - pt).clamp_min(1.0e-4) ** gamma) * raw).mean()
+
+            if float(ordinal_evidence_all_candidate_weight) > 0.0:
+                all_evidence = 0.5 * (
+                    _focal_bce(opp_delta_logits, benefit_target)
+                    + _focal_bce(harm_delta_logits, harm_target)
+                )
+                terms.append(float(ordinal_evidence_all_candidate_weight) * all_evidence)
+            if float(ordinal_evidence_policy_top1_weight) > 0.0:
+                policy_j = int(torch.argmax(r_delta.detach()).item())
+                policy_evidence = 0.5 * (
+                    _focal_bce(opp_delta_logits[policy_j:policy_j + 1], benefit_target[policy_j:policy_j + 1])
+                    + _focal_bce(harm_delta_logits[policy_j:policy_j + 1], harm_target[policy_j:policy_j + 1])
+                )
+                terms.append(float(ordinal_evidence_policy_top1_weight) * policy_evidence)
+
         # v48.4 DRA-RCD: separate candidate ranking from action admission.
         # Candidate ordering must not be trained through a harm head whose labels
         # are currently the least transferable part of the dataset.  The value-only

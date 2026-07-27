@@ -323,12 +323,18 @@ def _direct_value_loss_from_outputs(
         preference_set_mass_loss=bool(tcfg.get("direct_value_preference_set_mass_loss", False)),
         preference_noop_nominal_only=bool(tcfg.get("direct_value_preference_noop_nominal_only", False)),
         preference_deadzone_margin=float(tcfg.get("direct_value_preference_deadzone_margin", 0.008)),
+        preference_conditional_set_weight=float(tcfg.get("direct_value_preference_conditional_set_weight", 0.0)),
+        preference_conditional_noop_weight=float(tcfg.get("direct_value_preference_conditional_noop_weight", 0.35)),
+        preference_conditional_regret_weight=float(tcfg.get("direct_value_preference_conditional_regret_weight", 0.5)),
         delta_nll_weight=float(tcfg.get("direct_value_delta_nll_weight", 0.0)),
         delta_sign_weight=float(tcfg.get("direct_value_delta_sign_weight", 0.0)),
         delta_sign_temperature=float(tcfg.get("direct_value_delta_sign_temperature", 0.04)),
         certificate_policy_top1_weight=float(tcfg.get("direct_value_certificate_policy_top1_weight", 0.0)),
         certificate_policy_top1_sign_weight=float(tcfg.get("direct_value_certificate_policy_top1_sign_weight", 0.0)),
         certificate_policy_top1_temperature=float(tcfg.get("direct_value_certificate_policy_top1_temperature", 0.04)),
+        ordinal_evidence_policy_top1_weight=float(tcfg.get("direct_value_ordinal_evidence_policy_top1_weight", 0.0)),
+        ordinal_evidence_all_candidate_weight=float(tcfg.get("direct_value_ordinal_evidence_all_candidate_weight", 0.0)),
+        ordinal_evidence_focal_gamma=float(tcfg.get("direct_value_ordinal_evidence_focal_gamma", 1.5)),
     )
 
     def compute(
@@ -438,6 +444,12 @@ def _direct_policy_batch_stats(
         value_logvar = value_logvar.float().reshape(-1).clamp(-7.0, 2.0)
     direct_delta = out.get("direct_recovery_delta_mean")
     direct_delta_logvar = out.get("direct_recovery_delta_logvar")
+    opportunity_logit = out.get("direct_recovery_opportunity_logit")
+    harm_logit = out.get("direct_recovery_harm_logit")
+    if opportunity_logit is not None:
+        opportunity_logit = opportunity_logit.float().reshape(-1)
+    if harm_logit is not None:
+        harm_logit = harm_logit.float().reshape(-1)
     if direct_delta is not None:
         direct_delta = direct_delta.float().reshape(-1)
     if direct_delta_logvar is not None:
@@ -470,6 +482,8 @@ def _direct_policy_batch_stats(
     harm_threshold = float(tcfg.get("direct_policy_metric_harm_threshold", 0.30))
     rank_margin_threshold = float(tcfg.get("direct_policy_metric_rank_margin_threshold", 0.02))
     min_delta_mean = float(tcfg.get("direct_policy_metric_min_delta_mean", 0.0))
+    risk_source = str(tcfg.get("direct_policy_metric_risk_source", "gaussian_delta") or "gaussian_delta").strip().lower()
+    conditional_preference = bool(tcfg.get("direct_value_preference_conditional_mode", False))
     stats: dict[str, float] = {}
 
     def add(name: str, value: float) -> None:
@@ -510,28 +524,37 @@ def _direct_policy_batch_stats(
         recovery_scores = pred_rank_delta
         if recovery_scores.numel() > 1:
             sorted_scores = torch.topk(recovery_scores, k=2).values
-            runner = torch.maximum(sorted_scores[1], recovery_scores.new_zeros(()))
+            runner = sorted_scores[1] if conditional_preference else torch.maximum(
+                sorted_scores[1], recovery_scores.new_zeros(())
+            )
         else:
-            runner = recovery_scores.new_zeros(())
+            runner = recovery_scores[pred_j] - 1.0 if conditional_preference else recovery_scores.new_zeros(())
         rank_margin = float((recovery_scores[pred_j] - runner).item())
 
         chosen_idx = recs[pred_j]
-        if direct_delta is not None:
-            delta_mean = direct_delta[chosen_idx]
-            if direct_delta_logvar is not None:
-                delta_std = torch.exp(0.5 * direct_delta_logvar[chosen_idx]).clamp_min(1.0e-3)
-            else:
-                delta_std = delta_mean.new_tensor(0.10)
+        if risk_source in {"heads", "ordinal_evidence"} and opportunity_logit is not None and harm_logit is not None:
+            opp_delta = opportunity_logit[chosen_idx] - opportunity_logit[nom]
+            harm_delta = harm_logit[chosen_idx] - harm_logit[nom]
+            opportunity_prob = float(torch.sigmoid(opp_delta).item())
+            harm_prob = float(torch.sigmoid(harm_delta).item())
+            delta_mean = opp_delta.new_tensor(opportunity_prob - harm_prob)
         else:
-            delta_mean = value_score[chosen_idx] - value_score[nom]
-            if value_logvar is not None:
-                delta_std = torch.sqrt(
-                    torch.exp(value_logvar[chosen_idx]) + torch.exp(value_logvar[nom])
-                ).clamp_min(1.0e-3)
+            if direct_delta is not None:
+                delta_mean = direct_delta[chosen_idx]
+                if direct_delta_logvar is not None:
+                    delta_std = torch.exp(0.5 * direct_delta_logvar[chosen_idx]).clamp_min(1.0e-3)
+                else:
+                    delta_std = delta_mean.new_tensor(0.10)
             else:
-                delta_std = delta_mean.new_tensor(0.10)
-        opportunity_prob = float(normal_cdf((delta_mean - positive_gain) / delta_std).item())
-        harm_prob = float(normal_cdf((-negative_gain - delta_mean) / delta_std).item())
+                delta_mean = value_score[chosen_idx] - value_score[nom]
+                if value_logvar is not None:
+                    delta_std = torch.sqrt(
+                        torch.exp(value_logvar[chosen_idx]) + torch.exp(value_logvar[nom])
+                    ).clamp_min(1.0e-3)
+                else:
+                    delta_std = delta_mean.new_tensor(0.10)
+            opportunity_prob = float(normal_cdf((delta_mean - positive_gain) / delta_std).item())
+            harm_prob = float(normal_cdf((-negative_gain - delta_mean) / delta_std).item())
         admitted = bool(
             opportunity_prob >= opp_threshold
             and harm_prob <= harm_threshold
@@ -542,7 +565,12 @@ def _direct_policy_batch_stats(
         false_intervention = admitted and (not positive_group)
         positive_admission = admitted and positive_group
         scene_fold = int(abs(int(sh[nom].item())) % 3)
+        conditional_regret = max(0.0, oracle_adv_raw - chosen_teacher_adv - tie_eps)
+        conditional_hit = bool(chosen_teacher_adv >= oracle_adv_raw - tie_eps)
         for name in ("all", suffix, f"{suffix}_fold{scene_fold}"):
+            add(f"conditional_count_{name}", 1.0)
+            add(f"conditional_regret_sum_{name}", conditional_regret)
+            add(f"conditional_top1_hit_{name}", float(conditional_hit))
             add(f"group_count_{name}", 1.0)
             add(f"rank_harmful_{name}", float(rank_harmful))
             add(f"rank_switch_nonpositive_{name}", float(rank_switch_nonpositive))
@@ -570,6 +598,7 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
     rank_false_lambda = float(tcfg.get("direct_policy_metric_rank_false_switch_weight", 0.15))
     min_fold_positive = int(tcfg.get("direct_policy_metric_min_fold_positive", 6))
     robust_top_k = max(1, int(tcfg.get("direct_policy_metric_robust_top_k", 2)))
+    conditional_preference = bool(tcfg.get("direct_value_preference_conditional_mode", False))
     suffixes = ["all", "near", "contact"] + [f"{regime}_fold{fold}" for regime in ("near", "contact") for fold in range(3)]
     for suffix in suffixes:
         tag = "" if suffix == "all" else f"_{suffix}"
@@ -587,6 +616,17 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
             out[f"direct_harmful_switch_rate{tag}"] = stats.get(f"admitted_harmful_{suffix}", stats.get(f"harmful_switch_{suffix}", 0.0)) / count
             out[f"direct_false_intervention_rate{tag}"] = stats.get(f"false_intervention_{suffix}", 0.0) / count
             out[f"direct_raw_admission_rate{tag}"] = stats.get(f"admission_count_{suffix}", 0.0) / count
+        conditional_count = stats.get(f"conditional_count_{suffix}", 0.0)
+        if conditional_count > 0:
+            conditional_regret = stats.get(f"conditional_regret_sum_{suffix}", 0.0) / conditional_count
+            conditional_top1 = stats.get(f"conditional_top1_hit_{suffix}", 0.0) / conditional_count
+            out[f"direct_conditional_recovery_regret_mean{tag}"] = conditional_regret
+            out[f"direct_conditional_recovery_top1_accuracy{tag}"] = conditional_top1
+            out[f"direct_conditional_group_count{tag}"] = float(conditional_count)
+            if conditional_preference:
+                out[f"direct_preference_risk_mean{tag}"] = (
+                    conditional_regret + rank_miss_lambda * (1.0 - conditional_top1)
+                )
         if pos_count > 0:
             regret = stats.get(f"positive_regret_sum_{suffix}", 0.0) / pos_count
             top1 = stats.get(f"positive_top1_hit_{suffix}", 0.0) / pos_count
@@ -595,12 +635,13 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
             out[f"direct_positive_group_top1_accuracy{tag}"] = top1
             out[f"direct_positive_admission_recall{tag}"] = recall
             out[f"direct_positive_rank_margin_mean{tag}"] = stats.get(f"positive_rank_margin_sum_{suffix}", 0.0) / pos_count
-            out[f"direct_preference_risk_mean{tag}"] = (
-                regret
-                + rank_miss_lambda * (1.0 - top1)
-                + rank_harm_lambda * out.get(f"direct_rank_harmful_top1_rate{tag}", 0.0)
-                + rank_false_lambda * out.get(f"direct_rank_false_switch_rate{tag}", 0.0)
-            )
+            if not conditional_preference:
+                out[f"direct_preference_risk_mean{tag}"] = (
+                    regret
+                    + rank_miss_lambda * (1.0 - top1)
+                    + rank_harm_lambda * out.get(f"direct_rank_harmful_top1_rate{tag}", 0.0)
+                    + rank_false_lambda * out.get(f"direct_rank_false_switch_rate{tag}", 0.0)
+                )
             out[f"direct_positive_group_count{tag}"] = float(pos_count)
             out[f"direct_group_count{tag}"] = float(count)
         if count > 0 and pos_count > 0:
@@ -634,7 +675,11 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
         for regime in ("near", "contact"):
             for fold in range(3):
                 key = f"{metric}_{regime}_fold{fold}"
-                count_key = f"direct_positive_group_count_{regime}_fold{fold}"
+                count_key = (
+                    f"direct_conditional_group_count_{regime}_fold{fold}"
+                    if conditional_preference and metric == "direct_preference_risk_mean"
+                    else f"direct_positive_group_count_{regime}_fold{fold}"
+                )
                 if key in out and out.get(count_key, 0.0) >= float(min_fold_positive):
                     supported.append(float(out[key]))
         if supported:
@@ -1626,6 +1671,7 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_delta_hidden=int(model_cfg.get("direct_recovery_delta_hidden", d_model)),
         direct_recovery_delta_dropout=float(model_cfg.get("direct_recovery_delta_dropout", 0.05)),
         direct_recovery_delta_initial_logvar=float(model_cfg.get("direct_recovery_delta_initial_logvar", -4.605170186)),
+        direct_recovery_delta_mode=str(model_cfg.get("direct_recovery_delta_mode", "gaussian")),
     ).to(device)
     tcfg = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
 
@@ -1665,6 +1711,37 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "shape_mismatch_keys": shape_mismatch,
         }
         print(init_load_info, flush=True)
+
+        # v48.10 COPE: staged training must not silently discard the learned
+        # preference adapter because Stage C was instantiated with a different
+        # hidden width.  Prefixes listed here are an architecture contract: all
+        # destination tensors under each prefix must load with identical shapes.
+        strict_prefixes = tuple(
+            x.strip() for x in str(tcfg.get("strict_init_prefixes", "") or "").split(",") if x.strip()
+        )
+        if strict_prefixes:
+            failures: dict[str, object] = {}
+            for prefix in strict_prefixes:
+                required = sorted(key for key in current if key.startswith(prefix))
+                loaded = sorted(key for key in compatible if key.startswith(prefix))
+                mismatched = {key: value for key, value in shape_mismatch.items() if key.startswith(prefix)}
+                source_missing = sorted(set(required) - set(loaded) - set(mismatched))
+                if not required or len(loaded) != len(required) or mismatched or source_missing:
+                    failures[prefix] = {
+                        "required_keys": required,
+                        "loaded_keys": loaded,
+                        "shape_mismatch": mismatched,
+                        "missing_from_source": source_missing,
+                    }
+            if failures:
+                raise RuntimeError(
+                    "strict staged-checkpoint architecture contract failed: "
+                    + json.dumps(failures, sort_keys=True)
+                )
+            print({
+                "event": "strict_init_prefixes_verified",
+                "prefixes": list(strict_prefixes),
+            }, flush=True)
 
     encoder_anchor_weight = float(tcfg.get("encoder_anchor_weight", 0.0))
     if encoder_anchor_weight > 0.0:
@@ -1831,6 +1908,7 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "direct_recovery_delta_hidden": int(model_cfg.get("direct_recovery_delta_hidden", d_model)),
             "direct_recovery_delta_dropout": float(model_cfg.get("direct_recovery_delta_dropout", 0.05)),
             "direct_recovery_delta_initial_logvar": float(model_cfg.get("direct_recovery_delta_initial_logvar", -4.605170186)),
+            "direct_recovery_delta_mode": str(model_cfg.get("direct_recovery_delta_mode", "gaussian")),
             "model_state": model.state_dict(),
             "optimizer_state": opt.state_dict(),
             "epoch": int(ep),

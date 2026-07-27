@@ -241,6 +241,7 @@ def calibrated_constrained_select(
     direct_value_harm_threshold: float = 1.0,
     direct_value_top1_only: bool = False,
     direct_value_min_rank_margin: float = 0.0,
+    direct_value_conditional_rank_margin: bool = False,
     direct_value_risk_controlled_admission: bool = False,
     deployability_bonus: float = 0.0,
     contact_deployability_bonus: float = 0.0,
@@ -636,9 +637,13 @@ def calibrated_constrained_select(
         if bool(direct_value_top1_only) and bool(direct_actionable.any()):
             raw_rank_advantage = direct_rank - direct_rank[ni]
             chosen = int(np.argmax(np.where(direct_actionable, raw_rank_advantage, -np.inf)))
-            alternatives = [0.0]
-            alternatives.extend(float(raw_rank_advantage[j]) for j in np.where(direct_actionable)[0] if int(j) != chosen)
-            second_best = max(alternatives) if alternatives else 0.0
+            alternatives = [
+                float(raw_rank_advantage[j])
+                for j in np.where(direct_actionable)[0] if int(j) != chosen
+            ]
+            if not bool(direct_value_conditional_rank_margin):
+                alternatives.append(0.0)
+            second_best = max(alternatives) if alternatives else float(raw_rank_advantage[chosen] - 1.0)
             rank_margin = float(raw_rank_advantage[chosen] - second_best)
             if float(direct_value_min_rank_margin) <= 0.0 or rank_margin >= float(direct_value_min_rank_margin):
                 keep = np.zeros((n,), dtype=bool)

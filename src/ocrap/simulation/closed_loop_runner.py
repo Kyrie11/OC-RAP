@@ -739,6 +739,14 @@ def _select_prefix(
             normal_cdf = np.vectorize(lambda z: 0.5 * (1.0 + erf(float(z) / sqrt(2.0))))
             pred_direct_opportunity = normal_cdf(z_opp).astype(np.float32)
             pred_direct_harm = normal_cdf(z_harm).astype(np.float32)
+        elif risk_source == "ordinal_evidence" and np.isfinite(opp_logits[ni]) and np.isfinite(harm_logits[ni]):
+            opp_delta = np.clip(opp_logits - opp_logits[ni], -30.0, 30.0)
+            harm_delta = np.clip(harm_logits - harm_logits[ni], -30.0, 30.0)
+            pred_direct_opportunity = (1.0 / (1.0 + np.exp(-opp_delta))).astype(np.float32)
+            pred_direct_harm = (1.0 / (1.0 + np.exp(-harm_delta))).astype(np.float32)
+            pred_direct_value = (pred_direct_opportunity - pred_direct_harm).astype(np.float32)
+            pred_direct_value[ni] = 0.0
+            pred_direct_std = np.zeros_like(pred_direct_value, dtype=np.float32)
         elif risk_source == "delta_distribution" and np.isfinite(pred_direct_value[ni]):
             from math import erf, sqrt
             delta_mean = pred_direct_value - pred_direct_value[ni]

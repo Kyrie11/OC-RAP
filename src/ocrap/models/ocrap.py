@@ -64,6 +64,7 @@ class OCRAPModel(nn.Module):
         direct_recovery_delta_hidden: int = 128,
         direct_recovery_delta_dropout: float = 0.05,
         direct_recovery_delta_initial_logvar: float = -4.605170186,
+        direct_recovery_delta_mode: str = "gaussian",
     ):
         super().__init__()
         self.num_roots = int(num_roots)
@@ -111,6 +112,9 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_delta_hidden = max(16, int(direct_recovery_delta_hidden))
         self.direct_recovery_delta_dropout = float(max(0.0, direct_recovery_delta_dropout))
         self.direct_recovery_delta_initial_logvar = float(direct_recovery_delta_initial_logvar)
+        self.direct_recovery_delta_mode = str(direct_recovery_delta_mode or "gaussian").strip().lower()
+        if self.direct_recovery_delta_mode not in {"gaussian", "ordinal_evidence"}:
+            raise ValueError(f"Unsupported direct_recovery_delta_mode={direct_recovery_delta_mode!r}")
         if self.direct_recovery_value_expert_routing not in {
             "bucket",
             "hard_bucket",
@@ -682,13 +686,45 @@ class OCRAPModel(nn.Module):
 
         if self.direct_delta_adapter is not None:
             delta = self.direct_delta_adapter(relative_features)
-            delta_mean = torch.tanh(delta[:, 0])
-            delta_logvar = delta[:, 1].clamp(-7.0, 2.0)
-            if is_nominal is not None and is_nominal.numel() == delta_mean.numel():
-                nominal_mask = is_nominal.to(device=delta_mean.device).reshape(-1) > 0.5
-                delta_mean = torch.where(nominal_mask, torch.zeros_like(delta_mean), delta_mean)
-            out["direct_recovery_delta_mean"] = delta_mean
-            out["direct_recovery_delta_logvar"] = delta_logvar
+            nominal_mask = None
+            if is_nominal is not None and is_nominal.numel() == delta.shape[0]:
+                nominal_mask = is_nominal.to(device=delta.device).reshape(-1) > 0.5
+            if self.direct_recovery_delta_mode == "ordinal_evidence":
+                # v48.10 COPE: the exact PCD advantage is strongly tri-modal
+                # (harm / dead-zone / benefit).  A continuous regressor collapsed
+                # toward zero and made conformal radii span the whole target range.
+                # Parameterise two ordered cumulative logits instead:
+                #   P(benefit) <= P(non-harm), P(harm)=1-P(non-harm).
+                center = delta[:, 0]
+                half_width = 0.5 * torch.nn.functional.softplus(delta[:, 1])
+                nonharm_logit = center + half_width
+                benefit_logit = center - half_width
+                if nominal_mask is not None:
+                    nonharm_logit = torch.where(nominal_mask, torch.zeros_like(nonharm_logit), nonharm_logit)
+                    benefit_logit = torch.where(nominal_mask, torch.zeros_like(benefit_logit), benefit_logit)
+                harm_logit = -nonharm_logit
+                benefit_prob = torch.sigmoid(benefit_logit)
+                harm_prob = torch.sigmoid(harm_logit)
+                evidence_score = benefit_prob - harm_prob
+                out["direct_recovery_evidence_nonharm_logit"] = nonharm_logit
+                out["direct_recovery_evidence_benefit_logit"] = benefit_logit
+                out["direct_recovery_evidence_harm_logit"] = harm_logit
+                out["direct_recovery_evidence_score"] = evidence_score
+                # Reuse the established admission plumbing.  These logits are
+                # already candidate-vs-nominal evidence; nominal is pinned to 0.
+                out["direct_recovery_opportunity_logit"] = benefit_logit
+                out["direct_recovery_harm_logit"] = harm_logit
+                out["direct_recovery_delta_mean"] = evidence_score
+                out["direct_recovery_delta_logvar"] = torch.full_like(
+                    evidence_score, self.direct_recovery_delta_initial_logvar
+                )
+            else:
+                delta_mean = torch.tanh(delta[:, 0])
+                delta_logvar = delta[:, 1].clamp(-7.0, 2.0)
+                if nominal_mask is not None:
+                    delta_mean = torch.where(nominal_mask, torch.zeros_like(delta_mean), delta_mean)
+                out["direct_recovery_delta_mean"] = delta_mean
+                out["direct_recovery_delta_logvar"] = delta_logvar
         return out
 
     def forward(

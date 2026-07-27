@@ -49,6 +49,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.init_checkpoint="$INIT_CKPT" \
   --set training.freeze_param_prefixes="${FREEZE_PARAM_PREFIXES:-}" \
   --set training.trainable_param_prefixes="${TRAINABLE_PARAM_PREFIXES:-}" \
+  --set training.strict_init_prefixes="${STRICT_INIT_PREFIXES:-}" \
   --set training.direct_only_fast_path=true \
   --set training.group_index_path="$GROUP_INDEX" \
   --set training.epochs="${EPOCHS:-12}" --set training.early_stop_patience="${PATIENCE:-3}" \
@@ -100,6 +101,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set model.direct_recovery_delta_hidden="${DELTA_HIDDEN:-128}" \
   --set model.direct_recovery_delta_dropout="${DELTA_DROPOUT:-0.05}" \
   --set model.direct_recovery_delta_initial_logvar="${DELTA_INITIAL_LOGVAR:--4.605170186}" \
+  --set model.direct_recovery_delta_mode="${DELTA_MODE:-gaussian}" \
   --set loss_weights.dep=0 --set loss_weights.orc=0 --set loss_weights.assign=0 \
   --set loss_weights.sig=0 --set loss_weights.margin=0 --set loss_weights.obs=0 \
   --set loss_weights.anti_oracle=0 --set loss_weights.artifact_gap=0 \
@@ -150,12 +152,19 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.direct_value_preference_set_mass_loss="${PREFERENCE_SET_MASS_LOSS:-false}" \
   --set training.direct_value_preference_noop_nominal_only="${PREFERENCE_NOOP_NOMINAL_ONLY:-false}" \
   --set training.direct_value_preference_deadzone_margin="${PREFERENCE_DEADZONE_MARGIN:-0.008}" \
+  --set training.direct_value_preference_conditional_set_weight="${PREFERENCE_CONDITIONAL_SET_WEIGHT:-0.0}" \
+  --set training.direct_value_preference_conditional_noop_weight="${PREFERENCE_CONDITIONAL_NOOP_WEIGHT:-0.35}" \
+  --set training.direct_value_preference_conditional_regret_weight="${PREFERENCE_CONDITIONAL_REGRET_WEIGHT:-0.50}" \
+  --set training.direct_value_preference_conditional_mode="${PREFERENCE_CONDITIONAL_MODE:-false}" \
   --set training.direct_value_delta_nll_weight="${DELTA_NLL_WEIGHT:-1.00}" \
   --set training.direct_value_delta_sign_weight="${DELTA_SIGN_WEIGHT:-0.0}" \
   --set training.direct_value_delta_sign_temperature="${DELTA_SIGN_TEMPERATURE:-0.04}" \
   --set training.direct_value_certificate_policy_top1_weight="${CERTIFICATE_POLICY_TOP1_WEIGHT:-0.0}" \
   --set training.direct_value_certificate_policy_top1_sign_weight="${CERTIFICATE_POLICY_TOP1_SIGN_WEIGHT:-0.0}" \
   --set training.direct_value_certificate_policy_top1_temperature="${CERTIFICATE_POLICY_TOP1_TEMPERATURE:-0.04}" \
+  --set training.direct_value_ordinal_evidence_policy_top1_weight="${ORDINAL_EVIDENCE_POLICY_TOP1_WEIGHT:-0.0}" \
+  --set training.direct_value_ordinal_evidence_all_candidate_weight="${ORDINAL_EVIDENCE_ALL_CANDIDATE_WEIGHT:-0.0}" \
+  --set training.direct_value_ordinal_evidence_focal_gamma="${ORDINAL_EVIDENCE_FOCAL_GAMMA:-1.5}" \
   --set training.direct_policy_metric_harm_weight="${POLICY_METRIC_HARM_WEIGHT:-0.35}" \
   --set training.direct_policy_metric_false_intervention_weight="${POLICY_METRIC_FALSE_WEIGHT:-0.15}" \
   --set training.direct_policy_metric_missed_opportunity_weight="${POLICY_METRIC_MISS_WEIGHT:-0.25}" \
@@ -168,6 +177,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.direct_policy_metric_harm_threshold="${POLICY_METRIC_HARM_THRESHOLD:-0.30}" \
   --set training.direct_policy_metric_rank_margin_threshold="${POLICY_METRIC_RANK_MARGIN:-0.020}" \
   --set training.direct_policy_metric_min_delta_mean="${POLICY_METRIC_MIN_DELTA:-0.0}" \
+  --set training.direct_policy_metric_risk_source="${POLICY_METRIC_RISK_SOURCE:-gaussian_delta}" \
   --set training.direct_value_false_positive_weight="$FP_W" \
   --set training.direct_value_opportunity_weight="${OPPORTUNITY_AUX_WEIGHT:-0.15}" \
   --set training.direct_value_opportunity_pos_weight=8.0 \

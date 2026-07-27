@@ -1,3 +1,58 @@
+## v48.10 — OC-TRAC-COPE (2026-07-27)
+
+### Evidence from the completed v48.9 PACER experiment
+
+- The main v48.9 run and fixed-checkpoint calibration seeds 4801/4802/4803 completed. Neither variant passed the scene-disjoint Near+Contact Natural gate, so the controller correctly did not create `NEXT_COMMANDS.txt`; no Near/Contact stress closed-loop result is attributable to PACER.
+- Candidate evidence remained detectable, but policy quality did not improve enough. Main policy-top1 benefit AUC was about 0.67/0.74 for balanced Near/Contact and 0.67/0.73 for precision, while policy-top1 harm AUC was only about 0.49–0.57. Group top-1 correlation remained near zero in Near and slightly negative in Contact.
+- The closest Near fit rules could reach nominal precision around 0.75 on only eight selected groups, but verify precision fell to roughly 0.38–0.50, recall to about 0.08–0.12, and selected actions were concentrated in macro 5. Contact fit-to-verify transfer was worse and could become predominantly harmful with negative mean teacher advantage.
+- Policy-top1 conformal calibration did not solve certification. One-sided overprediction quantiles remained approximately 0.60–0.62, forcing zero verified coverage. Exact teacher advantage is strongly tri-modal (`harmful/dead-zone/beneficial`, with many exact zeros and boundary masses), whereas the continuous delta regressor collapsed near zero.
+- The uploaded ablation suite was incomplete: only balanced A/B/C artifacts were available. More importantly, Stage C for A/B instantiated a 128-wide preference context while Stage P used width 32, causing preference-adapter checkpoint shape mismatches and discarding learned Stage-P context. Final A/B attribution is therefore invalid even though the main run did not contain this mismatch.
+
+### What v48.9 established
+
+- **Intervention-aware preference is useful for suppression but not sufficient for ranking.** Relative to the old nominal-inclusive objective, the Stage-P audit reduced non-positive false switches from about 0.65–0.71 to 0.12–0.15 and harmful ranked switches from about 0.21–0.23 to 0.05–0.07. However, Contact conditional recovery ordering regressed to near zero/negative correlation.
+- **Policy-aligned certificate sampling is directionally useful.** Compared with all-candidate training, the available balanced ablation improved policy-top1 benefit AUC, especially in Contact, but harm discrimination remained near random and no rule passed verification.
+- **Conformal calibration is not a substitute for a discriminative evidence model.** Correcting the conformal sampling scope cannot rescue a regressor whose residual scale is comparable to the full teacher-advantage range.
+
+### Engineering corrections
+
+1. Added `training.strict_init_prefixes`. Stage E now aborts unless the complete Stage-P preference adapter loads with exactly matching geometry; silent loss of learned preference context is forbidden.
+2. The staged architecture writes `STAGE_ARCHITECTURE.json`, and completion markers include immutable preference/evidence checkpoint hashes.
+3. The v48.10 ablation controller propagates the same preference width to both stages, creates one immutable `TASK_COMPLETE.json` per task, resumes completed tasks, and refuses to write the suite summary until all eight `(4 ablations × 2 variants)` tasks exist.
+4. Calibration, checkpoint metrics, offline evaluation, selector semantics, and closed-loop execution now share the same conditional-recovery ranking and ordinal-evidence interpretation.
+
+### New algorithmic contribution: COPE
+
+**COPE = Conditional Option Preference with Monotone Ordinal Evidence.** It separates the two logically different questions that PACER still mixed inside the preference target and continuous certificate.
+
+1. **Conditional Option Preference (COP)**
+   - Stage P ranks recovery options only; nominal is excluded from the option-ordering loss and from the conditional rank margin.
+   - Exact teacher-PCD defines an ambiguity-aware acceptable recovery set. The loss maximizes mass on that set and minimizes exact expected recovery regret.
+   - Positive-opportunity groups receive full weight. No-opportunity and harmful groups receive a lower weight and teach only the least-bad recovery ordering; whether any recovery should be executed is deferred entirely to Stage E.
+   - This preserves the experimentally useful nominal-relative low-capacity context while preventing nominal-suppression gradients from destroying Contact recovery ordering.
+
+2. **Monotone Ordinal Evidence (MOE)**
+   - Stage E freezes the complete preference policy and models the frozen policy-top1 candidate as one of three ordered states: beneficial, dead-zone, or harmful relative to nominal.
+   - Two ordered cumulative logits parameterize `P(beneficial)` and `P(non-harm)`, with the architecture enforcing `P(beneficial) <= P(non-harm)` and `P(harm)=1-P(non-harm)`.
+   - Focal ordinal supervision is concentrated on policy-top1 candidates, with only a weak all-candidate regularizer. This matches the deployment distribution and the tri-modal exact teacher target without regressing advantages toward zero.
+   - Admission uses opportunity probability, harm probability, evidence score, conditional recovery rank margin, support, recall, and macro concentration under the unchanged fit/verify Natural gate. Thresholds are not relaxed.
+
+### Required causal ablations
+
+1. A: v48.9-style nominal-inclusive preference + continuous delta evidence.
+2. B: conditional option preference + continuous delta evidence.
+3. C: nominal-inclusive preference + monotone ordinal evidence.
+4. D: full COPE.
+
+The first attribution question is whether B improves conditional recovery top-1 and regret without relying on nominal switching. The second is whether C/D improve policy-top1 benefit and harm AUC and create transferable non-zero verification coverage. Multi-seed and stress closed loop remain forbidden until the fixed checkpoint passes the diagnostic learning gates and unchanged Natural gate.
+
+### Local validation
+
+- 144 tests passed.
+- Python compileall passed.
+- The main controller and all modified v48.10 shell scripts passed `bash -n`.
+- Real WOMD/Waymax/A30 training and closed-loop evaluation are not available locally; COPE is an experimentally testable design, not a claim that the publication thresholds have already been reached.
+
 ## v48.9 — OC-TRAC-PACER (2026-07-27)
 
 ### Evidence from the completed v48.8 experiment

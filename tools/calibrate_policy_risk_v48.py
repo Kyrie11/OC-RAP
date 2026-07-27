@@ -121,15 +121,18 @@ def _grid(values: list[float], *, minimum: float | None = None, maximum: float |
     return sorted(out, reverse=reverse)
 
 
-def _top1(groups: list[dict[str, Any]], opp_thr: float, harm_thr: float, supported_macros: set[int]) -> list[dict[str, Any]]:
+def _top1(groups: list[dict[str, Any]], opp_thr: float, harm_thr: float, supported_macros: set[int], *, conditional_rank_margin: bool = False) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for g in groups:
         eligible = [r for r in g["pairs"] if r["macro"] in supported_macros and r["opportunity"] >= opp_thr and r["harm"] <= harm_thr]
         if not eligible:
             continue
         best = sorted(eligible, key=lambda r: (-r.get("rank_adv", r["pred_adv"]), r["candidate"]))[0]
-        alternatives = [0.0] + [float(r.get("rank_adv", r["pred_adv"])) for r in eligible if r is not best]
-        rank_margin = float(best.get("rank_adv", best["pred_adv"]) - max(alternatives))
+        alternatives = [float(r.get("rank_adv", r["pred_adv"])) for r in eligible if r is not best]
+        if not conditional_rank_margin:
+            alternatives.append(0.0)
+        second = max(alternatives) if alternatives else float(best.get("rank_adv", best["pred_adv"]) - 1.0)
+        rank_margin = float(best.get("rank_adv", best["pred_adv"]) - second)
         row = dict(best)
         row["rank_margin"] = rank_margin
         row.update(scene=g["scene"], time=g["time"], fold=g["fold"], oracle_best_teacher_adv=g["oracle_best_teacher_adv"])
@@ -220,7 +223,7 @@ def _fit(
     frontier: list[dict[str, Any]] = []
     for opp_thr in opp_grid:
         for harm_thr in harm_grid:
-            top1 = _top1(groups, opp_thr, harm_thr, supported_macros)
+            top1 = _top1(groups, opp_thr, harm_thr, supported_macros, conditional_rank_margin=args.conditional_recovery_ranking)
             score_grid = _grid(
                 [r["pred_adv"] for r in top1],
                 minimum=args.min_score_advantage,
@@ -335,7 +338,7 @@ def main() -> int:
     ap.add_argument("--max-verify-harmful-selected-ucb", type=float, default=1.0,
                     help="Maximum conditional harmful-switch UCB among selected actions")
     ap.add_argument("--max-selected-macro-share", type=float, default=0.85)
-    ap.add_argument("--risk-source", choices=["direct_delta", "conformal_delta", "delta_distribution", "heads"], default="direct_delta")
+    ap.add_argument("--risk-source", choices=["direct_delta", "conformal_delta", "delta_distribution", "heads", "ordinal_evidence"], default="direct_delta")
     ap.add_argument("--conformal-alpha", type=float, default=0.10)
     ap.add_argument("--conformal-temperature", type=float, default=0.02)
     ap.add_argument(
@@ -345,6 +348,7 @@ def main() -> int:
     )
     ap.add_argument("--delta-std-floor", type=float, default=0.03)
     ap.add_argument("--min-rank-margin", type=float, default=0.0)
+    ap.add_argument("--conditional-recovery-ranking", action="store_true", help="Compute rank margins only against the second recovery candidate; nominal admission is handled by the evidence gate.")
     ap.add_argument("--preference-tie-epsilon-near", type=float, default=0.025)
     ap.add_argument("--preference-tie-epsilon-contact", type=float, default=0.010)
     args = ap.parse_args()
@@ -354,8 +358,8 @@ def main() -> int:
     bundle = load_model_bundle(args.checkpoint, runtime_cfg)
     if bundle is None:
         raise FileNotFoundError(args.checkpoint)
-    if args.risk_source == "heads" and not bool(getattr(bundle.model, "direct_recovery_harm_head", False)):
-        raise ValueError("risk-source=heads requires model.direct_recovery_harm_head=true")
+    if args.risk_source in {"heads", "ordinal_evidence"} and not bool(getattr(bundle.model, "direct_recovery_harm_head", False)):
+        raise ValueError("risk-source=heads/ordinal_evidence requires model.direct_recovery_harm_head=true")
 
     alpha = float((bundle.cfg.get("ocmero", {}) or {}).get("alpha", 0.2))
     beta = float((bundle.cfg.get("ocmero", {}) or {}).get("beta", 0.2))
@@ -397,8 +401,8 @@ def main() -> int:
             row["delta_std"] = None if pred.direct_recovery_delta_std is None else max(float(args.delta_std_floor), float(pred.direct_recovery_delta_std))
             row["opp_logit"] = None if pred.direct_recovery_opportunity_logit is None else float(pred.direct_recovery_opportunity_logit)
             row["harm_logit"] = None if pred.direct_recovery_harm_logit is None else float(pred.direct_recovery_harm_logit)
-            if args.risk_source == "heads" and (row["opp_logit"] is None or row["harm_logit"] is None):
-                raise ValueError("risk-source=heads requires opportunity/harm outputs")
+            if args.risk_source in {"heads", "ordinal_evidence"} and (row["opp_logit"] is None or row["harm_logit"] is None):
+                raise ValueError("risk-source=heads/ordinal_evidence requires opportunity/harm outputs")
         if gi == 1 or gi % 200 == 0 or gi == len(raw):
             print({"event": "v48_calibration_group_score_progress", "bucket": args.bucket, "groups": gi, "total_groups": len(raw)}, flush=True)
 
@@ -423,6 +427,10 @@ def main() -> int:
                 if r["delta"] is None or r["delta_std"] is None:
                     raise ValueError("risk-source=direct_delta requires direct delta mean/std outputs")
                 pred_adv = float(r["delta"])
+            elif args.risk_source == "ordinal_evidence":
+                opportunity = _sigmoid(float(r["opp_logit"]) - float(nom["opp_logit"]))
+                harm = _sigmoid(float(r["harm_logit"]) - float(nom["harm_logit"]))
+                pred_adv = opportunity - harm
             else:
                 pred_adv = r["pred"] - nom["pred"]
             rank_adv = r["rank"] - nom["rank"]
@@ -434,7 +442,7 @@ def main() -> int:
             if args.risk_source in {"direct_delta", "conformal_delta", "delta_distribution"}:
                 opportunity = _normal_cdf((pred_adv - args.positive_gain) / delta_std)
                 harm = _normal_cdf((-args.negative_gain - pred_adv) / delta_std)
-            else:
+            elif args.risk_source != "ordinal_evidence":
                 opportunity = _sigmoid(float(r["opp_logit"]) - float(nom["opp_logit"]))
                 harm = _sigmoid(float(r["harm_logit"]) - float(nom["harm_logit"]))
             head_harm = None
@@ -490,8 +498,8 @@ def main() -> int:
         all_top1: list[dict[str, Any]] = []
         score_thr = float("inf")
     else:
-        verify_top1 = _top1(verify, rule["opportunity_threshold"], rule["harm_threshold"], supported_macros)
-        all_top1 = _top1(groups, rule["opportunity_threshold"], rule["harm_threshold"], supported_macros)
+        verify_top1 = _top1(verify, rule["opportunity_threshold"], rule["harm_threshold"], supported_macros, conditional_rank_margin=args.conditional_recovery_ranking)
+        all_top1 = _top1(groups, rule["opportunity_threshold"], rule["harm_threshold"], supported_macros, conditional_rank_margin=args.conditional_recovery_ranking)
         score_thr = rule["score_threshold"]
     rank_margin_thr = float("inf") if rule is None else rule["rank_margin_threshold"]
     verify_metrics = _metrics(verify, verify_top1, score_thr, rank_margin_thr, args.positive_gain, args.negative_gain)
@@ -501,6 +509,7 @@ def main() -> int:
         vtop = _top1(
             verify, float(fit_row["opportunity_threshold"]),
             float(fit_row["harm_threshold"]), supported_macros,
+            conditional_rank_margin=args.conditional_recovery_ranking,
         )
         vm = _metrics(
             verify, vtop, float(fit_row["score_threshold"]),
@@ -536,9 +545,12 @@ def main() -> int:
     for g in groups:
         ordered = sorted(g["pairs"], key=lambda r: (-r["rank_adv"], r["candidate"]))
         chosen = ordered[0]
-        alternative_scores = [0.0] + [float(r["rank_adv"]) for r in ordered[1:]]
+        alternative_scores = [float(r["rank_adv"]) for r in ordered[1:]]
+        if not args.conditional_recovery_ranking:
+            alternative_scores.append(0.0)
+        second_score = max(alternative_scores) if alternative_scores else float(chosen["rank_adv"] - 1.0)
         chosen = dict(chosen)
-        chosen["rank_margin"] = float(chosen["rank_adv"] - max(alternative_scores))
+        chosen["rank_margin"] = float(chosen["rank_adv"] - second_score)
         chosen.update(
             scene=g["scene"], time=g["time"], fold=g["fold"],
             oracle_best_teacher_adv=g["oracle_best_teacher_adv"],
@@ -631,6 +643,7 @@ def main() -> int:
             "direct_value_harm_threshold": rule["harm_threshold"],
             "direct_value_min_advantage_lcb": rule["score_threshold"],
             "direct_value_min_rank_margin": rule["rank_margin_threshold"],
+            "direct_value_conditional_rank_margin": bool(args.conditional_recovery_ranking),
             "direct_value_conformal_overprediction_quantile": (None if conformal is None else conformal["overprediction_quantile"]),
             "direct_value_conformal_underprediction_quantile": (None if conformal is None else conformal["underprediction_quantile"]),
             "direct_value_conformal_temperature": (None if conformal is None else conformal["temperature"]),

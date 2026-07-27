@@ -306,6 +306,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "direct_value_harm_threshold": 1.0,
         "direct_value_top1_only": False,
         "direct_value_min_rank_margin": 0.0,
+        "direct_value_conditional_rank_margin": False,
         "direct_value_risk_controlled_admission": False,
         "gamma_rec_by_bucket": {},
         "gamma_rec_by_bucket_file": None,

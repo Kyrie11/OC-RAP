@@ -409,6 +409,12 @@ def _evaluate_grouped_items(grouped: dict[tuple, list[dict]], methods: list[str]
                 pg=float(sel0.get("direct_value_positive_gain",0.015)); ng=float(sel0.get("direct_value_negative_gain",0.010))
                 cdf=np.vectorize(lambda z:0.5*(1.0+math.erf(float(np.clip(z,-12,12))/math.sqrt(2.0))))
                 pred_direct_opportunity=cdf((dm-pg)/ds).astype(np.float32); pred_direct_harm=cdf((-ng-dm)/ds).astype(np.float32)
+            elif risk_source=="ordinal_evidence" and np.isfinite(opp_logits[ni]) and np.isfinite(harm_logits[ni]):
+                od=np.clip(opp_logits-opp_logits[ni],-30,30); hd=np.clip(harm_logits-harm_logits[ni],-30,30)
+                pred_direct_opportunity=(1.0/(1.0+np.exp(-od))).astype(np.float32)
+                pred_direct_harm=(1.0/(1.0+np.exp(-hd))).astype(np.float32)
+                pred_direct_value=(pred_direct_opportunity-pred_direct_harm).astype(np.float32); pred_direct_value[ni]=0.0
+                pred_direct_std=np.zeros_like(pred_direct_value,dtype=np.float32)
             elif risk_source=="delta_distribution" and np.isfinite(pred_direct_value[ni]):
                 import math
                 dm=pred_direct_value-pred_direct_value[ni]; ds=np.sqrt(np.maximum(1e-6,pred_direct_std**2+pred_direct_std[ni]**2))
