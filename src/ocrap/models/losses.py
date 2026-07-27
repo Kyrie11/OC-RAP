@@ -1365,9 +1365,15 @@ def direct_uncertainty_recovery_value_loss(
     preference_set_replace_singlewinner: bool = False,
     preference_nominal_margin: float = 0.02,
     preference_harm_margin: float = 0.03,
+    preference_set_mass_loss: bool = False,
+    preference_noop_nominal_only: bool = False,
+    preference_deadzone_margin: float = 0.008,
     delta_nll_weight: float = 0.0,
     delta_sign_weight: float = 0.0,
     delta_sign_temperature: float = 0.04,
+    certificate_policy_top1_weight: float = 0.0,
+    certificate_policy_top1_sign_weight: float = 0.0,
+    certificate_policy_top1_temperature: float = 0.04,
     pred_delta_mean: torch.Tensor | None = None,
     pred_delta_logvar: torch.Tensor | None = None,
 ) -> torch.Tensor:
@@ -1508,6 +1514,39 @@ def direct_uncertainty_recovery_value_loss(
             positive_bce = F.binary_cross_entropy_with_logits(p_delta / sign_tau, positive_soft)
             harmful_bce = F.binary_cross_entropy_with_logits(-p_delta / sign_tau, harmful_soft)
             terms.append(float(delta_sign_weight) * 0.5 * (positive_bce + harmful_bce))
+        # v48.9 PACER: Stage C is evaluated only on the candidate selected
+        # by the frozen Stage-P preference policy.  Train the certificate on
+        # that induced distribution instead of letting thousands of unused
+        # candidates dominate the relative-gain regression.
+        if (
+            direct_delta is not None
+            and (float(certificate_policy_top1_weight) > 0.0
+                 or float(certificate_policy_top1_sign_weight) > 0.0)
+        ):
+            policy_j = int(torch.argmax(r_delta.detach()).item())
+            policy_pred = p_delta[policy_j]
+            policy_teacher = t_delta[policy_j].detach()
+            if float(certificate_policy_top1_weight) > 0.0:
+                policy_reg = F.smooth_l1_loss(policy_pred, policy_teacher, reduction="mean")
+                terms.append(float(certificate_policy_top1_weight) * policy_reg)
+            if float(certificate_policy_top1_sign_weight) > 0.0:
+                policy_tau = max(float(certificate_policy_top1_temperature), 1.0e-4)
+                policy_positive = torch.sigmoid(
+                    (policy_teacher - float(positive_gain)) / policy_tau
+                ).detach()
+                policy_harmful = torch.sigmoid(
+                    (-float(negative_gain) - policy_teacher) / policy_tau
+                ).detach()
+                policy_pos_bce = F.binary_cross_entropy_with_logits(
+                    policy_pred / policy_tau, policy_positive
+                )
+                policy_harm_bce = F.binary_cross_entropy_with_logits(
+                    -policy_pred / policy_tau, policy_harmful
+                )
+                terms.append(
+                    0.5 * float(certificate_policy_top1_sign_weight)
+                    * (policy_pos_bce + policy_harm_bce)
+                )
         group_range = float((target[idx].max() - target[idx].min()).item())
         if group_range >= float(min_group_range) and float(listwise_weight) > 0.0:
             teacher_prob = torch.softmax((target[idx] - target[idx].mean()) / tau, dim=0)
@@ -1545,19 +1584,35 @@ def direct_uncertainty_recovery_value_loss(
             if material_positive:
                 acceptable_all = all_teacher >= (best_teacher_all - tie_eps)
                 acceptable_all[0] = False
+            elif bool(preference_noop_nominal_only):
+                # When no material recovery exists, the policy target is the
+                # nominal action.  Dead-zone recoveries may be harmless, but
+                # executing them is still an unnecessary intervention and was
+                # the main source of v48.8 false switches.
+                acceptable_all = torch.zeros_like(all_teacher, dtype=torch.bool)
+                acceptable_all[0] = True
             else:
                 acceptable_all = all_teacher >= -tie_eps
                 acceptable_all[0] = True
             if bool(acceptable_all.any()):
-                target_set = acceptable_all.to(dtype=all_pred.dtype)
-                target_set = target_set / target_set.sum().clamp_min(1.0)
-                pred_log = torch.log_softmax(all_pred / pref_tau, dim=0)
-                set_kl = F.kl_div(pred_log, target_set, reduction="sum")
+                logits = all_pred / pref_tau
+                if bool(preference_set_mass_loss):
+                    # Partial-label set likelihood: reward probability mass on
+                    # the acceptable set without forcing its members to have
+                    # identical logits.  The old uniform-target KL imposed an
+                    # artificial within-set ordering constraint.
+                    set_term = torch.logsumexp(logits, dim=0) - torch.logsumexp(
+                        logits[acceptable_all], dim=0
+                    )
+                else:
+                    target_set = acceptable_all.to(dtype=all_pred.dtype)
+                    target_set = target_set / target_set.sum().clamp_min(1.0)
+                    pred_log = torch.log_softmax(logits, dim=0)
+                    set_term = F.kl_div(pred_log, target_set, reduction="sum")
                 rejected_all = ~acceptable_all
-                set_term = set_kl
                 if bool(rejected_all.any()):
-                    accept_score = torch.logsumexp(all_pred[acceptable_all] / pref_tau, dim=0) * pref_tau
-                    reject_score = torch.logsumexp(all_pred[rejected_all] / pref_tau, dim=0) * pref_tau
+                    accept_score = torch.logsumexp(logits[acceptable_all], dim=0) * pref_tau
+                    reject_score = torch.logsumexp(logits[rejected_all], dim=0) * pref_tau
                     required_margin = (
                         float(preference_set_margin)
                         if material_positive else float(preference_nominal_margin)
@@ -1565,7 +1620,15 @@ def direct_uncertainty_recovery_value_loss(
                     set_term = set_term + F.softplus(
                         (required_margin - (accept_score - reject_score)) / pref_tau
                     ) * pref_tau
-                expected_teacher = (torch.softmax(all_pred / pref_tau, dim=0) * all_teacher).sum()
+                if (not material_positive) and bool(preference_noop_nominal_only) and bool(tie_mask.any()):
+                    # Dead-zone candidates receive only a weak intervention-cost
+                    # margin; they are not mislabeled as harmful.
+                    dead_rank = r_delta[tie_mask]
+                    set_term = set_term + 0.25 * (
+                        F.softplus((dead_rank + float(preference_deadzone_margin)) / pref_tau)
+                        * pref_tau
+                    ).mean()
+                expected_teacher = (torch.softmax(logits, dim=0) * all_teacher).sum()
                 set_regret = torch.clamp(best_teacher_all - expected_teacher, min=0.0)
                 confidence = (
                     torch.clamp(

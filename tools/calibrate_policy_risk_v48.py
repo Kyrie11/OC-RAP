@@ -137,6 +137,27 @@ def _top1(groups: list[dict[str, Any]], opp_thr: float, harm_thr: float, support
     return out
 
 
+def _policy_top1_pairs(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return the frozen preference policy's recovery candidate per group.
+
+    Certificate calibration must match the distribution on which the policy is
+    actually evaluated.  Fitting residuals over every unused recovery candidate
+    made v48.8's global conformal radius exceed the full prediction range.
+    """
+    out: list[dict[str, Any]] = []
+    for g in groups:
+        if not g.get("pairs"):
+            continue
+        best = sorted(
+            g["pairs"],
+            key=lambda r: (-float(r.get("rank_adv", r["pred_adv"])), int(r["candidate"])),
+        )[0]
+        row = dict(best)
+        row.update(scene=g["scene"], time=g["time"], fold=g["fold"])
+        out.append(row)
+    return out
+
+
 def _metrics(groups: list[dict[str, Any]], top1: list[dict[str, Any]], score_thr: float, rank_margin_thr: float, pos_gain: float, neg_gain: float) -> dict[str, Any]:
     selected = [r for r in top1 if r["pred_adv"] >= score_thr and r.get("rank_margin", 0.0) >= rank_margin_thr]
     positive = [r for r in selected if r["teacher_adv"] >= pos_gain]
@@ -184,6 +205,17 @@ def _fit(
         n=args.grid_size,
         reverse=False,
     )
+    # Preserve a diagnostic frontier even when every score lies outside the
+    # hard probability bounds.  Such rows can never become deployable rules,
+    # but they reveal whether failure comes from opportunity saturation, harm
+    # saturation, precision, support, or macro concentration.
+    diagnostic_probability_violation = False
+    if not opp_grid:
+        opp_grid = _grid([r["opportunity"] for r in pairs], n=args.grid_size, reverse=True)
+        diagnostic_probability_violation = True
+    if not harm_grid:
+        harm_grid = _grid([r["harm"] for r in pairs], n=args.grid_size, reverse=False)
+        diagnostic_probability_violation = True
     candidates: list[dict[str, Any]] = []
     frontier: list[dict[str, Any]] = []
     for opp_thr in opp_grid:
@@ -211,8 +243,13 @@ def _fit(
                     harm_ucb = float(m["harmful_group_exposure_ucb90"])
                     conditional_harm_ucb = float(m["harmful_selected_ucb90"])
                     mean_adv = float(m["teacher_advantage_mean"] or -1.0)
+                    probability_deficit = (
+                        max(0.0, float(args.min_opportunity) - float(opp_thr))
+                        + max(0.0, float(harm_thr) - float(args.max_harm_probability))
+                    )
                     deficit = (
-                        max(0, args.min_fit_selected - int(m["num_selected"])) / max(args.min_fit_selected, 1)
+                        probability_deficit
+                        + max(0, args.min_fit_selected - int(m["num_selected"])) / max(args.min_fit_selected, 1)
                         + max(0.0, args.min_fit_precision_lcb - lcb)
                         + max(0.0, harm_ucb - args.max_fit_harmful_group_ucb)
                         + max(0.0, conditional_harm_ucb - args.max_fit_harmful_selected_ucb)
@@ -229,7 +266,9 @@ def _fit(
                     )
                     frontier.append(row)
                     if (
-                        m["num_selected"] >= args.min_fit_selected
+                        opp_thr >= args.min_opportunity
+                        and harm_thr <= args.max_harm_probability
+                        and m["num_selected"] >= args.min_fit_selected
                         and m["precision_wilson_lcb90"] is not None
                         and m["precision_wilson_lcb90"] >= args.min_fit_precision_lcb
                         and m["harmful_group_exposure_ucb90"] <= args.max_fit_harmful_group_ucb
@@ -299,6 +338,11 @@ def main() -> int:
     ap.add_argument("--risk-source", choices=["direct_delta", "conformal_delta", "delta_distribution", "heads"], default="direct_delta")
     ap.add_argument("--conformal-alpha", type=float, default=0.10)
     ap.add_argument("--conformal-temperature", type=float, default=0.02)
+    ap.add_argument(
+        "--conformal-scope", choices=["all_pairs", "policy_top1"],
+        default="policy_top1",
+        help="Fit residuals on all candidates or on the frozen Stage-P policy top-1 distribution.",
+    )
     ap.add_argument("--delta-std-floor", type=float, default=0.03)
     ap.add_argument("--min-rank-margin", type=float, default=0.0)
     ap.add_argument("--preference-tie-epsilon-near", type=float, default=0.025)
@@ -411,7 +455,10 @@ def main() -> int:
     verify = [g for g in groups if g["fold"] != args.fit_fold]
     conformal = None
     if args.risk_source == "conformal_delta":
-        fit_pairs = [r for g in fit for r in g["pairs"]]
+        if args.conformal_scope == "policy_top1":
+            fit_pairs = _policy_top1_pairs(fit)
+        else:
+            fit_pairs = [r for g in fit for r in g["pairs"]]
         q_over = _finite_sample_upper_quantile(
             [r["pred_adv"] - r["teacher_adv"] for r in fit_pairs], args.conformal_alpha
         )
@@ -433,6 +480,7 @@ def main() -> int:
             "alpha": float(args.conformal_alpha),
             "temperature": float(temp),
             "fit_pair_count": len(fit_pairs),
+            "scope": str(args.conformal_scope),
             "overprediction_quantile": float(q_over),
             "underprediction_quantile": float(q_under),
         }
@@ -491,6 +539,10 @@ def main() -> int:
         alternative_scores = [0.0] + [float(r["rank_adv"]) for r in ordered[1:]]
         chosen = dict(chosen)
         chosen["rank_margin"] = float(chosen["rank_adv"] - max(alternative_scores))
+        chosen.update(
+            scene=g["scene"], time=g["time"], fold=g["fold"],
+            oracle_best_teacher_adv=g["oracle_best_teacher_adv"],
+        )
         unconstrained_top1.append(chosen)
         if g["oracle_best_teacher_adv"] >= args.positive_gain:
             oracle = max(g["pairs"], key=lambda r: r["teacher_adv"])
@@ -500,6 +552,26 @@ def main() -> int:
     top1_pred = [r["rank_adv"] for r in unconstrained_top1]
     top1_teacher = [r["teacher_adv"] for r in unconstrained_top1]
     top1_corr = float(np.corrcoef(top1_pred, top1_teacher)[0, 1]) if len(top1_pred) > 1 and np.std(top1_pred) > 1e-12 and np.std(top1_teacher) > 1e-12 else None
+    policy_top1_positive_auc = _auc(
+        [r["teacher_adv"] >= args.positive_gain for r in unconstrained_top1],
+        [r["pred_adv"] for r in unconstrained_top1],
+    )
+    policy_top1_harm_auc = _auc(
+        [r["teacher_adv"] <= -args.negative_gain for r in unconstrained_top1],
+        [r["harm"] for r in unconstrained_top1],
+    )
+    policy_top1_gain_mae = (
+        float(np.mean([abs(float(r["pred_adv"]) - float(r["teacher_adv"])) for r in unconstrained_top1]))
+        if unconstrained_top1 else None
+    )
+    recovery_switches = [r for r in unconstrained_top1 if float(r["rank_adv"]) > 0.0]
+    nonpositive_groups = [r for r in unconstrained_top1 if float(r["oracle_best_teacher_adv"]) < args.positive_gain]
+    positive_policy_groups = [r for r in unconstrained_top1 if float(r["oracle_best_teacher_adv"]) >= args.positive_gain]
+    nonpositive_false_switches = [r for r in nonpositive_groups if float(r["rank_adv"]) > 0.0]
+    harmful_ranked_switches = [
+        r for r in recovery_switches if float(r["teacher_adv"]) <= -args.negative_gain
+    ]
+    positive_group_activations = [r for r in positive_policy_groups if float(r["rank_adv"]) > 0.0]
     positive_groups = [g for g in groups if g["oracle_best_teacher_adv"] >= args.positive_gain]
     top1_hits = []
     top1_strict_hits = []
@@ -576,6 +648,13 @@ def main() -> int:
         "candidate_pred_teacher_correlation": corr,
         "candidate_rank_teacher_correlation": rank_corr,
         "unconstrained_group_top1_correlation": top1_corr,
+        "policy_top1_positive_auc": policy_top1_positive_auc,
+        "policy_top1_harm_auc": policy_top1_harm_auc,
+        "policy_top1_gain_mae": policy_top1_gain_mae,
+        "unconstrained_recovery_switch_rate": (len(recovery_switches) / len(unconstrained_top1) if unconstrained_top1 else None),
+        "nonpositive_group_false_switch_rate": (len(nonpositive_false_switches) / len(nonpositive_groups) if nonpositive_groups else None),
+        "harmful_ranked_switch_rate": (len(harmful_ranked_switches) / len(unconstrained_top1) if unconstrained_top1 else None),
+        "positive_group_recovery_activation_rate": (len(positive_group_activations) / len(positive_policy_groups) if positive_policy_groups else None),
         "positive_group_top1_accuracy": (float(np.mean(top1_hits)) if top1_hits else None),
         "positive_group_strict_top1_accuracy": (float(np.mean(top1_strict_hits)) if top1_strict_hits else None),
         "positive_group_top1_regret_mean": (float(np.mean(top1_regrets)) if top1_regrets else None),

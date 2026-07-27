@@ -320,9 +320,15 @@ def _direct_value_loss_from_outputs(
         preference_set_replace_singlewinner=bool(tcfg.get("direct_value_preference_set_replace_singlewinner", False)),
         preference_nominal_margin=float(tcfg.get("direct_value_preference_nominal_margin", 0.02)),
         preference_harm_margin=float(tcfg.get("direct_value_preference_harm_margin", 0.03)),
+        preference_set_mass_loss=bool(tcfg.get("direct_value_preference_set_mass_loss", False)),
+        preference_noop_nominal_only=bool(tcfg.get("direct_value_preference_noop_nominal_only", False)),
+        preference_deadzone_margin=float(tcfg.get("direct_value_preference_deadzone_margin", 0.008)),
         delta_nll_weight=float(tcfg.get("direct_value_delta_nll_weight", 0.0)),
         delta_sign_weight=float(tcfg.get("direct_value_delta_sign_weight", 0.0)),
         delta_sign_temperature=float(tcfg.get("direct_value_delta_sign_temperature", 0.04)),
+        certificate_policy_top1_weight=float(tcfg.get("direct_value_certificate_policy_top1_weight", 0.0)),
+        certificate_policy_top1_sign_weight=float(tcfg.get("direct_value_certificate_policy_top1_sign_weight", 0.0)),
+        certificate_policy_top1_temperature=float(tcfg.get("direct_value_certificate_policy_top1_temperature", 0.04)),
     )
 
     def compute(

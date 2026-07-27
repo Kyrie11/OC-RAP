@@ -1,3 +1,51 @@
+## v48.9 — OC-TRAC-PACER (2026-07-27)
+
+### Evidence from the completed v48.8 experiment
+
+- The v48.8 main run, eight ablation jobs, and the paired Safe probe were audited. Natural gate failed for both variants and both stress regimes; every calibrated rule selected zero actions, so no Near/Contact closed-loop improvement can be attributed to SCOPE.
+- Candidate-level signal remained usable (main candidate-positive AUC: Near 0.643–0.730, Contact 0.765–0.785), but policy ordering remained insufficient. Main top-1 correlation was 0.053/0.125 for balanced Near/Contact and 0.163/0.185 for precision Near/Contact, below the internal 0.20 readiness target.
+- The conflict-free preference ablation did not improve top-1 over the engineering-fixed reference. Near/Contact correlation changed from 0.022/0.079 to 0.006/0.058 for balanced and from 0.048/0.102 to 0.006/0.058 for precision.
+- The split-conformal certificate was over-conservative for the wrong reason: residuals were fitted over every recovery candidate, although deployment evaluates only the frozen preference top-1 candidate. One-sided overprediction quantiles were about 0.57–0.61, causing all scored rows to saturate at opportunity=0 and harm=1; no strict threshold grid or near-miss frontier existed.
+- The paired Safe probe used only eight scenes. Collision/offroad, bounded NUP, and intervention were identical to nominal, but route progression, jerk p95, and yaw-rate p95 were unavailable. It is diagnostic only and not a paper-ready Safe claim.
+
+### Root-cause corrections
+
+1. **Partial-label set mass rather than uniform-set KL.** The v48.8 target forced all acceptable candidates to equal logits. PACER minimizes negative probability mass on the acceptable set, preserving ambiguity without inventing an ordering inside the set.
+2. **Nominal-only target for no-opportunity groups.** Dead-zone recoveries are no longer treated as equally acceptable deployment actions. They receive a weak intervention-cost margin below nominal; materially harmful recoveries receive a stronger margin.
+3. **Policy-induced certificate training.** Stage C now trains the relative-gain head strongly on the recovery candidate actually selected by the frozen Stage-P preference policy, while retaining a low-weight all-candidate regularizer. This removes the train/deploy distribution mismatch.
+4. **Policy-top1 conformal scope.** Optional conformal calibration fits residuals on one frozen-policy candidate per group, not all unused candidates. The default main experiment uses empirical direct-delta admission; conformal remains a controlled ablation until it demonstrates non-zero verified coverage.
+5. **Non-empty failure diagnostics.** Calibration now writes a diagnostic frontier even when all predicted opportunity/harm values violate hard bounds, while explicitly marking probability-bound deficits so diagnostic rows cannot pass the Natural gate.
+
+### New algorithmic contribution: PACER
+
+**PACER = Policy-Aligned Candidate Evidence for Recovery.** It couples two isolated stages through the policy-induced candidate distribution rather than through shared gradients.
+
+- **Intervention-aware partial-label preference:** Stage P uses only nominal-relative set context. Positive groups maximize mass on the exact-teacher equivalent recovery set; no-opportunity groups choose nominal; dead-zone and harmful alternatives are separated by different margins.
+- **Policy-aligned evidence:** Stage C freezes the whole preference path and learns exact candidate-minus-nominal PCD gain on Stage P's selected candidate, with smooth-L1 and tri-state sign supervision. The all-candidate loss is only a weak representation regularizer.
+- **Auditable abstention:** empirical fit/verify precision, conditional harmful-switch bounds, rank margin, recall, support, and macro concentration remain unchanged. PACER does not lower gate thresholds to manufacture coverage.
+
+### Required validation and ablations
+
+1. Old uniform-set preference + old all-candidate certificate.
+2. Intervention-aware set-mass preference only.
+3. Policy-aligned certificate only.
+4. Full PACER.
+
+The first learning checkpoint is whether Near and Contact top-1 correlation improve without increasing non-positive false switches. The second is whether policy-top1 gain AUC and near-miss precision improve. Multi-seed and stress closed loop remain forbidden until a fixed checkpoint passes the held-out Natural gate.
+
+### Engineering and speed notes
+
+- Main and ablation runs may reuse the v48.8 proxy split and exact teacher-PCD index; no dataset rebuild is required.
+- Four ablations are submitted together but the scheduler runs at most one job per A30, so two jobs execute concurrently without GPU oversubscription.
+- The Stage-P adapter width is reduced from 48 to 32, Stage C uses only the delta adapter, BF16/TF32 and persistent data workers remain enabled, and calibration uses group-batched inference.
+
+### Local validation
+
+- 140 tests passed.
+- Python compileall passed.
+- Modified shell scripts passed `bash -n`.
+- Real WOMD/Waymax/A30 results are not available in the local environment; no claim is made that v48.9 already passes Natural gate or closed-loop publication targets.
+
 ## v48.8 — OC-TRAC-SCOPE (2026-07-27)
 
 ### Evidence from the completed v48.7 proxy experiment

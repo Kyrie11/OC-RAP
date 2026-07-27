@@ -7,6 +7,7 @@ export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONUNBUFFERED=1
 
 OUTPUTDIR="${OUTPUTDIR:-runs/ocrap_v48_1_reuse_existing_data}"
+RUN_LABEL="${RUN_LABEL:-v48}"
 LOG_DIR="$OUTPUTDIR/logs"
 mkdir -p "$LOG_DIR"
 
@@ -16,7 +17,7 @@ if [[ "${FOREGROUND:-0}" != "1" && "${V48_CONTROLLER_CHILD:-0}" != "1" ]]; then
   nohup env V48_CONTROLLER_CHILD=1 FOREGROUND=1 bash "$0" \
     >"$LOG_DIR/controller.log" 2>&1 </dev/null &
   echo $! > "$OUTPUTDIR/controller.pid"
-  echo "v48.7 controller started: PID=$(cat "$OUTPUTDIR/controller.pid")"
+  echo "$RUN_LABEL controller started: PID=$(cat "$OUTPUTDIR/controller.pid")"
   echo "log: $LOG_DIR/controller.log"
   exit 0
 fi
@@ -252,6 +253,7 @@ calibrate_variant() {
   CUDA_VISIBLE_DEVICES="$gpu" python -u tools/calibrate_policy_risk_v48.py \
     --dataset "$CAL_NEAR" --checkpoint "$ckpt" --bucket near --risk-source="${RISK_SOURCE:-direct_delta}" \
     --conformal-alpha="${CONFORMAL_ALPHA:-0.10}" --conformal-temperature="${CONFORMAL_TEMPERATURE:-0.02}" \
+    --conformal-scope="${CONFORMAL_SCOPE:-policy_top1}" \
     --output "$run/calibration/direct_value_risk_near_v48.json" \
     --rows-output "$run/calibration/direct_value_risk_near_v48.rows.jsonl" \
     --required-min-groups="${NEAR_MIN_GROUPS:-80}" --required-min-scenes="${NEAR_MIN_SCENES:-40}" \
@@ -265,6 +267,7 @@ calibrate_variant() {
   CUDA_VISIBLE_DEVICES="$gpu" python -u tools/calibrate_policy_risk_v48.py \
     --dataset "$CAL_CONTACT" --checkpoint "$ckpt" --bucket contact --risk-source="${RISK_SOURCE:-direct_delta}" \
     --conformal-alpha="${CONFORMAL_ALPHA:-0.10}" --conformal-temperature="${CONFORMAL_TEMPERATURE:-0.02}" \
+    --conformal-scope="${CONFORMAL_SCOPE:-policy_top1}" \
     --output "$run/calibration/direct_value_risk_contact_v48.json" \
     --rows-output "$run/calibration/direct_value_risk_contact_v48.rows.jsonl" \
     --required-min-groups="${CONTACT_MIN_GROUPS:-100}" --required-min-scenes="${CONTACT_MIN_SCENES:-45}" \
@@ -351,5 +354,5 @@ import json,pathlib,time,sys
 r=pathlib.Path(sys.argv[1]); p=r/'RUN_COMPLETE.json'
 p.write_text(json.dumps({"event":"run_complete","created_unix":time.time(),"chosen_base_run":(r/'chosen_base_run.txt').read_text().strip()},indent=2)+'\n')
 PYDONE
-echo "v48.7 screening complete. chosen=$CHOSEN_BASE_RUN" | tee "$LOG_DIR/complete.log"
+echo "$RUN_LABEL screening complete. chosen=$CHOSEN_BASE_RUN" | tee "$LOG_DIR/complete.log"
 echo "next commands: $OUTPUTDIR/NEXT_COMMANDS.txt"
