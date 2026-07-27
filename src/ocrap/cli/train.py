@@ -316,7 +316,13 @@ def _direct_value_loss_from_outputs(
         preference_set_margin=float(tcfg.get("direct_value_preference_set_margin", 0.02)),
         preference_tie_epsilon_near=float(tcfg.get("direct_value_preference_tie_epsilon_near", 0.025)),
         preference_tie_epsilon_contact=float(tcfg.get("direct_value_preference_tie_epsilon_contact", 0.010)),
+        preference_all_group_set_weight=float(tcfg.get("direct_value_preference_all_group_set_weight", 0.0)),
+        preference_set_replace_singlewinner=bool(tcfg.get("direct_value_preference_set_replace_singlewinner", False)),
+        preference_nominal_margin=float(tcfg.get("direct_value_preference_nominal_margin", 0.02)),
+        preference_harm_margin=float(tcfg.get("direct_value_preference_harm_margin", 0.03)),
         delta_nll_weight=float(tcfg.get("direct_value_delta_nll_weight", 0.0)),
+        delta_sign_weight=float(tcfg.get("direct_value_delta_sign_weight", 0.0)),
+        delta_sign_temperature=float(tcfg.get("direct_value_delta_sign_temperature", 0.04)),
     )
 
     def compute(
@@ -493,6 +499,7 @@ def _direct_policy_batch_stats(
         acceptable = bool(chosen_teacher_adv >= oracle_adv_raw - tie_eps)
         regret = max(0.0, oracle_adv - chosen_teacher_adv - tie_eps) if positive_group else 0.0
         rank_harmful = chosen_teacher_adv <= -negative_gain
+        rank_switch_nonpositive = (not positive_group) and bool(float(pred_rank_delta.max().item()) > 0.0)
 
         recovery_scores = pred_rank_delta
         if recovery_scores.numel() > 1:
@@ -532,6 +539,7 @@ def _direct_policy_batch_stats(
         for name in ("all", suffix, f"{suffix}_fold{scene_fold}"):
             add(f"group_count_{name}", 1.0)
             add(f"rank_harmful_{name}", float(rank_harmful))
+            add(f"rank_switch_nonpositive_{name}", float(rank_switch_nonpositive))
             add(f"admitted_harmful_{name}", float(admitted_harmful))
             add(f"false_intervention_{name}", float(false_intervention))
             add(f"admission_count_{name}", float(admitted))
@@ -552,6 +560,10 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
     false_lambda = float(tcfg.get("direct_policy_metric_false_intervention_weight", 0.15))
     miss_lambda = float(tcfg.get("direct_policy_metric_missed_opportunity_weight", 0.25))
     rank_miss_lambda = float(tcfg.get("direct_policy_metric_rank_miss_weight", 0.10))
+    rank_harm_lambda = float(tcfg.get("direct_policy_metric_rank_harm_weight", 0.25))
+    rank_false_lambda = float(tcfg.get("direct_policy_metric_rank_false_switch_weight", 0.15))
+    min_fold_positive = int(tcfg.get("direct_policy_metric_min_fold_positive", 6))
+    robust_top_k = max(1, int(tcfg.get("direct_policy_metric_robust_top_k", 2)))
     suffixes = ["all", "near", "contact"] + [f"{regime}_fold{fold}" for regime in ("near", "contact") for fold in range(3)]
     for suffix in suffixes:
         tag = "" if suffix == "all" else f"_{suffix}"
@@ -565,6 +577,7 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
             if f"top1_hit_{suffix}" in stats:
                 out[f"direct_group_top1_accuracy{tag}"] = stats.get(f"top1_hit_{suffix}", 0.0) / count
             out[f"direct_rank_harmful_top1_rate{tag}"] = stats.get(f"rank_harmful_{suffix}", stats.get(f"harmful_switch_{suffix}", 0.0)) / count
+            out[f"direct_rank_false_switch_rate{tag}"] = stats.get(f"rank_switch_nonpositive_{suffix}", 0.0) / count
             out[f"direct_harmful_switch_rate{tag}"] = stats.get(f"admitted_harmful_{suffix}", stats.get(f"harmful_switch_{suffix}", 0.0)) / count
             out[f"direct_false_intervention_rate{tag}"] = stats.get(f"false_intervention_{suffix}", 0.0) / count
             out[f"direct_raw_admission_rate{tag}"] = stats.get(f"admission_count_{suffix}", 0.0) / count
@@ -576,7 +589,14 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
             out[f"direct_positive_group_top1_accuracy{tag}"] = top1
             out[f"direct_positive_admission_recall{tag}"] = recall
             out[f"direct_positive_rank_margin_mean{tag}"] = stats.get(f"positive_rank_margin_sum_{suffix}", 0.0) / pos_count
-            out[f"direct_preference_risk_mean{tag}"] = regret + rank_miss_lambda * (1.0 - top1)
+            out[f"direct_preference_risk_mean{tag}"] = (
+                regret
+                + rank_miss_lambda * (1.0 - top1)
+                + rank_harm_lambda * out.get(f"direct_rank_harmful_top1_rate{tag}", 0.0)
+                + rank_false_lambda * out.get(f"direct_rank_false_switch_rate{tag}", 0.0)
+            )
+            out[f"direct_positive_group_count{tag}"] = float(pos_count)
+            out[f"direct_group_count{tag}"] = float(count)
         if count > 0 and pos_count > 0:
             cert_risk = (
                 out[f"direct_positive_group_regret_mean{tag}"]
@@ -600,6 +620,23 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
         ]
         if fold_vals:
             out[f"{metric.replace('_mean', '')}_fold_worst"] = max(fold_vals)
+    # v48.8 SCOPE: sparse fold maxima made v48.7 Stage-P selection brittle.
+    # Aggregate only folds with enough positive groups, then use the mean of the
+    # worst K supported folds (CVaR-like) instead of a single noisy maximum.
+    for metric in ("direct_preference_risk_mean", "direct_certificate_risk_mean"):
+        supported: list[float] = []
+        for regime in ("near", "contact"):
+            for fold in range(3):
+                key = f"{metric}_{regime}_fold{fold}"
+                count_key = f"direct_positive_group_count_{regime}_fold{fold}"
+                if key in out and out.get(count_key, 0.0) >= float(min_fold_positive):
+                    supported.append(float(out[key]))
+        if supported:
+            ordered = sorted(supported, reverse=True)
+            k = min(robust_top_k, len(ordered))
+            out[f"{metric.replace('_mean', '')}_fold_robust"] = sum(ordered[:k]) / float(k)
+            out[f"{metric.replace('_mean', '')}_supported_fold_count"] = float(len(supported))
+
     # Exact names consumed by v48.7 staged training.
     if "direct_preference_risk_fold_worst" not in out:
         vals = [v for k, v in out.items() if k.startswith("direct_preference_risk_mean_") and "fold" in k]
@@ -1578,9 +1615,11 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_preference_dropout=float(model_cfg.get("direct_recovery_preference_dropout", 0.05)),
         direct_recovery_preference_context=bool(model_cfg.get("direct_recovery_preference_context", False)),
         direct_recovery_preference_context_hidden=int(model_cfg.get("direct_recovery_preference_context_hidden", d_model)),
+        direct_recovery_relative_features_include_absolute=bool(model_cfg.get("direct_recovery_relative_features_include_absolute", True)),
         direct_recovery_delta_head=bool(model_cfg.get("direct_recovery_delta_head", False)),
         direct_recovery_delta_hidden=int(model_cfg.get("direct_recovery_delta_hidden", d_model)),
         direct_recovery_delta_dropout=float(model_cfg.get("direct_recovery_delta_dropout", 0.05)),
+        direct_recovery_delta_initial_logvar=float(model_cfg.get("direct_recovery_delta_initial_logvar", -4.605170186)),
     ).to(device)
     tcfg = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
 
@@ -1737,6 +1776,7 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, **loader_kwargs)
     epochs = int(tcfg.get("epochs", 10))
     best_val = float("inf")
+    best_metric_min_delta = max(0.0, float(tcfg.get("best_metric_min_delta", 1.0e-6)))
     best_epoch = 0
     no_improve_epochs = 0
     history = []
@@ -1780,9 +1820,11 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "direct_recovery_preference_dropout": float(model_cfg.get("direct_recovery_preference_dropout", 0.05)),
             "direct_recovery_preference_context": bool(model_cfg.get("direct_recovery_preference_context", False)),
             "direct_recovery_preference_context_hidden": int(model_cfg.get("direct_recovery_preference_context_hidden", d_model)),
+            "direct_recovery_relative_features_include_absolute": bool(model_cfg.get("direct_recovery_relative_features_include_absolute", True)),
             "direct_recovery_delta_head": bool(model_cfg.get("direct_recovery_delta_head", False)),
             "direct_recovery_delta_hidden": int(model_cfg.get("direct_recovery_delta_hidden", d_model)),
             "direct_recovery_delta_dropout": float(model_cfg.get("direct_recovery_delta_dropout", 0.05)),
+            "direct_recovery_delta_initial_logvar": float(model_cfg.get("direct_recovery_delta_initial_logvar", -4.605170186)),
             "model_state": model.state_dict(),
             "optimizer_state": opt.state_dict(),
             "epoch": int(ep),
@@ -1825,7 +1867,7 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             )
         current_metric = float(va[best_metric_name])
         compare_metric = current_metric if best_metric_mode != "max" else -current_metric
-        improved = compare_metric <= best_val
+        improved = compare_metric < (best_val - best_metric_min_delta)
         payload = _checkpoint_payload(ep, current_metric)
         save_every = bool(tcfg.get("save_every_epoch", True))
         if save_every:
@@ -1862,7 +1904,7 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
                 "epoch": ep,
                 "best_epoch": int(best_epoch),
                 "best_val_loss": float(best_val),
-        "best_metric": str(tcfg.get("best_metric", "loss") or "loss"),
+                "best_metric": str(tcfg.get("best_metric", "loss") or "loss"),
                 "epochs_completed": int(len(history)),
                 "patience": patience,
             }, flush=True)
@@ -1881,6 +1923,8 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         "encoder_type": encoder_type,
         "init_checkpoint": init_checkpoint,
         "freeze_param_prefixes": list(freeze_prefixes),
+        "trainable_param_prefixes": list(trainable_prefixes),
+        "best_metric_min_delta": float(best_metric_min_delta),
         "best_val_loss": float(best_val),
         "best_metric": str(tcfg.get("best_metric", "loss") or "loss"),
         "device_info": device_info,

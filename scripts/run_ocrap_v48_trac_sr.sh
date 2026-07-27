@@ -832,11 +832,13 @@ with open(sys.argv[1]) as f:
 JSONCHECK
 }
 
-run_safe_closed_loop() {
-  make_sel v48
-  CUDA_VISIBLE_DEVICES=${GPU_SAFE:-0} PYTHONUNBUFFERED=1 python -u -m ocrap.cli closed-loop \
-    --dataset "$WOMD_VAL@150" --checkpoint "$CKPT" \
-    --output "$RUN/closed_loop_safe_fast_v48.json" \
+run_safe_closed_loop_one() {
+  local tag="$1" gpu="$2" output="$3"
+  make_sel "$tag"
+  local safe_womd_source="${SAFE_WOMD_SOURCE:-$WOMD_VAL@150}"
+  CUDA_VISIBLE_DEVICES="$gpu" PYTHONUNBUFFERED=1 python -u -m ocrap.cli closed-loop \
+    --dataset "$safe_womd_source" --checkpoint "$CKPT" \
+    --output "$output" \
     "${COMMON_SEL[@]}" \
     --set closed_loop.method=ocrap \
     --set closed_loop.resume="$CL_RESUME" \
@@ -856,8 +858,23 @@ run_safe_closed_loop() {
     --set closed_loop.num_recovery_options=${SAFE_NUM_RECOVERY_OPTIONS:-8} \
     --set closed_loop.label_mode=fast \
     --set closed_loop.progress_every_steps=5 \
-    | tee -a "$RUN/closed_loop_safe_fast_v48.log"
-  assert_json "$RUN/closed_loop_safe_fast_v48.json"
+    | tee -a "${output%.json}.log"
+  assert_json "$output"
+}
+
+run_safe_closed_loop() {
+  if [[ "${RUN_SAFE_PAIRED_SCALAR:-0}" == "1" ]]; then
+    local scalar_out="$RUN/closed_loop_safe_fast_v48_scalar.json"
+    local model_out="$RUN/closed_loop_safe_fast_v48.json"
+    run_safe_closed_loop_one scalar "${GPU_SAFE_BASELINE:-0}" "$scalar_out" & local p0=$!
+    run_safe_closed_loop_one v48 "${GPU_SAFE:-1}" "$model_out" & local p1=$!
+    wait "$p0"; wait "$p1"
+    python tools/analyze_safe_paired_noninferiority_v48_8.py \
+      --baseline "$scalar_out" --candidate "$model_out" \
+      --output "$RUN/safe_paired_noninferiority_v48_8.json"
+  else
+    run_safe_closed_loop_one v48 "${GPU_SAFE:-0}" "$RUN/closed_loop_safe_fast_v48.json"
+  fi
 }
 
 summarize() {

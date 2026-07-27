@@ -63,7 +63,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.num_workers="${NUM_WORKERS:-6}" --set training.persistent_workers=true \
   --set training.prefetch_factor="${PREFETCH_FACTOR:-2}" --set training.progress=true \
   --set training.save_every_epoch=true --set training.best_metric="${BEST_METRIC:-direct_policy_risk_fold_worst}" \
-  --set training.best_metric_mode=min \
+  --set training.best_metric_mode=min --set training.best_metric_min_delta="${BEST_METRIC_MIN_DELTA:-0.000001}" \
   --set training.group_batching=true --set training.group_batching_replacement=true \
   --set training.group_batch_positive_advantage_boost="${POSITIVE_GROUP_BOOST:-5.0}" \
   --set training.group_batch_positive_best_macro_balance_power="${POSITIVE_MACRO_BALANCE_POWER:-0.5}" \
@@ -95,9 +95,11 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set model.direct_recovery_preference_dropout="${PREFERENCE_DROPOUT:-0.05}" \
   --set model.direct_recovery_preference_context="${PREFERENCE_CONTEXT_ENABLED:-true}" \
   --set model.direct_recovery_preference_context_hidden="${PREFERENCE_CONTEXT_HIDDEN:-128}" \
+  --set model.direct_recovery_relative_features_include_absolute="${RELATIVE_INCLUDE_ABSOLUTE:-true}" \
   --set model.direct_recovery_delta_head="${DELTA_HEAD_ENABLED:-true}" \
   --set model.direct_recovery_delta_hidden="${DELTA_HIDDEN:-128}" \
   --set model.direct_recovery_delta_dropout="${DELTA_DROPOUT:-0.05}" \
+  --set model.direct_recovery_delta_initial_logvar="${DELTA_INITIAL_LOGVAR:--4.605170186}" \
   --set loss_weights.dep=0 --set loss_weights.orc=0 --set loss_weights.assign=0 \
   --set loss_weights.sig=0 --set loss_weights.margin=0 --set loss_weights.obs=0 \
   --set loss_weights.anti_oracle=0 --set loss_weights.artifact_gap=0 \
@@ -141,11 +143,21 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.direct_value_preference_set_margin="${PREFERENCE_SET_MARGIN:-0.020}" \
   --set training.direct_value_preference_tie_epsilon_near="${PREFERENCE_TIE_EPS_NEAR:-0.025}" \
   --set training.direct_value_preference_tie_epsilon_contact="${PREFERENCE_TIE_EPS_CONTACT:-0.010}" \
+  --set training.direct_value_preference_all_group_set_weight="${PREFERENCE_ALL_GROUP_SET_WEIGHT:-0.0}" \
+  --set training.direct_value_preference_set_replace_singlewinner="${PREFERENCE_SET_REPLACE_SINGLEWINNER:-false}" \
+  --set training.direct_value_preference_nominal_margin="${PREFERENCE_NOMINAL_MARGIN:-0.020}" \
+  --set training.direct_value_preference_harm_margin="${PREFERENCE_HARM_MARGIN:-0.030}" \
   --set training.direct_value_delta_nll_weight="${DELTA_NLL_WEIGHT:-1.00}" \
+  --set training.direct_value_delta_sign_weight="${DELTA_SIGN_WEIGHT:-0.0}" \
+  --set training.direct_value_delta_sign_temperature="${DELTA_SIGN_TEMPERATURE:-0.04}" \
   --set training.direct_policy_metric_harm_weight="${POLICY_METRIC_HARM_WEIGHT:-0.35}" \
   --set training.direct_policy_metric_false_intervention_weight="${POLICY_METRIC_FALSE_WEIGHT:-0.15}" \
   --set training.direct_policy_metric_missed_opportunity_weight="${POLICY_METRIC_MISS_WEIGHT:-0.25}" \
   --set training.direct_policy_metric_rank_miss_weight="${POLICY_METRIC_RANK_MISS_WEIGHT:-0.10}" \
+  --set training.direct_policy_metric_rank_harm_weight="${POLICY_METRIC_RANK_HARM_WEIGHT:-0.25}" \
+  --set training.direct_policy_metric_rank_false_switch_weight="${POLICY_METRIC_RANK_FALSE_WEIGHT:-0.15}" \
+  --set training.direct_policy_metric_min_fold_positive="${POLICY_METRIC_MIN_FOLD_POSITIVE:-6}" \
+  --set training.direct_policy_metric_robust_top_k="${POLICY_METRIC_ROBUST_TOP_K:-2}" \
   --set training.direct_policy_metric_opportunity_threshold="${POLICY_METRIC_OPP_THRESHOLD:-0.65}" \
   --set training.direct_policy_metric_harm_threshold="${POLICY_METRIC_HARM_THRESHOLD:-0.30}" \
   --set training.direct_policy_metric_rank_margin_threshold="${POLICY_METRIC_RANK_MARGIN:-0.020}" \

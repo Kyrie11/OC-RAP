@@ -38,6 +38,17 @@ def _normal_cdf(x: float) -> float:
     return float(0.5 * (1.0 + math.erf(float(np.clip(x, -12.0, 12.0)) / math.sqrt(2.0))))
 
 
+def _finite_sample_upper_quantile(values: list[float], alpha: float) -> float:
+    """One-sided split-conformal finite-sample quantile."""
+    a = np.asarray([float(x) for x in values if np.isfinite(x)], dtype=float)
+    if a.size == 0:
+        return float("inf")
+    a.sort()
+    rank = int(math.ceil((a.size + 1) * (1.0 - float(alpha))))
+    rank = min(max(rank, 1), int(a.size))
+    return float(a[rank - 1])
+
+
 def _teacher_pcd(d: dict[str, Any], alpha: float, beta: float, top_m: int) -> float:
     m = np.asarray(d["m_star"], dtype=np.float64)
     p = np.asarray(d["root_probs"], dtype=np.float64)
@@ -285,7 +296,9 @@ def main() -> int:
     ap.add_argument("--max-verify-harmful-selected-ucb", type=float, default=1.0,
                     help="Maximum conditional harmful-switch UCB among selected actions")
     ap.add_argument("--max-selected-macro-share", type=float, default=0.85)
-    ap.add_argument("--risk-source", choices=["direct_delta", "delta_distribution", "heads"], default="direct_delta")
+    ap.add_argument("--risk-source", choices=["direct_delta", "conformal_delta", "delta_distribution", "heads"], default="direct_delta")
+    ap.add_argument("--conformal-alpha", type=float, default=0.10)
+    ap.add_argument("--conformal-temperature", type=float, default=0.02)
     ap.add_argument("--delta-std-floor", type=float, default=0.03)
     ap.add_argument("--min-rank-margin", type=float, default=0.0)
     ap.add_argument("--preference-tie-epsilon-near", type=float, default=0.025)
@@ -362,7 +375,7 @@ def main() -> int:
             continue
         pairs = []
         for r in recs:
-            if args.risk_source == "direct_delta":
+            if args.risk_source in {"direct_delta", "conformal_delta"}:
                 if r["delta"] is None or r["delta_std"] is None:
                     raise ValueError("risk-source=direct_delta requires direct delta mean/std outputs")
                 pred_adv = float(r["delta"])
@@ -371,10 +384,10 @@ def main() -> int:
             rank_adv = r["rank"] - nom["rank"]
             delta_std = (
                 float(r["delta_std"])
-                if args.risk_source == "direct_delta"
+                if args.risk_source in {"direct_delta", "conformal_delta"}
                 else max(float(args.delta_std_floor), math.sqrt(r["pred_std"] ** 2 + nom["pred_std"] ** 2))
             )
-            if args.risk_source in {"direct_delta", "delta_distribution"}:
+            if args.risk_source in {"direct_delta", "conformal_delta", "delta_distribution"}:
                 opportunity = _normal_cdf((pred_adv - args.positive_gain) / delta_std)
                 harm = _normal_cdf((-args.negative_gain - pred_adv) / delta_std)
             else:
@@ -396,6 +409,33 @@ def main() -> int:
 
     fit = [g for g in groups if g["fold"] == args.fit_fold]
     verify = [g for g in groups if g["fold"] != args.fit_fold]
+    conformal = None
+    if args.risk_source == "conformal_delta":
+        fit_pairs = [r for g in fit for r in g["pairs"]]
+        q_over = _finite_sample_upper_quantile(
+            [r["pred_adv"] - r["teacher_adv"] for r in fit_pairs], args.conformal_alpha
+        )
+        q_under = _finite_sample_upper_quantile(
+            [r["teacher_adv"] - r["pred_adv"] for r in fit_pairs], args.conformal_alpha
+        )
+        temp = max(float(args.conformal_temperature), 1.0e-4)
+        for g in groups:
+            for r in g["pairs"]:
+                r["gain_lcb"] = float(r["pred_adv"] - q_over)
+                r["gain_ucb"] = float(r["pred_adv"] + q_under)
+                # Admission is based on a held-out lower confidence bound.  The
+                # harm score uses the same bound conservatively, so a candidate
+                # cannot look simultaneously high-opportunity and low-risk only
+                # because its learned variance collapsed.
+                r["opportunity"] = _sigmoid((r["gain_lcb"] - args.positive_gain) / temp)
+                r["harm"] = _sigmoid((-args.negative_gain - r["gain_lcb"]) / temp)
+        conformal = {
+            "alpha": float(args.conformal_alpha),
+            "temperature": float(temp),
+            "fit_pair_count": len(fit_pairs),
+            "overprediction_quantile": float(q_over),
+            "underprediction_quantile": float(q_under),
+        }
     rule, fit_metrics, candidates, near_miss = _fit(fit, args, supported_macros)
     if rule is None:
         verify_top1: list[dict[str, Any]] = []
@@ -408,6 +448,31 @@ def main() -> int:
     rank_margin_thr = float("inf") if rule is None else rule["rank_margin_threshold"]
     verify_metrics = _metrics(verify, verify_top1, score_thr, rank_margin_thr, args.positive_gain, args.negative_gain)
     all_metrics = _metrics(groups, all_top1, score_thr, rank_margin_thr, args.positive_gain, args.negative_gain)
+    near_miss_verify_frontier: list[dict[str, Any]] = []
+    for fit_row in near_miss[:20]:
+        vtop = _top1(
+            verify, float(fit_row["opportunity_threshold"]),
+            float(fit_row["harm_threshold"]), supported_macros,
+        )
+        vm = _metrics(
+            verify, vtop, float(fit_row["score_threshold"]),
+            float(fit_row["rank_margin_threshold"]),
+            args.positive_gain, args.negative_gain,
+        )
+        near_miss_verify_frontier.append({
+            "fit_constraint_deficit": float(fit_row.get("constraint_deficit", 0.0)),
+            "rule": {k: float(fit_row[k]) for k in (
+                "opportunity_threshold", "harm_threshold",
+                "score_threshold", "rank_margin_threshold",
+            )},
+            "fit": {k: fit_row.get(k) for k in (
+                "num_selected", "precision", "precision_wilson_lcb90",
+                "harmful_selected_rate", "harmful_selected_ucb90",
+                "positive_recall", "teacher_advantage_mean",
+                "max_selected_macro_share",
+            )},
+            "verify": vm,
+        })
 
     pairs = [r for g in groups for r in g["pairs"]]
     pred = [r["pred_adv"] for r in pairs]
@@ -478,11 +543,13 @@ def main() -> int:
         "valid_for_deployment": valid,
         "selection_rule": "physical -> gain-distribution opportunity/harm -> preference top1 -> value challenge",
         "risk_source": args.risk_source,
+        "conformal": conformal,
         "rule": rule,
         "selector_overrides": ({} if rule is None else {
             "direct_value_certificate": True,
             "direct_value_score_mode": True,
-            "direct_value_uncertainty_mode": "risk_controlled",
+            "direct_value_uncertainty_mode": ("conformal_additive" if conformal is not None else "risk_controlled"),
+            "direct_value_additive_q": (0.0 if conformal is None else conformal["overprediction_quantile"]),
             "direct_value_top1_only": True,
             "direct_value_risk_controlled_admission": True,
             "direct_value_risk_source": args.risk_source,
@@ -492,6 +559,9 @@ def main() -> int:
             "direct_value_harm_threshold": rule["harm_threshold"],
             "direct_value_min_advantage_lcb": rule["score_threshold"],
             "direct_value_min_rank_margin": rule["rank_margin_threshold"],
+            "direct_value_conformal_overprediction_quantile": (None if conformal is None else conformal["overprediction_quantile"]),
+            "direct_value_conformal_underprediction_quantile": (None if conformal is None else conformal["underprediction_quantile"]),
+            "direct_value_conformal_temperature": (None if conformal is None else conformal["temperature"]),
         }),
         "num_groups": len(groups), "num_scenes": len(scenes), "fit_groups": len(fit), "verify_groups": len(verify),
         "fit_scenes": len(fit_scenes), "verify_scenes": len(verify_scenes), "scene_overlap": len(fit_scenes & verify_scenes),
@@ -514,6 +584,7 @@ def main() -> int:
         "preference_tie_epsilon": tie_epsilon,
         "top_fit_candidates": candidates,
         "near_miss_frontier": near_miss,
+        "near_miss_verify_frontier": near_miss_verify_frontier,
         "skipped": dict(skipped),
         "warnings": warnings,
         "constraints": vars(args) | {"output": str(args.output), "rows_output": str(args.rows_output) if args.rows_output else None},
@@ -522,10 +593,15 @@ def main() -> int:
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     if args.rows_output:
         args.rows_output.parent.mkdir(parents=True, exist_ok=True)
+        rows_to_write = all_top1 if rule is not None else unconstrained_top1
         with args.rows_output.open("w", encoding="utf-8") as f:
-            for row in all_top1:
+            for row in rows_to_write:
                 row = dict(row)
-                row["selected"] = bool(row["pred_adv"] >= score_thr and row.get("rank_margin", 0.0) >= rank_margin_thr)
+                row["selected"] = bool(
+                    rule is not None
+                    and row["pred_adv"] >= score_thr
+                    and row.get("rank_margin", 0.0) >= rank_margin_thr
+                )
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
     print(json.dumps(result, ensure_ascii=False), flush=True)
     return 0 if valid else 3

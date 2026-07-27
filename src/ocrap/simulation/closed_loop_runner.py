@@ -713,7 +713,18 @@ def _select_prefix(
     risk_source = str(sel_tmp.get("direct_value_risk_source", "heads") or "heads").strip().lower()
     if nominal_ids:
         ni = nominal_ids[0]
-        if risk_source == "direct_delta" and np.isfinite(pred_direct_delta).any():
+        if risk_source == "conformal_delta" and np.isfinite(pred_direct_delta).any():
+            pred_direct_value = np.where(np.isfinite(pred_direct_delta), pred_direct_delta, -np.inf).astype(np.float32)
+            pred_direct_value[ni] = 0.0
+            q = float(sel_tmp.get("direct_value_conformal_overprediction_quantile", sel_tmp.get("direct_value_additive_q", 0.0)) or 0.0)
+            temp = max(1.0e-4, float(sel_tmp.get("direct_value_conformal_temperature", 0.02) or 0.02))
+            pos_gain = float(sel_tmp.get("direct_value_positive_gain", 0.015))
+            neg_gain = float(sel_tmp.get("direct_value_negative_gain", 0.010))
+            gain_lcb = pred_direct_value - q
+            pred_direct_std = np.zeros_like(pred_direct_value, dtype=np.float32)
+            pred_direct_opportunity = (1.0 / (1.0 + np.exp(-np.clip((gain_lcb - pos_gain) / temp, -30.0, 30.0)))).astype(np.float32)
+            pred_direct_harm = (1.0 / (1.0 + np.exp(-np.clip((-neg_gain - gain_lcb) / temp, -30.0, 30.0)))).astype(np.float32)
+        elif risk_source == "direct_delta" and np.isfinite(pred_direct_delta).any():
             from math import erf, sqrt
             pred_direct_value = np.where(np.isfinite(pred_direct_delta), pred_direct_delta, -np.inf).astype(np.float32)
             pred_direct_value[ni] = 0.0

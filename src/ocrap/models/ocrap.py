@@ -59,9 +59,11 @@ class OCRAPModel(nn.Module):
         direct_recovery_preference_dropout: float = 0.05,
         direct_recovery_preference_context: bool = False,
         direct_recovery_preference_context_hidden: int = 128,
+        direct_recovery_relative_features_include_absolute: bool = True,
         direct_recovery_delta_head: bool = False,
         direct_recovery_delta_hidden: int = 128,
         direct_recovery_delta_dropout: float = 0.05,
+        direct_recovery_delta_initial_logvar: float = -4.605170186,
     ):
         super().__init__()
         self.num_roots = int(num_roots)
@@ -104,9 +106,11 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_preference_dropout = float(max(0.0, direct_recovery_preference_dropout))
         self.direct_recovery_preference_context = bool(direct_recovery_preference_context)
         self.direct_recovery_preference_context_hidden = max(16, int(direct_recovery_preference_context_hidden))
+        self.direct_recovery_relative_features_include_absolute = bool(direct_recovery_relative_features_include_absolute)
         self.direct_recovery_delta_head = bool(direct_recovery_delta_head)
         self.direct_recovery_delta_hidden = max(16, int(direct_recovery_delta_hidden))
         self.direct_recovery_delta_dropout = float(max(0.0, direct_recovery_delta_dropout))
+        self.direct_recovery_delta_initial_logvar = float(direct_recovery_delta_initial_logvar)
         if self.direct_recovery_value_expert_routing not in {
             "bucket",
             "hard_bucket",
@@ -292,7 +296,7 @@ class OCRAPModel(nn.Module):
         # A separate, zero-initialized relative-context residual augments only the
         # ranking score.  This preserves the v48.5 pointwise preference solution
         # while exposing candidate-minus-nominal and group summaries to ranking.
-        relative_in_dim = 4 * direct_in_dim
+        relative_in_dim = (4 if self.direct_recovery_relative_features_include_absolute else 3) * direct_in_dim
         self.direct_preference_context_adapter = (
             nn.Sequential(
                 nn.LayerNorm(relative_in_dim),
@@ -333,7 +337,7 @@ class OCRAPModel(nn.Module):
                 # A moderate initial standard deviation keeps the new head
                 # conservative without saturating opportunity/harm probabilities.
                 with torch.no_grad():
-                    delta_projection.bias[1] = -3.5
+                    delta_projection.bias[1] = self.direct_recovery_delta_initial_logvar
 
         def _make_direct_head() -> nn.Sequential:
             return nn.Sequential(
@@ -485,7 +489,10 @@ class OCRAPModel(nn.Module):
         branch remains pointwise and warm-start compatible.
         """
         zeros = torch.zeros_like(direct_features)
-        relative = torch.cat([direct_features, zeros, zeros, zeros], dim=-1)
+        if self.direct_recovery_relative_features_include_absolute:
+            relative = torch.cat([direct_features, zeros, zeros, zeros], dim=-1)
+        else:
+            relative = torch.cat([zeros, zeros, zeros], dim=-1)
         if group_index is None or is_nominal is None or direct_features.shape[0] <= 1:
             return relative
         groups = group_index.to(device=direct_features.device)
@@ -507,7 +514,10 @@ class OCRAPModel(nn.Module):
             rec_rel = direct_features[recs] - nominal
             mean_rel = rec_rel.mean(dim=0, keepdim=True).expand(idx.numel(), -1)
             max_rel = rec_rel.max(dim=0, keepdim=True).values.expand(idx.numel(), -1)
-            out[idx] = torch.cat([direct_features[idx], rel, mean_rel, max_rel], dim=-1)
+            if self.direct_recovery_relative_features_include_absolute:
+                out[idx] = torch.cat([direct_features[idx], rel, mean_rel, max_rel], dim=-1)
+            else:
+                out[idx] = torch.cat([rel, mean_rel, max_rel], dim=-1)
         return out
 
     def _direct_outputs(

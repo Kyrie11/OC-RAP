@@ -173,9 +173,11 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         direct_recovery_preference_dropout=float(ckpt.get("direct_recovery_preference_dropout", model_cfg.get("direct_recovery_preference_dropout", 0.05))),
         direct_recovery_preference_context=bool(ckpt.get("direct_recovery_preference_context", model_cfg.get("direct_recovery_preference_context", False))),
         direct_recovery_preference_context_hidden=int(ckpt.get("direct_recovery_preference_context_hidden", model_cfg.get("direct_recovery_preference_context_hidden", d_model))),
+        direct_recovery_relative_features_include_absolute=bool(ckpt.get("direct_recovery_relative_features_include_absolute", model_cfg.get("direct_recovery_relative_features_include_absolute", True))),
         direct_recovery_delta_head=bool(ckpt.get("direct_recovery_delta_head", model_cfg.get("direct_recovery_delta_head", False))),
         direct_recovery_delta_hidden=int(ckpt.get("direct_recovery_delta_hidden", model_cfg.get("direct_recovery_delta_hidden", d_model))),
         direct_recovery_delta_dropout=float(ckpt.get("direct_recovery_delta_dropout", model_cfg.get("direct_recovery_delta_dropout", 0.05))),
+        direct_recovery_delta_initial_logvar=float(ckpt.get("direct_recovery_delta_initial_logvar", model_cfg.get("direct_recovery_delta_initial_logvar", -4.605170186))),
     ).to(device)
     # Strict loading remains the default for checkpoints with matching geometry.
     # A v39 checkpoint can initialize v40 training through train.py's explicit
@@ -206,9 +208,11 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_preference_dropout"] = float(ckpt.get("direct_recovery_preference_dropout", model_cfg.get("direct_recovery_preference_dropout", 0.05)))
     cfg["model"]["direct_recovery_preference_context"] = bool(ckpt.get("direct_recovery_preference_context", model_cfg.get("direct_recovery_preference_context", False)))
     cfg["model"]["direct_recovery_preference_context_hidden"] = int(ckpt.get("direct_recovery_preference_context_hidden", model_cfg.get("direct_recovery_preference_context_hidden", d_model)))
+    cfg["model"]["direct_recovery_relative_features_include_absolute"] = bool(ckpt.get("direct_recovery_relative_features_include_absolute", model_cfg.get("direct_recovery_relative_features_include_absolute", True)))
     cfg["model"]["direct_recovery_delta_head"] = bool(ckpt.get("direct_recovery_delta_head", model_cfg.get("direct_recovery_delta_head", False)))
     cfg["model"]["direct_recovery_delta_hidden"] = int(ckpt.get("direct_recovery_delta_hidden", model_cfg.get("direct_recovery_delta_hidden", d_model)))
     cfg["model"]["direct_recovery_delta_dropout"] = float(ckpt.get("direct_recovery_delta_dropout", model_cfg.get("direct_recovery_delta_dropout", 0.05)))
+    cfg["model"]["direct_recovery_delta_initial_logvar"] = float(ckpt.get("direct_recovery_delta_initial_logvar", model_cfg.get("direct_recovery_delta_initial_logvar", -4.605170186)))
     return ModelBundle(model=model, cfg=cfg, device=device)
 
 

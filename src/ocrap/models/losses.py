@@ -1361,7 +1361,13 @@ def direct_uncertainty_recovery_value_loss(
     preference_set_margin: float = 0.02,
     preference_tie_epsilon_near: float = 0.025,
     preference_tie_epsilon_contact: float = 0.010,
+    preference_all_group_set_weight: float = 0.0,
+    preference_set_replace_singlewinner: bool = False,
+    preference_nominal_margin: float = 0.02,
+    preference_harm_margin: float = 0.03,
     delta_nll_weight: float = 0.0,
+    delta_sign_weight: float = 0.0,
+    delta_sign_temperature: float = 0.04,
     pred_delta_mean: torch.Tensor | None = None,
     pred_delta_logvar: torch.Tensor | None = None,
 ) -> torch.Tensor:
@@ -1495,6 +1501,13 @@ def direct_uncertainty_recovery_value_loss(
                 delta_var = (variance[recs] + variance[nom]).clamp_min(float(variance_floor))
             delta_nll = 0.5 * (((p_delta - t_delta).square() / delta_var) + torch.log(delta_var))
             terms.append(float(delta_nll_weight) * (mag_w * delta_nll).sum() / mag_w.sum().clamp_min(1.0e-6))
+        if float(delta_sign_weight) > 0.0:
+            sign_tau = max(float(delta_sign_temperature), 1.0e-4)
+            positive_soft = torch.sigmoid((t_delta - float(positive_gain)) / sign_tau).detach()
+            harmful_soft = torch.sigmoid((-float(negative_gain) - t_delta) / sign_tau).detach()
+            positive_bce = F.binary_cross_entropy_with_logits(p_delta / sign_tau, positive_soft)
+            harmful_bce = F.binary_cross_entropy_with_logits(-p_delta / sign_tau, harmful_soft)
+            terms.append(float(delta_sign_weight) * 0.5 * (positive_bce + harmful_bce))
         group_range = float((target[idx].max() - target[idx].min()).item())
         if group_range >= float(min_group_range) and float(listwise_weight) > 0.0:
             teacher_prob = torch.softmax((target[idx] - target[idx].mean()) / tau, dim=0)
@@ -1510,10 +1523,76 @@ def direct_uncertainty_recovery_value_loss(
         # gently toward their teacher delta rather than forced below a margin.
         neg_mask = harmful_mask
         tie_mask = (~pos_mask) & (~harmful_mask)
+
+        # v48.8 SCOPE: conflict-free nominal-inclusive set preference.  v48.7
+        # simultaneously treated near-tied candidates as both equivalent (set
+        # KL) and as ordered best-vs-rest competitors.  This objective replaces
+        # the single-winner family when requested and supervises every group:
+        # material-recovery groups prefer a teacher-equivalent recovery set;
+        # no-opportunity groups prefer nominal plus only genuinely dead-zone
+        # recoveries, while harmful candidates are pushed below nominal.
+        if float(preference_all_group_set_weight) > 0.0:
+            pref_tau = max(float(preference_temperature), 1.0e-3)
+            tie_eps = (
+                float(preference_tie_epsilon_near)
+                if int(bid[nom].item()) == 1
+                else float(preference_tie_epsilon_contact)
+            )
+            all_teacher = torch.cat([t_delta.new_zeros(1), t_delta], dim=0)
+            all_pred = torch.cat([r_delta.new_zeros(1), r_delta], dim=0)
+            best_teacher_all = all_teacher.max().detach()
+            material_positive = bool(float(t_delta.max().item()) >= float(positive_gain))
+            if material_positive:
+                acceptable_all = all_teacher >= (best_teacher_all - tie_eps)
+                acceptable_all[0] = False
+            else:
+                acceptable_all = all_teacher >= -tie_eps
+                acceptable_all[0] = True
+            if bool(acceptable_all.any()):
+                target_set = acceptable_all.to(dtype=all_pred.dtype)
+                target_set = target_set / target_set.sum().clamp_min(1.0)
+                pred_log = torch.log_softmax(all_pred / pref_tau, dim=0)
+                set_kl = F.kl_div(pred_log, target_set, reduction="sum")
+                rejected_all = ~acceptable_all
+                set_term = set_kl
+                if bool(rejected_all.any()):
+                    accept_score = torch.logsumexp(all_pred[acceptable_all] / pref_tau, dim=0) * pref_tau
+                    reject_score = torch.logsumexp(all_pred[rejected_all] / pref_tau, dim=0) * pref_tau
+                    required_margin = (
+                        float(preference_set_margin)
+                        if material_positive else float(preference_nominal_margin)
+                    )
+                    set_term = set_term + F.softplus(
+                        (required_margin - (accept_score - reject_score)) / pref_tau
+                    ) * pref_tau
+                expected_teacher = (torch.softmax(all_pred / pref_tau, dim=0) * all_teacher).sum()
+                set_regret = torch.clamp(best_teacher_all - expected_teacher, min=0.0)
+                confidence = (
+                    torch.clamp(
+                        (best_teacher_all - float(positive_gain))
+                        / max(float(preference_confidence_scale), 1.0e-4),
+                        0.0, 1.0,
+                    )
+                    if material_positive else all_pred.new_tensor(1.0)
+                )
+                terms.append(
+                    float(preference_all_group_set_weight)
+                    * confidence
+                    * (set_term + 0.5 * set_regret.square())
+                )
+            if bool(harmful_mask.any()) and float(preference_harm_margin) > 0.0:
+                harm_rank = r_delta[harmful_mask]
+                harm_penalty = F.softplus(
+                    (harm_rank + float(preference_harm_margin)) / pref_tau
+                ) * pref_tau
+                terms.append(
+                    0.5 * float(preference_all_group_set_weight) * harm_penalty.mean()
+                )
+
         # v48.5 ECPR: confidence-paced exact best-vs-rest preference.  It is
         # applied only when the exact teacher has a material recovery opportunity,
         # and downweights near-ties whose ordering is not stable across splits.
-        if bool(pos_mask.any()) and (float(preference_weight) > 0.0 or float(preference_regret_weight) > 0.0):
+        if (not bool(preference_set_replace_singlewinner)) and bool(pos_mask.any()) and (float(preference_weight) > 0.0 or float(preference_regret_weight) > 0.0):
             best_rank_j = int(torch.argmax(t_delta).item())
             best_teacher = t_delta[best_rank_j]
             gaps = (best_teacher - t_delta).detach()

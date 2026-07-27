@@ -1,3 +1,54 @@
+## v48.8 — OC-TRAC-SCOPE (2026-07-27)
+
+### Evidence from the completed v48.7 proxy experiment
+
+- Stage P did not reliably learn policy top-1. Candidate-level rank correlation was positive (about 0.12–0.16), but unconstrained group top-1 correlation remained slightly negative in both Near and Contact. Acceptable-set accuracy was only about 0.53–0.64 and positive-group regret remained 0.12–0.19.
+- Stage C did not learn deployable execution evidence. Candidate-positive AUC was 0.66–0.77 and risk-harm AUC only 0.55–0.61. Every Natural-gate rule selected zero actions. The closest rules had low precision, high conditional harmful-switch UCB, negative or near-zero mean teacher advantage, and 0.85–1.00 maximum macro share.
+- Ablations isolate two partial ideas: staged training improves Contact relative to joint single-winner training, and set-valued supervision improves both regimes under joint training. Their v48.7 combination regressed because the loss simultaneously treated near-tied candidates as equivalent and as ordered best-vs-rest competitors, while checkpoint selection was dominated by a sparse fold.
+- The Safe probe used only eight nominal-locked scenes. It confirms zero intervention and NUP=1 for that probe, but does not establish paired collision/offroad non-inferiority, confidence intervals, route progression, jerk/yaw-rate, or the publication Safe target.
+
+### Engineering corrections required for clean attribution
+
+- Checkpoint improvement is now strict with `training.best_metric_min_delta`; equal validation metrics no longer overwrite the earlier best checkpoint.
+- Fold selection is support-aware. Preference/certificate checkpointing ignores folds below a configurable positive-group floor and uses the mean of the worst supported K folds instead of a noisy single-fold maximum.
+- Preference risk now includes harmful top-1 and non-positive nominal-switch penalties, rather than evaluating only positive-group regret.
+- Training summaries retain the exact `trainable_param_prefixes` and metric tolerance.
+- Calibration always writes unconstrained top-1 diagnostic rows even when no rule passes and evaluates each near-miss fit rule on the held-out verify fold.
+- Proxy splits and exact teacher-PCD indexes can be prepared once and reused by all ablations. The controller supports one-variant jobs, shared assets, and a two-GPU queue without oversubscribing either A30.
+- Safe evaluation can now run a scene-paired scalar/nominal reference and the nominal-locked model on the two A30s, then report paired bootstrap non-inferiority intervals. A duplicate-loop syntax error in the legacy summary block was also fixed; route/jerk/yaw metrics are marked unavailable rather than silently proxied.
+
+### New algorithm: SCOPE
+
+**SCOPE = Support-aware Conflict-free Ordinal Preference with Conformal Evidence.**
+
+1. **Conflict-free nominal-inclusive set preference**
+   - Every scene-time group is supervised, not only groups with a positive recovery opportunity.
+   - Material-positive groups target a teacher-equivalent recovery set; no-opportunity groups target nominal plus only dead-zone alternatives; harmful recoveries are explicitly pushed below nominal.
+   - When enabled, this objective replaces the contradictory single-winner/listwise family instead of being added on top of it.
+
+2. **Invariant low-capacity preference context**
+   - The trainable Stage-P adapter receives only candidate-minus-nominal, recovery-mean, and recovery-max relative blocks. Absolute candidate features are excluded to reduce severity/macro shortcuts under train/dev contract drift.
+   - Only the context residual is trained; inherited pointwise preference remains frozen. Hidden width is reduced to 48 and the residual remains zero-initialized.
+
+3. **Robust relative-gain learning**
+   - Stage C trains only the relative delta adapter with smooth-L1 regression and soft positive/harm sign supervision. Heteroscedastic NLL is disabled, preventing the severe train-negative/validation-positive variance-collapse pattern observed in v48.7.
+   - The delta log-variance remains at a fixed conservative initializer and is not treated as learned epistemic confidence.
+
+4. **Split-conformal execution evidence**
+   - On the calibration fit scenes, one-sided finite-sample residual quantiles form a lower confidence bound for candidate-minus-nominal gain. Rule search and held-out verification use this bound.
+   - Selector, offline evaluator, and closed-loop runner consume the same conformal quantile and score semantics if a rule passes.
+
+### Stepwise validation protocol
+
+- Stage-P audit must first show positive Near/Contact top-1 correlation and acceptable-set accuracy before certificate results are interpreted.
+- Stage-C discrimination then checks positive/harm AUC and regret independently of Natural-gate coverage.
+- Only after both pass is fixed-checkpoint multi-seed calibration run; stress closed loop remains forbidden unless the held-out Natural gate is valid.
+- Four controlled groups are required: engineering-fixed v48.7 reference, conflict-free preference only, robust/conformal certificate only, and full SCOPE. The queue runs at most two jobs concurrently on two A30 GPUs.
+
+### Non-repetition note
+
+SCOPE does not repeat stronger Harm-head weighting, joint preference/certificate gradients, minibatch GroupDRO, threshold relaxation, shared NASC, or another additive single-winner ranking loss. It specifically removes contradictory supervision, absolute-feature shortcuts, learned-variance collapse, and sparse-fold checkpoint noise exposed by the completed v48.7 experiment.
+
 ## v48.7 — OC-TRAC-SPIRE (2026-07-26)
 
 ### Evidence from the completed v48.6 experiment

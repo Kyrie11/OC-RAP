@@ -32,22 +32,26 @@ EVAL_OCRAP_ROOT="${EVAL_OCRAP_ROOT:-/data0/senzeyu2/dataset/OCRAP}"
 INIT_CKPT="${INIT_CKPT:-runs/ocrap_v47_trac_balanced/model_v47_trac/best.pt}"
 GPU0="${GPU0:-0}"
 GPU1="${GPU1:-1}"
+VARIANTS="${VARIANTS:-balanced,precision}"
+want_variant() { [[ ",${VARIANTS}," == *",$1,"* ]]; }
 if command -v flock >/dev/null 2>&1; then
-  exec 8>"/tmp/ocrap_gpu_${GPU0}.lock"
-  flock -n 8 || { echo "GPU $GPU0 is reserved by another OC-RAP controller" >&2; exit 74; }
-  if [[ "$GPU1" != "$GPU0" ]]; then
+  if want_variant balanced; then
+    exec 8>"/tmp/ocrap_gpu_${GPU0}.lock"
+    flock -n 8 || { echo "GPU $GPU0 is reserved by another OC-RAP controller" >&2; exit 74; }
+  fi
+  if want_variant precision && { ! want_variant balanced || [[ "$GPU1" != "$GPU0" ]]; }; then
     exec 7>"/tmp/ocrap_gpu_${GPU1}.lock"
     flock -n 7 || { echo "GPU $GPU1 is reserved by another OC-RAP controller" >&2; exit 74; }
   fi
 fi
-SPLIT_ROOT="$OUTPUTDIR/dataset_splits"
+SPLIT_ROOT="${PREBUILT_SPLIT_ROOT:-$OUTPUTDIR/dataset_splits}"
 CALIBRATION_OCRAP_ROOT="${CALIBRATION_OCRAP_ROOT:-}"
 CALIBRATION_MODE="${CALIBRATION_MODE:-proxy_val_split}"  # proxy_val_split | dedicated
 CALIBRATION_FRACTION="${CALIBRATION_FRACTION:-0.50}"
 CALIBRATION_SEED="${CALIBRATION_SEED:-4801}"
 TRAIN_MIX="$TRAIN_OCRAP_ROOT/train_near_contact,$TRAIN_OCRAP_ROOT/train_contact"
-GROUP_INDEX="$OUTPUTDIR/teacher_pcd_train_index.jsonl"
-GROUP_SUMMARY="$OUTPUTDIR/teacher_pcd_train_index_summary.json"
+GROUP_INDEX="${SHARED_GROUP_INDEX:-$OUTPUTDIR/teacher_pcd_train_index.jsonl}"
+GROUP_SUMMARY="${SHARED_GROUP_SUMMARY:-$OUTPUTDIR/teacher_pcd_train_index_summary.json}"
 TRAIN_SCRIPT="${TRAIN_SCRIPT:-scripts/train_ocrap_v48_trac_sr.sh}"
 
 case "$CALIBRATION_MODE" in
@@ -137,9 +141,13 @@ else
       --calibration-fraction="$CALIBRATION_FRACTION" --seed="$CALIBRATION_SEED" \
       --overwrite 2>&1 | tee "$LOG_DIR/split_${name}.log"
   }
-  split_proxy safe "$EVAL_OCRAP_ROOT/val_safe" "$CAL_SAFE" "$DEV_SAFE"
-  split_proxy near "$EVAL_OCRAP_ROOT/val_near_contact" "$CAL_NEAR" "$DEV_NEAR"
-  split_proxy contact "$EVAL_OCRAP_ROOT/val_contact" "$CAL_CONTACT" "$DEV_CONTACT"
+  if [[ "${REUSE_PREBUILT_SPLITS:-0}" == "1" && -d "$CAL_SAFE" && -d "$CAL_NEAR" && -d "$CAL_CONTACT" && -d "$DEV_SAFE" && -d "$DEV_NEAR" && -d "$DEV_CONTACT" ]]; then
+    echo "reusing prebuilt proxy split: $SPLIT_ROOT" | tee "$LOG_DIR/split_reuse.log"
+  else
+    split_proxy safe "$EVAL_OCRAP_ROOT/val_safe" "$CAL_SAFE" "$DEV_SAFE"
+    split_proxy near "$EVAL_OCRAP_ROOT/val_near_contact" "$CAL_NEAR" "$DEV_NEAR"
+    split_proxy contact "$EVAL_OCRAP_ROOT/val_contact" "$CAL_CONTACT" "$DEV_CONTACT"
+  fi
 fi
 
 python tools/check_scene_overlap_v48.py \
@@ -212,18 +220,20 @@ launch_variant() {
   LAST_PID=$!
 }
 
-launch_variant balanced "$GPU0"; P0=$LAST_PID
-launch_variant precision "$GPU1"; P1=$LAST_PID
+P0=""; P1=""; S0=99; S1=99
+if want_variant balanced; then launch_variant balanced "$GPU0"; P0=$LAST_PID; fi
+if want_variant precision; then launch_variant precision "$GPU1"; P1=$LAST_PID; fi
 set +e
-wait "$P0"; S0=$?
-wait "$P1"; S1=$?
+if [[ -n "$P0" ]]; then wait "$P0"; S0=$?; fi
+if [[ -n "$P1" ]]; then wait "$P1"; S1=$?; fi
 set -e
-echo "training status: balanced=$S0 precision=$S1" | tee "$LOG_DIR/training_status.log"
+echo "training status: balanced=$S0 precision=$S1 variants=$VARIANTS" | tee "$LOG_DIR/training_status.log"
 [[ "$S0" -eq 0 || "$S1" -eq 0 ]] || exit 3
-python - "$OUTPUTDIR" "$S0" "$S1" <<'PYMARK'
+python - "$OUTPUTDIR" "$S0" "$S1" "$VARIANTS" <<'PYMARK'
 import hashlib,json,pathlib,sys,time
-root=pathlib.Path(sys.argv[1]); status={"balanced":int(sys.argv[2]),"precision":int(sys.argv[3])}; variants={}
+root=pathlib.Path(sys.argv[1]); status={"balanced":int(sys.argv[2]),"precision":int(sys.argv[3])}; requested={x for x in sys.argv[4].split(",") if x}; variants={}
 for name,code in status.items():
+    if name not in requested: continue
     p=root/'candidates'/name/'model_v48_trac_sr'/'best.pt'
     if code==0 and p.is_file():
         h=hashlib.sha256(p.read_bytes()).hexdigest()
@@ -241,6 +251,7 @@ calibrate_variant() {
   set +e
   CUDA_VISIBLE_DEVICES="$gpu" python -u tools/calibrate_policy_risk_v48.py \
     --dataset "$CAL_NEAR" --checkpoint "$ckpt" --bucket near --risk-source="${RISK_SOURCE:-direct_delta}" \
+    --conformal-alpha="${CONFORMAL_ALPHA:-0.10}" --conformal-temperature="${CONFORMAL_TEMPERATURE:-0.02}" \
     --output "$run/calibration/direct_value_risk_near_v48.json" \
     --rows-output "$run/calibration/direct_value_risk_near_v48.rows.jsonl" \
     --required-min-groups="${NEAR_MIN_GROUPS:-80}" --required-min-scenes="${NEAR_MIN_SCENES:-40}" \
@@ -253,6 +264,7 @@ calibrate_variant() {
   local sn=${PIPESTATUS[0]}
   CUDA_VISIBLE_DEVICES="$gpu" python -u tools/calibrate_policy_risk_v48.py \
     --dataset "$CAL_CONTACT" --checkpoint "$ckpt" --bucket contact --risk-source="${RISK_SOURCE:-direct_delta}" \
+    --conformal-alpha="${CONFORMAL_ALPHA:-0.10}" --conformal-temperature="${CONFORMAL_TEMPERATURE:-0.02}" \
     --output "$run/calibration/direct_value_risk_contact_v48.json" \
     --rows-output "$run/calibration/direct_value_risk_contact_v48.rows.jsonl" \
     --required-min-groups="${CONTACT_MIN_GROUPS:-100}" --required-min-scenes="${CONTACT_MIN_SCENES:-45}" \
@@ -266,17 +278,18 @@ calibrate_variant() {
   set -e
   echo "$variant near=$sn contact=$sc" >> "$LOG_DIR/policy_calibration_status.log"
 }
-calibrate_variant balanced "$GPU0" & C0=$!
-calibrate_variant precision "$GPU1" & C1=$!
-wait "$C0" || true
-wait "$C1" || true
+C0=""; C1=""
+if want_variant balanced; then calibrate_variant balanced "$GPU0" & C0=$!; fi
+if want_variant precision; then calibrate_variant precision "$GPU1" & C1=$!; fi
+if [[ -n "$C0" ]]; then wait "$C0" || true; fi
+if [[ -n "$C1" ]]; then wait "$C1" || true; fi
 
 # Only a checkpoint whose scene-disjoint proxy/dedicated certificate passes is
 # allowed into policy evaluation.  Failure still leaves complete diagnostics.
-python - "$OUTPUTDIR" <<'PY' | tee "$LOG_DIR/candidate_selection.log"
+python - "$OUTPUTDIR" "$VARIANTS" <<'PY' | tee "$LOG_DIR/candidate_selection.log"
 import json, pathlib, sys
-root=pathlib.Path(sys.argv[1]); valid=[]; summary={}
-for name in ('balanced','precision'):
+root=pathlib.Path(sys.argv[1]); requested=[x for x in sys.argv[2].split(",") if x]; valid=[]; summary={}
+for name in requested:
     r=root/'candidates'/name; docs=[]; ok=True; summary[name]={}
     for bucket in ('near','contact'):
         p=r/'calibration'/f'direct_value_risk_{bucket}_v48.json'

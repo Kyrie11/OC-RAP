@@ -390,7 +390,16 @@ def _evaluate_grouped_items(grouped: dict[tuple, list[dict]], methods: list[str]
         sel0=(cfg.get("selection",{}) or {}) if isinstance(cfg.get("selection",{}),dict) else {}
         if nominal_ids:
             ni=nominal_ids[0]; risk_source=str(sel0.get("direct_value_risk_source","heads") or "heads").lower()
-            if risk_source=="direct_delta" and np.isfinite(pred_direct_delta).any():
+            if risk_source=="conformal_delta" and np.isfinite(pred_direct_delta).any():
+                dm=np.where(np.isfinite(pred_direct_delta),pred_direct_delta,-np.inf); dm[ni]=0.0
+                q=float(sel0.get("direct_value_conformal_overprediction_quantile",sel0.get("direct_value_additive_q",0.0)) or 0.0)
+                temp=max(1e-4,float(sel0.get("direct_value_conformal_temperature",0.02) or 0.02))
+                pg=float(sel0.get("direct_value_positive_gain",0.015)); ng=float(sel0.get("direct_value_negative_gain",0.010))
+                lcb=dm-q
+                pred_direct_value=dm.astype(np.float32); pred_direct_std=np.zeros_like(dm,dtype=np.float32)
+                pred_direct_opportunity=(1.0/(1.0+np.exp(-np.clip((lcb-pg)/temp,-30,30)))).astype(np.float32)
+                pred_direct_harm=(1.0/(1.0+np.exp(-np.clip((-ng-lcb)/temp,-30,30)))).astype(np.float32)
+            elif risk_source=="direct_delta" and np.isfinite(pred_direct_delta).any():
                 import math
                 pred_direct_value = np.where(np.isfinite(pred_direct_delta), pred_direct_delta, -np.inf)
                 pred_direct_value[ni] = 0.0
