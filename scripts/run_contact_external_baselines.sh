@@ -88,6 +88,7 @@ run_closed_loop_method() {
     --set closed_loop.save_partial="$CL_SAVE_PARTIAL" \
     --set closed_loop.profile_timing="$CL_PROFILE_TIMING" \
     --set closed_loop.audit_every_n_steps="$CL_AUDIT_EVERY_N_STEPS" \
+    --set closed_loop.resume=true \
     --set waymax.dataloader_include_sdc_paths=false \
     --set waymax.compute_future_metrics=false \
     --set waymax.teacher_metrics_stride=0 \
