@@ -1380,6 +1380,11 @@ def direct_uncertainty_recovery_value_loss(
     ordinal_evidence_policy_top1_weight: float = 0.0,
     ordinal_evidence_all_candidate_weight: float = 0.0,
     ordinal_evidence_focal_gamma: float = 1.5,
+    ordinal_evidence_ordered_nll_top1_weight: float = 0.0,
+    ordinal_evidence_ordered_nll_all_weight: float = 0.0,
+    ordinal_evidence_harm_class_weight: float = 2.0,
+    ordinal_evidence_dead_class_weight: float = 0.5,
+    ordinal_evidence_benefit_class_weight: float = 1.25,
     pred_delta_mean: torch.Tensor | None = None,
     pred_delta_logvar: torch.Tensor | None = None,
 ) -> torch.Tensor:
@@ -1856,6 +1861,37 @@ def direct_uncertainty_recovery_value_loss(
                     + _focal_bce(harm_delta_logits[policy_j:policy_j + 1], harm_target[policy_j:policy_j + 1])
                 )
                 terms.append(float(ordinal_evidence_policy_top1_weight) * policy_evidence)
+
+        # v48.11 CASTER: proper three-class ordered likelihood.  The two
+        # cumulative logits induce a valid simplex:
+        #   p_harm = 1-P(non-harm), p_benefit=P(benefit),
+        #   p_dead = P(non-harm)-P(benefit).
+        # This replaces two independent BCE objectives that improved benefit AUC
+        # but left harmful-vs-dead evidence nearly random.
+        if opp_delta_logits is not None and harm_delta_logits is not None and (
+            float(ordinal_evidence_ordered_nll_top1_weight) > 0.0
+            or float(ordinal_evidence_ordered_nll_all_weight) > 0.0
+        ):
+            p_benefit = torch.sigmoid(opp_delta_logits)
+            p_harm = torch.sigmoid(harm_delta_logits)
+            p_dead = (1.0 - p_benefit - p_harm).clamp_min(1.0e-6)
+            probs = torch.stack([p_harm, p_dead, p_benefit], dim=-1).clamp_min(1.0e-6)
+            probs = probs / probs.sum(dim=-1, keepdim=True).clamp_min(1.0e-6)
+            classes = torch.ones_like(t_delta, dtype=torch.long)
+            classes = torch.where(t_delta >= float(positive_gain), torch.full_like(classes, 2), classes)
+            classes = torch.where(t_delta <= -float(negative_gain), torch.zeros_like(classes), classes)
+            class_weights = probs.new_tensor([
+                float(ordinal_evidence_harm_class_weight),
+                float(ordinal_evidence_dead_class_weight),
+                float(ordinal_evidence_benefit_class_weight),
+            ])
+            nll = -torch.log(probs[torch.arange(probs.shape[0], device=probs.device), classes])
+            nll = nll * class_weights[classes]
+            if float(ordinal_evidence_ordered_nll_all_weight) > 0.0:
+                terms.append(float(ordinal_evidence_ordered_nll_all_weight) * nll.mean())
+            if float(ordinal_evidence_ordered_nll_top1_weight) > 0.0:
+                policy_j = int(torch.argmax(r_delta.detach()).item())
+                terms.append(float(ordinal_evidence_ordered_nll_top1_weight) * nll[policy_j])
 
         # v48.4 DRA-RCD: separate candidate ranking from action admission.
         # Candidate ordering must not be trained through a harm head whose labels

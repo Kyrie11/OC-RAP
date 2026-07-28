@@ -121,18 +121,46 @@ def _grid(values: list[float], *, minimum: float | None = None, maximum: float |
     return sorted(out, reverse=reverse)
 
 
-def _top1(groups: list[dict[str, Any]], opp_thr: float, harm_thr: float, supported_macros: set[int], *, conditional_rank_margin: bool = False) -> list[dict[str, Any]]:
+def _top1(
+    groups: list[dict[str, Any]],
+    opp_thr: float,
+    harm_thr: float,
+    supported_macros: set[int],
+    *,
+    conditional_rank_margin: bool = False,
+    policy_first_no_fallback: bool = False,
+) -> list[dict[str, Any]]:
+    """Select one recovery candidate per group.
+
+    With ``policy_first_no_fallback`` the frozen preference policy chooses its
+    top recovery before evidence is checked.  If that candidate is uncertified,
+    the policy abstains instead of silently falling through to a lower-ranked
+    candidate that Stage-E never trained on.
+    """
     out: list[dict[str, Any]] = []
     for g in groups:
-        eligible = [r for r in g["pairs"] if r["macro"] in supported_macros and r["opportunity"] >= opp_thr and r["harm"] <= harm_thr]
-        if not eligible:
+        physical = [r for r in g["pairs"] if r["macro"] in supported_macros]
+        if not physical:
             continue
-        best = sorted(eligible, key=lambda r: (-r.get("rank_adv", r["pred_adv"]), r["candidate"]))[0]
-        alternatives = [float(r.get("rank_adv", r["pred_adv"])) for r in eligible if r is not best]
-        if not conditional_rank_margin:
-            alternatives.append(0.0)
-        second = max(alternatives) if alternatives else float(best.get("rank_adv", best["pred_adv"]) - 1.0)
-        rank_margin = float(best.get("rank_adv", best["pred_adv"]) - second)
+        if policy_first_no_fallback:
+            best = sorted(physical, key=lambda r: (-r.get("rank_adv", r["pred_adv"]), r["candidate"]))[0]
+            alternatives = [float(r.get("rank_adv", r["pred_adv"])) for r in physical if r is not best]
+            if not conditional_rank_margin:
+                alternatives.append(0.0)
+            second = max(alternatives) if alternatives else float(best.get("rank_adv", best["pred_adv"]) - 1.0)
+            rank_margin = float(best.get("rank_adv", best["pred_adv"]) - second)
+            if best["opportunity"] < opp_thr or best["harm"] > harm_thr:
+                continue
+        else:
+            eligible = [r for r in physical if r["opportunity"] >= opp_thr and r["harm"] <= harm_thr]
+            if not eligible:
+                continue
+            best = sorted(eligible, key=lambda r: (-r.get("rank_adv", r["pred_adv"]), r["candidate"]))[0]
+            alternatives = [float(r.get("rank_adv", r["pred_adv"])) for r in eligible if r is not best]
+            if not conditional_rank_margin:
+                alternatives.append(0.0)
+            second = max(alternatives) if alternatives else float(best.get("rank_adv", best["pred_adv"]) - 1.0)
+            rank_margin = float(best.get("rank_adv", best["pred_adv"]) - second)
         row = dict(best)
         row["rank_margin"] = rank_margin
         row.update(scene=g["scene"], time=g["time"], fold=g["fold"], oracle_best_teacher_adv=g["oracle_best_teacher_adv"])
@@ -223,7 +251,7 @@ def _fit(
     frontier: list[dict[str, Any]] = []
     for opp_thr in opp_grid:
         for harm_thr in harm_grid:
-            top1 = _top1(groups, opp_thr, harm_thr, supported_macros, conditional_rank_margin=args.conditional_recovery_ranking)
+            top1 = _top1(groups, opp_thr, harm_thr, supported_macros, conditional_rank_margin=args.conditional_recovery_ranking, policy_first_no_fallback=args.policy_first_no_fallback)
             score_grid = _grid(
                 [r["pred_adv"] for r in top1],
                 minimum=args.min_score_advantage,
@@ -349,6 +377,7 @@ def main() -> int:
     ap.add_argument("--delta-std-floor", type=float, default=0.03)
     ap.add_argument("--min-rank-margin", type=float, default=0.0)
     ap.add_argument("--conditional-recovery-ranking", action="store_true", help="Compute rank margins only against the second recovery candidate; nominal admission is handled by the evidence gate.")
+    ap.add_argument("--policy-first-no-fallback", action="store_true", help="Choose preference top-1 before evidence gating; abstain if it is uncertified instead of falling through to a runner-up.")
     ap.add_argument("--preference-tie-epsilon-near", type=float, default=0.025)
     ap.add_argument("--preference-tie-epsilon-contact", type=float, default=0.010)
     args = ap.parse_args()
@@ -498,8 +527,8 @@ def main() -> int:
         all_top1: list[dict[str, Any]] = []
         score_thr = float("inf")
     else:
-        verify_top1 = _top1(verify, rule["opportunity_threshold"], rule["harm_threshold"], supported_macros, conditional_rank_margin=args.conditional_recovery_ranking)
-        all_top1 = _top1(groups, rule["opportunity_threshold"], rule["harm_threshold"], supported_macros, conditional_rank_margin=args.conditional_recovery_ranking)
+        verify_top1 = _top1(verify, rule["opportunity_threshold"], rule["harm_threshold"], supported_macros, conditional_rank_margin=args.conditional_recovery_ranking, policy_first_no_fallback=args.policy_first_no_fallback)
+        all_top1 = _top1(groups, rule["opportunity_threshold"], rule["harm_threshold"], supported_macros, conditional_rank_margin=args.conditional_recovery_ranking, policy_first_no_fallback=args.policy_first_no_fallback)
         score_thr = rule["score_threshold"]
     rank_margin_thr = float("inf") if rule is None else rule["rank_margin_threshold"]
     verify_metrics = _metrics(verify, verify_top1, score_thr, rank_margin_thr, args.positive_gain, args.negative_gain)
@@ -510,6 +539,7 @@ def main() -> int:
             verify, float(fit_row["opportunity_threshold"]),
             float(fit_row["harm_threshold"]), supported_macros,
             conditional_rank_margin=args.conditional_recovery_ranking,
+            policy_first_no_fallback=args.policy_first_no_fallback,
         )
         vm = _metrics(
             verify, vtop, float(fit_row["score_threshold"]),
@@ -625,7 +655,7 @@ def main() -> int:
         "dataset": args.dataset,
         "checkpoint": args.checkpoint,
         "valid_for_deployment": valid,
-        "selection_rule": "physical -> gain-distribution opportunity/harm -> preference top1 -> value challenge",
+        "selection_rule": ("physical -> preference top1 -> evidence -> value challenge" if args.policy_first_no_fallback else "physical -> gain-distribution opportunity/harm -> preference top1 -> value challenge"),
         "risk_source": args.risk_source,
         "conformal": conformal,
         "rule": rule,
@@ -635,6 +665,7 @@ def main() -> int:
             "direct_value_uncertainty_mode": ("conformal_additive" if conformal is not None else "risk_controlled"),
             "direct_value_additive_q": (0.0 if conformal is None else conformal["overprediction_quantile"]),
             "direct_value_top1_only": True,
+            "direct_value_policy_first_no_fallback": bool(args.policy_first_no_fallback),
             "direct_value_risk_controlled_admission": True,
             "direct_value_risk_source": args.risk_source,
             "direct_value_positive_gain": args.positive_gain,

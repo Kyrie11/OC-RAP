@@ -282,7 +282,15 @@ model:
   direct_recovery_preference_dropout: 0.05
   direct_recovery_preference_context: false
   direct_recovery_preference_context_hidden: 128
+  direct_recovery_relative_features_include_absolute: true
+  direct_recovery_set_tournament: false
+  direct_recovery_set_tournament_hidden: 48
+  direct_recovery_set_tournament_heads: 4
+  direct_recovery_set_tournament_dropout: 0.05
+  direct_recovery_set_tournament_replace_base: true
   direct_recovery_delta_head: false
+  direct_recovery_delta_regime_experts: false
+  direct_recovery_delta_policy_features: false
   direct_recovery_delta_hidden: 128
   direct_recovery_delta_dropout: 0.05
 dataset_quality:

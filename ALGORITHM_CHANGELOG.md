@@ -1,3 +1,61 @@
+## v48.11 — OC-TRAC-CASTER (2026-07-28)
+
+### Evidence from the completed v48.10 COPE experiment
+
+- The main v48.10 run and all eight causal ablation tasks completed. Neither variant passed the joint Near+Contact Natural gate, so no stress closed-loop result is attributable to COPE.
+- Monotone ordinal evidence was the only consistently useful module. Relative to the A reference, the C evidence ablation raised Contact candidate-positive AUC from 0.724/0.670 to 0.806/0.826 for balanced/precision and improved Contact harm AUC to 0.583/0.597. The full model reached Contact candidate AUC 0.834/0.814 and policy-top1 benefit AUC 0.808/0.768.
+- Conditional Option Preference did not solve groupwise ranking. Main Near/Contact top-1 correlation stayed around zero (-0.003/0.012 balanced, 0.013/0.001 precision). The conditional objective also increased non-positive false switches to 0.37-0.53 and harmful ranked switches to 0.14-0.19.
+- Precision Contact was the only main result with non-zero verify coverage: 13/193 groups, precision 0.308 (LCB90 0.146), harmful rate 0.462 (UCB90 0.675), recall 0.121, mean exact-teacher advantage -0.180, and macro concentration 0.846. It is not deployable.
+- The inherited candidate value remained inside the preference score as `rank_base + residual`. The trained residual changed the chosen recovery in only a small fraction of groups, so the high-AUC but groupwise-wrong candidate value continued to dominate option ordering.
+
+### Engineering correction: policy-first, no-fallback semantics
+
+Stage-E evidence was trained on the frozen preference top-1 candidate, but calibration and runtime first filtered candidates by evidence and then selected the highest-ranked survivor. A failed top-1 could therefore fall through to a runner-up that Stage E never trained on. v48.11 makes the policy contract explicit and identical everywhere:
+
+1. rank physically supported recovery candidates;
+2. choose the preference top-1 candidate;
+3. evaluate rank margin and evidence only for that candidate;
+4. abstain if it is uncertified; never fall through to rank 2.
+
+The calibration JSON now records `direct_value_policy_first_no_fallback`, and the runtime selector exposes the same option.
+
+### New algorithmic contribution: CASTER
+
+**CASTER = Conditional Attention Set Tournament with Evidence Routing.**
+
+1. **Recovery-only set tournament**
+   - Replaces, rather than residualizes, the inherited candidate-level value ranking.
+   - Uses a small permutation-equivariant self-attention tournament over nominal-relative recovery tokens.
+   - Nominal is pinned to zero and excluded from the tournament; admission is isolated in Stage E.
+   - Group scores are centered to remove an unidentifiable common offset.
+
+2. **Policy-conditioned regime evidence**
+   - Stage E freezes the complete set tournament.
+   - Separate Near and Contact evidence experts consume nominal-relative candidate features plus the frozen policy score and top1-vs-runner-up gap.
+   - The evidence model therefore learns the distribution actually encountered by each regime rather than averaging incompatible harm/dead boundaries.
+
+3. **Proper ordered three-state likelihood**
+   - The ordered logits induce a valid simplex: harmful, dead-zone, beneficial.
+   - A class-weighted three-class NLL replaces two independent focal BCE losses.
+   - Harmful examples receive the largest weight because harm-vs-dead separation is the current certification bottleneck.
+
+4. **Strict attribution and speed**
+   - Added immutable staged architecture/checkpoint contracts.
+   - Added dynamic ablation summarization and a calibration-only policy-semantics ablation.
+   - Four ablations are queued together with at most one model per A30; the policy-first ablation reuses the reference checkpoint and avoids duplicate training.
+
+### Required validation order
+
+1. Stage T: Near and Contact recovery-only top-1 correlation should both exceed 0.10 before evidence results are interpreted.
+2. Stage E: policy-top1 benefit AUC should reach at least 0.70 Near / 0.75 Contact and harm AUC at least 0.60 in both regimes.
+3. Natural gate must produce non-zero verify coverage with positive mean exact-teacher advantage and unchanged confidence bounds.
+4. Run seeds 4801/4802/4803 only after stages 1-2 pass.
+5. Run stress closed loop only when the controller creates `NEXT_COMMANDS.txt`.
+
+### Non-repetition note
+
+CASTER does not repeat threshold relaxation, another residual MLP on top of the candidate value, independent harm BCE, or evidence-first runner-up fallback. Its novelty is the combination of recovery-only set competition, policy-conditioned regime evidence, ordered three-state certification, and one consistent no-fallback policy contract.
+
 ## v48.10 — OC-TRAC-COPE (2026-07-27)
 
 ### Evidence from the completed v48.9 PACER experiment

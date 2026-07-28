@@ -240,15 +240,18 @@ calibrate_variant() {
   local run="$OUTPUTDIR/candidates/$variant"
   local ckpt="$run/model_v48_trac_sr/best.pt"
   [[ -f "$ckpt" ]] || return 0
-  local conditional_rank_args=()
+  local conditional_rank_args=() policy_first_args=()
   case "${CONDITIONAL_RECOVERY_RANKING:-false}" in
     1|true|TRUE|yes|YES) conditional_rank_args=(--conditional-recovery-ranking) ;;
+  esac
+  case "${POLICY_FIRST_NO_FALLBACK:-false}" in
+    1|true|TRUE|yes|YES) policy_first_args=(--policy-first-no-fallback) ;;
   esac
   set +e
   CUDA_VISIBLE_DEVICES="$gpu" python -u tools/calibrate_policy_risk_v48.py \
     --dataset "$CAL_NEAR" --checkpoint "$ckpt" --bucket near --risk-source="${RISK_SOURCE:-direct_delta}" \
     --conformal-alpha="${CONFORMAL_ALPHA:-0.10}" --conformal-temperature="${CONFORMAL_TEMPERATURE:-0.02}" \
-    --conformal-scope="${CONFORMAL_SCOPE:-policy_top1}" "${conditional_rank_args[@]}" \
+    --conformal-scope="${CONFORMAL_SCOPE:-policy_top1}" "${conditional_rank_args[@]}" "${policy_first_args[@]}" \
     --output "$run/calibration/direct_value_risk_near_v48.json" \
     --rows-output "$run/calibration/direct_value_risk_near_v48.rows.jsonl" \
     --required-min-groups="${NEAR_MIN_GROUPS:-80}" --required-min-scenes="${NEAR_MIN_SCENES:-40}" \
@@ -262,7 +265,7 @@ calibrate_variant() {
   CUDA_VISIBLE_DEVICES="$gpu" python -u tools/calibrate_policy_risk_v48.py \
     --dataset "$CAL_CONTACT" --checkpoint "$ckpt" --bucket contact --risk-source="${RISK_SOURCE:-direct_delta}" \
     --conformal-alpha="${CONFORMAL_ALPHA:-0.10}" --conformal-temperature="${CONFORMAL_TEMPERATURE:-0.02}" \
-    --conformal-scope="${CONFORMAL_SCOPE:-policy_top1}" "${conditional_rank_args[@]}" \
+    --conformal-scope="${CONFORMAL_SCOPE:-policy_top1}" "${conditional_rank_args[@]}" "${policy_first_args[@]}" \
     --output "$run/calibration/direct_value_risk_contact_v48.json" \
     --rows-output "$run/calibration/direct_value_risk_contact_v48.rows.jsonl" \
     --required-min-groups="${CONTACT_MIN_GROUPS:-100}" --required-min-scenes="${CONTACT_MIN_SCENES:-45}" \

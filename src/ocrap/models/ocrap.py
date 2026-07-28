@@ -6,6 +6,67 @@ from torch import nn
 from .encoders import FlatFeatureLayout, MLPEncoder, StructuredTokenEncoder
 
 
+class RecoverySetTournament(nn.Module):
+    """Permutation-equivariant recovery-only set ranker.
+
+    The candidate-level value score is deliberately excluded.  Each recovery
+    token is projected from nominal-relative features, contextualised against
+    the other recovery candidates in the same scene-time group, and scored by
+    a shared head.  Nominal is pinned to zero and is not part of the tournament.
+    """
+
+    def __init__(self, input_dim: int, hidden_dim: int, num_heads: int, dropout: float):
+        super().__init__()
+        hidden_dim = max(int(num_heads), int(hidden_dim))
+        if hidden_dim % int(num_heads) != 0:
+            hidden_dim = int(num_heads) * ((hidden_dim + int(num_heads) - 1) // int(num_heads))
+        self.input_norm = nn.LayerNorm(input_dim)
+        self.input_proj = nn.Linear(input_dim, hidden_dim)
+        self.attn = nn.MultiheadAttention(hidden_dim, int(num_heads), dropout=float(dropout), batch_first=True)
+        self.norm1 = nn.LayerNorm(hidden_dim)
+        self.ffn = nn.Sequential(
+            nn.Linear(hidden_dim, 2 * hidden_dim),
+            nn.GELU(),
+            nn.Dropout(float(dropout)),
+            nn.Linear(2 * hidden_dim, hidden_dim),
+        )
+        self.norm2 = nn.LayerNorm(hidden_dim)
+        self.score = nn.Linear(hidden_dim, 1)
+        nn.init.zeros_(self.score.weight)
+        nn.init.zeros_(self.score.bias)
+
+    def forward(
+        self,
+        relative_features: torch.Tensor,
+        group_index: torch.Tensor | None,
+        is_nominal: torch.Tensor | None,
+    ) -> torch.Tensor:
+        scores = relative_features.new_zeros((relative_features.shape[0],))
+        if group_index is None or is_nominal is None or relative_features.shape[0] <= 1:
+            return scores
+        groups = group_index.to(device=relative_features.device)
+        groups = groups.reshape(-1, 1) if groups.dim() == 1 else groups.reshape(groups.shape[0], -1)
+        nominal_mask = is_nominal.to(device=relative_features.device).reshape(-1) > 0.5
+        if groups.shape[0] != relative_features.shape[0] or nominal_mask.shape[0] != relative_features.shape[0]:
+            return scores
+        for key in torch.unique(groups, dim=0):
+            idx = torch.where((groups == key.unsqueeze(0)).all(dim=1))[0]
+            recs = idx[~nominal_mask[idx]]
+            if recs.numel() == 0:
+                continue
+            token = self.input_proj(self.input_norm(relative_features[recs])).unsqueeze(0)
+            attended, _ = self.attn(token, token, token, need_weights=False)
+            token = self.norm1(token + attended)
+            token = self.norm2(token + self.ffn(token))
+            group_scores = self.score(token).squeeze(0).squeeze(-1)
+            # Remove an unidentifiable common offset.  Only recovery ordering is
+            # learned here; admission against nominal belongs to the evidence head.
+            if group_scores.numel() > 1:
+                group_scores = group_scores - group_scores.mean()
+            scores[recs] = group_scores
+        return scores
+
+
 class OCRAPModel(nn.Module):
     """Neural OC-RAP model with a learned root-query decoder.
 
@@ -60,7 +121,14 @@ class OCRAPModel(nn.Module):
         direct_recovery_preference_context: bool = False,
         direct_recovery_preference_context_hidden: int = 128,
         direct_recovery_relative_features_include_absolute: bool = True,
+        direct_recovery_set_tournament: bool = False,
+        direct_recovery_set_tournament_hidden: int = 48,
+        direct_recovery_set_tournament_heads: int = 4,
+        direct_recovery_set_tournament_dropout: float = 0.05,
+        direct_recovery_set_tournament_replace_base: bool = True,
         direct_recovery_delta_head: bool = False,
+        direct_recovery_delta_regime_experts: bool = False,
+        direct_recovery_delta_policy_features: bool = False,
         direct_recovery_delta_hidden: int = 128,
         direct_recovery_delta_dropout: float = 0.05,
         direct_recovery_delta_initial_logvar: float = -4.605170186,
@@ -108,7 +176,14 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_preference_context = bool(direct_recovery_preference_context)
         self.direct_recovery_preference_context_hidden = max(16, int(direct_recovery_preference_context_hidden))
         self.direct_recovery_relative_features_include_absolute = bool(direct_recovery_relative_features_include_absolute)
+        self.direct_recovery_set_tournament = bool(direct_recovery_set_tournament)
+        self.direct_recovery_set_tournament_hidden = max(16, int(direct_recovery_set_tournament_hidden))
+        self.direct_recovery_set_tournament_heads = max(1, int(direct_recovery_set_tournament_heads))
+        self.direct_recovery_set_tournament_dropout = float(max(0.0, direct_recovery_set_tournament_dropout))
+        self.direct_recovery_set_tournament_replace_base = bool(direct_recovery_set_tournament_replace_base)
         self.direct_recovery_delta_head = bool(direct_recovery_delta_head)
+        self.direct_recovery_delta_regime_experts = bool(direct_recovery_delta_regime_experts)
+        self.direct_recovery_delta_policy_features = bool(direct_recovery_delta_policy_features)
         self.direct_recovery_delta_hidden = max(16, int(direct_recovery_delta_hidden))
         self.direct_recovery_delta_dropout = float(max(0.0, direct_recovery_delta_dropout))
         self.direct_recovery_delta_initial_logvar = float(direct_recovery_delta_initial_logvar)
@@ -318,30 +393,54 @@ class OCRAPModel(nn.Module):
                 nn.init.zeros_(ctx_projection.weight)
                 nn.init.zeros_(ctx_projection.bias)
 
+        # v48.11 CASTER: a standalone recovery-only set tournament replaces the
+        # inherited candidate-level value ranking.  The latter has repeatedly
+        # shown high candidate AUC but near-zero or negative groupwise top-1.
+        self.direct_preference_set_ranker = (
+            RecoverySetTournament(
+                relative_in_dim,
+                self.direct_recovery_set_tournament_hidden,
+                self.direct_recovery_set_tournament_heads,
+                self.direct_recovery_set_tournament_dropout,
+            )
+            if self.direct_recovery_value_head and self.direct_recovery_set_tournament
+            else None
+        )
+
         # Directly estimate candidate-minus-nominal PCD gain and uncertainty.
         # Subtracting two absolute predictions and adding their variances assumes
         # independent errors, even though both candidates share a scene encoder;
         # that assumption made v48.5 admission probabilities excessively diffuse.
-        self.direct_delta_adapter = (
-            nn.Sequential(
-                nn.LayerNorm(relative_in_dim),
-                nn.Linear(relative_in_dim, self.direct_recovery_delta_hidden),
+        delta_input_dim = relative_in_dim + (2 if self.direct_recovery_delta_policy_features else 0)
+
+        def _make_delta_adapter() -> nn.Sequential:
+            adapter = nn.Sequential(
+                nn.LayerNorm(delta_input_dim),
+                nn.Linear(delta_input_dim, self.direct_recovery_delta_hidden),
                 nn.GELU(),
                 nn.Dropout(self.direct_recovery_delta_dropout),
                 nn.Linear(self.direct_recovery_delta_hidden, 2),
             )
+            projection = adapter[-1]
+            if isinstance(projection, nn.Linear):
+                nn.init.zeros_(projection.weight)
+                nn.init.zeros_(projection.bias)
+                with torch.no_grad():
+                    projection.bias[1] = self.direct_recovery_delta_initial_logvar
+            return adapter
+
+        self.direct_delta_adapters = (
+            nn.ModuleList([_make_delta_adapter(), _make_delta_adapter()])
             if self.direct_recovery_value_head and self.direct_recovery_delta_head
+            and self.direct_recovery_delta_regime_experts
             else None
         )
-        if self.direct_delta_adapter is not None:
-            delta_projection = self.direct_delta_adapter[-1]
-            if isinstance(delta_projection, nn.Linear):
-                nn.init.zeros_(delta_projection.weight)
-                nn.init.zeros_(delta_projection.bias)
-                # A moderate initial standard deviation keeps the new head
-                # conservative without saturating opportunity/harm probabilities.
-                with torch.no_grad():
-                    delta_projection.bias[1] = self.direct_recovery_delta_initial_logvar
+        self.direct_delta_adapter = (
+            _make_delta_adapter()
+            if self.direct_recovery_value_head and self.direct_recovery_delta_head
+            and not self.direct_recovery_delta_regime_experts
+            else None
+        )
 
         def _make_direct_head() -> nn.Sequential:
             return nn.Sequential(
@@ -682,10 +781,52 @@ class OCRAPModel(nn.Module):
             out["direct_recovery_rank_context_residual"] = context_rank_residual
             rank_residual = rank_residual + context_rank_residual
         out["direct_recovery_rank_residual"] = rank_residual
-        out["direct_recovery_rank_logit"] = rank_base + rank_residual
+        inherited_rank = rank_base + rank_residual
+        if self.direct_preference_set_ranker is not None:
+            tournament_rank = self.direct_preference_set_ranker(relative_features, group_index, is_nominal)
+            out["direct_recovery_rank_tournament"] = tournament_rank
+            rank_logit = tournament_rank if self.direct_recovery_set_tournament_replace_base else inherited_rank + tournament_rank
+        else:
+            rank_logit = inherited_rank
+        out["direct_recovery_rank_logit"] = rank_logit
 
-        if self.direct_delta_adapter is not None:
-            delta = self.direct_delta_adapter(relative_features)
+        delta_features = relative_features
+        if self.direct_recovery_delta_policy_features:
+            policy_features = relative_features.new_zeros((relative_features.shape[0], 2))
+            if group_index is not None and is_nominal is not None:
+                groups = group_index.to(device=relative_features.device)
+                groups = groups.reshape(-1, 1) if groups.dim() == 1 else groups.reshape(groups.shape[0], -1)
+                nominal_mask = is_nominal.to(device=relative_features.device).reshape(-1) > 0.5
+                if groups.shape[0] == rank_logit.shape[0] and nominal_mask.shape[0] == rank_logit.shape[0]:
+                    for key in torch.unique(groups, dim=0):
+                        idx = torch.where((groups == key.unsqueeze(0)).all(dim=1))[0]
+                        noms = idx[nominal_mask[idx]]
+                        recs = idx[~nominal_mask[idx]]
+                        if noms.numel() == 0 or recs.numel() == 0:
+                            continue
+                        nom_rank = rank_logit[noms[0]]
+                        policy_features[recs, 0] = rank_logit[recs] - nom_rank
+                        for rec in recs:
+                            others = recs[recs != rec]
+                            second = rank_logit[others].max() if others.numel() else nom_rank
+                            policy_features[rec, 1] = rank_logit[rec] - second
+            delta_features = torch.cat([relative_features, policy_features], dim=-1)
+            out["direct_recovery_policy_features"] = policy_features
+
+        if self.direct_delta_adapters is not None:
+            if bucket_id is None:
+                expert_idx = torch.zeros((delta_features.shape[0],), dtype=torch.long, device=delta_features.device)
+            else:
+                expert_idx = (bucket_id.to(device=delta_features.device, dtype=torch.long).reshape(-1) - 1).clamp(0, 1)
+            all_delta = torch.stack([adapter(delta_features) for adapter in self.direct_delta_adapters], dim=1)
+            delta = all_delta[torch.arange(all_delta.shape[0], device=all_delta.device), expert_idx]
+            out["direct_recovery_delta_expert_outputs"] = all_delta
+        elif self.direct_delta_adapter is not None:
+            delta = self.direct_delta_adapter(delta_features)
+        else:
+            delta = None
+
+        if delta is not None:
             nominal_mask = None
             if is_nominal is not None and is_nominal.numel() == delta.shape[0]:
                 nominal_mask = is_nominal.to(device=delta.device).reshape(-1) > 0.5

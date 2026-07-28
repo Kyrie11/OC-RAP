@@ -240,6 +240,7 @@ def calibrated_constrained_select(
     direct_value_opportunity_threshold: float = 0.0,
     direct_value_harm_threshold: float = 1.0,
     direct_value_top1_only: bool = False,
+    direct_value_policy_first_no_fallback: bool = False,
     direct_value_min_rank_margin: float = 0.0,
     direct_value_conditional_rank_margin: bool = False,
     direct_value_risk_controlled_admission: bool = False,
@@ -617,38 +618,37 @@ def calibrated_constrained_select(
         if direct_macro_allow:
             direct_macro_mask &= np.asarray([m in direct_macro_allow for m in macro_names], dtype=bool)
         candidate_floor_ok = np.ones((n,), dtype=bool) if bool(direct_value_score_mode) else (direct_value >= float(direct_value_min_candidate_value))
-        direct_actionable = (
+        physical_direct = (
             feasible
             & (hard <= float(direct_value_max_hard))
             & (harm <= float(direct_value_max_harm))
             & direct_macro_mask
             & (dev >= float(direct_value_min_nominal_deviation))
             & candidate_floor_ok
-            & (direct_opportunity >= float(direct_value_opportunity_threshold))
-            & (direct_pred_harm <= float(direct_value_harm_threshold))
             & ((direct_std <= float(direct_value_max_candidate_std)) if uncertainty_mode not in {"additive", "conformal_additive", "residual", "none", "raw", "risk_selective", "selective", "risk_controlled"} else np.ones((n,), dtype=bool))
         )
-        direct_actionable[ni] = False
-        # The top-1 rule is applied here, before any direct-value reward enters
-        # the selector score.  This exactly mirrors the selection-conditional
-        # conformal calibration rule.  Admission remains an independent OC-MERO
-        # requirement later; an unadmitted top-1 candidate therefore causes
-        # abstention rather than an uncalibrated fall-through to rank 2.
-        if bool(direct_value_top1_only) and bool(direct_actionable.any()):
+        physical_direct[ni] = False
+        evidence_ok = (
+            (direct_opportunity >= float(direct_value_opportunity_threshold))
+            & (direct_pred_harm <= float(direct_value_harm_threshold))
+        )
+        direct_actionable = physical_direct & evidence_ok
+        if bool(direct_value_top1_only):
             raw_rank_advantage = direct_rank - direct_rank[ni]
-            chosen = int(np.argmax(np.where(direct_actionable, raw_rank_advantage, -np.inf)))
-            alternatives = [
-                float(raw_rank_advantage[j])
-                for j in np.where(direct_actionable)[0] if int(j) != chosen
-            ]
-            if not bool(direct_value_conditional_rank_margin):
-                alternatives.append(0.0)
-            second_best = max(alternatives) if alternatives else float(raw_rank_advantage[chosen] - 1.0)
-            rank_margin = float(raw_rank_advantage[chosen] - second_best)
-            if float(direct_value_min_rank_margin) <= 0.0 or rank_margin >= float(direct_value_min_rank_margin):
+            rank_pool = physical_direct if bool(direct_value_policy_first_no_fallback) else direct_actionable
+            if bool(rank_pool.any()):
+                chosen = int(np.argmax(np.where(rank_pool, raw_rank_advantage, -np.inf)))
+                alternatives = [float(raw_rank_advantage[j]) for j in np.where(rank_pool)[0] if int(j) != chosen]
+                if not bool(direct_value_conditional_rank_margin):
+                    alternatives.append(0.0)
+                second_best = max(alternatives) if alternatives else float(raw_rank_advantage[chosen] - 1.0)
+                rank_margin = float(raw_rank_advantage[chosen] - second_best)
+                certified = bool(evidence_ok[chosen])
+                certified &= float(direct_value_min_rank_margin) <= 0.0 or rank_margin >= float(direct_value_min_rank_margin)
                 keep = np.zeros((n,), dtype=bool)
-                keep[chosen] = True
-                direct_actionable &= keep
+                if certified:
+                    keep[chosen] = True
+                direct_actionable = keep
             else:
                 direct_actionable[:] = False
         direct_value_challenge = direct_actionable & (direct_advantage_lcb >= float(direct_value_min_advantage_lcb))
