@@ -63,7 +63,12 @@ class RecoverySetTournament(nn.Module):
             # learned here; admission against nominal belongs to the evidence head.
             if group_scores.numel() > 1:
                 group_scores = group_scores - group_scores.mean()
-            scores[recs] = group_scores
+            # AMP may execute the attention/score path in fp16 or bfloat16 while
+            # ``relative_features`` (and therefore ``scores``) remains fp32.
+            # Advanced-index assignment requires an exact dtype match.  Cast only
+            # at the scatter boundary so the tournament computation keeps AMP,
+            # the public output keeps the input dtype, and gradients remain intact.
+            scores[recs] = group_scores.to(dtype=scores.dtype)
         return scores
 
 

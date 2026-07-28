@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 
-from ocrap.models.ocrap import OCRAPModel
+from ocrap.models.ocrap import OCRAPModel, RecoverySetTournament
 import importlib.util
 from pathlib import Path
 
@@ -85,3 +85,30 @@ def test_regime_specific_ordered_evidence_outputs_valid_simplex() -> None:
     p_d = 1.0 - p_b - p_h
     assert torch.all(p_d >= -1e-6)
     assert out["direct_recovery_delta_expert_outputs"].shape == (6, 2, 2)
+
+
+def test_set_tournament_amp_bfloat16_scatter_preserves_output_dtype_and_gradients() -> None:
+    """Regression test for mixed-precision indexed scatter in CASTER."""
+    torch.manual_seed(48)
+    ranker = RecoverySetTournament(
+        input_dim=12, hidden_dim=16, num_heads=2, dropout=0.0,
+    ).train()
+    with torch.no_grad():
+        ranker.score.weight.normal_(0.0, 0.1)
+
+    x = torch.randn(6, 12, requires_grad=True)
+    groups = torch.tensor([[0], [0], [0], [1], [1], [1]], dtype=torch.long)
+    nominal = torch.tensor([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])
+
+    # CPU autocast reproduces the same Float32 destination / BFloat16 source
+    # condition as CUDA bfloat16 AMP, so this test does not require a GPU.
+    with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+        scores = ranker(x, groups, nominal)
+        loss = scores.square().sum()
+
+    assert scores.dtype == x.dtype
+    assert torch.equal(scores[nominal.bool()], torch.zeros(2, dtype=x.dtype))
+    loss.backward()
+    assert x.grad is not None
+    assert torch.isfinite(x.grad).all()
+    assert float(x.grad.abs().sum()) > 0.0
