@@ -35,16 +35,7 @@ GPU0="${GPU0:-0}"
 GPU1="${GPU1:-1}"
 VARIANTS="${VARIANTS:-balanced,precision}"
 want_variant() { [[ ",${VARIANTS}," == *",$1,"* ]]; }
-if command -v flock >/dev/null 2>&1; then
-  if want_variant balanced; then
-    exec 8>"/tmp/ocrap_gpu_${GPU0}.lock"
-    flock -n 8 || { echo "GPU $GPU0 is reserved by another OC-RAP controller" >&2; exit 74; }
-  fi
-  if want_variant precision && { ! want_variant balanced || [[ "$GPU1" != "$GPU0" ]]; }; then
-    exec 7>"/tmp/ocrap_gpu_${GPU1}.lock"
-    flock -n 7 || { echo "GPU $GPU1 is reserved by another OC-RAP controller" >&2; exit 74; }
-  fi
-fi
+
 SPLIT_ROOT="${PREBUILT_SPLIT_ROOT:-$OUTPUTDIR/dataset_splits}"
 CALIBRATION_OCRAP_ROOT="${CALIBRATION_OCRAP_ROOT:-}"
 CALIBRATION_MODE="${CALIBRATION_MODE:-proxy_val_split}"  # proxy_val_split | dedicated
