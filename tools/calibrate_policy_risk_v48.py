@@ -196,6 +196,24 @@ def _metrics(groups: list[dict[str, Any]], top1: list[dict[str, Any]], score_thr
     opportunities = [g for g in groups if g["oracle_best_teacher_adv"] >= pos_gain]
     macro_counts = Counter(int(r["macro"]) for r in selected)
     max_macro_share = max(macro_counts.values(), default=0) / max(1, len(selected))
+    # v48.12 TRIDENT: an absolute diversity cap is invalid when the teacher
+    # opportunity distribution itself is concentrated.  Measure whether the
+    # learned selector is *more* concentrated than the oracle-positive policy,
+    # while retaining the raw share for reporting.
+    oracle_macro_counts: Counter[int] = Counter()
+    for g in opportunities:
+        positive_pairs = [r for r in g.get("pairs", []) if r.get("teacher_adv", -1.0e9) >= pos_gain]
+        if not positive_pairs:
+            continue
+        oracle_best = sorted(
+            positive_pairs,
+            key=lambda r: (-float(r["teacher_adv"]), int(r["candidate"])),
+        )[0]
+        oracle_macro_counts[int(oracle_best["macro"])] += 1
+    oracle_max_macro_share = (
+        max(oracle_macro_counts.values(), default=0) / max(1, sum(oracle_macro_counts.values()))
+    )
+    macro_excess_share = max(0.0, float(max_macro_share) - float(oracle_max_macro_share))
     return {
         "num_groups": len(groups),
         "num_top1_after_joint_gate": len(top1),
@@ -215,6 +233,9 @@ def _metrics(groups: list[dict[str, Any]], top1: list[dict[str, Any]], score_thr
         "teacher_advantage_min": float(min(r["teacher_adv"] for r in selected)) if selected else None,
         "selected_macro_counts": dict(sorted(macro_counts.items())),
         "max_selected_macro_share": float(max_macro_share),
+        "oracle_positive_macro_counts": dict(sorted(oracle_macro_counts.items())),
+        "oracle_positive_max_macro_share": float(oracle_max_macro_share),
+        "selected_macro_excess_share": float(macro_excess_share),
     }
 
 
@@ -274,6 +295,11 @@ def _fit(
                     harm_ucb = float(m["harmful_group_exposure_ucb90"])
                     conditional_harm_ucb = float(m["harmful_selected_ucb90"])
                     mean_adv = float(m["teacher_advantage_mean"] or -1.0)
+                    macro_violation = (
+                        float(m.get("selected_macro_excess_share", 0.0)) - args.max_macro_excess_share
+                        if args.macro_constraint_mode == "opportunity_normalized"
+                        else float(m["max_selected_macro_share"]) - args.max_selected_macro_share
+                    )
                     probability_deficit = (
                         max(0.0, float(args.min_opportunity) - float(opp_thr))
                         + max(0.0, float(harm_thr) - float(args.max_harm_probability))
@@ -284,7 +310,7 @@ def _fit(
                         + max(0.0, args.min_fit_precision_lcb - lcb)
                         + max(0.0, harm_ucb - args.max_fit_harmful_group_ucb)
                         + max(0.0, conditional_harm_ucb - args.max_fit_harmful_selected_ucb)
-                        + max(0.0, float(m["max_selected_macro_share"]) - args.max_selected_macro_share)
+                        + max(0.0, macro_violation)
                         + max(0.0, -mean_adv)
                     )
                     row = dict(m)
@@ -304,7 +330,11 @@ def _fit(
                         and m["precision_wilson_lcb90"] >= args.min_fit_precision_lcb
                         and m["harmful_group_exposure_ucb90"] <= args.max_fit_harmful_group_ucb
                         and m["harmful_selected_ucb90"] <= args.max_fit_harmful_selected_ucb
-                        and m["max_selected_macro_share"] <= args.max_selected_macro_share
+                        and (
+                            float(m.get("selected_macro_excess_share", 0.0)) <= args.max_macro_excess_share
+                            if args.macro_constraint_mode == "opportunity_normalized"
+                            else m["max_selected_macro_share"] <= args.max_selected_macro_share
+                        )
                         and m["teacher_advantage_mean"] is not None
                         and m["teacher_advantage_mean"] > 0.0
                     ):
@@ -320,7 +350,11 @@ def _fit(
             -x["harmful_group_exposure_ucb90"],
             -x["harmful_selected_ucb90"],
             x["num_selected"],
-            -x["max_selected_macro_share"],
+            -(
+                x.get("selected_macro_excess_share", 0.0)
+                if args.macro_constraint_mode == "opportunity_normalized"
+                else x["max_selected_macro_share"]
+            ),
         ),
         reverse=True,
     )
@@ -366,6 +400,12 @@ def main() -> int:
     ap.add_argument("--max-verify-harmful-selected-ucb", type=float, default=1.0,
                     help="Maximum conditional harmful-switch UCB among selected actions")
     ap.add_argument("--max-selected-macro-share", type=float, default=0.85)
+    ap.add_argument(
+        "--macro-constraint-mode", choices=["absolute", "opportunity_normalized"],
+        default="absolute",
+        help="Use an absolute selected-macro cap or limit excess concentration over the oracle-positive macro distribution.",
+    )
+    ap.add_argument("--max-macro-excess-share", type=float, default=0.10)
     ap.add_argument("--risk-source", choices=["direct_delta", "conformal_delta", "delta_distribution", "heads", "ordinal_evidence"], default="direct_delta")
     ap.add_argument("--conformal-alpha", type=float, default=0.10)
     ap.add_argument("--conformal-temperature", type=float, default=0.02)
@@ -645,8 +685,13 @@ def main() -> int:
         warnings.append("held-out harmful exposure UCB above budget")
     if verify_metrics["harmful_selected_ucb90"] > args.max_verify_harmful_selected_ucb:
         warnings.append("held-out conditional harmful-switch UCB above budget")
-    if verify_metrics["max_selected_macro_share"] > args.max_selected_macro_share:
-        warnings.append("held-out selections are dominated by one macro")
+    verify_macro_bad = (
+        float(verify_metrics.get("selected_macro_excess_share", 0.0)) > args.max_macro_excess_share
+        if args.macro_constraint_mode == "opportunity_normalized"
+        else verify_metrics["max_selected_macro_share"] > args.max_selected_macro_share
+    )
+    if verify_macro_bad:
+        warnings.append("held-out selections exceed the macro concentration budget")
 
     valid = not warnings
     result = {

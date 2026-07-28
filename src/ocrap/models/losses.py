@@ -1371,6 +1371,9 @@ def direct_uncertainty_recovery_value_loss(
     preference_conditional_set_weight: float = 0.0,
     preference_conditional_noop_weight: float = 0.35,
     preference_conditional_regret_weight: float = 0.5,
+    preference_conditional_pairwise_weight: float = 0.0,
+    preference_conditional_pairwise_min_gap: float = 0.01,
+    preference_conditional_pairwise_margin: float = 0.02,
     delta_nll_weight: float = 0.0,
     delta_sign_weight: float = 0.0,
     delta_sign_temperature: float = 0.04,
@@ -1385,6 +1388,9 @@ def direct_uncertainty_recovery_value_loss(
     ordinal_evidence_harm_class_weight: float = 2.0,
     ordinal_evidence_dead_class_weight: float = 0.5,
     ordinal_evidence_benefit_class_weight: float = 1.25,
+    ordinal_evidence_pairwise_benefit_weight: float = 0.0,
+    ordinal_evidence_pairwise_harm_weight: float = 0.0,
+    ordinal_evidence_pairwise_margin: float = 0.25,
     pred_delta_mean: torch.Tensor | None = None,
     pred_delta_logvar: torch.Tensor | None = None,
 ) -> torch.Tensor:
@@ -1495,6 +1501,11 @@ def direct_uncertainty_recovery_value_loss(
     group_losses: list[torch.Tensor] = []
     group_weights: list[float] = []
     group_domains: list[tuple[int, int, int, int]] = []
+    # v48.12 TRIDENT: collect frozen-policy top-1 evidence across groups so
+    # benefit and harm ranking are optimized directly, not only through local
+    # class likelihoods.  Regime-specific pairwise losses target the AUCs used
+    # by the Natural gate and are especially important for the harmful tail.
+    evidence_policy_records: list[tuple[int, torch.Tensor, torch.Tensor, int]] = []
     for key in torch.unique(keys[finite], dim=0):
         idx = torch.where(finite & (bid == key[0]) & (sh == key[1]) & (ti == key[2]))[0]
         noms = idx[isn[idx]]
@@ -1623,6 +1634,32 @@ def direct_uncertainty_recovery_value_loss(
                 torch.log_softmax(conditional_logits, dim=0),
                 teacher_prob_cond, reduction="sum"
             )
+            # v48.12 TRIDENT recovery-pair tournament.  Set likelihood is
+            # intentionally indifferent inside the teacher-equivalent set, but
+            # it provides weak gradients for materially ordered recovery pairs.
+            # Direct gap-weighted comparisons improve the actual group top-1
+            # objective without inventing an ordering for near ties.
+            if float(preference_conditional_pairwise_weight) > 0.0 and r_delta.numel() > 1:
+                teacher_pair_gap = t_delta.detach().unsqueeze(1) - t_delta.detach().unsqueeze(0)
+                ordered_pairs = teacher_pair_gap >= float(preference_conditional_pairwise_min_gap)
+                ordered_pairs.fill_diagonal_(False)
+                if bool(ordered_pairs.any()):
+                    pred_pair_gap = r_delta.unsqueeze(1) - r_delta.unsqueeze(0)
+                    pair_conf = torch.clamp(
+                        teacher_pair_gap[ordered_pairs]
+                        / max(float(preference_confidence_scale), 1.0e-4),
+                        0.0, 1.0,
+                    )
+                    required_pair_gap = (
+                        float(preference_conditional_pairwise_margin)
+                        + torch.clamp(teacher_pair_gap[ordered_pairs], max=0.20)
+                    )
+                    pair_loss = F.softplus(
+                        (required_pair_gap - pred_pair_gap[ordered_pairs]) / pref_tau
+                    ) * pref_tau
+                    conditional_term = conditional_term + float(preference_conditional_pairwise_weight) * (
+                        (pair_conf * pair_loss).sum() / pair_conf.sum().clamp_min(1.0e-6)
+                    )
             terms.append(
                 float(preference_conditional_set_weight) * material_weight * conditional_term
             )
@@ -1892,6 +1929,19 @@ def direct_uncertainty_recovery_value_loss(
             if float(ordinal_evidence_ordered_nll_top1_weight) > 0.0:
                 policy_j = int(torch.argmax(r_delta.detach()).item())
                 terms.append(float(ordinal_evidence_ordered_nll_top1_weight) * nll[policy_j])
+            else:
+                policy_j = int(torch.argmax(r_delta.detach()).item())
+            if (
+                float(ordinal_evidence_pairwise_benefit_weight) > 0.0
+                or float(ordinal_evidence_pairwise_harm_weight) > 0.0
+            ):
+                policy_class = int(classes[policy_j].detach().item())
+                evidence_policy_records.append((
+                    int(bid[nom].detach().item()),
+                    opp_delta_logits[policy_j],
+                    harm_delta_logits[policy_j],
+                    policy_class,
+                ))
 
         # v48.4 DRA-RCD: separate candidate ranking from action admission.
         # Candidate ordering must not be trained through a harm head whose labels
@@ -2002,8 +2052,40 @@ def direct_uncertainty_recovery_value_loss(
     gl = torch.stack(group_losses)
     gw = torch.as_tensor(group_weights, dtype=gl.dtype, device=gl.device)
     erm_grouped = (gl * gw).sum() / gw.sum().clamp_min(1.0e-6)
-    dro_mix = min(max(float(group_dro_weight), 0.0), 1.0)
     grouped = erm_grouped
+    # Cross-group, regime-local AUC surrogates for the frozen policy's selected
+    # candidate.  The ordered NLL calibrates probabilities; these terms enforce
+    # the ranking needed to distinguish beneficial and harmful tails across
+    # scene-time groups, which v48.11 left nearly random on Contact verify.
+    if evidence_policy_records:
+        auc_terms: list[torch.Tensor] = []
+        pair_margin = float(ordinal_evidence_pairwise_margin)
+        for regime_id in sorted({x[0] for x in evidence_policy_records}):
+            records = [x for x in evidence_policy_records if x[0] == regime_id]
+            if len(records) < 2:
+                continue
+            benefit_logits = torch.stack([x[1] for x in records])
+            harm_logits_batch = torch.stack([x[2] for x in records])
+            cls = torch.as_tensor([x[3] for x in records], device=benefit_logits.device)
+            if float(ordinal_evidence_pairwise_benefit_weight) > 0.0:
+                pos = benefit_logits[cls == 2]
+                neg = benefit_logits[cls != 2]
+                if pos.numel() and neg.numel():
+                    auc_terms.append(
+                        float(ordinal_evidence_pairwise_benefit_weight)
+                        * F.softplus(pair_margin - (pos.unsqueeze(1) - neg.unsqueeze(0))).mean()
+                    )
+            if float(ordinal_evidence_pairwise_harm_weight) > 0.0:
+                pos = harm_logits_batch[cls == 0]
+                neg = harm_logits_batch[cls != 0]
+                if pos.numel() and neg.numel():
+                    auc_terms.append(
+                        float(ordinal_evidence_pairwise_harm_weight)
+                        * F.softplus(pair_margin - (pos.unsqueeze(1) - neg.unsqueeze(0))).mean()
+                    )
+        if auc_terms:
+            grouped = grouped + torch.stack(auc_terms).sum()
+    dro_mix = min(max(float(group_dro_weight), 0.0), 1.0)
     if dro_mix > 0.0 and group_domains:
         domain_means: list[torch.Tensor] = []
         for domain in sorted(set(group_domains)):

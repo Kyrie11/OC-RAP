@@ -395,6 +395,13 @@ training:
   direct_value_preference_regret_weight: 0.0
   direct_value_preference_listwise_weight: 0.0
   direct_value_preference_gap_weight: 0.0
+  # v48.12 TRIDENT: exact recovery-pair ordering and cross-group evidence AUC.
+  direct_value_preference_conditional_pairwise_weight: 0.0
+  direct_value_preference_conditional_pairwise_min_gap: 0.01
+  direct_value_preference_conditional_pairwise_margin: 0.02
+  direct_value_ordinal_evidence_pairwise_benefit_weight: 0.0
+  direct_value_ordinal_evidence_pairwise_harm_weight: 0.0
+  direct_value_ordinal_evidence_pairwise_margin: 0.25
   direct_value_delta_nll_weight: 0.0
   direct_policy_metric_harm_weight: 0.35
   direct_policy_metric_false_intervention_weight: 0.15

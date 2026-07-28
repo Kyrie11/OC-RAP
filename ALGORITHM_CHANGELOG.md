@@ -1,3 +1,56 @@
+## v48.12 — OC-TRAC-TRIDENT (2026-07-28)
+
+### Evidence from the completed v48.11 CASTER experiment
+
+- No balanced or precision candidate passed the joint Near+Contact Natural gate; stress closed loop was correctly withheld.
+- The standalone recovery set tournament produced a real but incomplete Contact ranking gain. Across calibration seeds 4801/4802/4803, balanced Contact top-1 correlation was 0.0735/0.0850/0.1026 (mean 0.0870), and precision was 0.0208/0.0455/0.0777 (mean 0.0480). Near remained approximately zero or negative.
+- Candidate recovery signal remained strong, especially Contact (three-seed candidate-positive AUC about 0.829 balanced and 0.813 precision), but policy-top1 harm discrimination remained weak and unstable (Contact candidate-harm AUC about 0.536).
+- Balanced Near exposed a useful near-miss: a verify rule selected 10 groups with 0.70 point precision, no harmful selections, 0.28 positive recall, and +0.146 mean exact-teacher advantage. It was rejected partly because every selected action was macro 5. However, the teacher-positive training distribution itself was about 88% macro 5, so the old absolute 0.85 macro-share constraint confounded policy shortcut with opportunity support.
+- Contact fit-to-verify transfer remained the main safety failure: representative fit rules had positive mean advantage and moderate coverage, but verify precision collapsed and harmful rate increased sharply.
+
+### Engineering defects fixed before further algorithm attribution
+
+1. **Conditional checkpoint semantic mismatch.** v48.11 trained a recovery-only tournament, but `PREFERENCE_CONDITIONAL_MODE` was not enabled in the staged script. Early stopping therefore penalized nominal false-switch terms even though nominal was not part of the tournament and centered recovery scores make one recovery positive by construction. v48.12 sets this flag explicitly.
+2. **Ablation scheduler fail-fast bug.** Under `set -e`, failure of the first `wait` stopped the entire suite. The uploaded ablation package therefore lacked C-precision and D-precision and could not isolate all CASTER modules. The new scheduler records failures, continues all eight tasks, and creates `ABLATIONS_COMPLETE.json` only when all tasks finish.
+3. **Macro certificate contract.** The absolute selected-macro cap is replaced in the main v48.12 experiment by an opportunity-normalized excess concentration: selected concentration is penalized only when it exceeds the exact-teacher positive-policy concentration by more than a configured allowance. Raw macro share remains reported.
+
+### New algorithmic contribution: TRIDENT
+
+**TRIDENT = Teacher-gap Recovery tournament with Inter-regime Discriminative Evidence and Normalized-support cerTification.**
+
+1. **Teacher-gap recovery-pair tournament**
+   - Retains the recovery-only, permutation-equivariant set tournament that improved Contact.
+   - Adds exact-PCD gap-weighted pair supervision only when a recovery pair is materially ordered.
+   - Near ties below the configured gap remain unordered, avoiding artificial winner labels; clear pairs receive direct top-1 gradients.
+
+2. **Bipolar cross-group ordinal evidence**
+   - Retains the proper harmful/dead-zone/beneficial ordered simplex and frozen policy-top1 training distribution.
+   - Adds regime-local cross-group pairwise AUC surrogates for beneficial-vs-nonbeneficial and harmful-vs-nonharmful policy selections.
+   - Harm separation receives the larger weight because Contact verify harm inversion, rather than benefit detection, is the current certification bottleneck.
+
+3. **Opportunity-normalized support certificate**
+   - Reports both raw macro concentration and oracle-positive macro concentration.
+   - The deployability constraint uses positive-policy excess concentration by default in TRIDENT experiments, preventing an impossible diversity requirement when the available teacher opportunities are intrinsically concentrated.
+   - This is not threshold relaxation: precision, harmful-switch, support, recall, positive mean advantage, and scene-disjoint verification requirements are unchanged.
+
+4. **Layered experimental attribution**
+   - A: conditional-contract fix only.
+   - B: recovery-pair tournament.
+   - C: bipolar evidence.
+   - D: full TRIDENT.
+   - All eight variant tasks are attempted with at most two concurrent single-GPU jobs.
+
+### Required validation order
+
+1. Stage R: Near top-1 correlation must become consistently positive and Contact should exceed the v48.11 mean; inspect exact regret as well as correlation.
+2. Stage E: policy-top1 benefit AUC should be at least 0.70 Near / 0.75 Contact, and harm AUC at least 0.60 in both regimes.
+3. Certificate: non-zero verify selections must have positive mean exact-teacher advantage, precision LCB and harmful UCB within the unchanged Natural gate, and macro excess within budget.
+4. Only a candidate passing both Near and Contact may enter stress closed loop. Safe paired non-inferiority remains a separate experiment.
+
+### Non-repetition note
+
+TRIDENT does not repeat threshold relaxation, handwritten recovery rules, the inherited value-plus-residual rank, global conformal saturation, or a shared harm classifier. It deepens the only v48.11 component with positive evidence (the standalone set tournament), directly optimizes the failing cross-group harm tail, and corrects support certification relative to the opportunity distribution.
+
 ## v48.11 — OC-TRAC-CASTER (2026-07-28)
 
 ### Evidence from the completed v48.10 COPE experiment

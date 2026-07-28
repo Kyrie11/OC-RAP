@@ -326,6 +326,9 @@ def _direct_value_loss_from_outputs(
         preference_conditional_set_weight=float(tcfg.get("direct_value_preference_conditional_set_weight", 0.0)),
         preference_conditional_noop_weight=float(tcfg.get("direct_value_preference_conditional_noop_weight", 0.35)),
         preference_conditional_regret_weight=float(tcfg.get("direct_value_preference_conditional_regret_weight", 0.5)),
+        preference_conditional_pairwise_weight=float(tcfg.get("direct_value_preference_conditional_pairwise_weight", 0.0)),
+        preference_conditional_pairwise_min_gap=float(tcfg.get("direct_value_preference_conditional_pairwise_min_gap", 0.01)),
+        preference_conditional_pairwise_margin=float(tcfg.get("direct_value_preference_conditional_pairwise_margin", 0.02)),
         delta_nll_weight=float(tcfg.get("direct_value_delta_nll_weight", 0.0)),
         delta_sign_weight=float(tcfg.get("direct_value_delta_sign_weight", 0.0)),
         delta_sign_temperature=float(tcfg.get("direct_value_delta_sign_temperature", 0.04)),
@@ -340,6 +343,9 @@ def _direct_value_loss_from_outputs(
         ordinal_evidence_harm_class_weight=float(tcfg.get("direct_value_ordinal_evidence_harm_class_weight", 2.0)),
         ordinal_evidence_dead_class_weight=float(tcfg.get("direct_value_ordinal_evidence_dead_class_weight", 0.5)),
         ordinal_evidence_benefit_class_weight=float(tcfg.get("direct_value_ordinal_evidence_benefit_class_weight", 1.25)),
+        ordinal_evidence_pairwise_benefit_weight=float(tcfg.get("direct_value_ordinal_evidence_pairwise_benefit_weight", 0.0)),
+        ordinal_evidence_pairwise_harm_weight=float(tcfg.get("direct_value_ordinal_evidence_pairwise_harm_weight", 0.0)),
+        ordinal_evidence_pairwise_margin=float(tcfg.get("direct_value_ordinal_evidence_pairwise_margin", 0.25)),
     )
 
     def compute(

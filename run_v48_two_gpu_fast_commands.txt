@@ -31,6 +31,8 @@ fi
 TRAIN_OCRAP_ROOT="${TRAIN_OCRAP_ROOT:-/data0/senzeyu2/dataset/OCRAP}"
 EVAL_OCRAP_ROOT="${EVAL_OCRAP_ROOT:-/data0/senzeyu2/dataset/OCRAP}"
 INIT_CKPT="${INIT_CKPT:-runs/ocrap_v47_trac_balanced/model_v47_trac/best.pt}"
+INIT_CKPT_BALANCED="${INIT_CKPT_BALANCED:-$INIT_CKPT}"
+INIT_CKPT_PRECISION="${INIT_CKPT_PRECISION:-$INIT_CKPT}"
 GPU0="${GPU0:-0}"
 GPU1="${GPU1:-1}"
 VARIANTS="${VARIANTS:-balanced,precision}"
@@ -65,7 +67,8 @@ fi
 for d in val_safe val_near_contact val_contact; do
   [[ -d "$EVAL_OCRAP_ROOT/$d" ]] || { echo "missing dataset root: $EVAL_OCRAP_ROOT/$d" >&2; exit 2; }
 done
-[[ -f "$INIT_CKPT" ]] || { echo "missing INIT_CKPT=$INIT_CKPT" >&2; exit 2; }
+[[ -f "$INIT_CKPT_BALANCED" ]] || { echo "missing INIT_CKPT_BALANCED=$INIT_CKPT_BALANCED" >&2; exit 2; }
+[[ -f "$INIT_CKPT_PRECISION" ]] || { echo "missing INIT_CKPT_PRECISION=$INIT_CKPT_PRECISION" >&2; exit 2; }
 
 if [[ "${BUILD_TRAIN:-0}" == "1" ]]; then
   OUTPUT_ROOT="$TRAIN_OCRAP_ROOT" GPU0="$GPU0" GPU1="$GPU1" \
@@ -199,14 +202,15 @@ PY
 
 launch_variant() {
   local variant="$1" gpu="$2"
-  local run="$OUTPUTDIR/candidates/$variant"
+  local run="$OUTPUTDIR/candidates/$variant" init_ckpt
+  if [[ "$variant" == "balanced" ]]; then init_ckpt="$INIT_CKPT_BALANCED"; else init_ckpt="$INIT_CKPT_PRECISION"; fi
   mkdir -p "$run/logs"
   TRAIN_GPU="$gpu" VARIANT="$variant" RUN="$run" \
   TRAIN_OCRAP_ROOT="$TRAIN_OCRAP_ROOT" EVAL_OCRAP_ROOT="$EVAL_OCRAP_ROOT" \
   TRAIN_MIX="$TRAIN_MIX" VAL_MIX="$DEV_NEAR,$DEV_CONTACT" \
   CAL_MIX="$CAL_NEAR,$CAL_CONTACT" \
   VAL_SAFE="$CAL_SAFE" VAL_NEAR="$CAL_NEAR" VAL_CONTACT="$CAL_CONTACT" \
-  INIT_CKPT="$INIT_CKPT" GROUP_INDEX="$GROUP_INDEX" \
+  INIT_CKPT="$init_ckpt" GROUP_INDEX="$GROUP_INDEX" \
   NUM_WORKERS="${NUM_WORKERS:-6}" PREFETCH_FACTOR="${PREFETCH_FACTOR:-2}" \
     bash "$TRAIN_SCRIPT" >"$LOG_DIR/train_${variant}.launch.log" 2>&1 &
   LAST_PID=$!
@@ -252,6 +256,9 @@ calibrate_variant() {
     --dataset "$CAL_NEAR" --checkpoint "$ckpt" --bucket near --risk-source="${RISK_SOURCE:-direct_delta}" \
     --conformal-alpha="${CONFORMAL_ALPHA:-0.10}" --conformal-temperature="${CONFORMAL_TEMPERATURE:-0.02}" \
     --conformal-scope="${CONFORMAL_SCOPE:-policy_top1}" "${conditional_rank_args[@]}" "${policy_first_args[@]}" \
+    --macro-constraint-mode="${MACRO_CONSTRAINT_MODE:-absolute}" \
+    --max-selected-macro-share="${MAX_SELECTED_MACRO_SHARE:-0.85}" \
+    --max-macro-excess-share="${MAX_MACRO_EXCESS_SHARE:-0.10}" \
     --output "$run/calibration/direct_value_risk_near_v48.json" \
     --rows-output "$run/calibration/direct_value_risk_near_v48.rows.jsonl" \
     --required-min-groups="${NEAR_MIN_GROUPS:-80}" --required-min-scenes="${NEAR_MIN_SCENES:-40}" \
@@ -266,6 +273,9 @@ calibrate_variant() {
     --dataset "$CAL_CONTACT" --checkpoint "$ckpt" --bucket contact --risk-source="${RISK_SOURCE:-direct_delta}" \
     --conformal-alpha="${CONFORMAL_ALPHA:-0.10}" --conformal-temperature="${CONFORMAL_TEMPERATURE:-0.02}" \
     --conformal-scope="${CONFORMAL_SCOPE:-policy_top1}" "${conditional_rank_args[@]}" "${policy_first_args[@]}" \
+    --macro-constraint-mode="${MACRO_CONSTRAINT_MODE:-absolute}" \
+    --max-selected-macro-share="${MAX_SELECTED_MACRO_SHARE:-0.85}" \
+    --max-macro-excess-share="${MAX_MACRO_EXCESS_SHARE:-0.10}" \
     --output "$run/calibration/direct_value_risk_contact_v48.json" \
     --rows-output "$run/calibration/direct_value_risk_contact_v48.rows.jsonl" \
     --required-min-groups="${CONTACT_MIN_GROUPS:-100}" --required-min-scenes="${CONTACT_MIN_SCENES:-45}" \
