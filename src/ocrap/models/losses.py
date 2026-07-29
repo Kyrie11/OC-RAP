@@ -1374,6 +1374,9 @@ def direct_uncertainty_recovery_value_loss(
     preference_conditional_pairwise_weight: float = 0.0,
     preference_conditional_pairwise_min_gap: float = 0.01,
     preference_conditional_pairwise_margin: float = 0.02,
+    preference_proposal_topk_weight: float = 0.0,
+    preference_proposal_topk: int = 3,
+    preference_proposal_margin: float = 0.02,
     delta_nll_weight: float = 0.0,
     delta_sign_weight: float = 0.0,
     delta_sign_temperature: float = 0.04,
@@ -1388,6 +1391,12 @@ def direct_uncertainty_recovery_value_loss(
     ordinal_evidence_harm_class_weight: float = 2.0,
     ordinal_evidence_dead_class_weight: float = 0.5,
     ordinal_evidence_benefit_class_weight: float = 1.25,
+    ordinal_evidence_proposal_topk_weight: float = 0.0,
+    ordinal_evidence_proposal_topk: int = 3,
+    ordinal_evidence_proposal_rank_decay: float = 0.75,
+    ordinal_evidence_intragroup_benefit_weight: float = 0.0,
+    ordinal_evidence_intragroup_harm_weight: float = 0.0,
+    ordinal_evidence_intragroup_margin: float = 0.25,
     ordinal_evidence_pairwise_benefit_weight: float = 0.0,
     ordinal_evidence_pairwise_harm_weight: float = 0.0,
     ordinal_evidence_pairwise_margin: float = 0.25,
@@ -1660,6 +1669,17 @@ def direct_uncertainty_recovery_value_loss(
                     conditional_term = conditional_term + float(preference_conditional_pairwise_weight) * (
                         (pair_conf * pair_loss).sum() / pair_conf.sum().clamp_min(1.0e-6)
                     )
+            # v48.13 TERRA proposal-set supervision. Exact top-1 labels are
+            # unstable in Near and weakly identified in Contact. Require at least
+            # one teacher-acceptable recovery to enter the model top-k proposal.
+            if float(preference_proposal_topk_weight) > 0.0 and r_delta.numel() > 1:
+                proposal_k = min(max(1, int(preference_proposal_topk)), int(r_delta.numel()))
+                proposal_boundary = torch.topk(r_delta, k=proposal_k).values[-1]
+                acceptable_anchor = torch.logsumexp(r_delta[acceptable_recovery] / pref_tau, dim=0) * pref_tau
+                proposal_loss = F.softplus(
+                    (float(preference_proposal_margin) + proposal_boundary - acceptable_anchor) / pref_tau
+                ) * pref_tau
+                conditional_term = conditional_term + float(preference_proposal_topk_weight) * proposal_loss
             terms.append(
                 float(preference_conditional_set_weight) * material_weight * conditional_term
             )
@@ -1931,6 +1951,32 @@ def direct_uncertainty_recovery_value_loss(
                 terms.append(float(ordinal_evidence_ordered_nll_top1_weight) * nll[policy_j])
             else:
                 policy_j = int(torch.argmax(r_delta.detach()).item())
+
+            # v48.13 TERRA: train evidence on every member of the frozen top-k
+            # proposal, matching deployment and exposing hard runner-up errors.
+            proposal_k = min(max(1, int(ordinal_evidence_proposal_topk)), int(r_delta.numel()))
+            proposal_idx = torch.topk(r_delta.detach(), k=proposal_k).indices
+            if float(ordinal_evidence_proposal_topk_weight) > 0.0:
+                decay = max(0.0, min(1.0, float(ordinal_evidence_proposal_rank_decay)))
+                rank_weights = nll.new_tensor([decay ** i for i in range(proposal_k)])
+                rank_weights = rank_weights / rank_weights.sum().clamp_min(1.0e-6)
+                terms.append(float(ordinal_evidence_proposal_topk_weight) * (rank_weights * nll[proposal_idx]).sum())
+
+            # Same-group counterfactual comparisons cancel shared scene severity.
+            proposal_classes = classes[proposal_idx]
+            intra_margin = float(ordinal_evidence_intragroup_margin)
+            if float(ordinal_evidence_intragroup_benefit_weight) > 0.0:
+                pos_idx = proposal_idx[proposal_classes == 2]
+                neg_idx = proposal_idx[proposal_classes != 2]
+                if pos_idx.numel() and neg_idx.numel():
+                    benefit_pairs = opp_delta_logits[pos_idx].unsqueeze(1) - opp_delta_logits[neg_idx].unsqueeze(0)
+                    terms.append(float(ordinal_evidence_intragroup_benefit_weight) * F.softplus(intra_margin - benefit_pairs).mean())
+            if float(ordinal_evidence_intragroup_harm_weight) > 0.0:
+                harm_idx = proposal_idx[proposal_classes == 0]
+                safe_idx = proposal_idx[proposal_classes != 0]
+                if harm_idx.numel() and safe_idx.numel():
+                    harm_pairs = harm_delta_logits[harm_idx].unsqueeze(1) - harm_delta_logits[safe_idx].unsqueeze(0)
+                    terms.append(float(ordinal_evidence_intragroup_harm_weight) * F.softplus(intra_margin - harm_pairs).mean())
             if (
                 float(ordinal_evidence_pairwise_benefit_weight) > 0.0
                 or float(ordinal_evidence_pairwise_harm_weight) > 0.0

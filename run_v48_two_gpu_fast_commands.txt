@@ -244,18 +244,31 @@ calibrate_variant() {
   local run="$OUTPUTDIR/candidates/$variant"
   local ckpt="$run/model_v48_trac_sr/best.pt"
   [[ -f "$ckpt" ]] || return 0
-  local conditional_rank_args=() policy_first_args=()
+  # Staged algorithms write the deployment contract beside the checkpoint.
+  # Source it here so calibration cannot silently fall back to controller
+  # defaults after the child training process exits.
+  if [[ -f "$run/POLICY_CONTRACT.env" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$run/POLICY_CONTRACT.env"
+    set +a
+  fi
+  local conditional_rank_args=() policy_first_args=() proposal_args=()
   case "${CONDITIONAL_RECOVERY_RANKING:-false}" in
     1|true|TRUE|yes|YES) conditional_rank_args=(--conditional-recovery-ranking) ;;
   esac
   case "${POLICY_FIRST_NO_FALLBACK:-false}" in
     1|true|TRUE|yes|YES) policy_first_args=(--policy-first-no-fallback) ;;
   esac
+  case "${EVIDENCE_RERANK_TOP_K:-false}" in
+    1|true|TRUE|yes|YES) proposal_args=(--proposal-top-k "${PROPOSAL_TOP_K:-3}" --evidence-rerank-top-k) ;;
+    *) proposal_args=(--proposal-top-k "${PROPOSAL_TOP_K:-1}") ;;
+  esac
   set +e
   CUDA_VISIBLE_DEVICES="$gpu" python -u tools/calibrate_policy_risk_v48.py \
     --dataset "$CAL_NEAR" --checkpoint "$ckpt" --bucket near --risk-source="${RISK_SOURCE:-direct_delta}" \
     --conformal-alpha="${CONFORMAL_ALPHA:-0.10}" --conformal-temperature="${CONFORMAL_TEMPERATURE:-0.02}" \
-    --conformal-scope="${CONFORMAL_SCOPE:-policy_top1}" "${conditional_rank_args[@]}" "${policy_first_args[@]}" \
+    --conformal-scope="${CONFORMAL_SCOPE:-policy_top1}" "${conditional_rank_args[@]}" "${policy_first_args[@]}" "${proposal_args[@]}" \
     --macro-constraint-mode="${MACRO_CONSTRAINT_MODE:-absolute}" \
     --max-selected-macro-share="${MAX_SELECTED_MACRO_SHARE:-0.85}" \
     --max-macro-excess-share="${MAX_MACRO_EXCESS_SHARE:-0.10}" \
@@ -272,7 +285,7 @@ calibrate_variant() {
   CUDA_VISIBLE_DEVICES="$gpu" python -u tools/calibrate_policy_risk_v48.py \
     --dataset "$CAL_CONTACT" --checkpoint "$ckpt" --bucket contact --risk-source="${RISK_SOURCE:-direct_delta}" \
     --conformal-alpha="${CONFORMAL_ALPHA:-0.10}" --conformal-temperature="${CONFORMAL_TEMPERATURE:-0.02}" \
-    --conformal-scope="${CONFORMAL_SCOPE:-policy_top1}" "${conditional_rank_args[@]}" "${policy_first_args[@]}" \
+    --conformal-scope="${CONFORMAL_SCOPE:-policy_top1}" "${conditional_rank_args[@]}" "${policy_first_args[@]}" "${proposal_args[@]}" \
     --macro-constraint-mode="${MACRO_CONSTRAINT_MODE:-absolute}" \
     --max-selected-macro-share="${MAX_SELECTED_MACRO_SHARE:-0.85}" \
     --max-macro-excess-share="${MAX_MACRO_EXCESS_SHARE:-0.10}" \

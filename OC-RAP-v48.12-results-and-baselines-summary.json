@@ -1,0 +1,1722 @@
+{
+  "main": {
+    "balanced": {
+      "near": {
+        "valid": false,
+        "contract": {
+          "conditional_recovery_ranking": false,
+          "policy_first_no_fallback": false,
+          "proposal_top_k": null,
+          "evidence_rerank_top_k": null
+        },
+        "candidate_positive_auc": 0.6544436551260001,
+        "candidate_harm_auc": 0.6342619121082558,
+        "candidate_rank_corr": 0.15023503276871547,
+        "group_top1_corr": -0.047465172731451316,
+        "top1_acc": 0.5918367346938775,
+        "top1_regret": 0.13183964278924176,
+        "policy_top1_benefit_auc": 0.6209415584415584,
+        "policy_top1_harm_auc": 0.6552185548617306,
+        "fit": {
+          "num_selected": 0,
+          "precision": null,
+          "precision_wilson_lcb90": null,
+          "harmful_selected_rate": null,
+          "harmful_selected_ucb90": 1.0,
+          "positive_recall": 0.0,
+          "teacher_advantage_mean": null,
+          "max_selected_macro_share": 0.0,
+          "selected_macro_excess_share": 0.0
+        },
+        "verify": {
+          "num_selected": 0,
+          "precision": null,
+          "precision_wilson_lcb90": null,
+          "harmful_selected_rate": null,
+          "harmful_selected_ucb90": 1.0,
+          "positive_recall": 0.0,
+          "teacher_advantage_mean": null,
+          "max_selected_macro_share": 0.0,
+          "selected_macro_excess_share": 0.0
+        },
+        "warnings": [
+          "no joint opportunity-harm-score rule satisfied fit constraints",
+          "held-out selections below requirement",
+          "held-out precision LCB below requirement",
+          "held-out conditional harmful-switch UCB above budget"
+        ]
+      },
+      "contact": {
+        "valid": false,
+        "contract": {
+          "conditional_recovery_ranking": false,
+          "policy_first_no_fallback": false,
+          "proposal_top_k": null,
+          "evidence_rerank_top_k": null
+        },
+        "candidate_positive_auc": 0.845552977571539,
+        "candidate_harm_auc": 0.5889102408627027,
+        "candidate_rank_corr": 0.23865053585084683,
+        "group_top1_corr": 0.05738924843856155,
+        "top1_acc": 0.5757575757575758,
+        "top1_regret": 0.21221158837871765,
+        "policy_top1_benefit_auc": 0.7984810126582278,
+        "policy_top1_harm_auc": 0.5147579693034239,
+        "fit": {
+          "num_selected": 24,
+          "precision": 0.75,
+          "precision_wilson_lcb90": 0.584539861760291,
+          "harmful_selected_rate": 0.08333333333333333,
+          "harmful_selected_ucb90": 0.22312087366076844,
+          "positive_recall": 0.5454545454545454,
+          "teacher_advantage_mean": 0.13583199849032224,
+          "max_selected_macro_share": 0.875,
+          "selected_macro_excess_share": 0.0
+        },
+        "verify": {
+          "num_selected": 27,
+          "precision": 0.2962962962962963,
+          "precision_wilson_lcb90": 0.17580056447215936,
+          "harmful_selected_rate": 0.4444444444444444,
+          "harmful_selected_ucb90": 0.5995516354607646,
+          "positive_recall": 0.24242424242424243,
+          "teacher_advantage_mean": -0.18114067918122811,
+          "max_selected_macro_share": 0.9259259259259259,
+          "selected_macro_excess_share": 0.047138047138047146
+        },
+        "warnings": [
+          "held-out precision LCB below requirement",
+          "held-out conditional harmful-switch UCB above budget"
+        ]
+      }
+    },
+    "precision": {
+      "near": {
+        "valid": false,
+        "contract": {
+          "conditional_recovery_ranking": false,
+          "policy_first_no_fallback": false,
+          "proposal_top_k": null,
+          "evidence_rerank_top_k": null
+        },
+        "candidate_positive_auc": 0.6811018470051596,
+        "candidate_harm_auc": 0.6340944153039185,
+        "candidate_rank_corr": 0.12834624661633554,
+        "group_top1_corr": -0.00721163973656363,
+        "top1_acc": 0.5918367346938775,
+        "top1_regret": 0.1530415186715366,
+        "policy_top1_benefit_auc": 0.6307936507936508,
+        "policy_top1_harm_auc": 0.6281271129141311,
+        "fit": {
+          "num_selected": 0,
+          "precision": null,
+          "precision_wilson_lcb90": null,
+          "harmful_selected_rate": null,
+          "harmful_selected_ucb90": 1.0,
+          "positive_recall": 0.0,
+          "teacher_advantage_mean": null,
+          "max_selected_macro_share": 0.0,
+          "selected_macro_excess_share": 0.0
+        },
+        "verify": {
+          "num_selected": 0,
+          "precision": null,
+          "precision_wilson_lcb90": null,
+          "harmful_selected_rate": null,
+          "harmful_selected_ucb90": 1.0,
+          "positive_recall": 0.0,
+          "teacher_advantage_mean": null,
+          "max_selected_macro_share": 0.0,
+          "selected_macro_excess_share": 0.0
+        },
+        "warnings": [
+          "no joint opportunity-harm-score rule satisfied fit constraints",
+          "held-out selections below requirement",
+          "held-out precision LCB below requirement",
+          "held-out conditional harmful-switch UCB above budget"
+        ]
+      },
+      "contact": {
+        "valid": false,
+        "contract": {
+          "conditional_recovery_ranking": false,
+          "policy_first_no_fallback": false,
+          "proposal_top_k": null,
+          "evidence_rerank_top_k": null
+        },
+        "candidate_positive_auc": 0.8106963919432395,
+        "candidate_harm_auc": 0.5508747053738565,
+        "candidate_rank_corr": 0.22082822639913977,
+        "group_top1_corr": 0.09082256706835214,
+        "top1_acc": 0.5909090909090909,
+        "top1_regret": 0.20051353785181664,
+        "policy_top1_benefit_auc": 0.7967631497043262,
+        "policy_top1_harm_auc": 0.5153314218249283,
+        "fit": {
+          "num_selected": 20,
+          "precision": 0.7,
+          "precision_wilson_lcb90": 0.5161962804075577,
+          "harmful_selected_rate": 0.1,
+          "harmful_selected_ucb90": 0.2616630463268669,
+          "positive_recall": 0.42424242424242425,
+          "teacher_advantage_mean": 0.12231315902964557,
+          "max_selected_macro_share": 0.85,
+          "selected_macro_excess_share": 0.0
+        },
+        "verify": {
+          "num_selected": 23,
+          "precision": 0.34782608695652173,
+          "precision_wilson_lcb90": 0.2084975830012259,
+          "harmful_selected_rate": 0.4782608695652174,
+          "harmful_selected_ucb90": 0.6426240332900218,
+          "positive_recall": 0.24242424242424243,
+          "teacher_advantage_mean": -0.16322409785348876,
+          "max_selected_macro_share": 0.9130434782608695,
+          "selected_macro_excess_share": 0.03425559947299073
+        },
+        "warnings": [
+          "held-out precision LCB below requirement",
+          "held-out conditional harmful-switch UCB above budget"
+        ]
+      }
+    }
+  },
+  "multiseed": {
+    "4801": {
+      "balanced": {
+        "near": {
+          "valid": false,
+          "contract": {
+            "conditional_recovery_ranking": true,
+            "policy_first_no_fallback": true,
+            "proposal_top_k": null,
+            "evidence_rerank_top_k": null
+          },
+          "candidate_positive_auc": 0.6544436551260001,
+          "candidate_harm_auc": 0.6342619121082558,
+          "candidate_rank_corr": 0.15023503276871547,
+          "group_top1_corr": -0.047465172731451316,
+          "top1_acc": 0.5918367346938775,
+          "top1_regret": 0.13183964278924176,
+          "policy_top1_benefit_auc": 0.6209415584415584,
+          "policy_top1_harm_auc": 0.6552185548617306,
+          "fit": {
+            "num_selected": 0,
+            "precision": null,
+            "precision_wilson_lcb90": null,
+            "harmful_selected_rate": null,
+            "harmful_selected_ucb90": 1.0,
+            "positive_recall": 0.0,
+            "teacher_advantage_mean": null,
+            "max_selected_macro_share": 0.0,
+            "selected_macro_excess_share": 0.0
+          },
+          "verify": {
+            "num_selected": 0,
+            "precision": null,
+            "precision_wilson_lcb90": null,
+            "harmful_selected_rate": null,
+            "harmful_selected_ucb90": 1.0,
+            "positive_recall": 0.0,
+            "teacher_advantage_mean": null,
+            "max_selected_macro_share": 0.0,
+            "selected_macro_excess_share": 0.0
+          },
+          "warnings": [
+            "no joint opportunity-harm-score rule satisfied fit constraints",
+            "held-out selections below requirement",
+            "held-out precision LCB below requirement"
+          ]
+        },
+        "contact": {
+          "valid": false,
+          "contract": {
+            "conditional_recovery_ranking": true,
+            "policy_first_no_fallback": true,
+            "proposal_top_k": null,
+            "evidence_rerank_top_k": null
+          },
+          "candidate_positive_auc": 0.845552977571539,
+          "candidate_harm_auc": 0.5889102408627027,
+          "candidate_rank_corr": 0.23865053585084683,
+          "group_top1_corr": 0.05738924843856155,
+          "top1_acc": 0.5757575757575758,
+          "top1_regret": 0.21221158837871765,
+          "policy_top1_benefit_auc": 0.7984810126582278,
+          "policy_top1_harm_auc": 0.5147579693034239,
+          "fit": {
+            "num_selected": 21,
+            "precision": 0.8095238095238095,
+            "precision_wilson_lcb90": 0.6369152016739241,
+            "harmful_selected_rate": 0.047619047619047616,
+            "harmful_selected_ucb90": 0.18780357137645937,
+            "positive_recall": 0.5151515151515151,
+            "teacher_advantage_mean": 0.17715460686122425,
+            "max_selected_macro_share": 0.9523809523809523,
+            "selected_macro_excess_share": 0.07359307359307354
+          },
+          "verify": {
+            "num_selected": 24,
+            "precision": 0.3333333333333333,
+            "precision_wilson_lcb90": 0.1992267151015439,
+            "harmful_selected_rate": 0.5,
+            "harmful_selected_ucb90": 0.6591463017862407,
+            "positive_recall": 0.24242424242424243,
+            "teacher_advantage_mean": -0.2037832640788816,
+            "max_selected_macro_share": 1.0,
+            "selected_macro_excess_share": 0.12121212121212122
+          },
+          "warnings": [
+            "held-out precision LCB below requirement"
+          ]
+        }
+      },
+      "precision": {
+        "near": {
+          "valid": false,
+          "contract": {
+            "conditional_recovery_ranking": true,
+            "policy_first_no_fallback": true,
+            "proposal_top_k": null,
+            "evidence_rerank_top_k": null
+          },
+          "candidate_positive_auc": 0.6811018470051596,
+          "candidate_harm_auc": 0.6340944153039185,
+          "candidate_rank_corr": 0.12834624661633554,
+          "group_top1_corr": -0.00721163973656363,
+          "top1_acc": 0.5918367346938775,
+          "top1_regret": 0.1530415186715366,
+          "policy_top1_benefit_auc": 0.6307936507936508,
+          "policy_top1_harm_auc": 0.6281271129141311,
+          "fit": {
+            "num_selected": 0,
+            "precision": null,
+            "precision_wilson_lcb90": null,
+            "harmful_selected_rate": null,
+            "harmful_selected_ucb90": 1.0,
+            "positive_recall": 0.0,
+            "teacher_advantage_mean": null,
+            "max_selected_macro_share": 0.0,
+            "selected_macro_excess_share": 0.0
+          },
+          "verify": {
+            "num_selected": 0,
+            "precision": null,
+            "precision_wilson_lcb90": null,
+            "harmful_selected_rate": null,
+            "harmful_selected_ucb90": 1.0,
+            "positive_recall": 0.0,
+            "teacher_advantage_mean": null,
+            "max_selected_macro_share": 0.0,
+            "selected_macro_excess_share": 0.0
+          },
+          "warnings": [
+            "no joint opportunity-harm-score rule satisfied fit constraints",
+            "held-out selections below requirement",
+            "held-out precision LCB below requirement"
+          ]
+        },
+        "contact": {
+          "valid": false,
+          "contract": {
+            "conditional_recovery_ranking": true,
+            "policy_first_no_fallback": true,
+            "proposal_top_k": null,
+            "evidence_rerank_top_k": null
+          },
+          "candidate_positive_auc": 0.8106963919432395,
+          "candidate_harm_auc": 0.5508747053738565,
+          "candidate_rank_corr": 0.22082822639913977,
+          "group_top1_corr": 0.09082256706835214,
+          "top1_acc": 0.5909090909090909,
+          "top1_regret": 0.20051353785181664,
+          "policy_top1_benefit_auc": 0.7967631497043262,
+          "policy_top1_harm_auc": 0.5153314218249283,
+          "fit": {
+            "num_selected": 10,
+            "precision": 0.8,
+            "precision_wilson_lcb90": 0.540792805687488,
+            "harmful_selected_rate": 0.1,
+            "harmful_selected_ucb90": 0.34771866733585843,
+            "positive_recall": 0.24242424242424243,
+            "teacher_advantage_mean": 0.16708084917150862,
+            "max_selected_macro_share": 1.0,
+            "selected_macro_excess_share": 0.12121212121212122
+          },
+          "verify": {
+            "num_selected": 16,
+            "precision": 0.5,
+            "precision_wilson_lcb90": 0.3098430968465716,
+            "harmful_selected_rate": 0.4375,
+            "harmful_selected_ucb90": 0.6354218150786473,
+            "positive_recall": 0.24242424242424243,
+            "teacher_advantage_mean": -0.13927968949379768,
+            "max_selected_macro_share": 1.0,
+            "selected_macro_excess_share": 0.12121212121212122
+          },
+          "warnings": [
+            "held-out precision LCB below requirement"
+          ]
+        }
+      }
+    },
+    "4802": {
+      "balanced": {
+        "near": {
+          "valid": false,
+          "contract": {
+            "conditional_recovery_ranking": true,
+            "policy_first_no_fallback": true,
+            "proposal_top_k": null,
+            "evidence_rerank_top_k": null
+          },
+          "candidate_positive_auc": 0.6313321018062398,
+          "candidate_harm_auc": 0.5529022259791491,
+          "candidate_rank_corr": 0.13790649375455058,
+          "group_top1_corr": -0.07197441399944388,
+          "top1_acc": 0.5581395348837209,
+          "top1_regret": 0.1587001653410046,
+          "policy_top1_benefit_auc": 0.6779141104294478,
+          "policy_top1_harm_auc": 0.5220568695190008,
+          "fit": {
+            "num_selected": 0,
+            "precision": null,
+            "precision_wilson_lcb90": null,
+            "harmful_selected_rate": null,
+            "harmful_selected_ucb90": 1.0,
+            "positive_recall": 0.0,
+            "teacher_advantage_mean": null,
+            "max_selected_macro_share": 0.0,
+            "selected_macro_excess_share": 0.0
+          },
+          "verify": {
+            "num_selected": 0,
+            "precision": null,
+            "precision_wilson_lcb90": null,
+            "harmful_selected_rate": null,
+            "harmful_selected_ucb90": 1.0,
+            "positive_recall": 0.0,
+            "teacher_advantage_mean": null,
+            "max_selected_macro_share": 0.0,
+            "selected_macro_excess_share": 0.0
+          },
+          "warnings": [
+            "no joint opportunity-harm-score rule satisfied fit constraints",
+            "held-out selections below requirement",
+            "held-out precision LCB below requirement"
+          ]
+        },
+        "contact": {
+          "valid": false,
+          "contract": {
+            "conditional_recovery_ranking": true,
+            "policy_first_no_fallback": true,
+            "proposal_top_k": null,
+            "evidence_rerank_top_k": null
+          },
+          "candidate_positive_auc": 0.8755172492627055,
+          "candidate_harm_auc": 0.5640547263681592,
+          "candidate_rank_corr": 0.22097497199506988,
+          "group_top1_corr": 0.08935411025966021,
+          "top1_acc": 0.6440677966101694,
+          "top1_regret": 0.16878065388045999,
+          "policy_top1_benefit_auc": 0.8044791803494024,
+          "policy_top1_harm_auc": 0.523928950784846,
+          "fit": {
+            "num_selected": 0,
+            "precision": null,
+            "precision_wilson_lcb90": null,
+            "harmful_selected_rate": null,
+            "harmful_selected_ucb90": 1.0,
+            "positive_recall": 0.0,
+            "teacher_advantage_mean": null,
+            "max_selected_macro_share": 0.0,
+            "selected_macro_excess_share": 0.0
+          },
+          "verify": {
+            "num_selected": 0,
+            "precision": null,
+            "precision_wilson_lcb90": null,
+            "harmful_selected_rate": null,
+            "harmful_selected_ucb90": 1.0,
+            "positive_recall": 0.0,
+            "teacher_advantage_mean": null,
+            "max_selected_macro_share": 0.0,
+            "selected_macro_excess_share": 0.0
+          },
+          "warnings": [
+            "no joint opportunity-harm-score rule satisfied fit constraints",
+            "held-out selections below requirement",
+            "held-out precision LCB below requirement"
+          ]
+        }
+      },
+      "precision": {
+        "near": {
+          "valid": false,
+          "contract": {
+            "conditional_recovery_ranking": true,
+            "policy_first_no_fallback": true,
+            "proposal_top_k": null,
+            "evidence_rerank_top_k": null
+          },
+          "candidate_positive_auc": 0.6601293103448276,
+          "candidate_harm_auc": 0.5593171785479478,
+          "candidate_rank_corr": 0.1259520336623574,
+          "group_top1_corr": -0.025058596009205958,
+          "top1_acc": 0.5116279069767442,
+          "top1_regret": 0.18450910338273224,
+          "policy_top1_benefit_auc": 0.668174665617624,
+          "policy_top1_harm_auc": 0.5406132329209252,
+          "fit": {
+            "num_selected": 0,
+            "precision": null,
+            "precision_wilson_lcb90": null,
+            "harmful_selected_rate": null,
+            "harmful_selected_ucb90": 1.0,
+            "positive_recall": 0.0,
+            "teacher_advantage_mean": null,
+            "max_selected_macro_share": 0.0,
+            "selected_macro_excess_share": 0.0
+          },
+          "verify": {
+            "num_selected": 0,
+            "precision": null,
+            "precision_wilson_lcb90": null,
+            "harmful_selected_rate": null,
+            "harmful_selected_ucb90": 1.0,
+            "positive_recall": 0.0,
+            "teacher_advantage_mean": null,
+            "max_selected_macro_share": 0.0,
+            "selected_macro_excess_share": 0.0
+          },
+          "warnings": [
+            "no joint opportunity-harm-score rule satisfied fit constraints",
+            "held-out selections below requirement",
+            "held-out precision LCB below requirement"
+          ]
+        },
+        "contact": {
+          "valid": false,
+          "contract": {
+            "conditional_recovery_ranking": true,
+            "policy_first_no_fallback": true,
+            "proposal_top_k": null,
+            "evidence_rerank_top_k": null
+          },
+          "candidate_positive_auc": 0.8804020636626201,
+          "candidate_harm_auc": 0.5499239414438598,
+          "candidate_rank_corr": 0.2050674525052401,
+          "group_top1_corr": 0.10891121566198758,
+          "top1_acc": 0.5932203389830508,
+          "top1_regret": 0.17873441810630702,
+          "policy_top1_benefit_auc": 0.866801281158613,
+          "policy_top1_harm_auc": 0.5230677764565993,
+          "fit": {
+            "num_selected": 0,
+            "precision": null,
+            "precision_wilson_lcb90": null,
+            "harmful_selected_rate": null,
+            "harmful_selected_ucb90": 1.0,
+            "positive_recall": 0.0,
+            "teacher_advantage_mean": null,
+            "max_selected_macro_share": 0.0,
+            "selected_macro_excess_share": 0.0
+          },
+          "verify": {
+            "num_selected": 0,
+            "precision": null,
+            "precision_wilson_lcb90": null,
+            "harmful_selected_rate": null,
+            "harmful_selected_ucb90": 1.0,
+            "positive_recall": 0.0,
+            "teacher_advantage_mean": null,
+            "max_selected_macro_share": 0.0,
+            "selected_macro_excess_share": 0.0
+          },
+          "warnings": [
+            "no joint opportunity-harm-score rule satisfied fit constraints",
+            "held-out selections below requirement",
+            "held-out precision LCB below requirement"
+          ]
+        }
+      }
+    },
+    "4803": {
+      "balanced": {
+        "near": {
+          "valid": false,
+          "contract": {
+            "conditional_recovery_ranking": true,
+            "policy_first_no_fallback": true,
+            "proposal_top_k": null,
+            "evidence_rerank_top_k": null
+          },
+          "candidate_positive_auc": 0.7291116519097671,
+          "candidate_harm_auc": 0.596911045943304,
+          "candidate_rank_corr": 0.14787130705201515,
+          "group_top1_corr": -0.0416201288948922,
+          "top1_acc": 0.5777777777777777,
+          "top1_regret": 0.13696077405092857,
+          "policy_top1_benefit_auc": 0.7534293552812071,
+          "policy_top1_harm_auc": 0.5256936667910912,
+          "fit": {
+            "num_selected": 0,
+            "precision": null,
+            "precision_wilson_lcb90": null,
+            "harmful_selected_rate": null,
+            "harmful_selected_ucb90": 1.0,
+            "positive_recall": 0.0,
+            "teacher_advantage_mean": null,
+            "max_selected_macro_share": 0.0,
+            "selected_macro_excess_share": 0.0
+          },
+          "verify": {
+            "num_selected": 0,
+            "precision": null,
+            "precision_wilson_lcb90": null,
+            "harmful_selected_rate": null,
+            "harmful_selected_ucb90": 1.0,
+            "positive_recall": 0.0,
+            "teacher_advantage_mean": null,
+            "max_selected_macro_share": 0.0,
+            "selected_macro_excess_share": 0.0
+          },
+          "warnings": [
+            "no joint opportunity-harm-score rule satisfied fit constraints",
+            "held-out selections below requirement",
+            "held-out precision LCB below requirement"
+          ]
+        },
+        "contact": {
+          "valid": false,
+          "contract": {
+            "conditional_recovery_ranking": true,
+            "policy_first_no_fallback": true,
+            "proposal_top_k": null,
+            "evidence_rerank_top_k": null
+          },
+          "candidate_positive_auc": 0.7441180565223444,
+          "candidate_harm_auc": 0.5286703701031672,
+          "candidate_rank_corr": 0.18244828547715505,
+          "group_top1_corr": 0.08506687065499963,
+          "top1_acc": 0.55,
+          "top1_regret": 0.22219466001904922,
+          "policy_top1_benefit_auc": 0.7741171403962102,
+          "policy_top1_harm_auc": 0.49768595041322317,
+          "fit": {
+            "num_selected": 0,
+            "precision": null,
+            "precision_wilson_lcb90": null,
+            "harmful_selected_rate": null,
+            "harmful_selected_ucb90": 1.0,
+            "positive_recall": 0.0,
+            "teacher_advantage_mean": null,
+            "max_selected_macro_share": 0.0,
+            "selected_macro_excess_share": 0.0
+          },
+          "verify": {
+            "num_selected": 0,
+            "precision": null,
+            "precision_wilson_lcb90": null,
+            "harmful_selected_rate": null,
+            "harmful_selected_ucb90": 1.0,
+            "positive_recall": 0.0,
+            "teacher_advantage_mean": null,
+            "max_selected_macro_share": 0.0,
+            "selected_macro_excess_share": 0.0
+          },
+          "warnings": [
+            "no joint opportunity-harm-score rule satisfied fit constraints",
+            "held-out selections below requirement",
+            "held-out precision LCB below requirement"
+          ]
+        }
+      },
+      "precision": {
+        "near": {
+          "valid": false,
+          "contract": {
+            "conditional_recovery_ranking": true,
+            "policy_first_no_fallback": true,
+            "proposal_top_k": null,
+            "evidence_rerank_top_k": null
+          },
+          "candidate_positive_auc": 0.7381556464557552,
+          "candidate_harm_auc": 0.5843284457478006,
+          "candidate_rank_corr": 0.14896233969339104,
+          "group_top1_corr": -0.0728658162167191,
+          "top1_acc": 0.5333333333333333,
+          "top1_regret": 0.16162264817969055,
+          "policy_top1_benefit_auc": 0.7363716038562664,
+          "policy_top1_harm_auc": 0.5080347734457323,
+          "fit": {
+            "num_selected": 0,
+            "precision": null,
+            "precision_wilson_lcb90": null,
+            "harmful_selected_rate": null,
+            "harmful_selected_ucb90": 1.0,
+            "positive_recall": 0.0,
+            "teacher_advantage_mean": null,
+            "max_selected_macro_share": 0.0,
+            "selected_macro_excess_share": 0.0
+          },
+          "verify": {
+            "num_selected": 0,
+            "precision": null,
+            "precision_wilson_lcb90": null,
+            "harmful_selected_rate": null,
+            "harmful_selected_ucb90": 1.0,
+            "positive_recall": 0.0,
+            "teacher_advantage_mean": null,
+            "max_selected_macro_share": 0.0,
+            "selected_macro_excess_share": 0.0
+          },
+          "warnings": [
+            "no joint opportunity-harm-score rule satisfied fit constraints",
+            "held-out selections below requirement",
+            "held-out precision LCB below requirement"
+          ]
+        },
+        "contact": {
+          "valid": false,
+          "contract": {
+            "conditional_recovery_ranking": true,
+            "policy_first_no_fallback": true,
+            "proposal_top_k": null,
+            "evidence_rerank_top_k": null
+          },
+          "candidate_positive_auc": 0.7497911736043436,
+          "candidate_harm_auc": 0.5121265214837107,
+          "candidate_rank_corr": 0.15874715110338306,
+          "group_top1_corr": 0.10399452087482283,
+          "top1_acc": 0.55,
+          "top1_regret": 0.21452334169240872,
+          "policy_top1_benefit_auc": 0.8107692307692308,
+          "policy_top1_harm_auc": 0.5004939735230192,
+          "fit": {
+            "num_selected": 0,
+            "precision": null,
+            "precision_wilson_lcb90": null,
+            "harmful_selected_rate": null,
+            "harmful_selected_ucb90": 1.0,
+            "positive_recall": 0.0,
+            "teacher_advantage_mean": null,
+            "max_selected_macro_share": 0.0,
+            "selected_macro_excess_share": 0.0
+          },
+          "verify": {
+            "num_selected": 0,
+            "precision": null,
+            "precision_wilson_lcb90": null,
+            "harmful_selected_rate": null,
+            "harmful_selected_ucb90": 1.0,
+            "positive_recall": 0.0,
+            "teacher_advantage_mean": null,
+            "max_selected_macro_share": 0.0,
+            "selected_macro_excess_share": 0.0
+          },
+          "warnings": [
+            "no joint opportunity-harm-score rule satisfied fit constraints",
+            "held-out selections below requirement",
+            "held-out precision LCB below requirement"
+          ]
+        }
+      }
+    }
+  },
+  "ablations": {
+    "A_contract_fix_balanced": {
+      "near": {
+        "valid": false,
+        "contract": {
+          "conditional_recovery_ranking": true,
+          "policy_first_no_fallback": true,
+          "proposal_top_k": null,
+          "evidence_rerank_top_k": null
+        },
+        "candidate_positive_auc": 0.6786341882898377,
+        "candidate_harm_auc": 0.6057433772645127,
+        "candidate_rank_corr": 0.11483650154694489,
+        "group_top1_corr": 0.05531912034864028,
+        "top1_acc": 0.5714285714285714,
+        "top1_regret": 0.14063918769294656,
+        "policy_top1_benefit_auc": 0.6930194805194805,
+        "policy_top1_harm_auc": 0.558034708136128,
+        "fit": {
+          "num_selected": 0,
+          "precision": null,
+          "precision_wilson_lcb90": null,
+          "harmful_selected_rate": null,
+          "harmful_selected_ucb90": 1.0,
+          "positive_recall": 0.0,
+          "teacher_advantage_mean": null,
+          "max_selected_macro_share": 0.0,
+          "selected_macro_excess_share": 0.0
+        },
+        "verify": {
+          "num_selected": 0,
+          "precision": null,
+          "precision_wilson_lcb90": null,
+          "harmful_selected_rate": null,
+          "harmful_selected_ucb90": 1.0,
+          "positive_recall": 0.0,
+          "teacher_advantage_mean": null,
+          "max_selected_macro_share": 0.0,
+          "selected_macro_excess_share": 0.0
+        },
+        "warnings": [
+          "no joint opportunity-harm-score rule satisfied fit constraints",
+          "held-out selections below requirement",
+          "held-out precision LCB below requirement",
+          "held-out conditional harmful-switch UCB above budget"
+        ]
+      },
+      "contact": {
+        "valid": false,
+        "contract": {
+          "conditional_recovery_ranking": true,
+          "policy_first_no_fallback": true,
+          "proposal_top_k": null,
+          "evidence_rerank_top_k": null
+        },
+        "candidate_positive_auc": 0.830945895961532,
+        "candidate_harm_auc": 0.543306156209382,
+        "candidate_rank_corr": 0.17645250099033544,
+        "group_top1_corr": 0.07203831268740579,
+        "top1_acc": 0.5909090909090909,
+        "top1_regret": 0.19333070837909275,
+        "policy_top1_benefit_auc": 0.7918987341772152,
+        "policy_top1_harm_auc": 0.47032738610774294,
+        "fit": {
+          "num_selected": 20,
+          "precision": 0.7,
+          "precision_wilson_lcb90": 0.5161962804075577,
+          "harmful_selected_rate": 0.1,
+          "harmful_selected_ucb90": 0.2616630463268669,
+          "positive_recall": 0.42424242424242425,
+          "teacher_advantage_mean": 0.1440250432729034,
+          "max_selected_macro_share": 1.0,
+          "selected_macro_excess_share": 0.12121212121212122
+        },
+        "verify": {
+          "num_selected": 27,
+          "precision": 0.37037037037037035,
+          "precision_wilson_lcb90": 0.2359626275839824,
+          "harmful_selected_rate": 0.4444444444444444,
+          "harmful_selected_ucb90": 0.5995516354607646,
+          "positive_recall": 0.30303030303030304,
+          "teacher_advantage_mean": -0.10801387561187831,
+          "max_selected_macro_share": 1.0,
+          "selected_macro_excess_share": 0.12121212121212122
+        },
+        "warnings": [
+          "held-out precision LCB below requirement",
+          "held-out conditional harmful-switch UCB above budget"
+        ]
+      }
+    },
+    "A_contract_fix_precision": {
+      "near": {
+        "valid": false,
+        "contract": {
+          "conditional_recovery_ranking": true,
+          "policy_first_no_fallback": true,
+          "proposal_top_k": null,
+          "evidence_rerank_top_k": null
+        },
+        "candidate_positive_auc": 0.6897386525087864,
+        "candidate_harm_auc": 0.6132190241107242,
+        "candidate_rank_corr": 0.12129957708599833,
+        "group_top1_corr": 0.020748813252847092,
+        "top1_acc": 0.5918367346938775,
+        "top1_regret": 0.1539751933833465,
+        "policy_top1_benefit_auc": 0.6468253968253969,
+        "policy_top1_harm_auc": 0.5629139072847682,
+        "fit": {
+          "num_selected": 0,
+          "precision": null,
+          "precision_wilson_lcb90": null,
+          "harmful_selected_rate": null,
+          "harmful_selected_ucb90": 1.0,
+          "positive_recall": 0.0,
+          "teacher_advantage_mean": null,
+          "max_selected_macro_share": 0.0,
+          "selected_macro_excess_share": 0.0
+        },
+        "verify": {
+          "num_selected": 0,
+          "precision": null,
+          "precision_wilson_lcb90": null,
+          "harmful_selected_rate": null,
+          "harmful_selected_ucb90": 1.0,
+          "positive_recall": 0.0,
+          "teacher_advantage_mean": null,
+          "max_selected_macro_share": 0.0,
+          "selected_macro_excess_share": 0.0
+        },
+        "warnings": [
+          "no joint opportunity-harm-score rule satisfied fit constraints",
+          "held-out selections below requirement",
+          "held-out precision LCB below requirement",
+          "held-out conditional harmful-switch UCB above budget"
+        ]
+      },
+      "contact": {
+        "valid": false,
+        "contract": {
+          "conditional_recovery_ranking": true,
+          "policy_first_no_fallback": true,
+          "proposal_top_k": null,
+          "evidence_rerank_top_k": null
+        },
+        "candidate_positive_auc": 0.8314906351928444,
+        "candidate_harm_auc": 0.5262950594020204,
+        "candidate_rank_corr": 0.20779822533301848,
+        "group_top1_corr": 0.08411135787121589,
+        "top1_acc": 0.6060606060606061,
+        "top1_regret": 0.19246260702371365,
+        "policy_top1_benefit_auc": 0.7771313081822636,
+        "policy_top1_harm_auc": 0.43936582897621856,
+        "fit": {
+          "num_selected": 20,
+          "precision": 0.7,
+          "precision_wilson_lcb90": 0.5161962804075577,
+          "harmful_selected_rate": 0.15,
+          "harmful_selected_ucb90": 0.3218280756753068,
+          "positive_recall": 0.42424242424242425,
+          "teacher_advantage_mean": 0.0889627290501568,
+          "max_selected_macro_share": 1.0,
+          "selected_macro_excess_share": 0.12121212121212122
+        },
+        "verify": {
+          "num_selected": 32,
+          "precision": 0.34375,
+          "precision_wilson_lcb90": 0.2227602410620698,
+          "harmful_selected_rate": 0.5,
+          "harmful_selected_ucb90": 0.6396039917541597,
+          "positive_recall": 0.3333333333333333,
+          "teacher_advantage_mean": -0.18148945387686186,
+          "max_selected_macro_share": 1.0,
+          "selected_macro_excess_share": 0.12121212121212122
+        },
+        "warnings": [
+          "held-out precision LCB below requirement",
+          "held-out conditional harmful-switch UCB above budget"
+        ]
+      }
+    },
+    "B_recovery_pair_balanced": {
+      "near": {
+        "valid": false,
+        "contract": {
+          "conditional_recovery_ranking": true,
+          "policy_first_no_fallback": true,
+          "proposal_top_k": null,
+          "evidence_rerank_top_k": null
+        },
+        "candidate_positive_auc": 0.6591359455619532,
+        "candidate_harm_auc": 0.6274209899942699,
+        "candidate_rank_corr": 0.15023503276871547,
+        "group_top1_corr": -0.047465172731451316,
+        "top1_acc": 0.5918367346938775,
+        "top1_regret": 0.13183964278924176,
+        "policy_top1_benefit_auc": 0.6420454545454546,
+        "policy_top1_harm_auc": 0.605486173059768,
+        "fit": {
+          "num_selected": 0,
+          "precision": null,
+          "precision_wilson_lcb90": null,
+          "harmful_selected_rate": null,
+          "harmful_selected_ucb90": 1.0,
+          "positive_recall": 0.0,
+          "teacher_advantage_mean": null,
+          "max_selected_macro_share": 0.0,
+          "selected_macro_excess_share": 0.0
+        },
+        "verify": {
+          "num_selected": 0,
+          "precision": null,
+          "precision_wilson_lcb90": null,
+          "harmful_selected_rate": null,
+          "harmful_selected_ucb90": 1.0,
+          "positive_recall": 0.0,
+          "teacher_advantage_mean": null,
+          "max_selected_macro_share": 0.0,
+          "selected_macro_excess_share": 0.0
+        },
+        "warnings": [
+          "no joint opportunity-harm-score rule satisfied fit constraints",
+          "held-out selections below requirement",
+          "held-out precision LCB below requirement",
+          "held-out conditional harmful-switch UCB above budget"
+        ]
+      },
+      "contact": {
+        "valid": false,
+        "contract": {
+          "conditional_recovery_ranking": true,
+          "policy_first_no_fallback": true,
+          "proposal_top_k": null,
+          "evidence_rerank_top_k": null
+        },
+        "candidate_positive_auc": 0.8260499680554154,
+        "candidate_harm_auc": 0.5585012987389898,
+        "candidate_rank_corr": 0.23865053585084683,
+        "group_top1_corr": 0.05738924843856155,
+        "top1_acc": 0.5757575757575758,
+        "top1_regret": 0.21221158837871765,
+        "policy_top1_benefit_auc": 0.8068354430379747,
+        "policy_top1_harm_auc": 0.4744813627930511,
+        "fit": {
+          "num_selected": 17,
+          "precision": 0.7647058823529411,
+          "precision_wilson_lcb90": 0.567039126263359,
+          "harmful_selected_rate": 0.058823529411764705,
+          "harmful_selected_ucb90": 0.2255585033722061,
+          "positive_recall": 0.3939393939393939,
+          "teacher_advantage_mean": 0.16836516184454073,
+          "max_selected_macro_share": 1.0,
+          "selected_macro_excess_share": 0.12121212121212122
+        },
+        "verify": {
+          "num_selected": 20,
+          "precision": 0.4,
+          "precision_wilson_lcb90": 0.24238741776545158,
+          "harmful_selected_rate": 0.45,
+          "harmful_selected_ucb90": 0.6277922924470652,
+          "positive_recall": 0.24242424242424243,
+          "teacher_advantage_mean": -0.16271992523280965,
+          "max_selected_macro_share": 1.0,
+          "selected_macro_excess_share": 0.12121212121212122
+        },
+        "warnings": [
+          "held-out precision LCB below requirement",
+          "held-out conditional harmful-switch UCB above budget"
+        ]
+      }
+    },
+    "B_recovery_pair_precision": {
+      "near": {
+        "valid": false,
+        "contract": {
+          "conditional_recovery_ranking": true,
+          "policy_first_no_fallback": true,
+          "proposal_top_k": null,
+          "evidence_rerank_top_k": null
+        },
+        "candidate_positive_auc": 0.7566832423539969,
+        "candidate_harm_auc": 0.558518094062679,
+        "candidate_rank_corr": 0.12834624661633554,
+        "group_top1_corr": -0.00721163973656363,
+        "top1_acc": 0.5918367346938775,
+        "top1_regret": 0.1530415186715366,
+        "policy_top1_benefit_auc": 0.763015873015873,
+        "policy_top1_harm_auc": 0.535158891142664,
+        "fit": {
+          "num_selected": 0,
+          "precision": null,
+          "precision_wilson_lcb90": null,
+          "harmful_selected_rate": null,
+          "harmful_selected_ucb90": 1.0,
+          "positive_recall": 0.0,
+          "teacher_advantage_mean": null,
+          "max_selected_macro_share": 0.0,
+          "selected_macro_excess_share": 0.0
+        },
+        "verify": {
+          "num_selected": 0,
+          "precision": null,
+          "precision_wilson_lcb90": null,
+          "harmful_selected_rate": null,
+          "harmful_selected_ucb90": 1.0,
+          "positive_recall": 0.0,
+          "teacher_advantage_mean": null,
+          "max_selected_macro_share": 0.0,
+          "selected_macro_excess_share": 0.0
+        },
+        "warnings": [
+          "no joint opportunity-harm-score rule satisfied fit constraints",
+          "held-out selections below requirement",
+          "held-out precision LCB below requirement",
+          "held-out conditional harmful-switch UCB above budget"
+        ]
+      },
+      "contact": {
+        "valid": false,
+        "contract": {
+          "conditional_recovery_ranking": true,
+          "policy_first_no_fallback": true,
+          "proposal_top_k": null,
+          "evidence_rerank_top_k": null
+        },
+        "candidate_positive_auc": 0.7517502269746797,
+        "candidate_harm_auc": 0.4309823359059352,
+        "candidate_rank_corr": 0.22082822639913977,
+        "group_top1_corr": 0.09082256706835214,
+        "top1_acc": 0.5909090909090909,
+        "top1_regret": 0.20051353785181664,
+        "policy_top1_benefit_auc": 0.7082477435418612,
+        "policy_top1_harm_auc": 0.35226851071006915,
+        "fit": {
+          "num_selected": 0,
+          "precision": null,
+          "precision_wilson_lcb90": null,
+          "harmful_selected_rate": null,
+          "harmful_selected_ucb90": 1.0,
+          "positive_recall": 0.0,
+          "teacher_advantage_mean": null,
+          "max_selected_macro_share": 0.0,
+          "selected_macro_excess_share": 0.0
+        },
+        "verify": {
+          "num_selected": 0,
+          "precision": null,
+          "precision_wilson_lcb90": null,
+          "harmful_selected_rate": null,
+          "harmful_selected_ucb90": 1.0,
+          "positive_recall": 0.0,
+          "teacher_advantage_mean": null,
+          "max_selected_macro_share": 0.0,
+          "selected_macro_excess_share": 0.0
+        },
+        "warnings": [
+          "no joint opportunity-harm-score rule satisfied fit constraints",
+          "held-out selections below requirement",
+          "held-out precision LCB below requirement",
+          "held-out conditional harmful-switch UCB above budget"
+        ]
+      }
+    },
+    "C_bipolar_evidence_balanced": {
+      "near": {
+        "valid": false,
+        "contract": {
+          "conditional_recovery_ranking": true,
+          "policy_first_no_fallback": true,
+          "proposal_top_k": null,
+          "evidence_rerank_top_k": null
+        },
+        "candidate_positive_auc": 0.6750074777536827,
+        "candidate_harm_auc": 0.6480054656851941,
+        "candidate_rank_corr": 0.11483650154694489,
+        "group_top1_corr": 0.05531912034864028,
+        "top1_acc": 0.5714285714285714,
+        "top1_regret": 0.14063918769294656,
+        "policy_top1_benefit_auc": 0.7032467532467532,
+        "policy_top1_harm_auc": 0.6081812035158891,
+        "fit": {
+          "num_selected": 0,
+          "precision": null,
+          "precision_wilson_lcb90": null,
+          "harmful_selected_rate": null,
+          "harmful_selected_ucb90": 1.0,
+          "positive_recall": 0.0,
+          "teacher_advantage_mean": null,
+          "max_selected_macro_share": 0.0,
+          "selected_macro_excess_share": 0.0
+        },
+        "verify": {
+          "num_selected": 0,
+          "precision": null,
+          "precision_wilson_lcb90": null,
+          "harmful_selected_rate": null,
+          "harmful_selected_ucb90": 1.0,
+          "positive_recall": 0.0,
+          "teacher_advantage_mean": null,
+          "max_selected_macro_share": 0.0,
+          "selected_macro_excess_share": 0.0
+        },
+        "warnings": [
+          "no joint opportunity-harm-score rule satisfied fit constraints",
+          "held-out selections below requirement",
+          "held-out precision LCB below requirement",
+          "held-out conditional harmful-switch UCB above budget"
+        ]
+      },
+      "contact": {
+        "valid": false,
+        "contract": {
+          "conditional_recovery_ranking": true,
+          "policy_first_no_fallback": true,
+          "proposal_top_k": null,
+          "evidence_rerank_top_k": null
+        },
+        "candidate_positive_auc": 0.7782877702679982,
+        "candidate_harm_auc": 0.549340680070731,
+        "candidate_rank_corr": 0.17645250099033544,
+        "group_top1_corr": 0.07203831268740579,
+        "top1_acc": 0.5909090909090909,
+        "top1_regret": 0.19333070837909275,
+        "policy_top1_benefit_auc": 0.7675316455696203,
+        "policy_top1_harm_auc": 0.48508574398059934,
+        "fit": {
+          "num_selected": 12,
+          "precision": 0.75,
+          "precision_wilson_lcb90": 0.5126619681967507,
+          "harmful_selected_rate": 0.0,
+          "harmful_selected_ucb90": 0.18398119474747693,
+          "positive_recall": 0.2727272727272727,
+          "teacher_advantage_mean": 0.2634485858372484,
+          "max_selected_macro_share": 1.0,
+          "selected_macro_excess_share": 0.12121212121212122
+        },
+        "verify": {
+          "num_selected": 15,
+          "precision": 0.4,
+          "precision_wilson_lcb90": 0.22316791026598223,
+          "harmful_selected_rate": 0.4666666666666667,
+          "harmful_selected_ucb90": 0.666845070362379,
+          "positive_recall": 0.18181818181818182,
+          "teacher_advantage_mean": -0.12328729377855585,
+          "max_selected_macro_share": 1.0,
+          "selected_macro_excess_share": 0.12121212121212122
+        },
+        "warnings": [
+          "held-out precision LCB below requirement",
+          "held-out conditional harmful-switch UCB above budget"
+        ]
+      }
+    },
+    "C_bipolar_evidence_precision": {
+      "near": {
+        "valid": false,
+        "contract": {
+          "conditional_recovery_ranking": true,
+          "policy_first_no_fallback": true,
+          "proposal_top_k": null,
+          "evidence_rerank_top_k": null
+        },
+        "candidate_positive_auc": 0.6708760188439393,
+        "candidate_harm_auc": 0.6363247674879887,
+        "candidate_rank_corr": 0.12129957708599833,
+        "group_top1_corr": 0.020748813252847092,
+        "top1_acc": 0.5918367346938775,
+        "top1_regret": 0.1539751933833465,
+        "policy_top1_benefit_auc": 0.6242857142857143,
+        "policy_top1_harm_auc": 0.6416114790286975,
+        "fit": {
+          "num_selected": 0,
+          "precision": null,
+          "precision_wilson_lcb90": null,
+          "harmful_selected_rate": null,
+          "harmful_selected_ucb90": 1.0,
+          "positive_recall": 0.0,
+          "teacher_advantage_mean": null,
+          "max_selected_macro_share": 0.0,
+          "selected_macro_excess_share": 0.0
+        },
+        "verify": {
+          "num_selected": 0,
+          "precision": null,
+          "precision_wilson_lcb90": null,
+          "harmful_selected_rate": null,
+          "harmful_selected_ucb90": 1.0,
+          "positive_recall": 0.0,
+          "teacher_advantage_mean": null,
+          "max_selected_macro_share": 0.0,
+          "selected_macro_excess_share": 0.0
+        },
+        "warnings": [
+          "no joint opportunity-harm-score rule satisfied fit constraints",
+          "held-out selections below requirement",
+          "held-out precision LCB below requirement",
+          "held-out conditional harmful-switch UCB above budget"
+        ]
+      },
+      "contact": {
+        "valid": false,
+        "contract": {
+          "conditional_recovery_ranking": true,
+          "policy_first_no_fallback": true,
+          "proposal_top_k": null,
+          "evidence_rerank_top_k": null
+        },
+        "candidate_positive_auc": 0.8260903191095867,
+        "candidate_harm_auc": 0.5676494793642501,
+        "candidate_rank_corr": 0.20779822533301848,
+        "group_top1_corr": 0.08411135787121589,
+        "top1_acc": 0.6060606060606061,
+        "top1_regret": 0.19246260702371365,
+        "policy_top1_benefit_auc": 0.7989343459088682,
+        "policy_top1_harm_auc": 0.5283521673132062,
+        "fit": {
+          "num_selected": 20,
+          "precision": 0.7,
+          "precision_wilson_lcb90": 0.5161962804075577,
+          "harmful_selected_rate": 0.1,
+          "harmful_selected_ucb90": 0.2616630463268669,
+          "positive_recall": 0.42424242424242425,
+          "teacher_advantage_mean": 0.11787746454877826,
+          "max_selected_macro_share": 1.0,
+          "selected_macro_excess_share": 0.12121212121212122
+        },
+        "verify": {
+          "num_selected": 26,
+          "precision": 0.34615384615384615,
+          "precision_wilson_lcb90": 0.21388096673111992,
+          "harmful_selected_rate": 0.46153846153846156,
+          "harmful_selected_ucb90": 0.61825374524577,
+          "positive_recall": 0.2727272727272727,
+          "teacher_advantage_mean": -0.16412207276514815,
+          "max_selected_macro_share": 1.0,
+          "selected_macro_excess_share": 0.12121212121212122
+        },
+        "warnings": [
+          "held-out precision LCB below requirement",
+          "held-out conditional harmful-switch UCB above budget"
+        ]
+      }
+    },
+    "D_full_trident_balanced": {
+      "near": {
+        "valid": false,
+        "contract": {
+          "conditional_recovery_ranking": true,
+          "policy_first_no_fallback": true,
+          "proposal_top_k": null,
+          "evidence_rerank_top_k": null
+        },
+        "candidate_positive_auc": 0.6544436551260001,
+        "candidate_harm_auc": 0.6342619121082558,
+        "candidate_rank_corr": 0.15023503276871547,
+        "group_top1_corr": -0.047465172731451316,
+        "top1_acc": 0.5918367346938775,
+        "top1_regret": 0.13183964278924176,
+        "policy_top1_benefit_auc": 0.6209415584415584,
+        "policy_top1_harm_auc": 0.6552185548617306,
+        "fit": {
+          "num_selected": 0,
+          "precision": null,
+          "precision_wilson_lcb90": null,
+          "harmful_selected_rate": null,
+          "harmful_selected_ucb90": 1.0,
+          "positive_recall": 0.0,
+          "teacher_advantage_mean": null,
+          "max_selected_macro_share": 0.0,
+          "selected_macro_excess_share": 0.0
+        },
+        "verify": {
+          "num_selected": 0,
+          "precision": null,
+          "precision_wilson_lcb90": null,
+          "harmful_selected_rate": null,
+          "harmful_selected_ucb90": 1.0,
+          "positive_recall": 0.0,
+          "teacher_advantage_mean": null,
+          "max_selected_macro_share": 0.0,
+          "selected_macro_excess_share": 0.0
+        },
+        "warnings": [
+          "no joint opportunity-harm-score rule satisfied fit constraints",
+          "held-out selections below requirement",
+          "held-out precision LCB below requirement",
+          "held-out conditional harmful-switch UCB above budget"
+        ]
+      },
+      "contact": {
+        "valid": false,
+        "contract": {
+          "conditional_recovery_ranking": true,
+          "policy_first_no_fallback": true,
+          "proposal_top_k": null,
+          "evidence_rerank_top_k": null
+        },
+        "candidate_positive_auc": 0.845552977571539,
+        "candidate_harm_auc": 0.5889102408627027,
+        "candidate_rank_corr": 0.23865053585084683,
+        "group_top1_corr": 0.05738924843856155,
+        "top1_acc": 0.5757575757575758,
+        "top1_regret": 0.21221158837871765,
+        "policy_top1_benefit_auc": 0.7984810126582278,
+        "policy_top1_harm_auc": 0.5147579693034239,
+        "fit": {
+          "num_selected": 21,
+          "precision": 0.8095238095238095,
+          "precision_wilson_lcb90": 0.6369152016739241,
+          "harmful_selected_rate": 0.047619047619047616,
+          "harmful_selected_ucb90": 0.18780357137645937,
+          "positive_recall": 0.5151515151515151,
+          "teacher_advantage_mean": 0.17715460686122425,
+          "max_selected_macro_share": 0.9523809523809523,
+          "selected_macro_excess_share": 0.07359307359307354
+        },
+        "verify": {
+          "num_selected": 24,
+          "precision": 0.3333333333333333,
+          "precision_wilson_lcb90": 0.1992267151015439,
+          "harmful_selected_rate": 0.5,
+          "harmful_selected_ucb90": 0.6591463017862407,
+          "positive_recall": 0.24242424242424243,
+          "teacher_advantage_mean": -0.2037832640788816,
+          "max_selected_macro_share": 1.0,
+          "selected_macro_excess_share": 0.12121212121212122
+        },
+        "warnings": [
+          "held-out precision LCB below requirement",
+          "held-out conditional harmful-switch UCB above budget"
+        ]
+      }
+    },
+    "D_full_trident_precision": {
+      "near": {
+        "valid": false,
+        "contract": {
+          "conditional_recovery_ranking": true,
+          "policy_first_no_fallback": true,
+          "proposal_top_k": null,
+          "evidence_rerank_top_k": null
+        },
+        "candidate_positive_auc": 0.6811018470051596,
+        "candidate_harm_auc": 0.6340944153039185,
+        "candidate_rank_corr": 0.12834624661633554,
+        "group_top1_corr": -0.00721163973656363,
+        "top1_acc": 0.5918367346938775,
+        "top1_regret": 0.1530415186715366,
+        "policy_top1_benefit_auc": 0.6307936507936508,
+        "policy_top1_harm_auc": 0.6281271129141311,
+        "fit": {
+          "num_selected": 0,
+          "precision": null,
+          "precision_wilson_lcb90": null,
+          "harmful_selected_rate": null,
+          "harmful_selected_ucb90": 1.0,
+          "positive_recall": 0.0,
+          "teacher_advantage_mean": null,
+          "max_selected_macro_share": 0.0,
+          "selected_macro_excess_share": 0.0
+        },
+        "verify": {
+          "num_selected": 0,
+          "precision": null,
+          "precision_wilson_lcb90": null,
+          "harmful_selected_rate": null,
+          "harmful_selected_ucb90": 1.0,
+          "positive_recall": 0.0,
+          "teacher_advantage_mean": null,
+          "max_selected_macro_share": 0.0,
+          "selected_macro_excess_share": 0.0
+        },
+        "warnings": [
+          "no joint opportunity-harm-score rule satisfied fit constraints",
+          "held-out selections below requirement",
+          "held-out precision LCB below requirement",
+          "held-out conditional harmful-switch UCB above budget"
+        ]
+      },
+      "contact": {
+        "valid": false,
+        "contract": {
+          "conditional_recovery_ranking": true,
+          "policy_first_no_fallback": true,
+          "proposal_top_k": null,
+          "evidence_rerank_top_k": null
+        },
+        "candidate_positive_auc": 0.8106963919432395,
+        "candidate_harm_auc": 0.5508747053738565,
+        "candidate_rank_corr": 0.22082822639913977,
+        "group_top1_corr": 0.09082256706835214,
+        "top1_acc": 0.5909090909090909,
+        "top1_regret": 0.20051353785181664,
+        "policy_top1_benefit_auc": 0.7967631497043262,
+        "policy_top1_harm_auc": 0.5153314218249283,
+        "fit": {
+          "num_selected": 10,
+          "precision": 0.8,
+          "precision_wilson_lcb90": 0.540792805687488,
+          "harmful_selected_rate": 0.1,
+          "harmful_selected_ucb90": 0.34771866733585843,
+          "positive_recall": 0.24242424242424243,
+          "teacher_advantage_mean": 0.16708084917150862,
+          "max_selected_macro_share": 1.0,
+          "selected_macro_excess_share": 0.12121212121212122
+        },
+        "verify": {
+          "num_selected": 16,
+          "precision": 0.5,
+          "precision_wilson_lcb90": 0.3098430968465716,
+          "harmful_selected_rate": 0.4375,
+          "harmful_selected_ucb90": 0.6354218150786473,
+          "positive_recall": 0.24242424242424243,
+          "teacher_advantage_mean": -0.13927968949379768,
+          "max_selected_macro_share": 1.0,
+          "selected_macro_excess_share": 0.12121212121212122
+        },
+        "warnings": [
+          "held-out precision LCB below requirement",
+          "held-out conditional harmful-switch UCB above budget"
+        ]
+      }
+    }
+  },
+  "baselines": {
+    "safe_offline": {
+      "log_replay": {
+        "DRS": 1.0,
+        "FRA_exec": 0.0,
+        "ODG": 0.0,
+        "bounded_NUP": 1.0,
+        "intervention_rate": 0.0,
+        "max_yaw_rate_violation": 0.0,
+        "route_rejoin_success": 1.0,
+        "stable_stop_success": 1.0,
+        "secondary_collision_rate": 0.0,
+        "post_contact_deployability": 0.6162632327308294
+      },
+      "nominal_replay": {
+        "DRS": 1.0,
+        "FRA_exec": 0.0,
+        "ODG": 0.0,
+        "bounded_NUP": 1.0,
+        "intervention_rate": 0.0,
+        "max_yaw_rate_violation": 0.0,
+        "route_rejoin_success": 1.0,
+        "stable_stop_success": 1.0,
+        "secondary_collision_rate": 0.0,
+        "post_contact_deployability": 0.6162632327308294
+      },
+      "betopnet_lite": {
+        "DRS": 1.0,
+        "FRA_exec": 0.0,
+        "ODG": 0.0,
+        "bounded_NUP": 1.0,
+        "intervention_rate": 0.17647058823529413,
+        "max_yaw_rate_violation": 0.17647058823529413,
+        "route_rejoin_success": 1.0,
+        "stable_stop_success": 1.0,
+        "secondary_collision_rate": 0.0,
+        "post_contact_deployability": 0.6162632327308294
+      },
+      "gameformer_lite": {
+        "DRS": 1.0,
+        "FRA_exec": 0.0,
+        "ODG": 0.0,
+        "bounded_NUP": 0.9467900485021244,
+        "intervention_rate": 0.39215686274509803,
+        "max_yaw_rate_violation": 0.39215686274509803,
+        "route_rejoin_success": 1.0,
+        "stable_stop_success": 1.0,
+        "secondary_collision_rate": 0.0,
+        "post_contact_deployability": 0.6189246627804773
+      },
+      "wayformer_bc": {
+        "DRS": 1.0,
+        "FRA_exec": 0.0,
+        "ODG": 0.0,
+        "bounded_NUP": 1.0,
+        "intervention_rate": 0.0,
+        "max_yaw_rate_violation": 0.0,
+        "route_rejoin_success": 1.0,
+        "stable_stop_success": 1.0,
+        "secondary_collision_rate": 0.0,
+        "post_contact_deployability": 0.6162632327308294
+      }
+    },
+    "near_offline": {
+      "cvar_risk_filter": {
+        "DRS": 0.968478260723793,
+        "FRA_exec": 0.21014492753623187,
+        "ODG": 0.3106031560379526,
+        "bounded_NUP": 0.9887224192581872,
+        "intervention_rate": 0.6413043478260869,
+        "max_yaw_rate_violation": 0.25,
+        "route_rejoin_success": 0.9963768115942029,
+        "stable_stop_success": 0.8840579710144928,
+        "secondary_collision_rate": 0.09782608695652174,
+        "post_contact_deployability": 0.4983405151736038
+      },
+      "dro_cvar_filter": {
+        "DRS": 0.9721014491295901,
+        "FRA_exec": 0.20652173913043478,
+        "ODG": 0.3106031560379526,
+        "bounded_NUP": 0.9887224192581872,
+        "intervention_rate": 0.6413043478260869,
+        "max_yaw_rate_violation": 0.2536231884057971,
+        "route_rejoin_success": 0.9963768115942029,
+        "stable_stop_success": 0.8840579710144928,
+        "secondary_collision_rate": 0.09782608695652174,
+        "post_contact_deployability": 0.5002803591155056
+      },
+      "expected_risk_filter": {
+        "DRS": 0.968478260723793,
+        "FRA_exec": 0.21014492753623187,
+        "ODG": 0.3106031560379526,
+        "bounded_NUP": 0.9887224192581872,
+        "intervention_rate": 0.6413043478260869,
+        "max_yaw_rate_violation": 0.25,
+        "route_rejoin_success": 0.9963768115942029,
+        "stable_stop_success": 0.8840579710144928,
+        "secondary_collision_rate": 0.09782608695652174,
+        "post_contact_deployability": 0.4983405151736038
+      },
+      "marc_lite": {
+        "DRS": 0.9668478257009301,
+        "FRA_exec": 0.5036231884057971,
+        "ODG": 0.8359491695528445,
+        "bounded_NUP": 0.9874840528642798,
+        "intervention_rate": 0.9420289855072463,
+        "max_yaw_rate_violation": 0.25,
+        "route_rejoin_success": 1.0,
+        "stable_stop_success": 0.894927536231884,
+        "secondary_collision_rate": 0.09782608695652174,
+        "post_contact_deployability": 0.3288853611906016
+      },
+      "oracle_recovery_filter": {
+        "DRS": 0.9782608694032483,
+        "FRA_exec": 0.213768115942029,
+        "ODG": 0.33522634704907733,
+        "bounded_NUP": 0.9713745090560092,
+        "intervention_rate": 0.6521739130434783,
+        "max_yaw_rate_violation": 0.2572463768115942,
+        "route_rejoin_success": 0.9891304347826086,
+        "stable_stop_success": 0.8840579710144928,
+        "secondary_collision_rate": 0.10507246376811594,
+        "post_contact_deployability": 0.49795419926862794
+      },
+      "predictive_safety_filter": {
+        "DRS": 0.9726449274525478,
+        "FRA_exec": 0.12681159420289856,
+        "ODG": 0.17429900298947873,
+        "bounded_NUP": 0.9882030051691185,
+        "intervention_rate": 0.44565217391304346,
+        "max_yaw_rate_violation": 0.09420289855072464,
+        "route_rejoin_success": 0.9963768115942029,
+        "stable_stop_success": 0.8840579710144928,
+        "secondary_collision_rate": 0.09782608695652174,
+        "post_contact_deployability": 0.5466356772411917
+      },
+      "racp_lite": {
+        "DRS": 0.9523550720777416,
+        "FRA_exec": 0.5217391304347826,
+        "ODG": 0.8389732954294785,
+        "bounded_NUP": 0.9862011379447859,
+        "intervention_rate": 0.8333333333333334,
+        "max_yaw_rate_violation": 0.2463768115942029,
+        "route_rejoin_success": 0.9963768115942029,
+        "stable_stop_success": 0.8840579710144928,
+        "secondary_collision_rate": 0.09782608695652174,
+        "post_contact_deployability": 0.31835095414694015
+      },
+      "gameformer_lite": {
+        "DRS": 0.9483695650419247,
+        "FRA_exec": 0.2536231884057971,
+        "ODG": 0.36907387038935785,
+        "bounded_NUP": 0.9340877262765532,
+        "intervention_rate": 0.5398550724637681,
+        "max_yaw_rate_violation": 0.16304347826086957,
+        "route_rejoin_success": 0.9565217391304348,
+        "stable_stop_success": 0.8514492753623188,
+        "secondary_collision_rate": 0.11231884057971014,
+        "post_contact_deployability": 0.47186593583962183
+      }
+    },
+    "near_closed_loop": {
+      "marc_lite": {
+        "num_scenes": 50,
+        "num_decisions": 2000,
+        "closed_loop_DRS": 0.7960250000001864,
+        "closed_loop_FRA_exec": 0.20400000000000001,
+        "closed_loop_ODG": 0.0017849822087399614,
+        "closed_loop_bounded_NUP": 0.8647860135492692,
+        "intervention_rate": 0.993,
+        "closed_loop_post_contact_deployability": 0.5172556394182672
+      }
+    },
+    "contact_offline": {
+      "post_collision_restoration": {
+        "DRS": 0.8270950468584715,
+        "FRA_exec": 0.4069611780455154,
+        "ODG": 0.3271045964934341,
+        "bounded_NUP": 0.7981849482655051,
+        "intervention_rate": 0.9692101740294511,
+        "max_yaw_rate_violation": 0.006693440428380187,
+        "route_rejoin_success": 0.8487282463186078,
+        "stable_stop_success": 0.8380187416331994,
+        "secondary_collision_rate": 0.0013386880856760374,
+        "post_contact_deployability": 0.38523483855499613
+      },
+      "post_crash_braking": {
+        "DRS": 0.5742436412331889,
+        "FRA_exec": 0.5836680053547524,
+        "ODG": 0.22573268833212196,
+        "bounded_NUP": 0.3306304621760746,
+        "intervention_rate": 0.9946452476572959,
+        "max_yaw_rate_violation": 0.006693440428380187,
+        "route_rejoin_success": 0.33467202141900937,
+        "stable_stop_success": 0.5809906291834003,
+        "secondary_collision_rate": 0.0,
+        "post_contact_deployability": 0.27012217873198835
+      },
+      "postimpact_mpc_lite": {
+        "DRS": 0.593734939761031,
+        "FRA_exec": 0.5756358768406962,
+        "ODG": 0.2432960262260284,
+        "bounded_NUP": 0.3238425441234227,
+        "intervention_rate": 0.9906291834002677,
+        "max_yaw_rate_violation": 0.00535475234270415,
+        "route_rejoin_success": 0.32663989290495316,
+        "stable_stop_success": 0.6010709504685409,
+        "secondary_collision_rate": 0.0,
+        "post_contact_deployability": 0.2759759075748392
+      },
+      "severity_minimization": {
+        "DRS": 0.6778580990681049,
+        "FRA_exec": 0.49129852744310576,
+        "ODG": 0.23722871447323635,
+        "bounded_NUP": 0.3935678492759344,
+        "intervention_rate": 0.8433734939759037,
+        "max_yaw_rate_violation": 0.006693440428380187,
+        "route_rejoin_success": 0.41231593038821956,
+        "stable_stop_success": 0.6854082998661312,
+        "secondary_collision_rate": 0.0,
+        "post_contact_deployability": 0.32977788044446993
+      }
+    },
+    "contact_closed_loop": [
+      {
+        "method": "post_collision_restoration",
+        "num_scenes": 50,
+        "num_decisions": 2000,
+        "closed_loop_DRS": 0.49444999999962747,
+        "closed_loop_FRA_exec": 0.5055,
+        "closed_loop_ODG": 0.0037194382213502895,
+        "closed_loop_bounded_NUP": 0.8073833730342527,
+        "intervention_rate": 0.8325,
+        "closed_loop_post_contact_deployability": 0.32434226804771027
+      },
+      {
+        "method": "post_crash_braking",
+        "num_scenes": 50,
+        "num_decisions": 2000,
+        "closed_loop_DRS": 0.41732499999869616,
+        "closed_loop_FRA_exec": 0.5835,
+        "closed_loop_ODG": 0.0020594709399691744,
+        "closed_loop_bounded_NUP": 0.46247031789070564,
+        "intervention_rate": 0.9995,
+        "closed_loop_post_contact_deployability": 0.29685359368566716
+      },
+      {
+        "method": "postimpact_mpc_lite",
+        "num_scenes": 50,
+        "num_decisions": 2000,
+        "closed_loop_DRS": 0.5272499999981374,
+        "closed_loop_FRA_exec": 0.4734999999999999,
+        "closed_loop_ODG": 0.0008818218630979016,
+        "closed_loop_bounded_NUP": 0.45415406272115383,
+        "intervention_rate": 0.9754999999999999,
+        "closed_loop_post_contact_deployability": 0.34753978082036086
+      },
+      {
+        "method": "severity_minimization",
+        "num_scenes": 50,
+        "num_decisions": 2000,
+        "closed_loop_DRS": 0.491899999999255,
+        "closed_loop_FRA_exec": 0.5095,
+        "closed_loop_ODG": 0.001645259781786842,
+        "closed_loop_bounded_NUP": 0.4550648259556764,
+        "intervention_rate": 0.9450000000000002,
+        "closed_loop_post_contact_deployability": 0.31974442592929825
+      }
+    ]
+  }
+}

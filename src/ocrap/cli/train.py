@@ -329,6 +329,9 @@ def _direct_value_loss_from_outputs(
         preference_conditional_pairwise_weight=float(tcfg.get("direct_value_preference_conditional_pairwise_weight", 0.0)),
         preference_conditional_pairwise_min_gap=float(tcfg.get("direct_value_preference_conditional_pairwise_min_gap", 0.01)),
         preference_conditional_pairwise_margin=float(tcfg.get("direct_value_preference_conditional_pairwise_margin", 0.02)),
+        preference_proposal_topk_weight=float(tcfg.get("direct_value_preference_proposal_topk_weight", 0.0)),
+        preference_proposal_topk=int(tcfg.get("direct_value_preference_proposal_topk", 3)),
+        preference_proposal_margin=float(tcfg.get("direct_value_preference_proposal_margin", 0.02)),
         delta_nll_weight=float(tcfg.get("direct_value_delta_nll_weight", 0.0)),
         delta_sign_weight=float(tcfg.get("direct_value_delta_sign_weight", 0.0)),
         delta_sign_temperature=float(tcfg.get("direct_value_delta_sign_temperature", 0.04)),
@@ -343,6 +346,12 @@ def _direct_value_loss_from_outputs(
         ordinal_evidence_harm_class_weight=float(tcfg.get("direct_value_ordinal_evidence_harm_class_weight", 2.0)),
         ordinal_evidence_dead_class_weight=float(tcfg.get("direct_value_ordinal_evidence_dead_class_weight", 0.5)),
         ordinal_evidence_benefit_class_weight=float(tcfg.get("direct_value_ordinal_evidence_benefit_class_weight", 1.25)),
+        ordinal_evidence_proposal_topk_weight=float(tcfg.get("direct_value_ordinal_evidence_proposal_topk_weight", 0.0)),
+        ordinal_evidence_proposal_topk=int(tcfg.get("direct_value_ordinal_evidence_proposal_topk", 3)),
+        ordinal_evidence_proposal_rank_decay=float(tcfg.get("direct_value_ordinal_evidence_proposal_rank_decay", 0.75)),
+        ordinal_evidence_intragroup_benefit_weight=float(tcfg.get("direct_value_ordinal_evidence_intragroup_benefit_weight", 0.0)),
+        ordinal_evidence_intragroup_harm_weight=float(tcfg.get("direct_value_ordinal_evidence_intragroup_harm_weight", 0.0)),
+        ordinal_evidence_intragroup_margin=float(tcfg.get("direct_value_ordinal_evidence_intragroup_margin", 0.25)),
         ordinal_evidence_pairwise_benefit_weight=float(tcfg.get("direct_value_ordinal_evidence_pairwise_benefit_weight", 0.0)),
         ordinal_evidence_pairwise_harm_weight=float(tcfg.get("direct_value_ordinal_evidence_pairwise_harm_weight", 0.0)),
         ordinal_evidence_pairwise_margin=float(tcfg.get("direct_value_ordinal_evidence_pairwise_margin", 0.25)),
@@ -495,6 +504,8 @@ def _direct_policy_batch_stats(
     min_delta_mean = float(tcfg.get("direct_policy_metric_min_delta_mean", 0.0))
     risk_source = str(tcfg.get("direct_policy_metric_risk_source", "gaussian_delta") or "gaussian_delta").strip().lower()
     conditional_preference = bool(tcfg.get("direct_value_preference_conditional_mode", False))
+    metric_proposal_top_k = max(1, int(tcfg.get("direct_policy_metric_proposal_top_k", 1)))
+    metric_evidence_rerank = bool(tcfg.get("direct_policy_metric_evidence_rerank_top_k", False))
     stats: dict[str, float] = {}
 
     def add(name: str, value: float) -> None:
@@ -542,14 +553,34 @@ def _direct_policy_batch_stats(
             runner = recovery_scores[pred_j] - 1.0 if conditional_preference else recovery_scores.new_zeros(())
         rank_margin = float((recovery_scores[pred_j] - runner).item())
 
-        chosen_idx = recs[pred_j]
+        # Preference metrics always use the frozen tournament's exact top-1.
+        # Certificate metrics may instead use v48.13's deployment contract:
+        # create a rank-based top-k proposal, then evidence-rerank inside it.
+        cert_j = pred_j
+        cert_rank_margin = rank_margin
         if risk_source in {"heads", "ordinal_evidence"} and opportunity_logit is not None and harm_logit is not None:
-            opp_delta = opportunity_logit[chosen_idx] - opportunity_logit[nom]
-            harm_delta = harm_logit[chosen_idx] - harm_logit[nom]
-            opportunity_prob = float(torch.sigmoid(opp_delta).item())
-            harm_prob = float(torch.sigmoid(harm_delta).item())
-            delta_mean = opp_delta.new_tensor(opportunity_prob - harm_prob)
+            opp_delta_all = opportunity_logit[recs] - opportunity_logit[nom]
+            harm_delta_all = harm_logit[recs] - harm_logit[nom]
+            opportunity_all = torch.sigmoid(opp_delta_all)
+            harm_all = torch.sigmoid(harm_delta_all)
+            evidence_all = opportunity_all - harm_all
+            if metric_evidence_rerank:
+                proposal_k = min(metric_proposal_top_k, int(recs.numel()))
+                proposal_local = torch.topk(pred_rank_delta, k=proposal_k).indices
+                proposal_evidence = evidence_all[proposal_local]
+                best_local_in_proposal = int(torch.argmax(proposal_evidence).item())
+                cert_j = int(proposal_local[best_local_in_proposal].item())
+                if proposal_evidence.numel() > 1:
+                    sorted_evidence = torch.topk(proposal_evidence, k=2).values
+                    cert_rank_margin = float((sorted_evidence[0] - sorted_evidence[1]).item())
+                else:
+                    cert_rank_margin = 1.0
+            chosen_idx = recs[cert_j]
+            opportunity_prob = float(opportunity_all[cert_j].item())
+            harm_prob = float(harm_all[cert_j].item())
+            delta_mean = evidence_all[cert_j]
         else:
+            chosen_idx = recs[cert_j]
             if direct_delta is not None:
                 delta_mean = direct_delta[chosen_idx]
                 if direct_delta_logvar is not None:
@@ -569,12 +600,16 @@ def _direct_policy_batch_stats(
         admitted = bool(
             opportunity_prob >= opp_threshold
             and harm_prob <= harm_threshold
-            and rank_margin >= rank_margin_threshold
+            and cert_rank_margin >= rank_margin_threshold
             and float(delta_mean.item()) >= min_delta_mean
         )
-        admitted_harmful = admitted and rank_harmful
+        cert_teacher_adv = float(teacher_delta[cert_j].item())
+        cert_harmful = cert_teacher_adv <= -negative_gain
+        cert_positive = cert_teacher_adv >= positive_gain
+        cert_regret = max(0.0, oracle_adv_raw - cert_teacher_adv - tie_eps)
+        admitted_harmful = admitted and cert_harmful
         false_intervention = admitted and (not positive_group)
-        positive_admission = admitted and positive_group
+        positive_admission = admitted and positive_group and cert_positive
         scene_fold = int(abs(int(sh[nom].item())) % 3)
         conditional_regret = max(0.0, oracle_adv_raw - chosen_teacher_adv - tie_eps)
         conditional_hit = bool(chosen_teacher_adv >= oracle_adv_raw - tie_eps)
@@ -588,6 +623,9 @@ def _direct_policy_batch_stats(
             add(f"admitted_harmful_{name}", float(admitted_harmful))
             add(f"false_intervention_{name}", float(false_intervention))
             add(f"admission_count_{name}", float(admitted))
+            add(f"certificate_regret_sum_{name}", cert_regret)
+            add(f"certificate_top1_hit_{name}", float(cert_teacher_adv >= oracle_adv_raw - tie_eps))
+            add(f"certificate_rank_margin_sum_{name}", cert_rank_margin)
         if positive_group:
             for name in ("all", suffix, f"{suffix}_fold{scene_fold}"):
                 add(f"positive_count_{name}", 1.0)
@@ -595,6 +633,8 @@ def _direct_policy_batch_stats(
                 add(f"positive_top1_hit_{name}", float(acceptable))
                 add(f"positive_admission_hit_{name}", float(positive_admission))
                 add(f"positive_rank_margin_sum_{name}", rank_margin)
+                add(f"certificate_positive_regret_sum_{name}", cert_regret)
+                add(f"certificate_positive_top1_hit_{name}", float(cert_teacher_adv >= oracle_adv_raw - tie_eps))
     return stats
 
 
@@ -627,6 +667,9 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
             out[f"direct_harmful_switch_rate{tag}"] = stats.get(f"admitted_harmful_{suffix}", stats.get(f"harmful_switch_{suffix}", 0.0)) / count
             out[f"direct_false_intervention_rate{tag}"] = stats.get(f"false_intervention_{suffix}", 0.0) / count
             out[f"direct_raw_admission_rate{tag}"] = stats.get(f"admission_count_{suffix}", 0.0) / count
+            out[f"direct_certificate_group_regret_mean{tag}"] = stats.get(f"certificate_regret_sum_{suffix}", 0.0) / count
+            out[f"direct_certificate_group_top1_accuracy{tag}"] = stats.get(f"certificate_top1_hit_{suffix}", 0.0) / count
+            out[f"direct_certificate_rank_margin_mean{tag}"] = stats.get(f"certificate_rank_margin_sum_{suffix}", 0.0) / count
         conditional_count = stats.get(f"conditional_count_{suffix}", 0.0)
         if conditional_count > 0:
             conditional_regret = stats.get(f"conditional_regret_sum_{suffix}", 0.0) / conditional_count
@@ -646,6 +689,12 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
             out[f"direct_positive_group_top1_accuracy{tag}"] = top1
             out[f"direct_positive_admission_recall{tag}"] = recall
             out[f"direct_positive_rank_margin_mean{tag}"] = stats.get(f"positive_rank_margin_sum_{suffix}", 0.0) / pos_count
+            out[f"direct_certificate_positive_regret_mean{tag}"] = stats.get(
+                f"certificate_positive_regret_sum_{suffix}", stats.get(f"positive_regret_sum_{suffix}", 0.0)
+            ) / pos_count
+            out[f"direct_certificate_positive_top1_accuracy{tag}"] = stats.get(
+                f"certificate_positive_top1_hit_{suffix}", stats.get(f"positive_top1_hit_{suffix}", 0.0)
+            ) / pos_count
             if not conditional_preference:
                 out[f"direct_preference_risk_mean{tag}"] = (
                     regret
@@ -657,7 +706,7 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
             out[f"direct_group_count{tag}"] = float(count)
         if count > 0 and pos_count > 0:
             cert_risk = (
-                out[f"direct_positive_group_regret_mean{tag}"]
+                out[f"direct_certificate_positive_regret_mean{tag}"]
                 + harm_lambda * out[f"direct_harmful_switch_rate{tag}"]
                 + false_lambda * out[f"direct_false_intervention_rate{tag}"]
                 + miss_lambda * (1.0 - out[f"direct_positive_admission_recall{tag}"])

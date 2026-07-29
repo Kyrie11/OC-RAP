@@ -241,6 +241,8 @@ def calibrated_constrained_select(
     direct_value_harm_threshold: float = 1.0,
     direct_value_top1_only: bool = False,
     direct_value_policy_first_no_fallback: bool = False,
+    direct_value_proposal_top_k: int = 1,
+    direct_value_evidence_rerank_top_k: bool = False,
     direct_value_min_rank_margin: float = 0.0,
     direct_value_conditional_rank_margin: bool = False,
     direct_value_risk_controlled_admission: bool = False,
@@ -635,22 +637,41 @@ def calibrated_constrained_select(
         direct_actionable = physical_direct & evidence_ok
         if bool(direct_value_top1_only):
             raw_rank_advantage = direct_rank - direct_rank[ni]
-            rank_pool = physical_direct if bool(direct_value_policy_first_no_fallback) else direct_actionable
-            if bool(rank_pool.any()):
-                chosen = int(np.argmax(np.where(rank_pool, raw_rank_advantage, -np.inf)))
-                alternatives = [float(raw_rank_advantage[j]) for j in np.where(rank_pool)[0] if int(j) != chosen]
-                if not bool(direct_value_conditional_rank_margin):
-                    alternatives.append(0.0)
-                second_best = max(alternatives) if alternatives else float(raw_rank_advantage[chosen] - 1.0)
-                rank_margin = float(raw_rank_advantage[chosen] - second_best)
-                certified = bool(evidence_ok[chosen])
-                certified &= float(direct_value_min_rank_margin) <= 0.0 or rank_margin >= float(direct_value_min_rank_margin)
+            if bool(direct_value_evidence_rerank_top_k):
+                # v48.13 TERRA: freeze a preference top-k proposal first, then
+                # rerank only certified proposal members by ordinal evidence.
+                physical_idx = np.where(physical_direct)[0]
+                proposal_k = min(max(1, int(direct_value_proposal_top_k)), int(physical_idx.size))
                 keep = np.zeros((n,), dtype=bool)
-                if certified:
-                    keep[chosen] = True
+                if proposal_k > 0:
+                    ordered = physical_idx[np.argsort(-raw_rank_advantage[physical_idx], kind="stable")][:proposal_k]
+                    eligible = ordered[evidence_ok[ordered]]
+                    if eligible.size:
+                        evidence_score = direct_opportunity - direct_pred_harm
+                        chosen = int(eligible[np.argmax(evidence_score[eligible])])
+                        alternatives = [float(evidence_score[j]) for j in eligible if int(j) != chosen]
+                        second_best = max(alternatives) if alternatives else float(evidence_score[chosen] - 1.0)
+                        evidence_margin = float(evidence_score[chosen] - second_best)
+                        if float(direct_value_min_rank_margin) <= 0.0 or evidence_margin >= float(direct_value_min_rank_margin):
+                            keep[chosen] = True
                 direct_actionable = keep
             else:
-                direct_actionable[:] = False
+                rank_pool = physical_direct if bool(direct_value_policy_first_no_fallback) else direct_actionable
+                if bool(rank_pool.any()):
+                    chosen = int(np.argmax(np.where(rank_pool, raw_rank_advantage, -np.inf)))
+                    alternatives = [float(raw_rank_advantage[j]) for j in np.where(rank_pool)[0] if int(j) != chosen]
+                    if not bool(direct_value_conditional_rank_margin):
+                        alternatives.append(0.0)
+                    second_best = max(alternatives) if alternatives else float(raw_rank_advantage[chosen] - 1.0)
+                    rank_margin = float(raw_rank_advantage[chosen] - second_best)
+                    certified = bool(evidence_ok[chosen])
+                    certified &= float(direct_value_min_rank_margin) <= 0.0 or rank_margin >= float(direct_value_min_rank_margin)
+                    keep = np.zeros((n,), dtype=bool)
+                    if certified:
+                        keep[chosen] = True
+                    direct_actionable = keep
+                else:
+                    direct_actionable[:] = False
         direct_value_challenge = direct_actionable & (direct_advantage_lcb >= float(direct_value_min_advantage_lcb))
         if int(direct_value_max_consecutive) >= 0:
             prev_macro = str(previous_selected_macro or "").strip().lower()

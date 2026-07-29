@@ -1,0 +1,20 @@
+OC-RAP v48.13 TERRA local validation
+=====================================
+
+Date: 2026-07-29
+
+PASS: Full pytest suite: 157 passed.
+PASS: Python compileall for src, tools and tests.
+PASS: bash -n for:
+  - run_v48_two_gpu_fast_commands.txt
+  - scripts/train_ocrap_v48_13_terra.sh
+  - scripts/train_ocrap_v48_trac_sr.sh
+  - scripts/recalibrate_v48_13_multiseed.sh
+  - scripts/recalibrate_v48_13_on_dedicated_set.sh
+  - scripts/run_v48_13_parallel_ablations.sh
+PASS: New TERRA targeted tests: 5 passed.
+
+Warnings:
+- Existing PyTorch nested-tensor and requires-grad conversion warnings remain; no test failed.
+- Real WOMD, Waymax, A30 training, Natural-gate calibration and closed-loop evaluation were not run in this environment.
+- No claim is made that v48.13 already passes Natural gate or reaches CCF-A/internal closed-loop targets.

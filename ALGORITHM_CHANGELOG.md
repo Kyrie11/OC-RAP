@@ -1,3 +1,73 @@
+## v48.13 — OC-TRAC-TERRA (2026-07-29)
+
+### Evidence from the completed v48.12 TRIDENT experiment
+
+- Neither balanced nor precision passed the joint Near+Contact Natural gate, so no OC-RAP stress closed-loop result is attributable to v48.12.
+- Under the correct policy-first/no-fallback contract, three-seed recovery ranking remained asymmetric: Near group top-1 correlation was negative for both variants on average (about -0.054 balanced and -0.035 precision), while Contact was consistently positive but insufficient (about 0.077 balanced and 0.101 precision, versus the internal 0.20 readiness target).
+- Contact benefit detection remained strong (candidate-positive AUC about 0.82 and policy-top1 benefit AUC near 0.80), but harmful-vs-dead evidence did not transfer across scenes. Fit rules with positive mean exact-teacher advantage collapsed on verify to high harmful rates and negative mean advantage.
+- Near near-miss rules were sparse but sometimes safe: selected groups could have positive mean exact-teacher advantage and no harmful actions, yet support, Wilson precision lower bounds, recall, and cross-seed stability were below the Natural gate.
+- External baselines establish the eventual closed-loop bar. Safe is dominated by nominal/log replay non-intervention. Near predictive-safety filtering offers a strong DRS/FRA/ODG/NUP trade-off. Contact restoration/MPC baselines recover more aggressively but pay substantial intervention and NUP cost. v48.12 has no gate-authorized closed-loop result and therefore has not surpassed these baselines.
+
+### Causal conclusions from the complete v48.12 ablation
+
+1. **The standalone recovery-set tournament remains useful but exact winner supervision is underidentified.** Candidate rank correlation is positive, especially in Contact, but it does not reliably become exact top-1. The v48.12 all-pairs teacher-gap loss degraded Near and did not materially improve Contact.
+2. **Bipolar cross-group evidence is not a sufficient harm solution.** It improved some Near harm AUC values, but Contact harmful-vs-dead discrimination remained near random and selected verify actions retained negative average teacher advantage. Cross-scene pairwise losses can exploit scene severity and are noisy under minibatch sampling.
+3. **Opportunity-normalized macro support is an engineering-correct certificate, not the current bottleneck.** Precision/harm transfer fails before macro excess becomes decisive.
+4. **Threshold relaxation remains contraindicated.** Natural-gate rejection is consistent with the observed harmful verify actions.
+
+### Engineering defects fixed before v48.13 attribution
+
+1. **Parent-controller policy-contract loss.** The staged child process exported policy-first/no-fallback internally, but the parent calibration process reverted to default false values. The v48.12 main run therefore calibrated a different selection contract than its multi-seed run. Every staged variant now writes `POLICY_CONTRACT.env`, and the controller sources it before calibration.
+2. **Checkpoint-selection/deployment mismatch.** Stage-E early stopping evaluated only the tournament rank top-1, while TERRA deploys evidence reranking within a frozen top-k proposal. Validation now uses the same proposal and evidence-reranking candidate, including certificate regret, harm, false intervention, recall, and evidence margin.
+3. **Calibration/runtime contract propagation.** Proposal size and evidence-rerank semantics are now stored in calibration JSON selector overrides and consumed by offline and closed-loop selectors.
+4. **Dedicated and multi-seed recalibration parity.** Both scripts source the immutable per-variant contract and use the same support, conditional-harm, macro, and proposal settings as the main run.
+5. **Legacy packaging regression.** The missing historical v47 orchestration file required by the existing regression suite was restored; all historical tests now execute.
+
+### New algorithmic contribution: TERRA
+
+**TERRA = Top-k Evidence-Reranked Recovery with Abstention.**
+
+1. **Set-valued recovery proposal**
+   - Retains the independent permutation-equivariant recovery tournament.
+   - Replaces noisy all-pairs exact-winner supervision with a differentiable top-k inclusion objective: at least one exact-teacher acceptable recovery must enter the proposal.
+   - Proposal quality is measured on positive-opportunity groups by oracle-best hit rate and any-positive hit rate, separately from exact top-1 correlation.
+
+2. **Proposal-distribution ordinal evidence**
+   - Freezes the tournament and trains regime-specific ordered harmful/dead/beneficial evidence on every member of the actual top-k proposal, with rank-decayed weights.
+   - This removes the v48.12 mismatch in which only rank-1 evidence was trained although useful or harmful runner-up candidates determined failure analysis.
+
+3. **Same-group counterfactual evidence**
+   - Adds beneficial-vs-nonbeneficial and harmful-vs-nonharmful comparisons only within the same scene-time proposal.
+   - Shared scene severity cancels in these comparisons, reducing the train/dev shortcut that harmed Contact cross-scene transfer.
+   - The v48.12 cross-group bipolar pair loss is disabled in the TERRA main experiment.
+
+4. **Evidence reranking with abstention**
+   - Runtime order is: physical recovery candidates → frozen rank top-k proposal → evidence thresholds → choose the highest evidence member within the proposal → abstain if none passes.
+   - This is not an out-of-distribution runner-up fallback because Stage E explicitly trains all proposal members.
+   - The same evidence score and margin are used by checkpoint selection, calibration, offline evaluation, and closed loop.
+
+### Required layered validation
+
+1. **Proposal gate:** on positive-opportunity groups, proposal oracle-best hit rate should be at least 0.75 and any-positive hit rate at least 0.90 in Near and Contact. Exact top-1 remains diagnostic rather than the sole Stage-P success condition.
+2. **Proposal-evidence gate:** evidence-reranked proposal top-1 benefit AUC should reach at least 0.70 Near / 0.75 Contact, harm AUC at least 0.60, and evidence/teacher correlation at least 0.10.
+3. **Natural gate:** only non-zero held-out coverage with positive mean exact-teacher advantage, unchanged precision/harm confidence bounds, recall/support, and macro-excess constraints may authorize stress closed loop.
+4. **Multi-seed:** run 4801/4802/4803 only on an immutable checkpoint after proposal/evidence diagnostics are promising.
+5. **Closed-loop comparison:** Safe must remain nominal-noninferior; Near must improve safety/recovery relative to predictive filtering without excessive intervention; Contact must approach restoration/MPC recovery while materially improving intervention and NUP trade-offs.
+
+### Required ablations and GPU scheduling
+
+- A: top-1 contract baseline.
+- B: top-k proposal training only, deployment remains top-1.
+- C: proposal-distribution evidence and evidence reranking on the old tournament.
+- D: full TERRA.
+
+The v48.13 scheduler runs all four groups concurrently per variant wave. A/C share GPU0 and B/D share GPU1, permitting two approximately 1-GB jobs per A30 while preserving separate processes and outputs. Balanced and precision waves remain sequential to limit host I/O contention.
+
+### Non-repetition note
+
+Do not repeat v48.12 all-pairs recovery ordering, cross-group bipolar evidence as the main harm objective, threshold relaxation, absolute macro caps, inherited value residual ranking, or untrained runner-up fallback. TERRA changes the identifiable policy object from a noisy exact winner to a small recovery proposal and aligns evidence training with every candidate that deployment may execute.
+
+
 ## v48.12 — OC-TRAC-TRIDENT (2026-07-28)
 
 ### Evidence from the completed v48.11 CASTER experiment

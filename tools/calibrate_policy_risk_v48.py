@@ -129,6 +129,8 @@ def _top1(
     *,
     conditional_rank_margin: bool = False,
     policy_first_no_fallback: bool = False,
+    proposal_top_k: int = 1,
+    evidence_rerank_top_k: bool = False,
 ) -> list[dict[str, Any]]:
     """Select one recovery candidate per group.
 
@@ -142,7 +144,24 @@ def _top1(
         physical = [r for r in g["pairs"] if r["macro"] in supported_macros]
         if not physical:
             continue
-        if policy_first_no_fallback:
+        if evidence_rerank_top_k:
+            # v48.13 TERRA: freeze a rank-based proposal, then permit evidence
+            # reranking only inside that proposal.  Stage E is trained on this
+            # exact distribution, so selecting a certified runner-up is no longer
+            # an out-of-distribution fallback.
+            ordered = sorted(physical, key=lambda r: (-r.get("rank_adv", r["pred_adv"]), r["candidate"]))
+            proposal = ordered[: min(max(1, int(proposal_top_k)), len(ordered))]
+            eligible = [r for r in proposal if r["opportunity"] >= opp_thr and r["harm"] <= harm_thr]
+            if not eligible:
+                continue
+            best = sorted(eligible, key=lambda r: (-float(r["pred_adv"]), int(r["candidate"])))[0]
+            alternatives = [float(r["pred_adv"]) for r in eligible if r is not best]
+            second = max(alternatives) if alternatives else float(best["pred_adv"] - 1.0)
+            rank_margin = float(best["pred_adv"] - second)
+            best = dict(best)
+            best["proposal_rank"] = 1 + proposal.index(next(r for r in proposal if int(r["candidate"]) == int(best["candidate"])))
+            best["proposal_size"] = len(proposal)
+        elif policy_first_no_fallback:
             best = sorted(physical, key=lambda r: (-r.get("rank_adv", r["pred_adv"]), r["candidate"]))[0]
             alternatives = [float(r.get("rank_adv", r["pred_adv"])) for r in physical if r is not best]
             if not conditional_rank_margin:
@@ -272,7 +291,7 @@ def _fit(
     frontier: list[dict[str, Any]] = []
     for opp_thr in opp_grid:
         for harm_thr in harm_grid:
-            top1 = _top1(groups, opp_thr, harm_thr, supported_macros, conditional_rank_margin=args.conditional_recovery_ranking, policy_first_no_fallback=args.policy_first_no_fallback)
+            top1 = _top1(groups, opp_thr, harm_thr, supported_macros, conditional_rank_margin=args.conditional_recovery_ranking, policy_first_no_fallback=args.policy_first_no_fallback, proposal_top_k=args.proposal_top_k, evidence_rerank_top_k=args.evidence_rerank_top_k)
             score_grid = _grid(
                 [r["pred_adv"] for r in top1],
                 minimum=args.min_score_advantage,
@@ -418,6 +437,8 @@ def main() -> int:
     ap.add_argument("--min-rank-margin", type=float, default=0.0)
     ap.add_argument("--conditional-recovery-ranking", action="store_true", help="Compute rank margins only against the second recovery candidate; nominal admission is handled by the evidence gate.")
     ap.add_argument("--policy-first-no-fallback", action="store_true", help="Choose preference top-1 before evidence gating; abstain if it is uncertified instead of falling through to a runner-up.")
+    ap.add_argument("--proposal-top-k", type=int, default=1, help="Number of frozen preference candidates exposed to the evidence stage.")
+    ap.add_argument("--evidence-rerank-top-k", action="store_true", help="Rerank certified candidates only inside the frozen preference proposal.")
     ap.add_argument("--preference-tie-epsilon-near", type=float, default=0.025)
     ap.add_argument("--preference-tie-epsilon-contact", type=float, default=0.010)
     args = ap.parse_args()
@@ -567,8 +588,8 @@ def main() -> int:
         all_top1: list[dict[str, Any]] = []
         score_thr = float("inf")
     else:
-        verify_top1 = _top1(verify, rule["opportunity_threshold"], rule["harm_threshold"], supported_macros, conditional_rank_margin=args.conditional_recovery_ranking, policy_first_no_fallback=args.policy_first_no_fallback)
-        all_top1 = _top1(groups, rule["opportunity_threshold"], rule["harm_threshold"], supported_macros, conditional_rank_margin=args.conditional_recovery_ranking, policy_first_no_fallback=args.policy_first_no_fallback)
+        verify_top1 = _top1(verify, rule["opportunity_threshold"], rule["harm_threshold"], supported_macros, conditional_rank_margin=args.conditional_recovery_ranking, policy_first_no_fallback=args.policy_first_no_fallback, proposal_top_k=args.proposal_top_k, evidence_rerank_top_k=args.evidence_rerank_top_k)
+        all_top1 = _top1(groups, rule["opportunity_threshold"], rule["harm_threshold"], supported_macros, conditional_rank_margin=args.conditional_recovery_ranking, policy_first_no_fallback=args.policy_first_no_fallback, proposal_top_k=args.proposal_top_k, evidence_rerank_top_k=args.evidence_rerank_top_k)
         score_thr = rule["score_threshold"]
     rank_margin_thr = float("inf") if rule is None else rule["rank_margin_threshold"]
     verify_metrics = _metrics(verify, verify_top1, score_thr, rank_margin_thr, args.positive_gain, args.negative_gain)
@@ -580,6 +601,8 @@ def main() -> int:
             float(fit_row["harm_threshold"]), supported_macros,
             conditional_rank_margin=args.conditional_recovery_ranking,
             policy_first_no_fallback=args.policy_first_no_fallback,
+            proposal_top_k=args.proposal_top_k,
+            evidence_rerank_top_k=args.evidence_rerank_top_k,
         )
         vm = _metrics(
             verify, vtop, float(fit_row["score_threshold"]),
@@ -631,6 +654,65 @@ def main() -> int:
             top1_strict_labels.append(chosen["candidate"] == oracle["candidate"])
             top1_correct_labels.append(chosen["teacher_adv"] >= oracle["teacher_adv"] - tie_epsilon)
             top1_rank_margins.append(chosen["rank_margin"])
+    # Proposal quality is reported separately from exact top-1.  TERRA can
+    # improve closed-loop decisions even when the teacher-best recovery is only
+    # identifiable as a small set.
+    proposal_best_hits = 0
+    proposal_positive_hits = 0
+    proposal_groups = 0
+    proposal_positive_groups = 0
+    proposal_best_hits_positive = 0
+    proposal_positive_hits_positive = 0
+    proposal_evidence_top1: list[dict[str, Any]] = []
+    proposal_k = max(1, int(args.proposal_top_k))
+    for g in groups:
+        deployable_pairs = [r for r in g.get("pairs", []) if int(r.get("macro", -1)) in supported_macros]
+        ordered_pairs = sorted(deployable_pairs, key=lambda r: (-float(r["rank_adv"]), int(r["candidate"])))
+        if not ordered_pairs:
+            continue
+        proposal = ordered_pairs[: min(proposal_k, len(ordered_pairs))]
+        oracle = max(ordered_pairs, key=lambda r: float(r["teacher_adv"]))
+        proposal_groups += 1
+        proposal_best_hits += int(any(int(r["candidate"]) == int(oracle["candidate"]) for r in proposal))
+        proposal_positive_hits += int(any(float(r["teacher_adv"]) >= args.positive_gain for r in proposal))
+        if float(oracle["teacher_adv"]) >= args.positive_gain:
+            proposal_positive_groups += 1
+            proposal_best_hits_positive += int(any(int(r["candidate"]) == int(oracle["candidate"]) for r in proposal))
+            proposal_positive_hits_positive += int(any(float(r["teacher_adv"]) >= args.positive_gain for r in proposal))
+        evidence_best = sorted(
+            proposal,
+            key=lambda r: (-float(r["pred_adv"]), int(r["candidate"])),
+        )[0]
+        evidence_row = dict(evidence_best)
+        evidence_row.update(scene=g["scene"], time=g["time"], fold=g["fold"], oracle_best_teacher_adv=g["oracle_best_teacher_adv"])
+        proposal_evidence_top1.append(evidence_row)
+    proposal_best_hit_rate = proposal_best_hits / proposal_groups if proposal_groups else None
+    proposal_positive_hit_rate = proposal_positive_hits / proposal_groups if proposal_groups else None
+    proposal_best_hit_rate_positive = (
+        proposal_best_hits_positive / proposal_positive_groups if proposal_positive_groups else None
+    )
+    proposal_positive_hit_rate_positive = (
+        proposal_positive_hits_positive / proposal_positive_groups if proposal_positive_groups else None
+    )
+    proposal_evidence_top1_corr = (
+        float(np.corrcoef(
+            [float(r["pred_adv"]) for r in proposal_evidence_top1],
+            [float(r["teacher_adv"]) for r in proposal_evidence_top1],
+        )[0, 1])
+        if len(proposal_evidence_top1) > 1
+        and np.std([float(r["pred_adv"]) for r in proposal_evidence_top1]) > 1.0e-12
+        and np.std([float(r["teacher_adv"]) for r in proposal_evidence_top1]) > 1.0e-12
+        else None
+    )
+    proposal_evidence_top1_benefit_auc = _auc(
+        [float(r["teacher_adv"]) >= args.positive_gain for r in proposal_evidence_top1],
+        [float(r["pred_adv"]) for r in proposal_evidence_top1],
+    )
+    proposal_evidence_top1_harm_auc = _auc(
+        [float(r["teacher_adv"]) <= -args.negative_gain for r in proposal_evidence_top1],
+        [float(r["harm"]) for r in proposal_evidence_top1],
+    )
+
     top1_pred = [r["rank_adv"] for r in unconstrained_top1]
     top1_teacher = [r["teacher_adv"] for r in unconstrained_top1]
     top1_corr = float(np.corrcoef(top1_pred, top1_teacher)[0, 1]) if len(top1_pred) > 1 and np.std(top1_pred) > 1e-12 and np.std(top1_teacher) > 1e-12 else None
@@ -700,7 +782,11 @@ def main() -> int:
         "dataset": args.dataset,
         "checkpoint": args.checkpoint,
         "valid_for_deployment": valid,
-        "selection_rule": ("physical -> preference top1 -> evidence -> value challenge" if args.policy_first_no_fallback else "physical -> gain-distribution opportunity/harm -> preference top1 -> value challenge"),
+        "selection_rule": (
+            "physical -> preference top-k proposal -> evidence rerank -> value challenge"
+            if args.evidence_rerank_top_k else
+            ("physical -> preference top1 -> evidence -> value challenge" if args.policy_first_no_fallback else "physical -> gain-distribution opportunity/harm -> preference top1 -> value challenge")
+        ),
         "risk_source": args.risk_source,
         "conformal": conformal,
         "rule": rule,
@@ -711,6 +797,8 @@ def main() -> int:
             "direct_value_additive_q": (0.0 if conformal is None else conformal["overprediction_quantile"]),
             "direct_value_top1_only": True,
             "direct_value_policy_first_no_fallback": bool(args.policy_first_no_fallback),
+            "direct_value_proposal_top_k": int(args.proposal_top_k),
+            "direct_value_evidence_rerank_top_k": bool(args.evidence_rerank_top_k),
             "direct_value_risk_controlled_admission": True,
             "direct_value_risk_source": args.risk_source,
             "direct_value_positive_gain": args.positive_gain,
@@ -720,6 +808,8 @@ def main() -> int:
             "direct_value_min_advantage_lcb": rule["score_threshold"],
             "direct_value_min_rank_margin": rule["rank_margin_threshold"],
             "direct_value_conditional_rank_margin": bool(args.conditional_recovery_ranking),
+            "proposal_top_k": int(args.proposal_top_k),
+            "evidence_rerank_top_k": bool(args.evidence_rerank_top_k),
             "direct_value_conformal_overprediction_quantile": (None if conformal is None else conformal["overprediction_quantile"]),
             "direct_value_conformal_underprediction_quantile": (None if conformal is None else conformal["underprediction_quantile"]),
             "direct_value_conformal_temperature": (None if conformal is None else conformal["temperature"]),
@@ -739,6 +829,15 @@ def main() -> int:
         "unconstrained_group_top1_correlation": top1_corr,
         "policy_top1_positive_auc": policy_top1_positive_auc,
         "policy_top1_harm_auc": policy_top1_harm_auc,
+        "proposal_top_k": int(args.proposal_top_k),
+        "proposal_oracle_best_hit_rate": proposal_best_hit_rate,
+        "proposal_positive_hit_rate": proposal_positive_hit_rate,
+        "proposal_positive_group_count": int(proposal_positive_groups),
+        "proposal_oracle_best_hit_rate_positive_groups": proposal_best_hit_rate_positive,
+        "proposal_any_positive_hit_rate_positive_groups": proposal_positive_hit_rate_positive,
+        "proposal_evidence_top1_correlation": proposal_evidence_top1_corr,
+        "proposal_evidence_top1_positive_auc": proposal_evidence_top1_benefit_auc,
+        "proposal_evidence_top1_harm_auc": proposal_evidence_top1_harm_auc,
         "policy_top1_gain_mae": policy_top1_gain_mae,
         "unconstrained_recovery_switch_rate": (len(recovery_switches) / len(unconstrained_top1) if unconstrained_top1 else None),
         "nonpositive_group_false_switch_rate": (len(nonpositive_false_switches) / len(nonpositive_groups) if nonpositive_groups else None),

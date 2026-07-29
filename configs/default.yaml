@@ -399,12 +399,39 @@ training:
   direct_value_preference_conditional_pairwise_weight: 0.0
   direct_value_preference_conditional_pairwise_min_gap: 0.01
   direct_value_preference_conditional_pairwise_margin: 0.02
+  # v48.13 TERRA: train a set-valued top-k recovery proposal instead of a noisy exact winner.
+  direct_value_preference_proposal_topk_weight: 0.0
+  direct_value_preference_proposal_topk: 3
+  direct_value_preference_proposal_margin: 0.02
+  # Evidence is trained on every member of the frozen proposal set and compared
+  # within the same scene-time group to suppress scene-severity shortcuts.
+  direct_value_ordinal_evidence_proposal_topk_weight: 0.0
+  direct_value_ordinal_evidence_proposal_topk: 3
+  direct_value_ordinal_evidence_proposal_rank_decay: 0.75
+  direct_value_ordinal_evidence_intragroup_benefit_weight: 0.0
+  direct_value_ordinal_evidence_intragroup_harm_weight: 0.0
+  direct_value_ordinal_evidence_intragroup_margin: 0.25
   direct_value_ordinal_evidence_pairwise_benefit_weight: 0.0
   direct_value_ordinal_evidence_pairwise_harm_weight: 0.0
   direct_value_ordinal_evidence_pairwise_margin: 0.25
   direct_value_delta_nll_weight: 0.0
   direct_policy_metric_harm_weight: 0.35
   direct_policy_metric_false_intervention_weight: 0.15
+  direct_policy_metric_missed_opportunity_weight: 0.25
+  direct_policy_metric_rank_miss_weight: 0.10
+  direct_policy_metric_rank_harm_weight: 0.25
+  direct_policy_metric_rank_false_switch_weight: 0.15
+  direct_policy_metric_min_fold_positive: 6
+  direct_policy_metric_robust_top_k: 2
+  direct_policy_metric_opportunity_threshold: 0.65
+  direct_policy_metric_harm_threshold: 0.30
+  direct_policy_metric_rank_margin_threshold: 0.02
+  direct_policy_metric_min_delta_mean: 0.0
+  direct_policy_metric_risk_source: gaussian_delta
+  # v48.13 TERRA: checkpoint selection follows the same top-k proposal and
+  # evidence-reranking contract as calibration and runtime.
+  direct_policy_metric_proposal_top_k: 1
+  direct_policy_metric_evidence_rerank_top_k: false
 loss_weights:
   assign: 1.0
   sig: 0.5
