@@ -109,6 +109,9 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set model.direct_recovery_delta_dropout="${DELTA_DROPOUT:-0.05}" \
   --set model.direct_recovery_delta_initial_logvar="${DELTA_INITIAL_LOGVAR:--4.605170186}" \
   --set model.direct_recovery_delta_mode="${DELTA_MODE:-gaussian}" \
+  --set model.direct_recovery_evidence_calibrator="${EVIDENCE_CALIBRATOR_ENABLED:-false}" \
+  --set model.direct_recovery_evidence_calibrator_hidden="${EVIDENCE_CALIBRATOR_HIDDEN:-8}" \
+  --set model.direct_recovery_evidence_calibrator_scale="${EVIDENCE_CALIBRATOR_SCALE:-0.25}" \
   --set loss_weights.dep=0 --set loss_weights.orc=0 --set loss_weights.assign=0 \
   --set loss_weights.sig=0 --set loss_weights.margin=0 --set loss_weights.obs=0 \
   --set loss_weights.anti_oracle=0 --set loss_weights.artifact_gap=0 \

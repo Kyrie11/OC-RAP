@@ -48,7 +48,7 @@ run_task(){
         bash scripts/adapt_ocrap_v48_14_prism_variant.sh >"$out/logs/adapt.log" 2>&1
   fi
   set +e
-  OUTPUTDIR="$out" CAL_SAFE="$CAL_SAFE" CERT_NEAR="$CERT_NEAR" CERT_CONTACT="$CERT_CONTACT" GPU0="$gpu" GPU1="$gpu" \
+  OUTPUTDIR="$out" CAL_SAFE="$CAL_SAFE" CERT_NEAR="$CERT_NEAR" CERT_CONTACT="$CERT_CONTACT" GPU0="$gpu" GPU1="$gpu" VARIANTS="$variant" \
     bash scripts/calibrate_v48_14_certificate_pool.sh >"$out/logs/calibrate.log" 2>&1
   local rc=$?; set -e
   if [[ "$rc" != 0 && "$rc" != 20 ]]; then

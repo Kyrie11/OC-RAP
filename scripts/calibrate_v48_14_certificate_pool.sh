@@ -20,7 +20,9 @@ mkdir -p "$OUTPUTDIR/logs"
 : > "$OUTPUTDIR/logs/v48_14_certificate_status.log"
 
 calibrate_variant() {
-  local variant="$1" gpu="$2" run="$OUTPUTDIR/candidates/$variant"
+  local variant="$1"
+  local gpu="$2"
+  local run="$OUTPUTDIR/candidates/$variant"
   local ckpt="$run/model_v48_trac_sr/best.pt"
   [[ -f "$ckpt" ]] || { echo "skip missing variant $variant"; return 0; }
   local contract="$run/POLICY_CONTRACT.env"
@@ -106,14 +108,21 @@ PY
   ln -s "$(realpath --relative-to="$view" "$contract")" "$view/POLICY_CONTRACT.env"
 }
 
-calibrate_variant balanced "$GPU0" & P0=$!
-calibrate_variant precision "$GPU1" & P1=$!
-set +e; wait "$P0"; S0=$?; wait "$P1"; S1=$?; set -e
+VARIANTS="${VARIANTS:-balanced,precision}"
+S0=0; S1=0; P0=""; P1=""
+if [[ ",$VARIANTS," == *,balanced,* ]]; then calibrate_variant balanced "$GPU0" & P0=$!; fi
+if [[ ",$VARIANTS," == *,precision,* ]]; then calibrate_variant precision "$GPU1" & P1=$!; fi
+set +e
+if [[ -n "$P0" ]]; then wait "$P0"; S0=$?; fi
+if [[ -n "$P1" ]]; then wait "$P1"; S1=$?; fi
+set -e
 
-python - "$OUTPUTDIR" "$S0" "$S1" <<'PY'
+python - "$OUTPUTDIR" "$S0" "$S1" "$VARIANTS" <<'PY'
 import json,pathlib,sys,time
 root=pathlib.Path(sys.argv[1]); report={}; valid=[]
+requested={x.strip() for x in sys.argv[4].split(',') if x.strip()}
 for name in ('balanced','precision'):
+    if name not in requested: continue
     run=root/'candidates'/name; docs=[]; ok=True; report[name]={}
     for bucket in ('near','contact'):
         p=run/'calibration'/f'direct_value_risk_{bucket}_v48.json'
@@ -135,6 +144,15 @@ status={'event':'v48_14_certificate_candidate_selection','created_unix':time.tim
         'controller_exit_codes':{'balanced':int(sys.argv[2]),'precision':int(sys.argv[3])},
         'valid_candidates':[x[3] for x in valid],'candidates':report,'test_roots_read':False}
 (root/'dedicated_recalibration_status.json').write_text(json.dumps(status,ensure_ascii=False,indent=2)+'\n')
+requested_codes=[int(sys.argv[2]) if 'balanced' in requested else 0, int(sys.argv[3]) if 'precision' in requested else 0]
+artifact_failure=any(code not in (0,20) for code in requested_codes) or any(
+    any('missing' in bucket_doc for bucket_doc in variant_doc.values())
+    for variant_doc in report.values()
+)
+if artifact_failure:
+    (root/'CALIBRATION_FAILED.json').write_text(json.dumps(status,ensure_ascii=False,indent=2)+'\n')
+    print(json.dumps(status,ensure_ascii=False,indent=2))
+    raise SystemExit(30)
 if not valid:
     (root/'GATE_FAILED.json').write_text(json.dumps(status,ensure_ascii=False,indent=2)+'\n')
     print(json.dumps(status,ensure_ascii=False,indent=2))

@@ -756,3 +756,87 @@ See `ALGORITHM_CHANGELOG_V48.md`. Key items already tried: tri-state supervision
 - Added an explicit `SEED` override to the v48.2 training command so multi-seed publication experiments are reproducible rather than relying on an implicit config default.
 - Added normalized L2-SP encoder anchoring during direct-only fine-tuning (`training.encoder_anchor_weight`, default 0.02). This limits drift of the shared representation away from the loaded OC-MERO/root-margin model while still allowing policy-level adaptation; without it, zero-weight root/margin losses and an unfrozen encoder could silently invalidate the pretrained core heads.
 - Added an output-root `flock` guard to the dedicated calibration controller. The two commands in the supplied request are identical; launching both concurrently against the same shard/log paths can corrupt or race the build, so v48.2 rejects a second controller.
+
+## v48.15 — OC-TRAC-PRISM-CC (2026-07-29)
+
+### Evidence and correction of the v48.14 conclusion
+
+The uploaded v48.14 ablation package did **not** evaluate the Natural gate.  Every
+certificate worker terminated at shell line 23 with `variant: unbound variable`:
+`local variant="$1" gpu="$2" run="$OUTPUTDIR/candidates/$variant"` expanded
+`$variant` before the local assignment under `set -u`.  The controller then
+misclassified missing risk JSONs as `GATE_FAILED.json`.  Consequently, absence of
+`NEXT_COMMANDS.txt` in that run means *calibration artifact failure*, not a valid
+algorithmic gate rejection.  v48.15 separates exit code 30 / `CALIBRATION_FAILED.json`
+from exit code 20 / `GATE_FAILED.json` and provides a no-retraining recovery script.
+
+The Safe paired package also had zero matched calibration targets because the runner
+forced `closed_loop.bucket_split=test` on `calibration_safe`; it silently fell back to
+eight arbitrary WOMD scenes.  v48.15 removes the forced split, requires non-empty
+bucket targets, disables stale resume by default in the Safe wrapper, and emits
+scene-level jerk/yaw-rate p95.  The uploaded 8-scene Safe result is therefore a
+nominal-lock smoke test, not a calibration-safe non-inferiority result.
+
+### v48.14 algorithm evidence that remains valid
+
+- The dedicated scene-disjoint adaptation/dev/certificate protocol is retained.
+- Target-domain adaptation reduced harmful-switch/false-intervention diagnostics on
+  adaptation dev, but the full `direct_delta_adapters` update trained roughly 0.39M
+  parameters from only 16 deployable-positive Near groups (10 scenes) and 44 Contact
+  groups (17 scenes).  Positive admission recall collapsed to 0–0.33 Near and
+  0–0.036 Contact, indicating overfit/over-conservative forgetting rather than a
+  calibrated deployable certificate.
+- Dynamic hard-harm mining reduced some false-safe diagnostics but further suppressed
+  positive recall.  It remains a moderate auxiliary weight, not the main adaptation
+  mechanism.
+- The same-group counterfactual term produced no consistent gain over hard-harm-only
+  adaptation and is disabled in the v48.15 main experiment.
+
+### New algorithm: PRISM-CC
+
+**PRISM-CC = Proposal-aligned Risk adaptation with Independent Scene-disjoint
+certification and low-Capacity Correction.**
+
+1. **Frozen proposal and frozen source evidence.**  The high-recall v48.13 top-k
+   recovery proposal and the source ordinal-evidence experts are both frozen.
+2. **Tiny regime-specific residual evidence calibrator.**  A zero-initialized MLP
+   consumes the frozen source evidence center/width and frozen policy score/gap, then
+   produces a bounded residual correction.  The two regime calibrators contain 132 state parameters in total, versus approximately 392k trainable parameters
+   in v48.14.  Initial predictions exactly reproduce the source checkpoint.
+3. **Balanced three-state correction.**  Ordered harmful/dead-zone/beneficial NLL is
+   retained, but hard-harm amplification is reduced and missed-benefit importance in
+   checkpoint selection is increased to avoid an always-abstain optimum.
+4. **Independent certificate pool unchanged.**  Natural-gate thresholds, scene
+   disjointness, Wilson bounds, harmful-selection bounds, support requirements, and
+   opportunity-normalized macro checks are not relaxed.
+
+### Engineering and attribution changes
+
+- Fixed the certificate worker local-variable expansion bug.
+- Added `VARIANTS` filtering so a single-variant ablation task does not launch or report
+  a nonexistent sibling variant.
+- Distinguish calibration/controller failure from a genuine Natural-gate rejection.
+- Added `scripts/recover_v48_14_certificate_pool.sh` to evaluate already-trained v48.14
+  checkpoints without retraining.
+- Added strict Safe target matching and removed arbitrary-scene fallback.
+- Added scene-level jerk and yaw-rate p95 to Safe paired output.
+- Added `scripts/run_v48_15_parallel_ablations.sh`; four ablations run concurrently per
+  variant wave, two processes per A30 as supported by the measured memory footprint.
+- Added layered `tools/check_v48_15_learning_gates.py` diagnostics.
+
+### Required v48.15 ablations
+
+1. `A_source_dedicated`: fixed source checkpoint, dedicated recalibration only.
+2. `B_full_adapter_prism`: v48.14 high-capacity target adaptation.
+3. `C_tiny_calibrator`: low-capacity residual correction without hard mining.
+4. `D_full_prism_cc`: low-capacity correction with balanced hard-harm/missed-benefit
+   supervision.
+
+### Non-repetition and stopping rule
+
+Do not repeat all-pairs recovery ranking, shared NASC, minibatch GroupDRO, continuous
+relative-gain regression, broad conformal radii, strong hard-harm weighting, or
+full-adapter target adaptation unless new evidence invalidates the prior conclusions.
+First recover and evaluate the already-trained v48.14 certificates.  Run stress
+closed-loop only when the controller creates `NEXT_COMMANDS.txt`; no gate threshold is
+lowered to force that file to appear.

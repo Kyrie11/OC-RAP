@@ -293,6 +293,9 @@ model:
   direct_recovery_delta_policy_features: false
   direct_recovery_delta_hidden: 128
   direct_recovery_delta_dropout: 0.05
+  direct_recovery_evidence_calibrator: false
+  direct_recovery_evidence_calibrator_hidden: 8
+  direct_recovery_evidence_calibrator_scale: 0.25
 dataset_quality:
   # Off by default for broad natural-WOMD sweeps. Enable only for artifact/stress
   # datasets that are intended to support FRA, ODG, and anti-oracle claims.
@@ -477,6 +480,8 @@ closed_loop:
   # starts only from scene_id/time_index pairs mined into those regime datasets.
   bucket_dataset: null
   bucket_split: ''
+  require_bucket_targets: false
+  metric_dt_s: 0.1
   max_bucket_targets: 0
   max_targets_per_scene: 1
   start_time_index: null

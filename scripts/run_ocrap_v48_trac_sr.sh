@@ -870,7 +870,8 @@ run_safe_closed_loop_one() {
     --set closed_loop.resume_fsync="$CL_RESUME_FSYNC" \
     --set closed_loop.save_partial=true \
     --set closed_loop.bucket_dataset="$SAFE_TEST" \
-    --set closed_loop.bucket_split=test \
+    --set closed_loop.bucket_split="${SAFE_BUCKET_SPLIT:-}" \
+    --set closed_loop.require_bucket_targets=true \
     --set closed_loop.max_bucket_targets=${SAFE_MAX_TARGETS:-80} \
     --set closed_loop.max_targets_per_scene=1 \
     --set closed_loop.max_rollouts=${SAFE_MAX_ROLLOUTS:-32} \

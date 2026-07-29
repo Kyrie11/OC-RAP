@@ -1451,6 +1451,20 @@ def _rollout_one_scene(
     clearance_vals = [float(m["min_clearance_m"]) for m in metric_trace if "min_clearance_m" in m and np.isfinite(float(m["min_clearance_m"]))]
     ttc_vals = [float(m["ttc_s"]) for m in metric_trace if "ttc_s" in m and np.isfinite(float(m["ttc_s"]))]
     speed_vals = [float(m["ego_speed_mps"]) for m in metric_trace if "ego_speed_mps" in m and np.isfinite(float(m["ego_speed_mps"]))]
+    yaw_vals = [float(m["ego_yaw_rad"]) for m in metric_trace if "ego_yaw_rad" in m and np.isfinite(float(m["ego_yaw_rad"]))]
+    # WOMD/Waymax motion states are sampled at 10 Hz by default.  Make the
+    # interval configurable so the Safe paired report can publish comfort and
+    # heading-rate statistics instead of silently omitting them.
+    metric_dt_s = float(cl_cfg.get("metric_dt_s", 0.1) or 0.1)
+    metric_dt_s = max(metric_dt_s, 1.0e-3)
+    if len(speed_vals) >= 3:
+        acceleration = np.diff(np.asarray(speed_vals, dtype=np.float64)) / metric_dt_s
+        jerk = np.diff(acceleration) / metric_dt_s
+        metric_summary["jerk_p95"] = float(np.quantile(np.abs(jerk), 0.95)) if jerk.size else 0.0
+    if len(yaw_vals) >= 2:
+        yaw_unwrapped = np.unwrap(np.asarray(yaw_vals, dtype=np.float64))
+        yaw_rate = np.diff(yaw_unwrapped) / metric_dt_s
+        metric_summary["yaw_rate_p95"] = float(np.quantile(np.abs(yaw_rate), 0.95)) if yaw_rate.size else 0.0
     overlap_flags = [bool(float(m.get("overlap", 0.0)) > 0.0) for m in metric_trace]
     overlap_episode_count = int(sum(flag and (i == 0 or not overlap_flags[i - 1]) for i, flag in enumerate(overlap_flags)))
     metric_steps = int(len(metric_trace))
@@ -2102,6 +2116,12 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
     partial_every = max(1, int(cl_cfg.get("partial_write_every_scenes", 4) or 4))
     target_spec = str(cl_cfg.get("bucket_dataset", cl_cfg.get("target_dataset", "")) or "").strip()
     targets = _load_closed_loop_targets(target_spec, local)
+    if target_spec and bool(cl_cfg.get("require_bucket_targets", False)) and not targets:
+        raise ValueError(
+            "closed_loop.bucket_dataset was provided but no targets matched; "
+            "check closed_loop.bucket_split/manifest metadata instead of silently "
+            "falling back to arbitrary WOMD scenes"
+        )
     target_map: dict[str, list[dict[str, Any]]] = {}
     for t in targets:
         target_map.setdefault(str(t["scene_id"]), []).append(t)

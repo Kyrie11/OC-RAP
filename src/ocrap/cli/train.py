@@ -1742,6 +1742,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_delta_dropout=float(model_cfg.get("direct_recovery_delta_dropout", 0.05)),
         direct_recovery_delta_initial_logvar=float(model_cfg.get("direct_recovery_delta_initial_logvar", -4.605170186)),
         direct_recovery_delta_mode=str(model_cfg.get("direct_recovery_delta_mode", "gaussian")),
+        direct_recovery_evidence_calibrator=bool(model_cfg.get("direct_recovery_evidence_calibrator", False)),
+        direct_recovery_evidence_calibrator_hidden=int(model_cfg.get("direct_recovery_evidence_calibrator_hidden", 8)),
+        direct_recovery_evidence_calibrator_scale=float(model_cfg.get("direct_recovery_evidence_calibrator_scale", 0.25)),
     ).to(device)
     tcfg = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
 
@@ -1986,6 +1989,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "direct_recovery_delta_dropout": float(model_cfg.get("direct_recovery_delta_dropout", 0.05)),
             "direct_recovery_delta_initial_logvar": float(model_cfg.get("direct_recovery_delta_initial_logvar", -4.605170186)),
             "direct_recovery_delta_mode": str(model_cfg.get("direct_recovery_delta_mode", "gaussian")),
+            "direct_recovery_evidence_calibrator": bool(model_cfg.get("direct_recovery_evidence_calibrator", False)),
+            "direct_recovery_evidence_calibrator_hidden": int(model_cfg.get("direct_recovery_evidence_calibrator_hidden", 8)),
+            "direct_recovery_evidence_calibrator_scale": float(model_cfg.get("direct_recovery_evidence_calibrator_scale", 0.25)),
             "model_state": model.state_dict(),
             "optimizer_state": opt.state_dict(),
             "epoch": int(ep),

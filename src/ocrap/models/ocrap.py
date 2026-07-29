@@ -138,6 +138,9 @@ class OCRAPModel(nn.Module):
         direct_recovery_delta_dropout: float = 0.05,
         direct_recovery_delta_initial_logvar: float = -4.605170186,
         direct_recovery_delta_mode: str = "gaussian",
+        direct_recovery_evidence_calibrator: bool = False,
+        direct_recovery_evidence_calibrator_hidden: int = 8,
+        direct_recovery_evidence_calibrator_scale: float = 0.25,
     ):
         super().__init__()
         self.num_roots = int(num_roots)
@@ -193,6 +196,9 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_delta_dropout = float(max(0.0, direct_recovery_delta_dropout))
         self.direct_recovery_delta_initial_logvar = float(direct_recovery_delta_initial_logvar)
         self.direct_recovery_delta_mode = str(direct_recovery_delta_mode or "gaussian").strip().lower()
+        self.direct_recovery_evidence_calibrator = bool(direct_recovery_evidence_calibrator)
+        self.direct_recovery_evidence_calibrator_hidden = max(4, int(direct_recovery_evidence_calibrator_hidden))
+        self.direct_recovery_evidence_calibrator_scale = float(max(0.0, direct_recovery_evidence_calibrator_scale))
         if self.direct_recovery_delta_mode not in {"gaussian", "ordinal_evidence"}:
             raise ValueError(f"Unsupported direct_recovery_delta_mode={direct_recovery_delta_mode!r}")
         if self.direct_recovery_value_expert_routing not in {
@@ -444,6 +450,35 @@ class OCRAPModel(nn.Module):
             _make_delta_adapter()
             if self.direct_recovery_value_head and self.direct_recovery_delta_head
             and not self.direct_recovery_delta_regime_experts
+            else None
+        )
+
+        # v48.15 PRISM-CC: target-domain evidence adaptation must not rewrite the
+        # roughly 0.4M-parameter source evidence expert when the dedicated
+        # calibration split contains only a few dozen positive scene-time groups.
+        # A tiny, regime-specific residual calibrator acts on the frozen source
+        # center/width and the two frozen policy features.  Its final projection
+        # is exactly zero-initialised, so enabling it reproduces the source model
+        # before any target-domain update.
+        evidence_calibrator_input_dim = 4
+
+        def _make_evidence_calibrator() -> nn.Sequential:
+            adapter = nn.Sequential(
+                nn.LayerNorm(evidence_calibrator_input_dim),
+                nn.Linear(evidence_calibrator_input_dim, self.direct_recovery_evidence_calibrator_hidden),
+                nn.GELU(),
+                nn.Linear(self.direct_recovery_evidence_calibrator_hidden, 2),
+            )
+            projection = adapter[-1]
+            if isinstance(projection, nn.Linear):
+                nn.init.zeros_(projection.weight)
+                nn.init.zeros_(projection.bias)
+            return adapter
+
+        self.direct_evidence_calibrators = (
+            nn.ModuleList([_make_evidence_calibrator(), _make_evidence_calibrator()])
+            if self.direct_recovery_value_head and self.direct_recovery_delta_head
+            and self.direct_recovery_evidence_calibrator
             else None
         )
 
@@ -818,18 +853,36 @@ class OCRAPModel(nn.Module):
             delta_features = torch.cat([relative_features, policy_features], dim=-1)
             out["direct_recovery_policy_features"] = policy_features
 
+        delta_expert_idx = None
+        if bucket_id is None:
+            delta_expert_idx = torch.zeros((delta_features.shape[0],), dtype=torch.long, device=delta_features.device)
+        else:
+            delta_expert_idx = (bucket_id.to(device=delta_features.device, dtype=torch.long).reshape(-1) - 1).clamp(0, 1)
         if self.direct_delta_adapters is not None:
-            if bucket_id is None:
-                expert_idx = torch.zeros((delta_features.shape[0],), dtype=torch.long, device=delta_features.device)
-            else:
-                expert_idx = (bucket_id.to(device=delta_features.device, dtype=torch.long).reshape(-1) - 1).clamp(0, 1)
             all_delta = torch.stack([adapter(delta_features) for adapter in self.direct_delta_adapters], dim=1)
-            delta = all_delta[torch.arange(all_delta.shape[0], device=all_delta.device), expert_idx]
+            delta = all_delta[torch.arange(all_delta.shape[0], device=all_delta.device), delta_expert_idx]
             out["direct_recovery_delta_expert_outputs"] = all_delta
         elif self.direct_delta_adapter is not None:
             delta = self.direct_delta_adapter(delta_features)
         else:
             delta = None
+
+        if delta is not None and self.direct_evidence_calibrators is not None:
+            if self.direct_recovery_delta_policy_features and "direct_recovery_policy_features" in out:
+                calibrator_policy = out["direct_recovery_policy_features"].to(dtype=delta.dtype)
+            else:
+                calibrator_policy = delta.new_zeros((delta.shape[0], 2))
+            calibrator_input = torch.cat([delta[:, :2], calibrator_policy], dim=-1)
+            all_residuals = torch.stack(
+                [adapter(calibrator_input) for adapter in self.direct_evidence_calibrators], dim=1
+            )
+            residual = all_residuals[
+                torch.arange(all_residuals.shape[0], device=all_residuals.device), delta_expert_idx
+            ]
+            residual = torch.tanh(residual) * self.direct_recovery_evidence_calibrator_scale
+            out["direct_recovery_evidence_calibrator_residual"] = residual
+            out["direct_recovery_evidence_calibrator_outputs"] = all_residuals
+            delta = delta + residual
 
         if delta is not None:
             nominal_mask = None
