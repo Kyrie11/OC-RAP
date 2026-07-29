@@ -1391,6 +1391,9 @@ def direct_uncertainty_recovery_value_loss(
     ordinal_evidence_harm_class_weight: float = 2.0,
     ordinal_evidence_dead_class_weight: float = 0.5,
     ordinal_evidence_benefit_class_weight: float = 1.25,
+    ordinal_evidence_hard_harm_weight: float = 0.0,
+    ordinal_evidence_hard_benefit_weight: float = 0.0,
+    ordinal_evidence_hard_example_gamma: float = 2.0,
     ordinal_evidence_proposal_topk_weight: float = 0.0,
     ordinal_evidence_proposal_topk: int = 3,
     ordinal_evidence_proposal_rank_decay: float = 0.75,
@@ -1944,6 +1947,27 @@ def direct_uncertainty_recovery_value_loss(
             ])
             nll = -torch.log(probs[torch.arange(probs.shape[0], device=probs.device), classes])
             nll = nll * class_weights[classes]
+            # v48.14 PRISM: calibration-domain evidence adaptation must focus on
+            # the errors that invalidate a selective safety certificate.  Static
+            # class weights alone still let the adapter minimise loss by fitting
+            # abundant dead-zone samples.  Dynamically upweight false-safe
+            # harmful proposals and missed beneficial proposals, while detaching
+            # the hardness factor so the weighting cannot be gamed by the model.
+            hard_gamma = max(0.0, float(ordinal_evidence_hard_example_gamma))
+            if float(ordinal_evidence_hard_harm_weight) > 0.0:
+                harm_hardness = (1.0 - p_harm.detach()).clamp(0.0, 1.0).pow(hard_gamma)
+                nll = torch.where(
+                    classes == 0,
+                    nll * (1.0 + float(ordinal_evidence_hard_harm_weight) * harm_hardness),
+                    nll,
+                )
+            if float(ordinal_evidence_hard_benefit_weight) > 0.0:
+                benefit_hardness = (1.0 - p_benefit.detach()).clamp(0.0, 1.0).pow(hard_gamma)
+                nll = torch.where(
+                    classes == 2,
+                    nll * (1.0 + float(ordinal_evidence_hard_benefit_weight) * benefit_hardness),
+                    nll,
+                )
             if float(ordinal_evidence_ordered_nll_all_weight) > 0.0:
                 terms.append(float(ordinal_evidence_ordered_nll_all_weight) * nll.mean())
             if float(ordinal_evidence_ordered_nll_top1_weight) > 0.0:

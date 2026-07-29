@@ -1,0 +1,538 @@
+{
+  "version": "v48.13-TERRA",
+  "natural_gate_passed": false,
+  "main": {
+    "balanced": {
+      "proposal": {
+        "near": {
+          "proposal_top_k": 3,
+          "positive_group_count": 49,
+          "oracle_best_hit_rate_positive_groups": 0.9591836734693877,
+          "any_positive_hit_rate_positive_groups": 1.0,
+          "exact_top1_correlation": -0.11084784057675555,
+          "exact_top1_accuracy": 0.6326530612244898,
+          "positive_top1_regret": 0.13041917044982368,
+          "stage_p_audit_top1_correlation": -0.11084784057675555,
+          "passed": true
+        },
+        "contact": {
+          "proposal_top_k": 3,
+          "positive_group_count": 66,
+          "oracle_best_hit_rate_positive_groups": 0.9696969696969697,
+          "any_positive_hit_rate_positive_groups": 0.9848484848484849,
+          "exact_top1_correlation": 0.02360590800147416,
+          "exact_top1_accuracy": 0.5454545454545454,
+          "positive_top1_regret": 0.21857084779046385,
+          "stage_p_audit_top1_correlation": 0.02360590800147416,
+          "passed": true
+        }
+      },
+      "evidence": {
+        "near": {
+          "proposal_evidence_top1_benefit_auc": 0.7490112564648616,
+          "proposal_evidence_top1_harm_auc": 0.5189071038251366,
+          "proposal_evidence_top1_correlation": 0.051337541583225885,
+          "legacy_rank_top1_benefit_auc": 0.7399813606710158,
+          "legacy_rank_top1_harm_auc": 0.5352715798963263,
+          "candidate_benefit_auc": 0.7723304419352427,
+          "candidate_harm_auc": 0.5862608542337021,
+          "passed": false
+        },
+        "contact": {
+          "proposal_evidence_top1_benefit_auc": 0.7335252327290543,
+          "proposal_evidence_top1_harm_auc": 0.3943675792365813,
+          "proposal_evidence_top1_correlation": -0.06955470224328664,
+          "legacy_rank_top1_benefit_auc": 0.7386548913043478,
+          "legacy_rank_top1_harm_auc": 0.39376025150355387,
+          "candidate_benefit_auc": 0.8250815427553044,
+          "candidate_harm_auc": 0.482917384445398,
+          "passed": false
+        }
+      },
+      "certificate": {
+        "near": {
+          "valid_for_deployment": false,
+          "verify_selected": 0,
+          "precision": null,
+          "precision_lcb90": null,
+          "harmful_selected_rate": null,
+          "harmful_selected_ucb90": 1.0,
+          "positive_recall": 0.0,
+          "teacher_advantage_mean": null
+        },
+        "contact": {
+          "valid_for_deployment": false,
+          "verify_selected": 0,
+          "precision": null,
+          "precision_lcb90": null,
+          "harmful_selected_rate": null,
+          "harmful_selected_ucb90": 1.0,
+          "positive_recall": 0.0,
+          "teacher_advantage_mean": null
+        }
+      }
+    },
+    "precision": {
+      "proposal": {
+        "near": {
+          "proposal_top_k": 3,
+          "positive_group_count": 49,
+          "oracle_best_hit_rate_positive_groups": 1.0,
+          "any_positive_hit_rate_positive_groups": 1.0,
+          "exact_top1_correlation": 0.06266639593920886,
+          "exact_top1_accuracy": 0.5306122448979592,
+          "positive_top1_regret": 0.1640024358130638,
+          "stage_p_audit_top1_correlation": 0.06266639593920886,
+          "passed": true
+        },
+        "contact": {
+          "proposal_top_k": 3,
+          "positive_group_count": 66,
+          "oracle_best_hit_rate_positive_groups": 0.9848484848484849,
+          "any_positive_hit_rate_positive_groups": 0.9848484848484849,
+          "exact_top1_correlation": 0.005257115503434994,
+          "exact_top1_accuracy": 0.6212121212121212,
+          "positive_top1_regret": 0.19354220554803847,
+          "stage_p_audit_top1_correlation": 0.005257115503434994,
+          "passed": true
+        }
+      },
+      "evidence": {
+        "near": {
+          "proposal_evidence_top1_benefit_auc": 0.6368515205724508,
+          "proposal_evidence_top1_harm_auc": 0.577010708589656,
+          "proposal_evidence_top1_correlation": 0.1023269805905286,
+          "legacy_rank_top1_benefit_auc": 0.6728148886673313,
+          "legacy_rank_top1_harm_auc": 0.5516581632653061,
+          "candidate_benefit_auc": 0.6874953264039483,
+          "candidate_harm_auc": 0.6181469564067528,
+          "passed": false
+        },
+        "contact": {
+          "proposal_evidence_top1_benefit_auc": 0.798811856932876,
+          "proposal_evidence_top1_harm_auc": 0.4838624338624339,
+          "proposal_evidence_top1_correlation": 0.026154703978459305,
+          "legacy_rank_top1_benefit_auc": 0.7813571778539932,
+          "legacy_rank_top1_harm_auc": 0.4787940379403794,
+          "candidate_benefit_auc": 0.8225394263425132,
+          "candidate_harm_auc": 0.5450412632076469,
+          "passed": false
+        }
+      },
+      "certificate": {
+        "near": {
+          "valid_for_deployment": false,
+          "verify_selected": 0,
+          "precision": null,
+          "precision_lcb90": null,
+          "harmful_selected_rate": null,
+          "harmful_selected_ucb90": 1.0,
+          "positive_recall": 0.0,
+          "teacher_advantage_mean": null
+        },
+        "contact": {
+          "valid_for_deployment": false,
+          "verify_selected": 21,
+          "precision": 0.38095238095238093,
+          "precision_lcb90": 0.22991891516817053,
+          "harmful_selected_rate": 0.3333333333333333,
+          "harmful_selected_ucb90": 0.5127432798545779,
+          "positive_recall": 0.24242424242424243,
+          "teacher_advantage_mean": -0.11206125889160644
+        }
+      }
+    }
+  },
+  "multiseed_aggregate": [
+    {
+      "variant": "balanced",
+      "bucket": "near",
+      "num_seeds": 3,
+      "valid_seed_count": 0,
+      "candidate_positive_auc": {
+        "mean": 0.7810391263727615,
+        "min": 0.7698583743842364,
+        "max": 0.8009285627988056,
+        "std": 0.014100119160333848
+      },
+      "candidate_risk_harm_auc": {
+        "mean": 0.5771875106259371,
+        "min": 0.5716398985629755,
+        "max": 0.5862608542337021,
+        "std": 0.006468702774428779
+      },
+      "candidate_head_harm_auc": {
+        "mean": 0.5771875106259371,
+        "min": 0.5716398985629755,
+        "max": 0.5862608542337021,
+        "std": 0.006468702774428779
+      },
+      "rank_correlation": {
+        "mean": 0.12374773475425509,
+        "min": 0.10684077596002833,
+        "max": 0.13635398213314334,
+        "std": 0.012426568946219378
+      },
+      "top1_correlation": {
+        "mean": -0.09170580345900325,
+        "min": -0.11084784057675555,
+        "max": -0.06550917998150008,
+        "std": 0.019169836161242668
+      },
+      "top1_accuracy": {
+        "mean": 0.6120902107613072,
+        "min": 0.5813953488372093,
+        "max": 0.6326530612244898,
+        "std": 0.02211834098627017
+      },
+      "top1_regret": {
+        "mean": 0.14182084755508984,
+        "min": 0.13041917044982368,
+        "max": 0.15855359170296,
+        "std": 0.012088606803426829
+      },
+      "rank_margin_correctness_auc": {
+        "mean": 0.5796648695320422,
+        "min": 0.5546218487394958,
+        "max": 0.6021505376344086,
+        "std": 0.019487587615434083
+      },
+      "verify_selected": {
+        "mean": 0.0,
+        "min": 0.0,
+        "max": 0.0,
+        "std": 0.0
+      },
+      "verify_harmful_exposure_ucb90": {
+        "mean": 0.025094891976513312,
+        "min": 0.02298569272695777,
+        "max": 0.027410248294247718,
+        "std": 0.0018121899357001177
+      },
+      "verify_harmful_selected_ucb90": {
+        "mean": 1.0,
+        "min": 1.0,
+        "max": 1.0,
+        "std": 0.0
+      },
+      "verify_positive_recall": {
+        "mean": 0.0,
+        "min": 0.0,
+        "max": 0.0,
+        "std": 0.0
+      },
+      "verify_macro_share": {
+        "mean": 0.0,
+        "min": 0.0,
+        "max": 0.0,
+        "std": 0.0
+      }
+    },
+    {
+      "variant": "balanced",
+      "bucket": "contact",
+      "num_seeds": 3,
+      "valid_seed_count": 0,
+      "candidate_positive_auc": {
+        "mean": 0.8271011628609474,
+        "min": 0.7915564527356258,
+        "max": 0.8646654930919122,
+        "std": 0.029880786407351204
+      },
+      "candidate_risk_harm_auc": {
+        "mean": 0.4766631779048735,
+        "min": 0.47064940686613005,
+        "max": 0.482917384445398,
+        "std": 0.00501126566808844
+      },
+      "candidate_head_harm_auc": {
+        "mean": 0.4766631779048735,
+        "min": 0.47064940686613005,
+        "max": 0.482917384445398,
+        "std": 0.00501126566808844
+      },
+      "rank_correlation": {
+        "mean": 0.16918759701697117,
+        "min": 0.14373358686019158,
+        "max": 0.19180746339738045,
+        "std": 0.019728130162065087
+      },
+      "top1_correlation": {
+        "mean": 0.04468317625589844,
+        "min": 0.02360590800147416,
+        "max": 0.059371007676789204,
+        "std": 0.01528407157759544
+      },
+      "top1_accuracy": {
+        "mean": 0.5407635678822119,
+        "min": 0.4666666666666667,
+        "max": 0.6101694915254238,
+        "std": 0.058678611313657154
+      },
+      "top1_regret": {
+        "mean": 0.21050110060425012,
+        "min": 0.16972829237212833,
+        "max": 0.24320416165015818,
+        "std": 0.030534313553526257
+      },
+      "rank_margin_correctness_auc": {
+        "mean": 0.6024552373284258,
+        "min": 0.5848214285714286,
+        "max": 0.612037037037037,
+        "std": 0.012484616489231605
+      },
+      "verify_selected": {
+        "mean": 12.0,
+        "min": 0.0,
+        "max": 36.0,
+        "std": 16.97056274847714
+      },
+      "verify_precision_lcb90": {
+        "mean": 0.1738768773160312,
+        "min": 0.1738768773160312,
+        "max": 0.1738768773160312,
+        "std": 0.0
+      },
+      "verify_harmful_exposure_ucb90": {
+        "mean": 0.04121101897311999,
+        "min": 0.012779747804204579,
+        "max": 0.0970287469369766,
+        "std": 0.039471398721558214
+      },
+      "verify_harmful_selected_ucb90": {
+        "mean": 0.8327271133183872,
+        "min": 0.4981813399551618,
+        "max": 1.0,
+        "std": 0.2365595849624346
+      },
+      "verify_positive_recall": {
+        "mean": 0.09523809523809523,
+        "min": 0.0,
+        "max": 0.2857142857142857,
+        "std": 0.13468700594029476
+      },
+      "verify_macro_share": {
+        "mean": 0.3333333333333333,
+        "min": 0.0,
+        "max": 1.0,
+        "std": 0.4714045207910317
+      }
+    },
+    {
+      "variant": "precision",
+      "bucket": "near",
+      "num_seeds": 3,
+      "valid_seed_count": 0,
+      "candidate_positive_auc": {
+        "mean": 0.7058080165820518,
+        "min": 0.6776375205254516,
+        "max": 0.7522912028167555,
+        "std": 0.033114035655415014
+      },
+      "candidate_risk_harm_auc": {
+        "mean": 0.595239605711647,
+        "min": 0.5680332488024795,
+        "max": 0.6181469564067528,
+        "std": 0.020683439644363706
+      },
+      "candidate_head_harm_auc": {
+        "mean": 0.595239605711647,
+        "min": 0.5680332488024795,
+        "max": 0.6181469564067528,
+        "std": 0.020683439644363706
+      },
+      "rank_correlation": {
+        "mean": 0.15658927231100261,
+        "min": 0.1398065780468825,
+        "max": 0.17097440930471405,
+        "std": 0.01283665680717614
+      },
+      "top1_correlation": {
+        "mean": -0.010162418684646872,
+        "min": -0.08956241712043156,
+        "max": 0.06266639593920886,
+        "std": 0.06232061309018259
+      },
+      "top1_accuracy": {
+        "mean": 0.5484469756895006,
+        "min": 0.5306122448979592,
+        "max": 0.5813953488372093,
+        "std": 0.023324487138038297
+      },
+      "top1_regret": {
+        "mean": 0.16916429114391393,
+        "min": 0.1640024358130638,
+        "max": 0.17408896910738408,
+        "std": 0.0041212237909028756
+      },
+      "rank_margin_correctness_auc": {
+        "mean": 0.6153401107748934,
+        "min": 0.5535714285714286,
+        "max": 0.6513377926421404,
+        "std": 0.0438761425655503
+      },
+      "verify_selected": {
+        "mean": 0.0,
+        "min": 0.0,
+        "max": 0.0,
+        "std": 0.0
+      },
+      "verify_harmful_exposure_ucb90": {
+        "mean": 0.025094891976513312,
+        "min": 0.02298569272695777,
+        "max": 0.027410248294247718,
+        "std": 0.0018121899357001177
+      },
+      "verify_harmful_selected_ucb90": {
+        "mean": 1.0,
+        "min": 1.0,
+        "max": 1.0,
+        "std": 0.0
+      },
+      "verify_positive_recall": {
+        "mean": 0.0,
+        "min": 0.0,
+        "max": 0.0,
+        "std": 0.0
+      },
+      "verify_macro_share": {
+        "mean": 0.0,
+        "min": 0.0,
+        "max": 0.0,
+        "std": 0.0
+      }
+    },
+    {
+      "variant": "precision",
+      "bucket": "contact",
+      "num_seeds": 3,
+      "valid_seed_count": 0,
+      "candidate_positive_auc": {
+        "mean": 0.8357693182419023,
+        "min": 0.7901921202840039,
+        "max": 0.8945764080991899,
+        "std": 0.04362944277605083
+      },
+      "candidate_risk_harm_auc": {
+        "mean": 0.5359784676901631,
+        "min": 0.5165046842631432,
+        "max": 0.5463894555996993,
+        "std": 0.013781039786686487
+      },
+      "candidate_head_harm_auc": {
+        "mean": 0.5359784676901631,
+        "min": 0.5165046842631432,
+        "max": 0.5463894555996993,
+        "std": 0.013781039786686487
+      },
+      "rank_correlation": {
+        "mean": 0.1918680652173176,
+        "min": 0.16198667610121312,
+        "max": 0.21761139268308843,
+        "std": 0.02289643260961498
+      },
+      "top1_correlation": {
+        "mean": 0.028856676434621947,
+        "min": 0.005257115503434994,
+        "max": 0.0437436514047071,
+        "std": 0.01687671427375933
+      },
+      "top1_accuracy": {
+        "mean": 0.6162044170518747,
+        "min": 0.5833333333333334,
+        "max": 0.6440677966101694,
+        "std": 0.02504631154613057
+      },
+      "top1_regret": {
+        "mean": 0.18415633448854704,
+        "min": 0.1601069044233412,
+        "max": 0.19881989349426146,
+        "std": 0.017141466533144068
+      },
+      "rank_margin_correctness_auc": {
+        "mean": 0.6027192371171832,
+        "min": 0.588,
+        "max": 0.6240601503759399,
+        "std": 0.015448161864264242
+      },
+      "verify_selected": {
+        "mean": 17.0,
+        "min": 0.0,
+        "max": 30.0,
+        "std": 12.569805089976535
+      },
+      "verify_precision_lcb90": {
+        "mean": 0.22037792133198292,
+        "min": 0.21083692749579527,
+        "max": 0.22991891516817053,
+        "std": 0.00954099383618763
+      },
+      "verify_harmful_exposure_ucb90": {
+        "mean": 0.04662496564468172,
+        "min": 0.012779747804204579,
+        "max": 0.06557839057793066,
+        "std": 0.023989557334817075
+      },
+      "verify_harmful_selected_ucb90": {
+        "mean": 0.6305897776610866,
+        "min": 0.37902605312868204,
+        "max": 1.0,
+        "std": 0.26685577684981854
+      },
+      "verify_positive_recall": {
+        "mean": 0.17604617604617603,
+        "min": 0.0,
+        "max": 0.2857142857142857,
+        "std": 0.12573172242881364
+      },
+      "verify_macro_share": {
+        "mean": 0.6666666666666666,
+        "min": 0.0,
+        "max": 1.0,
+        "std": 0.4714045207910317
+      }
+    }
+  ],
+  "dedicated_calibration": {
+    "safe": {
+      "num_scenes": 135,
+      "num_scene_time_groups": 318,
+      "num_samples": 2544,
+      "candidate_count_mean": 8.0,
+      "hard_violation_mean": 0.00550314465408805,
+      "harm_proxy_mean": 0.0,
+      "oracle_recoverable_fraction": 0.9465408805031447,
+      "negative_deployable_fraction": 0.05345911949685535,
+      "r_dep_mean": 1.1096527639143323
+    },
+    "near_contact": {
+      "num_scenes": 316,
+      "num_scene_time_groups": 765,
+      "num_samples": 6039,
+      "candidate_count_mean": 7.894117647058824,
+      "hard_violation_mean": 0.03477396920019871,
+      "harm_proxy_mean": 0.0,
+      "oracle_recoverable_fraction": 0.7916873654578572,
+      "negative_deployable_fraction": 0.4482530220235138,
+      "r_dep_mean": -0.5089244156820497
+    },
+    "contact": {
+      "num_scenes": 543,
+      "num_scene_time_groups": 1896,
+      "num_samples": 16843,
+      "candidate_count_mean": 8.8834388185654,
+      "hard_violation_mean": 0.021611351896930475,
+      "harm_proxy_mean": 0.0,
+      "oracle_recoverable_fraction": 0.795167131746126,
+      "negative_deployable_fraction": 0.416909101703972,
+      "r_dep_mean": -0.35142238937301845
+    }
+  },
+  "engineering_findings": [
+    "standard gamma missing because staged training sets SKIP_POST_TRAIN_CALIBRATION=1",
+    "Safe nominal-only runner checked gamma/calibration before safe branch",
+    "dedicated recalibration was not completed; dedicated_candidates artifacts absent",
+    "v48.13 ablation scheduler used Bash special variable GROUPS, so only 1012_* tasks ran",
+    "ordered NLL top1/all intended variables were not propagated to the generic trainer"
+  ]
+}

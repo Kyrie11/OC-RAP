@@ -20,13 +20,22 @@ if [[ -z "${CKPT:-}" ]]; then
   [[ -n "$BASE_RUN" ]] || { echo "BASE_RUN or CKPT must be set explicitly; refusing legacy fallback" >&2; exit 2; }
   CKPT="$BASE_RUN/model_v48_trac_sr/best.pt"
 fi
-if [[ -z "${CAL:-}" ]]; then
-  [[ -n "$BASE_RUN" ]] || { echo "CAL or BASE_RUN must be set explicitly" >&2; exit 2; }
-  CAL="$BASE_RUN/calibration/calibration_mix_v48.json"
-fi
-if [[ -z "${GAMMA:-}" ]]; then
-  [[ -n "$BASE_RUN" ]] || { echo "GAMMA or BASE_RUN must be set explicitly" >&2; exit 2; }
-  GAMMA="$BASE_RUN/calibration/gamma_rec_by_bucket_v48.json"
+# Safe paired non-inferiority is nominal locked and does not consume a stress
+# certificate.  Requiring gamma/calibration here made the independent Safe
+# experiment fail whenever Near/Contact Natural gate had not yet produced those
+# files.  Stress runs still require both artifacts below.
+if [[ "$SAFE_NOMINAL_ONLY" != "1" ]]; then
+  if [[ -z "${CAL:-}" ]]; then
+    [[ -n "$BASE_RUN" ]] || { echo "CAL or BASE_RUN must be set explicitly" >&2; exit 2; }
+    CAL="$BASE_RUN/calibration/calibration_mix_v48.json"
+  fi
+  if [[ -z "${GAMMA:-}" ]]; then
+    [[ -n "$BASE_RUN" ]] || { echo "GAMMA or BASE_RUN must be set explicitly" >&2; exit 2; }
+    GAMMA="$BASE_RUN/calibration/gamma_rec_by_bucket_v48.json"
+  fi
+else
+  CAL="${CAL:-}"
+  GAMMA="${GAMMA:-}"
 fi
 export CKPT CAL GAMMA
 mkdir -p "$RUN"
@@ -38,8 +47,10 @@ export CL_PARTIAL_EVERY=${CL_PARTIAL_EVERY:-4}
 export CL_RESUME_FSYNC=${CL_RESUME_FSYNC:-false}
 
 [[ -f "$CKPT" ]] || { echo "missing checkpoint $CKPT; set CKPT=/path/to/best.pt" >&2; exit 2; }
-[[ -f "$GAMMA" ]] || { echo "missing gamma map $GAMMA; set GAMMA=/path/to/gamma.json" >&2; exit 2; }
-[[ -f "$CAL" ]] || { echo "missing calibration $CAL; set CAL=/path/to/calibration.json" >&2; exit 2; }
+if [[ "$SAFE_NOMINAL_ONLY" != "1" ]]; then
+  [[ -f "$GAMMA" ]] || { echo "missing gamma map $GAMMA; set GAMMA=/path/to/gamma.json" >&2; exit 2; }
+  [[ -f "$CAL" ]] || { echo "missing calibration $CAL; set CAL=/path/to/calibration.json" >&2; exit 2; }
+fi
 
 # v48 reads both an opportunity threshold and a observation-conditioned score
 # threshold. Refuse to execute a certificate that failed held-out verification.
@@ -99,16 +110,11 @@ make_sel() {
 
   COMMON_SEL=(
     --set seed=${SEED:-7}
-    --set selection.gamma_rec_by_bucket_file="$GAMMA"
     --set selection.ocrap_selector=calibrated_constrained
     --set selection.auto_regime_from_observation=${AUTO_REGIME_FROM_OBSERVATION:-true}
     --set regime_thresholds.tau_d=${AUTO_REGIME_TAU_D:-2.0}
     --set regime_thresholds.tau_ttc=${AUTO_REGIME_TAU_TTC:-3.0}
     --set regime_thresholds.tau_contact=${AUTO_REGIME_TAU_CONTACT:-0.8}
-    --set closed_loop.require_calibrated_selector=true
-    --set closed_loop.require_gamma_by_bucket=true
-    --set evaluation.require_calibrated_selector=true
-    --set evaluation.require_gamma_by_bucket=true
 
     # Paper invariant: never execute unadmitted recovery, and never treat
     # exploration/coverage prefixes as recoveries.
@@ -641,6 +647,23 @@ make_sel() {
     --set selection.intervention_cooldown_steps_by_bucket.contact=0
     --set selection.intervention_cooldown_steps_by_bucket.test_contact=0
   )
+
+  if [[ "$SAFE_NOMINAL_ONLY" == "1" ]]; then
+    COMMON_SEL+=(
+      --set closed_loop.require_calibrated_selector=false
+      --set closed_loop.require_gamma_by_bucket=false
+      --set evaluation.require_calibrated_selector=false
+      --set evaluation.require_gamma_by_bucket=false
+    )
+  else
+    COMMON_SEL+=(
+      --set selection.gamma_rec_by_bucket_file="$GAMMA"
+      --set closed_loop.require_calibrated_selector=true
+      --set closed_loop.require_gamma_by_bucket=true
+      --set evaluation.require_calibrated_selector=true
+      --set evaluation.require_gamma_by_bucket=true
+    )
+  fi
 
   if [[ "$is_v27" == "true" ]]; then
     COMMON_SEL+=(

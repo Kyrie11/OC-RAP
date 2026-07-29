@@ -74,7 +74,7 @@ PY
 # B: proposal training only, still deploy top1.
 # C: proposal-distribution evidence and reranking on the old tournament.
 # D: full TERRA.
-GROUPS=(
+ABLATION_SPECS=(
   "A_top1_contract 0 0.0 0.0 0.0 0.0 false"
   "B_proposal_only 1 1.25 0.0 0.0 0.0 false"
   "C_evidence_rerank 0 0.0 3.0 0.80 1.80 true"
@@ -84,7 +84,7 @@ GROUPS=(
 failures=0
 for variant in balanced precision; do
   pids=(); labels=()
-  for spec in "${GROUPS[@]}"; do
+  for spec in "${ABLATION_SPECS[@]}"; do
     read -r group slot proposal_w proposal_evidence_w intra_b intra_h rerank <<<"$spec"
     gpu="$GPU0"; [[ "$slot" == 1 ]] && gpu="$GPU1"
     run_task "$group" "$variant" "$gpu" "$proposal_w" "$proposal_evidence_w" "$intra_b" "$intra_h" "$rerank" &

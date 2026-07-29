@@ -1,3 +1,53 @@
+## v48.14 — OC-TRAC-PRISM (2026-07-29)
+
+### Evidence from the completed v48.13 TERRA experiment
+
+- Neither balanced nor precision passed the joint Near+Contact Natural gate. No v48.13 stress closed-loop result is attributable to the learned policy.
+- TERRA's top-k proposal objective was the clearest success: on the main split, positive-group oracle-best hit was about 0.959 Near / 0.970 Contact and any-positive hit was 1.000 / 0.985. The high-recall proposal should be retained.
+- Exact top-1 remained weak (Near negative or unstable, Contact only slightly positive), but this is no longer the primary bottleneck once proposal recall is high.
+- Proposal evidence did not transfer: Contact harm AUC was approximately 0.39–0.54 and evidence/teacher correlation was near zero or negative. Non-zero Contact selections had low precision, high conditional harm, and negative mean exact-teacher advantage.
+- The dedicated calibration diagnostics prove a train-to-target contract shift. Near/Contact calibration roots are far closer to val/test than train in `r_dep_star`, hard violation, candidate count, recoverability, and artifact rate. The legacy `harm_proxy` is non-zero in train but identically zero in calibration/val/test.
+
+### Engineering defects fixed before further attribution
+
+1. **Missing standard calibration artifacts.** Staged v48.13 training used `SKIP_POST_TRAIN_CALIBRATION=1`, so `gamma_rec_by_bucket_v48.json` and the standard calibration JSONs were never produced. v48.14 atomically generates them from the independent certificate pool.
+2. **Safe nominal-only dependency bug.** The runner checked gamma and calibration before entering the Safe nominal-lock branch. Safe paired non-inferiority now requires only the checkpoint; Near/Contact stress execution still requires a valid certificate.
+3. **Incomplete dedicated recalibration.** The uploaded source run had no completed `dedicated_candidates` artifacts. The new finalizer writes temporary outputs, verifies every required file, atomically installs the calibration directory, and writes `CERTIFICATE_CALIBRATION_COMPLETE.json`.
+4. **Invalid v48.13 ablation scheduler.** `GROUPS` is a Bash special array containing Unix group IDs; only `1012_balanced/precision` ran instead of A/B/C/D. The scheduler now uses `ABLATION_SPECS` and requires all eight task markers. Consequently, the uploaded v48.13 ablation cannot support causal algorithm claims.
+5. **Ordered-NLL option propagation.** The staged script computed `ORDERED_TOP1/ORDERED_ALL` but passed unrelated fallback defaults to the generic trainer. Parameter names and effective values are now unified.
+
+### New algorithmic contribution: PRISM
+
+**PRISM = Proposal-aligned Risk adaptation with Independent Scene-disjoint certification Model.**
+
+1. **Freeze the proven high-recall proposal policy.** The v48.13 recovery tournament and encoder are frozen. v48.14 does not repeat exact-winner pairwise/listwise attempts that previously degraded Near.
+2. **Scene-disjoint calibration-stage evidence adaptation.** Dedicated Near/Contact calibration roots are split by scene into 45% evidence-adaptation train, 15% adaptation dev, and 40% certificate pool. Only the small regime-specific `direct_delta_adapters` are updated. Test roots remain sealed.
+3. **Dynamic false-safe hard-harm mining.** Ordered three-state NLL dynamically upweights harmful proposal members that the current adapter predicts as safe, plus a weaker missed-benefit weight to prevent all-abstain collapse. Hardness weights are detached.
+4. **Independent certificate pool.** Standard OC-MERO calibration/gamma, policy-rule fit, scene-disjoint verify, and Natural gate are performed only on certificate-pool scenes not used by adaptation or early stopping.
+5. **Target-distribution-aligned checkpoint selection.** Adaptation early stopping uses the same top-k evidence-rerank certificate semantics as deployment.
+
+### Required v48.14 ablations
+
+- A: v48.13 frozen checkpoint + dedicated certificate recalibration only.
+- B: dedicated target-domain evidence adaptation without dynamic hard mining.
+- C: target adaptation + dynamic hard-harm/missed-benefit mining, no same-group pair objective.
+- D: full PRISM, adding same-group counterfactual evidence.
+
+Per variant, all four tasks run concurrently: A/C on GPU0 and B/D on GPU1. Balanced and precision remain separate waves to limit CPU and storage contention.
+
+### Decision gates
+
+- Proposal oracle-best/any-positive hit must not materially regress from v48.13.
+- Contact policy harm AUC should improve to at least 0.60 and remain directionally consistent between adaptation dev and certificate verify.
+- Near benefit AUC should remain at least 0.70; Contact at least 0.75.
+- Natural gate still requires non-zero verify coverage, positive mean exact-teacher advantage, unchanged precision/harm confidence bounds, recall/support, and opportunity-normalized macro constraints.
+- Stress closed loop is allowed only when `NEXT_COMMANDS.txt` is generated from the independent dedicated certificate pool.
+
+### Non-repetition note
+
+Do not repeat all-pairs recovery ranking, cross-scene bipolar evidence as the primary harm objective, conformal calibration on a non-discriminative evidence model, threshold relaxation, absolute macro caps, or full train-set reconstruction at this stage. PRISM reuses the successful top-k proposal and specifically targets the empirically proven evidence-domain shift while preserving an independent statistical certificate.
+
+
 ## v48.13 — OC-TRAC-TERRA (2026-07-29)
 
 ### Evidence from the completed v48.12 TRIDENT experiment
