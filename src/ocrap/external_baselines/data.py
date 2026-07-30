@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -9,7 +10,7 @@ import torch
 from torch.utils.data import Dataset
 
 from ocrap.data.serialization import load_npz
-from ocrap.models.data import iter_sample_paths_many, sample_to_feature, scalar_metadata_for_path
+from ocrap.models.data import iter_sample_paths_many, manifest_metadata_for_path, sample_to_feature, scalar_metadata_for_path
 
 
 # The external-baseline adapters intentionally derive all supervision from the
@@ -175,21 +176,41 @@ def dataset_label_for_path(path: Path) -> str:
     return root.name
 
 
+@lru_cache(maxsize=262144)
+def _group_metadata(path_key: str) -> tuple[str, int, int]:
+    """Read only scene/time/candidate metadata without expanding large NPZ arrays."""
+    path = Path(path_key)
+    row = manifest_metadata_for_path(path) or {}
+    required = ("scene_id", "time_index", "candidate_index")
+    if all(str(row.get(k, "")).strip() != "" for k in required):
+        try:
+            return str(row["scene_id"]), int(float(row["time_index"])), int(float(row["candidate_index"]))
+        except Exception:
+            pass
+    try:
+        with np.load(path, allow_pickle=True) as z:
+            scene_raw = np.asarray(z["scene_id"]).item() if "scene_id" in z.files else ""
+            if isinstance(scene_raw, bytes):
+                scene_raw = scene_raw.decode("utf-8", errors="ignore")
+            time_index = int(np.asarray(z["time_index"]).item()) if "time_index" in z.files else 0
+            candidate_index = int(np.asarray(z["candidate_index"]).item()) if "candidate_index" in z.files else 0
+            return str(scene_raw), time_index, candidate_index
+    except Exception:
+        return "", 0, 0
+
+
 def group_sample_paths(dataset: str | Path, split: str | set[str] = "train") -> list[list[Path]]:
     paths = iter_sample_paths_many(dataset)
-    grouped: dict[tuple[str, str, int], list[Path]] = defaultdict(list)
+    grouped: dict[tuple[str, str, int], list[tuple[int, Path]]] = defaultdict(list)
     for p in paths:
         p = Path(p)
         if not _split_matches_path(p, split):
             continue
-        d = load_npz(p)
-        scene_id = _str(d, "scene_id", "")
-        time_index = _int(d, "time_index", 0)
-        grouped[(dataset_label_for_path(p), scene_id, time_index)].append(p)
+        scene_id, time_index, candidate_index = _group_metadata(str(p.resolve()))
+        grouped[(dataset_label_for_path(p), scene_id, time_index)].append((candidate_index, p))
     out: list[list[Path]] = []
     for _, group in sorted(grouped.items(), key=lambda kv: (kv[0][0], kv[0][1], kv[0][2])):
-        group = sorted(group, key=lambda p: _int(load_npz(p), "candidate_index", 0))
-        out.append(group)
+        out.append([p for _, p in sorted(group, key=lambda item: (item[0], str(item[1])))])
     return out
 
 
@@ -492,7 +513,13 @@ def _target_index(samples: list[dict[str, Any]], baseline: str, cfg: dict[str, A
 
 
 class ExternalGroupDataset(Dataset):
-    """Dataset of candidate-prefix sets grouped by scene/time."""
+    """Dataset of candidate-prefix sets grouped by scene/time.
+
+    The tensor contract is architecture-aware: GameFormer does not materialize
+    BeTop topology tensors, and deployable models do not materialize teacher-only
+    root tensors. This removes unused NPZ processing while leaving model inputs
+    and optimization objectives unchanged.
+    """
 
     def __init__(self, dataset: str | Path, cfg: dict[str, Any], *, split: str = "train", baseline: str = "route_bc_lite"):
         self.cfg = cfg
@@ -503,23 +530,45 @@ class ExternalGroupDataset(Dataset):
         first = load_npz(self.groups[0][0])
         self.feature_dim = int(sample_to_feature(first, cfg).shape[0])
         bcfg = cfg.get("external_baselines", {}) if isinstance(cfg.get("external_baselines", {}), dict) else {}
+        mcfg = bcfg.get("model", {}) if isinstance(bcfg.get("model", {}), dict) else {}
+        self.arch = str(mcfg.get("arch", self.baseline)).lower()
         self.max_candidates = int(bcfg.get("max_candidates", max(len(g) for g in self.groups)))
         self.use_teacher_branch_context = use_teacher_branch_context(cfg)
-        m0, rf0, _, _, _ = _branch_arrays(first, cfg)
-        self.num_roots = int(m0.shape[0])
-        self.num_options = int(m0.shape[1])
-        self.root_feature_dim = int(rf0.shape[-1])
-        ego0, neigh0, _, prefix0, _ = _history_arrays(first, cfg)
-        self.history_len = int(ego0.shape[0])
-        self.neighbors_to_predict = int(neigh0.shape[0])
-        self.future_len = int(prefix0.shape[0])
-        at0, _, _ = _actor_topology_arrays(first, cfg)
-        mt0, _, _ = _map_topology_arrays(first, cfg)
-        self.num_topology_agents = int(at0.shape[0])
-        self.actor_topology_feature_dim = int(at0.shape[-1])
-        self.num_topology_map = int(mt0.shape[0])
-        self.map_topology_feature_dim = int(mt0.shape[-1])
-        # Backwards-compatible names used by train/evaluate checkpoints.
+        self.need_history = self.arch in {"gameformer", "gameformer_lite", "gameformer_levelk"}
+        self.need_topology = self.arch in {"betop", "betop_lite", "betopnet", "betopnet_lite"}
+
+        if self.use_teacher_branch_context:
+            m0, rf0, _, _, _ = _branch_arrays(first, cfg)
+            self.num_roots = int(m0.shape[0])
+            self.num_options = int(m0.shape[1])
+            self.root_feature_dim = int(rf0.shape[-1])
+        else:
+            self.num_roots = _cfg_int(cfg, ("external_baselines", "model", "num_roots"), _cfg_int(cfg, ("num_roots",), 10))
+            self.num_options = _cfg_int(cfg, ("external_baselines", "model", "num_options"), _cfg_int(cfg, ("num_recovery_options",), 12))
+            self.root_feature_dim = _cfg_int(cfg, ("external_baselines", "model", "root_feature_dim"), 18)
+
+        if self.need_history:
+            ego0, neigh0, _, prefix0, _ = _history_arrays(first, cfg)
+            self.history_len = int(ego0.shape[0])
+            self.neighbors_to_predict = int(neigh0.shape[0])
+            self.future_len = int(prefix0.shape[0])
+        else:
+            self.history_len = _cfg_int(cfg, ("external_baselines", "model", "history_len"), 0)
+            self.neighbors_to_predict = _cfg_int(cfg, ("external_baselines", "model", "neighbors_to_predict"), 0)
+            self.future_len = _cfg_int(cfg, ("external_baselines", "model", "future_len"), 0)
+
+        if self.need_topology:
+            at0, _, _ = _actor_topology_arrays(first, cfg)
+            mt0, _, _ = _map_topology_arrays(first, cfg)
+            self.num_topology_agents = int(at0.shape[0])
+            self.actor_topology_feature_dim = int(at0.shape[-1])
+            self.num_topology_map = int(mt0.shape[0])
+            self.map_topology_feature_dim = int(mt0.shape[-1])
+        else:
+            self.num_topology_agents = _cfg_int(cfg, ("external_baselines", "model", "num_topology_agents"), 0)
+            self.actor_topology_feature_dim = _cfg_int(cfg, ("external_baselines", "model", "actor_topology_feature_dim"), ACTOR_TOPO_FEATURE_DIM)
+            self.num_topology_map = _cfg_int(cfg, ("external_baselines", "model", "num_topology_map"), 0)
+            self.map_topology_feature_dim = _cfg_int(cfg, ("external_baselines", "model", "map_topology_feature_dim"), MAP_TOPO_FEATURE_DIM)
         self.topology_feature_dim = self.actor_topology_feature_dim
 
     def __len__(self) -> int:
@@ -537,24 +586,33 @@ class ExternalGroupDataset(Dataset):
         r_orc = np.zeros((self.max_candidates,), dtype=np.float32)
         r_dep = np.zeros((self.max_candidates,), dtype=np.float32)
         feasible = np.zeros((self.max_candidates,), dtype=bool)
-        branch_margins = np.zeros((self.max_candidates, self.num_roots, self.num_options), dtype=np.float32)
-        root_features = np.zeros((self.max_candidates, self.num_roots, self.root_feature_dim), dtype=np.float32)
-        root_probs = np.zeros((self.max_candidates, self.num_roots), dtype=np.float32)
-        root_valid = np.zeros((self.max_candidates, self.num_roots), dtype=bool)
-        option_valid = np.zeros((self.max_candidates, self.num_options), dtype=bool)
 
-        ego_history = np.zeros((self.max_candidates, self.history_len, GAMEFORMER_STATE_DIM), dtype=np.float32)
-        neighbor_history = np.zeros((self.max_candidates, self.neighbors_to_predict, self.history_len, GAMEFORMER_STATE_DIM), dtype=np.float32)
-        neighbor_valid = np.zeros((self.max_candidates, self.neighbors_to_predict, self.history_len), dtype=bool)
-        prefix_traj = np.zeros((self.max_candidates, self.future_len, 2), dtype=np.float32)
-        prefix_valid = np.zeros((self.max_candidates, self.future_len), dtype=bool)
-
-        actor_topology_features = np.zeros((self.max_candidates, self.num_topology_agents, self.actor_topology_feature_dim), dtype=np.float32)
-        actor_topology_target = np.zeros((self.max_candidates, self.num_topology_agents), dtype=np.float32)
-        actor_topology_mask = np.zeros((self.max_candidates, self.num_topology_agents), dtype=bool)
-        map_topology_features = np.zeros((self.max_candidates, self.num_topology_map, self.map_topology_feature_dim), dtype=np.float32)
-        map_topology_target = np.zeros((self.max_candidates, self.num_topology_map), dtype=np.float32)
-        map_topology_mask = np.zeros((self.max_candidates, self.num_topology_map), dtype=bool)
+        out_arrays: dict[str, np.ndarray] = {}
+        if self.use_teacher_branch_context:
+            out_arrays.update({
+                "branch_margins": np.zeros((self.max_candidates, self.num_roots, self.num_options), dtype=np.float32),
+                "root_features": np.zeros((self.max_candidates, self.num_roots, self.root_feature_dim), dtype=np.float32),
+                "root_probs": np.zeros((self.max_candidates, self.num_roots), dtype=np.float32),
+                "root_valid": np.zeros((self.max_candidates, self.num_roots), dtype=bool),
+                "option_valid": np.zeros((self.max_candidates, self.num_options), dtype=bool),
+            })
+        if self.need_history:
+            out_arrays.update({
+                "ego_history": np.zeros((self.max_candidates, self.history_len, GAMEFORMER_STATE_DIM), dtype=np.float32),
+                "neighbor_history": np.zeros((self.max_candidates, self.neighbors_to_predict, self.history_len, GAMEFORMER_STATE_DIM), dtype=np.float32),
+                "neighbor_valid": np.zeros((self.max_candidates, self.neighbors_to_predict, self.history_len), dtype=bool),
+                "prefix_traj": np.zeros((self.max_candidates, self.future_len, 2), dtype=np.float32),
+                "prefix_valid": np.zeros((self.max_candidates, self.future_len), dtype=bool),
+            })
+        if self.need_topology:
+            out_arrays.update({
+                "actor_topology_features": np.zeros((self.max_candidates, self.num_topology_agents, self.actor_topology_feature_dim), dtype=np.float32),
+                "actor_topology_target": np.zeros((self.max_candidates, self.num_topology_agents), dtype=np.float32),
+                "actor_topology_mask": np.zeros((self.max_candidates, self.num_topology_agents), dtype=bool),
+                "map_topology_features": np.zeros((self.max_candidates, self.num_topology_map, self.map_topology_feature_dim), dtype=np.float32),
+                "map_topology_target": np.zeros((self.max_candidates, self.num_topology_map), dtype=np.float32),
+                "map_topology_mask": np.zeros((self.max_candidates, self.num_topology_map), dtype=bool),
+            })
 
         for i, d in enumerate(samples):
             x[i] = sample_to_feature(d, self.cfg)
@@ -567,28 +625,30 @@ class ExternalGroupDataset(Dataset):
             feasible[i] = _scalar(d, "feasible", 1.0) > 0.5
             if self.use_teacher_branch_context:
                 bm, rf, rp, rv, ov = _branch_arrays(d, self.cfg)
-                branch_margins[i] = bm
-                root_features[i] = rf
-                root_probs[i] = rp
-                root_valid[i] = rv
-                option_valid[i] = ov
-            eh, nh, nv, pt, pv = _history_arrays(d, self.cfg)
-            ego_history[i] = eh
-            neighbor_history[i] = nh
-            neighbor_valid[i] = nv
-            prefix_traj[i] = pt
-            prefix_valid[i] = pv
-            af, at, am = _actor_topology_arrays(d, self.cfg)
-            mf, mt, mm = _map_topology_arrays(d, self.cfg)
-            actor_topology_features[i] = af
-            actor_topology_target[i] = at
-            actor_topology_mask[i] = am
-            map_topology_features[i] = mf
-            map_topology_target[i] = mt
-            map_topology_mask[i] = mm
+                out_arrays["branch_margins"][i] = bm
+                out_arrays["root_features"][i] = rf
+                out_arrays["root_probs"][i] = rp
+                out_arrays["root_valid"][i] = rv
+                out_arrays["option_valid"][i] = ov
+            if self.need_history:
+                eh, nh, nv, pt, pv = _history_arrays(d, self.cfg)
+                out_arrays["ego_history"][i] = eh
+                out_arrays["neighbor_history"][i] = nh
+                out_arrays["neighbor_valid"][i] = nv
+                out_arrays["prefix_traj"][i] = pt
+                out_arrays["prefix_valid"][i] = pv
+            if self.need_topology:
+                af, at, am = _actor_topology_arrays(d, self.cfg)
+                mf, mt, mm = _map_topology_arrays(d, self.cfg)
+                out_arrays["actor_topology_features"][i] = af
+                out_arrays["actor_topology_target"][i] = at
+                out_arrays["actor_topology_mask"][i] = am
+                out_arrays["map_topology_features"][i] = mf
+                out_arrays["map_topology_target"][i] = mt
+                out_arrays["map_topology_mask"][i] = mm
 
         target = min(_target_index(samples, self.baseline, self.cfg), max(n - 1, 0))
-        return {
+        result = {
             "x": torch.from_numpy(x),
             "mask": torch.from_numpy(mask),
             "target_index": torch.tensor(target, dtype=torch.long),
@@ -598,24 +658,12 @@ class ExternalGroupDataset(Dataset):
             "r_orc": torch.from_numpy(r_orc),
             "r_dep": torch.from_numpy(r_dep),
             "feasible": torch.from_numpy(feasible),
-            "branch_margins": torch.from_numpy(branch_margins),
-            "root_features": torch.from_numpy(root_features),
-            "root_probs": torch.from_numpy(root_probs),
-            "root_valid": torch.from_numpy(root_valid),
-            "option_valid": torch.from_numpy(option_valid),
-            "ego_history": torch.from_numpy(ego_history),
-            "neighbor_history": torch.from_numpy(neighbor_history),
-            "neighbor_valid": torch.from_numpy(neighbor_valid),
-            "prefix_traj": torch.from_numpy(prefix_traj),
-            "prefix_valid": torch.from_numpy(prefix_valid),
-            "actor_topology_features": torch.from_numpy(actor_topology_features),
-            "actor_topology_target": torch.from_numpy(actor_topology_target),
-            "actor_topology_mask": torch.from_numpy(actor_topology_mask),
-            "map_topology_features": torch.from_numpy(map_topology_features),
-            "map_topology_target": torch.from_numpy(map_topology_target),
-            "map_topology_mask": torch.from_numpy(map_topology_mask),
-            # Legacy aliases.
-            "topology_features": torch.from_numpy(actor_topology_features),
-            "topology_target": torch.from_numpy(actor_topology_target.astype(np.int64)),
-            "topology_mask": torch.from_numpy(actor_topology_mask),
         }
+        result.update({k: torch.from_numpy(v) for k, v in out_arrays.items()})
+        if self.need_topology:
+            result.update({
+                "topology_features": result["actor_topology_features"],
+                "topology_target": result["actor_topology_target"].to(torch.int64),
+                "topology_mask": result["actor_topology_mask"],
+            })
+        return result

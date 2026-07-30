@@ -125,3 +125,34 @@ def test_yaw_rate_proxy_uses_schema_channel_five() -> None:
     assert _yaw_rate_violation_proxy(d, yaw_rate_max=0.6) == 0.0
     d["prefix_states"][3, 5] = 0.8
     assert _yaw_rate_violation_proxy(d, yaw_rate_max=0.6) == 1.0
+
+
+def test_control_smoothness_uses_heading_not_vx() -> None:
+    from ocrap.external_baselines.policies import _control_smoothness_cost
+
+    d = _sample(detour=False, nominal=True)
+    states = d["prefix_states"].copy()
+    states[:, 2] = np.linspace(-100.0, 100.0, states.shape[0])  # vx variation
+    states[:, 4] = 0.0  # constant heading
+    d["prefix_states"] = states
+    assert _control_smoothness_cost(d, dt=0.1) < 1.0
+
+
+def test_marc_never_selects_rejected_candidate_when_admitted_exists() -> None:
+    samples = [_sample(detour=False, nominal=True), _sample(detour=True, nominal=False)]
+    samples[0]["utility"] = np.float32(1000.0)
+    samples[1]["utility"] = np.float32(0.0)
+    cfg = _cfg()
+    p0 = observed_risk_profile(samples[0], cfg)
+    p1 = observed_risk_profile(samples[1], cfg)
+    tol = 0.35
+    risk0 = (1.0 - tol) * p0.expected_loss + tol * p0.cvar_loss
+    risk1 = (1.0 - tol) * p1.expected_loss + tol * p1.cvar_loss
+    assert risk0 > risk1
+    cfg["external_baselines"]["policy"].update({
+        "marc_risk_threshold": 0.5 * (risk0 + risk1),
+        "marc_utility_weight": 10.0,
+    })
+    sel = select_external_policy("marc_lite", samples, cfg)
+    assert sel.admitted.any()
+    assert sel.admitted[sel.selected_index]

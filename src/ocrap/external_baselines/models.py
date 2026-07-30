@@ -151,7 +151,7 @@ class GameFormerFutureEncoder(nn.Module):
         prev = torch.cat([traj_xy[..., :1, :], traj_xy[..., :-1, :]], dim=-2)
         dxy = traj_xy - prev
         vel = dxy / 0.1
-        heading = torch.atan2(dxy[..., 1], dxy[..., 0].clamp(min=1e-3)).unsqueeze(-1)
+        heading = torch.atan2(dxy[..., 1], dxy[..., 0]).unsqueeze(-1)
         size = torch.ones(B, N, M, T, 2, device=traj_xy.device, dtype=traj_xy.dtype)
         valid = torch.ones(B, N, M, T, 1, device=traj_xy.device, dtype=traj_xy.dtype)
         state = torch.cat([traj_xy, heading, vel, size, valid], dim=-1)

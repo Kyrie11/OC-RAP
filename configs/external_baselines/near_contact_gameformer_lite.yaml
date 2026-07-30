@@ -30,8 +30,12 @@ external_baselines:
   training:
     device: auto
     distributed: auto
+    # Global batch is held fixed under DDP; two GPUs therefore use 32/group per rank.
+    global_batch_size: 64
     batch_size: 64
-    num_workers: 8
+    num_workers_total: 8
+    prefetch_factor: 2
+    persistent_workers: true
     epochs: 30
     lr: 0.0001
     weight_decay: 0.0002

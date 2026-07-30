@@ -159,8 +159,9 @@ def _control_smoothness_cost(d: dict[str, Any], dt: float = 0.2) -> float:
             cost += 0.5 * float(np.nanmean(np.abs(steer))) / 0.6
             if steer.size > 1:
                 cost += 0.15 * float(np.nanmax(np.abs(np.diff(steer) / max(dt, 1e-3)))) / 1.0
-    if states.ndim == 2 and states.shape[0] > 1 and states.shape[1] >= 3:
-        yaw = np.unwrap(states[:, 2])
+    if states.ndim == 2 and states.shape[0] > 1 and states.shape[1] >= 5:
+        # prefix_states schema: [x,y,vx,vy,heading,yaw_rate,speed,length,width].
+        yaw = np.unwrap(states[:, 4])
         yr = np.diff(yaw) / max(dt, 1e-3)
         if yr.size:
             cost += 0.3 * float(np.nanmax(np.abs(yr))) / 1.0
@@ -610,6 +611,7 @@ def select_external_policy(
     cfg: dict[str, Any] | None = None,
     *,
     model_outputs: dict[str, np.ndarray] | None = None,
+    precomputed_profiles: list[ObservedRiskProfile] | None = None,
 ) -> ExternalSelection:
     """Select a candidate for an external baseline.
 
@@ -691,10 +693,30 @@ def select_external_policy(
         admitted[idx] = True
         return ExternalSelection(idx, reason, admitted, score)
 
+    if baseline in {"oracle_filter", "oracle_recovery_filter", "branchwise_oracle_filter", "oracle_branchwise_recovery"}:
+        # Deliberate non-deployable upper bound.  This is the only selector that
+        # may consume OC-RAP teacher tensors.
+        alpha = float(pcfg.get("cvar_alpha", 0.2))
+        gamma_o = float(pcfg.get("gamma_oracle_rec", pcfg.get("gamma_branch_rec", 0.0)))
+        hard = np.asarray([_scalar(d, "hard_violation", 0.0) for d in samples], dtype=float)
+        harm = np.asarray([_scalar(d, "harm_proxy", 0.0) for d in samples], dtype=float)
+        branch_eff = [_effective_root_outcomes(d, alpha=alpha, gamma=gamma_o) for d in samples]
+        oracle_all = np.asarray([bool(b["oracle_all_roots"]) for b in branch_eff], dtype=bool)
+        branch_cvar = np.asarray([b["cvar"] for b in branch_eff], dtype=float)
+        teacher_safe = feasible & (hard <= float(pcfg.get("gamma_H", 0.0))) & (harm <= float(pcfg.get("gamma_D", 5.0)))
+        admitted = teacher_safe & oracle_all & (branch_cvar >= gamma_o)
+        score = branch_cvar + float(pcfg.get("oracle_utility_tiebreak", 1.0e-3)) * utility
+        idx = _best(score, admitted if admitted.any() else feasible)
+        opts = np.asarray(branch_eff[idx].get("best_options", np.zeros((0,), dtype=int)))
+        opt = int(opts[0]) if opts.size else None
+        return ExternalSelection(idx, "teacher_only_branchwise_oracle_upper_bound", admitted, score, selected_option=opt)
+
     # Deployable scenario-risk profiles shared by all non-oracle planning/filter
     # baselines.  They are derived from candidate trajectories and observed agent
     # histories, not from m_star/r_orc/r_dep/harm labels.
-    profiles = [observed_risk_profile(d, cfg) for d in samples]
+    profiles = precomputed_profiles if precomputed_profiles is not None else [observed_risk_profile(d, cfg) for d in samples]
+    if len(profiles) != n:
+        raise ValueError(f"precomputed_profiles length {len(profiles)} does not match candidate count {n}")
     exp_risk = np.asarray([p.expected_loss for p in profiles], dtype=float)
     cvar_risk = np.asarray([p.cvar_loss for p in profiles], dtype=float)
     worst_risk = np.asarray([p.worst_loss for p in profiles], dtype=float)
@@ -717,20 +739,24 @@ def select_external_policy(
             - float(pcfg.get("marc_smoothness_weight", 0.15)) * smooth
             - float(pcfg.get("marc_deviation_weight", 0.10)) * dev
         )
+        admitted = feasible & (mixed_risk <= float(pcfg.get("marc_risk_threshold", 1.0)))
+        # MARC is a constrained planner: an inadmissible representative must not
+        # win merely because its unconstrained score is high. If the certified
+        # set is empty, retain the documented feasible emergency fallback.
+        selection_pool = admitted if admitted.any() else feasible
         representatives: list[int] = []
         for macro in sorted(set(macros)):
             ids = np.asarray([i for i, name in enumerate(macros) if name == macro], dtype=int)
             if ids.size:
-                valid_ids = ids[feasible[ids]]
-                use = valid_ids if valid_ids.size else ids
-                representatives.append(int(use[np.argmax(score[use])]))
+                use = ids[selection_pool[ids]]
+                if use.size:
+                    representatives.append(int(use[np.argmax(score[use])]))
         if representatives:
             ids = np.asarray(representatives, dtype=int)
             idx = int(ids[np.argmax(score[ids])])
         else:
-            idx = _best(score, feasible)
-        admitted = feasible & (mixed_risk <= float(pcfg.get("marc_risk_threshold", 1.0)))
-        return ExternalSelection(idx, "marc_observation_conditioned_multipolicy_contingency", admitted, score)
+            idx = _best(score, selection_pool)
+        return ExternalSelection(idx, "marc_observation_conditioned_multipolicy_contingency_adapter", admitted, score)
 
     if baseline in {"racp", "racp_lite", "risk_aware_contingency"}:
         # RACP-style beliefs are the normalized observation-conditioned mode
@@ -775,7 +801,7 @@ def select_external_policy(
         admitted = feasible & (risk <= float(pcfg.get("dro_cvar_threshold", 0.65)))
         score = utility - float(pcfg.get("dro_cvar_risk_weight", 3.5)) * risk - float(pcfg.get("risk_deviation_weight", 0.05)) * dev
         idx = _best(score, admitted if admitted.any() else feasible)
-        return ExternalSelection(idx, "distributionally_robust_cvar_observed_risk_filter", admitted, score)
+        return ExternalSelection(idx, "wasserstein_inspired_cvar_dispersion_surrogate", admitted, score)
 
     if baseline in {"predictive_safety_filter", "psf", "cbf_backup_filter", "predictive_cbf_backup", "backup_cbf_filter"}:
         accel = np.zeros(n, dtype=float)
@@ -796,25 +822,7 @@ def select_external_policy(
             - float(pcfg.get("psf_smoothness_weight", 0.15)) * smooth
         )
         idx = 0 if admitted[0] else _best(score, admitted if admitted.any() else feasible)
-        return ExternalSelection(idx, "predictive_safety_filter_observed_backup_barrier", admitted, score)
-
-    if baseline in {"oracle_filter", "oracle_recovery_filter", "branchwise_oracle_filter", "oracle_branchwise_recovery"}:
-        # Deliberate non-deployable upper bound.  This is the only selector that
-        # may consume OC-RAP teacher tensors.
-        alpha = float(pcfg.get("cvar_alpha", 0.2))
-        gamma_o = float(pcfg.get("gamma_oracle_rec", pcfg.get("gamma_branch_rec", 0.0)))
-        hard = np.asarray([_scalar(d, "hard_violation", 0.0) for d in samples], dtype=float)
-        harm = np.asarray([_scalar(d, "harm_proxy", 0.0) for d in samples], dtype=float)
-        branch_eff = [_effective_root_outcomes(d, alpha=alpha, gamma=gamma_o) for d in samples]
-        oracle_all = np.asarray([bool(b["oracle_all_roots"]) for b in branch_eff], dtype=bool)
-        branch_cvar = np.asarray([b["cvar"] for b in branch_eff], dtype=float)
-        teacher_safe = feasible & (hard <= float(pcfg.get("gamma_H", 0.0))) & (harm <= float(pcfg.get("gamma_D", 5.0)))
-        admitted = teacher_safe & oracle_all & (branch_cvar >= gamma_o)
-        score = branch_cvar + float(pcfg.get("oracle_utility_tiebreak", 1.0e-3)) * utility
-        idx = _best(score, admitted if admitted.any() else feasible)
-        opts = np.asarray(branch_eff[idx].get("best_options", np.zeros((0,), dtype=int)))
-        opt = int(opts[0]) if opts.size else None
-        return ExternalSelection(idx, "teacher_only_branchwise_oracle_upper_bound", admitted, score, selected_option=opt)
+        return ExternalSelection(idx, "predictive_safety_filter_candidate_lattice_surrogate", admitted, score)
 
     if baseline in {"postimpact_mpc", "postimpact_mpc_lite", "post_impact_mpc_lite", "postimpact_mpc_paper", "integrated_postimpact_mpc"}:
         details_list = []

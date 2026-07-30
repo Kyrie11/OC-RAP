@@ -84,79 +84,92 @@ def _load_checkpoint(checkpoint: str | Path | None, cfg: dict[str, Any]) -> tupl
 def _predict_group(model: torch.nn.Module | None, samples: list[dict[str, Any]], cfg: dict[str, Any], device: torch.device) -> dict[str, np.ndarray] | None:
     if model is None or not samples:
         return None
-    max_candidates = int(((cfg.get("external_baselines", {}) or {}).get("max_candidates", len(samples))))
+    bcfg = (cfg.get("external_baselines", {}) or {})
+    mcfg = (bcfg.get("model", {}) or {})
+    arch = str(mcfg.get("arch", bcfg.get("baseline", ""))).lower()
+    need_history = arch in {"gameformer", "gameformer_lite", "gameformer_levelk"}
+    need_topology = arch in {"betop", "betop_lite", "betopnet", "betopnet_lite"}
+    use_branch_context = use_teacher_branch_context(cfg)
+
+    max_candidates = int(bcfg.get("max_candidates", len(samples)))
     n = min(len(samples), max_candidates)
     feats = [sample_to_feature(d, cfg) for d in samples[:n]]
     if not feats:
         return None
     D = int(feats[0].shape[0])
-    use_branch_context = use_teacher_branch_context(cfg)
-    bm0, rf0, _, _, _ = _branch_arrays(samples[0], cfg)
-    ego0, neigh0, _, pref0, _ = _history_arrays(samples[0], cfg)
-    actor0, _, _ = _actor_topology_arrays(samples[0], cfg)
-    map0, _, _ = _map_topology_arrays(samples[0], cfg)
-    K, L, Fdim = int(bm0.shape[0]), int(bm0.shape[1]), int(rf0.shape[-1])
-    H, A_hist, T = int(ego0.shape[0]), int(neigh0.shape[0]), int(pref0.shape[0])
-    A_top, AF = int(actor0.shape[0]), int(actor0.shape[-1])
-    M_top, MF = int(map0.shape[0]), int(map0.shape[-1])
-
     x = np.zeros((1, max_candidates, D), dtype=np.float32)
     mask = np.zeros((1, max_candidates), dtype=bool)
-    branch_margins = np.zeros((1, max_candidates, K, L), dtype=np.float32)
-    root_features = np.zeros((1, max_candidates, K, Fdim), dtype=np.float32)
-    root_probs = np.zeros((1, max_candidates, K), dtype=np.float32)
-    root_valid = np.zeros((1, max_candidates, K), dtype=bool)
-    option_valid = np.zeros((1, max_candidates, L), dtype=bool)
-    ego_history = np.zeros((1, max_candidates, H, 9), dtype=np.float32)
-    neighbor_history = np.zeros((1, max_candidates, A_hist, H, 9), dtype=np.float32)
-    neighbor_valid = np.zeros((1, max_candidates, A_hist, H), dtype=bool)
-    prefix_traj = np.zeros((1, max_candidates, T, 2), dtype=np.float32)
-    prefix_valid = np.zeros((1, max_candidates, T), dtype=bool)
-    actor_topology_features = np.zeros((1, max_candidates, A_top, AF), dtype=np.float32)
-    actor_topology_mask = np.zeros((1, max_candidates, A_top), dtype=bool)
-    map_topology_features = np.zeros((1, max_candidates, M_top, MF), dtype=np.float32)
-    map_topology_mask = np.zeros((1, max_candidates, M_top), dtype=bool)
-
     for i, f in enumerate(feats):
         x[0, i] = f
         mask[0, i] = True
-        if use_branch_context:
-            bm, rf, rp, rv, ov = _branch_arrays(samples[i], cfg)
-            branch_margins[0, i] = bm
-            root_features[0, i] = rf
-            root_probs[0, i] = rp
-            root_valid[0, i] = rv
-            option_valid[0, i] = ov
-        eh, nh, nv, pt, pv = _history_arrays(samples[i], cfg)
-        ego_history[0, i] = eh
-        neighbor_history[0, i] = nh
-        neighbor_valid[0, i] = nv
-        prefix_traj[0, i] = pt
-        prefix_valid[0, i] = pv
-        af, _, am = _actor_topology_arrays(samples[i], cfg)
-        mf, _, mm = _map_topology_arrays(samples[i], cfg)
-        actor_topology_features[0, i] = af
-        actor_topology_mask[0, i] = am
-        map_topology_features[0, i] = mf
-        map_topology_mask[0, i] = mm
-    with torch.no_grad():
+
+    kwargs: dict[str, torch.Tensor | None] = {}
+    if use_branch_context:
+        bm0, rf0, _, _, _ = _branch_arrays(samples[0], cfg)
+        K, L, Fdim = int(bm0.shape[0]), int(bm0.shape[1]), int(rf0.shape[-1])
+        branch_margins = np.zeros((1, max_candidates, K, L), dtype=np.float32)
+        root_features = np.zeros((1, max_candidates, K, Fdim), dtype=np.float32)
+        root_probs = np.zeros((1, max_candidates, K), dtype=np.float32)
+        root_valid = np.zeros((1, max_candidates, K), dtype=bool)
+        option_valid = np.zeros((1, max_candidates, L), dtype=bool)
+        for i, d in enumerate(samples[:n]):
+            bm, rf, rp, rv, ov = _branch_arrays(d, cfg)
+            branch_margins[0, i], root_features[0, i] = bm, rf
+            root_probs[0, i], root_valid[0, i], option_valid[0, i] = rp, rv, ov
+        kwargs.update({
+            "branch_margins": torch.from_numpy(branch_margins).to(device, non_blocking=True),
+            "root_features": torch.from_numpy(root_features).to(device, non_blocking=True),
+            "root_probs": torch.from_numpy(root_probs).to(device, non_blocking=True),
+            "root_valid": torch.from_numpy(root_valid).to(device, non_blocking=True),
+            "option_valid": torch.from_numpy(option_valid).to(device, non_blocking=True),
+        })
+
+    if need_history:
+        ego0, neigh0, _, pref0, _ = _history_arrays(samples[0], cfg)
+        H, A_hist, T = int(ego0.shape[0]), int(neigh0.shape[0]), int(pref0.shape[0])
+        ego_history = np.zeros((1, max_candidates, H, 9), dtype=np.float32)
+        neighbor_history = np.zeros((1, max_candidates, A_hist, H, 9), dtype=np.float32)
+        neighbor_valid = np.zeros((1, max_candidates, A_hist, H), dtype=bool)
+        prefix_traj = np.zeros((1, max_candidates, T, 2), dtype=np.float32)
+        prefix_valid = np.zeros((1, max_candidates, T), dtype=bool)
+        for i, d in enumerate(samples[:n]):
+            eh, nh, nv, pt, pv = _history_arrays(d, cfg)
+            ego_history[0, i], neighbor_history[0, i] = eh, nh
+            neighbor_valid[0, i], prefix_traj[0, i], prefix_valid[0, i] = nv, pt, pv
+        kwargs.update({
+            "ego_history": torch.from_numpy(ego_history).to(device, non_blocking=True),
+            "neighbor_history": torch.from_numpy(neighbor_history).to(device, non_blocking=True),
+            "neighbor_valid": torch.from_numpy(neighbor_valid).to(device, non_blocking=True),
+            "prefix_traj": torch.from_numpy(prefix_traj).to(device, non_blocking=True),
+            "prefix_valid": torch.from_numpy(prefix_valid).to(device, non_blocking=True),
+        })
+
+    if need_topology:
+        actor0, _, _ = _actor_topology_arrays(samples[0], cfg)
+        map0, _, _ = _map_topology_arrays(samples[0], cfg)
+        A_top, AF = int(actor0.shape[0]), int(actor0.shape[-1])
+        M_top, MF = int(map0.shape[0]), int(map0.shape[-1])
+        actor_topology_features = np.zeros((1, max_candidates, A_top, AF), dtype=np.float32)
+        actor_topology_mask = np.zeros((1, max_candidates, A_top), dtype=bool)
+        map_topology_features = np.zeros((1, max_candidates, M_top, MF), dtype=np.float32)
+        map_topology_mask = np.zeros((1, max_candidates, M_top), dtype=bool)
+        for i, d in enumerate(samples[:n]):
+            af, _, am = _actor_topology_arrays(d, cfg)
+            mf, _, mm = _map_topology_arrays(d, cfg)
+            actor_topology_features[0, i], actor_topology_mask[0, i] = af, am
+            map_topology_features[0, i], map_topology_mask[0, i] = mf, mm
+        kwargs.update({
+            "actor_topology_features": torch.from_numpy(actor_topology_features).to(device, non_blocking=True),
+            "actor_topology_mask": torch.from_numpy(actor_topology_mask).to(device, non_blocking=True),
+            "map_topology_features": torch.from_numpy(map_topology_features).to(device, non_blocking=True),
+            "map_topology_mask": torch.from_numpy(map_topology_mask).to(device, non_blocking=True),
+        })
+
+    with torch.inference_mode():
         out = model(
-            torch.from_numpy(x).to(device),
-            torch.from_numpy(mask).to(device),
-            branch_margins=(torch.from_numpy(branch_margins).to(device) if use_branch_context else None),
-            root_features=(torch.from_numpy(root_features).to(device) if use_branch_context else None),
-            root_probs=(torch.from_numpy(root_probs).to(device) if use_branch_context else None),
-            root_valid=(torch.from_numpy(root_valid).to(device) if use_branch_context else None),
-            option_valid=(torch.from_numpy(option_valid).to(device) if use_branch_context else None),
-            ego_history=torch.from_numpy(ego_history).to(device),
-            neighbor_history=torch.from_numpy(neighbor_history).to(device),
-            neighbor_valid=torch.from_numpy(neighbor_valid).to(device),
-            prefix_traj=torch.from_numpy(prefix_traj).to(device),
-            prefix_valid=torch.from_numpy(prefix_valid).to(device),
-            actor_topology_features=torch.from_numpy(actor_topology_features).to(device),
-            actor_topology_mask=torch.from_numpy(actor_topology_mask).to(device),
-            map_topology_features=torch.from_numpy(map_topology_features).to(device),
-            map_topology_mask=torch.from_numpy(map_topology_mask).to(device),
+            torch.from_numpy(x).to(device, non_blocking=True),
+            torch.from_numpy(mask).to(device, non_blocking=True),
+            **kwargs,
         )
     result: dict[str, np.ndarray] = {}
     for k, v in out.items():
@@ -164,7 +177,6 @@ def _predict_group(model: torch.nn.Module | None, samples: list[dict[str, Any]],
             continue
         result[k] = v.squeeze(0).detach().cpu().numpy()[:n]
     return result
-
 
 def _yaw_rate_violation_proxy(d: dict[str, Any], yaw_rate_max: float = 0.6) -> float:
     """Return whether the candidate exceeds the configured yaw-rate limit.
@@ -200,7 +212,7 @@ def _contact_extra_metrics(records: list[dict[str, Any]]) -> dict[str, float | N
     return out
 
 
-def _record_for_selection(method: str, samples: list[dict[str, Any]], sel: ExternalSelection, cfg: dict[str, Any]) -> dict[str, Any]:
+def _record_for_selection(method: str, samples: list[dict[str, Any]], sel: ExternalSelection, cfg: dict[str, Any], *, observed_profiles: list[Any] | None = None) -> dict[str, Any]:
     idx = int(np.clip(sel.selected_index, 0, max(len(samples) - 1, 0)))
     chosen = samples[idx]
     utility = np.asarray([_scalar(d, "utility", 0.0) for d in samples], dtype=float)
@@ -212,7 +224,7 @@ def _record_for_selection(method: str, samples: list[dict[str, Any]], sel: Exter
         selected_option = best_shared_option_index(chosen.get("m_star", np.zeros((0, 0))), chosen.get("root_probs", np.zeros((0,))), gamma=0.0, root_valid=chosen.get("root_valid", None), option_valid=chosen.get("option_valid", None))
     drs = deployable_recovery_success(chosen.get("m_star", np.zeros((0, 0))), chosen.get("root_probs", np.zeros((0,))), int(selected_option), chosen.get("root_valid", None))
     nup = nominal_utility_preservation(utility[0] if utility.size else 0.0, utility[idx] if utility.size else 0.0, sigma_u=float((cfg.get("metrics", {}) or {}).get("sigma_u", 1.0)))
-    observed = observed_risk_profile(chosen, cfg)
+    observed = observed_profiles[idx] if observed_profiles is not None and len(observed_profiles) > idx else observed_risk_profile(chosen, cfg)
     return {
         "method": method,
         "fra_cand": false_recoverability_admission(sel.admitted, r_dep),
@@ -291,9 +303,17 @@ def evaluate_external_baselines(
         samples = [load_npz(p) for p in paths]
         samples = sorted(samples, key=lambda d: int(np.asarray(d.get("candidate_index", 0)).item()))
         model_outputs = _predict_group(model, samples, model_cfg, device)
+        # All deployable hand-designed methods share exactly the same observation-
+        # conditioned risk profiles. Compute them once per candidate group rather
+        # than once per method and once again for the selected record.
+        oracle_names = {"oracle_filter", "oracle_recovery_filter", "branchwise_oracle_filter", "oracle_branchwise_recovery"}
+        learned_names = {"route_bc", "route_bc_lite", "waymax_bc", "waymax_bc_lite", "wayformer_bc", "wayformer_style_bc", "route_bc_wayformer", "gameformer", "gameformer_lite", "gameformer_levelk", "betop", "betop_lite", "betopnet", "betopnet_lite"}
+        need_profiles = any(m.lower() not in oracle_names | learned_names for m in methods)
+        profiles = [observed_risk_profile(d, model_cfg) for d in samples] if need_profiles else None
         for method in methods:
-            sel = select_external_policy(method, samples, model_cfg, model_outputs=model_outputs)
-            records_by_method[method].append(_record_for_selection(method, samples, sel, model_cfg))
+            use_profiles = profiles if method.lower() not in oracle_names | learned_names else None
+            sel = select_external_policy(method, samples, model_cfg, model_outputs=model_outputs, precomputed_profiles=use_profiles)
+            records_by_method[method].append(_record_for_selection(method, samples, sel, model_cfg, observed_profiles=profiles))
         if gi == 1 or gi % 500 == 0:
             print({"event": "external_eval_progress", "groups_done": gi, "num_groups": len(groups)}, flush=True)
     learned_methods = {"route_bc", "route_bc_lite", "waymax_bc", "waymax_bc_lite", "wayformer_bc", "wayformer_style_bc", "route_bc_wayformer", "gameformer", "gameformer_lite", "gameformer_levelk", "betop", "betop_lite", "betopnet", "betopnet_lite"}

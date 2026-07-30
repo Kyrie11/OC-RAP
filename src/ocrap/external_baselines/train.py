@@ -9,7 +9,7 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Sampler
 from torch.utils.data.distributed import DistributedSampler
 
 from ocrap.data.serialization import ensure_dir, write_json
@@ -21,6 +21,41 @@ try:  # tqdm is optional but strongly preferred on training machines.
     from tqdm.auto import tqdm
 except Exception:  # pragma: no cover
     tqdm = None
+
+
+
+
+class _DistributedEvalSampler(Sampler[int]):
+    """Shard validation data without DistributedSampler's duplicate padding.
+
+    Evaluation has no per-step gradient collective, so ranks may process one
+    different number of examples. Final totals are reduced once in ``_epoch``.
+    This preserves each validation group exactly once and therefore preserves
+    best-checkpoint selection semantics.
+    """
+
+    def __init__(self, dataset, *, num_replicas: int, rank: int) -> None:
+        self.dataset = dataset
+        self.num_replicas = int(num_replicas)
+        self.rank = int(rank)
+
+    def __iter__(self):
+        return iter(range(self.rank, len(self.dataset), self.num_replicas))
+
+    def __len__(self) -> int:
+        n = len(self.dataset) - self.rank
+        return 0 if n <= 0 else (n + self.num_replicas - 1) // self.num_replicas
+
+
+def _loader_kwargs(tcfg: dict[str, Any], *, num_workers: int, pin_memory: bool) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "num_workers": int(num_workers),
+        "pin_memory": bool(pin_memory),
+        "persistent_workers": bool(num_workers > 0 and tcfg.get("persistent_workers", True)),
+    }
+    if num_workers > 0:
+        kwargs["prefetch_factor"] = int(tcfg.get("prefetch_factor", 2))
+    return kwargs
 
 
 def _distributed_available() -> bool:
@@ -353,15 +388,38 @@ def train_external_baseline(dataset: str, output: str, cfg: dict[str, Any], *, v
                 find_unused = baseline_name.lower() in {"betop", "betop_lite", "betopnet", "betopnet_lite"} if fup_s == "auto" else fup_s in {"1", "true", "yes"}
             else:
                 find_unused = bool(fup)
-            model = DDP(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=find_unused)
+            model = DDP(
+                model,
+                device_ids=[local_rank],
+                output_device=local_rank,
+                find_unused_parameters=find_unused,
+                # The validation sampler intentionally does not pad/duplicate groups.
+                # Disabling per-forward buffer broadcasts makes uneven validation
+                # shard lengths safe; these architectures do not use BatchNorm.
+                broadcast_buffers=False,
+            )
         opt = torch.optim.AdamW(model.parameters(), lr=float(tcfg.get("lr", 2.0e-4)), weight_decay=float(tcfg.get("weight_decay", 1.0e-4)))
-        batch_size = int(tcfg.get("batch_size", 32))
-        num_workers = int(tcfg.get("num_workers", 0))
+        requested_batch_size = int(tcfg.get("batch_size", 32))
+        global_batch_size = int(tcfg.get("global_batch_size", requested_batch_size * world_size if use_ddp else requested_batch_size))
+        if use_ddp:
+            if global_batch_size % world_size != 0:
+                raise ValueError(f"external_baselines.training.global_batch_size={global_batch_size} must be divisible by world_size={world_size}")
+            batch_size = global_batch_size // world_size
+        else:
+            batch_size = global_batch_size
+        if use_ddp and len(train_ds) % world_size != 0:
+            raise ValueError(
+                f"Exact-result DDP requires num_train_groups ({len(train_ds)}) divisible by world_size ({world_size}); "
+                "otherwise DistributedSampler would duplicate training groups. Use one GPU or rebuild/shard the split."
+            )
+        configured_workers = int(tcfg.get("num_workers_total", tcfg.get("num_workers", 0)))
+        num_workers = max(0, configured_workers // world_size) if use_ddp else max(0, configured_workers)
         pin_memory = bool(tcfg.get("pin_memory", True)) and torch.cuda.is_available()
         train_sampler = DistributedSampler(train_ds, num_replicas=world_size, rank=rank, shuffle=True, drop_last=False) if use_ddp else None
-        val_sampler = DistributedSampler(val_ds, num_replicas=world_size, rank=rank, shuffle=False, drop_last=False) if use_ddp else None
-        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=(train_sampler is None), sampler=train_sampler, collate_fn=_collate, num_workers=num_workers, pin_memory=pin_memory, persistent_workers=(num_workers > 0))
-        val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, sampler=val_sampler, collate_fn=_collate, num_workers=num_workers, pin_memory=pin_memory, persistent_workers=(num_workers > 0))
+        val_sampler = _DistributedEvalSampler(val_ds, num_replicas=world_size, rank=rank) if use_ddp else None
+        loader_kwargs = _loader_kwargs(tcfg, num_workers=num_workers, pin_memory=pin_memory)
+        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=(train_sampler is None), sampler=train_sampler, collate_fn=_collate, **loader_kwargs)
+        val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, sampler=val_sampler, collate_fn=_collate, **loader_kwargs)
         epochs = int(tcfg.get("epochs", 10))
         best_val = float("inf")
         best_epoch = 0
@@ -403,6 +461,8 @@ def train_external_baseline(dataset: str, output: str, cfg: dict[str, Any], *, v
                     "epoch": int(ep),
                     "val_loss": float(va.get("loss", 0.0)),
                     "world_size": int(world_size),
+                    "per_rank_batch_size": int(batch_size),
+                    "global_batch_size": int(global_batch_size),
                 }
                 torch.save(ckpt, out_dir / "latest.pt")
                 if va.get("loss", float("inf")) <= best_val:
@@ -431,6 +491,9 @@ def train_external_baseline(dataset: str, output: str, cfg: dict[str, Any], *, v
             "best_val_loss": float(best_val),
             "seconds": float(perf_counter() - t0),
             "world_size": int(world_size),
+            "per_rank_batch_size": int(batch_size),
+            "global_batch_size": int(global_batch_size),
+            "num_workers_per_rank": int(num_workers),
             "history": history,
         }
         if rank == 0:
