@@ -1,3 +1,56 @@
+## v48.19 — OC-TRAC-FACET-BRIDGE (2026-07-30)
+
+### Result attribution corrected before further tuning
+
+- A recovered v48.17 `RC=20` is an algorithmic Natural-gate rejection only when the dedicated certificate is non-empty, scene-disjoint, and the controller records `pipeline_valid=true`. The earlier missing-report/`RC=30` failure was the separate 78,630-vs-20,000 parameter-guard bug already documented in v48.18.
+- The uploaded v48.18 dedicated run completed adaptation and a non-empty independent certificate, returned `RC=20`, did not read test roots, and selected no verify groups for either variant. However, that result is **not a clean algorithm-only rejection** because the historical Near-fit specification was unsupported by its own split.
+- Near fit contained only eight positive opportunities but required at least twelve selections and `precision LCB90 >= 0.50`. With the historical `z=1.6448536`, even an oracle selecting all eight positives plus four non-harmful negatives has LCB `0.43149`; no model or threshold could pass.
+- The code labelled those directional bounds as 90% LCB/UCB while using the central two-sided 90% critical value. v48.19 declares the convention explicitly and uses one-sided 90% Wilson bounds (`z=1.2815516`). Under the new, separately preregistered protocol, Near fit uses 10 selections (`8/10` optimistic LCB `0.60160`) and verify retains 8 (`6/8` optimistic LCB `0.52371`, zero-harm UCB `0.17033`). This is a new protocol and must not be used to retroactively relabel v48.18 as passing.
+
+### v48.18 ablation conclusions
+
+1. `A_dual_scalar` preserved the only robust signal: Near benefit AUC (0.817 Balanced / 0.756 Precision). Harm AUC remained near random and Contact remained weak.
+2. `B_dual_tournament` modestly improved harm ordering (especially Near) but reduced benefit ordering. It did not make Contact separable and therefore does not justify the current tournament context as a standalone improvement.
+3. `C_dual_tournament_balanced` was unstable: Balanced nearly reverted to A; Precision gained only small harm AUC while losing benefit AUC and increasing intervention/harm on dev.
+4. `D_full_duet` selected the same epochs and produced numerically identical certificate metrics as C for both variants. The v48.18 cross-regime checkpoint metric had no observed causal effect.
+5. All v48.18 variants remained all-abstain on verify. Threshold search cannot solve this because the underlying Contact evidence and harm supervision are not discriminative.
+
+### Root algorithm defect fixed
+
+- v48.18 made the network outputs independent but generated both labels from one signed total PCD delta. Consequently benefit and harm were still mutually exclusive in supervision, even though a Contact recovery candidate can improve total deployability while worsening DRS, hard violation, gap quality, or post-contact stability.
+- v48.19 introduces **FACET-BRIDGE: Factorized Advantage and Componentwise Evidence Transfer with a shared cross-regime bridge**.
+- The benefit tail remains total PCD advantage. The harm tail is a non-compensatory component veto over nominal-relative DRS, deployability-gate probability, gap discount, hard violation, and `harm_proxy`. Benefit and harm can now be simultaneously positive.
+- Component harm uses strict tolerance exceedance. Equality at the tolerance boundary is non-harmful; the default normalized deadband is 0.05 for each component. This removes the previous `component_margin == 0` soft-label ambiguity.
+- Near and Contact share one zero-initialized bounded calibrator, with a small bounded regime residual (`scale=0.25`). This partially pools sparse evidence across regimes while retaining phase-specific corrections. Safe is the nominal boundary condition and remains protected by the verified nominal lock.
+- Default trainable evidence-correction parameters are 2,298: three 766-parameter modules (one shared plus two regime residuals), far below the v48.17 raw-context calibrator and below the architecture-aware 8,000-parameter guard.
+
+### Engineering and statistical safeguards
+
+1. Add train/certificate-shared target implementation in `src/ocrap/algorithms/evidence_targets.py`; no duplicated harm definition is permitted.
+2. Add explicit Wilson confidence-level/bound-type implementation and optimistic certificate-support preflight. Unsupported gates return protocol/artifact failure rather than algorithm rejection.
+3. Freeze `GATE_SPEC.json` before certificate scoring. It now binds the full statistical protocol and SHA256 identities of Safe/Near/Contact manifests; changing data or gate settings requires a new output directory.
+4. Bind teacher-index reuse to train-root paths, manifest SHA256 values, PCD parameters, macro set, and component-veto tolerances. A stale index is automatically rebuilt.
+5. Add a pre-training FACET target-support audit. Near and Contact must each contain positive and negative examples for both benefit and harm tails; absence of overlap is reported as a warning rather than fabricated.
+6. Main runs require both Balanced and Precision adaptation branches by default. One failed branch yields normalized `RC=30`; partial variants are allowed only with the explicit debugging flag `ALLOW_PARTIAL_VARIANTS=1`.
+7. Normalize controller semantics: `RC=0` is a valid Natural-gate pass, `RC=20` is a valid supported-protocol algorithm rejection, and every other lower-level failure becomes `RC=30` with a stage-specific JSON artifact.
+8. Stress/test execution remains sealed unless an independently certified run creates `NEXT_COMMANDS.txt`.
+
+### v48.19 non-repetition ablations
+
+- `A_component_veto_separate`: factorized component-veto targets with separate regime calibrators.
+- `B_shared_component_veto`: A plus shared cross-regime partial pooling and bounded regime residuals.
+- `C_shared_only_no_regime_residual`: shared bridge only; isolates whether regime residuals are necessary.
+- `D_full_facet`: B plus the FACET checkpoint metric, which prioritizes minimum cross-regime recall subject to harm/false-intervention budgets.
+
+Run four tasks concurrently per wave: two tasks on each A30, one DataLoader worker per task, Balanced wave followed by Precision wave. Do not repeat simplex labels, signed-total-delta harm labels, raw 4,890-D context, auxiliary-only balancing, sampler-only balancing, or v48.18 C/D comparisons.
+
+### Validation
+
+- `pytest`: 185 passed, 5 warnings.
+- `python -m compileall -q src tools`: passed.
+- `bash -n scripts/*.sh`: passed.
+- No real Waymax/WOMD/A30 experiment was executed in the delivery environment; no v48.19 Natural-gate or closed-loop result is claimed.
+
 ## v48.18 — OC-TRAC-DUET-BRIDGE (2026-07-30)
 
 ### v48.17 result audit and corrected Natural-gate status

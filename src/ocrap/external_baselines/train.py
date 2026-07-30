@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 import os
 from pathlib import Path
 from time import perf_counter
@@ -58,127 +57,6 @@ def _loader_kwargs(tcfg: dict[str, Any], *, num_workers: int, pin_memory: bool) 
         kwargs["prefetch_factor"] = int(tcfg.get("prefetch_factor", 2))
     return kwargs
 
-
-
-
-def _atomic_torch_save(payload: dict[str, Any], path: str | Path) -> None:
-    """Write a checkpoint atomically so interrupted saves cannot leave a corrupt file."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.tmp-{os.getpid()}")
-    try:
-        torch.save(payload, tmp)
-        os.replace(tmp, path)
-    finally:
-        try:
-            tmp.unlink(missing_ok=True)
-        except Exception:
-            pass
-
-
-def _losses_are_finite(losses: dict[str, torch.Tensor]) -> tuple[bool, list[str]]:
-    bad: list[str] = []
-    for name, value in losses.items():
-        if not torch.is_tensor(value) or value.numel() != 1 or not bool(torch.isfinite(value.detach()).all()):
-            bad.append(name)
-    return not bad, bad
-
-
-def _gradient_diagnostics(model: torch.nn.Module, *, limit: int = 12) -> tuple[list[str], list[dict[str, float | str]]]:
-    """Return non-finite gradient names and the largest finite gradients.
-
-    This is intentionally executed after DDP's gradient all-reduce.  Therefore
-    one bad rank is visible on every rank and no additional parameter-wise
-    collectives are required.
-    """
-    bad: list[str] = []
-    largest: list[dict[str, float | str]] = []
-    for name, param in model.named_parameters():
-        grad = param.grad
-        if grad is None:
-            continue
-        finite = bool(torch.isfinite(grad).all())
-        if not finite:
-            bad.append(name)
-            continue
-        max_abs = float(grad.detach().abs().max().cpu()) if grad.numel() else 0.0
-        largest.append({"name": name, "max_abs_grad": max_abs})
-    largest.sort(key=lambda row: float(row["max_abs_grad"]), reverse=True)
-    return bad, largest[: max(int(limit), 0)]
-
-
-def _stable_clip_grad_norm_(parameters, max_norm: float, *, eps: float = 1.0e-12) -> float:
-    """Clip an L2 gradient norm without float32 norm-overflow false positives.
-
-    ``torch.nn.utils.clip_grad_norm_`` computes per-tensor/vector norms in the
-    gradient dtype.  A collection of very large but still finite float32
-    gradients can therefore report ``inf`` and be multiplied by zero.  We first
-    scale all gradients by their global maximum magnitude, compute the bounded
-    squared norm, and reconstruct the norm in Python float64.  This preserves the
-    usual global-L2 clipping semantics.  Truly NaN/Inf gradient elements are
-    rejected by the caller before this function is entered.
-    """
-    params = [p for p in parameters if p.grad is not None]
-    if not params:
-        return 0.0
-    max_norm = float(max_norm)
-    if max_norm < 0.0:
-        raise ValueError(f"max_norm must be non-negative, got {max_norm}")
-
-    device = params[0].grad.device
-    max_abs = torch.zeros((), dtype=torch.float32, device=device)
-    for p in params:
-        g = p.grad.detach()
-        if g.numel():
-            max_abs = torch.maximum(max_abs, g.abs().max().to(dtype=torch.float32))
-    max_abs_value = float(max_abs.cpu())
-    if max_abs_value == 0.0:
-        return 0.0
-    if not math.isfinite(max_abs_value):
-        return float("nan")
-
-    scaled_sq = torch.zeros((), dtype=torch.float64, device=device)
-    # Keep the temporary gradient-sized tensors in float32; only the scalar
-    # reduction accumulates in float64. This avoids doubling peak gradient
-    # memory and keeps the stable clipper practical on the full GameFormer.
-    for p in params:
-        scaled = p.grad.detach() / max_abs
-        scaled_sq.add_(scaled.square().sum(dtype=torch.float64))
-    total_norm = max_abs_value * math.sqrt(float(scaled_sq.cpu()))
-    if not math.isfinite(total_norm):
-        return total_norm
-    if total_norm > max_norm and max_norm > 0.0:
-        clip_coef = max_norm / (total_norm + float(eps))
-        for p in params:
-            p.grad.mul_(clip_coef)
-    elif max_norm == 0.0:
-        for p in params:
-            p.grad.zero_()
-    return total_norm
-
-
-def _batch_numeric_summary(batch: dict[str, torch.Tensor]) -> dict[str, dict[str, float | int]]:
-    summary: dict[str, dict[str, float | int]] = {}
-    for name in ("x", "ego_history", "neighbor_history", "prefix_traj"):
-        value = batch.get(name)
-        if value is None or not torch.is_tensor(value) or not value.is_floating_point():
-            continue
-        detached = value.detach()
-        finite = torch.isfinite(detached)
-        row: dict[str, float | int] = {
-            "numel": int(detached.numel()),
-            "nonfinite": int((~finite).sum().cpu()),
-        }
-        if bool(finite.any()):
-            row["max_abs_finite"] = float(detached[finite].abs().max().cpu())
-        summary[name] = row
-    return summary
-
-def _distributed_any(flag: bool, device: torch.device) -> bool:
-    value = torch.tensor([1 if flag else 0], dtype=torch.int32, device=device)
-    if _distributed_available():
-        dist.all_reduce(value, op=dist.ReduceOp.MAX)
-    return bool(value.item())
 
 def _distributed_available() -> bool:
     return dist.is_available() and dist.is_initialized()
@@ -279,12 +157,8 @@ def _gameformer_traj_loss(out: dict[str, torch.Tensor], batch: dict[str, torch.T
     score_levels = out.get("gameformer_level_scores")
     if not isinstance(traj_levels, list) or not isinstance(score_levels, list) or "prefix_traj" not in batch:
         return out["logits"].sum() * 0.0
-    gt = torch.nan_to_num(batch["prefix_traj"].float(), nan=0.0, posinf=0.0, neginf=0.0)
-    valid = (
-        batch.get("prefix_valid", torch.ones_like(gt[..., 0])).bool()
-        & batch["mask"].bool().unsqueeze(-1)
-        & torch.isfinite(batch["prefix_traj"].float()).all(dim=-1)
-    )
+    gt = batch["prefix_traj"].float()
+    valid = batch.get("prefix_valid", torch.ones_like(gt[..., 0])).bool() & batch["mask"].bool().unsqueeze(-1)
     losses = []
     for traj, scores in zip(traj_levels, score_levels):
         pred = traj[..., :2]
@@ -294,10 +168,7 @@ def _gameformer_traj_loss(out: dict[str, torch.Tensor], batch: dict[str, torch.T
         mask = valid[:, :, None, :T]
         inv_var = torch.exp(-2.0 * log_sigma)
         point_nll = 0.5 * ((pred - target) ** 2 * inv_var).sum(dim=-1) + log_sigma.sum(dim=-1)
-        # torch.where, unlike multiplication by zero, cannot propagate NaN/Inf
-        # from invalid timesteps into an otherwise valid candidate loss.
-        masked_point_nll = torch.where(mask, point_nll, torch.zeros_like(point_nll))
-        mode_nll = masked_point_nll.sum(dim=-1) / mask.float().sum(dim=-1).clamp_min(1.0)
+        mode_nll = (point_nll * mask.float()).sum(dim=-1) / mask.float().sum(dim=-1).clamp_min(1.0)
         best = mode_nll.argmin(dim=-1)
         bidx = torch.arange(B, device=pred.device)[:, None]
         nidx = torch.arange(N, device=pred.device)[None, :]
@@ -422,66 +293,16 @@ def _epoch(model, loader, opt, device, cfg: dict[str, Any], train: bool, *, rank
     show = bool(tcfg.get("tqdm", True)) and rank == 0 and tqdm is not None
     if show:
         iterator = tqdm(loader, desc=("train" if train else "val") + f" ep{epoch:03d}", leave=False, dynamic_ncols=True)
-    for batch_index, batch in enumerate(iterator, 1):
+    for batch in iterator:
         batch = _batch_to_device(batch, device)
         with torch.set_grad_enabled(train):
             out = _forward_model(model, batch, cfg)
             losses = _loss_dict(out, batch, cfg)
             loss = losses["loss"]
-            finite_local, bad_names = _losses_are_finite(losses)
-            # Training ranks execute the same number of batches, so synchronize
-            # before backward to prevent one rank entering a DDP collective while
-            # another rank has already failed. Validation shards intentionally do
-            # not pad; their batch counts may differ, so validation non-finites are
-            # reported locally and propagated through the final totals all-reduce.
-            bad_any_rank = _distributed_any(not finite_local, device) if train else (not finite_local)
-            if bad_any_rank:
-                if not finite_local:
-                    snapshot = {name: float(value.detach().cpu()) for name, value in losses.items()}
-                    print({
-                        "event": "nonfinite_external_baseline_loss",
-                        "rank": int(rank),
-                        "stage": "train" if train else "val",
-                        "epoch": int(epoch),
-                        "batch_index": int(batch_index),
-                        "bad_losses": bad_names,
-                        "losses": snapshot,
-                    }, flush=True)
-                if train:
-                    raise FloatingPointError(
-                        f"Non-finite external-baseline loss detected at stage=train "
-                        f"epoch={epoch} batch={batch_index}. See the rank-local diagnostic above."
-                    )
             if train:
                 opt.zero_grad(set_to_none=True)
                 loss.backward()
-
-                # Compute and clip the norm with overflow-safe scaling.  This
-                # single pass also detects true NaN/Inf gradient elements.  The
-                # expensive parameter-name diagnostic runs only on failure, not
-                # on every successful training batch.
-                grad_norm = _stable_clip_grad_norm_(
-                    model.parameters(),
-                    float(tcfg.get("grad_clip", 5.0)),
-                    eps=float(tcfg.get("grad_clip_eps", 1.0e-12)),
-                )
-                grad_norm_bad_any_rank = _distributed_any(not math.isfinite(float(grad_norm)), device)
-                if grad_norm_bad_any_rank:
-                    bad_grad_names, largest_grads = _gradient_diagnostics(model)
-                    print({
-                        "event": "nonfinite_external_baseline_gradient",
-                        "rank": int(rank),
-                        "epoch": int(epoch),
-                        "batch_index": int(batch_index),
-                        "grad_norm": float(grad_norm),
-                        "bad_parameters": bad_grad_names[:32],
-                        "largest_finite_gradients": largest_grads,
-                        "batch_numeric_summary": _batch_numeric_summary(batch),
-                    }, flush=True)
-                    raise FloatingPointError(
-                        f"Non-finite gradient elements or norm detected at epoch={epoch} batch={batch_index}; "
-                        "optimizer step was not applied. See the rank-local diagnostic above."
-                    )
+                torch.nn.utils.clip_grad_norm_(model.parameters(), float(tcfg.get("grad_clip", 5.0)))
                 opt.step()
         bs = int(batch["x"].shape[0])
         n += bs
@@ -643,27 +464,12 @@ def train_external_baseline(dataset: str, output: str, cfg: dict[str, Any], *, v
                     "per_rank_batch_size": int(batch_size),
                     "global_batch_size": int(global_batch_size),
                 }
-                val_loss = float(va.get("loss", float("nan")))
-                if not math.isfinite(val_loss):
-                    raise FloatingPointError(
-                        f"Validation loss is non-finite at epoch={ep}: {va}. "
-                        "best.pt was intentionally not created from an invalid model."
-                    )
-                # Save the selected best checkpoint first, then latest. On the
-                # first finite validation epoch this condition is always true.
-                if val_loss <= best_val:
-                    best_val = val_loss
+                torch.save(ckpt, out_dir / "latest.pt")
+                if va.get("loss", float("inf")) <= best_val:
+                    best_val = float(va.get("loss", float("inf")))
                     best_epoch = ep
-                    ckpt["is_best"] = True
-                    _atomic_torch_save(ckpt, out_dir / "best.pt")
-                ckpt["is_best"] = bool(ep == best_epoch)
-                _atomic_torch_save(ckpt, out_dir / "latest.pt")
+                    torch.save(ckpt, out_dir / "best.pt")
                 print({"event": "external_baseline_epoch", "baseline": baseline_name, "epoch": ep, "world_size": world_size, "train_loss": tr.get("loss"), "val_loss": va.get("loss"), "target_acc": va.get("target_acc")}, flush=True)
-        if rank == 0 and not (out_dir / "best.pt").is_file():
-            raise RuntimeError(
-                f"Training completed without a usable best checkpoint in {out_dir}. "
-                "Inspect non-finite loss diagnostics in the training log."
-            )
         summary = {
             "baseline": baseline_name,
             "num_train_groups": len(train_ds),

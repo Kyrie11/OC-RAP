@@ -251,13 +251,13 @@ def _resample_xy(xy: np.ndarray, T: int) -> tuple[np.ndarray, np.ndarray]:
     if xy.shape[0] == T:
         out[:] = xy[:, :2]
         valid[:] = True
-        return np.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0), valid
+        return np.nan_to_num(out), valid
     src = np.linspace(0.0, 1.0, xy.shape[0], dtype=np.float32)
     dst = np.linspace(0.0, 1.0, T, dtype=np.float32)
     out[:, 0] = np.interp(dst, src, xy[:, 0])
     out[:, 1] = np.interp(dst, src, xy[:, 1])
     valid[:] = True
-    return np.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0), valid
+    return np.nan_to_num(out), valid
 
 
 def _wrap_angle(x: np.ndarray | float) -> np.ndarray | float:
@@ -307,7 +307,7 @@ def _history_arrays(d: dict[str, Any], cfg: dict[str, Any]) -> tuple[np.ndarray,
         rel_heading = np.asarray(_wrap_angle(heading - yaw0), dtype=np.float32)
         out[:, 7] = rel_heading
         out[:, 8] = np.sin(rel_heading)
-        return np.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
+        return np.nan_to_num(out)
 
     ego_hist = np.zeros((H, GAMEFORMER_STATE_DIM), dtype=np.float32)
     neigh_hist = np.zeros((A, H, GAMEFORMER_STATE_DIM), dtype=np.float32)
@@ -332,7 +332,7 @@ def _history_arrays(d: dict[str, Any], cfg: dict[str, Any]) -> tuple[np.ndarray,
 
     prefix_xy, prefix_valid = _resample_xy(_ego_prefix_xy(d), T)
     prefix_xy = (prefix_xy - origin[None, :]) @ rot.T
-    return ego_hist, neigh_hist, neigh_valid.astype(bool), np.nan_to_num(prefix_xy, nan=0.0, posinf=0.0, neginf=0.0), prefix_valid.astype(bool)
+    return ego_hist, neigh_hist, neigh_valid.astype(bool), np.nan_to_num(prefix_xy), prefix_valid.astype(bool)
 
 
 def _crossing_binary(src_xy: np.ndarray, tgt_xy: np.ndarray, threshold: float = 3.0) -> bool:
@@ -422,7 +422,7 @@ def _actor_topology_arrays(d: dict[str, Any], cfg: dict[str, Any]) -> tuple[np.n
         ], dtype=np.float32)
         targets[i] = float(in_range and _crossing_binary(ego_xy, agent_xy, threshold=3.0))
         mask[i] = bool(in_range)
-    return np.nan_to_num(feats, nan=0.0, posinf=0.0, neginf=0.0), targets.astype(np.float32), mask
+    return np.nan_to_num(feats), targets.astype(np.float32), mask
 
 
 def _map_topology_arrays(d: dict[str, Any], cfg: dict[str, Any]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -473,7 +473,7 @@ def _map_topology_arrays(d: dict[str, Any], cfg: dict[str, Any]) -> tuple[np.nda
         ], dtype=np.float32)
         targets[i] = float(min_dist < 3.0)
         mask[i] = bool(d0 < 100.0 or min_dist < 10.0)
-    return np.nan_to_num(feats, nan=0.0, posinf=0.0, neginf=0.0), targets.astype(np.float32), mask
+    return np.nan_to_num(feats), targets.astype(np.float32), mask
 
 
 def _topology_arrays(d: dict[str, Any], cfg: dict[str, Any]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:

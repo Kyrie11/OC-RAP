@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
-"""Precompute exact teacher-PCD metadata for fast, aligned group sampling.
+"""Precompute exact teacher PCD and factorized evidence metadata.
 
-The index is intentionally separate from the dataset: it does not rewrite user
-samples and can be regenerated when OC-MERO hyperparameters change.
+The index is separate from the dataset and can be regenerated without changing
+any OC-RAP sample.  v48.19 adds a non-compensatory component-harm label so the
+training sampler and held-out certificate share the same evidence semantics.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+from ocrap.algorithms.evidence_targets import ComponentVetoTolerances, component_veto_margin_numpy
 from ocrap.algorithms.ocmero import oc_mero
 from ocrap.data.serialization import load_npz
 from ocrap.evaluation.metrics import (
@@ -28,7 +32,7 @@ def _scalar(d: dict[str, Any], key: str, default: Any) -> Any:
     return a.item() if a.shape == () else a
 
 
-def teacher_pcd(d: dict[str, Any], *, alpha: float, beta: float, top_m: int) -> float:
+def teacher_components(d: dict[str, Any], *, alpha: float, beta: float, top_m: int) -> dict[str, float]:
     m = np.asarray(d["m_star"], dtype=np.float64)
     p = np.asarray(d["root_probs"], dtype=np.float64)
     c = np.asarray(d.get("c_star", np.eye(m.shape[0])), dtype=np.float64)
@@ -39,10 +43,18 @@ def teacher_pcd(d: dict[str, Any], *, alpha: float, beta: float, top_m: int) -> 
         use_lcvar=True, use_obs_kernel=True, top_m=top_m,
     )
     option = best_shared_option_index(result.q, p, gamma=0.0, root_valid=rv, option_valid=ov)
-    drs = deployable_recovery_success(m, p, option, root_valid=rv)
+    drs = float(deployable_recovery_success(m, p, option, root_valid=rv))
     r_dep = float(_scalar(d, "r_dep_star", result.r_dep))
     r_orc = float(_scalar(d, "r_orc_star", result.r_orc))
-    return float(post_contact_deployability_score(drs, r_dep, max(0.0, r_orc - r_dep)))
+    gap = max(0.0, r_orc - r_dep)
+    return {
+        "teacher_pcd": float(post_contact_deployability_score(drs, r_dep, gap)),
+        "teacher_drs": drs,
+        "teacher_r_dep": r_dep,
+        "teacher_gap": gap,
+        "teacher_hard_violation": float(_scalar(d, "hard_violation", 0.0)),
+        "teacher_harm_proxy": float(_scalar(d, "harm_proxy", 0.0)),
+    }
 
 
 def main() -> int:
@@ -54,61 +66,121 @@ def main() -> int:
     ap.add_argument("--top-m", type=int, default=8)
     ap.add_argument("--progress-every", type=int, default=1000)
     ap.add_argument("--positive-gain", type=float, default=0.015)
-    ap.add_argument("--deployable-macro-ids", default="2,3,5,6,7",
-                    help="Comma-separated recovery macros permitted by the deployed selector")
+    ap.add_argument("--deployable-macro-ids", default="2,3,5,6,7")
+    ap.add_argument("--component-harm-drs-tolerance", type=float, default=0.05)
+    ap.add_argument("--component-harm-dep-tolerance", type=float, default=0.05)
+    ap.add_argument("--component-harm-gap-tolerance", type=float, default=0.05)
+    ap.add_argument("--component-harm-hard-tolerance", type=float, default=0.05)
+    ap.add_argument("--component-harm-proxy-tolerance", type=float, default=0.05)
     ap.add_argument("--summary-output", type=Path)
     ap.add_argument("--min-positive-groups-near", type=int, default=0)
     ap.add_argument("--min-positive-groups-contact", type=int, default=0)
     ap.add_argument("--min-positive-scenes-near", type=int, default=0)
     ap.add_argument("--min-positive-scenes-contact", type=int, default=0)
-    ap.add_argument(
-        "--quality-mode", choices=["strict", "warn", "off"], default="strict",
-        help="strict exits non-zero on requested coverage shortfalls; warn records them but continues; off skips target checks",
-    )
+    ap.add_argument("--quality-mode", choices=["strict", "warn", "off"], default="strict")
     args = ap.parse_args()
-    deployable_macro_ids = {int(x.strip()) for x in str(args.deployable_macro_ids).split(",") if x.strip()}
 
+    deployable_macro_ids = {int(x.strip()) for x in str(args.deployable_macro_ids).split(",") if x.strip()}
+    tolerances = ComponentVetoTolerances(
+        drs=args.component_harm_drs_tolerance,
+        deployability_gate=args.component_harm_dep_tolerance,
+        gap_discount=args.component_harm_gap_tolerance,
+        hard_violation=args.component_harm_hard_tolerance,
+        harm_proxy=args.component_harm_proxy_tolerance,
+    )
     paths = iter_sample_paths_many(args.dataset)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    tmp = args.output.with_suffix(args.output.suffix + ".tmp")
+    rows: list[dict[str, Any]] = []
     groups: set[tuple[int, str, int]] = set()
-    group_targets: dict[tuple[int, str, int], dict[str, float]] = {}
+    group_targets: dict[tuple[int, str, int], dict[str, Any]] = {}
+    nominal_rows: dict[tuple[int, str, int], dict[str, Any]] = {}
+
+    for i, path in enumerate(paths, 1):
+        d = load_npz(path)
+        scene = str(_scalar(d, "scene_id", path.stem))
+        time_index = int(_scalar(d, "time_index", 0))
+        bucket = int(bucket_id_for_path(path))
+        row: dict[str, Any] = {
+            "path": str(path.resolve()),
+            "bucket": bucket,
+            "scene": scene,
+            "time": time_index,
+            "candidate": int(_scalar(d, "candidate_index", 0)),
+            "macro": int(_scalar(d, "prefix_macro_type_id", _scalar(d, "prefix_macro_id", -1))),
+            "nominal": bool(float(_scalar(d, "is_nominal", 0.0)) > 0.5),
+            **teacher_components(d, alpha=args.alpha, beta=args.beta, top_m=args.top_m),
+        }
+        rows.append(row)
+        key = (bucket, scene, time_index)
+        groups.add(key)
+        stats = group_targets.setdefault(key, {
+            "nominal": float("-inf"), "best_recovery": float("-inf"),
+            "best_macro": -1, "best_deployable_recovery": float("-inf"),
+            "best_deployable_macro": -1, "scene": scene, "bucket": bucket,
+        })
+        if row["nominal"]:
+            if float(row["teacher_pcd"]) > float(stats["nominal"]):
+                stats["nominal"] = float(row["teacher_pcd"])
+                nominal_rows[key] = row
+        else:
+            if float(row["teacher_pcd"]) > float(stats["best_recovery"]):
+                stats["best_recovery"] = float(row["teacher_pcd"])
+                stats["best_macro"] = int(row["macro"])
+            if int(row["macro"]) in deployable_macro_ids and float(row["teacher_pcd"]) > float(stats["best_deployable_recovery"]):
+                stats["best_deployable_recovery"] = float(row["teacher_pcd"])
+                stats["best_deployable_macro"] = int(row["macro"])
+        if i == 1 or i % max(1, args.progress_every) == 0 or i == len(paths):
+            print({"event": "teacher_pcd_index_progress", "seen": i, "total": len(paths), "groups": len(groups)}, flush=True)
+
+    harmful_candidates = beneficial_candidates = overlap_candidates = 0
+    harmful_groups: set[tuple[int, str, int]] = set()
+    overlap_groups: set[tuple[int, str, int]] = set()
+    factorized_candidate_counts: dict[int, Counter[str]] = {1: Counter(), 2: Counter()}
+    factorized_harmful_groups: dict[int, set[tuple[int, str, int]]] = {1: set(), 2: set()}
+    factorized_overlap_groups: dict[int, set[tuple[int, str, int]]] = {1: set(), 2: set()}
+    for row in rows:
+        key = (int(row["bucket"]), str(row["scene"]), int(row["time"]))
+        nominal = nominal_rows.get(key)
+        if row["nominal"] or nominal is None:
+            row["component_veto_margin"] = 0.0
+            row["component_harmful"] = False
+            row["beneficial"] = False
+            continue
+        margin = component_veto_margin_numpy(
+            candidate_drs=float(row["teacher_drs"]), nominal_drs=float(nominal["teacher_drs"]),
+            candidate_r_dep=float(row["teacher_r_dep"]), nominal_r_dep=float(nominal["teacher_r_dep"]),
+            candidate_gap=float(row["teacher_gap"]), nominal_gap=float(nominal["teacher_gap"]),
+            candidate_hard=float(row["teacher_hard_violation"]), nominal_hard=float(nominal["teacher_hard_violation"]),
+            candidate_harm_proxy=float(row["teacher_harm_proxy"]), nominal_harm_proxy=float(nominal["teacher_harm_proxy"]),
+            tolerances=tolerances,
+        )
+        beneficial = float(row["teacher_pcd"]) - float(nominal["teacher_pcd"]) >= float(args.positive_gain)
+        harmful = margin > 0.0
+        row["component_veto_margin"] = float(margin)
+        row["component_harmful"] = bool(harmful)
+        row["beneficial"] = bool(beneficial)
+        if int(row["macro"]) in deployable_macro_ids:
+            beneficial_candidates += int(beneficial)
+            harmful_candidates += int(harmful)
+            overlap_candidates += int(beneficial and harmful)
+            bucket_counts = factorized_candidate_counts.setdefault(int(row["bucket"]), Counter())
+            bucket_counts["deployable_candidates"] += 1
+            bucket_counts["beneficial_candidates"] += int(beneficial)
+            bucket_counts["component_harmful_candidates"] += int(harmful)
+            bucket_counts["overlap_candidates"] += int(beneficial and harmful)
+            if harmful:
+                harmful_groups.add(key)
+                factorized_harmful_groups.setdefault(int(row["bucket"]), set()).add(key)
+            if beneficial and harmful:
+                overlap_groups.add(key)
+                factorized_overlap_groups.setdefault(int(row["bucket"]), set()).add(key)
+
+    tmp = args.output.with_suffix(args.output.suffix + ".tmp")
     with tmp.open("w", encoding="utf-8") as f:
-        for i, path in enumerate(paths, 1):
-            d = load_npz(path)
-            scene = str(_scalar(d, "scene_id", path.stem))
-            time_index = int(_scalar(d, "time_index", 0))
-            bucket = int(bucket_id_for_path(path))
-            row = {
-                "path": str(path.resolve()),
-                "bucket": bucket,
-                "scene": scene,
-                "time": time_index,
-                "candidate": int(_scalar(d, "candidate_index", 0)),
-                "macro": int(_scalar(d, "prefix_macro_type_id", _scalar(d, "prefix_macro_id", -1))),
-                "nominal": bool(float(_scalar(d, "is_nominal", 0.0)) > 0.5),
-                "teacher_pcd": teacher_pcd(d, alpha=args.alpha, beta=args.beta, top_m=args.top_m),
-            }
-            key = (bucket, scene, time_index)
-            groups.add(key)
-            stats = group_targets.setdefault(key, {
-                "nominal": float("-inf"), "best_recovery": float("-inf"),
-                "best_macro": -1, "best_deployable_recovery": float("-inf"),
-                "best_deployable_macro": -1, "scene": scene, "bucket": bucket,
-            })
-            if row["nominal"]:
-                stats["nominal"] = max(stats["nominal"], row["teacher_pcd"])
-            else:
-                if row["teacher_pcd"] > stats["best_recovery"]:
-                    stats["best_recovery"] = row["teacher_pcd"]
-                    stats["best_macro"] = row["macro"]
-                if row["macro"] in deployable_macro_ids and row["teacher_pcd"] > stats["best_deployable_recovery"]:
-                    stats["best_deployable_recovery"] = row["teacher_pcd"]
-                    stats["best_deployable_macro"] = row["macro"]
+        for row in rows:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
-            if i == 1 or i % max(1, args.progress_every) == 0 or i == len(paths):
-                print({"event": "teacher_pcd_index_progress", "seen": i, "total": len(paths), "groups": len(groups)}, flush=True)
     tmp.replace(args.output)
+
     positive_all = [
         stats for stats in group_targets.values()
         if np.isfinite(stats["nominal"]) and np.isfinite(stats["best_recovery"])
@@ -121,11 +193,10 @@ def main() -> int:
     ]
 
     def bucket_summary(bucket: int, rows_source: list[dict[str, Any]], macro_key: str) -> dict[str, Any]:
-        from collections import Counter
-        rows = [x for x in rows_source if int(x["bucket"]) == bucket]
-        scenes = Counter(str(x["scene"]) for x in rows)
-        macros = Counter(int(x[macro_key]) for x in rows)
-        n = len(rows)
+        selected = [x for x in rows_source if int(x["bucket"]) == bucket]
+        scenes = Counter(str(x["scene"]) for x in selected)
+        macros = Counter(int(x[macro_key]) for x in selected)
+        n = len(selected)
         return {
             "positive_groups": n,
             "positive_scenes": len(scenes),
@@ -138,54 +209,71 @@ def main() -> int:
                  "contact": bucket_summary(2, positive, "best_deployable_macro")}
     all_macro_by_bucket = {"near": bucket_summary(1, positive_all, "best_macro"),
                            "contact": bucket_summary(2, positive_all, "best_macro")}
-
-    # Development-screening heuristics are deliberately weaker than the final
-    # publication coverage targets. They answer whether an algorithm-direction
-    # experiment is worth running before paying for a multi-day rebuild.
     screening_thresholds = {
         "near": {"adequate_groups": 80, "adequate_scenes": 40, "marginal_groups": 20, "marginal_scenes": 10},
         "contact": {"adequate_groups": 60, "adequate_scenes": 30, "marginal_groups": 15, "marginal_scenes": 8},
     }
     for name, lim in screening_thresholds.items():
         got = by_bucket[name]
-        groups_n = int(got["positive_groups"])
-        scenes_n = int(got["positive_scenes"])
-        macro_share = got.get("max_positive_macro_share")
-        top10_share = got.get("top10_positive_scene_share")
+        groups_n, scenes_n = int(got["positive_groups"]), int(got["positive_scenes"])
         concentrated = bool(
-            (macro_share is not None and float(macro_share) > 0.80)
-            or (top10_share is not None and float(top10_share) > 0.60)
+            (got.get("max_positive_macro_share") is not None and float(got["max_positive_macro_share"]) > 0.80)
+            or (got.get("top10_positive_scene_share") is not None and float(got["top10_positive_scene_share"]) > 0.60)
         )
         if groups_n >= lim["adequate_groups"] and scenes_n >= lim["adequate_scenes"] and not concentrated:
-            status = "adequate_for_direction_screening"
-            action = "reuse_existing_dataset"
+            status, action = "adequate_for_direction_screening", "reuse_existing_dataset"
         elif groups_n >= lim["marginal_groups"] and scenes_n >= lim["marginal_scenes"]:
-            status = "marginal_debug_only"
-            action = "run_screening_but_do_not_make_strong_claims"
+            status, action = "marginal_debug_only", "run_screening_but_do_not_make_strong_claims"
         else:
-            status = "data_limited"
-            action = "consider_targeted_increment_or_rebuild_after_audit"
-        got["screening_status"] = status
-        got["screening_concentration_warning"] = concentrated
-        got["screening_recommended_action"] = action
+            status, action = "data_limited", "consider_targeted_increment_or_rebuild_after_audit"
+        got.update(screening_status=status, screening_concentration_warning=concentrated, screening_recommended_action=action)
 
+    dataset_roots = [str(Path(x.strip()).resolve()) for x in str(args.dataset).split(",") if x.strip()]
+    dataset_manifests = []
+    for dataset_root in dataset_roots:
+        manifest = Path(dataset_root) / "manifest.csv"
+        dataset_manifests.append({
+            "root": dataset_root,
+            "manifest": str(manifest),
+            "manifest_sha256": (
+                hashlib.sha256(manifest.read_bytes()).hexdigest() if manifest.is_file() else None
+            ),
+        })
+    index_contract = {
+        "dataset_roots": dataset_roots,
+        "dataset_manifests": dataset_manifests,
+        "alpha": float(args.alpha),
+        "beta": float(args.beta),
+        "top_m": int(args.top_m),
+        "positive_gain": float(args.positive_gain),
+        "deployable_macro_ids": sorted(deployable_macro_ids),
+        "component_harm_tolerances": tolerances.__dict__,
+    }
     summary = {
-        "event": "teacher_pcd_index_complete",
-        "output": str(args.output),
-        "num_samples": len(paths),
-        "num_groups": len(groups),
-        "alpha": args.alpha,
-        "beta": args.beta,
-        "top_m": args.top_m,
-        "positive_gain": args.positive_gain,
+        "event": "teacher_pcd_index_complete", "output": str(args.output),
+        "num_samples": len(paths), "num_groups": len(groups), "alpha": args.alpha,
+        "beta": args.beta, "top_m": args.top_m, "positive_gain": args.positive_gain,
         "deployable_macro_ids": sorted(deployable_macro_ids),
         "positive_advantage_groups": len(positive),
         "positive_advantage_groups_all_macros": len(positive_all),
-        "by_bucket": by_bucket,
-        "all_macro_by_bucket": all_macro_by_bucket,
+        "component_harm_tolerances": tolerances.__dict__,
+        "component_harmful_candidates": harmful_candidates,
+        "beneficial_candidates": beneficial_candidates,
+        "beneficial_and_component_harmful_candidates": overlap_candidates,
+        "component_harmful_groups": len(harmful_groups),
+        "beneficial_and_component_harmful_groups": len(overlap_groups),
+        "index_contract": index_contract,
+        "factorized_harm_support_by_bucket": {
+            name: {
+                **{k: int(v) for k, v in factorized_candidate_counts.get(bucket, Counter()).items()},
+                "component_harmful_groups": len(factorized_harmful_groups.get(bucket, set())),
+                "beneficial_and_component_harmful_groups": len(factorized_overlap_groups.get(bucket, set())),
+            }
+            for name, bucket in (("near", 1), ("contact", 2))
+        },
+        "by_bucket": by_bucket, "all_macro_by_bucket": all_macro_by_bucket,
         "quality_mode": args.quality_mode,
     }
-
     failures: list[str] = []
     limits = {
         "near": (args.min_positive_groups_near, args.min_positive_scenes_near),

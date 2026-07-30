@@ -146,25 +146,12 @@ class GameFormerFutureEncoder(nn.Module):
         self.pool = nn.Sequential(nn.LayerNorm(d_model), nn.Linear(d_model, d_model), nn.GELU())
 
     def forward(self, traj_xy: torch.Tensor, scores: torch.Tensor) -> torch.Tensor:
-        # traj_xy: [B,N,M,T,2], scores: [B,N,M].  Trajectories are cumulative
-        # displacements in the current ego frame, so the first finite difference
-        # is measured from the origin rather than from the first point itself.
+        # traj_xy: [B,N,M,T,2], scores: [B,N,M]
         B, N, M, T, _ = traj_xy.shape
-        origin = torch.zeros_like(traj_xy[..., :1, :])
-        prev = torch.cat([origin, traj_xy[..., :-1, :]], dim=-2)
+        prev = torch.cat([traj_xy[..., :1, :], traj_xy[..., :-1, :]], dim=-2)
         dxy = traj_xy - prev
         vel = dxy / 0.1
-
-        # atan2(0, 0) has a finite-looking forward value on some devices but an
-        # undefined derivative.  The old implementation generated exactly that
-        # input at every trajectory's first step and could therefore produce
-        # NaN gradients on CUDA while the scalar loss remained finite.  Replace
-        # stationary deltas by the constant direction (1, 0) before atan2; the
-        # torch.where branches also make their derivative w.r.t. dxy exactly zero.
-        moving = dxy.square().sum(dim=-1) > 1.0e-10
-        safe_dx = torch.where(moving, dxy[..., 0], torch.ones_like(dxy[..., 0]))
-        safe_dy = torch.where(moving, dxy[..., 1], torch.zeros_like(dxy[..., 1]))
-        heading = torch.atan2(safe_dy, safe_dx).unsqueeze(-1)
+        heading = torch.atan2(dxy[..., 1], dxy[..., 0]).unsqueeze(-1)
         size = torch.ones(B, N, M, T, 2, device=traj_xy.device, dtype=traj_xy.dtype)
         valid = torch.ones(B, N, M, T, 1, device=traj_xy.device, dtype=traj_xy.dtype)
         state = torch.cat([traj_xy, heading, vel, size, valid], dim=-1)

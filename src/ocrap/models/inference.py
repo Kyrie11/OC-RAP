@@ -193,6 +193,8 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         direct_recovery_evidence_calibrator_context=bool(ckpt.get("direct_recovery_evidence_calibrator_context", model_cfg.get("direct_recovery_evidence_calibrator_context", False))),
         direct_recovery_evidence_calibrator_context_detach=bool(ckpt.get("direct_recovery_evidence_calibrator_context_detach", model_cfg.get("direct_recovery_evidence_calibrator_context_detach", True))),
         direct_recovery_evidence_calibrator_context_source=str(ckpt.get("direct_recovery_evidence_calibrator_context_source", model_cfg.get("direct_recovery_evidence_calibrator_context_source", "relative"))),
+        direct_recovery_evidence_calibrator_shared=bool(ckpt.get("direct_recovery_evidence_calibrator_shared", model_cfg.get("direct_recovery_evidence_calibrator_shared", False))),
+        direct_recovery_evidence_calibrator_regime_scale=float(ckpt.get("direct_recovery_evidence_calibrator_regime_scale", model_cfg.get("direct_recovery_evidence_calibrator_regime_scale", 0.25))),
     ).to(device)
     # Strict loading remains the default for checkpoints with matching geometry.
     # A v39 checkpoint can initialize v40 training through train.py's explicit
@@ -243,6 +245,8 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_evidence_calibrator_context"] = bool(ckpt.get("direct_recovery_evidence_calibrator_context", model_cfg.get("direct_recovery_evidence_calibrator_context", False)))
     cfg["model"]["direct_recovery_evidence_calibrator_context_detach"] = bool(ckpt.get("direct_recovery_evidence_calibrator_context_detach", model_cfg.get("direct_recovery_evidence_calibrator_context_detach", True)))
     cfg["model"]["direct_recovery_evidence_calibrator_context_source"] = str(ckpt.get("direct_recovery_evidence_calibrator_context_source", model_cfg.get("direct_recovery_evidence_calibrator_context_source", "relative")))
+    cfg["model"]["direct_recovery_evidence_calibrator_shared"] = bool(ckpt.get("direct_recovery_evidence_calibrator_shared", model_cfg.get("direct_recovery_evidence_calibrator_shared", False)))
+    cfg["model"]["direct_recovery_evidence_calibrator_regime_scale"] = float(ckpt.get("direct_recovery_evidence_calibrator_regime_scale", model_cfg.get("direct_recovery_evidence_calibrator_regime_scale", 0.25)))
     return ModelBundle(model=model, cfg=cfg, device=device)
 
 

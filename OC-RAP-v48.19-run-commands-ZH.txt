@@ -1,0 +1,70 @@
+# OC-RAP v48.19 FACET-BRIDGE：下一步执行命令
+# 约定：0=有效通过；20=协议支持且工件有效的算法拒绝；30=工程/数据/协议/工件错误。
+
+cd /path/to/OC-RAP-v48.19-FACET-BRIDGE
+export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
+
+# 0. 本地静态回归
+python -m compileall -q src tools
+for f in scripts/*.sh; do bash -n "$f"; done
+pytest -q
+
+# 1. v48.19 主实验：Balanced 与 Precision 分别独占一张 A30。
+# 必须使用新的 OUTPUTDIR；不要复用任何含旧 GATE_SPEC.json 的目录。
+mkdir -p runs/ocrap_v48_19_facet_dedicated_4819
+set +e
+OUTPUTDIR=runs/ocrap_v48_19_facet_dedicated_4819 \
+OCRAP_ROOT=/data0/senzeyu2/dataset/OCRAP \
+SOURCE_RUN=runs/ocrap_v48_13_terra_proxy_4801 \
+PROTOCOL_ROOT=/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814 \
+CAL_SAFE=/data0/senzeyu2/dataset/OCRAP/calibration_safe \
+GPU0=0 GPU1=1 \
+NUM_WORKERS=3 PREFETCH_FACTOR=2 BATCH_SIZE=72 \
+OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 \
+bash scripts/run_v48_19_facet_dedicated.sh \
+> runs/ocrap_v48_19_facet_dedicated_4819/controller.log 2>&1
+RC=$?
+set -e
+echo "v48.19 Natural-gate rc=$RC"
+
+# 2A. 只有 RC=0 才允许执行 stress/test。
+if [[ "$RC" == 0 ]]; then
+  OUT=runs/ocrap_v48_19_facet_dedicated_4819 \
+  GPU0=0 GPU1=1 CL_RESUME=0 \
+  bash scripts/run_v48_19_stress_if_authorized.sh
+fi
+
+# 2B. RC=20：运行新的、非重复消融。每波 4 个任务并发；每张 A30 两个任务。
+if [[ "$RC" == 20 ]]; then
+  mkdir -p runs/ocrap_v48_19_facet_ablations
+  ABLATION_ROOT=runs/ocrap_v48_19_facet_ablations \
+  SOURCE_RUN=runs/ocrap_v48_13_terra_proxy_4801 \
+  OCRAP_ROOT=/data0/senzeyu2/dataset/OCRAP \
+  PROTOCOL_ROOT=/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814 \
+  CAL_SAFE=/data0/senzeyu2/dataset/OCRAP/calibration_safe \
+  GPU0=0 GPU1=1 NUM_WORKERS=1 PREFETCH_FACTOR=2 BATCH_SIZE=64 \
+  OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 \
+  bash scripts/run_v48_19_parallel_ablations.sh \
+  > runs/ocrap_v48_19_facet_ablations/controller.log 2>&1
+fi
+
+# 2C. RC=30：先定位工程阶段，禁止改阈值后直接重跑同一 OUTPUTDIR。
+if [[ "$RC" == 30 ]]; then
+  cat runs/ocrap_v48_19_facet_dedicated_4819/PIPELINE_FAILED.json 2>/dev/null || true
+  cat runs/ocrap_v48_19_facet_dedicated_4819/FACET_INDEX_CONTRACT.json 2>/dev/null || true
+  cat runs/ocrap_v48_19_facet_dedicated_4819/FACET_TARGET_SUPPORT.json 2>/dev/null || true
+  cat runs/ocrap_v48_19_facet_dedicated_4819/GATE_SPEC.json 2>/dev/null || true
+  cat runs/ocrap_v48_19_facet_dedicated_4819/learning_gates_v48_19.json 2>/dev/null || true
+  tail -n 200 runs/ocrap_v48_19_facet_dedicated_4819/controller.log 2>/dev/null || true
+fi
+
+# 3. 结果归因检查（主实验结束后运行）
+python - <<'PYRESULT'
+import json, pathlib
+root=pathlib.Path('runs/ocrap_v48_19_facet_dedicated_4819')
+for name in ('V48_19_COMPLETE.json','PIPELINE_FAILED.json','FACET_TARGET_SUPPORT.json','GATE_SPEC.json','learning_gates_v48_19.json'):
+    p=root/name
+    if p.is_file():
+        print(f'\n===== {name} =====')
+        print(json.dumps(json.load(open(p)),indent=2,ensure_ascii=False))
+PYRESULT

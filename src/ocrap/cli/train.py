@@ -13,6 +13,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Sampler, WeightedRandomSampler
 
 from ocrap.algorithms.ocmero import oc_mero, torch_oc_mero
+from ocrap.algorithms.evidence_targets import ComponentVetoTolerances, component_veto_margin_torch
 from ocrap.data.serialization import ensure_dir, load_npz, write_json
 from ocrap.models.data import OCRAPSampleDataset, OPTION_FEATURE_DIM, bucket_id_for_path, iter_sample_paths_many, scalar_metadata_for_path, split_paths_by_npz_split, stable_scene_hash
 from ocrap.models.losses import (
@@ -352,6 +353,13 @@ def _direct_value_loss_from_outputs(
         ordinal_evidence_class_balanced_weight=float(tcfg.get("direct_value_ordinal_evidence_class_balanced_weight", 0.0)),
         ordinal_evidence_batch_balanced=bool(tcfg.get("direct_value_ordinal_evidence_batch_balanced", False)),
         ordinal_evidence_independent_tails=bool(tcfg.get("direct_value_ordinal_evidence_independent_tails", False)),
+        ordinal_evidence_factorized_harm=bool(tcfg.get("direct_value_ordinal_evidence_factorized_harm", False)),
+        ordinal_evidence_factorized_harm_temperature=float(tcfg.get("direct_value_ordinal_evidence_factorized_harm_temperature", 0.05)),
+        ordinal_evidence_factorized_harm_drs_tolerance=float(tcfg.get("direct_value_ordinal_evidence_factorized_harm_drs_tolerance", 0.05)),
+        ordinal_evidence_factorized_harm_dep_tolerance=float(tcfg.get("direct_value_ordinal_evidence_factorized_harm_dep_tolerance", 0.05)),
+        ordinal_evidence_factorized_harm_gap_tolerance=float(tcfg.get("direct_value_ordinal_evidence_factorized_harm_gap_tolerance", 0.05)),
+        ordinal_evidence_factorized_harm_hard_tolerance=float(tcfg.get("direct_value_ordinal_evidence_factorized_harm_hard_tolerance", 0.05)),
+        ordinal_evidence_factorized_harm_proxy_tolerance=float(tcfg.get("direct_value_ordinal_evidence_factorized_harm_proxy_tolerance", 0.05)),
         ordinal_evidence_balanced_replaces_erm=bool(tcfg.get("direct_value_ordinal_evidence_balanced_replaces_erm", False)),
         ordinal_evidence_benefit_margin_weight=float(tcfg.get("direct_value_ordinal_evidence_benefit_margin_weight", 0.0)),
         ordinal_evidence_harm_margin_weight=float(tcfg.get("direct_value_ordinal_evidence_harm_margin_weight", 0.0)),
@@ -396,6 +404,8 @@ def _direct_value_loss_from_outputs(
             pred_delta_logvar=delta_logvar,
             evidence_calibrator_residual=out.get("direct_recovery_evidence_calibrator_residual"),
             teacher_m_star=batch["m_star"].float(),
+            teacher_hard_violation=batch.get("hard_violation"),
+            teacher_harm_proxy=batch.get("harm_proxy"),
             **kwargs,
         )
 
@@ -499,7 +509,22 @@ def _direct_policy_batch_stats(
             teacher_q, batch["root_probs"].float(), batch["root_valid"], batch["option_valid"],
             gamma=option_gamma, temperature=max(0.08, option_temperature * 0.5),
         ).reshape(-1)
-    target = _torch_pcd_score(teacher_drs, trd, torch.clamp(tro - trd, min=0.0)).detach().clamp(0.0, 1.0)
+    teacher_gap = torch.clamp(tro - trd, min=0.0)
+    target = _torch_pcd_score(teacher_drs, trd, teacher_gap).detach().clamp(0.0, 1.0)
+    teacher_hard = torch.nan_to_num(
+        batch.get("hard_violation", torch.zeros_like(trd)).float().reshape(-1), nan=0.0, posinf=1.0, neginf=0.0
+    )
+    teacher_harm_proxy = torch.nan_to_num(
+        batch.get("harm_proxy", torch.zeros_like(trd)).float().reshape(-1), nan=0.0, posinf=1.0, neginf=0.0
+    )
+    factorized_harm_metric = bool(tcfg.get("direct_value_ordinal_evidence_factorized_harm", False))
+    factorized_tolerances = ComponentVetoTolerances(
+        drs=float(tcfg.get("direct_value_ordinal_evidence_factorized_harm_drs_tolerance", 0.05)),
+        deployability_gate=float(tcfg.get("direct_value_ordinal_evidence_factorized_harm_dep_tolerance", 0.05)),
+        gap_discount=float(tcfg.get("direct_value_ordinal_evidence_factorized_harm_gap_tolerance", 0.05)),
+        hard_violation=float(tcfg.get("direct_value_ordinal_evidence_factorized_harm_hard_tolerance", 0.05)),
+        harm_proxy=float(tcfg.get("direct_value_ordinal_evidence_factorized_harm_proxy_tolerance", 0.05)),
+    )
     bid = batch.get("bucket_id", torch.full_like(batch["time_index"], 3)).reshape(-1)
     sh = batch["scene_hash"].reshape(-1)
     ti = batch["time_index"].reshape(-1)
@@ -535,6 +560,21 @@ def _direct_policy_batch_stats(
             continue
         nom = noms[0]
         teacher_delta = target[recs] - target[nom]
+        component_harmful = None
+        if factorized_harm_metric:
+            component_harmful = component_veto_margin_torch(
+                candidate_drs=teacher_drs[recs],
+                nominal_drs=teacher_drs[nom].expand_as(teacher_drs[recs]),
+                candidate_r_dep=trd[recs],
+                nominal_r_dep=trd[nom].expand_as(trd[recs]),
+                candidate_gap=teacher_gap[recs],
+                nominal_gap=teacher_gap[nom].expand_as(teacher_gap[recs]),
+                candidate_hard=teacher_hard[recs],
+                nominal_hard=teacher_hard[nom].expand_as(teacher_hard[recs]),
+                candidate_harm_proxy=teacher_harm_proxy[recs],
+                nominal_harm_proxy=teacher_harm_proxy[nom].expand_as(teacher_harm_proxy[recs]),
+                tolerances=factorized_tolerances,
+            ).detach() >= 0.0
         pred_rank_delta = rank_score[recs] - rank_score[nom]
         oracle_j = int(torch.argmax(teacher_delta).item())
         oracle_adv_raw = float(teacher_delta[oracle_j].item())
@@ -552,7 +592,11 @@ def _direct_policy_batch_stats(
         )
         acceptable = bool(chosen_teacher_adv >= oracle_adv_raw - tie_eps)
         regret = max(0.0, oracle_adv - chosen_teacher_adv - tie_eps) if positive_group else 0.0
-        rank_harmful = chosen_teacher_adv <= -negative_gain
+        rank_harmful = (
+            bool(component_harmful[pred_j].item())
+            if component_harmful is not None
+            else chosen_teacher_adv <= -negative_gain
+        )
         rank_switch_nonpositive = (not positive_group) and bool(float(pred_rank_delta.max().item()) > 0.0)
 
         recovery_scores = pred_rank_delta
@@ -616,7 +660,11 @@ def _direct_policy_batch_stats(
             and float(delta_mean.item()) >= min_delta_mean
         )
         cert_teacher_adv = float(teacher_delta[cert_j].item())
-        cert_harmful = cert_teacher_adv <= -negative_gain
+        cert_harmful = (
+            bool(component_harmful[cert_j].item())
+            if component_harmful is not None
+            else cert_teacher_adv <= -negative_gain
+        )
         cert_positive = cert_teacher_adv >= positive_gain
         cert_regret = max(0.0, oracle_adv_raw - cert_teacher_adv - tie_eps)
         admitted_harmful = admitted and cert_harmful
@@ -812,6 +860,35 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
         out["direct_duet_cross_regime_recall_min"] = min(recall_values)
         out["direct_duet_cross_regime_recall_shortfall"] = recall_shortfall
         out["direct_duet_selection_risk"] = duet_risk
+
+        # v48.19 FACET-BRIDGE: DUET's unscaled base risk dominated the sparse
+        # cross-regime feasibility terms, so C and D selected identical epochs.
+        # FACET treats admission feasibility as the primary dev objective while
+        # retaining a small tie-breaking contribution from calibrated regret.
+        # Safety penalties apply only beyond explicit dev budgets, plus small raw
+        # tail terms to prefer safer checkpoints among equally feasible models.
+        facet_target = float(tcfg.get("direct_policy_metric_facet_min_recall", cross_target))
+        facet_harm_budget = float(tcfg.get("direct_policy_metric_facet_harm_budget", 0.05))
+        facet_false_budget = float(tcfg.get("direct_policy_metric_facet_false_budget", 0.10))
+        recall_shortfalls = [max(0.0, facet_target - float(v)) for v in recall_values]
+        harm_excess = [max(0.0, float(v) - facet_harm_budget) for v in harm_values]
+        false_excess = [max(0.0, float(v) - facet_false_budget) for v in false_values]
+        facet_risk = (
+            float(tcfg.get("direct_policy_metric_facet_base_weight", 0.10)) * float(base_risk)
+            + float(tcfg.get("direct_policy_metric_facet_recall_weight", 12.0))
+            * sum(v * v for v in recall_shortfalls)
+            + float(tcfg.get("direct_policy_metric_facet_harm_excess_weight", 10.0))
+            * sum(v * v for v in harm_excess)
+            + float(tcfg.get("direct_policy_metric_facet_false_excess_weight", 3.0))
+            * sum(v * v for v in false_excess)
+            + float(tcfg.get("direct_policy_metric_facet_raw_harm_weight", 0.25)) * max(harm_values)
+            + float(tcfg.get("direct_policy_metric_facet_raw_false_weight", 0.10)) * max(false_values)
+        )
+        out["direct_facet_cross_regime_recall_min"] = min(recall_values)
+        out["direct_facet_recall_shortfall_sum"] = sum(recall_shortfalls)
+        out["direct_facet_harm_excess_max"] = max(harm_excess)
+        out["direct_facet_false_excess_max"] = max(false_excess)
+        out["direct_facet_selection_risk"] = facet_risk
     return out
 
 
@@ -1676,9 +1753,11 @@ def _make_group_batch_sampler(ds: OCRAPSampleDataset, cfg: dict, batch_size: int
     # sampler can interleave beneficial, harmful-only, and dead/mixed groups.
     negative_gain_max = float(tcfg.get("group_batch_negative_advantage_gain_max", 0.010))
     group_strata: list[int] = []
+    factorized_sampler_harm = bool(tcfg.get("direct_value_ordinal_evidence_factorized_harm", False))
     for g in groups:
         nominal_values: list[float] = []
         recovery_values: list[float] = []
+        recovery_component_harmful: list[bool] = []
         for i in g:
             p = ds.paths[i]
             idx_row = group_index.get(os.path.abspath(os.fspath(p)))
@@ -1697,13 +1776,18 @@ def _make_group_batch_sampler(ds: OCRAPSampleDataset, cfg: dict, batch_size: int
                 nominal_values.append(value)
             elif macro_value in positive_macro_ids:
                 recovery_values.append(value)
+                recovery_component_harmful.append(bool(idx_row.get("component_harmful", False)))
         if not nominal_values or not recovery_values:
             group_strata.append(1)
             continue
         nominal_value = max(nominal_values)
         best_delta = max(recovery_values) - nominal_value
         if best_delta >= positive_gain_min:
+            # Overlap groups remain in the positive stratum; the tail-balanced
+            # loss still observes their component-harm label.
             group_strata.append(2)
+        elif factorized_sampler_harm and any(recovery_component_harmful):
+            group_strata.append(0)
         elif best_delta <= -negative_gain_max:
             group_strata.append(0)
         else:
@@ -1933,6 +2017,8 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_evidence_calibrator_context=bool(model_cfg.get("direct_recovery_evidence_calibrator_context", False)),
         direct_recovery_evidence_calibrator_context_detach=bool(model_cfg.get("direct_recovery_evidence_calibrator_context_detach", True)),
         direct_recovery_evidence_calibrator_context_source=str(model_cfg.get("direct_recovery_evidence_calibrator_context_source", "relative")),
+        direct_recovery_evidence_calibrator_shared=bool(model_cfg.get("direct_recovery_evidence_calibrator_shared", False)),
+        direct_recovery_evidence_calibrator_regime_scale=float(model_cfg.get("direct_recovery_evidence_calibrator_regime_scale", 0.25)),
     ).to(device)
     tcfg = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
 
@@ -2184,6 +2270,8 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "direct_recovery_evidence_calibrator_context": bool(model_cfg.get("direct_recovery_evidence_calibrator_context", False)),
             "direct_recovery_evidence_calibrator_context_detach": bool(model_cfg.get("direct_recovery_evidence_calibrator_context_detach", True)),
             "direct_recovery_evidence_calibrator_context_source": str(model_cfg.get("direct_recovery_evidence_calibrator_context_source", "relative")),
+            "direct_recovery_evidence_calibrator_shared": bool(model_cfg.get("direct_recovery_evidence_calibrator_shared", False)),
+            "direct_recovery_evidence_calibrator_regime_scale": float(model_cfg.get("direct_recovery_evidence_calibrator_regime_scale", 0.25)),
             "model_state": model.state_dict(),
             "optimizer_state": opt.state_dict(),
             "epoch": int(ep),

@@ -18,8 +18,10 @@ from typing import Any
 import numpy as np
 
 from ocrap.algorithms.ocmero import oc_mero
+from ocrap.algorithms.evidence_targets import ComponentVetoTolerances, component_veto_margin_numpy
 from ocrap.data.serialization import load_npz
 from ocrap.evaluation.metrics import best_shared_option_index, deployable_recovery_success, post_contact_deployability_score
+from ocrap.evaluation.certificate_stats import certificate_support_feasibility, wilson_interval, wilson_z
 from ocrap.models.data import expand_split_roles, iter_sample_paths_many, scalar_metadata_for_path
 from ocrap.models.inference import load_model_bundle, predict_samples
 
@@ -49,7 +51,7 @@ def _finite_sample_upper_quantile(values: list[float], alpha: float) -> float:
     return float(a[rank - 1])
 
 
-def _teacher_pcd(d: dict[str, Any], alpha: float, beta: float, top_m: int) -> float:
+def _teacher_components(d: dict[str, Any], alpha: float, beta: float, top_m: int) -> dict[str, float]:
     m = np.asarray(d["m_star"], dtype=np.float64)
     p = np.asarray(d["root_probs"], dtype=np.float64)
     c = np.asarray(d.get("c_star", np.eye(m.shape[0])), dtype=np.float64)
@@ -58,10 +60,24 @@ def _teacher_pcd(d: dict[str, Any], alpha: float, beta: float, top_m: int) -> fl
     res = oc_mero(m, p, c, alpha=alpha, beta=beta, option_valid=ov, root_valid=rv,
                   use_lcvar=True, use_obs_kernel=True, top_m=top_m)
     opt = best_shared_option_index(res.q, p, gamma=0.0, root_valid=rv, option_valid=ov)
-    drs = deployable_recovery_success(m, p, opt, root_valid=rv)
+    drs = float(deployable_recovery_success(m, p, opt, root_valid=rv))
     rd = float(_scalar(d, "r_dep_star", res.r_dep))
     ro = float(_scalar(d, "r_orc_star", res.r_orc))
-    return float(post_contact_deployability_score(drs, rd, max(0.0, ro - rd)))
+    gap = max(0.0, ro - rd)
+    return {
+        "teacher": float(post_contact_deployability_score(drs, rd, gap)),
+        "teacher_drs": drs,
+        "teacher_r_dep": rd,
+        "teacher_gap": gap,
+        "teacher_hard": float(_scalar(d, "hard_violation", 0.0)),
+        "teacher_harm_proxy": float(_scalar(d, "harm_proxy", 0.0)),
+    }
+
+
+def _is_harmful(row: dict[str, Any], negative_gain: float) -> bool:
+    if "teacher_harmful" in row:
+        return bool(row["teacher_harmful"])
+    return float(row["teacher_adv"]) <= -float(negative_gain)
 
 
 def _group_deviation(items: list[dict[str, Any]]) -> list[float]:
@@ -85,14 +101,18 @@ def _fold(scene: str, folds: int) -> int:
     return int.from_bytes(hashlib.sha1(scene.encode("utf-8", errors="replace")).digest()[:8], "big") % folds
 
 
-def _wilson(k: int, n: int, *, upper: bool, z: float = 1.6448536269514722) -> float:
-    if n <= 0:
-        return 1.0 if upper else 0.0
-    p = float(k) / float(n)
-    z2 = z * z
-    center = (p + z2 / (2.0 * n)) / (1.0 + z2 / n)
-    radius = z * math.sqrt((p * (1.0 - p) / n) + z2 / (4.0 * n * n)) / (1.0 + z2 / n)
-    return float(min(1.0, center + radius) if upper else max(0.0, center - radius))
+def _wilson(
+    k: int,
+    n: int,
+    *,
+    upper: bool,
+    confidence_level: float = 0.90,
+    bound_type: str = "one_sided",
+) -> float:
+    lower, upper_bound = wilson_interval(
+        k, n, confidence_level=confidence_level, bound_type=bound_type,
+    )
+    return float(upper_bound if upper else lower)
 
 
 def _auc(labels: list[bool], scores: list[float]) -> float | None:
@@ -208,10 +228,14 @@ def _policy_top1_pairs(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
-def _metrics(groups: list[dict[str, Any]], top1: list[dict[str, Any]], score_thr: float, rank_margin_thr: float, pos_gain: float, neg_gain: float) -> dict[str, Any]:
+def _metrics(
+    groups: list[dict[str, Any]], top1: list[dict[str, Any]],
+    score_thr: float, rank_margin_thr: float, pos_gain: float, neg_gain: float,
+    *, confidence_level: float = 0.90, bound_type: str = "one_sided",
+) -> dict[str, Any]:
     selected = [r for r in top1 if r["pred_adv"] >= score_thr and r.get("rank_margin", 0.0) >= rank_margin_thr]
     positive = [r for r in selected if r["teacher_adv"] >= pos_gain]
-    harmful = [r for r in selected if r["teacher_adv"] <= -neg_gain]
+    harmful = [r for r in selected if _is_harmful(r, neg_gain)]
     opportunities = [g for g in groups if g["oracle_best_teacher_adv"] >= pos_gain]
     macro_counts = Counter(int(r["macro"]) for r in selected)
     max_macro_share = max(macro_counts.values(), default=0) / max(1, len(selected))
@@ -233,6 +257,22 @@ def _metrics(groups: list[dict[str, Any]], top1: list[dict[str, Any]], score_thr
         max(oracle_macro_counts.values(), default=0) / max(1, sum(oracle_macro_counts.values()))
     )
     macro_excess_share = max(0.0, float(max_macro_share) - float(oracle_max_macro_share))
+    precision_lcb = (
+        _wilson(
+            len(positive), len(selected), upper=False,
+            confidence_level=confidence_level, bound_type=bound_type,
+        ) if selected else None
+    )
+    harmful_selected_ucb = (
+        _wilson(
+            len(harmful), len(selected), upper=True,
+            confidence_level=confidence_level, bound_type=bound_type,
+        ) if selected else 1.0
+    )
+    harmful_group_ucb = _wilson(
+        len(harmful), len(groups), upper=True,
+        confidence_level=confidence_level, bound_type=bound_type,
+    )
     return {
         "num_groups": len(groups),
         "num_top1_after_joint_gate": len(top1),
@@ -240,12 +280,15 @@ def _metrics(groups: list[dict[str, Any]], top1: list[dict[str, Any]], score_thr
         "selection_rate": len(selected) / max(1, len(groups)),
         "num_positive_selected": len(positive),
         "precision": len(positive) / len(selected) if selected else None,
-        "precision_wilson_lcb90": _wilson(len(positive), len(selected), upper=False) if selected else None,
+        "precision_wilson_lcb": precision_lcb,
+        "precision_wilson_lcb90": precision_lcb,  # backward-compatible field name
         "num_harmful_selected": len(harmful),
         "harmful_selected_rate": len(harmful) / len(selected) if selected else None,
-        "harmful_selected_ucb90": _wilson(len(harmful), len(selected), upper=True) if selected else 1.0,
+        "harmful_selected_ucb": harmful_selected_ucb,
+        "harmful_selected_ucb90": harmful_selected_ucb,  # backward-compatible field name
         "harmful_group_exposure": len(harmful) / max(1, len(groups)),
-        "harmful_group_exposure_ucb90": _wilson(len(harmful), len(groups), upper=True),
+        "harmful_group_exposure_ucb": harmful_group_ucb,
+        "harmful_group_exposure_ucb90": harmful_group_ucb,  # backward-compatible field name
         "num_opportunities": len(opportunities),
         "positive_recall": len(positive) / len(opportunities) if opportunities else None,
         "teacher_advantage_mean": float(np.mean([r["teacher_adv"] for r in selected])) if selected else None,
@@ -309,6 +352,8 @@ def _fit(
                     m = _metrics(
                         groups, top1, score_thr, rank_margin_thr,
                         args.positive_gain, args.negative_gain,
+                        confidence_level=args.certificate_confidence_level,
+                        bound_type=args.certificate_bound_type,
                     )
                     lcb = float(m["precision_wilson_lcb90"] or 0.0)
                     harm_ucb = float(m["harmful_group_exposure_ucb90"])
@@ -360,7 +405,11 @@ def _fit(
                         candidates.append(row)
     frontier.sort(key=lambda x: (x["constraint_deficit"], -x["num_positive_selected"], -x["num_selected"]))
     if not candidates:
-        empty = _metrics(groups, [], float("inf"), float("inf"), args.positive_gain, args.negative_gain)
+        empty = _metrics(
+            groups, [], float("inf"), float("inf"), args.positive_gain, args.negative_gain,
+            confidence_level=args.certificate_confidence_level,
+            bound_type=args.certificate_bound_type,
+        )
         return None, empty, [], frontier[:40]
     candidates.sort(
         key=lambda x: (
@@ -402,10 +451,24 @@ def main() -> int:
     ap.add_argument("--max-hard", type=float, default=1.0)
     ap.add_argument("--positive-gain", type=float, default=0.015)
     ap.add_argument("--negative-gain", type=float, default=0.010)
+    ap.add_argument("--harm-label-mode", choices=["signed_advantage", "component_veto"], default="signed_advantage")
+    ap.add_argument("--component-harm-drs-tolerance", type=float, default=0.05)
+    ap.add_argument("--component-harm-dep-tolerance", type=float, default=0.05)
+    ap.add_argument("--component-harm-gap-tolerance", type=float, default=0.05)
+    ap.add_argument("--component-harm-hard-tolerance", type=float, default=0.05)
+    ap.add_argument("--component-harm-proxy-tolerance", type=float, default=0.05)
     ap.add_argument("--min-opportunity", type=float, default=0.05)
     ap.add_argument("--max-harm-probability", type=float, default=0.80)
     ap.add_argument("--min-score-advantage", type=float, default=0.0)
     ap.add_argument("--grid-size", type=int, default=15)
+    ap.add_argument(
+        "--certificate-confidence-level", type=float, default=0.90,
+        help="Directional confidence level for Wilson precision/harm bounds.",
+    )
+    ap.add_argument(
+        "--certificate-bound-type", choices=["one_sided", "two_sided"], default="one_sided",
+        help="One-sided is the declared Natural-gate protocol; two-sided is retained for historical audits.",
+    )
     ap.add_argument("--min-fit-selected", type=int, default=12)
     ap.add_argument("--min-fit-precision-lcb", type=float, default=0.50)
     ap.add_argument("--max-fit-harmful-group-ucb", type=float, default=0.08,
@@ -448,6 +511,13 @@ def main() -> int:
     args = ap.parse_args()
 
     supported_macros = {int(x) for x in args.macro_ids.split(",") if x.strip()}
+    component_tolerances = ComponentVetoTolerances(
+        drs=args.component_harm_drs_tolerance,
+        deployability_gate=args.component_harm_dep_tolerance,
+        gap_discount=args.component_harm_gap_tolerance,
+        hard_violation=args.component_harm_hard_tolerance,
+        harm_proxy=args.component_harm_proxy_tolerance,
+    )
     runtime_cfg = {"selection": {"active_bucket_name": "near_contact" if args.bucket == "near" else "contact"}}
     bundle = load_model_bundle(args.checkpoint, runtime_cfg)
     if bundle is None:
@@ -476,7 +546,7 @@ def main() -> int:
             "candidate": int(_scalar(d, "candidate_index", 0)),
             "macro": int(_scalar(d, "prefix_macro_type_id", _scalar(d, "prefix_macro_id", -1))),
             "nominal": bool(float(_scalar(d, "is_nominal", 0)) > 0.5),
-            "teacher": _teacher_pcd(d, alpha, beta, top_m),
+            **_teacher_components(d, alpha, beta, top_m),
             "hard": float(_scalar(d, "hard_violation", 0.0)),
             "feasible": bool(int(_scalar(d, "feasible", 1))),
         }
@@ -546,11 +616,22 @@ def main() -> int:
             head_harm = None
             if r["harm_logit"] is not None and nom["harm_logit"] is not None:
                 head_harm = _sigmoid(float(r["harm_logit"]) - float(nom["harm_logit"]))
+            teacher_adv = r["teacher"] - nom["teacher"]
+            component_margin = component_veto_margin_numpy(
+                candidate_drs=r["teacher_drs"], nominal_drs=nom["teacher_drs"],
+                candidate_r_dep=r["teacher_r_dep"], nominal_r_dep=nom["teacher_r_dep"],
+                candidate_gap=r["teacher_gap"], nominal_gap=nom["teacher_gap"],
+                candidate_hard=r["teacher_hard"], nominal_hard=nom["teacher_hard"],
+                candidate_harm_proxy=r["teacher_harm_proxy"], nominal_harm_proxy=nom["teacher_harm_proxy"],
+                tolerances=component_tolerances,
+            )
             pairs.append({
                 "candidate": r["candidate"], "macro": r["macro"], "deviation": r["deviation"],
                 "pred_adv": pred_adv, "rank_adv": rank_adv, "delta_std": delta_std,
                 "opportunity": opportunity, "harm": harm, "head_harm": head_harm,
-                "teacher_adv": r["teacher"] - nom["teacher"],
+                "teacher_adv": teacher_adv,
+                "teacher_component_veto_margin": component_margin,
+                "teacher_harmful": bool(component_margin > 0.0) if args.harm_label_mode == "component_veto" else bool(teacher_adv <= -args.negative_gain),
             })
         groups.append({
             "scene": scene, "time": time_index, "fold": _fold(scene, max(2, args.folds)),
@@ -559,6 +640,31 @@ def main() -> int:
 
     fit = [g for g in groups if g["fold"] == args.fit_fold]
     verify = [g for g in groups if g["fold"] != args.fit_fold]
+    support_feasibility = {
+        "fit": certificate_support_feasibility(
+            num_groups=len(fit),
+            num_opportunities=sum(g["oracle_best_teacher_adv"] >= args.positive_gain for g in fit),
+            min_selected=args.min_fit_selected,
+            min_precision_lcb=args.min_fit_precision_lcb,
+            max_harmful_selected_ucb=args.max_fit_harmful_selected_ucb,
+            max_harmful_group_ucb=args.max_fit_harmful_group_ucb,
+            confidence_level=args.certificate_confidence_level,
+            bound_type=args.certificate_bound_type,
+        ),
+        "verify": certificate_support_feasibility(
+            num_groups=len(verify),
+            num_opportunities=sum(g["oracle_best_teacher_adv"] >= args.positive_gain for g in verify),
+            min_selected=args.min_verify_selected,
+            min_precision_lcb=args.min_verify_precision_lcb,
+            max_harmful_selected_ucb=args.max_verify_harmful_selected_ucb,
+            max_harmful_group_ucb=args.max_verify_harmful_group_ucb,
+            confidence_level=args.certificate_confidence_level,
+            bound_type=args.certificate_bound_type,
+        ),
+    }
+    support_feasibility["overall"] = bool(
+        support_feasibility["fit"]["feasible"] and support_feasibility["verify"]["feasible"]
+    )
     conformal = None
     if args.risk_source == "conformal_delta":
         if args.conformal_scope == "policy_top1":
@@ -600,8 +706,16 @@ def main() -> int:
         all_top1 = _top1(groups, rule["opportunity_threshold"], rule["harm_threshold"], supported_macros, conditional_rank_margin=args.conditional_recovery_ranking, policy_first_no_fallback=args.policy_first_no_fallback, proposal_top_k=args.proposal_top_k, evidence_rerank_top_k=args.evidence_rerank_top_k)
         score_thr = rule["score_threshold"]
     rank_margin_thr = float("inf") if rule is None else rule["rank_margin_threshold"]
-    verify_metrics = _metrics(verify, verify_top1, score_thr, rank_margin_thr, args.positive_gain, args.negative_gain)
-    all_metrics = _metrics(groups, all_top1, score_thr, rank_margin_thr, args.positive_gain, args.negative_gain)
+    verify_metrics = _metrics(
+        verify, verify_top1, score_thr, rank_margin_thr, args.positive_gain, args.negative_gain,
+        confidence_level=args.certificate_confidence_level,
+        bound_type=args.certificate_bound_type,
+    )
+    all_metrics = _metrics(
+        groups, all_top1, score_thr, rank_margin_thr, args.positive_gain, args.negative_gain,
+        confidence_level=args.certificate_confidence_level,
+        bound_type=args.certificate_bound_type,
+    )
     near_miss_verify_frontier: list[dict[str, Any]] = []
     for fit_row in near_miss[:20]:
         vtop = _top1(
@@ -616,6 +730,8 @@ def main() -> int:
             verify, vtop, float(fit_row["score_threshold"]),
             float(fit_row["rank_margin_threshold"]),
             args.positive_gain, args.negative_gain,
+            confidence_level=args.certificate_confidence_level,
+            bound_type=args.certificate_bound_type,
         )
         near_miss_verify_frontier.append({
             "fit_constraint_deficit": float(fit_row.get("constraint_deficit", 0.0)),
@@ -717,7 +833,7 @@ def main() -> int:
         [float(r["pred_adv"]) for r in proposal_evidence_top1],
     )
     proposal_evidence_top1_harm_auc = _auc(
-        [float(r["teacher_adv"]) <= -args.negative_gain for r in proposal_evidence_top1],
+        [_is_harmful(r, args.negative_gain) for r in proposal_evidence_top1],
         [float(r["harm"]) for r in proposal_evidence_top1],
     )
 
@@ -729,7 +845,7 @@ def main() -> int:
         [r["pred_adv"] for r in unconstrained_top1],
     )
     policy_top1_harm_auc = _auc(
-        [r["teacher_adv"] <= -args.negative_gain for r in unconstrained_top1],
+        [_is_harmful(r, args.negative_gain) for r in unconstrained_top1],
         [r["harm"] for r in unconstrained_top1],
     )
     policy_top1_gain_mae = (
@@ -741,7 +857,7 @@ def main() -> int:
     positive_policy_groups = [r for r in unconstrained_top1 if float(r["oracle_best_teacher_adv"]) >= args.positive_gain]
     nonpositive_false_switches = [r for r in nonpositive_groups if float(r["rank_adv"]) > 0.0]
     harmful_ranked_switches = [
-        r for r in recovery_switches if float(r["teacher_adv"]) <= -args.negative_gain
+        r for r in recovery_switches if _is_harmful(r, args.negative_gain)
     ]
     positive_group_activations = [r for r in positive_policy_groups if float(r["rank_adv"]) > 0.0]
     positive_groups = [g for g in groups if g["oracle_best_teacher_adv"] >= args.positive_gain]
@@ -759,6 +875,10 @@ def main() -> int:
     fit_scenes = {g["scene"] for g in fit}
     verify_scenes = {g["scene"] for g in verify}
     warnings: list[str] = []
+    if not bool(support_feasibility["fit"]["feasible"]):
+        warnings.append("fit certificate specification infeasible for observed positive support")
+    if not bool(support_feasibility["verify"]["feasible"]):
+        warnings.append("verify certificate specification infeasible for observed positive support")
     if len(groups) < args.required_min_groups:
         warnings.append("insufficient calibration groups")
     if len(scenes) < args.required_min_scenes:
@@ -785,7 +905,7 @@ def main() -> int:
 
     valid = not warnings
     result = {
-        "method": "v48_scene_disjoint_joint_policy_risk_certificate",
+        "method": "v48_19_support_aware_factorized_policy_risk_certificate",
         "bucket": args.bucket,
         "dataset": args.dataset,
         "checkpoint": args.checkpoint,
@@ -796,6 +916,18 @@ def main() -> int:
             ("physical -> preference top1 -> evidence -> value challenge" if args.policy_first_no_fallback else "physical -> gain-distribution opportunity/harm -> preference top1 -> value challenge")
         ),
         "risk_source": args.risk_source,
+        "harm_label_mode": args.harm_label_mode,
+        "component_harm_tolerances": component_tolerances.__dict__,
+        "certificate_confidence": {
+            "level": float(args.certificate_confidence_level),
+            "bound_type": str(args.certificate_bound_type),
+            "wilson_z": wilson_z(
+                confidence_level=args.certificate_confidence_level,
+                bound_type=args.certificate_bound_type,
+            ),
+            "legacy_metric_suffix": "lcb90/ucb90 retained for reader compatibility",
+        },
+        "certificate_support_feasibility": support_feasibility,
         "conformal": conformal,
         "rule": rule,
         "selector_overrides": ({} if rule is None else {
@@ -830,12 +962,16 @@ def main() -> int:
         "fit_scenes": len(fit_scenes), "verify_scenes": len(verify_scenes), "scene_overlap": len(fit_scenes & verify_scenes),
         "fit": fit_metrics, "verify": verify_metrics, "all": all_metrics,
         "candidate_positive_auc": _auc([r["teacher_adv"] >= args.positive_gain for r in pairs], [r["pred_adv"] for r in pairs]),
-        "candidate_harm_auc": _auc([r["teacher_adv"] <= -args.negative_gain for r in pairs], [r["harm"] for r in pairs]),
-        "candidate_risk_harm_auc": _auc([r["teacher_adv"] <= -args.negative_gain for r in pairs], [r["harm"] for r in pairs]),
+        "candidate_harm_auc": _auc([_is_harmful(r, args.negative_gain) for r in pairs], [r["harm"] for r in pairs]),
+        "candidate_risk_harm_auc": _auc([_is_harmful(r, args.negative_gain) for r in pairs], [r["harm"] for r in pairs]),
         "candidate_head_harm_auc": _auc(
-            [r["teacher_adv"] <= -args.negative_gain for r in pairs if r.get("head_harm") is not None],
+            [_is_harmful(r, args.negative_gain) for r in pairs if r.get("head_harm") is not None],
             [float(r["head_harm"]) for r in pairs if r.get("head_harm") is not None],
         ),
+        "candidate_benefit_and_harm_overlap_count": sum(
+            (r["teacher_adv"] >= args.positive_gain) and _is_harmful(r, args.negative_gain) for r in pairs
+        ),
+        "candidate_component_harmful_count": sum(_is_harmful(r, args.negative_gain) for r in pairs),
         "candidate_pred_teacher_correlation": corr,
         "candidate_rank_teacher_correlation": rank_corr,
         "unconstrained_group_top1_correlation": top1_corr,
@@ -885,6 +1021,8 @@ def main() -> int:
     print(json.dumps(result, ensure_ascii=False), flush=True)
     if len(groups) == 0 or len(scenes) == 0:
         return 4  # protocol/artifact failure, not a Natural-gate rejection
+    if not bool(support_feasibility["overall"]):
+        return 4  # unsupported certificate specification, not an algorithm rejection
     return 0 if valid else 3
 
 

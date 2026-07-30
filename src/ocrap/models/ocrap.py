@@ -176,6 +176,8 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_calibrator_context: bool = False,
         direct_recovery_evidence_calibrator_context_detach: bool = True,
         direct_recovery_evidence_calibrator_context_source: str = "relative",
+        direct_recovery_evidence_calibrator_shared: bool = False,
+        direct_recovery_evidence_calibrator_regime_scale: float = 0.25,
     ):
         super().__init__()
         self.num_roots = int(num_roots)
@@ -244,6 +246,12 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_evidence_calibrator_context_source = str(
             direct_recovery_evidence_calibrator_context_source or "relative"
         ).strip().lower()
+        self.direct_recovery_evidence_calibrator_shared = bool(
+            direct_recovery_evidence_calibrator_shared
+        )
+        self.direct_recovery_evidence_calibrator_regime_scale = float(
+            max(0.0, direct_recovery_evidence_calibrator_regime_scale)
+        )
         if self.direct_recovery_evidence_calibrator_mode not in {
             "center_width", "simplex_context", "dual_tail_context"
         }:
@@ -553,6 +561,15 @@ class OCRAPModel(nn.Module):
             nn.ModuleList([_make_evidence_calibrator(), _make_evidence_calibrator()])
             if self.direct_recovery_value_head and self.direct_recovery_delta_head
             and self.direct_recovery_evidence_calibrator
+            else None
+        )
+        # v48.19 FACET-BRIDGE: pool sparse Near/Contact evidence through one
+        # shared calibrator, while retaining small bounded regime residuals.
+        # Safe remains protected by the external nominal lock.
+        self.direct_evidence_shared_calibrator = (
+            _make_evidence_calibrator()
+            if self.direct_evidence_calibrators is not None
+            and self.direct_recovery_evidence_calibrator_shared
             else None
         )
 
@@ -969,11 +986,21 @@ class OCRAPModel(nn.Module):
             all_residuals = torch.stack(
                 [adapter(calibrator_input) for adapter in self.direct_evidence_calibrators], dim=1
             )
-            evidence_calibrator_residual = all_residuals[
+            regime_residual = all_residuals[
                 torch.arange(all_residuals.shape[0], device=all_residuals.device), delta_expert_idx
             ]
+            if self.direct_evidence_shared_calibrator is not None:
+                shared_residual = self.direct_evidence_shared_calibrator(calibrator_input)
+                combined_residual = (
+                    shared_residual
+                    + self.direct_recovery_evidence_calibrator_regime_scale * regime_residual
+                )
+                out["direct_recovery_evidence_shared_residual_raw"] = shared_residual
+                out["direct_recovery_evidence_regime_residual_raw"] = regime_residual
+            else:
+                combined_residual = regime_residual
             evidence_calibrator_residual = (
-                torch.tanh(evidence_calibrator_residual)
+                torch.tanh(combined_residual)
                 * self.direct_recovery_evidence_calibrator_scale
             )
             out["direct_recovery_evidence_calibrator_input"] = calibrator_input

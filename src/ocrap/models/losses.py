@@ -3,6 +3,12 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 
+from ocrap.algorithms.evidence_targets import (
+    ComponentVetoTolerances,
+    component_veto_margin_torch,
+    component_veto_soft_target,
+)
+
 
 def margin_mse(pred: torch.Tensor, target: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
     loss = (pred - target) ** 2
@@ -1347,6 +1353,8 @@ def direct_uncertainty_recovery_value_loss(
     group_dro_temperature: float = 0.35,
     group_dro_severity_thresholds: tuple[float, ...] = (0.25, 0.55),
     teacher_m_star: torch.Tensor | None = None,
+    teacher_hard_violation: torch.Tensor | None = None,
+    teacher_harm_proxy: torch.Tensor | None = None,
     exact_teacher_pcd: bool = False,
     pred_rank_logit: torch.Tensor | None = None,
     preference_weight: float = 0.0,
@@ -1397,6 +1405,13 @@ def direct_uncertainty_recovery_value_loss(
     ordinal_evidence_class_balanced_weight: float = 0.0,
     ordinal_evidence_batch_balanced: bool = False,
     ordinal_evidence_independent_tails: bool = False,
+    ordinal_evidence_factorized_harm: bool = False,
+    ordinal_evidence_factorized_harm_temperature: float = 0.05,
+    ordinal_evidence_factorized_harm_drs_tolerance: float = 0.05,
+    ordinal_evidence_factorized_harm_dep_tolerance: float = 0.05,
+    ordinal_evidence_factorized_harm_gap_tolerance: float = 0.05,
+    ordinal_evidence_factorized_harm_hard_tolerance: float = 0.05,
+    ordinal_evidence_factorized_harm_proxy_tolerance: float = 0.05,
     ordinal_evidence_balanced_replaces_erm: bool = False,
     ordinal_evidence_benefit_margin_weight: float = 0.0,
     ordinal_evidence_harm_margin_weight: float = 0.0,
@@ -1467,6 +1482,16 @@ def direct_uncertainty_recovery_value_loss(
     logvar = pred_logvar.float().reshape(-1).clamp(-7.0, 2.0)
     trd = torch.nan_to_num(teacher_r_dep.float().reshape(-1), nan=-20.0, posinf=20.0, neginf=-20.0)
     tro = torch.nan_to_num(teacher_r_orc.float().reshape(-1), nan=-20.0, posinf=20.0, neginf=-20.0)
+    teacher_hard = (
+        torch.zeros_like(trd)
+        if teacher_hard_violation is None
+        else torch.nan_to_num(teacher_hard_violation.float().reshape(-1), nan=0.0, posinf=10.0, neginf=0.0)
+    )
+    teacher_harm = (
+        torch.zeros_like(trd)
+        if teacher_harm_proxy is None
+        else torch.nan_to_num(teacher_harm_proxy.float().reshape(-1), nan=0.0, posinf=10.0, neginf=0.0)
+    )
     with torch.no_grad():
         if bool(exact_teacher_pcd):
             if teacher_m_star is None:
@@ -1483,13 +1508,14 @@ def direct_uncertainty_recovery_value_loss(
     mac = macro_type_id.reshape(-1)
     isn = is_nominal.float().reshape(-1) > 0.5
     bid = bucket_id.reshape(-1)
-    sizes = [score.numel(), rank_score.numel(), point_mean.numel(), logvar.numel(), trd.numel(), tro.numel(), teacher_drs.numel(), sh.numel(), ti.numel(), mac.numel(), isn.numel(), bid.numel()]
+    sizes = [score.numel(), rank_score.numel(), point_mean.numel(), logvar.numel(), trd.numel(), tro.numel(), teacher_drs.numel(), teacher_hard.numel(), teacher_harm.numel(), sh.numel(), ti.numel(), mac.numel(), isn.numel(), bid.numel()]
     if direct_delta is not None:
         sizes.append(direct_delta.numel())
     if direct_delta_logvar is not None:
         sizes.append(direct_delta_logvar.numel())
     n = min(sizes)
     score, rank_score, point_mean, logvar, trd, tro, teacher_drs = score[:n], rank_score[:n], point_mean[:n], logvar[:n], trd[:n], tro[:n], teacher_drs[:n]
+    teacher_hard, teacher_harm = teacher_hard[:n], teacher_harm[:n]
     sh, ti, mac, isn, bid = sh[:n], ti[:n], mac[:n], isn[:n], bid[:n]
     if direct_delta is not None:
         direct_delta = direct_delta[:n]
@@ -1498,7 +1524,7 @@ def direct_uncertainty_recovery_value_loss(
     bucket_mask = torch.zeros((n,), dtype=torch.bool, device=score.device)
     for b in tuple(int(x) for x in bucket_ids):
         bucket_mask |= bid == b
-    finite = bucket_mask & torch.isfinite(score) & torch.isfinite(rank_score) & torch.isfinite(point_mean) & torch.isfinite(logvar) & torch.isfinite(trd) & torch.isfinite(tro) & torch.isfinite(teacher_drs)
+    finite = bucket_mask & torch.isfinite(score) & torch.isfinite(rank_score) & torch.isfinite(point_mean) & torch.isfinite(logvar) & torch.isfinite(trd) & torch.isfinite(tro) & torch.isfinite(teacher_drs) & torch.isfinite(teacher_hard) & torch.isfinite(teacher_harm)
     if not bool(finite.any()):
         return grad_anchor
     teacher_gap = torch.clamp(tro - trd, min=0.0)
@@ -1532,9 +1558,7 @@ def direct_uncertainty_recovery_value_loss(
     # in the whole minibatch (and separately by regime), not independently in
     # each scene-time group.  Most groups contain a single evidence class, so
     # v48.16's within-group averaging reduced to another dead-zone-dominated NLL.
-    evidence_proposal_records: list[
-        tuple[int, torch.Tensor, torch.Tensor, torch.Tensor, int]
-    ] = []
+    evidence_proposal_records: list[tuple] = []
     for key in torch.unique(keys[finite], dim=0):
         idx = torch.where(finite & (bid == key[0]) & (sh == key[1]) & (ti == key[2]))[0]
         noms = idx[isn[idx]]
@@ -1543,6 +1567,34 @@ def direct_uncertainty_recovery_value_loss(
             continue
         nom = noms[0]
         t_delta = target[recs] - target[nom]
+        factorized_harm_margin = None
+        factorized_harm_target = None
+        factorized_harm_binary = None
+        if bool(ordinal_evidence_factorized_harm):
+            factorized_harm_margin = component_veto_margin_torch(
+                candidate_drs=teacher_drs[recs],
+                nominal_drs=teacher_drs[nom].expand_as(teacher_drs[recs]),
+                candidate_r_dep=trd[recs],
+                nominal_r_dep=trd[nom].expand_as(trd[recs]),
+                candidate_gap=teacher_gap[recs],
+                nominal_gap=teacher_gap[nom].expand_as(teacher_gap[recs]),
+                candidate_hard=teacher_hard[recs],
+                nominal_hard=teacher_hard[nom].expand_as(teacher_hard[recs]),
+                candidate_harm_proxy=teacher_harm[recs],
+                nominal_harm_proxy=teacher_harm[nom].expand_as(teacher_harm[recs]),
+                tolerances=ComponentVetoTolerances(
+                    drs=float(ordinal_evidence_factorized_harm_drs_tolerance),
+                    deployability_gate=float(ordinal_evidence_factorized_harm_dep_tolerance),
+                    gap_discount=float(ordinal_evidence_factorized_harm_gap_tolerance),
+                    hard_violation=float(ordinal_evidence_factorized_harm_hard_tolerance),
+                    harm_proxy=float(ordinal_evidence_factorized_harm_proxy_tolerance),
+                ),
+            ).detach()
+            factorized_harm_target = component_veto_soft_target(
+                factorized_harm_margin,
+                temperature=float(ordinal_evidence_factorized_harm_temperature),
+            ).detach()
+            factorized_harm_binary = factorized_harm_margin > 0.0
         p_delta = score[recs] - score[nom]
         if direct_delta is not None:
             p_delta = direct_delta[recs]
@@ -1960,22 +2012,32 @@ def direct_uncertainty_recovery_value_loss(
                 float(ordinal_evidence_dead_class_weight),
                 float(ordinal_evidence_benefit_class_weight),
             ])
+            benefit_loss_tail = None
+            harm_loss_tail = None
+            benefit_binary = (classes == 2).to(dtype=p_benefit.dtype)
+            harm_binary_bool = classes == 0
             if bool(ordinal_evidence_independent_tails):
-                # v48.18 DUET-BRIDGE: benefit and harm are separate hypotheses.
-                # Dead-zone candidates supervise both tails to zero; ambiguous
-                # candidates may retain elevated probabilities in both tails and
-                # are rejected by the downstream harm veto rather than being
-                # artificially forced onto a three-class simplex.
-                benefit_binary = (classes == 2).to(dtype=p_benefit.dtype)
-                harm_binary = (classes == 0).to(dtype=p_harm.dtype)
-                nll = 0.5 * (
-                    F.binary_cross_entropy_with_logits(
-                        opp_delta_logits, benefit_binary, reduction="none"
-                    )
-                    + F.binary_cross_entropy_with_logits(
-                        harm_delta_logits, harm_binary, reduction="none"
-                    )
+                # v48.19 FACET-BRIDGE: independent outputs require independent
+                # teacher hypotheses.  Benefit remains total PCD improvement; the
+                # optional component-veto harm target fires when any safety
+                # component regresses, even if total PCD still improves.
+                harm_target_tail = (
+                    factorized_harm_target.to(dtype=p_harm.dtype)
+                    if factorized_harm_target is not None
+                    else harm_binary_bool.to(dtype=p_harm.dtype)
                 )
+                harm_binary_bool = (
+                    factorized_harm_binary
+                    if factorized_harm_binary is not None
+                    else harm_binary_bool
+                )
+                benefit_loss_tail = F.binary_cross_entropy_with_logits(
+                    opp_delta_logits, benefit_binary, reduction="none"
+                )
+                harm_loss_tail = F.binary_cross_entropy_with_logits(
+                    harm_delta_logits, harm_target_tail, reduction="none"
+                )
+                nll = 0.5 * (benefit_loss_tail + harm_loss_tail)
             else:
                 p_dead = (1.0 - p_benefit - p_harm).clamp_min(1.0e-6)
                 probs = torch.stack([p_harm, p_dead, p_benefit], dim=-1).clamp_min(1.0e-6)
@@ -2031,13 +2093,24 @@ def direct_uncertainty_recovery_value_loss(
             if bool(ordinal_evidence_batch_balanced):
                 regime_id = int(bid[nom].detach().item())
                 for local_idx in proposal_idx:
-                    evidence_proposal_records.append((
-                        regime_id,
-                        nll[local_idx],
-                        p_benefit[local_idx],
-                        p_harm[local_idx],
-                        int(classes[local_idx].detach().item()),
-                    ))
+                    if bool(ordinal_evidence_factorized_harm) and benefit_loss_tail is not None and harm_loss_tail is not None:
+                        evidence_proposal_records.append((
+                            regime_id,
+                            benefit_loss_tail[local_idx],
+                            harm_loss_tail[local_idx],
+                            p_benefit[local_idx],
+                            p_harm[local_idx],
+                            bool(benefit_binary[local_idx].detach().item() > 0.5),
+                            bool(harm_binary_bool[local_idx].detach().item()),
+                        ))
+                    else:
+                        evidence_proposal_records.append((
+                            regime_id,
+                            nll[local_idx],
+                            p_benefit[local_idx],
+                            p_harm[local_idx],
+                            int(classes[local_idx].detach().item()),
+                        ))
             elif float(ordinal_evidence_class_balanced_weight) > 0.0:
                 class_terms = []
                 for class_id in (0, 1, 2):
@@ -2195,55 +2268,93 @@ def direct_uncertainty_recovery_value_loss(
     erm_grouped = (gl * gw).sum() / gw.sum().clamp_min(1.0e-6)
     grouped = erm_grouped
     if bool(ordinal_evidence_batch_balanced) and evidence_proposal_records:
-        target_prob = min(0.99, max(0.51, float(ordinal_evidence_target_probability)))
-        regime_terms: list[torch.Tensor] = []
-        benefit_margin_terms: list[torch.Tensor] = []
-        harm_margin_terms: list[torch.Tensor] = []
-        for regime_id in sorted({record[0] for record in evidence_proposal_records}):
-            records = [record for record in evidence_proposal_records if record[0] == regime_id]
-            class_terms: list[torch.Tensor] = []
-            for class_id in (0, 1, 2):
-                cls_records = [record for record in records if record[4] == class_id]
-                if not cls_records:
-                    continue
-                class_terms.append(torch.stack([record[1] for record in cls_records]).mean())
-                if class_id == 2 and float(ordinal_evidence_benefit_margin_weight) > 0.0:
-                    benefit_margin_terms.append(
-                        F.relu(
-                            target_prob - torch.stack([record[2] for record in cls_records])
-                        ).mean()
-                    )
-                if class_id == 0 and float(ordinal_evidence_harm_margin_weight) > 0.0:
-                    harm_margin_terms.append(
-                        F.relu(
-                            target_prob - torch.stack([record[3] for record in cls_records])
-                        ).mean()
-                    )
-            if class_terms:
-                regime_terms.append(torch.stack(class_terms).mean())
-        balanced_terms: list[torch.Tensor] = []
-        if regime_terms and float(ordinal_evidence_class_balanced_weight) > 0.0:
-            balanced_terms.append(
-                float(ordinal_evidence_class_balanced_weight) * torch.stack(regime_terms).mean()
-            )
-        if benefit_margin_terms:
-            balanced_terms.append(
-                float(ordinal_evidence_benefit_margin_weight) * torch.stack(benefit_margin_terms).mean()
-            )
-        if harm_margin_terms:
-            balanced_terms.append(
-                float(ordinal_evidence_harm_margin_weight) * torch.stack(harm_margin_terms).mean()
-            )
-        if balanced_terms:
-            balanced_objective = torch.stack(balanced_terms).sum()
-            if bool(ordinal_evidence_balanced_replaces_erm):
-                # Calibrator-only target adaptation: the balanced objective is the
-                # evidence ERM, not an auxiliary term added on top of dead-zone-
-                # dominated per-group NLL.  Other explicitly enabled cross-group
-                # objectives and the residual anchor are still added below.
-                grouped = balanced_objective
-            else:
-                grouped = grouped + balanced_objective
+        if bool(ordinal_evidence_factorized_harm):
+            # Balance each binary hypothesis separately.  Joint three-class
+            # balancing cannot represent candidates that are both beneficial and
+            # component-harmful.
+            target_prob = min(0.99, max(0.51, float(ordinal_evidence_target_probability)))
+            regime_terms: list[torch.Tensor] = []
+            benefit_margin_terms: list[torch.Tensor] = []
+            harm_margin_terms: list[torch.Tensor] = []
+            for regime_id in sorted({record[0] for record in evidence_proposal_records}):
+                records = [record for record in evidence_proposal_records if record[0] == regime_id]
+                tail_terms: list[torch.Tensor] = []
+                for loss_index, label_index in ((1, 5), (2, 6)):
+                    class_means: list[torch.Tensor] = []
+                    for label in (False, True):
+                        selected = [record[loss_index] for record in records if bool(record[label_index]) is label]
+                        if selected:
+                            class_means.append(torch.stack(selected).mean())
+                    if class_means:
+                        tail_terms.append(torch.stack(class_means).mean())
+                if tail_terms:
+                    regime_terms.append(torch.stack(tail_terms).mean())
+                benefit_pos = [record[3] for record in records if bool(record[5])]
+                harm_pos = [record[4] for record in records if bool(record[6])]
+                if benefit_pos and float(ordinal_evidence_benefit_margin_weight) > 0.0:
+                    benefit_margin_terms.append(F.relu(target_prob - torch.stack(benefit_pos)).mean())
+                if harm_pos and float(ordinal_evidence_harm_margin_weight) > 0.0:
+                    harm_margin_terms.append(F.relu(target_prob - torch.stack(harm_pos)).mean())
+            balanced_terms: list[torch.Tensor] = []
+            if regime_terms and float(ordinal_evidence_class_balanced_weight) > 0.0:
+                balanced_terms.append(float(ordinal_evidence_class_balanced_weight) * torch.stack(regime_terms).mean())
+            if benefit_margin_terms:
+                balanced_terms.append(float(ordinal_evidence_benefit_margin_weight) * torch.stack(benefit_margin_terms).mean())
+            if harm_margin_terms:
+                balanced_terms.append(float(ordinal_evidence_harm_margin_weight) * torch.stack(harm_margin_terms).mean())
+            if balanced_terms:
+                balanced_objective = torch.stack(balanced_terms).sum()
+                grouped = balanced_objective if bool(ordinal_evidence_balanced_replaces_erm) else grouped + balanced_objective
+        else:
+            target_prob = min(0.99, max(0.51, float(ordinal_evidence_target_probability)))
+            regime_terms: list[torch.Tensor] = []
+            benefit_margin_terms: list[torch.Tensor] = []
+            harm_margin_terms: list[torch.Tensor] = []
+            for regime_id in sorted({record[0] for record in evidence_proposal_records}):
+                records = [record for record in evidence_proposal_records if record[0] == regime_id]
+                class_terms: list[torch.Tensor] = []
+                for class_id in (0, 1, 2):
+                    cls_records = [record for record in records if record[4] == class_id]
+                    if not cls_records:
+                        continue
+                    class_terms.append(torch.stack([record[1] for record in cls_records]).mean())
+                    if class_id == 2 and float(ordinal_evidence_benefit_margin_weight) > 0.0:
+                        benefit_margin_terms.append(
+                            F.relu(
+                                target_prob - torch.stack([record[2] for record in cls_records])
+                            ).mean()
+                        )
+                    if class_id == 0 and float(ordinal_evidence_harm_margin_weight) > 0.0:
+                        harm_margin_terms.append(
+                            F.relu(
+                                target_prob - torch.stack([record[3] for record in cls_records])
+                            ).mean()
+                        )
+                if class_terms:
+                    regime_terms.append(torch.stack(class_terms).mean())
+            balanced_terms: list[torch.Tensor] = []
+            if regime_terms and float(ordinal_evidence_class_balanced_weight) > 0.0:
+                balanced_terms.append(
+                    float(ordinal_evidence_class_balanced_weight) * torch.stack(regime_terms).mean()
+                )
+            if benefit_margin_terms:
+                balanced_terms.append(
+                    float(ordinal_evidence_benefit_margin_weight) * torch.stack(benefit_margin_terms).mean()
+                )
+            if harm_margin_terms:
+                balanced_terms.append(
+                    float(ordinal_evidence_harm_margin_weight) * torch.stack(harm_margin_terms).mean()
+                )
+            if balanced_terms:
+                balanced_objective = torch.stack(balanced_terms).sum()
+                if bool(ordinal_evidence_balanced_replaces_erm):
+                    # Calibrator-only target adaptation: the balanced objective is the
+                    # evidence ERM, not an auxiliary term added on top of dead-zone-
+                    # dominated per-group NLL.  Other explicitly enabled cross-group
+                    # objectives and the residual anchor are still added below.
+                    grouped = balanced_objective
+                else:
+                    grouped = grouped + balanced_objective
     # Cross-group, regime-local AUC surrogates for the frozen policy's selected
     # candidate.  The ordered NLL calibrates probabilities; these terms enforce
     # the ranking needed to distinguish beneficial and harmful tails across

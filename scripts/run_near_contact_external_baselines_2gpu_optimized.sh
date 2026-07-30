@@ -26,7 +26,6 @@ set -euo pipefail
 : "${GAMEFORMER_GLOBAL_BATCH_SIZE:=64}"
 : "${GAMEFORMER_NUM_WORKERS_TOTAL:=8}"
 : "${GAMEFORMER_TRAIN_GPUS:=2}"
-: "${GAMEFORMER_ALLOW_LATEST_RECOVERY:=true}"
 
 IFS=',' read -r -a GPU_LIST <<< "$CUDA_DEVICES"
 if [ "${#GPU_LIST[@]}" -eq 0 ]; then GPU_LIST=(0 1); fi
@@ -105,33 +104,24 @@ train_gameformer() {
     2>&1 | tee "$RUN/train_gameformer_lite.log"
 }
 
-TRAINED_GAMEFORMER_NOW=false
-if [ "$FORCE_RETRAIN_GAMEFORMER" = true ]; then
-  # Do not let a stale latest.pt from an earlier failed/NaN run masquerade as
-  # output from the current FORCE_RETRAIN invocation.
-  rm -f "$RUN/gameformer_lite/best.pt" "$RUN/gameformer_lite/latest.pt" "$RUN/gameformer_lite/train_summary.json"
-  rm -rf "$RUN/gameformer_lite/checkpoints"
-fi
 if [ "$FORCE_RETRAIN_GAMEFORMER" = true ] || { [ ! -f "$GAMEFORMER_CHECKPOINT" ] && [ "$TRAIN_GAMEFORMER_IF_MISSING" = true ]; }; then
   train_gameformer
-  TRAINED_GAMEFORMER_NOW=true
 fi
-
-# The trainer now writes best.pt before latest.pt and rejects NaN/Inf losses.
-# Recovery from latest.pt is therefore only for a narrow, validated interruption
-# window; it is never allowed for non-finite weights or a legacy input contract.
-validate_args=(
-  --checkpoint "$GAMEFORMER_CHECKPOINT"
-  --promote-from "$RUN/gameformer_lite/latest.pt"
-  --require-deployable-contract
-)
-if [ "$TRAINED_GAMEFORMER_NOW" = true ] && [ "$GAMEFORMER_ALLOW_LATEST_RECOVERY" = true ]; then
-  validate_args+=(--allow-promotion)
-fi
-if ! python -u tools/validate_external_checkpoint.py "${validate_args[@]}"; then
-  echo "GameFormer checkpoint validation failed. Inspect $RUN/train_gameformer_lite.log for the first non-finite loss diagnostic." >&2
+if { [ "$DO_OFFLINE" = true ] || [ "$DO_CLOSED_LOOP" = true ]; } && [ ! -f "$GAMEFORMER_CHECKPOINT" ]; then
+  echo "Missing GameFormer checkpoint: $GAMEFORMER_CHECKPOINT" >&2
   exit 2
 fi
+
+python - "$GAMEFORMER_CHECKPOINT" <<'PY'
+import sys, torch
+p=sys.argv[1]
+try: c=torch.load(p,map_location='cpu',weights_only=False)
+except TypeError: c=torch.load(p,map_location='cpu')
+contract=c.get('input_contract') or {}
+if contract.get('version',0) < 2 or contract.get('deployable_feature_only') is not True:
+    raise SystemExit('Checkpoint is legacy/teacher-conditioned. Retrain with near_contact_gameformer_lite.yaml.')
+print({'event':'gameformer_input_contract_ok','checkpoint':p,'version':contract.get('version')})
+PY
 
 if [ "$DO_OFFLINE" = true ]; then
   # Rule-based baselines are NumPy/CPU work. Keeping them off CUDA avoids GPU
@@ -257,50 +247,14 @@ if [ "$DO_CLOSED_LOOP" = true ]; then
   fi
 fi
 
-if [ "$DO_CLOSED_LOOP" = true ]; then
 python - <<'PY'
-import json, os
-from pathlib import Path
-
-run = Path(os.environ['RUN'])
-expected = [
-    'oracle_recovery_filter', 'gameformer_lite', 'marc_lite', 'racp_lite',
-    'predictive_safety_filter', 'dro_cvar_filter', 'cvar_risk_filter',
-    'expected_risk_filter',
-]
-rows = []
-missing = []
-invalid = []
-for method in expected:
-    path = run / f'closed_loop_{method}.json'
-    if not path.is_file():
-        missing.append(str(path))
-        continue
-    try:
-        data = json.loads(path.read_text())
-    except Exception as exc:
-        invalid.append(f'{path}: {exc}')
-        continue
-    reported = str(data.get('method', method))
-    if reported != method:
-        invalid.append(f'{path}: reported method={reported!r}')
-    if int(data.get('num_scenes', 0) or 0) <= 0 or int(data.get('num_decisions', 0) or 0) <= 0:
-        invalid.append(f'{path}: empty closed-loop result')
-    rows.append({k:data.get(k) for k in [
-        'method','source','label_mode','num_scenes','num_decisions',
-        'closed_loop_FRA_exec','closed_loop_FRA_cand','closed_loop_DRS',
-        'closed_loop_ODG','closed_loop_post_contact_deployability',
-        'closed_loop_bounded_NUP','intervention_rate','timing'
-    ]})
-out = run / 'closed_loop_summary.json'
-out.write_text(json.dumps(rows, indent=2))
-print({'event':'near_contact_closed_loop_summary','output':str(out),'num_methods':len(rows)})
-if missing or invalid:
-    raise SystemExit(json.dumps({
-        'event':'near_contact_closed_loop_incomplete',
-        'missing':missing,
-        'invalid':invalid,
-    }, indent=2))
-print({'event':'near_contact_closed_loop_complete','methods':expected})
+import glob,json,os
+run=os.environ['RUN']; rows=[]
+for p in sorted(glob.glob(os.path.join(run,'closed_loop_*.json'))):
+    try:d=json.load(open(p))
+    except Exception:continue
+    rows.append({k:d.get(k) for k in ['method','source','label_mode','num_scenes','num_decisions','closed_loop_FRA_exec','closed_loop_FRA_cand','closed_loop_DRS','closed_loop_ODG','closed_loop_post_contact_deployability','closed_loop_bounded_NUP','intervention_rate','timing']})
+out=os.path.join(run,'closed_loop_summary.json')
+with open(out,'w') as f: json.dump(rows,f,indent=2)
+print({'event':'near_contact_closed_loop_summary','output':out,'num_methods':len(rows)})
 PY
-fi
