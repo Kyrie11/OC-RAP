@@ -123,6 +123,9 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set model.direct_recovery_evidence_calibrator_context_source="${EVIDENCE_CALIBRATOR_CONTEXT_SOURCE:-relative}" \
   --set model.direct_recovery_evidence_calibrator_shared="${EVIDENCE_CALIBRATOR_SHARED:-false}" \
   --set model.direct_recovery_evidence_calibrator_regime_scale="${EVIDENCE_CALIBRATOR_REGIME_SCALE:-0.25}" \
+  --set model.direct_recovery_evidence_unified_experts="${EVIDENCE_UNIFIED_EXPERTS:-false}" \
+  --set model.direct_recovery_evidence_component_heads="${EVIDENCE_COMPONENT_HEADS:-false}" \
+  --set model.direct_recovery_evidence_component_scale="${EVIDENCE_COMPONENT_SCALE:-2.0}" \
   --set loss_weights.dep=0 --set loss_weights.orc=0 --set loss_weights.assign=0 \
   --set loss_weights.sig=0 --set loss_weights.margin=0 --set loss_weights.obs=0 \
   --set loss_weights.anti_oracle=0 --set loss_weights.artifact_gap=0 \
@@ -211,6 +214,9 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.direct_value_ordinal_evidence_factorized_harm_hard_tolerance="${COMPONENT_HARM_HARD_TOLERANCE:-0.05}" \
   --set training.direct_value_ordinal_evidence_factorized_harm_proxy_tolerance="${COMPONENT_HARM_PROXY_TOLERANCE:-0.05}" \
   --set training.direct_value_ordinal_evidence_balanced_replaces_erm="${ORDINAL_EVIDENCE_BALANCED_REPLACES_ERM:-false}" \
+  --set training.direct_value_ordinal_evidence_component_tail_weight="${ORDINAL_EVIDENCE_COMPONENT_TAIL_WEIGHT:-0.0}" \
+  --set training.direct_value_ordinal_evidence_global_balance="${ORDINAL_EVIDENCE_GLOBAL_BALANCE:-false}" \
+  --set training.direct_value_ordinal_evidence_safe_set_temperature="${ORDINAL_EVIDENCE_SAFE_SET_TEMPERATURE:-0.08}" \
   --set training.direct_value_ordinal_evidence_benefit_margin_weight="${ORDINAL_EVIDENCE_BENEFIT_MARGIN_WEIGHT:-0.0}" \
   --set training.direct_value_ordinal_evidence_harm_margin_weight="${ORDINAL_EVIDENCE_HARM_MARGIN_WEIGHT:-0.0}" \
   --set training.direct_value_ordinal_evidence_target_probability="${ORDINAL_EVIDENCE_TARGET_PROBABILITY:-0.60}" \

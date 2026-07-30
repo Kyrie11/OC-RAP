@@ -25,6 +25,34 @@ except Exception:  # pragma: no cover
 
 
 
+def _stable_clip_grad_norm_(parameters, max_norm: float, eps: float = 1.0e-12) -> float:
+    """Clip using a float64 norm so large finite float32 gradients do not overflow.
+
+    ``torch.nn.utils.clip_grad_norm_`` can report ``inf`` when the individual
+    gradients are finite but the float32 reduction overflows.  That turns the
+    clipping coefficient into zero and silently erases the update.  Accumulate
+    the norm in float64 and apply one finite coefficient in-place instead.
+    """
+    params = list(parameters)
+    grads = [p.grad for p in params if getattr(p, "grad", None) is not None]
+    if not grads:
+        return 0.0
+    total_sq = torch.zeros((), dtype=torch.float64, device=grads[0].device)
+    for grad in grads:
+        detached = grad.detach()
+        if not bool(torch.isfinite(detached).all()):
+            return float("inf")
+        total_sq = total_sq + detached.double().square().sum()
+    total_norm = torch.sqrt(total_sq)
+    total = float(total_norm.item())
+    limit = max(float(max_norm), 0.0)
+    if total > limit and total > 0.0:
+        coefficient = limit / (total + float(eps))
+        for grad in grads:
+            grad.mul_(coefficient)
+    return total
+
+
 class _DistributedEvalSampler(Sampler[int]):
     """Shard validation data without DistributedSampler's duplicate padding.
 
@@ -302,7 +330,7 @@ def _epoch(model, loader, opt, device, cfg: dict[str, Any], train: bool, *, rank
             if train:
                 opt.zero_grad(set_to_none=True)
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), float(tcfg.get("grad_clip", 5.0)))
+                _stable_clip_grad_norm_(model.parameters(), float(tcfg.get("grad_clip", 5.0)))
                 opt.step()
         bs = int(batch["x"].shape[0])
         n += bs

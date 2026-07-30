@@ -7,6 +7,7 @@ from ocrap.algorithms.evidence_targets import (
     ComponentVetoTolerances,
     component_veto_margin_torch,
     component_veto_soft_target,
+    component_veto_terms_torch,
 )
 
 
@@ -1332,6 +1333,7 @@ def direct_uncertainty_recovery_value_loss(
     opportunity_weight: float = 0.0,
     opportunity_pos_weight: float = 6.0,
     pred_harm_logit: torch.Tensor | None = None,
+    pred_component_harm_logits: torch.Tensor | None = None,
     harm_weight: float = 0.0,
     harm_pos_weight: float = 4.0,
     setwise_admission_weight: float = 0.0,
@@ -1412,6 +1414,9 @@ def direct_uncertainty_recovery_value_loss(
     ordinal_evidence_factorized_harm_gap_tolerance: float = 0.05,
     ordinal_evidence_factorized_harm_hard_tolerance: float = 0.05,
     ordinal_evidence_factorized_harm_proxy_tolerance: float = 0.05,
+    ordinal_evidence_component_tail_weight: float = 0.0,
+    ordinal_evidence_global_balance: bool = False,
+    ordinal_evidence_safe_set_temperature: float = 0.05,
     ordinal_evidence_balanced_replaces_erm: bool = False,
     ordinal_evidence_benefit_margin_weight: float = 0.0,
     ordinal_evidence_harm_margin_weight: float = 0.0,
@@ -1457,6 +1462,7 @@ def direct_uncertainty_recovery_value_loss(
         pred_logvar,
         pred_opportunity_logit,
         pred_harm_logit,
+        pred_component_harm_logits,
         pred_rank_logit,
         pred_delta_mean,
         pred_delta_logvar,
@@ -1478,6 +1484,13 @@ def direct_uncertainty_recovery_value_loss(
     rank_score = score if pred_rank_logit is None else pred_rank_logit.float().reshape(-1)
     direct_delta = None if pred_delta_mean is None else pred_delta_mean.float().reshape(-1)
     direct_delta_logvar = None if pred_delta_logvar is None else pred_delta_logvar.float().reshape(-1).clamp(-7.0, 2.0)
+    component_harm_logits = None
+    if pred_component_harm_logits is not None:
+        component_harm_logits = pred_component_harm_logits.float()
+        if component_harm_logits.ndim != 2 or component_harm_logits.shape[-1] < 3:
+            raise ValueError(
+                "pred_component_harm_logits must have shape [N, >=3] for DRS/deployability/gap"
+            )
     point_mean = torch.sigmoid(raw_score)
     logvar = pred_logvar.float().reshape(-1).clamp(-7.0, 2.0)
     trd = torch.nan_to_num(teacher_r_dep.float().reshape(-1), nan=-20.0, posinf=20.0, neginf=-20.0)
@@ -1513,6 +1526,8 @@ def direct_uncertainty_recovery_value_loss(
         sizes.append(direct_delta.numel())
     if direct_delta_logvar is not None:
         sizes.append(direct_delta_logvar.numel())
+    if component_harm_logits is not None:
+        sizes.append(component_harm_logits.shape[0])
     n = min(sizes)
     score, rank_score, point_mean, logvar, trd, tro, teacher_drs = score[:n], rank_score[:n], point_mean[:n], logvar[:n], trd[:n], tro[:n], teacher_drs[:n]
     teacher_hard, teacher_harm = teacher_hard[:n], teacher_harm[:n]
@@ -1521,6 +1536,8 @@ def direct_uncertainty_recovery_value_loss(
         direct_delta = direct_delta[:n]
     if direct_delta_logvar is not None:
         direct_delta_logvar = direct_delta_logvar[:n]
+    if component_harm_logits is not None:
+        component_harm_logits = component_harm_logits[:n]
     bucket_mask = torch.zeros((n,), dtype=torch.bool, device=score.device)
     for b in tuple(int(x) for x in bucket_ids):
         bucket_mask |= bid == b
@@ -1570,8 +1587,18 @@ def direct_uncertainty_recovery_value_loss(
         factorized_harm_margin = None
         factorized_harm_target = None
         factorized_harm_binary = None
+        factorized_component_margins = None
+        factorized_component_targets = None
+        component_harm_delta_logits = None
         if bool(ordinal_evidence_factorized_harm):
-            factorized_harm_margin = component_veto_margin_torch(
+            tolerances = ComponentVetoTolerances(
+                drs=float(ordinal_evidence_factorized_harm_drs_tolerance),
+                deployability_gate=float(ordinal_evidence_factorized_harm_dep_tolerance),
+                gap_discount=float(ordinal_evidence_factorized_harm_gap_tolerance),
+                hard_violation=float(ordinal_evidence_factorized_harm_hard_tolerance),
+                harm_proxy=float(ordinal_evidence_factorized_harm_proxy_tolerance),
+            )
+            factorized_component_margins = component_veto_terms_torch(
                 candidate_drs=teacher_drs[recs],
                 nominal_drs=teacher_drs[nom].expand_as(teacher_drs[recs]),
                 candidate_r_dep=trd[recs],
@@ -1582,14 +1609,33 @@ def direct_uncertainty_recovery_value_loss(
                 nominal_hard=teacher_hard[nom].expand_as(teacher_hard[recs]),
                 candidate_harm_proxy=teacher_harm[recs],
                 nominal_harm_proxy=teacher_harm[nom].expand_as(teacher_harm[recs]),
-                tolerances=ComponentVetoTolerances(
-                    drs=float(ordinal_evidence_factorized_harm_drs_tolerance),
-                    deployability_gate=float(ordinal_evidence_factorized_harm_dep_tolerance),
-                    gap_discount=float(ordinal_evidence_factorized_harm_gap_tolerance),
-                    hard_violation=float(ordinal_evidence_factorized_harm_hard_tolerance),
-                    harm_proxy=float(ordinal_evidence_factorized_harm_proxy_tolerance),
-                ),
+                tolerances=tolerances,
             ).detach()
+            factorized_harm_margin = factorized_component_margins.max(dim=-1).values
+            factorized_component_targets = component_veto_soft_target(
+                factorized_component_margins[:, :3],
+                temperature=float(ordinal_evidence_factorized_harm_temperature),
+            ).detach()
+            if component_harm_logits is not None:
+                component_harm_delta_logits = (
+                    component_harm_logits[recs, :3]
+                    - component_harm_logits[nom, :3].unsqueeze(0)
+                )
+            factorized_harm_margin_check = component_veto_margin_torch(
+                candidate_drs=teacher_drs[recs],
+                nominal_drs=teacher_drs[nom].expand_as(teacher_drs[recs]),
+                candidate_r_dep=trd[recs],
+                nominal_r_dep=trd[nom].expand_as(trd[recs]),
+                candidate_gap=teacher_gap[recs],
+                nominal_gap=teacher_gap[nom].expand_as(teacher_gap[recs]),
+                candidate_hard=teacher_hard[recs],
+                nominal_hard=teacher_hard[nom].expand_as(teacher_hard[recs]),
+                candidate_harm_proxy=teacher_harm[recs],
+                nominal_harm_proxy=teacher_harm[nom].expand_as(teacher_harm[recs]),
+                tolerances=tolerances,
+            ).detach()
+            if not torch.allclose(factorized_harm_margin, factorized_harm_margin_check):
+                raise RuntimeError("component-veto scalar/vector target drift")
             factorized_harm_target = component_veto_soft_target(
                 factorized_harm_margin,
                 temperature=float(ordinal_evidence_factorized_harm_temperature),
@@ -2037,13 +2083,46 @@ def direct_uncertainty_recovery_value_loss(
                 harm_loss_tail = F.binary_cross_entropy_with_logits(
                     harm_delta_logits, harm_target_tail, reduction="none"
                 )
-                nll = 0.5 * (benefit_loss_tail + harm_loss_tail)
+                benefit_tail_weight = torch.where(
+                    benefit_binary > 0.5,
+                    torch.full_like(benefit_binary, float(ordinal_evidence_benefit_class_weight)),
+                    torch.full_like(benefit_binary, float(ordinal_evidence_dead_class_weight)),
+                )
+                harm_tail_weight = torch.where(
+                    harm_binary_bool,
+                    torch.full_like(harm_target_tail, float(ordinal_evidence_harm_class_weight)),
+                    torch.full_like(harm_target_tail, float(ordinal_evidence_dead_class_weight)),
+                )
+                component_loss_tail = None
+                if (
+                    component_harm_delta_logits is not None
+                    and factorized_component_targets is not None
+                    and float(ordinal_evidence_component_tail_weight) > 0.0
+                ):
+                    component_loss_raw = F.binary_cross_entropy_with_logits(
+                        component_harm_delta_logits,
+                        factorized_component_targets.to(dtype=component_harm_delta_logits.dtype),
+                        reduction="none",
+                    )
+                    component_binary = factorized_component_margins[:, :3] > 0.0
+                    component_weight = torch.where(
+                        component_binary,
+                        torch.full_like(component_loss_raw, float(ordinal_evidence_harm_class_weight)),
+                        torch.full_like(component_loss_raw, float(ordinal_evidence_dead_class_weight)),
+                    )
+                    component_loss_tail = (component_loss_raw * component_weight).mean(dim=-1)
+                nll = 0.5 * (
+                    benefit_tail_weight * benefit_loss_tail
+                    + harm_tail_weight * harm_loss_tail
+                )
+                if component_loss_tail is not None:
+                    nll = nll + float(ordinal_evidence_component_tail_weight) * component_loss_tail
             else:
                 p_dead = (1.0 - p_benefit - p_harm).clamp_min(1.0e-6)
                 probs = torch.stack([p_harm, p_dead, p_benefit], dim=-1).clamp_min(1.0e-6)
                 probs = probs / probs.sum(dim=-1, keepdim=True).clamp_min(1.0e-6)
                 nll = -torch.log(probs[torch.arange(probs.shape[0], device=probs.device), classes])
-            nll = nll * class_weights[classes]
+                nll = nll * class_weights[classes]
             # v48.14 PRISM: calibration-domain evidence adaptation must focus on
             # the errors that invalidate a selective safety certificate.  Static
             # class weights alone still let the adapter minimise loss by fitting
@@ -2054,14 +2133,14 @@ def direct_uncertainty_recovery_value_loss(
             if float(ordinal_evidence_hard_harm_weight) > 0.0:
                 harm_hardness = (1.0 - p_harm.detach()).clamp(0.0, 1.0).pow(hard_gamma)
                 nll = torch.where(
-                    classes == 0,
+                    harm_binary_bool if bool(ordinal_evidence_independent_tails) else classes == 0,
                     nll * (1.0 + float(ordinal_evidence_hard_harm_weight) * harm_hardness),
                     nll,
                 )
             if float(ordinal_evidence_hard_benefit_weight) > 0.0:
                 benefit_hardness = (1.0 - p_benefit.detach()).clamp(0.0, 1.0).pow(hard_gamma)
                 nll = torch.where(
-                    classes == 2,
+                    benefit_binary > 0.5 if bool(ordinal_evidence_independent_tails) else classes == 2,
                     nll * (1.0 + float(ordinal_evidence_hard_benefit_weight) * benefit_hardness),
                     nll,
                 )
@@ -2090,6 +2169,8 @@ def direct_uncertainty_recovery_value_loss(
             # evidence loss per observed class before averaging classes, so the
             # tiny adapter cannot win by predicting abstention for every proposal.
             proposal_classes = classes[proposal_idx]
+            proposal_benefit_mask = benefit_binary[proposal_idx] > 0.5
+            proposal_harm_mask = harm_binary_bool[proposal_idx]
             if bool(ordinal_evidence_batch_balanced):
                 regime_id = int(bid[nom].detach().item())
                 for local_idx in proposal_idx:
@@ -2113,35 +2194,45 @@ def direct_uncertainty_recovery_value_loss(
                         ))
             elif float(ordinal_evidence_class_balanced_weight) > 0.0:
                 class_terms = []
-                for class_id in (0, 1, 2):
-                    mask = proposal_classes == class_id
-                    if bool(mask.any()):
-                        class_terms.append(nll[proposal_idx][mask].mean())
+                if bool(ordinal_evidence_independent_tails):
+                    for tail_loss, tail_mask in (
+                        (benefit_loss_tail[proposal_idx], proposal_benefit_mask),
+                        (harm_loss_tail[proposal_idx], proposal_harm_mask),
+                    ):
+                        for label in (False, True):
+                            mask = tail_mask == label
+                            if bool(mask.any()):
+                                class_terms.append(tail_loss[mask].mean())
+                else:
+                    for class_id in (0, 1, 2):
+                        mask = proposal_classes == class_id
+                        if bool(mask.any()):
+                            class_terms.append(nll[proposal_idx][mask].mean())
                 if class_terms:
                     terms.append(float(ordinal_evidence_class_balanced_weight) * torch.stack(class_terms).mean())
 
             target_prob = min(0.99, max(0.51, float(ordinal_evidence_target_probability)))
             if not bool(ordinal_evidence_batch_balanced):
                 if float(ordinal_evidence_benefit_margin_weight) > 0.0:
-                    benefit_idx = proposal_idx[proposal_classes == 2]
+                    benefit_idx = proposal_idx[proposal_benefit_mask]
                     if benefit_idx.numel():
                         terms.append(float(ordinal_evidence_benefit_margin_weight) * F.relu(target_prob - p_benefit[benefit_idx]).mean())
                 if float(ordinal_evidence_harm_margin_weight) > 0.0:
-                    harm_idx_margin = proposal_idx[proposal_classes == 0]
+                    harm_idx_margin = proposal_idx[proposal_harm_mask]
                     if harm_idx_margin.numel():
                         terms.append(float(ordinal_evidence_harm_margin_weight) * F.relu(target_prob - p_harm[harm_idx_margin]).mean())
 
             # Same-group counterfactual comparisons cancel shared scene severity.
             intra_margin = float(ordinal_evidence_intragroup_margin)
             if float(ordinal_evidence_intragroup_benefit_weight) > 0.0:
-                pos_idx = proposal_idx[proposal_classes == 2]
-                neg_idx = proposal_idx[proposal_classes != 2]
+                pos_idx = proposal_idx[proposal_benefit_mask]
+                neg_idx = proposal_idx[~proposal_benefit_mask]
                 if pos_idx.numel() and neg_idx.numel():
                     benefit_pairs = opp_delta_logits[pos_idx].unsqueeze(1) - opp_delta_logits[neg_idx].unsqueeze(0)
                     terms.append(float(ordinal_evidence_intragroup_benefit_weight) * F.softplus(intra_margin - benefit_pairs).mean())
             if float(ordinal_evidence_intragroup_harm_weight) > 0.0:
-                harm_idx = proposal_idx[proposal_classes == 0]
-                safe_idx = proposal_idx[proposal_classes != 0]
+                harm_idx = proposal_idx[proposal_harm_mask]
+                safe_idx = proposal_idx[~proposal_harm_mask]
                 if harm_idx.numel() and safe_idx.numel():
                     harm_pairs = harm_delta_logits[harm_idx].unsqueeze(1) - harm_delta_logits[safe_idx].unsqueeze(0)
                     terms.append(float(ordinal_evidence_intragroup_harm_weight) * F.softplus(intra_margin - harm_pairs).mean())
@@ -2157,11 +2248,8 @@ def direct_uncertainty_recovery_value_loss(
                     policy_class,
                 ))
 
-        # v48.4 DRA-RCD: separate candidate ranking from action admission.
-        # Candidate ordering must not be trained through a harm head whose labels
-        # are currently the least transferable part of the dataset.  The value-only
-        # distribution learns *which* recovery is best; opportunity/harm remain in
-        # the admission distribution that decides whether to leave nominal.
+        # v48.4 DRA-RCD legacy admission distribution.  Older objectives and
+        # checkpoints retain this path unchanged.
         recovery_admission_logits = p_delta
         if opp_delta_logits is not None:
             recovery_admission_logits = recovery_admission_logits + float(opportunity_admission_weight) * F.logsigmoid(opp_delta_logits)
@@ -2169,23 +2257,84 @@ def direct_uncertainty_recovery_value_loss(
             recovery_admission_logits = recovery_admission_logits + float(harm_admission_weight) * F.logsigmoid(-harm_delta_logits)
         admission_class_logits = torch.cat([score[nom:nom + 1] * 0.0, recovery_admission_logits], dim=0) / tau
         rank_class_logits = torch.cat([rank_score[nom:nom + 1] * 0.0, r_delta], dim=0) / tau
-        if bool(pos_mask.any()):
-            target_class = 1 + int(torch.argmax(t_delta).item())
-        else:
-            target_class = 0
+        admission_harm_mask = (
+            factorized_harm_binary
+            if factorized_harm_binary is not None
+            else harmful_mask
+        )
+        safe_positive_mask = pos_mask & (~admission_harm_mask)
+        target_class = 0
+        if bool(safe_positive_mask.any()):
+            safe_indices = torch.where(safe_positive_mask)[0]
+            safe_best = safe_indices[torch.argmax(t_delta[safe_indices])]
+            target_class = 1 + int(safe_best.item())
         target_tensor = torch.tensor([target_class], dtype=torch.long, device=score.device)
+
+        # v48.20 UNISON deployment-exact safe-set admission.  Calibration and
+        # closed loop first freeze a rank-based top-k proposal, then rerank only
+        # that proposal by sigmoid(benefit)-sigmoid(harm).  v48.19 trained a
+        # different all-candidate score (frozen PCD delta plus log-sigmoid tails),
+        # so even a well-fitted candidate classifier was not optimized for the
+        # action actually deployed.  Restrict both the target set and the loss to
+        # the frozen top-k and use the exact deployed evidence score.  No bucket or
+        # regime identifier enters this path.
+        safe_set_logits = admission_class_logits
+        safe_set_harm_mask = admission_harm_mask
+        safe_set_positive_mask = safe_positive_mask
+        safe_set_teacher_delta = t_delta
+        unison_safe_set = bool(
+            ordinal_evidence_independent_tails
+            and ordinal_evidence_factorized_harm
+            and opp_delta_logits is not None
+            and harm_delta_logits is not None
+        )
+        if unison_safe_set:
+            deployment_k = min(max(1, int(ordinal_evidence_proposal_topk)), int(r_delta.numel()))
+            deployment_idx = torch.topk(r_delta.detach(), k=deployment_k).indices
+            deployment_score = (
+                torch.sigmoid(opp_delta_logits[deployment_idx])
+                - torch.sigmoid(harm_delta_logits[deployment_idx])
+            )
+            safe_set_logits = torch.cat(
+                [deployment_score.new_zeros((1,)), deployment_score], dim=0
+            ) / tau
+            safe_set_harm_mask = admission_harm_mask[deployment_idx]
+            safe_set_positive_mask = pos_mask[deployment_idx] & (~safe_set_harm_mask)
+            safe_set_teacher_delta = t_delta[deployment_idx]
+
+        safe_set_target_class = 0
+        if bool(safe_set_positive_mask.any()):
+            safe_indices = torch.where(safe_set_positive_mask)[0]
+            safe_best = safe_indices[torch.argmax(safe_set_teacher_delta[safe_indices])]
+            safe_set_target_class = 1 + int(safe_best.item())
+        safe_set_target_tensor = torch.tensor(
+            [safe_set_target_class], dtype=torch.long, device=score.device
+        )
         if float(setwise_admission_weight) > 0.0:
-            terms.append(float(setwise_admission_weight) * F.cross_entropy(admission_class_logits.unsqueeze(0), target_tensor))
+            # Positive-but-harmful overlap candidates are never admission targets;
+            # they remain benefit positives for the independent benefit tail and
+            # are rejected by the non-compensatory component-veto tail.
+            if bool(safe_set_positive_mask.any()):
+                teacher_logits = torch.full_like(safe_set_logits, -30.0)
+                safe_indices = torch.where(safe_set_positive_mask)[0]
+                set_tau = max(float(ordinal_evidence_safe_set_temperature), 1.0e-3)
+                teacher_logits[1 + safe_indices] = safe_set_teacher_delta[safe_indices] / set_tau
+                teacher_prob = torch.softmax(teacher_logits, dim=0).detach()
+                admission_log_prob = torch.log_softmax(safe_set_logits, dim=0)
+                set_loss = F.kl_div(admission_log_prob, teacher_prob, reduction="sum")
+            else:
+                set_loss = F.cross_entropy(safe_set_logits.unsqueeze(0), safe_set_target_tensor)
+            terms.append(float(setwise_admission_weight) * set_loss)
 
         if float(selective_risk_weight) > 0.0 or float(selective_coverage_weight) > 0.0:
-            policy_prob = torch.softmax(admission_class_logits, dim=0)
+            policy_prob = torch.softmax(safe_set_logits, dim=0)
             recovery_prob = policy_prob[1:]
-            harmful_mass = (recovery_prob * harmful_mask.to(recovery_prob.dtype)).sum()
+            harmful_mass = (recovery_prob * safe_set_harm_mask.to(recovery_prob.dtype)).sum()
             risk_excess = F.relu(harmful_mass - float(selective_harm_budget))
             if float(selective_risk_weight) > 0.0:
                 terms.append(float(selective_risk_weight) * risk_excess.square())
-            if float(selective_coverage_weight) > 0.0 and bool(pos_mask.any()):
-                positive_mass = (recovery_prob * pos_mask.to(recovery_prob.dtype)).sum()
+            if float(selective_coverage_weight) > 0.0 and bool(safe_set_positive_mask.any()):
+                positive_mass = (recovery_prob * safe_set_positive_mask.to(recovery_prob.dtype)).sum()
                 coverage_shortfall = F.relu(float(selective_coverage_target) - positive_mass)
                 terms.append(float(selective_coverage_weight) * coverage_shortfall.square())
 
@@ -2194,10 +2343,12 @@ def direct_uncertainty_recovery_value_loss(
                 torch.zeros((1,), dtype=t_delta.dtype, device=t_delta.device),
                 t_delta,
             ], dim=0)
-            if bool(pos_mask.any()):
-                teacher_prob = torch.softmax(
-                    teacher_util / max(float(policy_teacher_temperature), 1.0e-3), dim=0
-                ).detach()
+            if bool(safe_positive_mask.any()):
+                teacher_prob = torch.zeros_like(teacher_util)
+                safe_indices = torch.where(safe_positive_mask)[0]
+                safe_logits = t_delta[safe_indices] / max(float(policy_teacher_temperature), 1.0e-3)
+                teacher_prob[1 + safe_indices] = torch.softmax(safe_logits, dim=0)
+                teacher_prob = teacher_prob.detach()
             else:
                 teacher_prob = torch.zeros_like(teacher_util)
                 teacher_prob[0] = 1.0
@@ -2276,8 +2427,17 @@ def direct_uncertainty_recovery_value_loss(
             regime_terms: list[torch.Tensor] = []
             benefit_margin_terms: list[torch.Tensor] = []
             harm_margin_terms: list[torch.Tensor] = []
-            for regime_id in sorted({record[0] for record in evidence_proposal_records}):
-                records = [record for record in evidence_proposal_records if record[0] == regime_id]
+            balance_ids = (
+                [None]
+                if bool(ordinal_evidence_global_balance)
+                else sorted({record[0] for record in evidence_proposal_records})
+            )
+            for regime_id in balance_ids:
+                records = (
+                    evidence_proposal_records
+                    if regime_id is None
+                    else [record for record in evidence_proposal_records if record[0] == regime_id]
+                )
                 tail_terms: list[torch.Tensor] = []
                 for loss_index, label_index in ((1, 5), (2, 6)):
                     class_means: list[torch.Tensor] = []
@@ -2310,8 +2470,17 @@ def direct_uncertainty_recovery_value_loss(
             regime_terms: list[torch.Tensor] = []
             benefit_margin_terms: list[torch.Tensor] = []
             harm_margin_terms: list[torch.Tensor] = []
-            for regime_id in sorted({record[0] for record in evidence_proposal_records}):
-                records = [record for record in evidence_proposal_records if record[0] == regime_id]
+            balance_ids = (
+                [None]
+                if bool(ordinal_evidence_global_balance)
+                else sorted({record[0] for record in evidence_proposal_records})
+            )
+            for regime_id in balance_ids:
+                records = (
+                    evidence_proposal_records
+                    if regime_id is None
+                    else [record for record in evidence_proposal_records if record[0] == regime_id]
+                )
                 class_terms: list[torch.Tensor] = []
                 for class_id in (0, 1, 2):
                     cls_records = [record for record in records if record[4] == class_id]

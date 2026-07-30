@@ -360,6 +360,9 @@ def _direct_value_loss_from_outputs(
         ordinal_evidence_factorized_harm_gap_tolerance=float(tcfg.get("direct_value_ordinal_evidence_factorized_harm_gap_tolerance", 0.05)),
         ordinal_evidence_factorized_harm_hard_tolerance=float(tcfg.get("direct_value_ordinal_evidence_factorized_harm_hard_tolerance", 0.05)),
         ordinal_evidence_factorized_harm_proxy_tolerance=float(tcfg.get("direct_value_ordinal_evidence_factorized_harm_proxy_tolerance", 0.05)),
+        ordinal_evidence_component_tail_weight=float(tcfg.get("direct_value_ordinal_evidence_component_tail_weight", 0.0)),
+        ordinal_evidence_global_balance=bool(tcfg.get("direct_value_ordinal_evidence_global_balance", False)),
+        ordinal_evidence_safe_set_temperature=float(tcfg.get("direct_value_ordinal_evidence_safe_set_temperature", 0.05)),
         ordinal_evidence_balanced_replaces_erm=bool(tcfg.get("direct_value_ordinal_evidence_balanced_replaces_erm", False)),
         ordinal_evidence_benefit_margin_weight=float(tcfg.get("direct_value_ordinal_evidence_benefit_margin_weight", 0.0)),
         ordinal_evidence_harm_margin_weight=float(tcfg.get("direct_value_ordinal_evidence_harm_margin_weight", 0.0)),
@@ -381,6 +384,7 @@ def _direct_value_loss_from_outputs(
         value_logvar: torch.Tensor,
         opportunity_logit: torch.Tensor | None,
         harm_logit: torch.Tensor | None,
+        component_harm_logits: torch.Tensor | None,
         rank_logit: torch.Tensor | None,
         delta_mean: torch.Tensor | None,
         delta_logvar: torch.Tensor | None,
@@ -399,6 +403,7 @@ def _direct_value_loss_from_outputs(
             batch.get("bucket_id", torch.full_like(batch["time_index"], 3)),
             pred_opportunity_logit=opportunity_logit,
             pred_harm_logit=harm_logit,
+            pred_component_harm_logits=component_harm_logits,
             pred_rank_logit=rank_logit,
             pred_delta_mean=delta_mean,
             pred_delta_logvar=delta_logvar,
@@ -412,6 +417,7 @@ def _direct_value_loss_from_outputs(
     aggregate = compute(
         out["direct_recovery_value_logit"], out["direct_recovery_value_logvar"],
         out.get("direct_recovery_opportunity_logit"), out.get("direct_recovery_harm_logit"),
+        out.get("direct_recovery_evidence_component_harm_logits"),
         out.get("direct_recovery_rank_logit"),
         out.get("direct_recovery_delta_mean"), out.get("direct_recovery_delta_logvar"),
     )
@@ -450,7 +456,7 @@ def _direct_value_loss_from_outputs(
             "preference_gap_weight": 0.0,
             "delta_nll_weight": 0.0,
         })
-        expert_losses.append(compute(eo[:, 0], eo[:, 1], opp, harm, None, None, None, overrides))
+        expert_losses.append(compute(eo[:, 0], eo[:, 1], opp, harm, None, None, None, None, overrides))
     return aggregate + specialist_weight * torch.stack(expert_losses).mean()
 
 
@@ -574,7 +580,7 @@ def _direct_policy_batch_stats(
                 candidate_harm_proxy=teacher_harm_proxy[recs],
                 nominal_harm_proxy=teacher_harm_proxy[nom].expand_as(teacher_harm_proxy[recs]),
                 tolerances=factorized_tolerances,
-            ).detach() >= 0.0
+            ).detach() > 0.0
         pred_rank_delta = rank_score[recs] - rank_score[nom]
         oracle_j = int(torch.argmax(teacher_delta).item())
         oracle_adv_raw = float(teacher_delta[oracle_j].item())
@@ -889,6 +895,10 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
         out["direct_facet_harm_excess_max"] = max(harm_excess)
         out["direct_facet_false_excess_max"] = max(false_excess)
         out["direct_facet_selection_risk"] = facet_risk
+        # v48.20 UNISON uses a single bucket-invariant model.  The
+        # worst-regime dev aggregate is only a robust checkpoint criterion; it
+        # is not exposed to the model and does not route inference.
+        out["direct_unison_selection_risk"] = facet_risk
     return out
 
 
@@ -2019,6 +2029,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_evidence_calibrator_context_source=str(model_cfg.get("direct_recovery_evidence_calibrator_context_source", "relative")),
         direct_recovery_evidence_calibrator_shared=bool(model_cfg.get("direct_recovery_evidence_calibrator_shared", False)),
         direct_recovery_evidence_calibrator_regime_scale=float(model_cfg.get("direct_recovery_evidence_calibrator_regime_scale", 0.25)),
+        direct_recovery_evidence_unified_experts=bool(model_cfg.get("direct_recovery_evidence_unified_experts", False)),
+        direct_recovery_evidence_component_heads=bool(model_cfg.get("direct_recovery_evidence_component_heads", False)),
+        direct_recovery_evidence_component_scale=float(model_cfg.get("direct_recovery_evidence_component_scale", 2.0)),
     ).to(device)
     tcfg = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
 
@@ -2272,6 +2285,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "direct_recovery_evidence_calibrator_context_source": str(model_cfg.get("direct_recovery_evidence_calibrator_context_source", "relative")),
             "direct_recovery_evidence_calibrator_shared": bool(model_cfg.get("direct_recovery_evidence_calibrator_shared", False)),
             "direct_recovery_evidence_calibrator_regime_scale": float(model_cfg.get("direct_recovery_evidence_calibrator_regime_scale", 0.25)),
+            "direct_recovery_evidence_unified_experts": bool(model_cfg.get("direct_recovery_evidence_unified_experts", False)),
+            "direct_recovery_evidence_component_heads": bool(model_cfg.get("direct_recovery_evidence_component_heads", False)),
+            "direct_recovery_evidence_component_scale": float(model_cfg.get("direct_recovery_evidence_component_scale", 2.0)),
             "model_state": model.state_dict(),
             "optimizer_state": opt.state_dict(),
             "epoch": int(ep),

@@ -299,6 +299,14 @@ model:
   direct_recovery_evidence_calibrator_mode: center_width
   direct_recovery_evidence_calibrator_context: false
   direct_recovery_evidence_calibrator_context_detach: true
+  direct_recovery_evidence_calibrator_context_source: relative
+  direct_recovery_evidence_calibrator_shared: false
+  direct_recovery_evidence_calibrator_regime_scale: 0.25
+  # v48.20 UNISON: evaluate both frozen source experts for every candidate and
+  # use one bucket-invariant calibrator with explicit DRS/DEP/GAP risk heads.
+  direct_recovery_evidence_unified_experts: false
+  direct_recovery_evidence_component_heads: false
+  direct_recovery_evidence_component_scale: 2.0
 dataset_quality:
   # Off by default for broad natural-WOMD sweeps. Enable only for artifact/stress
   # datasets that are intended to support FRA, ODG, and anti-oracle claims.
@@ -424,6 +432,11 @@ training:
   # Average proposal evidence over classes and regimes across the full minibatch.
   # This is distinct from the legacy within-group class average.
   direct_value_ordinal_evidence_batch_balanced: false
+  # v48.20: component-tail supervision is auxiliary; it never replaces the
+  # group-level safe-admission target used at deployment.
+  direct_value_ordinal_evidence_component_tail_weight: 0.0
+  direct_value_ordinal_evidence_global_balance: false
+  direct_value_ordinal_evidence_safe_set_temperature: 0.08
   direct_value_ordinal_evidence_intragroup_benefit_weight: 0.0
   direct_value_ordinal_evidence_intragroup_harm_weight: 0.0
   direct_value_ordinal_evidence_intragroup_margin: 0.25

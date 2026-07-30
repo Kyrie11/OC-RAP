@@ -178,6 +178,9 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_calibrator_context_source: str = "relative",
         direct_recovery_evidence_calibrator_shared: bool = False,
         direct_recovery_evidence_calibrator_regime_scale: float = 0.25,
+        direct_recovery_evidence_unified_experts: bool = False,
+        direct_recovery_evidence_component_heads: bool = False,
+        direct_recovery_evidence_component_scale: float = 2.0,
     ):
         super().__init__()
         self.num_roots = int(num_roots)
@@ -252,6 +255,15 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_evidence_calibrator_regime_scale = float(
             max(0.0, direct_recovery_evidence_calibrator_regime_scale)
         )
+        self.direct_recovery_evidence_unified_experts = bool(
+            direct_recovery_evidence_unified_experts
+        )
+        self.direct_recovery_evidence_component_heads = bool(
+            direct_recovery_evidence_component_heads
+        )
+        self.direct_recovery_evidence_component_scale = float(
+            max(0.0, direct_recovery_evidence_component_scale)
+        )
         if self.direct_recovery_evidence_calibrator_mode not in {
             "center_width", "simplex_context", "dual_tail_context"
         }:
@@ -270,6 +282,14 @@ class OCRAPModel(nn.Module):
             and not self.direct_recovery_set_tournament
         ):
             raise ValueError("tournament evidence context requires direct_recovery_set_tournament=true")
+        if self.direct_recovery_evidence_unified_experts and not self.direct_recovery_delta_regime_experts:
+            raise ValueError(
+                "unified expert evidence requires direct_recovery_delta_regime_experts=true"
+            )
+        if self.direct_recovery_evidence_component_heads and not self.direct_recovery_evidence_unified_experts:
+            raise ValueError(
+                "component evidence heads currently require unified expert evidence"
+            )
         if self.direct_recovery_delta_mode not in {"gaussian", "ordinal_evidence"}:
             raise ValueError(f"Unsupported direct_recovery_delta_mode={direct_recovery_delta_mode!r}")
         if self.direct_recovery_value_expert_routing not in {
@@ -539,10 +559,18 @@ class OCRAPModel(nn.Module):
                 and self.direct_preference_set_ranker is not None
                 else relative_in_dim
             )
-        evidence_calibrator_input_dim = 4 + evidence_context_dim
-        evidence_calibrator_output_dim = (
-            3 if self.direct_recovery_evidence_calibrator_mode == "simplex_context" else 2
-        )
+        # v48.20 UNISON-BRIDGE: a single shared evidence model consumes both
+        # frozen source experts, their consensus/disagreement, and the frozen
+        # proposal context.  No bucket/regime id is exposed to this model.
+        evidence_scalar_dim = 10 if self.direct_recovery_evidence_unified_experts else 4
+        evidence_calibrator_input_dim = evidence_scalar_dim + evidence_context_dim
+        if self.direct_recovery_evidence_component_heads:
+            # benefit + DRS/deployability/gap harm components
+            evidence_calibrator_output_dim = 4
+        else:
+            evidence_calibrator_output_dim = (
+                3 if self.direct_recovery_evidence_calibrator_mode == "simplex_context" else 2
+            )
 
         def _make_evidence_calibrator() -> nn.Sequential:
             adapter = nn.Sequential(
@@ -557,15 +585,24 @@ class OCRAPModel(nn.Module):
                 nn.init.zeros_(projection.bias)
             return adapter
 
+        self.direct_evidence_unified_calibrator = (
+            _make_evidence_calibrator()
+            if self.direct_recovery_value_head
+            and self.direct_recovery_delta_head
+            and self.direct_recovery_evidence_calibrator
+            and self.direct_recovery_evidence_unified_experts
+            else None
+        )
         self.direct_evidence_calibrators = (
             nn.ModuleList([_make_evidence_calibrator(), _make_evidence_calibrator()])
             if self.direct_recovery_value_head and self.direct_recovery_delta_head
             and self.direct_recovery_evidence_calibrator
+            and not self.direct_recovery_evidence_unified_experts
             else None
         )
-        # v48.19 FACET-BRIDGE: pool sparse Near/Contact evidence through one
-        # shared calibrator, while retaining small bounded regime residuals.
-        # Safe remains protected by the external nominal lock.
+        # v48.19 legacy partial pooling.  v48.20 disables this branch and uses
+        # ``direct_evidence_unified_calibrator`` so inference never first chooses
+        # a regime expert and then applies a regime-specific strategy.
         self.direct_evidence_shared_calibrator = (
             _make_evidence_calibrator()
             if self.direct_evidence_calibrators is not None
@@ -965,12 +1002,34 @@ class OCRAPModel(nn.Module):
             delta = None
 
         evidence_calibrator_residual = None
-        if delta is not None and self.direct_evidence_calibrators is not None:
+        unified_benefit_logit = None
+        unified_harm_logit = None
+        unified_component_harm_logits = None
+        calibrator_enabled = (
+            self.direct_evidence_calibrators is not None
+            or self.direct_evidence_unified_calibrator is not None
+        )
+        if delta is not None and calibrator_enabled:
             if self.direct_recovery_delta_policy_features and "direct_recovery_policy_features" in out:
                 calibrator_policy = out["direct_recovery_policy_features"].to(dtype=delta.dtype)
             else:
                 calibrator_policy = delta.new_zeros((delta.shape[0], 2))
-            calibrator_parts = [delta[:, :2], calibrator_policy]
+
+            if self.direct_evidence_unified_calibrator is not None:
+                if self.direct_delta_adapters is None or "direct_recovery_delta_expert_outputs" not in out:
+                    raise RuntimeError("unified evidence configured without frozen delta expert outputs")
+                expert_delta = out["direct_recovery_delta_expert_outputs"].to(dtype=delta.dtype).detach()
+                expert_mean = expert_delta.mean(dim=1)
+                expert_disagreement = (expert_delta[:, 0] - expert_delta[:, 1]).abs()
+                calibrator_parts = [
+                    expert_delta.reshape(expert_delta.shape[0], -1),
+                    expert_mean,
+                    expert_disagreement,
+                    calibrator_policy.detach(),
+                ]
+            else:
+                calibrator_parts = [delta[:, :2], calibrator_policy]
+
             if self.direct_recovery_evidence_calibrator_context:
                 if (
                     self.direct_recovery_evidence_calibrator_context_source == "tournament"
@@ -983,31 +1042,90 @@ class OCRAPModel(nn.Module):
                     calibrator_context = calibrator_context.detach()
                 calibrator_parts.append(calibrator_context)
             calibrator_input = torch.cat(calibrator_parts, dim=-1)
-            all_residuals = torch.stack(
-                [adapter(calibrator_input) for adapter in self.direct_evidence_calibrators], dim=1
-            )
-            regime_residual = all_residuals[
-                torch.arange(all_residuals.shape[0], device=all_residuals.device), delta_expert_idx
-            ]
-            if self.direct_evidence_shared_calibrator is not None:
-                shared_residual = self.direct_evidence_shared_calibrator(calibrator_input)
-                combined_residual = (
-                    shared_residual
-                    + self.direct_recovery_evidence_calibrator_regime_scale * regime_residual
+
+            if self.direct_evidence_unified_calibrator is not None:
+                combined_residual = self.direct_evidence_unified_calibrator(calibrator_input)
+                benefit_residual = (
+                    torch.tanh(combined_residual[:, 0])
+                    * self.direct_recovery_evidence_calibrator_scale
                 )
-                out["direct_recovery_evidence_shared_residual_raw"] = shared_residual
-                out["direct_recovery_evidence_regime_residual_raw"] = regime_residual
+                # Conservative continuous envelope over the two frozen source
+                # experts.  Equal experts reproduce the source exactly; expert
+                # disagreement lowers benefit confidence and raises harm.
+                center_e = expert_delta[:, :, 0]
+                half_e = 0.5 * torch.nn.functional.softplus(expert_delta[:, :, 1])
+                benefit_e = center_e - half_e
+                harm_e = -(center_e + half_e)
+                # Exact lower/upper envelopes are used instead of normalized
+                # soft-min/soft-max.  The normalized smooth forms lie *inside*
+                # the expert/component range and can therefore overstate benefit
+                # or let two low-risk components compensate one high-risk veto.
+                # Exact amin/amax are bucket-invariant, preserve the zero-residual
+                # source identity when experts/components agree, and implement the
+                # intended non-compensatory safety semantics.
+                base_benefit = benefit_e.amin(dim=1)
+                base_harm = harm_e.amax(dim=1)
+                unified_benefit_logit = base_benefit + benefit_residual
+                if self.direct_recovery_evidence_component_heads:
+                    # FACET changed the harm target semantics from signed total
+                    # PCD to componentwise non-compensatory vetoes.  Reusing the
+                    # old total-PCD harm logit as an additive base anchors every
+                    # component to a source signal that the v48.19 certificate
+                    # showed to be near random.  Benefit therefore transfers from
+                    # the source experts, while component harm heads are a semantic
+                    # reset: zero-initialized, bounded, absolute candidate-vs-
+                    # nominal logits learned jointly across all regimes.
+                    unified_component_harm_logits = (
+                        torch.tanh(combined_residual[:, 1:4])
+                        * self.direct_recovery_evidence_component_scale
+                    )
+                    unified_harm_logit = unified_component_harm_logits.amax(dim=-1)
+                    evidence_calibrator_residual = torch.cat(
+                        [benefit_residual.unsqueeze(-1), unified_component_harm_logits],
+                        dim=-1,
+                    )
+                else:
+                    harm_residual = (
+                        torch.tanh(combined_residual[:, 1])
+                        * self.direct_recovery_evidence_calibrator_scale
+                    )
+                    unified_harm_logit = base_harm + harm_residual
+                    evidence_calibrator_residual = torch.stack(
+                        [benefit_residual, harm_residual], dim=-1
+                    )
+                out["direct_recovery_evidence_expert_benefit_logits"] = benefit_e
+                out["direct_recovery_evidence_expert_harm_logits"] = harm_e
+                out["direct_recovery_evidence_expert_base"] = torch.stack(
+                    [base_benefit, base_harm], dim=-1
+                )
+                out["direct_recovery_evidence_unified_residual_raw"] = combined_residual
             else:
-                combined_residual = regime_residual
-            evidence_calibrator_residual = (
-                torch.tanh(combined_residual)
-                * self.direct_recovery_evidence_calibrator_scale
-            )
+                all_residuals = torch.stack(
+                    [adapter(calibrator_input) for adapter in self.direct_evidence_calibrators], dim=1
+                )
+                regime_residual = all_residuals[
+                    torch.arange(all_residuals.shape[0], device=all_residuals.device), delta_expert_idx
+                ]
+                if self.direct_evidence_shared_calibrator is not None:
+                    shared_residual = self.direct_evidence_shared_calibrator(calibrator_input)
+                    combined_residual = (
+                        shared_residual
+                        + self.direct_recovery_evidence_calibrator_regime_scale * regime_residual
+                    )
+                    out["direct_recovery_evidence_shared_residual_raw"] = shared_residual
+                    out["direct_recovery_evidence_regime_residual_raw"] = regime_residual
+                else:
+                    combined_residual = regime_residual
+                evidence_calibrator_residual = (
+                    torch.tanh(combined_residual)
+                    * self.direct_recovery_evidence_calibrator_scale
+                )
+                out["direct_recovery_evidence_calibrator_outputs"] = all_residuals
+                if self.direct_recovery_evidence_calibrator_mode == "center_width":
+                    delta = delta + evidence_calibrator_residual
+
             out["direct_recovery_evidence_calibrator_input"] = calibrator_input
             out["direct_recovery_evidence_calibrator_residual"] = evidence_calibrator_residual
-            out["direct_recovery_evidence_calibrator_outputs"] = all_residuals
-            if self.direct_recovery_evidence_calibrator_mode == "center_width":
-                delta = delta + evidence_calibrator_residual
 
         if delta is not None:
             nominal_mask = None
@@ -1023,13 +1141,25 @@ class OCRAPModel(nn.Module):
                 half_width = 0.5 * torch.nn.functional.softplus(delta[:, 1])
                 nonharm_logit = center + half_width
                 benefit_logit = center - half_width
-                if nominal_mask is not None:
-                    nonharm_logit = torch.where(nominal_mask, torch.zeros_like(nonharm_logit), nonharm_logit)
-                    benefit_logit = torch.where(nominal_mask, torch.zeros_like(benefit_logit), benefit_logit)
-                harm_logit = -nonharm_logit
+                if unified_benefit_logit is not None and unified_harm_logit is not None:
+                    benefit_logit = unified_benefit_logit
+                    harm_logit = unified_harm_logit
+                    nonharm_logit = -harm_logit
+                else:
+                    # Preserve the legacy identity exactly: nominal non-harm is
+                    # pinned before deriving the complementary harm logit.
+                    if nominal_mask is not None:
+                        nonharm_logit = torch.where(
+                            nominal_mask, torch.zeros_like(nonharm_logit), nonharm_logit
+                        )
+                        benefit_logit = torch.where(
+                            nominal_mask, torch.zeros_like(benefit_logit), benefit_logit
+                        )
+                    harm_logit = -nonharm_logit
                 if (
                     evidence_calibrator_residual is not None
                     and self.direct_recovery_evidence_calibrator_mode == "dual_tail_context"
+                    and unified_benefit_logit is None
                 ):
                     # v48.18 DUET-BRIDGE: benefit and harm are independent tails.
                     # A candidate can be simultaneously uncertain/ambiguous in both
@@ -1048,6 +1178,20 @@ class OCRAPModel(nn.Module):
                             nominal_mask, torch.zeros_like(harm_logit), harm_logit
                         )
                     nonharm_logit = -harm_logit
+                if nominal_mask is not None and unified_benefit_logit is not None:
+                    benefit_logit = torch.where(
+                        nominal_mask, torch.zeros_like(benefit_logit), benefit_logit
+                    )
+                    harm_logit = torch.where(
+                        nominal_mask, torch.zeros_like(harm_logit), harm_logit
+                    )
+                    nonharm_logit = -harm_logit
+                    if unified_component_harm_logits is not None:
+                        unified_component_harm_logits = torch.where(
+                            nominal_mask.unsqueeze(-1),
+                            torch.zeros_like(unified_component_harm_logits),
+                            unified_component_harm_logits,
+                        )
                 benefit_prob = torch.sigmoid(benefit_logit)
                 harm_prob = torch.sigmoid(harm_logit)
                 if (
@@ -1091,6 +1235,11 @@ class OCRAPModel(nn.Module):
                 out["direct_recovery_evidence_benefit_logit"] = benefit_logit
                 out["direct_recovery_evidence_harm_logit"] = harm_logit
                 out["direct_recovery_evidence_score"] = evidence_score
+                if unified_component_harm_logits is not None:
+                    out["direct_recovery_evidence_component_harm_logits"] = unified_component_harm_logits
+                    out["direct_recovery_evidence_component_harm_probabilities"] = torch.sigmoid(
+                        unified_component_harm_logits
+                    )
                 # Reuse the established admission plumbing.  These logits are
                 # already candidate-vs-nominal evidence; nominal is pinned to 0.
                 out["direct_recovery_opportunity_logit"] = benefit_logit

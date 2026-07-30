@@ -1,0 +1,178 @@
+{
+  "event": "v48_20_external_baseline_artifact_audit",
+  "valid": false,
+  "audits": [
+    {
+      "root": "/mnt/data/v4819_audit/safe",
+      "closed_loop_records": [],
+      "offline_eval_jsons": [
+        "/mnt/data/v4819_audit/safe/eval_safe_betopnet_lite.json",
+        "/mnt/data/v4819_audit/safe/eval_safe_gameformer_lite.json",
+        "/mnt/data/v4819_audit/safe/eval_safe_nominal_log_replay.json",
+        "/mnt/data/v4819_audit/safe/eval_safe_wayformer_bc.json"
+      ],
+      "valid": true,
+      "failures": []
+    },
+    {
+      "root": "/mnt/data/v4819_audit/near",
+      "closed_loop_records": [
+        {
+          "summary": "/mnt/data/v4819_audit/near/closed_loop_cvar_risk_filter.json",
+          "progress": "/mnt/data/v4819_audit/near/closed_loop_cvar_risk_filter.json.progress.json",
+          "scene_journal": "/mnt/data/v4819_audit/near/closed_loop_cvar_risk_filter.json.scenes.jsonl",
+          "status": "running_scene",
+          "completed_rollouts": 30,
+          "requested_rollouts": 50,
+          "summary_num_scenes": null,
+          "scene_journal_rows": 30,
+          "paper_usable": false
+        },
+        {
+          "summary": "/mnt/data/v4819_audit/near/closed_loop_dro_cvar_filter.json",
+          "progress": "/mnt/data/v4819_audit/near/closed_loop_dro_cvar_filter.json.progress.json",
+          "scene_journal": "/mnt/data/v4819_audit/near/closed_loop_dro_cvar_filter.json.scenes.jsonl",
+          "status": "running_scene",
+          "completed_rollouts": 30,
+          "requested_rollouts": 50,
+          "summary_num_scenes": null,
+          "scene_journal_rows": 30,
+          "paper_usable": false
+        },
+        {
+          "summary": "/mnt/data/v4819_audit/near/closed_loop_expected_risk_filter.json",
+          "progress": "/mnt/data/v4819_audit/near/closed_loop_expected_risk_filter.json.progress.json",
+          "scene_journal": "/mnt/data/v4819_audit/near/closed_loop_expected_risk_filter.json.scenes.jsonl",
+          "status": "running_scene",
+          "completed_rollouts": 31,
+          "requested_rollouts": 50,
+          "summary_num_scenes": null,
+          "scene_journal_rows": 31,
+          "paper_usable": false
+        },
+        {
+          "summary": "/mnt/data/v4819_audit/near/closed_loop_marc_lite.json",
+          "progress": "/mnt/data/v4819_audit/near/closed_loop_marc_lite.json.progress.json",
+          "scene_journal": "/mnt/data/v4819_audit/near/closed_loop_marc_lite.json.scenes.jsonl",
+          "status": "running_scene",
+          "completed_rollouts": 34,
+          "requested_rollouts": 50,
+          "summary_num_scenes": 50,
+          "scene_journal_rows": 31,
+          "paper_usable": false
+        },
+        {
+          "summary": "/mnt/data/v4819_audit/near/closed_loop_oracle_recovery_filter.json",
+          "progress": "/mnt/data/v4819_audit/near/closed_loop_oracle_recovery_filter.json.progress.json",
+          "scene_journal": "/mnt/data/v4819_audit/near/closed_loop_oracle_recovery_filter.json.scenes.jsonl",
+          "status": "running_scene",
+          "completed_rollouts": 30,
+          "requested_rollouts": 50,
+          "summary_num_scenes": null,
+          "scene_journal_rows": 30,
+          "paper_usable": false
+        },
+        {
+          "summary": "/mnt/data/v4819_audit/near/closed_loop_predictive_safety_filter.json",
+          "progress": "/mnt/data/v4819_audit/near/closed_loop_predictive_safety_filter.json.progress.json",
+          "scene_journal": "/mnt/data/v4819_audit/near/closed_loop_predictive_safety_filter.json.scenes.jsonl",
+          "status": "running_scene",
+          "completed_rollouts": 30,
+          "requested_rollouts": 50,
+          "summary_num_scenes": null,
+          "scene_journal_rows": 30,
+          "paper_usable": false
+        },
+        {
+          "summary": "/mnt/data/v4819_audit/near/closed_loop_racp_lite.json",
+          "progress": "/mnt/data/v4819_audit/near/closed_loop_racp_lite.json.progress.json",
+          "scene_journal": "/mnt/data/v4819_audit/near/closed_loop_racp_lite.json.scenes.jsonl",
+          "status": "running_scene",
+          "completed_rollouts": 31,
+          "requested_rollouts": 50,
+          "summary_num_scenes": null,
+          "scene_journal_rows": 31,
+          "paper_usable": false
+        }
+      ],
+      "offline_eval_jsons": [
+        "/mnt/data/v4819_audit/near/eval_near_contact_gameformer_lite.json",
+        "/mnt/data/v4819_audit/near/eval_near_contact_nonlearned.json"
+      ],
+      "valid": false,
+      "failures": [
+        "stale/incomplete closed-loop artifact: /mnt/data/v4819_audit/near/closed_loop_cvar_risk_filter.json; status=running_scene progress=30/50 summary=None journal=30",
+        "stale/incomplete closed-loop artifact: /mnt/data/v4819_audit/near/closed_loop_dro_cvar_filter.json; status=running_scene progress=30/50 summary=None journal=30",
+        "stale/incomplete closed-loop artifact: /mnt/data/v4819_audit/near/closed_loop_expected_risk_filter.json; status=running_scene progress=31/50 summary=None journal=31",
+        "stale/incomplete closed-loop artifact: /mnt/data/v4819_audit/near/closed_loop_marc_lite.json; status=running_scene progress=34/50 summary=50 journal=31",
+        "stale/incomplete closed-loop artifact: /mnt/data/v4819_audit/near/closed_loop_oracle_recovery_filter.json; status=running_scene progress=30/50 summary=None journal=30",
+        "stale/incomplete closed-loop artifact: /mnt/data/v4819_audit/near/closed_loop_predictive_safety_filter.json; status=running_scene progress=30/50 summary=None journal=30",
+        "stale/incomplete closed-loop artifact: /mnt/data/v4819_audit/near/closed_loop_racp_lite.json; status=running_scene progress=31/50 summary=None journal=31"
+      ]
+    },
+    {
+      "root": "/mnt/data/v4819_audit/contact",
+      "closed_loop_records": [
+        {
+          "summary": "/mnt/data/v4819_audit/contact/closed_loop_post_collision_restoration.json",
+          "progress": "/mnt/data/v4819_audit/contact/closed_loop_post_collision_restoration.json.progress.json",
+          "scene_journal": "/mnt/data/v4819_audit/contact/closed_loop_post_collision_restoration.json.scenes.jsonl",
+          "status": "complete",
+          "completed_rollouts": 50,
+          "requested_rollouts": 50,
+          "summary_num_scenes": 50,
+          "scene_journal_rows": 50,
+          "paper_usable": true
+        },
+        {
+          "summary": "/mnt/data/v4819_audit/contact/closed_loop_post_crash_braking.json",
+          "progress": "/mnt/data/v4819_audit/contact/closed_loop_post_crash_braking.json.progress.json",
+          "scene_journal": "/mnt/data/v4819_audit/contact/closed_loop_post_crash_braking.json.scenes.jsonl",
+          "status": "complete",
+          "completed_rollouts": 50,
+          "requested_rollouts": 50,
+          "summary_num_scenes": 50,
+          "scene_journal_rows": 50,
+          "paper_usable": true
+        },
+        {
+          "summary": "/mnt/data/v4819_audit/contact/closed_loop_postimpact_mpc_lite.json",
+          "progress": "/mnt/data/v4819_audit/contact/closed_loop_postimpact_mpc_lite.json.progress.json",
+          "scene_journal": "/mnt/data/v4819_audit/contact/closed_loop_postimpact_mpc_lite.json.scenes.jsonl",
+          "status": "complete",
+          "completed_rollouts": 50,
+          "requested_rollouts": 50,
+          "summary_num_scenes": 50,
+          "scene_journal_rows": 50,
+          "paper_usable": true
+        },
+        {
+          "summary": "/mnt/data/v4819_audit/contact/closed_loop_severity_minimization.json",
+          "progress": "/mnt/data/v4819_audit/contact/closed_loop_severity_minimization.json.progress.json",
+          "scene_journal": "/mnt/data/v4819_audit/contact/closed_loop_severity_minimization.json.scenes.jsonl",
+          "status": "complete",
+          "completed_rollouts": 50,
+          "requested_rollouts": 50,
+          "summary_num_scenes": 50,
+          "scene_journal_rows": 50,
+          "paper_usable": true
+        }
+      ],
+      "offline_eval_jsons": [
+        "/mnt/data/v4819_audit/contact/eval_contact_external_baselines.json"
+      ],
+      "valid": true,
+      "failures": []
+    }
+  ],
+  "failures": [
+    "stale/incomplete closed-loop artifact: /mnt/data/v4819_audit/near/closed_loop_cvar_risk_filter.json; status=running_scene progress=30/50 summary=None journal=30",
+    "stale/incomplete closed-loop artifact: /mnt/data/v4819_audit/near/closed_loop_dro_cvar_filter.json; status=running_scene progress=30/50 summary=None journal=30",
+    "stale/incomplete closed-loop artifact: /mnt/data/v4819_audit/near/closed_loop_expected_risk_filter.json; status=running_scene progress=31/50 summary=None journal=31",
+    "stale/incomplete closed-loop artifact: /mnt/data/v4819_audit/near/closed_loop_marc_lite.json; status=running_scene progress=34/50 summary=50 journal=31",
+    "stale/incomplete closed-loop artifact: /mnt/data/v4819_audit/near/closed_loop_oracle_recovery_filter.json; status=running_scene progress=30/50 summary=None journal=30",
+    "stale/incomplete closed-loop artifact: /mnt/data/v4819_audit/near/closed_loop_predictive_safety_filter.json; status=running_scene progress=30/50 summary=None journal=30",
+    "stale/incomplete closed-loop artifact: /mnt/data/v4819_audit/near/closed_loop_racp_lite.json; status=running_scene progress=31/50 summary=None journal=31"
+  ],
+  "rule": "closed-loop summary is usable only if progress=complete and progress/summary/journal counts agree"
+}

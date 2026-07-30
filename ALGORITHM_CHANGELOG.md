@@ -1,3 +1,68 @@
+## v48.20 — OC-TRAC-UNISON-BRIDGE (2026-07-30)
+
+### v48.19 result attribution and CCF-A readiness
+
+- The uploaded v48.19 dedicated run completed both variants, non-empty scene-disjoint certificate fitting/verification, protocol-manifest checks, support-feasibility checks, and the test-root seal. Its controller records `pipeline_valid=true`, `test_roots_read=false`, and `RC=20`. Unlike the historical v48.18 Near specification, all v48.19 fit/verify support bounds are mathematically feasible; this is a genuine certificate rejection rather than a parameter guard or impossible-gate artifact.
+- The frozen recovery proposal is already high recall: oracle-best top-k hit is approximately 0.982–0.991 in the main run and approximately 0.98–1.00 across ablations. The failure is therefore downstream of candidate generation.
+- Near retains a useful benefit signal (main candidate benefit AUC 0.708–0.759; the strongest shared-only ablation reaches 0.800), but harmful evidence and group admission do not generalize. Contact benefit/harm AUC remains close to random or inverted, and every main/ablation certificate has zero deployable verify selections.
+- Safe is ready only for the non-interference claim: the same mechanism must remain nominal when recovery is unnecessary. Near and Contact are not yet ready for a CCF-A main-result claim because no gate-authorized closed-loop OC-RAP result exists. Overall submission readiness is therefore **not reached**.
+- Available external references are used only as progress anchors. Safe nominal/log/Wayformer artifacts are complete; Contact has complete 50-scene closed-loop baselines; Near offline baselines are complete, but all uploaded Near closed-loop summaries are incomplete or count-inconsistent and are excluded from paper-ready comparisons.
+
+### Root defects found in v48.19
+
+1. **Candidate classification replaced the deployed group decision.** `direct_value_ordinal_evidence_balanced_replaces_erm=true` allowed candidate-level balanced BCE to replace group ERM, while setwise admission, top-k, and intragroup terms were zero or negligible. Training optimized candidate labels, whereas deployment chooses nominal versus one recovery candidate per group.
+2. **Training and deployment used different action scores and candidate supports.** The old setwise path scored every recovery candidate using frozen PCD plus log-sigmoid tails. Certificate/closed-loop first freezes proposal top-k and then reranks only that set with `sigmoid(benefit)-sigmoid(harm)`. Candidate AUC could improve without improving the actual deployed action.
+3. **Harm semantics changed without resetting the source prior.** FACET component-veto harm was still added as a residual to the old signed-PCD source harm logit. The old base and new target do not represent the same event, so zero initialization was not semantic identity.
+4. **Factorized supervision remained partly contaminated by signed three-class masks.** Class weighting, hard mining, and intragroup harm masks still used signed total PCD labels in several paths instead of component-veto labels.
+5. **Regime-conditioned routing remained in the model.** Shared plus bucket-selected residual calibrators still consumed regime/bucket identity, so the learned policy was not a single continuous mechanism across Safe/Near/Contact.
+6. **One aggregate harm tail discarded the observed physical structure.** DRS, deployability, and gap degradation account for nearly all harmful examples; hard-violation and `harm_proxy` positive increments are too sparse to support learned tails.
+7. **The normalized smooth envelope was not conservative.** Normalized soft-min/soft-max lies inside the input range, so it can overestimate the weakest benefit expert and dilute one high-risk component with several low-risk components.
+8. **External-baseline completion was not uniformly audited.** Several Near closed-loop summaries reported totals inconsistent with progress or scene journals. These artifacts must not enter a paper table.
+
+### v48.20 algorithm: UNISON-BRIDGE
+
+**UNISON = Unified Non-regime-specific Intervention Selection with Observation-consistent Non-compensatory evidence.**
+
+1. **One bucket-invariant evidence model.** Inference does not receive a regime ID and does not select a Near/Contact calibrator. Both frozen source experts are evaluated for every candidate. The shared calibrator consumes their outputs, means, absolute disagreement, frozen policy margins, and tournament context.
+2. **Conservative benefit transfer.** The source benefit is the exact lower envelope `min(expert_1, expert_2)`, followed by one zero-initialized bounded shared residual. This retains transferable Near signal while treating expert disagreement as lack of confidence without first classifying the regime.
+3. **Componentwise harm semantic reset.** Three explicit zero-initialized bounded heads estimate nominal-relative DRS, deployability, and gap risk. The aggregate harm logit is the exact `max` across heads. No old signed-PCD harm base is added. Hard violation and `harm_proxy` remain deterministic certificate vetoes until their positive support is sufficient.
+4. **Deployment-exact safe-set admission.** The frozen tournament first forms proposal top-k. The teacher safe set is `beneficial AND not component-harmful` within that top-k. If empty, nominal is the sole group target; otherwise a temperature-weighted distribution is formed over safe recovery candidates. The loss uses the exact deployed score `sigmoid(benefit)-sigmoid(harm)` and gives no safe-set gradient to candidates outside frozen top-k.
+5. **Group objective is primary.** Candidate balance, component BCE, top-k auxiliary, and intragroup ranking remain auxiliary. They can no longer replace group ERM. Global balancing is bucket-agnostic.
+6. **Safe is an invariant boundary, not a routed strategy.** Nominal rows remain pinned, and stress/test remains sealed until the same Natural gate authorizes execution.
+7. **Worst-regime metrics are evaluation-only.** `direct_unison_selection_risk` can select a checkpoint using the worst Near/Contact validation behavior, but regime labels are not passed to the model or used for inference routing.
+
+### Engineering corrections
+
+- Set `ORDINAL_EVIDENCE_BALANCED_REPLACES_ERM=false` in the v48.20 pipeline.
+- Use factorized component labels for component weights, hard masks, and intragroup supervision; use strict `margin > 0` for harmful membership.
+- Use exact `min` benefit and exact `max` harm envelopes, preserving legacy DUET/FACET behavior when UNISON is disabled.
+- Add a float64 gradient-norm reducer before clipping to prevent finite float32 gradients from overflowing the norm reduction and silently zeroing an update.
+- Persist UNISON model flags and component-head geometry in checkpoints and inference bundles.
+- Keep protocol preflight, manifest SHA256 binding, teacher-index contract/rebuild, both-variant completion, normalized return codes, and test-root sealing.
+- Add `tools/audit_external_baseline_artifacts_v48_20.py`; a closed-loop summary is paper-eligible only when progress is complete and progress/summary/journal scene counts agree.
+
+### Non-repeated v48.20 ablations
+
+- `A_candidate_tail_only`: unified experts plus component candidate tails, no safe-set group objective.
+- `B_safe_set_aggregate_harm`: deployment-exact safe-set objective with aggregate harm, no component heads.
+- `C_component_safe_set_no_balance`: component heads plus deployment-exact safe-set, no global auxiliary balance.
+- `D_full_unison`: component heads, deployment-exact safe-set, global auxiliary balance, and robust checkpoint selection.
+
+Run Balanced and Precision as two waves. Each wave launches four tasks concurrently, two tasks per A30, one DataLoader worker per task. Do not repeat v48.19 separate/shared/regime-residual comparisons, threshold-only tuning, signed-PCD harm, raw-context expansion, or candidate-BCE replacement.
+
+### Decision rules
+
+- `RC=0`: run stress/closed-loop only through the automatically generated `NEXT_COMMANDS.txt` authorization.
+- `RC=20`: the v48.20 protocol and artifacts are valid but the algorithm is rejected; run the four new ablations without reading test.
+- `RC=30`: inspect the stage-specific failure JSON/log and fix engineering only. Do not interpret it as an algorithm result and do not mutate protocol settings in the same output directory.
+
+### Validation
+
+- `pytest`: 196 passed, 5 warnings.
+- `python -m compileall -q src tests tools`: passed.
+- `bash -n` for every `scripts/*.sh`: passed.
+- The delivery environment did not contain the real WOMD/Waymax datasets or two A30 GPUs. No v48.20 Natural-gate or closed-loop outcome is claimed.
+
 ## v48.19 — OC-TRAC-FACET-BRIDGE (2026-07-30)
 
 ### Result attribution corrected before further tuning
