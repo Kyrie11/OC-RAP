@@ -83,6 +83,97 @@ def _losses_are_finite(losses: dict[str, torch.Tensor]) -> tuple[bool, list[str]
             bad.append(name)
     return not bad, bad
 
+
+def _gradient_diagnostics(model: torch.nn.Module, *, limit: int = 12) -> tuple[list[str], list[dict[str, float | str]]]:
+    """Return non-finite gradient names and the largest finite gradients.
+
+    This is intentionally executed after DDP's gradient all-reduce.  Therefore
+    one bad rank is visible on every rank and no additional parameter-wise
+    collectives are required.
+    """
+    bad: list[str] = []
+    largest: list[dict[str, float | str]] = []
+    for name, param in model.named_parameters():
+        grad = param.grad
+        if grad is None:
+            continue
+        finite = bool(torch.isfinite(grad).all())
+        if not finite:
+            bad.append(name)
+            continue
+        max_abs = float(grad.detach().abs().max().cpu()) if grad.numel() else 0.0
+        largest.append({"name": name, "max_abs_grad": max_abs})
+    largest.sort(key=lambda row: float(row["max_abs_grad"]), reverse=True)
+    return bad, largest[: max(int(limit), 0)]
+
+
+def _stable_clip_grad_norm_(parameters, max_norm: float, *, eps: float = 1.0e-12) -> float:
+    """Clip an L2 gradient norm without float32 norm-overflow false positives.
+
+    ``torch.nn.utils.clip_grad_norm_`` computes per-tensor/vector norms in the
+    gradient dtype.  A collection of very large but still finite float32
+    gradients can therefore report ``inf`` and be multiplied by zero.  We first
+    scale all gradients by their global maximum magnitude, compute the bounded
+    squared norm, and reconstruct the norm in Python float64.  This preserves the
+    usual global-L2 clipping semantics.  Truly NaN/Inf gradient elements are
+    rejected by the caller before this function is entered.
+    """
+    params = [p for p in parameters if p.grad is not None]
+    if not params:
+        return 0.0
+    max_norm = float(max_norm)
+    if max_norm < 0.0:
+        raise ValueError(f"max_norm must be non-negative, got {max_norm}")
+
+    device = params[0].grad.device
+    max_abs = torch.zeros((), dtype=torch.float32, device=device)
+    for p in params:
+        g = p.grad.detach()
+        if g.numel():
+            max_abs = torch.maximum(max_abs, g.abs().max().to(dtype=torch.float32))
+    max_abs_value = float(max_abs.cpu())
+    if max_abs_value == 0.0:
+        return 0.0
+    if not math.isfinite(max_abs_value):
+        return float("nan")
+
+    scaled_sq = torch.zeros((), dtype=torch.float64, device=device)
+    # Keep the temporary gradient-sized tensors in float32; only the scalar
+    # reduction accumulates in float64. This avoids doubling peak gradient
+    # memory and keeps the stable clipper practical on the full GameFormer.
+    for p in params:
+        scaled = p.grad.detach() / max_abs
+        scaled_sq.add_(scaled.square().sum(dtype=torch.float64))
+    total_norm = max_abs_value * math.sqrt(float(scaled_sq.cpu()))
+    if not math.isfinite(total_norm):
+        return total_norm
+    if total_norm > max_norm and max_norm > 0.0:
+        clip_coef = max_norm / (total_norm + float(eps))
+        for p in params:
+            p.grad.mul_(clip_coef)
+    elif max_norm == 0.0:
+        for p in params:
+            p.grad.zero_()
+    return total_norm
+
+
+def _batch_numeric_summary(batch: dict[str, torch.Tensor]) -> dict[str, dict[str, float | int]]:
+    summary: dict[str, dict[str, float | int]] = {}
+    for name in ("x", "ego_history", "neighbor_history", "prefix_traj"):
+        value = batch.get(name)
+        if value is None or not torch.is_tensor(value) or not value.is_floating_point():
+            continue
+        detached = value.detach()
+        finite = torch.isfinite(detached)
+        row: dict[str, float | int] = {
+            "numel": int(detached.numel()),
+            "nonfinite": int((~finite).sum().cpu()),
+        }
+        if bool(finite.any()):
+            row["max_abs_finite"] = float(detached[finite].abs().max().cpu())
+        summary[name] = row
+    return summary
+
 def _distributed_any(flag: bool, device: torch.device) -> bool:
     value = torch.tensor([1 if flag else 0], dtype=torch.int32, device=device)
     if _distributed_available():
@@ -364,12 +455,32 @@ def _epoch(model, loader, opt, device, cfg: dict[str, Any], train: bool, *, rank
             if train:
                 opt.zero_grad(set_to_none=True)
                 loss.backward()
-                grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), float(tcfg.get("grad_clip", 5.0)))
-                grad_bad_any_rank = _distributed_any(not bool(torch.isfinite(grad_norm)), device)
-                if grad_bad_any_rank:
+
+                # Compute and clip the norm with overflow-safe scaling.  This
+                # single pass also detects true NaN/Inf gradient elements.  The
+                # expensive parameter-name diagnostic runs only on failure, not
+                # on every successful training batch.
+                grad_norm = _stable_clip_grad_norm_(
+                    model.parameters(),
+                    float(tcfg.get("grad_clip", 5.0)),
+                    eps=float(tcfg.get("grad_clip_eps", 1.0e-12)),
+                )
+                grad_norm_bad_any_rank = _distributed_any(not math.isfinite(float(grad_norm)), device)
+                if grad_norm_bad_any_rank:
+                    bad_grad_names, largest_grads = _gradient_diagnostics(model)
+                    print({
+                        "event": "nonfinite_external_baseline_gradient",
+                        "rank": int(rank),
+                        "epoch": int(epoch),
+                        "batch_index": int(batch_index),
+                        "grad_norm": float(grad_norm),
+                        "bad_parameters": bad_grad_names[:32],
+                        "largest_finite_gradients": largest_grads,
+                        "batch_numeric_summary": _batch_numeric_summary(batch),
+                    }, flush=True)
                     raise FloatingPointError(
-                        f"Non-finite gradient norm detected at epoch={epoch} batch={batch_index}; "
-                        "optimizer step was not applied."
+                        f"Non-finite gradient elements or norm detected at epoch={epoch} batch={batch_index}; "
+                        "optimizer step was not applied. See the rank-local diagnostic above."
                     )
                 opt.step()
         bs = int(batch["x"].shape[0])
