@@ -27,8 +27,8 @@ def best_val(summary: dict[str, Any]) -> dict[str, Any]:
 
 
 def main() -> int:
-    ap=argparse.ArgumentParser(); ap.add_argument('--run',type=Path,required=True); ap.add_argument('--output',type=Path,required=True)
-    a=ap.parse_args(); report={'version':'v48.16-ANCHOR','run':str(a.run),'variants':{}}
+    ap=argparse.ArgumentParser(); ap.add_argument('--run',type=Path,required=True); ap.add_argument('--output',type=Path,required=True); ap.add_argument('--version',default='v48.16-ANCHOR')
+    a=ap.parse_args(); report={'version':a.version,'run':str(a.run),'variants':{}}
     for variant in ('balanced','precision'):
         root=a.run/'candidates'/variant; summary=load(root/'model_v48_trac_sr'/'train_summary.json'); val=best_val(summary)
         item={'adaptation':{},'certificate':{},'natural_gate_passed':False,'certificate_data_valid':False}
@@ -63,6 +63,8 @@ def main() -> int:
         item['calibration_complete']=(root/'calibration'/'CERTIFICATE_CALIBRATION_COMPLETE.json').is_file()
         report['variants'][variant]=item
     report['next_commands_present']=(a.run/'NEXT_COMMANDS.txt').is_file()
+    report['pipeline_failed']=(a.run/'PIPELINE_FAILED.json').is_file()
+    report['adaptation_failures']=[p.name for p in sorted(a.run.glob('ADAPTATION_FAILED_*.json'))]
     report['calibration_failed']=(a.run/'CALIBRATION_FAILED.json').is_file()
     report['gate_failed']=(a.run/'GATE_FAILED.json').is_file()
     a.output.parent.mkdir(parents=True,exist_ok=True); a.output.write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n')

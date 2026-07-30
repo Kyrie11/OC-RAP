@@ -1,0 +1,873 @@
+{
+  "version": "v48.17-results-audit-for-v48.18",
+  "engineering_root_cause": {
+    "calibrator_state_parameter_count": 78630,
+    "hardcoded_allowed_max": 20000,
+    "failure_message": "unexpected BRIDGE calibrator parameter count: 78630",
+    "control_flow": "both variants returned nonzero after completed training; controller exited 30 before certificate and gate report",
+    "learning_gates_missing_reason": "gate checker was below the early exit",
+    "next_commands_missing_reason": "certificate controller never ran; NEXT_COMMANDS is created only after a valid Near+Contact Natural gate pass",
+    "main_run_artifact_uploaded": false,
+    "evidence_basis": "current main-controller code plus four uploaded B/C ablation logs using the same adaptation script; all show completed training followed by the 78630>20000 post-check failure"
+  },
+  "ablation_status": {
+    "complete": false,
+    "version": "v48.17-BRIDGE",
+    "max_concurrent_tasks": 3,
+    "gpu_assignment": "GPU0:A+C, GPU1:B",
+    "expected_tasks": [
+      "A_simplex_scalar_balanced",
+      "B_context_simplex_balanced",
+      "C_full_bridge_balanced",
+      "A_simplex_scalar_precision",
+      "B_context_simplex_precision",
+      "C_full_bridge_precision"
+    ],
+    "missing_tasks": [
+      "B_context_simplex_balanced",
+      "C_full_bridge_balanced",
+      "B_context_simplex_precision",
+      "C_full_bridge_precision"
+    ],
+    "failed_waits": 4,
+    "created_unix": 1785385800.5601082
+  },
+  "adaptation_dataset": {
+    "event": "teacher_pcd_index_complete",
+    "output": "runs/ocrap_v48_17_bridge_ablations/evidence_adapt_teacher_pcd_index.jsonl",
+    "num_samples": 10015,
+    "num_groups": 1167,
+    "alpha": 0.2,
+    "beta": 0.2,
+    "top_m": 8,
+    "positive_gain": 0.015,
+    "deployable_macro_ids": [
+      2,
+      3,
+      5,
+      6,
+      7
+    ],
+    "positive_advantage_groups": 60,
+    "positive_advantage_groups_all_macros": 138,
+    "by_bucket": {
+      "near": {
+        "positive_groups": 16,
+        "positive_scenes": 10,
+        "positive_macro_counts": {
+          "2": 6,
+          "3": 2,
+          "5": 5,
+          "6": 1,
+          "7": 2
+        },
+        "max_positive_macro_share": 0.375,
+        "top10_positive_scene_share": 1.0,
+        "screening_status": "data_limited",
+        "screening_concentration_warning": true,
+        "screening_recommended_action": "consider_targeted_increment_or_rebuild_after_audit"
+      },
+      "contact": {
+        "positive_groups": 44,
+        "positive_scenes": 17,
+        "positive_macro_counts": {
+          "2": 11,
+          "3": 1,
+          "5": 12,
+          "6": 13,
+          "7": 7
+        },
+        "max_positive_macro_share": 0.29545454545454547,
+        "top10_positive_scene_share": 0.7727272727272727,
+        "screening_status": "marginal_debug_only",
+        "screening_concentration_warning": true,
+        "screening_recommended_action": "run_screening_but_do_not_make_strong_claims"
+      }
+    },
+    "all_macro_by_bucket": {
+      "near": {
+        "positive_groups": 42,
+        "positive_scenes": 22,
+        "positive_macro_counts": {
+          "1": 27,
+          "2": 6,
+          "3": 2,
+          "4": 3,
+          "5": 1,
+          "6": 1,
+          "7": 2
+        },
+        "max_positive_macro_share": 0.6428571428571429,
+        "top10_positive_scene_share": 0.5952380952380952
+      },
+      "contact": {
+        "positive_groups": 96,
+        "positive_scenes": 43,
+        "positive_macro_counts": {
+          "1": 60,
+          "2": 8,
+          "4": 4,
+          "5": 5,
+          "6": 12,
+          "7": 4,
+          "8": 3
+        },
+        "max_positive_macro_share": 0.625,
+        "top10_positive_scene_share": 0.3958333333333333
+      }
+    },
+    "quality_mode": "warn",
+    "quality_failures": [],
+    "quality_passed": true
+  },
+  "protocol_audit": {
+    "valid": true,
+    "protocol_root": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814",
+    "roles": {
+      "evidence_adapt_train_near_contact": {
+        "root": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_train_near_contact",
+        "rows": 2681,
+        "split_counts": {
+          "evidence_adapt_train": 2681
+        },
+        "num_scenes": 142
+      },
+      "evidence_adapt_train_contact": {
+        "root": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_train_contact",
+        "rows": 7334,
+        "split_counts": {
+          "evidence_adapt_train": 7334
+        },
+        "num_scenes": 240
+      },
+      "evidence_adapt_dev_near_contact": {
+        "root": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_near_contact",
+        "rows": 946,
+        "split_counts": {
+          "evidence_adapt_dev": 946
+        },
+        "num_scenes": 49
+      },
+      "evidence_adapt_dev_contact": {
+        "root": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_contact",
+        "rows": 2580,
+        "split_counts": {
+          "evidence_adapt_dev": 2580
+        },
+        "num_scenes": 84
+      },
+      "certificate_pool_near_contact": {
+        "root": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_near_contact",
+        "rows": 2412,
+        "split_counts": {
+          "certificate_pool": 2412
+        },
+        "num_scenes": 125
+      },
+      "certificate_pool_contact": {
+        "root": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_contact",
+        "rows": 6929,
+        "split_counts": {
+          "certificate_pool": 6929
+        },
+        "num_scenes": 219
+      }
+    },
+    "scene_overlaps": {
+      "evidence_adapt_train_near_contact__evidence_adapt_dev_near_contact": 0,
+      "evidence_adapt_train_near_contact__certificate_pool_near_contact": 0,
+      "evidence_adapt_dev_near_contact__certificate_pool_near_contact": 0,
+      "evidence_adapt_train_contact__evidence_adapt_dev_contact": 0,
+      "evidence_adapt_train_contact__certificate_pool_contact": 0,
+      "evidence_adapt_dev_contact__certificate_pool_contact": 0
+    }
+  },
+  "v48_17_train_dev": {
+    "A_simplex_scalar_balanced": {
+      "best_epoch": 1,
+      "best_metric": "direct_certificate_risk_fold_robust",
+      "epochs_completed": 6,
+      "metrics": {
+        "direct_positive_admission_recall_near": 0.0,
+        "direct_positive_admission_recall_contact": 0.03571428571428571,
+        "direct_harmful_switch_rate_near": 0.0,
+        "direct_harmful_switch_rate_contact": 0.013793103448275862,
+        "direct_false_intervention_rate_near": 0.0,
+        "direct_false_intervention_rate_contact": 0.034482758620689655,
+        "direct_certificate_risk_fold_robust": 1.6927701719675317,
+        "direct_certificate_risk_mean_worst": 1.5777356425921123
+      },
+      "trainable_prefixes": [
+        "direct_evidence_calibrators"
+      ]
+    },
+    "A_simplex_scalar_precision": {
+      "best_epoch": 5,
+      "best_metric": "direct_certificate_risk_fold_robust",
+      "epochs_completed": 10,
+      "metrics": {
+        "direct_positive_admission_recall_near": 0.1111111111111111,
+        "direct_positive_admission_recall_contact": 0.07142857142857142,
+        "direct_harmful_switch_rate_near": 0.008403361344537815,
+        "direct_harmful_switch_rate_contact": 0.02413793103448276,
+        "direct_false_intervention_rate_near": 0.01680672268907563,
+        "direct_false_intervention_rate_contact": 0.08275862068965517,
+        "direct_certificate_risk_fold_robust": 1.57476949665352,
+        "direct_certificate_risk_mean_worst": 1.4509711268948597
+      },
+      "trainable_prefixes": [
+        "direct_evidence_calibrators"
+      ]
+    },
+    "B_context_simplex_balanced": {
+      "best_epoch": 3,
+      "best_metric": "direct_certificate_risk_fold_robust",
+      "epochs_completed": 8,
+      "metrics": {
+        "direct_positive_admission_recall_near": 0.2222222222222222,
+        "direct_positive_admission_recall_contact": 0.03571428571428571,
+        "direct_harmful_switch_rate_near": 0.025210084033613446,
+        "direct_harmful_switch_rate_contact": 0.0034482758620689655,
+        "direct_false_intervention_rate_near": 0.09243697478991597,
+        "direct_false_intervention_rate_contact": 0.017241379310344827,
+        "direct_certificate_risk_fold_robust": 1.6193376320085608,
+        "direct_certificate_risk_mean_worst": 1.4972185321310705
+      },
+      "trainable_prefixes": [
+        "direct_evidence_calibrators"
+      ]
+    },
+    "B_context_simplex_precision": {
+      "best_epoch": 2,
+      "best_metric": "direct_certificate_risk_fold_robust",
+      "epochs_completed": 7,
+      "metrics": {
+        "direct_positive_admission_recall_near": 0.1111111111111111,
+        "direct_positive_admission_recall_contact": 0.10714285714285714,
+        "direct_harmful_switch_rate_near": 0.025210084033613446,
+        "direct_harmful_switch_rate_contact": 0.05862068965517241,
+        "direct_false_intervention_rate_near": 0.06722689075630252,
+        "direct_false_intervention_rate_contact": 0.1482758620689655,
+        "direct_certificate_risk_fold_robust": 1.6040351732211766,
+        "direct_certificate_risk_mean_worst": 1.433397235269244
+      },
+      "trainable_prefixes": [
+        "direct_evidence_calibrators"
+      ]
+    },
+    "C_full_bridge_balanced": {
+      "best_epoch": 1,
+      "best_metric": "direct_certificate_risk_fold_robust",
+      "epochs_completed": 6,
+      "metrics": {
+        "direct_positive_admission_recall_near": 0.1111111111111111,
+        "direct_positive_admission_recall_contact": 0.03571428571428571,
+        "direct_harmful_switch_rate_near": 0.0,
+        "direct_harmful_switch_rate_contact": 0.017241379310344827,
+        "direct_false_intervention_rate_near": 0.01680672268907563,
+        "direct_false_intervention_rate_contact": 0.04827586206896552,
+        "direct_certificate_risk_fold_robust": 1.8416976829281175,
+        "direct_certificate_risk_mean_worst": 1.6764215312882578
+      },
+      "trainable_prefixes": [
+        "direct_evidence_calibrators"
+      ]
+    },
+    "C_full_bridge_precision": {
+      "best_epoch": 10,
+      "best_metric": "direct_certificate_risk_fold_robust",
+      "epochs_completed": 15,
+      "metrics": {
+        "direct_positive_admission_recall_near": 0.3333333333333333,
+        "direct_positive_admission_recall_contact": 0.07142857142857142,
+        "direct_harmful_switch_rate_near": 0.01680672268907563,
+        "direct_harmful_switch_rate_contact": 0.027586206896551724,
+        "direct_false_intervention_rate_near": 0.06722689075630252,
+        "direct_false_intervention_rate_contact": 0.07241379310344828,
+        "direct_certificate_risk_fold_robust": 1.824718361912043,
+        "direct_certificate_risk_mean_worst": 1.576887412128656
+      },
+      "trainable_prefixes": [
+        "direct_evidence_calibrators"
+      ]
+    }
+  },
+  "a_scalar_certificate": {
+    "A_simplex_scalar_balanced": {
+      "near": {
+        "num_groups": 290,
+        "num_scenes": 123,
+        "fit_groups": 127,
+        "verify_groups": 163,
+        "valid_for_deployment": false,
+        "candidate_positive_auc": 0.8194183864915572,
+        "candidate_harm_auc": 0.5148535031847133,
+        "top1_correlation": -0.07752758569428336,
+        "fit": {
+          "num_selected": 0,
+          "positive_recall": 0.0,
+          "precision": null,
+          "precision_wilson_lcb90": null,
+          "harmful_selected_rate": null,
+          "harmful_selected_ucb90": 1.0,
+          "teacher_advantage_mean": null
+        },
+        "verify": {
+          "num_selected": 0,
+          "positive_recall": 0.0,
+          "precision": null,
+          "precision_wilson_lcb90": null,
+          "harmful_selected_rate": null,
+          "harmful_selected_ucb90": 1.0,
+          "teacher_advantage_mean": null
+        },
+        "warnings": [
+          "no joint opportunity-harm-score rule satisfied fit constraints",
+          "held-out selections below requirement",
+          "held-out precision LCB below requirement",
+          "held-out conditional harmful-switch UCB above budget"
+        ]
+      },
+      "contact": {
+        "num_groups": 764,
+        "num_scenes": 215,
+        "fit_groups": 384,
+        "verify_groups": 380,
+        "valid_for_deployment": false,
+        "candidate_positive_auc": 0.579582769273491,
+        "candidate_harm_auc": 0.4042492966444795,
+        "top1_correlation": -0.031750925508542714,
+        "fit": {
+          "num_selected": 0,
+          "positive_recall": 0.0,
+          "precision": null,
+          "precision_wilson_lcb90": null,
+          "harmful_selected_rate": null,
+          "harmful_selected_ucb90": 1.0,
+          "teacher_advantage_mean": null
+        },
+        "verify": {
+          "num_selected": 0,
+          "positive_recall": 0.0,
+          "precision": null,
+          "precision_wilson_lcb90": null,
+          "harmful_selected_rate": null,
+          "harmful_selected_ucb90": 1.0,
+          "teacher_advantage_mean": null
+        },
+        "warnings": [
+          "no joint opportunity-harm-score rule satisfied fit constraints",
+          "held-out selections below requirement",
+          "held-out precision LCB below requirement",
+          "held-out conditional harmful-switch UCB above budget"
+        ]
+      }
+    },
+    "A_simplex_scalar_precision": {
+      "near": {
+        "num_groups": 290,
+        "num_scenes": 123,
+        "fit_groups": 127,
+        "verify_groups": 163,
+        "valid_for_deployment": false,
+        "candidate_positive_auc": 0.7678236397748592,
+        "candidate_harm_auc": 0.5252540693559802,
+        "top1_correlation": -0.09154913459613415,
+        "fit": {
+          "num_selected": 0,
+          "positive_recall": 0.0,
+          "precision": null,
+          "precision_wilson_lcb90": null,
+          "harmful_selected_rate": null,
+          "harmful_selected_ucb90": 1.0,
+          "teacher_advantage_mean": null
+        },
+        "verify": {
+          "num_selected": 0,
+          "positive_recall": 0.0,
+          "precision": null,
+          "precision_wilson_lcb90": null,
+          "harmful_selected_rate": null,
+          "harmful_selected_ucb90": 1.0,
+          "teacher_advantage_mean": null
+        },
+        "warnings": [
+          "no joint opportunity-harm-score rule satisfied fit constraints",
+          "held-out selections below requirement",
+          "held-out precision LCB below requirement",
+          "held-out conditional harmful-switch UCB above budget"
+        ]
+      },
+      "contact": {
+        "num_groups": 764,
+        "num_scenes": 215,
+        "fit_groups": 384,
+        "verify_groups": 380,
+        "valid_for_deployment": false,
+        "candidate_positive_auc": 0.49447742025061614,
+        "candidate_harm_auc": 0.46855772089938014,
+        "top1_correlation": 0.026918601921451218,
+        "fit": {
+          "num_selected": 0,
+          "positive_recall": 0.0,
+          "precision": null,
+          "precision_wilson_lcb90": null,
+          "harmful_selected_rate": null,
+          "harmful_selected_ucb90": 1.0,
+          "teacher_advantage_mean": null
+        },
+        "verify": {
+          "num_selected": 0,
+          "positive_recall": 0.0,
+          "precision": null,
+          "precision_wilson_lcb90": null,
+          "harmful_selected_rate": null,
+          "harmful_selected_ucb90": 1.0,
+          "teacher_advantage_mean": null
+        },
+        "warnings": [
+          "no joint opportunity-harm-score rule satisfied fit constraints",
+          "held-out selections below requirement",
+          "held-out precision LCB below requirement",
+          "held-out conditional harmful-switch UCB above budget"
+        ]
+      }
+    }
+  },
+  "safe_paired": {
+    "paired_scenes": 120,
+    "paper_safe_claim_ready": true,
+    "metrics": [
+      {
+        "metric": "collision_scene_rate",
+        "available": true,
+        "paired_scenes": 120,
+        "baseline_mean": 0.008333333333333333,
+        "candidate_mean": 0.008333333333333333,
+        "candidate_minus_baseline": 0.0,
+        "paired_ci95": [
+          0.0,
+          0.0
+        ],
+        "direction": "lower_is_better",
+        "noninferiority_margin": 0.002,
+        "relative_margin_fraction": null,
+        "passed_noninferiority": true
+      },
+      {
+        "metric": "offroad_scene_rate",
+        "available": true,
+        "paired_scenes": 120,
+        "baseline_mean": 0.0,
+        "candidate_mean": 0.0,
+        "candidate_minus_baseline": 0.0,
+        "paired_ci95": [
+          0.0,
+          0.0
+        ],
+        "direction": "lower_is_better",
+        "noninferiority_margin": 0.002,
+        "relative_margin_fraction": null,
+        "passed_noninferiority": true
+      },
+      {
+        "metric": "bounded_NUP",
+        "available": true,
+        "paired_scenes": 120,
+        "baseline_mean": 1.0,
+        "candidate_mean": 1.0,
+        "candidate_minus_baseline": 0.0,
+        "paired_ci95": [
+          0.0,
+          0.0
+        ],
+        "direction": "higher_is_better",
+        "noninferiority_margin": 0.01,
+        "relative_margin_fraction": null,
+        "passed_noninferiority": true
+      },
+      {
+        "metric": "intervention_episode_rate",
+        "available": true,
+        "paired_scenes": 120,
+        "baseline_mean": 0.0,
+        "candidate_mean": 0.0,
+        "candidate_minus_baseline": 0.0,
+        "paired_ci95": [
+          0.0,
+          0.0
+        ],
+        "direction": "lower_is_better",
+        "noninferiority_margin": 0.03,
+        "relative_margin_fraction": null,
+        "passed_noninferiority": true
+      },
+      {
+        "metric": "route_progression",
+        "available": true,
+        "paired_scenes": 80,
+        "baseline_mean": 13.877050516786237,
+        "candidate_mean": 13.877050516786237,
+        "candidate_minus_baseline": 0.0,
+        "paired_ci95": [
+          0.0,
+          0.0
+        ],
+        "direction": "higher_is_better",
+        "noninferiority_margin": 0.005,
+        "relative_margin_fraction": null,
+        "passed_noninferiority": true
+      },
+      {
+        "metric": "jerk_p95",
+        "available": true,
+        "paired_scenes": 120,
+        "baseline_mean": 2.8901483650164057e-05,
+        "candidate_mean": 2.8901483650164057e-05,
+        "candidate_minus_baseline": 0.0,
+        "paired_ci95": [
+          0.0,
+          0.0
+        ],
+        "direction": "lower_is_better",
+        "noninferiority_margin": 1.445074182508203e-06,
+        "relative_margin_fraction": 0.05,
+        "passed_noninferiority": true
+      },
+      {
+        "metric": "yaw_rate_p95",
+        "available": true,
+        "paired_scenes": 120,
+        "baseline_mean": 0.12760172380218485,
+        "candidate_mean": 0.12760172380218485,
+        "candidate_minus_baseline": 0.0,
+        "paired_ci95": [
+          0.0,
+          0.0
+        ],
+        "direction": "lower_is_better",
+        "noninferiority_margin": 0.006380086190109243,
+        "relative_margin_fraction": 0.05,
+        "passed_noninferiority": true
+      }
+    ]
+  },
+  "external_baselines_safe_offline": {
+    "betopnet_lite": {
+      "DRS": 1.0,
+      "FRA_exec": 0.0,
+      "ODG": 0.0,
+      "bounded_NUP": 1.0,
+      "intervention_rate": 0.17647058823529413,
+      "max_yaw_rate_violation": 0.17647058823529413,
+      "post_contact_deployability": 0.6162632327308294
+    },
+    "gameformer_lite": {
+      "DRS": 1.0,
+      "FRA_exec": 0.0,
+      "ODG": 0.0,
+      "bounded_NUP": 0.9467900485021244,
+      "intervention_rate": 0.39215686274509803,
+      "max_yaw_rate_violation": 0.39215686274509803,
+      "post_contact_deployability": 0.6189246627804773
+    },
+    "log_replay": {
+      "DRS": 1.0,
+      "FRA_exec": 0.0,
+      "ODG": 0.0,
+      "bounded_NUP": 1.0,
+      "intervention_rate": 0.0,
+      "max_yaw_rate_violation": 0.0,
+      "post_contact_deployability": 0.6162632327308294
+    },
+    "nominal_replay": {
+      "DRS": 1.0,
+      "FRA_exec": 0.0,
+      "ODG": 0.0,
+      "bounded_NUP": 1.0,
+      "intervention_rate": 0.0,
+      "max_yaw_rate_violation": 0.0,
+      "post_contact_deployability": 0.6162632327308294
+    },
+    "wayformer_bc": {
+      "DRS": 1.0,
+      "FRA_exec": 0.0,
+      "ODG": 0.0,
+      "bounded_NUP": 1.0,
+      "intervention_rate": 0.0,
+      "max_yaw_rate_violation": 0.0,
+      "post_contact_deployability": 0.6162632327308294
+    }
+  },
+  "external_baselines_near_offline": {
+    "cvar_risk_filter": {
+      "DRS": 0.968478260723793,
+      "FRA_exec": 0.21014492753623187,
+      "ODG": 0.3106031560379526,
+      "bounded_NUP": 0.9887224192581872,
+      "intervention_rate": 0.6413043478260869,
+      "secondary_collision_rate": 0.09782608695652174,
+      "post_contact_deployability": 0.4983405151736038,
+      "route_rejoin_success": 0.9963768115942029,
+      "stable_stop_success": 0.8840579710144928
+    },
+    "dro_cvar_filter": {
+      "DRS": 0.9721014491295901,
+      "FRA_exec": 0.20652173913043478,
+      "ODG": 0.3106031560379526,
+      "bounded_NUP": 0.9887224192581872,
+      "intervention_rate": 0.6413043478260869,
+      "secondary_collision_rate": 0.09782608695652174,
+      "post_contact_deployability": 0.5002803591155056,
+      "route_rejoin_success": 0.9963768115942029,
+      "stable_stop_success": 0.8840579710144928
+    },
+    "expected_risk_filter": {
+      "DRS": 0.968478260723793,
+      "FRA_exec": 0.21014492753623187,
+      "ODG": 0.3106031560379526,
+      "bounded_NUP": 0.9887224192581872,
+      "intervention_rate": 0.6413043478260869,
+      "secondary_collision_rate": 0.09782608695652174,
+      "post_contact_deployability": 0.4983405151736038,
+      "route_rejoin_success": 0.9963768115942029,
+      "stable_stop_success": 0.8840579710144928
+    },
+    "marc_lite": {
+      "DRS": 0.9668478257009301,
+      "FRA_exec": 0.5036231884057971,
+      "ODG": 0.8359491695528445,
+      "bounded_NUP": 0.9874840528642798,
+      "intervention_rate": 0.9420289855072463,
+      "secondary_collision_rate": 0.09782608695652174,
+      "post_contact_deployability": 0.3288853611906016,
+      "route_rejoin_success": 1.0,
+      "stable_stop_success": 0.894927536231884
+    },
+    "oracle_recovery_filter": {
+      "DRS": 0.9782608694032483,
+      "FRA_exec": 0.213768115942029,
+      "ODG": 0.33522634704907733,
+      "bounded_NUP": 0.9713745090560092,
+      "intervention_rate": 0.6521739130434783,
+      "secondary_collision_rate": 0.10507246376811594,
+      "post_contact_deployability": 0.49795419926862794,
+      "route_rejoin_success": 0.9891304347826086,
+      "stable_stop_success": 0.8840579710144928
+    },
+    "predictive_safety_filter": {
+      "DRS": 0.9726449274525478,
+      "FRA_exec": 0.12681159420289856,
+      "ODG": 0.17429900298947873,
+      "bounded_NUP": 0.9882030051691185,
+      "intervention_rate": 0.44565217391304346,
+      "secondary_collision_rate": 0.09782608695652174,
+      "post_contact_deployability": 0.5466356772411917,
+      "route_rejoin_success": 0.9963768115942029,
+      "stable_stop_success": 0.8840579710144928
+    },
+    "racp_lite": {
+      "DRS": 0.9523550720777416,
+      "FRA_exec": 0.5217391304347826,
+      "ODG": 0.8389732954294785,
+      "bounded_NUP": 0.9862011379447859,
+      "intervention_rate": 0.8333333333333334,
+      "secondary_collision_rate": 0.09782608695652174,
+      "post_contact_deployability": 0.31835095414694015,
+      "route_rejoin_success": 0.9963768115942029,
+      "stable_stop_success": 0.8840579710144928
+    },
+    "gameformer_lite": {
+      "DRS": 0.9483695650419247,
+      "FRA_exec": 0.2536231884057971,
+      "ODG": 0.36907387038935785,
+      "bounded_NUP": 0.9340877262765532,
+      "intervention_rate": 0.5398550724637681,
+      "secondary_collision_rate": 0.11231884057971014,
+      "post_contact_deployability": 0.47186593583962183,
+      "route_rejoin_success": 0.9565217391304348,
+      "stable_stop_success": 0.8514492753623188
+    }
+  },
+  "external_baselines_near_closed_loop_progress": {
+    "closed_loop_cvar_risk_filter.json.progress.json": {
+      "completed_rollouts": 30,
+      "requested_rollouts": 50,
+      "status": "running_scene"
+    },
+    "closed_loop_dro_cvar_filter.json.progress.json": {
+      "completed_rollouts": 30,
+      "requested_rollouts": 50,
+      "status": "running_scene"
+    },
+    "closed_loop_expected_risk_filter.json.progress.json": {
+      "completed_rollouts": 31,
+      "requested_rollouts": 50,
+      "status": "running_scene"
+    },
+    "closed_loop_marc_lite.json.progress.json": {
+      "completed_rollouts": 34,
+      "requested_rollouts": 50,
+      "status": "running_scene"
+    },
+    "closed_loop_oracle_recovery_filter.json.progress.json": {
+      "completed_rollouts": 30,
+      "requested_rollouts": 50,
+      "status": "running_scene"
+    },
+    "closed_loop_predictive_safety_filter.json.progress.json": {
+      "completed_rollouts": 30,
+      "requested_rollouts": 50,
+      "status": "running_scene"
+    },
+    "closed_loop_racp_lite.json.progress.json": {
+      "completed_rollouts": 31,
+      "requested_rollouts": 50,
+      "status": "running_scene"
+    }
+  },
+  "external_baselines_contact_offline": {
+    "post_collision_restoration": {
+      "DRS": 0.8270950468584715,
+      "FRA_exec": 0.4069611780455154,
+      "ODG": 0.3271045964934341,
+      "bounded_NUP": 0.7981849482655051,
+      "intervention_rate": 0.9692101740294511,
+      "secondary_collision_rate": 0.0013386880856760374,
+      "post_contact_deployability": 0.38523483855499613,
+      "route_rejoin_success": 0.8487282463186078,
+      "stable_stop_success": 0.8380187416331994
+    },
+    "post_crash_braking": {
+      "DRS": 0.5742436412331889,
+      "FRA_exec": 0.5836680053547524,
+      "ODG": 0.22573268833212196,
+      "bounded_NUP": 0.3306304621760746,
+      "intervention_rate": 0.9946452476572959,
+      "secondary_collision_rate": 0.0,
+      "post_contact_deployability": 0.27012217873198835,
+      "route_rejoin_success": 0.33467202141900937,
+      "stable_stop_success": 0.5809906291834003
+    },
+    "postimpact_mpc_lite": {
+      "DRS": 0.593734939761031,
+      "FRA_exec": 0.5756358768406962,
+      "ODG": 0.2432960262260284,
+      "bounded_NUP": 0.3238425441234227,
+      "intervention_rate": 0.9906291834002677,
+      "secondary_collision_rate": 0.0,
+      "post_contact_deployability": 0.2759759075748392,
+      "route_rejoin_success": 0.32663989290495316,
+      "stable_stop_success": 0.6010709504685409
+    },
+    "severity_minimization": {
+      "DRS": 0.6778580990681049,
+      "FRA_exec": 0.49129852744310576,
+      "ODG": 0.23722871447323635,
+      "bounded_NUP": 0.3935678492759344,
+      "intervention_rate": 0.8433734939759037,
+      "secondary_collision_rate": 0.0,
+      "post_contact_deployability": 0.32977788044446993,
+      "route_rejoin_success": 0.41231593038821956,
+      "stable_stop_success": 0.6854082998661312
+    }
+  },
+  "external_baselines_contact_closed_loop": {
+    "post_collision_restoration": {
+      "num_scenes": 50,
+      "num_decisions": 2000,
+      "closed_loop_DRS": 0.49444999999962747,
+      "closed_loop_FRA_exec": 0.5055,
+      "closed_loop_ODG": 0.0037194382213502895,
+      "closed_loop_post_contact_deployability": 0.32434226804771027,
+      "closed_loop_bounded_NUP": 0.8073833730342527,
+      "intervention_rate": 0.8325,
+      "collision_scene_rate": 0.08,
+      "offroad_scene_rate": 0.02
+    },
+    "post_collision_restoration.json.progress": {
+      "num_scenes": null,
+      "num_decisions": null,
+      "closed_loop_DRS": null,
+      "closed_loop_FRA_exec": null,
+      "closed_loop_ODG": null,
+      "closed_loop_post_contact_deployability": null,
+      "closed_loop_bounded_NUP": null,
+      "intervention_rate": null,
+      "collision_scene_rate": null,
+      "offroad_scene_rate": null
+    },
+    "post_crash_braking": {
+      "num_scenes": 50,
+      "num_decisions": 2000,
+      "closed_loop_DRS": 0.41732499999869616,
+      "closed_loop_FRA_exec": 0.5835,
+      "closed_loop_ODG": 0.0020594709399691744,
+      "closed_loop_post_contact_deployability": 0.29685359368566716,
+      "closed_loop_bounded_NUP": 0.46247031789070564,
+      "intervention_rate": 0.9995,
+      "collision_scene_rate": 0.28,
+      "offroad_scene_rate": 0.0
+    },
+    "post_crash_braking.json.progress": {
+      "num_scenes": null,
+      "num_decisions": null,
+      "closed_loop_DRS": null,
+      "closed_loop_FRA_exec": null,
+      "closed_loop_ODG": null,
+      "closed_loop_post_contact_deployability": null,
+      "closed_loop_bounded_NUP": null,
+      "intervention_rate": null,
+      "collision_scene_rate": null,
+      "offroad_scene_rate": null
+    },
+    "postimpact_mpc_lite": {
+      "num_scenes": 50,
+      "num_decisions": 2000,
+      "closed_loop_DRS": 0.5272499999981374,
+      "closed_loop_FRA_exec": 0.4734999999999999,
+      "closed_loop_ODG": 0.0008818218630979016,
+      "closed_loop_post_contact_deployability": 0.34753978082036086,
+      "closed_loop_bounded_NUP": 0.45415406272115383,
+      "intervention_rate": 0.9754999999999999,
+      "collision_scene_rate": 0.18,
+      "offroad_scene_rate": 0.02
+    },
+    "postimpact_mpc_lite.json.progress": {
+      "num_scenes": null,
+      "num_decisions": null,
+      "closed_loop_DRS": null,
+      "closed_loop_FRA_exec": null,
+      "closed_loop_ODG": null,
+      "closed_loop_post_contact_deployability": null,
+      "closed_loop_bounded_NUP": null,
+      "intervention_rate": null,
+      "collision_scene_rate": null,
+      "offroad_scene_rate": null
+    },
+    "severity_minimization": {
+      "num_scenes": 50,
+      "num_decisions": 2000,
+      "closed_loop_DRS": 0.491899999999255,
+      "closed_loop_FRA_exec": 0.5095,
+      "closed_loop_ODG": 0.001645259781786842,
+      "closed_loop_post_contact_deployability": 0.31974442592929825,
+      "closed_loop_bounded_NUP": 0.4550648259556764,
+      "intervention_rate": 0.9450000000000002,
+      "collision_scene_rate": 0.1,
+      "offroad_scene_rate": 0.0
+    },
+    "severity_minimization.json.progress": {
+      "num_scenes": null,
+      "num_decisions": null,
+      "closed_loop_DRS": null,
+      "closed_loop_FRA_exec": null,
+      "closed_loop_ODG": null,
+      "closed_loop_post_contact_deployability": null,
+      "closed_loop_bounded_NUP": null,
+      "intervention_rate": null,
+      "collision_scene_rate": null,
+      "offroad_scene_rate": null
+    }
+  }
+}

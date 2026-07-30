@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# v48.17 BRIDGE: identity-preserving, context-conditioned tri-class evidence
+# v48.18 DUET-BRIDGE: identity-preserving independent-tail evidence
 # correction. The v48.13 top-k proposal and source evidence experts remain frozen.
 REPO="${OCRAP_REPO:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$REPO"
@@ -19,27 +19,33 @@ CAL_DIR="${CAL_DIR:-$RUN/calibration}"
 mkdir -p "$RUN/logs" "$MODEL_DIR" "$CAL_DIR"
 
 PROPOSAL_TOP_K="${PROPOSAL_TOP_K:-3}"
-CAL_HIDDEN="${EVIDENCE_CALIBRATOR_HIDDEN:-8}"
-CAL_SCALE="${EVIDENCE_CALIBRATOR_SCALE:-0.75}"
-CAL_MODE="${EVIDENCE_CALIBRATOR_MODE:-simplex_context}"
+CAL_HIDDEN="${EVIDENCE_CALIBRATOR_HIDDEN:-12}"
+CAL_SCALE="${EVIDENCE_CALIBRATOR_SCALE:-0.50}"
+CAL_MODE="${EVIDENCE_CALIBRATOR_MODE:-dual_tail_context}"
 CAL_CONTEXT="${EVIDENCE_CALIBRATOR_CONTEXT:-true}"
 CAL_CONTEXT_DETACH="${EVIDENCE_CALIBRATOR_CONTEXT_DETACH:-true}"
-CAL_CONTEXT_SOURCE="${EVIDENCE_CALIBRATOR_CONTEXT_SOURCE:-relative}"
-MAX_CALIBRATOR_PARAMS="${MAX_EVIDENCE_CALIBRATOR_PARAMS:-100000}"
+CAL_CONTEXT_SOURCE="${EVIDENCE_CALIBRATOR_CONTEXT_SOURCE:-tournament}"
+MAX_CALIBRATOR_PARAMS="${MAX_EVIDENCE_CALIBRATOR_PARAMS:-5000}"
 STRATIFIED_BATCHES="${GROUP_BATCH_STRATIFIED:-true}"
 BATCH_BALANCED="${ORDINAL_EVIDENCE_BATCH_BALANCED:-true}"
 MIN_POSITIVE_RECALL="${POLICY_METRIC_MIN_POSITIVE_RECALL:-0.25}"
 RECALL_SHORTFALL_WEIGHT="${POLICY_METRIC_RECALL_SHORTFALL_WEIGHT:-4.0}"
+INDEPENDENT_TAILS="${ORDINAL_EVIDENCE_INDEPENDENT_TAILS:-true}"
+BALANCED_REPLACES_ERM="${ORDINAL_EVIDENCE_BALANCED_REPLACES_ERM:-true}"
+BEST_METRIC_NAME="${BEST_METRIC:-direct_duet_selection_risk}"
 
 cat > "$RUN/STAGE_ARCHITECTURE.json" <<JSON
 {
-  "version": "v48.17-BRIDGE",
+  "version": "v48.18-DUET-BRIDGE",
   "source_checkpoint": "$INIT_CKPT",
-  "training_role": "context_conditioned_batch_balanced_scene_disjoint_evidence_correction",
+  "training_role": "dual_tail_tournament_context_balanced_scene_disjoint_evidence_correction",
   "frozen_policy": "v48.13_topk_recovery_proposal",
   "frozen_source_evidence": true,
   "trainable": ["direct_evidence_calibrators"],
   "evidence_parameterization": "$CAL_MODE",
+  "context_source": "$CAL_CONTEXT_SOURCE",
+  "independent_evidence_tails": $INDEPENDENT_TAILS,
+  "balanced_replaces_group_erm": $BALANCED_REPLACES_ERM,
   "context_features_enabled": $CAL_CONTEXT,
   "context_features": "frozen_candidate_nominal_relative_representation_plus_source_evidence_and_rank_margins",
   "calibrator_hidden": $CAL_HIDDEN,
@@ -62,7 +68,7 @@ EPOCHS="${EVIDENCE_ADAPT_EPOCHS:-20}" PATIENCE="${EVIDENCE_ADAPT_PATIENCE:-5}" \
 LR="${EVIDENCE_ADAPT_LR:-0.00030}" ENCODER_LR_SCALE=0 ENCODER_ANCHOR_WEIGHT=0 \
 TRAINABLE_PARAM_PREFIXES='direct_evidence_calibrators' \
 STRICT_INIT_PREFIXES='direct_preference_set_ranker,direct_delta_adapters' \
-BEST_METRIC=direct_certificate_risk_fold_robust BEST_METRIC_MIN_DELTA="${BEST_METRIC_MIN_DELTA:-0.00001}" \
+BEST_METRIC="$BEST_METRIC_NAME" BEST_METRIC_MIN_DELTA="${BEST_METRIC_MIN_DELTA:-0.00001}" \
 SKIP_POST_TRAIN_CALIBRATION=1 EXACT_TEACHER_PCD=true \
 SET_CONTEXT_ENABLED=false PREFERENCE_HEAD_ENABLED=false PREFERENCE_CONTEXT_ENABLED=false RELATIVE_INCLUDE_ABSOLUTE=false \
 SET_TOURNAMENT_ENABLED=true SET_TOURNAMENT_HIDDEN="${SET_TOURNAMENT_HIDDEN:-48}" SET_TOURNAMENT_HEADS="${SET_TOURNAMENT_HEADS:-4}" \
@@ -72,6 +78,7 @@ DELTA_REGIME_EXPERTS=true DELTA_POLICY_FEATURES=true \
 EVIDENCE_CALIBRATOR_ENABLED=true EVIDENCE_CALIBRATOR_HIDDEN="$CAL_HIDDEN" EVIDENCE_CALIBRATOR_SCALE="$CAL_SCALE" \
 EVIDENCE_CALIBRATOR_MODE="$CAL_MODE" EVIDENCE_CALIBRATOR_CONTEXT="$CAL_CONTEXT" EVIDENCE_CALIBRATOR_CONTEXT_DETACH="$CAL_CONTEXT_DETACH" \
 EVIDENCE_CALIBRATOR_CONTEXT_SOURCE="$CAL_CONTEXT_SOURCE" \
+ORDINAL_EVIDENCE_INDEPENDENT_TAILS="$INDEPENDENT_TAILS" ORDINAL_EVIDENCE_BALANCED_REPLACES_ERM="$BALANCED_REPLACES_ERM" \
 GROUP_BATCH_STRATIFIED="$STRATIFIED_BATCHES" GROUP_BATCH_POSITIVE_FRACTION="${GROUP_BATCH_POSITIVE_FRACTION:-0.35}" \
 GROUP_BATCH_HARMFUL_FRACTION="${GROUP_BATCH_HARMFUL_FRACTION:-0.35}" GROUP_BATCH_DEAD_FRACTION="${GROUP_BATCH_DEAD_FRACTION:-0.30}" \
 POSITIVE_GROUP_BOOST="${POSITIVE_GROUP_BOOST:-1.0}" POSITIVE_MACRO_BALANCE_POWER="${POSITIVE_MACRO_BALANCE_POWER:-0.25}" \
@@ -101,6 +108,10 @@ POLICY_METRIC_MIN_FOLD_POSITIVE="${POLICY_METRIC_MIN_FOLD_POSITIVE:-6}" POLICY_M
 POLICY_METRIC_HARM_WEIGHT="${POLICY_METRIC_HARM_WEIGHT:-0.50}" POLICY_METRIC_FALSE_WEIGHT="${POLICY_METRIC_FALSE_WEIGHT:-0.15}" \
 POLICY_METRIC_MISS_WEIGHT="${POLICY_METRIC_MISS_WEIGHT:-1.25}" POLICY_METRIC_MIN_POSITIVE_RECALL="$MIN_POSITIVE_RECALL" \
 POLICY_METRIC_RECALL_SHORTFALL_WEIGHT="$RECALL_SHORTFALL_WEIGHT" \
+POLICY_METRIC_CROSS_MIN_RECALL="${POLICY_METRIC_CROSS_MIN_RECALL:-0.25}" \
+POLICY_METRIC_CROSS_RECALL_WEIGHT="${POLICY_METRIC_CROSS_RECALL_WEIGHT:-2.0}" \
+POLICY_METRIC_CROSS_HARM_WEIGHT="${POLICY_METRIC_CROSS_HARM_WEIGHT:-0.50}" \
+POLICY_METRIC_CROSS_FALSE_WEIGHT="${POLICY_METRIC_CROSS_FALSE_WEIGHT:-0.20}" \
 GROUP_DRO_WEIGHT=0 POLICY_DISTILL_WEIGHT=0 POLICY_REGRET_WEIGHT=0 POLICY_ADMISSION_DISTILL_WEIGHT=0 \
 OPPORTUNITY_AUX_WEIGHT=0 HARM_W=0 SELECTIVE_RISK_WEIGHT=0 SELECTIVE_COVERAGE_WEIGHT=0 EXPERT_SPECIALIZATION_WEIGHT=0 \
   bash scripts/train_ocrap_v48_trac_sr.sh
@@ -113,10 +124,10 @@ PROPOSAL_TOP_K=$PROPOSAL_TOP_K
 EVIDENCE_RERANK_TOP_K=true
 MACRO_CONSTRAINT_MODE=opportunity_normalized
 MAX_MACRO_EXCESS_SHARE=${MAX_MACRO_EXCESS_SHARE:-0.15}
-CALIBRATION_PROTOCOL=v48_17_scene_disjoint_${CAL_MODE}_context_${CAL_CONTEXT}_batch_${BATCH_BALANCED}
+CALIBRATION_PROTOCOL=v48_18_duet_scene_disjoint_${CAL_MODE}_context_${CAL_CONTEXT}_batch_${BATCH_BALANCED}
 EOF2
 
-python - "$RUN" "$MODEL_DIR/best.pt" "$INIT_CKPT" "$CAL_MODE" "$CAL_CONTEXT" "$BATCH_BALANCED" "$STRATIFIED_BATCHES" "$MIN_POSITIVE_RECALL" "$MAX_CALIBRATOR_PARAMS" "$CAL_CONTEXT_SOURCE" <<'PY'
+python - "$RUN" "$MODEL_DIR/best.pt" "$INIT_CKPT" "$CAL_MODE" "$CAL_CONTEXT" "$BATCH_BALANCED" "$STRATIFIED_BATCHES" "$MIN_POSITIVE_RECALL" "$MAX_CALIBRATOR_PARAMS" "$CAL_CONTEXT_SOURCE" "$INDEPENDENT_TAILS" "$BALANCED_REPLACES_ERM" "$BEST_METRIC_NAME" <<'PY'
 import hashlib,json,pathlib,sys,time,torch
 run,ckpt,source=map(pathlib.Path,sys.argv[1:4])
 cal_mode=sys.argv[4]
@@ -126,6 +137,9 @@ stratified=sys.argv[7].lower() == 'true'
 min_positive_recall=float(sys.argv[8])
 max_calibrator_params=int(sys.argv[9])
 context_source=sys.argv[10]
+independent_tails=sys.argv[11].lower() == 'true'
+balanced_replaces_erm=sys.argv[12].lower() == 'true'
+best_metric=sys.argv[13]
 if not ckpt.is_file(): raise SystemExit(f'missing adapted checkpoint: {ckpt}')
 try: doc_ck=torch.load(ckpt,map_location='cpu',weights_only=False)
 except TypeError: doc_ck=torch.load(ckpt,map_location='cpu')
@@ -137,13 +151,15 @@ if trainable <= 0 or trainable > max_calibrator_params:
         f'allowed=(0,{max_calibrator_params}]'
     )
 doc={
- 'event':'v48_17_bridge_evidence_correction_complete','created_unix':time.time(),
+ 'event':'v48_18_duet_bridge_evidence_correction_complete','created_unix':time.time(),
  'checkpoint':str(ckpt),'checkpoint_sha256':hashlib.sha256(ckpt.read_bytes()).hexdigest(),
  'source_checkpoint':str(source),'source_checkpoint_sha256':hashlib.sha256(source.read_bytes()).hexdigest(),
  'frozen_policy':True,'frozen_source_evidence':True,
  'trainable_prefixes':['direct_evidence_calibrators'],'trainable_state_params':trainable,
  'evidence_parameterization':cal_mode,
  'context_features_enabled':context_enabled,'context_source':context_source,
+ 'independent_evidence_tails':independent_tails,'balanced_replaces_group_erm':balanced_replaces_erm,
+ 'checkpoint_metric':best_metric,
  'batch_class_balance':batch_balanced,'stratified_group_batches':stratified,
  'checkpoint_min_positive_recall':min_positive_recall,'test_roots_read':False,
 }

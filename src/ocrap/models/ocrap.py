@@ -20,6 +20,7 @@ class RecoverySetTournament(nn.Module):
         hidden_dim = max(int(num_heads), int(hidden_dim))
         if hidden_dim % int(num_heads) != 0:
             hidden_dim = int(num_heads) * ((hidden_dim + int(num_heads) - 1) // int(num_heads))
+        self.hidden_dim = int(hidden_dim)
         self.input_norm = nn.LayerNorm(input_dim)
         self.input_proj = nn.Linear(input_dim, hidden_dim)
         self.attn = nn.MultiheadAttention(hidden_dim, int(num_heads), dropout=float(dropout), batch_first=True)
@@ -35,20 +36,26 @@ class RecoverySetTournament(nn.Module):
         nn.init.zeros_(self.score.weight)
         nn.init.zeros_(self.score.bias)
 
-    def forward(
+    def encode(
         self,
         relative_features: torch.Tensor,
         group_index: torch.Tensor | None,
         is_nominal: torch.Tensor | None,
     ) -> torch.Tensor:
-        scores = relative_features.new_zeros((relative_features.shape[0],))
+        """Return candidate-set context without changing proposal semantics.
+
+        Nominal rows remain zero.  Recovery rows contain the frozen tournament
+        representation used by the proposal head, which is substantially lower
+        dimensional and more data-efficient than the raw relative feature vector.
+        """
+        context = relative_features.new_zeros((relative_features.shape[0], self.hidden_dim))
         if group_index is None or is_nominal is None or relative_features.shape[0] <= 1:
-            return scores
+            return context
         groups = group_index.to(device=relative_features.device)
         groups = groups.reshape(-1, 1) if groups.dim() == 1 else groups.reshape(groups.shape[0], -1)
         nominal_mask = is_nominal.to(device=relative_features.device).reshape(-1) > 0.5
         if groups.shape[0] != relative_features.shape[0] or nominal_mask.shape[0] != relative_features.shape[0]:
-            return scores
+            return context
         for key in torch.unique(groups, dim=0):
             idx = torch.where((groups == key.unsqueeze(0)).all(dim=1))[0]
             recs = idx[~nominal_mask[idx]]
@@ -57,19 +64,43 @@ class RecoverySetTournament(nn.Module):
             token = self.input_proj(self.input_norm(relative_features[recs])).unsqueeze(0)
             attended, _ = self.attn(token, token, token, need_weights=False)
             token = self.norm1(token + attended)
-            token = self.norm2(token + self.ffn(token))
-            group_scores = self.score(token).squeeze(0).squeeze(-1)
-            # Remove an unidentifiable common offset.  Only recovery ordering is
-            # learned here; admission against nominal belongs to the evidence head.
+            token = self.norm2(token + self.ffn(token)).squeeze(0)
+            context[recs] = token.to(dtype=context.dtype)
+        return context
+
+    def score_from_context(
+        self,
+        context: torch.Tensor,
+        group_index: torch.Tensor | None,
+        is_nominal: torch.Tensor | None,
+    ) -> torch.Tensor:
+        scores = context.new_zeros((context.shape[0],))
+        if group_index is None or is_nominal is None or context.shape[0] <= 1:
+            return scores
+        groups = group_index.to(device=context.device)
+        groups = groups.reshape(-1, 1) if groups.dim() == 1 else groups.reshape(groups.shape[0], -1)
+        nominal_mask = is_nominal.to(device=context.device).reshape(-1) > 0.5
+        if groups.shape[0] != context.shape[0] or nominal_mask.shape[0] != context.shape[0]:
+            return scores
+        for key in torch.unique(groups, dim=0):
+            idx = torch.where((groups == key.unsqueeze(0)).all(dim=1))[0]
+            recs = idx[~nominal_mask[idx]]
+            if recs.numel() == 0:
+                continue
+            group_scores = self.score(context[recs]).squeeze(-1)
             if group_scores.numel() > 1:
                 group_scores = group_scores - group_scores.mean()
-            # AMP may execute the attention/score path in fp16 or bfloat16 while
-            # ``relative_features`` (and therefore ``scores``) remains fp32.
-            # Advanced-index assignment requires an exact dtype match.  Cast only
-            # at the scatter boundary so the tournament computation keeps AMP,
-            # the public output keeps the input dtype, and gradients remain intact.
             scores[recs] = group_scores.to(dtype=scores.dtype)
         return scores
+
+    def forward(
+        self,
+        relative_features: torch.Tensor,
+        group_index: torch.Tensor | None,
+        is_nominal: torch.Tensor | None,
+    ) -> torch.Tensor:
+        context = self.encode(relative_features, group_index, is_nominal)
+        return self.score_from_context(context, group_index, is_nominal)
 
 
 class OCRAPModel(nn.Module):
@@ -144,6 +175,7 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_calibrator_mode: str = "center_width",
         direct_recovery_evidence_calibrator_context: bool = False,
         direct_recovery_evidence_calibrator_context_detach: bool = True,
+        direct_recovery_evidence_calibrator_context_source: str = "relative",
     ):
         super().__init__()
         self.num_roots = int(num_roots)
@@ -209,11 +241,27 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_evidence_calibrator_context_detach = bool(
             direct_recovery_evidence_calibrator_context_detach
         )
-        if self.direct_recovery_evidence_calibrator_mode not in {"center_width", "simplex_context"}:
+        self.direct_recovery_evidence_calibrator_context_source = str(
+            direct_recovery_evidence_calibrator_context_source or "relative"
+        ).strip().lower()
+        if self.direct_recovery_evidence_calibrator_mode not in {
+            "center_width", "simplex_context", "dual_tail_context"
+        }:
             raise ValueError(
                 "Unsupported direct_recovery_evidence_calibrator_mode="
                 f"{direct_recovery_evidence_calibrator_mode!r}"
             )
+        if self.direct_recovery_evidence_calibrator_context_source not in {"relative", "tournament"}:
+            raise ValueError(
+                "Unsupported direct_recovery_evidence_calibrator_context_source="
+                f"{direct_recovery_evidence_calibrator_context_source!r}"
+            )
+        if (
+            self.direct_recovery_evidence_calibrator_context
+            and self.direct_recovery_evidence_calibrator_context_source == "tournament"
+            and not self.direct_recovery_set_tournament
+        ):
+            raise ValueError("tournament evidence context requires direct_recovery_set_tournament=true")
         if self.direct_recovery_delta_mode not in {"gaussian", "ordinal_evidence"}:
             raise ValueError(f"Unsupported direct_recovery_delta_mode={direct_recovery_delta_mode!r}")
         if self.direct_recovery_value_expert_routing not in {
@@ -475,9 +523,15 @@ class OCRAPModel(nn.Module):
         # beneficial, dead-zone, and harmful candidates with nearly identical source
         # scores.  The low-rank bottleneck keeps target adaptation small while adding
         # the observables needed for conditional correction.
-        evidence_calibrator_input_dim = 4 + (
-            relative_in_dim if self.direct_recovery_evidence_calibrator_context else 0
-        )
+        evidence_context_dim = 0
+        if self.direct_recovery_evidence_calibrator_context:
+            evidence_context_dim = (
+                self.direct_preference_set_ranker.hidden_dim
+                if self.direct_recovery_evidence_calibrator_context_source == "tournament"
+                and self.direct_preference_set_ranker is not None
+                else relative_in_dim
+            )
+        evidence_calibrator_input_dim = 4 + evidence_context_dim
         evidence_calibrator_output_dim = (
             3 if self.direct_recovery_evidence_calibrator_mode == "simplex_context" else 2
         )
@@ -843,7 +897,13 @@ class OCRAPModel(nn.Module):
         out["direct_recovery_rank_residual"] = rank_residual
         inherited_rank = rank_base + rank_residual
         if self.direct_preference_set_ranker is not None:
-            tournament_rank = self.direct_preference_set_ranker(relative_features, group_index, is_nominal)
+            tournament_context = self.direct_preference_set_ranker.encode(
+                relative_features, group_index, is_nominal
+            )
+            tournament_rank = self.direct_preference_set_ranker.score_from_context(
+                tournament_context, group_index, is_nominal
+            )
+            out["direct_recovery_tournament_context"] = tournament_context
             out["direct_recovery_rank_tournament"] = tournament_rank
             rank_logit = tournament_rank if self.direct_recovery_set_tournament_replace_base else inherited_rank + tournament_rank
         else:
@@ -895,7 +955,13 @@ class OCRAPModel(nn.Module):
                 calibrator_policy = delta.new_zeros((delta.shape[0], 2))
             calibrator_parts = [delta[:, :2], calibrator_policy]
             if self.direct_recovery_evidence_calibrator_context:
-                calibrator_context = relative_features.to(dtype=delta.dtype)
+                if (
+                    self.direct_recovery_evidence_calibrator_context_source == "tournament"
+                    and "direct_recovery_tournament_context" in out
+                ):
+                    calibrator_context = out["direct_recovery_tournament_context"].to(dtype=delta.dtype)
+                else:
+                    calibrator_context = relative_features.to(dtype=delta.dtype)
                 if self.direct_recovery_evidence_calibrator_context_detach:
                     calibrator_context = calibrator_context.detach()
                 calibrator_parts.append(calibrator_context)
@@ -934,6 +1000,27 @@ class OCRAPModel(nn.Module):
                     nonharm_logit = torch.where(nominal_mask, torch.zeros_like(nonharm_logit), nonharm_logit)
                     benefit_logit = torch.where(nominal_mask, torch.zeros_like(benefit_logit), benefit_logit)
                 harm_logit = -nonharm_logit
+                if (
+                    evidence_calibrator_residual is not None
+                    and self.direct_recovery_evidence_calibrator_mode == "dual_tail_context"
+                ):
+                    # v48.18 DUET-BRIDGE: benefit and harm are independent tails.
+                    # A candidate can be simultaneously uncertain/ambiguous in both
+                    # tails; deployment then applies the harm veto rather than
+                    # forcing one class probability down through a simplex softmax.
+                    benefit_logit = benefit_logit + evidence_calibrator_residual[:, 0]
+                    harm_logit = harm_logit + evidence_calibrator_residual[:, 1]
+                    # The calibrator is a recovery-candidate correction only.
+                    # Keep nominal evidence exactly at the source identity even
+                    # after the residual output biases have been trained.
+                    if nominal_mask is not None:
+                        benefit_logit = torch.where(
+                            nominal_mask, torch.zeros_like(benefit_logit), benefit_logit
+                        )
+                        harm_logit = torch.where(
+                            nominal_mask, torch.zeros_like(harm_logit), harm_logit
+                        )
+                    nonharm_logit = -harm_logit
                 benefit_prob = torch.sigmoid(benefit_logit)
                 harm_prob = torch.sigmoid(harm_logit)
                 if (

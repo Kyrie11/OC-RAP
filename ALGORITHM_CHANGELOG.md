@@ -1,3 +1,54 @@
+## v48.18 — OC-TRAC-DUET-BRIDGE (2026-07-30)
+
+### v48.17 result audit and corrected Natural-gate status
+
+- The uploaded package does not contain the main `runs/ocrap_v48_17_bridge_dedicated_4817` directory, so its controller log cannot be inspected directly. However, the main controller invokes the same adaptation script used by the uploaded B/C ablations, and all four B/C logs show completed training followed by the same post-check failure: 78,630 `direct_evidence_calibrators.*` state parameters rejected against a hard-coded maximum of 20,000. The deterministic early-exit path therefore explains the reported missing main-run artifacts.
+- `run_v48_17_bridge_dedicated.sh` then exited with code 30 before invoking the certificate controller and before running `check_v48_16_learning_gates.py`. This directly explains the simultaneous absence of `learning_gates_v48_17.json` and `NEXT_COMMANDS.txt`.
+- The A_simplex_scalar ablation is the only v48.17 component with a valid, non-empty, scene-disjoint certificate. Both variants were genuinely rejected: Near used 290 groups/123 scenes and Contact 764 groups/215 scenes, but both selected zero verify groups and had zero positive recall.
+- B_context_simplex and C_full_bridge cannot be assigned a Natural-gate result because their completed checkpoints were blocked before certificate. Their dev curves are diagnostic only.
+
+### v48.17 algorithm attribution
+
+1. **Retain the frozen top-k recovery proposal and Safe nominal lock.** The proposal continues to expose useful positive candidates, and the 120-scene paired Safe experiment passed all available non-inferiority checks with zero candidate-minus-baseline deltas.
+2. **Context contains useful signal, but the v48.17 representation is statistically inefficient.** Relative-context BRIDGE improved Near dev positive recall in several epochs and modestly improved Contact recall in Precision, but it fed roughly 4,890 raw relative features into a 78,630-parameter calibrator despite only 60 deployable-positive adaptation groups.
+3. **The three-class simplex correction is not appropriate for the observed target ambiguity.** It forces harm, dead and benefit to compete for unit mass. In Contact, a candidate may carry both benefit evidence and unresolved harm evidence; forcing one tail down can create false-safe decisions.
+4. **The advertised batch-balanced objective was only auxiliary.** v48.17 added per-regime/class-balanced loss on top of the original top-1/top-k group ERM, so dead/mixed groups still dominated the primary gradient. The implementation did not match the intended “replace dead-zone-dominated ERM” contract.
+5. **Checkpoint selection remained vulnerable to one-regime collapse.** Fold-robust risk could select an epoch with Near improvement but near-zero Contact recall, or vice versa.
+
+### Engineering corrections
+
+1. Replace the fixed 20,000-parameter v48.17 post-check with a configurable architecture-aware cap (`MAX_EVIDENCE_CALIBRATOR_PARAMS`, default 100,000 for recovery of existing BRIDGE checkpoints).
+2. Always emit a learning-gate report and controller completion record, including on adaptation failure/exit 30. A missing report is no longer overloaded with “gate failed”.
+3. Add `recover_v48_17_after_param_guard.sh` to reuse already-trained v48.17 checkpoints and run the withheld certificate without retraining.
+4. Persist the evidence context source and new objective flags in checkpoints/inference configuration.
+5. Add tests for identity initialization, tournament-context dimensionality, independent dual tails and cross-regime checkpoint risk. Full local validation: 176 tests passed; Python compileall and all Shell syntax checks passed.
+
+### New algorithm: DUET-BRIDGE
+
+**DUET-BRIDGE = Dual-tail Uncoupled Evidence Transfer with frozen tournament context and balanced target adaptation.**
+
+1. **Frozen tournament context instead of raw relative features.** The evidence calibrator consumes the 48-dimensional contextual recovery embedding already produced by the frozen set tournament. This preserves proposal semantics while reducing the default two-regime calibrator from 78,630 parameters to 1,532 parameters.
+2. **Independent benefit and harm residual tails.** A zero-initialized bounded residual is added independently to source benefit and harm logits. The model is no longer forced onto a three-class simplex; ambiguous candidates may have both tails elevated and are conservatively rejected by the harm veto. Nominal rows are explicitly pinned back to zero logits after correction so trained residual biases cannot alter nominal semantics.
+3. **Independent-tail supervision.** Beneficial candidates supervise `(benefit=1, harm=0)`, harmful candidates `(0,1)`, and dead-zone candidates `(0,0)` using two BCE losses.
+4. **Strict per-regime/per-class balanced replacement.** In calibrator-only adaptation, the minibatch-balanced objective replaces the dead-zone-dominated evidence ERM rather than being added as a weak auxiliary term.
+5. **Cross-regime feasibility checkpoint metric.** `direct_duet_selection_risk` adds the minimum Near/Contact recall shortfall and worst-regime harm/false-intervention penalties to the held-out dev certificate risk. This changes only early stopping; the final Natural gate remains unchanged and scene-disjoint.
+
+### Required v48.18 ablations
+
+- A_dual_scalar: independent benefit/harm tails with the four source scalar inputs.
+- B_dual_tournament: A plus frozen tournament context.
+- C_dual_tournament_balanced: B plus stratified batches and strict balanced replacement.
+- D_full_duet: C plus cross-regime feasibility checkpoint selection.
+
+All eight tasks (four groups × Balanced/Precision) launch together. Tasks are assigned round-robin so each A30 runs four low-memory jobs; each task defaults to one DataLoader worker to limit CPU/I/O contention.
+
+### Decision and non-repetition rules
+
+- Do not create `NEXT_COMMANDS.txt` or run test/stress closed loop on exit 20 or 30. Stress remains authorized only by a valid independent Near+Contact certificate.
+- Do not repeat the 78,630-parameter raw-context calibrator, simplex-only target correction, “balanced as auxiliary” loss, full Evidence retraining, threshold relaxation, or test-guided tuning.
+- If repaired v48.17 returns 0, run its authorized stress experiment before v48.18 and preserve it as a valid comparison. If it returns 20, treat that as a true v48.17 algorithmic rejection and proceed to v48.18 without reading test results.
+
+
 ## v48.14 — OC-TRAC-PRISM (2026-07-29)
 
 ### Evidence from the completed v48.13 TERRA experiment

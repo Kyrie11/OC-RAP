@@ -1396,6 +1396,8 @@ def direct_uncertainty_recovery_value_loss(
     ordinal_evidence_hard_example_gamma: float = 2.0,
     ordinal_evidence_class_balanced_weight: float = 0.0,
     ordinal_evidence_batch_balanced: bool = False,
+    ordinal_evidence_independent_tails: bool = False,
+    ordinal_evidence_balanced_replaces_erm: bool = False,
     ordinal_evidence_benefit_margin_weight: float = 0.0,
     ordinal_evidence_harm_margin_weight: float = 0.0,
     ordinal_evidence_target_probability: float = 0.60,
@@ -1946,21 +1948,39 @@ def direct_uncertainty_recovery_value_loss(
         if opp_delta_logits is not None and harm_delta_logits is not None and (
             float(ordinal_evidence_ordered_nll_top1_weight) > 0.0
             or float(ordinal_evidence_ordered_nll_all_weight) > 0.0
+            or bool(ordinal_evidence_batch_balanced)
         ):
             p_benefit = torch.sigmoid(opp_delta_logits)
             p_harm = torch.sigmoid(harm_delta_logits)
-            p_dead = (1.0 - p_benefit - p_harm).clamp_min(1.0e-6)
-            probs = torch.stack([p_harm, p_dead, p_benefit], dim=-1).clamp_min(1.0e-6)
-            probs = probs / probs.sum(dim=-1, keepdim=True).clamp_min(1.0e-6)
             classes = torch.ones_like(t_delta, dtype=torch.long)
             classes = torch.where(t_delta >= float(positive_gain), torch.full_like(classes, 2), classes)
             classes = torch.where(t_delta <= -float(negative_gain), torch.zeros_like(classes), classes)
-            class_weights = probs.new_tensor([
+            class_weights = p_benefit.new_tensor([
                 float(ordinal_evidence_harm_class_weight),
                 float(ordinal_evidence_dead_class_weight),
                 float(ordinal_evidence_benefit_class_weight),
             ])
-            nll = -torch.log(probs[torch.arange(probs.shape[0], device=probs.device), classes])
+            if bool(ordinal_evidence_independent_tails):
+                # v48.18 DUET-BRIDGE: benefit and harm are separate hypotheses.
+                # Dead-zone candidates supervise both tails to zero; ambiguous
+                # candidates may retain elevated probabilities in both tails and
+                # are rejected by the downstream harm veto rather than being
+                # artificially forced onto a three-class simplex.
+                benefit_binary = (classes == 2).to(dtype=p_benefit.dtype)
+                harm_binary = (classes == 0).to(dtype=p_harm.dtype)
+                nll = 0.5 * (
+                    F.binary_cross_entropy_with_logits(
+                        opp_delta_logits, benefit_binary, reduction="none"
+                    )
+                    + F.binary_cross_entropy_with_logits(
+                        harm_delta_logits, harm_binary, reduction="none"
+                    )
+                )
+            else:
+                p_dead = (1.0 - p_benefit - p_harm).clamp_min(1.0e-6)
+                probs = torch.stack([p_harm, p_dead, p_benefit], dim=-1).clamp_min(1.0e-6)
+                probs = probs / probs.sum(dim=-1, keepdim=True).clamp_min(1.0e-6)
+                nll = -torch.log(probs[torch.arange(probs.shape[0], device=probs.device), classes])
             nll = nll * class_weights[classes]
             # v48.14 PRISM: calibration-domain evidence adaptation must focus on
             # the errors that invalidate a selective safety certificate.  Static
@@ -1983,9 +2003,12 @@ def direct_uncertainty_recovery_value_loss(
                     nll * (1.0 + float(ordinal_evidence_hard_benefit_weight) * benefit_hardness),
                     nll,
                 )
-            if float(ordinal_evidence_ordered_nll_all_weight) > 0.0:
+            replace_evidence_erm = bool(
+                ordinal_evidence_batch_balanced and ordinal_evidence_balanced_replaces_erm
+            )
+            if float(ordinal_evidence_ordered_nll_all_weight) > 0.0 and not replace_evidence_erm:
                 terms.append(float(ordinal_evidence_ordered_nll_all_weight) * nll.mean())
-            if float(ordinal_evidence_ordered_nll_top1_weight) > 0.0:
+            if float(ordinal_evidence_ordered_nll_top1_weight) > 0.0 and not replace_evidence_erm:
                 policy_j = int(torch.argmax(r_delta.detach()).item())
                 terms.append(float(ordinal_evidence_ordered_nll_top1_weight) * nll[policy_j])
             else:
@@ -1995,7 +2018,7 @@ def direct_uncertainty_recovery_value_loss(
             # proposal, matching deployment and exposing hard runner-up errors.
             proposal_k = min(max(1, int(ordinal_evidence_proposal_topk)), int(r_delta.numel()))
             proposal_idx = torch.topk(r_delta.detach(), k=proposal_k).indices
-            if float(ordinal_evidence_proposal_topk_weight) > 0.0:
+            if float(ordinal_evidence_proposal_topk_weight) > 0.0 and not replace_evidence_erm:
                 decay = max(0.0, min(1.0, float(ordinal_evidence_proposal_rank_decay)))
                 rank_weights = nll.new_tensor([decay ** i for i in range(proposal_k)])
                 rank_weights = rank_weights / rank_weights.sum().clamp_min(1.0e-6)
@@ -2198,12 +2221,29 @@ def direct_uncertainty_recovery_value_loss(
                     )
             if class_terms:
                 regime_terms.append(torch.stack(class_terms).mean())
+        balanced_terms: list[torch.Tensor] = []
         if regime_terms and float(ordinal_evidence_class_balanced_weight) > 0.0:
-            grouped = grouped + float(ordinal_evidence_class_balanced_weight) * torch.stack(regime_terms).mean()
+            balanced_terms.append(
+                float(ordinal_evidence_class_balanced_weight) * torch.stack(regime_terms).mean()
+            )
         if benefit_margin_terms:
-            grouped = grouped + float(ordinal_evidence_benefit_margin_weight) * torch.stack(benefit_margin_terms).mean()
+            balanced_terms.append(
+                float(ordinal_evidence_benefit_margin_weight) * torch.stack(benefit_margin_terms).mean()
+            )
         if harm_margin_terms:
-            grouped = grouped + float(ordinal_evidence_harm_margin_weight) * torch.stack(harm_margin_terms).mean()
+            balanced_terms.append(
+                float(ordinal_evidence_harm_margin_weight) * torch.stack(harm_margin_terms).mean()
+            )
+        if balanced_terms:
+            balanced_objective = torch.stack(balanced_terms).sum()
+            if bool(ordinal_evidence_balanced_replaces_erm):
+                # Calibrator-only target adaptation: the balanced objective is the
+                # evidence ERM, not an auxiliary term added on top of dead-zone-
+                # dominated per-group NLL.  Other explicitly enabled cross-group
+                # objectives and the residual anchor are still added below.
+                grouped = balanced_objective
+            else:
+                grouped = grouped + balanced_objective
     # Cross-group, regime-local AUC surrogates for the frozen policy's selected
     # candidate.  The ordered NLL calibrates probabilities; these terms enforce
     # the ranking needed to distinguish beneficial and harmful tails across

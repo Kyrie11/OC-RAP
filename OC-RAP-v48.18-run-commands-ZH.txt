@@ -1,0 +1,111 @@
+# ============================================================
+# OC-RAP v48.18 下一步执行命令
+# 两张 A30：GPU0=0, GPU1=1
+# ============================================================
+
+cd /path/to/OC-RAP-v48.18-DUET-BRIDGE
+export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
+
+# ------------------------------------------------------------
+# 1. 优先恢复已经完成训练的 v48.17，不重新训练
+# ------------------------------------------------------------
+set +e
+OUTPUTDIR=runs/ocrap_v48_17_bridge_dedicated_4817 \
+OCRAP_ROOT=/data0/senzeyu2/dataset/OCRAP \
+PROTOCOL_ROOT=/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814 \
+CAL_SAFE=/data0/senzeyu2/dataset/OCRAP/calibration_safe \
+GPU0=0 GPU1=1 \
+MAX_EVIDENCE_CALIBRATOR_PARAMS=100000 \
+bash scripts/recover_v48_17_after_param_guard.sh \
+> runs/ocrap_v48_17_bridge_dedicated_4817/recover_controller.log 2>&1
+RC=$?
+set -e
+
+echo "v48.17 recovered certificate rc=$RC"
+# RC=0  : certificate有效且Near+Contact通过，NEXT_COMMANDS.txt已生成
+# RC=20 : certificate有效但Natural gate真实失败
+# RC=30 : 工程/数据/checkpoint/certificate失败，不能做算法归因
+
+# v48.17 只有RC=0才运行：
+OUT=runs/ocrap_v48_17_bridge_dedicated_4817 \
+GPU0=0 GPU1=1 CL_RESUME=0 \
+bash scripts/run_v48_17_stress_if_authorized.sh
+
+# ------------------------------------------------------------
+# 2. v48.17返回20后，运行v48.18 DUET-BRIDGE主实验
+# ------------------------------------------------------------
+set +e
+OUTPUTDIR=runs/ocrap_v48_18_duet_dedicated_4818 \
+SOURCE_RUN=runs/ocrap_v48_13_terra_proxy_4801 \
+OCRAP_ROOT=/data0/senzeyu2/dataset/OCRAP \
+PROTOCOL_ROOT=/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814 \
+CAL_SAFE=/data0/senzeyu2/dataset/OCRAP/calibration_safe \
+GPU0=0 GPU1=1 \
+NUM_WORKERS=5 PREFETCH_FACTOR=2 BATCH_SIZE=72 \
+EVIDENCE_ADAPT_EPOCHS=20 EVIDENCE_ADAPT_PATIENCE=5 \
+EVIDENCE_ADAPT_LR=0.00020 \
+EVIDENCE_CALIBRATOR_HIDDEN=12 \
+EVIDENCE_CALIBRATOR_SCALE=0.50 \
+EVIDENCE_CALIBRATOR_MODE=dual_tail_context \
+EVIDENCE_CALIBRATOR_CONTEXT=true \
+EVIDENCE_CALIBRATOR_CONTEXT_SOURCE=tournament \
+ORDINAL_EVIDENCE_INDEPENDENT_TAILS=true \
+ORDINAL_EVIDENCE_BATCH_BALANCED=true \
+ORDINAL_EVIDENCE_BALANCED_REPLACES_ERM=true \
+GROUP_BATCH_STRATIFIED=true \
+POLICY_METRIC_MIN_POSITIVE_RECALL=0.25 \
+POLICY_METRIC_CROSS_MIN_RECALL=0.25 \
+POLICY_METRIC_CROSS_RECALL_WEIGHT=2.0 \
+POLICY_METRIC_CROSS_HARM_WEIGHT=0.50 \
+POLICY_METRIC_CROSS_FALSE_WEIGHT=0.20 \
+bash scripts/run_v48_18_duet_dedicated.sh \
+> runs/ocrap_v48_18_duet_dedicated_4818.controller.log 2>&1
+RC=$?
+set -e
+
+echo "v48.18 rc=$RC"
+# 检查：
+# runs/ocrap_v48_18_duet_dedicated_4818/learning_gates_v48_18.json
+# runs/ocrap_v48_18_duet_dedicated_4818/V48_18_COMPLETE.json
+# RC=0时还应存在NEXT_COMMANDS.txt
+
+# v48.18 只有RC=0才运行：
+OUT=runs/ocrap_v48_18_duet_dedicated_4818 \
+GPU0=0 GPU1=1 CL_RESUME=0 \
+bash scripts/run_v48_18_stress_if_authorized.sh
+
+# ------------------------------------------------------------
+# 3. 四组消融 × 两variant，一次性8任务并发
+# 每张A30四个低显存任务；每任务1个DataLoader worker
+# ------------------------------------------------------------
+nohup env \
+ABLATION_ROOT=runs/ocrap_v48_18_duet_ablations \
+SOURCE_RUN=runs/ocrap_v48_13_terra_proxy_4801 \
+OCRAP_ROOT=/data0/senzeyu2/dataset/OCRAP \
+PROTOCOL_ROOT=/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814 \
+CAL_SAFE=/data0/senzeyu2/dataset/OCRAP/calibration_safe \
+GPU0=0 GPU1=1 \
+NUM_WORKERS=1 PREFETCH_FACTOR=2 BATCH_SIZE=64 \
+EVIDENCE_ADAPT_EPOCHS=20 EVIDENCE_ADAPT_PATIENCE=5 \
+EVIDENCE_ADAPT_LR=0.00020 \
+bash scripts/run_v48_18_parallel_ablations.sh \
+> runs/ocrap_v48_18_duet_ablations.controller.log 2>&1 </dev/null &
+
+# 监控：
+tail -f runs/ocrap_v48_18_duet_ablations.controller.log
+
+# 完成标记：
+# runs/ocrap_v48_18_duet_ablations/ABLATIONS_COMPLETE.json
+# 汇总：
+# runs/ocrap_v48_18_duet_ablations/ablation_summary_v48_18.json
+
+# ------------------------------------------------------------
+# 4. 结果解释
+# ------------------------------------------------------------
+# RC=30：仅工程归因；先查PIPELINE_FAILED、ADAPTATION_FAILED、CALIBRATION_FAILED
+# RC=20：有效算法失败；不运行test/stress，不修改gate阈值
+# RC=0 ：运行stress，随后与外部baseline做同scene/同指标比较
+
+# Near外部closed-loop结果当前仅30-34/50，不应作为最终论文表。
+# Safe paired 120 scenes已经paper_safe_claim_ready=true，无需为了v48.18重复训练Safe策略；
+# 但最终chosen checkpoint可按论文协议再跑一次paired确认哈希与主实验一致。

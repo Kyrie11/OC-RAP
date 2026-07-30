@@ -120,6 +120,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set model.direct_recovery_evidence_calibrator_mode="${EVIDENCE_CALIBRATOR_MODE:-center_width}" \
   --set model.direct_recovery_evidence_calibrator_context="${EVIDENCE_CALIBRATOR_CONTEXT:-false}" \
   --set model.direct_recovery_evidence_calibrator_context_detach="${EVIDENCE_CALIBRATOR_CONTEXT_DETACH:-true}" \
+  --set model.direct_recovery_evidence_calibrator_context_source="${EVIDENCE_CALIBRATOR_CONTEXT_SOURCE:-relative}" \
   --set loss_weights.dep=0 --set loss_weights.orc=0 --set loss_weights.assign=0 \
   --set loss_weights.sig=0 --set loss_weights.margin=0 --set loss_weights.obs=0 \
   --set loss_weights.anti_oracle=0 --set loss_weights.artifact_gap=0 \
@@ -199,6 +200,8 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.direct_value_ordinal_evidence_hard_example_gamma="${ORDINAL_EVIDENCE_HARD_EXAMPLE_GAMMA:-2.0}" \
   --set training.direct_value_ordinal_evidence_class_balanced_weight="${ORDINAL_EVIDENCE_CLASS_BALANCED_WEIGHT:-0.0}" \
   --set training.direct_value_ordinal_evidence_batch_balanced="${ORDINAL_EVIDENCE_BATCH_BALANCED:-false}" \
+  --set training.direct_value_ordinal_evidence_independent_tails="${ORDINAL_EVIDENCE_INDEPENDENT_TAILS:-false}" \
+  --set training.direct_value_ordinal_evidence_balanced_replaces_erm="${ORDINAL_EVIDENCE_BALANCED_REPLACES_ERM:-false}" \
   --set training.direct_value_ordinal_evidence_benefit_margin_weight="${ORDINAL_EVIDENCE_BENEFIT_MARGIN_WEIGHT:-0.0}" \
   --set training.direct_value_ordinal_evidence_harm_margin_weight="${ORDINAL_EVIDENCE_HARM_MARGIN_WEIGHT:-0.0}" \
   --set training.direct_value_ordinal_evidence_target_probability="${ORDINAL_EVIDENCE_TARGET_PROBABILITY:-0.60}" \
@@ -222,6 +225,10 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.direct_policy_metric_rank_false_switch_weight="${POLICY_METRIC_RANK_FALSE_WEIGHT:-0.15}" \
   --set training.direct_policy_metric_min_fold_positive="${POLICY_METRIC_MIN_FOLD_POSITIVE:-6}" \
   --set training.direct_policy_metric_robust_top_k="${POLICY_METRIC_ROBUST_TOP_K:-2}" \
+  --set training.direct_policy_metric_cross_regime_min_recall="${POLICY_METRIC_CROSS_MIN_RECALL:-0.25}" \
+  --set training.direct_policy_metric_cross_regime_recall_weight="${POLICY_METRIC_CROSS_RECALL_WEIGHT:-2.0}" \
+  --set training.direct_policy_metric_cross_regime_harm_weight="${POLICY_METRIC_CROSS_HARM_WEIGHT:-0.50}" \
+  --set training.direct_policy_metric_cross_regime_false_weight="${POLICY_METRIC_CROSS_FALSE_WEIGHT:-0.20}" \
   --set training.direct_policy_metric_opportunity_threshold="${POLICY_METRIC_OPP_THRESHOLD:-0.65}" \
   --set training.direct_policy_metric_harm_threshold="${POLICY_METRIC_HARM_THRESHOLD:-0.30}" \
   --set training.direct_policy_metric_rank_margin_threshold="${POLICY_METRIC_RANK_MARGIN:-0.020}" \

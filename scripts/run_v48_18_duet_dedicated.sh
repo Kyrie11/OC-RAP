@@ -2,7 +2,7 @@
 set -euo pipefail
 REPO="${OCRAP_REPO:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$REPO"; export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"; export PYTHONUNBUFFERED=1
-OUTPUTDIR="${OUTPUTDIR:-runs/ocrap_v48_17_bridge_dedicated_4817}"
+OUTPUTDIR="${OUTPUTDIR:-runs/ocrap_v48_18_duet_dedicated_4818}"
 OCRAP_ROOT="${OCRAP_ROOT:-/data0/senzeyu2/dataset/OCRAP}"
 SOURCE_RUN="${SOURCE_RUN:-runs/ocrap_v48_13_terra_proxy_4801}"
 PROTOCOL_ROOT="${PROTOCOL_ROOT:-$OCRAP_ROOT/calibration_v48_14_prism_4814}"
@@ -31,7 +31,7 @@ run_variant(){
   NUM_WORKERS="${NUM_WORKERS:-5}" PREFETCH_FACTOR="${PREFETCH_FACTOR:-2}" BATCH_SIZE="${BATCH_SIZE:-72}" \
   EVIDENCE_ADAPT_EPOCHS="${EVIDENCE_ADAPT_EPOCHS:-20}" EVIDENCE_ADAPT_PATIENCE="${EVIDENCE_ADAPT_PATIENCE:-5}" \
   EVIDENCE_ADAPT_LR="${EVIDENCE_ADAPT_LR:-0.00030}" \
-    bash scripts/adapt_ocrap_v48_17_bridge_variant.sh >"$OUTPUTDIR/logs/adapt_${variant}.log" 2>&1
+    bash scripts/adapt_ocrap_v48_18_duet_variant.sh >"$OUTPUTDIR/logs/adapt_${variant}.log" 2>&1
   local rc=$?; set -e
   if [[ "$rc" != 0 ]]; then
     python - "$OUTPUTDIR" "$variant" "$rc" "$OUTPUTDIR/logs/adapt_${variant}.log" <<'PY'
@@ -47,16 +47,16 @@ run_variant balanced "$GPU0" & p0=$!; run_variant precision "$GPU1" & p1=$!
 set +e; wait "$p0"; s0=$?; wait "$p1"; s1=$?; set -e
 printf 'balanced=%s precision=%s\n' "$s0" "$s1" | tee "$OUTPUTDIR/logs/adaptation_status.log"
 if [[ "$s0" != 0 && "$s1" != 0 ]]; then
-  printf '{"event":"v48_17_pipeline_failed","balanced":%s,"precision":%s}\n' "$s0" "$s1" > "$OUTPUTDIR/PIPELINE_FAILED.json"
-  python tools/check_v48_16_learning_gates.py --run "$OUTPUTDIR" --output "$OUTPUTDIR/learning_gates_v48_17.json" --version v48.17-BRIDGE || true
+  printf '{"event":"v48_18_pipeline_failed","balanced":%s,"precision":%s}\n' "$s0" "$s1" > "$OUTPUTDIR/PIPELINE_FAILED.json"
+  python tools/check_v48_16_learning_gates.py --run "$OUTPUTDIR" --output "$OUTPUTDIR/learning_gates_v48_18.json" --version v48.18-DUET-BRIDGE || true
   python - "$OUTPUTDIR" "$PROTOCOL_ROOT" "$SOURCE_RUN" <<'PY'
 import hashlib,json,pathlib,sys,time
 root,protocol,source=map(pathlib.Path,sys.argv[1:4]); variants={}
 for name in ('balanced','precision'):
  p=root/'candidates'/name/'model_v48_trac_sr'/'best.pt'
  if p.is_file(): variants[name]={'checkpoint':str(p),'sha256':hashlib.sha256(p.read_bytes()).hexdigest()}
-doc={'event':'v48_17_bridge_controller_complete','created_unix':time.time(),'source_run':str(source),'protocol_root':str(protocol),'variants':variants,'certificate_exit_code':30,'gate_evaluated':False,'gate_passed':False,'pipeline_valid':False,'test_roots_read':False}
-(root/'V48_17_COMPLETE.json').write_text(json.dumps(doc,indent=2)+'\n')
+doc={'event':'v48_18_duet_bridge_controller_complete','created_unix':time.time(),'source_run':str(source),'protocol_root':str(protocol),'variants':variants,'certificate_exit_code':30,'gate_evaluated':False,'gate_passed':False,'pipeline_valid':False,'test_roots_read':False}
+(root/'V48_18_COMPLETE.json').write_text(json.dumps(doc,indent=2)+'\n')
 PY
   exit 30
 fi
@@ -66,14 +66,14 @@ OUTPUTDIR="$OUTPUTDIR" CAL_SAFE="$CAL_SAFE" CERT_NEAR="$CERT_NEAR" CERT_CONTACT=
   bash scripts/calibrate_v48_16_certificate_pool.sh >"$OUTPUTDIR/logs/certificate_controller.log" 2>&1
 rc=$?
 set -e
-python tools/check_v48_16_learning_gates.py --run "$OUTPUTDIR" --output "$OUTPUTDIR/learning_gates_v48_17.json" --version v48.17-BRIDGE || true
+python tools/check_v48_16_learning_gates.py --run "$OUTPUTDIR" --output "$OUTPUTDIR/learning_gates_v48_18.json" --version v48.18-DUET-BRIDGE || true
 python - "$OUTPUTDIR" "$PROTOCOL_ROOT" "$SOURCE_RUN" "$rc" <<'PY'
 import hashlib,json,pathlib,sys,time
 root,protocol,source=map(pathlib.Path,sys.argv[1:4]); rc=int(sys.argv[4]); variants={}
 for name in ('balanced','precision'):
  p=root/'candidates'/name/'model_v48_trac_sr'/'best.pt'
  if p.is_file(): variants[name]={'checkpoint':str(p),'sha256':hashlib.sha256(p.read_bytes()).hexdigest()}
-doc={'event':'v48_17_bridge_controller_complete','created_unix':time.time(),'source_run':str(source),'protocol_root':str(protocol),'variants':variants,'certificate_exit_code':rc,'gate_evaluated':rc in (0,20),'gate_passed':(root/'NEXT_COMMANDS.txt').is_file(),'pipeline_valid':rc in (0,20),'test_roots_read':False}
-(root/'V48_17_COMPLETE.json').write_text(json.dumps(doc,indent=2)+'\n')
+doc={'event':'v48_18_duet_bridge_controller_complete','created_unix':time.time(),'source_run':str(source),'protocol_root':str(protocol),'variants':variants,'certificate_exit_code':rc,'gate_evaluated':rc in (0,20),'gate_passed':(root/'NEXT_COMMANDS.txt').is_file(),'pipeline_valid':rc in (0,20),'test_roots_read':False}
+(root/'V48_18_COMPLETE.json').write_text(json.dumps(doc,indent=2)+'\n')
 PY
 exit "$rc"

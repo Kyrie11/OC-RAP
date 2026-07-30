@@ -1,0 +1,22 @@
+OC-RAP v48.18 DUET-BRIDGE local validation
+Date: 2026-07-30
+
+Scope:
+- Static validation only; this environment does not contain the user's real WOMD/Waymax datasets or two A30 GPUs.
+- No Natural-gate or closed-loop result was fabricated.
+
+Results:
+- Python compileall (src, tests, tools): PASS
+- pytest: 176 passed, 5 warnings
+- bash -n for every scripts/*.sh: PASS
+- Default two-regime DUET calibrator parameter count: 1,532 (required 0 < count <= 5,000): PASS
+- Zero-initialized correction identity: PASS
+- Learned residual cannot alter nominal benefit/harm logits: PASS
+- Tournament-context shape and checkpoint/inference propagation: PASS
+- Independent dual-tail non-simplex behavior: PASS
+- Cross-regime checkpoint-risk test: PASS
+
+Known runtime requirement:
+- v48.17 recovery requires the already-trained server-side checkpoints under
+  runs/ocrap_v48_17_bridge_dedicated_4817/candidates/{balanced,precision}/model_v48_trac_sr/best.pt.
+- Stress closed loop remains blocked unless a valid scene-disjoint certificate returns RC=0 and writes NEXT_COMMANDS.txt.

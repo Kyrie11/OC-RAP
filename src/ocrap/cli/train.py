@@ -351,6 +351,8 @@ def _direct_value_loss_from_outputs(
         ordinal_evidence_hard_example_gamma=float(tcfg.get("direct_value_ordinal_evidence_hard_example_gamma", 2.0)),
         ordinal_evidence_class_balanced_weight=float(tcfg.get("direct_value_ordinal_evidence_class_balanced_weight", 0.0)),
         ordinal_evidence_batch_balanced=bool(tcfg.get("direct_value_ordinal_evidence_batch_balanced", False)),
+        ordinal_evidence_independent_tails=bool(tcfg.get("direct_value_ordinal_evidence_independent_tails", False)),
+        ordinal_evidence_balanced_replaces_erm=bool(tcfg.get("direct_value_ordinal_evidence_balanced_replaces_erm", False)),
         ordinal_evidence_benefit_margin_weight=float(tcfg.get("direct_value_ordinal_evidence_benefit_margin_weight", 0.0)),
         ordinal_evidence_harm_margin_weight=float(tcfg.get("direct_value_ordinal_evidence_harm_margin_weight", 0.0)),
         ordinal_evidence_target_probability=float(tcfg.get("direct_value_ordinal_evidence_target_probability", 0.60)),
@@ -773,6 +775,43 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
         vals = [v for k, v in out.items() if k.startswith("direct_certificate_risk_mean_") and "fold" in k]
         if vals:
             out["direct_certificate_risk_fold_worst"] = max(vals)
+
+    # v48.18 DUET-BRIDGE: select checkpoints for cross-regime feasibility, not
+    # only the average/fold certificate risk.  Sparse target-domain adaptation
+    # repeatedly selected an always-abstain epoch because one regime could mask
+    # the other.  The added term is training/dev-only and does not relax the
+    # held-out Natural gate.
+    base_risk = out.get(
+        "direct_certificate_risk_fold_robust",
+        out.get("direct_certificate_risk_mean_worst", out.get("direct_certificate_risk_fold_worst")),
+    )
+    recall_values = [
+        out[k] for k in ("direct_positive_admission_recall_near", "direct_positive_admission_recall_contact")
+        if k in out
+    ]
+    if base_risk is not None and len(recall_values) == 2:
+        cross_target = float(tcfg.get("direct_policy_metric_cross_regime_min_recall", min_positive_recall))
+        recall_shortfall = max(0.0, cross_target - min(recall_values))
+        harm_values = [
+            out.get("direct_harmful_switch_rate_near", 0.0),
+            out.get("direct_harmful_switch_rate_contact", 0.0),
+        ]
+        false_values = [
+            out.get("direct_false_intervention_rate_near", 0.0),
+            out.get("direct_false_intervention_rate_contact", 0.0),
+        ]
+        duet_risk = (
+            float(base_risk)
+            + float(tcfg.get("direct_policy_metric_cross_regime_recall_weight", 2.0))
+            * recall_shortfall * recall_shortfall
+            + float(tcfg.get("direct_policy_metric_cross_regime_harm_weight", 0.50))
+            * max(harm_values)
+            + float(tcfg.get("direct_policy_metric_cross_regime_false_weight", 0.20))
+            * max(false_values)
+        )
+        out["direct_duet_cross_regime_recall_min"] = min(recall_values)
+        out["direct_duet_cross_regime_recall_shortfall"] = recall_shortfall
+        out["direct_duet_selection_risk"] = duet_risk
     return out
 
 
@@ -1893,6 +1932,7 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_evidence_calibrator_mode=str(model_cfg.get("direct_recovery_evidence_calibrator_mode", "center_width")),
         direct_recovery_evidence_calibrator_context=bool(model_cfg.get("direct_recovery_evidence_calibrator_context", False)),
         direct_recovery_evidence_calibrator_context_detach=bool(model_cfg.get("direct_recovery_evidence_calibrator_context_detach", True)),
+        direct_recovery_evidence_calibrator_context_source=str(model_cfg.get("direct_recovery_evidence_calibrator_context_source", "relative")),
     ).to(device)
     tcfg = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
 
@@ -2143,6 +2183,7 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "direct_recovery_evidence_calibrator_mode": str(model_cfg.get("direct_recovery_evidence_calibrator_mode", "center_width")),
             "direct_recovery_evidence_calibrator_context": bool(model_cfg.get("direct_recovery_evidence_calibrator_context", False)),
             "direct_recovery_evidence_calibrator_context_detach": bool(model_cfg.get("direct_recovery_evidence_calibrator_context_detach", True)),
+            "direct_recovery_evidence_calibrator_context_source": str(model_cfg.get("direct_recovery_evidence_calibrator_context_source", "relative")),
             "model_state": model.state_dict(),
             "optimizer_state": opt.state_dict(),
             "epoch": int(ep),
