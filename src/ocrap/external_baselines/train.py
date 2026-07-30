@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 from pathlib import Path
 from time import perf_counter
@@ -57,6 +58,36 @@ def _loader_kwargs(tcfg: dict[str, Any], *, num_workers: int, pin_memory: bool) 
         kwargs["prefetch_factor"] = int(tcfg.get("prefetch_factor", 2))
     return kwargs
 
+
+
+
+def _atomic_torch_save(payload: dict[str, Any], path: str | Path) -> None:
+    """Write a checkpoint atomically so interrupted saves cannot leave a corrupt file."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+    try:
+        torch.save(payload, tmp)
+        os.replace(tmp, path)
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def _losses_are_finite(losses: dict[str, torch.Tensor]) -> tuple[bool, list[str]]:
+    bad: list[str] = []
+    for name, value in losses.items():
+        if not torch.is_tensor(value) or value.numel() != 1 or not bool(torch.isfinite(value.detach()).all()):
+            bad.append(name)
+    return not bad, bad
+
+def _distributed_any(flag: bool, device: torch.device) -> bool:
+    value = torch.tensor([1 if flag else 0], dtype=torch.int32, device=device)
+    if _distributed_available():
+        dist.all_reduce(value, op=dist.ReduceOp.MAX)
+    return bool(value.item())
 
 def _distributed_available() -> bool:
     return dist.is_available() and dist.is_initialized()
@@ -157,8 +188,12 @@ def _gameformer_traj_loss(out: dict[str, torch.Tensor], batch: dict[str, torch.T
     score_levels = out.get("gameformer_level_scores")
     if not isinstance(traj_levels, list) or not isinstance(score_levels, list) or "prefix_traj" not in batch:
         return out["logits"].sum() * 0.0
-    gt = batch["prefix_traj"].float()
-    valid = batch.get("prefix_valid", torch.ones_like(gt[..., 0])).bool() & batch["mask"].bool().unsqueeze(-1)
+    gt = torch.nan_to_num(batch["prefix_traj"].float(), nan=0.0, posinf=0.0, neginf=0.0)
+    valid = (
+        batch.get("prefix_valid", torch.ones_like(gt[..., 0])).bool()
+        & batch["mask"].bool().unsqueeze(-1)
+        & torch.isfinite(batch["prefix_traj"].float()).all(dim=-1)
+    )
     losses = []
     for traj, scores in zip(traj_levels, score_levels):
         pred = traj[..., :2]
@@ -168,7 +203,10 @@ def _gameformer_traj_loss(out: dict[str, torch.Tensor], batch: dict[str, torch.T
         mask = valid[:, :, None, :T]
         inv_var = torch.exp(-2.0 * log_sigma)
         point_nll = 0.5 * ((pred - target) ** 2 * inv_var).sum(dim=-1) + log_sigma.sum(dim=-1)
-        mode_nll = (point_nll * mask.float()).sum(dim=-1) / mask.float().sum(dim=-1).clamp_min(1.0)
+        # torch.where, unlike multiplication by zero, cannot propagate NaN/Inf
+        # from invalid timesteps into an otherwise valid candidate loss.
+        masked_point_nll = torch.where(mask, point_nll, torch.zeros_like(point_nll))
+        mode_nll = masked_point_nll.sum(dim=-1) / mask.float().sum(dim=-1).clamp_min(1.0)
         best = mode_nll.argmin(dim=-1)
         bidx = torch.arange(B, device=pred.device)[:, None]
         nidx = torch.arange(N, device=pred.device)[None, :]
@@ -293,16 +331,46 @@ def _epoch(model, loader, opt, device, cfg: dict[str, Any], train: bool, *, rank
     show = bool(tcfg.get("tqdm", True)) and rank == 0 and tqdm is not None
     if show:
         iterator = tqdm(loader, desc=("train" if train else "val") + f" ep{epoch:03d}", leave=False, dynamic_ncols=True)
-    for batch in iterator:
+    for batch_index, batch in enumerate(iterator, 1):
         batch = _batch_to_device(batch, device)
         with torch.set_grad_enabled(train):
             out = _forward_model(model, batch, cfg)
             losses = _loss_dict(out, batch, cfg)
             loss = losses["loss"]
+            finite_local, bad_names = _losses_are_finite(losses)
+            # Training ranks execute the same number of batches, so synchronize
+            # before backward to prevent one rank entering a DDP collective while
+            # another rank has already failed. Validation shards intentionally do
+            # not pad; their batch counts may differ, so validation non-finites are
+            # reported locally and propagated through the final totals all-reduce.
+            bad_any_rank = _distributed_any(not finite_local, device) if train else (not finite_local)
+            if bad_any_rank:
+                if not finite_local:
+                    snapshot = {name: float(value.detach().cpu()) for name, value in losses.items()}
+                    print({
+                        "event": "nonfinite_external_baseline_loss",
+                        "rank": int(rank),
+                        "stage": "train" if train else "val",
+                        "epoch": int(epoch),
+                        "batch_index": int(batch_index),
+                        "bad_losses": bad_names,
+                        "losses": snapshot,
+                    }, flush=True)
+                if train:
+                    raise FloatingPointError(
+                        f"Non-finite external-baseline loss detected at stage=train "
+                        f"epoch={epoch} batch={batch_index}. See the rank-local diagnostic above."
+                    )
             if train:
                 opt.zero_grad(set_to_none=True)
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), float(tcfg.get("grad_clip", 5.0)))
+                grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), float(tcfg.get("grad_clip", 5.0)))
+                grad_bad_any_rank = _distributed_any(not bool(torch.isfinite(grad_norm)), device)
+                if grad_bad_any_rank:
+                    raise FloatingPointError(
+                        f"Non-finite gradient norm detected at epoch={epoch} batch={batch_index}; "
+                        "optimizer step was not applied."
+                    )
                 opt.step()
         bs = int(batch["x"].shape[0])
         n += bs
@@ -464,12 +532,27 @@ def train_external_baseline(dataset: str, output: str, cfg: dict[str, Any], *, v
                     "per_rank_batch_size": int(batch_size),
                     "global_batch_size": int(global_batch_size),
                 }
-                torch.save(ckpt, out_dir / "latest.pt")
-                if va.get("loss", float("inf")) <= best_val:
-                    best_val = float(va.get("loss", float("inf")))
+                val_loss = float(va.get("loss", float("nan")))
+                if not math.isfinite(val_loss):
+                    raise FloatingPointError(
+                        f"Validation loss is non-finite at epoch={ep}: {va}. "
+                        "best.pt was intentionally not created from an invalid model."
+                    )
+                # Save the selected best checkpoint first, then latest. On the
+                # first finite validation epoch this condition is always true.
+                if val_loss <= best_val:
+                    best_val = val_loss
                     best_epoch = ep
-                    torch.save(ckpt, out_dir / "best.pt")
+                    ckpt["is_best"] = True
+                    _atomic_torch_save(ckpt, out_dir / "best.pt")
+                ckpt["is_best"] = bool(ep == best_epoch)
+                _atomic_torch_save(ckpt, out_dir / "latest.pt")
                 print({"event": "external_baseline_epoch", "baseline": baseline_name, "epoch": ep, "world_size": world_size, "train_loss": tr.get("loss"), "val_loss": va.get("loss"), "target_acc": va.get("target_acc")}, flush=True)
+        if rank == 0 and not (out_dir / "best.pt").is_file():
+            raise RuntimeError(
+                f"Training completed without a usable best checkpoint in {out_dir}. "
+                "Inspect non-finite loss diagnostics in the training log."
+            )
         summary = {
             "baseline": baseline_name,
             "num_train_groups": len(train_ds),
