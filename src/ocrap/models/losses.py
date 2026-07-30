@@ -1394,6 +1394,12 @@ def direct_uncertainty_recovery_value_loss(
     ordinal_evidence_hard_harm_weight: float = 0.0,
     ordinal_evidence_hard_benefit_weight: float = 0.0,
     ordinal_evidence_hard_example_gamma: float = 2.0,
+    ordinal_evidence_class_balanced_weight: float = 0.0,
+    ordinal_evidence_benefit_margin_weight: float = 0.0,
+    ordinal_evidence_harm_margin_weight: float = 0.0,
+    ordinal_evidence_target_probability: float = 0.60,
+    evidence_calibrator_residual: torch.Tensor | None = None,
+    evidence_calibrator_anchor_weight: float = 0.0,
     ordinal_evidence_proposal_topk_weight: float = 0.0,
     ordinal_evidence_proposal_topk: int = 3,
     ordinal_evidence_proposal_rank_decay: float = 0.75,
@@ -1436,6 +1442,7 @@ def direct_uncertainty_recovery_value_loss(
         pred_rank_logit,
         pred_delta_mean,
         pred_delta_logvar,
+        evidence_calibrator_residual,
     ):
         if optional_output is not None:
             grad_anchor = grad_anchor + optional_output.float().sum() * 0.0
@@ -1986,8 +1993,30 @@ def direct_uncertainty_recovery_value_loss(
                 rank_weights = rank_weights / rank_weights.sum().clamp_min(1.0e-6)
                 terms.append(float(ordinal_evidence_proposal_topk_weight) * (rank_weights * nll[proposal_idx]).sum())
 
-            # Same-group counterfactual comparisons cancel shared scene severity.
+            # v48.16 ANCHOR: adaptation sets are dead-zone heavy. Average
+            # evidence loss per observed class before averaging classes, so the
+            # tiny adapter cannot win by predicting abstention for every proposal.
             proposal_classes = classes[proposal_idx]
+            if float(ordinal_evidence_class_balanced_weight) > 0.0:
+                class_terms = []
+                for class_id in (0, 1, 2):
+                    mask = proposal_classes == class_id
+                    if bool(mask.any()):
+                        class_terms.append(nll[proposal_idx][mask].mean())
+                if class_terms:
+                    terms.append(float(ordinal_evidence_class_balanced_weight) * torch.stack(class_terms).mean())
+
+            target_prob = min(0.99, max(0.51, float(ordinal_evidence_target_probability)))
+            if float(ordinal_evidence_benefit_margin_weight) > 0.0:
+                benefit_idx = proposal_idx[proposal_classes == 2]
+                if benefit_idx.numel():
+                    terms.append(float(ordinal_evidence_benefit_margin_weight) * F.relu(target_prob - p_benefit[benefit_idx]).mean())
+            if float(ordinal_evidence_harm_margin_weight) > 0.0:
+                harm_idx_margin = proposal_idx[proposal_classes == 0]
+                if harm_idx_margin.numel():
+                    terms.append(float(ordinal_evidence_harm_margin_weight) * F.relu(target_prob - p_harm[harm_idx_margin]).mean())
+
+            # Same-group counterfactual comparisons cancel shared scene severity.
             intra_margin = float(ordinal_evidence_intragroup_margin)
             if float(ordinal_evidence_intragroup_benefit_weight) > 0.0:
                 pos_idx = proposal_idx[proposal_classes == 2]
@@ -2167,4 +2196,7 @@ def direct_uncertainty_recovery_value_loss(
             dro_tau = max(float(group_dro_temperature), 1.0e-3)
             robust_grouped = dro_tau * (torch.logsumexp(dm / dro_tau, dim=0) - torch.log(torch.as_tensor(float(dm.numel()), dtype=dm.dtype, device=dm.device)))
             grouped = (1.0 - dro_mix) * erm_grouped + dro_mix * robust_grouped
-    return float(point_weight) * point_loss + grouped + grad_anchor
+    calibrator_anchor = pred_logit.float().sum() * 0.0
+    if evidence_calibrator_residual is not None and float(evidence_calibrator_anchor_weight) > 0.0:
+        calibrator_anchor = float(evidence_calibrator_anchor_weight) * evidence_calibrator_residual.float().pow(2).mean()
+    return float(point_weight) * point_loss + grouped + grad_anchor + calibrator_anchor

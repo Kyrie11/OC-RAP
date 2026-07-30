@@ -2263,6 +2263,13 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
         if len(scene_results) >= total_rollouts:
             break
 
+    if targets and matched_targets == 0 and bool(cl_cfg.get("require_bucket_targets", False)):
+        raise RuntimeError(
+            "No requested bucket target scene matched the raw WOMD source after "
+            f"scanning {raw_seen_this_run} scenarios. Use the complete validation "
+            "shard set and set closed_loop.raw_max_scenarios=0 for sparse target ids."
+        )
+
     # Always leave a final valid partial snapshot, even when the last group has
     # fewer than partial_write_every_scenes rollouts.
     if save_partial:

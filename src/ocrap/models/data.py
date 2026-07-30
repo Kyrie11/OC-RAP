@@ -31,6 +31,36 @@ OPTION_PARAM_DIM = 3
 OPTION_FEATURE_DIM = len(RECOVERY_MODE_VOCAB) + OPTION_PARAM_DIM + 2
 
 
+# v48.16 ANCHOR: protocol-role aliases. Dedicated calibration intentionally
+# renames split_id to make train/dev/certificate roles explicit. All readers
+# must agree on these aliases instead of silently discarding every sample.
+SPLIT_ROLE_ALIASES: dict[str, frozenset[str]] = {
+    "train": frozenset({"train", "evidence_adapt_train"}),
+    "val": frozenset({"val", "evidence_adapt_dev"}),
+    "calibration": frozenset({"calibration", "certificate_pool"}),
+    "certificate_pool": frozenset({"certificate_pool"}),
+    "evidence_adapt_train": frozenset({"evidence_adapt_train"}),
+    "evidence_adapt_dev": frozenset({"evidence_adapt_dev"}),
+}
+
+
+def expand_split_roles(splits: str | set[str] | tuple[str, ...] | list[str]) -> set[str]:
+    """Expand semantic split roles into concrete manifest split_id values."""
+    raw = {splits} if isinstance(splits, str) else {str(x) for x in splits}
+    out: set[str] = set()
+    for item in raw:
+        item = str(item).strip()
+        if not item:
+            continue
+        out.update(SPLIT_ROLE_ALIASES.get(item, frozenset({item})))
+    return out
+
+
+def split_id_matches(split_id: object, allowed: str | set[str] | tuple[str, ...] | list[str]) -> bool:
+    """Return whether a manifest/NPZ split id belongs to an allowed role."""
+    return str(split_id).strip() in expand_split_roles(allowed)
+
+
 def _path_key(path: str | Path) -> str:
     """Stable absolute key for matching sample paths to manifest rows."""
     return os.path.abspath(os.fspath(path))
@@ -593,12 +623,13 @@ class OCRAPSampleDataset(Dataset):
 
 
 def split_paths_by_npz_split(paths: list[Path], split: str | set[str]) -> list[Path]:
-    splits = {split} if isinstance(split, str) else set(split)
-    if "all" in splits:
+    requested = {split} if isinstance(split, str) else set(split)
+    if "all" in requested:
         return list(paths)
+    allowed = expand_split_roles(requested)
     keep: list[Path] = []
     for p in paths:
         sid = str(scalar_metadata_for_path(p, "split_id", ""))
-        if sid in splits:
+        if sid in allowed:
             keep.append(p)
     return keep

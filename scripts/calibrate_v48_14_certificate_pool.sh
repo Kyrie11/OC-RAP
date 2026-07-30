@@ -36,11 +36,14 @@ calibrate_variant() {
   local datasets=("$CERT_NEAR,$CERT_CONTACT" "$CAL_SAFE" "$CERT_NEAR" "$CERT_CONTACT")
   local buckets=(mix safe near contact)
   local mins=(180 80 100 140)
+  local allowed=(certificate_pool calibration certificate_pool certificate_pool)
   for i in 0 1 2 3; do
     CUDA_VISIBLE_DEVICES="$gpu" python -u -m ocrap.cli calibrate \
       --dataset "${datasets[$i]}" --checkpoint "$ckpt" \
       --output "$tmp/calibration_${buckets[$i]}_v48.json" \
       --set calibration.required_min_for_delta="${mins[$i]}" \
+      --set calibration.allowed_split_ids="${allowed[$i]}" \
+      --set calibration.allow_validation_fallback=false \
       2>&1 | tee "$run/logs/v48_14_calibrate_${buckets[$i]}.log"
   done
   python tools/write_gamma_by_bucket.py \
@@ -51,7 +54,7 @@ calibrate_variant() {
     2>&1 | tee "$run/logs/v48_14_gamma.log"
 
   local common=(
-    --checkpoint "$ckpt" --risk-source="${RISK_SOURCE:-ordinal_evidence}"
+    --checkpoint "$ckpt" --risk-source="${RISK_SOURCE:-ordinal_evidence}" --allowed-splits=certificate_pool
     --conditional-recovery-ranking --proposal-top-k "${PROPOSAL_TOP_K:-3}" --evidence-rerank-top-k
     --macro-constraint-mode="${MACRO_CONSTRAINT_MODE:-opportunity_normalized}"
     --max-selected-macro-share="${MAX_SELECTED_MACRO_SHARE:-0.95}"
@@ -83,15 +86,29 @@ calibrate_variant() {
   python - "$tmp" "$variant" "$ckpt" "$sn" "$sc" <<'PY'
 import hashlib,json,pathlib,sys,time
 root=pathlib.Path(sys.argv[1]); variant=sys.argv[2]; ckpt=pathlib.Path(sys.argv[3])
+near_rc,contact_rc=int(sys.argv[4]),int(sys.argv[5])
 required=[
  'calibration_mix_v48.json','calibration_safe_v48.json','calibration_near_v48.json','calibration_contact_v48.json',
  'gamma_rec_by_bucket_v48.json','direct_value_risk_near_v48.json','direct_value_risk_contact_v48.json',
 ]
 missing=[x for x in required if not (root/x).is_file()]
 if missing: raise SystemExit('missing final calibration artifacts: '+','.join(missing))
-doc={'event':'v48_14_certificate_pool_calibration_complete','created_unix':time.time(),
+for name in ('mix','safe','near','contact'):
+    d=json.load(open(root/f'calibration_{name}_v48.json'))
+    if int(d.get('num_samples',0) or 0) <= 0:
+        raise SystemExit(f'empty standard calibration dataset for {name}; splits={d.get("splits")} allowed={d.get("allowed_split_ids")}')
+for name,rc in (('near',near_rc),('contact',contact_rc)):
+    d=json.load(open(root/f'direct_value_risk_{name}_v48.json'))
+    if int(d.get('num_groups',0) or 0) <= 0 or int(d.get('num_scenes',0) or 0) <= 0:
+        raise SystemExit(f'empty policy certificate for {name}; rc={rc}; kept={d.get("kept_split_counts")} allowed={d.get("allowed_split_ids")}')
+    if int(d.get('fit_groups',0) or 0) <= 0 or int(d.get('verify_groups',0) or 0) <= 0:
+        raise SystemExit(f'non-disjoint/empty certificate folds for {name}')
+    if rc not in (0,3):
+        raise SystemExit(f'policy certificate process failed for {name}: rc={rc}')
+doc={'event':'v48_16_certificate_pool_calibration_complete','created_unix':time.time(),
  'variant':variant,'checkpoint':str(ckpt),'checkpoint_sha256':hashlib.sha256(ckpt.read_bytes()).hexdigest(),
- 'near_exit_code':int(sys.argv[4]),'contact_exit_code':int(sys.argv[5]),'test_roots_read':False,
+ 'near_exit_code':near_rc,'contact_exit_code':contact_rc,'gate_evaluated':True,
+ 'certificate_data_valid':True,'allowed_split_id':'certificate_pool','test_roots_read':False,
  'scene_roles_disjoint':True}
 (root/'CERTIFICATE_CALIBRATION_COMPLETE.json').write_text(json.dumps(doc,indent=2)+'\n')
 PY
@@ -106,6 +123,9 @@ PY
   ln -s "$(realpath --relative-to="$view" "$run/model_v48_trac_sr")" "$view/model_v48_trac_sr"
   ln -s "$(realpath --relative-to="$view" "$final")" "$view/calibration"
   ln -s "$(realpath --relative-to="$view" "$contract")" "$view/POLICY_CONTRACT.env"
+  if [[ "$sn" == 0 && "$sc" == 0 ]]; then return 0; fi
+  if [[ ( "$sn" == 0 || "$sn" == 3 ) && ( "$sc" == 0 || "$sc" == 3 ) ]]; then return 20; fi
+  return 30
 }
 
 VARIANTS="${VARIANTS:-balanced,precision}"
@@ -129,6 +149,8 @@ for name in ('balanced','precision'):
         try: d=json.load(open(p))
         except Exception as e:
             report[name][bucket]={'missing':str(e)}; ok=False; continue
+        if int(d.get('num_groups',0) or 0) <= 0 or int(d.get('num_scenes',0) or 0) <= 0:
+            report[name][bucket]={'artifact_error':'empty certificate data','num_groups':d.get('num_groups'),'num_scenes':d.get('num_scenes')}; ok=False; continue
         docs.append(d); ok &= bool(d.get('valid_for_deployment',False))
         report[name][bucket]={
           'valid':d.get('valid_for_deployment'),'candidate_auc':d.get('candidate_positive_auc'),
@@ -146,7 +168,7 @@ status={'event':'v48_14_certificate_candidate_selection','created_unix':time.tim
 (root/'dedicated_recalibration_status.json').write_text(json.dumps(status,ensure_ascii=False,indent=2)+'\n')
 requested_codes=[int(sys.argv[2]) if 'balanced' in requested else 0, int(sys.argv[3]) if 'precision' in requested else 0]
 artifact_failure=any(code not in (0,20) for code in requested_codes) or any(
-    any('missing' in bucket_doc for bucket_doc in variant_doc.values())
+    any(('missing' in bucket_doc or 'artifact_error' in bucket_doc) for bucket_doc in variant_doc.values())
     for variant_doc in report.values()
 )
 if artifact_failure:
@@ -161,8 +183,8 @@ valid.sort(); chosen=valid[0][4]
 (root/'chosen_base_run_dedicated.txt').write_text(str(chosen)+'\n')
 (root/'NEXT_COMMANDS.txt').write_text(
  f'''# Natural gate passed on the scene-disjoint dedicated certificate pool.\n'''
- f'''BASE_RUN={chosen} RUN={root}/safe_paired SAFE_NOMINAL_ONLY=1 RUN_SAFE_PAIRED_SCALAR=1 bash scripts/run_v48_7_safe_noninferiority.sh\n'''
- f'''BASE_RUN={chosen} RUN={root}/stress_closed_loop bash scripts/run_ocrap_v48_trac_sr.sh\n''')
+ f'''BASE_RUN={chosen} RUN={root}/safe_paired SAFE_NOMINAL_ONLY=1 RUN_SAFE_PAIRED_SCALAR=1 SAFE_WOMD_SOURCE=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord@150 SAFE_RAW_MAX_SCENARIOS=0 bash scripts/run_v48_7_safe_noninferiority.sh\n'''
+ f'''OUT={root} bash scripts/run_v48_16_stress_if_authorized.sh\n''')
 print(json.dumps(status,ensure_ascii=False,indent=2))
 print('chosen',chosen)
 PY

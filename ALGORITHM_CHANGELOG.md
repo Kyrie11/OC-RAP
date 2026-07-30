@@ -840,3 +840,91 @@ full-adapter target adaptation unless new evidence invalidates the prior conclus
 First recover and evaluate the already-trained v48.14 certificates.  Run stress
 closed-loop only when the controller creates `NEXT_COMMANDS.txt`; no gate threshold is
 lowered to force that file to appear.
+
+## v48.16 — OC-TRAC-ANCHOR (2026-07-29)
+
+### Correction of the v48.15 experimental conclusion
+
+The uploaded v48.15 certificate result with `rc=20` was not a valid Natural-gate
+rejection.  The dedicated partition deliberately labels samples as
+`evidence_adapt_train`, `evidence_adapt_dev`, and `certificate_pool`, while both
+standard calibration and policy-risk calibration accepted only literal
+`calibration`/`val`.  Every certificate NPZ was therefore discarded:
+`num_groups=0`, `num_scenes=0`.  The controller installed the empty JSON files and
+misclassified the risk tool's failure as a gate rejection.  v48.16 introduces
+protocol-aware split roles, requires non-empty scene-disjoint certificate data, and
+uses exit code 30 for artifact/protocol failure.  A Natural gate is considered
+evaluated only when both Near and Contact contain non-zero groups, scenes, fit folds,
+and verify folds.
+
+The uploaded Safe paired run was also invalid: 120 offline targets were loaded but
+zero were matched after scanning only 2,000 raw validation scenarios.  The correct
+WOMD validation shard specification is `validation_tfexample.tfrecord@150`, and
+sparse dedicated target IDs require scanning the complete validation set.  v48.16
+validates all 150 shard files, defaults `SAFE_RAW_MAX_SCENARIOS=0`, and hard-fails
+instead of writing an empty apparently valid result when no target is matched.
+
+### Evidence retained from the adaptation-dev ablation
+
+Final certificate metrics are unavailable because of the split-role bug, but the
+adaptation-dev results still reveal the optimization failure mode:
+
+- the high-capacity v48.14 adapter substantially reduces admissions and often
+  destroys Contact positive recall;
+- the 132-parameter v48.15 calibrator preserves the source model structurally and
+  lowers harmful/false interventions, but collapses positive admission recall to
+  0--0.11 Near and approximately 0.036 Contact;
+- the v48.15 hard-harm/hard-benefit configuration selected exactly the same best
+  epoch metrics as the plain tiny calibrator, so the same weighting is not repeated;
+- the frozen high-recall top-k proposal, source ordinal evidence, scene-disjoint
+  adaptation/certificate protocol, and zero-initialized bounded residual correction
+  remain the useful foundation.
+
+### New algorithm: ANCHOR
+
+**ANCHOR = Adaptation with Nominal-preserving Class-balanced Held-out Ordinal Risk.**
+
+1. **Class-balanced ordered evidence.**  Proposal evidence loss is averaged within
+   harmful, dead-zone, and beneficial classes before averaging present classes.
+   Dead-zone prevalence can no longer make all-abstain the lowest-loss solution.
+2. **Bipolar probability margins.**  Beneficial proposals are explicitly pushed to a
+   minimum benefit probability and harmful proposals to a minimum harm probability.
+   This trains both tails required by the selective certificate.
+3. **Source-residual anchoring.**  The target-domain calibrator residual receives an
+   L2 anchor, retaining the source evidence unless dedicated data supports a bounded
+   correction.
+4. **Lower-capacity correction.**  Hidden width is reduced from 8 to 4 and residual
+   scale from 0.30 to 0.20.  Strong hard-harm mining is replaced by moderate
+   harm/benefit weights; the missed-opportunity checkpoint penalty is increased.
+5. **No proposal retraining in this round.**  The top-k recovery proposal is frozen so
+   any change in Natural-gate performance is attributable to target-domain evidence
+   correction rather than another ranking modification.
+
+### Engineering and attribution changes
+
+- Added semantic split-role aliases in `ocrap.models.data`.
+- Dedicated standard calibration explicitly accepts `certificate_pool` and disables
+  validation fallback.
+- Policy-risk calibration accepts an explicit `--allowed-splits` contract and returns
+  an artifact-failure code for empty data.
+- Certificate completion now validates non-zero samples/groups/scenes and non-empty
+  fit/verify folds before installing results.
+- Added dedicated protocol role/scene-leakage audit.
+- Main and ablation controllers distinguish exit 0 (gate pass), 20 (valid gate
+  rejection), and 30 (pipeline/artifact failure), and capture adaptation log tails.
+- Safe WOMD shard preflight requires 150 validation shards; complete-set scanning is
+  the default for sparse target matching; zero matched targets now hard-fail.
+- Generated `NEXT_COMMANDS.txt` invokes an authorization-checking stress wrapper.
+- Four v48.16 ablations run concurrently per variant wave, two light jobs per A30.
+
+### Required v48.16 ablations
+
+1. `A_source`: fixed v48.13 source evidence plus valid dedicated certificate.
+2. `B_old_tiny`: the v48.15 tiny-calibrator objective under the repaired pipeline.
+3. `C_balanced_margin`: class-balanced ordinal evidence and bipolar margins.
+4. `D_full_anchor`: class-balanced margins plus source-residual anchoring.
+
+Do not claim a v48.15/v48.16 gate result unless `certificate_data_valid=true` and
+both risk JSON files contain non-zero independent scenes.  Do not run test/stress
+closed loop after exit 20; development-only qualitative diagnostics may be used, but
+must be isolated from paper metrics and threshold selection.

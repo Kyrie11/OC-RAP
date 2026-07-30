@@ -858,7 +858,15 @@ JSONCHECK
 run_safe_closed_loop_one() {
   local tag="$1" gpu="$2" output="$3"
   make_sel "$tag"
-  local safe_womd_source="${SAFE_WOMD_SOURCE:-$WOMD_VAL@150}"
+  local safe_womd_source
+  if [[ -n "${SAFE_WOMD_SOURCE:-}" ]]; then
+    safe_womd_source="$SAFE_WOMD_SOURCE"
+  elif [[ "$WOMD_VAL" == *@* ]]; then
+    safe_womd_source="$WOMD_VAL"
+  else
+    safe_womd_source="$WOMD_VAL@150"
+  fi
+  python tools/validate_womd_shards_v48_16.py --source "$safe_womd_source" --expected-shards 150
   CUDA_VISIBLE_DEVICES="$gpu" PYTHONUNBUFFERED=1 python -u -m ocrap.cli closed-loop \
     --dataset "$safe_womd_source" --checkpoint "$CKPT" \
     --output "$output" \
@@ -875,7 +883,7 @@ run_safe_closed_loop_one() {
     --set closed_loop.max_bucket_targets=${SAFE_MAX_TARGETS:-80} \
     --set closed_loop.max_targets_per_scene=1 \
     --set closed_loop.max_rollouts=${SAFE_MAX_ROLLOUTS:-32} \
-    --set closed_loop.raw_max_scenarios=${SAFE_RAW_MAX_SCENARIOS:-600} \
+    --set closed_loop.raw_max_scenarios=${SAFE_RAW_MAX_SCENARIOS:-0} \
     --set closed_loop.max_steps=${SAFE_MAX_STEPS:-40} \
     --set closed_loop.replan_interval_steps=${SAFE_REPLAN_INTERVAL:-1} \
     --set closed_loop.num_candidate_prefixes=${SAFE_NUM_CANDIDATES:-16} \

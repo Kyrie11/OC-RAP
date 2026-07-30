@@ -20,7 +20,7 @@ import numpy as np
 from ocrap.algorithms.ocmero import oc_mero
 from ocrap.data.serialization import load_npz
 from ocrap.evaluation.metrics import best_shared_option_index, deployable_recovery_success, post_contact_deployability_score
-from ocrap.models.data import iter_sample_paths_many, scalar_metadata_for_path
+from ocrap.models.data import expand_split_roles, iter_sample_paths_many, scalar_metadata_for_path
 from ocrap.models.inference import load_model_bundle, predict_samples
 
 
@@ -426,6 +426,10 @@ def main() -> int:
     )
     ap.add_argument("--max-macro-excess-share", type=float, default=0.10)
     ap.add_argument("--risk-source", choices=["direct_delta", "conformal_delta", "delta_distribution", "heads", "ordinal_evidence"], default="direct_delta")
+    ap.add_argument(
+        "--allowed-splits", default="calibration",
+        help="Comma-separated semantic roles or concrete split_id values. Dedicated certificates should pass certificate_pool exactly.",
+    )
     ap.add_argument("--conformal-alpha", type=float, default=0.10)
     ap.add_argument("--conformal-temperature", type=float, default=0.02)
     ap.add_argument(
@@ -456,10 +460,14 @@ def main() -> int:
     top_m = int((bundle.cfg.get("ocmero", {}) or {}).get("top_m", 8))
     raw: dict[tuple[str, int], list[dict[str, Any]]] = defaultdict(list)
     paths = iter_sample_paths_many(args.dataset)
+    requested_splits = {x.strip() for x in str(args.allowed_splits).split(",") if x.strip()}
+    allowed_splits = expand_split_roles(requested_splits or {"calibration"})
+    kept_split_counts: Counter[str] = Counter()
     for i, path in enumerate(paths, 1):
         split = str(scalar_metadata_for_path(path, "split_id", ""))
-        if split and split not in {"calibration", "val"}:
+        if split not in allowed_splits:
             continue
+        kept_split_counts[split] += 1
         d = load_npz(path)
         row = {
             "data": d,
@@ -814,6 +822,10 @@ def main() -> int:
             "direct_value_conformal_underprediction_quantile": (None if conformal is None else conformal["underprediction_quantile"]),
             "direct_value_conformal_temperature": (None if conformal is None else conformal["temperature"]),
         }),
+        "num_input_paths": len(paths),
+        "requested_split_roles": sorted(requested_splits),
+        "allowed_split_ids": sorted(allowed_splits),
+        "kept_split_counts": dict(kept_split_counts),
         "num_groups": len(groups), "num_scenes": len(scenes), "fit_groups": len(fit), "verify_groups": len(verify),
         "fit_scenes": len(fit_scenes), "verify_scenes": len(verify_scenes), "scene_overlap": len(fit_scenes & verify_scenes),
         "fit": fit_metrics, "verify": verify_metrics, "all": all_metrics,
@@ -871,6 +883,8 @@ def main() -> int:
                 )
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
     print(json.dumps(result, ensure_ascii=False), flush=True)
+    if len(groups) == 0 or len(scenes) == 0:
+        return 4  # protocol/artifact failure, not a Natural-gate rejection
     return 0 if valid else 3
 
 

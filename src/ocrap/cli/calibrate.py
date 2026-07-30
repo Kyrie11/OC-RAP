@@ -6,7 +6,7 @@ import numpy as np
 
 from ocrap.algorithms.lcv import finite_sample_upper_quantile
 from ocrap.data.serialization import load_npz, write_json
-from ocrap.models.data import iter_sample_paths_many, scalar_metadata_for_path
+from ocrap.models.data import expand_split_roles, iter_sample_paths_many, scalar_metadata_for_path
 from ocrap.models.inference import load_model_bundle, predict_sample
 from ocrap.evaluation.metrics import predicted_shared_option_success
 
@@ -32,7 +32,15 @@ def calibrate(dataset: str, checkpoint: str | None = None, output: str | None = 
     deltas = cfg.get("calibration", {}).get("deltas", [0.01, 0.05, 0.10])
     strict = bool(cfg.get("calibration", {}).get("strict", True))
     numerical_margin = float(cfg.get("calibration", {}).get("numerical_margin", 0.0))
-    required = int(cfg.get("calibration", {}).get("required_min_for_delta", 100))
+    cal_cfg = cfg.get("calibration", {}) or {}
+    required = int(cal_cfg.get("required_min_for_delta", 100))
+    allowed_raw = cal_cfg.get("allowed_split_ids", "calibration")
+    if isinstance(allowed_raw, str):
+        requested_splits = {x.strip() for x in allowed_raw.split(",") if x.strip()}
+    else:
+        requested_splits = {str(x).strip() for x in allowed_raw if str(x).strip()}
+    allowed_splits = expand_split_roles(requested_splits or {"calibration"})
+    allow_val_fallback = bool(cal_cfg.get("allow_validation_fallback", True))
     bundle = load_model_bundle(checkpoint, cfg)
     paths = iter_sample_paths_many(dataset)
     print({"event": "calibrate_start", "num_npz_paths": len(paths), "dataset": str(dataset)}, flush=True)
@@ -43,7 +51,7 @@ def calibrate(dataset: str, checkpoint: str | None = None, output: str | None = 
         if idx == 1 or idx % 1000 == 0:
             print({"event": "calibrate_progress", "seen": idx, "kept": len(scores)}, flush=True)
         split = str(scalar_metadata_for_path(p, "split_id", ""))
-        if split != "calibration":
+        if split not in allowed_splits:
             continue
         d = load_npz(p)
         pred = predict_sample(d, bundle, cfg)
@@ -51,13 +59,14 @@ def calibrate(dataset: str, checkpoint: str | None = None, output: str | None = 
         teacher.append(float(np.asarray(d["r_dep_star"]).item()))
         used_splits.append(split)
     warnings = []
-    if not scores:
-        warnings.append("no calibration split found; falling back to validation split")
+    if not scores and allow_val_fallback:
+        warnings.append("no requested calibration split found; falling back to validation role")
+        val_splits = expand_split_roles({"val"})
         for idx, p in enumerate(paths, 1):
             if idx == 1 or idx % 1000 == 0:
                 print({"event": "calibrate_val_fallback_progress", "seen": idx, "kept": len(scores)}, flush=True)
             split = str(scalar_metadata_for_path(p, "split_id", ""))
-            if split != "val":
+            if split not in val_splits:
                 continue
             d = load_npz(p)
             pred = predict_sample(d, bundle, cfg)
@@ -68,7 +77,7 @@ def calibrate(dataset: str, checkpoint: str | None = None, output: str | None = 
     teacher = np.asarray(teacher, dtype=float)
     neg = scores[teacher < 0]
     if len(scores) == 0:
-        warnings.append("no calibration or validation samples were found in the supplied dataset argument")
+        warnings.append("no samples matched the requested calibration split role(s)")
     if len(neg) < required:
         warnings.append(f"num_negative < required_min_for_delta ({len(neg)} < {required})")
     def _delta_key(x) -> str:
@@ -93,6 +102,9 @@ def calibrate(dataset: str, checkpoint: str | None = None, output: str | None = 
         "source": "model" if bundle is not None else "teacher_fallback",
         "score_mode": str((cfg.get("calibration", {}) or {}).get("score", "r_dep")),
         "splits": sorted(set(used_splits)),
+        "requested_split_roles": sorted(requested_splits),
+        "allowed_split_ids": sorted(allowed_splits),
+        "allow_validation_fallback": allow_val_fallback,
         "thresholds": thresholds,
         "default_delta": default_delta,
         "gamma_rec": thresholds.get(default_delta, 0.0),

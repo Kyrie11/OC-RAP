@@ -14,4 +14,6 @@ RUN_DIRECT_VALUE=false \
 GPU_SAFE_BASELINE="${GPU_SAFE_BASELINE:-0}" GPU_SAFE="${GPU_SAFE:-1}" SAFE_MAX_TARGETS="${SAFE_MAX_TARGETS:-120}" \
 SAFE_MAX_ROLLOUTS="${SAFE_MAX_ROLLOUTS:-120}" SAFE_MAX_STEPS="${SAFE_MAX_STEPS:-40}" \
 SAFE_BUCKET_SPLIT="${SAFE_BUCKET_SPLIT:-}" CL_RESUME="${CL_RESUME:-0}" \
+SAFE_RAW_MAX_SCENARIOS="${SAFE_RAW_MAX_SCENARIOS:-0}" \
+SAFE_WOMD_SOURCE="${SAFE_WOMD_SOURCE:-/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord@150}" \
   bash scripts/run_ocrap_v48_trac_sr.sh
