@@ -928,3 +928,124 @@ Do not claim a v48.15/v48.16 gate result unless `certificate_data_valid=true` an
 both risk JSON files contain non-zero independent scenes.  Do not run test/stress
 closed loop after exit 20; development-only qualitative diagnostics may be used, but
 must be isolated from paper metrics and threshold selection.
+
+## v48.17 BRIDGE — 2026-07-30
+
+**BRIDGE: Batch-balanced Regime-conditioned Identity-preserving Discriminative Group Evidence**
+
+### Why this version was necessary
+
+The completed v48.16 ablation bundle contains eight valid, non-empty dedicated
+certificates (four components times balanced/precision).  Every run returned a real
+Natural-gate rejection (exit 20), not an artifact failure: the held-out verify folds
+contained 163 Near groups with 6 positive opportunities and 380 Contact groups with
+14 positive opportunities, but every accepted rule selected zero groups.  The
+uploaded Safe paired run contains 120 matched scenes and is identical on its available
+metrics, while route progression was not emitted and jerk/yaw-rate did not yet carry
+non-inferiority margins.
+
+The source proposal is not the dominant bottleneck.  On the balanced source
+certificate, top-3 contains an oracle-best or another positive candidate for all
+positive Near groups and all positive Contact groups.  Positive-group top-1 accuracy
+is 0.643 for Near and 0.594 for Contact.  In contrast, Evidence has weak harmful
+ranking and severe false-switch exposure: proposal-Evidence harm AUC is below 0.5 in
+both regimes, and the unconstrained non-positive false-switch rate exceeds 0.90.
+Contact additionally exhibits a strong fit-to-verify reversal: the closest fit rule
+selected 1/20 positive and 2/20 harmful candidates, while its verify counterpart
+selected 0/24 positive and 14/24 harmful candidates.
+
+v48.16 B/C/D changed the dedicated certificate metrics only at approximately floating
+point noise.  Code audit identified three reasons:
+
+1. The target calibrator observed only four summary scalars, so candidates with
+   similar source center/width and rank margins but opposite target-domain outcomes
+   were conditionally indistinguishable.
+2. The advertised class-balanced Evidence loss was balanced inside each scene-time
+   group.  Because most groups contain a single teacher class, it often collapsed to
+   ordinary NLL; dead-zone groups still dominated across the minibatch.
+3. Weighted replacement increased the probability of rare groups but did not ensure
+   beneficial, harmful and dead-zone evidence was simultaneously present in a batch.
+   Bipolar margins and class balance were therefore frequently inactive.  Checkpoint
+   selection could still prefer the early always-abstain solution.
+
+### Algorithm changes
+
+1. **Identity-preserving tri-simplex residual.**  Added
+   `direct_recovery_evidence_calibrator_mode=simplex_context`.  A zero-initialized,
+   bounded residual is added to the frozen source log-probabilities of the harmful,
+   dead-zone and beneficial classes, followed by a softmax.  At initialization the
+   model is exactly the source Evidence model; unlike the old center/width correction,
+   the beneficial and harmful tails may be corrected independently while retaining a
+   valid probability simplex.
+2. **Frozen candidate-vs-nominal context.**  The small calibrator can consume the
+   source relative feature vector in addition to source class summaries and proposal
+   rank margins.  Context is detached by default, preserving proposal/source Evidence
+   attribution and keeping target adaptation low capacity.
+3. **Batch- and regime-balanced ordinal Evidence.**  Beneficial, harmful and dead-zone
+   candidate losses are accumulated over the whole minibatch and separately by
+   regime, then averaged over the classes/regimes that are present.  Bipolar benefit
+   and harm probability margins are applied at the same batch scope.
+4. **Evidence-stratified scene-time batches.**  The group sampler builds exact teacher
+   strata from best candidate-vs-nominal PCD: beneficial, harmful-only and dead/mixed.
+   Replacement sampling is performed within each stratum and batches are interleaved,
+   with default group fractions 0.35/0.35/0.30.  Scene-time grouping remains intact.
+5. **Recall-constrained checkpoint selection.**  Added a configurable minimum positive
+   recall and a shortfall penalty in the direct-policy metric.  The default v48.17
+   target is recall >= 0.25 on adaptation dev; this prevents an always-abstain epoch
+   from winning only by avoiding harm.
+6. **Conservative bounded adaptation.**  BRIDGE freezes the source model and proposal,
+   uses an 8-wide calibrator, a bounded residual scale of 0.75, an L2 source anchor of
+   0.02, and no selective-risk, hard-mining or pairwise objectives.  Those objectives
+   were intentionally disabled because previous versions did not provide stable
+   incremental evidence.
+
+### Engineering changes
+
+- Added full checkpoint/config compatibility for calibrator mode, context input and
+  context detachment; legacy `center_width` checkpoints remain loadable.
+- Added exact evidence-stratum accounting to training summaries and hard failure when
+  stratification is requested without an exact scene-time group index.
+- Fixed Natural-gate checker field names (`precision_wilson_lcb90` and
+  `teacher_advantage_mean`) so reports no longer silently read missing metrics.
+- Fixed final candidate selection to read `teacher_advantage_mean` (with legacy
+  fallback), so a dual-pass run is not ranked with a silently zeroed advantage.
+- Rewrote the ablation summarizer, corrected dedicated-certificate paths and proposal
+  metric names, and made the reported version explicit.
+- Added signed fixed-route progression at scene level.  Waymax SDC routes are used
+  when available; otherwise the already constructed logged-future route proxy is
+  transformed once to global coordinates and its source is reported explicitly.
+- Added 5% paired non-inferiority margins for jerk and yaw-rate; the Safe paper-ready
+  flag now requires route progression, jerk and yaw-rate to be available and pass.
+- Added authorization-checked v48.17 stress execution and exit-code separation:
+  0 = valid Natural-gate pass, 20 = valid algorithmic rejection, 30 = engineering or
+  artifact failure.
+- Added four focused unit tests for simplex identity/bounds, calibrator capacity,
+  evidence-stratified batching and signed route progression.
+
+### Required v48.17 experiment and ablations
+
+Main experiment: `run_v48_17_bridge_dedicated.sh`, with balanced on GPU0 and precision
+on GPU1.
+
+Component ablations compare against the already completed v48.16 `D_full_anchor`
+baseline and therefore do not rerun old failed designs:
+
+1. `A_simplex_scalar`: tri-simplex residual with the legacy four scalar inputs.
+2. `B_context_simplex`: add frozen relative context, keep the old sampler/loss scope.
+3. `C_full_bridge`: add evidence-stratified batches, batch/regime balance and the
+   recall-constrained checkpoint metric.
+
+### Decision and stopping rules
+
+- Exit 0 and `NEXT_COMMANDS.txt` present: run authorized stress closed loop, rerun Safe
+  paired evaluation with route progression, then perform multi-seed confirmation.
+- Exit 20: do not inspect test/stress.  Use the three component ablations and explicitly
+  labelled validation-only trajectory diagnostics to determine whether the remaining
+  limitation is conditional Evidence capacity or irreducible positive support.
+- Exit 30: no algorithm conclusion is allowed; repair the pipeline first.
+- Do not relax the Natural-gate statistical constraints merely to create coverage.
+- Do not retrain the proposal unless v48.17 shows that top-3 positive-hit rate itself
+  degrades under the corrected protocol; current uploaded evidence supports freezing it.
+- Do not rebuild the three regime datasets in this round.  Sparse positive support is
+  addressed through sampler/loss/checkpoint logic so the next result remains
+  attributable to the algorithm rather than a changed dataset.

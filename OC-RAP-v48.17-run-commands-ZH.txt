@@ -1,0 +1,166 @@
+OC-RAP v48.17 BRIDGE — 两张 A30 的推荐执行顺序
+日期：2026-07-30
+
+原则：
+1. 不读取 test/stress 进行调参。
+2. 返回码 0=有效 gate 通过，20=有效算法拒绝，30=工程失败。
+3. 只有 RC=0 且生成 NEXT_COMMANDS.txt 才运行 Near/Contact stress。
+4. Safe nominal-only paired 可在 gate 前后执行，但不要和主训练同时抢两张 GPU。
+
+======================================================================
+0. 解压、进入代码目录并做本地预检
+======================================================================
+
+unzip -q OC-RAP-v48.17-BRIDGE.zip -d /path/to/workspace
+cd /path/to/workspace/OC-RAP-v48.17-BRIDGE
+export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
+
+python -m compileall -q src tools tests
+find scripts -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+PYTHONPATH=src pytest -q
+
+# 可选：先核对关键输入是否存在
+ls -lh runs/ocrap_v48_13_terra_proxy_4801/candidates/{balanced,precision}/model_v48_trac_sr/best.pt
+ls -ld \
+  /data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_train_near_contact \
+  /data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_train_contact \
+  /data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_near_contact \
+  /data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_contact \
+  /data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_near_contact \
+  /data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_contact
+
+======================================================================
+1. 主实验：Balanced→GPU0，Precision→GPU1，并行训练+独立 certificate
+======================================================================
+
+mkdir -p runs
+set +e
+
+OUTPUTDIR=runs/ocrap_v48_17_bridge_dedicated_4817 \
+SOURCE_RUN=runs/ocrap_v48_13_terra_proxy_4801 \
+OCRAP_ROOT=/data0/senzeyu2/dataset/OCRAP \
+PROTOCOL_ROOT=/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814 \
+CAL_SAFE=/data0/senzeyu2/dataset/OCRAP/calibration_safe \
+GPU0=0 GPU1=1 \
+BATCH_SIZE=72 NUM_WORKERS=5 PREFETCH_FACTOR=2 \
+EVIDENCE_ADAPT_EPOCHS=20 EVIDENCE_ADAPT_PATIENCE=5 \
+EVIDENCE_ADAPT_LR=0.00030 \
+EVIDENCE_CALIBRATOR_HIDDEN=8 \
+EVIDENCE_CALIBRATOR_SCALE=0.75 \
+GROUP_BATCH_POSITIVE_FRACTION=0.35 \
+GROUP_BATCH_HARMFUL_FRACTION=0.35 \
+GROUP_BATCH_DEAD_FRACTION=0.30 \
+ORDINAL_EVIDENCE_CLASS_BALANCED_WEIGHT=1.50 \
+ORDINAL_EVIDENCE_BENEFIT_MARGIN_WEIGHT=0.75 \
+ORDINAL_EVIDENCE_HARM_MARGIN_WEIGHT=1.00 \
+ORDINAL_EVIDENCE_TARGET_PROBABILITY=0.65 \
+EVIDENCE_CALIBRATOR_ANCHOR_WEIGHT=0.02 \
+POLICY_METRIC_MIN_POSITIVE_RECALL=0.25 \
+POLICY_METRIC_RECALL_SHORTFALL_WEIGHT=4.0 \
+bash scripts/run_v48_17_bridge_dedicated.sh \
+> runs/ocrap_v48_17_bridge_dedicated_4817.controller.log 2>&1
+
+RC=$?
+set -e
+
+echo "v48.17 main rc=$RC"
+tail -n 100 runs/ocrap_v48_17_bridge_dedicated_4817.controller.log
+cat runs/ocrap_v48_17_bridge_dedicated_4817/learning_gates_v48_17.json
+
+# 判定：
+# RC=0  -> gate 通过；继续第3步 stress。
+# RC=20 -> gate 真实未通过；禁止 stress/test，先执行第4步组件消融。
+# RC=30 -> 工程失败；查看 logs、PIPELINE_FAILED.json、ADAPTATION_FAILED_*.json，
+#          修复后重跑，不允许做算法结论。
+
+======================================================================
+2. Safe paired 非劣复跑：补齐 route progression + jerk/yaw margin
+======================================================================
+
+# 主实验只要 adaptation 成功生成 candidate（即通常 RC=0 或 RC=20）即可执行。
+# 两个 Safe rollout 分别使用 GPU0/GPU1；不要和第1或第4步同时运行。
+
+BASE_RUN=runs/ocrap_v48_17_bridge_dedicated_4817/candidates/precision \
+RUN=runs/ocrap_v48_17_safe_paired_calibration \
+SAFE_TEST=/data0/senzeyu2/dataset/OCRAP/calibration_safe \
+SAFE_WOMD_SOURCE=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord@150 \
+SAFE_RAW_MAX_SCENARIOS=0 \
+RUN_SAFE_PAIRED_SCALAR=1 \
+GPU_SAFE_BASELINE=0 GPU_SAFE=1 \
+SAFE_MAX_TARGETS=120 SAFE_MAX_ROLLOUTS=120 SAFE_MAX_STEPS=40 \
+CL_RESUME=0 \
+bash scripts/run_v48_7_safe_noninferiority.sh \
+> runs/ocrap_v48_17_safe_paired_calibration.controller.log 2>&1
+
+cat runs/ocrap_v48_17_safe_paired_calibration/safe_paired_noninferiority_v48_8.json
+
+# 论文级 Safe 条件：paper_safe_claim_ready=true；
+# route_progression、jerk_p95、yaw_rate_p95 均 available 且 passed_noninferiority=true。
+
+======================================================================
+3. 仅 RC=0 时：授权后的 Near/Contact stress closed loop
+======================================================================
+
+OUT=runs/ocrap_v48_17_bridge_dedicated_4817 \
+GPU0=0 GPU1=1 CL_RESUME=0 \
+bash scripts/run_v48_17_stress_if_authorized.sh \
+> runs/ocrap_v48_17_bridge_dedicated_4817.stress.log 2>&1
+
+# wrapper 会再次检查 NEXT_COMMANDS.txt；没有授权时以 20 拒绝，不会误跑 test/stress。
+
+======================================================================
+4. RC=20 时：三组件消融（不重复 v48.16 已完成实验）
+======================================================================
+
+# 每个 variant 一波：GPU0 同时跑 A_simplex_scalar 和 C_full_bridge，
+# GPU1 跑 B_context_simplex；Balanced 完成后自动跑 Precision。
+
+nohup env \
+ABLATION_ROOT=runs/ocrap_v48_17_bridge_ablations \
+SOURCE_RUN=runs/ocrap_v48_13_terra_proxy_4801 \
+OCRAP_ROOT=/data0/senzeyu2/dataset/OCRAP \
+PROTOCOL_ROOT=/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814 \
+CAL_SAFE=/data0/senzeyu2/dataset/OCRAP/calibration_safe \
+GPU0=0 GPU1=1 \
+BATCH_SIZE=72 NUM_WORKERS=3 PREFETCH_FACTOR=2 \
+EVIDENCE_ADAPT_EPOCHS=20 EVIDENCE_ADAPT_PATIENCE=5 \
+EVIDENCE_ADAPT_LR=0.00030 \
+bash scripts/run_v48_17_parallel_ablations.sh \
+> runs/ocrap_v48_17_bridge_ablations.controller.log 2>&1 </dev/null &
+
+echo $! > runs/ocrap_v48_17_bridge_ablations.pid
+
+# 查看：
+tail -f runs/ocrap_v48_17_bridge_ablations.controller.log
+cat runs/ocrap_v48_17_bridge_ablations/ABLATIONS_STATUS.json
+cat runs/ocrap_v48_17_bridge_ablations/ablation_summary_v48_17.json
+
+# 组件解释：
+# A_simplex_scalar：只验证三概率单纯形 residual；
+# B_context_simplex：再加入冻结 candidate-vs-nominal context；
+# C_full_bridge：再加入 evidence-stratified batch、batch/regime balance、recall floor。
+# 对照使用已经完成的 v48.16 D_full_anchor，不重复跑 source、old_tiny、ANCHOR。
+
+======================================================================
+5. 结果归因检查（主实验/消融都适用）
+======================================================================
+
+# 重点看：
+# 1) candidate_positive_auc / candidate_harm_auc 是否有 >1e-3 的实质变化，
+#    而不是 v48.16 的 1e-5~1e-4 数值噪声；
+# 2) adaptation dev 的 direct_positive_admission_recall 是否不再接近0；
+# 3) verify num_selected 是否非零；
+# 4) precision_wilson_lcb90、harmful_selected_ucb90、teacher_advantage_mean；
+# 5) Contact fit->verify 是否仍出现 positive=0、harmful 大幅增加；
+# 6) proposal top-3 positive hit 不应显著下降（proposal 被冻结，下降通常说明工程问题）。
+
+find runs/ocrap_v48_17_bridge_dedicated_4817 -path '*calibration/direct_value_risk_*_v48.json' -print
+
+======================================================================
+6. 运行资源与速度建议
+======================================================================
+
+# 默认 BATCH_SIZE=72、NUM_WORKERS=5、PREFETCH_FACTOR=2 适配两张 A30。
+# 若显存不足，先降 BATCH_SIZE 到 56 或 48，不要改变 strata 比例/损失权重。
+# 若 CPU/存储成为瓶颈，NUM_WORKERS 可从5降到3；不要把两个主 variant 放同一张卡。
+# teacher PCD index 会复用；除非数据或 positive-gain 改变，不要设置 REBUILD_ADAPT_INDEX=1。

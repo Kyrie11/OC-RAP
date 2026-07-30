@@ -141,6 +141,9 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_calibrator: bool = False,
         direct_recovery_evidence_calibrator_hidden: int = 8,
         direct_recovery_evidence_calibrator_scale: float = 0.25,
+        direct_recovery_evidence_calibrator_mode: str = "center_width",
+        direct_recovery_evidence_calibrator_context: bool = False,
+        direct_recovery_evidence_calibrator_context_detach: bool = True,
     ):
         super().__init__()
         self.num_roots = int(num_roots)
@@ -199,6 +202,18 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_evidence_calibrator = bool(direct_recovery_evidence_calibrator)
         self.direct_recovery_evidence_calibrator_hidden = max(4, int(direct_recovery_evidence_calibrator_hidden))
         self.direct_recovery_evidence_calibrator_scale = float(max(0.0, direct_recovery_evidence_calibrator_scale))
+        self.direct_recovery_evidence_calibrator_mode = str(
+            direct_recovery_evidence_calibrator_mode or "center_width"
+        ).strip().lower()
+        self.direct_recovery_evidence_calibrator_context = bool(direct_recovery_evidence_calibrator_context)
+        self.direct_recovery_evidence_calibrator_context_detach = bool(
+            direct_recovery_evidence_calibrator_context_detach
+        )
+        if self.direct_recovery_evidence_calibrator_mode not in {"center_width", "simplex_context"}:
+            raise ValueError(
+                "Unsupported direct_recovery_evidence_calibrator_mode="
+                f"{direct_recovery_evidence_calibrator_mode!r}"
+            )
         if self.direct_recovery_delta_mode not in {"gaussian", "ordinal_evidence"}:
             raise ValueError(f"Unsupported direct_recovery_delta_mode={direct_recovery_delta_mode!r}")
         if self.direct_recovery_value_expert_routing not in {
@@ -453,21 +468,26 @@ class OCRAPModel(nn.Module):
             else None
         )
 
-        # v48.15 PRISM-CC: target-domain evidence adaptation must not rewrite the
-        # roughly 0.4M-parameter source evidence expert when the dedicated
-        # calibration split contains only a few dozen positive scene-time groups.
-        # A tiny, regime-specific residual calibrator acts on the frozen source
-        # center/width and the two frozen policy features.  Its final projection
-        # is exactly zero-initialised, so enabling it reproduces the source model
-        # before any target-domain update.
-        evidence_calibrator_input_dim = 4
+        # v48.17 BRIDGE: retain the zero-initialised identity correction, but
+        # optionally expose the frozen candidate-vs-nominal context representation.
+        # v48.16 used only four scalars (source center/width and two rank margins);
+        # certificate results showed that this input was insufficient to distinguish
+        # beneficial, dead-zone, and harmful candidates with nearly identical source
+        # scores.  The low-rank bottleneck keeps target adaptation small while adding
+        # the observables needed for conditional correction.
+        evidence_calibrator_input_dim = 4 + (
+            relative_in_dim if self.direct_recovery_evidence_calibrator_context else 0
+        )
+        evidence_calibrator_output_dim = (
+            3 if self.direct_recovery_evidence_calibrator_mode == "simplex_context" else 2
+        )
 
         def _make_evidence_calibrator() -> nn.Sequential:
             adapter = nn.Sequential(
                 nn.LayerNorm(evidence_calibrator_input_dim),
                 nn.Linear(evidence_calibrator_input_dim, self.direct_recovery_evidence_calibrator_hidden),
                 nn.GELU(),
-                nn.Linear(self.direct_recovery_evidence_calibrator_hidden, 2),
+                nn.Linear(self.direct_recovery_evidence_calibrator_hidden, evidence_calibrator_output_dim),
             )
             projection = adapter[-1]
             if isinstance(projection, nn.Linear):
@@ -867,22 +887,34 @@ class OCRAPModel(nn.Module):
         else:
             delta = None
 
+        evidence_calibrator_residual = None
         if delta is not None and self.direct_evidence_calibrators is not None:
             if self.direct_recovery_delta_policy_features and "direct_recovery_policy_features" in out:
                 calibrator_policy = out["direct_recovery_policy_features"].to(dtype=delta.dtype)
             else:
                 calibrator_policy = delta.new_zeros((delta.shape[0], 2))
-            calibrator_input = torch.cat([delta[:, :2], calibrator_policy], dim=-1)
+            calibrator_parts = [delta[:, :2], calibrator_policy]
+            if self.direct_recovery_evidence_calibrator_context:
+                calibrator_context = relative_features.to(dtype=delta.dtype)
+                if self.direct_recovery_evidence_calibrator_context_detach:
+                    calibrator_context = calibrator_context.detach()
+                calibrator_parts.append(calibrator_context)
+            calibrator_input = torch.cat(calibrator_parts, dim=-1)
             all_residuals = torch.stack(
                 [adapter(calibrator_input) for adapter in self.direct_evidence_calibrators], dim=1
             )
-            residual = all_residuals[
+            evidence_calibrator_residual = all_residuals[
                 torch.arange(all_residuals.shape[0], device=all_residuals.device), delta_expert_idx
             ]
-            residual = torch.tanh(residual) * self.direct_recovery_evidence_calibrator_scale
-            out["direct_recovery_evidence_calibrator_residual"] = residual
+            evidence_calibrator_residual = (
+                torch.tanh(evidence_calibrator_residual)
+                * self.direct_recovery_evidence_calibrator_scale
+            )
+            out["direct_recovery_evidence_calibrator_input"] = calibrator_input
+            out["direct_recovery_evidence_calibrator_residual"] = evidence_calibrator_residual
             out["direct_recovery_evidence_calibrator_outputs"] = all_residuals
-            delta = delta + residual
+            if self.direct_recovery_evidence_calibrator_mode == "center_width":
+                delta = delta + evidence_calibrator_residual
 
         if delta is not None:
             nominal_mask = None
@@ -904,6 +936,42 @@ class OCRAPModel(nn.Module):
                 harm_logit = -nonharm_logit
                 benefit_prob = torch.sigmoid(benefit_logit)
                 harm_prob = torch.sigmoid(harm_logit)
+                if (
+                    evidence_calibrator_residual is not None
+                    and self.direct_recovery_evidence_calibrator_mode == "simplex_context"
+                ):
+                    # Identity-preserving tri-class correction.  Adding a bounded
+                    # residual to source log-probabilities and renormalising with
+                    # softmax preserves a valid harmful/dead/beneficial simplex,
+                    # while allowing each tail to move independently.
+                    eps = torch.finfo(benefit_prob.dtype).eps
+                    dead_prob = (1.0 - benefit_prob - harm_prob).clamp_min(eps)
+                    source_probs = torch.stack(
+                        [harm_prob.clamp_min(eps), dead_prob, benefit_prob.clamp_min(eps)],
+                        dim=-1,
+                    )
+                    calibrated_probs = torch.softmax(
+                        torch.log(source_probs) + evidence_calibrator_residual, dim=-1
+                    )
+                    harm_prob = calibrated_probs[:, 0]
+                    dead_prob = calibrated_probs[:, 1]
+                    benefit_prob = calibrated_probs[:, 2]
+                    if nominal_mask is not None:
+                        harm_prob = torch.where(
+                            nominal_mask, torch.full_like(harm_prob, 0.5), harm_prob
+                        )
+                        benefit_prob = torch.where(
+                            nominal_mask, torch.full_like(benefit_prob, 0.5), benefit_prob
+                        )
+                        dead_prob = torch.where(
+                            nominal_mask, torch.zeros_like(dead_prob), dead_prob
+                        )
+                    harm_logit = torch.logit(harm_prob.clamp(eps, 1.0 - eps))
+                    benefit_logit = torch.logit(benefit_prob.clamp(eps, 1.0 - eps))
+                    nonharm_logit = torch.logit((1.0 - harm_prob).clamp(eps, 1.0 - eps))
+                    out["direct_recovery_evidence_class_probabilities"] = torch.stack(
+                        [harm_prob, dead_prob, benefit_prob], dim=-1
+                    )
                 evidence_score = benefit_prob - harm_prob
                 out["direct_recovery_evidence_nonharm_logit"] = nonharm_logit
                 out["direct_recovery_evidence_benefit_logit"] = benefit_logit

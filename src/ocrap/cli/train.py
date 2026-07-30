@@ -350,6 +350,7 @@ def _direct_value_loss_from_outputs(
         ordinal_evidence_hard_benefit_weight=float(tcfg.get("direct_value_ordinal_evidence_hard_benefit_weight", 0.0)),
         ordinal_evidence_hard_example_gamma=float(tcfg.get("direct_value_ordinal_evidence_hard_example_gamma", 2.0)),
         ordinal_evidence_class_balanced_weight=float(tcfg.get("direct_value_ordinal_evidence_class_balanced_weight", 0.0)),
+        ordinal_evidence_batch_balanced=bool(tcfg.get("direct_value_ordinal_evidence_batch_balanced", False)),
         ordinal_evidence_benefit_margin_weight=float(tcfg.get("direct_value_ordinal_evidence_benefit_margin_weight", 0.0)),
         ordinal_evidence_harm_margin_weight=float(tcfg.get("direct_value_ordinal_evidence_harm_margin_weight", 0.0)),
         ordinal_evidence_target_probability=float(tcfg.get("direct_value_ordinal_evidence_target_probability", 0.60)),
@@ -653,6 +654,8 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
     harm_lambda = float(tcfg.get("direct_policy_metric_harm_weight", 0.35))
     false_lambda = float(tcfg.get("direct_policy_metric_false_intervention_weight", 0.15))
     miss_lambda = float(tcfg.get("direct_policy_metric_missed_opportunity_weight", 0.25))
+    min_positive_recall = float(tcfg.get("direct_policy_metric_min_positive_recall", 0.0))
+    recall_shortfall_lambda = float(tcfg.get("direct_policy_metric_recall_shortfall_weight", 0.0))
     rank_miss_lambda = float(tcfg.get("direct_policy_metric_rank_miss_weight", 0.10))
     rank_harm_lambda = float(tcfg.get("direct_policy_metric_rank_harm_weight", 0.25))
     rank_false_lambda = float(tcfg.get("direct_policy_metric_rank_false_switch_weight", 0.15))
@@ -714,12 +717,16 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
             out[f"direct_positive_group_count{tag}"] = float(pos_count)
             out[f"direct_group_count{tag}"] = float(count)
         if count > 0 and pos_count > 0:
+            positive_recall = out[f"direct_positive_admission_recall{tag}"]
+            recall_shortfall = max(0.0, min_positive_recall - positive_recall)
             cert_risk = (
                 out[f"direct_certificate_positive_regret_mean{tag}"]
                 + harm_lambda * out[f"direct_harmful_switch_rate{tag}"]
                 + false_lambda * out[f"direct_false_intervention_rate{tag}"]
-                + miss_lambda * (1.0 - out[f"direct_positive_admission_recall{tag}"])
+                + miss_lambda * (1.0 - positive_recall)
+                + recall_shortfall_lambda * recall_shortfall * recall_shortfall
             )
+            out[f"direct_certificate_recall_shortfall{tag}"] = recall_shortfall
             out[f"direct_certificate_risk_mean{tag}"] = cert_risk
             # Backward-compatible alias used by older dashboards.
             out[f"direct_policy_risk_mean{tag}"] = cert_risk
@@ -1292,7 +1299,19 @@ class SceneTimeBatchSampler(Sampler[list[int]]):
     in the same mini-batch.  Standard random sampling destroys that structure.
     """
 
-    def __init__(self, groups: list[list[int]], batch_size: int, *, group_weights: list[float] | None = None, replacement: bool = True, shuffle_within_group: bool = True, shuffle_groups: bool = True):
+    def __init__(
+        self,
+        groups: list[list[int]],
+        batch_size: int,
+        *,
+        group_weights: list[float] | None = None,
+        replacement: bool = True,
+        shuffle_within_group: bool = True,
+        shuffle_groups: bool = True,
+        group_strata: list[int] | None = None,
+        stratified: bool = False,
+        stratum_fractions: dict[int, float] | None = None,
+    ):
         self.groups = [list(g) for g in groups if g]
         self.batch_size = max(1, int(batch_size))
         self.replacement = bool(replacement)
@@ -1302,6 +1321,17 @@ class SceneTimeBatchSampler(Sampler[list[int]]):
             self.group_weights = torch.ones((len(self.groups),), dtype=torch.double)
         else:
             self.group_weights = torch.as_tensor(group_weights, dtype=torch.double).clamp_min(1.0e-8)
+        self.stratified = bool(stratified and replacement)
+        if group_strata is None or len(group_strata) != len(self.groups):
+            self.group_strata = [1 for _ in self.groups]
+        else:
+            self.group_strata = [int(x) for x in group_strata]
+        default_fractions = {2: 0.30, 0: 0.35, 1: 0.35}
+        supplied = stratum_fractions or {}
+        self.stratum_fractions = {
+            key: max(0.0, float(supplied.get(key, value)))
+            for key, value in default_fractions.items()
+        }
 
     def __len__(self) -> int:
         if not self.groups:
@@ -1312,7 +1342,47 @@ class SceneTimeBatchSampler(Sampler[list[int]]):
     def __iter__(self):
         if not self.groups:
             return
-        if self.replacement:
+        if self.stratified:
+            available = {
+                label: [i for i, value in enumerate(self.group_strata) if value == label]
+                for label in (2, 0, 1)
+            }
+            available = {label: indices for label, indices in available.items() if indices}
+            fraction_total = sum(self.stratum_fractions.get(label, 0.0) for label in available)
+            if not available or fraction_total <= 0.0:
+                order = torch.multinomial(
+                    self.group_weights, num_samples=len(self.groups), replacement=True
+                ).tolist()
+            else:
+                requested: dict[int, int] = {}
+                remaining = len(self.groups)
+                labels = list(available)
+                for label in labels[:-1]:
+                    count = int(round(
+                        len(self.groups)
+                        * self.stratum_fractions.get(label, 0.0)
+                        / fraction_total
+                    ))
+                    requested[label] = min(max(0, count), remaining)
+                    remaining -= requested[label]
+                requested[labels[-1]] = remaining
+                draws: dict[int, list[int]] = {}
+                for label, count in requested.items():
+                    indices = available[label]
+                    weights = self.group_weights[indices]
+                    local = torch.multinomial(weights, num_samples=count, replacement=True).tolist()
+                    draws[label] = [indices[j] for j in local]
+                # Interleave strata instead of concatenating them.  With the
+                # default fractions and ~8 scene-time groups per batch this makes
+                # beneficial evidence present in almost every training batch.
+                order = []
+                cycle = [2, 0, 1]
+                while any(draws.get(label) for label in cycle):
+                    for label in cycle:
+                        values = draws.get(label)
+                        if values:
+                            order.append(values.pop())
+        elif self.replacement:
             order = torch.multinomial(self.group_weights, num_samples=len(self.groups), replacement=True).tolist()
         elif self.shuffle_groups:
             order = torch.randperm(len(self.groups)).tolist()
@@ -1560,6 +1630,56 @@ def _make_group_batch_sampler(ds: OCRAPSampleDataset, cfg: dict, batch_size: int
             "exact teacher-PCD sampler found zero positive-advantage groups; "
             "check GROUP_INDEX path matching and positive-advantage configuration"
         )
+
+    # v48.17 BRIDGE: weighted replacement raised the expected frequency of rare
+    # positive groups but did not ensure that a minibatch contained all evidence
+    # states.  Build exact teacher-PCD group strata so the optional stratified
+    # sampler can interleave beneficial, harmful-only, and dead/mixed groups.
+    negative_gain_max = float(tcfg.get("group_batch_negative_advantage_gain_max", 0.010))
+    group_strata: list[int] = []
+    for g in groups:
+        nominal_values: list[float] = []
+        recovery_values: list[float] = []
+        for i in g:
+            p = ds.paths[i]
+            idx_row = group_index.get(os.path.abspath(os.fspath(p)))
+            if idx_row is None:
+                continue
+            try:
+                value = float(idx_row.get("teacher_pcd", -99.0))
+                is_nominal_value = bool(idx_row.get("nominal", False))
+                macro_value = int(idx_row.get("macro", -1))
+                bucket_value = int(idx_row.get("bucket", bucket_id_for_path(p)))
+            except (TypeError, ValueError):
+                continue
+            if positive_bucket_ids and bucket_value not in positive_bucket_ids:
+                continue
+            if is_nominal_value:
+                nominal_values.append(value)
+            elif macro_value in positive_macro_ids:
+                recovery_values.append(value)
+        if not nominal_values or not recovery_values:
+            group_strata.append(1)
+            continue
+        nominal_value = max(nominal_values)
+        best_delta = max(recovery_values) - nominal_value
+        if best_delta >= positive_gain_min:
+            group_strata.append(2)
+        elif best_delta <= -negative_gain_max:
+            group_strata.append(0)
+        else:
+            group_strata.append(1)
+    stratum_counts = Counter(group_strata)
+    stratified = bool(tcfg.get("group_batch_stratified", False))
+    stratum_fractions = {
+        2: float(tcfg.get("group_batch_positive_fraction", 0.30)),
+        0: float(tcfg.get("group_batch_harmful_fraction", 0.35)),
+        1: float(tcfg.get("group_batch_dead_fraction", 0.35)),
+    }
+    if stratified and not group_index:
+        raise RuntimeError(
+            "group_batch_stratified=true requires an exact teacher-PCD group index"
+        )
     print({
         "event": "group_batch_sampler_stats",
         "num_groups": int(len(groups)),
@@ -1580,8 +1700,27 @@ def _make_group_batch_sampler(ds: OCRAPSampleDataset, cfg: dict, batch_size: int
         "positive_best_macro_counts": dict(sorted(positive_macro_counts.items())),
         "group_index_rows": int(len(group_index)),
         "scene_balance_power": float(scene_balance_power),
+        "stratified": stratified,
+        "stratum_counts": {
+            "harmful_only": int(stratum_counts.get(0, 0)),
+            "dead_or_mixed": int(stratum_counts.get(1, 0)),
+            "beneficial": int(stratum_counts.get(2, 0)),
+        },
+        "stratum_fractions": {
+            "harmful_only": stratum_fractions[0],
+            "dead_or_mixed": stratum_fractions[1],
+            "beneficial": stratum_fractions[2],
+        },
     }, flush=True)
-    return SceneTimeBatchSampler(groups, batch_size, group_weights=group_weights, replacement=bool(tcfg.get("group_batching_replacement", True)))
+    return SceneTimeBatchSampler(
+        groups,
+        batch_size,
+        group_weights=group_weights,
+        replacement=bool(tcfg.get("group_batching_replacement", True)),
+        group_strata=group_strata,
+        stratified=stratified,
+        stratum_fractions=stratum_fractions,
+    )
 
 def _make_sampler(ds: OCRAPSampleDataset, cfg: dict) -> WeightedRandomSampler | None:
     tcfg = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
@@ -1751,6 +1890,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_evidence_calibrator=bool(model_cfg.get("direct_recovery_evidence_calibrator", False)),
         direct_recovery_evidence_calibrator_hidden=int(model_cfg.get("direct_recovery_evidence_calibrator_hidden", 8)),
         direct_recovery_evidence_calibrator_scale=float(model_cfg.get("direct_recovery_evidence_calibrator_scale", 0.25)),
+        direct_recovery_evidence_calibrator_mode=str(model_cfg.get("direct_recovery_evidence_calibrator_mode", "center_width")),
+        direct_recovery_evidence_calibrator_context=bool(model_cfg.get("direct_recovery_evidence_calibrator_context", False)),
+        direct_recovery_evidence_calibrator_context_detach=bool(model_cfg.get("direct_recovery_evidence_calibrator_context_detach", True)),
     ).to(device)
     tcfg = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
 
@@ -1998,6 +2140,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "direct_recovery_evidence_calibrator": bool(model_cfg.get("direct_recovery_evidence_calibrator", False)),
             "direct_recovery_evidence_calibrator_hidden": int(model_cfg.get("direct_recovery_evidence_calibrator_hidden", 8)),
             "direct_recovery_evidence_calibrator_scale": float(model_cfg.get("direct_recovery_evidence_calibrator_scale", 0.25)),
+            "direct_recovery_evidence_calibrator_mode": str(model_cfg.get("direct_recovery_evidence_calibrator_mode", "center_width")),
+            "direct_recovery_evidence_calibrator_context": bool(model_cfg.get("direct_recovery_evidence_calibrator_context", False)),
+            "direct_recovery_evidence_calibrator_context_detach": bool(model_cfg.get("direct_recovery_evidence_calibrator_context_detach", True)),
             "model_state": model.state_dict(),
             "optimizer_state": opt.state_dict(),
             "epoch": int(ep),

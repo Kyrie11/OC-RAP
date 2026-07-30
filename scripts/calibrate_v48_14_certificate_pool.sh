@@ -159,7 +159,7 @@ for name in ('balanced','precision'):
         }
     if ok:
         harm=sum(float((d.get('verify') or {}).get('harmful_selected_rate') or 0) for d in docs)
-        adv=sum(float((d.get('verify') or {}).get('teacher_advantage_selected_mean') or 0) for d in docs)
+        adv=sum(float(((d.get('verify') or {}).get('teacher_advantage_mean', (d.get('verify') or {}).get('teacher_advantage_selected_mean'))) or 0) for d in docs)
         recall=sum(float((d.get('verify') or {}).get('positive_recall') or 0) for d in docs)
         valid.append((harm,-adv,-recall,name,run))
 status={'event':'v48_14_certificate_candidate_selection','created_unix':time.time(),

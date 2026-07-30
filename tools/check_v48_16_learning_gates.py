@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Layered PRISM-CC diagnostic: adaptation, certificate artifacts, Natural gate."""
+"""Layered ANCHOR/BRIDGE diagnostic: adaptation, certificate artifacts, Natural gate."""
 from __future__ import annotations
 import argparse, json, math
 from pathlib import Path
@@ -52,11 +52,11 @@ def main() -> int:
                 'group_top1_correlation':finite(risk.get('unconstrained_group_top1_correlation')),
                 'num_selected':finite(verify.get('num_selected',verify.get('selected'))),
                 'precision':finite(verify.get('precision')),
-                'precision_lcb90':finite(verify.get('precision_lcb90')),
+                'precision_lcb90':finite(verify.get('precision_wilson_lcb90', verify.get('precision_lcb90'))),
                 'positive_recall':finite(verify.get('positive_recall')),
                 'harmful_selected_rate':finite(verify.get('harmful_selected_rate')),
                 'harmful_selected_ucb90':finite(verify.get('harmful_selected_ucb90')),
-                'teacher_advantage_selected_mean':finite(verify.get('teacher_advantage_selected_mean')),
+                'teacher_advantage_selected_mean':finite(verify.get('teacher_advantage_mean', verify.get('teacher_advantage_selected_mean'))),
             }
         item['certificate_data_valid']=all((item['certificate'][r]['num_groups'] or 0)>0 and (item['certificate'][r]['num_scenes'] or 0)>0 for r in ('near','contact'))
         item['natural_gate_passed']=item['certificate_data_valid'] and all(item['certificate'][r]['valid_for_deployment'] for r in ('near','contact'))

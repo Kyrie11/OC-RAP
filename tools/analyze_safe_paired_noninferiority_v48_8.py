@@ -77,6 +77,7 @@ def _evaluate_metric(
     seed: int,
     samples: int,
     alpha: float,
+    relative_margin_fraction: float | None = None,
 ) -> dict[str, Any]:
     deltas: list[float] = []
     baseline_values: list[float] = []
@@ -98,23 +99,29 @@ def _evaluate_metric(
             "noninferiority_margin": margin,
         }
     mean_delta = sum(deltas) / len(deltas)
+    baseline_mean = sum(baseline_values) / len(baseline_values)
+    candidate_mean = sum(candidate_values) / len(candidate_values)
+    effective_margin = margin
+    if relative_margin_fraction is not None:
+        effective_margin = abs(baseline_mean) * float(relative_margin_fraction)
     lo, hi = _bootstrap_mean_ci(deltas, seed=seed, samples=samples, alpha=alpha)
     passed = None
-    if margin is not None:
+    if effective_margin is not None:
         if direction == "lower_is_better":
-            passed = hi <= margin
+            passed = hi <= effective_margin
         elif direction == "higher_is_better":
-            passed = lo >= -margin
+            passed = lo >= -effective_margin
     return {
         "metric": name,
         "available": True,
         "paired_scenes": len(deltas),
-        "baseline_mean": sum(baseline_values) / len(baseline_values),
-        "candidate_mean": sum(candidate_values) / len(candidate_values),
+        "baseline_mean": baseline_mean,
+        "candidate_mean": candidate_mean,
         "candidate_minus_baseline": mean_delta,
         "paired_ci95": [lo, hi],
         "direction": direction,
-        "noninferiority_margin": margin,
+        "noninferiority_margin": effective_margin,
+        "relative_margin_fraction": relative_margin_fraction,
         "passed_noninferiority": passed,
     }
 
@@ -192,6 +199,7 @@ def main() -> int:
             name="jerk_p95",
             direction="lower_is_better",
             margin=None,
+            relative_margin_fraction=0.05,
             seed=args.seed + 5,
             samples=args.bootstrap_samples,
             alpha=0.05,
@@ -202,6 +210,7 @@ def main() -> int:
             name="yaw_rate_p95",
             direction="lower_is_better",
             margin=None,
+            relative_margin_fraction=0.05,
             seed=args.seed + 6,
             samples=args.bootstrap_samples,
             alpha=0.05,
@@ -224,7 +233,7 @@ def main() -> int:
         ),
         "paper_safe_claim_ready": len(shared) >= 100
         and all(m.get("available") for m in metrics)
-        and all(m.get("passed_noninferiority") is True for m in metrics[:4]),
+        and all(m.get("passed_noninferiority") is True for m in metrics),
         "notes": [
             "A small paired probe is diagnostic only; use at least 100 paired scenes for the paper claim.",
             "Unavailable route/jerk/yaw metrics are reported as unavailable rather than inferred from proxies.",

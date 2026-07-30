@@ -1,0 +1,122 @@
+{
+  "version": "v48.8",
+  "method": "scene_paired_bootstrap_noninferiority",
+  "baseline": "/mnt/data/ocrap_audit_workspace/safe/ocrap_v48_16_safe_paired_calibration/closed_loop_safe_fast_v48_scalar.json",
+  "candidate": "/mnt/data/ocrap_audit_workspace/safe/ocrap_v48_16_safe_paired_calibration/closed_loop_safe_fast_v48.json",
+  "baseline_scenes": 120,
+  "candidate_scenes": 120,
+  "paired_scenes": 120,
+  "baseline_only_scenes": [],
+  "candidate_only_scenes": [],
+  "metrics": [
+    {
+      "metric": "collision_scene_rate",
+      "available": true,
+      "paired_scenes": 120,
+      "baseline_mean": 0.008333333333333333,
+      "candidate_mean": 0.008333333333333333,
+      "candidate_minus_baseline": 0.0,
+      "paired_ci95": [
+        0.0,
+        0.0
+      ],
+      "direction": "lower_is_better",
+      "noninferiority_margin": 0.002,
+      "relative_margin_fraction": null,
+      "passed_noninferiority": true
+    },
+    {
+      "metric": "offroad_scene_rate",
+      "available": true,
+      "paired_scenes": 120,
+      "baseline_mean": 0.0,
+      "candidate_mean": 0.0,
+      "candidate_minus_baseline": 0.0,
+      "paired_ci95": [
+        0.0,
+        0.0
+      ],
+      "direction": "lower_is_better",
+      "noninferiority_margin": 0.002,
+      "relative_margin_fraction": null,
+      "passed_noninferiority": true
+    },
+    {
+      "metric": "bounded_NUP",
+      "available": true,
+      "paired_scenes": 120,
+      "baseline_mean": 1.0,
+      "candidate_mean": 1.0,
+      "candidate_minus_baseline": 0.0,
+      "paired_ci95": [
+        0.0,
+        0.0
+      ],
+      "direction": "higher_is_better",
+      "noninferiority_margin": 0.01,
+      "relative_margin_fraction": null,
+      "passed_noninferiority": true
+    },
+    {
+      "metric": "intervention_episode_rate",
+      "available": true,
+      "paired_scenes": 120,
+      "baseline_mean": 0.0,
+      "candidate_mean": 0.0,
+      "candidate_minus_baseline": 0.0,
+      "paired_ci95": [
+        0.0,
+        0.0
+      ],
+      "direction": "lower_is_better",
+      "noninferiority_margin": 0.03,
+      "relative_margin_fraction": null,
+      "passed_noninferiority": true
+    },
+    {
+      "metric": "route_progression",
+      "available": false,
+      "reason": "metric is not emitted at scene level by both runs",
+      "direction": "higher_is_better",
+      "noninferiority_margin": 0.005
+    },
+    {
+      "metric": "jerk_p95",
+      "available": true,
+      "paired_scenes": 120,
+      "baseline_mean": 2.8901483650164053e-05,
+      "candidate_mean": 2.8901483650164053e-05,
+      "candidate_minus_baseline": 0.0,
+      "paired_ci95": [
+        0.0,
+        0.0
+      ],
+      "direction": "lower_is_better",
+      "noninferiority_margin": 1.4450741825082027e-06,
+      "relative_margin_fraction": 0.05,
+      "passed_noninferiority": true
+    },
+    {
+      "metric": "yaw_rate_p95",
+      "available": true,
+      "paired_scenes": 120,
+      "baseline_mean": 0.12760172380218485,
+      "candidate_mean": 0.12760172380218485,
+      "candidate_minus_baseline": 0.0,
+      "paired_ci95": [
+        0.0,
+        0.0
+      ],
+      "direction": "lower_is_better",
+      "noninferiority_margin": 0.006380086190109243,
+      "relative_margin_fraction": 0.05,
+      "passed_noninferiority": true
+    }
+  ],
+  "core_available_metrics_passed": true,
+  "paper_safe_claim_ready": false,
+  "notes": [
+    "A small paired probe is diagnostic only; use at least 100 paired scenes for the paper claim.",
+    "Unavailable route/jerk/yaw metrics are reported as unavailable rather than inferred from proxies."
+  ]
+}

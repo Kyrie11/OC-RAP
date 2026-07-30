@@ -296,6 +296,9 @@ model:
   direct_recovery_evidence_calibrator: false
   direct_recovery_evidence_calibrator_hidden: 8
   direct_recovery_evidence_calibrator_scale: 0.25
+  direct_recovery_evidence_calibrator_mode: center_width
+  direct_recovery_evidence_calibrator_context: false
+  direct_recovery_evidence_calibrator_context_detach: true
 dataset_quality:
   # Off by default for broad natural-WOMD sweeps. Enable only for artifact/stress
   # datasets that are intended to support FRA, ODG, and anti-oracle claims.
@@ -364,6 +367,13 @@ training:
   balanced_obs_loss: true
   group_batching: false
   group_batching_replacement: true
+  # v48.17 BRIDGE: optional exact teacher-PCD strata. Disabled by default so
+  # legacy training behavior remains unchanged.
+  group_batch_stratified: false
+  group_batch_positive_fraction: 0.30
+  group_batch_harmful_fraction: 0.35
+  group_batch_dead_fraction: 0.35
+  group_batch_negative_advantage_gain_max: 0.010
   group_batch_positive_best_macro_balance_power: 0.0
   group_ranking_margin: 0.25
   group_ranking_gap_weight: 0.25
@@ -411,6 +421,9 @@ training:
   direct_value_ordinal_evidence_proposal_topk_weight: 0.0
   direct_value_ordinal_evidence_proposal_topk: 3
   direct_value_ordinal_evidence_proposal_rank_decay: 0.75
+  # Average proposal evidence over classes and regimes across the full minibatch.
+  # This is distinct from the legacy within-group class average.
+  direct_value_ordinal_evidence_batch_balanced: false
   direct_value_ordinal_evidence_intragroup_benefit_weight: 0.0
   direct_value_ordinal_evidence_intragroup_harm_weight: 0.0
   direct_value_ordinal_evidence_intragroup_margin: 0.25
@@ -435,6 +448,8 @@ training:
   # evidence-reranking contract as calibration and runtime.
   direct_policy_metric_proposal_top_k: 1
   direct_policy_metric_evidence_rerank_top_k: false
+  direct_policy_metric_min_positive_recall: 0.0
+  direct_policy_metric_recall_shortfall_weight: 0.0
 loss_weights:
   assign: 1.0
   sig: 0.5

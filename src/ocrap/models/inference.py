@@ -189,6 +189,9 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         direct_recovery_evidence_calibrator=bool(ckpt.get("direct_recovery_evidence_calibrator", model_cfg.get("direct_recovery_evidence_calibrator", False))),
         direct_recovery_evidence_calibrator_hidden=int(ckpt.get("direct_recovery_evidence_calibrator_hidden", model_cfg.get("direct_recovery_evidence_calibrator_hidden", 8))),
         direct_recovery_evidence_calibrator_scale=float(ckpt.get("direct_recovery_evidence_calibrator_scale", model_cfg.get("direct_recovery_evidence_calibrator_scale", 0.25))),
+        direct_recovery_evidence_calibrator_mode=str(ckpt.get("direct_recovery_evidence_calibrator_mode", model_cfg.get("direct_recovery_evidence_calibrator_mode", "center_width"))),
+        direct_recovery_evidence_calibrator_context=bool(ckpt.get("direct_recovery_evidence_calibrator_context", model_cfg.get("direct_recovery_evidence_calibrator_context", False))),
+        direct_recovery_evidence_calibrator_context_detach=bool(ckpt.get("direct_recovery_evidence_calibrator_context_detach", model_cfg.get("direct_recovery_evidence_calibrator_context_detach", True))),
     ).to(device)
     # Strict loading remains the default for checkpoints with matching geometry.
     # A v39 checkpoint can initialize v40 training through train.py's explicit
@@ -235,6 +238,9 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_evidence_calibrator"] = bool(ckpt.get("direct_recovery_evidence_calibrator", model_cfg.get("direct_recovery_evidence_calibrator", False)))
     cfg["model"]["direct_recovery_evidence_calibrator_hidden"] = int(ckpt.get("direct_recovery_evidence_calibrator_hidden", model_cfg.get("direct_recovery_evidence_calibrator_hidden", 8)))
     cfg["model"]["direct_recovery_evidence_calibrator_scale"] = float(ckpt.get("direct_recovery_evidence_calibrator_scale", model_cfg.get("direct_recovery_evidence_calibrator_scale", 0.25)))
+    cfg["model"]["direct_recovery_evidence_calibrator_mode"] = str(ckpt.get("direct_recovery_evidence_calibrator_mode", model_cfg.get("direct_recovery_evidence_calibrator_mode", "center_width")))
+    cfg["model"]["direct_recovery_evidence_calibrator_context"] = bool(ckpt.get("direct_recovery_evidence_calibrator_context", model_cfg.get("direct_recovery_evidence_calibrator_context", False)))
+    cfg["model"]["direct_recovery_evidence_calibrator_context_detach"] = bool(ckpt.get("direct_recovery_evidence_calibrator_context_detach", model_cfg.get("direct_recovery_evidence_calibrator_context_detach", True)))
     return ModelBundle(model=model, cfg=cfg, device=device)
 
 

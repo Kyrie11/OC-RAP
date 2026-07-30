@@ -22,7 +22,8 @@ from ocrap.models.inference import ModelBundle, load_model_bundle, predict_sampl
 from ocrap.external_baselines.policies import select_external_policy
 from ocrap.external_baselines.evaluate import _load_checkpoint as _load_external_checkpoint, _predict_group as _predict_external_group
 from ocrap.simulation.waymax_rollout import _as_np, _bicycle_action, _make_env, _metric_summary, _sdc_index
-from ocrap.utils.geometry import compute_ttc, min_box_clearance
+from ocrap.planning.route_lattice import project_to_route
+from ocrap.utils.geometry import compute_ttc, min_box_clearance, rotation_matrix
 
 
 EXTERNAL_CLOSED_LOOP_METHODS = {
@@ -571,6 +572,62 @@ def _step_metrics_geometry_snapshot(waymax_env: Any, state: Any, sdc: int) -> tu
     return metrics, xy, _current_timestep(state), _scene_done(state)
 
 
+def _global_route_from_history(history: Any) -> tuple[np.ndarray | None, str | None]:
+    """Recover a fixed global route reference from the first rollout history.
+
+    Validation TFExample shards can omit ``path_samples/*``. In that case the
+    history builder creates a logged-future route proxy in the ego frame. The
+    fixed first-step route is transformed back to global coordinates so paired
+    policies use the same route-progress reference without reading test labels.
+    """
+    route = np.asarray(getattr(history, "route", np.zeros((0, 2))), dtype=np.float64)
+    if route.ndim != 2 or route.shape[0] < 2 or route.shape[1] < 2:
+        return None, None
+    xy_local = route[:, :2]
+    xy_local = xy_local[np.all(np.isfinite(xy_local), axis=1)]
+    if xy_local.shape[0] < 2:
+        return None, None
+    metadata = getattr(history, "metadata", {}) or {}
+    try:
+        ego_xy = np.asarray(metadata.get("ego_global_xy"), dtype=np.float64).reshape(2)
+        heading = float(metadata.get("ego_global_heading", 0.0))
+    except (TypeError, ValueError):
+        return None, None
+    # Inverse of transform_points_to_ego for row-vector points.
+    xy_global = xy_local @ rotation_matrix(-heading).astype(np.float64) + ego_xy
+    length = float(np.sum(np.linalg.norm(np.diff(xy_global, axis=0), axis=1)))
+    if not np.isfinite(length) or length < 1.0:
+        return None, None
+    source = (
+        "history_future_route_proxy"
+        if bool(metadata.get("route_sanitized", False))
+        else "waymax_sdc_route"
+    )
+    return xy_global.astype(np.float32), source
+
+
+def _route_progression_from_trace(
+    state_xy_trace: list[list[float]], route_xy_global: np.ndarray | None
+) -> float | None:
+    """Return signed arc-length progress along a fixed scene route."""
+    if route_xy_global is None or len(state_xy_trace) < 2:
+        return None
+    trace = np.asarray(state_xy_trace, dtype=np.float32)
+    if trace.ndim != 2 or trace.shape[1] < 2:
+        return None
+    trace = trace[np.all(np.isfinite(trace[:, :2]), axis=1), :2]
+    if trace.shape[0] < 2:
+        return None
+    route = np.zeros((len(route_xy_global), 6), dtype=np.float32)
+    route[:, :2] = np.asarray(route_xy_global, dtype=np.float32)[:, :2]
+    try:
+        start = project_to_route(trace[0], route)
+        end = project_to_route(trace[-1], route)
+    except Exception:
+        return None
+    return float(end.s - start.s)
+
+
 def _scene_done(state: Any) -> bool:
     try:
         return bool(_as_np(state.is_done).reshape(()).item())
@@ -993,6 +1050,17 @@ def _rollout_one_scene(
     active_regime_trace: list[str] = []
     metric_trace: list[dict[str, float]] = []
     state_xy_trace: list[list[float]] = []
+    route_reference_global: np.ndarray | None = None
+    route_reference_source: str | None = None
+    try:
+        initial_tr = state.sim_trajectory
+        initial_tt = _current_timestep(state)
+        state_xy_trace.append([
+            float(_as_np(initial_tr.x)[sdc, initial_tt]),
+            float(_as_np(initial_tr.y)[sdc, initial_tt]),
+        ])
+    except Exception:
+        pass
     interventions_used = 0
     last_intervention_step = -10**9
     previous_selected_macro = "nominal"
@@ -1040,6 +1108,8 @@ def _rollout_one_scene(
             static_template=raw,
         )
         hist = construct_history(spliced_raw, t, cfg)
+        if route_reference_global is None:
+            route_reference_global, route_reference_source = _global_route_from_history(hist)
         hist.metadata["_waymax_state"] = state
         hist.metadata["_waymax_branch_from_current"] = True
         hist.metadata["waymax_planning_timestep"] = int(t)
@@ -1510,6 +1580,12 @@ def _rollout_one_scene(
     macro_switch_count = int(sum(decisions[i].selected_macro != decisions[i - 1].selected_macro for i in range(1, len(decisions))))
     wall_s = perf_counter() - scene_wall_t0
     measured_s = float(sum(timing_totals.values()))
+    route_progression = _route_progression_from_trace(
+        state_xy_trace, route_reference_global
+    )
+    if route_progression is not None:
+        metric_summary["route_progression_m"] = float(route_progression)
+
     timing_summary = {
         "enabled": bool(profile_timing),
         "wall_s": float(wall_s),
@@ -1523,6 +1599,8 @@ def _rollout_one_scene(
         "bucket_name": bucket_name,
         "target_key": target_key,
         "target_time_index": int(start_time_index_override) if start_time_index_override is not None else None,
+        "route_progression": route_progression,
+        "route_progression_source": route_reference_source,
         "num_decisions": int(len(decisions)),
         "num_metric_steps": int(len(metric_trace)),
         "method": method,

@@ -1395,6 +1395,7 @@ def direct_uncertainty_recovery_value_loss(
     ordinal_evidence_hard_benefit_weight: float = 0.0,
     ordinal_evidence_hard_example_gamma: float = 2.0,
     ordinal_evidence_class_balanced_weight: float = 0.0,
+    ordinal_evidence_batch_balanced: bool = False,
     ordinal_evidence_benefit_margin_weight: float = 0.0,
     ordinal_evidence_harm_margin_weight: float = 0.0,
     ordinal_evidence_target_probability: float = 0.60,
@@ -1525,6 +1526,13 @@ def direct_uncertainty_recovery_value_loss(
     # class likelihoods.  Regime-specific pairwise losses target the AUCs used
     # by the Natural gate and are especially important for the harmful tail.
     evidence_policy_records: list[tuple[int, torch.Tensor, torch.Tensor, int]] = []
+    # v48.17 BRIDGE: class balance must be enforced across proposal candidates
+    # in the whole minibatch (and separately by regime), not independently in
+    # each scene-time group.  Most groups contain a single evidence class, so
+    # v48.16's within-group averaging reduced to another dead-zone-dominated NLL.
+    evidence_proposal_records: list[
+        tuple[int, torch.Tensor, torch.Tensor, torch.Tensor, int]
+    ] = []
     for key in torch.unique(keys[finite], dim=0):
         idx = torch.where(finite & (bid == key[0]) & (sh == key[1]) & (ti == key[2]))[0]
         noms = idx[isn[idx]]
@@ -1997,7 +2005,17 @@ def direct_uncertainty_recovery_value_loss(
             # evidence loss per observed class before averaging classes, so the
             # tiny adapter cannot win by predicting abstention for every proposal.
             proposal_classes = classes[proposal_idx]
-            if float(ordinal_evidence_class_balanced_weight) > 0.0:
+            if bool(ordinal_evidence_batch_balanced):
+                regime_id = int(bid[nom].detach().item())
+                for local_idx in proposal_idx:
+                    evidence_proposal_records.append((
+                        regime_id,
+                        nll[local_idx],
+                        p_benefit[local_idx],
+                        p_harm[local_idx],
+                        int(classes[local_idx].detach().item()),
+                    ))
+            elif float(ordinal_evidence_class_balanced_weight) > 0.0:
                 class_terms = []
                 for class_id in (0, 1, 2):
                     mask = proposal_classes == class_id
@@ -2007,14 +2025,15 @@ def direct_uncertainty_recovery_value_loss(
                     terms.append(float(ordinal_evidence_class_balanced_weight) * torch.stack(class_terms).mean())
 
             target_prob = min(0.99, max(0.51, float(ordinal_evidence_target_probability)))
-            if float(ordinal_evidence_benefit_margin_weight) > 0.0:
-                benefit_idx = proposal_idx[proposal_classes == 2]
-                if benefit_idx.numel():
-                    terms.append(float(ordinal_evidence_benefit_margin_weight) * F.relu(target_prob - p_benefit[benefit_idx]).mean())
-            if float(ordinal_evidence_harm_margin_weight) > 0.0:
-                harm_idx_margin = proposal_idx[proposal_classes == 0]
-                if harm_idx_margin.numel():
-                    terms.append(float(ordinal_evidence_harm_margin_weight) * F.relu(target_prob - p_harm[harm_idx_margin]).mean())
+            if not bool(ordinal_evidence_batch_balanced):
+                if float(ordinal_evidence_benefit_margin_weight) > 0.0:
+                    benefit_idx = proposal_idx[proposal_classes == 2]
+                    if benefit_idx.numel():
+                        terms.append(float(ordinal_evidence_benefit_margin_weight) * F.relu(target_prob - p_benefit[benefit_idx]).mean())
+                if float(ordinal_evidence_harm_margin_weight) > 0.0:
+                    harm_idx_margin = proposal_idx[proposal_classes == 0]
+                    if harm_idx_margin.numel():
+                        terms.append(float(ordinal_evidence_harm_margin_weight) * F.relu(target_prob - p_harm[harm_idx_margin]).mean())
 
             # Same-group counterfactual comparisons cancel shared scene severity.
             intra_margin = float(ordinal_evidence_intragroup_margin)
@@ -2152,6 +2171,39 @@ def direct_uncertainty_recovery_value_loss(
     gw = torch.as_tensor(group_weights, dtype=gl.dtype, device=gl.device)
     erm_grouped = (gl * gw).sum() / gw.sum().clamp_min(1.0e-6)
     grouped = erm_grouped
+    if bool(ordinal_evidence_batch_balanced) and evidence_proposal_records:
+        target_prob = min(0.99, max(0.51, float(ordinal_evidence_target_probability)))
+        regime_terms: list[torch.Tensor] = []
+        benefit_margin_terms: list[torch.Tensor] = []
+        harm_margin_terms: list[torch.Tensor] = []
+        for regime_id in sorted({record[0] for record in evidence_proposal_records}):
+            records = [record for record in evidence_proposal_records if record[0] == regime_id]
+            class_terms: list[torch.Tensor] = []
+            for class_id in (0, 1, 2):
+                cls_records = [record for record in records if record[4] == class_id]
+                if not cls_records:
+                    continue
+                class_terms.append(torch.stack([record[1] for record in cls_records]).mean())
+                if class_id == 2 and float(ordinal_evidence_benefit_margin_weight) > 0.0:
+                    benefit_margin_terms.append(
+                        F.relu(
+                            target_prob - torch.stack([record[2] for record in cls_records])
+                        ).mean()
+                    )
+                if class_id == 0 and float(ordinal_evidence_harm_margin_weight) > 0.0:
+                    harm_margin_terms.append(
+                        F.relu(
+                            target_prob - torch.stack([record[3] for record in cls_records])
+                        ).mean()
+                    )
+            if class_terms:
+                regime_terms.append(torch.stack(class_terms).mean())
+        if regime_terms and float(ordinal_evidence_class_balanced_weight) > 0.0:
+            grouped = grouped + float(ordinal_evidence_class_balanced_weight) * torch.stack(regime_terms).mean()
+        if benefit_margin_terms:
+            grouped = grouped + float(ordinal_evidence_benefit_margin_weight) * torch.stack(benefit_margin_terms).mean()
+        if harm_margin_terms:
+            grouped = grouped + float(ordinal_evidence_harm_margin_weight) * torch.stack(harm_margin_terms).mean()
     # Cross-group, regime-local AUC surrogates for the frozen policy's selected
     # candidate.  The ordered NLL calibrates probabilities; these terms enforce
     # the ranking needed to distinguish beneficial and harmful tails across
