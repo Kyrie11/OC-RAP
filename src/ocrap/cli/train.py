@@ -231,7 +231,12 @@ def _profile_paths(paths: list[Path], *, stage: str, max_scalar_scan: int | None
         "scalar_scanned": int(scanned),
         "artifact_fraction": float(num_art / max(scanned, 1)),
         "negative_deployable_fraction": float(num_neg / max(scanned, 1)),
-        "safe_positive_fraction": float(num_safe_pos / max(scanned, 1)),
+        # This legacy file-name heuristic is not the composite safe-benefit
+        # admission label used by v48.21+. Keep it explicitly named so a zero is
+        # never misread as evidence that the exact teacher index has no positives.
+        "legacy_safe_root_positive_fraction": float(num_safe_pos / max(scanned, 1)),
+        "safe_positive_fraction": None,
+        "safe_positive_semantics": "requires exact teacher index; not inferred from dataset root name",
         "r_dep_mean": float(r_sum / max(scanned, 1)),
     }
 
@@ -1076,6 +1081,34 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
             + float(tcfg.get("direct_policy_metric_frontier_global_harm_tiebreak", 0.25)) * conditional_harm
         )
         out["direct_frontier_harmful_mass_worst"] = frontier_harm
+
+        # v48.25 INTEGRITY-BRIDGE: soft policy mass alone allowed an epoch with
+        # zero executable admissions to win. Add a lexicographic-style barrier
+        # using the exact development admission contract. The held-out Natural
+        # gate remains unchanged; this metric only selects a train/dev checkpoint.
+        hard_recalls = [
+            float(out.get("direct_positive_admission_recall_near", 0.0)),
+            float(out.get("direct_positive_admission_recall_contact", 0.0)),
+        ]
+        hard_admission_rates = [
+            float(out.get("direct_raw_admission_rate_near", 0.0)),
+            float(out.get("direct_raw_admission_rate_contact", 0.0)),
+        ]
+        integrity_target = float(
+            tcfg.get("direct_policy_metric_integrity_min_recall",
+                     tcfg.get("direct_policy_metric_min_positive_recall", 0.20))
+        )
+        hard_shortfall = sum(max(0.0, integrity_target - value) for value in hard_recalls)
+        all_abstain = float(max(hard_admission_rates) <= 0.0)
+        out["direct_integrity_recall_min"] = min(hard_recalls)
+        out["direct_integrity_all_abstain"] = all_abstain
+        out["direct_integrity_selection_risk"] = (
+            float(out["direct_frontier_selection_risk"])
+            + float(tcfg.get("direct_policy_metric_integrity_recall_weight", 20.0))
+            * hard_shortfall
+            + float(tcfg.get("direct_policy_metric_integrity_all_abstain_weight", 8.0))
+            * all_abstain
+        )
     return out
 
 
@@ -2250,6 +2283,18 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_evidence_admission_scale=float(
             model_cfg.get("direct_recovery_evidence_admission_scale", 2.0)
         ),
+        direct_recovery_evidence_admission_bounded=bool(
+            model_cfg.get("direct_recovery_evidence_admission_bounded", True)
+        ),
+        # v48.23/v48.24 set these fields in the run scripts, but the CLI model
+        # constructor previously dropped them. That silently restored the legacy
+        # p(harm)=0.5 prior and non-identity admission penalty.
+        direct_recovery_evidence_frontier=bool(
+            model_cfg.get("direct_recovery_evidence_frontier", False)
+        ),
+        direct_recovery_evidence_component_prior_logit=float(
+            model_cfg.get("direct_recovery_evidence_component_prior_logit", -2.0)
+        ),
     ).to(device)
     tcfg = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
 
@@ -2427,6 +2472,16 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         val_tcfg = dict(tcfg)
         val_tcfg["group_batching_replacement"] = False
         val_tcfg["group_batch_hard_boost"] = 0.0
+        # A train-only path index cannot match adaptation-dev NPZ paths. Use an
+        # independently built dev index when supplied; otherwise disable exact
+        # stratification rather than logging every validation group as dead/mixed.
+        val_group_index = str(tcfg.get("validation_group_index_path", "") or "").strip()
+        if val_group_index:
+            val_tcfg["group_index_path"] = val_group_index
+        else:
+            val_tcfg["group_index_path"] = ""
+            val_tcfg["group_batch_stratified"] = False
+            val_tcfg["group_batch_require_positive_advantage_groups"] = False
         val_cfg["training"] = val_tcfg
         val_group_sampler = _make_group_batch_sampler(val_ds, val_cfg, batch_size)
         if val_group_sampler is not None:

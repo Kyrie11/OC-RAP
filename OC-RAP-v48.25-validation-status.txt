@@ -1,0 +1,38 @@
+OC-RAP v48.25 INTEGRITY-BRIDGE validation status
+================================================
+
+Source audited:
+  /mnt/data/OC-RAP(2).zip
+  /mnt/data/ocrap_v48_24_support_dedicated_4824.zip
+  /mnt/data/大模型建议(2).md
+
+Static and unit validation:
+  PYTHONPATH="$PWD/src" python -m pytest -q
+    225 passed, 5 warnings
+
+  python -m compileall -q src tools tests
+    PASS
+
+  find scripts -maxdepth 1 -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+    PASS
+
+  python tools/check_v48_25_regime_targets.py --help
+    PASS
+
+Specific integrity checks:
+  - model constructor forwards semantic frontier: PASS
+  - model constructor forwards component prior logit: PASS
+  - model constructor forwards admission bounded mode: PASS
+  - independent adaptation-dev index path: PASS
+  - structural certificate rejection maps to RC=20: PASS
+  - empty/invalid certificate population remains RC=30: PASS
+  - dev-shadow selector does not authorize deployment: PASS
+  - two-A30 ablation maximum concurrency=2: PASS
+
+Not available in this environment:
+  - real WOMD/Waymax training and simulation
+  - two NVIDIA A30 GPUs
+  - real v48.25 Natural-gate result
+  - real Near/Contact physical closed-loop deltas
+
+No claim of RC=0 or CCF-A target attainment is made before the server run.

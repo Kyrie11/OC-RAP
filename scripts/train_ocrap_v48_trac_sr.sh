@@ -52,6 +52,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.strict_init_prefixes="${STRICT_INIT_PREFIXES:-}" \
   --set training.direct_only_fast_path=true \
   --set training.group_index_path="$GROUP_INDEX" \
+  --set training.validation_group_index_path="${VAL_GROUP_INDEX:-}" \
   --set training.epochs="${EPOCHS:-12}" --set training.early_stop_patience="${PATIENCE:-3}" \
   --set training.batch_size="${BATCH_SIZE:-96}" --set training.lr="$LR" \
   --set training.encoder_lr_scale="$ENCODER_LR_SCALE" \
@@ -133,6 +134,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set model.direct_recovery_evidence_consensus_disagreement_penalty="${EVIDENCE_CONSENSUS_DISAGREEMENT_PENALTY:-0.15}" \
   --set model.direct_recovery_evidence_admission_head="${EVIDENCE_ADMISSION_HEAD:-false}" \
   --set model.direct_recovery_evidence_admission_scale="${EVIDENCE_ADMISSION_SCALE:-2.0}" \
+  --set model.direct_recovery_evidence_admission_bounded="${EVIDENCE_ADMISSION_BOUNDED:-true}" \
   --set model.direct_recovery_evidence_frontier="${EVIDENCE_FRONTIER:-false}" \
   --set model.direct_recovery_evidence_component_prior_logit="${EVIDENCE_COMPONENT_PRIOR_LOGIT:--2.0}" \
   --set loss_weights.dep=0 --set loss_weights.orc=0 --set loss_weights.assign=0 \
@@ -295,6 +297,9 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.direct_policy_metric_frontier_harm_weight="${POLICY_METRIC_FRONTIER_HARM_WEIGHT:-1.5}" \
   --set training.direct_policy_metric_frontier_false_weight="${POLICY_METRIC_FRONTIER_FALSE_WEIGHT:-0.5}" \
   --set training.direct_policy_metric_frontier_global_harm_tiebreak="${POLICY_METRIC_FRONTIER_GLOBAL_HARM_TIEBREAK:-0.25}" \
+  --set training.direct_policy_metric_integrity_min_recall="${POLICY_METRIC_INTEGRITY_MIN_RECALL:-0.20}" \
+  --set training.direct_policy_metric_integrity_recall_weight="${POLICY_METRIC_INTEGRITY_RECALL_WEIGHT:-20.0}" \
+  --set training.direct_policy_metric_integrity_all_abstain_weight="${POLICY_METRIC_INTEGRITY_ALL_ABSTAIN_WEIGHT:-8.0}" \
   --set training.direct_value_false_positive_weight="$FP_W" \
   --set training.direct_value_opportunity_weight="${OPPORTUNITY_AUX_WEIGHT:-0.15}" \
   --set training.direct_value_opportunity_pos_weight=8.0 \

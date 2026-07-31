@@ -469,6 +469,20 @@ def main() -> int:
     ap.add_argument("--macro-ids", default="2,3,5,6,7")
     ap.add_argument("--folds", type=int, default=2)
     ap.add_argument("--fit-fold", type=int, default=0)
+    ap.add_argument(
+        "--development-fit-only", action="store_true",
+        help=("Fit a diagnostic threshold rule on all adaptation-dev groups. "
+              "The output is never deployment-authorized."),
+    )
+    ap.add_argument(
+        "--verification-only", action="store_true",
+        help=("Evaluate one rule frozen outside the certificate on the complete certificate "
+              "population. No threshold is fitted from certificate labels."),
+    )
+    ap.add_argument(
+        "--frozen-rule-json", type=Path,
+        help="JSON produced on adaptation-dev containing rule or diagnostic_fit_rule.",
+    )
     ap.add_argument("--required-min-groups", type=int, default=120)
     ap.add_argument("--required-min-scenes", type=int, default=60)
     ap.add_argument("--min-nominal-deviation", type=float, default=0.002)
@@ -538,6 +552,14 @@ def main() -> int:
     ap.add_argument("--preference-tie-epsilon-near", type=float, default=0.025)
     ap.add_argument("--preference-tie-epsilon-contact", type=float, default=0.010)
     args = ap.parse_args()
+    if args.development_fit_only and args.verification_only:
+        ap.error("--development-fit-only and --verification-only are mutually exclusive")
+    if args.development_fit_only and args.frozen_rule_json is not None:
+        ap.error("--development-fit-only cannot use --frozen-rule-json")
+    if args.verification_only and args.frozen_rule_json is None:
+        ap.error("--verification-only requires --frozen-rule-json")
+    if args.frozen_rule_json is not None and not args.frozen_rule_json.is_file():
+        ap.error(f"frozen rule JSON not found: {args.frozen_rule_json}")
 
     supported_macros = {int(x) for x in args.macro_ids.split(",") if x.strip()}
     component_tolerances = ComponentVetoTolerances(
@@ -681,10 +703,12 @@ def main() -> int:
             "has_safe_opportunity": bool(safe_pairs),
         })
 
-    fit = [g for g in groups if g["fold"] == args.fit_fold]
-    verify = [g for g in groups if g["fold"] != args.fit_fold]
-    support_feasibility = {
-        "fit": certificate_support_feasibility(
+    if args.development_fit_only:
+        # All adaptation-dev groups may be used to fit the external threshold
+        # rule because this mode never authorizes deployment.
+        fit = list(groups)
+        verify: list[dict[str, Any]] = []
+        fit_support = certificate_support_feasibility(
             num_groups=len(fit),
             num_opportunities=sum(
                 g["has_safe_opportunity"]
@@ -698,8 +722,55 @@ def main() -> int:
             max_harmful_group_ucb=args.max_fit_harmful_group_ucb,
             confidence_level=args.certificate_confidence_level,
             bound_type=args.certificate_bound_type,
-        ),
-        "verify": certificate_support_feasibility(
+        )
+        verify_support = certificate_support_feasibility(
+            num_groups=0, num_opportunities=0, min_selected=0,
+            min_precision_lcb=0.0, max_harmful_selected_ucb=1.0,
+            max_harmful_group_ucb=1.0,
+            confidence_level=args.certificate_confidence_level,
+            bound_type=args.certificate_bound_type,
+        )
+        verify_support["not_applicable"] = True
+        verify_support["population_role"] = "adaptation_dev_threshold_fit"
+        support_feasibility = {"fit": fit_support, "verify": verify_support}
+        support_feasibility["overall"] = bool(fit_support["feasible"])
+    elif args.verification_only:
+        # Thresholds are frozen on adaptation-dev.  Every certificate scene is
+        # therefore an independent verification example; no certificate label
+        # is consumed for threshold fitting.  This avoids discarding half of a
+        # sparse, expensive safety certificate while preserving a clean
+        # threshold-source / verification-population separation.
+        fit: list[dict[str, Any]] = []
+        verify = list(groups)
+        fit_support = certificate_support_feasibility(
+            num_groups=0, num_opportunities=0, min_selected=0,
+            min_precision_lcb=0.0, max_harmful_selected_ucb=1.0,
+            max_harmful_group_ucb=1.0,
+            confidence_level=args.certificate_confidence_level,
+            bound_type=args.certificate_bound_type,
+        )
+        fit_support["not_applicable"] = True
+        fit_support["threshold_source"] = "external_frozen_rule"
+    else:
+        fit = [g for g in groups if g["fold"] == args.fit_fold]
+        verify = [g for g in groups if g["fold"] != args.fit_fold]
+        fit_support = certificate_support_feasibility(
+            num_groups=len(fit),
+            num_opportunities=sum(
+                g["has_safe_opportunity"]
+                if args.opportunity_label_mode == "safe_benefit"
+                else g["oracle_best_teacher_adv"] >= args.positive_gain
+                for g in fit
+            ),
+            min_selected=args.min_fit_selected,
+            min_precision_lcb=args.min_fit_precision_lcb,
+            max_harmful_selected_ucb=args.max_fit_harmful_selected_ucb,
+            max_harmful_group_ucb=args.max_fit_harmful_group_ucb,
+            confidence_level=args.certificate_confidence_level,
+            bound_type=args.certificate_bound_type,
+        )
+    if not args.development_fit_only:
+        verify_support = certificate_support_feasibility(
             num_groups=len(verify),
             num_opportunities=sum(
                 g["has_safe_opportunity"]
@@ -713,11 +784,13 @@ def main() -> int:
             max_harmful_group_ucb=args.max_verify_harmful_group_ucb,
             confidence_level=args.certificate_confidence_level,
             bound_type=args.certificate_bound_type,
-        ),
-    }
-    support_feasibility["overall"] = bool(
-        support_feasibility["fit"]["feasible"] and support_feasibility["verify"]["feasible"]
-    )
+        )
+        support_feasibility = {"fit": fit_support, "verify": verify_support}
+        support_feasibility["overall"] = bool(
+            verify_support["feasible"]
+            if args.verification_only
+            else fit_support["feasible"] and verify_support["feasible"]
+        )
     conformal = None
     if args.risk_source == "conformal_delta":
         if args.conformal_scope == "policy_top1":
@@ -749,7 +822,36 @@ def main() -> int:
             "overprediction_quantile": float(q_over),
             "underprediction_quantile": float(q_under),
         }
-    rule, fit_metrics, candidates, near_miss = _fit(fit, args, supported_macros)
+    frozen_rule_source: dict[str, Any] | None = None
+    if args.frozen_rule_json is not None:
+        frozen_doc = json.loads(args.frozen_rule_json.read_text(encoding="utf-8"))
+        frozen_rule = frozen_doc.get("rule") or frozen_doc.get("diagnostic_fit_rule")
+        required_rule_keys = {
+            "opportunity_threshold", "harm_threshold",
+            "score_threshold", "rank_margin_threshold",
+        }
+        if not isinstance(frozen_rule, dict) or not required_rule_keys.issubset(frozen_rule):
+            raise ValueError(
+                f"frozen rule JSON lacks rule/diagnostic_fit_rule keys: {args.frozen_rule_json}"
+            )
+        rule = {key: float(frozen_rule[key]) for key in sorted(required_rule_keys)}
+        fit_metrics = {
+            "external_frozen_rule": True,
+            "source_valid_for_deployment": bool(frozen_doc.get("valid_for_deployment", False)),
+            "source_rejection_kind": frozen_doc.get("rejection_kind"),
+        }
+        candidates = []
+        near_miss = []
+        frozen_rule_source = {
+            "path": str(args.frozen_rule_json),
+            "sha256": hashlib.sha256(args.frozen_rule_json.read_bytes()).hexdigest(),
+            "selected_field": "rule" if frozen_doc.get("rule") else "diagnostic_fit_rule",
+            "dataset": frozen_doc.get("dataset"),
+            "requested_split_roles": frozen_doc.get("requested_split_roles"),
+            "allowed_split_ids": frozen_doc.get("allowed_split_ids"),
+        }
+    else:
+        rule, fit_metrics, candidates, near_miss = _fit(fit, args, supported_macros)
     if rule is None:
         verify_top1: list[dict[str, Any]] = []
         all_top1: list[dict[str, Any]] = []
@@ -959,21 +1061,43 @@ def main() -> int:
             "feasible": bool(best["feasible"]),
         }
 
-    proposal_constrained_oracle_gate = {
-        "fit": _proposal_oracle_partition(
+    if args.verification_only:
+        fit_oracle = {
+            "num_groups": 0, "proposal_top_k": int(proposal_k),
+            "proposal_safe_positive_groups": 0, "proposal_nonharm_groups": 0,
+            "oracle_selected": 0, "oracle_true_positive": 0,
+            "oracle_precision_lcb": None, "oracle_harmful_selected_ucb": None,
+            "oracle_harmful_group_ucb": None,
+            "optimistic_ignores_macro_constraint": True, "feasible": True,
+            "not_applicable": True, "threshold_source": "external_frozen_rule",
+        }
+    else:
+        fit_oracle = _proposal_oracle_partition(
             fit, min_selected=args.min_fit_selected, min_precision_lcb=args.min_fit_precision_lcb,
             max_harmful_selected_ucb=args.max_fit_harmful_selected_ucb,
             max_harmful_group_ucb=args.max_fit_harmful_group_ucb,
-        ),
-        "verify": _proposal_oracle_partition(
+        )
+    if args.development_fit_only:
+        verify_oracle = {
+            "num_groups": 0, "proposal_top_k": int(proposal_k),
+            "proposal_safe_positive_groups": 0, "proposal_nonharm_groups": 0,
+            "oracle_selected": 0, "oracle_true_positive": 0,
+            "oracle_precision_lcb": None, "oracle_harmful_selected_ucb": None,
+            "oracle_harmful_group_ucb": None,
+            "optimistic_ignores_macro_constraint": True, "feasible": True,
+            "not_applicable": True, "population_role": "adaptation_dev_threshold_fit",
+        }
+    else:
+        verify_oracle = _proposal_oracle_partition(
             verify, min_selected=args.min_verify_selected, min_precision_lcb=args.min_verify_precision_lcb,
             max_harmful_selected_ucb=args.max_verify_harmful_selected_ucb,
             max_harmful_group_ucb=args.max_verify_harmful_group_ucb,
-        ),
-    }
+        )
+    proposal_constrained_oracle_gate = {"fit": fit_oracle, "verify": verify_oracle}
     proposal_constrained_oracle_gate["overall"] = bool(
-        proposal_constrained_oracle_gate["fit"]["feasible"]
-        and proposal_constrained_oracle_gate["verify"]["feasible"]
+        fit_oracle["feasible"] if args.development_fit_only else
+        verify_oracle["feasible"] if args.verification_only else
+        fit_oracle["feasible"] and verify_oracle["feasible"]
     )
     # v48.24 SUPPORT-BRIDGE: report whether the structural support failure is
     # caused by the fixed proposal width.  The curve is diagnostic only; the
@@ -983,24 +1107,48 @@ def main() -> int:
     })
     proposal_support_curve = {}
     for support_k in support_k_values:
-        fit_support = _proposal_oracle_partition(
-            fit, min_selected=args.min_fit_selected,
-            min_precision_lcb=args.min_fit_precision_lcb,
-            max_harmful_selected_ucb=args.max_fit_harmful_selected_ucb,
-            max_harmful_group_ucb=args.max_fit_harmful_group_ucb,
-            proposal_k_override=support_k,
+        fit_support = (
+            {
+                "num_groups": 0, "proposal_top_k": int(support_k),
+                "proposal_safe_positive_groups": 0, "proposal_nonharm_groups": 0,
+                "oracle_selected": 0, "oracle_true_positive": 0,
+                "oracle_precision_lcb": None, "oracle_harmful_selected_ucb": None,
+                "oracle_harmful_group_ucb": None,
+                "optimistic_ignores_macro_constraint": True, "feasible": True,
+                "not_applicable": True, "threshold_source": "external_frozen_rule",
+            }
+            if args.verification_only else
+            _proposal_oracle_partition(
+                fit, min_selected=args.min_fit_selected,
+                min_precision_lcb=args.min_fit_precision_lcb,
+                max_harmful_selected_ucb=args.max_fit_harmful_selected_ucb,
+                max_harmful_group_ucb=args.max_fit_harmful_group_ucb,
+                proposal_k_override=support_k,
+            )
         )
-        verify_support = _proposal_oracle_partition(
-            verify, min_selected=args.min_verify_selected,
-            min_precision_lcb=args.min_verify_precision_lcb,
-            max_harmful_selected_ucb=args.max_verify_harmful_selected_ucb,
-            max_harmful_group_ucb=args.max_verify_harmful_group_ucb,
-            proposal_k_override=support_k,
+        verify_support = (
+            {
+                "num_groups": 0, "proposal_top_k": int(support_k),
+                "proposal_safe_positive_groups": 0, "proposal_nonharm_groups": 0,
+                "oracle_selected": 0, "oracle_true_positive": 0,
+                "oracle_precision_lcb": None, "oracle_harmful_selected_ucb": None,
+                "oracle_harmful_group_ucb": None,
+                "optimistic_ignores_macro_constraint": True, "feasible": True,
+                "not_applicable": True, "population_role": "adaptation_dev_threshold_fit",
+            }
+            if args.development_fit_only else
+            _proposal_oracle_partition(
+                verify, min_selected=args.min_verify_selected,
+                min_precision_lcb=args.min_verify_precision_lcb,
+                max_harmful_selected_ucb=args.max_verify_harmful_selected_ucb,
+                max_harmful_group_ucb=args.max_verify_harmful_group_ucb,
+                proposal_k_override=support_k,
+            )
         )
         proposal_support_curve[str(support_k)] = {
             "fit": fit_support,
             "verify": verify_support,
-            "overall": bool(fit_support["feasible"] and verify_support["feasible"]),
+            "overall": bool(fit_support["feasible"] if args.development_fit_only else verify_support["feasible"] if args.verification_only else fit_support["feasible"] and verify_support["feasible"]),
         }
     proposal_evidence_top1_corr = (
         float(np.corrcoef(
@@ -1100,9 +1248,9 @@ def main() -> int:
     fit_scenes = {g["scene"] for g in fit}
     verify_scenes = {g["scene"] for g in verify}
     warnings: list[str] = []
-    if not bool(support_feasibility["fit"]["feasible"]):
+    if not args.verification_only and not bool(support_feasibility["fit"]["feasible"]):
         warnings.append("fit certificate specification infeasible for observed positive support")
-    if not bool(support_feasibility["verify"]["feasible"]):
+    if not args.development_fit_only and not bool(support_feasibility["verify"]["feasible"]):
         warnings.append("verify certificate specification infeasible for observed positive support")
     if not bool(proposal_constrained_oracle_gate["overall"]):
         warnings.append("proposal-constrained safe-positive oracle cannot satisfy the declared gate")
@@ -1110,27 +1258,27 @@ def main() -> int:
         warnings.append("insufficient calibration groups")
     if len(scenes) < args.required_min_scenes:
         warnings.append("insufficient independent calibration scenes")
-    if fit_scenes & verify_scenes:
+    if not args.verification_only and fit_scenes & verify_scenes:
         warnings.append("fit/verify scene leakage")
     if rule is None:
         warnings.append("no joint opportunity-harm-score rule satisfied fit constraints")
-    if verify_metrics["num_selected"] < args.min_verify_selected:
+    if not args.development_fit_only and verify_metrics["num_selected"] < args.min_verify_selected:
         warnings.append("held-out selections below requirement")
-    if verify_metrics["precision_wilson_lcb90"] is None or verify_metrics["precision_wilson_lcb90"] < args.min_verify_precision_lcb:
+    if not args.development_fit_only and (verify_metrics["precision_wilson_lcb90"] is None or verify_metrics["precision_wilson_lcb90"] < args.min_verify_precision_lcb):
         warnings.append("held-out precision LCB below requirement")
-    if verify_metrics["harmful_group_exposure_ucb90"] > args.max_verify_harmful_group_ucb:
+    if not args.development_fit_only and verify_metrics["harmful_group_exposure_ucb90"] > args.max_verify_harmful_group_ucb:
         warnings.append("held-out harmful exposure UCB above budget")
-    if verify_metrics["harmful_selected_ucb90"] > args.max_verify_harmful_selected_ucb:
+    if not args.development_fit_only and verify_metrics["harmful_selected_ucb90"] > args.max_verify_harmful_selected_ucb:
         warnings.append("held-out conditional harmful-switch UCB above budget")
     verify_macro_bad = (
         float(verify_metrics.get("selected_macro_excess_share", 0.0)) > args.max_macro_excess_share
         if args.macro_constraint_mode == "opportunity_normalized"
         else verify_metrics["max_selected_macro_share"] > args.max_selected_macro_share
     )
-    if verify_macro_bad:
+    if not args.development_fit_only and verify_macro_bad:
         warnings.append("held-out selections exceed the macro concentration budget")
 
-    valid = not warnings
+    valid = bool(not warnings and not args.development_fit_only)
 
     # A failed deployment certificate must still be usable for an explicitly
     # adaptation-dev-only shadow diagnostic.  Persist the closest *fit-derived*
@@ -1170,7 +1318,20 @@ def main() -> int:
         "bucket": args.bucket,
         "dataset": args.dataset,
         "checkpoint": args.checkpoint,
+        "certificate_mode": ("development_fit_only" if args.development_fit_only else "external_rule_full_verification" if args.verification_only else "internal_fit_verify_split"),
+        "development_fit_only": bool(args.development_fit_only),
+        "verification_only": bool(args.verification_only),
+        "frozen_rule_source": frozen_rule_source,
         "valid_for_deployment": valid,
+        "certificate_data_valid": bool(len(groups) > 0 and len(scenes) > 0),
+        "certificate_support_feasible": bool(support_feasibility["overall"]),
+        "gate_evaluated": bool(not args.development_fit_only and len(groups) > 0 and len(scenes) > 0),
+        "rejection_kind": (
+            "development_fit_only" if args.development_fit_only else
+            None if valid else
+            "structural_support_infeasible" if not bool(support_feasibility["overall"]) else
+            "learned_gate_rejection"
+        ),
         "selection_rule": (
             "physical -> preference top-k proposal -> evidence rerank -> value challenge"
             if args.evidence_rerank_top_k else
@@ -1296,9 +1457,14 @@ def main() -> int:
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
     print(json.dumps(result, ensure_ascii=False), flush=True)
     if len(groups) == 0 or len(scenes) == 0:
-        return 4  # protocol/artifact failure, not a Natural-gate rejection
+        return 4  # protocol/artifact failure: no valid certificate population
+    if args.development_fit_only:
+        return 0 if (rule is not None or diagnostic_fit_rule is not None) else 3
     if not bool(support_feasibility["overall"]):
-        return 4  # unsupported certificate specification, not an algorithm rejection
+        # The certificate was validly evaluated and proved that the declared
+        # opportunity/gate contract lacks enough support. This is a structural
+        # Natural-gate rejection (controller RC=20), not an engineering failure.
+        return 3
     return 0 if valid else 3
 
 

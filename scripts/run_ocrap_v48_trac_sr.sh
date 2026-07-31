@@ -70,6 +70,13 @@ if d.get('valid_for_deployment', False):
 elif diagnostic:
     source='fit_nearest_frontier_diagnostic_only'
     r=d.get('diagnostic_selector_overrides', {}) or {}
+    if (not r and d.get('verification_only')
+            and (d.get('frozen_rule_source') or {}).get('sha256')):
+        # v48.25: the selector was frozen on adaptation-dev before the complete
+        # certificate was read. It remains safe for adaptation-dev-only shadow
+        # diagnosis even when the independent certificate rejects deployment.
+        source='adaptation_dev_frozen_rule_diagnostic_only'
+        r=d.get('selector_overrides', {}) or {}
     if not r:
         frontier=d.get('near_miss_frontier') or []
         if not frontier:

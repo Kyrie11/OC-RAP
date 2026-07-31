@@ -185,6 +185,7 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_consensus_disagreement_penalty: float = 0.15,
         direct_recovery_evidence_admission_head: bool = False,
         direct_recovery_evidence_admission_scale: float = 2.0,
+        direct_recovery_evidence_admission_bounded: bool = True,
         direct_recovery_evidence_frontier: bool = False,
         direct_recovery_evidence_component_prior_logit: float = -2.0,
     ):
@@ -279,6 +280,9 @@ class OCRAPModel(nn.Module):
         )
         self.direct_recovery_evidence_admission_scale = float(
             max(0.0, direct_recovery_evidence_admission_scale)
+        )
+        self.direct_recovery_evidence_admission_bounded = bool(
+            direct_recovery_evidence_admission_bounded
         )
         self.direct_recovery_evidence_frontier = bool(direct_recovery_evidence_frontier)
         self.direct_recovery_evidence_component_prior_logit = float(
@@ -1214,9 +1218,18 @@ class OCRAPModel(nn.Module):
                             unified_benefit_logit.detach()
                             - torch.nn.functional.softplus(unified_harm_logit.detach())
                         )
-                    admission_residual = (
+                    # v48.25 INTEGRITY-BRIDGE optionally removes the tanh ceiling.
+                    # The zero-initialised head still preserves the transferred prior
+                    # exactly, while an unbounded linear residual can cross the actual
+                    # nominal-vs-recovery decision boundary when the source prior is
+                    # conservatively negative. Global gradient clipping retains numerical control.
+                    admission_basis = (
                         torch.tanh(admission_raw)
-                        * self.direct_recovery_evidence_admission_scale
+                        if self.direct_recovery_evidence_admission_bounded
+                        else admission_raw
+                    )
+                    admission_residual = (
+                        admission_basis * self.direct_recovery_evidence_admission_scale
                     )
                     unified_admission_logit = admission_prior + admission_residual
                     evidence_calibrator_residual = torch.cat(

@@ -1,3 +1,65 @@
+## v48.25 — OC-TRAC-INTEGRITY-BRIDGE (2026-07-31)
+
+### v48.24 result attribution
+
+- The uploaded v48.24 run returned `RC=30`, but this does **not** establish algorithmic regression. Balanced and Precision both completed adaptation and produced checkpoints. Four non-empty Near/Contact certificate artifacts were evaluated; the controller converted each worker's structural-support rejection (`rc=4` in v48.24) into pipeline failure 30. Structural infeasibility is a valid Natural-gate rejection and must map to worker 3 / controller `RC=20`; only missing, empty, corrupt or protocol-inconsistent artifacts map to `RC=30`.
+- The v48.24 model was not the intended SUPPORT-BRIDGE implementation. The run scripts set `model.direct_recovery_evidence_frontier=true` and `model.direct_recovery_evidence_component_prior_logit=-2.0`, but `ocrap.cli.train` omitted both keyword arguments when constructing `OCRAPModel`. Runtime therefore used the legacy default `frontier=false`; zero component logits again represented approximately 0.5 harmful probability and admission again used the non-centred `benefit-softplus(harm)` prior. This silent configuration drop is sufficient to produce universal abstention and invalidates v48.24 as a test of the intended semantic prior/frontier design.
+- Validation stratification also reused the adaptation-train teacher index for adaptation-dev paths. The log consequently reported all 409 dev groups as `dead_or_mixed`, despite separately computed validation statistics containing positive groups. Checkpoint selection was therefore based on a mislabeled validation sampler.
+- Both variants selected checkpoints with `direct_raw_admission_rate_near=0`, `direct_raw_admission_rate_contact=0`, and zero positive admission recall. The v48.24 `direct_frontier_selection_risk` could still improve through soft mass while the executable policy remained all-abstain.
+- Expanding the frozen proposal from top-3 to top-8 did not recover additional fit-side safe-positive support. Near fit remains 3 safe-positive groups at k=1/3/5/8. Contact fit increases from 7 at k=1 to 10 at k=3 and remains 10 at k=5/8. Proposal width is therefore not the current bottleneck; top-8 adds computation and ranking ambiguity without adding certificate opportunities.
+- Near Balanced preserves raw-benefit AUC (0.855) but learned safe-benefit AUC, conditional harm AUC and regret worsen. Near Precision shows one partial positive signal—conditional harm AUC improves from 0.527 to 0.611 and false-switch falls from 0.221 to 0.153—but harmful-switch rises from 0.492 to 0.622, top-1 regret rises from 0.091 to 0.202, and coverage stays zero. This is not safe admission.
+- Contact remains unresolved. Precision Contact learned benefit/safe-benefit/harm AUC all decline, conditional harm AUC falls to 0.443, correlation remains negative, and top-1 regret rises to 0.264. Balanced Contact remains below-random for safe/harm ordering and has negative correlation. No v48.24 closed-loop shadow result exists, so none of the physical Near/Contact publication targets is supported.
+
+### Certificate decision
+
+- The certificate concept is retained. It is the statistical authorization layer that correctly prevents an unsafe or unsupported learned selector from being evaluated on held-out test/stress. Removing it would hide failure rather than solve it.
+- The old internal 50/50 certificate fit/verify split is no longer suitable for this sparse safe-positive population. Across the complete Near certificate there are 9 proposal-contained safe-positive groups, but the old split separately required approximately 8 fit positives and 5 verify positives; that contract can be impossible even when the full independent population has enough support. Contact has 20 total safe-positive groups, but its old fit half still misses the precision-LCB requirement.
+- v48.25 fits all opportunity/harm/score/rank thresholds on `evidence_adapt_dev`, freezes the rule and SHA256 provenance, then evaluates the **entire** scene-disjoint certificate population in verification-only mode. Certificate labels never alter thresholds. The numerical verification requirements are not relaxed.
+- This is a new protocol and must not be used to reinterpret v48.24 retrospectively. Because the current certificate population has already been inspected during algorithm development, results on it are development evidence. A final CCF-A paper claim requires a newly sealed/preregistered certificate population, even if the fixed dataset is retained for the next diagnostic round.
+
+### Engineering corrections
+
+1. Forward `direct_recovery_evidence_frontier`, `direct_recovery_evidence_component_prior_logit`, and `direct_recovery_evidence_admission_bounded` from the CLI config into `OCRAPModel`.
+2. Build a separate exact teacher-PCD index for adaptation-dev and pass it through `training.validation_group_index_path`; otherwise validation stratification is disabled rather than silently using a train-only index.
+3. Rename the file-name heuristic `safe_positive_fraction` to `legacy_safe_root_positive_fraction`; exact safe-positive prevalence is reported only by the teacher index.
+4. Map valid structural/learned certificate rejection to `RC=20`. Reserve `RC=30` for empty data, corrupt artifacts, protocol/index mismatch, training/checkpoint failure or runtime exceptions.
+5. Keep strict deployment authorization, while allowing an adaptation-dev-only shadow diagnostic to load the dev-frozen selector after independent certificate rejection.
+6. Add `check_v48_25_regime_targets.py` and restore complete Near/Contact physical target checking in the shadow workflow.
+
+### v48.25 algorithm: INTEGRITY-BRIDGE
+
+**INTEGRITY = Identity-preserving Non-regime Evidence with Gate-True Risk, Independent dev labels, Threshold freezing and Yielding admission.** It remains one unified model and does not expose Near/Contact regime IDs at inference.
+
+1. **Correct semantic frontier execution.** The low-risk component prior and centred identity-preserving admission path are now actually instantiated, not merely written to the shell command.
+2. **Executable-admission checkpoint barrier.** `direct_integrity_selection_risk` adds hard Near/Contact positive-recall shortfall and an explicit all-abstain penalty to the existing frontier risk. A checkpoint cannot win only by improving soft mass while selecting no action.
+3. **Unbounded, zero-initialised admission residual.** The primary model removes the `tanh` ceiling from the admission residual. Zero initialisation still preserves the transferred prior exactly, but the residual can cross the nominal-vs-recovery boundary when the source prior is conservatively negative. Global gradient clipping remains active.
+4. **Top-3 restored.** Since k=8 adds no safe-positive support, the default returns to frozen top-3. This avoids extra harmful/ambiguous candidates and makes the ablation isolate algorithm integrity rather than proposal width.
+5. **Safe-utility remains the deployed target.** Continuous safe-utility regression/listwise supervision and categorical nominal-plus-top-k learning remain active; legacy Noisy-OR remains disabled.
+6. **No retrospective label relaxation.** The current component-veto teacher is kept for the clean v48.25 main run. A future protective-Pareto label ablation may separate hard collision/offroad vetoes from soft DRS/deployability/gap trade-offs, but it must be versioned and evaluated on fresh sealed evidence.
+
+### Non-repeated ablations and two-A30 schedule
+
+- `A_wiring_fix_bounded`: only repair the missing semantic frontier/prior wiring; retain bounded admission and the previous checkpoint metric.
+- `B_add_integrity_checkpoint`: A plus executable-admission checkpoint barrier.
+- `C_add_unbounded_admission`: B plus the unbounded zero-initialised admission residual.
+- `D_full_integrity_bridge`: C plus continuous benefit listwise and stronger safe-vs-harmful frontier contrast.
+
+The launcher runs four waves. In every wave Balanced occupies GPU0 and Precision occupies GPU1; each A30 runs one task at a time and receives four tasks total. Maximum concurrency is two.
+
+### Return-code interpretation
+
+- `RC=0`: both Near and Contact pass the dev-frozen, full-certificate verification gate; only the authorization-checked stress script may read held-out test/stress.
+- `RC=20`: pipeline and certificate data are valid, but structural support or the learned selector fails. Do not read held-out test/stress. Run adaptation-dev shadow and the A/B/C/D ablations.
+- `RC=30`: engineering/protocol/index/training/checkpoint/empty-artifact failure. Inspect `PIPELINE_FAILED.json` and logs before drawing any algorithm conclusion.
+
+### Local validation
+
+- `PYTHONPATH="$PWD/src" python -m pytest -q`: 225 passed, 5 warnings.
+- `python -m compileall -q src tools tests`: passed.
+- `bash -n` for every shell script: passed.
+- `check_v48_25_regime_targets.py --help`: passed.
+- Real WOMD/Waymax and two A30s are unavailable in this audit environment; no v48.25 gate or closed-loop result is claimed in advance.
+
 ## v48.24 — OC-TRAC-SUPPORT-BRIDGE (2026-07-31)
 
 ### v48.23 result attribution
