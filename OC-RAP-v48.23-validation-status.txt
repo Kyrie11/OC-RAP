@@ -1,0 +1,45 @@
+OC-RAP v48.23 FRONTIER-BRIDGE validation status
+================================================
+
+Source/result audit
+- v48.22 controller: RC=20
+- pipeline_valid=true
+- gate_evaluated=true
+- test_roots_read=false
+- Balanced and Precision artifacts present
+- Near/Contact fit and verify support feasible and scene-disjoint
+- Attribution: genuine Natural-gate rejection; no held-out test read
+
+Automated validation
+- pytest: 216 passed, 5 warnings
+- python -m compileall -q src tools tests: PASS
+- bash -n for every scripts/*.sh: PASS
+- v48.23 stale-controller/version audit: PASS
+- missing-protocol fault injection:
+  - process exit = 30
+  - PIPELINE_FAILED.normalized_exit_code = 30
+  - V48_23_COMPLETE.certificate_exit_code = 30
+  - pipeline_valid = false
+  - test_roots_read = false
+
+Behavioral regression coverage
+- semantic component-risk prior at -2.0: PASS
+- zero-residual admission equals transferred benefit: PASS
+- continuous frozen-top-k benefit listwise gradients: PASS
+- safe-benefit versus harmful-benefit frontier gradients: PASS
+- categorical one-action group objective: PASS
+- FRONTIER checkpoint metric reacts to harmful high-gain mass: PASS
+- proposal oracle / dev-shadow / eight-task plumbing: PASS
+- Contact event metrics aggregate as scene rates, not any-scene maxima: PASS
+- legacy v48.18-v48.22 paths retained by full regression suite: PASS
+
+Performance settings
+- Main: Balanced GPU0, Precision GPU1; batch=96, workers=3, prefetch=3
+- Ablations: 8 simultaneous tasks, 4 per A30; batch=56, workers=1
+- bfloat16 AMP, pinned persistent workers and bounded host math threads retained
+- New losses reuse the existing forward pass; no duplicate encoder/proposal pass
+
+Limitations
+- This environment does not contain the real WOMD/Waymax datasets or two A30 GPUs.
+- No v48.23 Natural-gate, dev-shadow or held-out closed-loop result is claimed.
+- Held-out stress remains authorization-gated by NEXT_COMMANDS.txt.

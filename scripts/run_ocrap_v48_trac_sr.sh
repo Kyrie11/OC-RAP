@@ -823,7 +823,7 @@ run_audit() {
     --set closed_loop.resume_fsync="$CL_RESUME_FSYNC" \
     --set closed_loop.save_partial=true \
     --set closed_loop.bucket_dataset="$bucket" \
-    --set closed_loop.bucket_split=test \
+    --set closed_loop.bucket_split=${BUCKET_SPLIT:-test} \
     --set closed_loop.max_bucket_targets="$targets" \
     --set closed_loop.max_rollouts=${AUDIT_MAX_ROLLOUTS:-12} \
     --set closed_loop.raw_max_scenarios=900 \

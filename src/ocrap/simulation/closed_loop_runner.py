@@ -1551,12 +1551,88 @@ def _rollout_one_scene(
     metric_summary["near_zero_clearance_exposure_count"] = near_zero_clearance_count
     metric_summary["near_contact_exposure_rate"] = float(near_count / max(len(clearance_vals), 1)) if clearance_vals else 0.0
     metric_summary["critical_ttc_exposure_rate"] = float(critical_ttc_count / max(len(ttc_vals), 1)) if ttc_vals else 0.0
+    metric_summary["near_contact_exposure_duration_s"] = float(near_count * metric_dt_s)
+    metric_summary["critical_ttc_exposure_duration_s"] = float(critical_ttc_count * metric_dt_s)
+    # Continuous margin-deficit integrals are less brittle than a single minimum
+    # and distinguish a brief close pass from sustained unsafe proximity.
+    metric_summary["clearance_deficit_auc_m_s"] = float(
+        sum(max(0.0, 2.0 - c) for c in clearance_vals) * metric_dt_s
+    )
+    metric_summary["ttc_deficit_auc_s2"] = float(
+        sum(max(0.0, 3.0 - t) for t in ttc_vals) * metric_dt_s
+    )
     # A radius-based clearance <= 5 cm is not equivalent to simulator contact.
     # Keep the legacy key for compatibility, but publish the unambiguous name.
     metric_summary["near_zero_clearance_exposure_rate"] = float(near_zero_clearance_count / max(len(clearance_vals), 1)) if clearance_vals else 0.0
     metric_summary["contact_exposure_rate"] = metric_summary["near_zero_clearance_exposure_rate"]
     metric_summary["overlap_episode_count"] = overlap_episode_count
     metric_summary["secondary_overlap_event"] = float(overlap_episode_count >= 2)
+    overlap_duration_steps = int(sum(overlap_flags))
+    longest_overlap_run_steps = 0
+    overlap_run = 0
+    for flag in overlap_flags + [False]:
+        if flag:
+            overlap_run += 1
+        else:
+            longest_overlap_run_steps = max(longest_overlap_run_steps, overlap_run)
+            overlap_run = 0
+    metric_summary["overlap_duration_steps"] = float(overlap_duration_steps)
+    metric_summary["overlap_duration_s"] = float(overlap_duration_steps * metric_dt_s)
+    metric_summary["longest_overlap_run_steps"] = float(longest_overlap_run_steps)
+    metric_summary["longest_overlap_run_s"] = float(longest_overlap_run_steps * metric_dt_s)
+
+    # Contact-only escape-space diagnostics.  These are computed from observable
+    # closed-loop geometry, not from the offline PCD teacher.  A sustained escape
+    # requires three consecutive non-overlap steps above a configurable clearance.
+    aligned_clearance = [
+        float(m.get("min_clearance_m", float("nan"))) for m in metric_trace
+    ]
+    first_contact_idx = next((i for i, flag in enumerate(overlap_flags) if flag), None)
+    metric_summary["first_contact_step"] = (
+        float(first_contact_idx) if first_contact_idx is not None else float("nan")
+    )
+    if first_contact_idx is not None:
+        post_indices = [
+            i for i in range(first_contact_idx, len(metric_trace))
+            if np.isfinite(aligned_clearance[i])
+        ]
+        post_clearance = [aligned_clearance[i] for i in post_indices]
+        metric_summary["post_contact_clearance_m_max"] = (
+            float(max(post_clearance)) if post_clearance else float("nan")
+        )
+        metric_summary["post_contact_clearance_m_mean"] = (
+            float(np.mean(post_clearance)) if post_clearance else float("nan")
+        )
+        metric_summary["post_contact_free_space_auc_m_s"] = float(
+            sum(max(0.0, c) for c in post_clearance) * metric_dt_s
+        )
+        escape_clearance = float(cl_cfg.get("post_contact_escape_clearance_m", 0.5) or 0.5)
+        escape_sustain_steps = max(1, int(cl_cfg.get("post_contact_escape_sustain_steps", 3) or 3))
+        escape_idx = None
+        for end in range(first_contact_idx + escape_sustain_steps - 1, len(metric_trace)):
+            begin = end - escape_sustain_steps + 1
+            window_clearance = aligned_clearance[begin : end + 1]
+            if (
+                all(np.isfinite(c) and c >= escape_clearance for c in window_clearance)
+                and not any(overlap_flags[begin : end + 1])
+            ):
+                escape_idx = begin
+                break
+        metric_summary["post_contact_escape_event"] = float(escape_idx is not None)
+        metric_summary["time_to_post_contact_escape_steps"] = (
+            float(escape_idx - first_contact_idx) if escape_idx is not None else float("nan")
+        )
+        metric_summary["time_to_post_contact_escape_s"] = (
+            float((escape_idx - first_contact_idx) * metric_dt_s)
+            if escape_idx is not None else float("nan")
+        )
+    else:
+        metric_summary["post_contact_clearance_m_max"] = float("nan")
+        metric_summary["post_contact_clearance_m_mean"] = float("nan")
+        metric_summary["post_contact_free_space_auc_m_s"] = float("nan")
+        metric_summary["post_contact_escape_event"] = 0.0
+        metric_summary["time_to_post_contact_escape_steps"] = float("nan")
+        metric_summary["time_to_post_contact_escape_s"] = float("nan")
     tail_speeds = speed_vals[-3:] if speed_vals else []
     tail_overlaps = overlap_flags[-3:] if overlap_flags else []
     stable_tail = bool(tail_speeds) and max(tail_speeds) <= 0.5 and not any(tail_overlaps)
@@ -1704,7 +1780,7 @@ def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, s
             agg["waymax_metrics"][mk] = 0.0
         elif mk.endswith("_count") or mk in {"overlap_episode_count", "num_metric_steps"}:
             agg["waymax_metrics"][mk] = float(sum(v for v, _ in finite))
-        elif mk.endswith("_any") or mk in {"secondary_overlap_event"}:
+        elif mk.endswith("_any"):
             agg["waymax_metrics"][mk] = float(max(v for v, _ in finite))
         elif mk.endswith("_max") or "_max_" in mk:
             agg["waymax_metrics"][mk] = float(max(v for v, _ in finite))
@@ -1731,6 +1807,11 @@ def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, s
     agg["collision_step_rate"] = _step_weighted("overlap_mean")
     agg["offroad_scene_rate"] = _scene_mean("offroad_any")
     agg["offroad_step_rate"] = _step_weighted("offroad_mean")
+    # Event-valued contact metrics are Bernoulli scene outcomes.  Aggregate
+    # them as scene rates rather than ``any scene triggered`` maxima.
+    agg["secondary_overlap_scene_rate"] = _scene_mean("secondary_overlap_event")
+    agg["new_stable_stop_scene_rate"] = _scene_mean("new_stable_stop_event")
+    agg["post_contact_escape_scene_rate"] = _scene_mean("post_contact_escape_event")
     agg["minimum_clearance_m"] = float(wm.get("min_clearance_m_min", 0.0))
     agg["minimum_ttc_s"] = float(wm.get("ttc_s_min", 0.0))
     # Distribution across scenes is the publication-level unit; do not average

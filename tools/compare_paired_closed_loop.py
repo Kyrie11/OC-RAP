@@ -28,11 +28,45 @@ NESTED_METRICS = (
     "near_contact_exposure_rate",
     "critical_ttc_exposure_rate",
     "near_zero_clearance_exposure_rate",
+    "near_contact_exposure_duration_s",
+    "critical_ttc_exposure_duration_s",
+    "clearance_deficit_auc_m_s",
+    "ttc_deficit_auc_s2",
     "overlap_episode_count",
+    "overlap_duration_s",
+    "longest_overlap_run_s",
     "secondary_overlap_event",
+    "post_contact_clearance_m_max",
+    "post_contact_clearance_m_mean",
+    "post_contact_free_space_auc_m_s",
+    "post_contact_escape_event",
+    "time_to_post_contact_escape_s",
     "new_stable_stop_event",
     "time_to_stable_stop_steps",
 )
+
+LOWER_IS_BETTER = {
+    "closed_loop_FRA_exec",
+    "closed_loop_audit_paper_pcd_selector_miss_rate",
+    "closed_loop_audit_paper_selected_PCD_regret",
+    "closed_loop_audit_selector_miss_rate",
+    "intervention_rate",
+    "intervention_episode_rate",
+    "macro_switch_rate",
+    "near_contact_exposure_rate",
+    "critical_ttc_exposure_rate",
+    "near_zero_clearance_exposure_rate",
+    "near_contact_exposure_duration_s",
+    "critical_ttc_exposure_duration_s",
+    "clearance_deficit_auc_m_s",
+    "ttc_deficit_auc_s2",
+    "overlap_episode_count",
+    "overlap_duration_s",
+    "longest_overlap_run_s",
+    "secondary_overlap_event",
+    "time_to_post_contact_escape_s",
+    "time_to_stable_stop_steps",
+}
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -105,12 +139,15 @@ def main() -> int:
         arr = np.asarray(pairs, dtype=np.float64)
         delta = arr[:, 1] - arr[:, 0]
         lo, hi = _bootstrap_ci(delta, rng, args.bootstrap)
+        lower_is_better = name in LOWER_IS_BETTER
         report["metrics"][name] = {
             "n": int(delta.size),
             "control_mean": float(np.mean(arr[:, 0])),
             "method_mean": float(np.mean(arr[:, 1])),
             "paired_delta": float(np.mean(delta)),
             "bootstrap_95ci": [lo, hi],
+            "direction": "lower_is_better" if lower_is_better else "higher_is_better",
+            "fraction_improved": float(np.mean(delta < 0.0 if lower_is_better else delta > 0.0)),
             "fraction_improved_raw": float(np.mean(delta > 0.0)),
         }
 

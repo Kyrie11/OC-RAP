@@ -461,6 +461,7 @@ def _fit(
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dataset", required=True)
+    ap.add_argument("--method-version", default="v48_19_support_aware_factorized_policy_risk_certificate")
     ap.add_argument("--checkpoint", required=True)
     ap.add_argument("--bucket", choices=["near", "contact"], required=True)
     ap.add_argument("--output", type=Path, required=True)
@@ -878,6 +879,97 @@ def main() -> int:
     proposal_positive_hit_rate_positive = (
         proposal_positive_hits_positive / proposal_positive_groups if proposal_positive_groups else None
     )
+
+    def _proposal_oracle_partition(partition, *, min_selected, min_precision_lcb,
+                                   max_harmful_selected_ucb, max_harmful_group_ucb):
+        safe_positive = 0
+        nonharm_groups = 0
+        for group in partition:
+            deployable = [r for r in group.get("pairs", []) if int(r.get("macro", -1)) in supported_macros]
+            proposal = sorted(
+                deployable, key=lambda r: (-float(r["rank_adv"]), int(r["candidate"]))
+            )[: min(proposal_k, len(deployable))]
+            safe_positive += int(any(
+                float(r["teacher_adv"]) >= args.positive_gain
+                and not _is_harmful(r, args.negative_gain) for r in proposal
+            ))
+            nonharm_groups += int(any(not _is_harmful(r, args.negative_gain) for r in proposal))
+        harmful_group_ucb = _wilson(
+            0, len(partition), upper=True,
+            confidence_level=args.certificate_confidence_level,
+            bound_type=args.certificate_bound_type,
+        ) if partition else 1.0
+        # Optimistically enumerate every admissible coverage.  The oracle is
+        # allowed to pick safe positives first and then non-harmful dead groups;
+        # therefore a negative result proves that neither model tuning nor a
+        # denser threshold grid can pass the declared support constraints inside
+        # the frozen proposal.  Macro concentration is intentionally ignored,
+        # making this a necessary (not sufficient) feasibility certificate.
+        candidates = []
+        for selected in range(int(min_selected), int(nonharm_groups) + 1):
+            true_positive = min(int(safe_positive), selected)
+            precision_lcb = _wilson(
+                true_positive, selected, upper=False,
+                confidence_level=args.certificate_confidence_level,
+                bound_type=args.certificate_bound_type,
+            )
+            harmful_selected_ucb = _wilson(
+                0, selected, upper=True,
+                confidence_level=args.certificate_confidence_level,
+                bound_type=args.certificate_bound_type,
+            )
+            feasible = bool(
+                precision_lcb >= float(min_precision_lcb)
+                and harmful_selected_ucb <= float(max_harmful_selected_ucb)
+                and harmful_group_ucb <= float(max_harmful_group_ucb)
+            )
+            candidates.append({
+                "selected": selected,
+                "true_positive": true_positive,
+                "precision_lcb": precision_lcb,
+                "harmful_selected_ucb": harmful_selected_ucb,
+                "feasible": feasible,
+            })
+        feasible_candidates = [row for row in candidates if row["feasible"]]
+        best = max(
+            feasible_candidates or candidates or [{
+                "selected": 0, "true_positive": 0, "precision_lcb": 0.0,
+                "harmful_selected_ucb": 1.0, "feasible": False,
+            }],
+            key=lambda row: (
+                bool(row["feasible"]), float(row["precision_lcb"]),
+                int(row["true_positive"]), int(row["selected"]),
+            ),
+        )
+        return {
+            "num_groups": len(partition),
+            "proposal_safe_positive_groups": safe_positive,
+            "proposal_nonharm_groups": nonharm_groups,
+            "oracle_selected": int(best["selected"]),
+            "oracle_true_positive": int(best["true_positive"]),
+            "oracle_precision_lcb": float(best["precision_lcb"]),
+            "oracle_harmful_selected_ucb": float(best["harmful_selected_ucb"]),
+            "oracle_harmful_group_ucb": harmful_group_ucb,
+            "optimistic_ignores_macro_constraint": True,
+            "feasible": bool(best["feasible"]),
+        }
+
+    proposal_constrained_oracle_gate = {
+        "fit": _proposal_oracle_partition(
+            fit, min_selected=args.min_fit_selected, min_precision_lcb=args.min_fit_precision_lcb,
+            max_harmful_selected_ucb=args.max_fit_harmful_selected_ucb,
+            max_harmful_group_ucb=args.max_fit_harmful_group_ucb,
+        ),
+        "verify": _proposal_oracle_partition(
+            verify, min_selected=args.min_verify_selected, min_precision_lcb=args.min_verify_precision_lcb,
+            max_harmful_selected_ucb=args.max_verify_harmful_selected_ucb,
+            max_harmful_group_ucb=args.max_verify_harmful_group_ucb,
+        ),
+    }
+    proposal_constrained_oracle_gate["overall"] = bool(
+        proposal_constrained_oracle_gate["fit"]["feasible"]
+        and proposal_constrained_oracle_gate["verify"]["feasible"]
+    )
     proposal_evidence_top1_corr = (
         float(np.corrcoef(
             [float(r["pred_adv"]) for r in proposal_evidence_top1],
@@ -1006,7 +1098,7 @@ def main() -> int:
 
     valid = not warnings
     result = {
-        "method": "v48_19_support_aware_factorized_policy_risk_certificate",
+        "method": str(args.method_version),
         "bucket": args.bucket,
         "dataset": args.dataset,
         "checkpoint": args.checkpoint,
@@ -1030,6 +1122,7 @@ def main() -> int:
             "legacy_metric_suffix": "lcb90/ucb90 retained for reader compatibility",
         },
         "certificate_support_feasibility": support_feasibility,
+        "proposal_constrained_oracle_gate": proposal_constrained_oracle_gate,
         "conformal": conformal,
         "rule": rule,
         "selector_overrides": ({} if rule is None else {

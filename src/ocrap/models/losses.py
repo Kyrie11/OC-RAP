@@ -1434,6 +1434,11 @@ def direct_uncertainty_recovery_value_loss(
     ordinal_evidence_proposal_rank_decay: float = 0.75,
     ordinal_evidence_intragroup_benefit_weight: float = 0.0,
     ordinal_evidence_intragroup_harm_weight: float = 0.0,
+    ordinal_evidence_benefit_listwise_weight: float = 0.0,
+    ordinal_evidence_benefit_listwise_temperature: float = 0.08,
+    ordinal_evidence_frontier_pairwise_weight: float = 0.0,
+    ordinal_evidence_frontier_pairwise_margin: float = 0.25,
+    ordinal_evidence_categorical_group_policy: bool = False,
     ordinal_evidence_intragroup_margin: float = 0.25,
     ordinal_evidence_pairwise_benefit_weight: float = 0.0,
     ordinal_evidence_pairwise_harm_weight: float = 0.0,
@@ -2354,6 +2359,48 @@ def direct_uncertainty_recovery_value_loss(
             safe_set_positive_mask = pos_mask[deployment_idx] & (~safe_set_harm_mask)
             safe_set_teacher_delta = t_delta[deployment_idx]
 
+            # v48.23 FRONTIER: distil continuous raw-gain ordering inside the
+            # exact frozen proposal. Binary benefit AUC alone cannot identify the
+            # best post-contact action or reduce top-1 regret.
+            if float(ordinal_evidence_benefit_listwise_weight) > 0.0:
+                benefit_tau = max(float(ordinal_evidence_benefit_listwise_temperature), 1.0e-3)
+                student_benefit_logits = torch.cat([
+                    opp_delta_logits.new_zeros((1,)),
+                    opp_delta_logits[deployment_idx],
+                ]) / benefit_tau
+                teacher_benefit_logits = torch.cat([
+                    safe_set_teacher_delta.new_zeros((1,)),
+                    safe_set_teacher_delta,
+                ]) / benefit_tau
+                teacher_benefit_prob = torch.softmax(teacher_benefit_logits, dim=0).detach()
+                terms.append(
+                    float(ordinal_evidence_benefit_listwise_weight)
+                    * F.kl_div(
+                        torch.log_softmax(student_benefit_logits, dim=0),
+                        teacher_benefit_prob, reduction="sum",
+                    )
+                )
+
+            # Directly train the high-benefit safety frontier rather than global
+            # harmful-vs-dead discrimination. Safe beneficial candidates must
+            # outrank beneficial-but-component-harmful candidates.
+            if (
+                float(ordinal_evidence_frontier_pairwise_weight) > 0.0
+                and admission_delta_logits is not None
+            ):
+                frontier_safe = torch.where(safe_set_positive_mask)[0]
+                frontier_bad = torch.where(pos_mask[deployment_idx] & safe_set_harm_mask)[0]
+                if frontier_safe.numel() and frontier_bad.numel():
+                    safe_logits = admission_delta_logits[deployment_idx[frontier_safe]]
+                    bad_logits = admission_delta_logits[deployment_idx[frontier_bad]]
+                    frontier_pairs = safe_logits.unsqueeze(1) - bad_logits.unsqueeze(0)
+                    terms.append(
+                        float(ordinal_evidence_frontier_pairwise_weight)
+                        * F.softplus(
+                            float(ordinal_evidence_frontier_pairwise_margin) - frontier_pairs
+                        ).mean()
+                    )
+
         # Multiple-instance safe-opportunity objective.  The deployed decision
         # first asks whether the frozen top-k contains *any* safe beneficial
         # recovery.  Candidate BCE and listwise ranking alone do not directly
@@ -2373,7 +2420,13 @@ def direct_uncertainty_recovery_value_loss(
                     * (1.0 - torch.sigmoid(harm_delta_logits[deployment_idx]))
                 )
             deployment_prob = deployment_prob.clamp(1.0e-6, 1.0 - 1.0e-6)
-            any_safe_prob = 1.0 - torch.prod(1.0 - deployment_prob)
+            if bool(ordinal_evidence_categorical_group_policy):
+                # One mutually exclusive action or nominal is executed. Noisy-OR
+                # incorrectly treats top-k candidates as independent events.
+                group_policy_prob = torch.softmax(safe_set_logits, dim=0)
+                any_safe_prob = group_policy_prob[1:].sum().clamp(1.0e-6, 1.0 - 1.0e-6)
+            else:
+                any_safe_prob = 1.0 - torch.prod(1.0 - deployment_prob)
             any_safe_target = safe_set_positive_mask.any().to(dtype=any_safe_prob.dtype)
             group_opportunity_loss = F.binary_cross_entropy(
                 any_safe_prob.clamp(1.0e-6, 1.0 - 1.0e-6), any_safe_target

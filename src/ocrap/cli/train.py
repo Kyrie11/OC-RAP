@@ -379,6 +379,11 @@ def _direct_value_loss_from_outputs(
         ordinal_evidence_proposal_rank_decay=float(tcfg.get("direct_value_ordinal_evidence_proposal_rank_decay", 0.75)),
         ordinal_evidence_intragroup_benefit_weight=float(tcfg.get("direct_value_ordinal_evidence_intragroup_benefit_weight", 0.0)),
         ordinal_evidence_intragroup_harm_weight=float(tcfg.get("direct_value_ordinal_evidence_intragroup_harm_weight", 0.0)),
+        ordinal_evidence_benefit_listwise_weight=float(tcfg.get("direct_value_ordinal_evidence_benefit_listwise_weight", 0.0)),
+        ordinal_evidence_benefit_listwise_temperature=float(tcfg.get("direct_value_ordinal_evidence_benefit_listwise_temperature", 0.08)),
+        ordinal_evidence_frontier_pairwise_weight=float(tcfg.get("direct_value_ordinal_evidence_frontier_pairwise_weight", 0.0)),
+        ordinal_evidence_frontier_pairwise_margin=float(tcfg.get("direct_value_ordinal_evidence_frontier_pairwise_margin", 0.25)),
+        ordinal_evidence_categorical_group_policy=bool(tcfg.get("direct_value_ordinal_evidence_categorical_group_policy", False)),
         ordinal_evidence_intragroup_margin=float(tcfg.get("direct_value_ordinal_evidence_intragroup_margin", 0.25)),
         ordinal_evidence_pairwise_benefit_weight=float(tcfg.get("direct_value_ordinal_evidence_pairwise_benefit_weight", 0.0)),
         ordinal_evidence_pairwise_harm_weight=float(tcfg.get("direct_value_ordinal_evidence_pairwise_harm_weight", 0.0)),
@@ -563,6 +568,7 @@ def _direct_policy_batch_stats(
     metric_evidence_rerank = bool(tcfg.get("direct_policy_metric_evidence_rerank_top_k", False))
     metric_safe_opportunity = bool(tcfg.get("direct_policy_metric_safe_opportunity", False))
     metric_soft_temperature = max(1.0e-3, float(tcfg.get("direct_policy_metric_soft_temperature", 0.10)))
+    metric_categorical_group_policy = bool(tcfg.get("direct_policy_metric_categorical_group_policy", False))
     stats: dict[str, float] = {}
 
     def add(name: str, value: float) -> None:
@@ -685,6 +691,7 @@ def _direct_policy_batch_stats(
         soft_safe_group = False
         soft_group_admit = 0.0
         soft_harmful_mass = 0.0
+        soft_frontier_harmful_mass = 0.0
         soft_safe_mass = 0.0
         soft_regret = 0.0
         if (
@@ -700,21 +707,30 @@ def _direct_policy_batch_stats(
                 proposal_harmful = component_harmful[proposal_local_soft]
             else:
                 proposal_harmful = proposal_teacher <= -negative_gain
-            proposal_safe_positive = (proposal_teacher >= positive_gain) & (~proposal_harmful)
+            proposal_raw_positive = proposal_teacher >= positive_gain
+            proposal_safe_positive = proposal_raw_positive & (~proposal_harmful)
+            proposal_frontier_harmful = proposal_raw_positive & proposal_harmful
             soft_safe_group = bool(proposal_safe_positive.any().item())
             proposal_opp = opportunity_all[proposal_local_soft]
             proposal_harm = harm_all[proposal_local_soft]
             proposal_admit = admission_all[proposal_local_soft].clamp(1.0e-6, 1.0 - 1.0e-6)
-            soft_group_admit_t = 1.0 - torch.prod(1.0 - proposal_admit)
-            soft_group_admit = float(soft_group_admit_t.item())
             proposal_evidence_soft = evidence_all[proposal_local_soft]
             policy_logits_soft = torch.cat([
                 proposal_evidence_soft.new_zeros((1,)),
                 proposal_evidence_soft / metric_soft_temperature,
             ])
-            policy_prob_soft = torch.softmax(policy_logits_soft, dim=0)[1:]
+            policy_prob_full_soft = torch.softmax(policy_logits_soft, dim=0)
+            policy_prob_soft = policy_prob_full_soft[1:]
+            if metric_categorical_group_policy:
+                soft_group_admit_t = policy_prob_soft.sum()
+            else:
+                soft_group_admit_t = 1.0 - torch.prod(1.0 - proposal_admit)
+            soft_group_admit = float(soft_group_admit_t.item())
             soft_harmful_mass = float(
                 (policy_prob_soft * proposal_harmful.to(policy_prob_soft.dtype)).sum().item()
+            )
+            soft_frontier_harmful_mass = float(
+                (policy_prob_soft * proposal_frontier_harmful.to(policy_prob_soft.dtype)).sum().item()
             )
             soft_safe_mass = float(
                 (policy_prob_soft * proposal_safe_positive.to(policy_prob_soft.dtype)).sum().item()
@@ -766,6 +782,7 @@ def _direct_policy_batch_stats(
                 add(f"soft_safe_recall_sum_{name}", soft_group_admit if soft_safe_group else 0.0)
                 add(f"soft_false_admission_sum_{name}", soft_group_admit if not soft_safe_group else 0.0)
                 add(f"soft_harmful_mass_sum_{name}", soft_harmful_mass)
+                add(f"soft_frontier_harmful_mass_sum_{name}", soft_frontier_harmful_mass)
                 add(f"soft_safe_mass_sum_{name}", soft_safe_mass if soft_safe_group else 0.0)
                 add(f"soft_safe_regret_sum_{name}", soft_regret if soft_safe_group else 0.0)
         if positive_group:
@@ -816,6 +833,9 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
                 negative_count = max(0.0, count - safe_count)
                 out[f"direct_soft_safe_opportunity_nll{tag}"] = stats.get(f"soft_safe_nll_sum_{suffix}", 0.0) / count
                 out[f"direct_soft_harmful_mass{tag}"] = stats.get(f"soft_harmful_mass_sum_{suffix}", 0.0) / count
+                out[f"direct_soft_frontier_harmful_mass{tag}"] = (
+                    stats.get(f"soft_frontier_harmful_mass_sum_{suffix}", 0.0) / count
+                )
                 out[f"direct_soft_safe_recall{tag}"] = (
                     stats.get(f"soft_safe_recall_sum_{suffix}", 0.0) / safe_count if safe_count > 0 else 0.0
                 )
@@ -1038,6 +1058,21 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
             + float(tcfg.get("direct_policy_metric_covenant_harm_weight", 1.5)) * conditional_harm
             + float(tcfg.get("direct_policy_metric_covenant_false_weight", 0.5)) * conditional_false
         )
+        # v48.23 FRONTIER selects against the actual failure boundary:
+        # recovery mass assigned to candidates that are simultaneously raw-gain
+        # positives and component-harmful. Global harm remains only a tie-breaker
+        # because its AUC can be dominated by easy harmful-vs-dead examples.
+        frontier_harm = max(
+            float(out.get("direct_soft_frontier_harmful_mass_near", 0.0)),
+            float(out.get("direct_soft_frontier_harmful_mass_contact", 0.0)),
+        )
+        out["direct_frontier_selection_risk"] = (
+            concord_total
+            + float(tcfg.get("direct_policy_metric_frontier_harm_weight", 1.5)) * frontier_harm
+            + float(tcfg.get("direct_policy_metric_frontier_false_weight", 0.5)) * conditional_false
+            + float(tcfg.get("direct_policy_metric_frontier_global_harm_tiebreak", 0.25)) * conditional_harm
+        )
+        out["direct_frontier_harmful_mass_worst"] = frontier_harm
     return out
 
 

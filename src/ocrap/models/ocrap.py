@@ -185,6 +185,8 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_consensus_disagreement_penalty: float = 0.15,
         direct_recovery_evidence_admission_head: bool = False,
         direct_recovery_evidence_admission_scale: float = 2.0,
+        direct_recovery_evidence_frontier: bool = False,
+        direct_recovery_evidence_component_prior_logit: float = -2.0,
     ):
         super().__init__()
         self.num_roots = int(num_roots)
@@ -277,6 +279,10 @@ class OCRAPModel(nn.Module):
         )
         self.direct_recovery_evidence_admission_scale = float(
             max(0.0, direct_recovery_evidence_admission_scale)
+        )
+        self.direct_recovery_evidence_frontier = bool(direct_recovery_evidence_frontier)
+        self.direct_recovery_evidence_component_prior_logit = float(
+            direct_recovery_evidence_component_prior_logit
         )
         if self.direct_recovery_evidence_calibrator_mode not in {
             "center_width", "simplex_context", "dual_tail_context"
@@ -1147,13 +1153,30 @@ class OCRAPModel(nn.Module):
                 )
                 unified_benefit_logit = base_benefit + benefit_residual
                 if self.direct_recovery_evidence_component_heads:
-                    unified_component_harm_logits = (
+                    component_residual = (
                         torch.tanh(harm_raw[:, :3])
                         * self.direct_recovery_evidence_component_scale
                     )
+                    # v48.23 FRONTIER: a zero network output must mean the
+                    # nominal-relative component is inside the configured safety
+                    # deadband, not p(harm)=0.5.  With tolerance=0.05 and
+                    # temperature=0.025 the teacher target at equality is
+                    # sigmoid(-2), hence the principled default prior -2.0.
+                    if self.direct_recovery_evidence_frontier:
+                        unified_component_harm_logits = (
+                            component_residual
+                            + self.direct_recovery_evidence_component_prior_logit
+                        )
+                    else:
+                        unified_component_harm_logits = component_residual
                     unified_harm_logit = unified_component_harm_logits.amax(dim=-1)
+                    anchor_harm_residual = (
+                        component_residual
+                        if self.direct_recovery_evidence_frontier
+                        else unified_component_harm_logits
+                    )
                     evidence_calibrator_residual = torch.cat(
-                        [benefit_residual.unsqueeze(-1), unified_component_harm_logits], dim=-1
+                        [benefit_residual.unsqueeze(-1), anchor_harm_residual], dim=-1
                     )
                 else:
                     harm_residual = (
@@ -1170,10 +1193,27 @@ class OCRAPModel(nn.Module):
                     # gradient from distorting either the raw-benefit or risk head.
                     # softplus(harm) is a conservative log-risk penalty; the bounded
                     # residual can correct it from context without regime routing.
-                    admission_prior = (
-                        unified_benefit_logit.detach()
-                        - torch.nn.functional.softplus(unified_harm_logit.detach())
-                    )
+                    if self.direct_recovery_evidence_frontier:
+                        # Center the risk penalty at the semantic non-harm prior.
+                        # Zero residual therefore reproduces the transferred
+                        # benefit evidence instead of forcing all-abstain.
+                        prior_penalty = torch.nn.functional.softplus(
+                            unified_harm_logit.new_tensor(
+                                self.direct_recovery_evidence_component_prior_logit
+                            )
+                        )
+                        admission_prior = (
+                            unified_benefit_logit.detach()
+                            - (
+                                torch.nn.functional.softplus(unified_harm_logit.detach())
+                                - prior_penalty
+                            )
+                        )
+                    else:
+                        admission_prior = (
+                            unified_benefit_logit.detach()
+                            - torch.nn.functional.softplus(unified_harm_logit.detach())
+                        )
                     admission_residual = (
                         torch.tanh(admission_raw)
                         * self.direct_recovery_evidence_admission_scale

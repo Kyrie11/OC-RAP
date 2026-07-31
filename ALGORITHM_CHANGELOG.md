@@ -1,3 +1,193 @@
+## v48.23 — OC-TRAC-FRONTIER-BRIDGE (2026-07-31)
+
+### v48.22 result attribution
+
+- The uploaded v48.22 dedicated controller completed both Balanced and Precision
+  adaptations, non-empty scene-disjoint certificate fitting/verification, protocol
+  and teacher-index contract checks, and the test-root seal. It records
+  `pipeline_valid=true`, `gate_evaluated=true`, `test_roots_read=false`, and
+  `RC=20`. This is a genuine Natural-gate rejection rather than a controller,
+  protocol, empty-pool, parameter-count, unsupported-support, or partial-variant
+  failure.
+- The preregistered gate remains mathematically feasible, but it is intentionally
+  close to an oracle-quality selective policy at the current support. Near-fit must
+  select at least 10 groups with at least 8 positives and zero harmful selections;
+  Near-verify needs at least 5/8 positives and zero harmful selections. Contact-fit
+  needs at least 11/16 positives and at most one harmful selection; Contact-verify
+  needs at least 6/10 positives and zero harmful selections. These conditions must
+  not be relaxed retrospectively in the v48.22 protocol.
+- v48.22 does not fail only because the gate is strict. Precision learns broad
+  component risk (candidate harm AUC about 0.64--0.66), but Near/Contact safe-action
+  precision remains about 0.05--0.10 at the closest fit rules. Balanced selects the
+  epoch-zero identity, leaves harm at 0.5, and effectively abstains. Every main and
+  ablation verify certificate has zero coverage.
+- The frozen proposal remains high recall: positive-group oracle-best hit is about
+  0.97--1.00. Candidate generation is not the primary bottleneck. The unresolved
+  problem is converting a proposal-contained opportunity into a calibrated,
+  high-benefit, non-harmful action and deciding when to leave nominal.
+- Training support is extremely imbalanced. Near has 25 safe-beneficial candidates
+  among 1425 deployable candidates (1.75%), across 11 groups and 7 scenes; Contact
+  has 106/4086 (2.59%), across 41 groups and 17 scenes. Global harm prevalence is
+  approximately 54% in Near and 45% in Contact. Broad candidate AUC is therefore
+  insufficient evidence of safety-frontier transfer.
+
+### Root engineering and objective defects found in v48.22
+
+1. **Neutral risk was encoded as 0.5 harmful probability.** Zero-initialized
+   component logits produced `P(harm)=0.5`, even though the target contract defines
+   a tolerance/deadband within which a candidate is non-harmful. Balanced early
+   stopping therefore preferred an artificial all-abstain identity rather than a
+   semantically neutral source policy.
+2. **The detached admission prior had a constant negative offset.** v48.22 used
+   `benefit_logit - softplus(harm_logit)`. At the zero residual identity this
+   subtracts `log(2)`, so the new admission head is not identity-preserving and is
+   pushed toward abstention before any target-domain evidence is learned.
+3. **The two-head fallback was also structurally over-conservative.** Its score
+   `P(benefit)*(1-P(harm))-0.5` is non-negative at neutral harm only when benefit is
+   nearly certain. The A ablation therefore cannot isolate the third head fairly.
+4. **Noisy-OR does not match the one-action deployment event.** The group objective
+   treated top-k candidates as independent Bernoulli opportunities, while runtime
+   chooses exactly one candidate or nominal. Noisy-OR inflates opportunity as top-k
+   grows and can be satisfied by diffuse weak scores rather than one executable
+   safe action.
+5. **Benefit supervision was mostly a binary sign test.** Continuous PCD magnitude
+   ordering was disabled (`CENTERED/DELTA_NLL/pairwise benefit` effectively zero or
+   weak), explaining high Near candidate AUC but weak or negative score correlation,
+   unstable Contact ranking, and positive-group top-1 regret.
+6. **Checkpoint selection emphasized broad risk instead of the high-benefit safety
+   frontier.** Global harm AUC/mass is dominated by abundant dead or obviously
+   harmful candidates. The deployment-critical distinction is safe high-benefit
+   versus harmful high-benefit recovery.
+7. **Primary-gate-only debugging is information-poor.** A zero-coverage certificate
+   cannot identify whether failure comes from proposal support, labels/features,
+   ranking, admission, or overly conservative finite-sample certification. A
+   proposal-constrained oracle audit and adaptation-dev-only shadow closed loop are
+   required, without reading held-out test/stress roots.
+8. **Contact event aggregation was incorrect.** `secondary_overlap_event` was
+   aggregated by maximum across scenes, making any single event report as 1.0.
+   v48.23 reports scene rates for secondary contact, stable stop and sustained
+   escape. A duplicate scene-quantile computation was also removed.
+
+### v48.23 algorithm: FRONTIER-BRIDGE
+
+**FRONTIER = Factorized Recovery Opportunity with Non-compensatory Threat Evidence,
+Rank-consistent Transfer, and Intervention Evaluation.** It remains one unified
+model over Safe, Near and Contact. No regime ID, bucket router, bucket-selected
+calibrator, or regime-specific residual is available at inference.
+
+1. **Semantic non-harm prior.** Component risk logits start from a configurable
+   low-risk prior (`-2.0` by default) and learn bounded residuals around that prior.
+   The prior represents the component-veto deadband rather than an arbitrary 0.5
+   harmful probability. Exact non-compensatory `max` aggregation is retained.
+2. **Centered identity-preserving admission.** The detached prior is
+   `benefit - [softplus(harm)-softplus(harm_prior)]`. At zero residual the admission
+   logit exactly equals the transferred benefit logit. Risk can subsequently veto
+   an action without imposing a fixed pre-training abstention penalty.
+3. **Categorical one-action group policy.** The primary group objective is a softmax
+   over nominal plus frozen proposal top-k, matching the actual decision that one
+   action (or nominal) is executed. It replaces noisy-OR in FRONTIER runs while the
+   legacy path remains checkpoint-compatible.
+4. **Continuous top-k benefit ranking.** A vectorized listwise/KL objective uses the
+   continuous raw PCD advantages inside the exact deployment top-k. It teaches which
+   beneficial action is better, not only whether its signed delta exceeds a
+   threshold. Candidates outside frozen top-k receive no listwise gradient.
+5. **High-benefit safety-frontier contrast.** Admission logits for safe beneficial
+   candidates are trained to outrank raw-beneficial but component-harmful candidates
+   in the same group. This directly targets the false-safe frontier that broad harm
+   AUC misses.
+6. **FRONTIER checkpoint risk.** Early stopping adds high-opportunity harmful policy
+   mass and false-admission mass to the threshold-free cross-regime risk, with a
+   small global-harm tie-break only. Near/Contact remain validation strata and are
+   never model inputs.
+7. **Proposal-constrained oracle gate audit.** Certificate artifacts now report the
+   most optimistic fit/verify feasibility achievable using non-harmful opportunities
+   already contained in the frozen proposal. This audit ignores macro-concentration
+   constraints and is therefore necessary but not sufficient. Oracle failure means
+   more training cannot pass the current proposal/label/gate contract; oracle pass
+   with model failure localizes the bottleneck to representation/ranking/admission.
+8. **Adaptation-dev shadow closed loop.** After `RC=20`, a separate script runs only
+   on adaptation-dev roots, never certificate/test/stress roots. It is explicitly
+   diagnostic and non-paper. Held-out stress remains authorization-gated by
+   `NEXT_COMMANDS.txt`.
+9. **Physical regime diagnostics.** Near adds minimum clearance/TTC, near-contact and
+   critical-TTC exposure durations, and clearance/TTC deficit integrals. Contact
+   adds overlap duration and longest run, secondary contact rate, post-contact
+   clearance/free-space integral, sustained escape rate/time, and stable-stop rate.
+   The paired comparator reports metric-aware improvement direction.
+
+### Non-repeated v48.23 ablations
+
+1. `A_semantic_prior_categorical`: semantic risk prior, centered admission identity
+   and categorical one-action group objective; no continuous ranking or frontier
+   contrast. This isolates the v48.22 engineering corrections.
+2. `B_add_benefit_listwise`: A plus continuous top-k PCD listwise supervision. This
+   isolates benefit magnitude/ranking transfer.
+3. `C_add_frontier_contrast`: A plus high-benefit safe-versus-harmful admission
+   contrast. This isolates safety-frontier discrimination.
+4. `D_full_frontier`: semantic prior, categorical group policy, continuous benefit
+   ranking, component veto and frontier contrast.
+
+All eight tasks are launched simultaneously. Round-robin assignment places four
+jobs on GPU0 and four jobs on GPU1. Each job uses one DataLoader worker, batch size
+56 and bounded host math threads. Main Balanced/Precision use separate A30s, batch
+size 96, three workers, pinned persistent workers, prefetching and bfloat16 AMP.
+The new losses are vectorized inside the existing model forward pass and do not add
+an additional encoder or duplicate proposal computation.
+
+### Near/Contact development targets and diagnostic policy
+
+- **Near-contact:** preserve zero collision/non-inferior nominal safety; improve
+  minimum clearance by at least 0.10 m and minimum TTC by at least 0.20 s in paired
+  development analysis; reduce near-contact/critical-TTC exposure and safety-margin
+  deficit integrals; target PCD >= 0.54, FRA <= 0.12, DRS >= 0.88, NUP >= 0.995,
+  intervention <= 0.02, intervention-episode rate <= 0.012, maximum intervention run
+  <= 1, and selector miss <= 0.034 for development (<= 0.025 publication target).
+- **Contact:** target PCD >= 0.52, FRA <= 0.16, DRS >= 0.84, NUP >= 0.985,
+  intervention <= 0.04, intervention-episode rate <= 0.025 and maximum run <= 2;
+  reduce paired secondary-overlap scene rate by at least 0.02, overlap duration/run
+  and residual impact; increase post-contact free-space, sustained escape and stable
+  stop by at least 0.02 while preserving route/offroad/comfort constraints.
+- These are development targets, not claimed v48.23 results. Publication claims
+  require the preregistered gate, held-out authorized closed loop, paired confidence
+  intervals and multi-seed confirmation.
+
+### Decision and non-repetition rules
+
+- `RC=0`: run only the authorization-checked held-out stress/closed-loop command,
+  then multi-seed confirmation and final Safe paired non-interference evaluation
+  using the same selected checkpoint.
+- `RC=20`: do not read test/stress. First inspect the proposal-constrained oracle
+  audit. If it fails, repair proposal/label/gate support under a newly preregistered
+  protocol rather than training another calibrator. If it passes, run the
+  adaptation-dev shadow closed loop and A/B/C/D ablations to localize
+  ranking-versus-frontier-versus-admission failure.
+- A dev shadow physical improvement with primary-gate failure means the certificate
+  may be too conservative for the available sample size; document this and create a
+  new preregistered protocol in a later version. Never relax v48.22/v48.23 gates
+  retrospectively or use dev shadow results as paper results.
+- `RC=30`: no algorithm conclusion is allowed. Repair the named protocol, index,
+  training, checkpoint, calibration or artifact stage first.
+- Do not repeat opportunity-only noisy-OR, neutral harm at probability 0.5,
+  uncentered softplus admission, binary-only benefit supervision, global-harm-only
+  checkpointing, regime-specific calibrators/residuals, raw high-dimensional
+  context, proposal retraining, threshold-grid-only tuning, or dataset regeneration
+  in this round.
+
+### Local validation
+
+- `pytest`: 216 passed, 5 warnings.
+- `python -m compileall -q src tools tests`: passed.
+- `bash -n` for all shell scripts: passed.
+- Missing-protocol fault injection normalizes the controller and both failure
+  artifacts to `RC=30`, `pipeline_valid=false`, and `test_roots_read=false`.
+- New tests cover semantic risk initialization, identity-preserving admission,
+  continuous top-k ranking gradients, frontier contrast gradients, categorical
+  one-action probability, FRONTIER checkpoint sensitivity, proposal-oracle/dev-
+  shadow plumbing and eight-task/two-GPU assignment.
+- The delivery environment has no real WOMD/Waymax data or A30 GPUs. No v48.23
+  Natural-gate or closed-loop result is claimed.
+
+
 ## v48.22 — OC-TRAC-COVENANT-BRIDGE (2026-07-30)
 
 ### v48.21 result attribution

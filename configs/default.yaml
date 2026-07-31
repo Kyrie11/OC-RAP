@@ -313,6 +313,9 @@ model:
   direct_recovery_evidence_consensus_disagreement_penalty: 0.15
   direct_recovery_evidence_admission_head: false
   direct_recovery_evidence_admission_scale: 2.0
+  # v48.23 FRONTIER: semantic non-harm prior and deployment-aligned objectives.
+  direct_recovery_evidence_frontier: false
+  direct_recovery_evidence_component_prior_logit: -2.0
 dataset_quality:
   # Off by default for broad natural-WOMD sweeps. Enable only for artifact/stress
   # datasets that are intended to support FRA, ODG, and anti-oracle claims.
@@ -447,6 +450,12 @@ training:
   direct_value_ordinal_evidence_safe_set_temperature: 0.08
   direct_value_ordinal_evidence_intragroup_benefit_weight: 0.0
   direct_value_ordinal_evidence_intragroup_harm_weight: 0.0
+  # v48.23 FRONTIER: top-k raw-gain ordering and safe-frontier separation.
+  direct_value_ordinal_evidence_benefit_listwise_weight: 0.0
+  direct_value_ordinal_evidence_benefit_listwise_temperature: 0.08
+  direct_value_ordinal_evidence_frontier_pairwise_weight: 0.0
+  direct_value_ordinal_evidence_frontier_pairwise_margin: 0.25
+  direct_value_ordinal_evidence_categorical_group_policy: false
   direct_value_ordinal_evidence_intragroup_margin: 0.25
   direct_value_ordinal_evidence_pairwise_benefit_weight: 0.0
   direct_value_ordinal_evidence_pairwise_harm_weight: 0.0
@@ -460,6 +469,10 @@ training:
   direct_policy_metric_rank_false_switch_weight: 0.15
   direct_policy_metric_min_fold_positive: 6
   direct_policy_metric_robust_top_k: 2
+  direct_policy_metric_categorical_group_policy: false
+  direct_policy_metric_frontier_harm_weight: 1.5
+  direct_policy_metric_frontier_false_weight: 0.5
+  direct_policy_metric_frontier_global_harm_tiebreak: 0.25
   direct_policy_metric_opportunity_threshold: 0.65
   direct_policy_metric_harm_threshold: 0.30
   direct_policy_metric_rank_margin_threshold: 0.02
@@ -518,6 +531,10 @@ closed_loop:
   bucket_split: ''
   require_bucket_targets: false
   metric_dt_s: 0.1
+  # Contact-only physical recovery diagnostics. A successful escape requires
+  # sustained non-overlap clearance above this threshold.
+  post_contact_escape_clearance_m: 0.5
+  post_contact_escape_sustain_steps: 3
   max_bucket_targets: 0
   max_targets_per_scene: 1
   start_time_index: null
