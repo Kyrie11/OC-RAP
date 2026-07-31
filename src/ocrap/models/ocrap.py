@@ -181,6 +181,8 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_unified_experts: bool = False,
         direct_recovery_evidence_component_heads: bool = False,
         direct_recovery_evidence_component_scale: float = 2.0,
+        direct_recovery_evidence_concord: bool = False,
+        direct_recovery_evidence_consensus_disagreement_penalty: float = 0.15,
     ):
         super().__init__()
         self.num_roots = int(num_roots)
@@ -264,6 +266,10 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_evidence_component_scale = float(
             max(0.0, direct_recovery_evidence_component_scale)
         )
+        self.direct_recovery_evidence_concord = bool(direct_recovery_evidence_concord)
+        self.direct_recovery_evidence_consensus_disagreement_penalty = float(
+            max(0.0, direct_recovery_evidence_consensus_disagreement_penalty)
+        )
         if self.direct_recovery_evidence_calibrator_mode not in {
             "center_width", "simplex_context", "dual_tail_context"
         }:
@@ -290,6 +296,8 @@ class OCRAPModel(nn.Module):
             raise ValueError(
                 "component evidence heads currently require unified expert evidence"
             )
+        if self.direct_recovery_evidence_concord and not self.direct_recovery_evidence_unified_experts:
+            raise ValueError("CONCORD evidence requires unified frozen source experts")
         if self.direct_recovery_delta_mode not in {"gaussian", "ordinal_evidence"}:
             raise ValueError(f"Unsupported direct_recovery_delta_mode={direct_recovery_delta_mode!r}")
         if self.direct_recovery_value_expert_routing not in {
@@ -572,12 +580,13 @@ class OCRAPModel(nn.Module):
                 3 if self.direct_recovery_evidence_calibrator_mode == "simplex_context" else 2
             )
 
-        def _make_evidence_calibrator() -> nn.Sequential:
+        def _make_evidence_calibrator(output_dim: int | None = None) -> nn.Sequential:
+            final_dim = evidence_calibrator_output_dim if output_dim is None else int(output_dim)
             adapter = nn.Sequential(
                 nn.LayerNorm(evidence_calibrator_input_dim),
                 nn.Linear(evidence_calibrator_input_dim, self.direct_recovery_evidence_calibrator_hidden),
                 nn.GELU(),
-                nn.Linear(self.direct_recovery_evidence_calibrator_hidden, evidence_calibrator_output_dim),
+                nn.Linear(self.direct_recovery_evidence_calibrator_hidden, final_dim),
             )
             projection = adapter[-1]
             if isinstance(projection, nn.Linear):
@@ -591,6 +600,31 @@ class OCRAPModel(nn.Module):
             and self.direct_recovery_delta_head
             and self.direct_recovery_evidence_calibrator
             and self.direct_recovery_evidence_unified_experts
+            and not self.direct_recovery_evidence_concord
+            else None
+        )
+        # v48.21 CONCORD-BRIDGE decouples the sparse safe-benefit task from the
+        # much denser component-risk task.  A single shared trunk in v48.20 let
+        # the 45--54% harmful labels dominate the roughly 3% benefit labels.
+        # Both adapters remain bucket-invariant and consume the same symmetric
+        # frozen-expert/context representation; only their parameters are
+        # decoupled to prevent negative transfer.
+        self.direct_evidence_concord_benefit_calibrator = (
+            _make_evidence_calibrator(1)
+            if self.direct_recovery_value_head
+            and self.direct_recovery_delta_head
+            and self.direct_recovery_evidence_calibrator
+            and self.direct_recovery_evidence_unified_experts
+            and self.direct_recovery_evidence_concord
+            else None
+        )
+        self.direct_evidence_concord_harm_calibrator = (
+            _make_evidence_calibrator(3 if self.direct_recovery_evidence_component_heads else 1)
+            if self.direct_recovery_value_head
+            and self.direct_recovery_delta_head
+            and self.direct_recovery_evidence_calibrator
+            and self.direct_recovery_evidence_unified_experts
+            and self.direct_recovery_evidence_concord
             else None
         )
         self.direct_evidence_calibrators = (
@@ -1008,6 +1042,7 @@ class OCRAPModel(nn.Module):
         calibrator_enabled = (
             self.direct_evidence_calibrators is not None
             or self.direct_evidence_unified_calibrator is not None
+            or self.direct_evidence_concord_benefit_calibrator is not None
         )
         if delta is not None and calibrator_enabled:
             if self.direct_recovery_delta_policy_features and "direct_recovery_policy_features" in out:
@@ -1015,18 +1050,41 @@ class OCRAPModel(nn.Module):
             else:
                 calibrator_policy = delta.new_zeros((delta.shape[0], 2))
 
-            if self.direct_evidence_unified_calibrator is not None:
+            unified_evidence = (
+                self.direct_evidence_unified_calibrator is not None
+                or self.direct_evidence_concord_benefit_calibrator is not None
+            )
+            if unified_evidence:
                 if self.direct_delta_adapters is None or "direct_recovery_delta_expert_outputs" not in out:
                     raise RuntimeError("unified evidence configured without frozen delta expert outputs")
                 expert_delta = out["direct_recovery_delta_expert_outputs"].to(dtype=delta.dtype).detach()
                 expert_mean = expert_delta.mean(dim=1)
                 expert_disagreement = (expert_delta[:, 0] - expert_delta[:, 1]).abs()
-                calibrator_parts = [
-                    expert_delta.reshape(expert_delta.shape[0], -1),
-                    expert_mean,
-                    expert_disagreement,
-                    calibrator_policy.detach(),
-                ]
+                if self.direct_evidence_concord_benefit_calibrator is not None:
+                    # Permutation-invariant expert statistics.  The evidence model
+                    # cannot infer a regime from expert ordering and never receives
+                    # bucket ids.  Consensus and disagreement are observables, not
+                    # a hidden hard router.
+                    center_e = expert_delta[:, :, 0]
+                    half_e = 0.5 * torch.nn.functional.softplus(expert_delta[:, :, 1])
+                    benefit_e = center_e - half_e
+                    harm_e = -(center_e + half_e)
+                    benefit_stats = torch.stack(
+                        [benefit_e.mean(dim=1), benefit_e.amin(dim=1),
+                         benefit_e.amax(dim=1), benefit_e.amax(dim=1)-benefit_e.amin(dim=1)],
+                        dim=-1,
+                    )
+                    calibrator_parts = [
+                        expert_mean, expert_disagreement, benefit_stats,
+                        calibrator_policy.detach(),
+                    ]
+                else:
+                    calibrator_parts = [
+                        expert_delta.reshape(expert_delta.shape[0], -1),
+                        expert_mean,
+                        expert_disagreement,
+                        calibrator_policy.detach(),
+                    ]
             else:
                 calibrator_parts = [delta[:, :2], calibrator_policy]
 
@@ -1043,7 +1101,48 @@ class OCRAPModel(nn.Module):
                 calibrator_parts.append(calibrator_context)
             calibrator_input = torch.cat(calibrator_parts, dim=-1)
 
-            if self.direct_evidence_unified_calibrator is not None:
+            if self.direct_evidence_concord_benefit_calibrator is not None:
+                benefit_raw = self.direct_evidence_concord_benefit_calibrator(calibrator_input).squeeze(-1)
+                harm_raw = self.direct_evidence_concord_harm_calibrator(calibrator_input)
+                benefit_residual = (
+                    torch.tanh(benefit_raw) * self.direct_recovery_evidence_calibrator_scale
+                )
+                # Consensus transfer replaces v48.20's exact min envelope.  The
+                # exact min let one mismatched frozen expert destroy otherwise
+                # useful Near benefit evidence.  Mean consensus preserves shared
+                # source information while an explicit disagreement penalty keeps
+                # transfer conservative without selecting a regime expert.
+                base_benefit = benefit_e.mean(dim=1) - (
+                    self.direct_recovery_evidence_consensus_disagreement_penalty
+                    * (benefit_e.amax(dim=1) - benefit_e.amin(dim=1))
+                )
+                unified_benefit_logit = base_benefit + benefit_residual
+                if self.direct_recovery_evidence_component_heads:
+                    unified_component_harm_logits = (
+                        torch.tanh(harm_raw[:, :3])
+                        * self.direct_recovery_evidence_component_scale
+                    )
+                    unified_harm_logit = unified_component_harm_logits.amax(dim=-1)
+                    evidence_calibrator_residual = torch.cat(
+                        [benefit_residual.unsqueeze(-1), unified_component_harm_logits], dim=-1
+                    )
+                else:
+                    harm_residual = (
+                        torch.tanh(harm_raw.reshape(-1))
+                        * self.direct_recovery_evidence_component_scale
+                    )
+                    unified_harm_logit = harm_residual
+                    evidence_calibrator_residual = torch.stack(
+                        [benefit_residual, harm_residual], dim=-1
+                    )
+                out["direct_recovery_evidence_expert_benefit_logits"] = benefit_e
+                out["direct_recovery_evidence_expert_harm_logits"] = harm_e
+                out["direct_recovery_evidence_expert_base"] = torch.stack(
+                    [base_benefit, harm_e.amax(dim=1)], dim=-1
+                )
+                out["direct_recovery_evidence_concord_benefit_raw"] = benefit_raw
+                out["direct_recovery_evidence_concord_harm_raw"] = harm_raw
+            elif self.direct_evidence_unified_calibrator is not None:
                 combined_residual = self.direct_evidence_unified_calibrator(calibrator_input)
                 benefit_residual = (
                     torch.tanh(combined_residual[:, 0])

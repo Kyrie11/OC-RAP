@@ -132,12 +132,14 @@ def main() -> int:
         if i == 1 or i % max(1, args.progress_every) == 0 or i == len(paths):
             print({"event": "teacher_pcd_index_progress", "seen": i, "total": len(paths), "groups": len(groups)}, flush=True)
 
-    harmful_candidates = beneficial_candidates = overlap_candidates = 0
+    harmful_candidates = beneficial_candidates = overlap_candidates = safe_beneficial_candidates = 0
     harmful_groups: set[tuple[int, str, int]] = set()
     overlap_groups: set[tuple[int, str, int]] = set()
+    safe_beneficial_groups: set[tuple[int, str, int]] = set()
     factorized_candidate_counts: dict[int, Counter[str]] = {1: Counter(), 2: Counter()}
     factorized_harmful_groups: dict[int, set[tuple[int, str, int]]] = {1: set(), 2: set()}
     factorized_overlap_groups: dict[int, set[tuple[int, str, int]]] = {1: set(), 2: set()}
+    factorized_safe_groups: dict[int, set[tuple[int, str, int]]] = {1: set(), 2: set()}
     for row in rows:
         key = (int(row["bucket"]), str(row["scene"]), int(row["time"]))
         nominal = nominal_rows.get(key)
@@ -163,17 +165,23 @@ def main() -> int:
             beneficial_candidates += int(beneficial)
             harmful_candidates += int(harmful)
             overlap_candidates += int(beneficial and harmful)
+            safe_beneficial = bool(beneficial and not harmful)
+            safe_beneficial_candidates += int(safe_beneficial)
             bucket_counts = factorized_candidate_counts.setdefault(int(row["bucket"]), Counter())
             bucket_counts["deployable_candidates"] += 1
             bucket_counts["beneficial_candidates"] += int(beneficial)
             bucket_counts["component_harmful_candidates"] += int(harmful)
             bucket_counts["overlap_candidates"] += int(beneficial and harmful)
+            bucket_counts["safe_beneficial_candidates"] += int(safe_beneficial)
             if harmful:
                 harmful_groups.add(key)
                 factorized_harmful_groups.setdefault(int(row["bucket"]), set()).add(key)
             if beneficial and harmful:
                 overlap_groups.add(key)
                 factorized_overlap_groups.setdefault(int(row["bucket"]), set()).add(key)
+            if safe_beneficial:
+                safe_beneficial_groups.add(key)
+                factorized_safe_groups.setdefault(int(row["bucket"]), set()).add(key)
 
     tmp = args.output.with_suffix(args.output.suffix + ".tmp")
     with tmp.open("w", encoding="utf-8") as f:
@@ -260,14 +268,19 @@ def main() -> int:
         "component_harmful_candidates": harmful_candidates,
         "beneficial_candidates": beneficial_candidates,
         "beneficial_and_component_harmful_candidates": overlap_candidates,
+        "safe_beneficial_candidates": safe_beneficial_candidates,
         "component_harmful_groups": len(harmful_groups),
         "beneficial_and_component_harmful_groups": len(overlap_groups),
+        "safe_beneficial_groups": len(safe_beneficial_groups),
+        "safe_beneficial_scenes": len({(bucket, scene) for bucket, scene, _ in safe_beneficial_groups}),
         "index_contract": index_contract,
         "factorized_harm_support_by_bucket": {
             name: {
                 **{k: int(v) for k, v in factorized_candidate_counts.get(bucket, Counter()).items()},
                 "component_harmful_groups": len(factorized_harmful_groups.get(bucket, set())),
                 "beneficial_and_component_harmful_groups": len(factorized_overlap_groups.get(bucket, set())),
+                "safe_beneficial_groups": len(factorized_safe_groups.get(bucket, set())),
+                "safe_beneficial_scenes": len({scene for _, scene, _ in factorized_safe_groups.get(bucket, set())}),
             }
             for name, bucket in (("near", 1), ("contact", 2))
         },

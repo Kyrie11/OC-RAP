@@ -198,6 +198,11 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         direct_recovery_evidence_unified_experts=bool(ckpt.get("direct_recovery_evidence_unified_experts", model_cfg.get("direct_recovery_evidence_unified_experts", False))),
         direct_recovery_evidence_component_heads=bool(ckpt.get("direct_recovery_evidence_component_heads", model_cfg.get("direct_recovery_evidence_component_heads", False))),
         direct_recovery_evidence_component_scale=float(ckpt.get("direct_recovery_evidence_component_scale", model_cfg.get("direct_recovery_evidence_component_scale", 2.0))),
+        direct_recovery_evidence_concord=bool(ckpt.get("direct_recovery_evidence_concord", model_cfg.get("direct_recovery_evidence_concord", False))),
+        direct_recovery_evidence_consensus_disagreement_penalty=float(ckpt.get(
+            "direct_recovery_evidence_consensus_disagreement_penalty",
+            model_cfg.get("direct_recovery_evidence_consensus_disagreement_penalty", 0.15),
+        )),
     ).to(device)
     # Strict loading remains the default for checkpoints with matching geometry.
     # A v39 checkpoint can initialize v40 training through train.py's explicit
@@ -253,6 +258,11 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_evidence_unified_experts"] = bool(ckpt.get("direct_recovery_evidence_unified_experts", model_cfg.get("direct_recovery_evidence_unified_experts", False)))
     cfg["model"]["direct_recovery_evidence_component_heads"] = bool(ckpt.get("direct_recovery_evidence_component_heads", model_cfg.get("direct_recovery_evidence_component_heads", False)))
     cfg["model"]["direct_recovery_evidence_component_scale"] = float(ckpt.get("direct_recovery_evidence_component_scale", model_cfg.get("direct_recovery_evidence_component_scale", 2.0)))
+    cfg["model"]["direct_recovery_evidence_concord"] = bool(ckpt.get("direct_recovery_evidence_concord", model_cfg.get("direct_recovery_evidence_concord", False)))
+    cfg["model"]["direct_recovery_evidence_consensus_disagreement_penalty"] = float(ckpt.get(
+        "direct_recovery_evidence_consensus_disagreement_penalty",
+        model_cfg.get("direct_recovery_evidence_consensus_disagreement_penalty", 0.15),
+    ))
     return ModelBundle(model=model, cfg=cfg, device=device)
 
 

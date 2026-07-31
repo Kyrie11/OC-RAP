@@ -80,6 +80,13 @@ def _is_harmful(row: dict[str, Any], negative_gain: float) -> bool:
     return float(row["teacher_adv"]) <= -float(negative_gain)
 
 
+def _is_positive(
+    row: dict[str, Any], positive_gain: float, negative_gain: float, *, safe_only: bool
+) -> bool:
+    raw = float(row["teacher_adv"]) >= float(positive_gain)
+    return bool(raw and (not safe_only or not _is_harmful(row, negative_gain)))
+
+
 def _group_deviation(items: list[dict[str, Any]]) -> list[float]:
     nominal = next((x for x in items if x["nominal"]), items[0])
     try:
@@ -232,11 +239,21 @@ def _metrics(
     groups: list[dict[str, Any]], top1: list[dict[str, Any]],
     score_thr: float, rank_margin_thr: float, pos_gain: float, neg_gain: float,
     *, confidence_level: float = 0.90, bound_type: str = "one_sided",
+    safe_positive_only: bool = False,
 ) -> dict[str, Any]:
     selected = [r for r in top1 if r["pred_adv"] >= score_thr and r.get("rank_margin", 0.0) >= rank_margin_thr]
-    positive = [r for r in selected if r["teacher_adv"] >= pos_gain]
+    positive = [
+        r for r in selected
+        if _is_positive(r, pos_gain, neg_gain, safe_only=safe_positive_only)
+    ]
     harmful = [r for r in selected if _is_harmful(r, neg_gain)]
-    opportunities = [g for g in groups if g["oracle_best_teacher_adv"] >= pos_gain]
+    opportunities = [
+        g for g in groups
+        if any(
+            _is_positive(r, pos_gain, neg_gain, safe_only=safe_positive_only)
+            for r in g.get("pairs", [])
+        )
+    ]
     macro_counts = Counter(int(r["macro"]) for r in selected)
     max_macro_share = max(macro_counts.values(), default=0) / max(1, len(selected))
     # v48.12 TRIDENT: an absolute diversity cap is invalid when the teacher
@@ -245,7 +262,10 @@ def _metrics(
     # while retaining the raw share for reporting.
     oracle_macro_counts: Counter[int] = Counter()
     for g in opportunities:
-        positive_pairs = [r for r in g.get("pairs", []) if r.get("teacher_adv", -1.0e9) >= pos_gain]
+        positive_pairs = [
+            r for r in g.get("pairs", [])
+            if _is_positive(r, pos_gain, neg_gain, safe_only=safe_positive_only)
+        ]
         if not positive_pairs:
             continue
         oracle_best = sorted(
@@ -290,6 +310,7 @@ def _metrics(
         "harmful_group_exposure_ucb": harmful_group_ucb,
         "harmful_group_exposure_ucb90": harmful_group_ucb,  # backward-compatible field name
         "num_opportunities": len(opportunities),
+        "opportunity_label_mode": "safe_benefit" if safe_positive_only else "raw_benefit",
         "positive_recall": len(positive) / len(opportunities) if opportunities else None,
         "teacher_advantage_mean": float(np.mean([r["teacher_adv"] for r in selected])) if selected else None,
         "teacher_advantage_min": float(min(r["teacher_adv"] for r in selected)) if selected else None,
@@ -354,6 +375,7 @@ def _fit(
                         args.positive_gain, args.negative_gain,
                         confidence_level=args.certificate_confidence_level,
                         bound_type=args.certificate_bound_type,
+                        safe_positive_only=args.opportunity_label_mode == "safe_benefit",
                     )
                     lcb = float(m["precision_wilson_lcb90"] or 0.0)
                     harm_ucb = float(m["harmful_group_exposure_ucb90"])
@@ -409,6 +431,7 @@ def _fit(
             groups, [], float("inf"), float("inf"), args.positive_gain, args.negative_gain,
             confidence_level=args.certificate_confidence_level,
             bound_type=args.certificate_bound_type,
+            safe_positive_only=args.opportunity_label_mode == "safe_benefit",
         )
         return None, empty, [], frontier[:40]
     candidates.sort(
@@ -452,6 +475,11 @@ def main() -> int:
     ap.add_argument("--positive-gain", type=float, default=0.015)
     ap.add_argument("--negative-gain", type=float, default=0.010)
     ap.add_argument("--harm-label-mode", choices=["signed_advantage", "component_veto"], default="signed_advantage")
+    ap.add_argument(
+        "--opportunity-label-mode", choices=["raw_benefit", "safe_benefit"],
+        default="raw_benefit",
+        help="safe_benefit counts only beneficial candidates that do not trigger the declared harm label.",
+    )
     ap.add_argument("--component-harm-drs-tolerance", type=float, default=0.05)
     ap.add_argument("--component-harm-dep-tolerance", type=float, default=0.05)
     ap.add_argument("--component-harm-gap-tolerance", type=float, default=0.05)
@@ -633,9 +661,18 @@ def main() -> int:
                 "teacher_component_veto_margin": component_margin,
                 "teacher_harmful": bool(component_margin > 0.0) if args.harm_label_mode == "component_veto" else bool(teacher_adv <= -args.negative_gain),
             })
+        safe_pairs = [
+            r for r in pairs
+            if _is_positive(r, args.positive_gain, args.negative_gain, safe_only=True)
+        ]
         groups.append({
             "scene": scene, "time": time_index, "fold": _fold(scene, max(2, args.folds)),
-            "pairs": pairs, "oracle_best_teacher_adv": max(r["teacher_adv"] for r in pairs),
+            "pairs": pairs,
+            "oracle_best_teacher_adv": max(r["teacher_adv"] for r in pairs),
+            "oracle_best_safe_teacher_adv": (
+                max(r["teacher_adv"] for r in safe_pairs) if safe_pairs else None
+            ),
+            "has_safe_opportunity": bool(safe_pairs),
         })
 
     fit = [g for g in groups if g["fold"] == args.fit_fold]
@@ -643,7 +680,12 @@ def main() -> int:
     support_feasibility = {
         "fit": certificate_support_feasibility(
             num_groups=len(fit),
-            num_opportunities=sum(g["oracle_best_teacher_adv"] >= args.positive_gain for g in fit),
+            num_opportunities=sum(
+                g["has_safe_opportunity"]
+                if args.opportunity_label_mode == "safe_benefit"
+                else g["oracle_best_teacher_adv"] >= args.positive_gain
+                for g in fit
+            ),
             min_selected=args.min_fit_selected,
             min_precision_lcb=args.min_fit_precision_lcb,
             max_harmful_selected_ucb=args.max_fit_harmful_selected_ucb,
@@ -653,7 +695,12 @@ def main() -> int:
         ),
         "verify": certificate_support_feasibility(
             num_groups=len(verify),
-            num_opportunities=sum(g["oracle_best_teacher_adv"] >= args.positive_gain for g in verify),
+            num_opportunities=sum(
+                g["has_safe_opportunity"]
+                if args.opportunity_label_mode == "safe_benefit"
+                else g["oracle_best_teacher_adv"] >= args.positive_gain
+                for g in verify
+            ),
             min_selected=args.min_verify_selected,
             min_precision_lcb=args.min_verify_precision_lcb,
             max_harmful_selected_ucb=args.max_verify_harmful_selected_ucb,
@@ -710,11 +757,13 @@ def main() -> int:
         verify, verify_top1, score_thr, rank_margin_thr, args.positive_gain, args.negative_gain,
         confidence_level=args.certificate_confidence_level,
         bound_type=args.certificate_bound_type,
+        safe_positive_only=args.opportunity_label_mode == "safe_benefit",
     )
     all_metrics = _metrics(
         groups, all_top1, score_thr, rank_margin_thr, args.positive_gain, args.negative_gain,
         confidence_level=args.certificate_confidence_level,
         bound_type=args.certificate_bound_type,
+        safe_positive_only=args.opportunity_label_mode == "safe_benefit",
     )
     near_miss_verify_frontier: list[dict[str, Any]] = []
     for fit_row in near_miss[:20]:
@@ -732,6 +781,7 @@ def main() -> int:
             args.positive_gain, args.negative_gain,
             confidence_level=args.certificate_confidence_level,
             bound_type=args.certificate_bound_type,
+            safe_positive_only=args.opportunity_label_mode == "safe_benefit",
         )
         near_miss_verify_frontier.append({
             "fit_constraint_deficit": float(fit_row.get("constraint_deficit", 0.0)),
@@ -808,7 +858,12 @@ def main() -> int:
             key=lambda r: (-float(r["pred_adv"]), int(r["candidate"])),
         )[0]
         evidence_row = dict(evidence_best)
-        evidence_row.update(scene=g["scene"], time=g["time"], fold=g["fold"], oracle_best_teacher_adv=g["oracle_best_teacher_adv"])
+        evidence_row.update(
+            scene=g["scene"], time=g["time"], fold=g["fold"],
+            oracle_best_teacher_adv=g["oracle_best_teacher_adv"],
+            oracle_best_safe_teacher_adv=g.get("oracle_best_safe_teacher_adv"),
+            has_safe_opportunity=bool(g.get("has_safe_opportunity", False)),
+        )
         proposal_evidence_top1.append(evidence_row)
     proposal_best_hit_rate = proposal_best_hits / proposal_groups if proposal_groups else None
     proposal_positive_hit_rate = proposal_positive_hits / proposal_groups if proposal_groups else None
@@ -835,6 +890,34 @@ def main() -> int:
     proposal_evidence_top1_harm_auc = _auc(
         [_is_harmful(r, args.negative_gain) for r in proposal_evidence_top1],
         [float(r["harm"]) for r in proposal_evidence_top1],
+    )
+
+    evidence_switches = [r for r in proposal_evidence_top1 if float(r["pred_adv"]) > 0.0]
+    if args.opportunity_label_mode == "safe_benefit":
+        evidence_nonpositive = [r for r in proposal_evidence_top1 if not bool(r.get("has_safe_opportunity", False))]
+        evidence_positive = [r for r in proposal_evidence_top1 if bool(r.get("has_safe_opportunity", False))]
+    else:
+        evidence_nonpositive = [r for r in proposal_evidence_top1 if float(r["oracle_best_teacher_adv"]) < args.positive_gain]
+        evidence_positive = [r for r in proposal_evidence_top1 if float(r["oracle_best_teacher_adv"]) >= args.positive_gain]
+    evidence_false_switches = [r for r in evidence_nonpositive if float(r["pred_adv"]) > 0.0]
+    evidence_harmful_switches = [r for r in evidence_switches if _is_harmful(r, args.negative_gain)]
+    evidence_positive_regrets = []
+    for r in evidence_positive:
+        oracle_adv = (
+            r.get("oracle_best_safe_teacher_adv")
+            if args.opportunity_label_mode == "safe_benefit"
+            else r.get("oracle_best_teacher_adv")
+        )
+        if oracle_adv is not None:
+            evidence_positive_regrets.append(max(0.0, float(oracle_adv) - float(r["teacher_adv"])))
+    proposal_evidence_false_switch_rate = (
+        len(evidence_false_switches) / len(evidence_nonpositive) if evidence_nonpositive else None
+    )
+    proposal_evidence_harmful_switch_rate = (
+        len(evidence_harmful_switches) / len(evidence_switches) if evidence_switches else None
+    )
+    proposal_evidence_positive_regret_mean = (
+        float(np.mean(evidence_positive_regrets)) if evidence_positive_regrets else None
     )
 
     top1_pred = [r["rank_adv"] for r in unconstrained_top1]
@@ -917,6 +1000,7 @@ def main() -> int:
         ),
         "risk_source": args.risk_source,
         "harm_label_mode": args.harm_label_mode,
+        "opportunity_label_mode": args.opportunity_label_mode,
         "component_harm_tolerances": component_tolerances.__dict__,
         "certificate_confidence": {
             "level": float(args.certificate_confidence_level),
@@ -986,6 +1070,9 @@ def main() -> int:
         "proposal_evidence_top1_correlation": proposal_evidence_top1_corr,
         "proposal_evidence_top1_positive_auc": proposal_evidence_top1_benefit_auc,
         "proposal_evidence_top1_harm_auc": proposal_evidence_top1_harm_auc,
+        "proposal_evidence_nonpositive_false_switch_rate": proposal_evidence_false_switch_rate,
+        "proposal_evidence_harmful_switch_rate": proposal_evidence_harmful_switch_rate,
+        "proposal_evidence_positive_top1_regret_mean": proposal_evidence_positive_regret_mean,
         "policy_top1_gain_mae": policy_top1_gain_mae,
         "unconstrained_recovery_switch_rate": (len(recovery_switches) / len(unconstrained_top1) if unconstrained_top1 else None),
         "nonpositive_group_false_switch_rate": (len(nonpositive_false_switches) / len(nonpositive_groups) if nonpositive_groups else None),

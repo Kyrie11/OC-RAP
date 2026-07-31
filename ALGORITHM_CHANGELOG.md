@@ -1,3 +1,59 @@
+## v48.21 — OC-TRAC-CONCORD-BRIDGE (2026-07-30)
+
+### v48.20 result attribution
+
+- The uploaded v48.20 dedicated controller completed both Balanced and Precision adaptations, a non-empty scene-disjoint certificate, manifest/protocol checks, and the test-root seal. It records `pipeline_valid=true`, `test_roots_read=false`, and `RC=20`. Fit/verify support feasibility is true in both Near and Contact, so this is a real Natural-gate rejection rather than the historical unsupported-gate or parameter-guard failure.
+- Component-risk learning improved materially. Main candidate harm AUC is approximately 0.669--0.676 in Near and 0.661 in Contact, compared with approximately random harm evidence in v48.19. The component semantic reset and exact non-compensatory maximum are therefore retained.
+- Natural-gate usability did not improve: every main and ablation certificate still selects zero verify groups. Near benefit is unstable across objectives/variants (Balanced main 0.445 versus Precision main 0.790), learned proposal-evidence correlation is only -0.074--0.125, and no gate-authorized Near closed-loop result exists.
+- Contact remains the limiting regime. Main candidate benefit AUC is 0.487--0.495, proposal-evidence benefit AUC is 0.430--0.439, learned correlation is -0.074--0.105, and all verify coverage is zero. The strongest Contact benefit result is only the candidate-tail Precision ablation (0.603), whose harm AUC falls to 0.419 and still yields zero certificate coverage.
+- The frozen proposal remains high recall (positive-group top-k oracle hit approximately 0.982--0.991). Proposal generation is not retrained in this version.
+
+### Root defects found in v48.20
+
+1. **Benefit/risk negative transfer in one shared adapter.** Safe-benefit positives are only about 3% of deployable candidates, whereas component-harm positives are about 45--54%. A single shared hidden representation allowed dense risk gradients to overwrite sparse benefit structure. The ablations expose this directly: candidate-only models retain the strongest Near/Contact benefit, while component-head models improve harm AUC but damage benefit AUC.
+2. **The exact minimum expert envelope is too pessimistic for transfer.** v48.20 defines base benefit as `min(expert_1, expert_2)`. One source expert that is mismatched for a candidate can erase useful Near evidence even when the other expert is well calibrated. Balanced Near benefit collapses to 0.445 while the same frozen proposal still contains the opportunity almost always.
+3. **Candidate tails do not directly supervise the group event.** Deployment first asks whether the frozen top-k contains any safe recovery and only then chooses a candidate. Candidate BCE and a setwise winner objective provide an indirect and unstable signal for this rare group-level admission event.
+4. **Early stopping used fixed dev thresholds that were inactive.** The v48.20 metric used fixed opportunity/harm thresholds. Positive admission recall was zero through almost all dev epochs, making the selection risk nearly constant and causing Precision to select epoch 1. This cannot choose the checkpoint most likely to have a useful fit/verify frontier.
+5. **Sampler semantics disagreed with safe-benefit training.** Raw PCD-positive but component-harmful overlap groups were placed in the positive stratum even though the safe-benefit group loss labelled them negative. In the uploaded index, Near has 16 raw positive groups but only 11 safe-positive groups; Contact has 44 raw and 41 safe-positive groups.
+6. **Frozen proposal diagnostics were mixed with learned selector diagnostics.** The reported 0.86--0.93 non-positive false-switch rate and approximately 0.38--0.41 harmful ranked-switch rate are frozen tournament metrics and are identical across ablations. They diagnose the need for admission evidence, but they are not the learned gate's false-intervention rate. The learned gate currently abstains everywhere.
+7. **Main/D ablation reproducibility was not exact.** Main and ablation jobs used different batch sizes/worker settings and non-deterministic cuDNN behavior, weakening causal comparison.
+
+### v48.21 algorithm: CONCORD-BRIDGE
+
+**CONCORD = CONservative Consensus Opportunity and Non-Compensatory Risk Decoupling.** It remains one continuous, bucket-invariant mechanism across Safe, Near and Contact; regime labels are never model inputs or inference routers.
+
+1. **Permutation-invariant expert consensus.** Replace the exact minimum with `mean(expert benefit) - lambda * expert range` (`lambda=0.15` by default). This preserves transferable evidence when one expert is locally pessimistic while retaining an explicit disagreement penalty. The representation uses symmetric expert statistics, so expert ordering cannot act as a hidden regime identifier.
+2. **Decoupled benefit and component-risk adapters.** Sparse safe-benefit and dense risk supervision receive separate zero-initialized bounded MLPs. Benefit keeps consensus transfer; harm remains an absolute semantic reset with DRS/deployability/gap component heads and exact `max` veto.
+3. **Safe-benefit candidate target.** Opportunity supervision is `raw benefit AND not component harmful`. A candidate may still be a raw-benefit opportunity for certificate accounting, but the trained admission score is not rewarded for unsafe benefit/harm overlap.
+4. **Frozen-top-k multiple-instance opportunity objective.** A noisy-OR loss directly supervises whether the deployed proposal top-k contains any safe beneficial candidate. Candidates outside frozen top-k receive no group-opportunity gradient. The existing deployment-exact safe-set objective remains primary; candidate tails and ranking terms remain auxiliary.
+5. **Safe-positive stratified sampling.** When safe-benefit training is enabled, raw-positive/component-harmful groups are no longer sampled as positive admission groups. The teacher-index audit now reports safe-positive candidate/group/scene support explicitly.
+6. **Threshold-free checkpoint selection.** `direct_concord_selection_risk` uses soft top-k safe-opportunity NLL, soft recall, false-admission mass, harmful policy mass, safe-candidate mass and safe top-1 regret. Near/Contact are only robust validation strata; the model receives no regime ID. Fixed 0.65/0.30 thresholds remain diagnostic and do not drive early stopping.
+7. **Primary certificate semantics preserved.** The preregistered Natural gate continues to count raw PCD benefit and independently veto component harm (`OPPORTUNITY_LABEL_MODE=raw_benefit`). `safe_benefit` is supported as a separate audit mode but is not silently substituted into the primary gate, because current Near fit/verify support is sparse.
+8. **Deterministic attribution.** Main and D use the same default batch size (72), deterministic algorithms, and `cudnn.benchmark=false`. Both variants must complete; all non-0/20 lower-level failures normalize to `RC=30`.
+
+### Non-repeated v48.21 ablations
+
+1. `A_safe_target_legacy_trunk`: safe target, safe sampler, group MIL and soft checkpoint metric, but retain the v48.20 shared trunk/exact-min architecture. This isolates the architecture correction.
+2. `B_concord_candidate_only`: consensus plus decoupled adapters, but no group MIL or safe-set objective. This tests whether architecture alone is sufficient.
+3. `C_concord_group_mil_aggregate`: consensus, decoupled adapters and group objectives with one aggregate harm head. This isolates component heads.
+4. `D_full_concord`: full consensus, decoupled component risk, safe-positive sampler, frozen-top-k group MIL, deployment-exact safe set and threshold-free checkpoint selection.
+
+Balanced and Precision run in separate waves. Each wave launches four tasks concurrently, two tasks per A30 and one DataLoader worker per task. Do not repeat exact-min unified benefit, one shared benefit/harm trunk, raw-positive sampler under safe targets, fixed-threshold early stopping, threshold-grid-only tuning, proposal retraining, regime-selected calibrators, or signed-total-PCD harm.
+
+### Decision rules
+
+- `RC=0`: run only the authorization-checked stress command generated after the independent certificate; then run multi-seed confirmation and the final Safe paired non-interference experiment.
+- `RC=20`: do not read test. Compare A/B/C/D to determine whether the remaining failure is consensus transfer, group opportunity learning, or component calibration. Do not relax the Natural gate in the same output directory.
+- `RC=30`: repair the stage-specific engineering failure before making any algorithm conclusion.
+- Dataset regeneration is still deferred. The index/sampler/reporting fixes do not modify the three regime datasets.
+
+### Local validation
+
+- `pytest`: 203 passed, 5 warnings.
+- `python -m compileall -q src tools tests`: passed.
+- `bash -n` for every `scripts/*.sh`: passed.
+- The delivery environment does not contain the real WOMD/Waymax datasets or the two A30 GPUs. No v48.21 Natural-gate or closed-loop result is claimed.
+
 ## v48.20 — OC-TRAC-UNISON-BRIDGE (2026-07-30)
 
 ### v48.19 result attribution and CCF-A readiness

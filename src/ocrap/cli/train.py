@@ -4,6 +4,7 @@ from pathlib import Path
 from time import perf_counter
 from collections import Counter
 import json
+import math
 import os
 from contextlib import nullcontext
 
@@ -363,6 +364,8 @@ def _direct_value_loss_from_outputs(
         ordinal_evidence_component_tail_weight=float(tcfg.get("direct_value_ordinal_evidence_component_tail_weight", 0.0)),
         ordinal_evidence_global_balance=bool(tcfg.get("direct_value_ordinal_evidence_global_balance", False)),
         ordinal_evidence_safe_set_temperature=float(tcfg.get("direct_value_ordinal_evidence_safe_set_temperature", 0.05)),
+        ordinal_evidence_safe_benefit_target=bool(tcfg.get("direct_value_ordinal_evidence_safe_benefit_target", False)),
+        ordinal_evidence_group_opportunity_weight=float(tcfg.get("direct_value_ordinal_evidence_group_opportunity_weight", 0.0)),
         ordinal_evidence_balanced_replaces_erm=bool(tcfg.get("direct_value_ordinal_evidence_balanced_replaces_erm", False)),
         ordinal_evidence_benefit_margin_weight=float(tcfg.get("direct_value_ordinal_evidence_benefit_margin_weight", 0.0)),
         ordinal_evidence_harm_margin_weight=float(tcfg.get("direct_value_ordinal_evidence_harm_margin_weight", 0.0)),
@@ -549,6 +552,8 @@ def _direct_policy_batch_stats(
     conditional_preference = bool(tcfg.get("direct_value_preference_conditional_mode", False))
     metric_proposal_top_k = max(1, int(tcfg.get("direct_policy_metric_proposal_top_k", 1)))
     metric_evidence_rerank = bool(tcfg.get("direct_policy_metric_evidence_rerank_top_k", False))
+    metric_safe_opportunity = bool(tcfg.get("direct_policy_metric_safe_opportunity", False))
+    metric_soft_temperature = max(1.0e-3, float(tcfg.get("direct_policy_metric_soft_temperature", 0.10)))
     stats: dict[str, float] = {}
 
     def add(name: str, value: float) -> None:
@@ -659,6 +664,48 @@ def _direct_policy_batch_stats(
                     delta_std = delta_mean.new_tensor(0.10)
             opportunity_prob = float(normal_cdf((delta_mean - positive_gain) / delta_std).item())
             harm_prob = float(normal_cdf((-negative_gain - delta_mean) / delta_std).item())
+        soft_safe_group = False
+        soft_group_admit = 0.0
+        soft_harmful_mass = 0.0
+        soft_safe_mass = 0.0
+        soft_regret = 0.0
+        if (
+            metric_safe_opportunity
+            and risk_source in {"heads", "ordinal_evidence"}
+            and opportunity_logit is not None
+            and harm_logit is not None
+        ):
+            proposal_k_soft = min(metric_proposal_top_k, int(recs.numel()))
+            proposal_local_soft = torch.topk(pred_rank_delta.detach(), k=proposal_k_soft).indices
+            proposal_teacher = teacher_delta[proposal_local_soft]
+            if component_harmful is not None:
+                proposal_harmful = component_harmful[proposal_local_soft]
+            else:
+                proposal_harmful = proposal_teacher <= -negative_gain
+            proposal_safe_positive = (proposal_teacher >= positive_gain) & (~proposal_harmful)
+            soft_safe_group = bool(proposal_safe_positive.any().item())
+            proposal_opp = opportunity_all[proposal_local_soft]
+            proposal_harm = harm_all[proposal_local_soft]
+            proposal_admit = (proposal_opp * (1.0 - proposal_harm)).clamp(1.0e-6, 1.0 - 1.0e-6)
+            soft_group_admit_t = 1.0 - torch.prod(1.0 - proposal_admit)
+            soft_group_admit = float(soft_group_admit_t.item())
+            proposal_evidence_soft = proposal_opp - proposal_harm
+            policy_logits_soft = torch.cat([
+                proposal_evidence_soft.new_zeros((1,)),
+                proposal_evidence_soft / metric_soft_temperature,
+            ])
+            policy_prob_soft = torch.softmax(policy_logits_soft, dim=0)[1:]
+            soft_harmful_mass = float(
+                (policy_prob_soft * proposal_harmful.to(policy_prob_soft.dtype)).sum().item()
+            )
+            soft_safe_mass = float(
+                (policy_prob_soft * proposal_safe_positive.to(policy_prob_soft.dtype)).sum().item()
+            )
+            if soft_safe_group:
+                best_safe = float(proposal_teacher[proposal_safe_positive].max().item())
+                expected_teacher = float((policy_prob_soft * proposal_teacher).sum().item())
+                soft_regret = max(0.0, best_safe - expected_teacher - tie_eps)
+
         admitted = bool(
             opportunity_prob >= opp_threshold
             and harm_prob <= harm_threshold
@@ -692,6 +739,17 @@ def _direct_policy_batch_stats(
             add(f"certificate_regret_sum_{name}", cert_regret)
             add(f"certificate_top1_hit_{name}", float(cert_teacher_adv >= oracle_adv_raw - tie_eps))
             add(f"certificate_rank_margin_sum_{name}", cert_rank_margin)
+            if metric_safe_opportunity:
+                soft_target = 1.0 if soft_safe_group else 0.0
+                soft_prob = min(max(soft_group_admit, 1.0e-6), 1.0 - 1.0e-6)
+                soft_nll = -(soft_target * math.log(soft_prob) + (1.0 - soft_target) * math.log(1.0 - soft_prob))
+                add(f"soft_safe_nll_sum_{name}", soft_nll)
+                add(f"soft_safe_group_{name}", soft_target)
+                add(f"soft_safe_recall_sum_{name}", soft_group_admit if soft_safe_group else 0.0)
+                add(f"soft_false_admission_sum_{name}", soft_group_admit if not soft_safe_group else 0.0)
+                add(f"soft_harmful_mass_sum_{name}", soft_harmful_mass)
+                add(f"soft_safe_mass_sum_{name}", soft_safe_mass if soft_safe_group else 0.0)
+                add(f"soft_safe_regret_sum_{name}", soft_regret if soft_safe_group else 0.0)
         if positive_group:
             for name in ("all", suffix, f"{suffix}_fold{scene_fold}"):
                 add(f"positive_count_{name}", 1.0)
@@ -735,6 +793,24 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
             out[f"direct_harmful_switch_rate{tag}"] = stats.get(f"admitted_harmful_{suffix}", stats.get(f"harmful_switch_{suffix}", 0.0)) / count
             out[f"direct_false_intervention_rate{tag}"] = stats.get(f"false_intervention_{suffix}", 0.0) / count
             out[f"direct_raw_admission_rate{tag}"] = stats.get(f"admission_count_{suffix}", 0.0) / count
+            if f"soft_safe_nll_sum_{suffix}" in stats:
+                safe_count = stats.get(f"soft_safe_group_{suffix}", 0.0)
+                negative_count = max(0.0, count - safe_count)
+                out[f"direct_soft_safe_opportunity_nll{tag}"] = stats.get(f"soft_safe_nll_sum_{suffix}", 0.0) / count
+                out[f"direct_soft_harmful_mass{tag}"] = stats.get(f"soft_harmful_mass_sum_{suffix}", 0.0) / count
+                out[f"direct_soft_safe_recall{tag}"] = (
+                    stats.get(f"soft_safe_recall_sum_{suffix}", 0.0) / safe_count if safe_count > 0 else 0.0
+                )
+                out[f"direct_soft_false_admission{tag}"] = (
+                    stats.get(f"soft_false_admission_sum_{suffix}", 0.0) / negative_count if negative_count > 0 else 0.0
+                )
+                out[f"direct_soft_safe_mass{tag}"] = (
+                    stats.get(f"soft_safe_mass_sum_{suffix}", 0.0) / safe_count if safe_count > 0 else 0.0
+                )
+                out[f"direct_soft_safe_regret{tag}"] = (
+                    stats.get(f"soft_safe_regret_sum_{suffix}", 0.0) / safe_count if safe_count > 0 else 0.0
+                )
+                out[f"direct_safe_positive_group_count{tag}"] = float(safe_count)
             out[f"direct_certificate_group_regret_mean{tag}"] = stats.get(f"certificate_regret_sum_{suffix}", 0.0) / count
             out[f"direct_certificate_group_top1_accuracy{tag}"] = stats.get(f"certificate_top1_hit_{suffix}", 0.0) / count
             out[f"direct_certificate_rank_margin_mean{tag}"] = stats.get(f"certificate_rank_margin_sum_{suffix}", 0.0) / count
@@ -899,6 +975,34 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
         # worst-regime dev aggregate is only a robust checkpoint criterion; it
         # is not exposed to the model and does not route inference.
         out["direct_unison_selection_risk"] = facet_risk
+
+    # v48.21 CONCORD: threshold-free checkpoint selection aligned with the
+    # deployed top-k evidence score.  Fixed 0.65/0.30 validation thresholds made
+    # every v48.20 epoch look like all-abstain, so early stopping could not select
+    # a certificate-feasible checkpoint.  This soft risk uses no regime input and
+    # no test data; Near/Contact are only robust reporting strata.
+    concord_regime_risks: list[float] = []
+    for regime in ("near", "contact"):
+        nll_key = f"direct_soft_safe_opportunity_nll_{regime}"
+        if nll_key not in out:
+            continue
+        miss = 1.0 - float(out.get(f"direct_soft_safe_recall_{regime}", 0.0))
+        false = float(out.get(f"direct_soft_false_admission_{regime}", 0.0))
+        harm = float(out.get(f"direct_soft_harmful_mass_{regime}", 0.0))
+        regret = float(out.get(f"direct_soft_safe_regret_{regime}", 0.0))
+        safe_mass_shortfall = max(0.0, 0.50 - float(out.get(f"direct_soft_safe_mass_{regime}", 0.0)))
+        risk = (
+            float(out[nll_key])
+            + float(tcfg.get("direct_policy_metric_concord_miss_weight", 2.0)) * miss
+            + float(tcfg.get("direct_policy_metric_concord_false_weight", 0.75)) * false
+            + float(tcfg.get("direct_policy_metric_concord_harm_weight", 2.0)) * harm
+            + float(tcfg.get("direct_policy_metric_concord_regret_weight", 0.50)) * regret
+            + float(tcfg.get("direct_policy_metric_concord_safe_mass_weight", 1.0)) * safe_mass_shortfall
+        )
+        out[f"direct_concord_risk_{regime}"] = risk
+        concord_regime_risks.append(risk)
+    if len(concord_regime_risks) == 2:
+        out["direct_concord_selection_risk"] = max(concord_regime_risks) + 0.25 * sum(concord_regime_risks)
     return out
 
 
@@ -1666,6 +1770,14 @@ def _make_group_batch_sampler(ds: OCRAPSampleDataset, cfg: dict, batch_size: int
     positive_boost = float(tcfg.get("group_batch_positive_advantage_boost", 0.0))
     positive_best_macro_balance_power = float(tcfg.get("group_batch_positive_best_macro_balance_power", 0.0))
     require_positive_groups = bool(tcfg.get("group_batch_require_positive_advantage_groups", False))
+    # v48.21: the sampler must use the same opportunity semantics as the loss.
+    # When safe-benefit supervision is enabled, a raw PCD-positive but
+    # component-harmful group is *not* a positive admission group.  v48.20
+    # oversampled those overlap groups as positives while the group loss labeled
+    # them negative, injecting avoidable contradictory gradients.
+    safe_positive_sampler = bool(
+        tcfg.get("direct_value_ordinal_evidence_safe_benefit_target", False)
+    )
     if positive_boost > 0.0 and not positive_macro_ids:
         raise ValueError(
             "positive group boost is enabled but no recovery macro ids were configured; "
@@ -1720,6 +1832,12 @@ def _make_group_batch_sampler(ds: OCRAPSampleDataset, cfg: dict, batch_size: int
                         nominal_target = target_value if nominal_target is None else max(nominal_target, target_value)
                         continue
                     if mac in positive_macro_ids:
+                        if (
+                            safe_positive_sampler
+                            and idx_row is not None
+                            and bool(idx_row.get("component_harmful", False))
+                        ):
+                            continue
                         if best_recovery_target is None or target_value > best_recovery_target:
                             best_recovery_target = target_value
                             positive_best_macro = mac
@@ -1791,10 +1909,16 @@ def _make_group_batch_sampler(ds: OCRAPSampleDataset, cfg: dict, batch_size: int
             group_strata.append(1)
             continue
         nominal_value = max(nominal_values)
-        best_delta = max(recovery_values) - nominal_value
+        eligible_recovery_values = [
+            value for value, harmful in zip(recovery_values, recovery_component_harmful)
+            if not (safe_positive_sampler and harmful)
+        ]
+        best_delta = (
+            max(eligible_recovery_values) - nominal_value
+            if eligible_recovery_values
+            else float("-inf")
+        )
         if best_delta >= positive_gain_min:
-            # Overlap groups remain in the positive stratum; the tail-balanced
-            # loss still observes their component-harm label.
             group_strata.append(2)
         elif factorized_sampler_harm and any(recovery_component_harmful):
             group_strata.append(0)
@@ -1828,7 +1952,12 @@ def _make_group_batch_sampler(ds: OCRAPSampleDataset, cfg: dict, batch_size: int
         "positive_advantage_boost": float(positive_boost),
         "positive_advantage_gain_min": float(positive_gain_min),
         "positive_advantage_groups": int(positive_advantage_groups),
-        "positive_advantage_target": "teacher_pcd" if group_index else "r_dep_fallback",
+        "positive_advantage_target": (
+            "safe_teacher_pcd" if group_index and safe_positive_sampler
+            else "teacher_pcd" if group_index
+            else "r_dep_fallback"
+        ),
+        "safe_positive_sampler": bool(safe_positive_sampler),
         "positive_best_macro_balance_power": float(positive_best_macro_balance_power),
         "positive_best_macro_counts": dict(sorted(positive_macro_counts.items())),
         "group_index_rows": int(len(group_index)),
@@ -1917,6 +2046,9 @@ def _make_sampler(ds: OCRAPSampleDataset, cfg: dict) -> WeightedRandomSampler | 
 
 def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) -> dict:
     seed_everything(int(cfg.get("seed", 7)))
+    deterministic_training = bool((cfg.get("training", {}) or {}).get("deterministic_algorithms", False))
+    if deterministic_training:
+        torch.use_deterministic_algorithms(True, warn_only=True)
     out = ensure_dir(output)
     print({"event": "dataset_scan_start", "dataset": str(dataset)}, flush=True)
     paths = iter_sample_paths_many(dataset)
@@ -2032,6 +2164,10 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_evidence_unified_experts=bool(model_cfg.get("direct_recovery_evidence_unified_experts", False)),
         direct_recovery_evidence_component_heads=bool(model_cfg.get("direct_recovery_evidence_component_heads", False)),
         direct_recovery_evidence_component_scale=float(model_cfg.get("direct_recovery_evidence_component_scale", 2.0)),
+        direct_recovery_evidence_concord=bool(model_cfg.get("direct_recovery_evidence_concord", False)),
+        direct_recovery_evidence_consensus_disagreement_penalty=float(
+            model_cfg.get("direct_recovery_evidence_consensus_disagreement_penalty", 0.15)
+        ),
     ).to(device)
     tcfg = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
 
@@ -2184,7 +2320,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         torch.set_float32_matmul_precision(str(tcfg.get("matmul_precision", "high")))
         torch.backends.cuda.matmul.allow_tf32 = bool(tcfg.get("allow_tf32", True))
         torch.backends.cudnn.allow_tf32 = bool(tcfg.get("allow_tf32", True))
-        torch.backends.cudnn.benchmark = bool(tcfg.get("cudnn_benchmark", True))
+        torch.backends.cudnn.benchmark = (
+            False if deterministic_training else bool(tcfg.get("cudnn_benchmark", True))
+        )
     loader_kwargs = {
         "num_workers": num_workers,
         "collate_fn": _collate,
@@ -2288,6 +2426,10 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "direct_recovery_evidence_unified_experts": bool(model_cfg.get("direct_recovery_evidence_unified_experts", False)),
             "direct_recovery_evidence_component_heads": bool(model_cfg.get("direct_recovery_evidence_component_heads", False)),
             "direct_recovery_evidence_component_scale": float(model_cfg.get("direct_recovery_evidence_component_scale", 2.0)),
+            "direct_recovery_evidence_concord": bool(model_cfg.get("direct_recovery_evidence_concord", False)),
+            "direct_recovery_evidence_consensus_disagreement_penalty": float(
+                model_cfg.get("direct_recovery_evidence_consensus_disagreement_penalty", 0.15)
+            ),
             "model_state": model.state_dict(),
             "optimizer_state": opt.state_dict(),
             "epoch": int(ep),

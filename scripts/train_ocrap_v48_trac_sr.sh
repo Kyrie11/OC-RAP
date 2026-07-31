@@ -60,7 +60,8 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.grad_clip=3.0 --set training.require_cuda=true \
   --set training.amp=true --set training.amp_dtype=bfloat16 \
   --set training.allow_tf32=true --set training.matmul_precision=high \
-  --set training.cudnn_benchmark=true --set training.pin_memory=true \
+  --set training.cudnn_benchmark="${CUDNN_BENCHMARK:-true}" --set training.pin_memory=true \
+  --set training.deterministic_algorithms="${DETERMINISTIC_ALGORITHMS:-false}" \
   --set training.num_workers="${NUM_WORKERS:-6}" --set training.persistent_workers=true \
   --set training.prefetch_factor="${PREFETCH_FACTOR:-2}" --set training.progress=true \
   --set training.save_every_epoch=true --set training.best_metric="${BEST_METRIC:-direct_policy_risk_fold_worst}" \
@@ -126,6 +127,8 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set model.direct_recovery_evidence_unified_experts="${EVIDENCE_UNIFIED_EXPERTS:-false}" \
   --set model.direct_recovery_evidence_component_heads="${EVIDENCE_COMPONENT_HEADS:-false}" \
   --set model.direct_recovery_evidence_component_scale="${EVIDENCE_COMPONENT_SCALE:-2.0}" \
+  --set model.direct_recovery_evidence_concord="${EVIDENCE_CONCORD:-false}" \
+  --set model.direct_recovery_evidence_consensus_disagreement_penalty="${EVIDENCE_CONSENSUS_DISAGREEMENT_PENALTY:-0.15}" \
   --set loss_weights.dep=0 --set loss_weights.orc=0 --set loss_weights.assign=0 \
   --set loss_weights.sig=0 --set loss_weights.margin=0 --set loss_weights.obs=0 \
   --set loss_weights.anti_oracle=0 --set loss_weights.artifact_gap=0 \
@@ -217,6 +220,8 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.direct_value_ordinal_evidence_component_tail_weight="${ORDINAL_EVIDENCE_COMPONENT_TAIL_WEIGHT:-0.0}" \
   --set training.direct_value_ordinal_evidence_global_balance="${ORDINAL_EVIDENCE_GLOBAL_BALANCE:-false}" \
   --set training.direct_value_ordinal_evidence_safe_set_temperature="${ORDINAL_EVIDENCE_SAFE_SET_TEMPERATURE:-0.08}" \
+  --set training.direct_value_ordinal_evidence_safe_benefit_target="${ORDINAL_EVIDENCE_SAFE_BENEFIT_TARGET:-false}" \
+  --set training.direct_value_ordinal_evidence_group_opportunity_weight="${ORDINAL_EVIDENCE_GROUP_OPPORTUNITY_WEIGHT:-0.0}" \
   --set training.direct_value_ordinal_evidence_benefit_margin_weight="${ORDINAL_EVIDENCE_BENEFIT_MARGIN_WEIGHT:-0.0}" \
   --set training.direct_value_ordinal_evidence_harm_margin_weight="${ORDINAL_EVIDENCE_HARM_MARGIN_WEIGHT:-0.0}" \
   --set training.direct_value_ordinal_evidence_target_probability="${ORDINAL_EVIDENCE_TARGET_PROBABILITY:-0.60}" \
@@ -260,6 +265,13 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.direct_policy_metric_risk_source="${POLICY_METRIC_RISK_SOURCE:-gaussian_delta}" \
   --set training.direct_policy_metric_proposal_top_k="${POLICY_METRIC_PROPOSAL_TOP_K:-1}" \
   --set training.direct_policy_metric_evidence_rerank_top_k="${POLICY_METRIC_EVIDENCE_RERANK_TOP_K:-false}" \
+  --set training.direct_policy_metric_safe_opportunity="${POLICY_METRIC_SAFE_OPPORTUNITY:-false}" \
+  --set training.direct_policy_metric_soft_temperature="${POLICY_METRIC_SOFT_TEMPERATURE:-0.10}" \
+  --set training.direct_policy_metric_concord_miss_weight="${POLICY_METRIC_CONCORD_MISS_WEIGHT:-2.0}" \
+  --set training.direct_policy_metric_concord_false_weight="${POLICY_METRIC_CONCORD_FALSE_WEIGHT:-0.75}" \
+  --set training.direct_policy_metric_concord_harm_weight="${POLICY_METRIC_CONCORD_HARM_WEIGHT:-2.0}" \
+  --set training.direct_policy_metric_concord_regret_weight="${POLICY_METRIC_CONCORD_REGRET_WEIGHT:-0.50}" \
+  --set training.direct_policy_metric_concord_safe_mass_weight="${POLICY_METRIC_CONCORD_SAFE_MASS_WEIGHT:-1.0}" \
   --set training.direct_value_false_positive_weight="$FP_W" \
   --set training.direct_value_opportunity_weight="${OPPORTUNITY_AUX_WEIGHT:-0.15}" \
   --set training.direct_value_opportunity_pos_weight=8.0 \

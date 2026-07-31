@@ -1417,6 +1417,8 @@ def direct_uncertainty_recovery_value_loss(
     ordinal_evidence_component_tail_weight: float = 0.0,
     ordinal_evidence_global_balance: bool = False,
     ordinal_evidence_safe_set_temperature: float = 0.05,
+    ordinal_evidence_safe_benefit_target: bool = False,
+    ordinal_evidence_group_opportunity_weight: float = 0.0,
     ordinal_evidence_balanced_replaces_erm: bool = False,
     ordinal_evidence_benefit_margin_weight: float = 0.0,
     ordinal_evidence_harm_margin_weight: float = 0.0,
@@ -2077,6 +2079,14 @@ def direct_uncertainty_recovery_value_loss(
                     if factorized_harm_binary is not None
                     else harm_binary_bool
                 )
+                # v48.21 CONCORD: the admission opportunity is not merely a raw
+                # total-PCD improvement.  It is a *safe* improvement that survives
+                # the component veto.  Supervising raw benefit while deployment
+                # rejects benefit/harm overlap forced one logit to serve two
+                # incompatible meanings and inflated opportunity on unsafe Contact
+                # candidates.  Legacy checkpoints retain raw-benefit semantics.
+                if bool(ordinal_evidence_safe_benefit_target):
+                    benefit_binary = benefit_binary * (~harm_binary_bool).to(benefit_binary.dtype)
                 benefit_loss_tail = F.binary_cross_entropy_with_logits(
                     opp_delta_logits, benefit_binary, reduction="none"
                 )
@@ -2301,6 +2311,25 @@ def direct_uncertainty_recovery_value_loss(
             safe_set_harm_mask = admission_harm_mask[deployment_idx]
             safe_set_positive_mask = pos_mask[deployment_idx] & (~safe_set_harm_mask)
             safe_set_teacher_delta = t_delta[deployment_idx]
+
+        # Multiple-instance safe-opportunity objective.  The deployed decision
+        # first asks whether the frozen top-k contains *any* safe beneficial
+        # recovery.  Candidate BCE and listwise ranking alone do not directly
+        # supervise this group event.  Noisy-OR is permutation invariant, shares
+        # one model across all regimes, and gives useful gradients even when the
+        # exact best candidate is ambiguous.
+        if (
+            float(ordinal_evidence_group_opportunity_weight) > 0.0
+            and unison_safe_set
+            and opp_delta_logits is not None
+        ):
+            deployment_prob = torch.sigmoid(opp_delta_logits[deployment_idx]).clamp(1.0e-6, 1.0 - 1.0e-6)
+            any_safe_prob = 1.0 - torch.prod(1.0 - deployment_prob)
+            any_safe_target = safe_set_positive_mask.any().to(dtype=any_safe_prob.dtype)
+            group_opportunity_loss = F.binary_cross_entropy(
+                any_safe_prob.clamp(1.0e-6, 1.0 - 1.0e-6), any_safe_target
+            )
+            terms.append(float(ordinal_evidence_group_opportunity_weight) * group_opportunity_loss)
 
         safe_set_target_class = 0
         if bool(safe_set_positive_mask.any()):

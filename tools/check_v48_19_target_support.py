@@ -23,6 +23,8 @@ def _audit_bucket(name: str, summary: dict[str, Any]) -> dict[str, Any]:
     beneficial = int(support.get("beneficial_candidates", 0) or 0)
     harmful = int(support.get("component_harmful_candidates", 0) or 0)
     overlap = int(support.get("overlap_candidates", 0) or 0)
+    safe_beneficial_raw = support.get("safe_beneficial_candidates")
+    safe_beneficial = int(safe_beneficial_raw or 0) if safe_beneficial_raw is not None else None
     failures: list[str] = []
     if total <= 0:
         failures.append("no deployable recovery candidates")
@@ -37,13 +39,19 @@ def _audit_bucket(name: str, summary: dict[str, Any]) -> dict[str, Any]:
     warnings: list[str] = []
     if overlap <= 0:
         warnings.append("no observed benefit/harm overlap; independent-tail novelty is not exercised in this regime")
+    if safe_beneficial is not None and safe_beneficial <= 0:
+        failures.append("safe-benefit admission target has no positive examples")
     return {
         "regime": name,
         "deployable_candidates": total,
         "beneficial_candidates": beneficial,
         "component_harmful_candidates": harmful,
         "overlap_candidates": overlap,
+        "safe_beneficial_candidates": safe_beneficial,
+        "safe_beneficial_groups": int(support.get("safe_beneficial_groups", 0) or 0) if safe_beneficial is not None else None,
+        "safe_beneficial_scenes": int(support.get("safe_beneficial_scenes", 0) or 0) if safe_beneficial is not None else None,
         "benefit_prevalence": beneficial / total if total else None,
+        "safe_benefit_prevalence": (safe_beneficial / total) if total and safe_beneficial is not None else None,
         "harm_prevalence": harmful / total if total else None,
         "overlap_prevalence": overlap / total if total else None,
         "component_harmful_groups": int(support.get("component_harmful_groups", 0) or 0),
