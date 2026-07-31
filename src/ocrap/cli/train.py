@@ -764,7 +764,31 @@ def _direct_policy_batch_stats(
         cert_regret = max(0.0, oracle_adv_raw - cert_teacher_adv - tie_eps)
         admitted_harmful = admitted and cert_harmful
         false_intervention = admitted and (not positive_group)
-        positive_admission = admitted and positive_group and cert_positive
+        # Natural-gate opportunity is proposal-contained safe-positive, not raw
+        # benefit anywhere in the full group. Keep the legacy metric only for
+        # continuity; checkpoint selection uses the exact gate contract below.
+        safe_opportunity_group = bool(soft_safe_group) if metric_safe_opportunity else bool(
+            positive_group and component_harmful is not None
+            and ((teacher_delta >= positive_gain) & (~component_harmful)).any().item()
+        )
+        positive_admission = admitted and positive_group and cert_positive and (not cert_harmful)
+        safe_positive_admission = admitted and safe_opportunity_group and cert_positive and (not cert_harmful)
+        invalid_admission = admitted and (cert_harmful or not cert_positive)
+        evidence_safe_top1_hit = False
+        evidence_safe_top1_regret = 0.0
+        if safe_opportunity_group:
+            if metric_safe_opportunity:
+                best_safe_adv = float(proposal_teacher[proposal_safe_positive].max().item())
+            elif component_harmful is not None:
+                safe_mask_all = (teacher_delta >= positive_gain) & (~component_harmful)
+                best_safe_adv = float(teacher_delta[safe_mask_all].max().item())
+            else:
+                best_safe_adv = oracle_adv_raw
+            evidence_safe_top1_hit = bool(
+                cert_positive and (not cert_harmful)
+                and cert_teacher_adv >= best_safe_adv - tie_eps
+            )
+            evidence_safe_top1_regret = max(0.0, best_safe_adv - cert_teacher_adv - tie_eps)
         scene_fold = int(abs(int(sh[nom].item())) % 3)
         conditional_regret = max(0.0, oracle_adv_raw - chosen_teacher_adv - tie_eps)
         conditional_hit = bool(chosen_teacher_adv >= oracle_adv_raw - tie_eps)
@@ -778,6 +802,12 @@ def _direct_policy_batch_stats(
             add(f"admitted_harmful_{name}", float(admitted_harmful))
             add(f"false_intervention_{name}", float(false_intervention))
             add(f"admission_count_{name}", float(admitted))
+            add(f"safe_opportunity_count_{name}", float(safe_opportunity_group))
+            add(f"safe_positive_admission_hit_{name}", float(safe_positive_admission))
+            add(f"valid_safe_admission_count_{name}", float(admitted and cert_positive and (not cert_harmful)))
+            add(f"invalid_admission_count_{name}", float(invalid_admission))
+            add(f"evidence_safe_top1_hit_{name}", float(evidence_safe_top1_hit))
+            add(f"evidence_safe_top1_regret_sum_{name}", float(evidence_safe_top1_regret))
             add(f"certificate_regret_sum_{name}", cert_regret)
             add(f"certificate_top1_hit_{name}", float(cert_teacher_adv >= oracle_adv_raw - tie_eps))
             add(f"certificate_rank_margin_sum_{name}", cert_rank_margin)
@@ -835,7 +865,32 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
             out[f"direct_rank_false_switch_rate{tag}"] = stats.get(f"rank_switch_nonpositive_{suffix}", 0.0) / count
             out[f"direct_harmful_switch_rate{tag}"] = stats.get(f"admitted_harmful_{suffix}", stats.get(f"harmful_switch_{suffix}", 0.0)) / count
             out[f"direct_false_intervention_rate{tag}"] = stats.get(f"false_intervention_{suffix}", 0.0) / count
-            out[f"direct_raw_admission_rate{tag}"] = stats.get(f"admission_count_{suffix}", 0.0) / count
+            admission_count = stats.get(f"admission_count_{suffix}", 0.0)
+            safe_contract_available = f"safe_opportunity_count_{suffix}" in stats
+            safe_opportunity_count = stats.get(f"safe_opportunity_count_{suffix}", 0.0)
+            out[f"direct_safe_contract_available{tag}"] = float(safe_contract_available)
+            out[f"direct_raw_admission_rate{tag}"] = admission_count / count
+            out[f"direct_safe_positive_admission_recall{tag}"] = (
+                stats.get(f"safe_positive_admission_hit_{suffix}", 0.0) / safe_opportunity_count
+                if safe_opportunity_count > 0 else 0.0
+            )
+            out[f"direct_safe_admission_precision{tag}"] = (
+                stats.get(f"valid_safe_admission_count_{suffix}", 0.0) / admission_count
+                if admission_count > 0 else 0.0
+            )
+            out[f"direct_invalid_admission_rate{tag}"] = (
+                stats.get(f"invalid_admission_count_{suffix}", 0.0) / admission_count
+                if admission_count > 0 else 0.0
+            )
+            out[f"direct_evidence_safe_top1_accuracy{tag}"] = (
+                stats.get(f"evidence_safe_top1_hit_{suffix}", 0.0) / safe_opportunity_count
+                if safe_opportunity_count > 0 else 0.0
+            )
+            out[f"direct_evidence_safe_top1_regret{tag}"] = (
+                stats.get(f"evidence_safe_top1_regret_sum_{suffix}", 0.0) / safe_opportunity_count
+                if safe_opportunity_count > 0 else 0.0
+            )
+            out[f"direct_safe_opportunity_group_count{tag}"] = float(safe_opportunity_count)
             if f"soft_safe_nll_sum_{suffix}" in stats:
                 safe_count = stats.get(f"soft_safe_group_{suffix}", 0.0)
                 negative_count = max(0.0, count - safe_count)
@@ -1087,8 +1142,27 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
         # using the exact development admission contract. The held-out Natural
         # gate remains unchanged; this metric only selects a train/dev checkpoint.
         hard_recalls = [
-            float(out.get("direct_positive_admission_recall_near", 0.0)),
-            float(out.get("direct_positive_admission_recall_contact", 0.0)),
+            float(out.get(
+                f"direct_safe_positive_admission_recall_{regime}",
+                out.get(f"direct_positive_admission_recall_{regime}", 0.0),
+            )) if float(out.get(f"direct_safe_contract_available_{regime}", 0.0)) > 0.5
+            else float(out.get(f"direct_positive_admission_recall_{regime}", 0.0))
+            for regime in ("near", "contact")
+        ]
+        hard_precisions = [
+            float(out.get(f"direct_safe_admission_precision_{regime}", 0.0))
+            if float(out.get(f"direct_safe_contract_available_{regime}", 0.0)) > 0.5 else 1.0
+            for regime in ("near", "contact")
+        ]
+        invalid_admission_rates = [
+            float(out.get(f"direct_invalid_admission_rate_{regime}", 0.0))
+            if float(out.get(f"direct_safe_contract_available_{regime}", 0.0)) > 0.5 else 0.0
+            for regime in ("near", "contact")
+        ]
+        safe_top1_regrets = [
+            float(out.get(f"direct_evidence_safe_top1_regret_{regime}", 0.0))
+            if float(out.get(f"direct_safe_contract_available_{regime}", 0.0)) > 0.5 else 0.0
+            for regime in ("near", "contact")
         ]
         hard_admission_rates = [
             float(out.get("direct_raw_admission_rate_near", 0.0)),
@@ -1099,13 +1173,24 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
                      tcfg.get("direct_policy_metric_min_positive_recall", 0.20))
         )
         hard_shortfall = sum(max(0.0, integrity_target - value) for value in hard_recalls)
+        precision_target = float(tcfg.get("direct_policy_metric_integrity_min_precision", 0.60))
+        precision_shortfall = sum(max(0.0, precision_target - value) for value in hard_precisions)
         all_abstain = float(max(hard_admission_rates) <= 0.0)
         out["direct_integrity_recall_min"] = min(hard_recalls)
+        out["direct_integrity_precision_min"] = min(hard_precisions)
+        out["direct_integrity_invalid_admission_max"] = max(invalid_admission_rates)
+        out["direct_integrity_safe_top1_regret_max"] = max(safe_top1_regrets)
         out["direct_integrity_all_abstain"] = all_abstain
         out["direct_integrity_selection_risk"] = (
             float(out["direct_frontier_selection_risk"])
             + float(tcfg.get("direct_policy_metric_integrity_recall_weight", 20.0))
             * hard_shortfall
+            + float(tcfg.get("direct_policy_metric_integrity_precision_weight", 8.0))
+            * precision_shortfall
+            + float(tcfg.get("direct_policy_metric_integrity_invalid_weight", 4.0))
+            * max(invalid_admission_rates)
+            + float(tcfg.get("direct_policy_metric_integrity_safe_regret_weight", 2.0))
+            * max(safe_top1_regrets)
             + float(tcfg.get("direct_policy_metric_integrity_all_abstain_weight", 8.0))
             * all_abstain
         )
@@ -2572,6 +2657,15 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             ),
             "direct_recovery_evidence_admission_scale": float(
                 model_cfg.get("direct_recovery_evidence_admission_scale", 2.0)
+            ),
+            "direct_recovery_evidence_admission_bounded": bool(
+                model_cfg.get("direct_recovery_evidence_admission_bounded", True)
+            ),
+            "direct_recovery_evidence_frontier": bool(
+                model_cfg.get("direct_recovery_evidence_frontier", False)
+            ),
+            "direct_recovery_evidence_component_prior_logit": float(
+                model_cfg.get("direct_recovery_evidence_component_prior_logit", -2.0)
             ),
             "model_state": model.state_dict(),
             "optimizer_state": opt.state_dict(),

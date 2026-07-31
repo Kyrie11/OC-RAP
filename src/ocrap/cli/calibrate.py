@@ -39,7 +39,8 @@ def calibrate(dataset: str, checkpoint: str | None = None, output: str | None = 
         requested_splits = {x.strip() for x in allowed_raw.split(",") if x.strip()}
     else:
         requested_splits = {str(x).strip() for x in allowed_raw if str(x).strip()}
-    allowed_splits = expand_split_roles(requested_splits or {"calibration"})
+    exact_split_ids = bool(cal_cfg.get("exact_split_ids", False))
+    allowed_splits = (requested_splits or {"calibration"}) if exact_split_ids else expand_split_roles(requested_splits or {"calibration"})
     allow_val_fallback = bool(cal_cfg.get("allow_validation_fallback", True))
     bundle = load_model_bundle(checkpoint, cfg)
     paths = iter_sample_paths_many(dataset)
@@ -104,6 +105,7 @@ def calibrate(dataset: str, checkpoint: str | None = None, output: str | None = 
         "splits": sorted(set(used_splits)),
         "requested_split_roles": sorted(requested_splits),
         "allowed_split_ids": sorted(allowed_splits),
+        "exact_split_ids": exact_split_ids,
         "allow_validation_fallback": allow_val_fallback,
         "thresholds": thresholds,
         "default_delta": default_delta,

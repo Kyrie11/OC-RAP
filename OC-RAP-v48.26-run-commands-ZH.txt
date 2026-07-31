@@ -1,0 +1,285 @@
+OC-RAP v48.26 EXECUTION-PHYSICS-BRIDGE 执行指令
+=================================================
+
+重要说明
+--------
+
+1. v48.25 的 RC=30 是 certificate JSON 写盘工程故障；gate 实际没有被评估。
+2. 先运行第二节的 repair-only 可以在不重训的情况下复核现有 v48.25 checkpoint。
+3. repair-only 只能验证修复后的推理/证书流水线，不能验证 v48.26 新的 checkpoint 与 safe-utility 修改。
+4. 完整 v48.26 主实验见第三节。
+5. 不得手工创建 NEXT_COMMANDS.txt；只有 RC=0 时 certificate controller 才会自动生成。
+6. 当前 certificate population 已被多轮查看，只能作为开发证据；最终论文确认需要新封存或重新预注册的 certificate population。
+
+一、解压与环境
+--------------
+
+unzip -q OC-RAP-v48.26-EXECUTION-PHYSICS-BRIDGE.zip
+cd OC-RAP-v48.26-EXECUTION-PHYSICS-BRIDGE
+export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
+
+# 以下保持你服务器上的实际路径；路径不同只修改这里。
+export OCRAP_ROOT=/data0/senzeyu2/dataset/OCRAP
+export PROTOCOL_ROOT=$OCRAP_ROOT/calibration_v48_14_prism_4814
+export CAL_SAFE=$OCRAP_ROOT/calibration_safe
+export SOURCE_RUN=runs/ocrap_v48_13_terra_proxy_4801
+export GPU0=0
+export GPU1=1
+
+# 两张 A30 的通用资源设置。
+export OMP_NUM_THREADS=2
+export MKL_NUM_THREADS=2
+export OPENBLAS_NUM_THREADS=2
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:128
+
+# 可选的本地静态复核。
+python -m compileall -q src tools tests
+python -m pytest -q
+find scripts -maxdepth 1 -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+
+二、先对服务器上的 v48.25 checkpoint 做 repair-only 诊断
+------------------------------------------------------
+
+# SOURCE_OUTPUTDIR 必须指向服务器上原始、完整的 v48.25 主实验目录。
+# 不要指向你下载后重新压缩的结果目录，除非其中 checkpoint 与 POLICY_CONTRACT.env 均完整。
+export SOURCE_OUTPUTDIR=runs/ocrap_v48_25_integrity_dedicated_4825
+export REPAIR_OUTPUTDIR=runs/ocrap_v48_25_certificate_repair_with_v4826
+mkdir -p "$REPAIR_OUTPUTDIR"
+
+set +e
+SOURCE_OUTPUTDIR="$SOURCE_OUTPUTDIR" \
+OUTPUTDIR="$REPAIR_OUTPUTDIR" \
+OCRAP_ROOT="$OCRAP_ROOT" \
+PROTOCOL_ROOT="$PROTOCOL_ROOT" \
+CAL_SAFE="$CAL_SAFE" \
+GPU0="$GPU0" GPU1="$GPU1" \
+bash scripts/repair_v48_25_certificate_with_v48_26.sh \
+  > "$REPAIR_OUTPUTDIR/controller.log" 2>&1
+REPAIR_RC=$?
+set -e
+
+echo "v48.25 repair-only rc=$REPAIR_RC"
+cat "$REPAIR_OUTPUTDIR/REPAIR_COMPLETE.json"
+cat "$REPAIR_OUTPUTDIR/dedicated_recalibration_status.json" 2>/dev/null || true
+
+返回码解释：
+
+RC=0
+  修复后的推理与 certificate 可以完整执行，现有 v48.25 checkpoint 通过 Near/Contact gate。
+  这仍不是 v48.26 训练结果；也不能把已查看 certificate 当成最终论文 held-out 证据。
+
+RC=20
+  修复后的流水线有效，现有 v48.25 checkpoint 被 Natural gate 拒绝。
+  这时可以读取 repair 输出中的 Near/Contact certificate 进行算法诊断，但不能读取 test/stress。
+
+RC=30
+  仍存在 checkpoint contract、缺失工件、目录、协议或运行环境错误。
+  只检查：
+    $REPAIR_OUTPUTDIR/REPAIR_COMPLETE.json
+    $REPAIR_OUTPUTDIR/logs/
+    $REPAIR_OUTPUTDIR/candidates/*/MODEL_INFERENCE_CONTRACT.json
+
+三、运行完整 v48.26 主实验
+--------------------------
+
+export OUTPUTDIR=runs/ocrap_v48_26_execution_physics_dedicated_4826
+mkdir -p "$OUTPUTDIR"
+
+set +e
+OUTPUTDIR="$OUTPUTDIR" \
+OCRAP_ROOT="$OCRAP_ROOT" \
+SOURCE_RUN="$SOURCE_RUN" \
+PROTOCOL_ROOT="$PROTOCOL_ROOT" \
+CAL_SAFE="$CAL_SAFE" \
+GPU0="$GPU0" GPU1="$GPU1" \
+PROPOSAL_TOP_K=3 \
+BATCH_SIZE=96 NUM_WORKERS=3 PREFETCH_FACTOR=3 \
+EVIDENCE_ADAPT_EPOCHS=28 EVIDENCE_ADAPT_PATIENCE=8 \
+EVIDENCE_ADAPT_LR=0.00015 \
+bash scripts/run_v48_26_execution_physics_dedicated.sh \
+  > "$OUTPUTDIR/controller.log" 2>&1
+RC=$?
+set -e
+
+echo "v48.26 main rc=$RC"
+cat "$OUTPUTDIR/V48_26_COMPLETE.json"
+
+返回码：
+
+RC=0
+  工程、训练、模型合同、dev-frozen rule 和 full-certificate verification 均有效，
+  Near 与 Contact Natural gate 通过。只执行第四节授权命令。
+
+RC=20
+  pipeline_valid=true 且 gate_evaluated=true，但结构支持或 learned selector 被拒绝。
+  禁止读取 test/stress；依次执行第五、第六节。
+
+RC=30
+  工程、协议、索引、训练、checkpoint/model-contract、空工件或运行异常。
+  不得进行算法归因；只检查：
+    $OUTPUTDIR/PIPELINE_FAILED.json
+    $OUTPUTDIR/V48_26_COMPLETE.json
+    $OUTPUTDIR/logs/
+    $OUTPUTDIR/candidates/*/MODEL_INFERENCE_CONTRACT.json
+    $OUTPUTDIR/candidates/*/model_v48_trac_sr/training_summary.json
+
+主实验首先应确认：
+
+cat "$OUTPUTDIR/candidates/balanced/MODEL_INFERENCE_CONTRACT.json"
+cat "$OUTPUTDIR/candidates/precision/MODEL_INFERENCE_CONTRACT.json"
+cat "$OUTPUTDIR/SAFE_REGIME_STATUS.json" 2>/dev/null || true
+
+四、只有 RC=0 才运行自动授权的 Safe paired 和 held-out stress
+------------------------------------------------------------
+
+# NEXT_COMMANDS.txt 必须由 certificate controller 自动生成。
+test -s "$OUTPUTDIR/NEXT_COMMANDS.txt"
+cat "$OUTPUTDIR/NEXT_COMMANDS.txt"
+
+# 可直接逐行执行 NEXT_COMMANDS.txt；或使用下面的授权 wrapper 运行 stress。
+OUT="$OUTPUTDIR" \
+OCRAP_ROOT="$OCRAP_ROOT" \
+GPU0="$GPU0" GPU1="$GPU1" \
+CL_RESUME=0 \
+bash scripts/run_v48_26_stress_if_authorized.sh \
+  > "$OUTPUTDIR/stress_controller.log" 2>&1
+
+注意：
+- 缺少 NEXT_COMMANDS.txt 时 wrapper 返回 RC=20；不得手工补文件。
+- Safe 当前没有独立 policy Natural-gate population；Safe 通过标准 gamma_rec 校准、nominal-first 和 paired non-inferiority 检查。
+
+五、RC=20 后运行 adaptation-dev shadow closed loop
+---------------------------------------------------
+
+# 只读取 evidence_adapt_dev，不读取 certificate/test/stress。
+# Balanced 使用 GPU0，Precision 使用 GPU1；每张卡内部 Near/Contact 顺序运行。
+OUT="$OUTPUTDIR" \
+OCRAP_ROOT="$OCRAP_ROOT" \
+PROTOCOL_ROOT="$PROTOCOL_ROOT" \
+GPU0="$GPU0" GPU1="$GPU1" \
+AUDIT_TARGETS=16 AUDIT_LABELS=192 \
+AUDIT_MAX_ROLLOUTS=8 AUDIT_MAX_STEPS=24 \
+SHADOW_BOOTSTRAP=2000 CL_RESUME=0 \
+bash scripts/run_v48_26_dev_shadow_closed_loop.sh \
+  > "$OUTPUTDIR/dev_shadow_controller.log" 2>&1
+
+主要输出：
+
+$OUTPUTDIR/dev_shadow_closed_loop/DIAGNOSTIC_ONLY_NO_PAPER.json
+$OUTPUTDIR/dev_shadow_closed_loop/DEV_SHADOW_COMPLETE.json
+$OUTPUTDIR/dev_shadow_closed_loop/balanced/near_dev_shadow_paired.json
+$OUTPUTDIR/dev_shadow_closed_loop/balanced/contact_dev_shadow_paired.json
+$OUTPUTDIR/dev_shadow_closed_loop/balanced/dev_shadow_target_check.log
+$OUTPUTDIR/dev_shadow_closed_loop/balanced/dev_shadow_target_check.rc
+$OUTPUTDIR/dev_shadow_closed_loop/precision/near_dev_shadow_paired.json
+$OUTPUTDIR/dev_shadow_closed_loop/precision/contact_dev_shadow_paired.json
+$OUTPUTDIR/dev_shadow_closed_loop/precision/dev_shadow_target_check.log
+$OUTPUTDIR/dev_shadow_closed_loop/precision/dev_shadow_target_check.rc
+
+该结果只能用于算法定位，不能作为论文 held-out 结果或用于挑选 test threshold。
+
+六、RC=20 后运行 8 个非重复消融，平均分配到两张 A30
+------------------------------------------------------
+
+export ABLATION_ROOT=runs/ocrap_v48_26_execution_physics_ablations_4826
+mkdir -p "$ABLATION_ROOT"
+
+ABLATION_ROOT="$ABLATION_ROOT" \
+OCRAP_ROOT="$OCRAP_ROOT" \
+SOURCE_RUN="$SOURCE_RUN" \
+PROTOCOL_ROOT="$PROTOCOL_ROOT" \
+CAL_SAFE="$CAL_SAFE" \
+GPU0="$GPU0" GPU1="$GPU1" \
+BATCH_SIZE=72 NUM_WORKERS=2 PREFETCH_FACTOR=2 \
+EVIDENCE_ADAPT_EPOCHS=28 EVIDENCE_ADAPT_PATIENCE=8 \
+bash scripts/run_v48_26_parallel_ablations.sh \
+  > "$ABLATION_ROOT/controller.log" 2>&1
+
+cat "$ABLATION_ROOT/TASK_GPU_ASSIGNMENT.txt"
+cat "$ABLATION_ROOT/ABLATIONS_STATUS.json"
+
+四个 wave：
+
+A_engineering_contract_only
+  只修 certificate JSON、训练/推理模型合同、exact split 和返回码；保留旧 checkpoint/safe-utility 选择方式。
+
+B_add_safe_checkpoint_contract
+  A + proposal-contained safe-positive checkpoint 定义、safe precision、invalid admission 和 safe top-1 regret。
+
+C_add_execution_exact_safe_utility
+  B + 与运行时完全相同的 sigmoid(admission)-0.5 safe-utility 训练尺度。
+
+D_full_execution_physics_bridge
+  完整 v48.26 主模型和物理诊断输出。
+
+调度方式：
+- 每个 wave：Balanced 独占 GPU0，Precision 独占 GPU1；
+- 一张卡同时只运行一个任务；
+- 每张 GPU 总计四个任务；
+- 最大并发数为 2。
+
+七、结果判读顺序
+----------------
+
+1. 工程合同
+   - PIPELINE_FAILED.json 是否不存在；
+   - MODEL_INFERENCE_CONTRACT.json 是否 pass；
+   - certificate JSON 是否完整；
+   - exact_split_ids=true；
+   - gate_evaluated=true。
+
+2. adaptation-dev checkpoint
+   - direct_safe_positive_admission_recall_near/contact；
+   - direct_safe_admission_precision_near/contact；
+   - direct_invalid_admission_rate_near/contact；
+   - direct_evidence_safe_top1_accuracy_near/contact；
+   - direct_evidence_safe_top1_regret_near/contact。
+
+3. certificate
+   - certificate_data_valid；
+   - frozen_rule_source.sha256；
+   - source_rule_satisfied_dev_constraints；
+   - proposal support；
+   - verify selected count；
+   - precision LCB；
+   - harmful selected count/UCB；
+   - positive recall；
+   - macro concentration。
+
+4. dev shadow Near 物理指标
+   - collision/overlap 保持 0 或 paired non-inferior；
+   - minimum/terminal clearance 与 TTC；
+   - clearance/TTC deficit AUC；
+   - near/critical exposure duration、episode count、longest run；
+   - time-to-min 与 recovery gain；
+   - DRS/PCD/NUP、干预率与干预 burst；
+   - route progression、加速度、减速度、jerk、yaw-rate。
+
+5. dev shadow Contact 物理指标
+   - secondary/re-contact event、episode、scene rate；
+   - overlap duration、episode count、longest run；
+   - post-contact terminal clearance、gain、time-to-peak；
+   - normalized free-space AUC、clearance deficit AUC；
+   - sustained escape、time-to-escape；
+   - stable-stop quality 与 time-to-stable-stop；
+   - offroad、route progression、jerk、yaw-rate、干预率。
+
+关键归因：
+
+- A 即失败：仍有工程/模型合同问题，不做算法结论。
+- B>A：旧 checkpoint 定义是主要瓶颈。
+- C>B：训练/运行时 safe-utility 尺度错位是主要瓶颈。
+- D>C 仅改善物理 shadow、不改善 gate：离线证书标签与闭环物理目标存在错位。
+- adaptation-dev 好、certificate 差：泛化或有限样本支持不足。
+- offline gate 指标好、shadow 不改善：PCD teacher 没有充分表达时间恢复过程；下一版本才应预注册 candidate-level physical auxiliary teacher。
+- certificate 通过但 Safe paired/held-out stress 不达标：不能宣称投稿目标达到，应保留 gate 通过事实并修复物理策略。
+
+八、不要执行的操作
+------------------
+
+- 不要在 RC=20 或 RC=30 时读取 test/stress；
+- 不要手工创建 NEXT_COMMANDS.txt；
+- 不要在当前输出目录事后降低 precision/harm/support gate；
+- 不要把 repair-only 结果称为 v48.26 训练结果；
+- 不要把当前已反复查看的 certificate 称为最终 untouched paper certificate；
+- 不要在没有 candidate-level physical teacher 标签时伪造 Contact/Near 物理辅助训练目标。

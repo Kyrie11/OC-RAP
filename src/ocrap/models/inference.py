@@ -211,6 +211,18 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_evidence_admission_scale",
             model_cfg.get("direct_recovery_evidence_admission_scale", 2.0),
         )),
+        direct_recovery_evidence_admission_bounded=bool(ckpt.get(
+            "direct_recovery_evidence_admission_bounded",
+            model_cfg.get("direct_recovery_evidence_admission_bounded", True),
+        )),
+        direct_recovery_evidence_frontier=bool(ckpt.get(
+            "direct_recovery_evidence_frontier",
+            model_cfg.get("direct_recovery_evidence_frontier", False),
+        )),
+        direct_recovery_evidence_component_prior_logit=float(ckpt.get(
+            "direct_recovery_evidence_component_prior_logit",
+            model_cfg.get("direct_recovery_evidence_component_prior_logit", -2.0),
+        )),
     ).to(device)
     # Strict loading remains the default for checkpoints with matching geometry.
     # A v39 checkpoint can initialize v40 training through train.py's explicit
@@ -279,6 +291,40 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         "direct_recovery_evidence_admission_scale",
         model_cfg.get("direct_recovery_evidence_admission_scale", 2.0),
     ))
+    cfg["model"]["direct_recovery_evidence_admission_bounded"] = bool(
+        model.direct_recovery_evidence_admission_bounded
+    )
+    cfg["model"]["direct_recovery_evidence_frontier"] = bool(
+        model.direct_recovery_evidence_frontier
+    )
+    cfg["model"]["direct_recovery_evidence_component_prior_logit"] = float(
+        model.direct_recovery_evidence_component_prior_logit
+    )
+    # Fail closed when checkpoint construction and runtime reporting diverge.
+    expected_contract = {
+        "direct_recovery_evidence_admission_bounded": bool(ckpt.get(
+            "direct_recovery_evidence_admission_bounded",
+            model_cfg.get("direct_recovery_evidence_admission_bounded", True),
+        )),
+        "direct_recovery_evidence_frontier": bool(ckpt.get(
+            "direct_recovery_evidence_frontier",
+            model_cfg.get("direct_recovery_evidence_frontier", False),
+        )),
+        "direct_recovery_evidence_component_prior_logit": float(ckpt.get(
+            "direct_recovery_evidence_component_prior_logit",
+            model_cfg.get("direct_recovery_evidence_component_prior_logit", -2.0),
+        )),
+    }
+    actual_contract = {
+        "direct_recovery_evidence_admission_bounded": bool(model.direct_recovery_evidence_admission_bounded),
+        "direct_recovery_evidence_frontier": bool(model.direct_recovery_evidence_frontier),
+        "direct_recovery_evidence_component_prior_logit": float(model.direct_recovery_evidence_component_prior_logit),
+    }
+    if expected_contract != actual_contract:
+        raise RuntimeError(
+            f"checkpoint/inference evidence contract mismatch: expected={expected_contract}, actual={actual_contract}"
+        )
+    cfg["model"]["inference_evidence_contract_verified"] = True
     return ModelBundle(model=model, cfg=cfg, device=device)
 
 

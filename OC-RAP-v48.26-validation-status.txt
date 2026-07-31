@@ -1,0 +1,51 @@
+OC-RAP v48.26 EXECUTION-PHYSICS-BRIDGE 本地验证状态
+==================================================
+
+验证日期：2026-07-31
+验证范围：代码静态检查、单元/回归测试、Shell 语法、工具入口与交付包完整性。
+
+通过项
+------
+
+1. Python 编译
+   python -m compileall -q src tools tests
+   结果：PASS
+
+2. Pytest
+   PYTHONPATH="$PWD/src" python -m pytest -q
+   结果：233 passed, 5 warnings
+
+3. Shell 语法
+   find scripts -maxdepth 1 -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+   结果：PASS
+
+4. 新工具入口
+   PYTHONPATH="$PWD/src" python tools/check_v48_26_model_contract.py --help
+   PYTHONPATH="$PWD/src" python tools/check_v48_26_regime_targets.py --help
+   结果：PASS
+
+5. 重点测试覆盖
+   - certificate Path/NumPy JSON-safe serialization；
+   - training/inference frontier/prior/admission contract parity；
+   - proposal-contained safe-positive checkpoint 定义；
+   - harmful action 不计入 positive admission；
+   - execution-exact safe utility；
+   - exact split IDs；
+   - Near 与 post-contact bucket 精确区分；
+   - Near exposure/recovery/dynamics 指标；
+   - Contact causal anchor/recontact/overlap/free-space/escape/stable-stop 指标。
+
+未在当前环境验证
+----------------
+
+- 当前审计环境没有真实 WOMD/Waymax 数据；
+- 当前审计环境没有两张 A30；
+- 未实际运行完整 v48.26 adaptation/certificate/closed-loop；
+- 未声称 RC=0、Natural gate 通过或 Near/Contact/Safe 达到论文目标；
+- repair-only 脚本需要服务器上保留的完整 v48.25 checkpoint 与 POLICY_CONTRACT.env。
+
+结论
+----
+
+本地代码与脚本回归通过。真实实验结果必须以服务器上的 V48_26_COMPLETE.json、
+MODEL_INFERENCE_CONTRACT.json、certificate artifacts 和 closed-loop paired metrics 为准。

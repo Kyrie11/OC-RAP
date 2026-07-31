@@ -26,6 +26,27 @@ from ocrap.models.data import expand_split_roles, iter_sample_paths_many, scalar
 from ocrap.models.inference import load_model_bundle, predict_samples
 
 
+def _json_safe(value: Any) -> Any:
+    """Recursively convert CLI/config/results objects to strict JSON values.
+
+    Certificate workers receive ``pathlib.Path`` values from argparse and may
+    also accumulate NumPy scalars/arrays.  A valid Natural-gate rejection must
+    never be reclassified as a pipeline failure merely because one of these
+    diagnostic values cannot be encoded by the stdlib JSON encoder.
+    """
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(v) for v in value]
+    return value
+
+
 def _scalar(d: dict[str, Any], key: str, default: Any) -> Any:
     a = np.asarray(d.get(key, default))
     return a.item() if a.shape == () else a
@@ -846,6 +867,10 @@ def main() -> int:
             "path": str(args.frozen_rule_json),
             "sha256": hashlib.sha256(args.frozen_rule_json.read_bytes()).hexdigest(),
             "selected_field": "rule" if frozen_doc.get("rule") else "diagnostic_fit_rule",
+            "source_rule_satisfied_dev_constraints": bool(frozen_doc.get("rule") is not None),
+            "source_valid": bool(frozen_doc.get("valid", False)),
+            "source_valid_for_deployment": bool(frozen_doc.get("valid_for_deployment", False)),
+            "source_rejection_kind": frozen_doc.get("rejection_kind"),
             "dataset": frozen_doc.get("dataset"),
             "requested_split_roles": frozen_doc.get("requested_split_roles"),
             "allowed_split_ids": frozen_doc.get("allowed_split_ids"),
@@ -1439,8 +1464,12 @@ def main() -> int:
         "near_miss_verify_frontier": near_miss_verify_frontier,
         "skipped": dict(skipped),
         "warnings": warnings,
-        "constraints": vars(args) | {"output": str(args.output), "rows_output": str(args.rows_output) if args.rows_output else None},
+        "constraints": _json_safe(vars(args) | {
+            "output": str(args.output),
+            "rows_output": str(args.rows_output) if args.rows_output else None,
+        }),
     }
+    result = _json_safe(result)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     if args.rows_output:
@@ -1454,7 +1483,7 @@ def main() -> int:
                     and row["pred_adv"] >= score_thr
                     and row.get("rank_margin", 0.0) >= rank_margin_thr
                 )
-                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+                f.write(json.dumps(_json_safe(row), ensure_ascii=False) + "\n")
     print(json.dumps(result, ensure_ascii=False), flush=True)
     if len(groups) == 0 or len(scenes) == 0:
         return 4  # protocol/artifact failure: no valid certificate population

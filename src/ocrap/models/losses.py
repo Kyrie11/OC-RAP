@@ -2398,13 +2398,16 @@ def direct_uncertainty_recovery_value_loss(
                 harmful_floor = safe_set_teacher_delta.new_full(
                     safe_set_teacher_delta.shape, max(float(positive_gain), 1.0e-3)
                 )
+                # Runtime deploys sigmoid(admission_delta)-0.5. Train the exact
+                # same score and range. The v48.24/v48.25 tanh(logit/2) proxy was
+                # exactly two times larger and broke the train/certificate scale.
                 safe_utility_target = torch.where(
                     safe_set_harm_mask,
                     -torch.maximum(safe_set_teacher_delta.abs(), harmful_floor),
                     safe_set_teacher_delta,
-                ).clamp(-1.0, 1.0)
-                deployed_safe_utility = torch.tanh(
-                    admission_delta_logits[deployment_idx] / 2.0
+                ).clamp(-0.5, 0.5)
+                deployed_safe_utility = (
+                    torch.sigmoid(admission_delta_logits[deployment_idx]) - 0.5
                 )
                 if float(ordinal_evidence_safe_utility_regression_weight) > 0.0:
                     terms.append(
