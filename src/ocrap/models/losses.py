@@ -1436,6 +1436,9 @@ def direct_uncertainty_recovery_value_loss(
     ordinal_evidence_intragroup_harm_weight: float = 0.0,
     ordinal_evidence_benefit_listwise_weight: float = 0.0,
     ordinal_evidence_benefit_listwise_temperature: float = 0.08,
+    ordinal_evidence_safe_utility_regression_weight: float = 0.0,
+    ordinal_evidence_safe_utility_listwise_weight: float = 0.0,
+    ordinal_evidence_safe_utility_temperature: float = 0.10,
     ordinal_evidence_frontier_pairwise_weight: float = 0.0,
     ordinal_evidence_frontier_pairwise_margin: float = 0.25,
     ordinal_evidence_categorical_group_policy: bool = False,
@@ -2380,6 +2383,56 @@ def direct_uncertainty_recovery_value_loss(
                         teacher_benefit_prob, reduction="sum",
                     )
                 )
+
+            # v48.24 SUPPORT-BRIDGE: regress and rank the exact deployed
+            # candidate-vs-nominal admission score against a continuous
+            # *safe utility*.  Raw-benefit listwise supervision in v48.23 could
+            # rank a beneficial-but-harmful action above nominal and then rely on
+            # a separate sparse veto.  The certificate, however, thresholds the
+            # final admission score.  Harmful candidates therefore receive a
+            # strictly negative target while non-harmful candidates retain their
+            # continuous PCD advantage.  This makes score correlation, top-1
+            # regret and safety-frontier separation share one deployment-exact
+            # target rather than three weakly coupled objectives.
+            if admission_delta_logits is not None:
+                harmful_floor = safe_set_teacher_delta.new_full(
+                    safe_set_teacher_delta.shape, max(float(positive_gain), 1.0e-3)
+                )
+                safe_utility_target = torch.where(
+                    safe_set_harm_mask,
+                    -torch.maximum(safe_set_teacher_delta.abs(), harmful_floor),
+                    safe_set_teacher_delta,
+                ).clamp(-1.0, 1.0)
+                deployed_safe_utility = torch.tanh(
+                    admission_delta_logits[deployment_idx] / 2.0
+                )
+                if float(ordinal_evidence_safe_utility_regression_weight) > 0.0:
+                    terms.append(
+                        float(ordinal_evidence_safe_utility_regression_weight)
+                        * F.smooth_l1_loss(
+                            deployed_safe_utility, safe_utility_target.detach()
+                        )
+                    )
+                if float(ordinal_evidence_safe_utility_listwise_weight) > 0.0:
+                    safe_tau = max(
+                        float(ordinal_evidence_safe_utility_temperature), 1.0e-3
+                    )
+                    safe_student = torch.cat([
+                        admission_delta_logits.new_zeros((1,)),
+                        admission_delta_logits[deployment_idx],
+                    ]) / safe_tau
+                    safe_teacher = torch.cat([
+                        safe_utility_target.new_zeros((1,)),
+                        safe_utility_target,
+                    ]) / safe_tau
+                    safe_teacher_prob = torch.softmax(safe_teacher, dim=0).detach()
+                    terms.append(
+                        float(ordinal_evidence_safe_utility_listwise_weight)
+                        * F.kl_div(
+                            torch.log_softmax(safe_student, dim=0),
+                            safe_teacher_prob, reduction="sum",
+                        )
+                    )
 
             # Directly train the high-benefit safety frontier rather than global
             # harmful-vs-dead discrimination. Safe beneficial candidates must

@@ -1,3 +1,56 @@
+## v48.24 — OC-TRAC-SUPPORT-BRIDGE (2026-07-31)
+
+### v48.23 result attribution
+
+- The uploaded v48.23 controller is a valid Natural-gate evaluation: both variants trained, certificate fit/verify folds are non-empty and scene-disjoint, held-out test/stress roots were not read, and the controller returned `RC=20`.
+- The decisive new finding is that the v48.23 proposal-constrained oracle does **not** pass the fit fold. Under frozen top-3 and the current component-veto label, Near fit contains only 3 safe-positive groups; its optimistic oracle can select 10 but obtains only 3 positives and precision LCB 0.1538. Contact fit contains 10 safe-positive groups; selecting 16 yields precision LCB 0.4652, below the 0.5 fit requirement. Verify is feasible in both regimes. Therefore this round is not only a calibrator/representation failure: the fit-side proposal/label/gate support contract is itself insufficient.
+- The earlier statement that proposal recall is approximately 0.97--1.00 remains true only for **raw-benefit** opportunity. It must not be interpreted as safe-positive proposal sufficiency. The distinction is now reported explicitly.
+- Near Balanced retains high raw-benefit AUC but has below-random harm ordering and negative learned top-k correlation. Near Precision retains part of broad risk recognition, but harmful-switch remains about 0.49 and verify coverage remains zero. The benefit signal has not become safe admission.
+- Contact Precision retains broad harm AUC near 0.65, but conditional harm AUC falls to about 0.50, learned benefit AUC remains about 0.42, correlation is negative, and regret is unchanged. Balanced Contact is materially worse than v48.22. The claimed Contact improvement therefore did not materialize.
+- All eight v48.23 ablations complete and reject. A recovers part of broad harm AUC; B does not establish continuous ranking; C gives only small frontier changes; D does not dominate B or C. Additional epochs on the same objective are not a justified next step.
+
+### Engineering defects fixed
+
+1. **RC=20 dev-shadow was impossible to launch.** `run_v48_23_dev_shadow_closed_loop.sh` called the strict deployment entry, while `run_ocrap_v48_trac_sr.sh` rejected every certificate with `valid_for_deployment=false`. This is an engineering defect, not a user command error. A dedicated `DEV_SHADOW_DIAGNOSTIC=1` path now consumes only a fit-derived diagnostic selector and remains forbidden from test/stress.
+2. **Runtime did not execute the certified policy.** Training and calibration used frozen top-k plus Evidence reranking, but the closed-loop loader read only score/opportunity/harm thresholds. Runtime silently fell back to `proposal_top_k=1` and `evidence_rerank_top_k=false`. It now loads the complete selector contract, including rank margin, top-k, rerank and conditional-ranking flags.
+3. **Categorical and Noisy-OR objectives were both active.** v48.23 introduced a one-action categorical objective but left the legacy group-opportunity/Noisy-OR term at weight 1.25. The two targets are incompatible when only one action can execute. SUPPORT-BRIDGE disables Noisy-OR by default.
+
+### v48.24 algorithm: SUPPORT-BRIDGE
+
+**SUPPORT = Safe-Utility Proposal-Policy Ordering with Runtime-True Transfer.** It preserves one unified model and does not expose Near/Contact IDs to inference.
+
+1. **Safe-positive support width.** The frozen proposal is widened from top-3 to top-8 for the new preregistered version. This is not unrestricted proposal retraining; it tests whether safe recovery variants exist below the raw-benefit top-3.
+2. **Support curve audit.** Every certificate reports optimistic proposal-constrained oracle feasibility for k=1,3,5,8 and the active k, separately for fit and verify. Structural support failure is no longer confused with learned-gate failure.
+3. **Safe-benefit opportunity semantics.** Gate training and calibration use continuous positive PCD only when component harm is false. Raw-beneficial but harmful actions are not counted as admission opportunities.
+4. **Direct deployed safe-utility target.** The exact final admission logit receives continuous regression and listwise supervision. A safe action target is its signed PCD advantage; a component-harmful action receives a strictly negative target `-max(|delta|, positive_gain)`. This removes the requirement that an indirect benefit head and sparse risk head happen to cancel correctly.
+5. **One-action-only group learning.** The categorical nominal-plus-top-k policy remains active, while legacy Noisy-OR group opportunity is disabled.
+6. **Safe-positive group sampling.** Group batching explicitly preserves safe-positive groups and balances hard-negative/harmful groups without regenerating the dataset.
+7. **Light frontier contrast.** Pairwise safe-versus-harmful contrast is retained only as a small auxiliary term; it no longer carries the main safety-transfer burden.
+8. **Runtime-true certificate contract.** Deployment and diagnostic execution consume the same top-k/rerank/rank-margin contract written by the adaptation and certificate stages.
+
+### New non-repeated ablations and two-A30 schedule
+
+- `A_top3_safe_label_baseline`: safe-benefit labels with top-3; isolates label semantics from support width.
+- `B_top8_support_only`: A plus top-8; isolates proposal support width.
+- `C_top8_safe_utility`: B plus direct continuous safe-utility regression/listwise learning.
+- `D_full_support_bridge`: C plus light high-benefit frontier contrast.
+
+The launcher runs four waves. Each wave starts Balanced on GPU0 and Precision on GPU1, so only one task occupies each A30 at a time. Each GPU receives exactly four tasks; maximum concurrency is two rather than four processes per card.
+
+### Decision rules
+
+- `RC=0`: the preregistered certificate passed; run only the authorization-checked held-out stress/closed-loop script.
+- `RC=20`: top-8 proposal support is feasible but the learned policy still fails. Do not read test/stress. Run fixed adaptation-dev shadow and A/B/C/D to distinguish safe-utility learning from physical transfer.
+- `RC=30` with certificate support diagnostics: the new top-8 safe-positive oracle still cannot satisfy the gate or an engineering/protocol stage failed. No amount of calibrator retraining can make the current contract pass; inspect `PIPELINE_FAILED.json`, `proposal_support_curve`, and logs.
+- Do not claim RC=0 in advance. It is theoretically plausible only if top-8 recovers enough fit-side safe-positive support and the learned safe-utility ordering reaches the finite-sample gate.
+
+### Local validation
+
+- `PYTHONPATH="$PWD/src" pytest -q`: 220 passed, 5 warnings.
+- `python -m compileall -q src tools tests`: passed.
+- `bash -n` for all shell scripts: passed.
+- Real WOMD/Waymax and two A30s are unavailable in this audit environment, so no v48.24 gate or physical closed-loop result is claimed.
+
 ## v48.23 — OC-TRAC-FRONTIER-BRIDGE (2026-07-31)
 
 ### v48.22 result attribution

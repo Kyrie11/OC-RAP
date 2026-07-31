@@ -881,14 +881,18 @@ def main() -> int:
     )
 
     def _proposal_oracle_partition(partition, *, min_selected, min_precision_lcb,
-                                   max_harmful_selected_ucb, max_harmful_group_ucb):
+                                   max_harmful_selected_ucb, max_harmful_group_ucb,
+                                   proposal_k_override: int | None = None):
         safe_positive = 0
         nonharm_groups = 0
         for group in partition:
             deployable = [r for r in group.get("pairs", []) if int(r.get("macro", -1)) in supported_macros]
+            active_proposal_k = max(1, int(
+                proposal_k if proposal_k_override is None else proposal_k_override
+            ))
             proposal = sorted(
                 deployable, key=lambda r: (-float(r["rank_adv"]), int(r["candidate"]))
-            )[: min(proposal_k, len(deployable))]
+            )[: min(active_proposal_k, len(deployable))]
             safe_positive += int(any(
                 float(r["teacher_adv"]) >= args.positive_gain
                 and not _is_harmful(r, args.negative_gain) for r in proposal
@@ -943,6 +947,7 @@ def main() -> int:
         )
         return {
             "num_groups": len(partition),
+            "proposal_top_k": int(proposal_k if proposal_k_override is None else proposal_k_override),
             "proposal_safe_positive_groups": safe_positive,
             "proposal_nonharm_groups": nonharm_groups,
             "oracle_selected": int(best["selected"]),
@@ -970,6 +975,33 @@ def main() -> int:
         proposal_constrained_oracle_gate["fit"]["feasible"]
         and proposal_constrained_oracle_gate["verify"]["feasible"]
     )
+    # v48.24 SUPPORT-BRIDGE: report whether the structural support failure is
+    # caused by the fixed proposal width.  The curve is diagnostic only; the
+    # executed width remains the preregistered ``--proposal-top-k``.
+    support_k_values = sorted({
+        1, 3, 5, 8, int(proposal_k),
+    })
+    proposal_support_curve = {}
+    for support_k in support_k_values:
+        fit_support = _proposal_oracle_partition(
+            fit, min_selected=args.min_fit_selected,
+            min_precision_lcb=args.min_fit_precision_lcb,
+            max_harmful_selected_ucb=args.max_fit_harmful_selected_ucb,
+            max_harmful_group_ucb=args.max_fit_harmful_group_ucb,
+            proposal_k_override=support_k,
+        )
+        verify_support = _proposal_oracle_partition(
+            verify, min_selected=args.min_verify_selected,
+            min_precision_lcb=args.min_verify_precision_lcb,
+            max_harmful_selected_ucb=args.max_verify_harmful_selected_ucb,
+            max_harmful_group_ucb=args.max_verify_harmful_group_ucb,
+            proposal_k_override=support_k,
+        )
+        proposal_support_curve[str(support_k)] = {
+            "fit": fit_support,
+            "verify": verify_support,
+            "overall": bool(fit_support["feasible"] and verify_support["feasible"]),
+        }
     proposal_evidence_top1_corr = (
         float(np.corrcoef(
             [float(r["pred_adv"]) for r in proposal_evidence_top1],
@@ -1072,6 +1104,8 @@ def main() -> int:
         warnings.append("fit certificate specification infeasible for observed positive support")
     if not bool(support_feasibility["verify"]["feasible"]):
         warnings.append("verify certificate specification infeasible for observed positive support")
+    if not bool(proposal_constrained_oracle_gate["overall"]):
+        warnings.append("proposal-constrained safe-positive oracle cannot satisfy the declared gate")
     if len(groups) < args.required_min_groups:
         warnings.append("insufficient calibration groups")
     if len(scenes) < args.required_min_scenes:
@@ -1097,6 +1131,40 @@ def main() -> int:
         warnings.append("held-out selections exceed the macro concentration budget")
 
     valid = not warnings
+
+    # A failed deployment certificate must still be usable for an explicitly
+    # adaptation-dev-only shadow diagnostic.  Persist the closest *fit-derived*
+    # rule separately so the deployment loader can never confuse it with an
+    # authorized held-out rule.  No verify/test/stress statistic is used to
+    # choose this diagnostic rule.
+    diagnostic_fit_rule = None
+    diagnostic_selector_overrides: dict[str, Any] = {}
+    if near_miss:
+        diagnostic_fit_rule = {
+            key: float(near_miss[0][key]) for key in (
+                "opportunity_threshold", "harm_threshold",
+                "score_threshold", "rank_margin_threshold",
+            )
+        }
+        diagnostic_selector_overrides = {
+            "diagnostic_only": True,
+            "selected_from": "fit_nearest_frontier",
+            "direct_value_certificate": True,
+            "direct_value_score_mode": True,
+            "direct_value_uncertainty_mode": "risk_controlled",
+            "direct_value_additive_q": 0.0,
+            "direct_value_top1_only": True,
+            "direct_value_policy_first_no_fallback": bool(args.policy_first_no_fallback),
+            "direct_value_proposal_top_k": int(args.proposal_top_k),
+            "direct_value_evidence_rerank_top_k": bool(args.evidence_rerank_top_k),
+            "direct_value_risk_controlled_admission": True,
+            "direct_value_opportunity_threshold": diagnostic_fit_rule["opportunity_threshold"],
+            "direct_value_harm_threshold": diagnostic_fit_rule["harm_threshold"],
+            "direct_value_min_advantage_lcb": diagnostic_fit_rule["score_threshold"],
+            "direct_value_min_rank_margin": diagnostic_fit_rule["rank_margin_threshold"],
+            "direct_value_conditional_rank_margin": bool(args.conditional_recovery_ranking),
+        }
+
     result = {
         "method": str(args.method_version),
         "bucket": args.bucket,
@@ -1123,6 +1191,9 @@ def main() -> int:
         },
         "certificate_support_feasibility": support_feasibility,
         "proposal_constrained_oracle_gate": proposal_constrained_oracle_gate,
+        "proposal_support_curve": proposal_support_curve,
+        "diagnostic_fit_rule": diagnostic_fit_rule,
+        "diagnostic_selector_overrides": diagnostic_selector_overrides,
         "conformal": conformal,
         "rule": rule,
         "selector_overrides": ({} if rule is None else {

@@ -52,20 +52,56 @@ if [[ "$SAFE_NOMINAL_ONLY" != "1" ]]; then
   [[ -f "$CAL" ]] || { echo "missing calibration $CAL; set CAL=/path/to/calibration.json" >&2; exit 2; }
 fi
 
-# v48 reads both an opportunity threshold and a observation-conditioned score
-# threshold. Refuse to execute a certificate that failed held-out verification.
+# v48.24 reads the complete calibrated selector contract.  Earlier versions
+# loaded only score/opportunity/harm thresholds and silently left runtime at the
+# defaults proposal_top_k=1 and evidence_rerank_top_k=false, even though training
+# and calibration used top-k reranking.  That was a deployment-contract mismatch.
+DEV_SHADOW_DIAGNOSTIC="${DEV_SHADOW_DIAGNOSTIC:-0}"
 read_direct_rule() {
   local path="$1"
-  python - "$path" <<'PYQ'
+  python - "$path" "$DEV_SHADOW_DIAGNOSTIC" <<'PYQ'
 import json, math, sys
-p=sys.argv[1]; d=json.load(open(p))
-r=d.get('selector_overrides', {}) or {}
-s=float(r.get('direct_value_min_advantage_lcb', float('inf')))
-o=float(r.get('direct_value_opportunity_threshold', float('inf')))
-h=float(r.get('direct_value_harm_threshold', float('-inf')))
-if not d.get('valid_for_deployment', False) or not math.isfinite(s) or not math.isfinite(o) or not math.isfinite(h):
-    raise SystemExit(f'invalid OC-TRAC-SR certificate: {p}')
-print(s, o, h)
+p=sys.argv[1]
+diagnostic=str(sys.argv[2]).strip().lower() in {'1','true','yes','on'}
+d=json.load(open(p))
+source='deployment'
+if d.get('valid_for_deployment', False):
+    r=d.get('selector_overrides', {}) or {}
+elif diagnostic:
+    source='fit_nearest_frontier_diagnostic_only'
+    r=d.get('diagnostic_selector_overrides', {}) or {}
+    if not r:
+        frontier=d.get('near_miss_frontier') or []
+        if not frontier:
+            raise SystemExit(f'no fit-derived diagnostic rule in certificate: {p}')
+        f=frontier[0]
+        r={
+          'direct_value_min_advantage_lcb':f.get('score_threshold'),
+          'direct_value_opportunity_threshold':f.get('opportunity_threshold'),
+          'direct_value_harm_threshold':f.get('harm_threshold'),
+          'direct_value_min_rank_margin':f.get('rank_margin_threshold',0.0),
+          'direct_value_proposal_top_k':d.get('proposal_top_k',1),
+          'direct_value_evidence_rerank_top_k':bool((d.get('constraints') or {}).get('evidence_rerank_top_k',False)),
+          'direct_value_conditional_rank_margin':bool((d.get('constraints') or {}).get('conditional_recovery_ranking',False)),
+        }
+else:
+    raise SystemExit(f'invalid OC-TRAC-SR deployment certificate: {p}')
+
+def finite(name, default):
+    value=float(r.get(name, default))
+    if not math.isfinite(value):
+        raise SystemExit(f'non-finite {name} in {p}')
+    return value
+s=finite('direct_value_min_advantage_lcb', float('inf'))
+o=finite('direct_value_opportunity_threshold', float('inf'))
+h=finite('direct_value_harm_threshold', float('-inf'))
+m=finite('direct_value_min_rank_margin', 0.0)
+k=int(r.get('direct_value_proposal_top_k', r.get('proposal_top_k', 1)))
+rerank=bool(r.get('direct_value_evidence_rerank_top_k', r.get('evidence_rerank_top_k', False)))
+conditional=bool(r.get('direct_value_conditional_rank_margin', False))
+if k < 1:
+    raise SystemExit(f'invalid direct_value_proposal_top_k={k} in {p}')
+print(s, o, h, m, k, str(rerank).lower(), str(conditional).lower(), source)
 PYQ
 }
 if [[ "$SAFE_NOMINAL_ONLY" == "1" ]]; then
@@ -75,20 +111,53 @@ if [[ "$SAFE_NOMINAL_ONLY" == "1" ]]; then
   NEAR_DIRECT_THRESHOLD=1000000000
   NEAR_DIRECT_OPPORTUNITY_THRESHOLD=1.0
   NEAR_DIRECT_HARM_THRESHOLD=0.0
+  NEAR_DIRECT_MIN_RANK_MARGIN=0.0
+  NEAR_DIRECT_PROPOSAL_TOP_K=1
+  NEAR_DIRECT_EVIDENCE_RERANK=false
+  NEAR_DIRECT_CONDITIONAL_RANK_MARGIN=false
+  NEAR_DIRECT_RULE_SOURCE=safe_nominal_lock
   CONTACT_DIRECT_THRESHOLD=1000000000
   CONTACT_DIRECT_OPPORTUNITY_THRESHOLD=1.0
   CONTACT_DIRECT_HARM_THRESHOLD=0.0
+  CONTACT_DIRECT_MIN_RANK_MARGIN=0.0
+  CONTACT_DIRECT_PROPOSAL_TOP_K=1
+  CONTACT_DIRECT_EVIDENCE_RERANK=false
+  CONTACT_DIRECT_CONDITIONAL_RANK_MARGIN=false
+  CONTACT_DIRECT_RULE_SOURCE=safe_nominal_lock
 else
-  [[ -n "$BASE_RUN" ]] || { echo "BASE_RUN is required for stress certificate loading" >&2; exit 2; }
+  [[ -n "$BASE_RUN" ]] || { echo "BASE_RUN is required for certificate loading" >&2; exit 2; }
   if [[ -z "${NEAR_DIRECT_THRESHOLD:-}" || -z "${NEAR_DIRECT_OPPORTUNITY_THRESHOLD:-}" || -z "${NEAR_DIRECT_HARM_THRESHOLD:-}" ]]; then
-    read -r NEAR_DIRECT_THRESHOLD NEAR_DIRECT_OPPORTUNITY_THRESHOLD NEAR_DIRECT_HARM_THRESHOLD < <(read_direct_rule "$BASE_RUN/calibration/direct_value_risk_near_v48.json")
+    read -r NEAR_DIRECT_THRESHOLD NEAR_DIRECT_OPPORTUNITY_THRESHOLD NEAR_DIRECT_HARM_THRESHOLD \
+      NEAR_DIRECT_MIN_RANK_MARGIN NEAR_DIRECT_PROPOSAL_TOP_K NEAR_DIRECT_EVIDENCE_RERANK \
+      NEAR_DIRECT_CONDITIONAL_RANK_MARGIN NEAR_DIRECT_RULE_SOURCE \
+      < <(read_direct_rule "$BASE_RUN/calibration/direct_value_risk_near_v48.json")
   fi
   if [[ -z "${CONTACT_DIRECT_THRESHOLD:-}" || -z "${CONTACT_DIRECT_OPPORTUNITY_THRESHOLD:-}" || -z "${CONTACT_DIRECT_HARM_THRESHOLD:-}" ]]; then
-    read -r CONTACT_DIRECT_THRESHOLD CONTACT_DIRECT_OPPORTUNITY_THRESHOLD CONTACT_DIRECT_HARM_THRESHOLD < <(read_direct_rule "$BASE_RUN/calibration/direct_value_risk_contact_v48.json")
+    read -r CONTACT_DIRECT_THRESHOLD CONTACT_DIRECT_OPPORTUNITY_THRESHOLD CONTACT_DIRECT_HARM_THRESHOLD \
+      CONTACT_DIRECT_MIN_RANK_MARGIN CONTACT_DIRECT_PROPOSAL_TOP_K CONTACT_DIRECT_EVIDENCE_RERANK \
+      CONTACT_DIRECT_CONDITIONAL_RANK_MARGIN CONTACT_DIRECT_RULE_SOURCE \
+      < <(read_direct_rule "$BASE_RUN/calibration/direct_value_risk_contact_v48.json")
   fi
 fi
-export NEAR_DIRECT_THRESHOLD CONTACT_DIRECT_THRESHOLD NEAR_DIRECT_OPPORTUNITY_THRESHOLD CONTACT_DIRECT_OPPORTUNITY_THRESHOLD NEAR_DIRECT_HARM_THRESHOLD CONTACT_DIRECT_HARM_THRESHOLD
-echo "direct-value OC-TRAC-SR rules: near(score=$NEAR_DIRECT_THRESHOLD,opp=$NEAR_DIRECT_OPPORTUNITY_THRESHOLD,harm=$NEAR_DIRECT_HARM_THRESHOLD) contact(score=$CONTACT_DIRECT_THRESHOLD,opp=$CONTACT_DIRECT_OPPORTUNITY_THRESHOLD,harm=$CONTACT_DIRECT_HARM_THRESHOLD)"
+# Manual threshold overrides remain supported; fill the rest of the selector
+# contract explicitly instead of inheriting silent top-1/non-rerank defaults.
+NEAR_DIRECT_MIN_RANK_MARGIN="${NEAR_DIRECT_MIN_RANK_MARGIN:-0.0}"
+CONTACT_DIRECT_MIN_RANK_MARGIN="${CONTACT_DIRECT_MIN_RANK_MARGIN:-0.0}"
+NEAR_DIRECT_PROPOSAL_TOP_K="${NEAR_DIRECT_PROPOSAL_TOP_K:-1}"
+CONTACT_DIRECT_PROPOSAL_TOP_K="${CONTACT_DIRECT_PROPOSAL_TOP_K:-1}"
+NEAR_DIRECT_EVIDENCE_RERANK="${NEAR_DIRECT_EVIDENCE_RERANK:-false}"
+CONTACT_DIRECT_EVIDENCE_RERANK="${CONTACT_DIRECT_EVIDENCE_RERANK:-false}"
+NEAR_DIRECT_CONDITIONAL_RANK_MARGIN="${NEAR_DIRECT_CONDITIONAL_RANK_MARGIN:-false}"
+CONTACT_DIRECT_CONDITIONAL_RANK_MARGIN="${CONTACT_DIRECT_CONDITIONAL_RANK_MARGIN:-false}"
+export NEAR_DIRECT_THRESHOLD CONTACT_DIRECT_THRESHOLD \
+  NEAR_DIRECT_OPPORTUNITY_THRESHOLD CONTACT_DIRECT_OPPORTUNITY_THRESHOLD \
+  NEAR_DIRECT_HARM_THRESHOLD CONTACT_DIRECT_HARM_THRESHOLD \
+  NEAR_DIRECT_MIN_RANK_MARGIN CONTACT_DIRECT_MIN_RANK_MARGIN \
+  NEAR_DIRECT_PROPOSAL_TOP_K CONTACT_DIRECT_PROPOSAL_TOP_K \
+  NEAR_DIRECT_EVIDENCE_RERANK CONTACT_DIRECT_EVIDENCE_RERANK \
+  NEAR_DIRECT_CONDITIONAL_RANK_MARGIN CONTACT_DIRECT_CONDITIONAL_RANK_MARGIN
+
+echo "direct-value OC-TRAC-SR rules: near(source=${NEAR_DIRECT_RULE_SOURCE:-manual},score=$NEAR_DIRECT_THRESHOLD,opp=$NEAR_DIRECT_OPPORTUNITY_THRESHOLD,harm=$NEAR_DIRECT_HARM_THRESHOLD,rank_margin=$NEAR_DIRECT_MIN_RANK_MARGIN,k=$NEAR_DIRECT_PROPOSAL_TOP_K,rerank=$NEAR_DIRECT_EVIDENCE_RERANK) contact(source=${CONTACT_DIRECT_RULE_SOURCE:-manual},score=$CONTACT_DIRECT_THRESHOLD,opp=$CONTACT_DIRECT_OPPORTUNITY_THRESHOLD,harm=$CONTACT_DIRECT_HARM_THRESHOLD,rank_margin=$CONTACT_DIRECT_MIN_RANK_MARGIN,k=$CONTACT_DIRECT_PROPOSAL_TOP_K,rerank=$CONTACT_DIRECT_EVIDENCE_RERANK)"
 
 make_sel() {
   local tag="$1"  # scalar | v48
@@ -584,6 +653,22 @@ make_sel() {
     --set selection.direct_value_top1_only_by_bucket.test_near_contact=${DIRECT_TOP1_ONLY:-true}
     --set selection.direct_value_top1_only_by_bucket.contact=${DIRECT_TOP1_ONLY:-true}
     --set selection.direct_value_top1_only_by_bucket.test_contact=${DIRECT_TOP1_ONLY:-true}
+    --set selection.direct_value_evidence_rerank_top_k_by_bucket.near_contact=${NEAR_DIRECT_EVIDENCE_RERANK}
+    --set selection.direct_value_evidence_rerank_top_k_by_bucket.test_near_contact=${NEAR_DIRECT_EVIDENCE_RERANK}
+    --set selection.direct_value_evidence_rerank_top_k_by_bucket.contact=${CONTACT_DIRECT_EVIDENCE_RERANK}
+    --set selection.direct_value_evidence_rerank_top_k_by_bucket.test_contact=${CONTACT_DIRECT_EVIDENCE_RERANK}
+    --set selection.direct_value_proposal_top_k_by_bucket.near_contact=${NEAR_DIRECT_PROPOSAL_TOP_K}
+    --set selection.direct_value_proposal_top_k_by_bucket.test_near_contact=${NEAR_DIRECT_PROPOSAL_TOP_K}
+    --set selection.direct_value_proposal_top_k_by_bucket.contact=${CONTACT_DIRECT_PROPOSAL_TOP_K}
+    --set selection.direct_value_proposal_top_k_by_bucket.test_contact=${CONTACT_DIRECT_PROPOSAL_TOP_K}
+    --set selection.direct_value_min_rank_margin_by_bucket.near_contact=${NEAR_DIRECT_MIN_RANK_MARGIN}
+    --set selection.direct_value_min_rank_margin_by_bucket.test_near_contact=${NEAR_DIRECT_MIN_RANK_MARGIN}
+    --set selection.direct_value_min_rank_margin_by_bucket.contact=${CONTACT_DIRECT_MIN_RANK_MARGIN}
+    --set selection.direct_value_min_rank_margin_by_bucket.test_contact=${CONTACT_DIRECT_MIN_RANK_MARGIN}
+    --set selection.direct_value_conditional_rank_margin_by_bucket.near_contact=${NEAR_DIRECT_CONDITIONAL_RANK_MARGIN}
+    --set selection.direct_value_conditional_rank_margin_by_bucket.test_near_contact=${NEAR_DIRECT_CONDITIONAL_RANK_MARGIN}
+    --set selection.direct_value_conditional_rank_margin_by_bucket.contact=${CONTACT_DIRECT_CONDITIONAL_RANK_MARGIN}
+    --set selection.direct_value_conditional_rank_margin_by_bucket.test_contact=${CONTACT_DIRECT_CONDITIONAL_RANK_MARGIN}
     --set selection.direct_value_opportunity_threshold_by_bucket.near_contact=${NEAR_DIRECT_OPPORTUNITY_THRESHOLD}
     --set selection.direct_value_opportunity_threshold_by_bucket.test_near_contact=${NEAR_DIRECT_OPPORTUNITY_THRESHOLD}
     --set selection.direct_value_opportunity_threshold_by_bucket.contact=${CONTACT_DIRECT_OPPORTUNITY_THRESHOLD}
