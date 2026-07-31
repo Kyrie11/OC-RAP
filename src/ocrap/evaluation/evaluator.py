@@ -413,7 +413,12 @@ def _evaluate_grouped_items(grouped: dict[tuple, list[dict]], methods: list[str]
                 od=np.clip(opp_logits-opp_logits[ni],-30,30); hd=np.clip(harm_logits-harm_logits[ni],-30,30)
                 pred_direct_opportunity=(1.0/(1.0+np.exp(-od))).astype(np.float32)
                 pred_direct_harm=(1.0/(1.0+np.exp(-hd))).astype(np.float32)
-                pred_direct_value=(pred_direct_opportunity-pred_direct_harm).astype(np.float32); pred_direct_value[ni]=0.0
+                
+                if np.isfinite(pred_direct_delta).any():
+                    pred_direct_value = np.where(np.isfinite(pred_direct_delta), pred_direct_delta, -np.inf).astype(np.float32)
+                    pred_direct_value = pred_direct_value - float(pred_direct_value[ni])
+                else:
+                    pred_direct_value=(pred_direct_opportunity-pred_direct_harm).astype(np.float32); pred_direct_value[ni]=0.0
                 pred_direct_std=np.zeros_like(pred_direct_value,dtype=np.float32)
             elif risk_source=="delta_distribution" and np.isfinite(pred_direct_value[ni]):
                 import math

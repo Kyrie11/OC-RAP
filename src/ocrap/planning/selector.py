@@ -647,7 +647,7 @@ def calibrated_constrained_select(
                     ordered = physical_idx[np.argsort(-raw_rank_advantage[physical_idx], kind="stable")][:proposal_k]
                     eligible = ordered[evidence_ok[ordered]]
                     if eligible.size:
-                        evidence_score = direct_opportunity - direct_pred_harm
+                        evidence_score = raw_direct_advantage
                         chosen = int(eligible[np.argmax(evidence_score[eligible])])
                         alternatives = [float(evidence_score[j]) for j in eligible if int(j) != chosen]
                         second_best = max(alternatives) if alternatives else float(evidence_score[chosen] - 1.0)

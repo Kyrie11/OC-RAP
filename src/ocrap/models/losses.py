@@ -1334,6 +1334,7 @@ def direct_uncertainty_recovery_value_loss(
     opportunity_pos_weight: float = 6.0,
     pred_harm_logit: torch.Tensor | None = None,
     pred_component_harm_logits: torch.Tensor | None = None,
+    pred_admission_logit: torch.Tensor | None = None,
     harm_weight: float = 0.0,
     harm_pos_weight: float = 4.0,
     setwise_admission_weight: float = 0.0,
@@ -1419,6 +1420,9 @@ def direct_uncertainty_recovery_value_loss(
     ordinal_evidence_safe_set_temperature: float = 0.05,
     ordinal_evidence_safe_benefit_target: bool = False,
     ordinal_evidence_group_opportunity_weight: float = 0.0,
+    ordinal_evidence_admission_weight: float = 0.0,
+    ordinal_evidence_admission_pos_weight: float = 4.0,
+    ordinal_evidence_admission_harm_negative_weight: float = 2.0,
     ordinal_evidence_balanced_replaces_erm: bool = False,
     ordinal_evidence_benefit_margin_weight: float = 0.0,
     ordinal_evidence_harm_margin_weight: float = 0.0,
@@ -1465,6 +1469,7 @@ def direct_uncertainty_recovery_value_loss(
         pred_opportunity_logit,
         pred_harm_logit,
         pred_component_harm_logits,
+        pred_admission_logit,
         pred_rank_logit,
         pred_delta_mean,
         pred_delta_logvar,
@@ -1530,6 +1535,8 @@ def direct_uncertainty_recovery_value_loss(
         sizes.append(direct_delta_logvar.numel())
     if component_harm_logits is not None:
         sizes.append(component_harm_logits.shape[0])
+    if pred_admission_logit is not None:
+        sizes.append(pred_admission_logit.numel())
     n = min(sizes)
     score, rank_score, point_mean, logvar, trd, tro, teacher_drs = score[:n], rank_score[:n], point_mean[:n], logvar[:n], trd[:n], tro[:n], teacher_drs[:n]
     teacher_hard, teacher_harm = teacher_hard[:n], teacher_harm[:n]
@@ -1565,6 +1572,9 @@ def direct_uncertainty_recovery_value_loss(
     harm_logits = None
     if pred_harm_logit is not None:
         harm_logits = pred_harm_logit.float().reshape(-1)[:n]
+    admission_logits = None
+    if pred_admission_logit is not None:
+        admission_logits = pred_admission_logit.float().reshape(-1)[:n]
     group_losses: list[torch.Tensor] = []
     group_weights: list[float] = []
     group_domains: list[tuple[int, int, int, int]] = []
@@ -1980,6 +1990,9 @@ def direct_uncertainty_recovery_value_loss(
         harm_delta_logits = None
         if harm_logits is not None:
             harm_delta_logits = harm_logits[recs] - harm_logits[nom]
+        admission_delta_logits = None
+        if admission_logits is not None:
+            admission_delta_logits = admission_logits[recs] - admission_logits[nom]
         if opp_delta_logits is not None and float(opportunity_weight) > 0.0:
             opp_temp = float(opportunity_soft_label_temperature)
             labels = (
@@ -2062,7 +2075,8 @@ def direct_uncertainty_recovery_value_loss(
             ])
             benefit_loss_tail = None
             harm_loss_tail = None
-            benefit_binary = (classes == 2).to(dtype=p_benefit.dtype)
+            raw_benefit_binary = (classes == 2).to(dtype=p_benefit.dtype)
+            benefit_binary = raw_benefit_binary
             harm_binary_bool = classes == 0
             if bool(ordinal_evidence_independent_tails):
                 # v48.19 FACET-BRIDGE: independent outputs require independent
@@ -2079,6 +2093,9 @@ def direct_uncertainty_recovery_value_loss(
                     if factorized_harm_binary is not None
                     else harm_binary_bool
                 )
+                safe_admission_binary = raw_benefit_binary * (
+                    ~harm_binary_bool
+                ).to(dtype=raw_benefit_binary.dtype)
                 # v48.21 CONCORD: the admission opportunity is not merely a raw
                 # total-PCD improvement.  It is a *safe* improvement that survives
                 # the component veto.  Supervising raw benefit while deployment
@@ -2127,6 +2144,28 @@ def direct_uncertainty_recovery_value_loss(
                 )
                 if component_loss_tail is not None:
                     nll = nll + float(ordinal_evidence_component_tail_weight) * component_loss_tail
+                if admission_delta_logits is not None and float(ordinal_evidence_admission_weight) > 0.0:
+                    # v48.22 COVENANT: direct safe-admission supervision is a
+                    # third hypothesis, distinct from raw benefit and component
+                    # harm.  False-safe harmful candidates receive extra weight
+                    # because they dominate certificate precision/UCB failures.
+                    admission_raw_loss = F.binary_cross_entropy_with_logits(
+                        admission_delta_logits, safe_admission_binary, reduction="none"
+                    )
+                    admission_weights = torch.where(
+                        safe_admission_binary > 0.5,
+                        torch.full_like(admission_raw_loss, float(ordinal_evidence_admission_pos_weight)),
+                        torch.ones_like(admission_raw_loss),
+                    )
+                    admission_weights = torch.where(
+                        harm_binary_bool,
+                        admission_weights * float(ordinal_evidence_admission_harm_negative_weight),
+                        admission_weights,
+                    )
+                    terms.append(
+                        float(ordinal_evidence_admission_weight)
+                        * (admission_raw_loss * admission_weights).mean()
+                    )
             else:
                 p_dead = (1.0 - p_benefit - p_harm).clamp_min(1.0e-6)
                 probs = torch.stack([p_harm, p_dead, p_benefit], dim=-1).clamp_min(1.0e-6)
@@ -2301,10 +2340,13 @@ def direct_uncertainty_recovery_value_loss(
         if unison_safe_set:
             deployment_k = min(max(1, int(ordinal_evidence_proposal_topk)), int(r_delta.numel()))
             deployment_idx = torch.topk(r_delta.detach(), k=deployment_k).indices
-            deployment_score = (
-                torch.sigmoid(opp_delta_logits[deployment_idx])
-                - torch.sigmoid(harm_delta_logits[deployment_idx])
-            )
+            if admission_delta_logits is not None:
+                deployment_score = torch.sigmoid(admission_delta_logits[deployment_idx]) - 0.5
+            else:
+                deployment_score = (
+                    torch.sigmoid(opp_delta_logits[deployment_idx])
+                    * (1.0 - torch.sigmoid(harm_delta_logits[deployment_idx]))
+                ) - 0.5
             safe_set_logits = torch.cat(
                 [deployment_score.new_zeros((1,)), deployment_score], dim=0
             ) / tau
@@ -2323,7 +2365,14 @@ def direct_uncertainty_recovery_value_loss(
             and unison_safe_set
             and opp_delta_logits is not None
         ):
-            deployment_prob = torch.sigmoid(opp_delta_logits[deployment_idx]).clamp(1.0e-6, 1.0 - 1.0e-6)
+            if admission_delta_logits is not None:
+                deployment_prob = torch.sigmoid(admission_delta_logits[deployment_idx])
+            else:
+                deployment_prob = (
+                    torch.sigmoid(opp_delta_logits[deployment_idx])
+                    * (1.0 - torch.sigmoid(harm_delta_logits[deployment_idx]))
+                )
+            deployment_prob = deployment_prob.clamp(1.0e-6, 1.0 - 1.0e-6)
             any_safe_prob = 1.0 - torch.prod(1.0 - deployment_prob)
             any_safe_target = safe_set_positive_mask.any().to(dtype=any_safe_prob.dtype)
             group_opportunity_loss = F.binary_cross_entropy(

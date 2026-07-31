@@ -307,6 +307,12 @@ model:
   direct_recovery_evidence_unified_experts: false
   direct_recovery_evidence_component_heads: false
   direct_recovery_evidence_component_scale: 2.0
+  # v48.21/v48.22 unified decoupled evidence heads. All remain disabled by
+  # default so legacy checkpoints and scripts preserve their exact behaviour.
+  direct_recovery_evidence_concord: false
+  direct_recovery_evidence_consensus_disagreement_penalty: 0.15
+  direct_recovery_evidence_admission_head: false
+  direct_recovery_evidence_admission_scale: 2.0
 dataset_quality:
   # Off by default for broad natural-WOMD sweeps. Enable only for artifact/stress
   # datasets that are intended to support FRA, ODG, and anti-oracle claims.
@@ -375,6 +381,8 @@ training:
   balanced_obs_loss: true
   group_batching: false
   group_batching_replacement: true
+  group_batch_safe_positive_target: false
+  evaluate_initial_checkpoint: false
   # v48.17 BRIDGE: optional exact teacher-PCD strata. Disabled by default so
   # legacy training behavior remains unchanged.
   group_batch_stratified: false

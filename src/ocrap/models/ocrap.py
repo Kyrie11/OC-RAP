@@ -183,6 +183,8 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_component_scale: float = 2.0,
         direct_recovery_evidence_concord: bool = False,
         direct_recovery_evidence_consensus_disagreement_penalty: float = 0.15,
+        direct_recovery_evidence_admission_head: bool = False,
+        direct_recovery_evidence_admission_scale: float = 2.0,
     ):
         super().__init__()
         self.num_roots = int(num_roots)
@@ -269,6 +271,12 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_evidence_concord = bool(direct_recovery_evidence_concord)
         self.direct_recovery_evidence_consensus_disagreement_penalty = float(
             max(0.0, direct_recovery_evidence_consensus_disagreement_penalty)
+        )
+        self.direct_recovery_evidence_admission_head = bool(
+            direct_recovery_evidence_admission_head
+        )
+        self.direct_recovery_evidence_admission_scale = float(
+            max(0.0, direct_recovery_evidence_admission_scale)
         )
         if self.direct_recovery_evidence_calibrator_mode not in {
             "center_width", "simplex_context", "dual_tail_context"
@@ -625,6 +633,21 @@ class OCRAPModel(nn.Module):
             and self.direct_recovery_evidence_calibrator
             and self.direct_recovery_evidence_unified_experts
             and self.direct_recovery_evidence_concord
+            else None
+        )
+        # v48.22 COVENANT-BRIDGE factorises three distinct hypotheses:
+        # raw recovery benefit, componentwise harm, and final safe admissibility.
+        # The admission adapter never receives a regime id.  It starts from a
+        # detached benefit/risk prior and learns only the residual needed to
+        # identify candidates that are simultaneously useful and safe.
+        self.direct_evidence_concord_admission_calibrator = (
+            _make_evidence_calibrator(1)
+            if self.direct_recovery_value_head
+            and self.direct_recovery_delta_head
+            and self.direct_recovery_evidence_calibrator
+            and self.direct_recovery_evidence_unified_experts
+            and self.direct_recovery_evidence_concord
+            and self.direct_recovery_evidence_admission_head
             else None
         )
         self.direct_evidence_calibrators = (
@@ -1039,6 +1062,7 @@ class OCRAPModel(nn.Module):
         unified_benefit_logit = None
         unified_harm_logit = None
         unified_component_harm_logits = None
+        unified_admission_logit = None
         calibrator_enabled = (
             self.direct_evidence_calibrators is not None
             or self.direct_evidence_unified_calibrator is not None
@@ -1104,6 +1128,11 @@ class OCRAPModel(nn.Module):
             if self.direct_evidence_concord_benefit_calibrator is not None:
                 benefit_raw = self.direct_evidence_concord_benefit_calibrator(calibrator_input).squeeze(-1)
                 harm_raw = self.direct_evidence_concord_harm_calibrator(calibrator_input)
+                admission_raw = (
+                    self.direct_evidence_concord_admission_calibrator(calibrator_input).squeeze(-1)
+                    if self.direct_evidence_concord_admission_calibrator is not None
+                    else None
+                )
                 benefit_residual = (
                     torch.tanh(benefit_raw) * self.direct_recovery_evidence_calibrator_scale
                 )
@@ -1135,6 +1164,26 @@ class OCRAPModel(nn.Module):
                     evidence_calibrator_residual = torch.stack(
                         [benefit_residual, harm_residual], dim=-1
                     )
+                if admission_raw is not None:
+                    # Admission has a separate semantic target: raw benefit AND
+                    # no component veto.  Detaching the prior prevents its sparse
+                    # gradient from distorting either the raw-benefit or risk head.
+                    # softplus(harm) is a conservative log-risk penalty; the bounded
+                    # residual can correct it from context without regime routing.
+                    admission_prior = (
+                        unified_benefit_logit.detach()
+                        - torch.nn.functional.softplus(unified_harm_logit.detach())
+                    )
+                    admission_residual = (
+                        torch.tanh(admission_raw)
+                        * self.direct_recovery_evidence_admission_scale
+                    )
+                    unified_admission_logit = admission_prior + admission_residual
+                    evidence_calibrator_residual = torch.cat(
+                        [evidence_calibrator_residual, admission_residual.unsqueeze(-1)], dim=-1
+                    )
+                    out["direct_recovery_evidence_concord_admission_raw"] = admission_raw
+                    out["direct_recovery_evidence_admission_prior"] = admission_prior
                 out["direct_recovery_evidence_expert_benefit_logits"] = benefit_e
                 out["direct_recovery_evidence_expert_harm_logits"] = harm_e
                 out["direct_recovery_evidence_expert_base"] = torch.stack(
@@ -1291,6 +1340,10 @@ class OCRAPModel(nn.Module):
                             torch.zeros_like(unified_component_harm_logits),
                             unified_component_harm_logits,
                         )
+                    if unified_admission_logit is not None:
+                        unified_admission_logit = torch.where(
+                            nominal_mask, torch.zeros_like(unified_admission_logit), unified_admission_logit
+                        )
                 benefit_prob = torch.sigmoid(benefit_logit)
                 harm_prob = torch.sigmoid(harm_logit)
                 if (
@@ -1329,7 +1382,15 @@ class OCRAPModel(nn.Module):
                     out["direct_recovery_evidence_class_probabilities"] = torch.stack(
                         [harm_prob, dead_prob, benefit_prob], dim=-1
                     )
-                evidence_score = benefit_prob - harm_prob
+                if unified_admission_logit is not None:
+                    admission_prob = torch.sigmoid(unified_admission_logit)
+                    # Nominal is pinned to probability 0.5, so subtracting 0.5
+                    # yields an exact candidate-vs-nominal admission score.
+                    evidence_score = admission_prob - 0.5
+                    out["direct_recovery_admission_logit"] = unified_admission_logit
+                    out["direct_recovery_admission_probability"] = admission_prob
+                else:
+                    evidence_score = benefit_prob - harm_prob
                 out["direct_recovery_evidence_nonharm_logit"] = nonharm_logit
                 out["direct_recovery_evidence_benefit_logit"] = benefit_logit
                 out["direct_recovery_evidence_harm_logit"] = harm_logit

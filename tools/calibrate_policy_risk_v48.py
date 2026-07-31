@@ -626,7 +626,12 @@ def main() -> int:
             elif args.risk_source == "ordinal_evidence":
                 opportunity = _sigmoid(float(r["opp_logit"]) - float(nom["opp_logit"]))
                 harm = _sigmoid(float(r["harm_logit"]) - float(nom["harm_logit"]))
-                pred_adv = opportunity - harm
+                # v48.22 checkpoints expose a separately supervised safe-admission
+                # score through direct_recovery_delta.  Legacy ordinal checkpoints
+                # expose opportunity-harm through the same field, so preferring the
+                # explicit delta is backward compatible and keeps calibration equal
+                # to runtime reranking.
+                pred_adv = float(r["delta"]) if r["delta"] is not None else opportunity - harm
             else:
                 pred_adv = r["pred"] - nom["pred"]
             rank_adv = r["rank"] - nom["rank"]
@@ -887,9 +892,22 @@ def main() -> int:
         [float(r["teacher_adv"]) >= args.positive_gain for r in proposal_evidence_top1],
         [float(r["pred_adv"]) for r in proposal_evidence_top1],
     )
+    proposal_evidence_top1_safe_benefit_auc = _auc(
+        [
+            float(r["teacher_adv"]) >= args.positive_gain
+            and not _is_harmful(r, args.negative_gain)
+            for r in proposal_evidence_top1
+        ],
+        [float(r["pred_adv"]) for r in proposal_evidence_top1],
+    )
     proposal_evidence_top1_harm_auc = _auc(
         [_is_harmful(r, args.negative_gain) for r in proposal_evidence_top1],
         [float(r["harm"]) for r in proposal_evidence_top1],
+    )
+    high_opportunity_top1 = [r for r in proposal_evidence_top1 if float(r["opportunity"]) >= 0.5]
+    proposal_evidence_top1_conditional_harm_auc = _auc(
+        [_is_harmful(r, args.negative_gain) for r in high_opportunity_top1],
+        [float(r["harm"]) for r in high_opportunity_top1],
     )
 
     evidence_switches = [r for r in proposal_evidence_top1 if float(r["pred_adv"]) > 0.0]
@@ -1046,6 +1064,10 @@ def main() -> int:
         "fit_scenes": len(fit_scenes), "verify_scenes": len(verify_scenes), "scene_overlap": len(fit_scenes & verify_scenes),
         "fit": fit_metrics, "verify": verify_metrics, "all": all_metrics,
         "candidate_positive_auc": _auc([r["teacher_adv"] >= args.positive_gain for r in pairs], [r["pred_adv"] for r in pairs]),
+        "candidate_safe_positive_auc": _auc(
+            [_is_positive(r, args.positive_gain, args.negative_gain, safe_only=True) for r in pairs],
+            [r["pred_adv"] for r in pairs],
+        ),
         "candidate_harm_auc": _auc([_is_harmful(r, args.negative_gain) for r in pairs], [r["harm"] for r in pairs]),
         "candidate_risk_harm_auc": _auc([_is_harmful(r, args.negative_gain) for r in pairs], [r["harm"] for r in pairs]),
         "candidate_head_harm_auc": _auc(
@@ -1069,7 +1091,10 @@ def main() -> int:
         "proposal_any_positive_hit_rate_positive_groups": proposal_positive_hit_rate_positive,
         "proposal_evidence_top1_correlation": proposal_evidence_top1_corr,
         "proposal_evidence_top1_positive_auc": proposal_evidence_top1_benefit_auc,
+        "proposal_evidence_top1_safe_positive_auc": proposal_evidence_top1_safe_benefit_auc,
         "proposal_evidence_top1_harm_auc": proposal_evidence_top1_harm_auc,
+        "proposal_evidence_top1_conditional_harm_auc": proposal_evidence_top1_conditional_harm_auc,
+        "proposal_evidence_top1_high_opportunity_count": len(high_opportunity_top1),
         "proposal_evidence_nonpositive_false_switch_rate": proposal_evidence_false_switch_rate,
         "proposal_evidence_harmful_switch_rate": proposal_evidence_harmful_switch_rate,
         "proposal_evidence_positive_top1_regret_mean": proposal_evidence_positive_regret_mean,

@@ -366,6 +366,9 @@ def _direct_value_loss_from_outputs(
         ordinal_evidence_safe_set_temperature=float(tcfg.get("direct_value_ordinal_evidence_safe_set_temperature", 0.05)),
         ordinal_evidence_safe_benefit_target=bool(tcfg.get("direct_value_ordinal_evidence_safe_benefit_target", False)),
         ordinal_evidence_group_opportunity_weight=float(tcfg.get("direct_value_ordinal_evidence_group_opportunity_weight", 0.0)),
+        ordinal_evidence_admission_weight=float(tcfg.get("direct_value_ordinal_evidence_admission_weight", 0.0)),
+        ordinal_evidence_admission_pos_weight=float(tcfg.get("direct_value_ordinal_evidence_admission_pos_weight", 4.0)),
+        ordinal_evidence_admission_harm_negative_weight=float(tcfg.get("direct_value_ordinal_evidence_admission_harm_negative_weight", 2.0)),
         ordinal_evidence_balanced_replaces_erm=bool(tcfg.get("direct_value_ordinal_evidence_balanced_replaces_erm", False)),
         ordinal_evidence_benefit_margin_weight=float(tcfg.get("direct_value_ordinal_evidence_benefit_margin_weight", 0.0)),
         ordinal_evidence_harm_margin_weight=float(tcfg.get("direct_value_ordinal_evidence_harm_margin_weight", 0.0)),
@@ -388,6 +391,7 @@ def _direct_value_loss_from_outputs(
         opportunity_logit: torch.Tensor | None,
         harm_logit: torch.Tensor | None,
         component_harm_logits: torch.Tensor | None,
+        admission_logit: torch.Tensor | None,
         rank_logit: torch.Tensor | None,
         delta_mean: torch.Tensor | None,
         delta_logvar: torch.Tensor | None,
@@ -407,6 +411,7 @@ def _direct_value_loss_from_outputs(
             pred_opportunity_logit=opportunity_logit,
             pred_harm_logit=harm_logit,
             pred_component_harm_logits=component_harm_logits,
+            pred_admission_logit=admission_logit,
             pred_rank_logit=rank_logit,
             pred_delta_mean=delta_mean,
             pred_delta_logvar=delta_logvar,
@@ -421,6 +426,7 @@ def _direct_value_loss_from_outputs(
         out["direct_recovery_value_logit"], out["direct_recovery_value_logvar"],
         out.get("direct_recovery_opportunity_logit"), out.get("direct_recovery_harm_logit"),
         out.get("direct_recovery_evidence_component_harm_logits"),
+        out.get("direct_recovery_admission_logit"),
         out.get("direct_recovery_rank_logit"),
         out.get("direct_recovery_delta_mean"), out.get("direct_recovery_delta_logvar"),
     )
@@ -459,7 +465,7 @@ def _direct_value_loss_from_outputs(
             "preference_gap_weight": 0.0,
             "delta_nll_weight": 0.0,
         })
-        expert_losses.append(compute(eo[:, 0], eo[:, 1], opp, harm, None, None, None, None, overrides))
+        expert_losses.append(compute(eo[:, 0], eo[:, 1], opp, harm, None, None, None, None, None, overrides))
     return aggregate + specialist_weight * torch.stack(expert_losses).mean()
 
 
@@ -497,10 +503,13 @@ def _direct_policy_batch_stats(
     direct_delta_logvar = out.get("direct_recovery_delta_logvar")
     opportunity_logit = out.get("direct_recovery_opportunity_logit")
     harm_logit = out.get("direct_recovery_harm_logit")
+    admission_logit = out.get("direct_recovery_admission_logit")
     if opportunity_logit is not None:
         opportunity_logit = opportunity_logit.float().reshape(-1)
     if harm_logit is not None:
         harm_logit = harm_logit.float().reshape(-1)
+    if admission_logit is not None:
+        admission_logit = admission_logit.float().reshape(-1)
     if direct_delta is not None:
         direct_delta = direct_delta.float().reshape(-1)
     if direct_delta_logvar is not None:
@@ -630,7 +639,16 @@ def _direct_policy_batch_stats(
             harm_delta_all = harm_logit[recs] - harm_logit[nom]
             opportunity_all = torch.sigmoid(opp_delta_all)
             harm_all = torch.sigmoid(harm_delta_all)
-            evidence_all = opportunity_all - harm_all
+            if admission_logit is not None:
+                admission_delta_all = admission_logit[recs] - admission_logit[nom]
+                admission_all = torch.sigmoid(admission_delta_all)
+                evidence_all = admission_all - 0.5
+            elif direct_delta is not None:
+                evidence_all = direct_delta[recs] - direct_delta[nom]
+                admission_all = (evidence_all + 0.5).clamp(1.0e-6, 1.0 - 1.0e-6)
+            else:
+                evidence_all = opportunity_all - harm_all
+                admission_all = (opportunity_all * (1.0 - harm_all)).clamp(1.0e-6, 1.0 - 1.0e-6)
             if metric_evidence_rerank:
                 proposal_k = min(metric_proposal_top_k, int(recs.numel()))
                 proposal_local = torch.topk(pred_rank_delta, k=proposal_k).indices
@@ -686,10 +704,10 @@ def _direct_policy_batch_stats(
             soft_safe_group = bool(proposal_safe_positive.any().item())
             proposal_opp = opportunity_all[proposal_local_soft]
             proposal_harm = harm_all[proposal_local_soft]
-            proposal_admit = (proposal_opp * (1.0 - proposal_harm)).clamp(1.0e-6, 1.0 - 1.0e-6)
+            proposal_admit = admission_all[proposal_local_soft].clamp(1.0e-6, 1.0 - 1.0e-6)
             soft_group_admit_t = 1.0 - torch.prod(1.0 - proposal_admit)
             soft_group_admit = float(soft_group_admit_t.item())
-            proposal_evidence_soft = proposal_opp - proposal_harm
+            proposal_evidence_soft = evidence_all[proposal_local_soft]
             policy_logits_soft = torch.cat([
                 proposal_evidence_soft.new_zeros((1,)),
                 proposal_evidence_soft / metric_soft_temperature,
@@ -1002,7 +1020,24 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
         out[f"direct_concord_risk_{regime}"] = risk
         concord_regime_risks.append(risk)
     if len(concord_regime_risks) == 2:
-        out["direct_concord_selection_risk"] = max(concord_regime_risks) + 0.25 * sum(concord_regime_risks)
+        concord_total = max(concord_regime_risks) + 0.25 * sum(concord_regime_risks)
+        out["direct_concord_selection_risk"] = concord_total
+        # v48.22 COVENANT uses the same unified model but checkpoint selection
+        # additionally penalises the exact failure mode observed in v48.21:
+        # large harmful policy mass despite apparently useful opportunity AUC.
+        conditional_harm = max(
+            float(out.get("direct_soft_harmful_mass_near", 0.0)),
+            float(out.get("direct_soft_harmful_mass_contact", 0.0)),
+        )
+        conditional_false = max(
+            float(out.get("direct_soft_false_admission_near", 0.0)),
+            float(out.get("direct_soft_false_admission_contact", 0.0)),
+        )
+        out["direct_covenant_selection_risk"] = (
+            concord_total
+            + float(tcfg.get("direct_policy_metric_covenant_harm_weight", 1.5)) * conditional_harm
+            + float(tcfg.get("direct_policy_metric_covenant_false_weight", 0.5)) * conditional_false
+        )
     return out
 
 
@@ -1776,7 +1811,10 @@ def _make_group_batch_sampler(ds: OCRAPSampleDataset, cfg: dict, batch_size: int
     # oversampled those overlap groups as positives while the group loss labeled
     # them negative, injecting avoidable contradictory gradients.
     safe_positive_sampler = bool(
-        tcfg.get("direct_value_ordinal_evidence_safe_benefit_target", False)
+        tcfg.get(
+            "group_batch_safe_positive_target",
+            tcfg.get("direct_value_ordinal_evidence_safe_benefit_target", False),
+        )
     )
     if positive_boost > 0.0 and not positive_macro_ids:
         raise ValueError(
@@ -2168,6 +2206,12 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_evidence_consensus_disagreement_penalty=float(
             model_cfg.get("direct_recovery_evidence_consensus_disagreement_penalty", 0.15)
         ),
+        direct_recovery_evidence_admission_head=bool(
+            model_cfg.get("direct_recovery_evidence_admission_head", False)
+        ),
+        direct_recovery_evidence_admission_scale=float(
+            model_cfg.get("direct_recovery_evidence_admission_scale", 2.0)
+        ),
     ).to(device)
     tcfg = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
 
@@ -2430,6 +2474,12 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "direct_recovery_evidence_consensus_disagreement_penalty": float(
                 model_cfg.get("direct_recovery_evidence_consensus_disagreement_penalty", 0.15)
             ),
+            "direct_recovery_evidence_admission_head": bool(
+                model_cfg.get("direct_recovery_evidence_admission_head", False)
+            ),
+            "direct_recovery_evidence_admission_scale": float(
+                model_cfg.get("direct_recovery_evidence_admission_scale", 2.0)
+            ),
             "model_state": model.state_dict(),
             "optimizer_state": opt.state_dict(),
             "epoch": int(ep),
@@ -2456,6 +2506,39 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         "freeze_param_prefixes": list(freeze_prefixes),
     }, flush=True)
     t0 = perf_counter()
+    # v48.22: zero-initialised bounded adapters are intended to preserve the
+    # source model.  Earlier runs never evaluated epoch 0, so the source identity
+    # could not win checkpoint selection even when the first optimisation step
+    # destroyed a useful Near or Contact signal.
+    if bool(tcfg.get("evaluate_initial_checkpoint", False)):
+        with torch.no_grad():
+            va0 = _epoch(model, val_loader, cfg, device, None, stage="val", epoch=0)
+        best_metric_name = str(tcfg.get("best_metric", "loss") or "loss")
+        best_metric_mode = str(tcfg.get("best_metric_mode", "min") or "min").lower()
+        if best_metric_name not in va0:
+            raise KeyError(
+                f"Configured training.best_metric={best_metric_name!r} was not produced by epoch-0 validation. "
+                f"Available metrics: {sorted(va0)}"
+            )
+        current_metric0 = float(va0[best_metric_name])
+        best_val = current_metric0 if best_metric_mode != "max" else -current_metric0
+        best_epoch = 0
+        payload0 = _checkpoint_payload(0, current_metric0)
+        payload0["val_loss"] = float(va0.get("loss", current_metric0))
+        payload0["best_metric_name"] = best_metric_name
+        payload0["best_metric_value"] = current_metric0
+        payload0["is_best"] = True
+        torch.save(payload0, ckpt_dir / "epoch_0000.pt")
+        torch.save(payload0, best_path)
+        if bool(tcfg.get("save_latest", True)):
+            torch.save(payload0, latest_path)
+        history.append({"epoch": 0, "train": {}, "val": va0, "seconds": 0.0})
+        print({
+            "event": "initial_checkpoint_evaluated",
+            "epoch": 0,
+            "best_metric_name": best_metric_name,
+            "current_best_metric": round(current_metric0, 6),
+        }, flush=True)
     for ep in range(1, epochs + 1):
         ep_t0 = perf_counter()
         tr = _epoch(model, train_loader, cfg, device, opt, stage="train", epoch=ep)

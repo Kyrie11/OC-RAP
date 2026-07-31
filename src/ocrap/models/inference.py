@@ -203,6 +203,14 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_evidence_consensus_disagreement_penalty",
             model_cfg.get("direct_recovery_evidence_consensus_disagreement_penalty", 0.15),
         )),
+        direct_recovery_evidence_admission_head=bool(ckpt.get(
+            "direct_recovery_evidence_admission_head",
+            model_cfg.get("direct_recovery_evidence_admission_head", False),
+        )),
+        direct_recovery_evidence_admission_scale=float(ckpt.get(
+            "direct_recovery_evidence_admission_scale",
+            model_cfg.get("direct_recovery_evidence_admission_scale", 2.0),
+        )),
     ).to(device)
     # Strict loading remains the default for checkpoints with matching geometry.
     # A v39 checkpoint can initialize v40 training through train.py's explicit
@@ -262,6 +270,14 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_evidence_consensus_disagreement_penalty"] = float(ckpt.get(
         "direct_recovery_evidence_consensus_disagreement_penalty",
         model_cfg.get("direct_recovery_evidence_consensus_disagreement_penalty", 0.15),
+    ))
+    cfg["model"]["direct_recovery_evidence_admission_head"] = bool(ckpt.get(
+        "direct_recovery_evidence_admission_head",
+        model_cfg.get("direct_recovery_evidence_admission_head", False),
+    ))
+    cfg["model"]["direct_recovery_evidence_admission_scale"] = float(ckpt.get(
+        "direct_recovery_evidence_admission_scale",
+        model_cfg.get("direct_recovery_evidence_admission_scale", 2.0),
     ))
     return ModelBundle(model=model, cfg=cfg, device=device)
 
