@@ -144,6 +144,13 @@ class DatasetSample:
         return {
             "scene_id": self.scene_id,
             "original_scenario_id": self.original_scenario_id,
+            "official_scenario_id": str(h.metadata.get("official_scenario_id") or ""),
+            "legacy_scenario_id": str(h.metadata.get("legacy_scenario_id") or ""),
+            "source_scenario_index": np.int64(h.metadata.get("source_scenario_index", -1) or -1),
+            "scenario_id_source": str(h.metadata.get("scenario_id_source", "unknown")),
+            "womd_source_role": str(h.metadata.get("womd_source_role", "unknown")),
+            "womd_source_pattern": str(h.metadata.get("womd_source_pattern", "")),
+            "waymax_max_num_objects": np.int64(h.metadata.get("waymax_max_num_objects", -1) or -1),
             "time_index": np.int64(self.time_index),
             "candidate_index": np.int64(self.candidate_index),
             "split_id": self.split_id,

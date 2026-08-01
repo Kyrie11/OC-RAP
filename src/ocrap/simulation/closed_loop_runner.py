@@ -119,15 +119,43 @@ class ClosedLoopDecision:
 
 
 def _canonical_womd_scene_id(value: Any) -> str:
-    """Normalize OC-RAP/Waymax IDs without depending on dataloader order.
+    """Normalize official or legacy OC-RAP scene ids.
 
-    Offline builders append ``__wx########`` to make filenames unique. Closed-loop
-    dataloaders may enumerate the same WOMD scene at a different index or source
-    pattern, so exact string matching can miss every requested target. The WOMD
-    scenario/base hash is stable; only the loader suffix is operational.
+    The ``__wx########`` suffix is a source-order provenance field, not scene
+    identity.  Official WOMD ``scenario/id`` is authoritative; pre-v48.28
+    ``waymax_<hash>`` ids remain migration aliases only.
     """
     text = str(value or "").strip()
     return re.sub(r"__wx\d{8}$", "", text)
+
+
+def _legacy_waymax_source_index(value: Any) -> int | None:
+    match = re.search(r"__wx(\d{8})$", str(value or "").strip())
+    return int(match.group(1)) if match else None
+
+
+def _source_role_from_pattern(value: Any) -> str:
+    text = str(value or "").lower()
+    if "validation_interactive" in text:
+        return "validation_interactive"
+    if re.search(r"(^|[/_])validation([/_]|$)", text):
+        return "validation"
+    if "training" in text:
+        return "training"
+    if "testing" in text or "/test" in text:
+        return "test"
+    return "unknown"
+
+
+def _raw_scene_identity_keys(raw: Any) -> set[str]:
+    metadata = getattr(raw, "metadata", {}) or {}
+    values = [
+        getattr(raw, "scenario_id", ""),
+        metadata.get("original_scenario_id"),
+        metadata.get("official_scenario_id"),
+        metadata.get("legacy_scenario_id"),
+    ]
+    return {key for key in (_canonical_womd_scene_id(v) for v in values) if key}
 
 
 def _safe_float(x: Any, default: float = 0.0) -> float:
@@ -2054,11 +2082,30 @@ def _load_closed_loop_targets(dataset_spec: str | None, cfg: dict) -> list[dict[
             continue
         scene_id = str(scalar_metadata_for_path(p, "scene_id", ""))
         original_scene_id = str(scalar_metadata_for_path(p, "original_scenario_id", ""))
-        if not scene_id and not original_scene_id:
+        official_scene_id = str(scalar_metadata_for_path(p, "official_scenario_id", ""))
+        legacy_scene_id = str(scalar_metadata_for_path(p, "legacy_scenario_id", ""))
+        if not scene_id and not original_scene_id and not official_scene_id:
             continue
-        canonical_scene_id = _canonical_womd_scene_id(original_scene_id or scene_id)
+        canonical_scene_id = _canonical_womd_scene_id(official_scene_id or original_scene_id or scene_id)
         if not canonical_scene_id:
             continue
+        source_index_raw = scalar_metadata_for_path(p, "source_scenario_index", -1)
+        try:
+            source_scenario_index = int(float(source_index_raw))
+        except Exception:
+            source_scenario_index = -1
+        if source_scenario_index < 0:
+            source_scenario_index = (
+                _legacy_waymax_source_index(original_scene_id)
+                or _legacy_waymax_source_index(scene_id)
+                or -1
+            )
+        source_role = str(scalar_metadata_for_path(p, "womd_source_role", "") or "unknown")
+        max_num_objects_raw = scalar_metadata_for_path(p, "waymax_max_num_objects", -1)
+        try:
+            waymax_max_num_objects = int(float(max_num_objects_raw))
+        except Exception:
+            waymax_max_num_objects = -1
         try:
             time_index = int(float(scalar_metadata_for_path(p, "time_index", 0)))
         except Exception:
@@ -2071,11 +2118,23 @@ def _load_closed_loop_targets(dataset_spec: str | None, cfg: dict) -> list[dict[
             continue
         seen.add(key)
         per_scene[canonical_scene_id] = per_scene.get(canonical_scene_id, 0) + 1
+        aliases = {
+            _canonical_womd_scene_id(v)
+            for v in (scene_id, original_scene_id, official_scene_id, legacy_scene_id)
+            if str(v or "").strip()
+        }
+        aliases.discard("")
         targets.append({
             "bucket_name": bucket,
             "scene_id": canonical_scene_id,
+            "scene_aliases": sorted(aliases),
             "saved_scene_id": scene_id,
             "original_scenario_id": original_scene_id or None,
+            "official_scenario_id": official_scene_id or None,
+            "legacy_scenario_id": legacy_scene_id or None,
+            "source_scenario_index": int(source_scenario_index),
+            "womd_source_role": source_role,
+            "waymax_max_num_objects": int(waymax_max_num_objects),
             "time_index": int(time_index),
             "target_key": f"{bucket}:{canonical_scene_id}:t{int(time_index)}",
         })
@@ -2446,8 +2505,27 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
             "falling back to arbitrary WOMD scenes"
         )
     target_map: dict[str, list[dict[str, Any]]] = {}
+    target_index_map: dict[int, list[dict[str, Any]]] = {}
     for t in targets:
-        target_map.setdefault(_canonical_womd_scene_id(t["scene_id"]), []).append(t)
+        aliases = set(t.get("scene_aliases") or [])
+        aliases.add(_canonical_womd_scene_id(t["scene_id"]))
+        for alias in aliases:
+            if alias:
+                target_map.setdefault(alias, []).append(t)
+        source_index = int(t.get("source_scenario_index", -1) or -1)
+        if source_index >= 0:
+            target_index_map.setdefault(source_index, []).append(t)
+    raw_source_role = _source_role_from_pattern(dataset_patterns)
+    declared_target_roles = {str(t.get("womd_source_role", "unknown")) for t in targets}
+    known_target_roles = {r for r in declared_target_roles if r not in {"", "unknown"}}
+    if targets and known_target_roles and raw_source_role not in known_target_roles:
+        raise RuntimeError(
+            "Closed-loop target/source split mismatch: targets were built from "
+            f"{sorted(known_target_roles)}, but raw WOMD source is {raw_source_role}. "
+            "Use the same standard validation split and shard set used by the "
+            "adaptation-dev builder."
+        )
+    allow_legacy_index = bool(cl_cfg.get("allow_legacy_source_index_targets", True))
     run_fingerprint = _closed_loop_fingerprint(dataset_patterns, checkpoint, method, target_spec, local)
     total_rollouts = max_rollouts if targets else max_scenes
     resume_meta: dict[str, Any] = {"sources": [], "legacy_sources": [], "prior_raw_scenarios_seen": 0}
@@ -2491,13 +2569,26 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
             "journal": str(journal_path),
         }, flush=True)
     if progress and targets:
-        print({"event": "closed_loop_bucket_targets_loaded", "num_targets": len(targets), "num_target_scenes": len(target_map), "target_scene_examples": sorted(target_map)[:5], "max_rollouts": max_rollouts, "raw_max_scenarios": raw_max_scenarios}, flush=True)
+        print({"event": "closed_loop_bucket_targets_loaded", "num_targets": len(targets), "num_target_scenes": len(target_map), "num_legacy_source_indices": len(target_index_map), "target_source_roles": sorted(declared_target_roles), "raw_source_role": raw_source_role, "target_scene_examples": sorted(target_map)[:5], "max_rollouts": max_rollouts, "raw_max_scenarios": raw_max_scenarios}, flush=True)
     new_scenes_since_partial = 0
     for i, raw in enumerate(iter_waymax_womd_scenarios(dataset_patterns, max_scenarios=raw_max_scenarios if targets else max_scenes, parser_cfg=local)):
         raw_seen_this_run += 1
         raw_seen = max(raw_seen, raw_seen_this_run)
-        raw_canonical_id = _canonical_womd_scene_id(raw.scenario_id)
-        raw_targets = target_map.get(raw_canonical_id, []) if targets else [{"bucket_name": None, "time_index": None, "target_key": None}]
+        raw_identity_keys = _raw_scene_identity_keys(raw)
+        raw_targets_by_key: dict[str, dict[str, Any]] = {}
+        for identity_key in raw_identity_keys:
+            for target in target_map.get(identity_key, []):
+                raw_targets_by_key[str(target.get("target_key"))] = target
+        raw_index = int((getattr(raw, "metadata", {}) or {}).get("_waymax_scenario_index", i))
+        if targets and not raw_targets_by_key and allow_legacy_index:
+            for target in target_index_map.get(raw_index, []):
+                # Source-order matching is permitted only on the same declared
+                # split. It is a migration path for pre-v48.28 datasets, never
+                # the primary scene identity.
+                target_role = str(target.get("womd_source_role", "unknown"))
+                if target_role in {"", "unknown", raw_source_role}:
+                    raw_targets_by_key[str(target.get("target_key"))] = target
+        raw_targets = list(raw_targets_by_key.values()) if targets else [{"bucket_name": None, "time_index": None, "target_key": None}]
         if targets and not raw_targets:
             continue
         for target in raw_targets:
@@ -2571,7 +2662,7 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
                     "bucket_matched_rollouts": matched_targets,
                     "raw_scenarios_seen": raw_seen,
                     "raw_scenarios_seen_this_run": raw_seen_this_run,
-                    "target_id_matching": "canonical_without_waymax_loader_suffix",
+                    "target_id_matching": "official_or_legacy_alias_with_provenance_checked_source_index_fallback",
                 })
                 write_json(partial, partial_path, fsync=resume_fsync)
                 new_scenes_since_partial = 0
@@ -2591,8 +2682,10 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
     if targets and matched_targets == 0 and bool(cl_cfg.get("require_bucket_targets", False)):
         raise RuntimeError(
             "No requested bucket target scene matched the raw WOMD source after "
-            f"scanning {raw_seen_this_run} scenarios. Use the complete validation "
-            "shard set and set closed_loop.raw_max_scenarios=0 for sparse target ids."
+            f"scanning {raw_seen_this_run} scenarios. Verify that adaptation-dev "
+            "and closed loop use the same WOMD split/shard set. Pre-v48.28 target "
+            "ids are local state hashes; use the standard validation source and "
+            "enable closed_loop.allow_legacy_source_index_targets for migration."
         )
 
     # Always leave a final valid partial snapshot, even when the last group has
@@ -2609,7 +2702,7 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
             "bucket_matched_rollouts": matched_targets,
             "raw_scenarios_seen": raw_seen,
             "raw_scenarios_seen_this_run": raw_seen_this_run,
-            "target_id_matching": "canonical_without_waymax_loader_suffix",
+            "target_id_matching": "official_or_legacy_alias_with_provenance_checked_source_index_fallback",
         })
         write_json(partial, partial_path, fsync=resume_fsync)
     result = _aggregate_with_buckets(scene_results, method, source)

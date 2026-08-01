@@ -181,7 +181,7 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_unified_experts: bool = False,
         direct_recovery_evidence_component_heads: bool = False,
         direct_recovery_evidence_component_count: int = 3,
-        direct_recovery_evidence_component_scale: float = 2.0,
+        direct_recovery_evidence_component_scale: float = 6.0,
         direct_recovery_evidence_concord: bool = False,
         direct_recovery_evidence_consensus_disagreement_penalty: float = 0.15,
         direct_recovery_evidence_admission_head: bool = False,
@@ -1165,6 +1165,11 @@ class OCRAPModel(nn.Module):
                 )
                 unified_benefit_logit = base_benefit + benefit_residual
                 if self.direct_recovery_evidence_component_heads:
+                    # v48.28: the semantic prior is -2.  A scale of 2 capped
+                    # candidate component logits at zero, so the model could
+                    # never represent p(harm)>0.5 after a veto tolerance was
+                    # exceeded.  The wider bounded range retains stable logits
+                    # while allowing strong harmful evidence.
                     component_residual = (
                         torch.tanh(harm_raw[:, : self.direct_recovery_evidence_component_count])
                         * self.direct_recovery_evidence_component_scale

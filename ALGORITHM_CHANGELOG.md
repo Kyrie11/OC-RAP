@@ -1891,3 +1891,57 @@ baseline and therefore do not rerun old failed designs:
 - Do not rebuild the three regime datasets in this round.  Sparse positive support is
   addressed through sampler/loss/checkpoint logic so the next result remains
   attributable to the algorithm rather than a changed dataset.
+
+## v48.28 — PROVENANCE-MARGIN-BRIDGE
+
+### Motivation
+
+v48.27 returned a valid `RC=20`, but two independent defects prevented a clean interpretation:
+
+1. adaptation-dev shadow targets were built from standard WOMD `validation`, while the closed-loop audit defaulted to `validation_interactive`; all 16 targets missed after scanning 43,479 raw scenarios;
+2. the stage-1 factor checkpoint metric was constant across epochs and selected epoch 0 for both Balanced and Precision, so the five harm-factor heads were frozen at their semantic prior.
+
+The component-harm parameterization also used `prior=-2, scale=2`, which bounded each candidate component logit to at most zero and therefore could not represent `p(harm)>0.5` for strong veto violations.
+
+### Engineering changes
+
+- Added an official WOMD `scenario/id` preserving Waymax loader, following the custom-loader contract used by Waymax when string IDs are required.
+- Persisted `official_scenario_id`, `legacy_scenario_id`, source scenario index, source role, source pattern, and `max_num_objects` into RawScenario metadata, sample NPZ files, and manifests.
+- Changed adaptation-dev shadow default from `validation_interactive` to the same standard `validation` TFRecord family used by the calibration-regime builder.
+- Added fail-closed target/source-role provenance audit before shadow execution.
+- Restricted legacy source-order matching to the same declared source role. It is migration-only; official `scenario/id` is the primary identity.
+- Added `repair_v48_27_dev_shadow_with_v48_28.sh` so existing v48.27 checkpoints can be re-evaluated without retraining.
+- Added model-contract validation for component count, prior, frontier mode, bounded admission, and component scale.
+- Added factor-transfer integrity validation: stage-1 and stage-2 checkpoints must be post-epoch-0, factor heads must be nonzero and frozen during admission training, and the admission head must be trained.
+- Added a structured `GATE_FAILURE_DECOMPOSITION.json` separating proposal infeasibility, development-rule fitting failure, certificate generalization failure, and pass.
+
+### Algorithm changes
+
+- Replaced the stage-1 checkpoint metric `direct_factor_selection_risk` with `direct_factor_supervised_risk`, which includes the actual supervised factor loss and therefore changes when the benefit and component-risk heads learn.
+- Disabled initial-checkpoint eligibility in both factor and admission stages.
+- Increased the default component-harm residual scale from 2.0 to 6.0 while retaining the semantic prior of -2.0. The representable logit range changes from approximately `[-4, 0]` to `[-8, 4]`.
+- Kept five non-compensatory factors: DRS, deployability, oracle-to-deployable gap, hard rule, and harm proxy.
+- Kept top-3 frozen proposals, categorical one-action admission, bounded identity-preserving admission, and legacy Noisy-OR disabled.
+- The v48.28 main model uses two-stage factor→admission training with deployment-exact safe-utility regression only. Listwise/frontier terms are no longer in the main objective and remain an ablation because v48.27 showed no consistent benefit.
+
+### Ablations
+
+The four groups are:
+
+1. `A_three_factor_wide_range` — three factors, scale 6;
+2. `B_five_factor_old_range` — five factors, scale 2;
+3. `C_five_factor_wide_range_regression` — five factors, scale 6, regression-only main design;
+4. `D_add_listwise_frontier` — C plus listwise/frontier terms.
+
+All eight Balanced/Precision jobs are launched concurrently: four jobs per 24 GB A30. Per-task data workers and host threads are limited to one to reduce TFRecord and CPU contention.
+
+### Protocol decisions
+
+- The certificate concept is retained. Complete certificate oracle support is feasible for Near and Contact in v48.27, so the dominant failure is learned development-rule fitting, not mathematical gate impossibility.
+- Gate thresholds are not reduced post hoc.
+- Safe remains nominal-first with held-out non-inferiority checks; Near and Contact use the registered Natural gate.
+- Existing v48.27 shadow outputs contain no valid physical rollouts and must not be interpreted as zero collision/exposure/intervention.
+
+### Non-claims
+
+The local environment does not contain the user's WOMD/Waymax runtime or two A30 GPUs. v48.28 has passed static and unit tests, but no claim is made that it already obtains `RC=0`, passes the Natural gate, or reaches the Near/Contact closed-loop publication targets.

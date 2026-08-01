@@ -903,7 +903,14 @@ run_audit() {
   local tag="$1"; local b="$2"; local gpu="$3"; local targets="${4:-32}"; local labels="${5:-384}"
   make_sel "$tag"
   local bucket="$NEAR_TEST"
-  local shadow_womd_source="${DEV_SHADOW_WOMD_SOURCE:-$WOMD_VAL_INTERACTIVE@150}"
+  local shadow_womd_source
+  if [[ -n "${DEV_SHADOW_WOMD_SOURCE:-}" ]]; then
+    shadow_womd_source="$DEV_SHADOW_WOMD_SOURCE"
+  elif [[ "$WOMD_VAL" == *@* ]]; then
+    shadow_womd_source="$WOMD_VAL"
+  else
+    shadow_womd_source="$WOMD_VAL@150"
+  fi
   [[ "$b" == "contact" ]] && bucket="$CONTACT_TEST"
   CUDA_VISIBLE_DEVICES="$gpu" PYTHONUNBUFFERED=1 python -u -m ocrap.cli closed-loop \
     --dataset "$shadow_womd_source" --checkpoint "$CKPT" \
@@ -920,6 +927,8 @@ run_audit() {
     --set closed_loop.max_bucket_targets="$targets" \
     --set closed_loop.max_rollouts=${AUDIT_MAX_ROLLOUTS:-12} \
     --set closed_loop.require_bucket_targets=true \
+    --set closed_loop.allow_legacy_source_index_targets=${DEV_SHADOW_ALLOW_LEGACY_SOURCE_INDEX_TARGETS:-true} \
+    --set waymax.retain_official_scenario_id=true \
     --set closed_loop.raw_max_scenarios=${DEV_SHADOW_RAW_MAX_SCENARIOS:-0} \
     --set closed_loop.max_steps=${AUDIT_MAX_STEPS:-20} \
     --set closed_loop.replan_interval_steps=${AUDIT_REPLAN_INTERVAL:-1} \

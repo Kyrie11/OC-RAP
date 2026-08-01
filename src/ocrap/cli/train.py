@@ -1732,6 +1732,27 @@ def _epoch(
             totals[k] = totals.get(k, 0.0) + float(v) * bsz
     epoch_metrics = {k: float(v / max(n, 1)) for k, v in totals.items()}
     epoch_metrics.update(_finalize_direct_policy_stats(policy_totals, tcfg))
+    # v48.28 PROVENANCE-MARGIN-BRIDGE: the v48.27 stage-1 metric used
+    # teacher-labelled harmful selections from the *rank head*, but it did not
+    # depend on the newly initialized component-harm heads.  Both variants
+    # therefore selected epoch 0 and carried the semantic prior (AUC=0.5) into
+    # stage 2.  Select factor checkpoints with the actual supervised factor
+    # loss plus a small benefit-ranking term.  This remains threshold-free and
+    # uses adaptation-dev only.
+    if "direct_factor_selection_risk" in epoch_metrics:
+        pref = max(
+            float(epoch_metrics.get("direct_preference_risk_mean_near", 1.0)),
+            float(epoch_metrics.get("direct_preference_risk_mean_contact", 1.0)),
+        )
+        rank_harm = max(
+            float(epoch_metrics.get("direct_rank_harmful_top1_rate_near", 1.0)),
+            float(epoch_metrics.get("direct_rank_harmful_top1_rate_contact", 1.0)),
+        )
+        epoch_metrics["direct_factor_supervised_risk"] = (
+            float(epoch_metrics.get("loss_direct_recovery_value", epoch_metrics.get("loss", 0.0)))
+            + float(tcfg.get("direct_policy_metric_factor_preference_weight_v2", 0.35)) * pref
+            + float(tcfg.get("direct_policy_metric_factor_rank_harm_weight_v2", 0.15)) * rank_harm
+        )
     epoch_metrics.update({"num_samples": int(n), "num_batches": int(len(loader))})
     return epoch_metrics
 
@@ -2388,7 +2409,7 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_evidence_unified_experts=bool(model_cfg.get("direct_recovery_evidence_unified_experts", False)),
         direct_recovery_evidence_component_heads=bool(model_cfg.get("direct_recovery_evidence_component_heads", False)),
         direct_recovery_evidence_component_count=int(model_cfg.get("direct_recovery_evidence_component_count", 3)),
-        direct_recovery_evidence_component_scale=float(model_cfg.get("direct_recovery_evidence_component_scale", 2.0)),
+        direct_recovery_evidence_component_scale=float(model_cfg.get("direct_recovery_evidence_component_scale", 6.0)),
         direct_recovery_evidence_concord=bool(model_cfg.get("direct_recovery_evidence_concord", False)),
         direct_recovery_evidence_consensus_disagreement_penalty=float(
             model_cfg.get("direct_recovery_evidence_consensus_disagreement_penalty", 0.15)
@@ -2679,7 +2700,7 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "direct_recovery_evidence_unified_experts": bool(model_cfg.get("direct_recovery_evidence_unified_experts", False)),
             "direct_recovery_evidence_component_heads": bool(model_cfg.get("direct_recovery_evidence_component_heads", False)),
             "direct_recovery_evidence_component_count": int(model_cfg.get("direct_recovery_evidence_component_count", 3)),
-            "direct_recovery_evidence_component_scale": float(model_cfg.get("direct_recovery_evidence_component_scale", 2.0)),
+            "direct_recovery_evidence_component_scale": float(model_cfg.get("direct_recovery_evidence_component_scale", 6.0)),
             "direct_recovery_evidence_concord": bool(model_cfg.get("direct_recovery_evidence_concord", False)),
             "direct_recovery_evidence_consensus_disagreement_penalty": float(
                 model_cfg.get("direct_recovery_evidence_consensus_disagreement_penalty", 0.15)

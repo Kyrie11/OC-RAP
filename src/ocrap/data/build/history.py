@@ -131,6 +131,13 @@ def construct_history(raw: RawScenario, t: int, cfg: dict) -> SceneHistory:
             # DatasetSample.to_npz_dict serializes json-safe metadata.
             "_waymax_state": raw.metadata.get("_waymax_state"),
             "_waymax_scenario_index": raw.metadata.get("_waymax_scenario_index"),
+            "source_scenario_index": raw.metadata.get("_waymax_scenario_index", -1),
+            "official_scenario_id": raw.metadata.get("official_scenario_id"),
+            "legacy_scenario_id": raw.metadata.get("legacy_scenario_id"),
+            "scenario_id_source": raw.metadata.get("scenario_id_source", "unknown"),
+            "womd_source_role": raw.metadata.get("womd_source_role", "unknown"),
+            "womd_source_pattern": raw.metadata.get("womd_source_pattern", ""),
+            "waymax_max_num_objects": raw.metadata.get("waymax_max_num_objects", -1),
             **route_meta,
         },
     )

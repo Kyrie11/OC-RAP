@@ -3,6 +3,7 @@ from __future__ import annotations
 import functools
 import hashlib
 import os
+import re
 from typing import Any, Iterator
 from types import SimpleNamespace
 
@@ -113,39 +114,108 @@ def _agent_time_array(x: Any, num_agents: int, num_steps: int, name: str) -> np.
     return _normalize_agent_time(x, num_agents, num_steps, name=name)
 
 
-def _scenario_id_from_payload(payload: dict[str, Any], idx: int, state: Any, cfg: dict | None = None) -> str:
-    """Return a stable, scene-level id suitable for split assignment.
+def _decode_scenario_id(value: Any) -> str | None:
+    """Decode WOMD ``scenario/id`` from scalar bytes or a uint8 byte vector."""
+    try:
+        arr = _as_np(value)
+    except Exception:
+        return None
+    if arr.size == 0:
+        return None
+    try:
+        if arr.dtype == np.uint8:
+            text = bytes(arr.reshape(-1).tolist()).decode("utf-8", errors="strict")
+        elif arr.size == 1:
+            val = arr.reshape(()).item()
+            if isinstance(val, bytes):
+                text = val.decode("utf-8", errors="strict")
+            else:
+                text = str(val)
+        else:
+            return None
+    except Exception:
+        return None
+    text = text.strip()
+    return text if text and text not in {"None", "b''"} else None
 
-    Some Waymax/WOMD input paths expose ``scenario/id`` as a scalar bytes tensor,
-    some as a length-1 tensor, and some omit it.  A repeated or malformed id
-    collapses all samples into one scene, which in turn makes calibration/test
-    splits empty.  Keep the original id when available, but append the dataloader
-    index by default so the saved sample id is unique at scene granularity.
+
+def _legacy_scenario_id_from_state(state: Any) -> str:
+    """Reproduce the pre-v48.28 fallback id for legacy target migration."""
+    ids = _as_np(state.object_metadata.ids).reshape(-1)
+    ts = _as_np(state.log_trajectory.timestamp_micros).reshape(-1)
+    h = hashlib.sha1(ids.tobytes() + ts[: min(16, ts.size)].tobytes()).hexdigest()[:16]
+    return f"waymax_{h}"
+
+
+def _scenario_identity_from_payload(
+    payload: dict[str, Any], idx: int, state: Any, cfg: dict | None = None
+) -> tuple[str, str, str]:
+    """Return saved id, official/legacy base id, and legacy compatibility id.
+
+    Waymax's default dataloader discards the string ``scenario/id``.  v48.28
+    preserves it explicitly.  The legacy state hash remains available only as a
+    migration key for datasets built before the official id was retained.
     """
     cfg = cfg or {}
     wx = cfg.get("waymax", {}) if isinstance(cfg.get("waymax", {}), dict) else {}
     append_index = bool(wx.get("append_scenario_index_to_id", True))
-
-    base: str | None = None
-    sid = payload.get("scenario_id")
-    try:
-        arr = _as_np(sid)
-        if arr.size == 1:
-            val = arr.reshape(()).item()
-            if isinstance(val, bytes):
-                base = val.decode("utf-8", errors="ignore") or None
-            else:
-                base = str(val)
-    except Exception:
-        base = None
-    if not base or base in {"None", "", "b''"}:
-        ids = _as_np(state.object_metadata.ids).reshape(-1)
-        ts = _as_np(state.log_trajectory.timestamp_micros).reshape(-1)
-        h = hashlib.sha1(ids.tobytes() + ts[: min(16, ts.size)].tobytes()).hexdigest()[:16]
-        base = f"waymax_{h}"
-    # Avoid path separators in filenames and make repeated payload ids harmless.
+    official = _decode_scenario_id(payload.get("scenario_id"))
+    legacy = _legacy_scenario_id_from_state(state)
+    base = official or legacy
     base = base.replace("/", "_").replace("\\", "_")
-    return f"{base}__wx{idx:08d}" if append_index else base
+    saved = f"{base}__wx{idx:08d}" if append_index else base
+    return saved, base, legacy
+
+
+def _scenario_id_from_payload(payload: dict[str, Any], idx: int, state: Any, cfg: dict | None = None) -> str:
+    """Backward-compatible wrapper returning the persisted scene id."""
+    return _scenario_identity_from_payload(payload, idx, state, cfg)[0]
+
+
+def _infer_womd_source_role(patterns: Any) -> str:
+    text = _paths_to_waymax_path(patterns).lower()
+    if "validation_interactive" in text:
+        return "validation_interactive"
+    if re.search(r"(^|[/_])validation([/_]|$)", text):
+        return "validation"
+    if "training" in text:
+        return "training"
+    if "testing" in text or "/test" in text:
+        return "test"
+    return "unknown"
+
+
+def _preprocess_serialized_womd_with_id(serialized: Any, dataset_cfg: Any, wx_dataloader: Any):
+    """Waymax preprocessor that retains the official WOMD ``scenario/id``.
+
+    This follows the official Waymax custom-loader pattern.  It intentionally
+    fails closed when the installed Waymax/TensorFlow API cannot expose the
+    feature instead of silently reverting to a loader-order-dependent hash.
+    """
+    import tensorflow as tf  # type: ignore
+
+    womd_utils = getattr(wx_dataloader, "womd_utils", None)
+    if womd_utils is None:
+        from waymax.dataloader import womd_utils  # type: ignore
+    features = womd_utils.get_features_description(
+        include_sdc_paths=bool(getattr(dataset_cfg, "include_sdc_paths", False)),
+        max_num_rg_points=int(getattr(dataset_cfg, "max_num_rg_points", 30000)),
+        num_paths=int(getattr(dataset_cfg, "num_paths", 45)),
+        num_points_per_path=int(getattr(dataset_cfg, "num_points_per_path", 800)),
+    )
+    features["scenario/id"] = tf.io.FixedLenFeature([1], tf.string)
+    parsed = tf.io.parse_example(serialized, features)
+    scenario_id = parsed.pop("scenario/id")
+    parsed["scenario/id"] = tf.io.decode_raw(scenario_id, tf.uint8)
+    processed = wx_dataloader.preprocess_womd_example(
+        parsed,
+        aggregate_timesteps=bool(getattr(dataset_cfg, "aggregate_timesteps", True)),
+        max_num_objects=int(getattr(dataset_cfg, "max_num_objects", 64)),
+    )
+    # preprocess_womd_example may preserve unknown keys in some versions and
+    # discard them in others.  Re-attach the decoded bytes explicitly.
+    processed["scenario/id"] = tf.io.decode_raw(scenario_id, tf.uint8)
+    return processed
 
 
 def _paths_to_waymax_path(patterns: Any) -> str:
@@ -412,7 +482,14 @@ def iter_waymax_womd_scenarios(patterns: Any, max_scenarios: int | None, parser_
         )
         return {"state": state, "scenario_id": example.get("scenario/id")}
 
-    parse = functools.partial(wx_dataloader.preprocess_serialized_womd_data, config=dataset_cfg)
+    wx_cfg = cfg.get("waymax", {}) if isinstance(cfg.get("waymax", {}), dict) else {}
+    retain_official_id = bool(wx_cfg.get("retain_official_scenario_id", True))
+    if retain_official_id:
+        parse = functools.partial(
+            _preprocess_serialized_womd_with_id, dataset_cfg=dataset_cfg, wx_dataloader=wx_dataloader
+        )
+    else:
+        parse = functools.partial(wx_dataloader.preprocess_serialized_womd_data, config=dataset_cfg)
     gen = wx_dataloader.get_data_generator(dataset_cfg, parse, _postprocess)
     start_index = max(0, int(cfg.get("scenario_start_index", 0)))
     stride = max(1, int(cfg.get("scenario_stride", 1)))
@@ -426,6 +503,18 @@ def iter_waymax_womd_scenarios(patterns: Any, max_scenarios: int | None, parser_
         if max_scenarios is not None and emitted >= int(max_scenarios):
             break
         state = payload["state"] if isinstance(payload, dict) else payload
-        sid = _scenario_id_from_payload(payload if isinstance(payload, dict) else {}, i, state, cfg)
-        yield raw_scenario_from_waymax_state(state, sid, i, cfg)
+        saved_id, base_id, legacy_id = _scenario_identity_from_payload(
+            payload if isinstance(payload, dict) else {}, i, state, cfg
+        )
+        raw = raw_scenario_from_waymax_state(state, saved_id, i, cfg)
+        raw.metadata.update({
+            "original_scenario_id": base_id,
+            "official_scenario_id": base_id if not base_id.startswith("waymax_") else None,
+            "legacy_scenario_id": legacy_id,
+            "scenario_id_source": "official_womd" if not base_id.startswith("waymax_") else "legacy_state_hash",
+            "womd_source_role": _infer_womd_source_role(patterns),
+            "womd_source_pattern": _paths_to_waymax_path(patterns),
+            "waymax_max_num_objects": int(getattr(dataset_cfg, "max_num_objects", cfg.get("max_agents", 64))),
+        })
+        yield raw
         emitted += 1

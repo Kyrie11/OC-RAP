@@ -1,3 +1,8 @@
+
+## Current development release: v48.28 PROVENANCE-MARGIN-BRIDGE
+
+v48.28 fixes WOMD target provenance for adaptation-dev shadow evaluation, prevents epoch-0 factor checkpoint selection, expands the five-factor harm-logit range, and launches all eight ablations concurrently. See `ALGORITHM_CHANGELOG.md` and `OC-RAP-v48.27-results-audit-and-v48.28-PROVENANCE-MARGIN-BRIDGE-plan-ZH.md`.
+
 # OC-RAP：Observation-Consistent Recovery-Affordance Planner
 
 本仓库是对论文 `post-collision.tex` 中 OC-RAP 方法的可运行实现。实现以论文的 `abstract -> introduction -> method -> appendix -> experiments` 逻辑为主线，并按照 `代码完善指令.md` 对原始代码进行了重构、补全和修复：数据构造、candidate prefix 生成、counterfactual future mining、observation-consistent root 聚类、recovery teacher、OC-MERO、CRISP selector、训练、校准、评估和 papercheck 都已落到 `src/ocrap` 包结构中。

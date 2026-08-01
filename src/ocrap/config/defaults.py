@@ -413,6 +413,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "scenario_worker_index": 0,
     "waymax": {
         "append_scenario_index_to_id": True,
+            "retain_official_scenario_id": True,
         "strict": True,
         "dataloader_include_sdc_paths": True,
         "num_paths": 45,
