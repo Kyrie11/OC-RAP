@@ -180,6 +180,7 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_calibrator_regime_scale: float = 0.25,
         direct_recovery_evidence_unified_experts: bool = False,
         direct_recovery_evidence_component_heads: bool = False,
+        direct_recovery_evidence_component_count: int = 3,
         direct_recovery_evidence_component_scale: float = 2.0,
         direct_recovery_evidence_concord: bool = False,
         direct_recovery_evidence_consensus_disagreement_penalty: float = 0.15,
@@ -268,6 +269,9 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_evidence_component_heads = bool(
             direct_recovery_evidence_component_heads
         )
+        self.direct_recovery_evidence_component_count = max(3, min(5, int(
+            direct_recovery_evidence_component_count
+        )))
         self.direct_recovery_evidence_component_scale = float(
             max(0.0, direct_recovery_evidence_component_scale)
         )
@@ -591,8 +595,9 @@ class OCRAPModel(nn.Module):
         evidence_scalar_dim = 10 if self.direct_recovery_evidence_unified_experts else 4
         evidence_calibrator_input_dim = evidence_scalar_dim + evidence_context_dim
         if self.direct_recovery_evidence_component_heads:
-            # benefit + DRS/deployability/gap harm components
-            evidence_calibrator_output_dim = 4
+            # benefit + all configured non-compensatory harm components.
+            # v48.27 uses DRS/deployability/gap/hard-rule/harm-proxy (5).
+            evidence_calibrator_output_dim = 1 + self.direct_recovery_evidence_component_count
         else:
             evidence_calibrator_output_dim = (
                 3 if self.direct_recovery_evidence_calibrator_mode == "simplex_context" else 2
@@ -637,7 +642,10 @@ class OCRAPModel(nn.Module):
             else None
         )
         self.direct_evidence_concord_harm_calibrator = (
-            _make_evidence_calibrator(3 if self.direct_recovery_evidence_component_heads else 1)
+            _make_evidence_calibrator(
+                self.direct_recovery_evidence_component_count
+                if self.direct_recovery_evidence_component_heads else 1
+            )
             if self.direct_recovery_value_head
             and self.direct_recovery_delta_head
             and self.direct_recovery_evidence_calibrator
@@ -1158,7 +1166,7 @@ class OCRAPModel(nn.Module):
                 unified_benefit_logit = base_benefit + benefit_residual
                 if self.direct_recovery_evidence_component_heads:
                     component_residual = (
-                        torch.tanh(harm_raw[:, :3])
+                        torch.tanh(harm_raw[:, : self.direct_recovery_evidence_component_count])
                         * self.direct_recovery_evidence_component_scale
                     )
                     # v48.23 FRONTIER: a zero network output must mean the
@@ -1277,7 +1285,7 @@ class OCRAPModel(nn.Module):
                     # reset: zero-initialized, bounded, absolute candidate-vs-
                     # nominal logits learned jointly across all regimes.
                     unified_component_harm_logits = (
-                        torch.tanh(combined_residual[:, 1:4])
+                        torch.tanh(combined_residual[:, 1 : 1 + self.direct_recovery_evidence_component_count])
                         * self.direct_recovery_evidence_component_scale
                     )
                     unified_harm_logit = unified_component_harm_logits.amax(dim=-1)

@@ -1,0 +1,30 @@
+OC-RAP v48.27 FACTOR-PHYSICS-BRIDGE local validation
+====================================================
+
+Validation date: 2026-08-01
+
+PASS  PYTHONPATH="$PWD/src" python -m pytest -q
+      242 passed, 5 warnings
+
+PASS  python -m compileall -q src tools tests
+
+PASS  find scripts -maxdepth 1 -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+
+PASS  Focused v48.27 checks:
+      - five non-compensatory harm heads and semantic prior identity
+      - train/inference/checkpoint component-count persistence
+      - deployment-exact safe-utility regression/listwise/frontier scale
+      - raw-benefit model semantics vs safe-benefit Natural-gate semantics
+      - canonical WOMD target IDs and complete strict shadow scan
+      - empty physical metrics fail closed instead of reporting zeros
+      - factor/admission two-stage isolation
+      - four-wave two-A30 ablation assignment
+
+NOT RUN in this environment:
+      - real WOMD/Waymax training
+      - two-A30 v48.27 main experiment
+      - repaired v48.26 adaptation-dev shadow
+      - Natural-gate/certificate result for v48.27
+      - authorized held-out test/stress
+
+No claim is made that v48.27 already achieves RC=0 or the paper-level closed-loop targets.

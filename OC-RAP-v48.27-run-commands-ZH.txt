@@ -1,0 +1,296 @@
+OC-RAP v48.27 FACTOR-PHYSICS-BRIDGE 执行指令
+================================================
+
+重要说明
+--------
+
+1. v48.26 的 RC=20 是有效 Natural-gate 拒绝：pipeline_valid=true、gate_evaluated=true、test_roots_read=false。
+2. v48.26 dev-shadow 没有得到物理结果：16 个 target 全部未匹配，四组 audit 均为 0 scene。
+3. 第二节可用 v48.27 runner 在不重训的情况下修复并重跑现有 v48.26 dev-shadow。
+4. repair-only shadow 只用于诊断 v48.26 checkpoint，不能验证 v48.27 的五因子与两阶段训练。
+5. 完整 v48.27 主实验见第三节。
+6. 不得手工创建 NEXT_COMMANDS.txt；只有 RC=0 时 certificate controller 才会自动生成。
+7. 当前 certificate 已被多轮查看，只能作为开发证据；最终论文确认需要新封存/预注册 certificate population。
+
+一、解压与环境
+--------------
+
+unzip -q OC-RAP-v48.27-FACTOR-PHYSICS-BRIDGE.zip
+cd OC-RAP-v48.27-FACTOR-PHYSICS-BRIDGE
+export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
+
+# 保持服务器上的实际路径；路径不同只修改这里。
+export OCRAP_ROOT=/data0/senzeyu2/dataset/OCRAP
+export PROTOCOL_ROOT=$OCRAP_ROOT/calibration_v48_14_prism_4814
+export CAL_SAFE=$OCRAP_ROOT/calibration_safe
+export SOURCE_RUN=runs/ocrap_v48_13_terra_proxy_4801
+export GPU0=0
+export GPU1=1
+
+# 必须是包含全部 validation_interactive shards 的原始 WOMD/Waymax source。
+# 若你的环境变量 WOMD_VAL_INTERACTIVE 已配置正确，可直接使用它。
+export DEV_SHADOW_WOMD_SOURCE=${WOMD_VAL_INTERACTIVE:-/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation_interactive/validation_interactive_tfexample.tfrecord@150}
+
+export OMP_NUM_THREADS=2
+export MKL_NUM_THREADS=2
+export OPENBLAS_NUM_THREADS=2
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:128
+
+# 本地静态复核。预期 242 passed，5 warnings。
+python -m compileall -q src tools tests
+python -m pytest -q
+find scripts -maxdepth 1 -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+
+二、先修复并重跑现有 v48.26 adaptation-dev shadow
+----------------------------------------------------
+
+# OUT 必须指向服务器上保留 checkpoint、calibration、POLICY_CONTRACT.env 的完整 v48.26 主实验目录。
+export V4826_OUT=runs/ocrap_v48_26_execution_physics_dedicated_4826
+
+set +e
+OUT="$V4826_OUT" \
+OCRAP_ROOT="$OCRAP_ROOT" \
+PROTOCOL_ROOT="$PROTOCOL_ROOT" \
+GPU0="$GPU0" GPU1="$GPU1" \
+DEV_SHADOW_WOMD_SOURCE="$DEV_SHADOW_WOMD_SOURCE" \
+DEV_SHADOW_RAW_MAX_SCENARIOS=0 \
+AUDIT_TARGETS=16 AUDIT_LABELS=192 \
+AUDIT_MAX_ROLLOUTS=8 AUDIT_MAX_STEPS=24 \
+SHADOW_BOOTSTRAP=2000 CL_RESUME=0 \
+bash scripts/repair_v48_26_dev_shadow_with_v48_27.sh \
+  > "$V4826_OUT/dev_shadow_repair_controller.log" 2>&1
+SHADOW_REPAIR_RC=$?
+set -e
+
+echo "v48.26 shadow repair rc=$SHADOW_REPAIR_RC"
+cat "$V4826_OUT/dev_shadow_closed_loop/DEV_SHADOW_COMPLETE.json" 2>/dev/null || true
+
+必须确认：
+
+python - "$V4826_OUT" <<'PY'
+import json,pathlib,sys
+root=pathlib.Path(sys.argv[1])/'dev_shadow_closed_loop'
+d=json.load(open(root/'DEV_SHADOW_COMPLETE.json'))
+assert d.get('complete') is True, d
+for variant in ('balanced','precision'):
+    for regime in ('near','contact'):
+        p=root/variant/f'{regime}_dev_shadow_paired.json'
+        x=json.load(open(p))
+        assert int(x.get('num_paired',0) or 0)>0, (p,x)
+print('v48.26 repaired shadow is non-empty and paired')
+PY
+
+若仍为 0 target match：
+
+- 检查 DEV_SHADOW_WOMD_SOURCE 是否与构建 evidence_adapt_dev 使用的 raw source 一致；
+- 不要设置 DEV_SHADOW_RAW_MAX_SCENARIOS 为小于完整 validation_interactive 的值；
+- 查看各 variant 的 near_controller.log/contact_controller.log 中 target_scene_examples 与 raw scenario id；
+- repair 脚本会 fail-fast，不会再把空指标当成 0。
+
+三、运行完整 v48.27 主实验
+--------------------------
+
+export OUTPUTDIR=runs/ocrap_v48_27_factor_physics_dedicated_4827
+mkdir -p "$OUTPUTDIR"
+
+set +e
+OUTPUTDIR="$OUTPUTDIR" \
+OCRAP_ROOT="$OCRAP_ROOT" \
+SOURCE_RUN="$SOURCE_RUN" \
+PROTOCOL_ROOT="$PROTOCOL_ROOT" \
+CAL_SAFE="$CAL_SAFE" \
+GPU0="$GPU0" GPU1="$GPU1" \
+PROPOSAL_TOP_K=3 \
+BATCH_SIZE=96 NUM_WORKERS=3 PREFETCH_FACTOR=3 \
+FACTOR_EPOCHS=20 FACTOR_PATIENCE=6 \
+ADMISSION_EPOCHS=18 ADMISSION_PATIENCE=6 \
+EVIDENCE_ADAPT_LR=0.00015 \
+bash scripts/run_v48_27_factor_physics_dedicated.sh \
+  > "$OUTPUTDIR/controller.log" 2>&1
+RC=$?
+set -e
+
+echo "v48.27 main rc=$RC"
+cat "$OUTPUTDIR/V48_27_COMPLETE.json" 2>/dev/null || true
+
+返回码：
+
+RC=0
+  工程、两阶段训练、五因子模型合同、adaptation-dev rule 和完整 certificate 均有效，
+  Near 与 Contact Natural gate 通过。只执行第四节授权命令。
+
+RC=20
+  pipeline_valid=true 且 gate_evaluated=true，但 development rule 或 certificate verification 被拒绝。
+  禁止读取 test/stress；执行第五、六节。
+
+RC=30
+  工程、协议、索引、训练、checkpoint/model-contract、空工件或运行异常。
+  不得做算法归因；只检查：
+    $OUTPUTDIR/PIPELINE_FAILED.json
+    $OUTPUTDIR/V48_27_COMPLETE.json
+    $OUTPUTDIR/logs/
+    $OUTPUTDIR/candidates/*/MODEL_INFERENCE_CONTRACT.json
+    $OUTPUTDIR/candidates/*/TWO_STAGE_TRAINING_COMPLETE.json
+    $OUTPUTDIR/candidates/*/model_v48_trac_sr/train_summary.json
+
+主实验必须确认：
+
+cat "$OUTPUTDIR/candidates/balanced/MODEL_INFERENCE_CONTRACT.json"
+cat "$OUTPUTDIR/candidates/precision/MODEL_INFERENCE_CONTRACT.json"
+cat "$OUTPUTDIR/candidates/balanced/TWO_STAGE_TRAINING_COMPLETE.json"
+cat "$OUTPUTDIR/candidates/precision/TWO_STAGE_TRAINING_COMPLETE.json"
+
+四、只有 RC=0 才运行自动授权的 held-out stress
+------------------------------------------------
+
+test -s "$OUTPUTDIR/NEXT_COMMANDS.txt"
+cat "$OUTPUTDIR/NEXT_COMMANDS.txt"
+
+OUT="$OUTPUTDIR" \
+OCRAP_ROOT="$OCRAP_ROOT" \
+GPU0="$GPU0" GPU1="$GPU1" \
+CL_RESUME=0 \
+bash scripts/run_v48_27_stress_if_authorized.sh \
+  > "$OUTPUTDIR/stress_controller.log" 2>&1
+
+注意：
+- 缺少 NEXT_COMMANDS.txt 时 wrapper 返回 RC=20；不得手工补文件。
+- Safe 仍通过 nominal-first 与 paired non-inferiority 验证；当前没有独立 Safe policy Natural-gate population。
+
+五、RC=20 后运行 v48.27 adaptation-dev shadow
+-----------------------------------------------
+
+OUT="$OUTPUTDIR" \
+OCRAP_ROOT="$OCRAP_ROOT" \
+PROTOCOL_ROOT="$PROTOCOL_ROOT" \
+GPU0="$GPU0" GPU1="$GPU1" \
+DEV_SHADOW_WOMD_SOURCE="$DEV_SHADOW_WOMD_SOURCE" \
+DEV_SHADOW_RAW_MAX_SCENARIOS=0 \
+AUDIT_TARGETS=16 AUDIT_LABELS=192 \
+AUDIT_MAX_ROLLOUTS=8 AUDIT_MAX_STEPS=24 \
+SHADOW_BOOTSTRAP=2000 CL_RESUME=0 \
+bash scripts/run_v48_27_dev_shadow_closed_loop.sh \
+  > "$OUTPUTDIR/dev_shadow_controller.log" 2>&1
+
+主要输出：
+
+$OUTPUTDIR/dev_shadow_closed_loop/DEV_SHADOW_COMPLETE.json
+$OUTPUTDIR/dev_shadow_closed_loop/balanced/near_dev_shadow_paired.json
+$OUTPUTDIR/dev_shadow_closed_loop/balanced/contact_dev_shadow_paired.json
+$OUTPUTDIR/dev_shadow_closed_loop/precision/near_dev_shadow_paired.json
+$OUTPUTDIR/dev_shadow_closed_loop/precision/contact_dev_shadow_paired.json
+
+完成后必须检查：
+
+python - "$OUTPUTDIR" <<'PY'
+import json,pathlib,sys
+root=pathlib.Path(sys.argv[1])/'dev_shadow_closed_loop'
+d=json.load(open(root/'DEV_SHADOW_COMPLETE.json'))
+assert d.get('complete') is True, d
+for v in ('balanced','precision'):
+  for r in ('near','contact'):
+    p=root/v/f'{r}_dev_shadow_paired.json'
+    x=json.load(open(p))
+    assert int(x.get('num_paired',0) or 0)>0, (p,x)
+print('shadow results are non-empty and paired')
+PY
+
+该结果只能用于算法定位，不能作为论文 held-out 结果或选择 test threshold。
+
+六、RC=20 后运行 8 个双卡消融
+--------------------------------
+
+export ABLATION_ROOT=runs/ocrap_v48_27_factor_physics_ablations_4827
+mkdir -p "$ABLATION_ROOT"
+
+ABLATION_ROOT="$ABLATION_ROOT" \
+OCRAP_ROOT="$OCRAP_ROOT" \
+SOURCE_RUN="$SOURCE_RUN" \
+PROTOCOL_ROOT="$PROTOCOL_ROOT" \
+CAL_SAFE="$CAL_SAFE" \
+GPU0="$GPU0" GPU1="$GPU1" \
+BATCH_SIZE=72 NUM_WORKERS=2 PREFETCH_FACTOR=2 \
+FACTOR_EPOCHS=20 FACTOR_PATIENCE=6 \
+ADMISSION_EPOCHS=18 ADMISSION_PATIENCE=6 \
+bash scripts/run_v48_27_parallel_ablations.sh \
+  > "$ABLATION_ROOT/controller.log" 2>&1
+
+cat "$ABLATION_ROOT/TASK_GPU_ASSIGNMENT.txt"
+cat "$ABLATION_ROOT/ABLATIONS_STATUS.json"
+
+四个 wave：
+
+A_three_factor_joint
+  旧三风险因子 + 联合训练，用于验证 v48.26 表示合同。
+
+B_five_factor_joint
+  A + hard-rule/harm-proxy 两个不可补偿风险因子。
+
+C_five_factor_two_stage_regression
+  B + factor/admission 两阶段解耦 + deployment-exact safe-utility regression。
+
+D_full_factor_physics_bridge
+  C + deployment-exact safe-utility listwise 和 frontier contrast。
+
+调度：
+- 每个 wave：Balanced 独占 GPU0，Precision 独占 GPU1；
+- 一张卡同时只运行一个任务；
+- 每张 GPU 共四个任务；最大并发 2。
+
+七、结果判读
+------------
+
+1. 先看 development rule：
+   - `dev_frozen_rule_*_v48.json` 是否存在正式 `rule`；
+   - `source_rule_satisfied_dev_constraints=true`；
+   - rejection_kind 是否为 development_rule_fit_rejection。
+
+2. 再看完整 certificate：
+   - proposal oracle 是否继续 feasible；
+   - selected、safe-positive precision/LCB、harmful UCB、recall；
+   - selected teacher advantage mean；
+   - macro concentration。
+
+3. Near 离线目标：
+   - Precision 的 conditional harm AUC 与低 false-switch 应保留；
+   - Balanced A/B 中的正 mean advantage 应由 C/D 保留或提高；
+   - safe-positive recall > 0，selected harmful 显著下降；
+   - correlation 转正、top-1 regret 下降。
+
+4. Contact 离线目标：
+   - positive selected 不再只有 1；
+   - harmful selected rate 从约 44%–46% 大幅下降；
+   - selected teacher advantage mean 转正；
+   - correlation 转正、safe-positive AUC/harm AUC 同时改善；
+   - macro concentration 受控。
+
+5. Near shadow：
+   - collision/overlap 非劣；
+   - minimum/terminal clearance 和 TTC 提升；
+   - near/critical exposure duration、episode、longest run 和 deficit AUC 降低；
+   - intervention burst、route progression、jerk、yaw-rate 合格。
+
+6. Contact shadow：
+   - secondary/re-contact、overlap duration/longest run 降低；
+   - free-space AUC、terminal clearance、sustained escape、stable-stop quality 提升；
+   - time-to-escape/time-to-stable-stop 缩短；
+   - offroad、route progression、jerk、yaw-rate 和干预负担受控。
+
+关键归因：
+
+- B>A：五因子 harm 表示缺失是主要瓶颈。
+- C>B：联合稀疏 admission 梯度污染 factor learning。
+- D>C：execution-exact listwise/frontier 有额外价值。
+- 离线改善但 shadow 不改善：PCD teacher 未充分表达时间恢复过程；下一轮应预注册 candidate-level physical rollout auxiliary labels。
+- dev rule 有效、certificate 失败：泛化或有限样本问题，不得读取 test/stress。
+- proposal oracle 失败：proposal/标签/gate 合同结构问题；不要继续重复 calibrator。
+
+八、禁止操作
+------------
+
+- RC=20/30 时不要读取 test/stress；
+- 不要手工创建 NEXT_COMMANDS.txt；
+- 不要根据本轮结果事后降低 gate；
+- 不要把空 shadow 指标的 0 当成安全；
+- 不要把当前已反复查看的 certificate 当成最终 untouched paper certificate；
+- 没有 candidate-level physical labels 时，不要把闭环汇总指标直接写成训练监督。

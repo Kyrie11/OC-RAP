@@ -396,7 +396,7 @@ def _fit(
                         args.positive_gain, args.negative_gain,
                         confidence_level=args.certificate_confidence_level,
                         bound_type=args.certificate_bound_type,
-                        safe_positive_only=args.opportunity_label_mode == "safe_benefit",
+                        safe_positive_only=args.gate_positive_mode == "safe_benefit",
                     )
                     lcb = float(m["precision_wilson_lcb90"] or 0.0)
                     harm_ucb = float(m["harmful_group_exposure_ucb90"])
@@ -452,7 +452,7 @@ def _fit(
             groups, [], float("inf"), float("inf"), args.positive_gain, args.negative_gain,
             confidence_level=args.certificate_confidence_level,
             bound_type=args.certificate_bound_type,
-            safe_positive_only=args.opportunity_label_mode == "safe_benefit",
+            safe_positive_only=args.gate_positive_mode == "safe_benefit",
         )
         return None, empty, [], frontier[:40]
     candidates.sort(
@@ -514,7 +514,14 @@ def main() -> int:
     ap.add_argument(
         "--opportunity-label-mode", choices=["raw_benefit", "safe_benefit"],
         default="raw_benefit",
-        help="safe_benefit counts only beneficial candidates that do not trigger the declared harm label.",
+        help="Semantic target of the learned opportunity head.",
+    )
+    ap.add_argument(
+        "--gate-positive-mode", choices=["raw_benefit", "safe_benefit"],
+        default="safe_benefit",
+        help=("Ground-truth positive used by support, precision and recall. "
+              "The Natural gate should remain safe_benefit even when the model "
+              "factorizes raw benefit and component harm into separate heads."),
     )
     ap.add_argument("--component-harm-drs-tolerance", type=float, default=0.05)
     ap.add_argument("--component-harm-dep-tolerance", type=float, default=0.05)
@@ -733,7 +740,7 @@ def main() -> int:
             num_groups=len(fit),
             num_opportunities=sum(
                 g["has_safe_opportunity"]
-                if args.opportunity_label_mode == "safe_benefit"
+                if args.gate_positive_mode == "safe_benefit"
                 else g["oracle_best_teacher_adv"] >= args.positive_gain
                 for g in fit
             ),
@@ -779,7 +786,7 @@ def main() -> int:
             num_groups=len(fit),
             num_opportunities=sum(
                 g["has_safe_opportunity"]
-                if args.opportunity_label_mode == "safe_benefit"
+                if args.gate_positive_mode == "safe_benefit"
                 else g["oracle_best_teacher_adv"] >= args.positive_gain
                 for g in fit
             ),
@@ -795,7 +802,7 @@ def main() -> int:
             num_groups=len(verify),
             num_opportunities=sum(
                 g["has_safe_opportunity"]
-                if args.opportunity_label_mode == "safe_benefit"
+                if args.gate_positive_mode == "safe_benefit"
                 else g["oracle_best_teacher_adv"] >= args.positive_gain
                 for g in verify
             ),
@@ -890,13 +897,13 @@ def main() -> int:
         verify, verify_top1, score_thr, rank_margin_thr, args.positive_gain, args.negative_gain,
         confidence_level=args.certificate_confidence_level,
         bound_type=args.certificate_bound_type,
-        safe_positive_only=args.opportunity_label_mode == "safe_benefit",
+        safe_positive_only=args.gate_positive_mode == "safe_benefit",
     )
     all_metrics = _metrics(
         groups, all_top1, score_thr, rank_margin_thr, args.positive_gain, args.negative_gain,
         confidence_level=args.certificate_confidence_level,
         bound_type=args.certificate_bound_type,
-        safe_positive_only=args.opportunity_label_mode == "safe_benefit",
+        safe_positive_only=args.gate_positive_mode == "safe_benefit",
     )
     near_miss_verify_frontier: list[dict[str, Any]] = []
     for fit_row in near_miss[:20]:
@@ -914,7 +921,7 @@ def main() -> int:
             args.positive_gain, args.negative_gain,
             confidence_level=args.certificate_confidence_level,
             bound_type=args.certificate_bound_type,
-            safe_positive_only=args.opportunity_label_mode == "safe_benefit",
+            safe_positive_only=args.gate_positive_mode == "safe_benefit",
         )
         near_miss_verify_frontier.append({
             "fit_constraint_deficit": float(fit_row.get("constraint_deficit", 0.0)),
@@ -1208,7 +1215,7 @@ def main() -> int:
     )
 
     evidence_switches = [r for r in proposal_evidence_top1 if float(r["pred_adv"]) > 0.0]
-    if args.opportunity_label_mode == "safe_benefit":
+    if args.gate_positive_mode == "safe_benefit":
         evidence_nonpositive = [r for r in proposal_evidence_top1 if not bool(r.get("has_safe_opportunity", False))]
         evidence_positive = [r for r in proposal_evidence_top1 if bool(r.get("has_safe_opportunity", False))]
     else:
@@ -1220,7 +1227,7 @@ def main() -> int:
     for r in evidence_positive:
         oracle_adv = (
             r.get("oracle_best_safe_teacher_adv")
-            if args.opportunity_label_mode == "safe_benefit"
+            if args.gate_positive_mode == "safe_benefit"
             else r.get("oracle_best_teacher_adv")
         )
         if oracle_adv is not None:
@@ -1303,6 +1310,11 @@ def main() -> int:
     if not args.development_fit_only and verify_macro_bad:
         warnings.append("held-out selections exceed the macro concentration budget")
 
+    if (
+        args.verification_only and frozen_rule_source is not None
+        and not bool(frozen_rule_source.get("source_rule_satisfied_dev_constraints", False))
+    ):
+        warnings.append("adaptation-dev failed to produce a rule satisfying development constraints")
     valid = bool(not warnings and not args.development_fit_only)
 
     # A failed deployment certificate must still be usable for an explicitly
@@ -1355,6 +1367,10 @@ def main() -> int:
             "development_fit_only" if args.development_fit_only else
             None if valid else
             "structural_support_infeasible" if not bool(support_feasibility["overall"]) else
+            "development_rule_fit_rejection"
+            if args.verification_only and frozen_rule_source is not None
+            and not bool(frozen_rule_source.get("source_rule_satisfied_dev_constraints", False)) else
+            "certificate_verification_rejection" if args.verification_only else
             "learned_gate_rejection"
         ),
         "selection_rule": (
@@ -1365,6 +1381,7 @@ def main() -> int:
         "risk_source": args.risk_source,
         "harm_label_mode": args.harm_label_mode,
         "opportunity_label_mode": args.opportunity_label_mode,
+        "gate_positive_mode": args.gate_positive_mode,
         "component_harm_tolerances": component_tolerances.__dict__,
         "certificate_confidence": {
             "level": float(args.certificate_confidence_level),

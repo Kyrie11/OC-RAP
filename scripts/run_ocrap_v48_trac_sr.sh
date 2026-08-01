@@ -903,9 +903,10 @@ run_audit() {
   local tag="$1"; local b="$2"; local gpu="$3"; local targets="${4:-32}"; local labels="${5:-384}"
   make_sel "$tag"
   local bucket="$NEAR_TEST"
+  local shadow_womd_source="${DEV_SHADOW_WOMD_SOURCE:-$WOMD_VAL_INTERACTIVE@150}"
   [[ "$b" == "contact" ]] && bucket="$CONTACT_TEST"
   CUDA_VISIBLE_DEVICES="$gpu" PYTHONUNBUFFERED=1 python -u -m ocrap.cli closed-loop \
-    --dataset "$WOMD_VAL_INTERACTIVE@150" --checkpoint "$CKPT" \
+    --dataset "$shadow_womd_source" --checkpoint "$CKPT" \
     --output "$RUN/audit_${b}_selected_topk_v48_${tag}.json" \
     "${COMMON_SEL[@]}" \
     --set closed_loop.method=ocrap \
@@ -918,7 +919,8 @@ run_audit() {
     --set closed_loop.bucket_split=${BUCKET_SPLIT:-test} \
     --set closed_loop.max_bucket_targets="$targets" \
     --set closed_loop.max_rollouts=${AUDIT_MAX_ROLLOUTS:-12} \
-    --set closed_loop.raw_max_scenarios=900 \
+    --set closed_loop.require_bucket_targets=true \
+    --set closed_loop.raw_max_scenarios=${DEV_SHADOW_RAW_MAX_SCENARIOS:-0} \
     --set closed_loop.max_steps=${AUDIT_MAX_STEPS:-20} \
     --set closed_loop.replan_interval_steps=${AUDIT_REPLAN_INTERVAL:-1} \
     --set closed_loop.num_candidate_prefixes=${AUDIT_NUM_CANDIDATES:-12} \
@@ -943,7 +945,11 @@ assert_json() {
   python - <<'JSONCHECK' "$path"
 import json, sys
 with open(sys.argv[1]) as f:
-    json.load(f)
+    doc=json.load(f)
+if doc.get("bucket_dataset") and int(doc.get("bucket_matched_rollouts", 0) or 0) <= 0:
+    raise SystemExit(f"targeted closed-loop audit matched zero rollouts: {sys.argv[1]}")
+if doc.get("metrics_valid") is False:
+    raise SystemExit(f"closed-loop metrics are invalid/empty: {sys.argv[1]}")
 JSONCHECK
 }
 

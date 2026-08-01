@@ -6,6 +6,7 @@ from typing import Any
 import hashlib
 import json
 import os
+import re
 from time import perf_counter
 
 import numpy as np
@@ -115,6 +116,18 @@ class ClosedLoopDecision:
     drs: float | None
     nup: float
     metrics_after_step: dict[str, float]
+
+
+def _canonical_womd_scene_id(value: Any) -> str:
+    """Normalize OC-RAP/Waymax IDs without depending on dataloader order.
+
+    Offline builders append ``__wx########`` to make filenames unique. Closed-loop
+    dataloaders may enumerate the same WOMD scene at a different index or source
+    pattern, so exact string matching can miss every requested target. The WOMD
+    scenario/base hash is stable; only the loader suffix is operational.
+    """
+    text = str(value or "").strip()
+    return re.sub(r"__wx\d{8}$", "", text)
 
 
 def _safe_float(x: Any, default: float = 0.0) -> float:
@@ -1894,6 +1907,8 @@ def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, s
         "num_decisions": int(sum(int(s.get("num_decisions", 0)) for s in scene_results)),
         "num_metric_steps": int(sum(int(s.get("num_metric_steps", 0)) for s in scene_results)),
         "label_modes": sorted({str(s.get("label_mode", "unknown")) for s in scene_results}),
+        "metrics_valid": bool(scene_results),
+        "empty_reason": None if scene_results else "no_closed_loop_scenes",
     }
     for k in keys:
         vals = [s.get(k, None) for s in scene_results if int(s.get("num_decisions", 0)) > 0]
@@ -1914,7 +1929,7 @@ def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, s
         pairs = [((s.get("metric_summary", {}) or {}).get(mk, None), int(s.get("num_metric_steps", 0))) for s in scene_results]
         finite = [(float(v), w) for v, w in pairs if v is not None and np.isfinite(float(v))]
         if not finite:
-            agg["waymax_metrics"][mk] = 0.0
+            agg["waymax_metrics"][mk] = None
         elif mk.endswith("_count") or mk in {"overlap_episode_count", "num_metric_steps"}:
             agg["waymax_metrics"][mk] = float(sum(v for v, _ in finite))
         elif mk.endswith("_any"):
@@ -1933,13 +1948,13 @@ def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, s
         vals = [float((sc.get("metric_summary", {}) or {}).get(name)) for sc in scene_results
                 if (sc.get("metric_summary", {}) or {}).get(name) is not None
                 and np.isfinite(float((sc.get("metric_summary", {}) or {}).get(name)))]
-        return float(np.mean(vals)) if vals else 0.0
+        return float(np.mean(vals)) if vals else None
     def _step_weighted(name: str) -> float:
         vals = [(float((sc.get("metric_summary", {}) or {}).get(name)), int(sc.get("num_metric_steps", 0)))
                 for sc in scene_results if (sc.get("metric_summary", {}) or {}).get(name) is not None
                 and np.isfinite(float((sc.get("metric_summary", {}) or {}).get(name)))]
         den = sum(max(w, 0) for _, w in vals)
-        return float(sum(v * max(w, 0) for v, w in vals) / max(den, 1)) if vals else 0.0
+        return float(sum(v * max(w, 0) for v, w in vals) / max(den, 1)) if vals and den > 0 else None
     agg["collision_scene_rate"] = _scene_mean("overlap_any")
     agg["collision_step_rate"] = _step_weighted("overlap_mean")
     agg["offroad_scene_rate"] = _scene_mean("offroad_any")
@@ -1951,8 +1966,8 @@ def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, s
     agg["new_stable_stop_scene_rate"] = _scene_mean("new_stable_stop_event")
     agg["new_stable_stop_quality_scene_rate"] = _scene_mean("new_stable_stop_quality_event")
     agg["post_contact_escape_scene_rate"] = _scene_mean("post_contact_escape_event")
-    agg["minimum_clearance_m"] = float(wm.get("min_clearance_m_min", 0.0))
-    agg["minimum_ttc_s"] = float(wm.get("ttc_s_min", 0.0))
+    agg["minimum_clearance_m"] = wm.get("min_clearance_m_min")
+    agg["minimum_ttc_s"] = wm.get("ttc_s_min")
     # Distribution across scenes is the publication-level unit; do not average
     # per-scene p05 values and call it a global p05.
     for base in ("min_clearance_m", "ttc_s"):
@@ -2038,25 +2053,31 @@ def _load_closed_loop_targets(dataset_spec: str | None, cfg: dict) -> list[dict[
         if split_filter and split != split_filter:
             continue
         scene_id = str(scalar_metadata_for_path(p, "scene_id", ""))
-        if not scene_id:
+        original_scene_id = str(scalar_metadata_for_path(p, "original_scenario_id", ""))
+        if not scene_id and not original_scene_id:
+            continue
+        canonical_scene_id = _canonical_womd_scene_id(original_scene_id or scene_id)
+        if not canonical_scene_id:
             continue
         try:
             time_index = int(float(scalar_metadata_for_path(p, "time_index", 0)))
         except Exception:
             continue
         bucket = _dataset_label_for_sample_path(Path(p))
-        key = (bucket, scene_id, time_index)
+        key = (bucket, canonical_scene_id, time_index)
         if key in seen:
             continue
-        if per_scene.get(scene_id, 0) >= max_per_scene:
+        if per_scene.get(canonical_scene_id, 0) >= max_per_scene:
             continue
         seen.add(key)
-        per_scene[scene_id] = per_scene.get(scene_id, 0) + 1
+        per_scene[canonical_scene_id] = per_scene.get(canonical_scene_id, 0) + 1
         targets.append({
             "bucket_name": bucket,
-            "scene_id": scene_id,
+            "scene_id": canonical_scene_id,
+            "saved_scene_id": scene_id,
+            "original_scenario_id": original_scene_id or None,
             "time_index": int(time_index),
-            "target_key": f"{bucket}:{scene_id}:t{int(time_index)}",
+            "target_key": f"{bucket}:{canonical_scene_id}:t{int(time_index)}",
         })
         if max_targets > 0 and len(targets) >= max_targets:
             break
@@ -2426,7 +2447,7 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
         )
     target_map: dict[str, list[dict[str, Any]]] = {}
     for t in targets:
-        target_map.setdefault(str(t["scene_id"]), []).append(t)
+        target_map.setdefault(_canonical_womd_scene_id(t["scene_id"]), []).append(t)
     run_fingerprint = _closed_loop_fingerprint(dataset_patterns, checkpoint, method, target_spec, local)
     total_rollouts = max_rollouts if targets else max_scenes
     resume_meta: dict[str, Any] = {"sources": [], "legacy_sources": [], "prior_raw_scenarios_seen": 0}
@@ -2470,12 +2491,13 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
             "journal": str(journal_path),
         }, flush=True)
     if progress and targets:
-        print({"event": "closed_loop_bucket_targets_loaded", "num_targets": len(targets), "num_target_scenes": len(target_map), "max_rollouts": max_rollouts, "raw_max_scenarios": raw_max_scenarios}, flush=True)
+        print({"event": "closed_loop_bucket_targets_loaded", "num_targets": len(targets), "num_target_scenes": len(target_map), "target_scene_examples": sorted(target_map)[:5], "max_rollouts": max_rollouts, "raw_max_scenarios": raw_max_scenarios}, flush=True)
     new_scenes_since_partial = 0
     for i, raw in enumerate(iter_waymax_womd_scenarios(dataset_patterns, max_scenarios=raw_max_scenarios if targets else max_scenes, parser_cfg=local)):
         raw_seen_this_run += 1
         raw_seen = max(raw_seen, raw_seen_this_run)
-        raw_targets = target_map.get(str(raw.scenario_id), []) if targets else [{"bucket_name": None, "time_index": None, "target_key": None}]
+        raw_canonical_id = _canonical_womd_scene_id(raw.scenario_id)
+        raw_targets = target_map.get(raw_canonical_id, []) if targets else [{"bucket_name": None, "time_index": None, "target_key": None}]
         if targets and not raw_targets:
             continue
         for target in raw_targets:
@@ -2549,6 +2571,7 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
                     "bucket_matched_rollouts": matched_targets,
                     "raw_scenarios_seen": raw_seen,
                     "raw_scenarios_seen_this_run": raw_seen_this_run,
+                    "target_id_matching": "canonical_without_waymax_loader_suffix",
                 })
                 write_json(partial, partial_path, fsync=resume_fsync)
                 new_scenes_since_partial = 0
@@ -2586,6 +2609,7 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
             "bucket_matched_rollouts": matched_targets,
             "raw_scenarios_seen": raw_seen,
             "raw_scenarios_seen_this_run": raw_seen_this_run,
+            "target_id_matching": "canonical_without_waymax_loader_suffix",
         })
         write_json(partial, partial_path, fsync=resume_fsync)
     result = _aggregate_with_buckets(scene_results, method, source)

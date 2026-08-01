@@ -1504,7 +1504,8 @@ def direct_uncertainty_recovery_value_loss(
         component_harm_logits = pred_component_harm_logits.float()
         if component_harm_logits.ndim != 2 or component_harm_logits.shape[-1] < 3:
             raise ValueError(
-                "pred_component_harm_logits must have shape [N, >=3] for DRS/deployability/gap"
+                "pred_component_harm_logits must have shape [N, >=3]; "
+                "v48.27 uses five DRS/deployability/gap/hard/harm-proxy components"
             )
     point_mean = torch.sigmoid(raw_score)
     logvar = pred_logvar.float().reshape(-1).clamp(-7.0, 2.0)
@@ -1632,14 +1633,21 @@ def direct_uncertainty_recovery_value_loss(
                 tolerances=tolerances,
             ).detach()
             factorized_harm_margin = factorized_component_margins.max(dim=-1).values
-            factorized_component_targets = component_veto_soft_target(
-                factorized_component_margins[:, :3],
-                temperature=float(ordinal_evidence_factorized_harm_temperature),
-            ).detach()
-            if component_harm_logits is not None:
+            component_count = (
+                min(int(component_harm_logits.shape[-1]), int(factorized_component_margins.shape[-1]))
+                if component_harm_logits is not None else 0
+            )
+            factorized_component_targets = (
+                component_veto_soft_target(
+                    factorized_component_margins[:, :component_count],
+                    temperature=float(ordinal_evidence_factorized_harm_temperature),
+                ).detach()
+                if component_count > 0 else None
+            )
+            if component_harm_logits is not None and component_count > 0:
                 component_harm_delta_logits = (
-                    component_harm_logits[recs, :3]
-                    - component_harm_logits[nom, :3].unsqueeze(0)
+                    component_harm_logits[recs, :component_count]
+                    - component_harm_logits[nom, :component_count].unsqueeze(0)
                 )
             factorized_harm_margin_check = component_veto_margin_torch(
                 candidate_drs=teacher_drs[recs],
@@ -2139,7 +2147,7 @@ def direct_uncertainty_recovery_value_loss(
                         factorized_component_targets.to(dtype=component_harm_delta_logits.dtype),
                         reduction="none",
                     )
-                    component_binary = factorized_component_margins[:, :3] > 0.0
+                    component_binary = factorized_component_margins[:, :component_harm_delta_logits.shape[-1]] > 0.0
                     component_weight = torch.where(
                         component_binary,
                         torch.full_like(component_loss_raw, float(ordinal_evidence_harm_class_weight)),
@@ -2420,9 +2428,13 @@ def direct_uncertainty_recovery_value_loss(
                     safe_tau = max(
                         float(ordinal_evidence_safe_utility_temperature), 1.0e-3
                     )
+                    # Match the exact deployed selector score. Using raw logits
+                    # here while the teacher lived in [-0.5, 0.5] made the
+                    # listwise gradient dominate regression and explains the
+                    # v48.26 C/D degradation.
                     safe_student = torch.cat([
-                        admission_delta_logits.new_zeros((1,)),
-                        admission_delta_logits[deployment_idx],
+                        deployed_safe_utility.new_zeros((1,)),
+                        deployed_safe_utility,
                     ]) / safe_tau
                     safe_teacher = torch.cat([
                         safe_utility_target.new_zeros((1,)),
@@ -2447,8 +2459,10 @@ def direct_uncertainty_recovery_value_loss(
                 frontier_safe = torch.where(safe_set_positive_mask)[0]
                 frontier_bad = torch.where(pos_mask[deployment_idx] & safe_set_harm_mask)[0]
                 if frontier_safe.numel() and frontier_bad.numel():
-                    safe_logits = admission_delta_logits[deployment_idx[frontier_safe]]
-                    bad_logits = admission_delta_logits[deployment_idx[frontier_bad]]
+                    # Frontier margin is expressed in deployed safe-utility
+                    # units, not unconstrained logit units.
+                    safe_logits = deployed_safe_utility[frontier_safe]
+                    bad_logits = deployed_safe_utility[frontier_bad]
                     frontier_pairs = safe_logits.unsqueeze(1) - bad_logits.unsqueeze(0)
                     terms.append(
                         float(ordinal_evidence_frontier_pairwise_weight)

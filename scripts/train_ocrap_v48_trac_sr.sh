@@ -129,6 +129,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set model.direct_recovery_evidence_calibrator_regime_scale="${EVIDENCE_CALIBRATOR_REGIME_SCALE:-0.25}" \
   --set model.direct_recovery_evidence_unified_experts="${EVIDENCE_UNIFIED_EXPERTS:-false}" \
   --set model.direct_recovery_evidence_component_heads="${EVIDENCE_COMPONENT_HEADS:-false}" \
+  --set model.direct_recovery_evidence_component_count="${EVIDENCE_COMPONENT_COUNT:-3}" \
   --set model.direct_recovery_evidence_component_scale="${EVIDENCE_COMPONENT_SCALE:-2.0}" \
   --set model.direct_recovery_evidence_concord="${EVIDENCE_CONCORD:-false}" \
   --set model.direct_recovery_evidence_consensus_disagreement_penalty="${EVIDENCE_CONSENSUS_DISAGREEMENT_PENALTY:-0.15}" \

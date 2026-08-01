@@ -1077,6 +1077,30 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
         # is not exposed to the model and does not route inference.
         out["direct_unison_selection_risk"] = facet_risk
 
+    # v48.27 FACTOR-PHYSICS-BRIDGE: stage-1 checkpoint selection learns two
+    # reusable factors before the sparse admission head is introduced. Raw
+    # benefit ordering and non-compensatory harmful-switch control are optimized
+    # without an admission threshold, preventing the admission loss from
+    # corrupting the factor heads early in training.
+    factor_preference = [
+        float(out.get(f"direct_preference_risk_mean_{regime}", 1.0))
+        for regime in ("near", "contact")
+    ]
+    if all(np.isfinite(v) for v in factor_preference):
+        factor_harm = max(
+            float(out.get("direct_rank_harmful_top1_rate_near", 1.0)),
+            float(out.get("direct_rank_harmful_top1_rate_contact", 1.0)),
+        )
+        factor_false = max(
+            float(out.get("direct_rank_false_switch_rate_near", 1.0)),
+            float(out.get("direct_rank_false_switch_rate_contact", 1.0)),
+        )
+        out["direct_factor_selection_risk"] = (
+            max(factor_preference)
+            + float(tcfg.get("direct_policy_metric_factor_harm_weight", 1.5)) * factor_harm
+            + float(tcfg.get("direct_policy_metric_factor_false_weight", 0.5)) * factor_false
+        )
+
     # v48.21 CONCORD: threshold-free checkpoint selection aligned with the
     # deployed top-k evidence score.  Fixed 0.65/0.30 validation thresholds made
     # every v48.20 epoch look like all-abstain, so early stopping could not select
@@ -2140,7 +2164,12 @@ def _make_group_batch_sampler(ds: OCRAPSampleDataset, cfg: dict, batch_size: int
         "replacement": bool(tcfg.get("group_batching_replacement", True)),
         "num_artifacts": int(num_artifacts),
         "num_negative_deployable": int(num_negative),
+        # Legacy sample-root statistic kept for backward compatibility. It is not
+        # the exact scene-time safe-positive group count used by the stratified
+        # sampler or Natural gate.
         "num_safe_positive": int(num_safe_pos),
+        "legacy_root_safe_sample_count": int(num_safe_pos),
+        "safe_positive_group_count": int(stratum_counts.get(2, 0)),
         "hard_group_boost": float(hard_boost),
         "hard_groups": int(hard_groups),
         "positive_advantage_boost": float(positive_boost),
@@ -2233,6 +2262,7 @@ def _make_sampler(ds: OCRAPSampleDataset, cfg: dict) -> WeightedRandomSampler | 
         "num_negative_deployable": int(num_negative),
         "negative_deployable_fraction": float(num_negative / max(total, 1)),
         "num_safe_positive": int(num_safe_pos),
+        "legacy_root_safe_sample_count": int(num_safe_pos),
         "safe_positive_fraction": float(num_safe_pos / max(total, 1)),
     }, flush=True)
     return WeightedRandomSampler(torch.as_tensor(weights, dtype=torch.double), num_samples=len(weights), replacement=True)
@@ -2357,6 +2387,7 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_evidence_calibrator_regime_scale=float(model_cfg.get("direct_recovery_evidence_calibrator_regime_scale", 0.25)),
         direct_recovery_evidence_unified_experts=bool(model_cfg.get("direct_recovery_evidence_unified_experts", False)),
         direct_recovery_evidence_component_heads=bool(model_cfg.get("direct_recovery_evidence_component_heads", False)),
+        direct_recovery_evidence_component_count=int(model_cfg.get("direct_recovery_evidence_component_count", 3)),
         direct_recovery_evidence_component_scale=float(model_cfg.get("direct_recovery_evidence_component_scale", 2.0)),
         direct_recovery_evidence_concord=bool(model_cfg.get("direct_recovery_evidence_concord", False)),
         direct_recovery_evidence_consensus_disagreement_penalty=float(
@@ -2647,6 +2678,7 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "direct_recovery_evidence_calibrator_regime_scale": float(model_cfg.get("direct_recovery_evidence_calibrator_regime_scale", 0.25)),
             "direct_recovery_evidence_unified_experts": bool(model_cfg.get("direct_recovery_evidence_unified_experts", False)),
             "direct_recovery_evidence_component_heads": bool(model_cfg.get("direct_recovery_evidence_component_heads", False)),
+            "direct_recovery_evidence_component_count": int(model_cfg.get("direct_recovery_evidence_component_count", 3)),
             "direct_recovery_evidence_component_scale": float(model_cfg.get("direct_recovery_evidence_component_scale", 2.0)),
             "direct_recovery_evidence_concord": bool(model_cfg.get("direct_recovery_evidence_concord", False)),
             "direct_recovery_evidence_consensus_disagreement_penalty": float(

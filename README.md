@@ -4,6 +4,30 @@
 
 核心目标不是做普通 motion prediction，而是为每个 `(scene, time, candidate_prefix)` 判断：在 prefix 执行后、只基于 post-prefix observation 可区分的未来簇中，是否存在可恢复的 recovery option；以及是否存在 oracle recoverable 但 deployable 不可恢复的 observation aliasing artifact。
 
+## 当前实验版本 v48.27 FACTOR-PHYSICS-BRIDGE
+
+本版本针对 v48.26 的有效 `RC=20` 与空 adaptation-dev shadow 做了两类修复：
+
+- **工程完整性**：完整扫描 sparse WOMD targets、canonical scenario ID、strict target match、空物理指标 fail-closed、development-rule 与 certificate rejection 分型；
+- **算法合同**：raw-benefit 与 safe admission 分解、五个不可补偿 harm heads、factor→admission 两阶段训练，以及 regression/listwise/frontier 全部使用真实部署分数 `sigmoid(logit)-0.5`。
+
+主入口：
+
+```bash
+bash scripts/run_v48_27_factor_physics_dedicated.sh
+```
+
+修复并重跑旧 v48.26 development shadow：
+
+```bash
+OUT=runs/ocrap_v48_26_execution_physics_dedicated_4826 \
+DEV_SHADOW_WOMD_SOURCE="$WOMD_VAL_INTERACTIVE" \
+DEV_SHADOW_RAW_MAX_SCENARIOS=0 \
+bash scripts/repair_v48_26_dev_shadow_with_v48_27.sh
+```
+
+详细协议、双 A30 命令与结果判读见 `OC-RAP-v48.27-run-commands-ZH.txt`。
+
 ## 已修复 / 已补全的关键点
 
 - **代码结构**：重构为 `src/ocrap/{cli,config,data,planning,simulation,roots,models,algorithms,evaluation,utils}`，并保留少量顶层兼容 shim，避免旧扁平包结构遮蔽新实现。
