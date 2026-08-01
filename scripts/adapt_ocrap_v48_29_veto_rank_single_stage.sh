@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# v48.28 PROVENANCE-MARGIN-BRIDGE
+# v48.29 VETO-RANK-PHYSICS-BRIDGE
 # One bucket-invariant model evaluates both frozen source experts for every
-# candidate. FACTOR-PHYSICS-BRIDGE first fixes the missing runtime wiring for the semantic
+# candidate. VETO-RANK-PHYSICS-BRIDGE preserves the missing runtime wiring for the semantic
 # risk prior/frontier, uses an executable-admission checkpoint barrier, and evaluates a
 # rule frozen on adaptation-dev against the full dedicated certificate population. No regime id or regime-specific strategy is exposed.
 REPO="${OCRAP_REPO:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
@@ -71,7 +71,7 @@ TRAINABLE_PREFIXES="${EVIDENCE_TRAINABLE_PREFIXES_OVERRIDE:-$TRAINABLE_PREFIXES}
 
 cat > "$RUN/STAGE_ARCHITECTURE.json" <<JSON
 {
-  "version": "v48.28-PROVENANCE-MARGIN-BRIDGE",
+  "version": "v48.29-VETO-RANK-PHYSICS-BRIDGE",
   "source_checkpoint": "$INIT_CKPT",
   "training_role": "unified_non_regime_specific_safe_set_admission",
   "frozen_policy": "v48.13_topk_recovery_proposal",
@@ -233,7 +233,7 @@ HARM_LABEL_MODE=component_veto
 OPPORTUNITY_LABEL_MODE=raw_benefit
 GATE_POSITIVE_MODE=safe_benefit
 ADMISSION_LABEL_MODE=continuous_safe_utility_with_component_veto
-CALIBRATION_PROTOCOL=v48_28_dev_frozen_full_certificate_verification
+CALIBRATION_PROTOCOL=v48_29_dev_frozen_full_certificate_verification
 EOF
 
 python - "$RUN" "$MODEL_DIR/best.pt" "$INIT_CKPT" "$MAX_CALIBRATOR_PARAMS" "$BEST_METRIC_NAME" "$COMPONENT_HEADS" "$SETWISE_WEIGHT" "$COMPONENT_TAIL_WEIGHT" <<'PY'
@@ -250,7 +250,7 @@ legacy=[k for k in state if k.startswith(('direct_evidence_calibrators.','direct
 if trainable <= 0 or trainable > max_params:
     raise SystemExit(f'unexpected FACTOR-PHYSICS-BRIDGE calibrator parameter count: {trainable}; allowed=(0,{max_params}]')
 meta={
- 'event':'v48_28_provenance_margin_bridge_evidence_correction_complete','created_unix':time.time(),
+ 'event':'v48_29_veto_rank_physics_bridge_evidence_correction_complete','created_unix':time.time(),
  'checkpoint':str(ckpt),'checkpoint_sha256':hashlib.sha256(ckpt.read_bytes()).hexdigest(),
  'source_checkpoint':str(source),'source_checkpoint_sha256':hashlib.sha256(source.read_bytes()).hexdigest(),
  'frozen_policy':True,'frozen_source_experts':True,

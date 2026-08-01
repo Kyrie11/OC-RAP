@@ -1,0 +1,37 @@
+OC-RAP v48.29 VETO-RANK-PHYSICS-BRIDGE local validation
+=======================================================
+
+Validation date: 2026-08-01
+Environment: local container without the user's WOMD/Waymax datasets or two A30 GPUs
+
+PASS  python -m compileall -q src tools tests
+PASS  all scripts/*.sh parsed with bash -n
+PASS  pytest: 259 passed, 5 warnings
+PASS  v48.29-specific tests: 8 passed
+PASS  all local tools/scripts referenced by v48.29 shell entrypoints exist
+PASS  legacy v48.28 shadow runtime-contract audit fails closed with RC=30 and reports:
+      - Near/Contact gamma_rec=0
+      - Contact contact anchors missing
+      - post-contact semantics invalid
+PASS  delivery ZIP integrity check
+
+Validated implementation contracts:
+- provenance-prefixed Near/Contact buckets resolve to canonical regimes
+- calibrated gamma lookup works for evidence_adapt_dev_* bucket names
+- Near is not classified as post-contact
+- benefit-only admission prior is accepted and invalid modes fail closed
+- safe hardest-negative objective uses deployed selector score
+- dev-shadow defaults to fast physical mode
+- shadow runtime contract checks positive gamma and Contact anchors
+- eight ablations launch concurrently, four tasks per A30
+- checkpoint/inference contract requires five factors, scale 6, bounded admission,
+  frontier mode and benefit-only admission prior
+
+Not validated locally:
+- real WOMD/Waymax closed-loop execution
+- actual A30 throughput
+- v48.29 Natural-gate outcome
+- Near/Contact physical metric improvement
+- held-out stress results
+
+No claim is made that v48.29 already obtains RC=0 or meets CCF-A targets.

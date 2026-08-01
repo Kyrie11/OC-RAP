@@ -1945,3 +1945,54 @@ All eight Balanced/Precision jobs are launched concurrently: four jobs per 24 GB
 ### Non-claims
 
 The local environment does not contain the user's WOMD/Waymax runtime or two A30 GPUs. v48.28 has passed static and unit tests, but no claim is made that it already obtains `RC=0`, passes the Natural gate, or reaches the Near/Contact closed-loop publication targets.
+
+## v48.29 — VETO-RANK-PHYSICS-BRIDGE
+
+### Motivation
+
+v48.28 returned a valid `RC=20`. The proposal-constrained oracle remained feasible on the complete Near and Contact certificates, while all Balanced/Precision branches failed during adaptation-dev rule fitting. The nearest rules had low safe-positive precision/recall and excessive harmful selection, so the certificate was correctly rejecting an unsafe learned selector.
+
+The v48.28 shadow matched eight paired scenes per branch, but audit found a runtime alias defect: dataset buckets were named `evidence_adapt_dev_near_contact` and `evidence_adapt_dev_contact`, whereas selector overrides, calibrated `gamma_rec`, and Contact physics recognized only bare `near_contact`/`contact`. Consequently every scene ran with `gamma_rec=0`; Contact was not marked as a post-contact target and its anchor/free-space/escape/re-contact metrics were missing or misleading. The matched shadow therefore established provenance only, not physical efficacy.
+
+Runtime timing also showed that online `selected_topk` OC-MERO audit labels consumed 98.48%–98.57% of scene wall time. Model selection and Waymax step metrics were a small fraction of total cost.
+
+### Engineering changes
+
+- Added a shared canonical regime parser for dataset provenance prefixes. `evidence_adapt_dev_*`, `certificate_pool_*`, calibration, validation and test names now resolve to `safe`, `near_contact` or `contact` without misclassifying Near as post-contact.
+- Applied the same alias contract to all selection `*_by_bucket`/`*_by_regime` overrides and to `gamma_rec_by_bucket`.
+- Added explicit `canonical_regime`, `bucket_aliases`, `post_contact_target` and runtime-contract metadata to closed-loop results.
+- Contact physics now recognizes provenance-prefixed Contact buckets, creates a finite causal contact anchor, and enables re-contact, overlap, post-contact free-space, escape and stable-stop metrics.
+- Added `check_v48_29_shadow_runtime_contract.py`. Shadow execution fails closed unless Near/Contact regimes are correct, every scene has a finite positive calibrated gamma, Contact anchors are finite, post-contact semantics are active, and metrics are valid.
+- Fixed the runtime-contract auditor itself to serialize invalid/non-finite values as JSON `null` rather than crashing while reporting an invalid legacy result.
+- Added `repair_v48_28_dev_shadow_with_v48_29.sh` so v48.28 checkpoints can be re-evaluated without retraining.
+- Changed physical dev-shadow default to `label_mode=fast`, zero online audit labels. Policy execution and Waymax physical metrics are unchanged. A separate suffix directory can run a sparse `selected_topk` teacher audit when needed.
+- Kept official WOMD `scenario/id`, source-role provenance and legacy source-index migration checks from v48.28.
+- Added fail-closed checkpoint/inference validation for admission prior mode, bounded admission, frontier, component count, component scale and semantic risk prior.
+- Added eight v48.29-specific tests. Full regression result: 259 passed, 5 warnings.
+
+### Algorithm changes
+
+1. **Independent five-factor veto.** DRS, deployability, oracle-to-deployable gap, hard rule and harm proxy remain separately supervised non-compensatory risk factors with semantic prior -2 and scale 6.
+2. **Benefit-only admission prior.** Added `direct_recovery_evidence_admission_prior_mode=benefit_only`. Admission inherits detached raw-benefit evidence but no longer subtracts the same maximum risk a second time. The five factors remain an independent calibrated hard veto, and harmful actions still receive negative safe-utility targets.
+3. **Hardest-negative safe ranking.** For every proposal group with a safe-positive opportunity, the teacher-best safe action must outrank nominal and the hardest non-safe proposal by a registered margin. Groups with no safe opportunity push every recovery score below nominal.
+4. **Two-stage training retained.** Stage 1 learns dense raw-benefit ordering and five harm factors only. Stage 2 freezes them and learns bounded admission with deployment-exact safe-utility regression, categorical one-action supervision and hardest-negative ranking.
+5. **Listwise/frontier removed from the default main model.** v48.28 did not show stable incremental benefit. A small frontier term remains only in the D ablation.
+6. **Top-3 frozen proposal retained.** Complete certificate oracle support remains feasible, so proposal expansion is not justified.
+7. **Legacy Noisy-OR remains disabled.** Deployment selects exactly one recovery action or nominal.
+
+### v48.29 ablations
+
+1. `A_risk_centered_reference` — old risk-centered admission prior;
+2. `B_veto_decoupled` — independent veto plus benefit-only admission;
+3. `C_add_safe_hard_negative` — B plus hardest-negative safe ranking; v48.29 main design;
+4. `D_add_frontier_to_hard_negative` — C plus a light frontier term.
+
+All eight Balanced/Precision jobs launch concurrently: four tasks per 24 GB A30. Each task is limited to one DataLoader worker and one OMP/MKL/OpenBLAS thread to control CPU and filesystem contention.
+
+### Protocol and decision rules
+
+- The Natural certificate is retained. Oracle feasibility means the current gate is not mathematically impossible; thresholds are not reduced post hoc.
+- `RC=20` means a valid algorithmic rejection. `RC=30` is reserved for engineering, provenance, checkpoint, index, artifact or runtime-contract failure.
+- A physical shadow result is interpretable only when `SHADOW_RUNTIME_CONTRACT.json` is valid.
+- If v48.29 improves offline precision/risk but valid physical shadow does not improve, the next change must be a preregistered candidate-level temporal physical teacher, not threshold tuning on certificate or held-out stress.
+- No claim is made locally that v48.29 already passes the gate or meets CCF-A Near/Contact targets; WOMD/Waymax execution on the user's two A30s is required.

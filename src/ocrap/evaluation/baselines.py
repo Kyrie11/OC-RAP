@@ -4,6 +4,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from ocrap.utils.regimes import bucket_aliases as canonical_bucket_aliases
+
 from ocrap.planning.selector import SelectionResult, calibrated_constrained_select, constrained_lcb_select, crisp_select
 
 
@@ -73,23 +75,10 @@ def _strip_version_suffix(name: str) -> str:
 
 
 def _bucket_aliases(name: str | None) -> list[str]:
-    if not name:
-        return []
-    raw = str(name)
-    aliases = [raw]
-    for p in ("test_", "val_", "train_"):
-        if raw.startswith(p):
-            aliases.append(raw[len(p):])
-    # Treat normal shard versions such as test_safe_v2 as safe unless a more
-    # specific override is provided.  This keeps regime-conditioned selector
-    # knobs usable after rebuilding safe_v2/safe_v3.
-    aliases.extend([_strip_version_suffix(x) for x in list(aliases)])
-    aliases.extend([raw.replace("-", "_"), raw.replace("_", "-")])
-    out: list[str] = []
-    for x in aliases:
-        if x and x not in out:
-            out.append(x)
-    return out
+    # v48.29: dataset provenance prefixes (for example
+    # evidence_adapt_dev_contact) must resolve to the same calibrated selector
+    # overrides as the semantic regime name.
+    return canonical_bucket_aliases(name)
 
 
 

@@ -1441,6 +1441,8 @@ def direct_uncertainty_recovery_value_loss(
     ordinal_evidence_safe_utility_temperature: float = 0.10,
     ordinal_evidence_frontier_pairwise_weight: float = 0.0,
     ordinal_evidence_frontier_pairwise_margin: float = 0.25,
+    ordinal_evidence_safe_hard_negative_weight: float = 0.0,
+    ordinal_evidence_safe_hard_negative_margin: float = 0.05,
     ordinal_evidence_categorical_group_policy: bool = False,
     ordinal_evidence_intragroup_margin: float = 0.25,
     ordinal_evidence_pairwise_benefit_weight: float = 0.0,
@@ -2447,6 +2449,38 @@ def direct_uncertainty_recovery_value_loss(
                             torch.log_softmax(safe_student, dim=0),
                             safe_teacher_prob, reduction="sum",
                         )
+                    )
+
+            # v48.29 VETO-RANK: sparse safe-positive groups need a direct
+            # execution-aligned margin.  The teacher-best safe action must beat
+            # nominal and the single hardest non-safe proposal member.  On
+            # groups with no safe opportunity every recovery score is pushed
+            # below nominal.  This focuses gradient on the actual top-1 failure
+            # rather than averaging over many easy candidates.
+            if (
+                float(ordinal_evidence_safe_hard_negative_weight) > 0.0
+                and admission_delta_logits is not None
+                and deployed_safe_utility.numel()
+            ):
+                margin = float(ordinal_evidence_safe_hard_negative_margin)
+                safe_idx = torch.where(safe_set_positive_mask)[0]
+                if safe_idx.numel():
+                    best_safe = safe_idx[torch.argmax(safe_set_teacher_delta[safe_idx])]
+                    negative_mask = ~safe_set_positive_mask
+                    negative_scores = deployed_safe_utility[negative_mask]
+                    hard_negative = torch.cat([
+                        deployed_safe_utility.new_zeros((1,)), negative_scores
+                    ]).max()
+                    safe_gap = deployed_safe_utility[best_safe] - hard_negative
+                    terms.append(
+                        float(ordinal_evidence_safe_hard_negative_weight)
+                        * F.softplus(margin - safe_gap)
+                    )
+                else:
+                    max_recovery = deployed_safe_utility.max()
+                    terms.append(
+                        float(ordinal_evidence_safe_hard_negative_weight)
+                        * F.softplus(margin + max_recovery)
                     )
 
             # Directly train the high-benefit safety frontier rather than global

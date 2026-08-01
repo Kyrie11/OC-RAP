@@ -136,6 +136,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set model.direct_recovery_evidence_admission_head="${EVIDENCE_ADMISSION_HEAD:-false}" \
   --set model.direct_recovery_evidence_admission_scale="${EVIDENCE_ADMISSION_SCALE:-2.0}" \
   --set model.direct_recovery_evidence_admission_bounded="${EVIDENCE_ADMISSION_BOUNDED:-true}" \
+  --set model.direct_recovery_evidence_admission_prior_mode="${EVIDENCE_ADMISSION_PRIOR_MODE:-risk_centered}" \
   --set model.direct_recovery_evidence_frontier="${EVIDENCE_FRONTIER:-false}" \
   --set model.direct_recovery_evidence_component_prior_logit="${EVIDENCE_COMPONENT_PRIOR_LOGIT:--2.0}" \
   --set loss_weights.dep=0 --set loss_weights.orc=0 --set loss_weights.assign=0 \
@@ -250,6 +251,8 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.direct_value_ordinal_evidence_safe_utility_temperature="${ORDINAL_EVIDENCE_SAFE_UTILITY_TEMPERATURE:-0.10}" \
   --set training.direct_value_ordinal_evidence_frontier_pairwise_weight="${ORDINAL_EVIDENCE_FRONTIER_PAIRWISE_WEIGHT:-0.0}" \
   --set training.direct_value_ordinal_evidence_frontier_pairwise_margin="${ORDINAL_EVIDENCE_FRONTIER_PAIRWISE_MARGIN:-0.25}" \
+  --set training.direct_value_ordinal_evidence_safe_hard_negative_weight="${ORDINAL_EVIDENCE_SAFE_HARD_NEGATIVE_WEIGHT:-0.0}" \
+  --set training.direct_value_ordinal_evidence_safe_hard_negative_margin="${ORDINAL_EVIDENCE_SAFE_HARD_NEGATIVE_MARGIN:-0.05}" \
   --set training.direct_value_ordinal_evidence_categorical_group_policy="${ORDINAL_EVIDENCE_CATEGORICAL_GROUP_POLICY:-false}" \
   --set training.direct_value_ordinal_evidence_intragroup_margin="${ORDINAL_EVIDENCE_INTRAGROUP_MARGIN:-0.25}" \
   --set training.direct_value_ordinal_evidence_pairwise_benefit_weight="${ORDINAL_EVIDENCE_PAIRWISE_BENEFIT_WEIGHT:-0.0}" \

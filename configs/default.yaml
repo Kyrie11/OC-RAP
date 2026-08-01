@@ -455,6 +455,8 @@ training:
   direct_value_ordinal_evidence_benefit_listwise_temperature: 0.08
   direct_value_ordinal_evidence_frontier_pairwise_weight: 0.0
   direct_value_ordinal_evidence_frontier_pairwise_margin: 0.25
+  direct_value_ordinal_evidence_safe_hard_negative_weight: 0.0
+  direct_value_ordinal_evidence_safe_hard_negative_margin: 0.05
   direct_value_ordinal_evidence_categorical_group_policy: false
   direct_value_ordinal_evidence_intragroup_margin: 0.25
   direct_value_ordinal_evidence_pairwise_benefit_weight: 0.0

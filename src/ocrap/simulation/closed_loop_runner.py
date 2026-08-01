@@ -25,6 +25,7 @@ from ocrap.external_baselines.evaluate import _load_checkpoint as _load_external
 from ocrap.simulation.waymax_rollout import _as_np, _bicycle_action, _make_env, _metric_summary, _sdc_index
 from ocrap.planning.route_lattice import project_to_route
 from ocrap.utils.geometry import compute_ttc, min_box_clearance, rotation_matrix
+from ocrap.utils.regimes import bucket_aliases as canonical_bucket_aliases, canonical_regime_name, is_post_contact_bucket
 
 
 EXTERNAL_CLOSED_LOOP_METHODS = {
@@ -954,29 +955,17 @@ def _strip_version_suffix(name: str) -> str:
 
 
 def _bucket_gamma_aliases(name: str | None) -> list[str]:
-    if not name:
-        return []
-    raw = str(name)
-    aliases = [raw]
-    for p in ("test_", "val_", "train_"):
-        if raw.startswith(p):
-            aliases.append(raw[len(p):])
-    aliases.extend([_strip_version_suffix(x) for x in list(aliases)])
-    out: list[str] = []
-    for x in aliases:
-        if x and x not in out:
-            out.append(x)
-    return out
+    return canonical_bucket_aliases(name)
 
 
 def _is_post_contact_bucket_name(bucket_name: str | None) -> bool:
-    """Return true only for post-contact targets, never for near-contact aliases."""
-    norm = str(bucket_name or "").strip().lower().replace("-", "_")
-    return norm in {
-        "contact", "post_contact", "post_collision",
-        "test_contact", "test_post_contact", "test_post_collision",
-        "contact_dev", "post_contact_dev",
-    }
+    """Recognise semantic contact targets under dataset provenance prefixes.
+
+    ``near_contact`` remains non-contact by construction in
+    :func:`canonical_regime_name`.
+    """
+    return is_post_contact_bucket(bucket_name)
+
 
 
 def _gamma_for_bucket(base_gamma: float, cfg: dict, bucket_name: str | None) -> float:
@@ -1855,6 +1844,9 @@ def _rollout_one_scene(
     out = {
         "scene_id": str(raw.scenario_id),
         "bucket_name": bucket_name,
+        "canonical_regime": canonical_regime_name(bucket_name),
+        "bucket_aliases": _bucket_gamma_aliases(bucket_name),
+        "post_contact_target": bool(is_post_contact_target),
         "target_key": target_key,
         "target_time_index": int(start_time_index_override) if start_time_index_override is not None else None,
         "route_progression": route_progression,
@@ -1937,6 +1929,12 @@ def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, s
         "label_modes": sorted({str(s.get("label_mode", "unknown")) for s in scene_results}),
         "metrics_valid": bool(scene_results),
         "empty_reason": None if scene_results else "no_closed_loop_scenes",
+        "runtime_contract": {
+            "bucket_names": sorted({str(s.get("bucket_name", "")) for s in scene_results}),
+            "canonical_regimes": sorted({str(s.get("canonical_regime", "")) for s in scene_results}),
+            "gamma_rec_values": sorted({float(s.get("gamma_rec", 0.0)) for s in scene_results}),
+            "post_contact_target_count": int(sum(bool(s.get("post_contact_target", False)) for s in scene_results)),
+        },
     }
     for k in keys:
         vals = [s.get(k, None) for s in scene_results if int(s.get("num_decisions", 0)) > 0]

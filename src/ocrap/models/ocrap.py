@@ -187,6 +187,7 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_admission_head: bool = False,
         direct_recovery_evidence_admission_scale: float = 2.0,
         direct_recovery_evidence_admission_bounded: bool = True,
+        direct_recovery_evidence_admission_prior_mode: str = "risk_centered",
         direct_recovery_evidence_frontier: bool = False,
         direct_recovery_evidence_component_prior_logit: float = -2.0,
     ):
@@ -288,6 +289,16 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_evidence_admission_bounded = bool(
             direct_recovery_evidence_admission_bounded
         )
+        self.direct_recovery_evidence_admission_prior_mode = str(
+            direct_recovery_evidence_admission_prior_mode or "risk_centered"
+        ).strip().lower()
+        if self.direct_recovery_evidence_admission_prior_mode not in {
+            "risk_centered", "benefit_only"
+        }:
+            raise ValueError(
+                "Unsupported direct_recovery_evidence_admission_prior_mode="
+                f"{direct_recovery_evidence_admission_prior_mode!r}"
+            )
         self.direct_recovery_evidence_frontier = bool(direct_recovery_evidence_frontier)
         self.direct_recovery_evidence_component_prior_logit = float(
             direct_recovery_evidence_component_prior_logit
@@ -1210,7 +1221,15 @@ class OCRAPModel(nn.Module):
                     # gradient from distorting either the raw-benefit or risk head.
                     # softplus(harm) is a conservative log-risk penalty; the bounded
                     # residual can correct it from context without regime routing.
-                    if self.direct_recovery_evidence_frontier:
+                    if self.direct_recovery_evidence_admission_prior_mode == "benefit_only":
+                        # v48.29: non-compensatory factors are calibrated as a
+                        # separate veto. Penalising the same max-risk logit again
+                        # inside the admission score double-counted one noisy
+                        # factor and suppressed safe-positive actions. The
+                        # admission residual is still trained with harmful
+                        # candidates mapped to negative safe utility.
+                        admission_prior = unified_benefit_logit.detach()
+                    elif self.direct_recovery_evidence_frontier:
                         # Center the risk penalty at the semantic non-harm prior.
                         # Zero residual therefore reproduces the transferred
                         # benefit evidence instead of forcing all-abstain.
