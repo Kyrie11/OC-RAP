@@ -1,0 +1,194 @@
+{
+  "checked_scripts": [
+    "scripts/adapt_ocrap_v48_32_1_identity_utility_single_stage.sh",
+    "scripts/adapt_ocrap_v48_32_1_identity_utility_variant.sh",
+    "scripts/run_v48_32_1_rc30_integrity_hotfix_dedicated.sh",
+    "scripts/calibrate_v48_32_1_certificate_pool.sh",
+    "scripts/run_v48_32_1_stress_if_authorized.sh"
+  ],
+  "reference_count": 36,
+  "references": [
+    {
+      "source": "scripts/adapt_ocrap_v48_32_1_identity_utility_single_stage.sh",
+      "reference": "scripts/train_ocrap_v48_trac_sr.sh",
+      "exists": true
+    },
+    {
+      "source": "scripts/adapt_ocrap_v48_32_1_identity_utility_variant.sh",
+      "reference": "tools/build_v48_32_factor_support_contract.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/adapt_ocrap_v48_32_1_identity_utility_variant.sh",
+      "reference": "tools/manage_v48_32_factor_cache.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/adapt_ocrap_v48_32_1_identity_utility_variant.sh",
+      "reference": "tools/materialize_v48_32_1_factor_cache.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/adapt_ocrap_v48_32_1_identity_utility_variant.sh",
+      "reference": "scripts/adapt_ocrap_v48_32_1_identity_utility_single_stage.sh",
+      "exists": true
+    },
+    {
+      "source": "scripts/adapt_ocrap_v48_32_1_identity_utility_variant.sh",
+      "reference": "tools/manage_v48_32_factor_cache.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/adapt_ocrap_v48_32_1_identity_utility_variant.sh",
+      "reference": "scripts/adapt_ocrap_v48_32_1_identity_utility_single_stage.sh",
+      "exists": true
+    },
+    {
+      "source": "scripts/adapt_ocrap_v48_32_1_identity_utility_variant.sh",
+      "reference": "scripts/adapt_ocrap_v48_32_1_identity_utility_single_stage.sh",
+      "exists": true
+    },
+    {
+      "source": "scripts/adapt_ocrap_v48_32_1_identity_utility_variant.sh",
+      "reference": "tools/check_v48_32_stage_transfer.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/run_v48_32_1_rc30_integrity_hotfix_dedicated.sh",
+      "reference": "tools/audit_dedicated_protocol_v48_16.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/run_v48_32_1_rc30_integrity_hotfix_dedicated.sh",
+      "reference": "tools/check_v48_32_1_multigroup_loss_contract.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/run_v48_32_1_rc30_integrity_hotfix_dedicated.sh",
+      "reference": "tools/check_v48_19_target_support.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/run_v48_32_1_rc30_integrity_hotfix_dedicated.sh",
+      "reference": "tools/build_teacher_pcd_index_v48.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/run_v48_32_1_rc30_integrity_hotfix_dedicated.sh",
+      "reference": "tools/check_v48_19_target_support.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/run_v48_32_1_rc30_integrity_hotfix_dedicated.sh",
+      "reference": "tools/check_v48_19_target_support.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/run_v48_32_1_rc30_integrity_hotfix_dedicated.sh",
+      "reference": "tools/check_v48_19_target_support.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/run_v48_32_1_rc30_integrity_hotfix_dedicated.sh",
+      "reference": "tools/build_teacher_pcd_index_v48.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/run_v48_32_1_rc30_integrity_hotfix_dedicated.sh",
+      "reference": "tools/check_v48_19_target_support.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/run_v48_32_1_rc30_integrity_hotfix_dedicated.sh",
+      "reference": "scripts/adapt_ocrap_v48_32_1_identity_utility_variant.sh",
+      "exists": true
+    },
+    {
+      "source": "scripts/run_v48_32_1_rc30_integrity_hotfix_dedicated.sh",
+      "reference": "tools/extract_v48_32_1_failure_signature.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/run_v48_32_1_rc30_integrity_hotfix_dedicated.sh",
+      "reference": "tools/check_v48_16_learning_gates.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/run_v48_32_1_rc30_integrity_hotfix_dedicated.sh",
+      "reference": "tools/check_v48_16_learning_gates.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/run_v48_32_1_rc30_integrity_hotfix_dedicated.sh",
+      "reference": "tools/check_v48_32_model_contract.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/run_v48_32_1_rc30_integrity_hotfix_dedicated.sh",
+      "reference": "tools/check_v48_32_training_contract.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/run_v48_32_1_rc30_integrity_hotfix_dedicated.sh",
+      "reference": "scripts/calibrate_v48_32_1_certificate_pool.sh",
+      "exists": true
+    },
+    {
+      "source": "scripts/run_v48_32_1_rc30_integrity_hotfix_dedicated.sh",
+      "reference": "tools/check_v48_16_learning_gates.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/run_v48_32_1_rc30_integrity_hotfix_dedicated.sh",
+      "reference": "tools/summarize_v48_30_gate_failure.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/calibrate_v48_32_1_certificate_pool.sh",
+      "reference": "tools/write_gamma_by_bucket.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/calibrate_v48_32_1_certificate_pool.sh",
+      "reference": "tools/calibrate_policy_risk_v48.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/calibrate_v48_32_1_certificate_pool.sh",
+      "reference": "tools/calibrate_policy_risk_v48.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/calibrate_v48_32_1_certificate_pool.sh",
+      "reference": "tools/check_v48_32_1_metric_calibration_contract.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/calibrate_v48_32_1_certificate_pool.sh",
+      "reference": "tools/calibrate_policy_risk_v48.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/calibrate_v48_32_1_certificate_pool.sh",
+      "reference": "tools/calibrate_policy_risk_v48.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/calibrate_v48_32_1_certificate_pool.sh",
+      "reference": "scripts/run_v48_7_safe_noninferiority.sh",
+      "exists": true
+    },
+    {
+      "source": "scripts/calibrate_v48_32_1_certificate_pool.sh",
+      "reference": "scripts/run_v48_32_1_stress_if_authorized.sh",
+      "exists": true
+    },
+    {
+      "source": "scripts/run_v48_32_1_stress_if_authorized.sh",
+      "reference": "scripts/run_ocrap_v48_trac_sr.sh",
+      "exists": true
+    }
+  ],
+  "missing": [],
+  "valid": true
+}

@@ -1451,6 +1451,7 @@ def direct_uncertainty_recovery_value_loss(
     ordinal_evidence_pairwise_benefit_weight: float = 0.0,
     ordinal_evidence_pairwise_harm_weight: float = 0.0,
     ordinal_evidence_pairwise_margin: float = 0.25,
+    strict_shape_contract: bool = False,
     pred_delta_mean: torch.Tensor | None = None,
     pred_delta_logvar: torch.Tensor | None = None,
 ) -> torch.Tensor:
@@ -1551,6 +1552,11 @@ def direct_uncertainty_recovery_value_loss(
         sizes.append(component_harm_logits.shape[0])
     if pred_admission_logit is not None:
         sizes.append(pred_admission_logit.numel())
+    if bool(strict_shape_contract) and len(set(int(x) for x in sizes)) != 1:
+        raise ValueError(
+            "direct recovery loss shape contract violated: "
+            + ", ".join(str(int(x)) for x in sizes)
+        )
     n = min(sizes)
     score, rank_score, point_mean, logvar, trd, tro, teacher_drs = score[:n], rank_score[:n], point_mean[:n], logvar[:n], trd[:n], tro[:n], teacher_drs[:n]
     teacher_hard, teacher_harm = teacher_hard[:n], teacher_harm[:n]
@@ -1567,8 +1573,8 @@ def direct_uncertainty_recovery_value_loss(
     finite = bucket_mask & torch.isfinite(score) & torch.isfinite(rank_score) & torch.isfinite(point_mean) & torch.isfinite(logvar) & torch.isfinite(trd) & torch.isfinite(tro) & torch.isfinite(teacher_drs) & torch.isfinite(teacher_hard) & torch.isfinite(teacher_harm)
     if not bool(finite.any()):
         return grad_anchor
-    teacher_gap = torch.clamp(tro - trd, min=0.0)
-    target = _torch_pcd_score(teacher_drs, trd, teacher_gap).detach().clamp(0.0, 1.0)
+    teacher_gap_vector = torch.clamp(tro - trd, min=0.0)
+    target = _torch_pcd_score(teacher_drs, trd, teacher_gap_vector).detach().clamp(0.0, 1.0)
     variance = torch.exp(logvar).clamp_min(float(variance_floor))
     point = 0.5 * ((point_mean - target) ** 2 / variance + torch.log(variance))
     point_loss = point[finite].mean()
@@ -1606,6 +1612,11 @@ def direct_uncertainty_recovery_value_loss(
         idx = torch.where(finite & (bid == key[0]) & (sh == key[1]) & (ti == key[2]))[0]
         noms = idx[isn[idx]]
         recs = idx[macro_mask[idx] & (~isn[idx])]
+        if bool(strict_shape_contract) and noms.numel() != 1:
+            raise ValueError(
+                f"direct recovery group contract requires exactly one nominal; "
+                f"key={tuple(int(x) for x in key.tolist())} nominal_count={int(noms.numel())}"
+            )
         if noms.numel() == 0 or recs.numel() == 0:
             continue
         nom = noms[0]
@@ -1629,8 +1640,8 @@ def direct_uncertainty_recovery_value_loss(
                 nominal_drs=teacher_drs[nom].expand_as(teacher_drs[recs]),
                 candidate_r_dep=trd[recs],
                 nominal_r_dep=trd[nom].expand_as(trd[recs]),
-                candidate_gap=teacher_gap[recs],
-                nominal_gap=teacher_gap[nom].expand_as(teacher_gap[recs]),
+                candidate_gap=teacher_gap_vector[recs],
+                nominal_gap=teacher_gap_vector[nom].expand_as(teacher_gap_vector[recs]),
                 candidate_hard=teacher_hard[recs],
                 nominal_hard=teacher_hard[nom].expand_as(teacher_hard[recs]),
                 candidate_harm_proxy=teacher_harm[recs],
@@ -1659,8 +1670,8 @@ def direct_uncertainty_recovery_value_loss(
                 nominal_drs=teacher_drs[nom].expand_as(teacher_drs[recs]),
                 candidate_r_dep=trd[recs],
                 nominal_r_dep=trd[nom].expand_as(trd[recs]),
-                candidate_gap=teacher_gap[recs],
-                nominal_gap=teacher_gap[nom].expand_as(teacher_gap[recs]),
+                candidate_gap=teacher_gap_vector[recs],
+                nominal_gap=teacher_gap_vector[nom].expand_as(teacher_gap_vector[recs]),
                 candidate_hard=teacher_hard[recs],
                 nominal_hard=teacher_hard[nom].expand_as(teacher_hard[recs]),
                 candidate_harm_proxy=teacher_harm[recs],
@@ -2553,10 +2564,10 @@ def direct_uncertainty_recovery_value_loss(
                         safe_utility_target.new_zeros((1,)),
                         safe_utility_target[negative_mask],
                     ]).max()
-                    teacher_gap = (
+                    adaptive_teacher_gap = (
                         safe_utility_target[best_safe] - negative_teacher
                     ).clamp(min=0.0, max=0.25)
-                    required_margin = margin + teacher_scale * teacher_gap
+                    required_margin = margin + teacher_scale * adaptive_teacher_gap
                     safe_gap = deployed_safe_utility[best_safe] - hard_negative
                     terms.append(
                         float(ordinal_evidence_safe_hard_negative_weight)

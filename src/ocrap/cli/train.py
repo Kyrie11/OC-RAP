@@ -407,6 +407,7 @@ def _direct_value_loss_from_outputs(
         ordinal_evidence_pairwise_benefit_weight=float(tcfg.get("direct_value_ordinal_evidence_pairwise_benefit_weight", 0.0)),
         ordinal_evidence_pairwise_harm_weight=float(tcfg.get("direct_value_ordinal_evidence_pairwise_harm_weight", 0.0)),
         ordinal_evidence_pairwise_margin=float(tcfg.get("direct_value_ordinal_evidence_pairwise_margin", 0.25)),
+        strict_shape_contract=bool(tcfg.get("direct_value_strict_shape_contract", False)),
     )
 
     def compute(

@@ -80,8 +80,8 @@ def test_safe_utility_prior_has_explicit_coupled_gradient_contract() -> None:
 def test_teacher_gap_margin_is_continuous_and_regime_agnostic() -> None:
     source = (ROOT / "src" / "ocrap" / "models" / "losses.py").read_text()
     block = source[source.index("teacher_scale = max(") : source.index("# Directly train the high-benefit", source.index("teacher_scale = max("))]
-    assert "teacher_gap" in block
-    assert "required_margin = margin + teacher_scale * teacher_gap" in block
+    assert "adaptive_teacher_gap" in block
+    assert "required_margin = margin + teacher_scale * adaptive_teacher_gap" in block
     assert "teacher_noop_depth" in block
     assert "regime" not in block.lower()
 

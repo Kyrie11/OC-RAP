@@ -1,0 +1,133 @@
+OC-RAP v48.32.1 RC30-INTEGRITY-HOTFIX 下一步执行指令
+====================================================
+
+重要原则
+--------
+1. 本版本算法与 v48.32 相同，只修复 RC=30 工程错误。
+2. 本轮只运行主实验。RC=30 时不要运行消融、shadow、test 或 stress。
+3. 必须使用新的 OUTPUTDIR，不得覆盖 v48.32 原结果。
+4. 不要手工创建 NEXT_COMMANDS.txt。
+
+一、解压与进入代码目录
+----------------------
+unzip OC-RAP-v48.32.1-RC30-INTEGRITY-HOTFIX.zip
+cd OC-RAP-v48.32.1-RC30-INTEGRITY-HOTFIX
+export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
+export CUBLAS_WORKSPACE_CONFIG=:4096:8
+
+二、先执行发布自检
+------------------
+python tools/check_v48_32_1_multigroup_loss_contract.py \
+  --output /tmp/v48_32_1_multigroup_loss_contract.json
+cat /tmp/v48_32_1_multigroup_loss_contract.json
+
+# 必须看到 valid=true。否则停止，不运行训练。
+
+python -m compileall -q src tools tests
+PYTHONPATH="$PWD/src" pytest -q
+
+三、设置数据、源模型和新输出目录
+------------------------------
+export OCRAP_ROOT=/data0/senzeyu2/dataset/OCRAP
+export SOURCE_RUN=runs/ocrap_v48_13_terra_proxy_4801
+export PROTOCOL_ROOT="$OCRAP_ROOT/calibration_v48_14_prism_4814"
+export CAL_SAFE="$OCRAP_ROOT/calibration_safe"
+export GPU0=0
+export GPU1=1
+
+# 上一轮失败运行目录。不要删除，其中 Stage-1 可精确复用。
+export PREVIOUS_V4832_RUN=runs/ocrap_v48_32_identity_utility_bridge_dedicated_4832
+
+# 必须是新目录。
+export OUTPUTDIR=runs/ocrap_v48_32_1_rc30_integrity_hotfix_dedicated_48321
+mkdir -p "$OUTPUTDIR"
+
+四、复用上一轮经过合同审计的 teacher index
+-----------------------------------------
+# 复制后，controller 会再次执行 dataset/label contract 审计；不匹配会 fail-closed。
+for f in \
+  evidence_adapt_teacher_pcd_index.jsonl \
+  evidence_adapt_teacher_pcd_index_summary.json \
+  evidence_adapt_dev_teacher_pcd_index.jsonl \
+  evidence_adapt_dev_teacher_pcd_index_summary.json; do
+  if [[ -f "$PREVIOUS_V4832_RUN/$f" ]]; then
+    cp -a "$PREVIOUS_V4832_RUN/$f" "$OUTPUTDIR/$f"
+  fi
+done
+
+五、按 variant 精确复用已完成的 Stage-1
+--------------------------------------
+BAL_CACHE="$PREVIOUS_V4832_RUN/candidates/balanced/factor_stage"
+PRE_CACHE="$PREVIOUS_V4832_RUN/candidates/precision/factor_stage"
+
+# 上传的结果压缩包没有携带大体积 .pt；这里检查服务器原目录。
+# 某个 checkpoint 不存在时，只取消该 variant 的缓存变量，该 variant 会重新训练 Stage-1。
+if [[ -f "$BAL_CACHE/model_v48_trac_sr/best.pt" ]]; then
+  export V48321_FACTOR_CACHE_BALANCED="$BAL_CACHE"
+else
+  unset V48321_FACTOR_CACHE_BALANCED || true
+  echo "Balanced factor checkpoint 不存在，将重新训练 Stage-1"
+fi
+
+if [[ -f "$PRE_CACHE/model_v48_trac_sr/best.pt" ]]; then
+  export V48321_FACTOR_CACHE_PRECISION="$PRE_CACHE"
+else
+  unset V48321_FACTOR_CACHE_PRECISION || true
+  echo "Precision factor checkpoint 不存在，将重新训练 Stage-1"
+fi
+
+六、只运行主实验
+----------------
+set +e
+OUTPUTDIR="$OUTPUTDIR" \
+OCRAP_ROOT="$OCRAP_ROOT" \
+SOURCE_RUN="$SOURCE_RUN" \
+PROTOCOL_ROOT="$PROTOCOL_ROOT" \
+CAL_SAFE="$CAL_SAFE" \
+GPU0="$GPU0" GPU1="$GPU1" \
+NUM_WORKERS=3 PREFETCH_FACTOR=3 BATCH_SIZE=96 \
+  bash scripts/run_v48_32_1_rc30_integrity_hotfix_dedicated.sh \
+  >"$OUTPUTDIR/launcher.stdout.log" \
+  2>"$OUTPUTDIR/launcher.stderr.log"
+RC=$?
+set -e
+
+echo "V48.32.1 MAIN RC=$RC"
+
+七、按 RC 严格分支
+------------------
+case "$RC" in
+  0)
+    echo "Natural gate 通过。检查完成状态和授权命令："
+    cat "$OUTPUTDIR/V48_32_1_COMPLETE.json"
+    cat "$OUTPUTDIR/NEXT_COMMANDS_STATUS.json"
+    cat "$OUTPUTDIR/NEXT_COMMANDS.txt"
+    echo "仅执行 NEXT_COMMANDS.txt 中的命令。"
+    ;;
+  20)
+    echo "Pipeline/certificate 有效，但 Natural gate 拒绝。"
+    cat "$OUTPUTDIR/V48_32_1_COMPLETE.json"
+    cat "$OUTPUTDIR/NEXT_COMMANDS_BLOCKED.json"
+    echo "不要运行 test/stress。请先上传完整主实验结果，再决定消融和 adaptation-dev physical shadow。"
+    ;;
+  30)
+    echo "仍为工程或协议失败；不得作算法结论，也不得运行消融/shadow/test/stress。"
+    cat "$OUTPUTDIR/MULTIGROUP_LOSS_CONTRACT.json" 2>/dev/null || true
+    cat "$OUTPUTDIR/PIPELINE_FAILED.json" 2>/dev/null || true
+    cat "$OUTPUTDIR/NEXT_COMMANDS_BLOCKED.json" 2>/dev/null || true
+    cat "$OUTPUTDIR/FAILURE_SIGNATURE_balanced.json" 2>/dev/null || true
+    cat "$OUTPUTDIR/FAILURE_SIGNATURE_precision.json" 2>/dev/null || true
+    cat "$OUTPUTDIR/candidates/balanced/VARIANT_STAGE_FAILED.json" 2>/dev/null || true
+    cat "$OUTPUTDIR/candidates/precision/VARIANT_STAGE_FAILED.json" 2>/dev/null || true
+    ;;
+  *)
+    echo "意外退出码 $RC，按 RC=30 处理并停止所有后续实验。"
+    ;;
+esac
+
+八、打包本轮主实验结果
+----------------------
+zip -r ocrap_v48_32_1_rc30_integrity_hotfix_dedicated_48321.zip "$OUTPUTDIR" \
+  -x '*/model_v48_trac_sr/*.pt' \
+     '*/model_v48_trac_sr/checkpoints/*' \
+     '*/__pycache__/*'

@@ -260,6 +260,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.direct_value_ordinal_evidence_safe_hard_negative_weight="${ORDINAL_EVIDENCE_SAFE_HARD_NEGATIVE_WEIGHT:-0.0}" \
   --set training.direct_value_ordinal_evidence_safe_hard_negative_margin="${ORDINAL_EVIDENCE_SAFE_HARD_NEGATIVE_MARGIN:-0.05}" \
   --set training.direct_value_ordinal_evidence_safe_hard_negative_teacher_scale="${ORDINAL_EVIDENCE_SAFE_HARD_NEGATIVE_TEACHER_SCALE:-0.0}" \
+  --set training.direct_value_strict_shape_contract="${DIRECT_VALUE_STRICT_SHAPE_CONTRACT:-false}" \
   --set training.direct_value_ordinal_evidence_categorical_group_policy="${ORDINAL_EVIDENCE_CATEGORICAL_GROUP_POLICY:-false}" \
   --set training.direct_value_ordinal_evidence_intragroup_margin="${ORDINAL_EVIDENCE_INTRAGROUP_MARGIN:-0.25}" \
   --set training.direct_value_ordinal_evidence_pairwise_benefit_weight="${ORDINAL_EVIDENCE_PAIRWISE_BENEFIT_WEIGHT:-0.0}" \

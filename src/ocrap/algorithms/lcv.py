@@ -70,13 +70,31 @@ def torch_normalize_weights(weights: torch.Tensor, eps: float = EPS) -> torch.Te
     return torch.where(denom > eps, w / denom.clamp_min(eps), fallback)
 
 
+def _exclusive_cumulative_weights(weights: torch.Tensor) -> torch.Tensor:
+    """Return an exclusive prefix sum without CUDA cumsum when determinism is enabled.
+
+    PyTorch's CUDA cumsum backward is nondeterministic on the deployment stack.
+    Root counts are small, so a strictly lower-triangular matrix product is an
+    exact semantic replacement and respects the configured CuBLAS deterministic
+    workspace contract.
+    """
+    if torch.are_deterministic_algorithms_enabled() and weights.is_cuda:
+        width = int(weights.shape[-1])
+        lower = torch.tril(
+            torch.ones((width, width), dtype=weights.dtype, device=weights.device),
+            diagonal=-1,
+        )
+        return torch.matmul(weights, lower.transpose(-1, -2))
+    return torch.cumsum(weights, dim=-1) - weights
+
+
 def torch_weighted_lcvar(scores: torch.Tensor, weights: torch.Tensor, alpha: float, eps: float = EPS) -> torch.Tensor:
     if not (0.0 < float(alpha) <= 1.0):
         raise ValueError(f"alpha must be in (0,1], got {alpha}")
     w = torch_normalize_weights(weights, eps)
     sorted_scores, idx = torch.sort(scores, dim=-1, descending=False, stable=True)
     sorted_weights = torch.gather(w, -1, idx)
-    cumsum_prev = torch.cumsum(sorted_weights, dim=-1) - sorted_weights
+    cumsum_prev = _exclusive_cumulative_weights(sorted_weights)
     remaining = torch.clamp(float(alpha) - cumsum_prev, min=0.0)
     take = torch.minimum(sorted_weights, remaining)
     return (take * sorted_scores).sum(dim=-1) / float(alpha)
