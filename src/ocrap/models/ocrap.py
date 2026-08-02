@@ -182,6 +182,7 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_component_heads: bool = False,
         direct_recovery_evidence_component_count: int = 3,
         direct_recovery_evidence_component_scale: float = 6.0,
+        direct_recovery_evidence_component_reliability: str | tuple[float, ...] = "",
         direct_recovery_evidence_concord: bool = False,
         direct_recovery_evidence_consensus_disagreement_penalty: float = 0.15,
         direct_recovery_evidence_admission_head: bool = False,
@@ -277,6 +278,29 @@ class OCRAPModel(nn.Module):
         )))
         self.direct_recovery_evidence_component_scale = float(
             max(0.0, direct_recovery_evidence_component_scale)
+        )
+        raw_component_reliability = direct_recovery_evidence_component_reliability
+        if isinstance(raw_component_reliability, str):
+            reliability_values = [
+                float(x.strip()) for x in raw_component_reliability.split(",") if x.strip()
+            ]
+        else:
+            reliability_values = [float(x) for x in raw_component_reliability]
+        if not reliability_values:
+            reliability_values = [1.0] * self.direct_recovery_evidence_component_count
+        if len(reliability_values) < self.direct_recovery_evidence_component_count:
+            reliability_values.extend(
+                [1.0] * (self.direct_recovery_evidence_component_count - len(reliability_values))
+            )
+        reliability_values = [
+            min(1.0, max(0.0, float(x)))
+            for x in reliability_values[: self.direct_recovery_evidence_component_count]
+        ]
+        self.direct_recovery_evidence_component_reliability = tuple(reliability_values)
+        self.register_buffer(
+            "_direct_recovery_evidence_component_reliability",
+            torch.tensor(reliability_values, dtype=torch.float32),
+            persistent=False,
         )
         self.direct_recovery_evidence_concord = bool(direct_recovery_evidence_concord)
         self.direct_recovery_evidence_consensus_disagreement_penalty = float(
@@ -1205,11 +1229,39 @@ class OCRAPModel(nn.Module):
                         )
                     else:
                         unified_component_harm_logits = component_residual
-                    unified_harm_logit = unified_component_harm_logits.amax(dim=-1)
+                    # v48.31 CONTRACT-SLACK-RANK: some physical coordinates can
+                    # be degenerate or nearly unsupported in a fixed dataset (for
+                    # example a constant harm_proxy).  A max-veto over an
+                    # unsupported learned coordinate can dominate every regime even
+                    # though no data identify its sign.  Reliability is global and
+                    # regime-agnostic: it shrinks only unsupported coordinates toward
+                    # the semantic non-harm prior, while the independent measured
+                    # hard veto remains unchanged at deployment.
+                    reliability = self._direct_recovery_evidence_component_reliability.to(
+                        device=unified_component_harm_logits.device,
+                        dtype=unified_component_harm_logits.dtype,
+                    )
+                    neutral_component_logit = (
+                        unified_component_harm_logits.new_tensor(
+                            self.direct_recovery_evidence_component_prior_logit
+                        )
+                        if self.direct_recovery_evidence_frontier
+                        else unified_component_harm_logits.new_zeros(())
+                    )
+                    effective_component_harm_logits = neutral_component_logit + reliability * (
+                        unified_component_harm_logits - neutral_component_logit
+                    )
+                    unified_harm_logit = effective_component_harm_logits.amax(dim=-1)
+                    out["direct_recovery_evidence_effective_component_harm_logits"] = (
+                        effective_component_harm_logits
+                    )
+                    out["direct_recovery_evidence_component_reliability"] = reliability.expand_as(
+                        effective_component_harm_logits
+                    )
                     anchor_harm_residual = (
                         component_residual
                         if self.direct_recovery_evidence_frontier
-                        else unified_component_harm_logits
+                        else effective_component_harm_logits
                     )
                     evidence_calibrator_residual = torch.cat(
                         [benefit_residual.unsqueeze(-1), anchor_harm_residual], dim=-1
@@ -1239,7 +1291,7 @@ class OCRAPModel(nn.Module):
                         # regime-agnostic ranking semantic near the safety frontier.
                         predicted_component_margins = (
                             self.direct_recovery_evidence_slack_temperature
-                            * unified_component_harm_logits.detach()
+                            * effective_component_harm_logits.detach()
                         )
                         max_predicted_veto_margin = predicted_component_margins.amax(dim=-1)
                         slack_barrier = torch.relu(max_predicted_veto_margin)

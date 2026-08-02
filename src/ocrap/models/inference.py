@@ -199,6 +199,10 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         direct_recovery_evidence_component_heads=bool(ckpt.get("direct_recovery_evidence_component_heads", model_cfg.get("direct_recovery_evidence_component_heads", False))),
         direct_recovery_evidence_component_count=int(ckpt.get("direct_recovery_evidence_component_count", model_cfg.get("direct_recovery_evidence_component_count", 3))),
         direct_recovery_evidence_component_scale=float(ckpt.get("direct_recovery_evidence_component_scale", model_cfg.get("direct_recovery_evidence_component_scale", 6.0))),
+        direct_recovery_evidence_component_reliability=str(ckpt.get(
+            "direct_recovery_evidence_component_reliability",
+            model_cfg.get("direct_recovery_evidence_component_reliability", ""),
+        )),
         direct_recovery_evidence_concord=bool(ckpt.get("direct_recovery_evidence_concord", model_cfg.get("direct_recovery_evidence_concord", False))),
         direct_recovery_evidence_consensus_disagreement_penalty=float(ckpt.get(
             "direct_recovery_evidence_consensus_disagreement_penalty",
@@ -323,7 +327,31 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_evidence_component_prior_logit"] = float(
         model.direct_recovery_evidence_component_prior_logit
     )
+    cfg["model"]["direct_recovery_evidence_component_reliability"] = ",".join(
+        f"{x:.8g}" for x in model.direct_recovery_evidence_component_reliability
+    )
     # Fail closed when checkpoint construction and runtime reporting diverge.
+    raw_component_reliability = ckpt.get(
+        "direct_recovery_evidence_component_reliability",
+        model_cfg.get("direct_recovery_evidence_component_reliability", ""),
+    )
+    if isinstance(raw_component_reliability, str):
+        reliability_values = [
+            float(x.strip()) for x in raw_component_reliability.split(",") if x.strip()
+        ]
+    else:
+        reliability_values = [float(x) for x in raw_component_reliability]
+    component_count = int(ckpt.get(
+        "direct_recovery_evidence_component_count",
+        model_cfg.get("direct_recovery_evidence_component_count", 3),
+    ))
+    if not reliability_values:
+        reliability_values = [1.0] * component_count
+    if len(reliability_values) < component_count:
+        reliability_values.extend([1.0] * (component_count - len(reliability_values)))
+    expected_component_reliability = ",".join(
+        f"{min(1.0, max(0.0, x)):.8g}" for x in reliability_values[:component_count]
+    )
     expected_contract = {
         "direct_recovery_evidence_admission_bounded": bool(ckpt.get(
             "direct_recovery_evidence_admission_bounded",
@@ -349,6 +377,7 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_evidence_component_prior_logit",
             model_cfg.get("direct_recovery_evidence_component_prior_logit", -2.0),
         )),
+        "direct_recovery_evidence_component_reliability": expected_component_reliability,
     }
     actual_contract = {
         "direct_recovery_evidence_admission_bounded": bool(model.direct_recovery_evidence_admission_bounded),
@@ -357,6 +386,9 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         "direct_recovery_evidence_slack_penalty": float(model.direct_recovery_evidence_slack_penalty),
         "direct_recovery_evidence_frontier": bool(model.direct_recovery_evidence_frontier),
         "direct_recovery_evidence_component_prior_logit": float(model.direct_recovery_evidence_component_prior_logit),
+        "direct_recovery_evidence_component_reliability": ",".join(
+            f"{x:.8g}" for x in model.direct_recovery_evidence_component_reliability
+        ),
     }
     if expected_contract != actual_contract:
         raise RuntimeError(

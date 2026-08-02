@@ -558,6 +558,51 @@ def fix_sample_geometry(d: dict[str, Any], *, num_roots: int, num_options: int, 
     }
 
 
+def _nominal_deviation_by_path(paths: list[Path]) -> list[float]:
+    """Compute the certificate's candidate-vs-nominal prefix deviation.
+
+    v48.31 keeps validation/checkpoint selection on exactly the same eligible
+    population as policy calibration.  The value is precomputed once because a
+    normal Dataset item has no access to the other candidates in its scene-time
+    group.
+    """
+
+    records: list[tuple[tuple[int, str, int], bool, np.ndarray | None]] = []
+    grouped: dict[tuple[int, str, int], list[int]] = {}
+    for index, path in enumerate(paths):
+        d = load_npz(path)
+        scene = str(np.asarray(d.get("scene_id", path.stem)).item())
+        time_index = int(np.asarray(d.get("time_index", 0)).item())
+        key = (bucket_id_for_path(path), scene, time_index)
+        is_nominal = bool(float(np.asarray(d.get("is_nominal", 0.0)).item()) > 0.5)
+        try:
+            prefix = np.asarray(d.get("prefix_states"), dtype=np.float64)[:, :2]
+        except Exception:
+            prefix = None
+        records.append((key, is_nominal, prefix))
+        grouped.setdefault(key, []).append(index)
+    out = [0.0] * len(paths)
+    for indices in grouped.values():
+        nominal_index = next((i for i in indices if records[i][1]), None)
+        if nominal_index is None:
+            continue
+        reference = records[nominal_index][2]
+        if reference is None:
+            continue
+        for i in indices:
+            prefix = records[i][2]
+            if prefix is None:
+                continue
+            length = min(len(reference), len(prefix))
+            if length <= 0:
+                continue
+            out[i] = float(
+                np.sqrt(np.mean(np.sum((prefix[:length] - reference[:length]) ** 2, axis=-1)))
+                / 5.0
+            )
+    return out
+
+
 class OCRAPSampleDataset(Dataset):
     def __init__(self, paths: list[Path], cfg: dict | None = None):
         self.paths = list(paths)
@@ -574,6 +619,12 @@ class OCRAPSampleDataset(Dataset):
         self.d_signature = max(_model_target_dim(self.cfg, "d_signature", first_sig), first_sig)
         self.d_future_signature = max(_model_target_dim(self.cfg, "d_future_signature", first_fsig), first_fsig)
         self.feature_dim = int(sample_to_feature(first, self.cfg).shape[0])
+        training_cfg = self.cfg.get("training", {}) if isinstance(self.cfg.get("training", {}), dict) else {}
+        self.nominal_deviation = (
+            _nominal_deviation_by_path(self.paths)
+            if bool(training_cfg.get("direct_policy_metric_exact_eligibility", False))
+            else [0.0] * len(self.paths)
+        )
 
     def __len__(self) -> int:
         return len(self.paths)
@@ -603,6 +654,7 @@ class OCRAPSampleDataset(Dataset):
             "hard_violation": torch.tensor(float(np.asarray(d.get("hard_violation", 0.0)).item()), dtype=torch.float32),
             "harm_proxy": torch.tensor(float(np.asarray(d.get("harm_proxy", 0.0)).item()), dtype=torch.float32),
             "feasible": torch.tensor(float(np.asarray(d.get("feasible", 1.0)).item()), dtype=torch.float32),
+            "nominal_deviation": torch.tensor(float(self.nominal_deviation[idx]), dtype=torch.float32),
             "scene_hash": torch.tensor(stable_scene_hash(d.get("scene_id", "")), dtype=torch.long),
             "time_index": torch.tensor(int(np.asarray(d.get("time_index", 0)).item()), dtype=torch.long),
             "candidate_index": torch.tensor(int(np.asarray(d.get("candidate_index", 0)).item()), dtype=torch.long),

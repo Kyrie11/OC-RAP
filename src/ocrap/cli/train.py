@@ -370,6 +370,9 @@ def _direct_value_loss_from_outputs(
         ordinal_evidence_component_margin_regression_weight=float(
             tcfg.get("direct_value_ordinal_evidence_component_margin_regression_weight", 0.0)
         ),
+        ordinal_evidence_component_reliability=str(
+            tcfg.get("direct_value_ordinal_evidence_component_reliability", "")
+        ),
         ordinal_evidence_global_balance=bool(tcfg.get("direct_value_ordinal_evidence_global_balance", False)),
         ordinal_evidence_safe_set_temperature=float(tcfg.get("direct_value_ordinal_evidence_safe_set_temperature", 0.05)),
         ordinal_evidence_safe_benefit_target=bool(tcfg.get("direct_value_ordinal_evidence_safe_benefit_target", False)),
@@ -566,6 +569,15 @@ def _direct_policy_batch_stats(
     ti = batch["time_index"].reshape(-1)
     isn = batch["is_nominal"].reshape(-1) > 0.5
     mac = batch.get("prefix_macro_type_id", batch.get("candidate_index", torch.zeros_like(ti))).reshape(-1)
+    exact_eligibility = bool(tcfg.get("direct_policy_metric_exact_eligibility", False))
+    feasible = batch.get("feasible", torch.ones_like(batch["is_nominal"])).reshape(-1) > 0.5
+    nominal_deviation = batch.get(
+        "nominal_deviation", torch.zeros_like(batch["is_nominal"])
+    ).float().reshape(-1)
+    metric_max_hard = float(tcfg.get("direct_policy_metric_max_hard", 1.0))
+    metric_min_nominal_deviation = float(
+        tcfg.get("direct_policy_metric_min_nominal_deviation", 0.002)
+    )
     allowed = torch.zeros_like(isn)
     for m in _parse_int_tuple(tcfg.get("direct_value_macro_ids", "2,3,5,6,7"), (2, 3, 5, 6, 7)):
         allowed |= mac == int(m)
@@ -594,7 +606,15 @@ def _direct_policy_batch_stats(
     for key in torch.unique(keys, dim=0):
         idx = torch.where((keys == key.unsqueeze(0)).all(dim=1))[0]
         noms = idx[isn[idx]]
-        recs = idx[(~isn[idx]) & allowed[idx]]
+        recovery_mask = (~isn[idx]) & allowed[idx]
+        if exact_eligibility:
+            recovery_mask = (
+                recovery_mask
+                & feasible[idx]
+                & (teacher_hard[idx] <= metric_max_hard)
+                & (nominal_deviation[idx] >= metric_min_nominal_deviation)
+            )
+        recs = idx[recovery_mask]
         if noms.numel() == 0 or recs.numel() == 0:
             continue
         nom = noms[0]
@@ -879,8 +899,20 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
                 stats.get(f"safe_positive_admission_hit_{suffix}", 0.0) / safe_opportunity_count
                 if safe_opportunity_count > 0 else 0.0
             )
+            valid_safe_admission_count = stats.get(
+                f"valid_safe_admission_count_{suffix}", 0.0
+            )
+            evidence_safe_top1_hit_count = stats.get(
+                f"evidence_safe_top1_hit_{suffix}", 0.0
+            )
+            out[f"direct_valid_safe_admission_count{tag}"] = float(
+                valid_safe_admission_count
+            )
+            out[f"direct_evidence_safe_top1_hit_count{tag}"] = float(
+                evidence_safe_top1_hit_count
+            )
             out[f"direct_safe_admission_precision{tag}"] = (
-                stats.get(f"valid_safe_admission_count_{suffix}", 0.0) / admission_count
+                valid_safe_admission_count / admission_count
                 if admission_count > 0 else 0.0
             )
             out[f"direct_invalid_admission_rate{tag}"] = (
@@ -1229,6 +1261,18 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
             float(out.get("direct_raw_admission_rate_near", 0.0)),
             float(out.get("direct_raw_admission_rate_contact", 0.0)),
         ]
+        valid_safe_admission_counts = [
+            float(out.get("direct_valid_safe_admission_count_near", 0.0)),
+            float(out.get("direct_valid_safe_admission_count_contact", 0.0)),
+        ]
+        evidence_safe_top1_hit_counts = [
+            float(out.get("direct_evidence_safe_top1_hit_count_near", 0.0)),
+            float(out.get("direct_evidence_safe_top1_hit_count_contact", 0.0)),
+        ]
+        safe_opportunity_counts = [
+            float(out.get("direct_safe_opportunity_group_count_near", 0.0)),
+            float(out.get("direct_safe_opportunity_group_count_contact", 0.0)),
+        ]
         integrity_target = float(
             tcfg.get("direct_policy_metric_integrity_min_recall",
                      tcfg.get("direct_policy_metric_min_positive_recall", 0.20))
@@ -1236,7 +1280,20 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
         hard_shortfall = sum(max(0.0, integrity_target - value) for value in hard_recalls)
         precision_target = float(tcfg.get("direct_policy_metric_integrity_min_precision", 0.60))
         precision_shortfall = sum(max(0.0, precision_target - value) for value in hard_precisions)
-        all_abstain = float(max(hard_admission_rates) <= 0.0)
+        # v48.31 fixes the v48.25 barrier: harmful/invalid admissions must not
+        # make an all-abstain checkpoint look executable.  Whenever the exact
+        # safe contract is present, abstention is defined by zero *valid safe*
+        # admissions, not by zero raw switches.  The raw-rate fallback is only
+        # for historical callers that did not emit safe-contract counters.
+        safe_contract_present = any(
+            float(out.get(f"direct_safe_contract_available_{regime}", 0.0)) > 0.5
+            for regime in ("near", "contact")
+        )
+        all_abstain = float(
+            sum(valid_safe_admission_counts) <= 0.0
+            if safe_contract_present
+            else max(hard_admission_rates) <= 0.0
+        )
         out["direct_integrity_recall_min"] = min(hard_recalls)
         out["direct_integrity_precision_min"] = min(hard_precisions)
         out["direct_integrity_invalid_admission_max"] = max(invalid_admission_rates)
@@ -1254,6 +1311,52 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
             * max(safe_top1_regrets)
             + float(tcfg.get("direct_policy_metric_integrity_all_abstain_weight", 8.0))
             * all_abstain
+        )
+
+        # v48.31 CONTRACT-SLACK-RANK: checkpoint selection is lexicographically
+        # dominated by exact-eligible, proposal-contained safe top-1 support.
+        # This remains threshold-free (rules are fitted later on adaptation-dev),
+        # but it prevents a globally good candidate AUC or soft mass metric from
+        # selecting a checkpoint that never ranks a safe recovery first.
+        top1_recalls = [
+            hits / opportunities if opportunities > 0.0 else 0.0
+            for hits, opportunities in zip(
+                evidence_safe_top1_hit_counts, safe_opportunity_counts
+            )
+        ]
+        zero_safe_top1_regimes = sum(
+            1.0
+            for hits, opportunities in zip(
+                evidence_safe_top1_hit_counts, safe_opportunity_counts
+            )
+            if opportunities > 0.0 and hits <= 0.0
+        )
+        contract_top1_target = float(
+            tcfg.get("direct_policy_metric_contract_min_safe_top1_recall", 0.20)
+        )
+        contract_top1_shortfall = sum(
+            max(0.0, contract_top1_target - value) for value in top1_recalls
+        )
+        base_population_risk = float(
+            out.get("direct_population_safe_rank_risk", out["direct_frontier_selection_risk"])
+        )
+        out["direct_contract_safe_top1_recall_min"] = min(top1_recalls)
+        out["direct_contract_zero_safe_top1_regimes"] = float(zero_safe_top1_regimes)
+        out["direct_contract_valid_safe_admission_total"] = float(
+            sum(valid_safe_admission_counts)
+        )
+        out["direct_contract_safe_rank_risk"] = (
+            base_population_risk
+            + float(tcfg.get("direct_policy_metric_contract_zero_top1_weight", 100.0))
+            * zero_safe_top1_regimes
+            + float(tcfg.get("direct_policy_metric_contract_top1_shortfall_weight", 20.0))
+            * contract_top1_shortfall
+            + float(tcfg.get("direct_policy_metric_contract_all_abstain_weight", 10.0))
+            * all_abstain
+            + float(tcfg.get("direct_policy_metric_contract_invalid_weight", 4.0))
+            * max(invalid_admission_rates)
+            + float(tcfg.get("direct_policy_metric_contract_regret_weight", 2.0))
+            * max(safe_top1_regrets)
         )
     return out
 
@@ -2447,6 +2550,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_evidence_component_heads=bool(model_cfg.get("direct_recovery_evidence_component_heads", False)),
         direct_recovery_evidence_component_count=int(model_cfg.get("direct_recovery_evidence_component_count", 3)),
         direct_recovery_evidence_component_scale=float(model_cfg.get("direct_recovery_evidence_component_scale", 6.0)),
+        direct_recovery_evidence_component_reliability=str(
+            model_cfg.get("direct_recovery_evidence_component_reliability", "")
+        ),
         direct_recovery_evidence_concord=bool(model_cfg.get("direct_recovery_evidence_concord", False)),
         direct_recovery_evidence_consensus_disagreement_penalty=float(
             model_cfg.get("direct_recovery_evidence_consensus_disagreement_penalty", 0.15)
@@ -2747,6 +2853,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "direct_recovery_evidence_component_heads": bool(model_cfg.get("direct_recovery_evidence_component_heads", False)),
             "direct_recovery_evidence_component_count": int(model_cfg.get("direct_recovery_evidence_component_count", 3)),
             "direct_recovery_evidence_component_scale": float(model_cfg.get("direct_recovery_evidence_component_scale", 6.0)),
+            "direct_recovery_evidence_component_reliability": str(
+                model_cfg.get("direct_recovery_evidence_component_reliability", "")
+            ),
             "direct_recovery_evidence_concord": bool(model_cfg.get("direct_recovery_evidence_concord", False)),
             "direct_recovery_evidence_consensus_disagreement_penalty": float(
                 model_cfg.get("direct_recovery_evidence_consensus_disagreement_penalty", 0.15)

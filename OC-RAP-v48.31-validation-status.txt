@@ -1,0 +1,37 @@
+OC-RAP v48.31 CONTRACT-SLACK-RANK 本地验证状态
+================================================
+验证日期：2026-08-02
+
+PASS  PYTHONPATH=src python -m pytest -q
+      273 passed, 5 warnings
+
+PASS  python -m compileall -q src tools tests
+
+PASS  find scripts -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+
+PASS  v48.31 shell-to-tool reference audit
+      所有 v48.31 shell 脚本引用的 tools/*.py 均存在。
+
+PASS  git apply --check --unsafe-paths
+      OC-RAP-v48.30-to-v48.31-CONTRACT-SLACK-RANK.patch 可对原始上传代码树进行 clean apply 检查。
+
+PASS  ZIP 完整性
+      unzip -tq OC-RAP-v48.31-CONTRACT-SLACK-RANK.zip
+
+PASS  v48.30 shadow 故障复核
+      上传的 v48.30 开发闭环日志在 Waymax 仿真前因缺少
+      tools/audit_v48_30_shadow_provenance.py 退出；v48.31 已补齐新的 provenance、
+      runtime、physical-support、target checker，并加入脚本依赖回归测试。
+
+边界与未执行项
+--------------
+
+1. 当前环境没有用户服务器上的 WOMD / Waymax 数据、原始 NPZ 绝对路径和两张 A30，
+   因此未执行 v48.31 真实训练、Natural certificate gate 或闭环物理评估。
+2. 本地 factor-support 审计只能读取 teacher index 中的标量，不能读取服务器绝对 NPZ；
+   它得到的初步全局 reliability 为 1,1,1,0,0。真实主实验使用
+   --require-readable-samples，NPZ 不可读会直接 RC=30，不会静默采用 fallback。
+3. 不预先声称 v48.31 会得到 RC=0。真实结果必须按三值返回码解释：
+   RC=0 为有效通过，RC=20 为有效算法拒绝，RC=30 为工程/协议/artifact 失败。
+4. 当前反复分析过的 certificate pool 应视为开发证据。最终 CCF-A 论文结论仍需
+   新封存或预注册的独立 certificate/test population。
