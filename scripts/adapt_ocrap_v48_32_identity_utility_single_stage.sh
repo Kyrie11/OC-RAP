@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# v48.31 CONTRACT-SLACK-RANK
+# v48.32 IDENTITY-UTILITY-BRIDGE
 # One bucket-invariant model evaluates both frozen source experts for every
 # candidate. SLACK-RANK-BRIDGE preserves the missing runtime wiring for the semantic
 # risk prior/frontier, uses an executable-admission checkpoint barrier, and evaluates a
@@ -71,7 +71,7 @@ TRAINABLE_PREFIXES="${EVIDENCE_TRAINABLE_PREFIXES_OVERRIDE:-$TRAINABLE_PREFIXES}
 
 cat > "$RUN/STAGE_ARCHITECTURE.json" <<JSON
 {
-  "version": "v48.31-CONTRACT-SLACK-RANK",
+  "version": "v48.32-IDENTITY-UTILITY-BRIDGE",
   "source_checkpoint": "$INIT_CKPT",
   "training_role": "unified_non_regime_specific_safe_set_admission",
   "frozen_policy": "v48.13_topk_recovery_proposal",
@@ -104,6 +104,7 @@ cat > "$RUN/STAGE_ARCHITECTURE.json" <<JSON
   "proposal_top_k": $PROPOSAL_TOP_K,
   "frontier_runtime_wiring_verified": true,
   "admission_residual_bounded": ${EVIDENCE_ADMISSION_BOUNDED:-false},
+  "admission_prior_detach": ${EVIDENCE_ADMISSION_PRIOR_DETACH:-true},
   "admission_prior_mode": "$ADMISSION_PRIOR_MODE",
   "slack_temperature": ${EVIDENCE_SLACK_TEMPERATURE:-0.025},
   "slack_penalty": ${EVIDENCE_SLACK_PENALTY:-1.0},
@@ -120,6 +121,7 @@ cat > "$RUN/STAGE_ARCHITECTURE.json" <<JSON
   "safe_utility_temperature": $SAFE_UTILITY_TEMPERATURE,
   "safe_hard_negative_weight": $SAFE_HARD_NEGATIVE_WEIGHT,
   "safe_hard_negative_margin": $SAFE_HARD_NEGATIVE_MARGIN,
+  "safe_hard_negative_teacher_scale": ${ORDINAL_EVIDENCE_SAFE_HARD_NEGATIVE_TEACHER_SCALE:-0.0},
   "test_roots_read": false
 }
 JSON
@@ -146,7 +148,9 @@ EVIDENCE_CALIBRATOR_MODE=dual_tail_context EVIDENCE_CALIBRATOR_CONTEXT="$CAL_CON
 EVIDENCE_CALIBRATOR_CONTEXT_SOURCE="$CAL_CONTEXT_SOURCE" EVIDENCE_CALIBRATOR_SHARED=false EVIDENCE_CALIBRATOR_REGIME_SCALE=0 \
 EVIDENCE_UNIFIED_EXPERTS=true EVIDENCE_COMPONENT_HEADS="$COMPONENT_HEADS" EVIDENCE_COMPONENT_COUNT="$COMPONENT_COUNT" \
 EVIDENCE_CONCORD="$CONCORD_ENABLED" EVIDENCE_ADMISSION_HEAD="$ADMISSION_ENABLED" \
-EVIDENCE_ADMISSION_SCALE="${EVIDENCE_ADMISSION_SCALE:-1.0}" EVIDENCE_ADMISSION_BOUNDED="${EVIDENCE_ADMISSION_BOUNDED:-false}" EVIDENCE_ADMISSION_PRIOR_MODE="$ADMISSION_PRIOR_MODE" EVIDENCE_SLACK_TEMPERATURE="${EVIDENCE_SLACK_TEMPERATURE:-0.025}" EVIDENCE_SLACK_PENALTY="${EVIDENCE_SLACK_PENALTY:-1.0}" EVIDENCE_CONSENSUS_DISAGREEMENT_PENALTY="$DISAGREEMENT_PENALTY" \
+EVIDENCE_ADMISSION_SCALE="${EVIDENCE_ADMISSION_SCALE:-1.0}" EVIDENCE_ADMISSION_BOUNDED="${EVIDENCE_ADMISSION_BOUNDED:-false}" \
+EVIDENCE_ADMISSION_PRIOR_DETACH="${EVIDENCE_ADMISSION_PRIOR_DETACH:-true}" EVIDENCE_ADMISSION_PRIOR_MODE="$ADMISSION_PRIOR_MODE" \
+EVIDENCE_SLACK_TEMPERATURE="${EVIDENCE_SLACK_TEMPERATURE:-0.025}" EVIDENCE_SLACK_PENALTY="${EVIDENCE_SLACK_PENALTY:-1.0}" EVIDENCE_CONSENSUS_DISAGREEMENT_PENALTY="$DISAGREEMENT_PENALTY" \
 EVIDENCE_COMPONENT_SCALE="${EVIDENCE_COMPONENT_SCALE:-6.0}" \
 EVIDENCE_FRONTIER="$FRONTIER_ENABLED" EVIDENCE_COMPONENT_PRIOR_LOGIT="$COMPONENT_PRIOR_LOGIT" \
 ORDINAL_EVIDENCE_INDEPENDENT_TAILS=true ORDINAL_EVIDENCE_FACTORIZED_HARM=true \
@@ -247,7 +251,7 @@ HARM_LABEL_MODE=component_veto
 OPPORTUNITY_LABEL_MODE=raw_benefit
 GATE_POSITIVE_MODE=safe_benefit
 ADMISSION_LABEL_MODE=continuous_safe_utility_with_component_veto
-CALIBRATION_PROTOCOL=v48_31_dev_frozen_full_certificate_verification
+CALIBRATION_PROTOCOL=v48_32_dev_frozen_full_certificate_verification
 EOF
 
 python - "$RUN" "$MODEL_DIR/best.pt" "$INIT_CKPT" "$MAX_CALIBRATOR_PARAMS" "$BEST_METRIC_NAME" "$COMPONENT_HEADS" "$SETWISE_WEIGHT" "$COMPONENT_TAIL_WEIGHT" <<'PY'
@@ -264,7 +268,7 @@ legacy=[k for k in state if k.startswith(('direct_evidence_calibrators.','direct
 if trainable <= 0 or trainable > max_params:
     raise SystemExit(f'unexpected FACTOR-PHYSICS-BRIDGE calibrator parameter count: {trainable}; allowed=(0,{max_params}]')
 meta={
- 'event':'v48_31_slack_rank_bridge_bridge_evidence_correction_complete','created_unix':time.time(),
+ 'event':'v48_32_identity_utility_evidence_correction_complete','created_unix':time.time(),
  'checkpoint':str(ckpt),'checkpoint_sha256':hashlib.sha256(ckpt.read_bytes()).hexdigest(),
  'source_checkpoint':str(source),'source_checkpoint_sha256':hashlib.sha256(source.read_bytes()).hexdigest(),
  'frozen_policy':True,'frozen_source_experts':True,

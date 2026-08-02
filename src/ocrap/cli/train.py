@@ -399,6 +399,9 @@ def _direct_value_loss_from_outputs(
         ordinal_evidence_frontier_pairwise_margin=float(tcfg.get("direct_value_ordinal_evidence_frontier_pairwise_margin", 0.25)),
         ordinal_evidence_safe_hard_negative_weight=float(tcfg.get("direct_value_ordinal_evidence_safe_hard_negative_weight", 0.0)),
         ordinal_evidence_safe_hard_negative_margin=float(tcfg.get("direct_value_ordinal_evidence_safe_hard_negative_margin", 0.05)),
+        ordinal_evidence_safe_hard_negative_teacher_scale=float(
+            tcfg.get("direct_value_ordinal_evidence_safe_hard_negative_teacher_scale", 0.0)
+        ),
         ordinal_evidence_categorical_group_policy=bool(tcfg.get("direct_value_ordinal_evidence_categorical_group_policy", False)),
         ordinal_evidence_intragroup_margin=float(tcfg.get("direct_value_ordinal_evidence_intragroup_margin", 0.25)),
         ordinal_evidence_pairwise_benefit_weight=float(tcfg.get("direct_value_ordinal_evidence_pairwise_benefit_weight", 0.0)),
@@ -2566,6 +2569,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_evidence_admission_bounded=bool(
             model_cfg.get("direct_recovery_evidence_admission_bounded", True)
         ),
+        direct_recovery_evidence_admission_prior_detach=bool(
+            model_cfg.get("direct_recovery_evidence_admission_prior_detach", True)
+        ),
         direct_recovery_evidence_admission_prior_mode=str(
             model_cfg.get("direct_recovery_evidence_admission_prior_mode", "risk_centered")
         ),
@@ -2868,6 +2874,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             ),
             "direct_recovery_evidence_admission_bounded": bool(
                 model_cfg.get("direct_recovery_evidence_admission_bounded", True)
+            ),
+            "direct_recovery_evidence_admission_prior_detach": bool(
+                model_cfg.get("direct_recovery_evidence_admission_prior_detach", True)
             ),
             "direct_recovery_evidence_admission_prior_mode": str(
                 model_cfg.get("direct_recovery_evidence_admission_prior_mode", "risk_centered")

@@ -82,7 +82,8 @@ def test_benefit_only_admission_prior_is_supported_and_persisted() -> None:
 def test_benefit_only_mode_removes_soft_risk_double_penalty() -> None:
     source = (ROOT / "src" / "ocrap" / "models" / "ocrap.py").read_text()
     block = source[source.index('if self.direct_recovery_evidence_admission_prior_mode == "benefit_only"'):]
-    assert "admission_prior = unified_benefit_logit.detach()" in block[:1000]
+    assert "admission_prior = prior_benefit" in block[:1000]
+    assert "direct_recovery_evidence_admission_prior_detach" in source
     assert "softplus(unified_harm_logit.detach())" not in block[:1000]
 
 

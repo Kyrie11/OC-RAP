@@ -1,0 +1,20 @@
+{
+  "measured_ablation_factor_trainings": 8,
+  "measured_factor_seconds_total": 11302.461539091542,
+  "v48_32_factor_trainings": 2,
+  "estimated_factor_seconds_with_cache": 2735.6448876229115,
+  "estimated_factor_seconds_saved": 8566.81665146863,
+  "estimated_factor_hours_saved": 2.3796712920746197,
+  "note": "Standalone ablations train one factor stage per variant; the recommended post-main command reuses the two exact-contract main factor stages, so all eight v48.31 ablation factor retrainings are eliminated. Certificate and Waymax simulations are not shortened.",
+  "measured_ablation_effective_training_seconds": 17308.498352398165,
+  "factor_share_of_ablation_training": 0.6530006999437672,
+  "main_factor_share_of_training": 0.5840889755361298,
+  "v48_32_standalone_ablation_factor_trainings": 2,
+  "v48_32_standalone_estimated_factor_seconds": 2735.6448876229115,
+  "v48_32_standalone_estimated_factor_seconds_saved": 8566.81665146863,
+  "v48_32_standalone_estimated_factor_hours_saved": 2.3796712920746197,
+  "v48_32_after_main_factor_trainings": 0,
+  "v48_32_after_main_estimated_factor_seconds_saved": 11302.461539091542,
+  "v48_32_after_main_estimated_factor_hours_saved": 3.1395726497476506,
+  "teacher_index_cache": "training and adaptation-dev indexes are reused only after exact contract audit"
+}

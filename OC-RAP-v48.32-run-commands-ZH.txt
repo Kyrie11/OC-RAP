@@ -1,0 +1,154 @@
+# OC-RAP v48.32 IDENTITY-UTILITY-BRIDGE 执行指令
+# 日期：2026-08-02
+# 目标：先得到可信的主流程 RC，再按照 RC=0/20/30 分支执行。
+# 禁止手工创建 NEXT_COMMANDS.txt，禁止在 RC=20/30 时读取 held-out test/stress。
+
+################################################################################
+# 0. 解压与环境
+################################################################################
+
+unzip -q OC-RAP-v48.32-IDENTITY-UTILITY-BRIDGE.zip
+cd OC-RAP-v48.32-IDENTITY-UTILITY-BRIDGE
+
+export OCRAP_REPO="$PWD"
+export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
+export OCRAP_ROOT=/data0/senzeyu2/dataset/OCRAP
+export SOURCE_RUN=runs/ocrap_v48_13_terra_proxy_4801
+export PROTOCOL_ROOT="$OCRAP_ROOT/calibration_v48_14_prism_4814"
+export CAL_SAFE="$OCRAP_ROOT/calibration_safe"
+export GPU0=0
+export GPU1=1
+
+# 建议保留确定性。不要为了速度关闭 exact eligibility 或减少 certificate population。
+export DETERMINISTIC_ALGORITHMS=true
+export CUDNN_BENCHMARK=false
+export NUM_WORKERS=3
+export PREFETCH_FACTOR=3
+export BATCH_SIZE=96
+
+################################################################################
+# 1. 可选的发布包自检
+################################################################################
+
+PYTHONPATH="$PWD/src" pytest -q
+python -m compileall -q src tools tests
+find scripts -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+
+################################################################################
+# 2. 主实验：Balanced GPU0，Precision GPU1
+################################################################################
+
+export OUTPUTDIR=runs/ocrap_v48_32_identity_utility_bridge_dedicated_4832
+mkdir -p "$OUTPUTDIR"
+
+set +e
+bash scripts/run_v48_32_identity_utility_bridge_dedicated.sh \
+  >"$OUTPUTDIR/launcher.stdout.log" 2>"$OUTPUTDIR/launcher.stderr.log"
+RC=$?
+set -e
+
+echo "V48.32_MAIN_RC=$RC"
+
+# 必看。不要只根据 NEXT_COMMANDS.txt 是否存在猜 RC。
+[[ -f "$OUTPUTDIR/V48_32_COMPLETE.json" ]] && python -m json.tool "$OUTPUTDIR/V48_32_COMPLETE.json" || true
+[[ -f "$OUTPUTDIR/PIPELINE_FAILED.json" ]] && python -m json.tool "$OUTPUTDIR/PIPELINE_FAILED.json" || true
+[[ -f "$OUTPUTDIR/NEXT_COMMANDS_STATUS.json" ]] && python -m json.tool "$OUTPUTDIR/NEXT_COMMANDS_STATUS.json" || true
+[[ -f "$OUTPUTDIR/NEXT_COMMANDS_BLOCKED.json" ]] && python -m json.tool "$OUTPUTDIR/NEXT_COMMANDS_BLOCKED.json" || true
+
+################################################################################
+# 3A. RC=0：Natural gate 通过
+################################################################################
+
+# 只有当下面三个条件同时满足才执行：
+#   1) shell RC=0
+#   2) V48_32_COMPLETE.json: pipeline_valid=true, gate_passed=true
+#   3) NEXT_COMMANDS_STATUS.json: generated=true
+
+if [[ "$RC" == 0 ]]; then
+  test -s "$OUTPUTDIR/NEXT_COMMANDS.txt"
+  cat "$OUTPUTDIR/NEXT_COMMANDS.txt"
+  # 审阅后严格原样执行自动生成的两条命令；不要手工修改 threshold/gamma/gate。
+fi
+
+################################################################################
+# 3B. RC=20：有效 Natural gate 拒绝
+################################################################################
+
+# RC=20 时不读取 test/stress。先运行 v48.32 消融，再运行 adaptation-dev shadow。
+# 推荐复用主实验的两个 Stage-1 factor checkpoint；代码会对源 checkpoint、
+# train/dev index、support contract、variant 和所有关键超参数做 SHA 合同验证。
+
+if [[ "$RC" == 20 ]]; then
+  export ABLATION_ROOT=runs/ocrap_v48_32_identity_utility_bridge_ablations_4832
+  export V4832_ABLATION_FACTOR_CACHE_BALANCED="$OUTPUTDIR/candidates/balanced/factor_stage"
+  export V4832_ABLATION_FACTOR_CACHE_PRECISION="$OUTPUTDIR/candidates/precision/factor_stage"
+
+  set +e
+  bash scripts/run_v48_32_identity_utility_bridge_ablations.sh \
+    >"$ABLATION_ROOT.launcher.stdout.log" 2>"$ABLATION_ROOT.launcher.stderr.log"
+  ABLATION_RC=$?
+  set -e
+  echo "V48.32_ABLATION_RC=$ABLATION_RC"
+  [[ -f "$ABLATION_ROOT/ABLATIONS_STATUS.json" ]] && python -m json.tool "$ABLATION_ROOT/ABLATIONS_STATUS.json" || true
+
+  # adaptation-dev physical shadow。该脚本会在 Waymax 之前检查 pipeline、gamma、
+  # checkpoint、目标列表、provenance 与 runtime 合同。失败时写 SHADOW_BLOCKED.json。
+  export OUT="$OUTPUTDIR"
+  set +e
+  bash scripts/run_v48_32_dev_shadow_closed_loop.sh \
+    >"$OUTPUTDIR/dev_shadow_launcher.stdout.log" 2>"$OUTPUTDIR/dev_shadow_launcher.stderr.log"
+  SHADOW_RC=$?
+  set -e
+  echo "V48.32_DEV_SHADOW_RC=$SHADOW_RC"
+  [[ -f "$OUTPUTDIR/SHADOW_BLOCKED.json" ]] && python -m json.tool "$OUTPUTDIR/SHADOW_BLOCKED.json" || true
+  [[ -f "$OUTPUTDIR/DEV_SHADOW_COMPLETE.json" ]] && python -m json.tool "$OUTPUTDIR/DEV_SHADOW_COMPLETE.json" || true
+fi
+
+################################################################################
+# 3C. RC=30：工程/协议/产物失败
+################################################################################
+
+# RC=30 不做算法结论，不运行消融、shadow、test 或 stress。
+# 优先查看结构化失败文件和对应日志。
+
+if [[ "$RC" == 30 ]]; then
+  python -m json.tool "$OUTPUTDIR/PIPELINE_FAILED.json"
+  python -m json.tool "$OUTPUTDIR/NEXT_COMMANDS_BLOCKED.json"
+  find "$OUTPUTDIR" -maxdepth 3 -type f \
+    \( -name '*FAILED*.json' -o -name '*CONTRACT*.json' -o -name '*INTEGRITY*.json' \) \
+    -print | sort
+  tail -n 160 "$OUTPUTDIR"/logs/*.log 2>/dev/null || true
+fi
+
+################################################################################
+# 4. 结果判读
+################################################################################
+
+# 主流程：
+#   RC=0  = gate 通过，NEXT_COMMANDS.txt 必须存在。
+#   RC=20 = pipeline/certificate 有效，但 Natural gate 拒绝；BLOCKED reason 应为 natural_gate_failed。
+#   RC=30 = 工程、协议、artifact 或合同错误；certificate_exit_code 在未运行时必须为 null。
+#
+# 消融 D 应重点比较：
+#   proposal_evidence_top1_correlation
+#   proposal_evidence_top1_safe_positive_auc
+#   selected / positive_selected / harmful_selected
+#   precision_lcb90 / positive_recall
+#   teacher_advantage_mean
+#   macro_excess_share
+#
+# Near 的首要目标：在保留 candidate AUC 的同时产生非零、低 harmful、非集中 safe top-1。
+# Contact 的首要目标：把负 top-1 correlation 拉到稳定正值，并消除高收益 harmful action 优先。
+
+################################################################################
+# 5. 强制重建缓存（仅当数据、标签或参数确实改变）
+################################################################################
+
+# 主实验 train index：
+# export REBUILD_ADAPT_INDEX=1
+# 主实验 adaptation-dev index：
+# export REBUILD_ADAPT_DEV_INDEX=1
+# 消融 train/dev index：
+# export REBUILD_ABLATION_INDEX=1
+#
+# Factor cache 不允许强制忽略合同。合同不一致时应重新训练，不能手工复制 checkpoint。

@@ -1,0 +1,14 @@
+{
+  "files_scanned": [
+    "scripts/run_v48_32_stress_if_authorized.sh",
+    "scripts/run_v48_32_identity_utility_bridge_dedicated.sh",
+    "scripts/calibrate_v48_32_certificate_pool.sh",
+    "scripts/run_v48_32_identity_utility_bridge_ablations.sh",
+    "scripts/adapt_ocrap_v48_32_identity_utility_variant.sh",
+    "scripts/run_v48_32_dev_shadow_closed_loop.sh",
+    "scripts/adapt_ocrap_v48_32_identity_utility_single_stage.sh"
+  ],
+  "reference_count": 46,
+  "missing": [],
+  "valid": true
+}

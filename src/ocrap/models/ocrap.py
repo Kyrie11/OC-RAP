@@ -188,6 +188,7 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_admission_head: bool = False,
         direct_recovery_evidence_admission_scale: float = 2.0,
         direct_recovery_evidence_admission_bounded: bool = True,
+        direct_recovery_evidence_admission_prior_detach: bool = True,
         direct_recovery_evidence_admission_prior_mode: str = "risk_centered",
         direct_recovery_evidence_slack_temperature: float = 0.025,
         direct_recovery_evidence_slack_penalty: float = 1.0,
@@ -314,6 +315,9 @@ class OCRAPModel(nn.Module):
         )
         self.direct_recovery_evidence_admission_bounded = bool(
             direct_recovery_evidence_admission_bounded
+        )
+        self.direct_recovery_evidence_admission_prior_detach = bool(
+            direct_recovery_evidence_admission_prior_detach
         )
         self.direct_recovery_evidence_admission_prior_mode = str(
             direct_recovery_evidence_admission_prior_mode or "risk_centered"
@@ -1277,10 +1281,27 @@ class OCRAPModel(nn.Module):
                     )
                 if admission_raw is not None:
                     # Admission has a separate semantic target: raw benefit AND
-                    # no component veto.  Detaching the prior prevents its sparse
-                    # gradient from distorting either the raw-benefit or risk head.
-                    # softplus(harm) is a conservative log-risk penalty; the bounded
-                    # residual can correct it from context without regime routing.
+                    # no component veto. Historical stages detached the prior so
+                    # sparse admission gradients could not distort the factor
+                    # heads. v48.32 optionally couples the deployment-exact safe
+                    # utility back into the compact benefit/component calibrators.
+                    # This remains one regime-agnostic candidate-vs-nominal model;
+                    # the flag controls gradient flow only, never inference logic.
+                    prior_benefit = (
+                        unified_benefit_logit.detach()
+                        if self.direct_recovery_evidence_admission_prior_detach
+                        else unified_benefit_logit
+                    )
+                    prior_components = (
+                        effective_component_harm_logits.detach()
+                        if self.direct_recovery_evidence_admission_prior_detach
+                        else effective_component_harm_logits
+                    )
+                    prior_harm = (
+                        unified_harm_logit.detach()
+                        if self.direct_recovery_evidence_admission_prior_detach
+                        else unified_harm_logit
+                    )
                     if self.direct_recovery_evidence_admission_prior_mode == "safety_slack":
                         # v48.30 SLACK-RANK: convert the five calibrated component
                         # logits back into signed physical veto margins.  Actions
@@ -1291,12 +1312,12 @@ class OCRAPModel(nn.Module):
                         # regime-agnostic ranking semantic near the safety frontier.
                         predicted_component_margins = (
                             self.direct_recovery_evidence_slack_temperature
-                            * effective_component_harm_logits.detach()
+                            * prior_components
                         )
                         max_predicted_veto_margin = predicted_component_margins.amax(dim=-1)
                         slack_barrier = torch.relu(max_predicted_veto_margin)
                         admission_prior = (
-                            unified_benefit_logit.detach()
+                            prior_benefit
                             - self.direct_recovery_evidence_slack_penalty * slack_barrier
                         )
                         out["direct_recovery_evidence_predicted_component_margins"] = predicted_component_margins
@@ -1309,7 +1330,7 @@ class OCRAPModel(nn.Module):
                         # factor and suppressed safe-positive actions. The
                         # admission residual is still trained with harmful
                         # candidates mapped to negative safe utility.
-                        admission_prior = unified_benefit_logit.detach()
+                        admission_prior = prior_benefit
                     elif self.direct_recovery_evidence_frontier:
                         # Center the risk penalty at the semantic non-harm prior.
                         # Zero residual therefore reproduces the transferred
@@ -1320,16 +1341,16 @@ class OCRAPModel(nn.Module):
                             )
                         )
                         admission_prior = (
-                            unified_benefit_logit.detach()
+                            prior_benefit
                             - (
-                                torch.nn.functional.softplus(unified_harm_logit.detach())
+                                torch.nn.functional.softplus(prior_harm)
                                 - prior_penalty
                             )
                         )
                     else:
                         admission_prior = (
-                            unified_benefit_logit.detach()
-                            - torch.nn.functional.softplus(unified_harm_logit.detach())
+                            prior_benefit
+                            - torch.nn.functional.softplus(prior_harm)
                         )
                     # v48.25 INTEGRITY-BRIDGE optionally removes the tanh ceiling.
                     # The zero-initialised head still preserves the transferred prior

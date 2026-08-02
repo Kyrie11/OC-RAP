@@ -1445,6 +1445,7 @@ def direct_uncertainty_recovery_value_loss(
     ordinal_evidence_frontier_pairwise_margin: float = 0.25,
     ordinal_evidence_safe_hard_negative_weight: float = 0.0,
     ordinal_evidence_safe_hard_negative_margin: float = 0.05,
+    ordinal_evidence_safe_hard_negative_teacher_scale: float = 0.0,
     ordinal_evidence_categorical_group_policy: bool = False,
     ordinal_evidence_intragroup_margin: float = 0.25,
     ordinal_evidence_pairwise_benefit_weight: float = 0.0,
@@ -2537,6 +2538,9 @@ def direct_uncertainty_recovery_value_loss(
                 and deployed_safe_utility.numel()
             ):
                 margin = float(ordinal_evidence_safe_hard_negative_margin)
+                teacher_scale = max(
+                    0.0, float(ordinal_evidence_safe_hard_negative_teacher_scale)
+                )
                 safe_idx = torch.where(safe_set_positive_mask)[0]
                 if safe_idx.numel():
                     best_safe = safe_idx[torch.argmax(safe_set_teacher_delta[safe_idx])]
@@ -2545,16 +2549,28 @@ def direct_uncertainty_recovery_value_loss(
                     hard_negative = torch.cat([
                         deployed_safe_utility.new_zeros((1,)), negative_scores
                     ]).max()
+                    negative_teacher = torch.cat([
+                        safe_utility_target.new_zeros((1,)),
+                        safe_utility_target[negative_mask],
+                    ]).max()
+                    teacher_gap = (
+                        safe_utility_target[best_safe] - negative_teacher
+                    ).clamp(min=0.0, max=0.25)
+                    required_margin = margin + teacher_scale * teacher_gap
                     safe_gap = deployed_safe_utility[best_safe] - hard_negative
                     terms.append(
                         float(ordinal_evidence_safe_hard_negative_weight)
-                        * F.softplus(margin - safe_gap)
+                        * F.softplus(required_margin - safe_gap)
                     )
                 else:
                     max_recovery = deployed_safe_utility.max()
+                    teacher_noop_depth = (-safe_utility_target.max()).clamp(
+                        min=0.0, max=0.25
+                    )
+                    required_margin = margin + teacher_scale * teacher_noop_depth
                     terms.append(
                         float(ordinal_evidence_safe_hard_negative_weight)
-                        * F.softplus(margin + max_recovery)
+                        * F.softplus(required_margin + max_recovery)
                     )
 
             # Directly train the high-benefit safety frontier rather than global

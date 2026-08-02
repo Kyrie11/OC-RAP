@@ -1,0 +1,39 @@
+OC-RAP v48.32 IDENTITY-UTILITY-BRIDGE - LOCAL VALIDATION STATUS
+================================================================
+
+Source basis
+------------
+- Audited source: uploaded v48.31 code and dedicated/ablation result archives.
+- Real WOMD/Waymax datasets and two-A30 training environment are not available locally.
+- No claim is made that a future server run must obtain RC=0.
+
+Static and regression validation
+--------------------------------
+- pytest: PASS (285 passed, 5 warnings)
+- python compileall (src, tools, tests): PASS
+- shell syntax, all scripts/*.sh via bash -n: PASS
+- v48.32 shell-to-tool dependency audit: PASS (46 references, 0 missing)
+- actual gradient-path regression:
+  * detached admission prior -> benefit/component gradients remain zero: PASS
+  * coupled admission prior -> benefit, active component and admission gradients are non-zero: PASS
+- Stage-2 valid epoch-0/no-op fallback accepted: PASS
+- Stage-3 valid no-op fallback accepted: PASS
+- frozen-parameter change rejection: PASS
+- exact factor-cache relocation/content contract: PASS
+- factor-cache hyperparameter mismatch rejection: PASS
+- NEXT_COMMANDS generated/blocked mutually exclusive state tests: PASS
+- physical-shadow fail-closed preflight tests: PASS
+
+Release validation
+------------------
+- v48.31 -> v48.32 patch git apply --check: PASS
+- patch clean apply and resulting tree content match: PASS
+- final ZIP integrity (unzip -t): PASS
+- SHA256 manifest: generated separately
+
+Interpretation boundary
+-----------------------
+The uploaded v48.31 main run is RC=30 at the adaptation pipeline stage,
+not RC=0 and not development_rule_fit_rejection. The certificate gate was
+not evaluated. Only C/D Balanced ablation candidates reached certificate;
+both returned RC=20 with development_rule_fit_rejection.

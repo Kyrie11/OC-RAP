@@ -74,7 +74,8 @@ def test_safety_slack_uses_signed_margin_hinge_not_regime_routing() -> None:
     block = source[source.index('admission_prior_mode == "safety_slack"'):]
     assert "direct_recovery_evidence_slack_temperature" in block[:2500]
     assert "torch.relu(max_predicted_veto_margin)" in block[:2500]
-    assert "unified_benefit_logit.detach()" in block[:2500]
+    assert "prior_benefit" in block[:2500]
+    assert "direct_recovery_evidence_admission_prior_detach" in source
     assert "bucket_id" not in block[:1800]
     assert "regime_id" not in block[:1800]
 
