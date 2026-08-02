@@ -1,0 +1,23 @@
+OC-RAP v48.30 SLACK-RANK-BRIDGE validation status
+=================================================
+
+Static/unit validation performed in the current container:
+
+- pytest: 265 passed, 5 warnings
+- python compileall: PASS
+- all scripts/*.sh bash -n: PASS
+- v48.30 targeted tests: PASS
+- safety-slack train/checkpoint/inference parameter plumbing: inspected
+- stage-2 natural population/no replacement contract: unit tested
+- population checkpoint metric: unit tested
+- eight-task dual-A30 scheduler syntax: PASS
+
+Not executed in the current container:
+
+- real WOMD/Waymax adaptation training
+- Natural certificate on the user's datasets
+- adaptation-dev Waymax physical shadow
+- held-out stress/test
+- two-A30 performance or memory benchmark
+
+Therefore no claim is made that v48.30 already obtains RC=0 or reaches the paper's Near/Contact closed-loop targets.

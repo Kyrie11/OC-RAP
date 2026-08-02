@@ -313,6 +313,12 @@ model:
   direct_recovery_evidence_consensus_disagreement_penalty: 0.15
   direct_recovery_evidence_admission_head: false
   direct_recovery_evidence_admission_scale: 2.0
+  direct_recovery_evidence_admission_bounded: true
+  direct_recovery_evidence_admission_prior_mode: risk_centered
+  # v48.30: signed component margins provide a regime-agnostic safety-slack
+  # projection. Disabled unless admission_prior_mode=safety_slack.
+  direct_recovery_evidence_slack_temperature: 0.025
+  direct_recovery_evidence_slack_penalty: 1.0
   # v48.23 FRONTIER: semantic non-harm prior and deployment-aligned objectives.
   direct_recovery_evidence_frontier: false
   direct_recovery_evidence_component_prior_logit: -2.0
@@ -446,6 +452,7 @@ training:
   # v48.20: component-tail supervision is auxiliary; it never replaces the
   # group-level safe-admission target used at deployment.
   direct_value_ordinal_evidence_component_tail_weight: 0.0
+  direct_value_ordinal_evidence_component_margin_regression_weight: 0.0
   direct_value_ordinal_evidence_global_balance: false
   direct_value_ordinal_evidence_safe_set_temperature: 0.08
   direct_value_ordinal_evidence_intragroup_benefit_weight: 0.0

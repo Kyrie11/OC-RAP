@@ -220,6 +220,14 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_evidence_admission_prior_mode",
             model_cfg.get("direct_recovery_evidence_admission_prior_mode", "risk_centered"),
         )),
+        direct_recovery_evidence_slack_temperature=float(ckpt.get(
+            "direct_recovery_evidence_slack_temperature",
+            model_cfg.get("direct_recovery_evidence_slack_temperature", 0.025),
+        )),
+        direct_recovery_evidence_slack_penalty=float(ckpt.get(
+            "direct_recovery_evidence_slack_penalty",
+            model_cfg.get("direct_recovery_evidence_slack_penalty", 1.0),
+        )),
         direct_recovery_evidence_frontier=bool(ckpt.get(
             "direct_recovery_evidence_frontier",
             model_cfg.get("direct_recovery_evidence_frontier", False),
@@ -303,6 +311,12 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_evidence_admission_prior_mode"] = str(
         model.direct_recovery_evidence_admission_prior_mode
     )
+    cfg["model"]["direct_recovery_evidence_slack_temperature"] = float(
+        model.direct_recovery_evidence_slack_temperature
+    )
+    cfg["model"]["direct_recovery_evidence_slack_penalty"] = float(
+        model.direct_recovery_evidence_slack_penalty
+    )
     cfg["model"]["direct_recovery_evidence_frontier"] = bool(
         model.direct_recovery_evidence_frontier
     )
@@ -319,6 +333,14 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_evidence_admission_prior_mode",
             model_cfg.get("direct_recovery_evidence_admission_prior_mode", "risk_centered"),
         )),
+        "direct_recovery_evidence_slack_temperature": float(ckpt.get(
+            "direct_recovery_evidence_slack_temperature",
+            model_cfg.get("direct_recovery_evidence_slack_temperature", 0.025),
+        )),
+        "direct_recovery_evidence_slack_penalty": float(ckpt.get(
+            "direct_recovery_evidence_slack_penalty",
+            model_cfg.get("direct_recovery_evidence_slack_penalty", 1.0),
+        )),
         "direct_recovery_evidence_frontier": bool(ckpt.get(
             "direct_recovery_evidence_frontier",
             model_cfg.get("direct_recovery_evidence_frontier", False),
@@ -331,6 +353,8 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     actual_contract = {
         "direct_recovery_evidence_admission_bounded": bool(model.direct_recovery_evidence_admission_bounded),
         "direct_recovery_evidence_admission_prior_mode": str(model.direct_recovery_evidence_admission_prior_mode),
+        "direct_recovery_evidence_slack_temperature": float(model.direct_recovery_evidence_slack_temperature),
+        "direct_recovery_evidence_slack_penalty": float(model.direct_recovery_evidence_slack_penalty),
         "direct_recovery_evidence_frontier": bool(model.direct_recovery_evidence_frontier),
         "direct_recovery_evidence_component_prior_logit": float(model.direct_recovery_evidence_component_prior_logit),
     }

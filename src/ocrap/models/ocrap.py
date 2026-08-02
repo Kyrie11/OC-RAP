@@ -188,6 +188,8 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_admission_scale: float = 2.0,
         direct_recovery_evidence_admission_bounded: bool = True,
         direct_recovery_evidence_admission_prior_mode: str = "risk_centered",
+        direct_recovery_evidence_slack_temperature: float = 0.025,
+        direct_recovery_evidence_slack_penalty: float = 1.0,
         direct_recovery_evidence_frontier: bool = False,
         direct_recovery_evidence_component_prior_logit: float = -2.0,
     ):
@@ -293,12 +295,18 @@ class OCRAPModel(nn.Module):
             direct_recovery_evidence_admission_prior_mode or "risk_centered"
         ).strip().lower()
         if self.direct_recovery_evidence_admission_prior_mode not in {
-            "risk_centered", "benefit_only"
+            "risk_centered", "benefit_only", "safety_slack"
         }:
             raise ValueError(
                 "Unsupported direct_recovery_evidence_admission_prior_mode="
                 f"{direct_recovery_evidence_admission_prior_mode!r}"
             )
+        self.direct_recovery_evidence_slack_temperature = float(
+            max(1.0e-6, direct_recovery_evidence_slack_temperature)
+        )
+        self.direct_recovery_evidence_slack_penalty = float(
+            max(0.0, direct_recovery_evidence_slack_penalty)
+        )
         self.direct_recovery_evidence_frontier = bool(direct_recovery_evidence_frontier)
         self.direct_recovery_evidence_component_prior_logit = float(
             direct_recovery_evidence_component_prior_logit
@@ -1221,7 +1229,28 @@ class OCRAPModel(nn.Module):
                     # gradient from distorting either the raw-benefit or risk head.
                     # softplus(harm) is a conservative log-risk penalty; the bounded
                     # residual can correct it from context without regime routing.
-                    if self.direct_recovery_evidence_admission_prior_mode == "benefit_only":
+                    if self.direct_recovery_evidence_admission_prior_mode == "safety_slack":
+                        # v48.30 SLACK-RANK: convert the five calibrated component
+                        # logits back into signed physical veto margins.  Actions
+                        # inside every non-degradation envelope pay no penalty; only
+                        # predicted boundary violation reduces recoverability utility.
+                        # The independent component veto remains fail-closed at
+                        # deployment, while this continuous hinge gives one unified,
+                        # regime-agnostic ranking semantic near the safety frontier.
+                        predicted_component_margins = (
+                            self.direct_recovery_evidence_slack_temperature
+                            * unified_component_harm_logits.detach()
+                        )
+                        max_predicted_veto_margin = predicted_component_margins.amax(dim=-1)
+                        slack_barrier = torch.relu(max_predicted_veto_margin)
+                        admission_prior = (
+                            unified_benefit_logit.detach()
+                            - self.direct_recovery_evidence_slack_penalty * slack_barrier
+                        )
+                        out["direct_recovery_evidence_predicted_component_margins"] = predicted_component_margins
+                        out["direct_recovery_evidence_max_predicted_veto_margin"] = max_predicted_veto_margin
+                        out["direct_recovery_evidence_slack_barrier"] = slack_barrier
+                    elif self.direct_recovery_evidence_admission_prior_mode == "benefit_only":
                         # v48.29: non-compensatory factors are calibrated as a
                         # separate veto. Penalising the same max-risk logit again
                         # inside the admission score double-counted one noisy

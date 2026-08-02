@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+set -euo pipefail
+REPO="${OCRAP_REPO:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
+cd "$REPO"
+export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"
+
+FINAL_RUN="${RUN:?RUN is required}"
+SOURCE_CKPT="${INIT_CKPT:?INIT_CKPT is required}"
+FACTOR_RUN="$FINAL_RUN/factor_stage"
+rm -rf "$FACTOR_RUN"
+mkdir -p "$FACTOR_RUN"
+
+# Stage 1: dense raw-benefit ordering plus five independently supervised,
+# non-compensatory harm factors. No admission gradient is allowed in this stage.
+RUN="$FACTOR_RUN" INIT_CKPT="$SOURCE_CKPT" \
+EVIDENCE_ADMISSION_HEAD=false \
+EVIDENCE_COMPONENT_COUNT="${EVIDENCE_COMPONENT_COUNT:-5}" \
+EVIDENCE_ADMISSION_PRIOR_MODE=safety_slack \
+ORDINAL_EVIDENCE_SAFE_BENEFIT_TARGET=false \
+ORDINAL_EVIDENCE_BENEFIT_LISTWISE_WEIGHT="${FACTOR_BENEFIT_LISTWISE_WEIGHT:-0.50}" \
+ORDINAL_EVIDENCE_SAFE_UTILITY_REGRESSION_WEIGHT=0 \
+ORDINAL_EVIDENCE_SAFE_UTILITY_LISTWISE_WEIGHT=0 \
+ORDINAL_EVIDENCE_SAFE_HARD_NEGATIVE_WEIGHT=0 \
+ORDINAL_EVIDENCE_FRONTIER_PAIRWISE_WEIGHT=0 \
+ORDINAL_EVIDENCE_ADMISSION_WEIGHT=0 \
+SETWISE_W=0 \
+SELECTIVE_RISK_WEIGHT=0 SELECTIVE_COVERAGE_WEIGHT=0 \
+OPPORTUNITY_ADMISSION_WEIGHT=0 HARM_ADMISSION_WEIGHT=0 \
+GROUP_BATCH_STRATIFIED=true GROUP_BATCHING_REPLACEMENT=true \
+GROUP_BATCH_POSITIVE_FRACTION="${FACTOR_POSITIVE_FRACTION:-0.20}" GROUP_BATCH_HARMFUL_FRACTION="${FACTOR_HARMFUL_FRACTION:-0.60}" GROUP_BATCH_DEAD_FRACTION="${FACTOR_DEAD_FRACTION:-0.20}" \
+ORDINAL_EVIDENCE_COMPONENT_MARGIN_REGRESSION_WEIGHT="${FACTOR_COMPONENT_MARGIN_REGRESSION_WEIGHT:-0.50}" \
+BEST_METRIC=direct_factor_supervised_risk EVALUATE_INITIAL_CHECKPOINT=false \
+EVIDENCE_ADAPT_EPOCHS="${FACTOR_EPOCHS:-${EVIDENCE_ADAPT_EPOCHS:-20}}" \
+EVIDENCE_ADAPT_PATIENCE="${FACTOR_PATIENCE:-${EVIDENCE_ADAPT_PATIENCE:-6}}" \
+  bash scripts/adapt_ocrap_v48_30_slack_rank_single_stage.sh
+
+FACTOR_CKPT="$FACTOR_RUN/model_v48_trac_sr/best.pt"
+[[ -f "$FACTOR_CKPT" ]] || { echo "missing factor checkpoint $FACTOR_CKPT" >&2; exit 30; }
+
+# Stage 2: freeze the benefit/factor heads. Risk remains an independent veto;
+# admission learns safe utility without paying the same max-risk penalty twice.
+rm -rf "$FINAL_RUN/model_v48_trac_sr" "$FINAL_RUN/calibration"
+RUN="$FINAL_RUN" INIT_CKPT="$FACTOR_CKPT" \
+EVIDENCE_ADMISSION_HEAD=true \
+EVIDENCE_COMPONENT_COUNT="${EVIDENCE_COMPONENT_COUNT:-5}" \
+EVIDENCE_TRAINABLE_PREFIXES_OVERRIDE=direct_evidence_concord_admission_calibrator \
+EVIDENCE_ADMISSION_PRIOR_MODE="${EVIDENCE_ADMISSION_PRIOR_MODE:-safety_slack}" \
+EVIDENCE_SLACK_TEMPERATURE="${EVIDENCE_SLACK_TEMPERATURE:-0.025}" EVIDENCE_SLACK_PENALTY="${EVIDENCE_SLACK_PENALTY:-1.0}" \
+EVIDENCE_ADMISSION_SCALE="${EVIDENCE_ADMISSION_SCALE:-2.0}" \
+ORDINAL_EVIDENCE_SAFE_BENEFIT_TARGET=false \
+ORDINAL_EVIDENCE_BENEFIT_LISTWISE_WEIGHT=0 \
+ORDINAL_EVIDENCE_COMPONENT_TAIL_WEIGHT=0 \
+ORDINAL_EVIDENCE_COMPONENT_MARGIN_REGRESSION_WEIGHT=0 \
+ORDINAL_EVIDENCE_SAFE_UTILITY_REGRESSION_WEIGHT="${ADMISSION_SAFE_UTILITY_REGRESSION_WEIGHT:-0.75}" \
+ORDINAL_EVIDENCE_SAFE_UTILITY_LISTWISE_WEIGHT="${ADMISSION_SAFE_UTILITY_LISTWISE_WEIGHT:-0.0}" \
+ORDINAL_EVIDENCE_SAFE_HARD_NEGATIVE_WEIGHT="${ADMISSION_SAFE_HARD_NEGATIVE_WEIGHT:-1.0}" \
+ORDINAL_EVIDENCE_SAFE_HARD_NEGATIVE_MARGIN="${ADMISSION_SAFE_HARD_NEGATIVE_MARGIN:-0.05}" \
+ORDINAL_EVIDENCE_FRONTIER_PAIRWISE_WEIGHT="${ADMISSION_FRONTIER_PAIRWISE_WEIGHT:-0.0}" \
+ORDINAL_EVIDENCE_FRONTIER_PAIRWISE_MARGIN="${ADMISSION_FRONTIER_MARGIN:-0.05}" \
+ORDINAL_EVIDENCE_ADMISSION_WEIGHT="${ADMISSION_BINARY_WEIGHT:-0.10}" \
+ORDINAL_EVIDENCE_ADMISSION_POS_WEIGHT="${ADMISSION_POS_WEIGHT:-2.0}" \
+ORDINAL_EVIDENCE_ADMISSION_HARM_NEGATIVE_WEIGHT="${ADMISSION_HARM_NEGATIVE_WEIGHT:-2.0}" \
+SETWISE_W="${ADMISSION_SETWISE_WEIGHT:-0.10}" \
+SELECTIVE_RISK_WEIGHT=0 SELECTIVE_COVERAGE_WEIGHT=0 \
+OPPORTUNITY_ADMISSION_WEIGHT=0 HARM_ADMISSION_WEIGHT=0 \
+GROUP_BATCH_STRATIFIED=false GROUP_BATCHING_REPLACEMENT=false \
+POSITIVE_GROUP_BOOST=1.0 POSITIVE_MACRO_BALANCE_POWER=0.0 \
+EVIDENCE_ADMISSION_BOUNDED=true \
+BEST_METRIC=direct_population_safe_rank_risk EVALUATE_INITIAL_CHECKPOINT=false \
+EVIDENCE_ADAPT_EPOCHS="${ADMISSION_EPOCHS:-${EVIDENCE_ADAPT_EPOCHS:-18}}" \
+EVIDENCE_ADAPT_PATIENCE="${ADMISSION_PATIENCE:-${EVIDENCE_ADAPT_PATIENCE:-6}}" \
+  bash scripts/adapt_ocrap_v48_30_slack_rank_single_stage.sh
+
+python tools/check_v48_30_factor_transfer.py \
+  --source "$SOURCE_CKPT" --factor "$FACTOR_CKPT" \
+  --final "$FINAL_RUN/model_v48_trac_sr/best.pt" \
+  --output "$FINAL_RUN/FACTOR_TRANSFER_INTEGRITY.json"
+
+python - "$FINAL_RUN" "$SOURCE_CKPT" "$FACTOR_CKPT" <<'PY'
+import hashlib,json,pathlib,sys,time
+run,source,factor=map(pathlib.Path,sys.argv[1:4])
+final=run/'model_v48_trac_sr'/'best.pt'
+if not final.is_file(): raise SystemExit(f'missing final checkpoint: {final}')
+doc={
+ 'event':'v48_30_two_stage_slack_rank_complete','created_unix':time.time(),
+ 'source_checkpoint':str(source),'source_sha256':hashlib.sha256(source.read_bytes()).hexdigest(),
+ 'factor_checkpoint':str(factor),'factor_sha256':hashlib.sha256(factor.read_bytes()).hexdigest(),
+ 'final_checkpoint':str(final),'final_sha256':hashlib.sha256(final.read_bytes()).hexdigest(),
+ 'stage1_trainable':['benefit_calibrator','five_component_harm_calibrator'],
+ 'stage2_trainable':['admission_calibrator'],
+ 'opportunity_semantics':'raw_benefit',
+ 'gate_positive_semantics':'safe_benefit',
+ 'risk_semantics':'independent_noncompensatory_veto',
+ 'admission_prior_mode':'safety_slack',
+ 'safe_rank_objective':'population_natural_safe_utility_plus_hardest_negative',
+ 'component_harm_components':['drs','deployability','gap','hard_rule','harm_proxy'],
+ 'test_roots_read':False,
+}
+(run/'TWO_STAGE_TRAINING_COMPLETE.json').write_text(json.dumps(doc,indent=2)+'\n')
+PY

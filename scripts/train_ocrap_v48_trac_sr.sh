@@ -68,7 +68,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.save_every_epoch=true --set training.best_metric="${BEST_METRIC:-direct_policy_risk_fold_worst}" \
   --set training.best_metric_mode=min --set training.best_metric_min_delta="${BEST_METRIC_MIN_DELTA:-0.000001}" \
   --set training.evaluate_initial_checkpoint="${EVALUATE_INITIAL_CHECKPOINT:-false}" \
-  --set training.group_batching=true --set training.group_batching_replacement=true \
+  --set training.group_batching=true --set training.group_batching_replacement="${GROUP_BATCHING_REPLACEMENT:-true}" \
   --set training.group_batch_stratified="${GROUP_BATCH_STRATIFIED:-false}" \
   --set training.group_batch_positive_fraction="${GROUP_BATCH_POSITIVE_FRACTION:-0.30}" \
   --set training.group_batch_safe_positive_target="${GROUP_BATCH_SAFE_POSITIVE_TARGET:-${ORDINAL_EVIDENCE_SAFE_BENEFIT_TARGET:-false}}" \
@@ -137,6 +137,8 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set model.direct_recovery_evidence_admission_scale="${EVIDENCE_ADMISSION_SCALE:-2.0}" \
   --set model.direct_recovery_evidence_admission_bounded="${EVIDENCE_ADMISSION_BOUNDED:-true}" \
   --set model.direct_recovery_evidence_admission_prior_mode="${EVIDENCE_ADMISSION_PRIOR_MODE:-risk_centered}" \
+  --set model.direct_recovery_evidence_slack_temperature="${EVIDENCE_SLACK_TEMPERATURE:-0.025}" \
+  --set model.direct_recovery_evidence_slack_penalty="${EVIDENCE_SLACK_PENALTY:-1.0}" \
   --set model.direct_recovery_evidence_frontier="${EVIDENCE_FRONTIER:-false}" \
   --set model.direct_recovery_evidence_component_prior_logit="${EVIDENCE_COMPONENT_PRIOR_LOGIT:--2.0}" \
   --set loss_weights.dep=0 --set loss_weights.orc=0 --set loss_weights.assign=0 \
@@ -228,6 +230,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.direct_value_ordinal_evidence_factorized_harm_proxy_tolerance="${COMPONENT_HARM_PROXY_TOLERANCE:-0.05}" \
   --set training.direct_value_ordinal_evidence_balanced_replaces_erm="${ORDINAL_EVIDENCE_BALANCED_REPLACES_ERM:-false}" \
   --set training.direct_value_ordinal_evidence_component_tail_weight="${ORDINAL_EVIDENCE_COMPONENT_TAIL_WEIGHT:-0.0}" \
+  --set training.direct_value_ordinal_evidence_component_margin_regression_weight="${ORDINAL_EVIDENCE_COMPONENT_MARGIN_REGRESSION_WEIGHT:-0.0}" \
   --set training.direct_value_ordinal_evidence_global_balance="${ORDINAL_EVIDENCE_GLOBAL_BALANCE:-false}" \
   --set training.direct_value_ordinal_evidence_safe_set_temperature="${ORDINAL_EVIDENCE_SAFE_SET_TEMPERATURE:-0.08}" \
   --set training.direct_value_ordinal_evidence_safe_benefit_target="${ORDINAL_EVIDENCE_SAFE_BENEFIT_TARGET:-false}" \

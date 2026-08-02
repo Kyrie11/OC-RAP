@@ -1996,3 +1996,106 @@ All eight Balanced/Precision jobs launch concurrently: four tasks per 24 GB A30.
 - A physical shadow result is interpretable only when `SHADOW_RUNTIME_CONTRACT.json` is valid.
 - If v48.29 improves offline precision/risk but valid physical shadow does not improve, the next change must be a preregistered candidate-level temporal physical teacher, not threshold tuning on certificate or held-out stress.
 - No claim is made locally that v48.29 already passes the gate or meets CCF-A Near/Contact targets; WOMD/Waymax execution on the user's two A30s is required.
+
+## v48.30 — SLACK-RANK-BRIDGE
+
+### Motivation
+
+v48.29 returned a valid `RC=20`. All four Balanced/Precision Near/Contact branches still failed at `development_rule_fit`, while the complete top-3 proposal-constrained certificate oracle remained feasible. The failure was therefore not a mathematically impossible certificate or missing proposal support.
+
+The hardest-negative objective produced a real local gain on adaptation-dev—Near safe-opportunity recall increased—but certificate selection became substantially more aggressive and harmful. Joint audit found a population-prior contract error in the admission stage: only 52 of 1,167 training groups (4.46%) were safe-beneficial, while stage 2 forced 50% safe-positive groups with replacement and applied no importance correction. The model learned a recovery-heavy resampled prior that was incompatible with the natural development/certificate population and the low-intervention Natural gate.
+
+v48.29 paired shadow execution was technically valid, but it did not establish publication-level physical gains. Near produced only small TTC changes with lower NUP and nontrivial intervention. The eight Contact targets were floor/ceiling saturated for overlap, re-contact, escape and stable-stop events, so those event metrics were not informative; continuous clearance/free-space changes were negligible or adverse.
+
+### Unified algorithm change
+
+SLACK-RANK-BRIDGE uses one regime-agnostic physical semantic for Safe, Near and Contact. It does not expose a regime identifier to the Evidence model and does not dispatch to separate policies.
+
+For each recovery candidate relative to nominal, the model predicts five signed non-degradation margins:
+
+1. DRS margin;
+2. deployability margin;
+3. oracle-to-deployable-gap margin;
+4. hard-rule margin;
+5. harm-proxy margin.
+
+Each target margin already includes its preregistered tolerance. A value at or below zero is inside the allowed envelope; a positive value crosses an uncompensated safety boundary. The unified safety slack is
+
+```text
+s(a) = max_k m_k(a)
+```
+
+and the admission prior is
+
+```text
+U_safe(a) = B(a) - lambda * relu(s(a))
+```
+
+where `B(a)` is detached raw-benefit evidence. The independent component veto remains fail-closed. The continuous hinge supplies stable ordering close to the boundary, while the hard veto prevents benefit from compensating for a true violation.
+
+This semantic protects Safe because unnecessary non-nominal actions lack positive benefit or violate at least one non-degradation margin; it permits Near recovery only when benefit is obtained inside the common physical envelope; and it permits Contact escape/stabilization only when deployability, recovery gap, hard-rule and harm-proxy coordinates do not deteriorate beyond the same registered tolerances.
+
+### Training changes
+
+1. **Natural-population stage 2.** Admission training now uses every scene-time group at most once per epoch:
+
+   ```text
+   GROUP_BATCH_STRATIFIED=false
+   GROUP_BATCHING_REPLACEMENT=false
+   ```
+
+   Positive weighting remains inside the loss; it no longer alters deployment prevalence through replacement sampling.
+
+2. **Signed component-margin regression.** Binary component targets are retained, and stage 1 additionally regresses the continuous distance to each veto boundary:
+
+   ```text
+   predicted_margin_k = factor_temperature * component_logit_k
+   L_margin = SmoothL1(predicted_margin_k, teacher_margin_k)
+   ```
+
+3. **Population-aware checkpoint metric.** Added `direct_population_safe_rank_risk`, evaluated on the natural adaptation-dev population. It combines safe top-1 regret, harmful recovery mass, false-admission mass, safe-recall shortfall and safe-mass shortfall. Near and Contact are used as worst-stratum reports only; no regime ID enters the model.
+
+4. **Hardest-negative retained under the corrected prior.** Best-safe-vs-nominal-and-hardest-non-safe supervision remains in the full design, but it is now trained on natural groups rather than an 11x positive-oversampled population.
+
+5. **Default objective simplification.** Safe-utility listwise and frontier contrast remain disabled in the main model because v48.29 C/D ablations showed no stable incremental benefit. Legacy Noisy-OR, unbounded admission and top-8 proposal remain disabled.
+
+### Engineering and attribution safeguards
+
+- Added checkpoint/inference persistence for slack temperature and slack penalty.
+- Added `TRAINING_CONTRACT.json`, which fails closed unless stage 2 is natural and without replacement, the population checkpoint metric is finite and varies across epochs, signed margin regression is enabled, factor transfer is valid, five factors are present, no regime routing is used and legacy Noisy-OR is disabled.
+- Main runner explicitly pins five factors, natural stage-2 defaults, zero listwise/frontier weights, separate factor/admission epoch budgets and the safety-slack model contract. This prevents ambient environment variables from silently changing the registered main algorithm.
+- Added `PHYSICAL_TARGET_SUPPORT.json`. It warns when Contact event targets are floor/ceiling saturated; continuous physical deltas remain reportable, but event non-improvement cannot be interpreted as success.
+- Added structured `GATE_FAILURE_DECOMPOSITION.json` for proposal infeasibility, development fitting, certificate generalization and engineering failures.
+- Retained exact train/dev index separation, official WOMD provenance, canonical regime aliases, positive calibrated gamma checks and Contact anchor checks from v48.28/v48.29.
+- Corrected the v48.30 controller event name and pinned factor/admission epoch variables in the main runner.
+
+### Ablations
+
+Eight jobs are launched concurrently, four per 24 GB A30:
+
+1. `A_natural_population_reference` — natural population, benefit-only admission;
+2. `B_add_signed_component_margin` — A plus continuous five-factor margin regression;
+3. `C_add_safety_slack_projection` — B plus unified safety-slack prior;
+4. `D_full_slack_rank` — C plus hardest-negative, the v48.30 main design.
+
+Per-task workers and host threads remain limited to one during eight-way execution. If filesystem/CPU contention dominates, reduce `TASKS_PER_GPU` to two rather than increasing DataLoader workers.
+
+### Protocol decisions
+
+- The Natural certificate and registered gate thresholds are unchanged. Complete oracle feasibility means post-hoc gate relaxation is not justified.
+- `RC=0` alone authorizes held-out stress. `RC=20` remains a valid algorithmic rejection; `RC=30` remains engineering/protocol failure.
+- If natural-population training improves precision but reduces recall, future changes must use loss weighting or better representations without changing the sampling prior.
+- If development passes but certificate fails, focus on scene-level generalization and slack calibration.
+- If offline safe ranking improves but valid physical shadow does not, the next step is a preregistered candidate-level temporal physical teacher, not certificate threshold tuning.
+
+### Validation and non-claims
+
+Local validation:
+
+```text
+265 passed, 5 warnings
+compileall PASS
+all shell bash -n PASS
+```
+
+The local environment does not contain the user's WOMD/Waymax runtime or two A30 GPUs. No claim is made that v48.30 already obtains `RC=0`, passes the Natural gate or reaches the Near/Contact CCF-A closed-loop targets.

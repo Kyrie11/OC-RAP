@@ -1416,6 +1416,7 @@ def direct_uncertainty_recovery_value_loss(
     ordinal_evidence_factorized_harm_hard_tolerance: float = 0.05,
     ordinal_evidence_factorized_harm_proxy_tolerance: float = 0.05,
     ordinal_evidence_component_tail_weight: float = 0.0,
+    ordinal_evidence_component_margin_regression_weight: float = 0.0,
     ordinal_evidence_global_balance: bool = False,
     ordinal_evidence_safe_set_temperature: float = 0.05,
     ordinal_evidence_safe_benefit_target: bool = False,
@@ -2162,6 +2163,28 @@ def direct_uncertainty_recovery_value_loss(
                 )
                 if component_loss_tail is not None:
                     nll = nll + float(ordinal_evidence_component_tail_weight) * component_loss_tail
+                if (
+                    component_harm_delta_logits is not None
+                    and factorized_component_margins is not None
+                    and float(ordinal_evidence_component_margin_regression_weight) > 0.0
+                ):
+                    # v48.30: BCE identifies the side of each veto boundary but
+                    # discards distance-to-boundary.  Regressing the signed margins
+                    # makes the factor heads usable as a continuous safety-slack
+                    # projection shared by Safe, Near and Contact.
+                    predicted_component_margins = (
+                        float(ordinal_evidence_factorized_harm_temperature)
+                        * component_harm_delta_logits
+                    )
+                    terms.append(
+                        float(ordinal_evidence_component_margin_regression_weight)
+                        * F.smooth_l1_loss(
+                            predicted_component_margins,
+                            factorized_component_margins[
+                                :, : component_harm_delta_logits.shape[-1]
+                            ].to(dtype=predicted_component_margins.dtype),
+                        )
+                    )
                 if admission_delta_logits is not None and float(ordinal_evidence_admission_weight) > 0.0:
                     # v48.22 COVENANT: direct safe-admission supervision is a
                     # third hypothesis, distinct from raw benefit and component

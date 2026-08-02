@@ -367,6 +367,9 @@ def _direct_value_loss_from_outputs(
         ordinal_evidence_factorized_harm_hard_tolerance=float(tcfg.get("direct_value_ordinal_evidence_factorized_harm_hard_tolerance", 0.05)),
         ordinal_evidence_factorized_harm_proxy_tolerance=float(tcfg.get("direct_value_ordinal_evidence_factorized_harm_proxy_tolerance", 0.05)),
         ordinal_evidence_component_tail_weight=float(tcfg.get("direct_value_ordinal_evidence_component_tail_weight", 0.0)),
+        ordinal_evidence_component_margin_regression_weight=float(
+            tcfg.get("direct_value_ordinal_evidence_component_margin_regression_weight", 0.0)
+        ),
         ordinal_evidence_global_balance=bool(tcfg.get("direct_value_ordinal_evidence_global_balance", False)),
         ordinal_evidence_safe_set_temperature=float(tcfg.get("direct_value_ordinal_evidence_safe_set_temperature", 0.05)),
         ordinal_evidence_safe_benefit_target=bool(tcfg.get("direct_value_ordinal_evidence_safe_benefit_target", False)),
@@ -1162,6 +1165,38 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
             + float(tcfg.get("direct_policy_metric_frontier_global_harm_tiebreak", 0.25)) * conditional_harm
         )
         out["direct_frontier_harmful_mass_worst"] = frontier_harm
+
+        # v48.30 SLACK-RANK: select stage-2 checkpoints on the untouched natural
+        # validation distribution.  The previous fixed-threshold integrity metric
+        # was constant across epochs, while 50% positive replacement sampling made
+        # soft recovery mass look artificially attractive.  This threshold-free
+        # risk rewards safe top-1 ordering but directly charges harmful and false
+        # recovery mass in both reporting strata; no regime id enters the model.
+        population_regime_risks: list[float] = []
+        for regime in ("near", "contact"):
+            safe_groups = float(out.get(f"direct_safe_positive_group_count_{regime}", 0.0))
+            if safe_groups <= 0.0:
+                continue
+            regret = float(out.get(f"direct_soft_safe_regret_{regime}", 0.0))
+            harm_mass = float(out.get(f"direct_soft_harmful_mass_{regime}", 0.0))
+            false_mass = float(out.get(f"direct_soft_false_admission_{regime}", 0.0))
+            safe_recall = float(out.get(f"direct_soft_safe_recall_{regime}", 0.0))
+            safe_mass = float(out.get(f"direct_soft_safe_mass_{regime}", 0.0))
+            safe_mass_shortfall = max(0.0, 0.35 - safe_mass)
+            regime_risk = (
+                2.0 * regret
+                + 2.5 * harm_mass
+                + 1.5 * false_mass
+                + 1.0 * (1.0 - safe_recall)
+                + 0.75 * safe_mass_shortfall
+            )
+            out[f"direct_population_safe_rank_risk_{regime}"] = regime_risk
+            population_regime_risks.append(regime_risk)
+        if len(population_regime_risks) == 2:
+            out["direct_population_safe_rank_risk"] = (
+                max(population_regime_risks)
+                + 0.25 * sum(population_regime_risks)
+            )
 
         # v48.25 INTEGRITY-BRIDGE: soft policy mass alone allowed an epoch with
         # zero executable admissions to win. Add a lexicographic-style barrier
@@ -2428,6 +2463,12 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_evidence_admission_prior_mode=str(
             model_cfg.get("direct_recovery_evidence_admission_prior_mode", "risk_centered")
         ),
+        direct_recovery_evidence_slack_temperature=float(
+            model_cfg.get("direct_recovery_evidence_slack_temperature", 0.025)
+        ),
+        direct_recovery_evidence_slack_penalty=float(
+            model_cfg.get("direct_recovery_evidence_slack_penalty", 1.0)
+        ),
         # v48.23/v48.24 set these fields in the run scripts, but the CLI model
         # constructor previously dropped them. That silently restored the legacy
         # p(harm)=0.5 prior and non-identity admission penalty.
@@ -2721,6 +2762,12 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             ),
             "direct_recovery_evidence_admission_prior_mode": str(
                 model_cfg.get("direct_recovery_evidence_admission_prior_mode", "risk_centered")
+            ),
+            "direct_recovery_evidence_slack_temperature": float(
+                model_cfg.get("direct_recovery_evidence_slack_temperature", 0.025)
+            ),
+            "direct_recovery_evidence_slack_penalty": float(
+                model_cfg.get("direct_recovery_evidence_slack_penalty", 1.0)
             ),
             "direct_recovery_evidence_frontier": bool(
                 model_cfg.get("direct_recovery_evidence_frontier", False)
