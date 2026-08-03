@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from time import perf_counter
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +19,7 @@ from ocrap.evaluation.metrics import (
 )
 from ocrap.external_baselines.data import group_sample_paths, _branch_arrays, _topology_arrays, _history_arrays, _actor_topology_arrays, _map_topology_arrays, use_teacher_branch_context
 from ocrap.external_baselines.models import build_model_from_cfg
-from ocrap.external_baselines.observed_risk import observed_risk_profile
+from ocrap.external_baselines.observed_risk import observed_risk_profile, observed_risk_profiles
 from ocrap.external_baselines.policies import ExternalSelection, select_external_policy
 from ocrap.models.data import sample_to_feature
 
@@ -248,10 +249,44 @@ def _record_for_selection(method: str, samples: list[dict[str, Any]], sel: Exter
         "selected_harm_proxy": _scalar(chosen, "harm_proxy", 0.0),
         "selected_observed_expected_risk": float(observed.expected_loss),
         "selected_observed_cvar_risk": float(observed.cvar_loss),
+        "selected_observed_worst_risk": float(observed.worst_loss),
         "selected_observed_collision_probability": float(observed.collision_probability),
         "selected_observed_min_clearance_m": float(observed.min_clearance),
+        "selected_observed_min_ttc_s": float(observed.min_ttc),
+        "selected_observed_severity_proxy": float(observed.severity_proxy),
         "selected_observed_backup_margin_m": float(observed.backup_margin),
+        "observed_calibration_target_teacher_hard_violation": float(_scalar(chosen, "hard_violation", 0.0) > 0.0),
         "yaw_rate_violation_proxy": _yaw_rate_violation_proxy(chosen, yaw_rate_max=float(cfg.get("yaw_rate_max_rps", 0.6))),
+    }
+
+
+
+def _binary_calibration(records: list[dict[str, Any]], *, bins: int = 10) -> dict[str, float]:
+    if not records:
+        return {"observed_collision_brier_vs_teacher_hard_violation": float("nan"), "observed_collision_ece_vs_teacher_hard_violation": float("nan")}
+    p = np.clip(np.asarray([r.get("selected_observed_collision_probability", np.nan) for r in records], dtype=float), 0.0, 1.0)
+    y = np.asarray([r.get("observed_calibration_target_teacher_hard_violation", np.nan) for r in records], dtype=float)
+    ok = np.isfinite(p) & np.isfinite(y)
+    if not ok.any():
+        return {"observed_collision_brier_vs_teacher_hard_violation": float("nan"), "observed_collision_ece_vs_teacher_hard_violation": float("nan")}
+    p, y = p[ok], y[ok]
+    brier = float(np.mean((p - y) ** 2))
+    ece = 0.0
+    edges = np.linspace(0.0, 1.0, max(int(bins), 1) + 1)
+    for i in range(len(edges) - 1):
+        m = (p >= edges[i]) & (p < edges[i + 1] if i + 1 < len(edges) - 1 else p <= edges[i + 1])
+        if m.any():
+            ece += float(m.mean()) * abs(float(p[m].mean()) - float(y[m].mean()))
+    return {"observed_collision_brier_vs_teacher_hard_violation": brier, "observed_collision_ece_vs_teacher_hard_violation": float(ece)}
+
+
+def _finite_summary(values: list[float]) -> dict[str, float]:
+    a = np.asarray(values, dtype=float)
+    finite = a[np.isfinite(a)]
+    return {
+        "mean": float(np.mean(finite)) if finite.size else float("nan"),
+        "p05": float(np.percentile(finite, 5.0)) if finite.size else float("nan"),
+        "finite_rate": float(finite.size / max(a.size, 1)),
     }
 
 
@@ -268,11 +303,18 @@ def _summarize(records: list[dict[str, Any]], method: str, num_groups: int, sour
             "mean_selected_utility": float(np.mean([r.get("selected_utility", 0.0) for r in records])),
             "mean_selected_observed_expected_risk": float(np.mean([r.get("selected_observed_expected_risk", 0.0) for r in records])),
             "mean_selected_observed_cvar_risk": float(np.mean([r.get("selected_observed_cvar_risk", 0.0) for r in records])),
+            "mean_selected_observed_worst_risk": float(np.mean([r.get("selected_observed_worst_risk", 0.0) for r in records])),
             "mean_selected_observed_collision_probability": float(np.mean([r.get("selected_observed_collision_probability", 0.0) for r in records])),
             "mean_selected_observed_min_clearance_m": float(np.mean([r.get("selected_observed_min_clearance_m", 0.0) for r in records])),
             "mean_selected_observed_backup_margin_m": float(np.mean([r.get("selected_observed_backup_margin_m", 0.0) for r in records])),
+            "mean_selected_observed_severity_proxy": float(np.mean([r.get("selected_observed_severity_proxy", 0.0) for r in records])),
+            "mean_selection_time_ms": float(np.mean([r.get("selection_time_ms", 0.0) for r in records])),
+            "p95_selection_time_ms": float(np.percentile([r.get("selection_time_ms", 0.0) for r in records], 95.0)),
             "selection_reason_counts": dict(Counter(str(r.get("selection_reason", "")) for r in records)),
         })
+        ttc = _finite_summary([r.get("selected_observed_min_ttc_s", float("inf")) for r in records])
+        result.update({"mean_selected_observed_min_ttc_s": ttc["mean"], "p05_selected_observed_min_ttc_s": ttc["p05"], "finite_selected_observed_ttc_rate": ttc["finite_rate"]})
+        result.update(_binary_calibration(records, bins=10))
         result.update(_contact_extra_metrics(records))
     result.update({"method": method, "num_scene_time_groups": int(num_groups), "num_records": int(len(records)), "source": source})
     return result
@@ -299,21 +341,34 @@ def evaluate_external_baselines(
     model, model_cfg, device = _load_checkpoint(checkpoint, cfg)
     groups = group_sample_paths(dataset, split=split)
     records_by_method: dict[str, list[dict[str, Any]]] = {m: [] for m in methods}
+    timing = {"load_s": 0.0, "model_inference_s": 0.0, "observed_risk_s": 0.0, "selection_s_by_method": {m: 0.0 for m in methods}}
+    eval_start = perf_counter()
     for gi, paths in enumerate(groups, 1):
+        tick = perf_counter()
         samples = [load_npz(p) for p in paths]
         samples = sorted(samples, key=lambda d: int(np.asarray(d.get("candidate_index", 0)).item()))
+        timing["load_s"] += perf_counter() - tick
+        tick = perf_counter()
         model_outputs = _predict_group(model, samples, model_cfg, device)
+        timing["model_inference_s"] += perf_counter() - tick
         # All deployable hand-designed methods share exactly the same observation-
         # conditioned risk profiles. Compute them once per candidate group rather
         # than once per method and once again for the selected record.
         oracle_names = {"oracle_filter", "oracle_recovery_filter", "branchwise_oracle_filter", "oracle_branchwise_recovery"}
         learned_names = {"route_bc", "route_bc_lite", "waymax_bc", "waymax_bc_lite", "wayformer_bc", "wayformer_style_bc", "route_bc_wayformer", "gameformer", "gameformer_lite", "gameformer_levelk", "betop", "betop_lite", "betopnet", "betopnet_lite"}
         need_profiles = any(m.lower() not in oracle_names | learned_names for m in methods)
-        profiles = [observed_risk_profile(d, model_cfg) for d in samples] if need_profiles else None
+        tick = perf_counter()
+        profiles = observed_risk_profiles(samples, model_cfg) if need_profiles else None
+        timing["observed_risk_s"] += perf_counter() - tick
         for method in methods:
             use_profiles = profiles if method.lower() not in oracle_names | learned_names else None
+            tick = perf_counter()
             sel = select_external_policy(method, samples, model_cfg, model_outputs=model_outputs, precomputed_profiles=use_profiles)
-            records_by_method[method].append(_record_for_selection(method, samples, sel, model_cfg, observed_profiles=profiles))
+            selection_s = perf_counter() - tick
+            timing["selection_s_by_method"][method] += selection_s
+            record = _record_for_selection(method, samples, sel, model_cfg, observed_profiles=profiles)
+            record["selection_time_ms"] = 1000.0 * selection_s
+            records_by_method[method].append(record)
         if gi == 1 or gi % 500 == 0:
             print({"event": "external_eval_progress", "groups_done": gi, "num_groups": len(groups)}, flush=True)
     learned_methods = {"route_bc", "route_bc_lite", "waymax_bc", "waymax_bc_lite", "wayformer_bc", "wayformer_style_bc", "route_bc_wayformer", "gameformer", "gameformer_lite", "gameformer_levelk", "betop", "betop_lite", "betopnet", "betopnet_lite"}
@@ -328,12 +383,17 @@ def evaluate_external_baselines(
         else:
             source = "observation_only_rule_or_optimizer"
         summaries[m] = _summarize(records_by_method[m], m, len(groups), source)
+    timing["total_s"] = perf_counter() - eval_start
+    timing["groups_per_second"] = float(len(groups) / max(timing["total_s"], 1e-9))
+    timing["candidates_per_second"] = float(sum(len(x) for x in groups) / max(timing["total_s"], 1e-9))
     result = {
         "dataset": str(dataset),
         "split": split,
         "checkpoint": str(checkpoint) if checkpoint else None,
         "method_order": methods,
         "methods": summaries,
+        "timing": timing,
+        "metric_protocol": {"observed_collision_calibration_target": "teacher hard_violation used only after selection; diagnostic, not a deployable policy input", "min_ttc_definition": "first time mode-wise geometric clearance reaches risk_ttc_clearance_threshold_m"},
     }
     if output:
         write_json(result, output)

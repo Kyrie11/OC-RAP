@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+REPO="${OCRAP_REPO:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
+cd "$REPO"
+export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONUNBUFFERED=1
+
 : "${OCRAP_ROOT:=/data0/senzeyu2/dataset/OCRAP}"
 : "${TRAIN_NEAR:=$OCRAP_ROOT/train_near_contact}"
 : "${VAL_NEAR:=$OCRAP_ROOT/val_near_contact}"
@@ -9,13 +14,19 @@ set -euo pipefail
 : "${WOMD_VAL_INTERACTIVE:=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation_interactive/validation_interactive_tfexample.tfrecord}"
 : "${CL_WOMD:=${WOMD_VAL_INTERACTIVE}@150}"
 : "${CL_MAX_SCENARIOS:=50}"
+: "${CL_BUCKET_DATASET:=${TEST_NEAR}}"
+: "${CL_BUCKET_SPLIT:=test}"
+: "${CL_MAX_TARGETS_PER_SCENE:=1}"
+: "${CL_RENDER_TRACE:=false}"
+: "${CL_RENDER_MAX_AGENTS:=64}"
+: "${CL_PREFLIGHT:=true}"
 : "${CL_ORACLE_MAX_SCENARIOS:=$CL_MAX_SCENARIOS}"
 : "${CL_MAX_STEPS:=40}"
 : "${CL_REPLAN_INTERVAL_STEPS:=1}"
 : "${CL_NUM_CANDIDATES:=24}"
 : "${CL_AUDIT_EVERY_N_STEPS:=1}"
 : "${CL_NUM_RECOVERY_OPTIONS:=12}"
-: "${CL_SAVE_PARTIAL:=false}"
+: "${CL_SAVE_PARTIAL:=true}"
 : "${CL_PROFILE_TIMING:=true}"
 : "${DO_OFFLINE:=true}"
 : "${DO_CLOSED_LOOP:=true}"
@@ -41,6 +52,13 @@ if [ "$THREADS_PER_JOB" -gt 8 ]; then THREADS_PER_JOB=8; fi
 : "${XLA_PYTHON_CLIENT_PREALLOCATE:=false}"
 export RUN
 mkdir -p "$RUN" "$JAX_CACHE_DIR"
+
+if [ "$DO_CLOSED_LOOP" = true ] && [ "$CL_PREFLIGHT" = true ]; then
+  python tools/check_closed_loop_dataset_support.py \
+    --dataset "$CL_BUCKET_DATASET" --split "$CL_BUCKET_SPLIT" --womd-pattern "$CL_WOMD" \
+    --expected-source-role auto --output "$RUN/closed_loop_dataset_support.json"
+fi
+
 
 # Longest/most variable jobs first; the dynamic scheduler immediately backfills
 # whichever GPU finishes. This balances wall-clock load, not just job count.
@@ -164,6 +182,13 @@ run_closed_loop_method() {
     --output "$RUN/closed_loop_${method}.json" \
     --set closed_loop.method="$method" \
     --set closed_loop.max_scenarios="$max_scenes" \
+    --set closed_loop.bucket_dataset="$CL_BUCKET_DATASET" \
+    --set closed_loop.bucket_split="$CL_BUCKET_SPLIT" \
+    --set closed_loop.require_bucket_targets=true \
+    --set closed_loop.max_bucket_targets="$CL_MAX_SCENARIOS" \
+    --set closed_loop.max_targets_per_scene="$CL_MAX_TARGETS_PER_SCENE" \
+    --set closed_loop.render_trace="$CL_RENDER_TRACE" \
+    --set closed_loop.render_max_agents="$CL_RENDER_MAX_AGENTS" \
     --set closed_loop.max_steps="$CL_MAX_STEPS" \
     --set closed_loop.replan_interval_steps="$CL_REPLAN_INTERVAL_STEPS" \
     --set closed_loop.label_mode="$label_mode" \

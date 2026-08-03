@@ -311,7 +311,7 @@ def _loss_dict(out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], cfg
     return losses
 
 
-def _epoch(model, loader, opt, device, cfg: dict[str, Any], train: bool, *, rank: int = 0, epoch: int = 0) -> dict[str, float]:
+def _epoch(model, loader, opt, device, cfg: dict[str, Any], train: bool, *, rank: int = 0, epoch: int = 0, scaler: Any | None = None) -> dict[str, float]:
     model.train(train)
     bcfg = cfg.get("external_baselines", {}) if isinstance(cfg.get("external_baselines", {}), dict) else {}
     tcfg = bcfg.get("training", {}) if isinstance(bcfg.get("training", {}), dict) else {}
@@ -323,15 +323,26 @@ def _epoch(model, loader, opt, device, cfg: dict[str, Any], train: bool, *, rank
         iterator = tqdm(loader, desc=("train" if train else "val") + f" ep{epoch:03d}", leave=False, dynamic_ncols=True)
     for batch in iterator:
         batch = _batch_to_device(batch, device)
+        amp_enabled = bool(tcfg.get("amp", True)) and device.type == "cuda"
+        amp_name = str(tcfg.get("amp_dtype", "bfloat16")).lower()
+        amp_dtype = torch.bfloat16 if amp_name in {"bf16", "bfloat16"} else torch.float16
         with torch.set_grad_enabled(train):
-            out = _forward_model(model, batch, cfg)
-            losses = _loss_dict(out, batch, cfg)
-            loss = losses["loss"]
+            with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=amp_enabled):
+                out = _forward_model(model, batch, cfg)
+                losses = _loss_dict(out, batch, cfg)
+                loss = losses["loss"]
             if train:
                 opt.zero_grad(set_to_none=True)
-                loss.backward()
-                _stable_clip_grad_norm_(model.parameters(), float(tcfg.get("grad_clip", 5.0)))
-                opt.step()
+                if scaler is not None and scaler.is_enabled():
+                    scaler.scale(loss).backward()
+                    scaler.unscale_(opt)
+                    _stable_clip_grad_norm_(model.parameters(), float(tcfg.get("grad_clip", 5.0)))
+                    scaler.step(opt)
+                    scaler.update()
+                else:
+                    loss.backward()
+                    _stable_clip_grad_norm_(model.parameters(), float(tcfg.get("grad_clip", 5.0)))
+                    opt.step()
         bs = int(batch["x"].shape[0])
         n += bs
         for name, val in losses.items():
@@ -408,7 +419,17 @@ def train_external_baseline(dataset: str, output: str, cfg: dict[str, Any], *, v
                 val_ds = train_ds
         tcfg = bcfg.get("training", {}) if isinstance(bcfg.get("training", {}), dict) else {}
         device = _device(cfg, use_ddp=use_ddp, local_rank=local_rank)
+        if device.type == "cuda":
+            torch.backends.cuda.matmul.allow_tf32 = bool(tcfg.get("allow_tf32", True))
+            torch.backends.cudnn.allow_tf32 = bool(tcfg.get("allow_tf32", True))
+            torch.backends.cudnn.benchmark = bool(tcfg.get("cudnn_benchmark", True))
+            try:
+                torch.set_float32_matmul_precision(str(tcfg.get("matmul_precision", "high")))
+            except Exception:
+                pass
         model = build_model_from_cfg(train_ds.feature_dim, cfg).to(device)
+        if bool(tcfg.get("compile", False)) and hasattr(torch, "compile"):
+            model = torch.compile(model, mode=str(tcfg.get("compile_mode", "reduce-overhead")), dynamic=bool(tcfg.get("compile_dynamic", False)))
         if use_ddp:
             fup = tcfg.get("find_unused_parameters", "auto")
             if isinstance(fup, str):
@@ -426,7 +447,21 @@ def train_external_baseline(dataset: str, output: str, cfg: dict[str, Any], *, v
                 # shard lengths safe; these architectures do not use BatchNorm.
                 broadcast_buffers=False,
             )
-        opt = torch.optim.AdamW(model.parameters(), lr=float(tcfg.get("lr", 2.0e-4)), weight_decay=float(tcfg.get("weight_decay", 1.0e-4)))
+        opt_kwargs = {"lr": float(tcfg.get("lr", 2.0e-4)), "weight_decay": float(tcfg.get("weight_decay", 1.0e-4))}
+        if device.type == "cuda" and bool(tcfg.get("fused_optimizer", True)):
+            opt_kwargs["fused"] = True
+        try:
+            opt = torch.optim.AdamW(model.parameters(), **opt_kwargs)
+        except (TypeError, RuntimeError):
+            opt_kwargs.pop("fused", None)
+            opt = torch.optim.AdamW(model.parameters(), **opt_kwargs)
+        amp_enabled = bool(tcfg.get("amp", True)) and device.type == "cuda"
+        amp_dtype_name = str(tcfg.get("amp_dtype", "bfloat16")).lower()
+        use_scaler = amp_enabled and amp_dtype_name not in {"bf16", "bfloat16"}
+        try:
+            scaler = torch.amp.GradScaler("cuda", enabled=use_scaler)
+        except Exception:
+            scaler = torch.cuda.amp.GradScaler(enabled=use_scaler)
         requested_batch_size = int(tcfg.get("batch_size", 32))
         global_batch_size = int(tcfg.get("global_batch_size", requested_batch_size * world_size if use_ddp else requested_batch_size))
         if use_ddp:
@@ -456,9 +491,9 @@ def train_external_baseline(dataset: str, output: str, cfg: dict[str, Any], *, v
         for ep in range(1, epochs + 1):
             if train_sampler is not None:
                 train_sampler.set_epoch(ep)
-            tr = _epoch(model, train_loader, opt, device, cfg, train=True, rank=rank, epoch=ep)
+            tr = _epoch(model, train_loader, opt, device, cfg, train=True, rank=rank, epoch=ep, scaler=scaler)
             with torch.no_grad():
-                va = _epoch(model, val_loader, None, device, cfg, train=False, rank=rank, epoch=ep)
+                va = _epoch(model, val_loader, None, device, cfg, train=False, rank=rank, epoch=ep, scaler=None)
             row = {"epoch": ep, "train": tr, "val": va}
             if rank == 0:
                 history.append(row)
@@ -522,6 +557,10 @@ def train_external_baseline(dataset: str, output: str, cfg: dict[str, Any], *, v
             "per_rank_batch_size": int(batch_size),
             "global_batch_size": int(global_batch_size),
             "num_workers_per_rank": int(num_workers),
+            "amp": bool(amp_enabled),
+            "amp_dtype": amp_dtype_name,
+            "fused_optimizer": bool(opt_kwargs.get("fused", False)),
+            "torch_compile": bool(tcfg.get("compile", False)),
             "history": history,
         }
         if rank == 0:

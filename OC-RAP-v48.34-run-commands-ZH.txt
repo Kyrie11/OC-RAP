@@ -1,0 +1,267 @@
+OC-RAP v48.34 BARRIER-CROSSFIT
+主实验、消融、探索性闭环、外部baseline与critical视频执行指令
+
+总原则
+======
+1. 先只运行v48.34主实验。不要预先运行消融、shadow、正式test或stress。
+2. 不修改GATE_SPEC，不手工创建NEXT_COMMANDS.txt，不把RC=30当作算法结果。
+3. v48.34继续使用统一top-5、一个模型和统一连续物理余量；没有regime ID或三套策略。
+4. RC=20后的closed-loop/baseline/video是“探索性诊断”。它不会授权部署或论文主结论。
+5. 若在RC=20后主动查看held-out test，必须承认这些场景已被后续模型选择污染，不能再用于v48.35及之后的调参、checkpoint或threshold选择。
+
+一、解压和快速检查
+==================
+
+unzip -q OC-RAP-v48.34-BARRIER-CROSSFIT.zip -d OC-RAP-v48.34
+cd OC-RAP-v48.34
+export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
+
+python tools/check_v48_34_multigroup_loss_contract.py \
+  --output /tmp/V48_34_MULTIGROUP_LOSS_CONTRACT.json
+cat /tmp/V48_34_MULTIGROUP_LOSS_CONTRACT.json
+
+bash -n scripts/run_v48_34_barrier_crossfit_dedicated.sh
+bash -n scripts/run_v48_34_barrier_crossfit_ablations.sh
+bash -n scripts/run_v48_34_exploratory_closed_loop_baselines_and_videos.sh
+
+二、运行v48.34主实验
+===================
+
+export OUTPUTDIR="runs/ocrap_v48_34_barrier_crossfit_dedicated_4834"
+export OCRAP_ROOT="/data0/senzeyu2/dataset/OCRAP"
+export SOURCE_RUN="runs/ocrap_v48_13_terra_proxy_4801"
+export PROTOCOL_ROOT="$OCRAP_ROOT/calibration_v48_14_prism_4814"
+export CAL_SAFE="$OCRAP_ROOT/calibration_safe"
+export GPU0=0
+export GPU1=1
+
+set +e
+bash scripts/run_v48_34_barrier_crossfit_dedicated.sh \
+  >"$OUTPUTDIR.launcher.stdout.log" \
+  2>"$OUTPUTDIR.launcher.stderr.log"
+RC=$?
+set -e
+echo "V48.34 MAIN RC=$RC"
+
+cat "$OUTPUTDIR/V48_34_COMPLETE.json" 2>/dev/null || true
+cat "$OUTPUTDIR/PIPELINE_FAILED.json" 2>/dev/null || true
+cat "$OUTPUTDIR/NEXT_COMMANDS_STATUS.json" 2>/dev/null || true
+cat "$OUTPUTDIR/NEXT_COMMANDS_BLOCKED.json" 2>/dev/null || true
+
+三、严格按RC分支
+===============
+
+A. RC=30
+-------
+含义：工程、协议、数据合同、缓存、训练、模型合同或certificate artifact失败。
+立即停止。不要运行消融、shadow、探索性baseline、video、test或stress。
+
+收集：
+
+find "$OUTPUTDIR" -maxdepth 4 -type f \
+  \( -name 'PIPELINE_FAILED.json' \
+  -o -name 'VARIANT_STAGE_FAILED.json' \
+  -o -name 'FAILURE_SIGNATURE_*.json' \
+  -o -name 'TRAINING_CONTRACT.json' \
+  -o -name 'FACTOR_CACHE_*.json' \
+  -o -name 'METRIC_CALIBRATION_CONTRACT.json' \
+  -o -name 'CALIBRATION_FAILED.json' \
+  -o -name 'V48_34_COMPLETE.json' \) -print
+
+tail -n 200 "$OUTPUTDIR/logs/adapt_balanced.log" 2>/dev/null || true
+tail -n 200 "$OUTPUTDIR/logs/adapt_precision.log" 2>/dev/null || true
+tail -n 240 "$OUTPUTDIR/logs/certificate_controller.log" 2>/dev/null || true
+
+B. RC=20
+-------
+含义：pipeline和scene-disjoint Natural certificate有效，但development rule fit/gate未通过。
+允许：v48.34消融、adaptation-dev physical shadow、带披露的探索性closed-loop。
+仍不授权正式test/stress。
+
+先验证：
+
+python - "$OUTPUTDIR/V48_34_COMPLETE.json" <<'PY'
+import json,sys
+x=json.load(open(sys.argv[1]))
+assert x['pipeline_exit_code']==20
+assert x['pipeline_valid'] is True
+assert x['certificate_executed'] is True
+assert x['certificate_exit_code']==20
+assert x['gate_evaluated'] is True
+assert x['gate_passed'] is False
+assert x['test_roots_read'] is False
+print('V48.34 RC20 authorization contract PASS')
+PY
+
+1) 运行8个v48.34消融
+--------------------
+
+export MAIN_RUN="$OUTPUTDIR"
+export ABLATION_ROOT="runs/ocrap_v48_34_barrier_crossfit_ablations_4834"
+set +e
+bash scripts/run_v48_34_barrier_crossfit_ablations.sh \
+  >"$ABLATION_ROOT.launcher.stdout.log" \
+  2>"$ABLATION_ROOT.launcher.stderr.log"
+ABLATION_RC=$?
+set -e
+echo "V48.34 ABLATION CONTROLLER RC=$ABLATION_RC"
+cat "$ABLATION_ROOT/ABLATIONS_STATUS.json" 2>/dev/null || true
+
+每个任务必须同时检查：
+- TASK_COMPLETE.json存在；
+- pipeline_exit_code不是30；
+- certificate_executed=true；
+- certificate_exit_code为0或20。
+任何RC=30任务都只是工程失败，不能进入消融表。
+
+2) 运行adaptation-dev physical shadow
+------------------------------------
+
+set +e
+OUT="$OUTPUTDIR" GPU0=0 GPU1=1 \
+  bash scripts/run_v48_34_dev_shadow_closed_loop.sh \
+  >"$OUTPUTDIR.dev_shadow.stdout.log" \
+  2>"$OUTPUTDIR.dev_shadow.stderr.log"
+SHADOW_RC=$?
+set -e
+echo "V48.34 DEV SHADOW RC=$SHADOW_RC"
+cat "$OUTPUTDIR/dev_shadow_closed_loop/DEV_SHADOW_COMPLETE.json" 2>/dev/null || true
+
+C. RC=0
+------
+必须同时存在：
+- $OUTPUTDIR/NEXT_COMMANDS.txt
+- $OUTPUTDIR/NEXT_COMMANDS_STATUS.json且generated=true
+- $OUTPUTDIR/V48_34_COMPLETE.json且gate_passed=true
+
+python - "$OUTPUTDIR/V48_34_COMPLETE.json" "$OUTPUTDIR/NEXT_COMMANDS_STATUS.json" <<'PY'
+import json,pathlib,sys
+complete=json.load(open(sys.argv[1])); status=json.load(open(sys.argv[2]))
+root=pathlib.Path(sys.argv[1]).parent
+assert complete['pipeline_exit_code']==0
+assert complete['pipeline_valid'] is True
+assert complete['certificate_executed'] is True
+assert complete['certificate_exit_code']==0
+assert complete['gate_evaluated'] is True
+assert complete['gate_passed'] is True
+assert complete['next_commands_generated'] is True
+assert complete['test_roots_read'] is False
+assert status['generated'] is True
+assert (root/'NEXT_COMMANDS.txt').is_file()
+print('V48.34 RC0 authorization contract PASS')
+PY
+
+cat "$OUTPUTDIR/NEXT_COMMANDS.txt"
+bash "$OUTPUTDIR/NEXT_COMMANDS.txt"
+
+四、用当前v48.33模型立即做探索性闭环、同场景baseline和视频
+========================================================
+本节可在v48.33 RC=20后执行。使用v48.34代码中的新配对与可视化工具，但MODEL_RUN指向已有v48.33主实验。
+
+A. 推荐：只看adaptation-dev Near/Contact，不污染held-out test
+--------------------------------------------------------
+Safe没有隐式adaptation-dev根目录，所以默认关闭Safe。该结果只用于诊断，不能用于v48.34/v48.35调参。
+
+export MODEL_RUN="runs/ocrap_v48_33_eligible_set_policy_dedicated_4833"
+export OUT="runs/ocrap_v48_33_exploratory_adapt_dev_paired"
+export ALLOW_DIAGNOSTIC_RC20=1
+export EXPLORATORY_DATA_SCOPE=adaptation_dev
+export RUN_SAFE=0
+export RUN_NEAR=1
+export RUN_CONTACT=1
+export RUN_EXTERNAL_BASELINES=1
+export RUN_VIDEOS=1
+export VIDEO_VARIANTS=precision
+export REQUIRE_ALL_BASELINES=0
+export CUDA_DEVICES=0,1
+
+# 仅需要checkpoint的方法：未设置时REQUIRE_ALL_BASELINES=0会跳过，不会伪造结果。
+export NEAR_GAMEFORMER_CHECKPOINT="/absolute/path/to/near_gameformer_lite_checkpoint.pt"
+
+bash scripts/run_v48_34_exploratory_closed_loop_baselines_and_videos.sh \
+  >"$OUT.launcher.stdout.log" \
+  2>"$OUT.launcher.stderr.log"
+
+检查：
+cat "$OUT/EXPLORATORY_ONLY_DISCLOSURE.json"
+cat "$OUT/EXPLORATORY_DATA_SCOPE_CONTRACT.json"
+cat "$OUT/EXPLORATORY_CLOSED_LOOP_COMPLETE.json"
+find "$OUT/reports" -maxdepth 1 -type f -print
+find "$OUT/videos" -name 'VIDEO_INDEX.json' -print
+
+B. 用户明确要求的三regime held-out初步对比
+-----------------------------------------
+警告：这会永久污染这批held-out场景用于后续模型选择的独立性。结果只能标为“post-gate exploratory diagnostic”，不得用于选择v48.34/v48.35算法、阈值或checkpoint。最终论文仍需新冻结的未触碰test集合或重新注册评估协议。
+
+export MODEL_RUN="runs/ocrap_v48_33_eligible_set_policy_dedicated_4833"
+export OUT="runs/ocrap_v48_33_exploratory_heldout_all_regimes"
+export ALLOW_DIAGNOSTIC_RC20=1
+export EXPLORATORY_DATA_SCOPE=heldout_test
+export ALLOW_HELDOUT_TEST_DIAGNOSTIC=1
+export RUN_SAFE=1
+export RUN_NEAR=1
+export RUN_CONTACT=1
+export RUN_EXTERNAL_BASELINES=1
+export RUN_VIDEOS=1
+export VIDEO_VARIANTS=precision
+export REQUIRE_ALL_BASELINES=1
+export CUDA_DEVICES=0,1
+export MAX_TARGETS=50
+export MAX_STEPS=40
+
+# 数据根目录可按服务器环境覆盖；heldout_test默认读取：
+# $OCRAP_ROOT/test_safe
+# $OCRAP_ROOT/test_near_contact
+# $OCRAP_ROOT/test_contact
+
+# 需要checkpoint的外部方法；必须使用与上传baseline相同的冻结checkpoint。
+export SAFE_WAYFORMER_CHECKPOINT="/absolute/path/to/wayformer_bc_checkpoint.pt"
+export SAFE_GAMEFORMER_CHECKPOINT="/absolute/path/to/safe_gameformer_lite_checkpoint.pt"
+export SAFE_BETOPNET_CHECKPOINT="/absolute/path/to/betopnet_lite_checkpoint.pt"
+export NEAR_GAMEFORMER_CHECKPOINT="/absolute/path/to/near_gameformer_lite_checkpoint.pt"
+
+bash scripts/run_v48_34_exploratory_closed_loop_baselines_and_videos.sh \
+  >"$OUT.launcher.stdout.log" \
+  2>"$OUT.launcher.stderr.log"
+
+必须保留并上传：
+- $OUT/EXPLORATORY_ONLY_DISCLOSURE.json
+- $OUT/EXPLORATORY_DATA_SCOPE_CONTRACT.json
+- $OUT/EXPLORATORY_CLOSED_LOOP_COMPLETE.json
+- $OUT/reports/*.json与*.csv
+- $OUT/models/**/**/*.scenes.jsonl
+- $OUT/baselines/**/*.scenes.jsonl
+- $OUT/videos/**/critical_scene_selection.json
+- $OUT/videos/**/rendered/VIDEO_INDEX.json
+- 全部MP4/GIF与日志
+
+五、v48.34 RC=20后运行同样的探索性闭环
+======================================
+将上面MODEL_RUN替换为：
+
+export MODEL_RUN="runs/ocrap_v48_34_barrier_crossfit_dedicated_4834"
+
+推荐先执行adaptation_dev Near/Contact。只有在你接受held-out污染并承诺不据此修改v48.35时，才执行三regime heldout命令。
+
+六、视频选择与解释
+================
+工具会从全部已配对场景中同时选择：
+- positive examples：相对Control在注册连续指标上有改善，且不引入明显安全退化；
+- failure examples：干预导致NUP、安全或恢复指标恶化；
+并生成Control/OC-RAP并排MP4和GIF。
+
+不要只展示positive video。论文toy example或补充材料中必须同步披露选择规则、总场景数、positive/failure数量以及对应aggregate paired结果。
+
+七、建议上传的下一轮结果
+======================
+始终上传整个主实验目录：
+$OUTPUTDIR
+
+RC=20时再上传：
+$ABLATION_ROOT
+$OUTPUTDIR/dev_shadow_closed_loop
+
+做了探索性对比时再上传整个：
+$OUT
+
+请保留所有JSON、CSV、scenes.jsonl、POLICY_CONTRACT.env、GATE_SPEC.json、checkpoint summary、dev frozen rule、certificate rows、disclosure和data-scope contract；不要只上传几项最终均值或精选视频。

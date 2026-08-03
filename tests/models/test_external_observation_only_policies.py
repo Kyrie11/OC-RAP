@@ -156,3 +156,35 @@ def test_marc_never_selects_rejected_candidate_when_admitted_exists() -> None:
     sel = select_external_policy("marc_lite", samples, cfg)
     assert sel.admitted.any()
     assert sel.admitted[sel.selected_index]
+
+
+def test_min_ttc_is_first_threshold_entry_not_closest_approach_time() -> None:
+    d = _sample(detour=False, nominal=True)
+    d["agent_history"][:, 1, 0] = 10.0
+    profile = observed_risk_profile(d, _cfg())
+    assert np.isclose(profile.min_ttc, 0.5)
+    assert np.min(profile.closest_approach_time_by_mode) >= profile.min_ttc
+    assert np.any(profile.closest_approach_time_by_mode > profile.min_ttc)
+
+
+def test_group_risk_scoring_reuses_actor_forecast(monkeypatch) -> None:
+    import ocrap.external_baselines.observed_risk as risk_module
+
+    samples = [_sample(detour=False, nominal=True), _sample(detour=True, nominal=False)]
+    original = risk_module.build_observed_risk_context
+    calls = 0
+
+    def counted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(risk_module, "build_observed_risk_context", counted)
+    grouped = risk_module.observed_risk_profiles(samples, _cfg())
+    assert calls == 1
+    independent = [original(d, _cfg()) for d in samples]
+    rescored = [risk_module.score_candidate_with_context(d, _cfg(), c) for d, c in zip(samples, independent)]
+    for a, b in zip(grouped, rescored):
+        np.testing.assert_allclose(a.losses, b.losses)
+        assert np.isclose(a.expected_loss, b.expected_loss)
+        assert np.isclose(a.cvar_loss, b.cvar_loss)

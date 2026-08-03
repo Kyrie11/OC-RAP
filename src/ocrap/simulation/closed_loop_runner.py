@@ -1792,6 +1792,13 @@ def _rollout_one_scene(
             if np.isfinite(aligned_clearance[i])
         ]
         post_clearance = [aligned_clearance[i] for i in post_indices]
+        post_overlap_flags = overlap_flags[contact_anchor_idx:]
+        metric_summary["post_contact_overlap_duration_s"] = float(
+            sum(bool(x) for x in post_overlap_flags) * metric_dt_s
+        )
+        metric_summary["post_contact_overlap_rate"] = float(
+            sum(bool(x) for x in post_overlap_flags) / max(len(post_overlap_flags), 1)
+        )
         metric_summary["post_contact_clearance_m_max"] = (
             float(max(post_clearance)) if post_clearance else float("nan")
         )
@@ -1840,6 +1847,8 @@ def _rollout_one_scene(
             if escape_idx is not None else float("nan")
         )
     else:
+        metric_summary["post_contact_overlap_duration_s"] = float("nan")
+        metric_summary["post_contact_overlap_rate"] = float("nan")
         metric_summary["post_contact_clearance_m_max"] = float("nan")
         metric_summary["post_contact_clearance_m_mean"] = float("nan")
         metric_summary["post_contact_free_space_auc_m_s"] = float("nan")
@@ -2483,6 +2492,13 @@ def _write_closed_loop_progress(
     )
 
 
+def _closed_loop_rollout_limit(*, target_count: int, max_rollouts: int, max_scenes: int) -> int:
+    """Resolve the rollout cap; zero means all for an explicit target set."""
+    if int(target_count) > 0:
+        return int(target_count) if int(max_rollouts) <= 0 else min(int(target_count), int(max_rollouts))
+    return max(int(max_scenes), 0)
+
+
 def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, output: str | Path, cfg: dict) -> dict[str, Any]:
     if not str(dataset_patterns).strip() or str(dataset_patterns).strip().startswith("@"):
         raise ValueError(
@@ -2491,7 +2507,11 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
         )
     cl_cfg = cfg.get("closed_loop", {}) if isinstance(cfg.get("closed_loop", {}), dict) else {}
     max_scenes = int(cl_cfg.get("max_scenarios", cfg.get("max_scenarios") or 8))
-    max_rollouts = int(cl_cfg.get("max_rollouts", max_scenes) or max_scenes)
+    # For bucket-targeted evaluation, 0 means all loaded targets.  This is
+    # required for full-regime runs; the historical ``or max_scenes`` behavior
+    # silently turned 0 back into a small exploratory cap.
+    raw_max_rollouts = cl_cfg.get("max_rollouts", max_scenes)
+    max_rollouts = int(raw_max_rollouts) if raw_max_rollouts not in {None, ""} else max_scenes
     raw_max_scenarios = cl_cfg.get("raw_max_scenarios", cfg.get("max_scenarios", None))
     raw_max_scenarios = None if raw_max_scenarios in {None, "", 0, "0"} else int(raw_max_scenarios)
     method = str(cl_cfg.get("method", "ocrap")).lower()
@@ -2607,7 +2627,9 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
         )
     allow_legacy_index = bool(cl_cfg.get("allow_legacy_source_index_targets", True))
     run_fingerprint = _closed_loop_fingerprint(dataset_patterns, checkpoint, method, target_spec, local)
-    total_rollouts = max_rollouts if targets else max_scenes
+    total_rollouts = _closed_loop_rollout_limit(
+        target_count=len(targets), max_rollouts=max_rollouts, max_scenes=max_scenes
+    )
     resume_meta: dict[str, Any] = {"sources": [], "legacy_sources": [], "prior_raw_scenarios_seen": 0}
     if resume:
         scene_results, resume_meta = _load_resume_scene_results(

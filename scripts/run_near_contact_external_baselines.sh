@@ -15,7 +15,7 @@ set -euo pipefail
 : "${CL_NUM_CANDIDATES:=24}"
 : "${CL_AUDIT_EVERY_N_STEPS:=1}"
 : "${CL_NUM_RECOVERY_OPTIONS:=12}"
-: "${CL_SAVE_PARTIAL:=false}"
+: "${CL_SAVE_PARTIAL:=true}"
 : "${CL_PROFILE_TIMING:=true}"
 : "${DO_OFFLINE:=true}"
 : "${DO_CLOSED_LOOP:=true}"

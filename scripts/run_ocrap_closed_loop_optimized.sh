@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+REPO="${OCRAP_REPO:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
+cd "$REPO"
+export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"
+
 # Exact OC-RAP closed-loop evaluation with the optimized hot path.
 # Required: WOMD_VAL and CHECKPOINT. CALIBRATION is optional when GAMMA_REC is set.
 
@@ -21,6 +25,15 @@ LABEL_MODE="${LABEL_MODE:-fast}"
 NUM_CANDIDATES="${NUM_CANDIDATES:-}"
 NUM_RECOVERY_OPTIONS="${NUM_RECOVERY_OPTIONS:-}"
 JAX_CACHE_DIR="${JAX_CACHE_DIR:-${RUN_DIR}/.jax_compilation_cache}"
+CONFIG="${CONFIG:-}"
+BUCKET_DATASET="${BUCKET_DATASET:-}"
+BUCKET_SPLIT="${BUCKET_SPLIT:-test}"
+MAX_TARGETS_PER_SCENE="${MAX_TARGETS_PER_SCENE:-1}"
+RENDER_TRACE="${RENDER_TRACE:-false}"
+RENDER_MAX_AGENTS="${RENDER_MAX_AGENTS:-64}"
+SAVE_PARTIAL="${SAVE_PARTIAL:-false}"
+RESUME_FORCE="${RESUME_FORCE:-true}"
+PREFLIGHT="${PREFLIGHT:-true}"
 
 mkdir -p "$RUN_DIR" "$(dirname "$OUTPUT")" "$JAX_CACHE_DIR"
 
@@ -48,22 +61,41 @@ export OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}"
 export MKL_NUM_THREADS="${MKL_NUM_THREADS:-4}"
 export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-4}"
 
+DATASET_SPEC="$WOMD_VAL"
+if [[ "$DATASET_SPEC" != *"@"* && "$WOMD_LIMIT" -gt 0 ]]; then DATASET_SPEC="${DATASET_SPEC}@${WOMD_LIMIT}"; fi
+if [[ -n "$BUCKET_DATASET" && "$PREFLIGHT" == true ]]; then
+  python tools/check_closed_loop_dataset_support.py --dataset "$BUCKET_DATASET" --split "$BUCKET_SPLIT" \
+    --womd-pattern "$DATASET_SPEC" --expected-source-role auto --output "$RUN_DIR/closed_loop_dataset_support.json"
+fi
+
 ARGS=(
   python -u -m ocrap.cli closed-loop
-  --dataset "${WOMD_VAL}@${WOMD_LIMIT}"
+  --dataset "$DATASET_SPEC"
   --checkpoint "$CHECKPOINT"
   --output "$OUTPUT"
   --set "closed_loop.max_scenarios=${MAX_SCENARIOS}"
+  --set "closed_loop.max_bucket_targets=${MAX_SCENARIOS}"
+  --set "closed_loop.max_targets_per_scene=${MAX_TARGETS_PER_SCENE}"
   --set "closed_loop.max_steps=${MAX_STEPS}"
   --set "closed_loop.method=ocrap"
   --set "closed_loop.replan_interval_steps=${REPLAN_INTERVAL}"
   --set "closed_loop.label_mode=${LABEL_MODE}"
   --set "closed_loop.fast_waymax_history=true"
   --set "closed_loop.profile_timing=true"
+  --set "closed_loop.render_trace=${RENDER_TRACE}"
+  --set "closed_loop.render_max_agents=${RENDER_MAX_AGENTS}"
+  --set "closed_loop.save_partial=${SAVE_PARTIAL}"
+  --set "closed_loop.resume_force=${RESUME_FORCE}"
   --set "selection.gamma_rec=${GAMMA_REC}"
   --set "waymax.jax_compilation_cache_dir=${JAX_CACHE_DIR}"
 )
 
+if [[ -n "$CONFIG" ]]; then
+  ARGS+=(--config "$CONFIG")
+fi
+if [[ -n "$BUCKET_DATASET" ]]; then
+  ARGS+=(--set "closed_loop.bucket_dataset=${BUCKET_DATASET}" --set "closed_loop.bucket_split=${BUCKET_SPLIT}" --set "closed_loop.require_bucket_targets=true")
+fi
 if [[ -n "$NUM_CANDIDATES" ]]; then
   ARGS+=(--set "closed_loop.num_candidate_prefixes=${NUM_CANDIDATES}")
 fi

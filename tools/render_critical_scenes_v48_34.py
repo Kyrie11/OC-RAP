@@ -140,6 +140,8 @@ def main() -> int:
     ap.add_argument("--output-dir", type=Path, required=True)
     ap.add_argument("--fps", type=int, default=10)
     ap.add_argument("--format", choices=("auto", "mp4", "gif"), default="auto")
+    ap.add_argument("--method-name", default="OC-RAP")
+    ap.add_argument("--control-name", default="Comparator")
     args = ap.parse_args()
     if args.fps <= 0:
         raise SystemExit("fps must be positive")
@@ -170,8 +172,8 @@ def main() -> int:
         fig, axes = plt.subplots(1, 2, figsize=(12, 6), dpi=100)
 
         def update(i: int):
-            _draw_frame(axes[0], ct, i, "Scalar control", bounds)
-            _draw_frame(axes[1], mt, i, "OC-RAP", bounds)
+            _draw_frame(axes[0], ct, i, args.control_name, bounds)
+            _draw_frame(axes[1], mt, i, args.method_name, bounds)
             fig.suptitle(f"{selection.get('regime')} | {item.get('category')} | {key}")
             return []
 
@@ -208,13 +210,15 @@ def main() -> int:
         csv_rows.append({k: record.get(k) for k in ("target_key", "scene_id", "target_time_index", "category", "category_rank", "selection_score", "video", "num_control_frames", "num_method_frames", "fps")})
 
     index_doc = {
-        "event": "v48_34_1_critical_scene_videos",
+        "event": "critical_scene_recovery_videos",
         "version": "v48.34.1-RC30-MODEL-CONTRACT-HOTFIX",
         "exploratory_only": True,
         "paper_claim_allowed": False,
         "method_scenes": str(args.method_scenes),
         "control_scenes": str(args.control_scenes),
         "selection": str(args.selection),
+        "method_name": args.method_name,
+        "control_name": args.control_name,
         "videos": index,
     }
     (args.output_dir / "VIDEO_INDEX.json").write_text(json.dumps(index_doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

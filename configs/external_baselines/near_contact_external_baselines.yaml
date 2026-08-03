@@ -16,6 +16,8 @@ external_baselines:
     risk_clearance_buffer_m: 0.75
     risk_clearance_scale_m: 2.0
     risk_collision_temperature_m: 0.8
+    # TTC is the first entry into this signed-clearance threshold.
+    risk_ttc_clearance_threshold_m: 0.0
     risk_severity_speed_mps: 12.0
     backup_deceleration_mps2: 5.0
     backup_reaction_time_s: 0.25
@@ -33,6 +35,10 @@ external_baselines:
     marc_smoothness_weight: 0.15
     marc_deviation_weight: 0.10
     marc_risk_threshold: 1.0
+    # Use the non-anticipative temporal branch-risk implementation added in v49.
+    marc_use_temporal_risk_for_admission: true
+    marc_shared_prefix_risk_weight: 0.45
+    marc_chance_threshold: 0.50
 
     # RACP-style multimodal beliefs and contingent risk.
     racp_risk_tolerance: 0.60
@@ -43,6 +49,8 @@ external_baselines:
     racp_collision_probability_weight: 1.0
     racp_smoothness_weight: 0.10
     racp_risk_threshold: 0.75
+    racp_shared_prefix_risk_weight: 0.55
+    racp_chance_threshold: 0.50
 
     risk_deviation_weight: 0.05
     expected_risk_threshold: 0.45
@@ -75,6 +83,13 @@ external_baselines:
     device: auto
     batch_size: 64
     epochs: 1
+    # CUDA fast path. compile remains opt-in because Waymax/JAX coexistence and
+    # short one-epoch runs can make graph compilation slower overall.
+    amp: true
+    amp_dtype: bfloat16
+    allow_tf32: true
+    fused_optimizer: true
+    compile: false
 
 closed_loop:
   # Deployable methods select from feature-only candidates, then label only the

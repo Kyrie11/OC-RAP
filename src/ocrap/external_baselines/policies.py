@@ -5,7 +5,7 @@ from typing import Any
 
 import numpy as np
 
-from .observed_risk import ObservedRiskProfile, observed_risk_profile
+from .observed_risk import ObservedRiskProfile, observed_risk_profile, observed_risk_profiles
 
 
 @dataclass
@@ -605,6 +605,43 @@ def _severity_minimization_cost(d: dict[str, Any], cfg: dict[str, Any], risk: Ob
         "backup_margin": float(risk.backup_margin),
     }
 
+
+def _temporal_contingency_risk(
+    profile: ObservedRiskProfile,
+    branch_fraction: float,
+    *,
+    alpha: float,
+    tail_risk_weight: float,
+    shared_prefix_weight: float,
+    collision_threshold_m: float = 0.0,
+) -> tuple[float, float, float, float]:
+    """Finite-lattice scenario-tree risk with a non-anticipative shared prefix.
+
+    The candidate is shared until the branch point.  The prefix is therefore
+    upper-tail aggregated across all modes; only the tail receives the
+    belief-weighted expected/CVaR mixture.  This is a deployable approximation
+    of MARC/RACP when their continuous optimizer is replaced by OC-RAP's
+    executable candidate lattice.
+    """
+    curves = np.asarray(profile.loss_curves, dtype=float)
+    clearance = np.asarray(profile.clearance_curves, dtype=float)
+    weights = np.asarray(profile.weights, dtype=float)
+    if curves.ndim != 2 or curves.shape[0] == 0 or curves.shape[1] == 0:
+        risk = (1.0 - tail_risk_weight) * float(profile.expected_loss) + tail_risk_weight * float(profile.cvar_loss)
+        return risk, float(profile.expected_loss), float(profile.cvar_loss), float(profile.collision_probability)
+    T = int(curves.shape[1])
+    branch = int(np.clip(round(float(branch_fraction) * (T - 1)), 1, max(T - 1, 1))) if T > 1 else 0
+    prefix_mode = np.max(curves[:, : branch + 1], axis=1)
+    tail_mode = np.max(curves[:, branch:], axis=1)
+    prefix_cvar = _weighted_upper_cvar(prefix_mode, weights, alpha=float(alpha))
+    tail_expected = float(np.sum(weights * tail_mode))
+    tail_cvar = _weighted_upper_cvar(tail_mode, weights, alpha=float(alpha))
+    chance = float(np.sum(weights * np.any(clearance[:, branch:] <= float(collision_threshold_m), axis=1))) if clearance.shape == curves.shape else float(profile.collision_probability)
+    tail = (1.0 - float(tail_risk_weight)) * tail_expected + float(tail_risk_weight) * tail_cvar
+    total = float(shared_prefix_weight) * prefix_cvar + (1.0 - float(shared_prefix_weight)) * tail
+    return total, tail_expected, tail_cvar, chance
+
+
 def select_external_policy(
     baseline: str,
     samples: list[dict[str, Any]],
@@ -714,7 +751,7 @@ def select_external_policy(
     # Deployable scenario-risk profiles shared by all non-oracle planning/filter
     # baselines.  They are derived from candidate trajectories and observed agent
     # histories, not from m_star/r_orc/r_dep/harm labels.
-    profiles = precomputed_profiles if precomputed_profiles is not None else [observed_risk_profile(d, cfg) for d in samples]
+    profiles = precomputed_profiles if precomputed_profiles is not None else observed_risk_profiles(samples, cfg)
     if len(profiles) != n:
         raise ValueError(f"precomputed_profiles length {len(profiles)} does not match candidate count {n}")
     exp_risk = np.asarray([p.expected_loss for p in profiles], dtype=float)
@@ -726,61 +763,83 @@ def select_external_policy(
     severity = np.asarray([p.severity_proxy for p in profiles], dtype=float)
 
     if baseline in {"marc", "marc_lite", "marc_contingency"}:
-        # Semantic-policy contingency planning: retain the best candidate within
-        # each macro policy and then compare policy-level representatives.
-        risk_tol = float(pcfg.get("marc_risk_tolerance", 0.35))
-        mixed_risk = (1.0 - risk_tol) * exp_risk + risk_tol * cvar_risk
+        # MARC-style multi-policy contingency planning.  Each semantic macro is
+        # one policy family; the shared prefix is non-anticipative and its risk is
+        # aggregated before the mode-conditioned tail.  The continuous optimizer
+        # from the paper is replaced by the executable OC-RAP candidate lattice.
+        alpha = float(pcfg.get("cvar_alpha", 0.2))
+        rho = float(np.clip(pcfg.get("marc_risk_tolerance", 0.35), 0.0, 1.0))
+        shared_weight = float(np.clip(pcfg.get("marc_shared_prefix_risk_weight", 0.45), 0.0, 1.0))
+        temporal = [
+            _temporal_contingency_risk(
+                p, common[i], alpha=alpha, tail_risk_weight=rho,
+                shared_prefix_weight=shared_weight,
+                collision_threshold_m=float(pcfg.get("risk_ttc_clearance_threshold_m", 0.0)),
+            )
+            for i, p in enumerate(profiles)
+        ]
+        mixed_risk = np.asarray([x[0] for x in temporal], dtype=float)
+        chance_risk = np.asarray([x[3] for x in temporal], dtype=float)
         score = (
             float(pcfg.get("marc_utility_weight", 1.0)) * utility
             + float(pcfg.get("marc_common_prefix_weight", 0.35)) * common
             + float(pcfg.get("marc_backup_margin_weight", 0.08)) * np.clip(backup_margin, -20.0, 20.0)
             - float(pcfg.get("marc_expected_risk_weight", 2.0)) * mixed_risk
-            - float(pcfg.get("marc_collision_probability_weight", 1.0)) * collision_prob
+            - float(pcfg.get("marc_collision_probability_weight", 1.0)) * chance_risk
             - float(pcfg.get("marc_smoothness_weight", 0.15)) * smooth
             - float(pcfg.get("marc_deviation_weight", 0.10)) * dev
         )
-        admitted = feasible & (mixed_risk <= float(pcfg.get("marc_risk_threshold", 1.0)))
-        # MARC is a constrained planner: an inadmissible representative must not
-        # win merely because its unconstrained score is high. If the certified
-        # set is empty, retain the documented feasible emergency fallback.
+        legacy_mixed_risk = (1.0 - rho) * exp_risk + rho * cvar_risk
+        admission_risk = mixed_risk if bool(pcfg.get("marc_use_temporal_risk_for_admission", False)) else legacy_mixed_risk
+        admitted = feasible & (admission_risk <= float(pcfg.get("marc_risk_threshold", 1.0))) & (chance_risk <= float(pcfg.get("marc_chance_threshold", 1.0)))
         selection_pool = admitted if admitted.any() else feasible
         representatives: list[int] = []
         for macro in sorted(set(macros)):
             ids = np.asarray([i for i, name in enumerate(macros) if name == macro], dtype=int)
-            if ids.size:
-                use = ids[selection_pool[ids]]
-                if use.size:
-                    representatives.append(int(use[np.argmax(score[use])]))
+            use = ids[selection_pool[ids]] if ids.size else np.zeros((0,), dtype=int)
+            if use.size:
+                representatives.append(int(use[np.argmax(score[use])]))
         if representatives:
             ids = np.asarray(representatives, dtype=int)
             idx = int(ids[np.argmax(score[ids])])
         else:
             idx = _best(score, selection_pool)
-        return ExternalSelection(idx, "marc_observation_conditioned_multipolicy_contingency_adapter", admitted, score)
+        return ExternalSelection(idx, "marc_nonanticipative_multipolicy_candidate_lattice", admitted, score)
 
     if baseline in {"racp", "racp_lite", "risk_aware_contingency"}:
-        # RACP-style beliefs are the normalized observation-conditioned mode
-        # weights.  At planning time there is no future evidence with which to
-        # update them using teacher margins; posterior risk is therefore the
-        # honest prior-predictive risk over the multimodal forecast.
+        # RACP-style belief-weighted branch MPC over the same executable lattice.
+        # The current prior is the observation-conditioned multi-modal predictor;
+        # no teacher margin is used to fabricate a posterior.
+        alpha = float(pcfg.get("cvar_alpha", 0.2))
+        rho = float(np.clip(pcfg.get("racp_risk_tolerance", 0.6), 0.0, 1.0))
+        shared_weight = float(np.clip(pcfg.get("racp_shared_prefix_risk_weight", 0.55), 0.0, 1.0))
+        temporal = [
+            _temporal_contingency_risk(
+                p, common[i], alpha=alpha, tail_risk_weight=rho,
+                shared_prefix_weight=shared_weight,
+                collision_threshold_m=float(pcfg.get("risk_ttc_clearance_threshold_m", 0.0)),
+            )
+            for i, p in enumerate(profiles)
+        ]
+        contingent_risk = np.asarray([x[0] for x in temporal], dtype=float)
+        chance_risk = np.asarray([x[3] for x in temporal], dtype=float)
         entropy = np.asarray([
             -np.sum(p.weights[p.weights > 0] * np.log(p.weights[p.weights > 0])) / max(np.log(max(p.weights.size, 2)), 1e-8)
             for p in profiles
         ], dtype=float)
-        rho = float(pcfg.get("racp_risk_tolerance", 0.6))
-        contingent_risk = rho * exp_risk + (1.0 - rho) * cvar_risk
-        branch_bonus = common * (1.0 - entropy)
+        information_preserving_branch = common * (1.0 - entropy)
         score = (
             float(pcfg.get("racp_utility_weight", 1.0)) * utility
-            + float(pcfg.get("racp_belief_branch_weight", 0.45)) * branch_bonus
+            + float(pcfg.get("racp_belief_branch_weight", 0.45)) * information_preserving_branch
             + float(pcfg.get("racp_backup_margin_weight", 0.06)) * np.clip(backup_margin, -20.0, 20.0)
             - float(pcfg.get("racp_risk_weight", 2.5)) * contingent_risk
-            - float(pcfg.get("racp_collision_probability_weight", 1.0)) * collision_prob
+            - float(pcfg.get("racp_collision_probability_weight", 1.0)) * chance_risk
             - float(pcfg.get("racp_smoothness_weight", 0.10)) * smooth
+            - float(pcfg.get("racp_deviation_weight", 0.05)) * dev
         )
-        admitted = feasible & (contingent_risk <= float(pcfg.get("racp_risk_threshold", pcfg.get("racp_delta", 0.75))))
+        admitted = feasible & (contingent_risk <= float(pcfg.get("racp_risk_threshold", pcfg.get("racp_delta", 0.75)))) & (chance_risk <= float(pcfg.get("racp_chance_threshold", 1.0)))
         idx = _best(score, admitted if admitted.any() else feasible)
-        return ExternalSelection(idx, "racp_prior_predictive_multimodal_contingency", admitted, score)
+        return ExternalSelection(idx, "racp_belief_weighted_nonanticipative_candidate_lattice", admitted, score)
 
     if baseline in {"expected_risk", "expected_risk_filter", "expected_risk_planner"}:
         admitted = feasible & (exp_risk <= float(pcfg.get("expected_risk_threshold", 0.45)))
@@ -810,19 +869,22 @@ def select_external_policy(
             accel[i], steer[i] = _control_proxy(d)
         ctrl_ok = (accel <= float(pcfg.get("psf_accel_gate", 6.0))) & (steer <= float(pcfg.get("psf_steer_gate", 0.75)))
         gamma_b = float(pcfg.get("psf_backup_margin_m", 0.0))
-        backup_ok = backup_margin >= gamma_b
-        nominal_barrier = backup_margin[0]
-        cbf_ok = backup_margin >= (1.0 - float(pcfg.get("psf_cbf_kappa", 0.5))) * nominal_barrier - float(pcfg.get("psf_cbf_slack_m", 0.5))
-        admitted = feasible & ctrl_ok & backup_ok & cbf_ok
+        stage_barrier = np.asarray([float(np.min(p.backup_margin_curves)) if np.asarray(p.backup_margin_curves).size else p.backup_margin for p in profiles], dtype=float)
+        terminal_barrier = np.asarray([float(np.min(np.asarray(p.backup_margin_curves)[:, -1])) if np.asarray(p.backup_margin_curves).ndim == 2 and np.asarray(p.backup_margin_curves).shape[1] else p.backup_margin for p in profiles], dtype=float)
+        backup_ok = stage_barrier >= gamma_b
+        terminal_ok = terminal_barrier >= float(pcfg.get("psf_terminal_backup_margin_m", gamma_b))
+        nominal_barrier = stage_barrier[0]
+        cbf_ok = stage_barrier >= (1.0 - float(pcfg.get("psf_cbf_kappa", 0.5))) * nominal_barrier - float(pcfg.get("psf_cbf_slack_m", 0.5))
+        admitted = feasible & ctrl_ok & backup_ok & terminal_ok & cbf_ok
         score = (
             -float(pcfg.get("psf_deviation_weight", 2.0)) * dev
             + float(pcfg.get("psf_utility_weight", 0.35)) * utility
-            + float(pcfg.get("psf_barrier_weight", 0.25)) * np.clip(backup_margin, -20.0, 20.0)
+            + float(pcfg.get("psf_barrier_weight", 0.25)) * np.clip(stage_barrier, -20.0, 20.0)
             - float(pcfg.get("psf_risk_weight", 2.0)) * cvar_risk
             - float(pcfg.get("psf_smoothness_weight", 0.15)) * smooth
         )
         idx = 0 if admitted[0] else _best(score, admitted if admitted.any() else feasible)
-        return ExternalSelection(idx, "predictive_safety_filter_candidate_lattice_surrogate", admitted, score)
+        return ExternalSelection(idx, "predictive_safety_filter_stage_and_terminal_backup_set", admitted, score)
 
     if baseline in {"postimpact_mpc", "postimpact_mpc_lite", "post_impact_mpc_lite", "postimpact_mpc_paper", "integrated_postimpact_mpc"}:
         details_list = []

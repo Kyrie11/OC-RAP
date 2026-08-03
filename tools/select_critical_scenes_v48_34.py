@@ -151,6 +151,8 @@ def main() -> int:
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--num-positive", type=int, default=3)
     ap.add_argument("--num-failure", type=int, default=2)
+    ap.add_argument("--max-per-scene", type=int, default=1, help="Diversity cap for each source scene.")
+    ap.add_argument("--minimum-positive-score", type=float, default=0.0)
     args = ap.parse_args()
 
     method = _scene_rows(args.method_scenes)
@@ -174,11 +176,27 @@ def main() -> int:
             "method_intervention_rate": _finite_or_none(method[key].get("intervention_rate")),
             "terms": terms,
         })
-    positive_pool = [r for r in rows if r["eligible_positive_example"]]
-    positive = sorted(positive_pool, key=lambda r: (-r["score"], str(r["target_key"])))[: max(0, args.num_positive)]
+    positive_pool = [r for r in rows if r["eligible_positive_example"] and float(r["score"]) >= float(args.minimum_positive_score)]
+    positive = []
+    scene_counts: dict[str, int] = {}
+    for row in sorted(positive_pool, key=lambda r: (-r["score"], str(r["target_key"]))):
+        scene_id = str(row.get("scene_id") or row["target_key"])
+        if scene_counts.get(scene_id, 0) >= max(int(args.max_per_scene), 1):
+            continue
+        positive.append(row); scene_counts[scene_id] = scene_counts.get(scene_id, 0) + 1
+        if len(positive) >= max(0, args.num_positive):
+            break
     positive_keys = {str(r["target_key"]) for r in positive}
     failure_pool = [r for r in rows if str(r["target_key"]) not in positive_keys]
-    failure = sorted(failure_pool, key=lambda r: (r["score"], str(r["target_key"])))[: max(0, args.num_failure)]
+    failure = []
+    failure_scene_counts: dict[str, int] = {}
+    for row in sorted(failure_pool, key=lambda r: (r["score"], str(r["target_key"]))):
+        scene_id = str(row.get("scene_id") or row["target_key"])
+        if failure_scene_counts.get(scene_id, 0) >= max(int(args.max_per_scene), 1):
+            continue
+        failure.append(row); failure_scene_counts[scene_id] = failure_scene_counts.get(scene_id, 0) + 1
+        if len(failure) >= max(0, args.num_failure):
+            break
     selected = []
     for category, items in (("positive_toy_example", positive), ("failure_case", failure)):
         for rank, row in enumerate(items, start=1):
@@ -189,6 +207,8 @@ def main() -> int:
         "exploratory_only": True,
         "paper_claim_allowed": False,
         "selection_is_auditable_not_cherry_picked": True,
+        "diversity_max_per_scene": int(args.max_per_scene),
+        "minimum_positive_score": float(args.minimum_positive_score),
         "num_paired_scenes": len(rows),
         "num_positive_eligible_scenes": len(positive_pool),
         "positive_eligibility": "complete critical metrics, method intervention, positive composite score, and no new overlap/offroad/recontact",

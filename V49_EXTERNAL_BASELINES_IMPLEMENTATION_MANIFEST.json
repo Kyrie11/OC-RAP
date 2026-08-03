@@ -1,0 +1,124 @@
+{
+  "delivery": "OC-RAP-v48.34-external-baselines-v49",
+  "created_at_utc": "2026-08-03T17:18:26.800164+00:00",
+  "source_archive": {
+    "path": "OC-RAP(1).zip",
+    "sha256": "841abc80002ece8556ff0e6ea75d3abd18185917a317f1f06edbb7e7cb3d47e5"
+  },
+  "scope": {
+    "paper_and_result_audit": true,
+    "external_baseline_fidelity_registry": 15,
+    "efficient_training_and_evaluation": true,
+    "unified_metrics": true,
+    "strict_paired_closed_loop": true,
+    "near_contact_and_contact_video_pipeline": "5 + 5 MP4, strict positive selection",
+    "three_regime_tables": true
+  },
+  "modified_file_count": 18,
+  "added_file_count": 13,
+  "added_files": [
+    "OC-RAP-v48.34-external-baselines-v49-run-commands-ZH.txt",
+    "docs/EXTERNAL_BASELINES_V49_IMPLEMENTATION_ZH.md",
+    "docs/EXTERNAL_BASELINE_FIDELITY_AUDIT_V49.md",
+    "docs/OC_RAP_PAPER_CODE_RESULTS_AUDIT_ZH.md",
+    "external_baseline_fidelity_audit_v49.json",
+    "scripts/build_external_comparison_artifacts.sh",
+    "scripts/build_top10_recovery_videos.sh",
+    "scripts/run_all_regime_external_baselines_optimized.sh",
+    "scripts/run_ocrap_three_regime_closed_loop.sh",
+    "src/ocrap/external_baselines/provenance.py",
+    "tools/audit_external_baseline_fidelity.py",
+    "tools/build_regime_comparison_tables.py",
+    "tools/select_best_external_baseline.py"
+  ],
+  "modified_files": [
+    "configs/external_baselines/marc_racp_lite.yaml",
+    "configs/external_baselines/near_contact_external_baselines.yaml",
+    "configs/external_baselines/near_contact_marc.yaml",
+    "configs/external_baselines/near_contact_racp.yaml",
+    "scripts/run_contact_external_baselines.sh",
+    "scripts/run_near_contact_external_baselines.sh",
+    "scripts/run_near_contact_external_baselines_2gpu_optimized.sh",
+    "scripts/run_ocrap_closed_loop_optimized.sh",
+    "scripts/run_safe_regime_external_baselines.sh",
+    "src/ocrap/external_baselines/evaluate.py",
+    "src/ocrap/external_baselines/observed_risk.py",
+    "src/ocrap/external_baselines/policies.py",
+    "src/ocrap/external_baselines/train.py",
+    "src/ocrap/simulation/closed_loop_runner.py",
+    "tests/models/test_external_observation_only_policies.py",
+    "tests/test_closed_loop_resume_optimization.py",
+    "tools/render_critical_scenes_v48_34.py",
+    "tools/select_critical_scenes_v48_34.py"
+  ],
+  "file_sha256": {
+    "OC-RAP-v48.34-external-baselines-v49-run-commands-ZH.txt": "9fba6624873f33d95c3000ea85b584b2265b08745ff43633ad2d0f1b141fd15c",
+    "docs/EXTERNAL_BASELINES_V49_IMPLEMENTATION_ZH.md": "576b6614a4e78ffb32a8643459e51fb44a3e393f7e86f78efdb1fa54d14d96fe",
+    "docs/EXTERNAL_BASELINE_FIDELITY_AUDIT_V49.md": "297cca4ecc08a73ce54e675bbfc5abc81fe91ffae065ece482ecbf1dc89ff2a6",
+    "docs/OC_RAP_PAPER_CODE_RESULTS_AUDIT_ZH.md": "fb6902fd955061cdca34d711ea65ff993dea3880c0c46010f91ddc0ec169fbb0",
+    "external_baseline_fidelity_audit_v49.json": "70a62e94406cc50754aae183297128c1d6147e2d931ec52dd5dac786fc3d34f4",
+    "scripts/build_external_comparison_artifacts.sh": "2f2762681afa60da599c9da250c52abf80667057b2bdaf60c57bab887fc1b4a5",
+    "scripts/build_top10_recovery_videos.sh": "547068a99b851aca683d1c23fb8eab100bbaefebad9918a6befd8d1876b87b2c",
+    "scripts/run_all_regime_external_baselines_optimized.sh": "8270836db8cc69ab843ccc812f9d01b8f88a3960e479dcde224f756d18576a49",
+    "scripts/run_ocrap_three_regime_closed_loop.sh": "a56c1d3ad26ebb494805694f6d43d146676d8fcd3d76a7f5bf03ce2ce559b9a9",
+    "src/ocrap/external_baselines/provenance.py": "10fafc1a79c68883b5212baaec92ff5395e810782c76f86706679b94add4e929",
+    "tools/audit_external_baseline_fidelity.py": "8e10c0fddebc8f984b40eb86d6fc5fdbc1950b62a0ab11b9afba267a618f0c41",
+    "tools/build_regime_comparison_tables.py": "b4cc25a4d4243395416e80a7b483527d06751475dbcec232f15aa4c085d8f51e",
+    "tools/select_best_external_baseline.py": "9a08f3732873f24547fa0817e3f8c184921da9e2a5a02ebf2c20bd4e3dc5b576",
+    "configs/external_baselines/marc_racp_lite.yaml": "ec3731095cd239db82b371077bccc29a58db1f0955fd6f8b3bf94acba44716dc",
+    "configs/external_baselines/near_contact_external_baselines.yaml": "be6cbd7a2dd4e3dd45c9cec0be8783396fb49732944786adcef4caa621a225f1",
+    "configs/external_baselines/near_contact_marc.yaml": "c0bed328a05b65060c01cbfbf02ac47c3b06d1dd3f661796bf4dd091bb9b16ab",
+    "configs/external_baselines/near_contact_racp.yaml": "b532acbd39188903448f57630ef9b134b0f66ae860c5ddd2e3deef8660ec8276",
+    "scripts/run_contact_external_baselines.sh": "ffede2b7eb3d7aa639064abfb5af00ed43e7d3c32083db28492fccd7daf6f0e4",
+    "scripts/run_near_contact_external_baselines.sh": "b2cff65866d60e21b7d6d1a31abcf40b2d2585a11edcf7ee337e7c6fe55030fa",
+    "scripts/run_near_contact_external_baselines_2gpu_optimized.sh": "1ae2dc85771c320862e609c395fa930140517fe2a5a4508bb55e926cb23cd317",
+    "scripts/run_ocrap_closed_loop_optimized.sh": "65958e806450af7608fbbbe672cf84d1a7a9d408ebeb25637adef7dc3ced96ab",
+    "scripts/run_safe_regime_external_baselines.sh": "30480cc3a91e468a561a3afb6183e51032f177415a062aa2ac6507573f2402fc",
+    "src/ocrap/external_baselines/evaluate.py": "c9cb7b52800d5e0b2f8651f68d20abdab6539726c6dc8d7037117eeba7af5dfa",
+    "src/ocrap/external_baselines/observed_risk.py": "2e6cb00545b10d5df59b8c3b0cb3d738122a04008928ee5ec6e577706807bb85",
+    "src/ocrap/external_baselines/policies.py": "d12d25b1d2a770e096113aa6788f1fac07020ad1b8ad2d181ee8d471416f911a",
+    "src/ocrap/external_baselines/train.py": "3fce6d500d19d0ab9f27d661c4ccaaec3bc0cee03507027ac00cd6a33638a692",
+    "src/ocrap/simulation/closed_loop_runner.py": "251ffba8289f7ed867527ea1408ceed747cf9dd08f5fc273e2816d7251480d04",
+    "tests/models/test_external_observation_only_policies.py": "bfad5a42014bf97e92778e538a9db0dbb6f7c20f189af3628984292c17747c7a",
+    "tests/test_closed_loop_resume_optimization.py": "146277370b7eddaaf800eaad7a7311ed681304087b75900d41e68d35d99046dd",
+    "tools/render_critical_scenes_v48_34.py": "7c504fc109733c05fd42b05b2dd9ed6e5626eddc5061f2a70bd9a3ff078c8640",
+    "tools/select_critical_scenes_v48_34.py": "68fc9cda246a564d612dd2e0ae92a4eeaa4ac893fc149cd5573c766244e11709"
+  },
+  "calibration_gamma_rec_by_bucket": {
+    "safe": 1.2729634046554565,
+    "near_contact": 0.19746489822864532,
+    "contact": 0.16214445233345032,
+    "source": "uploaded v48.34 RC=20 balanced/precision calibration artifacts"
+  },
+  "validation": {
+    "focused_tests": {
+      "result": "41 passed",
+      "command_group": "external policies/metrics/closed-loop/v48.34 contract"
+    },
+    "python_compileall": "passed",
+    "shell_syntax": "passed",
+    "full_repository_suite": {
+      "result": "282 passed, 37 failed",
+      "failure_scope": "All 37 failures are FileNotFoundError assertions for legacy v48.12-v48.32 scripts absent from the supplied source archive; they are outside this patch.",
+      "example_missing": "scripts/train_ocrap_v48_12_trident.sh"
+    }
+  },
+  "limitations": [
+    "The uploaded package intentionally omitted large checkpoints, so final closed-loop numeric tables and MP4 files were not fabricated or generated in this environment.",
+    "Current v48.34 result is RC=20 because the Natural gate did not pass; resulting runs must be labeled post-gate exploratory diagnostic.",
+    "Paper-core adapters are not represented as bit-exact official implementations when author code/planning stack is unavailable or incompatible."
+  ],
+  "primary_commands": "OC-RAP-v48.34-external-baselines-v49-run-commands-ZH.txt",
+  "primary_audits": [
+    "docs/OC_RAP_PAPER_CODE_RESULTS_AUDIT_ZH.md",
+    "docs/EXTERNAL_BASELINES_V49_IMPLEMENTATION_ZH.md",
+    "docs/EXTERNAL_BASELINE_FIDELITY_AUDIT_V49.md"
+  ],
+  "expected_generated_outputs": [
+    "safe/near/contact paired closed-loop JSON plus .scenes.jsonl journals",
+    "safe_comparison.{json,csv,md}",
+    "near_comparison.{json,csv,md}",
+    "contact_comparison.{json,csv,md}",
+    "5 near-contact plus 5 contact MP4 files and TOP10_VIDEO_INDEX.json"
+  ]
+}

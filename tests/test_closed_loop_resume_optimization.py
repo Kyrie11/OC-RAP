@@ -145,3 +145,9 @@ def test_legacy_partial_is_resumable(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert calls == ["s2"]
     assert result["num_scenes"] == 3
     assert result["resume"]["legacy_sources"] == ["partial"]
+
+
+def test_targeted_zero_rollout_cap_means_all_loaded_targets() -> None:
+    assert clr._closed_loop_rollout_limit(target_count=175, max_rollouts=0, max_scenes=0) == 175
+    assert clr._closed_loop_rollout_limit(target_count=175, max_rollouts=20, max_scenes=0) == 20
+    assert clr._closed_loop_rollout_limit(target_count=0, max_rollouts=0, max_scenes=8) == 8

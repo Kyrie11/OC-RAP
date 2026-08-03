@@ -7,7 +7,10 @@ external_baselines:
     gamma_D: 5.0
     gamma_branch_rec: 0.0
     cvar_alpha: 0.20
+    risk_ttc_clearance_threshold_m: 0.0
     racp_risk_tolerance: 0.60
+    racp_shared_prefix_risk_weight: 0.55
+    racp_chance_threshold: 0.50
     racp_belief_temperature: 0.70
     racp_utility_weight: 1.0
     racp_branch_rec_weight: 1.0
