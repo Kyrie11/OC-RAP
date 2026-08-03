@@ -925,6 +925,7 @@ run_audit() {
     --set closed_loop.bucket_dataset="$bucket" \
     --set closed_loop.bucket_split=${BUCKET_SPLIT:-test} \
     --set closed_loop.max_bucket_targets="$targets" \
+    --set closed_loop.max_targets_per_scene=${AUDIT_MAX_TARGETS_PER_SCENE:-1} \
     --set closed_loop.max_rollouts=${AUDIT_MAX_ROLLOUTS:-12} \
     --set closed_loop.require_bucket_targets=true \
     --set closed_loop.allow_legacy_source_index_targets=${DEV_SHADOW_ALLOW_LEGACY_SOURCE_INDEX_TARGETS:-true} \

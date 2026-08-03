@@ -124,7 +124,7 @@ run_task() {
   fi
 
   set +e
-  python tools/check_v48_32_model_contract.py \
+  python tools/check_v48_34_model_contract.py \
     --checkpoint "$run/model_v48_trac_sr/best.pt" --support-contract "$run/FACTOR_SUPPORT_CONTRACT.json" \
     --output "$run/MODEL_INFERENCE_CONTRACT.json" --expect-frontier true --expect-admission-bounded true \
     --expect-component-count 5 --expect-component-scale "${EVIDENCE_COMPONENT_SCALE:-6.0}" \

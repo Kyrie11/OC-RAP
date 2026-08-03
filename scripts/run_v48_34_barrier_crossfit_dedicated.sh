@@ -351,7 +351,7 @@ for variant in balanced precision; do
   [[ "$variant" == precision && "$s1" != 0 ]] && continue
   ckpt="$OUTPUTDIR/candidates/$variant/model_v48_trac_sr/best.pt"
   set +e
-  python tools/check_v48_32_model_contract.py \
+  python tools/check_v48_34_model_contract.py \
     --checkpoint "$ckpt" \
     --support-contract "$OUTPUTDIR/candidates/$variant/FACTOR_SUPPORT_CONTRACT.json" \
     --output "$OUTPUTDIR/candidates/$variant/MODEL_INFERENCE_CONTRACT.json" \

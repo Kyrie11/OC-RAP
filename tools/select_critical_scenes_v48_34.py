@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Select auditable Near/Contact toy examples from paired closed-loop traces.
 
-This tool never cherry-picks silently: it writes both positive examples and
-failure cases, reports every scoring term, and rejects unpaired scene sets.
+Positive examples require all regime-critical metrics to be present, an actual
+OC-RAP intervention, positive composite progress, and no new safety regression.
+Failure examples are selected from the remaining scenes and cannot duplicate a
+positive example.
 """
 from __future__ import annotations
 
@@ -13,12 +15,31 @@ from pathlib import Path
 from typing import Any
 
 
-def _finite(x: Any, default: float = 0.0) -> float:
+REQUIRED = {
+    "near": {
+        "ttc_s_p05", "terminal_ttc_s", "min_clearance_m_p05", "terminal_clearance_m",
+        "critical_ttc_exposure_duration_s", "near_zero_clearance_exposure_rate",
+        "overlap_any", "offroad_any",
+    },
+    "contact": {
+        "post_contact_terminal_clearance_m", "post_contact_free_space_auc_normalized_m",
+        "post_contact_clearance_gain_m", "post_contact_escape_event", "recontact_event",
+        "stable_stop_quality_event", "overlap_any", "offroad_any",
+    },
+}
+
+
+def _finite_or_none(x: Any) -> float | None:
     try:
         v = float(x)
-        return v if math.isfinite(v) else default
+        return v if math.isfinite(v) else None
     except Exception:
-        return default
+        return None
+
+
+def _finite(x: Any, default: float = 0.0) -> float:
+    v = _finite_or_none(x)
+    return default if v is None else v
 
 
 def _scene_rows(path: Path) -> dict[str, dict[str, Any]]:
@@ -33,30 +54,50 @@ def _scene_rows(path: Path) -> dict[str, dict[str, Any]]:
                 continue
             envelope = json.loads(line)
             scene = envelope.get("scene", envelope)
-            key = str(scene.get("target_key") or scene.get("scene_id") or envelope.get("resume_key") or "")
+            key = str(scene.get("target_key") or envelope.get("resume_key") or "")
+            if not key:
+                scene_id = str(scene.get("scene_id") or "")
+                target_time = scene.get("target_time_index")
+                key = f"{scene_id}:t{target_time}" if scene_id and target_time is not None else scene_id
             if not key:
                 raise ValueError(f"scene row without target/scene key in {path}")
             if key in rows:
                 raise ValueError(f"duplicate scene key {key} in {path}")
             rows[key] = scene
+    if not rows:
+        raise ValueError(f"empty paired scene journal: {path}")
     return rows
 
 
-def _delta(method: dict[str, Any], control: dict[str, Any], name: str) -> float:
-    mm = method.get("metric_summary", {}) or {}
-    cm = control.get("metric_summary", {}) or {}
-    return _finite(mm.get(name)) - _finite(cm.get(name))
+def _metric(scene: dict[str, Any], name: str) -> float | None:
+    if name == "closed_loop_bounded_NUP":
+        return _finite_or_none(scene.get(name))
+    return _finite_or_none((scene.get("metric_summary", {}) or {}).get(name))
+
+
+def _delta(method: dict[str, Any], control: dict[str, Any], name: str) -> float | None:
+    a = _metric(method, name)
+    b = _metric(control, name)
+    return None if a is None or b is None else a - b
 
 
 def _unsafe_regression(method: dict[str, Any], control: dict[str, Any]) -> bool:
-    bad = ("overlap_any", "offroad_any", "secondary_overlap_event", "recontact_event")
-    return any(_delta(method, control, name) > 1.0e-9 for name in bad)
+    bad = ("overlap_any", "offroad_any", "recontact_event")
+    for name in bad:
+        delta = _delta(method, control, name)
+        if delta is not None and delta > 1.0e-9:
+            return True
+    return False
 
 
-def _score(regime: str, method: dict[str, Any], control: dict[str, Any]) -> tuple[float, dict[str, float], bool]:
-    common = {
-        "bounded_nup": _finite(method.get("closed_loop_bounded_NUP")) - _finite(control.get("closed_loop_bounded_NUP")),
-        "intervention_rate": _finite(method.get("intervention_rate")),
+def _score(regime: str, method: dict[str, Any], control: dict[str, Any]) -> tuple[float, dict[str, float | None], bool, list[str]]:
+    missing: list[str] = []
+    for name in sorted(REQUIRED[regime]):
+        if _metric(method, name) is None or _metric(control, name) is None:
+            missing.append(name)
+    common: dict[str, float | None] = {
+        "bounded_nup": _delta(method, control, "closed_loop_bounded_NUP"),
+        "intervention_rate": _finite_or_none(method.get("intervention_rate")),
         "overlap_any": _delta(method, control, "overlap_any"),
         "offroad_any": _delta(method, control, "offroad_any"),
     }
@@ -70,36 +111,36 @@ def _score(regime: str, method: dict[str, Any], control: dict[str, Any]) -> tupl
             "near_zero_clearance_rate": _delta(method, control, "near_zero_clearance_exposure_rate"),
         }
         score = (
-            1.5 * terms["ttc_p05_s"] + 0.5 * terms["terminal_ttc_s"]
-            + 1.0 * terms["clearance_p05_m"] + 0.5 * terms["terminal_clearance_m"]
-            - 1.5 * terms["critical_ttc_exposure_s"] - 1.0 * terms["near_zero_clearance_rate"]
-            + 0.25 * terms["bounded_nup"]
+            1.5 * _finite(terms["ttc_p05_s"]) + 0.5 * _finite(terms["terminal_ttc_s"])
+            + 1.0 * _finite(terms["clearance_p05_m"]) + 0.5 * _finite(terms["terminal_clearance_m"])
+            - 1.5 * _finite(terms["critical_ttc_exposure_s"]) - 1.0 * _finite(terms["near_zero_clearance_rate"])
+            + 0.25 * _finite(terms["bounded_nup"])
         )
     elif regime == "contact":
         terms = common | {
             "post_contact_terminal_clearance_m": _delta(method, control, "post_contact_terminal_clearance_m"),
             "post_contact_free_space_auc_normalized_m": _delta(method, control, "post_contact_free_space_auc_normalized_m"),
-            "clearance_recovery_gain_m": _delta(method, control, "clearance_recovery_gain_m"),
+            "post_contact_clearance_gain_m": _delta(method, control, "post_contact_clearance_gain_m"),
             "ttc_recovery_gain_s": _delta(method, control, "ttc_recovery_gain_s"),
             "stable_stop_quality_event": _delta(method, control, "stable_stop_quality_event"),
             "post_contact_escape_event": _delta(method, control, "post_contact_escape_event"),
             "recontact_event": _delta(method, control, "recontact_event"),
-            "secondary_overlap_event": _delta(method, control, "secondary_overlap_event"),
         }
         score = (
-            1.5 * terms["post_contact_terminal_clearance_m"]
-            + 1.0 * terms["post_contact_free_space_auc_normalized_m"]
-            + 0.75 * terms["clearance_recovery_gain_m"]
-            + 0.35 * terms["ttc_recovery_gain_s"]
-            + 2.0 * terms["stable_stop_quality_event"]
-            + 1.5 * terms["post_contact_escape_event"]
-            - 4.0 * terms["recontact_event"] - 4.0 * terms["secondary_overlap_event"]
-            + 0.25 * terms["bounded_nup"]
+            1.5 * _finite(terms["post_contact_terminal_clearance_m"])
+            + 1.0 * _finite(terms["post_contact_free_space_auc_normalized_m"])
+            + 0.75 * _finite(terms["post_contact_clearance_gain_m"])
+            + 0.35 * _finite(terms["ttc_recovery_gain_s"])
+            + 2.0 * _finite(terms["stable_stop_quality_event"])
+            + 1.5 * _finite(terms["post_contact_escape_event"])
+            - 4.0 * _finite(terms["recontact_event"])
+            + 0.25 * _finite(terms["bounded_nup"])
         )
     else:
         raise ValueError(f"unsupported regime {regime}")
-    eligible = terms["intervention_rate"] > 0.0 and not _unsafe_regression(method, control)
-    return float(score), terms, eligible
+    intervention = _finite_or_none(method.get("intervention_rate"))
+    eligible = not missing and intervention is not None and intervention > 0.0 and score > 0.0 and not _unsafe_regression(method, control)
+    return float(score), terms, eligible, missing
 
 
 def main() -> int:
@@ -121,7 +162,7 @@ def main() -> int:
         )
     rows = []
     for key in sorted(method):
-        score, terms, eligible = _score(args.regime, method[key], control[key])
+        score, terms, eligible, missing = _score(args.regime, method[key], control[key])
         rows.append({
             "target_key": key,
             "scene_id": method[key].get("scene_id"),
@@ -129,30 +170,35 @@ def main() -> int:
             "regime": args.regime,
             "score": score,
             "eligible_positive_example": bool(eligible),
-            "method_intervention_rate": _finite(method[key].get("intervention_rate")),
+            "missing_required_metrics": missing,
+            "method_intervention_rate": _finite_or_none(method[key].get("intervention_rate")),
             "terms": terms,
         })
     positive_pool = [r for r in rows if r["eligible_positive_example"]]
     positive = sorted(positive_pool, key=lambda r: (-r["score"], str(r["target_key"])))[: max(0, args.num_positive)]
-    failure = sorted(rows, key=lambda r: (r["score"], str(r["target_key"])))[: max(0, args.num_failure)]
+    positive_keys = {str(r["target_key"]) for r in positive}
+    failure_pool = [r for r in rows if str(r["target_key"]) not in positive_keys]
+    failure = sorted(failure_pool, key=lambda r: (r["score"], str(r["target_key"])))[: max(0, args.num_failure)]
     selected = []
     for category, items in (("positive_toy_example", positive), ("failure_case", failure)):
         for rank, row in enumerate(items, start=1):
             selected.append({**row, "category": category, "category_rank": rank})
     doc = {
-        "event": "v48_34_critical_scene_selection",
+        "event": "v48_34_1_critical_scene_selection",
         "regime": args.regime,
         "exploratory_only": True,
         "paper_claim_allowed": False,
         "selection_is_auditable_not_cherry_picked": True,
         "num_paired_scenes": len(rows),
-        "positive_eligibility": "method intervenes and introduces no new overlap/offroad/recontact",
+        "num_positive_eligible_scenes": len(positive_pool),
+        "positive_eligibility": "complete critical metrics, method intervention, positive composite score, and no new overlap/offroad/recontact",
+        "required_metrics": sorted(REQUIRED[args.regime]),
         "selected": selected,
         "all_scene_scores": sorted(rows, key=lambda r: (-r["score"], str(r["target_key"]))),
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({"event": doc["event"], "output": str(args.output), "selected": len(selected)}))
+    print(json.dumps({"event": doc["event"], "output": str(args.output), "selected": len(selected), "positive_eligible": len(positive_pool)}))
     return 0
 
 

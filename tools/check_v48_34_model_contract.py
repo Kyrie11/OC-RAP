@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
+"""Fail-closed v48.34 checkpoint/inference contract audit.
+
+This checker is intentionally version-specific so new admission-prior modes
+cannot be passed to an older parser without an explicit test and release bump.
+"""
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -9,12 +15,15 @@ from pathlib import Path
 from ocrap.models.inference import load_model_bundle
 
 
+PRIOR_MODES = ("risk_centered", "benefit_only", "safety_slack", "barrier_gated_slack")
+
+
 def _parse_csv(value: str) -> tuple[float, ...]:
     return tuple(float(x.strip()) for x in value.split(",") if x.strip())
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description="Fail-closed v48.32 checkpoint/inference contract audit")
+def build_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(description="Fail-closed v48.34 checkpoint/inference contract audit")
     ap.add_argument("--checkpoint", type=Path, required=True)
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--support-contract", type=Path, required=True)
@@ -24,12 +33,18 @@ def main() -> int:
     ap.add_argument("--expect-component-count", type=int, default=5)
     ap.add_argument("--expect-component-scale", type=float, default=6.0)
     ap.add_argument("--expect-admission-prior-detach", choices=("true", "false", "any"), default="any")
-    ap.add_argument("--expect-admission-prior-mode", choices=("risk_centered", "benefit_only", "safety_slack", "barrier_gated_slack"), default="safety_slack")
+    ap.add_argument("--expect-admission-prior-mode", choices=PRIOR_MODES, default="barrier_gated_slack")
     ap.add_argument("--expect-slack-temperature", type=float, default=0.025)
-    ap.add_argument("--expect-slack-penalty", type=float, default=1.0)
+    ap.add_argument("--expect-slack-penalty", type=float, default=1.5)
     ap.add_argument("--reliability-override", default="", help="Ablation override; empty uses support contract")
-    args = ap.parse_args()
+    return ap
 
+
+def main() -> int:
+    args = build_parser().parse_args()
+
+    if not args.support_contract.is_file():
+        raise SystemExit(f"support contract not found: {args.support_contract}")
     support = json.loads(args.support_contract.read_text(encoding="utf-8"))
     support_reliability = tuple(float(x) for x in support.get("reliability", []))
     expected_reliability = _parse_csv(args.reliability_override) if args.reliability_override else support_reliability
@@ -58,8 +73,7 @@ def main() -> int:
         "direct_recovery_evidence_frontier": args.expect_frontier == "true",
         "direct_recovery_evidence_admission_bounded": args.expect_admission_bounded == "true",
         "direct_recovery_evidence_admission_prior_detach": (
-            None if args.expect_admission_prior_detach == "any"
-            else args.expect_admission_prior_detach == "true"
+            None if args.expect_admission_prior_detach == "any" else args.expect_admission_prior_detach == "true"
         ),
         "direct_recovery_evidence_admission_prior_mode": args.expect_admission_prior_mode,
         "direct_recovery_evidence_component_prior_logit": float(args.expect_component_prior_logit),
@@ -88,9 +102,12 @@ def main() -> int:
             mismatches[key] = {"expected": expected_value, "actual": actual_value}
 
     doc = {
-        "event": "v48_32_checkpoint_inference_contract_audit",
+        "event": "v48_34_checkpoint_inference_contract_audit",
+        "version": "v48.34.1-RC30-MODEL-CONTRACT-HOTFIX",
         "checkpoint": str(args.checkpoint),
+        "checkpoint_sha256": hashlib.sha256(args.checkpoint.read_bytes()).hexdigest(),
         "support_contract": str(args.support_contract),
+        "support_contract_sha256": hashlib.sha256(args.support_contract.read_bytes()).hexdigest(),
         "expected": expected,
         "actual": actual,
         "valid": not mismatches,

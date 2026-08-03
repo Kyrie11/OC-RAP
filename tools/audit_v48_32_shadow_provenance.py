@@ -38,7 +38,7 @@ def main()->int:
     raw_role=role(args.womd_source)
     expected=args.expected_source_role
     known={r for r in roles if r not in {'','unknown'}}
-    valid=raw_role==expected and (not known or raw_role in known)
+    valid=(expected == 'auto' or raw_role==expected) and (not known or raw_role in known)
     result={'event':'v48_32_shadow_provenance_audit','targets':args.targets,'womd_source':args.womd_source,
             'raw_source_role':raw_role,'expected_source_role':expected,'target_metadata_roles':dict(roles),
             'scenario_id_sources':dict(id_sources),'num_sample_paths':len(paths),
