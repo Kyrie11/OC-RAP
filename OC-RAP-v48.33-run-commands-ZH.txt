@@ -1,0 +1,164 @@
+OC-RAP v48.33 ELIGIBLE-SET-POLICY
+下一轮实验执行指令（中文）
+
+重要原则
+========
+1. 先只运行主实验。不要预先运行消融、shadow、test 或 stress。
+2. v48.33 使用统一 top-5 proposal。因为 Stage-1 的监督和缓存合同包含 proposal_top_k，v48.32/v48.32.1 的 top-3 factor checkpoint 不允许复用；两个 variant 都需要重新训练 Stage-1。
+3. 不要修改 GATE_SPEC 阈值，不要手工创建 NEXT_COMMANDS.txt，不要把 RC=30 当作算法结果。
+4. Balanced 使用 GPU0，Precision 使用 GPU1。以下示例默认 GPU 0/1。
+
+一、解压并进入代码目录
+=====================
+
+unzip -q OC-RAP-v48.33-ELIGIBLE-SET-POLICY.zip -d OC-RAP-v48.33
+cd OC-RAP-v48.33
+export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
+
+可选的快速本地检查：
+
+python tools/check_v48_33_multigroup_loss_contract.py --output /tmp/V48_33_MULTIGROUP_LOSS_CONTRACT.json
+bash -n scripts/run_v48_33_eligible_set_policy_dedicated.sh
+bash -n scripts/calibrate_v48_33_certificate_pool.sh
+
+二、只运行主实验
+================
+
+export OUTPUTDIR="runs/ocrap_v48_33_eligible_set_policy_dedicated_4833"
+export OCRAP_ROOT="/data0/senzeyu2/dataset/OCRAP"
+export SOURCE_RUN="runs/ocrap_v48_13_terra_proxy_4801"
+export PROTOCOL_ROOT="$OCRAP_ROOT/calibration_v48_14_prism_4814"
+export CAL_SAFE="$OCRAP_ROOT/calibration_safe"
+export GPU0=0
+export GPU1=1
+
+set +e
+bash scripts/run_v48_33_eligible_set_policy_dedicated.sh \
+  >"$OUTPUTDIR.launcher.stdout.log" \
+  2>"$OUTPUTDIR.launcher.stderr.log"
+RC=$?
+set -e
+echo "V48.33 MAIN RC=$RC"
+
+查看结构化状态：
+
+cat "$OUTPUTDIR/V48_33_COMPLETE.json" 2>/dev/null || true
+cat "$OUTPUTDIR/PIPELINE_FAILED.json" 2>/dev/null || true
+cat "$OUTPUTDIR/NEXT_COMMANDS_STATUS.json" 2>/dev/null || true
+cat "$OUTPUTDIR/NEXT_COMMANDS_BLOCKED.json" 2>/dev/null || true
+
+三、严格按 RC 分支
+==================
+
+A. RC=30
+-------
+
+含义：工程、协议、训练、缓存、模型合同或 certificate artifact 失败。
+
+立即停止。不要运行：
+- v48.33 消融；
+- adaptation-dev physical shadow；
+- Safe paired；
+- test；
+- stress。
+
+优先收集：
+
+find "$OUTPUTDIR" -maxdepth 3 -type f \
+  \( -name 'PIPELINE_FAILED.json' \
+  -o -name 'VARIANT_STAGE_FAILED.json' \
+  -o -name 'FAILURE_SIGNATURE_*.json' \
+  -o -name 'TRAINING_CONTRACT.json' \
+  -o -name 'METRIC_CALIBRATION_CONTRACT.json' \
+  -o -name 'CALIBRATION_FAILED.json' \
+  -o -name 'V48_33_COMPLETE.json' \) -print
+
+tail -n 160 "$OUTPUTDIR/logs/adapt_balanced.log" 2>/dev/null || true
+tail -n 160 "$OUTPUTDIR/logs/adapt_precision.log" 2>/dev/null || true
+tail -n 200 "$OUTPUTDIR/logs/certificate_controller.log" 2>/dev/null || true
+
+B. RC=20
+-------
+
+含义：pipeline 和 scene-disjoint certificate 有效，严格 Natural gate 已评估但未通过。
+允许运行 v48.33 消融和 adaptation-dev physical shadow；仍禁止 test/stress。
+
+先检查：
+
+python - "$OUTPUTDIR/V48_33_COMPLETE.json" <<'PY'
+import json,sys
+x=json.load(open(sys.argv[1]))
+assert x['pipeline_valid'] is True
+assert x['certificate_executed'] is True
+assert x['gate_evaluated'] is True
+assert x['certificate_exit_code'] == 20
+assert x['test_roots_read'] is False
+print('RC20 authorization contract PASS')
+PY
+
+运行 8 个 v48.33 消融（每一波 Balanced/Precision 并行，Stage-1 精确复用主实验 top-5 factor）：
+
+export MAIN_RUN="$OUTPUTDIR"
+export ABLATION_ROOT="runs/ocrap_v48_33_eligible_set_policy_ablations_4833"
+set +e
+bash scripts/run_v48_33_eligible_set_policy_ablations.sh \
+  >"$ABLATION_ROOT.launcher.stdout.log" \
+  2>"$ABLATION_ROOT.launcher.stderr.log"
+ABLATION_RC=$?
+set -e
+echo "V48.33 ABLATION RC=$ABLATION_RC"
+cat "$ABLATION_ROOT/ABLATIONS_STATUS.json" 2>/dev/null || true
+
+运行 adaptation-dev physical shadow（仅诊断，不是论文 test 结果）：
+
+set +e
+OUT="$OUTPUTDIR" GPU0=0 GPU1=1 \
+  bash scripts/run_v48_33_dev_shadow_closed_loop.sh \
+  >"$OUTPUTDIR.dev_shadow.stdout.log" \
+  2>"$OUTPUTDIR.dev_shadow.stderr.log"
+SHADOW_RC=$?
+set -e
+echo "V48.33 DEV SHADOW RC=$SHADOW_RC"
+cat "$OUTPUTDIR/dev_shadow_closed_loop/DEV_SHADOW_COMPLETE.json" 2>/dev/null || true
+
+C. RC=0
+------
+
+含义：严格 Natural gate 通过。必须同时存在：
+- $OUTPUTDIR/NEXT_COMMANDS.txt
+- $OUTPUTDIR/NEXT_COMMANDS_STATUS.json，且 generated=true
+- $OUTPUTDIR/V48_33_COMPLETE.json，且 gate_passed=true
+
+检查并只执行生成的命令：
+
+python - "$OUTPUTDIR/V48_33_COMPLETE.json" "$OUTPUTDIR/NEXT_COMMANDS_STATUS.json" <<'PY'
+import json,sys,pathlib
+complete=json.load(open(sys.argv[1])); status=json.load(open(sys.argv[2]))
+assert complete['pipeline_valid'] is True
+assert complete['certificate_executed'] is True
+assert complete['gate_evaluated'] is True
+assert complete['certificate_exit_code'] == 0
+assert complete['gate_passed'] is True
+assert complete['next_commands_generated'] is True
+assert status['generated'] is True
+assert pathlib.Path(pathlib.Path(sys.argv[1]).parent/'NEXT_COMMANDS.txt').is_file()
+assert complete['test_roots_read'] is False
+print('RC0 authorization contract PASS')
+PY
+
+cat "$OUTPUTDIR/NEXT_COMMANDS.txt"
+bash "$OUTPUTDIR/NEXT_COMMANDS.txt"
+
+四、建议上传的结果
+==================
+
+主实验无论 RC 为 0、20 或30，都上传整个：
+
+$OUTPUTDIR
+
+RC=20 且执行了后续实验时，再上传：
+
+$ABLATION_ROOT
+$OUTPUTDIR/dev_shadow_closed_loop
+
+请保留所有 JSON、CSV、日志、POLICY_CONTRACT.env、GATE_SPEC.json、训练 summary、dev frozen rule 和 certificate rows 文件；不要只上传最终几项指标。

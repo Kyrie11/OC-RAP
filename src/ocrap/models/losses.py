@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import torch
 import torch.nn.functional as F
 
@@ -1441,6 +1443,11 @@ def direct_uncertainty_recovery_value_loss(
     ordinal_evidence_safe_utility_regression_weight: float = 0.0,
     ordinal_evidence_safe_utility_listwise_weight: float = 0.0,
     ordinal_evidence_safe_utility_temperature: float = 0.10,
+    ordinal_evidence_eligible_policy_weight: float = 0.0,
+    ordinal_evidence_eligible_policy_temperature: float = 0.10,
+    ordinal_evidence_eligibility_logit_temperature: float = 0.25,
+    ordinal_evidence_eligible_opportunity_threshold: float = 0.65,
+    ordinal_evidence_eligible_harm_threshold: float = 0.30,
     ordinal_evidence_frontier_pairwise_weight: float = 0.0,
     ordinal_evidence_frontier_pairwise_margin: float = 0.25,
     ordinal_evidence_safe_hard_negative_weight: float = 0.0,
@@ -2534,6 +2541,67 @@ def direct_uncertainty_recovery_value_loss(
                         * F.kl_div(
                             torch.log_softmax(safe_student, dim=0),
                             safe_teacher_prob, reduction="sum",
+                        )
+                    )
+
+                # v48.33 ELIGIBLE-SET POLICY: calibration and runtime first
+                # filter the frozen proposal by opportunity/harm, then rerank
+                # the remaining candidates by admission evidence.  Earlier
+                # listwise losses optimized evidence independently of this
+                # filter, so a good runner-up received no deployment gradient
+                # when an ineligible high-evidence candidate occupied top-1.
+                # This differentiable categorical policy uses the same order:
+                # proposal -> soft eligibility -> evidence -> one action/nominal.
+                # It is shared by every regime and contains no regime ID.
+                if (
+                    float(ordinal_evidence_eligible_policy_weight) > 0.0
+                    and opp_delta_logits is not None
+                    and harm_delta_logits is not None
+                ):
+                    policy_tau = max(
+                        float(ordinal_evidence_eligible_policy_temperature), 1.0e-3
+                    )
+                    gate_tau = max(
+                        float(ordinal_evidence_eligibility_logit_temperature), 1.0e-3
+                    )
+                    opp_threshold = min(max(
+                        float(ordinal_evidence_eligible_opportunity_threshold), 1.0e-4
+                    ), 1.0 - 1.0e-4)
+                    harm_threshold = min(max(
+                        float(ordinal_evidence_eligible_harm_threshold), 1.0e-4
+                    ), 1.0 - 1.0e-4)
+                    opp_threshold_logit = deployed_safe_utility.new_tensor(
+                        math.log(opp_threshold / (1.0 - opp_threshold))
+                    )
+                    harm_threshold_logit = deployed_safe_utility.new_tensor(
+                        math.log(harm_threshold / (1.0 - harm_threshold))
+                    )
+                    proposal_opp_logits = opp_delta_logits[deployment_idx]
+                    proposal_harm_logits = harm_delta_logits[deployment_idx]
+                    log_soft_eligibility = (
+                        F.logsigmoid(
+                            (proposal_opp_logits - opp_threshold_logit) / gate_tau
+                        )
+                        + F.logsigmoid(
+                            (harm_threshold_logit - proposal_harm_logits) / gate_tau
+                        )
+                    )
+                    eligible_student = torch.cat([
+                        deployed_safe_utility.new_zeros((1,)),
+                        deployed_safe_utility / policy_tau + log_soft_eligibility,
+                    ])
+                    eligible_teacher = torch.cat([
+                        safe_utility_target.new_zeros((1,)),
+                        safe_utility_target / policy_tau,
+                    ])
+                    eligible_teacher_prob = torch.softmax(
+                        eligible_teacher, dim=0
+                    ).detach()
+                    terms.append(
+                        float(ordinal_evidence_eligible_policy_weight)
+                        * F.kl_div(
+                            torch.log_softmax(eligible_student, dim=0),
+                            eligible_teacher_prob, reduction="sum",
                         )
                     )
 

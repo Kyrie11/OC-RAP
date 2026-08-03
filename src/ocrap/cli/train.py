@@ -395,6 +395,11 @@ def _direct_value_loss_from_outputs(
         ordinal_evidence_safe_utility_regression_weight=float(tcfg.get("direct_value_ordinal_evidence_safe_utility_regression_weight", 0.0)),
         ordinal_evidence_safe_utility_listwise_weight=float(tcfg.get("direct_value_ordinal_evidence_safe_utility_listwise_weight", 0.0)),
         ordinal_evidence_safe_utility_temperature=float(tcfg.get("direct_value_ordinal_evidence_safe_utility_temperature", 0.10)),
+        ordinal_evidence_eligible_policy_weight=float(tcfg.get("direct_value_ordinal_evidence_eligible_policy_weight", 0.0)),
+        ordinal_evidence_eligible_policy_temperature=float(tcfg.get("direct_value_ordinal_evidence_eligible_policy_temperature", 0.10)),
+        ordinal_evidence_eligibility_logit_temperature=float(tcfg.get("direct_value_ordinal_evidence_eligibility_logit_temperature", 0.25)),
+        ordinal_evidence_eligible_opportunity_threshold=float(tcfg.get("direct_value_ordinal_evidence_eligible_opportunity_threshold", 0.65)),
+        ordinal_evidence_eligible_harm_threshold=float(tcfg.get("direct_value_ordinal_evidence_eligible_harm_threshold", 0.30)),
         ordinal_evidence_frontier_pairwise_weight=float(tcfg.get("direct_value_ordinal_evidence_frontier_pairwise_weight", 0.0)),
         ordinal_evidence_frontier_pairwise_margin=float(tcfg.get("direct_value_ordinal_evidence_frontier_pairwise_margin", 0.25)),
         ordinal_evidence_safe_hard_negative_weight=float(tcfg.get("direct_value_ordinal_evidence_safe_hard_negative_weight", 0.0)),
@@ -597,6 +602,10 @@ def _direct_policy_batch_stats(
     metric_evidence_rerank = bool(tcfg.get("direct_policy_metric_evidence_rerank_top_k", False))
     metric_safe_opportunity = bool(tcfg.get("direct_policy_metric_safe_opportunity", False))
     metric_soft_temperature = max(1.0e-3, float(tcfg.get("direct_policy_metric_soft_temperature", 0.10)))
+    metric_eligibility_logit_temperature = max(
+        1.0e-3,
+        float(tcfg.get("direct_policy_metric_eligibility_logit_temperature", 0.25)),
+    )
     metric_categorical_group_policy = bool(tcfg.get("direct_policy_metric_categorical_group_policy", False))
     stats: dict[str, float] = {}
 
@@ -677,6 +686,7 @@ def _direct_policy_batch_stats(
         # create a rank-based top-k proposal, then evidence-rerank inside it.
         cert_j = pred_j
         cert_rank_margin = rank_margin
+        joint_gate_available = True
         if risk_source in {"heads", "ordinal_evidence"} and opportunity_logit is not None and harm_logit is not None:
             opp_delta_all = opportunity_logit[recs] - opportunity_logit[nom]
             harm_delta_all = harm_logit[recs] - harm_logit[nom]
@@ -695,14 +705,34 @@ def _direct_policy_batch_stats(
             if metric_evidence_rerank:
                 proposal_k = min(metric_proposal_top_k, int(recs.numel()))
                 proposal_local = torch.topk(pred_rank_delta, k=proposal_k).indices
-                proposal_evidence = evidence_all[proposal_local]
-                best_local_in_proposal = int(torch.argmax(proposal_evidence).item())
-                cert_j = int(proposal_local[best_local_in_proposal].item())
-                if proposal_evidence.numel() > 1:
-                    sorted_evidence = torch.topk(proposal_evidence, k=2).values
-                    cert_rank_margin = float((sorted_evidence[0] - sorted_evidence[1]).item())
+                # v48.33: mirror calibration/runtime exactly.  The frozen rank
+                # head proposes top-k; opportunity/harm eligibility is applied
+                # before evidence reranking.  The former implementation picked
+                # the largest evidence score first and then rejected it, silently
+                # abstaining even when another proposal member was deployable.
+                proposal_eligible_mask = (
+                    (opportunity_all[proposal_local] >= opp_threshold)
+                    & (harm_all[proposal_local] <= harm_threshold)
+                )
+                eligible_local = proposal_local[proposal_eligible_mask]
+                joint_gate_available = bool(eligible_local.numel())
+                if joint_gate_available:
+                    eligible_evidence = evidence_all[eligible_local]
+                    best_local_in_eligible = int(torch.argmax(eligible_evidence).item())
+                    cert_j = int(eligible_local[best_local_in_eligible].item())
+                    if eligible_evidence.numel() > 1:
+                        sorted_evidence = torch.topk(eligible_evidence, k=2).values
+                        cert_rank_margin = float((sorted_evidence[0] - sorted_evidence[1]).item())
+                    else:
+                        cert_rank_margin = 1.0
                 else:
-                    cert_rank_margin = 1.0
+                    # Keep a deterministic diagnostic candidate so regret/AUC
+                    # bookkeeping remains defined, but mark the deployable set
+                    # empty and force admission false below.
+                    proposal_evidence = evidence_all[proposal_local]
+                    best_local_in_proposal = int(torch.argmax(proposal_evidence).item())
+                    cert_j = int(proposal_local[best_local_in_proposal].item())
+                    cert_rank_margin = 0.0
             chosen_idx = recs[cert_j]
             opportunity_prob = float(opportunity_all[cert_j].item())
             harm_prob = float(harm_all[cert_j].item())
@@ -752,9 +782,31 @@ def _direct_policy_batch_stats(
             proposal_harm = harm_all[proposal_local_soft]
             proposal_admit = admission_all[proposal_local_soft].clamp(1.0e-6, 1.0 - 1.0e-6)
             proposal_evidence_soft = evidence_all[proposal_local_soft]
+            # v48.33: checkpoint selection must optimize the same ordered
+            # policy as calibration/runtime, not an evidence-only categorical
+            # distribution.  A candidate receives deployment mass only to the
+            # extent that its opportunity and harm heads place it inside the
+            # eligibility envelope; nominal remains the explicit abstention.
+            opp_threshold_logit = proposal_evidence_soft.new_tensor(
+                math.log(opp_threshold / (1.0 - opp_threshold))
+            )
+            harm_threshold_logit = proposal_evidence_soft.new_tensor(
+                math.log(harm_threshold / (1.0 - harm_threshold))
+            )
+            proposal_log_soft_eligibility = (
+                F.logsigmoid(
+                    (opp_delta_all[proposal_local_soft] - opp_threshold_logit)
+                    / metric_eligibility_logit_temperature
+                )
+                + F.logsigmoid(
+                    (harm_threshold_logit - harm_delta_all[proposal_local_soft])
+                    / metric_eligibility_logit_temperature
+                )
+            )
             policy_logits_soft = torch.cat([
                 proposal_evidence_soft.new_zeros((1,)),
-                proposal_evidence_soft / metric_soft_temperature,
+                proposal_evidence_soft / metric_soft_temperature
+                + proposal_log_soft_eligibility,
             ])
             policy_prob_full_soft = torch.softmax(policy_logits_soft, dim=0)
             policy_prob_soft = policy_prob_full_soft[1:]
@@ -778,7 +830,8 @@ def _direct_policy_batch_stats(
                 soft_regret = max(0.0, best_safe - expected_teacher - tie_eps)
 
         admitted = bool(
-            opportunity_prob >= opp_threshold
+            joint_gate_available
+            and opportunity_prob >= opp_threshold
             and harm_prob <= harm_threshold
             and cert_rank_margin >= rank_margin_threshold
             and float(delta_mean.item()) >= min_delta_mean
