@@ -1914,8 +1914,13 @@ def _rollout_one_scene(
         "timing": timing_summary,
         "decisions": decision_dicts,
     }
-    if bool(cl_cfg.get("save_trace_npz", False)):
+    # Optional scene-level traces for paired critical-case visualization.
+    # ``save_trace_npz`` is kept for backward compatibility even though the
+    # closed-loop result is JSON; ``save_traces`` is the clearer public alias.
+    if bool(cl_cfg.get("save_traces", cl_cfg.get("save_trace_npz", False))):
+        out["trace_dt_s"] = float(metric_dt_s)
         out["state_xy_trace"] = state_xy_trace
+        out["metric_trace"] = metric_trace
     return out
 
 def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, source: str) -> dict[str, Any]:
@@ -2074,6 +2079,18 @@ def _load_closed_loop_targets(dataset_spec: str | None, cfg: dict) -> list[dict[
     seen: set[tuple[str, str, int]] = set()
     per_scene: dict[str, int] = {}
     targets: list[dict[str, Any]] = []
+    target_keys_file = str(cl_cfg.get("target_keys_file", "") or "").strip()
+    allowed_target_keys: set[str] | None = None
+    if target_keys_file:
+        target_doc = _read_json_if_valid(Path(target_keys_file))
+        if target_doc is None:
+            raise ValueError(f"closed_loop.target_keys_file is missing or invalid JSON: {target_keys_file}")
+        raw_keys = target_doc.get("selected_keys", target_doc.get("target_keys", []))
+        if not isinstance(raw_keys, list) or not raw_keys:
+            raise ValueError(
+                "closed_loop.target_keys_file must contain a non-empty selected_keys or target_keys list"
+            )
+        allowed_target_keys = {str(key) for key in raw_keys}
     for p in paths:
         split = str(scalar_metadata_for_path(p, "split_id", ""))
         if split_filter and split != split_filter:
@@ -2109,6 +2126,9 @@ def _load_closed_loop_targets(dataset_spec: str | None, cfg: dict) -> list[dict[
         except Exception:
             continue
         bucket = _dataset_label_for_sample_path(Path(p))
+        target_key = f"{bucket}:{canonical_scene_id}:t{int(time_index)}"
+        if allowed_target_keys is not None and target_key not in allowed_target_keys:
+            continue
         key = (bucket, canonical_scene_id, time_index)
         if key in seen:
             continue
@@ -2134,7 +2154,7 @@ def _load_closed_loop_targets(dataset_spec: str | None, cfg: dict) -> list[dict[
             "womd_source_role": source_role,
             "waymax_max_num_objects": int(waymax_max_num_objects),
             "time_index": int(time_index),
-            "target_key": f"{bucket}:{canonical_scene_id}:t{int(time_index)}",
+            "target_key": target_key,
         })
         if max_targets > 0 and len(targets) >= max_targets:
             break

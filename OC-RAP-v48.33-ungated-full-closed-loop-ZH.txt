@@ -1,0 +1,233 @@
+OC-RAP v48.33
+Natural gate 未通过情况下，完整三regime closed-loop探索性运行指令
+=====================================================================
+
+重要声明
+========
+
+1. 这些命令会读取 test roots。
+2. 因 v48.33 Natural gate 未通过，结果只能标记为 ungated exploratory diagnostic。
+3. 不要修改正式的 V48_33_COMPLETE.json，不要把这些结果描述成部署证书。
+4. 脚本要求显式设置 ALLOW_UNGATED_TEST=1；否则会拒绝运行。
+5. 默认每个test scene运行一个canonical target，避免同一scene的多个相邻时间窗造成伪重复。
+
+一、进入修改后的代码目录
+========================
+
+cd /你的路径/OC-RAP-v48.33-with-full-closed-loop-tools
+export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
+
+先做静态检查：
+
+python -m compileall -q \
+  src/ocrap/simulation/closed_loop_runner.py \
+  src/ocrap/config/defaults.py \
+  tools/select_critical_closed_loop_scenes.py \
+  tools/visualize_closed_loop_critical.py \
+  tools/count_closed_loop_targets.py \
+  tools/compare_paired_closed_loop.py \
+  tools/summarize_ungated_closed_loop.py
+
+bash -n scripts/run_ocrap_v48_trac_sr.sh
+bash -n scripts/run_v48_33_ungated_full_closed_loop.sh
+
+二、设置路径
+============
+
+# 必须指向你原来v48.33主实验的完整目录；其中需保留best.pt和calibration artifacts。
+export OUT="runs/ocrap_v48_33_eligible_set_policy_dedicated_4833"
+
+export OCRAP_ROOT="/data0/senzeyu2/dataset/OCRAP"
+export WOMD_VAL="/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord"
+
+# 默认从OCRAP_ROOT推导，也可显式覆盖：
+export SAFE_TEST="$OCRAP_ROOT/test_safe"
+export NEAR_TEST="$OCRAP_ROOT/test_near_contact"
+export CONTACT_TEST="$OCRAP_ROOT/test_contact"
+
+export GPU0=0
+export GPU1=1
+
+三、运行前检查
+============
+
+python - "$OUT/V48_33_COMPLETE.json" <<'PY'
+import json,sys
+x=json.load(open(sys.argv[1]))
+assert x['pipeline_valid'] is True
+assert x['certificate_executed'] is True
+assert x['gate_evaluated'] is True
+assert x['gate_passed'] is False
+assert x['test_roots_read'] is False
+print('主流程有效；gate未通过；允许进入显式ungated exploratory流程。')
+PY
+
+# 检查完整checkpoint；上传给分析用的精简结果包可能没有best.pt，但你的原始运行目录必须有。
+for v in balanced precision; do
+  test -s "$OUT/candidates/$v/model_v48_trac_sr/best.pt" || {
+    echo "缺少checkpoint: $OUT/candidates/$v/model_v48_trac_sr/best.pt" >&2
+    exit 1
+  }
+  test -s "$OUT/candidates/$v/calibration/gamma_rec_by_bucket_v48.json" || exit 1
+  test -s "$OUT/candidates/$v/calibration/direct_value_risk_near_v48.json" || exit 1
+  test -s "$OUT/candidates/$v/calibration/direct_value_risk_contact_v48.json" || exit 1
+done
+
+四、推荐：先跑Balanced确认全链路
+===============================
+
+# Balanced的near候选级AUC相对更高；但仍未通过gate，因此这里只是先验证完整闭环。
+export ALLOW_UNGATED_TEST=1
+export VARIANTS=balanced
+export CL_RESUME=true
+export FULL_LABEL_MODE=fast
+export FULL_BOOTSTRAP=5000
+export CRITICAL_TOP_K_EACH=8
+export CRITICAL_MAX_SELECTED=24
+
+set +e
+bash scripts/run_v48_33_ungated_full_closed_loop.sh \
+  >"$OUT.ungated_full_balanced.stdout.log" \
+  2>"$OUT.ungated_full_balanced.stderr.log"
+RC=$?
+set -e
+echo "UNGATED FULL BALANCED RC=$RC"
+
+cat "$OUT/ungated_full_closed_loop/UNGATED_EXPLORATORY_ONLY.json" 2>/dev/null || true
+cat "$OUT/ungated_full_closed_loop/FULL_TARGET_COUNTS.json" 2>/dev/null || true
+cat "$OUT/ungated_full_closed_loop/balanced/UNGATED_VARIANT_COMPLETE.json" 2>/dev/null || true
+
+五、继续跑Precision
+==================
+
+# 已有partial/result时，CL_RESUME=true会按fingerprint和target_key继续。
+export VARIANTS=precision
+
+set +e
+bash scripts/run_v48_33_ungated_full_closed_loop.sh \
+  >"$OUT.ungated_full_precision.stdout.log" \
+  2>"$OUT.ungated_full_precision.stderr.log"
+RC=$?
+set -e
+echo "UNGATED FULL PRECISION RC=$RC"
+
+六、一次性跑两个variant
+======================
+
+# 若尚未运行任何variant，也可以直接：
+export VARIANTS=balanced,precision
+export ALLOW_UNGATED_TEST=1
+export CL_RESUME=true
+
+bash scripts/run_v48_33_ungated_full_closed_loop.sh \
+  2>&1 | tee "$OUT.ungated_full_all.log"
+
+说明：
+- 两个variant按顺序运行，避免四路Waymax同时占用GPU/CPU/IO；
+- 每个variant内部，near与contact分别在GPU0/GPU1并行；
+- 每张GPU上先跑scalar control，再跑OC-RAP，保证paired target顺序一致；
+- safe的scalar与OC-RAP在两张GPU上并行；
+- safe/near/contact默认最大步数分别为40/50/60。
+
+七、只对critical场景补做teacher/PCD audit
+=========================================
+
+# 全量物理结果仍使用fast；本选项仅复跑自动筛出的少量target。
+export VARIANTS=balanced,precision
+export RERUN_CRITICAL_WITH_LABELS=1
+export CRITICAL_AUDIT_LABELS=1024
+export CRITICAL_AUDIT_EVERY_N_STEPS=2
+export CRITICAL_AUDIT_TOP_K=5
+export CRITICAL_AUDIT_MAX_EXTRA_CANDIDATES=3
+export ALLOW_UNGATED_TEST=1
+export CL_RESUME=true
+
+bash scripts/run_v48_33_ungated_full_closed_loop.sh \
+  2>&1 | tee "$OUT.critical_label_audit.log"
+
+八、查看结果
+============
+
+for v in balanced precision; do
+  R="$OUT/ungated_full_closed_loop/$v"
+  echo "===== $v ====="
+  cat "$R/UNGATED_FULL_CLOSED_LOOP_SUMMARY.md" 2>/dev/null || true
+  echo "Near visualization:    $R/visualizations/near_contact/index.html"
+  echo "Contact visualization: $R/visualizations/contact/index.html"
+done
+
+关键文件：
+
+$OUT/ungated_full_closed_loop/FULL_TARGET_COUNTS.json
+$OUT/ungated_full_closed_loop/balanced/safe_test_paired.md
+$OUT/ungated_full_closed_loop/balanced/near_test_paired.md
+$OUT/ungated_full_closed_loop/balanced/contact_test_paired.md
+$OUT/ungated_full_closed_loop/balanced/critical_near_contact.selected.csv
+$OUT/ungated_full_closed_loop/balanced/critical_contact.selected.csv
+$OUT/ungated_full_closed_loop/balanced/visualizations/near_contact/index.html
+$OUT/ungated_full_closed_loop/balanced/visualizations/contact/index.html
+
+precision目录同理。
+
+九、已有闭环JSON时，单独重做critical筛选和可视化
+=================================================
+
+R="$OUT/dev_shadow_closed_loop/precision"
+A="$OUT/dev_shadow_revisualized/precision"
+mkdir -p "$A"
+
+python tools/select_critical_closed_loop_scenes.py \
+  "$R/audit_near_contact_selected_topk_v48_scalar.json" \
+  "$R/audit_near_contact_selected_topk_v48_v48.json" \
+  --regime near_contact --top-k-each 8 --max-selected 24 \
+  --output "$A/critical_near_contact.json"
+
+python tools/visualize_closed_loop_critical.py \
+  "$R/audit_near_contact_selected_topk_v48_scalar.json" \
+  "$R/audit_near_contact_selected_topk_v48_v48.json" \
+  "$A/critical_near_contact.json" \
+  --output-dir "$A/near_contact" --max-scenes 24
+
+python tools/select_critical_closed_loop_scenes.py \
+  "$R/audit_contact_selected_topk_v48_scalar.json" \
+  "$R/audit_contact_selected_topk_v48_v48.json" \
+  --regime contact --top-k-each 8 --max-selected 24 \
+  --output "$A/critical_contact.json"
+
+python tools/visualize_closed_loop_critical.py \
+  "$R/audit_contact_selected_topk_v48_scalar.json" \
+  "$R/audit_contact_selected_topk_v48_v48.json" \
+  "$A/critical_contact.json" \
+  --output-dir "$A/contact" --max-scenes 24
+
+十、常见问题
+============
+
+1. 报 missing checkpoint
+------------------------
+上传给别人分析的结果包可能排除了best.pt。必须在原始训练机器上使用包含：
+
+$OUT/candidates/balanced/model_v48_trac_sr/best.pt
+$OUT/candidates/precision/model_v48_trac_sr/best.pt
+
+的完整运行目录。
+
+2. 中途退出
+-----------
+保持输出目录、配置、target roots和checkpoint不变，再次设置CL_RESUME=true运行。
+不要改变会影响fingerprint的闭环参数后复用旧partial；需要改变时请使用新的FULL_ROOT。
+
+3. 想减少时间
+-------------
+先设置VARIANTS=balanced，只跑一个variant验证完整链路。
+不要只挑少量“好场景”作为最终结果；少量场景仅用于debug或可视化。
+
+4. 想增加teacher标签
+--------------------
+不要把全量test直接改成selected_topk并高频打标签。先完成fast物理闭环，再用RERUN_CRITICAL_WITH_LABELS=1补做少量critical audit。
+
+5. 如何写论文
+------------
+在Natural gate未通过时，统一写作：
+“ungated exploratory closed-loop diagnostic on the held-out test roots”。
+不要写“deployment-validated”或“certified deployment performance”。
