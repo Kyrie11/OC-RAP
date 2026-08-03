@@ -565,6 +565,66 @@ def _state_geometry_metrics(state: Any, sdc: int) -> dict[str, float]:
         return {}
 
 
+def _capture_render_context(
+    state: Any,
+    sdc: int,
+    *,
+    radius_m: float = 80.0,
+    max_polylines: int = 192,
+    max_points_per_polyline: int = 64,
+) -> dict[str, Any]:
+    """Capture static nearby roadgraph geometry once per rendered scene.
+
+    Full benchmark runs keep rendering disabled.  For the selected ten video
+    targets, storing compact roadgraph polylines makes escape space and
+    off-road behavior interpretable without serializing the same map at every
+    simulator step.  Missing/older Waymax roadgraph fields are tolerated.
+    """
+    try:
+        rg = getattr(state, "roadgraph_points", None)
+        if rg is None:
+            return {}
+        x = _as_np(rg.x).reshape(-1)
+        y = _as_np(rg.y).reshape(-1)
+        valid = _as_np(rg.valid).reshape(-1).astype(bool)
+        ids_raw = getattr(rg, "ids", None)
+        types_raw = getattr(rg, "types", None)
+        ids = _as_np(ids_raw).reshape(-1) if ids_raw is not None else np.arange(len(x), dtype=np.int64)
+        types = _as_np(types_raw).reshape(-1) if types_raw is not None else np.zeros(len(x), dtype=np.int64)
+        tr = state.sim_trajectory
+        t = _current_timestep(state)
+        cx = float(_as_np(tr.x)[sdc, t]); cy = float(_as_np(tr.y)[sdc, t])
+        keep = np.flatnonzero(valid & (((x - cx) ** 2 + (y - cy) ** 2) <= float(radius_m) ** 2))
+        if keep.size == 0:
+            return {}
+        groups: list[dict[str, Any]] = []
+        # Preserve original point order within each feature id; this is the
+        # ordering carried by the WOMD roadgraph arrays.
+        for gid in np.unique(ids[keep]):
+            idx = keep[ids[keep] == gid]
+            if idx.size < 2:
+                continue
+            if idx.size > max_points_per_polyline:
+                sample = np.linspace(0, idx.size - 1, max_points_per_polyline).round().astype(int)
+                idx = idx[sample]
+            type_values = types[idx]
+            type_id = int(type_values[0]) if type_values.size else 0
+            groups.append({
+                "id": int(gid) if np.issubdtype(np.asarray(gid).dtype, np.number) else str(gid),
+                "type": type_id,
+                "xy": [[float(x[i]), float(y[i])] for i in idx],
+            })
+            if len(groups) >= max(1, int(max_polylines)):
+                break
+        return {
+            "roadgraph_polylines": groups,
+            "center_xy": [cx, cy],
+            "radius_m": float(radius_m),
+        } if groups else {}
+    except Exception:
+        return {}
+
+
 def _capture_render_frame(
     state: Any,
     sdc: int,
@@ -1144,8 +1204,12 @@ def _rollout_one_scene(
     metric_trace: list[dict[str, float]] = []
     state_xy_trace: list[list[float]] = []
     render_trace: list[dict[str, Any]] = []
+    render_context: dict[str, Any] = {}
     render_trace_enabled = bool(cl_cfg.get("render_trace", cl_cfg.get("render", False)))
     render_max_agents = max(1, int(cl_cfg.get("render_max_agents", 64)))
+    render_max_roadgraph_polylines = max(1, int(cl_cfg.get("render_max_roadgraph_polylines", 192)))
+    render_max_points_per_polyline = max(2, int(cl_cfg.get("render_max_points_per_polyline", 64)))
+    render_roadgraph_radius_m = max(10.0, float(cl_cfg.get("render_roadgraph_radius_m", 80.0)))
     route_reference_global: np.ndarray | None = None
     route_reference_source: str | None = None
     try:
@@ -1158,6 +1222,11 @@ def _rollout_one_scene(
     except Exception:
         pass
     if render_trace_enabled:
+        render_context = _capture_render_context(
+            state, sdc, radius_m=render_roadgraph_radius_m,
+            max_polylines=render_max_roadgraph_polylines,
+            max_points_per_polyline=render_max_points_per_polyline,
+        )
         try:
             render_trace.append(
                 _capture_render_frame(
@@ -2006,7 +2075,9 @@ def _rollout_one_scene(
         out["state_xy_trace"] = state_xy_trace
     if render_trace_enabled:
         out["render_trace"] = render_trace
-        out["render_trace_schema"] = "ocrap.v48.34.agent_boxes.v1"
+        if render_context:
+            out["render_context"] = render_context
+        out["render_trace_schema"] = "ocrap.v50.agent_boxes_roadgraph.v2"
     return out
 
 def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, source: str) -> dict[str, Any]:
@@ -2153,6 +2224,56 @@ def _dataset_label_for_sample_path(path: Path) -> str:
         return "dataset"
 
 
+def _load_target_key_filter(path_value: str | Path | None) -> set[str]:
+    """Load target keys from JSON, JSONL or one-key-per-line text.
+
+    Selection files written by ``select_critical_scenes_v48_34.py`` are
+    accepted directly, as are ``{"target_keys": [...]}`` documents.
+    """
+    raw = str(path_value or "").strip()
+    if not raw:
+        return set()
+    path = Path(raw)
+    if not path.is_file():
+        raise FileNotFoundError(f"closed_loop.target_keys_file does not exist: {path}")
+
+    def collect(value: Any, out: set[str]) -> None:
+        if isinstance(value, str):
+            text = value.strip()
+            if text:
+                out.add(text)
+        elif isinstance(value, list):
+            for item in value:
+                collect(item, out)
+        elif isinstance(value, dict):
+            for key in ("target_key", "resume_key"):
+                if value.get(key):
+                    text = str(value[key]).strip()
+                    if text.startswith("target:"):
+                        text = text[len("target:"):]
+                    if text:
+                        out.add(text)
+                    return
+            for key in ("target_keys", "selected", "items", "scenes"):
+                if key in value:
+                    collect(value[key], out)
+
+    keys: set[str] = set()
+    text = path.read_text(encoding="utf-8")
+    try:
+        collect(json.loads(text), keys)
+    except json.JSONDecodeError:
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            try:
+                collect(json.loads(line), keys)
+            except json.JSONDecodeError:
+                collect(line, keys)
+    return keys
+
+
 def _load_closed_loop_targets(dataset_spec: str | None, cfg: dict) -> list[dict[str, Any]]:
     """Load unique (bucket, scene_id, time_index) targets from OC-RAP offline roots."""
     if not dataset_spec:
@@ -2161,6 +2282,11 @@ def _load_closed_loop_targets(dataset_spec: str | None, cfg: dict) -> list[dict[
     split_filter = str(cl_cfg.get("bucket_split", "") or "").strip()
     max_targets = int(cl_cfg.get("max_bucket_targets", 0) or 0)
     max_per_scene = int(cl_cfg.get("max_targets_per_scene", 1) or 1)
+    requested_keys = _load_target_key_filter(cl_cfg.get("target_keys_file"))
+    require_requested_keys = bool(cl_cfg.get("require_target_keys", bool(requested_keys)))
+    # Include the resolved content, not only its path, in the run fingerprint.
+    if requested_keys:
+        cl_cfg["_resolved_target_keys"] = sorted(requested_keys)
     paths = iter_sample_paths_many(dataset_spec)
     seen: set[tuple[str, str, int]] = set()
     per_scene: dict[str, int] = {}
@@ -2184,11 +2310,10 @@ def _load_closed_loop_targets(dataset_spec: str | None, cfg: dict) -> list[dict[
         except Exception:
             source_scenario_index = -1
         if source_scenario_index < 0:
-            source_scenario_index = (
-                _legacy_waymax_source_index(original_scene_id)
-                or _legacy_waymax_source_index(scene_id)
-                or -1
-            )
+            legacy_idx = _legacy_waymax_source_index(original_scene_id)
+            if legacy_idx is None:
+                legacy_idx = _legacy_waymax_source_index(scene_id)
+            source_scenario_index = int(legacy_idx) if legacy_idx is not None else -1
         source_role = str(scalar_metadata_for_path(p, "womd_source_role", "") or "unknown")
         max_num_objects_raw = scalar_metadata_for_path(p, "waymax_max_num_objects", -1)
         try:
@@ -2200,6 +2325,9 @@ def _load_closed_loop_targets(dataset_spec: str | None, cfg: dict) -> list[dict[
         except Exception:
             continue
         bucket = _dataset_label_for_sample_path(Path(p))
+        target_key = f"{bucket}:{canonical_scene_id}:t{int(time_index)}"
+        if requested_keys and target_key not in requested_keys:
+            continue
         key = (bucket, canonical_scene_id, time_index)
         if key in seen:
             continue
@@ -2225,10 +2353,18 @@ def _load_closed_loop_targets(dataset_spec: str | None, cfg: dict) -> list[dict[
             "womd_source_role": source_role,
             "waymax_max_num_objects": int(waymax_max_num_objects),
             "time_index": int(time_index),
-            "target_key": f"{bucket}:{canonical_scene_id}:t{int(time_index)}",
+            "target_key": target_key,
         })
         if max_targets > 0 and len(targets) >= max_targets:
             break
+    if requested_keys and require_requested_keys:
+        loaded = {str(t.get("target_key")) for t in targets}
+        missing = sorted(requested_keys - loaded)
+        if missing:
+            raise ValueError(
+                "closed_loop.target_keys_file contains keys absent from the bucket dataset: "
+                + ", ".join(missing[:20])
+            )
     return targets
 
 
@@ -2612,9 +2748,25 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
         for alias in aliases:
             if alias:
                 target_map.setdefault(alias, []).append(t)
-        source_index = int(t.get("source_scenario_index", -1) or -1)
+        raw_source_index = t.get("source_scenario_index", -1)
+        source_index = -1 if raw_source_index is None else int(raw_source_index)
         if source_index >= 0:
             target_index_map.setdefault(source_index, []).append(t)
+    raw_scan_bound_source = "explicit" if raw_max_scenarios is not None else "unbounded"
+    # Legacy datasets encode original Waymax record indices in ``__wxNNN``.
+    # When every requested target has such an index, stop after the largest one
+    # instead of decoding unrelated trailing records.  This is a record bound,
+    # independent of the @N TFRecord shard declaration.
+    if targets and raw_max_scenarios is None:
+        target_source_indices = [
+            -1 if t.get("source_scenario_index", -1) is None else int(t.get("source_scenario_index", -1))
+            for t in targets
+        ]
+        scenario_start_index = int(local.get("scenario_start_index", 0) or 0)
+        scenario_stride = int(local.get("scenario_stride", 1) or 1)
+        if target_source_indices and all(idx >= 0 for idx in target_source_indices) and scenario_start_index == 0 and scenario_stride == 1:
+            raw_max_scenarios = max(target_source_indices) + 1
+            raw_scan_bound_source = "derived_from_max_target_source_index"
     raw_source_role = _source_role_from_pattern(dataset_patterns)
     declared_target_roles = {str(t.get("womd_source_role", "unknown")) for t in targets}
     known_target_roles = {r for r in declared_target_roles if r not in {"", "unknown"}}
@@ -2671,7 +2823,7 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
             "journal": str(journal_path),
         }, flush=True)
     if progress and targets:
-        print({"event": "closed_loop_bucket_targets_loaded", "num_targets": len(targets), "num_target_scenes": len(target_map), "num_legacy_source_indices": len(target_index_map), "target_source_roles": sorted(declared_target_roles), "raw_source_role": raw_source_role, "target_scene_examples": sorted(target_map)[:5], "max_rollouts": max_rollouts, "raw_max_scenarios": raw_max_scenarios}, flush=True)
+        print({"event": "closed_loop_bucket_targets_loaded", "num_targets": len(targets), "num_target_scenes": len({t["scene_id"] for t in targets}), "num_legacy_source_indices": len(target_index_map), "target_source_roles": sorted(declared_target_roles), "raw_source_role": raw_source_role, "target_scene_examples": sorted(target_map)[:5], "max_rollouts": max_rollouts, "raw_max_scenarios": raw_max_scenarios, "raw_scan_bound_source": raw_scan_bound_source, "target_keys_file": cl_cfg.get("target_keys_file")}, flush=True)
     new_scenes_since_partial = 0
     for i, raw in enumerate(iter_waymax_womd_scenarios(dataset_patterns, max_scenarios=raw_max_scenarios if targets else max_scenes, parser_cfg=local)):
         raw_seen_this_run += 1
@@ -2811,6 +2963,8 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
     result["bucket_dataset"] = target_spec or None
     result["bucket_target_count"] = len(targets)
     result["bucket_matched_rollouts"] = matched_targets
+    result["target_keys_file"] = str(cl_cfg.get("target_keys_file", "") or "") or None
+    result["raw_scan_bound_source"] = raw_scan_bound_source
     result["raw_scenarios_seen"] = raw_seen
     result["raw_scenarios_seen_this_run"] = raw_seen_this_run
     result["run_fingerprint"] = run_fingerprint

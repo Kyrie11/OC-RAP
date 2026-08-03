@@ -1,0 +1,181 @@
+{
+  "event": "ocrap_v50_1_full_regime_runtime_fix",
+  "schema_version": 1,
+  "created_at_utc": "2026-08-03T19:08:02.802456+00:00",
+  "source_archives": {
+    "code": "/mnt/data/OC-RAP(2).zip",
+    "failed_external_results": "/mnt/data/all_regime_external_baselines_v49_full.zip"
+  },
+  "observed_failure": {
+    "first_failed_phase": "safe closed-loop preflight",
+    "observed_womd_pattern": "/absolute/path/validation_tfexample.tfrecord@150",
+    "resolved_womd_files": 0,
+    "preflight_exit_code": 3,
+    "training_started": false,
+    "near_or_contact_started": false,
+    "old_index_missing_because": "set -e exited before final index block"
+  },
+  "retraining_decision": {
+    "required_due_to_this_failure": false,
+    "trainable_checkpoints": [
+      "safe/wayformer_bc",
+      "safe/gameformer_lite",
+      "safe/betopnet_lite",
+      "near/gameformer_lite"
+    ],
+    "default_policy": "reuse valid checkpoint; train only missing/invalid; force only with FORCE_RETRAIN_ALL=true"
+  },
+  "main_fixes": [
+    "TensorFlow/Waymax @N shard semantics and complete-shard validation",
+    "placeholder/bare-prefix detection and target-key preflight",
+    "failure-safe external and OC-RAP run indexes with per-regime phase files",
+    "strict fingerprint resume and independent regime execution",
+    "metric-only full benchmark plus selective ten-target trace rerun",
+    "paired comparison tables and deployable physical metric protocol",
+    "post-contact recovery selection that does not treat causal initial contact as a regression",
+    "compact per-scene WOMD roadgraph context in MP4 rendering",
+    "checkpoint reuse/validation, JAX cache isolation, thread/memory controls, dynamic GPU scheduling"
+  ],
+  "verification": {
+    "bash_syntax": "passed",
+    "python_compileall": "passed",
+    "targeted_pytest": "27 passed, 1 pre-existing Transformer warning",
+    "failure_index_smoke": "passed; index generated on launcher failure",
+    "mp4_smoke": "passed; H.264 MP4 parsed by ffprobe",
+    "full_real_womd_run": "not executed in this environment because the 150 real shards and large checkpoints were not uploaded"
+  },
+  "files": [
+    {
+      "path": "OC-RAP-v50.1-failure-analysis-and-optimization-ZH.md",
+      "size_bytes": 11801,
+      "sha256": "c03691eaebe02ade386fa8ad1fadc9f4c5ba9224e8d4914c69f50872051e04f0",
+      "executable": false
+    },
+    {
+      "path": "OC-RAP-v50.1-run-commands-ZH.txt",
+      "size_bytes": 9729,
+      "sha256": "bd6bc81c7ebf1136a285d5798e88fe56803848dcbba6dc1b4431d5a99d0e8244",
+      "executable": false
+    },
+    {
+      "path": "scripts/build_external_comparison_artifacts.sh",
+      "size_bytes": 8190,
+      "sha256": "704abced2aa3926eca826b31e12cdde164f3c0a27feffaf96e3b6da295c40c49",
+      "executable": true
+    },
+    {
+      "path": "scripts/build_top10_recovery_videos.sh",
+      "size_bytes": 2387,
+      "sha256": "0413a3b10277df2532a52c7dc90b0328892fd81126f007bcfeeb6148d72a5df3",
+      "executable": true
+    },
+    {
+      "path": "scripts/lib/v50_runtime.sh",
+      "size_bytes": 668,
+      "sha256": "a8fee141ebaa661dbe36fc27174f64a13837f9ccd84f339f90b18ca40842c39b",
+      "executable": true
+    },
+    {
+      "path": "scripts/run_all_regime_external_baselines_optimized.sh",
+      "size_bytes": 5337,
+      "sha256": "eb391e50da0c6524ce9e020ac6ce44d19d2a5bf1ecb81b69d67de9de52fd8e81",
+      "executable": true
+    },
+    {
+      "path": "scripts/run_contact_external_baselines.sh",
+      "size_bytes": 7261,
+      "sha256": "f94718f8eae867692ee3b074121be9b0762b6feb651fcb58e883f7d1acdccf00",
+      "executable": true
+    },
+    {
+      "path": "scripts/run_near_contact_external_baselines_2gpu_optimized.sh",
+      "size_bytes": 12144,
+      "sha256": "b65dc427dc2ad5d169cf5ad8b4a2f0d6535eae2085927c7b533486f82b7fb8c8",
+      "executable": true
+    },
+    {
+      "path": "scripts/run_ocrap_closed_loop_optimized.sh",
+      "size_bytes": 5407,
+      "sha256": "2f3c07b4ffa03d11fafa259eb6edb309e88fd555a021fd5eeed803d1430c0500",
+      "executable": true
+    },
+    {
+      "path": "scripts/run_ocrap_three_regime_closed_loop.sh",
+      "size_bytes": 6845,
+      "sha256": "bd1e9eb968721bee0270c386cb16b15d995a0829cd30a51660c223af81efad0a",
+      "executable": true
+    },
+    {
+      "path": "scripts/run_safe_regime_external_baselines.sh",
+      "size_bytes": 9801,
+      "sha256": "ac49a874f1fa5d96174b651c669700bf38ff3cdbcc8e18fad36d5f647b2abc25",
+      "executable": true
+    },
+    {
+      "path": "scripts/run_selected_recovery_video_traces.sh",
+      "size_bytes": 8846,
+      "sha256": "3216973d46ed4998f01409a65ae158df8994afef7d145f32abbfe23ebe44fa1b",
+      "executable": true
+    },
+    {
+      "path": "src/ocrap/data/womd/sharded_path.py",
+      "size_bytes": 7158,
+      "sha256": "15cb3cafd992005d50c07e3a87787cb9d86fded5a875bb05756a51e22ba63dfa",
+      "executable": false
+    },
+    {
+      "path": "src/ocrap/simulation/closed_loop_runner.py",
+      "size_bytes": 167327,
+      "sha256": "4722fc95e6d81057d3b86fd060486ce6dd05f111d7df7b846d1d12c66063bb9a",
+      "executable": false
+    },
+    {
+      "path": "tests/test_v50_full_regime_runtime.py",
+      "size_bytes": 9681,
+      "sha256": "0508e6a2ea1a99d29cfbec9b354c887a058dd153bc45c95ff7a2b4d2d9e65ea4",
+      "executable": false
+    },
+    {
+      "path": "tools/build_external_baseline_run_index.py",
+      "size_bytes": 4693,
+      "sha256": "45bcfa21dc30b39487f6249a361a39c997f3f9f35ca7dca854596be9e3781995",
+      "executable": true
+    },
+    {
+      "path": "tools/build_ocrap_three_regime_index.py",
+      "size_bytes": 3173,
+      "sha256": "5a61df23cf37e19294639f5850626d9e49b6e3a51101115b00feb1478f0a681d",
+      "executable": true
+    },
+    {
+      "path": "tools/build_regime_comparison_tables.py",
+      "size_bytes": 9621,
+      "sha256": "85e6e521ea810563b8cb9d93e92c6a867353ee0df0f619f6d396fb59286df20a",
+      "executable": true
+    },
+    {
+      "path": "tools/check_closed_loop_dataset_support.py",
+      "size_bytes": 10579,
+      "sha256": "6b584092de3a46ded7ec09b796fd61010f9f5208e946da24851c7ff7db0d63e0",
+      "executable": true
+    },
+    {
+      "path": "tools/render_critical_scenes_v48_34.py",
+      "size_bytes": 12414,
+      "sha256": "ff9dbcd8554ce1c1298d6c1dbcddc128acdd18695ca47ba6318ac2eb8d83ab4a",
+      "executable": true
+    },
+    {
+      "path": "tools/select_critical_scenes_v48_34.py",
+      "size_bytes": 13576,
+      "sha256": "860f1f9b197bde0e940f3c3de5162a9564b596ec42f5cd38580806ffc7f447cf",
+      "executable": true
+    },
+    {
+      "path": "tools/validate_womd_spec.py",
+      "size_bytes": 1302,
+      "sha256": "06443dbf2dedb0ed2b468a723e7976829554d444a1af348d3f765befa42ed95a",
+      "executable": true
+    }
+  ]
+}

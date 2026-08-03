@@ -31,10 +31,9 @@ SCHEMA: dict[str, list[tuple[str, str, str]]] = {
         ("terminal_clearance_m", "Terminal clearance [m] ↑", "float"),
         ("terminal_ttc_s", "Terminal TTC [s] ↑", "float"),
         ("critical_ttc_exposure_duration_s", "Critical-TTC exposure [s] ↓", "float"),
-        ("closed_loop_DRS", "DRS ↑", "float"),
-        ("closed_loop_ODG", "ODG ↓", "float"),
-        ("closed_loop_FRA_exec", "FRA-exec ↓", "rate"),
+        ("near_zero_clearance_exposure_rate", "Near-zero-clearance exposure ↓", "rate"),
         ("closed_loop_bounded_NUP", "Bounded NUP ↑", "float"),
+        ("intervention_rate", "Intervention rate", "rate"),
         ("decision_latency_ms", "Decision latency [ms] ↓", "float"),
     ],
     "contact": [
@@ -162,8 +161,14 @@ def main() -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     stem = f"{args.regime}_comparison"
     json_doc = {
-        "schema_version": 1, "regime": args.regime, "paired_scene_set": paired,
-        "paired_scene_count": paired_count, "contact_protocol": "physical post-contact metrics only; certificate metrics intentionally omitted" if args.regime == "contact" else None,
+        "schema_version": 2, "regime": args.regime, "paired_scene_set": paired,
+        "paired_scene_count": paired_count,
+        "metric_protocol": (
+            "physical post-contact metrics only; certificate metrics intentionally omitted" if args.regime == "contact"
+            else "deployable physical closed-loop metrics; expensive selected/all-candidate teacher certificate audits are excluded from the main table" if args.regime == "near"
+            else "deployable physical closed-loop metrics"
+        ),
+        "contact_protocol": "physical post-contact metrics only; certificate metrics intentionally omitted" if args.regime == "contact" else None,
         "metrics": [{"key": k, "label": label, "kind": kind} for k, label, kind in SCHEMA[args.regime]],
         "rows": rows,
     }
@@ -177,6 +182,8 @@ def main() -> int:
     lines = ["# " + args.regime.capitalize() + " regime comparison", "", f"Paired target set: **{paired}**" + (f" ({paired_count} scenes)" if paired_count is not None else ""), ""]
     if args.regime == "contact":
         lines += ["> Contact is evaluated with post-contact physical recovery/escape metrics; FRA/DRS/ODG are intentionally excluded.", ""]
+    elif args.regime == "near":
+        lines += ["> The main Near table uses deployable physical closed-loop metrics. Exact teacher-label FRA/DRS/ODG audits are optional diagnostics and are not mixed into the runtime comparison.", ""]
     lines += ["| " + " | ".join(headers) + " |", "|" + "---|" * len(headers)]
     for r in rows:
         cells = [str(r["reporting_name"])] + [_format(r.get(k), kind) for k, _, kind in SCHEMA[args.regime]]

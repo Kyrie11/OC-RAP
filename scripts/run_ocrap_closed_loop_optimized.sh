@@ -4,12 +4,12 @@ set -euo pipefail
 REPO="${OCRAP_REPO:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$REPO"
 export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"
+# shellcheck source=scripts/lib/v50_runtime.sh
+source scripts/lib/v50_runtime.sh
 
-# Exact OC-RAP closed-loop evaluation with the optimized hot path.
-# Required: WOMD_VAL and CHECKPOINT. CALIBRATION is optional when GAMMA_REC is set.
-
-: "${WOMD_VAL:?Set WOMD_VAL to the WOMD validation TFRecord pattern or shard prefix}"
+: "${WOMD_VAL:?Set WOMD_VAL to a WOMD TFRecord path/spec, preferably ...tfrecord@150}"
 : "${CHECKPOINT:?Set CHECKPOINT to the trained OC-RAP checkpoint}"
+[[ -f "$CHECKPOINT" ]] || { echo "Missing OC-RAP checkpoint: $CHECKPOINT" >&2; exit 2; }
 
 RUN_DIR="${RUN_DIR:-runs/ocrap_closed_loop_optimized}"
 OUTPUT="${OUTPUT:-${RUN_DIR}/closed_loop_ocrap.json}"
@@ -17,11 +17,17 @@ CALIBRATION="${CALIBRATION:-}"
 GAMMA_REC="${GAMMA_REC:-}"
 DELTA="${DELTA:-0.05}"
 GPU="${GPU:-0}"
-WOMD_LIMIT="${WOMD_LIMIT:-150}"
+if [[ -n "${WOMD_LIMIT+x}" && -z "${WOMD_NUM_SHARDS+x}" ]]; then
+  echo "[WARN] WOMD_LIMIT is deprecated; it represented TFRecord shard count, not scenario count. Use WOMD_NUM_SHARDS." >&2
+  WOMD_NUM_SHARDS="$WOMD_LIMIT"
+fi
+WOMD_NUM_SHARDS="${WOMD_NUM_SHARDS:-150}"
 MAX_SCENARIOS="${MAX_SCENARIOS:-50}"
+RAW_MAX_SCENARIOS="${RAW_MAX_SCENARIOS:-}"
 MAX_STEPS="${MAX_STEPS:-40}"
 REPLAN_INTERVAL="${REPLAN_INTERVAL:-1}"
 LABEL_MODE="${LABEL_MODE:-fast}"
+AUDIT_EVERY_N_STEPS="${AUDIT_EVERY_N_STEPS:-0}"
 NUM_CANDIDATES="${NUM_CANDIDATES:-}"
 NUM_RECOVERY_OPTIONS="${NUM_RECOVERY_OPTIONS:-}"
 JAX_CACHE_DIR="${JAX_CACHE_DIR:-${RUN_DIR}/.jax_compilation_cache}"
@@ -29,25 +35,25 @@ CONFIG="${CONFIG:-}"
 BUCKET_DATASET="${BUCKET_DATASET:-}"
 BUCKET_SPLIT="${BUCKET_SPLIT:-test}"
 MAX_TARGETS_PER_SCENE="${MAX_TARGETS_PER_SCENE:-1}"
+TARGET_KEYS_FILE="${TARGET_KEYS_FILE:-}"
+REQUIRE_TARGET_KEYS="${REQUIRE_TARGET_KEYS:-true}"
 RENDER_TRACE="${RENDER_TRACE:-false}"
-RENDER_MAX_AGENTS="${RENDER_MAX_AGENTS:-64}"
-SAVE_PARTIAL="${SAVE_PARTIAL:-false}"
-RESUME_FORCE="${RESUME_FORCE:-true}"
+RENDER_MAX_AGENTS="${RENDER_MAX_AGENTS:-48}"
+SAVE_PARTIAL="${SAVE_PARTIAL:-true}"
+RESUME_FORCE="${RESUME_FORCE:-false}"
+PROFILE_TIMING="${PROFILE_TIMING:-true}"
 PREFLIGHT="${PREFLIGHT:-true}"
 
 mkdir -p "$RUN_DIR" "$(dirname "$OUTPUT")" "$JAX_CACHE_DIR"
 
 if [[ -z "$GAMMA_REC" ]]; then
   if [[ -z "$CALIBRATION" || ! -f "$CALIBRATION" ]]; then
-    echo "Set GAMMA_REC directly or provide an existing CALIBRATION JSON." >&2
-    exit 2
+    echo "Set GAMMA_REC directly or provide an existing CALIBRATION JSON." >&2; exit 2
   fi
   GAMMA_REC="$(python - "$CALIBRATION" "$DELTA" <<'PY'
 import json, sys
-path, delta = sys.argv[1], sys.argv[2]
-cal = json.load(open(path))
-thresholds = cal.get("thresholds", {})
-print(thresholds.get(delta, cal.get("gamma_rec", 0.0)))
+cal=json.load(open(sys.argv[1])); delta=sys.argv[2]
+print((cal.get('thresholds') or {}).get(delta, cal.get('gamma_rec', 0.0)))
 PY
 )"
 fi
@@ -61,11 +67,18 @@ export OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}"
 export MKL_NUM_THREADS="${MKL_NUM_THREADS:-4}"
 export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-4}"
 
-DATASET_SPEC="$WOMD_VAL"
-if [[ "$DATASET_SPEC" != *"@"* && "$WOMD_LIMIT" -gt 0 ]]; then DATASET_SPEC="${DATASET_SPEC}@${WOMD_LIMIT}"; fi
+DATASET_SPEC="$(v50_normalize_womd_spec "$WOMD_VAL" "$WOMD_NUM_SHARDS")"
 if [[ -n "$BUCKET_DATASET" && "$PREFLIGHT" == true ]]; then
+  preflight_target_args=()
+  if [[ -n "$TARGET_KEYS_FILE" ]]; then
+    preflight_target_args=(--target-keys-file "$TARGET_KEYS_FILE")
+    v50_bool_true "$REQUIRE_TARGET_KEYS" && preflight_target_args+=(--require-target-keys)
+  fi
   python tools/check_closed_loop_dataset_support.py --dataset "$BUCKET_DATASET" --split "$BUCKET_SPLIT" \
-    --womd-pattern "$DATASET_SPEC" --expected-source-role auto --output "$RUN_DIR/closed_loop_dataset_support.json"
+    --womd-pattern "$DATASET_SPEC" --expected-source-role auto "${preflight_target_args[@]}" \
+    --output "$RUN_DIR/closed_loop_dataset_support.json"
+else
+  python tools/validate_womd_spec.py --spec "$DATASET_SPEC" --output "$RUN_DIR/womd_spec_validation.json"
 fi
 
 ARGS=(
@@ -73,37 +86,37 @@ ARGS=(
   --dataset "$DATASET_SPEC"
   --checkpoint "$CHECKPOINT"
   --output "$OUTPUT"
-  --set "closed_loop.max_scenarios=${MAX_SCENARIOS}"
-  --set "closed_loop.max_bucket_targets=${MAX_SCENARIOS}"
-  --set "closed_loop.max_targets_per_scene=${MAX_TARGETS_PER_SCENE}"
-  --set "closed_loop.max_steps=${MAX_STEPS}"
-  --set "closed_loop.method=ocrap"
-  --set "closed_loop.replan_interval_steps=${REPLAN_INTERVAL}"
-  --set "closed_loop.label_mode=${LABEL_MODE}"
-  --set "closed_loop.fast_waymax_history=true"
-  --set "closed_loop.profile_timing=true"
-  --set "closed_loop.render_trace=${RENDER_TRACE}"
-  --set "closed_loop.render_max_agents=${RENDER_MAX_AGENTS}"
-  --set "closed_loop.save_partial=${SAVE_PARTIAL}"
-  --set "closed_loop.resume_force=${RESUME_FORCE}"
-  --set "selection.gamma_rec=${GAMMA_REC}"
-  --set "waymax.jax_compilation_cache_dir=${JAX_CACHE_DIR}"
+  --set "closed_loop.max_scenarios=$MAX_SCENARIOS"
+  --set "closed_loop.max_bucket_targets=$MAX_SCENARIOS"
+  --set "closed_loop.max_targets_per_scene=$MAX_TARGETS_PER_SCENE"
+  --set "closed_loop.max_steps=$MAX_STEPS"
+  --set closed_loop.method=ocrap
+  --set "closed_loop.replan_interval_steps=$REPLAN_INTERVAL"
+  --set "closed_loop.label_mode=$LABEL_MODE"
+  --set "closed_loop.audit_every_n_steps=$AUDIT_EVERY_N_STEPS"
+  --set closed_loop.fast_waymax_history=true
+  --set "closed_loop.profile_timing=$PROFILE_TIMING"
+  --set "closed_loop.render_trace=$RENDER_TRACE"
+  --set "closed_loop.render_max_agents=$RENDER_MAX_AGENTS"
+  --set "closed_loop.save_partial=$SAVE_PARTIAL"
+  --set "closed_loop.resume_force=$RESUME_FORCE"
+  --set "selection.gamma_rec=$GAMMA_REC"
+  --set "waymax.jax_compilation_cache_dir=$JAX_CACHE_DIR"
+  --set waymax.dataloader_include_sdc_paths=false
+  --set waymax.compute_future_metrics=false
+  --set waymax.teacher_metrics_stride=0
+  --set waymax.use_jit_scan_rollouts=true
 )
-
-if [[ -n "$CONFIG" ]]; then
-  ARGS+=(--config "$CONFIG")
-fi
+[[ -n "$CONFIG" ]] && ARGS+=(--config "$CONFIG")
 if [[ -n "$BUCKET_DATASET" ]]; then
-  ARGS+=(--set "closed_loop.bucket_dataset=${BUCKET_DATASET}" --set "closed_loop.bucket_split=${BUCKET_SPLIT}" --set "closed_loop.require_bucket_targets=true")
+  ARGS+=(--set "closed_loop.bucket_dataset=$BUCKET_DATASET" --set "closed_loop.bucket_split=$BUCKET_SPLIT" --set closed_loop.require_bucket_targets=true)
 fi
-if [[ -n "$NUM_CANDIDATES" ]]; then
-  ARGS+=(--set "closed_loop.num_candidate_prefixes=${NUM_CANDIDATES}")
+if [[ -n "$TARGET_KEYS_FILE" ]]; then
+  ARGS+=(--set "closed_loop.target_keys_file=$TARGET_KEYS_FILE" --set "closed_loop.require_target_keys=$REQUIRE_TARGET_KEYS")
 fi
-if [[ -n "$NUM_RECOVERY_OPTIONS" ]]; then
-  ARGS+=(--set "closed_loop.num_recovery_options=${NUM_RECOVERY_OPTIONS}")
-fi
+[[ -n "$RAW_MAX_SCENARIOS" ]] && ARGS+=(--set "closed_loop.raw_max_scenarios=$RAW_MAX_SCENARIOS")
+[[ -n "$NUM_CANDIDATES" ]] && ARGS+=(--set "closed_loop.num_candidate_prefixes=$NUM_CANDIDATES")
+[[ -n "$NUM_RECOVERY_OPTIONS" ]] && ARGS+=(--set "closed_loop.num_recovery_options=$NUM_RECOVERY_OPTIONS")
 
-printf 'Running:'
-printf ' %q' "${ARGS[@]}"
-printf '\n'
+printf 'Running:'; printf ' %q' "${ARGS[@]}"; printf '\n'
 "${ARGS[@]}" 2>&1 | tee -a "${OUTPUT%.json}.log"
