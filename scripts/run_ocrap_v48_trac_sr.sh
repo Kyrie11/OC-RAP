@@ -911,15 +911,7 @@ run_audit() {
   else
     shadow_womd_source="$WOMD_VAL@150"
   fi
-  local max_rollouts="${NEAR_AUDIT_MAX_ROLLOUTS:-${AUDIT_MAX_ROLLOUTS:-12}}"
-  local max_steps="${NEAR_AUDIT_MAX_STEPS:-${AUDIT_MAX_STEPS:-20}}"
-  local target_keys_file="${NEAR_AUDIT_TARGET_KEYS_FILE:-}"
-  if [[ "$b" == "contact" ]]; then
-    bucket="$CONTACT_TEST"
-    max_rollouts="${CONTACT_AUDIT_MAX_ROLLOUTS:-${AUDIT_MAX_ROLLOUTS:-12}}"
-    max_steps="${CONTACT_AUDIT_MAX_STEPS:-${AUDIT_MAX_STEPS:-20}}"
-    target_keys_file="${CONTACT_AUDIT_TARGET_KEYS_FILE:-}"
-  fi
+  [[ "$b" == "contact" ]] && bucket="$CONTACT_TEST"
   CUDA_VISIBLE_DEVICES="$gpu" PYTHONUNBUFFERED=1 python -u -m ocrap.cli closed-loop \
     --dataset "$shadow_womd_source" --checkpoint "$CKPT" \
     --output "$RUN/audit_${b}_selected_topk_v48_${tag}.json" \
@@ -933,13 +925,12 @@ run_audit() {
     --set closed_loop.bucket_dataset="$bucket" \
     --set closed_loop.bucket_split=${BUCKET_SPLIT:-test} \
     --set closed_loop.max_bucket_targets="$targets" \
-    --set closed_loop.max_rollouts="$max_rollouts" \
-    --set closed_loop.target_keys_file="$target_keys_file" \
+    --set closed_loop.max_rollouts=${AUDIT_MAX_ROLLOUTS:-12} \
     --set closed_loop.require_bucket_targets=true \
     --set closed_loop.allow_legacy_source_index_targets=${DEV_SHADOW_ALLOW_LEGACY_SOURCE_INDEX_TARGETS:-true} \
     --set waymax.retain_official_scenario_id=true \
     --set closed_loop.raw_max_scenarios=${DEV_SHADOW_RAW_MAX_SCENARIOS:-0} \
-    --set closed_loop.max_steps="$max_steps" \
+    --set closed_loop.max_steps=${AUDIT_MAX_STEPS:-20} \
     --set closed_loop.replan_interval_steps=${AUDIT_REPLAN_INTERVAL:-1} \
     --set closed_loop.num_candidate_prefixes=${AUDIT_NUM_CANDIDATES:-12} \
     --set closed_loop.num_recovery_options=${AUDIT_NUM_RECOVERY_OPTIONS:-8} \
@@ -948,7 +939,6 @@ run_audit() {
     --set closed_loop.audit_max_labels="$labels" \
     --set closed_loop.audit_top_k=${AUDIT_TOP_K:-10} \
     --set closed_loop.audit_max_extra_candidates=${AUDIT_MAX_EXTRA_CANDIDATES:-9} \
-    --set closed_loop.save_traces=${SAVE_CLOSED_LOOP_TRACES:-false} \
     --set closed_loop.progress_every_steps=1 \
     | tee -a "$RUN/audit_${b}_selected_topk_v48_${tag}.log"
   assert_json "$RUN/audit_${b}_selected_topk_v48_${tag}.json"
@@ -1006,7 +996,6 @@ run_safe_closed_loop_one() {
     --set closed_loop.num_candidate_prefixes=${SAFE_NUM_CANDIDATES:-16} \
     --set closed_loop.num_recovery_options=${SAFE_NUM_RECOVERY_OPTIONS:-8} \
     --set closed_loop.label_mode=fast \
-    --set closed_loop.save_traces=${SAVE_CLOSED_LOOP_TRACES:-false} \
     --set closed_loop.progress_every_steps=5 \
     | tee -a "${output%.json}.log"
   assert_json "$output"
@@ -1084,31 +1073,29 @@ fi
 if [[ "$RUN_AUDITS" == "1" ]]; then
   RUN_NEAR_AUDIT=${RUN_NEAR_AUDIT:-1}
   RUN_CONTACT_AUDIT=${RUN_CONTACT_AUDIT:-1}
-  NEAR_AUDIT_TARGETS=${NEAR_AUDIT_TARGETS:-${AUDIT_TARGETS:-16}}
-  CONTACT_AUDIT_TARGETS=${CONTACT_AUDIT_TARGETS:-${AUDIT_TARGETS:-16}}
   if [[ "${RUN_SCALAR_BASELINES:-1}" == "1" && "${PAIR_BUCKETS_ON_TWO_GPUS:-1}" == "1" ]]; then
     if [[ "$RUN_NEAR_AUDIT" == "1" ]]; then
-      (run_audit scalar near_contact ${GPU_NEAR:-0} "$NEAR_AUDIT_TARGETS" ${AUDIT_LABELS:-192}; \
-       run_audit v48 near_contact ${GPU_NEAR:-0} "$NEAR_AUDIT_TARGETS" ${AUDIT_LABELS:-192}) &
+      (run_audit scalar near_contact ${GPU_NEAR:-0} ${AUDIT_TARGETS:-16} ${AUDIT_LABELS:-192}; \
+       run_audit v48 near_contact ${GPU_NEAR:-0} ${AUDIT_TARGETS:-16} ${AUDIT_LABELS:-192}) &
       P_NEAR=$!
     fi
     if [[ "$RUN_CONTACT_AUDIT" == "1" ]]; then
-      (run_audit scalar contact ${GPU_CONTACT:-1} "$CONTACT_AUDIT_TARGETS" ${AUDIT_LABELS:-192}; \
-       run_audit v48 contact ${GPU_CONTACT:-1} "$CONTACT_AUDIT_TARGETS" ${AUDIT_LABELS:-192}) &
+      (run_audit scalar contact ${GPU_CONTACT:-1} ${AUDIT_TARGETS:-16} ${AUDIT_LABELS:-192}; \
+       run_audit v48 contact ${GPU_CONTACT:-1} ${AUDIT_TARGETS:-16} ${AUDIT_LABELS:-192}) &
       P_CONTACT=$!
     fi
     [[ -z "${P_NEAR:-}" ]] || wait "$P_NEAR"
     [[ -z "${P_CONTACT:-}" ]] || wait "$P_CONTACT"
   elif [[ "${RUN_SCALAR_BASELINES:-1}" == "1" ]]; then
-    [[ "$RUN_NEAR_AUDIT" != "1" ]] || { run_audit scalar near_contact 0 "$NEAR_AUDIT_TARGETS" ${AUDIT_LABELS:-192} & run_audit v48 near_contact 1 "$NEAR_AUDIT_TARGETS" ${AUDIT_LABELS:-192} & wait; }
-    [[ "$RUN_CONTACT_AUDIT" != "1" ]] || { run_audit scalar contact 0 "$CONTACT_AUDIT_TARGETS" ${AUDIT_LABELS:-192} & run_audit v48 contact 1 "$CONTACT_AUDIT_TARGETS" ${AUDIT_LABELS:-192} & wait; }
+    [[ "$RUN_NEAR_AUDIT" != "1" ]] || { run_audit scalar near_contact 0 ${AUDIT_TARGETS:-16} ${AUDIT_LABELS:-192} & run_audit v48 near_contact 1 ${AUDIT_TARGETS:-16} ${AUDIT_LABELS:-192} & wait; }
+    [[ "$RUN_CONTACT_AUDIT" != "1" ]] || { run_audit scalar contact 0 ${AUDIT_TARGETS:-16} ${AUDIT_LABELS:-192} & run_audit v48 contact 1 ${AUDIT_TARGETS:-16} ${AUDIT_LABELS:-192} & wait; }
   else
     if [[ "$RUN_NEAR_AUDIT" == "1" ]]; then
-      run_audit v48 near_contact ${GPU_NEAR:-0} "$NEAR_AUDIT_TARGETS" ${AUDIT_LABELS:-192} &
+      run_audit v48 near_contact ${GPU_NEAR:-0} ${AUDIT_TARGETS:-16} ${AUDIT_LABELS:-192} &
       P_NEAR=$!
     fi
     if [[ "$RUN_CONTACT_AUDIT" == "1" ]]; then
-      run_audit v48 contact ${GPU_CONTACT:-1} "$CONTACT_AUDIT_TARGETS" ${AUDIT_LABELS:-192} &
+      run_audit v48 contact ${GPU_CONTACT:-1} ${AUDIT_TARGETS:-16} ${AUDIT_LABELS:-192} &
       P_CONTACT=$!
     fi
     [[ -z "${P_NEAR:-}" ]] || wait "$P_NEAR"

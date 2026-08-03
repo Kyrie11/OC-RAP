@@ -62,13 +62,6 @@ NESTED_METRICS = (
     "time_to_stable_stop_steps",
     "time_to_stable_stop_s",
     "time_to_stable_stop_quality_s",
-    "overlap_any",
-    "offroad_any",
-    "acceleration_abs_p95_mps2",
-    "deceleration_max_mps2",
-    "jerk_p95",
-    "yaw_rate_p95",
-    "route_progression_m",
 )
 
 LOWER_IS_BETTER = {
@@ -103,12 +96,6 @@ LOWER_IS_BETTER = {
     "time_to_stable_stop_steps",
     "time_to_stable_stop_s",
     "time_to_stable_stop_quality_s",
-    "overlap_any",
-    "offroad_any",
-    "acceleration_abs_p95_mps2",
-    "deceleration_max_mps2",
-    "jerk_p95",
-    "yaw_rate_p95",
 }
 
 
