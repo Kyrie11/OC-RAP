@@ -487,6 +487,9 @@ def main() -> int:
     ap.add_argument("--bucket", choices=["near", "contact"], required=True)
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--rows-output", type=Path)
+    ap.add_argument("--proposal-rows-output", type=Path)
+    ap.add_argument("--diagnostic-opportunity-threshold", type=float, default=0.65)
+    ap.add_argument("--diagnostic-harm-threshold", type=float, default=0.30)
     ap.add_argument("--macro-ids", default="2,3,5,6,7")
     ap.add_argument("--folds", type=int, default=2)
     ap.add_argument("--fit-fold", type=int, default=0)
@@ -978,6 +981,9 @@ def main() -> int:
     proposal_best_hits_positive = 0
     proposal_positive_hits_positive = 0
     proposal_evidence_top1: list[dict[str, Any]] = []
+    proposal_exact_eligible_top1: list[dict[str, Any]] = []
+    proposal_candidate_audit_rows: list[dict[str, Any]] = []
+    proposal_exact_eligible_abstentions = 0
     proposal_k = max(1, int(args.proposal_top_k))
     for g in groups:
         deployable_pairs = [r for r in g.get("pairs", []) if int(r.get("macro", -1)) in supported_macros]
@@ -997,14 +1003,48 @@ def main() -> int:
             proposal,
             key=lambda r: (-float(r["pred_adv"]), int(r["candidate"])),
         )[0]
-        evidence_row = dict(evidence_best)
-        evidence_row.update(
-            scene=g["scene"], time=g["time"], fold=g["fold"],
-            oracle_best_teacher_adv=g["oracle_best_teacher_adv"],
-            oracle_best_safe_teacher_adv=g.get("oracle_best_safe_teacher_adv"),
-            has_safe_opportunity=bool(g.get("has_safe_opportunity", False)),
+        diagnostic_eligible = [
+            r for r in proposal
+            if float(r["opportunity"]) >= float(args.diagnostic_opportunity_threshold)
+            and float(r["harm"]) <= float(args.diagnostic_harm_threshold)
+        ]
+        exact_best = (
+            sorted(
+                diagnostic_eligible,
+                key=lambda r: (-float(r["pred_adv"]), int(r["candidate"])),
+            )[0]
+            if diagnostic_eligible else None
         )
+        common = {
+            "scene": g["scene"], "time": g["time"], "fold": g["fold"],
+            "oracle_best_teacher_adv": g["oracle_best_teacher_adv"],
+            "oracle_best_safe_teacher_adv": g.get("oracle_best_safe_teacher_adv"),
+            "has_safe_opportunity": bool(g.get("has_safe_opportunity", False)),
+        }
+        evidence_row = dict(evidence_best)
+        evidence_row.update(common)
         proposal_evidence_top1.append(evidence_row)
+        if exact_best is None:
+            proposal_exact_eligible_abstentions += 1
+        else:
+            exact_row = dict(exact_best)
+            exact_row.update(common)
+            proposal_exact_eligible_top1.append(exact_row)
+        for proposal_rank, candidate_row in enumerate(proposal, start=1):
+            audit_row = dict(candidate_row)
+            audit_row.update(common)
+            audit_row.update({
+                "proposal_rank": proposal_rank,
+                "diagnostic_opportunity_threshold": float(args.diagnostic_opportunity_threshold),
+                "diagnostic_harm_threshold": float(args.diagnostic_harm_threshold),
+                "diagnostic_eligible": bool(candidate_row in diagnostic_eligible),
+                "legacy_evidence_only_chosen": int(candidate_row["candidate"]) == int(evidence_best["candidate"]),
+                "exact_eligible_chosen": bool(
+                    exact_best is not None
+                    and int(candidate_row["candidate"]) == int(exact_best["candidate"])
+                ),
+            })
+            proposal_candidate_audit_rows.append(audit_row)
     proposal_best_hit_rate = proposal_best_hits / proposal_groups if proposal_groups else None
     proposal_positive_hit_rate = proposal_positive_hits / proposal_groups if proposal_groups else None
     proposal_best_hit_rate_positive = (
@@ -1242,6 +1282,64 @@ def main() -> int:
         float(np.mean(evidence_positive_regrets)) if evidence_positive_regrets else None
     )
 
+    def _proposal_policy_diagnostics(rows: list[dict[str, Any]]) -> dict[str, Any]:
+        corr_value = (
+            float(np.corrcoef(
+                [float(r["pred_adv"]) for r in rows],
+                [float(r["teacher_adv"]) for r in rows],
+            )[0, 1])
+            if len(rows) > 1
+            and np.std([float(r["pred_adv"]) for r in rows]) > 1.0e-12
+            and np.std([float(r["teacher_adv"]) for r in rows]) > 1.0e-12
+            else None
+        )
+        switches = [r for r in rows if float(r["pred_adv"]) > 0.0]
+        if args.gate_positive_mode == "safe_benefit":
+            nonpositive = [r for r in rows if not bool(r.get("has_safe_opportunity", False))]
+            positive = [r for r in rows if bool(r.get("has_safe_opportunity", False))]
+        else:
+            nonpositive = [r for r in rows if float(r["oracle_best_teacher_adv"]) < args.positive_gain]
+            positive = [r for r in rows if float(r["oracle_best_teacher_adv"]) >= args.positive_gain]
+        regrets = []
+        for r in positive:
+            oracle_adv = (
+                r.get("oracle_best_safe_teacher_adv")
+                if args.gate_positive_mode == "safe_benefit"
+                else r.get("oracle_best_teacher_adv")
+            )
+            if oracle_adv is not None:
+                regrets.append(max(0.0, float(oracle_adv) - float(r["teacher_adv"])))
+        return {
+            "correlation": corr_value,
+            "positive_auc": _auc(
+                [float(r["teacher_adv"]) >= args.positive_gain for r in rows],
+                [float(r["pred_adv"]) for r in rows],
+            ),
+            "safe_positive_auc": _auc(
+                [
+                    float(r["teacher_adv"]) >= args.positive_gain
+                    and not _is_harmful(r, args.negative_gain) for r in rows
+                ],
+                [float(r["pred_adv"]) for r in rows],
+            ),
+            "harm_auc": _auc(
+                [_is_harmful(r, args.negative_gain) for r in rows],
+                [float(r["harm"]) for r in rows],
+            ),
+            "nonpositive_false_switch_rate": (
+                sum(float(r["pred_adv"]) > 0.0 for r in nonpositive) / len(nonpositive)
+                if nonpositive else None
+            ),
+            "harmful_switch_rate": (
+                sum(_is_harmful(r, args.negative_gain) for r in switches) / len(switches)
+                if switches else None
+            ),
+            "positive_top1_regret_mean": float(np.mean(regrets)) if regrets else None,
+            "selected_count": len(rows),
+        }
+
+    exact_eligible_diag = _proposal_policy_diagnostics(proposal_exact_eligible_top1)
+
     top1_pred = [r["rank_adv"] for r in unconstrained_top1]
     top1_teacher = [r["teacher_adv"] for r in unconstrained_top1]
     top1_corr = float(np.corrcoef(top1_pred, top1_teacher)[0, 1]) if len(top1_pred) > 1 and np.std(top1_pred) > 1e-12 and np.std(top1_teacher) > 1e-12 else None
@@ -1465,6 +1563,21 @@ def main() -> int:
         "proposal_evidence_nonpositive_false_switch_rate": proposal_evidence_false_switch_rate,
         "proposal_evidence_harmful_switch_rate": proposal_evidence_harmful_switch_rate,
         "proposal_evidence_positive_top1_regret_mean": proposal_evidence_positive_regret_mean,
+        "legacy_evidence_only_top1_correlation": proposal_evidence_top1_corr,
+        "legacy_evidence_only_top1_safe_positive_auc": proposal_evidence_top1_safe_benefit_auc,
+        "legacy_evidence_only_harmful_switch_rate": proposal_evidence_harmful_switch_rate,
+        "proposal_exact_eligible_top1_correlation": exact_eligible_diag["correlation"],
+        "proposal_exact_eligible_top1_positive_auc": exact_eligible_diag["positive_auc"],
+        "proposal_exact_eligible_top1_safe_positive_auc": exact_eligible_diag["safe_positive_auc"],
+        "proposal_exact_eligible_top1_harm_auc": exact_eligible_diag["harm_auc"],
+        "proposal_exact_eligible_nonpositive_false_switch_rate": exact_eligible_diag["nonpositive_false_switch_rate"],
+        "proposal_exact_eligible_harmful_switch_rate": exact_eligible_diag["harmful_switch_rate"],
+        "proposal_exact_eligible_positive_top1_regret_mean": exact_eligible_diag["positive_top1_regret_mean"],
+        "proposal_exact_eligible_selected_count": exact_eligible_diag["selected_count"],
+        "proposal_exact_eligible_abstention_count": proposal_exact_eligible_abstentions,
+        "proposal_exact_eligible_abstention_rate": (
+            proposal_exact_eligible_abstentions / proposal_groups if proposal_groups else None
+        ),
         "policy_top1_gain_mae": policy_top1_gain_mae,
         "unconstrained_recovery_switch_rate": (len(recovery_switches) / len(unconstrained_top1) if unconstrained_top1 else None),
         "nonpositive_group_false_switch_rate": (len(nonpositive_false_switches) / len(nonpositive_groups) if nonpositive_groups else None),
@@ -1484,6 +1597,7 @@ def main() -> int:
         "constraints": _json_safe(vars(args) | {
             "output": str(args.output),
             "rows_output": str(args.rows_output) if args.rows_output else None,
+            "proposal_rows_output": str(args.proposal_rows_output) if args.proposal_rows_output else None,
         }),
     }
     result = _json_safe(result)
@@ -1500,6 +1614,11 @@ def main() -> int:
                     and row["pred_adv"] >= score_thr
                     and row.get("rank_margin", 0.0) >= rank_margin_thr
                 )
+                f.write(json.dumps(_json_safe(row), ensure_ascii=False) + "\n")
+    if args.proposal_rows_output:
+        args.proposal_rows_output.parent.mkdir(parents=True, exist_ok=True)
+        with args.proposal_rows_output.open("w", encoding="utf-8") as f:
+            for row in proposal_candidate_audit_rows:
                 f.write(json.dumps(_json_safe(row), ensure_ascii=False) + "\n")
     print(json.dumps(result, ensure_ascii=False), flush=True)
     if len(groups) == 0 or len(scenes) == 0:

@@ -349,6 +349,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "exhaustive_teacher_labels": False,
         "artifact_mine_probability": 0.0,
         "render": False,
+        "render_trace": False,
+        "render_max_agents": 64,
         "save_trace_npz": False,
         "save_partial": True,
         "resume": True,

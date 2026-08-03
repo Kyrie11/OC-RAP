@@ -1,3 +1,57 @@
+## v48.34 — BARRIER-CROSSFIT (2026-08-03)
+
+### v48.33 result attribution
+
+- The uploaded v48.33 main pipeline is a valid algorithmic rejection: `pipeline_exit_code=20`, `certificate_exit_code=20`, `certificate_executed=true`, `gate_evaluated=true`, `gate_passed=false`, `pipeline_valid=true`, and `test_roots_read=false`. The operational rejection remains `development_rule_fit_rejection`.
+- Unified top-5 proposal support is not the blocker. Adaptation-dev/certificate contain 8/9 Near and 17/20 Contact proposal-contained safe opportunities, and the proposal-constrained oracle is feasible.
+- Near improved on adaptation-dev but not on the scene-disjoint certificate. Precision Near candidate safe-positive AUC rose to approximately `0.919` and the legacy evidence-only proposal correlation rose from approximately `-0.011` to `+0.249`; the closest development rule selected 13 actions, 4 safe positives and 1 harmful action with safe recall `0.50` and mean teacher advantage `+0.151`. On certificate it selected 14 actions, 0 safe positives and 7 harmful actions with mean advantage `-0.263`. Balanced Near similarly selected 2 safe positives on development but 0 on certificate.
+- Contact action identity remains unresolved. Balanced/Precision certificate candidate safe-positive AUC is approximately `0.570/0.557`, proposal evidence correlation is `-0.205/-0.115`, safe-positive selections are `1/1`, harmful selections are `17/19`, and mean selected teacher advantage is `-0.204/-0.159`.
+- v48.33 therefore learned a development-local Near ordering signal but not a transferable action-level physical ordering. Contact remains close to candidate-level random discrimination and still assigns excessive evidence to apparently beneficial but physically unsafe actions.
+- All eight uploaded v48.33 ablations are invalid for algorithm comparison. They exited pipeline `RC=30` before identity training because Stage-2 settings and inconsistent defaults were included in the Stage-1 factor-cache identity. No C/D/A/B performance attribution is made from those runs.
+- The uploaded development shadow is exploratory and contains only eight paired scenes per variant/regime. Near produces approximately `+0.011 s` TTC-p05 and `+0.015 s` terminal-TTC changes but decreases bounded NUP by approximately `0.014`; Contact produces millimetre-scale clearance/free-space changes and small TTC-recovery changes while also decreasing bounded NUP. These results do not establish submission-level closed-loop superiority.
+
+### Root cause
+
+1. **Soft improvement did not cross executable safety boundaries.** Precision selected epoch 12 for a small improvement in threshold-free soft risk even though valid-safe admissions remained zero and the maximum invalid-admission rate remained one. Balanced training moved from one valid-safe admission at epoch 0 to zero while soft recall increased. The scalar checkpoint objective rewarded probability mass shifts that never produced a deployable action.
+2. **Unsafe recovery evidence remained compensatory.** The v48.33 admission residual could still overcome an unfavourable learned safety slack. High raw recoverability evidence therefore remained able to dominate even when one supported physical component predicted boundary violation.
+3. **Development-local scene shortcuts dominated action identity.** Near candidate AUC and development correlation improved, but certificate safe hits remained zero. The selector learned opportunity/context correlations concentrated in a few scenes rather than invariant candidate-vs-nominal causal differences.
+4. **Contact representation is still underidentified.** Candidate safe-positive AUC remains near random and proposal correlation remains negative. Threshold calibration cannot repair a representation that assigns the wrong sign or relative order to action-level safety.
+5. **Legacy diagnostics obscured the exact failure location.** v48.33 reported an evidence-only top-1 diagnostic that ignored eligibility. The Natural gate used the correct eligible-set policy, so RC=20 is valid, but the diagnostic could not distinguish an eligibility-head failure from a ranking-after-filter failure.
+
+### Engineering and protocol corrections
+
+1. **Stage-1 cache boundary is exact.** Factor-cache identity contains only Stage-1 inputs and hyperparameters. Stage-2 prior, boundary and checkpoint settings no longer invalidate a reusable factor checkpoint. Reuse validates source and copied checkpoint hashes and rewrites run-local metadata.
+2. **Exact and legacy policy diagnostics coexist.** Calibration emits both evidence-only top-1 and exact `rank top-k -> eligibility -> evidence rerank -> one action or nominal` metrics, plus proposal candidate rows. This separates unsafe-filter errors from eligible-set ranking errors.
+3. **Hard-policy checkpoint metadata is authoritative.** Best-checkpoint selection records the complete lexicographic key, actual validation loss and scalar audit metric separately; it no longer stores a tuple element as `best_val_loss`.
+4. **No all-abstain preference.** Lexicographic ordering first minimizes regimes with zero valid-safe admissions, then maximizes total valid-safe admissions and cross-scene fold-min safe top-1 recall before minimizing invalid admission and regret.
+5. **Cross-scene fold validation is mandatory.** Scene-fold minimum safe top-1 recall participates in checkpoint ordering, reducing selection of epochs that concentrate all apparent success in one or two development scenes.
+6. **Exploratory data scope is fail-closed.** Adaptation-dev closed-loop can no longer silently default to held-out test roots. Held-out test inspection requires explicit authorization and writes a permanent contamination declaration. Exact target roots, WOMD sources and target-contract hashes are recorded.
+7. **Ablation status is unambiguous.** Every task records both pipeline and certificate exit codes, failure stage and cache identity. An engineering `RC=30` cannot be interpreted as an algorithmic `RC=20`.
+8. **Critical-scene videos are auditable.** Selection scores every paired scene and exports both positive and failure examples. Videos cannot be generated from an unpaired or cherry-picked scene list.
+
+### v48.34 unified algorithm
+
+1. **Barrier-gated safety slack.** Let `m_max(a)` be the maximum supported learned candidate-vs-nominal safety margin. A continuous safety gate `g(a)=sigmoid(-m_max/tau)` attenuates both raw benefit and the learnable admission residual, while a softplus barrier penalizes positive safety slack. Unsafe evidence can no longer be fully compensated by a large residual. The same equation is used for Safe, Near and Contact; no regime ID or case routing is introduced.
+2. **Eligibility-boundary continuation.** In addition to the eligible-set KL, safe-positive candidates are pushed beyond opportunity, harm and admission boundaries by a registered margin; harmful candidates are pushed below harm/admission boundaries; dead candidates receive a weak nominal preference. This directly optimizes executable transitions rather than only soft probabilities.
+3. **Hard-first lexicographic checkpointing.** Checkpoints are selected by valid-safe admissions and cross-scene safe top-1 coverage before invalid-admission rate, safe regret and soft population risk. Soft risk is only a tie-breaker once executable behaviour is comparable.
+4. **Two-stage natural-population training.** Stage 1 learns raw benefit and signed physical margins with no replacement. Stage 2 jointly trains benefit/opportunity, supported harm components and admission under barrier-gated eligible-set supervision. Adaptive teacher-gap margin and Stage 3 remain disabled.
+5. **Unified top-5 and independent measured veto are retained.** Proposal generation, measured hard veto, exact eligibility, bounded one-action policy, scene-disjoint certificate and sealed test/stress roots are unchanged.
+
+### Exploratory closed-loop and external baselines
+
+- External baseline results uploaded with v48.33 are not directly numerically comparable to OC-RAP because they were not evaluated on the same target scene set; the observed Near/Contact scene overlap with the existing OC-RAP shadow is zero.
+- v48.34 provides a same-target paired runner for OC-RAP, scalar control and external baselines. It validates identical scene IDs before paired bootstrap reporting.
+- After `RC=20`, adaptation-dev exploratory closed-loop is allowed only with an explicit diagnostic flag and cannot be used to tune thresholds/checkpoints. Held-out test evaluation additionally requires an explicit contamination flag and permanently disqualifies those scenes from future model selection.
+- The critical-scene pipeline records render traces and produces side-by-side Control/OC-RAP MP4 and GIF files for both positive and failure cases. These are toy examples, not substitutes for aggregate paired metrics.
+
+### Required next decision
+
+- Run only the v48.34 main experiment first.
+- `RC=30`: stop and inspect the structured failure; do not run ablation, shadow, test, stress or exploratory comparison.
+- `RC=20`: run the authorized v48.34 ablations and adaptation-dev shadow. Exploratory same-target baseline comparison/video generation is optional and must retain its disclosure. Do not use held-out results for v48.35 design.
+- `RC=0`: execute only generated `NEXT_COMMANDS.txt` for formal test/stress. Exploratory tooling may still be used for visualization, but formal and exploratory outputs must remain separate.
+- No claim is made in advance that v48.34 will pass. The decisive evidence is whether valid-safe admissions become nonzero in both target regimes, Near certificate safe hits replace development-only gains, and Contact exact-eligible harmful switches/negative advantage fall without regime routing.
+
 ## v48.33 — ELIGIBLE-SET-POLICY (2026-08-02)
 
 ### v48.32.1 result attribution

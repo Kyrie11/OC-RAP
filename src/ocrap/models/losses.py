@@ -1448,6 +1448,8 @@ def direct_uncertainty_recovery_value_loss(
     ordinal_evidence_eligibility_logit_temperature: float = 0.25,
     ordinal_evidence_eligible_opportunity_threshold: float = 0.65,
     ordinal_evidence_eligible_harm_threshold: float = 0.30,
+    ordinal_evidence_eligibility_boundary_weight: float = 0.0,
+    ordinal_evidence_eligibility_boundary_margin: float = 0.20,
     ordinal_evidence_frontier_pairwise_weight: float = 0.0,
     ordinal_evidence_frontier_pairwise_margin: float = 0.25,
     ordinal_evidence_safe_hard_negative_weight: float = 0.0,
@@ -2604,6 +2606,65 @@ def direct_uncertainty_recovery_value_loss(
                             eligible_teacher_prob, reduction="sum",
                         )
                     )
+
+                # v48.34 HARD-BOUNDARY CONTINUATION: v48.33 increased soft
+                # eligible-set mass without moving candidates across the exact
+                # opportunity/harm/admission boundaries used by checkpointing and
+                # deployment.  Apply candidate-level margin constraints inside the
+                # same frozen proposal.  Safe-beneficial actions are pulled into the
+                # executable envelope; component-harmful actions are pushed through
+                # the harm boundary and below nominal admission.  This is global,
+                # continuous and regime-agnostic.
+                if (
+                    float(ordinal_evidence_eligibility_boundary_weight) > 0.0
+                    and opp_delta_logits is not None
+                    and harm_delta_logits is not None
+                    and admission_delta_logits is not None
+                ):
+                    boundary_weight = float(ordinal_evidence_eligibility_boundary_weight)
+                    boundary_margin = max(0.0, float(ordinal_evidence_eligibility_boundary_margin))
+                    opp_threshold = min(max(
+                        float(ordinal_evidence_eligible_opportunity_threshold), 1.0e-4
+                    ), 1.0 - 1.0e-4)
+                    harm_threshold = min(max(
+                        float(ordinal_evidence_eligible_harm_threshold), 1.0e-4
+                    ), 1.0 - 1.0e-4)
+                    opp_threshold_logit = deployed_safe_utility.new_tensor(
+                        math.log(opp_threshold / (1.0 - opp_threshold))
+                    )
+                    harm_threshold_logit = deployed_safe_utility.new_tensor(
+                        math.log(harm_threshold / (1.0 - harm_threshold))
+                    )
+                    proposal_opp_logits = opp_delta_logits[deployment_idx]
+                    proposal_harm_logits = harm_delta_logits[deployment_idx]
+                    proposal_admission_logits = admission_delta_logits[deployment_idx]
+                    boundary_terms: list[torch.Tensor] = []
+                    if bool(safe_set_positive_mask.any()):
+                        safe_opp = proposal_opp_logits[safe_set_positive_mask]
+                        safe_harm = proposal_harm_logits[safe_set_positive_mask]
+                        safe_admission = proposal_admission_logits[safe_set_positive_mask]
+                        boundary_terms.extend([
+                            F.softplus(opp_threshold_logit + boundary_margin - safe_opp).mean(),
+                            F.softplus(safe_harm - (harm_threshold_logit - boundary_margin)).mean(),
+                            F.softplus(boundary_margin - safe_admission).mean(),
+                        ])
+                    if bool(safe_set_harm_mask.any()):
+                        unsafe_harm = proposal_harm_logits[safe_set_harm_mask]
+                        unsafe_admission = proposal_admission_logits[safe_set_harm_mask]
+                        boundary_terms.extend([
+                            F.softplus(harm_threshold_logit + boundary_margin - unsafe_harm).mean(),
+                            F.softplus(unsafe_admission + boundary_margin).mean(),
+                        ])
+                    dead_mask = (~safe_set_positive_mask) & (~safe_set_harm_mask)
+                    if bool(dead_mask.any()):
+                        dead_opp = proposal_opp_logits[dead_mask]
+                        dead_admission = proposal_admission_logits[dead_mask]
+                        boundary_terms.extend([
+                            0.5 * F.softplus(dead_opp - (opp_threshold_logit - boundary_margin)).mean(),
+                            0.5 * F.softplus(dead_admission + boundary_margin).mean(),
+                        ])
+                    if boundary_terms:
+                        terms.append(boundary_weight * torch.stack(boundary_terms).mean())
 
             # v48.29 VETO-RANK: sparse safe-positive groups need a direct
             # execution-aligned margin.  The teacher-best safe action must beat

@@ -565,6 +565,55 @@ def _state_geometry_metrics(state: Any, sdc: int) -> dict[str, float]:
         return {}
 
 
+def _capture_render_frame(
+    state: Any,
+    sdc: int,
+    *,
+    max_agents: int = 64,
+    selected_macro: str = "nominal",
+    selected_candidate_index: int = 0,
+    selection_reason: str = "initial",
+    metrics: dict[str, float] | None = None,
+) -> dict[str, Any]:
+    """Capture a compact, renderer-independent Waymax frame.
+
+    The trace is enabled only for explicitly requested diagnostic/toy-example
+    runs.  It records physical state, not rasterized pixels, so the same scene
+    can be rendered reproducibly as MP4/GIF without depending on a Waymax GUI.
+    """
+    tr = state.sim_trajectory
+    t = _current_timestep(state)
+    x = _as_np(tr.x)[:, t]
+    y = _as_np(tr.y)[:, t]
+    yaw = _as_np(tr.yaw)[:, t]
+    length = _as_np(tr.length)[:, t]
+    width = _as_np(tr.width)[:, t]
+    valid = _as_np(tr.valid)[:, t].astype(bool)
+    if sdc < 0 or sdc >= len(x):
+        raise IndexError(f"invalid SDC index {sdc} for {len(x)} objects")
+    indices = np.flatnonzero(valid)
+    if indices.size:
+        dist2 = (x[indices] - x[sdc]) ** 2 + (y[indices] - y[sdc]) ** 2
+        indices = indices[np.argsort(dist2)[: max(1, int(max_agents))]]
+    agents = [
+        {
+            "object_index": int(i),
+            "is_sdc": bool(int(i) == int(sdc)),
+            "x": float(x[i]), "y": float(y[i]), "yaw": float(yaw[i]),
+            "length": float(length[i]), "width": float(width[i]),
+        }
+        for i in indices
+    ]
+    return {
+        "time_index": int(t),
+        "selected_macro": str(selected_macro),
+        "selected_candidate_index": int(selected_candidate_index),
+        "selection_reason": str(selection_reason),
+        "metrics": {str(k): float(v) for k, v in (metrics or {}).items() if np.isfinite(v)},
+        "agents": agents,
+    }
+
+
 def _observable_regime_name(state: Any, sdc: int, cfg: dict, fallback: str = "") -> str:
     """Infer the runtime policy regime from current observable geometry only.
 
@@ -1094,6 +1143,9 @@ def _rollout_one_scene(
     active_regime_trace: list[str] = []
     metric_trace: list[dict[str, float]] = []
     state_xy_trace: list[list[float]] = []
+    render_trace: list[dict[str, Any]] = []
+    render_trace_enabled = bool(cl_cfg.get("render_trace", cl_cfg.get("render", False)))
+    render_max_agents = max(1, int(cl_cfg.get("render_max_agents", 64)))
     route_reference_global: np.ndarray | None = None
     route_reference_source: str | None = None
     try:
@@ -1105,6 +1157,19 @@ def _rollout_one_scene(
         ])
     except Exception:
         pass
+    if render_trace_enabled:
+        try:
+            render_trace.append(
+                _capture_render_frame(
+                    state, sdc, max_agents=render_max_agents,
+                    selected_macro="nominal", selected_candidate_index=0,
+                    selection_reason="initial",
+                    metrics=_state_geometry_metrics(state, sdc),
+                )
+            )
+        except Exception as exc:
+            if progress:
+                print({"event": "closed_loop_render_trace_initial_failed", "scene_rank": scenario_rank, "error": str(exc)}, flush=True)
     interventions_used = 0
     last_intervention_step = -10**9
     previous_selected_macro = "nominal"
@@ -1460,6 +1525,20 @@ def _rollout_one_scene(
                 state_xy_trace.append([float(_as_np(tr.x)[sdc, tt]), float(_as_np(tr.y)[sdc, tt])])
             except Exception:
                 pass
+            if render_trace_enabled:
+                try:
+                    render_trace.append(
+                        _capture_render_frame(
+                            state, sdc, max_agents=render_max_agents,
+                            selected_macro=str(prefix.macro_name),
+                            selected_candidate_index=int(selected_sample.candidate_index),
+                            selection_reason=str(info["selection"].reason),
+                            metrics=metrics_after,
+                        )
+                    )
+                except Exception as exc:
+                    if progress:
+                        print({"event": "closed_loop_render_trace_frame_failed", "scene_rank": scenario_rank, "step": step_idx, "error": str(exc)}, flush=True)
             if _scene_done(state):
                 break
         if profile_timing:
@@ -1916,6 +1995,9 @@ def _rollout_one_scene(
     }
     if bool(cl_cfg.get("save_trace_npz", False)):
         out["state_xy_trace"] = state_xy_trace
+    if render_trace_enabled:
+        out["render_trace"] = render_trace
+        out["render_trace_schema"] = "ocrap.v48.34.agent_boxes.v1"
     return out
 
 def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, source: str) -> dict[str, Any]:

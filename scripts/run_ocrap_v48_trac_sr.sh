@@ -939,6 +939,8 @@ run_audit() {
     --set closed_loop.audit_max_labels="$labels" \
     --set closed_loop.audit_top_k=${AUDIT_TOP_K:-10} \
     --set closed_loop.audit_max_extra_candidates=${AUDIT_MAX_EXTRA_CANDIDATES:-9} \
+    --set closed_loop.render_trace=${CL_RENDER_TRACE:-false} \
+    --set closed_loop.render_max_agents=${CL_RENDER_MAX_AGENTS:-64} \
     --set closed_loop.progress_every_steps=1 \
     | tee -a "$RUN/audit_${b}_selected_topk_v48_${tag}.log"
   assert_json "$RUN/audit_${b}_selected_topk_v48_${tag}.json"
@@ -996,6 +998,8 @@ run_safe_closed_loop_one() {
     --set closed_loop.num_candidate_prefixes=${SAFE_NUM_CANDIDATES:-16} \
     --set closed_loop.num_recovery_options=${SAFE_NUM_RECOVERY_OPTIONS:-8} \
     --set closed_loop.label_mode=fast \
+    --set closed_loop.render_trace=${CL_RENDER_TRACE:-false} \
+    --set closed_loop.render_max_agents=${CL_RENDER_MAX_AGENTS:-64} \
     --set closed_loop.progress_every_steps=5 \
     | tee -a "${output%.json}.log"
   assert_json "$output"

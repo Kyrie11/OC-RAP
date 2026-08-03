@@ -85,7 +85,7 @@ def _payload(args: argparse.Namespace) -> dict[str, Any]:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--mode", choices=("create", "verify"), required=True)
+    ap.add_argument("--mode", choices=("create", "verify", "verify-reuse"), required=True)
     ap.add_argument("--source-checkpoint", type=Path, required=True)
     ap.add_argument("--group-index", type=Path, required=True)
     ap.add_argument("--validation-group-index", type=Path, required=True)
@@ -113,9 +113,46 @@ def main() -> int:
         try:
             actual = json.loads(args.contract.read_text(encoding="utf-8"))
             report["actual_contract_sha256"] = actual.get("contract_sha256")
-            report["valid"] = actual.get("contract_sha256") == expected["contract_sha256"]
-            if not report["valid"]:
-                report["reason"] = "factor cache inputs or hyperparameters changed"
+            if args.mode == "verify":
+                report["valid"] = actual.get("contract_sha256") == expected["contract_sha256"]
+                if not report["valid"]:
+                    report["reason"] = "factor cache inputs or hyperparameters changed"
+            else:
+                # v48.34: a frozen Stage-1 artifact owns its Stage-1 optimization
+                # settings.  A Stage-2 ablation must not invalidate that artifact
+                # merely because the caller has different batch-size/defaults.
+                # Verify the source contract against its own recorded settings,
+                # then compare only inputs that semantically determine which
+                # examples/labels/support contract the frozen factor saw.
+                identity_keys = (
+                    "version", "source_checkpoint_sha256", "group_index_sha256",
+                    "validation_group_index_sha256", "support_contract_semantic_sha256",
+                    "support_reliability", "train_mix", "validation_mix", "variant", "settings",
+                )
+                actual_identity = {key: actual.get(key) for key in identity_keys}
+                actual_encoded = json.dumps(
+                    actual_identity, sort_keys=True, separators=(",", ":")
+                ).encode("utf-8")
+                self_hash = hashlib.sha256(actual_encoded).hexdigest()
+                report["source_contract_self_hash_valid"] = self_hash == actual.get("contract_sha256")
+                semantic_keys = (
+                    "source_checkpoint_sha256", "group_index_sha256",
+                    "validation_group_index_sha256", "support_contract_semantic_sha256",
+                    "support_reliability", "train_mix", "validation_mix", "variant",
+                )
+                mismatches = {
+                    key: {"source": actual.get(key), "current": expected.get(key)}
+                    for key in semantic_keys
+                    if actual.get(key) != expected.get(key)
+                }
+                report["semantic_mismatches"] = mismatches
+                report["source_settings"] = actual.get("settings", {})
+                report["caller_settings_ignored_for_reuse"] = expected.get("settings", {})
+                report["valid"] = bool(report["source_contract_self_hash_valid"] and not mismatches)
+                if not report["valid"]:
+                    report["reason"] = (
+                        "factor cache source contract is corrupt or semantic inputs changed"
+                    )
         except Exception as exc:
             report["valid"] = False
             report["reason"] = f"unreadable factor cache contract: {exc}"

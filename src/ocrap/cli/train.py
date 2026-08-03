@@ -400,6 +400,12 @@ def _direct_value_loss_from_outputs(
         ordinal_evidence_eligibility_logit_temperature=float(tcfg.get("direct_value_ordinal_evidence_eligibility_logit_temperature", 0.25)),
         ordinal_evidence_eligible_opportunity_threshold=float(tcfg.get("direct_value_ordinal_evidence_eligible_opportunity_threshold", 0.65)),
         ordinal_evidence_eligible_harm_threshold=float(tcfg.get("direct_value_ordinal_evidence_eligible_harm_threshold", 0.30)),
+        ordinal_evidence_eligibility_boundary_weight=float(
+            tcfg.get("direct_value_ordinal_evidence_eligibility_boundary_weight", 0.0)
+        ),
+        ordinal_evidence_eligibility_boundary_margin=float(
+            tcfg.get("direct_value_ordinal_evidence_eligibility_boundary_margin", 0.20)
+        ),
         ordinal_evidence_frontier_pairwise_weight=float(tcfg.get("direct_value_ordinal_evidence_frontier_pairwise_weight", 0.0)),
         ordinal_evidence_frontier_pairwise_margin=float(tcfg.get("direct_value_ordinal_evidence_frontier_pairwise_margin", 0.25)),
         ordinal_evidence_safe_hard_negative_weight=float(tcfg.get("direct_value_ordinal_evidence_safe_hard_negative_weight", 0.0)),
@@ -1401,6 +1407,30 @@ def _finalize_direct_policy_stats(stats: dict[str, float], tcfg: dict | None = N
         out["direct_contract_zero_safe_top1_regimes"] = float(zero_safe_top1_regimes)
         out["direct_contract_valid_safe_admission_total"] = float(
             sum(valid_safe_admission_counts)
+        )
+        out["direct_contract_zero_valid_safe_admission_regimes"] = float(
+            sum(
+                1
+                for valid_count, opportunity_count in zip(
+                    valid_safe_admission_counts, safe_opportunity_counts
+                )
+                if opportunity_count > 0.0 and valid_count <= 0.0
+            )
+        )
+        supported_fold_recalls: list[float] = []
+        for regime in ("near", "contact"):
+            for fold in range(3):
+                opportunity_count = float(
+                    out.get(f"direct_safe_opportunity_group_count_{regime}_fold{fold}", 0.0)
+                )
+                if opportunity_count <= 0.0:
+                    continue
+                hit_count = float(
+                    out.get(f"direct_evidence_safe_top1_hit_count_{regime}_fold{fold}", 0.0)
+                )
+                supported_fold_recalls.append(hit_count / opportunity_count)
+        out["direct_contract_safe_top1_recall_fold_min"] = (
+            min(supported_fold_recalls) if supported_fold_recalls else min(top1_recalls)
         )
         out["direct_contract_safe_rank_risk"] = (
             base_population_risk
@@ -2843,6 +2873,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, **loader_kwargs)
     epochs = int(tcfg.get("epochs", 10))
     best_val = float("inf")
+    best_metric_value = float("inf")
+    best_validation_loss = float("inf")
+    best_key: tuple[float, ...] = (float("inf"),)
     best_metric_min_delta = max(0.0, float(tcfg.get("best_metric_min_delta", 1.0e-6)))
     best_epoch = 0
     no_improve_epochs = 0
@@ -2850,6 +2883,43 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
     best_path = out / "best.pt"
     latest_path = out / "latest.pt"
     ckpt_dir = ensure_dir(out / "checkpoints")
+
+    def _checkpoint_order_key(metrics: dict[str, float], metric_name: str, metric_mode: str) -> tuple[float, ...]:
+        """Return the exact checkpoint ordering contract.
+
+        ``direct_contract_lexicographic`` prevents a small soft-risk improvement
+        from selecting an epoch whose executable policy has zero valid-safe
+        admissions or worse hard safety.  The tuple is global and regime-agnostic:
+        regime labels are used only to report the minimum/worst development
+        support, never as a model input or runtime route.
+        """
+        if metric_name != "direct_contract_lexicographic":
+            if metric_name not in metrics:
+                raise KeyError(
+                    f"Configured training.best_metric={metric_name!r} was not produced by validation. "
+                    f"Available metrics: {sorted(metrics)}"
+                )
+            value = float(metrics[metric_name])
+            return (value if metric_mode != "max" else -value,)
+        return (
+            # First establish at least one executable safe admission in every
+            # supported regime, then prefer more valid-safe actions.  Ranking
+            # generalisation precedes invalid-admission rate so an all-abstain
+            # checkpoint cannot beat a model that has learned cross-scene action
+            # identity merely because it never attempts recovery.
+            float(metrics.get("direct_contract_zero_valid_safe_admission_regimes", 2.0)),
+            -float(metrics.get("direct_contract_valid_safe_admission_total", 0.0)),
+            -float(metrics.get("direct_contract_safe_top1_recall_fold_min", 0.0)),
+            -float(metrics.get("direct_contract_safe_top1_recall_min", 0.0)),
+            float(metrics.get("direct_integrity_invalid_admission_max", 1.0)),
+            float(metrics.get("direct_integrity_safe_top1_regret_max", 1.0)),
+            float(metrics.get("direct_contract_safe_rank_risk", float("inf"))),
+        )
+
+    def _checkpoint_display_metric(metrics: dict[str, float], metric_name: str) -> float:
+        if metric_name == "direct_contract_lexicographic":
+            return float(metrics.get("direct_contract_safe_rank_risk", float("inf")))
+        return float(metrics[metric_name])
 
     def _checkpoint_payload(ep: int, val_loss: float) -> dict:
         return {
@@ -2982,18 +3052,18 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             va0 = _epoch(model, val_loader, cfg, device, None, stage="val", epoch=0)
         best_metric_name = str(tcfg.get("best_metric", "loss") or "loss")
         best_metric_mode = str(tcfg.get("best_metric_mode", "min") or "min").lower()
-        if best_metric_name not in va0:
-            raise KeyError(
-                f"Configured training.best_metric={best_metric_name!r} was not produced by epoch-0 validation. "
-                f"Available metrics: {sorted(va0)}"
-            )
-        current_metric0 = float(va0[best_metric_name])
-        best_val = current_metric0 if best_metric_mode != "max" else -current_metric0
+        current_key0 = _checkpoint_order_key(va0, best_metric_name, best_metric_mode)
+        current_metric0 = _checkpoint_display_metric(va0, best_metric_name)
+        best_key = current_key0
+        best_val = current_key0[0]
+        best_metric_value = current_metric0
+        best_validation_loss = float(va0.get("loss", current_metric0))
         best_epoch = 0
         payload0 = _checkpoint_payload(0, current_metric0)
         payload0["val_loss"] = float(va0.get("loss", current_metric0))
         payload0["best_metric_name"] = best_metric_name
         payload0["best_metric_value"] = current_metric0
+        payload0["best_metric_order_key"] = list(current_key0)
         payload0["is_best"] = True
         torch.save(payload0, ckpt_dir / "epoch_0000.pt")
         torch.save(payload0, best_path)
@@ -3015,14 +3085,13 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         history.append(row)
         best_metric_name = str(tcfg.get("best_metric", "loss") or "loss")
         best_metric_mode = str(tcfg.get("best_metric_mode", "min") or "min").lower()
-        if best_metric_name not in va:
-            raise KeyError(
-                f"Configured training.best_metric={best_metric_name!r} was not produced by validation. "
-                f"Available metrics: {sorted(va)}"
-            )
-        current_metric = float(va[best_metric_name])
-        compare_metric = current_metric if best_metric_mode != "max" else -current_metric
-        improved = compare_metric < (best_val - best_metric_min_delta)
+        current_key = _checkpoint_order_key(va, best_metric_name, best_metric_mode)
+        current_metric = _checkpoint_display_metric(va, best_metric_name)
+        compare_metric = current_key[0]
+        if best_metric_name == "direct_contract_lexicographic":
+            improved = current_key < best_key
+        else:
+            improved = compare_metric < (best_val - best_metric_min_delta)
         payload = _checkpoint_payload(ep, current_metric)
         save_every = bool(tcfg.get("save_every_epoch", True))
         if save_every:
@@ -3030,12 +3099,16 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         if bool(tcfg.get("save_latest", True)):
             torch.save(payload, latest_path)
         if improved:
+            best_key = current_key
             best_val = compare_metric
+            best_metric_value = current_metric
+            best_validation_loss = float(va.get("loss", current_metric))
             best_epoch = ep
             no_improve_epochs = 0
             payload["val_loss"] = float(va.get("loss", current_metric))
             payload["best_metric_name"] = best_metric_name
             payload["best_metric_value"] = float(current_metric)
+            payload["best_metric_order_key"] = list(current_key)
             payload["is_best"] = True
             torch.save(payload, best_path)
         else:
@@ -3045,9 +3118,12 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "epoch": ep,
             "train_loss": round(float(tr.get("loss", 0.0)), 6),
             "val_loss": round(float(va.get("loss", 0.0)), 6),
-            "best_val_loss": round(float(best_val), 6),
+            "best_val_loss": round(float(best_validation_loss), 6),
             "best_metric_name": best_metric_name,
+            "best_metric_value": round(float(best_metric_value), 6),
             "current_best_metric": round(float(current_metric), 6),
+            "current_metric_order_key": [round(float(v), 6) for v in current_key],
+            "best_metric_order_key": [round(float(v), 6) for v in best_key],
             "best_epoch": int(best_epoch),
             "improved": bool(improved),
             "seconds": round(float(row["seconds"]), 2),
@@ -3058,8 +3134,10 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
                 "event": "early_stop",
                 "epoch": ep,
                 "best_epoch": int(best_epoch),
-                "best_val_loss": float(best_val),
+                "best_val_loss": float(best_validation_loss),
                 "best_metric": str(tcfg.get("best_metric", "loss") or "loss"),
+                "best_metric_value": float(best_metric_value),
+                "best_metric_order_key": list(best_key),
                 "epochs_completed": int(len(history)),
                 "patience": patience,
             }, flush=True)
@@ -3080,8 +3158,10 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         "freeze_param_prefixes": list(freeze_prefixes),
         "trainable_param_prefixes": list(trainable_prefixes),
         "best_metric_min_delta": float(best_metric_min_delta),
-        "best_val_loss": float(best_val),
+        "best_val_loss": float(best_validation_loss),
         "best_metric": str(tcfg.get("best_metric", "loss") or "loss"),
+        "best_metric_value": float(best_metric_value),
+        "best_metric_order_key": list(best_key),
         "device_info": device_info,
         "train_batches_per_epoch": len(train_loader),
         "val_batches_per_epoch": len(val_loader),

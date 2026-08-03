@@ -323,7 +323,7 @@ class OCRAPModel(nn.Module):
             direct_recovery_evidence_admission_prior_mode or "risk_centered"
         ).strip().lower()
         if self.direct_recovery_evidence_admission_prior_mode not in {
-            "risk_centered", "benefit_only", "safety_slack"
+            "risk_centered", "benefit_only", "safety_slack", "barrier_gated_slack"
         }:
             raise ValueError(
                 "Unsupported direct_recovery_evidence_admission_prior_mode="
@@ -1302,24 +1302,42 @@ class OCRAPModel(nn.Module):
                         if self.direct_recovery_evidence_admission_prior_detach
                         else unified_harm_logit
                     )
-                    if self.direct_recovery_evidence_admission_prior_mode == "safety_slack":
-                        # v48.30 SLACK-RANK: convert the five calibrated component
-                        # logits back into signed physical veto margins.  Actions
-                        # inside every non-degradation envelope pay no penalty; only
-                        # predicted boundary violation reduces recoverability utility.
-                        # The independent component veto remains fail-closed at
-                        # deployment, while this continuous hinge gives one unified,
-                        # regime-agnostic ranking semantic near the safety frontier.
+                    residual_safety_gate = None
+                    if (
+                        self.direct_recovery_evidence_admission_prior_mode == "safety_slack"
+                        or self.direct_recovery_evidence_admission_prior_mode == "barrier_gated_slack"
+                    ):
+                        # Unified candidate-vs-nominal signed physical margins.
                         predicted_component_margins = (
                             self.direct_recovery_evidence_slack_temperature
                             * prior_components
                         )
                         max_predicted_veto_margin = predicted_component_margins.amax(dim=-1)
-                        slack_barrier = torch.relu(max_predicted_veto_margin)
-                        admission_prior = (
-                            prior_benefit
-                            - self.direct_recovery_evidence_slack_penalty * slack_barrier
-                        )
+                        if self.direct_recovery_evidence_admission_prior_mode == "barrier_gated_slack":
+                            # v48.34 BARRIER-GATED IDENTITY: a free admission residual
+                            # must not compensate for a predicted safety-boundary
+                            # violation.  The same continuous worst slack gates both
+                            # transferred benefit and residual capacity, while a smooth
+                            # non-negative barrier drives unsafe candidates below
+                            # nominal.  No regime identifier is used.
+                            tau = max(self.direct_recovery_evidence_slack_temperature, 1.0e-6)
+                            residual_safety_gate = torch.sigmoid(
+                                -max_predicted_veto_margin / tau
+                            )
+                            slack_barrier = tau * torch.nn.functional.softplus(
+                                max_predicted_veto_margin / tau
+                            )
+                            admission_prior = (
+                                residual_safety_gate * prior_benefit
+                                - self.direct_recovery_evidence_slack_penalty * slack_barrier
+                            )
+                            out["direct_recovery_evidence_barrier_safety_gate"] = residual_safety_gate
+                        else:
+                            slack_barrier = torch.relu(max_predicted_veto_margin)
+                            admission_prior = (
+                                prior_benefit
+                                - self.direct_recovery_evidence_slack_penalty * slack_barrier
+                            )
                         out["direct_recovery_evidence_predicted_component_margins"] = predicted_component_margins
                         out["direct_recovery_evidence_max_predicted_veto_margin"] = max_predicted_veto_margin
                         out["direct_recovery_evidence_slack_barrier"] = slack_barrier
@@ -1365,6 +1383,8 @@ class OCRAPModel(nn.Module):
                     admission_residual = (
                         admission_basis * self.direct_recovery_evidence_admission_scale
                     )
+                    if residual_safety_gate is not None:
+                        admission_residual = residual_safety_gate * admission_residual
                     unified_admission_logit = admission_prior + admission_residual
                     evidence_calibrator_residual = torch.cat(
                         [evidence_calibrator_residual, admission_residual.unsqueeze(-1)], dim=-1
