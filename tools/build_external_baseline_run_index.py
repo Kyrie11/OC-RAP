@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build an auditable run index even when a regime launcher fails early."""
+"""Build an auditable run index from artifacts, even after launcher failure."""
 from __future__ import annotations
 
 import argparse
@@ -67,34 +67,43 @@ def main() -> int:
         if regime == "near" and oracle:
             expected.insert(0, "oracle_recovery_filter")
         methods = [method_result(args.root / regime, method) for method in expected] if closed_loop else []
-        regime_complete = phase.get("status") in {"complete", "skipped"}
-        if closed_loop and phase.get("status") != "skipped":
-            regime_complete = regime_complete and all(row["complete"] for row in methods)
-        if not regime_complete and phase.get("status") != "skipped":
+        artifacts_complete = bool(methods) and all(row["complete"] for row in methods) if closed_loop else False
+        if closed_loop:
+            # Completed result/progress/journal triples are authoritative. This
+            # allows a stale phase="failed" file to be recovered after the
+            # launcher died while writing its final index.
+            regime_complete = artifacts_complete
+        else:
+            regime_complete = phase.get("status") in {"complete", "skipped"}
+        if not regime_complete:
             failed.append(regime)
+        phase_status = str(phase.get("status") or "not_started")
+        effective = "complete_from_artifacts" if regime_complete and phase_status != "complete" else phase_status
         regimes[regime] = {
             "phase": phase,
+            "phase_effective_status": effective,
             "expected_closed_loop_methods": expected if closed_loop else [],
             "closed_loop_methods": methods,
             "complete": regime_complete,
             "preflight": str(args.root / regime / "closed_loop_dataset_support.json"),
             "launcher_log": str(args.root / f"{regime}.launcher.log"),
         }
+    complete = not failed and int(args.launcher_exit_code) == 0
     doc = {
-        "event": "all_regime_external_baselines_v50",
-        "schema_version": 2,
+        "event": "all_regime_external_baselines_v50_3",
+        "schema_version": 3,
         "root": str(args.root),
         "launcher_exit_code": int(args.launcher_exit_code),
         "closed_loop_enabled": closed_loop,
-        "status": "complete" if not failed and args.launcher_exit_code == 0 else "failed_or_incomplete",
-        "complete": not failed and args.launcher_exit_code == 0,
+        "status": "complete" if complete else "failed_or_incomplete",
+        "complete": complete,
         "failed_or_incomplete_regimes": failed,
         "regimes": regimes,
     }
     args.root.mkdir(parents=True, exist_ok=True)
     out = args.root / "EXTERNAL_BASELINE_RUN_INDEX.json"
     out.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({"event": doc["event"], "output": str(out), "complete": doc["complete"], "failed": failed}))
+    print(json.dumps({"event": doc["event"], "output": str(out), "complete": complete, "failed": failed}))
     return 0
 
 

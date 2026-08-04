@@ -33,6 +33,9 @@ CL_WOMD="$(v50_normalize_womd_spec "$CL_WOMD" "$WOMD_NUM_SHARDS")"
 : "${CL_SAVE_PARTIAL:=true}"
 : "${CL_PROFILE_TIMING:=true}"
 : "${CL_RESUME_FORCE:=false}"
+: "${CL_PARTIAL_WRITE_EVERY_SCENES:=32}"
+: "${CL_PROGRESS_EVERY_STEPS:=10}"
+: "${SKIP_COMPLETE_METHODS:=true}"
 : "${DO_TRAIN:=true}"                 # permit training missing/invalid checkpoints
 : "${FORCE_RETRAIN_SAFE:=false}"      # explicit architecture/data retraining
 : "${DO_OFFLINE:=true}"
@@ -121,6 +124,11 @@ run_train_eval_job() {
   IFS='|' read -r method config ckpt <<< "$spec"
   gpu="${GPU_LIST[$((idx % ${#GPU_LIST[@]}))]}"
   train_dir="$(dirname "$ckpt")"
+  if ! v50_bool_true "$DO_OFFLINE" && v50_bool_true "$DO_CLOSED_LOOP" && v50_bool_true "$SKIP_COMPLETE_METHODS" \
+      && python tools/check_closed_loop_artifact.py --output "$RUN/closed_loop_${method}.json" --quiet; then
+    echo "[REUSE] safe method=$method already has a complete closed-loop artifact; checkpoint preparation skipped"
+    return 0
+  fi
   echo "[START] safe train/eval baseline=$method gpu=$gpu checkpoint=$ckpt"
   if v50_bool_true "$FORCE_RETRAIN_SAFE" || ! checkpoint_valid "$ckpt"; then
     if ! v50_bool_true "$DO_TRAIN"; then
@@ -161,9 +169,18 @@ if v50_bool_true "$DO_TRAIN" || v50_bool_true "$DO_OFFLINE" || v50_bool_true "$D
 fi
 
 run_closed_loop_method() {
-  local spec="$1" idx="$2" method config ckpt gpu
+  local spec="$1" idx="$2" method runtime_method config ckpt gpu
   IFS='|' read -r method config ckpt <<< "$spec"
+  # ``nominal_replay`` is the reporting alias used in tables. The core
+  # evaluator's deployable closed-loop method is named ``nominal``.
+  runtime_method="$method"
+  [[ "$method" == nominal_replay ]] && runtime_method=nominal
   gpu="${GPU_LIST[$((idx % ${#GPU_LIST[@]}))]}"
+  local output="$RUN/closed_loop_${method}.json"
+  if v50_bool_true "$SKIP_COMPLETE_METHODS" && python tools/check_closed_loop_artifact.py --output "$output" --quiet; then
+    echo "[REUSE] safe closed-loop method=$method is already complete: $output"
+    return 0
+  fi
   local checkpoint_args=() target_args=()
   if [[ "$method" != nominal_replay ]]; then
     checkpoint_valid "$ckpt" || { echo "Missing/invalid checkpoint: $ckpt" >&2; return 2; }
@@ -175,8 +192,8 @@ run_closed_loop_method() {
   echo "[START] safe closed-loop method=$method gpu=$gpu"
   run_env "$gpu" python -u -m ocrap.cli closed-loop \
     --config "$config" --dataset "$CL_WOMD" "${checkpoint_args[@]}" \
-    --output "$RUN/closed_loop_${method}.json" \
-    --set "closed_loop.method=$method" \
+    --output "$output" \
+    --set "closed_loop.method=$runtime_method" \
     --set "closed_loop.max_scenarios=$CL_MAX_SCENARIOS" \
     --set "closed_loop.max_bucket_targets=$CL_MAX_SCENARIOS" \
     --set "closed_loop.bucket_dataset=$CL_BUCKET_DATASET" \
@@ -193,6 +210,13 @@ run_closed_loop_method() {
     --set "closed_loop.audit_every_n_steps=$CL_AUDIT_EVERY_N_STEPS" \
     --set "closed_loop.save_partial=$CL_SAVE_PARTIAL" \
     --set "closed_loop.resume_force=$CL_RESUME_FORCE" \
+    --set "closed_loop.partial_write_every_scenes=$CL_PARTIAL_WRITE_EVERY_SCENES" \
+    --set "closed_loop.progress_every_steps=$CL_PROGRESS_EVERY_STEPS" \
+    --set closed_loop.result_scene_detail=metrics \
+    --set closed_loop.scene_journal_detail=metrics \
+    --set closed_loop.memory_scene_detail=metrics \
+    --set closed_loop.include_scenes_in_result=false \
+    --set closed_loop.include_scenes_in_partial=false \
     --set "closed_loop.profile_timing=$CL_PROFILE_TIMING" \
     --set waymax.dataloader_include_sdc_paths=false \
     --set waymax.compute_future_metrics=false \

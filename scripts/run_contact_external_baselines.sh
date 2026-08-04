@@ -32,6 +32,9 @@ CL_WOMD="$(v50_normalize_womd_spec "$CL_WOMD" "$WOMD_NUM_SHARDS")"
 : "${CL_SAVE_PARTIAL:=true}"
 : "${CL_PROFILE_TIMING:=true}"
 : "${CL_RESUME_FORCE:=false}"
+: "${CL_PARTIAL_WRITE_EVERY_SCENES:=32}"
+: "${CL_PROGRESS_EVERY_STEPS:=10}"
+: "${SKIP_COMPLETE_METHODS:=true}"
 : "${DO_OFFLINE:=true}"
 : "${DO_CLOSED_LOOP:=true}"
 : "${CUDA_DEVICES:=0,1}"
@@ -100,11 +103,16 @@ fi
 run_closed_loop_method() {
   local method="$1" idx="$2" gpu target_args=()
   gpu="${GPU_LIST[$((idx % ${#GPU_LIST[@]}))]}"
+  local output="$RUN/closed_loop_${method}.json"
+  if v50_bool_true "$SKIP_COMPLETE_METHODS" && python tools/check_closed_loop_artifact.py --output "$output" --quiet; then
+    echo "[REUSE] contact closed-loop method=$method is already complete: $output"
+    return 0
+  fi
   if [[ -n "$CL_TARGET_KEYS_FILE" ]]; then target_args=(--set "closed_loop.target_keys_file=$CL_TARGET_KEYS_FILE" --set closed_loop.require_target_keys=true); fi
   echo "[START] contact method=$method gpu=$gpu"
   run_env "$gpu" python -u -m ocrap.cli closed-loop \
     --config configs/external_baselines/contact_external_baselines.yaml \
-    --dataset "$CL_WOMD" --output "$RUN/closed_loop_${method}.json" \
+    --dataset "$CL_WOMD" --output "$output" \
     --set "closed_loop.method=$method" \
     --set "closed_loop.max_scenarios=$CL_MAX_SCENARIOS" \
     --set "closed_loop.max_bucket_targets=$CL_MAX_SCENARIOS" \
@@ -123,6 +131,13 @@ run_closed_loop_method() {
     --set "closed_loop.num_candidate_prefixes=$CL_NUM_CANDIDATES" \
     --set "closed_loop.num_recovery_options=$CL_NUM_RECOVERY_OPTIONS" \
     --set "closed_loop.save_partial=$CL_SAVE_PARTIAL" \
+    --set "closed_loop.partial_write_every_scenes=$CL_PARTIAL_WRITE_EVERY_SCENES" \
+    --set "closed_loop.progress_every_steps=$CL_PROGRESS_EVERY_STEPS" \
+    --set closed_loop.result_scene_detail=metrics \
+    --set closed_loop.scene_journal_detail=metrics \
+    --set closed_loop.memory_scene_detail=metrics \
+    --set closed_loop.include_scenes_in_result=false \
+    --set closed_loop.include_scenes_in_partial=false \
     --set "closed_loop.profile_timing=$CL_PROFILE_TIMING" \
     --set "closed_loop.audit_every_n_steps=$CL_AUDIT_EVERY_N_STEPS" \
     --set "closed_loop.resume_force=$CL_RESUME_FORCE" \

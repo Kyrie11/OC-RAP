@@ -43,6 +43,21 @@ SAVE_PARTIAL="${SAVE_PARTIAL:-true}"
 RESUME_FORCE="${RESUME_FORCE:-false}"
 PROFILE_TIMING="${PROFILE_TIMING:-true}"
 PREFLIGHT="${PREFLIGHT:-true}"
+PARTIAL_WRITE_EVERY_SCENES="${PARTIAL_WRITE_EVERY_SCENES:-32}"
+PROGRESS_EVERY_STEPS="${PROGRESS_EVERY_STEPS:-10}"
+# Full render traces are needed only for the ten selected qualitative reruns.
+# Population metric runs store one compact scene-summary row per target.
+if v50_bool_true "$RENDER_TRACE"; then
+  RESULT_SCENE_DETAIL="${RESULT_SCENE_DETAIL:-full}"
+  SCENE_JOURNAL_DETAIL="${SCENE_JOURNAL_DETAIL:-full}"
+  MEMORY_SCENE_DETAIL="${MEMORY_SCENE_DETAIL:-full}"
+else
+  RESULT_SCENE_DETAIL="${RESULT_SCENE_DETAIL:-metrics}"
+  SCENE_JOURNAL_DETAIL="${SCENE_JOURNAL_DETAIL:-metrics}"
+  MEMORY_SCENE_DETAIL="${MEMORY_SCENE_DETAIL:-metrics}"
+fi
+INCLUDE_SCENES_IN_RESULT="${INCLUDE_SCENES_IN_RESULT:-false}"
+INCLUDE_SCENES_IN_PARTIAL="${INCLUDE_SCENES_IN_PARTIAL:-false}"
 
 mkdir -p "$RUN_DIR" "$(dirname "$OUTPUT")" "$JAX_CACHE_DIR"
 
@@ -100,6 +115,13 @@ ARGS=(
   --set "closed_loop.render_max_agents=$RENDER_MAX_AGENTS"
   --set "closed_loop.save_partial=$SAVE_PARTIAL"
   --set "closed_loop.resume_force=$RESUME_FORCE"
+  --set "closed_loop.partial_write_every_scenes=$PARTIAL_WRITE_EVERY_SCENES"
+  --set "closed_loop.progress_every_steps=$PROGRESS_EVERY_STEPS"
+  --set "closed_loop.result_scene_detail=$RESULT_SCENE_DETAIL"
+  --set "closed_loop.scene_journal_detail=$SCENE_JOURNAL_DETAIL"
+  --set "closed_loop.memory_scene_detail=$MEMORY_SCENE_DETAIL"
+  --set "closed_loop.include_scenes_in_result=$INCLUDE_SCENES_IN_RESULT"
+  --set "closed_loop.include_scenes_in_partial=$INCLUDE_SCENES_IN_PARTIAL"
   --set "selection.gamma_rec=$GAMMA_REC"
   --set "waymax.jax_compilation_cache_dir=$JAX_CACHE_DIR"
   --set waymax.dataloader_include_sdc_paths=false

@@ -36,6 +36,10 @@ CL_WOMD="$(v50_normalize_womd_spec "$CL_WOMD" "$WOMD_NUM_SHARDS")"
 : "${CL_SAVE_PARTIAL:=true}"
 : "${CL_PROFILE_TIMING:=true}"
 : "${CL_RESUME_FORCE:=false}"
+: "${CL_PARTIAL_WRITE_EVERY_SCENES:=32}"
+: "${CL_PROGRESS_EVERY_STEPS:=10}"
+: "${SKIP_COMPLETE_METHODS:=true}"
+: "${USE_DYNAMIC_SCHEDULER:=auto}"
 : "${DO_OFFLINE:=true}"
 : "${DO_CLOSED_LOOP:=true}"
 : "${TRAIN_GAMEFORMER_IF_MISSING:=true}"
@@ -134,14 +138,27 @@ train_gameformer() {
     2>&1 | tee "$RUN/train_gameformer_lite.log"
 }
 
-if v50_bool_true "$FORCE_RETRAIN_GAMEFORMER" || ! checkpoint_valid; then
-  if ! v50_bool_true "$TRAIN_GAMEFORMER_IF_MISSING"; then
-    echo "Missing/invalid GameFormer checkpoint and training disabled: $GAMEFORMER_CHECKPOINT" >&2; exit 2
-  fi
-  train_gameformer
+GAMEFORMER_ARTIFACT_COMPLETE=false
+if v50_bool_true "$SKIP_COMPLETE_METHODS" && python tools/check_closed_loop_artifact.py \
+    --output "$RUN/closed_loop_gameformer_lite.json" --quiet; then
+  GAMEFORMER_ARTIFACT_COMPLETE=true
 fi
-checkpoint_valid || { echo "Invalid GameFormer checkpoint after training: $GAMEFORMER_CHECKPOINT" >&2; exit 2; }
-echo "[REUSE/READY] GameFormer checkpoint $GAMEFORMER_CHECKPOINT"
+NEED_GAMEFORMER_CHECKPOINT=true
+if ! v50_bool_true "$DO_OFFLINE" && [[ "$GAMEFORMER_ARTIFACT_COMPLETE" == true ]]; then
+  NEED_GAMEFORMER_CHECKPOINT=false
+fi
+if [[ "$NEED_GAMEFORMER_CHECKPOINT" == true ]]; then
+  if v50_bool_true "$FORCE_RETRAIN_GAMEFORMER" || ! checkpoint_valid; then
+    if ! v50_bool_true "$TRAIN_GAMEFORMER_IF_MISSING"; then
+      echo "Missing/invalid GameFormer checkpoint and training disabled: $GAMEFORMER_CHECKPOINT" >&2; exit 2
+    fi
+    train_gameformer
+  fi
+  checkpoint_valid || { echo "Invalid GameFormer checkpoint after training: $GAMEFORMER_CHECKPOINT" >&2; exit 2; }
+  echo "[REUSE/READY] GameFormer checkpoint $GAMEFORMER_CHECKPOINT"
+else
+  echo "[REUSE] complete GameFormer closed-loop artifact; checkpoint preparation skipped"
+fi
 
 if v50_bool_true "$DO_OFFLINE"; then
   run_env_cpu python -u -m ocrap.cli evaluate-baseline \
@@ -159,6 +176,11 @@ fi
 
 run_closed_loop_method() {
   local method="$1" gpu="$2"
+  local output="$RUN/closed_loop_${method}.json"
+  if v50_bool_true "$SKIP_COMPLETE_METHODS" && python tools/check_closed_loop_artifact.py --output "$output" --quiet; then
+    echo "[REUSE] near closed-loop method=$method is already complete: $output"
+    return 0
+  fi
   local config=configs/external_baselines/near_contact_external_baselines.yaml
   local label_mode="$CL_LABEL_MODE" max_scenes="$CL_MAX_SCENARIOS" exhaustive=false sparse=true
   local ckpt=() target_args=()
@@ -174,7 +196,7 @@ run_closed_loop_method() {
   echo "[START] near method=$method gpu=$gpu label_mode=$label_mode max_scenes=$max_scenes"
   run_env_gpu "$gpu" python -u -m ocrap.cli closed-loop \
     --config "$config" --dataset "$CL_WOMD" "${ckpt[@]}" \
-    --output "$RUN/closed_loop_${method}.json" \
+    --output "$output" \
     --set "closed_loop.method=$method" \
     --set "closed_loop.max_scenarios=$max_scenes" \
     --set "closed_loop.max_bucket_targets=$max_scenes" \
@@ -194,6 +216,13 @@ run_closed_loop_method() {
     --set "closed_loop.num_recovery_options=$CL_NUM_RECOVERY_OPTIONS" \
     --set "closed_loop.save_partial=$CL_SAVE_PARTIAL" \
     --set "closed_loop.resume_force=$CL_RESUME_FORCE" \
+    --set "closed_loop.partial_write_every_scenes=$CL_PARTIAL_WRITE_EVERY_SCENES" \
+    --set "closed_loop.progress_every_steps=$CL_PROGRESS_EVERY_STEPS" \
+    --set closed_loop.result_scene_detail=metrics \
+    --set closed_loop.scene_journal_detail=metrics \
+    --set closed_loop.memory_scene_detail=metrics \
+    --set closed_loop.include_scenes_in_result=false \
+    --set closed_loop.include_scenes_in_partial=false \
     --set "closed_loop.profile_timing=$CL_PROFILE_TIMING" \
     --set "closed_loop.audit_every_n_steps=$CL_AUDIT_EVERY_N_STEPS" \
     --set waymax.dataloader_include_sdc_paths=false \
@@ -230,8 +259,32 @@ run_closed_loop_fallback() {
   return "$failed"
 }
 
+supports_wait_pid_capture() {
+  # Bash 5.0 has ``wait -n`` but not ``wait -p``. Version-only checks are
+  # therefore incorrect on common enterprise distributions.
+  help wait 2>/dev/null | grep -Eq -- '(^|[[:space:]])-p([[:space:]]|[[:punct:]])'
+}
+
 if v50_bool_true "$DO_CLOSED_LOOP"; then
-  if ((BASH_VERSINFO[0] >= 5)); then run_closed_loop_dynamic "${CLOSED_LOOP_METHODS[@]}"; else run_closed_loop_fallback "${CLOSED_LOOP_METHODS[@]}"; fi
+  use_dynamic=false
+  case "${USE_DYNAMIC_SCHEDULER,,}" in
+    1|true|yes|on)
+      supports_wait_pid_capture || { echo "USE_DYNAMIC_SCHEDULER requested but this Bash lacks wait -p" >&2; exit 2; }
+      use_dynamic=true
+      ;;
+    auto|'')
+      supports_wait_pid_capture && use_dynamic=true
+      ;;
+    0|false|no|off) use_dynamic=false ;;
+    *) echo "Invalid USE_DYNAMIC_SCHEDULER=$USE_DYNAMIC_SCHEDULER" >&2; exit 2 ;;
+  esac
+  if [[ "$use_dynamic" == true ]]; then
+    echo "[SCHEDULER] dynamic wait -n/-p"
+    run_closed_loop_dynamic "${CLOSED_LOOP_METHODS[@]}"
+  else
+    echo "[SCHEDULER] portable fixed batches (wait -p unavailable or disabled)"
+    run_closed_loop_fallback "${CLOSED_LOOP_METHODS[@]}"
+  fi
 fi
 
 python - <<'PY'

@@ -12,6 +12,7 @@ export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"
 : "${ALLOW_INCOMPLETE_RUNS:=false}"
 : "${FPS:=10}"
 : "${REQUIRE_EXACT_VIDEO_SELECTION:=$BUILD_VIDEOS}"
+: "${VIDEO_SELECTION_FALLBACK:=true}"
 # Deterministic qualitative-example thresholds.  They can be tightened or
 # relaxed without changing the full benchmark results or unsafe-regression
 # guards in the selector.
@@ -92,6 +93,7 @@ NEAR_OCRAP_JOURNAL="$(scene_journal "$OCRAP_NEAR")"; NEAR_BASELINE_JOURNAL="$(sc
 CONTACT_OCRAP_JOURNAL="$(scene_journal "$OCRAP_CONTACT")"; CONTACT_BASELINE_JOURNAL="$(scene_journal "$CONTACT_BEST_RESULT")"
 SELECTION_EXACT_ARGS=()
 if [[ "$REQUIRE_EXACT_VIDEO_SELECTION" == true ]]; then SELECTION_EXACT_ARGS+=(--require-exact-positive-count); fi
+if [[ "$VIDEO_SELECTION_FALLBACK" == true ]]; then SELECTION_EXACT_ARGS+=(--fallback-topk-nonregressive); fi
 python tools/select_critical_scenes_v48_34.py \
   --method-scenes "$NEAR_OCRAP_JOURNAL" --control-scenes "$NEAR_BASELINE_JOURNAL" --regime near \
   --num-positive 5 --num-failure 0 --max-per-scene 1 "${SELECTION_EXACT_ARGS[@]}" \

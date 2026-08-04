@@ -25,6 +25,8 @@ source scripts/lib/v50_runtime.sh
 : "${RENDER_TRACES:=false}"      # full runs are metric-only; trace only selected 10 scenes later
 : "${RUN_ORACLE_CLOSED_LOOP:=false}"
 : "${CONTINUE_AFTER_REGIME_FAILURE:=true}"
+: "${SKIP_COMPLETE_METHODS:=true}"
+: "${USE_DYNAMIC_SCHEDULER:=auto}"
 : "${WOMD_NUM_SHARDS:=150}"
 : "${WOMD_VAL:=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord@150}"
 : "${WOMD_VAL_INTERACTIVE:=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation_interactive/validation_interactive_tfexample.tfrecord@150}"
@@ -61,6 +63,12 @@ finalize_index() {
   return 0
 }
 trap finalize_index EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+# Publish a recoverable index before starting long-running workers.
+python tools/build_external_baseline_run_index.py \
+  --root "$OUT" --closed-loop-enabled "$DO_CLOSED_LOOP" \
+  --oracle-enabled "$RUN_ORACLE_CLOSED_LOOP" --launcher-exit-code 1 >/dev/null || true
 
 failed=0
 if ! python tools/audit_external_baseline_fidelity.py \
@@ -81,6 +89,7 @@ common=(
   CL_RENDER_TRACE="$RENDER_TRACES"
   DO_OFFLINE="$DO_OFFLINE"
   DO_CLOSED_LOOP="$DO_CLOSED_LOOP"
+  SKIP_COMPLETE_METHODS="$SKIP_COMPLETE_METHODS"
   WOMD_NUM_SHARDS="$WOMD_NUM_SHARDS"
 )
 
@@ -103,6 +112,7 @@ run_regime() {
       if env "${common[@]}" RUN="$OUT/near" TRAIN_GAMEFORMER_IF_MISSING="$DO_TRAIN_NEAR" \
         FORCE_RETRAIN_GAMEFORMER="$FORCE_RETRAIN_ALL" CHECKPOINT_ROOT="$NEAR_CHECKPOINT_ROOT" \
         RUN_ORACLE_CLOSED_LOOP="$RUN_ORACLE_CLOSED_LOOP" CL_WOMD="$NEAR_CL_WOMD" \
+        USE_DYNAMIC_SCHEDULER="$USE_DYNAMIC_SCHEDULER" \
         bash scripts/run_near_contact_external_baselines_2gpu_optimized.sh \
         > >(tee "$OUT/near.launcher.log") 2>&1; then rc=0; else rc=$?; fi
       ;;

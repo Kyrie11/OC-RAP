@@ -167,7 +167,25 @@ def main(argv: list[str] | None = None) -> None:
         result = deploy(args.dataset, args.checkpoint, args.scene_id, args.time_index, args.output, calibration_json=args.calibration, delta=args.delta, cfg=cfg)
     else:
         raise AssertionError(args.cmd)
-    print(result)
+    if args.cmd == "closed-loop" and isinstance(result, dict):
+        # The full scene records are already persisted to RESULT.json and the
+        # append-only scene journal. Printing them again can create multi-GB
+        # launcher logs and can make a completed metric-only run look hung.
+        print({
+            "event": "closed_loop_complete",
+            "output": getattr(args, "output", None),
+            "method": result.get("method"),
+            "source": result.get("source"),
+            "num_scenes": result.get("num_scenes"),
+            "num_decisions": result.get("num_decisions"),
+            "bucket_target_count": result.get("bucket_target_count"),
+            "run_fingerprint": result.get("run_fingerprint"),
+            "metrics_valid": result.get("metrics_valid"),
+            "scene_storage_detail": result.get("scene_storage_detail"),
+            "scene_journal_detail": result.get("scene_journal_detail"),
+        })
+    else:
+        print(result)
 
 
 if __name__ == "__main__":

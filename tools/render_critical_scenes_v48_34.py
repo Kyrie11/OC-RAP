@@ -169,7 +169,10 @@ def main() -> int:
         def update(i):
             center=_shared_center(ct,mt,i)
             _draw_frame(axes[0],ct,i,args.control_name,center,args.view_radius_m,cc,cc_label,cs.get('render_context')); _draw_frame(axes[1],mt,i,args.method_name,center,args.view_radius_m,mc,mc_label,ms.get('render_context'))
-            delta=_delta_text(item,regime); fig.suptitle(f'{regime} | deterministic qualitative rank {item.get("category_rank")} | {key}\n{delta}',fontsize=11)
+            delta=_delta_text(item,regime)
+            tier=str(item.get('selection_tier') or 'strict_material_improvement')
+            improvements=', '.join(item.get('material_improvements') or []) or 'positive non-regressive score'
+            fig.suptitle(f'{regime} | rank {item.get("category_rank")} | {tier} | {key}\n{improvements} | {delta}',fontsize=10.5)
             return []
         ani=animation.FuncAnimation(fig,update,frames=frames,interval=1000/args.fps,blit=False)
         sid=str(ms.get('scene_id') or 'scene'); ti=ms.get('target_time_index'); kh=hashlib.sha1(key.encode()).hexdigest()[:8]; stem=f'{regime}_{item.get("category_rank",0)}_{sid}_t{ti}_{kh}'
@@ -180,11 +183,11 @@ def main() -> int:
         else:
             out=args.output_dir/f'{stem}.gif'; writer=animation.PillowWriter(fps=args.fps)
         ani.save(out,writer=writer); plt.close(fig)
-        record={'target_key':key,'scene_id':ms.get('scene_id'),'target_time_index':ms.get('target_time_index'),'category':item.get('category'),'category_rank':item.get('category_rank'),'selection_score':item.get('score'),'material_improvements':item.get('material_improvements'),'selection_terms':item.get('terms'),'video':str(out),'num_control_frames':len(ct),'num_method_frames':len(mt),'fps':args.fps,'view_radius_m':args.view_radius_m}
-        index.append(record); csv_rows.append({k:record.get(k) for k in ('target_key','scene_id','target_time_index','category','category_rank','selection_score','video','num_control_frames','num_method_frames','fps','view_radius_m')})
+        record={'target_key':key,'scene_id':ms.get('scene_id'),'target_time_index':ms.get('target_time_index'),'category':item.get('category'),'category_rank':item.get('category_rank'),'selection_tier':item.get('selection_tier'),'selection_score':item.get('score'),'material_improvements':item.get('material_improvements'),'selection_terms':item.get('terms'),'video':str(out),'num_control_frames':len(ct),'num_method_frames':len(mt),'fps':args.fps,'view_radius_m':args.view_radius_m}
+        index.append(record); csv_rows.append({k:record.get(k) for k in ('target_key','scene_id','target_time_index','category','category_rank','selection_tier','selection_score','video','num_control_frames','num_method_frames','fps','view_radius_m')})
     doc={'event':'critical_scene_recovery_videos_v50','exploratory_qualitative_only':True,'paper_population_claim_allowed':False,'rendering_scope':'nearby WOMD roadgraph polylines, agent boxes, ego trail, clearance circle and observed-overlap/causal-contact anchor; no raster image dependency','method_scenes':str(args.method_scenes),'control_scenes':str(args.control_scenes),'selection':str(args.selection),'method_name':args.method_name,'control_name':args.control_name,'videos':index}
     (args.output_dir/'VIDEO_INDEX.json').write_text(json.dumps(doc,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
     with (args.output_dir/'VIDEO_INDEX.csv').open('w',newline='',encoding='utf-8') as f:
-        fields=['target_key','scene_id','target_time_index','category','category_rank','selection_score','video','num_control_frames','num_method_frames','fps','view_radius_m']; w=csv.DictWriter(f,fieldnames=fields); w.writeheader(); w.writerows(csv_rows)
+        fields=['target_key','scene_id','target_time_index','category','category_rank','selection_tier','selection_score','video','num_control_frames','num_method_frames','fps','view_radius_m']; w=csv.DictWriter(f,fieldnames=fields); w.writeheader(); w.writerows(csv_rows)
     print(json.dumps({'event':doc['event'],'num_videos':len(index),'output_dir':str(args.output_dir)})); return 0
 if __name__=='__main__': raise SystemExit(main())

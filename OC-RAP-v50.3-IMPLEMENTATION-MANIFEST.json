@@ -1,0 +1,157 @@
+{
+  "release": "OC-RAP-v50.3-recovery-hotfix",
+  "generated_at_utc": "2026-08-04T10:53:50.792903+00:00",
+  "input_code": "OC-RAP(7).zip / V50.2",
+  "input_results": "all_regime_external_baselines_v50_1_full.zip",
+  "confirmed_external_failures": [
+    {
+      "regime": "safe",
+      "method": "nominal_replay",
+      "cause": "reporting alias nominal_replay was passed as closed_loop.method; runtime accepts nominal"
+    },
+    {
+      "regime": "near",
+      "cause": "launcher assumed Bash >=5 supports wait -p; target Bash exposes wait -n but not wait -p"
+    }
+  ],
+  "ocrap_failure_boundary": {
+    "exact_traceback_available": false,
+    "reason": "The uploaded result package did not include runs/ocrap_three_regime_closed_loop_v50_1_full logs/progress/journals.",
+    "code_proven_defect": "V50.2 metric-only retained decisions in memory/journal/partial/final JSON and printed the entire result to launcher logs.",
+    "most_likely_effect": "excessive RAM/disk/log serialization and possible SIGKILL; SIGKILL bypasses EXIT trap, leaving no top-level index"
+  },
+  "checkpoint_reuse": {
+    "retraining_required": false,
+    "observed_learning_based_checkpoints": [
+      "safe/wayformer_bc",
+      "safe/gameformer_lite",
+      "safe/betopnet_lite",
+      "near/gameformer_lite"
+    ],
+    "policy": "Recovery scripts disable training and fail explicitly if a required checkpoint is absent or invalid."
+  },
+  "key_changes": [
+    "True metric-only scene storage and compact journals",
+    "Stream finalize old journals and rebuild results/progress without rerunning complete rollouts",
+    "Artifact-authoritative run index recovery and early index creation",
+    "Safe runtime alias nominal_replay -> nominal",
+    "Bash wait -p capability detection and portable scheduler fallback",
+    "Skip complete methods/regimes and reuse existing checkpoints",
+    "Metric-only full benchmark followed by selected 5+5 full-trace reruns for MP4"
+  ],
+  "validation": {
+    "python_compileall": "passed",
+    "bash_syntax": "passed",
+    "focused_pytest": "26 passed",
+    "test_files": [
+      "tests/test_v50_3_recovery_hotfix.py",
+      "tests/test_v50_full_regime_runtime.py",
+      "tests/test_external_baseline_cuda_runtime.py",
+      "tests/test_closed_loop_resume_optimization.py",
+      "tests/test_ocrap_closed_loop_hotpath.py"
+    ],
+    "mp4_smoke": "H.264 1280x640 yuv420p passed ffprobe (from local synthetic smoke test)"
+  },
+  "changed_files": [
+    {
+      "path": "OC-RAP-v50.3-RECOVERY-HOTFIX-ZH.md",
+      "size_bytes": 8657,
+      "sha256": "4937371817861bc0b07f9819ab944b813bcfdaf33728d4cc56ea83f74a1633bf"
+    },
+    {
+      "path": "OC-RAP-v50.3-run-commands-ZH.txt",
+      "size_bytes": 5997,
+      "sha256": "850c321081af9855be62ff952b95a0198e5817728611f9632be86c1b707969f6"
+    },
+    {
+      "path": "scripts/build_external_comparison_artifacts.sh",
+      "size_bytes": 8337,
+      "sha256": "0c38b7ce43044829ab5eafe0403e2e563aba71966346b07f0ba00bfe49ee061b"
+    },
+    {
+      "path": "scripts/recover_v50_1_full_pipeline_no_retrain.sh",
+      "size_bytes": 4077,
+      "sha256": "9c128fa1f226dc55d489de6affbd4469f2a2ac3a6b6e14852bde178715fbd152"
+    },
+    {
+      "path": "scripts/run_all_regime_external_baselines_optimized.sh",
+      "size_bytes": 5964,
+      "sha256": "e373467a3293ad1956e21b2e73c42d547a6448bfd183633ca2a1ab39840ce91d"
+    },
+    {
+      "path": "scripts/run_contact_external_baselines.sh",
+      "size_bytes": 8045,
+      "sha256": "cd9e2b546e150d77a9426c27781771ed778a7925959ccfc1d7bc302a4913e37a"
+    },
+    {
+      "path": "scripts/run_near_contact_external_baselines_2gpu_optimized.sh",
+      "size_bytes": 14539,
+      "sha256": "13623a7d8d0739d04f03a581aab63a3f5ec917067c4d2843b0904eee78485828"
+    },
+    {
+      "path": "scripts/run_ocrap_closed_loop_optimized.sh",
+      "size_bytes": 6657,
+      "sha256": "0a7caf709efe5fba5d5b340c739e2d35f5866a4d1427d22fedc55ab93add71db"
+    },
+    {
+      "path": "scripts/run_ocrap_three_regime_closed_loop.sh",
+      "size_bytes": 8241,
+      "sha256": "cab14eae1f07a249f55566324faf1755455584df110166ae19450239760da7bb"
+    },
+    {
+      "path": "scripts/run_safe_regime_external_baselines.sh",
+      "size_bytes": 11510,
+      "sha256": "ee98779321518f04e4de1cba643d24ead0e1dd6420cc15fb1a5bfa5ca5f81a50"
+    },
+    {
+      "path": "scripts/run_selected_recovery_video_traces.sh",
+      "size_bytes": 9188,
+      "sha256": "430b643cf31f29805d3361288be482a4ebb3b3808d1a6b1aedef4709507642df"
+    },
+    {
+      "path": "src/ocrap/cli/main.py",
+      "size_bytes": 9232,
+      "sha256": "9e6e67a1b7e3b5af135052a0afc9c89684ceeb9b746ffabc479f35bc1c157684"
+    },
+    {
+      "path": "src/ocrap/simulation/closed_loop_runner.py",
+      "size_bytes": 170899,
+      "sha256": "6e838230e3b331cef71428cc429cb31dad1bd3964cb953421343d7e895ab820d"
+    },
+    {
+      "path": "tests/test_v50_3_recovery_hotfix.py",
+      "size_bytes": 6039,
+      "sha256": "a19b60202d4abd9f1f677b3671f02e1fe3d145d441a5b3ad09c8bc35b360e6b6"
+    },
+    {
+      "path": "tools/build_external_baseline_run_index.py",
+      "size_bytes": 5144,
+      "sha256": "4893807c59a0d508ba21f2ea4b74a1e7a35e8eb6a8d1259ba4e45d9335dab7a6"
+    },
+    {
+      "path": "tools/build_ocrap_three_regime_index.py",
+      "size_bytes": 3549,
+      "sha256": "372895eb2b2b5eaa3245240734c1ca6bfcd173e2e61744c00bc4fe00ec44bc4c"
+    },
+    {
+      "path": "tools/check_closed_loop_artifact.py",
+      "size_bytes": 1361,
+      "sha256": "a8a4ba588f7dbb235f158660849f4a3543e1c313084f1147ccba6279649bf23a"
+    },
+    {
+      "path": "tools/finalize_closed_loop_from_journal.py",
+      "size_bytes": 6361,
+      "sha256": "6573480224206fea601dbd182015c1ff9a399e63540d1913407d029d0b86c367"
+    },
+    {
+      "path": "tools/render_critical_scenes_v48_34.py",
+      "size_bytes": 12698,
+      "sha256": "7246cf31f118c5a5917fc767404232c353b46aec4f3f4b2f8f13eb19962ee1d0"
+    },
+    {
+      "path": "tools/select_critical_scenes_v48_34.py",
+      "size_bytes": 15438,
+      "sha256": "30e18bd9b5bef50ca6e330a05ccb3d720f47fd76739232950c350d6948d6aca2"
+    }
+  ]
+}

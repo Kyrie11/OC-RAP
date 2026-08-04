@@ -2080,6 +2080,44 @@ def _rollout_one_scene(
         out["render_trace_schema"] = "ocrap.v50.agent_boxes_roadgraph.v2"
     return out
 
+_HEAVY_SCENE_STORAGE_KEYS = {
+    "decisions",
+    "render_trace",
+    "render_context",
+    "render_trace_schema",
+    "state_xy_trace",
+}
+
+
+def _normalize_scene_storage_detail(value: Any, *, default: str = "full") -> str:
+    detail = str(value or default).strip().lower().replace("-", "_")
+    aliases = {"compact": "metrics", "summary": "metrics", "metric": "metrics", "trace": "full"}
+    detail = aliases.get(detail, detail)
+    if detail not in {"full", "metrics"}:
+        raise ValueError(f"closed_loop scene storage detail must be 'full' or 'metrics', got {value!r}")
+    return detail
+
+
+def _scene_storage_view(scene: dict[str, Any], detail: str) -> dict[str, Any]:
+    """Return a storage-safe scene record without changing evaluated metrics.
+
+    ``metrics`` removes step-by-step decisions and render payloads. All scalar
+    scene metrics, target identity, intervention summaries, macro counts and
+    timing information remain available for aggregation, paired tables and
+    qualitative-scene selection. Selected video reruns use ``full`` journals.
+    """
+    detail = _normalize_scene_storage_detail(detail)
+    if detail == "full":
+        return scene
+    compact = {
+        key: value
+        for key, value in scene.items()
+        if key not in _HEAVY_SCENE_STORAGE_KEYS and not str(key).endswith("_trace")
+    }
+    compact["scene_storage_detail"] = "metrics"
+    return compact
+
+
 def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, source: str) -> dict[str, Any]:
     keys = ["closed_loop_FRA_exec", "closed_loop_FRA_cand", "closed_loop_DRS", "closed_loop_ODG", "closed_loop_post_contact_deployability", "closed_loop_artifact_selection_rate", "closed_loop_audit_candidate_count", "closed_loop_audit_best_R_dep", "closed_loop_audit_best_DRS", "closed_loop_audit_selected_R_dep_regret", "closed_loop_audit_best_PCD", "closed_loop_audit_selected_PCD_regret", "closed_loop_audit_recoverable_candidate_rate", "closed_loop_audit_selector_miss_rate", "closed_loop_audit_pcd_selector_miss_rate", "closed_loop_audit_paper_best_PCD", "closed_loop_audit_paper_selected_PCD_regret", "closed_loop_audit_paper_pcd_selector_miss_rate", "closed_loop_bounded_NUP", "closed_loop_pred_r_dep", "closed_loop_pred_gap", "closed_loop_pred_DRS_proxy", "closed_loop_direct_recovery_value", "closed_loop_direct_recovery_std", "closed_loop_direct_recovery_advantage", "closed_loop_nominal_deviation", "intervention_rate", "intervention_episode_rate", "mean_intervention_run_length", "max_intervention_run_length", "macro_switch_rate", "external_sparse_label_candidates_mean", "external_sparse_full_candidates_mean"]
     agg: dict[str, Any] = {
@@ -2388,6 +2426,13 @@ _RESUME_OPERATIONAL_KEYS = {
     "progress",
     "progress_every_steps",
     "keep_resume_files_after_success",
+    # Serialization controls do not affect actions or metrics and therefore
+    # must not invalidate a compatible interrupted run.
+    "result_scene_detail",
+    "scene_journal_detail",
+    "memory_scene_detail",
+    "include_scenes_in_result",
+    "include_scenes_in_partial",
 }
 
 
@@ -2732,6 +2777,15 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
     resume_allow_legacy = bool(cl_cfg.get("resume_allow_legacy_partial", True))
     resume_fsync = bool(cl_cfg.get("resume_fsync", False))
     partial_every = max(1, int(cl_cfg.get("partial_write_every_scenes", 4) or 4))
+    result_scene_detail = _normalize_scene_storage_detail(cl_cfg.get("result_scene_detail", "full"))
+    journal_scene_detail = _normalize_scene_storage_detail(
+        cl_cfg.get("scene_journal_detail", result_scene_detail)
+    )
+    memory_scene_detail = _normalize_scene_storage_detail(
+        cl_cfg.get("memory_scene_detail", journal_scene_detail)
+    )
+    include_scenes_in_result = bool(cl_cfg.get("include_scenes_in_result", True))
+    include_scenes_in_partial = bool(cl_cfg.get("include_scenes_in_partial", True))
     target_spec = str(cl_cfg.get("bucket_dataset", cl_cfg.get("target_dataset", "")) or "").strip()
     targets = _load_closed_loop_targets(target_spec, local)
     if target_spec and bool(cl_cfg.get("require_bucket_targets", False)) and not targets:
@@ -2794,6 +2848,10 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
             force=resume_force,
             allow_legacy=resume_allow_legacy,
         )
+        # Old v50 journals may contain full decision traces. Compact them in
+        # memory immediately so a resumed metric-only run does not recreate the
+        # original RAM spike.
+        scene_results = [_scene_storage_view(scene, memory_scene_detail) for scene in scene_results]
     else:
         scene_results = []
         for stale in (partial_path, journal_path, progress_path):
@@ -2894,20 +2952,21 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
                 external_model_cfg=external_model_cfg,
                 external_device=external_device,
             )
-            scene_results.append(scene_result)
-            completed_keys.add(_scene_resume_key(scene_result))
+            memory_scene = _scene_storage_view(scene_result, memory_scene_detail)
+            journal_scene = _scene_storage_view(scene_result, journal_scene_detail)
+            scene_results.append(memory_scene)
+            completed_keys.add(_scene_resume_key(memory_scene))
             matched_targets += int(bool(targets))
             new_scenes_since_partial += 1
 
-            # The JSONL journal records every completed rollout in O(scene_size)
-            # time.  Full aggregate snapshots are deliberately less frequent so
-            # a long run does not repeatedly serialize all previous scenes.
+            # The JSONL journal is the authoritative scene-granular resume and
+            # pairing artifact. Metric-only runs keep it compact; selective
+            # video reruns request full render traces explicitly.
             if resume or save_partial:
-                _append_scene_journal(journal_path, run_fingerprint, scene_result, fsync=resume_fsync)
+                _append_scene_journal(journal_path, run_fingerprint, journal_scene, fsync=resume_fsync)
             if save_partial and new_scenes_since_partial >= partial_every:
                 partial = _aggregate_with_buckets(scene_results, method, source)
                 partial.update({
-                    "scenes": scene_results,
                     "partial": True,
                     "run_fingerprint": run_fingerprint,
                     "resume_supported": True,
@@ -2917,7 +2976,11 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
                     "raw_scenarios_seen": raw_seen,
                     "raw_scenarios_seen_this_run": raw_seen_this_run,
                     "target_id_matching": "official_or_legacy_alias_with_provenance_checked_source_index_fallback",
+                    "scene_storage_detail": memory_scene_detail,
+                    "scene_journal_detail": journal_scene_detail,
                 })
+                if include_scenes_in_partial:
+                    partial["scenes"] = scene_results
                 write_json(partial, partial_path, fsync=resume_fsync)
                 new_scenes_since_partial = 0
             _write_closed_loop_progress(
@@ -2947,7 +3010,6 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
     if save_partial:
         partial = _aggregate_with_buckets(scene_results, method, source)
         partial.update({
-            "scenes": scene_results,
             "partial": True,
             "run_fingerprint": run_fingerprint,
             "resume_supported": True,
@@ -2957,7 +3019,11 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
             "raw_scenarios_seen": raw_seen,
             "raw_scenarios_seen_this_run": raw_seen_this_run,
             "target_id_matching": "official_or_legacy_alias_with_provenance_checked_source_index_fallback",
+            "scene_storage_detail": memory_scene_detail,
+            "scene_journal_detail": journal_scene_detail,
         })
+        if include_scenes_in_partial:
+            partial["scenes"] = scene_results
         write_json(partial, partial_path, fsync=resume_fsync)
     result = _aggregate_with_buckets(scene_results, method, source)
     result["bucket_dataset"] = target_spec or None
@@ -2985,7 +3051,11 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
         )
     if targets and matched_targets == 0:
         result.setdefault("warnings", []).append("No offline bucket scene_id matched the supplied WOMD raw dataset/pattern. Check WOMD_VAL vs WOMD_VAL_INTERACTIVE and scenario_start_index/raw_max_scenarios.")
-    result["scenes"] = scene_results
+    if include_scenes_in_result:
+        result["scenes"] = [_scene_storage_view(scene, result_scene_detail) for scene in scene_results]
+    result["scene_storage_detail"] = memory_scene_detail
+    result["scene_journal_detail"] = journal_scene_detail
+    result["scenes_embedded"] = bool(include_scenes_in_result)
     result["gamma_rec"] = gamma
     eff_wx = local.get("waymax", {}) if isinstance(local.get("waymax", {}), dict) else {}
     eff_cl = local.get("closed_loop", {}) if isinstance(local.get("closed_loop", {}), dict) else {}
@@ -3001,6 +3071,11 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
         "audit_lightweight_serialization": True,
         "partial_write_every_scenes": int(partial_every),
         "scene_journal": True,
+        "result_scene_detail": result_scene_detail,
+        "scene_journal_detail": journal_scene_detail,
+        "memory_scene_detail": memory_scene_detail,
+        "include_scenes_in_result": bool(include_scenes_in_result),
+        "include_scenes_in_partial": bool(include_scenes_in_partial),
     }
     result["gamma_rec_by_bucket"] = (local.get("selection", {}) or {}).get("gamma_rec_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {}
     result["selector_config"] = {

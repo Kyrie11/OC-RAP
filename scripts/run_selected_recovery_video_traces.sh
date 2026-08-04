@@ -102,6 +102,9 @@ run_external_trace() {
       --set closed_loop.force_teacher_baselines=false --set closed_loop.external_sparse_labels=true \
       --set "closed_loop.num_candidate_prefixes=$NUM_CANDIDATES" --set "closed_loop.num_recovery_options=$NUM_RECOVERY_OPTIONS" \
       --set closed_loop.save_partial=true --set closed_loop.resume_force=false --set closed_loop.profile_timing=true \
+      --set closed_loop.partial_write_every_scenes=5 --set closed_loop.progress_every_steps=10 \
+      --set closed_loop.result_scene_detail=full --set closed_loop.scene_journal_detail=full --set closed_loop.memory_scene_detail=full \
+      --set closed_loop.include_scenes_in_result=false --set closed_loop.include_scenes_in_partial=false \
       --set waymax.dataloader_include_sdc_paths=false --set waymax.compute_future_metrics=false --set waymax.teacher_metrics_stride=0 --set waymax.use_jit_scan_rollouts=true \
       2>&1 | tee "$run_dir/closed_loop_${method}.log"
 }

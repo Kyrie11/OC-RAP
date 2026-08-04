@@ -54,7 +54,14 @@ def _scene_rows(path: Path) -> dict[str, dict[str, Any]]:
                 key=f"{sid}:t{t}" if sid and t is not None else sid
             if not key: raise ValueError(f"scene row without target/scene key in {path}")
             if key in rows: raise ValueError(f"duplicate scene key {key} in {path}")
-            rows[key]=scene
+            # Population journals from v50.1 may still contain every decision
+            # and render frame. Qualitative selection needs only scalar scene
+            # summaries, so discard heavy payloads while streaming the file.
+            rows[key]={
+                k:v for k,v in scene.items()
+                if k not in {"decisions","render_trace","render_context","render_trace_schema","state_xy_trace"}
+                and not str(k).endswith("_trace")
+            }
     if not rows: raise ValueError(f"empty paired scene journal: {path}")
     return rows
 
@@ -78,7 +85,7 @@ def _unsafe_regression(regime: str, method: dict[str, Any], control: dict[str, A
     return any((_delta(method, control, name) or 0.0) > 1e-9 for name in names)
 
 
-def _score(regime: str, method: dict[str, Any], control: dict[str, Any], args: argparse.Namespace) -> tuple[float,dict[str,float|None],bool,list[str],list[str]]:
+def _score(regime: str, method: dict[str, Any], control: dict[str, Any], args: argparse.Namespace) -> tuple[float,dict[str,float|None],bool,bool,list[str],list[str]]:
     missing=[n for n in sorted(REQUIRED[regime]) if _metric(method,n) is None or _metric(control,n) is None]
     common={
         "bounded_nup":_delta(method,control,"closed_loop_bounded_NUP"),
@@ -132,8 +139,14 @@ def _score(regime: str, method: dict[str, Any], control: dict[str, Any], args: a
         )
     else: raise ValueError(regime)
     intervention=_finite_or_none(method.get("intervention_rate"))
-    eligible=not missing and intervention is not None and intervention>0 and score>=args.minimum_positive_score and bool(material) and not material_regression and not _unsafe_regression(regime,method,control)
-    return float(score),terms,eligible,missing,material
+    unsafe_regression = _unsafe_regression(regime,method,control)
+    fallback_eligible = (
+        not missing and intervention is not None and intervention > 0
+        and score >= args.minimum_positive_score
+        and not material_regression and not unsafe_regression
+    )
+    eligible = fallback_eligible and bool(material)
+    return float(score),terms,eligible,fallback_eligible,missing,material
 
 
 def main() -> int:
@@ -144,6 +157,7 @@ def main() -> int:
     ap.add_argument("--num-positive",type=int,default=5); ap.add_argument("--num-failure",type=int,default=0)
     ap.add_argument("--max-per-scene",type=int,default=1); ap.add_argument("--minimum-positive-score",type=float,default=0.0)
     ap.add_argument("--require-exact-positive-count",action="store_true")
+    ap.add_argument("--fallback-topk-nonregressive",action="store_true",help="Fill an exact 5-scene qualitative set with positive-score, non-regressive scenes when strict material thresholds yield fewer examples.")
     ap.add_argument("--min-near-ttc-gain-s",type=float,default=0.25); ap.add_argument("--min-near-clearance-gain-m",type=float,default=0.25); ap.add_argument("--min-near-exposure-reduction-s",type=float,default=0.20)
     ap.add_argument("--max-near-ttc-regression-s",type=float,default=0.10); ap.add_argument("--max-near-clearance-regression-m",type=float,default=0.10); ap.add_argument("--max-near-exposure-regression-s",type=float,default=0.10)
     ap.add_argument("--min-contact-terminal-clearance-gain-m",type=float,default=0.50); ap.add_argument("--min-contact-auc-gain-m",type=float,default=0.50); ap.add_argument("--min-contact-clearance-gain-m",type=float,default=0.25); ap.add_argument("--min-contact-overlap-duration-reduction-s",type=float,default=0.20)
@@ -153,8 +167,8 @@ def main() -> int:
     if set(method)!=set(control): raise SystemExit(f"unpaired scene sets: method_only={sorted(set(method)-set(control))[:10]} control_only={sorted(set(control)-set(method))[:10]}")
     rows=[]
     for key in sorted(method):
-        score,terms,eligible,missing,material=_score(args.regime,method[key],control[key],args)
-        rows.append({"target_key":key,"scene_id":method[key].get("scene_id"),"target_time_index":method[key].get("target_time_index"),"regime":args.regime,"score":score,"eligible_positive_example":eligible,"missing_required_metrics":missing,"material_improvements":material,"method_intervention_rate":_finite_or_none(method[key].get("intervention_rate")),"terms":terms})
+        score,terms,eligible,fallback_eligible,missing,material=_score(args.regime,method[key],control[key],args)
+        rows.append({"target_key":key,"scene_id":method[key].get("scene_id"),"target_time_index":method[key].get("target_time_index"),"regime":args.regime,"score":score,"eligible_positive_example":eligible,"fallback_nonregressive_example":fallback_eligible,"missing_required_metrics":missing,"material_improvements":material,"method_intervention_rate":_finite_or_none(method[key].get("intervention_rate")),"terms":terms})
     positive_pool=[r for r in rows if r["eligible_positive_example"]]
     positive=[]; scene_counts={}
     for row in sorted(positive_pool,key=lambda r:(-r["score"],str(r["target_key"]))):
@@ -162,8 +176,19 @@ def main() -> int:
         if scene_counts.get(sid,0)>=max(args.max_per_scene,1): continue
         positive.append(row); scene_counts[sid]=scene_counts.get(sid,0)+1
         if len(positive)>=max(args.num_positive,0): break
+    strict_count=len(positive)
+    if args.fallback_topk_nonregressive and len(positive)<max(args.num_positive,0):
+        selected_keys={r["target_key"] for r in positive}
+        fallback_pool=[r for r in rows if r["fallback_nonregressive_example"] and r["target_key"] not in selected_keys]
+        for row in sorted(fallback_pool,key=lambda r:(-r["score"],str(r["target_key"]))):
+            sid=str(row.get("scene_id") or row["target_key"])
+            if scene_counts.get(sid,0)>=max(args.max_per_scene,1): continue
+            row={**row,"selection_tier":"best_available_nonregressive"}
+            positive.append(row); scene_counts[sid]=scene_counts.get(sid,0)+1
+            if len(positive)>=max(args.num_positive,0): break
+    positive=[({**r,"selection_tier":r.get("selection_tier","strict_material_improvement")}) for r in positive]
     if args.require_exact_positive_count and len(positive)!=args.num_positive:
-        raise SystemExit(f"requested {args.num_positive} eligible positive {args.regime} scenes, found {len(positive)} after diversity filtering")
+        raise SystemExit(f"requested {args.num_positive} positive/non-regressive {args.regime} scenes, found {len(positive)} after diversity filtering (strict={strict_count})")
     pkeys={r["target_key"] for r in positive}; failure=[]; fcounts={}
     for row in sorted((r for r in rows if r["target_key"] not in pkeys),key=lambda r:(r["score"],str(r["target_key"]))):
         sid=str(row.get("scene_id") or row["target_key"])
@@ -177,7 +202,7 @@ def main() -> int:
         "event":"v50_critical_scene_selection","regime":args.regime,"exploratory_qualitative_only":True,"paper_population_claim_allowed":False,
         "selection_process":"deterministic post-hoc selection from paired metric journals using published thresholds and target-key tie breaking",
         "not_population_level_evidence":True,"diversity_max_per_scene":args.max_per_scene,"minimum_positive_score":args.minimum_positive_score,
-        "num_paired_scenes":len(rows),"num_positive_eligible_scenes":len(positive_pool),"required_metrics":sorted(REQUIRED[args.regime]),
+        "num_paired_scenes":len(rows),"num_positive_eligible_scenes":len(positive_pool),"num_strict_selected_scenes":strict_count,"num_fallback_selected_scenes":max(0,len(positive)-strict_count),"required_metrics":sorted(REQUIRED[args.regime]),
         "thresholds":{k:v for k,v in vars(args).items() if k.startswith(('min_','max_')) and k not in {'max_per_scene'}},
         "selected":selected,"target_keys":[r["target_key"] for r in selected],"all_scene_scores":sorted(rows,key=lambda r:(-r["score"],str(r["target_key"])))
     }
