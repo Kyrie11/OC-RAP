@@ -39,13 +39,13 @@ fi
 
 NEAR_WOMD="$(v50_normalize_womd_spec "$NEAR_WOMD" "$WOMD_NUM_SHARDS")"
 CONTACT_WOMD="$(v50_normalize_womd_spec "$CONTACT_WOMD" "$WOMD_NUM_SHARDS")"
-NEAR_KEYS="$SELECTION_ROOT/near_target_keys.json"
-CONTACT_KEYS="$SELECTION_ROOT/contact_target_keys.json"
-NEAR_SELECTION="$SELECTION_ROOT/near_selection.json"
-CONTACT_SELECTION="$SELECTION_ROOT/contact_selection.json"
+NEAR_SOURCE_KEYS="$SELECTION_ROOT/near_target_keys.json"
+CONTACT_SOURCE_KEYS="$SELECTION_ROOT/contact_target_keys.json"
+NEAR_SOURCE_SELECTION="$SELECTION_ROOT/near_selection.json"
+CONTACT_SOURCE_SELECTION="$SELECTION_ROOT/contact_selection.json"
 NEAR_BEST="$SELECTION_ROOT/near_best_external.json"
 CONTACT_BEST="$SELECTION_ROOT/contact_best_external.json"
-for p in "$NEAR_KEYS" "$CONTACT_KEYS" "$NEAR_SELECTION" "$CONTACT_SELECTION" "$NEAR_BEST" "$CONTACT_BEST"; do [[ -f "$p" ]] || { echo "Missing selection artifact: $p" >&2; exit 2; }; done
+for p in "$NEAR_SOURCE_KEYS" "$CONTACT_SOURCE_KEYS" "$NEAR_SOURCE_SELECTION" "$CONTACT_SOURCE_SELECTION" "$NEAR_BEST" "$CONTACT_BEST"; do [[ -f "$p" ]] || { echo "Missing selection artifact: $p" >&2; exit 2; }; done
 
 read -r NEAR_METHOD CONTACT_METHOD NEAR_GAMMA CONTACT_GAMMA < <(python - "$NEAR_BEST" "$CONTACT_BEST" "$GAMMA_REC_JSON" <<'PY'
 import json,sys
@@ -58,7 +58,23 @@ IFS=',' read -r -a GPUS <<< "$CUDA_DEVICES"; ((${#GPUS[@]})) || GPUS=(0)
 GPU0="${GPUS[0]}"; GPU1="${GPUS[1]:-${GPUS[0]}}"
 mkdir -p "$OUT/near/ocrap" "$OUT/near/baseline" "$OUT/contact/ocrap" "$OUT/contact/baseline" "$OUT/videos"
 
-# Fail before launching two workers if either WOMD shard set or selected target set is invalid.
+# Historical full-run journals can carry legacy waymax_<hash> target keys even
+# after the bucket was rebuilt with new canonical scene ids. Resolve them once,
+# explicitly and uniquely, using exact aliases or the stable __wx source index.
+NEAR_KEYS="$OUT/near/resolved_target_keys.json"
+CONTACT_KEYS="$OUT/contact/resolved_target_keys.json"
+NEAR_SELECTION="$OUT/near/resolved_selection.json"
+CONTACT_SELECTION="$OUT/contact/resolved_selection.json"
+python tools/resolve_selected_targets_v50.py \
+  --dataset "$NEAR_BUCKET" --split test --selection "$NEAR_SOURCE_SELECTION" --category positive_toy_example --max-items 5 \
+  --target-keys-output "$NEAR_KEYS" --selection-output "$NEAR_SELECTION" \
+  --report-output "$OUT/near/target_resolution.json"
+python tools/resolve_selected_targets_v50.py \
+  --dataset "$CONTACT_BUCKET" --split test --selection "$CONTACT_SOURCE_SELECTION" --category positive_toy_example --max-items 5 \
+  --target-keys-output "$CONTACT_KEYS" --selection-output "$CONTACT_SELECTION" \
+  --report-output "$OUT/contact/target_resolution.json"
+
+# Fail before launching two workers if either WOMD shard set or resolved target set is invalid.
 python tools/check_closed_loop_dataset_support.py --dataset "$NEAR_BUCKET" --split test --womd "$NEAR_WOMD" --target-keys-file "$NEAR_KEYS" --require-target-keys --output "$OUT/near/preflight.json"
 python tools/check_closed_loop_dataset_support.py --dataset "$CONTACT_BUCKET" --split test --womd "$CONTACT_WOMD" --target-keys-file "$CONTACT_KEYS" --require-target-keys --output "$OUT/contact/preflight.json"
 

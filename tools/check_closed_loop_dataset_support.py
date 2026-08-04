@@ -91,7 +91,16 @@ def _source_role(text: str) -> str:
     return "unknown"
 
 
-def _root_label(path: Path) -> str:
+def _dataset_label(path: Path) -> str:
+    """Return the exact bucket label used by the closed-loop runner."""
+    try:
+        return path.parent.parent.name if path.parent.name == "samples" else path.parent.name
+    except Exception:
+        return "dataset"
+
+
+def _regime_label(path: Path) -> str:
+    """Return a human-readable regime label without changing target-key identity."""
     for parent in [path.parent, *path.parents]:
         low = parent.name.lower()
         if "near" in low:
@@ -120,6 +129,7 @@ def main() -> int:
         paths = paths[: args.max_scan]
     split_counts: Counter[str] = Counter()
     bucket_counts: Counter[str] = Counter()
+    regime_counts: Counter[str] = Counter()
     target_roles: Counter[str] = Counter()
     missing_scene = 0
     missing_time = 0
@@ -168,8 +178,9 @@ def main() -> int:
         if idx >= 0:
             source_indices.append(idx)
         valid_rows += 1
-        bucket = _root_label(Path(p))
+        bucket = _dataset_label(Path(p))
         bucket_counts[bucket] += 1
+        regime_counts[_regime_label(Path(p))] += 1
         unique_targets.add((canonical, time_index))
         unique_scenes.add(canonical)
         available_target_keys.add(f"{bucket}:{canonical}:t{time_index}")
@@ -221,6 +232,7 @@ def main() -> int:
         "missing_time_index_rows": missing_time,
         "split_counts": dict(sorted(split_counts.items())),
         "bucket_counts_after_split": dict(sorted(bucket_counts.items())),
+        "regime_counts_after_split": dict(sorted(regime_counts.items())),
         "target_source_roles_after_split": dict(sorted(target_roles.items())),
         "raw_source_role": raw_role,
         "expected_source_role": args.expected_source_role,

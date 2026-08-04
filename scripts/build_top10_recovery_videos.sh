@@ -13,16 +13,17 @@ set -euo pipefail
 : "${CONTACT_BASELINE_NAME:=Best external baseline}"
 : "${FPS:=10}"
 : "${VIEW_RADIUS_M:=35}"
+: "${CAMERA_MODE:=fixed}"
 
 mkdir -p "$OUT/near" "$OUT/contact"
 PYTHONPATH=src python tools/render_critical_scenes_v48_34.py \
   --method-scenes "$NEAR_OCRAP_SCENES" --control-scenes "$NEAR_BASELINE_SCENES" \
   --selection "$NEAR_SELECTION" --output-dir "$OUT/near" --fps "$FPS" --format mp4 --view-radius-m "$VIEW_RADIUS_M" \
-  --method-name "OC-RAP" --control-name "$NEAR_BASELINE_NAME"
+  --camera-mode "$CAMERA_MODE" --method-name "OC-RAP" --control-name "$NEAR_BASELINE_NAME"
 PYTHONPATH=src python tools/render_critical_scenes_v48_34.py \
   --method-scenes "$CONTACT_OCRAP_SCENES" --control-scenes "$CONTACT_BASELINE_SCENES" \
   --selection "$CONTACT_SELECTION" --output-dir "$OUT/contact" --fps "$FPS" --format mp4 --view-radius-m "$VIEW_RADIUS_M" \
-  --method-name "OC-RAP" --control-name "$CONTACT_BASELINE_NAME"
+  --camera-mode "$CAMERA_MODE" --method-name "OC-RAP" --control-name "$CONTACT_BASELINE_NAME"
 
 python - "$OUT" <<'PY'
 import json,pathlib,sys

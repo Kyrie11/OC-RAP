@@ -178,6 +178,7 @@ def test_contact_video_selection_uses_post_contact_recovery_not_initial_overlap(
     )
     assert proc.returncode == 0, proc.stderr + proc.stdout
     selected = json.loads(output.read_text())["selected"]
+    assert len(selected) == 1  # --num-failure 0 must not append one failure case.
     assert selected[0]["target_key"] == key
     assert "overlap_duration_reduced" in selected[0]["material_improvements"]
     assert "new_stable_stop" in selected[0]["material_improvements"]
@@ -198,8 +199,77 @@ def test_contact_renderer_marks_causal_anchor_when_rollout_starts_separated() ->
     }]
     xy, label = module._contact_marker(trace, "contact")
     assert xy == (3.0, -2.0)
-    assert label == "causal contact anchor"
+    assert label == "post-contact rollout start"
 
+
+
+def test_preflight_accepts_runner_exact_bucket_target_key(tmp_path: Path) -> None:
+    from ocrap.data.womd.sharded_path import sharded_filename
+
+    samples = tmp_path / "test_near_contact" / "samples"
+    samples.mkdir(parents=True)
+    np.savez_compressed(
+        samples / "a.npz",
+        split_id=np.asarray("test"),
+        scene_id=np.asarray("scene-a"),
+        time_index=np.asarray(7, dtype=np.int64),
+    )
+    keys = tmp_path / "keys.json"
+    keys.write_text(json.dumps({"target_keys": ["test_near_contact:scene-a:t7"]}))
+    prefix = str(tmp_path / "validation_interactive_tfexample.tfrecord")
+    for i in range(2):
+        Path(sharded_filename(prefix, i, 2)).write_bytes(b"")
+    output = tmp_path / "support.json"
+    proc = subprocess.run(
+        [sys.executable, "tools/check_closed_loop_dataset_support.py", "--dataset", str(samples.parent),
+         "--split", "test", "--womd", prefix + "@2", "--target-keys-file", str(keys),
+         "--require-target-keys", "--output", str(output)],
+        cwd=ROOT, env=_env(), text=True, capture_output=True, check=False,
+    )
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    doc = json.loads(output.read_text())
+    assert doc["target_keys_valid"] is True
+    assert doc["bucket_counts_after_split"] == {"test_near_contact": 1}
+    assert doc["regime_counts_after_split"] == {"near_contact": 1}
+
+
+def test_selected_target_resolver_migrates_legacy_hash_by_source_index(tmp_path: Path) -> None:
+    samples = tmp_path / "test_contact" / "samples"
+    samples.mkdir(parents=True)
+    np.savez_compressed(
+        samples / "a.npz",
+        split_id=np.asarray("test"),
+        scene_id=np.asarray("new_scene_hash__wx00002123"),
+        source_scenario_index=np.asarray(2123, dtype=np.int64),
+        time_index=np.asarray(11, dtype=np.int64),
+    )
+    selection = tmp_path / "selection.json"
+    selection.write_text(json.dumps({
+        "regime": "contact",
+        "selected": [{
+            "target_key": "test_contact:waymax_old_hash:t11",
+            "scene_id": "old_official_hash__wx00002123",
+            "target_time_index": 11,
+            "category": "positive_toy_example",
+        }],
+    }))
+    keys = tmp_path / "resolved_keys.json"
+    resolved = tmp_path / "resolved_selection.json"
+    report = tmp_path / "resolution_report.json"
+    proc = subprocess.run(
+        [sys.executable, "tools/resolve_selected_targets_v50.py",
+         "--dataset", str(samples.parent), "--split", "test",
+         "--selection", str(selection), "--target-keys-output", str(keys),
+         "--selection-output", str(resolved), "--report-output", str(report)],
+        cwd=ROOT, env=_env(), text=True, capture_output=True, check=False,
+    )
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    resolved_doc = json.loads(resolved.read_text())
+    item = resolved_doc["selected"][0]
+    assert item["target_key"] == "test_contact:new_scene_hash:t11"
+    assert item["source_target_key"] == "test_contact:waymax_old_hash:t11"
+    assert item["target_resolution_method"] == "source_scenario_index_and_time"
+    assert json.loads(report.read_text())["valid"] is True
 
 def test_render_context_captures_nearby_roadgraph_once() -> None:
     from types import SimpleNamespace
