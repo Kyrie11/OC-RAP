@@ -398,8 +398,8 @@ def _direct_value_loss_from_outputs(
         ordinal_evidence_eligible_policy_weight=float(tcfg.get("direct_value_ordinal_evidence_eligible_policy_weight", 0.0)),
         ordinal_evidence_eligible_policy_temperature=float(tcfg.get("direct_value_ordinal_evidence_eligible_policy_temperature", 0.10)),
         ordinal_evidence_eligibility_logit_temperature=float(tcfg.get("direct_value_ordinal_evidence_eligibility_logit_temperature", 0.25)),
-        ordinal_evidence_eligible_opportunity_threshold=float(tcfg.get("direct_value_ordinal_evidence_eligible_opportunity_threshold", 0.65)),
-        ordinal_evidence_eligible_harm_threshold=float(tcfg.get("direct_value_ordinal_evidence_eligible_harm_threshold", 0.30)),
+        ordinal_evidence_eligible_opportunity_threshold=float(tcfg.get("direct_value_ordinal_evidence_eligible_opportunity_threshold", 0.50)),
+        ordinal_evidence_eligible_harm_threshold=float(tcfg.get("direct_value_ordinal_evidence_eligible_harm_threshold", 0.50)),
         ordinal_evidence_eligibility_boundary_weight=float(
             tcfg.get("direct_value_ordinal_evidence_eligibility_boundary_weight", 0.0)
         ),
@@ -2665,6 +2665,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_evidence_slack_penalty=float(
             model_cfg.get("direct_recovery_evidence_slack_penalty", 1.0)
         ),
+        direct_recovery_evidence_frontier_cap_temperature=float(
+            model_cfg.get("direct_recovery_evidence_frontier_cap_temperature", 0.10)
+        ),
         # v48.23/v48.24 set these fields in the run scripts, but the CLI model
         # constructor previously dropped them. That silently restored the legacy
         # p(harm)=0.5 prior and non-identity admission penalty.
@@ -3010,6 +3013,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             ),
             "direct_recovery_evidence_slack_penalty": float(
                 model_cfg.get("direct_recovery_evidence_slack_penalty", 1.0)
+            ),
+            "direct_recovery_evidence_frontier_cap_temperature": float(
+                model_cfg.get("direct_recovery_evidence_frontier_cap_temperature", 0.10)
             ),
             "direct_recovery_evidence_frontier": bool(
                 model_cfg.get("direct_recovery_evidence_frontier", False)

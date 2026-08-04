@@ -1,0 +1,32 @@
+OC-RAP v48.35 CONTINUOUS-FRONTIER local validation
+==================================================
+
+PASS: 159 supported release tests
+WARN: 6 non-fatal PyTorch warnings
+PASS: 55 shell scripts bash -n
+PASS: python compileall for src/tools/tests
+PASS: calibrate_policy_risk_v48.py --help (no duplicate argparse registration)
+PASS: calibrate_shared_continuous_rule_v48_35.py --help
+PASS: materialize_v48_35_factor_cache.py --help
+PASS: continuous-frontier finite-gradient/cap/context preflight
+PASS: v48.35 command dependency regression tests
+PASS: one shared-rule synthetic calibration and semantic-domain checks
+PASS: post-gate Safe/stress authorization contracts
+
+Supported release test scope includes core selector/runtime tests, v39-v48.11 model
+compatibility, v48.33, v48.34, v48.35 and v50 runtime compatibility.
+
+The uploaded ZIP omits many historical scripts referenced by retained v48.12-v48.32
+script-contract tests. Therefore a raw all-history `pytest -q` is not a valid release
+criterion for this upload and fails with FileNotFoundError for absent historical assets.
+The delivery does not fabricate those files. This limitation is documented in the audit.
+
+NOT EXECUTED LOCALLY:
+- real WOMD tf_example data
+- Waymax closed-loop
+- two-A30 training
+- v48.35 Natural certificate outcome
+- held-out test/stress
+
+No claim is made that v48.35 obtains RC=0 until the registered commands are run in the
+user's data/GPU environment.

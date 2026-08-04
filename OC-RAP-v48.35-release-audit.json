@@ -1,0 +1,162 @@
+{
+  "event": "v48_35_release_audit",
+  "created_unix": 1785826691.4347458,
+  "version": "v48.35-CONTINUOUS-FRONTIER",
+  "changed_files": 29,
+  "repository_files": 501,
+  "supported_tests_passed": 159,
+  "warnings": 6,
+  "shell_scripts_syntax_checked": 55,
+  "compileall": true,
+  "frontier_contract": true,
+  "real_womd_waymax_executed": false,
+  "claims_rc0": false,
+  "test_roots_read": false,
+  "changes": [
+    {
+      "status": "modified",
+      "path": "ALGORITHM_CHANGELOG.md",
+      "sha256": "3b43a0257c15f310d12f9ced0f592c1072806b147047440e254065f4449fe845"
+    },
+    {
+      "status": "added",
+      "path": "OC-RAP-v48.34-ablation-audit.csv",
+      "sha256": "bd7c2d008258b6c3f9fd807f6427026740fa11c540f15b1858809d1a03e86764"
+    },
+    {
+      "status": "added",
+      "path": "OC-RAP-v48.34-main-certificate-audit.csv",
+      "sha256": "99e535c8195e066e44c881ceb0b2b5ffb217eb541ef8eb48f833867cd9102724"
+    },
+    {
+      "status": "added",
+      "path": "OC-RAP-v48.34-results-audit-and-v48.35-CONTINUOUS-FRONTIER-plan-ZH.md",
+      "sha256": "9fa29de878f08e67f13253c7e392d042145dc7d8f2807ed4368315685612d55f"
+    },
+    {
+      "status": "added",
+      "path": "OC-RAP-v48.35-CONTINUOUS_FRONTIER_CONTRACT.json",
+      "sha256": "edd85905640584e304f4eaddae37822465e9adca05583cf10429946bdad9788c"
+    },
+    {
+      "status": "added",
+      "path": "OC-RAP-v48.35-engineering-error-audit.csv",
+      "sha256": "5535642aace59e9f9ef11e92a05b8b44a4682f56975ef63815954f3171a7e2c3"
+    },
+    {
+      "status": "added",
+      "path": "OC-RAP-v48.35-run-commands-ZH.txt",
+      "sha256": "3bc5caea6396c963a430080aa2dc2d179cd31c8cac7a40840160c1585afda559"
+    },
+    {
+      "status": "added",
+      "path": "OC-RAP-v48.35-script-dependency-audit.json",
+      "sha256": "f16761f5ed4190ed8fd62be15a46a9ab62b34e1692eadce18b9319709cd7a475"
+    },
+    {
+      "status": "added",
+      "path": "OC-RAP-v48.35-validation-status.txt",
+      "sha256": "87e2eba6f2b7acfab09d77435d56bc909a16020908f12ebb3091aca4b0443c19"
+    },
+    {
+      "status": "modified",
+      "path": "pyproject.toml",
+      "sha256": "83e7ded07a033dac079fa8912320071fc5d983bcd1755262ace8fedc2806ba68"
+    },
+    {
+      "status": "added",
+      "path": "scripts/adapt_ocrap_v48_35_continuous_frontier_single_stage.sh",
+      "sha256": "e487ae04d5561dd1abb8dd0f8a91b63009fd9d4565a2e5be482ee6e7e3e8aaaf"
+    },
+    {
+      "status": "added",
+      "path": "scripts/adapt_ocrap_v48_35_continuous_frontier_variant.sh",
+      "sha256": "8c22a8a58edbfd785cbbca207b71a2a9a211fc5dd77093cf65be295d9dc8b637"
+    },
+    {
+      "status": "added",
+      "path": "scripts/calibrate_v48_35_shared_certificate_pool.sh",
+      "sha256": "78be2bb62a783e3d1ca56989870c43d3712b60ec4327976481dba3f35fb75032"
+    },
+    {
+      "status": "added",
+      "path": "scripts/run_v48_35_continuous_frontier_ablations.sh",
+      "sha256": "598f22d132743d365d6516f728530f6817ba814fbbabdc8226794d8b6f6177a4"
+    },
+    {
+      "status": "added",
+      "path": "scripts/run_v48_35_continuous_frontier_dedicated.sh",
+      "sha256": "d717f64b4e18c89ced91d3a21a0cf9925d408d9a38baed6563f5c31a5505ae50"
+    },
+    {
+      "status": "added",
+      "path": "scripts/run_v48_35_safe_noninferiority.sh",
+      "sha256": "e8cbbd974f85543ac79256015210bb7a41f401be9257c919d7327c35bc442161"
+    },
+    {
+      "status": "added",
+      "path": "scripts/run_v48_35_stress_if_authorized.sh",
+      "sha256": "1d25fef6865f2508cf63e44927102d141dce473888e196da8ca9da72ec82f49a"
+    },
+    {
+      "status": "modified",
+      "path": "scripts/train_ocrap_v48_trac_sr.sh",
+      "sha256": "5dc29edb74949df3d5fdff36fad5b3add066bcad0df5a7196dcdffe52e38d66d"
+    },
+    {
+      "status": "modified",
+      "path": "src/ocrap/cli/train.py",
+      "sha256": "0fc3934870acadeaff7ea6d80d81601388dc75eb8035bc78738799317f5b43da"
+    },
+    {
+      "status": "modified",
+      "path": "src/ocrap/models/inference.py",
+      "sha256": "788e027aa09b2069c16afa759a28a44111132deeb28297fddd61895c3421a003"
+    },
+    {
+      "status": "modified",
+      "path": "src/ocrap/models/ocrap.py",
+      "sha256": "7f6cd4a786b83dde0a118f5b433dc80ef8d5eadcdd0d7b5ea376431e434eba46"
+    },
+    {
+      "status": "added",
+      "path": "tests/test_v48_35_continuous_frontier.py",
+      "sha256": "f44a16bbc3ba0cd2b82424d996ac80d30817c6d7fe8e036c571f87b3cb8c1920"
+    },
+    {
+      "status": "modified",
+      "path": "tools/calibrate_policy_risk_v48.py",
+      "sha256": "f76d3f37398fe87c4c4d04aee8000b00523e19854d5147b0ad3b5a2e95bd2345"
+    },
+    {
+      "status": "added",
+      "path": "tools/calibrate_shared_continuous_rule_v48_35.py",
+      "sha256": "e318cf5330917571b1e2fdc5a499f11a030fe438c1afb676acdd995ae8170ee5"
+    },
+    {
+      "status": "added",
+      "path": "tools/check_v48_35_frontier_contract.py",
+      "sha256": "8f87f59822ee358aa7f5f8ed34da7cc8ed98c9cd4c76c1fb185bc6f20ba69eb6"
+    },
+    {
+      "status": "added",
+      "path": "tools/check_v48_35_metric_calibration_contract.py",
+      "sha256": "261b25992790203584f6378c99a0b40a532d8b392f0489c7bf13a635a16feecf"
+    },
+    {
+      "status": "added",
+      "path": "tools/check_v48_35_model_contract.py",
+      "sha256": "aa79ba2fbd828b3d8116627495e32af9692f343b6456ee1a8637f92f1be753f1"
+    },
+    {
+      "status": "added",
+      "path": "tools/check_v48_35_training_contract.py",
+      "sha256": "5abcd69eb627d158813ff66d8456995e136169628590c446b86f12bcfd2f9c34"
+    },
+    {
+      "status": "added",
+      "path": "tools/materialize_v48_35_factor_cache.py",
+      "sha256": "08532309b6b5c03ca3f36bfde172585520f7098ee669b6ae5f13667b4cffd354"
+    }
+  ]
+}

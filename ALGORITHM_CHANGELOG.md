@@ -2422,3 +2422,85 @@ all shell bash -n PASS
 ```
 
 The local environment does not contain the user's WOMD/Waymax runtime or two A30 GPUs. No claim is made that v48.30 already obtains `RC=0`, passes the Natural gate or reaches the Near/Contact CCF-A closed-loop targets.
+
+## v48.35 — CONTINUOUS-FRONTIER
+
+### Motivation and audited failure
+
+v48.34 produced a valid algorithmic rejection (`pipeline_valid=true`, `certificate_executed=true`, `gate_evaluated=true`, `certificate_exit_code=20`, `test_roots_read=false`). The top-5 proposal still contained safe recovery opportunities, but the learned selector did not transfer them into a stable scene-disjoint certificate policy. Near retained useful candidate discrimination but had only one clean certificate hit; Contact selected no safe-positive action and many harmful actions. The v48.34 barrier/boundary ablations did not solve this failure.
+
+The audit found four attribution errors that had to be removed before another algorithm claim:
+
+1. Near and Contact were fitted with separate frozen threshold rules, creating a deployment policy fork despite the network not receiving a regime ID.
+2. `proposal_exact_eligible_*` used fixed diagnostic thresholds rather than the frozen deployed rule, so “exact” diagnostics could disagree with actual selection.
+3. the hard-boundary training continuation used semantic thresholds that were not constrained to the final fitted rule domain, making the corresponding ablation nearly inert;
+4. post-gate commands referenced stale/missing scripts and could turn an algorithmic RC=3/20 into an engineering RC=30.
+
+### Unified algorithm
+
+v48.35 keeps one continuous mechanism for Safe, Near and Contact. Regime labels are not model inputs and are not used to choose a rule. Near and Contact names appear only as certificate audit strata for worst-stratum constraints.
+
+For each candidate, the compact trainable evidence bridge now receives executable prefix physics relative to the nominal candidate:
+
+- prefix parameters;
+- macro identity;
+- prefix state trajectory;
+- control sequence.
+
+It excludes absolute ego state, utility/hard/harm/feasibility audit scalars, nominal/time flags, agents, map and BEV suffixes. This restores action identity without exposing scene or regime shortcuts.
+
+The five signed component logits define a continuous worst-component safety frontier. The free admission logit is capped by the safety frontier using a differentiable smooth minimum:
+
+```text
+free(a) = benefit(a) + residual(a)
+cap(a)  = - max_k component_logit_k(a)
+admission(a) = smooth_min(free(a), cap(a))
+```
+
+Therefore benefit or a large learned residual cannot compensate for a predicted component violation. The shared rule fitter is additionally restricted to the semantic domain:
+
+```text
+opportunity_threshold >= 0.5
+harm_threshold        <= 0.5
+score_threshold       >= 0.0
+```
+
+This is required for the cap to remain non-compensatory at deployment, not only during training.
+
+### One shared deployment rule
+
+`calibrate_shared_continuous_rule_v48_35.py` pools adaptation-dev proposal rows and fits exactly one four-threshold rule. Audit strata are used only to require that the same rule satisfies every stratum's minimum support, precision LCB, harmful-exposure UCB and macro-concentration constraints. Both certificate workers consume the byte-identical frozen JSON and record its SHA256.
+
+A failed shared development fit exits with RC=3 and is preserved as an algorithmic rejection. The controller maps only missing/corrupt/protocol-inconsistent artifacts to RC=30. Held-out test commands are generated only after certificate RC=0.
+
+### Engineering and protocol fixes
+
+- real deployed-rule diagnostics are emitted as `proposal_deployed_rule_*`;
+- legacy `proposal_exact_eligible_*` fields remain only as explicitly deprecated aliases;
+- duplicate argparse registration in the mixed source snapshot is removed;
+- model, training, metric/calibration and continuous-frontier fail-closed contract checks are added;
+- factor-cache identity includes the context source and verifies source/copy checkpoint hashes;
+- training metadata no longer claims that the train-time semantic boundary equals the final fitted threshold;
+- Safe and stress wrappers verify `V48_35_COMPLETE.json`, gate authorization and candidate identity;
+- stress execution verifies that Near and Contact certificates reference the same shared frozen-rule SHA and expose identical selector overrides;
+- generated command dependencies are regression-tested;
+- repository-local pytest import configuration is added.
+
+### Preregistered ablation
+
+The v48.35 ablation is a 2x2 design with one shared rule in every task:
+
+1. legacy relative context + compensatory safety slack;
+2. executable physical-relative context + compensatory safety slack;
+3. legacy relative context + non-compensatory frontier cap;
+4. executable physical-relative context + non-compensatory frontier cap (main).
+
+The design isolates representation and admission geometry without creating Near/Contact-specific policies. Compatible Stage-1 factor caches are reused only after exact semantic-contract validation.
+
+### Decision rules and non-claims
+
+- `RC=0`: shared development rule and independent certificate pass; only then Safe paired non-inferiority and held-out stress are authorized.
+- `RC=20`: valid algorithmic rejection; inspect shared-rule deficits and certificate rows, then improve representation/losses without reading test.
+- `RC=30`: engineering, provenance, cache, checkpoint, script, artifact or protocol failure; no algorithm comparison is valid.
+
+Local CPU validation checks code and contracts only. WOMD/Waymax and the user's A30 environment are unavailable locally, so v48.35 is not claimed to obtain `RC=0` or publication-ready closed-loop gains before the registered experiments are run.

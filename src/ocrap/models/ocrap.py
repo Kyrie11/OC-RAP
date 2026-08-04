@@ -192,6 +192,7 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_admission_prior_mode: str = "risk_centered",
         direct_recovery_evidence_slack_temperature: float = 0.025,
         direct_recovery_evidence_slack_penalty: float = 1.0,
+        direct_recovery_evidence_frontier_cap_temperature: float = 0.10,
         direct_recovery_evidence_frontier: bool = False,
         direct_recovery_evidence_component_prior_logit: float = -2.0,
     ):
@@ -323,7 +324,8 @@ class OCRAPModel(nn.Module):
             direct_recovery_evidence_admission_prior_mode or "risk_centered"
         ).strip().lower()
         if self.direct_recovery_evidence_admission_prior_mode not in {
-            "risk_centered", "benefit_only", "safety_slack", "barrier_gated_slack"
+            "risk_centered", "benefit_only", "safety_slack", "barrier_gated_slack",
+            "frontier_capped_slack",
         }:
             raise ValueError(
                 "Unsupported direct_recovery_evidence_admission_prior_mode="
@@ -334,6 +336,9 @@ class OCRAPModel(nn.Module):
         )
         self.direct_recovery_evidence_slack_penalty = float(
             max(0.0, direct_recovery_evidence_slack_penalty)
+        )
+        self.direct_recovery_evidence_frontier_cap_temperature = float(
+            max(1.0e-4, direct_recovery_evidence_frontier_cap_temperature)
         )
         self.direct_recovery_evidence_frontier = bool(direct_recovery_evidence_frontier)
         self.direct_recovery_evidence_component_prior_logit = float(
@@ -346,7 +351,9 @@ class OCRAPModel(nn.Module):
                 "Unsupported direct_recovery_evidence_calibrator_mode="
                 f"{direct_recovery_evidence_calibrator_mode!r}"
             )
-        if self.direct_recovery_evidence_calibrator_context_source not in {"relative", "tournament"}:
+        if self.direct_recovery_evidence_calibrator_context_source not in {
+            "relative", "tournament", "physical_relative"
+        }:
             raise ValueError(
                 "Unsupported direct_recovery_evidence_calibrator_context_source="
                 f"{direct_recovery_evidence_calibrator_context_source!r}"
@@ -357,6 +364,12 @@ class OCRAPModel(nn.Module):
             and not self.direct_recovery_set_tournament
         ):
             raise ValueError("tournament evidence context requires direct_recovery_set_tournament=true")
+        if (
+            self.direct_recovery_evidence_calibrator_context
+            and self.direct_recovery_evidence_calibrator_context_source == "physical_relative"
+            and self.encoder_type != "structured_transformer"
+        ):
+            raise ValueError("physical_relative evidence context requires structured_transformer")
         if self.direct_recovery_evidence_unified_experts and not self.direct_recovery_delta_regime_experts:
             raise ValueError(
                 "unified expert evidence requires direct_recovery_delta_regime_experts=true"
@@ -450,12 +463,27 @@ class OCRAPModel(nn.Module):
         direct_in_dim = d_model
         self.direct_candidate_raw_dim = 0
         self.direct_candidate_feature_dim = 0
+        self.direct_candidate_physical_feature_dim = 0
+        self.direct_candidate_physical_slices: tuple[tuple[int, int], ...] = ()
         self.direct_ego_feature_dim = 0
         if self.encoder_type == "structured_transformer":
             layout = FlatFeatureLayout(**self.feature_layout)
             self.direct_ego_feature_dim = int(layout.ego_dim)
-            self.direct_candidate_feature_dim = int(
-                layout.ego_dim + layout.prefix_param_dim + layout.num_macros + layout.scalar_dim
+            prefix_semantic_start = int(layout.ego_dim)
+            prefix_semantic_end = prefix_semantic_start + int(layout.prefix_param_dim + layout.num_macros)
+            trajectory_start = prefix_semantic_end + int(layout.scalar_dim)
+            trajectory_end = trajectory_start + int(layout.prefix_flat_dim + layout.control_flat_dim)
+            self.direct_candidate_feature_dim = trajectory_end
+            # The compact v48.35 evidence bridge receives only executable action
+            # geometry/control.  It deliberately excludes ego state and the scalar
+            # block (utility, hard_violation, harm_proxy, feasibility, nominal flag,
+            # and time index), preventing direct target/selector shortcut leakage.
+            self.direct_candidate_physical_slices = (
+                (prefix_semantic_start, prefix_semantic_end),
+                (trajectory_start, trajectory_end),
+            )
+            self.direct_candidate_physical_feature_dim = int(
+                layout.prefix_param_dim + layout.num_macros
                 + layout.prefix_flat_dim + layout.control_flat_dim
             )
         if self.direct_recovery_value_pooling in {"candidate_concat", "prefix_concat", "action_concat"}:
@@ -630,12 +658,19 @@ class OCRAPModel(nn.Module):
         # the observables needed for conditional correction.
         evidence_context_dim = 0
         if self.direct_recovery_evidence_calibrator_context:
-            evidence_context_dim = (
-                self.direct_preference_set_ranker.hidden_dim
-                if self.direct_recovery_evidence_calibrator_context_source == "tournament"
+            if (
+                self.direct_recovery_evidence_calibrator_context_source == "tournament"
                 and self.direct_preference_set_ranker is not None
-                else relative_in_dim
-            )
+            ):
+                evidence_context_dim = self.direct_preference_set_ranker.hidden_dim
+            elif self.direct_recovery_evidence_calibrator_context_source == "physical_relative":
+                # v48.35 CONTINUOUS-FRONTIER: expose only the raw executable-prefix
+                # difference to nominal.  This excludes agents/map/BEV and absolute
+                # scene identity, but restores action-level kinematics that the
+                # four/ten scalar evidence bridge cannot reconstruct.
+                evidence_context_dim = self.direct_candidate_physical_feature_dim
+            else:
+                evidence_context_dim = relative_in_dim
         # v48.20 UNISON-BRIDGE: a single shared evidence model consumes both
         # frozen source experts, their consensus/disagreement, and the frozen
         # proposal context.  No bucket/regime id is exposed to this model.
@@ -822,6 +857,52 @@ class OCRAPModel(nn.Module):
         # states and controls first, so the candidate-conditioned slice is
         # contiguous and does not include future/audit labels.
         return x[:, : self.direct_candidate_raw_dim]
+
+    @staticmethod
+    def _noncompensatory_smooth_cap(
+        free_logit: torch.Tensor, safety_cap_logit: torch.Tensor, temperature: float
+    ) -> torch.Tensor:
+        """Differentiable upper cap that is never above either input."""
+        tau = max(float(temperature), 1.0e-4)
+        stacked = torch.stack([free_logit, safety_cap_logit], dim=-1)
+        return -tau * torch.logsumexp(-stacked / tau, dim=-1)
+
+    def _direct_candidate_raw_relative_features(
+        self,
+        x: torch.Tensor,
+        group_index: torch.Tensor | None,
+        is_nominal: torch.Tensor | None,
+    ) -> torch.Tensor:
+        """Return executable-prefix raw features relative to the nominal action.
+
+        The slice contains prefix parameters, macro identity, prefix states, and
+        controls only.  It excludes ego state plus the scalar utility/hard/harm/
+        feasibility/nominal/time block before candidate-minus-nominal subtraction.
+        This prevents target shortcuts and absolute scene identity from entering
+        the compact evidence calibrators.  The operation is permutation-equivariant
+        and uses no regime label.
+        """
+        if not self.direct_candidate_physical_slices:
+            return x[:, :0]
+        raw = torch.cat(
+            [x[:, start:end] for start, end in self.direct_candidate_physical_slices],
+            dim=-1,
+        )
+        out = torch.zeros_like(raw)
+        if raw.shape[-1] == 0 or group_index is None or is_nominal is None:
+            return out
+        groups = group_index.to(device=raw.device)
+        groups = groups.reshape(-1, 1) if groups.dim() == 1 else groups.reshape(groups.shape[0], -1)
+        nominal_mask = is_nominal.to(device=raw.device).reshape(-1) > 0.5
+        if groups.shape[0] != raw.shape[0] or nominal_mask.shape[0] != raw.shape[0]:
+            return out
+        for key in torch.unique(groups, dim=0):
+            idx = torch.where((groups == key.unsqueeze(0)).all(dim=1))[0]
+            noms = idx[nominal_mask[idx]]
+            if noms.numel() != 1:
+                continue
+            out[idx] = raw[idx] - raw[noms[0]:noms[0] + 1]
+        return out
 
     def _apply_direct_set_context(
         self,
@@ -1183,6 +1264,11 @@ class OCRAPModel(nn.Module):
                     and "direct_recovery_tournament_context" in out
                 ):
                     calibrator_context = out["direct_recovery_tournament_context"].to(dtype=delta.dtype)
+                elif self.direct_recovery_evidence_calibrator_context_source == "physical_relative":
+                    calibrator_context = self._direct_candidate_raw_relative_features(
+                        x, group_index, is_nominal
+                    ).to(dtype=delta.dtype)
+                    out["direct_recovery_evidence_physical_relative_context"] = calibrator_context
                 else:
                     calibrator_context = relative_features.to(dtype=delta.dtype)
                 if self.direct_recovery_evidence_calibrator_context_detach:
@@ -1303,10 +1389,10 @@ class OCRAPModel(nn.Module):
                         else unified_harm_logit
                     )
                     residual_safety_gate = None
-                    if (
-                        self.direct_recovery_evidence_admission_prior_mode == "safety_slack"
-                        or self.direct_recovery_evidence_admission_prior_mode == "barrier_gated_slack"
-                    ):
+                    admission_safety_cap_logit = None
+                    if self.direct_recovery_evidence_admission_prior_mode in {
+                        "safety_slack", "barrier_gated_slack", "frontier_capped_slack"
+                    }:
                         # Unified candidate-vs-nominal signed physical margins.
                         predicted_component_margins = (
                             self.direct_recovery_evidence_slack_temperature
@@ -1314,12 +1400,7 @@ class OCRAPModel(nn.Module):
                         )
                         max_predicted_veto_margin = predicted_component_margins.amax(dim=-1)
                         if self.direct_recovery_evidence_admission_prior_mode == "barrier_gated_slack":
-                            # v48.34 BARRIER-GATED IDENTITY: a free admission residual
-                            # must not compensate for a predicted safety-boundary
-                            # violation.  The same continuous worst slack gates both
-                            # transferred benefit and residual capacity, while a smooth
-                            # non-negative barrier drives unsafe candidates below
-                            # nominal.  No regime identifier is used.
+                            # v48.34 legacy soft barrier.  Retained for ablation only.
                             tau = max(self.direct_recovery_evidence_slack_temperature, 1.0e-6)
                             residual_safety_gate = torch.sigmoid(
                                 -max_predicted_veto_margin / tau
@@ -1332,6 +1413,18 @@ class OCRAPModel(nn.Module):
                                 - self.direct_recovery_evidence_slack_penalty * slack_barrier
                             )
                             out["direct_recovery_evidence_barrier_safety_gate"] = residual_safety_gate
+                        elif self.direct_recovery_evidence_admission_prior_mode == "frontier_capped_slack":
+                            # v48.35 non-compensatory frontier.  A component logit of
+                            # zero is the shared signed-margin boundary.  The final
+                            # admission is capped by its worst component; benefit or
+                            # a learned residual can never cross an unsafe cap.
+                            tau = max(self.direct_recovery_evidence_slack_temperature, 1.0e-6)
+                            admission_safety_cap_logit = -max_predicted_veto_margin / tau
+                            slack_barrier = torch.relu(max_predicted_veto_margin)
+                            admission_prior = prior_benefit
+                            out["direct_recovery_evidence_frontier_safety_cap_logit"] = (
+                                admission_safety_cap_logit
+                            )
                         else:
                             slack_barrier = torch.relu(max_predicted_veto_margin)
                             admission_prior = (
@@ -1385,7 +1478,17 @@ class OCRAPModel(nn.Module):
                     )
                     if residual_safety_gate is not None:
                         admission_residual = residual_safety_gate * admission_residual
-                    unified_admission_logit = admission_prior + admission_residual
+                    free_admission_logit = admission_prior + admission_residual
+                    if admission_safety_cap_logit is not None:
+                        # Smooth minimum is always <= the exact minimum, so the
+                        # differentiable continuation preserves the hard safety cap.
+                        unified_admission_logit = self._noncompensatory_smooth_cap(
+                            free_admission_logit, admission_safety_cap_logit,
+                            self.direct_recovery_evidence_frontier_cap_temperature,
+                        )
+                        out["direct_recovery_evidence_free_admission_logit"] = free_admission_logit
+                    else:
+                        unified_admission_logit = free_admission_logit
                     evidence_calibrator_residual = torch.cat(
                         [evidence_calibrator_residual, admission_residual.unsqueeze(-1)], dim=-1
                     )

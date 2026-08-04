@@ -981,9 +981,20 @@ def main() -> int:
     proposal_best_hits_positive = 0
     proposal_positive_hits_positive = 0
     proposal_evidence_top1: list[dict[str, Any]] = []
-    proposal_exact_eligible_top1: list[dict[str, Any]] = []
+    # v48.35: deployment-exact diagnostics must use the actual frozen/fitted
+    # rule, including score and rank-margin boundaries.  v48.34 incorrectly
+    # used fixed 0.65/0.30 opportunity/harm thresholds and called the result
+    # "exact eligible", which could disagree completely with deployment.
+    proposal_deployed_rule_top1: list[dict[str, Any]] = []
     proposal_candidate_audit_rows: list[dict[str, Any]] = []
-    proposal_exact_eligible_abstentions = 0
+    deployed_rule_selected = {
+        (str(r["scene"]), int(r["time"]), int(r["fold"])): r
+        for r in all_top1
+        if rule is not None
+        and float(r["pred_adv"]) >= float(score_thr)
+        and float(r.get("rank_margin", 0.0)) >= float(rank_margin_thr)
+    }
+    proposal_deployed_rule_abstentions = 0
     proposal_k = max(1, int(args.proposal_top_k))
     for g in groups:
         deployable_pairs = [r for r in g.get("pairs", []) if int(r.get("macro", -1)) in supported_macros]
@@ -1003,18 +1014,8 @@ def main() -> int:
             proposal,
             key=lambda r: (-float(r["pred_adv"]), int(r["candidate"])),
         )[0]
-        diagnostic_eligible = [
-            r for r in proposal
-            if float(r["opportunity"]) >= float(args.diagnostic_opportunity_threshold)
-            and float(r["harm"]) <= float(args.diagnostic_harm_threshold)
-        ]
-        exact_best = (
-            sorted(
-                diagnostic_eligible,
-                key=lambda r: (-float(r["pred_adv"]), int(r["candidate"])),
-            )[0]
-            if diagnostic_eligible else None
-        )
+        deployed_key = (str(g["scene"]), int(g["time"]), int(g["fold"]))
+        deployed_best = deployed_rule_selected.get(deployed_key)
         common = {
             "scene": g["scene"], "time": g["time"], "fold": g["fold"],
             "oracle_best_teacher_adv": g["oracle_best_teacher_adv"],
@@ -1024,24 +1025,38 @@ def main() -> int:
         evidence_row = dict(evidence_best)
         evidence_row.update(common)
         proposal_evidence_top1.append(evidence_row)
-        if exact_best is None:
-            proposal_exact_eligible_abstentions += 1
+        if deployed_best is None:
+            proposal_deployed_rule_abstentions += 1
         else:
-            exact_row = dict(exact_best)
-            exact_row.update(common)
-            proposal_exact_eligible_top1.append(exact_row)
+            deployed_row = dict(deployed_best)
+            deployed_row.update(common)
+            proposal_deployed_rule_top1.append(deployed_row)
         for proposal_rank, candidate_row in enumerate(proposal, start=1):
             audit_row = dict(candidate_row)
             audit_row.update(common)
             audit_row.update({
                 "proposal_rank": proposal_rank,
-                "diagnostic_opportunity_threshold": float(args.diagnostic_opportunity_threshold),
-                "diagnostic_harm_threshold": float(args.diagnostic_harm_threshold),
-                "diagnostic_eligible": bool(candidate_row in diagnostic_eligible),
+                "deployed_rule_opportunity_threshold": (
+                    float(rule["opportunity_threshold"]) if rule is not None else None
+                ),
+                "deployed_rule_harm_threshold": (
+                    float(rule["harm_threshold"]) if rule is not None else None
+                ),
+                "deployed_rule_score_threshold": (
+                    float(rule["score_threshold"]) if rule is not None else None
+                ),
+                "deployed_rule_rank_margin_threshold": (
+                    float(rule["rank_margin_threshold"]) if rule is not None else None
+                ),
+                "deployed_rule_eligible": bool(
+                    rule is not None
+                    and float(candidate_row["opportunity"]) >= float(rule["opportunity_threshold"])
+                    and float(candidate_row["harm"]) <= float(rule["harm_threshold"])
+                ),
                 "legacy_evidence_only_chosen": int(candidate_row["candidate"]) == int(evidence_best["candidate"]),
-                "exact_eligible_chosen": bool(
-                    exact_best is not None
-                    and int(candidate_row["candidate"]) == int(exact_best["candidate"])
+                "deployed_rule_chosen": bool(
+                    deployed_best is not None
+                    and int(candidate_row["candidate"]) == int(deployed_best["candidate"])
                 ),
             })
             proposal_candidate_audit_rows.append(audit_row)
@@ -1338,7 +1353,7 @@ def main() -> int:
             "selected_count": len(rows),
         }
 
-    exact_eligible_diag = _proposal_policy_diagnostics(proposal_exact_eligible_top1)
+    deployed_rule_diag = _proposal_policy_diagnostics(proposal_deployed_rule_top1)
 
     top1_pred = [r["rank_adv"] for r in unconstrained_top1]
     top1_teacher = [r["teacher_adv"] for r in unconstrained_top1]
@@ -1566,17 +1581,31 @@ def main() -> int:
         "legacy_evidence_only_top1_correlation": proposal_evidence_top1_corr,
         "legacy_evidence_only_top1_safe_positive_auc": proposal_evidence_top1_safe_benefit_auc,
         "legacy_evidence_only_harmful_switch_rate": proposal_evidence_harmful_switch_rate,
-        "proposal_exact_eligible_top1_correlation": exact_eligible_diag["correlation"],
-        "proposal_exact_eligible_top1_positive_auc": exact_eligible_diag["positive_auc"],
-        "proposal_exact_eligible_top1_safe_positive_auc": exact_eligible_diag["safe_positive_auc"],
-        "proposal_exact_eligible_top1_harm_auc": exact_eligible_diag["harm_auc"],
-        "proposal_exact_eligible_nonpositive_false_switch_rate": exact_eligible_diag["nonpositive_false_switch_rate"],
-        "proposal_exact_eligible_harmful_switch_rate": exact_eligible_diag["harmful_switch_rate"],
-        "proposal_exact_eligible_positive_top1_regret_mean": exact_eligible_diag["positive_top1_regret_mean"],
-        "proposal_exact_eligible_selected_count": exact_eligible_diag["selected_count"],
-        "proposal_exact_eligible_abstention_count": proposal_exact_eligible_abstentions,
+        "proposal_deployed_rule_top1_correlation": deployed_rule_diag["correlation"],
+        "proposal_deployed_rule_top1_positive_auc": deployed_rule_diag["positive_auc"],
+        "proposal_deployed_rule_top1_safe_positive_auc": deployed_rule_diag["safe_positive_auc"],
+        "proposal_deployed_rule_top1_harm_auc": deployed_rule_diag["harm_auc"],
+        "proposal_deployed_rule_nonpositive_false_switch_rate": deployed_rule_diag["nonpositive_false_switch_rate"],
+        "proposal_deployed_rule_harmful_switch_rate": deployed_rule_diag["harmful_switch_rate"],
+        "proposal_deployed_rule_positive_top1_regret_mean": deployed_rule_diag["positive_top1_regret_mean"],
+        "proposal_deployed_rule_selected_count": deployed_rule_diag["selected_count"],
+        "proposal_deployed_rule_abstention_count": proposal_deployed_rule_abstentions,
+        "proposal_deployed_rule_abstention_rate": (
+            proposal_deployed_rule_abstentions / proposal_groups if proposal_groups else None
+        ),
+        # Backward-compatible aliases.  Their semantics are corrected in v48.35.
+        "proposal_exact_eligible_semantics": "deprecated_alias_of_deployed_rule",
+        "proposal_exact_eligible_top1_correlation": deployed_rule_diag["correlation"],
+        "proposal_exact_eligible_top1_positive_auc": deployed_rule_diag["positive_auc"],
+        "proposal_exact_eligible_top1_safe_positive_auc": deployed_rule_diag["safe_positive_auc"],
+        "proposal_exact_eligible_top1_harm_auc": deployed_rule_diag["harm_auc"],
+        "proposal_exact_eligible_nonpositive_false_switch_rate": deployed_rule_diag["nonpositive_false_switch_rate"],
+        "proposal_exact_eligible_harmful_switch_rate": deployed_rule_diag["harmful_switch_rate"],
+        "proposal_exact_eligible_positive_top1_regret_mean": deployed_rule_diag["positive_top1_regret_mean"],
+        "proposal_exact_eligible_selected_count": deployed_rule_diag["selected_count"],
+        "proposal_exact_eligible_abstention_count": proposal_deployed_rule_abstentions,
         "proposal_exact_eligible_abstention_rate": (
-            proposal_exact_eligible_abstentions / proposal_groups if proposal_groups else None
+            proposal_deployed_rule_abstentions / proposal_groups if proposal_groups else None
         ),
         "policy_top1_gain_mae": policy_top1_gain_mae,
         "unconstrained_recovery_switch_rate": (len(recovery_switches) / len(unconstrained_top1) if unconstrained_top1 else None),

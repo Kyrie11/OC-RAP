@@ -1,0 +1,142 @@
+{
+  "event": "v48_35_script_dependency_audit",
+  "created_unix": 1785826690.8729618,
+  "valid": true,
+  "files_audited": [
+    "scripts/calibrate_v48_35_shared_certificate_pool.sh",
+    "scripts/run_v48_35_continuous_frontier_dedicated.sh",
+    "scripts/run_v48_35_continuous_frontier_ablations.sh",
+    "scripts/run_v48_35_safe_noninferiority.sh",
+    "scripts/run_v48_35_stress_if_authorized.sh",
+    "scripts/adapt_ocrap_v48_35_continuous_frontier_variant.sh",
+    "scripts/adapt_ocrap_v48_35_continuous_frontier_single_stage.sh"
+  ],
+  "dependencies": [
+    {
+      "source": "scripts/calibrate_v48_35_shared_certificate_pool.sh",
+      "dependency": "scripts/run_v48_35_safe_noninferiority.sh",
+      "exists": true
+    },
+    {
+      "source": "scripts/calibrate_v48_35_shared_certificate_pool.sh",
+      "dependency": "scripts/run_v48_35_stress_if_authorized.sh",
+      "exists": true
+    },
+    {
+      "source": "scripts/calibrate_v48_35_shared_certificate_pool.sh",
+      "dependency": "tools/check_v48_35_metric_calibration_contract.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/calibrate_v48_35_shared_certificate_pool.sh",
+      "dependency": "tools/write_gamma_by_bucket.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/run_v48_35_continuous_frontier_dedicated.sh",
+      "dependency": "scripts/adapt_ocrap_v48_35_continuous_frontier_variant.sh",
+      "exists": true
+    },
+    {
+      "source": "scripts/run_v48_35_continuous_frontier_dedicated.sh",
+      "dependency": "scripts/calibrate_v48_35_shared_certificate_pool.sh",
+      "exists": true
+    },
+    {
+      "source": "scripts/run_v48_35_continuous_frontier_dedicated.sh",
+      "dependency": "tools/audit_dedicated_protocol_v48_16.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/run_v48_35_continuous_frontier_dedicated.sh",
+      "dependency": "tools/build_teacher_pcd_index_v48.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/run_v48_35_continuous_frontier_dedicated.sh",
+      "dependency": "tools/check_v48_16_learning_gates.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/run_v48_35_continuous_frontier_dedicated.sh",
+      "dependency": "tools/check_v48_19_target_support.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/run_v48_35_continuous_frontier_dedicated.sh",
+      "dependency": "tools/check_v48_34_multigroup_loss_contract.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/run_v48_35_continuous_frontier_dedicated.sh",
+      "dependency": "tools/check_v48_35_frontier_contract.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/run_v48_35_continuous_frontier_dedicated.sh",
+      "dependency": "tools/check_v48_35_model_contract.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/run_v48_35_continuous_frontier_dedicated.sh",
+      "dependency": "tools/check_v48_35_training_contract.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/run_v48_35_continuous_frontier_dedicated.sh",
+      "dependency": "tools/extract_v48_34_failure_signature.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/run_v48_35_continuous_frontier_dedicated.sh",
+      "dependency": "tools/summarize_v48_34_gate_failure.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/run_v48_35_continuous_frontier_ablations.sh",
+      "dependency": "scripts/run_v48_35_continuous_frontier_dedicated.sh",
+      "exists": true
+    },
+    {
+      "source": "scripts/run_v48_35_safe_noninferiority.sh",
+      "dependency": "scripts/run_ocrap_v48_trac_sr.sh",
+      "exists": true
+    },
+    {
+      "source": "scripts/run_v48_35_stress_if_authorized.sh",
+      "dependency": "scripts/run_ocrap_v48_trac_sr.sh",
+      "exists": true
+    },
+    {
+      "source": "scripts/adapt_ocrap_v48_35_continuous_frontier_variant.sh",
+      "dependency": "scripts/adapt_ocrap_v48_35_continuous_frontier_single_stage.sh",
+      "exists": true
+    },
+    {
+      "source": "scripts/adapt_ocrap_v48_35_continuous_frontier_variant.sh",
+      "dependency": "tools/build_v48_32_factor_support_contract.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/adapt_ocrap_v48_35_continuous_frontier_variant.sh",
+      "dependency": "tools/check_v48_32_stage_transfer.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/adapt_ocrap_v48_35_continuous_frontier_variant.sh",
+      "dependency": "tools/manage_v48_32_factor_cache.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/adapt_ocrap_v48_35_continuous_frontier_variant.sh",
+      "dependency": "tools/materialize_v48_35_factor_cache.py",
+      "exists": true
+    },
+    {
+      "source": "scripts/adapt_ocrap_v48_35_continuous_frontier_single_stage.sh",
+      "dependency": "scripts/train_ocrap_v48_trac_sr.sh",
+      "exists": true
+    }
+  ],
+  "missing": []
+}

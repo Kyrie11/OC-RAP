@@ -236,6 +236,10 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_evidence_slack_penalty",
             model_cfg.get("direct_recovery_evidence_slack_penalty", 1.0),
         )),
+        direct_recovery_evidence_frontier_cap_temperature=float(ckpt.get(
+            "direct_recovery_evidence_frontier_cap_temperature",
+            model_cfg.get("direct_recovery_evidence_frontier_cap_temperature", 0.10),
+        )),
         direct_recovery_evidence_frontier=bool(ckpt.get(
             "direct_recovery_evidence_frontier",
             model_cfg.get("direct_recovery_evidence_frontier", False),
@@ -328,6 +332,9 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_evidence_slack_penalty"] = float(
         model.direct_recovery_evidence_slack_penalty
     )
+    cfg["model"]["direct_recovery_evidence_frontier_cap_temperature"] = float(
+        model.direct_recovery_evidence_frontier_cap_temperature
+    )
     cfg["model"]["direct_recovery_evidence_frontier"] = bool(
         model.direct_recovery_evidence_frontier
     )
@@ -360,6 +367,14 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         f"{min(1.0, max(0.0, x)):.8g}" for x in reliability_values[:component_count]
     )
     expected_contract = {
+        "direct_recovery_evidence_calibrator_context": bool(ckpt.get(
+            "direct_recovery_evidence_calibrator_context",
+            model_cfg.get("direct_recovery_evidence_calibrator_context", False),
+        )),
+        "direct_recovery_evidence_calibrator_context_source": str(ckpt.get(
+            "direct_recovery_evidence_calibrator_context_source",
+            model_cfg.get("direct_recovery_evidence_calibrator_context_source", "relative"),
+        )),
         "direct_recovery_evidence_admission_bounded": bool(ckpt.get(
             "direct_recovery_evidence_admission_bounded",
             model_cfg.get("direct_recovery_evidence_admission_bounded", True),
@@ -380,6 +395,10 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_evidence_slack_penalty",
             model_cfg.get("direct_recovery_evidence_slack_penalty", 1.0),
         )),
+        "direct_recovery_evidence_frontier_cap_temperature": float(ckpt.get(
+            "direct_recovery_evidence_frontier_cap_temperature",
+            model_cfg.get("direct_recovery_evidence_frontier_cap_temperature", 0.10),
+        )),
         "direct_recovery_evidence_frontier": bool(ckpt.get(
             "direct_recovery_evidence_frontier",
             model_cfg.get("direct_recovery_evidence_frontier", False),
@@ -391,11 +410,14 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         "direct_recovery_evidence_component_reliability": expected_component_reliability,
     }
     actual_contract = {
+        "direct_recovery_evidence_calibrator_context": bool(model.direct_recovery_evidence_calibrator_context),
+        "direct_recovery_evidence_calibrator_context_source": str(model.direct_recovery_evidence_calibrator_context_source),
         "direct_recovery_evidence_admission_bounded": bool(model.direct_recovery_evidence_admission_bounded),
         "direct_recovery_evidence_admission_prior_detach": bool(model.direct_recovery_evidence_admission_prior_detach),
         "direct_recovery_evidence_admission_prior_mode": str(model.direct_recovery_evidence_admission_prior_mode),
         "direct_recovery_evidence_slack_temperature": float(model.direct_recovery_evidence_slack_temperature),
         "direct_recovery_evidence_slack_penalty": float(model.direct_recovery_evidence_slack_penalty),
+        "direct_recovery_evidence_frontier_cap_temperature": float(model.direct_recovery_evidence_frontier_cap_temperature),
         "direct_recovery_evidence_frontier": bool(model.direct_recovery_evidence_frontier),
         "direct_recovery_evidence_component_prior_logit": float(model.direct_recovery_evidence_component_prior_logit),
         "direct_recovery_evidence_component_reliability": ",".join(

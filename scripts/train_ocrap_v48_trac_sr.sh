@@ -141,6 +141,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set model.direct_recovery_evidence_admission_prior_mode="${EVIDENCE_ADMISSION_PRIOR_MODE:-risk_centered}" \
   --set model.direct_recovery_evidence_slack_temperature="${EVIDENCE_SLACK_TEMPERATURE:-0.025}" \
   --set model.direct_recovery_evidence_slack_penalty="${EVIDENCE_SLACK_PENALTY:-1.0}" \
+  --set model.direct_recovery_evidence_frontier_cap_temperature="${EVIDENCE_FRONTIER_CAP_TEMPERATURE:-0.10}" \
   --set model.direct_recovery_evidence_frontier="${EVIDENCE_FRONTIER:-false}" \
   --set model.direct_recovery_evidence_component_prior_logit="${EVIDENCE_COMPONENT_PRIOR_LOGIT:--2.0}" \
   --set loss_weights.dep=0 --set loss_weights.orc=0 --set loss_weights.assign=0 \

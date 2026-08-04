@@ -1,0 +1,17 @@
+﻿task,group,variant,regime,admission_prior_mode,boundary_weight,best_metric,certificate_exit,num_selected,safe_positive_selected,harmful_selected,precision_lcb90,positive_recall,teacher_advantage_mean,candidate_safe_positive_auc
+A_reference_soft_eligible_balanced,A_reference_soft_eligible,balanced,near,safety_slack,0.0,direct_contract_safe_rank_risk,20,5,1,0,0.061895749028760355,0.1111111111111111,0.12449186624037092,0.8636607622114868
+A_reference_soft_eligible_balanced,A_reference_soft_eligible,balanced,contact,safety_slack,0.0,direct_contract_safe_rank_risk,20,19,0,6,0.0,0.0,-0.15526866591844551,0.5675245098039216
+A_reference_soft_eligible_precision,A_reference_soft_eligible,precision,near,safety_slack,0.0,direct_contract_safe_rank_risk,20,9,0,4,0.0,0.0,-0.25953156195180904,0.8109232420826624
+A_reference_soft_eligible_precision,A_reference_soft_eligible,precision,contact,safety_slack,0.0,direct_contract_safe_rank_risk,20,42,1,19,0.007149222756067067,0.05,-0.17649580217008676,0.5554367201426025
+B_add_barrier_gate_balanced,B_add_barrier_gate,balanced,near,barrier_gated_slack,0.0,direct_contract_safe_rank_risk,20,14,2,2,0.06092897719046636,0.2222222222222222,-0.037987077230062324,0.857085346215781
+B_add_barrier_gate_balanced,B_add_barrier_gate,balanced,contact,barrier_gated_slack,0.0,direct_contract_safe_rank_risk,20,69,2,25,0.012110435694320017,0.1,-0.13553520368326516,0.5691844919786097
+B_add_barrier_gate_precision,B_add_barrier_gate,precision,near,barrier_gated_slack,0.0,direct_contract_safe_rank_risk,20,9,0,4,0.0,0.0,-0.25953156195180904,0.803743961352657
+B_add_barrier_gate_precision,B_add_barrier_gate,precision,contact,barrier_gated_slack,0.0,direct_contract_safe_rank_risk,20,29,1,13,0.01037216905718348,0.05,-0.15948019422392612,0.5526403743315508
+C_add_hard_boundary_lexicographic_balanced,C_add_hard_boundary_lexicographic,balanced,near,safety_slack,1.0,direct_contract_lexicographic,20,5,1,0,0.061895749028760355,0.1111111111111111,0.12449186624037092,0.8635265700483091
+C_add_hard_boundary_lexicographic_balanced,C_add_hard_boundary_lexicographic,balanced,contact,safety_slack,1.0,direct_contract_lexicographic,20,24,0,8,0.0,0.0,-0.14448877694286635,0.5679367201426025
+C_add_hard_boundary_lexicographic_precision,C_add_hard_boundary_lexicographic,precision,near,safety_slack,1.0,direct_contract_lexicographic,20,9,0,4,0.0,0.0,-0.25953156195180904,0.8109232420826624
+C_add_hard_boundary_lexicographic_precision,C_add_hard_boundary_lexicographic,precision,contact,safety_slack,1.0,direct_contract_lexicographic,20,42,1,19,0.007149222756067067,0.05,-0.17649580217008676,0.5554367201426025
+D_full_barrier_boundary_balanced,D_full_barrier_boundary,balanced,near,barrier_gated_slack,1.0,direct_contract_lexicographic,20,18,2,5,0.04711087255663264,0.2222222222222222,-0.13063945248400002,0.857085346215781
+D_full_barrier_boundary_balanced,D_full_barrier_boundary,balanced,contact,barrier_gated_slack,1.0,direct_contract_lexicographic,20,57,1,23,0.0052624671782328936,0.05,-0.16549191100785912,0.567602495543672
+D_full_barrier_boundary_precision,D_full_barrier_boundary,precision,near,barrier_gated_slack,1.0,direct_contract_lexicographic,20,8,0,4,0.0,0.0,-0.2924506735958554,0.8060923242082663
+D_full_barrier_boundary_precision,D_full_barrier_boundary,precision,contact,barrier_gated_slack,1.0,direct_contract_lexicographic,20,30,0,15,0.0,0.0,-0.2732499112035799,0.5515151515151515
