@@ -15,6 +15,10 @@ external_baselines:
     mlp_hidden: 128
     mlp_layers: 4
   training:
+    # Avoid incompatible cuDNN SDPA execution-plan selection while retaining fast fused fallbacks.
+    sdpa_backend: safe
+    # Prefer BF16 only when the current GPU supports it; otherwise use FP16 + GradScaler.
+    amp_dtype: auto
     device: auto
     distributed: auto
     batch_size: 128

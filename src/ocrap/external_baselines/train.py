@@ -15,6 +15,7 @@ from torch.utils.data.distributed import DistributedSampler
 from ocrap.data.serialization import ensure_dir, write_json
 from ocrap.external_baselines.data import ExternalGroupDataset, use_teacher_branch_context
 from ocrap.external_baselines.models import build_model_from_cfg
+from ocrap.external_baselines.runtime import configure_cuda_runtime, resolve_amp_dtype
 from ocrap.utils.seed import seed_everything
 
 try:  # tqdm is optional but strongly preferred on training machines.
@@ -311,7 +312,7 @@ def _loss_dict(out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], cfg
     return losses
 
 
-def _epoch(model, loader, opt, device, cfg: dict[str, Any], train: bool, *, rank: int = 0, epoch: int = 0, scaler: Any | None = None) -> dict[str, float]:
+def _epoch(model, loader, opt, device, cfg: dict[str, Any], train: bool, *, rank: int = 0, epoch: int = 0, scaler: Any | None = None, amp_dtype: torch.dtype | None = None) -> dict[str, float]:
     model.train(train)
     bcfg = cfg.get("external_baselines", {}) if isinstance(cfg.get("external_baselines", {}), dict) else {}
     tcfg = bcfg.get("training", {}) if isinstance(bcfg.get("training", {}), dict) else {}
@@ -324,10 +325,9 @@ def _epoch(model, loader, opt, device, cfg: dict[str, Any], train: bool, *, rank
     for batch in iterator:
         batch = _batch_to_device(batch, device)
         amp_enabled = bool(tcfg.get("amp", True)) and device.type == "cuda"
-        amp_name = str(tcfg.get("amp_dtype", "bfloat16")).lower()
-        amp_dtype = torch.bfloat16 if amp_name in {"bf16", "bfloat16"} else torch.float16
+        effective_amp_dtype = amp_dtype or resolve_amp_dtype(tcfg, device)
         with torch.set_grad_enabled(train):
-            with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=amp_enabled):
+            with torch.autocast(device_type=device.type, dtype=effective_amp_dtype, enabled=amp_enabled):
                 out = _forward_model(model, batch, cfg)
                 losses = _loss_dict(out, batch, cfg)
                 loss = losses["loss"]
@@ -419,14 +419,8 @@ def train_external_baseline(dataset: str, output: str, cfg: dict[str, Any], *, v
                 val_ds = train_ds
         tcfg = bcfg.get("training", {}) if isinstance(bcfg.get("training", {}), dict) else {}
         device = _device(cfg, use_ddp=use_ddp, local_rank=local_rank)
-        if device.type == "cuda":
-            torch.backends.cuda.matmul.allow_tf32 = bool(tcfg.get("allow_tf32", True))
-            torch.backends.cudnn.allow_tf32 = bool(tcfg.get("allow_tf32", True))
-            torch.backends.cudnn.benchmark = bool(tcfg.get("cudnn_benchmark", True))
-            try:
-                torch.set_float32_matmul_precision(str(tcfg.get("matmul_precision", "high")))
-            except Exception:
-                pass
+        runtime_info = configure_cuda_runtime(tcfg, device, log=(rank == 0))
+        effective_amp_dtype = resolve_amp_dtype(tcfg, device)
         model = build_model_from_cfg(train_ds.feature_dim, cfg).to(device)
         if bool(tcfg.get("compile", False)) and hasattr(torch, "compile"):
             model = torch.compile(model, mode=str(tcfg.get("compile_mode", "reduce-overhead")), dynamic=bool(tcfg.get("compile_dynamic", False)))
@@ -456,8 +450,7 @@ def train_external_baseline(dataset: str, output: str, cfg: dict[str, Any], *, v
             opt_kwargs.pop("fused", None)
             opt = torch.optim.AdamW(model.parameters(), **opt_kwargs)
         amp_enabled = bool(tcfg.get("amp", True)) and device.type == "cuda"
-        amp_dtype_name = str(tcfg.get("amp_dtype", "bfloat16")).lower()
-        use_scaler = amp_enabled and amp_dtype_name not in {"bf16", "bfloat16"}
+        use_scaler = amp_enabled and effective_amp_dtype == torch.float16
         try:
             scaler = torch.amp.GradScaler("cuda", enabled=use_scaler)
         except Exception:
@@ -491,9 +484,9 @@ def train_external_baseline(dataset: str, output: str, cfg: dict[str, Any], *, v
         for ep in range(1, epochs + 1):
             if train_sampler is not None:
                 train_sampler.set_epoch(ep)
-            tr = _epoch(model, train_loader, opt, device, cfg, train=True, rank=rank, epoch=ep, scaler=scaler)
+            tr = _epoch(model, train_loader, opt, device, cfg, train=True, rank=rank, epoch=ep, scaler=scaler, amp_dtype=effective_amp_dtype)
             with torch.no_grad():
-                va = _epoch(model, val_loader, None, device, cfg, train=False, rank=rank, epoch=ep, scaler=None)
+                va = _epoch(model, val_loader, None, device, cfg, train=False, rank=rank, epoch=ep, scaler=None, amp_dtype=effective_amp_dtype)
             row = {"epoch": ep, "train": tr, "val": va}
             if rank == 0:
                 history.append(row)
@@ -558,7 +551,8 @@ def train_external_baseline(dataset: str, output: str, cfg: dict[str, Any], *, v
             "global_batch_size": int(global_batch_size),
             "num_workers_per_rank": int(num_workers),
             "amp": bool(amp_enabled),
-            "amp_dtype": amp_dtype_name,
+            "amp_dtype": str(effective_amp_dtype).replace("torch.", ""),
+            "cuda_runtime": runtime_info,
             "fused_optimizer": bool(opt_kwargs.get("fused", False)),
             "torch_compile": bool(tcfg.get("compile", False)),
             "history": history,

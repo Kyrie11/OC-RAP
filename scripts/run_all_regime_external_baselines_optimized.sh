@@ -10,6 +10,8 @@ source scripts/lib/v50_runtime.sh
 : "${OCRAP_ROOT:=/data0/senzeyu2/dataset/OCRAP}"
 : "${OUT:=runs/all_regime_external_baselines_v50}"
 : "${CUDA_DEVICES:=0,1}"
+: "${OCRAP_SDPA_BACKEND:=safe}"
+: "${OCRAP_AMP_DTYPE:=auto}"
 : "${MAX_SCENARIOS:=0}"
 : "${MAX_STEPS:=40}"
 : "${RUN_SAFE:=1}"
@@ -70,6 +72,8 @@ fi
 common=(
   OCRAP_ROOT="$OCRAP_ROOT"
   CUDA_DEVICES="$CUDA_DEVICES"
+  OCRAP_SDPA_BACKEND="$OCRAP_SDPA_BACKEND"
+  OCRAP_AMP_DTYPE="$OCRAP_AMP_DTYPE"
   CL_MAX_SCENARIOS="$MAX_SCENARIOS"
   CL_MAX_STEPS="$MAX_STEPS"
   CL_SAVE_PARTIAL=true

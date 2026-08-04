@@ -38,6 +38,8 @@ CL_WOMD="$(v50_normalize_womd_spec "$CL_WOMD" "$WOMD_NUM_SHARDS")"
 : "${DO_OFFLINE:=true}"
 : "${DO_CLOSED_LOOP:=true}"
 : "${CUDA_DEVICES:=0,1}"
+: "${OCRAP_SDPA_BACKEND:=safe}"  # safe keeps Flash/MEM-efficient/math and disables only cuDNN SDPA
+: "${OCRAP_AMP_DTYPE:=auto}"    # BF16 on supported GPUs, otherwise FP16
 : "${CHECKPOINT_ROOT:=$RUN}"
 : "${WAYFORMER_CHECKPOINT:=$CHECKPOINT_ROOT/wayformer_bc/best.pt}"
 : "${GAMEFORMER_SAFE_CHECKPOINT:=$CHECKPOINT_ROOT/gameformer_lite/best.pt}"
@@ -129,6 +131,8 @@ run_train_eval_job() {
       --config "$config" --dataset "$TRAIN_SAFE" --val-dataset "$VAL_SAFE" \
       --baseline "$method" --output "$train_dir" \
       --set external_baselines.training.tqdm=false \
+      --set "external_baselines.training.sdpa_backend=$OCRAP_SDPA_BACKEND" \
+      --set "external_baselines.training.amp_dtype=$OCRAP_AMP_DTYPE" \
       2>&1 | tee "$RUN/train_${method}.log"
     checkpoint_valid "$ckpt" || { echo "Training produced an invalid checkpoint: $ckpt" >&2; return 2; }
   else

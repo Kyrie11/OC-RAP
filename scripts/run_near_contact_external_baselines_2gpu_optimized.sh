@@ -46,6 +46,8 @@ CL_WOMD="$(v50_normalize_womd_spec "$CL_WOMD" "$WOMD_NUM_SHARDS")"
 : "${GAMEFORMER_GLOBAL_BATCH_SIZE:=64}"
 : "${GAMEFORMER_NUM_WORKERS_TOTAL:=8}"
 : "${GAMEFORMER_TRAIN_GPUS:=2}"
+: "${OCRAP_SDPA_BACKEND:=safe}"
+: "${OCRAP_AMP_DTYPE:=auto}"
 
 IFS=',' read -r -a GPU_LIST <<< "$CUDA_DEVICES"
 ((${#GPU_LIST[@]})) || GPU_LIST=(0 1)
@@ -127,6 +129,8 @@ train_gameformer() {
     --set "external_baselines.training.global_batch_size=$GAMEFORMER_GLOBAL_BATCH_SIZE" \
     --set "external_baselines.training.num_workers_total=$GAMEFORMER_NUM_WORKERS_TOTAL" \
     --set external_baselines.training.tqdm=false \
+    --set "external_baselines.training.sdpa_backend=$OCRAP_SDPA_BACKEND" \
+    --set "external_baselines.training.amp_dtype=$OCRAP_AMP_DTYPE" \
     2>&1 | tee "$RUN/train_gameformer_lite.log"
 }
 

@@ -1,0 +1,101 @@
+{
+  "version": "v50.2-cudnn-sdpa-hotfix",
+  "root_cause": "PyTorch selected cuDNN SDPA but cuDNN frontend could not build an execution plan for the Transformer graph.",
+  "default_runtime": {
+    "sdpa_backend": "safe",
+    "cudnn_sdp": false,
+    "flash_sdp": true,
+    "mem_efficient_sdp": true,
+    "math_sdp": true,
+    "amp_dtype": "auto"
+  },
+  "validation": {
+    "targeted_tests": "24 passed",
+    "python_compileall": "passed",
+    "bash_syntax": "passed",
+    "yaml_parse": "passed",
+    "dummy_model_forward": "wayformer/gameformer/betop passed"
+  },
+  "files": [
+    {
+      "path": "src/ocrap/external_baselines/runtime.py",
+      "bytes": 5833,
+      "sha256": "380078ecb38756a5d5a76d36d0845a0413cfc63679df94c093987ccc7b622f1c"
+    },
+    {
+      "path": "src/ocrap/external_baselines/train.py",
+      "bytes": 31154,
+      "sha256": "03969d7ecd647ee7d4fc0da06e6aaabdfbe77b7a97da5512c7ca3483661ce49c"
+    },
+    {
+      "path": "src/ocrap/external_baselines/evaluate.py",
+      "bytes": 24407,
+      "sha256": "a17ed2e3dd5e43f9086522ce4b7a84fc7ccceef69685383e09bfbdf517be0088"
+    },
+    {
+      "path": "src/ocrap/external_baselines/models.py",
+      "bytes": 35993,
+      "sha256": "4bb60192aa422ef80af90b6f61a66d4334996a397361dad322f784eb582465d1"
+    },
+    {
+      "path": "configs/external_baselines/wayformer_bc.yaml",
+      "bytes": 935,
+      "sha256": "75189d63934fbea6e9785b51d78ca416a8abb7ad225038fe2d57999a1fc90926"
+    },
+    {
+      "path": "configs/external_baselines/gameformer_lite.yaml",
+      "bytes": 1474,
+      "sha256": "c8660821bf3959d2e5ff79add7c97c31e5a0bc7d9f55d1d0f1cc003e47b6479b"
+    },
+    {
+      "path": "configs/external_baselines/betopnet_lite.yaml",
+      "bytes": 1541,
+      "sha256": "5122280eb8c50a9e96e84cfe61cf86af0747c35b69ee4557fe26a035c70dcc22"
+    },
+    {
+      "path": "configs/external_baselines/near_contact_gameformer_lite.yaml",
+      "bytes": 1794,
+      "sha256": "0128c011b5d375902decd4ba63445223b22bae878ff3c2983ecb4f5e72909c41"
+    },
+    {
+      "path": "configs/external_baselines/route_bc_lite.yaml",
+      "bytes": 883,
+      "sha256": "26335bc1a974d717e5cf4d9645d46df288dba0dcb69e2300255177b9d4d6750f"
+    },
+    {
+      "path": "scripts/run_all_regime_external_baselines_optimized.sh",
+      "bytes": 5478,
+      "sha256": "a195b38fd6af715a0dab53b239574042dda0800a9e8ae996949b7c8fba732861"
+    },
+    {
+      "path": "scripts/run_safe_regime_external_baselines.sh",
+      "bytes": 10122,
+      "sha256": "ddc4b5b86ef6494a5c2ea40f12d809a2bfc604f7932c72df2ba64ab3520bdc4c"
+    },
+    {
+      "path": "scripts/run_near_contact_external_baselines_2gpu_optimized.sh",
+      "bytes": 12349,
+      "sha256": "9075630c0dd75719b74a5fbe69c95ab403baa0b7526bdbfedaf6ffa7cda8980b"
+    },
+    {
+      "path": "tools/check_external_baseline_cuda_runtime.py",
+      "bytes": 3388,
+      "sha256": "4810f290a7f5952ae8ee025d3d416cfdc1f2f28a64bb3d62bd058ed987609f96"
+    },
+    {
+      "path": "tests/test_external_baseline_cuda_runtime.py",
+      "bytes": 2033,
+      "sha256": "d369623c6ee453127d7b9ce057cb1cfcf9dd45803b99c54bda7afd262f9956cb"
+    },
+    {
+      "path": "OC-RAP-v50.2-CUDNN-SDPA-HOTFIX-ZH.md",
+      "bytes": 4126,
+      "sha256": "e110740787aab204a1b6eed5ca0c4e264eb89251b2c52d8747d1e5e0f8daf076"
+    },
+    {
+      "path": "OC-RAP-v50.2-run-command-ZH.txt",
+      "bytes": 1287,
+      "sha256": "15859235a2b4c742a6853a545bada3274eee74f41d1a843496b9fca4ae8471eb"
+    }
+  ]
+}

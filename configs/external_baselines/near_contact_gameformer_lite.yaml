@@ -28,6 +28,10 @@ external_baselines:
     use_teacher_branch_context: false
     traj_step_scale: 1.5
   training:
+    # Avoid incompatible cuDNN SDPA execution-plan selection while retaining fast fused fallbacks.
+    sdpa_backend: safe
+    # Prefer BF16 only when the current GPU supports it; otherwise use FP16 + GradScaler.
+    amp_dtype: auto
     device: auto
     distributed: auto
     # Global batch is held fixed under DDP; two GPUs therefore use 32/group per rank.

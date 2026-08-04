@@ -5,6 +5,21 @@ from typing import Any
 
 import torch
 from torch import nn
+
+
+def _make_transformer_encoder(layer: nn.TransformerEncoderLayer, num_layers: int) -> nn.TransformerEncoder:
+    """Build a pre-norm encoder without the inapplicable nested-tensor probe.
+
+    PyTorch's nested-tensor fast path is disabled internally for ``norm_first``
+    encoders, but the default constructor still emits a warning on every model
+    creation.  Explicitly disabling it keeps logs clean without changing the
+    executed attention path.  The fallback preserves compatibility with older
+    supported PyTorch releases.
+    """
+    try:
+        return nn.TransformerEncoder(layer, num_layers=int(num_layers), enable_nested_tensor=False)
+    except TypeError:  # PyTorch builds predating the keyword.
+        return nn.TransformerEncoder(layer, num_layers=int(num_layers))
 import torch.nn.functional as F
 
 
@@ -94,7 +109,7 @@ class WayformerRouteBC(nn.Module):
         self.pos = nn.Parameter(torch.zeros(1, self.max_candidates, d_model))
         self.type_route = nn.Parameter(torch.zeros(1, 1, d_model))
         enc_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=int(num_heads), dim_feedforward=4 * d_model, dropout=float(dropout), activation="gelu", batch_first=True, norm_first=True)
-        self.encoder = nn.TransformerEncoder(enc_layer, num_layers=int(num_layers))
+        self.encoder = _make_transformer_encoder(enc_layer, int(num_layers))
         if self.num_latents > 0:
             self.latents = nn.Parameter(torch.randn(1, self.num_latents, d_model) * 0.02)
             self.latent_xattn = nn.MultiheadAttention(d_model, int(num_heads), dropout=float(dropout), batch_first=True)
@@ -193,7 +208,7 @@ class GameFormerLevelK(nn.Module):
         self.agent_encoder = nn.LSTM(GAMEFORMER_STATE_DIM, d_model // 2, num_layers=2, batch_first=True, dropout=dropout)
         self.history_fuse = nn.Sequential(nn.LayerNorm(d_model), nn.Linear(d_model, d_model), nn.GELU(), nn.Dropout(dropout), nn.Linear(d_model, d_model))
         enc_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=int(num_heads), dim_feedforward=4 * d_model, dropout=float(dropout), activation="gelu", batch_first=True, norm_first=True)
-        self.fusion_encoder = nn.TransformerEncoder(enc_layer, num_layers=int(num_layers))
+        self.fusion_encoder = _make_transformer_encoder(enc_layer, int(num_layers))
 
         branch_in = self.root_feature_dim + self.num_options + 2
         if self.use_teacher_branch_context:
@@ -208,7 +223,7 @@ class GameFormerLevelK(nn.Module):
         self.level0_cross = nn.MultiheadAttention(d_model, int(num_heads), dropout=float(dropout), batch_first=True)
         self.level_cross = nn.ModuleList([nn.MultiheadAttention(d_model, int(num_heads), dropout=float(dropout), batch_first=True) for _ in range(max(self.num_levels, 1))])
         self.level_self = nn.ModuleList([
-            nn.TransformerEncoder(nn.TransformerEncoderLayer(d_model=d_model, nhead=int(num_heads), dim_feedforward=4*d_model, dropout=float(dropout), activation="gelu", batch_first=True, norm_first=True), num_layers=1)
+            _make_transformer_encoder(nn.TransformerEncoderLayer(d_model=d_model, nhead=int(num_heads), dim_feedforward=4*d_model, dropout=float(dropout), activation="gelu", batch_first=True, norm_first=True), 1)
             for _ in range(max(self.num_levels, 1))
         ])
         self.future_encoder = GameFormerFutureEncoder(d_model, self.future_len, dropout)
@@ -436,7 +451,7 @@ class BeTopNetLite(nn.Module):
         self.token_proj = nn.Sequential(nn.LayerNorm(input_dim), nn.Linear(input_dim, d_model), nn.GELU(), nn.Dropout(dropout))
         self.pos = nn.Parameter(torch.zeros(1, self.max_candidates, d_model))
         enc_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=int(num_heads), dim_feedforward=4 * d_model, dropout=float(dropout), activation="gelu", batch_first=True, norm_first=True)
-        self.scene_encoder = nn.TransformerEncoder(enc_layer, num_layers=int(num_layers))
+        self.scene_encoder = _make_transformer_encoder(enc_layer, int(num_layers))
 
         self.actor_proj = nn.Sequential(nn.LayerNorm(self.actor_topology_feature_dim), nn.Linear(self.actor_topology_feature_dim, d_model), nn.GELU(), nn.Dropout(dropout), nn.Linear(d_model, d_model))
         self.map_proj = nn.Sequential(nn.LayerNorm(self.map_topology_feature_dim), nn.Linear(self.map_topology_feature_dim, d_model), nn.GELU(), nn.Dropout(dropout), nn.Linear(d_model, d_model))

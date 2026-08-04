@@ -19,6 +19,7 @@ from ocrap.evaluation.metrics import (
 )
 from ocrap.external_baselines.data import group_sample_paths, _branch_arrays, _topology_arrays, _history_arrays, _actor_topology_arrays, _map_topology_arrays, use_teacher_branch_context
 from ocrap.external_baselines.models import build_model_from_cfg
+from ocrap.external_baselines.runtime import configure_cuda_runtime
 from ocrap.external_baselines.observed_risk import observed_risk_profile, observed_risk_profiles
 from ocrap.external_baselines.policies import ExternalSelection, select_external_policy
 from ocrap.models.data import sample_to_feature
@@ -76,6 +77,8 @@ def _load_checkpoint(checkpoint: str | Path | None, cfg: dict[str, Any]) -> tupl
             mcfg[mk] = int(ckpt[ck])
     device_req = str(((merged.get("external_baselines", {}) or {}).get("training", {}) or {}).get("device", (merged.get("training", {}) or {}).get("device", "auto")))
     device = torch.device("cuda" if device_req == "auto" and torch.cuda.is_available() else ("cpu" if device_req == "auto" else device_req))
+    training_cfg = ((merged.get("external_baselines", {}) or {}).get("training", {}) or {})
+    configure_cuda_runtime(training_cfg, device, log=False)
     model = build_model_from_cfg(int(ckpt["input_dim"]), merged).to(device)
     model.load_state_dict(ckpt["model_state"])
     model.eval()
