@@ -1,0 +1,14 @@
+﻿id,finding,impact,fix,status,algorithm_change
+E01,陈旧 PIPELINE_FAILED 被按存在性解释为当前 RC=30,误判权威终态，污染算法归因,attempt/timestamp/RC 契约解析器；same-attempt 矛盾 fail-closed,fixed,no
+E02,结果 ZIP 未从空白 archive 全量重建,源目录已删除的旧 entry 仍留在上传包,fresh write-mode packager、stale 排除、duplicate/hash 审计,fixed,no
+E03,gate decomposition 仍读取 legacy per-regime rule,shared-rule v48.35 产生 FileNotFoundError,兼容 shared rule 与 legacy rule,fixed,no
+E04,关键 post-certificate 诊断使用 || true,诊断失败被静默吞掉,诊断返回码成为 pipeline 契约，失败归一化 RC=30,fixed,no
+E05,同一输出目录没有 attempt ID 和状态历史,不同执行状态可混合,ATTEMPT_STARTED、attempt_id、status_history,fixed,no
+E06,终态 JSON 非原子写入,中断时可能暴露部分 JSON,临时文件+flush+fsync+os.replace,fixed,no
+E07,resume 拒绝时直接 exit 30,本次执行没有完整终态,归档旧状态并发布 attempt-scoped RC=30,fixed,no
+E08,failure-signature 提取错误被忽略,无法区分训练失败和诊断工具失败,记录 signature 工具 RC 与日志，原子发布,fixed,no
+E09,Safe/stress 授权依赖脆弱 marker,可能错误授权或错误阻断,下游必须通过 authoritative RC=0 审计,fixed,no
+E10,生成命令硬编码 SAFE WOMD 路径,跨机器产生工程失败,引用配置的 SAFE_WOMD_SOURCE 并 shell quote,fixed,no
+E11,已有 generated metadata 被 packager 重复写入,ZIP duplicate entry，读取方选择不确定,源目录生成型 metadata 强制排除并唯一重建,fixed,no
+E12,17 个历史测试引用缺失脚本且混入 v50 测试,默认全历史 pytest 误报当前版本回归,独立 v48.35.2 release matrix；记录缺失，不补造,fixed/documented,no
+E13,Safe/stress 授权日志目录未显式创建,非标准布局可能在重定向阶段失败,授权前 mkdir -p OUT/logs,fixed,no

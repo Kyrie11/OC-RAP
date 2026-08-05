@@ -1,0 +1,59 @@
+OC-RAP v48.35.2-ENGINEERING-INTEGRITY validation status
+=======================================================
+
+Scope: engineering/state/provenance/diagnostic/packaging validation only.
+No WOMD/Waymax/GPU training or certificate recomputation was performed locally.
+No model, loss, candidate, rule fitter, gate threshold, or dataset change was made.
+
+PASS  Supported v48.35.2 release matrix: 192 tests
+      batch_1: 58 passed, 1 warning
+      batch_2: 46 passed, 4 warnings
+      batch_3: 67 passed, 1 warning
+      batch_4: 21 passed
+
+PASS  Focused v48.35/v48.35.1/v48.35.2 matrix: 28 tests
+      engineering integrity: 11
+      RC30 training-contract hotfix: 8
+      continuous frontier: 9
+
+PASS  Shell syntax: 58 scripts passed bash -n
+PASS  Python bytecode compilation: python -m compileall -q -f src tools tests
+PASS  RC=0 terminal-state fixture
+PASS  RC=20 terminal-state fixture
+PASS  RC=30 terminal-state fixture
+PASS  same-attempt contradictory PIPELINE_FAILED fails closed
+PASS  legacy stale RC30 marker is recognized and archivable
+PASS  shared-rule gate decomposition
+PASS  controller/calibration embedded Python heredoc compilation
+PASS  post-certificate diagnostics are not silently ignored
+PASS  refused resume publishes an attempt-scoped RC30 terminal state
+PASS  fresh ZIP creation and old-archive replacement
+PASS  stale marker exclusion
+PASS  duplicate ZIP entry rejection
+PASS  generated metadata is written exactly once
+PASS  packaging target/self-output exclusion
+PASS  per-entry round-trip SHA256 verification
+PASS  downstream Safe/stress authorization requires authoritative RC=0
+
+Uploaded-result repair validation
+---------------------------------
+PASS  authoritative state valid
+PASS  authoritative_exit_code=20
+PASS  pipeline_valid=true
+PASS  stale PIPELINE_FAILED archived
+PASS  learning-gate pipeline_failed=false
+PASS  gate decomposition artifact_valid=true
+PASS  development_rule_modes=[shared]
+PASS  gate decomposition errors=[]
+PASS  clean result ZIP has zero duplicate entries
+PASS  clean result ZIP has no top-level stale PIPELINE_FAILED.json
+PASS  exactly one AUTHORITATIVE_RUN_STATUS.json
+PASS  exactly one PACKAGING_MANIFEST.json
+
+Repository boundary
+-------------------
+The uploaded repository retains 17 historical test files whose referenced
+v48.12-v48.32 scripts/tools are absent. They are documented in
+OC-RAP-v48.35.2-unsupported-historical-tests.json and are not fabricated or used
+as a v48.35.2 release criterion. Unrelated v50 tests are also outside this
+version's release contract.

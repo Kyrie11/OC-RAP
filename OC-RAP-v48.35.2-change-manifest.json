@@ -1,0 +1,42 @@
+{
+  "event": "v48_35_2_change_manifest",
+  "version": "v48.35.2-ENGINEERING-INTEGRITY",
+  "created_unix": 1785920649.0342226,
+  "scope": "engineering-only",
+  "algorithm_changed": false,
+  "modified_files": [
+    "ALGORITHM_CHANGELOG.md",
+    "scripts/calibrate_v48_35_shared_certificate_pool.sh",
+    "scripts/run_v48_35_continuous_frontier_dedicated.sh",
+    "scripts/run_v48_35_safe_noninferiority.sh",
+    "scripts/run_v48_35_stress_if_authorized.sh",
+    "tools/check_v48_16_learning_gates.py",
+    "tools/summarize_v48_34_gate_failure.py"
+  ],
+  "added_files": [
+    "tools/audit_v48_35_run_state.py",
+    "tools/package_v48_35_results.py",
+    "scripts/package_v48_35_results.sh",
+    "scripts/run_v48_35_2_release_tests.sh",
+    "tests/test_v48_35_2_engineering_integrity.py",
+    "OC-RAP-v48.35.2-engineering-root-cause-and-fix-ZH.md",
+    "OC-RAP-v48.35.2-run-commands-ZH.txt",
+    "OC-RAP-v48.35.2-engineering-error-audit.csv",
+    "OC-RAP-v48.35.2-unsupported-historical-tests.json",
+    "OC-RAP-v48.35.2-validation-status.txt",
+    "OC-RAP-v48.35.2-VERSION-CONTRACT.json",
+    "OC-RAP-v48.35.2-release-audit.json",
+    "OC-RAP-v48.35.2-change-manifest.json",
+    "OC-RAP-v48.35.1-to-v48.35.2-ENGINEERING-INTEGRITY.patch",
+    "OC-RAP-v48.35.2-FILE-SHA256SUMS.txt"
+  ],
+  "removed_release_artifacts": [
+    "mnt/data/ocrap_waymax/OC-RAP accidental nested copy",
+    "__pycache__",
+    ".pytest_cache"
+  ],
+  "model_or_loss_files_modified": false,
+  "dataset_files_modified": false,
+  "gate_thresholds_modified": false,
+  "test_roots_read": false
+}

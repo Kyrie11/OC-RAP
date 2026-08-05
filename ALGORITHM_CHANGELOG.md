@@ -1,3 +1,53 @@
+## v48.35.2 — ENGINEERING-INTEGRITY-AND-AUTHORITATIVE-STATE (2026-08-05)
+
+### Scope
+
+This release is engineering-only. It does **not** change the OC-RAP model, candidate generator, physical-relative representation, continuous frontier, losses, checkpoint ordering, shared-rule fitter, certificate thresholds, datasets, or Natural gate. It exists solely to make a completed run have one unambiguous terminal state and to prevent stale files or diagnostic-script drift from changing algorithm attribution.
+
+### Root-cause attribution for the uploaded result
+
+The uploaded result archive contains two terminal records from different executions:
+
+- `PIPELINE_FAILED.json`: `created_unix=1785887254.9260776`, stage `training_contract`, raw RC=4, normalized RC=30, certificate/gate not executed.
+- `V48_35_COMPLETE.json`: `created_unix=1785913147.147986`, raw/certificate/pipeline RC=20, `pipeline_valid=true`, certificate and gate executed.
+
+The later completion is authoritative. `GATE_FAILED.json` and `NEXT_COMMANDS_STATUS.json(reason=natural_gate_failed)` were written immediately before it. The active source run had already cleared the old pipeline marker, but the uploaded ZIP retained the earlier entry. Therefore the apparent repeated RC=30 was a stale-package/state-resolution error, not a second pipeline failure.
+
+A second engineering defect occurred after certificate execution: `summarize_v48_34_gate_failure.py` still required legacy `dev_frozen_rule_{near,contact}_v48.json` files, while v48.35 correctly emits one `dev_frozen_shared_rule_v48.json`. The resulting `FileNotFoundError` was hidden by `|| true`, leaving the core RC unchanged but silently dropping required diagnostics.
+
+### Engineering changes
+
+1. Added `tools/audit_v48_35_run_state.py`, which resolves the terminal state from `V48_35_COMPLETE.json`, attempt IDs, timestamps, and the RC/NEXT_COMMANDS contract. A stale marker can be archived, but a same-attempt contradiction is fail-closed.
+2. Added attempt-scoped controller state. Every invocation writes `ATTEMPT_STARTED.json`; previous active terminal files are moved into `status_history/` rather than deleted or mixed with the new attempt.
+3. All v48.35 terminal, gate, calibration, candidate-selection, completion, and learning-gate JSON writes used by this path are atomic (`fsync` + `os.replace`).
+4. Failure publication now creates an attempt-scoped RC=30 completion, blocked-next-command state, and authoritative-state audit. A refused no-retraining resume also publishes a complete RC=30 terminal state instead of exiting without one.
+5. Replaced the gate-decomposition reader so it supports the shared v48.35 development rule and legacy per-regime files. Artifact/protocol errors return nonzero instead of an uncaught traceback.
+6. Removed silent post-certificate diagnostics. Learning-gate and decomposition failures now become `post_certificate_diagnostics` RC=30; they cannot be ignored with `|| true`.
+7. Adaptation-failure signatures now record their own extraction return code and are written atomically. Signature extraction failure no longer disappears silently.
+8. Downstream Safe and stress wrappers require a valid authoritative RC=0 state, rather than trusting marker-file existence alone.
+9. Added `tools/package_v48_35_results.py` and `scripts/package_v48_35_results.sh`. Packaging always creates a fresh ZIP in write mode, excludes stale terminal markers/checkpoints by default, replaces generated metadata exactly once, rejects duplicate entries, round-trip verifies every entry hash, and writes a ZIP SHA256 file.
+10. Generated follow-up commands quote paths and use the configured `SAFE_WOMD_SOURCE`; they no longer embed an unrelated machine-specific path.
+11. Added a version-specific release test launcher. The supported v48.35.2 matrix is isolated from 17 retained historical tests whose referenced v48.12-v48.32 launchers are absent, and from unrelated v50 tests in the mixed research repository. No missing historical scripts were fabricated.
+12. Removed cache artifacts and the accidental nested `mnt/data/ocrap_waymax/OC-RAP` copy from the clean release package.
+
+### Terminal-state contract
+
+- `RC=0`: completion is valid, gate passed, `NEXT_COMMANDS.txt` exists, and no active failure marker is allowed.
+- `RC=20`: completion is valid, gate evaluated and failed naturally, `GATE_FAILED.json` and blocked-next-command status are active, and any older `PIPELINE_FAILED.json` is stale.
+- `RC=30`: completion is invalid for algorithm attribution, an active same-attempt `PIPELINE_FAILED.json` and blocked-next-command status are required, and downstream evaluation is forbidden.
+
+### Validation
+
+- 192 tests in the supported v48.35.2 release matrix passed in isolated batches, with six non-fatal warnings.
+- 28 focused v48.35/v48.35.1/v48.35.2 tests passed (11 engineering-integrity, 8 RC30-contract hotfix, 9 continuous-frontier).
+- All 57 shell scripts passed `bash -n`.
+- `python -m compileall -q -f src tools tests` passed.
+- The uploaded result was repaired without retraining: authoritative state is valid RC=20, the stale RC=30 marker was archived, shared-rule diagnostics completed, and the clean result ZIP contains no duplicate entries or top-level stale `PIPELINE_FAILED.json`.
+
+### Non-claims
+
+No algorithm-quality conclusion is introduced by this release. Local validation did not rerun WOMD/Waymax training or certificate computation; it validates state, provenance, script, packaging, and diagnostic contracts only.
+
 ## v48.34.1 — RC30-MODEL-CONTRACT-AND-PROGRESS-HOTFIX (2026-08-03)
 
 ### Scope

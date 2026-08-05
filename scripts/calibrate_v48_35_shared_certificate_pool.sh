@@ -17,6 +17,9 @@ CERT_CONTACT="${CERT_CONTACT:?CERT_CONTACT is required}"
 DEV_NEAR="${DEV_NEAR:?DEV_NEAR is required}"
 DEV_CONTACT="${DEV_CONTACT:?DEV_CONTACT is required}"
 GPU0="${GPU0:-0}"; GPU1="${GPU1:-1}"
+ATTEMPT_ID="${V4835_ATTEMPT_ID:-legacy-untracked}"
+SAFE_WOMD_SOURCE="${SAFE_WOMD_SOURCE:-/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord@150}"
+export V4835_ATTEMPT_ID="$ATTEMPT_ID" SAFE_WOMD_SOURCE
 for d in "$CAL_SAFE" "$CERT_NEAR" "$CERT_CONTACT" "$DEV_NEAR" "$DEV_CONTACT"; do
   [[ -d "$d" && -f "$d/manifest.csv" ]] || { echo "missing certificate dataset $d" >&2; exit 2; }
 done
@@ -60,6 +63,12 @@ export CONTACT_MAX_FIT_SELECTED_HARM_UCB="${CONTACT_MAX_FIT_SELECTED_HARM_UCB:-0
 export CONTACT_MAX_VERIFY_SELECTED_HARM_UCB="${CONTACT_MAX_VERIFY_SELECTED_HARM_UCB:-0.25}"
 python - "$OUTPUTDIR/GATE_SPEC.json" "$CAL_SAFE" "$CERT_NEAR" "$CERT_CONTACT" "$DEV_NEAR" "$DEV_CONTACT" <<'PY_GATE'
 import hashlib,json,os,pathlib,sys,time
+def atomic(path,doc):
+    path.parent.mkdir(parents=True,exist_ok=True)
+    tmp=path.with_name(f'.{path.name}.tmp.{os.getpid()}.{time.time_ns()}')
+    with tmp.open('w',encoding='utf-8') as f:
+        json.dump(doc,f,ensure_ascii=False,indent=2); f.write('\n'); f.flush(); os.fsync(f.fileno())
+    os.replace(tmp,path)
 def f(name): return float(os.environ[name])
 def i(name): return int(os.environ[name])
 def dataset_record(role, value):
@@ -102,15 +111,14 @@ protocol={
  'fit_verify_scene_disjoint':True,'test_roots_read':False,
 }
 canonical=json.dumps(protocol,sort_keys=True,separators=(',',':')).encode()
-doc={'event':'v48_35_gate_protocol_preregistered','created_unix':time.time(),
-     'protocol_sha256':hashlib.sha256(canonical).hexdigest(),'protocol':protocol}
+doc={'event':'v48_35_gate_protocol_preregistered','version':'v48.35.2-ENGINEERING-INTEGRITY','created_unix':time.time(),
+     'attempt_id':os.environ.get('V4835_ATTEMPT_ID'),'protocol_sha256':hashlib.sha256(canonical).hexdigest(),'protocol':protocol}
 p=pathlib.Path(sys.argv[1])
 if p.exists():
     old=json.load(open(p))
     if old.get('protocol') != protocol:
         raise SystemExit('GATE_SPEC.json already exists with a different protocol; use a new OUTPUTDIR')
-else:
-    p.write_text(json.dumps(doc,ensure_ascii=False,indent=2)+'\n')
+atomic(p,doc)
 PY_GATE
 
 calibrate_variant() {
@@ -253,7 +261,12 @@ calibrate_variant() {
   python - "$tmp" "$variant" "$ckpt" "$sn" "$sc" <<'PY'
 import hashlib,json,os,pathlib,sys,time
 root=pathlib.Path(sys.argv[1]); variant=sys.argv[2]; ckpt=pathlib.Path(sys.argv[3])
-near_rc,contact_rc=int(sys.argv[4]),int(sys.argv[5])
+near_rc,contact_rc=int(sys.argv[4]),int(sys.argv[5]); attempt_id=os.environ.get('V4835_ATTEMPT_ID')
+def atomic(path,doc):
+    tmp=path.with_name(f'.{path.name}.tmp.{os.getpid()}.{time.time_ns()}')
+    with tmp.open('w',encoding='utf-8') as f:
+        json.dump(doc,f,ensure_ascii=False,indent=2); f.write('\n'); f.flush(); os.fsync(f.fileno())
+    os.replace(tmp,path)
 required=[
  'calibration_mix_v48.json','calibration_safe_v48.json','calibration_near_v48.json','calibration_contact_v48.json',
  'gamma_rec_by_bucket_v48.json','dev_diagnostic_near_v48.json','dev_diagnostic_contact_v48.json','dev_frozen_shared_rule_v48.json',
@@ -287,15 +300,15 @@ for name,rc in (('near',near_rc),('contact',contact_rc)):
         raise SystemExit(f'policy certificate artifact/protocol failure for {name}: rc={rc}')
 safe=json.load(open(root/'calibration_safe_v48.json'))
 safe_status={
- 'event':'v48_35_safe_regime_status','created_unix':time.time(),'variant':variant,
+ 'event':'v48_35_safe_regime_status','version':'v48.35.2-ENGINEERING-INTEGRITY','created_unix':time.time(),'attempt_id':attempt_id,'variant':variant,
  'standard_calibration_valid':int(safe.get('num_samples',0) or 0)>0,
  'num_samples':int(safe.get('num_samples',0) or 0),'num_negative':int(safe.get('num_negative',0) or 0),
  'gamma_rec':safe.get('gamma_rec'),'policy_natural_gate_evaluated':False,
  'reason':'no dedicated scene-disjoint Safe policy certificate population is registered; Safe is checked by calibrated recovery threshold plus paired non-inferiority closed loop',
  'test_roots_read':False}
-(root/'SAFE_REGIME_STATUS.json').write_text(json.dumps(safe_status,ensure_ascii=False,indent=2)+'\n')
+atomic(root/'SAFE_REGIME_STATUS.json',safe_status)
 certificate_data_valid=(near_rc in (0,3) and contact_rc in (0,3))
-doc={'event':'v48_35_certificate_pool_calibration_complete','created_unix':time.time(),
+doc={'event':'v48_35_certificate_pool_calibration_complete','version':'v48.35.2-ENGINEERING-INTEGRITY','created_unix':time.time(),'attempt_id':attempt_id,
  'variant':variant,'checkpoint':str(ckpt),'checkpoint_sha256':hashlib.sha256(ckpt.read_bytes()).hexdigest(),
  'near_exit_code':near_rc,'contact_exit_code':contact_rc,
  'certificate_executed':True,'gate_evaluated':certificate_data_valid,
@@ -305,7 +318,7 @@ doc={'event':'v48_35_certificate_pool_calibration_complete','created_unix':time.
  'certificate_mode':'external_rule_full_verification',
  'opportunity_label_mode':os.environ.get('OPPORTUNITY_LABEL_MODE','raw_benefit'),
  'gate_positive_mode':os.environ.get('GATE_POSITIVE_MODE','safe_benefit')}
-(root/'CERTIFICATE_CALIBRATION_COMPLETE.json').write_text(json.dumps(doc,indent=2)+'\n')
+atomic(root/'CERTIFICATE_CALIBRATION_COMPLETE.json',doc)
 PY
   rm -rf "$final.old"
   [[ ! -e "$final" ]] || mv "$final" "$final.old"
@@ -334,8 +347,18 @@ if [[ -n "$P1" ]]; then wait "$P1"; S1=$?; fi
 set -e
 
 python - "$OUTPUTDIR" "$S0" "$S1" "$VARIANTS" <<'PY'
-import json,pathlib,sys,time
-root=pathlib.Path(sys.argv[1]); report={}; valid=[]
+import json,os,pathlib,shlex,sys,time
+root=pathlib.Path(sys.argv[1]); report={}; valid=[]; attempt_id=os.environ.get('V4835_ATTEMPT_ID')
+def atomic_json(path,doc):
+    tmp=path.with_name(f'.{path.name}.tmp.{os.getpid()}.{time.time_ns()}')
+    with tmp.open('w',encoding='utf-8') as f:
+        json.dump(doc,f,ensure_ascii=False,indent=2); f.write('\n'); f.flush(); os.fsync(f.fileno())
+    os.replace(tmp,path)
+def atomic_text(path,text):
+    tmp=path.with_name(f'.{path.name}.tmp.{os.getpid()}.{time.time_ns()}')
+    with tmp.open('w',encoding='utf-8') as f:
+        f.write(text); f.flush(); os.fsync(f.fileno())
+    os.replace(tmp,path)
 requested={x.strip() for x in sys.argv[4].split(',') if x.strip()}
 for name in ('balanced','precision'):
     if name not in requested: continue
@@ -369,11 +392,11 @@ for name in ('balanced','precision'):
 requested_codes={'balanced':int(sys.argv[2]),'precision':int(sys.argv[3])}
 requested_codes={k:v for k,v in requested_codes.items() if k in requested}
 all_requested_gates_evaluated=bool(requested_codes) and all(v in (0,20) for v in requested_codes.values())
-status={'event':'v48_35_certificate_candidate_selection','created_unix':time.time(),
+status={'event':'v48_35_certificate_candidate_selection','version':'v48.35.2-ENGINEERING-INTEGRITY','created_unix':time.time(),'attempt_id':attempt_id,
         'controller_exit_codes':{'balanced':int(sys.argv[2]),'precision':int(sys.argv[3])},
         'certificate_executed':True,'gate_evaluated':all_requested_gates_evaluated,
         'valid_candidates':[x[3] for x in valid],'candidates':report,'test_roots_read':False}
-(root/'dedicated_recalibration_status.json').write_text(json.dumps(status,ensure_ascii=False,indent=2)+'\n')
+atomic_json(root/'dedicated_recalibration_status.json',status)
 requested_code_values=list(requested_codes.values())
 artifact_failure=any(code not in (0,20) for code in requested_code_values) or any(
     any(('missing' in bucket_doc or 'artifact_error' in bucket_doc) for bucket_doc in variant_doc.values())
@@ -381,35 +404,36 @@ artifact_failure=any(code not in (0,20) for code in requested_code_values) or an
 )
 def write_blocked(reason, exit_code):
     doc={
-      'event':'v48_35_next_commands_blocked','created_unix':time.time(),
+      'event':'v48_35_next_commands_blocked','version':'v48.35.2-ENGINEERING-INTEGRITY','created_unix':time.time(),'attempt_id':attempt_id,
       'reason':reason,'exit_code':int(exit_code),'certificate_executed':True,
       'gate_evaluated':bool(status.get('gate_evaluated',False)) if reason=='natural_gate_failed' else False,
       'test_roots_read':False,'controller_exit_codes':status['controller_exit_codes'],
     }
-    (root/'NEXT_COMMANDS_BLOCKED.json').write_text(json.dumps(doc,ensure_ascii=False,indent=2)+'\n')
-    (root/'NEXT_COMMANDS_STATUS.json').write_text(json.dumps({**doc,'generated':False},ensure_ascii=False,indent=2)+'\n')
+    atomic_json(root/'NEXT_COMMANDS_BLOCKED.json',doc)
+    atomic_json(root/'NEXT_COMMANDS_STATUS.json',{**doc,'generated':False})
 if artifact_failure:
-    (root/'CALIBRATION_FAILED.json').write_text(json.dumps(status,ensure_ascii=False,indent=2)+'\n')
+    atomic_json(root/'CALIBRATION_FAILED.json',status)
     write_blocked('certificate_artifact_or_protocol_failure',30)
     print(json.dumps(status,ensure_ascii=False,indent=2))
     raise SystemExit(30)
 if not valid:
-    (root/'GATE_FAILED.json').write_text(json.dumps(status,ensure_ascii=False,indent=2)+'\n')
+    atomic_json(root/'GATE_FAILED.json',status)
     write_blocked('natural_gate_failed',20)
     print(json.dumps(status,ensure_ascii=False,indent=2))
     raise SystemExit(20)
 valid.sort(); chosen=valid[0][4]
-(root/'chosen_base_run_dedicated.txt').write_text(str(chosen)+'\n')
+atomic_text(root/'chosen_base_run_dedicated.txt',str(chosen)+'\n')
+safe_source=os.environ['SAFE_WOMD_SOURCE']
 commands=(
- f'''# Natural gate passed on the scene-disjoint dedicated certificate pool.\n'''
- f'''BASE_RUN={chosen} RUN={root}/safe_paired SAFE_NOMINAL_ONLY=1 RUN_SAFE_PAIRED_SCALAR=1 SAFE_WOMD_SOURCE=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord@150 SAFE_RAW_MAX_SCENARIOS=0 bash scripts/run_v48_35_safe_noninferiority.sh\n'''
- f'''OUT={root} bash scripts/run_v48_35_stress_if_authorized.sh\n''')
-(root/'NEXT_COMMANDS.txt').write_text(commands)
-(root/'NEXT_COMMANDS_STATUS.json').write_text(json.dumps({
-  'event':'v48_35_next_commands_generated','created_unix':time.time(),
+ '# Natural gate passed on the scene-disjoint dedicated certificate pool.\n'
+ f'BASE_RUN={shlex.quote(str(chosen))} RUN={shlex.quote(str(root / "safe_paired"))} SAFE_NOMINAL_ONLY=1 RUN_SAFE_PAIRED_SCALAR=1 SAFE_WOMD_SOURCE={shlex.quote(safe_source)} SAFE_RAW_MAX_SCENARIOS=0 bash scripts/run_v48_35_safe_noninferiority.sh\n'
+ f'OUT={shlex.quote(str(root))} bash scripts/run_v48_35_stress_if_authorized.sh\n')
+atomic_text(root/'NEXT_COMMANDS.txt',commands)
+atomic_json(root/'NEXT_COMMANDS_STATUS.json',{
+  'event':'v48_35_next_commands_generated','version':'v48.35.2-ENGINEERING-INTEGRITY','created_unix':time.time(),'attempt_id':attempt_id,
   'generated':True,'certificate_executed':True,'gate_evaluated':True,'gate_passed':True,'chosen_base_run':str(chosen),
   'test_roots_read':False,
-},ensure_ascii=False,indent=2)+'\n')
+})
 print(json.dumps(status,ensure_ascii=False,indent=2))
 print('chosen',chosen)
 PY

@@ -10,7 +10,14 @@ RUN="${RUN:?RUN is required}"
 # for nonstandard layouts, but never authorize from a checkpoint alone.
 OUT="${OUT:-$(cd -- "$BASE_RUN/../.." && pwd)}"
 STATUS="$OUT/V48_35_COMPLETE.json"
+mkdir -p "$OUT/logs"
 [[ -s "$STATUS" ]] || { echo "missing $STATUS" >&2; exit 30; }
+set +e
+python tools/audit_v48_35_run_state.py --run "$OUT" --output "$OUT/AUTHORITATIVE_RUN_STATUS.json" --expect-exit-code 0 \
+  >"$OUT/logs/safe_authorization_state.log" 2>&1
+auth_rc=$?
+set -e
+[[ "$auth_rc" == 0 ]] || { echo "Safe run is not authorized by authoritative run state" >&2; exit 30; }
 [[ -s "$OUT/NEXT_COMMANDS.txt" ]] || { echo "Safe run is not authorized: missing $OUT/NEXT_COMMANDS.txt" >&2; exit 20; }
 python - "$STATUS" "$BASE_RUN" <<'PY_STATUS'
 import json,pathlib,sys

@@ -1,0 +1,87 @@
+{
+  "event": "v48_35_2_unsupported_historical_test_assets",
+  "version": "v48.35.2-ENGINEERING-INTEGRITY",
+  "scope": "informational; these retained historical tests are excluded from the supported release matrix because their referenced launchers/tools are absent from the uploaded repository",
+  "num_test_files": 17,
+  "test_files": {
+    "test_v48_12_trident.py": [
+      "train_ocrap_v48_12_trident.sh"
+    ],
+    "test_v48_13_terra.py": [
+      "train_ocrap_v48_13_terra.sh"
+    ],
+    "test_v48_14_prism.py": [
+      "run_v48_14_parallel_ablations.sh"
+    ],
+    "test_v48_20_unison_bridge.py": [
+      "adapt_ocrap_v48_20_unison_variant.sh"
+    ],
+    "test_v48_21_concord_bridge.py": [
+      "adapt_ocrap_v48_21_concord_variant.sh"
+    ],
+    "test_v48_22_covenant_bridge.py": [
+      "adapt_ocrap_v48_22_covenant_variant.sh",
+      "run_v48_22_parallel_ablations.sh"
+    ],
+    "test_v48_23_frontier_bridge.py": [
+      "run_v48_23_dev_shadow_closed_loop.sh",
+      "run_v48_23_parallel_ablations.sh"
+    ],
+    "test_v48_24_support_bridge.py": [
+      "adapt_ocrap_v48_24_support_variant.sh",
+      "run_v48_24_dev_shadow_closed_loop.sh",
+      "run_v48_24_parallel_ablations.sh"
+    ],
+    "test_v48_25_integrity_bridge.py": [
+      "calibrate_v48_25_certificate_pool.sh",
+      "run_v48_25_integrity_dedicated.sh",
+      "run_v48_25_parallel_ablations.sh"
+    ],
+    "test_v48_26_execution_physics_bridge.py": [
+      "run_v48_26_execution_physics_dedicated.sh"
+    ],
+    "test_v48_27_factor_physics_bridge.py": [
+      "adapt_ocrap_v48_27_factor_physics_variant.sh",
+      "calibrate_v48_27_certificate_pool.sh",
+      "run_v48_27_dev_shadow_closed_loop.sh",
+      "run_v48_27_parallel_ablations.sh"
+    ],
+    "test_v48_28_provenance_margin_bridge.py": [
+      "adapt_ocrap_v48_28_provenance_margin_variant.sh",
+      "run_v48_28_dev_shadow_closed_loop.sh",
+      "run_v48_28_parallel_ablations.sh"
+    ],
+    "test_v48_29_veto_rank_physics_bridge.py": [
+      "adapt_ocrap_v48_29_veto_rank_variant.sh",
+      "run_v48_29_dev_shadow_closed_loop.sh",
+      "run_v48_29_parallel_ablations.sh",
+      "run_v48_29_veto_rank_physics_dedicated.sh"
+    ],
+    "test_v48_30_slack_rank_bridge.py": [
+      "adapt_ocrap_v48_30_slack_rank_variant.sh",
+      "run_v48_30_parallel_ablations.sh"
+    ],
+    "test_v48_31_contract_slack_rank.py": [
+      "adapt_ocrap_v48_31_contract_slack_rank_single_stage.sh",
+      "adapt_ocrap_v48_31_contract_slack_rank_variant.sh",
+      "audit_v48_30_shadow_provenance.py",
+      "check_v48_30_shadow_runtime_contract.py",
+      "run_v48_31_dev_shadow_closed_loop.sh",
+      "run_v48_31_parallel_ablations.sh"
+    ],
+    "test_v48_32_1_rc30_integrity_hotfix.py": [
+      "adapt_ocrap_v48_32_1_identity_utility_variant.sh",
+      "run_v48_32_1_rc30_integrity_hotfix_dedicated.sh"
+    ],
+    "test_v48_32_identity_utility_bridge.py": [
+      "adapt_ocrap_v48_32_identity_utility_single_stage.sh",
+      "adapt_ocrap_v48_32_identity_utility_variant.sh",
+      "run_v48_32_dev_shadow_closed_loop.sh",
+      "run_v48_32_identity_utility_bridge_ablations.sh",
+      "run_v48_32_identity_utility_bridge_dedicated.sh",
+      "run_v48_32_stress_if_authorized.sh"
+    ]
+  },
+  "fabricated_replacements_added": false,
+  "test_roots_read": false
+}

@@ -1,0 +1,35 @@
+{
+  "event": "v48_35_2_version_contract",
+  "version": "v48.35.2-ENGINEERING-INTEGRITY",
+  "created_unix": 1785920820.5206494,
+  "scope": "engineering-only",
+  "algorithm_changed": false,
+  "primary_controller": "scripts/run_v48_35_continuous_frontier_dedicated.sh",
+  "authoritative_state_resolver": "tools/audit_v48_35_run_state.py",
+  "result_packager": "tools/package_v48_35_results.py",
+  "terminal_exit_codes": [
+    0,
+    20,
+    30
+  ],
+  "shared_rule_required": true,
+  "regime_id_used_for_policy": false,
+  "supported_release_test_count": 192,
+  "focused_test_count": 28,
+  "shell_script_count": 58,
+  "historical_test_asset_index": "OC-RAP-v48.35.2-unsupported-historical-tests.json",
+  "critical_file_sha256": {
+    "scripts/run_v48_35_continuous_frontier_dedicated.sh": "2a1539e27f07013d683a7f80b759855864a3db9c2b9924150debcfa2652397ab",
+    "scripts/calibrate_v48_35_shared_certificate_pool.sh": "2ff69bdbb57721f25f325acf15e3ad3c4400887186d8135b1d4c01e67c7cc443",
+    "scripts/run_v48_35_safe_noninferiority.sh": "a0a9854b2aaaef4d887ad4067076f802a0788f0b3df93fef63d015470ee9d68b",
+    "scripts/run_v48_35_stress_if_authorized.sh": "e02c376c5781d3e3138fc91accb46e5a37100e7676e76e0e0b995c57b63a4184",
+    "scripts/package_v48_35_results.sh": "63310091e538df8ede340d4165ae9d1e645e454cc213307cfc8f6d03ab44932b",
+    "scripts/run_v48_35_2_release_tests.sh": "b10eaee52ffd95ab1a34f58658ae7e257f8d38781e52cbe62423b90da3e2f2f5",
+    "tools/audit_v48_35_run_state.py": "da5b8814e336ae9e0f96a75bd8162325cde0e764f9b6fa8fc4019c9686019024",
+    "tools/package_v48_35_results.py": "38c43735fc87d8c19e5ed8fdd440b48d222ed1b1e93327a9d0d21f08df37a588",
+    "tools/check_v48_16_learning_gates.py": "f6661999818f7caf1e47bc5b2de9babefebb25bbcd6cd2066b7167909d14f454",
+    "tools/summarize_v48_34_gate_failure.py": "35635132f12e6aa39b52d8f748286a80e85007e20d231b09eddb928e0b092557",
+    "tests/test_v48_35_2_engineering_integrity.py": "ca3452b4edc98cc8fdaeb7fb2b207dd1e8a569f2e809c763ee0807c370824137"
+  },
+  "test_roots_read": false
+}

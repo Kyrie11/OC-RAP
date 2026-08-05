@@ -1,0 +1,39 @@
+{
+  "event": "v48_35_2_release_audit",
+  "version": "v48.35.2-ENGINEERING-INTEGRITY",
+  "created_unix": 1785920820.5207753,
+  "valid": true,
+  "algorithm_changed": false,
+  "uploaded_result_authoritative_exit_code": 20,
+  "uploaded_result_pipeline_valid": true,
+  "uploaded_result_stale_pipeline_marker_detected": true,
+  "uploaded_result_stale_pipeline_marker_archived_in_repaired_copy": true,
+  "shared_rule_diagnostic_compatible": true,
+  "silent_required_diagnostics_removed": true,
+  "attempt_scoped_terminal_state": true,
+  "atomic_status_writes": true,
+  "fresh_transactional_packaging": true,
+  "duplicate_zip_entries_rejected": true,
+  "supported_release_tests": {
+    "passed": 192,
+    "warnings": 6,
+    "batches": [
+      58,
+      46,
+      67,
+      21
+    ]
+  },
+  "focused_tests": {
+    "passed": 28,
+    "warnings": 1
+  },
+  "shell_syntax": {
+    "passed": 58
+  },
+  "compileall": true,
+  "real_gpu_training_rerun": false,
+  "certificate_recomputed": false,
+  "algorithm_quality_analyzed": false,
+  "test_roots_read": false
+}

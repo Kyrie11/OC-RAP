@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Layered ANCHOR/BRIDGE diagnostic: adaptation, certificate artifacts, Natural gate."""
 from __future__ import annotations
-import argparse, json, math
+import argparse, json, math, os, time
 from pathlib import Path
 from typing import Any
 
@@ -63,10 +63,29 @@ def main() -> int:
         item['calibration_complete']=(root/'calibration'/'CERTIFICATE_CALIBRATION_COMPLETE.json').is_file()
         report['variants'][variant]=item
     report['next_commands_present']=(a.run/'NEXT_COMMANDS.txt').is_file()
-    report['pipeline_failed']=(a.run/'PIPELINE_FAILED.json').is_file()
+    try:
+        from audit_v48_35_run_state import resolve as resolve_v48_35_state
+        authoritative=resolve_v48_35_state(a.run)
+    except Exception as exc:
+        authoritative={'valid':False,'authoritative_exit_code':None,'error':repr(exc)}
+    report['authoritative_state']={
+        'valid':authoritative.get('valid'),
+        'exit_code':authoritative.get('authoritative_exit_code'),
+        'pipeline_valid':authoritative.get('pipeline_valid'),
+        'stale_markers':authoritative.get('stale_markers') or [],
+        'active_contradictions':authoritative.get('active_contradictions') or [],
+    }
+    if authoritative.get('valid') and authoritative.get('authoritative_exit_code') in (0,20,30):
+        report['pipeline_failed']=authoritative.get('authoritative_exit_code') == 30
+    else:
+        report['pipeline_failed']=(a.run/'PIPELINE_FAILED.json').is_file()
     report['adaptation_failures']=[p.name for p in sorted(a.run.glob('ADAPTATION_FAILED_*.json'))]
     report['calibration_failed']=(a.run/'CALIBRATION_FAILED.json').is_file()
     report['gate_failed']=(a.run/'GATE_FAILED.json').is_file()
-    a.output.parent.mkdir(parents=True,exist_ok=True); a.output.write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n')
+    a.output.parent.mkdir(parents=True,exist_ok=True)
+    tmp=a.output.with_name(f'.{a.output.name}.tmp.{os.getpid()}.{time.time_ns()}')
+    with tmp.open('w',encoding='utf-8') as handle:
+        json.dump(report,handle,ensure_ascii=False,indent=2); handle.write('\n'); handle.flush(); os.fsync(handle.fileno())
+    os.replace(tmp,a.output)
     print(json.dumps(report,ensure_ascii=False,indent=2)); return 0
 if __name__=='__main__': raise SystemExit(main())

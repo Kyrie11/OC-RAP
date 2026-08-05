@@ -35,6 +35,23 @@ COMPONENT_HARM_HARD_TOLERANCE="${COMPONENT_HARM_HARD_TOLERANCE:-0.05}"
 COMPONENT_HARM_PROXY_TOLERANCE="${COMPONENT_HARM_PROXY_TOLERANCE:-0.05}"
 
 mkdir -p "$OUTPUTDIR/logs"
+ATTEMPT_ID="${V4835_ATTEMPT_ID:-$(python - <<'PY_ATTEMPT'
+import time,uuid
+print(f"v48352-{time.time_ns()}-{uuid.uuid4().hex[:12]}")
+PY_ATTEMPT
+)}"
+export V4835_ATTEMPT_ID="$ATTEMPT_ID"
+python - "$OUTPUTDIR/ATTEMPT_STARTED.json" "$ATTEMPT_ID" "$SOURCE_RUN" "$PROTOCOL_ROOT" "$RESUME_AFTER_ADAPTATION" <<'PY_ATTEMPT_STATUS'
+import json,os,pathlib,sys,time
+p=pathlib.Path(sys.argv[1]); p.parent.mkdir(parents=True,exist_ok=True)
+doc={'event':'v48_35_attempt_started','version':'v48.35.2-ENGINEERING-INTEGRITY',
+     'created_unix':time.time(),'attempt_id':sys.argv[2],'source_run':sys.argv[3],
+     'protocol_root':sys.argv[4],'resume_after_adaptation':sys.argv[5]=='1','test_roots_read':False}
+tmp=p.with_name(f'.{p.name}.tmp.{os.getpid()}.{time.time_ns()}')
+with tmp.open('w',encoding='utf-8') as f:
+    json.dump(doc,f,ensure_ascii=False,indent=2); f.write('\n'); f.flush(); os.fsync(f.fileno())
+os.replace(tmp,p)
+PY_ATTEMPT_STATUS
 # A no-retraining resume must inspect the original failure state before any
 # status cleanup. The authorization is narrow and validates checkpoint bytes,
 # checkpoint config, source/protocol identity, and absence of certificate access.
@@ -51,10 +68,16 @@ VAL_GROUP_SUMMARY="$OUTPUTDIR/evidence_adapt_dev_teacher_pcd_index_summary.json"
 
 write_pipeline_failure() {
   local stage="$1" raw_rc="$2" detail="${3:-}" balanced_rc="${4:-}" precision_rc="${5:-}"
-  python - "$OUTPUTDIR" "$PROTOCOL_ROOT" "$SOURCE_RUN" "$stage" "$raw_rc" "$detail" "$balanced_rc" "$precision_rc" <<'PY_FAILURE'
-import hashlib,json,pathlib,sys,time
+  python - "$OUTPUTDIR" "$PROTOCOL_ROOT" "$SOURCE_RUN" "$stage" "$raw_rc" "$detail" "$balanced_rc" "$precision_rc" "$ATTEMPT_ID" <<'PY_FAILURE'
+import hashlib,json,os,pathlib,shutil,sys,time
 root=pathlib.Path(sys.argv[1]); protocol=pathlib.Path(sys.argv[2]); source=pathlib.Path(sys.argv[3])
-stage=sys.argv[4]; raw_rc=int(sys.argv[5]); detail=sys.argv[6]
+stage=sys.argv[4]; raw_rc=int(sys.argv[5]); detail=sys.argv[6]; attempt_id=sys.argv[9]
+def atomic(path,doc):
+    path.parent.mkdir(parents=True,exist_ok=True)
+    tmp=path.with_name(f'.{path.name}.tmp.{os.getpid()}.{time.time_ns()}')
+    with tmp.open('w',encoding='utf-8') as f:
+        json.dump(doc,f,ensure_ascii=False,indent=2); f.write('\n'); f.flush(); os.fsync(f.fileno())
+    os.replace(tmp,path)
 def maybe_int(x):
     try: return int(x)
     except Exception: return None
@@ -67,29 +90,49 @@ for name in ('balanced','precision'):
 next_status={}
 try: next_status=json.load(open(root/'NEXT_COMMANDS_STATUS.json'))
 except Exception: pass
-certificate_executed=stage in {'certificate','completion_contract'}
+certificate_executed=stage in {'certificate','post_certificate_diagnostics','completion_contract','terminal_state_contract'}
 gate_evaluated=bool(next_status.get('gate_evaluated',False)) if certificate_executed else False
-failed={'event':'v48_35_pipeline_failed','created_unix':time.time(),'stage':stage,
+# A natural-gate marker cannot remain active after a later engineering failure.
+gate_marker=root/'GATE_FAILED.json'
+if gate_marker.exists():
+    history=root/'status_history'/f'overridden-by-{attempt_id}-{time.time_ns()}'
+    history.mkdir(parents=True,exist_ok=True)
+    shutil.move(str(gate_marker),str(history/gate_marker.name))
+try: (root/'NEXT_COMMANDS.txt').unlink()
+except FileNotFoundError: pass
+failed={'event':'v48_35_pipeline_failed','version':'v48.35.2-ENGINEERING-INTEGRITY','created_unix':time.time(),'attempt_id':attempt_id,'stage':stage,
         'raw_exit_code':raw_rc,'normalized_exit_code':30,'pipeline_exit_code':30,'detail':detail,
         'adaptation_exit_codes':{'balanced':balanced_rc,'precision':precision_rc},
         'certificate_executed':certificate_executed,'gate_evaluated':gate_evaluated,
         'pipeline_valid':False,'test_roots_read':False}
-(root/'PIPELINE_FAILED.json').write_text(json.dumps(failed,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
-doc={'event':'v48_35_continuous_frontier_controller_complete','created_unix':time.time(),
+atomic(root/'PIPELINE_FAILED.json',failed)
+doc={'event':'v48_35_continuous_frontier_controller_complete','version':'v48.35.2-ENGINEERING-INTEGRITY','created_unix':time.time(),'attempt_id':attempt_id,
      'source_run':str(source),'protocol_root':str(protocol),'variants':variants,
      'raw_certificate_exit_code':raw_rc if certificate_executed else None,
      'certificate_exit_code':30 if certificate_executed else None,'pipeline_exit_code':30,
      'certificate_executed':certificate_executed,'gate_evaluated':gate_evaluated,
      'gate_passed':False,'next_commands_generated':False,
      'pipeline_valid':False,'failure_stage':stage,'test_roots_read':False}
-(root/'V48_35_COMPLETE.json').write_text(json.dumps(doc,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+atomic(root/'V48_35_COMPLETE.json',doc)
 blocked={'event':'v48_35_next_commands_blocked','created_unix':time.time(),
          'generated':False,'reason':'pipeline_failure','failure_stage':stage,
          'pipeline_exit_code':30,'certificate_executed':certificate_executed,
          'gate_evaluated':gate_evaluated,'test_roots_read':False}
-(root/'NEXT_COMMANDS_BLOCKED.json').write_text(json.dumps(blocked,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
-(root/'NEXT_COMMANDS_STATUS.json').write_text(json.dumps(blocked,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+blocked['attempt_id']=attempt_id
+atomic(root/'NEXT_COMMANDS_BLOCKED.json',blocked)
+atomic(root/'NEXT_COMMANDS_STATUS.json',blocked)
 PY_FAILURE
+  set +e
+  python tools/audit_v48_35_run_state.py --run "$OUTPUTDIR" \
+    --output "$OUTPUTDIR/AUTHORITATIVE_RUN_STATUS.json" \
+    --expect-exit-code 30 --expect-attempt-id "$ATTEMPT_ID" \
+    >"$OUTPUTDIR/logs/authoritative_failure_state.log" 2>&1
+  local audit_rc=$?
+  set -e
+  if [[ "$audit_rc" != 0 ]]; then
+    printf 'authoritative failure-state audit failed: rc=%s\n' "$audit_rc" \
+      >"$OUTPUTDIR/TERMINAL_STATE_AUDIT_FAILED.txt"
+  fi
 }
 
 if [[ "$RESUME_AFTER_ADAPTATION" == 1 ]]; then
@@ -101,18 +144,45 @@ if [[ "$RESUME_AFTER_ADAPTATION" == 1 ]]; then
   resume_contract_rc=$?
   set -e
   if [[ "$resume_contract_rc" != 0 ]]; then
-    echo "v48.35.1 resume refused; inspect $OUTPUTDIR/V48_35_RESUME_CONTRACT.json" >&2
+    # A refused resume is itself the terminal state of this new attempt. Preserve
+    # the old terminal evidence before publishing an attempt-scoped RC=30.
+    python - "$OUTPUTDIR" "$ATTEMPT_ID" <<'PY_ARCHIVE_REFUSED_RESUME'
+import pathlib,shutil,sys,time
+root=pathlib.Path(sys.argv[1]); attempt=sys.argv[2]
+names=('PIPELINE_FAILED.json','V48_35_COMPLETE.json','NEXT_COMMANDS_STATUS.json',
+       'NEXT_COMMANDS_BLOCKED.json','GATE_FAILED.json','CALIBRATION_FAILED.json',
+       'AUTHORITATIVE_RUN_STATUS.json')
+present=[root/name for name in names if (root/name).exists()]
+if present:
+    dst=root/'status_history'/f'resume-refused-{attempt}-{time.time_ns()}'
+    dst.mkdir(parents=True,exist_ok=True)
+    for src in present: shutil.move(str(src),str(dst/src.name))
+PY_ARCHIVE_REFUSED_RESUME
+    write_pipeline_failure "resume_authorization" "$resume_contract_rc" \
+      "resume contract rejected; inspect V48_35_RESUME_CONTRACT.json"
+    echo "v48.35.2 resume refused; inspect $OUTPUTDIR/V48_35_RESUME_CONTRACT.json" >&2
     exit 30
   fi
 fi
 
-# Status files are run-local state, not cache. Clear them only after an optional
-# resume authorization has captured and validated the previous failure state.
-rm -f "$OUTPUTDIR"/ADAPTATION_FAILED_*.json "$OUTPUTDIR"/FAILURE_SIGNATURE_*.json "$OUTPUTDIR/PIPELINE_FAILED.json" \
-      "$OUTPUTDIR/V48_35_COMPLETE.json" "$OUTPUTDIR/NEXT_COMMANDS.txt" \
-      "$OUTPUTDIR/NEXT_COMMANDS_STATUS.json" "$OUTPUTDIR/NEXT_COMMANDS_BLOCKED.json" \
-      "$OUTPUTDIR/GATE_FAILED.json" "$OUTPUTDIR/CALIBRATION_FAILED.json" \
-      "$OUTPUTDIR/chosen_base_run_dedicated.txt"
+# Preserve previous active status as history, then clear the active namespace.
+# The current attempt is identified by ATTEMPT_ID; downstream readers never infer
+# state from the mere presence of an older marker.
+python - "$OUTPUTDIR" "$ATTEMPT_ID" <<'PY_ARCHIVE_STATUS'
+import pathlib,shutil,sys,time
+root=pathlib.Path(sys.argv[1]); attempt=sys.argv[2]
+names=('PIPELINE_FAILED.json','V48_35_COMPLETE.json','NEXT_COMMANDS_STATUS.json',
+       'NEXT_COMMANDS_BLOCKED.json','GATE_FAILED.json','CALIBRATION_FAILED.json',
+       'AUTHORITATIVE_RUN_STATUS.json','GATE_FAILURE_DECOMPOSITION.json',
+       'learning_gates_v48_35.json','GATE_SPEC.json','dedicated_recalibration_status.json')
+present=[root/name for name in names if (root/name).exists()]
+if present:
+    dst=root/'status_history'/f'pre-{attempt}-{time.time_ns()}'
+    dst.mkdir(parents=True,exist_ok=True)
+    for src in present: shutil.move(str(src),str(dst/src.name))
+PY_ARCHIVE_STATUS
+rm -f "$OUTPUTDIR"/ADAPTATION_FAILED_*.json "$OUTPUTDIR"/FAILURE_SIGNATURE_*.json \
+      "$OUTPUTDIR/NEXT_COMMANDS.txt" "$OUTPUTDIR/chosen_base_run_dedicated.txt"
 
 set +e
 python tools/audit_dedicated_protocol_v48_16.py \
@@ -354,20 +424,31 @@ except Exception: print('unknown')
 PY_STAGE
 )"
     fi
+    set +e
     python tools/extract_v48_34_failure_signature.py \
       --log "$OUTPUTDIR/logs/adapt_${variant}.log" --output "$signature" \
-      --stage "$stage" --exit-code "$rc" >/dev/null || true
-    python - "$OUTPUTDIR" "$variant" "$rc" "$OUTPUTDIR/logs/adapt_${variant}.log" "$stage" "$signature" <<'PY_ADAPT_FAIL'
-import json,pathlib,sys,time
+      --stage "$stage" --exit-code "$rc" >"$OUTPUTDIR/logs/failure_signature_${variant}.log" 2>&1
+    local signature_rc=$?
+    set -e
+    python - "$OUTPUTDIR" "$variant" "$rc" "$OUTPUTDIR/logs/adapt_${variant}.log" "$stage" "$signature" "$signature_rc" "$ATTEMPT_ID" <<'PY_ADAPT_FAIL'
+import json,os,pathlib,sys,time
 root=pathlib.Path(sys.argv[1]); variant=sys.argv[2]; rc=int(sys.argv[3]); log=pathlib.Path(sys.argv[4]); stage=sys.argv[5]; signature=pathlib.Path(sys.argv[6])
+signature_rc=int(sys.argv[7]); attempt_id=sys.argv[8]
 tail='\n'.join(log.read_text(errors='replace').splitlines()[-100:]) if log.exists() else ''
 sig={}
-try: sig=json.load(open(signature))
-except Exception: pass
-(root/f'ADAPTATION_FAILED_{variant}.json').write_text(json.dumps({
-    'event':'v48_35_adaptation_failed','variant':variant,'stage':stage,
+if signature_rc == 0:
+    try: sig=json.load(open(signature))
+    except Exception as exc: sig={'read_error':repr(exc)}
+doc={
+    'event':'v48_35_adaptation_failed','version':'v48.35.2-ENGINEERING-INTEGRITY',
+    'attempt_id':attempt_id,'variant':variant,'stage':stage,
     'exit_code':rc,'log':str(log),'failure_signature':sig,
-    'log_tail':tail,'created_unix':time.time(),'test_roots_read':False},ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+    'failure_signature_exit_code':signature_rc,
+    'log_tail':tail,'created_unix':time.time(),'test_roots_read':False}
+out=root/f'ADAPTATION_FAILED_{variant}.json'; tmp=out.with_name(f'.{out.name}.tmp.{os.getpid()}.{time.time_ns()}')
+with tmp.open('w',encoding='utf-8') as f:
+    json.dump(doc,f,ensure_ascii=False,indent=2); f.write('\n'); f.flush(); os.fsync(f.fileno())
+os.replace(tmp,out)
 PY_ADAPT_FAIL
   else
     rm -f "$OUTPUTDIR/ADAPTATION_FAILED_${variant}.json"
@@ -390,12 +471,10 @@ fi
 
 if [[ "$s0" != 0 && "$s1" != 0 ]]; then
   write_pipeline_failure adaptation 30 "both variants failed; inspect FAILURE_SIGNATURE_balanced.json and FAILURE_SIGNATURE_precision.json" "$s0" "$s1"
-  python tools/check_v48_16_learning_gates.py --run "$OUTPUTDIR" --output "$OUTPUTDIR/learning_gates_v48_35.json" --version v48.35-CONTINUOUS-FRONTIER || true
   exit 30
 fi
 if [[ "$ALLOW_PARTIAL_VARIANTS" != 1 && ( "$s0" != 0 || "$s1" != 0 ) ]]; then
   write_pipeline_failure adaptation 30 "one variant failed; set ALLOW_PARTIAL_VARIANTS=1 only for explicit debugging" "$s0" "$s1"
-  python tools/check_v48_16_learning_gates.py --run "$OUTPUTDIR" --output "$OUTPUTDIR/learning_gates_v48_35.json" --version v48.35-CONTINUOUS-FRONTIER || true
   exit 30
 fi
 
@@ -451,18 +530,29 @@ case "$raw_cert_rc" in
   *) cert_rc=30 ;;
 esac
 
-python tools/check_v48_16_learning_gates.py --run "$OUTPUTDIR" --output "$OUTPUTDIR/learning_gates_v48_35.json" --version v48.35-CONTINUOUS-FRONTIER || true
-python tools/summarize_v48_34_gate_failure.py --run "$OUTPUTDIR" --output "$OUTPUTDIR/GATE_FAILURE_DECOMPOSITION.json" || true
 if [[ "$cert_rc" == 30 ]]; then
   write_pipeline_failure certificate "$raw_cert_rc" "$OUTPUTDIR/logs/certificate_controller.log" "$s0" "$s1"
   exit 30
 fi
 
 set +e
-python - "$OUTPUTDIR" "$PROTOCOL_ROOT" "$SOURCE_RUN" "$raw_cert_rc" "$cert_rc" "$RESUME_AFTER_ADAPTATION" <<'PY'
-import hashlib,json,pathlib,sys,time
+python tools/check_v48_16_learning_gates.py --run "$OUTPUTDIR" --output "$OUTPUTDIR/learning_gates_v48_35.json" --version v48.35.2-ENGINEERING-INTEGRITY \
+  >"$OUTPUTDIR/logs/learning_gates.log" 2>&1
+learning_gates_rc=$?
+python tools/summarize_v48_34_gate_failure.py --run "$OUTPUTDIR" --output "$OUTPUTDIR/GATE_FAILURE_DECOMPOSITION.json" \
+  >"$OUTPUTDIR/logs/gate_failure_decomposition.log" 2>&1
+gate_decomposition_rc=$?
+set -e
+if [[ "$learning_gates_rc" != 0 || "$gate_decomposition_rc" != 0 ]]; then
+  write_pipeline_failure post_certificate_diagnostics 4 "learning_gates_rc=$learning_gates_rc gate_decomposition_rc=$gate_decomposition_rc" "$s0" "$s1"
+  exit 30
+fi
+
+set +e
+python - "$OUTPUTDIR" "$PROTOCOL_ROOT" "$SOURCE_RUN" "$raw_cert_rc" "$cert_rc" "$RESUME_AFTER_ADAPTATION" "$ATTEMPT_ID" <<'PY'
+import hashlib,json,os,pathlib,sys,time
 root=pathlib.Path(sys.argv[1]); protocol=pathlib.Path(sys.argv[2]); source=pathlib.Path(sys.argv[3])
-raw_rc=int(sys.argv[4]); rc=int(sys.argv[5]); resumed=sys.argv[6] == '1'; variants={}
+raw_rc=int(sys.argv[4]); rc=int(sys.argv[5]); resumed=sys.argv[6] == '1'; attempt_id=sys.argv[7]; variants={}
 for name in ('balanced','precision'):
     p=root/'candidates'/name/'model_v48_trac_sr'/'best.pt'
     if p.is_file(): variants[name]={'checkpoint':str(p),'sha256':hashlib.sha256(p.read_bytes()).hexdigest()}
@@ -471,19 +561,33 @@ blocked_exists=(root/'NEXT_COMMANDS_BLOCKED.json').is_file()
 consistent=(rc==0 and next_exists and not blocked_exists) or (rc==20 and (not next_exists) and blocked_exists)
 if not consistent:
     raise SystemExit(f'certificate/NEXT_COMMANDS contract mismatch: rc={rc} next={next_exists} blocked={blocked_exists}')
-doc={'event':'v48_35_continuous_frontier_controller_complete','created_unix':time.time(),
+doc={'event':'v48_35_continuous_frontier_controller_complete','version':'v48.35.2-ENGINEERING-INTEGRITY','created_unix':time.time(),'attempt_id':attempt_id,
      'source_run':str(source),'protocol_root':str(protocol),'variants':variants,
      'raw_certificate_exit_code':raw_rc,'certificate_exit_code':rc,'pipeline_exit_code':rc,
      'certificate_executed':True,'gate_evaluated':True,'gate_passed':(rc==0 and next_exists),
      'next_commands_generated':next_exists,'pipeline_valid':True,
      'adaptation_reused_without_retraining':resumed,'resume_contract':str(root/'V48_35_RESUME_CONTRACT.json') if resumed else None,
      'test_roots_read':False}
-(root/'V48_35_COMPLETE.json').write_text(json.dumps(doc,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+tmp=root/f'.V48_35_COMPLETE.json.tmp.{os.getpid()}.{time.time_ns()}'
+with tmp.open('w',encoding='utf-8') as f:
+    json.dump(doc,f,ensure_ascii=False,indent=2); f.write('\n'); f.flush(); os.fsync(f.fileno())
+os.replace(tmp,root/'V48_35_COMPLETE.json')
 PY
 completion_rc=$?
 set -e
 if [[ "$completion_rc" != 0 ]]; then
   write_pipeline_failure completion_contract 30 "RC/NEXT_COMMANDS mismatch" "$s0" "$s1"
+  exit 30
+fi
+set +e
+python tools/audit_v48_35_run_state.py --run "$OUTPUTDIR" \
+  --output "$OUTPUTDIR/AUTHORITATIVE_RUN_STATUS.json" \
+  --expect-exit-code "$cert_rc" --expect-attempt-id "$ATTEMPT_ID" --archive-stale-markers \
+  >"$OUTPUTDIR/logs/authoritative_run_state.log" 2>&1
+state_contract_rc=$?
+set -e
+if [[ "$state_contract_rc" != 0 ]]; then
+  write_pipeline_failure terminal_state_contract "$state_contract_rc" "$OUTPUTDIR/AUTHORITATIVE_RUN_STATUS.json" "$s0" "$s1"
   exit 30
 fi
 exit "$cert_rc"

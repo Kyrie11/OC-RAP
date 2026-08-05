@@ -4,8 +4,15 @@ REPO="${OCRAP_REPO:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$REPO"
 export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"
 OUT="${OUT:?OUT is required}"
+mkdir -p "$OUT/logs"
 [[ -s "$OUT/NEXT_COMMANDS.txt" ]] || { echo "Stress run is not authorized: missing $OUT/NEXT_COMMANDS.txt" >&2; exit 20; }
 [[ -s "$OUT/V48_35_COMPLETE.json" ]] || { echo "missing $OUT/V48_35_COMPLETE.json" >&2; exit 30; }
+set +e
+python tools/audit_v48_35_run_state.py --run "$OUT" --output "$OUT/AUTHORITATIVE_RUN_STATUS.json" --expect-exit-code 0 \
+  >"$OUT/logs/stress_authorization_state.log" 2>&1
+auth_rc=$?
+set -e
+[[ "$auth_rc" == 0 ]] || { echo "Stress run is not authorized by authoritative run state" >&2; exit 30; }
 python - "$OUT/V48_35_COMPLETE.json" <<'PY_STATUS'
 import json,sys
 status=json.load(open(sys.argv[1],encoding='utf-8'))

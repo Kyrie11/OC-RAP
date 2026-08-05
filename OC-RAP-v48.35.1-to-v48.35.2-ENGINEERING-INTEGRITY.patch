@@ -1,0 +1,2827 @@
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' /mnt/data/ocrap_round2_audit/code/ALGORITHM_CHANGELOG.md /mnt/data/ocrap_round2_audit/OC-RAP-v48.35.2-ENGINEERING-INTEGRITY/ALGORITHM_CHANGELOG.md
+--- a/ALGORITHM_CHANGELOG.md	2026-08-05 16:06:24.000000000 +0000
++++ b/ALGORITHM_CHANGELOG.md	2026-08-05 09:01:06.649126862 +0000
+@@ -1,3 +1,53 @@
++## v48.35.2 — ENGINEERING-INTEGRITY-AND-AUTHORITATIVE-STATE (2026-08-05)
++
++### Scope
++
++This release is engineering-only. It does **not** change the OC-RAP model, candidate generator, physical-relative representation, continuous frontier, losses, checkpoint ordering, shared-rule fitter, certificate thresholds, datasets, or Natural gate. It exists solely to make a completed run have one unambiguous terminal state and to prevent stale files or diagnostic-script drift from changing algorithm attribution.
++
++### Root-cause attribution for the uploaded result
++
++The uploaded result archive contains two terminal records from different executions:
++
++- `PIPELINE_FAILED.json`: `created_unix=1785887254.9260776`, stage `training_contract`, raw RC=4, normalized RC=30, certificate/gate not executed.
++- `V48_35_COMPLETE.json`: `created_unix=1785913147.147986`, raw/certificate/pipeline RC=20, `pipeline_valid=true`, certificate and gate executed.
++
++The later completion is authoritative. `GATE_FAILED.json` and `NEXT_COMMANDS_STATUS.json(reason=natural_gate_failed)` were written immediately before it. The active source run had already cleared the old pipeline marker, but the uploaded ZIP retained the earlier entry. Therefore the apparent repeated RC=30 was a stale-package/state-resolution error, not a second pipeline failure.
++
++A second engineering defect occurred after certificate execution: `summarize_v48_34_gate_failure.py` still required legacy `dev_frozen_rule_{near,contact}_v48.json` files, while v48.35 correctly emits one `dev_frozen_shared_rule_v48.json`. The resulting `FileNotFoundError` was hidden by `|| true`, leaving the core RC unchanged but silently dropping required diagnostics.
++
++### Engineering changes
++
++1. Added `tools/audit_v48_35_run_state.py`, which resolves the terminal state from `V48_35_COMPLETE.json`, attempt IDs, timestamps, and the RC/NEXT_COMMANDS contract. A stale marker can be archived, but a same-attempt contradiction is fail-closed.
++2. Added attempt-scoped controller state. Every invocation writes `ATTEMPT_STARTED.json`; previous active terminal files are moved into `status_history/` rather than deleted or mixed with the new attempt.
++3. All v48.35 terminal, gate, calibration, candidate-selection, completion, and learning-gate JSON writes used by this path are atomic (`fsync` + `os.replace`).
++4. Failure publication now creates an attempt-scoped RC=30 completion, blocked-next-command state, and authoritative-state audit. A refused no-retraining resume also publishes a complete RC=30 terminal state instead of exiting without one.
++5. Replaced the gate-decomposition reader so it supports the shared v48.35 development rule and legacy per-regime files. Artifact/protocol errors return nonzero instead of an uncaught traceback.
++6. Removed silent post-certificate diagnostics. Learning-gate and decomposition failures now become `post_certificate_diagnostics` RC=30; they cannot be ignored with `|| true`.
++7. Adaptation-failure signatures now record their own extraction return code and are written atomically. Signature extraction failure no longer disappears silently.
++8. Downstream Safe and stress wrappers require a valid authoritative RC=0 state, rather than trusting marker-file existence alone.
++9. Added `tools/package_v48_35_results.py` and `scripts/package_v48_35_results.sh`. Packaging always creates a fresh ZIP in write mode, excludes stale terminal markers/checkpoints by default, replaces generated metadata exactly once, rejects duplicate entries, round-trip verifies every entry hash, and writes a ZIP SHA256 file.
++10. Generated follow-up commands quote paths and use the configured `SAFE_WOMD_SOURCE`; they no longer embed an unrelated machine-specific path.
++11. Added a version-specific release test launcher. The supported v48.35.2 matrix is isolated from 17 retained historical tests whose referenced v48.12-v48.32 launchers are absent, and from unrelated v50 tests in the mixed research repository. No missing historical scripts were fabricated.
++12. Removed cache artifacts and the accidental nested `mnt/data/ocrap_waymax/OC-RAP` copy from the clean release package.
++
++### Terminal-state contract
++
++- `RC=0`: completion is valid, gate passed, `NEXT_COMMANDS.txt` exists, and no active failure marker is allowed.
++- `RC=20`: completion is valid, gate evaluated and failed naturally, `GATE_FAILED.json` and blocked-next-command status are active, and any older `PIPELINE_FAILED.json` is stale.
++- `RC=30`: completion is invalid for algorithm attribution, an active same-attempt `PIPELINE_FAILED.json` and blocked-next-command status are required, and downstream evaluation is forbidden.
++
++### Validation
++
++- 192 tests in the supported v48.35.2 release matrix passed in isolated batches, with six non-fatal warnings.
++- 28 focused v48.35/v48.35.1/v48.35.2 tests passed (11 engineering-integrity, 8 RC30-contract hotfix, 9 continuous-frontier).
++- All 57 shell scripts passed `bash -n`.
++- `python -m compileall -q -f src tools tests` passed.
++- The uploaded result was repaired without retraining: authoritative state is valid RC=20, the stale RC=30 marker was archived, shared-rule diagnostics completed, and the clean result ZIP contains no duplicate entries or top-level stale `PIPELINE_FAILED.json`.
++
++### Non-claims
++
++No algorithm-quality conclusion is introduced by this release. Local validation did not rerun WOMD/Waymax training or certificate computation; it validates state, provenance, script, packaging, and diagnostic contracts only.
++
+ ## v48.34.1 — RC30-MODEL-CONTRACT-AND-PROGRESS-HOTFIX (2026-08-03)
+ 
+ ### Scope
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' /mnt/data/ocrap_round2_audit/code/OC-RAP-v48.35.2-FILE-SHA256SUMS.txt /mnt/data/ocrap_round2_audit/OC-RAP-v48.35.2-ENGINEERING-INTEGRITY/OC-RAP-v48.35.2-FILE-SHA256SUMS.txt
+--- a/OC-RAP-v48.35.2-FILE-SHA256SUMS.txt	1970-01-01 00:00:00.000000000 +0000
++++ b/OC-RAP-v48.35.2-FILE-SHA256SUMS.txt	2026-08-05 09:07:49.708862776 +0000
+@@ -0,0 +1,517 @@
++0853def41a34db8b6d34fd1b351486b7c7c9786c5e6e090059c778dcf3027d68  ALGORITHM_CHANGELOG.md
++67903fd9105555e6bad77e0eb9f11b8472dc0ad913d3708ec615d48ffeeb7974  ALGORITHM_CHANGELOG_V48.md
++97fa61833d755295cd967272c53f18897651ad606c32a5ead8542a16b0c7170e  OC-RAP-v48.33-ALGORITHM_CHANGELOG.md
++b0bb25136ddfcafe926d8d1d91cb3ade586bde8fd6c844ab37da50d2aa14cb5d  OC-RAP-v48.33-change-manifest.md
++a519d068ebd61e57cb991833e5ecd23e4c190560fd9c46d495da301bc572465f  OC-RAP-v48.33-run-commands-ZH.txt
++c4f789b134160d0a83f4de7ddccca2001da7486eebcf715d21e0b64cf8aa87d4  OC-RAP-v48.33-script-dependency-audit.json
++1178d7741ac46bf9740a085ef03fb2d8e67b76dfcb5ca42d0c1a0c517b0affc1  OC-RAP-v48.33-validation-status.txt
++bd7c2d008258b6c3f9fd807f6427026740fa11c540f15b1858809d1a03e86764  OC-RAP-v48.34-ablation-audit.csv
++9fba6624873f33d95c3000ea85b584b2265b08745ff43633ad2d0f1b141fd15c  OC-RAP-v48.34-external-baselines-v49-run-commands-ZH.txt
++99e535c8195e066e44c881ceb0b2b5ffb217eb541ef8eb48f833867cd9102724  OC-RAP-v48.34-main-certificate-audit.csv
++a792ba91cf8eb97a10e02b4d3629e9e0a08d98960def2d89dbdb3d500637d01b  OC-RAP-v48.34-results-audit-and-v48.34.1-HOTFIX-plan-ZH.md
++9fa29de878f08e67f13253c7e392d042145dc7d8f2807ed4368315685612d55f  OC-RAP-v48.34-results-audit-and-v48.35-CONTINUOUS-FRONTIER-plan-ZH.md
++43eb2c847ae64af3113cc4fa4ef78da8eb1ef3ad27da6dd7aa90525a7f441914  OC-RAP-v48.34-run-commands-ZH.txt
++3121003d6b4540ee28548a5d410553096d1e1b45a6437dac6e18fa788e95f9b7  OC-RAP-v48.34-to-v48.35-CONTINUOUS-FRONTIER.patch
++ab783a3dd8ee1e0699fac93ab4d88353c815432ccb9e07017a5f36de42701359  OC-RAP-v48.34.1-ALGORITHM_CHANGELOG.md
++9be2f0e3f4d23e75e26f5255e7a36420d37912daa1fef688c4e8e74556fa1a19  OC-RAP-v48.34.1-run-commands-ZH.txt
++edd85905640584e304f4eaddae37822465e9adca05583cf10429946bdad9788c  OC-RAP-v48.35-CONTINUOUS_FRONTIER_CONTRACT.json
++3d53d3d96970a290d1fe7d7415bab9e7d7db0ab2877105daa53afadbdb55dcdc  OC-RAP-v48.35-RC30-audit-and-v48.35.1-hotfix-ZH.md
++96613357f231b4a5df1ab32e602b3b27c579ed5b78d02d3ca77603d1dd6d457d  OC-RAP-v48.35-change-manifest.md
++5535642aace59e9f9ef11e92a05b8b44a4682f56975ef63815954f3171a7e2c3  OC-RAP-v48.35-engineering-error-audit.csv
++725b1d76fbbebbb62f75b33625872cbdeab859ec5e7f25c67ee6e809bb5c3605  OC-RAP-v48.35-release-audit.json
++3bc5caea6396c963a430080aa2dc2d179cd31c8cac7a40840160c1585afda559  OC-RAP-v48.35-run-commands-ZH.txt
++f16761f5ed4190ed8fd62be15a46a9ab62b34e1692eadce18b9319709cd7a475  OC-RAP-v48.35-script-dependency-audit.json
++4c906daaac3fe5262dc6e2a986ebd5e0ad3c7cae8a27086c85b47341d9ce323f  OC-RAP-v48.35-to-v48.35.1-RC30-TRAINING-CONTRACT-HOTFIX.patch
++87e2eba6f2b7acfab09d77435d56bc909a16020908f12ebb3091aca4b0443c19  OC-RAP-v48.35-validation-status.txt
++edd85905640584e304f4eaddae37822465e9adca05583cf10429946bdad9788c  OC-RAP-v48.35.1-CONTINUOUS_FRONTIER_CONTRACT.json
++8d1419a90737283d2f4d2b5c6d2dc4cde9a2ae04f9020bbe737a7e2144a9900e  OC-RAP-v48.35.1-FILE-SHA256SUMS.txt
++1b9eb51057942622bfead024dd4d0b27c6847d2f06fbb37c08582f7fa7538ad6  OC-RAP-v48.35.1-VERSION-CONTRACT.json
++35a805c3148ef13feecb7b7c9cf94ba954c7c9e3b981816bffffd0f143ad5e1a  OC-RAP-v48.35.1-change-manifest.md
++66a7a049e81d14d03e0aeaf78014449f1d2d250fb738895c387b902448d34c07  OC-RAP-v48.35.1-dataset-report-index.csv
++aaa136eb8fa49b511e77a1df410996aa2566c453d78042ee5e0178eac0234e70  OC-RAP-v48.35.1-engineering-error-audit.csv
++f15f094a3697d99eebdc6f4b75cc2770b111db581cb9d2b56575d247420019bc  OC-RAP-v48.35.1-release-audit.json
++1869f7818cae018d16a87f2a168ecc6500afa6b333abb85740a4aff9af186c01  OC-RAP-v48.35.1-result-debug-signals.csv
++7ddb0f790aa1bcf7a1ea038486ed7aaa82ed08be1621bd3f3d57f51807c4fbd8  OC-RAP-v48.35.1-run-commands-ZH.txt
++273f4d1a91059b07a336e5e2089e65e8bac4099276563a5ab949252885db521a  OC-RAP-v48.35.1-to-v48.35.2-ENGINEERING-INTEGRITY.patch
++0e96de18ff72293a440dba6e2d407df384db603768d41090c9a57e2343f75124  OC-RAP-v48.35.1-validation-status.txt
++2836c25b091a249b321918faea337cac1b10addd1779f28582f21eba85b1813c  OC-RAP-v48.35.2-VERSION-CONTRACT.json
++3670de6e472ce9d3df1455b28207b85cead72f12062d7a4339616bde10d19ed0  OC-RAP-v48.35.2-change-manifest.json
++b635f048ac8ee96e403b3e1f8976db010bc2f3839533d7222d0189f144dd8178  OC-RAP-v48.35.2-engineering-error-audit.csv
++97058b5f7c66dcb75c5b9078f6d0c00c2020c72f863c6ac7dd3385302eea289c  OC-RAP-v48.35.2-engineering-root-cause-and-fix-ZH.md
++d0f41f76f1d6c38d7388da12ef37ebd6efdeb9354f2e9d4fcd73521c8f76c68c  OC-RAP-v48.35.2-release-audit.json
++98c20ec40f84c59f085939ec213b24f7311d4e1a0c5f314a12ebee0369fa5fe8  OC-RAP-v48.35.2-run-commands-ZH.txt
++6f0b44c1521cf2887647a9ecb93ba74c96f367fac7714727602069236545a629  OC-RAP-v48.35.2-unsupported-historical-tests.json
++3cbbfc08bf3466ca302de2a9b85ffd0fd21ee202eba99f075d5d2258419ea170  OC-RAP-v48.35.2-validation-status.txt
++cf7435d08d8f22889e947505c731a638ea051e883adb8580c10d8e42a5a3977b  OC-RAP-v50.1-IMPLEMENTATION-MANIFEST.json
++c03691eaebe02ade386fa8ad1fadc9f4c5ba9224e8d4914c69f50872051e04f0  OC-RAP-v50.1-failure-analysis-and-optimization-ZH.md
++bd6bc81c7ebf1136a285d5798e88fe56803848dcbba6dc1b4431d5a99d0e8244  OC-RAP-v50.1-run-commands-ZH.txt
++e110740787aab204a1b6eed5ca0c4e264eb89251b2c52d8747d1e5e0f8daf076  OC-RAP-v50.2-CUDNN-SDPA-HOTFIX-ZH.md
++b32f671226083727de94894399049a9dc5b45a24778c83979f2c0825f3dafb01  OC-RAP-v50.2-IMPLEMENTATION-MANIFEST.json
++15859235a2b4c742a6853a545bada3274eee74f41d1a843496b9fca4ae8471eb  OC-RAP-v50.2-run-command-ZH.txt
++c60de2628cf34b7d34e7b0e7ed398fef4fec605d440aae46633c27c12bd7d2d0  OC-RAP-v50.3-IMPLEMENTATION-MANIFEST.json
++4937371817861bc0b07f9819ab944b813bcfdaf33728d4cc56ea83f74a1633bf  OC-RAP-v50.3-RECOVERY-HOTFIX-ZH.md
++850c321081af9855be62ff952b95a0198e5817728611f9632be86c1b707969f6  OC-RAP-v50.3-run-commands-ZH.txt
++367caa323610dccbd391ae471e20fee2eaf5a7ca0ee1dfde66ee3bac668e7bb6  OC-RAP-v50.4-video-selection-fix-analysis-ZH.md
++98e5078a5c7e0dc0bc4df531312f0b1425c00d9945f6993b087cabce613f158e  OC-RAP-v50.4-video-selection-fix-manifest.json
++e9ae84378b4005b47e868375a5d143800ec208a31b6ee2dad4645d97ca4302c9  OC-RAP-v50.4-video-selection-fix-run-commands-ZH.txt
++46fb2b1bbc511321581738cbc6625bc7974533c1cd6493df0eaabfdc3d956c90  README.md
++86b7a5abaa624f198dc43b69ffef9dfe06c8f6752e425752827b07b606b2ed68  V48_11_AMP_DTYPE_FIX_ZH.md
++e347f8fbb6ea755299c40ccfef498038a50b3b3f59961dd22c4bc4969e781042  V49_EXTERNAL_BASELINES_IMPLEMENTATION_MANIFEST.json
++c34111404b22728a7918e6b42d39b19997a3b7e681aba67f92d675be2aac8ad4  configs/ablations/full_future_roots.yaml
++4a925ab5e9a1dbc0ec8ea5009301aa051a20b2000db2e1a5560b52f7dbea7d00  configs/ablations/no_occlusion_bev.yaml
++f4dbafc1b2d5fa28faef57e9ffcacec9af075e5c83b5795bde5e523210a7a92c  configs/ablations/without_anti_oracle.yaml
++24b37d54567b6f8f3617fdca0690bfb1eac0dd174bf3c5eb4efd30561b119113  configs/ablations/without_calibration.yaml
++96adfd8513ddd973229c132f799fbd02e9cb7e36c36848d1ef946fa423e55717  configs/ablations/without_lower_tail.yaml
++2824322fb8b7d3784b54d90cbe4a6657cb44c9161b114bdcd4a01273d6ad3d14  configs/ablations/without_observation_kernel.yaml
++b3a8aba2ef7173740f432302f271870a120d22382175be23ae247ee16e082c5d  configs/default.yaml
++df6d19a029154ee2092583da5db6ead3267604fa0b63e1fa07a2bf3f4f8576ca  configs/external_baselines/all_external_baselines.yaml
++5122280eb8c50a9e96e84cfe61cf86af0747c35b69ee4557fe26a035c70dcc22  configs/external_baselines/betopnet_lite.yaml
++18123cd3d061c65eba4fe52dc9a06b616937290a28eabaa4d0c6cd0d62130de5  configs/external_baselines/contact_external_baselines.yaml
++c8660821bf3959d2e5ff79add7c97c31e5a0bc7d9f55d1d0f1cc003e47b6479b  configs/external_baselines/gameformer_lite.yaml
++ec3731095cd239db82b371077bccc29a58db1f0955fd6f8b3bf94acba44716dc  configs/external_baselines/marc_racp_lite.yaml
++be6cbd7a2dd4e3dd45c9cec0be8783396fb49732944786adcef4caa621a225f1  configs/external_baselines/near_contact_external_baselines.yaml
++0128c011b5d375902decd4ba63445223b22bae878ff3c2983ecb4f5e72909c41  configs/external_baselines/near_contact_gameformer_lite.yaml
++c0bed328a05b65060c01cbfbf02ac47c3b06d1dd3f661796bf4dd091bb9b16ab  configs/external_baselines/near_contact_marc.yaml
++cc79779fb9795dce1237cd1837e149ecf4e0b07b24d206171fa767da0c65fca6  configs/external_baselines/near_contact_oracle_recovery_filter.yaml
++9555f8f14184ec51c9469a61b4dc5b4d4e9ddc43c1193dcb3b91696090e0458b  configs/external_baselines/near_contact_predictive_safety_filter.yaml
++b532acbd39188903448f57630ef9b134b0f66ae860c5ddd2e3deef8660ec8276  configs/external_baselines/near_contact_racp.yaml
++af86bc66896b8a92c17f4dddc2dc924ba3570e32c7e1395177e44a9917e90d33  configs/external_baselines/near_contact_risk_filters.yaml
++966bec2b222d07330605dce1572bc0094bb747e7dc4c395b4362ae0042cea216  configs/external_baselines/nominal_log_replay.yaml
++a98842284d16694aeac510261df3a1405c5a4adfd23c9a2874e325bb3b2fa3fc  configs/external_baselines/post_collision_restoration.yaml
++4cea94f76e8b1cdf245ddc6213e10d2636100e2c8e351cb565e135852ec1f7ca  configs/external_baselines/post_crash_braking_stable_stop.yaml
++e2d7165a8d9147f010c1aadd5f65a1a8618159dba053658b991c4390535a0f4e  configs/external_baselines/postimpact_mpc_lite.yaml
++07c8c83717fcd1444c2afa532448cb7197780e210ca07451f5c2be1995b269d9  configs/external_baselines/risk_filters.yaml
++26335bc1a974d717e5cf4d9645d46df288dba0dcb69e2300255177b9d4d6750f  configs/external_baselines/route_bc_lite.yaml
++debc48a48362894e482ca20affe9b171e4997fb15caaafd45be7673fff9c867c  configs/external_baselines/safe_regime_baselines.yaml
++8c7143e86afda8e010bf3431135ae425cd11b65b64024a44462c0220eb05a062  configs/external_baselines/severity_minimization.yaml
++75189d63934fbea6e9785b51d78ca416a8abb7ad225038fe2d57999a1fc90926  configs/external_baselines/wayformer_bc.yaml
++c0820fe3a8cb81c466069ea60a2fb43ce532da95c001585ebf381765d6d98609  docs/ACCELERATION_AND_PAPERCHECK.md
++00d1d09073956ddcd90c409cedbf7774ea31c0d9a5a92a4b427a0044744a4f58  docs/CLOSED_LOOP_ACCELERATION_AND_RESUME.md
++253929df8e0ae261c9aada3ce55a844ffb87b2e27da0d108ca0a6d33acb2b357  docs/CURRENT_DATASET_DIAGNOSE_SUMMARY.json
++6eff78e8f4a5205125e888423be5c1592a0cca7752e3152014bc134a0287ab8f  docs/DATASET_REUSE_AND_CALIBRATION_DECISION_ZH.md
++51985f498709cf77b8dff5065a9cd8ef9b6f18462582d7991e432d64e8108ccb  docs/EXTERNAL_BASELINES.md
++ba1abde8f9bf29878ffafed1bcbeab01eb4da7f1f70ee29e4a4abd5e50e7b6df  docs/EXTERNAL_BASELINES_REVISION_ZH.md
++576b6614a4e78ffb32a8643459e51fb44a3e393f7e86f78efdb1fa54d14d96fe  docs/EXTERNAL_BASELINES_V49_IMPLEMENTATION_ZH.md
++79ace10deca89564ef96ef4c17cc405803bee16ed491a369e25f5c1e6535c5db  docs/EXTERNAL_BASELINE_CLOSED_LOOP_OPTIMIZATION_ZH.md
++297cca4ecc08a73ce54e675bbfc5abc81fe91ffae065ece482ecbf1dc89ff2a6  docs/EXTERNAL_BASELINE_FIDELITY_AUDIT_V49.md
++4f8f5e76ad439d67ca814a77ee229d46a3787fbede3d842bf8309dc839effbc3  docs/NEAR_CONTACT_BASELINES.md
++5aa7e0982822f2731f69dd844fb7ba6350ed400eb31f57064c0cd5a231802b23  docs/OC-RAP-v47-audit-v48-OC-TRAC-SR-ZH.md
++c707cc591a0d95d869cb87fa5fb8bb3407e6b8cc66b5df5468a04908f8b2797b  docs/OC-RAP-v48-run-instructions-ZH.md
++43b2cf15f9d6179c39a4f86305d85913c0ea9b9470f230c2b7e962e24dedef68  docs/OC-RAP-v48.3-analysis-and-run-guide-ZH.md
++f0e9fa9fd0767ad74062a329f2f4c7988ccb707b6c4df7866fa92e04aaf2a3a1  docs/OCRAP_CLOSED_LOOP_HOTPATH_OPTIMIZATION.md
++fb6902fd955061cdca34d711ea65ff993dea3880c0c46010f91ddc0ec169fbb0  docs/OC_RAP_PAPER_CODE_RESULTS_AUDIT_ZH.md
++e41430884321e916756a96e19b8110ccd9b1c39ef7f2418e2f3cef5ed5d7532e  docs/RUN_EXISTING_DATA_FIRST_ZH.md
++52c18b7a2e2d145ab961182ae2b26826e31e8a8110e21cf99100c6850750dc70  docs/SAFE_BASELINE_FIX_NOTES.md
++6d034e0e1d9dc987080cfb6e89134fd7bad5c5dd7db1ef5d9a40849f67cb279e  docs/SAFE_REGIME_V2.md
++619687b268f4ebfc7564858b65a9dfca8d18318c7f59ebcfc789d43158991bac  docs/SOURCE_ADAPTATION_NOTES.md
++ede267a834c3b0761de59dec1db4a990641b87c59d91da8d6548a97b7846b131  docs/V30_CONTACT_PAPER_FRONTIER.md
++18c37e18f19e652d29a4c4277c8fc2136d3f37b92ddd1ea95b112cca4ac6704c  docs/V38_V39_DIAGNOSIS_V40_OCUVRA_ZH.md
++280212fa3a7d3eb01f67435046e7fd7b17eb2a5789ea6edd3a4a1c5d8a76e13f  docs/V39_OCRAC_ANALYSIS_AND_PLAN.md
++f5db6fb4a4a10ad302b88657a0172dfba9d31f72630de7209b09c820d2dbf746  external_baseline_artifact_audit.json
++70a62e94406cc50754aae183297128c1d6147e2d931ec52dd5dac786fc3d34f4  external_baseline_fidelity_audit_v49.json
++83e7ded07a033dac079fa8912320071fc5d983bcd1755262ace8fedc2806ba68  pyproject.toml
++2e6aefedc6ce25972c6932faa7ef29d14ae825933109de6a133989b5a552b711  requirements.txt
++773a27dfa6e97f8ae77401a5db126b2d5fd3d66ffd6b9bc7f179e23cd675e287  run_v47_two_gpu_fast_commands.txt
++458e455380ee7a5c39cb832c4bdbf138d59ea23ad5928160df6d883704c9fc21  run_v48_two_gpu_fast_commands.txt
++1653079d17f2c0604c1508e04dfe8c4790669835ae23dfb26d75c3da5b5e2291  scripts/adapt_ocrap_v48_33_eligible_set_policy_single_stage.sh
++9eb92b9ccfa9d36e2a5da3a9789075cb353b2f563c4a1121611423b8269dee41  scripts/adapt_ocrap_v48_33_eligible_set_policy_variant.sh
++34700ad11ffa41e36ed4c5b53ce7a04ec82ebaecfe9034f289c634273ada0ee5  scripts/adapt_ocrap_v48_34_barrier_crossfit_single_stage.sh
++54800a6ff9691a53de0e95895607dda816270d699ec504706f9e907b0fc73fac  scripts/adapt_ocrap_v48_34_barrier_crossfit_variant.sh
++940cd0e4aad7172ad5c10d370572d375470f9d5ab3c3df822fb9e4ab87d95cc0  scripts/adapt_ocrap_v48_35_continuous_frontier_single_stage.sh
++8c22a8a58edbfd785cbbca207b71a2a9a211fc5dd77093cf65be295d9dc8b637  scripts/adapt_ocrap_v48_35_continuous_frontier_variant.sh
++0c38b7ce43044829ab5eafe0403e2e563aba71966346b07f0ba00bfe49ee061b  scripts/build_external_comparison_artifacts.sh
++02003c5c64054c645111e4ef8f376f2d437dd57c6d7c765497ef9a6e37a8e3e6  scripts/build_top10_recovery_videos.sh
++c9dff95e78cbe24ff4ed49fbfdda64d6e1da9b3a12b3a0443316e96fceabaaff  scripts/build_v48_calibration_regimes.sh
++277607c964b9439820601ab3d1d097ac71e6f7cc11c5cafd1fcc455862949043  scripts/build_v48_train_regimes.sh
++4feedeeb4714f527a23dd1d69d76bfe8a4411634bb0fcaa4a7b29b96a2feea32  scripts/calibrate_ocrap_v47_trac.sh
++b85c1c203eba567f1b78ea9afca7349119c7f06a97df9099adf74b6240ad4bc5  scripts/calibrate_v48_14_certificate_pool.sh
++2a48ff81e68d841f84bbc419119a737d0249f1af7b1a103e98a51ef84c9ef481  scripts/calibrate_v48_16_certificate_pool.sh
++bb982b24bce17616150295c9cf7f752f07c13a7c48c343fc1f19eaf2f9701d1e  scripts/calibrate_v48_19_certificate_pool.sh
++88296f1cae5dd871cffe60825a23306f6e10258f35d4c4ee3eb359e0774b09ae  scripts/calibrate_v48_19_learning_gate.sh
++e3c96aebd5ca69e74f121c9dd79b1f6c12ee6b2b7a7fef809eee7043254e75a4  scripts/calibrate_v48_20_certificate_pool.sh
++99af227bc541f9c7bdcbc7b4d4bf7017b190a59b3ba0737e886fa2cc7216b5bb  scripts/calibrate_v48_32_1_certificate_pool.sh
++76137ddff71bf564fb8e17f266fbc8081fe32530d3aa7d37c47ba188c61a525b  scripts/calibrate_v48_32_certificate_pool.sh
++60b5c205d48a49fcc31c4f0fe970530c35c5b13914aa23933c0f2a18d9d633ca  scripts/calibrate_v48_33_certificate_pool.sh
++767278766a4a07482651e717887d553dcba27045a649e3e188829e1ffa36f6bc  scripts/calibrate_v48_34_certificate_pool.sh
++2ff69bdbb57721f25f325acf15e3ad3c4400887186d8135b1d4c01e67c7cc443  scripts/calibrate_v48_35_shared_certificate_pool.sh
++a8fee141ebaa661dbe36fc27174f64a13837f9ccd84f339f90b18ca40842c39b  scripts/lib/v50_runtime.sh
++698391e3e6badacaa4708e241db7e21dc929a3c196da5936cafc09d82f870972  scripts/merge_v48_calibration_regimes_to_eval_root.sh
++63310091e538df8ede340d4165ae9d1e645e454cc213307cfc8f6d03ab44932b  scripts/package_v48_35_results.sh
++82f677cd7b8408f9d6e76672e4ee269b575c6c83d109ceb909790148d7452d3a  scripts/prepare_v48_8_shared_assets.sh
++edb563bbb2ee62dbf489482d427520d505bcff6182870fc8735c34b0902115dd  scripts/rebuild_ocrap_train_safe_two_gpu.sh
++0b06be046bc8848421d7a0c1ec9d3f4f903b18398b850febaddd555285c13752  scripts/rebuild_ocrap_val_test_regimes.sh
++b4cbc29ca40a3776b06c4c9ca232418a09eeb7a5340f2263bb48799dab714d01  scripts/recalibrate_source_v48_14_dedicated.sh
++9c128fa1f226dc55d489de6affbd4469f2a2ac3a6b6e14852bde178715fbd152  scripts/recover_v50_1_full_pipeline_no_retrain.sh
++7e59f5ee0b86382c2285b0ea592bddd03b9e9c51e81e2f8df4f3aff165386ce0  scripts/repair_v48_34_rc30_model_contract_with_v48_34_1.sh
++983e05760afb98fd68247dcdca41f30fc8d098e4c1426cf71ec43231c19225af  scripts/repair_v48_35_rc30_training_contract_with_v48_35_1.sh
++e373467a3293ad1956e21b2e73c42d547a6448bfd183633ca2a1ab39840ce91d  scripts/run_all_regime_external_baselines_optimized.sh
++cd9e2b546e150d77a9426c27781771ed778a7925959ccfc1d7bc302a4913e37a  scripts/run_contact_external_baselines.sh
++fc4f3875171ea748037b1715847c6cad3f35f2d1a1377a19ba296c3432f83e6a  scripts/run_external_baselines.sh
++b2cff65866d60e21b7d6d1a31abcf40b2d2585a11edcf7ee337e7c6fe55030fa  scripts/run_near_contact_external_baselines.sh
++13623a7d8d0739d04f03a581aab63a3f5ec917067c4d2843b0904eee78485828  scripts/run_near_contact_external_baselines_2gpu_optimized.sh
++0a7caf709efe5fba5d5b340c739e2d35f5866a4d1427d22fedc55ab93add71db  scripts/run_ocrap_closed_loop_optimized.sh
++cab14eae1f07a249f55566324faf1755455584df110166ae19450239760da7bb  scripts/run_ocrap_three_regime_closed_loop.sh
++4535b813a966d486c4df802bed75977e010326b11d42f597a6fd9bc24f2efba9  scripts/run_ocrap_v47_trac.sh
++f7a26c1b47e98361ee793297eb3dbb0602a4a6b10be49a7be353fd8827a8749c  scripts/run_ocrap_v48_trac_sr.sh
++ee98779321518f04e4de1cba643d24ead0e1dd6420cc15fb1a5bfa5ca5f81a50  scripts/run_safe_regime_external_baselines.sh
++79f9b434fcb713d9d0bf5fa7da81eca96e0fbe1362e1b21216eb3a50cb5d7882  scripts/run_selected_recovery_video_traces.sh
++644211776ff1ff185f96a9409e165420b45a153397d6bc03607bb57a2b7bbf01  scripts/run_v47_all_regime_reference_closed_loop.sh
++2c75393c29a4ab653164e37bac5ea42abe7c39859a7b65fd97fe129575474954  scripts/run_v48_33_eligible_set_policy_ablations.sh
++518b2297e8dbe0e1f86d30fdd9c8f49de554be6c8bd52e82d997c476517cac3d  scripts/run_v48_33_eligible_set_policy_dedicated.sh
++6ef4579c03bd76822e46f39797a2166673fe7768ce67a3483a19e17b00df1156  scripts/run_v48_33_stress_if_authorized.sh
++c65fd3ed863673f28395c9c7d79be4f9cfebb125cf23144e8a176ffaeec84065  scripts/run_v48_34_1_barrier_crossfit_dedicated.sh
++906c16674e878a8960f8bb4c5d59745dbb2ac40971d4c742e327825f44f552de  scripts/run_v48_34_1_exploratory_closed_loop_baselines_and_videos.sh
++4bbfc395ef5d10af9d86a57a05496799cd888cd688959ac5c14ddef0247383b2  scripts/run_v48_34_barrier_crossfit_ablations.sh
++cd79929b9bc9d59fd18bd867e9e7cba48606dcc3b206b5e0a55d1eda26ad9865  scripts/run_v48_34_barrier_crossfit_dedicated.sh
++66c8dfef77c251de5960f7e8a722c7e7f53f6f0226bea2ff054fde850b1af96c  scripts/run_v48_34_dev_shadow_closed_loop.sh
++906c16674e878a8960f8bb4c5d59745dbb2ac40971d4c742e327825f44f552de  scripts/run_v48_34_exploratory_closed_loop_baselines_and_videos.sh
++697de556d243508d0266f89acc79873f7d1a8f13b6493245e0d54b2e0f62fef3  scripts/run_v48_34_stress_if_authorized.sh
++b10eaee52ffd95ab1a34f58658ae7e257f8d38781e52cbe62423b90da3e2f2f5  scripts/run_v48_35_2_release_tests.sh
++598f22d132743d365d6516f728530f6817ba814fbbabdc8226794d8b6f6177a4  scripts/run_v48_35_continuous_frontier_ablations.sh
++2a1539e27f07013d683a7f80b759855864a3db9c2b9924150debcfa2652397ab  scripts/run_v48_35_continuous_frontier_dedicated.sh
++a0a9854b2aaaef4d887ad4067076f802a0788f0b3df93fef63d015470ee9d68b  scripts/run_v48_35_safe_noninferiority.sh
++e02c376c5781d3e3138fc91accb46e5a37100e7676e76e0e0b995c57b63a4184  scripts/run_v48_35_stress_if_authorized.sh
++5dc29edb74949df3d5fdff36fad5b3add066bcad0df5a7196dcdffe52e38d66d  scripts/train_ocrap_v48_trac_sr.sh
++9ec71ea6710ebb9dd3c72d50c159896f72ba4387d005f94a7cac0c4e1805d92d  src/ocrap/__init__.py
++b0b12b030cac2b0e3e1211a4bfe07a2f92938bdc48e8f18cc0dc8a98a64b57cd  src/ocrap/algorithms/__init__.py
++5462ea801cb51ccd7f01d87b369b0ec0dc57fd37ef658307937e83fb2b049b9f  src/ocrap/algorithms/calibration.py
++93678ea5ec4f14874f2c989c88a868512dcb6b6e48d29641451913c9f59b5006  src/ocrap/algorithms/evidence_targets.py
++09df286b24f54d2032193a230d45743c5e69dade2777366fbf6e06df1478ae3e  src/ocrap/algorithms/lcv.py
++7fd947e0bbf168be2a20f16098ff1429ac16d8bd66aa62e6d4dd2957d27d1487  src/ocrap/algorithms/ocmero.py
++881412ae1fe34e652f162217c1c85a89b17390c67cd9d0dd2999e1e4566bab8b  src/ocrap/analysis/__init__.py
++223ea666457ceb5630d50a795cddd1e5e0de3361c7c91dea811e9157ee017034  src/ocrap/analysis/dataset_report.py
++7562b9d18159b65409eb2a061c2a46ee3c3bba7ce479dd709ad04f3572e015a7  src/ocrap/analysis/visualization.py
++f9b04d1583aaf34036120b69a39579cd626d60ec507d164543f7debdee659055  src/ocrap/cli/__init__.py
++55d870f180352b7c0f3256c94182f95aabd1cc0295799d7a9994053bd551982a  src/ocrap/cli/__main__.py
++9572e840b474397b3b90179bca0711064d0013a777aafda5c680714d6393605f  src/ocrap/cli/analyze_dataset.py
++25c8021ae9d4b899db34836622dc830c50fb8990de79270f5741ef7a6fce4164  src/ocrap/cli/build_dataset.py
++eb5fe65bbbf341b1ea2e5044e3c80620c885f5665ce2b63a6b39b784f27a2c99  src/ocrap/cli/calibrate.py
++a9afeaee642dbe295277b5ef16242cf11cfc6ae6c0aabc587f38a77281fd532e  src/ocrap/cli/closed_loop.py
++6cb578a8d04d91d27a40859e62fa1da2f0fe3b0586a31fe2a24dfeb24345d4cc  src/ocrap/cli/deploy.py
++76c7063d08255c52065b43f3093f22a23db3ea1aa7d46ac436a0d218a14be8f8  src/ocrap/cli/diagnose.py
++5e55f18a8644de2fd4d60258785e41d298c3e607c25837b4acde1ddaa283aef9  src/ocrap/cli/evaluate.py
++9e6e67a1b7e3b5af135052a0afc9c89684ceeb9b746ffabc479f35bc1c157684  src/ocrap/cli/main.py
++d947239183000296679edf3ba31a45d9a04517850efdaabe403f8c2ff192f520  src/ocrap/cli/papercheck.py
++0fc3934870acadeaff7ea6d80d81601388dc75eb8035bc78738799317f5b43da  src/ocrap/cli/train.py
++89ade5ab5270fec82f759ed275da872bd5028811b712581e04d7694db330b705  src/ocrap/config/__init__.py
++9b24de33fec2e9176c37736e89dd531124fecb0ad4dbadac7b7dd8fcc59f9c49  src/ocrap/config/defaults.py
++ec44ffcef9a31993dc8216b0f56ac733e0cc787bef93a7f7750e4cf3cfa63656  src/ocrap/config/overrides.py
++5652194433d94b67b59bd460efd736345de21d73f4e98d233ebcd59f47bb6341  src/ocrap/config/yaml_io.py
++61b3d70c6f824183a332379c75fc4670bc512c464e32d29a23c35cd780d50032  src/ocrap/data/__init__.py
++1e8b8748dd4966c7874e4dff24e96f0ac291ff9662083229b135bb21d429bdf5  src/ocrap/data/build/__init__.py
++9213f544d32a93ac8818cb09006b8373ba7cc21e5c1f4460bc63b679cab1be55  src/ocrap/data/build/builder.py
++af73bba61a9c97286020e2d9eba23410734e32e4678a7482a9e350787d7d8b9b  src/ocrap/data/build/diagnose.py
++23633ad319bca4c2a7aa01e74b2f8567d98b2c5e8b4863842077515d69933a4c  src/ocrap/data/build/history.py
++2a8751edc458258bdd919700154622649be0b3e48f9068c93eb7d96e07e2a541  src/ocrap/data/build/papercheck.py
++8e54070c668ce583e2b4402d86bf329ba4d838efd59f16aeaf8bdd100c8f1d70  src/ocrap/data/build/regimes.py
++8581cadbfdb392848921bd74a0987be579ecc76894d7c8faae00344208c4dc07  src/ocrap/data/build/synthetic.py
++bf98b1aba79a0d4201bc03c55122183302714d849a0d501cc17e7efdc99bafb4  src/ocrap/data/schema.py
++4a5e52b1f0347fb5e9e5fc35898d050fda6c476ce54e0045388a535b5f9c6aff  src/ocrap/data/serialization.py
++a94f4f7ebbdc05d84a54e512713fa7eb66a535321075e4cd72f858ba6cb62f35  src/ocrap/data/split.py
++7a16ce734bebe903b7dd24a21b5b912a0ee6a484ada1d63ad06b7bcc5782e4df  src/ocrap/data/validation.py
++6199271d81fd7e3707c973eac98a11ca13c5d82c7c63790019793c7d9b7401c1  src/ocrap/data/waymax_loader.py
++953510c06ee58975c8389d4da4b5713bc9975068f6ceb518dbcf6257a7fdbb2b  src/ocrap/data/womd/__init__.py
++7777a417c7d2e495b3b3d22f3502770cbfa15772b258aeac99a494695032de5c  src/ocrap/data/womd/agent_selection.py
++039639c0373ad00459894992c12c87d4d073addf8756dcd1098a7c826f1fceca  src/ocrap/data/womd/dynamic_map.py
++40486d182499f25cb60d8046688d1ac5489afc531412342fc00aecfadba38237  src/ocrap/data/womd/feature_extraction.py
++f36f3091cd6b49dceb59a502a32ca183a90d47bc47567370809a0161b2ce5156  src/ocrap/data/womd/map_features.py
++b07dc5746f4aa8df71203fa3d582aeaffa377ef20755105db1b056e684383310  src/ocrap/data/womd/route.py
++a3911fa1fcdd78ba434ab6eb6cfdc990e3f3ebdaaab76596272c7cbcf9d33279  src/ocrap/data/womd/scenario_parser.py
++15cb3cafd992005d50c07e3a87787cb9d86fded5a875bb05756a51e22ba63dfa  src/ocrap/data/womd/sharded_path.py
++08d235d56faa356c0eefb008a6eaa3386c73cfd67af1ecfb34ec1fad3197361b  src/ocrap/data/womd/torch_tfrecord.py
++168260bf97f13e666418560b8c1b085ed4ced4f07d0a0c0009c090b633dd1e85  src/ocrap/evaluation/__init__.py
++1511070b639a704435ee5384d6365dfe30ea37e4b1223df2713375d2e573fb1a  src/ocrap/evaluation/baselines.py
++15348459f59d967275bb0f16504d4b549c44ba86da89da46af0cbde01bd19c08  src/ocrap/evaluation/certificate_stats.py
++a447f42f9d9391991d9a5d284ef1cefbe89d145ad8f482cad165fb63f50f8913  src/ocrap/evaluation/evaluator.py
++b9adab78cd6d338f0e0370bbc6a81533e899bbc4ab57622cee98bf5beb9267da  src/ocrap/evaluation/metrics.py
++e814dcf9c5f374fd96b0b478b1c3a43fc285db411b99fe8edb7e7150eeca8289  src/ocrap/external_baselines/__init__.py
++44a03d88c72877a99996cf4cec2a7dcb6ee6c4dac61db45e7516ab4fbecc6cc7  src/ocrap/external_baselines/data.py
++a17ed2e3dd5e43f9086522ce4b7a84fc7ccceef69685383e09bfbdf517be0088  src/ocrap/external_baselines/evaluate.py
++4bb60192aa422ef80af90b6f61a66d4334996a397361dad322f784eb582465d1  src/ocrap/external_baselines/models.py
++2e6cb00545b10d5df59b8c3b0cb3d738122a04008928ee5ec6e577706807bb85  src/ocrap/external_baselines/observed_risk.py
++d12d25b1d2a770e096113aa6788f1fac07020ad1b8ad2d181ee8d471416f911a  src/ocrap/external_baselines/policies.py
++10fafc1a79c68883b5212baaec92ff5395e810782c76f86706679b94add4e929  src/ocrap/external_baselines/provenance.py
++380078ecb38756a5d5a76d36d0845a0413cfc63679df94c093987ccc7b622f1c  src/ocrap/external_baselines/runtime.py
++03969d7ecd647ee7d4fc0da06e6aaabdfbe77b7a97da5512c7ca3483661ce49c  src/ocrap/external_baselines/train.py
++75d533ec499ac863a685562d0cda8ca5239adc68ceb8009bc55f3a83d884b4ac  src/ocrap/lcv.py
++1acd0040baf02895285f40c21285088f55a5b5193627fea782df44c176255815  src/ocrap/losses.py
++db947c8638bd82970985168d1db647df5e488b660d73ec3760cf7f5373d01bc6  src/ocrap/metrics.py
++2a91ea30fe04b37501e9740b5523da9245378da9956472047023b1b50bcc2ae8  src/ocrap/models/__init__.py
++a4a67bcc89194bb518e80fc6d566606113bfee118a1fa7c841df8d596098ac4d  src/ocrap/models/data.py
++360b1fd32509f695145f585373031b4a36a5aba526c64385b052f15e154ee5b8  src/ocrap/models/encoders.py
++788e027aa09b2069c16afa759a28a44111132deeb28297fddd61895c3421a003  src/ocrap/models/inference.py
++c2a7aa7f53801fb7af9037e5e6e3173426fe5f0425d5e62bd6080a07a14fb960  src/ocrap/models/losses.py
++7f6cd4a786b83dde0a118f5b433dc80ef8d5eadcdd0d7b5ea376431e434eba46  src/ocrap/models/ocrap.py
++e93df6fe26906172dedecdef4f87ccc59d9ec9d75ba109203ef25804b2ab4faa  src/ocrap/observation.py
++0c04788b55711ae350406157651425beffa323b17dcf14288f65ffe425d702a4  src/ocrap/ocmero.py
++066edcc472fc897f497e8928afc0a63d9815cee76df0aa91cbb11a31696f65a1  src/ocrap/papercheck.py
++34c63a368dbb052f932bb52eb69db2aa2af9989255e79a3985dbb428b60a49e7  src/ocrap/planning/__init__.py
++a141639c8aef93b15cabfb43922ae652424a1245cc55637862d52328a792d375  src/ocrap/planning/prefix_generation.py
++8847e9ac91cb5934360e66ebfa7c8fe94d74557c17fcf3f5284ac21b60a2db8d  src/ocrap/planning/route_lattice.py
++636be1950a1c51d7dc8b454b4d3906e043fdd6f280e625a0398ed536240032a2  src/ocrap/planning/selector.py
++aa76711ce8b51ac92fbe47ac08d768cc743904df016779c188e247e2b9d6a914  src/ocrap/planning/utility.py
++33e94a4f804d123017d34f7c4ef0b853c0959c34e7e2c98df9f90c2bd85aa293  src/ocrap/root_clustering.py
++4e59723c4c9f7664ef4cfab270240fb07f852586487df98440e2b55008127eb1  src/ocrap/roots/__init__.py
++b3ac6eccf4eb4537c7a359e0bc39999e46086ba1655f81d5f959a12a905965ed  src/ocrap/roots/aggregation.py
++eb3de0187b6a27da608dfd926a7ceb65e80a2330138f8fea4d1dc9c2ba1f7de3  src/ocrap/roots/clustering.py
++f51d10ddfeefcd59f0b84a6a2627b2a049dfc5c8d03f63919afd8dc80dff1a74  src/ocrap/roots/signatures.py
++9faa1a1b4b7db2346db5097fc9470c25cc5ebb8e533c7a2309afcbe88ee36f36  src/ocrap/schema.py
++40ac9811546b69f852f4566bbdeab6c6417623197261bafa6fd5fdaea4020220  src/ocrap/selector.py
++e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  src/ocrap/simulation/__init__.py
++6e838230e3b331cef71428cc429cb31dad1bd3964cb953421343d7e895ab820d  src/ocrap/simulation/closed_loop_runner.py
++bc011dd7ac92c165f8ce48e6d52e344a550c3bdbdf561b33de7985636ad37537  src/ocrap/simulation/futures/__init__.py
++fc7d5b11046c4d01a878a4e0b006bf1b528fd02131ce7b73a46cc53a1d794d47  src/ocrap/simulation/futures/plausibility.py
++800220c3d72e3f710079e341590ac0948a56414245aca6c5b7ea6f042282178b  src/ocrap/simulation/futures/priors.py
++989023219576c2e769d461796b20c130c787d57a972b88e62e743895888c7827  src/ocrap/simulation/futures/reactive.py
++8c858929ceecd153c0d6fd9ffb98a45da6c156d512c3f001cf12864d6e1fd41f  src/ocrap/simulation/futures/replay.py
++d78a14302e3b2a95f700e3f7f56c5a680b0e8df1a9cdaa395a24e402a6160b8f  src/ocrap/simulation/futures/targeted.py
++4ee5bc64d86af2d39a0b4f6e54a2705cc5682dfbe6fe63f733123e8abf43a17c  src/ocrap/simulation/observation/__init__.py
++ed07e5bf0bbff496d59d74815799fdeade6441463258e0335c4b31a5e1cccd0b  src/ocrap/simulation/observation/bev.py
++c10b8fe349dcc77d945940ce03b340fb4273c489dc6a94ec4bd8ecf4e332b42d  src/ocrap/simulation/observation/compatibility.py
++2e73cc6f498f03e7fcacd50b237ce0151c344ddab048d14fed6a652785703ef7  src/ocrap/simulation/observation/renderer.py
++6110c379b05fcb72198f70168a14fe441784a81ed7864119794610be336de599  src/ocrap/simulation/observation/visibility.py
++95841a82732cd113e2b81029dffd5ea4a9e97a19db6ba7ac67b0abd9a43fd162  src/ocrap/simulation/teacher/__init__.py
++e26957cd0735abc039bf7157dd69b34c6a860527fe542f74d74a13d27ae7b993  src/ocrap/simulation/teacher/controllers.py
++76c2e97b23ffdc6698d42e7becacddaa50dffea5dc253e63ee96c7fa8f6d325c  src/ocrap/simulation/teacher/margins.py
++921fc9172c13a6853c56df4ac1b550e5be2b2a1e3c75dc7009bae2f3e4f6845b  src/ocrap/simulation/teacher/options.py
++790e1b2c8e29ba609d875dd989930bc599d9076afa360c4d0cc2765afd91e3c8  src/ocrap/simulation/teacher/rollout.py
++36044edc450c5374139ed9579c3bd626be7a86419fe3eff00903723559d02a44  src/ocrap/simulation/waymax_rollout.py
++64ed5ee2c0e25a59209288ffc91d0ab24feac4de124a2b547647a4feb1ea2309  src/ocrap/utils/__init__.py
++5d835c1963d44e4305cefb071192818ddf94e4e59f0725243f0a436ee1535937  src/ocrap/utils/geometry.py
++468f5346c2b9c02b23d0c168b49cc8352f4181e451246add5b21db2814f7857a  src/ocrap/utils/regimes.py
++95f61055627583e53e25ec148efe4fd2a029d032f099cbca637652d6d387dcd1  src/ocrap/utils/seed.py
++1d834443e6f3c3e10904055b43c89329571f76337b6014425b30c70c99f6c6ce  src/ocrap/womd.py
++b28f559c7506b46363e587f601876d3fad04df11c00c928b616ca5bfe2f3b389  tests/algorithms/test_lcv.py
++22fc14d4c3b91ecdbfaf95de2349d747856f9db9fb6d3f6d39d975e1b671502d  tests/algorithms/test_ocmero.py
++cc7a33c8e90aa2850a536d19656e192ac58c8e10335ea90b98787d3954f8b808  tests/data/test_builder_smoke.py
++454ac22b6ddddaa21933a6c75d674df6ff19aa53a90448982cc75e36a170af6b  tests/data/test_dataset_rebuild_integrity.py
++4c5b00d73f6795decfea9e5f4cc8825b2686e8f718908e8c8abfc6f4bd711499  tests/data/test_papercheck.py
++35b5a61a2144fa7fa5b7f95b9d6a8955d51e821e6268713f2331eac190819e99  tests/data/test_planning_time_selection.py
++0cbf77179c1ef62474be45fa33adf622b140e7d5d0214a00031b442ae5225e35  tests/data/test_split.py
++cfc1b5824d5c8aeab0379f9cc9fbada20c84f9529766f940a282732b593dec7a  tests/data/test_waymax_loader.py
++12dfd3c9eb0e1f96927ad642b92c602636f2f32965bb8083c17c9abdbea32276  tests/data/womd/test_scenario_parser.py
++17f3a308c75527fd7fafb662ad8e728a40f7c956ab59a95b82a5af8729fc1c8d  tests/data/womd/test_torch_tfrecord.py
++bf250abff7707203e96095b27dddba73b7211d8b999095c0825ed3017e6c2bd6  tests/models/test_external_gameformer_input_contract.py
++bfad5a42014bf97e92778e538a9db0dbb6f7c20f189af3628984292c17747c7a  tests/models/test_external_observation_only_policies.py
++6c31ab6b5fbe2e122b654e9864d4622ef5e6bef7b0bcfd1c604a8e55a9a920e8  tests/models/test_gameformer_gradient_stability.py
++1c4dbc8c1943f81fbf5cba45b785de1e3d5a71e38e558dbbf08acd7da4ccf63e  tests/models/test_option_features.py
++952aac161c51526e12562e4c45e16279ca616ba25883365ef9a20b5d16575f89  tests/simulation/futures/test_targeted.py
++69bbbfd6cc368b470831f5e5397ceac624498d136586f1f3d4109d699751c216  tests/simulation/observation/test_compatibility.py
++2939c63c1c5a2be2852cd2e07ea82e66ae205188f464826a9b2fa27bb449ea89  tests/simulation/observation/test_visibility.py
++935b9cea3e447f2525cdebed0ff1e0f45480ffe6cd39467d607bef79cccfa937  tests/simulation/test_closed_loop_timing_aggregation.py
++9411ba3ae075a08c4f5aeb3d547d0ecfbbe814da9321790d9e101fbd6310b46d  tests/test_calibrated_selector_v5.py
++e54a470e833169815eb1038af42039f2ade8bab6ba6c7b5f982b911c76ff1681  tests/test_cli_overrides_and_metrics.py
++146277370b7eddaaf800eaad7a7311ed681304087b75900d41e68d35d99046dd  tests/test_closed_loop_resume_optimization.py
++6dff5eb7da276f2071fb965af4fece9b347c2ddd54079d440b3fffef4fbf7b3f  tests/test_core.py
++d369623c6ee453127d7b9ce057cb1cfcf9dd45803b99c54bda7afd262f9956cb  tests/test_external_baseline_cuda_runtime.py
++46dda9c1b38a4cb6fb9e6371e337a6041673b5b32b79af81b37b72337bf6be94  tests/test_manifest_repair_v48.py
++ece0253885c99ad24e0705300632c06a11f83750684d39ef6c620aeed7a98330  tests/test_ocrap_closed_loop_hotpath.py
++e771a196113e69703e678ec10a602aca16100cecfe6c133cd0e8612c0de7f352  tests/test_v39_recovery_advantage.py
++6c07a755dae875f4ead3291b023e380fd7d956625b911ac393dc1b6a4bcafddd  tests/test_v40_direct_value.py
++125d242940f960b4e43c5c98abb2e9f2b149f199758562bdc930b4a7816d5e9e  tests/test_v42_ocsava.py
++119d4cd8f4aae2ffb53c632aeb05107f4ae00d007684fa9401b8583804b5aa80  tests/test_v43_rsc.py
++0c526c3fa4b19f017fffa9fb52bfd84b7971799b58948bdcb0314dcd44ee996f  tests/test_v44_rava.py
++7dcbdf7381bc5f89c639b2fd8399a4e686b005c19896548bc7cc509d956d1774  tests/test_v45_rave.py
++b7a13435a191ac18e4bc7b3f0c6e78bfea4b59dec1c45197bc529e0ad2730eb8  tests/test_v46_race.py
++a5e4e379d9b3a50933f0fe322cb36fd3e6903dac25ef5ec67cafc499d2c5e7f9  tests/test_v47_trac.py
++cb39937d78cd00403f4d733c0df77ceca98288666cc5d4efe3add749c0d67e59  tests/test_v48_10_cope.py
++f5d75e5f61202779004a969d617fcc77d10657f3a980a47d86054e7a21b37fd3  tests/test_v48_11_caster.py
++aa0d042e2d4eedb4d0d9841edec7adf09919d573b7fc68c945258a511a75f9f4  tests/test_v48_12_trident.py
++f4ef41b3c42cc2fa1c7abfe5ee0f6fa3446bb4fb89f35607ecf6fdff7b749501  tests/test_v48_13_terra.py
++2911bc7fc99020b7203e8e1774edeb61ec3e1300be7232fc620dacc352488f10  tests/test_v48_14_prism.py
++a41db27db43859127f8930b115769370a9a470f77a097956b1eda7affae37e36  tests/test_v48_15_prism_cc.py
++708e363de5c9d449f476283b43dee86fab225d6ff07b3a2c00d8c41eb34ed5a3  tests/test_v48_16_anchor.py
++d24f7ca534bce10ce59ed7e2de468582584e4a8c7d96a90024b1c4c660f6f7df  tests/test_v48_17_bridge.py
++1683b27cd66ec6f56beea086f98f902ff10497c0f4c463599d3411755d0ca3b6  tests/test_v48_18_duet_bridge.py
++af625d8577d499a002c0d9950a018276c54a42ef301a0ef2827eb3cda8dcd4e7  tests/test_v48_19_facet_bridge.py
++525dc2fac8018bd264d805c80a77f224525dc6f545e348b07839228aa74adb4b  tests/test_v48_20_unison_bridge.py
++ef4a5fa4510bfab3c18441ee14107dc555207025f93fac5dd4c96192b34f8c28  tests/test_v48_21_concord_bridge.py
++c5996a2c80ab0543ccfc201e1404247249a5f1e68b5c9610bc2aec46c5ff8d51  tests/test_v48_22_covenant_bridge.py
++77617ea6ee2e84b623e691812c98fc5d6a71ff11d360ff6dd4d387f5b6a05bc8  tests/test_v48_23_frontier_bridge.py
++ae2ddcc66d7ccba50bd6e13e5986a5a7a94a507f1e24847cae14072cb8ae82d8  tests/test_v48_24_support_bridge.py
++b68cd4f82feab8a1936adfa5ee7aa9e3c5faf0f2ec092dce762d131c33cc72da  tests/test_v48_25_integrity_bridge.py
++84cc34574cd57bd3433454688e93c263105c4da384d7945c64d2a061b4d867d9  tests/test_v48_26_execution_physics_bridge.py
++a5bb96fb8d2a06bf995b4a4b8d0e207bba4d25b12d20698ab34f2998452a9e04  tests/test_v48_27_factor_physics_bridge.py
++c83e9174c2997f6ad76431aff1b1a806483a406fdbcd2088e050bc2c65c92e03  tests/test_v48_28_provenance_margin_bridge.py
++a78d174f849ec8b8739d1a0d65bbe9ec334686d2334c5d0de47ecf429fc6d73a  tests/test_v48_29_veto_rank_physics_bridge.py
++e8d3f3e5fba028aa8080a040eac91fa93884b0a25fff64fffc44411d22bd33bb  tests/test_v48_30_slack_rank_bridge.py
++435416ffcb8bfecb194573f7267fe7df0f93db270ace3d596eedb31adf07c700  tests/test_v48_31_contract_slack_rank.py
++ac67c696ae86a6f98183e39d657e7419487caee3a48f67ba4c28c587f9c5c3c3  tests/test_v48_32_1_rc30_integrity_hotfix.py
++8a3b7f999b2e94b531efe0133b1ccc44e30a6bd988b66052534183cd63bea837  tests/test_v48_32_identity_utility_bridge.py
++3d6c6cb8fa1527419144a2b24f6d031f9b9982896bf4a0c7874072dc46f182b3  tests/test_v48_33_eligible_set_policy.py
++2a89b3886ec634f11973cdbc4d9487ae546636ec7a66d019efa7a3df5b675cea  tests/test_v48_34_1_rc30_model_contract_hotfix.py
++89cad972a72d41d0598516eac6d60e5f84dbc963a571c6d466512316750ca12f  tests/test_v48_34_barrier_crossfit.py
++e3ba78b6b166d3d0500bf8b604dffc2453fb14e92f3a66a539b255c05809ec23  tests/test_v48_35_1_rc30_training_contract_hotfix.py
++ca3452b4edc98cc8fdaeb7fb2b207dd1e8a569f2e809c763ee0807c370824137  tests/test_v48_35_2_engineering_integrity.py
++f44a16bbc3ba0cd2b82424d996ac80d30817c6d7fe8e036c571f87b3cb8c1920  tests/test_v48_35_continuous_frontier.py
++6db7da5809552ea5ece586fec78f59ae7fd07f98313888b9b4aa02b971b370f9  tests/test_v48_5_ecpr.py
++5a802cb2171f2a281385eb04194f8710b4c160530fdadfe99241e41801990a35  tests/test_v48_6_rpgc.py
++14afe61a22eb44f259966fd1195e8342866bc2cdd141524a479b65631f8b0346  tests/test_v48_7_spire.py
++0ae3dbf51927da4792e9420a169c8d0f66f1a8142990ef6723be2b460f3a7caa  tests/test_v48_8_scope.py
++83914aa72053300f897b89e5625ddebde7812c33297cd4f63315c240d3f7fe72  tests/test_v48_9_pacer.py
++d5c1122642ba1e7c089e18a38bdacf7b9926ad73a67d29e329a8c2ea0ec93c22  tests/test_v48_trac_sr.py
++a19b60202d4abd9f1f677b3671f02e1fe3d145d441a5b3ad09c8bc35b360e6b6  tests/test_v50_3_recovery_hotfix.py
++09edf28ac440c07da0abf9d9dcaf173a2a68a8a552ae6b669462d3e311d8c0cf  tests/test_v50_full_regime_runtime.py
++eef70bcd9a40ff9c64aa42b8c17e655a95a873ab79f961264ff5704dfa266fb1  tools/analyze_safe_paired_noninferiority_v48_8.py
++6fda208548c3645c3a25490e95d61333c6347a6f956b36071782a87b4cb3cbd7  tools/audit_dedicated_protocol_v48_16.py
++f304346aeb6f22f94885cda93e33cca44e0b9ce22792922040c2e7f8b1b2fe3c  tools/audit_external_baseline_artifacts_v48_20.py
++8e10c0fddebc8f984b40eb86d6fc5fdbc1950b62a0ab11b9afba267a618f0c41  tools/audit_external_baseline_fidelity.py
++d701143cd0558ab45a7a9f9475a281dc1dfffd2929dd5fe8616d9d951b9db386  tools/audit_v48_28_shadow_provenance.py
++3fabbeeb5113285d1ca8510361e66b74b73c5d5361ad15e07b03fe674d6f488a  tools/audit_v48_29_shadow_provenance.py
++18aace24ed18279e9676962ec7ccb7af3e627bc8178a6d36476fc484511fe157  tools/audit_v48_31_shadow_provenance.py
++d85787c9af310548d09c9ad5073e406a25b9cdd4dc27a8f1542c7e99c8987a0e  tools/audit_v48_32_shadow_provenance.py
++da5b8814e336ae9e0f96a75bd8162325cde0e764f9b6fa8fc4019c9686019024  tools/audit_v48_35_run_state.py
++7392a3038cc0d23bdfac828ba39ac4a0f672aa8e059624ef7631749ff6d959ae  tools/audit_v48_5_completion.py
++3a68b5d4fc443c1efaff3fcea14c534b061815c49b4bc9b1aac24ac6cc3cf953  tools/audit_v48_6_completion.py
++7a84ac0e8e575361d626b5419f1834a98c2cd6d37cfd82ff8535935759134af5  tools/audit_v48_7_completion.py
++4893807c59a0d508ba21f2ea4b74a1e7a35e8eb6a8d1259ba4e45d9335dab7a6  tools/build_external_baseline_run_index.py
++372895eb2b2b5eaa3245240734c1ca6bfcd173e2e61744c00bc4fe00ec44bc4c  tools/build_ocrap_three_regime_index.py
++85e6e521ea810563b8cb9d93e92c6a867353ee0df0f619f6d396fb59286df20a  tools/build_regime_comparison_tables.py
++1982256dacc6789370c56ad2e4acddef1bbdfe59cc0e619f434dbad15a25e91a  tools/build_safe_v2.sh
++037632c66897c4981cf6dae66df303488d1d2c37ee30f4568eefb38ec50455a6  tools/build_teacher_pcd_index_v48.py
++4bf969066a2519fddae93f7fb06cd96afc3bab19c50fce72ff4851ba42b38d0e  tools/build_v48_31_factor_support_contract.py
++f5eae7af207648a1806852486d5d1e99d4e72d683a4b8d0837474fc95b624c16  tools/build_v48_32_factor_support_contract.py
++3617fdbaf381e2ec25926ea0ce5521d517b1f42d2d3f1b4fd57893f39378ee96  tools/build_v48_34_1_progress_tables.py
++4be22df4be3690f3403918933860bf2d4d7ad81ce8c8082e4275dd8747264703  tools/build_v48_34_paired_baseline_report.py
++944ff930923ce97fe213d22a45cbf984968b3cf03da7f12d53afdfe9f4e929a4  tools/calibrate_direct_value_advantage.py
++f2aa5bf968135156b2929e93dfcda94b4532ab8b14749b1034141945013488b5  tools/calibrate_direct_value_advantage_v41.py
++f69d646f6d23e57d2c15082ff606024474ec8e33fb4dfcf19898191d99548e86  tools/calibrate_direct_value_advantage_v42.py
++70bfdad06ac0d6af8b414956f0d4f89371537bef8a10532b4f1ff2a94d36e5ac  tools/calibrate_direct_value_risk_v43.py
++acfe176131b0da4fee2d7c225834969f2163e4c0e4dfc814e40876ba4096c2f1  tools/calibrate_direct_value_risk_v44.py
++4775a985bcc8f9ba412818d77ba51a6ee6c0d4cc73b46f45491121180a999f68  tools/calibrate_direct_value_risk_v45.py
++9378ba85049e0fdfb8fd486782816ddc29589bb7d7c05ab4b75f4861a26b7b01  tools/calibrate_direct_value_risk_v46.py
++50f481a411cfeb2428dd1a53fc5a33aecc7b18935de907043e517a7fab3661cd  tools/calibrate_direct_value_risk_v47.py
++f76d3f37398fe87c4c4d04aee8000b00523e19854d5147b0ad3b5a2e95bd2345  tools/calibrate_policy_risk_v48.py
++e318cf5330917571b1e2fdc5a499f11a030fe438c1afb676acdd995ae8170ee5  tools/calibrate_shared_continuous_rule_v48_35.py
++171ddf93f0959a6916d291b5546ae393cfe0d09247e381dc9e8972da05dd3e7e  tools/cap_dataset_scene_time_groups.py
++a8a4ba588f7dbb235f158660849f4a3543e1c313084f1147ccba6279649bf23a  tools/check_closed_loop_artifact.py
++3fcb14064fa1daeda96e6c7e4ac785f682c2b00409cb824bb46d13364b529b09  tools/check_closed_loop_dataset_support.py
++4810f290a7f5952ae8ee025d3d416cfdc1f2f28a64bb3d62bd058ed987609f96  tools/check_external_baseline_cuda_runtime.py
++2d92296001139ff71c3d8aaf958dcdec4429879ad181352cd355c5bcb1b19802  tools/check_regime_dataset_contract.py
++5606d9564bc9850b68dc55770d6365b7800643b148f33d9c94f9141b422e0b85  tools/check_scene_overlap_v48.py
++0902946cc4209ec135f67944443cb49721f9a8a64fde7a0e6083900af7baef03  tools/check_v30_regime_targets.py
++505c5b6c05ee5bcf85d5ae4c4380c30c2ffeca71c7269dd56ae09303f80aacbc  tools/check_v31_regime_targets.py
++1b56d2af3e36df540b52fa49396f1be4e28dcd30b3fb39a8973df0ee0e53c5fd  tools/check_v33_regime_targets.py
++4db11b9c50daaa9eed82e9da899a9bb890d2c23188b5903fe09f0a0be6a0e8e2  tools/check_v34_regime_targets.py
++b08403e006867c30551a42875127755a22efb3474623813939fa9921b8808322  tools/check_v35_regime_targets.py
++21b9fb2b5847918a07622dd42a320f211e93a6bec35d49b40ed029cbe69c0ec6  tools/check_v36_regime_targets.py
++c0b204b1dc9b3bf879a5df4d57d32fba950237c26dbb5398b3cfcdfdaa2a8a49  tools/check_v37_regime_targets.py
++dbe1d0fcdba50ac4fa61d036ead32c0e404d9880dc91b499f6a651e67413e8b0  tools/check_v38_regime_targets.py
++464b65d6cf1cd6858e1c36572018b387343b02947847631645e8349b62575be9  tools/check_v39_regime_targets.py
++90f3f0922e393451e614b7b2cf6cff9333635f6641c87f412778cedb5ac2459d  tools/check_v40_regime_targets.py
++876cf7f9434740112b9e259104c6206f77b409ca7a771cfd079f2f17d08af257  tools/check_v41_quick_gate.py
++0438704b215862b49676e0ff3a00d60cf388b6335f088ed712b2f4704bac558b  tools/check_v42_quick_gate.py
++59e23962c73a31a801475dbffefd0249332f70e8e605d09a1cf0b7a3d5e86e18  tools/check_v43_quick_gate.py
++dd90379bac61d4bb441b50ea53243c90150f780797b4e2aeea5e97907f7655f6  tools/check_v44_quick_gate.py
++66b33a47d0896f183dcf0d8fad700817c2e2ac7aa9c8edd46909ea59e4176d6e  tools/check_v45_quick_gate.py
++09612228db7d44328cb33b1208467a8a2b4bd7d08fd5820664d1c717219d345e  tools/check_v46_quick_gate.py
++a7fbae6cf9cbbe2ad2db8d4c7fe6442ce108719ba894a0d17c0d9a12be9c9c73  tools/check_v47_quick_gate.py
++02196f180c22f8d6b8d34101c974ab0c4bb18e27fda662d717ab42d3387f4760  tools/check_v48_10_learning_gates.py
++79db72c42aa7fa58e4807c78c48d6caac715fdbf8b23a6d1c42a859e2d51660f  tools/check_v48_11_learning_gates.py
++34d8ba858599f12fc860360ba6321d97dc78e25cbeafe3563405584ad7049dbf  tools/check_v48_12_learning_gates.py
++7c8375c8f3f82cea848beb3b3f1a5067baf295a6aefa0f06f8d27cacb110c94f  tools/check_v48_13_learning_gates.py
++39ace139d7831fbd7037840d293adac62267ccae508f646fad57c8bfd05076ff  tools/check_v48_15_learning_gates.py
++f6661999818f7caf1e47bc5b2de9babefebb25bbcd6cd2066b7167909d14f454  tools/check_v48_16_learning_gates.py
++4f5b71e6c61af12abff4cc4bdc130988ed0480d469f411c1f925f67c0f587d04  tools/check_v48_19_target_support.py
++673ae0f513a11bc8074c201775f9380cb48a0614841b698f8e1d281df31aeb8a  tools/check_v48_23_regime_targets.py
++a620ff694e1e9a4f735013eca92bf83706ec7ced4e4e04c79d9e48b44bf8e682  tools/check_v48_24_regime_targets.py
++faa7aa8aa82cac5a3075274d02eede75a02ab4c4e829e6a54f8eba03c6e94f88  tools/check_v48_25_regime_targets.py
++a1b8489f55335846993c4b529dd553043e89d64f4331c5c2a20b43fc9194deca  tools/check_v48_26_model_contract.py
++80342820e9fa147e747fcdae66c3b2f96272cb3be7237f07606ae6385e4b8a8a  tools/check_v48_26_regime_targets.py
++404e425ada6bff5a5b7645f7d3985161769371ab7eb559834c738f9d50c48b20  tools/check_v48_27_model_contract.py
++4e4a6369442ee43296f1e322df5f6fdd8b1c30be8216b9cc4e4e1851dc449098  tools/check_v48_27_regime_targets.py
++7dbdae438ba5fef9576720a5d5fc2ee4a9faac95bccbac6f216189cad33cf76c  tools/check_v48_28_factor_transfer.py
++9d7bcc3c50ad23f536bcb3121af4cc61485e1f247487197332dbeff59c8d70c6  tools/check_v48_28_model_contract.py
++64894955a87a5473416f49108f7e5dc846ada4d91ea5b9331ef36fe228ff0340  tools/check_v48_28_regime_targets.py
++7dbdae438ba5fef9576720a5d5fc2ee4a9faac95bccbac6f216189cad33cf76c  tools/check_v48_29_factor_transfer.py
++493278e558867944cf2b02237ff87c464bab1dc2d7e54b0f77b9fba6f7ffcd9b  tools/check_v48_29_model_contract.py
++bcb9052b20385df832782dd78342dba8f67f0e9603de1489e7dc29cd6f1c2efa  tools/check_v48_29_regime_targets.py
++d6f2b7807d4059202415e7995b7907a1cd39e896d27391cec6fa25935e91a0d5  tools/check_v48_29_shadow_runtime_contract.py
++7dbdae438ba5fef9576720a5d5fc2ee4a9faac95bccbac6f216189cad33cf76c  tools/check_v48_30_factor_transfer.py
++2349027f75e2516c53677ae7d9f25fa15fbc099ecbba2230691bafc7a44f68be  tools/check_v48_30_model_contract.py
++d16584659b587e5d8b8d2204a5546772ad2db0eca4f23f63ccab72eccf58988f  tools/check_v48_30_physical_target_support.py
++f8afd55cbb372fc5dd94b0501a1179be7ea39859ff5cc4434de8fe913737e693  tools/check_v48_30_training_contract.py
++ff30aa0db22a5ca63ceb93d0b7625b43bd64e165864b0673ec7e59f04c70b44b  tools/check_v48_31_metric_calibration_contract.py
++08459c5ffd99c96497fe505235b319040116a7dec1d080c1f6151482ca164ffe  tools/check_v48_31_model_contract.py
++5cf803404e83858a5629fcb0661032312330464acdd8a7b4f088876262c2442a  tools/check_v48_31_physical_target_support.py
++49eec6aee25d38a844bd82ea0e657a2d3be02f9861235091ce32296962a29cd6  tools/check_v48_31_regime_targets.py
++c3972c4c17dd0efc553cc0d62417140c105a7498978fadb0005d48d7e00d238f  tools/check_v48_31_shadow_runtime_contract.py
++40950c3bd8fd15a6a69953c18be4121eacdb06540310e0ee29e7a3ff24db68bf  tools/check_v48_31_stage_transfer.py
++0f7b0e8d61549833a11c76330c9c938057d499ab383f6aaea58e47a9d26f418f  tools/check_v48_31_training_contract.py
++ea3297922a68eed1a46340500c6742fe0e3ffce5611c06650c046db8be5a3bec  tools/check_v48_32_1_metric_calibration_contract.py
++f7876be4587dc58a6370ea0960ec25a00db11d3924b98ef3bf4bf9bc2db8dd6c  tools/check_v48_32_1_multigroup_loss_contract.py
++49b857d59ade7e728dbcac0c7cc9a0e33063da6d08e2cabd886c9a0c2c663e49  tools/check_v48_32_metric_calibration_contract.py
++702c36a3a03ad4d44aea979a1b72a3c027c577c4bd3fdd1eb50c1e4f99501fa4  tools/check_v48_32_model_contract.py
++403571a3eb22079c7ad128ec0903bf0ef322459ba57c83e64520be4d6dba5cf4  tools/check_v48_32_physical_target_support.py
++251704b696e59189fb6eb2052a71be72bc7e674dd5cb6b3c227d0e3e46b95593  tools/check_v48_32_regime_targets.py
++067183e49a12a2f20a3a2425b15077e27e4d1840fbb9d45f15e6346102711c70  tools/check_v48_32_shadow_runtime_contract.py
++080f905ef58858e50dc2e3c2f2789ccaa38136e576fcbc6f5441caedbb0078f9  tools/check_v48_32_stage_transfer.py
++68f2b29453d232e96faef9c2692481dd19f23ff578ba0bd2d7d1ec0b0a927ef8  tools/check_v48_32_training_contract.py
++908cddc5fd47dc45b1624826d104cc794441f8d559e09b64755a0238679ebfb2  tools/check_v48_33_metric_calibration_contract.py
++14cd51322c30946db0f3e98e3747e84eac8d9ec7b7defb9989388f366a4a9f78  tools/check_v48_33_multigroup_loss_contract.py
++ede7cc8741ead0a030bcdc7cac3f48f66b0d3ccadab1d762d833ca46942b7797  tools/check_v48_33_training_contract.py
++f28e9f5bcbe824d4070c24bf25cf87331aa8fb3e8a61f8fd632e5c10b0fcbaef  tools/check_v48_34_metric_calibration_contract.py
++81c5bbdfdffb0a3292b900beefe369d8c97273a381df4cee8d19e191fc6d05b4  tools/check_v48_34_model_contract.py
++44a5a4074869d5846875f1b4f6d9461ee0465074c825d8aecb314f79b0301035  tools/check_v48_34_multigroup_loss_contract.py
++2999d5a294cb6f86083921bf3c41850eac736e89a2f1cc2dd5bcb41784cc9f41  tools/check_v48_34_training_contract.py
++8f87f59822ee358aa7f5f8ed34da7cc8ed98c9cd4c76c1fb185bc6f20ba69eb6  tools/check_v48_35_frontier_contract.py
++261b25992790203584f6378c99a0b40a532d8b392f0489c7bf13a635a16feecf  tools/check_v48_35_metric_calibration_contract.py
++aa79ba2fbd828b3d8116627495e32af9692f343b6456ee1a8637f92f1be753f1  tools/check_v48_35_model_contract.py
++e7e90014b6a26aefadf67850b36283dc6554d64f2a65ed7cb4d002ede2d28f07  tools/check_v48_35_resume_contract.py
++86418ca3d489d35860dd84694d8543022904dc88bdd8b29d70ab468cac7eea3f  tools/check_v48_35_training_contract.py
++1179f507b72a5f412c50a66a194f6b999e9f6b0ad27a05cf000b2e9cc9c4de08  tools/check_v48_7_submission_gates.py
++9132d4213ea3aa0f0e875341424d4cbe87d4b75b1af6ee8f8119a99377c4d6fa  tools/check_v48_8_learning_gates.py
++9da5ccd09673ff866b3ae912b18a94263f5ff7c6be1e8883a39cabb057acb042  tools/check_v48_9_learning_gates.py
++5903e72a0fbb4025259e80845b235e2e851b02f92a405dcbedda2e749576cd85  tools/compare_paired_closed_loop.py
++f768d5873a97d1beaaecc30b331cf8e53c03c855cb97b35062564cf838748152  tools/ensure_manifest_v48.py
++1f0331f9ee6ac4ec109b46c038de5ae7c4779028ceed686c605991d15f4c651f  tools/extract_v48_32_1_failure_signature.py
++ef608fc1709ed29166574f7f89c13a81f07c6a1eb1b43a50839baa97477c63a5  tools/extract_v48_33_failure_signature.py
++4c3e365f2970f2531cdcc31a9b8b510802591ae6f2127bbcfe0552cf6a8571d5  tools/extract_v48_34_failure_signature.py
++8e1097058a8faa35a478775b4cb46d7430aace8283360124a4104abe6a1b601c  tools/filter_dataset_scenes_v48.py
++6573480224206fea601dbd182015c1ff9a399e63540d1913407d029d0b86c367  tools/finalize_closed_loop_from_journal.py
++38b322dd7bbdc0eb1fd41658dfe3ab45ffeafc9bf4145b08e5aaee01f7ae7804  tools/inspect_calibration_build_v48.py
++6f31753349607101a9ad7c1f59084a6ee26c4adb22ef7118d6a8c98dc281a3df  tools/manage_v48_32_factor_cache.py
++83ee975ff5ab19086dfe7eafba7c2923427a80c9bdca40efe30777cd5bcf0c57  tools/manifest_repair_v48.py
++80db9b28f2b2403a06961285758b43295806ed8214227ccf6d25c74c123bdc41  tools/materialize_v48_32_1_factor_cache.py
++fbc762e8c57165c51cf9838706647410b59a7c19c7614c84eec629258c11e8e6  tools/materialize_v48_33_factor_cache.py
++f0f89f1b1893ef15661156368cf8aba27c3bacafb984f8fa154baebdc7c8733f  tools/materialize_v48_34_factor_cache.py
++08532309b6b5c03ca3f36bfde172585520f7098ee669b6ae5f13667b4cffd354  tools/materialize_v48_35_factor_cache.py
++8d95797a839d36888d0a369acdedf093e544e5edb1553bcc890c7cc23af8df2d  tools/merge_dataset_roots.py
++448d7e1393f0b01c1dc7cf2fc154056aaadc8a1613dcda89326f15456e3fe6f4  tools/merge_dataset_shards.py
++38c43735fc87d8c19e5ed8fdd440b48d222ed1b1e93327a9d0d21f08df37a588  tools/package_v48_35_results.py
++615465a59a6a74905632f4016bedcc07d7c0c7094889efd8aa1aa3d4e3298e95  tools/partition_dedicated_calibration_v48_14.py
++b2fb57af2856cef57811a53e369d6c094555fff8ced55260828c23eda484d021  tools/render_critical_scenes_v48_34.py
++6dfc0690143fddd53247e97a30e31053de952fb2699e56616bf58b64ba8ffe58  tools/resolve_selected_targets_v50.py
++9a08f3732873f24547fa0817e3f8c184921da9e2a5a02ebf2c20bd4e3dc5b576  tools/select_best_external_baseline.py
++3de2dfda0ade8d66bef8ce60fe047f59e3a3e73b0f70599c00e6053afc82b2d7  tools/select_critical_scenes_v48_34.py
++0ad2ab713fc5c389e01043106fa9b46f1ff00c0f2d802c089312d20c15dbcd46  tools/select_v42_candidate.py
++9ae294853888a0415a505f6ef26cf6272efd836203e213044d83f42408b3ec14  tools/select_v43_candidate.py
++4ff287ef0c5890a17f23650d9d8bc4b5ab50d0aa2bf2833179ec1ca8e1b219db  tools/select_v44_candidate.py
++b9084e840375064826566a08f7dd693c4caf0951604ef59271754bf283c9d6c3  tools/select_v45_candidate.py
++5481b4b0ae2c63163650328ca7656b40fccaebe57ba0af74691242efa10395f6  tools/select_v46_candidate.py
++9197e57157c0c4f71f24a73cdf480e311e27a70af3f83946743913fbba5cdc5a  tools/select_v47_candidate.py
++cc105ea67d13ad1808fbdd32b5b0f0b20cc98d54f155e7ae3484c64eb161f655  tools/split_calibration_by_scene_v48.py
++c92716ad444a4599b784e413f419d63f0cf7dbc3cb8d20ce33b4987aaf7b06b4  tools/subset_dataset_targets_v48_34.py
++b5c0a3bd079aa383f8924682f10bb272f6b3ffc6852c551dbf839bba3f938847  tools/summarize_dataset_build_profile.py
++60f7b62393588441338111602b41b95cfbaaf2f217b6e00b6d51366abe8fe3d4  tools/summarize_regime_results.py
++f4896ea49b576686375bb53a59d32859366f3bb5a31c709c5fbe2b090ad3da93  tools/summarize_v48_11_ablations.py
++a7a5b03a14bf9db699504e85ea6e9bf52f907619be4ce71fcca014ad2a88d2a8  tools/summarize_v48_12_ablations.py
++d61e7157d4ebdb0260741fc801f1438a8811752caa2ec9f3ecdc9d6811acd5c5  tools/summarize_v48_13_ablations.py
++8930440a19016fc4f51d378fd6e49a1f31497983e55ee78caa6c0d4d2afb27eb  tools/summarize_v48_14_ablations.py
++911d6deb4cb8e43df5acd0bbf947a7bad1e5adb5079a93569f3a0037a65ee4ac  tools/summarize_v48_28_gate_failure.py
++9e5d681712bb3a24d178e8cff12f75e75749a6a1d85cda27e18a5994338c29b2  tools/summarize_v48_29_gate_failure.py
++bc557c6d8ccffb28a154add2bb13a01db39235e49aab59f4c465da1e0233c90e  tools/summarize_v48_30_gate_failure.py
++35635132f12e6aa39b52d8f748286a80e85007e20d231b09eddb928e0b092557  tools/summarize_v48_34_gate_failure.py
++2a024b76714146007d1dbfdc37ffebc6e4066772065cd7c9823fff63e864b38a  tools/summarize_v48_4_ablations.py
++5b405537de9ac2852a5c703c36c1fdc6ee01430cc390a3a7f3b815ae0d317c38  tools/summarize_v48_4_multiseed.py
++16d7e270dfe53fcf2bf1299dccbaccf0f34242b0ea7d0b3643272b2c6ebb2cae  tools/summarize_v48_5_ablations.py
++51323af5c189758d1d17c42d4917b43c70dfe1a232803010bdbd3a40f7b96e48  tools/summarize_v48_6_ablations.py
++69b8156f9e7176a4da1ec64966d5d6d050755463ae82f519ba046e057076b755  tools/summarize_v48_6_multiseed.py
++51323af5c189758d1d17c42d4917b43c70dfe1a232803010bdbd3a40f7b96e48  tools/summarize_v48_7_ablations.py
++69b8156f9e7176a4da1ec64966d5d6d050755463ae82f519ba046e057076b755  tools/summarize_v48_7_multiseed.py
++518d813ca4dbbdd8112b80d9073071752880fe945aad889d6b0c0ee0b8cdc199  tools/summarize_v48_8_parallel_ablations.py
++93809376057311430a850cc537a29d715a3d2dabb15268b49a66fd3ed8cbeae7  tools/validate_external_checkpoint.py
++c45819387fc4097f691f0ab67130a26cb94fc1e818bea80a64f5b1e3e3702f7c  tools/validate_womd_shards_v48_16.py
++06443dbf2dedb0ed2b468a723e7976829554d444a1af348d3f765befa42ed95a  tools/validate_womd_spec.py
++9e5c2f98d20aa0e54ffb09c570ed54cc97b389322512f4d898503fce5defe924  tools/watch_build.py
++33b777167831006640fa45ffe2d21252a0eae1b22fc94d4eeb337d158ba36d22  tools/write_gamma_by_bucket.py
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' /mnt/data/ocrap_round2_audit/code/OC-RAP-v48.35.2-VERSION-CONTRACT.json /mnt/data/ocrap_round2_audit/OC-RAP-v48.35.2-ENGINEERING-INTEGRITY/OC-RAP-v48.35.2-VERSION-CONTRACT.json
+--- a/OC-RAP-v48.35.2-VERSION-CONTRACT.json	1970-01-01 00:00:00.000000000 +0000
++++ b/OC-RAP-v48.35.2-VERSION-CONTRACT.json	2026-08-05 09:07:00.520758004 +0000
+@@ -0,0 +1,35 @@
++{
++  "event": "v48_35_2_version_contract",
++  "version": "v48.35.2-ENGINEERING-INTEGRITY",
++  "created_unix": 1785920820.5206494,
++  "scope": "engineering-only",
++  "algorithm_changed": false,
++  "primary_controller": "scripts/run_v48_35_continuous_frontier_dedicated.sh",
++  "authoritative_state_resolver": "tools/audit_v48_35_run_state.py",
++  "result_packager": "tools/package_v48_35_results.py",
++  "terminal_exit_codes": [
++    0,
++    20,
++    30
++  ],
++  "shared_rule_required": true,
++  "regime_id_used_for_policy": false,
++  "supported_release_test_count": 192,
++  "focused_test_count": 28,
++  "shell_script_count": 58,
++  "historical_test_asset_index": "OC-RAP-v48.35.2-unsupported-historical-tests.json",
++  "critical_file_sha256": {
++    "scripts/run_v48_35_continuous_frontier_dedicated.sh": "2a1539e27f07013d683a7f80b759855864a3db9c2b9924150debcfa2652397ab",
++    "scripts/calibrate_v48_35_shared_certificate_pool.sh": "2ff69bdbb57721f25f325acf15e3ad3c4400887186d8135b1d4c01e67c7cc443",
++    "scripts/run_v48_35_safe_noninferiority.sh": "a0a9854b2aaaef4d887ad4067076f802a0788f0b3df93fef63d015470ee9d68b",
++    "scripts/run_v48_35_stress_if_authorized.sh": "e02c376c5781d3e3138fc91accb46e5a37100e7676e76e0e0b995c57b63a4184",
++    "scripts/package_v48_35_results.sh": "63310091e538df8ede340d4165ae9d1e645e454cc213307cfc8f6d03ab44932b",
++    "scripts/run_v48_35_2_release_tests.sh": "b10eaee52ffd95ab1a34f58658ae7e257f8d38781e52cbe62423b90da3e2f2f5",
++    "tools/audit_v48_35_run_state.py": "da5b8814e336ae9e0f96a75bd8162325cde0e764f9b6fa8fc4019c9686019024",
++    "tools/package_v48_35_results.py": "38c43735fc87d8c19e5ed8fdd440b48d222ed1b1e93327a9d0d21f08df37a588",
++    "tools/check_v48_16_learning_gates.py": "f6661999818f7caf1e47bc5b2de9babefebb25bbcd6cd2066b7167909d14f454",
++    "tools/summarize_v48_34_gate_failure.py": "35635132f12e6aa39b52d8f748286a80e85007e20d231b09eddb928e0b092557",
++    "tests/test_v48_35_2_engineering_integrity.py": "ca3452b4edc98cc8fdaeb7fb2b207dd1e8a569f2e809c763ee0807c370824137"
++  },
++  "test_roots_read": false
++}
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' /mnt/data/ocrap_round2_audit/code/OC-RAP-v48.35.2-change-manifest.json /mnt/data/ocrap_round2_audit/OC-RAP-v48.35.2-ENGINEERING-INTEGRITY/OC-RAP-v48.35.2-change-manifest.json
+--- a/OC-RAP-v48.35.2-change-manifest.json	1970-01-01 00:00:00.000000000 +0000
++++ b/OC-RAP-v48.35.2-change-manifest.json	2026-08-05 09:07:49.029845863 +0000
+@@ -0,0 +1,42 @@
++{
++  "event": "v48_35_2_change_manifest",
++  "version": "v48.35.2-ENGINEERING-INTEGRITY",
++  "created_unix": 1785920649.0342226,
++  "scope": "engineering-only",
++  "algorithm_changed": false,
++  "modified_files": [
++    "ALGORITHM_CHANGELOG.md",
++    "scripts/calibrate_v48_35_shared_certificate_pool.sh",
++    "scripts/run_v48_35_continuous_frontier_dedicated.sh",
++    "scripts/run_v48_35_safe_noninferiority.sh",
++    "scripts/run_v48_35_stress_if_authorized.sh",
++    "tools/check_v48_16_learning_gates.py",
++    "tools/summarize_v48_34_gate_failure.py"
++  ],
++  "added_files": [
++    "tools/audit_v48_35_run_state.py",
++    "tools/package_v48_35_results.py",
++    "scripts/package_v48_35_results.sh",
++    "scripts/run_v48_35_2_release_tests.sh",
++    "tests/test_v48_35_2_engineering_integrity.py",
++    "OC-RAP-v48.35.2-engineering-root-cause-and-fix-ZH.md",
++    "OC-RAP-v48.35.2-run-commands-ZH.txt",
++    "OC-RAP-v48.35.2-engineering-error-audit.csv",
++    "OC-RAP-v48.35.2-unsupported-historical-tests.json",
++    "OC-RAP-v48.35.2-validation-status.txt",
++    "OC-RAP-v48.35.2-VERSION-CONTRACT.json",
++    "OC-RAP-v48.35.2-release-audit.json",
++    "OC-RAP-v48.35.2-change-manifest.json",
++    "OC-RAP-v48.35.1-to-v48.35.2-ENGINEERING-INTEGRITY.patch",
++    "OC-RAP-v48.35.2-FILE-SHA256SUMS.txt"
++  ],
++  "removed_release_artifacts": [
++    "mnt/data/ocrap_waymax/OC-RAP accidental nested copy",
++    "__pycache__",
++    ".pytest_cache"
++  ],
++  "model_or_loss_files_modified": false,
++  "dataset_files_modified": false,
++  "gate_thresholds_modified": false,
++  "test_roots_read": false
++}
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' /mnt/data/ocrap_round2_audit/code/OC-RAP-v48.35.2-engineering-error-audit.csv /mnt/data/ocrap_round2_audit/OC-RAP-v48.35.2-ENGINEERING-INTEGRITY/OC-RAP-v48.35.2-engineering-error-audit.csv
+--- a/OC-RAP-v48.35.2-engineering-error-audit.csv	1970-01-01 00:00:00.000000000 +0000
++++ b/OC-RAP-v48.35.2-engineering-error-audit.csv	2026-08-05 09:04:09.034197722 +0000
+@@ -0,0 +1,14 @@
++﻿id,finding,impact,fix,status,algorithm_change
++E01,陈旧 PIPELINE_FAILED 被按存在性解释为当前 RC=30,误判权威终态，污染算法归因,attempt/timestamp/RC 契约解析器；same-attempt 矛盾 fail-closed,fixed,no
++E02,结果 ZIP 未从空白 archive 全量重建,源目录已删除的旧 entry 仍留在上传包,fresh write-mode packager、stale 排除、duplicate/hash 审计,fixed,no
++E03,gate decomposition 仍读取 legacy per-regime rule,shared-rule v48.35 产生 FileNotFoundError,兼容 shared rule 与 legacy rule,fixed,no
++E04,关键 post-certificate 诊断使用 || true,诊断失败被静默吞掉,诊断返回码成为 pipeline 契约，失败归一化 RC=30,fixed,no
++E05,同一输出目录没有 attempt ID 和状态历史,不同执行状态可混合,ATTEMPT_STARTED、attempt_id、status_history,fixed,no
++E06,终态 JSON 非原子写入,中断时可能暴露部分 JSON,临时文件+flush+fsync+os.replace,fixed,no
++E07,resume 拒绝时直接 exit 30,本次执行没有完整终态,归档旧状态并发布 attempt-scoped RC=30,fixed,no
++E08,failure-signature 提取错误被忽略,无法区分训练失败和诊断工具失败,记录 signature 工具 RC 与日志，原子发布,fixed,no
++E09,Safe/stress 授权依赖脆弱 marker,可能错误授权或错误阻断,下游必须通过 authoritative RC=0 审计,fixed,no
++E10,生成命令硬编码 SAFE WOMD 路径,跨机器产生工程失败,引用配置的 SAFE_WOMD_SOURCE 并 shell quote,fixed,no
++E11,已有 generated metadata 被 packager 重复写入,ZIP duplicate entry，读取方选择不确定,源目录生成型 metadata 强制排除并唯一重建,fixed,no
++E12,17 个历史测试引用缺失脚本且混入 v50 测试,默认全历史 pytest 误报当前版本回归,独立 v48.35.2 release matrix；记录缺失，不补造,fixed/documented,no
++E13,Safe/stress 授权日志目录未显式创建,非标准布局可能在重定向阶段失败,授权前 mkdir -p OUT/logs,fixed,no
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' /mnt/data/ocrap_round2_audit/code/OC-RAP-v48.35.2-engineering-root-cause-and-fix-ZH.md /mnt/data/ocrap_round2_audit/OC-RAP-v48.35.2-ENGINEERING-INTEGRITY/OC-RAP-v48.35.2-engineering-root-cause-and-fix-ZH.md
+--- a/OC-RAP-v48.35.2-engineering-root-cause-and-fix-ZH.md	1970-01-01 00:00:00.000000000 +0000
++++ b/OC-RAP-v48.35.2-engineering-root-cause-and-fix-ZH.md	2026-08-05 09:02:49.257533748 +0000
+@@ -0,0 +1,189 @@
++# OC-RAP v48.35.2 工程根因审计与修复
++
++## 1. 审计边界
++
++本轮只审计工程完整性，不评价模型、损失、候选动作、连续安全前沿或 shared rule 的算法优劣。代码修改不改变训练目标、模型参数化、证书阈值、Natural gate、数据集或三种 regime 的统一连续语义。
++
++## 2. 上传结果的真实终态
++
++上传的结果 ZIP 同时包含两个来自不同时间点的终态文件：
++
++| 文件 | UTC 时间 | 含义 |
++|---|---|---|
++| `PIPELINE_FAILED.json` | 2026-08-04 23:47:34.926 | 旧的 training-contract 失败，raw RC=4，归一化 RC=30，certificate/gate 未执行 |
++| `GATE_FAILED.json` | 2026-08-05 06:59:06.855 | 后续续跑已经执行 certificate 和 Natural gate，结果为自然 gate 未通过 |
++| `NEXT_COMMANDS_STATUS.json` | 2026-08-05 06:59:06.860 | `reason=natural_gate_failed`，未生成后续命令 |
++| `V48_35_COMPLETE.json` | 2026-08-05 06:59:07.148 | 后续续跑完整结束，raw/certificate/pipeline RC=20，`pipeline_valid=true` |
++
++因此，**本次上传结果的权威终态不是 RC=30，而是有效 pipeline 的 RC=20**。本报告不解释 RC=20 的算法含义，只确认 pipeline 已完成。
++
++结果中的 `learning_gates_v48_35.json` 也把 `pipeline_failed` 记录为 false，说明续跑结束时活动运行目录已不再把旧 `PIPELINE_FAILED.json` 作为当前状态。上传 ZIP 却仍保留旧 entry，表明发布包没有从空白 archive 按当前活动目录重新构建。无论具体操作是复用已有 ZIP 做增量更新，还是等价的旧包复用流程，根本缺陷都是：**归档过程没有删除已经从源目录消失的旧终态 entry，也没有在归档前验证唯一权威状态。**
++
++## 3. 根本性工程错误
++
++### E01：用“文件是否存在”代替终态状态机
++
++旧代码和人工检查容易把任意 `PIPELINE_FAILED.json` 的存在解释为当前 RC=30。该逻辑没有比较：
++
++- `V48_35_COMPLETE.json` 的 pipeline RC；
++- 文件时间；
++- 同一 attempt ID；
++- `NEXT_COMMANDS`、`GATE_FAILED` 和 blocked 状态是否相互一致。
++
++因此，一个来自旧 attempt 的 marker 可以覆盖更新、更完整的终态。
++
++### E02：结果 ZIP 不是事务性全量重建
++
++旧流程没有版本专用 packager，也没有强制：
++
++- 删除旧目标 ZIP；
++- 以 write mode 新建；
++- 排除 stale terminal marker；
++- 检查 duplicate entry；
++- 写入权威状态和 manifest；
++- ZIP 往返哈希验证。
++
++这使已被源目录删除的旧 `PIPELINE_FAILED.json` 继续留在上传包中。
++
++### E03：共享规则与旧诊断脚本不兼容
++
++v48.35 正确使用 `dev_frozen_shared_rule_v48.json`。但后续诊断脚本仍寻找：
++
++- `dev_frozen_rule_near_v48.json`；
++- `dev_frozen_rule_contact_v48.json`。
++
++因此 `controller.resume-v48.35.1.log` 出现 `FileNotFoundError`。这是纯工程兼容错误，不是算法失败。
++
++### E04：诊断异常被 `|| true` 静默吞掉
++
++旧 controller 对 learning-gate 和 gate-decomposition 使用 best-effort 调用。脚本崩溃后主 RC 不变，但诊断文件缺失，后续人员无法区分“诊断未执行”和“诊断结论为空”。
++
++### E05：同一运行目录缺少 attempt 隔离
++
++旧状态文件没有统一 attempt ID。resume、失败、certificate 和 completion 写入同一顶层命名空间，历史状态通常直接删除而不是归档。出现中断、复制、打包复用或人工恢复时，文件来源无法可靠对应某次执行。
++
++### E06：终态文件非原子写入
++
++旧脚本多处直接 `write_text`。进程中断、磁盘异常或并发读取时可能暴露部分 JSON，进一步把解析错误误归因为 pipeline 失败。
++
++### E07：resume 被拒绝时没有发布完整终态
++
++旧 resume contract 返回非零时直接 `exit 30`，可能只留下 `ATTEMPT_STARTED` 或上一次状态，而没有本次 attempt 的 `PIPELINE_FAILED`、completion 和 blocked-next-command 契约。
++
++### E08：failure-signature 提取错误被隐藏
++
++adaptation 失败路径使用 `extract... || true`。若签名工具本身失败，最终 `ADAPTATION_FAILED` 无法区分“没有签名”与“签名提取器坏了”。
++
++### E09：下游授权依赖脆弱 marker
++
++Safe non-inferiority 和 stress wrapper 原先没有统一调用权威终态审计。陈旧 `NEXT_COMMANDS`、旧 completion 或 marker 混合可能造成错误授权或错误阻断。
++
++### E10：生成命令包含机器特定数据路径
++
++certificate 通过后生成的命令曾直接嵌入固定 `SAFE_WOMD_SOURCE`。在另一台机器上即使主 pipeline 正确，也可能在后续步骤产生与算法无关的路径失败。
++
++### E11：打包器生成文件重复
++
++故障注入发现：当运行目录已有 `AUTHORITATIVE_RUN_STATUS.json` 或 `PACKAGING_MANIFEST.json` 时，初版新 packager 会先复制旧文件再写入新文件，形成 duplicate ZIP entry。现已修复为始终排除源目录中的生成型元数据，并在 ZIP 内只写一次。
++
++### E12：历史测试资产不完整且版本混杂
++
++仓库保留 17 个历史测试文件，但其 v48.12–v48.32 launcher/tool 未随代码包提供；同时还混入与本发布无关的 v50 测试。直接运行全历史 `pytest` 会把缺失历史资产或跨版本运行时污染误报为 v48.35.2 回归。修复版提供明确的 v48.35.2 release matrix，不补造历史脚本，也不把 v50 结果计入 v48.35.2 发布判据。
++
++## 4. 修复方案
++
++### 4.1 权威终态解析器
++
++新增 `tools/audit_v48_35_run_state.py`：
++
++- 以 `V48_35_COMPLETE.json` 为终态入口；
++- 校验 RC 只能是 0、20、30；
++- 使用 attempt ID 和时间判断 marker 是 same-attempt、stale 还是矛盾；
++- 校验 RC 与 `pipeline_valid`、certificate、gate、`NEXT_COMMANDS`、blocked、GATE/PIPELINE marker 的完整契约；
++- 同一 attempt 的矛盾 fail-closed；
++- 可将旧 marker 移入 `status_history/`；
++- 原子写入 `AUTHORITATIVE_RUN_STATUS.json`。
++
++终态契约：
++
++- RC=0：pipeline valid、gate passed、`NEXT_COMMANDS.txt` 存在、无活动失败 marker；
++- RC=20：pipeline valid、gate 已评估但未通过、活动 `GATE_FAILED` 和 blocked 状态存在、无活动 pipeline failure；
++- RC=30：pipeline invalid、活动同 attempt `PIPELINE_FAILED` 和 blocked 状态存在、无后续授权。
++
++### 4.2 attempt 隔离与状态历史
++
++controller 每次启动生成 `ATTEMPT_ID` 并写入 `ATTEMPT_STARTED.json`。新 attempt 开始前，旧活动状态移至 `status_history/pre-<attempt>-<timestamp>/`，不再无痕删除，也不会与当前状态混合。
++
++### 4.3 原子状态发布
++
++v48.35 相关 terminal、gate、calibration、candidate-selection、completion、learning-gate 文件均改为临时文件写入、flush、`fsync`、`os.replace`。
++
++### 4.4 fail-closed 诊断
++
++- gate decomposition 同时支持 shared rule 和 legacy rule；
++- 缺失或坏 artifact 返回非零；
++- post-certificate learning-gate/decomposition 任一失败，pipeline 以 `post_certificate_diagnostics` RC=30 结束；
++- 不再用 `|| true` 隐藏关键诊断失败；
++- adaptation failure-signature 独立记录工具 RC。
++
++### 4.5 安全 resume
++
++resume contract 拒绝时，本次 attempt 会先归档旧终态，再发布完整 RC=30 终态。不会出现“命令返回 30，但目录里仍只有旧 completion”的不一致。
++
++### 4.6 新结果打包器
++
++新增 `tools/package_v48_35_results.py` 与 shell wrapper：
++
++- 打包前要求权威状态 valid；
++- 删除旧目标 ZIP 和 SHA 文件；
++- `ZipFile(..., "w")` 全量重建；
++- 默认排除 checkpoint 和 `status_history`；
++- 排除 stale marker；
++- 源目录已有的 generated metadata 不直接复制；
++- 重新写入唯一 `AUTHORITATIVE_RUN_STATUS.json` 和 `PACKAGING_MANIFEST.json`；
++- 检查 duplicate names；
++- 对每个 entry 做 round-trip SHA256；
++- 输出 ZIP SHA256。
++
++### 4.7 下游授权
++
++Safe 和 stress wrapper 在执行前必须通过权威状态审计并确认 RC=0。单个 marker 或旧 `NEXT_COMMANDS` 不再具有授权效力。
++
++## 5. 对上传结果的无重训修复
++
++对上传结果副本执行：
++
++1. 权威状态审计，确认新 completion 为 RC=20；
++2. 将旧 `PIPELINE_FAILED.json` 移入 `status_history`；
++3. 使用 shared-rule 兼容诊断重新生成 learning-gate 与 gate decomposition；
++4. 使用新 packager 生成 clean ZIP。
++
++修复后：
++
++- `authoritative_exit_code=20`；
++- `pipeline_valid=true`；
++- `pipeline_failed=false`；
++- gate decomposition `artifact_valid=true`；
++- `development_rule_modes=["shared"]`；
++- errors 为空；
++- clean ZIP 无 duplicate entry；
++- 顶层不包含 stale `PIPELINE_FAILED.json`；
++- `AUTHORITATIVE_RUN_STATUS.json` 和 `PACKAGING_MANIFEST.json` 各只有一份。
++
++这只是工程状态修复，不重新计算 certificate，不改变 RC=20，也不进行算法评价。
++
++## 6. 验证
++
++- 192 个 v48.35.2 支持矩阵测试通过；
++- 其中 28 个为 v48.35/v48.35.1/v48.35.2 focused tests；
++- 57 个 shell 脚本全部通过 `bash -n`；
++- `compileall` 通过；
++- RC=0、RC=20、RC=30 三种终态一致性均有测试；
++- 同 attempt 矛盾 marker fail-closed；
++- stale RC=30 marker 可被正确识别和归档；
++- shared-rule decomposition 通过；
++- fresh ZIP、重复 entry、packager 自包含、旧 generated metadata、hash round-trip 均有回归测试。
++
++## 7. 非声明
++
++本地没有重新运行 WOMD/Waymax、GPU adaptation 或 certificate。本修复只保证：后续实验产生的状态、诊断、授权和归档可以被可靠解释，从而使下一轮结果能够用于算法优劣评估。
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' /mnt/data/ocrap_round2_audit/code/OC-RAP-v48.35.2-release-audit.json /mnt/data/ocrap_round2_audit/OC-RAP-v48.35.2-ENGINEERING-INTEGRITY/OC-RAP-v48.35.2-release-audit.json
+--- a/OC-RAP-v48.35.2-release-audit.json	1970-01-01 00:00:00.000000000 +0000
++++ b/OC-RAP-v48.35.2-release-audit.json	2026-08-05 09:07:00.520820407 +0000
+@@ -0,0 +1,39 @@
++{
++  "event": "v48_35_2_release_audit",
++  "version": "v48.35.2-ENGINEERING-INTEGRITY",
++  "created_unix": 1785920820.5207753,
++  "valid": true,
++  "algorithm_changed": false,
++  "uploaded_result_authoritative_exit_code": 20,
++  "uploaded_result_pipeline_valid": true,
++  "uploaded_result_stale_pipeline_marker_detected": true,
++  "uploaded_result_stale_pipeline_marker_archived_in_repaired_copy": true,
++  "shared_rule_diagnostic_compatible": true,
++  "silent_required_diagnostics_removed": true,
++  "attempt_scoped_terminal_state": true,
++  "atomic_status_writes": true,
++  "fresh_transactional_packaging": true,
++  "duplicate_zip_entries_rejected": true,
++  "supported_release_tests": {
++    "passed": 192,
++    "warnings": 6,
++    "batches": [
++      58,
++      46,
++      67,
++      21
++    ]
++  },
++  "focused_tests": {
++    "passed": 28,
++    "warnings": 1
++  },
++  "shell_syntax": {
++    "passed": 58
++  },
++  "compileall": true,
++  "real_gpu_training_rerun": false,
++  "certificate_recomputed": false,
++  "algorithm_quality_analyzed": false,
++  "test_roots_read": false
++}
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' /mnt/data/ocrap_round2_audit/code/OC-RAP-v48.35.2-run-commands-ZH.txt /mnt/data/ocrap_round2_audit/OC-RAP-v48.35.2-ENGINEERING-INTEGRITY/OC-RAP-v48.35.2-run-commands-ZH.txt
+--- a/OC-RAP-v48.35.2-run-commands-ZH.txt	1970-01-01 00:00:00.000000000 +0000
++++ b/OC-RAP-v48.35.2-run-commands-ZH.txt	2026-08-05 09:03:03.196419703 +0000
+@@ -0,0 +1,91 @@
++OC-RAP v48.35.2 工程完整性修复：执行指令
++============================================================
++
++一、优先使用完整修复包
++------------------------------------------------------------
++unzip OC-RAP-v48.35.2-ENGINEERING-INTEGRITY.zip
++cd OC-RAP-v48.35.2-ENGINEERING-INTEGRITY
++
++# 代码发布矩阵；不运行缺失历史资产，也不把 v50 测试计入 v48.35.2。
++bash scripts/run_v48_35_2_release_tests.sh
++
++# 静态检查。
++find scripts -maxdepth 1 -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
++PYTHONDONTWRITEBYTECODE=1 python -m compileall -q -f src tools tests
++
++二、修复服务器上本次已有结果；不重训、不重跑 certificate
++------------------------------------------------------------
++# 设置为本次结果目录。
++OUTPUTDIR=runs/ocrap_v48_35_continuous_frontier_dedicated_4835
++
++# 这批上传结果的预期权威终态是 RC=20。命令会把旧 RC=30 marker
++# 移入 status_history，并生成唯一权威状态文件。
++PYTHONPATH=tools:src python tools/audit_v48_35_run_state.py \
++  --run "$OUTPUTDIR" \
++  --output "$OUTPUTDIR/AUTHORITATIVE_RUN_STATUS.json" \
++  --expect-exit-code 20 \
++  --archive-stale-markers
++
++# 重新生成工程诊断；不会训练模型，也不会读取 test root。
++PYTHONPATH=tools:src python tools/check_v48_16_learning_gates.py \
++  --run "$OUTPUTDIR" \
++  --output "$OUTPUTDIR/learning_gates_v48_35.json" \
++  --version v48.35.2-ENGINEERING-INTEGRITY
++
++PYTHONPATH=tools:src python tools/summarize_v48_34_gate_failure.py \
++  --run "$OUTPUTDIR" \
++  --output "$OUTPUTDIR/GATE_FAILURE_DECOMPOSITION.json"
++
++# 全新构建结果 ZIP。不要再用 zip -r 更新已有 ZIP。
++RUN="$OUTPUTDIR" OUTPUT_ZIP="${OUTPUTDIR%/}-v48.35.2-clean.zip" \
++  bash scripts/package_v48_35_results.sh
++
++三、未来从全新输出目录执行主 pipeline
++------------------------------------------------------------
++# 必须使用一个从未被其他 attempt 使用过的新目录。
++export OUTPUTDIR=runs/ocrap_v48_35_2_engineering_integrity_$(date +%Y%m%d_%H%M%S)
++export OCRAP_ROOT=/absolute/path/to/OCRAP
++export SOURCE_RUN=/absolute/path/to/source_run
++export PROTOCOL_ROOT=/absolute/path/to/calibration_protocol
++export CAL_SAFE=/absolute/path/to/calibration_safe
++export GPU0=0
++export GPU1=1
++
++# 可移植 Safe WOMD 路径；生成的 NEXT_COMMANDS 会引用这里，而不是硬编码其他机器路径。
++export SAFE_WOMD_SOURCE=/absolute/path/to/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord@150
++
++set +e
++bash scripts/run_v48_35_continuous_frontier_dedicated.sh
++RC=$?
++set -e
++printf 'pipeline_rc=%s\n' "$RC"
++
++# 无论 RC 是什么，都必须验证终态契约。
++PYTHONPATH=tools:src python tools/audit_v48_35_run_state.py \
++  --run "$OUTPUTDIR" \
++  --output "$OUTPUTDIR/AUTHORITATIVE_RUN_STATUS.json" \
++  --expect-exit-code "$RC"
++
++# 只用新 packager 交付结果。
++RUN="$OUTPUTDIR" OUTPUT_ZIP="${OUTPUTDIR%/}-clean.zip" bash scripts/package_v48_35_results.sh
++
++四、RC 解释
++------------------------------------------------------------
++RC=0：pipeline valid，Natural gate 通过，NEXT_COMMANDS.txt 存在；才允许执行后续 Safe/stress。
++RC=20：pipeline valid，certificate 和 gate 已执行，Natural gate 未通过；不是工程失败。
++RC=30：工程、契约、artifact、诊断或协议失败；禁止评价算法，先修工程。
++
++不要通过“目录中是否存在 PIPELINE_FAILED.json”单独判断状态。
++必须读取 AUTHORITATIVE_RUN_STATUS.json，并要求 valid=true。
++
++五、应用补丁而非替换完整目录
++------------------------------------------------------------
++cd /path/to/original/OC-RAP
++patch -p1 --dry-run < OC-RAP-v48.35.1-to-v48.35.2-ENGINEERING-INTEGRITY.patch
++patch -p1 < OC-RAP-v48.35.1-to-v48.35.2-ENGINEERING-INTEGRITY.patch
++
++# 删除不属于源码发布物的缓存和意外嵌套副本。
++find . -type d -name '__pycache__' -prune -exec rm -rf {} +
++rm -rf .pytest_cache mnt/data/ocrap_waymax/OC-RAP
++
++bash scripts/run_v48_35_2_release_tests.sh
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' /mnt/data/ocrap_round2_audit/code/OC-RAP-v48.35.2-unsupported-historical-tests.json /mnt/data/ocrap_round2_audit/OC-RAP-v48.35.2-ENGINEERING-INTEGRITY/OC-RAP-v48.35.2-unsupported-historical-tests.json
+--- a/OC-RAP-v48.35.2-unsupported-historical-tests.json	1970-01-01 00:00:00.000000000 +0000
++++ b/OC-RAP-v48.35.2-unsupported-historical-tests.json	2026-08-05 08:57:36.385513581 +0000
+@@ -0,0 +1,87 @@
++{
++  "event": "v48_35_2_unsupported_historical_test_assets",
++  "version": "v48.35.2-ENGINEERING-INTEGRITY",
++  "scope": "informational; these retained historical tests are excluded from the supported release matrix because their referenced launchers/tools are absent from the uploaded repository",
++  "num_test_files": 17,
++  "test_files": {
++    "test_v48_12_trident.py": [
++      "train_ocrap_v48_12_trident.sh"
++    ],
++    "test_v48_13_terra.py": [
++      "train_ocrap_v48_13_terra.sh"
++    ],
++    "test_v48_14_prism.py": [
++      "run_v48_14_parallel_ablations.sh"
++    ],
++    "test_v48_20_unison_bridge.py": [
++      "adapt_ocrap_v48_20_unison_variant.sh"
++    ],
++    "test_v48_21_concord_bridge.py": [
++      "adapt_ocrap_v48_21_concord_variant.sh"
++    ],
++    "test_v48_22_covenant_bridge.py": [
++      "adapt_ocrap_v48_22_covenant_variant.sh",
++      "run_v48_22_parallel_ablations.sh"
++    ],
++    "test_v48_23_frontier_bridge.py": [
++      "run_v48_23_dev_shadow_closed_loop.sh",
++      "run_v48_23_parallel_ablations.sh"
++    ],
++    "test_v48_24_support_bridge.py": [
++      "adapt_ocrap_v48_24_support_variant.sh",
++      "run_v48_24_dev_shadow_closed_loop.sh",
++      "run_v48_24_parallel_ablations.sh"
++    ],
++    "test_v48_25_integrity_bridge.py": [
++      "calibrate_v48_25_certificate_pool.sh",
++      "run_v48_25_integrity_dedicated.sh",
++      "run_v48_25_parallel_ablations.sh"
++    ],
++    "test_v48_26_execution_physics_bridge.py": [
++      "run_v48_26_execution_physics_dedicated.sh"
++    ],
++    "test_v48_27_factor_physics_bridge.py": [
++      "adapt_ocrap_v48_27_factor_physics_variant.sh",
++      "calibrate_v48_27_certificate_pool.sh",
++      "run_v48_27_dev_shadow_closed_loop.sh",
++      "run_v48_27_parallel_ablations.sh"
++    ],
++    "test_v48_28_provenance_margin_bridge.py": [
++      "adapt_ocrap_v48_28_provenance_margin_variant.sh",
++      "run_v48_28_dev_shadow_closed_loop.sh",
++      "run_v48_28_parallel_ablations.sh"
++    ],
++    "test_v48_29_veto_rank_physics_bridge.py": [
++      "adapt_ocrap_v48_29_veto_rank_variant.sh",
++      "run_v48_29_dev_shadow_closed_loop.sh",
++      "run_v48_29_parallel_ablations.sh",
++      "run_v48_29_veto_rank_physics_dedicated.sh"
++    ],
++    "test_v48_30_slack_rank_bridge.py": [
++      "adapt_ocrap_v48_30_slack_rank_variant.sh",
++      "run_v48_30_parallel_ablations.sh"
++    ],
++    "test_v48_31_contract_slack_rank.py": [
++      "adapt_ocrap_v48_31_contract_slack_rank_single_stage.sh",
++      "adapt_ocrap_v48_31_contract_slack_rank_variant.sh",
++      "audit_v48_30_shadow_provenance.py",
++      "check_v48_30_shadow_runtime_contract.py",
++      "run_v48_31_dev_shadow_closed_loop.sh",
++      "run_v48_31_parallel_ablations.sh"
++    ],
++    "test_v48_32_1_rc30_integrity_hotfix.py": [
++      "adapt_ocrap_v48_32_1_identity_utility_variant.sh",
++      "run_v48_32_1_rc30_integrity_hotfix_dedicated.sh"
++    ],
++    "test_v48_32_identity_utility_bridge.py": [
++      "adapt_ocrap_v48_32_identity_utility_single_stage.sh",
++      "adapt_ocrap_v48_32_identity_utility_variant.sh",
++      "run_v48_32_dev_shadow_closed_loop.sh",
++      "run_v48_32_identity_utility_bridge_ablations.sh",
++      "run_v48_32_identity_utility_bridge_dedicated.sh",
++      "run_v48_32_stress_if_authorized.sh"
++    ]
++  },
++  "fabricated_replacements_added": false,
++  "test_roots_read": false
++}
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' /mnt/data/ocrap_round2_audit/code/OC-RAP-v48.35.2-validation-status.txt /mnt/data/ocrap_round2_audit/OC-RAP-v48.35.2-ENGINEERING-INTEGRITY/OC-RAP-v48.35.2-validation-status.txt
+--- a/OC-RAP-v48.35.2-validation-status.txt	1970-01-01 00:00:00.000000000 +0000
++++ b/OC-RAP-v48.35.2-validation-status.txt	2026-08-05 09:07:00.006804379 +0000
+@@ -0,0 +1,59 @@
++OC-RAP v48.35.2-ENGINEERING-INTEGRITY validation status
++=======================================================
++
++Scope: engineering/state/provenance/diagnostic/packaging validation only.
++No WOMD/Waymax/GPU training or certificate recomputation was performed locally.
++No model, loss, candidate, rule fitter, gate threshold, or dataset change was made.
++
++PASS  Supported v48.35.2 release matrix: 192 tests
++      batch_1: 58 passed, 1 warning
++      batch_2: 46 passed, 4 warnings
++      batch_3: 67 passed, 1 warning
++      batch_4: 21 passed
++
++PASS  Focused v48.35/v48.35.1/v48.35.2 matrix: 28 tests
++      engineering integrity: 11
++      RC30 training-contract hotfix: 8
++      continuous frontier: 9
++
++PASS  Shell syntax: 58 scripts passed bash -n
++PASS  Python bytecode compilation: python -m compileall -q -f src tools tests
++PASS  RC=0 terminal-state fixture
++PASS  RC=20 terminal-state fixture
++PASS  RC=30 terminal-state fixture
++PASS  same-attempt contradictory PIPELINE_FAILED fails closed
++PASS  legacy stale RC30 marker is recognized and archivable
++PASS  shared-rule gate decomposition
++PASS  controller/calibration embedded Python heredoc compilation
++PASS  post-certificate diagnostics are not silently ignored
++PASS  refused resume publishes an attempt-scoped RC30 terminal state
++PASS  fresh ZIP creation and old-archive replacement
++PASS  stale marker exclusion
++PASS  duplicate ZIP entry rejection
++PASS  generated metadata is written exactly once
++PASS  packaging target/self-output exclusion
++PASS  per-entry round-trip SHA256 verification
++PASS  downstream Safe/stress authorization requires authoritative RC=0
++
++Uploaded-result repair validation
++---------------------------------
++PASS  authoritative state valid
++PASS  authoritative_exit_code=20
++PASS  pipeline_valid=true
++PASS  stale PIPELINE_FAILED archived
++PASS  learning-gate pipeline_failed=false
++PASS  gate decomposition artifact_valid=true
++PASS  development_rule_modes=[shared]
++PASS  gate decomposition errors=[]
++PASS  clean result ZIP has zero duplicate entries
++PASS  clean result ZIP has no top-level stale PIPELINE_FAILED.json
++PASS  exactly one AUTHORITATIVE_RUN_STATUS.json
++PASS  exactly one PACKAGING_MANIFEST.json
++
++Repository boundary
++-------------------
++The uploaded repository retains 17 historical test files whose referenced
++v48.12-v48.32 scripts/tools are absent. They are documented in
++OC-RAP-v48.35.2-unsupported-historical-tests.json and are not fabricated or used
++as a v48.35.2 release criterion. Unrelated v50 tests are also outside this
++version's release contract.
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' /mnt/data/ocrap_round2_audit/code/mnt/data/ocrap_waymax/OC-RAP/docs/WAYMAX_CLOSED_LOOP.md /mnt/data/ocrap_round2_audit/OC-RAP-v48.35.2-ENGINEERING-INTEGRITY/mnt/data/ocrap_waymax/OC-RAP/docs/WAYMAX_CLOSED_LOOP.md
+--- a/mnt/data/ocrap_waymax/OC-RAP/docs/WAYMAX_CLOSED_LOOP.md	2026-08-05 16:06:20.000000000 +0000
++++ b/mnt/data/ocrap_waymax/OC-RAP/docs/WAYMAX_CLOSED_LOOP.md	1970-01-01 00:00:00.000000000 +0000
+@@ -1,34 +0,0 @@
+-# WOMD + Waymax closed-loop dataset backend
+-
+-This backend is selected with:
+-
+-```bash
+---set data_source=womd --set simulation_backend=waymax_closed_loop
+-```
+-
+-It intentionally fails if `waymax`/`jax` cannot be imported. It does not silently fall back to the OC-RAP surrogate backend.
+-
+-## Semantics
+-
+-- WOMD is read through Waymax dataloader utilities into `SimulatorState`.
+-- Planning time is represented by `BaseEnvironment.reset(..., init_steps=t+1)`, so `state.timestep == t` before candidate-prefix rollout.
+-- Candidate prefixes are executed by Waymax dynamics. The default training backend uses `InvertibleBicycleModel`; debug/replay alignment can use `StateDynamics` by overriding `waymax.prefix_dynamics=state`.
+-- Non-SDC agents use Waymax reference/log playback. Natural future object appearance is controlled by Waymax `allow_new_objects_after_warmup`.
+-- Optional hidden stress roots are generated by augmenting the Waymax reference trajectory in an unknown, drivable, not-visible-free cell; the resulting state is still rolled forward by `BaseEnvironment.step` with object injection enabled.
+-- Recovery labels are computed by executing each recovery controller through Waymax and reading Waymax metrics over the recovery horizon. The stored `m_star`, `r_orc_star`, `r_dep_star`, and `oracle_gap_star` therefore come from Waymax recovery rollout, not from the old surrogate teacher.
+-
+-## Required diagnosis checks
+-
+-For a dataset to support a Waymax closed-loop primary benchmark, `diagnose.json` should have:
+-
+-```json
+-"supports_waymax_runtime_claim": true,
+-"waymax_runtime_fraction": 0.95 or higher,
+-"runtime_backend_counts": {"waymax_closed_loop": ...},
+-"supports_fra": true,
+-"supports_drs_labels": true,
+-"supports_calibration_protocol": true,
+-"supports_heldout_test_protocol": true
+-```
+-
+-and no schema / hidden-spawn / split leakage failures.
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' /mnt/data/ocrap_round2_audit/code/scripts/calibrate_v48_35_shared_certificate_pool.sh /mnt/data/ocrap_round2_audit/OC-RAP-v48.35.2-ENGINEERING-INTEGRITY/scripts/calibrate_v48_35_shared_certificate_pool.sh
+--- a/scripts/calibrate_v48_35_shared_certificate_pool.sh	2026-08-05 16:06:20.000000000 +0000
++++ b/scripts/calibrate_v48_35_shared_certificate_pool.sh	2026-08-05 08:28:03.467776616 +0000
+@@ -17,6 +17,9 @@
+ DEV_NEAR="${DEV_NEAR:?DEV_NEAR is required}"
+ DEV_CONTACT="${DEV_CONTACT:?DEV_CONTACT is required}"
+ GPU0="${GPU0:-0}"; GPU1="${GPU1:-1}"
++ATTEMPT_ID="${V4835_ATTEMPT_ID:-legacy-untracked}"
++SAFE_WOMD_SOURCE="${SAFE_WOMD_SOURCE:-/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord@150}"
++export V4835_ATTEMPT_ID="$ATTEMPT_ID" SAFE_WOMD_SOURCE
+ for d in "$CAL_SAFE" "$CERT_NEAR" "$CERT_CONTACT" "$DEV_NEAR" "$DEV_CONTACT"; do
+   [[ -d "$d" && -f "$d/manifest.csv" ]] || { echo "missing certificate dataset $d" >&2; exit 2; }
+ done
+@@ -60,6 +63,12 @@
+ export CONTACT_MAX_VERIFY_SELECTED_HARM_UCB="${CONTACT_MAX_VERIFY_SELECTED_HARM_UCB:-0.25}"
+ python - "$OUTPUTDIR/GATE_SPEC.json" "$CAL_SAFE" "$CERT_NEAR" "$CERT_CONTACT" "$DEV_NEAR" "$DEV_CONTACT" <<'PY_GATE'
+ import hashlib,json,os,pathlib,sys,time
++def atomic(path,doc):
++    path.parent.mkdir(parents=True,exist_ok=True)
++    tmp=path.with_name(f'.{path.name}.tmp.{os.getpid()}.{time.time_ns()}')
++    with tmp.open('w',encoding='utf-8') as f:
++        json.dump(doc,f,ensure_ascii=False,indent=2); f.write('\n'); f.flush(); os.fsync(f.fileno())
++    os.replace(tmp,path)
+ def f(name): return float(os.environ[name])
+ def i(name): return int(os.environ[name])
+ def dataset_record(role, value):
+@@ -102,15 +111,14 @@
+  'fit_verify_scene_disjoint':True,'test_roots_read':False,
+ }
+ canonical=json.dumps(protocol,sort_keys=True,separators=(',',':')).encode()
+-doc={'event':'v48_35_gate_protocol_preregistered','created_unix':time.time(),
+-     'protocol_sha256':hashlib.sha256(canonical).hexdigest(),'protocol':protocol}
++doc={'event':'v48_35_gate_protocol_preregistered','version':'v48.35.2-ENGINEERING-INTEGRITY','created_unix':time.time(),
++     'attempt_id':os.environ.get('V4835_ATTEMPT_ID'),'protocol_sha256':hashlib.sha256(canonical).hexdigest(),'protocol':protocol}
+ p=pathlib.Path(sys.argv[1])
+ if p.exists():
+     old=json.load(open(p))
+     if old.get('protocol') != protocol:
+         raise SystemExit('GATE_SPEC.json already exists with a different protocol; use a new OUTPUTDIR')
+-else:
+-    p.write_text(json.dumps(doc,ensure_ascii=False,indent=2)+'\n')
++atomic(p,doc)
+ PY_GATE
+ 
+ calibrate_variant() {
+@@ -253,7 +261,12 @@
+   python - "$tmp" "$variant" "$ckpt" "$sn" "$sc" <<'PY'
+ import hashlib,json,os,pathlib,sys,time
+ root=pathlib.Path(sys.argv[1]); variant=sys.argv[2]; ckpt=pathlib.Path(sys.argv[3])
+-near_rc,contact_rc=int(sys.argv[4]),int(sys.argv[5])
++near_rc,contact_rc=int(sys.argv[4]),int(sys.argv[5]); attempt_id=os.environ.get('V4835_ATTEMPT_ID')
++def atomic(path,doc):
++    tmp=path.with_name(f'.{path.name}.tmp.{os.getpid()}.{time.time_ns()}')
++    with tmp.open('w',encoding='utf-8') as f:
++        json.dump(doc,f,ensure_ascii=False,indent=2); f.write('\n'); f.flush(); os.fsync(f.fileno())
++    os.replace(tmp,path)
+ required=[
+  'calibration_mix_v48.json','calibration_safe_v48.json','calibration_near_v48.json','calibration_contact_v48.json',
+  'gamma_rec_by_bucket_v48.json','dev_diagnostic_near_v48.json','dev_diagnostic_contact_v48.json','dev_frozen_shared_rule_v48.json',
+@@ -287,15 +300,15 @@
+         raise SystemExit(f'policy certificate artifact/protocol failure for {name}: rc={rc}')
+ safe=json.load(open(root/'calibration_safe_v48.json'))
+ safe_status={
+- 'event':'v48_35_safe_regime_status','created_unix':time.time(),'variant':variant,
++ 'event':'v48_35_safe_regime_status','version':'v48.35.2-ENGINEERING-INTEGRITY','created_unix':time.time(),'attempt_id':attempt_id,'variant':variant,
+  'standard_calibration_valid':int(safe.get('num_samples',0) or 0)>0,
+  'num_samples':int(safe.get('num_samples',0) or 0),'num_negative':int(safe.get('num_negative',0) or 0),
+  'gamma_rec':safe.get('gamma_rec'),'policy_natural_gate_evaluated':False,
+  'reason':'no dedicated scene-disjoint Safe policy certificate population is registered; Safe is checked by calibrated recovery threshold plus paired non-inferiority closed loop',
+  'test_roots_read':False}
+-(root/'SAFE_REGIME_STATUS.json').write_text(json.dumps(safe_status,ensure_ascii=False,indent=2)+'\n')
++atomic(root/'SAFE_REGIME_STATUS.json',safe_status)
+ certificate_data_valid=(near_rc in (0,3) and contact_rc in (0,3))
+-doc={'event':'v48_35_certificate_pool_calibration_complete','created_unix':time.time(),
++doc={'event':'v48_35_certificate_pool_calibration_complete','version':'v48.35.2-ENGINEERING-INTEGRITY','created_unix':time.time(),'attempt_id':attempt_id,
+  'variant':variant,'checkpoint':str(ckpt),'checkpoint_sha256':hashlib.sha256(ckpt.read_bytes()).hexdigest(),
+  'near_exit_code':near_rc,'contact_exit_code':contact_rc,
+  'certificate_executed':True,'gate_evaluated':certificate_data_valid,
+@@ -305,7 +318,7 @@
+  'certificate_mode':'external_rule_full_verification',
+  'opportunity_label_mode':os.environ.get('OPPORTUNITY_LABEL_MODE','raw_benefit'),
+  'gate_positive_mode':os.environ.get('GATE_POSITIVE_MODE','safe_benefit')}
+-(root/'CERTIFICATE_CALIBRATION_COMPLETE.json').write_text(json.dumps(doc,indent=2)+'\n')
++atomic(root/'CERTIFICATE_CALIBRATION_COMPLETE.json',doc)
+ PY
+   rm -rf "$final.old"
+   [[ ! -e "$final" ]] || mv "$final" "$final.old"
+@@ -334,8 +347,18 @@
+ set -e
+ 
+ python - "$OUTPUTDIR" "$S0" "$S1" "$VARIANTS" <<'PY'
+-import json,pathlib,sys,time
+-root=pathlib.Path(sys.argv[1]); report={}; valid=[]
++import json,os,pathlib,shlex,sys,time
++root=pathlib.Path(sys.argv[1]); report={}; valid=[]; attempt_id=os.environ.get('V4835_ATTEMPT_ID')
++def atomic_json(path,doc):
++    tmp=path.with_name(f'.{path.name}.tmp.{os.getpid()}.{time.time_ns()}')
++    with tmp.open('w',encoding='utf-8') as f:
++        json.dump(doc,f,ensure_ascii=False,indent=2); f.write('\n'); f.flush(); os.fsync(f.fileno())
++    os.replace(tmp,path)
++def atomic_text(path,text):
++    tmp=path.with_name(f'.{path.name}.tmp.{os.getpid()}.{time.time_ns()}')
++    with tmp.open('w',encoding='utf-8') as f:
++        f.write(text); f.flush(); os.fsync(f.fileno())
++    os.replace(tmp,path)
+ requested={x.strip() for x in sys.argv[4].split(',') if x.strip()}
+ for name in ('balanced','precision'):
+     if name not in requested: continue
+@@ -369,11 +392,11 @@
+ requested_codes={'balanced':int(sys.argv[2]),'precision':int(sys.argv[3])}
+ requested_codes={k:v for k,v in requested_codes.items() if k in requested}
+ all_requested_gates_evaluated=bool(requested_codes) and all(v in (0,20) for v in requested_codes.values())
+-status={'event':'v48_35_certificate_candidate_selection','created_unix':time.time(),
++status={'event':'v48_35_certificate_candidate_selection','version':'v48.35.2-ENGINEERING-INTEGRITY','created_unix':time.time(),'attempt_id':attempt_id,
+         'controller_exit_codes':{'balanced':int(sys.argv[2]),'precision':int(sys.argv[3])},
+         'certificate_executed':True,'gate_evaluated':all_requested_gates_evaluated,
+         'valid_candidates':[x[3] for x in valid],'candidates':report,'test_roots_read':False}
+-(root/'dedicated_recalibration_status.json').write_text(json.dumps(status,ensure_ascii=False,indent=2)+'\n')
++atomic_json(root/'dedicated_recalibration_status.json',status)
+ requested_code_values=list(requested_codes.values())
+ artifact_failure=any(code not in (0,20) for code in requested_code_values) or any(
+     any(('missing' in bucket_doc or 'artifact_error' in bucket_doc) for bucket_doc in variant_doc.values())
+@@ -381,35 +404,36 @@
+ )
+ def write_blocked(reason, exit_code):
+     doc={
+-      'event':'v48_35_next_commands_blocked','created_unix':time.time(),
++      'event':'v48_35_next_commands_blocked','version':'v48.35.2-ENGINEERING-INTEGRITY','created_unix':time.time(),'attempt_id':attempt_id,
+       'reason':reason,'exit_code':int(exit_code),'certificate_executed':True,
+       'gate_evaluated':bool(status.get('gate_evaluated',False)) if reason=='natural_gate_failed' else False,
+       'test_roots_read':False,'controller_exit_codes':status['controller_exit_codes'],
+     }
+-    (root/'NEXT_COMMANDS_BLOCKED.json').write_text(json.dumps(doc,ensure_ascii=False,indent=2)+'\n')
+-    (root/'NEXT_COMMANDS_STATUS.json').write_text(json.dumps({**doc,'generated':False},ensure_ascii=False,indent=2)+'\n')
++    atomic_json(root/'NEXT_COMMANDS_BLOCKED.json',doc)
++    atomic_json(root/'NEXT_COMMANDS_STATUS.json',{**doc,'generated':False})
+ if artifact_failure:
+-    (root/'CALIBRATION_FAILED.json').write_text(json.dumps(status,ensure_ascii=False,indent=2)+'\n')
++    atomic_json(root/'CALIBRATION_FAILED.json',status)
+     write_blocked('certificate_artifact_or_protocol_failure',30)
+     print(json.dumps(status,ensure_ascii=False,indent=2))
+     raise SystemExit(30)
+ if not valid:
+-    (root/'GATE_FAILED.json').write_text(json.dumps(status,ensure_ascii=False,indent=2)+'\n')
++    atomic_json(root/'GATE_FAILED.json',status)
+     write_blocked('natural_gate_failed',20)
+     print(json.dumps(status,ensure_ascii=False,indent=2))
+     raise SystemExit(20)
+ valid.sort(); chosen=valid[0][4]
+-(root/'chosen_base_run_dedicated.txt').write_text(str(chosen)+'\n')
++atomic_text(root/'chosen_base_run_dedicated.txt',str(chosen)+'\n')
++safe_source=os.environ['SAFE_WOMD_SOURCE']
+ commands=(
+- f'''# Natural gate passed on the scene-disjoint dedicated certificate pool.\n'''
+- f'''BASE_RUN={chosen} RUN={root}/safe_paired SAFE_NOMINAL_ONLY=1 RUN_SAFE_PAIRED_SCALAR=1 SAFE_WOMD_SOURCE=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord@150 SAFE_RAW_MAX_SCENARIOS=0 bash scripts/run_v48_35_safe_noninferiority.sh\n'''
+- f'''OUT={root} bash scripts/run_v48_35_stress_if_authorized.sh\n''')
+-(root/'NEXT_COMMANDS.txt').write_text(commands)
+-(root/'NEXT_COMMANDS_STATUS.json').write_text(json.dumps({
+-  'event':'v48_35_next_commands_generated','created_unix':time.time(),
++ '# Natural gate passed on the scene-disjoint dedicated certificate pool.\n'
++ f'BASE_RUN={shlex.quote(str(chosen))} RUN={shlex.quote(str(root / "safe_paired"))} SAFE_NOMINAL_ONLY=1 RUN_SAFE_PAIRED_SCALAR=1 SAFE_WOMD_SOURCE={shlex.quote(safe_source)} SAFE_RAW_MAX_SCENARIOS=0 bash scripts/run_v48_35_safe_noninferiority.sh\n'
++ f'OUT={shlex.quote(str(root))} bash scripts/run_v48_35_stress_if_authorized.sh\n')
++atomic_text(root/'NEXT_COMMANDS.txt',commands)
++atomic_json(root/'NEXT_COMMANDS_STATUS.json',{
++  'event':'v48_35_next_commands_generated','version':'v48.35.2-ENGINEERING-INTEGRITY','created_unix':time.time(),'attempt_id':attempt_id,
+   'generated':True,'certificate_executed':True,'gate_evaluated':True,'gate_passed':True,'chosen_base_run':str(chosen),
+   'test_roots_read':False,
+-},ensure_ascii=False,indent=2)+'\n')
++})
+ print(json.dumps(status,ensure_ascii=False,indent=2))
+ print('chosen',chosen)
+ PY
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' /mnt/data/ocrap_round2_audit/code/scripts/package_v48_35_results.sh /mnt/data/ocrap_round2_audit/OC-RAP-v48.35.2-ENGINEERING-INTEGRITY/scripts/package_v48_35_results.sh
+--- a/scripts/package_v48_35_results.sh	1970-01-01 00:00:00.000000000 +0000
++++ b/scripts/package_v48_35_results.sh	2026-08-05 08:29:34.320970245 +0000
+@@ -0,0 +1,11 @@
++#!/usr/bin/env bash
++set -Eeuo pipefail
++REPO="${OCRAP_REPO:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
++cd "$REPO"
++export PYTHONPATH="$REPO/tools:$REPO/src${PYTHONPATH:+:$PYTHONPATH}"
++RUN="${RUN:?RUN is required}"
++OUTPUT_ZIP="${OUTPUT_ZIP:-${RUN%/}-clean-result.zip}"
++args=(--run "$RUN" --output "$OUTPUT_ZIP")
++[[ "${INCLUDE_CHECKPOINTS:-0}" == 1 ]] && args+=(--include-checkpoints)
++[[ "${INCLUDE_STATUS_HISTORY:-0}" == 1 ]] && args+=(--include-status-history)
++python tools/package_v48_35_results.py "${args[@]}"
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' /mnt/data/ocrap_round2_audit/code/scripts/run_v48_35_2_release_tests.sh /mnt/data/ocrap_round2_audit/OC-RAP-v48.35.2-ENGINEERING-INTEGRITY/scripts/run_v48_35_2_release_tests.sh
+--- a/scripts/run_v48_35_2_release_tests.sh	1970-01-01 00:00:00.000000000 +0000
++++ b/scripts/run_v48_35_2_release_tests.sh	2026-08-05 08:59:54.189639656 +0000
+@@ -0,0 +1,69 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
++cd "$ROOT"
++
++export PYTEST_DISABLE_PLUGIN_AUTOLOAD="${PYTEST_DISABLE_PLUGIN_AUTOLOAD:-1}"
++export PYTHONDONTWRITEBYTECODE="${PYTHONDONTWRITEBYTECODE:-1}"
++
++# The uploaded repository retains historical tests whose referenced v48.12-v48.32
++# launchers are not present. Those files are documented separately and are not
++# part of the v48.35.2 release contract. Run the supported matrix in isolated
++# processes to prevent cross-suite global-runtime contamination.
++batch_1=(
++  tests/test_calibrated_selector_v5.py
++  tests/test_cli_overrides_and_metrics.py
++  tests/test_closed_loop_resume_optimization.py
++  tests/test_core.py
++  tests/test_external_baseline_cuda_runtime.py
++  tests/test_manifest_repair_v48.py
++  tests/test_ocrap_closed_loop_hotpath.py
++  tests/test_v39_recovery_advantage.py
++  tests/test_v40_direct_value.py
++  tests/test_v42_ocsava.py
++)
++batch_2=(
++  tests/test_v43_rsc.py
++  tests/test_v44_rava.py
++  tests/test_v45_rave.py
++  tests/test_v46_race.py
++  tests/test_v47_trac.py
++  tests/test_v48_10_cope.py
++  tests/test_v48_11_caster.py
++  tests/test_v48_15_prism_cc.py
++  tests/test_v48_16_anchor.py
++  tests/test_v48_17_bridge.py
++)
++batch_3=(
++  tests/test_v48_18_duet_bridge.py
++  tests/test_v48_19_facet_bridge.py
++  tests/test_v48_33_eligible_set_policy.py
++  tests/test_v48_34_1_rc30_model_contract_hotfix.py
++  tests/test_v48_34_barrier_crossfit.py
++  tests/test_v48_35_1_rc30_training_contract_hotfix.py
++  tests/test_v48_35_2_engineering_integrity.py
++  tests/test_v48_35_continuous_frontier.py
++  tests/test_v48_5_ecpr.py
++  tests/test_v48_6_rpgc.py
++)
++batch_4=(
++  tests/test_v48_7_spire.py
++  tests/test_v48_8_scope.py
++  tests/test_v48_9_pacer.py
++  tests/test_v48_trac_sr.py
++)
++# v50 tests are intentionally outside the v48.35.2 release contract. They are
++# retained in the mixed research repository, but are not allowed to influence
++# v48.35.2 release status.
++
++for name in batch_1 batch_2 batch_3 batch_4; do
++  declare -n batch="$name"
++  for test_file in "${batch[@]}"; do
++    [[ -f "$test_file" ]] || { echo "missing release test: $test_file" >&2; exit 4; }
++  done
++  echo "[v48.35.2] running $name (${#batch[@]} files)"
++  python -m pytest -q "${batch[@]}"
++done
++
++echo "[v48.35.2] supported release matrix passed"
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' /mnt/data/ocrap_round2_audit/code/scripts/run_v48_35_continuous_frontier_dedicated.sh /mnt/data/ocrap_round2_audit/OC-RAP-v48.35.2-ENGINEERING-INTEGRITY/scripts/run_v48_35_continuous_frontier_dedicated.sh
+--- a/scripts/run_v48_35_continuous_frontier_dedicated.sh	2026-08-05 16:06:20.000000000 +0000
++++ b/scripts/run_v48_35_continuous_frontier_dedicated.sh	2026-08-05 08:54:43.994827948 +0000
+@@ -35,6 +35,23 @@
+ COMPONENT_HARM_PROXY_TOLERANCE="${COMPONENT_HARM_PROXY_TOLERANCE:-0.05}"
+ 
+ mkdir -p "$OUTPUTDIR/logs"
++ATTEMPT_ID="${V4835_ATTEMPT_ID:-$(python - <<'PY_ATTEMPT'
++import time,uuid
++print(f"v48352-{time.time_ns()}-{uuid.uuid4().hex[:12]}")
++PY_ATTEMPT
++)}"
++export V4835_ATTEMPT_ID="$ATTEMPT_ID"
++python - "$OUTPUTDIR/ATTEMPT_STARTED.json" "$ATTEMPT_ID" "$SOURCE_RUN" "$PROTOCOL_ROOT" "$RESUME_AFTER_ADAPTATION" <<'PY_ATTEMPT_STATUS'
++import json,os,pathlib,sys,time
++p=pathlib.Path(sys.argv[1]); p.parent.mkdir(parents=True,exist_ok=True)
++doc={'event':'v48_35_attempt_started','version':'v48.35.2-ENGINEERING-INTEGRITY',
++     'created_unix':time.time(),'attempt_id':sys.argv[2],'source_run':sys.argv[3],
++     'protocol_root':sys.argv[4],'resume_after_adaptation':sys.argv[5]=='1','test_roots_read':False}
++tmp=p.with_name(f'.{p.name}.tmp.{os.getpid()}.{time.time_ns()}')
++with tmp.open('w',encoding='utf-8') as f:
++    json.dump(doc,f,ensure_ascii=False,indent=2); f.write('\n'); f.flush(); os.fsync(f.fileno())
++os.replace(tmp,p)
++PY_ATTEMPT_STATUS
+ # A no-retraining resume must inspect the original failure state before any
+ # status cleanup. The authorization is narrow and validates checkpoint bytes,
+ # checkpoint config, source/protocol identity, and absence of certificate access.
+@@ -51,10 +68,16 @@
+ 
+ write_pipeline_failure() {
+   local stage="$1" raw_rc="$2" detail="${3:-}" balanced_rc="${4:-}" precision_rc="${5:-}"
+-  python - "$OUTPUTDIR" "$PROTOCOL_ROOT" "$SOURCE_RUN" "$stage" "$raw_rc" "$detail" "$balanced_rc" "$precision_rc" <<'PY_FAILURE'
+-import hashlib,json,pathlib,sys,time
++  python - "$OUTPUTDIR" "$PROTOCOL_ROOT" "$SOURCE_RUN" "$stage" "$raw_rc" "$detail" "$balanced_rc" "$precision_rc" "$ATTEMPT_ID" <<'PY_FAILURE'
++import hashlib,json,os,pathlib,shutil,sys,time
+ root=pathlib.Path(sys.argv[1]); protocol=pathlib.Path(sys.argv[2]); source=pathlib.Path(sys.argv[3])
+-stage=sys.argv[4]; raw_rc=int(sys.argv[5]); detail=sys.argv[6]
++stage=sys.argv[4]; raw_rc=int(sys.argv[5]); detail=sys.argv[6]; attempt_id=sys.argv[9]
++def atomic(path,doc):
++    path.parent.mkdir(parents=True,exist_ok=True)
++    tmp=path.with_name(f'.{path.name}.tmp.{os.getpid()}.{time.time_ns()}')
++    with tmp.open('w',encoding='utf-8') as f:
++        json.dump(doc,f,ensure_ascii=False,indent=2); f.write('\n'); f.flush(); os.fsync(f.fileno())
++    os.replace(tmp,path)
+ def maybe_int(x):
+     try: return int(x)
+     except Exception: return None
+@@ -67,29 +90,49 @@
+ next_status={}
+ try: next_status=json.load(open(root/'NEXT_COMMANDS_STATUS.json'))
+ except Exception: pass
+-certificate_executed=stage in {'certificate','completion_contract'}
++certificate_executed=stage in {'certificate','post_certificate_diagnostics','completion_contract','terminal_state_contract'}
+ gate_evaluated=bool(next_status.get('gate_evaluated',False)) if certificate_executed else False
+-failed={'event':'v48_35_pipeline_failed','created_unix':time.time(),'stage':stage,
++# A natural-gate marker cannot remain active after a later engineering failure.
++gate_marker=root/'GATE_FAILED.json'
++if gate_marker.exists():
++    history=root/'status_history'/f'overridden-by-{attempt_id}-{time.time_ns()}'
++    history.mkdir(parents=True,exist_ok=True)
++    shutil.move(str(gate_marker),str(history/gate_marker.name))
++try: (root/'NEXT_COMMANDS.txt').unlink()
++except FileNotFoundError: pass
++failed={'event':'v48_35_pipeline_failed','version':'v48.35.2-ENGINEERING-INTEGRITY','created_unix':time.time(),'attempt_id':attempt_id,'stage':stage,
+         'raw_exit_code':raw_rc,'normalized_exit_code':30,'pipeline_exit_code':30,'detail':detail,
+         'adaptation_exit_codes':{'balanced':balanced_rc,'precision':precision_rc},
+         'certificate_executed':certificate_executed,'gate_evaluated':gate_evaluated,
+         'pipeline_valid':False,'test_roots_read':False}
+-(root/'PIPELINE_FAILED.json').write_text(json.dumps(failed,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+-doc={'event':'v48_35_continuous_frontier_controller_complete','created_unix':time.time(),
++atomic(root/'PIPELINE_FAILED.json',failed)
++doc={'event':'v48_35_continuous_frontier_controller_complete','version':'v48.35.2-ENGINEERING-INTEGRITY','created_unix':time.time(),'attempt_id':attempt_id,
+      'source_run':str(source),'protocol_root':str(protocol),'variants':variants,
+      'raw_certificate_exit_code':raw_rc if certificate_executed else None,
+      'certificate_exit_code':30 if certificate_executed else None,'pipeline_exit_code':30,
+      'certificate_executed':certificate_executed,'gate_evaluated':gate_evaluated,
+      'gate_passed':False,'next_commands_generated':False,
+      'pipeline_valid':False,'failure_stage':stage,'test_roots_read':False}
+-(root/'V48_35_COMPLETE.json').write_text(json.dumps(doc,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
++atomic(root/'V48_35_COMPLETE.json',doc)
+ blocked={'event':'v48_35_next_commands_blocked','created_unix':time.time(),
+          'generated':False,'reason':'pipeline_failure','failure_stage':stage,
+          'pipeline_exit_code':30,'certificate_executed':certificate_executed,
+          'gate_evaluated':gate_evaluated,'test_roots_read':False}
+-(root/'NEXT_COMMANDS_BLOCKED.json').write_text(json.dumps(blocked,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+-(root/'NEXT_COMMANDS_STATUS.json').write_text(json.dumps(blocked,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
++blocked['attempt_id']=attempt_id
++atomic(root/'NEXT_COMMANDS_BLOCKED.json',blocked)
++atomic(root/'NEXT_COMMANDS_STATUS.json',blocked)
+ PY_FAILURE
++  set +e
++  python tools/audit_v48_35_run_state.py --run "$OUTPUTDIR" \
++    --output "$OUTPUTDIR/AUTHORITATIVE_RUN_STATUS.json" \
++    --expect-exit-code 30 --expect-attempt-id "$ATTEMPT_ID" \
++    >"$OUTPUTDIR/logs/authoritative_failure_state.log" 2>&1
++  local audit_rc=$?
++  set -e
++  if [[ "$audit_rc" != 0 ]]; then
++    printf 'authoritative failure-state audit failed: rc=%s\n' "$audit_rc" \
++      >"$OUTPUTDIR/TERMINAL_STATE_AUDIT_FAILED.txt"
++  fi
+ }
+ 
+ if [[ "$RESUME_AFTER_ADAPTATION" == 1 ]]; then
+@@ -101,18 +144,45 @@
+   resume_contract_rc=$?
+   set -e
+   if [[ "$resume_contract_rc" != 0 ]]; then
+-    echo "v48.35.1 resume refused; inspect $OUTPUTDIR/V48_35_RESUME_CONTRACT.json" >&2
++    # A refused resume is itself the terminal state of this new attempt. Preserve
++    # the old terminal evidence before publishing an attempt-scoped RC=30.
++    python - "$OUTPUTDIR" "$ATTEMPT_ID" <<'PY_ARCHIVE_REFUSED_RESUME'
++import pathlib,shutil,sys,time
++root=pathlib.Path(sys.argv[1]); attempt=sys.argv[2]
++names=('PIPELINE_FAILED.json','V48_35_COMPLETE.json','NEXT_COMMANDS_STATUS.json',
++       'NEXT_COMMANDS_BLOCKED.json','GATE_FAILED.json','CALIBRATION_FAILED.json',
++       'AUTHORITATIVE_RUN_STATUS.json')
++present=[root/name for name in names if (root/name).exists()]
++if present:
++    dst=root/'status_history'/f'resume-refused-{attempt}-{time.time_ns()}'
++    dst.mkdir(parents=True,exist_ok=True)
++    for src in present: shutil.move(str(src),str(dst/src.name))
++PY_ARCHIVE_REFUSED_RESUME
++    write_pipeline_failure "resume_authorization" "$resume_contract_rc" \
++      "resume contract rejected; inspect V48_35_RESUME_CONTRACT.json"
++    echo "v48.35.2 resume refused; inspect $OUTPUTDIR/V48_35_RESUME_CONTRACT.json" >&2
+     exit 30
+   fi
+ fi
+ 
+-# Status files are run-local state, not cache. Clear them only after an optional
+-# resume authorization has captured and validated the previous failure state.
+-rm -f "$OUTPUTDIR"/ADAPTATION_FAILED_*.json "$OUTPUTDIR"/FAILURE_SIGNATURE_*.json "$OUTPUTDIR/PIPELINE_FAILED.json" \
+-      "$OUTPUTDIR/V48_35_COMPLETE.json" "$OUTPUTDIR/NEXT_COMMANDS.txt" \
+-      "$OUTPUTDIR/NEXT_COMMANDS_STATUS.json" "$OUTPUTDIR/NEXT_COMMANDS_BLOCKED.json" \
+-      "$OUTPUTDIR/GATE_FAILED.json" "$OUTPUTDIR/CALIBRATION_FAILED.json" \
+-      "$OUTPUTDIR/chosen_base_run_dedicated.txt"
++# Preserve previous active status as history, then clear the active namespace.
++# The current attempt is identified by ATTEMPT_ID; downstream readers never infer
++# state from the mere presence of an older marker.
++python - "$OUTPUTDIR" "$ATTEMPT_ID" <<'PY_ARCHIVE_STATUS'
++import pathlib,shutil,sys,time
++root=pathlib.Path(sys.argv[1]); attempt=sys.argv[2]
++names=('PIPELINE_FAILED.json','V48_35_COMPLETE.json','NEXT_COMMANDS_STATUS.json',
++       'NEXT_COMMANDS_BLOCKED.json','GATE_FAILED.json','CALIBRATION_FAILED.json',
++       'AUTHORITATIVE_RUN_STATUS.json','GATE_FAILURE_DECOMPOSITION.json',
++       'learning_gates_v48_35.json','GATE_SPEC.json','dedicated_recalibration_status.json')
++present=[root/name for name in names if (root/name).exists()]
++if present:
++    dst=root/'status_history'/f'pre-{attempt}-{time.time_ns()}'
++    dst.mkdir(parents=True,exist_ok=True)
++    for src in present: shutil.move(str(src),str(dst/src.name))
++PY_ARCHIVE_STATUS
++rm -f "$OUTPUTDIR"/ADAPTATION_FAILED_*.json "$OUTPUTDIR"/FAILURE_SIGNATURE_*.json \
++      "$OUTPUTDIR/NEXT_COMMANDS.txt" "$OUTPUTDIR/chosen_base_run_dedicated.txt"
+ 
+ set +e
+ python tools/audit_dedicated_protocol_v48_16.py \
+@@ -354,20 +424,31 @@
+ PY_STAGE
+ )"
+     fi
++    set +e
+     python tools/extract_v48_34_failure_signature.py \
+       --log "$OUTPUTDIR/logs/adapt_${variant}.log" --output "$signature" \
+-      --stage "$stage" --exit-code "$rc" >/dev/null || true
+-    python - "$OUTPUTDIR" "$variant" "$rc" "$OUTPUTDIR/logs/adapt_${variant}.log" "$stage" "$signature" <<'PY_ADAPT_FAIL'
+-import json,pathlib,sys,time
++      --stage "$stage" --exit-code "$rc" >"$OUTPUTDIR/logs/failure_signature_${variant}.log" 2>&1
++    local signature_rc=$?
++    set -e
++    python - "$OUTPUTDIR" "$variant" "$rc" "$OUTPUTDIR/logs/adapt_${variant}.log" "$stage" "$signature" "$signature_rc" "$ATTEMPT_ID" <<'PY_ADAPT_FAIL'
++import json,os,pathlib,sys,time
+ root=pathlib.Path(sys.argv[1]); variant=sys.argv[2]; rc=int(sys.argv[3]); log=pathlib.Path(sys.argv[4]); stage=sys.argv[5]; signature=pathlib.Path(sys.argv[6])
++signature_rc=int(sys.argv[7]); attempt_id=sys.argv[8]
+ tail='\n'.join(log.read_text(errors='replace').splitlines()[-100:]) if log.exists() else ''
+ sig={}
+-try: sig=json.load(open(signature))
+-except Exception: pass
+-(root/f'ADAPTATION_FAILED_{variant}.json').write_text(json.dumps({
+-    'event':'v48_35_adaptation_failed','variant':variant,'stage':stage,
++if signature_rc == 0:
++    try: sig=json.load(open(signature))
++    except Exception as exc: sig={'read_error':repr(exc)}
++doc={
++    'event':'v48_35_adaptation_failed','version':'v48.35.2-ENGINEERING-INTEGRITY',
++    'attempt_id':attempt_id,'variant':variant,'stage':stage,
+     'exit_code':rc,'log':str(log),'failure_signature':sig,
+-    'log_tail':tail,'created_unix':time.time(),'test_roots_read':False},ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
++    'failure_signature_exit_code':signature_rc,
++    'log_tail':tail,'created_unix':time.time(),'test_roots_read':False}
++out=root/f'ADAPTATION_FAILED_{variant}.json'; tmp=out.with_name(f'.{out.name}.tmp.{os.getpid()}.{time.time_ns()}')
++with tmp.open('w',encoding='utf-8') as f:
++    json.dump(doc,f,ensure_ascii=False,indent=2); f.write('\n'); f.flush(); os.fsync(f.fileno())
++os.replace(tmp,out)
+ PY_ADAPT_FAIL
+   else
+     rm -f "$OUTPUTDIR/ADAPTATION_FAILED_${variant}.json"
+@@ -390,12 +471,10 @@
+ 
+ if [[ "$s0" != 0 && "$s1" != 0 ]]; then
+   write_pipeline_failure adaptation 30 "both variants failed; inspect FAILURE_SIGNATURE_balanced.json and FAILURE_SIGNATURE_precision.json" "$s0" "$s1"
+-  python tools/check_v48_16_learning_gates.py --run "$OUTPUTDIR" --output "$OUTPUTDIR/learning_gates_v48_35.json" --version v48.35-CONTINUOUS-FRONTIER || true
+   exit 30
+ fi
+ if [[ "$ALLOW_PARTIAL_VARIANTS" != 1 && ( "$s0" != 0 || "$s1" != 0 ) ]]; then
+   write_pipeline_failure adaptation 30 "one variant failed; set ALLOW_PARTIAL_VARIANTS=1 only for explicit debugging" "$s0" "$s1"
+-  python tools/check_v48_16_learning_gates.py --run "$OUTPUTDIR" --output "$OUTPUTDIR/learning_gates_v48_35.json" --version v48.35-CONTINUOUS-FRONTIER || true
+   exit 30
+ fi
+ 
+@@ -451,18 +530,29 @@
+   *) cert_rc=30 ;;
+ esac
+ 
+-python tools/check_v48_16_learning_gates.py --run "$OUTPUTDIR" --output "$OUTPUTDIR/learning_gates_v48_35.json" --version v48.35-CONTINUOUS-FRONTIER || true
+-python tools/summarize_v48_34_gate_failure.py --run "$OUTPUTDIR" --output "$OUTPUTDIR/GATE_FAILURE_DECOMPOSITION.json" || true
+ if [[ "$cert_rc" == 30 ]]; then
+   write_pipeline_failure certificate "$raw_cert_rc" "$OUTPUTDIR/logs/certificate_controller.log" "$s0" "$s1"
+   exit 30
+ fi
+ 
+ set +e
+-python - "$OUTPUTDIR" "$PROTOCOL_ROOT" "$SOURCE_RUN" "$raw_cert_rc" "$cert_rc" "$RESUME_AFTER_ADAPTATION" <<'PY'
+-import hashlib,json,pathlib,sys,time
++python tools/check_v48_16_learning_gates.py --run "$OUTPUTDIR" --output "$OUTPUTDIR/learning_gates_v48_35.json" --version v48.35.2-ENGINEERING-INTEGRITY \
++  >"$OUTPUTDIR/logs/learning_gates.log" 2>&1
++learning_gates_rc=$?
++python tools/summarize_v48_34_gate_failure.py --run "$OUTPUTDIR" --output "$OUTPUTDIR/GATE_FAILURE_DECOMPOSITION.json" \
++  >"$OUTPUTDIR/logs/gate_failure_decomposition.log" 2>&1
++gate_decomposition_rc=$?
++set -e
++if [[ "$learning_gates_rc" != 0 || "$gate_decomposition_rc" != 0 ]]; then
++  write_pipeline_failure post_certificate_diagnostics 4 "learning_gates_rc=$learning_gates_rc gate_decomposition_rc=$gate_decomposition_rc" "$s0" "$s1"
++  exit 30
++fi
++
++set +e
++python - "$OUTPUTDIR" "$PROTOCOL_ROOT" "$SOURCE_RUN" "$raw_cert_rc" "$cert_rc" "$RESUME_AFTER_ADAPTATION" "$ATTEMPT_ID" <<'PY'
++import hashlib,json,os,pathlib,sys,time
+ root=pathlib.Path(sys.argv[1]); protocol=pathlib.Path(sys.argv[2]); source=pathlib.Path(sys.argv[3])
+-raw_rc=int(sys.argv[4]); rc=int(sys.argv[5]); resumed=sys.argv[6] == '1'; variants={}
++raw_rc=int(sys.argv[4]); rc=int(sys.argv[5]); resumed=sys.argv[6] == '1'; attempt_id=sys.argv[7]; variants={}
+ for name in ('balanced','precision'):
+     p=root/'candidates'/name/'model_v48_trac_sr'/'best.pt'
+     if p.is_file(): variants[name]={'checkpoint':str(p),'sha256':hashlib.sha256(p.read_bytes()).hexdigest()}
+@@ -471,14 +561,17 @@
+ consistent=(rc==0 and next_exists and not blocked_exists) or (rc==20 and (not next_exists) and blocked_exists)
+ if not consistent:
+     raise SystemExit(f'certificate/NEXT_COMMANDS contract mismatch: rc={rc} next={next_exists} blocked={blocked_exists}')
+-doc={'event':'v48_35_continuous_frontier_controller_complete','created_unix':time.time(),
++doc={'event':'v48_35_continuous_frontier_controller_complete','version':'v48.35.2-ENGINEERING-INTEGRITY','created_unix':time.time(),'attempt_id':attempt_id,
+      'source_run':str(source),'protocol_root':str(protocol),'variants':variants,
+      'raw_certificate_exit_code':raw_rc,'certificate_exit_code':rc,'pipeline_exit_code':rc,
+      'certificate_executed':True,'gate_evaluated':True,'gate_passed':(rc==0 and next_exists),
+      'next_commands_generated':next_exists,'pipeline_valid':True,
+      'adaptation_reused_without_retraining':resumed,'resume_contract':str(root/'V48_35_RESUME_CONTRACT.json') if resumed else None,
+      'test_roots_read':False}
+-(root/'V48_35_COMPLETE.json').write_text(json.dumps(doc,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
++tmp=root/f'.V48_35_COMPLETE.json.tmp.{os.getpid()}.{time.time_ns()}'
++with tmp.open('w',encoding='utf-8') as f:
++    json.dump(doc,f,ensure_ascii=False,indent=2); f.write('\n'); f.flush(); os.fsync(f.fileno())
++os.replace(tmp,root/'V48_35_COMPLETE.json')
+ PY
+ completion_rc=$?
+ set -e
+@@ -486,4 +579,15 @@
+   write_pipeline_failure completion_contract 30 "RC/NEXT_COMMANDS mismatch" "$s0" "$s1"
+   exit 30
+ fi
++set +e
++python tools/audit_v48_35_run_state.py --run "$OUTPUTDIR" \
++  --output "$OUTPUTDIR/AUTHORITATIVE_RUN_STATUS.json" \
++  --expect-exit-code "$cert_rc" --expect-attempt-id "$ATTEMPT_ID" --archive-stale-markers \
++  >"$OUTPUTDIR/logs/authoritative_run_state.log" 2>&1
++state_contract_rc=$?
++set -e
++if [[ "$state_contract_rc" != 0 ]]; then
++  write_pipeline_failure terminal_state_contract "$state_contract_rc" "$OUTPUTDIR/AUTHORITATIVE_RUN_STATUS.json" "$s0" "$s1"
++  exit 30
++fi
+ exit "$cert_rc"
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' /mnt/data/ocrap_round2_audit/code/scripts/run_v48_35_safe_noninferiority.sh /mnt/data/ocrap_round2_audit/OC-RAP-v48.35.2-ENGINEERING-INTEGRITY/scripts/run_v48_35_safe_noninferiority.sh
+--- a/scripts/run_v48_35_safe_noninferiority.sh	2026-08-05 16:06:20.000000000 +0000
++++ b/scripts/run_v48_35_safe_noninferiority.sh	2026-08-05 09:03:36.928792651 +0000
+@@ -10,7 +10,14 @@
+ # for nonstandard layouts, but never authorize from a checkpoint alone.
+ OUT="${OUT:-$(cd -- "$BASE_RUN/../.." && pwd)}"
+ STATUS="$OUT/V48_35_COMPLETE.json"
++mkdir -p "$OUT/logs"
+ [[ -s "$STATUS" ]] || { echo "missing $STATUS" >&2; exit 30; }
++set +e
++python tools/audit_v48_35_run_state.py --run "$OUT" --output "$OUT/AUTHORITATIVE_RUN_STATUS.json" --expect-exit-code 0 \
++  >"$OUT/logs/safe_authorization_state.log" 2>&1
++auth_rc=$?
++set -e
++[[ "$auth_rc" == 0 ]] || { echo "Safe run is not authorized by authoritative run state" >&2; exit 30; }
+ [[ -s "$OUT/NEXT_COMMANDS.txt" ]] || { echo "Safe run is not authorized: missing $OUT/NEXT_COMMANDS.txt" >&2; exit 20; }
+ python - "$STATUS" "$BASE_RUN" <<'PY_STATUS'
+ import json,pathlib,sys
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' /mnt/data/ocrap_round2_audit/code/scripts/run_v48_35_stress_if_authorized.sh /mnt/data/ocrap_round2_audit/OC-RAP-v48.35.2-ENGINEERING-INTEGRITY/scripts/run_v48_35_stress_if_authorized.sh
+--- a/scripts/run_v48_35_stress_if_authorized.sh	2026-08-05 16:06:20.000000000 +0000
++++ b/scripts/run_v48_35_stress_if_authorized.sh	2026-08-05 09:03:36.928979879 +0000
+@@ -4,8 +4,15 @@
+ cd "$REPO"
+ export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"
+ OUT="${OUT:?OUT is required}"
++mkdir -p "$OUT/logs"
+ [[ -s "$OUT/NEXT_COMMANDS.txt" ]] || { echo "Stress run is not authorized: missing $OUT/NEXT_COMMANDS.txt" >&2; exit 20; }
+ [[ -s "$OUT/V48_35_COMPLETE.json" ]] || { echo "missing $OUT/V48_35_COMPLETE.json" >&2; exit 30; }
++set +e
++python tools/audit_v48_35_run_state.py --run "$OUT" --output "$OUT/AUTHORITATIVE_RUN_STATUS.json" --expect-exit-code 0 \
++  >"$OUT/logs/stress_authorization_state.log" 2>&1
++auth_rc=$?
++set -e
++[[ "$auth_rc" == 0 ]] || { echo "Stress run is not authorized by authoritative run state" >&2; exit 30; }
+ python - "$OUT/V48_35_COMPLETE.json" <<'PY_STATUS'
+ import json,sys
+ status=json.load(open(sys.argv[1],encoding='utf-8'))
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' /mnt/data/ocrap_round2_audit/code/tests/test_v48_35_2_engineering_integrity.py /mnt/data/ocrap_round2_audit/OC-RAP-v48.35.2-ENGINEERING-INTEGRITY/tests/test_v48_35_2_engineering_integrity.py
+--- a/tests/test_v48_35_2_engineering_integrity.py	1970-01-01 00:00:00.000000000 +0000
++++ b/tests/test_v48_35_2_engineering_integrity.py	2026-08-05 08:56:21.285396007 +0000
+@@ -0,0 +1,287 @@
++from __future__ import annotations
++
++import importlib.util
++import json
++import os
++import re
++import subprocess
++import sys
++import zipfile
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[1]
++
++
++def _write_json(path: Path, value: dict) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
++
++
++def _run(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
++    merged = os.environ.copy()
++    merged["PYTHONPATH"] = f"{ROOT / 'tools'}:{ROOT / 'src'}" + (f":{merged['PYTHONPATH']}" if merged.get("PYTHONPATH") else "")
++    if env:
++        merged.update(env)
++    return subprocess.run(args, cwd=ROOT, env=merged, text=True, capture_output=True, check=False)
++
++
++def _make_rc20_run(root: Path, *, attempt_id: str | None = None, stale_pipeline: bool = True) -> None:
++    complete = {
++        "event": "v48_35_continuous_frontier_controller_complete",
++        "created_unix": 200.0,
++        "pipeline_exit_code": 20,
++        "certificate_exit_code": 20,
++        "pipeline_valid": True,
++        "certificate_executed": True,
++        "gate_evaluated": True,
++        "gate_passed": False,
++        "next_commands_generated": False,
++        "test_roots_read": False,
++    }
++    gate = {
++        "event": "v48_35_certificate_candidate_selection",
++        "created_unix": 190.0,
++        "certificate_executed": True,
++        "gate_evaluated": True,
++        "valid_candidates": [],
++        "test_roots_read": False,
++    }
++    blocked = {
++        "event": "v48_35_next_commands_blocked",
++        "created_unix": 191.0,
++        "reason": "natural_gate_failed",
++        "exit_code": 20,
++        "generated": False,
++        "certificate_executed": True,
++        "gate_evaluated": True,
++        "test_roots_read": False,
++    }
++    if attempt_id:
++        complete["attempt_id"] = attempt_id
++        gate["attempt_id"] = attempt_id
++        blocked["attempt_id"] = attempt_id
++    _write_json(root / "V48_35_COMPLETE.json", complete)
++    _write_json(root / "GATE_FAILED.json", gate)
++    _write_json(root / "NEXT_COMMANDS_BLOCKED.json", blocked)
++    _write_json(root / "NEXT_COMMANDS_STATUS.json", blocked)
++    (root / "artifact.txt").write_text("current\n", encoding="utf-8")
++    if stale_pipeline:
++        failed = {
++            "event": "v48_35_pipeline_failed",
++            "created_unix": 100.0,
++            "pipeline_exit_code": 30,
++            "normalized_exit_code": 30,
++            "pipeline_valid": False,
++            "test_roots_read": False,
++        }
++        _write_json(root / "PIPELINE_FAILED.json", failed)
++
++
++def test_authoritative_state_resolves_legacy_stale_rc30_marker(tmp_path: Path) -> None:
++    run = tmp_path / "run"
++    run.mkdir()
++    _make_rc20_run(run)
++    output = run / "AUTHORITATIVE_RUN_STATUS.json"
++    proc = _run(sys.executable, "tools/audit_v48_35_run_state.py", "--run", str(run), "--output", str(output))
++    assert proc.returncode == 0, proc.stderr + proc.stdout
++    doc = json.loads(output.read_text(encoding="utf-8"))
++    assert doc["valid"] is True
++    assert doc["authoritative_exit_code"] == 20
++    assert doc["pipeline_valid"] is True
++    assert [item["name"] for item in doc["stale_markers"]] == ["PIPELINE_FAILED.json"]
++
++
++def test_same_attempt_pipeline_failure_cannot_be_hidden(tmp_path: Path) -> None:
++    run = tmp_path / "run"
++    run.mkdir()
++    _make_rc20_run(run, attempt_id="attempt-a", stale_pipeline=False)
++    failed = json.loads((run / "PIPELINE_FAILED.json").read_text()) if (run / "PIPELINE_FAILED.json").exists() else {
++        "event": "v48_35_pipeline_failed",
++        "created_unix": 199.0,
++        "pipeline_exit_code": 30,
++    }
++    failed["attempt_id"] = "attempt-a"
++    _write_json(run / "PIPELINE_FAILED.json", failed)
++    output = run / "AUTHORITATIVE_RUN_STATUS.json"
++    proc = _run(sys.executable, "tools/audit_v48_35_run_state.py", "--run", str(run), "--output", str(output))
++    assert proc.returncode == 4
++    doc = json.loads(output.read_text(encoding="utf-8"))
++    assert doc["valid"] is False
++    assert any("PIPELINE_FAILED" in item for item in doc["active_contradictions"])
++
++
++def test_packager_recreates_zip_and_excludes_stale_marker(tmp_path: Path) -> None:
++    run = tmp_path / "run"
++    run.mkdir()
++    _make_rc20_run(run)
++    _write_json(run / "AUTHORITATIVE_RUN_STATUS.json", {"obsolete": True})
++    _write_json(run / "PACKAGING_MANIFEST.json", {"obsolete": True})
++    output = tmp_path / "result.zip"
++    with zipfile.ZipFile(output, "w") as archive:
++        archive.writestr(f"{run.name}/PIPELINE_FAILED.json", "obsolete")
++        archive.writestr("obsolete.txt", "obsolete")
++    proc = _run(sys.executable, "tools/package_v48_35_results.py", "--run", str(run), "--output", str(output))
++    assert proc.returncode == 0, proc.stderr + proc.stdout
++    with zipfile.ZipFile(output) as archive:
++        names = archive.namelist()
++        assert len(names) == len(set(names))
++        assert f"{run.name}/PIPELINE_FAILED.json" not in names
++        assert "obsolete.txt" not in names
++        assert f"{run.name}/GATE_FAILED.json" in names
++        status = json.loads(archive.read(f"{run.name}/AUTHORITATIVE_RUN_STATUS.json"))
++        assert status["authoritative_exit_code"] == 20
++        assert status["stale_markers_excluded_from_archive"] == ["PIPELINE_FAILED.json"]
++
++
++def test_shared_rule_gate_decomposition_is_supported(tmp_path: Path) -> None:
++    run = tmp_path / "run"
++    for variant in ("balanced", "precision"):
++        cal = run / "candidates" / variant / "calibration"
++        shared = {
++            "valid": False,
++            "valid_for_deployment": False,
++            "diagnostic_fit_rule": {"opportunity_threshold": 0.5},
++            "fit": {
++                "constraint_failures": 2,
++                "constraint_deficit": 3.0,
++                "by_stratum": {"near": {"num_selected": 1}, "contact": {"num_selected": 2}},
++                "pooled": {"num_selected": 3},
++            },
++        }
++        _write_json(cal / "dev_frozen_shared_rule_v48.json", shared)
++        for regime in ("near", "contact"):
++            cert = {
++                "valid_for_deployment": False,
++                "rejection_kind": "development_rule_fit_rejection",
++                "proposal_constrained_oracle_gate": {"verify": {"feasible": True, "proposal_safe_positive_groups": 4}},
++                "verify": {"num_selected": 0},
++            }
++            _write_json(cal / f"direct_value_risk_{regime}_v48.json", cert)
++    output = run / "GATE_FAILURE_DECOMPOSITION.json"
++    proc = _run(sys.executable, "tools/summarize_v48_34_gate_failure.py", "--run", str(run), "--output", str(output))
++    assert proc.returncode == 0, proc.stderr + proc.stdout
++    doc = json.loads(output.read_text(encoding="utf-8"))
++    assert doc["artifact_valid"] is True
++    assert doc["development_rule_modes"] == ["shared"]
++    assert doc["errors"] == []
++
++
++def test_v4835_shell_python_heredocs_compile() -> None:
++    scripts = [
++        ROOT / "scripts" / "run_v48_35_continuous_frontier_dedicated.sh",
++        ROOT / "scripts" / "calibrate_v48_35_shared_certificate_pool.sh",
++    ]
++    pattern = re.compile(r"<<'(?P<tag>PY[A-Z0-9_]*)'\n(?P<body>.*?)\n(?P=tag)(?:\n|$)", re.DOTALL)
++    for script in scripts:
++        text = script.read_text(encoding="utf-8")
++        blocks = list(pattern.finditer(text))
++        assert blocks, script
++        for index, match in enumerate(blocks):
++            compile(match.group("body"), f"{script.name}:heredoc:{index}", "exec")
++
++
++def test_controller_has_attempt_scoped_state_and_required_diagnostics() -> None:
++    controller = (ROOT / "scripts" / "run_v48_35_continuous_frontier_dedicated.sh").read_text(encoding="utf-8")
++    assert "ATTEMPT_ID=" in controller
++    assert "status_history" in controller
++    assert "audit_v48_35_run_state.py" in controller
++    assert "post_certificate_diagnostics" in controller
++    assert "summarize_v48_34_gate_failure.py" in controller
++    assert "summarize_v48_34_gate_failure.py --run" in controller
++    assert "summarize_v48_34_gate_failure.py --run \"$OUTPUTDIR\" --output \"$OUTPUTDIR/GATE_FAILURE_DECOMPOSITION.json\" || true" not in controller
++
++
++def test_generated_followup_commands_are_portable_and_attempt_scoped() -> None:
++    calibration = (ROOT / "scripts" / "calibrate_v48_35_shared_certificate_pool.sh").read_text(encoding="utf-8")
++    assert "V4835_ATTEMPT_ID" in calibration
++    assert "SAFE_WOMD_SOURCE={shlex.quote(safe_source)}" in calibration
++    assert "SAFE_WOMD_SOURCE=/data0/senzeyu2/dataset/WOMD" not in calibration.split("safe_source=os.environ['SAFE_WOMD_SOURCE']", 1)[1]
++
++
++def test_packager_excludes_its_own_outputs_when_target_is_inside_run(tmp_path: Path) -> None:
++    run = tmp_path / "run"
++    run.mkdir()
++    _make_rc20_run(run)
++    output = run / "clean-result.zip"
++    output.write_bytes(b"obsolete archive")
++    output.with_suffix(".zip.sha256").write_text("obsolete hash\n", encoding="utf-8")
++    proc = _run(sys.executable, "tools/package_v48_35_results.py", "--run", str(run), "--output", str(output))
++    assert proc.returncode == 0, proc.stderr + proc.stdout
++    with zipfile.ZipFile(output) as archive:
++        names = archive.namelist()
++        assert f"{run.name}/clean-result.zip" not in names
++        assert f"{run.name}/clean-result.zip.sha256" not in names
++
++
++def test_resume_rejection_publishes_attempt_scoped_terminal_rc30() -> None:
++    controller = (ROOT / "scripts" / "run_v48_35_continuous_frontier_dedicated.sh").read_text(encoding="utf-8")
++    resume_start = controller.index('if [[ "$RESUME_AFTER_ADAPTATION" == 1 ]]')
++    resume_end = controller.index("# Preserve previous active status", resume_start)
++    block = controller[resume_start:resume_end]
++    assert "resume-refused-{attempt}" in block
++    assert 'write_pipeline_failure "resume_authorization" "$resume_contract_rc"' in block
++    assert "exit 30" in block
++
++
++def test_authoritative_state_accepts_consistent_rc0(tmp_path: Path) -> None:
++    run = tmp_path / "run"
++    run.mkdir()
++    attempt = "attempt-pass"
++    complete = {
++        "event": "v48_35_continuous_frontier_controller_complete",
++        "created_unix": 20.0,
++        "attempt_id": attempt,
++        "pipeline_exit_code": 0,
++        "pipeline_valid": True,
++        "certificate_executed": True,
++        "gate_evaluated": True,
++        "gate_passed": True,
++        "next_commands_generated": True,
++    }
++    status = {"created_unix": 19.0, "attempt_id": attempt, "generated": True}
++    _write_json(run / "V48_35_COMPLETE.json", complete)
++    _write_json(run / "NEXT_COMMANDS_STATUS.json", status)
++    (run / "NEXT_COMMANDS.txt").write_text("echo authorized\n", encoding="utf-8")
++    output = run / "AUTHORITATIVE_RUN_STATUS.json"
++    proc = _run(sys.executable, "tools/audit_v48_35_run_state.py", "--run", str(run), "--output", str(output), "--expect-exit-code", "0")
++    assert proc.returncode == 0, proc.stderr + proc.stdout
++    assert json.loads(output.read_text())["valid"] is True
++
++
++def test_authoritative_state_accepts_consistent_rc30(tmp_path: Path) -> None:
++    run = tmp_path / "run"
++    run.mkdir()
++    attempt = "attempt-fail"
++    complete = {
++        "event": "v48_35_continuous_frontier_controller_complete",
++        "created_unix": 20.0,
++        "attempt_id": attempt,
++        "pipeline_exit_code": 30,
++        "pipeline_valid": False,
++        "certificate_executed": False,
++        "gate_evaluated": False,
++        "gate_passed": False,
++        "next_commands_generated": False,
++    }
++    failed = {
++        "event": "v48_35_pipeline_failed",
++        "created_unix": 19.0,
++        "attempt_id": attempt,
++        "pipeline_exit_code": 30,
++        "pipeline_valid": False,
++    }
++    blocked = {
++        "created_unix": 19.5,
++        "attempt_id": attempt,
++        "reason": "pipeline_failure",
++        "generated": False,
++        "pipeline_exit_code": 30,
++    }
++    _write_json(run / "V48_35_COMPLETE.json", complete)
++    _write_json(run / "PIPELINE_FAILED.json", failed)
++    _write_json(run / "NEXT_COMMANDS_BLOCKED.json", blocked)
++    _write_json(run / "NEXT_COMMANDS_STATUS.json", blocked)
++    output = run / "AUTHORITATIVE_RUN_STATUS.json"
++    proc = _run(sys.executable, "tools/audit_v48_35_run_state.py", "--run", str(run), "--output", str(output), "--expect-exit-code", "30")
++    assert proc.returncode == 0, proc.stderr + proc.stdout
++    assert json.loads(output.read_text())["valid"] is True
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' /mnt/data/ocrap_round2_audit/code/tools/audit_v48_35_run_state.py /mnt/data/ocrap_round2_audit/OC-RAP-v48.35.2-ENGINEERING-INTEGRITY/tools/audit_v48_35_run_state.py
+--- a/tools/audit_v48_35_run_state.py	1970-01-01 00:00:00.000000000 +0000
++++ b/tools/audit_v48_35_run_state.py	2026-08-05 08:31:32.480304475 +0000
+@@ -0,0 +1,282 @@
++#!/usr/bin/env python3
++"""Resolve and validate the authoritative terminal state of a v48.35 run.
++
++Legacy runs used several top-level marker files.  A stale marker copied from an
++older attempt (or retained by updating an existing ZIP) must never override a
++newer V48_35_COMPLETE.json.  This tool resolves state from content, attempt IDs
++and timestamps, validates the RC/NEXT_COMMANDS contract, and can archive stale
++markers without modifying model or certificate artifacts.
++"""
++from __future__ import annotations
++
++import argparse
++import json
++import os
++import shutil
++import time
++from pathlib import Path
++from typing import Any, Mapping
++
++
++TERMINAL_EVENT = "v48_35_continuous_frontier_controller_complete"
++FAILURE_EVENT = "v48_35_pipeline_failed"
++
++
++def _read_json(path: Path) -> tuple[dict[str, Any], str | None]:
++    if not path.is_file():
++        return {}, None
++    try:
++        value = json.loads(path.read_text(encoding="utf-8"))
++    except Exception as exc:  # pragma: no cover - exact parser text is platform-dependent
++        return {}, f"{path}: {exc!r}"
++    if not isinstance(value, dict):
++        return {}, f"{path}: top-level JSON is not an object"
++    return value, None
++
++
++def _atomic_write_json(path: Path, value: Mapping[str, Any]) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}.{time.time_ns()}")
++    try:
++        with tmp.open("w", encoding="utf-8") as handle:
++            json.dump(value, handle, ensure_ascii=False, indent=2)
++            handle.write("\n")
++            handle.flush()
++            os.fsync(handle.fileno())
++        os.replace(tmp, path)
++    finally:
++        try:
++            tmp.unlink()
++        except FileNotFoundError:
++            pass
++
++
++def _number(value: Any) -> float | None:
++    try:
++        return float(value)
++    except (TypeError, ValueError):
++        return None
++
++
++def _integer(value: Any) -> int | None:
++    try:
++        return int(value)
++    except (TypeError, ValueError):
++        return None
++
++
++def _marker_relation(marker: Mapping[str, Any], complete: Mapping[str, Any]) -> str:
++    """Return same_attempt, stale, newer_or_ambiguous, or absent metadata."""
++    marker_attempt = marker.get("attempt_id")
++    complete_attempt = complete.get("attempt_id")
++    if marker_attempt and complete_attempt:
++        return "same_attempt" if marker_attempt == complete_attempt else "stale"
++    marker_time = _number(marker.get("created_unix"))
++    complete_time = _number(complete.get("created_unix"))
++    if marker_time is not None and complete_time is not None:
++        return "stale" if marker_time < complete_time else "newer_or_ambiguous"
++    return "newer_or_ambiguous"
++
++
++def resolve(run: Path) -> dict[str, Any]:
++    paths = {
++        "complete": run / "V48_35_COMPLETE.json",
++        "pipeline_failed": run / "PIPELINE_FAILED.json",
++        "gate_failed": run / "GATE_FAILED.json",
++        "calibration_failed": run / "CALIBRATION_FAILED.json",
++        "next_status": run / "NEXT_COMMANDS_STATUS.json",
++        "next_blocked": run / "NEXT_COMMANDS_BLOCKED.json",
++    }
++    docs: dict[str, dict[str, Any]] = {}
++    read_errors: list[str] = []
++    for name, path in paths.items():
++        doc, error = _read_json(path)
++        docs[name] = doc
++        if error:
++            read_errors.append(error)
++
++    complete = docs["complete"]
++    failed = docs["pipeline_failed"]
++    next_status = docs["next_status"]
++    rc = _integer(complete.get("pipeline_exit_code")) if complete else None
++    complete_is_terminal = complete.get("event") == TERMINAL_EVENT and rc in (0, 20, 30)
++    pipeline_valid = complete.get("pipeline_valid") is True
++    next_commands_present = (run / "NEXT_COMMANDS.txt").is_file()
++    blocked_present = paths["next_blocked"].is_file()
++    gate_failed_present = paths["gate_failed"].is_file()
++    calibration_failed_present = paths["calibration_failed"].is_file()
++    pipeline_failed_present = paths["pipeline_failed"].is_file()
++
++    stale_markers: list[dict[str, Any]] = []
++    active_contradictions: list[str] = []
++    relations: dict[str, str] = {}
++    if complete_is_terminal:
++        for name in ("pipeline_failed", "gate_failed", "calibration_failed"):
++            if not paths[name].is_file():
++                continue
++            relation = _marker_relation(docs[name], complete)
++            expected_active = ((name == "pipeline_failed" and rc == 30) or (name == "gate_failed" and rc == 20) or (name == "calibration_failed" and rc == 30))
++            if expected_active:
++                marker_attempt = docs[name].get("attempt_id")
++                complete_attempt = complete.get("attempt_id")
++                if marker_attempt and complete_attempt and marker_attempt != complete_attempt:
++                    relations[name] = "stale"
++                    active_contradictions.append(f"{name} belongs to an older attempt but is required for RC={rc}")
++                else:
++                    # Legacy markers are normally written immediately before the terminal
++                    # completion record, so an earlier timestamp is expected here.
++                    relations[name] = "same_attempt" if marker_attempt and complete_attempt else "same_attempt_legacy"
++            elif relation == "stale":
++                relations[name] = relation
++                stale_markers.append({"name": paths[name].name, "path": str(paths[name]), "relation": relation})
++            else:
++                relations[name] = relation
++                active_contradictions.append(f"unexpected active {paths[name].name} for terminal RC={rc}")
++
++    checks: dict[str, bool] = {
++        "json_readable": not read_errors,
++        "terminal_completion_present": complete_is_terminal,
++        "no_active_status_contradictions": not active_contradictions,
++    }
++
++    if complete_is_terminal and rc == 0:
++        checks.update(
++            {
++                "pipeline_valid": pipeline_valid,
++                "certificate_executed": complete.get("certificate_executed") is True,
++                "gate_evaluated": complete.get("gate_evaluated") is True,
++                "gate_passed": complete.get("gate_passed") is True,
++                "next_commands_generated": complete.get("next_commands_generated") is True,
++                "next_commands_present": next_commands_present,
++                "next_commands_not_blocked": not blocked_present,
++                "next_status_generated": next_status.get("generated") is True,
++                "no_gate_failure_marker": not gate_failed_present or relations.get("gate_failed") == "stale",
++                "no_calibration_failure_marker": not calibration_failed_present or relations.get("calibration_failed") == "stale",
++                "no_pipeline_failure_marker": not pipeline_failed_present or relations.get("pipeline_failed") == "stale",
++            }
++        )
++    elif complete_is_terminal and rc == 20:
++        checks.update(
++            {
++                "pipeline_valid": pipeline_valid,
++                "certificate_executed": complete.get("certificate_executed") is True,
++                "gate_evaluated": complete.get("gate_evaluated") is True,
++                "gate_passed_false": complete.get("gate_passed") is False,
++                "next_commands_not_generated": complete.get("next_commands_generated") is False,
++                "next_commands_absent": not next_commands_present,
++                "next_commands_blocked": blocked_present,
++                "next_status_is_natural_gate_failure": (
++                    next_status.get("reason") == "natural_gate_failed"
++                    and _integer(next_status.get("exit_code")) == 20
++                    and next_status.get("gate_evaluated") is True
++                ),
++                "gate_failure_marker_present": gate_failed_present and relations.get("gate_failed") != "stale",
++                "no_calibration_failure_marker": not calibration_failed_present or relations.get("calibration_failed") == "stale",
++                "no_pipeline_failure_marker": not pipeline_failed_present or relations.get("pipeline_failed") == "stale",
++            }
++        )
++    elif complete_is_terminal and rc == 30:
++        checks.update(
++            {
++                "pipeline_invalid": complete.get("pipeline_valid") is False,
++                "pipeline_failure_marker_present": pipeline_failed_present and relations.get("pipeline_failed") != "stale",
++                "next_commands_absent": not next_commands_present,
++                "next_commands_blocked": blocked_present,
++            }
++        )
++    else:
++        checks["terminal_rc_registered"] = False
++
++    valid = all(checks.values())
++    return {
++        "event": "v48_35_authoritative_run_state",
++        "version": "v48.35.2-ENGINEERING-INTEGRITY",
++        "created_unix": time.time(),
++        "run": str(run),
++        "valid": valid,
++        "authoritative_source": str(paths["complete"]) if complete_is_terminal else None,
++        "authoritative_exit_code": rc,
++        "pipeline_valid": pipeline_valid if complete_is_terminal else False,
++        "attempt_id": complete.get("attempt_id") if complete else None,
++        "checks": checks,
++        "read_errors": read_errors,
++        "active_contradictions": active_contradictions,
++        "stale_markers": stale_markers,
++        "marker_relations": relations,
++        "artifacts": {
++            "next_commands_present": next_commands_present,
++            "next_commands_blocked_present": blocked_present,
++            "pipeline_failed_present": pipeline_failed_present,
++            "gate_failed_present": gate_failed_present,
++            "calibration_failed_present": calibration_failed_present,
++        },
++        "test_roots_read": False,
++    }
++
++
++def _archive_stale(run: Path, report: Mapping[str, Any]) -> list[str]:
++    archived: list[str] = []
++    attempt = str(report.get("attempt_id") or "legacy")
++    stamp = int(_number(report.get("created_unix")) or time.time())
++    target_dir = run / "status_history" / f"stale-before-{attempt}-{stamp}"
++    for item in report.get("stale_markers") or []:
++        source = Path(str(item.get("path", "")))
++        if not source.is_file() or source.parent.resolve() != run.resolve():
++            continue
++        target_dir.mkdir(parents=True, exist_ok=True)
++        target = target_dir / source.name
++        if target.exists():
++            target = target_dir / f"{source.stem}.{time.time_ns()}{source.suffix}"
++        shutil.move(str(source), str(target))
++        archived.append(str(target))
++    return archived
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser()
++    parser.add_argument("--run", type=Path, required=True)
++    parser.add_argument("--output", type=Path)
++    parser.add_argument("--expect-exit-code", type=int, choices=(0, 20, 30))
++    parser.add_argument("--expect-attempt-id")
++    parser.add_argument("--archive-stale-markers", action="store_true")
++    args = parser.parse_args()
++
++    run = args.run
++    output = args.output or run / "AUTHORITATIVE_RUN_STATUS.json"
++    report = resolve(run)
++    if args.expect_exit_code is not None:
++        ok = report.get("authoritative_exit_code") == args.expect_exit_code
++        report["checks"]["expected_exit_code"] = ok
++        report["expected_exit_code"] = args.expect_exit_code
++    if args.expect_attempt_id is not None:
++        ok = report.get("attempt_id") == args.expect_attempt_id
++        report["checks"]["expected_attempt_id"] = ok
++        report["expected_attempt_id"] = args.expect_attempt_id
++    report["valid"] = all(report["checks"].values())
++
++    if args.archive_stale_markers and report["valid"]:
++        archived = _archive_stale(run, report)
++        report["archived_stale_markers"] = archived
++        if archived:
++            refreshed = resolve(run)
++            refreshed.update(
++                {
++                    "archived_stale_markers": archived,
++                    "expected_exit_code": report.get("expected_exit_code"),
++                    "expected_attempt_id": report.get("expected_attempt_id"),
++                }
++            )
++            if args.expect_exit_code is not None:
++                refreshed["checks"]["expected_exit_code"] = refreshed.get("authoritative_exit_code") == args.expect_exit_code
++            if args.expect_attempt_id is not None:
++                refreshed["checks"]["expected_attempt_id"] = refreshed.get("attempt_id") == args.expect_attempt_id
++            refreshed["valid"] = all(refreshed["checks"].values())
++            report = refreshed
++
++    _atomic_write_json(output, report)
++    print(json.dumps(report, ensure_ascii=False))
++    return 0 if report["valid"] else 4
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' /mnt/data/ocrap_round2_audit/code/tools/check_v48_16_learning_gates.py /mnt/data/ocrap_round2_audit/OC-RAP-v48.35.2-ENGINEERING-INTEGRITY/tools/check_v48_16_learning_gates.py
+--- a/tools/check_v48_16_learning_gates.py	2026-08-05 16:06:22.000000000 +0000
++++ b/tools/check_v48_16_learning_gates.py	2026-08-05 08:54:43.995191220 +0000
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ """Layered ANCHOR/BRIDGE diagnostic: adaptation, certificate artifacts, Natural gate."""
+ from __future__ import annotations
+-import argparse, json, math
++import argparse, json, math, os, time
+ from pathlib import Path
+ from typing import Any
+ 
+@@ -63,10 +63,29 @@
+         item['calibration_complete']=(root/'calibration'/'CERTIFICATE_CALIBRATION_COMPLETE.json').is_file()
+         report['variants'][variant]=item
+     report['next_commands_present']=(a.run/'NEXT_COMMANDS.txt').is_file()
+-    report['pipeline_failed']=(a.run/'PIPELINE_FAILED.json').is_file()
++    try:
++        from audit_v48_35_run_state import resolve as resolve_v48_35_state
++        authoritative=resolve_v48_35_state(a.run)
++    except Exception as exc:
++        authoritative={'valid':False,'authoritative_exit_code':None,'error':repr(exc)}
++    report['authoritative_state']={
++        'valid':authoritative.get('valid'),
++        'exit_code':authoritative.get('authoritative_exit_code'),
++        'pipeline_valid':authoritative.get('pipeline_valid'),
++        'stale_markers':authoritative.get('stale_markers') or [],
++        'active_contradictions':authoritative.get('active_contradictions') or [],
++    }
++    if authoritative.get('valid') and authoritative.get('authoritative_exit_code') in (0,20,30):
++        report['pipeline_failed']=authoritative.get('authoritative_exit_code') == 30
++    else:
++        report['pipeline_failed']=(a.run/'PIPELINE_FAILED.json').is_file()
+     report['adaptation_failures']=[p.name for p in sorted(a.run.glob('ADAPTATION_FAILED_*.json'))]
+     report['calibration_failed']=(a.run/'CALIBRATION_FAILED.json').is_file()
+     report['gate_failed']=(a.run/'GATE_FAILED.json').is_file()
+-    a.output.parent.mkdir(parents=True,exist_ok=True); a.output.write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n')
++    a.output.parent.mkdir(parents=True,exist_ok=True)
++    tmp=a.output.with_name(f'.{a.output.name}.tmp.{os.getpid()}.{time.time_ns()}')
++    with tmp.open('w',encoding='utf-8') as handle:
++        json.dump(report,handle,ensure_ascii=False,indent=2); handle.write('\n'); handle.flush(); os.fsync(handle.fileno())
++    os.replace(tmp,a.output)
+     print(json.dumps(report,ensure_ascii=False,indent=2)); return 0
+ if __name__=='__main__': raise SystemExit(main())
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' /mnt/data/ocrap_round2_audit/code/tools/package_v48_35_results.py /mnt/data/ocrap_round2_audit/OC-RAP-v48.35.2-ENGINEERING-INTEGRITY/tools/package_v48_35_results.py
+--- a/tools/package_v48_35_results.py	1970-01-01 00:00:00.000000000 +0000
++++ b/tools/package_v48_35_results.py	2026-08-05 08:56:21.285258622 +0000
+@@ -0,0 +1,183 @@
++#!/usr/bin/env python3
++"""Create a fresh, self-auditing v48.35 result ZIP.
++
++The archive is always opened in write mode after deleting any previous target.
++This prevents `zip -r existing.zip ...` from retaining files that no longer
++exist in the run directory, which was the source of the false RC=30 report.
++"""
++from __future__ import annotations
++
++import argparse
++import hashlib
++import json
++import os
++import stat
++import time
++import zipfile
++from pathlib import Path
++from typing import Any
++
++from audit_v48_35_run_state import resolve
++
++
++def sha256_bytes(data: bytes) -> str:
++    return hashlib.sha256(data).hexdigest()
++
++
++def sha256_file(path: Path) -> str:
++    digest = hashlib.sha256()
++    with path.open("rb") as handle:
++        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
++            digest.update(chunk)
++    return digest.hexdigest()
++
++
++def json_bytes(value: Any) -> bytes:
++    return (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
++
++
++def symlink_info(name: str, target: str) -> zipfile.ZipInfo:
++    info = zipfile.ZipInfo(name)
++    info.create_system = 3
++    info.external_attr = (stat.S_IFLNK | 0o777) << 16
++    info.compress_type = zipfile.ZIP_DEFLATED
++    return info
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser()
++    parser.add_argument("--run", type=Path, required=True)
++    parser.add_argument("--output", type=Path, required=True)
++    parser.add_argument("--include-checkpoints", action="store_true")
++    parser.add_argument("--include-status-history", action="store_true")
++    args = parser.parse_args()
++
++    run = args.run.resolve()
++    if not run.is_dir():
++        raise SystemExit(f"run directory does not exist: {run}")
++    state = resolve(run)
++    if not state.get("valid"):
++        print(json.dumps(state, ensure_ascii=False, indent=2))
++        raise SystemExit("refusing to package an inconsistent run state")
++
++    stale_names = {Path(item["path"]).resolve() for item in state.get("stale_markers") or []}
++    excluded: list[dict[str, str]] = []
++    entries: list[dict[str, Any]] = []
++    root_name = run.name
++    output = args.output.resolve()
++    hash_path = output.with_suffix(output.suffix + ".sha256").resolve()
++    output.parent.mkdir(parents=True, exist_ok=True)
++    for generated in (output, hash_path):
++        try:
++            generated.unlink()
++        except FileNotFoundError:
++            pass
++
++    candidates: list[Path] = []
++    for path in sorted(run.rglob("*")):
++        rel = path.relative_to(run)
++        resolved = path.resolve()
++        if resolved in {output, hash_path}:
++            excluded.append({"path": str(rel), "reason": "packaging_output_excluded"})
++            continue
++        if rel.as_posix() in {"AUTHORITATIVE_RUN_STATUS.json", "PACKAGING_MANIFEST.json"}:
++            excluded.append({"path": str(rel), "reason": "generated_packaging_metadata_replaced"})
++            continue
++        if rel.parts and rel.parts[0] == "status_history" and not args.include_status_history:
++            excluded.append({"path": str(rel), "reason": "historical_status_excluded"})
++            continue
++        if path.resolve() in stale_names:
++            excluded.append({"path": str(rel), "reason": "stale_terminal_marker_excluded"})
++            continue
++        if path.is_file() and not args.include_checkpoints and path.suffix.lower() in {".pt", ".pth", ".ckpt"}:
++            excluded.append({"path": str(rel), "reason": "checkpoint_excluded"})
++            continue
++        if path.is_dir() and not path.is_symlink():
++            continue
++        candidates.append(path)
++
++    created_unix = time.time()
++    state_for_archive = dict(state)
++    state_for_archive.update(
++        {
++            "packaged_unix": created_unix,
++            "packaging_version": "v48.35.2-ENGINEERING-INTEGRITY",
++            "stale_markers_excluded_from_archive": [str(p.relative_to(run)) for p in sorted(stale_names) if p.is_relative_to(run)],
++        }
++    )
++
++    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True) as archive:
++        for path in candidates:
++            rel = path.relative_to(run).as_posix()
++            arcname = f"{root_name}/{rel}"
++            if path.is_symlink():
++                target = os.readlink(path)
++                data = target.encode("utf-8")
++                archive.writestr(symlink_info(arcname, target), data)
++                entries.append({"path": rel, "type": "symlink", "target": target, "sha256": sha256_bytes(data), "size": len(data)})
++            else:
++                digest = sha256_file(path)
++                size = path.stat().st_size
++                archive.write(path, arcname)
++                entries.append({"path": rel, "type": "file", "sha256": digest, "size": size})
++
++        state_data = json_bytes(state_for_archive)
++        state_arc = f"{root_name}/AUTHORITATIVE_RUN_STATUS.json"
++        archive.writestr(state_arc, state_data)
++        entries = [entry for entry in entries if entry["path"] != "AUTHORITATIVE_RUN_STATUS.json"]
++        entries.append({"path": "AUTHORITATIVE_RUN_STATUS.json", "type": "generated", "sha256": sha256_bytes(state_data), "size": len(state_data)})
++
++        manifest = {
++            "event": "v48_35_result_package_manifest",
++            "version": "v48.35.2-ENGINEERING-INTEGRITY",
++            "created_unix": created_unix,
++            "source_run": str(run),
++            "archive_root": root_name,
++            "authoritative_exit_code": state.get("authoritative_exit_code"),
++            "pipeline_valid": state.get("pipeline_valid"),
++            "include_checkpoints": args.include_checkpoints,
++            "include_status_history": args.include_status_history,
++            "entry_count": len(entries),
++            "entries": entries,
++            "excluded": excluded,
++            "test_roots_read": False,
++        }
++        manifest_data = json_bytes(manifest)
++        archive.writestr(f"{root_name}/PACKAGING_MANIFEST.json", manifest_data)
++
++    # Round-trip integrity and duplicate-name audit.
++    with zipfile.ZipFile(output, "r") as archive:
++        names = archive.namelist()
++        duplicates = sorted({name for name in names if names.count(name) > 1})
++        if duplicates:
++            raise SystemExit(f"duplicate ZIP entries: {duplicates[:10]}")
++        archived_state = json.loads(archive.read(f"{root_name}/AUTHORITATIVE_RUN_STATUS.json"))
++        if not archived_state.get("valid") or archived_state.get("authoritative_exit_code") != state.get("authoritative_exit_code"):
++            raise SystemExit("authoritative state changed during packaging")
++        for stale in state.get("stale_markers") or []:
++            stale_arc = f"{root_name}/{Path(stale['path']).name}"
++            if stale_arc in names:
++                raise SystemExit(f"stale marker leaked into package: {stale_arc}")
++        archived_manifest = json.loads(archive.read(f"{root_name}/PACKAGING_MANIFEST.json"))
++        for entry in archived_manifest["entries"]:
++            arcname = f"{root_name}/{entry['path']}"
++            payload = archive.read(arcname)
++            if sha256_bytes(payload) != entry["sha256"]:
++                raise SystemExit(f"round-trip hash mismatch: {arcname}")
++
++    zip_hash = sha256_file(output)
++    hash_path.write_text(f"{zip_hash}  {output.name}\n", encoding="utf-8")
++    result = {
++        "output": str(output),
++        "sha256": zip_hash,
++        "sha256_file": str(hash_path),
++        "authoritative_exit_code": state.get("authoritative_exit_code"),
++        "pipeline_valid": state.get("pipeline_valid"),
++        "stale_markers_excluded": [Path(item["path"]).name for item in state.get("stale_markers") or []],
++    }
++    print(json.dumps(result, ensure_ascii=False, indent=2))
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff -ruN '--exclude=__pycache__' '--exclude=.pytest_cache' /mnt/data/ocrap_round2_audit/code/tools/summarize_v48_34_gate_failure.py /mnt/data/ocrap_round2_audit/OC-RAP-v48.35.2-ENGINEERING-INTEGRITY/tools/summarize_v48_34_gate_failure.py
+--- a/tools/summarize_v48_34_gate_failure.py	2026-08-05 16:06:24.000000000 +0000
++++ b/tools/summarize_v48_34_gate_failure.py	2026-08-05 08:24:34.955906602 +0000
+@@ -1,88 +1,164 @@
+ #!/usr/bin/env python3
+ from __future__ import annotations
+-import argparse, json
++
++import argparse
++import json
++import os
++import time
+ from pathlib import Path
+ from typing import Any
+ 
+ 
+ def _read(path: Path) -> dict[str, Any]:
+-    with path.open(encoding='utf-8') as f:
+-        data=json.load(f)
+-    if not isinstance(data,dict): raise ValueError(path)
++    with path.open(encoding="utf-8") as handle:
++        data = json.load(handle)
++    if not isinstance(data, dict):
++        raise ValueError(f"{path}: top-level JSON is not an object")
+     return data
+ 
+ 
++def _atomic_write(path: Path, value: dict[str, Any]) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}.{time.time_ns()}")
++    try:
++        with tmp.open("w", encoding="utf-8") as handle:
++            json.dump(value, handle, ensure_ascii=False, indent=2)
++            handle.write("\n")
++            handle.flush()
++            os.fsync(handle.fileno())
++        os.replace(tmp, path)
++    finally:
++        try:
++            tmp.unlink()
++        except FileNotFoundError:
++            pass
++
++
+ def _nearest(doc: dict[str, Any]) -> dict[str, Any] | None:
+-    rows=doc.get('near_miss_frontier') or []
+-    if not rows: return None
+-    return min(rows,key=lambda r: float(r.get('constraint_deficit',1e9)))
++    rows = doc.get("near_miss_frontier") or []
++    if not rows:
++        return None
++    return min(rows, key=lambda row: float(row.get("constraint_deficit", 1e9)))
++
++
++def _development_summary(calibration: Path, regime: str) -> tuple[dict[str, Any], str, dict[str, Any] | None]:
++    shared = calibration / "dev_frozen_shared_rule_v48.json"
++    if shared.is_file():
++        doc = _read(shared)
++        fit = doc.get("fit") if isinstance(doc.get("fit"), dict) else {}
++        by_stratum = fit.get("by_stratum") if isinstance(fit.get("by_stratum"), dict) else {}
++        diagnostic = {
++            "shared_rule": True,
++            "rule": doc.get("rule") or doc.get("diagnostic_fit_rule") or fit.get("rule"),
++            "valid": bool(doc.get("valid_for_deployment", doc.get("valid", False))),
++            "constraint_failures": fit.get("constraint_failures"),
++            "constraint_deficit": fit.get("constraint_deficit"),
++            "stratum": by_stratum.get(regime),
++            "pooled": fit.get("pooled"),
++        }
++        return doc, "shared", diagnostic
++
++    legacy = calibration / f"dev_frozen_rule_{regime}_v48.json"
++    if legacy.is_file():
++        doc = _read(legacy)
++        return doc, "legacy_regime_specific", _nearest(doc)
++    raise FileNotFoundError(f"missing shared and legacy development rule under {calibration}")
+ 
+ 
+ def main() -> int:
+-    ap=argparse.ArgumentParser()
+-    ap.add_argument('--run',type=Path,required=True)
+-    ap.add_argument('--output',type=Path,required=True)
+-    args=ap.parse_args()
+-    variants={}
+-    overall=[]
+-    for variant in ('balanced','precision'):
+-        cal=args.run/'candidates'/variant/'calibration'
+-        if not cal.exists(): continue
+-        regimes={}
+-        for regime in ('near','contact'):
+-            cert=_read(cal/f'direct_value_risk_{regime}_v48.json')
+-            dev=_read(cal/f'dev_frozen_rule_{regime}_v48.json')
+-            oracle=((cert.get('proposal_constrained_oracle_gate') or {}).get('verify') or {})
+-            nearest=_nearest(dev)
+-            kind=str(cert.get('rejection_kind') or '')
+-            layer=(
+-                'proposal_or_contract' if not bool(oracle.get('feasible',False)) else
+-                'development_rule_fit' if not bool(dev.get('valid_for_deployment',False)) else
+-                'certificate_generalization' if not bool(cert.get('valid_for_deployment',False)) else
+-                'passed'
++    parser = argparse.ArgumentParser()
++    parser.add_argument("--run", type=Path, required=True)
++    parser.add_argument("--output", type=Path, required=True)
++    args = parser.parse_args()
++
++    variants: dict[str, Any] = {}
++    overall: list[str] = []
++    errors: list[str] = []
++    shared_rule_modes: set[str] = set()
++    for variant in ("balanced", "precision"):
++        calibration = args.run / "candidates" / variant / "calibration"
++        if not calibration.exists():
++            continue
++        regimes: dict[str, Any] = {}
++        for regime in ("near", "contact"):
++            try:
++                certificate = _read(calibration / f"direct_value_risk_{regime}_v48.json")
++                development, rule_mode, development_nearest = _development_summary(calibration, regime)
++            except Exception as exc:
++                errors.append(f"{variant}/{regime}: {exc!r}")
++                regimes[regime] = {"artifact_error": repr(exc)}
++                overall.append("artifact_or_protocol")
++                continue
++            shared_rule_modes.add(rule_mode)
++            oracle = ((certificate.get("proposal_constrained_oracle_gate") or {}).get("verify") or {})
++            development_valid = bool(development.get("valid_for_deployment", development.get("valid", False)))
++            layer = (
++                "proposal_or_contract"
++                if not bool(oracle.get("feasible", False))
++                else "development_rule_fit"
++                if not development_valid
++                else "certificate_generalization"
++                if not bool(certificate.get("valid_for_deployment", False))
++                else "passed"
+             )
+-            regimes[regime]={
+-                'failure_layer':layer,
+-                'rejection_kind':kind,
+-                'proposal_oracle_feasible':bool(oracle.get('feasible',False)),
+-                'proposal_safe_positive_groups':oracle.get('proposal_safe_positive_groups'),
+-                'development_rule_valid':bool(dev.get('valid_for_deployment',False)),
+-                'development_nearest_rule':nearest,
+-                'certificate_verify':cert.get('verify'),
+-                'candidate_positive_auc':cert.get('candidate_positive_auc'),
+-                'legacy_evidence_only_safe_positive_auc':cert.get('legacy_evidence_only_top1_safe_positive_auc', cert.get('proposal_evidence_top1_safe_positive_auc')),
+-                'legacy_evidence_only_harm_auc':cert.get('proposal_evidence_top1_harm_auc'),
+-                'legacy_evidence_only_correlation':cert.get('legacy_evidence_only_top1_correlation', cert.get('proposal_evidence_top1_correlation')),
+-                'exact_eligible_safe_positive_auc':cert.get('proposal_exact_eligible_top1_safe_positive_auc'),
+-                'exact_eligible_harm_auc':cert.get('proposal_exact_eligible_top1_harm_auc'),
+-                'exact_eligible_correlation':cert.get('proposal_exact_eligible_top1_correlation'),
+-                'exact_eligible_selected_count':cert.get('proposal_exact_eligible_selected_count'),
+-                'exact_eligible_abstention_rate':cert.get('proposal_exact_eligible_abstention_rate'),
++            regimes[regime] = {
++                "failure_layer": layer,
++                "rejection_kind": str(certificate.get("rejection_kind") or ""),
++                "development_rule_mode": rule_mode,
++                "proposal_oracle_feasible": bool(oracle.get("feasible", False)),
++                "proposal_safe_positive_groups": oracle.get("proposal_safe_positive_groups"),
++                "development_rule_valid": development_valid,
++                "development_nearest_rule": development_nearest,
++                "certificate_verify": certificate.get("verify"),
++                "candidate_positive_auc": certificate.get("candidate_positive_auc"),
++                "legacy_evidence_only_safe_positive_auc": certificate.get(
++                    "legacy_evidence_only_top1_safe_positive_auc",
++                    certificate.get("proposal_evidence_top1_safe_positive_auc"),
++                ),
++                "legacy_evidence_only_harm_auc": certificate.get("proposal_evidence_top1_harm_auc"),
++                "legacy_evidence_only_correlation": certificate.get(
++                    "legacy_evidence_only_top1_correlation",
++                    certificate.get("proposal_evidence_top1_correlation"),
++                ),
++                "exact_eligible_safe_positive_auc": certificate.get("proposal_exact_eligible_top1_safe_positive_auc"),
++                "exact_eligible_harm_auc": certificate.get("proposal_exact_eligible_top1_harm_auc"),
++                "exact_eligible_correlation": certificate.get("proposal_exact_eligible_top1_correlation"),
++                "exact_eligible_selected_count": certificate.get("proposal_exact_eligible_selected_count"),
++                "exact_eligible_abstention_rate": certificate.get("proposal_exact_eligible_abstention_rate"),
+             }
+             overall.append(layer)
+-        variants[variant]=regimes
+-    result={
+-        'event':'v48_34_gate_failure_decomposition',
+-        'run':str(args.run),
+-        'gate_passed':bool(overall) and all(x=='passed' for x in overall),
+-        'dominant_failure_layer':(
+-            'proposal_or_contract' if 'proposal_or_contract' in overall else
+-            'development_rule_fit' if 'development_rule_fit' in overall else
+-            'certificate_generalization' if 'certificate_generalization' in overall else
+-            'passed' if overall else 'missing_results'
++        variants[variant] = regimes
++
++    artifact_valid = bool(overall) and "artifact_or_protocol" not in overall and not errors
++    result = {
++        "event": "v48_35_gate_failure_decomposition",
++        "version": "v48.35.2-ENGINEERING-INTEGRITY",
++        "created_unix": time.time(),
++        "run": str(args.run),
++        "artifact_valid": artifact_valid,
++        "gate_passed": artifact_valid and all(layer == "passed" for layer in overall),
++        "dominant_failure_layer": (
++            "artifact_or_protocol"
++            if "artifact_or_protocol" in overall or errors
++            else "proposal_or_contract"
++            if "proposal_or_contract" in overall
++            else "development_rule_fit"
++            if "development_rule_fit" in overall
++            else "certificate_generalization"
++            if "certificate_generalization" in overall
++            else "passed"
++            if overall
++            else "missing_results"
+         ),
+-        'variants':variants,
+-        'interpretation':{
+-            'proposal_or_contract':'Frozen proposal/label/gate contract is not mathematically feasible.',
+-            'development_rule_fit':'Oracle support exists, but no threshold rule satisfies adaptation-dev joint safety/coverage constraints.',
+-            'certificate_generalization':'A dev-valid frozen rule failed independent certificate verification.',
+-            'passed':'All registered regimes passed.',
+-        },
+-        'test_roots_read':False,
++        "development_rule_modes": sorted(shared_rule_modes),
++        "variants": variants,
++        "errors": errors,
++        "test_roots_read": False,
+     }
+-    args.output.parent.mkdir(parents=True,exist_ok=True)
+-    args.output.write_text(json.dumps(result,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+-    print(json.dumps(result,ensure_ascii=False))
+-    return 0
++    _atomic_write(args.output, result)
++    print(json.dumps(result, ensure_ascii=False))
++    return 0 if artifact_valid else 4
++
+ 
+-if __name__=='__main__': raise SystemExit(main())
++if __name__ == "__main__":
++    raise SystemExit(main())
