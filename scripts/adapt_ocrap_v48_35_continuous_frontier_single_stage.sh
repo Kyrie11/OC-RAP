@@ -103,6 +103,8 @@ cat > "$RUN/STAGE_ARCHITECTURE.json" <<JSON
   "component_harm_count": $COMPONENT_COUNT,
   "component_reliability": "${EVIDENCE_COMPONENT_RELIABILITY:-}",
   "semantic_frontier_eligibility_metric": true,
+  "exact_deployment_eligibility_metric": true,
+  "exact_deployment_eligibility_provenance": "checkpoint_cfg.training.direct_policy_metric_exact_eligibility",
   "final_thresholds_fit_by_single_shared_rule": true,
   "train_metric_uses_final_fitted_thresholds": false,
   "setwise_admission_weight": $SETWISE_WEIGHT,

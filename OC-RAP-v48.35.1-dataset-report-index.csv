@@ -1,0 +1,13 @@
+﻿split,regime,file,num_samples,num_groups,num_scenes,note
+train,safe,train_safe.json,20000,,1171,source report retained; no dataset reconstruction proposed in this hotfix
+train,near-contact,train_near_contact.json,13324,,600,source report retained; no dataset reconstruction proposed in this hotfix
+train,contact,train_contact.json,16790,,500,source report retained; no dataset reconstruction proposed in this hotfix
+val,safe,val_safe.json,2328,,132,source report retained; no dataset reconstruction proposed in this hotfix
+val,near-contact,val_near_contact.json,3445,,176,source report retained; no dataset reconstruction proposed in this hotfix
+val,contact,val_contact.json,6477,,211,source report retained; no dataset reconstruction proposed in this hotfix
+calibration,safe,calibration_safe.json,2544,,135,source report retained; no dataset reconstruction proposed in this hotfix
+calibration,near-contact,calibration_near_contact.json,6039,,316,source report retained; no dataset reconstruction proposed in this hotfix
+calibration,contact,calibration_contact.json,16843,,543,source report retained; no dataset reconstruction proposed in this hotfix
+test,safe,test_safe.json,3216,,175,source report retained; no dataset reconstruction proposed in this hotfix
+test,near-contact,test_near_contact.json,4723,,250,source report retained; no dataset reconstruction proposed in this hotfix
+test,contact,test_contact.json,6687,,209,source report retained; no dataset reconstruction proposed in this hotfix

@@ -1,0 +1,913 @@
+diff --git a/ALGORITHM_CHANGELOG.md b/ALGORITHM_CHANGELOG.md
+index edd2b13..659cc0b 100644
+--- a/ALGORITHM_CHANGELOG.md
++++ b/ALGORITHM_CHANGELOG.md
+@@ -2504,3 +2504,85 @@ The design isolates representation and admission geometry without creating Near/
+ - `RC=30`: engineering, provenance, cache, checkpoint, script, artifact or protocol failure; no algorithm comparison is valid.
+ 
+ Local CPU validation checks code and contracts only. WOMD/Waymax and the user's A30 environment are unavailable locally, so v48.35 is not claimed to obtain `RC=0` or publication-ready closed-loop gains before the registered experiments are run.
++
++## v48.35.1 — RC30-TRAINING-CONTRACT-HOTFIX
++
++### Scope and attribution
++
++This release is an engineering-only hotfix for the uploaded v48.35 run. It does **not** change the OC-RAP model, candidate set, training objective, checkpoint-selection metric, shared-rule fitter, certificate thresholds, gate, datasets, or Safe/Near/Contact semantics. The algorithm remains one network, one continuous physical representation, one non-compensatory frontier, and one shared deployment rule; Near and Contact remain audit strata only.
++
++The uploaded run stopped with:
++
++```text
++failure_stage=training_contract
++raw_exit_code=4
++normalized_exit_code=30
++balanced_adaptation_rc=0
++precision_adaptation_rc=0
++certificate_executed=false
++gate_evaluated=false
++```
++
++The sole failed check was `exact_eligibility_all_stages`. The trainer did enable
++`POLICY_METRIC_EXACT_ELIGIBILITY=true`, which was persisted as
++`cfg.training.direct_policy_metric_exact_eligibility=true` in every checkpoint, but
++`adapt_ocrap_v48_35_continuous_frontier_single_stage.sh` wrote only the older
++`semantic_frontier_eligibility_metric` metadata key. The training-contract checker
++looked only for the never-written `exact_deployment_eligibility_metric` key. This
++metadata/checker mismatch converted a completed adaptation into RC=30 and prevented
++all certificate execution.
++
++### Engineering changes
++
++1. New stage metadata writes both:
++   - `semantic_frontier_eligibility_metric=true`;
++   - `exact_deployment_eligibility_metric=true`, with checkpoint-config provenance.
++2. `check_v48_35_training_contract.py` now verifies the actual exact-eligibility bit
++   in the factor, identity, and final checkpoint configs. A legacy v48.35 stage file
++   is accepted only when its semantic metadata is present **and** every trusted
++   checkpoint independently proves exact eligibility. Removing the check or trusting
++   metadata alone is not allowed.
++3. Added `check_v48_35_resume_contract.py`. No-retraining reuse is authorized only
++   for the exact known signature: training-contract raw RC=4 normalized to 30, both
++   adaptations RC=0, no certificate/gate/test access, unchanged source/protocol,
++   matching checkpoint/support hashes, valid stage transfer, unified physical
++   semantics, and exact eligibility in every checkpoint config.
++4. Added `RESUME_AFTER_ADAPTATION=1` to the v48.35 controller. Authorization occurs
++   before stale status cleanup. A valid resume skips both GPU adaptations, refuses
++   index rebuilds, reruns protocol/index/model/training contracts, and then executes
++   the original shared-rule certificate path.
++5. Added `repair_v48_35_rc30_training_contract_with_v48_35_1.sh` as the operator-facing
++   no-retraining repair wrapper.
++6. Completion metadata records `adaptation_reused_without_retraining` and the resume
++   contract path. Different RC=30 signatures, algorithmic RC=20, changed data/index
++   contracts, changed checkpoint bytes, or prior certificate artifacts are rejected.
++7. Added regression tests for new metadata, checkpoint-proven legacy repair,
++   rejection when one checkpoint disables exact eligibility, resume ordering before
++   cleanup, no-retraining behavior, and index fail-closed behavior.
++8. Tightened legacy compatibility: an absent new metadata key may be repaired from
++   checkpoint evidence, but an explicitly false new key is treated as a contradiction
++   and is rejected even when the old semantic key is true.
++9. The resume contract additionally checks the final checkpoint hash against the
++   controller-level completion record and refuses any pre-existing calibration/GATE
++   artifacts that could indicate prior certificate access.
++10. The repair wrapper now implements `--help`, rejects positional arguments, and
++    cannot accidentally interpret a help request as an experiment launch.
++
++### Interpretation rule
++
++The uploaded v48.35 result is not an algorithm result because the certificate never
++ran. Training diagnostics may be used only as debugging signals; they cannot establish
++Near/Contact gate effectiveness. The correct next action is to reuse the byte-identical
++adaptation checkpoints through the v48.35.1 resume path. Only a resulting valid RC=0
++or RC=20 may be used for algorithm attribution. No additional algorithm modification
++is introduced before that certificate evidence exists.
++
++### Local validation for v48.35.1
++
++- 17 focused v48.35/v48.35.1 tests passed.
++- 174 supported release-matrix tests passed with 6 non-fatal PyTorch warnings.
++- 57 shell scripts passed `bash -n`.
++- `python -m compileall -q src tools tests` passed.
++- The continuous-frontier contract preflight passed all finite-gradient, physical-relative input-isolation, non-compensation, no-regime-ID, and one-shared-rule checks.
++- The uploaded result archive does not contain checkpoint `.pt` bytes. Therefore the no-retraining authorization cannot be executed against the archive alone; it is intentionally rechecked on the original experiment machine, where the registered checkpoints must still exist and match their stored SHA256 values.
++
+diff --git a/scripts/adapt_ocrap_v48_35_continuous_frontier_single_stage.sh b/scripts/adapt_ocrap_v48_35_continuous_frontier_single_stage.sh
+index 5288398..c7fabd8 100644
+--- a/scripts/adapt_ocrap_v48_35_continuous_frontier_single_stage.sh
++++ b/scripts/adapt_ocrap_v48_35_continuous_frontier_single_stage.sh
+@@ -103,6 +103,8 @@ cat > "$RUN/STAGE_ARCHITECTURE.json" <<JSON
+   "component_harm_count": $COMPONENT_COUNT,
+   "component_reliability": "${EVIDENCE_COMPONENT_RELIABILITY:-}",
+   "semantic_frontier_eligibility_metric": true,
++  "exact_deployment_eligibility_metric": true,
++  "exact_deployment_eligibility_provenance": "checkpoint_cfg.training.direct_policy_metric_exact_eligibility",
+   "final_thresholds_fit_by_single_shared_rule": true,
+   "train_metric_uses_final_fitted_thresholds": false,
+   "setwise_admission_weight": $SETWISE_WEIGHT,
+diff --git a/scripts/repair_v48_35_rc30_training_contract_with_v48_35_1.sh b/scripts/repair_v48_35_rc30_training_contract_with_v48_35_1.sh
+new file mode 100755
+index 0000000..236801c
+--- /dev/null
++++ b/scripts/repair_v48_35_rc30_training_contract_with_v48_35_1.sh
+@@ -0,0 +1,35 @@
++#!/usr/bin/env bash
++set -Eeuo pipefail
++
++if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
++  cat <<'EOF'
++Usage: configure OUTPUTDIR/OCRAP_ROOT/SOURCE_RUN/PROTOCOL_ROOT/CAL_SAFE/GPU0/GPU1, then run:
++  bash scripts/repair_v48_35_rc30_training_contract_with_v48_35_1.sh
++
++This command validates the exact known RC=30 signature and reuses existing adaptation checkpoints.
++It never retrains and rejects any positional arguments or changed checkpoint/index contracts.
++EOF
++  exit 0
++fi
++if (( $# != 0 )); then
++  echo "unexpected arguments; use --help" >&2
++  exit 2
++fi
++
++# Repair only the known v48.35 stale training-contract metadata-key failure.
++# This wrapper never launches adaptation training. The controller first validates
++# the original RC=30 signature and every checkpoint/config/hash, then reruns the
++# protocol/index/model/training contracts and the registered certificate.
++REPO="${OCRAP_REPO:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
++cd "$REPO"
++export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"
++
++OUTPUTDIR="${OUTPUTDIR:-runs/ocrap_v48_35_continuous_frontier_dedicated_4835}"
++export OUTPUTDIR
++
++# Rebuilding either index would invalidate the byte-identical checkpoint reuse
++# contract. The resumed controller therefore requires the original audited files.
++unset REBUILD_ADAPT_INDEX REBUILD_ADAPT_DEV_INDEX
++export RESUME_AFTER_ADAPTATION=1
++
++bash scripts/run_v48_35_continuous_frontier_dedicated.sh
+diff --git a/scripts/run_v48_35_continuous_frontier_dedicated.sh b/scripts/run_v48_35_continuous_frontier_dedicated.sh
+old mode 100644
+new mode 100755
+index a1c1bc4..47c556e
+--- a/scripts/run_v48_35_continuous_frontier_dedicated.sh
++++ b/scripts/run_v48_35_continuous_frontier_dedicated.sh
+@@ -18,6 +18,7 @@ CAL_SAFE="${CAL_SAFE:-$OCRAP_ROOT/calibration_safe}"
+ GPU0="${GPU0:-0}"
+ GPU1="${GPU1:-1}"
+ ALLOW_PARTIAL_VARIANTS="${ALLOW_PARTIAL_VARIANTS:-0}"
++RESUME_AFTER_ADAPTATION="${RESUME_AFTER_ADAPTATION:-0}"
+ PROPOSAL_TOP_K="${PROPOSAL_TOP_K:-5}"
+ EVIDENCE_CONTEXT_SOURCE="${EVIDENCE_CALIBRATOR_CONTEXT_SOURCE:-physical_relative}"
+ ADMISSION_PRIOR_MODE="${EVIDENCE_ADMISSION_PRIOR_MODE:-frontier_capped_slack}"
+@@ -34,13 +35,9 @@ COMPONENT_HARM_HARD_TOLERANCE="${COMPONENT_HARM_HARD_TOLERANCE:-0.05}"
+ COMPONENT_HARM_PROXY_TOLERANCE="${COMPONENT_HARM_PROXY_TOLERANCE:-0.05}"
+ 
+ mkdir -p "$OUTPUTDIR/logs"
+-# Status files are run-local state, not cache. Clear them before every controller
+-# execution so a resumed run cannot inherit a stale failure or authorization.
+-rm -f "$OUTPUTDIR"/ADAPTATION_FAILED_*.json "$OUTPUTDIR"/FAILURE_SIGNATURE_*.json "$OUTPUTDIR/PIPELINE_FAILED.json" \
+-      "$OUTPUTDIR/V48_35_COMPLETE.json" "$OUTPUTDIR/NEXT_COMMANDS.txt" \
+-      "$OUTPUTDIR/NEXT_COMMANDS_STATUS.json" "$OUTPUTDIR/NEXT_COMMANDS_BLOCKED.json" \
+-      "$OUTPUTDIR/GATE_FAILED.json" "$OUTPUTDIR/CALIBRATION_FAILED.json" \
+-      "$OUTPUTDIR/chosen_base_run_dedicated.txt"
++# A no-retraining resume must inspect the original failure state before any
++# status cleanup. The authorization is narrow and validates checkpoint bytes,
++# checkpoint config, source/protocol identity, and absence of certificate access.
+ TRAIN_NEAR="$PROTOCOL_ROOT/evidence_adapt_train_near_contact"
+ TRAIN_CONTACT="$PROTOCOL_ROOT/evidence_adapt_train_contact"
+ DEV_NEAR="$PROTOCOL_ROOT/evidence_adapt_dev_near_contact"
+@@ -94,6 +91,29 @@ blocked={'event':'v48_35_next_commands_blocked','created_unix':time.time(),
+ (root/'NEXT_COMMANDS_STATUS.json').write_text(json.dumps(blocked,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+ PY_FAILURE
+ }
++
++if [[ "$RESUME_AFTER_ADAPTATION" == 1 ]]; then
++  set +e
++  python tools/check_v48_35_resume_contract.py \
++    --run "$OUTPUTDIR" --output "$OUTPUTDIR/V48_35_RESUME_CONTRACT.json" \
++    --expect-source-run "$SOURCE_RUN" --expect-protocol-root "$PROTOCOL_ROOT" \
++    >"$OUTPUTDIR/logs/resume_contract.log" 2>&1
++  resume_contract_rc=$?
++  set -e
++  if [[ "$resume_contract_rc" != 0 ]]; then
++    echo "v48.35.1 resume refused; inspect $OUTPUTDIR/V48_35_RESUME_CONTRACT.json" >&2
++    exit 30
++  fi
++fi
++
++# Status files are run-local state, not cache. Clear them only after an optional
++# resume authorization has captured and validated the previous failure state.
++rm -f "$OUTPUTDIR"/ADAPTATION_FAILED_*.json "$OUTPUTDIR"/FAILURE_SIGNATURE_*.json "$OUTPUTDIR/PIPELINE_FAILED.json" \
++      "$OUTPUTDIR/V48_35_COMPLETE.json" "$OUTPUTDIR/NEXT_COMMANDS.txt" \
++      "$OUTPUTDIR/NEXT_COMMANDS_STATUS.json" "$OUTPUTDIR/NEXT_COMMANDS_BLOCKED.json" \
++      "$OUTPUTDIR/GATE_FAILED.json" "$OUTPUTDIR/CALIBRATION_FAILED.json" \
++      "$OUTPUTDIR/chosen_base_run_dedicated.txt"
++
+ set +e
+ python tools/audit_dedicated_protocol_v48_16.py \
+   --protocol-root "$PROTOCOL_ROOT" \
+@@ -165,10 +185,18 @@ if [[ "$rebuild_index" != 1 && -f "$GROUP_INDEX" && -f "$GROUP_SUMMARY" ]]; then
+   contract_rc=$?
+   set -e
+   if [[ "$contract_rc" != 0 ]]; then
++    if [[ "$RESUME_AFTER_ADAPTATION" == 1 ]]; then
++      write_pipeline_failure resume_training_index_contract "$contract_rc" "$OUTPUTDIR/SUPPORT_INDEX_CONTRACT.json" 0 0
++      exit 30
++    fi
+     echo "teacher-index contract changed; rebuilding the index" | tee -a "$OUTPUTDIR/logs/check_teacher_index_contract.log"
+     rebuild_index=1
+   fi
+ else
++  if [[ "$RESUME_AFTER_ADAPTATION" == 1 ]]; then
++    write_pipeline_failure resume_training_index_missing 30 "resume requires the byte-identical adaptation training index" 0 0
++    exit 30
++  fi
+   rebuild_index=1
+ fi
+ 
+@@ -230,8 +258,18 @@ if [[ "$rebuild_val_index" != 1 && -f "$VAL_GROUP_INDEX" && -f "$VAL_GROUP_SUMMA
+     >"$OUTPUTDIR/logs/check_dev_teacher_index_contract.log" 2>&1
+   val_contract_rc=$?
+   set -e
+-  [[ "$val_contract_rc" == 0 ]] || rebuild_val_index=1
++  if [[ "$val_contract_rc" != 0 ]]; then
++    if [[ "$RESUME_AFTER_ADAPTATION" == 1 ]]; then
++      write_pipeline_failure resume_validation_index_contract "$val_contract_rc" "$OUTPUTDIR/VAL_SUPPORT_INDEX_CONTRACT.json" 0 0
++      exit 30
++    fi
++    rebuild_val_index=1
++  fi
+ else
++  if [[ "$RESUME_AFTER_ADAPTATION" == 1 ]]; then
++    write_pipeline_failure resume_validation_index_missing 30 "resume requires the byte-identical adaptation-dev index" 0 0
++    exit 30
++  fi
+   rebuild_val_index=1
+ fi
+ if [[ "$rebuild_val_index" == 1 ]]; then
+@@ -337,13 +375,18 @@ PY_ADAPT_FAIL
+   return "$rc"
+ }
+ 
+-run_variant balanced "$GPU0" & p0=$!
+-run_variant precision "$GPU1" & p1=$!
+-set +e
+-wait "$p0"; s0=$?
+-wait "$p1"; s1=$?
+-set -e
+-printf 'balanced=%s precision=%s\n' "$s0" "$s1" | tee "$OUTPUTDIR/logs/adaptation_status.log"
++if [[ "$RESUME_AFTER_ADAPTATION" == 1 ]]; then
++  s0=0; s1=0
++  printf 'balanced=0 precision=0 resume_after_adaptation=1 retraining=0\n' | tee "$OUTPUTDIR/logs/adaptation_status.log"
++else
++  run_variant balanced "$GPU0" & p0=$!
++  run_variant precision "$GPU1" & p1=$!
++  set +e
++  wait "$p0"; s0=$?
++  wait "$p1"; s1=$?
++  set -e
++  printf 'balanced=%s precision=%s resume_after_adaptation=0 retraining=1\n' "$s0" "$s1" | tee "$OUTPUTDIR/logs/adaptation_status.log"
++fi
+ 
+ if [[ "$s0" != 0 && "$s1" != 0 ]]; then
+   write_pipeline_failure adaptation 30 "both variants failed; inspect FAILURE_SIGNATURE_balanced.json and FAILURE_SIGNATURE_precision.json" "$s0" "$s1"
+@@ -416,10 +459,10 @@ if [[ "$cert_rc" == 30 ]]; then
+ fi
+ 
+ set +e
+-python - "$OUTPUTDIR" "$PROTOCOL_ROOT" "$SOURCE_RUN" "$raw_cert_rc" "$cert_rc" <<'PY'
++python - "$OUTPUTDIR" "$PROTOCOL_ROOT" "$SOURCE_RUN" "$raw_cert_rc" "$cert_rc" "$RESUME_AFTER_ADAPTATION" <<'PY'
+ import hashlib,json,pathlib,sys,time
+ root=pathlib.Path(sys.argv[1]); protocol=pathlib.Path(sys.argv[2]); source=pathlib.Path(sys.argv[3])
+-raw_rc=int(sys.argv[4]); rc=int(sys.argv[5]); variants={}
++raw_rc=int(sys.argv[4]); rc=int(sys.argv[5]); resumed=sys.argv[6] == '1'; variants={}
+ for name in ('balanced','precision'):
+     p=root/'candidates'/name/'model_v48_trac_sr'/'best.pt'
+     if p.is_file(): variants[name]={'checkpoint':str(p),'sha256':hashlib.sha256(p.read_bytes()).hexdigest()}
+@@ -432,7 +475,9 @@ doc={'event':'v48_35_continuous_frontier_controller_complete','created_unix':tim
+      'source_run':str(source),'protocol_root':str(protocol),'variants':variants,
+      'raw_certificate_exit_code':raw_rc,'certificate_exit_code':rc,'pipeline_exit_code':rc,
+      'certificate_executed':True,'gate_evaluated':True,'gate_passed':(rc==0 and next_exists),
+-     'next_commands_generated':next_exists,'pipeline_valid':True,'test_roots_read':False}
++     'next_commands_generated':next_exists,'pipeline_valid':True,
++     'adaptation_reused_without_retraining':resumed,'resume_contract':str(root/'V48_35_RESUME_CONTRACT.json') if resumed else None,
++     'test_roots_read':False}
+ (root/'V48_35_COMPLETE.json').write_text(json.dumps(doc,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+ PY
+ completion_rc=$?
+diff --git a/tests/test_v48_35_1_rc30_training_contract_hotfix.py b/tests/test_v48_35_1_rc30_training_contract_hotfix.py
+new file mode 100644
+index 0000000..96c0e93
+--- /dev/null
++++ b/tests/test_v48_35_1_rc30_training_contract_hotfix.py
+@@ -0,0 +1,250 @@
++from __future__ import annotations
++
++import hashlib
++import importlib.util
++import json
++import os
++import subprocess
++import sys
++from pathlib import Path
++
++import torch
++
++ROOT = Path(__file__).resolve().parents[1]
++
++
++def _run(*args: str) -> subprocess.CompletedProcess[str]:
++    env = dict(os.environ)
++    env["PYTHONPATH"] = str(ROOT / "src") + os.pathsep + env.get("PYTHONPATH", "")
++    return subprocess.run(args, cwd=ROOT, env=env, text=True, capture_output=True, check=False)
++
++
++def _load_training_contract_module():
++    path = ROOT / "tools" / "check_v48_35_training_contract.py"
++    spec = importlib.util.spec_from_file_location("v4835_training_contract", path)
++    assert spec and spec.loader
++    module = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(module)
++    return module
++
++
++def _sha(path: Path) -> str:
++    return hashlib.sha256(path.read_bytes()).hexdigest()
++
++
++def _write_json(path: Path, value: dict) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
++
++
++def _write_checkpoint(path: Path, *, exact: bool, tag: str) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    torch.save(
++        {
++            "cfg": {
++                "training": {
++                    "direct_policy_metric_exact_eligibility": exact,
++                    "direct_policy_metric_risk_source": "ordinal_evidence",
++                    "direct_policy_metric_proposal_top_k": 5,
++                    "direct_policy_metric_evidence_rerank_top_k": True,
++                }
++            },
++            "tag": tag,
++        },
++        path,
++    )
++
++
++def _legacy_architecture() -> dict:
++    return {
++        "semantic_frontier_eligibility_metric": True,
++        "regime_id_exposed_to_evidence_model": False,
++        "context_source": "physical_relative",
++        "noncompensatory_frontier_cap": True,
++        "shared_deployment_rule_required": True,
++        "test_roots_read": False,
++    }
++
++
++def _make_resume_fixture(root: Path, *, precision_exact: bool = True) -> None:
++    _write_json(
++        root / "PIPELINE_FAILED.json",
++        {
++            "event": "v48_35_pipeline_failed",
++            "stage": "training_contract",
++            "raw_exit_code": 4,
++            "normalized_exit_code": 30,
++            "adaptation_exit_codes": {"balanced": 0, "precision": 0},
++            "certificate_executed": False,
++            "gate_evaluated": False,
++            "test_roots_read": False,
++        },
++    )
++    completion_doc = {
++        "event": "v48_35_continuous_frontier_controller_complete",
++        "source_run": "runs/source",
++        "protocol_root": "/data/protocol",
++        "certificate_executed": False,
++        "gate_evaluated": False,
++        "test_roots_read": False,
++        "variants": {},
++    }
++    for variant in ("balanced", "precision"):
++        run = root / "candidates" / variant
++        exact = precision_exact if variant == "precision" else True
++        paths = {
++            "factor": run / "factor_stage" / "model_v48_trac_sr" / "best.pt",
++            "identity": run / "identity_stage" / "model_v48_trac_sr" / "best.pt",
++            "final": run / "model_v48_trac_sr" / "best.pt",
++        }
++        for stage, path in paths.items():
++            _write_checkpoint(path, exact=exact, tag=f"{variant}-{stage}")
++            arch_path = run / "STAGE_ARCHITECTURE.json"
++            complete_path = run / "TRAINING_COMPLETE.json"
++            if stage == "factor":
++                arch_path = run / "factor_stage" / "STAGE_ARCHITECTURE.json"
++                complete_path = run / "factor_stage" / "TRAINING_COMPLETE.json"
++            elif stage == "identity":
++                arch_path = run / "identity_stage" / "STAGE_ARCHITECTURE.json"
++                complete_path = run / "identity_stage" / "TRAINING_COMPLETE.json"
++            _write_json(arch_path, _legacy_architecture())
++            _write_json(complete_path, {"checkpoint_sha256": _sha(path)})
++        support = run / "FACTOR_SUPPORT_CONTRACT.json"
++        _write_json(support, {"reliability": [1, 1, 1, 1, 1]})
++        _write_json(run / "STAGE_TRANSFER_INTEGRITY.json", {"valid": True})
++        _write_json(
++            run / "THREE_STAGE_TRAINING_COMPLETE.json",
++            {
++                "factor_sha256": _sha(paths["factor"]),
++                "identity_sha256": _sha(paths["identity"]),
++                "final_sha256": _sha(paths["final"]),
++                "factor_support_sha256": _sha(support),
++                "model_regime_routing": False,
++                "shared_deployment_rule_required": True,
++                "evidence_context_source": "physical_relative",
++                "test_roots_read": False,
++            },
++        )
++        completion_doc["variants"][variant] = {"sha256": _sha(paths["final"])}
++    _write_json(root / "V48_35_COMPLETE.json", completion_doc)
++
++
++def test_new_stage_metadata_names_exact_deployment_contract() -> None:
++    text = (ROOT / "scripts" / "adapt_ocrap_v48_35_continuous_frontier_single_stage.sh").read_text(encoding="utf-8")
++    assert '"exact_deployment_eligibility_metric": true' in text
++    assert '"exact_deployment_eligibility_provenance": "checkpoint_cfg.training.direct_policy_metric_exact_eligibility"' in text
++    assert "POLICY_METRIC_EXACT_ELIGIBILITY=true" in text
++
++
++def test_legacy_metadata_is_repairable_only_with_checkpoint_proof(tmp_path: Path) -> None:
++    module = _load_training_contract_module()
++    paths = []
++    for i in range(3):
++        path = tmp_path / f"stage-{i}.pt"
++        _write_checkpoint(path, exact=True, tag=str(i))
++        paths.append(path)
++    result = module._exact_eligibility_contract([_legacy_architecture()] * 3, paths)
++    assert result["valid"] is True
++    assert result["legacy_metadata_repair_used"] is True
++    _write_checkpoint(paths[1], exact=False, tag="bad")
++    rejected = module._exact_eligibility_contract([_legacy_architecture()] * 3, paths)
++    assert rejected["valid"] is False
++    assert rejected["checkpoint_exact_all_stages"] is False
++
++
++def test_explicit_false_exact_metadata_is_not_legacy_repairable(tmp_path: Path) -> None:
++    module = _load_training_contract_module()
++    paths = []
++    architectures = []
++    for i in range(3):
++        path = tmp_path / f"stage-{i}.pt"
++        _write_checkpoint(path, exact=True, tag=str(i))
++        paths.append(path)
++        arch = _legacy_architecture()
++        arch["exact_deployment_eligibility_metric"] = False
++        architectures.append(arch)
++    result = module._exact_eligibility_contract(architectures, paths)
++    assert result["valid"] is False
++    assert result["metadata_contradiction_present"] is True
++
++
++def test_resume_contract_accepts_only_known_rc30_without_retraining(tmp_path: Path) -> None:
++    run = tmp_path / "run"
++    _make_resume_fixture(run)
++    out = run / "V48_35_RESUME_CONTRACT.json"
++    proc = _run(
++        sys.executable,
++        "tools/check_v48_35_resume_contract.py",
++        "--run", str(run),
++        "--output", str(out),
++        "--expect-source-run", "runs/source",
++        "--expect-protocol-root", "/data/protocol",
++    )
++    assert proc.returncode == 0, proc.stderr + proc.stdout
++    doc = json.loads(out.read_text(encoding="utf-8"))
++    assert doc["valid"] is True
++    assert doc["retraining_authorized"] is False
++    assert doc["authorized_action"].startswith("reuse_byte_identical")
++
++
++def test_resume_contract_rejects_checkpoint_without_exact_eligibility(tmp_path: Path) -> None:
++    run = tmp_path / "run"
++    _make_resume_fixture(run, precision_exact=False)
++    out = run / "V48_35_RESUME_CONTRACT.json"
++    proc = _run(
++        sys.executable,
++        "tools/check_v48_35_resume_contract.py",
++        "--run", str(run),
++        "--output", str(out),
++        "--expect-source-run", "runs/source",
++        "--expect-protocol-root", "/data/protocol",
++    )
++    assert proc.returncode == 4
++    doc = json.loads(out.read_text(encoding="utf-8"))
++    assert doc["valid"] is False
++    assert doc["checks"]["precision_adaptation_reusable"] is False
++
++
++def test_resume_contract_rejects_controller_final_hash_mismatch(tmp_path: Path) -> None:
++    run = tmp_path / "run"
++    _make_resume_fixture(run)
++    complete_path = run / "V48_35_COMPLETE.json"
++    complete = json.loads(complete_path.read_text(encoding="utf-8"))
++    complete["variants"]["balanced"]["sha256"] = "0" * 64
++    _write_json(complete_path, complete)
++    out = run / "V48_35_RESUME_CONTRACT.json"
++    proc = _run(
++        sys.executable,
++        "tools/check_v48_35_resume_contract.py",
++        "--run", str(run),
++        "--output", str(out),
++        "--expect-source-run", "runs/source",
++        "--expect-protocol-root", "/data/protocol",
++    )
++    assert proc.returncode == 4
++    doc = json.loads(out.read_text(encoding="utf-8"))
++    assert doc["checks"]["balanced_adaptation_reusable"] is False
++
++
++def test_controller_checks_resume_before_cleanup_and_skips_adaptation() -> None:
++    text = (ROOT / "scripts" / "run_v48_35_continuous_frontier_dedicated.sh").read_text(encoding="utf-8")
++    check_pos = text.index("check_v48_35_resume_contract.py")
++    cleanup_pos = text.index('rm -f "$OUTPUTDIR"/ADAPTATION_FAILED_*.json')
++    assert check_pos < cleanup_pos
++    assert 'RESUME_AFTER_ADAPTATION="${RESUME_AFTER_ADAPTATION:-0}"' in text
++    assert "resume_after_adaptation=1 retraining=0" in text
++    assert 'if [[ "$RESUME_AFTER_ADAPTATION" == 1 ]]; then\n  s0=0; s1=0' in text
++    assert "resume_training_index_contract" in text
++    assert "resume_validation_index_contract" in text
++    assert "adaptation_reused_without_retraining" in text
++
++
++def test_repair_wrapper_is_no_retraining_and_known_signature_only() -> None:
++    text = (ROOT / "scripts" / "repair_v48_35_rc30_training_contract_with_v48_35_1.sh").read_text(encoding="utf-8")
++    assert "RESUME_AFTER_ADAPTATION=1" in text
++    assert "unset REBUILD_ADAPT_INDEX REBUILD_ADAPT_DEV_INDEX" in text
++    assert "run_v48_35_continuous_frontier_dedicated.sh" in text
++    assert "adapt_ocrap_v48_35" not in text
++    help_proc = _run("bash", "scripts/repair_v48_35_rc30_training_contract_with_v48_35_1.sh", "--help")
++    assert help_proc.returncode == 0
++    assert "never retrains" in help_proc.stdout
+diff --git a/tools/check_v48_35_resume_contract.py b/tools/check_v48_35_resume_contract.py
+new file mode 100755
+index 0000000..7a0bcbe
+--- /dev/null
++++ b/tools/check_v48_35_resume_contract.py
+@@ -0,0 +1,223 @@
++#!/usr/bin/env python3
++"""Authorize a no-retraining resume after the known v48.35 training-contract RC=30.
++
++The authorization is deliberately narrow. It accepts only a pipeline that stopped
++at the stale metadata-key check after both adaptations returned RC=0, and it
++re-validates checkpoint bytes plus the exact-eligibility bit stored in every
++checkpoint config. It does not authorize reuse after an algorithmic RC=20,
++certificate access, a different failure signature, or a changed data/source path.
++"""
++from __future__ import annotations
++
++import argparse
++import hashlib
++import json
++from collections.abc import Mapping
++from pathlib import Path
++from typing import Any
++
++import torch
++
++
++def _sha256(path: Path) -> str:
++    h = hashlib.sha256()
++    with path.open("rb") as f:
++        for chunk in iter(lambda: f.read(1024 * 1024), b""):
++            h.update(chunk)
++    return h.hexdigest()
++
++
++def _json(path: Path) -> dict[str, Any]:
++    value = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(value, dict):
++        raise TypeError(f"expected object in {path}")
++    return value
++
++
++def _checkpoint_cfg(path: Path) -> Mapping[str, Any]:
++    try:
++        payload = torch.load(path, map_location="cpu", weights_only=False)
++    except TypeError:
++        payload = torch.load(path, map_location="cpu")
++    if not isinstance(payload, Mapping):
++        raise TypeError(f"checkpoint is not a mapping: {path}")
++    cfg = payload.get("cfg")
++    if not isinstance(cfg, Mapping):
++        raise TypeError(f"checkpoint cfg missing: {path}")
++    return cfg
++
++
++def _path_equal(recorded: Any, expected: str) -> bool:
++    if expected == "":
++        return True
++    return str(recorded) == expected
++
++
++def _int_equal(value: Any, expected: int) -> bool:
++    try:
++        return int(value) == expected
++    except (TypeError, ValueError):
++        return False
++
++
++def main() -> int:
++    ap = argparse.ArgumentParser(description="Fail-closed v48.35 RC30 no-retraining resume authorization")
++    ap.add_argument("--run", type=Path, required=True)
++    ap.add_argument("--output", type=Path, required=True)
++    ap.add_argument("--expect-source-run", default="")
++    ap.add_argument("--expect-protocol-root", default="")
++    args = ap.parse_args()
++
++    checks: dict[str, bool] = {}
++    details: dict[str, Any] = {}
++    errors: list[str] = []
++
++    def record(name: str, condition: bool, detail: Any = None) -> None:
++        checks[name] = bool(condition)
++        if detail is not None:
++            details[name] = detail
++        if not condition:
++            errors.append(name)
++
++    root = args.run
++    try:
++        failed = _json(root / "PIPELINE_FAILED.json")
++        complete = _json(root / "V48_35_COMPLETE.json")
++    except Exception as exc:
++        failed = {}
++        complete = {}
++        record("prior_status_readable", False, repr(exc))
++    else:
++        record("prior_status_readable", True)
++
++    record("known_failure_event", failed.get("event") == "v48_35_pipeline_failed", failed)
++    record("known_failure_stage", failed.get("stage") == "training_contract", failed.get("stage"))
++    record("known_failure_raw_rc", _int_equal(failed.get("raw_exit_code"), 4), failed.get("raw_exit_code"))
++    record("known_failure_normalized_rc", _int_equal(failed.get("normalized_exit_code"), 30), failed.get("normalized_exit_code"))
++    adaptation = failed.get("adaptation_exit_codes") if isinstance(failed.get("adaptation_exit_codes"), Mapping) else {}
++    record("both_adaptations_completed", adaptation.get("balanced") == 0 and adaptation.get("precision") == 0, adaptation)
++    record("certificate_not_executed", failed.get("certificate_executed") is False and complete.get("certificate_executed") is False)
++    record("gate_not_evaluated", failed.get("gate_evaluated") is False and complete.get("gate_evaluated") is False)
++    record("test_roots_sealed_in_status", failed.get("test_roots_read") is False and complete.get("test_roots_read") is False)
++    record("source_run_unchanged", _path_equal(complete.get("source_run"), args.expect_source_run), complete.get("source_run"))
++    record("protocol_root_unchanged", _path_equal(complete.get("protocol_root"), args.expect_protocol_root), complete.get("protocol_root"))
++
++    stale_certificate_markers = []
++    for variant in ("balanced", "precision"):
++        calibration_dir = root / "candidates" / variant / "calibration"
++        if calibration_dir.exists():
++            stale_certificate_markers.append(str(calibration_dir))
++    for rel in ("NEXT_COMMANDS.txt", "GATE_FAILED.json", "CALIBRATION_FAILED.json", "GATE_SPEC.json"):
++        p = root / rel
++        if p.exists():
++            stale_certificate_markers.append(str(p))
++    record("no_prior_certificate_artifacts", not stale_certificate_markers, stale_certificate_markers)
++
++    controller_variants = complete.get("variants") if isinstance(complete.get("variants"), Mapping) else {}
++    variant_details: dict[str, Any] = {}
++    for variant in ("balanced", "precision"):
++        run = root / "candidates" / variant
++        v: dict[str, Any] = {"run": str(run)}
++        variant_ok = True
++        try:
++            three = _json(run / "THREE_STAGE_TRAINING_COMPLETE.json")
++            transfer = _json(run / "STAGE_TRANSFER_INTEGRITY.json")
++            support = run / "FACTOR_SUPPORT_CONTRACT.json"
++            paths = {
++                "factor": run / "factor_stage" / "model_v48_trac_sr" / "best.pt",
++                "identity": run / "identity_stage" / "model_v48_trac_sr" / "best.pt",
++                "final": run / "model_v48_trac_sr" / "best.pt",
++            }
++            architectures = {
++                "factor": _json(run / "factor_stage" / "STAGE_ARCHITECTURE.json"),
++                "identity": _json(run / "identity_stage" / "STAGE_ARCHITECTURE.json"),
++                "final": _json(run / "STAGE_ARCHITECTURE.json"),
++            }
++            completions = {
++                "factor": _json(run / "factor_stage" / "TRAINING_COMPLETE.json"),
++                "identity": _json(run / "identity_stage" / "TRAINING_COMPLETE.json"),
++                "final": _json(run / "TRAINING_COMPLETE.json"),
++            }
++        except Exception as exc:
++            v["read_error"] = repr(exc)
++            variant_ok = False
++        else:
++            v["stages"] = {}
++            for stage, path in paths.items():
++                stage_doc: dict[str, Any] = {"checkpoint": str(path)}
++                try:
++                    digest = _sha256(path)
++                    cfg = _checkpoint_cfg(path)
++                    training = cfg.get("training") if isinstance(cfg.get("training"), Mapping) else {}
++                    arch = architectures[stage]
++                    completion = completions[stage]
++                    expected_hash = three.get(f"{stage}_sha256")
++                    if stage == "final":
++                        expected_hash = three.get("final_sha256")
++                    controller_variant = controller_variants.get(variant) if isinstance(controller_variants.get(variant), Mapping) else {}
++                    exact_metadata_supported = (
++                        arch.get("exact_deployment_eligibility_metric") is True
++                        or (
++                            "exact_deployment_eligibility_metric" not in arch
++                            and arch.get("semantic_frontier_eligibility_metric") is True
++                        )
++                    )
++                    stage_checks = {
++                        "checkpoint_exists": path.is_file(),
++                        "three_stage_hash_matches": digest == expected_hash,
++                        "training_complete_hash_matches": digest == completion.get("checkpoint_sha256"),
++                        "controller_completion_final_hash_matches": stage != "final" or digest == controller_variant.get("sha256"),
++                        "checkpoint_exact_eligibility": training.get("direct_policy_metric_exact_eligibility") is True,
++                        "exact_eligibility_metadata_supported": exact_metadata_supported,
++                        "semantic_frontier_metadata": arch.get("semantic_frontier_eligibility_metric") is True,
++                        "no_regime_routing": arch.get("regime_id_exposed_to_evidence_model") is False,
++                        "physical_relative_context": arch.get("context_source") == "physical_relative",
++                        "noncompensatory_frontier": arch.get("noncompensatory_frontier_cap") is True,
++                        "shared_rule_required": arch.get("shared_deployment_rule_required") is True,
++                        "test_roots_sealed": arch.get("test_roots_read") is False,
++                    }
++                    stage_doc.update({"sha256": digest, "expected_sha256": expected_hash, "checks": stage_checks})
++                    variant_ok &= all(stage_checks.values())
++                except Exception as exc:
++                    stage_doc["error"] = repr(exc)
++                    variant_ok = False
++                v["stages"][stage] = stage_doc
++
++            support_ok = support.is_file() and _sha256(support) == three.get("factor_support_sha256")
++            variant_contract = {
++                "support_hash_matches": support_ok,
++                "stage_transfer_valid": transfer.get("valid") is True,
++                "unified_model_semantics": three.get("model_regime_routing") is False
++                and three.get("shared_deployment_rule_required") is True
++                and three.get("evidence_context_source") == "physical_relative",
++                "certificate_never_used_for_fit": three.get("test_roots_read") is False,
++            }
++            v["checks"] = variant_contract
++            variant_ok &= all(variant_contract.values())
++        v["valid"] = bool(variant_ok)
++        variant_details[variant] = v
++        record(f"{variant}_adaptation_reusable", variant_ok)
++
++    valid = all(checks.values())
++    doc = {
++        "event": "v48_35_1_rc30_training_contract_resume_authorization",
++        "version": "v48.35.1-RC30-TRAINING-CONTRACT-HOTFIX",
++        "run": str(root),
++        "valid": valid,
++        "authorized_action": "reuse_byte_identical_balanced_and_precision_adaptation_checkpoints_then_rerun_contracts_and_certificate" if valid else None,
++        "retraining_authorized": False,
++        "known_signature_only": True,
++        "checks": checks,
++        "details": details,
++        "variants": variant_details,
++        "errors": errors,
++        "test_roots_read": False,
++    }
++    args.output.parent.mkdir(parents=True, exist_ok=True)
++    args.output.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
++    print(json.dumps(doc, ensure_ascii=False))
++    return 0 if valid else 4
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tools/check_v48_35_training_contract.py b/tools/check_v48_35_training_contract.py
+old mode 100644
+new mode 100755
+index 7fd2fef..d931b09
+--- a/tools/check_v48_35_training_contract.py
++++ b/tools/check_v48_35_training_contract.py
+@@ -4,9 +4,12 @@ from __future__ import annotations
+ import argparse
+ import json
+ import math
++from collections.abc import Mapping, Sequence
+ from pathlib import Path
+ from typing import Any
+ 
++import torch
++
+ 
+ def _load(path: Path) -> dict[str, Any]:
+     if not path.is_file():
+@@ -47,6 +50,73 @@ def _trainable(arch: dict[str, Any]) -> str:
+     return str(values[0])
+ 
+ 
++def _torch_load_trusted_checkpoint(path: Path) -> Mapping[str, Any]:
++    """Load a locally produced OC-RAP checkpoint including its config payload."""
++    if not path.is_file():
++        raise FileNotFoundError(path)
++    try:
++        payload = torch.load(path, map_location="cpu", weights_only=False)
++    except TypeError:  # PyTorch versions before weights_only was added.
++        payload = torch.load(path, map_location="cpu")
++    if not isinstance(payload, Mapping):
++        raise TypeError(f"expected checkpoint mapping in {path}")
++    return payload
++
++
++def _checkpoint_exact_eligibility(path: Path) -> dict[str, Any]:
++    payload = _torch_load_trusted_checkpoint(path)
++    cfg = payload.get("cfg")
++    if not isinstance(cfg, Mapping):
++        raise TypeError(f"checkpoint cfg missing or not a mapping in {path}")
++    training = cfg.get("training")
++    if not isinstance(training, Mapping):
++        raise TypeError(f"checkpoint training cfg missing or not a mapping in {path}")
++    return {
++        "checkpoint": str(path),
++        "direct_policy_metric_exact_eligibility": training.get("direct_policy_metric_exact_eligibility"),
++        "direct_policy_metric_risk_source": training.get("direct_policy_metric_risk_source"),
++        "direct_policy_metric_proposal_top_k": training.get("direct_policy_metric_proposal_top_k"),
++        "direct_policy_metric_evidence_rerank_top_k": training.get("direct_policy_metric_evidence_rerank_top_k"),
++    }
++
++
++def _exact_eligibility_contract(
++    architectures: Sequence[Mapping[str, Any]], checkpoint_paths: Sequence[Path]
++) -> dict[str, Any]:
++    if len(architectures) != len(checkpoint_paths):
++        raise ValueError("architectures/checkpoints length mismatch")
++    checkpoint_records = [_checkpoint_exact_eligibility(path) for path in checkpoint_paths]
++    metadata_exact_values = [a.get("exact_deployment_eligibility_metric") for a in architectures]
++    metadata_exact = [value is True for value in metadata_exact_values]
++    metadata_exact_absent = ["exact_deployment_eligibility_metric" not in a for a in architectures]
++    metadata_legacy = [a.get("semantic_frontier_eligibility_metric") is True for a in architectures]
++    checkpoint_exact = [r.get("direct_policy_metric_exact_eligibility") is True for r in checkpoint_records]
++    # Legacy repair is allowed only when the new key is absent. An explicitly false
++    # new key is contradictory metadata and must never be hidden by the legacy bit.
++    metadata_supported = [
++        new or (absent and legacy)
++        for new, absent, legacy in zip(metadata_exact, metadata_exact_absent, metadata_legacy)
++    ]
++    return {
++        "valid": all(checkpoint_exact) and all(metadata_supported),
++        "checkpoint_exact_all_stages": all(checkpoint_exact),
++        "metadata_exact_all_stages": all(metadata_exact),
++        "metadata_exact_absent_all_stages": all(metadata_exact_absent),
++        "metadata_legacy_semantic_all_stages": all(metadata_legacy),
++        "metadata_exact_or_legacy_all_stages": all(metadata_supported),
++        "metadata_contradiction_present": any(value is False for value in metadata_exact_values),
++        "legacy_metadata_repair_used": any(metadata_exact_absent) and all(metadata_supported),
++        "stages": [
++            {
++                **record,
++                "architecture_exact_deployment_eligibility_metric": exact,
++                "architecture_semantic_frontier_eligibility_metric": legacy,
++            }
++            for record, exact, legacy in zip(checkpoint_records, metadata_exact, metadata_legacy)
++        ],
++    }
++
++
+ def main() -> int:
+     ap = argparse.ArgumentParser(description="Fail-closed v48.35 continuous-frontier training contract audit")
+     ap.add_argument("--run", type=Path, required=True)
+@@ -103,6 +173,14 @@ def main() -> int:
+         "direct_evidence_concord_harm_calibrator",
+         "direct_evidence_concord_admission_calibrator",
+     )
++    exact_eligibility = _exact_eligibility_contract(
++        (factor_arch, identity_arch, final_arch),
++        (
++            args.run / "factor_stage" / "model_v48_trac_sr" / "best.pt",
++            args.run / "identity_stage" / "model_v48_trac_sr" / "best.pt",
++            args.run / "model_v48_trac_sr" / "best.pt",
++        ),
++    )
+ 
+     checks = {
+         "no_regime_routing_all_stages": all(
+@@ -112,10 +190,13 @@ def main() -> int:
+         "natural_stage1_sampling": _natural(factor_arch),
+         "natural_stage2_sampling": _natural(identity_arch),
+         "natural_stage3_sampling": _natural(final_arch),
+-        "exact_eligibility_all_stages": all(
+-            a.get("exact_deployment_eligibility_metric") is True
+-            for a in (factor_arch, identity_arch, final_arch)
+-        ),
++        # v48.35 originally wrote only semantic_frontier_eligibility_metric even
++        # though the actual checkpoint config enabled exact deployment eligibility.
++        # New runs carry the exact metadata key; old v48.35 runs are repairable only
++        # when every trusted checkpoint independently proves the exact config bit.
++        "checkpoint_exact_eligibility_all_stages": exact_eligibility["checkpoint_exact_all_stages"],
++        "exact_eligibility_metadata_supported_all_stages": exact_eligibility["metadata_exact_or_legacy_all_stages"],
++        "exact_eligibility_all_stages": exact_eligibility["valid"],
+         "factor_metric": factor_metric == "direct_factor_supervised_risk",
+         "identity_contract_metric": identity_metric == args.expect_best_metric,
+         "final_contract_metric": final_metric == args.expect_best_metric,
+@@ -211,6 +292,7 @@ def main() -> int:
+         },
+         "support_reliability": reliability,
+         "expected_runtime_reliability": expected_rel,
++        "exact_eligibility_provenance": exact_eligibility,
+         "expected": {
+             "identity_all": expect_identity_all,
+             "prior_coupled": expect_coupled,

@@ -4,8 +4,11 @@ from __future__ import annotations
 import argparse
 import json
 import math
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
+
+import torch
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -45,6 +48,73 @@ def _natural(arch: dict[str, Any]) -> bool:
 def _trainable(arch: dict[str, Any]) -> str:
     values = arch.get("trainable") or [""]
     return str(values[0])
+
+
+def _torch_load_trusted_checkpoint(path: Path) -> Mapping[str, Any]:
+    """Load a locally produced OC-RAP checkpoint including its config payload."""
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    try:
+        payload = torch.load(path, map_location="cpu", weights_only=False)
+    except TypeError:  # PyTorch versions before weights_only was added.
+        payload = torch.load(path, map_location="cpu")
+    if not isinstance(payload, Mapping):
+        raise TypeError(f"expected checkpoint mapping in {path}")
+    return payload
+
+
+def _checkpoint_exact_eligibility(path: Path) -> dict[str, Any]:
+    payload = _torch_load_trusted_checkpoint(path)
+    cfg = payload.get("cfg")
+    if not isinstance(cfg, Mapping):
+        raise TypeError(f"checkpoint cfg missing or not a mapping in {path}")
+    training = cfg.get("training")
+    if not isinstance(training, Mapping):
+        raise TypeError(f"checkpoint training cfg missing or not a mapping in {path}")
+    return {
+        "checkpoint": str(path),
+        "direct_policy_metric_exact_eligibility": training.get("direct_policy_metric_exact_eligibility"),
+        "direct_policy_metric_risk_source": training.get("direct_policy_metric_risk_source"),
+        "direct_policy_metric_proposal_top_k": training.get("direct_policy_metric_proposal_top_k"),
+        "direct_policy_metric_evidence_rerank_top_k": training.get("direct_policy_metric_evidence_rerank_top_k"),
+    }
+
+
+def _exact_eligibility_contract(
+    architectures: Sequence[Mapping[str, Any]], checkpoint_paths: Sequence[Path]
+) -> dict[str, Any]:
+    if len(architectures) != len(checkpoint_paths):
+        raise ValueError("architectures/checkpoints length mismatch")
+    checkpoint_records = [_checkpoint_exact_eligibility(path) for path in checkpoint_paths]
+    metadata_exact_values = [a.get("exact_deployment_eligibility_metric") for a in architectures]
+    metadata_exact = [value is True for value in metadata_exact_values]
+    metadata_exact_absent = ["exact_deployment_eligibility_metric" not in a for a in architectures]
+    metadata_legacy = [a.get("semantic_frontier_eligibility_metric") is True for a in architectures]
+    checkpoint_exact = [r.get("direct_policy_metric_exact_eligibility") is True for r in checkpoint_records]
+    # Legacy repair is allowed only when the new key is absent. An explicitly false
+    # new key is contradictory metadata and must never be hidden by the legacy bit.
+    metadata_supported = [
+        new or (absent and legacy)
+        for new, absent, legacy in zip(metadata_exact, metadata_exact_absent, metadata_legacy)
+    ]
+    return {
+        "valid": all(checkpoint_exact) and all(metadata_supported),
+        "checkpoint_exact_all_stages": all(checkpoint_exact),
+        "metadata_exact_all_stages": all(metadata_exact),
+        "metadata_exact_absent_all_stages": all(metadata_exact_absent),
+        "metadata_legacy_semantic_all_stages": all(metadata_legacy),
+        "metadata_exact_or_legacy_all_stages": all(metadata_supported),
+        "metadata_contradiction_present": any(value is False for value in metadata_exact_values),
+        "legacy_metadata_repair_used": any(metadata_exact_absent) and all(metadata_supported),
+        "stages": [
+            {
+                **record,
+                "architecture_exact_deployment_eligibility_metric": exact,
+                "architecture_semantic_frontier_eligibility_metric": legacy,
+            }
+            for record, exact, legacy in zip(checkpoint_records, metadata_exact, metadata_legacy)
+        ],
+    }
 
 
 def main() -> int:
@@ -103,6 +173,14 @@ def main() -> int:
         "direct_evidence_concord_harm_calibrator",
         "direct_evidence_concord_admission_calibrator",
     )
+    exact_eligibility = _exact_eligibility_contract(
+        (factor_arch, identity_arch, final_arch),
+        (
+            args.run / "factor_stage" / "model_v48_trac_sr" / "best.pt",
+            args.run / "identity_stage" / "model_v48_trac_sr" / "best.pt",
+            args.run / "model_v48_trac_sr" / "best.pt",
+        ),
+    )
 
     checks = {
         "no_regime_routing_all_stages": all(
@@ -112,10 +190,13 @@ def main() -> int:
         "natural_stage1_sampling": _natural(factor_arch),
         "natural_stage2_sampling": _natural(identity_arch),
         "natural_stage3_sampling": _natural(final_arch),
-        "exact_eligibility_all_stages": all(
-            a.get("exact_deployment_eligibility_metric") is True
-            for a in (factor_arch, identity_arch, final_arch)
-        ),
+        # v48.35 originally wrote only semantic_frontier_eligibility_metric even
+        # though the actual checkpoint config enabled exact deployment eligibility.
+        # New runs carry the exact metadata key; old v48.35 runs are repairable only
+        # when every trusted checkpoint independently proves the exact config bit.
+        "checkpoint_exact_eligibility_all_stages": exact_eligibility["checkpoint_exact_all_stages"],
+        "exact_eligibility_metadata_supported_all_stages": exact_eligibility["metadata_exact_or_legacy_all_stages"],
+        "exact_eligibility_all_stages": exact_eligibility["valid"],
         "factor_metric": factor_metric == "direct_factor_supervised_risk",
         "identity_contract_metric": identity_metric == args.expect_best_metric,
         "final_contract_metric": final_metric == args.expect_best_metric,
@@ -211,6 +292,7 @@ def main() -> int:
         },
         "support_reliability": reliability,
         "expected_runtime_reliability": expected_rel,
+        "exact_eligibility_provenance": exact_eligibility,
         "expected": {
             "identity_all": expect_identity_all,
             "prior_coupled": expect_coupled,

@@ -18,6 +18,7 @@ CAL_SAFE="${CAL_SAFE:-$OCRAP_ROOT/calibration_safe}"
 GPU0="${GPU0:-0}"
 GPU1="${GPU1:-1}"
 ALLOW_PARTIAL_VARIANTS="${ALLOW_PARTIAL_VARIANTS:-0}"
+RESUME_AFTER_ADAPTATION="${RESUME_AFTER_ADAPTATION:-0}"
 PROPOSAL_TOP_K="${PROPOSAL_TOP_K:-5}"
 EVIDENCE_CONTEXT_SOURCE="${EVIDENCE_CALIBRATOR_CONTEXT_SOURCE:-physical_relative}"
 ADMISSION_PRIOR_MODE="${EVIDENCE_ADMISSION_PRIOR_MODE:-frontier_capped_slack}"
@@ -34,13 +35,9 @@ COMPONENT_HARM_HARD_TOLERANCE="${COMPONENT_HARM_HARD_TOLERANCE:-0.05}"
 COMPONENT_HARM_PROXY_TOLERANCE="${COMPONENT_HARM_PROXY_TOLERANCE:-0.05}"
 
 mkdir -p "$OUTPUTDIR/logs"
-# Status files are run-local state, not cache. Clear them before every controller
-# execution so a resumed run cannot inherit a stale failure or authorization.
-rm -f "$OUTPUTDIR"/ADAPTATION_FAILED_*.json "$OUTPUTDIR"/FAILURE_SIGNATURE_*.json "$OUTPUTDIR/PIPELINE_FAILED.json" \
-      "$OUTPUTDIR/V48_35_COMPLETE.json" "$OUTPUTDIR/NEXT_COMMANDS.txt" \
-      "$OUTPUTDIR/NEXT_COMMANDS_STATUS.json" "$OUTPUTDIR/NEXT_COMMANDS_BLOCKED.json" \
-      "$OUTPUTDIR/GATE_FAILED.json" "$OUTPUTDIR/CALIBRATION_FAILED.json" \
-      "$OUTPUTDIR/chosen_base_run_dedicated.txt"
+# A no-retraining resume must inspect the original failure state before any
+# status cleanup. The authorization is narrow and validates checkpoint bytes,
+# checkpoint config, source/protocol identity, and absence of certificate access.
 TRAIN_NEAR="$PROTOCOL_ROOT/evidence_adapt_train_near_contact"
 TRAIN_CONTACT="$PROTOCOL_ROOT/evidence_adapt_train_contact"
 DEV_NEAR="$PROTOCOL_ROOT/evidence_adapt_dev_near_contact"
@@ -94,6 +91,29 @@ blocked={'event':'v48_35_next_commands_blocked','created_unix':time.time(),
 (root/'NEXT_COMMANDS_STATUS.json').write_text(json.dumps(blocked,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
 PY_FAILURE
 }
+
+if [[ "$RESUME_AFTER_ADAPTATION" == 1 ]]; then
+  set +e
+  python tools/check_v48_35_resume_contract.py \
+    --run "$OUTPUTDIR" --output "$OUTPUTDIR/V48_35_RESUME_CONTRACT.json" \
+    --expect-source-run "$SOURCE_RUN" --expect-protocol-root "$PROTOCOL_ROOT" \
+    >"$OUTPUTDIR/logs/resume_contract.log" 2>&1
+  resume_contract_rc=$?
+  set -e
+  if [[ "$resume_contract_rc" != 0 ]]; then
+    echo "v48.35.1 resume refused; inspect $OUTPUTDIR/V48_35_RESUME_CONTRACT.json" >&2
+    exit 30
+  fi
+fi
+
+# Status files are run-local state, not cache. Clear them only after an optional
+# resume authorization has captured and validated the previous failure state.
+rm -f "$OUTPUTDIR"/ADAPTATION_FAILED_*.json "$OUTPUTDIR"/FAILURE_SIGNATURE_*.json "$OUTPUTDIR/PIPELINE_FAILED.json" \
+      "$OUTPUTDIR/V48_35_COMPLETE.json" "$OUTPUTDIR/NEXT_COMMANDS.txt" \
+      "$OUTPUTDIR/NEXT_COMMANDS_STATUS.json" "$OUTPUTDIR/NEXT_COMMANDS_BLOCKED.json" \
+      "$OUTPUTDIR/GATE_FAILED.json" "$OUTPUTDIR/CALIBRATION_FAILED.json" \
+      "$OUTPUTDIR/chosen_base_run_dedicated.txt"
+
 set +e
 python tools/audit_dedicated_protocol_v48_16.py \
   --protocol-root "$PROTOCOL_ROOT" \
@@ -165,10 +185,18 @@ if [[ "$rebuild_index" != 1 && -f "$GROUP_INDEX" && -f "$GROUP_SUMMARY" ]]; then
   contract_rc=$?
   set -e
   if [[ "$contract_rc" != 0 ]]; then
+    if [[ "$RESUME_AFTER_ADAPTATION" == 1 ]]; then
+      write_pipeline_failure resume_training_index_contract "$contract_rc" "$OUTPUTDIR/SUPPORT_INDEX_CONTRACT.json" 0 0
+      exit 30
+    fi
     echo "teacher-index contract changed; rebuilding the index" | tee -a "$OUTPUTDIR/logs/check_teacher_index_contract.log"
     rebuild_index=1
   fi
 else
+  if [[ "$RESUME_AFTER_ADAPTATION" == 1 ]]; then
+    write_pipeline_failure resume_training_index_missing 30 "resume requires the byte-identical adaptation training index" 0 0
+    exit 30
+  fi
   rebuild_index=1
 fi
 
@@ -230,8 +258,18 @@ if [[ "$rebuild_val_index" != 1 && -f "$VAL_GROUP_INDEX" && -f "$VAL_GROUP_SUMMA
     >"$OUTPUTDIR/logs/check_dev_teacher_index_contract.log" 2>&1
   val_contract_rc=$?
   set -e
-  [[ "$val_contract_rc" == 0 ]] || rebuild_val_index=1
+  if [[ "$val_contract_rc" != 0 ]]; then
+    if [[ "$RESUME_AFTER_ADAPTATION" == 1 ]]; then
+      write_pipeline_failure resume_validation_index_contract "$val_contract_rc" "$OUTPUTDIR/VAL_SUPPORT_INDEX_CONTRACT.json" 0 0
+      exit 30
+    fi
+    rebuild_val_index=1
+  fi
 else
+  if [[ "$RESUME_AFTER_ADAPTATION" == 1 ]]; then
+    write_pipeline_failure resume_validation_index_missing 30 "resume requires the byte-identical adaptation-dev index" 0 0
+    exit 30
+  fi
   rebuild_val_index=1
 fi
 if [[ "$rebuild_val_index" == 1 ]]; then
@@ -337,13 +375,18 @@ PY_ADAPT_FAIL
   return "$rc"
 }
 
-run_variant balanced "$GPU0" & p0=$!
-run_variant precision "$GPU1" & p1=$!
-set +e
-wait "$p0"; s0=$?
-wait "$p1"; s1=$?
-set -e
-printf 'balanced=%s precision=%s\n' "$s0" "$s1" | tee "$OUTPUTDIR/logs/adaptation_status.log"
+if [[ "$RESUME_AFTER_ADAPTATION" == 1 ]]; then
+  s0=0; s1=0
+  printf 'balanced=0 precision=0 resume_after_adaptation=1 retraining=0\n' | tee "$OUTPUTDIR/logs/adaptation_status.log"
+else
+  run_variant balanced "$GPU0" & p0=$!
+  run_variant precision "$GPU1" & p1=$!
+  set +e
+  wait "$p0"; s0=$?
+  wait "$p1"; s1=$?
+  set -e
+  printf 'balanced=%s precision=%s resume_after_adaptation=0 retraining=1\n' "$s0" "$s1" | tee "$OUTPUTDIR/logs/adaptation_status.log"
+fi
 
 if [[ "$s0" != 0 && "$s1" != 0 ]]; then
   write_pipeline_failure adaptation 30 "both variants failed; inspect FAILURE_SIGNATURE_balanced.json and FAILURE_SIGNATURE_precision.json" "$s0" "$s1"
@@ -416,10 +459,10 @@ if [[ "$cert_rc" == 30 ]]; then
 fi
 
 set +e
-python - "$OUTPUTDIR" "$PROTOCOL_ROOT" "$SOURCE_RUN" "$raw_cert_rc" "$cert_rc" <<'PY'
+python - "$OUTPUTDIR" "$PROTOCOL_ROOT" "$SOURCE_RUN" "$raw_cert_rc" "$cert_rc" "$RESUME_AFTER_ADAPTATION" <<'PY'
 import hashlib,json,pathlib,sys,time
 root=pathlib.Path(sys.argv[1]); protocol=pathlib.Path(sys.argv[2]); source=pathlib.Path(sys.argv[3])
-raw_rc=int(sys.argv[4]); rc=int(sys.argv[5]); variants={}
+raw_rc=int(sys.argv[4]); rc=int(sys.argv[5]); resumed=sys.argv[6] == '1'; variants={}
 for name in ('balanced','precision'):
     p=root/'candidates'/name/'model_v48_trac_sr'/'best.pt'
     if p.is_file(): variants[name]={'checkpoint':str(p),'sha256':hashlib.sha256(p.read_bytes()).hexdigest()}
@@ -432,7 +475,9 @@ doc={'event':'v48_35_continuous_frontier_controller_complete','created_unix':tim
      'source_run':str(source),'protocol_root':str(protocol),'variants':variants,
      'raw_certificate_exit_code':raw_rc,'certificate_exit_code':rc,'pipeline_exit_code':rc,
      'certificate_executed':True,'gate_evaluated':True,'gate_passed':(rc==0 and next_exists),
-     'next_commands_generated':next_exists,'pipeline_valid':True,'test_roots_read':False}
+     'next_commands_generated':next_exists,'pipeline_valid':True,
+     'adaptation_reused_without_retraining':resumed,'resume_contract':str(root/'V48_35_RESUME_CONTRACT.json') if resumed else None,
+     'test_roots_read':False}
 (root/'V48_35_COMPLETE.json').write_text(json.dumps(doc,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
 PY
 completion_rc=$?

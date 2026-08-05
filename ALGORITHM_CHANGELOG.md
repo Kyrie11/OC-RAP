@@ -2504,3 +2504,85 @@ The design isolates representation and admission geometry without creating Near/
 - `RC=30`: engineering, provenance, cache, checkpoint, script, artifact or protocol failure; no algorithm comparison is valid.
 
 Local CPU validation checks code and contracts only. WOMD/Waymax and the user's A30 environment are unavailable locally, so v48.35 is not claimed to obtain `RC=0` or publication-ready closed-loop gains before the registered experiments are run.
+
+## v48.35.1 — RC30-TRAINING-CONTRACT-HOTFIX
+
+### Scope and attribution
+
+This release is an engineering-only hotfix for the uploaded v48.35 run. It does **not** change the OC-RAP model, candidate set, training objective, checkpoint-selection metric, shared-rule fitter, certificate thresholds, gate, datasets, or Safe/Near/Contact semantics. The algorithm remains one network, one continuous physical representation, one non-compensatory frontier, and one shared deployment rule; Near and Contact remain audit strata only.
+
+The uploaded run stopped with:
+
+```text
+failure_stage=training_contract
+raw_exit_code=4
+normalized_exit_code=30
+balanced_adaptation_rc=0
+precision_adaptation_rc=0
+certificate_executed=false
+gate_evaluated=false
+```
+
+The sole failed check was `exact_eligibility_all_stages`. The trainer did enable
+`POLICY_METRIC_EXACT_ELIGIBILITY=true`, which was persisted as
+`cfg.training.direct_policy_metric_exact_eligibility=true` in every checkpoint, but
+`adapt_ocrap_v48_35_continuous_frontier_single_stage.sh` wrote only the older
+`semantic_frontier_eligibility_metric` metadata key. The training-contract checker
+looked only for the never-written `exact_deployment_eligibility_metric` key. This
+metadata/checker mismatch converted a completed adaptation into RC=30 and prevented
+all certificate execution.
+
+### Engineering changes
+
+1. New stage metadata writes both:
+   - `semantic_frontier_eligibility_metric=true`;
+   - `exact_deployment_eligibility_metric=true`, with checkpoint-config provenance.
+2. `check_v48_35_training_contract.py` now verifies the actual exact-eligibility bit
+   in the factor, identity, and final checkpoint configs. A legacy v48.35 stage file
+   is accepted only when its semantic metadata is present **and** every trusted
+   checkpoint independently proves exact eligibility. Removing the check or trusting
+   metadata alone is not allowed.
+3. Added `check_v48_35_resume_contract.py`. No-retraining reuse is authorized only
+   for the exact known signature: training-contract raw RC=4 normalized to 30, both
+   adaptations RC=0, no certificate/gate/test access, unchanged source/protocol,
+   matching checkpoint/support hashes, valid stage transfer, unified physical
+   semantics, and exact eligibility in every checkpoint config.
+4. Added `RESUME_AFTER_ADAPTATION=1` to the v48.35 controller. Authorization occurs
+   before stale status cleanup. A valid resume skips both GPU adaptations, refuses
+   index rebuilds, reruns protocol/index/model/training contracts, and then executes
+   the original shared-rule certificate path.
+5. Added `repair_v48_35_rc30_training_contract_with_v48_35_1.sh` as the operator-facing
+   no-retraining repair wrapper.
+6. Completion metadata records `adaptation_reused_without_retraining` and the resume
+   contract path. Different RC=30 signatures, algorithmic RC=20, changed data/index
+   contracts, changed checkpoint bytes, or prior certificate artifacts are rejected.
+7. Added regression tests for new metadata, checkpoint-proven legacy repair,
+   rejection when one checkpoint disables exact eligibility, resume ordering before
+   cleanup, no-retraining behavior, and index fail-closed behavior.
+8. Tightened legacy compatibility: an absent new metadata key may be repaired from
+   checkpoint evidence, but an explicitly false new key is treated as a contradiction
+   and is rejected even when the old semantic key is true.
+9. The resume contract additionally checks the final checkpoint hash against the
+   controller-level completion record and refuses any pre-existing calibration/GATE
+   artifacts that could indicate prior certificate access.
+10. The repair wrapper now implements `--help`, rejects positional arguments, and
+    cannot accidentally interpret a help request as an experiment launch.
+
+### Interpretation rule
+
+The uploaded v48.35 result is not an algorithm result because the certificate never
+ran. Training diagnostics may be used only as debugging signals; they cannot establish
+Near/Contact gate effectiveness. The correct next action is to reuse the byte-identical
+adaptation checkpoints through the v48.35.1 resume path. Only a resulting valid RC=0
+or RC=20 may be used for algorithm attribution. No additional algorithm modification
+is introduced before that certificate evidence exists.
+
+### Local validation for v48.35.1
+
+- 17 focused v48.35/v48.35.1 tests passed.
+- 174 supported release-matrix tests passed with 6 non-fatal PyTorch warnings.
+- 57 shell scripts passed `bash -n`.
+- `python -m compileall -q src tools tests` passed.
+- The continuous-frontier contract preflight passed all finite-gradient, physical-relative input-isolation, non-compensation, no-regime-ID, and one-shared-rule checks.
+- The uploaded result archive does not contain checkpoint `.pt` bytes. Therefore the no-retraining authorization cannot be executed against the archive alone; it is intentionally rechecked on the original experiment machine, where the registered checkpoints must still exist and match their stored SHA256 values.
+
