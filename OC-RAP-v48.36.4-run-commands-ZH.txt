@@ -1,0 +1,92 @@
+# OC-RAP v48.36.4 Pipeline 恢复与验证指令（中文）
+# 目标：修复已完成实验被拒绝的 resume 重复调用覆盖成 RC=30 的工程终态。
+# 本命令不重训、不重校准、不修改 checkpoint、分数、阈值或 gate 决策。
+
+set -Eeuo pipefail
+
+# 1) 建议将交付 ZIP 解压到独立目录，不覆盖原仓库。
+# 示例：
+#   /home/senzeyu2/code/OC-RAP-v48.36.4-IDEMPOTENT-TERMINAL-STATE-HOTFIX
+# 原始实验结果目录继续保留在原仓库下。
+
+REPO=/home/senzeyu2/code/OC-RAP-v48.36.4-IDEMPOTENT-TERMINAL-STATE-HOTFIX
+OUTPUTDIR=/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_36_1_ocaf_cuda_hotfix_48361
+
+cd "$REPO"
+export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"
+
+# 2) 先做只读/旁路式 re-entry 审计。
+python tools/check_v48_36_reentry_contract.py \
+  --run "$OUTPUTDIR" --mode resume \
+  --output "$OUTPUTDIR/V48_36_REENTRY_CONTRACT.json"
+python -m json.tool "$OUTPUTDIR/V48_36_REENTRY_CONTRACT.json"
+
+# 对当前上传结果，action 应为 restore_archived_terminal；
+# 若此前已经执行成功，则应为 return_existing_terminal。
+
+# 3) 执行统一的已知工程故障恢复入口。
+# 注意：RC=20 是预期的“pipeline 有效、Natural gate 未通过”，不是脚本故障。
+set +e
+OUTPUTDIR="$OUTPUTDIR" \
+OCRAP_REPO="$REPO" \
+bash scripts/recover_v48_36_pipeline_with_v48_36_4.sh
+rc=$?
+set -e
+printf 'authoritative pipeline RC=%s\n' "$rc"
+
+# 当前结果必须返回 RC=20。若返回 RC=30，停止，不要继续 closed-loop。
+[[ "$rc" == 20 ]]
+
+# 4) 检查恢复与权威终态。
+python -m json.tool "$OUTPUTDIR/V48_36_4_REENTRY_RESTORE.json" 2>/dev/null || true
+python -m json.tool "$OUTPUTDIR/V48_36_CERTIFICATE_STATUS_CONTRACT.json"
+python -m json.tool "$OUTPUTDIR/AUTHORITATIVE_RUN_STATUS.json"
+python -m json.tool "$OUTPUTDIR/V48_36_COMPLETE.json"
+
+python - "$OUTPUTDIR" <<'PY_VERIFY'
+import json, pathlib, sys
+root=pathlib.Path(sys.argv[1])
+state=json.loads((root/'AUTHORITATIVE_RUN_STATUS.json').read_text())
+complete=json.loads((root/'V48_36_COMPLETE.json').read_text())
+contract=json.loads((root/'V48_36_CERTIFICATE_STATUS_CONTRACT.json').read_text())
+assert state['valid'] is True, state
+assert state['authoritative_exit_code'] == 20, state
+assert state['pipeline_valid'] is True, state
+assert state['test_roots_read'] is False, state
+assert complete['pipeline_exit_code'] == 20, complete
+assert complete['pipeline_valid'] is True, complete
+assert complete['gate_passed'] is False, complete
+assert contract['valid'] is True, contract
+assert contract['algorithm_changed'] is False, contract
+assert not (root/'PIPELINE_FAILED.json').exists()
+assert (root/'GATE_FAILED.json').is_file()
+assert not (root/'NEXT_COMMANDS.txt').exists()
+print('PASS: pipeline_valid=true, authoritative_exit_code=20, natural_gate_failed=true')
+PY_VERIFY
+
+# 5) 幂等性复核：重复执行不会再次创建 attempt，也不会覆盖 RC=20。
+set +e
+OUTPUTDIR="$OUTPUTDIR" OCRAP_REPO="$REPO" \
+bash scripts/recover_v48_36_pipeline_with_v48_36_4.sh
+rc2=$?
+set -e
+[[ "$rc2" == 20 ]]
+echo 'PASS: repeated recovery is idempotent'
+
+# 6) 本轮到此停止。
+# RC=20 不授权执行仅对 RC=0 开放的 Safe/stress closed-loop、外部基线或视频生成。
+# 下一轮算法分析应读取现有 calibration、Near/Contact certificate、
+# GATE_FAILURE_DECOMPOSITION.json 与 learning_gates_v48_36.json。
+
+# ---------------------------------------------------------------------------
+# 可选：以后从零启动新实验时，必须使用全新的 OUTPUTDIR，禁止复用上述目录。
+# ---------------------------------------------------------------------------
+# NEW_OUTPUTDIR=/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_36_4_fresh_$(date +%Y%m%d_%H%M%S)
+# OUTPUTDIR="$NEW_OUTPUTDIR" \
+# OCRAP_REPO="$REPO" \
+# OCRAP_ROOT=/data0/senzeyu2/dataset/OCRAP \
+# SOURCE_RUN=/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_13_terra_proxy_4801 \
+# PROTOCOL_ROOT=/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814 \
+# CAL_SAFE=/data0/senzeyu2/dataset/OCRAP/calibration_safe \
+# GPU0=0 GPU1=1 RESUME_AFTER_ADAPTATION=0 \
+# bash scripts/run_v48_36_ocaf_dedicated.sh

@@ -1,0 +1,15 @@
+﻿id,risk,root_cause,impact,mitigation,status
+E01,stage-transfer allowlist drift,old checker rejected legal direct_evidence_interaction_bridge.* parameters,RC30 before calibration,repaired in v48.36.2; compatible,fixed
+E02,attempt environment namespace mismatch,controller exported V4836_ATTEMPT_ID while older calibration consumed V4835_ATTEMPT_ID,legacy-untracked cross-attempt state and RC30,unified V4836_ATTEMPT_ID + certificate-status contract,fixed
+E03,completed terminal state overwritten by rejected resume,resume authorization happened after new attempt creation and status archival,valid RC20 hidden by RC30,pre-attempt re-entry audit + exact archived RC20 restore,fixed
+E04,resume refusal was destructive,write_pipeline_failure and marker moves executed for a pre-attempt authorization failure,algorithm evidence polluted by command misuse,write only V48_36_RESUME_REFUSED.json; preserve active state,fixed
+E05,repeated invocation was non-idempotent,same command created multiple attempts and status histories,chronology ambiguity and false engineering failure,active RC0/20 returned without terminal mutation,fixed
+E06,accidental reuse of completed OUTPUTDIR,fresh command could replace completed run,loss of authoritative evidence,default refuse/return; explicit ALLOW_COMPLETED_RUN_OVERWRITE=1 required,fixed
+E07,ambiguous archived-state selection,multiple status_history bundles exist,wrong attempt could be restored,sort by authoritative timestamp and require attempt/gate/certificate/Safe/test-seal consistency,fixed
+E08,partial terminal restoration,copying a subset can create contradictions,false RC or mixed attempts,"backup all touched files, atomic writes, rerun two contracts, byte rollback",fixed
+E09,algorithm leakage through hotfix,engineering change could alter model behavior,invalidates comparison,src and configs trees byte-identical; no checkpoint included,verified
+E10,false archived RC0 recoverability,historical archive omitted NEXT_COMMANDS.txt,could synthesize an incomplete success,archived auto-restore limited to RC20; active RC0 remains idempotent,fail-closed limitation
+E11,test-root leakage during repair,repair might inspect test outcomes,protocol contamination,all repair reports require test_roots_read=false; no test-root traversal,verified
+E12,raw/normalized exit-code ambiguity,raw contract RC4 normalized to pipeline RC30,misdiagnosis as algorithm failure,structured stage/raw/normalized/authoritative fields retained,fixed
+E13,wrapper exit-code handling,set -e treats expected RC20 as shell error,operator may rerun destructive commands,documented set +e capture and explicit RC20 assertion,fixed
+E14,version provenance drift,restored scientific result was produced by v48.36.3 while state manager is v48.36.4,could imply recomputation,preserve archived V48_36_COMPLETE bytes; record terminal_state_management_version separately,fixed

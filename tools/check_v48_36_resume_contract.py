@@ -17,7 +17,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-IMPLEMENTATION_VERSION = os.environ.get("OCRAP_IMPLEMENTATION_VERSION", "v48.36.3-TERMINAL-STATE-HOTFIX")
+IMPLEMENTATION_VERSION = os.environ.get("OCRAP_IMPLEMENTATION_VERSION", "v48.36.4-IDEMPOTENT-TERMINAL-STATE-HOTFIX")
 
 import torch
 

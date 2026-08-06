@@ -18,7 +18,7 @@ from typing import Any
 
 EVENT = "v48_36_certificate_status_contract"
 VERSION = "v48.36-OCAF"
-IMPLEMENTATION_VERSION = "v48.36.3-TERMINAL-STATE-HOTFIX"
+IMPLEMENTATION_VERSION = "v48.36.4-IDEMPOTENT-TERMINAL-STATE-HOTFIX"
 VARIANTS = ("balanced", "precision")
 
 

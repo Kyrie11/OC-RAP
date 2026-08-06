@@ -1,0 +1,50 @@
+{
+  "event": "v48_36_4_change_manifest",
+  "implementation_version": "v48.36.4-IDEMPOTENT-TERMINAL-STATE-HOTFIX",
+  "new_files": [
+    "tools/check_v48_36_reentry_contract.py",
+    "tools/restore_v48_36_terminal_state_after_refused_resume.py",
+    "scripts/repair_v48_36_3_resume_clobber_with_v48_36_4.sh",
+    "scripts/recover_v48_36_pipeline_with_v48_36_4.sh",
+    "tests/test_v48_36_4_idempotent_terminal_state.py",
+    "OC-RAP-v48.36.4-run-commands-ZH.txt",
+    "OC-RAP-v48.36.4-RC30-resume-clobber-audit.json",
+    "OC-RAP-v48.36.4-VERSION-CONTRACT.json",
+    "OC-RAP-v48.36.4-change-manifest.json",
+    "OC-RAP-v48.36.4-engineering-error-audit.csv",
+    "OC-RAP-v48.36.4-validation-status.txt"
+  ],
+  "modified_files": [
+    "scripts/run_v48_36_ocaf_dedicated.sh",
+    "scripts/adapt_ocrap_v48_36_ocaf_variant.sh",
+    "scripts/calibrate_v48_36_shared_certificate_pool.sh",
+    "tools/check_v48_36_certificate_status_contract.py",
+    "tools/check_v48_36_resume_contract.py",
+    "tools/check_v48_36_stage_transfer.py",
+    "tools/finalize_v48_36_adaptation_variant.py",
+    "tools/repair_v48_36_2_terminal_state_failure.py",
+    "tests/test_v48_36_3_terminal_state_hotfix.py",
+    "ALGORITHM_CHANGELOG.md"
+  ],
+  "functional_changes": [
+    "audit re-entry before attempt creation or terminal cleanup",
+    "return active valid RC0/20 idempotently",
+    "restore exact archived RC20 after resume_authorization clobber",
+    "make resume refusal non-destructive and record only V48_36_RESUME_REFUSED.json",
+    "require explicit ALLOW_COMPLETED_RUN_OVERWRITE=1 for intentional completed-run overwrite",
+    "rerun certificate-status and authoritative-result contracts after restoration",
+    "byte-for-byte rollback on any post-restore audit failure",
+    "unified known-signature recovery entrypoint"
+  ],
+  "non_changes": [
+    "algorithm",
+    "model",
+    "loss",
+    "dataset",
+    "thresholds",
+    "gate",
+    "checkpoint",
+    "scores",
+    "three-regime continuous representation"
+  ]
+}

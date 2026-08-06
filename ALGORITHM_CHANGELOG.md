@@ -2846,3 +2846,16 @@ is introduced before that certificate evidence exists.
 - The continuous-frontier contract preflight passed all finite-gradient, physical-relative input-isolation, non-compensation, no-regime-ID, and one-shared-rule checks.
 - The uploaded result archive does not contain checkpoint `.pt` bytes. Therefore the no-retraining authorization cannot be executed against the archive alone; it is intentionally rechecked on the original experiment machine, where the registered checkpoints must still exist and match their stored SHA256 values.
 
+
+
+## v48.36.4-IDEMPOTENT-TERMINAL-STATE-HOTFIX
+
+**类别：工程终态修复；算法不变。**
+
+- 未修改 `src/`、`configs/`、模型、损失、训练目标、数据集、certificate 阈值或 gate。
+- 未引入 Safe/Near/Contact regime routing；统一连续物理余量机制保持不变。
+- 新增 pre-attempt re-entry contract，活动 RC=0/20 重复调用幂等返回。
+- 修复拒绝 resume 覆盖已完成 RC=20 的问题；拒绝仅写旁路诊断，不创建 attempt 或替换 terminal markers。
+- 新增精确 archived RC=20 恢复，要求 attempt/gate/certificate/Safe/test-seal 一致，失败 byte-for-byte rollback。
+- 历史 archive 缺少 `NEXT_COMMANDS.txt`，故 archived RC=0 自动恢复显式 fail closed。
+- 新增统一工程恢复入口与 6 个定向测试。

@@ -256,7 +256,7 @@ fi
 FINAL_CKPT="$FINAL_RUN/model_v48_trac_sr/best.pt"
 transfer_extra=()
 [[ "$ENABLE_FINAL_CALIBRATION" == 1 ]] || transfer_extra+=(--final-stage-disabled)
-IMPLEMENTATION_VERSION="${OCRAP_IMPLEMENTATION_VERSION:-v48.36.3-TERMINAL-STATE-HOTFIX}"
+IMPLEMENTATION_VERSION="${OCRAP_IMPLEMENTATION_VERSION:-v48.36.4-IDEMPOTENT-TERMINAL-STATE-HOTFIX}"
 CURRENT_STAGE="stage_transfer_integrity"
 python tools/check_v48_36_stage_transfer.py \
   --factor "$FACTOR_CKPT" --identity "$IDENTITY_CKPT" --final "$FINAL_CKPT" \

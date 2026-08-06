@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any
 
 BASE_VERSION = "v48.36-OCAF"
-IMPLEMENTATION_VERSION = "v48.36.3-TERMINAL-STATE-HOTFIX"
+IMPLEMENTATION_VERSION = "v48.36.4-IDEMPOTENT-TERMINAL-STATE-HOTFIX"
 EVENT = "v48_36_3_terminal_state_repair"
 VARIANTS = ("balanced", "precision")
 LEGACY_ATTEMPT = "legacy-untracked"

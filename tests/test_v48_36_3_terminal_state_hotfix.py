@@ -237,7 +237,7 @@ def test_v48_36_controller_and_calibration_use_same_attempt_namespace() -> None:
     assert 'V4836_ATTEMPT_ID="$ATTEMPT_ID"' in controller
     assert "check_v48_36_certificate_status_contract.py" in controller
     assert "certificate_status_contract" in controller
-    assert "v48.36.3-TERMINAL-STATE-HOTFIX" in controller
+    assert "v48.36.4-IDEMPOTENT-TERMINAL-STATE-HOTFIX" in controller
 
 
 def test_calibration_launcher_fails_closed_without_attempt_id(tmp_path: Path) -> None:

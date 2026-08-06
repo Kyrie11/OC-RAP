@@ -25,7 +25,7 @@ ADMISSION_PRIOR_MODE="${EVIDENCE_ADMISSION_PRIOR_MODE:-frontier_capped_slack}"
 EVIDENCE_INTERACTION_HIDDEN="${EVIDENCE_INTERACTION_HIDDEN:-64}"
 EVIDENCE_INTERACTION_DROPOUT="${EVIDENCE_INTERACTION_DROPOUT:-0.05}"
 EVIDENCE_CONSENSUS_PRIOR_SCALE="${EVIDENCE_CONSENSUS_PRIOR_SCALE:-0.50}"
-IMPLEMENTATION_VERSION="${OCRAP_IMPLEMENTATION_VERSION:-v48.36.3-TERMINAL-STATE-HOTFIX}"
+IMPLEMENTATION_VERSION="${OCRAP_IMPLEMENTATION_VERSION:-v48.36.4-IDEMPOTENT-TERMINAL-STATE-HOTFIX}"
 export OCRAP_IMPLEMENTATION_VERSION="$IMPLEMENTATION_VERSION"
 
 ALPHA="${ALPHA:-0.2}"
@@ -40,30 +40,64 @@ COMPONENT_HARM_HARD_TOLERANCE="${COMPONENT_HARM_HARD_TOLERANCE:-0.05}"
 COMPONENT_HARM_PROXY_TOLERANCE="${COMPONENT_HARM_PROXY_TOLERANCE:-0.05}"
 
 mkdir -p "$OUTPUTDIR/logs"
-ATTEMPT_ID="${V4836_ATTEMPT_ID:-$(python - <<'PY_ATTEMPT'
-import time,uuid
-print(f"v4836-{time.time_ns()}-{uuid.uuid4().hex[:12]}")
-PY_ATTEMPT
-)}"
-if [[ -z "$ATTEMPT_ID" || "$ATTEMPT_ID" == "legacy-untracked" ]]; then
-  echo "invalid V4836_ATTEMPT_ID: attempt-scoped non-legacy ID required" >&2
+# Re-entry is audited before ATTEMPT_STARTED.json or any active terminal marker is
+# changed.  Repeated invocations therefore return an existing active RC=0/20 result, and
+# an exact archived RC=20 resume-refusal clobber is restored safely.
+REENTRY_MODE=fresh
+[[ "$RESUME_AFTER_ADAPTATION" == 1 ]] && REENTRY_MODE=resume
+reentry_args=(--run "$OUTPUTDIR" --mode "$REENTRY_MODE" --output "$OUTPUTDIR/V48_36_REENTRY_CONTRACT.json")
+[[ "${ALLOW_COMPLETED_RUN_OVERWRITE:-0}" == 1 ]] && reentry_args+=(--allow-completed-overwrite)
+set +e
+python tools/check_v48_36_reentry_contract.py "${reentry_args[@]}"   >"$OUTPUTDIR/logs/reentry_contract.log" 2>&1
+reentry_rc=$?
+set -e
+if [[ "$reentry_rc" != 0 ]]; then
+  echo "v48.36 re-entry contract failed; existing terminal state was not modified" >&2
   exit 30
 fi
-export V4836_ATTEMPT_ID="$ATTEMPT_ID"
-python - "$OUTPUTDIR/ATTEMPT_STARTED.json" "$ATTEMPT_ID" "$SOURCE_RUN" "$PROTOCOL_ROOT" "$RESUME_AFTER_ADAPTATION" <<'PY_ATTEMPT_STATUS'
-import json,os,pathlib,sys,time
-p=pathlib.Path(sys.argv[1]); p.parent.mkdir(parents=True,exist_ok=True)
-doc={'event':'v48_36_attempt_started','version':'v48.36-OCAF','implementation_version':os.environ.get('OCRAP_IMPLEMENTATION_VERSION','v48.36.3-TERMINAL-STATE-HOTFIX'),
-     'created_unix':time.time(),'attempt_id':sys.argv[2],'source_run':sys.argv[3],
-     'protocol_root':sys.argv[4],'resume_after_adaptation':sys.argv[5]=='1','test_roots_read':False}
-tmp=p.with_name(f'.{p.name}.tmp.{os.getpid()}.{time.time_ns()}')
-with tmp.open('w',encoding='utf-8') as f:
-    json.dump(doc,f,ensure_ascii=False,indent=2); f.write('\n'); f.flush(); os.fsync(f.fileno())
-os.replace(tmp,p)
-PY_ATTEMPT_STATUS
+read -r reentry_action reentry_exit_code < <(python - "$OUTPUTDIR/V48_36_REENTRY_CONTRACT.json" <<'PY_REENTRY_READ'
+import json,sys
+x=json.load(open(sys.argv[1]))
+print(x.get('action','refuse'), x.get('existing_exit_code',''))
+PY_REENTRY_READ
+)
+case "$reentry_action" in
+  return_existing_terminal)
+    echo "v48.36 output already has a valid authoritative terminal state; returning RC=${reentry_exit_code} without mutation"
+    exit "$reentry_exit_code"
+    ;;
+  restore_archived_terminal)
+    set +e
+    python tools/restore_v48_36_terminal_state_after_refused_resume.py       --run "$OUTPUTDIR" --repo "$REPO" --output "$OUTPUTDIR/V48_36_4_REENTRY_RESTORE.json"       >"$OUTPUTDIR/logs/reentry_restore.log" 2>&1
+    restore_rc=$?
+    set -e
+    if [[ "$restore_rc" != 0 ]]; then
+      echo "v48.36 archived terminal restore failed; repair rolled back" >&2
+      exit 30
+    fi
+    restored_exit_code="$(python - "$OUTPUTDIR/V48_36_4_REENTRY_RESTORE.json" <<'PY_RESTORED_RC'
+import json,sys
+print(int(json.load(open(sys.argv[1]))['authoritative_exit_code']))
+PY_RESTORED_RC
+)"
+    echo "v48.36 restored the previous authoritative terminal state; returning RC=${restored_exit_code}"
+    exit "$restored_exit_code"
+    ;;
+  refuse_preserve_current|refuse)
+    echo "v48.36 re-entry refused; current active state was preserved" >&2
+    exit 30
+    ;;
+  proceed) ;;
+  *)
+    echo "unknown v48.36 re-entry action: $reentry_action" >&2
+    exit 30
+    ;;
+esac
+
 # A no-retraining resume must inspect the original failure state before any
-# status cleanup. The authorization is narrow and validates checkpoint bytes,
-# checkpoint config, source/protocol identity, and absence of certificate access.
+# attempt creation or status cleanup. The authorization is narrow and validates
+# checkpoint bytes, checkpoint config, source/protocol identity, and absence of
+# certificate access.
 TRAIN_NEAR="$PROTOCOL_ROOT/evidence_adapt_train_near_contact"
 TRAIN_CONTACT="$PROTOCOL_ROOT/evidence_adapt_train_contact"
 DEV_NEAR="$PROTOCOL_ROOT/evidence_adapt_dev_near_contact"
@@ -123,13 +157,13 @@ if gate_marker.exists():
     shutil.move(str(gate_marker),str(history/gate_marker.name))
 try: (root/'NEXT_COMMANDS.txt').unlink()
 except FileNotFoundError: pass
-failed={'event':'v48_36_pipeline_failed','version':'v48.36-OCAF','implementation_version':os.environ.get('OCRAP_IMPLEMENTATION_VERSION','v48.36.3-TERMINAL-STATE-HOTFIX'),'created_unix':time.time(),'attempt_id':attempt_id,'stage':stage,
+failed={'event':'v48_36_pipeline_failed','version':'v48.36-OCAF','implementation_version':os.environ.get('OCRAP_IMPLEMENTATION_VERSION','v48.36.4-IDEMPOTENT-TERMINAL-STATE-HOTFIX'),'created_unix':time.time(),'attempt_id':attempt_id,'stage':stage,
         'raw_exit_code':raw_rc,'normalized_exit_code':30,'pipeline_exit_code':30,'detail':detail,
         'adaptation_exit_codes':{'balanced':balanced_rc,'precision':precision_rc},
         'certificate_executed':certificate_executed,'gate_evaluated':gate_evaluated,
         'pipeline_valid':False,'test_roots_read':False}
 atomic(root/'PIPELINE_FAILED.json',failed)
-doc={'event':'v48_36_ocaf_controller_complete','version':'v48.36-OCAF','implementation_version':os.environ.get('OCRAP_IMPLEMENTATION_VERSION','v48.36.3-TERMINAL-STATE-HOTFIX'),'created_unix':time.time(),'attempt_id':attempt_id,
+doc={'event':'v48_36_ocaf_controller_complete','version':'v48.36-OCAF','implementation_version':os.environ.get('OCRAP_IMPLEMENTATION_VERSION','v48.36.4-IDEMPOTENT-TERMINAL-STATE-HOTFIX'),'created_unix':time.time(),'attempt_id':attempt_id,
      'source_run':str(source),'protocol_root':str(protocol),'variants':variants,
      'raw_certificate_exit_code':raw_rc if certificate_executed else None,
      'certificate_exit_code':30 if certificate_executed else None,'pipeline_exit_code':30,
@@ -167,26 +201,48 @@ if [[ "$RESUME_AFTER_ADAPTATION" == 1 ]]; then
   resume_contract_rc=$?
   set -e
   if [[ "$resume_contract_rc" != 0 ]]; then
-    # A refused resume is itself the terminal state of this new attempt. Preserve
-    # the old terminal evidence before publishing an attempt-scoped RC=30.
-    python - "$OUTPUTDIR" "$ATTEMPT_ID" <<'PY_ARCHIVE_REFUSED_RESUME'
-import pathlib,shutil,sys,time
-root=pathlib.Path(sys.argv[1]); attempt=sys.argv[2]
-names=('PIPELINE_FAILED.json','V48_36_COMPLETE.json','NEXT_COMMANDS_STATUS.json',
-       'NEXT_COMMANDS_BLOCKED.json','GATE_FAILED.json','CALIBRATION_FAILED.json',
-       'AUTHORITATIVE_RUN_STATUS.json')
-present=[root/name for name in names if (root/name).exists()]
-if present:
-    dst=root/'status_history'/f'resume-refused-{attempt}-{time.time_ns()}'
-    dst.mkdir(parents=True,exist_ok=True)
-    for src in present: shutil.move(str(src),str(dst/src.name))
-PY_ARCHIVE_REFUSED_RESUME
-    write_pipeline_failure "resume_authorization" "$resume_contract_rc" \
-      "resume contract rejected; inspect V48_36_RESUME_CONTRACT.json"
-    echo "v48.36 resume refused; inspect $OUTPUTDIR/V48_36_RESUME_CONTRACT.json" >&2
+    # Resume authorization is a pre-attempt decision.  Do not create a new active
+    # RC=30 or move/overwrite any existing terminal state merely because reuse was
+    # refused.  The sidecar records the command failure for operator diagnosis.
+    python - "$OUTPUTDIR/V48_36_RESUME_REFUSED.json" "$resume_contract_rc" <<'PY_RESUME_REFUSED'
+import json,os,pathlib,sys,time
+p=pathlib.Path(sys.argv[1]); rc=int(sys.argv[2])
+doc={'event':'v48_36_resume_refused','version':'v48.36-OCAF',
+     'implementation_version':os.environ.get('OCRAP_IMPLEMENTATION_VERSION','v48.36.4-IDEMPOTENT-TERMINAL-STATE-HOTFIX'),
+     'created_unix':time.time(),'resume_contract_exit_code':rc,
+     'active_terminal_state_preserved':True,'attempt_created':False,
+     'algorithm_changed':False,'test_roots_read':False}
+tmp=p.with_name(f'.{p.name}.tmp.{os.getpid()}.{time.time_ns()}')
+with tmp.open('w',encoding='utf-8') as f:
+    json.dump(doc,f,ensure_ascii=False,indent=2); f.write('\n'); f.flush(); os.fsync(f.fileno())
+os.replace(tmp,p)
+PY_RESUME_REFUSED
+    echo "v48.36 resume refused before attempt creation; active terminal state was preserved" >&2
     exit 30
   fi
 fi
+
+ATTEMPT_ID="${V4836_ATTEMPT_ID:-$(python - <<'PY_ATTEMPT'
+import time,uuid
+print(f"v4836-{time.time_ns()}-{uuid.uuid4().hex[:12]}")
+PY_ATTEMPT
+)}"
+if [[ -z "$ATTEMPT_ID" || "$ATTEMPT_ID" == "legacy-untracked" ]]; then
+  echo "invalid V4836_ATTEMPT_ID: attempt-scoped non-legacy ID required" >&2
+  exit 30
+fi
+export V4836_ATTEMPT_ID="$ATTEMPT_ID"
+python - "$OUTPUTDIR/ATTEMPT_STARTED.json" "$ATTEMPT_ID" "$SOURCE_RUN" "$PROTOCOL_ROOT" "$RESUME_AFTER_ADAPTATION" <<'PY_ATTEMPT_STATUS'
+import json,os,pathlib,sys,time
+p=pathlib.Path(sys.argv[1]); p.parent.mkdir(parents=True,exist_ok=True)
+doc={'event':'v48_36_attempt_started','version':'v48.36-OCAF','implementation_version':os.environ.get('OCRAP_IMPLEMENTATION_VERSION','v48.36.4-IDEMPOTENT-TERMINAL-STATE-HOTFIX'),
+     'created_unix':time.time(),'attempt_id':sys.argv[2],'source_run':sys.argv[3],
+     'protocol_root':sys.argv[4],'resume_after_adaptation':sys.argv[5]=='1','test_roots_read':False}
+tmp=p.with_name(f'.{p.name}.tmp.{os.getpid()}.{time.time_ns()}')
+with tmp.open('w',encoding='utf-8') as f:
+    json.dump(doc,f,ensure_ascii=False,indent=2); f.write('\n'); f.flush(); os.fsync(f.fileno())
+os.replace(tmp,p)
+PY_ATTEMPT_STATUS
 
 # Preserve previous active status as history, then clear the active namespace.
 # The current attempt is identified by ATTEMPT_ID; downstream readers never infer
@@ -504,7 +560,7 @@ if signature_rc == 0:
     try: sig=json.load(open(signature))
     except Exception as exc: sig={'read_error':repr(exc)}
 doc={
-    'event':'v48_36_adaptation_failed','version':'v48.36-OCAF','implementation_version':os.environ.get('OCRAP_IMPLEMENTATION_VERSION','v48.36.3-TERMINAL-STATE-HOTFIX'),
+    'event':'v48_36_adaptation_failed','version':'v48.36-OCAF','implementation_version':os.environ.get('OCRAP_IMPLEMENTATION_VERSION','v48.36.4-IDEMPOTENT-TERMINAL-STATE-HOTFIX'),
     'attempt_id':attempt_id,'variant':variant,'stage':stage,
     'exit_code':rc,'log':str(log),'failure_signature':sig,
     'failure_signature_exit_code':signature_rc,
@@ -637,7 +693,7 @@ blocked_exists=(root/'NEXT_COMMANDS_BLOCKED.json').is_file()
 consistent=(rc==0 and next_exists and not blocked_exists) or (rc==20 and (not next_exists) and blocked_exists)
 if not consistent:
     raise SystemExit(f'certificate/NEXT_COMMANDS contract mismatch: rc={rc} next={next_exists} blocked={blocked_exists}')
-doc={'event':'v48_36_ocaf_controller_complete','version':'v48.36-OCAF','implementation_version':os.environ.get('OCRAP_IMPLEMENTATION_VERSION','v48.36.3-TERMINAL-STATE-HOTFIX'),'created_unix':time.time(),'attempt_id':attempt_id,
+doc={'event':'v48_36_ocaf_controller_complete','version':'v48.36-OCAF','implementation_version':os.environ.get('OCRAP_IMPLEMENTATION_VERSION','v48.36.4-IDEMPOTENT-TERMINAL-STATE-HOTFIX'),'created_unix':time.time(),'attempt_id':attempt_id,
      'source_run':str(source),'protocol_root':str(protocol),'variants':variants,
      'raw_certificate_exit_code':raw_rc,'certificate_exit_code':rc,'pipeline_exit_code':rc,
      'certificate_executed':True,'gate_evaluated':True,'gate_passed':(rc==0 and next_exists),
