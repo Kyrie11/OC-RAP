@@ -1,0 +1,32 @@
+# OC-RAP v48.36 OCAF 下一步执行指令（中文）
+# 必须在仓库根目录执行。主实验只读取 train/adaptation-dev/certificate pool；不读取 held-out test。
+
+export OCRAP_REPO=/home/senzeyu2/code/OC-RAP
+cd "$OCRAP_REPO"
+export PYTHONPATH="$OCRAP_REPO/src${PYTHONPATH:+:$PYTHONPATH}"
+
+# 0) 可选：静态预检
+python tools/check_v48_36_ocaf_bridge_contract.py --output runs/v48_36_ocaf_preflight/OCAF_BRIDGE_CONTRACT.json
+bash -n scripts/run_v48_36_ocaf_dedicated.sh
+bash -n scripts/run_v48_36_ocaf_ablations.sh
+
+# 1) 主实验（两张 GPU；一个网络、一套连续物理语义、一份共享 rule）
+OUTPUTDIR=runs/ocrap_v48_36_ocaf_dedicated_4836 OCRAP_ROOT=/data0/senzeyu2/dataset/OCRAP SOURCE_RUN=runs/ocrap_v48_13_terra_proxy_4801 PROTOCOL_ROOT=/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814 CAL_SAFE=/data0/senzeyu2/dataset/OCRAP/calibration_safe GPU0=0 GPU1=1 EVIDENCE_CALIBRATOR_CONTEXT_SOURCE=physical_interaction EVIDENCE_INTERACTION_HIDDEN=64 EVIDENCE_INTERACTION_DROPOUT=0.05 EVIDENCE_CONSENSUS_PRIOR_SCALE=0.50 EVIDENCE_ADMISSION_PRIOR_MODE=frontier_capped_slack bash scripts/run_v48_36_ocaf_dedicated.sh
+RC=$?
+echo "v48.36 main RC=$RC"
+
+# RC 解释：0=通过 gate；20=有效算法拒绝；30=工程/协议失败。
+python tools/resolve_v48_36_authoritative_result.py   --run runs/ocrap_v48_36_ocaf_dedicated_4836   --output runs/ocrap_v48_36_ocaf_dedicated_4836/AUTHORITATIVE_RUN_STATUS.json
+
+# 2) 无论主实验 RC=0 还是 20，都可运行科学消融；RC=30 时先修工程错误。
+MAIN_RUN=runs/ocrap_v48_36_ocaf_dedicated_4836 ABLATION_ROOT=runs/ocrap_v48_36_ocaf_ablations_4836 OCRAP_ROOT=/data0/senzeyu2/dataset/OCRAP SOURCE_RUN=runs/ocrap_v48_13_terra_proxy_4801 PROTOCOL_ROOT=/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814 GPU0=0 GPU1=1 bash scripts/run_v48_36_ocaf_ablations.sh
+
+# 3) 只有主实验 RC=0 才执行。不要手工改路径，直接执行 gate 生成的命令。
+if [[ -s runs/ocrap_v48_36_ocaf_dedicated_4836/NEXT_COMMANDS.txt ]]; then
+  bash runs/ocrap_v48_36_ocaf_dedicated_4836/NEXT_COMMANDS.txt
+else
+  echo "未授权 Safe/stress：主 gate 尚未通过。"
+fi
+
+# 4) 打包结果
+python tools/package_v48_36_results.py   --run runs/ocrap_v48_36_ocaf_dedicated_4836   --output runs/ocrap_v48_36_ocaf_dedicated_4836/packaged_v48_36.zip

@@ -1,3 +1,18 @@
+# Algorithm Change Log
+
+## v48.36 — OCAF (Observation-Conditioned Action Frontier)
+
+- **Root cause addressed:** v48.35.2 used an action-only `physical_relative` evidence context. It could not distinguish the effect of the same braking/steering delta under different continuous clearance, contact-pose, relative-motion, route and occupancy conditions.
+- **Unified representation:** added `ObservationConditionedActionFrontierBridge`, combining candidate-minus-nominal executable action with nominal-anchor observation pressure via a multiplicative interaction. No regime ID, regime-specific head, threshold or policy branch is introduced.
+- **No scene shortcut:** all action-to-context outputs are bias-free; zero candidate action difference produces exactly zero interaction context.
+- **Magnitude preservation:** retained a raw signed-action pathway and added an RMS-gated normalized direction pathway, avoiding LayerNorm-only loss of action magnitude.
+- **Conservative transfer:** source-expert consensus prior is explicitly scaled (default `0.50`) so the learned observation-conditioned residual can correct wrong frozen-expert direction without selecting a regime expert.
+- **Continuous frontier retained:** the five signed harm components and non-compensatory smooth cap remain mandatory; benefit/residual cannot compensate an unsafe component.
+- **Training update:** factor and identity stages train the OCAF bridge; strengthened listwise, tail, margin-regression, frontier-pairwise and safe-utility objectives while keeping one shared rule.
+- **Engineering fixes:** replaced the generic 100k calibrator cap with an exact checkpoint trainable-prefix contract; added canonical dataset-root/alias rejection; made 2x2 ablations independent; added missing version-scoped calibration tools; made context/cap contracts arm-aware; included OCAF hyperparameters in cache identity; added v48.36 authoritative RC resolver, atomic attempt-scoped terminal state, and v48.36-only Safe/stress authorization.
+- **Paper alignment:** removed the regime-conditioned second admission channel and documented one continuous-headroom admission rule.
+- **Validation:** targeted OCAF tests cover exact-zero action, nonzero gradient, action magnitude, nominal-scene anchoring, observation modulation, non-compensatory cap, canonical roots, authoritative RC 0/20, arm-aware 2x2 contracts, and OCAF-specific resume semantics. The revised TeX compiles after fixing the malformed hyperref declaration; the uploaded source did not include its bibliography file.
+
 ## v48.35.2 — ENGINEERING-INTEGRITY-AND-AUTHORITATIVE-STATE (2026-08-05)
 
 ### Scope

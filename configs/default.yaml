@@ -300,6 +300,8 @@ model:
   direct_recovery_evidence_calibrator_context: false
   direct_recovery_evidence_calibrator_context_detach: true
   direct_recovery_evidence_calibrator_context_source: relative
+  direct_recovery_evidence_interaction_hidden: 64
+  direct_recovery_evidence_interaction_dropout: 0.05
   direct_recovery_evidence_calibrator_shared: false
   direct_recovery_evidence_calibrator_regime_scale: 0.25
   # v48.20 UNISON: evaluate both frozen source experts for every candidate and
@@ -311,6 +313,7 @@ model:
   # default so legacy checkpoints and scripts preserve their exact behaviour.
   direct_recovery_evidence_concord: false
   direct_recovery_evidence_consensus_disagreement_penalty: 0.15
+  direct_recovery_evidence_consensus_prior_scale: 1.0
   direct_recovery_evidence_admission_head: false
   direct_recovery_evidence_admission_scale: 2.0
   direct_recovery_evidence_admission_bounded: true

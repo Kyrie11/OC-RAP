@@ -103,6 +103,55 @@ class RecoverySetTournament(nn.Module):
         return self.score_from_context(context, group_index, is_nominal)
 
 
+class ObservationConditionedActionFrontierBridge(nn.Module):
+    """Low-rank, regime-agnostic action-by-observation interaction.
+
+    The scene path cannot produce a context by itself: every output term is
+    multiplicatively gated by a candidate-minus-nominal executable action.  The
+    raw signed action path preserves magnitude, while a magnitude-gated direction
+    path improves conditioning.  With a zero action difference the output is
+    exactly zero, including in finite precision.
+    """
+
+    def __init__(self, action_dim: int, observation_dim: int, hidden_dim: int, dropout: float):
+        super().__init__()
+        self.action_dim = int(action_dim)
+        self.observation_dim = int(observation_dim)
+        self.hidden_dim = max(8, int(hidden_dim))
+        self.action_raw = nn.Linear(self.action_dim, self.hidden_dim, bias=False)
+        self.action_direction_norm = nn.LayerNorm(self.action_dim, elementwise_affine=False)
+        self.action_direction = nn.Linear(self.action_dim, self.hidden_dim, bias=False)
+        self.observation = nn.Sequential(
+            nn.LayerNorm(self.observation_dim),
+            nn.Linear(self.observation_dim, self.hidden_dim),
+            nn.GELU(),
+            nn.Linear(self.hidden_dim, self.hidden_dim),
+        )
+        self.output = nn.Sequential(
+            nn.Linear(2 * self.hidden_dim, self.hidden_dim, bias=False),
+            nn.GELU(),
+            nn.Dropout(float(max(0.0, dropout))),
+            nn.Linear(self.hidden_dim, self.hidden_dim, bias=False),
+        )
+
+    def forward(self, action_relative: torch.Tensor, nominal_observation: torch.Tensor) -> torch.Tensor:
+        if action_relative.shape[-1] != self.action_dim:
+            raise ValueError(
+                f"OCAF action dimension mismatch: got {action_relative.shape[-1]}, expected {self.action_dim}"
+            )
+        if nominal_observation.shape[-1] != self.observation_dim:
+            raise ValueError(
+                "OCAF observation dimension mismatch: "
+                f"got {nominal_observation.shape[-1]}, expected {self.observation_dim}"
+            )
+        scale = action_relative.square().mean(dim=-1, keepdim=True).sqrt()
+        raw = self.action_raw(action_relative)
+        direction = self.action_direction(self.action_direction_norm(action_relative)) * scale
+        action = raw + direction
+        scene = torch.tanh(self.observation(nominal_observation))
+        return self.output(torch.cat([action, action * scene], dim=-1))
+
+
 class OCRAPModel(nn.Module):
     """Neural OC-RAP model with a learned root-query decoder.
 
@@ -176,6 +225,8 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_calibrator_context: bool = False,
         direct_recovery_evidence_calibrator_context_detach: bool = True,
         direct_recovery_evidence_calibrator_context_source: str = "relative",
+        direct_recovery_evidence_interaction_hidden: int = 64,
+        direct_recovery_evidence_interaction_dropout: float = 0.05,
         direct_recovery_evidence_calibrator_shared: bool = False,
         direct_recovery_evidence_calibrator_regime_scale: float = 0.25,
         direct_recovery_evidence_unified_experts: bool = False,
@@ -185,6 +236,7 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_component_reliability: str | tuple[float, ...] = "",
         direct_recovery_evidence_concord: bool = False,
         direct_recovery_evidence_consensus_disagreement_penalty: float = 0.15,
+        direct_recovery_evidence_consensus_prior_scale: float = 1.0,
         direct_recovery_evidence_admission_head: bool = False,
         direct_recovery_evidence_admission_scale: float = 2.0,
         direct_recovery_evidence_admission_bounded: bool = True,
@@ -263,6 +315,12 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_evidence_calibrator_context_source = str(
             direct_recovery_evidence_calibrator_context_source or "relative"
         ).strip().lower()
+        self.direct_recovery_evidence_interaction_hidden = max(
+            8, int(direct_recovery_evidence_interaction_hidden)
+        )
+        self.direct_recovery_evidence_interaction_dropout = float(
+            max(0.0, direct_recovery_evidence_interaction_dropout)
+        )
         self.direct_recovery_evidence_calibrator_shared = bool(
             direct_recovery_evidence_calibrator_shared
         )
@@ -308,6 +366,9 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_evidence_consensus_disagreement_penalty = float(
             max(0.0, direct_recovery_evidence_consensus_disagreement_penalty)
         )
+        self.direct_recovery_evidence_consensus_prior_scale = float(
+            max(0.0, direct_recovery_evidence_consensus_prior_scale)
+        )
         self.direct_recovery_evidence_admission_head = bool(
             direct_recovery_evidence_admission_head
         )
@@ -352,7 +413,7 @@ class OCRAPModel(nn.Module):
                 f"{direct_recovery_evidence_calibrator_mode!r}"
             )
         if self.direct_recovery_evidence_calibrator_context_source not in {
-            "relative", "tournament", "physical_relative"
+            "relative", "tournament", "physical_relative", "physical_interaction"
         }:
             raise ValueError(
                 "Unsupported direct_recovery_evidence_calibrator_context_source="
@@ -366,10 +427,12 @@ class OCRAPModel(nn.Module):
             raise ValueError("tournament evidence context requires direct_recovery_set_tournament=true")
         if (
             self.direct_recovery_evidence_calibrator_context
-            and self.direct_recovery_evidence_calibrator_context_source == "physical_relative"
+            and self.direct_recovery_evidence_calibrator_context_source in {
+                "physical_relative", "physical_interaction"
+            }
             and self.encoder_type != "structured_transformer"
         ):
-            raise ValueError("physical_relative evidence context requires structured_transformer")
+            raise ValueError("physical evidence context requires structured_transformer")
         if self.direct_recovery_evidence_unified_experts and not self.direct_recovery_delta_regime_experts:
             raise ValueError(
                 "unified expert evidence requires direct_recovery_delta_regime_experts=true"
@@ -465,6 +528,8 @@ class OCRAPModel(nn.Module):
         self.direct_candidate_feature_dim = 0
         self.direct_candidate_physical_feature_dim = 0
         self.direct_candidate_physical_slices: tuple[tuple[int, int], ...] = ()
+        self.direct_observation_feature_dim = 0
+        self.direct_observation_slices: tuple[tuple[int, int], ...] = ()
         self.direct_ego_feature_dim = 0
         if self.encoder_type == "structured_transformer":
             layout = FlatFeatureLayout(**self.feature_layout)
@@ -485,6 +550,16 @@ class OCRAPModel(nn.Module):
             self.direct_candidate_physical_feature_dim = int(
                 layout.prefix_param_dim + layout.num_macros
                 + layout.prefix_flat_dim + layout.control_flat_dim
+            )
+            # OCAF scene pressure is anchored on the nominal row.  It contains
+            # ego and shared observation context, while excluding every candidate
+            # action field and the utility/harm/feasibility audit scalar block.
+            self.direct_observation_slices = (
+                (0, int(layout.ego_dim)),
+                (trajectory_end, int(input_dim)),
+            )
+            self.direct_observation_feature_dim = int(
+                layout.ego_dim + int(input_dim) - trajectory_end
             )
         if self.direct_recovery_value_pooling in {"candidate_concat", "prefix_concat", "action_concat"}:
             direct_in_dim = 6 * d_model
@@ -664,13 +739,26 @@ class OCRAPModel(nn.Module):
             ):
                 evidence_context_dim = self.direct_preference_set_ranker.hidden_dim
             elif self.direct_recovery_evidence_calibrator_context_source == "physical_relative":
-                # v48.35 CONTINUOUS-FRONTIER: expose only the raw executable-prefix
-                # difference to nominal.  This excludes agents/map/BEV and absolute
-                # scene identity, but restores action-level kinematics that the
-                # four/ten scalar evidence bridge cannot reconstruct.
+                # v48.35 CONTINUOUS-FRONTIER ablation: action-only executable-prefix
+                # difference to nominal.
                 evidence_context_dim = self.direct_candidate_physical_feature_dim
+            elif self.direct_recovery_evidence_calibrator_context_source == "physical_interaction":
+                # v48.36 OCAF: continuous observation pressure modulates an
+                # executable candidate-minus-nominal action without a regime switch.
+                evidence_context_dim = self.direct_recovery_evidence_interaction_hidden
             else:
                 evidence_context_dim = relative_in_dim
+        self.direct_evidence_interaction_bridge = (
+            ObservationConditionedActionFrontierBridge(
+                self.direct_candidate_physical_feature_dim,
+                self.direct_observation_feature_dim,
+                self.direct_recovery_evidence_interaction_hidden,
+                self.direct_recovery_evidence_interaction_dropout,
+            )
+            if self.direct_recovery_evidence_calibrator_context
+            and self.direct_recovery_evidence_calibrator_context_source == "physical_interaction"
+            else None
+        )
         # v48.20 UNISON-BRIDGE: a single shared evidence model consumes both
         # frozen source experts, their consensus/disagreement, and the frozen
         # proposal context.  No bucket/regime id is exposed to this model.
@@ -902,6 +990,37 @@ class OCRAPModel(nn.Module):
             if noms.numel() != 1:
                 continue
             out[idx] = raw[idx] - raw[noms[0]:noms[0] + 1]
+        return out
+
+    def _direct_nominal_observation_features(
+        self,
+        x: torch.Tensor,
+        group_index: torch.Tensor | None,
+        is_nominal: torch.Tensor | None,
+    ) -> torch.Tensor:
+        """Broadcast observation-only features from the unique nominal row.
+
+        Candidate rows cannot replace the scene anchor.  Audit scalars and every
+        candidate action field are excluded by construction, and no regime label
+        is consumed.
+        """
+        if not self.direct_observation_slices:
+            return x[:, :0]
+        raw = torch.cat([x[:, start:end] for start, end in self.direct_observation_slices], dim=-1)
+        out = torch.zeros_like(raw)
+        if raw.shape[-1] == 0 or group_index is None or is_nominal is None:
+            return out
+        groups = group_index.to(device=raw.device)
+        groups = groups.reshape(-1, 1) if groups.dim() == 1 else groups.reshape(groups.shape[0], -1)
+        nominal_mask = is_nominal.to(device=raw.device).reshape(-1) > 0.5
+        if groups.shape[0] != raw.shape[0] or nominal_mask.shape[0] != raw.shape[0]:
+            return out
+        for key in torch.unique(groups, dim=0):
+            idx = torch.where((groups == key.unsqueeze(0)).all(dim=1))[0]
+            noms = idx[nominal_mask[idx]]
+            if noms.numel() != 1:
+                continue
+            out[idx] = raw[noms[0]:noms[0] + 1]
         return out
 
     def _apply_direct_set_context(
@@ -1268,11 +1387,32 @@ class OCRAPModel(nn.Module):
                     calibrator_context = self._direct_candidate_raw_relative_features(
                         x, group_index, is_nominal
                     ).to(dtype=delta.dtype)
+                    if self.direct_recovery_evidence_calibrator_context_detach:
+                        calibrator_context = calibrator_context.detach()
                     out["direct_recovery_evidence_physical_relative_context"] = calibrator_context
+                elif self.direct_recovery_evidence_calibrator_context_source == "physical_interaction":
+                    if self.direct_evidence_interaction_bridge is None:
+                        raise RuntimeError("physical_interaction configured without OCAF bridge")
+                    action_context = self._direct_candidate_raw_relative_features(
+                        x, group_index, is_nominal
+                    ).to(dtype=delta.dtype)
+                    observation_context = self._direct_nominal_observation_features(
+                        x, group_index, is_nominal
+                    ).to(dtype=delta.dtype)
+                    if self.direct_recovery_evidence_calibrator_context_detach:
+                        # Detach raw/upstream representations, not the trainable OCAF bridge.
+                        action_context = action_context.detach()
+                        observation_context = observation_context.detach()
+                    calibrator_context = self.direct_evidence_interaction_bridge(
+                        action_context, observation_context
+                    )
+                    out["direct_recovery_evidence_physical_relative_context"] = action_context
+                    out["direct_recovery_evidence_nominal_observation_context"] = observation_context
+                    out["direct_recovery_evidence_interaction_context"] = calibrator_context
                 else:
                     calibrator_context = relative_features.to(dtype=delta.dtype)
-                if self.direct_recovery_evidence_calibrator_context_detach:
-                    calibrator_context = calibrator_context.detach()
+                    if self.direct_recovery_evidence_calibrator_context_detach:
+                        calibrator_context = calibrator_context.detach()
                 calibrator_parts.append(calibrator_context)
             calibrator_input = torch.cat(calibrator_parts, dim=-1)
 
@@ -1292,9 +1432,11 @@ class OCRAPModel(nn.Module):
                 # useful Near benefit evidence.  Mean consensus preserves shared
                 # source information while an explicit disagreement penalty keeps
                 # transfer conservative without selecting a regime expert.
-                base_benefit = benefit_e.mean(dim=1) - (
-                    self.direct_recovery_evidence_consensus_disagreement_penalty
-                    * (benefit_e.amax(dim=1) - benefit_e.amin(dim=1))
+                base_benefit = self.direct_recovery_evidence_consensus_prior_scale * (
+                    benefit_e.mean(dim=1) - (
+                        self.direct_recovery_evidence_consensus_disagreement_penalty
+                        * (benefit_e.amax(dim=1) - benefit_e.amin(dim=1))
+                    )
                 )
                 unified_benefit_logit = base_benefit + benefit_residual
                 if self.direct_recovery_evidence_component_heads:

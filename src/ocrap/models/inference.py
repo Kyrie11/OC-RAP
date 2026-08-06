@@ -193,6 +193,8 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         direct_recovery_evidence_calibrator_context=bool(ckpt.get("direct_recovery_evidence_calibrator_context", model_cfg.get("direct_recovery_evidence_calibrator_context", False))),
         direct_recovery_evidence_calibrator_context_detach=bool(ckpt.get("direct_recovery_evidence_calibrator_context_detach", model_cfg.get("direct_recovery_evidence_calibrator_context_detach", True))),
         direct_recovery_evidence_calibrator_context_source=str(ckpt.get("direct_recovery_evidence_calibrator_context_source", model_cfg.get("direct_recovery_evidence_calibrator_context_source", "relative"))),
+        direct_recovery_evidence_interaction_hidden=int(ckpt.get("direct_recovery_evidence_interaction_hidden", model_cfg.get("direct_recovery_evidence_interaction_hidden", 64))),
+        direct_recovery_evidence_interaction_dropout=float(ckpt.get("direct_recovery_evidence_interaction_dropout", model_cfg.get("direct_recovery_evidence_interaction_dropout", 0.05))),
         direct_recovery_evidence_calibrator_shared=bool(ckpt.get("direct_recovery_evidence_calibrator_shared", model_cfg.get("direct_recovery_evidence_calibrator_shared", False))),
         direct_recovery_evidence_calibrator_regime_scale=float(ckpt.get("direct_recovery_evidence_calibrator_regime_scale", model_cfg.get("direct_recovery_evidence_calibrator_regime_scale", 0.25))),
         direct_recovery_evidence_unified_experts=bool(ckpt.get("direct_recovery_evidence_unified_experts", model_cfg.get("direct_recovery_evidence_unified_experts", False))),
@@ -207,6 +209,10 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         direct_recovery_evidence_consensus_disagreement_penalty=float(ckpt.get(
             "direct_recovery_evidence_consensus_disagreement_penalty",
             model_cfg.get("direct_recovery_evidence_consensus_disagreement_penalty", 0.15),
+        )),
+        direct_recovery_evidence_consensus_prior_scale=float(ckpt.get(
+            "direct_recovery_evidence_consensus_prior_scale",
+            model_cfg.get("direct_recovery_evidence_consensus_prior_scale", 1.0),
         )),
         direct_recovery_evidence_admission_head=bool(ckpt.get(
             "direct_recovery_evidence_admission_head",
@@ -298,6 +304,8 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_evidence_calibrator_context"] = bool(ckpt.get("direct_recovery_evidence_calibrator_context", model_cfg.get("direct_recovery_evidence_calibrator_context", False)))
     cfg["model"]["direct_recovery_evidence_calibrator_context_detach"] = bool(ckpt.get("direct_recovery_evidence_calibrator_context_detach", model_cfg.get("direct_recovery_evidence_calibrator_context_detach", True)))
     cfg["model"]["direct_recovery_evidence_calibrator_context_source"] = str(ckpt.get("direct_recovery_evidence_calibrator_context_source", model_cfg.get("direct_recovery_evidence_calibrator_context_source", "relative")))
+    cfg["model"]["direct_recovery_evidence_interaction_hidden"] = int(ckpt.get("direct_recovery_evidence_interaction_hidden", model_cfg.get("direct_recovery_evidence_interaction_hidden", 64)))
+    cfg["model"]["direct_recovery_evidence_interaction_dropout"] = float(ckpt.get("direct_recovery_evidence_interaction_dropout", model_cfg.get("direct_recovery_evidence_interaction_dropout", 0.05)))
     cfg["model"]["direct_recovery_evidence_calibrator_shared"] = bool(ckpt.get("direct_recovery_evidence_calibrator_shared", model_cfg.get("direct_recovery_evidence_calibrator_shared", False)))
     cfg["model"]["direct_recovery_evidence_calibrator_regime_scale"] = float(ckpt.get("direct_recovery_evidence_calibrator_regime_scale", model_cfg.get("direct_recovery_evidence_calibrator_regime_scale", 0.25)))
     cfg["model"]["direct_recovery_evidence_unified_experts"] = bool(ckpt.get("direct_recovery_evidence_unified_experts", model_cfg.get("direct_recovery_evidence_unified_experts", False)))
@@ -308,6 +316,10 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_evidence_consensus_disagreement_penalty"] = float(ckpt.get(
         "direct_recovery_evidence_consensus_disagreement_penalty",
         model_cfg.get("direct_recovery_evidence_consensus_disagreement_penalty", 0.15),
+    ))
+    cfg["model"]["direct_recovery_evidence_consensus_prior_scale"] = float(ckpt.get(
+        "direct_recovery_evidence_consensus_prior_scale",
+        model_cfg.get("direct_recovery_evidence_consensus_prior_scale", 1.0),
     ))
     cfg["model"]["direct_recovery_evidence_admission_head"] = bool(ckpt.get(
         "direct_recovery_evidence_admission_head",
@@ -375,6 +387,14 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_evidence_calibrator_context_source",
             model_cfg.get("direct_recovery_evidence_calibrator_context_source", "relative"),
         )),
+        "direct_recovery_evidence_interaction_hidden": int(ckpt.get(
+            "direct_recovery_evidence_interaction_hidden",
+            model_cfg.get("direct_recovery_evidence_interaction_hidden", 64),
+        )),
+        "direct_recovery_evidence_interaction_dropout": float(ckpt.get(
+            "direct_recovery_evidence_interaction_dropout",
+            model_cfg.get("direct_recovery_evidence_interaction_dropout", 0.05),
+        )),
         "direct_recovery_evidence_admission_bounded": bool(ckpt.get(
             "direct_recovery_evidence_admission_bounded",
             model_cfg.get("direct_recovery_evidence_admission_bounded", True),
@@ -408,10 +428,16 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             model_cfg.get("direct_recovery_evidence_component_prior_logit", -2.0),
         )),
         "direct_recovery_evidence_component_reliability": expected_component_reliability,
+        "direct_recovery_evidence_consensus_prior_scale": float(ckpt.get(
+            "direct_recovery_evidence_consensus_prior_scale",
+            model_cfg.get("direct_recovery_evidence_consensus_prior_scale", 1.0),
+        )),
     }
     actual_contract = {
         "direct_recovery_evidence_calibrator_context": bool(model.direct_recovery_evidence_calibrator_context),
         "direct_recovery_evidence_calibrator_context_source": str(model.direct_recovery_evidence_calibrator_context_source),
+        "direct_recovery_evidence_interaction_hidden": int(model.direct_recovery_evidence_interaction_hidden),
+        "direct_recovery_evidence_interaction_dropout": float(model.direct_recovery_evidence_interaction_dropout),
         "direct_recovery_evidence_admission_bounded": bool(model.direct_recovery_evidence_admission_bounded),
         "direct_recovery_evidence_admission_prior_detach": bool(model.direct_recovery_evidence_admission_prior_detach),
         "direct_recovery_evidence_admission_prior_mode": str(model.direct_recovery_evidence_admission_prior_mode),
@@ -422,6 +448,9 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         "direct_recovery_evidence_component_prior_logit": float(model.direct_recovery_evidence_component_prior_logit),
         "direct_recovery_evidence_component_reliability": ",".join(
             f"{x:.8g}" for x in model.direct_recovery_evidence_component_reliability
+        ),
+        "direct_recovery_evidence_consensus_prior_scale": float(
+            model.direct_recovery_evidence_consensus_prior_scale
         ),
     }
     if expected_contract != actual_contract:

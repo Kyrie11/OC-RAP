@@ -1,0 +1,22 @@
+{
+  "event": "v48_36_ocaf_bridge_contract",
+  "version": "v48.36-OCAF",
+  "created_unix": 1785986513.215653,
+  "valid": true,
+  "checks": {
+    "zero_action_exact_zero": true,
+    "finite_nonzero_action_gradient": true,
+    "action_magnitude_preserved": true,
+    "observation_modulates_nonzero_action": true,
+    "observation_cannot_create_action_free_signal": true,
+    "noncompensatory_smooth_cap_upper_bounds_both_inputs": true
+  },
+  "measurements": {
+    "small_action_norm": 0.15124686062335968,
+    "large_action_norm": 1.5165047645568848,
+    "observation_effect_max": 0.01635095477104187,
+    "scene_only_max": 0.0
+  },
+  "regime_id_consumed": false,
+  "test_roots_read": false
+}

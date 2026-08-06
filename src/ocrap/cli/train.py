@@ -2631,6 +2631,8 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_evidence_calibrator_context=bool(model_cfg.get("direct_recovery_evidence_calibrator_context", False)),
         direct_recovery_evidence_calibrator_context_detach=bool(model_cfg.get("direct_recovery_evidence_calibrator_context_detach", True)),
         direct_recovery_evidence_calibrator_context_source=str(model_cfg.get("direct_recovery_evidence_calibrator_context_source", "relative")),
+        direct_recovery_evidence_interaction_hidden=int(model_cfg.get("direct_recovery_evidence_interaction_hidden", 64)),
+        direct_recovery_evidence_interaction_dropout=float(model_cfg.get("direct_recovery_evidence_interaction_dropout", 0.05)),
         direct_recovery_evidence_calibrator_shared=bool(model_cfg.get("direct_recovery_evidence_calibrator_shared", False)),
         direct_recovery_evidence_calibrator_regime_scale=float(model_cfg.get("direct_recovery_evidence_calibrator_regime_scale", 0.25)),
         direct_recovery_evidence_unified_experts=bool(model_cfg.get("direct_recovery_evidence_unified_experts", False)),
@@ -2643,6 +2645,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_evidence_concord=bool(model_cfg.get("direct_recovery_evidence_concord", False)),
         direct_recovery_evidence_consensus_disagreement_penalty=float(
             model_cfg.get("direct_recovery_evidence_consensus_disagreement_penalty", 0.15)
+        ),
+        direct_recovery_evidence_consensus_prior_scale=float(
+            model_cfg.get("direct_recovery_evidence_consensus_prior_scale", 1.0)
         ),
         direct_recovery_evidence_admission_head=bool(
             model_cfg.get("direct_recovery_evidence_admission_head", False)
@@ -2980,6 +2985,8 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "direct_recovery_evidence_calibrator_context": bool(model_cfg.get("direct_recovery_evidence_calibrator_context", False)),
             "direct_recovery_evidence_calibrator_context_detach": bool(model_cfg.get("direct_recovery_evidence_calibrator_context_detach", True)),
             "direct_recovery_evidence_calibrator_context_source": str(model_cfg.get("direct_recovery_evidence_calibrator_context_source", "relative")),
+            "direct_recovery_evidence_interaction_hidden": int(model_cfg.get("direct_recovery_evidence_interaction_hidden", 64)),
+            "direct_recovery_evidence_interaction_dropout": float(model_cfg.get("direct_recovery_evidence_interaction_dropout", 0.05)),
             "direct_recovery_evidence_calibrator_shared": bool(model_cfg.get("direct_recovery_evidence_calibrator_shared", False)),
             "direct_recovery_evidence_calibrator_regime_scale": float(model_cfg.get("direct_recovery_evidence_calibrator_regime_scale", 0.25)),
             "direct_recovery_evidence_unified_experts": bool(model_cfg.get("direct_recovery_evidence_unified_experts", False)),
@@ -2992,6 +2999,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "direct_recovery_evidence_concord": bool(model_cfg.get("direct_recovery_evidence_concord", False)),
             "direct_recovery_evidence_consensus_disagreement_penalty": float(
                 model_cfg.get("direct_recovery_evidence_consensus_disagreement_penalty", 0.15)
+            ),
+            "direct_recovery_evidence_consensus_prior_scale": float(
+                model_cfg.get("direct_recovery_evidence_consensus_prior_scale", 1.0)
             ),
             "direct_recovery_evidence_admission_head": bool(
                 model_cfg.get("direct_recovery_evidence_admission_head", False)

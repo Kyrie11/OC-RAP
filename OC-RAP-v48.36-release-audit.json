@@ -1,0 +1,27 @@
+{
+  "event": "v48_36_release_audit",
+  "version": "v48.36-OCAF",
+  "created_unix": 1785986618.6726468,
+  "valid": true,
+  "checks": {
+    "single_network_shared_rule": true,
+    "regime_not_policy_input": true,
+    "ocaf_bridge_contract": true,
+    "noncompensatory_cap_contract": true,
+    "canonical_dataset_contract": true,
+    "authoritative_rc_contract": true,
+    "ablation_arm_aware": true,
+    "dependency_closure": true,
+    "python_compileall": true,
+    "shell_syntax_66": true,
+    "focused_tests_39_passed": true,
+    "paper_fatal_compile": true,
+    "test_roots_read": false
+  },
+  "known_limitations": [
+    "No real WOMD/Waymax/A30 execution in delivery environment",
+    "Uploaded paper bibliography file is absent; citations unresolved",
+    "Paper quantitative tables still require v48.36 measurements"
+  ],
+  "algorithm_result_claimed": false
+}
