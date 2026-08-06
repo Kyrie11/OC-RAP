@@ -1,0 +1,32 @@
+OC-RAP v48.36.3 validation status
+=================================
+Implementation: v48.36.3-TERMINAL-STATE-HOTFIX
+Algorithm changed: false
+
+Focused tests, executed per file:
+- test_v48_16_anchor.py: 4 passed
+- test_v48_35_continuous_frontier.py: 9 passed
+- test_v48_35_1_rc30_training_contract_hotfix.py: 8 passed
+- test_v48_35_2_engineering_integrity.py: 11 passed
+- test_v48_36_ocaf.py: 14 passed, 1 CUDA-only skipped
+- test_v48_36_2_stage_transfer_hotfix.py: 6 passed
+- test_v48_36_3_terminal_state_hotfix.py: 6 passed
+TOTAL: 58 passed, 1 skipped
+
+Static validation:
+- Python compileall src/tools/tests: PASS
+- bash -n on 69 scripts/tools shell files: PASS
+- new tools --help/import: PASS
+- active v48.36 calibration has no V4835_ATTEMPT_ID: PASS
+- OC-RAP model algorithm source byte-identical to uploaded code: PASS
+
+Full historical suite:
+- 352 passed, 1 skipped, 38 failed
+- 37 failures: historical v48.12-v48.32 scripts absent from uploaded archive
+- 1 failure: inherited v48.30 source-text assertion, reproducible in original upload
+- no failure was introduced by a modified v48.36.3 file
+
+Environment limitations:
+- uploaded result archive has no .pt checkpoints
+- no WOMD/Waymax/A30 execution performed in delivery environment
+- real checkpoint-byte terminal repair must run on original experiment machine

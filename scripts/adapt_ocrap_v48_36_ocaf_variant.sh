@@ -256,6 +256,7 @@ fi
 FINAL_CKPT="$FINAL_RUN/model_v48_trac_sr/best.pt"
 transfer_extra=()
 [[ "$ENABLE_FINAL_CALIBRATION" == 1 ]] || transfer_extra+=(--final-stage-disabled)
+IMPLEMENTATION_VERSION="${OCRAP_IMPLEMENTATION_VERSION:-v48.36.3-TERMINAL-STATE-HOTFIX}"
 CURRENT_STAGE="stage_transfer_integrity"
 python tools/check_v48_36_stage_transfer.py \
   --factor "$FACTOR_CKPT" --identity "$IDENTITY_CKPT" --final "$FINAL_CKPT" \
@@ -263,7 +264,7 @@ python tools/check_v48_36_stage_transfer.py \
   --final-architecture "$FINAL_RUN/STAGE_ARCHITECTURE.json" \
   --identity-allowed-prefixes "$identity_prefixes" \
   --final-allowed-prefixes direct_evidence_concord_admission_calibrator \
-  --implementation-version v48.36.2-STAGE-TRANSFER-HOTFIX \
+  --implementation-version "$IMPLEMENTATION_VERSION" \
   --output "$FINAL_RUN/STAGE_TRANSFER_INTEGRITY.json" "${transfer_extra[@]}"
 
 CURRENT_STAGE="completion_metadata"
@@ -281,6 +282,6 @@ python tools/finalize_v48_36_adaptation_variant.py \
   --interaction-hidden "${EVIDENCE_INTERACTION_HIDDEN:-64}" \
   --interaction-dropout "${EVIDENCE_INTERACTION_DROPOUT:-0.05}" \
   --admission-prior-mode "${EVIDENCE_ADMISSION_PRIOR_MODE:-frontier_capped_slack}" \
-  --implementation-version v48.36.2-STAGE-TRANSFER-HOTFIX
+  --implementation-version "$IMPLEMENTATION_VERSION"
 CURRENT_STAGE="complete"
 rm -f "$FINAL_RUN/VARIANT_STAGE_FAILED.json"

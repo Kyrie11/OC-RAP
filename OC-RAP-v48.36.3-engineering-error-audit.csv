@@ -1,0 +1,11 @@
+﻿id,severity,area,risk_or_defect,status_before_fix,mitigation,affected_files,algorithm_changed
+E001,critical,attempt namespace,calibration used V4835_ATTEMPT_ID; controller used V4836_ATTEMPT_ID,triggered,use V4836 everywhere; explicit child propagation; reject legacy,scripts/calibrate_v48_36_shared_certificate_pool.sh;scripts/run_v48_36_ocaf_dedicated.sh,no
+E002,critical,terminal status contract,no pre-completion cross-file attempt audit,triggered,add certificate status contract before completion,tools/check_v48_36_certificate_status_contract.py,no
+E003,critical,repair authorization,metadata-only repair could be unsafe without exact artifact checks,preventive,"check exact failure, checkpoint bytes, certificates, archived marker, source/protocol and seals",tools/repair_v48_36_2_terminal_state_failure.py,no
+E004,high,atomicity,post-repair validation failure could leave partial state,preventive,backup touched files and byte rollback,tools/repair_v48_36_2_terminal_state_failure.py,no
+E005,high,evidence preservation,terminal failure overwrote active terminal evidence,partially triggered,archive pre-failure terminal/gate/diagnostic evidence,scripts/run_v48_36_ocaf_dedicated.sh,no
+E006,medium,partial variants,unrequested default return codes could be interpreted as requested,latent,record requested_variants and audit only requested arms,scripts/calibrate_v48_36_shared_certificate_pool.sh;tools/check_v48_36_certificate_status_contract.py,no
+E007,medium,version provenance,v48.36.2 child metadata under v48.36.3 root execution,latent,propagate OCRAP_IMPLEMENTATION_VERSION,scripts/adapt_ocrap_v48_36_ocaf_variant.sh;tools/check_v48_36_resume_contract.py,no
+E008,medium,stale active markers,old markers could contradict current RC0/20,covered,attempt archive at controller start plus exact RC marker contract,scripts/run_v48_36_ocaf_dedicated.sh;tools/check_v48_36_certificate_status_contract.py,no
+E009,medium,checkpoint omission,result ZIP cannot authorize byte-level repair,observed,fail closed; run repair only on original machine with .pt files,delivery/report,no
+E010,low,historical tests,missing archived old scripts create unrelated full-suite failures,observed,report separately; do not fabricate historical code,OC-RAP-v48.36.3-validation-status.txt,no

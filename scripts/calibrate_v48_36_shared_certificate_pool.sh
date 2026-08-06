@@ -17,9 +17,15 @@ CERT_CONTACT="${CERT_CONTACT:?CERT_CONTACT is required}"
 DEV_NEAR="${DEV_NEAR:?DEV_NEAR is required}"
 DEV_CONTACT="${DEV_CONTACT:?DEV_CONTACT is required}"
 GPU0="${GPU0:-0}"; GPU1="${GPU1:-1}"
-ATTEMPT_ID="${V4835_ATTEMPT_ID:-legacy-untracked}"
+ATTEMPT_ID="${V4836_ATTEMPT_ID:-}"
+if [[ -z "$ATTEMPT_ID" || "$ATTEMPT_ID" == "legacy-untracked" ]]; then
+  echo "V4836_ATTEMPT_ID is required and must be attempt-scoped" >&2
+  exit 30
+fi
+IMPLEMENTATION_VERSION="${OCRAP_IMPLEMENTATION_VERSION:-v48.36.3-TERMINAL-STATE-HOTFIX}"
+export OCRAP_IMPLEMENTATION_VERSION="$IMPLEMENTATION_VERSION"
 SAFE_WOMD_SOURCE="${SAFE_WOMD_SOURCE:-/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord@150}"
-export V4835_ATTEMPT_ID="$ATTEMPT_ID" SAFE_WOMD_SOURCE
+export V4836_ATTEMPT_ID="$ATTEMPT_ID" SAFE_WOMD_SOURCE
 for d in "$CAL_SAFE" "$CERT_NEAR" "$CERT_CONTACT" "$DEV_NEAR" "$DEV_CONTACT"; do
   [[ -d "$d" && -f "$d/manifest.csv" ]] || { echo "missing certificate dataset $d" >&2; exit 2; }
 done
@@ -111,8 +117,8 @@ protocol={
  'fit_verify_scene_disjoint':True,'test_roots_read':False,
 }
 canonical=json.dumps(protocol,sort_keys=True,separators=(',',':')).encode()
-doc={'event':'v48_36_gate_protocol_preregistered','version':'v48.36-OCAF','created_unix':time.time(),
-     'attempt_id':os.environ.get('V4835_ATTEMPT_ID'),'protocol_sha256':hashlib.sha256(canonical).hexdigest(),'protocol':protocol}
+doc={'event':'v48_36_gate_protocol_preregistered','version':'v48.36-OCAF','implementation_version':os.environ.get('OCRAP_IMPLEMENTATION_VERSION','v48.36.3-TERMINAL-STATE-HOTFIX'),'created_unix':time.time(),
+     'attempt_id':os.environ.get('V4836_ATTEMPT_ID'),'protocol_sha256':hashlib.sha256(canonical).hexdigest(),'protocol':protocol}
 p=pathlib.Path(sys.argv[1])
 if p.exists():
     old=json.load(open(p))
@@ -261,7 +267,7 @@ calibrate_variant() {
   python - "$tmp" "$variant" "$ckpt" "$sn" "$sc" <<'PY'
 import hashlib,json,os,pathlib,sys,time
 root=pathlib.Path(sys.argv[1]); variant=sys.argv[2]; ckpt=pathlib.Path(sys.argv[3])
-near_rc,contact_rc=int(sys.argv[4]),int(sys.argv[5]); attempt_id=os.environ.get('V4835_ATTEMPT_ID')
+near_rc,contact_rc=int(sys.argv[4]),int(sys.argv[5]); attempt_id=os.environ.get('V4836_ATTEMPT_ID')
 def atomic(path,doc):
     tmp=path.with_name(f'.{path.name}.tmp.{os.getpid()}.{time.time_ns()}')
     with tmp.open('w',encoding='utf-8') as f:
@@ -348,7 +354,7 @@ set -e
 
 python - "$OUTPUTDIR" "$S0" "$S1" "$VARIANTS" <<'PY'
 import json,os,pathlib,shlex,sys,time
-root=pathlib.Path(sys.argv[1]); report={}; valid=[]; attempt_id=os.environ.get('V4835_ATTEMPT_ID')
+root=pathlib.Path(sys.argv[1]); report={}; valid=[]; attempt_id=os.environ.get('V4836_ATTEMPT_ID')
 def atomic_json(path,doc):
     tmp=path.with_name(f'.{path.name}.tmp.{os.getpid()}.{time.time_ns()}')
     with tmp.open('w',encoding='utf-8') as f:
@@ -392,7 +398,8 @@ for name in ('balanced','precision'):
 requested_codes={'balanced':int(sys.argv[2]),'precision':int(sys.argv[3])}
 requested_codes={k:v for k,v in requested_codes.items() if k in requested}
 all_requested_gates_evaluated=bool(requested_codes) and all(v in (0,20) for v in requested_codes.values())
-status={'event':'v48_36_certificate_candidate_selection','version':'v48.36-OCAF','created_unix':time.time(),'attempt_id':attempt_id,
+status={'event':'v48_36_certificate_candidate_selection','version':'v48.36-OCAF','implementation_version':os.environ.get('OCRAP_IMPLEMENTATION_VERSION','v48.36.3-TERMINAL-STATE-HOTFIX'),'created_unix':time.time(),'attempt_id':attempt_id,
+        'requested_variants':sorted(requested),
         'controller_exit_codes':{'balanced':int(sys.argv[2]),'precision':int(sys.argv[3])},
         'certificate_executed':True,'gate_evaluated':all_requested_gates_evaluated,
         'valid_candidates':[x[3] for x in valid],'candidates':report,'test_roots_read':False}
@@ -404,7 +411,7 @@ artifact_failure=any(code not in (0,20) for code in requested_code_values) or an
 )
 def write_blocked(reason, exit_code):
     doc={
-      'event':'v48_36_next_commands_blocked','version':'v48.36-OCAF','created_unix':time.time(),'attempt_id':attempt_id,
+      'event':'v48_36_next_commands_blocked','version':'v48.36-OCAF','implementation_version':os.environ.get('OCRAP_IMPLEMENTATION_VERSION','v48.36.3-TERMINAL-STATE-HOTFIX'),'created_unix':time.time(),'attempt_id':attempt_id,
       'reason':reason,'exit_code':int(exit_code),'certificate_executed':True,
       'gate_evaluated':bool(status.get('gate_evaluated',False)) if reason=='natural_gate_failed' else False,
       'test_roots_read':False,'controller_exit_codes':status['controller_exit_codes'],
@@ -430,7 +437,7 @@ commands=(
  f'OUT={shlex.quote(str(root))} bash scripts/run_v48_36_stress_if_authorized.sh\n')
 atomic_text(root/'NEXT_COMMANDS.txt',commands)
 atomic_json(root/'NEXT_COMMANDS_STATUS.json',{
-  'event':'v48_36_next_commands_generated','version':'v48.36-OCAF','created_unix':time.time(),'attempt_id':attempt_id,
+  'event':'v48_36_next_commands_generated','version':'v48.36-OCAF','implementation_version':os.environ.get('OCRAP_IMPLEMENTATION_VERSION','v48.36.3-TERMINAL-STATE-HOTFIX'),'created_unix':time.time(),'attempt_id':attempt_id,
   'generated':True,'certificate_executed':True,'gate_evaluated':True,'gate_passed':True,'chosen_base_run':str(chosen),
   'test_roots_read':False,
 })

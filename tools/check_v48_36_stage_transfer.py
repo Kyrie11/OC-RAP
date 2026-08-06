@@ -19,7 +19,7 @@ from typing import Any
 import torch
 
 BASE_ALGORITHM_VERSION = "v48.36-OCAF"
-IMPLEMENTATION_VERSION = "v48.36.2-STAGE-TRANSFER-HOTFIX"
+IMPLEMENTATION_VERSION = "v48.36.3-TERMINAL-STATE-HOTFIX"
 APPROVED_PREFIXES = {
     "direct_evidence_concord_benefit_calibrator",
     "direct_evidence_concord_harm_calibrator",

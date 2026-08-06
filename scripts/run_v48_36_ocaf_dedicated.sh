@@ -25,7 +25,7 @@ ADMISSION_PRIOR_MODE="${EVIDENCE_ADMISSION_PRIOR_MODE:-frontier_capped_slack}"
 EVIDENCE_INTERACTION_HIDDEN="${EVIDENCE_INTERACTION_HIDDEN:-64}"
 EVIDENCE_INTERACTION_DROPOUT="${EVIDENCE_INTERACTION_DROPOUT:-0.05}"
 EVIDENCE_CONSENSUS_PRIOR_SCALE="${EVIDENCE_CONSENSUS_PRIOR_SCALE:-0.50}"
-IMPLEMENTATION_VERSION="${OCRAP_IMPLEMENTATION_VERSION:-v48.36.2-STAGE-TRANSFER-HOTFIX}"
+IMPLEMENTATION_VERSION="${OCRAP_IMPLEMENTATION_VERSION:-v48.36.3-TERMINAL-STATE-HOTFIX}"
 export OCRAP_IMPLEMENTATION_VERSION="$IMPLEMENTATION_VERSION"
 
 ALPHA="${ALPHA:-0.2}"
@@ -45,11 +45,15 @@ import time,uuid
 print(f"v4836-{time.time_ns()}-{uuid.uuid4().hex[:12]}")
 PY_ATTEMPT
 )}"
+if [[ -z "$ATTEMPT_ID" || "$ATTEMPT_ID" == "legacy-untracked" ]]; then
+  echo "invalid V4836_ATTEMPT_ID: attempt-scoped non-legacy ID required" >&2
+  exit 30
+fi
 export V4836_ATTEMPT_ID="$ATTEMPT_ID"
 python - "$OUTPUTDIR/ATTEMPT_STARTED.json" "$ATTEMPT_ID" "$SOURCE_RUN" "$PROTOCOL_ROOT" "$RESUME_AFTER_ADAPTATION" <<'PY_ATTEMPT_STATUS'
 import json,os,pathlib,sys,time
 p=pathlib.Path(sys.argv[1]); p.parent.mkdir(parents=True,exist_ok=True)
-doc={'event':'v48_36_attempt_started','version':'v48.36-OCAF','implementation_version':os.environ.get('OCRAP_IMPLEMENTATION_VERSION','v48.36.2-STAGE-TRANSFER-HOTFIX'),
+doc={'event':'v48_36_attempt_started','version':'v48.36-OCAF','implementation_version':os.environ.get('OCRAP_IMPLEMENTATION_VERSION','v48.36.3-TERMINAL-STATE-HOTFIX'),
      'created_unix':time.time(),'attempt_id':sys.argv[2],'source_run':sys.argv[3],
      'protocol_root':sys.argv[4],'resume_after_adaptation':sys.argv[5]=='1','test_roots_read':False}
 tmp=p.with_name(f'.{p.name}.tmp.{os.getpid()}.{time.time_ns()}')
@@ -95,23 +99,37 @@ for name in ('balanced','precision'):
 next_status={}
 try: next_status=json.load(open(root/'NEXT_COMMANDS_STATUS.json'))
 except Exception: pass
-certificate_executed=stage in {'certificate','post_certificate_diagnostics','completion_contract','terminal_state_contract'}
+certificate_executed=stage in {'certificate','post_certificate_diagnostics','certificate_status_contract','completion_contract','terminal_state_contract'}
 gate_evaluated=bool(next_status.get('gate_evaluated',False)) if certificate_executed else False
-# A natural-gate marker cannot remain active after a later engineering failure.
+# Preserve the pre-failure terminal evidence before publishing a later engineering
+# failure.  This makes a terminal-state contract defect diagnosable without relying
+# on a log tail after V48_36_COMPLETE.json is replaced.
 gate_marker=root/'GATE_FAILED.json'
-if gate_marker.exists():
-    history=root/'status_history'/f'overridden-by-{attempt_id}-{time.time_ns()}'
+history=None
+if stage in {'post_certificate_diagnostics','certificate_status_contract','completion_contract','terminal_state_contract'}:
+    history=root/'status_history'/f'pre-{stage}-{attempt_id}-{time.time_ns()}'
     history.mkdir(parents=True,exist_ok=True)
+    for name in ('V48_36_COMPLETE.json','AUTHORITATIVE_RUN_STATUS.json',
+                 'NEXT_COMMANDS_STATUS.json','NEXT_COMMANDS_BLOCKED.json',
+                 'GATE_SPEC.json','dedicated_recalibration_status.json',
+                 'GATE_FAILURE_DECOMPOSITION.json','learning_gates_v48_36.json'):
+        source_path=root/name
+        if source_path.is_file():
+            shutil.copy2(source_path,history/name)
+if gate_marker.exists():
+    if history is None:
+        history=root/'status_history'/f'overridden-by-{attempt_id}-{time.time_ns()}'
+        history.mkdir(parents=True,exist_ok=True)
     shutil.move(str(gate_marker),str(history/gate_marker.name))
 try: (root/'NEXT_COMMANDS.txt').unlink()
 except FileNotFoundError: pass
-failed={'event':'v48_36_pipeline_failed','version':'v48.36-OCAF','implementation_version':os.environ.get('OCRAP_IMPLEMENTATION_VERSION','v48.36.2-STAGE-TRANSFER-HOTFIX'),'created_unix':time.time(),'attempt_id':attempt_id,'stage':stage,
+failed={'event':'v48_36_pipeline_failed','version':'v48.36-OCAF','implementation_version':os.environ.get('OCRAP_IMPLEMENTATION_VERSION','v48.36.3-TERMINAL-STATE-HOTFIX'),'created_unix':time.time(),'attempt_id':attempt_id,'stage':stage,
         'raw_exit_code':raw_rc,'normalized_exit_code':30,'pipeline_exit_code':30,'detail':detail,
         'adaptation_exit_codes':{'balanced':balanced_rc,'precision':precision_rc},
         'certificate_executed':certificate_executed,'gate_evaluated':gate_evaluated,
         'pipeline_valid':False,'test_roots_read':False}
 atomic(root/'PIPELINE_FAILED.json',failed)
-doc={'event':'v48_36_ocaf_controller_complete','version':'v48.36-OCAF','implementation_version':os.environ.get('OCRAP_IMPLEMENTATION_VERSION','v48.36.2-STAGE-TRANSFER-HOTFIX'),'created_unix':time.time(),'attempt_id':attempt_id,
+doc={'event':'v48_36_ocaf_controller_complete','version':'v48.36-OCAF','implementation_version':os.environ.get('OCRAP_IMPLEMENTATION_VERSION','v48.36.3-TERMINAL-STATE-HOTFIX'),'created_unix':time.time(),'attempt_id':attempt_id,
      'source_run':str(source),'protocol_root':str(protocol),'variants':variants,
      'raw_certificate_exit_code':raw_rc if certificate_executed else None,
      'certificate_exit_code':30 if certificate_executed else None,'pipeline_exit_code':30,
@@ -486,7 +504,7 @@ if signature_rc == 0:
     try: sig=json.load(open(signature))
     except Exception as exc: sig={'read_error':repr(exc)}
 doc={
-    'event':'v48_36_adaptation_failed','version':'v48.36-OCAF','implementation_version':os.environ.get('OCRAP_IMPLEMENTATION_VERSION','v48.36.2-STAGE-TRANSFER-HOTFIX'),
+    'event':'v48_36_adaptation_failed','version':'v48.36-OCAF','implementation_version':os.environ.get('OCRAP_IMPLEMENTATION_VERSION','v48.36.3-TERMINAL-STATE-HOTFIX'),
     'attempt_id':attempt_id,'variant':variant,'stage':stage,
     'exit_code':rc,'log':str(log),'failure_signature':sig,
     'failure_signature_exit_code':signature_rc,
@@ -567,7 +585,7 @@ variants=""
 [[ "$s1" == 0 ]] && variants="${variants:+$variants,}precision"
 set +e
 OUTPUTDIR="$OUTPUTDIR" CAL_SAFE="$CAL_SAFE" CERT_NEAR="$CERT_NEAR" CERT_CONTACT="$CERT_CONTACT" DEV_NEAR="$DEV_NEAR" DEV_CONTACT="$DEV_CONTACT" \
-GPU0="$GPU0" GPU1="$GPU1" VARIANTS="$variants" PROPOSAL_TOP_K="$PROPOSAL_TOP_K" \
+GPU0="$GPU0" GPU1="$GPU1" VARIANTS="$variants" PROPOSAL_TOP_K="$PROPOSAL_TOP_K" V4836_ATTEMPT_ID="$ATTEMPT_ID" \
   OPPORTUNITY_LABEL_MODE=raw_benefit GATE_POSITIVE_MODE=safe_benefit bash scripts/calibrate_v48_36_shared_certificate_pool.sh >"$OUTPUTDIR/logs/certificate_controller.log" 2>&1
 raw_cert_rc=$?
 set -e
@@ -595,6 +613,18 @@ if [[ "$learning_gates_rc" != 0 || "$gate_decomposition_rc" != 0 ]]; then
 fi
 
 set +e
+python tools/check_v48_36_certificate_status_contract.py \
+  --run "$OUTPUTDIR" --expected-attempt-id "$ATTEMPT_ID" \
+  --output "$OUTPUTDIR/V48_36_CERTIFICATE_STATUS_CONTRACT.json" \
+  >"$OUTPUTDIR/logs/certificate_status_contract.log" 2>&1
+certificate_status_contract_rc=$?
+set -e
+if [[ "$certificate_status_contract_rc" != 0 ]]; then
+  write_pipeline_failure certificate_status_contract "$certificate_status_contract_rc" "$OUTPUTDIR/V48_36_CERTIFICATE_STATUS_CONTRACT.json" "$s0" "$s1"
+  exit 30
+fi
+
+set +e
 python - "$OUTPUTDIR" "$PROTOCOL_ROOT" "$SOURCE_RUN" "$raw_cert_rc" "$cert_rc" "$RESUME_AFTER_ADAPTATION" "$ATTEMPT_ID" <<'PY'
 import hashlib,json,os,pathlib,sys,time
 root=pathlib.Path(sys.argv[1]); protocol=pathlib.Path(sys.argv[2]); source=pathlib.Path(sys.argv[3])
@@ -607,7 +637,7 @@ blocked_exists=(root/'NEXT_COMMANDS_BLOCKED.json').is_file()
 consistent=(rc==0 and next_exists and not blocked_exists) or (rc==20 and (not next_exists) and blocked_exists)
 if not consistent:
     raise SystemExit(f'certificate/NEXT_COMMANDS contract mismatch: rc={rc} next={next_exists} blocked={blocked_exists}')
-doc={'event':'v48_36_ocaf_controller_complete','version':'v48.36-OCAF','implementation_version':os.environ.get('OCRAP_IMPLEMENTATION_VERSION','v48.36.2-STAGE-TRANSFER-HOTFIX'),'created_unix':time.time(),'attempt_id':attempt_id,
+doc={'event':'v48_36_ocaf_controller_complete','version':'v48.36-OCAF','implementation_version':os.environ.get('OCRAP_IMPLEMENTATION_VERSION','v48.36.3-TERMINAL-STATE-HOTFIX'),'created_unix':time.time(),'attempt_id':attempt_id,
      'source_run':str(source),'protocol_root':str(protocol),'variants':variants,
      'raw_certificate_exit_code':raw_rc,'certificate_exit_code':rc,'pipeline_exit_code':rc,
      'certificate_executed':True,'gate_evaluated':True,'gate_passed':(rc==0 and next_exists),

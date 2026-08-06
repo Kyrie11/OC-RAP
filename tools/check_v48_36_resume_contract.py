@@ -12,9 +12,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+
+IMPLEMENTATION_VERSION = os.environ.get("OCRAP_IMPLEMENTATION_VERSION", "v48.36.3-TERMINAL-STATE-HOTFIX")
 
 import torch
 
@@ -239,7 +242,7 @@ def main() -> int:
     doc = {
         "event": "v48_36_rc30_resume_authorization",
         "version": "v48.36-OCAF",
-        "implementation_version": "v48.36.2-STAGE-TRANSFER-HOTFIX",
+        "implementation_version": IMPLEMENTATION_VERSION,
         "failure_mode": failure_mode,
         "run": str(root),
         "valid": valid,

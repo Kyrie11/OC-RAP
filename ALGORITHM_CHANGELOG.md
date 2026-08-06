@@ -1,5 +1,76 @@
 # Algorithm Change Log
 
+## v48.36.3 — RC30 TERMINAL-STATE ATTEMPT CONTRACT HOTFIX (2026-08-06)
+
+### Scope and attribution
+
+This is an **engineering-only** release on top of the unchanged v48.36 OCAF
+algorithm. It does not alter the observation-conditioned interaction bridge,
+candidate generator, model heads, losses, training data, checkpoint selection,
+shared deployment rule, certificate statistics, thresholds, gate, Safe/stress
+protocol, or the unified continuous treatment of Safe/Near/Contact.
+
+The uploaded result is later than the first v48.36.1 stage-transfer failure: the
+v48.36.2 no-retraining repair and resume contract both passed, calibration and the
+Near/Contact certificate both executed, and balanced and precision each returned a
+natural certificate-controller RC=20. The active RC=30 was produced afterwards by
+the terminal-state audit.
+
+### Root cause
+
+`run_v48_36_ocaf_dedicated.sh` created and exported `V4836_ATTEMPT_ID`, but the
+copied v48.36 calibration launcher still read `V4835_ATTEMPT_ID`. Consequently
+`GATE_SPEC.json`, `dedicated_recalibration_status.json`, both candidates’
+`CERTIFICATE_CALIBRATION_COMPLETE.json` and `SAFE_REGIME_STATUS.json`, and the
+natural `GATE_FAILED.json` were written under `attempt_id=legacy-untracked`.
+
+The authoritative resolver correctly refused to attach that gate marker to the
+active v48.36 attempt. Its RC=4 contract rejection was normalized by the controller
+to pipeline RC=30. The underlying algorithmic outcome was unchanged: no candidate
+passed the Natural gate, so the authoritative result should be pipeline-valid
+RC=20, not engineering RC=30.
+
+### Engineering changes
+
+1. Unified the v48.36 controller and calibration launcher on
+   `V4836_ATTEMPT_ID`; the controller passes it explicitly and the launcher now
+   fails closed if it is absent or `legacy-untracked`.
+2. Added `check_v48_36_certificate_status_contract.py`. Before publishing terminal
+   completion it checks that gate specification, candidate selection, candidate
+   certificate completion, Safe status, gate/block markers, and NEXT_COMMANDS
+   state all belong to the same non-legacy attempt and satisfy the exact RC=0/20
+   contract.
+3. Added an exact no-training/no-calibration repair path for the observed
+   v48.36.2 terminal-state signature. It verifies adaptation/checkpoint hashes,
+   both natural gate failures, certificate validity, archived gate equivalence,
+   source/protocol identity, and test-root seals; backs up every touched file;
+   changes provenance/status metadata only; reruns both contracts; and rolls back
+   byte-for-byte if any post-repair audit fails.
+4. Propagated `v48.36.3-TERMINAL-STATE-HOTFIX` through controller, calibration,
+   adaptation completion and resume metadata while retaining compatibility with
+   the v48.36.2 stage-transfer repair artifact.
+5. Expanded post-certificate failure archiving so diagnostics, gate specification,
+   candidate selection and terminal markers are preserved before an engineering
+   failure publishes RC=30.
+6. Added regression tests for stale-attempt rejection, exact RC=20 repair,
+   rejection of an altered gate outcome, missing-attempt fail-closed behavior,
+   post-repair rollback, and controller/calibration namespace wiring.
+
+### Validation
+
+- Version-focused compatibility matrix: 58 passed, 1 CUDA-only test skipped.
+- Python `compileall`: PASS.
+- 69 Shell scripts under `scripts/` and `tools/`: `bash -n` PASS.
+- New tool import/`--help`: PASS.
+- Algorithm implementation source is byte-identical to the uploaded v48.36.2 code.
+- Full historical repository suite: 352 passed, 1 skipped, 38 inherited failures.
+  Thirty-seven failures are missing archived v48.12–v48.32 scripts and one is an
+  already-present v48.30 source-text assertion; all are reproducible in the
+  unmodified uploaded code and are outside the active v48.36 pipeline.
+- The uploaded results ZIP omits `.pt` files. Exact repair authorization therefore
+  remains fail-closed locally and must run where the recorded checkpoints still
+  exist.
+
 ## v48.36.2 — RC30 STAGE-TRANSFER CONTRACT HOTFIX (2026-08-06)
 
 ### Scope and attribution

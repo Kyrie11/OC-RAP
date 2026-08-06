@@ -1,0 +1,36 @@
+{
+  "event": "v48_36_3_version_contract",
+  "base_algorithm_version": "v48.36-OCAF",
+  "implementation_version": "v48.36.3-TERMINAL-STATE-HOTFIX",
+  "release_date": "2026-08-06",
+  "algorithm_changed": false,
+  "model_architecture_changed": false,
+  "candidate_generation_changed": false,
+  "loss_changed": false,
+  "training_hyperparameters_changed": false,
+  "checkpoint_selection_changed": false,
+  "datasets_changed": false,
+  "shared_rule_changed": false,
+  "certificate_statistics_changed": false,
+  "certificate_thresholds_changed": false,
+  "gate_changed": false,
+  "safe_stress_protocol_changed": false,
+  "regime_routing_added": false,
+  "unified_continuous_regime_representation_preserved": true,
+  "engineering_changes": [
+    "v48.36 attempt namespace propagation",
+    "certificate status contract",
+    "exact terminal-state metadata repair",
+    "atomic evidence archival and rollback",
+    "implementation-version propagation"
+  ],
+  "expected_current_run_resolution": {
+    "uploaded_pipeline_exit_code": 30,
+    "repaired_authoritative_exit_code": 20,
+    "pipeline_valid_after_exact_repair": true,
+    "natural_gate_failed": true,
+    "retraining_required": false,
+    "recalibration_required": false,
+    "checkpoint_bytes_required_for_authorization": true
+  }
+}

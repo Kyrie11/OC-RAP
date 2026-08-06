@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 BASE_ALGORITHM_VERSION = "v48.36-OCAF"
-IMPLEMENTATION_VERSION = "v48.36.2-STAGE-TRANSFER-HOTFIX"
+IMPLEMENTATION_VERSION = "v48.36.3-TERMINAL-STATE-HOTFIX"
 
 
 def _sha256(path: Path) -> str:
