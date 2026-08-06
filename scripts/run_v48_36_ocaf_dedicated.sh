@@ -517,8 +517,9 @@ run_variant() {
   IDENTITY_EPOCHS="${IDENTITY_EPOCHS:-24}" IDENTITY_PATIENCE="${IDENTITY_PATIENCE:-6}" \
   FINAL_EPOCHS="${FINAL_EPOCHS:-8}" FINAL_PATIENCE="${FINAL_PATIENCE:-3}" \
   IDENTITY_LR="${IDENTITY_LR:-0.00004}" FINAL_LR="${FINAL_LR:-0.00003}" \
-  V4836_IDENTITY_TRAIN_ALL=1 V4836_COUPLE_ADMISSION_PRIOR=1 \
-  V4836_ADAPTIVE_IDENTITY_MARGIN=0 V4836_ENABLE_FINAL_CALIBRATION=0 \
+  V4836_IDENTITY_TRAIN_ALL="${V4836_IDENTITY_TRAIN_ALL:-1}" V4836_COUPLE_ADMISSION_PRIOR="${V4836_COUPLE_ADMISSION_PRIOR:-1}" \
+  V4837_FACTOR_PRESERVING_IDENTITY="${V4837_FACTOR_PRESERVING_IDENTITY:-0}" \
+  V4836_ADAPTIVE_IDENTITY_MARGIN="${V4836_ADAPTIVE_IDENTITY_MARGIN:-0}" V4836_ENABLE_FINAL_CALIBRATION="${V4836_ENABLE_FINAL_CALIBRATION:-0}" \
   V4836_FACTOR_CACHE_RUN="$factor_cache" \
   PROPOSAL_TOP_K="$PROPOSAL_TOP_K" \
   EVIDENCE_CALIBRATOR_CONTEXT=true EVIDENCE_CALIBRATOR_CONTEXT_SOURCE="$EVIDENCE_CONTEXT_SOURCE" \
@@ -624,8 +625,13 @@ for variant in balanced precision; do
   python tools/check_v48_36_ocaf_training_contract.py \
     --run "$OUTPUTDIR/candidates/$variant" \
     --output "$OUTPUTDIR/candidates/$variant/TRAINING_CONTRACT.json" \
-    --expect-identity-all true --expect-prior-coupled true \
-    --expect-adaptive-margin false --expect-final-enabled false \
+    --expect-identity-all "$([[ "${V4836_IDENTITY_TRAIN_ALL:-1}" == 1 ]] && echo true || echo false)" \
+    --expect-prior-coupled "$([[ "${V4836_COUPLE_ADMISSION_PRIOR:-1}" == 1 ]] && echo true || echo false)" \
+    --expect-factor-preserving "$([[ "${V4837_FACTOR_PRESERVING_IDENTITY:-0}" == 1 ]] && echo true || echo false)" \
+    --expect-benefit-margin-regression "${FACTOR_BENEFIT_MARGIN_REGRESSION_WEIGHT:-0.0}" \
+    --expect-benefit-margin-temperature "${FACTOR_BENEFIT_MARGIN_TEMPERATURE:-0.025}" \
+    --expect-algorithm-variant "${OCRAP_ALGORITHM_VERSION:-v48.36-OCAF}" \
+    --expect-adaptive-margin "$([[ "${V4836_ADAPTIVE_IDENTITY_MARGIN:-0}" == 1 ]] && echo true || echo false)" --expect-final-enabled "$([[ "${V4836_ENABLE_FINAL_CALIBRATION:-0}" == 1 ]] && echo true || echo false)" \
     --expect-eligible-policy true --expect-prior-mode "$ADMISSION_PRIOR_MODE" --expect-context-source "$EVIDENCE_CONTEXT_SOURCE" --expect-proposal-top-k "$PROPOSAL_TOP_K" \
     >"$OUTPUTDIR/logs/training_contract_${variant}.log" 2>&1
   training_contract_rc=$?
@@ -720,6 +726,27 @@ state_contract_rc=$?
 set -e
 if [[ "$state_contract_rc" != 0 ]]; then
   write_pipeline_failure terminal_state_contract "$state_contract_rc" "$OUTPUTDIR/AUTHORITATIVE_RUN_STATUS.json" "$s0" "$s1"
+  exit 30
+fi
+# Refresh the diagnostics now that the authoritative completion exists.  Older
+# ordering left learning_gates_v48_36.json claiming authoritative_state=false
+# even for a valid RC=20 run, which could mislead later algorithm analysis.
+set +e
+python tools/check_v48_16_learning_gates.py --run "$OUTPUTDIR" --output "$OUTPUTDIR/learning_gates_v48_36.json" --version v48.36-OCAF \
+  >"$OUTPUTDIR/logs/learning_gates_post_terminal.log" 2>&1
+post_learning_rc=$?
+python - "$OUTPUTDIR/learning_gates_v48_36.json" "$cert_rc" "$ATTEMPT_ID" <<'PY_POST_LEARNING'
+import json,sys
+doc=json.load(open(sys.argv[1],encoding='utf-8')); expected=int(sys.argv[2]); attempt=sys.argv[3]
+auth=doc.get('authoritative_state') or {}
+if not (auth.get('valid') is True and auth.get('pipeline_valid') is True and
+        int(auth.get('exit_code')) == expected and auth.get('attempt_id') == attempt):
+    raise SystemExit(f'post-terminal learning-gate authoritative snapshot mismatch: {auth}')
+PY_POST_LEARNING
+post_learning_contract_rc=$?
+set -e
+if [[ "$post_learning_rc" != 0 || "$post_learning_contract_rc" != 0 ]]; then
+  write_pipeline_failure post_terminal_diagnostics 4 "learning_gates_rc=$post_learning_rc snapshot_contract_rc=$post_learning_contract_rc" "$s0" "$s1"
   exit 30
 fi
 exit "$cert_rc"

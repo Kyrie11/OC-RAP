@@ -370,6 +370,12 @@ def _direct_value_loss_from_outputs(
         ordinal_evidence_component_margin_regression_weight=float(
             tcfg.get("direct_value_ordinal_evidence_component_margin_regression_weight", 0.0)
         ),
+        ordinal_evidence_benefit_margin_regression_weight=float(
+            tcfg.get("direct_value_ordinal_evidence_benefit_margin_regression_weight", 0.0)
+        ),
+        ordinal_evidence_benefit_margin_temperature=float(
+            tcfg.get("direct_value_ordinal_evidence_benefit_margin_temperature", 0.025)
+        ),
         ordinal_evidence_component_reliability=str(
             tcfg.get("direct_value_ordinal_evidence_component_reliability", "")
         ),

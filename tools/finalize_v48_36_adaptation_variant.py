@@ -82,6 +82,7 @@ def main() -> int:
     ap.add_argument("--support", type=Path, required=True)
     ap.add_argument("--support-reliability-enabled", type=_bool, required=True)
     ap.add_argument("--identity-train-all", type=_bool, required=True)
+    ap.add_argument("--factor-preserving-identity", type=_bool, default=False)
     ap.add_argument("--prior-coupled", type=_bool, required=True)
     ap.add_argument("--adaptive-margin", type=_bool, required=True)
     ap.add_argument("--final-enabled", type=_bool, required=True)
@@ -147,6 +148,7 @@ def main() -> int:
         "event": "v48_36_ocaf_complete",
         "version": BASE_ALGORITHM_VERSION,
         "implementation_version": args.implementation_version,
+        "algorithm_variant": architectures["final"].get("algorithm_variant", BASE_ALGORITHM_VERSION),
         "created_unix": time.time(),
         "source_checkpoint": str(args.source),
         "source_sha256": source_sha,
@@ -161,9 +163,16 @@ def main() -> int:
         "stage1_population": "natural_without_replacement",
         "stage2_population": "natural_without_replacement",
         "stage3_population": "natural_without_replacement" if args.final_enabled else "disabled",
-        "stage2_trainable": "all_compact_evidence_calibrators_with_ocaf_interaction"
-        if args.identity_train_all
-        else "admission_and_ocaf_interaction_reference",
+        "stage2_trainable": (
+            "factor_preserving_admission_only"
+            if args.factor_preserving_identity
+            else (
+                "all_compact_evidence_calibrators_with_ocaf_interaction"
+                if args.identity_train_all
+                else "admission_and_ocaf_interaction_reference"
+            )
+        ),
+        "factor_preserving_identity": bool(args.factor_preserving_identity),
         "stage2_trainable_prefixes": identity_trainable,
         "stage3_trainable_prefixes": final_trainable if args.final_enabled else [],
         "deployment_safe_utility_gradient_coupled": args.prior_coupled,

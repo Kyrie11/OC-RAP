@@ -64,14 +64,21 @@ def main() -> int:
         report['variants'][variant]=item
     report['next_commands_present']=(a.run/'NEXT_COMMANDS.txt').is_file()
     try:
-        from audit_v48_35_run_state import resolve as resolve_v48_35_state
-        authoritative=resolve_v48_35_state(a.run)
+        # v48.37 still reuses the audited v48.36 terminal protocol.  Prefer the
+        # matching resolver whenever a v48.36 completion/status exists; retain
+        # the v48.35 resolver only for historical runs.
+        if (a.run/'V48_36_COMPLETE.json').is_file() or (a.run/'AUTHORITATIVE_RUN_STATUS.json').is_file():
+            from resolve_v48_36_authoritative_result import resolve as resolve_run_state
+        else:
+            from audit_v48_35_run_state import resolve as resolve_run_state
+        authoritative=resolve_run_state(a.run)
     except Exception as exc:
         authoritative={'valid':False,'authoritative_exit_code':None,'error':repr(exc)}
     report['authoritative_state']={
         'valid':authoritative.get('valid'),
         'exit_code':authoritative.get('authoritative_exit_code'),
         'pipeline_valid':authoritative.get('pipeline_valid'),
+        'attempt_id':authoritative.get('attempt_id'),
         'stale_markers':authoritative.get('stale_markers') or [],
         'active_contradictions':authoritative.get('active_contradictions') or [],
     }

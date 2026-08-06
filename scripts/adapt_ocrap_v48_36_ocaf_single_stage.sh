@@ -35,6 +35,8 @@ COMPONENT_HEADS="${EVIDENCE_COMPONENT_HEADS:-true}"
 COMPONENT_COUNT="${EVIDENCE_COMPONENT_COUNT:-5}"
 SETWISE_WEIGHT="${SETWISE_W:-1.00}"
 COMPONENT_TAIL_WEIGHT="${ORDINAL_EVIDENCE_COMPONENT_TAIL_WEIGHT:-0.50}"
+BENEFIT_MARGIN_REGRESSION_WEIGHT="${ORDINAL_EVIDENCE_BENEFIT_MARGIN_REGRESSION_WEIGHT:-0.0}"
+BENEFIT_MARGIN_TEMPERATURE="${ORDINAL_EVIDENCE_BENEFIT_MARGIN_TEMPERATURE:-0.025}"
 BATCH_BALANCED="${ORDINAL_EVIDENCE_BATCH_BALANCED:-true}"
 GLOBAL_BALANCE="${ORDINAL_EVIDENCE_GLOBAL_BALANCE:-true}"
 MAX_CALIBRATOR_PARAMS="${MAX_EVIDENCE_CALIBRATOR_PARAMS:-0}"
@@ -86,10 +88,16 @@ if [[ "$CAL_CONTEXT_SOURCE" == physical_interaction ]]; then
   TRAINABLE_PREFIXES+=',direct_evidence_interaction_bridge'
 fi
 TRAINABLE_PREFIXES="${EVIDENCE_TRAINABLE_PREFIXES_OVERRIDE:-$TRAINABLE_PREFIXES}"
+INTERACTION_BRIDGE_TRAINABLE=false
+case ",$TRAINABLE_PREFIXES," in
+  *,direct_evidence_interaction_bridge,*) INTERACTION_BRIDGE_TRAINABLE=true ;;
+esac
+ALGORITHM_VARIANT="${OCRAP_ALGORITHM_VERSION:-v48.36-OCAF}"
 
 cat > "$RUN/STAGE_ARCHITECTURE.json" <<JSON
 {
   "version": "v48.36-OCAF",
+  "algorithm_variant": "$ALGORITHM_VARIANT",
   "source_checkpoint": "$INIT_CKPT",
   "training_role": "unified_non_regime_specific_safe_set_admission",
   "frozen_policy": "v48.13_topk_recovery_proposal",
@@ -141,6 +149,9 @@ cat > "$RUN/STAGE_ARCHITECTURE.json" <<JSON
   "noncompensatory_frontier_cap": $NONCOMPENSATORY_CAP,
   "shared_deployment_rule_required": true,
   "component_margin_regression_weight": ${ORDINAL_EVIDENCE_COMPONENT_MARGIN_REGRESSION_WEIGHT:-0.0},
+  "benefit_margin_regression_weight": $BENEFIT_MARGIN_REGRESSION_WEIGHT,
+  "benefit_margin_temperature": $BENEFIT_MARGIN_TEMPERATURE,
+  "interaction_bridge_trainable_this_stage": $INTERACTION_BRIDGE_TRAINABLE,
   "group_batch_stratified": $STRATIFIED_BATCHES,
   "group_batching_replacement": ${GROUP_BATCHING_REPLACEMENT:-true},
   "checkpoint_all_abstain_barrier": true,
@@ -198,6 +209,8 @@ ORDINAL_EVIDENCE_INDEPENDENT_TAILS=true ORDINAL_EVIDENCE_FACTORIZED_HARM=true \
 ORDINAL_EVIDENCE_FACTORIZED_HARM_TEMPERATURE="${ORDINAL_EVIDENCE_FACTORIZED_HARM_TEMPERATURE:-0.025}" \
 ORDINAL_EVIDENCE_COMPONENT_TAIL_WEIGHT="$COMPONENT_TAIL_WEIGHT" \
 ORDINAL_EVIDENCE_COMPONENT_MARGIN_REGRESSION_WEIGHT="${ORDINAL_EVIDENCE_COMPONENT_MARGIN_REGRESSION_WEIGHT:-0.0}" \
+ORDINAL_EVIDENCE_BENEFIT_MARGIN_REGRESSION_WEIGHT="$BENEFIT_MARGIN_REGRESSION_WEIGHT" \
+ORDINAL_EVIDENCE_BENEFIT_MARGIN_TEMPERATURE="$BENEFIT_MARGIN_TEMPERATURE" \
 ORDINAL_EVIDENCE_BATCH_BALANCED="$BATCH_BALANCED" ORDINAL_EVIDENCE_GLOBAL_BALANCE="$GLOBAL_BALANCE" \
 ORDINAL_EVIDENCE_BALANCED_REPLACES_ERM=false \
 ORDINAL_EVIDENCE_SAFE_SET_TEMPERATURE="${ORDINAL_EVIDENCE_SAFE_SET_TEMPERATURE:-0.08}" \
@@ -304,13 +317,13 @@ CALIBRATION_PROTOCOL=v48_36_ocaf_shared_rule_dev_frozen_full_certificate_verific
 SELECTION_SEMANTICS=rank_topk_then_filter_then_evidence_rerank
 EOF
 
-python - "$RUN" "$MODEL_DIR/best.pt" "$INIT_CKPT" "$MAX_CALIBRATOR_PARAMS" "$BEST_METRIC_NAME" "$COMPONENT_HEADS" "$SETWISE_WEIGHT" "$COMPONENT_TAIL_WEIGHT" "$TRAINABLE_PREFIXES" "$CAL_CONTEXT_SOURCE" "$CONSENSUS_PRIOR_SCALE" <<'PY_VERIFY'
+python - "$RUN" "$MODEL_DIR/best.pt" "$INIT_CKPT" "$MAX_CALIBRATOR_PARAMS" "$BEST_METRIC_NAME" "$COMPONENT_HEADS" "$SETWISE_WEIGHT" "$COMPONENT_TAIL_WEIGHT" "$TRAINABLE_PREFIXES" "$CAL_CONTEXT_SOURCE" "$CONSENSUS_PRIOR_SCALE" "$ALGORITHM_VARIANT" <<'PY_VERIFY'
 import hashlib,json,pathlib,sys,time,torch
 run,ckpt,source=map(pathlib.Path,sys.argv[1:4])
 max_params=int(sys.argv[4]); best_metric=sys.argv[5]
 component_heads=sys.argv[6].lower()=='true'; setwise=float(sys.argv[7]); component_tail=float(sys.argv[8])
 declared=[x.strip() for x in sys.argv[9].split(',') if x.strip()]
-context_source=sys.argv[10]; consensus_prior_scale=float(sys.argv[11])
+context_source=sys.argv[10]; consensus_prior_scale=float(sys.argv[11]); algorithm_variant=sys.argv[12]
 if not ckpt.is_file(): raise SystemExit(f'missing adapted checkpoint: {ckpt}')
 try: doc=torch.load(ckpt,map_location='cpu',weights_only=False)
 except TypeError: doc=torch.load(ckpt,map_location='cpu')
@@ -358,6 +371,9 @@ meta={
  'safe_utility_regression':float(doc.get('train_config',{}).get('ordinal_evidence_safe_utility_regression_weight',0.0) or 0.0)>0,
  'safe_utility_listwise':float(doc.get('train_config',{}).get('ordinal_evidence_safe_utility_listwise_weight',0.0) or 0.0)>0,
  'frontier_contrast':float(doc.get('train_config',{}).get('ordinal_evidence_frontier_pairwise_weight',0.0) or 0.0)>0,
+ 'benefit_margin_regression_weight':float(doc.get('train_config',{}).get('ordinal_evidence_benefit_margin_regression_weight',0.0) or 0.0),
+ 'benefit_margin_temperature':float(doc.get('train_config',{}).get('ordinal_evidence_benefit_margin_temperature',0.025) or 0.025),
+ 'algorithm_variant':algorithm_variant,
  'test_roots_read':False,
 }
 out=run/'EVIDENCE_CORRECTION_COMPLETE.json'; tmp=out.with_name(f'.{out.name}.tmp.{time.time_ns()}')

@@ -1,5 +1,120 @@
 # Algorithm Change Log
 
+## v48.37 — HAF / HEADROOM-ALIGNED FRONTIER (2026-08-06)
+
+### Evidence-based motivation
+
+The repaired v48.36 OCAF pipeline is valid and terminates with the *natural* gate
+exit code RC=20.  The failure is no longer an engineering stop.  The gate-failure
+decomposition localizes the dominant layer to `development_rule_fit`: for both
+balanced and precision, Near-contact and Contact have a feasible proposal oracle,
+but no single shared development rule satisfies the preregistered admission
+constraints.
+
+The candidate set is therefore not the main bottleneck.  In the certificate
+proposal top-5, Near-contact contains 9 safe-positive groups and Contact contains
+20; the corresponding proposal-oracle precision lower confidence bounds are
+approximately 0.846 and 0.924.  In contrast, the learned selector selects very few
+safe-positive actions and many harmful actions.  A denser 21/31-point shared-rule
+search remains infeasible, excluding the original 15-point threshold grid as the
+primary cause.
+
+A second diagnostic is stage drift.  The v48.36 identity stage improves proposal
+identity/ranking but materially worsens the factor-stage supervised-risk metric
+while jointly updating benefit, harm, admission and the OCAF interaction bridge.
+This is especially problematic because safe-positive support is sparse.  The
+observed failure signature is consistent with a useful ranking representation
+being rotated away from the absolute physical benefit/harm boundaries needed by
+the shared admission rule.
+
+### Algorithm change: dual signed headroom alignment
+
+HAF retains OCAF's observation-conditioned action frontier and adds a *regime-free
+continuous* benefit headroom target.  For every candidate relative to nominal,
+
+`benefit_headroom = teacher_advantage - positive_gain`.
+
+The candidate-minus-nominal opportunity logit is mapped to a signed physical
+margin with a temperature and optimized with Smooth-L1 regression.  Consequently
+zero logit / opportunity probability 0.5 is explicitly anchored at the
+preregistered positive-gain boundary, symmetric in spirit with the existing
+signed component-harm margin heads.  The same target is used for Safe,
+Near-contact and Contact; no regime identifier, bucket-conditioned threshold, or
+case-specific policy is introduced.
+
+### Algorithm change: factor-preserving admission refinement
+
+HAF makes the two-stage optimization semantics explicit:
+
+1. **Factor stage:** fit OCAF's observation-conditioned bridge plus compact benefit
+   and component-harm factors, including signed benefit headroom.
+2. **Admission stage:** freeze the benefit head, harm head and OCAF interaction
+   bridge byte-for-byte, and optimize only the shared admission residual on top of
+   those physical factors.  The admission prior is detached during this stage.
+
+This preserves the factor stage as a stable continuous physical coordinate system
+while still allowing the selector to learn when evidence is sufficient to leave
+nominal.  It directly targets the observed admission/ranking mismatch without
+changing the proposal generator, source experts, data split, certificate or gate.
+
+### Engineering/provenance hardening
+
+- The stage-transfer checker now accepts a frozen OCAF bridge only when the stage
+  architecture explicitly registers `interaction_bridge_trainable_this_stage=false`;
+  all such tensors are then required to be byte-identical across the transfer.
+- The OCAF training contract understands factor-preserving admission, checks the
+  signed-benefit-headroom weight/temperature, and verifies the recorded algorithm
+  variant at every stage.
+- Factor-cache fingerprints include the new headroom settings and algorithm
+  variant, preventing stale v48.36 factor checkpoints from being silently reused.
+- The v48.37 wrappers clear ambient factor-cache variables by default, force the
+  preregistered algorithm switches/top-k/context rather than inheriting stale shell
+  values, assign unique output directories, and default resume to off, reducing
+  avoidable engineering RC=30 failures and mislabeled runs.
+- The repaired v48.36 terminal-state/gate protocol is intentionally reused so that
+  a v48.37 gate change is attributable to the algorithm rather than a new gate.
+- The learning-gate diagnostic now resolves v48.36 terminal state with the v48.36
+  resolver and is refreshed after terminal publication; this removes the stale
+  `authoritative_state=false` snapshot seen in the uploaded RC=20 result.
+
+### What is deliberately unchanged
+
+- No Safe/Near/Contact classifier, one-hot regime input, routing branch, or
+  regime-conditioned strategy/threshold.
+- Same proposal generator and `top_k=5` for the primary experiment.
+- Same frozen source experts and observation-consistent physical context.
+- Same positive-gain definition, component-veto tolerances, shared-rule fitting,
+  fit/verify scene separation, certificate statistics and Natural gate.
+- Same datasets and test-root access policy.
+
+### Pre-registered mechanism ablation
+
+The release provides a 2x2 ablation under the identical gate/protocol:
+
+- **A:** repaired v48.36 training semantics (no new headroom regression, joint
+  identity update).
+- **B:** signed benefit-headroom alignment only.
+- **C:** factor-preserving admission only.
+- **D:** full HAF (B+C; primary v48.37 method).
+
+The expected falsifiable signature is not merely a lower loss.  A successful HAF
+run should produce a *valid shared development rule* in both Near-contact and
+Contact, increase safe-positive selected count/precision while reducing harmful
+selected UCB, and preserve the noncompensatory component-harm contract.  If B helps
+but C does not, calibration of benefit semantics is dominant; if C helps but B
+does not, stage drift is dominant; if D is materially stronger than either alone,
+the two mechanisms are complementary.
+
+### Three-regime publication objective
+
+The intended paper-level behavior remains one continuous policy: preserve nominal
+utility/non-inferiority in Safe scenes; convert continuous recovery headroom into
+larger minimum TTC / fewer unsafe interventions as situations approach contact;
+and, after contact, prefer actions with positive recoverability headroom that
+reduce secondary-collision exposure while retaining post-contact TTC and route
+progress.  These are audit outcomes of one shared physical frontier, not three
+case-specific control laws.
+
 ## v48.36.3 — RC30 TERMINAL-STATE ATTEMPT CONTRACT HOTFIX (2026-08-06)
 
 ### Scope and attribution

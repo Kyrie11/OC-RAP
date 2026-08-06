@@ -205,7 +205,20 @@ def main() -> int:
         if identity_arch.get("observation_conditioned_action_frontier") is not True:
             failures.append("identity architecture does not register OCAF while interaction bridge is trainable")
     elif identity_context == "physical_interaction":
-        failures.append("physical_interaction identity stage omitted the interaction bridge from the allowed set")
+        # v48.37 HAF explicitly permits the OCAF bridge to remain frozen during
+        # admission refinement.  This is fail-closed: legacy architectures that
+        # merely omit the bridge are still rejected unless they register the
+        # factor-preserving contract and the bridge is verified byte-identical
+        # by the ordinary disallowed-drift comparison below.
+        factor_preserving_bridge = (
+            identity_arch.get("interaction_bridge_trainable_this_stage") is False
+            and identity_arch.get("observation_conditioned_action_frontier") is True
+        )
+        if not factor_preserving_bridge:
+            failures.append(
+                "physical_interaction identity stage omitted the interaction bridge from the allowed set "
+                "without an explicit frozen-bridge contract"
+            )
 
     identity_diff = _compare(factor, identity, identity_allowed)
     final_compare_allowed: tuple[str, ...] = () if args.final_stage_disabled else final_allowed

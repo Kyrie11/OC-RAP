@@ -123,6 +123,10 @@ def main() -> int:
     ap.add_argument("--run", type=Path, required=True)
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--expect-identity-all", choices=("true", "false"), default="true")
+    ap.add_argument("--expect-factor-preserving", choices=("true", "false"), default="false")
+    ap.add_argument("--expect-benefit-margin-regression", type=float, default=0.0)
+    ap.add_argument("--expect-benefit-margin-temperature", type=float, default=0.025)
+    ap.add_argument("--expect-algorithm-variant", default="")
     ap.add_argument("--expect-prior-coupled", choices=("true", "false"), default="true")
     ap.add_argument("--expect-adaptive-margin", choices=("true", "false"), default="false")
     ap.add_argument("--expect-final-enabled", choices=("true", "false"), default="false")
@@ -161,6 +165,7 @@ def main() -> int:
     final_rel = [float(x) for x in str(final_arch.get("component_reliability", "")).split(",") if x.strip()]
 
     expect_identity_all = args.expect_identity_all == "true"
+    expect_factor_preserving = args.expect_factor_preserving == "true"
     expect_coupled = args.expect_prior_coupled == "true"
     expect_adaptive = args.expect_adaptive_margin == "true"
     expect_final = args.expect_final_enabled == "true"
@@ -179,7 +184,12 @@ def main() -> int:
     reference_prefixes = (
         "direct_evidence_concord_admission_calibrator",
     ) + (("direct_evidence_interaction_bridge",) if expected_ocaf else ())
-    expected_identity_prefixes = set(all_prefixes if expect_identity_all else reference_prefixes)
+    factor_preserving_prefixes = ("direct_evidence_concord_admission_calibrator",)
+    expected_identity_prefixes = set(
+        all_prefixes
+        if expect_identity_all
+        else (factor_preserving_prefixes if expect_factor_preserving else reference_prefixes)
+    )
     exact_eligibility = _exact_eligibility_contract(
         (factor_arch, identity_arch, final_arch),
         (
@@ -189,7 +199,16 @@ def main() -> int:
         ),
     )
 
+    expected_algorithm_variant = str(args.expect_algorithm_variant).strip()
+
     checks = {
+        "algorithm_variant_provenance": (
+            not expected_algorithm_variant
+            or all(
+                str(a.get("algorithm_variant", "")) == expected_algorithm_variant
+                for a in (factor_arch, identity_arch, final_arch)
+            )
+        ),
         "no_regime_routing_all_stages": all(
             a.get("regime_id_exposed_to_evidence_model") is False
             for a in (factor_arch, identity_arch, final_arch)
@@ -211,6 +230,19 @@ def main() -> int:
         "finite_identity_metric": bool(identity_values) and all(math.isfinite(x) for x in identity_values),
         "finite_final_metric": bool(final_values) and all(math.isfinite(x) for x in final_values),
         "factor_margin_regression_enabled": float(factor_arch.get("component_margin_regression_weight", 0.0)) > 0.0,
+        "factor_benefit_margin_regression_contract": math.isclose(
+            float(factor_arch.get("benefit_margin_regression_weight", 0.0)),
+            float(args.expect_benefit_margin_regression), rel_tol=0.0, abs_tol=1.0e-9,
+        ),
+        "factor_benefit_margin_temperature_contract": math.isclose(
+            float(factor_arch.get("benefit_margin_temperature", 0.025)),
+            float(args.expect_benefit_margin_temperature), rel_tol=0.0, abs_tol=1.0e-9,
+        ),
+        "factor_preserving_bridge_contract": (
+            identity_arch.get("interaction_bridge_trainable_this_stage") is False
+            if expect_factor_preserving and expected_ocaf
+            else True
+        ),
         "identity_trainable_contract": set(identity_trainable) == expected_identity_prefixes,
         "identity_prior_gradient_contract": bool(identity_arch.get("admission_prior_detach", True)) is (not expect_coupled),
         "identity_adaptive_margin_contract": (
@@ -301,6 +333,10 @@ def main() -> int:
         "exact_eligibility_provenance": exact_eligibility,
         "expected": {
             "identity_all": expect_identity_all,
+            "factor_preserving_identity": expect_factor_preserving,
+            "benefit_margin_regression_weight": float(args.expect_benefit_margin_regression),
+            "benefit_margin_temperature": float(args.expect_benefit_margin_temperature),
+            "algorithm_variant": expected_algorithm_variant,
             "identity_trainable_prefixes": sorted(expected_identity_prefixes),
             "prior_coupled": expect_coupled,
             "adaptive_margin": expect_adaptive,

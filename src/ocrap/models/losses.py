@@ -1419,6 +1419,8 @@ def direct_uncertainty_recovery_value_loss(
     ordinal_evidence_factorized_harm_proxy_tolerance: float = 0.05,
     ordinal_evidence_component_tail_weight: float = 0.0,
     ordinal_evidence_component_margin_regression_weight: float = 0.0,
+    ordinal_evidence_benefit_margin_regression_weight: float = 0.0,
+    ordinal_evidence_benefit_margin_temperature: float = 0.025,
     ordinal_evidence_component_reliability: str | tuple[float, ...] = "",
     ordinal_evidence_global_balance: bool = False,
     ordinal_evidence_safe_set_temperature: float = 0.05,
@@ -2056,6 +2058,27 @@ def direct_uncertainty_recovery_value_loss(
             harm_pos_w = torch.as_tensor(max(float(harm_pos_weight), 1.0), dtype=harm_delta_logits.dtype, device=harm_delta_logits.device)
             harm_loss = F.binary_cross_entropy_with_logits(harm_delta_logits, harm_labels, pos_weight=harm_pos_w)
             terms.append(float(harm_weight) * harm_loss)
+        if opp_delta_logits is not None and float(ordinal_evidence_benefit_margin_regression_weight) > 0.0:
+            # v48.37 HAF: anchor the raw-benefit factor to the same kind of
+            # physically meaningful signed distance used by component-veto
+            # heads. Zero logit means exactly the preregistered positive-gain
+            # boundary, so P(opportunity)=0.5 has a cross-scene physical meaning
+            # rather than an arbitrary class-prior calibration. The target is a
+            # single continuous margin shared by every audit stratum.
+            benefit_tau = max(float(ordinal_evidence_benefit_margin_temperature), 1.0e-4)
+            predicted_benefit_margin = benefit_tau * opp_delta_logits
+            target_benefit_margin = (
+                t_delta.detach().to(dtype=predicted_benefit_margin.dtype)
+                - float(positive_gain)
+            )
+            benefit_margin_regression = F.smooth_l1_loss(
+                predicted_benefit_margin, target_benefit_margin, reduction="mean"
+            )
+            terms.append(
+                float(ordinal_evidence_benefit_margin_regression_weight)
+                * benefit_margin_regression
+            )
+
         # v48.10 COPE ordinal evidence.  The exact-PDC advantage is
         # tri-state; train ordered benefit/non-harm logits primarily on the
         # frozen policy's top-1 candidate, with an optional weak all-candidate

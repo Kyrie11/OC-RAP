@@ -456,6 +456,8 @@ training:
   # group-level safe-admission target used at deployment.
   direct_value_ordinal_evidence_component_tail_weight: 0.0
   direct_value_ordinal_evidence_component_margin_regression_weight: 0.0
+  direct_value_ordinal_evidence_benefit_margin_regression_weight: 0.0
+  direct_value_ordinal_evidence_benefit_margin_temperature: 0.025
   direct_value_ordinal_evidence_global_balance: false
   direct_value_ordinal_evidence_safe_set_temperature: 0.08
   direct_value_ordinal_evidence_intragroup_benefit_weight: 0.0
