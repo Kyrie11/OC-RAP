@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json, subprocess, sys
 from pathlib import Path
+import pytest
 import torch
 from ocrap.models.ocrap import ObservationConditionedActionFrontierBridge, OCRAPModel
 from ocrap.models.encoders import FlatFeatureLayout
@@ -89,6 +90,92 @@ def test_ocaf_model_uses_nominal_scene_anchor_and_expected_slices():
     context_changed = model.direct_evidence_interaction_bridge(action, observation_changed)
     assert not torch.allclose(context[1], context_changed[1])
     assert torch.equal(context_changed[0], torch.zeros_like(context_changed[0]))
+
+
+def _exercise_group_row_broadcast(device: torch.device) -> None:
+    """Match the real A30 batch geometry that triggered the v48.36 RC=30."""
+    torch.manual_seed(36)
+    model = _ocaf_model().to(device)
+    layout = FlatFeatureLayout()
+    group_size = 8
+    num_groups = 12
+    batch = group_size * num_groups
+
+    x = torch.randn(batch, layout.total_dim, device=device, requires_grad=True)
+    group_ids = torch.arange(num_groups, device=device).repeat_interleave(group_size)
+    # Composite group keys exercise the same two-column path used by training.
+    group_index = torch.stack([group_ids, group_ids * 17 + 3], dim=-1)
+    nominal = torch.zeros(batch, device=device)
+    nominal[::group_size] = 1.0
+
+    action = model._direct_candidate_raw_relative_features(x, group_index, nominal)
+    observation = model._direct_nominal_observation_features(x, group_index, nominal)
+    raw_action = torch.cat(
+        [x[:, start:end] for start, end in model.direct_candidate_physical_slices], dim=-1
+    )
+    raw_observation = torch.cat(
+        [x[:, start:end] for start, end in model.direct_observation_slices], dim=-1
+    )
+
+    assert action.shape == (batch, 141)
+    assert observation.shape == (batch, 529)
+    for group_id in range(num_groups):
+        start = group_id * group_size
+        idx = torch.arange(start, start + group_size, device=device)
+        expected_action = raw_action.index_select(0, idx) - raw_action[start : start + 1]
+        expected_observation = raw_observation[start : start + 1].expand(group_size, -1)
+        assert torch.allclose(action.index_select(0, idx), expected_action)
+        assert torch.allclose(observation.index_select(0, idx), expected_observation)
+
+    context = model.direct_evidence_interaction_bridge(action, observation)
+    loss = context.square().mean() + action.square().mean() + observation.square().mean()
+    loss.backward()
+    assert x.grad is not None
+    assert torch.isfinite(x.grad).all()
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+
+
+def test_group_row_broadcast_matches_real_batch_geometry_cpu():
+    _exercise_group_row_broadcast(torch.device("cpu"))
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is not available")
+def test_group_row_broadcast_matches_real_batch_geometry_cuda():
+    _exercise_group_row_broadcast(torch.device("cuda"))
+
+
+def test_group_broadcast_runtime_contract_runs_on_cpu(tmp_path: Path):
+    output = tmp_path / "contract.json"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "tools" / "check_v48_36_cuda_group_broadcast_contract.py"),
+            "--device",
+            "cpu",
+            "--batch-size",
+            "96",
+            "--group-size",
+            "8",
+            "--output",
+            str(output),
+        ],
+        cwd=ROOT,
+    )
+    assert completed.returncode == 0
+    report = json.loads(output.read_text())
+    assert report["valid"] is True
+    assert report["candidate_action_dim"] == 141
+    assert report["nominal_observation_dim"] == 529
+    assert report["forward_finite"] is True
+    assert report["backward_finite"] is True
+
+
+def test_main_runner_preflights_group_broadcast_on_both_training_gpus():
+    text = (ROOT / "scripts" / "run_v48_36_ocaf_dedicated.sh").read_text()
+    assert 'for gpu_spec in "gpu0:$GPU0" "gpu1:$GPU1"' in text
+    assert "check_v48_36_cuda_group_broadcast_contract.py" in text
+    assert "ocaf_cuda_group_broadcast_preflight_" in text
 
 def test_noncompensatory_cap_never_exceeds_any_component():
     free=torch.tensor([5.0,-1.0,0.2]); cap=torch.tensor([-0.5,3.0,0.1])

@@ -1,0 +1,22 @@
+{
+  "event": "v48_36_1_full_factor_geometry_smoke",
+  "version": "v48.36.1-RC30-CUDA-INDEX-HOTFIX",
+  "created_unix": 1785991765.3148308,
+  "device": "cpu",
+  "torch_version": "2.10.0+cpu",
+  "batch_size": 96,
+  "group_size": 8,
+  "num_groups": 12,
+  "d_model": 192,
+  "d_obs": 64,
+  "candidate_action_dim": 141,
+  "nominal_observation_dim": 529,
+  "interaction_hidden": 64,
+  "trainable_parameter_tensors": 22,
+  "outputs_finite": true,
+  "gradients_finite": true,
+  "zero_action_exact_zero": true,
+  "elapsed_s": 0.0952451229095459,
+  "test_roots_read": false,
+  "valid": true
+}

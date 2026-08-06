@@ -61,11 +61,12 @@ class RecoverySetTournament(nn.Module):
             recs = idx[~nominal_mask[idx]]
             if recs.numel() == 0:
                 continue
-            token = self.input_proj(self.input_norm(relative_features[recs])).unsqueeze(0)
+            recovery_features = relative_features.index_select(0, recs)
+            token = self.input_proj(self.input_norm(recovery_features)).unsqueeze(0)
             attended, _ = self.attn(token, token, token, need_weights=False)
             token = self.norm1(token + attended)
             token = self.norm2(token + self.ffn(token)).squeeze(0)
-            context[recs] = token.to(dtype=context.dtype)
+            context.index_copy_(0, recs, token.to(dtype=context.dtype))
         return context
 
     def score_from_context(
@@ -87,10 +88,10 @@ class RecoverySetTournament(nn.Module):
             recs = idx[~nominal_mask[idx]]
             if recs.numel() == 0:
                 continue
-            group_scores = self.score(context[recs]).squeeze(-1)
+            group_scores = self.score(context.index_select(0, recs)).squeeze(-1)
             if group_scores.numel() > 1:
                 group_scores = group_scores - group_scores.mean()
-            scores[recs] = group_scores.to(dtype=scores.dtype)
+            scores.index_copy_(0, recs, group_scores.to(dtype=scores.dtype))
         return scores
 
     def forward(
@@ -144,7 +145,14 @@ class ObservationConditionedActionFrontierBridge(nn.Module):
                 "OCAF observation dimension mismatch: "
                 f"got {nominal_observation.shape[-1]}, expected {self.observation_dim}"
             )
-        scale = action_relative.square().mean(dim=-1, keepdim=True).sqrt()
+        # Compute the magnitude gate in float32 and clamp before sqrt.  Exact
+        # nominal rows have a zero action difference; sqrt(x) has an undefined
+        # derivative at x=0 and can inject NaNs when the raw context is not
+        # detached (for example in diagnostic or future joint-training runs).
+        # The clamp does not violate the zero-action contract because both
+        # bias-free action projections are exactly zero at a zero input.
+        scale_sq = action_relative.float().square().mean(dim=-1, keepdim=True)
+        scale = scale_sq.clamp_min(1.0e-12).sqrt().to(dtype=action_relative.dtype)
         raw = self.action_raw(action_relative)
         direction = self.action_direction(self.action_direction_norm(action_relative)) * scale
         action = raw + direction
@@ -989,7 +997,14 @@ class OCRAPModel(nn.Module):
             noms = idx[nominal_mask[idx]]
             if noms.numel() != 1:
                 continue
-            out[idx] = raw[idx] - raw[noms[0]:noms[0] + 1]
+            # Avoid CUDA advanced-index assignment with a tensor-valued slice
+            # boundary.  PyTorch 2.5/CUDA can route the broadcast through
+            # index_put_ and mis-compute the expanded RHS geometry.  Explicit
+            # row selection plus index_copy_ has identical semantics, preserves
+            # gradients, and is stable on both CPU and CUDA.
+            group_rows = raw.index_select(0, idx)
+            nominal_row = raw.index_select(0, noms[:1])
+            out.index_copy_(0, idx, group_rows - nominal_row)
         return out
 
     def _direct_nominal_observation_features(
@@ -1020,7 +1035,14 @@ class OCRAPModel(nn.Module):
             noms = idx[nominal_mask[idx]]
             if noms.numel() != 1:
                 continue
-            out[idx] = raw[noms[0]:noms[0] + 1]
+            # Do not rely on implicit [1, D] -> [N, D] broadcasting inside a
+            # CUDA advanced-index assignment.  The v48.36 A30 run failed here
+            # with an internal Indexing.cu assertion (N*D=4232 versus D*D=279841
+            # for N=8, D=529).  Materialise the intended source geometry and use
+            # index_copy_ so the row count is explicit to the kernel.
+            nominal_row = raw.index_select(0, noms[:1])
+            broadcast_rows = nominal_row.expand(idx.numel(), -1).contiguous()
+            out.index_copy_(0, idx, broadcast_rows)
         return out
 
     def _apply_direct_set_context(
@@ -1058,14 +1080,16 @@ class OCRAPModel(nn.Module):
             recs = idx[~nominal_mask[idx]]
             if noms.numel() == 0 or recs.numel() == 0:
                 continue
-            nom_feat = direct_features[noms[0]:noms[0] + 1]
-            rel = direct_features[idx] - nom_feat
-            rec_rel = direct_features[recs] - nom_feat
+            nom_feat = direct_features.index_select(0, noms[:1])
+            group_features = direct_features.index_select(0, idx)
+            recovery_features = direct_features.index_select(0, recs)
+            rel = group_features - nom_feat
+            rec_rel = recovery_features - nom_feat
             mean_rel = rec_rel.mean(dim=0, keepdim=True).expand(idx.numel(), -1)
             max_rel = rec_rel.max(dim=0, keepdim=True).values.expand(idx.numel(), -1)
-            context_input = torch.cat([direct_features[idx], rel, mean_rel, max_rel], dim=-1)
+            context_input = torch.cat([group_features, rel, mean_rel, max_rel], dim=-1)
             residual = self.direct_set_context_adapter(context_input)
-            adapted[idx] = direct_features[idx] + gate * residual
+            adapted.index_copy_(0, idx, group_features + gate * residual)
         return adapted
 
     def _direct_group_relative_features(
@@ -1102,15 +1126,18 @@ class OCRAPModel(nn.Module):
             recs = idx[~nominal_mask[idx]]
             if noms.numel() == 0 or recs.numel() == 0:
                 continue
-            nominal = direct_features[noms[0]:noms[0] + 1]
-            rel = direct_features[idx] - nominal
-            rec_rel = direct_features[recs] - nominal
+            nominal = direct_features.index_select(0, noms[:1])
+            group_features = direct_features.index_select(0, idx)
+            recovery_features = direct_features.index_select(0, recs)
+            rel = group_features - nominal
+            rec_rel = recovery_features - nominal
             mean_rel = rec_rel.mean(dim=0, keepdim=True).expand(idx.numel(), -1)
             max_rel = rec_rel.max(dim=0, keepdim=True).values.expand(idx.numel(), -1)
             if self.direct_recovery_relative_features_include_absolute:
-                out[idx] = torch.cat([direct_features[idx], rel, mean_rel, max_rel], dim=-1)
+                rows = torch.cat([group_features, rel, mean_rel, max_rel], dim=-1)
             else:
-                out[idx] = torch.cat([rel, mean_rel, max_rel], dim=-1)
+                rows = torch.cat([rel, mean_rel, max_rel], dim=-1)
+            out.index_copy_(0, idx, rows)
         return out
 
     def _direct_outputs(

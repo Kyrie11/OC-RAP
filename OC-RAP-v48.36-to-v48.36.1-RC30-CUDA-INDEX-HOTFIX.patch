@@ -1,0 +1,1364 @@
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=.pytest_cache' '--exclude=.validation_tmp' '--exclude=OC-RAP-v48.36-to-v48.36.1-RC30-CUDA-INDEX-HOTFIX.patch' '--exclude=SHA256SUMS.txt' /mnt/data/v4836_audit/code/ALGORITHM_CHANGELOG.md /mnt/data/ocrap_v48361_delivery/OC-RAP-v48.36.1-RC30-CUDA-INDEX-HOTFIX/ALGORITHM_CHANGELOG.md
+--- /mnt/data/v4836_audit/code/ALGORITHM_CHANGELOG.md	2026-08-06 11:40:50.000000000 +0000
++++ /mnt/data/ocrap_v48361_delivery/OC-RAP-v48.36.1-RC30-CUDA-INDEX-HOTFIX/ALGORITHM_CHANGELOG.md	2026-08-06 04:44:46.435952773 +0000
+@@ -1,5 +1,52 @@
+ # Algorithm Change Log
+ 
++## v48.36.1 — RC30 CUDA GROUP-BROADCAST HOTFIX (2026-08-06)
++
++### Scope and attribution
++
++This is an **engineering-only hotfix** for v48.36 OCAF.  It does not change the
++candidate generator, unified continuous physical semantics, source-expert prior,
++loss weights, shared deployment rule, certificate thresholds, datasets, or gate.
++The uploaded v48.36 result is not an algorithm result: both balanced and precision
++variants failed in factor-stage epoch 1 before producing a checkpoint, calibration,
++certificate, or gate decision.
++
++The first authoritative exception was raised in
++`OCRAPModel._direct_nominal_observation_features`.  For a real A30 group with eight
++rows and a 529-dimensional nominal-observation vector, CUDA advanced-index
++assignment attempted to reconcile `8*529=4232` destination elements with an
++incorrectly expanded `529*529=279841` value tensor and aborted in
++`ATen/native/cuda/Indexing.cu`.
++
++### Engineering changes
++
++1. Replaced tensor-valued scalar slicing and implicit advanced-index broadcasting
++   in candidate-relative and nominal-observation group construction with explicit
++   `index_select` + `index_copy_` row operations.
++2. Applied the same explicit row gather/scatter discipline to the recovery-set
++   tournament and group-relative/set-context adapters, removing the remaining
++   group-wise CUDA `tensor[idx] = value` writes from the model path.
++3. Replaced the zero-unsafe `sqrt(mean(action^2))` derivative with a float32,
++   clamped RMS magnitude gate.  Exact zero action still gives exact zero OCAF
++   output, while nominal-row and non-detached diagnostic gradients remain finite.
++4. Added `tools/check_v48_36_cuda_group_broadcast_contract.py`.  The main runner
++   now executes the exact 141-D action / 529-D observation geometry, including
++   backward, on **both configured training GPUs** before index construction or
++   adaptation.  A failure is published as an attempt-scoped RC=30 preflight error.
++5. Added real-batch-geometry CPU regression, optional CUDA regression, runtime-tool
++   regression, and main-runner wiring tests.
++
++### Validation
++
++- Focused v48.35/v48.35.1/v48.35.2/v48.36 matrix: **42 passed, 1 CUDA-only skipped**
++  in the CPU delivery environment, with only non-fatal Transformer warnings.
++- Exact factor-stage geometry smoke: batch 96, group size 8, action dimension 141,
++  observation dimension 529, all outputs and trainable gradients finite.
++- Python `compileall`, all 67 shell scripts under `scripts/` and `tools/`, and all
++  v48.36 version-scoped tool `--help` imports pass.
++- Real A30 execution is still required; no RC=0 or algorithm-performance claim is
++  made by this hotfix.
++
+ ## v48.36 — OCAF (Observation-Conditioned Action Frontier)
+ 
+ - **Root cause addressed:** v48.35.2 used an action-only `physical_relative` evidence context. It could not distinguish the effect of the same braking/steering delta under different continuous clearance, contact-pose, relative-motion, route and occupancy conditions.
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=.pytest_cache' '--exclude=.validation_tmp' '--exclude=OC-RAP-v48.36-to-v48.36.1-RC30-CUDA-INDEX-HOTFIX.patch' '--exclude=SHA256SUMS.txt' /mnt/data/v4836_audit/code/OC-RAP-v48.36-RC30-audit-and-v48.36.1-hotfix-ZH.md /mnt/data/ocrap_v48361_delivery/OC-RAP-v48.36.1-RC30-CUDA-INDEX-HOTFIX/OC-RAP-v48.36-RC30-audit-and-v48.36.1-hotfix-ZH.md
+--- /mnt/data/v4836_audit/code/OC-RAP-v48.36-RC30-audit-and-v48.36.1-hotfix-ZH.md	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/ocrap_v48361_delivery/OC-RAP-v48.36.1-RC30-CUDA-INDEX-HOTFIX/OC-RAP-v48.36-RC30-audit-and-v48.36.1-hotfix-ZH.md	2026-08-06 04:51:00.137804328 +0000
+@@ -0,0 +1,156 @@
++# OC-RAP v48.36 RC=30 审计与 v48.36.1 工程热修复
++
++## 1. 权威结论
++
++本次结果不能用于判断 OCAF 算法优劣。权威完成状态为：
++
++- `pipeline_exit_code=30`
++- `pipeline_valid=false`
++- failure stage 为 `adaptation`
++- balanced/precision 的 adaptation 子进程均返回 1
++- `certificate_executed=false`
++- `gate_evaluated=false`
++- `test_roots_read=false`
++
++因此不存在 Near/contact certificate、共享规则、gate 或 Safe/stress 指标。本轮不能据此修改阈值、损失权重或 OCAF 算法结构。
++
++## 2. 第一现场
++
++两个 variant 都在 factor stage 的 epoch 1、第一个 batch 进入 OCAF 上下文构造时失败，异常完全相同：
++
++```text
++RuntimeError: linearIndex.numel()*sliceSize*nElemBefore == expandedValue.numel()
++INTERNAL ASSERT FAILED at ATen/native/cuda/Indexing.cu:490
++number of flattened indices did not match number of elements in the value tensor:
++4232 vs 279841
++```
++
++堆栈指向：
++
++```text
++src/ocrap/models/ocrap.py
++OCRAPModel._direct_nominal_observation_features
++out[idx] = raw[noms[0]:noms[0] + 1]
++```
++
++真实几何为：
++
++- 当前 group 有 8 行；
++- nominal observation 维度为 529；
++- 目标元素数应为 `8 × 529 = 4232`；
++- CUDA advanced-index assignment 却把 RHS 扩展成了 `529 × 529 = 279841`。
++
++这不是数据不完整、候选不足、显存不足或 gate 拒绝，而是 GPU 高级索引赋值路径中的形状广播实现错误。CPU 单元测试之所以没有发现，是因为 CPU 上同一写法能够运行；原有 OCAF preflight 也只测试了独立 bridge，没有覆盖“复合 group index + nominal 行广播 + A30 backward”的完整路径。
++
++## 3. 已排除的原因
++
++在崩溃之前，以下契约均已通过：
++
++- canonical dataset root contract；
++- dedicated protocol audit；
++- multigroup loss finite-gradient contract；
++- CPU OCAF bridge contract；
++- adaptation train/dev teacher index contract；
++- 训练集 10015 行、1167 groups；dev 3526 行、409 groups；
++- source checkpoint 成功加载；
++- trainable prefix 与 74768 个可训练参数符合 factor-stage 设计。
++
++训练尚未完成一次 optimizer step，因此本轮没有算法方向信号。
++
++## 4. v48.36.1 修复
++
++### 4.1 CUDA-safe group row operations
++
++将以下两类操作从 tensor-valued scalar slice 和 `tensor[idx] = value` 改为显式 row gather/scatter：
++
++```python
++group_rows = raw.index_select(0, idx)
++nominal_row = raw.index_select(0, noms[:1])
++out.index_copy_(0, idx, group_rows - nominal_row)
++```
++
++以及：
++
++```python
++nominal_row = raw.index_select(0, noms[:1])
++broadcast_rows = nominal_row.expand(idx.numel(), -1).contiguous()
++out.index_copy_(0, idx, broadcast_rows)
++```
++
++该方式明确给出 `[N,D]` source geometry，不再依赖 CUDA `index_put_` 内部广播。
++
++同类 group-wise 写入也在 recovery tournament、set-context adapter 和 group-relative feature 中统一替换为 `index_select/index_copy_`，避免下一个阶段再次触发同类 GPU 路径。
++
++### 4.2 零动作 RMS 的有限梯度
++
++原实现：
++
++```python
++sqrt(mean(action_relative ** 2))
++```
++
++nominal 行的 action difference 严格为零，零点导数可能在 non-detached 调试、消融或未来联合训练中产生 NaN。修复后使用 float32 的稳定 RMS：
++
++```python
++scale_sq = action_relative.float().square().mean(...)
++scale = scale_sq.clamp_min(1e-12).sqrt().to(action_relative.dtype)
++```
++
++所有 action projection 均无 bias，因此零动作仍然严格输出零，没有改变 OCAF 的物理语义。
++
++### 4.3 两张 GPU 的真实几何 preflight
++
++新增：
++
++```text
++tools/check_v48_36_cuda_group_broadcast_contract.py
++```
++
++主 runner 在构建/复用 index 和启动 adaptation 之前，分别在 `GPU0`、`GPU1` 上执行：
++
++- batch 96；
++- group size 8；
++- composite group index；
++- action dimension 141；
++- nominal observation dimension 529；
++- exact-zero nominal context；
++- forward finite；
++- input 和 bridge parameter backward finite。
++
++任何一张卡失败都会被记录成 attempt-scoped RC=30，且不会消耗完整训练时间。
++
++## 5. 对算法设计的处理
++
++本热修复不改变：
++
++- 一个网络、一套连续物理语义、一份共享 rule；
++- 不输入 regime ID；
++- OCAF action × nominal-observation interaction；
++- source consensus prior scale；
++- 五个 signed safety components；
++- non-compensatory frontier cap；
++- factor/identity loss 权重；
++- candidate proposal、certificate、gate 和数据集。
++
++只有在修复后得到 RC=20 或 RC=0，才能继续分析 Near/contact 的排序、precision/recall、harmful admission、macro collapse 和 shared-rule 稳定性。
++
++## 6. 重新执行原则
++
++- 必须设置 `RESUME_AFTER_ADAPTATION=0`。本次两个 variant 均未生成 factor checkpoint，不满足 adaptation resume 条件。
++- 建议使用新的输出目录 `runs/ocrap_v48_36_1_ocaf_cuda_hotfix_48361`。
++- 可以把旧目录中的四个 teacher-index 文件复制到新目录，并把两个 summary 的 `output` provenance 更新为新路径；runner 会重新做 manifest SHA、dataset roots、label 参数和 tolerance contract 校验。校验不通过会自动拒绝或重建。
++- 不要手工复制旧 factor/identity stage、完成标记或 failure marker。
++
++## 7. 本地验证边界
++
++已完成：
++
++- focused regression：42 passed，1 个 CUDA-only test 因本容器无 GPU 被 skip；
++- batch=96、group=8、141-D/529-D 完整 factor-stage geometry forward/backward smoke；
++- compileall；
++- 67 个 shell 脚本 `bash -n`；
++- version-scoped tools import/`--help`；
++- dependency closure；
++- ZIP hash round-trip。
++
++本容器无 A30、WOMD/Waymax 和 source checkpoint，因此没有声称真实 CUDA 主实验已经通过，也没有声称 RC=0。
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=.pytest_cache' '--exclude=.validation_tmp' '--exclude=OC-RAP-v48.36-to-v48.36.1-RC30-CUDA-INDEX-HOTFIX.patch' '--exclude=SHA256SUMS.txt' /mnt/data/v4836_audit/code/OC-RAP-v48.36-RC30-failure-audit.json /mnt/data/ocrap_v48361_delivery/OC-RAP-v48.36.1-RC30-CUDA-INDEX-HOTFIX/OC-RAP-v48.36-RC30-failure-audit.json
+--- /mnt/data/v4836_audit/code/OC-RAP-v48.36-RC30-failure-audit.json	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/ocrap_v48361_delivery/OC-RAP-v48.36.1-RC30-CUDA-INDEX-HOTFIX/OC-RAP-v48.36-RC30-failure-audit.json	2026-08-06 04:47:41.952349933 +0000
+@@ -0,0 +1,67 @@
++{
++  "event": "v48_36_rc30_failure_audit",
++  "version": "v48.36-OCAF",
++  "hotfix_version": "v48.36.1-RC30-CUDA-INDEX-HOTFIX",
++  "created_unix": 1785991661.9522164,
++  "input_archives": {
++    "code": {
++      "path": "OC-RAP(1).zip",
++      "sha256": "d68a3322213cf088debadef2c8d3483674d821181e2f820f5840344fc81bd31a"
++    },
++    "result": {
++      "path": "ocrap_v48_36_ocaf_dedicated_4836.zip",
++      "sha256": "29497411c99c84d0ca58a512187b2cde846329da919f29fa066dcc1c715d8ac0"
++    }
++  },
++  "authoritative_exit_code": 30,
++  "pipeline_valid": false,
++  "failure_stage": "adaptation",
++  "adaptation_exit_codes": {
++    "balanced": 1,
++    "precision": 1
++  },
++  "certificate_executed": false,
++  "gate_evaluated": false,
++  "test_roots_read": false,
++  "balanced_signature": {
++    "event": "v48_34_failure_signature",
++    "created_unix": 1785988037.3808904,
++    "stage": "factor_stage",
++    "exit_code": 1,
++    "log": "runs/ocrap_v48_36_ocaf_dedicated_4836/logs/adapt_balanced.log",
++    "exception_type": "RuntimeError",
++    "message": "linearIndex.numel()*sliceSize*nElemBefore == expandedValue.numel() INTERNAL ASSERT FAILED at \"../aten/src/ATen/native/cuda/Indexing.cu\":490, please report a bug to PyTorch. number of flattened indices did not match number of elements in the value tensor: 4232 vs 279841",
++    "location": {
++      "file": "/home/senzeyu2/code/OC-RAP/src/ocrap/models/ocrap.py",
++      "line": 1023,
++      "function": "_direct_nominal_observation_features"
++    }
++  },
++  "precision_signature": {
++    "event": "v48_34_failure_signature",
++    "created_unix": 1785988037.5194905,
++    "stage": "factor_stage",
++    "exit_code": 1,
++    "log": "runs/ocrap_v48_36_ocaf_dedicated_4836/logs/adapt_precision.log",
++    "exception_type": "RuntimeError",
++    "message": "linearIndex.numel()*sliceSize*nElemBefore == expandedValue.numel() INTERNAL ASSERT FAILED at \"../aten/src/ATen/native/cuda/Indexing.cu\":490, please report a bug to PyTorch. number of flattened indices did not match number of elements in the value tensor: 4232 vs 279841",
++    "location": {
++      "file": "/home/senzeyu2/code/OC-RAP/src/ocrap/models/ocrap.py",
++      "line": 1023,
++      "function": "_direct_nominal_observation_features"
++    }
++  },
++  "same_exception_both_variants": true,
++  "algorithm_attribution_allowed": false,
++  "root_cause": {
++    "class": "CUDA advanced-index implicit-broadcast engineering defect",
++    "function": "OCRAPModel._direct_nominal_observation_features",
++    "source_line_in_uploaded_code": 1023,
++    "destination_elements": 4232,
++    "incorrect_expanded_value_elements": 279841,
++    "geometry": {
++      "group_rows": 8,
++      "nominal_observation_dim": 529
++    }
++  }
++}
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=.pytest_cache' '--exclude=.validation_tmp' '--exclude=OC-RAP-v48.36-to-v48.36.1-RC30-CUDA-INDEX-HOTFIX.patch' '--exclude=SHA256SUMS.txt' /mnt/data/v4836_audit/code/OC-RAP-v48.36.1-VERSION-CONTRACT.json /mnt/data/ocrap_v48361_delivery/OC-RAP-v48.36.1-RC30-CUDA-INDEX-HOTFIX/OC-RAP-v48.36.1-VERSION-CONTRACT.json
+--- /mnt/data/v4836_audit/code/OC-RAP-v48.36.1-VERSION-CONTRACT.json	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/ocrap_v48361_delivery/OC-RAP-v48.36.1-RC30-CUDA-INDEX-HOTFIX/OC-RAP-v48.36.1-VERSION-CONTRACT.json	2026-08-06 04:53:01.737558928 +0000
+@@ -0,0 +1,54 @@
++{
++  "event": "v48_36_1_release_version_contract",
++  "version": "v48.36.1-RC30-CUDA-INDEX-HOTFIX",
++  "created_unix": 1785991661.952368,
++  "base_algorithm_version": "v48.36-OCAF",
++  "algorithm_changed": false,
++  "input_code_archive_sha256": "d68a3322213cf088debadef2c8d3483674d821181e2f820f5840344fc81bd31a",
++  "audited_result_archive_sha256": "29497411c99c84d0ca58a512187b2cde846329da919f29fa066dcc1c715d8ac0",
++  "audited_authoritative_result": 30,
++  "audited_failure_stage": "adaptation/factor_stage/first_batch",
++  "model_contract": {
++    "single_network": true,
++    "regime_id_input": false,
++    "regime_specific_head": false,
++    "regime_specific_threshold": false,
++    "candidate_context_source": "physical_interaction",
++    "candidate_action_dim": 141,
++    "nominal_observation_dim": 529,
++    "single_shared_deployment_rule": true,
++    "noncompensatory_frontier_cap": true
++  },
++  "hotfix_contract": {
++    "cuda_group_row_operations": "index_select_plus_index_copy",
++    "implicit_advanced_index_broadcast_forbidden": true,
++    "zero_action_rms_gradient_finite": true,
++    "zero_action_exact_zero": true,
++    "per_gpu_runtime_preflight": true,
++    "preflight_gpus": [
++      "GPU0",
++      "GPU1"
++    ],
++    "preflight_batch_size": 96,
++    "preflight_group_size": 8
++  },
++  "rerun_contract": {
++    "resume_after_adaptation": false,
++    "algorithm_exit_codes": [
++      0,
++      20
++    ],
++    "engineering_exit_code": 30,
++    "test_roots_read_before_gate": false
++  },
++  "real_cuda_experiment_executed_in_delivery_environment": false,
++  "key_file_sha256": {
++    "src/ocrap/models/ocrap.py": "e542ba4938832f8abbaaed398784765162e1a2ec16d593fc6e5c19c3342d9570",
++    "scripts/run_v48_36_ocaf_dedicated.sh": "c891e840a16ecfbd3389e97f3a467f2e1cfb66b51ae9fe4f728c2ae435fe7951",
++    "tools/check_v48_36_cuda_group_broadcast_contract.py": "95fc3cb5578e8125565845750aa1c75219a2e78d1544f4cad9c3c1ac40401428",
++    "tests/test_v48_36_ocaf.py": "4db77345de245bb64af6daf5f24521bd2a05818fafb1d4f528423650e4c11f40",
++    "ALGORITHM_CHANGELOG.md": "6a8339415e9102c7453012dc61897e8f02da84f7edde647d4c372e6cd88ee2f0",
++    "OC-RAP-v48.36.1-run-commands-ZH.txt": "3adab01f2b5f84aa68a7d3672597f017675d0590946d41f805dc94ab0d963b82"
++  },
++  "finalized_unix": 1785991981.737465
++}
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=.pytest_cache' '--exclude=.validation_tmp' '--exclude=OC-RAP-v48.36-to-v48.36.1-RC30-CUDA-INDEX-HOTFIX.patch' '--exclude=SHA256SUMS.txt' /mnt/data/v4836_audit/code/OC-RAP-v48.36.1-change-manifest.md /mnt/data/ocrap_v48361_delivery/OC-RAP-v48.36.1-RC30-CUDA-INDEX-HOTFIX/OC-RAP-v48.36.1-change-manifest.md
+--- /mnt/data/v4836_audit/code/OC-RAP-v48.36.1-change-manifest.md	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/ocrap_v48361_delivery/OC-RAP-v48.36.1-RC30-CUDA-INDEX-HOTFIX/OC-RAP-v48.36.1-change-manifest.md	2026-08-06 04:50:20.581966160 +0000
+@@ -0,0 +1,50 @@
++# OC-RAP v48.36.1 RC30 CUDA Index Hotfix — Change Manifest
++
++## Algorithm scope
++
++No algorithm or dataset change. The package retains v48.36 OCAF, one network,
++one continuous physical representation, one shared deployment rule, five signed
++safety components and the non-compensatory frontier cap.
++
++## Runtime code
++
++- `src/ocrap/models/ocrap.py`
++  - replaces implicit CUDA advanced-index broadcast with explicit
++    `index_select/index_copy_`;
++  - hardens the other group-wise row gather/scatter paths;
++  - makes the zero-action RMS derivative finite while preserving exact-zero output.
++- `scripts/run_v48_36_ocaf_dedicated.sh`
++  - executes the exact group-broadcast forward/backward contract on GPU0 and GPU1
++    before adaptation.
++- `tools/check_v48_36_cuda_group_broadcast_contract.py`
++  - new attempt-independent CUDA/CPU runtime contract for batch 96, group 8,
++    141-D action and 529-D nominal observation.
++
++## Tests
++
++- `tests/test_v48_36_ocaf.py`
++  - real batch-geometry CPU regression;
++  - optional CUDA regression;
++  - finite backward at exact-zero nominal action;
++  - runtime-contract subprocess test;
++  - two-GPU main-runner wiring test.
++
++## Analysis and execution artifacts
++
++- `OC-RAP-v48.36-RC30-audit-and-v48.36.1-hotfix-ZH.md`
++- `OC-RAP-v48.36-RC30-failure-audit.json`
++- `OC-RAP-v48.36.1-run-commands-ZH.txt`
++- `OC-RAP-v48.36.1-engineering-error-audit.csv`
++- `OC-RAP-v48.36.1-VERSION-CONTRACT.json`
++- `OC-RAP-v48.36.1-validation-status.txt`
++- `OC-RAP-v48.36.1-full-factor-geometry-smoke.json`
++- `OC-RAP-v48.36.1-script-dependency-audit.json`
++- `OC-RAP-v48.36.1-release-audit.json`
++- `OC-RAP-v48.36-to-v48.36.1-RC30-CUDA-INDEX-HOTFIX.patch`
++- `ALGORITHM_CHANGELOG.md`
++
++## Rerun requirement
++
++Use `RESUME_AFTER_ADAPTATION=0`. The failed run produced no factor-stage checkpoint,
++so only contract-verified teacher indexes may be reused; old stage outputs and
++terminal markers must not be copied into the new output directory.
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=.pytest_cache' '--exclude=.validation_tmp' '--exclude=OC-RAP-v48.36-to-v48.36.1-RC30-CUDA-INDEX-HOTFIX.patch' '--exclude=SHA256SUMS.txt' /mnt/data/v4836_audit/code/OC-RAP-v48.36.1-engineering-error-audit.csv /mnt/data/ocrap_v48361_delivery/OC-RAP-v48.36.1-RC30-CUDA-INDEX-HOTFIX/OC-RAP-v48.36.1-engineering-error-audit.csv
+--- /mnt/data/v4836_audit/code/OC-RAP-v48.36.1-engineering-error-audit.csv	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/ocrap_v48361_delivery/OC-RAP-v48.36.1-RC30-CUDA-INDEX-HOTFIX/OC-RAP-v48.36.1-engineering-error-audit.csv	2026-08-06 04:47:02.824954064 +0000
+@@ -0,0 +1,24 @@
++﻿id,issue,impact,v48.36_fix,status
++E01,mixed v48.34/v48.35/v48.35.1/v48.35.2/v50.x files in one ZIP,stale scripts or markers can be attributed to the wrong algorithm,"version-scoped completion contract, attempt ID, resolver, downstream v48.36-only commands",fixed
++E02,Near and Contact formerly fit separate frozen rules,deployment policy silently branches by regime,one shared rule; strata only for worst-case audit; SHA-checked rule reuse,retained fixed design
++E03,proposal_exact_eligible diagnostic semantics can diverge from frozen rule,diagnostic name can overstate deployability,exact deployment thresholds carried in checkpoint/stage contracts and verified before certificate,fixed
++E04,training boundary differed from fitted deployment boundary,boundary ablation did not act on deployed boundary,identity loss uses exact opportunity/harm thresholds and runtime order,fixed
++E05,soft barrier allowed benefit/residual compensation,unsafe component could be admitted,non-compensatory smooth cap remains mandatory,fixed
++E06,physical_relative was action-only and excluded continuous scene pressure,same action delta treated similarly across different clearance/contact geometry,OCAF multiplicative action x nominal-observation interaction; zero action exactly zero,fixed algorithmically; needs real experiment
++E07,"generic 100k parameter cap killed legacy-context ablation (267,774 parameters)",A returned RC30 and B/C never ran; invalid scientific conclusion,exact checkpoint trainable-prefix contract; generic cap disabled unless explicit; independent ablation tasks,fixed
++E08,raw RC=3 could be mapped ambiguously to 30,algorithm rejection and engineering failure can be confused,only 0/20 are algorithm outcomes; all other codes normalize to 30 with stage-specific JSON,fixed
++E09,gate-passed commands referenced old scripts,post-gate experiment could use wrong version,generated commands call v48.36 Safe/stress wrappers only,fixed
++E10,legacy dataset aliases such as traincontact differ from canonical train_contact,silent sample/provenance drift,canonical dataset-root contract rejects aliases before expensive work,fixed
++E11,stale completion/gate/failure markers can coexist,wrong RC inferred from file presence,atomic authoritative state plus attempt-scoped stale-marker archive,fixed
++E12,scene branch could create a residual without candidate action,scene shortcut masquerades as candidate effect,all OCAF output terms are bias-free and action-gated; zero action unit-tested,fixed
++E13,LayerNorm-only action representation can erase action magnitude,weak ordering of mild versus strong braking/steering,raw signed action path plus RMS-gated normalized direction path,fixed
++E14,test-root access before gate would invalidate protocol,held-out leakage,main scripts report test_roots_read=false; Safe/stress authorized only after authoritative RC0,fixed
++E15,v48.36 certificate script initially referenced two missing version-specific tools,next run would stop after development-rule fitting with RC30,added version-scoped shared-rule fitter and metric-calibration contract; dependency closure now has zero missing references,fixed
++E16,initial 2x2 contracts hard-coded OCAF and non-compensatory-cap metadata for every arm,action-only and soft-slack controls would be misclassified as RC30 rather than scientific outcomes,"context/cap expectations now derive from each arm; cache identity includes interaction width/dropout, consensus scale and prior mode",fixed
++E17,initial resume checker retained physical_relative and v48.36.1 strings,a legitimate OCAF metadata-only resume would be rejected or mislabeled,"resume authorization is now exact v48.36 OCAF, physical_interaction-specific and fail-closed",fixed
++E18,uploaded TeX used an incomplete hyperref package declaration,paper failed before algorithm sections could compile,changed to usepackage[hidelinks]{hyperref}; TeX now emits a PDF; bibliography remains absent from upload,fixed compile blocker; missing bibliography disclosed
++E19,"nominal-observation group broadcast used CUDA advanced-index assignment with an implicit [1,529] to [N,529] expansion",both variants crashed on the first factor-stage batch with Indexing.cu internal assertion; no checkpoint/certificate/gate result existed,"replaced tensor-valued slice plus tensor[idx] assignment with explicit index_select, contiguous expand and index_copy_",fixed in v48.36.1; real A30 rerun required
++E20,candidate-relative and other group-wise model paths retained tensor-index slices/scatters,after fixing the first line a later group adapter could re-enter a similar CUDA indexing path,"systematically changed recovery tournament, candidate-relative, set-context and group-relative row movement to index_select/index_copy_",fixed and regression-tested
++E21,RMS magnitude gate evaluated sqrt at exact zero candidate-minus-nominal action,non-detached diagnostic/ablation or future joint-training gradients can become NaN at nominal rows,compute RMS in float32 with clamp_min(1e-12); bias-free action paths preserve exact zero output,fixed; finite backward regression added
++E22,v48.36 preflight was CPU/bridge-local and did not execute composite group indexing on the configured A30 devices,GPU-only implementation defect passed all delivery tests and consumed a full pipeline launch before failing,added exact 141-D/529-D batch-96 group-broadcast forward/backward contract on GPU0 and GPU1 before index/adaptation,fixed; fail-closed RC30 preflight
++E23,a user could attempt RESUME_AFTER_ADAPTATION=1 after the uploaded failure,"neither variant produced a factor checkpoint, so adaptation resume would be invalid and could confuse rerun attribution",hotfix run guide mandates RESUME_AFTER_ADAPTATION=0 and recommends a clean output directory with only contract-verified teacher indexes copied,execution guidance updated
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=.pytest_cache' '--exclude=.validation_tmp' '--exclude=OC-RAP-v48.36-to-v48.36.1-RC30-CUDA-INDEX-HOTFIX.patch' '--exclude=SHA256SUMS.txt' /mnt/data/v4836_audit/code/OC-RAP-v48.36.1-full-factor-geometry-smoke.json /mnt/data/ocrap_v48361_delivery/OC-RAP-v48.36.1-RC30-CUDA-INDEX-HOTFIX/OC-RAP-v48.36.1-full-factor-geometry-smoke.json
+--- /mnt/data/v4836_audit/code/OC-RAP-v48.36.1-full-factor-geometry-smoke.json	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/ocrap_v48361_delivery/OC-RAP-v48.36.1-RC30-CUDA-INDEX-HOTFIX/OC-RAP-v48.36.1-full-factor-geometry-smoke.json	2026-08-06 04:49:25.315787363 +0000
+@@ -0,0 +1,22 @@
++{
++  "event": "v48_36_1_full_factor_geometry_smoke",
++  "version": "v48.36.1-RC30-CUDA-INDEX-HOTFIX",
++  "created_unix": 1785991765.3148308,
++  "device": "cpu",
++  "torch_version": "2.10.0+cpu",
++  "batch_size": 96,
++  "group_size": 8,
++  "num_groups": 12,
++  "d_model": 192,
++  "d_obs": 64,
++  "candidate_action_dim": 141,
++  "nominal_observation_dim": 529,
++  "interaction_hidden": 64,
++  "trainable_parameter_tensors": 22,
++  "outputs_finite": true,
++  "gradients_finite": true,
++  "zero_action_exact_zero": true,
++  "elapsed_s": 0.0952451229095459,
++  "test_roots_read": false,
++  "valid": true
++}
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=.pytest_cache' '--exclude=.validation_tmp' '--exclude=OC-RAP-v48.36-to-v48.36.1-RC30-CUDA-INDEX-HOTFIX.patch' '--exclude=SHA256SUMS.txt' /mnt/data/v4836_audit/code/OC-RAP-v48.36.1-release-audit.json /mnt/data/ocrap_v48361_delivery/OC-RAP-v48.36.1-RC30-CUDA-INDEX-HOTFIX/OC-RAP-v48.36.1-release-audit.json
+--- /mnt/data/v4836_audit/code/OC-RAP-v48.36.1-release-audit.json	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/ocrap_v48361_delivery/OC-RAP-v48.36.1-RC30-CUDA-INDEX-HOTFIX/OC-RAP-v48.36.1-release-audit.json	2026-08-06 04:49:52.311454071 +0000
+@@ -0,0 +1,31 @@
++{
++  "event": "v48_36_1_release_audit",
++  "version": "v48.36.1-RC30-CUDA-INDEX-HOTFIX",
++  "created_unix": 1785991792.3113573,
++  "valid": true,
++  "algorithm_changed": false,
++  "checks": {
++    "uploaded_rc30_attributed_to_engineering": true,
++    "both_variants_same_first_batch_exception": true,
++    "certificate_not_executed": true,
++    "gate_not_evaluated": true,
++    "cuda_unsafe_broadcast_removed": true,
++    "group_row_scatter_hardened": true,
++    "zero_action_gradient_finite": true,
++    "zero_action_exact_zero": true,
++    "per_gpu_runtime_preflight_wired": true,
++    "focused_tests_42_passed": true,
++    "cuda_only_test_skipped_without_gpu": true,
++    "full_factor_geometry_smoke": true,
++    "dependency_closure": true,
++    "python_compileall": true,
++    "shell_syntax_67": true,
++    "tool_help": true,
++    "test_roots_read": false
++  },
++  "known_limitations": [
++    "No CUDA/A30 execution in the delivery environment",
++    "No real WOMD/Waymax adaptation, calibration or certificate was run locally",
++    "No RC=0 or algorithm-quality claim is made"
++  ]
++}
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=.pytest_cache' '--exclude=.validation_tmp' '--exclude=OC-RAP-v48.36-to-v48.36.1-RC30-CUDA-INDEX-HOTFIX.patch' '--exclude=SHA256SUMS.txt' /mnt/data/v4836_audit/code/OC-RAP-v48.36.1-run-commands-ZH.txt /mnt/data/ocrap_v48361_delivery/OC-RAP-v48.36.1-RC30-CUDA-INDEX-HOTFIX/OC-RAP-v48.36.1-run-commands-ZH.txt
+--- /mnt/data/v4836_audit/code/OC-RAP-v48.36.1-run-commands-ZH.txt	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/ocrap_v48361_delivery/OC-RAP-v48.36.1-RC30-CUDA-INDEX-HOTFIX/OC-RAP-v48.36.1-run-commands-ZH.txt	2026-08-06 04:50:59.631425683 +0000
+@@ -0,0 +1,126 @@
++OC-RAP v48.36.1 RC30 CUDA group-broadcast hotfix：执行指令
++================================================================
++
++重要：本次旧结果没有完成 adaptation，必须使用 RESUME_AFTER_ADAPTATION=0。
++算法配置、数据集、共享 rule 和 gate 均保持 v48.36 不变。
++
++一、进入修复后的代码目录
++------------------------
++cd /home/senzeyu2/code/OC-RAP
++export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
++
++建议先备份旧代码，再把本包内容覆盖到该目录；不要复制包内历史 runs。
++
++二、静态检查
++------------
++python -m compileall -q src tools tests
++PYTHONPATH=src pytest -q \
++  tests/test_v48_35_continuous_frontier.py \
++  tests/test_v48_35_1_rc30_training_contract_hotfix.py \
++  tests/test_v48_35_2_engineering_integrity.py \
++  tests/test_v48_36_ocaf.py
++
++三、在两张 A30 上单独执行新的 CUDA preflight
++-------------------------------------------
++mkdir -p runs/v48361_preflight
++
++CUDA_VISIBLE_DEVICES=0 PYTHONPATH=src \
++python tools/check_v48_36_cuda_group_broadcast_contract.py \
++  --device cuda:0 --batch-size 96 --group-size 8 --interaction-hidden 64 \
++  --output runs/v48361_preflight/GPU0.json
++
++CUDA_VISIBLE_DEVICES=1 PYTHONPATH=src \
++python tools/check_v48_36_cuda_group_broadcast_contract.py \
++  --device cuda:0 --batch-size 96 --group-size 8 --interaction-hidden 64 \
++  --output runs/v48361_preflight/GPU1.json
++
++python -m json.tool runs/v48361_preflight/GPU0.json
++python -m json.tool runs/v48361_preflight/GPU1.json
++
++两份 JSON 都必须满足 valid=true、forward_finite=true、backward_finite=true。
++主 runner 也会重复执行这两个检查，因此手工 preflight 只是提前确认环境。
++
++四、准备干净输出目录并安全复用旧 teacher index（推荐）
++------------------------------------------------------
++OLD_RUN=runs/ocrap_v48_36_ocaf_dedicated_4836
++OUTPUTDIR=runs/ocrap_v48_36_1_ocaf_cuda_hotfix_48361
++mkdir -p "$OUTPUTDIR"
++
++# 只复制 index 与 summary；不要复制旧 checkpoint、完成状态或 failure marker。
++for f in \
++  evidence_adapt_teacher_pcd_index.jsonl \
++  evidence_adapt_teacher_pcd_index_summary.json \
++  evidence_adapt_dev_teacher_pcd_index.jsonl \
++  evidence_adapt_dev_teacher_pcd_index_summary.json; do
++  if [[ -f "$OLD_RUN/$f" ]]; then cp -f "$OLD_RUN/$f" "$OUTPUTDIR/$f"; fi
++done
++
++# 复制后更新 summary 中的 output provenance；不改标签、manifest SHA 或阈值。
++python - "$OUTPUTDIR" <<'PY_REBASE_INDEX_SUMMARY'
++import json,os,pathlib,sys,time
++root=pathlib.Path(sys.argv[1])
++for summary_name,index_name in (
++    ('evidence_adapt_teacher_pcd_index_summary.json','evidence_adapt_teacher_pcd_index.jsonl'),
++    ('evidence_adapt_dev_teacher_pcd_index_summary.json','evidence_adapt_dev_teacher_pcd_index.jsonl'),
++):
++    path=root/summary_name
++    if not path.is_file():
++        continue
++    doc=json.loads(path.read_text())
++    doc['output']=str(root/index_name)
++    doc['copied_for_hotfix_rerun']=True
++    doc['copied_for_hotfix_rerun_unix']=time.time()
++    tmp=path.with_name(f'.{path.name}.tmp.{os.getpid()}')
++    tmp.write_text(json.dumps(doc,ensure_ascii=False,indent=2)+'\n')
++    os.replace(tmp,path)
++PY_REBASE_INDEX_SUMMARY
++
++五、重新执行主实验
++------------------
++set +e
++OUTPUTDIR="$OUTPUTDIR" \
++OCRAP_ROOT=/data0/senzeyu2/dataset/OCRAP \
++SOURCE_RUN=runs/ocrap_v48_13_terra_proxy_4801 \
++PROTOCOL_ROOT=/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814 \
++CAL_SAFE=/data0/senzeyu2/dataset/OCRAP/calibration_safe \
++GPU0=0 GPU1=1 \
++RESUME_AFTER_ADAPTATION=0 \
++REBUILD_ADAPT_INDEX=0 \
++REBUILD_ADAPT_DEV_INDEX=0 \
++bash scripts/run_v48_36_ocaf_dedicated.sh \
++  >"$OUTPUTDIR/controller.stdout.log" 2>&1
++RC=$?
++set -e
++printf 'authoritative process RC=%s\n' "$RC"
++
++注意：
++- 如果复制的 index contract 不匹配，runner 会拒绝或重建；不要绕过 contract。
++- 不得设置 ALLOW_PARTIAL_VARIANTS=1 作为正式实验。
++- 不要在 RC=0 前运行 Safe 或 held-out stress。
++
++六、读取权威状态
++----------------
++python -m json.tool "$OUTPUTDIR/AUTHORITATIVE_RUN_STATUS.json"
++python -m json.tool "$OUTPUTDIR/V48_36_COMPLETE.json"
++
++结果解释：
++- RC=0：pipeline 有效且 gate 通过，执行 NEXT_COMMANDS.txt。
++- RC=20：pipeline 有效但自然 gate 拒绝，可开始算法缺陷分析。
++- RC=30：仍是工程失败，优先查看 PIPELINE_FAILED.json 和 FAILURE_SIGNATURE_*.json。
++
++七、只有 RC=0 才执行后续授权命令
++--------------------------------
++cat "$OUTPUTDIR/NEXT_COMMANDS.txt"
++bash "$OUTPUTDIR/NEXT_COMMANDS.txt"
++
++八、若仍为 RC=30，收集最小诊断集
++--------------------------------
++python -m json.tool "$OUTPUTDIR/PIPELINE_FAILED.json"
++for f in "$OUTPUTDIR"/FAILURE_SIGNATURE_*.json "$OUTPUTDIR"/ADAPTATION_FAILED_*.json; do
++  [[ -f "$f" ]] && { echo "===== $f ====="; python -m json.tool "$f"; }
++done
++for f in "$OUTPUTDIR"/logs/adapt_*.log; do
++  [[ -f "$f" ]] && { echo "===== tail $f ====="; tail -n 240 "$f"; }
++done
++
++打包时请包含 OUTPUTDIR 全部 JSON、logs、candidate stage metadata；checkpoint 很大时可以单独提供其 SHA256。
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=.pytest_cache' '--exclude=.validation_tmp' '--exclude=OC-RAP-v48.36-to-v48.36.1-RC30-CUDA-INDEX-HOTFIX.patch' '--exclude=SHA256SUMS.txt' /mnt/data/v4836_audit/code/OC-RAP-v48.36.1-script-dependency-audit.json /mnt/data/ocrap_v48361_delivery/OC-RAP-v48.36.1-RC30-CUDA-INDEX-HOTFIX/OC-RAP-v48.36.1-script-dependency-audit.json
+--- /mnt/data/v4836_audit/code/OC-RAP-v48.36.1-script-dependency-audit.json	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/ocrap_v48361_delivery/OC-RAP-v48.36.1-RC30-CUDA-INDEX-HOTFIX/OC-RAP-v48.36.1-script-dependency-audit.json	2026-08-06 04:47:41.957058504 +0000
+@@ -0,0 +1,242 @@
++{
++  "event": "v48_36_1_script_dependency_audit",
++  "version": "v48.36.1-RC30-CUDA-INDEX-HOTFIX",
++  "created_unix": 1785991661.9569724,
++  "files_scanned": 17,
++  "references_checked": 46,
++  "unique_targets": 30,
++  "valid": true,
++  "missing": [],
++  "references": [
++    {
++      "source": "scripts/adapt_ocrap_v48_36_ocaf_single_stage.sh",
++      "target": "scripts/train_ocrap_v48_trac_sr.sh",
++      "exists": true
++    },
++    {
++      "source": "scripts/adapt_ocrap_v48_36_ocaf_variant.sh",
++      "target": "tools/build_v48_32_factor_support_contract.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/adapt_ocrap_v48_36_ocaf_variant.sh",
++      "target": "tools/manage_v48_32_factor_cache.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/adapt_ocrap_v48_36_ocaf_variant.sh",
++      "target": "tools/materialize_v48_35_factor_cache.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/adapt_ocrap_v48_36_ocaf_variant.sh",
++      "target": "scripts/adapt_ocrap_v48_36_ocaf_single_stage.sh",
++      "exists": true
++    },
++    {
++      "source": "scripts/adapt_ocrap_v48_36_ocaf_variant.sh",
++      "target": "tools/manage_v48_32_factor_cache.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/adapt_ocrap_v48_36_ocaf_variant.sh",
++      "target": "scripts/adapt_ocrap_v48_36_ocaf_single_stage.sh",
++      "exists": true
++    },
++    {
++      "source": "scripts/adapt_ocrap_v48_36_ocaf_variant.sh",
++      "target": "scripts/adapt_ocrap_v48_36_ocaf_single_stage.sh",
++      "exists": true
++    },
++    {
++      "source": "scripts/adapt_ocrap_v48_36_ocaf_variant.sh",
++      "target": "tools/check_v48_32_stage_transfer.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/calibrate_v48_36_shared_certificate_pool.sh",
++      "target": "tools/write_gamma_by_bucket.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/calibrate_v48_36_shared_certificate_pool.sh",
++      "target": "tools/calibrate_policy_risk_v48.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/calibrate_v48_36_shared_certificate_pool.sh",
++      "target": "tools/calibrate_policy_risk_v48.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/calibrate_v48_36_shared_certificate_pool.sh",
++      "target": "tools/calibrate_shared_continuous_rule_v48_36.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/calibrate_v48_36_shared_certificate_pool.sh",
++      "target": "tools/check_v48_36_metric_calibration_contract.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/calibrate_v48_36_shared_certificate_pool.sh",
++      "target": "tools/calibrate_policy_risk_v48.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/calibrate_v48_36_shared_certificate_pool.sh",
++      "target": "tools/calibrate_policy_risk_v48.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/calibrate_v48_36_shared_certificate_pool.sh",
++      "target": "scripts/run_v48_36_safe_noninferiority.sh",
++      "exists": true
++    },
++    {
++      "source": "scripts/calibrate_v48_36_shared_certificate_pool.sh",
++      "target": "scripts/run_v48_36_stress_if_authorized.sh",
++      "exists": true
++    },
++    {
++      "source": "scripts/run_v48_36_ocaf_ablations.sh",
++      "target": "tools/resolve_v48_36_authoritative_result.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/run_v48_36_ocaf_ablations.sh",
++      "target": "scripts/run_v48_36_ocaf_dedicated.sh",
++      "exists": true
++    },
++    {
++      "source": "scripts/run_v48_36_ocaf_dedicated.sh",
++      "target": "tools/resolve_v48_36_authoritative_result.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/run_v48_36_ocaf_dedicated.sh",
++      "target": "tools/check_v48_36_resume_contract.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/run_v48_36_ocaf_dedicated.sh",
++      "target": "tools/check_v48_36_dataset_root_contract.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/run_v48_36_ocaf_dedicated.sh",
++      "target": "tools/audit_dedicated_protocol_v48_16.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/run_v48_36_ocaf_dedicated.sh",
++      "target": "tools/check_v48_34_multigroup_loss_contract.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/run_v48_36_ocaf_dedicated.sh",
++      "target": "tools/check_v48_36_ocaf_bridge_contract.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/run_v48_36_ocaf_dedicated.sh",
++      "target": "tools/check_v48_36_cuda_group_broadcast_contract.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/run_v48_36_ocaf_dedicated.sh",
++      "target": "tools/check_v48_19_target_support.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/run_v48_36_ocaf_dedicated.sh",
++      "target": "tools/build_teacher_pcd_index_v48.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/run_v48_36_ocaf_dedicated.sh",
++      "target": "tools/check_v48_19_target_support.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/run_v48_36_ocaf_dedicated.sh",
++      "target": "tools/check_v48_19_target_support.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/run_v48_36_ocaf_dedicated.sh",
++      "target": "tools/check_v48_19_target_support.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/run_v48_36_ocaf_dedicated.sh",
++      "target": "tools/build_teacher_pcd_index_v48.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/run_v48_36_ocaf_dedicated.sh",
++      "target": "tools/check_v48_19_target_support.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/run_v48_36_ocaf_dedicated.sh",
++      "target": "scripts/adapt_ocrap_v48_36_ocaf_variant.sh",
++      "exists": true
++    },
++    {
++      "source": "scripts/run_v48_36_ocaf_dedicated.sh",
++      "target": "tools/extract_v48_34_failure_signature.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/run_v48_36_ocaf_dedicated.sh",
++      "target": "tools/check_v48_36_ocaf_model_contract.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/run_v48_36_ocaf_dedicated.sh",
++      "target": "tools/check_v48_36_ocaf_training_contract.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/run_v48_36_ocaf_dedicated.sh",
++      "target": "scripts/calibrate_v48_36_shared_certificate_pool.sh",
++      "exists": true
++    },
++    {
++      "source": "scripts/run_v48_36_ocaf_dedicated.sh",
++      "target": "tools/check_v48_16_learning_gates.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/run_v48_36_ocaf_dedicated.sh",
++      "target": "tools/summarize_v48_34_gate_failure.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/run_v48_36_ocaf_dedicated.sh",
++      "target": "tools/resolve_v48_36_authoritative_result.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/run_v48_36_safe_noninferiority.sh",
++      "target": "tools/resolve_v48_36_authoritative_result.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/run_v48_36_safe_noninferiority.sh",
++      "target": "scripts/run_ocrap_v48_trac_sr.sh",
++      "exists": true
++    },
++    {
++      "source": "scripts/run_v48_36_stress_if_authorized.sh",
++      "target": "tools/resolve_v48_36_authoritative_result.py",
++      "exists": true
++    },
++    {
++      "source": "scripts/run_v48_36_stress_if_authorized.sh",
++      "target": "scripts/run_ocrap_v48_trac_sr.sh",
++      "exists": true
++    }
++  ]
++}
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=.pytest_cache' '--exclude=.validation_tmp' '--exclude=OC-RAP-v48.36-to-v48.36.1-RC30-CUDA-INDEX-HOTFIX.patch' '--exclude=SHA256SUMS.txt' /mnt/data/v4836_audit/code/OC-RAP-v48.36.1-validation-status.txt /mnt/data/ocrap_v48361_delivery/OC-RAP-v48.36.1-RC30-CUDA-INDEX-HOTFIX/OC-RAP-v48.36.1-validation-status.txt
+--- /mnt/data/v4836_audit/code/OC-RAP-v48.36.1-validation-status.txt	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/ocrap_v48361_delivery/OC-RAP-v48.36.1-RC30-CUDA-INDEX-HOTFIX/OC-RAP-v48.36.1-validation-status.txt	2026-08-06 04:49:51.831753610 +0000
+@@ -0,0 +1,39 @@
++OC-RAP v48.36.1 RC30 CUDA group-broadcast hotfix validation
++================================================================
++
++Uploaded-result attribution
++- AUTHORITATIVE_RUN_STATUS: valid terminal RC=30, pipeline_valid=false.
++- Failure stage: adaptation / factor_stage / first batch.
++- balanced and precision failed with the same Indexing.cu assertion.
++- certificate_executed=false; gate_evaluated=false; test_roots_read=false.
++- No algorithm-performance conclusion is claimed.
++
++Focused regression matrix
++- tests/test_v48_35_continuous_frontier.py
++- tests/test_v48_35_1_rc30_training_contract_hotfix.py
++- tests/test_v48_35_2_engineering_integrity.py
++- tests/test_v48_36_ocaf.py
++- Result: 42 passed, 1 CUDA-only skipped, 3 non-fatal Transformer warnings.
++
++Runtime geometry checks
++- New group-broadcast contract on CPU: PASS.
++- Batch size: 96; group size: 8; groups: 12.
++- Candidate-relative action dimension: 141.
++- Nominal-observation dimension: 529.
++- Interaction hidden dimension: 64.
++- Exact-zero nominal OCAF context: PASS.
++- Forward finite: PASS.
++- Input/bridge backward finite: PASS.
++- Full d_model=192, d_obs=64 factor-geometry smoke: PASS.
++
++Static/release checks
++- python compileall (src, tools, tests): PASS.
++- Shell syntax for 67 scripts under scripts/ and tools/: PASS.
++- v48.36 version-scoped tool import/--help, including the new CUDA contract: PASS.
++- v48.36.1 dependency closure: PASS; 0 missing referenced targets.
++
++Not performed / not claimed
++- This container has no CUDA device, A30, WOMD/Waymax dataset or source checkpoints.
++- The optional CUDA pytest was skipped locally.
++- The main runner now performs the exact contract on GPU0 and GPU1 before adaptation.
++- A real two-A30 rerun is required before claiming that the pipeline reaches RC=20/0.
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=.pytest_cache' '--exclude=.validation_tmp' '--exclude=OC-RAP-v48.36-to-v48.36.1-RC30-CUDA-INDEX-HOTFIX.patch' '--exclude=SHA256SUMS.txt' /mnt/data/v4836_audit/code/scripts/run_v48_36_ocaf_dedicated.sh /mnt/data/ocrap_v48361_delivery/OC-RAP-v48.36.1-RC30-CUDA-INDEX-HOTFIX/scripts/run_v48_36_ocaf_dedicated.sh
+--- /mnt/data/v4836_audit/code/scripts/run_v48_36_ocaf_dedicated.sh	2026-08-06 11:40:18.000000000 +0000
++++ /mnt/data/ocrap_v48361_delivery/OC-RAP-v48.36.1-RC30-CUDA-INDEX-HOTFIX/scripts/run_v48_36_ocaf_dedicated.sh	2026-08-06 04:43:33.728764135 +0000
+@@ -242,6 +242,28 @@
+   exit 30
+ fi
+ 
++# v48.36 passed its CPU bridge contract but failed on the first A30 batch in a
++# CUDA index_put_ broadcast.  Exercise the exact 141-D action / 529-D nominal
++# observation geometry, including backward, on every configured training GPU
++# before building/reusing indexes or starting the parallel adaptation jobs.
++for gpu_spec in "gpu0:$GPU0" "gpu1:$GPU1"; do
++  gpu_label="${gpu_spec%%:*}"
++  gpu_id="${gpu_spec#*:}"
++  set +e
++  CUDA_VISIBLE_DEVICES="$gpu_id" python tools/check_v48_36_cuda_group_broadcast_contract.py \
++    --device cuda:0 --batch-size 96 --group-size 8 \
++    --interaction-hidden "$EVIDENCE_INTERACTION_HIDDEN" \
++    --output "$OUTPUTDIR/OCAF_CUDA_GROUP_BROADCAST_CONTRACT_${gpu_label}.json" \
++    >"$OUTPUTDIR/logs/ocaf_cuda_group_broadcast_contract_${gpu_label}.log" 2>&1
++  cuda_group_contract_rc=$?
++  set -e
++  if [[ "$cuda_group_contract_rc" != 0 ]]; then
++    write_pipeline_failure "ocaf_cuda_group_broadcast_preflight_${gpu_label}" \
++      "$cuda_group_contract_rc" "$OUTPUTDIR/OCAF_CUDA_GROUP_BROADCAST_CONTRACT_${gpu_label}.json"
++    exit 30
++  fi
++done
++
+ index_contract_args=(
+   --summary "$GROUP_SUMMARY"
+   --expected-dataset "$TRAIN_NEAR,$TRAIN_CONTACT"
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=.pytest_cache' '--exclude=.validation_tmp' '--exclude=OC-RAP-v48.36-to-v48.36.1-RC30-CUDA-INDEX-HOTFIX.patch' '--exclude=SHA256SUMS.txt' /mnt/data/v4836_audit/code/src/ocrap/models/ocrap.py /mnt/data/ocrap_v48361_delivery/OC-RAP-v48.36.1-RC30-CUDA-INDEX-HOTFIX/src/ocrap/models/ocrap.py
+--- /mnt/data/v4836_audit/code/src/ocrap/models/ocrap.py	2026-08-06 11:40:40.000000000 +0000
++++ /mnt/data/ocrap_v48361_delivery/OC-RAP-v48.36.1-RC30-CUDA-INDEX-HOTFIX/src/ocrap/models/ocrap.py	2026-08-06 04:41:36.047590847 +0000
+@@ -61,11 +61,12 @@
+             recs = idx[~nominal_mask[idx]]
+             if recs.numel() == 0:
+                 continue
+-            token = self.input_proj(self.input_norm(relative_features[recs])).unsqueeze(0)
++            recovery_features = relative_features.index_select(0, recs)
++            token = self.input_proj(self.input_norm(recovery_features)).unsqueeze(0)
+             attended, _ = self.attn(token, token, token, need_weights=False)
+             token = self.norm1(token + attended)
+             token = self.norm2(token + self.ffn(token)).squeeze(0)
+-            context[recs] = token.to(dtype=context.dtype)
++            context.index_copy_(0, recs, token.to(dtype=context.dtype))
+         return context
+ 
+     def score_from_context(
+@@ -87,10 +88,10 @@
+             recs = idx[~nominal_mask[idx]]
+             if recs.numel() == 0:
+                 continue
+-            group_scores = self.score(context[recs]).squeeze(-1)
++            group_scores = self.score(context.index_select(0, recs)).squeeze(-1)
+             if group_scores.numel() > 1:
+                 group_scores = group_scores - group_scores.mean()
+-            scores[recs] = group_scores.to(dtype=scores.dtype)
++            scores.index_copy_(0, recs, group_scores.to(dtype=scores.dtype))
+         return scores
+ 
+     def forward(
+@@ -144,7 +145,14 @@
+                 "OCAF observation dimension mismatch: "
+                 f"got {nominal_observation.shape[-1]}, expected {self.observation_dim}"
+             )
+-        scale = action_relative.square().mean(dim=-1, keepdim=True).sqrt()
++        # Compute the magnitude gate in float32 and clamp before sqrt.  Exact
++        # nominal rows have a zero action difference; sqrt(x) has an undefined
++        # derivative at x=0 and can inject NaNs when the raw context is not
++        # detached (for example in diagnostic or future joint-training runs).
++        # The clamp does not violate the zero-action contract because both
++        # bias-free action projections are exactly zero at a zero input.
++        scale_sq = action_relative.float().square().mean(dim=-1, keepdim=True)
++        scale = scale_sq.clamp_min(1.0e-12).sqrt().to(dtype=action_relative.dtype)
+         raw = self.action_raw(action_relative)
+         direction = self.action_direction(self.action_direction_norm(action_relative)) * scale
+         action = raw + direction
+@@ -989,7 +997,14 @@
+             noms = idx[nominal_mask[idx]]
+             if noms.numel() != 1:
+                 continue
+-            out[idx] = raw[idx] - raw[noms[0]:noms[0] + 1]
++            # Avoid CUDA advanced-index assignment with a tensor-valued slice
++            # boundary.  PyTorch 2.5/CUDA can route the broadcast through
++            # index_put_ and mis-compute the expanded RHS geometry.  Explicit
++            # row selection plus index_copy_ has identical semantics, preserves
++            # gradients, and is stable on both CPU and CUDA.
++            group_rows = raw.index_select(0, idx)
++            nominal_row = raw.index_select(0, noms[:1])
++            out.index_copy_(0, idx, group_rows - nominal_row)
+         return out
+ 
+     def _direct_nominal_observation_features(
+@@ -1020,7 +1035,14 @@
+             noms = idx[nominal_mask[idx]]
+             if noms.numel() != 1:
+                 continue
+-            out[idx] = raw[noms[0]:noms[0] + 1]
++            # Do not rely on implicit [1, D] -> [N, D] broadcasting inside a
++            # CUDA advanced-index assignment.  The v48.36 A30 run failed here
++            # with an internal Indexing.cu assertion (N*D=4232 versus D*D=279841
++            # for N=8, D=529).  Materialise the intended source geometry and use
++            # index_copy_ so the row count is explicit to the kernel.
++            nominal_row = raw.index_select(0, noms[:1])
++            broadcast_rows = nominal_row.expand(idx.numel(), -1).contiguous()
++            out.index_copy_(0, idx, broadcast_rows)
+         return out
+ 
+     def _apply_direct_set_context(
+@@ -1058,14 +1080,16 @@
+             recs = idx[~nominal_mask[idx]]
+             if noms.numel() == 0 or recs.numel() == 0:
+                 continue
+-            nom_feat = direct_features[noms[0]:noms[0] + 1]
+-            rel = direct_features[idx] - nom_feat
+-            rec_rel = direct_features[recs] - nom_feat
++            nom_feat = direct_features.index_select(0, noms[:1])
++            group_features = direct_features.index_select(0, idx)
++            recovery_features = direct_features.index_select(0, recs)
++            rel = group_features - nom_feat
++            rec_rel = recovery_features - nom_feat
+             mean_rel = rec_rel.mean(dim=0, keepdim=True).expand(idx.numel(), -1)
+             max_rel = rec_rel.max(dim=0, keepdim=True).values.expand(idx.numel(), -1)
+-            context_input = torch.cat([direct_features[idx], rel, mean_rel, max_rel], dim=-1)
++            context_input = torch.cat([group_features, rel, mean_rel, max_rel], dim=-1)
+             residual = self.direct_set_context_adapter(context_input)
+-            adapted[idx] = direct_features[idx] + gate * residual
++            adapted.index_copy_(0, idx, group_features + gate * residual)
+         return adapted
+ 
+     def _direct_group_relative_features(
+@@ -1102,15 +1126,18 @@
+             recs = idx[~nominal_mask[idx]]
+             if noms.numel() == 0 or recs.numel() == 0:
+                 continue
+-            nominal = direct_features[noms[0]:noms[0] + 1]
+-            rel = direct_features[idx] - nominal
+-            rec_rel = direct_features[recs] - nominal
++            nominal = direct_features.index_select(0, noms[:1])
++            group_features = direct_features.index_select(0, idx)
++            recovery_features = direct_features.index_select(0, recs)
++            rel = group_features - nominal
++            rec_rel = recovery_features - nominal
+             mean_rel = rec_rel.mean(dim=0, keepdim=True).expand(idx.numel(), -1)
+             max_rel = rec_rel.max(dim=0, keepdim=True).values.expand(idx.numel(), -1)
+             if self.direct_recovery_relative_features_include_absolute:
+-                out[idx] = torch.cat([direct_features[idx], rel, mean_rel, max_rel], dim=-1)
++                rows = torch.cat([group_features, rel, mean_rel, max_rel], dim=-1)
+             else:
+-                out[idx] = torch.cat([rel, mean_rel, max_rel], dim=-1)
++                rows = torch.cat([rel, mean_rel, max_rel], dim=-1)
++            out.index_copy_(0, idx, rows)
+         return out
+ 
+     def _direct_outputs(
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=.pytest_cache' '--exclude=.validation_tmp' '--exclude=OC-RAP-v48.36-to-v48.36.1-RC30-CUDA-INDEX-HOTFIX.patch' '--exclude=SHA256SUMS.txt' /mnt/data/v4836_audit/code/tests/test_v48_36_ocaf.py /mnt/data/ocrap_v48361_delivery/OC-RAP-v48.36.1-RC30-CUDA-INDEX-HOTFIX/tests/test_v48_36_ocaf.py
+--- /mnt/data/v4836_audit/code/tests/test_v48_36_ocaf.py	2026-08-06 11:40:22.000000000 +0000
++++ /mnt/data/ocrap_v48361_delivery/OC-RAP-v48.36.1-RC30-CUDA-INDEX-HOTFIX/tests/test_v48_36_ocaf.py	2026-08-06 04:43:50.611610992 +0000
+@@ -1,6 +1,7 @@
+ from __future__ import annotations
+ import json, subprocess, sys
+ from pathlib import Path
++import pytest
+ import torch
+ from ocrap.models.ocrap import ObservationConditionedActionFrontierBridge, OCRAPModel
+ from ocrap.models.encoders import FlatFeatureLayout
+@@ -90,6 +91,92 @@
+     assert not torch.allclose(context[1], context_changed[1])
+     assert torch.equal(context_changed[0], torch.zeros_like(context_changed[0]))
+ 
++
++def _exercise_group_row_broadcast(device: torch.device) -> None:
++    """Match the real A30 batch geometry that triggered the v48.36 RC=30."""
++    torch.manual_seed(36)
++    model = _ocaf_model().to(device)
++    layout = FlatFeatureLayout()
++    group_size = 8
++    num_groups = 12
++    batch = group_size * num_groups
++
++    x = torch.randn(batch, layout.total_dim, device=device, requires_grad=True)
++    group_ids = torch.arange(num_groups, device=device).repeat_interleave(group_size)
++    # Composite group keys exercise the same two-column path used by training.
++    group_index = torch.stack([group_ids, group_ids * 17 + 3], dim=-1)
++    nominal = torch.zeros(batch, device=device)
++    nominal[::group_size] = 1.0
++
++    action = model._direct_candidate_raw_relative_features(x, group_index, nominal)
++    observation = model._direct_nominal_observation_features(x, group_index, nominal)
++    raw_action = torch.cat(
++        [x[:, start:end] for start, end in model.direct_candidate_physical_slices], dim=-1
++    )
++    raw_observation = torch.cat(
++        [x[:, start:end] for start, end in model.direct_observation_slices], dim=-1
++    )
++
++    assert action.shape == (batch, 141)
++    assert observation.shape == (batch, 529)
++    for group_id in range(num_groups):
++        start = group_id * group_size
++        idx = torch.arange(start, start + group_size, device=device)
++        expected_action = raw_action.index_select(0, idx) - raw_action[start : start + 1]
++        expected_observation = raw_observation[start : start + 1].expand(group_size, -1)
++        assert torch.allclose(action.index_select(0, idx), expected_action)
++        assert torch.allclose(observation.index_select(0, idx), expected_observation)
++
++    context = model.direct_evidence_interaction_bridge(action, observation)
++    loss = context.square().mean() + action.square().mean() + observation.square().mean()
++    loss.backward()
++    assert x.grad is not None
++    assert torch.isfinite(x.grad).all()
++    if device.type == "cuda":
++        torch.cuda.synchronize(device)
++
++
++def test_group_row_broadcast_matches_real_batch_geometry_cpu():
++    _exercise_group_row_broadcast(torch.device("cpu"))
++
++
++@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is not available")
++def test_group_row_broadcast_matches_real_batch_geometry_cuda():
++    _exercise_group_row_broadcast(torch.device("cuda"))
++
++
++def test_group_broadcast_runtime_contract_runs_on_cpu(tmp_path: Path):
++    output = tmp_path / "contract.json"
++    completed = subprocess.run(
++        [
++            sys.executable,
++            str(ROOT / "tools" / "check_v48_36_cuda_group_broadcast_contract.py"),
++            "--device",
++            "cpu",
++            "--batch-size",
++            "96",
++            "--group-size",
++            "8",
++            "--output",
++            str(output),
++        ],
++        cwd=ROOT,
++    )
++    assert completed.returncode == 0
++    report = json.loads(output.read_text())
++    assert report["valid"] is True
++    assert report["candidate_action_dim"] == 141
++    assert report["nominal_observation_dim"] == 529
++    assert report["forward_finite"] is True
++    assert report["backward_finite"] is True
++
++
++def test_main_runner_preflights_group_broadcast_on_both_training_gpus():
++    text = (ROOT / "scripts" / "run_v48_36_ocaf_dedicated.sh").read_text()
++    assert 'for gpu_spec in "gpu0:$GPU0" "gpu1:$GPU1"' in text
++    assert "check_v48_36_cuda_group_broadcast_contract.py" in text
++    assert "ocaf_cuda_group_broadcast_preflight_" in text
++
+ def test_noncompensatory_cap_never_exceeds_any_component():
+     free=torch.tensor([5.0,-1.0,0.2]); cap=torch.tensor([-0.5,3.0,0.1])
+     x=OCRAPModel._noncompensatory_smooth_cap(free,cap,0.1)
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=.pytest_cache' '--exclude=.validation_tmp' '--exclude=OC-RAP-v48.36-to-v48.36.1-RC30-CUDA-INDEX-HOTFIX.patch' '--exclude=SHA256SUMS.txt' /mnt/data/v4836_audit/code/tools/check_v48_36_cuda_group_broadcast_contract.py /mnt/data/ocrap_v48361_delivery/OC-RAP-v48.36.1-RC30-CUDA-INDEX-HOTFIX/tools/check_v48_36_cuda_group_broadcast_contract.py
+--- /mnt/data/v4836_audit/code/tools/check_v48_36_cuda_group_broadcast_contract.py	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/ocrap_v48361_delivery/OC-RAP-v48.36.1-RC30-CUDA-INDEX-HOTFIX/tools/check_v48_36_cuda_group_broadcast_contract.py	2026-08-06 04:43:09.939035436 +0000
+@@ -0,0 +1,192 @@
++#!/usr/bin/env python3
++"""Runtime contract for v48.36.1 OCAF group-row gather/broadcast/scatter.
++
++The original v48.36 A30 run passed CPU unit tests but failed on the first CUDA
++batch inside ``_direct_nominal_observation_features``.  This preflight executes
++the exact 141-D action / 529-D observation geometry, including backward, on the
++selected runtime device before expensive adaptation starts.
++"""
++from __future__ import annotations
++
++import argparse
++import json
++import os
++from pathlib import Path
++import time
++import traceback
++
++import torch
++
++from ocrap.models.encoders import FlatFeatureLayout
++from ocrap.models.ocrap import OCRAPModel
++
++
++def _atomic_json(path: Path, document: dict) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}.{time.time_ns()}")
++    with tmp.open("w", encoding="utf-8") as handle:
++        json.dump(document, handle, ensure_ascii=False, indent=2)
++        handle.write("\n")
++        handle.flush()
++        os.fsync(handle.fileno())
++    os.replace(tmp, path)
++
++
++def _model(device: torch.device, hidden: int) -> OCRAPModel:
++    model = OCRAPModel(
++        input_dim=FlatFeatureLayout().total_dim,
++        num_roots=2,
++        num_options=3,
++        d_model=8,
++        d_obs=4,
++        encoder_type="structured_transformer",
++        num_layers=1,
++        num_heads=2,
++        dropout=0.0,
++        direct_recovery_value_head=True,
++        direct_recovery_value_pooling="candidate_concat_raw",
++        direct_recovery_delta_head=True,
++        direct_recovery_delta_regime_experts=True,
++        direct_recovery_evidence_calibrator=True,
++        direct_recovery_evidence_calibrator_context=True,
++        direct_recovery_evidence_calibrator_context_source="physical_interaction",
++        direct_recovery_evidence_interaction_hidden=hidden,
++        direct_recovery_evidence_interaction_dropout=0.0,
++        direct_recovery_evidence_unified_experts=True,
++        direct_recovery_evidence_component_heads=True,
++        direct_recovery_evidence_component_count=5,
++        direct_recovery_evidence_concord=True,
++        direct_recovery_evidence_admission_head=False,
++        direct_recovery_evidence_admission_bounded=False,
++        direct_recovery_evidence_admission_prior_mode="frontier_capped_slack",
++    ).to(device)
++    return model.train()
++
++
++def _exercise(device: torch.device, batch_size: int, group_size: int, hidden: int) -> dict:
++    if batch_size < group_size or batch_size % group_size != 0:
++        raise ValueError("batch-size must be a positive multiple of group-size")
++    torch.manual_seed(48361)
++    if device.type == "cuda":
++        torch.cuda.manual_seed_all(48361)
++
++    model = _model(device, hidden)
++    layout = FlatFeatureLayout()
++    num_groups = batch_size // group_size
++    x = torch.randn(batch_size, layout.total_dim, device=device, requires_grad=True)
++    group_ids = torch.arange(num_groups, device=device, dtype=torch.long).repeat_interleave(group_size)
++    group_index = torch.stack([group_ids, group_ids * 1009 + 17], dim=-1)
++    nominal = torch.zeros(batch_size, device=device)
++    nominal[::group_size] = 1.0
++
++    action = model._direct_candidate_raw_relative_features(x, group_index, nominal)
++    observation = model._direct_nominal_observation_features(x, group_index, nominal)
++    if action.shape != (batch_size, 141):
++        raise AssertionError(f"unexpected action shape: {tuple(action.shape)}")
++    if observation.shape != (batch_size, 529):
++        raise AssertionError(f"unexpected observation shape: {tuple(observation.shape)}")
++
++    raw_action = torch.cat(
++        [x[:, start:end] for start, end in model.direct_candidate_physical_slices], dim=-1
++    )
++    raw_observation = torch.cat(
++        [x[:, start:end] for start, end in model.direct_observation_slices], dim=-1
++    )
++    for group_id in range(num_groups):
++        start = group_id * group_size
++        idx = torch.arange(start, start + group_size, device=device)
++        expected_action = raw_action.index_select(0, idx) - raw_action[start : start + 1]
++        expected_observation = raw_observation[start : start + 1].expand(group_size, -1)
++        if not torch.allclose(action.index_select(0, idx), expected_action):
++            raise AssertionError(f"candidate-relative action mismatch in group {group_id}")
++        if not torch.allclose(observation.index_select(0, idx), expected_observation):
++            raise AssertionError(f"nominal observation broadcast mismatch in group {group_id}")
++
++    context = model.direct_evidence_interaction_bridge(action, observation)
++    if not torch.equal(context[::group_size], torch.zeros_like(context[::group_size])):
++        raise AssertionError("zero-action nominal rows do not produce exact zero OCAF context")
++    loss = context.float().square().mean() + action.float().square().mean() + observation.float().square().mean()
++    loss.backward()
++    if x.grad is None or not torch.isfinite(x.grad).all():
++        raise AssertionError("non-finite group-row/OCAF input gradients")
++    bridge_grads = [
++        parameter.grad
++        for parameter in model.direct_evidence_interaction_bridge.parameters()
++        if parameter.requires_grad
++    ]
++    if not bridge_grads or any(grad is None or not torch.isfinite(grad).all() for grad in bridge_grads):
++        raise AssertionError("non-finite OCAF bridge parameter gradients")
++    if device.type == "cuda":
++        torch.cuda.synchronize(device)
++
++    return {
++        "batch_size": batch_size,
++        "group_size": group_size,
++        "num_groups": num_groups,
++        "candidate_action_dim": action.shape[-1],
++        "nominal_observation_dim": observation.shape[-1],
++        "interaction_hidden": context.shape[-1],
++        "zero_action_exact_zero": True,
++        "forward_finite": bool(torch.isfinite(context).all()),
++        "backward_finite": True,
++    }
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser()
++    parser.add_argument("--output", type=Path, required=True)
++    parser.add_argument("--device", default="cuda")
++    parser.add_argument("--batch-size", type=int, default=96)
++    parser.add_argument("--group-size", type=int, default=8)
++    parser.add_argument("--interaction-hidden", type=int, default=64)
++    args = parser.parse_args()
++
++    started = time.time()
++    report = {
++        "event": "v48_36_1_cuda_group_broadcast_contract",
++        "version": "v48.36.1-RC30-CUDA-INDEX-HOTFIX",
++        "created_unix": started,
++        "device_request": args.device,
++        "torch_version": torch.__version__,
++        "torch_cuda_version": torch.version.cuda,
++        "cuda_available": torch.cuda.is_available(),
++        "test_roots_read": False,
++    }
++    try:
++        device = torch.device(args.device)
++        if device.type == "cuda" and not torch.cuda.is_available():
++            raise RuntimeError("CUDA was requested but torch.cuda.is_available() is false")
++        if device.type == "cuda":
++            torch.cuda.set_device(device)
++            report["cuda_device_index"] = torch.cuda.current_device()
++            report["cuda_device_name"] = torch.cuda.get_device_name(torch.cuda.current_device())
++        report.update(
++            _exercise(
++                device=device,
++                batch_size=args.batch_size,
++                group_size=args.group_size,
++                hidden=args.interaction_hidden,
++            )
++        )
++        report["valid"] = True
++        report["elapsed_s"] = time.time() - started
++        _atomic_json(args.output, report)
++        print(json.dumps(report, ensure_ascii=False))
++        return 0
++    except Exception as exc:  # fail-closed and preserve the first runtime traceback
++        report.update(
++            {
++                "valid": False,
++                "exception_type": type(exc).__name__,
++                "message": str(exc),
++                "traceback": traceback.format_exc(),
++                "elapsed_s": time.time() - started,
++            }
++        )
++        _atomic_json(args.output, report)
++        print(json.dumps(report, ensure_ascii=False))
++        return 4
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())

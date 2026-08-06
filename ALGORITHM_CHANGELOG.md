@@ -1,5 +1,52 @@
 # Algorithm Change Log
 
+## v48.36.1 — RC30 CUDA GROUP-BROADCAST HOTFIX (2026-08-06)
+
+### Scope and attribution
+
+This is an **engineering-only hotfix** for v48.36 OCAF.  It does not change the
+candidate generator, unified continuous physical semantics, source-expert prior,
+loss weights, shared deployment rule, certificate thresholds, datasets, or gate.
+The uploaded v48.36 result is not an algorithm result: both balanced and precision
+variants failed in factor-stage epoch 1 before producing a checkpoint, calibration,
+certificate, or gate decision.
+
+The first authoritative exception was raised in
+`OCRAPModel._direct_nominal_observation_features`.  For a real A30 group with eight
+rows and a 529-dimensional nominal-observation vector, CUDA advanced-index
+assignment attempted to reconcile `8*529=4232` destination elements with an
+incorrectly expanded `529*529=279841` value tensor and aborted in
+`ATen/native/cuda/Indexing.cu`.
+
+### Engineering changes
+
+1. Replaced tensor-valued scalar slicing and implicit advanced-index broadcasting
+   in candidate-relative and nominal-observation group construction with explicit
+   `index_select` + `index_copy_` row operations.
+2. Applied the same explicit row gather/scatter discipline to the recovery-set
+   tournament and group-relative/set-context adapters, removing the remaining
+   group-wise CUDA `tensor[idx] = value` writes from the model path.
+3. Replaced the zero-unsafe `sqrt(mean(action^2))` derivative with a float32,
+   clamped RMS magnitude gate.  Exact zero action still gives exact zero OCAF
+   output, while nominal-row and non-detached diagnostic gradients remain finite.
+4. Added `tools/check_v48_36_cuda_group_broadcast_contract.py`.  The main runner
+   now executes the exact 141-D action / 529-D observation geometry, including
+   backward, on **both configured training GPUs** before index construction or
+   adaptation.  A failure is published as an attempt-scoped RC=30 preflight error.
+5. Added real-batch-geometry CPU regression, optional CUDA regression, runtime-tool
+   regression, and main-runner wiring tests.
+
+### Validation
+
+- Focused v48.35/v48.35.1/v48.35.2/v48.36 matrix: **42 passed, 1 CUDA-only skipped**
+  in the CPU delivery environment, with only non-fatal Transformer warnings.
+- Exact factor-stage geometry smoke: batch 96, group size 8, action dimension 141,
+  observation dimension 529, all outputs and trainable gradients finite.
+- Python `compileall`, all 67 shell scripts under `scripts/` and `tools/`, and all
+  v48.36 version-scoped tool `--help` imports pass.
+- Real A30 execution is still required; no RC=0 or algorithm-performance claim is
+  made by this hotfix.
+
 ## v48.36 — OCAF (Observation-Conditioned Action Frontier)
 
 - **Root cause addressed:** v48.35.2 used an action-only `physical_relative` evidence context. It could not distinguish the effect of the same braking/steering delta under different continuous clearance, contact-pose, relative-motion, route and occupancy conditions.

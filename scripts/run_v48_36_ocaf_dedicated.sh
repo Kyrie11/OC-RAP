@@ -242,6 +242,28 @@ if [[ "$frontier_contract_rc" != 0 ]]; then
   exit 30
 fi
 
+# v48.36 passed its CPU bridge contract but failed on the first A30 batch in a
+# CUDA index_put_ broadcast.  Exercise the exact 141-D action / 529-D nominal
+# observation geometry, including backward, on every configured training GPU
+# before building/reusing indexes or starting the parallel adaptation jobs.
+for gpu_spec in "gpu0:$GPU0" "gpu1:$GPU1"; do
+  gpu_label="${gpu_spec%%:*}"
+  gpu_id="${gpu_spec#*:}"
+  set +e
+  CUDA_VISIBLE_DEVICES="$gpu_id" python tools/check_v48_36_cuda_group_broadcast_contract.py \
+    --device cuda:0 --batch-size 96 --group-size 8 \
+    --interaction-hidden "$EVIDENCE_INTERACTION_HIDDEN" \
+    --output "$OUTPUTDIR/OCAF_CUDA_GROUP_BROADCAST_CONTRACT_${gpu_label}.json" \
+    >"$OUTPUTDIR/logs/ocaf_cuda_group_broadcast_contract_${gpu_label}.log" 2>&1
+  cuda_group_contract_rc=$?
+  set -e
+  if [[ "$cuda_group_contract_rc" != 0 ]]; then
+    write_pipeline_failure "ocaf_cuda_group_broadcast_preflight_${gpu_label}" \
+      "$cuda_group_contract_rc" "$OUTPUTDIR/OCAF_CUDA_GROUP_BROADCAST_CONTRACT_${gpu_label}.json"
+    exit 30
+  fi
+done
+
 index_contract_args=(
   --summary "$GROUP_SUMMARY"
   --expected-dataset "$TRAIN_NEAR,$TRAIN_CONTACT"

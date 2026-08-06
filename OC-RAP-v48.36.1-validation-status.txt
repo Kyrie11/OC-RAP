@@ -1,0 +1,39 @@
+OC-RAP v48.36.1 RC30 CUDA group-broadcast hotfix validation
+================================================================
+
+Uploaded-result attribution
+- AUTHORITATIVE_RUN_STATUS: valid terminal RC=30, pipeline_valid=false.
+- Failure stage: adaptation / factor_stage / first batch.
+- balanced and precision failed with the same Indexing.cu assertion.
+- certificate_executed=false; gate_evaluated=false; test_roots_read=false.
+- No algorithm-performance conclusion is claimed.
+
+Focused regression matrix
+- tests/test_v48_35_continuous_frontier.py
+- tests/test_v48_35_1_rc30_training_contract_hotfix.py
+- tests/test_v48_35_2_engineering_integrity.py
+- tests/test_v48_36_ocaf.py
+- Result: 42 passed, 1 CUDA-only skipped, 3 non-fatal Transformer warnings.
+
+Runtime geometry checks
+- New group-broadcast contract on CPU: PASS.
+- Batch size: 96; group size: 8; groups: 12.
+- Candidate-relative action dimension: 141.
+- Nominal-observation dimension: 529.
+- Interaction hidden dimension: 64.
+- Exact-zero nominal OCAF context: PASS.
+- Forward finite: PASS.
+- Input/bridge backward finite: PASS.
+- Full d_model=192, d_obs=64 factor-geometry smoke: PASS.
+
+Static/release checks
+- python compileall (src, tools, tests): PASS.
+- Shell syntax for 67 scripts under scripts/ and tools/: PASS.
+- v48.36 version-scoped tool import/--help, including the new CUDA contract: PASS.
+- v48.36.1 dependency closure: PASS; 0 missing referenced targets.
+
+Not performed / not claimed
+- This container has no CUDA device, A30, WOMD/Waymax dataset or source checkpoints.
+- The optional CUDA pytest was skipped locally.
+- The main runner now performs the exact contract on GPU0 and GPU1 before adaptation.
+- A real two-A30 rerun is required before claiming that the pipeline reaches RC=20/0.
