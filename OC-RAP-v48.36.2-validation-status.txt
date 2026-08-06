@@ -1,0 +1,36 @@
+OC-RAP v48.36.2 STAGE-TRANSFER HOTFIX — VALIDATION STATUS
+================================================================
+Release scope: engineering only; OCAF algorithm and hyperparameters unchanged.
+
+Uploaded-result attribution
+---------------------------
+PASS: authoritative RC=30 / pipeline_valid=false parsed.
+PASS: balanced and precision training completed before stage-transfer checking.
+PASS: both variant RC=31 failures contain exactly 10 misclassified OCAF interaction-bridge tensors.
+PASS: certificate_executed=false, gate_evaluated=false, test_roots_read=false.
+
+Focused regression matrix (run by file)
+---------------------------------------
+PASS: tests/test_v48_35_continuous_frontier.py — 9 passed.
+PASS: tests/test_v48_35_1_rc30_training_contract_hotfix.py — 8 passed.
+PASS: tests/test_v48_35_2_engineering_integrity.py — 11 passed.
+PASS: tests/test_v48_36_ocaf.py — 14 passed, 1 CUDA-only skipped.
+PASS: tests/test_v48_36_2_stage_transfer_hotfix.py — 6 passed.
+TOTAL: 48 passed, 1 skipped; only non-fatal Transformer warnings.
+
+Static/release checks
+---------------------
+PASS: python -m compileall -q src tools tests.
+PASS: 68 shell scripts under scripts/ and tools/ pass bash -n.
+PASS: all new version-scoped tools execute --help.
+PASS: synthetic legacy false RC31 reproduction.
+PASS: new checker accepts registered interaction-bridge changes.
+PASS: new checker rejects true encoder drift and architecture mismatch.
+PASS: exact no-retraining repair and resume authorization end to end.
+
+Environment limitations
+-----------------------
+The delivery environment has no omitted .pt checkpoint bytes, WOMD/Waymax data,
+or NVIDIA A30. The repair utility therefore must validate the real checkpoint
+bytes on the original experiment machine. No calibration, certificate, gate, or
+algorithm-performance claim is made by this release.

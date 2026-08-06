@@ -1,0 +1,3 @@
+﻿variant,best_epoch,direct_contract_safe_rank_risk,direct_contract_safe_top1_recall_min,direct_contract_valid_safe_admission_total,direct_integrity_all_abstain,interpretation
+balanced,4,13.79846107214629,0.5,0.0,1.0,adaptation-dev checkpoint-selection diagnostic only; not calibration/certificate/gate evidence
+precision,6,7.176798992661781,0.625,1.0,0.0,adaptation-dev checkpoint-selection diagnostic only; not calibration/certificate/gate evidence

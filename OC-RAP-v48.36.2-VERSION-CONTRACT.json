@@ -1,0 +1,37 @@
+{
+  "event": "ocrap_release_version_contract",
+  "base_algorithm_version": "v48.36-OCAF",
+  "implementation_version": "v48.36.2-STAGE-TRANSFER-HOTFIX",
+  "release_date": "2026-08-06",
+  "scope": "engineering_only",
+  "algorithm_changed": false,
+  "datasets_changed": false,
+  "gate_changed": false,
+  "certificate_thresholds_changed": false,
+  "supported_resume_source": "v48.36.1 exact stage-transfer RC31 false-failure only",
+  "unknown_rc30_fail_closed": true,
+  "changed_files": {
+    "OC-RAP-v48.36.1-results-audit-and-v48.36.2-hotfix-ZH.md": "32545ad38c3449ce66534546b577e0e634d005092759212a13d9ca9b10dfe034",
+    "OC-RAP-v48.36.2-run-commands-ZH.txt": "c6d39389cba3a1449b29878ae238cf0a0a171452cf6bbf96f7e004b61b14cc2f",
+    "scripts/repair_v48_36_1_stage_transfer_with_v48_36_2.sh": "397e2abd13f9456f135067086ba326cba3a3c25354df07f2a847d2f7ebc75042",
+    "tests/test_v48_36_2_stage_transfer_hotfix.py": "b9b40840b80ae30c81c7dd65ef7ef668c6feda99b6f0afc20783b98ee5d554ed",
+    "tools/check_v48_36_stage_transfer.py": "893dc6b4c73a8fbd1686a315f5caad58ae8cde7743e27104178a8b75e85f2a02",
+    "tools/extract_v48_36_failure_signature.py": "625423307e0679996226b14c9a41a8519a041867808d22c9da0373c26ab4d436",
+    "tools/finalize_v48_36_adaptation_variant.py": "9a87e5dc42ab98bf758365f705a2623d766dae7d1b0d047a27a6cd89d1e6f0f4",
+    "tools/repair_v48_36_1_stage_transfer_failure.py": "19f41b5ddf4c6717f7ef8b5749218a22a2ca9c7d0d833e62859a679a8c60183e",
+    "ALGORITHM_CHANGELOG.md": "e5f192ea1434f55702ce99829485c02511f32c61047f77b589151054969b9c65",
+    "scripts/adapt_ocrap_v48_36_ocaf_variant.sh": "86fff727a02d960a64e1432eb378be96adf560dce687c1d4d2602b1f6292dc74",
+    "scripts/run_v48_36_ocaf_dedicated.sh": "bafc66d04942f2084c086abff8808e46f6845ff26003cde227b8bfca5ff0147e",
+    "tools/check_v48_36_ocaf_training_contract.py": "966aeb1ea1960695bd3a7555886dffce3773f55f52116b9303fbff7cbf483330",
+    "tools/check_v48_36_resume_contract.py": "d9ac2788c3e7929e97acf1e7aded8908d9721b074c36da72db38ed7cd7126a77"
+  },
+  "deleted_files": [],
+  "required_new_tools": [
+    "tools/check_v48_36_stage_transfer.py",
+    "tools/finalize_v48_36_adaptation_variant.py",
+    "tools/repair_v48_36_1_stage_transfer_failure.py",
+    "tools/extract_v48_36_failure_signature.py"
+  ],
+  "checkpoint_bytes_in_delivery": false,
+  "test_roots_read": false
+}

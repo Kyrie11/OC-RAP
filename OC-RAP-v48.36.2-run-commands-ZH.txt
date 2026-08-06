@@ -1,0 +1,217 @@
+OC-RAP v48.36.2 RC30 stage-transfer contract hotfix：执行指令
+================================================================
+
+本版本不修改算法。推荐直接复用 v48.36.1 已完成的 factor/identity/final
+checkpoint，修复 stage-transfer 契约后继续 calibration/certificate，不要重复训练。
+
+一、部署代码
+------------
+cd /home/senzeyu2/code/OC-RAP
+export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
+
+建议先备份当前代码，再把 v48.36.2 包覆盖到该目录。不要覆盖或删除原来的
+runs/ocrap_v48_36_1_ocaf_cuda_hotfix_48361 目录。
+
+二、静态检查
+------------
+python -m compileall -q src tools tests
+
+PYTHONPATH=src pytest -q tests/test_v48_36_2_stage_transfer_hotfix.py
+PYTHONPATH=src pytest -q tests/test_v48_36_ocaf.py
+PYTHONPATH=src pytest -q tests/test_v48_35_2_engineering_integrity.py
+
+bash -n scripts/adapt_ocrap_v48_36_ocaf_variant.sh
+bash -n scripts/run_v48_36_ocaf_dedicated.sh
+bash -n scripts/repair_v48_36_1_stage_transfer_with_v48_36_2.sh
+
+三、确认原实验 checkpoint 仍存在
+------------------------------
+OUTPUTDIR=runs/ocrap_v48_36_1_ocaf_cuda_hotfix_48361
+SOURCE_RUN=runs/ocrap_v48_13_terra_proxy_4801
+
+for variant in balanced precision; do
+  for f in \
+    "$SOURCE_RUN/candidates/$variant/model_v48_trac_sr/best.pt" \
+    "$OUTPUTDIR/candidates/$variant/factor_stage/model_v48_trac_sr/best.pt" \
+    "$OUTPUTDIR/candidates/$variant/identity_stage/model_v48_trac_sr/best.pt" \
+    "$OUTPUTDIR/candidates/$variant/model_v48_trac_sr/best.pt"; do
+    [[ -f "$f" ]] || { echo "MISSING: $f" >&2; exit 30; }
+  done
+done
+
+echo "checkpoint presence PASS"
+
+四、推荐：先只执行无重训 repair 审计
+----------------------------------
+OCRAP_ROOT=/data0/senzeyu2/dataset/OCRAP
+PROTOCOL_ROOT="$OCRAP_ROOT/calibration_v48_14_prism_4814"
+CAL_SAFE="$OCRAP_ROOT/calibration_safe"
+
+OUTPUTDIR="$OUTPUTDIR" \
+SOURCE_RUN="$SOURCE_RUN" \
+OCRAP_ROOT="$OCRAP_ROOT" \
+PROTOCOL_ROOT="$PROTOCOL_ROOT" \
+CAL_SAFE="$CAL_SAFE" \
+GPU0=0 GPU1=1 \
+REPAIR_ONLY=1 \
+bash scripts/repair_v48_36_1_stage_transfer_with_v48_36_2.sh
+
+python -m json.tool "$OUTPUTDIR/V48_36_2_STAGE_TRANSFER_REPAIR.json"
+
+必须满足：
+- valid=true；
+- algorithm_changed=false；
+- retraining_performed=false；
+- balanced/precision 都有新的 stage_transfer_sha256；
+- authorized_next_action 为 RESUME_AFTER_ADAPTATION=1。
+
+如果 repair 返回非零，不要绕过。查看：
+
+for f in "$OUTPUTDIR"/candidates/*/STAGE_TRANSFER_REPAIR_REJECTED.v48.36.2.json; do
+  [[ -f "$f" ]] && { echo "===== $f ====="; python -m json.tool "$f"; }
+done
+python -m json.tool "$OUTPUTDIR/V48_36_2_STAGE_TRANSFER_REPAIR.json"
+
+五、repair 通过后继续 pipeline，不重新训练
+------------------------------------------
+set +e
+OUTPUTDIR="$OUTPUTDIR" \
+OCRAP_ROOT="$OCRAP_ROOT" \
+SOURCE_RUN="$SOURCE_RUN" \
+PROTOCOL_ROOT="$PROTOCOL_ROOT" \
+CAL_SAFE="$CAL_SAFE" \
+GPU0=0 GPU1=1 \
+RESUME_AFTER_ADAPTATION=1 \
+REBUILD_ADAPT_INDEX=0 \
+REBUILD_ADAPT_DEV_INDEX=0 \
+OCRAP_IMPLEMENTATION_VERSION=v48.36.2-STAGE-TRANSFER-HOTFIX \
+bash scripts/run_v48_36_ocaf_dedicated.sh \
+  >"$OUTPUTDIR/controller.v48.36.2-resume.stdout.log" 2>&1
+RC=$?
+set -e
+printf 'authoritative process RC=%s\n' "$RC"
+
+注意：
+- 不要设置 ALLOW_PARTIAL_VARIANTS=1；
+- 不要删除原 index、summary 或 checkpoint；
+- resume contract 会重新核对 checkpoint、completion、source/protocol、index 和
+  test-root seal；
+- 只有 RC=0 才能运行 Safe/stress。
+
+六、读取权威结果
+----------------
+python -m json.tool "$OUTPUTDIR/V48_36_RESUME_CONTRACT.json"
+python -m json.tool "$OUTPUTDIR/AUTHORITATIVE_RUN_STATUS.json"
+python -m json.tool "$OUTPUTDIR/V48_36_COMPLETE.json"
+
+结果解释：
+- RC=0：pipeline 有效且 gate 通过，执行 NEXT_COMMANDS.txt；
+- RC=20：pipeline 有效但 gate 拒绝，可进行算法层分析；
+- RC=30：工程失败，查看 PIPELINE_FAILED.json 和对应阶段日志。
+
+七、RC=0 后的授权命令
+--------------------
+cat "$OUTPUTDIR/NEXT_COMMANDS.txt"
+bash "$OUTPUTDIR/NEXT_COMMANDS.txt"
+
+八、若 checkpoint 已删除：使用全新目录重新训练
+----------------------------------------------
+# 仅当第三步发现 checkpoint 缺失或 repair contract 拒绝 checkpoint 字节时使用。
+FRESH_OUTPUTDIR=runs/ocrap_v48_36_2_ocaf_stage_transfer_hotfix_48362
+mkdir -p "$FRESH_OUTPUTDIR"
+
+# 可以只复用通过 contract 的 teacher index/summary；不要复制 checkpoint 或状态文件。
+for f in \
+  evidence_adapt_teacher_pcd_index.jsonl \
+  evidence_adapt_teacher_pcd_index_summary.json \
+  evidence_adapt_dev_teacher_pcd_index.jsonl \
+  evidence_adapt_dev_teacher_pcd_index_summary.json; do
+  [[ -f "$OUTPUTDIR/$f" ]] && cp -f "$OUTPUTDIR/$f" "$FRESH_OUTPUTDIR/$f"
+done
+
+# 更新 summary 中的 output provenance。
+python - "$FRESH_OUTPUTDIR" <<'PY_REBASE'
+import json, os, pathlib, sys, time
+root=pathlib.Path(sys.argv[1])
+for summary_name,index_name in (
+    ('evidence_adapt_teacher_pcd_index_summary.json','evidence_adapt_teacher_pcd_index.jsonl'),
+    ('evidence_adapt_dev_teacher_pcd_index_summary.json','evidence_adapt_dev_teacher_pcd_index.jsonl'),
+):
+    path=root/summary_name
+    if not path.is_file():
+        continue
+    doc=json.loads(path.read_text())
+    doc['output']=str(root/index_name)
+    doc['copied_for_v48_36_2_fresh_rerun']=True
+    doc['copied_unix']=time.time()
+    tmp=path.with_name(f'.{path.name}.tmp.{os.getpid()}')
+    tmp.write_text(json.dumps(doc,ensure_ascii=False,indent=2)+'\n')
+    os.replace(tmp,path)
+PY_REBASE
+
+set +e
+OUTPUTDIR="$FRESH_OUTPUTDIR" \
+OCRAP_ROOT="$OCRAP_ROOT" \
+SOURCE_RUN="$SOURCE_RUN" \
+PROTOCOL_ROOT="$PROTOCOL_ROOT" \
+CAL_SAFE="$CAL_SAFE" \
+GPU0=0 GPU1=1 \
+RESUME_AFTER_ADAPTATION=0 \
+REBUILD_ADAPT_INDEX=0 \
+REBUILD_ADAPT_DEV_INDEX=0 \
+OCRAP_IMPLEMENTATION_VERSION=v48.36.2-STAGE-TRANSFER-HOTFIX \
+bash scripts/run_v48_36_ocaf_dedicated.sh \
+  >"$FRESH_OUTPUTDIR/controller.stdout.log" 2>&1
+FRESH_RC=$?
+set -e
+printf 'fresh authoritative process RC=%s\n' "$FRESH_RC"
+
+九、RC=30 的最小诊断包
+---------------------
+# 默认仍不需要上传大 checkpoint。
+DIAG_DIR="$OUTPUTDIR/v48_36_2_minimal_diagnostics"
+rm -rf "$DIAG_DIR"; mkdir -p "$DIAG_DIR"
+
+for f in \
+  ATTEMPT_STARTED.json \
+  V48_36_2_STAGE_TRANSFER_REPAIR.json \
+  V48_36_RESUME_CONTRACT.json \
+  PIPELINE_FAILED.json \
+  V48_36_COMPLETE.json \
+  AUTHORITATIVE_RUN_STATUS.json \
+  NEXT_COMMANDS_STATUS.json; do
+  [[ -f "$OUTPUTDIR/$f" ]] && cp -a "$OUTPUTDIR/$f" "$DIAG_DIR/"
+done
+
+mkdir -p "$DIAG_DIR/candidates" "$DIAG_DIR/logs"
+for variant in balanced precision; do
+  mkdir -p "$DIAG_DIR/candidates/$variant"
+  for f in \
+    STAGE_TRANSFER_INTEGRITY.json \
+    STAGE_TRANSFER_REPAIR_REJECTED.v48.36.2.json \
+    THREE_STAGE_TRAINING_COMPLETE.json \
+    TRAINING_CONTRACT.json \
+    MODEL_INFERENCE_CONTRACT.json \
+    VARIANT_STAGE_FAILED.json; do
+    [[ -f "$OUTPUTDIR/candidates/$variant/$f" ]] && \
+      cp -a "$OUTPUTDIR/candidates/$variant/$f" "$DIAG_DIR/candidates/$variant/"
+  done
+done
+
+for f in \
+  resume_contract.log \
+  training_contract_balanced.log \
+  training_contract_precision.log \
+  model_contract_balanced.log \
+  model_contract_precision.log \
+  certificate_controller.log \
+  controller.v48.36.2-resume.stdout.log; do
+  [[ -f "$OUTPUTDIR/logs/$f" ]] && cp -a "$OUTPUTDIR/logs/$f" "$DIAG_DIR/logs/"
+done
+
+# 只写 checkpoint SHA，不复制 checkpoint。
+find "$SOURCE_RUN/candidates" "$OUTPUTDIR/candidates" -type f -name best.pt -print0 2>/dev/null \
+  | sort -z | xargs -0 -r sha256sum >"$DIAG_DIR/CHECKPOINT_SHA256SUMS.txt"
+
+zip -qr "${DIAG_DIR}.zip" "$DIAG_DIR"
+echo "diagnostic package: ${DIAG_DIR}.zip"

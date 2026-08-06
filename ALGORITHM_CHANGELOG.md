@@ -1,5 +1,82 @@
 # Algorithm Change Log
 
+## v48.36.2 — RC30 STAGE-TRANSFER CONTRACT HOTFIX (2026-08-06)
+
+### Scope and attribution
+
+This release is an **engineering-only hotfix** for v48.36 OCAF. It does not change
+candidate generation, the observation-conditioned action representation, model
+heads, losses, checkpoint-selection metrics, source-expert prior, shared-rule
+fitter, certificate thresholds, datasets, or the gate.
+
+The uploaded v48.36.1 run passed both A30 CUDA group-broadcast preflights and
+completed factor and identity training for balanced and precision. Both variants
+then stopped at `stage_transfer_integrity` with RC=31. The controller normalized
+the two adaptation RCs to pipeline RC=30 before calibration or certificate.
+
+The failure was a false integrity rejection. The v48.36 variant runner explicitly
+trained `direct_evidence_interaction_bridge` during the identity stage and recorded
+that prefix in `STAGE_ARCHITECTURE.json`, but it still invoked the legacy
+`check_v48_32_stage_transfer.py`. That checker permits only the benefit, harm and
+admission calibrators. It therefore reported all ten changed OCAF bridge tensors as
+"frozen parameter drift" even though they were registered trainable parameters.
+No encoder, source expert, proposal generator, or other frozen parameter was
+reported changed.
+
+### Engineering changes
+
+1. Added `tools/check_v48_36_stage_transfer.py`, with an explicit controller-provided
+   prefix contract, an approved-prefix allowlist, exact architecture/trainable-set
+   agreement, OCAF context checks, full parameter-diff reporting, and fail-closed
+   rejection of any true frozen drift.
+2. Replaced the v48.32 checker in `adapt_ocrap_v48_36_ocaf_variant.sh`. The normal
+   training path now authorizes the OCAF interaction bridge only when both the
+   runner contract and stage metadata register it.
+3. Added `tools/finalize_v48_36_adaptation_variant.py`. Completion metadata is now
+   written atomically after checkpoint/completion SHA256 verification and records
+   exact stage-2 trainable prefixes, the stage-transfer contract version, exact
+   deployment eligibility and implementation version.
+4. Added an exact no-retraining repair path:
+   `repair_v48_36_1_stage_transfer_failure.py` and
+   `repair_v48_36_1_stage_transfer_with_v48_36_2.sh`. It accepts only the observed
+   signature (both variants RC=31 at stage transfer, no certificate/gate/test access,
+   only interaction-bridge tensors misclassified), rechecks the existing checkpoint
+   bytes, archives the old failure evidence, regenerates valid completion metadata,
+   and authorizes `RESUME_AFTER_ADAPTATION=1`.
+5. Extended `check_v48_36_resume_contract.py` to accept the repaired signature while
+   still rejecting algorithmic RC=20, prior certificate artifacts, changed source or
+   protocol identity, changed checkpoint hashes, or any unregistered RC=30.
+6. Corrected a latent reference-arm contract bug: when OCAF context is used with
+   `IDENTITY_TRAIN_ALL=0`, the identity-stage expected set is admission plus the
+   interaction bridge, not admission alone.
+7. Added a v48.36-specific failure-signature extractor. New failures no longer carry
+   the stale `v48_34_failure_signature` event name.
+8. Added regression tests reproducing the legacy false rejection, accepting the
+   registered OCAF bridge, rejecting real encoder drift, rejecting architecture
+   mismatch, repairing both variants without retraining, and validating the resume
+   authorization end to end.
+
+### Algorithm interpretation
+
+The uploaded archive contains training summaries but no calibration, shared frozen
+rule, certificate, or gate outputs. Precision identity training showed debugging
+signals (at least one valid safe admission and non-all-abstain on adaptation-dev),
+while balanced remained all-abstain. These are checkpoint-selection diagnostics,
+not independent evidence. No algorithm or hyperparameter change is made before the
+repaired run reaches a valid RC=0 or RC=20.
+
+### Validation
+
+- Focused v48.35/v48.35.1/v48.35.2/v48.36/v48.36.2 matrix: 48 passed and one
+  CUDA-only test skipped when run by file; only non-fatal Transformer warnings.
+- New v48.36.2 tests: 6 passed, including exact no-retraining repair and resume.
+- Python `compileall`: PASS.
+- All 68 shell scripts under `scripts/` and `tools/`: `bash -n` PASS.
+- All new version-scoped tools: import/`--help` PASS.
+- The delivery environment does not contain the omitted checkpoint bytes, WOMD,
+  Waymax or A30 GPUs. Byte-level no-retraining authorization is therefore executed
+  on the original experiment machine, not claimed from the uploaded archive alone.
+
 ## v48.36.1 — RC30 CUDA GROUP-BROADCAST HOTFIX (2026-08-06)
 
 ### Scope and attribution

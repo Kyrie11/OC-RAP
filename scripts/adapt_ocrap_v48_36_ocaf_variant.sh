@@ -257,51 +257,30 @@ FINAL_CKPT="$FINAL_RUN/model_v48_trac_sr/best.pt"
 transfer_extra=()
 [[ "$ENABLE_FINAL_CALIBRATION" == 1 ]] || transfer_extra+=(--final-stage-disabled)
 CURRENT_STAGE="stage_transfer_integrity"
-python tools/check_v48_32_stage_transfer.py \
+python tools/check_v48_36_stage_transfer.py \
   --factor "$FACTOR_CKPT" --identity "$IDENTITY_CKPT" --final "$FINAL_CKPT" \
+  --identity-architecture "$IDENTITY_RUN/STAGE_ARCHITECTURE.json" \
+  --final-architecture "$FINAL_RUN/STAGE_ARCHITECTURE.json" \
+  --identity-allowed-prefixes "$identity_prefixes" \
+  --final-allowed-prefixes direct_evidence_concord_admission_calibrator \
+  --implementation-version v48.36.2-STAGE-TRANSFER-HOTFIX \
   --output "$FINAL_RUN/STAGE_TRANSFER_INTEGRITY.json" "${transfer_extra[@]}"
 
 CURRENT_STAGE="completion_metadata"
-python - "$FINAL_RUN" "$SOURCE_CKPT" "$FACTOR_CKPT" "$IDENTITY_CKPT" "$FINAL_CKPT" "$SUPPORT_JSON" "$ENABLE_SUPPORT_RELIABILITY" "$IDENTITY_TRAIN_ALL" "$COUPLE_ADMISSION_PRIOR" "$ADAPTIVE_IDENTITY_MARGIN" "$ENABLE_FINAL_CALIBRATION" "$EVIDENCE_CONTEXT_SOURCE" "${EVIDENCE_CONSENSUS_PRIOR_SCALE:-0.50}" "${EVIDENCE_INTERACTION_HIDDEN:-64}" "${EVIDENCE_INTERACTION_DROPOUT:-0.05}" "${EVIDENCE_ADMISSION_PRIOR_MODE:-frontier_capped_slack}" <<'PY'
-import hashlib,json,pathlib,sys,time
-run,source,factor,identity,final,support=map(pathlib.Path,sys.argv[1:7])
-support_enabled=sys.argv[7] == '1'; identity_all=sys.argv[8] == '1'
-coupled=sys.argv[9] == '1'; adaptive=sys.argv[10] == '1'; final_enabled=sys.argv[11] == '1'; context_source=sys.argv[12]
-consensus_prior_scale=float(sys.argv[13]); interaction_hidden=int(sys.argv[14]); interaction_dropout=float(sys.argv[15]); admission_prior_mode=sys.argv[16]
-for p in (source,factor,identity,final,support,run/'STAGE_TRANSFER_INTEGRITY.json'):
-    if not p.is_file(): raise SystemExit(f'missing v48.36 OCAF stage artifact: {p}')
-transfer=json.load(open(run/'STAGE_TRANSFER_INTEGRITY.json'))
-doc={
- 'event':'v48_36_ocaf_complete','created_unix':time.time(),
- 'source_checkpoint':str(source),'source_sha256':hashlib.sha256(source.read_bytes()).hexdigest(),
- 'factor_checkpoint':str(factor),'factor_sha256':hashlib.sha256(factor.read_bytes()).hexdigest(),
- 'identity_checkpoint':str(identity),'identity_sha256':hashlib.sha256(identity.read_bytes()).hexdigest(),
- 'final_checkpoint':str(final),'final_sha256':hashlib.sha256(final.read_bytes()).hexdigest(),
- 'factor_support_contract':str(support),'factor_support_sha256':hashlib.sha256(support.read_bytes()).hexdigest(),
- 'stage1_population':'natural_without_replacement','stage2_population':'natural_without_replacement',
- 'stage3_population':'natural_without_replacement' if final_enabled else 'disabled',
- 'stage2_trainable':'all_compact_evidence_calibrators' if identity_all else 'admission_only_reference',
- 'deployment_safe_utility_gradient_coupled':coupled,
- 'adaptive_teacher_gap_margin':adaptive,
- 'stage3_trainable':['admission_calibrator'] if final_enabled else [],
- 'stage2_selected_initial_checkpoint':bool(transfer.get('identity_selected_initial_checkpoint',False)),
- 'stage3_selected_initial_checkpoint':bool(transfer.get('final_selected_initial_checkpoint',False)),
- 'model_regime_routing':False,'shared_deployment_rule_required':True,'audit_strata_only':['near','contact'],
- 'evidence_context_source':context_source,
- 'continuous_unified_semantics':('top5 proposal plus observation-conditioned executable-action margins and noncompensatory frontier cap' if admission_prior_mode=='frontier_capped_slack' else 'top5 proposal plus continuous candidate context and compensatory safety slack'),
- 'independent_measured_hard_veto':True,
- 'checkpoint_metric':'direct_contract_lexicographic',
- 'semantic_frontier_eligibility_metric':True,'version':'v48.36-OCAF','observation_conditioned_action_frontier':context_source=='physical_interaction',
- 'source_consensus_prior_scale':consensus_prior_scale,'interaction_hidden':interaction_hidden,'interaction_dropout':interaction_dropout,
- 'admission_prior_mode':admission_prior_mode,'noncompensatory_frontier_cap':admission_prior_mode=='frontier_capped_slack',
- 'final_thresholds_fit_by_single_shared_rule':True,
- 'train_metric_uses_final_fitted_thresholds':False,
- 'selection_semantics':'rank_topk_then_filter_then_evidence_rerank',
- 'support_reliability_enabled':support_enabled,'final_calibration_enabled':final_enabled,
- 'test_roots_read':False,
-}
-(run/'THREE_STAGE_TRAINING_COMPLETE.json').write_text(json.dumps(doc,indent=2)+'\n')
-PY
-
+python tools/finalize_v48_36_adaptation_variant.py \
+  --run "$FINAL_RUN" --source "$SOURCE_CKPT" \
+  --factor "$FACTOR_CKPT" --identity "$IDENTITY_CKPT" --final "$FINAL_CKPT" \
+  --support "$SUPPORT_JSON" \
+  --support-reliability-enabled "$ENABLE_SUPPORT_RELIABILITY" \
+  --identity-train-all "$IDENTITY_TRAIN_ALL" \
+  --prior-coupled "$COUPLE_ADMISSION_PRIOR" \
+  --adaptive-margin "$ADAPTIVE_IDENTITY_MARGIN" \
+  --final-enabled "$ENABLE_FINAL_CALIBRATION" \
+  --context-source "$EVIDENCE_CONTEXT_SOURCE" \
+  --consensus-prior-scale "${EVIDENCE_CONSENSUS_PRIOR_SCALE:-0.50}" \
+  --interaction-hidden "${EVIDENCE_INTERACTION_HIDDEN:-64}" \
+  --interaction-dropout "${EVIDENCE_INTERACTION_DROPOUT:-0.05}" \
+  --admission-prior-mode "${EVIDENCE_ADMISSION_PRIOR_MODE:-frontier_capped_slack}" \
+  --implementation-version v48.36.2-STAGE-TRANSFER-HOTFIX
 CURRENT_STAGE="complete"
 rm -f "$FINAL_RUN/VARIANT_STAGE_FAILED.json"

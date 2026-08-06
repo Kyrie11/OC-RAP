@@ -45,9 +45,10 @@ def _natural(arch: dict[str, Any]) -> bool:
     return arch.get("group_batch_stratified") is False and arch.get("group_batching_replacement") is False
 
 
-def _trainable(arch: dict[str, Any]) -> str:
+def _trainable(arch: dict[str, Any]) -> tuple[str, ...]:
     values = arch.get("trainable") or [""]
-    return str(values[0])
+    raw = str(values[0])
+    return tuple(item.strip() for item in raw.split(",") if item.strip())
 
 
 def _torch_load_trusted_checkpoint(path: Path) -> Mapping[str, Any]:
@@ -175,6 +176,10 @@ def main() -> int:
         "direct_evidence_concord_harm_calibrator",
         "direct_evidence_concord_admission_calibrator",
     ) + (("direct_evidence_interaction_bridge",) if expected_ocaf else ())
+    reference_prefixes = (
+        "direct_evidence_concord_admission_calibrator",
+    ) + (("direct_evidence_interaction_bridge",) if expected_ocaf else ())
+    expected_identity_prefixes = set(all_prefixes if expect_identity_all else reference_prefixes)
     exact_eligibility = _exact_eligibility_contract(
         (factor_arch, identity_arch, final_arch),
         (
@@ -206,11 +211,7 @@ def main() -> int:
         "finite_identity_metric": bool(identity_values) and all(math.isfinite(x) for x in identity_values),
         "finite_final_metric": bool(final_values) and all(math.isfinite(x) for x in final_values),
         "factor_margin_regression_enabled": float(factor_arch.get("component_margin_regression_weight", 0.0)) > 0.0,
-        "identity_trainable_contract": (
-            all(prefix in identity_trainable for prefix in all_prefixes)
-            if expect_identity_all
-            else identity_trainable == "direct_evidence_concord_admission_calibrator"
-        ),
+        "identity_trainable_contract": set(identity_trainable) == expected_identity_prefixes,
         "identity_prior_gradient_contract": bool(identity_arch.get("admission_prior_detach", True)) is (not expect_coupled),
         "identity_adaptive_margin_contract": (
             float(identity_arch.get("safe_hard_negative_teacher_scale", 0.0)) > 0.0
@@ -259,9 +260,9 @@ def main() -> int:
             )
         ),
         "final_admission_only_or_disabled": (
-            ("direct_evidence_concord_admission_calibrator" in final_trainable)
+            set(final_trainable) == {"direct_evidence_concord_admission_calibrator"}
             if expect_final
-            else final_trainable == identity_trainable
+            else set(final_trainable) == set(identity_trainable)
         ),
         "unbounded_residual_with_frontier_cap": identity_arch.get("admission_residual_bounded") is False and final_arch.get("admission_residual_bounded") is False,
         "admission_prior_mode": identity_arch.get("admission_prior_mode") == args.expect_prior_mode and final_arch.get("admission_prior_mode") == args.expect_prior_mode,
@@ -300,6 +301,7 @@ def main() -> int:
         "exact_eligibility_provenance": exact_eligibility,
         "expected": {
             "identity_all": expect_identity_all,
+            "identity_trainable_prefixes": sorted(expected_identity_prefixes),
             "prior_coupled": expect_coupled,
             "adaptive_margin": expect_adaptive,
             "final_enabled": expect_final,

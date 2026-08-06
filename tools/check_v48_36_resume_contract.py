@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Authorize a no-retraining resume after an exact v48.36 OCAF training-contract RC=30.
+"""Authorize a no-retraining resume for exact, audited v48.36 RC=30 signatures.
 
-The authorization is deliberately narrow. It accepts only a pipeline that stopped
-at the training-contract audit after both adaptations returned RC=0, and it
-re-validates checkpoint bytes plus the exact-eligibility bit stored in every
-checkpoint config. It does not authorize reuse after an algorithmic RC=20,
-certificate access, a different failure signature, or a changed data/source path.
+Supported signatures are deliberately narrow: the earlier checkpoint-proven
+training-contract metadata failure, and the v48.36.1 stage-transfer false
+failure after a valid v48.36.2 repair contract.  Algorithmic RC=20, prior
+certificate access, changed checkpoint bytes, changed data/source identity, or
+any unregistered failure remains rejected.
 """
 from __future__ import annotations
 
@@ -90,12 +90,41 @@ def main() -> int:
     else:
         record("prior_status_readable", True)
 
-    record("known_failure_event", failed.get("event") == "v48_36_pipeline_failed", failed)
-    record("known_failure_stage", failed.get("stage") == "training_contract", failed.get("stage"))
-    record("known_failure_raw_rc", _int_equal(failed.get("raw_exit_code"), 4), failed.get("raw_exit_code"))
-    record("known_failure_normalized_rc", _int_equal(failed.get("normalized_exit_code"), 30), failed.get("normalized_exit_code"))
+    repair_path = root / "V48_36_2_STAGE_TRANSFER_REPAIR.json"
+    try:
+        repair = _json(repair_path) if repair_path.is_file() else {}
+    except Exception as exc:
+        repair = {"read_error": repr(exc)}
     adaptation = failed.get("adaptation_exit_codes") if isinstance(failed.get("adaptation_exit_codes"), Mapping) else {}
-    record("both_adaptations_completed", adaptation.get("balanced") == 0 and adaptation.get("precision") == 0, adaptation)
+    legacy_training_contract_failure = (
+        failed.get("stage") == "training_contract"
+        and _int_equal(failed.get("raw_exit_code"), 4)
+        and adaptation.get("balanced") == 0
+        and adaptation.get("precision") == 0
+    )
+    repaired_stage_transfer_failure = (
+        failed.get("stage") == "adaptation"
+        and _int_equal(failed.get("raw_exit_code"), 30)
+        and adaptation.get("balanced") == 31
+        and adaptation.get("precision") == 31
+        and repair.get("event") == "v48_36_2_stage_transfer_repair"
+        and repair.get("valid") is True
+        and repair.get("algorithm_changed") is False
+        and repair.get("retraining_performed") is False
+        and repair.get("test_roots_read") is False
+    )
+    failure_mode = (
+        "legacy_training_contract" if legacy_training_contract_failure
+        else "repaired_stage_transfer" if repaired_stage_transfer_failure
+        else "unsupported"
+    )
+    record("known_failure_event", failed.get("event") == "v48_36_pipeline_failed", failed)
+    record("known_failure_signature", failure_mode != "unsupported", {"mode": failure_mode, "stage": failed.get("stage"), "raw_exit_code": failed.get("raw_exit_code"), "adaptation_exit_codes": adaptation})
+    record("known_failure_normalized_rc", _int_equal(failed.get("normalized_exit_code"), 30), failed.get("normalized_exit_code"))
+    record("adaptation_artifacts_authorized", legacy_training_contract_failure or repaired_stage_transfer_failure, adaptation)
+    if repaired_stage_transfer_failure:
+        record("stage_transfer_repair_source_matches", _path_equal(repair.get("source_run"), args.expect_source_run), repair.get("source_run"))
+        record("stage_transfer_repair_protocol_matches", _path_equal(repair.get("protocol_root"), args.expect_protocol_root), repair.get("protocol_root"))
     record("certificate_not_executed", failed.get("certificate_executed") is False and complete.get("certificate_executed") is False)
     record("gate_not_evaluated", failed.get("gate_evaluated") is False and complete.get("gate_evaluated") is False)
     record("test_roots_sealed_in_status", failed.get("test_roots_read") is False and complete.get("test_roots_read") is False)
@@ -179,6 +208,11 @@ def main() -> int:
                         "shared_rule_required": arch.get("shared_deployment_rule_required") is True,
                         "test_roots_sealed": arch.get("test_roots_read") is False,
                     }
+                    if repaired_stage_transfer_failure:
+                        repair_variants = repair.get("variants") if isinstance(repair.get("variants"), Mapping) else {}
+                        repair_variant = repair_variants.get(variant) if isinstance(repair_variants.get(variant), Mapping) else {}
+                        repair_hash_key = f"{stage}_sha256"
+                        stage_checks["stage_transfer_repair_hash_matches"] = digest == repair_variant.get(repair_hash_key)
                     stage_doc.update({"sha256": digest, "expected_sha256": expected_hash, "checks": stage_checks})
                     variant_ok &= all(stage_checks.values())
                 except Exception as exc:
@@ -203,13 +237,16 @@ def main() -> int:
 
     valid = all(checks.values())
     doc = {
-        "event": "v48_36_rc30_training_contract_resume_authorization",
+        "event": "v48_36_rc30_resume_authorization",
         "version": "v48.36-OCAF",
+        "implementation_version": "v48.36.2-STAGE-TRANSFER-HOTFIX",
+        "failure_mode": failure_mode,
         "run": str(root),
         "valid": valid,
         "authorized_action": "reuse_byte_identical_balanced_and_precision_adaptation_checkpoints_then_rerun_contracts_and_certificate" if valid else None,
         "retraining_authorized": False,
         "known_signature_only": True,
+        "stage_transfer_repair": str(repair_path) if repaired_stage_transfer_failure else None,
         "checks": checks,
         "details": details,
         "variants": variant_details,
