@@ -1,5 +1,158 @@
 # Algorithm Change Log
 
+
+## v48.39 — DRFR / DYNAMIC-RANGE FRONTIER RESERVE (2026-08-07)
+
+### Evidence-based diagnosis of v48.38
+
+The v48.38 primary D run does **not** end in a Natural-gate rejection.  Its
+authoritative terminal state is `RC=30`, `pipeline_valid=false`,
+`failure_stage=certificate`, `gate_evaluated=false`.  Ablation B, the other arm
+using the deterministic joint reserve, has the same failure.  A and C reach valid
+`RC=20` Natural-gate decisions.  The D/B RC=30 is an engineering contract failure:
+RFR intentionally skips identity/final optimization and writes an honest zero-update
+summary (`epochs_completed=0`, `history=[]`, `best_epoch=0`), while the inherited
+metric-calibration checker still requires `best_epoch` to occur in `history` and
+terminates with `best epoch 0 not found`.  v48.39 accepts such a stage only through
+explicit, SHA-verified provenance back to the real factor-stage training history;
+it does not fabricate a fake identity epoch.
+
+The engineering stop hides a second, independent v48.38 algorithm-semantic defect.
+Factor losses supervise candidate benefit/component logits after the nominal row has
+already been pinned to zero.  v48.38 deployment reserve instead subtracts the
+*pre-pin* nominal logit again.  For component harm this cancels the semantic `-2`
+prior and shifts the physical safety margin by approximately `+0.05`, so training
+and deployment do not use the same safety coordinate.  This explains the B/D
+development all-abstain signature.  Offline replay with the aligned coordinate
+recovers some candidates, but a dense 31-point shared-rule search remains infeasible;
+therefore coordinate alignment is necessary but not sufficient for `RC=0`.
+
+The v48.38 ablation also falsifies the one-sided tail-calibration loss as a primary
+solution.  C (tail correction without reserve) does not improve over A on the valid
+certificate: Near-contact still selects zero positives, while Contact keeps the
+same three positives with more selections/harm and slightly worse point precision.
+The tail losses are therefore disabled in v48.39 instead of being up-weighted.
+
+### Representation diagnosis: signed factor dynamic-range ceiling
+
+The remaining factor representation has useful ranking signal but cannot express the
+physical target magnitude in the frontier tail.  With the v48.38 component
+parameterization `tanh(raw)*6 + prior(-2)` and `tau_h=0.025`, the largest representable
+positive physical violation margin is approximately `0.10`.  The uploaded v48.38
+development teacher component-veto targets reach approximately `0.95` in the harmful
+tail.  Correspondingly, observed predicted worst-component margins remain around
+`0.06--0.09` in the high tail while severe teacher violations are an order of
+magnitude larger.
+
+The HAF benefit residual has the analogous limitation: `tanh(raw)*0.75` with
+`tau_b=0.05` contributes at most `0.0375` physical headroom, whereas safe-positive
+development teacher headroom has a median around `0.57` and reaches about `0.61`.
+This is compatible with the empirical pattern seen since v48.37: ranking AUC can be
+non-trivial while absolute frontier admission remains badly calibrated.  Another
+threshold grid, top-k change, or learned admission residual cannot recover
+information that the factor parameterization cannot represent.
+
+### Algorithm change: dynamically expressive signed physical factors
+
+DRFR keeps the validated HAF/OCAF factor semantics but removes the artificial
+`tanh` range ceiling at the final physical-factor residuals.  New zero-initialized
+linear residual modes are available independently for benefit and component harm:
+
+- `direct_recovery_evidence_unbounded_benefit_factor=true`
+- `direct_recovery_evidence_unbounded_harm_factors=true`
+
+The final projections are still zero-initialized, so step-zero behavior exactly
+preserves the source/prior factor coordinate.  Smooth-L1 signed physical-margin
+supervision then learns the required magnitude without a hard `tanh` saturation.
+The representation remains one observation-conditioned continuous factor system;
+no regime label, regime branch, regime-specific loss, or regime-specific threshold
+is introduced.
+
+### Algorithm change: factor-aligned noncompensatory reserve
+
+DRFR retains the useful idea of a deterministic noncompensatory reserve, but corrects
+its coordinate semantics.  With `reserve_factor_alignment=true`, deployment uses
+the exact benefit/component coordinates supervised by the factor losses, rather than
+subtracting a pre-pin nominal a second time.  Supported component reliability still
+defines which learned harm coordinates enter the learned reserve; unsupported
+coordinates remain outside the learned max while the independent measured hard-veto
+path is preserved.
+
+For the aligned physical factors,
+
+`r = min(benefit_headroom, -max_supported(component_violation_margin))`.
+
+This is a single monotone continuous reserve shared across Safe, Near-contact and
+Contact.  Positive benefit can never compensate a violated supported safety factor.
+The shared calibration/gate protocol and top-k=5 remain unchanged.
+
+### What is retained, removed, and not repeated
+
+Retained because prior ablations or diagnostics support them:
+
+- OCAF observation-conditioned physical interaction bridge;
+- HAF signed benefit boundary and dense factor supervision;
+- factor-preservation principle (do not rotate learned physical factors in a sparse
+  identity/admission stage);
+- component-veto/noncompensatory safety semantics;
+- reliability-aware learned component support plus independent hard veto;
+- one shared continuous rule and the pre-registered top-k/gate protocol.
+
+Removed from the v48.39 primary path because v48.38 does not support them:
+
+- one-sided component underestimation / safe-positive overestimation tail losses;
+- joint-reserve regression and boundary loss;
+- learned identity/admission residual optimization.
+
+Not repeated because prior versions already tested them without solving the gate:
+threshold-grid densification, top-k expansion, aggressive positive oversampling,
+hard-negative population distortion as the main mechanism, repeated pairwise/listwise
+ranking additions, barrier/eligibility continuation, full joint stage-2 refinement,
+or any regime-conditioned routing.
+
+### Pre-registered v48.39 dynamic-range ablation
+
+All arms use the corrected factor-aligned deterministic reserve, the same data,
+proposal top-k=5, calibration, certificate and one shared rule.  They differ only in
+which physical factor is allowed sufficient signed dynamic range:
+
+- **A:** bounded benefit + bounded harm (aligned-reserve control);
+- **B:** bounded benefit + unbounded harm;
+- **C:** unbounded benefit + bounded harm;
+- **D / primary:** unbounded benefit + unbounded harm.
+
+A/B/C can be launched concurrently; D is the primary run and is not duplicated by
+default.  This cleanly tests whether the remaining bottleneck is harm range, benefit
+range, or their complementarity, without reusing the disproven v48.38 tail-loss
+ablation.
+
+### Engineering hardening and runtime
+
+- The metric-calibration contract now supports an explicitly audited zero-update
+  materialized stage by resolving its metric row to the SHA-verified factor-stage
+  training summary/checkpoint.  Missing or tampered provenance fails closed.
+- Reserve-only materialization remains zero optimizer steps and byte-identical to
+  the factor checkpoint; no fake identity epoch is created.
+- All new factor semantics are included in checkpoint metadata, model/training
+  contracts and factor-cache fingerprints so a bounded v48.38 checkpoint cannot be
+  silently reused as a v48.39 dynamic-range factor.
+- The empirically unhelpful identity stage remains skipped, retaining the v48.38
+  runtime saving.  A/B/C ablations are launched concurrently on the same two-GPU
+  Balanced/Precision layout with CPU/data-loader caps to reduce wall-clock time.
+
+### Dataset/statistical interpretation
+
+The current dataset is a material statistical constraint but is not yet sufficient
+to explain away the gate failure.  Near-contact has only about 25 safe-positive
+training candidates (about 1.75%) and roughly eight safe-opportunity groups in the
+shared-rule development slice, close to the gate's minimum-selection boundary;
+Contact is less sparse but still low-prevalence.  Nevertheless the proposal oracle
+is feasible in both regimes.  Therefore v48.39 first removes the demonstrated
+engineering, coordinate, and representation ceilings.  If an aligned dynamic-range
+selector approaches oracle point behavior but only confidence bounds / minimum
+support remain infeasible, the remaining limitation should then be reported as a
+dataset statistical-power ceiling rather than hidden by further algorithm tuning.
+
 ## v48.38 — RFR / ROBUST FRONTIER RESERVE (2026-08-07)
 
 ### Evidence-based attribution from the complete v48.37 HAF ablation

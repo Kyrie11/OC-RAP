@@ -619,6 +619,9 @@ for variant in balanced precision; do
     --expect-admission-head "$([[ "${V4838_RFR_RESERVE_ONLY:-0}" == 1 ]] && echo false || echo true)" \
     --expect-benefit-margin-temperature "${FACTOR_BENEFIT_MARGIN_TEMPERATURE:-0.025}" --expect-joint-reserve-temperature "${EVIDENCE_JOINT_RESERVE_TEMPERATURE:-0.025}" \
     --expect-component-prior-logit -2.0 --expect-component-count 5 --expect-component-scale "${EVIDENCE_COMPONENT_SCALE:-6.0}" \
+    --expect-benefit-residual-scale "${EVIDENCE_BENEFIT_RESIDUAL_SCALE:-1.0}" \
+    --expect-unbounded-benefit-factor "${EVIDENCE_UNBOUNDED_BENEFIT_FACTOR:-false}" --expect-unbounded-harm-factors "${EVIDENCE_UNBOUNDED_HARM_FACTORS:-false}" \
+    --expect-reserve-factor-alignment "${EVIDENCE_RESERVE_FACTOR_ALIGNMENT:-false}" \
     --expect-admission-prior-detach any \
     --expect-admission-prior-mode "$ADMISSION_PRIOR_MODE" --expect-slack-temperature "${EVIDENCE_SLACK_TEMPERATURE:-0.025}" --expect-slack-penalty "${EVIDENCE_SLACK_PENALTY:-1.0}" \
     >"$OUTPUTDIR/logs/model_contract_${variant}.log" 2>&1
@@ -641,6 +644,9 @@ for variant in balanced precision; do
     --expect-component-underestimation "${FACTOR_COMPONENT_UNDERESTIMATION_WEIGHT:-0.0}" \
     --expect-safe-positive-component-overestimation "${FACTOR_SAFE_POSITIVE_COMPONENT_OVERESTIMATION_WEIGHT:-0.0}" \
     --expect-joint-reserve-regression "${FACTOR_JOINT_RESERVE_REGRESSION_WEIGHT:-0.0}" \
+    --expect-benefit-residual-scale "${EVIDENCE_BENEFIT_RESIDUAL_SCALE:-1.0}" \
+    --expect-unbounded-benefit-factor "${EVIDENCE_UNBOUNDED_BENEFIT_FACTOR:-false}" --expect-unbounded-harm-factors "${EVIDENCE_UNBOUNDED_HARM_FACTORS:-false}" \
+    --expect-reserve-factor-alignment "${EVIDENCE_RESERVE_FACTOR_ALIGNMENT:-false}" \
     --expect-algorithm-variant "${OCRAP_ALGORITHM_VERSION:-v48.36-OCAF}" \
     --expect-adaptive-margin "$([[ "${V4836_ADAPTIVE_IDENTITY_MARGIN:-0}" == 1 ]] && echo true || echo false)" --expect-final-enabled "$([[ "${V4836_ENABLE_FINAL_CALIBRATION:-0}" == 1 ]] && echo true || echo false)" \
     --expect-eligible-policy "$([[ "${V4838_RFR_RESERVE_ONLY:-0}" == 1 ]] && echo false || echo true)" \

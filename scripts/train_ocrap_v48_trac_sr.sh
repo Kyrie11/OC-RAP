@@ -133,6 +133,9 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set model.direct_recovery_evidence_component_heads="${EVIDENCE_COMPONENT_HEADS:-false}" \
   --set model.direct_recovery_evidence_component_count="${EVIDENCE_COMPONENT_COUNT:-3}" \
   --set model.direct_recovery_evidence_component_scale="${EVIDENCE_COMPONENT_SCALE:-2.0}" \
+  --set model.direct_recovery_evidence_benefit_residual_scale="${EVIDENCE_BENEFIT_RESIDUAL_SCALE:-1.0}" \
+  --set model.direct_recovery_evidence_unbounded_benefit_factor="${EVIDENCE_UNBOUNDED_BENEFIT_FACTOR:-false}" \
+  --set model.direct_recovery_evidence_unbounded_harm_factors="${EVIDENCE_UNBOUNDED_HARM_FACTORS:-false}" \
   --set model.direct_recovery_evidence_component_reliability="${EVIDENCE_COMPONENT_RELIABILITY:-}" \
   --set model.direct_recovery_evidence_concord="${EVIDENCE_CONCORD:-false}" \
   --set model.direct_recovery_evidence_consensus_disagreement_penalty="${EVIDENCE_CONSENSUS_DISAGREEMENT_PENALTY:-0.15}" \
@@ -147,6 +150,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set model.direct_recovery_evidence_frontier_cap_temperature="${EVIDENCE_FRONTIER_CAP_TEMPERATURE:-0.10}" \
   --set model.direct_recovery_evidence_benefit_margin_temperature="${EVIDENCE_BENEFIT_MARGIN_TEMPERATURE:-${ORDINAL_EVIDENCE_BENEFIT_MARGIN_TEMPERATURE:-0.025}}" \
   --set model.direct_recovery_evidence_joint_reserve_temperature="${EVIDENCE_JOINT_RESERVE_TEMPERATURE:-0.025}" \
+  --set model.direct_recovery_evidence_reserve_factor_alignment="${EVIDENCE_RESERVE_FACTOR_ALIGNMENT:-false}" \
   --set model.direct_recovery_evidence_frontier="${EVIDENCE_FRONTIER:-false}" \
   --set model.direct_recovery_evidence_component_prior_logit="${EVIDENCE_COMPONENT_PRIOR_LOGIT:--2.0}" \
   --set loss_weights.dep=0 --set loss_weights.orc=0 --set loss_weights.assign=0 \

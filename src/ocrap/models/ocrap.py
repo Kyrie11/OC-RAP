@@ -241,6 +241,9 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_component_heads: bool = False,
         direct_recovery_evidence_component_count: int = 3,
         direct_recovery_evidence_component_scale: float = 6.0,
+        direct_recovery_evidence_benefit_residual_scale: float = 1.0,
+        direct_recovery_evidence_unbounded_benefit_factor: bool = False,
+        direct_recovery_evidence_unbounded_harm_factors: bool = False,
         direct_recovery_evidence_component_reliability: str | tuple[float, ...] = "",
         direct_recovery_evidence_concord: bool = False,
         direct_recovery_evidence_consensus_disagreement_penalty: float = 0.15,
@@ -255,6 +258,7 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_frontier_cap_temperature: float = 0.10,
         direct_recovery_evidence_benefit_margin_temperature: float = 0.025,
         direct_recovery_evidence_joint_reserve_temperature: float = 0.025,
+        direct_recovery_evidence_reserve_factor_alignment: bool = False,
         direct_recovery_evidence_frontier: bool = False,
         direct_recovery_evidence_component_prior_logit: float = -2.0,
     ):
@@ -349,6 +353,19 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_evidence_component_scale = float(
             max(0.0, direct_recovery_evidence_component_scale)
         )
+        self.direct_recovery_evidence_benefit_residual_scale = float(
+            max(0.0, direct_recovery_evidence_benefit_residual_scale)
+        )
+        # v48.39 DRFR: benefit and harm are signed physical regression
+        # coordinates. Keep the legacy bounded parameterisation as the default
+        # so older checkpoints retain their inference semantics; v48.39 opts in
+        # independently for benefit and harm to support a clean 2x2 ablation.
+        self.direct_recovery_evidence_unbounded_benefit_factor = bool(
+            direct_recovery_evidence_unbounded_benefit_factor
+        )
+        self.direct_recovery_evidence_unbounded_harm_factors = bool(
+            direct_recovery_evidence_unbounded_harm_factors
+        )
         raw_component_reliability = direct_recovery_evidence_component_reliability
         if isinstance(raw_component_reliability, str):
             reliability_values = [
@@ -419,6 +436,9 @@ class OCRAPModel(nn.Module):
         )
         self.direct_recovery_evidence_joint_reserve_temperature = float(
             max(1.0e-6, direct_recovery_evidence_joint_reserve_temperature)
+        )
+        self.direct_recovery_evidence_reserve_factor_alignment = bool(
+            direct_recovery_evidence_reserve_factor_alignment
         )
         self.direct_recovery_evidence_frontier = bool(direct_recovery_evidence_frontier)
         self.direct_recovery_evidence_component_prior_logit = float(
@@ -1494,9 +1514,21 @@ class OCRAPModel(nn.Module):
                     if self.direct_evidence_concord_admission_calibrator is not None
                     else None
                 )
-                benefit_residual = (
-                    torch.tanh(benefit_raw) * self.direct_recovery_evidence_calibrator_scale
-                )
+                if self.direct_recovery_evidence_unbounded_benefit_factor:
+                    # v48.39 DRFR.  v48.38 development rows expose a hard
+                    # dynamic-range mismatch: safe-positive benefit headroom is
+                    # often O(0.4) while the legacy bounded residual can change
+                    # the physical margin by at most tau_b*0.75=0.0375.  The
+                    # final layer is zero-initialised, so a linear residual keeps
+                    # the exact source identity at initialisation while allowing
+                    # continuous signed-margin regression to represent the data.
+                    benefit_residual = (
+                        benefit_raw * self.direct_recovery_evidence_benefit_residual_scale
+                    )
+                else:
+                    benefit_residual = (
+                        torch.tanh(benefit_raw) * self.direct_recovery_evidence_calibrator_scale
+                    )
                 # Consensus transfer replaces v48.20's exact min envelope.  The
                 # exact min let one mismatched frozen expert destroy otherwise
                 # useful Near benefit evidence.  Mean consensus preserves shared
@@ -1515,10 +1547,25 @@ class OCRAPModel(nn.Module):
                     # never represent p(harm)>0.5 after a veto tolerance was
                     # exceeded.  The wider bounded range retains stable logits
                     # while allowing strong harmful evidence.
-                    component_residual = (
-                        torch.tanh(harm_raw[:, : self.direct_recovery_evidence_component_count])
-                        * self.direct_recovery_evidence_component_scale
-                    )
+                    raw_component_residual = harm_raw[
+                        :, : self.direct_recovery_evidence_component_count
+                    ]
+                    if self.direct_recovery_evidence_unbounded_harm_factors:
+                        # v48.39 DRFR.  With prior=-2, scale=6 and tanh, the
+                        # largest representable component margin at tau_h=.025
+                        # is only 0.10, yet v48.38 teacher veto margins reach
+                        # roughly 0.95.  A zero-initialised unbounded residual
+                        # preserves the semantic prior at step zero and removes
+                        # this representational ceiling without a regime branch.
+                        component_residual = (
+                            raw_component_residual
+                            * self.direct_recovery_evidence_component_scale
+                        )
+                    else:
+                        component_residual = (
+                            torch.tanh(raw_component_residual)
+                            * self.direct_recovery_evidence_component_scale
+                        )
                     # v48.23 FRONTIER: a zero network output must mean the
                     # nominal-relative component is inside the configured safety
                     # deadband, not p(harm)=0.5.  With tolerance=0.05 and
@@ -1860,19 +1907,33 @@ class OCRAPModel(nn.Module):
                     # learned sparse classifier in this mode. It is the exact
                     # piecewise-linear physical AND of benefit headroom and worst-component safety
                     # headroom, shared continuously across all audit strata.
-                    relative_benefit = self._candidate_minus_nominal(
-                        unified_benefit_logit, group_index, is_nominal
-                    )
-                    relative_components = self._candidate_minus_nominal(
-                        effective_component_harm_logits, group_index, is_nominal
-                    )
+                    if self.direct_recovery_evidence_reserve_factor_alignment:
+                        # v48.39 DRFR: use exactly the signed factor coordinates
+                        # seen by factor supervision.  The externally published
+                        # nominal evidence is pinned to logit zero before the
+                        # loss forms candidate-minus-nominal deltas, so the loss
+                        # trains the recovery-candidate logits themselves.  The
+                        # v48.38 reserve instead subtracted the *pre-pin* nominal
+                        # here, cancelling the component prior (-2) and shifting
+                        # every safety headroom by about one tolerance (0.05).
+                        # Keep old behaviour behind the flag for checkpoint
+                        # compatibility; all v48.39 arms require this alignment.
+                        reserve_benefit_logit = unified_benefit_logit
+                        reserve_component_logits = effective_component_harm_logits
+                    else:
+                        reserve_benefit_logit = self._candidate_minus_nominal(
+                            unified_benefit_logit, group_index, is_nominal
+                        )
+                        reserve_component_logits = self._candidate_minus_nominal(
+                            effective_component_harm_logits, group_index, is_nominal
+                        )
                     predicted_benefit_margin = (
                         self.direct_recovery_evidence_benefit_margin_temperature
-                        * relative_benefit
+                        * reserve_benefit_logit
                     )
                     predicted_component_margins = (
                         self.direct_recovery_evidence_slack_temperature
-                        * relative_components
+                        * reserve_component_logits
                     )
                     # Only globally supported learned coordinates may define
                     # the learned reserve.  Reliability-zero coordinates are

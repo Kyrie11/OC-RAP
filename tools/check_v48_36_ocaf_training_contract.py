@@ -130,6 +130,10 @@ def main() -> int:
     ap.add_argument("--expect-component-underestimation", type=float, default=0.0)
     ap.add_argument("--expect-safe-positive-component-overestimation", type=float, default=0.0)
     ap.add_argument("--expect-joint-reserve-regression", type=float, default=0.0)
+    ap.add_argument("--expect-benefit-residual-scale", type=float, default=None)
+    ap.add_argument("--expect-unbounded-benefit-factor", choices=("true", "false", "any"), default="any")
+    ap.add_argument("--expect-unbounded-harm-factors", choices=("true", "false", "any"), default="any")
+    ap.add_argument("--expect-reserve-factor-alignment", choices=("true", "false", "any"), default="any")
     ap.add_argument("--expect-algorithm-variant", default="")
     ap.add_argument("--expect-prior-coupled", choices=("true", "false"), default="true")
     ap.add_argument("--expect-adaptive-margin", choices=("true", "false"), default="false")
@@ -177,6 +181,9 @@ def main() -> int:
     expect_eligible = args.expect_eligible_policy == "true"
     expect_boundary = args.expect_boundary == "true"
     expected_topk = int(args.expect_proposal_top_k)
+    expected_unbounded_benefit = None if args.expect_unbounded_benefit_factor == "any" else args.expect_unbounded_benefit_factor == "true"
+    expected_unbounded_harm = None if args.expect_unbounded_harm_factors == "any" else args.expect_unbounded_harm_factors == "true"
+    expected_reserve_alignment = None if args.expect_reserve_factor_alignment == "any" else args.expect_reserve_factor_alignment == "true"
     identity_trainable = _trainable(identity_arch)
     final_trainable = _trainable(final_arch)
     expected_ocaf = args.expect_context_source == "physical_interaction"
@@ -264,6 +271,22 @@ def main() -> int:
         "factor_joint_reserve_regression_contract": math.isclose(
             float(factor_arch.get("joint_reserve_regression_weight", 0.0)),
             float(args.expect_joint_reserve_regression), rel_tol=0.0, abs_tol=1.0e-9,
+        ),
+        "factor_benefit_residual_scale_contract": (
+            args.expect_benefit_residual_scale is None
+            or math.isclose(float(factor_arch.get("benefit_residual_scale", -1.0)), float(args.expect_benefit_residual_scale), rel_tol=0.0, abs_tol=1.0e-9)
+        ),
+        "unbounded_benefit_factor_contract": (
+            expected_unbounded_benefit is None
+            or all(bool(a.get("unbounded_benefit_factor", False)) is expected_unbounded_benefit for a in (factor_arch, identity_arch, final_arch))
+        ),
+        "unbounded_harm_factors_contract": (
+            expected_unbounded_harm is None
+            or all(bool(a.get("unbounded_harm_factors", False)) is expected_unbounded_harm for a in (factor_arch, identity_arch, final_arch))
+        ),
+        "reserve_factor_alignment_contract": (
+            expected_reserve_alignment is None
+            or all(bool(a.get("reserve_factor_alignment", False)) is expected_reserve_alignment for a in (factor_arch, identity_arch, final_arch))
         ),
         "reserve_only_architecture_contract": (
             all(
@@ -386,6 +409,10 @@ def main() -> int:
             "component_underestimation_weight": float(args.expect_component_underestimation),
             "safe_positive_component_overestimation_weight": float(args.expect_safe_positive_component_overestimation),
             "joint_reserve_regression_weight": float(args.expect_joint_reserve_regression),
+            "benefit_residual_scale": args.expect_benefit_residual_scale,
+            "unbounded_benefit_factor": expected_unbounded_benefit,
+            "unbounded_harm_factors": expected_unbounded_harm,
+            "reserve_factor_alignment": expected_reserve_alignment,
             "algorithm_variant": expected_algorithm_variant,
             "identity_trainable_prefixes": sorted(expected_identity_prefixes),
             "prior_coupled": expect_coupled,

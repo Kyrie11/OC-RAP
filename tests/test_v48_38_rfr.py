@@ -255,6 +255,9 @@ def test_materializer_records_zero_training_instead_of_copying_factor_history(tm
     assert summary["checkpoint_materialization"] in {"hardlink", "copy"}
     assert {p.name for p in (dest / "model_v48_trac_sr").iterdir()} == {"best.pt", "train_summary.json"}
     assert summary["initial_checkpoint"]["direct_factor_supervised_risk"] == 1.25
+    assert summary["metric_source_train_summary"] == str(model / "train_summary.json")
+    assert len(summary["metric_source_train_summary_sha256"]) == 64
+    assert summary["metric_source_checkpoint_sha256"] == summary["source_factor_checkpoint_sha256"]
     assert correction["trainable_prefixes"] == []
     assert correction["parameter_update_performed"] is False
 

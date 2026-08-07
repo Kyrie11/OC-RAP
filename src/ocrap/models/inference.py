@@ -201,6 +201,18 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         direct_recovery_evidence_component_heads=bool(ckpt.get("direct_recovery_evidence_component_heads", model_cfg.get("direct_recovery_evidence_component_heads", False))),
         direct_recovery_evidence_component_count=int(ckpt.get("direct_recovery_evidence_component_count", model_cfg.get("direct_recovery_evidence_component_count", 3))),
         direct_recovery_evidence_component_scale=float(ckpt.get("direct_recovery_evidence_component_scale", model_cfg.get("direct_recovery_evidence_component_scale", 6.0))),
+        direct_recovery_evidence_benefit_residual_scale=float(ckpt.get(
+            "direct_recovery_evidence_benefit_residual_scale",
+            model_cfg.get("direct_recovery_evidence_benefit_residual_scale", 1.0),
+        )),
+        direct_recovery_evidence_unbounded_benefit_factor=bool(ckpt.get(
+            "direct_recovery_evidence_unbounded_benefit_factor",
+            model_cfg.get("direct_recovery_evidence_unbounded_benefit_factor", False),
+        )),
+        direct_recovery_evidence_unbounded_harm_factors=bool(ckpt.get(
+            "direct_recovery_evidence_unbounded_harm_factors",
+            model_cfg.get("direct_recovery_evidence_unbounded_harm_factors", False),
+        )),
         direct_recovery_evidence_component_reliability=str(ckpt.get(
             "direct_recovery_evidence_component_reliability",
             model_cfg.get("direct_recovery_evidence_component_reliability", ""),
@@ -253,6 +265,10 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         direct_recovery_evidence_joint_reserve_temperature=float(ckpt.get(
             "direct_recovery_evidence_joint_reserve_temperature",
             model_cfg.get("direct_recovery_evidence_joint_reserve_temperature", 0.025),
+        )),
+        direct_recovery_evidence_reserve_factor_alignment=bool(ckpt.get(
+            "direct_recovery_evidence_reserve_factor_alignment",
+            model_cfg.get("direct_recovery_evidence_reserve_factor_alignment", False),
         )),
         direct_recovery_evidence_frontier=bool(ckpt.get(
             "direct_recovery_evidence_frontier",
@@ -320,6 +336,15 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_evidence_component_heads"] = bool(ckpt.get("direct_recovery_evidence_component_heads", model_cfg.get("direct_recovery_evidence_component_heads", False)))
     cfg["model"]["direct_recovery_evidence_component_count"] = int(ckpt.get("direct_recovery_evidence_component_count", model_cfg.get("direct_recovery_evidence_component_count", 3)))
     cfg["model"]["direct_recovery_evidence_component_scale"] = float(ckpt.get("direct_recovery_evidence_component_scale", model_cfg.get("direct_recovery_evidence_component_scale", 6.0)))
+    cfg["model"]["direct_recovery_evidence_benefit_residual_scale"] = float(
+        model.direct_recovery_evidence_benefit_residual_scale
+    )
+    cfg["model"]["direct_recovery_evidence_unbounded_benefit_factor"] = bool(
+        model.direct_recovery_evidence_unbounded_benefit_factor
+    )
+    cfg["model"]["direct_recovery_evidence_unbounded_harm_factors"] = bool(
+        model.direct_recovery_evidence_unbounded_harm_factors
+    )
     cfg["model"]["direct_recovery_evidence_concord"] = bool(ckpt.get("direct_recovery_evidence_concord", model_cfg.get("direct_recovery_evidence_concord", False)))
     cfg["model"]["direct_recovery_evidence_consensus_disagreement_penalty"] = float(ckpt.get(
         "direct_recovery_evidence_consensus_disagreement_penalty",
@@ -360,6 +385,9 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     )
     cfg["model"]["direct_recovery_evidence_joint_reserve_temperature"] = float(
         model.direct_recovery_evidence_joint_reserve_temperature
+    )
+    cfg["model"]["direct_recovery_evidence_reserve_factor_alignment"] = bool(
+        model.direct_recovery_evidence_reserve_factor_alignment
     )
     cfg["model"]["direct_recovery_evidence_frontier"] = bool(
         model.direct_recovery_evidence_frontier

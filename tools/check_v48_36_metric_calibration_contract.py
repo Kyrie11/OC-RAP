@@ -26,6 +26,99 @@ def _same(a: Any, b: Any, tol: float = 1e-12) -> bool:
         return False
 
 
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _load_metric_row(train_summary_path: Path) -> tuple[dict[str, Any], dict[str, Any], int, dict[str, Any]]:
+    """Resolve the validation row without fabricating a training epoch.
+
+    A normal trained stage is self-contained.  v48.38+ reserve-only stages are
+    deliberately materialized with zero optimizer steps and an empty history;
+    in that exact case the audited metric source is the byte-pinned factor-stage
+    train summary.  Anything else fails closed.
+    """
+    summary = json.loads(train_summary_path.read_text(encoding="utf-8"))
+    best_epoch = int(summary["best_epoch"])
+    best = next(
+        (x for x in summary.get("history", []) if int(x.get("epoch", -1)) == best_epoch),
+        None,
+    )
+    if best is not None:
+        return summary, best, best_epoch, {
+            "kind": "stage_training_history",
+            "stage_train_summary": str(train_summary_path),
+            "stage_train_summary_sha256": _sha256(train_summary_path),
+            "materialized_without_training": False,
+        }
+
+    no_training_contract = (
+        summary.get("materialized_without_training") is True
+        and summary.get("parameter_update_performed") is False
+        and int(summary.get("epochs_completed", -1)) == 0
+        and int(summary.get("total_train_steps", -1)) == 0
+        and summary.get("history") == []
+        and summary.get("factor_checkpoint_reused_without_parameter_update") is True
+    )
+    if not no_training_contract:
+        raise SystemExit(f"best epoch {best_epoch} not found")
+
+    source_raw = str(summary.get("metric_source_train_summary") or "").strip()
+    source_checkpoint_raw = str(summary.get("source_factor_checkpoint") or "").strip()
+    expected_summary_sha = str(summary.get("metric_source_train_summary_sha256") or "").strip()
+    expected_metric_ckpt_sha = str(summary.get("metric_source_checkpoint_sha256") or "").strip()
+    source_factor_ckpt_sha = str(summary.get("source_factor_checkpoint_sha256") or "").strip()
+    if not source_raw or not source_checkpoint_raw or not expected_summary_sha or not expected_metric_ckpt_sha:
+        raise SystemExit("reserve-only metric source provenance is incomplete")
+    if expected_metric_ckpt_sha != source_factor_ckpt_sha:
+        raise SystemExit("reserve-only metric source checkpoint hash mismatch")
+
+    source_path = Path(source_raw)
+    if not source_path.is_absolute():
+        source_path = (train_summary_path.parent / source_path).resolve()
+    if not source_path.is_file():
+        raise SystemExit(f"metric source train summary missing: {source_path}")
+    source_checkpoint = Path(source_checkpoint_raw)
+    if not source_checkpoint.is_absolute():
+        source_checkpoint = (train_summary_path.parent / source_checkpoint).resolve()
+    if not source_checkpoint.is_file():
+        raise SystemExit(f"metric source checkpoint missing: {source_checkpoint}")
+    if source_path.parent != source_checkpoint.parent:
+        raise SystemExit("metric source summary/checkpoint are not from the same model directory")
+    if _sha256(source_checkpoint) != source_factor_ckpt_sha:
+        raise SystemExit("source factor checkpoint SHA256 mismatch")
+    actual_summary_sha = _sha256(source_path)
+    if actual_summary_sha != expected_summary_sha:
+        raise SystemExit("metric source train summary SHA256 mismatch")
+
+    source = json.loads(source_path.read_text(encoding="utf-8"))
+    source_best_epoch = int(source["best_epoch"])
+    declared_source_best = summary.get("source_factor_best_epoch")
+    if declared_source_best is not None and int(declared_source_best) != source_best_epoch:
+        raise SystemExit("materialized/source best epoch mismatch")
+    source_best = next(
+        (x for x in source.get("history", []) if int(x.get("epoch", -1)) == source_best_epoch),
+        None,
+    )
+    if source_best is None:
+        raise SystemExit(f"source best epoch {source_best_epoch} not found")
+    return source, source_best, source_best_epoch, {
+        "kind": "factor_training_history_for_zero_update_stage",
+        "stage_train_summary": str(train_summary_path),
+        "stage_train_summary_sha256": _sha256(train_summary_path),
+        "metric_source_train_summary": str(source_path),
+        "metric_source_train_summary_sha256": actual_summary_sha,
+        "metric_source_checkpoint_sha256": expected_metric_ckpt_sha,
+        "materialized_without_training": True,
+        "stage_epochs_completed": 0,
+        "stage_optimizer_steps": 0,
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--train-summary", type=Path, required=True)
@@ -37,11 +130,7 @@ def main() -> int:
     ap.add_argument("--output", type=Path, required=True)
     args = ap.parse_args()
 
-    summary = json.loads(args.train_summary.read_text(encoding="utf-8"))
-    best_epoch = int(summary["best_epoch"])
-    best = next((x for x in summary.get("history", []) if int(x.get("epoch", -1)) == best_epoch), None)
-    if best is None:
-        raise SystemExit(f"best epoch {best_epoch} not found")
+    summary, best, best_epoch, metric_provenance = _load_metric_row(args.train_summary)
     val = best.get("val") or {}
     dev = {
         "near": json.loads(args.near_dev.read_text(encoding="utf-8")),
@@ -124,6 +213,7 @@ def main() -> int:
         "valid": not failures,
         "best_epoch": best_epoch,
         "best_metric": summary.get("best_metric"),
+        "metric_summary_provenance": metric_provenance,
         "gate_spec_sha256": hashlib.sha256(args.gate_spec.read_bytes()).hexdigest(),
         "shared_rule_sha256": hashlib.sha256(args.shared_rule.read_bytes()).hexdigest(),
         "single_deployment_rule": True,

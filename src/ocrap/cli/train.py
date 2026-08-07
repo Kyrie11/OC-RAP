@@ -2660,6 +2660,15 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_evidence_component_heads=bool(model_cfg.get("direct_recovery_evidence_component_heads", False)),
         direct_recovery_evidence_component_count=int(model_cfg.get("direct_recovery_evidence_component_count", 3)),
         direct_recovery_evidence_component_scale=float(model_cfg.get("direct_recovery_evidence_component_scale", 6.0)),
+        direct_recovery_evidence_benefit_residual_scale=float(
+            model_cfg.get("direct_recovery_evidence_benefit_residual_scale", 1.0)
+        ),
+        direct_recovery_evidence_unbounded_benefit_factor=bool(
+            model_cfg.get("direct_recovery_evidence_unbounded_benefit_factor", False)
+        ),
+        direct_recovery_evidence_unbounded_harm_factors=bool(
+            model_cfg.get("direct_recovery_evidence_unbounded_harm_factors", False)
+        ),
         direct_recovery_evidence_component_reliability=str(
             model_cfg.get("direct_recovery_evidence_component_reliability", "")
         ),
@@ -2699,6 +2708,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         ),
         direct_recovery_evidence_joint_reserve_temperature=float(
             model_cfg.get("direct_recovery_evidence_joint_reserve_temperature", 0.025)
+        ),
+        direct_recovery_evidence_reserve_factor_alignment=bool(
+            model_cfg.get("direct_recovery_evidence_reserve_factor_alignment", False)
         ),
         # v48.23/v48.24 set these fields in the run scripts, but the CLI model
         # constructor previously dropped them. That silently restored the legacy
@@ -3020,6 +3032,15 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "direct_recovery_evidence_component_heads": bool(model_cfg.get("direct_recovery_evidence_component_heads", False)),
             "direct_recovery_evidence_component_count": int(model_cfg.get("direct_recovery_evidence_component_count", 3)),
             "direct_recovery_evidence_component_scale": float(model_cfg.get("direct_recovery_evidence_component_scale", 6.0)),
+            "direct_recovery_evidence_benefit_residual_scale": float(
+                model_cfg.get("direct_recovery_evidence_benefit_residual_scale", 1.0)
+            ),
+            "direct_recovery_evidence_unbounded_benefit_factor": bool(
+                model_cfg.get("direct_recovery_evidence_unbounded_benefit_factor", False)
+            ),
+            "direct_recovery_evidence_unbounded_harm_factors": bool(
+                model_cfg.get("direct_recovery_evidence_unbounded_harm_factors", False)
+            ),
             "direct_recovery_evidence_component_reliability": str(
                 model_cfg.get("direct_recovery_evidence_component_reliability", "")
             ),
@@ -3059,6 +3080,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             ),
             "direct_recovery_evidence_joint_reserve_temperature": float(
                 model_cfg.get("direct_recovery_evidence_joint_reserve_temperature", 0.025)
+            ),
+            "direct_recovery_evidence_reserve_factor_alignment": bool(
+                model_cfg.get("direct_recovery_evidence_reserve_factor_alignment", False)
             ),
             "direct_recovery_evidence_frontier": bool(
                 model_cfg.get("direct_recovery_evidence_frontier", False)

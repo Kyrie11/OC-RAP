@@ -309,6 +309,9 @@ model:
   direct_recovery_evidence_unified_experts: false
   direct_recovery_evidence_component_heads: false
   direct_recovery_evidence_component_scale: 2.0
+  direct_recovery_evidence_benefit_residual_scale: 1.0
+  direct_recovery_evidence_unbounded_benefit_factor: false
+  direct_recovery_evidence_unbounded_harm_factors: false
   # v48.21/v48.22 unified decoupled evidence heads. All remain disabled by
   # default so legacy checkpoints and scripts preserve their exact behaviour.
   direct_recovery_evidence_concord: false
@@ -322,6 +325,7 @@ model:
   # projection. Disabled unless admission_prior_mode=safety_slack.
   direct_recovery_evidence_slack_temperature: 0.025
   direct_recovery_evidence_slack_penalty: 1.0
+  direct_recovery_evidence_reserve_factor_alignment: false
   # v48.23 FRONTIER: semantic non-harm prior and deployment-aligned objectives.
   direct_recovery_evidence_frontier: false
   direct_recovery_evidence_component_prior_logit: -2.0

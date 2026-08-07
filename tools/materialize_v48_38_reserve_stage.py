@@ -104,7 +104,9 @@ def main() -> int:
         raise SystemExit("checkpoint bytes changed during RFR materialization")
 
     factor_complete = _load(factor / "TRAINING_COMPLETE.json")
-    factor_summary = _load(src_model / "train_summary.json")
+    factor_summary_path = src_model / "train_summary.json"
+    factor_summary = _load(factor_summary_path)
+    factor_summary_sha = _sha256(factor_summary_path)
     factor_correction = _load(factor / "EVIDENCE_CORRECTION_COMPLETE.json")
     best_metric = str(factor_summary.get("best_metric") or factor_complete.get("best_metric") or "direct_factor_supervised_risk")
     best_value = factor_summary.get("best_metric_value")
@@ -136,6 +138,9 @@ def main() -> int:
         "checkpoint_materialization": checkpoint_materialization,
         "source_factor_checkpoint": str(factor_checkpoint),
         "source_factor_checkpoint_sha256": factor_sha,
+        "metric_source_train_summary": str(factor_summary_path),
+        "metric_source_train_summary_sha256": factor_summary_sha,
+        "metric_source_checkpoint_sha256": factor_sha,
         "source_factor_best_epoch": factor_summary.get("best_epoch"),
         "source_factor_epochs_completed": factor_summary.get("epochs_completed"),
         "test_roots_read": False,
@@ -155,6 +160,8 @@ def main() -> int:
         "parameter_update_performed": False,
         "source_factor_checkpoint": str(factor_checkpoint),
         "source_factor_checkpoint_sha256": factor_sha,
+        "metric_source_train_summary": str(factor_summary_path),
+        "metric_source_train_summary_sha256": factor_summary_sha,
         "checkpoint_materialization": checkpoint_materialization,
         "test_roots_read": False,
     }
@@ -195,6 +202,8 @@ def main() -> int:
         "parameter_update_performed": False,
         "source_factor_checkpoint": str(factor_checkpoint),
         "source_factor_checkpoint_sha256": factor_sha,
+        "metric_source_train_summary": str(factor_summary_path),
+        "metric_source_train_summary_sha256": factor_summary_sha,
         "test_roots_read": False,
     })
     _atomic_json(dest / "EVIDENCE_CORRECTION_COMPLETE.json", correction)
@@ -206,6 +215,8 @@ def main() -> int:
         "source_factor_stage": str(factor),
         "source_factor_checkpoint": str(factor_checkpoint),
         "source_factor_checkpoint_sha256": factor_sha,
+        "metric_source_train_summary": str(factor_summary_path),
+        "metric_source_train_summary_sha256": factor_summary_sha,
         "destination": str(dest),
         "destination_checkpoint": str(dest_checkpoint),
         "destination_checkpoint_sha256": dest_sha,

@@ -38,6 +38,10 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--expect-component-prior-logit", type=float, default=-2.0)
     ap.add_argument("--expect-component-count", type=int, default=5)
     ap.add_argument("--expect-component-scale", type=float, default=6.0)
+    ap.add_argument("--expect-benefit-residual-scale", type=float, default=None)
+    ap.add_argument("--expect-unbounded-benefit-factor", choices=("true", "false", "any"), default="any")
+    ap.add_argument("--expect-unbounded-harm-factors", choices=("true", "false", "any"), default="any")
+    ap.add_argument("--expect-reserve-factor-alignment", choices=("true", "false", "any"), default="any")
     ap.add_argument("--expect-admission-prior-detach", choices=("true", "false", "any"), default="any")
     ap.add_argument("--expect-admission-prior-mode", choices=PRIOR_MODES, default="frontier_capped_slack")
     ap.add_argument("--expect-slack-temperature", type=float, default=0.025)
@@ -78,6 +82,10 @@ def main() -> int:
         "direct_recovery_evidence_component_prior_logit": float(model.direct_recovery_evidence_component_prior_logit),
         "direct_recovery_evidence_component_count": int(model.direct_recovery_evidence_component_count),
         "direct_recovery_evidence_component_scale": float(model.direct_recovery_evidence_component_scale),
+        "direct_recovery_evidence_benefit_residual_scale": float(model.direct_recovery_evidence_benefit_residual_scale),
+        "direct_recovery_evidence_unbounded_benefit_factor": bool(model.direct_recovery_evidence_unbounded_benefit_factor),
+        "direct_recovery_evidence_unbounded_harm_factors": bool(model.direct_recovery_evidence_unbounded_harm_factors),
+        "direct_recovery_evidence_reserve_factor_alignment": bool(model.direct_recovery_evidence_reserve_factor_alignment),
         "direct_recovery_evidence_slack_temperature": float(model.direct_recovery_evidence_slack_temperature),
         "direct_recovery_evidence_slack_penalty": float(model.direct_recovery_evidence_slack_penalty),
         "direct_recovery_evidence_component_reliability": list(actual_reliability),
@@ -104,6 +112,16 @@ def main() -> int:
         "direct_recovery_evidence_component_prior_logit": float(args.expect_component_prior_logit),
         "direct_recovery_evidence_component_count": int(args.expect_component_count),
         "direct_recovery_evidence_component_scale": float(args.expect_component_scale),
+        "direct_recovery_evidence_benefit_residual_scale": args.expect_benefit_residual_scale,
+        "direct_recovery_evidence_unbounded_benefit_factor": (
+            None if args.expect_unbounded_benefit_factor == "any" else args.expect_unbounded_benefit_factor == "true"
+        ),
+        "direct_recovery_evidence_unbounded_harm_factors": (
+            None if args.expect_unbounded_harm_factors == "any" else args.expect_unbounded_harm_factors == "true"
+        ),
+        "direct_recovery_evidence_reserve_factor_alignment": (
+            None if args.expect_reserve_factor_alignment == "any" else args.expect_reserve_factor_alignment == "true"
+        ),
         "direct_recovery_evidence_slack_temperature": float(args.expect_slack_temperature),
         "direct_recovery_evidence_slack_penalty": float(args.expect_slack_penalty),
         "direct_recovery_evidence_component_reliability": list(expected_reliability),
