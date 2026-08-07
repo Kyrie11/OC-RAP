@@ -15,6 +15,7 @@ COUPLE_ADMISSION_PRIOR="${V4836_COUPLE_ADMISSION_PRIOR:-1}"
 ADAPTIVE_IDENTITY_MARGIN="${V4836_ADAPTIVE_IDENTITY_MARGIN:-0}"
 ENABLE_FINAL_CALIBRATION="${V4836_ENABLE_FINAL_CALIBRATION:-0}"
 HAF_FACTOR_PRESERVE="${V4837_FACTOR_PRESERVING_IDENTITY:-0}"
+RFR_RESERVE_ONLY="${V4838_RFR_RESERVE_ONLY:-0}"
 FACTOR_CACHE_RUN="${V4836_FACTOR_CACHE_RUN:-}"
 PROPOSAL_TOP_K="${PROPOSAL_TOP_K:-5}"
 EVIDENCE_CONTEXT_SOURCE="${EVIDENCE_CALIBRATOR_CONTEXT_SOURCE:-physical_interaction}"
@@ -86,9 +87,14 @@ factor_cache_contract_args=(
   --setting "benefit_listwise_weight=${FACTOR_BENEFIT_LISTWISE_WEIGHT:-1.00}"
   --setting "component_tail_weight=${FACTOR_COMPONENT_TAIL_WEIGHT:-0.75}"
   --setting "component_margin_regression_weight=${FACTOR_COMPONENT_MARGIN_REGRESSION_WEIGHT:-1.00}"
+  --setting "component_underestimation_weight=${FACTOR_COMPONENT_UNDERESTIMATION_WEIGHT:-0.0}"
+  --setting "safe_positive_component_overestimation_weight=${FACTOR_SAFE_POSITIVE_COMPONENT_OVERESTIMATION_WEIGHT:-0.0}"
   --setting "benefit_margin_regression_weight=${FACTOR_BENEFIT_MARGIN_REGRESSION_WEIGHT:-0.0}"
   --setting "benefit_margin_temperature=${FACTOR_BENEFIT_MARGIN_TEMPERATURE:-0.025}"
-  --setting "algorithm_variant=${OCRAP_ALGORITHM_VERSION:-v48.36-OCAF}"
+  --setting "joint_reserve_regression_weight=${FACTOR_JOINT_RESERVE_REGRESSION_WEIGHT:-0.0}"
+  --setting "joint_reserve_boundary_weight=${FACTOR_JOINT_RESERVE_BOUNDARY_WEIGHT:-0.0}"
+  --setting "joint_reserve_boundary_width=${FACTOR_JOINT_RESERVE_BOUNDARY_WIDTH:-0.05}"
+  --setting "factor_algorithm_family=${V4838_FACTOR_ALGORITHM_FAMILY:-${OCRAP_ALGORITHM_VERSION:-v48.36-OCAF}}"
   --setting "positive_group_boost=${FACTOR_POSITIVE_GROUP_BOOST:-3.0}"
   --setting "positive_macro_balance_power=${FACTOR_POSITIVE_MACRO_BALANCE_POWER:-0.50}"
   --setting "scene_balance_power=${FACTOR_SCENE_BALANCE_POWER:-0.50}"
@@ -118,12 +124,19 @@ EVIDENCE_INTERACTION_HIDDEN="${EVIDENCE_INTERACTION_HIDDEN:-64}" EVIDENCE_INTERA
   EVIDENCE_ADMISSION_HEAD=false \
   EVIDENCE_COMPONENT_COUNT="${EVIDENCE_COMPONENT_COUNT:-5}" \
   EVIDENCE_ADMISSION_PRIOR_MODE="${EVIDENCE_ADMISSION_PRIOR_MODE:-frontier_capped_slack}" EVIDENCE_ADMISSION_PRIOR_DETACH=true \
+  EVIDENCE_BENEFIT_MARGIN_TEMPERATURE="${FACTOR_BENEFIT_MARGIN_TEMPERATURE:-0.025}" \
+  EVIDENCE_JOINT_RESERVE_TEMPERATURE="${EVIDENCE_JOINT_RESERVE_TEMPERATURE:-0.025}" \
   ORDINAL_EVIDENCE_SAFE_BENEFIT_TARGET=false \
   ORDINAL_EVIDENCE_BENEFIT_LISTWISE_WEIGHT="${FACTOR_BENEFIT_LISTWISE_WEIGHT:-1.00}" \
   ORDINAL_EVIDENCE_COMPONENT_TAIL_WEIGHT="${FACTOR_COMPONENT_TAIL_WEIGHT:-0.75}" \
   ORDINAL_EVIDENCE_COMPONENT_MARGIN_REGRESSION_WEIGHT="${FACTOR_COMPONENT_MARGIN_REGRESSION_WEIGHT:-1.00}" \
+  ORDINAL_EVIDENCE_COMPONENT_UNDERESTIMATION_WEIGHT="${FACTOR_COMPONENT_UNDERESTIMATION_WEIGHT:-0.0}" \
+  ORDINAL_EVIDENCE_SAFE_POSITIVE_COMPONENT_OVERESTIMATION_WEIGHT="${FACTOR_SAFE_POSITIVE_COMPONENT_OVERESTIMATION_WEIGHT:-0.0}" \
   ORDINAL_EVIDENCE_BENEFIT_MARGIN_REGRESSION_WEIGHT="${FACTOR_BENEFIT_MARGIN_REGRESSION_WEIGHT:-0.0}" \
   ORDINAL_EVIDENCE_BENEFIT_MARGIN_TEMPERATURE="${FACTOR_BENEFIT_MARGIN_TEMPERATURE:-0.025}" \
+  ORDINAL_EVIDENCE_JOINT_RESERVE_REGRESSION_WEIGHT="${FACTOR_JOINT_RESERVE_REGRESSION_WEIGHT:-0.0}" \
+  ORDINAL_EVIDENCE_JOINT_RESERVE_BOUNDARY_WEIGHT="${FACTOR_JOINT_RESERVE_BOUNDARY_WEIGHT:-0.0}" \
+  ORDINAL_EVIDENCE_JOINT_RESERVE_BOUNDARY_WIDTH="${FACTOR_JOINT_RESERVE_BOUNDARY_WIDTH:-0.05}" \
   ORDINAL_EVIDENCE_SAFE_UTILITY_REGRESSION_WEIGHT=0 \
   ORDINAL_EVIDENCE_SAFE_UTILITY_LISTWISE_WEIGHT=0 \
   ORDINAL_EVIDENCE_ELIGIBLE_POLICY_WEIGHT=0 \
@@ -149,6 +162,22 @@ FACTOR_CKPT="$FACTOR_RUN/model_v48_trac_sr/best.pt"
 [[ -f "$FACTOR_CKPT" ]] || { echo "missing factor checkpoint $FACTOR_CKPT" >&2; exit 30; }
 
 CURRENT_STAGE="identity_stage"
+if [[ "$RFR_RESERVE_ONLY" == 1 ]]; then
+  # v48.38 RFR: v48.37 C/D repeatedly selected identity epoch zero.  Do not
+  # spend compute learning a residual that degrades exact deployment metrics.
+  # Materialize a byte-identical no-learning stage so all downstream provenance
+  # and certificate machinery remains unchanged and auditable.
+  IDENTITY_TRAIN_ALL=0
+  COUPLE_ADMISSION_PRIOR=0
+  HAF_FACTOR_PRESERVE=0
+  ENABLE_FINAL_CALIBRATION=0
+  identity_prefixes=""
+  python tools/materialize_v48_38_reserve_stage.py \
+    --factor-stage "$FACTOR_RUN" --destination "$IDENTITY_RUN" --role identity \
+    --implementation-version "${OCRAP_IMPLEMENTATION_VERSION:-v48.38-RFR}"
+  IDENTITY_CKPT="$IDENTITY_RUN/model_v48_trac_sr/best.pt"
+  [[ -f "$IDENTITY_CKPT" ]] || { echo "missing reserve identity checkpoint $IDENTITY_CKPT" >&2; exit 30; }
+else
 # Stage 2: proposal-local action identity. The deployment safe-utility prior is
 # coupled to the compact benefit/component heads by default, so candidate AUC can
 # influence the exact evidence-reranked top-1 instead of stopping at detached
@@ -233,8 +262,14 @@ EVIDENCE_ADAPT_EPOCHS="${IDENTITY_EPOCHS:-24}" EVIDENCE_ADAPT_PATIENCE="${IDENTI
   bash scripts/adapt_ocrap_v48_36_ocaf_single_stage.sh
 IDENTITY_CKPT="$IDENTITY_RUN/model_v48_trac_sr/best.pt"
 [[ -f "$IDENTITY_CKPT" ]] || { echo "missing identity checkpoint $IDENTITY_CKPT" >&2; exit 30; }
+fi
 
 CURRENT_STAGE="final_calibration_stage"
+if [[ "$RFR_RESERVE_ONLY" == 1 ]]; then
+  python tools/materialize_v48_38_reserve_stage.py \
+    --factor-stage "$FACTOR_RUN" --destination "$FINAL_RUN" --role final \
+    --implementation-version "${OCRAP_IMPLEMENTATION_VERSION:-v48.38-RFR}"
+else
 # Stage 3: admission-only calibration. Epoch zero is a valid selected fallback;
 # the stage must never fail merely because optimization found no safer update.
 if [[ "$ENABLE_FINAL_CALIBRATION" == 1 ]]; then
@@ -283,9 +318,17 @@ else
   done
 fi
 
+fi
+
 FINAL_CKPT="$FINAL_RUN/model_v48_trac_sr/best.pt"
 transfer_extra=()
-[[ "$ENABLE_FINAL_CALIBRATION" == 1 ]] || transfer_extra+=(--final-stage-disabled)
+final_allowed_prefixes=direct_evidence_concord_admission_calibrator
+if [[ "$RFR_RESERVE_ONLY" == 1 ]]; then
+  transfer_extra+=(--identity-stage-skipped --final-stage-disabled)
+  final_allowed_prefixes=""
+else
+  [[ "$ENABLE_FINAL_CALIBRATION" == 1 ]] || transfer_extra+=(--final-stage-disabled)
+fi
 IMPLEMENTATION_VERSION="${OCRAP_IMPLEMENTATION_VERSION:-v48.36.4-IDEMPOTENT-TERMINAL-STATE-HOTFIX}"
 CURRENT_STAGE="stage_transfer_integrity"
 python tools/check_v48_36_stage_transfer.py \
@@ -293,7 +336,7 @@ python tools/check_v48_36_stage_transfer.py \
   --identity-architecture "$IDENTITY_RUN/STAGE_ARCHITECTURE.json" \
   --final-architecture "$FINAL_RUN/STAGE_ARCHITECTURE.json" \
   --identity-allowed-prefixes "$identity_prefixes" \
-  --final-allowed-prefixes direct_evidence_concord_admission_calibrator \
+  --final-allowed-prefixes "$final_allowed_prefixes" \
   --implementation-version "$IMPLEMENTATION_VERSION" \
   --output "$FINAL_RUN/STAGE_TRANSFER_INTEGRITY.json" "${transfer_extra[@]}"
 
@@ -305,6 +348,7 @@ python tools/finalize_v48_36_adaptation_variant.py \
   --support-reliability-enabled "$ENABLE_SUPPORT_RELIABILITY" \
   --identity-train-all "$IDENTITY_TRAIN_ALL" \
   --factor-preserving-identity "$HAF_FACTOR_PRESERVE" \
+  --reserve-only "$RFR_RESERVE_ONLY" \
   --prior-coupled "$COUPLE_ADMISSION_PRIOR" \
   --adaptive-margin "$ADAPTIVE_IDENTITY_MARGIN" \
   --final-enabled "$ENABLE_FINAL_CALIBRATION" \

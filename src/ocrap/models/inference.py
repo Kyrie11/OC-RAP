@@ -246,6 +246,14 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_evidence_frontier_cap_temperature",
             model_cfg.get("direct_recovery_evidence_frontier_cap_temperature", 0.10),
         )),
+        direct_recovery_evidence_benefit_margin_temperature=float(ckpt.get(
+            "direct_recovery_evidence_benefit_margin_temperature",
+            model_cfg.get("direct_recovery_evidence_benefit_margin_temperature", 0.025),
+        )),
+        direct_recovery_evidence_joint_reserve_temperature=float(ckpt.get(
+            "direct_recovery_evidence_joint_reserve_temperature",
+            model_cfg.get("direct_recovery_evidence_joint_reserve_temperature", 0.025),
+        )),
         direct_recovery_evidence_frontier=bool(ckpt.get(
             "direct_recovery_evidence_frontier",
             model_cfg.get("direct_recovery_evidence_frontier", False),
@@ -347,6 +355,12 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_evidence_frontier_cap_temperature"] = float(
         model.direct_recovery_evidence_frontier_cap_temperature
     )
+    cfg["model"]["direct_recovery_evidence_benefit_margin_temperature"] = float(
+        model.direct_recovery_evidence_benefit_margin_temperature
+    )
+    cfg["model"]["direct_recovery_evidence_joint_reserve_temperature"] = float(
+        model.direct_recovery_evidence_joint_reserve_temperature
+    )
     cfg["model"]["direct_recovery_evidence_frontier"] = bool(
         model.direct_recovery_evidence_frontier
     )
@@ -419,6 +433,14 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_evidence_frontier_cap_temperature",
             model_cfg.get("direct_recovery_evidence_frontier_cap_temperature", 0.10),
         )),
+        "direct_recovery_evidence_benefit_margin_temperature": float(ckpt.get(
+            "direct_recovery_evidence_benefit_margin_temperature",
+            model_cfg.get("direct_recovery_evidence_benefit_margin_temperature", 0.025),
+        )),
+        "direct_recovery_evidence_joint_reserve_temperature": float(ckpt.get(
+            "direct_recovery_evidence_joint_reserve_temperature",
+            model_cfg.get("direct_recovery_evidence_joint_reserve_temperature", 0.025),
+        )),
         "direct_recovery_evidence_frontier": bool(ckpt.get(
             "direct_recovery_evidence_frontier",
             model_cfg.get("direct_recovery_evidence_frontier", False),
@@ -444,6 +466,8 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         "direct_recovery_evidence_slack_temperature": float(model.direct_recovery_evidence_slack_temperature),
         "direct_recovery_evidence_slack_penalty": float(model.direct_recovery_evidence_slack_penalty),
         "direct_recovery_evidence_frontier_cap_temperature": float(model.direct_recovery_evidence_frontier_cap_temperature),
+        "direct_recovery_evidence_benefit_margin_temperature": float(model.direct_recovery_evidence_benefit_margin_temperature),
+        "direct_recovery_evidence_joint_reserve_temperature": float(model.direct_recovery_evidence_joint_reserve_temperature),
         "direct_recovery_evidence_frontier": bool(model.direct_recovery_evidence_frontier),
         "direct_recovery_evidence_component_prior_logit": float(model.direct_recovery_evidence_component_prior_logit),
         "direct_recovery_evidence_component_reliability": ",".join(

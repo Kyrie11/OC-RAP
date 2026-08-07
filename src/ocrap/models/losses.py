@@ -1419,8 +1419,13 @@ def direct_uncertainty_recovery_value_loss(
     ordinal_evidence_factorized_harm_proxy_tolerance: float = 0.05,
     ordinal_evidence_component_tail_weight: float = 0.0,
     ordinal_evidence_component_margin_regression_weight: float = 0.0,
+    ordinal_evidence_component_underestimation_weight: float = 0.0,
+    ordinal_evidence_safe_positive_component_overestimation_weight: float = 0.0,
     ordinal_evidence_benefit_margin_regression_weight: float = 0.0,
     ordinal_evidence_benefit_margin_temperature: float = 0.025,
+    ordinal_evidence_joint_reserve_regression_weight: float = 0.0,
+    ordinal_evidence_joint_reserve_boundary_weight: float = 0.0,
+    ordinal_evidence_joint_reserve_boundary_width: float = 0.05,
     ordinal_evidence_component_reliability: str | tuple[float, ...] = "",
     ordinal_evidence_global_balance: bool = False,
     ordinal_evidence_safe_set_temperature: float = 0.05,
@@ -2280,6 +2285,155 @@ def direct_uncertainty_recovery_value_loss(
                         float(ordinal_evidence_component_margin_regression_weight)
                         * regression
                     )
+                if (
+                    component_harm_delta_logits is not None
+                    and factorized_component_margins is not None
+                    and (
+                        float(ordinal_evidence_component_underestimation_weight) > 0.0
+                        or float(ordinal_evidence_safe_positive_component_overestimation_weight) > 0.0
+                        or float(ordinal_evidence_joint_reserve_regression_weight) > 0.0
+                    )
+                ):
+                    # v48.38 RFR: the certificate failure is concentrated in
+                    # the low-predicted-harm tail, where some truly large veto
+                    # violations are underestimated while safe-positive actions
+                    # are overestimated.  Keep dense signed-margin supervision,
+                    # but add an asymmetric per-component penalty for dangerous
+                    # underestimation and a joint physical reserve target.
+                    predicted_component_margins = (
+                        float(ordinal_evidence_factorized_harm_temperature)
+                        * component_harm_delta_logits
+                    )
+                    target_component_margins = factorized_component_margins[
+                        :, : component_harm_delta_logits.shape[-1]
+                    ].to(dtype=predicted_component_margins.dtype)
+                    raw_reliability = ordinal_evidence_component_reliability
+                    if isinstance(raw_reliability, str):
+                        reliability_values = [
+                            float(x.strip()) for x in raw_reliability.split(",") if x.strip()
+                        ]
+                    else:
+                        reliability_values = [float(x) for x in raw_reliability]
+                    if not reliability_values:
+                        reliability_values = [1.0] * component_harm_delta_logits.shape[-1]
+                    if len(reliability_values) < component_harm_delta_logits.shape[-1]:
+                        reliability_values.extend(
+                            [1.0] * (component_harm_delta_logits.shape[-1] - len(reliability_values))
+                        )
+                    component_reliability = predicted_component_margins.new_tensor(
+                        [
+                            min(1.0, max(0.0, x))
+                            for x in reliability_values[: component_harm_delta_logits.shape[-1]]
+                        ]
+                    )
+                    supported = component_reliability > 0.0
+                    if not bool(supported.any()):
+                        raise RuntimeError("RFR joint reserve requires at least one supported component")
+
+                    target_benefit_margin_for_tail = (
+                        t_delta.detach().to(dtype=predicted_component_margins.dtype)
+                        - float(positive_gain)
+                    )
+                    if float(ordinal_evidence_component_underestimation_weight) > 0.0:
+                        # Only true veto violations receive the extra one-sided
+                        # false-safe penalty. This directly targets the observed
+                        # certificate tail (large positive teacher margin but low
+                        # predicted harm) without globally biasing safe examples.
+                        harmful_coordinate = (target_component_margins > 0.0).to(
+                            dtype=predicted_component_margins.dtype
+                        )
+                        under = torch.relu(
+                            target_component_margins - predicted_component_margins
+                        ) * harmful_coordinate * component_reliability
+                        denom = (
+                            harmful_coordinate * component_reliability
+                        ).sum().clamp_min(1.0)
+                        terms.append(
+                            float(ordinal_evidence_component_underestimation_weight)
+                            * under.sum() / denom
+                        )
+
+                    if float(ordinal_evidence_safe_positive_component_overestimation_weight) > 0.0:
+                        # The opposite error dominates missed opportunities: truly
+                        # safe-beneficial candidates are often assigned very high
+                        # predicted harm. Penalise that direction only on the same
+                        # continuous safe-positive definition used by the gate.
+                        # "Safe-positive" must use the complete teacher veto
+                        # definition, not only the subset of learned coordinates
+                        # with non-zero reliability.  Otherwise a row that is
+                        # harmful on an unsupported coordinate could incorrectly
+                        # receive a loss that pushes the supported harm estimates
+                        # downward.  Reliability still controls which predicted
+                        # coordinates receive gradients.
+                        target_full_worst_margin_for_tail = target_component_margins.amax(dim=-1)
+                        safe_positive_row = (
+                            (target_benefit_margin_for_tail > 0.0)
+                            & (target_full_worst_margin_for_tail <= 0.0)
+                        ).to(dtype=predicted_component_margins.dtype)
+                        over = torch.relu(
+                            predicted_component_margins - target_component_margins
+                        ) * component_reliability * safe_positive_row.unsqueeze(-1)
+                        denom = (
+                            component_reliability.sum() * safe_positive_row.sum()
+                        ).clamp_min(1.0)
+                        terms.append(
+                            float(ordinal_evidence_safe_positive_component_overestimation_weight)
+                            * over.sum() / denom
+                        )
+
+                    if (
+                        opp_delta_logits is not None
+                        and float(ordinal_evidence_joint_reserve_regression_weight) > 0.0
+                    ):
+                        benefit_tau = max(float(ordinal_evidence_benefit_margin_temperature), 1.0e-4)
+                        predicted_benefit_margin = benefit_tau * opp_delta_logits
+                        target_benefit_margin = (
+                            t_delta.detach().to(dtype=predicted_benefit_margin.dtype)
+                            - float(positive_gain)
+                        )
+                        # Unsupported learned components cannot define the
+                        # differentiable reserve. Independent measured hard vetoes
+                        # remain active downstream exactly as before.
+                        large_negative = predicted_component_margins.new_tensor(-1.0e6)
+                        pred_supported = torch.where(
+                            supported.unsqueeze(0), predicted_component_margins, large_negative
+                        )
+                        target_supported = torch.where(
+                            supported.unsqueeze(0), target_component_margins, large_negative
+                        )
+                        predicted_safety_headroom = -pred_supported.amax(dim=-1)
+                        target_safety_headroom = -target_supported.amax(dim=-1)
+                        predicted_joint_reserve = torch.minimum(
+                            predicted_benefit_margin, predicted_safety_headroom
+                        )
+                        target_joint_reserve = torch.minimum(
+                            target_benefit_margin, target_safety_headroom
+                        ).detach()
+                        reserve_raw = F.smooth_l1_loss(
+                            predicted_joint_reserve, target_joint_reserve, reduction="none"
+                        )
+                        boundary_width = max(
+                            1.0e-6, float(ordinal_evidence_joint_reserve_boundary_width)
+                        )
+                        boundary_weight = max(
+                            0.0, float(ordinal_evidence_joint_reserve_boundary_weight)
+                        )
+                        # The deployment decision changes at reserve=0; preserve
+                        # dense population training but spend extra capacity close
+                        # to that shared physical boundary. No regime/bucket label
+                        # enters this weighting.
+                        near_boundary = (target_joint_reserve.abs() <= boundary_width).to(
+                            dtype=reserve_raw.dtype
+                        )
+                        reserve_weights = 1.0 + boundary_weight * near_boundary
+                        reserve_loss = (reserve_raw * reserve_weights).sum() / (
+                            reserve_weights.sum().clamp_min(1.0e-6)
+                        )
+                        terms.append(
+                            float(ordinal_evidence_joint_reserve_regression_weight)
+                            * reserve_loss
+                        )
+
                 if admission_delta_logits is not None and float(ordinal_evidence_admission_weight) > 0.0:
                     # v48.22 COVENANT: direct safe-admission supervision is a
                     # third hypothesis, distinct from raw benefit and component

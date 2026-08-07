@@ -124,8 +124,12 @@ def main() -> int:
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--expect-identity-all", choices=("true", "false"), default="true")
     ap.add_argument("--expect-factor-preserving", choices=("true", "false"), default="false")
+    ap.add_argument("--expect-reserve-only", choices=("true", "false"), default="false")
     ap.add_argument("--expect-benefit-margin-regression", type=float, default=0.0)
     ap.add_argument("--expect-benefit-margin-temperature", type=float, default=0.025)
+    ap.add_argument("--expect-component-underestimation", type=float, default=0.0)
+    ap.add_argument("--expect-safe-positive-component-overestimation", type=float, default=0.0)
+    ap.add_argument("--expect-joint-reserve-regression", type=float, default=0.0)
     ap.add_argument("--expect-algorithm-variant", default="")
     ap.add_argument("--expect-prior-coupled", choices=("true", "false"), default="true")
     ap.add_argument("--expect-adaptive-margin", choices=("true", "false"), default="false")
@@ -166,6 +170,7 @@ def main() -> int:
 
     expect_identity_all = args.expect_identity_all == "true"
     expect_factor_preserving = args.expect_factor_preserving == "true"
+    expect_reserve_only = args.expect_reserve_only == "true"
     expect_coupled = args.expect_prior_coupled == "true"
     expect_adaptive = args.expect_adaptive_margin == "true"
     expect_final = args.expect_final_enabled == "true"
@@ -176,6 +181,8 @@ def main() -> int:
     final_trainable = _trainable(final_arch)
     expected_ocaf = args.expect_context_source == "physical_interaction"
     expected_noncompensatory_cap = args.expect_prior_mode == "frontier_capped_slack"
+    if args.expect_prior_mode == "joint_reserve":
+        expected_noncompensatory_cap = True
     all_prefixes = (
         "direct_evidence_concord_benefit_calibrator",
         "direct_evidence_concord_harm_calibrator",
@@ -185,10 +192,14 @@ def main() -> int:
         "direct_evidence_concord_admission_calibrator",
     ) + (("direct_evidence_interaction_bridge",) if expected_ocaf else ())
     factor_preserving_prefixes = ("direct_evidence_concord_admission_calibrator",)
-    expected_identity_prefixes = set(
-        all_prefixes
-        if expect_identity_all
-        else (factor_preserving_prefixes if expect_factor_preserving else reference_prefixes)
+    expected_identity_prefixes = (
+        set()
+        if expect_reserve_only
+        else set(
+            all_prefixes
+            if expect_identity_all
+            else (factor_preserving_prefixes if expect_factor_preserving else reference_prefixes)
+        )
     )
     exact_eligibility = _exact_eligibility_contract(
         (factor_arch, identity_arch, final_arch),
@@ -224,8 +235,12 @@ def main() -> int:
         "exact_eligibility_metadata_supported_all_stages": exact_eligibility["metadata_exact_or_legacy_all_stages"],
         "exact_eligibility_all_stages": exact_eligibility["valid"],
         "factor_metric": factor_metric == "direct_factor_supervised_risk",
-        "identity_contract_metric": identity_metric == args.expect_best_metric,
-        "final_contract_metric": final_metric == args.expect_best_metric,
+        "identity_contract_metric": identity_metric == (
+            "direct_factor_supervised_risk" if expect_reserve_only else args.expect_best_metric
+        ),
+        "final_contract_metric": final_metric == (
+            "direct_factor_supervised_risk" if expect_reserve_only else args.expect_best_metric
+        ),
         "finite_factor_metric": bool(factor_values) and all(math.isfinite(x) for x in factor_values),
         "finite_identity_metric": bool(identity_values) and all(math.isfinite(x) for x in identity_values),
         "finite_final_metric": bool(final_values) and all(math.isfinite(x) for x in final_values),
@@ -237,6 +252,28 @@ def main() -> int:
         "factor_benefit_margin_temperature_contract": math.isclose(
             float(factor_arch.get("benefit_margin_temperature", 0.025)),
             float(args.expect_benefit_margin_temperature), rel_tol=0.0, abs_tol=1.0e-9,
+        ),
+        "factor_component_underestimation_contract": math.isclose(
+            float(factor_arch.get("component_underestimation_weight", 0.0)),
+            float(args.expect_component_underestimation), rel_tol=0.0, abs_tol=1.0e-9,
+        ),
+        "factor_safe_positive_component_overestimation_contract": math.isclose(
+            float(factor_arch.get("safe_positive_component_overestimation_weight", 0.0)),
+            float(args.expect_safe_positive_component_overestimation), rel_tol=0.0, abs_tol=1.0e-9,
+        ),
+        "factor_joint_reserve_regression_contract": math.isclose(
+            float(factor_arch.get("joint_reserve_regression_weight", 0.0)),
+            float(args.expect_joint_reserve_regression), rel_tol=0.0, abs_tol=1.0e-9,
+        ),
+        "reserve_only_architecture_contract": (
+            all(
+                a.get("identity_stage_skipped") is True
+                and a.get("deterministic_joint_reserve") is True
+                and a.get("learned_admission_residual") is False
+                for a in (identity_arch, final_arch)
+            )
+            if expect_reserve_only
+            else True
         ),
         "factor_preserving_bridge_contract": (
             identity_arch.get("interaction_bridge_trainable_this_stage") is False
@@ -296,7 +333,15 @@ def main() -> int:
             if expect_final
             else set(final_trainable) == set(identity_trainable)
         ),
-        "unbounded_residual_with_frontier_cap": identity_arch.get("admission_residual_bounded") is False and final_arch.get("admission_residual_bounded") is False,
+        "unbounded_residual_with_frontier_cap": (
+            identity_arch.get("admission_head") is False
+            and final_arch.get("admission_head") is False
+            and identity_arch.get("deterministic_joint_reserve") is True
+            and final_arch.get("deterministic_joint_reserve") is True
+            if expect_reserve_only
+            else identity_arch.get("admission_residual_bounded") is False
+            and final_arch.get("admission_residual_bounded") is False
+        ),
         "admission_prior_mode": identity_arch.get("admission_prior_mode") == args.expect_prior_mode and final_arch.get("admission_prior_mode") == args.expect_prior_mode,
         "five_harm_factors": all(int(a.get("component_harm_count", 0)) == 5 for a in (factor_arch, identity_arch, final_arch)),
         "support_contract_has_five_coordinates": len(reliability) == 5,
@@ -313,6 +358,7 @@ def main() -> int:
         "identity_checkpoint_registered": int(identity_complete.get("best_epoch", -1)) >= 0,
         "final_checkpoint_registered": int(final_complete.get("best_epoch", -1)) >= 0,
         "final_enabled_metadata": bool(three_stage.get("final_calibration_enabled", False)) is expect_final,
+        "reserve_only_metadata": bool(three_stage.get("reserve_only", False)) is expect_reserve_only,
         "coupled_metadata": bool(three_stage.get("deployment_safe_utility_gradient_coupled", False)) is expect_coupled,
         "adaptive_metadata": bool(three_stage.get("adaptive_teacher_gap_margin", False)) is expect_adaptive,
         "legacy_noisy_or_disabled": all(a.get("noisy_or_group_objective_disabled") is True for a in (factor_arch, identity_arch, final_arch)),
@@ -334,8 +380,12 @@ def main() -> int:
         "expected": {
             "identity_all": expect_identity_all,
             "factor_preserving_identity": expect_factor_preserving,
+            "reserve_only": expect_reserve_only,
             "benefit_margin_regression_weight": float(args.expect_benefit_margin_regression),
             "benefit_margin_temperature": float(args.expect_benefit_margin_temperature),
+            "component_underestimation_weight": float(args.expect_component_underestimation),
+            "safe_positive_component_overestimation_weight": float(args.expect_safe_positive_component_overestimation),
+            "joint_reserve_regression_weight": float(args.expect_joint_reserve_regression),
             "algorithm_variant": expected_algorithm_variant,
             "identity_trainable_prefixes": sorted(expected_identity_prefixes),
             "prior_coupled": expect_coupled,

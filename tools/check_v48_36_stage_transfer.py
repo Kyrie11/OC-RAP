@@ -66,7 +66,7 @@ def _load_state(path: Path) -> dict[str, torch.Tensor]:
     return tensors
 
 
-def _parse_prefixes(raw: str, *, field: str) -> tuple[str, ...]:
+def _parse_prefixes(raw: str, *, field: str, allow_empty: bool = False) -> tuple[str, ...]:
     values: list[str] = []
     for token in raw.split(","):
         prefix = token.strip().rstrip(".")
@@ -77,20 +77,27 @@ def _parse_prefixes(raw: str, *, field: str) -> tuple[str, ...]:
         if prefix in values:
             raise ValueError(f"{field} contains duplicate prefix: {prefix}")
         values.append(prefix)
-    if not values:
+    if not values and not allow_empty:
         raise ValueError(f"{field} must contain at least one approved prefix")
     return tuple(values)
 
 
-def _arch_trainable(architecture: Mapping[str, Any]) -> tuple[str, ...]:
+def _arch_trainable(architecture: Mapping[str, Any], *, allow_empty: bool = False) -> tuple[str, ...]:
     raw = architecture.get("trainable")
     if isinstance(raw, str):
         text = raw
     elif isinstance(raw, list) and len(raw) == 1 and isinstance(raw[0], str):
         text = raw[0]
+    elif allow_empty and isinstance(raw, list) and len(raw) == 0:
+        text = ""
     else:
-        raise TypeError("STAGE_ARCHITECTURE.trainable must be a string or one-item string list")
-    return _parse_prefixes(text, field="STAGE_ARCHITECTURE.trainable")
+        raise TypeError(
+            "STAGE_ARCHITECTURE.trainable must be a string, a one-item string list, "
+            "or an empty list for an explicitly skipped stage"
+        )
+    return _parse_prefixes(
+        text, field="STAGE_ARCHITECTURE.trainable", allow_empty=allow_empty
+    )
 
 
 def _starts_with_any(key: str, prefixes: tuple[str, ...]) -> bool:
@@ -152,24 +159,31 @@ def main() -> int:
     ap.add_argument("--final-allowed-prefixes", default=ADMISSION_PREFIX)
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--final-stage-disabled", action="store_true")
+    ap.add_argument("--identity-stage-skipped", action="store_true")
     ap.add_argument("--implementation-version", default=IMPLEMENTATION_VERSION)
     args = ap.parse_args()
 
     failures: list[str] = []
     try:
         identity_allowed = _parse_prefixes(
-            args.identity_allowed_prefixes, field="identity_allowed_prefixes"
+            args.identity_allowed_prefixes, field="identity_allowed_prefixes",
+            allow_empty=args.identity_stage_skipped,
         )
         final_allowed = _parse_prefixes(
-            args.final_allowed_prefixes, field="final_allowed_prefixes"
+            args.final_allowed_prefixes, field="final_allowed_prefixes",
+            allow_empty=args.identity_stage_skipped and args.final_stage_disabled,
         )
         factor = _load_state(args.factor)
         identity = _load_state(args.identity)
         final = _load_state(args.final)
         identity_arch = _json(args.identity_architecture)
         final_arch = _json(args.final_architecture)
-        identity_arch_trainable = _arch_trainable(identity_arch)
-        final_arch_trainable = _arch_trainable(final_arch)
+        identity_arch_trainable = _arch_trainable(
+            identity_arch, allow_empty=args.identity_stage_skipped
+        )
+        final_arch_trainable = _arch_trainable(
+            final_arch, allow_empty=args.identity_stage_skipped and args.final_stage_disabled
+        )
     except Exception as exc:
         doc = {
             "event": "v48_36_stage_transfer_integrity",
@@ -204,7 +218,7 @@ def main() -> int:
             failures.append("interaction bridge authorized without physical_interaction context metadata")
         if identity_arch.get("observation_conditioned_action_frontier") is not True:
             failures.append("identity architecture does not register OCAF while interaction bridge is trainable")
-    elif identity_context == "physical_interaction":
+    elif identity_context == "physical_interaction" and not args.identity_stage_skipped:
         # v48.37 HAF explicitly permits the OCAF bridge to remain frozen during
         # admission refinement.  This is fail-closed: legacy architectures that
         # merely omit the bridge are still rejected unless they register the
@@ -221,6 +235,15 @@ def main() -> int:
             )
 
     identity_diff = _compare(factor, identity, identity_allowed)
+    if args.identity_stage_skipped and (
+        identity_diff["allowed_changed"]
+        or identity_diff["disallowed_changed"]
+        or identity_diff["missing_from_before"]
+        or identity_diff["missing_from_after"]
+    ):
+        failures.append("identity stage declared skipped but checkpoint is not byte-identical")
+    if args.identity_stage_skipped and identity_arch.get("identity_stage_skipped") is not True:
+        failures.append("identity stage skip flag missing from architecture metadata")
     final_compare_allowed: tuple[str, ...] = () if args.final_stage_disabled else final_allowed
     final_diff = _compare(identity, final, final_compare_allowed)
 
@@ -282,6 +305,7 @@ def main() -> int:
         "identity_architecture_trainable_prefixes": list(identity_arch_trainable),
         "final_architecture_trainable_prefixes": list(final_arch_trainable),
         "final_stage_disabled": bool(args.final_stage_disabled),
+        "identity_stage_skipped": bool(args.identity_stage_skipped),
         "identity_allowed_changed_parameter_count": len(identity_diff["allowed_changed"]),
         "identity_disallowed_changed_parameter_count": len(identity_diff["disallowed_changed"]),
         "identity_selected_initial_checkpoint": identity_selected_initial,

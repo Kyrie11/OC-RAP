@@ -519,7 +519,12 @@ run_variant() {
   IDENTITY_LR="${IDENTITY_LR:-0.00004}" FINAL_LR="${FINAL_LR:-0.00003}" \
   V4836_IDENTITY_TRAIN_ALL="${V4836_IDENTITY_TRAIN_ALL:-1}" V4836_COUPLE_ADMISSION_PRIOR="${V4836_COUPLE_ADMISSION_PRIOR:-1}" \
   V4837_FACTOR_PRESERVING_IDENTITY="${V4837_FACTOR_PRESERVING_IDENTITY:-0}" \
+  V4838_RFR_RESERVE_ONLY="${V4838_RFR_RESERVE_ONLY:-0}" V4838_FACTOR_ALGORITHM_FAMILY="${V4838_FACTOR_ALGORITHM_FAMILY:-${OCRAP_ALGORITHM_VERSION:-v48.36-OCAF}}" \
   V4836_ADAPTIVE_IDENTITY_MARGIN="${V4836_ADAPTIVE_IDENTITY_MARGIN:-0}" V4836_ENABLE_FINAL_CALIBRATION="${V4836_ENABLE_FINAL_CALIBRATION:-0}" \
+  FACTOR_BENEFIT_MARGIN_REGRESSION_WEIGHT="${FACTOR_BENEFIT_MARGIN_REGRESSION_WEIGHT:-0.0}" FACTOR_BENEFIT_MARGIN_TEMPERATURE="${FACTOR_BENEFIT_MARGIN_TEMPERATURE:-0.025}" \
+  FACTOR_COMPONENT_UNDERESTIMATION_WEIGHT="${FACTOR_COMPONENT_UNDERESTIMATION_WEIGHT:-0.0}" FACTOR_SAFE_POSITIVE_COMPONENT_OVERESTIMATION_WEIGHT="${FACTOR_SAFE_POSITIVE_COMPONENT_OVERESTIMATION_WEIGHT:-0.0}" \
+  FACTOR_JOINT_RESERVE_REGRESSION_WEIGHT="${FACTOR_JOINT_RESERVE_REGRESSION_WEIGHT:-0.0}" FACTOR_JOINT_RESERVE_BOUNDARY_WEIGHT="${FACTOR_JOINT_RESERVE_BOUNDARY_WEIGHT:-0.0}" FACTOR_JOINT_RESERVE_BOUNDARY_WIDTH="${FACTOR_JOINT_RESERVE_BOUNDARY_WIDTH:-0.05}" \
+  EVIDENCE_JOINT_RESERVE_TEMPERATURE="${EVIDENCE_JOINT_RESERVE_TEMPERATURE:-0.025}" \
   V4836_FACTOR_CACHE_RUN="$factor_cache" \
   PROPOSAL_TOP_K="$PROPOSAL_TOP_K" \
   EVIDENCE_CALIBRATOR_CONTEXT=true EVIDENCE_CALIBRATOR_CONTEXT_SOURCE="$EVIDENCE_CONTEXT_SOURCE" \
@@ -611,6 +616,8 @@ for variant in balanced precision; do
     --support-contract "$OUTPUTDIR/candidates/$variant/FACTOR_SUPPORT_CONTRACT.json" \
     --output "$OUTPUTDIR/candidates/$variant/MODEL_INFERENCE_CONTRACT.json" \
     --expect-frontier true --expect-admission-bounded false --expect-context-enabled true --expect-context-source "$EVIDENCE_CONTEXT_SOURCE" --expect-interaction-hidden "$EVIDENCE_INTERACTION_HIDDEN" --expect-consensus-prior-scale "$EVIDENCE_CONSENSUS_PRIOR_SCALE" --expect-frontier-cap-temperature "${EVIDENCE_FRONTIER_CAP_TEMPERATURE:-0.10}" \
+    --expect-admission-head "$([[ "${V4838_RFR_RESERVE_ONLY:-0}" == 1 ]] && echo false || echo true)" \
+    --expect-benefit-margin-temperature "${FACTOR_BENEFIT_MARGIN_TEMPERATURE:-0.025}" --expect-joint-reserve-temperature "${EVIDENCE_JOINT_RESERVE_TEMPERATURE:-0.025}" \
     --expect-component-prior-logit -2.0 --expect-component-count 5 --expect-component-scale "${EVIDENCE_COMPONENT_SCALE:-6.0}" \
     --expect-admission-prior-detach any \
     --expect-admission-prior-mode "$ADMISSION_PRIOR_MODE" --expect-slack-temperature "${EVIDENCE_SLACK_TEMPERATURE:-0.025}" --expect-slack-penalty "${EVIDENCE_SLACK_PENALTY:-1.0}" \
@@ -628,11 +635,17 @@ for variant in balanced precision; do
     --expect-identity-all "$([[ "${V4836_IDENTITY_TRAIN_ALL:-1}" == 1 ]] && echo true || echo false)" \
     --expect-prior-coupled "$([[ "${V4836_COUPLE_ADMISSION_PRIOR:-1}" == 1 ]] && echo true || echo false)" \
     --expect-factor-preserving "$([[ "${V4837_FACTOR_PRESERVING_IDENTITY:-0}" == 1 ]] && echo true || echo false)" \
+    --expect-reserve-only "$([[ "${V4838_RFR_RESERVE_ONLY:-0}" == 1 ]] && echo true || echo false)" \
     --expect-benefit-margin-regression "${FACTOR_BENEFIT_MARGIN_REGRESSION_WEIGHT:-0.0}" \
     --expect-benefit-margin-temperature "${FACTOR_BENEFIT_MARGIN_TEMPERATURE:-0.025}" \
+    --expect-component-underestimation "${FACTOR_COMPONENT_UNDERESTIMATION_WEIGHT:-0.0}" \
+    --expect-safe-positive-component-overestimation "${FACTOR_SAFE_POSITIVE_COMPONENT_OVERESTIMATION_WEIGHT:-0.0}" \
+    --expect-joint-reserve-regression "${FACTOR_JOINT_RESERVE_REGRESSION_WEIGHT:-0.0}" \
     --expect-algorithm-variant "${OCRAP_ALGORITHM_VERSION:-v48.36-OCAF}" \
     --expect-adaptive-margin "$([[ "${V4836_ADAPTIVE_IDENTITY_MARGIN:-0}" == 1 ]] && echo true || echo false)" --expect-final-enabled "$([[ "${V4836_ENABLE_FINAL_CALIBRATION:-0}" == 1 ]] && echo true || echo false)" \
-    --expect-eligible-policy true --expect-prior-mode "$ADMISSION_PRIOR_MODE" --expect-context-source "$EVIDENCE_CONTEXT_SOURCE" --expect-proposal-top-k "$PROPOSAL_TOP_K" \
+    --expect-eligible-policy "$([[ "${V4838_RFR_RESERVE_ONLY:-0}" == 1 ]] && echo false || echo true)" \
+    --expect-boundary "$([[ "${V4838_RFR_RESERVE_ONLY:-0}" == 1 ]] && echo false || echo true)" \
+    --expect-prior-mode "$ADMISSION_PRIOR_MODE" --expect-context-source "$EVIDENCE_CONTEXT_SOURCE" --expect-proposal-top-k "$PROPOSAL_TOP_K" \
     >"$OUTPUTDIR/logs/training_contract_${variant}.log" 2>&1
   training_contract_rc=$?
   set -e

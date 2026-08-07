@@ -56,6 +56,8 @@ def _trainable(architecture: Mapping[str, Any]) -> list[str]:
         text = raw
     elif isinstance(raw, list) and len(raw) == 1 and isinstance(raw[0], str):
         text = raw[0]
+    elif isinstance(raw, list) and len(raw) == 0:
+        return []
     else:
         raise TypeError("STAGE_ARCHITECTURE.trainable is malformed")
     return [item.strip() for item in text.split(",") if item.strip()]
@@ -83,6 +85,7 @@ def main() -> int:
     ap.add_argument("--support-reliability-enabled", type=_bool, required=True)
     ap.add_argument("--identity-train-all", type=_bool, required=True)
     ap.add_argument("--factor-preserving-identity", type=_bool, default=False)
+    ap.add_argument("--reserve-only", type=_bool, default=False)
     ap.add_argument("--prior-coupled", type=_bool, required=True)
     ap.add_argument("--adaptive-margin", type=_bool, required=True)
     ap.add_argument("--final-enabled", type=_bool, required=True)
@@ -161,18 +164,24 @@ def main() -> int:
         "factor_support_contract": str(args.support),
         "factor_support_sha256": support_sha,
         "stage1_population": "natural_without_replacement",
-        "stage2_population": "natural_without_replacement",
+        "stage2_population": "disabled" if args.reserve_only else "natural_without_replacement",
         "stage3_population": "natural_without_replacement" if args.final_enabled else "disabled",
         "stage2_trainable": (
-            "factor_preserving_admission_only"
-            if args.factor_preserving_identity
+            "disabled_deterministic_joint_reserve"
+            if args.reserve_only
             else (
-                "all_compact_evidence_calibrators_with_ocaf_interaction"
-                if args.identity_train_all
-                else "admission_and_ocaf_interaction_reference"
+                "factor_preserving_admission_only"
+                if args.factor_preserving_identity
+                else (
+                    "all_compact_evidence_calibrators_with_ocaf_interaction"
+                    if args.identity_train_all
+                    else "admission_and_ocaf_interaction_reference"
+                )
             )
         ),
         "factor_preserving_identity": bool(args.factor_preserving_identity),
+        "reserve_only": bool(args.reserve_only),
+        "learned_admission_residual": not bool(args.reserve_only),
         "stage2_trainable_prefixes": identity_trainable,
         "stage3_trainable_prefixes": final_trainable if args.final_enabled else [],
         "deployment_safe_utility_gradient_coupled": args.prior_coupled,
@@ -192,12 +201,18 @@ def main() -> int:
         "audit_strata_only": ["near", "contact"],
         "evidence_context_source": args.context_source,
         "continuous_unified_semantics": (
-            "top5 proposal plus observation-conditioned executable-action margins and noncompensatory frontier cap"
-            if args.admission_prior_mode == "frontier_capped_slack"
-            else "top5 proposal plus continuous candidate context and compensatory safety slack"
+            "top5 proposal plus observation-conditioned benefit/safety headrooms and deterministic joint physical reserve"
+            if args.admission_prior_mode == "joint_reserve"
+            else (
+                "top5 proposal plus observation-conditioned executable-action margins and noncompensatory frontier cap"
+                if args.admission_prior_mode == "frontier_capped_slack"
+                else "top5 proposal plus continuous candidate context and compensatory safety slack"
+            )
         ),
         "independent_measured_hard_veto": True,
-        "checkpoint_metric": "direct_contract_lexicographic",
+        "checkpoint_metric": (
+            "direct_factor_supervised_risk" if args.reserve_only else "direct_contract_lexicographic"
+        ),
         "semantic_frontier_eligibility_metric": True,
         "exact_deployment_eligibility_metric": True,
         "observation_conditioned_action_frontier": args.context_source
@@ -207,7 +222,8 @@ def main() -> int:
         "interaction_dropout": args.interaction_dropout,
         "admission_prior_mode": args.admission_prior_mode,
         "noncompensatory_frontier_cap": args.admission_prior_mode
-        == "frontier_capped_slack",
+        in {"frontier_capped_slack", "joint_reserve"},
+        "deterministic_joint_reserve": args.admission_prior_mode == "joint_reserve",
         "final_thresholds_fit_by_single_shared_rule": True,
         "train_metric_uses_final_fitted_thresholds": False,
         "selection_semantics": "rank_topk_then_filter_then_evidence_rerank",

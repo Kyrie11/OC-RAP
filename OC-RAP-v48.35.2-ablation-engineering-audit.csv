@@ -1,5 +1,0 @@
-﻿task,variant,raw_exit_code,failure_category,signature,observed_error,algorithm_conclusion_valid,reason
-A_legacy_context_soft_slack,balanced,1,training_contract,,"unexpected FACTOR-PHYSICS-BRIDGE calibrator parameter count: 267774; allowed=(0,100000]",False,architecture-agnostic 100k cap rejected the larger legacy-context model before scientific comparison
-A_legacy_context_soft_slack,precision,1,training_contract,,"unexpected FACTOR-PHYSICS-BRIDGE calibrator parameter count: 267774; allowed=(0,100000]",False,architecture-agnostic 100k cap rejected the larger legacy-context model before scientific comparison
-B_physical_context_soft_slack,all,not_run,upstream_abort,runner set -e after A,no task completion artifact,False,not executed
-C_legacy_context_frontier_cap,all,not_run,upstream_abort,runner set -e after A,no task completion artifact,False,not executed

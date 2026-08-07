@@ -1,5 +1,176 @@
 # Algorithm Change Log
 
+## v48.38 — RFR / ROBUST FRONTIER RESERVE (2026-08-07)
+
+### Evidence-based attribution from the complete v48.37 HAF ablation
+
+All four v48.37 arms (A/B/C/D) finish with authoritative `pipeline_valid=true` and
+RC=20.  Training, model and stage-transfer contracts pass, so this is a Natural-gate
+rejection rather than an engineering stop.  The dominant gate layer remains
+`development_rule_fit`; Near-contact and Contact retain feasible proposal oracles,
+which means candidate support is not the immediate bottleneck.
+
+The v48.37 ablation gives a useful causal result.  On the Precision selector,
+factor-preserving admission (C) reduces excessive selection and raises certificate
+point precision from 1/33=3.0% to 1/7=14.3% in Near-contact and from 1/75=1.3% to
+2/26=7.7% in Contact.  Full HAF (D) reaches 1/6=16.7% and 2/20=10.0%.  Benefit
+headroom alone (B) is weaker but has a positive Near-contact signal: positives rise
+from 1 to 2 and recall from 0.111 to 0.222; for Balanced Near it also reduces
+harmful selections from 10 to 5.  Thus factor preservation is the strongest
+validated v48.37 mechanism, while signed benefit headroom is retained as a useful
+physical anchor rather than treated as a complete solution.
+
+However, D remains far from the confidence-bound gate.  It over-abstains and still
+selects harmful tail cases.  More importantly, the remaining error is a
+**frontier-tail inversion**: several truly harmful candidates with large positive
+teacher component-veto margins are predicted as low harm, while genuine
+safe-positive candidates with teacher safety margin -0.05 are often predicted as
+high harm and low opportunity.  Broad harm ranking remains moderate, but harm AUC
+inside the exact low-harm deployable tail collapses.  The same pattern exists on
+development data, so it is not a certificate-only shift.
+
+The learned admission residual itself is also not supported by v48.37.  For the
+primary D arm, both Balanced and Precision identity-stage best checkpoints are
+`epoch=0`; later optimization lowers its training loss while exact deployment-risk
+metrics worsen and valid-safe admission remains zero.  Repeating another admission
+fine-tuning stage would therefore repeat a failed mechanism rather than exploit a
+new signal.
+
+### Algorithm change: deterministic joint physical reserve
+
+RFR removes the learned admission residual from the primary method.  It composes the
+already observation-conditioned physical factors with one shared, monotone reserve.
+For candidate `a` relative to nominal `a0`, let
+
+`b = tau_b * (benefit_logit(a) - benefit_logit(a0))`
+
+be signed benefit headroom, and let each supported component-harm margin be
+
+`m_k = tau_h * (harm_component_logit_k(a) - harm_component_logit_k(a0))`.
+
+The continuous safety headroom is `s = -max_k m_k`, and the joint recovery reserve is
+
+`r = min(b, s)`.
+
+Admission is `sigmoid(r / tau_r)`.  Therefore `r>0` if and only if the candidate is
+simultaneously above the physical benefit boundary and below every supported
+component-harm boundary.  This is a noncompensatory continuous AND expressed by a
+single scalar reserve; it uses no Safe/Near/Contact identifier, branch, threshold,
+or case-specific strategy.  The existing shared-rule fitter still applies one rule
+to all regimes.
+
+### Algorithm change: robust frontier-tail calibration
+
+The factor stage receives three boundary-focused continuous objectives in addition
+to the retained OCAF/HAF losses:
+
+1. **Joint-reserve regression.**  The teacher reserve is
+   `r* = min(teacher_advantage-positive_gain, -max_k teacher_component_margin_k)`.
+   A Smooth-L1 term anchors the model reserve to the same physical frontier, with
+   extra continuous weight near `r*=0`, where admission decisions are sensitive.
+2. **Harm underestimation penalty.**  For component targets that truly violate the
+   tolerance, penalize only `relu(target_margin - predicted_margin)`.  This directly
+   targets dangerous false-safe tail errors without population rebalancing.
+3. **Safe-positive harm-overestimation penalty.**  For naturally occurring
+   continuous safe-positive rows, penalize only `relu(predicted_margin-target_margin)`.
+   This counterbalances over-conservatism that rejects true recovery opportunities.
+
+The two one-sided terms are deliberately asymmetric in error direction but use the
+same physical margins and natural population in every regime.  They are not
+regime-conditioned losses.
+
+### Optimization change: factor stage is directly deployable
+
+Because v48.37 shows no positive evidence for learned admission refinement, the RFR
+primary path skips identity/final optimization after the factor stage.  The
+identity/final checkpoint files are materialized byte-for-byte from the factor
+checkpoint so legacy downstream contracts remain intact, while provenance records
+`epochs_completed=0`, zero optimizer steps and an empty history.  Stage-transfer
+checks require exact SHA/tensor identity.  This removes a stage that was both
+computationally expensive and empirically harmful, without changing calibration,
+certificate or gate semantics.
+
+### Pre-registered v48.38 mechanism ablation
+
+All arms keep the same data, proposal generator, top-k=5, gate and one shared rule:
+
+- **A — HAF reference:** v48.37 benefit headroom + factor-preserving learned
+  admission residual.
+- **B — Reserve only:** deterministic joint reserve + joint-reserve regression,
+  without the new bidirectional tail losses.
+- **C — Tail only:** v48.37 factor-preserving learned admission residual + the new
+  bidirectional tail losses, without deterministic joint reserve.
+- **D — Full RFR:** reserve + bidirectional tail calibration.  D is the primary
+  v48.38 run, so the parallel ablation launcher runs A/B/C concurrently by default
+  and does not waste time duplicating D unless `RERUN_D=1` is explicitly requested.
+
+This design tests two distinct hypotheses: whether the learned admission residual is
+the wrong composition mechanism (B) and whether low-harm-tail calibration is the
+remaining factor error (C).  D tests complementarity.
+
+### Runtime and engineering hardening
+
+- A/B/C ablations can run concurrently.  Each arm uses the same two-GPU
+  Balanced/Precision layout; on a two-GPU machine this means up to three ablation
+  processes per GPU.  CPU BLAS threads and data-loader workers are capped to avoid
+  CPU/I/O oversubscription.
+- The factor-cache fingerprint is keyed to factor-stage semantics rather than a
+  cosmetic arm name, preventing stale semantic reuse while allowing safe repeated
+  runs with identical factor configuration.
+- Wrappers explicitly reset all v48.38/v48.37 mechanism switches, top-k, resume and
+  cache controls, avoiding ambient-shell contamination across concurrent arms.
+- `joint_reserve` is covered by model/training/stage-transfer contracts.  The
+  skipped identity stage is only legal when the architecture declares reserve-only
+  mode and factor/identity tensors are byte-identical.
+- The no-training materializer writes truthful zero-epoch provenance rather than
+  copying a factor-stage training record, preventing downstream analyses from
+  falsely interpreting a skipped stage as trained.  It materializes only `best.pt`
+  (same-filesystem hard link when possible, otherwise a byte copy) instead of
+  duplicating factor-stage `latest.pt`/epoch checkpoints.
+- The learned reserve excludes reliability-zero harm coordinates before the max.
+  This is necessary for the observed global support `[1,1,1,0,0]`: including the
+  neutral zero margins would otherwise force safety headroom `<=0` and make every
+  positive reserve impossible.  The safe-positive tail loss nevertheless uses the
+  complete teacher component-veto definition, so an unsupported learned coordinate
+  cannot relabel a teacher-harmful example as safe-positive.
+- Fresh v48.38 wrappers force `RESUME_AFTER_ADAPTATION=0`; stale shell state cannot
+  accidentally trigger a no-retraining resume path.
+
+### Dataset ceiling assessment at the time of this change
+
+The current RC=20 cannot be attributed to the dataset alone: the proposal oracle is
+feasible in both Near-contact and Contact, proving that the existing candidate/data
+pipeline exposes recoverable actions.  Nevertheless, safe-positive support is
+statistically sparse and concentrated.  Near-contact train support is about
+25/1425 deployable candidates (1.75%, 11 groups, 7 scenes); Contact is about
+106/4086 (2.59%, 41 groups, 17 scenes).  Development support is also small, with
+Near-contact especially tight.  This makes the one-sided confidence-bound gate hard
+and increases representation variance.  RFR therefore targets the observable tail
+errors first rather than reconstructing the dataset.  If RFR repairs tail
+calibration but confidence bounds remain support-limited, the dataset becomes the
+next dominant ceiling and should be reported explicitly rather than hidden by
+threshold relaxation.
+
+### Previously tested directions intentionally not repeated
+
+RFR does not repeat threshold-grid densification, top-k expansion, aggressive
+positive oversampling, hardest-negative population distortion, listwise/pairwise
+ranking as the primary fix, barrier continuation, full joint identity refinement,
+or another learned admission residual.  Those directions were already tested in
+v48.28-v48.37 and did not resolve the shared-rule/certificate failure.
+
+### What remains unchanged
+
+- No regime classifier or regime-conditioned policy, threshold, loss weight or
+  routing logic.
+- Same Safe/Near/Contact datasets and split roots.
+- Same source experts, OCAF observation-conditioned bridge, component-veto physical
+  semantics, proposal generator and top-k=5.
+- Same positive-gain threshold, component tolerances, shared-rule fit/verify split,
+  certificate confidence procedures and Natural gate.
+- No test-root access is introduced during training, ablation selection or repair.
+
+
 ## v48.37 — HAF / HEADROOM-ALIGNED FRONTIER (2026-08-06)
 
 ### Evidence-based motivation

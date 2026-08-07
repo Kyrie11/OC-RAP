@@ -1,0 +1,132 @@
+# OC-RAP v48.38 RFR — 原实验机下一步执行指令
+# 目的：先跑主实验 D；RC=0/20 都表示 pipeline 工程有效，只有 RC=0 才授权 test closed-loop。
+# A/B/C 为机制消融，可在主实验完成后并发。D 已由主实验覆盖，默认不重复。
+set -Eeuo pipefail
+
+# ---------------------------------------------------------------------------
+# 0. 路径。若你的实际路径不同，只改这一节。
+# ---------------------------------------------------------------------------
+REPO=/home/senzeyu2/code/OC-RAP-v48.38-RFR
+OLD_REPO=/home/senzeyu2/code/OC-RAP
+RUN_ROOT="$OLD_REPO/runs"
+OCRAP_ROOT=/data0/senzeyu2/dataset/OCRAP
+PROTOCOL_ROOT="$OCRAP_ROOT/calibration_v48_14_prism_4814"
+CAL_SAFE="$OCRAP_ROOT/calibration_safe"
+SOURCE_RUN="$OLD_REPO/runs/ocrap_v48_13_terra_proxy_4801"
+SAFE_WOMD_SOURCE=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord@150
+GPU0=0
+GPU1=1
+
+cd "$REPO"
+export OCRAP_REPO="$REPO"
+export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"
+export OCRAP_ROOT PROTOCOL_ROOT CAL_SAFE SOURCE_RUN SAFE_WOMD_SOURCE GPU0 GPU1
+
+# 可选的静态预检；不会访问 test split。
+python -m compileall -q src tools
+bash -n scripts/run_v48_38_rfr_dedicated.sh
+bash -n scripts/run_v48_38_rfr_ablation_arm.sh
+bash -n scripts/run_v48_38_rfr_ablations_parallel.sh
+
+# ---------------------------------------------------------------------------
+# 1. 主实验：v48.38 RFR = ablation D
+# ---------------------------------------------------------------------------
+MAIN_OUT="$RUN_ROOT/ocrap_v48_38_rfr_main"
+if [[ -e "$MAIN_OUT/AUTHORITATIVE_RUN_STATUS.json" || -e "$MAIN_OUT/ATTEMPT_STARTED.json" ]]; then
+  echo "REFUSE: $MAIN_OUT 已有历史运行。为避免把旧终态当作新算法结果，请改一个新的 MAIN_OUT。" >&2
+  exit 2
+fi
+
+set +e
+OUTPUTDIR="$MAIN_OUT" GPU0="$GPU0" GPU1="$GPU1" \
+  bash scripts/run_v48_38_rfr_dedicated.sh
+MAIN_RC=$?
+set -e
+
+echo "v48.38 RFR main controller RC=$MAIN_RC"
+python -m json.tool "$MAIN_OUT/AUTHORITATIVE_RUN_STATUS.json"
+[[ -f "$MAIN_OUT/GATE_FAILURE_DECOMPOSITION.json" ]] && \
+  python -m json.tool "$MAIN_OUT/GATE_FAILURE_DECOMPOSITION.json"
+
+# 只接受三种解释：0=Natural gate通过；20=工程有效但Natural gate拒绝；其它=工程失败。
+if [[ "$MAIN_RC" != 0 && "$MAIN_RC" != 20 ]]; then
+  echo "STOP: main RC=$MAIN_RC 属于工程/协议失败。不要跑消融或 closed-loop，先上传完整 MAIN_OUT。" >&2
+  exit "$MAIN_RC"
+fi
+
+# 再用 authoritative 文件防止 shell RC/终态不一致。
+python - "$MAIN_OUT/AUTHORITATIVE_RUN_STATUS.json" "$MAIN_RC" <<'PY'
+import json,sys
+p=sys.argv[1]; shell_rc=int(sys.argv[2]); d=json.load(open(p))
+assert d.get('valid') is True, d
+assert d.get('pipeline_valid') is True, d
+assert int(d.get('authoritative_exit_code')) == shell_rc, (d,shell_rc)
+print('authoritative state OK:', d.get('authoritative_exit_code'))
+PY
+
+# ---------------------------------------------------------------------------
+# 2. A/B/C 机制消融并发运行。
+#    A: v48.37 HAF reference
+#    B: deterministic joint reserve + reserve regression, 无新 tail loss
+#    C: bidirectional tail calibration + v48.37 learned residual, 无 joint reserve
+#    D: full RFR，已经由 MAIN_OUT 覆盖，因此默认不重复。
+# ---------------------------------------------------------------------------
+for ARM in A B C; do
+  OUT="$RUN_ROOT/ocrap_v48_38_rfr_ablation_${ARM}"
+  if [[ -e "$OUT/AUTHORITATIVE_RUN_STATUS.json" || -e "$OUT/ATTEMPT_STARTED.json" ]]; then
+    echo "REFUSE: $OUT 已存在。请改 BASE_OUT/输出名或先人工归档，不自动删除历史结果。" >&2
+    exit 2
+  fi
+done
+
+# 三个 controller 同时启动。每个 arm 内部 Balanced->GPU0、Precision->GPU1，
+# 因此两张 GPU 都会被均衡使用；默认限制 CPU/loader 并发，减少 I/O 抢占。
+BASE_OUT="$RUN_ROOT" GPU0="$GPU0" GPU1="$GPU1" \
+ABLATION_OMP_NUM_THREADS=1 ABLATION_NUM_WORKERS=2 ABLATION_PREFETCH_FACTOR=2 \
+  bash scripts/run_v48_38_rfr_ablations_parallel.sh
+
+python -m json.tool "$RUN_ROOT/v48_38_parallel_logs/ABLATION_PARALLEL_SUMMARY.json"
+for ARM in A B C; do
+  OUT="$RUN_ROOT/ocrap_v48_38_rfr_ablation_${ARM}"
+  echo "========== ABLATION $ARM =========="
+  python -m json.tool "$OUT/AUTHORITATIVE_RUN_STATUS.json"
+  [[ -f "$OUT/GATE_FAILURE_DECOMPOSITION.json" ]] && \
+    python -m json.tool "$OUT/GATE_FAILURE_DECOMPOSITION.json"
+done
+
+# 若确实需要独立重复 D（通常不需要，因为 MAIN_OUT 已经是 D）：
+# BASE_OUT="$RUN_ROOT" GPU0="$GPU0" GPU1="$GPU1" RERUN_D=1 \
+#   bash scripts/run_v48_38_rfr_ablations_parallel.sh
+
+# ---------------------------------------------------------------------------
+# 3. Closed-loop：严格只在主实验 authoritative RC=0 时执行。
+# ---------------------------------------------------------------------------
+AUTH_RC="$(python - "$MAIN_OUT/AUTHORITATIVE_RUN_STATUS.json" <<'PY'
+import json,sys
+print(int(json.load(open(sys.argv[1]))['authoritative_exit_code']))
+PY
+)"
+if [[ "$AUTH_RC" == 0 ]]; then
+  [[ -s "$MAIN_OUT/NEXT_COMMANDS.txt" ]] || {
+    echo "ERROR: RC=0 但缺失 NEXT_COMMANDS.txt，属于终态契约错误，禁止手工绕过。" >&2
+    exit 30
+  }
+  echo "Natural gate passed. Authorized commands:"
+  cat "$MAIN_OUT/NEXT_COMMANDS.txt"
+  # NEXT_COMMANDS.txt 包含：
+  # 1) Safe paired non-inferiority closed-loop
+  # 2) Near/Contact authorized stress closed-loop
+  bash "$MAIN_OUT/NEXT_COMMANDS.txt"
+else
+  echo "Main RC=$AUTH_RC: Natural gate 未通过，不执行 test closed-loop；不要手动绕过授权。"
+fi
+
+# ---------------------------------------------------------------------------
+# 4. 上传给下一轮分析的最小完整集合
+# ---------------------------------------------------------------------------
+# 主实验：整个 $MAIN_OUT
+# 消融：ocrap_v48_38_rfr_ablation_A/B/C
+# 并发摘要：$RUN_ROOT/v48_38_parallel_logs/ABLATION_PARALLEL_SUMMARY.json
+# 如果 RC=0，再包含 safe_paired、stress closed-loop 的全部产物。
+# 建议保留 factor_stage / STAGE_ARCHITECTURE / TRAINING_COMPLETE / calibration /
+# certificate / GATE_FAILURE_DECOMPOSITION / AUTHORITATIVE_RUN_STATUS，不要只上传日志尾部。

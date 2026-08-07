@@ -370,11 +370,26 @@ def _direct_value_loss_from_outputs(
         ordinal_evidence_component_margin_regression_weight=float(
             tcfg.get("direct_value_ordinal_evidence_component_margin_regression_weight", 0.0)
         ),
+        ordinal_evidence_component_underestimation_weight=float(
+            tcfg.get("direct_value_ordinal_evidence_component_underestimation_weight", 0.0)
+        ),
+        ordinal_evidence_safe_positive_component_overestimation_weight=float(
+            tcfg.get("direct_value_ordinal_evidence_safe_positive_component_overestimation_weight", 0.0)
+        ),
         ordinal_evidence_benefit_margin_regression_weight=float(
             tcfg.get("direct_value_ordinal_evidence_benefit_margin_regression_weight", 0.0)
         ),
         ordinal_evidence_benefit_margin_temperature=float(
             tcfg.get("direct_value_ordinal_evidence_benefit_margin_temperature", 0.025)
+        ),
+        ordinal_evidence_joint_reserve_regression_weight=float(
+            tcfg.get("direct_value_ordinal_evidence_joint_reserve_regression_weight", 0.0)
+        ),
+        ordinal_evidence_joint_reserve_boundary_weight=float(
+            tcfg.get("direct_value_ordinal_evidence_joint_reserve_boundary_weight", 0.0)
+        ),
+        ordinal_evidence_joint_reserve_boundary_width=float(
+            tcfg.get("direct_value_ordinal_evidence_joint_reserve_boundary_width", 0.05)
         ),
         ordinal_evidence_component_reliability=str(
             tcfg.get("direct_value_ordinal_evidence_component_reliability", "")
@@ -2679,6 +2694,12 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_evidence_frontier_cap_temperature=float(
             model_cfg.get("direct_recovery_evidence_frontier_cap_temperature", 0.10)
         ),
+        direct_recovery_evidence_benefit_margin_temperature=float(
+            model_cfg.get("direct_recovery_evidence_benefit_margin_temperature", 0.025)
+        ),
+        direct_recovery_evidence_joint_reserve_temperature=float(
+            model_cfg.get("direct_recovery_evidence_joint_reserve_temperature", 0.025)
+        ),
         # v48.23/v48.24 set these fields in the run scripts, but the CLI model
         # constructor previously dropped them. That silently restored the legacy
         # p(harm)=0.5 prior and non-identity admission penalty.
@@ -3032,6 +3053,12 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             ),
             "direct_recovery_evidence_frontier_cap_temperature": float(
                 model_cfg.get("direct_recovery_evidence_frontier_cap_temperature", 0.10)
+            ),
+            "direct_recovery_evidence_benefit_margin_temperature": float(
+                model_cfg.get("direct_recovery_evidence_benefit_margin_temperature", 0.025)
+            ),
+            "direct_recovery_evidence_joint_reserve_temperature": float(
+                model_cfg.get("direct_recovery_evidence_joint_reserve_temperature", 0.025)
             ),
             "direct_recovery_evidence_frontier": bool(
                 model_cfg.get("direct_recovery_evidence_frontier", False)

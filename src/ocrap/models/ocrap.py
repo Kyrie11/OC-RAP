@@ -253,6 +253,8 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_slack_temperature: float = 0.025,
         direct_recovery_evidence_slack_penalty: float = 1.0,
         direct_recovery_evidence_frontier_cap_temperature: float = 0.10,
+        direct_recovery_evidence_benefit_margin_temperature: float = 0.025,
+        direct_recovery_evidence_joint_reserve_temperature: float = 0.025,
         direct_recovery_evidence_frontier: bool = False,
         direct_recovery_evidence_component_prior_logit: float = -2.0,
     ):
@@ -394,7 +396,7 @@ class OCRAPModel(nn.Module):
         ).strip().lower()
         if self.direct_recovery_evidence_admission_prior_mode not in {
             "risk_centered", "benefit_only", "safety_slack", "barrier_gated_slack",
-            "frontier_capped_slack",
+            "frontier_capped_slack", "joint_reserve",
         }:
             raise ValueError(
                 "Unsupported direct_recovery_evidence_admission_prior_mode="
@@ -408,6 +410,15 @@ class OCRAPModel(nn.Module):
         )
         self.direct_recovery_evidence_frontier_cap_temperature = float(
             max(1.0e-4, direct_recovery_evidence_frontier_cap_temperature)
+        )
+        # v48.38 RFR: benefit and component logits are converted back into the
+        # same signed physical-margin units used by factor supervision before
+        # being composed into a deterministic noncompensatory recovery reserve.
+        self.direct_recovery_evidence_benefit_margin_temperature = float(
+            max(1.0e-6, direct_recovery_evidence_benefit_margin_temperature)
+        )
+        self.direct_recovery_evidence_joint_reserve_temperature = float(
+            max(1.0e-6, direct_recovery_evidence_joint_reserve_temperature)
         )
         self.direct_recovery_evidence_frontier = bool(direct_recovery_evidence_frontier)
         self.direct_recovery_evidence_component_prior_logit = float(
@@ -963,6 +974,37 @@ class OCRAPModel(nn.Module):
         stacked = torch.stack([free_logit, safety_cap_logit], dim=-1)
         return -tau * torch.logsumexp(-stacked / tau, dim=-1)
 
+    @staticmethod
+    def _candidate_minus_nominal(
+        values: torch.Tensor,
+        group_index: torch.Tensor | None,
+        is_nominal: torch.Tensor | None,
+    ) -> torch.Tensor:
+        """Return candidate-minus-nominal values with exact group provenance.
+
+        v48.38 RFR composes benefit and component-safety factors only after
+        converting each learned factor into a nominal-relative physical margin.
+        The operation is regime agnostic and fails closed to zeros for malformed
+        groups instead of borrowing information across scenes.
+        """
+        out = torch.zeros_like(values)
+        if group_index is None or is_nominal is None or values.shape[0] <= 0:
+            return out
+        groups = group_index.to(device=values.device)
+        groups = groups.reshape(-1, 1) if groups.dim() == 1 else groups.reshape(groups.shape[0], -1)
+        nominal_mask = is_nominal.to(device=values.device).reshape(-1) > 0.5
+        if groups.shape[0] != values.shape[0] or nominal_mask.shape[0] != values.shape[0]:
+            return out
+        for key in torch.unique(groups, dim=0):
+            idx = torch.where((groups == key.unsqueeze(0)).all(dim=1))[0]
+            noms = idx[nominal_mask[idx]]
+            if noms.numel() != 1:
+                continue
+            group_rows = values.index_select(0, idx)
+            nominal_row = values.index_select(0, noms[:1])
+            out.index_copy_(0, idx, group_rows - nominal_row)
+        return out
+
     def _direct_candidate_raw_relative_features(
         self,
         x: torch.Tensor,
@@ -1354,6 +1396,7 @@ class OCRAPModel(nn.Module):
         unified_benefit_logit = None
         unified_harm_logit = None
         unified_component_harm_logits = None
+        effective_component_harm_logits = None
         unified_admission_logit = None
         calibrator_enabled = (
             self.direct_evidence_calibrators is not None
@@ -1805,6 +1848,74 @@ class OCRAPModel(nn.Module):
                             nominal_mask, torch.zeros_like(harm_logit), harm_logit
                         )
                     nonharm_logit = -harm_logit
+                if (
+                    self.direct_recovery_evidence_admission_prior_mode == "joint_reserve"
+                    and unified_benefit_logit is not None
+                    and effective_component_harm_logits is not None
+                ):
+                    # v48.38 RFR / ROBUST-FRONTIER-RESERVE.
+                    # v48.37 showed that the learned admission residual selected
+                    # epoch zero while later updates worsened deployment-exact
+                    # metrics. Admission is therefore no longer a separately
+                    # learned sparse classifier in this mode. It is the exact
+                    # piecewise-linear physical AND of benefit headroom and worst-component safety
+                    # headroom, shared continuously across all audit strata.
+                    relative_benefit = self._candidate_minus_nominal(
+                        unified_benefit_logit, group_index, is_nominal
+                    )
+                    relative_components = self._candidate_minus_nominal(
+                        effective_component_harm_logits, group_index, is_nominal
+                    )
+                    predicted_benefit_margin = (
+                        self.direct_recovery_evidence_benefit_margin_temperature
+                        * relative_benefit
+                    )
+                    predicted_component_margins = (
+                        self.direct_recovery_evidence_slack_temperature
+                        * relative_components
+                    )
+                    # Only globally supported learned coordinates may define
+                    # the learned reserve.  Reliability-zero coordinates are
+                    # pinned to a constant neutral prior; after nominal
+                    # subtraction their margin is exactly zero.  Including that
+                    # zero in a max would force safety_headroom <= 0 and make
+                    # positive reserve mathematically impossible whenever any
+                    # coordinate is unsupported (the v48.37 support contract is
+                    # [1,1,1,0,0]).  Mask them exactly as the RFR training loss
+                    # does.  Independent measured hard vetoes remain downstream.
+                    reserve_supported = (
+                        self._direct_recovery_evidence_component_reliability
+                        .to(device=predicted_component_margins.device) > 0.0
+                    )
+                    if not bool(reserve_supported.any()):
+                        raise RuntimeError(
+                            "joint_reserve requires at least one supported harm coordinate"
+                        )
+                    reserve_components = torch.where(
+                        reserve_supported.unsqueeze(0),
+                        predicted_component_margins,
+                        predicted_component_margins.new_tensor(-1.0e6),
+                    )
+                    max_predicted_veto_margin = reserve_components.amax(dim=-1)
+                    predicted_safety_headroom = -max_predicted_veto_margin
+                    # Exact min preserves the physical zero boundary: reserve
+                    # is positive iff both benefit headroom and safety headroom
+                    # are positive.  It is piecewise differentiable and never
+                    # allows one factor to compensate the other.
+                    joint_reserve_margin = torch.minimum(
+                        predicted_benefit_margin, predicted_safety_headroom
+                    )
+                    unified_admission_logit = (
+                        joint_reserve_margin
+                        / self.direct_recovery_evidence_joint_reserve_temperature
+                    )
+                    out["direct_recovery_evidence_predicted_benefit_margin"] = predicted_benefit_margin
+                    out["direct_recovery_evidence_predicted_component_margins"] = predicted_component_margins
+                    out["direct_recovery_evidence_max_predicted_veto_margin"] = max_predicted_veto_margin
+                    out["direct_recovery_evidence_predicted_safety_headroom"] = predicted_safety_headroom
+                    out["direct_recovery_evidence_joint_reserve_margin"] = joint_reserve_margin
+                    out["direct_recovery_evidence_admission_prior"] = unified_admission_logit
+
                 if nominal_mask is not None and unified_benefit_logit is not None:
                     benefit_logit = torch.where(
                         nominal_mask, torch.zeros_like(benefit_logit), benefit_logit

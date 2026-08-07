@@ -1,5 +1,0 @@
-﻿variant,regime,shared_rule_count,strategy_regime_conditioning,opportunity_threshold,harm_threshold,score_threshold,rank_margin_threshold,fit_valid,constraint_failures,constraint_deficit,groups,selected,safe_positive_selected,harmful_selected,precision_lcb90,harmful_selected_ucb90,safe_opportunity_groups,positive_recall,teacher_advantage_mean,max_selected_macro_share
-balanced,near,1,False,0.5,0.45131673472719847,0.0,0.0,False,6,249.1788526380451,110,0,0,0,0.0,1.0,8,0.0,0.0,0.0
-balanced,contact,1,False,0.5,0.45131673472719847,0.0,0.0,False,6,249.1788526380451,279,6,0,3,0.0,0.7317885263804511,17,0.0,-0.2805783807180811,0.8333333333333334
-precision,near,1,False,0.5,0.17886482520648686,0.10526823997497559,0.0,False,6,282.0,110,0,0,0,0.0,1.0,8,0.0,0.0,0.0
-precision,contact,1,False,0.5,0.17886482520648686,0.10526823997497559,0.0,False,6,282.0,279,0,0,0,0.0,1.0,17,0.0,0.0,0.0

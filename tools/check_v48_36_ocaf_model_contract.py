@@ -15,7 +15,7 @@ from pathlib import Path
 from ocrap.models.inference import load_model_bundle
 
 
-PRIOR_MODES = ("risk_centered", "benefit_only", "safety_slack", "barrier_gated_slack", "frontier_capped_slack")
+PRIOR_MODES = ("risk_centered", "benefit_only", "safety_slack", "barrier_gated_slack", "frontier_capped_slack", "joint_reserve")
 
 
 def _parse_csv(value: str) -> tuple[float, ...]:
@@ -32,6 +32,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--expect-context-source", choices=("relative", "tournament", "physical_relative", "physical_interaction"), default="physical_interaction")
     ap.add_argument("--expect-context-enabled", choices=("true", "false"), default="true")
     ap.add_argument("--expect-frontier-cap-temperature", type=float, default=0.10)
+    ap.add_argument("--expect-admission-head", choices=("true", "false", "any"), default="any")
+    ap.add_argument("--expect-benefit-margin-temperature", type=float, default=0.025)
+    ap.add_argument("--expect-joint-reserve-temperature", type=float, default=0.025)
     ap.add_argument("--expect-component-prior-logit", type=float, default=-2.0)
     ap.add_argument("--expect-component-count", type=int, default=5)
     ap.add_argument("--expect-component-scale", type=float, default=6.0)
@@ -66,6 +69,9 @@ def main() -> int:
         "direct_recovery_evidence_calibrator_context": bool(model.direct_recovery_evidence_calibrator_context),
         "direct_recovery_evidence_calibrator_context_source": str(model.direct_recovery_evidence_calibrator_context_source),
         "direct_recovery_evidence_frontier_cap_temperature": float(model.direct_recovery_evidence_frontier_cap_temperature),
+        "direct_recovery_evidence_admission_head": bool(model.direct_recovery_evidence_admission_head),
+        "direct_recovery_evidence_benefit_margin_temperature": float(model.direct_recovery_evidence_benefit_margin_temperature),
+        "direct_recovery_evidence_joint_reserve_temperature": float(model.direct_recovery_evidence_joint_reserve_temperature),
         "direct_recovery_evidence_admission_bounded": bool(model.direct_recovery_evidence_admission_bounded),
         "direct_recovery_evidence_admission_prior_detach": bool(model.direct_recovery_evidence_admission_prior_detach),
         "direct_recovery_evidence_admission_prior_mode": str(model.direct_recovery_evidence_admission_prior_mode),
@@ -85,6 +91,11 @@ def main() -> int:
         "direct_recovery_evidence_calibrator_context": args.expect_context_enabled == "true",
         "direct_recovery_evidence_calibrator_context_source": args.expect_context_source,
         "direct_recovery_evidence_frontier_cap_temperature": float(args.expect_frontier_cap_temperature),
+        "direct_recovery_evidence_admission_head": (
+            None if args.expect_admission_head == "any" else args.expect_admission_head == "true"
+        ),
+        "direct_recovery_evidence_benefit_margin_temperature": float(args.expect_benefit_margin_temperature),
+        "direct_recovery_evidence_joint_reserve_temperature": float(args.expect_joint_reserve_temperature),
         "direct_recovery_evidence_admission_bounded": args.expect_admission_bounded == "true",
         "direct_recovery_evidence_admission_prior_detach": (
             None if args.expect_admission_prior_detach == "any" else args.expect_admission_prior_detach == "true"
@@ -131,7 +142,8 @@ def main() -> int:
         "mismatches": mismatches,
         "regime_routing": False,
         "shared_deployment_rule_required": True,
-        "noncompensatory_frontier_cap": args.expect_admission_prior_mode == "frontier_capped_slack",
+        "noncompensatory_frontier_cap": args.expect_admission_prior_mode in {"frontier_capped_slack", "joint_reserve"},
+        "deterministic_joint_reserve": args.expect_admission_prior_mode == "joint_reserve",
         "observation_conditioned_action_frontier": args.expect_context_source == "physical_interaction",
         "zero_action_no_scene_shortcut": args.expect_context_source == "physical_interaction",
     }
