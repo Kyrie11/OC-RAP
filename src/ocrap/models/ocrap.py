@@ -187,6 +187,74 @@ class DualObservationConditionedActionFrontierBridge(nn.Module):
         )
 
 
+class _ZeroObservationConditionedActionFrontierBranch(nn.Module):
+    """Parameter-free placeholder for a globally unsupported harm coordinate."""
+
+    def __init__(self, hidden_dim: int):
+        super().__init__()
+        self.hidden_dim = int(hidden_dim)
+
+    def forward(self, action_relative: torch.Tensor, nominal_observation: torch.Tensor) -> torch.Tensor:
+        del nominal_observation
+        return action_relative.new_zeros((action_relative.shape[0], self.hidden_dim))
+
+
+class FactorizedObservationConditionedActionFrontierBridge(nn.Module):
+    """Task- and component-decoupled continuous OCAF contexts.
+
+    v48.40 established that benefit/harm interaction decoupling improves rare
+    safety-frontier discrimination.  The remaining harm head still multiplexes
+    physically different veto factors (DRS, deployability, gap, ...), whose
+    prevalences and observation dependencies differ substantially.  FCFR gives
+    every harm component its own observation-conditioned action interaction
+    bridge while preserving *identical* regime-free inputs and the same exact
+    non-compensatory max-veto downstream.
+
+    No regime id, bucket router, regime-specific threshold, or case policy is
+    introduced.  A zero candidate-minus-nominal action produces exact zeros in
+    every branch.
+    """
+
+    def __init__(
+        self,
+        action_dim: int,
+        observation_dim: int,
+        hidden_dim: int,
+        dropout: float,
+        component_count: int,
+        component_reliability: tuple[float, ...] | None = None,
+    ):
+        super().__init__()
+        self.component_count = int(component_count)
+        reliability = list(component_reliability or ())
+        if len(reliability) < self.component_count:
+            reliability.extend([1.0] * (self.component_count - len(reliability)))
+        self.component_reliability = tuple(float(x) for x in reliability[: self.component_count])
+        self.benefit = ObservationConditionedActionFrontierBridge(
+            action_dim, observation_dim, hidden_dim, dropout
+        )
+        self.harm_components = nn.ModuleList(
+            [
+                ObservationConditionedActionFrontierBridge(
+                    action_dim, observation_dim, hidden_dim, dropout
+                )
+                if self.component_reliability[i] > 0.0
+                else _ZeroObservationConditionedActionFrontierBranch(hidden_dim)
+                for i in range(self.component_count)
+            ]
+        )
+
+    def forward(
+        self, action_relative: torch.Tensor, nominal_observation: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        benefit = self.benefit(action_relative, nominal_observation)
+        harm = torch.stack(
+            [branch(action_relative, nominal_observation) for branch in self.harm_components],
+            dim=1,
+        )
+        return benefit, harm
+
+
 class OCRAPModel(nn.Module):
     """Neural OC-RAP model with a learned root-query decoder.
 
@@ -263,6 +331,9 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_interaction_hidden: int = 64,
         direct_recovery_evidence_interaction_dropout: float = 0.05,
         direct_recovery_evidence_dual_interaction_bridge: bool = False,
+        direct_recovery_evidence_factorized_harm_interaction: bool = False,
+        direct_recovery_evidence_rank_benefit_skip: bool = False,
+        direct_recovery_evidence_rank_benefit_gain_init: float = 1.0,
         direct_recovery_evidence_calibrator_shared: bool = False,
         direct_recovery_evidence_calibrator_regime_scale: float = 0.25,
         direct_recovery_evidence_unified_experts: bool = False,
@@ -367,6 +438,21 @@ class OCRAPModel(nn.Module):
         # between sparse benefit and dense harm tasks without any regime input.
         self.direct_recovery_evidence_dual_interaction_bridge = bool(
             direct_recovery_evidence_dual_interaction_bridge
+        )
+        # v48.41 FCFR.  Harm factors have different physical semantics and
+        # label prevalences; sharing the same interaction representation can
+        # recreate the negative transfer that v48.40 removed between benefit
+        # and aggregate harm.  This option is meaningful only with a physical
+        # interaction context and component heads, but keeping it as a model
+        # flag makes the checkpoint contract explicit and auditable.
+        self.direct_recovery_evidence_factorized_harm_interaction = bool(
+            direct_recovery_evidence_factorized_harm_interaction
+        )
+        self.direct_recovery_evidence_rank_benefit_skip = bool(
+            direct_recovery_evidence_rank_benefit_skip
+        )
+        self.direct_recovery_evidence_rank_benefit_gain_init = float(
+            max(1.0e-4, direct_recovery_evidence_rank_benefit_gain_init)
         )
         self.direct_recovery_evidence_calibrator_shared = bool(
             direct_recovery_evidence_calibrator_shared
@@ -822,7 +908,16 @@ class OCRAPModel(nn.Module):
                 evidence_context_dim = relative_in_dim
         self.direct_evidence_interaction_bridge = (
             (
-                DualObservationConditionedActionFrontierBridge(
+                FactorizedObservationConditionedActionFrontierBridge(
+                    self.direct_candidate_physical_feature_dim,
+                    self.direct_observation_feature_dim,
+                    self.direct_recovery_evidence_interaction_hidden,
+                    self.direct_recovery_evidence_interaction_dropout,
+                    self.direct_recovery_evidence_component_count,
+                    self.direct_recovery_evidence_component_reliability,
+                )
+                if self.direct_recovery_evidence_factorized_harm_interaction
+                else DualObservationConditionedActionFrontierBridge(
                     self.direct_candidate_physical_feature_dim,
                     self.direct_observation_feature_dim,
                     self.direct_recovery_evidence_interaction_hidden,
@@ -892,10 +987,37 @@ class OCRAPModel(nn.Module):
             and self.direct_recovery_evidence_concord
             else None
         )
+        # v48.41 FCFR: a deliberately low-capacity monotone skip from the
+        # frozen recovery preference advantage into the *bounded* benefit
+        # residual.  v48.40 rows show that rank_adv carries strong Contact
+        # safe-positive ordering information while the learned opportunity
+        # frontier underuses it.  The positive softplus gain cannot invert that
+        # ordering, and the downstream tanh keeps the HAF benefit correction
+        # bounded (unlike the falsified v48.39 unbounded-benefit ablation).
+        if self.direct_recovery_evidence_rank_benefit_skip:
+            init_gain = torch.tensor(
+                self.direct_recovery_evidence_rank_benefit_gain_init,
+                dtype=torch.float32,
+            )
+            self.direct_evidence_rank_benefit_log_gain = nn.Parameter(
+                torch.log(torch.expm1(init_gain))
+            )
+        else:
+            self.register_parameter("direct_evidence_rank_benefit_log_gain", None)
         self.direct_evidence_concord_harm_calibrator = (
-            _make_evidence_calibrator(
-                self.direct_recovery_evidence_component_count
-                if self.direct_recovery_evidence_component_heads else 1
+            (
+                nn.ModuleList(
+                    [
+                        _make_evidence_calibrator(1)
+                        for _ in range(self.direct_recovery_evidence_component_count)
+                    ]
+                )
+                if self.direct_recovery_evidence_factorized_harm_interaction
+                and self.direct_recovery_evidence_component_heads
+                else _make_evidence_calibrator(
+                    self.direct_recovery_evidence_component_count
+                    if self.direct_recovery_evidence_component_heads else 1
+                )
             )
             if self.direct_recovery_value_head
             and self.direct_recovery_delta_head
@@ -1535,7 +1657,18 @@ class OCRAPModel(nn.Module):
                         # Detach raw/upstream representations, not the trainable OCAF bridge.
                         action_context = action_context.detach()
                         observation_context = observation_context.detach()
-                    if self.direct_recovery_evidence_dual_interaction_bridge:
+                    if self.direct_recovery_evidence_factorized_harm_interaction:
+                        benefit_context, harm_component_contexts = self.direct_evidence_interaction_bridge(
+                            action_context, observation_context
+                        )
+                        harm_context = harm_component_contexts.mean(dim=1)
+                        calibrator_context = 0.5 * (benefit_context + harm_context)
+                        out["direct_recovery_evidence_benefit_interaction_context"] = benefit_context
+                        out["direct_recovery_evidence_harm_interaction_context"] = harm_context
+                        out["direct_recovery_evidence_component_harm_interaction_contexts"] = (
+                            harm_component_contexts
+                        )
+                    elif self.direct_recovery_evidence_dual_interaction_bridge:
                         benefit_context, harm_context = self.direct_evidence_interaction_bridge(
                             action_context, observation_context
                         )
@@ -1567,7 +1700,10 @@ class OCRAPModel(nn.Module):
             if (
                 self.direct_recovery_evidence_calibrator_context
                 and self.direct_recovery_evidence_calibrator_context_source == "physical_interaction"
-                and self.direct_recovery_evidence_dual_interaction_bridge
+                and (
+                    self.direct_recovery_evidence_dual_interaction_bridge
+                    or self.direct_recovery_evidence_factorized_harm_interaction
+                )
             ):
                 # Replace only the final context block; scalar evidence and raw
                 # physical inputs remain identical between tasks.
@@ -1580,7 +1716,42 @@ class OCRAPModel(nn.Module):
                 benefit_raw = self.direct_evidence_concord_benefit_calibrator(
                     benefit_calibrator_input
                 ).squeeze(-1)
-                harm_raw = self.direct_evidence_concord_harm_calibrator(harm_calibrator_input)
+                if self.direct_recovery_evidence_rank_benefit_skip:
+                    if calibrator_policy.shape[-1] < 1 or self.direct_evidence_rank_benefit_log_gain is None:
+                        raise RuntimeError("rank-benefit skip configured without rank policy evidence")
+                    rank_gain = torch.nn.functional.softplus(
+                        self.direct_evidence_rank_benefit_log_gain
+                    )
+                    benefit_raw = benefit_raw + rank_gain * calibrator_policy[:, 0]
+                    out["direct_recovery_evidence_rank_benefit_gain"] = rank_gain.expand_as(
+                        benefit_raw
+                    )
+                if self.direct_recovery_evidence_factorized_harm_interaction:
+                    if not isinstance(self.direct_evidence_concord_harm_calibrator, nn.ModuleList):
+                        raise RuntimeError("factorized harm interaction requires component calibrators")
+                    component_contexts = out.get(
+                        "direct_recovery_evidence_component_harm_interaction_contexts"
+                    )
+                    if component_contexts is None:
+                        raise RuntimeError("factorized harm interaction context missing")
+                    harm_parts = []
+                    for component_index, head in enumerate(
+                        self.direct_evidence_concord_harm_calibrator
+                    ):
+                        if self.direct_recovery_evidence_component_reliability[component_index] <= 0.0:
+                            # Exact compute-only pruning for globally unsupported
+                            # coordinates. Their effective logit remains the
+                            # semantic non-harm prior and they are masked from
+                            # the learned reserve exactly as before.
+                            harm_parts.append(component_contexts.new_zeros((component_contexts.shape[0], 1)))
+                            continue
+                        component_input = torch.cat(
+                            [scalar_input, component_contexts[:, component_index, :]], dim=-1
+                        )
+                        harm_parts.append(head(component_input))
+                    harm_raw = torch.cat(harm_parts, dim=-1)
+                else:
+                    harm_raw = self.direct_evidence_concord_harm_calibrator(harm_calibrator_input)
                 admission_raw = (
                     self.direct_evidence_concord_admission_calibrator(benefit_calibrator_input).squeeze(-1)
                     if self.direct_evidence_concord_admission_calibrator is not None
@@ -1675,6 +1846,13 @@ class OCRAPModel(nn.Module):
                     unified_harm_logit = effective_component_harm_logits.amax(dim=-1)
                     out["direct_recovery_evidence_effective_component_harm_logits"] = (
                         effective_component_harm_logits
+                    )
+                    # v48.41 diagnostic contract: publish the exact effective
+                    # component probabilities used by the global harm max.  This
+                    # is diagnostic/provenance only; deployment selection still
+                    # uses the signed component margins and the same max-veto.
+                    out["direct_recovery_evidence_component_harm_probabilities"] = (
+                        torch.sigmoid(effective_component_harm_logits)
                     )
                     out["direct_recovery_evidence_component_reliability"] = reliability.expand_as(
                         effective_component_harm_logits

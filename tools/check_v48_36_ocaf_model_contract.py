@@ -48,6 +48,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--expect-slack-penalty", type=float, default=1.0)
     ap.add_argument("--expect-interaction-hidden", type=int, default=64)
     ap.add_argument("--expect-dual-interaction-bridge", choices=("true", "false", "any"), default="any")
+    ap.add_argument("--expect-factorized-harm-interaction", choices=("true", "false", "any"), default="any")
+    ap.add_argument("--expect-rank-benefit-skip", choices=("true", "false", "any"), default="any")
+    ap.add_argument("--expect-rank-benefit-gain-init", type=float, default=None)
     ap.add_argument("--expect-consensus-prior-scale", type=float, default=0.50)
     ap.add_argument("--reliability-override", default="", help="Ablation override; empty uses support contract")
     return ap
@@ -95,6 +98,15 @@ def main() -> int:
         "direct_recovery_evidence_dual_interaction_bridge": bool(
             model.direct_recovery_evidence_dual_interaction_bridge
         ),
+        "direct_recovery_evidence_factorized_harm_interaction": bool(
+            model.direct_recovery_evidence_factorized_harm_interaction
+        ),
+        "direct_recovery_evidence_rank_benefit_skip": bool(
+            model.direct_recovery_evidence_rank_benefit_skip
+        ),
+        "direct_recovery_evidence_rank_benefit_gain_init": float(
+            model.direct_recovery_evidence_rank_benefit_gain_init
+        ),
         "direct_recovery_evidence_consensus_prior_scale": float(model.direct_recovery_evidence_consensus_prior_scale),
         "interaction_bridge_present": model.direct_evidence_interaction_bridge is not None,
     }
@@ -135,6 +147,15 @@ def main() -> int:
             None if args.expect_dual_interaction_bridge == "any"
             else args.expect_dual_interaction_bridge == "true"
         ),
+        "direct_recovery_evidence_factorized_harm_interaction": (
+            None if args.expect_factorized_harm_interaction == "any"
+            else args.expect_factorized_harm_interaction == "true"
+        ),
+        "direct_recovery_evidence_rank_benefit_skip": (
+            None if args.expect_rank_benefit_skip == "any"
+            else args.expect_rank_benefit_skip == "true"
+        ),
+        "direct_recovery_evidence_rank_benefit_gain_init": args.expect_rank_benefit_gain_init,
         "direct_recovery_evidence_consensus_prior_scale": float(args.expect_consensus_prior_scale),
         "interaction_bridge_present": args.expect_context_source == "physical_interaction",
     }

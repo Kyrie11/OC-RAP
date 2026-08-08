@@ -32,7 +32,12 @@ def _atomic_json(path: Path, document: dict) -> None:
     os.replace(tmp, path)
 
 
-def _model(device: torch.device, hidden: int, dual: bool = False) -> OCRAPModel:
+def _model(
+    device: torch.device,
+    hidden: int,
+    dual: bool = False,
+    factorized_harm: bool = False,
+) -> OCRAPModel:
     model = OCRAPModel(
         input_dim=FlatFeatureLayout().total_dim,
         num_roots=2,
@@ -53,6 +58,7 @@ def _model(device: torch.device, hidden: int, dual: bool = False) -> OCRAPModel:
         direct_recovery_evidence_interaction_hidden=hidden,
         direct_recovery_evidence_interaction_dropout=0.0,
         direct_recovery_evidence_dual_interaction_bridge=dual,
+        direct_recovery_evidence_factorized_harm_interaction=factorized_harm,
         direct_recovery_evidence_unified_experts=True,
         direct_recovery_evidence_component_heads=True,
         direct_recovery_evidence_component_count=5,
@@ -64,14 +70,21 @@ def _model(device: torch.device, hidden: int, dual: bool = False) -> OCRAPModel:
     return model.train()
 
 
-def _exercise(device: torch.device, batch_size: int, group_size: int, hidden: int, dual: bool = False) -> dict:
+def _exercise(
+    device: torch.device,
+    batch_size: int,
+    group_size: int,
+    hidden: int,
+    dual: bool = False,
+    factorized_harm: bool = False,
+) -> dict:
     if batch_size < group_size or batch_size % group_size != 0:
         raise ValueError("batch-size must be a positive multiple of group-size")
     torch.manual_seed(48361)
     if device.type == "cuda":
         torch.cuda.manual_seed_all(48361)
 
-    model = _model(device, hidden, dual=dual)
+    model = _model(device, hidden, dual=dual, factorized_harm=factorized_harm)
     layout = FlatFeatureLayout()
     num_groups = batch_size // group_size
     x = torch.randn(batch_size, layout.total_dim, device=device, requires_grad=True)
@@ -131,6 +144,7 @@ def _exercise(device: torch.device, batch_size: int, group_size: int, hidden: in
         "nominal_observation_dim": observation.shape[-1],
         "interaction_hidden": context.shape[-1],
         "dual_interaction_bridge": bool(dual),
+        "factorized_harm_interaction": bool(factorized_harm),
         "zero_action_exact_zero": True,
         "forward_finite": bool(torch.isfinite(context).all()),
         "backward_finite": True,
@@ -145,6 +159,7 @@ def main() -> int:
     parser.add_argument("--group-size", type=int, default=8)
     parser.add_argument("--interaction-hidden", type=int, default=64)
     parser.add_argument("--dual-interaction-bridge", action="store_true")
+    parser.add_argument("--factorized-harm-interaction", action="store_true")
     args = parser.parse_args()
 
     started = time.time()
@@ -173,6 +188,7 @@ def main() -> int:
                 group_size=args.group_size,
                 hidden=args.interaction_hidden,
                 dual=args.dual_interaction_bridge,
+                factorized_harm=args.factorized_harm_interaction,
             )
         )
         report["valid"] = True

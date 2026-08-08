@@ -651,6 +651,16 @@ def main() -> int:
             row["delta_std"] = None if pred.direct_recovery_delta_std is None else max(float(args.delta_std_floor), float(pred.direct_recovery_delta_std))
             row["opp_logit"] = None if pred.direct_recovery_opportunity_logit is None else float(pred.direct_recovery_opportunity_logit)
             row["harm_logit"] = None if pred.direct_recovery_harm_logit is None else float(pred.direct_recovery_harm_logit)
+            row["component_harm"] = (
+                None
+                if pred.direct_recovery_component_harm is None
+                else [float(x) for x in np.asarray(pred.direct_recovery_component_harm).reshape(-1)]
+            )
+            row["component_margins"] = (
+                None
+                if pred.direct_recovery_component_margins is None
+                else [float(x) for x in np.asarray(pred.direct_recovery_component_margins).reshape(-1)]
+            )
             if args.risk_source in {"heads", "ordinal_evidence"} and (row["opp_logit"] is None or row["harm_logit"] is None):
                 raise ValueError("risk-source=heads/ordinal_evidence requires opportunity/harm outputs")
         if gi == 1 or gi % 200 == 0 or gi == len(raw):
@@ -716,6 +726,8 @@ def main() -> int:
                 "candidate": r["candidate"], "macro": r["macro"], "deviation": r["deviation"],
                 "pred_adv": pred_adv, "rank_adv": rank_adv, "delta_std": delta_std,
                 "opportunity": opportunity, "harm": harm, "head_harm": head_harm,
+                "predicted_component_harm": r.get("component_harm"),
+                "predicted_component_margins": r.get("component_margins"),
                 "teacher_adv": teacher_adv,
                 "teacher_component_veto_margin": component_margin,
                 "teacher_harmful": bool(component_margin > 0.0) if args.harm_label_mode == "component_veto" else bool(teacher_adv <= -args.negative_gain),

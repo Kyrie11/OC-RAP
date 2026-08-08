@@ -1,6 +1,114 @@
 # Algorithm Change Log
 
 
+## v48.41 — FCFR / FACTORIZED COMPONENT FRONTIER RESERVE (2026-08-07)
+
+### Evidence-based diagnosis of v48.40
+
+All four v48.40 arms (A/B/C/D-main) terminate as authoritative, pipeline-valid
+`RC=20` runs with `certificate_executed=true`, `gate_evaluated=true`, and the same
+`development_rule_fit` dominant failure layer.  Dataset/protocol hashes, proposal
+row identities/teacher labels, factor caches, model/training contracts, and stage
+transfer are consistent across arms, so the ablation is usable as algorithm evidence
+rather than an engineering-failure comparison.  Proposal-oracle support remains
+feasible (Near top-5 contains 9 safe-positive groups; Contact contains 20), placing
+the remaining bottleneck after candidate generation.
+
+The v48.40 2x2 yields a clear asymmetric conclusion.  Dual task OCAF (B vs A) is
+meaningful: on Precision certificate rows the Near harmful-vs-safe-positive
+conditional harm AUC rises from roughly 0.336 to 0.482 and overall harm AUC from
+roughly 0.635 to 0.677; paired group bootstrap gives a positive conditional-harm
+delta around +0.143 and positive overall-harm delta around +0.042.  Contact overall
+harm AUC also improves and conditional harm moves in the positive direction.
+Therefore benefit/harm interaction-gradient decoupling is retained.
+
+Frontier-normalized component regression is not retained.  C is approximately
+neutral relative to A, while adding it on top of dual OCAF (D vs B) reduces Near
+opportunity discrimination and rare-frontier harm discrimination; Contact
+conditional harm also falls.  The `frontier_tanh` target therefore fails its causal
+ablation and v48.41 returns to raw signed component-margin regression.
+
+Near still exhibits the v48.39/v48.40 failure signature: safe-positive recovery
+candidates have useful benefit ordering (certificate opportunity AUC about
+0.73--0.78 in the bounded-benefit arms), but the aggregate harm path false-vetoes
+most of them.  Under the A reference, rare safe-positive-vs-harmful conditional harm
+AUC is below random; B materially improves it but does not make the shared rule
+feasible.  Contact remains a dual bottleneck: benefit opportunity AUC is only about
+0.57--0.59 and harmful false-safe selections remain frequent.  However the frozen
+preference `rank_adv` has substantially stronger Contact safe-positive ordering
+(AUC about 0.73), indicating useful already-learned benefit information that the
+current sparse opportunity calibrator underuses.
+
+### Algorithm change 1: component-factorized harm interaction and calibration
+
+v48.40 decoupled benefit from harm but the harm task still forces physically
+different veto factors (DRS, deployability, gap, hard-rule, harm-proxy) through one
+trainable harm OCAF bridge and one shared MLP.  The supported coordinates have
+substantially different prevalence and observation dependence, so dense
+deployability gradients can still rotate the representation used by the rarer DRS
+and gap frontiers.  FCFR extends the validated task-level decoupling *inside the
+harm factorization*: every physical component receives its own
+observation-conditioned action bridge and its own one-output calibrator.
+
+All branches consume the same candidate-minus-nominal executable action and the same
+nominal observation.  No Safe/Near/Contact label, router, head, threshold, or
+case-specific policy is added.  The global support reliability and exact
+noncompensatory max-veto are unchanged.  Reliability-zero coordinates receive no
+component supervision and cannot enter the learned reserve, while independent
+measured hard vetoes remain intact.
+For the current global support contract `[1,1,1,0,0]`, reliability-zero harm
+coordinates use parameter-free zero-context placeholders and skip their calibrator
+forward.  This is an exact compute-only optimization: their effective semantic logit
+remains the same fixed non-harm prior, and they remain excluded from the learned
+reserve.
+
+### Algorithm change 2: bounded monotone rank-benefit skip
+
+The frozen preference advantage already contains useful Contact recovery ordering
+that the learned benefit frontier fails to exploit.  FCFR adds one low-capacity
+positive-gain skip from detached `rank_adv` into the **bounded** HAF benefit residual.
+The gain is parameterized by `softplus`, so it cannot invert the frozen ranking.
+The existing tanh-bounded HAF residual remains in place, deliberately avoiding the
+falsified v48.39 unbounded-benefit parameterization.  No new ranking loss, regime
+routing, or deployment threshold is introduced.
+
+### New diagnostic contract
+
+Inference/calibration now publishes the five effective component-harm probabilities
+and signed predicted component margins into proposal rows.  This does not change
+selection.  It allows the next run to identify whether DRS, deployability, or gap is
+responsible for Near safe-positive false vetoes and Contact harmful false-safe errors
+instead of inferring component causes from an aggregate max.
+
+### Preregistered 2x2 ablation
+
+- A: v48.40-B reference (dual task OCAF + raw component margins).
+- B: A + component-factorized harm interaction/calibrators.
+- C: A + bounded monotone rank-benefit skip.
+- D/main: B + C.
+
+Interpretation is fixed before the next result is read: B>A supports within-harm
+component interference; C>A supports underused frozen rank evidence; D>B,C supports
+complementarity.  If B fails to improve the Near rare-frontier false-veto pattern,
+do not add another generic harm loss; inspect per-component observation/teacher
+identifiability and data support.  If C fails despite strong frozen Contact rank AUC,
+do not restack another pairwise/listwise objective.
+
+### Explicit non-repetition and scientific protocol
+
+Not repeated: threshold-grid densification, top-k expansion, aggressive positive
+oversampling, hardest-negative population distortion as the main mechanism, generic
+pairwise/listwise restacking, barrier/eligibility continuation, full joint stage-2,
+learned admission residual, v48.38 one-sided tail losses, v48.39 unbounded
+benefit/harm factors, v48.40 `frontier_tanh`, or regime-conditioned routing.
+
+Because multiple development cycles have already inspected the same certificate
+outputs, those certificate sets should no longer be described as pristine one-shot
+independent evidence in the paper.  v48.41 mechanisms/arms are preregistered here
+before execution; further coefficient/threshold tuning should use development data,
+while untouched test roots and gate-authorized closed-loop evaluation remain the
+final evidence for CCF-A claims.
+
 ## v48.39 — DRFR / DYNAMIC-RANGE FRONTIER RESERVE (2026-08-07)
 
 ### Evidence-based diagnosis of v48.38

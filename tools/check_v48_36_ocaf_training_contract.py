@@ -135,6 +135,9 @@ def main() -> int:
     ap.add_argument("--expect-unbounded-harm-factors", choices=("true", "false", "any"), default="any")
     ap.add_argument("--expect-reserve-factor-alignment", choices=("true", "false", "any"), default="any")
     ap.add_argument("--expect-dual-interaction-bridge", choices=("true", "false", "any"), default="any")
+    ap.add_argument("--expect-factorized-harm-interaction", choices=("true", "false", "any"), default="any")
+    ap.add_argument("--expect-rank-benefit-skip", choices=("true", "false", "any"), default="any")
+    ap.add_argument("--expect-rank-benefit-gain-init", type=float, default=None)
     ap.add_argument("--expect-component-margin-target-mode", default="any")
     ap.add_argument("--expect-component-margin-target-scale", type=float, default=None)
     ap.add_argument("--expect-algorithm-variant", default="")
@@ -188,6 +191,9 @@ def main() -> int:
     expected_unbounded_harm = None if args.expect_unbounded_harm_factors == "any" else args.expect_unbounded_harm_factors == "true"
     expected_reserve_alignment = None if args.expect_reserve_factor_alignment == "any" else args.expect_reserve_factor_alignment == "true"
     expected_dual_bridge = None if args.expect_dual_interaction_bridge == "any" else args.expect_dual_interaction_bridge == "true"
+    expected_factorized_harm = None if args.expect_factorized_harm_interaction == "any" else args.expect_factorized_harm_interaction == "true"
+    expected_rank_benefit_skip = None if args.expect_rank_benefit_skip == "any" else args.expect_rank_benefit_skip == "true"
+    expected_rank_benefit_gain_init = args.expect_rank_benefit_gain_init
     identity_trainable = _trainable(identity_arch)
     final_trainable = _trainable(final_arch)
     expected_ocaf = args.expect_context_source == "physical_interaction"
@@ -295,6 +301,21 @@ def main() -> int:
         "dual_interaction_bridge_contract": (
             expected_dual_bridge is None
             or all(bool(a.get("dual_interaction_bridge", False)) is expected_dual_bridge for a in (factor_arch, identity_arch, final_arch))
+        ),
+        "factorized_harm_interaction_contract": (
+            expected_factorized_harm is None
+            or all(bool(a.get("factorized_harm_interaction", False)) is expected_factorized_harm for a in (factor_arch, identity_arch, final_arch))
+        ),
+        "rank_benefit_skip_contract": (
+            expected_rank_benefit_skip is None
+            or all(bool(a.get("rank_benefit_skip", False)) is expected_rank_benefit_skip for a in (factor_arch, identity_arch, final_arch))
+        ),
+        "rank_benefit_gain_init_contract": (
+            expected_rank_benefit_gain_init is None
+            or all(
+                math.isclose(float(a.get("rank_benefit_gain_init", -1.0)), float(expected_rank_benefit_gain_init), rel_tol=0.0, abs_tol=1.0e-9)
+                for a in (factor_arch, identity_arch, final_arch)
+            )
         ),
         "component_margin_target_mode_contract": (
             args.expect_component_margin_target_mode == "any"
