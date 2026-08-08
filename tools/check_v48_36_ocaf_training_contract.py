@@ -134,6 +134,9 @@ def main() -> int:
     ap.add_argument("--expect-unbounded-benefit-factor", choices=("true", "false", "any"), default="any")
     ap.add_argument("--expect-unbounded-harm-factors", choices=("true", "false", "any"), default="any")
     ap.add_argument("--expect-reserve-factor-alignment", choices=("true", "false", "any"), default="any")
+    ap.add_argument("--expect-dual-interaction-bridge", choices=("true", "false", "any"), default="any")
+    ap.add_argument("--expect-component-margin-target-mode", default="any")
+    ap.add_argument("--expect-component-margin-target-scale", type=float, default=None)
     ap.add_argument("--expect-algorithm-variant", default="")
     ap.add_argument("--expect-prior-coupled", choices=("true", "false"), default="true")
     ap.add_argument("--expect-adaptive-margin", choices=("true", "false"), default="false")
@@ -184,6 +187,7 @@ def main() -> int:
     expected_unbounded_benefit = None if args.expect_unbounded_benefit_factor == "any" else args.expect_unbounded_benefit_factor == "true"
     expected_unbounded_harm = None if args.expect_unbounded_harm_factors == "any" else args.expect_unbounded_harm_factors == "true"
     expected_reserve_alignment = None if args.expect_reserve_factor_alignment == "any" else args.expect_reserve_factor_alignment == "true"
+    expected_dual_bridge = None if args.expect_dual_interaction_bridge == "any" else args.expect_dual_interaction_bridge == "true"
     identity_trainable = _trainable(identity_arch)
     final_trainable = _trainable(final_arch)
     expected_ocaf = args.expect_context_source == "physical_interaction"
@@ -287,6 +291,18 @@ def main() -> int:
         "reserve_factor_alignment_contract": (
             expected_reserve_alignment is None
             or all(bool(a.get("reserve_factor_alignment", False)) is expected_reserve_alignment for a in (factor_arch, identity_arch, final_arch))
+        ),
+        "dual_interaction_bridge_contract": (
+            expected_dual_bridge is None
+            or all(bool(a.get("dual_interaction_bridge", False)) is expected_dual_bridge for a in (factor_arch, identity_arch, final_arch))
+        ),
+        "component_margin_target_mode_contract": (
+            args.expect_component_margin_target_mode == "any"
+            or str(factor_arch.get("component_margin_target_mode", "raw")) == args.expect_component_margin_target_mode
+        ),
+        "component_margin_target_scale_contract": (
+            args.expect_component_margin_target_scale is None
+            or math.isclose(float(factor_arch.get("component_margin_target_scale", -1.0)), float(args.expect_component_margin_target_scale), rel_tol=0.0, abs_tol=1.0e-9)
         ),
         "reserve_only_architecture_contract": (
             all(

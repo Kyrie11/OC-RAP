@@ -3298,3 +3298,27 @@ is introduced before that certificate evidence exists.
 - 新增精确 archived RC=20 恢复，要求 attempt/gate/certificate/Safe/test-seal 一致，失败 byte-for-byte rollback。
 - 历史 archive 缺少 `NEXT_COMMANDS.txt`，故 archived RC=0 自动恢复显式 fail closed。
 - 新增统一工程恢复入口与 6 个定向测试。
+
+
+## v48.40 DCFR — Decoupled Context Frontier Reserve (2026-08-07)
+
+### Evidence from v48.39
+- Main/A/B/C all terminated as pipeline-valid `RC=20`; the dominant layer is `development_rule_fit`, not an engineering failure.
+- Unbounded benefit is rejected: Precision Near opportunity AUC fell from about 0.89 (A/B bounded benefit) to 0.64/0.57 (C/D) on development and from about 0.73 to 0.44/0.38 on certificate.
+- Unbounded harm is at most weakly positive and does not repair the shared-rule gate. Dynamic-range expansion is therefore not retained.
+- With bounded benefit, Near safe-positive opportunity discrimination remains strong, but certificate safe-positive actions are systematically predicted harmful; conditional safe-positive-vs-harmful harm AUC falls below random in Near certificate.
+- Cross-head changes under one-head parameterization ablations indicate gradient coupling through the trainable shared OCAF interaction bridge. This reintroduces a shared bottleneck after v48.21 had already shown benefit/risk adapter decoupling was useful.
+
+### Algorithm changes
+1. **Dual task-specific OCAF interaction contexts, still one regime-free policy.** The same candidate-minus-nominal executable action and the same nominal observation feed two independently trainable `ObservationConditionedActionFrontierBridge` branches. Benefit and harm no longer rotate the same interaction parameters. No regime id, regime branch, or regime-specific threshold is introduced.
+2. **Frontier-normalized component-margin regression.** Component BCE keeps the exact harmful/safe sign target. The dense physical regression target optionally becomes `s*tanh(m/s)` with `s=0.10`, an odd monotone transform preserving zero and near-boundary resolution while preventing very large violations from dominating the regression geometry. Deployment margins and measured hard vetoes remain in the original physical semantics.
+3. **Retained:** bounded HAF benefit factor, factor-preserving/reserve-only deployment, support reliability, aligned deterministic noncompensatory joint reserve, OCAF observation-conditioned physics, top-k=5, and one shared Natural rule.
+4. **Explicitly not retained/repeated:** v48.39 unbounded benefit/harm factors, v48.38 one-sided tail losses, learned admission residual, full identity-stage factor updates, grid densification, top-k expansion, aggressive positive oversampling, generic pairwise/listwise restacking, or any Safe/Near/Contact routing.
+
+### Preregistered ablation
+- A: shared OCAF + raw component-margin regression.
+- B: dual OCAF + raw regression.
+- C: shared OCAF + frontier-normalized regression.
+- D/main: dual OCAF + frontier-normalized regression.
+
+The intended causal readout is: B>A supports gradient-decoupling; C>A supports boundary-focused target geometry; D>B,C supports complementarity. If D does not improve rare-frontier harm discrimination, do not stack additional losses; inspect observation/teacher identifiability and the dataset statistical-power ceiling.

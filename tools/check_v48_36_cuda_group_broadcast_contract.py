@@ -32,7 +32,7 @@ def _atomic_json(path: Path, document: dict) -> None:
     os.replace(tmp, path)
 
 
-def _model(device: torch.device, hidden: int) -> OCRAPModel:
+def _model(device: torch.device, hidden: int, dual: bool = False) -> OCRAPModel:
     model = OCRAPModel(
         input_dim=FlatFeatureLayout().total_dim,
         num_roots=2,
@@ -52,6 +52,7 @@ def _model(device: torch.device, hidden: int) -> OCRAPModel:
         direct_recovery_evidence_calibrator_context_source="physical_interaction",
         direct_recovery_evidence_interaction_hidden=hidden,
         direct_recovery_evidence_interaction_dropout=0.0,
+        direct_recovery_evidence_dual_interaction_bridge=dual,
         direct_recovery_evidence_unified_experts=True,
         direct_recovery_evidence_component_heads=True,
         direct_recovery_evidence_component_count=5,
@@ -63,14 +64,14 @@ def _model(device: torch.device, hidden: int) -> OCRAPModel:
     return model.train()
 
 
-def _exercise(device: torch.device, batch_size: int, group_size: int, hidden: int) -> dict:
+def _exercise(device: torch.device, batch_size: int, group_size: int, hidden: int, dual: bool = False) -> dict:
     if batch_size < group_size or batch_size % group_size != 0:
         raise ValueError("batch-size must be a positive multiple of group-size")
     torch.manual_seed(48361)
     if device.type == "cuda":
         torch.cuda.manual_seed_all(48361)
 
-    model = _model(device, hidden)
+    model = _model(device, hidden, dual=dual)
     layout = FlatFeatureLayout()
     num_groups = batch_size // group_size
     x = torch.randn(batch_size, layout.total_dim, device=device, requires_grad=True)
@@ -102,10 +103,13 @@ def _exercise(device: torch.device, batch_size: int, group_size: int, hidden: in
         if not torch.allclose(observation.index_select(0, idx), expected_observation):
             raise AssertionError(f"nominal observation broadcast mismatch in group {group_id}")
 
-    context = model.direct_evidence_interaction_bridge(action, observation)
-    if not torch.equal(context[::group_size], torch.zeros_like(context[::group_size])):
-        raise AssertionError("zero-action nominal rows do not produce exact zero OCAF context")
-    loss = context.float().square().mean() + action.float().square().mean() + observation.float().square().mean()
+    context_raw = model.direct_evidence_interaction_bridge(action, observation)
+    contexts = list(context_raw) if isinstance(context_raw, tuple) else [context_raw]
+    for context in contexts:
+        if not torch.equal(context[::group_size], torch.zeros_like(context[::group_size])):
+            raise AssertionError("zero-action nominal rows do not produce exact zero OCAF context")
+    loss = sum(context.float().square().mean() for context in contexts) + action.float().square().mean() + observation.float().square().mean()
+    context = contexts[0]
     loss.backward()
     if x.grad is None or not torch.isfinite(x.grad).all():
         raise AssertionError("non-finite group-row/OCAF input gradients")
@@ -126,6 +130,7 @@ def _exercise(device: torch.device, batch_size: int, group_size: int, hidden: in
         "candidate_action_dim": action.shape[-1],
         "nominal_observation_dim": observation.shape[-1],
         "interaction_hidden": context.shape[-1],
+        "dual_interaction_bridge": bool(dual),
         "zero_action_exact_zero": True,
         "forward_finite": bool(torch.isfinite(context).all()),
         "backward_finite": True,
@@ -139,6 +144,7 @@ def main() -> int:
     parser.add_argument("--batch-size", type=int, default=96)
     parser.add_argument("--group-size", type=int, default=8)
     parser.add_argument("--interaction-hidden", type=int, default=64)
+    parser.add_argument("--dual-interaction-bridge", action="store_true")
     args = parser.parse_args()
 
     started = time.time()
@@ -166,6 +172,7 @@ def main() -> int:
                 batch_size=args.batch_size,
                 group_size=args.group_size,
                 hidden=args.interaction_hidden,
+                dual=args.dual_interaction_bridge,
             )
         )
         report["valid"] = True

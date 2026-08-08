@@ -160,6 +160,33 @@ class ObservationConditionedActionFrontierBridge(nn.Module):
         return self.output(torch.cat([action, action * scene], dim=-1))
 
 
+class DualObservationConditionedActionFrontierBridge(nn.Module):
+    """Task-decoupled OCAF contexts with identical continuous inputs.
+
+    Benefit and harm see the same regime-free candidate-minus-nominal action and
+    nominal observation, but they do not share trainable interaction parameters.
+    This prevents dense harm gradients from rotating the sparse benefit context
+    (and vice versa) while preserving the single continuous physical policy.
+    """
+
+    def __init__(self, action_dim: int, observation_dim: int, hidden_dim: int, dropout: float):
+        super().__init__()
+        self.benefit = ObservationConditionedActionFrontierBridge(
+            action_dim, observation_dim, hidden_dim, dropout
+        )
+        self.harm = ObservationConditionedActionFrontierBridge(
+            action_dim, observation_dim, hidden_dim, dropout
+        )
+
+    def forward(
+        self, action_relative: torch.Tensor, nominal_observation: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        return (
+            self.benefit(action_relative, nominal_observation),
+            self.harm(action_relative, nominal_observation),
+        )
+
+
 class OCRAPModel(nn.Module):
     """Neural OC-RAP model with a learned root-query decoder.
 
@@ -235,6 +262,7 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_calibrator_context_source: str = "relative",
         direct_recovery_evidence_interaction_hidden: int = 64,
         direct_recovery_evidence_interaction_dropout: float = 0.05,
+        direct_recovery_evidence_dual_interaction_bridge: bool = False,
         direct_recovery_evidence_calibrator_shared: bool = False,
         direct_recovery_evidence_calibrator_regime_scale: float = 0.25,
         direct_recovery_evidence_unified_experts: bool = False,
@@ -334,6 +362,11 @@ class OCRAPModel(nn.Module):
         )
         self.direct_recovery_evidence_interaction_dropout = float(
             max(0.0, direct_recovery_evidence_interaction_dropout)
+        )
+        # v48.40 DCFR: decouple observation-conditioned interaction parameters
+        # between sparse benefit and dense harm tasks without any regime input.
+        self.direct_recovery_evidence_dual_interaction_bridge = bool(
+            direct_recovery_evidence_dual_interaction_bridge
         )
         self.direct_recovery_evidence_calibrator_shared = bool(
             direct_recovery_evidence_calibrator_shared
@@ -788,11 +821,20 @@ class OCRAPModel(nn.Module):
             else:
                 evidence_context_dim = relative_in_dim
         self.direct_evidence_interaction_bridge = (
-            ObservationConditionedActionFrontierBridge(
-                self.direct_candidate_physical_feature_dim,
-                self.direct_observation_feature_dim,
-                self.direct_recovery_evidence_interaction_hidden,
-                self.direct_recovery_evidence_interaction_dropout,
+            (
+                DualObservationConditionedActionFrontierBridge(
+                    self.direct_candidate_physical_feature_dim,
+                    self.direct_observation_feature_dim,
+                    self.direct_recovery_evidence_interaction_hidden,
+                    self.direct_recovery_evidence_interaction_dropout,
+                )
+                if self.direct_recovery_evidence_dual_interaction_bridge
+                else ObservationConditionedActionFrontierBridge(
+                    self.direct_candidate_physical_feature_dim,
+                    self.direct_observation_feature_dim,
+                    self.direct_recovery_evidence_interaction_hidden,
+                    self.direct_recovery_evidence_interaction_dropout,
+                )
             )
             if self.direct_recovery_evidence_calibrator_context
             and self.direct_recovery_evidence_calibrator_context_source == "physical_interaction"
@@ -1493,9 +1535,22 @@ class OCRAPModel(nn.Module):
                         # Detach raw/upstream representations, not the trainable OCAF bridge.
                         action_context = action_context.detach()
                         observation_context = observation_context.detach()
-                    calibrator_context = self.direct_evidence_interaction_bridge(
-                        action_context, observation_context
-                    )
+                    if self.direct_recovery_evidence_dual_interaction_bridge:
+                        benefit_context, harm_context = self.direct_evidence_interaction_bridge(
+                            action_context, observation_context
+                        )
+                        # Generic/legacy consumers receive a symmetric diagnostic
+                        # context only; concord benefit/harm heads below receive
+                        # their task-specific contexts. No regime id is introduced.
+                        calibrator_context = 0.5 * (benefit_context + harm_context)
+                        out["direct_recovery_evidence_benefit_interaction_context"] = benefit_context
+                        out["direct_recovery_evidence_harm_interaction_context"] = harm_context
+                    else:
+                        calibrator_context = self.direct_evidence_interaction_bridge(
+                            action_context, observation_context
+                        )
+                        benefit_context = calibrator_context
+                        harm_context = calibrator_context
                     out["direct_recovery_evidence_physical_relative_context"] = action_context
                     out["direct_recovery_evidence_nominal_observation_context"] = observation_context
                     out["direct_recovery_evidence_interaction_context"] = calibrator_context
@@ -1503,14 +1558,31 @@ class OCRAPModel(nn.Module):
                     calibrator_context = relative_features.to(dtype=delta.dtype)
                     if self.direct_recovery_evidence_calibrator_context_detach:
                         calibrator_context = calibrator_context.detach()
+                    benefit_context = calibrator_context
+                    harm_context = calibrator_context
                 calibrator_parts.append(calibrator_context)
             calibrator_input = torch.cat(calibrator_parts, dim=-1)
+            benefit_calibrator_input = calibrator_input
+            harm_calibrator_input = calibrator_input
+            if (
+                self.direct_recovery_evidence_calibrator_context
+                and self.direct_recovery_evidence_calibrator_context_source == "physical_interaction"
+                and self.direct_recovery_evidence_dual_interaction_bridge
+            ):
+                # Replace only the final context block; scalar evidence and raw
+                # physical inputs remain identical between tasks.
+                scalar_width = calibrator_input.shape[-1] - benefit_context.shape[-1]
+                scalar_input = calibrator_input[:, :scalar_width]
+                benefit_calibrator_input = torch.cat([scalar_input, benefit_context], dim=-1)
+                harm_calibrator_input = torch.cat([scalar_input, harm_context], dim=-1)
 
             if self.direct_evidence_concord_benefit_calibrator is not None:
-                benefit_raw = self.direct_evidence_concord_benefit_calibrator(calibrator_input).squeeze(-1)
-                harm_raw = self.direct_evidence_concord_harm_calibrator(calibrator_input)
+                benefit_raw = self.direct_evidence_concord_benefit_calibrator(
+                    benefit_calibrator_input
+                ).squeeze(-1)
+                harm_raw = self.direct_evidence_concord_harm_calibrator(harm_calibrator_input)
                 admission_raw = (
-                    self.direct_evidence_concord_admission_calibrator(calibrator_input).squeeze(-1)
+                    self.direct_evidence_concord_admission_calibrator(benefit_calibrator_input).squeeze(-1)
                     if self.direct_evidence_concord_admission_calibrator is not None
                     else None
                 )

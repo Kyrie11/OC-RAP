@@ -195,6 +195,10 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         direct_recovery_evidence_calibrator_context_source=str(ckpt.get("direct_recovery_evidence_calibrator_context_source", model_cfg.get("direct_recovery_evidence_calibrator_context_source", "relative"))),
         direct_recovery_evidence_interaction_hidden=int(ckpt.get("direct_recovery_evidence_interaction_hidden", model_cfg.get("direct_recovery_evidence_interaction_hidden", 64))),
         direct_recovery_evidence_interaction_dropout=float(ckpt.get("direct_recovery_evidence_interaction_dropout", model_cfg.get("direct_recovery_evidence_interaction_dropout", 0.05))),
+        direct_recovery_evidence_dual_interaction_bridge=bool(ckpt.get(
+            "direct_recovery_evidence_dual_interaction_bridge",
+            model_cfg.get("direct_recovery_evidence_dual_interaction_bridge", False),
+        )),
         direct_recovery_evidence_calibrator_shared=bool(ckpt.get("direct_recovery_evidence_calibrator_shared", model_cfg.get("direct_recovery_evidence_calibrator_shared", False))),
         direct_recovery_evidence_calibrator_regime_scale=float(ckpt.get("direct_recovery_evidence_calibrator_regime_scale", model_cfg.get("direct_recovery_evidence_calibrator_regime_scale", 0.25))),
         direct_recovery_evidence_unified_experts=bool(ckpt.get("direct_recovery_evidence_unified_experts", model_cfg.get("direct_recovery_evidence_unified_experts", False))),
@@ -330,6 +334,9 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_evidence_calibrator_context_source"] = str(ckpt.get("direct_recovery_evidence_calibrator_context_source", model_cfg.get("direct_recovery_evidence_calibrator_context_source", "relative")))
     cfg["model"]["direct_recovery_evidence_interaction_hidden"] = int(ckpt.get("direct_recovery_evidence_interaction_hidden", model_cfg.get("direct_recovery_evidence_interaction_hidden", 64)))
     cfg["model"]["direct_recovery_evidence_interaction_dropout"] = float(ckpt.get("direct_recovery_evidence_interaction_dropout", model_cfg.get("direct_recovery_evidence_interaction_dropout", 0.05)))
+    cfg["model"]["direct_recovery_evidence_dual_interaction_bridge"] = bool(
+        model.direct_recovery_evidence_dual_interaction_bridge
+    )
     cfg["model"]["direct_recovery_evidence_calibrator_shared"] = bool(ckpt.get("direct_recovery_evidence_calibrator_shared", model_cfg.get("direct_recovery_evidence_calibrator_shared", False)))
     cfg["model"]["direct_recovery_evidence_calibrator_regime_scale"] = float(ckpt.get("direct_recovery_evidence_calibrator_regime_scale", model_cfg.get("direct_recovery_evidence_calibrator_regime_scale", 0.25)))
     cfg["model"]["direct_recovery_evidence_unified_experts"] = bool(ckpt.get("direct_recovery_evidence_unified_experts", model_cfg.get("direct_recovery_evidence_unified_experts", False)))

@@ -47,6 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--expect-slack-temperature", type=float, default=0.025)
     ap.add_argument("--expect-slack-penalty", type=float, default=1.0)
     ap.add_argument("--expect-interaction-hidden", type=int, default=64)
+    ap.add_argument("--expect-dual-interaction-bridge", choices=("true", "false", "any"), default="any")
     ap.add_argument("--expect-consensus-prior-scale", type=float, default=0.50)
     ap.add_argument("--reliability-override", default="", help="Ablation override; empty uses support contract")
     return ap
@@ -91,6 +92,9 @@ def main() -> int:
         "direct_recovery_evidence_component_reliability": list(actual_reliability),
         "inference_evidence_contract_verified": bool((bundle.cfg.get("model", {}) or {}).get("inference_evidence_contract_verified", False)),
         "direct_recovery_evidence_interaction_hidden": int(model.direct_recovery_evidence_interaction_hidden),
+        "direct_recovery_evidence_dual_interaction_bridge": bool(
+            model.direct_recovery_evidence_dual_interaction_bridge
+        ),
         "direct_recovery_evidence_consensus_prior_scale": float(model.direct_recovery_evidence_consensus_prior_scale),
         "interaction_bridge_present": model.direct_evidence_interaction_bridge is not None,
     }
@@ -127,6 +131,10 @@ def main() -> int:
         "direct_recovery_evidence_component_reliability": list(expected_reliability),
         "inference_evidence_contract_verified": True,
         "direct_recovery_evidence_interaction_hidden": int(args.expect_interaction_hidden),
+        "direct_recovery_evidence_dual_interaction_bridge": (
+            None if args.expect_dual_interaction_bridge == "any"
+            else args.expect_dual_interaction_bridge == "true"
+        ),
         "direct_recovery_evidence_consensus_prior_scale": float(args.expect_consensus_prior_scale),
         "interaction_bridge_present": args.expect_context_source == "physical_interaction",
     }

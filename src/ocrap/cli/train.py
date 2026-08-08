@@ -370,6 +370,12 @@ def _direct_value_loss_from_outputs(
         ordinal_evidence_component_margin_regression_weight=float(
             tcfg.get("direct_value_ordinal_evidence_component_margin_regression_weight", 0.0)
         ),
+        ordinal_evidence_component_margin_target_mode=str(
+            tcfg.get("direct_value_ordinal_evidence_component_margin_target_mode", "raw")
+        ),
+        ordinal_evidence_component_margin_target_scale=float(
+            tcfg.get("direct_value_ordinal_evidence_component_margin_target_scale", 0.10)
+        ),
         ordinal_evidence_component_underestimation_weight=float(
             tcfg.get("direct_value_ordinal_evidence_component_underestimation_weight", 0.0)
         ),
@@ -2654,6 +2660,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_evidence_calibrator_context_source=str(model_cfg.get("direct_recovery_evidence_calibrator_context_source", "relative")),
         direct_recovery_evidence_interaction_hidden=int(model_cfg.get("direct_recovery_evidence_interaction_hidden", 64)),
         direct_recovery_evidence_interaction_dropout=float(model_cfg.get("direct_recovery_evidence_interaction_dropout", 0.05)),
+        direct_recovery_evidence_dual_interaction_bridge=bool(
+            model_cfg.get("direct_recovery_evidence_dual_interaction_bridge", False)
+        ),
         direct_recovery_evidence_calibrator_shared=bool(model_cfg.get("direct_recovery_evidence_calibrator_shared", False)),
         direct_recovery_evidence_calibrator_regime_scale=float(model_cfg.get("direct_recovery_evidence_calibrator_regime_scale", 0.25)),
         direct_recovery_evidence_unified_experts=bool(model_cfg.get("direct_recovery_evidence_unified_experts", False)),
@@ -3026,6 +3035,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "direct_recovery_evidence_calibrator_context_source": str(model_cfg.get("direct_recovery_evidence_calibrator_context_source", "relative")),
             "direct_recovery_evidence_interaction_hidden": int(model_cfg.get("direct_recovery_evidence_interaction_hidden", 64)),
             "direct_recovery_evidence_interaction_dropout": float(model_cfg.get("direct_recovery_evidence_interaction_dropout", 0.05)),
+            "direct_recovery_evidence_dual_interaction_bridge": bool(
+                model_cfg.get("direct_recovery_evidence_dual_interaction_bridge", False)
+            ),
             "direct_recovery_evidence_calibrator_shared": bool(model_cfg.get("direct_recovery_evidence_calibrator_shared", False)),
             "direct_recovery_evidence_calibrator_regime_scale": float(model_cfg.get("direct_recovery_evidence_calibrator_regime_scale", 0.25)),
             "direct_recovery_evidence_unified_experts": bool(model_cfg.get("direct_recovery_evidence_unified_experts", False)),

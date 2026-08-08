@@ -21,6 +21,20 @@ def margin_mse(pred: torch.Tensor, target: torch.Tensor, mask: torch.Tensor | No
     return loss.mean()
 
 
+def frontier_normalize_signed_margin(
+    margin: torch.Tensor, scale: float
+) -> torch.Tensor:
+    """Odd monotone compression that preserves the physical zero frontier.
+
+    v48.40 DCFR uses this only for dense component-margin regression. BCE sign
+    targets, measured hard vetoes, and deployment margins keep their original
+    physical semantics. Large violations therefore cannot dominate regression
+    capacity while ±tolerance examples retain high resolution.
+    """
+    s = max(float(scale), 1.0e-6)
+    return s * torch.tanh(margin / s)
+
+
 def anti_oracle_loss(pred_r_orc: torch.Tensor, pred_r_dep: torch.Tensor, teacher_artifact: torch.Tensor, delta_neg: float = 0.0) -> torch.Tensor:
     """Anti-oracle loss from Eq. (18): I_art * [R_dep - delta_neg]_+.
 
@@ -1419,6 +1433,8 @@ def direct_uncertainty_recovery_value_loss(
     ordinal_evidence_factorized_harm_proxy_tolerance: float = 0.05,
     ordinal_evidence_component_tail_weight: float = 0.0,
     ordinal_evidence_component_margin_regression_weight: float = 0.0,
+    ordinal_evidence_component_margin_target_mode: str = "raw",
+    ordinal_evidence_component_margin_target_scale: float = 0.10,
     ordinal_evidence_component_underestimation_weight: float = 0.0,
     ordinal_evidence_safe_positive_component_overestimation_weight: float = 0.0,
     ordinal_evidence_benefit_margin_regression_weight: float = 0.0,
@@ -2250,12 +2266,27 @@ def direct_uncertainty_recovery_value_loss(
                         float(ordinal_evidence_factorized_harm_temperature)
                         * component_harm_delta_logits
                     )
-                    target_component_margins = factorized_component_margins[
+                    target_component_margins_raw = factorized_component_margins[
                         :, : component_harm_delta_logits.shape[-1]
                     ].to(dtype=predicted_component_margins.dtype)
+                    component_margin_target_mode = str(
+                        ordinal_evidence_component_margin_target_mode or "raw"
+                    ).strip().lower()
+                    if component_margin_target_mode == "raw":
+                        target_component_margins_regression = target_component_margins_raw
+                    elif component_margin_target_mode == "frontier_tanh":
+                        target_component_margins_regression = frontier_normalize_signed_margin(
+                            target_component_margins_raw,
+                            ordinal_evidence_component_margin_target_scale,
+                        )
+                    else:
+                        raise ValueError(
+                            "unsupported ordinal_evidence_component_margin_target_mode="
+                            f"{ordinal_evidence_component_margin_target_mode!r}"
+                        )
                     regression_raw = F.smooth_l1_loss(
                         predicted_component_margins,
-                        target_component_margins,
+                        target_component_margins_regression,
                         reduction="none",
                     )
                     raw_reliability = ordinal_evidence_component_reliability
