@@ -136,6 +136,8 @@ def main() -> int:
     ap.add_argument("--expect-reserve-factor-alignment", choices=("true", "false", "any"), default="any")
     ap.add_argument("--expect-dual-interaction-bridge", choices=("true", "false", "any"), default="any")
     ap.add_argument("--expect-factorized-harm-interaction", choices=("true", "false", "any"), default="any")
+    ap.add_argument("--expect-partial-pool-harm-residual", choices=("true", "false", "any"), default="any")
+    ap.add_argument("--expect-partial-pool-harm-residual-scale", type=float, default=None)
     ap.add_argument("--expect-rank-benefit-skip", choices=("true", "false", "any"), default="any")
     ap.add_argument("--expect-rank-benefit-gain-init", type=float, default=None)
     ap.add_argument("--expect-component-margin-target-mode", default="any")
@@ -192,6 +194,8 @@ def main() -> int:
     expected_reserve_alignment = None if args.expect_reserve_factor_alignment == "any" else args.expect_reserve_factor_alignment == "true"
     expected_dual_bridge = None if args.expect_dual_interaction_bridge == "any" else args.expect_dual_interaction_bridge == "true"
     expected_factorized_harm = None if args.expect_factorized_harm_interaction == "any" else args.expect_factorized_harm_interaction == "true"
+    expected_partial_pool_harm = None if args.expect_partial_pool_harm_residual == "any" else args.expect_partial_pool_harm_residual == "true"
+    expected_partial_pool_harm_scale = args.expect_partial_pool_harm_residual_scale
     expected_rank_benefit_skip = None if args.expect_rank_benefit_skip == "any" else args.expect_rank_benefit_skip == "true"
     expected_rank_benefit_gain_init = args.expect_rank_benefit_gain_init
     identity_trainable = _trainable(identity_arch)
@@ -205,6 +209,10 @@ def main() -> int:
         "direct_evidence_concord_harm_calibrator",
         "direct_evidence_concord_admission_calibrator",
     ) + (("direct_evidence_interaction_bridge",) if expected_ocaf else ())
+    if expected_partial_pool_harm is True:
+        all_prefixes += ("direct_evidence_concord_harm_component_residuals",)
+    if expected_rank_benefit_skip is True:
+        all_prefixes += ("direct_evidence_rank_benefit_log_gain",)
     reference_prefixes = (
         "direct_evidence_concord_admission_calibrator",
     ) + (("direct_evidence_interaction_bridge",) if expected_ocaf else ())
@@ -305,6 +313,14 @@ def main() -> int:
         "factorized_harm_interaction_contract": (
             expected_factorized_harm is None
             or all(bool(a.get("factorized_harm_interaction", False)) is expected_factorized_harm for a in (factor_arch, identity_arch, final_arch))
+        ),
+        "partial_pool_harm_residual_contract": (
+            expected_partial_pool_harm is None
+            or all(bool(a.get("partial_pool_harm_residual", False)) is expected_partial_pool_harm for a in (factor_arch, identity_arch, final_arch))
+        ),
+        "partial_pool_harm_residual_scale_contract": (
+            expected_partial_pool_harm_scale is None
+            or all(math.isclose(float(a.get("partial_pool_harm_residual_scale", -1.0)), float(expected_partial_pool_harm_scale), rel_tol=0.0, abs_tol=1.0e-9) for a in (factor_arch, identity_arch, final_arch))
         ),
         "rank_benefit_skip_contract": (
             expected_rank_benefit_skip is None
@@ -450,6 +466,10 @@ def main() -> int:
             "unbounded_benefit_factor": expected_unbounded_benefit,
             "unbounded_harm_factors": expected_unbounded_harm,
             "reserve_factor_alignment": expected_reserve_alignment,
+            "partial_pool_harm_residual": expected_partial_pool_harm,
+            "partial_pool_harm_residual_scale": expected_partial_pool_harm_scale,
+            "rank_benefit_skip": expected_rank_benefit_skip,
+            "rank_benefit_gain_init": expected_rank_benefit_gain_init,
             "algorithm_variant": expected_algorithm_variant,
             "identity_trainable_prefixes": sorted(expected_identity_prefixes),
             "prior_coupled": expect_coupled,

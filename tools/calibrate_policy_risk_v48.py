@@ -18,7 +18,11 @@ from typing import Any
 import numpy as np
 
 from ocrap.algorithms.ocmero import oc_mero
-from ocrap.algorithms.evidence_targets import ComponentVetoTolerances, component_veto_margin_numpy
+from ocrap.algorithms.evidence_targets import (
+    ComponentVetoTolerances,
+    component_veto_margin_numpy,
+    component_veto_terms_numpy,
+)
 from ocrap.data.serialization import load_npz
 from ocrap.evaluation.metrics import best_shared_option_index, deployable_recovery_success, post_contact_deployability_score
 from ocrap.evaluation.certificate_stats import certificate_support_feasibility, wilson_interval, wilson_z
@@ -714,7 +718,7 @@ def main() -> int:
             if r["harm_logit"] is not None and nom["harm_logit"] is not None:
                 head_harm = _sigmoid(float(r["harm_logit"]) - float(nom["harm_logit"]))
             teacher_adv = r["teacher"] - nom["teacher"]
-            component_margin = component_veto_margin_numpy(
+            component_terms = component_veto_terms_numpy(
                 candidate_drs=r["teacher_drs"], nominal_drs=nom["teacher_drs"],
                 candidate_r_dep=r["teacher_r_dep"], nominal_r_dep=nom["teacher_r_dep"],
                 candidate_gap=r["teacher_gap"], nominal_gap=nom["teacher_gap"],
@@ -722,6 +726,7 @@ def main() -> int:
                 candidate_harm_proxy=r["teacher_harm_proxy"], nominal_harm_proxy=nom["teacher_harm_proxy"],
                 tolerances=component_tolerances,
             )
+            component_margin = float(np.max(component_terms))
             pairs.append({
                 "candidate": r["candidate"], "macro": r["macro"], "deviation": r["deviation"],
                 "pred_adv": pred_adv, "rank_adv": rank_adv, "delta_std": delta_std,
@@ -730,6 +735,7 @@ def main() -> int:
                 "predicted_component_margins": r.get("component_margins"),
                 "teacher_adv": teacher_adv,
                 "teacher_component_veto_margin": component_margin,
+                "teacher_component_veto_terms": [float(x) for x in component_terms],
                 "teacher_harmful": bool(component_margin > 0.0) if args.harm_label_mode == "component_veto" else bool(teacher_adv <= -args.negative_gain),
             })
         safe_pairs = [

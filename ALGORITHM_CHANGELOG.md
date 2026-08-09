@@ -1,5 +1,101 @@
 # Algorithm Change Log
 
+## v48.42 — HPFR / HIERARCHICAL PARTIAL-POOLING FRONTIER RESERVE (2026-08-08)
+
+### v48.41 result audit and corrected attribution
+
+The uploaded v48.41 result set is **not** four comparable RC=20 runs.  A and B are
+authoritative, pipeline-valid `RC=20` Natural-gate rejections.  C and D/main are
+`RC=30`, `pipeline_valid=false`, `failure_stage=adaptation`, with no certificate or
+Natural-gate decision.  Their factor training completed, but the post-training
+prefix verifier rejected the valid scalar parameter
+`direct_evidence_rank_benefit_log_gain`: the state-dict key is exactly that string,
+while the verifier accepted only dotted module descendants (`prefix + "."`).  The
+stage-transfer checker used the same module-only assumption.  v48.42 changes both
+contracts to exact-or-dotted matching and explicitly registers the scalar rank-gain
+parameter.  C/D therefore cannot be used to claim that rank-benefit skip is effective
+or ineffective; it is re-tested as a preregistered arm after the engineering repair.
+
+A/B provide valid evidence about the v48.41 factorized-harm mechanism.  Full
+component factorisation is **not retained**.  Precision Near certificate
+harmful-vs-safe-positive conditional harm AUC falls from about 0.482 (A) to 0.447
+(B); Contact falls from about 0.694 to 0.641.  B also drives the Precision selector
+toward near-total abstention.  Component diagnostics explain the mixed signal:
+DRS improves with specialization, but deployability remains the dominant false veto
+and degrades in rare-frontier discrimination.  For Near certificate safe-positive
+candidates, deployability is above the 0.5 harm frontier for 16/18 candidates in
+both A and B, while B reduces DRS false-veto frequency.  Contact shows the same
+pattern: deployability dominates most safe-positive vetoes.  Thus the strategic
+priority—rare-frontier harm discrimination—remains correct, but removing all sharing
+between DRS/deployability/gap is the wrong implementation.
+
+Proposal oracle support remains feasible, so candidate generation is not the primary
+bottleneck.  The valid A/B failures still occur downstream of proposal support at the
+continuous benefit/harm evidence -> noncompensatory reserve -> one shared rule path.
+Near benefit ordering remains useful while safety evidence rejects good recoveries.
+Contact still has a dual bottleneck: benefit capture is weak and harmful false-safe
+control remains insufficient.  The frozen Contact `rank_adv` signal remains much
+stronger than the learned opportunity signal (about 0.73 AUC on the audited
+certificate rows), so the rank-benefit hypothesis remains worth a clean test after
+the checker repair.
+
+### Algorithm change 1: shared-base, detached component frontier residuals
+
+HPFR returns to the empirically stronger **shared harm OCAF + shared harm calibrator**
+from v48.40-B / v48.41-A.  It adds only a small component-specific residual readout
+for supported physical factors.  Each residual consumes a **detached** copy of the
+same shared, regime-free harm evidence.  Therefore a DRS/deployability/gap residual
+can specialize without sending its gradient back through the shared OCAF bridge.
+This is hierarchical partial pooling rather than full component factorisation.
+
+The residual heads are zero-initialised, so enabling HPFR is exactly identical to the
+shared-harm reference at initialization.  Their correction is bounded with tanh and
+a preregistered raw-logit scale of 0.50.  This deliberately avoids the falsified
+v48.39 unbounded-factor route.  Global component reliability and the exact
+noncompensatory max-veto remain unchanged.  No regime id, regime head, or
+regime-specific threshold is introduced.
+
+### Algorithm change 2: clean re-test of bounded monotone rank-benefit skip
+
+The v48.41 rank skip is not modified conceptually.  The positive softplus gain from
+frozen `rank_adv` remains inside the bounded HAF benefit residual.  v48.42 fixes the
+engineering contract that previously prevented C/D from reaching certificate and
+re-runs it as an independent arm.  It is not promoted to a proven mechanism until
+C has an authoritative RC=0/20 result and improves the preregistered benefit/frontier
+metrics.
+
+### Diagnostic change
+
+Calibration proposal rows now include the complete ordered teacher component-veto
+term vector (`DRS, deployability, gap, hard, harm_proxy`) in addition to the maximum
+veto margin and predicted component diagnostics.  This is diagnostic-only and does
+not change selection, labels, thresholds, or gate logic.  It permits direct
+false-veto / false-safe attribution by physical component in the next round.
+
+### Preregistered v48.42 2x2
+
+- A: shared dual-task OCAF + shared harm calibrator, no component residual, no rank skip.
+- B: A + detached bounded component-specific harm residuals.
+- C: A + engineering-fixed bounded monotone rank-benefit skip.
+- D/main: B + C.
+
+Interpretation is fixed before results are read: B>A supports partial-pooling harm
+specialization; C>A supports underused frozen rank evidence; D>B,C supports
+complementarity.  If B does not improve deployability-dominated Near false vetoes,
+stop adding generic harm capacity and move to deployability observation/teacher
+identifiability and data support.  If C fails after the engineering repair, do not
+restack ranking losses.  If learned evidence approaches proposal-oracle behavior but
+Near still fails only through minimum support / Wilson bounds, treat statistical
+power as the limiting factor rather than continuing post-hoc algorithm tuning.
+
+### Explicit non-repetition
+
+Still excluded: threshold-grid densification, top-k expansion, aggressive positive
+oversampling, hardest-negative population distortion as the main mechanism, generic
+pairwise/listwise restacking, full joint stage-2, learned admission residual,
+v48.38 one-sided tail losses, v48.39 unbounded benefit/harm, v48.40 frontier-tanh,
+v48.41 full component-factorized harm, and any Safe/Near/Contact routing.
+
 
 ## v48.41 — FCFR / FACTORIZED COMPONENT FRONTIER RESERVE (2026-08-07)
 

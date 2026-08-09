@@ -1,5 +1,14 @@
 # v48 OC-TRAC-SR Algorithm Changelog
 
+## v48.42 — HPFR / HIERARCHICAL PARTIAL-POOLING FRONTIER RESERVE (2026-08-08)
+
+- v48.41 A/B are valid RC=20 algorithm results; C/D are RC=30 engineering failures caused by a module-prefix-only verifier rejecting the exact scalar key `direct_evidence_rank_benefit_log_gain`. v48.42 fixes exact-or-dotted parameter matching in adaptation and stage-transfer contracts.
+- v48.41 full component-factorized harm is not retained: it improves DRS locally but worsens aggregate rare-frontier discrimination because deployability/gap lose useful shared regularization. Near safe-positive false veto remains deployability-dominated; Contact still has benefit + harmful-false-safe bottlenecks.
+- Retain v48.40 dual task OCAF and shared harm representation. Add zero-initialized, bounded, component-specific residual heads on a detached copy of the shared harm evidence (partial pooling). This permits physical-factor correction without rotating the shared OCAF bridge.
+- Re-test the bounded monotone rank-benefit skip only after the checker repair; v48.41 never produced a valid gate result for that mechanism.
+- New 2x2: A shared-harm reference; B + partial-pool harm residual; C + repaired rank skip; D/main = B+C. No regime labels, regime-specific thresholds, or discrete Safe/Near/Contact policies are introduced.
+- Calibration diagnostics additionally emit the ordered teacher component-veto terms so future false-veto/false-safe analysis can be attributed directly to DRS/deployability/gap rather than aggregate harm alone.
+
 ## v48.22 — OC-TRAC-COVENANT-BRIDGE (2026-07-30)
 
 ### v48.21 result attribution

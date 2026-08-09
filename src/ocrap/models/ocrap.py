@@ -332,6 +332,8 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_interaction_dropout: float = 0.05,
         direct_recovery_evidence_dual_interaction_bridge: bool = False,
         direct_recovery_evidence_factorized_harm_interaction: bool = False,
+        direct_recovery_evidence_partial_pool_harm_residual: bool = False,
+        direct_recovery_evidence_partial_pool_harm_residual_scale: float = 0.50,
         direct_recovery_evidence_rank_benefit_skip: bool = False,
         direct_recovery_evidence_rank_benefit_gain_init: float = 1.0,
         direct_recovery_evidence_calibrator_shared: bool = False,
@@ -448,6 +450,18 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_evidence_factorized_harm_interaction = bool(
             direct_recovery_evidence_factorized_harm_interaction
         )
+        # v48.42 HPFR: retain the empirically stronger shared harm OCAF/trunk,
+        # then allow only a small zero-initialised component-specific correction
+        # from a detached copy of the same continuous evidence.  This is partial
+        # pooling: physical factors may refine their frontier without rotating
+        # the shared interaction representation that v48.41 full factorisation
+        # showed was valuable.  No regime id or regime-specific policy exists.
+        self.direct_recovery_evidence_partial_pool_harm_residual = bool(
+            direct_recovery_evidence_partial_pool_harm_residual
+        )
+        self.direct_recovery_evidence_partial_pool_harm_residual_scale = float(
+            max(0.0, direct_recovery_evidence_partial_pool_harm_residual_scale)
+        )
         self.direct_recovery_evidence_rank_benefit_skip = bool(
             direct_recovery_evidence_rank_benefit_skip
         )
@@ -509,6 +523,17 @@ class OCRAPModel(nn.Module):
             persistent=False,
         )
         self.direct_recovery_evidence_concord = bool(direct_recovery_evidence_concord)
+        if self.direct_recovery_evidence_partial_pool_harm_residual:
+            if self.direct_recovery_evidence_factorized_harm_interaction:
+                raise ValueError(
+                    "partial-pool harm residual and full factorized-harm interaction are mutually exclusive"
+                )
+            if not self.direct_recovery_evidence_component_heads or not self.direct_recovery_evidence_concord:
+                raise ValueError(
+                    "partial-pool harm residual requires concord component heads"
+                )
+            if self.direct_recovery_evidence_partial_pool_harm_residual_scale <= 0.0:
+                raise ValueError("partial-pool harm residual scale must be positive when enabled")
         self.direct_recovery_evidence_consensus_disagreement_penalty = float(
             max(0.0, direct_recovery_evidence_consensus_disagreement_penalty)
         )
@@ -1026,6 +1051,33 @@ class OCRAPModel(nn.Module):
             and self.direct_recovery_evidence_concord
             else None
         )
+        # v48.42 HPFR component residuals operate on a detached copy of the
+        # shared harm evidence.  Each supported physical component gets one
+        # zero-initialised scalar readout; unsupported coordinates are kept as
+        # parameter-free zero placeholders.  The residual is bounded in raw-logit
+        # space before the legacy bounded component factor, preserving the exact
+        # v48.40-A/B semantics at initialisation and preventing another unbounded
+        # factor experiment.
+        if (
+            self.direct_recovery_evidence_partial_pool_harm_residual
+            and self.direct_recovery_evidence_component_heads
+            and self.direct_evidence_concord_harm_calibrator is not None
+            and not self.direct_recovery_evidence_factorized_harm_interaction
+        ):
+            residual_heads: list[nn.Module] = []
+            for component_index in range(self.direct_recovery_evidence_component_count):
+                if self.direct_recovery_evidence_component_reliability[component_index] <= 0.0:
+                    residual_heads.append(nn.Identity())
+                    continue
+                head = nn.Sequential(
+                    nn.LayerNorm(evidence_calibrator_input_dim),
+                    nn.Linear(evidence_calibrator_input_dim, 1, bias=False),
+                )
+                nn.init.zeros_(head[-1].weight)
+                residual_heads.append(head)
+            self.direct_evidence_concord_harm_component_residuals = nn.ModuleList(residual_heads)
+        else:
+            self.direct_evidence_concord_harm_component_residuals = None
         # v48.22 COVENANT-BRIDGE factorises three distinct hypotheses:
         # raw recovery benefit, componentwise harm, and final safe admissibility.
         # The admission adapter never receives a regime id.  It starts from a
@@ -1752,6 +1804,27 @@ class OCRAPModel(nn.Module):
                     harm_raw = torch.cat(harm_parts, dim=-1)
                 else:
                     harm_raw = self.direct_evidence_concord_harm_calibrator(harm_calibrator_input)
+                    if self.direct_evidence_concord_harm_component_residuals is not None:
+                        detached_harm_input = harm_calibrator_input.detach()
+                        residual_parts = []
+                        for component_index, head in enumerate(
+                            self.direct_evidence_concord_harm_component_residuals
+                        ):
+                            if self.direct_recovery_evidence_component_reliability[component_index] <= 0.0:
+                                residual_parts.append(
+                                    harm_raw.new_zeros((harm_raw.shape[0], 1))
+                                )
+                            else:
+                                residual_parts.append(head(detached_harm_input))
+                        component_residual_raw = torch.cat(residual_parts, dim=-1)
+                        component_residual_raw = (
+                            torch.tanh(component_residual_raw)
+                            * self.direct_recovery_evidence_partial_pool_harm_residual_scale
+                        )
+                        harm_raw = harm_raw + component_residual_raw
+                        out[
+                            "direct_recovery_evidence_partial_pool_harm_component_residuals"
+                        ] = component_residual_raw
                 admission_raw = (
                     self.direct_evidence_concord_admission_calibrator(benefit_calibrator_input).squeeze(-1)
                     if self.direct_evidence_concord_admission_calibrator is not None

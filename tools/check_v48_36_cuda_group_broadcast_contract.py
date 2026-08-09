@@ -12,8 +12,17 @@ import argparse
 import json
 import os
 from pathlib import Path
+import sys
 import time
 import traceback
+
+# Make this preflight self-contained when invoked as ``python tools/...py``.
+# Historical wrappers export PYTHONPATH, but tests / recovery shells may not;
+# relying on ambient environment made a healthy runtime contract look broken.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_SRC_ROOT = _REPO_ROOT / "src"
+if str(_SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SRC_ROOT))
 
 import torch
 
@@ -37,6 +46,8 @@ def _model(
     hidden: int,
     dual: bool = False,
     factorized_harm: bool = False,
+    partial_pool_harm: bool = False,
+    rank_benefit_skip: bool = False,
 ) -> OCRAPModel:
     model = OCRAPModel(
         input_dim=FlatFeatureLayout().total_dim,
@@ -52,6 +63,8 @@ def _model(
         direct_recovery_value_pooling="candidate_concat_raw",
         direct_recovery_delta_head=True,
         direct_recovery_delta_regime_experts=True,
+        direct_recovery_delta_policy_features=True,
+        direct_recovery_delta_mode="ordinal_evidence",
         direct_recovery_evidence_calibrator=True,
         direct_recovery_evidence_calibrator_context=True,
         direct_recovery_evidence_calibrator_context_source="physical_interaction",
@@ -59,6 +72,10 @@ def _model(
         direct_recovery_evidence_interaction_dropout=0.0,
         direct_recovery_evidence_dual_interaction_bridge=dual,
         direct_recovery_evidence_factorized_harm_interaction=factorized_harm,
+        direct_recovery_evidence_partial_pool_harm_residual=partial_pool_harm,
+        direct_recovery_evidence_partial_pool_harm_residual_scale=0.50,
+        direct_recovery_evidence_rank_benefit_skip=rank_benefit_skip,
+        direct_recovery_evidence_rank_benefit_gain_init=1.0,
         direct_recovery_evidence_unified_experts=True,
         direct_recovery_evidence_component_heads=True,
         direct_recovery_evidence_component_count=5,
@@ -77,6 +94,8 @@ def _exercise(
     hidden: int,
     dual: bool = False,
     factorized_harm: bool = False,
+    partial_pool_harm: bool = False,
+    rank_benefit_skip: bool = False,
 ) -> dict:
     if batch_size < group_size or batch_size % group_size != 0:
         raise ValueError("batch-size must be a positive multiple of group-size")
@@ -84,7 +103,10 @@ def _exercise(
     if device.type == "cuda":
         torch.cuda.manual_seed_all(48361)
 
-    model = _model(device, hidden, dual=dual, factorized_harm=factorized_harm)
+    model = _model(
+        device, hidden, dual=dual, factorized_harm=factorized_harm,
+        partial_pool_harm=partial_pool_harm, rank_benefit_skip=rank_benefit_skip,
+    )
     layout = FlatFeatureLayout()
     num_groups = batch_size // group_size
     x = torch.randn(batch_size, layout.total_dim, device=device, requires_grad=True)
@@ -121,7 +143,30 @@ def _exercise(
     for context in contexts:
         if not torch.equal(context[::group_size], torch.zeros_like(context[::group_size])):
             raise AssertionError("zero-action nominal rows do not produce exact zero OCAF context")
-    loss = sum(context.float().square().mean() for context in contexts) + action.float().square().mean() + observation.float().square().mean()
+    full_out = model(
+        x,
+        bucket_id=torch.ones(batch_size, dtype=torch.long, device=device),
+        group_index=group_index,
+        is_nominal=nominal,
+        direct_only=True,
+    )
+    full_terms = [full_out["direct_recovery_evidence_component_harm_logits"].float().square().mean()]
+    if partial_pool_harm:
+        residual = full_out.get("direct_recovery_evidence_partial_pool_harm_component_residuals")
+        if residual is None or not torch.isfinite(residual).all():
+            raise AssertionError("partial-pool harm residual missing or non-finite")
+        full_terms.append(residual.float().square().mean())
+    if rank_benefit_skip:
+        gain = full_out.get("direct_recovery_evidence_rank_benefit_gain")
+        if gain is None or not torch.isfinite(gain).all() or not bool(torch.all(gain > 0)):
+            raise AssertionError("rank-benefit gain missing, non-finite, or non-positive")
+        full_terms.append(gain.float().square().mean())
+    loss = (
+        sum(context.float().square().mean() for context in contexts)
+        + action.float().square().mean()
+        + observation.float().square().mean()
+        + sum(full_terms)
+    )
     context = contexts[0]
     loss.backward()
     if x.grad is None or not torch.isfinite(x.grad).all():
@@ -145,6 +190,9 @@ def _exercise(
         "interaction_hidden": context.shape[-1],
         "dual_interaction_bridge": bool(dual),
         "factorized_harm_interaction": bool(factorized_harm),
+        "partial_pool_harm_residual": bool(partial_pool_harm),
+        "rank_benefit_skip": bool(rank_benefit_skip),
+        "full_evidence_path_forward_backward": True,
         "zero_action_exact_zero": True,
         "forward_finite": bool(torch.isfinite(context).all()),
         "backward_finite": True,
@@ -160,6 +208,8 @@ def main() -> int:
     parser.add_argument("--interaction-hidden", type=int, default=64)
     parser.add_argument("--dual-interaction-bridge", action="store_true")
     parser.add_argument("--factorized-harm-interaction", action="store_true")
+    parser.add_argument("--partial-pool-harm-residual", action="store_true")
+    parser.add_argument("--rank-benefit-skip", action="store_true")
     args = parser.parse_args()
 
     started = time.time()
@@ -189,6 +239,8 @@ def main() -> int:
                 hidden=args.interaction_hidden,
                 dual=args.dual_interaction_bridge,
                 factorized_harm=args.factorized_harm_interaction,
+                partial_pool_harm=args.partial_pool_harm_residual,
+                rank_benefit_skip=args.rank_benefit_skip,
             )
         )
         report["valid"] = True

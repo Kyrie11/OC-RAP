@@ -49,6 +49,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--expect-interaction-hidden", type=int, default=64)
     ap.add_argument("--expect-dual-interaction-bridge", choices=("true", "false", "any"), default="any")
     ap.add_argument("--expect-factorized-harm-interaction", choices=("true", "false", "any"), default="any")
+    ap.add_argument("--expect-partial-pool-harm-residual", choices=("true", "false", "any"), default="any")
+    ap.add_argument("--expect-partial-pool-harm-residual-scale", type=float, default=None)
     ap.add_argument("--expect-rank-benefit-skip", choices=("true", "false", "any"), default="any")
     ap.add_argument("--expect-rank-benefit-gain-init", type=float, default=None)
     ap.add_argument("--expect-consensus-prior-scale", type=float, default=0.50)
@@ -101,6 +103,12 @@ def main() -> int:
         "direct_recovery_evidence_factorized_harm_interaction": bool(
             model.direct_recovery_evidence_factorized_harm_interaction
         ),
+        "direct_recovery_evidence_partial_pool_harm_residual": bool(
+            model.direct_recovery_evidence_partial_pool_harm_residual
+        ),
+        "direct_recovery_evidence_partial_pool_harm_residual_scale": float(
+            model.direct_recovery_evidence_partial_pool_harm_residual_scale
+        ),
         "direct_recovery_evidence_rank_benefit_skip": bool(
             model.direct_recovery_evidence_rank_benefit_skip
         ),
@@ -151,6 +159,11 @@ def main() -> int:
             None if args.expect_factorized_harm_interaction == "any"
             else args.expect_factorized_harm_interaction == "true"
         ),
+        "direct_recovery_evidence_partial_pool_harm_residual": (
+            None if args.expect_partial_pool_harm_residual == "any"
+            else args.expect_partial_pool_harm_residual == "true"
+        ),
+        "direct_recovery_evidence_partial_pool_harm_residual_scale": args.expect_partial_pool_harm_residual_scale,
         "direct_recovery_evidence_rank_benefit_skip": (
             None if args.expect_rank_benefit_skip == "any"
             else args.expect_rank_benefit_skip == "true"

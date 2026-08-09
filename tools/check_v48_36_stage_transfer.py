@@ -24,7 +24,9 @@ APPROVED_PREFIXES = {
     "direct_evidence_concord_benefit_calibrator",
     "direct_evidence_concord_harm_calibrator",
     "direct_evidence_concord_admission_calibrator",
+    "direct_evidence_concord_harm_component_residuals",
     "direct_evidence_interaction_bridge",
+    "direct_evidence_rank_benefit_log_gain",
 }
 ADMISSION_PREFIX = "direct_evidence_concord_admission_calibrator"
 INTERACTION_PREFIX = "direct_evidence_interaction_bridge"
@@ -101,7 +103,10 @@ def _arch_trainable(architecture: Mapping[str, Any], *, allow_empty: bool = Fals
 
 
 def _starts_with_any(key: str, prefixes: tuple[str, ...]) -> bool:
-    return any(key.startswith(prefix + ".") for prefix in prefixes)
+    # Some trainable objects are scalar nn.Parameters whose state-dict key is
+    # exactly the declared contract token (for example rank-benefit log gain).
+    # Module prefixes still match their dotted descendants.
+    return any(key == prefix or key.startswith(prefix + ".") for prefix in prefixes)
 
 
 def _compare(

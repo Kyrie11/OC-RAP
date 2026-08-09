@@ -331,6 +331,8 @@ for gpu_spec in "gpu0:$GPU0" "gpu1:$GPU1"; do
     --interaction-hidden "$EVIDENCE_INTERACTION_HIDDEN" \
     $([[ "${EVIDENCE_DUAL_INTERACTION_BRIDGE:-false}" == true ]] && echo --dual-interaction-bridge) \
     $([[ "${EVIDENCE_FACTORIZED_HARM_INTERACTION:-false}" == true ]] && echo --factorized-harm-interaction) \
+    $([[ "${EVIDENCE_PARTIAL_POOL_HARM_RESIDUAL:-false}" == true ]] && echo --partial-pool-harm-residual) \
+    $([[ "${EVIDENCE_RANK_BENEFIT_SKIP:-false}" == true ]] && echo --rank-benefit-skip) \
     --output "$OUTPUTDIR/OCAF_CUDA_GROUP_BROADCAST_CONTRACT_${gpu_label}.json" \
     >"$OUTPUTDIR/logs/ocaf_cuda_group_broadcast_contract_${gpu_label}.log" 2>&1
   cuda_group_contract_rc=$?
@@ -618,7 +620,7 @@ for variant in balanced precision; do
     --support-contract "$OUTPUTDIR/candidates/$variant/FACTOR_SUPPORT_CONTRACT.json" \
     --output "$OUTPUTDIR/candidates/$variant/MODEL_INFERENCE_CONTRACT.json" \
     --expect-frontier true --expect-admission-bounded false --expect-context-enabled true --expect-context-source "$EVIDENCE_CONTEXT_SOURCE" --expect-interaction-hidden "$EVIDENCE_INTERACTION_HIDDEN" --expect-dual-interaction-bridge "${EVIDENCE_DUAL_INTERACTION_BRIDGE:-false}" --expect-consensus-prior-scale "$EVIDENCE_CONSENSUS_PRIOR_SCALE" --expect-frontier-cap-temperature "${EVIDENCE_FRONTIER_CAP_TEMPERATURE:-0.10}" \
-    --expect-factorized-harm-interaction "${EVIDENCE_FACTORIZED_HARM_INTERACTION:-false}" --expect-rank-benefit-skip "${EVIDENCE_RANK_BENEFIT_SKIP:-false}" --expect-rank-benefit-gain-init "${EVIDENCE_RANK_BENEFIT_GAIN_INIT:-1.0}" \
+    --expect-factorized-harm-interaction "${EVIDENCE_FACTORIZED_HARM_INTERACTION:-false}" --expect-partial-pool-harm-residual "${EVIDENCE_PARTIAL_POOL_HARM_RESIDUAL:-false}" --expect-partial-pool-harm-residual-scale "${EVIDENCE_PARTIAL_POOL_HARM_RESIDUAL_SCALE:-0.50}" --expect-rank-benefit-skip "${EVIDENCE_RANK_BENEFIT_SKIP:-false}" --expect-rank-benefit-gain-init "${EVIDENCE_RANK_BENEFIT_GAIN_INIT:-1.0}" \
     --expect-admission-head "$([[ "${V4838_RFR_RESERVE_ONLY:-0}" == 1 ]] && echo false || echo true)" \
     --expect-benefit-margin-temperature "${FACTOR_BENEFIT_MARGIN_TEMPERATURE:-0.025}" --expect-joint-reserve-temperature "${EVIDENCE_JOINT_RESERVE_TEMPERATURE:-0.025}" \
     --expect-component-prior-logit -2.0 --expect-component-count 5 --expect-component-scale "${EVIDENCE_COMPONENT_SCALE:-6.0}" \
@@ -651,7 +653,7 @@ for variant in balanced precision; do
     --expect-unbounded-benefit-factor "${EVIDENCE_UNBOUNDED_BENEFIT_FACTOR:-false}" --expect-unbounded-harm-factors "${EVIDENCE_UNBOUNDED_HARM_FACTORS:-false}" \
     --expect-reserve-factor-alignment "${EVIDENCE_RESERVE_FACTOR_ALIGNMENT:-false}" \
     --expect-dual-interaction-bridge "${EVIDENCE_DUAL_INTERACTION_BRIDGE:-false}" \
-    --expect-factorized-harm-interaction "${EVIDENCE_FACTORIZED_HARM_INTERACTION:-false}" --expect-rank-benefit-skip "${EVIDENCE_RANK_BENEFIT_SKIP:-false}" --expect-rank-benefit-gain-init "${EVIDENCE_RANK_BENEFIT_GAIN_INIT:-1.0}" \
+    --expect-factorized-harm-interaction "${EVIDENCE_FACTORIZED_HARM_INTERACTION:-false}" --expect-partial-pool-harm-residual "${EVIDENCE_PARTIAL_POOL_HARM_RESIDUAL:-false}" --expect-partial-pool-harm-residual-scale "${EVIDENCE_PARTIAL_POOL_HARM_RESIDUAL_SCALE:-0.50}" --expect-rank-benefit-skip "${EVIDENCE_RANK_BENEFIT_SKIP:-false}" --expect-rank-benefit-gain-init "${EVIDENCE_RANK_BENEFIT_GAIN_INIT:-1.0}" \
     --expect-component-margin-target-mode "${FACTOR_COMPONENT_MARGIN_TARGET_MODE:-raw}" \
     --expect-component-margin-target-scale "${FACTOR_COMPONENT_MARGIN_TARGET_SCALE:-0.10}" \
     --expect-algorithm-variant "${OCRAP_ALGORITHM_VERSION:-v48.36-OCAF}" \

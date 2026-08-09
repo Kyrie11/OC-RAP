@@ -2666,6 +2666,12 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_evidence_factorized_harm_interaction=bool(
             model_cfg.get("direct_recovery_evidence_factorized_harm_interaction", False)
         ),
+        direct_recovery_evidence_partial_pool_harm_residual=bool(
+            model_cfg.get("direct_recovery_evidence_partial_pool_harm_residual", False)
+        ),
+        direct_recovery_evidence_partial_pool_harm_residual_scale=float(
+            model_cfg.get("direct_recovery_evidence_partial_pool_harm_residual_scale", 0.50)
+        ),
         direct_recovery_evidence_rank_benefit_skip=bool(
             model_cfg.get("direct_recovery_evidence_rank_benefit_skip", False)
         ),
@@ -3049,6 +3055,12 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             ),
             "direct_recovery_evidence_factorized_harm_interaction": bool(
                 model_cfg.get("direct_recovery_evidence_factorized_harm_interaction", False)
+            ),
+            "direct_recovery_evidence_partial_pool_harm_residual": bool(
+                model_cfg.get("direct_recovery_evidence_partial_pool_harm_residual", False)
+            ),
+            "direct_recovery_evidence_partial_pool_harm_residual_scale": float(
+                model_cfg.get("direct_recovery_evidence_partial_pool_harm_residual_scale", 0.50)
             ),
             "direct_recovery_evidence_rank_benefit_skip": bool(
                 model_cfg.get("direct_recovery_evidence_rank_benefit_skip", False)

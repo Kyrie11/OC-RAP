@@ -205,6 +205,14 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_evidence_factorized_harm_interaction",
             model_cfg.get("direct_recovery_evidence_factorized_harm_interaction", False),
         )),
+        direct_recovery_evidence_partial_pool_harm_residual=bool(ckpt.get(
+            "direct_recovery_evidence_partial_pool_harm_residual",
+            model_cfg.get("direct_recovery_evidence_partial_pool_harm_residual", False),
+        )),
+        direct_recovery_evidence_partial_pool_harm_residual_scale=float(ckpt.get(
+            "direct_recovery_evidence_partial_pool_harm_residual_scale",
+            model_cfg.get("direct_recovery_evidence_partial_pool_harm_residual_scale", 0.50),
+        )),
         direct_recovery_evidence_rank_benefit_skip=bool(ckpt.get(
             "direct_recovery_evidence_rank_benefit_skip",
             model_cfg.get("direct_recovery_evidence_rank_benefit_skip", False),
@@ -353,6 +361,12 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     )
     cfg["model"]["direct_recovery_evidence_factorized_harm_interaction"] = bool(
         model.direct_recovery_evidence_factorized_harm_interaction
+    )
+    cfg["model"]["direct_recovery_evidence_partial_pool_harm_residual"] = bool(
+        model.direct_recovery_evidence_partial_pool_harm_residual
+    )
+    cfg["model"]["direct_recovery_evidence_partial_pool_harm_residual_scale"] = float(
+        model.direct_recovery_evidence_partial_pool_harm_residual_scale
     )
     cfg["model"]["direct_recovery_evidence_rank_benefit_skip"] = bool(
         model.direct_recovery_evidence_rank_benefit_skip
