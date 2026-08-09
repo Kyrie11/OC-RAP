@@ -34,6 +34,72 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _resolve_sha_pinned_provenance_path(
+    raw_value: str,
+    *,
+    stage_train_summary: Path,
+    expected_sha256: str,
+    label: str,
+) -> tuple[Path, str]:
+    """Resolve an audited provenance path without assuming its relative anchor.
+
+    Older reserve-only summaries stored repo-relative paths (for example
+    ``runs/<run>/candidates/.../factor_stage/...``).  The v48.36 metric checker
+    incorrectly interpreted those paths as relative to the *final model*
+    directory, producing ``.../model_v48_trac_sr/runs/...`` and a false RC=30.
+
+    Resolution is deliberately fail-closed: every accepted candidate must be a
+    file whose bytes match the already-recorded SHA256.  We support absolute
+    paths, repo/CWD-relative paths, the legacy stage-parent interpretation, and
+    a relocation-safe factor-stage suffix rooted at an ancestor of the current
+    stage summary.  Multiple byte-identical matches are harmless; the first
+    deterministic candidate is used and the resolution mode is recorded.
+    """
+    raw = Path(raw_value)
+    candidates: list[tuple[str, Path]] = []
+
+    def add(mode: str, value: Path) -> None:
+        try:
+            resolved = value.expanduser().resolve()
+        except OSError:
+            resolved = value.expanduser().absolute()
+        if all(resolved != existing for _, existing in candidates):
+            candidates.append((mode, resolved))
+
+    if raw.is_absolute():
+        add("absolute", raw)
+    else:
+        # The audited controller always cd's to OCRAP_REPO before invoking this
+        # checker, so historical ``runs/...`` values are repo/CWD-relative.
+        add("cwd_relative", Path.cwd() / raw)
+        # Retain compatibility with genuinely stage-relative historical fixtures.
+        add("stage_parent_relative", stage_train_summary.parent / raw)
+
+        # Relocation-safe fallback: historical values contain a stable
+        # ``factor_stage/...`` suffix.  This permits moving the whole run tree
+        # without weakening byte identity.
+        parts = raw.parts
+        if "factor_stage" in parts:
+            idx = parts.index("factor_stage")
+            suffix = Path(*parts[idx:])
+            for ancestor in stage_train_summary.resolve().parents:
+                add("factor_stage_suffix", ancestor / suffix)
+
+    existing: list[tuple[str, Path, str]] = []
+    for mode, candidate in candidates:
+        if candidate.is_file():
+            digest = _sha256(candidate)
+            existing.append((mode, candidate, digest))
+            if digest == expected_sha256:
+                return candidate, mode
+
+    if existing:
+        detail = "; ".join(f"{mode}:{path}:sha256={digest}" for mode, path, digest in existing)
+        raise SystemExit(f"{label} SHA256 mismatch; expected={expected_sha256}; candidates={detail}")
+    attempted = "; ".join(f"{mode}:{path}" for mode, path in candidates)
+    raise SystemExit(f"{label} missing; raw={raw_value!r}; attempted={attempted}")
+
+
 def _load_metric_row(train_summary_path: Path) -> tuple[dict[str, Any], dict[str, Any], int, dict[str, Any]]:
     """Resolve the validation row without fabricating a training epoch.
 
@@ -77,23 +143,21 @@ def _load_metric_row(train_summary_path: Path) -> tuple[dict[str, Any], dict[str
     if expected_metric_ckpt_sha != source_factor_ckpt_sha:
         raise SystemExit("reserve-only metric source checkpoint hash mismatch")
 
-    source_path = Path(source_raw)
-    if not source_path.is_absolute():
-        source_path = (train_summary_path.parent / source_path).resolve()
-    if not source_path.is_file():
-        raise SystemExit(f"metric source train summary missing: {source_path}")
-    source_checkpoint = Path(source_checkpoint_raw)
-    if not source_checkpoint.is_absolute():
-        source_checkpoint = (train_summary_path.parent / source_checkpoint).resolve()
-    if not source_checkpoint.is_file():
-        raise SystemExit(f"metric source checkpoint missing: {source_checkpoint}")
+    source_path, source_summary_resolution = _resolve_sha_pinned_provenance_path(
+        source_raw,
+        stage_train_summary=train_summary_path,
+        expected_sha256=expected_summary_sha,
+        label="metric source train summary",
+    )
+    source_checkpoint, source_checkpoint_resolution = _resolve_sha_pinned_provenance_path(
+        source_checkpoint_raw,
+        stage_train_summary=train_summary_path,
+        expected_sha256=source_factor_ckpt_sha,
+        label="metric source checkpoint",
+    )
     if source_path.parent != source_checkpoint.parent:
         raise SystemExit("metric source summary/checkpoint are not from the same model directory")
-    if _sha256(source_checkpoint) != source_factor_ckpt_sha:
-        raise SystemExit("source factor checkpoint SHA256 mismatch")
     actual_summary_sha = _sha256(source_path)
-    if actual_summary_sha != expected_summary_sha:
-        raise SystemExit("metric source train summary SHA256 mismatch")
 
     source = json.loads(source_path.read_text(encoding="utf-8"))
     source_best_epoch = int(source["best_epoch"])
@@ -113,6 +177,8 @@ def _load_metric_row(train_summary_path: Path) -> tuple[dict[str, Any], dict[str
         "metric_source_train_summary": str(source_path),
         "metric_source_train_summary_sha256": actual_summary_sha,
         "metric_source_checkpoint_sha256": expected_metric_ckpt_sha,
+        "metric_source_train_summary_resolution": source_summary_resolution,
+        "metric_source_checkpoint_resolution": source_checkpoint_resolution,
         "materialized_without_training": True,
         "stage_epochs_completed": 0,
         "stage_optimizer_steps": 0,

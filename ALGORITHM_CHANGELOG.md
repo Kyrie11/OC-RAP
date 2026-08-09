@@ -1,3 +1,29 @@
+## v48.42.1 — HPFR METRIC-PROVENANCE HOTFIX (engineering-only, 2026-08-08)
+
+### Scope
+
+This is an **engineering-only** repair of the uploaded v48.42 HPFR main run. The algorithm remains `v48.42-HPFR`: no model tensor computation, loss, optimizer setting, dataset, candidate set, factor-cache semantic setting, Natural gate, threshold, Safe/Near/Contact treatment, or shared continuous deployment rule is changed. `src/` and `configs/` are byte-identical to v48.42.
+
+### Uploaded RC=30 root cause
+
+- Balanced and Precision adaptation both completed with RC=0 and valid training/model/stage-transfer/cache contracts.
+- The controller entered certificate execution, but `check_v48_36_metric_calibration_contract.py` rejected the reserve-only final stage before policy-certificate verification.
+- `materialize_v48_38_reserve_stage.py` had recorded factor provenance as repo-relative strings such as `runs/<run>/candidates/<variant>/factor_stage/model_v48_trac_sr/train_summary.json`.
+- The checker incorrectly treated every relative provenance path as relative to the final model directory, producing a duplicated path of the form `.../model_v48_trac_sr/runs/<run>/.../factor_stage/...`.
+- Both certificate workers therefore exited RC=1 with `metric source train summary missing`; the certificate controller normalized the artifact failure to RC=30. The Natural gate was never evaluated.
+
+### Engineering changes
+
+1. Metric-source provenance resolution is SHA256-pinned and anchor-aware. It accepts absolute paths, controller-CWD/repo-relative historical paths, genuine stage-parent-relative paths, and a relocation-safe `factor_stage/...` suffix. A candidate is accepted only when its bytes match the already-recorded SHA256; mismatches still fail closed.
+2. New zero-update materialization writes canonical absolute source paths and explicit candidate-relative provenance fields (`provenance_path_schema_version=2`) so future runs do not depend on an implicit relative-path anchor.
+3. Certificate ordering now executes adaptation-dev proposal extraction, pooled shared-rule fitting, and the metric-calibration provenance contract **before reading certificate samples**. This changes no score or gate semantics but prevents an engineering provenance error from consuming certificate I/O or leaving misleading partial verification artifacts.
+4. Added `run_v48_42_1_hpfr_from_exact_factor_cache.sh`. It requires a new OUTPUTDIR and reuses old Balanced/Precision factor stages only through the existing exact factor-cache SHA/semantic contract; it never silently reuses a checkpoint. This avoids repeating the 20-epoch factor training after the engineering-only failure.
+5. The implementation identifier is `v48.42.1-HPFR-METRIC-PROVENANCE-HOTFIX`; the algorithm identifier remains exactly `v48.42-HPFR`.
+
+### Interpretation
+
+The uploaded v48.42 RC=30 is **not an algorithm result**. Development diagnostics produced before the failed provenance contract must not be used as a Natural-gate outcome. The next valid scientific result is the first pipeline-valid RC=0 or RC=20 obtained from the byte-identical v48.42 HPFR factor checkpoint through this repaired certificate path.
+
 # Algorithm Change Log
 
 ## v48.42 — HPFR / HIERARCHICAL PARTIAL-POOLING FRONTIER RESERVE (2026-08-08)

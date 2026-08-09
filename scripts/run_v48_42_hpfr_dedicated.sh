@@ -14,7 +14,7 @@ fi
 export OUTPUTDIR="${OUTPUTDIR:-runs/ocrap_v48_42_hpfr_main}"
 export RESUME_AFTER_ADAPTATION=0
 export OCRAP_ALGORITHM_VERSION="v48.42-HPFR"
-export OCRAP_IMPLEMENTATION_VERSION="v48.42-HPFR-HIERARCHICAL-PARTIAL-POOL-FRONTIER"
+export OCRAP_IMPLEMENTATION_VERSION="v48.42.1-HPFR-METRIC-PROVENANCE-HOTFIX"
 export V4838_FACTOR_ALGORITHM_FAMILY="v48.42-D-partial-pool-harm-rank-skip"
 
 # Keep mechanisms with positive evidence; explicitly disable falsified routes.

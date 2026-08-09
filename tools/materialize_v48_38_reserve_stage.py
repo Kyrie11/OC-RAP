@@ -53,8 +53,12 @@ def main() -> int:
     ap.add_argument("--implementation-version", default="v48.38-RFR")
     args = ap.parse_args()
 
-    factor = args.factor_stage
-    dest = args.destination
+    # Persist canonical source/destination paths in all new zero-update stage
+    # provenance.  Earlier relative ``runs/...`` values were scientifically
+    # unambiguous but were later anchored to the wrong directory by the metric
+    # checker, causing a false certificate RC=30.
+    factor = args.factor_stage.expanduser().resolve()
+    dest = args.destination.expanduser().resolve()
     required = [
         factor / "model_v48_trac_sr" / "best.pt",
         factor / "model_v48_trac_sr" / "train_summary.json",
@@ -107,6 +111,9 @@ def main() -> int:
     factor_summary_path = src_model / "train_summary.json"
     factor_summary = _load(factor_summary_path)
     factor_summary_sha = _sha256(factor_summary_path)
+    factor_candidate_root = factor.parent
+    factor_summary_candidate_relpath = str(factor_summary_path.relative_to(factor_candidate_root))
+    factor_checkpoint_candidate_relpath = str(factor_checkpoint.relative_to(factor_candidate_root))
     factor_correction = _load(factor / "EVIDENCE_CORRECTION_COMPLETE.json")
     best_metric = str(factor_summary.get("best_metric") or factor_complete.get("best_metric") or "direct_factor_supervised_risk")
     best_value = factor_summary.get("best_metric_value")
@@ -141,6 +148,9 @@ def main() -> int:
         "metric_source_train_summary": str(factor_summary_path),
         "metric_source_train_summary_sha256": factor_summary_sha,
         "metric_source_checkpoint_sha256": factor_sha,
+        "provenance_path_schema_version": 2,
+        "metric_source_train_summary_candidate_relpath": factor_summary_candidate_relpath,
+        "source_factor_checkpoint_candidate_relpath": factor_checkpoint_candidate_relpath,
         "source_factor_best_epoch": factor_summary.get("best_epoch"),
         "source_factor_epochs_completed": factor_summary.get("epochs_completed"),
         "test_roots_read": False,
@@ -162,6 +172,9 @@ def main() -> int:
         "source_factor_checkpoint_sha256": factor_sha,
         "metric_source_train_summary": str(factor_summary_path),
         "metric_source_train_summary_sha256": factor_summary_sha,
+        "provenance_path_schema_version": 2,
+        "metric_source_train_summary_candidate_relpath": factor_summary_candidate_relpath,
+        "source_factor_checkpoint_candidate_relpath": factor_checkpoint_candidate_relpath,
         "checkpoint_materialization": checkpoint_materialization,
         "test_roots_read": False,
     }
@@ -204,6 +217,9 @@ def main() -> int:
         "source_factor_checkpoint_sha256": factor_sha,
         "metric_source_train_summary": str(factor_summary_path),
         "metric_source_train_summary_sha256": factor_summary_sha,
+        "provenance_path_schema_version": 2,
+        "metric_source_train_summary_candidate_relpath": factor_summary_candidate_relpath,
+        "source_factor_checkpoint_candidate_relpath": factor_checkpoint_candidate_relpath,
         "test_roots_read": False,
     })
     _atomic_json(dest / "EVIDENCE_CORRECTION_COMPLETE.json", correction)

@@ -141,27 +141,6 @@ calibrate_variant() {
   set +a
   local tmp="$run/calibration.v48_14.tmp.$$" final="$run/calibration"
   rm -rf "$tmp"; mkdir -p "$tmp" "$run/logs"
-  local datasets=("$CERT_NEAR,$CERT_CONTACT" "$CAL_SAFE" "$CERT_NEAR" "$CERT_CONTACT")
-  local buckets=(mix safe near contact)
-  local mins=(180 80 100 140)
-  local allowed=(certificate_pool calibration certificate_pool certificate_pool)
-  for i in 0 1 2 3; do
-    CUDA_VISIBLE_DEVICES="$gpu" python -u -m ocrap.cli calibrate \
-      --dataset "${datasets[$i]}" --checkpoint "$ckpt" \
-      --output "$tmp/calibration_${buckets[$i]}_v48.json" \
-      --set calibration.required_min_for_delta="${mins[$i]}" \
-      --set calibration.allowed_split_ids="${allowed[$i]}" \
-      --set calibration.exact_split_ids=true \
-      --set calibration.allow_validation_fallback=false \
-      2>&1 | tee "$run/logs/v48_36_calibrate_${buckets[$i]}.log"
-  done
-  python tools/write_gamma_by_bucket.py \
-    --safe "$tmp/calibration_safe_v48.json" \
-    --near "$tmp/calibration_near_v48.json" \
-    --contact "$tmp/calibration_contact_v48.json" \
-    --delta 0.05 --output "$tmp/gamma_rec_by_bucket_v48.json" \
-    2>&1 | tee "$run/logs/v48_36_gamma.log"
-
   local common=(
     --checkpoint "$ckpt" --method-version=v48_36_continuous_frontier_dev_frozen_policy_risk_certificate --risk-source="${RISK_SOURCE:-ordinal_evidence}"
     --conditional-recovery-ranking --proposal-top-k "${PROPOSAL_TOP_K:-5}" --evidence-rerank-top-k
@@ -240,6 +219,32 @@ calibrate_variant() {
     --gate-spec "$OUTPUTDIR/GATE_SPEC.json" \
     --policy-contract "$run/POLICY_CONTRACT.env" \
     --output "$tmp/METRIC_CALIBRATION_CONTRACT.json"
+
+  # Only after all adaptation/dev provenance contracts pass do we touch the
+  # certificate pools.  Earlier versions calibrated r_dep on certificate data
+  # before the metric-source contract, so a pure provenance bug could consume
+  # substantial certificate I/O and leave misleading partial artifacts.  This
+  # reordering changes no score, threshold, dataset or gate semantics.
+  local datasets=("$CERT_NEAR,$CERT_CONTACT" "$CAL_SAFE" "$CERT_NEAR" "$CERT_CONTACT")
+  local buckets=(mix safe near contact)
+  local mins=(180 80 100 140)
+  local allowed=(certificate_pool calibration certificate_pool certificate_pool)
+  for i in 0 1 2 3; do
+    CUDA_VISIBLE_DEVICES="$gpu" python -u -m ocrap.cli calibrate \
+      --dataset "${datasets[$i]}" --checkpoint "$ckpt" \
+      --output "$tmp/calibration_${buckets[$i]}_v48.json" \
+      --set calibration.required_min_for_delta="${mins[$i]}" \
+      --set calibration.allowed_split_ids="${allowed[$i]}" \
+      --set calibration.exact_split_ids=true \
+      --set calibration.allow_validation_fallback=false \
+      2>&1 | tee "$run/logs/v48_36_calibrate_${buckets[$i]}.log"
+  done
+  python tools/write_gamma_by_bucket.py \
+    --safe "$tmp/calibration_safe_v48.json" \
+    --near "$tmp/calibration_near_v48.json" \
+    --contact "$tmp/calibration_contact_v48.json" \
+    --delta 0.05 --output "$tmp/gamma_rec_by_bucket_v48.json" \
+    2>&1 | tee "$run/logs/v48_36_gamma.log"
 
   set +e
   # The complete dedicated certificate is verification-only. Both workers read
