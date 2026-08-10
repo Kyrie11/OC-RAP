@@ -1,0 +1,46 @@
+{
+  "algorithm_version": "v48.43-POET",
+  "implementation_version": "v48.43-POET-DUAL-TRANSPORT",
+  "name": "Post-prefix Observation-Equivalence Transport",
+  "base_reference": "v48.42-A shared dual-OCAF semantics",
+  "regime_conditioned": false,
+  "proposal_top_k": 5,
+  "retained": [
+    "bounded HAF semantics",
+    "dual task OCAF",
+    "shared harm representation",
+    "component veto",
+    "support reliability",
+    "aligned deterministic joint reserve",
+    "one shared continuous deployment rule"
+  ],
+  "force_disabled": [
+    "partial_pool_harm_residual",
+    "rank_benefit_skip",
+    "factorized_harm_interaction",
+    "unbounded_benefit_factor",
+    "unbounded_harm_factors",
+    "regime-conditioned routing/threshold/policy"
+  ],
+  "poet": {
+    "signature_dim": 4,
+    "signature": [
+      "normalized_root_entropy",
+      "probability_weighted_offdiagonal_observation_alias_mass",
+      "probability_weighted_peak_alias_pressure",
+      "maximum_root_probability"
+    ],
+    "candidate_relative": true,
+    "nominal_exact_zero": true,
+    "structural_teacher_detached": true,
+    "projection_bias": false,
+    "projection_zero_initialized": true,
+    "default_transport_scale": 1.0
+  },
+  "ablation": {
+    "A": "no POET",
+    "B": "harm-side POET only",
+    "C": "benefit-side POET only",
+    "D": "benefit + harm POET"
+  }
+}

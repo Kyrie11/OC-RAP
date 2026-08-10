@@ -336,6 +336,9 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_partial_pool_harm_residual_scale: float = 0.50,
         direct_recovery_evidence_rank_benefit_skip: bool = False,
         direct_recovery_evidence_rank_benefit_gain_init: float = 1.0,
+        direct_recovery_evidence_postprefix_obs_transport_benefit: bool = False,
+        direct_recovery_evidence_postprefix_obs_transport_harm: bool = False,
+        direct_recovery_evidence_postprefix_obs_transport_scale: float = 1.0,
         direct_recovery_evidence_calibrator_shared: bool = False,
         direct_recovery_evidence_calibrator_regime_scale: float = 0.25,
         direct_recovery_evidence_unified_experts: bool = False,
@@ -468,6 +471,37 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_evidence_rank_benefit_gain_init = float(
             max(1.0e-4, direct_recovery_evidence_rank_benefit_gain_init)
         )
+        # v48.43 POET: expose the candidate-induced post-prefix observation
+        # equivalence geometry to the evidence bridge.  This is not a regime
+        # router: every candidate in every evaluation slice is mapped through
+        # the same frozen root/observation model and then expressed relative to
+        # the unique nominal action in its scene-time group.
+        self.direct_recovery_evidence_postprefix_obs_transport_benefit = bool(
+            direct_recovery_evidence_postprefix_obs_transport_benefit
+        )
+        self.direct_recovery_evidence_postprefix_obs_transport_harm = bool(
+            direct_recovery_evidence_postprefix_obs_transport_harm
+        )
+        self.direct_recovery_evidence_postprefix_obs_transport_scale = float(
+            max(0.0, direct_recovery_evidence_postprefix_obs_transport_scale)
+        )
+        self.direct_recovery_evidence_postprefix_obs_signature_dim = 4
+        if (
+            self.direct_recovery_evidence_postprefix_obs_transport_benefit
+            or self.direct_recovery_evidence_postprefix_obs_transport_harm
+        ):
+            if not self.direct_recovery_evidence_dual_interaction_bridge:
+                raise ValueError(
+                    "post-prefix observation transport requires the dual OCAF bridge"
+                )
+            if self.direct_recovery_evidence_calibrator_context_source != "physical_interaction":
+                raise ValueError(
+                    "post-prefix observation transport requires physical_interaction context"
+                )
+            if self.direct_recovery_evidence_postprefix_obs_transport_scale <= 0.0:
+                raise ValueError(
+                    "post-prefix observation transport scale must be positive when enabled"
+                )
         self.direct_recovery_evidence_calibrator_shared = bool(
             direct_recovery_evidence_calibrator_shared
         )
@@ -960,6 +994,33 @@ class OCRAPModel(nn.Module):
             and self.direct_recovery_evidence_calibrator_context_source == "physical_interaction"
             else None
         )
+        # v48.43 POET (Post-prefix Observation-Equivalence Transport).
+        # Four bounded, model-predicted structural coordinates summarize how the
+        # candidate changes root uncertainty and observation aliasing after the
+        # executable prefix.  Separate zero-init adapters let the 2x2 ablation
+        # test benefit-side and harm-side identifiability without changing the
+        # shared deployment rule.  Bias-free projections keep the nominal row
+        # exactly unchanged because the signature is candidate-minus-nominal.
+        def _make_postprefix_obs_transport_adapter() -> nn.Linear:
+            adapter = nn.Linear(
+                self.direct_recovery_evidence_postprefix_obs_signature_dim,
+                self.direct_recovery_evidence_interaction_hidden,
+                bias=False,
+            )
+            nn.init.zeros_(adapter.weight)
+            return adapter
+
+        self.direct_evidence_postprefix_obs_transport_benefit = (
+            _make_postprefix_obs_transport_adapter()
+            if self.direct_recovery_evidence_postprefix_obs_transport_benefit
+            else None
+        )
+        self.direct_evidence_postprefix_obs_transport_harm = (
+            _make_postprefix_obs_transport_adapter()
+            if self.direct_recovery_evidence_postprefix_obs_transport_harm
+            else None
+        )
+
         # v48.20 UNISON-BRIDGE: a single shared evidence model consumes both
         # frozen source experts, their consensus/disagreement, and the frozen
         # proposal context.  No bucket/regime id is exposed to this model.
@@ -1323,6 +1384,56 @@ class OCRAPModel(nn.Module):
             out.index_copy_(0, idx, broadcast_rows)
         return out
 
+    @staticmethod
+    def _postprefix_observation_equivalence_signature(
+        root_logits: torch.Tensor,
+        obs_embeddings: torch.Tensor,
+        tau_obs: float,
+    ) -> torch.Tensor:
+        """Return a bounded structural summary of predicted post-prefix observability.
+
+        Coordinates are deliberately low-dimensional and regime agnostic:
+        normalized root entropy, probability-weighted observation-alias mass,
+        probability-weighted peak alias pressure, and maximum root probability.
+        All are functions only of the model's predicted latent-root distribution
+        and post-prefix observation kernel for the candidate action.
+        """
+        p = torch.softmax(root_logits.float(), dim=-1)
+        k = int(p.shape[-1])
+        if k <= 1:
+            entropy = p.new_zeros((p.shape[0],))
+        else:
+            entropy = -(p * p.clamp_min(1.0e-8).log()).sum(dim=-1)
+            entropy = entropy / float(torch.log(torch.tensor(float(k))).item())
+        obs = obs_embeddings.float()
+        diff = obs.unsqueeze(2) - obs.unsqueeze(1)
+        dist2 = diff.square().mean(dim=-1)
+        compatibility = torch.exp(-dist2 / max(float(tau_obs), 1.0e-6)).clamp(0.0, 1.0)
+        eye = torch.eye(k, dtype=compatibility.dtype, device=compatibility.device).unsqueeze(0)
+        offdiag = compatibility * (1.0 - eye)
+        alias_mass = torch.einsum('bi,bij,bj->b', p, offdiag, p)
+        peak_alias = (offdiag.amax(dim=-1) * p).sum(dim=-1)
+        root_peak = p.amax(dim=-1)
+        signature = torch.stack([entropy, alias_mass, peak_alias, root_peak], dim=-1)
+        return signature.clamp(0.0, 1.0)
+
+    def _direct_postprefix_observation_signature(
+        self, memory: torch.Tensor
+    ) -> torch.Tensor:
+        """Compute frozen candidate-specific post-prefix observability evidence.
+
+        Evidence adaptation must not rotate the root decoder or observation
+        kernel.  The structural signal is therefore detached by construction;
+        only the tiny transport projection is trainable.
+        """
+        with torch.no_grad():
+            root_tokens = self._decode_roots(memory.detach())
+            root_logits = self.root_logit_head(root_tokens).squeeze(-1)
+            obs_embeddings = self.obs_embed_head(root_tokens)
+            return self._postprefix_observation_equivalence_signature(
+                root_logits, obs_embeddings, self.tau_obs
+            ).to(dtype=memory.dtype).detach()
+
     def _apply_direct_set_context(
         self,
         direct_features: torch.Tensor,
@@ -1425,6 +1536,7 @@ class OCRAPModel(nn.Module):
         bucket_id: torch.Tensor | None,
         group_index: torch.Tensor | None = None,
         is_nominal: torch.Tensor | None = None,
+        postprefix_observation_signature: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """Evaluate the policy-level recovery branch.
 
@@ -1736,6 +1848,39 @@ class OCRAPModel(nn.Module):
                         )
                         benefit_context = calibrator_context
                         harm_context = calibrator_context
+
+                    if (
+                        self.direct_evidence_postprefix_obs_transport_benefit is not None
+                        or self.direct_evidence_postprefix_obs_transport_harm is not None
+                    ):
+                        signature_abs = postprefix_observation_signature
+                        if signature_abs is None:
+                            signature_abs = self._direct_postprefix_observation_signature(memory)
+                        signature_abs = signature_abs.to(device=delta.device, dtype=delta.dtype).detach()
+                        signature_rel = self._candidate_minus_nominal(
+                            signature_abs, group_index, is_nominal
+                        ).detach()
+                        scale = self.direct_recovery_evidence_postprefix_obs_transport_scale
+                        if self.direct_evidence_postprefix_obs_transport_benefit is not None:
+                            benefit_transport = (
+                                self.direct_evidence_postprefix_obs_transport_benefit(signature_rel) * scale
+                            )
+                            benefit_context = benefit_context + benefit_transport
+                            out["direct_recovery_evidence_postprefix_obs_benefit_transport"] = benefit_transport
+                        if self.direct_evidence_postprefix_obs_transport_harm is not None:
+                            harm_transport = (
+                                self.direct_evidence_postprefix_obs_transport_harm(signature_rel) * scale
+                            )
+                            harm_context = harm_context + harm_transport
+                            out["direct_recovery_evidence_postprefix_obs_harm_transport"] = harm_transport
+                        # The generic diagnostic context stays symmetric; task
+                        # calibrators below receive their branch-specific contexts.
+                        calibrator_context = 0.5 * (benefit_context + harm_context)
+                        out["direct_recovery_evidence_benefit_interaction_context"] = benefit_context
+                        out["direct_recovery_evidence_harm_interaction_context"] = harm_context
+                        out["direct_recovery_evidence_postprefix_obs_signature"] = signature_abs
+                        out["direct_recovery_evidence_postprefix_obs_signature_relative"] = signature_rel
+
                     out["direct_recovery_evidence_physical_relative_context"] = action_context
                     out["direct_recovery_evidence_nominal_observation_context"] = observation_context
                     out["direct_recovery_evidence_interaction_context"] = calibrator_context
@@ -2426,7 +2571,21 @@ class OCRAPModel(nn.Module):
             "c_star": C,
             "utility": self.utility_head(scene_token).squeeze(-1),
         }
-        out.update(self._direct_outputs(memory, x, bucket_id, group_index, is_nominal))
+        postprefix_signature = None
+        if (
+            self.direct_evidence_postprefix_obs_transport_benefit is not None
+            or self.direct_evidence_postprefix_obs_transport_harm is not None
+        ):
+            with torch.no_grad():
+                postprefix_signature = self._postprefix_observation_equivalence_signature(
+                    root_logits.detach(), obs_embeddings.detach(), self.tau_obs
+                ).to(dtype=memory.dtype)
+        out.update(
+            self._direct_outputs(
+                memory, x, bucket_id, group_index, is_nominal,
+                postprefix_observation_signature=postprefix_signature,
+            )
+        )
         if self.root_signature_head is not None:
             out["root_signature"] = self.root_signature_head(root_tokens)
         if self.root_future_signature_head is not None:

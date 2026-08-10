@@ -27,6 +27,8 @@ APPROVED_PREFIXES = {
     "direct_evidence_concord_harm_component_residuals",
     "direct_evidence_interaction_bridge",
     "direct_evidence_rank_benefit_log_gain",
+    "direct_evidence_postprefix_obs_transport_benefit",
+    "direct_evidence_postprefix_obs_transport_harm",
 }
 ADMISSION_PREFIX = "direct_evidence_concord_admission_calibrator"
 INTERACTION_PREFIX = "direct_evidence_interaction_bridge"

@@ -140,6 +140,9 @@ def main() -> int:
     ap.add_argument("--expect-partial-pool-harm-residual-scale", type=float, default=None)
     ap.add_argument("--expect-rank-benefit-skip", choices=("true", "false", "any"), default="any")
     ap.add_argument("--expect-rank-benefit-gain-init", type=float, default=None)
+    ap.add_argument("--expect-postprefix-obs-transport-benefit", choices=("true", "false", "any"), default="any")
+    ap.add_argument("--expect-postprefix-obs-transport-harm", choices=("true", "false", "any"), default="any")
+    ap.add_argument("--expect-postprefix-obs-transport-scale", type=float, default=None)
     ap.add_argument("--expect-component-margin-target-mode", default="any")
     ap.add_argument("--expect-component-margin-target-scale", type=float, default=None)
     ap.add_argument("--expect-algorithm-variant", default="")
@@ -198,6 +201,9 @@ def main() -> int:
     expected_partial_pool_harm_scale = args.expect_partial_pool_harm_residual_scale
     expected_rank_benefit_skip = None if args.expect_rank_benefit_skip == "any" else args.expect_rank_benefit_skip == "true"
     expected_rank_benefit_gain_init = args.expect_rank_benefit_gain_init
+    expected_postprefix_benefit = None if args.expect_postprefix_obs_transport_benefit == "any" else args.expect_postprefix_obs_transport_benefit == "true"
+    expected_postprefix_harm = None if args.expect_postprefix_obs_transport_harm == "any" else args.expect_postprefix_obs_transport_harm == "true"
+    expected_postprefix_scale = args.expect_postprefix_obs_transport_scale
     identity_trainable = _trainable(identity_arch)
     final_trainable = _trainable(final_arch)
     expected_ocaf = args.expect_context_source == "physical_interaction"
@@ -213,6 +219,10 @@ def main() -> int:
         all_prefixes += ("direct_evidence_concord_harm_component_residuals",)
     if expected_rank_benefit_skip is True:
         all_prefixes += ("direct_evidence_rank_benefit_log_gain",)
+    if expected_postprefix_benefit is True:
+        all_prefixes += ("direct_evidence_postprefix_obs_transport_benefit",)
+    if expected_postprefix_harm is True:
+        all_prefixes += ("direct_evidence_postprefix_obs_transport_harm",)
     reference_prefixes = (
         "direct_evidence_concord_admission_calibrator",
     ) + (("direct_evidence_interaction_bridge",) if expected_ocaf else ())
@@ -332,6 +342,18 @@ def main() -> int:
                 math.isclose(float(a.get("rank_benefit_gain_init", -1.0)), float(expected_rank_benefit_gain_init), rel_tol=0.0, abs_tol=1.0e-9)
                 for a in (factor_arch, identity_arch, final_arch)
             )
+        ),
+        "postprefix_obs_transport_benefit_contract": (
+            expected_postprefix_benefit is None
+            or all(bool(a.get("postprefix_obs_transport_benefit", False)) is expected_postprefix_benefit for a in (factor_arch, identity_arch, final_arch))
+        ),
+        "postprefix_obs_transport_harm_contract": (
+            expected_postprefix_harm is None
+            or all(bool(a.get("postprefix_obs_transport_harm", False)) is expected_postprefix_harm for a in (factor_arch, identity_arch, final_arch))
+        ),
+        "postprefix_obs_transport_scale_contract": (
+            expected_postprefix_scale is None
+            or all(math.isclose(float(a.get("postprefix_obs_transport_scale", -1.0)), float(expected_postprefix_scale), rel_tol=0.0, abs_tol=1.0e-9) for a in (factor_arch, identity_arch, final_arch))
         ),
         "component_margin_target_mode_contract": (
             args.expect_component_margin_target_mode == "any"
@@ -470,6 +492,9 @@ def main() -> int:
             "partial_pool_harm_residual_scale": expected_partial_pool_harm_scale,
             "rank_benefit_skip": expected_rank_benefit_skip,
             "rank_benefit_gain_init": expected_rank_benefit_gain_init,
+            "postprefix_obs_transport_benefit": expected_postprefix_benefit,
+            "postprefix_obs_transport_harm": expected_postprefix_harm,
+            "postprefix_obs_transport_scale": expected_postprefix_scale,
             "algorithm_variant": expected_algorithm_variant,
             "identity_trainable_prefixes": sorted(expected_identity_prefixes),
             "prior_coupled": expect_coupled,

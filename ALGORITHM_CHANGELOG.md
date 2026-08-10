@@ -1,3 +1,145 @@
+## v48.43 — POET / POST-PREFIX OBSERVATION-EQUIVALENCE TRANSPORT (2026-08-09)
+
+### v48.42 final valid 2x2 attribution (supersedes the earlier RC30-only interpretation)
+
+The newly uploaded v48.42/48.42.1 A/B/C/D results are all pipeline-valid algorithm
+results: `authoritative_exit_code=20`, `pipeline_valid=true`,
+`certificate_executed=true`, and `gate_evaluated=true`.  Consequently the earlier
+v48.41-era statement that the rank-skip arms could not be evaluated no longer applies
+to this experiment set.
+
+All four Precision arms remain blocked at `development_rule_fit`, while the proposal
+oracle remains feasible (Near top-5: 9 safe-positive groups; Contact: 20).  The failure
+is therefore downstream of candidate generation.
+
+**B (hierarchical partial-pooling harm residual) is rejected as a main-algorithm
+component.**  In Near certificate, deployability safe-positive false veto changes only
+from 16/18 to 15/18 while harmful-vs-safe-positive deployability AUC degrades from
+about 0.482 to 0.420 and harmful false-safe fraction rises from about 0.106 to 0.184.
+In Contact, B reduces deployability false veto from 27/31 to 21/31, but harmful
+false-safe fraction rises and certificate harmful-selected UCB90 worsens from about
+0.484 to 0.563.  This is primarily a score/calibration shift, not improved conditional
+frontier discrimination.
+
+**C (bounded rank-benefit skip) is rejected.**  Contact candidate safe-positive AUC
+changes from about 0.582 to 0.580; proposal positive/safe-positive AUC does not improve;
+certificate positive recall remains 0.10.  The strong frozen rank signal previously
+observed is not converted into deployable physical benefit evidence by this skip.
+Further ranking-objective/skip stacking is therefore stopped.
+
+**D/Main (partial pooling + rank skip) is also rejected.**  It reaches Contact
+certificate recall 0.15 versus A's 0.10, but harmful-selected UCB90 worsens to about
+0.503 and Contact harmful false-safe rises sharply.  The nearest shared development
+rule has fewer formal failures (4 versus 6) and lower aggregate deficit, yet selects
+zero safe-positive examples in both Near and Contact development strata.  It has not
+entered a statistically meaningful feasible window.
+
+These results activate the pre-registered stop rules from v48.42: do not add more
+generic harm residual capacity after B fails the Near deployability frontier, and do
+not stack more ranking objectives after a valid C run fails to improve Contact benefit
+capture.
+
+### Bottleneck re-diagnosis
+
+The retained v48.40/v48.42-A architecture already sends candidate-relative executable
+physical action features to dual benefit/harm OCAF branches, but its observation
+context is a broadcast of the nominal row's current observation features.  During the
+`direct_only` evidence-adaptation path it does not explicitly expose the candidate's
+predicted **post-prefix observation-equivalence geometry**, despite observation
+consistency after the candidate prefix being the central recoverability object in the
+paper.
+
+v48.43 therefore treats the next problem as **structural identifiability**, not
+additional classifier capacity.  The same learned latent-root/observation model is
+used for every sample and every regime; no Safe/Near/Contact identifier, branch,
+threshold, router, or loss is introduced.
+
+### Algorithm: Post-prefix Observation-Equivalence Transport (POET)
+
+For each candidate prefix `a`, the frozen latent-root decoder and post-prefix
+observation embedding predict a compact four-coordinate structural signature:
+
+1. normalized latent-root entropy;
+2. probability-weighted off-diagonal observation-alias mass;
+3. probability-weighted peak alias pressure;
+4. maximum latent-root probability.
+
+Let this bounded signature be `psi(a)` and let `a0` be the nominal candidate in the
+same proposal group.  POET uses only the candidate-relative structural evidence
+
+`delta_psi(a) = psi(a) - psi(a0)`.
+
+Two optional bias-free linear projections inject this signal into the already
+validated dual-OCAF task contexts:
+
+`z_b' = z_b + s W_b delta_psi`,
+`z_h' = z_h + s W_h delta_psi`.
+
+`W_b` and `W_h` are zero-initialized.  Therefore enabling POET is exactly identical to
+the shared dual-OCAF reference at initialization; the nominal candidate has exactly
+zero transport; and the frozen root/observation teacher cannot be rotated by sparse
+evidence gradients.  Only the tiny transport projection is learned.  The mechanism is
+continuous, observation/action based, and regime agnostic.
+
+### v48.43 2x2 ablation
+
+- **A:** retained shared dual-OCAF reference; no POET.
+- **B:** A + harm-side POET only.  Tests whether candidate-specific post-prefix
+  observability improves Near deployability discrimination rather than merely shifting
+  its calibration.
+- **C:** A + benefit-side POET only.  Tests whether the missing Contact benefit signal
+  is recoverable from candidate-specific post-prefix observability without another
+  rank objective.
+- **D/Main:** A + benefit and harm POET.  Tests complementarity and the shared-rule
+  feasibility window.
+
+Every v48.43 arm force-disables v48.42 partial pooling and rank-benefit skip, as well as
+historical unbounded factors, factorized harm interaction, one-sided tail losses, and
+regime-conditioned routing.  Proposal top-k remains 5 and the same shared Natural rule
+is fitted.
+
+### Go/no-go interpretation
+
+The v48.43 mechanism is considered supported only if its causal readout improves
+conditional discrimination, not merely score level:
+
+- B should materially reduce Near deployability safe-positive false veto **and** raise
+  harmful-vs-safe-positive deployability AUC without a comparable rise in harmful
+  false-safe/selected UCB.
+- C should materially improve Contact safe-positive/positive AUC and certificate
+  positive capture without worsening harm control.
+- D should retain B's Near harm cleanliness and C's Contact benefit gain, and the
+  shared development rule must begin selecting safe-positive examples in both Near and
+  Contact.  A lower numerical constraint deficit with zero positives is not sufficient.
+- If POET fails these tests, do not increase its width/scale as the next reaction;
+  inspect recovery-option conflict/teacher observability calibration instead.
+
+### Engineering contract changes
+
+- POET flags/scale are checkpoint-, inference-, training-, architecture-, factor-cache-
+  and contract-bound.
+- Stage-transfer approved-prefix logic now recognizes both POET projections, including
+  non-reserve future paths.
+- Runtime preflight checks signature shape/finiteness, nominal exact-zero transport,
+  and full forward/backward finiteness.
+- Added a v48.43 2x2 comparator that reads development/certificate artifacts only and
+  explicitly sets `test_roots_read=false`.
+- Two-GPU launcher supports four concurrent arms; `MAX_PARALLEL_ARMS=2` provides two
+  waves on memory-constrained GPUs without changing experiment semantics.
+
+### Non-repetition list extended by the valid v48.42 results
+
+Do not repeat: threshold-grid densification, top-k expansion, aggressive positive
+oversampling, hardest-negative population distortion, generic pairwise/listwise loss
+stacking, full identity-stage factor updates, learned admission residual, v48.38
+one-sided tail loss, v48.39 unbounded benefit/harm, v48.40 `frontier_tanh`, v48.41 full
+component factorization, **v48.42 partial-pooling harm residual**, **v48.42 bounded
+rank-benefit skip**, or any regime-conditioned routing/threshold/policy.
+
+Retain: OCAF, factor preservation, bounded HAF semantics, dual task OCAF, component
+veto, support reliability, aligned deterministic joint reserve, one shared continuous
+deployment rule, and proposal top-k=5.
+
 ## v48.42.1 — HPFR METRIC-PROVENANCE HOTFIX (engineering-only, 2026-08-08)
 
 ### Scope

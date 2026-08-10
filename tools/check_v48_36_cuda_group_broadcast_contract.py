@@ -48,6 +48,8 @@ def _model(
     factorized_harm: bool = False,
     partial_pool_harm: bool = False,
     rank_benefit_skip: bool = False,
+    postprefix_obs_transport_benefit: bool = False,
+    postprefix_obs_transport_harm: bool = False,
 ) -> OCRAPModel:
     model = OCRAPModel(
         input_dim=FlatFeatureLayout().total_dim,
@@ -76,6 +78,9 @@ def _model(
         direct_recovery_evidence_partial_pool_harm_residual_scale=0.50,
         direct_recovery_evidence_rank_benefit_skip=rank_benefit_skip,
         direct_recovery_evidence_rank_benefit_gain_init=1.0,
+        direct_recovery_evidence_postprefix_obs_transport_benefit=postprefix_obs_transport_benefit,
+        direct_recovery_evidence_postprefix_obs_transport_harm=postprefix_obs_transport_harm,
+        direct_recovery_evidence_postprefix_obs_transport_scale=1.0,
         direct_recovery_evidence_unified_experts=True,
         direct_recovery_evidence_component_heads=True,
         direct_recovery_evidence_component_count=5,
@@ -96,6 +101,8 @@ def _exercise(
     factorized_harm: bool = False,
     partial_pool_harm: bool = False,
     rank_benefit_skip: bool = False,
+    postprefix_obs_transport_benefit: bool = False,
+    postprefix_obs_transport_harm: bool = False,
 ) -> dict:
     if batch_size < group_size or batch_size % group_size != 0:
         raise ValueError("batch-size must be a positive multiple of group-size")
@@ -106,6 +113,8 @@ def _exercise(
     model = _model(
         device, hidden, dual=dual, factorized_harm=factorized_harm,
         partial_pool_harm=partial_pool_harm, rank_benefit_skip=rank_benefit_skip,
+        postprefix_obs_transport_benefit=postprefix_obs_transport_benefit,
+        postprefix_obs_transport_harm=postprefix_obs_transport_harm,
     )
     layout = FlatFeatureLayout()
     num_groups = batch_size // group_size
@@ -161,6 +170,27 @@ def _exercise(
         if gain is None or not torch.isfinite(gain).all() or not bool(torch.all(gain > 0)):
             raise AssertionError("rank-benefit gain missing, non-finite, or non-positive")
         full_terms.append(gain.float().square().mean())
+    if postprefix_obs_transport_benefit or postprefix_obs_transport_harm:
+        signature_rel = full_out.get("direct_recovery_evidence_postprefix_obs_signature_relative")
+        if signature_rel is None or signature_rel.shape != (batch_size, 4):
+            raise AssertionError("post-prefix observation signature missing or wrong shape")
+        if not torch.isfinite(signature_rel).all():
+            raise AssertionError("post-prefix observation signature is non-finite")
+        if not torch.equal(signature_rel[::group_size], torch.zeros_like(signature_rel[::group_size])):
+            raise AssertionError("nominal post-prefix observation signature is not exact zero")
+        full_terms.append(signature_rel.float().square().mean())
+    if postprefix_obs_transport_benefit:
+        t = full_out.get("direct_recovery_evidence_postprefix_obs_benefit_transport")
+        if t is None or not torch.isfinite(t).all():
+            raise AssertionError("benefit post-prefix observation transport missing or non-finite")
+        if not torch.equal(t[::group_size], torch.zeros_like(t[::group_size])):
+            raise AssertionError("benefit nominal transport is not exact zero")
+    if postprefix_obs_transport_harm:
+        t = full_out.get("direct_recovery_evidence_postprefix_obs_harm_transport")
+        if t is None or not torch.isfinite(t).all():
+            raise AssertionError("harm post-prefix observation transport missing or non-finite")
+        if not torch.equal(t[::group_size], torch.zeros_like(t[::group_size])):
+            raise AssertionError("harm nominal transport is not exact zero")
     loss = (
         sum(context.float().square().mean() for context in contexts)
         + action.float().square().mean()
@@ -192,6 +222,8 @@ def _exercise(
         "factorized_harm_interaction": bool(factorized_harm),
         "partial_pool_harm_residual": bool(partial_pool_harm),
         "rank_benefit_skip": bool(rank_benefit_skip),
+        "postprefix_obs_transport_benefit": bool(postprefix_obs_transport_benefit),
+        "postprefix_obs_transport_harm": bool(postprefix_obs_transport_harm),
         "full_evidence_path_forward_backward": True,
         "zero_action_exact_zero": True,
         "forward_finite": bool(torch.isfinite(context).all()),
@@ -210,6 +242,8 @@ def main() -> int:
     parser.add_argument("--factorized-harm-interaction", action="store_true")
     parser.add_argument("--partial-pool-harm-residual", action="store_true")
     parser.add_argument("--rank-benefit-skip", action="store_true")
+    parser.add_argument("--postprefix-obs-transport-benefit", action="store_true")
+    parser.add_argument("--postprefix-obs-transport-harm", action="store_true")
     args = parser.parse_args()
 
     started = time.time()
@@ -241,6 +275,8 @@ def main() -> int:
                 factorized_harm=args.factorized_harm_interaction,
                 partial_pool_harm=args.partial_pool_harm_residual,
                 rank_benefit_skip=args.rank_benefit_skip,
+                postprefix_obs_transport_benefit=args.postprefix_obs_transport_benefit,
+                postprefix_obs_transport_harm=args.postprefix_obs_transport_harm,
             )
         )
         report["valid"] = True

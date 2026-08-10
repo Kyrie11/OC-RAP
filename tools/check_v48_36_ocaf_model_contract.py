@@ -53,6 +53,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--expect-partial-pool-harm-residual-scale", type=float, default=None)
     ap.add_argument("--expect-rank-benefit-skip", choices=("true", "false", "any"), default="any")
     ap.add_argument("--expect-rank-benefit-gain-init", type=float, default=None)
+    ap.add_argument("--expect-postprefix-obs-transport-benefit", choices=("true", "false", "any"), default="any")
+    ap.add_argument("--expect-postprefix-obs-transport-harm", choices=("true", "false", "any"), default="any")
+    ap.add_argument("--expect-postprefix-obs-transport-scale", type=float, default=None)
     ap.add_argument("--expect-consensus-prior-scale", type=float, default=0.50)
     ap.add_argument("--reliability-override", default="", help="Ablation override; empty uses support contract")
     return ap
@@ -115,6 +118,15 @@ def main() -> int:
         "direct_recovery_evidence_rank_benefit_gain_init": float(
             model.direct_recovery_evidence_rank_benefit_gain_init
         ),
+        "direct_recovery_evidence_postprefix_obs_transport_benefit": bool(
+            model.direct_recovery_evidence_postprefix_obs_transport_benefit
+        ),
+        "direct_recovery_evidence_postprefix_obs_transport_harm": bool(
+            model.direct_recovery_evidence_postprefix_obs_transport_harm
+        ),
+        "direct_recovery_evidence_postprefix_obs_transport_scale": float(
+            model.direct_recovery_evidence_postprefix_obs_transport_scale
+        ),
         "direct_recovery_evidence_consensus_prior_scale": float(model.direct_recovery_evidence_consensus_prior_scale),
         "interaction_bridge_present": model.direct_evidence_interaction_bridge is not None,
     }
@@ -169,6 +181,15 @@ def main() -> int:
             else args.expect_rank_benefit_skip == "true"
         ),
         "direct_recovery_evidence_rank_benefit_gain_init": args.expect_rank_benefit_gain_init,
+        "direct_recovery_evidence_postprefix_obs_transport_benefit": (
+            None if args.expect_postprefix_obs_transport_benefit == "any"
+            else args.expect_postprefix_obs_transport_benefit == "true"
+        ),
+        "direct_recovery_evidence_postprefix_obs_transport_harm": (
+            None if args.expect_postprefix_obs_transport_harm == "any"
+            else args.expect_postprefix_obs_transport_harm == "true"
+        ),
+        "direct_recovery_evidence_postprefix_obs_transport_scale": args.expect_postprefix_obs_transport_scale,
         "direct_recovery_evidence_consensus_prior_scale": float(args.expect_consensus_prior_scale),
         "interaction_bridge_present": args.expect_context_source == "physical_interaction",
     }

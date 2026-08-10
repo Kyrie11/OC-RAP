@@ -1,0 +1,41 @@
+OC-RAP v48.43 POET local engineering validation
+Date: 2026-08-09
+
+PASS: focused v48.36/40/41/42/43 regression matrix
+  51 passed, 1 skipped (CUDA-only), 10 warnings
+
+PASS: v48.43 POET directed tests
+  8 passed
+  - zero-init exact baseline equivalence
+  - bounded candidate-relative signature and exact nominal zero
+  - task-separable, regime-free injection
+  - dual physical OCAF requirement
+  - 2x2 wrappers disable v48.42 negative arms
+  - cache/checkpoint/contract flag binding
+  - adapter gradient finite while root/observation structural teacher is detached
+  - stage-transfer approved-prefix coverage
+
+PASS: CPU direct-evidence full forward/backward preflight
+  direct action dim: 141
+  nominal observation dim: 529
+  post-prefix benefit transport: enabled
+  post-prefix harm transport: enabled
+  zero_action_exact_zero: true
+  forward_finite: true
+  backward_finite: true
+  valid: true
+  test_roots_read: false
+
+PASS: python compileall for src/tools/tests
+PASS: bash -n for 91 scripts
+
+FULL HISTORICAL PYTEST SUITE: NOT CLAIMED PASS
+  The first confirmed historical failure is test_v48_12_trident.py attempting to
+  read scripts/train_ocrap_v48_12_trident.sh, a historical script absent from the
+  uploaded source package. The unrestricted suite also exceeded the execution
+  window before all such historical snapshot failures could be classified.
+  This is not recorded as a POET runtime regression, but it is also not hidden or
+  re-labelled as a full-suite PASS.
+
+No WOMD/Waymax GPU training or Natural-gate result is claimed in this environment.
+The next scientific result must come from the registered v48.43 A/B/C/D runs.

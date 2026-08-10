@@ -221,6 +221,18 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_evidence_rank_benefit_gain_init",
             model_cfg.get("direct_recovery_evidence_rank_benefit_gain_init", 1.0),
         )),
+        direct_recovery_evidence_postprefix_obs_transport_benefit=bool(ckpt.get(
+            "direct_recovery_evidence_postprefix_obs_transport_benefit",
+            model_cfg.get("direct_recovery_evidence_postprefix_obs_transport_benefit", False),
+        )),
+        direct_recovery_evidence_postprefix_obs_transport_harm=bool(ckpt.get(
+            "direct_recovery_evidence_postprefix_obs_transport_harm",
+            model_cfg.get("direct_recovery_evidence_postprefix_obs_transport_harm", False),
+        )),
+        direct_recovery_evidence_postprefix_obs_transport_scale=float(ckpt.get(
+            "direct_recovery_evidence_postprefix_obs_transport_scale",
+            model_cfg.get("direct_recovery_evidence_postprefix_obs_transport_scale", 1.0),
+        )),
         direct_recovery_evidence_calibrator_shared=bool(ckpt.get("direct_recovery_evidence_calibrator_shared", model_cfg.get("direct_recovery_evidence_calibrator_shared", False))),
         direct_recovery_evidence_calibrator_regime_scale=float(ckpt.get("direct_recovery_evidence_calibrator_regime_scale", model_cfg.get("direct_recovery_evidence_calibrator_regime_scale", 0.25))),
         direct_recovery_evidence_unified_experts=bool(ckpt.get("direct_recovery_evidence_unified_experts", model_cfg.get("direct_recovery_evidence_unified_experts", False))),
@@ -373,6 +385,15 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     )
     cfg["model"]["direct_recovery_evidence_rank_benefit_gain_init"] = float(
         model.direct_recovery_evidence_rank_benefit_gain_init
+    )
+    cfg["model"]["direct_recovery_evidence_postprefix_obs_transport_benefit"] = bool(
+        model.direct_recovery_evidence_postprefix_obs_transport_benefit
+    )
+    cfg["model"]["direct_recovery_evidence_postprefix_obs_transport_harm"] = bool(
+        model.direct_recovery_evidence_postprefix_obs_transport_harm
+    )
+    cfg["model"]["direct_recovery_evidence_postprefix_obs_transport_scale"] = float(
+        model.direct_recovery_evidence_postprefix_obs_transport_scale
     )
     cfg["model"]["direct_recovery_evidence_calibrator_shared"] = bool(ckpt.get("direct_recovery_evidence_calibrator_shared", model_cfg.get("direct_recovery_evidence_calibrator_shared", False)))
     cfg["model"]["direct_recovery_evidence_calibrator_regime_scale"] = float(ckpt.get("direct_recovery_evidence_calibrator_regime_scale", model_cfg.get("direct_recovery_evidence_calibrator_regime_scale", 0.25)))
