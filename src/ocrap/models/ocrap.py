@@ -3,6 +3,7 @@ from __future__ import annotations
 import torch
 from torch import nn
 
+from ocrap.algorithms.ocmero import torch_oc_mero
 from .encoders import FlatFeatureLayout, MLPEncoder, StructuredTokenEncoder
 
 
@@ -339,6 +340,13 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_postprefix_obs_transport_benefit: bool = False,
         direct_recovery_evidence_postprefix_obs_transport_harm: bool = False,
         direct_recovery_evidence_postprefix_obs_transport_scale: float = 1.0,
+        direct_recovery_evidence_roct_benefit: bool = False,
+        direct_recovery_evidence_roct_deployability: bool = False,
+        direct_recovery_evidence_roct_scale: float = 1.0,
+        direct_recovery_evidence_roct_alpha: float = 0.2,
+        direct_recovery_evidence_roct_beta: float = 0.2,
+        direct_recovery_evidence_roct_top_m: int = 8,
+        direct_recovery_evidence_roct_option_temperature: float = 0.35,
         direct_recovery_evidence_calibrator_shared: bool = False,
         direct_recovery_evidence_calibrator_regime_scale: float = 0.25,
         direct_recovery_evidence_unified_experts: bool = False,
@@ -486,6 +494,38 @@ class OCRAPModel(nn.Module):
             max(0.0, direct_recovery_evidence_postprefix_obs_transport_scale)
         )
         self.direct_recovery_evidence_postprefix_obs_signature_dim = 4
+        # v48.44 ROCT (Recovery-Option Compatibility Transport): unlike POET,
+        # which summarizes only post-prefix observation ambiguity, ROCT exposes
+        # whether observation-equivalent latent roots actually share a recovery
+        # option.  The structural teacher is frozen and candidate-relative; the
+        # learned correction is zero-init and never consumes a regime label.
+        self.direct_recovery_evidence_roct_benefit = bool(
+            direct_recovery_evidence_roct_benefit
+        )
+        self.direct_recovery_evidence_roct_deployability = bool(
+            direct_recovery_evidence_roct_deployability
+        )
+        self.direct_recovery_evidence_roct_scale = float(
+            max(0.0, direct_recovery_evidence_roct_scale)
+        )
+        self.direct_recovery_evidence_roct_alpha = float(direct_recovery_evidence_roct_alpha)
+        self.direct_recovery_evidence_roct_beta = float(direct_recovery_evidence_roct_beta)
+        self.direct_recovery_evidence_roct_top_m = int(direct_recovery_evidence_roct_top_m)
+        self.direct_recovery_evidence_roct_option_temperature = float(
+            max(1.0e-4, direct_recovery_evidence_roct_option_temperature)
+        )
+        self.direct_recovery_evidence_roct_signature_dim = 4
+        if not (0.0 < self.direct_recovery_evidence_roct_alpha <= 1.0):
+            raise ValueError("direct_recovery_evidence_roct_alpha must be in (0,1]")
+        if not (0.0 < self.direct_recovery_evidence_roct_beta <= 1.0):
+            raise ValueError("direct_recovery_evidence_roct_beta must be in (0,1]")
+        if (self.direct_recovery_evidence_roct_benefit or self.direct_recovery_evidence_roct_deployability):
+            if self.direct_recovery_evidence_roct_scale <= 0.0:
+                raise ValueError("ROCT requires direct_recovery_evidence_roct_scale > 0")
+            if not bool(direct_recovery_evidence_component_heads):
+                raise ValueError("ROCT requires component-head physical evidence")
+            if self.direct_recovery_evidence_roct_deployability and int(direct_recovery_evidence_component_count) < 2:
+                raise ValueError("ROCT deployability transport requires component index 1")
         if (
             self.direct_recovery_evidence_postprefix_obs_transport_benefit
             or self.direct_recovery_evidence_postprefix_obs_transport_harm
@@ -1021,6 +1061,25 @@ class OCRAPModel(nn.Module):
             else None
         )
 
+        # v48.44 ROCT uses the frozen OC-MERO geometry as a compact structural
+        # teacher.  Benefit receives one scalar correction; only the deployability
+        # physical veto coordinate receives the safety-side correction.  This
+        # deliberately avoids another generic shared-harm residual or full
+        # component factorization, both of which have already failed empirically.
+        def _make_roct_adapter() -> nn.Linear:
+            adapter = nn.Linear(
+                self.direct_recovery_evidence_roct_signature_dim, 1, bias=False
+            )
+            nn.init.zeros_(adapter.weight)
+            return adapter
+
+        self.direct_evidence_roct_benefit = (
+            _make_roct_adapter() if self.direct_recovery_evidence_roct_benefit else None
+        )
+        self.direct_evidence_roct_deployability = (
+            _make_roct_adapter() if self.direct_recovery_evidence_roct_deployability else None
+        )
+
         # v48.20 UNISON-BRIDGE: a single shared evidence model consumes both
         # frozen source experts, their consensus/disagreement, and the frozen
         # proposal context.  No bucket/regime id is exposed to this model.
@@ -1434,6 +1493,133 @@ class OCRAPModel(nn.Module):
                 root_logits, obs_embeddings, self.tau_obs
             ).to(dtype=memory.dtype).detach()
 
+    @staticmethod
+    def _recovery_option_compatibility_signature(
+        root_logits: torch.Tensor,
+        obs_embeddings: torch.Tensor,
+        margins: torch.Tensor,
+        tau_obs: float,
+        alpha: float,
+        beta: float,
+        top_m: int,
+        option_temperature: float,
+        root_valid: torch.Tensor | None = None,
+        option_valid: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Return the frozen observation-consistent recovery compatibility signature.
+
+        v48.43 POET only measured whether roots remain observation-aliased.  The
+        paper's deployability definition is stricter: aliased roots must admit a
+        *shared recovery option*.  ROCT therefore combines the exact predicted
+        OC-MERO deployable score/gap with a soft pairwise shared-option conflict
+        pressure and the probability mass with a feasible shared option.  No
+        regime label or audit stratum is consumed.
+        """
+        logits = root_logits.float()
+        B, K = logits.shape
+        if root_valid is not None:
+            rv = root_valid.to(device=logits.device, dtype=torch.bool)
+            if rv.dim() == 1:
+                rv = rv.unsqueeze(0).expand(B, -1)
+            if rv.shape != logits.shape:
+                rv = None
+        else:
+            rv = None
+        if rv is not None:
+            logits = logits.masked_fill(~rv, -1.0e4)
+        p = torch.softmax(logits, dim=-1)
+        if rv is not None:
+            p = torch.where(rv, p, torch.zeros_like(p))
+            p = p / p.sum(dim=-1, keepdim=True).clamp_min(1.0e-8)
+
+        obs = obs_embeddings.float()
+        diff = obs.unsqueeze(2) - obs.unsqueeze(1)
+        dist2 = diff.square().mean(dim=-1)
+        compatibility = torch.exp(-dist2 / max(float(tau_obs), 1.0e-6)).clamp(0.0, 1.0)
+        eye_bool = torch.eye(K, dtype=torch.bool, device=compatibility.device).unsqueeze(0)
+        compatibility = torch.where(
+            eye_bool, torch.ones_like(compatibility), compatibility
+        )
+
+        ov = option_valid
+        if ov is not None:
+            ov = ov.to(device=margins.device, dtype=torch.bool)
+            if ov.dim() == 1:
+                ov = ov.unsqueeze(0).expand(B, -1)
+            if ov.shape[0] != B or ov.shape[1] != margins.shape[-1]:
+                ov = None
+
+        r_dep, _r_orc, gap, q = torch_oc_mero(
+            margins.float(),
+            p,
+            compatibility,
+            alpha=float(alpha),
+            beta=float(beta),
+            option_valid=ov,
+            root_valid=rv,
+            use_lcvar=True,
+            use_obs_kernel=True,
+            top_m=int(top_m),
+        )
+
+        # Pairwise option compatibility: for two observation-aliased roots, the
+        # common recovery support is the best option's minimum success across the
+        # pair.  Weight only off-diagonal alias mass.
+        tau = max(float(option_temperature), 1.0e-4)
+        success = torch.sigmoid(margins.float() / tau)
+        if ov is not None:
+            success = torch.where(ov.unsqueeze(1), success, torch.zeros_like(success))
+        pair_common = torch.minimum(
+            success.unsqueeze(2), success.unsqueeze(1)
+        ).amax(dim=-1)
+        offdiag = compatibility * (~eye_bool).to(dtype=compatibility.dtype)
+        pair_weight = p.unsqueeze(2) * p.unsqueeze(1) * offdiag
+        alias_mass = pair_weight.sum(dim=(1, 2)).clamp(0.0, 1.0)
+        common_num = (pair_weight * pair_common).sum(dim=(1, 2))
+        common_support = torch.where(
+            alias_mass > 1.0e-8,
+            common_num / alias_mass.clamp_min(1.0e-8),
+            torch.ones_like(alias_mass),
+        ).clamp(0.0, 1.0)
+        conflict_pressure = (alias_mass * (1.0 - common_support)).clamp(0.0, 1.0)
+
+        q_best = q.amax(dim=-1)
+        shared_feasible = torch.sigmoid(q_best / tau)
+        if rv is not None:
+            shared_feasible = torch.where(rv, shared_feasible, torch.zeros_like(shared_feasible))
+        shared_feasible_mass = (p * shared_feasible).sum(dim=-1).clamp(0.0, 1.0)
+
+        dep_unit = (0.5 * (torch.tanh(r_dep) + 1.0)).clamp(0.0, 1.0)
+        gap_unit = torch.tanh(torch.relu(gap)).clamp(0.0, 1.0)
+        return torch.stack(
+            [dep_unit, gap_unit, conflict_pressure, shared_feasible_mass], dim=-1
+        )
+
+    def _direct_recovery_option_compatibility_signature(
+        self,
+        memory: torch.Tensor,
+        x: torch.Tensor,
+        option_features: torch.Tensor | None,
+        root_valid: torch.Tensor | None = None,
+        option_valid: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Compute frozen candidate-specific ROCT evidence for direct-only adaptation."""
+        with torch.no_grad():
+            root_tokens = self._decode_roots(memory.detach())
+            root_logits = self.root_logit_head(root_tokens).squeeze(-1)
+            obs_embeddings = self.obs_embed_head(root_tokens)
+            root_expand = root_tokens.unsqueeze(2).expand(-1, -1, self.num_options, -1)
+            opt_expand = self._option_tokens(x, option_features)
+            margins = self.margin_head(torch.cat([root_expand, opt_expand], dim=-1)).squeeze(-1)
+            return self._recovery_option_compatibility_signature(
+                root_logits, obs_embeddings, margins, self.tau_obs,
+                self.direct_recovery_evidence_roct_alpha,
+                self.direct_recovery_evidence_roct_beta,
+                self.direct_recovery_evidence_roct_top_m,
+                self.direct_recovery_evidence_roct_option_temperature,
+                root_valid=root_valid, option_valid=option_valid,
+            ).to(dtype=memory.dtype).detach()
+
     def _apply_direct_set_context(
         self,
         direct_features: torch.Tensor,
@@ -1537,6 +1723,7 @@ class OCRAPModel(nn.Module):
         group_index: torch.Tensor | None = None,
         is_nominal: torch.Tensor | None = None,
         postprefix_observation_signature: torch.Tensor | None = None,
+        recovery_option_compatibility_signature: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """Evaluate the policy-level recovery branch.
 
@@ -1594,6 +1781,14 @@ class OCRAPModel(nn.Module):
         )
 
         out: dict[str, torch.Tensor] = {}
+        roct_signature_rel: torch.Tensor | None = None
+        if recovery_option_compatibility_signature is not None:
+            roct_signature_abs = recovery_option_compatibility_signature.to(dtype=memory.dtype).detach()
+            roct_signature_rel = self._candidate_minus_nominal(
+                roct_signature_abs, group_index, is_nominal
+            )
+            out["direct_recovery_evidence_roct_signature"] = roct_signature_abs
+            out["direct_recovery_evidence_roct_signature_relative"] = roct_signature_rel
         rank_base: torch.Tensor | None = None
         if self.direct_value_heads is not None:
             all_direct = torch.stack([head(direct_features) for head in self.direct_value_heads], dim=1)
@@ -2002,6 +2197,13 @@ class OCRAPModel(nn.Module):
                     )
                 )
                 unified_benefit_logit = base_benefit + benefit_residual
+                if self.direct_evidence_roct_benefit is not None and roct_signature_rel is not None:
+                    roct_benefit_correction = (
+                        torch.tanh(self.direct_evidence_roct_benefit(roct_signature_rel).squeeze(-1))
+                        * self.direct_recovery_evidence_roct_scale
+                    )
+                    unified_benefit_logit = unified_benefit_logit + roct_benefit_correction
+                    out["direct_recovery_evidence_roct_benefit_correction"] = roct_benefit_correction
                 if self.direct_recovery_evidence_component_heads:
                     # v48.28: the semantic prior is -2.  A scale of 2 capped
                     # candidate component logits at zero, so the model could
@@ -2047,6 +2249,25 @@ class OCRAPModel(nn.Module):
                     # regime-agnostic: it shrinks only unsupported coordinates toward
                     # the semantic non-harm prior, while the independent measured
                     # hard veto remains unchanged at deployment.
+                    if (
+                        self.direct_evidence_roct_deployability is not None
+                        and roct_signature_rel is not None
+                    ):
+                        roct_deployability_correction = (
+                            torch.tanh(self.direct_evidence_roct_deployability(roct_signature_rel).squeeze(-1))
+                            * self.direct_recovery_evidence_roct_scale
+                        )
+                        deployability_basis = unified_component_harm_logits.new_zeros(
+                            (self.direct_recovery_evidence_component_count,)
+                        )
+                        deployability_basis[1] = 1.0
+                        unified_component_harm_logits = (
+                            unified_component_harm_logits
+                            + roct_deployability_correction.unsqueeze(-1) * deployability_basis.unsqueeze(0)
+                        )
+                        out["direct_recovery_evidence_roct_deployability_correction"] = (
+                            roct_deployability_correction
+                        )
                     reliability = self._direct_recovery_evidence_component_reliability.to(
                         device=unified_component_harm_logits.device,
                         dtype=unified_component_harm_logits.dtype,
@@ -2251,6 +2472,13 @@ class OCRAPModel(nn.Module):
                 base_benefit = benefit_e.amin(dim=1)
                 base_harm = harm_e.amax(dim=1)
                 unified_benefit_logit = base_benefit + benefit_residual
+                if self.direct_evidence_roct_benefit is not None and roct_signature_rel is not None:
+                    roct_benefit_correction = (
+                        torch.tanh(self.direct_evidence_roct_benefit(roct_signature_rel).squeeze(-1))
+                        * self.direct_recovery_evidence_roct_scale
+                    )
+                    unified_benefit_logit = unified_benefit_logit + roct_benefit_correction
+                    out["direct_recovery_evidence_roct_benefit_correction"] = roct_benefit_correction
                 if self.direct_recovery_evidence_component_heads:
                     # FACET changed the harm target semantics from signed total
                     # PCD to componentwise non-compensatory vetoes.  Reusing the
@@ -2264,6 +2492,25 @@ class OCRAPModel(nn.Module):
                         torch.tanh(combined_residual[:, 1 : 1 + self.direct_recovery_evidence_component_count])
                         * self.direct_recovery_evidence_component_scale
                     )
+                    if (
+                        self.direct_evidence_roct_deployability is not None
+                        and roct_signature_rel is not None
+                    ):
+                        roct_deployability_correction = (
+                            torch.tanh(self.direct_evidence_roct_deployability(roct_signature_rel).squeeze(-1))
+                            * self.direct_recovery_evidence_roct_scale
+                        )
+                        deployability_basis = unified_component_harm_logits.new_zeros(
+                            (self.direct_recovery_evidence_component_count,)
+                        )
+                        deployability_basis[1] = 1.0
+                        unified_component_harm_logits = (
+                            unified_component_harm_logits
+                            + roct_deployability_correction.unsqueeze(-1) * deployability_basis.unsqueeze(0)
+                        )
+                        out["direct_recovery_evidence_roct_deployability_correction"] = (
+                            roct_deployability_correction
+                        )
                     unified_harm_logit = unified_component_harm_logits.amax(dim=-1)
                     evidence_calibrator_residual = torch.cat(
                         [benefit_residual.unsqueeze(-1), unified_component_harm_logits],
@@ -2544,10 +2791,20 @@ class OCRAPModel(nn.Module):
         group_index: torch.Tensor | None = None,
         is_nominal: torch.Tensor | None = None,
         direct_only: bool = False,
+        root_valid: torch.Tensor | None = None,
+        option_valid: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         memory = self._scene_tokens(x)
         if direct_only:
-            return self._direct_outputs(memory, x, bucket_id, group_index, is_nominal)
+            roct_signature = None
+            if self.direct_evidence_roct_benefit is not None or self.direct_evidence_roct_deployability is not None:
+                roct_signature = self._direct_recovery_option_compatibility_signature(
+                    memory, x, option_features, root_valid=root_valid, option_valid=option_valid
+                )
+            return self._direct_outputs(
+                memory, x, bucket_id, group_index, is_nominal,
+                recovery_option_compatibility_signature=roct_signature,
+            )
         scene_token = memory[:, 0]
         root_tokens = self._decode_roots(memory)
 
@@ -2580,10 +2837,22 @@ class OCRAPModel(nn.Module):
                 postprefix_signature = self._postprefix_observation_equivalence_signature(
                     root_logits.detach(), obs_embeddings.detach(), self.tau_obs
                 ).to(dtype=memory.dtype)
+        roct_signature = None
+        if self.direct_evidence_roct_benefit is not None or self.direct_evidence_roct_deployability is not None:
+            with torch.no_grad():
+                roct_signature = self._recovery_option_compatibility_signature(
+                    root_logits.detach(), obs_embeddings.detach(), margins.detach(), self.tau_obs,
+                    self.direct_recovery_evidence_roct_alpha,
+                    self.direct_recovery_evidence_roct_beta,
+                    self.direct_recovery_evidence_roct_top_m,
+                    self.direct_recovery_evidence_roct_option_temperature,
+                    root_valid=root_valid, option_valid=option_valid,
+                ).to(dtype=memory.dtype).detach()
         out.update(
             self._direct_outputs(
                 memory, x, bucket_id, group_index, is_nominal,
                 postprefix_observation_signature=postprefix_signature,
+                recovery_option_compatibility_signature=roct_signature,
             )
         )
         if self.root_signature_head is not None:

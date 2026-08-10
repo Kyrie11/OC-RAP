@@ -233,6 +233,34 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_evidence_postprefix_obs_transport_scale",
             model_cfg.get("direct_recovery_evidence_postprefix_obs_transport_scale", 1.0),
         )),
+        direct_recovery_evidence_roct_benefit=bool(ckpt.get(
+            "direct_recovery_evidence_roct_benefit",
+            model_cfg.get("direct_recovery_evidence_roct_benefit", False),
+        )),
+        direct_recovery_evidence_roct_deployability=bool(ckpt.get(
+            "direct_recovery_evidence_roct_deployability",
+            model_cfg.get("direct_recovery_evidence_roct_deployability", False),
+        )),
+        direct_recovery_evidence_roct_scale=float(ckpt.get(
+            "direct_recovery_evidence_roct_scale",
+            model_cfg.get("direct_recovery_evidence_roct_scale", 1.0),
+        )),
+        direct_recovery_evidence_roct_alpha=float(ckpt.get(
+            "direct_recovery_evidence_roct_alpha",
+            model_cfg.get("direct_recovery_evidence_roct_alpha", 0.2),
+        )),
+        direct_recovery_evidence_roct_beta=float(ckpt.get(
+            "direct_recovery_evidence_roct_beta",
+            model_cfg.get("direct_recovery_evidence_roct_beta", 0.2),
+        )),
+        direct_recovery_evidence_roct_top_m=int(ckpt.get(
+            "direct_recovery_evidence_roct_top_m",
+            model_cfg.get("direct_recovery_evidence_roct_top_m", 8),
+        )),
+        direct_recovery_evidence_roct_option_temperature=float(ckpt.get(
+            "direct_recovery_evidence_roct_option_temperature",
+            model_cfg.get("direct_recovery_evidence_roct_option_temperature", 0.35),
+        )),
         direct_recovery_evidence_calibrator_shared=bool(ckpt.get("direct_recovery_evidence_calibrator_shared", model_cfg.get("direct_recovery_evidence_calibrator_shared", False))),
         direct_recovery_evidence_calibrator_regime_scale=float(ckpt.get("direct_recovery_evidence_calibrator_regime_scale", model_cfg.get("direct_recovery_evidence_calibrator_regime_scale", 0.25))),
         direct_recovery_evidence_unified_experts=bool(ckpt.get("direct_recovery_evidence_unified_experts", model_cfg.get("direct_recovery_evidence_unified_experts", False))),
@@ -394,6 +422,27 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     )
     cfg["model"]["direct_recovery_evidence_postprefix_obs_transport_scale"] = float(
         model.direct_recovery_evidence_postprefix_obs_transport_scale
+    )
+    cfg["model"]["direct_recovery_evidence_roct_benefit"] = bool(
+        model.direct_recovery_evidence_roct_benefit
+    )
+    cfg["model"]["direct_recovery_evidence_roct_deployability"] = bool(
+        model.direct_recovery_evidence_roct_deployability
+    )
+    cfg["model"]["direct_recovery_evidence_roct_scale"] = float(
+        model.direct_recovery_evidence_roct_scale
+    )
+    cfg["model"]["direct_recovery_evidence_roct_alpha"] = float(
+        model.direct_recovery_evidence_roct_alpha
+    )
+    cfg["model"]["direct_recovery_evidence_roct_beta"] = float(
+        model.direct_recovery_evidence_roct_beta
+    )
+    cfg["model"]["direct_recovery_evidence_roct_top_m"] = int(
+        model.direct_recovery_evidence_roct_top_m
+    )
+    cfg["model"]["direct_recovery_evidence_roct_option_temperature"] = float(
+        model.direct_recovery_evidence_roct_option_temperature
     )
     cfg["model"]["direct_recovery_evidence_calibrator_shared"] = bool(ckpt.get("direct_recovery_evidence_calibrator_shared", model_cfg.get("direct_recovery_evidence_calibrator_shared", False)))
     cfg["model"]["direct_recovery_evidence_calibrator_regime_scale"] = float(ckpt.get("direct_recovery_evidence_calibrator_regime_scale", model_cfg.get("direct_recovery_evidence_calibrator_regime_scale", 0.25)))
@@ -640,6 +689,8 @@ def predict_samples(
         for d in ds
     ]
     option_features = torch.from_numpy(np.stack([f["option_features"] for f in fixed], axis=0)).float().to(bundle.device)
+    root_valid = torch.from_numpy(np.stack([f["root_valid"] for f in fixed], axis=0)).bool().to(bundle.device)
+    option_valid = torch.from_numpy(np.stack([f["option_valid"] for f in fixed], axis=0)).bool().to(bundle.device)
     runtime_cfg = cfg or bundle.cfg
     bucket_ids = torch.full((len(ds),), regime_id_from_cfg(runtime_cfg), dtype=torch.long, device=bundle.device)
     # predict_samples is normally called on one complete scene-time candidate set
@@ -649,11 +700,10 @@ def predict_samples(
         1.0 if float(np.asarray(d.get("is_nominal", 0)).reshape(-1)[0]) > 0.5 else 0.0 for d in ds
     ], dtype=torch.float32, device=bundle.device)
     out = bundle.model(
-        xs, option_features, bucket_id=bucket_ids, group_index=group_index, is_nominal=is_nominal
+        xs, option_features, bucket_id=bucket_ids, group_index=group_index, is_nominal=is_nominal,
+        root_valid=root_valid, option_valid=option_valid,
     )
-    root_valid = torch.from_numpy(np.stack([f["root_valid"] for f in fixed], axis=0)).bool().to(bundle.device)
     p = torch.softmax(out["root_logits"].masked_fill(~root_valid, -1.0e4), dim=-1)
-    option_valid = torch.from_numpy(np.stack([f["option_valid"] for f in fixed], axis=0)).bool().to(bundle.device)
     r_dep, r_orc, gap, q = torch_oc_mero(
         out["margins"],
         p,
@@ -754,6 +804,8 @@ def predict_sample(d: dict[str, Any], bundle: ModelBundle | None, cfg: dict | No
         d_future_signature=int(getattr(bundle.model, "d_future_signature", 0)),
     )
     option_features = torch.from_numpy(fixed["option_features"]).float().unsqueeze(0).to(bundle.device)
+    root_valid = torch.from_numpy(fixed["root_valid"]).bool().unsqueeze(0).to(bundle.device)
+    option_valid = torch.from_numpy(fixed["option_valid"]).bool().unsqueeze(0).to(bundle.device)
     runtime_cfg = cfg or bundle.cfg
     bucket_id = torch.tensor([regime_id_from_cfg(runtime_cfg)], dtype=torch.long, device=bundle.device)
     singleton_group = torch.zeros((1, 1), dtype=torch.long, device=bundle.device)
@@ -761,11 +813,10 @@ def predict_sample(d: dict[str, Any], bundle: ModelBundle | None, cfg: dict | No
         1.0 if float(np.asarray(d.get("is_nominal", 0)).reshape(-1)[0]) > 0.5 else 0.0
     ], dtype=torch.float32, device=bundle.device)
     out = bundle.model(
-        x, option_features, bucket_id=bucket_id, group_index=singleton_group, is_nominal=singleton_nominal
+        x, option_features, bucket_id=bucket_id, group_index=singleton_group, is_nominal=singleton_nominal,
+        root_valid=root_valid, option_valid=option_valid,
     )
-    root_valid = torch.from_numpy(fixed["root_valid"]).bool().unsqueeze(0).to(bundle.device)
     p = torch.softmax(out["root_logits"].masked_fill(~root_valid, -1.0e4), dim=-1)
-    option_valid = torch.from_numpy(fixed["option_valid"]).bool().unsqueeze(0).to(bundle.device)
     r_dep, r_orc, gap, q = torch_oc_mero(
         out["margins"],
         p,

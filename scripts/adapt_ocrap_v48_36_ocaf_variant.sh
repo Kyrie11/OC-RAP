@@ -92,6 +92,13 @@ factor_cache_contract_args=(
   --setting "postprefix_obs_transport_benefit=${EVIDENCE_POSTPREFIX_OBS_TRANSPORT_BENEFIT:-false}"
   --setting "postprefix_obs_transport_harm=${EVIDENCE_POSTPREFIX_OBS_TRANSPORT_HARM:-false}"
   --setting "postprefix_obs_transport_scale=${EVIDENCE_POSTPREFIX_OBS_TRANSPORT_SCALE:-1.0}"
+  --setting "roct_benefit=${EVIDENCE_ROCT_BENEFIT:-false}"
+  --setting "roct_deployability=${EVIDENCE_ROCT_DEPLOYABILITY:-false}"
+  --setting "roct_scale=${EVIDENCE_ROCT_SCALE:-1.0}"
+  --setting "roct_alpha=${EVIDENCE_ROCT_ALPHA:-0.2}"
+  --setting "roct_beta=${EVIDENCE_ROCT_BETA:-0.2}"
+  --setting "roct_top_m=${EVIDENCE_ROCT_TOP_M:-8}"
+  --setting "roct_option_temperature=${EVIDENCE_ROCT_OPTION_TEMPERATURE:-0.35}"
   --setting "consensus_prior_scale=${EVIDENCE_CONSENSUS_PRIOR_SCALE:-0.50}"
   --setting "admission_prior_mode=${EVIDENCE_ADMISSION_PRIOR_MODE:-frontier_capped_slack}"
   --setting "tournament_hidden=${SET_TOURNAMENT_HIDDEN:-48}"
@@ -230,6 +237,12 @@ else
   fi
   if [[ "${EVIDENCE_POSTPREFIX_OBS_TRANSPORT_HARM:-false}" == true ]]; then
     identity_prefixes+=',direct_evidence_postprefix_obs_transport_harm'
+  fi
+  if [[ "${EVIDENCE_ROCT_BENEFIT:-false}" == true ]]; then
+    identity_prefixes+=',direct_evidence_roct_benefit'
+  fi
+  if [[ "${EVIDENCE_ROCT_DEPLOYABILITY:-false}" == true ]]; then
+    identity_prefixes+=',direct_evidence_roct_deployability'
   fi
 fi
 prior_detach=true

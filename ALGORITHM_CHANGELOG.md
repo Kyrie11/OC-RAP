@@ -1,3 +1,141 @@
+## v48.44 — ROCT / RECOVERY-OPTION COMPATIBILITY TRANSPORT (2026-08-10)
+
+### v48.43 POET final 2x2 attribution
+
+The uploaded v48.43 A/B/C/D runs are all authoritative Natural-gate algorithm results
+(`authoritative_exit_code=20`, `pipeline_valid=true`).  They therefore support causal
+algorithm attribution rather than engineering-failure diagnosis.
+
+**B (harm-side POET) is rejected.**  Near deployability safe-positive false veto is
+unchanged at 16/18 relative to A, while harmful-vs-safe-positive deployability AUC
+falls from 0.416 to 0.409.  Near certificate harmful-selected UCB90 worsens from
+0.546 to 0.640.  B therefore does not rotate the Near deployability frontier; it
+mostly changes score level/cleanliness trade-offs and is not retained.
+
+**C (benefit-side POET) is rejected.**  Contact candidate safe-positive AUC changes
+only from 0.544 to 0.556, proposal safe-positive AUC falls from 0.555 to 0.526, and
+certificate positive recall remains 0.10.  The development Contact safe-positive
+rows still have 0/37 with `pred_adv >= 0`.  C does not convert post-prefix alias
+geometry into physical benefit capture and is not retained.
+
+**D/Main (dual POET) is rejected as an implementation, but supplies a structural
+clue.**  It improves Contact candidate safe-positive AUC to 0.578 and deployability
+safe-positive false veto from 26/31 to 17/31; DRS harmful-vs-safe-positive AUC rises
+from 0.554 to 0.706.  However Near deployability false veto worsens to 17/18,
+Contact deployability harmful false-safe rises from 0.148 to 0.255, Contact
+certificate recall falls to zero, and the fitted shared development rule selects
+zero candidates in both Near and Contact.  This is evidence that candidate-specific
+post-prefix structure carries useful signal, but free dual context transport creates
+incompatible scales/negative transfer across evidence coordinates.
+
+A decisive development diagnostic is common to all A/B/C/D arms: Contact has 37
+safe-positive proposal rows and **none has `pred_adv >= 0`**.  Since the shared rule's
+semantic score domain starts at zero, no threshold-grid densification can recover
+those positives.  The current bottleneck is therefore sign/structural identifiability,
+not grid resolution.
+
+### Bottleneck re-diagnosis
+
+POET measures whether latent roots remain observation-aliased, but the paper's
+recoverability definition is stricter: observation-equivalent roots must admit a
+**shared compatible recovery option**.  Alias mass alone cannot distinguish benign
+ambiguity (roots share a recovery maneuver) from harmful ambiguity (roots require
+incompatible maneuvers).  Moreover v48.43 injected the same structural vector into
+whole benefit/harm OCAF contexts, permitting one useful Contact coordinate to rotate
+unrelated DRS/gap coordinates and damage the shared rule.
+
+v48.44 therefore changes the structural statistic and the injection locality rather
+than adding generic capacity, another ranking loss, more proposal candidates, or a
+regime-specific policy.
+
+### Algorithm: Recovery-Option Compatibility Transport (ROCT)
+
+For every candidate prefix, ROCT reuses the frozen latent-root decoder, predicted
+post-prefix observation kernel, and frozen recovery-option margin decoder.  It computes
+the same OC-MERO geometry already used by the paper and forms a bounded four-coordinate
+signature:
+
+1. normalized deployable recoverability `0.5*(tanh(R_dep)+1)`;
+2. bounded oracle-to-deployable gap `tanh(relu(R_orc-R_dep))`;
+3. observation-weighted shared-option conflict pressure: aliased root pairs receive
+   high pressure only when no recovery option has high common support for both roots;
+4. root-probability mass that has a feasible observation-consistent recovery option.
+
+Only candidate-minus-nominal evidence is learned.  The structural teacher is detached,
+and both ROCT projections are bias-free and zero-initialized, preserving the exact A
+forward pass at initialization and exact zero correction on nominal candidates.
+Corrections are bounded with `tanh`; the v48.44 experiment uses a shared logit bound of
+3.0 (at `tau_b=0.05`, at most 0.15 physical benefit-margin correction), avoiding the
+historically failed unbounded-residual path.
+
+ROCT is deliberately **semantically local**:
+
+- benefit-side ROCT corrects only the unified benefit logit;
+- safety-side ROCT corrects only component index 1 (deployability), which is the
+  paper-matched observation-consistent recoverability coordinate;
+- it does not rotate DRS, gap, hard-rule, harm-proxy, the shared OCAF bridge, proposal
+  generator, or deployment thresholds.
+
+No Safe/Near/Contact identifier, routing branch, per-regime threshold, per-regime loss,
+or state machine is introduced.  Regimes remain evaluation slices only.
+
+### v48.44 2x2 ablation
+
+- **A:** v48.43-A retained shared dual-OCAF reference; no POET and no ROCT.
+- **B:** A + deployability-side ROCT only.  Primary causal readout: Near deployability
+  false-veto/AUC/false-safe, with Contact reported as a cross-regime consistency check.
+- **C:** A + benefit-side ROCT only.  Primary readout: Contact safe-positive benefit
+  AUC plus the development `pred_adv >= 0` sign-capture rate.
+- **D/Main:** A + both semantically local ROCT corrections.  Tests whether one shared
+  development rule can select safe-positive examples in both Near and Contact while
+  preserving harmful-selection budgets.
+
+Every arm force-disables v48.43 POET, v48.42 partial pooling/rank skip, unbounded
+benefit/harm factors, full component factorization, and regime routing.  Proposal
+top-k remains 5 and the shared development rule is unchanged.
+
+### Pre-registered v48.44 go/no-go
+
+- **B vs A:** Near deployability false veto must materially decrease (strong signal:
+  <=12/18), harmful-vs-safe-positive AUC must increase (strong signal: >=0.56), and
+  harmful false-safe / selected-UCB must not materially worsen.
+- **C vs A:** Contact development safe-positive `pred_adv >= 0` must move from 0/37 to
+  a non-trivial fraction (strong signal: >=25%), Contact candidate/proposal
+  safe-positive or positive AUC should improve by about >=0.05, and certificate recall
+  should move toward >=0.20 without worse harmful UCB.
+- **D:** Near and Contact development must both have `positive_selected > 0` under the
+  same shared rule.  Contact sign capture and B's Near deployability gain must both be
+  retained.  A lower constraint deficit with zero positives is explicitly not a go.
+- If B/C/D fail these structural criteria, do **not** increase ROCT width/scale or
+  loosen shared-rule harm budgets.  The next diagnosis must target calibration of the
+  frozen recovery-option/observation teacher or the definition/coverage of the
+  recovery-option set.
+
+### Engineering changes
+
+- Added ROCT flags/hyperparameters to training, checkpoint, inference materialization,
+  factor-cache identity, architecture records, model/training contracts, and
+  stage-transfer approved prefixes.
+- Direct-only and full forward paths both consume root/option validity masks when
+  constructing ROCT evidence.
+- Added v48.44 tests for exact zero-init identity, bounded/candidate-relative signature,
+  nominal-zero correction, component-local deployability injection, benefit/harm
+  separation, detached structural teacher, script cleanliness, and contract binding.
+- Added `run_v48_44_roct_ablation_arm.sh`, `run_v48_44_roct_2x2_parallel.sh`,
+  `run_v48_44_roct_dedicated.sh`, and a development/certificate-only v48.44 comparator
+  with explicit Contact/Near sign-geometry diagnostics.
+
+### Non-repetition list extended by v48.43
+
+Do not repeat or simply amplify: POET alias-only free dual-context transport, POET
+width/scale increases, threshold-grid densification, top-k expansion, positive
+oversampling, generic rank-loss stacking, generic harm residuals, full component
+factorization, unbounded factors, or regime-conditioned routing/threshold/policy.
+
+Retain: candidate-relative physical OCAF, dual task bridge, bounded HAF/component veto,
+support reliability, deterministic joint reserve, proposal top-k=5, and one shared
+continuous development/deployment rule.
+
 ## v48.43 — POET / POST-PREFIX OBSERVATION-EQUIVALENCE TRANSPORT (2026-08-09)
 
 ### v48.42 final valid 2x2 attribution (supersedes the earlier RC30-only interpretation)

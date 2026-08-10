@@ -143,6 +143,13 @@ def main() -> int:
     ap.add_argument("--expect-postprefix-obs-transport-benefit", choices=("true", "false", "any"), default="any")
     ap.add_argument("--expect-postprefix-obs-transport-harm", choices=("true", "false", "any"), default="any")
     ap.add_argument("--expect-postprefix-obs-transport-scale", type=float, default=None)
+    ap.add_argument("--expect-roct-benefit", choices=("true", "false", "any"), default="any")
+    ap.add_argument("--expect-roct-deployability", choices=("true", "false", "any"), default="any")
+    ap.add_argument("--expect-roct-scale", type=float, default=None)
+    ap.add_argument("--expect-roct-alpha", type=float, default=None)
+    ap.add_argument("--expect-roct-beta", type=float, default=None)
+    ap.add_argument("--expect-roct-top-m", type=int, default=None)
+    ap.add_argument("--expect-roct-option-temperature", type=float, default=None)
     ap.add_argument("--expect-component-margin-target-mode", default="any")
     ap.add_argument("--expect-component-margin-target-scale", type=float, default=None)
     ap.add_argument("--expect-algorithm-variant", default="")
@@ -204,6 +211,13 @@ def main() -> int:
     expected_postprefix_benefit = None if args.expect_postprefix_obs_transport_benefit == "any" else args.expect_postprefix_obs_transport_benefit == "true"
     expected_postprefix_harm = None if args.expect_postprefix_obs_transport_harm == "any" else args.expect_postprefix_obs_transport_harm == "true"
     expected_postprefix_scale = args.expect_postprefix_obs_transport_scale
+    expected_roct_benefit = None if args.expect_roct_benefit == "any" else args.expect_roct_benefit == "true"
+    expected_roct_deployability = None if args.expect_roct_deployability == "any" else args.expect_roct_deployability == "true"
+    expected_roct_scale = args.expect_roct_scale
+    expected_roct_alpha = args.expect_roct_alpha
+    expected_roct_beta = args.expect_roct_beta
+    expected_roct_top_m = args.expect_roct_top_m
+    expected_roct_option_temperature = args.expect_roct_option_temperature
     identity_trainable = _trainable(identity_arch)
     final_trainable = _trainable(final_arch)
     expected_ocaf = args.expect_context_source == "physical_interaction"
@@ -223,6 +237,10 @@ def main() -> int:
         all_prefixes += ("direct_evidence_postprefix_obs_transport_benefit",)
     if expected_postprefix_harm is True:
         all_prefixes += ("direct_evidence_postprefix_obs_transport_harm",)
+    if expected_roct_benefit is True:
+        all_prefixes += ("direct_evidence_roct_benefit",)
+    if expected_roct_deployability is True:
+        all_prefixes += ("direct_evidence_roct_deployability",)
     reference_prefixes = (
         "direct_evidence_concord_admission_calibrator",
     ) + (("direct_evidence_interaction_bridge",) if expected_ocaf else ())
@@ -354,6 +372,34 @@ def main() -> int:
         "postprefix_obs_transport_scale_contract": (
             expected_postprefix_scale is None
             or all(math.isclose(float(a.get("postprefix_obs_transport_scale", -1.0)), float(expected_postprefix_scale), rel_tol=0.0, abs_tol=1.0e-9) for a in (factor_arch, identity_arch, final_arch))
+        ),
+        "roct_benefit_contract": (
+            expected_roct_benefit is None
+            or all(bool(a.get("roct_benefit", False)) is expected_roct_benefit for a in (factor_arch, identity_arch, final_arch))
+        ),
+        "roct_deployability_contract": (
+            expected_roct_deployability is None
+            or all(bool(a.get("roct_deployability", False)) is expected_roct_deployability for a in (factor_arch, identity_arch, final_arch))
+        ),
+        "roct_scale_contract": (
+            expected_roct_scale is None
+            or all(math.isclose(float(a.get("roct_scale", -1.0)), float(expected_roct_scale), rel_tol=0.0, abs_tol=1.0e-9) for a in (factor_arch, identity_arch, final_arch))
+        ),
+        "roct_alpha_contract": (
+            expected_roct_alpha is None
+            or all(math.isclose(float(a.get("roct_alpha", -1.0)), float(expected_roct_alpha), rel_tol=0.0, abs_tol=1.0e-9) for a in (factor_arch, identity_arch, final_arch))
+        ),
+        "roct_beta_contract": (
+            expected_roct_beta is None
+            or all(math.isclose(float(a.get("roct_beta", -1.0)), float(expected_roct_beta), rel_tol=0.0, abs_tol=1.0e-9) for a in (factor_arch, identity_arch, final_arch))
+        ),
+        "roct_top_m_contract": (
+            expected_roct_top_m is None
+            or all(int(a.get("roct_top_m", -1)) == int(expected_roct_top_m) for a in (factor_arch, identity_arch, final_arch))
+        ),
+        "roct_option_temperature_contract": (
+            expected_roct_option_temperature is None
+            or all(math.isclose(float(a.get("roct_option_temperature", -1.0)), float(expected_roct_option_temperature), rel_tol=0.0, abs_tol=1.0e-9) for a in (factor_arch, identity_arch, final_arch))
         ),
         "component_margin_target_mode_contract": (
             args.expect_component_margin_target_mode == "any"
@@ -495,6 +541,13 @@ def main() -> int:
             "postprefix_obs_transport_benefit": expected_postprefix_benefit,
             "postprefix_obs_transport_harm": expected_postprefix_harm,
             "postprefix_obs_transport_scale": expected_postprefix_scale,
+            "roct_benefit": expected_roct_benefit,
+            "roct_deployability": expected_roct_deployability,
+            "roct_scale": expected_roct_scale,
+            "roct_alpha": expected_roct_alpha,
+            "roct_beta": expected_roct_beta,
+            "roct_top_m": expected_roct_top_m,
+            "roct_option_temperature": expected_roct_option_temperature,
             "algorithm_variant": expected_algorithm_variant,
             "identity_trainable_prefixes": sorted(expected_identity_prefixes),
             "prior_coupled": expect_coupled,

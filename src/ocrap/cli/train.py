@@ -1516,6 +1516,7 @@ def _epoch(
                     batch["x"].float(), batch.get("option_features"),
                     bucket_id=batch.get("bucket_id"), group_index=group_index,
                     is_nominal=batch.get("is_nominal"), direct_only=True,
+                    root_valid=batch.get("root_valid"), option_valid=batch.get("option_valid"),
                 )
             root_valid = batch["root_valid"].bool()
             option_gamma = float(art_cfg.get("admission_gamma", 0.0))
@@ -1574,6 +1575,7 @@ def _epoch(
         out = model(
             batch["x"].float(), batch.get("option_features"), bucket_id=batch.get("bucket_id"),
             group_index=group_index, is_nominal=batch.get("is_nominal"),
+            root_valid=batch.get("root_valid"), option_valid=batch.get("option_valid"),
         )
         root_valid = batch["root_valid"].bool()
         masked_logits = out["root_logits"].masked_fill(~root_valid, -1.0e4)
@@ -2687,6 +2689,27 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_evidence_postprefix_obs_transport_scale=float(
             model_cfg.get("direct_recovery_evidence_postprefix_obs_transport_scale", 1.0)
         ),
+        direct_recovery_evidence_roct_benefit=bool(
+            model_cfg.get("direct_recovery_evidence_roct_benefit", False)
+        ),
+        direct_recovery_evidence_roct_deployability=bool(
+            model_cfg.get("direct_recovery_evidence_roct_deployability", False)
+        ),
+        direct_recovery_evidence_roct_scale=float(
+            model_cfg.get("direct_recovery_evidence_roct_scale", 1.0)
+        ),
+        direct_recovery_evidence_roct_alpha=float(
+            model_cfg.get("direct_recovery_evidence_roct_alpha", 0.2)
+        ),
+        direct_recovery_evidence_roct_beta=float(
+            model_cfg.get("direct_recovery_evidence_roct_beta", 0.2)
+        ),
+        direct_recovery_evidence_roct_top_m=int(
+            model_cfg.get("direct_recovery_evidence_roct_top_m", 8)
+        ),
+        direct_recovery_evidence_roct_option_temperature=float(
+            model_cfg.get("direct_recovery_evidence_roct_option_temperature", 0.35)
+        ),
         direct_recovery_evidence_calibrator_shared=bool(model_cfg.get("direct_recovery_evidence_calibrator_shared", False)),
         direct_recovery_evidence_calibrator_regime_scale=float(model_cfg.get("direct_recovery_evidence_calibrator_regime_scale", 0.25)),
         direct_recovery_evidence_unified_experts=bool(model_cfg.get("direct_recovery_evidence_unified_experts", False)),
@@ -3085,6 +3108,27 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             ),
             "direct_recovery_evidence_postprefix_obs_transport_scale": float(
                 model_cfg.get("direct_recovery_evidence_postprefix_obs_transport_scale", 1.0)
+            ),
+            "direct_recovery_evidence_roct_benefit": bool(
+                model_cfg.get("direct_recovery_evidence_roct_benefit", False)
+            ),
+            "direct_recovery_evidence_roct_deployability": bool(
+                model_cfg.get("direct_recovery_evidence_roct_deployability", False)
+            ),
+            "direct_recovery_evidence_roct_scale": float(
+                model_cfg.get("direct_recovery_evidence_roct_scale", 1.0)
+            ),
+            "direct_recovery_evidence_roct_alpha": float(
+                model_cfg.get("direct_recovery_evidence_roct_alpha", 0.2)
+            ),
+            "direct_recovery_evidence_roct_beta": float(
+                model_cfg.get("direct_recovery_evidence_roct_beta", 0.2)
+            ),
+            "direct_recovery_evidence_roct_top_m": int(
+                model_cfg.get("direct_recovery_evidence_roct_top_m", 8)
+            ),
+            "direct_recovery_evidence_roct_option_temperature": float(
+                model_cfg.get("direct_recovery_evidence_roct_option_temperature", 0.35)
             ),
             "direct_recovery_evidence_calibrator_shared": bool(model_cfg.get("direct_recovery_evidence_calibrator_shared", False)),
             "direct_recovery_evidence_calibrator_regime_scale": float(model_cfg.get("direct_recovery_evidence_calibrator_regime_scale", 0.25)),

@@ -56,6 +56,13 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--expect-postprefix-obs-transport-benefit", choices=("true", "false", "any"), default="any")
     ap.add_argument("--expect-postprefix-obs-transport-harm", choices=("true", "false", "any"), default="any")
     ap.add_argument("--expect-postprefix-obs-transport-scale", type=float, default=None)
+    ap.add_argument("--expect-roct-benefit", choices=("true", "false", "any"), default="any")
+    ap.add_argument("--expect-roct-deployability", choices=("true", "false", "any"), default="any")
+    ap.add_argument("--expect-roct-scale", type=float, default=None)
+    ap.add_argument("--expect-roct-alpha", type=float, default=None)
+    ap.add_argument("--expect-roct-beta", type=float, default=None)
+    ap.add_argument("--expect-roct-top-m", type=int, default=None)
+    ap.add_argument("--expect-roct-option-temperature", type=float, default=None)
     ap.add_argument("--expect-consensus-prior-scale", type=float, default=0.50)
     ap.add_argument("--reliability-override", default="", help="Ablation override; empty uses support contract")
     return ap
@@ -127,6 +134,13 @@ def main() -> int:
         "direct_recovery_evidence_postprefix_obs_transport_scale": float(
             model.direct_recovery_evidence_postprefix_obs_transport_scale
         ),
+        "direct_recovery_evidence_roct_benefit": bool(model.direct_recovery_evidence_roct_benefit),
+        "direct_recovery_evidence_roct_deployability": bool(model.direct_recovery_evidence_roct_deployability),
+        "direct_recovery_evidence_roct_scale": float(model.direct_recovery_evidence_roct_scale),
+        "direct_recovery_evidence_roct_alpha": float(model.direct_recovery_evidence_roct_alpha),
+        "direct_recovery_evidence_roct_beta": float(model.direct_recovery_evidence_roct_beta),
+        "direct_recovery_evidence_roct_top_m": int(model.direct_recovery_evidence_roct_top_m),
+        "direct_recovery_evidence_roct_option_temperature": float(model.direct_recovery_evidence_roct_option_temperature),
         "direct_recovery_evidence_consensus_prior_scale": float(model.direct_recovery_evidence_consensus_prior_scale),
         "interaction_bridge_present": model.direct_evidence_interaction_bridge is not None,
     }
@@ -190,6 +204,13 @@ def main() -> int:
             else args.expect_postprefix_obs_transport_harm == "true"
         ),
         "direct_recovery_evidence_postprefix_obs_transport_scale": args.expect_postprefix_obs_transport_scale,
+        "direct_recovery_evidence_roct_benefit": (None if args.expect_roct_benefit == "any" else args.expect_roct_benefit == "true"),
+        "direct_recovery_evidence_roct_deployability": (None if args.expect_roct_deployability == "any" else args.expect_roct_deployability == "true"),
+        "direct_recovery_evidence_roct_scale": args.expect_roct_scale,
+        "direct_recovery_evidence_roct_alpha": args.expect_roct_alpha,
+        "direct_recovery_evidence_roct_beta": args.expect_roct_beta,
+        "direct_recovery_evidence_roct_top_m": args.expect_roct_top_m,
+        "direct_recovery_evidence_roct_option_temperature": args.expect_roct_option_temperature,
         "direct_recovery_evidence_consensus_prior_scale": float(args.expect_consensus_prior_scale),
         "interaction_bridge_present": args.expect_context_source == "physical_interaction",
     }
