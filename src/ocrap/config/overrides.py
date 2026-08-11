@@ -8,6 +8,15 @@ from .defaults import deep_update
 
 
 def _parse_scalar(s: str) -> Any:
+    # ``--set dotted.path=`` is used throughout the shell launchers to mean an
+    # explicit empty string (for example scratch ``init_checkpoint`` and
+    # optional component-reliability CSVs).  ``yaml.safe_load("")`` returns
+    # ``None``, which silently changed that contract and later produced the
+    # literal string ``"None"`` in string-valued model settings.  Preserve an
+    # explicitly empty CLI value; callers can still request YAML null with
+    # ``key=null`` or ``key=~``.
+    if s == "":
+        return ""
     try:
         return yaml.safe_load(s)
     except Exception:

@@ -282,7 +282,7 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         direct_recovery_evidence_component_reliability=str(ckpt.get(
             "direct_recovery_evidence_component_reliability",
             model_cfg.get("direct_recovery_evidence_component_reliability", ""),
-        )),
+        ) or ""),
         direct_recovery_evidence_concord=bool(ckpt.get("direct_recovery_evidence_concord", model_cfg.get("direct_recovery_evidence_concord", False))),
         direct_recovery_evidence_consensus_disagreement_penalty=float(ckpt.get(
             "direct_recovery_evidence_consensus_disagreement_penalty",
@@ -517,10 +517,16 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         "direct_recovery_evidence_component_reliability",
         model_cfg.get("direct_recovery_evidence_component_reliability", ""),
     )
-    if isinstance(raw_component_reliability, str):
-        reliability_values = [
-            float(x.strip()) for x in raw_component_reliability.split(",") if x.strip()
-        ]
+    if raw_component_reliability is None:
+        reliability_values = []
+    elif isinstance(raw_component_reliability, str):
+        reliability_text = raw_component_reliability.strip()
+        if reliability_text.lower() in {"", "none", "null", "~"}:
+            reliability_values = []
+        else:
+            reliability_values = [
+                float(x.strip()) for x in reliability_text.split(",") if x.strip()
+            ]
     else:
         reliability_values = [float(x) for x in raw_component_reliability]
     component_count = int(ckpt.get(

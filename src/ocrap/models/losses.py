@@ -2223,10 +2223,16 @@ def direct_uncertainty_recovery_value_loss(
                         torch.full_like(component_loss_raw, float(ordinal_evidence_dead_class_weight)),
                     )
                     raw_reliability = ordinal_evidence_component_reliability
-                    if isinstance(raw_reliability, str):
-                        reliability_values = [
-                            float(x.strip()) for x in raw_reliability.split(",") if x.strip()
-                        ]
+                    if raw_reliability is None:
+                        reliability_values = []
+                    elif isinstance(raw_reliability, str):
+                        reliability_text = raw_reliability.strip()
+                        if reliability_text.lower() in {"", "none", "null", "~"}:
+                            reliability_values = []
+                        else:
+                            reliability_values = [
+                                float(x.strip()) for x in reliability_text.split(",") if x.strip()
+                            ]
                     else:
                         reliability_values = [float(x) for x in raw_reliability]
                     if not reliability_values:
@@ -2290,10 +2296,16 @@ def direct_uncertainty_recovery_value_loss(
                         reduction="none",
                     )
                     raw_reliability = ordinal_evidence_component_reliability
-                    if isinstance(raw_reliability, str):
-                        reliability_values = [
-                            float(x.strip()) for x in raw_reliability.split(",") if x.strip()
-                        ]
+                    if raw_reliability is None:
+                        reliability_values = []
+                    elif isinstance(raw_reliability, str):
+                        reliability_text = raw_reliability.strip()
+                        if reliability_text.lower() in {"", "none", "null", "~"}:
+                            reliability_values = []
+                        else:
+                            reliability_values = [
+                                float(x.strip()) for x in reliability_text.split(",") if x.strip()
+                            ]
                     else:
                         reliability_values = [float(x) for x in raw_reliability]
                     if not reliability_values:
@@ -2339,10 +2351,16 @@ def direct_uncertainty_recovery_value_loss(
                         :, : component_harm_delta_logits.shape[-1]
                     ].to(dtype=predicted_component_margins.dtype)
                     raw_reliability = ordinal_evidence_component_reliability
-                    if isinstance(raw_reliability, str):
-                        reliability_values = [
-                            float(x.strip()) for x in raw_reliability.split(",") if x.strip()
-                        ]
+                    if raw_reliability is None:
+                        reliability_values = []
+                    elif isinstance(raw_reliability, str):
+                        reliability_text = raw_reliability.strip()
+                        if reliability_text.lower() in {"", "none", "null", "~"}:
+                            reliability_values = []
+                        else:
+                            reliability_values = [
+                                float(x.strip()) for x in reliability_text.split(",") if x.strip()
+                            ]
                     else:
                         reliability_values = [float(x) for x in raw_reliability]
                     if not reliability_values:

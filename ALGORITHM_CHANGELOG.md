@@ -1,3 +1,67 @@
+## v48.45.3 — SOURCE-REBUILD EMPTY-OVERRIDE ENGINEERING HOTFIX (2026-08-11)
+
+**Category: engineering-only; v48.45 SOWR algorithm and v48.45.2 source-rebuild attribution protocol are unchanged.**
+
+### Uploaded v48.45.2 failure diagnosis
+
+The uploaded `ocrap_v48_45_source_rebuild_s7` did not complete S0.  Its shared-backbone
+log scans the pooled Safe/Near/Contact train and validation roots successfully, then
+crashes before epoch 1 while constructing `OCRAPModel`:
+
+```text
+ValueError: could not convert string to float: 'None'
+... direct_recovery_evidence_component_reliability
+```
+
+The shell trainer intentionally passes optional string settings as explicit empty CLI
+overrides, e.g. `--set model.direct_recovery_evidence_component_reliability=` and
+`--set training.init_checkpoint=` in scratch mode.  The generic override parser used
+`yaml.safe_load("")`, which returns Python `None`.  `train.py` then converted the
+reliability value with `str(None)`, producing the literal `"None"`; the model attempted
+`float("None")` and S0 terminated.  Since S0 produced neither `best.pt` nor
+`TRAINING_COMPLETE.json`, S1 never produced Balanced/Precision source checkpoints.
+The uploaded A/B/C runs therefore all fail later at `source_checkpoint_contract` with
+RC=30.  Adaptation, certificate and gate were never executed, so those runs are not
+algorithm-attribution evidence.
+
+### Engineering fixes
+
+1. CLI `--set key=` now preserves the explicit empty string.  YAML null remains
+   available explicitly via `key=null` or `key=~`.
+2. Train-time model and ordinal-evidence reliability plumbing normalizes optional
+   `None` to the original unspecified/default semantics instead of the string
+   `"None"`.
+3. Model, loss and inference/checkpoint paths defensively accept `None`, empty string,
+   and legacy textual null spellings as an unspecified reliability vector, retaining
+   the pre-existing default of all-one component reliability.  Nonempty numeric CSVs
+   are unchanged.
+4. `rebuild_v48_45_shared_source.sh` now writes `SOURCE_REBUILD_FAILED.json` with the
+   exact stage (`preflight`, teacher-index build, S0, S1, sealing, or final contracts)
+   on any nonzero source-rebuild exit.  This prevents a primary S0 error from being
+   visible only later as missing source checkpoints.
+5. The v48.45.3 operator commands explicitly delete only an **incomplete** source
+   (never a sealed `SOURCE_REBUILD_COMPLETE.json`), run an empty-override semantic
+   precheck, fail immediately if source rebuild is nonzero or the manifest is absent,
+   and only then launch A/B/C/D.
+
+### Attribution boundary
+
+No loss weight, S0/S1 dataset mix, architecture, SOWR switch, ROCT parameter, top-k,
+shared Natural rule, risk budget, certificate, gate, or regime-specific policy is
+changed.  After rebuilding one fresh sealed source, A/B/C/D remain attributable within
+that source identity.  The failed uploaded v48.45.2 A/B/C runs must be discarded.
+
+### Validation
+
+- Focused v48.13/v48.36-v48.45 regression: **117 passed / 3 skipped**.
+- v48.45.3 exact S0 shell-argument capture confirms scratch `init_checkpoint`,
+  freeze/trainable prefixes, model reliability and ordinal reliability are all parsed
+  as `""`, not `None`.
+- `python -m compileall -q src tools tests`: PASS.
+- **99/99** shell scripts pass `bash -n`; backslash-continuation/comment hazard scan: 0.
+- Dynamic source-failure simulation writes `SOURCE_REBUILD_FAILED.json` with the
+  correct `preflight` stage and preserves the original nonzero exit.
+
 ## v48.45.1 — SOWR ENGINEERING HOTFIX / SOURCE-RUN RESOLUTION (2026-08-10)
 
 This revision changes **no algorithmic factor, loss target, shared rule, gate, top-k,

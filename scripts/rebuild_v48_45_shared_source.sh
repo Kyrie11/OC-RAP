@@ -59,6 +59,30 @@ if [[ "${ALLOW_SOURCE_REBUILD_OVERWRITE:-0}" == 1 ]]; then
   rm -rf "$SOURCE_OUT"
 fi
 mkdir -p "$SOURCE_OUT/logs"
+SOURCE_REBUILD_STAGE="preflight"
+source_rebuild_failure_marker() {
+  local rc=$?
+  if [[ $rc -ne 0 && ! -f "$SOURCE_OUT/SOURCE_REBUILD_COMPLETE.json" ]]; then
+    SOURCE_REBUILD_FAILURE_RC="$rc" SOURCE_REBUILD_FAILURE_STAGE="$SOURCE_REBUILD_STAGE" SOURCE_REBUILD_FAILURE_OUT="$SOURCE_OUT" python - <<'PYFAIL' || true
+import json, os, pathlib, time
+out = pathlib.Path(os.environ["SOURCE_REBUILD_FAILURE_OUT"]) / "SOURCE_REBUILD_FAILED.json"
+doc = {
+    "event": "v48_45_source_rebuild_failed",
+    "implementation_version": "v48.45.3-engineering-hotfix",
+    "created_unix": time.time(),
+    "stage": os.environ.get("SOURCE_REBUILD_FAILURE_STAGE", "unknown"),
+    "raw_exit_code": int(os.environ.get("SOURCE_REBUILD_FAILURE_RC", "1")),
+    "source_rebuild_complete": False,
+    "test_roots_read": False,
+}
+tmp = out.with_name(f".{out.name}.tmp")
+tmp.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+os.replace(tmp, out)
+PYFAIL
+  fi
+  return "$rc"
+}
+trap source_rebuild_failure_marker EXIT
 
 for d in "$TRAIN_SAFE" "$TRAIN_NEAR" "$TRAIN_CONTACT" "$DEV_SAFE" "$DEV_NEAR" "$DEV_CONTACT"; do
   [[ -d "$d" ]] || { echo "missing source dataset root: $d" >&2; exit 2; }
@@ -74,6 +98,7 @@ python tools/check_scene_overlap_v48.py \
   2>&1 | tee "$SOURCE_OUT/logs/source_train_dev_overlap_audit.log"
 
 # Build exact teacher-PCD group indexes once and freeze them for the source run.
+SOURCE_REBUILD_STAGE="teacher_index_build"
 build_index() {
   local dataset="$1" index="$2" summary="$3" log="$4"
   if [[ ! -s "$index" || ! -s "$summary" || "${REBUILD_SOURCE_INDEX:-0}" == 1 ]]; then
@@ -124,6 +149,7 @@ if [[ -f "$BACKBONE_CKPT" && ! -f "$BACKBONE_DONE" ]]; then
   rm -rf "$BACKBONE_RUN"
 fi
 if [[ ! -f "$BACKBONE_CKPT" || ! -f "$BACKBONE_DONE" ]]; then
+  SOURCE_REBUILD_STAGE="S0_shared_recovery_backbone"
   echo "[source rebuild] S0 shared recovery backbone on GPU $GPU0" | tee "$SOURCE_OUT/logs/source_rebuild_status.log"
   env "${common_arch[@]}" \
     RUN="$BACKBONE_RUN" MODEL_DIR="$BACKBONE_RUN/model_v48_trac_sr" CAL_DIR="$BACKBONE_RUN/calibration" \
@@ -193,6 +219,7 @@ SOURCE_REBUILD_ID=v48.45-shared-backbone-source-rebuild
 POLICY
 }
 
+SOURCE_REBUILD_STAGE="S1_source_policy_heads"
 train_source_variant balanced "$GPU0" & p0=$!
 train_source_variant precision "$GPU1" & p1=$!
 set +e
@@ -202,6 +229,7 @@ set -e
 printf 'source policy status: balanced=%s precision=%s\n' "$s0" "$s1" | tee -a "$SOURCE_OUT/logs/source_rebuild_status.log"
 [[ "$s0" == 0 && "$s1" == 0 ]] || exit 30
 
+SOURCE_REBUILD_STAGE="seal_source_manifest"
 python - "$SOURCE_OUT" "$BACKBONE_CKPT" "$BACKBONE_TRAIN_MIX" "$BACKBONE_VAL_MIX" "$POLICY_TRAIN_MIX" "$POLICY_VAL_MIX" "$BACKBONE_GROUP_INDEX" "$BACKBONE_VAL_GROUP_INDEX" "$POLICY_GROUP_INDEX" "$POLICY_VAL_GROUP_INDEX" "$SEED" <<'PY'
 import hashlib,json,os,pathlib,sys,time
 root=pathlib.Path(sys.argv[1]); backbone=pathlib.Path(sys.argv[2])
@@ -237,6 +265,7 @@ tmp.write_text(json.dumps(doc,indent=2)+'\n',encoding='utf-8'); os.replace(tmp,o
 print(json.dumps(doc,indent=2))
 PY
 
+SOURCE_REBUILD_STAGE="final_source_contracts"
 python tools/check_v48_36_source_checkpoint_contract.py \
   --source-run "$SOURCE_OUT" --output "$SOURCE_OUT/SOURCE_CHECKPOINT_CONTRACT.json" \
   2>&1 | tee "$SOURCE_OUT/logs/final_source_checkpoint_contract.log"
@@ -244,5 +273,7 @@ python tools/check_v48_45_rebuilt_source_quality.py \
   --source-run "$SOURCE_OUT" --output "$SOURCE_OUT/SOURCE_QUALITY_CONTRACT.json" \
   2>&1 | tee "$SOURCE_OUT/logs/final_source_quality_contract.log"
 
+rm -f "$SOURCE_OUT/SOURCE_REBUILD_FAILED.json"
+trap - EXIT
 echo "source rebuild complete: $SOURCE_OUT"
 echo "Use SOURCE_RUN=$SOURCE_OUT for every v48.45 A/B/C/D arm."

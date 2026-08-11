@@ -398,7 +398,7 @@ def _direct_value_loss_from_outputs(
             tcfg.get("direct_value_ordinal_evidence_joint_reserve_boundary_width", 0.05)
         ),
         ordinal_evidence_component_reliability=str(
-            tcfg.get("direct_value_ordinal_evidence_component_reliability", "")
+            tcfg.get("direct_value_ordinal_evidence_component_reliability", "") or ""
         ),
         ordinal_evidence_global_balance=bool(tcfg.get("direct_value_ordinal_evidence_global_balance", False)),
         ordinal_evidence_safe_set_temperature=float(tcfg.get("direct_value_ordinal_evidence_safe_set_temperature", 0.05)),
@@ -2726,7 +2726,7 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             model_cfg.get("direct_recovery_evidence_unbounded_harm_factors", False)
         ),
         direct_recovery_evidence_component_reliability=str(
-            model_cfg.get("direct_recovery_evidence_component_reliability", "")
+            model_cfg.get("direct_recovery_evidence_component_reliability", "") or ""
         ),
         direct_recovery_evidence_concord=bool(model_cfg.get("direct_recovery_evidence_concord", False)),
         direct_recovery_evidence_consensus_disagreement_penalty=float(
@@ -3146,7 +3146,7 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
                 model_cfg.get("direct_recovery_evidence_unbounded_harm_factors", False)
             ),
             "direct_recovery_evidence_component_reliability": str(
-                model_cfg.get("direct_recovery_evidence_component_reliability", "")
+                model_cfg.get("direct_recovery_evidence_component_reliability", "") or ""
             ),
             "direct_recovery_evidence_concord": bool(model_cfg.get("direct_recovery_evidence_concord", False)),
             "direct_recovery_evidence_consensus_disagreement_penalty": float(

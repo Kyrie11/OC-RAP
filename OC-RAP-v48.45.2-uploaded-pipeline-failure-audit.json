@@ -1,0 +1,74 @@
+{
+  "event": "v48_45_2_uploaded_pipeline_failure_audit",
+  "created_unix": 1786422674.014845,
+  "algorithm_attribution_valid": false,
+  "primary_failure": {
+    "stage": "S0_shared_recovery_backbone_model_construction",
+    "exception": "ValueError: could not convert string to float: 'None'",
+    "trace_target": "direct_recovery_evidence_component_reliability",
+    "training_epoch_started": false,
+    "oom_evidence": false
+  },
+  "source_rebuild": {
+    "source_rebuild_complete_present": false,
+    "s0_best_checkpoint_present": false,
+    "s0_training_complete_present": false,
+    "balanced_source_checkpoint_present": false,
+    "precision_source_checkpoint_present": false,
+    "train_samples_scanned": 50114,
+    "val_samples_scanned": 12250,
+    "train_scenes": 1715,
+    "development_scenes": 519,
+    "train_development_overlap": 0
+  },
+  "arms": {
+    "A": {
+      "pipeline_exit_code": 30,
+      "pipeline_valid": false,
+      "failure_stage": "source_checkpoint_contract",
+      "raw_exit_code": 3,
+      "adaptation_exit_codes": {
+        "balanced": null,
+        "precision": null
+      },
+      "certificate_executed": false,
+      "gate_evaluated": false,
+      "test_roots_read": false
+    },
+    "B": {
+      "pipeline_exit_code": 30,
+      "pipeline_valid": false,
+      "failure_stage": "source_checkpoint_contract",
+      "raw_exit_code": 3,
+      "adaptation_exit_codes": {
+        "balanced": null,
+        "precision": null
+      },
+      "certificate_executed": false,
+      "gate_evaluated": false,
+      "test_roots_read": false
+    },
+    "C": {
+      "pipeline_exit_code": 30,
+      "pipeline_valid": false,
+      "failure_stage": "source_checkpoint_contract",
+      "raw_exit_code": 3,
+      "adaptation_exit_codes": {
+        "balanced": null,
+        "precision": null
+      },
+      "certificate_executed": false,
+      "gate_evaluated": false,
+      "test_roots_read": false
+    }
+  },
+  "root_cause_chain": [
+    "train_ocrap_v48_trac_sr.sh passes an explicit empty --set value for optional component reliability",
+    "yaml.safe_load(\"\") in CLI override parsing returned Python None",
+    "train.py converted None with str(None), yielding the literal \"None\"",
+    "OCRAPModel attempted float(\"None\") while parsing reliability CSV",
+    "S0 exited before epoch 1, so S1 Balanced/Precision source checkpoints were never created",
+    "A/B/C later failed the source_checkpoint_contract with RC=30 before adaptation/certificate/gate"
+  ],
+  "test_roots_read": false
+}

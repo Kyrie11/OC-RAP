@@ -34,3 +34,31 @@ def test_drs_masks_invalid_roots():
     root_valid = np.array([1.0, 0.0], dtype=float)
     selected_options = np.array([0, 0], dtype=int)
     assert deployable_recovery_success(m_star, root_probs, selected_options, root_valid) == 1.0
+
+
+def test_empty_cli_override_is_preserved_as_empty_string():
+    parser = make_parser()
+    args = parser.parse_args([
+        "train",
+        "--dataset", "/tmp/train",
+        "--output", "/tmp/out",
+        "--set", "training.init_checkpoint=",
+        "--set", "model.direct_recovery_evidence_component_reliability=",
+        "--set", "training.direct_value_ordinal_evidence_component_reliability=",
+    ])
+    cfg = build_cfg(args)
+    assert cfg["training"]["init_checkpoint"] == ""
+    assert cfg["model"]["direct_recovery_evidence_component_reliability"] == ""
+    assert cfg["training"]["direct_value_ordinal_evidence_component_reliability"] == ""
+
+
+def test_cli_yaml_null_remains_available_explicitly():
+    parser = make_parser()
+    args = parser.parse_args([
+        "train",
+        "--dataset", "/tmp/train",
+        "--output", "/tmp/out",
+        "--set", "training.init_checkpoint=null",
+    ])
+    cfg = build_cfg(args)
+    assert cfg["training"]["init_checkpoint"] is None

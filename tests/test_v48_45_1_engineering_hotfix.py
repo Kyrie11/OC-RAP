@@ -229,3 +229,66 @@ def test_source_rebuild_freezes_one_common_backbone_before_ablation_source_heads
     assert "best.pt exists without TRAINING_COMPLETE.json" in text
     assert "SOURCE_REBUILD_COMPLETE.json" in text
     assert "test_roots_read':False" in text
+
+
+def test_v48453_source_rebuild_empty_string_config_contract() -> None:
+    from ocrap.config.overrides import parse_cli_overrides
+    cfg = parse_cli_overrides([
+        "training.init_checkpoint=",
+        "training.freeze_param_prefixes=",
+        "training.trainable_param_prefixes=",
+        "model.direct_recovery_evidence_component_reliability=",
+        "training.direct_value_ordinal_evidence_component_reliability=",
+    ])
+    assert cfg["training"]["init_checkpoint"] == ""
+    assert cfg["training"]["freeze_param_prefixes"] == ""
+    assert cfg["training"]["trainable_param_prefixes"] == ""
+    assert cfg["model"]["direct_recovery_evidence_component_reliability"] == ""
+    assert cfg["training"]["direct_value_ordinal_evidence_component_reliability"] == ""
+
+
+def test_v48453_model_accepts_unspecified_reliability_without_string_none() -> None:
+    from ocrap.models.encoders import FlatFeatureLayout
+    from ocrap.models.ocrap import OCRAPModel
+
+    common = dict(
+        input_dim=FlatFeatureLayout().total_dim,
+        num_roots=3,
+        num_options=4,
+        d_model=12,
+        d_obs=6,
+        encoder_type="structured_transformer",
+        num_layers=1,
+        num_heads=3,
+        dropout=0.0,
+        direct_recovery_delta_head=True,
+        direct_recovery_delta_mode="ordinal_evidence",
+        direct_recovery_delta_regime_experts=True,
+        direct_recovery_evidence_unified_experts=True,
+        direct_recovery_evidence_component_heads=True,
+        direct_recovery_evidence_component_count=3,
+    )
+    for value in (None, "", "None", "null", "~"):
+        model = OCRAPModel(
+            **common,
+            direct_recovery_evidence_component_reliability=value,
+        )
+        assert model.direct_recovery_evidence_component_reliability == (1.0, 1.0, 1.0)
+
+
+def test_v48453_source_rebuild_writes_failure_stage_marker() -> None:
+    text = (ROOT / "scripts" / "rebuild_v48_45_shared_source.sh").read_text()
+    assert 'SOURCE_REBUILD_STAGE="S0_shared_recovery_backbone"' in text
+    assert 'SOURCE_REBUILD_STAGE="S1_source_policy_heads"' in text
+    assert 'SOURCE_REBUILD_FAILED.json' in text
+    assert 'implementation_version": "v48.45.3-engineering-hotfix"' in text
+
+
+def test_v48453_operator_commands_fail_closed_before_ablation() -> None:
+    text = (ROOT / "OC-RAP-v48.45.3-source-rebuild-and-SOWR-run-commands-ZH.txt").read_text()
+    assert "V48.45.3 EMPTY-OVERRIDE CONTRACT PASS" in text
+    assert "source_rc=${PIPESTATUS[0]}" in text
+    assert "SOURCE REBUILD ENGINEERING FAILURE" in text
+    assert '[[ -s "$SOURCE_RUN/SOURCE_REBUILD_COMPLETE.json" ]]' in text
+    assert text.index("SOURCE REBUILD ENGINEERING FAILURE") < text.index("run_v48_45_sowr_2x2_parallel.sh")
+    assert 'if [[ -d "$SOURCE_RUN" && ! -f "$SOURCE_RUN/SOURCE_REBUILD_COMPLETE.json" ]]' in text

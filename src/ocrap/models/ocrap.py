@@ -356,7 +356,7 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_benefit_residual_scale: float = 1.0,
         direct_recovery_evidence_unbounded_benefit_factor: bool = False,
         direct_recovery_evidence_unbounded_harm_factors: bool = False,
-        direct_recovery_evidence_component_reliability: str | tuple[float, ...] = "",
+        direct_recovery_evidence_component_reliability: str | tuple[float, ...] | None = "",
         direct_recovery_evidence_concord: bool = False,
         direct_recovery_evidence_consensus_disagreement_penalty: float = 0.15,
         direct_recovery_evidence_consensus_prior_scale: float = 1.0,
@@ -574,10 +574,16 @@ class OCRAPModel(nn.Module):
             direct_recovery_evidence_unbounded_harm_factors
         )
         raw_component_reliability = direct_recovery_evidence_component_reliability
-        if isinstance(raw_component_reliability, str):
-            reliability_values = [
-                float(x.strip()) for x in raw_component_reliability.split(",") if x.strip()
-            ]
+        if raw_component_reliability is None:
+            reliability_values = []
+        elif isinstance(raw_component_reliability, str):
+            reliability_text = raw_component_reliability.strip()
+            if reliability_text.lower() in {"", "none", "null", "~"}:
+                reliability_values = []
+            else:
+                reliability_values = [
+                    float(x.strip()) for x in reliability_text.split(",") if x.strip()
+                ]
         else:
             reliability_values = [float(x) for x in raw_component_reliability]
         if not reliability_values:
