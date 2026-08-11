@@ -127,6 +127,7 @@ def test_sowr_stage_uses_exact_existing_teacher_losses_and_no_encoder_finetune()
     assert "LOSS_OPTION_BEST=1.00" in stage
     assert "DIRECT_VALUE_WEIGHT=0" in stage
     assert "ENCODER_LR_SCALE=0" in stage
+    assert "SKIP_POST_TRAIN_CALIBRATION=1" in stage
     assert "regime_id_exposed" in stage
     assert "encoder" not in 'prefixes="root_logit_head,margin_head"'
 

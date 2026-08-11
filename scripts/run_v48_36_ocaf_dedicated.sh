@@ -263,6 +263,21 @@ PY_ARCHIVE_STATUS
 rm -f "$OUTPUTDIR"/ADAPTATION_FAILED_*.json "$OUTPUTDIR"/FAILURE_SIGNATURE_*.json \
       "$OUTPUTDIR/NEXT_COMMANDS.txt" "$OUTPUTDIR/chosen_base_run_dedicated.txt"
 
+# Fail fast on the immutable source checkpoints before spending time rebuilding
+# teacher indexes or starting GPU jobs.  Older code checked these only inside
+# each background variant, which could collapse two missing-source errors into
+# the misleading message "both variants failed" and leave no in-run log.
+set +e
+python tools/check_v48_36_source_checkpoint_contract.py \
+  --source-run "$SOURCE_RUN" --output "$OUTPUTDIR/SOURCE_CHECKPOINT_CONTRACT.json" \
+  >"$OUTPUTDIR/logs/source_checkpoint_contract.log" 2>&1
+source_checkpoint_rc=$?
+set -e
+if [[ "$source_checkpoint_rc" != 0 ]]; then
+  write_pipeline_failure source_checkpoint_contract "$source_checkpoint_rc" "$OUTPUTDIR/SOURCE_CHECKPOINT_CONTRACT.json"
+  exit 30
+fi
+
 # Fail closed on the exact canonical dataset roots. Legacy aliases (for example
 # traincontact versus train_contact) must never silently change the experiment.
 set +e
@@ -509,13 +524,32 @@ run_variant() {
     balanced) factor_cache="${V4836_FACTOR_CACHE_BALANCED:-}" ;;
     precision) factor_cache="${V4836_FACTOR_CACHE_PRECISION:-}" ;;
   esac
-  [[ -f "$source" ]] || { echo "missing source checkpoint $source" >&2; return 30; }
-  if [[ -n "$factor_cache" && ! -d "$factor_cache" ]]; then
-    echo "configured factor cache does not exist: $factor_cache" >&2
-    return 30
-  fi
-  set +e
-  RUN="$run" INIT_CKPT="$source" VARIANT="$variant" TRAIN_GPU="$gpu" \
+  local rc=0
+  if [[ ! -f "$source" ]]; then
+    mkdir -p "$run" "$OUTPUTDIR/logs"
+    printf 'missing source checkpoint: %s\n' "$source" >"$OUTPUTDIR/logs/adapt_${variant}.log"
+    python - "$run/VARIANT_STAGE_FAILED.json" "$variant" "$source" <<'PY_SOURCE_MISSING'
+import json,pathlib,sys,time
+p=pathlib.Path(sys.argv[1]); p.parent.mkdir(parents=True,exist_ok=True)
+p.write_text(json.dumps({'event':'v48_36_variant_stage_failed','created_unix':time.time(),
+ 'variant':sys.argv[2],'stage':'source_checkpoint_preflight','exit_code':30,
+ 'missing_source_checkpoint':sys.argv[3],'test_roots_read':False},indent=2)+'\n')
+PY_SOURCE_MISSING
+    rc=30
+  elif [[ -n "$factor_cache" && ! -d "$factor_cache" ]]; then
+    mkdir -p "$run" "$OUTPUTDIR/logs"
+    printf 'configured factor cache does not exist: %s\n' "$factor_cache" >"$OUTPUTDIR/logs/adapt_${variant}.log"
+    python - "$run/VARIANT_STAGE_FAILED.json" "$variant" "$factor_cache" <<'PY_CACHE_MISSING'
+import json,pathlib,sys,time
+p=pathlib.Path(sys.argv[1]); p.parent.mkdir(parents=True,exist_ok=True)
+p.write_text(json.dumps({'event':'v48_36_variant_stage_failed','created_unix':time.time(),
+ 'variant':sys.argv[2],'stage':'factor_cache_preflight','exit_code':30,
+ 'missing_factor_cache':sys.argv[3],'test_roots_read':False},indent=2)+'\n')
+PY_CACHE_MISSING
+    rc=30
+  else
+    set +e
+    RUN="$run" INIT_CKPT="$source" VARIANT="$variant" TRAIN_GPU="$gpu" \
   TRAIN_MIX="$TRAIN_NEAR,$TRAIN_CONTACT" VAL_MIX="$DEV_NEAR,$DEV_CONTACT" GROUP_INDEX="$GROUP_INDEX" VAL_GROUP_INDEX="$VAL_GROUP_INDEX" \
   TRAIN_OCRAP_ROOT="$OCRAP_ROOT" EVAL_OCRAP_ROOT="$OCRAP_ROOT" \
   NUM_WORKERS="${NUM_WORKERS:-3}" PREFETCH_FACTOR="${PREFETCH_FACTOR:-3}" BATCH_SIZE="${BATCH_SIZE:-96}" \
@@ -527,6 +561,8 @@ run_variant() {
   V4837_FACTOR_PRESERVING_IDENTITY="${V4837_FACTOR_PRESERVING_IDENTITY:-0}" \
   V4838_RFR_RESERVE_ONLY="${V4838_RFR_RESERVE_ONLY:-0}" V4838_FACTOR_ALGORITHM_FAMILY="${V4838_FACTOR_ALGORITHM_FAMILY:-${OCRAP_ALGORITHM_VERSION:-v48.36-OCAF}}" \
   V4836_ADAPTIVE_IDENTITY_MARGIN="${V4836_ADAPTIVE_IDENTITY_MARGIN:-0}" V4836_ENABLE_FINAL_CALIBRATION="${V4836_ENABLE_FINAL_CALIBRATION:-0}" \
+  V4845_SOWR_MARGIN_WITNESS="${V4845_SOWR_MARGIN_WITNESS:-0}" V4845_SOWR_OBS_KERNEL="${V4845_SOWR_OBS_KERNEL:-0}" \
+  SOWR_EPOCHS="${SOWR_EPOCHS:-8}" SOWR_PATIENCE="${SOWR_PATIENCE:-3}" SOWR_LR="${SOWR_LR:-0.00005}" SOWR_BATCH_SIZE="${SOWR_BATCH_SIZE:-72}" \
   FACTOR_BENEFIT_MARGIN_REGRESSION_WEIGHT="${FACTOR_BENEFIT_MARGIN_REGRESSION_WEIGHT:-0.0}" FACTOR_BENEFIT_MARGIN_TEMPERATURE="${FACTOR_BENEFIT_MARGIN_TEMPERATURE:-0.025}" \
   FACTOR_COMPONENT_UNDERESTIMATION_WEIGHT="${FACTOR_COMPONENT_UNDERESTIMATION_WEIGHT:-0.0}" FACTOR_SAFE_POSITIVE_COMPONENT_OVERESTIMATION_WEIGHT="${FACTOR_SAFE_POSITIVE_COMPONENT_OVERESTIMATION_WEIGHT:-0.0}" \
   FACTOR_JOINT_RESERVE_REGRESSION_WEIGHT="${FACTOR_JOINT_RESERVE_REGRESSION_WEIGHT:-0.0}" FACTOR_JOINT_RESERVE_BOUNDARY_WEIGHT="${FACTOR_JOINT_RESERVE_BOUNDARY_WEIGHT:-0.0}" FACTOR_JOINT_RESERVE_BOUNDARY_WIDTH="${FACTOR_JOINT_RESERVE_BOUNDARY_WIDTH:-0.05}" \
@@ -542,9 +578,10 @@ run_variant() {
   IDENTITY_ELIGIBILITY_BOUNDARY_MARGIN="${IDENTITY_ELIGIBILITY_BOUNDARY_MARGIN:-0.20}" \
   IDENTITY_POSITIVE_MACRO_BALANCE_POWER="${IDENTITY_POSITIVE_MACRO_BALANCE_POWER:-0.50}" \
   IDENTITY_SCENE_BALANCE_POWER="${IDENTITY_SCENE_BALANCE_POWER:-0.50}" \
-  bash scripts/adapt_ocrap_v48_36_ocaf_variant.sh >"$OUTPUTDIR/logs/adapt_${variant}.log" 2>&1
-  local rc=$?
-  set -e
+    bash scripts/adapt_ocrap_v48_36_ocaf_variant.sh >"$OUTPUTDIR/logs/adapt_${variant}.log" 2>&1
+    rc=$?
+    set -e
+  fi
   if [[ "$rc" != 0 ]]; then
     local signature="$OUTPUTDIR/FAILURE_SIGNATURE_${variant}.json"
     local stage="unknown"

@@ -59,6 +59,10 @@ JSON
 # deployability, option-resolved q, shared-option admission, and best shared option.
 # All supervision already exists in the training NPZs; no new labels or regime
 # branches are introduced.
+# SOWR is an internal witness recalibration stage.  It must not run the generic
+# post-training bucket calibrator against default val_* roots; downstream v48.36
+# performs the authoritative calibration after factor adaptation.  Keep this
+# comment outside the backslash-continued environment-assignment command below.
 RUN="$RUN" MODEL_DIR="$RUN/model_v48_sowr" CAL_DIR="$RUN/calibration" \
 INIT_CKPT="$INIT_CKPT" VARIANT="$VARIANT" TRAIN_MIX="$TRAIN_MIX" VAL_MIX="$VAL_MIX" CAL_MIX="$VAL_MIX" \
 GROUP_INDEX="$GROUP_INDEX" VAL_GROUP_INDEX="${VAL_GROUP_INDEX:-}" TRAIN_GPU="$TRAIN_GPU" \
@@ -74,6 +78,7 @@ LOSS_PROTECTIVE_MACRO=0 LOSS_MACRO_DRS=0 LOSS_TEACHER_PCD_DIRECT=0 LOSS_RECOVERY
 EPOCHS="${SOWR_EPOCHS:-8}" PATIENCE="${SOWR_PATIENCE:-3}" LR="${SOWR_LR:-0.00005}" \
 ENCODER_LR_SCALE=0 ENCODER_ANCHOR_WEIGHT=0 BEST_METRIC=loss BEST_METRIC_MIN_DELTA="${SOWR_BEST_METRIC_MIN_DELTA:-0.000001}" \
 EVALUATE_INITIAL_CHECKPOINT=true GROUP_BATCH_STRATIFIED=true GROUP_BATCHING_REPLACEMENT=true \
+SKIP_POST_TRAIN_CALIBRATION=1 \
 NUM_WORKERS="${NUM_WORKERS:-2}" PREFETCH_FACTOR="${PREFETCH_FACTOR:-2}" BATCH_SIZE="${SOWR_BATCH_SIZE:-72}" \
   bash scripts/train_ocrap_v48_trac_sr.sh
 

@@ -1,3 +1,53 @@
+## v48.45.1 — SOWR ENGINEERING HOTFIX / SOURCE-RUN RESOLUTION (2026-08-10)
+
+This revision changes **no algorithmic factor, loss target, shared rule, gate, top-k,
+ROCT scale, regime handling, or risk budget**. It fixes the execution layer only.
+
+The failed v48.45 A/B/C runs are authoritative engineering failures (`RC=30`,
+`pipeline_valid=false`, `failure_stage=adaptation`, certificate not executed). Their
+result packages contain no candidate directories or `adapt_balanced/precision.log`,
+which means both variants returned before entering adaptation. The run metadata records
+`source_run=runs/ocrap_v48_13_terra_proxy_4801` while the v48.45 command changes cwd to
+the versioned checkout. In the successful v48.44 results, the actual source checkpoint
+was `/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_13_terra_proxy_4801/.../best.pt`. The
+relative default therefore resolved against the wrong repository in v48.45. This is the
+root cause; there is no OOM evidence.
+
+Engineering fixes:
+
+- v48.45 arm launcher resolves the immutable v48.13 source run from persistent
+  `BASE_OUT` first, while preserving an explicit `SOURCE_RUN` override; the resolved
+  path is made absolute before entering the dedicated controller.
+- the dedicated controller now performs a source-checkpoint contract **before** dataset
+  index construction or GPU adaptation, checking both Balanced and Precision source
+  checkpoints and recording paths, size and SHA256 in `SOURCE_CHECKPOINT_CONTRACT.json`;
+  a missing source now fails as `source_checkpoint_contract`, not as the ambiguous
+  `both variants failed`.
+- the per-variant fallback path now always writes an in-run adaptation log,
+  `VARIANT_STAGE_FAILED.json`, `FAILURE_SIGNATURE_*.json`, and
+  `ADAPTATION_FAILED_*.json` if a source/factor-cache prerequisite disappears after the
+  global preflight.
+- SOWR controls are explicitly passed across the dedicated-controller -> variant-process
+  boundary instead of relying only on inherited export state.
+- the internal SOWR witness stage now sets `SKIP_POST_TRAIN_CALIBRATION=1`; generic
+  bucket calibration is not run inside witness recalibration, while the downstream authoritative
+  v48.36 calibration/certificate path remains unchanged.
+- the v48.45 2x2 launcher now treats RC=20 as a valid Natural-gate result, not an
+  engineering crash; only non-{0,20} arm exits make the launcher fail. Launcher logs and
+  exit codes are stored inside each run directory so result ZIPs retain the primary
+  failure evidence.
+
+Validation after the hotfix: compileall PASS; 98/98 shell scripts `bash -n` PASS; focused
+v48.36-v48.45 regression 102 passed / 1 skipped; dedicated missing-source simulation
+correctly terminates before dataset/adaptation; synthetic four-arm RC=20 launch returns
+success and classifies all four arms as valid Natural-gate failures; synthetic RC=30
+launch is correctly classified as engineering failure.
+
+The existing v48.45 SOWR run commands remain valid when the repaired code is extracted
+under the same `/home/senzeyu2/code/OC-RAP-v48.45-SOWR` path. Do not delete the immutable
+source run `/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_13_terra_proxy_4801` when cleaning
+old v48.45 outputs.
+
 ## v48.45 — SOWR / SHARED-OPTION WITNESS RECALIBRATION (2026-08-10)
 
 ### v48.44 ROCT final gate attribution
