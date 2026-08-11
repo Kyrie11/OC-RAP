@@ -4017,3 +4017,37 @@ is introduced before that certificate evidence exists.
 - D/main: dual OCAF + frontier-normalized regression.
 
 The intended causal readout is: B>A supports gradient-decoupling; C>A supports boundary-focused target geometry; D>B,C supports complementarity. If D does not improve rare-frontier harm discrimination, do not stack additional losses; inspect observation/teacher identifiability and the dataset statistical-power ceiling.
+
+## v48.45.2 — LOST-SOURCE RECONSTRUCTION SUPPORT (engineering/source protocol; SOWR algorithm unchanged)
+
+### Trigger
+
+The uploaded v48.45 A/B/C archives all terminated before adaptation with normalized `RC=30` at `source_checkpoint_contract`. The historical source run directory no longer exists and both required `candidates/{balanced,precision}/model_v48_trac_sr/best.pt` files are missing. No certificate or gate was executed, so those archives are engineering failures and provide no SOWR algorithm evidence.
+
+The historical v48.13 source also cannot be reproduced byte/recipe-identically from the current archive: `tests/test_v48_13_terra.py` references `scripts/train_ocrap_v48_13_terra.sh`, but that historical training script is absent. v48.45.2 therefore does **not** pretend to recover v48.13.
+
+### Protocol repair
+
+1. `train_ocrap_v48_trac_sr.sh` now supports scratch initialization only behind explicit `ALLOW_SCRATCH_INIT=1 INIT_CKPT=`. Normal source/adaptation training remains fail-closed on a missing checkpoint.
+2. Added `rebuild_v48_45_shared_source.sh` with a two-stage reconstruction:
+   - S0: one pooled Safe/Near/Contact recovery backbone/witness from scratch, using train and val only; direct proposal loss disabled;
+   - S1: the exact same S0 checkpoint is frozen while Balanced/Precision direct proposal/evidence heads are fit on Near/Contact candidate groups.
+3. S0 requires both `best.pt` and `TRAINING_COMPLETE.json`. A partial `best.pt` without completion metadata is deleted and retrained instead of being silently reused.
+4. The rebuilt source writes `SOURCE_REBUILD_COMPLETE.json` containing source identity and SHA256 for the S0, Balanced and Precision checkpoints.
+5. `check_v48_36_source_checkpoint_contract.py` verifies manifest hashes whenever a rebuilt-source manifest exists. Every A/B/C/D arm must therefore consume byte-identical source checkpoints.
+6. Added `check_v48_45_rebuilt_source_quality.py`, a train/validation-only structural source preflight that rejects missing/non-finite summaries, empty data, missing checkpoint artifacts, a non-scratch S0, or S1 checkpoints that did not warm-start from the single shared S0. It introduces no calibration/test threshold.
+7. v48.45 source resolution now prefers a completed `ocrap_v48_45_source_rebuild_s7` source before the absent historical v48.13 source when `SOURCE_RUN` is not explicitly set. Explicit `SOURCE_RUN` still wins.
+8. Recommended A/B/C/D concurrency is `MAX_PARALLEL_ARMS=1`: each arm already launches Balanced on GPU0 and Precision on GPU1, so this uses exactly two GPU training processes. `MAX_PARALLEL_ARMS=2` would launch up to four training processes and is not recommended for the first rebuilt-source round.
+
+### Attribution contract
+
+- SOWR A/B/C/D definitions, dual-ROCT settings, top-k, shared Natural rule, harm budgets, calibration/certificate protocol and gate are unchanged.
+- All four arms must use the same rebuilt source manifest hashes.
+- Results are valid for causal comparison **within the rebuilt-source round**.
+- Absolute metrics must not be interpreted as directly comparable to historical v48.44/v48.45 runs whose source checkpoint was different and is now lost.
+- No per-arm random warm start and no per-arm backbone retraining is allowed.
+- Source rebuild reads no calibration/certificate/test roots; those remain downstream protocol-only data.
+
+### Unified-regime note
+
+S0 pools Safe/Near/Contact for recovery-witness learning and does not add any new SOWR regime router or regime-specific admission rule. The inherited v48 source-policy checkpoint geometry still contains the legacy two `direct_delta_adapters`; this pre-existing design debt is held fixed in the rebuilt round to avoid confounding source recovery with a separate algorithm refactor. If strict removal of all bucket-conditioned policy internals is required for the final paper, it must be evaluated as a separate controlled experiment after SOWR attribution.

@@ -691,3 +691,13 @@ v47 improved candidate-level positive-recovery AUC but failed policy-level top-1
 - Shell syntax checks passed.
 - 97 tests passed, 2 non-failing warnings.
 - No v48 WOMD/GPU experiment has yet been executed in this environment.
+
+## v48.45.2 — LOST-SOURCE RECONSTRUCTION SUPPORT
+
+- A/B/C uploaded failures are RC=30 source preflight failures: historical Balanced/Precision source checkpoints are gone; adaptation/certificate/gate never ran.
+- Exact v48.13 reproduction is unavailable because the archived `train_ocrap_v48_13_terra.sh` recipe is missing.
+- New source identity `ocrap_v48_45_source_rebuild_s7`: pooled Safe/Near/Contact S0 recovery witness from scratch once, then frozen S0 → Balanced/Precision S1 source heads.
+- A manifest seals S0/Balanced/Precision SHA256; all v48.45 A/B/C/D arms must consume those exact bytes.
+- SOWR 2x2 algorithm, dual ROCT, top-k=5, one shared rule and risk budgets are unchanged.
+- Rebuilt-round A/B/C/D comparisons are valid; direct absolute comparison to historical v48.44 source runs is not.
+- Recommended `MAX_PARALLEL_ARMS=1` because each arm already uses both GPUs internally.

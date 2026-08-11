@@ -33,6 +33,24 @@ def main() -> int:
     variants = [x.strip() for x in args.variants.split(",") if x.strip()]
     checks: dict[str, dict[str, object]] = {}
     valid = source.is_dir()
+
+    # A source rebuilt after checkpoint loss carries an immutable hash manifest.
+    # Historical sources do not have this file and remain supported.  When the
+    # manifest exists, every downstream arm must consume exactly those bytes;
+    # otherwise A/B/C/D attribution is invalid even if files merely exist.
+    manifest_path = source / "SOURCE_REBUILD_COMPLETE.json"
+    manifest: dict[str, object] | None = None
+    manifest_error: str | None = None
+    if manifest_path.is_file():
+        try:
+            loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if not isinstance(loaded, dict):
+                raise TypeError("manifest root must be a JSON object")
+            manifest = loaded
+        except Exception as exc:  # fail closed if an advertised manifest is unreadable
+            manifest_error = repr(exc)
+            valid = False
+
     for variant in variants:
         ckpt = source / "candidates" / variant / "model_v48_trac_sr" / "best.pt"
         exists = ckpt.is_file()
@@ -48,6 +66,12 @@ def main() -> int:
         }
         if exists and readable and nonempty:
             row["sha256"] = sha256_file(ckpt)
+        if manifest is not None:
+            expected = ((manifest.get("variants") or {}).get(variant) or {}) if isinstance(manifest.get("variants"), dict) else {}
+            expected_sha = expected.get("sha256") if isinstance(expected, dict) else None
+            row["manifest_expected_sha256"] = expected_sha
+            row["manifest_hash_match"] = bool(expected_sha and row.get("sha256") == expected_sha)
+            valid = valid and bool(row["manifest_hash_match"])
         checks[variant] = row
         valid = valid and exists and readable and nonempty
 
@@ -60,6 +84,9 @@ def main() -> int:
         "working_directory": str(Path.cwd()),
         "variants": variants,
         "checks": checks,
+        "source_rebuild_manifest": str(manifest_path) if manifest_path.is_file() else None,
+        "source_rebuild_manifest_present": manifest_path.is_file(),
+        "source_rebuild_manifest_error": manifest_error,
         "valid": bool(valid),
         "test_roots_read": False,
     }

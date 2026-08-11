@@ -17,7 +17,16 @@ EVAL_OCRAP_ROOT="${EVAL_OCRAP_ROOT:-/data0/senzeyu2/dataset/OCRAP}"
 TRAIN_MIX="${TRAIN_MIX:-$TRAIN_OCRAP_ROOT/train_near_contact,$TRAIN_OCRAP_ROOT/train_contact}"
 VAL_MIX="${VAL_MIX:-$EVAL_OCRAP_ROOT/val_near_contact,$EVAL_OCRAP_ROOT/val_contact}"
 CAL_MIX="${CAL_MIX:-$VAL_MIX}"
-INIT_CKPT="${INIT_CKPT:-runs/ocrap_v47_trac_balanced/model_v47_trac/best.pt}"
+ALLOW_SCRATCH_INIT="${ALLOW_SCRATCH_INIT:-0}"
+if [[ "$ALLOW_SCRATCH_INIT" == 1 ]]; then
+  # Explicit scratch mode is used only by the one-off shared-source rebuild.
+  # An empty INIT_CKPT is intentional; normal adaptation remains fail-closed.
+  INIT_CKPT="${INIT_CKPT-}"
+  ENCODER_ANCHOR_WEIGHT="${ENCODER_ANCHOR_WEIGHT:-0}"
+else
+  INIT_CKPT="${INIT_CKPT:-runs/ocrap_v47_trac_balanced/model_v47_trac/best.pt}"
+  ENCODER_ANCHOR_WEIGHT="${ENCODER_ANCHOR_WEIGHT:-0.02}"
+fi
 VARIANT="${VARIANT:-balanced}"
 RUN="${RUN:-runs/ocrap_v48_trac_sr_${VARIANT}}"
 MODEL_DIR="${MODEL_DIR:-$RUN/model_v48_trac_sr}"
@@ -26,7 +35,12 @@ LOG_DIR="${LOG_DIR:-$RUN/logs}"
 TRAIN_GPU="${TRAIN_GPU:-0}"
 GROUP_INDEX="${GROUP_INDEX:-$RUN/teacher_pcd_train_index.jsonl}"
 mkdir -p "$MODEL_DIR" "$CAL_DIR" "$LOG_DIR"
-[[ -f "$INIT_CKPT" ]] || { echo "missing INIT_CKPT=$INIT_CKPT" >&2; exit 2; }
+if [[ -n "$INIT_CKPT" ]]; then
+  [[ -f "$INIT_CKPT" ]] || { echo "missing INIT_CKPT=$INIT_CKPT" >&2; exit 2; }
+elif [[ "$ALLOW_SCRATCH_INIT" != 1 ]]; then
+  echo "empty INIT_CKPT requires ALLOW_SCRATCH_INIT=1" >&2
+  exit 2
+fi
 [[ -f "$GROUP_INDEX" ]] || { echo "missing GROUP_INDEX=$GROUP_INDEX" >&2; exit 2; }
 
 case "$VARIANT" in
@@ -56,7 +70,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.epochs="${EPOCHS:-12}" --set training.early_stop_patience="${PATIENCE:-3}" \
   --set training.batch_size="${BATCH_SIZE:-96}" --set training.lr="$LR" \
   --set training.encoder_lr_scale="$ENCODER_LR_SCALE" \
-  --set training.encoder_anchor_weight="${ENCODER_ANCHOR_WEIGHT:-0.02}" \
+  --set training.encoder_anchor_weight="$ENCODER_ANCHOR_WEIGHT" \
   --set training.weight_decay=0.00002 \
   --set training.grad_clip=3.0 --set training.require_cuda=true \
   --set training.amp=true --set training.amp_dtype=bfloat16 \

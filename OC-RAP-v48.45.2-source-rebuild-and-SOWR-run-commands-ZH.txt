@@ -1,0 +1,120 @@
+# OC-RAP v48.45.2 — historical source checkpoint lost: rebuild one immutable shared source, then run SOWR A/B/C/D
+# 目标：恢复“可归因”的实验，而不是恢复已经丢失的 v48.13 数值结果。
+# 重要：完成 SOURCE_REBUILD_COMPLETE.json 后，不要再删除/覆盖 SOURCE_RUN，直到 A/B/C/D 全部结束。
+# 资源语义：MAX_PARALLEL_ARMS=1 时，每次只启动 1 个 arm；该 arm 内 Balanced→GPU0、Precision→GPU1，
+#          因此总共恰好 2 个 GPU 训练进程。MAX_PARALLEL_ARMS=2 会变成最多 4 个训练进程（每张 GPU 2 个）。
+
+set -Eeuo pipefail
+
+# ==============================
+# 0. 路径：只需要根据机器实际路径改这里
+# ==============================
+export OCRAP_REPO=/home/senzeyu2/code/OC-RAP
+export OCRAP_ROOT=/data0/senzeyu2/dataset/OCRAP
+export BASE_OUT="$OCRAP_REPO/runs"
+export SOURCE_RUN="$BASE_OUT/ocrap_v48_45_source_rebuild_s7"
+export GPU0=0
+export GPU1=1
+export SOURCE_SEED=7
+
+# 如果你的六个 train/val 数据目录名称就是下面这些，不需要修改。
+export SOURCE_TRAIN_SAFE="$OCRAP_ROOT/train_safe"
+export SOURCE_TRAIN_NEAR="$OCRAP_ROOT/train_near_contact"
+export SOURCE_TRAIN_CONTACT="$OCRAP_ROOT/train_contact"
+export SOURCE_DEV_SAFE="$OCRAP_ROOT/val_safe"
+export SOURCE_DEV_NEAR="$OCRAP_ROOT/val_near_contact"
+export SOURCE_DEV_CONTACT="$OCRAP_ROOT/val_contact"
+
+cd "$OCRAP_REPO"
+export PYTHONPATH="$OCRAP_REPO/src${PYTHONPATH:+:$PYTHONPATH}"
+mkdir -p "$BASE_OUT"
+
+printf '\n========== PRECHECK =========='\nprintf '\nrepo=%s\ndataset=%s\nsource=%s\n' "$OCRAP_REPO" "$OCRAP_ROOT" "$SOURCE_RUN"
+for d in \
+  "$SOURCE_TRAIN_SAFE" "$SOURCE_TRAIN_NEAR" "$SOURCE_TRAIN_CONTACT" \
+  "$SOURCE_DEV_SAFE" "$SOURCE_DEV_NEAR" "$SOURCE_DEV_CONTACT"; do
+  test -d "$d" || { echo "ERROR missing dataset: $d" >&2; exit 2; }
+done
+nvidia-smi -L
+
+# ==============================
+# 1. 一次性重建 shared source
+# ==============================
+# 如果 SOURCE_REBUILD_COMPLETE.json 已经存在，则绝不能重新训练 source；只重新核验 hash。
+# 如果此前 source 构建中断、但尚无 COMPLETE manifest，脚本会安全继续：
+# - S0 只有 best.pt 而没有 TRAINING_COMPLETE.json 时会删掉不完整 S0 后重训；
+# - S0 完整时会复用同一 S0，再重训两份 S1 source heads。
+if [[ ! -f "$SOURCE_RUN/SOURCE_REBUILD_COMPLETE.json" ]]; then
+  echo "[1/3] rebuilding one common source from current code/data"
+  OCRAP_REPO="$OCRAP_REPO" OCRAP_ROOT="$OCRAP_ROOT" SOURCE_OUT="$SOURCE_RUN" \
+  SOURCE_TRAIN_SAFE="$SOURCE_TRAIN_SAFE" SOURCE_TRAIN_NEAR="$SOURCE_TRAIN_NEAR" SOURCE_TRAIN_CONTACT="$SOURCE_TRAIN_CONTACT" \
+  SOURCE_DEV_SAFE="$SOURCE_DEV_SAFE" SOURCE_DEV_NEAR="$SOURCE_DEV_NEAR" SOURCE_DEV_CONTACT="$SOURCE_DEV_CONTACT" \
+  GPU0="$GPU0" GPU1="$GPU1" SOURCE_SEED="$SOURCE_SEED" \
+  bash scripts/rebuild_v48_45_shared_source.sh \
+    2>&1 | tee "$BASE_OUT/v48_45_source_rebuild_driver.log"
+else
+  echo "[1/3] immutable source already exists; DO NOT retrain it"
+fi
+
+# 必须通过 hash-sealed source contract 才允许进入 A/B/C/D。
+echo "[2/3] validating immutable source hashes"
+python tools/check_v48_36_source_checkpoint_contract.py \
+  --source-run "$SOURCE_RUN" \
+  --output "$SOURCE_RUN/SOURCE_CHECKPOINT_CONTRACT_RECHECK.json"
+python - "$SOURCE_RUN/SOURCE_CHECKPOINT_CONTRACT_RECHECK.json" <<'PY'
+import json,sys
+p=sys.argv[1]; d=json.load(open(p))
+assert d.get('valid') is True, d
+for v in ('balanced','precision'):
+    c=d['checks'][v]
+    assert c.get('exists') and c.get('nonempty'), c
+    if d.get('source_rebuild_manifest_present'):
+        assert c.get('manifest_hash_match') is True, c
+print('SOURCE CONTRACT PASS')
+PY
+python tools/check_v48_45_rebuilt_source_quality.py \
+  --source-run "$SOURCE_RUN" \
+  --output "$SOURCE_RUN/SOURCE_QUALITY_CONTRACT_RECHECK.json"
+
+# ==============================
+# 2. 清理“旧失败 arm 输出”——不要删 SOURCE_RUN
+# ==============================
+rm -rf \
+  "$BASE_OUT/ocrap_v48_45_sowr_ablation_A" \
+  "$BASE_OUT/ocrap_v48_45_sowr_ablation_B" \
+  "$BASE_OUT/ocrap_v48_45_sowr_ablation_C" \
+  "$BASE_OUT/ocrap_v48_45_sowr_main" \
+  "$BASE_OUT/ocrap_v48_45_sowr_parallel_status.json"
+
+# ==============================
+# 3. 严格 2x2 A/B/C/D 算法归因
+# ==============================
+# A = v48.44-D/dual-ROCT + 不做 SOWR witness recalibration
+# B = A + root probability / recovery-margin witness recalibration
+# C = A + observation-kernel recalibration
+# D = A + 两者
+# 所有 arm 使用同一 SOURCE_RUN、同一 source SHA256、同一 top-k/shared rule/risk budget。
+#
+# 推荐 MAX_PARALLEL_ARMS=1：
+#   A arm 内 balanced/precision 已经分别使用 GPU0/GPU1，所以此时总并发训练进程=2。
+# 不建议在首次 source-rebuild round 使用 2；2 会让两张卡上各跑两个训练进程，增加 OOM/IO 抖动变量。
+export SOURCE_RUN
+export BASE_OUT
+export GPU0
+export GPU1
+export MAX_PARALLEL_ARMS=1
+export ABLATION_NUM_WORKERS=1
+export ABLATION_OMP_NUM_THREADS=1
+
+echo "[3/3] running v48.45 SOWR A/B/C/D from the same rebuilt source"
+bash scripts/run_v48_45_sowr_2x2_parallel.sh \
+  2>&1 | tee "$BASE_OUT/v48_45_sowr_2x2_driver.log"
+
+printf '\n========== FINAL STATUS =========='\nprintf '\n'
+cat "$BASE_OUT/ocrap_v48_45_sowr_parallel_status.json"
+
+# 解释退出：
+# - arm RC=0  : pipeline valid, Natural gate PASS
+# - arm RC=20 : pipeline valid, Natural gate FAIL，仍然是“有效算法归因结果”
+# - 其他 RC   : 工程/协议失败，先看该 arm 的 AUTHORITATIVE_RUN_STATUS.json / PIPELINE_FAILED.json
+# launcher 只在工程失败时非零；A/B/C/D 中出现 RC=20 不会中止整轮。

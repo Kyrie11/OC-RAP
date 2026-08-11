@@ -16,17 +16,28 @@ unset V4836_FACTOR_CACHE_BALANCED V4836_FACTOR_CACHE_PRECISION || true
 # The v48.13 reference checkpoints live under the persistent BASE_OUT used by
 # the previous successful v48.44 run.  An explicit SOURCE_RUN still wins.
 SOURCE_RUN_BASENAME="${V4845_SOURCE_RUN_BASENAME:-ocrap_v48_13_terra_proxy_4801}"
+REBUILT_SOURCE_BASENAME="${V4845_REBUILT_SOURCE_BASENAME:-ocrap_v48_45_source_rebuild_s7}"
 if [[ -z "${SOURCE_RUN:-}" ]]; then
-  if [[ -f "$BASE_OUT/$SOURCE_RUN_BASENAME/candidates/balanced/model_v48_trac_sr/best.pt" && \
-        -f "$BASE_OUT/$SOURCE_RUN_BASENAME/candidates/precision/model_v48_trac_sr/best.pt" ]]; then
+  # After historical checkpoint loss, prefer the explicitly reconstructed,
+  # hash-sealed common source. Historical v48.13 remains supported when present.
+  if [[ -f "$BASE_OUT/$REBUILT_SOURCE_BASENAME/SOURCE_REBUILD_COMPLETE.json" && \
+        -f "$BASE_OUT/$REBUILT_SOURCE_BASENAME/candidates/balanced/model_v48_trac_sr/best.pt" && \
+        -f "$BASE_OUT/$REBUILT_SOURCE_BASENAME/candidates/precision/model_v48_trac_sr/best.pt" ]]; then
+    SOURCE_RUN="$BASE_OUT/$REBUILT_SOURCE_BASENAME"
+  elif [[ -f "$BASE_OUT/$SOURCE_RUN_BASENAME/candidates/balanced/model_v48_trac_sr/best.pt" && \
+          -f "$BASE_OUT/$SOURCE_RUN_BASENAME/candidates/precision/model_v48_trac_sr/best.pt" ]]; then
     SOURCE_RUN="$BASE_OUT/$SOURCE_RUN_BASENAME"
+  elif [[ -f "$REPO/runs/$REBUILT_SOURCE_BASENAME/SOURCE_REBUILD_COMPLETE.json" && \
+          -f "$REPO/runs/$REBUILT_SOURCE_BASENAME/candidates/balanced/model_v48_trac_sr/best.pt" && \
+          -f "$REPO/runs/$REBUILT_SOURCE_BASENAME/candidates/precision/model_v48_trac_sr/best.pt" ]]; then
+    SOURCE_RUN="$REPO/runs/$REBUILT_SOURCE_BASENAME"
   elif [[ -f "$REPO/runs/$SOURCE_RUN_BASENAME/candidates/balanced/model_v48_trac_sr/best.pt" && \
           -f "$REPO/runs/$SOURCE_RUN_BASENAME/candidates/precision/model_v48_trac_sr/best.pt" ]]; then
     SOURCE_RUN="$REPO/runs/$SOURCE_RUN_BASENAME"
   else
-    # Keep the canonical BASE_OUT candidate so the dedicated preflight can
-    # publish an authoritative RC=30 with an exact missing-checkpoint path.
-    SOURCE_RUN="$BASE_OUT/$SOURCE_RUN_BASENAME"
+    # Keep a deterministic canonical path so the dedicated source preflight
+    # publishes an authoritative RC=30 instead of silently random-initializing.
+    SOURCE_RUN="$BASE_OUT/$REBUILT_SOURCE_BASENAME"
   fi
 fi
 SOURCE_RUN="$(python - "$SOURCE_RUN" <<'PY_SOURCE_RUN'
@@ -92,24 +103,24 @@ export SOWR_BATCH_SIZE="${SOWR_BATCH_SIZE:-72}"
 case "$ARM" in
   A)
     export OCRAP_ALGORITHM_VERSION="v48.45-SOWR-ablation-A"
-    export OCRAP_IMPLEMENTATION_VERSION="v48.45.1-A-v48.44D-unaltered-witness-reference-source-path-hotfix"
+    export OCRAP_IMPLEMENTATION_VERSION="v48.45.2-A-v48.44D-unaltered-witness-rebuilt-source-support"
     export V4838_FACTOR_ALGORITHM_FAMILY="v48.45-A-v48.44D-reference"
     ;;
   B)
     export OCRAP_ALGORITHM_VERSION="v48.45-SOWR-ablation-B"
-    export OCRAP_IMPLEMENTATION_VERSION="v48.45.1-B-shared-option-margin-witness-recalibration-source-path-hotfix"
+    export OCRAP_IMPLEMENTATION_VERSION="v48.45.2-B-shared-option-margin-witness-recalibration-rebuilt-source-support"
     export V4838_FACTOR_ALGORITHM_FAMILY="v48.45-B-margin-witness-recalibration"
     export V4845_SOWR_MARGIN_WITNESS=1
     ;;
   C)
     export OCRAP_ALGORITHM_VERSION="v48.45-SOWR-ablation-C"
-    export OCRAP_IMPLEMENTATION_VERSION="v48.45.1-C-observation-kernel-recalibration-source-path-hotfix"
-    export V4838_FACTOR_ALGORITHM_FAMILY="v48.45.1-C-observation-kernel-recalibration-source-path-hotfix"
+    export OCRAP_IMPLEMENTATION_VERSION="v48.45.2-C-observation-kernel-recalibration-rebuilt-source-support"
+    export V4838_FACTOR_ALGORITHM_FAMILY="v48.45-C-observation-kernel-recalibration"
     export V4845_SOWR_OBS_KERNEL=1
     ;;
   D)
     export OCRAP_ALGORITHM_VERSION="v48.45-SOWR"
-    export OCRAP_IMPLEMENTATION_VERSION="v48.45.1-D-shared-option-witness-recalibration-source-path-hotfix"
+    export OCRAP_IMPLEMENTATION_VERSION="v48.45.2-D-shared-option-witness-recalibration-rebuilt-source-support"
     export V4838_FACTOR_ALGORITHM_FAMILY="v48.45-D-full-sowr"
     export V4845_SOWR_MARGIN_WITNESS=1
     export V4845_SOWR_OBS_KERNEL=1

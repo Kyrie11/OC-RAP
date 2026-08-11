@@ -1,0 +1,94 @@
+{
+  "event": "v48_45_uploaded_failure_audit",
+  "created_unix": 1786416357.2039914,
+  "arms": {
+    "A": {
+      "archive": "ocrap_v48_45_sowr_ablation_A(1).zip",
+      "authoritative_exit_code": 30,
+      "pipeline_valid": false,
+      "certificate_executed": null,
+      "gate_evaluated": null,
+      "failure_stage": "source_checkpoint_contract",
+      "failure_raw_exit_code": 3,
+      "source_run_input": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_13_terra_proxy_4801",
+      "source_run_resolved": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_13_terra_proxy_4801",
+      "source_run_exists": false,
+      "checks": {
+        "balanced": {
+          "checkpoint": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_13_terra_proxy_4801/candidates/balanced/model_v48_trac_sr/best.pt",
+          "exists": false,
+          "readable": false,
+          "size_bytes": 0,
+          "nonempty": false
+        },
+        "precision": {
+          "checkpoint": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_13_terra_proxy_4801/candidates/precision/model_v48_trac_sr/best.pt",
+          "exists": false,
+          "readable": false,
+          "size_bytes": 0,
+          "nonempty": false
+        }
+      },
+      "test_roots_read": false
+    },
+    "B": {
+      "archive": "ocrap_v48_45_sowr_ablation_B(1).zip",
+      "authoritative_exit_code": 30,
+      "pipeline_valid": false,
+      "certificate_executed": null,
+      "gate_evaluated": null,
+      "failure_stage": "source_checkpoint_contract",
+      "failure_raw_exit_code": 3,
+      "source_run_input": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_13_terra_proxy_4801",
+      "source_run_resolved": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_13_terra_proxy_4801",
+      "source_run_exists": false,
+      "checks": {
+        "balanced": {
+          "checkpoint": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_13_terra_proxy_4801/candidates/balanced/model_v48_trac_sr/best.pt",
+          "exists": false,
+          "readable": false,
+          "size_bytes": 0,
+          "nonempty": false
+        },
+        "precision": {
+          "checkpoint": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_13_terra_proxy_4801/candidates/precision/model_v48_trac_sr/best.pt",
+          "exists": false,
+          "readable": false,
+          "size_bytes": 0,
+          "nonempty": false
+        }
+      },
+      "test_roots_read": false
+    },
+    "C": {
+      "archive": "ocrap_v48_45_sowr_ablation_C(1).zip",
+      "authoritative_exit_code": 30,
+      "pipeline_valid": false,
+      "certificate_executed": null,
+      "gate_evaluated": null,
+      "failure_stage": "source_checkpoint_contract",
+      "failure_raw_exit_code": 3,
+      "source_run_input": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_13_terra_proxy_4801",
+      "source_run_resolved": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_13_terra_proxy_4801",
+      "source_run_exists": false,
+      "checks": {
+        "balanced": {
+          "checkpoint": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_13_terra_proxy_4801/candidates/balanced/model_v48_trac_sr/best.pt",
+          "exists": false,
+          "readable": false,
+          "size_bytes": 0,
+          "nonempty": false
+        },
+        "precision": {
+          "checkpoint": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_13_terra_proxy_4801/candidates/precision/model_v48_trac_sr/best.pt",
+          "exists": false,
+          "readable": false,
+          "size_bytes": 0,
+          "nonempty": false
+        }
+      },
+      "test_roots_read": false
+    }
+  },
+  "conclusion": "all uploaded arms failed at source_checkpoint_contract before adaptation; historical source checkpoints are missing"
+}
