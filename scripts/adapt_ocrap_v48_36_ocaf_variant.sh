@@ -6,9 +6,11 @@ export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"
 
 FINAL_RUN="${RUN:?RUN is required}"
 SOURCE_CKPT="${INIT_CKPT:?INIT_CKPT is required}"
+ORIGINAL_SOURCE_CKPT="$SOURCE_CKPT"
 GROUP_INDEX="${GROUP_INDEX:?GROUP_INDEX is required}"
 FACTOR_RUN="$FINAL_RUN/factor_stage"
 IDENTITY_RUN="$FINAL_RUN/identity_stage"
+WITNESS_RUN="$FINAL_RUN/witness_stage"
 ENABLE_SUPPORT_RELIABILITY="${V4836_ENABLE_SUPPORT_RELIABILITY:-1}"
 IDENTITY_TRAIN_ALL="${V4836_IDENTITY_TRAIN_ALL:-1}"
 COUPLE_ADMISSION_PRIOR="${V4836_COUPLE_ADMISSION_PRIOR:-1}"
@@ -38,7 +40,7 @@ PY_STAGE_FAIL
 }
 trap on_variant_error ERR
 
-rm -rf "$IDENTITY_RUN" "$FINAL_RUN/model_v48_trac_sr" "$FINAL_RUN/calibration"
+rm -rf "$IDENTITY_RUN" "$WITNESS_RUN" "$FINAL_RUN/model_v48_trac_sr" "$FINAL_RUN/calibration"
 mkdir -p "$FINAL_RUN" "$IDENTITY_RUN"
 rm -f "$FINAL_RUN/VARIANT_STAGE_FAILED.json"
 
@@ -60,6 +62,26 @@ if [[ "$ENABLE_SUPPORT_RELIABILITY" != 1 ]]; then
   EVIDENCE_COMPONENT_RELIABILITY="1,1,1,1,1"
 fi
 export EVIDENCE_COMPONENT_RELIABILITY
+
+# v48.45 SOWR: optional, regime-agnostic recalibration of the paper-matched
+# recovery witness before any OCAF/ROCT factor adaptation.  The shared encoder,
+# root decoder, proposal policy, thresholds and gate remain unchanged.
+SOWR_MARGIN_WITNESS="${V4845_SOWR_MARGIN_WITNESS:-0}"
+SOWR_OBS_KERNEL="${V4845_SOWR_OBS_KERNEL:-0}"
+if [[ "$SOWR_MARGIN_WITNESS" == 1 || "$SOWR_OBS_KERNEL" == 1 ]]; then
+  CURRENT_STAGE="shared_option_witness_recalibration"
+  RUN="$WITNESS_RUN" INIT_CKPT="$ORIGINAL_SOURCE_CKPT" \
+  TRAIN_MIX="${TRAIN_MIX:?TRAIN_MIX is required}" VAL_MIX="${VAL_MIX:?VAL_MIX is required}" \
+  GROUP_INDEX="$GROUP_INDEX" VAL_GROUP_INDEX="${VAL_GROUP_INDEX:-}" \
+  TRAIN_GPU="${TRAIN_GPU:-0}" VARIANT="${VARIANT:?VARIANT is required}" \
+  V4845_SOWR_MARGIN_WITNESS="$SOWR_MARGIN_WITNESS" \
+  V4845_SOWR_OBS_KERNEL="$SOWR_OBS_KERNEL" \
+  SOWR_EPOCHS="${SOWR_EPOCHS:-8}" SOWR_PATIENCE="${SOWR_PATIENCE:-3}" \
+  SOWR_LR="${SOWR_LR:-0.00005}" SOWR_BATCH_SIZE="${SOWR_BATCH_SIZE:-72}" \
+    bash scripts/adapt_ocrap_v48_45_sowr_stage.sh
+  SOURCE_CKPT="$WITNESS_RUN/model_v48_sowr/best.pt"
+  [[ -f "$SOURCE_CKPT" ]] || { echo "missing SOWR checkpoint $SOURCE_CKPT" >&2; exit 30; }
+fi
 
 factor_cache_contract_args=(
   --source-checkpoint "$SOURCE_CKPT"
@@ -99,6 +121,10 @@ factor_cache_contract_args=(
   --setting "roct_beta=${EVIDENCE_ROCT_BETA:-0.2}"
   --setting "roct_top_m=${EVIDENCE_ROCT_TOP_M:-8}"
   --setting "roct_option_temperature=${EVIDENCE_ROCT_OPTION_TEMPERATURE:-0.35}"
+  --setting "sowr_margin_witness=${V4845_SOWR_MARGIN_WITNESS:-0}"
+  --setting "sowr_obs_kernel=${V4845_SOWR_OBS_KERNEL:-0}"
+  --setting "sowr_epochs=${SOWR_EPOCHS:-8}"
+  --setting "sowr_learning_rate=${SOWR_LR:-0.00005}"
   --setting "consensus_prior_scale=${EVIDENCE_CONSENSUS_PRIOR_SCALE:-0.50}"
   --setting "admission_prior_mode=${EVIDENCE_ADMISSION_PRIOR_MODE:-frontier_capped_slack}"
   --setting "tournament_hidden=${SET_TOURNAMENT_HIDDEN:-48}"

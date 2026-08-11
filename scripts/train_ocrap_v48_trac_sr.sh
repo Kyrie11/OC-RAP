@@ -50,7 +50,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.freeze_param_prefixes="${FREEZE_PARAM_PREFIXES:-}" \
   --set training.trainable_param_prefixes="${TRAINABLE_PARAM_PREFIXES:-}" \
   --set training.strict_init_prefixes="${STRICT_INIT_PREFIXES:-}" \
-  --set training.direct_only_fast_path=true \
+  --set training.direct_only_fast_path="${DIRECT_ONLY_FAST_PATH:-true}" \
   --set training.group_index_path="$GROUP_INDEX" \
   --set training.validation_group_index_path="${VAL_GROUP_INDEX:-}" \
   --set training.epochs="${EPOCHS:-12}" --set training.early_stop_patience="${PATIENCE:-3}" \
@@ -169,17 +169,17 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set model.direct_recovery_evidence_reserve_factor_alignment="${EVIDENCE_RESERVE_FACTOR_ALIGNMENT:-false}" \
   --set model.direct_recovery_evidence_frontier="${EVIDENCE_FRONTIER:-false}" \
   --set model.direct_recovery_evidence_component_prior_logit="${EVIDENCE_COMPONENT_PRIOR_LOGIT:--2.0}" \
-  --set loss_weights.dep=0 --set loss_weights.orc=0 --set loss_weights.assign=0 \
-  --set loss_weights.sig=0 --set loss_weights.margin=0 --set loss_weights.obs=0 \
-  --set loss_weights.anti_oracle=0 --set loss_weights.artifact_gap=0 \
-  --set loss_weights.admission=0 --set loss_weights.utility=0 \
-  --set loss_weights.option_q=0 --set loss_weights.option_admission=0 \
-  --set loss_weights.option_success=0 --set loss_weights.option_success_bce=0 \
-  --set loss_weights.option_best=0 --set loss_weights.group_ce=0 \
-  --set loss_weights.group_distill=0 --set loss_weights.nominal_switch=0 \
-  --set loss_weights.safe_nominal=0 --set loss_weights.protective_macro=0 \
-  --set loss_weights.macro_drs=0 --set loss_weights.teacher_pcd_direct=0 \
-  --set loss_weights.recovery_advantage=0 --set loss_weights.direct_router_balance=0 \
+  --set loss_weights.dep="${LOSS_DEP:-0}" --set loss_weights.orc="${LOSS_ORC:-0}" --set loss_weights.assign="${LOSS_ASSIGN:-0}" \
+  --set loss_weights.sig="${LOSS_SIG:-0}" --set loss_weights.margin="${LOSS_MARGIN:-0}" --set loss_weights.obs="${LOSS_OBS:-0}" \
+  --set loss_weights.anti_oracle="${LOSS_ANTI_ORACLE:-0}" --set loss_weights.artifact_gap="${LOSS_ARTIFACT_GAP:-0}" \
+  --set loss_weights.admission="${LOSS_ADMISSION:-0}" --set loss_weights.utility="${LOSS_UTILITY:-0}" \
+  --set loss_weights.option_q="${LOSS_OPTION_Q:-0}" --set loss_weights.option_admission="${LOSS_OPTION_ADMISSION:-0}" \
+  --set loss_weights.option_success="${LOSS_OPTION_SUCCESS:-0}" --set loss_weights.option_success_bce="${LOSS_OPTION_SUCCESS_BCE:-0}" \
+  --set loss_weights.option_best="${LOSS_OPTION_BEST:-0}" --set loss_weights.group_ce="${LOSS_GROUP_CE:-0}" \
+  --set loss_weights.group_distill="${LOSS_GROUP_DISTILL:-0}" --set loss_weights.nominal_switch="${LOSS_NOMINAL_SWITCH:-0}" \
+  --set loss_weights.safe_nominal="${LOSS_SAFE_NOMINAL:-0}" --set loss_weights.protective_macro="${LOSS_PROTECTIVE_MACRO:-0}" \
+  --set loss_weights.macro_drs="${LOSS_MACRO_DRS:-0}" --set loss_weights.teacher_pcd_direct="${LOSS_TEACHER_PCD_DIRECT:-0}" \
+  --set loss_weights.recovery_advantage="${LOSS_RECOVERY_ADVANTAGE:-0}" --set loss_weights.direct_router_balance="${LOSS_DIRECT_ROUTER_BALANCE:-0}" \
   --set loss_weights.direct_recovery_value="${DIRECT_VALUE_WEIGHT:-10.0}" \
   --set training.direct_value_macro_ids=2,3,5,6,7 --set training.direct_value_bucket_ids=1,2 \
   --set training.direct_value_temperature="${DIRECT_TEMPERATURE:-0.10}" \

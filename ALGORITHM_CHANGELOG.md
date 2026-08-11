@@ -1,3 +1,138 @@
+## v48.45 — SOWR / SHARED-OPTION WITNESS RECALIBRATION (2026-08-10)
+
+### v48.44 ROCT final gate attribution
+
+All uploaded v48.44 A/B/C/D runs are authoritative Natural-gate algorithm results:
+`authoritative_exit_code=20`, `pipeline_valid=true`, certificate executed, gate evaluated,
+`gate_passed_false=true`, and no pipeline/calibration-failure marker. They are therefore
+valid for algorithm attribution and must not be treated as engineering failures.
+
+**B (deployability-side ROCT) is rejected as a Near frontier rotation.** Relative to A,
+Near certificate deployability safe-positive false veto changes only 16/18 -> 15/18,
+harmful-vs-safe-positive AUC 0.416 -> 0.418, while harmful false-safe rises
+0.162 -> 0.301. Certificate recall remains 0.111. This misses the pre-registered
+strong signal (roughly <=12/18 false veto and AUC >=0.56 without contamination).
+Do not absorb B as evidence that the Near deployability bottleneck is solved.
+
+**C (benefit-side ROCT) is rejected.** Contact development still has exactly **0/37**
+safe-positive proposal rows with `pred_adv >= 0`; certificate recall falls from 0.10 to
+0.05; candidate safe-positive AUC 0.544 -> 0.523 and proposal safe-positive AUC
+0.555 -> 0.543. It therefore does not break the physical-sign collapse and must not
+be absorbed.
+
+**D/Main (dual ROCT) is not accepted as a successful shared-rule solution.** Precision
+development gets one Near safe-positive but zero Contact safe-positive; Contact remains
+0/37 on `pred_adv >= 0`. Balanced development does select one Near and two Contact
+safe-positives under one shared rule, but harmful-selected UCB90 is 0.282 (Near) and
+0.387 (Contact), both above the 0.22 fit budget, while precision LCBs are far below 0.50.
+The two-sided positive-capture condition is therefore not achieved without harmful
+contamination.
+
+D nevertheless provides one useful *diagnostic* signal. It reduces certificate
+deployability harmful false-safe to 0.076 (Near) / 0.068 (Contact) and improves Contact
+deployability AUC to 0.651, while its Near development deployability AUC reaches 0.764.
+But Near certificate AUC collapses to 0.487 and false-veto returns from 9/17 development
+to 16/18 certificate. The useful structure is not stable across splits.
+
+### Bottleneck re-diagnosis
+
+The top-5 proposal oracle remains feasible in both Near and Contact, so candidate support
+is not the first bottleneck. More importantly, the current direct-evidence adaptation
+freezes the paper-matched `root_logit_head`, `margin_head`, and `obs_embed_head`; only
+OCAF/ROCT-side evidence corrections are adapted. Yet source training already contains
+teacher supervision for root assignment, signed recovery margins, observation
+compatibility, deployability/oracle scores, option-resolved shared-recovery `q`, shared
+option admission/success, and best shared option.
+
+The D split gap shows why adding another residual or increasing ROCT width/scale is the
+wrong next move: development can fit a useful deployability ordering, but the frozen
+recovery witness does not carry that ordering stably to certificate. This is consistent
+with stale/miscalibrated recovery-option margins, root probabilities, or observation
+compatibility rather than a lack of downstream ranking capacity.
+
+### v48.45 algorithm: SOWR
+
+**SOWR = Shared-Option Witness Recalibration.** Before the existing factor/OCAF/ROCT
+adaptation, insert a short, low-learning-rate, regime-agnostic witness stage that uses
+only the existing training/validation teacher contract. It does **not** add a
+Safe/Near/Contact identifier, regime router, regime-specific threshold, or regime-specific
+policy.
+
+The shared encoder and root decoder stay frozen. SOWR only permits the following
+paper-matched semantic heads to move:
+
+- margin-witness factor: `root_logit_head,margin_head`;
+- observation factor: `obs_embed_head`.
+
+The stage uses full OC-MERO forward semantics plus explicit root-assignment and
+observation-equivalence losses. The explicit losses are required because lower-tail /
+top-m OC-MERO aggregation alone does not guarantee dense gradients to root/observation
+heads. Default SOWR settings are 8 epochs, patience 3, LR 5e-5, batch 72. It uses
+train/validation only; held-out test roots remain unread. After SOWR, all witness heads
+are frozen again and the **same v48.44-D dual ROCT, top-k=5, shared continuous rule and
+risk budgets** are run unchanged.
+
+### v48.45 strict 2x2
+
+- **A:** v48.44-D dual-ROCT reference, no witness recalibration.
+- **B:** A + root-probability/recovery-margin witness recalibration.
+- **C:** A + observation-kernel recalibration.
+- **D/Main:** A + both witness factors.
+
+This 2x2 answers whether the frozen recovery witness is the current bottleneck without
+confounding the experiment with another selector, larger ROCT scale, new rank loss, or
+regime routing.
+
+### Pre-registered go/no-go interpretation
+
+**B / Near:** require a material certificate deployability frontier rotation, not only
+lower training loss. Strong signal: safe-positive false veto <=12/18, deployability
+AUC >=0.56, and no increase in harmful false-safe / harmful-selected UCB. The witness
+stage should also reduce validation margin/option-q/best-option loss from its initial
+checkpoint.
+
+**C / Contact:** first requirement remains breaking the physical-sign collapse:
+Contact development safe-positive `pred_adv >= 0` must become non-zero (strong signal
+about >=25%), with candidate/proposal safe-positive AUC improving by roughly 0.05 and
+recall moving toward 0.20 without a risk rebound. Lower observation BCE alone is not a
+go decision.
+
+**D/Main:** the same shared rule must have `positive_selected > 0` in both Near and
+Contact development, retain B/C structural signals, and satisfy the existing harmful
+budgets rather than relaxing them. A key generalization signal is that the large
+Near development->certificate deployability AUC/FV gap should shrink materially.
+
+If SOWR fails, **do not** increase ROCT scale/width, loosen harmful budgets, densify the
+threshold grid, expand top-k, oversample positives, add generic pairwise/listwise rank
+stacks, re-add generic harm residuals, or introduce regime-specific routing. The next
+algorithmic audit should move upstream to recovery-option coverage/taxonomy, continuous
+option parameter coverage, margin-teacher calibration and option-resolved witness
+identifiability.
+
+### Historical modifications explicitly not repeated
+
+v48.45 intentionally avoids previously unsuccessful families: threshold densification,
+top-k expansion, positive oversampling, generic rank stacking, generic harm residuals,
+unbounded residuals/factors, full factorization, v48.42 partial-pooling/rank-skip,
+v48.43 POET free alias transport, ROCT width/scale increases, broad encoder fine-tuning,
+and regime-conditioned policy/threshold routing. The retained downstream stack remains
+candidate-relative physical OCAF + dual-task bridge + bounded component veto/support
+reliability + deterministic joint reserve + shared rule.
+
+### Engineering changes and validation
+
+- `scripts/train_ocrap_v48_trac_sr.sh`: source loss weights and direct-only fast path are
+  now environment-overridable while legacy defaults remain exactly unchanged.
+- New `scripts/adapt_ocrap_v48_45_sowr_stage.sh` implements the head-only witness stage.
+- `scripts/adapt_ocrap_v48_36_ocaf_variant.sh` optionally inserts SOWR and binds the
+  resulting checkpoint hash into the factor-cache contract.
+- New A/B/C/D runners and `tools/compare_v48_45_sowr_2x2.py` report SOWR initial/best
+  validation diagnostics plus development/certificate metrics without test-root reads.
+- Focused regression audit after implementation: **95 passed / 1 skipped** across the
+  retained v48.36-v48.45 contracts; v48.44+v48.45 targeted matrix **14 passed**.
+- `compileall` PASS; **98/98** shell scripts pass `bash -n`; new v48.45 runtime scripts
+  pass a static no-regime-routing and no-test-boundary check.
+
 ## v48.44 — ROCT / RECOVERY-OPTION COMPATIBILITY TRANSPORT (2026-08-10)
 
 ### v48.43 POET final 2x2 attribution
