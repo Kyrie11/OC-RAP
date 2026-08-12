@@ -113,7 +113,7 @@ def test_v48455_launcher_prepares_one_shared_protocol_before_arms() -> None:
     dedicated = (ROOT / "scripts" / "run_v48_36_ocaf_dedicated.sh").read_text()
     assert "protocol_seal_sha256" in dedicated
     assert "V4845_PROTOCOL_SEAL_SHA256" in dedicated
-    assert "v48.45.5-A-" in arm and "v48.45.5-D-" in arm
+    assert (("v48.45.5-A-" in arm and "v48.45.5-D-" in arm) or ("v48.45.6-A-" in arm and "v48.45.6-D-" in arm))
 
 
 def test_v48455_operator_commands_prepare_protocol_before_deleting_or_launching_arms() -> None:

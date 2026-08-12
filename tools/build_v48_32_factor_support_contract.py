@@ -18,9 +18,10 @@ from typing import Any
 
 import numpy as np
 
-from ocrap.data.serialization import load_npz
+from ocrap.data.serialization import load_npz_selected
 
 COMPONENTS = ("drs", "deployability", "gap", "hard_rule", "harm_proxy")
+SUPPORT_SAMPLE_KEYS = frozenset({"prefix_states", "feasible", "hard_violation"})
 
 
 def _sigmoid(x: float) -> float:
@@ -30,7 +31,7 @@ def _sigmoid(x: float) -> float:
 
 def _prefix_xy(path: Path) -> np.ndarray | None:
     try:
-        d = load_npz(path)
+        d = load_npz_selected(path, SUPPORT_SAMPLE_KEYS)
         return np.asarray(d.get("prefix_states"), dtype=np.float64)[:, :2]
     except Exception:
         return None
@@ -125,7 +126,7 @@ def main() -> int:
             candidate_prefix = None
             if path.is_file():
                 try:
-                    d = load_npz(path)
+                    d = load_npz_selected(path, SUPPORT_SAMPLE_KEYS)
                     feasible = bool(float(np.asarray(d.get("feasible", 1.0)).item()) > 0.5)
                     candidate_hard = float(np.asarray(d.get("hard_violation", candidate_hard)).item())
                     candidate_prefix = np.asarray(d.get("prefix_states"), dtype=np.float64)[:, :2]

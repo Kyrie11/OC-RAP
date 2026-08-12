@@ -76,6 +76,21 @@ def load_npz(path: str | Path) -> dict[str, Any]:
         return {k: z[k] for k in z.files}
 
 
+def load_npz_selected(path: str | Path, keys: set[str] | frozenset[str] | tuple[str, ...] | list[str]) -> dict[str, Any]:
+    """Load only selected members from an NPZ archive.
+
+    ``np.savez_compressed`` stores every array as an independent ZIP member.  The
+    historical training/calibration path eagerly materialized *all* members even
+    though the model consumes only a stable subset.  Reading just the requested
+    members is numerically identical for those keys and avoids decompression and
+    allocation of unused rollout/debug tensors.  Missing optional keys are left
+    absent so existing ``dict.get`` fallbacks retain their exact semantics.
+    """
+    wanted = frozenset(str(k) for k in keys)
+    with np.load(path, allow_pickle=True) as z:
+        return {k: z[k] for k in z.files if k in wanted}
+
+
 def scalar_str(x: Any) -> str:
     arr = np.asarray(x)
     if arr.shape == ():

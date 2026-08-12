@@ -2578,8 +2578,22 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         print({"event": "validation_fallback_warning", "reason": "no explicit validation split; using first 10pct of training paths"}, flush=True)
         val_paths = train_paths[: max(1, min(len(train_paths), len(train_paths) // 10 or 1))]
 
+    dataset_materialize_t0 = perf_counter()
     train_ds = OCRAPSampleDataset(train_paths, cfg)
     val_ds = OCRAPSampleDataset(val_paths, cfg)
+    dataset_materialize_seconds = float(perf_counter() - dataset_materialize_t0)
+    def _cached_bytes(ds):
+        cache = getattr(ds, "_item_cache", None)
+        if cache is None:
+            return 0
+        return int(sum(t.numel() * t.element_size() for item in cache for t in item.values()))
+    print({
+        "event": "dataset_materialization_done",
+        "cache_samples_in_memory": bool(getattr(train_ds, "cache_samples_in_memory", False)),
+        "seconds": round(dataset_materialize_seconds, 3),
+        "train_cached_bytes": _cached_bytes(train_ds),
+        "val_cached_bytes": _cached_bytes(val_ds),
+    }, flush=True)
     first = train_ds[0]
     num_roots = int(train_ds.num_roots)
     num_options = int(train_ds.num_options)

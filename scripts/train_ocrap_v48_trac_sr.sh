@@ -78,7 +78,8 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.cudnn_benchmark="${CUDNN_BENCHMARK:-true}" --set training.pin_memory=true \
   --set training.deterministic_algorithms="${DETERMINISTIC_ALGORITHMS:-false}" \
   --set training.num_workers="${NUM_WORKERS:-6}" --set training.persistent_workers=true \
-  --set training.prefetch_factor="${PREFETCH_FACTOR:-2}" --set training.progress=true \
+  --set training.prefetch_factor="${PREFETCH_FACTOR:-2}" --set training.cache_samples_in_memory="${CACHE_SAMPLES_IN_MEMORY:-false}" \
+  --set training.progress=true \
   --set training.save_every_epoch=true --set training.best_metric="${BEST_METRIC:-direct_policy_risk_fold_worst}" \
   --set training.best_metric_mode=min --set training.best_metric_min_delta="${BEST_METRIC_MIN_DELTA:-0.000001}" \
   --set training.evaluate_initial_checkpoint="${EVALUATE_INITIAL_CHECKPOINT:-false}" \

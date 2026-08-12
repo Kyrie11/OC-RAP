@@ -18,13 +18,13 @@ import numpy as np
 
 from ocrap.algorithms.evidence_targets import ComponentVetoTolerances, component_veto_margin_numpy
 from ocrap.algorithms.ocmero import oc_mero
-from ocrap.data.serialization import load_npz
+from ocrap.data.serialization import load_npz_selected
 from ocrap.evaluation.metrics import (
     best_shared_option_index,
     deployable_recovery_success,
     post_contact_deployability_score,
 )
-from ocrap.models.data import bucket_id_for_path, iter_sample_paths_many
+from ocrap.models.data import MODEL_SAMPLE_NPZ_KEYS, bucket_id_for_path, iter_sample_paths_many
 
 
 def _scalar(d: dict[str, Any], key: str, default: Any) -> Any:
@@ -96,7 +96,7 @@ def main() -> int:
     nominal_rows: dict[tuple[int, str, int], dict[str, Any]] = {}
 
     for i, path in enumerate(paths, 1):
-        d = load_npz(path)
+        d = load_npz_selected(path, MODEL_SAMPLE_NPZ_KEYS)
         scene = str(_scalar(d, "scene_id", path.stem))
         time_index = int(_scalar(d, "time_index", 0))
         bucket = int(bucket_id_for_path(path))

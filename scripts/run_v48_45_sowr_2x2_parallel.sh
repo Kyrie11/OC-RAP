@@ -6,7 +6,9 @@ BASE_OUT="${BASE_OUT:-runs}"
 GPU0="${GPU0:-0}"; GPU1="${GPU1:-1}"
 export OMP_NUM_THREADS="${ABLATION_OMP_NUM_THREADS:-1}"
 export MKL_NUM_THREADS="$OMP_NUM_THREADS"; export OPENBLAS_NUM_THREADS="$OMP_NUM_THREADS"
-export NUM_WORKERS="${ABLATION_NUM_WORKERS:-1}"; export PREFETCH_FACTOR="${ABLATION_PREFETCH_FACTOR:-2}"
+export NUM_WORKERS="${ABLATION_NUM_WORKERS:-3}"; export PREFETCH_FACTOR="${ABLATION_PREFETCH_FACTOR:-3}"
+# Exact tensor cache: preprocessing only; no sample order/loss/model change.
+export CACHE_SAMPLES_IN_MEMORY="${ABLATION_CACHE_SAMPLES_IN_MEMORY:-true}"
 mkdir -p "$BASE_OUT"
 
 # One shared deterministic calibration protocol is prepared/sealed before any arm
@@ -56,6 +58,50 @@ run_arm() {
   BASE_OUT="$BASE_OUT" GPU0="$GPU0" GPU1="$GPU1" \
     bash scripts/run_v48_45_sowr_ablation_arm.sh "$arm" >"$log" 2>&1
 }
+
+# Engineering-resume fast path.  A pipeline-valid RC=0/20 arm is already an
+# authoritative algorithm result.  Reuse it only when its protocol seal and
+# source checkpoint bytes still match the current shared inputs.  This avoids
+# spending ~2 hours rerunning a valid reference arm after another arm had an
+# engineering-only failure.  Set V48456_REUSE_AUTHORITATIVE_ARMS=0 for a final
+# clean rerun under one exact implementation checkout.
+reusable_arm_rc() {
+  local arm="$1" out
+  [[ "${V48456_REUSE_AUTHORITATIVE_ARMS:-1}" == 1 ]] || return 1
+  [[ -n "${SOURCE_RUN:-}" ]] || return 1
+  out="$(arm_output "$arm")"
+  python - "$out" "$PROTOCOL_ROOT/V48_45_PROTOCOL_SEAL.json" "$SOURCE_RUN" <<'PY_REUSE'
+import hashlib,json,pathlib,sys
+run=pathlib.Path(sys.argv[1]); seal=pathlib.Path(sys.argv[2]); source_run=pathlib.Path(sys.argv[3])
+try:
+    status=json.loads((run/'AUTHORITATIVE_RUN_STATUS.json').read_text())
+    complete=json.loads((run/'V48_36_COMPLETE.json').read_text())
+    attempt=json.loads((run/'ATTEMPT_STARTED.json').read_text())
+    source=json.loads((run/'SOURCE_CHECKPOINT_CONTRACT.json').read_text())
+except Exception:
+    raise SystemExit(1)
+rc=status.get('authoritative_exit_code')
+if rc not in (0,20) or status.get('pipeline_valid') is not True:
+    raise SystemExit(1)
+if complete.get('pipeline_valid') is not True or complete.get('pipeline_exit_code') != rc:
+    raise SystemExit(1)
+if status.get('test_roots_read') is True or complete.get('test_roots_read') is True or attempt.get('test_roots_read') is True:
+    raise SystemExit(1)
+try:
+    seal_sha=hashlib.sha256(seal.read_bytes()).hexdigest()
+except Exception:
+    raise SystemExit(1)
+if attempt.get('protocol_seal_sha256') != seal_sha:
+    raise SystemExit(1)
+checks=source.get('checks') or {}
+for variant in ('balanced','precision'):
+    recorded=(checks.get(variant) or {}).get('sha256')
+    ckpt=source_run/'candidates'/variant/'model_v48_trac_sr'/'best.pt'
+    if not recorded or not ckpt.is_file() or hashlib.sha256(ckpt.read_bytes()).hexdigest()!=recorded:
+        raise SystemExit(1)
+print(int(rc))
+PY_REUSE
+}
 engineering_failed=0
 gate_failed=0
 pids=(); names=()
@@ -85,6 +131,14 @@ wait_arm() {
   esac
 }
 for arm in "${arms[@]}"; do
+  if reused_rc="$(reusable_arm_rc "$arm")"; then
+    out="$(arm_output "$arm")"
+    mkdir -p "$out/logs"
+    printf '%s\n' "$reused_rc" >"$out/logs/v48_45_launcher.rc"
+    echo "arm $arm reused authoritative result: RC=$reused_rc (protocol/source hashes unchanged)"
+    [[ "$reused_rc" == 20 ]] && gate_failed=1
+    continue
+  fi
   while (( ${#pids[@]} >= MAX_PARALLEL_ARMS )); do
     pid="${pids[0]}"; name="${names[0]}"
     wait_arm "$pid" "$name"

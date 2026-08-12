@@ -1,3 +1,60 @@
+## v48.45.6 — SOWR STAGE-ISOLATION + SOURCE-ARCHITECTURE + EXACT-I/O HOTFIX (2026-08-12)
+
+**类别：工程/执行性能修复；SOWR、dual-ROCT、shared rule、risk/gate 算法语义不变。**
+
+### Uploaded v48.45.5 evidence
+
+- Arm A is **not** a pipeline failure. It completed certificate and gate with `pipeline_valid=true`, authoritative `RC=20`; it is a valid negative algorithm result.
+- Arms B/C/D(Main) all terminate before SOWR training with normalized `RC=30`, both Balanced and Precision failing in `shared_option_witness_recalibration` with the same constructor exception: `ValueError: ROCT requires component-head physical evidence`.
+- The dedicated-calibration protocol introduced in v48.45.5 is valid in all four arms. The shared protocol seal is identical and no test root was read.
+- Source checkpoint hashes are valid and identical across arms: Balanced `070218c66e506d66f25a12bf53b4127581992d75481bbb635d7ea658f4cfd352`, Precision `8f7528b76ce4b2424c5f153fe3109844de27a08a976a067b1292baee393f768d`.
+
+### Root cause 1 — downstream ROCT environment leaked into witness-only SOWR
+
+`run_v48_45_sowr_ablation_arm.sh` exports downstream v48.44-D `EVIDENCE_ROCT_BENEFIT=true` and `EVIDENCE_ROCT_DEPLOYABILITY=true`. B/C/D execute the optional SOWR stage before downstream factor adaptation. v48.45.5 called the generic trainer without stage-local overrides, while the generic trainer defaults `EVIDENCE_COMPONENT_HEADS=false`. The witness model therefore received `ROCT=true && component_heads=false` and correctly failed its constructor guard. A has no SOWR stage, so it does not hit this leak.
+
+The repair does **not** remove the ROCT guard and does **not** fabricate reliability for the observed constant `hard_rule`/`harm_proxy` components. During SOWR only, all downstream OCAF/ROCT/component-evidence flags are explicitly disabled. After SOWR, downstream factor adaptation still runs the original dual-ROCT configuration with component heads enabled.
+
+### Root cause 2 — hidden source-architecture drift after fixing root cause 1
+
+The rebuilt v48.45 source uses a fixed architecture (`preference_head=false`, set tournament enabled 48/4/0.05 with replacement, `delta_mode=ordinal_evidence`, delta hidden 48/dropout .02, regime experts/policy features enabled). Generic trainer defaults differ materially. v48.45.5 SOWR did not pin the source architecture, so a simple ROCT-only fix could have produced partial `strict=False` checkpoint loads and silently replaced frozen direct-policy layers.
+
+v48.45.6 therefore pins the exact rebuilt-source architecture in the SOWR subprocess and adds fail-closed pre/post contracts:
+
+- `check_v48_45_sowr_source_architecture.py` validates immutable source metadata and required state prefixes before training.
+- `check_v48_45_sowr_stage_isolation.py` verifies architecture metadata preservation, key-set preservation outside the allowed witness prefixes, exact trainable-prefix declaration, no downstream evidence flags in the SOWR checkpoint, and no parameter change outside the intended B/C/D witness heads. Epoch-zero/identity is allowed because “no beneficial update” is a legitimate algorithm outcome.
+
+### Execution-equivalent I/O acceleration
+
+Uploaded valid Arm A took about **7683.7 s = 2.13 h** end-to-end. The initial contracts/index phase was about 3.5 min, factor adaptation about 85 min, and certificate/calibration about 34–38 min. Both A30 jobs show a synchronized epoch-14 stall (`~1188 s` Balanced, `~1203 s` Precision) while ordinary epochs are roughly 140–267 s, consistent with shared compressed-NPZ/storage/CPU data-pipeline contention rather than a single-GPU compute failure.
+
+v48.45.6 adds only execution-equivalent fast paths:
+
+1. NPZ member-selective loading: model/index/calibration readers materialize only fields actually consumed by the computation.
+2. Optional `training.cache_samples_in_memory`: each training process decodes the final flat feature + recovery-label CPU tensors once and reuses them for all epochs; raw BEV/map/debug arrays are not cached.
+3. v48.45 launcher defaults to `ABLATION_CACHE_SAMPLES_IN_MEMORY=true`, `ABLATION_NUM_WORKERS=3`, `ABLATION_PREFETCH_FACTOR=3`; batch size, epochs, sampler, loss, LR, seed, top-k, ROCT parameters and gate are unchanged.
+4. `dataset_materialization_done` logs cache time and byte count so the next real GPU run can quantify the improvement.
+5. Certificate/support-index paths also use selective NPZ loading. Setwise candidate scoring semantics are unchanged; no cross-scene batching was introduced.
+6. Keep `MAX_PARALLEL_ARMS=1`: every arm already runs Balanced on GPU0 and Precision on GPU1. Arm-level concurrency >1 puts multiple training processes on each GPU and reintroduces I/O/GPU contention.
+
+### Resume and attribution safety
+
+- `prepare_v48_45_6_resume.py` can preserve an existing authoritative RC=0/20 arm only when its protocol seal and current source checkpoint SHA256 match. Pipeline-invalid RC=30 arms are deleted for a clean retry.
+- Fast engineering recovery can therefore keep the uploaded valid A and rerun only B/C/D. For paper-quality final 2x2 attribution, rerun all four from the same v48.45.6 checkout (`FORCE_RERUN_VALID_ARMS=1`).
+- No Safe/Near/Contact identifier, router, policy, threshold or risk budget was added. `test_roots_read=false` remains a hard contract.
+
+### Local validation
+
+- v48.45.6 new tests: **7/7 passed**.
+- v48.44 + v48.45 focused regression: **43/43 passed**.
+- v48.40–v48.45 regression: **74/74 passed** (warnings are existing PyTorch nested-tensor warnings).
+- v48.36 stage/terminal/OCAF regression: **32 passed / 1 skipped**.
+- v48.37–v48.39 regression: **18/18 passed**.
+- `python -m compileall -q src tools tests`: PASS.
+- **100/100** shell scripts pass `bash -n`; operator command passes `bash -n`.
+- repository-wide same-`local` nounset RHS audit: **0 findings**.
+- The delivery environment has no user WOMD files or A30 GPUs, so no new real training/certificate result is claimed.
+
 ## v48.45.5 — DEDICATED CALIBRATION PROTOCOL BOOTSTRAP HOTFIX (2026-08-12)
 
 **Category: engineering-only. The v48.45 SOWR algorithm, A/B/C/D factors, shared source,

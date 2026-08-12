@@ -12,7 +12,7 @@ import torch
 from torch.utils.data import Dataset
 
 from ocrap.data.build.diagnose import iter_sample_paths
-from ocrap.data.serialization import load_npz
+from ocrap.data.serialization import load_npz_selected
 
 
 RECOVERY_MODE_VOCAB = [
@@ -29,6 +29,27 @@ RECOVERY_MODE_TO_ID = {name: i for i, name in enumerate(RECOVERY_MODE_VOCAB)}
 BUCKET_TO_ID = {"safe": 0, "near_contact": 1, "contact": 2, "other": 3}
 OPTION_PARAM_DIM = 3
 OPTION_FEATURE_DIM = len(RECOVERY_MODE_VOCAB) + OPTION_PARAM_DIM + 2
+
+# v48.45.6 engineering-only I/O fast path.  These are exactly the NPZ members
+# consumed by OCRAPSampleDataset/sample_to_feature/fix_sample_geometry and the
+# training labels returned by __getitem__.  Keeping this list explicit makes the
+# optimization auditable: it changes no tensor value, sample order, loss, or model
+# input; it only avoids decompressing unrelated archive members.
+MODEL_SAMPLE_NPZ_KEYS: frozenset[str] = frozenset({
+    "agent_history", "agent_valid", "ego_state", "bev_occ", "route",
+    "map_polylines", "dynamic_map", "prefix_param", "prefix_states",
+    "prefix_controls", "prefix_macro_type_id", "prefix_macro_id",
+    "utility", "hard_violation", "harm_proxy", "feasible",
+    "is_nominal", "scene_id", "time_index", "candidate_index",
+    "root_probs", "m_star", "c_star", "y_obs", "root_valid",
+    "option_valid", "root_signature", "root_future_signature",
+    "recovery_params", "recovery_modes", "r_dep_star", "r_orc_star",
+    "i_art_star",
+})
+
+NOMINAL_DEVIATION_NPZ_KEYS: frozenset[str] = frozenset({
+    "scene_id", "time_index", "is_nominal", "prefix_states",
+})
 
 
 # v48.16 ANCHOR: protocol-role aliases. Dedicated calibration intentionally
@@ -570,7 +591,7 @@ def _nominal_deviation_by_path(paths: list[Path]) -> list[float]:
     records: list[tuple[tuple[int, str, int], bool, np.ndarray | None]] = []
     grouped: dict[tuple[int, str, int], list[int]] = {}
     for index, path in enumerate(paths):
-        d = load_npz(path)
+        d = load_npz_selected(path, NOMINAL_DEVIATION_NPZ_KEYS)
         scene = str(np.asarray(d.get("scene_id", path.stem)).item())
         time_index = int(np.asarray(d.get("time_index", 0)).item())
         key = (bucket_id_for_path(path), scene, time_index)
@@ -609,7 +630,7 @@ class OCRAPSampleDataset(Dataset):
         self.cfg = cfg or {}
         if not self.paths:
             raise ValueError("OCRAPSampleDataset requires at least one sample path")
-        first = load_npz(self.paths[0])
+        first = load_npz_selected(self.paths[0], MODEL_SAMPLE_NPZ_KEYS)
         first_K, first_L, first_sig, first_fsig = _geometry_from_sample(first)
         # Default to the paper/build geometry in config, but never shrink below
         # the first sample.  This makes the README's mixed proof/natural/stress
@@ -625,12 +646,21 @@ class OCRAPSampleDataset(Dataset):
             if bool(training_cfg.get("direct_policy_metric_exact_eligibility", False))
             else [0.0] * len(self.paths)
         )
+        # v48.45.6 engineering-only fast path.  A decoded model item is only a
+        # few KB (flat feature + recovery labels), whereas the source NPZ can
+        # contain large compressed map/BEV/debug arrays.  Caching the final CPU
+        # tensors once removes repeated ZIP decompression across 8--20 epochs.
+        # It is opt-in so non-v48 workflows keep their historical memory profile.
+        self.cache_samples_in_memory = bool(training_cfg.get("cache_samples_in_memory", False))
+        self._item_cache: list[dict[str, torch.Tensor]] | None = None
+        if self.cache_samples_in_memory:
+            self._item_cache = [self._build_item(i) for i in range(len(self.paths))]
 
     def __len__(self) -> int:
         return len(self.paths)
 
-    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
-        d = load_npz(self.paths[idx])
+    def _build_item(self, idx: int) -> dict[str, torch.Tensor]:
+        d = load_npz_selected(self.paths[idx], MODEL_SAMPLE_NPZ_KEYS)
         x = sample_to_feature(d, self.cfg)
         fixed = fix_sample_geometry(
             d,
@@ -672,6 +702,11 @@ class OCRAPSampleDataset(Dataset):
             "option_features": torch.from_numpy(fixed["option_features"]),
         }
         return out
+
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        if self._item_cache is not None:
+            return self._item_cache[idx]
+        return self._build_item(idx)
 
 
 def split_paths_by_npz_split(paths: list[Path], split: str | set[str]) -> list[Path]:

@@ -23,10 +23,10 @@ from ocrap.algorithms.evidence_targets import (
     component_veto_margin_numpy,
     component_veto_terms_numpy,
 )
-from ocrap.data.serialization import load_npz
+from ocrap.data.serialization import load_npz_selected
 from ocrap.evaluation.metrics import best_shared_option_index, deployable_recovery_success, post_contact_deployability_score
 from ocrap.evaluation.certificate_stats import certificate_support_feasibility, wilson_interval, wilson_z
-from ocrap.models.data import expand_split_roles, iter_sample_paths_many, scalar_metadata_for_path
+from ocrap.models.data import MODEL_SAMPLE_NPZ_KEYS, expand_split_roles, iter_sample_paths_many, scalar_metadata_for_path
 from ocrap.models.inference import load_model_bundle, predict_samples
 
 
@@ -624,7 +624,7 @@ def main() -> int:
         if split not in allowed_splits:
             continue
         kept_split_counts[split] += 1
-        d = load_npz(path)
+        d = load_npz_selected(path, MODEL_SAMPLE_NPZ_KEYS)
         row = {
             "data": d,
             "scene": str(_scalar(d, "scene_id", path.stem)),

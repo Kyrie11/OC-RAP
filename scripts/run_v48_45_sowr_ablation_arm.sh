@@ -90,6 +90,7 @@ export EVIDENCE_UNBOUNDED_BENEFIT_FACTOR=false
 export EVIDENCE_UNBOUNDED_HARM_FACTORS=false
 export EVIDENCE_BENEFIT_RESIDUAL_SCALE=1.0
 export EVIDENCE_COMPONENT_SCALE=6.0
+export EVIDENCE_COMPONENT_HEADS=true
 export FACTOR_BENEFIT_MARGIN_REGRESSION_WEIGHT=1.00
 export FACTOR_BENEFIT_MARGIN_TEMPERATURE=0.050
 export FACTOR_COMPONENT_MARGIN_REGRESSION_WEIGHT=1.00
@@ -137,24 +138,24 @@ export SOWR_BATCH_SIZE="${SOWR_BATCH_SIZE:-72}"
 case "$ARM" in
   A)
     export OCRAP_ALGORITHM_VERSION="v48.45-SOWR-ablation-A"
-    export OCRAP_IMPLEMENTATION_VERSION="v48.45.5-A-v48.44D-unaltered-witness-protocol-bootstrap"
+    export OCRAP_IMPLEMENTATION_VERSION="v48.45.6-A-v48.44D-reference-stage-isolation-iofast"
     export V4838_FACTOR_ALGORITHM_FAMILY="v48.45-A-v48.44D-reference"
     ;;
   B)
     export OCRAP_ALGORITHM_VERSION="v48.45-SOWR-ablation-B"
-    export OCRAP_IMPLEMENTATION_VERSION="v48.45.5-B-shared-option-margin-witness-protocol-bootstrap"
+    export OCRAP_IMPLEMENTATION_VERSION="v48.45.6-B-margin-witness-stage-isolation-iofast"
     export V4838_FACTOR_ALGORITHM_FAMILY="v48.45-B-margin-witness-recalibration"
     export V4845_SOWR_MARGIN_WITNESS=1
     ;;
   C)
     export OCRAP_ALGORITHM_VERSION="v48.45-SOWR-ablation-C"
-    export OCRAP_IMPLEMENTATION_VERSION="v48.45.5-C-observation-kernel-protocol-bootstrap"
+    export OCRAP_IMPLEMENTATION_VERSION="v48.45.6-C-observation-kernel-stage-isolation-iofast"
     export V4838_FACTOR_ALGORITHM_FAMILY="v48.45-C-observation-kernel-recalibration"
     export V4845_SOWR_OBS_KERNEL=1
     ;;
   D)
     export OCRAP_ALGORITHM_VERSION="v48.45-SOWR"
-    export OCRAP_IMPLEMENTATION_VERSION="v48.45.5-D-shared-option-witness-protocol-bootstrap"
+    export OCRAP_IMPLEMENTATION_VERSION="v48.45.6-D-shared-option-witness-stage-isolation-iofast"
     export V4838_FACTOR_ALGORITHM_FAMILY="v48.45-D-full-sowr"
     export V4845_SOWR_MARGIN_WITNESS=1
     export V4845_SOWR_OBS_KERNEL=1

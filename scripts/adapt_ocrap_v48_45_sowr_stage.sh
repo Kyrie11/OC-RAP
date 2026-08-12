@@ -24,6 +24,8 @@ if [[ "$MARGIN_WITNESS" != 1 && "$OBS_KERNEL" != 1 ]]; then
 fi
 [[ -f "$INIT_CKPT" ]] || { echo "missing INIT_CKPT=$INIT_CKPT" >&2; exit 2; }
 [[ -f "$GROUP_INDEX" ]] || { echo "missing GROUP_INDEX=$GROUP_INDEX" >&2; exit 2; }
+python tools/check_v48_45_sowr_source_architecture.py \
+  --checkpoint "$INIT_CKPT" --output "$RUN/SOWR_SOURCE_ARCHITECTURE_CONTRACT.json"
 
 prefixes=""
 if [[ "$MARGIN_WITNESS" == 1 ]]; then
@@ -63,10 +65,24 @@ JSON
 # post-training bucket calibrator against default val_* roots; downstream v48.36
 # performs the authoritative calibration after factor adaptation.  Keep this
 # comment outside the backslash-continued environment-assignment command below.
+# Stage-isolation contract: outer v48.44-D exports ROCT/OCAF flags for the
+# downstream factor stage.  They must not leak into this source-witness model,
+# whose checkpoint intentionally has no learned component-evidence heads.
 RUN="$RUN" MODEL_DIR="$RUN/model_v48_sowr" CAL_DIR="$RUN/calibration" \
 INIT_CKPT="$INIT_CKPT" VARIANT="$VARIANT" TRAIN_MIX="$TRAIN_MIX" VAL_MIX="$VAL_MIX" CAL_MIX="$VAL_MIX" \
 GROUP_INDEX="$GROUP_INDEX" VAL_GROUP_INDEX="${VAL_GROUP_INDEX:-}" TRAIN_GPU="$TRAIN_GPU" \
 TRAINABLE_PARAM_PREFIXES="$prefixes" STRICT_INIT_PREFIXES="" \
+SET_CONTEXT_ENABLED=false PREFERENCE_HEAD_ENABLED=false PREFERENCE_CONTEXT_ENABLED=false RELATIVE_INCLUDE_ABSOLUTE=false \
+SET_TOURNAMENT_ENABLED=true SET_TOURNAMENT_HIDDEN=48 SET_TOURNAMENT_HEADS=4 SET_TOURNAMENT_DROPOUT=0.05 SET_TOURNAMENT_REPLACE_BASE=true \
+DELTA_HEAD_ENABLED=true DELTA_MODE=ordinal_evidence DELTA_HIDDEN=48 DELTA_DROPOUT=0.02 DELTA_REGIME_EXPERTS=true DELTA_POLICY_FEATURES=true \
+EVIDENCE_CALIBRATOR_ENABLED=false EVIDENCE_CALIBRATOR_CONTEXT_SOURCE=relative \
+EVIDENCE_DUAL_INTERACTION_BRIDGE=false \
+EVIDENCE_FACTORIZED_HARM_INTERACTION=false EVIDENCE_PARTIAL_POOL_HARM_RESIDUAL=false \
+EVIDENCE_RANK_BENEFIT_SKIP=false EVIDENCE_POSTPREFIX_OBS_TRANSPORT_BENEFIT=false \
+EVIDENCE_POSTPREFIX_OBS_TRANSPORT_HARM=false EVIDENCE_ROCT_BENEFIT=false EVIDENCE_ROCT_DEPLOYABILITY=false \
+EVIDENCE_UNIFIED_EXPERTS=false EVIDENCE_COMPONENT_HEADS=false EVIDENCE_CONCORD=false \
+EVIDENCE_ADMISSION_HEAD=false EVIDENCE_FRONTIER=false EVIDENCE_RESERVE_FACTOR_ALIGNMENT=false \
+EVIDENCE_ADMISSION_PRIOR_MODE=risk_centered EVIDENCE_JOINT_RESERVE_TEMPERATURE=0.025 EVIDENCE_COMPONENT_RELIABILITY= \
 DIRECT_ONLY_FAST_PATH=false DIRECT_VALUE_WEIGHT=0 \
 LOSS_ASSIGN="$([[ "$MARGIN_WITNESS" == 1 ]] && echo 0.35 || echo 0)" \
 LOSS_MARGIN="$([[ "$MARGIN_WITNESS" == 1 ]] && echo 2.00 || echo 0)" \
@@ -85,6 +101,10 @@ NUM_WORKERS="${NUM_WORKERS:-2}" PREFETCH_FACTOR="${PREFETCH_FACTOR:-2}" BATCH_SI
 CKPT="$RUN/model_v48_sowr/best.pt"
 SUMMARY="$RUN/model_v48_sowr/train_summary.json"
 [[ -f "$CKPT" && -f "$SUMMARY" ]] || { echo "SOWR output missing" >&2; exit 30; }
+
+python tools/check_v48_45_sowr_stage_isolation.py \
+  --source "$INIT_CKPT" --checkpoint "$CKPT" --allowed-prefixes "$prefixes" \
+  --output "$RUN/SOWR_STAGE_ISOLATION_CONTRACT.json"
 
 python - "$RUN" "$INIT_CKPT" "$CKPT" "$SUMMARY" "$MARGIN_WITNESS" "$OBS_KERNEL" "$prefixes" <<'PY'
 import hashlib,json,pathlib,sys,time
