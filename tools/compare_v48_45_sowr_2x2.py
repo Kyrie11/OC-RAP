@@ -179,6 +179,54 @@ def _sowr_stage(run: Path, variant: str) -> dict[str, Any]:
         "delta_best_minus_initial": delta,
     }
 
+def _attribution_identity(run: Path) -> dict[str, Any]:
+    """Engineering provenance that must be identical across the four causal arms."""
+    attempt = _json(run / "ATTEMPT_STARTED.json")
+    source = _json(run / "SOURCE_CHECKPOINT_CONTRACT.json")
+    gate = _json(run / "GATE_SPEC.json")
+    checks = source.get("checks") or {}
+    checkpoint_sha256 = {}
+    for variant in ("balanced", "precision"):
+        block = checks.get(variant) or {}
+        checkpoint_sha256[variant] = block.get("sha256")
+    protocol = gate.get("protocol") or {}
+    datasets = protocol.get("datasets") or []
+    dataset_manifests = {
+        str(d.get("role")): d.get("manifest_sha256")
+        for d in datasets if isinstance(d, dict) and d.get("role")
+    }
+    return {
+        "protocol_root": attempt.get("protocol_root"),
+        "protocol_seal_sha256": attempt.get("protocol_seal_sha256"),
+        "source_run_resolved": source.get("source_run_resolved"),
+        "source_checkpoint_sha256": checkpoint_sha256,
+        "gate_protocol_sha256": gate.get("protocol_sha256"),
+        "gate_dataset_manifest_sha256": dataset_manifests,
+    }
+
+
+def _attribution_contract(arms: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    identities = {name: arm["attribution_identity"] for name, arm in arms.items()}
+    reference = identities["A"]
+    required_nonempty = (
+        reference.get("protocol_seal_sha256"),
+        reference.get("source_checkpoint_sha256", {}).get("balanced"),
+        reference.get("source_checkpoint_sha256", {}).get("precision"),
+        reference.get("gate_protocol_sha256"),
+    )
+    missing_reference_fields = not all(required_nonempty)
+    mismatches = {name: value for name, value in identities.items() if value != reference}
+    valid = (not missing_reference_fields) and not mismatches
+    return {
+        "valid": valid,
+        "reference_arm": "A",
+        "missing_reference_fields": missing_reference_fields,
+        "mismatched_arms": sorted(mismatches),
+        "identities": identities,
+        "meaning": "B-A, C-A and D-B-C+A are attributable only when this contract is valid",
+    }
+
+
 def _arm(run: Path, positive_gain: float) -> dict[str, Any]:
     status = _json(run / "AUTHORITATIVE_RUN_STATUS.json")
     checks = status.get("checks") or {}
@@ -189,6 +237,7 @@ def _arm(run: Path, positive_gain: float) -> dict[str, Any]:
         "certificate_executed": status.get("certificate_executed", checks.get("certificate_executed")),
         "gate_evaluated": status.get("gate_evaluated", checks.get("gate_evaluated")),
         "gate_passed_false": checks.get("gate_passed_false"),
+        "attribution_identity": _attribution_identity(run),
         "sowr_stage_precision": _sowr_stage(run, "precision"),
         "sowr_stage_balanced": _sowr_stage(run, "balanced"),
         "near": {
@@ -211,24 +260,27 @@ def main() -> int:
     ap.add_argument("--positive-gain", type=float, default=0.015)
     ap.add_argument("--output", type=Path)
     args = ap.parse_args()
+    arms = {
+        "A": _arm(args.a, args.positive_gain),
+        "B": _arm(args.b, args.positive_gain),
+        "C": _arm(args.c, args.positive_gain),
+        "D": _arm(args.d, args.positive_gain),
+    }
+    attribution_contract = _attribution_contract(arms)
     report = {
-        "schema": "v48.45-sowr-2x2-comparison-v1",
+        "schema": "v48.45-sowr-2x2-comparison-v2",
         "diagnostic_only": True,
         "test_roots_read": False,
         "positive_gain": args.positive_gain,
-        "arms": {
-            "A": _arm(args.a, args.positive_gain),
-            "B": _arm(args.b, args.positive_gain),
-            "C": _arm(args.c, args.positive_gain),
-            "D": _arm(args.d, args.positive_gain),
-        },
+        "attribution_contract": attribution_contract,
+        "arms": arms,
     }
     text = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(text + "\n", encoding="utf-8")
     print(text)
-    return 0
+    return 0 if attribution_contract["valid"] else 4
 
 
 if __name__ == "__main__":

@@ -111,7 +111,7 @@ def test_parallel_launcher_accepts_rc20_as_valid_ablation(tmp_path: Path) -> Non
     completed = subprocess.run(
         ["bash", str(repo / "scripts" / "run_v48_45_sowr_2x2_parallel.sh")],
         cwd=repo,
-        env={**os.environ, "OCRAP_REPO": str(repo), "BASE_OUT": str(out), "MAX_PARALLEL_ARMS": "2"},
+        env={**os.environ, "OCRAP_REPO": str(repo), "BASE_OUT": str(out), "MAX_PARALLEL_ARMS": "2", "V4845_TEST_BYPASS_PROTOCOL_PREFLIGHT": "1"},
         text=True,
         capture_output=True,
         check=False,
@@ -130,7 +130,7 @@ def test_parallel_launcher_rejects_engineering_failure(tmp_path: Path) -> None:
     completed = subprocess.run(
         ["bash", str(repo / "scripts" / "run_v48_45_sowr_2x2_parallel.sh")],
         cwd=repo,
-        env={**os.environ, "OCRAP_REPO": str(repo), "BASE_OUT": str(out), "MAX_PARALLEL_ARMS": "2"},
+        env={**os.environ, "OCRAP_REPO": str(repo), "BASE_OUT": str(out), "MAX_PARALLEL_ARMS": "2", "V4845_TEST_BYPASS_PROTOCOL_PREFLIGHT": "1"},
         text=True,
         capture_output=True,
         check=False,

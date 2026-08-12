@@ -237,7 +237,8 @@ import json,os,pathlib,sys,time
 p=pathlib.Path(sys.argv[1]); p.parent.mkdir(parents=True,exist_ok=True)
 doc={'event':'v48_36_attempt_started','version':'v48.36-OCAF','implementation_version':os.environ.get('OCRAP_IMPLEMENTATION_VERSION','v48.36.4-IDEMPOTENT-TERMINAL-STATE-HOTFIX'),
      'created_unix':time.time(),'attempt_id':sys.argv[2],'source_run':sys.argv[3],
-     'protocol_root':sys.argv[4],'resume_after_adaptation':sys.argv[5]=='1','test_roots_read':False}
+     'protocol_root':sys.argv[4],'resume_after_adaptation':sys.argv[5]=='1',
+     'protocol_seal_sha256':os.environ.get('V4845_PROTOCOL_SEAL_SHA256'),'test_roots_read':False}
 tmp=p.with_name(f'.{p.name}.tmp.{os.getpid()}.{time.time_ns()}')
 with tmp.open('w',encoding='utf-8') as f:
     json.dump(doc,f,ensure_ascii=False,indent=2); f.write('\n'); f.flush(); os.fsync(f.fileno())

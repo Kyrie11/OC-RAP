@@ -12,6 +12,40 @@ fi
 export RESUME_AFTER_ADAPTATION=0
 unset V4836_FACTOR_CACHE_BALANCED V4836_FACTOR_CACHE_PRECISION || true
 
+# Direct single-arm invocation is also self-contained. The 2x2 launcher prepares
+# once and sets V4845_SKIP_PROTOCOL_PREPARE=1 so parallel arms never race here.
+export OCRAP_ROOT="${OCRAP_ROOT:-/data0/senzeyu2/dataset/OCRAP}"
+export PROTOCOL_ROOT="${PROTOCOL_ROOT:-$OCRAP_ROOT/calibration_v48_14_prism_4814}"
+export CAL_NEAR="${CAL_NEAR:-$OCRAP_ROOT/calibration_near_contact}"
+export CAL_CONTACT="${CAL_CONTACT:-$OCRAP_ROOT/calibration_contact}"
+export CAL_SAFE="${CAL_SAFE:-$OCRAP_ROOT/calibration_safe}"
+if [[ "${V4845_SKIP_PROTOCOL_PREPARE:-0}" != 1 ]]; then
+  bash scripts/prepare_v48_45_protocol.sh
+fi
+[[ -s "$PROTOCOL_ROOT/V48_45_PROTOCOL_SEAL.json" ]] || {
+  echo "v48.45 protocol seal missing: $PROTOCOL_ROOT/V48_45_PROTOCOL_SEAL.json" >&2
+  exit 30
+}
+# Recompute the manifest/scene assignment contract at each arm boundary (sample
+# existence was already checked by prepare). This prevents cross-arm input drift.
+mkdir -p "$BASE_OUT"
+protocol_probe="$BASE_OUT/.v48_45_protocol_recheck_${ARM}_$$.json"
+set +e
+python tools/check_v48_45_protocol_seal.py \
+  --protocol-root "$PROTOCOL_ROOT" --near-source "$CAL_NEAR" --contact-source "$CAL_CONTACT" --safe-root "$CAL_SAFE" \
+  --seed "${V4845_PROTOCOL_SEED:-4814}" --adapt-train-fraction "${V4845_ADAPT_TRAIN_FRACTION:-0.45}" \
+  --adapt-dev-fraction "${V4845_ADAPT_DEV_FRACTION:-0.15}" --skip-sample-file-check --output "$protocol_probe" >/dev/null
+protocol_probe_rc=$?
+set -e
+if [[ "$protocol_probe_rc" != 0 ]]; then
+  echo "v48.45 per-arm protocol recheck failed for arm=$ARM" >&2
+  [[ -s "$protocol_probe" ]] && cat "$protocol_probe" >&2
+  rm -f "$protocol_probe"
+  exit 30
+fi
+rm -f "$protocol_probe"
+export V4845_PROTOCOL_SEAL_SHA256="$(sha256sum "$PROTOCOL_ROOT/V48_45_PROTOCOL_SEAL.json" | awk '{print $1}')"
+
 # v48.45 source-run resolution must not depend on the versioned checkout cwd.
 # The v48.13 reference checkpoints live under the persistent BASE_OUT used by
 # the previous successful v48.44 run.  An explicit SOURCE_RUN still wins.
@@ -103,24 +137,24 @@ export SOWR_BATCH_SIZE="${SOWR_BATCH_SIZE:-72}"
 case "$ARM" in
   A)
     export OCRAP_ALGORITHM_VERSION="v48.45-SOWR-ablation-A"
-    export OCRAP_IMPLEMENTATION_VERSION="v48.45.2-A-v48.44D-unaltered-witness-rebuilt-source-support"
+    export OCRAP_IMPLEMENTATION_VERSION="v48.45.5-A-v48.44D-unaltered-witness-protocol-bootstrap"
     export V4838_FACTOR_ALGORITHM_FAMILY="v48.45-A-v48.44D-reference"
     ;;
   B)
     export OCRAP_ALGORITHM_VERSION="v48.45-SOWR-ablation-B"
-    export OCRAP_IMPLEMENTATION_VERSION="v48.45.2-B-shared-option-margin-witness-recalibration-rebuilt-source-support"
+    export OCRAP_IMPLEMENTATION_VERSION="v48.45.5-B-shared-option-margin-witness-protocol-bootstrap"
     export V4838_FACTOR_ALGORITHM_FAMILY="v48.45-B-margin-witness-recalibration"
     export V4845_SOWR_MARGIN_WITNESS=1
     ;;
   C)
     export OCRAP_ALGORITHM_VERSION="v48.45-SOWR-ablation-C"
-    export OCRAP_IMPLEMENTATION_VERSION="v48.45.2-C-observation-kernel-recalibration-rebuilt-source-support"
+    export OCRAP_IMPLEMENTATION_VERSION="v48.45.5-C-observation-kernel-protocol-bootstrap"
     export V4838_FACTOR_ALGORITHM_FAMILY="v48.45-C-observation-kernel-recalibration"
     export V4845_SOWR_OBS_KERNEL=1
     ;;
   D)
     export OCRAP_ALGORITHM_VERSION="v48.45-SOWR"
-    export OCRAP_IMPLEMENTATION_VERSION="v48.45.2-D-shared-option-witness-recalibration-rebuilt-source-support"
+    export OCRAP_IMPLEMENTATION_VERSION="v48.45.5-D-shared-option-witness-protocol-bootstrap"
     export V4838_FACTOR_ALGORITHM_FAMILY="v48.45-D-full-sowr"
     export V4845_SOWR_MARGIN_WITNESS=1
     export V4845_SOWR_OBS_KERNEL=1

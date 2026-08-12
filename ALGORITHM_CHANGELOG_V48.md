@@ -1,3 +1,91 @@
+## v48.45.5 — DEDICATED CALIBRATION PROTOCOL BOOTSTRAP HOTFIX (2026-08-12)
+
+**Category: engineering-only. The v48.45 SOWR algorithm, A/B/C/D factors, shared source,
+ROCT/top-k/shared-rule settings, harm budgets, certificate semantics and Natural gate are unchanged.**
+
+### Uploaded failure diagnosis
+
+The uploaded v48.45.4 shared source is now valid: `S1_SOURCE_POLICY_STATUS.json` records
+`balanced_exit_code=0`, `precision_exit_code=0`, both rebuilt checkpoints pass the
+SHA256 source contract, and the source-quality contract is valid.  The uploaded A/B/C/D
+SOWR runs all fail before adaptation with the same authoritative engineering state:
+`stage=dataset_root_contract`, `raw_exit_code=4`, `pipeline_exit_code=30`,
+`certificate_executed=false`, `gate_evaluated=false`.
+
+The dataset contract shows the exact missing roots.  Every arm resolved the legacy
+dedicated protocol root
+`$OCRAP_ROOT/calibration_v48_14_prism_4814` and expected six derived directories:
+`evidence_adapt_{train,dev}_{near_contact,contact}` plus
+`certificate_pool_{near_contact,contact}`.  All six canonical-path checks were true but
+all six `*_exists` checks were false.  `calibration_safe` existed.
+
+The operator command was the defect: it validated `train_*`/`val_*` for source rebuild
+but never invoked the repository's deterministic
+`partition_dedicated_calibration_v48_14.py` on the actual
+`calibration_near_contact` and `calibration_contact` roots.  The v48.36 controller was
+therefore correct to fail closed; the missing protocol bootstrap made all four arms
+guaranteed RC=30.  This upload contains no new SOWR algorithm evidence.
+
+### Engineering fixes
+
+1. Added `scripts/prepare_v48_45_protocol.sh`.  Before any arm starts it deterministically
+   derives the dedicated protocol from `calibration_near_contact/contact` with the
+   preregistered seed `4814`, adaptation-train fraction `0.45`, adaptation-dev fraction
+   `0.15`, and certificate fraction `0.40`.  `calibration_safe` remains the safe
+   calibration root.  No `test_*` root is read.
+2. Added `tools/check_v48_45_protocol_seal.py`, an independent fail-closed seal.  It
+   verifies source split IDs are exactly `calibration`, all six derived role manifests
+   are non-empty, role labels are exact, every referenced sample exists, Near and
+   Contact train/dev/certificate scene sets are mutually disjoint, their union exactly
+   recovers each source calibration population, and every scene assignment exactly
+   matches the seed/fraction hash rule.  Source and role manifest SHA256 hashes are
+   recorded for attribution.
+3. Protocol preparation is resumable.  A valid existing protocol is independently
+   revalidated and reused without repartitioning.  An invalid/partial protocol is moved
+   aside, rebuilt, audited and sealed; failure rolls back to the previous directory.
+4. `run_v48_45_sowr_2x2_parallel.sh` now prepares/verifies this one shared protocol
+   before launching A/B/C/D.  Direct single-arm invocation also prepares/verifies it,
+   so the previous four-way repeated dataset-root failure cannot recur silently.
+5. The new operator command explicitly validates all train/val/calibration manifests,
+   prepares the shared protocol before deleting failed arm outputs, reuses the already
+   successful v48.45 source, and captures launcher RC so any future engineering failure
+   prints each arm's `PIPELINE_FAILED.json` instead of being mistaken for algorithm
+   evidence.
+6. Every arm recomputes a fast independent protocol-seal check at its boundary and records
+   `protocol_seal_sha256` in `ATTEMPT_STARTED.json`.  The v48.45 comparator now fails closed
+   unless all four arms have the same protocol seal, source checkpoint SHA256 pair, gate
+   protocol SHA256 and certificate/development manifest SHA256 identities.  This prevents
+   B-A/C-A/D-B-C+A from being reported when shared inputs drift.
+7. Arm implementation-version strings are advanced to v48.45.5 for provenance only;
+   `OCRAP_ALGORITHM_VERSION`, SOWR factor definitions and all algorithm hyperparameters
+   remain unchanged.
+
+### Attribution boundary
+
+Safe/Near/Contact remain dataset/evaluation strata only.  No regime identifier, router,
+per-regime policy, per-regime threshold or relaxed risk budget is introduced.  The
+strict 2x2 remains A=no SOWR, B=root/margin witness only, C=observation-kernel only,
+D=both, with one shared source and one shared scene-disjoint calibration protocol.
+Only authoritative arm RC 0/20 results are eligible for B-A, C-A and interaction
+`D-B-C+A` attribution.
+
+### Validation
+
+- New protocol/bootstrap focused tests: **4/4 passed**; complete v48.45 focused set:
+  **29/29 passed**.
+- v48.42-v48.45 regression: **56/56 passed**.
+- v48.36 controller/terminal suites: **32 passed / 1 skipped**.
+- v48.37-v48.41 regression: **29/29 passed**.
+- Combined completed v48.36-v48.45 validation: **117 passed / 1 skipped**.
+- `python -m compileall -q src tools tests`: PASS.
+- **100/100** shell scripts pass `bash -n`; the v48.45.5 operator command also passes.
+- Repository-wide nounset same-`local` self-dependency scan: **0 findings**.
+- Synthetic end-to-end arm smoke passes `source_checkpoint_contract`,
+  `dataset_root_contract`, `dedicated_protocol_audit`, multigroup loss and OCAF bridge,
+  then stops only at the expected CUDA preflight because the validation container has
+  no training GPU.  Thus the exact uploaded `dataset_root_contract` failure is removed
+  from the real controller path before any algorithm stage.
+
 ## v48.45.4 — S1 NOUNSET SOURCE-REBUILD ENGINEERING HOTFIX (2026-08-12)
 
 **Category: engineering-only.  The v48.45 SOWR algorithm, 2x2 factors, source data mix,

@@ -1,0 +1,189 @@
+#!/usr/bin/env bash
+# OC-RAP v48.45.5 — engineering-only protocol bootstrap + sealed shared source + SOWR 2x2
+#
+# 目的：修复 v48.45.4 的 dataset_root_contract RC=30，不改变任何 SOWR 算法因素/阈值/gate budget。
+# 本脚本不会读取 test_* 根目录，也不会删除已成功的 shared source。
+# 每个 arm 内 balanced->GPU0、precision->GPU1；MAX_PARALLEL_ARMS=1 已同时使用两张 GPU。
+
+set -Eeuo pipefail
+
+# ==============================
+# 0. 只按机器实际路径修改这里
+# ==============================
+export OCRAP_REPO=/home/senzeyu2/code/OC-RAP
+export OCRAP_ROOT=/data0/senzeyu2/dataset/OCRAP
+export BASE_OUT="$OCRAP_REPO/runs"
+export SOURCE_RUN="$BASE_OUT/ocrap_v48_45_source_rebuild_s7"
+export PROTOCOL_ROOT="$OCRAP_ROOT/calibration_v48_14_prism_4814"
+export GPU0=0
+export GPU1=1
+export SOURCE_SEED=7
+
+# source rebuild 只使用 train/val；保持与成功的 v48.45.4 source 完全一致。
+export SOURCE_TRAIN_SAFE="$OCRAP_ROOT/train_safe"
+export SOURCE_TRAIN_NEAR="$OCRAP_ROOT/train_near_contact"
+export SOURCE_TRAIN_CONTACT="$OCRAP_ROOT/train_contact"
+export SOURCE_DEV_SAFE="$OCRAP_ROOT/val_safe"
+export SOURCE_DEV_NEAR="$OCRAP_ROOT/val_near_contact"
+export SOURCE_DEV_CONTACT="$OCRAP_ROOT/val_contact"
+
+# SOWR/OCAF dedicated protocol 只从 calibration 数据确定性切分；绝不读取 test_*。
+export CAL_NEAR="$OCRAP_ROOT/calibration_near_contact"
+export CAL_CONTACT="$OCRAP_ROOT/calibration_contact"
+export CAL_SAFE="$OCRAP_ROOT/calibration_safe"
+export V4845_PROTOCOL_SEED=4814
+export V4845_ADAPT_TRAIN_FRACTION=0.45
+export V4845_ADAPT_DEV_FRACTION=0.15
+export V4845_PROTOCOL_LINK_MODE=hardlink
+
+cd "$OCRAP_REPO"
+export PYTHONPATH="$OCRAP_REPO/src${PYTHONPATH:+:$PYTHONPATH}"
+mkdir -p "$BASE_OUT"
+[[ "$GPU0" != "$GPU1" ]] || { echo "ERROR: GPU0 and GPU1 must be different" >&2; exit 2; }
+
+printf '\n========== 0/5 CODE + DATA PRECHECK =========='; echo
+python - <<'PYCFG'
+from ocrap.config.overrides import parse_cli_overrides
+d=parse_cli_overrides([
+  'training.init_checkpoint=',
+  'model.direct_recovery_evidence_component_reliability=',
+  'training.direct_value_ordinal_evidence_component_reliability=',
+])
+assert d['training']['init_checkpoint']==''
+assert d['model']['direct_recovery_evidence_component_reliability']==''
+assert d['training']['direct_value_ordinal_evidence_component_reliability']==''
+print('EMPTY-OVERRIDE CONTRACT PASS')
+PYCFG
+
+pytest -q \
+  tests/test_v48_45_1_engineering_hotfix.py \
+  tests/test_v48_45_sowr.py \
+  tests/test_v48_45_5_protocol_bootstrap.py
+
+for d in \
+  "$SOURCE_TRAIN_SAFE" "$SOURCE_TRAIN_NEAR" "$SOURCE_TRAIN_CONTACT" \
+  "$SOURCE_DEV_SAFE" "$SOURCE_DEV_NEAR" "$SOURCE_DEV_CONTACT" \
+  "$CAL_NEAR" "$CAL_CONTACT" "$CAL_SAFE"; do
+  [[ -d "$d" ]] || { echo "ERROR missing dataset: $d" >&2; exit 2; }
+  [[ -s "$d/manifest.csv" ]] || { echo "ERROR missing/empty manifest: $d/manifest.csv" >&2; exit 2; }
+done
+nvidia-smi -L
+
+printf '\n========== 1/5 BUILD/VERIFY SHARED CALIBRATION PROTOCOL =========='; echo
+# 这是 v48.45.4 漏掉的关键步骤：calibration_near/contact ->
+# evidence_adapt_train / evidence_adapt_dev / certificate_pool，按 scene 确定性切分。
+bash scripts/prepare_v48_45_protocol.sh \
+  2>&1 | tee "$BASE_OUT/v48_45_5_protocol_prepare.log"
+
+python - "$PROTOCOL_ROOT/V48_45_PROTOCOL_SEAL.json" <<'PYPROTO'
+import json,sys
+p=sys.argv[1]; d=json.load(open(p))
+assert d.get('valid') is True, d
+assert d.get('test_roots_read') is False, d
+for key in ('near_contact_scene_disjoint','near_contact_scene_union_exact','near_contact_deterministic_assignment_exact',
+            'contact_scene_disjoint','contact_scene_union_exact','contact_deterministic_assignment_exact'):
+    assert d['checks'].get(key) is True, (key,d)
+print('SHARED CALIBRATION PROTOCOL SEAL PASS')
+print('near scene counts:', d['details']['near_contact_actual_scene_counts'])
+print('contact scene counts:', d['details']['contact_actual_scene_counts'])
+PYPROTO
+
+printf '\n========== 2/5 REUSE/BUILD IMMUTABLE SHARED SOURCE =========='; echo
+# 你上传的本轮 source 已成功：balanced/precision 均为 rc=0；不要删除它。
+if [[ ! -s "$SOURCE_RUN/SOURCE_REBUILD_COMPLETE.json" ]]; then
+  echo '[source] sealed source absent; resume/build it without deleting a completed S0 backbone'
+  set +e
+  OCRAP_REPO="$OCRAP_REPO" OCRAP_ROOT="$OCRAP_ROOT" SOURCE_OUT="$SOURCE_RUN" \
+  SOURCE_TRAIN_SAFE="$SOURCE_TRAIN_SAFE" SOURCE_TRAIN_NEAR="$SOURCE_TRAIN_NEAR" SOURCE_TRAIN_CONTACT="$SOURCE_TRAIN_CONTACT" \
+  SOURCE_DEV_SAFE="$SOURCE_DEV_SAFE" SOURCE_DEV_NEAR="$SOURCE_DEV_NEAR" SOURCE_DEV_CONTACT="$SOURCE_DEV_CONTACT" \
+  GPU0="$GPU0" GPU1="$GPU1" SOURCE_SEED="$SOURCE_SEED" \
+    bash scripts/rebuild_v48_45_shared_source.sh \
+    2>&1 | tee "$BASE_OUT/v48_45_5_source_rebuild_driver.log"
+  source_rc=${PIPESTATUS[0]}
+  set -e
+  [[ "$source_rc" == 0 ]] || { echo "SOURCE REBUILD ENGINEERING FAILURE rc=$source_rc" >&2; exit 30; }
+else
+  echo '[source] existing sealed v48.45 source detected; reusing it unchanged'
+fi
+
+python tools/check_v48_36_source_checkpoint_contract.py \
+  --source-run "$SOURCE_RUN" --output "$SOURCE_RUN/SOURCE_CHECKPOINT_CONTRACT_V48_45_5.json"
+python tools/check_v48_45_rebuilt_source_quality.py \
+  --source-run "$SOURCE_RUN" --output "$SOURCE_RUN/SOURCE_QUALITY_CONTRACT_V48_45_5.json"
+python - "$SOURCE_RUN/SOURCE_CHECKPOINT_CONTRACT_V48_45_5.json" "$SOURCE_RUN/SOURCE_QUALITY_CONTRACT_V48_45_5.json" <<'PYSRC'
+import json,sys
+h=json.load(open(sys.argv[1])); q=json.load(open(sys.argv[2]))
+assert h.get('valid') is True, h
+assert q.get('valid') is True, q
+for v in ('balanced','precision'):
+    assert h['checks'][v].get('exists') and h['checks'][v].get('nonempty'), h
+    if h.get('source_rebuild_manifest_present'):
+        assert h['checks'][v].get('manifest_hash_match') is True, h
+print('SOURCE HASH + QUALITY CONTRACT PASS')
+PYSRC
+
+printf '\n========== 3/5 CLEAR ONLY FAILED ARM OUTPUTS =========='; echo
+# 只清 v48.45 arm 输出；绝不删除 SOURCE_RUN 或 calibration protocol。
+rm -rf \
+  "$BASE_OUT/ocrap_v48_45_sowr_ablation_A" \
+  "$BASE_OUT/ocrap_v48_45_sowr_ablation_B" \
+  "$BASE_OUT/ocrap_v48_45_sowr_ablation_C" \
+  "$BASE_OUT/ocrap_v48_45_sowr_main" \
+  "$BASE_OUT/ocrap_v48_45_sowr_parallel_status.json" \
+  "$BASE_OUT/ocrap_v48_45_sowr_2x2_comparison.json"
+
+printf '\n========== 4/5 RUN STRICT SOWR 2x2 =========='; echo
+# A: v48.44-D reference, no witness recalibration
+# B: A + root probability/recovery-margin witness recalibration
+# C: A + observation-kernel recalibration
+# D/Main: B+C
+# 固定：同一 source SHA、同一 protocol seal、top-k=5、dual ROCT、shared rule、harm budgets。
+export SOURCE_RUN BASE_OUT PROTOCOL_ROOT CAL_NEAR CAL_CONTACT CAL_SAFE GPU0 GPU1
+export MAX_PARALLEL_ARMS=1
+export ABLATION_NUM_WORKERS=1
+export ABLATION_OMP_NUM_THREADS=1
+
+set +e
+bash scripts/run_v48_45_sowr_2x2_parallel.sh \
+  2>&1 | tee "$BASE_OUT/v48_45_5_sowr_2x2_driver.log"
+launcher_rc=${PIPESTATUS[0]}
+set -e
+
+[[ -s "$BASE_OUT/ocrap_v48_45_sowr_parallel_status.json" ]] && cat "$BASE_OUT/ocrap_v48_45_sowr_parallel_status.json"
+if [[ "$launcher_rc" != 0 ]]; then
+  echo "SOWR 2x2 ENGINEERING FAILURE: launcher_rc=$launcher_rc" >&2
+  for r in \
+    ocrap_v48_45_sowr_ablation_A ocrap_v48_45_sowr_ablation_B \
+    ocrap_v48_45_sowr_ablation_C ocrap_v48_45_sowr_main; do
+    f="$BASE_OUT/$r/PIPELINE_FAILED.json"
+    [[ -s "$f" ]] && { echo "---- $r" >&2; cat "$f" >&2; }
+  done
+  exit 30
+fi
+
+python - "$BASE_OUT/ocrap_v48_45_sowr_parallel_status.json" "$PROTOCOL_ROOT/V48_45_PROTOCOL_SEAL.json" <<'PYSTATUS'
+import json,sys
+s=json.load(open(sys.argv[1])); p=json.load(open(sys.argv[2]))
+assert p.get('valid') is True and p.get('test_roots_read') is False, p
+assert s.get('engineering_failed') is False, s
+assert all(v.get('launcher_exit_code') in (0,20) for v in s['arms'].values()), s
+print('ALL FOUR ARMS ARE AUTHORITATIVE ALGORITHM RESULTS (RC 0/20)')
+PYSTATUS
+
+printf '\n========== 5/5 BUILD DEVELOPMENT/CERTIFICATE 2x2 DIAGNOSTIC =========='; echo
+python tools/compare_v48_45_sowr_2x2.py \
+  --a "$BASE_OUT/ocrap_v48_45_sowr_ablation_A" \
+  --b "$BASE_OUT/ocrap_v48_45_sowr_ablation_B" \
+  --c "$BASE_OUT/ocrap_v48_45_sowr_ablation_C" \
+  --d "$BASE_OUT/ocrap_v48_45_sowr_main" \
+  --positive-gain 0.015 \
+  --output "$BASE_OUT/ocrap_v48_45_sowr_2x2_comparison.json" \
+  | tee "$BASE_OUT/v48_45_5_sowr_2x2_comparison.log"
+
+printf '\n========== INTERPRETATION =========='; echo
+printf '%s\n' \
+  'RC=30/other = engineering/protocol failure; do NOT attribute algorithmically.' \
+  'RC=20 = pipeline-valid Natural-gate failure; valid negative algorithm evidence.' \
+  'Compare B-A, C-A, and interaction D-B-C+A under the same sealed source/protocol.' \
+  'Do not retune threshold/top-k/ROCT scale/harm budget after certificate results.' \
+  'Do not use held-out test until a preregistered factor shows repeatable certificate improvement.'

@@ -155,4 +155,9 @@ def test_sowr_comparator_is_development_certificate_only() -> None:
     assert "SOWR_COMPLETE.json" in text
     assert "direct_value_risk_" in text
     assert "dev_diagnostic_" in text
+    assert "attribution_contract" in text
+    assert "protocol_seal_sha256" in text
+    assert "source_checkpoint_sha256" in text
+    assert "gate_protocol_sha256" in text
+    assert 'return 0 if attribution_contract["valid"] else 4' in text
     assert "test_" not in text.replace('"test_roots_read": False', "")

@@ -8,6 +8,36 @@ export OMP_NUM_THREADS="${ABLATION_OMP_NUM_THREADS:-1}"
 export MKL_NUM_THREADS="$OMP_NUM_THREADS"; export OPENBLAS_NUM_THREADS="$OMP_NUM_THREADS"
 export NUM_WORKERS="${ABLATION_NUM_WORKERS:-1}"; export PREFETCH_FACTOR="${ABLATION_PREFETCH_FACTOR:-2}"
 mkdir -p "$BASE_OUT"
+
+# One shared deterministic calibration protocol is prepared/sealed before any arm
+# starts. This prevents four identical RC=30 failures and guarantees every arm
+# sees byte-identical role manifests. The bootstrap reads calibration roots only.
+export OCRAP_ROOT="${OCRAP_ROOT:-/data0/senzeyu2/dataset/OCRAP}"
+export PROTOCOL_ROOT="${PROTOCOL_ROOT:-$OCRAP_ROOT/calibration_v48_14_prism_4814}"
+export CAL_NEAR="${CAL_NEAR:-$OCRAP_ROOT/calibration_near_contact}"
+export CAL_CONTACT="${CAL_CONTACT:-$OCRAP_ROOT/calibration_contact}"
+export CAL_SAFE="${CAL_SAFE:-$OCRAP_ROOT/calibration_safe}"
+if [[ "${V4845_TEST_BYPASS_PROTOCOL_PREFLIGHT:-0}" == 1 ]]; then
+  # Unit-test harness only: production/operator scripts never set this flag.
+  echo "V48.45 protocol preflight bypassed by explicit test harness"
+else
+  if [[ "${V4845_SKIP_SHARED_PROTOCOL_PREPARE:-0}" != 1 ]]; then
+    bash scripts/prepare_v48_45_protocol.sh
+  fi
+  [[ -s "$PROTOCOL_ROOT/V48_45_PROTOCOL_SEAL.json" ]] || {
+    echo "v48.45 shared protocol seal missing after bootstrap: $PROTOCOL_ROOT/V48_45_PROTOCOL_SEAL.json" >&2
+    exit 4
+  }
+  python - "$PROTOCOL_ROOT/V48_45_PROTOCOL_SEAL.json" <<'PY_PROTOCOL_SEAL'
+import json,sys
+d=json.load(open(sys.argv[1]))
+assert d.get('valid') is True, d
+assert d.get('test_roots_read') is False, d
+print('V48.45 SHARED PROTOCOL SEAL PASS')
+PY_PROTOCOL_SEAL
+fi
+export V4845_SKIP_PROTOCOL_PREPARE=1
+
 MAX_PARALLEL_ARMS="${MAX_PARALLEL_ARMS:-1}"
 if ! [[ "$MAX_PARALLEL_ARMS" =~ ^[1-4]$ ]]; then echo "MAX_PARALLEL_ARMS must be 1..4 (1 recommended: each arm already uses GPU0/GPU1 in parallel)" >&2; exit 2; fi
 arms=(A B C D)

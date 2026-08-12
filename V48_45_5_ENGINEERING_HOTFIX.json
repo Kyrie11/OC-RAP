@@ -1,0 +1,532 @@
+{
+  "event": "v48_45_4_uploaded_failure_audit",
+  "created_unix": 1786528646.7858465,
+  "conclusion": "engineering_failure_missing_dedicated_calibration_protocol_bootstrap",
+  "source": {
+    "s1_status": {
+      "event": "v48_45_source_policy_stage_status",
+      "implementation_version": "v48.45.4-s1-nounset-hotfix",
+      "created_unix": 1786527012.116191,
+      "balanced_exit_code": 0,
+      "precision_exit_code": 0,
+      "both_succeeded": true,
+      "test_roots_read": false
+    },
+    "checkpoint_contract_valid": true,
+    "quality_contract_valid": true,
+    "balanced_checkpoint_sha256": "070218c66e506d66f25a12bf53b4127581992d75481bbb635d7ea658f4cfd352",
+    "precision_checkpoint_sha256": "8f7528b76ce4b2424c5f153fe3109844de27a08a976a067b1292baee393f768d"
+  },
+  "arms": {
+    "A": {
+      "pipeline_failed": {
+        "event": "v48_36_pipeline_failed",
+        "version": "v48.36-OCAF",
+        "implementation_version": "v48.45.2-A-v48.44D-unaltered-witness-rebuilt-source-support",
+        "created_unix": 1786527314.3176415,
+        "attempt_id": "v4836-1786527313920912782-f949d889283e",
+        "stage": "dataset_root_contract",
+        "raw_exit_code": 4,
+        "normalized_exit_code": 30,
+        "pipeline_exit_code": 30,
+        "detail": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_45_sowr_ablation_A/DATASET_ROOT_CONTRACT.json",
+        "adaptation_exit_codes": {
+          "balanced": null,
+          "precision": null
+        },
+        "certificate_executed": false,
+        "gate_evaluated": false,
+        "pipeline_valid": false,
+        "test_roots_read": false
+      },
+      "dataset_root_contract": {
+        "event": "v48_36_dataset_root_contract",
+        "version": "v48.36-OCAF",
+        "created_unix": 1786527314.2647212,
+        "valid": false,
+        "checks": {
+          "train_near_canonical_path": true,
+          "train_near_exists": false,
+          "train_contact_canonical_path": true,
+          "train_contact_exists": false,
+          "dev_near_canonical_path": true,
+          "dev_near_exists": false,
+          "dev_contact_canonical_path": true,
+          "dev_contact_exists": false,
+          "cert_near_canonical_path": true,
+          "cert_near_exists": false,
+          "cert_contact_canonical_path": true,
+          "cert_contact_exists": false,
+          "safe_root_exists": true,
+          "no_legacy_alias_selected": true,
+          "near_contact_and_contact_distinct": true
+        },
+        "paths": {
+          "train_near": {
+            "actual": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_train_near_contact",
+            "expected": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_train_near_contact",
+            "leaf": "evidence_adapt_train_near_contact"
+          },
+          "train_contact": {
+            "actual": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_train_contact",
+            "expected": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_train_contact",
+            "leaf": "evidence_adapt_train_contact"
+          },
+          "dev_near": {
+            "actual": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_near_contact",
+            "expected": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_near_contact",
+            "leaf": "evidence_adapt_dev_near_contact"
+          },
+          "dev_contact": {
+            "actual": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_contact",
+            "expected": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_contact",
+            "leaf": "evidence_adapt_dev_contact"
+          },
+          "cert_near": {
+            "actual": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_near_contact",
+            "expected": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_near_contact",
+            "leaf": "certificate_pool_near_contact"
+          },
+          "cert_contact": {
+            "actual": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_contact",
+            "expected": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_contact",
+            "leaf": "certificate_pool_contact"
+          }
+        },
+        "legacy_aliases": [],
+        "test_roots_read": false
+      },
+      "authoritative": {
+        "event": "v48_36_authoritative_run_state",
+        "version": "v48.36-OCAF",
+        "created_unix": 1786527314.3966005,
+        "run": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_45_sowr_ablation_A",
+        "valid": true,
+        "authoritative_source": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_45_sowr_ablation_A/V48_36_COMPLETE.json",
+        "authoritative_exit_code": 30,
+        "pipeline_valid": false,
+        "attempt_id": "v4836-1786527313920912782-f949d889283e",
+        "checks": {
+          "json_readable": true,
+          "terminal_completion_present": true,
+          "no_active_status_contradictions": true,
+          "pipeline_invalid": true,
+          "pipeline_failure_marker_present": true,
+          "next_commands_absent": true,
+          "next_commands_blocked": true,
+          "expected_exit_code": true,
+          "expected_attempt_id": true
+        },
+        "read_errors": [],
+        "active_contradictions": [],
+        "stale_markers": [],
+        "marker_relations": {
+          "pipeline_failed": "same_attempt"
+        },
+        "artifacts": {
+          "next_commands_present": false,
+          "next_commands_blocked_present": true,
+          "pipeline_failed_present": true,
+          "gate_failed_present": false,
+          "calibration_failed_present": false
+        },
+        "test_roots_read": false,
+        "expected_exit_code": 30,
+        "expected_attempt_id": "v4836-1786527313920912782-f949d889283e"
+      }
+    },
+    "B": {
+      "pipeline_failed": {
+        "event": "v48_36_pipeline_failed",
+        "version": "v48.36-OCAF",
+        "implementation_version": "v48.45.2-B-shared-option-margin-witness-recalibration-rebuilt-source-support",
+        "created_unix": 1786527315.0117998,
+        "attempt_id": "v4836-1786527314597108284-4c01caa6f624",
+        "stage": "dataset_root_contract",
+        "raw_exit_code": 4,
+        "normalized_exit_code": 30,
+        "pipeline_exit_code": 30,
+        "detail": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_45_sowr_ablation_B/DATASET_ROOT_CONTRACT.json",
+        "adaptation_exit_codes": {
+          "balanced": null,
+          "precision": null
+        },
+        "certificate_executed": false,
+        "gate_evaluated": false,
+        "pipeline_valid": false,
+        "test_roots_read": false
+      },
+      "dataset_root_contract": {
+        "event": "v48_36_dataset_root_contract",
+        "version": "v48.36-OCAF",
+        "created_unix": 1786527314.9570239,
+        "valid": false,
+        "checks": {
+          "train_near_canonical_path": true,
+          "train_near_exists": false,
+          "train_contact_canonical_path": true,
+          "train_contact_exists": false,
+          "dev_near_canonical_path": true,
+          "dev_near_exists": false,
+          "dev_contact_canonical_path": true,
+          "dev_contact_exists": false,
+          "cert_near_canonical_path": true,
+          "cert_near_exists": false,
+          "cert_contact_canonical_path": true,
+          "cert_contact_exists": false,
+          "safe_root_exists": true,
+          "no_legacy_alias_selected": true,
+          "near_contact_and_contact_distinct": true
+        },
+        "paths": {
+          "train_near": {
+            "actual": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_train_near_contact",
+            "expected": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_train_near_contact",
+            "leaf": "evidence_adapt_train_near_contact"
+          },
+          "train_contact": {
+            "actual": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_train_contact",
+            "expected": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_train_contact",
+            "leaf": "evidence_adapt_train_contact"
+          },
+          "dev_near": {
+            "actual": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_near_contact",
+            "expected": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_near_contact",
+            "leaf": "evidence_adapt_dev_near_contact"
+          },
+          "dev_contact": {
+            "actual": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_contact",
+            "expected": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_contact",
+            "leaf": "evidence_adapt_dev_contact"
+          },
+          "cert_near": {
+            "actual": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_near_contact",
+            "expected": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_near_contact",
+            "leaf": "certificate_pool_near_contact"
+          },
+          "cert_contact": {
+            "actual": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_contact",
+            "expected": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_contact",
+            "leaf": "certificate_pool_contact"
+          }
+        },
+        "legacy_aliases": [],
+        "test_roots_read": false
+      },
+      "authoritative": {
+        "event": "v48_36_authoritative_run_state",
+        "version": "v48.36-OCAF",
+        "created_unix": 1786527315.0963805,
+        "run": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_45_sowr_ablation_B",
+        "valid": true,
+        "authoritative_source": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_45_sowr_ablation_B/V48_36_COMPLETE.json",
+        "authoritative_exit_code": 30,
+        "pipeline_valid": false,
+        "attempt_id": "v4836-1786527314597108284-4c01caa6f624",
+        "checks": {
+          "json_readable": true,
+          "terminal_completion_present": true,
+          "no_active_status_contradictions": true,
+          "pipeline_invalid": true,
+          "pipeline_failure_marker_present": true,
+          "next_commands_absent": true,
+          "next_commands_blocked": true,
+          "expected_exit_code": true,
+          "expected_attempt_id": true
+        },
+        "read_errors": [],
+        "active_contradictions": [],
+        "stale_markers": [],
+        "marker_relations": {
+          "pipeline_failed": "same_attempt"
+        },
+        "artifacts": {
+          "next_commands_present": false,
+          "next_commands_blocked_present": true,
+          "pipeline_failed_present": true,
+          "gate_failed_present": false,
+          "calibration_failed_present": false
+        },
+        "test_roots_read": false,
+        "expected_exit_code": 30,
+        "expected_attempt_id": "v4836-1786527314597108284-4c01caa6f624"
+      }
+    },
+    "C": {
+      "pipeline_failed": {
+        "event": "v48_36_pipeline_failed",
+        "version": "v48.36-OCAF",
+        "implementation_version": "v48.45.2-C-observation-kernel-recalibration-rebuilt-source-support",
+        "created_unix": 1786527315.6954565,
+        "attempt_id": "v4836-1786527315296885853-f9370432a3b8",
+        "stage": "dataset_root_contract",
+        "raw_exit_code": 4,
+        "normalized_exit_code": 30,
+        "pipeline_exit_code": 30,
+        "detail": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_45_sowr_ablation_C/DATASET_ROOT_CONTRACT.json",
+        "adaptation_exit_codes": {
+          "balanced": null,
+          "precision": null
+        },
+        "certificate_executed": false,
+        "gate_evaluated": false,
+        "pipeline_valid": false,
+        "test_roots_read": false
+      },
+      "dataset_root_contract": {
+        "event": "v48_36_dataset_root_contract",
+        "version": "v48.36-OCAF",
+        "created_unix": 1786527315.6505957,
+        "valid": false,
+        "checks": {
+          "train_near_canonical_path": true,
+          "train_near_exists": false,
+          "train_contact_canonical_path": true,
+          "train_contact_exists": false,
+          "dev_near_canonical_path": true,
+          "dev_near_exists": false,
+          "dev_contact_canonical_path": true,
+          "dev_contact_exists": false,
+          "cert_near_canonical_path": true,
+          "cert_near_exists": false,
+          "cert_contact_canonical_path": true,
+          "cert_contact_exists": false,
+          "safe_root_exists": true,
+          "no_legacy_alias_selected": true,
+          "near_contact_and_contact_distinct": true
+        },
+        "paths": {
+          "train_near": {
+            "actual": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_train_near_contact",
+            "expected": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_train_near_contact",
+            "leaf": "evidence_adapt_train_near_contact"
+          },
+          "train_contact": {
+            "actual": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_train_contact",
+            "expected": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_train_contact",
+            "leaf": "evidence_adapt_train_contact"
+          },
+          "dev_near": {
+            "actual": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_near_contact",
+            "expected": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_near_contact",
+            "leaf": "evidence_adapt_dev_near_contact"
+          },
+          "dev_contact": {
+            "actual": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_contact",
+            "expected": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_contact",
+            "leaf": "evidence_adapt_dev_contact"
+          },
+          "cert_near": {
+            "actual": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_near_contact",
+            "expected": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_near_contact",
+            "leaf": "certificate_pool_near_contact"
+          },
+          "cert_contact": {
+            "actual": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_contact",
+            "expected": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_contact",
+            "leaf": "certificate_pool_contact"
+          }
+        },
+        "legacy_aliases": [],
+        "test_roots_read": false
+      },
+      "authoritative": {
+        "event": "v48_36_authoritative_run_state",
+        "version": "v48.36-OCAF",
+        "created_unix": 1786527315.7682297,
+        "run": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_45_sowr_ablation_C",
+        "valid": true,
+        "authoritative_source": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_45_sowr_ablation_C/V48_36_COMPLETE.json",
+        "authoritative_exit_code": 30,
+        "pipeline_valid": false,
+        "attempt_id": "v4836-1786527315296885853-f9370432a3b8",
+        "checks": {
+          "json_readable": true,
+          "terminal_completion_present": true,
+          "no_active_status_contradictions": true,
+          "pipeline_invalid": true,
+          "pipeline_failure_marker_present": true,
+          "next_commands_absent": true,
+          "next_commands_blocked": true,
+          "expected_exit_code": true,
+          "expected_attempt_id": true
+        },
+        "read_errors": [],
+        "active_contradictions": [],
+        "stale_markers": [],
+        "marker_relations": {
+          "pipeline_failed": "same_attempt"
+        },
+        "artifacts": {
+          "next_commands_present": false,
+          "next_commands_blocked_present": true,
+          "pipeline_failed_present": true,
+          "gate_failed_present": false,
+          "calibration_failed_present": false
+        },
+        "test_roots_read": false,
+        "expected_exit_code": 30,
+        "expected_attempt_id": "v4836-1786527315296885853-f9370432a3b8"
+      }
+    },
+    "D/Main": {
+      "pipeline_failed": {
+        "event": "v48_36_pipeline_failed",
+        "version": "v48.36-OCAF",
+        "implementation_version": "v48.45.2-D-shared-option-witness-recalibration-rebuilt-source-support",
+        "created_unix": 1786527316.3316526,
+        "attempt_id": "v4836-1786527315965120204-5aea9fc08bbc",
+        "stage": "dataset_root_contract",
+        "raw_exit_code": 4,
+        "normalized_exit_code": 30,
+        "pipeline_exit_code": 30,
+        "detail": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_45_sowr_main/DATASET_ROOT_CONTRACT.json",
+        "adaptation_exit_codes": {
+          "balanced": null,
+          "precision": null
+        },
+        "certificate_executed": false,
+        "gate_evaluated": false,
+        "pipeline_valid": false,
+        "test_roots_read": false
+      },
+      "dataset_root_contract": {
+        "event": "v48_36_dataset_root_contract",
+        "version": "v48.36-OCAF",
+        "created_unix": 1786527316.2882836,
+        "valid": false,
+        "checks": {
+          "train_near_canonical_path": true,
+          "train_near_exists": false,
+          "train_contact_canonical_path": true,
+          "train_contact_exists": false,
+          "dev_near_canonical_path": true,
+          "dev_near_exists": false,
+          "dev_contact_canonical_path": true,
+          "dev_contact_exists": false,
+          "cert_near_canonical_path": true,
+          "cert_near_exists": false,
+          "cert_contact_canonical_path": true,
+          "cert_contact_exists": false,
+          "safe_root_exists": true,
+          "no_legacy_alias_selected": true,
+          "near_contact_and_contact_distinct": true
+        },
+        "paths": {
+          "train_near": {
+            "actual": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_train_near_contact",
+            "expected": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_train_near_contact",
+            "leaf": "evidence_adapt_train_near_contact"
+          },
+          "train_contact": {
+            "actual": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_train_contact",
+            "expected": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_train_contact",
+            "leaf": "evidence_adapt_train_contact"
+          },
+          "dev_near": {
+            "actual": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_near_contact",
+            "expected": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_near_contact",
+            "leaf": "evidence_adapt_dev_near_contact"
+          },
+          "dev_contact": {
+            "actual": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_contact",
+            "expected": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_contact",
+            "leaf": "evidence_adapt_dev_contact"
+          },
+          "cert_near": {
+            "actual": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_near_contact",
+            "expected": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_near_contact",
+            "leaf": "certificate_pool_near_contact"
+          },
+          "cert_contact": {
+            "actual": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_contact",
+            "expected": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_contact",
+            "leaf": "certificate_pool_contact"
+          }
+        },
+        "legacy_aliases": [],
+        "test_roots_read": false
+      },
+      "authoritative": {
+        "event": "v48_36_authoritative_run_state",
+        "version": "v48.36-OCAF",
+        "created_unix": 1786527316.4056282,
+        "run": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_45_sowr_main",
+        "valid": true,
+        "authoritative_source": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_45_sowr_main/V48_36_COMPLETE.json",
+        "authoritative_exit_code": 30,
+        "pipeline_valid": false,
+        "attempt_id": "v4836-1786527315965120204-5aea9fc08bbc",
+        "checks": {
+          "json_readable": true,
+          "terminal_completion_present": true,
+          "no_active_status_contradictions": true,
+          "pipeline_invalid": true,
+          "pipeline_failure_marker_present": true,
+          "next_commands_absent": true,
+          "next_commands_blocked": true,
+          "expected_exit_code": true,
+          "expected_attempt_id": true
+        },
+        "read_errors": [],
+        "active_contradictions": [],
+        "stale_markers": [],
+        "marker_relations": {
+          "pipeline_failed": "same_attempt"
+        },
+        "artifacts": {
+          "next_commands_present": false,
+          "next_commands_blocked_present": true,
+          "pipeline_failed_present": true,
+          "gate_failed_present": false,
+          "calibration_failed_present": false
+        },
+        "test_roots_read": false,
+        "expected_exit_code": 30,
+        "expected_attempt_id": "v4836-1786527315965120204-5aea9fc08bbc"
+      }
+    }
+  },
+  "shared_failure_signature": {
+    "stage": "dataset_root_contract",
+    "raw_exit_code": 4,
+    "normalized_exit_code": 30,
+    "missing_expected_roots": [
+      "evidence_adapt_train_near_contact",
+      "evidence_adapt_train_contact",
+      "evidence_adapt_dev_near_contact",
+      "evidence_adapt_dev_contact",
+      "certificate_pool_near_contact",
+      "certificate_pool_contact"
+    ],
+    "default_protocol_root": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814",
+    "actual_calibration_sources": [
+      "/data0/senzeyu2/dataset/OCRAP/calibration_near_contact",
+      "/data0/senzeyu2/dataset/OCRAP/calibration_contact",
+      "/data0/senzeyu2/dataset/OCRAP/calibration_safe"
+    ],
+    "certificate_executed": false,
+    "gate_evaluated": false,
+    "test_roots_read": false
+  },
+  "fix": {
+    "version": "v48.45.5",
+    "algorithm_changed": false,
+    "protocol_seed": 4814,
+    "adapt_train_fraction": 0.45,
+    "adapt_dev_fraction": 0.15,
+    "certificate_fraction": 0.4,
+    "bootstrap": "scripts/prepare_v48_45_protocol.sh",
+    "seal": "tools/check_v48_45_protocol_seal.py",
+    "per_arm_protocol_recheck": true,
+    "attempt_records_protocol_seal_sha256": true,
+    "attribution_comparator_fail_closed": true,
+    "attribution_identity_fields": [
+      "protocol_seal_sha256",
+      "balanced_source_checkpoint_sha256",
+      "precision_source_checkpoint_sha256",
+      "gate_protocol_sha256",
+      "gate_dataset_manifest_sha256"
+    ]
+  }
+}
