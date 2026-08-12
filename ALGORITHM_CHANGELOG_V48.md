@@ -1,3 +1,72 @@
+## v48.45.4 — S1 NOUNSET SOURCE-REBUILD ENGINEERING HOTFIX (2026-08-12)
+
+**Category: engineering-only.  The v48.45 SOWR algorithm, 2x2 factors, source data mix,
+ROCT/top-k/shared-rule settings, harm budgets, certificate and gate are unchanged.**
+
+### Uploaded failure diagnosis
+
+The uploaded `ocrap_v48_45_source_rebuild_s7` is not an algorithm result.  S0 completed
+successfully (`50114` train samples, `12250` validation samples, `13` epochs, best epoch
+`7`, best validation loss `5.2515695061`, and an existing `best.pt` on the run machine),
+but the source rebuild terminated at `S1_source_policy_heads`.  The retained status log
+is exactly `balanced=1 precision=1`; neither S1 candidate directory nor its
+`train_summary.json` was created.  The outer source driver then normalized the failed
+S1 stage to RC=30.  No v48.45 SOWR adaptation/certificate/gate result can therefore be
+attributed from this upload.
+
+The direct cause is Bash nounset evaluation in `rebuild_v48_45_shared_source.sh`:
+
+```bash
+train_source_variant() {
+  local variant="$1" gpu="$2" run="$SOURCE_OUT/candidates/$variant"
+  ...
+}
+```
+
+The script uses `set -u`.  Bash expands all RHS expressions before the `local` builtin
+establishes those local variables, so `$variant` in the third assignment is unbound.
+Both background S1 functions abort before `mkdir -p "$run/logs"`, producing the observed
+`balanced=1 precision=1` signature.  A minimal shell reproduction returns the same two
+exit codes.
+
+### Engineering fixes
+
+1. `train_source_variant` now declares `variant gpu run` first and assigns them on
+   separate commands; S1 additionally writes `S1_SOURCE_POLICY_STATUS.json` with both
+   raw exits before the outer RC=30 mapping.
+2. Resuming an unsealed source removes only stale failure/status markers.  A complete S0
+   (`best.pt` + `TRAINING_COMPLETE.json`) is preserved and reused; it is not retrained.
+3. The new operator commands no longer delete the entire incomplete `SOURCE_RUN`, so the
+   already-completed S0 from the uploaded attempt can be reused on the original machine.
+4. `run_v48_45_sowr_2x2_parallel.sh` now defaults to `MAX_PARALLEL_ARMS=1`.  Each arm
+   already runs Balanced on GPU0 and Precision on GPU1 concurrently, so this uses both
+   GPUs while avoiding 8 concurrent train processes on two GPUs.
+5. The same nounset-local dependency class was removed from the latent v48.36 ablation
+   task launcher and both v48.34 video launchers.  A repository-wide shell test now
+   scans every script for this exact unsafe `local a=... b=...$a` pattern.
+6. The new operator command runs source hash/quality contracts before A/B/C/D and builds
+   `ocrap_v48_45_sowr_2x2_comparison.json` only after all four arms are authoritative
+   RC=0/20 results.
+
+### Attribution boundary
+
+No new Safe/Near/Contact identifier, router, regime-specific threshold or regime-specific
+policy is introduced.  Because the uploaded run stopped before S1 training, no further
+algorithm change is justified by this result.  The next algorithmic decision remains the
+pre-registered SOWR 2x2: A=no witness recalibration, B=root/margin witness only,
+C=observation kernel only, D=both.  Only after these four arms complete with RC 0/20 may
+we decide whether SOWR is effective.
+
+### Validation
+
+- v48.42-v48.45 focused regression: **52 passed**.
+- v48.45 focused regression: **25 passed**.
+- `python -m compileall -q src tools tests`: PASS.
+- **99/99** scripts pass `bash -n`; v48.45.4 operator command also passes `bash -n`.
+- Repository-wide nounset same-`local` self-dependency scan: **0 findings**.
+- A larger v48.36-v48.41 regression batch was started and reached its environment time
+  limit without reporting a test failure; it is not counted as a completed validation.
+
 ## v48.45.3 — SOURCE-REBUILD EMPTY-OVERRIDE ENGINEERING HOTFIX (2026-08-11)
 
 **Category: engineering-only; v48.45 SOWR algorithm and v48.45.2 source-rebuild attribution protocol are unchanged.**

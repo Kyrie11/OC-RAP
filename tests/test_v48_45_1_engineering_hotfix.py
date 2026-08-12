@@ -281,7 +281,7 @@ def test_v48453_source_rebuild_writes_failure_stage_marker() -> None:
     assert 'SOURCE_REBUILD_STAGE="S0_shared_recovery_backbone"' in text
     assert 'SOURCE_REBUILD_STAGE="S1_source_policy_heads"' in text
     assert 'SOURCE_REBUILD_FAILED.json' in text
-    assert 'implementation_version": "v48.45.3-engineering-hotfix"' in text
+    assert 'implementation_version": "v48.45.4-s1-nounset-hotfix"' in text
 
 
 def test_v48453_operator_commands_fail_closed_before_ablation() -> None:
@@ -292,3 +292,74 @@ def test_v48453_operator_commands_fail_closed_before_ablation() -> None:
     assert '[[ -s "$SOURCE_RUN/SOURCE_REBUILD_COMPLETE.json" ]]' in text
     assert text.index("SOURCE REBUILD ENGINEERING FAILURE") < text.index("run_v48_45_sowr_2x2_parallel.sh")
     assert 'if [[ -d "$SOURCE_RUN" && ! -f "$SOURCE_RUN/SOURCE_REBUILD_COMPLETE.json" ]]' in text
+
+
+
+def test_v48454_s1_local_initialization_is_nounset_safe() -> None:
+    text = (ROOT / "scripts" / "rebuild_v48_45_shared_source.sh").read_text()
+    assert "local variant gpu run" in text
+    assert 'variant="$1"' in text
+    assert 'gpu="$2"' in text
+    assert 'run="$SOURCE_OUT/candidates/$variant"' in text
+    assert 'local variant="$1" gpu="$2" run="$SOURCE_OUT/candidates/$variant"' not in text
+    assert "S1_SOURCE_POLICY_STATUS.json" in text
+    assert "v48.45.4-s1-nounset-hotfix" in text
+
+
+def test_v48454_no_same_local_command_self_dependency_under_nounset() -> None:
+    """Catch the exact Bash class that caused uploaded RC=30.
+
+    In `local a=... b=...$a`, every RHS is expanded before the local builtin
+    assigns `a`; with `set -u` this aborts the function if `a` was not already set.
+    Inspect only each local builtin up to its command separator to avoid flagging
+    ordinary later references such as `local a=$1; echo $a`.
+    """
+    import shlex
+
+    problems: list[tuple[str, int, str, str]] = []
+    for path in sorted((ROOT / "scripts").glob("*.sh")):
+        for lineno, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+            if "local " not in line or line.lstrip().startswith("#"):
+                continue
+            lexer = shlex.shlex(line, posix=True, punctuation_chars=";")
+            lexer.whitespace_split = True
+            lexer.commenters = "#"
+            tokens = list(lexer)
+            i = 0
+            while i < len(tokens):
+                if tokens[i] != "local":
+                    i += 1
+                    continue
+                j = i + 1
+                segment: list[str] = []
+                while j < len(tokens) and tokens[j] != ";":
+                    segment.append(tokens[j])
+                    j += 1
+                assignments: list[tuple[str, str]] = []
+                for token in segment:
+                    m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", token, flags=re.S)
+                    if m:
+                        assignments.append((m.group(1), m.group(2)))
+                local_names = {name for name, _ in assignments}
+                for target, rhs in assignments:
+                    for ref in local_names:
+                        if re.search(rf"\${re.escape(ref)}\b", rhs) or re.search(rf"\${{{re.escape(ref)}}}", rhs):
+                            problems.append((str(path.relative_to(ROOT)), lineno, target, ref))
+                i = max(j + 1, i + 1)
+    assert problems == []
+
+
+def test_v48454_parallel_default_uses_two_training_processes_total() -> None:
+    text = (ROOT / "scripts" / "run_v48_45_sowr_2x2_parallel.sh").read_text()
+    assert 'MAX_PARALLEL_ARMS="${MAX_PARALLEL_ARMS:-1}"' in text
+    assert "1 recommended: each arm already uses GPU0/GPU1 in parallel" in text
+
+
+def test_v48454_operator_commands_preserve_reusable_s0_and_compare_2x2() -> None:
+    text = (ROOT / "OC-RAP-v48.45.4-source-rebuild-and-SOWR-run-commands-ZH.txt").read_text()
+    assert not re.search(r'^\s*rm -rf \"\$SOURCE_RUN\"\s*$', text, flags=re.M)
+    assert "reusable S0 detected; S0 WILL NOT be retrained" in text
+    assert "S1_SOURCE_POLICY_STATUS.json" in text
+    assert "MAX_PARALLEL_ARMS=1" in text
+    assert "compare_v48_45_sowr_2x2.py" in text
+    assert text.index("SOURCE HASH + QUALITY CONTRACT PASS") < text.index("run_v48_45_sowr_2x2_parallel.sh")

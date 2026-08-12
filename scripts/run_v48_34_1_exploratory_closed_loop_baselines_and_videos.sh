@@ -295,7 +295,10 @@ run_video_regime() {
   local variant="$1" regime="$2" target="$3" split="$4" womd="$5" gpu="$6"
   local full="$OUT/models/$variant/$regime" model_file control_file
   if [[ "$regime" == near ]]; then model_file="$full/audit_near_contact_selected_topk_v48_v48.json"; control_file="$full/audit_near_contact_selected_topk_v48_scalar.json"; else model_file="$full/audit_contact_selected_topk_v48_v48.json"; control_file="$full/audit_contact_selected_topk_v48_scalar.json"; fi
-  local video_root="$OUT/videos/$variant/$regime" selection="$video_root/critical_scene_selection.json" subset="$video_root/target_subset"
+  local video_root selection subset
+  video_root="$OUT/videos/$variant/$regime"
+  selection="$video_root/critical_scene_selection.json"
+  subset="$video_root/target_subset"
   mkdir -p "$video_root"
   python tools/select_critical_scenes_v48_34.py --method-scenes "$model_file" --control-scenes "$control_file" --regime "$regime" --num-positive "$NUM_POSITIVE_VIDEOS" --num-failure "$NUM_FAILURE_VIDEOS" --output "$selection"
   python tools/subset_dataset_targets_v48_34.py --input "$target" --selection "$selection" --output "$subset" --overwrite

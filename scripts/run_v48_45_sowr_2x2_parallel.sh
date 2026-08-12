@@ -8,8 +8,8 @@ export OMP_NUM_THREADS="${ABLATION_OMP_NUM_THREADS:-1}"
 export MKL_NUM_THREADS="$OMP_NUM_THREADS"; export OPENBLAS_NUM_THREADS="$OMP_NUM_THREADS"
 export NUM_WORKERS="${ABLATION_NUM_WORKERS:-1}"; export PREFETCH_FACTOR="${ABLATION_PREFETCH_FACTOR:-2}"
 mkdir -p "$BASE_OUT"
-MAX_PARALLEL_ARMS="${MAX_PARALLEL_ARMS:-4}"
-if ! [[ "$MAX_PARALLEL_ARMS" =~ ^[1-4]$ ]]; then echo "MAX_PARALLEL_ARMS must be 1..4" >&2; exit 2; fi
+MAX_PARALLEL_ARMS="${MAX_PARALLEL_ARMS:-1}"
+if ! [[ "$MAX_PARALLEL_ARMS" =~ ^[1-4]$ ]]; then echo "MAX_PARALLEL_ARMS must be 1..4 (1 recommended: each arm already uses GPU0/GPU1 in parallel)" >&2; exit 2; fi
 arms=(A B C D)
 arm_output() {
   case "$1" in

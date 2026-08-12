@@ -17,7 +17,14 @@ if not x.get('valid') or rc not in (0,20): raise SystemExit('ablations require a
 PY
 copy_indices(){ local out="$1"; mkdir -p "$out"; for f in evidence_adapt_teacher_pcd_index.jsonl evidence_adapt_teacher_pcd_index_summary.json evidence_adapt_dev_teacher_pcd_index.jsonl evidence_adapt_dev_teacher_pcd_index_summary.json; do [[ -s "$MAIN_RUN/$f" ]] || { echo "missing $MAIN_RUN/$f" >&2; return 30; }; cp -a "$MAIN_RUN/$f" "$out/$f"; done; }
 run_task(){
-  local name="$1" context="$2" prior="$3" out="$ROOT/tasks/$name" rc=30
+  # Keep nounset-safe local initialization: later RHS values must not depend on
+  # names assigned by the same `local` command.
+  local name context prior out rc
+  name="$1"
+  context="$2"
+  prior="$3"
+  out="$ROOT/tasks/$name"
+  rc=30
   rm -rf "$out"; mkdir -p "$out"
   if copy_indices "$out"; then
     set +e

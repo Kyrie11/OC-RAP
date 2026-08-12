@@ -59,6 +59,9 @@ if [[ "${ALLOW_SOURCE_REBUILD_OVERWRITE:-0}" == 1 ]]; then
   rm -rf "$SOURCE_OUT"
 fi
 mkdir -p "$SOURCE_OUT/logs"
+# A resumed unsealed source may contain a marker from the previous failed attempt.
+# Remove only status markers; never remove a completed S0 backbone here.
+rm -f "$SOURCE_OUT/SOURCE_REBUILD_FAILED.json" "$SOURCE_OUT/S1_SOURCE_POLICY_STATUS.json"
 SOURCE_REBUILD_STAGE="preflight"
 source_rebuild_failure_marker() {
   local rc=$?
@@ -68,7 +71,7 @@ import json, os, pathlib, time
 out = pathlib.Path(os.environ["SOURCE_REBUILD_FAILURE_OUT"]) / "SOURCE_REBUILD_FAILED.json"
 doc = {
     "event": "v48_45_source_rebuild_failed",
-    "implementation_version": "v48.45.3-engineering-hotfix",
+    "implementation_version": "v48.45.4-s1-nounset-hotfix",
     "created_unix": time.time(),
     "stage": os.environ.get("SOURCE_REBUILD_FAILURE_STAGE", "unknown"),
     "raw_exit_code": int(os.environ.get("SOURCE_REBUILD_FAILURE_RC", "1")),
@@ -172,7 +175,14 @@ fi
 [[ -f "$BACKBONE_CKPT" && -f "$BACKBONE_DONE" ]] || { echo "shared recovery backbone completion artifacts missing: $BACKBONE_CKPT / $BACKBONE_DONE" >&2; exit 30; }
 
 train_source_variant() {
-  local variant="$1" gpu="$2" run="$SOURCE_OUT/candidates/$variant"
+  # Do not reference a variable in the same `local` command that initializes it.
+  # Under `set -u`, Bash expands all RHS expressions before these local assignments
+  # become visible, so `local variant="$1" run=".../$variant"` aborts with an
+  # unbound-variable error before S1 can even create its candidate directory.
+  local variant gpu run
+  variant="$1"
+  gpu="$2"
+  run="$SOURCE_OUT/candidates/$variant"
   rm -rf "$run"
   mkdir -p "$run/logs"
   echo "[source rebuild] S1 $variant source policy/evidence on GPU $gpu" | tee -a "$SOURCE_OUT/logs/source_rebuild_status.log"
@@ -227,6 +237,21 @@ wait "$p0"; s0=$?
 wait "$p1"; s1=$?
 set -e
 printf 'source policy status: balanced=%s precision=%s\n' "$s0" "$s1" | tee -a "$SOURCE_OUT/logs/source_rebuild_status.log"
+python - "$SOURCE_OUT" "$s0" "$s1" <<'PY_S1_STATUS'
+import json,pathlib,sys,time
+root=pathlib.Path(sys.argv[1])
+doc={
+  'event':'v48_45_source_policy_stage_status',
+  'implementation_version':'v48.45.4-s1-nounset-hotfix',
+  'created_unix':time.time(),
+  'balanced_exit_code':int(sys.argv[2]),
+  'precision_exit_code':int(sys.argv[3]),
+  'both_succeeded':sys.argv[2]=='0' and sys.argv[3]=='0',
+  'test_roots_read':False,
+}
+p=root/'S1_SOURCE_POLICY_STATUS.json'; tmp=p.with_name('.'+p.name+'.tmp')
+tmp.write_text(json.dumps(doc,indent=2)+'\n',encoding='utf-8'); tmp.replace(p)
+PY_S1_STATUS
 [[ "$s0" == 0 && "$s1" == 0 ]] || exit 30
 
 SOURCE_REBUILD_STAGE="seal_source_manifest"
@@ -244,7 +269,7 @@ for name in ('balanced','precision'):
     if not p.is_file(): raise SystemExit(f'missing source checkpoint {p}')
     variants[name]={'checkpoint':str(p.resolve()),'sha256':sha(p),'size_bytes':p.stat().st_size}
 doc={
- 'event':'v48_45_source_rebuild_complete','created_unix':time.time(),
+ 'event':'v48_45_source_rebuild_complete','implementation_version':'v48.45.4-s1-nounset-hotfix','created_unix':time.time(),
  'source_identity':'v48.45-shared-backbone-source-rebuild',
  'historical_v48_13_checkpoint_recovered':False,
  'attribution_scope':'within_this_source_rebuilt_A_B_C_D_round',

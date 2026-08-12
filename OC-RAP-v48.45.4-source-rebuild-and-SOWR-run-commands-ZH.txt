@@ -1,0 +1,200 @@
+#!/usr/bin/env bash
+# OC-RAP v48.45.4 — S1 nounset engineering hotfix + resumable shared-source rebuild + SOWR 2x2
+#
+# 本轮只修工程，不改变 v48.45 SOWR 算法因素。
+# 关键区别：不要删除已经完成的 S0 backbone。当前失败发生在 S1 启动前；
+# rebuild_v48_45_shared_source.sh 会在 S0 的 best.pt + TRAINING_COMPLETE.json 都存在时直接复用 S0，
+# 然后只重训 balanced/precision 两份 S1 source policy/evidence heads。
+#
+# 推荐整份执行：
+#   bash OC-RAP-v48.45.4-source-rebuild-and-SOWR-run-commands-ZH.txt
+#
+# GPU 语义：每个 arm 内 balanced->GPU0、precision->GPU1，因此 MAX_PARALLEL_ARMS=1 已经同时使用 2 张 GPU。
+# 首轮归因不要设成 4；那会在两张卡上最多并发 8 个训练进程，增加 OOM/IO 抖动这一额外变量。
+
+set -Eeuo pipefail
+
+# ==============================
+# 0. 只根据机器实际路径修改这里
+# ==============================
+export OCRAP_REPO=/home/senzeyu2/code/OC-RAP
+export OCRAP_ROOT=/data0/senzeyu2/dataset/OCRAP
+export BASE_OUT="$OCRAP_REPO/runs"
+export SOURCE_RUN="$BASE_OUT/ocrap_v48_45_source_rebuild_s7"
+export GPU0=0
+export GPU1=1
+export SOURCE_SEED=7
+
+export SOURCE_TRAIN_SAFE="$OCRAP_ROOT/train_safe"
+export SOURCE_TRAIN_NEAR="$OCRAP_ROOT/train_near_contact"
+export SOURCE_TRAIN_CONTACT="$OCRAP_ROOT/train_contact"
+export SOURCE_DEV_SAFE="$OCRAP_ROOT/val_safe"
+export SOURCE_DEV_NEAR="$OCRAP_ROOT/val_near_contact"
+export SOURCE_DEV_CONTACT="$OCRAP_ROOT/val_contact"
+
+cd "$OCRAP_REPO"
+export PYTHONPATH="$OCRAP_REPO/src${PYTHONPATH:+:$PYTHONPATH}"
+mkdir -p "$BASE_OUT"
+
+[[ "$GPU0" != "$GPU1" ]] || { echo "ERROR: GPU0 and GPU1 must be different" >&2; exit 2; }
+
+printf '\n========== CODE PRECHECK ==========\n'
+python - <<'PYCFG'
+from ocrap.config.overrides import parse_cli_overrides
+d = parse_cli_overrides([
+    'training.init_checkpoint=',
+    'model.direct_recovery_evidence_component_reliability=',
+    'training.direct_value_ordinal_evidence_component_reliability=',
+])
+assert d['training']['init_checkpoint'] == '', d
+assert d['model']['direct_recovery_evidence_component_reliability'] == '', d
+assert d['training']['direct_value_ordinal_evidence_component_reliability'] == '', d
+print('V48.45.4 EMPTY-OVERRIDE CONTRACT PASS')
+PYCFG
+
+# 回归测试覆盖：RC=20/30 分类、source hash contract、SOWR、S1 nounset local 初始化、双 GPU launcher 默认并发。
+pytest -q tests/test_v48_45_1_engineering_hotfix.py tests/test_v48_45_sowr.py
+
+printf '\n========== DATA/GPU PRECHECK ==========\n'
+for d in \
+  "$SOURCE_TRAIN_SAFE" "$SOURCE_TRAIN_NEAR" "$SOURCE_TRAIN_CONTACT" \
+  "$SOURCE_DEV_SAFE" "$SOURCE_DEV_NEAR" "$SOURCE_DEV_CONTACT"; do
+  test -d "$d" || { echo "ERROR missing dataset: $d" >&2; exit 2; }
+done
+nvidia-smi -L
+
+# ==============================
+# 1. 续跑 shared source；保留完整 S0
+# ==============================
+# 重要：不要 rm -rf "$SOURCE_RUN"。
+# 当前上传结果已经证明 S0 训练完成；如果原机器 run 目录仍保留 best.pt + TRAINING_COMPLETE.json，
+# 修复后的脚本会复用它，只重跑失败的 S1。
+BACKBONE_CKPT="$SOURCE_RUN/shared_recovery_backbone/model_v48_trac_sr/best.pt"
+BACKBONE_DONE="$SOURCE_RUN/shared_recovery_backbone/TRAINING_COMPLETE.json"
+if [[ -s "$BACKBONE_CKPT" && -s "$BACKBONE_DONE" ]]; then
+  echo "[source] reusable S0 detected; S0 WILL NOT be retrained"
+elif [[ -e "$BACKBONE_CKPT" || -e "$BACKBONE_DONE" ]]; then
+  echo "[source] partial S0 detected; rebuild script will remove only partial S0 and retrain it"
+else
+  echo "[source] no reusable S0 found on this machine; S0 will be trained from scratch"
+fi
+
+if [[ ! -f "$SOURCE_RUN/SOURCE_REBUILD_COMPLETE.json" ]]; then
+  echo "[1/4] resume/build one common source"
+  set +e
+  OCRAP_REPO="$OCRAP_REPO" OCRAP_ROOT="$OCRAP_ROOT" SOURCE_OUT="$SOURCE_RUN" \
+  SOURCE_TRAIN_SAFE="$SOURCE_TRAIN_SAFE" SOURCE_TRAIN_NEAR="$SOURCE_TRAIN_NEAR" SOURCE_TRAIN_CONTACT="$SOURCE_TRAIN_CONTACT" \
+  SOURCE_DEV_SAFE="$SOURCE_DEV_SAFE" SOURCE_DEV_NEAR="$SOURCE_DEV_NEAR" SOURCE_DEV_CONTACT="$SOURCE_DEV_CONTACT" \
+  GPU0="$GPU0" GPU1="$GPU1" SOURCE_SEED="$SOURCE_SEED" \
+  bash scripts/rebuild_v48_45_shared_source.sh \
+    2>&1 | tee "$BASE_OUT/v48_45_4_source_rebuild_driver.log"
+  source_rc=${PIPESTATUS[0]}
+  set -e
+  if [[ "$source_rc" -ne 0 ]]; then
+    echo "SOURCE REBUILD ENGINEERING FAILURE: rc=$source_rc" >&2
+    [[ -f "$SOURCE_RUN/SOURCE_REBUILD_FAILED.json" ]] && cat "$SOURCE_RUN/SOURCE_REBUILD_FAILED.json" >&2
+    exit 30
+  fi
+else
+  echo "[1/4] immutable sealed source already exists; DO NOT retrain it"
+fi
+
+[[ -s "$SOURCE_RUN/SOURCE_REBUILD_COMPLETE.json" ]] || {
+  echo "ERROR: source rebuild returned without SOURCE_REBUILD_COMPLETE.json" >&2
+  exit 30
+}
+
+# 新版 S1 状态文件用于区分 shell 启动错误和真实训练错误。
+if [[ -s "$SOURCE_RUN/S1_SOURCE_POLICY_STATUS.json" ]]; then
+  python - "$SOURCE_RUN/S1_SOURCE_POLICY_STATUS.json" <<'PYS1'
+import json,sys
+p=sys.argv[1]; d=json.load(open(p))
+assert d.get('balanced_exit_code') == 0, d
+assert d.get('precision_exit_code') == 0, d
+assert d.get('both_succeeded') is True, d
+assert d.get('test_roots_read') is False, d
+print('S1 SOURCE POLICY STATUS PASS')
+PYS1
+fi
+
+# ==============================
+# 2. 封存 source contract；不读取 test roots
+# ==============================
+echo "[2/4] validate immutable source hashes and train/val quality"
+python tools/check_v48_36_source_checkpoint_contract.py \
+  --source-run "$SOURCE_RUN" \
+  --output "$SOURCE_RUN/SOURCE_CHECKPOINT_CONTRACT_RECHECK.json"
+python tools/check_v48_45_rebuilt_source_quality.py \
+  --source-run "$SOURCE_RUN" \
+  --output "$SOURCE_RUN/SOURCE_QUALITY_CONTRACT_RECHECK.json"
+
+python - "$SOURCE_RUN/SOURCE_CHECKPOINT_CONTRACT_RECHECK.json" "$SOURCE_RUN/SOURCE_QUALITY_CONTRACT_RECHECK.json" <<'PYSRC'
+import json,sys
+h=json.load(open(sys.argv[1])); q=json.load(open(sys.argv[2]))
+assert h.get('valid') is True, h
+assert q.get('valid') is True, q
+for v in ('balanced','precision'):
+    c=h['checks'][v]
+    assert c.get('exists') and c.get('nonempty'), c
+    if h.get('source_rebuild_manifest_present'):
+        assert c.get('manifest_hash_match') is True, c
+print('SOURCE HASH + QUALITY CONTRACT PASS')
+PYSRC
+
+# ==============================
+# 3. 清理旧失败 arm；绝不删除 SOURCE_RUN
+# ==============================
+rm -rf \
+  "$BASE_OUT/ocrap_v48_45_sowr_ablation_A" \
+  "$BASE_OUT/ocrap_v48_45_sowr_ablation_B" \
+  "$BASE_OUT/ocrap_v48_45_sowr_ablation_C" \
+  "$BASE_OUT/ocrap_v48_45_sowr_main" \
+  "$BASE_OUT/ocrap_v48_45_sowr_parallel_status.json" \
+  "$BASE_OUT/ocrap_v48_45_sowr_2x2_comparison.json"
+
+# ==============================
+# 4. 严格 2x2：只改变 SOWR witness 因素
+# ==============================
+# A: dual-ROCT reference，不做 SOWR
+# B: A + root probability/recovery-margin witness recalibration
+# C: A + observation-kernel recalibration
+# D/Main: A + 两者
+# 固定：同一 source SHA256、同一 top-k=5、同一 shared continuous rule、同一 harm budgets、同一数据 protocol。
+# 不加入 Safe/Near/Contact identifier/router/专用 threshold。
+export SOURCE_RUN BASE_OUT GPU0 GPU1
+export MAX_PARALLEL_ARMS=1
+export ABLATION_NUM_WORKERS=1
+export ABLATION_OMP_NUM_THREADS=1
+
+echo "[3/4] run v48.45 SOWR A/B/C/D; each arm uses both GPUs concurrently"
+bash scripts/run_v48_45_sowr_2x2_parallel.sh \
+  2>&1 | tee "$BASE_OUT/v48_45_4_sowr_2x2_driver.log"
+
+cat "$BASE_OUT/ocrap_v48_45_sowr_parallel_status.json"
+
+# launcher 只会在工程失败时非零；arm RC=20 是 pipeline-valid 的算法 gate failure，必须保留用于归因。
+python - "$BASE_OUT/ocrap_v48_45_sowr_parallel_status.json" <<'PYSTATUS'
+import json,sys
+s=json.load(open(sys.argv[1]))
+assert s.get('engineering_failed') is False, s
+assert all(v.get('launcher_exit_code') in (0,20) for v in s['arms'].values()), s
+print('ALL FOUR ARMS ARE AUTHORITATIVE ALGORITHM RESULTS (RC 0/20)')
+PYSTATUS
+
+# 只读 development/certificate diagnostics，不读取 held-out test roots。
+echo "[4/4] build diagnostic 2x2 comparison"
+python tools/compare_v48_45_sowr_2x2.py \
+  --a "$BASE_OUT/ocrap_v48_45_sowr_ablation_A" \
+  --b "$BASE_OUT/ocrap_v48_45_sowr_ablation_B" \
+  --c "$BASE_OUT/ocrap_v48_45_sowr_ablation_C" \
+  --d "$BASE_OUT/ocrap_v48_45_sowr_main" \
+  --positive-gain 0.015 \
+  --output "$BASE_OUT/ocrap_v48_45_sowr_2x2_comparison.json" \
+  | tee "$BASE_OUT/v48_45_4_sowr_2x2_comparison.log"
+
+printf '\n========== INTERPRETATION RULES ==========\n'
+echo '1) RC=30/other: engineering/protocol failure -> no algorithm attribution.'
+echo '2) RC=20: pipeline-valid Natural-gate failure -> valid negative algorithm evidence.'
+echo '3) First compare B-A (margin/root witness), C-A (obs kernel), and interaction D-B-C+A.'
+echo '4) Do not tune thresholds after seeing certificate/test. Keep the preregistered harm budgets fixed.'
+echo '5) Only after one factor gives a repeatable certificate improvement should we spend test-set budget.'
