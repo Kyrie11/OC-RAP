@@ -1,0 +1,39 @@
+OC-RAP v48.47 DS-OFR validation status
+Date: 2026-08-13
+
+Scientific basis
+- v48.46 A/B/C/D: authoritative RC=20, pipeline_valid=true, attribution contract valid.
+- No v48.46 arm met Natural gate; results are valid algorithm-negative evidence, not pipeline failure.
+- Proposal oracle is feasible on all registered Near/Contact safe-positive certificate opportunities; bottleneck localizes to learned DRS/deployability frontier/admission.
+
+New v48.47 regression coverage
+- tests/test_v48_47_dsofr.py: 7 passed (includes witness fast/full bit-exact + RNG-equivalence contract).
+- v48.44/v48.45/v48.46/v48.47 focused: 28 passed.
+- v48.37-v48.43: 49 passed.
+- v48.36 OCAF: 14 passed / 1 skipped.
+- v48.36 transfer/terminal/idempotence: 18 passed.
+- v48.45 engineering/protocol/stage-isolation: 29 passed.
+- Unique total: 138 passed / 1 skipped.
+
+Static/packaging checks
+- python compileall src+tools: PASS.
+- shell scripts bash -n: 106/106 PASS.
+- operator command bash -n: PASS.
+- same-local cross-assignment nounset audit: 0 findings.
+- New factor contract forbids strategy_regime_conditioning and test-roots use.
+- New witness stages freeze root logits, encoder/root decoder and downstream policy/evidence heads.
+- DWOK changes observation-loss importance only; physical y_obs labels are unchanged.
+- DRFC is symmetric candidate-relative DRS/deployability calibration; no one-sided safe-positive or regime-conditioned loss.
+
+Performance engineering
+- Two ablations run in parallel: A/B then C/D on GPU0/GPU1.
+- Balanced/Precision default to parallel on their assigned GPU; set V4847_VARIANT_MODE=serial only for OOM/compute saturation.
+- D reuses B DWOK checkpoint only after fail-closed source/input/hyperparameter identity checks.
+- Persistent mmap tensor cache is reused from v48.46 input schema.
+- Witness fast path skips only zero-weight frozen downstream heads; frozen subtrees are eval and fast/full active outputs plus RNG state are bit-exact.
+- Runtime end/RC is now recorded inside each background arm at actual process completion; v48.46 wait-order inflation is removed.
+- Runtime telemetry is truncated at launcher start and summarized after the run.
+
+Not claimed
+- The current container does not have the user's real WOMD/Waymax data path and dual A30 training environment.
+- Therefore v48.47 real GPU RC0/20 and algorithm performance remain to be established by the supplied operator command.

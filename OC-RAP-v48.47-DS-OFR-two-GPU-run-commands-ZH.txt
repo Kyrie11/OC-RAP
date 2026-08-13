@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# ================================================================
+# OC-RAP v48.47 DS-OFR — 两张 GPU 的严格 2x2
+# A@GPU0 + B@GPU1，然后 C@GPU0 + D/Main@GPU1。
+# 每个 arm 内 Balanced/Precision 默认并发；显存/compute 不足时仅把
+# V4847_VARIANT_MODE=serial，不改变任何算法、数据、gate 或随机种子。
+# ================================================================
+
+export OCRAP_REPO="${OCRAP_REPO:-/home/senzeyu2/code/OC-RAP-v48.47}"
+export BASE_OUT="${BASE_OUT:-/home/senzeyu2/code/OC-RAP/runs}"
+export OCRAP_ROOT="${OCRAP_ROOT:-/data0/senzeyu2/dataset/OCRAP}"
+export GPU0="${GPU0:-0}"
+export GPU1="${GPU1:-1}"
+
+# 使用 v48.45.6/v48.46 已验证的输入 tensor cache；v48.47 没有改变输入 tensor schema。
+export OCRAP_TENSOR_CACHE_DIR="${OCRAP_TENSOR_CACHE_DIR:-$OCRAP_ROOT/.ocrap_tensor_cache_v4846}"
+# 用户已确认单 arm 显存有余量：默认同一 arm 的 Balanced/Precision 也并发。
+export V4847_VARIANT_MODE="${V4847_VARIANT_MODE:-parallel}"
+# persistent tensor cache 后 DataLoader 不需要过度堆 worker；四个模型并发时保持保守 CPU/IO 压力。
+export ABLATION_NUM_WORKERS="${ABLATION_NUM_WORKERS:-3}"
+export ABLATION_PREFETCH_FACTOR="${ABLATION_PREFETCH_FACTOR:-3}"
+export ABLATION_OMP_NUM_THREADS="${ABLATION_OMP_NUM_THREADS:-1}"
+
+cd "$OCRAP_REPO"
+
+# ---------- 0. fail-fast 工程预检 ----------
+[[ -f "$BASE_OUT/ocrap_v48_45_source_rebuild_s7/SOURCE_REBUILD_COMPLETE.json" ]] || {
+  echo "缺少已 seal 的 shared source: $BASE_OUT/ocrap_v48_45_source_rebuild_s7" >&2
+  exit 30
+}
+for v in balanced precision; do
+  [[ -f "$BASE_OUT/ocrap_v48_45_source_rebuild_s7/candidates/$v/model_v48_trac_sr/best.pt" ]] || {
+    echo "缺少 source checkpoint: $v" >&2; exit 30;
+  }
+done
+for d in calibration_near_contact calibration_contact calibration_safe; do
+  [[ -d "$OCRAP_ROOT/$d" ]] || { echo "缺少数据集: $OCRAP_ROOT/$d" >&2; exit 30; }
+done
+
+python -m compileall -q src tools
+while IFS= read -r -d '' f; do bash -n "$f"; done < <(find scripts -type f -name '*.sh' -print0)
+PYTHONPATH=src:. python -m pytest -q \
+  tests/test_v48_47_dsofr.py \
+  tests/test_v48_46_ocswic.py \
+  tests/test_v48_45_sowr.py \
+  tests/test_v48_44_roct.py
+
+# ---------- 1. 正式 2x2 ----------
+# 四个 arm 的 final train/eval semantics 都是 observation_class；
+# A: reference
+# B: Decision-Weighted Observation Kernel (DWOK)
+# C: Direct Recovery-Frontier Calibration (DRFC)
+# D/Main: DWOK -> freeze -> DRFC
+bash scripts/run_v48_47_dsofr_2x2_two_gpu.sh
+
+# ---------- 2. 只接受 RC=0/20 的可归因结果 ----------
+AUDIT="$BASE_OUT/OC-RAP-v48.47-DS-OFR-2x2-audit.json"
+[[ -s "$AUDIT" ]] || { echo "缺少 2x2 audit: $AUDIT" >&2; exit 30; }
+python - "$AUDIT" <<'PY_AUDIT'
+import json,sys
+p=sys.argv[1]; d=json.load(open(p))
+assert d.get('attribution_contract',{}).get('valid') is True, d.get('attribution_contract')
+for arm in 'ABCD':
+    x=d['arms'][arm]
+    assert x.get('pipeline_valid') is True, (arm,x.get('pipeline_valid'))
+    assert int(x.get('authoritative_exit_code')) in (0,20), (arm,x.get('authoritative_exit_code'))
+    assert x.get('factor_contract',{}).get('strategy_regime_conditioning') is False
+    assert x.get('factor_contract',{}).get('test_roots_read') is False
+print('v48.47 attribution contract: PASS')
+PY_AUDIT
+
+# ---------- 3. 打包，便于回传下一轮归因 ----------
+python - "$BASE_OUT" <<'PY_ZIP'
+from pathlib import Path
+import zipfile, sys
+base=Path(sys.argv[1])
+items={
+ 'A':base/'ocrap_v48_47_dsofr_ablation_A',
+ 'B':base/'ocrap_v48_47_dsofr_ablation_B',
+ 'C':base/'ocrap_v48_47_dsofr_ablation_C',
+ 'D':base/'ocrap_v48_47_dsofr_main',
+}
+for name,root in items.items():
+    out=base/f'ocrap_v48_47_dsofr_{"main" if name=="D" else "ablation_"+name}.zip'
+    with zipfile.ZipFile(out,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=6) as z:
+        for p in sorted(root.rglob('*')):
+            if p.is_file(): z.write(p, Path(root.name)/p.relative_to(root))
+    print(out)
+meta=base/'ocrap_v48_47_dsofr_meta.zip'
+with zipfile.ZipFile(meta,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=6) as z:
+    for name in ['OC-RAP-v48.47-DS-OFR-2x2-audit.json','OC-RAP-v48.47-runtime-telemetry.jsonl','OC-RAP-v48.47-runtime-telemetry-summary.json']:
+        p=base/name
+        if p.is_file(): z.write(p,p.name)
+print(meta)
+PY_ZIP
+
+cat <<EOF_DONE
+v48.47 完成。
+请回传：
+  $BASE_OUT/ocrap_v48_47_dsofr_ablation_A.zip
+  $BASE_OUT/ocrap_v48_47_dsofr_ablation_B.zip
+  $BASE_OUT/ocrap_v48_47_dsofr_ablation_C.zip
+  $BASE_OUT/ocrap_v48_47_dsofr_main.zip
+  $BASE_OUT/ocrap_v48_47_dsofr_meta.zip
+如果出现任何非 0/20 RC，不要用于算法归因，直接保留 logs 后停止调参。
+EOF_DONE

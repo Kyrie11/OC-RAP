@@ -23,6 +23,8 @@ from ocrap.models.losses import (
     best_shared_option_loss,
     observation_class_option_success_loss,
     observation_class_best_option_loss,
+    recovery_conflict_pair_weights,
+    observation_consistent_frontier_calibration_loss,
     deployability_classification_loss,
     shared_option_admission_loss,
     shared_option_q_regression_loss,
@@ -109,7 +111,14 @@ def _root_signature_loss(out: dict[str, torch.Tensor], batch: dict[str, torch.Te
     return _masked_smooth_l1(pred, target, mask)
 
 
-def _obs_bce(pred_c: torch.Tensor, target_y: torch.Tensor, root_valid: torch.Tensor, *, balanced: bool = True) -> torch.Tensor:
+def _obs_bce(
+    pred_c: torch.Tensor,
+    target_y: torch.Tensor,
+    root_valid: torch.Tensor,
+    *,
+    balanced: bool = True,
+    pair_weights: torch.Tensor | None = None,
+) -> torch.Tensor:
     B, K, _ = pred_c.shape
     eye = torch.eye(K, dtype=torch.bool, device=pred_c.device).unsqueeze(0)
     pair_mask = root_valid.unsqueeze(1) & root_valid.unsqueeze(2) & (~eye)
@@ -117,13 +126,26 @@ def _obs_bce(pred_c: torch.Tensor, target_y: torch.Tensor, root_valid: torch.Ten
         return pred_c.sum() * 0.0
     pred = pred_c.clamp(1e-5, 1.0 - 1e-5)[pair_mask]
     target = target_y[pair_mask].float().clamp(0.0, 1.0)
-    if not balanced:
-        return F.binary_cross_entropy(pred, target)
-    pos = target >= 0.5
-    neg = ~pos
-    if not bool(pos.any()) or not bool(neg.any()):
-        return F.binary_cross_entropy(pred, target)
-    weights = torch.where(pos, 0.5 / pos.float().mean().clamp_min(1e-6), 0.5 / neg.float().mean().clamp_min(1e-6))
+    weights = torch.ones_like(target)
+    if balanced:
+        pos = target >= 0.5
+        neg = ~pos
+        if bool(pos.any()) and bool(neg.any()):
+            weights = weights * torch.where(
+                pos,
+                0.5 / pos.float().mean().clamp_min(1e-6),
+                0.5 / neg.float().mean().clamp_min(1e-6),
+            )
+    if pair_weights is not None:
+        if pair_weights.shape != pred_c.shape:
+            raise ValueError(
+                f"pair_weights shape {tuple(pair_weights.shape)} != pred_c shape {tuple(pred_c.shape)}"
+            )
+        pw = pair_weights.to(device=pred_c.device, dtype=pred_c.dtype)[pair_mask].clamp_min(0.0)
+        weights = weights * pw
+    # Preserve the overall observation-loss scale when importance weighting is
+    # enabled; only the allocation of gradient across root pairs changes.
+    weights = weights / weights.mean().clamp_min(1.0e-6)
     return F.binary_cross_entropy(pred, target, weight=weights)
 
 
@@ -1503,6 +1525,9 @@ def _epoch(
         _keep_fully_frozen_modules_in_eval(model)
     progress = bool(tcfg.get("progress", cfg.get("progress", True)))
     direct_only_fast = bool(tcfg.get("direct_only_fast_path", False))
+    witness_fast_mode = str(tcfg.get("witness_fast_path", "") or "").strip().lower()
+    if witness_fast_mode not in {"", "decision_obs", "frontier"}:
+        raise ValueError(f"unknown training.witness_fast_path={witness_fast_mode!r}")
     amp_enabled = bool(tcfg.get("amp", False)) and device.type == "cuda"
     amp_dtype_name = str(tcfg.get("amp_dtype", "bfloat16")).strip().lower()
     amp_dtype = torch.float16 if amp_dtype_name in {"float16", "fp16", "half"} else torch.bfloat16
@@ -1583,8 +1608,98 @@ def _epoch(
             batch["x"].float(), batch.get("option_features"), bucket_id=batch.get("bucket_id"),
             group_index=group_index, is_nominal=batch.get("is_nominal"),
             root_valid=batch.get("root_valid"), option_valid=batch.get("option_valid"),
+            witness_only=bool(witness_fast_mode),
+            witness_observation_only=(witness_fast_mode == "decision_obs"),
         )
         root_valid = batch["root_valid"].bool()
+
+        # v48.47 DS-OFR exact witness fast path.  Generic training historically
+        # computed every direct-policy/option/group auxiliary loss even when its
+        # configured weight was zero.  For a head-only witness stage this is pure
+        # overhead.  This branch computes the same active loss graph and optimizer
+        # step, while omitting only zero-weight frozen-head work.
+        if witness_fast_mode:
+            zero = out["c_star"].sum() * 0.0
+            option_gamma = float(art_cfg.get("admission_gamma", 0.0))
+            loss_obs = zero
+            loss_margin = zero
+            loss_recovery_frontier = zero
+            if witness_fast_mode == "decision_obs":
+                obs_pair_weights = recovery_conflict_pair_weights(
+                    batch["m_star"].float(), batch["root_valid"], batch["option_valid"],
+                    gamma=float(tcfg.get("decision_weighted_obs_gamma", option_gamma)),
+                    temperature=float(tcfg.get("decision_weighted_obs_temperature", 0.20)),
+                    conflict_scale=float(tcfg.get("decision_weighted_obs_conflict_scale", 3.0)),
+                    max_weight=float(tcfg.get("decision_weighted_obs_max_weight", 4.0)),
+                ) if bool(tcfg.get("decision_weighted_obs_enabled", False)) else None
+                loss_obs = _obs_bce(
+                    out["c_star"], batch["y_obs"], batch["root_valid"],
+                    balanced=bool(tcfg.get("balanced_obs_loss", True)),
+                    pair_weights=obs_pair_weights,
+                )
+                total = float(lw.get("obs", 1.0)) * loss_obs
+            else:
+                margin_target = torch.clamp(
+                    batch["m_star"].float(),
+                    min=-float(cfg.get("margin_clip", 5.0)),
+                    max=float(cfg.get("margin_clip", 5.0)),
+                )
+                margin_mask = batch["root_valid"].unsqueeze(-1) & batch["option_valid"].unsqueeze(1)
+                loss_margin = _masked_smooth_l1(out["margins"], margin_target, margin_mask)
+                masked_logits = out["root_logits"].masked_fill(~root_valid, -1.0e4)
+                root_p = torch.softmax(masked_logits, dim=-1)
+                r_dep, _r_orc, _gap, pred_q = torch_oc_mero(
+                    out["margins"], root_p, out["c_star"],
+                    alpha=float(ocfg.get("alpha", 0.2)), beta=float(ocfg.get("beta", 0.2)),
+                    option_valid=batch["option_valid"], root_valid=root_valid,
+                    use_lcvar=not bool((cfg.get("ablation", {}) or {}).get("without_lower_tail", False)),
+                    use_obs_kernel=not bool((cfg.get("ablation", {}) or {}).get("without_observation_kernel", False)),
+                    top_m=int(ocfg.get("top_m", 8)),
+                )
+                with torch.no_grad():
+                    _trd, _tro, _tgap, teacher_q = torch_oc_mero(
+                        batch["m_star"].float(), batch["root_probs"].float(), batch["c_star"].float(),
+                        alpha=float(ocfg.get("alpha", 0.2)), beta=float(ocfg.get("beta", 0.2)),
+                        option_valid=batch["option_valid"], root_valid=root_valid,
+                        use_lcvar=not bool((cfg.get("ablation", {}) or {}).get("without_lower_tail", False)),
+                        use_obs_kernel=not bool((cfg.get("ablation", {}) or {}).get("without_observation_kernel", False)),
+                        top_m=int(ocfg.get("top_m", 8)),
+                    )
+                loss_recovery_frontier = observation_consistent_frontier_calibration_loss(
+                    r_dep, pred_q, batch["r_dep_star"].float(), teacher_q,
+                    batch["root_probs"].float(), batch["root_valid"], batch["option_valid"],
+                    batch["scene_hash"], batch["time_index"], batch["is_nominal"].float(),
+                    gamma=option_gamma,
+                    option_temperature=float(tcfg.get("recovery_frontier_option_temperature", tcfg.get("option_success_temperature", 0.35))),
+                    deployability_tolerance=float(tcfg.get("recovery_frontier_deployability_tolerance", 0.05)),
+                    drs_tolerance=float(tcfg.get("recovery_frontier_drs_tolerance", 0.05)),
+                    sign_temperature=float(tcfg.get("recovery_frontier_sign_temperature", 0.08)),
+                    regression_weight=float(tcfg.get("recovery_frontier_regression_weight", 1.0)),
+                    sign_weight=float(tcfg.get("recovery_frontier_sign_weight", 0.50)),
+                )
+                total = (
+                    float(lw.get("margin", 0.0)) * loss_margin
+                    + float(lw.get("recovery_frontier", 0.0)) * loss_recovery_frontier
+                )
+            if training:
+                optimizer.zero_grad(set_to_none=True)
+                total.backward()
+                grad_clip = float(tcfg.get("grad_clip", 5.0))
+                if grad_clip > 0:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+                optimizer.step()
+            bsz = int(batch["x"].shape[0]); n += bsz
+            vals = {
+                "loss": float(total.item()),
+                "loss_margin": float(loss_margin.item()),
+                "loss_obs": float(loss_obs.item()),
+                "loss_recovery_frontier": float(loss_recovery_frontier.item()),
+                "loss_dep": 0.0,
+                "loss_option_q": 0.0,
+            }
+            for k, v in vals.items():
+                totals[k] = totals.get(k, 0.0) + float(v) * bsz
+            continue
         masked_logits = out["root_logits"].masked_fill(~root_valid, -1.0e4)
         root_p = torch.softmax(masked_logits, dim=-1)
         root_target = batch["root_probs"].float() * root_valid.float()
@@ -1596,11 +1711,23 @@ def _epoch(
         loss_margin = _masked_smooth_l1(out["margins"], margin_target, margin_mask)
         loss_sig = _root_signature_loss(out, batch, "root_signature")
         loss_future_sig = _root_signature_loss(out, batch, "root_future_signature")
+        obs_pair_weights = None
+        if bool(tcfg.get("decision_weighted_obs_enabled", False)):
+            obs_pair_weights = recovery_conflict_pair_weights(
+                batch["m_star"].float(),
+                batch["root_valid"],
+                batch["option_valid"],
+                gamma=float(tcfg.get("decision_weighted_obs_gamma", art_cfg.get("admission_gamma", 0.0))),
+                temperature=float(tcfg.get("decision_weighted_obs_temperature", 0.20)),
+                conflict_scale=float(tcfg.get("decision_weighted_obs_conflict_scale", 3.0)),
+                max_weight=float(tcfg.get("decision_weighted_obs_max_weight", 4.0)),
+            )
         loss_obs = _obs_bce(
             out["c_star"],
             batch["y_obs"],
             batch["root_valid"],
             balanced=bool(tcfg.get("balanced_obs_loss", True)),
+            pair_weights=obs_pair_weights,
         )
         r_dep, r_orc, gap, pred_q = torch_oc_mero(
             out["margins"],
@@ -1678,6 +1805,21 @@ def _epoch(
             pred_q, teacher_q, batch["root_probs"].float(), batch["root_valid"], batch["option_valid"],
             gamma=option_gamma, temperature=option_temperature,
         )
+        if float(lw.get("recovery_frontier", 0.0)) > 0.0:
+            loss_recovery_frontier = observation_consistent_frontier_calibration_loss(
+                r_dep, pred_q, batch["r_dep_star"].float(), teacher_q,
+                batch["root_probs"].float(), batch["root_valid"], batch["option_valid"],
+                batch["scene_hash"], batch["time_index"], batch["is_nominal"].float(),
+                gamma=option_gamma,
+                option_temperature=float(tcfg.get("recovery_frontier_option_temperature", option_temperature)),
+                deployability_tolerance=float(tcfg.get("recovery_frontier_deployability_tolerance", 0.05)),
+                drs_tolerance=float(tcfg.get("recovery_frontier_drs_tolerance", 0.05)),
+                sign_temperature=float(tcfg.get("recovery_frontier_sign_temperature", 0.08)),
+                regression_weight=float(tcfg.get("recovery_frontier_regression_weight", 1.0)),
+                sign_weight=float(tcfg.get("recovery_frontier_sign_weight", 0.50)),
+            )
+        else:
+            loss_recovery_frontier = r_dep.sum() * 0.0
         loss_group_rank = groupwise_candidate_ranking_loss(
             r_dep,
             gap,
@@ -1945,6 +2087,7 @@ def _epoch(
             + float(lw.get("option_best", 0.2)) * loss_option_best
             + float(lw.get("option_class_success", 0.0)) * loss_option_class_success
             + float(lw.get("option_class_best", 0.0)) * loss_option_class_best
+            + float(lw.get("recovery_frontier", 0.0)) * loss_recovery_frontier
             + float(lw.get("group_ranking", 0.0)) * loss_group_rank
             + float(lw.get("group_ce", 0.0)) * loss_group_ce
             + float(lw.get("nominal_switch", 0.0)) * loss_nominal_switch
@@ -1987,6 +2130,7 @@ def _epoch(
             "loss_option_best": loss_option_best.item(),
             "loss_option_class_success": loss_option_class_success.item(),
             "loss_option_class_best": loss_option_class_best.item(),
+            "loss_recovery_frontier": loss_recovery_frontier.item(),
             "loss_group_ranking": loss_group_rank.item(),
             "loss_group_ce": loss_group_ce.item(),
             "loss_nominal_switch": loss_nominal_switch.item(),

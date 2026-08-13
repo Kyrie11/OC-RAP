@@ -2797,9 +2797,13 @@ class OCRAPModel(nn.Module):
         group_index: torch.Tensor | None = None,
         is_nominal: torch.Tensor | None = None,
         direct_only: bool = False,
+        witness_only: bool = False,
+        witness_observation_only: bool = False,
         root_valid: torch.Tensor | None = None,
         option_valid: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
+        if witness_observation_only and not witness_only:
+            raise ValueError("witness_observation_only requires witness_only=True")
         memory = self._scene_tokens(x)
         if direct_only:
             roct_signature = None
@@ -2817,9 +2821,11 @@ class OCRAPModel(nn.Module):
         root_logits = self.root_logit_head(root_tokens).squeeze(-1)
         obs_embeddings = self.obs_embed_head(root_tokens)
 
-        root_expand = root_tokens.unsqueeze(2).expand(-1, -1, self.num_options, -1)
-        opt_expand = self._option_tokens(x, option_features)
-        margins = self.margin_head(torch.cat([root_expand, opt_expand], dim=-1)).squeeze(-1)
+        margins = None
+        if not witness_observation_only:
+            root_expand = root_tokens.unsqueeze(2).expand(-1, -1, self.num_options, -1)
+            opt_expand = self._option_tokens(x, option_features)
+            margins = self.margin_head(torch.cat([root_expand, opt_expand], dim=-1)).squeeze(-1)
 
         diff = obs_embeddings.unsqueeze(2) - obs_embeddings.unsqueeze(1)
         dist2 = (diff * diff).mean(dim=-1)
@@ -2829,11 +2835,18 @@ class OCRAPModel(nn.Module):
 
         out: dict[str, torch.Tensor] = {
             "root_logits": root_logits,
-            "margins": margins,
             "obs_embeddings": obs_embeddings,
             "c_star": C,
-            "utility": self.utility_head(scene_token).squeeze(-1),
         }
+        if margins is not None:
+            out["margins"] = margins
+        # v48.47 DS-OFR witness stages update only the paper-native observation
+        # or margin witness.  Skipping utility/direct-policy/diagnostic heads here
+        # is execution-equivalent for those stages because every skipped parameter
+        # is frozen and every corresponding loss weight is exactly zero.
+        if witness_only:
+            return out
+        out["utility"] = self.utility_head(scene_token).squeeze(-1)
         postprefix_signature = None
         if (
             self.direct_evidence_postprefix_obs_transport_benefit is not None

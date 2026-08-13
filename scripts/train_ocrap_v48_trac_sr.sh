@@ -65,6 +65,8 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.trainable_param_prefixes="${TRAINABLE_PARAM_PREFIXES:-}" \
   --set training.strict_init_prefixes="${STRICT_INIT_PREFIXES:-}" \
   --set training.direct_only_fast_path="${DIRECT_ONLY_FAST_PATH:-true}" \
+  --set training.witness_fast_path="${WITNESS_FAST_PATH:-}" \
+  --set training.frozen_modules_eval="${FROZEN_MODULES_EVAL:-false}" \
   --set training.group_index_path="$GROUP_INDEX" \
   --set training.validation_group_index_path="${VAL_GROUP_INDEX:-}" \
   --set training.epochs="${EPOCHS:-12}" --set training.early_stop_patience="${PATIENCE:-3}" \
@@ -81,6 +83,17 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.prefetch_factor="${PREFETCH_FACTOR:-2}" --set training.cache_samples_in_memory="${CACHE_SAMPLES_IN_MEMORY:-false}" \
   --set training.persistent_tensor_cache="${PERSISTENT_TENSOR_CACHE:-false}" --set training.persistent_tensor_cache_dir="${PERSISTENT_TENSOR_CACHE_DIR:-}" \
   --set training.option_execution_semantics="${OPTION_EXECUTION_SEMANTICS:-global}" \
+  --set training.decision_weighted_obs_enabled="${DECISION_WEIGHTED_OBS_ENABLED:-false}" \
+  --set training.decision_weighted_obs_gamma="${DECISION_WEIGHTED_OBS_GAMMA:-0.0}" \
+  --set training.decision_weighted_obs_temperature="${DECISION_WEIGHTED_OBS_TEMPERATURE:-0.20}" \
+  --set training.decision_weighted_obs_conflict_scale="${DECISION_WEIGHTED_OBS_CONFLICT_SCALE:-3.0}" \
+  --set training.decision_weighted_obs_max_weight="${DECISION_WEIGHTED_OBS_MAX_WEIGHT:-4.0}" \
+  --set training.recovery_frontier_option_temperature="${RECOVERY_FRONTIER_OPTION_TEMPERATURE:-0.35}" \
+  --set training.recovery_frontier_deployability_tolerance="${RECOVERY_FRONTIER_DEPLOYABILITY_TOLERANCE:-0.05}" \
+  --set training.recovery_frontier_drs_tolerance="${RECOVERY_FRONTIER_DRS_TOLERANCE:-0.05}" \
+  --set training.recovery_frontier_sign_temperature="${RECOVERY_FRONTIER_SIGN_TEMPERATURE:-0.08}" \
+  --set training.recovery_frontier_regression_weight="${RECOVERY_FRONTIER_REGRESSION_WEIGHT:-1.0}" \
+  --set training.recovery_frontier_sign_weight="${RECOVERY_FRONTIER_SIGN_WEIGHT:-0.50}" \
   --set training.progress=true \
   --set training.save_every_epoch=true --set training.best_metric="${BEST_METRIC:-direct_policy_risk_fold_worst}" \
   --set training.best_metric_mode=min --set training.best_metric_min_delta="${BEST_METRIC_MIN_DELTA:-0.000001}" \
@@ -194,6 +207,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set loss_weights.option_success="${LOSS_OPTION_SUCCESS:-0}" --set loss_weights.option_success_bce="${LOSS_OPTION_SUCCESS_BCE:-0}" \
   --set loss_weights.option_best="${LOSS_OPTION_BEST:-0}" \
   --set loss_weights.option_class_success="${LOSS_OPTION_CLASS_SUCCESS:-0}" --set loss_weights.option_class_best="${LOSS_OPTION_CLASS_BEST:-0}" \
+  --set loss_weights.recovery_frontier="${LOSS_RECOVERY_FRONTIER:-0}" \
   --set loss_weights.group_ce="${LOSS_GROUP_CE:-0}" \
   --set loss_weights.group_distill="${LOSS_GROUP_DISTILL:-0}" --set loss_weights.nominal_switch="${LOSS_NOMINAL_SWITCH:-0}" \
   --set loss_weights.safe_nominal="${LOSS_SAFE_NOMINAL:-0}" --set loss_weights.protective_macro="${LOSS_PROTECTIVE_MACRO:-0}" \

@@ -247,6 +247,179 @@ def best_shared_option_loss(
 
 
 
+
+def recovery_conflict_pair_weights(
+    teacher_margins: torch.Tensor,
+    root_valid: torch.Tensor,
+    option_valid: torch.Tensor,
+    *,
+    gamma: float = 0.0,
+    temperature: float = 0.20,
+    conflict_scale: float = 3.0,
+    max_weight: float = 4.0,
+) -> torch.Tensor:
+    """Decision-importance weights for the physical observation-equivalence loss.
+
+    The observation label itself is never changed.  We only spend more gradient on
+    root pairs for which confusing/separating the pair changes the recovery decision:
+    both roots have individually plausible recovery, but their best/shared recovery
+    support differs.  This is the exact place where an observation-kernel error can
+    create either an oracle-style false-safe (aliased incompatible roots separated)
+    or a false-veto (distinguishable roots with different recovery choices merged).
+
+    No regime identifier, bucket-specific threshold, or policy route is consumed.
+    The returned tensor has shape ``[B,K,K]`` and is detached by construction.
+    """
+    if teacher_margins.ndim != 3:
+        raise ValueError("teacher_margins must have shape [B,K,L]")
+    b, k, _ = teacher_margins.shape
+    rv = root_valid.bool()
+    ov = option_valid.bool()
+    if rv.shape != (b, k):
+        raise ValueError("root_valid shape mismatch")
+    tau = max(float(temperature), 1.0e-4)
+    with torch.no_grad():
+        finite = torch.isfinite(teacher_margins)
+        valid = rv.unsqueeze(-1) & ov.unsqueeze(1) & finite
+        margins = torch.nan_to_num(
+            teacher_margins.detach().float(), nan=-20.0, posinf=20.0, neginf=-20.0
+        )
+        option_support = torch.sigmoid((margins - float(gamma)) / tau)
+        option_support = torch.where(valid, option_support, torch.zeros_like(option_support))
+        individual = option_support.amax(dim=-1)  # [B,K]
+        # Soft mass that a *single* option is simultaneously viable for both roots.
+        shared = (
+            option_support.unsqueeze(2) * option_support.unsqueeze(1)
+        ).amax(dim=-1)  # [B,K,K]
+        independent = individual.unsqueeze(2) * individual.unsqueeze(1)
+        conflict = (independent - shared).clamp(0.0, 1.0)
+        pair_valid = rv.unsqueeze(2) & rv.unsqueeze(1)
+        weights = 1.0 + max(0.0, float(conflict_scale)) * conflict
+        weights = weights.clamp(1.0, max(1.0, float(max_weight)))
+        weights = torch.where(pair_valid, weights, torch.ones_like(weights))
+    return weights
+
+
+def observation_consistent_frontier_calibration_loss(
+    pred_r_dep: torch.Tensor,
+    pred_q: torch.Tensor,
+    teacher_r_dep: torch.Tensor,
+    teacher_q: torch.Tensor,
+    root_probs: torch.Tensor,
+    root_valid: torch.Tensor,
+    option_valid: torch.Tensor,
+    scene_hash: torch.Tensor,
+    time_index: torch.Tensor,
+    is_nominal: torch.Tensor,
+    *,
+    gamma: float = 0.0,
+    option_temperature: float = 0.35,
+    deployability_tolerance: float = 0.05,
+    drs_tolerance: float = 0.05,
+    sign_temperature: float = 0.08,
+    regression_weight: float = 1.0,
+    sign_weight: float = 0.50,
+) -> torch.Tensor:
+    """Calibrate the paper-native candidate-relative recovery frontier directly.
+
+    Dense point-wise margin/Q losses can improve validation reconstruction while the
+    deployment decision remains wrong because the selector is driven by *relative*
+    non-compensatory coordinates.  This loss differentiates through OC-MERO's
+    observation-conditioned option table and trains only two structural coordinates:
+
+    1. nominal-minus-candidate deployability degradation in the same sigmoid space
+       used by the component-veto teacher; and
+    2. nominal-minus-candidate deployable-recovery-success (DRS) degradation, where
+       DRS is the root-mass probability that each observation class has an admissible
+       recovery option.
+
+    The target and prediction use identical tolerances and grouping.  It is symmetric
+    on both sides of zero (not a one-sided safe-positive or harmful-tail patch), and
+    it never consumes a Safe/Near/Contact label.  This makes it different from the
+    rejected v48.38 one-sided tail penalties and from generic candidate ranking.
+    """
+    if pred_q.ndim != 3 or teacher_q.ndim != 3:
+        return pred_r_dep.sum() * 0.0
+    b, k, _ = pred_q.shape
+    if pred_r_dep.reshape(-1).numel() != b:
+        raise ValueError("pred_r_dep batch mismatch")
+    rv = root_valid.bool()
+    ov = option_valid.bool()
+    mask = rv.unsqueeze(-1) & ov.unsqueeze(1) & torch.isfinite(teacher_q)
+    if not bool(mask.any()):
+        return pred_r_dep.sum() * 0.0
+
+    root_w = _root_weights(root_probs, root_valid)
+    tau = max(float(option_temperature), 1.0e-4)
+    pred_prob = torch.sigmoid(
+        (torch.nan_to_num(pred_q, nan=-20.0, posinf=20.0, neginf=-20.0) - float(gamma)) / tau
+    )
+    pred_prob = torch.where(mask, pred_prob, torch.zeros_like(pred_prob))
+    pred_exist = pred_prob.amax(dim=-1)
+    pred_drs = (pred_exist * root_w).sum(dim=-1)
+    teacher_exist = (((teacher_q.detach() >= float(gamma)) & mask).any(dim=-1)).float()
+    teacher_drs = (teacher_exist * root_w.detach()).sum(dim=-1)
+
+    prd = pred_r_dep.float().reshape(-1)
+    trd = teacher_r_dep.detach().float().reshape(-1)
+    sh = scene_hash.reshape(-1)
+    ti = time_index.reshape(-1)
+    nominal = is_nominal.reshape(-1) > 0.5
+    finite = torch.isfinite(prd) & torch.isfinite(trd) & torch.isfinite(pred_drs) & torch.isfinite(teacher_drs)
+    if not bool(finite.any()):
+        return pred_r_dep.sum() * 0.0
+
+    pred_terms: list[torch.Tensor] = []
+    target_terms: list[torch.Tensor] = []
+    keys = torch.stack([sh, ti], dim=-1)
+    for key in torch.unique(keys[finite], dim=0):
+        idx = torch.where(finite & (sh == key[0]) & (ti == key[1]))[0]
+        noms = idx[nominal[idx]]
+        recs = idx[~nominal[idx]]
+        if noms.numel() != 1 or recs.numel() == 0:
+            continue
+        nom = noms[0]
+        pred_dep_margin = (
+            torch.sigmoid(prd[nom]).expand_as(prd[recs])
+            - torch.sigmoid(prd[recs])
+            - float(deployability_tolerance)
+        )
+        teacher_dep_margin = (
+            torch.sigmoid(trd[nom]).expand_as(trd[recs])
+            - torch.sigmoid(trd[recs])
+            - float(deployability_tolerance)
+        )
+        pred_drs_margin = pred_drs[nom].expand_as(pred_drs[recs]) - pred_drs[recs] - float(drs_tolerance)
+        teacher_drs_margin = teacher_drs[nom].expand_as(teacher_drs[recs]) - teacher_drs[recs] - float(drs_tolerance)
+        pred_terms.append(torch.stack([pred_drs_margin, pred_dep_margin], dim=-1))
+        target_terms.append(torch.stack([teacher_drs_margin, teacher_dep_margin], dim=-1))
+
+    if not pred_terms:
+        return pred_r_dep.sum() * 0.0
+    pred = torch.cat(pred_terms, dim=0)
+    target = torch.cat(target_terms, dim=0).detach()
+    regression = F.smooth_l1_loss(pred, target)
+
+    sign_tau = max(float(sign_temperature), 1.0e-4)
+    sign_losses: list[torch.Tensor] = []
+    for j in range(pred.shape[-1]):
+        tgt = (target[:, j] > 0.0).float()
+        logits = pred[:, j] / sign_tau
+        pos = tgt > 0.5
+        neg = ~pos
+        if bool(pos.any()) and bool(neg.any()):
+            weights = torch.where(
+                pos,
+                0.5 / pos.float().mean().clamp_min(1.0e-6),
+                0.5 / neg.float().mean().clamp_min(1.0e-6),
+            )
+            sign_losses.append(F.binary_cross_entropy_with_logits(logits, tgt, weight=weights))
+        else:
+            sign_losses.append(F.binary_cross_entropy_with_logits(logits, tgt))
+    sign_loss = torch.stack(sign_losses).mean()
+    return float(regression_weight) * regression + float(sign_weight) * sign_loss
+
+
 def observation_class_option_success_loss(
     pred_q: torch.Tensor,
     teacher_q: torch.Tensor,

@@ -1,3 +1,158 @@
+## v48.47 — DS-OFR / DECISION-SUFFICIENT OBSERVATION & RECOVERY-FRONTIER CALIBRATION (2026-08-13)
+
+**类别：基于 v48.46 authoritative 2x2 的算法升级 + attribution-safe 执行优化。没有新增 Safe/Near/Contact identifier、router、regime-specific policy/threshold/loss/budget。**
+
+### v48.46 authoritative OC-SWIC 归因：四臂均为有效算法负结果
+
+本轮上传的 v48.46 A/B/C/D(Main) 四个 arm 均为 authoritative `RC=20`，且
+`pipeline_valid=true`、certificate 已执行、Natural gate 已评估、`test_roots_read=false`；v48.46 comparator
+的 attribution contract 通过。四个 arm 共享完全相同的 source checkpoint、dedicated calibration protocol、
+final `observation_class` evaluation semantics、dual-ROCT、top-k=5、risk budgets 和 gate protocol。因此本轮
+可以正式解释 B-A、C-A 与 D-B-C+A；RC=20 是有效 Natural-gate miss，不是 pipeline failure。
+
+Precision selector 的核心结果：
+
+- **A / paper-consistent reference:** Near certificate recall `0.1111`、harmful UCB90 `0.2361`，deployability
+  safe-positive false-veto `14/16`；Contact recall `0`、UCB90 `0.2921`，false-veto `30/31`，development
+  safe-positive `pred_adv>=0` 仅 `1/37`。
+- **B / observation-class training semantics:** Near recall 仍 `0.1111`，false-veto 仍 `14/16`；Contact recall
+  仍 `0`，false-veto 仍 `30/31`，development sign 仍 `1/37`。Near/Contact candidate safe-positive AUC 仅
+  `+0.0022/+0.0041`，UCB90 小幅下降到 `0.2274/0.2773`。因此 v48.46 直接否定了“历史 global-one-option
+  是当前 Near/Contact false-veto 的主导根因”这一更强性能假设。`observation_class` 仍作为论文正确语义保留，
+  但不再作为有证据的性能模块。
+- **C / sequential obs->margin witness:** Precision Contact development recall `0.0588 -> 0.1176`，safe-positive
+  `pred_adv>=0` `1/37 -> 3/37`，certificate harmful UCB90 `0.2921 -> 0.2618`；但 Contact certificate recall
+  仍 `0`，Near recall `0.1111 -> 0` 且 deployability false-veto `14/16 -> 16/16`。Balanced Contact 虽得到
+  `0.05` recall，却伴随 UCB90 `0.3329`。因此 staged witness 只有局部 sign/risk 信号，不能整体吸收。
+- **D/Main / observation-class + staged witness:** Precision candidate safe-positive AUC 达到 Near `0.3653`、
+  Contact `0.5086`，Contact certificate 得到 `0.05` recall，deployability false-veto `30/31 -> 29/31`；但
+  Near/Contact harmful UCB90 恶化到 `0.2959/0.3278`。两因素在 discrimination/capture 上有弱正 interaction，
+  在 risk 上出现强负 interaction，故 D/Main 仍不能吸收为主算法。
+
+Balanced selector 不改变上述结论：Near certificate recall 四臂均为 `0`；Contact certificate 最好只有 C 的
+`0.05`，而风险不稳定。Safe 只完成统一 calibration（A/B gamma `1.6269`，C `1.4829`，D `1.4558`），没有
+registered scene-disjoint Safe policy certificate，因此本轮不能宣称 paper-level Safe closed-loop non-inferiority。
+
+### 最可靠的新瓶颈结论：proposal 已覆盖，失败发生在 learned witness -> frontier/admission
+
+final certificate 的 proposal-oracle 证据显示：Near top-5 proposal 对 9 个 safe-positive opportunity group 为
+`9/9` 可达；Contact 对 20 个 safe-positive group 为 `20/20` 可达，positive-group any-hit 约 `96.9%`、
+oracle-best hit 约 `90.6%`。因此当前主瓶颈不是 candidate family、top-k 或 recovery macro “没有生成好动作”，
+而是好 candidate 已存在却在 learned recovery-value / deployability witness、rerank/admission 中被错误否决。
+
+component audit 更具体地把错误定位到 **DRS/deployability physical frontier 的 sign/scale collapse**：Contact
+safe-positive 中 teacher deployability degradation margin 往往已经明显在安全侧（约 `-0.24~-0.38`），但 learned
+component margin 被压在约 `+0.02~+0.06` 的危险侧附近，导致 `30/31` safe-positive 被 deployability veto；Near
+同样为 `14/16`。DRS 也有明显 false-veto。相比之下 gap/hard-rule/harm-proxy 不是当前 safe-positive veto 主因。
+
+因此下一步明确**不**扩大 top-k、不增加 recovery macro 数量、不放松 harm budget，也不继续给 downstream
+classifier 堆 generic residual/head。现有 factor stage 已开启 dense signed component-margin regression；重复 v48.38
+one-sided safe-positive component penalty 没有科学依据，继续禁止。
+
+### 论文 motivation 的严谨升级：从 observation-consistent 到 decision-sufficient observation-consistent
+
+v48.46 不否定论文的核心结构命题：oracle branch-wise recoverability 与 deployed observation-conditioned
+recoverability 不等价，OC-MERO 的 observation-consistency 仍是必要的 deployment semantics。但两轮结果
+（v48.43 POET、v48.46-B）不支持把“observation ambiguity / global-option semantics 是实际 false-veto 的主导原因”
+作为更强经验主张。
+
+v48.47 将方法论升级为 **Decision-Sufficient Observation-Consistent Recoverability**：
+
+1. **物理 observation equivalence 定义不变。** 不修改 `y_obs`，不按 regime 改 observation threshold。
+2. **Decision-weighted observation identifiability.** 对 recovery decision 不敏感的 root pair 不需要与关键 pair
+   获得相同梯度预算；若两 root 各自存在 recovery、但没有相同 option 同时具有高 support，则错误合并/分离该 pair
+   会直接改变可部署 recovery decision，应被优先校准。
+3. **Recovery-frontier identifiability.** pointwise margin/Q reconstruction loss 降低并不等于 selector 的
+   candidate-relative DRS/deployability 零边界正确；必须直接对齐最终 non-compensatory admission 使用的 frontier。
+
+这不是替换 OC-MERO，而是把“结构上可部署”升级为“结构正确且决策边界可识别/可校准”。三个 regime 仍仅作为
+training/evaluation strata，同一性质和同一算法作用于 Safe/Near/Contact。
+
+### 新算法因素 X：Decision-Weighted Observation Kernel (DWOK)
+
+对 teacher recovery margin 定义 smooth option support
+` s_{i,l}=sigmoid((m*_{i,l}-gamma)/tau) `，pair 的 recovery-decision conflict 为
+`kappa_ij = max_l s_i,l * max_l s_j,l - max_l(s_i,l*s_j,l)`，截断到 `[0,1]`。
+物理 observation BCE 的 label **完全不改变**，只把 pair 权重改为 `1 + lambda*kappa_ij` 并归一化保持整体 loss scale。
+高 `kappa` 同时覆盖两类真正与 OC-MERO decision 有关的错误：物理不可区分但 recovery-incompatible 的 pair 被错误
+分开会产生 oracle false-safe；物理可区分且需要不同 recovery option 的 pair 被错误合并会产生 false-veto。
+该权重不读取 Safe/Near/Contact label。
+
+### 新算法因素 Y：Direct OC-MERO Recovery-Frontier Calibration (DRFC)
+
+margin witness 不再用 v48.46 的 generic deployability/oracle/option auxiliary bundle。它仅更新 `margin_head`，直接
+从 differentiable OC-MERO `q[i,l]` 构造 observation-class DRS，并在同一 scene-time candidate group 内对齐两条
+selector 原生 frontier：
+
+- deployability degradation: `sigmoid(R_dep(nominal))-sigmoid(R_dep(candidate))-eps_R`；
+- DRS degradation: `DRS(nominal)-DRS(candidate)-eps_Q`。
+
+loss 为双坐标**对称** SmoothL1 + balanced sign BCE；safe/harm 两侧同时校准，不是 v48.38 的 one-sided tail patch，
+也不是已失败的 generic pairwise/listwise ranking。保留小权重 absolute margin anchor 防止 candidate-relative training
+破坏全局 signed margin scale。root logits、encoder、root decoder、direct policy/OCAF/ROCT heads 全冻结。
+
+### v48.47 scientific 2x2
+
+四臂 training/evaluation semantics 全部固定为 paper-consistent `observation_class`：
+
+- **A:** reference；无 DWOK、无 DRFC。
+- **B:** A + DWOK（只更新 `obs_embed_head`）。
+- **C:** A + DRFC（只更新 `margin_head`）。
+- **D/Main:** A + DWOK，然后 freeze obs，再做 DRFC。
+
+因此 `B-A` 是 decision-weighted observation identifiability 主效应；`C-A` 是 direct recovery-frontier calibration
+主效应；`D-B-C+A` 是 interaction。四臂共享 source/protocol/gate/dual-ROCT/top-k5/risk budget。D 在 fail-closed
+identity contract 通过时复用 B 的 DWOK checkpoint，只节省重复训练时间，不改变 D 的模型状态或输入。
+
+### v48.47 pre-registered screening / stop rule
+
+不以 train/val loss 下降作为吸收标准：
+
+- **Near:** Precision deployability false-veto 优先从 `14/16` 降至 `<=10/16`；DRS false-veto 从 `11/16`
+  明显下降；certificate recall 至少向 `>=0.20` 移动，同时 harmful-selected UCB90 `<=0.25`。
+- **Contact:** deployability false-veto 从 `30/31` 降至 `<=24/31`；development safe-positive `pred_adv>=0`
+  至少从 `1/37` 移动到 `>=6/37`；certificate recall 至少 `>=0.10`（主算法目标继续向 `0.15-0.20` 推进），
+  harmful-selected UCB90 `<=0.25`。
+- **D/Main:** 只有同时优于对应单因素的 capture/frontier 且不产生 risk interaction 才吸收；若 C 单因素最好，
+  主算法只吸收 C，不为“模块完整性”强行保留 B/D。
+- **Safe:** 必须保持 standard calibration 有效，并监控 gamma drift；真正 paper-level Safe 结论仍要求后续 paired
+  closed-loop non-inferiority，不新增 Safe-specific route。
+
+若 v48.47 的 C/DRFC 仍不能显著移动 DRS/deployability false-veto，则 stop rule 是进入 teacher-margin calibration、
+recovery constraint normalization、option continuous-parameter teacher coverage 审计；不再增加 downstream capacity。
+若 B/DWOK 不能改善 observation-conflict 子集而 frontier 也不动，则停止继续优化 observation kernel，把它保留为
+结构语义模块而非性能抓手。
+
+### Execution-equivalent 加速与工程 contract
+
+- 两张 GPU 默认同时跑两个 ablation：`A@GPU0 + B@GPU1`，完成后 `C@GPU0 + D@GPU1`。
+- 基于用户已观察到单 ablation 显存有余量，每个 arm 的 Balanced/Precision 默认可在分配到的同一 GPU 并发；若
+  telemetry 显示 compute saturation/OOM，可设 `V4847_VARIANT_MODE=serial`，但 arm-level 双 GPU 并行保持不变。
+- 继续复用 v48.46 persistent tensor mmap cache；cache key 只依赖输入 tensor geometry/manifest，算法因素不会造成
+  无意义 cache miss。D 通过 source SHA、checkpoint SHA、train/val mix、group-index SHA 和 DWOK 超参的 fail-closed
+  contract 复用 B 的 obs stage，避免重复一整个 witness stage。
+- witness stage 新增严格 `witness_fast_path`：DWOK 只执行 root/observation 图与加权 observation BCE，DRFC 只执行
+  root/margin/observation 图、OC-MERO 与 frontier loss；utility/direct-policy/tournament/delta/group auxiliary 等全部为零权重且
+  冻结的计算不再前向。所有冻结 subtree 强制 `eval()`；回归验证各 stage 实际消费的 active outputs（DWOK: `root_logits/obs_embeddings/c_star`；DRFC: `root_logits/margins/obs_embeddings/c_star`）
+  与 full path 逐元素 bit-exact，且 forward 后 RNG state 完全一致，因此该优化不改变 witness 的样本、
+  loss、梯度、optimizer step 或随机轨迹。
+- runtime telemetry 每次 launcher 开始前清空，避免多次运行日志混合；30 s 只读采集 GPU util/memory/power 与 host
+  memory/load，结束后自动汇总，不改变 CUDA/sampler/random state。
+- 修复 v48.46 launcher runtime 记账偏差：父进程先 `wait` 左 arm 会把已提前完成的右 arm 空等时间错误计入右 arm
+  wall time。v48.47 在每个后台 arm 自己退出时原子记录 end/RC，再由父进程校验；这只影响性能诊断，不影响训练。
+  对本轮上传结果回溯可见 D 实际约 `56.3 min` 已完成，而旧 logger 因等待 C 错记为 `120.8 min`。
+- comparator 继续 fail-closed 验证 source checkpoint、protocol seal、gate manifest、factor matrix 和 no-test/no-regime
+  contract；并记录 Safe calibration gamma 供跨臂 drift 诊断。
+
+### 继续禁止的历史失败方向
+
+v48.47 不重复：threshold-grid densification、top-k expansion、aggressive positive oversampling、hardest-negative
+population distortion、generic pairwise/listwise stacking、full joint Stage-2、learned admission residual、v48.38
+one-sided tail losses、v48.39 unbounded benefit/harm factors、v48.40 frontier_tanh、v48.41 full component factorization、
+v48.42 partial-pooling/rank-skip、v48.43 POET free alias transport、v48.45 joint SOWR、v48.46 uniform generic
+obs->margin witness、broad encoder fine-tuning，以及任何 regime-conditioned router/policy/threshold/budget。
+
+
 ## v48.46 — OC-SWIC / OBSERVATION-CLASS SHARED-WITNESS IDENTIFIABILITY CALIBRATION (2026-08-12)
 
 **类别：有效算法迭代 + execution-equivalent 性能优化。没有新增 Safe/Near/Contact identifier、router、regime-specific policy/threshold/loss/budget。**

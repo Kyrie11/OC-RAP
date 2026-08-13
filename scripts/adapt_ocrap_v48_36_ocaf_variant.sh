@@ -14,6 +14,10 @@ WITNESS_RUN="$FINAL_RUN/witness_stage"
 V4846_OBS_RUN="$FINAL_RUN/v48_46_witness_obs"
 V4846_MARGIN_RUN="$FINAL_RUN/v48_46_witness_margin"
 V4846_SEQUENTIAL_WITNESS="${V4846_SEQUENTIAL_WITNESS:-0}"
+V4847_OBS_RUN="$FINAL_RUN/v48_47_decision_obs"
+V4847_FRONTIER_RUN="$FINAL_RUN/v48_47_recovery_frontier"
+V4847_DECISION_OBS="${V4847_DECISION_OBS:-0}"
+V4847_RECOVERY_FRONTIER="${V4847_RECOVERY_FRONTIER:-0}"
 OPTION_EXECUTION_SEMANTICS="${OPTION_EXECUTION_SEMANTICS:-global}"
 export OPTION_EXECUTION_SEMANTICS
 ENABLE_SUPPORT_RELIABILITY="${V4836_ENABLE_SUPPORT_RELIABILITY:-1}"
@@ -45,7 +49,7 @@ PY_STAGE_FAIL
 }
 trap on_variant_error ERR
 
-rm -rf "$IDENTITY_RUN" "$WITNESS_RUN" "$V4846_OBS_RUN" "$V4846_MARGIN_RUN" "$FINAL_RUN/model_v48_trac_sr" "$FINAL_RUN/calibration"
+rm -rf "$IDENTITY_RUN" "$WITNESS_RUN" "$V4846_OBS_RUN" "$V4846_MARGIN_RUN" "$V4847_OBS_RUN" "$V4847_FRONTIER_RUN" "$FINAL_RUN/model_v48_trac_sr" "$FINAL_RUN/calibration"
 mkdir -p "$FINAL_RUN" "$IDENTITY_RUN"
 rm -f "$FINAL_RUN/VARIANT_STAGE_FAILED.json"
 
@@ -67,6 +71,59 @@ if [[ "$ENABLE_SUPPORT_RELIABILITY" != 1 ]]; then
   EVIDENCE_COMPONENT_RELIABILITY="1,1,1,1,1"
 fi
 export EVIDENCE_COMPONENT_RELIABILITY
+
+# v48.47 DS-OFR: paper-native decision-sufficient witness calibration.
+# Factor X reweights the unchanged physical observation-equivalence labels by
+# recovery-decision conflict. Factor Y calibrates the candidate-relative DRS /
+# deployability frontier directly through OC-MERO. Root logits and every
+# downstream evidence/policy head remain frozen. No regime label is consumed.
+if [[ "$V4847_DECISION_OBS" == 1 || "$V4847_RECOVERY_FRONTIER" == 1 ]]; then
+  if [[ "$V4846_SEQUENTIAL_WITNESS" == 1 || "${V4845_SOWR_MARGIN_WITNESS:-0}" == 1 || "${V4845_SOWR_OBS_KERNEL:-0}" == 1 ]]; then
+    echo "v48.47 witness factors cannot be combined with historical v48.45/v48.46 witness stages" >&2
+    exit 2
+  fi
+  export OPTION_EXECUTION_SEMANTICS=observation_class
+  SOURCE_CKPT="$ORIGINAL_SOURCE_CKPT"
+  if [[ "$V4847_DECISION_OBS" == 1 ]]; then
+    CURRENT_STAGE="v48_47_decision_weighted_observation"
+    V4847_OBS_REUSE_RUN="${V4847_OBS_REUSE_RUN:-}"
+    if [[ -z "$V4847_OBS_REUSE_RUN" && -n "${V4847_OBS_REUSE_BASE:-}" ]]; then
+      reuse_candidate="${V4847_OBS_REUSE_BASE%/}/candidates/${VARIANT:?VARIANT is required}/v48_47_decision_obs"
+      if [[ -f "$reuse_candidate/V48_47_WITNESS_COMPLETE.json" && -f "$reuse_candidate/model_v48_47_witness/best.pt" ]]; then
+        V4847_OBS_REUSE_RUN="$reuse_candidate"
+      fi
+    fi
+    if [[ -n "$V4847_OBS_REUSE_RUN" ]]; then
+      python tools/reuse_v48_47_witness_stage.py \
+        --source-run "$V4847_OBS_REUSE_RUN" --destination-run "$V4847_OBS_RUN" \
+        --expected-source "$ORIGINAL_SOURCE_CKPT" --expected-stage decision_obs \
+        --expected-train-mix "${TRAIN_MIX:?TRAIN_MIX is required}" \
+        --expected-val-mix "${VAL_MIX:?VAL_MIX is required}" --expected-group-index "$GROUP_INDEX" \
+        --expected-epochs "${V4847_OBS_EPOCHS:-5}" --expected-obs-loss-weight "${V4847_OBS_LOSS_WEIGHT:-1.50}" \
+        --expected-conflict-scale "${V4847_OBS_CONFLICT_SCALE:-3.0}" \
+        --expected-conflict-temperature "${V4847_OBS_CONFLICT_TEMPERATURE:-0.20}" \
+        --expected-max-weight "${V4847_OBS_MAX_WEIGHT:-4.0}"
+    else
+      RUN="$V4847_OBS_RUN" INIT_CKPT="$ORIGINAL_SOURCE_CKPT" \
+      TRAIN_MIX="${TRAIN_MIX:?TRAIN_MIX is required}" VAL_MIX="${VAL_MIX:?VAL_MIX is required}" \
+      GROUP_INDEX="$GROUP_INDEX" VAL_GROUP_INDEX="${VAL_GROUP_INDEX:-}" TRAIN_GPU="${TRAIN_GPU:-0}" VARIANT="${VARIANT:?VARIANT is required}" \
+      V4847_WITNESS_STAGE=decision_obs OPTION_EXECUTION_SEMANTICS=observation_class \
+        bash scripts/adapt_ocrap_v48_47_dsofr_witness_stage.sh
+    fi
+    SOURCE_CKPT="$V4847_OBS_RUN/model_v48_47_witness/best.pt"
+    [[ -f "$SOURCE_CKPT" ]] || { echo "missing v48.47 decision-observation checkpoint $SOURCE_CKPT" >&2; exit 30; }
+  fi
+  if [[ "$V4847_RECOVERY_FRONTIER" == 1 ]]; then
+    CURRENT_STAGE="v48_47_recovery_frontier"
+    RUN="$V4847_FRONTIER_RUN" INIT_CKPT="$SOURCE_CKPT" \
+    TRAIN_MIX="${TRAIN_MIX:?TRAIN_MIX is required}" VAL_MIX="${VAL_MIX:?VAL_MIX is required}" \
+    GROUP_INDEX="$GROUP_INDEX" VAL_GROUP_INDEX="${VAL_GROUP_INDEX:-}" TRAIN_GPU="${TRAIN_GPU:-0}" VARIANT="${VARIANT:?VARIANT is required}" \
+    V4847_WITNESS_STAGE=frontier OPTION_EXECUTION_SEMANTICS=observation_class \
+      bash scripts/adapt_ocrap_v48_47_dsofr_witness_stage.sh
+    SOURCE_CKPT="$V4847_FRONTIER_RUN/model_v48_47_witness/best.pt"
+    [[ -f "$SOURCE_CKPT" ]] || { echo "missing v48.47 recovery-frontier checkpoint $SOURCE_CKPT" >&2; exit 30; }
+  fi
+fi
 
 # v48.46 OC-SWIC: staged witness calibration.  Observation embedding is
 # calibrated first, frozen, then the signed margin head is calibrated.  Root
@@ -153,6 +210,12 @@ factor_cache_contract_args=(
   --setting "sowr_margin_witness=${V4845_SOWR_MARGIN_WITNESS:-0}"
   --setting "sowr_obs_kernel=${V4845_SOWR_OBS_KERNEL:-0}"
   --setting "v4846_sequential_witness=$V4846_SEQUENTIAL_WITNESS"
+  --setting "v4847_decision_obs=$V4847_DECISION_OBS"
+  --setting "v4847_recovery_frontier=$V4847_RECOVERY_FRONTIER"
+  --setting "v4847_obs_conflict_scale=${V4847_OBS_CONFLICT_SCALE:-3.0}"
+  --setting "v4847_obs_conflict_temperature=${V4847_OBS_CONFLICT_TEMPERATURE:-0.20}"
+  --setting "v4847_frontier_loss_weight=${V4847_FRONTIER_LOSS_WEIGHT:-2.00}"
+  --setting "v4847_frontier_margin_anchor_weight=${V4847_FRONTIER_MARGIN_ANCHOR_WEIGHT:-0.25}"
   --setting "training_option_execution_semantics=$OPTION_EXECUTION_SEMANTICS"
   --setting "sowr_epochs=${SOWR_EPOCHS:-8}"
   --setting "sowr_learning_rate=${SOWR_LR:-0.00005}"
