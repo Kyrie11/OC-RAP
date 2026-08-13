@@ -17,7 +17,7 @@ from ocrap.data.schema import pad_recovery_params
 from ocrap.data.serialization import write_json
 from ocrap.data.waymax_loader import iter_waymax_womd_scenarios, raw_scenario_from_waymax_state
 from ocrap.evaluation.baselines import select_baseline
-from ocrap.evaluation.metrics import best_shared_option_index, deployable_recovery_success, false_recoverability_admission, nominal_utility_preservation, post_contact_deployability_score, predicted_shared_option_success
+from ocrap.evaluation.metrics import best_option_indices, deployable_recovery_success, false_recoverability_admission, nominal_utility_preservation, option_execution_semantics, post_contact_deployability_score, predicted_option_success
 from ocrap.models.data import iter_sample_paths_many, scalar_metadata_for_path
 from ocrap.models.inference import ModelBundle, load_model_bundle, predict_sample, predict_samples, teacher_prediction_from_sample
 from ocrap.external_baselines.policies import select_external_policy
@@ -906,7 +906,8 @@ def _select_prefix(
     sel_tmp = cfg.get("selection", {}) if isinstance(cfg.get("selection", {}), dict) else {}
     active_bucket = str(sel_tmp.get("active_bucket_name", sel_tmp.get("regime_name", "")) or "")
     drs_gamma = _drs_success_gamma_for_bucket(gamma, cfg, active_bucket)
-    pred_drs = np.asarray([predicted_shared_option_success(x["pred"].q, x["pred"].root_probs, gamma=drs_gamma, root_valid=x["data"].get("root_valid", None), option_valid=x["data"].get("option_valid", None)) for x in items], dtype=np.float32)
+    option_semantics = option_execution_semantics(cfg)
+    pred_drs = np.asarray([predicted_option_success(x["pred"].q, x["pred"].root_probs, gamma=drs_gamma, root_valid=x["data"].get("root_valid", None), option_valid=x["data"].get("option_valid", None), semantics=option_semantics) for x in items], dtype=np.float32)
     pred_direct_value = np.asarray([np.nan if x["pred"].direct_recovery_value is None else float(x["pred"].direct_recovery_value) for x in items], dtype=np.float32)
     pred_direct_rank = np.asarray([np.nan if x["pred"].direct_recovery_rank is None else float(x["pred"].direct_recovery_rank) for x in items], dtype=np.float32)
     pred_direct_rank = np.where(np.isfinite(pred_direct_rank), pred_direct_rank, pred_direct_value).astype(np.float32)
@@ -1028,8 +1029,12 @@ def _select_prefix(
         use_model_option = bool(method == "ocrap" and idx != 0)
         q_eval = chosen["pred"].q if use_model_option else chosen["teacher"].q
         opt_gamma = drs_gamma if use_model_option else 0.0
-        selected_option = best_shared_option_index(q_eval, d["root_probs"], gamma=opt_gamma, root_valid=d.get("root_valid", None), option_valid=d.get("option_valid", None))
-        drs = deployable_recovery_success(d["m_star"], d["root_probs"], int(selected_option), d.get("root_valid", None))
+        selected_option = best_option_indices(
+            q_eval, d["root_probs"], gamma=opt_gamma,
+            root_valid=d.get("root_valid", None), option_valid=d.get("option_valid", None),
+            semantics=option_semantics,
+        )
+        drs = deployable_recovery_success(d["m_star"], d["root_probs"], selected_option, d.get("root_valid", None))
         fra_cand = false_recoverability_admission(selected.admitted, teacher_r_dep)
     else:
         drs = None
@@ -1452,17 +1457,18 @@ def _rollout_one_scene(
                     use_model_option = bool(method == "ocrap" and int(selected_sample.candidate_index) != 0)
                     q_eval = pred_q if use_model_option else selected_audit_data["m_star"]
                     opt_gamma = drs_gamma if use_model_option else 0.0
-                    selected_option = best_shared_option_index(
+                    selected_option = best_option_indices(
                         q_eval,
                         selected_audit_data["root_probs"],
                         gamma=opt_gamma,
                         root_valid=selected_audit_data.get("root_valid", None),
                         option_valid=selected_audit_data.get("option_valid", None),
+                        semantics=option_semantics,
                     )
                     selected_audit_drs = deployable_recovery_success(
                         selected_audit_data["m_star"],
                         selected_audit_data["root_probs"],
-                        int(selected_option),
+                        selected_option,
                         selected_audit_data.get("root_valid", None),
                     )
                     selected_r_dep_star = _safe_float(selected_audit_data.get("r_dep_star", 0.0))
@@ -1502,14 +1508,15 @@ def _rollout_one_scene(
                         use_model_option_i = bool(method == "ocrap" and cid != 0)
                         q_eval_i = pred_q_i if use_model_option_i else ld["m_star"]
                         opt_gamma_i = drs_gamma if use_model_option_i else 0.0
-                        opt_i = best_shared_option_index(
+                        opt_i = best_option_indices(
                             q_eval_i,
                             ld["root_probs"],
                             gamma=opt_gamma_i,
                             root_valid=ld.get("root_valid", None),
                             option_valid=ld.get("option_valid", None),
+                            semantics=option_semantics,
                         )
-                        drs_i = deployable_recovery_success(ld["m_star"], ld["root_probs"], int(opt_i), ld.get("root_valid", None))
+                        drs_i = deployable_recovery_success(ld["m_star"], ld["root_probs"], opt_i, ld.get("root_valid", None))
                         odg_i = _safe_float(ld.get("oracle_gap_star", 0.0), 0.0)
                         pcd_i = post_contact_deployability_score(float(drs_i), float(r_star), float(odg_i))
                         # v23 paper-eligible audit upper bound.  The global top-k

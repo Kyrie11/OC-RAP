@@ -6,7 +6,7 @@ import numpy as np
 
 from ocrap.data.serialization import load_npz, write_json
 from ocrap.evaluation.baselines import BASELINES, select_baseline, _bucket_aliases
-from ocrap.evaluation.metrics import best_shared_option_index, deployable_recovery_success, false_recoverability_admission, nominal_utility_preservation, post_contact_deployability_score, predicted_shared_option_success, summarize_selection_metrics
+from ocrap.evaluation.metrics import best_option_indices, deployable_recovery_success, false_recoverability_admission, nominal_utility_preservation, option_execution_semantics, post_contact_deployability_score, predicted_option_success, summarize_selection_metrics
 from ocrap.models.data import iter_sample_paths_many, scalar_metadata_for_path
 from ocrap.models.inference import load_model_bundle, predict_sample, teacher_prediction_from_sample
 
@@ -375,7 +375,8 @@ def _evaluate_grouped_items(grouped: dict[tuple, list[dict]], methods: list[str]
         dataset_label = str(items[0].get("dataset_label", "")) if items else ""
         gamma_i = _gamma_for_dataset(gamma, cfg, dataset_label)
         drs_gamma_i = _drs_success_gamma_for_dataset(gamma_i, cfg, dataset_label)
-        pred_drs = np.array([predicted_shared_option_success(x["pred"].q, x["pred"].root_probs, gamma=drs_gamma_i, root_valid=x["data"].get("root_valid", None), option_valid=x["data"].get("option_valid", None)) for x in items])
+        option_semantics = option_execution_semantics(cfg)
+        pred_drs = np.array([predicted_option_success(x["pred"].q, x["pred"].root_probs, gamma=drs_gamma_i, root_valid=x["data"].get("root_valid", None), option_valid=x["data"].get("option_valid", None), semantics=option_semantics) for x in items])
         pred_direct_value = np.array([np.nan if x["pred"].direct_recovery_value is None else float(x["pred"].direct_recovery_value) for x in items])
         pred_direct_rank = np.array([np.nan if x["pred"].direct_recovery_rank is None else float(x["pred"].direct_recovery_rank) for x in items])
         pred_direct_rank = np.where(np.isfinite(pred_direct_rank), pred_direct_rank, pred_direct_value)
@@ -481,8 +482,12 @@ def _evaluate_grouped_items(grouped: dict[tuple, list[dict]], methods: list[str]
             # claim, so use the teacher option just like the nominal baseline.
             q_eval = chosen["pred"].q if (method == "ocrap" and selected_index != 0) else chosen["teacher"].q
             opt_gamma = drs_gamma_i if (method == "ocrap" and selected_index != 0) else 0.0
-            selected_option = best_shared_option_index(q_eval, sd["root_probs"], gamma=opt_gamma, root_valid=sd.get("root_valid", None), option_valid=sd.get("option_valid", None))
-            drs = deployable_recovery_success(sd["m_star"], sd["root_probs"], int(selected_option), sd.get("root_valid", None))
+            selected_option = best_option_indices(
+                q_eval, sd["root_probs"], gamma=opt_gamma,
+                root_valid=sd.get("root_valid", None), option_valid=sd.get("option_valid", None),
+                semantics=option_semantics,
+            )
+            drs = deployable_recovery_success(sd["m_star"], sd["root_probs"], selected_option, sd.get("root_valid", None))
             odg_val = float(np.asarray(sd.get("oracle_gap_star", teacher_r_orc[selected_index] - teacher_r_dep[selected_index])).item())
             pcds = post_contact_deployability_score(drs, teacher_r_dep[selected_index], odg_val)
             nup = nominal_utility_preservation(utility[0] if len(utility) else 0.0, utility[selected_index], sigma_u=float((cfg or {}).get("metrics", {}).get("sigma_u", 1.0)))

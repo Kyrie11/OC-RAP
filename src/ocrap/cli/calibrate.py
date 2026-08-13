@@ -8,7 +8,7 @@ from ocrap.algorithms.lcv import finite_sample_upper_quantile
 from ocrap.data.serialization import load_npz, write_json
 from ocrap.models.data import expand_split_roles, iter_sample_paths_many, scalar_metadata_for_path
 from ocrap.models.inference import load_model_bundle, predict_sample
-from ocrap.evaluation.metrics import predicted_shared_option_success
+from ocrap.evaluation.metrics import option_execution_semantics, predicted_option_success
 
 
 def _calibration_score(d: dict, pred, cfg: dict) -> float:
@@ -20,9 +20,10 @@ def _calibration_score(d: dict, pred, cfg: dict) -> float:
         return float(pred.r_dep - beta * max(0.0, pred.gap))
     if mode in {"pred_drs", "drs", "shared_option_success", "option_drs"}:
         gamma = float((cfg.get("selection", {}) or {}).get("drs_success_gamma", 0.0))
-        return float(predicted_shared_option_success(
+        return float(predicted_option_success(
             pred.q, pred.root_probs, gamma=gamma,
-            root_valid=d.get("root_valid", None), option_valid=d.get("option_valid", None)
+            root_valid=d.get("root_valid", None), option_valid=d.get("option_valid", None),
+            semantics=option_execution_semantics(cfg),
         ))
     raise ValueError(f"Unknown calibration.score={mode!r}; expected r_dep, rec_lcb, or pred_drs")
 

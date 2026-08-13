@@ -129,6 +129,137 @@ def predicted_shared_option_success(
     return float(np.sum(w * (valid & np.isfinite(col) & (col >= float(gamma)))))
 
 
+def best_observation_consistent_option_indices(
+    q: np.ndarray,
+    root_probs: np.ndarray,
+    gamma: float = 0.0,
+    root_valid: np.ndarray | None = None,
+    option_valid: np.ndarray | None = None,
+) -> np.ndarray:
+    """Return one recovery option per post-prefix observation class/root.
+
+    OC-MERO already folds observationally compatible latent roots into every
+    row ``q[i, l]``.  The deployed recovery policy is therefore allowed to pick
+    a different option for *distinguishable* post-prefix observations while
+    roots represented by the same/compatible observation are evaluated through
+    the same row-wise lower-tail witness.  Requiring one option globally across
+    every root is strictly stronger than the paper's observation-consistency
+    constraint and can create false vetoes when distinct observation classes
+    legitimately require different recovery modes.
+    """
+    Q = np.asarray(q, dtype=float)
+    if Q.ndim != 2 or Q.shape[0] == 0 or Q.shape[1] == 0:
+        return np.zeros(0, dtype=np.int64)
+    K, L = Q.shape
+    _w, valid = _valid_root_weights(root_probs, K, root_valid)
+    opt_valid = np.ones(L, dtype=bool) if option_valid is None else np.asarray(option_valid, dtype=bool).reshape(-1)[:L]
+    if opt_valid.size < L:
+        opt_valid = np.pad(opt_valid, (0, L - opt_valid.size), constant_values=False)
+    finite = np.isfinite(Q) & valid[:, None] & opt_valid[None, :]
+    # Primary score is signed OC-MERO q.  A small gamma-centred success term
+    # makes ties deterministic in the same direction as deployable admission.
+    score = np.where(finite, np.clip(Q, -5.0, 5.0), -1.0e9)
+    score = score + 0.01 * ((Q >= float(gamma)) & finite).astype(float)
+    out = np.argmax(score, axis=1).astype(np.int64)
+    out[~valid] = 0
+    return out
+
+
+def predicted_observation_consistent_option_success(
+    q: np.ndarray,
+    root_probs: np.ndarray,
+    gamma: float = 0.0,
+    root_valid: np.ndarray | None = None,
+    option_valid: np.ndarray | None = None,
+) -> float:
+    """Predicted DRS proxy under the paper's observation-conditioned policy."""
+    Q = np.asarray(q, dtype=float)
+    if Q.ndim != 2 or Q.shape[0] == 0 or Q.shape[1] == 0:
+        return 0.0
+    K, L = Q.shape
+    w, valid = _valid_root_weights(root_probs, K, root_valid)
+    if float(w.sum()) <= 1e-8:
+        return 0.0
+    opt = best_observation_consistent_option_indices(
+        Q, root_probs, gamma=gamma, root_valid=root_valid, option_valid=option_valid
+    )
+    vals = np.zeros(K, dtype=float)
+    for i in range(K):
+        if not valid[i]:
+            continue
+        l = int(opt[i])
+        vals[i] = float(0 <= l < L and np.isfinite(Q[i, l]) and Q[i, l] >= float(gamma))
+    return float(np.sum(w * vals))
+
+
+def option_execution_semantics(cfg: dict | None) -> str:
+    """Resolve the auditable recovery-option execution contract from config."""
+    cfg = cfg or {}
+    for section in ("evaluation", "calibration", "training", "selection"):
+        block = cfg.get(section, {}) if isinstance(cfg.get(section, {}), dict) else {}
+        raw = block.get("option_execution_semantics")
+        if raw is not None:
+            mode = str(raw).strip().lower()
+            break
+    else:
+        mode = "global"
+    aliases = {
+        "global": "global",
+        "global_shared": "global",
+        "single_global": "global",
+        "observation_class": "observation_class",
+        "observation_consistent": "observation_class",
+        "ocmero": "observation_class",
+    }
+    if mode not in aliases:
+        raise ValueError(f"Unknown option_execution_semantics={mode!r}")
+    return aliases[mode]
+
+
+
+def best_option_indices(
+    q: np.ndarray,
+    root_probs: np.ndarray,
+    *,
+    gamma: float = 0.0,
+    root_valid: np.ndarray | None = None,
+    option_valid: np.ndarray | None = None,
+    semantics: str = "global",
+) -> np.ndarray | int:
+    """Dispatch the executed recovery-option contract without changing legacy runs."""
+    mode = str(semantics).strip().lower()
+    if mode in {"observation_class", "observation_consistent", "ocmero"}:
+        return best_observation_consistent_option_indices(
+            q, root_probs, gamma=gamma, root_valid=root_valid, option_valid=option_valid
+        )
+    if mode in {"global", "global_shared", "single_global"}:
+        return best_shared_option_index(
+            q, root_probs, gamma=gamma, root_valid=root_valid, option_valid=option_valid
+        )
+    raise ValueError(f"Unknown option execution semantics: {semantics!r}")
+
+def predicted_option_success(
+    q: np.ndarray,
+    root_probs: np.ndarray,
+    *,
+    gamma: float = 0.0,
+    root_valid: np.ndarray | None = None,
+    option_valid: np.ndarray | None = None,
+    semantics: str = "global",
+) -> float:
+    """Dispatch DRS prediction without silently changing historical runs."""
+    mode = str(semantics).strip().lower()
+    if mode in {"observation_class", "observation_consistent", "ocmero"}:
+        return predicted_observation_consistent_option_success(
+            q, root_probs, gamma=gamma, root_valid=root_valid, option_valid=option_valid
+        )
+    if mode in {"global", "global_shared", "single_global"}:
+        return predicted_shared_option_success(
+            q, root_probs, gamma=gamma, root_valid=root_valid, option_valid=option_valid
+        )
+    raise ValueError(f"Unknown option execution semantics: {semantics!r}")
+
+
 def post_contact_deployability_score(drs: float, r_dep: float, odg: float) -> float:
     """Compact post-contact recovery score for unavoidable-contact regimes.
 

@@ -79,6 +79,8 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.deterministic_algorithms="${DETERMINISTIC_ALGORITHMS:-false}" \
   --set training.num_workers="${NUM_WORKERS:-6}" --set training.persistent_workers=true \
   --set training.prefetch_factor="${PREFETCH_FACTOR:-2}" --set training.cache_samples_in_memory="${CACHE_SAMPLES_IN_MEMORY:-false}" \
+  --set training.persistent_tensor_cache="${PERSISTENT_TENSOR_CACHE:-false}" --set training.persistent_tensor_cache_dir="${PERSISTENT_TENSOR_CACHE_DIR:-}" \
+  --set training.option_execution_semantics="${OPTION_EXECUTION_SEMANTICS:-global}" \
   --set training.progress=true \
   --set training.save_every_epoch=true --set training.best_metric="${BEST_METRIC:-direct_policy_risk_fold_worst}" \
   --set training.best_metric_mode=min --set training.best_metric_min_delta="${BEST_METRIC_MIN_DELTA:-0.000001}" \
@@ -190,7 +192,9 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set loss_weights.admission="${LOSS_ADMISSION:-0}" --set loss_weights.utility="${LOSS_UTILITY:-0}" \
   --set loss_weights.option_q="${LOSS_OPTION_Q:-0}" --set loss_weights.option_admission="${LOSS_OPTION_ADMISSION:-0}" \
   --set loss_weights.option_success="${LOSS_OPTION_SUCCESS:-0}" --set loss_weights.option_success_bce="${LOSS_OPTION_SUCCESS_BCE:-0}" \
-  --set loss_weights.option_best="${LOSS_OPTION_BEST:-0}" --set loss_weights.group_ce="${LOSS_GROUP_CE:-0}" \
+  --set loss_weights.option_best="${LOSS_OPTION_BEST:-0}" \
+  --set loss_weights.option_class_success="${LOSS_OPTION_CLASS_SUCCESS:-0}" --set loss_weights.option_class_best="${LOSS_OPTION_CLASS_BEST:-0}" \
+  --set loss_weights.group_ce="${LOSS_GROUP_CE:-0}" \
   --set loss_weights.group_distill="${LOSS_GROUP_DISTILL:-0}" --set loss_weights.nominal_switch="${LOSS_NOMINAL_SWITCH:-0}" \
   --set loss_weights.safe_nominal="${LOSS_SAFE_NOMINAL:-0}" --set loss_weights.protective_macro="${LOSS_PROTECTIVE_MACRO:-0}" \
   --set loss_weights.macro_drs="${LOSS_MACRO_DRS:-0}" --set loss_weights.teacher_pcd_direct="${LOSS_TEACHER_PCD_DIRECT:-0}" \

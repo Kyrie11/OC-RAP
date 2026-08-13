@@ -11,6 +11,11 @@ GROUP_INDEX="${GROUP_INDEX:?GROUP_INDEX is required}"
 FACTOR_RUN="$FINAL_RUN/factor_stage"
 IDENTITY_RUN="$FINAL_RUN/identity_stage"
 WITNESS_RUN="$FINAL_RUN/witness_stage"
+V4846_OBS_RUN="$FINAL_RUN/v48_46_witness_obs"
+V4846_MARGIN_RUN="$FINAL_RUN/v48_46_witness_margin"
+V4846_SEQUENTIAL_WITNESS="${V4846_SEQUENTIAL_WITNESS:-0}"
+OPTION_EXECUTION_SEMANTICS="${OPTION_EXECUTION_SEMANTICS:-global}"
+export OPTION_EXECUTION_SEMANTICS
 ENABLE_SUPPORT_RELIABILITY="${V4836_ENABLE_SUPPORT_RELIABILITY:-1}"
 IDENTITY_TRAIN_ALL="${V4836_IDENTITY_TRAIN_ALL:-1}"
 COUPLE_ADMISSION_PRIOR="${V4836_COUPLE_ADMISSION_PRIOR:-1}"
@@ -40,7 +45,7 @@ PY_STAGE_FAIL
 }
 trap on_variant_error ERR
 
-rm -rf "$IDENTITY_RUN" "$WITNESS_RUN" "$FINAL_RUN/model_v48_trac_sr" "$FINAL_RUN/calibration"
+rm -rf "$IDENTITY_RUN" "$WITNESS_RUN" "$V4846_OBS_RUN" "$V4846_MARGIN_RUN" "$FINAL_RUN/model_v48_trac_sr" "$FINAL_RUN/calibration"
 mkdir -p "$FINAL_RUN" "$IDENTITY_RUN"
 rm -f "$FINAL_RUN/VARIANT_STAGE_FAILED.json"
 
@@ -63,12 +68,36 @@ if [[ "$ENABLE_SUPPORT_RELIABILITY" != 1 ]]; then
 fi
 export EVIDENCE_COMPONENT_RELIABILITY
 
+# v48.46 OC-SWIC: staged witness calibration.  Observation embedding is
+# calibrated first, frozen, then the signed margin head is calibrated.  Root
+# logits stay frozen because v48.45.6 showed no validation support for updating
+# them.  This is property-conditioned, not regime-conditioned.
+if [[ "$V4846_SEQUENTIAL_WITNESS" == 1 ]]; then
+  CURRENT_STAGE="v48_46_observation_witness"
+  RUN="$V4846_OBS_RUN" INIT_CKPT="$ORIGINAL_SOURCE_CKPT" \
+  TRAIN_MIX="${TRAIN_MIX:?TRAIN_MIX is required}" VAL_MIX="${VAL_MIX:?VAL_MIX is required}" \
+  GROUP_INDEX="$GROUP_INDEX" VAL_GROUP_INDEX="${VAL_GROUP_INDEX:-}" TRAIN_GPU="${TRAIN_GPU:-0}" VARIANT="${VARIANT:?VARIANT is required}" \
+  V4846_WITNESS_STAGE=obs OPTION_EXECUTION_SEMANTICS="$OPTION_EXECUTION_SEMANTICS" \
+    bash scripts/adapt_ocrap_v48_46_ocswic_witness_stage.sh
+  obs_ckpt="$V4846_OBS_RUN/model_v48_46_witness/best.pt"
+  [[ -f "$obs_ckpt" ]] || { echo "missing v48.46 observation checkpoint $obs_ckpt" >&2; exit 30; }
+
+  CURRENT_STAGE="v48_46_margin_witness"
+  RUN="$V4846_MARGIN_RUN" INIT_CKPT="$obs_ckpt" \
+  TRAIN_MIX="${TRAIN_MIX:?TRAIN_MIX is required}" VAL_MIX="${VAL_MIX:?VAL_MIX is required}" \
+  GROUP_INDEX="$GROUP_INDEX" VAL_GROUP_INDEX="${VAL_GROUP_INDEX:-}" TRAIN_GPU="${TRAIN_GPU:-0}" VARIANT="${VARIANT:?VARIANT is required}" \
+  V4846_WITNESS_STAGE=margin OPTION_EXECUTION_SEMANTICS="$OPTION_EXECUTION_SEMANTICS" \
+    bash scripts/adapt_ocrap_v48_46_ocswic_witness_stage.sh
+  SOURCE_CKPT="$V4846_MARGIN_RUN/model_v48_46_witness/best.pt"
+  [[ -f "$SOURCE_CKPT" ]] || { echo "missing v48.46 margin checkpoint $SOURCE_CKPT" >&2; exit 30; }
+fi
+
 # v48.45 SOWR: optional, regime-agnostic recalibration of the paper-matched
 # recovery witness before any OCAF/ROCT factor adaptation.  The shared encoder,
 # root decoder, proposal policy, thresholds and gate remain unchanged.
 SOWR_MARGIN_WITNESS="${V4845_SOWR_MARGIN_WITNESS:-0}"
 SOWR_OBS_KERNEL="${V4845_SOWR_OBS_KERNEL:-0}"
-if [[ "$SOWR_MARGIN_WITNESS" == 1 || "$SOWR_OBS_KERNEL" == 1 ]]; then
+if [[ "$V4846_SEQUENTIAL_WITNESS" != 1 && ( "$SOWR_MARGIN_WITNESS" == 1 || "$SOWR_OBS_KERNEL" == 1 ) ]]; then
   CURRENT_STAGE="shared_option_witness_recalibration"
   RUN="$WITNESS_RUN" INIT_CKPT="$ORIGINAL_SOURCE_CKPT" \
   TRAIN_MIX="${TRAIN_MIX:?TRAIN_MIX is required}" VAL_MIX="${VAL_MIX:?VAL_MIX is required}" \
@@ -123,6 +152,8 @@ factor_cache_contract_args=(
   --setting "roct_option_temperature=${EVIDENCE_ROCT_OPTION_TEMPERATURE:-0.35}"
   --setting "sowr_margin_witness=${V4845_SOWR_MARGIN_WITNESS:-0}"
   --setting "sowr_obs_kernel=${V4845_SOWR_OBS_KERNEL:-0}"
+  --setting "v4846_sequential_witness=$V4846_SEQUENTIAL_WITNESS"
+  --setting "training_option_execution_semantics=$OPTION_EXECUTION_SEMANTICS"
   --setting "sowr_epochs=${SOWR_EPOCHS:-8}"
   --setting "sowr_learning_rate=${SOWR_LR:-0.00005}"
   --setting "consensus_prior_scale=${EVIDENCE_CONSENSUS_PRIOR_SCALE:-0.50}"

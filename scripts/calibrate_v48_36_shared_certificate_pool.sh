@@ -46,6 +46,8 @@ export NEGATIVE_GAIN="${NEGATIVE_GAIN:-0.010}"
 export HARM_LABEL_MODE="${HARM_LABEL_MODE:-component_veto}"
 export OPPORTUNITY_LABEL_MODE="${OPPORTUNITY_LABEL_MODE:-raw_benefit}"
 export GATE_POSITIVE_MODE="${GATE_POSITIVE_MODE:-safe_benefit}"
+export OPTION_EXECUTION_SEMANTICS="${OPTION_EXECUTION_SEMANTICS:-global}"
+SERIAL_VARIANTS_ON_ONE_GPU="${SERIAL_VARIANTS_ON_ONE_GPU:-0}"
 export COMPONENT_HARM_DRS_TOLERANCE="${COMPONENT_HARM_DRS_TOLERANCE:-0.05}"
 export COMPONENT_HARM_DEP_TOLERANCE="${COMPONENT_HARM_DEP_TOLERANCE:-0.05}"
 export COMPONENT_HARM_GAP_TOLERANCE="${COMPONENT_HARM_GAP_TOLERANCE:-0.05}"
@@ -97,7 +99,8 @@ protocol={
  'confidence':{'level':f('CERTIFICATE_CONFIDENCE_LEVEL'),'bound_type':os.environ['CERTIFICATE_BOUND_TYPE']},
  'benefit':{'positive_gain':f('POSITIVE_GAIN'),'opportunity_label_mode':os.environ['OPPORTUNITY_LABEL_MODE'],
             'gate_positive_mode':os.environ.get('GATE_POSITIVE_MODE','safe_benefit')},
- 'policy':{'proposal_top_k':i('PROPOSAL_TOP_K'),'selection_semantics':'rank_topk_then_filter_then_evidence_rerank'},
+ 'policy':{'proposal_top_k':i('PROPOSAL_TOP_K'),'selection_semantics':'rank_topk_then_filter_then_evidence_rerank',
+           'option_execution_semantics':os.environ.get('OPTION_EXECUTION_SEMANTICS','global')},
  'harm':{'negative_gain_legacy':f('NEGATIVE_GAIN'),'label_mode':os.environ['HARM_LABEL_MODE'],
          'component_tolerances':{
            'drs':f('COMPONENT_HARM_DRS_TOLERANCE'),
@@ -143,6 +146,7 @@ calibrate_variant() {
   rm -rf "$tmp"; mkdir -p "$tmp" "$run/logs"
   local common=(
     --checkpoint "$ckpt" --method-version=v48_36_continuous_frontier_dev_frozen_policy_risk_certificate --risk-source="${RISK_SOURCE:-ordinal_evidence}"
+    --option-execution-semantics="$OPTION_EXECUTION_SEMANTICS"
     --conditional-recovery-ranking --proposal-top-k "${PROPOSAL_TOP_K:-5}" --evidence-rerank-top-k
     --macro-constraint-mode="${MACRO_CONSTRAINT_MODE:-opportunity_normalized}"
     --positive-gain="$POSITIVE_GAIN" --negative-gain="$NEGATIVE_GAIN"
@@ -237,6 +241,9 @@ calibrate_variant() {
       --set calibration.allowed_split_ids="${allowed[$i]}" \
       --set calibration.exact_split_ids=true \
       --set calibration.allow_validation_fallback=false \
+      --set training.option_execution_semantics="$OPTION_EXECUTION_SEMANTICS" \
+      --set calibration.option_execution_semantics="$OPTION_EXECUTION_SEMANTICS" \
+      --set evaluation.option_execution_semantics="$OPTION_EXECUTION_SEMANTICS" \
       2>&1 | tee "$run/logs/v48_36_calibrate_${buckets[$i]}.log"
   done
   python tools/write_gamma_by_bucket.py \
@@ -350,12 +357,19 @@ PY
 
 VARIANTS="${VARIANTS:-balanced,precision}"
 S0=0; S1=0; P0=""; P1=""
-if [[ ",$VARIANTS," == *,balanced,* ]]; then calibrate_variant balanced "$GPU0" & P0=$!; fi
-if [[ ",$VARIANTS," == *,precision,* ]]; then calibrate_variant precision "$GPU1" & P1=$!; fi
-set +e
-if [[ -n "$P0" ]]; then wait "$P0"; S0=$?; fi
-if [[ -n "$P1" ]]; then wait "$P1"; S1=$?; fi
-set -e
+if [[ "$SERIAL_VARIANTS_ON_ONE_GPU" == 1 ]]; then
+  set +e
+  if [[ ",$VARIANTS," == *,balanced,* ]]; then calibrate_variant balanced "$GPU0"; S0=$?; fi
+  if [[ ",$VARIANTS," == *,precision,* ]]; then calibrate_variant precision "$GPU1"; S1=$?; fi
+  set -e
+else
+  if [[ ",$VARIANTS," == *,balanced,* ]]; then calibrate_variant balanced "$GPU0" & P0=$!; fi
+  if [[ ",$VARIANTS," == *,precision,* ]]; then calibrate_variant precision "$GPU1" & P1=$!; fi
+  set +e
+  if [[ -n "$P0" ]]; then wait "$P0"; S0=$?; fi
+  if [[ -n "$P1" ]]; then wait "$P1"; S1=$?; fi
+  set -e
+fi
 
 python - "$OUTPUTDIR" "$S0" "$S1" "$VARIANTS" <<'PY'
 import json,os,pathlib,shlex,sys,time

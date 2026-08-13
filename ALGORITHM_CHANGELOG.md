@@ -1,3 +1,172 @@
+## v48.46 — OC-SWIC / OBSERVATION-CLASS SHARED-WITNESS IDENTIFIABILITY CALIBRATION (2026-08-12)
+
+**类别：有效算法迭代 + execution-equivalent 性能优化。没有新增 Safe/Near/Contact identifier、router、regime-specific policy/threshold/loss/budget。**
+
+### v48.45.6 authoritative 2x2 attribution
+
+本轮上传的 v48.45.6 A/B/C/D(Main) 四个 arm 均为 authoritative `RC=20`，且
+`pipeline_valid=true`、certificate 已执行、Natural gate 已评估、`test_roots_read=false`。
+四个 arm 的 dedicated-calibration protocol seal、Balanced/Precision source checkpoint
+SHA256、gate protocol 与所有 development/certificate manifest SHA256 完全一致；因此这是
+v48.45 SOWR 第一轮真正可进行 B-A、C-A、D-B-C+A 因果归因的有效负结果，而非工程失败。
+
+Precision selector 的主要结果：
+
+- A/Near certificate recall `0.1111`，harmful-selected UCB90 `0.2361`；deployability
+  harmful-vs-safe-positive AUC `0.4510`，safe-positive false veto `14/16`。
+- A/Contact certificate recall `0`，UCB90 `0.2921`；deployability AUC `0.5252`，false veto
+  `30/31`；development safe-positive `pred_adv>=0` 仅 `1/37`。
+- B(root+margin) 将 Near/Contact candidate safe-positive AUC 分别提高约 `+0.026/+0.027`，
+  Contact certificate 首次得到 `1/20` positive recall `0.05`，false veto `30/31 -> 29/31`；
+  但 Near/Contact certificate harmful UCB90 分别恶化到 `0.2980/0.3151`，不满足风险约束。
+- C(obs-only) 的主要正信号是 certificate harmful UCB90：Near `0.2361 -> 0.1532`、Contact
+  `0.2921 -> 0.2368`；Contact development `pred_adv>=0` 从 `1/37 -> 2/37`。但 Near
+  certificate positive capture 从 `1` 降为 `0`，无法单独作为主算法。
+- D/Main 基本退化为 B；它没有同时保留 C 的 risk suppression 与 B 的 capture signal。
+  Near/Contact certificate UCB90 为 `0.2980/0.3189`，Contact development sign 又回到 `1/37`。
+  因而 v48.45 joint SOWR 不吸收为成功模块。
+
+Balanced selector 给出相同方向的弱证据：B/C/D 可把 Contact development recall 从
+`0.1176` 提到 `0.1765`，但 certificate 仍只有 `0.05`，Near 仍极弱，且 risk/generalization
+不稳定。结果支持“上游 witness/option semantics 有问题”，不支持继续堆 downstream capacity。
+
+### SOWR 组件归因与保留/拒绝
+
+v48.45.6 witness validation 显示 B/D 的 margin、deployability、oracle、option-q/admission/best-option
+loss 都下降，但 `root_loss` 反而略升；C 的 observation loss 明显下降，同时有 certificate risk
+suppression。由此：
+
+1. **拒绝 root-logit recalibration。** 它没有独立正证据，且与 margin 更新绑定时 root objective
+   反向漂移。v48.46 所有新 witness stage 都 byte-level 冻结 `root_logit_head`。
+2. **保留 observation recalibration 作为风险侧候选。** 它只能被视作局部正信号，不能单独宣称
+   解决 positive capture。
+3. **保留 margin recalibration 作为 capture 侧候选。** B 的弱 AUC/Contact-positive 改善与
+   margin/option loss 改善一致，但必须摆脱 root update 并验证不再用 harmful risk 换 recall。
+4. **拒绝 simultaneous joint SOWR。** D 没有正 interaction，因此 v48.46 改为
+   `observation -> freeze -> margin -> freeze` 的顺序识别，不再联合更新三个 witness heads。
+
+### 根本算法语义审计：历史 global-one-option 与论文 OC-MERO 不一致
+
+本轮对论文、`src/ocrap/algorithms/ocmero.py` 与历史 v48.5+ DRS 辅助路径进行逐项审计后发现：
+核心 OC-MERO 一直正确实现为对每个 post-prefix observation-conditioned row `q[i,l]` 先
+`max_l`，再在 roots 上做 outer LCVaR。也就是说，不可区分的 roots 通过 compatibility-weighted
+lower-tail `q[i,l]` 被迫共享 compatible option，但**不同的可区分 post-prefix observation class
+可以选择不同 recovery option**。
+
+历史 v48.5 的“exact policy contract”却把它解释成“整个候选所有 roots 只能选择一个 globally
+shared option”，并把这一更强约束扩散到 best-option/DRS auxiliary loss、teacher-PCD、calibration
+和部分 execution diagnostics。这个约束不是论文 Eq. OC-MERO 所要求的 observation consistency。
+当 Safe 的 best-option diversity≈1 时影响极小；Near/Contact 的 best-option diversity≈1.4–1.6，
+它会系统性制造 false veto。当前 Precision certificate 的 `14/16` Near 和 `29–30/31` Contact
+safe-positive deployability false veto 与这一语义错配高度一致。
+
+v48.46 不通过降低 harm budget 或放松 observation consistency 来修复，而是新增显式、可审计的
+两种训练监督语义：`global`（历史对照）与 `observation_class`（论文一致）。新的
+`best_observation_consistent_option_indices()` / `predicted_observation_consistent_option_success()`
+直接从 OC-MERO `q[i,l]` 做 row-wise option selection；class-specific success/best-option losses
+只移除对**可区分 classes**的全局绑死，compatible roots 仍被 q 的 observation-kernel lower-tail
+共同约束。
+
+### v48.46 scientific 2x2：固定同一评价尺子
+
+为了避免“改变算法同时改变 certificate ground-truth 定义”的混杂，四个 arm 的最终
+calibration/certificate/closed-loop **全部固定为论文一致的 `observation_class` execution
+semantics**。2x2 的因素只改变训练监督和 staged witness：
+
+- **A:** legacy `global` option-witness/teacher supervision；无 staged witness。
+- **B:** `observation_class`-aligned option-witness/teacher supervision；无 staged witness。
+- **C:** legacy `global` supervision + sequential `obs -> margin` witness。
+- **D/Main:** `observation_class`-aligned supervision + sequential `obs -> margin` witness。
+
+因此 B-A 是“训练语义与 OC-MERO 对齐”的主效应；C-A 是“顺序 witness identifiability”的主效应；
+D-B-C+A 是二者 interaction。A/B/C/D 共享同一个 paper-consistent gate protocol、dataset labels、
+risk budgets、source checkpoint、dual-ROCT、top-k=5 和 shared continuous rule；comparator 对任何
+identity mismatch fail-closed。
+
+顺序 witness 的 obs stage 只允许 `obs_embed_head` 更新，margin stage 只允许 `margin_head` 更新；
+`root_logit_head`、shared encoder/root decoder/direct policy/OCAF/ROCT heads 全部冻结。每一 stage
+复用 v48.45.6 source-architecture/isolation contract，禁止 hidden partial checkpoint load。
+
+### Pre-registered v48.46 go/no-go
+
+本轮不以“loss 下降”作为成功条件：
+
+- **Near:** 优先要求 certificate safe-positive deployability false veto 从 `14/16` 明显下降，
+  screening target `<=10/16`；deployability harmful-vs-safe-positive AUC 向 `>=0.56` 移动；
+  verify recall 至少接近 `0.20`，并保持 harmful-selected UCB90 `<=0.25`。
+- **Contact:** development safe-positive `pred_adv>=0` 必须从 `1–2/37` 显著增加，screening target
+  约 `>=10/37`；certificate recall 向 `0.15–0.20` 移动，harmful-selected UCB90 `<=0.25`，
+  false veto 必须显著低于 `29/31`。
+- **D/Main:** 必须同时保留 B 的 capture/frontier 改善和 C 的 risk suppression；若 interaction
+  再次为负，不吸收 sequential witness package。
+- **Safe:** 只有 RC=0 后才进入 paper-level paired closed-loop non-inferiority；不因为 Safe 数据简单
+  而添加 Safe-specific strategy。
+
+内部 CCF-A readiness 仍不是 venue 官方阈值：Near verify recall 目标约 `0.25–0.33`、harmful UCB
+`<=0.25`、precision LCB `>=0.40`；Contact recall `0.20–0.30`、UCB `<=0.25`，并需要 secondary
+collision、post-contact TTC、stable-stop/rejoin 等 closed-loop 改善；Safe 需要严格 nominal utility /
+progress / intervention / FRA non-inferiority。当前 v48.45.6 与这些目标仍有明显距离。
+
+### 不重复的历史失败方向
+
+遵守 v48.45 stop rule，本轮明确**不**增加 ROCT width/scale，不放松 harmful budgets，不 densify
+threshold grid，不扩大 top-k，不做 positive oversampling，不再堆 generic pairwise/listwise rank
+loss，不恢复 generic harm residual/unbounded factor，不重做 v48.42 partial pooling/rank skip，
+不恢复 v48.43 POET free alias transport，不 broad fine-tune encoder，也不加入 regime routing。
+
+若 v48.46 仍失败，下一步才进入 recovery-option taxonomy/continuous-parameter coverage、margin teacher
+calibration 和 observation-class identifiability 的数据/teacher 审计，而不是再加 downstream head。
+
+### Execution-equivalent speed path
+
+上传 v48.45.6 四个 arm 实际串行 wall time 约：A `59.2 min`、B `97.3 min`、C `71.6 min`、D
+`67.6 min`。主要时间仍在 factor/witness training；同一 train/val NPZ 在不同 variant/stage 中重复
+materialize 约 90–250 s/次，是剩余可去除的 I/O 开销。
+
+v48.46 的加速不改变样本、epoch、batch、loss、seed、sampler、top-k 或 gate：
+
+1. `OCRAPSampleDataset` 增加跨进程/跨 stage 的 **persistent decoded-tensor cache**。key 只绑定
+   dataset manifest/path、tensor geometry 和 feature-construction settings；model head/optimizer/ROCT/
+   option-semantic设置不改变 tensor，因此不再错误地制造不同 cache。`fcntl` lock + atomic replace
+   保证 A/B 与 Balanced/Precision 并发 warm-up 时不会产生损坏 cache。
+2. A/B **同时运行**，分别占 GPU0/GPU1；完成后 C/D 同时运行。每个 ablation 内 Balanced 与
+   Precision 默认在该 arm 的同一 GPU 上并发，因为用户已确认单 arm 显存有 headroom。
+3. 若单卡同时跑 Balanced+Precision 出现 OOM/吞吐下降，只设置 `V4846_VARIANT_MODE=serial`；
+   两个 ablation 仍分别在两张 GPU 上并发，科学协议不变。
+4. v48.45.6 已将单 A 从约 2.13 h 降到约 59 min；v48.46 进一步消除跨 stage 重复解压。按上传
+   v48.45.6 wall time 粗略上界，A/B + C/D pairing 在无 contention 时可把四臂串行约 296 min
+   降到约 169 min，再叠加 persistent cache 收益。真实值必须由 A30 实测，不在代码审计环境中宣称。
+5. persistent cache schema v3 优先以 `weights_only + mmap` 读取，多个 arm/variant 可共享 OS page cache，
+   避免每个 trainer 再复制一整份 decoded tensors 到 host RAM；旧 PyTorch 自动 fallback。cache 若损坏/截断
+   会在 flock 内视为 miss 并原子重建，不再把缓存介质问题升级成实验 RC=30。
+6. certificate config 同时显式写入 `training/calibration/evaluation.option_execution_semantics`，避免未来 config
+   优先级或默认值改变时把 paper-consistent evaluation 静默退回 legacy global 语义。
+
+### Legacy architecture debt kept out of this 2x2
+
+共享 v48.45 rebuilt source 仍含历史 `DELTA_REGIME_EXPERTS=true`/bucket-conditioned internal geometry。
+v48.46 **不新增也不扩大**这一 legacy 路径，并在 factor contract 中声明
+`strategy_regime_conditioning=false`。为了保持 2x2 单因素可归因，本轮不同时重建 source 去除该
+历史结构。若 v48.46 得到明确正结果，论文最终版前应单独做一次 controlled source rebuild，移除
+legacy bucket-conditioned policy internals，并把 Appendix 的 “Regime-conditioned recovery admission”
+改写为连续 deployable headroom + observation compatibility + harm envelope；该结构清理必须作为
+独立实验，不能和 v48.46 混在一起。
+
+### Engineering / attribution contracts and local validation
+
+- 新增 `test_v48_46_ocswic.py`，验证 global-vs-observation-class 最小反例、class loss gradients、
+  persistent cache key/mmap/损坏重建、explicit evaluation semantics、telemetry summary 与 2x2 launcher/factor contract。
+- `compare_v48_46_ocswic_2x2.py` 要求四臂 source checkpoint SHA、protocol seal、**完整同一 gate
+  protocol**、development/certificate manifest 完全一致；RC 必须为 authoritative `0/20`。
+- 四臂最终 evaluation semantics 固定 `observation_class`；training semantics 才是可变因素，避免
+  change-of-metric confounding。
+- 当前本地完成回归：v48.42–v48.46 + v48.45 engineering/protocol 组合测试 `70/70`；
+  v48.37–41 `29/29`；v48.36 OCAF `14 passed / 1 skipped`；v48.36 transfer/terminal/idempotence
+  `18/18`。去重后合计 **131 passed / 1 skipped**。
+- `python -m compileall -q src tools` PASS；全部 **103/103** shell scripts `bash -n` PASS。
+- 本地环境没有用户 A30/WOMD 数据，因此未声称真实 v48.46 GPU/certificate 结果。
+
+
 ## v48.45.6 — SOWR STAGE-ISOLATION + SOURCE-ARCHITECTURE + EXACT-I/O HOTFIX (2026-08-12)
 
 **类别：工程/执行性能修复；SOWR、dual-ROCT、shared rule、risk/gate 算法语义不变。**

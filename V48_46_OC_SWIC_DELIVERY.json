@@ -1,0 +1,54 @@
+{
+  "version": "v48.46",
+  "name": "OC-SWIC — Observation-Class Shared-Witness Identifiability Calibration",
+  "basis": "authoritative v48.45.6 SOWR 2x2: A/B/C/D all RC=20 and pipeline_valid=true",
+  "scientific_design": {
+    "evaluation_semantics_all_arms": "observation_class",
+    "A": {
+      "training_semantics": "global",
+      "sequential_obs_margin_witness": false
+    },
+    "B": {
+      "training_semantics": "observation_class",
+      "sequential_obs_margin_witness": false
+    },
+    "C": {
+      "training_semantics": "global",
+      "sequential_obs_margin_witness": true
+    },
+    "D/Main": {
+      "training_semantics": "observation_class",
+      "sequential_obs_margin_witness": true
+    },
+    "root_logit_recalibration": false,
+    "regime_conditioned_strategy": false,
+    "downstream_dual_roct_fixed": true,
+    "proposal_top_k": 5
+  },
+  "execution_optimization": {
+    "arm_schedule": "A+B concurrently on GPU0/GPU1, then C+D concurrently",
+    "variant_mode_default": "parallel Balanced+Precision on the arm-assigned GPU",
+    "variant_mode_fallback": "serial",
+    "persistent_tensor_cache_schema": 3,
+    "persistent_cache_mmap": true,
+    "telemetry_interval_seconds_default": 30
+  },
+  "v48_45_6_key_findings": {
+    "all_pipeline_valid": true,
+    "all_authoritative_rc": 20,
+    "precision_near_A_recall": 0.1111111111111111,
+    "precision_near_A_harm_ucb90": 0.23609470141850816,
+    "precision_contact_A_recall": 0.0,
+    "precision_contact_A_harm_ucb90": 0.2921463319946307,
+    "B_signal": "weak capture/AUC improvement with harmful-UCB degradation",
+    "C_signal": "certificate harmful-UCB reduction and weak Contact sign improvement, but capture loss",
+    "D_signal": "no positive interaction; behaves close to B"
+  },
+  "validation": {
+    "passed": 131,
+    "skipped": 1,
+    "shell_scripts_bash_n": "103/103",
+    "compileall": "PASS"
+  },
+  "real_gpu_v48_46_executed_here": false
+}

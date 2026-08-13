@@ -3,6 +3,10 @@ from __future__ import annotations
 import csv
 import os
 import zlib
+import hashlib
+import json
+import time
+import fcntl
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -624,6 +628,98 @@ def _nominal_deviation_by_path(paths: list[Path]) -> list[float]:
     return out
 
 
+_PERSISTENT_TENSOR_CACHE_SCHEMA = 3
+
+def _load_persistent_tensor_cache_payload(cache_path: Path) -> dict[str, Any] | None:
+    """Load an immutable decoded-tensor cache with mmap when supported.
+
+    Multiple v48.46 arms/variants may read the same cache concurrently.  mmap
+    keeps tensor storages file-backed so the OS page cache can be shared across
+    processes instead of materialising another full host-RAM copy per trainer.
+    The payload contains tensors plus primitive provenance only, so
+    ``weights_only=True`` is sufficient on modern PyTorch.  Older PyTorch
+    versions fall back to the historical loader.  A malformed/truncated cache
+    is treated as a cache miss and rebuilt under the existing flock rather than
+    becoming an experiment-level RC=30.
+    """
+    attempts = (
+        {"weights_only": True, "mmap": True},
+        {"weights_only": True},
+        {"weights_only": False},
+    )
+    for extra in attempts:
+        try:
+            payload = torch.load(cache_path, map_location="cpu", **extra)
+            return payload if isinstance(payload, dict) else None
+        except TypeError:
+            # ``mmap``/``weights_only`` are version-dependent keyword args.
+            continue
+        except Exception:
+            # A second loader mode may still work (for example mmap unsupported
+            # by the filesystem).  If every mode fails the caller rebuilds.
+            continue
+    return None
+
+def _dataset_manifest_fingerprint(paths: list[Path]) -> list[dict[str, Any]]:
+    """Stable provenance for a decoded-tensor cache without opening every NPZ."""
+    roots = sorted({_dataset_root_for_sample(p).resolve() for p in paths}, key=lambda x: str(x))
+    rows: list[dict[str, Any]] = []
+    for root in roots:
+        manifest = root / "manifest.csv"
+        if manifest.is_file():
+            raw = manifest.read_bytes()
+            rows.append({
+                "root": str(root),
+                "manifest_sha256": hashlib.sha256(raw).hexdigest(),
+                "manifest_size": len(raw),
+            })
+        else:
+            # Fail-safe fallback for non-manifest datasets used by older tests.
+            member = [p for p in paths if _dataset_root_for_sample(p).resolve() == root]
+            rows.append({
+                "root": str(root),
+                "members": [(str(p.resolve()), int(p.stat().st_size), int(p.stat().st_mtime_ns)) for p in member],
+            })
+    return rows
+
+def _persistent_tensor_cache_key(
+    paths: list[Path], cfg: dict, *, num_roots: int, num_options: int,
+    d_signature: int, d_future_signature: int, feature_dim: int,
+) -> str:
+    training = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
+    payload = {
+        "schema": _PERSISTENT_TENSOR_CACHE_SCHEMA,
+        "manifests": _dataset_manifest_fingerprint(paths),
+        "path_count": len(paths),
+        "paths": [str(p.resolve()) for p in paths],
+        "geometry": {
+            "num_roots": int(num_roots), "num_options": int(num_options),
+            "d_signature": int(d_signature), "d_future_signature": int(d_future_signature),
+            "feature_dim": int(feature_dim),
+        },
+        # Only tensor-construction settings belong in this key.  Model-head,
+        # optimizer, ROCT and option-execution settings do not change any
+        # OCRAPSampleDataset tensor and previously forced redundant 90--250 s
+        # decompression passes between witness/factor stages and ablation arms.
+        "feature_layout": _feature_layout_values(cfg),
+        "prefix_param_dim": int(cfg.get("prefix_param_dim", 5)),
+        "bev_channels": int(cfg.get("bev_channels", 7)),
+        "exact_eligibility": bool(training.get("direct_policy_metric_exact_eligibility", False)),
+        "npz_keys": sorted(MODEL_SAMPLE_NPZ_KEYS),
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+def _stack_tensor_items(items: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
+    if not items:
+        return {}
+    keys = tuple(items[0].keys())
+    if any(tuple(x.keys()) != keys for x in items):
+        raise ValueError("persistent tensor cache item-key mismatch")
+    return {k: torch.stack([x[k] for x in items], dim=0).contiguous() for k in keys}
+
+
+
 class OCRAPSampleDataset(Dataset):
     def __init__(self, paths: list[Path], cfg: dict | None = None):
         self.paths = list(paths)
@@ -651,10 +747,77 @@ class OCRAPSampleDataset(Dataset):
         # contain large compressed map/BEV/debug arrays.  Caching the final CPU
         # tensors once removes repeated ZIP decompression across 8--20 epochs.
         # It is opt-in so non-v48 workflows keep their historical memory profile.
-        self.cache_samples_in_memory = bool(training_cfg.get("cache_samples_in_memory", False))
+        self.persistent_tensor_cache = bool(training_cfg.get("persistent_tensor_cache", False))
+        cache_dir_raw = str(training_cfg.get("persistent_tensor_cache_dir", "") or "").strip()
+        self.persistent_tensor_cache_dir = Path(cache_dir_raw).expanduser() if cache_dir_raw else None
+        self.cache_samples_in_memory = bool(training_cfg.get("cache_samples_in_memory", False)) or self.persistent_tensor_cache
         self._item_cache: list[dict[str, torch.Tensor]] | None = None
-        if self.cache_samples_in_memory:
+        self._stacked_item_cache: dict[str, torch.Tensor] | None = None
+        self.tensor_cache_event: dict[str, Any] = {"enabled": self.persistent_tensor_cache, "hit": False}
+        if self.persistent_tensor_cache:
+            if self.persistent_tensor_cache_dir is None:
+                raise ValueError("training.persistent_tensor_cache=true requires persistent_tensor_cache_dir")
+            self._load_or_build_persistent_tensor_cache()
+        elif self.cache_samples_in_memory:
             self._item_cache = [self._build_item(i) for i in range(len(self.paths))]
+
+    def _load_or_build_persistent_tensor_cache(self) -> None:
+        assert self.persistent_tensor_cache_dir is not None
+        cache_dir = self.persistent_tensor_cache_dir
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        key = _persistent_tensor_cache_key(
+            self.paths, self.cfg, num_roots=self.num_roots, num_options=self.num_options,
+            d_signature=self.d_signature, d_future_signature=self.d_future_signature,
+            feature_dim=self.feature_dim,
+        )
+        cache_path = cache_dir / f"ocrap_tensor_items_{key}.pt"
+        lock_path = cache_dir / f"ocrap_tensor_items_{key}.lock"
+        t0 = time.perf_counter()
+        with lock_path.open("a+b") as lockf:
+            fcntl.flock(lockf.fileno(), fcntl.LOCK_EX)
+            try:
+                if cache_path.is_file():
+                    payload = _load_persistent_tensor_cache_payload(cache_path)
+                    if (
+                        isinstance(payload, dict)
+                        and int(payload.get("schema", -1)) == _PERSISTENT_TENSOR_CACHE_SCHEMA
+                        and payload.get("key") == key
+                        and int(payload.get("num_items", -1)) == len(self.paths)
+                        and isinstance(payload.get("tensors"), dict)
+                    ):
+                        tensors = payload["tensors"]
+                        if tensors and all(int(v.shape[0]) == len(self.paths) for v in tensors.values()):
+                            self._stacked_item_cache = tensors
+                            self.tensor_cache_event = {
+                                "enabled": True, "hit": True, "key": key, "path": str(cache_path),
+                                "seconds": float(time.perf_counter() - t0),
+                            }
+                            return
+                    # Corrupt/stale same-name artifact should never be trusted.
+                    cache_path.unlink(missing_ok=True)
+                items = [self._build_item(i) for i in range(len(self.paths))]
+                tensors = _stack_tensor_items(items)
+                payload = {
+                    "schema": _PERSISTENT_TENSOR_CACHE_SCHEMA, "key": key,
+                    "num_items": len(self.paths), "tensors": tensors,
+                }
+                tmp = cache_path.with_name(f".{cache_path.name}.tmp.{os.getpid()}.{time.time_ns()}")
+                torch.save(payload, tmp)
+                os.replace(tmp, cache_path)
+                self._stacked_item_cache = tensors
+                self.tensor_cache_event = {
+                    "enabled": True, "hit": False, "key": key, "path": str(cache_path),
+                    "seconds": float(time.perf_counter() - t0),
+                }
+            finally:
+                fcntl.flock(lockf.fileno(), fcntl.LOCK_UN)
+
+    def cached_tensor_bytes(self) -> int:
+        if self._stacked_item_cache is not None:
+            return int(sum(v.numel() * v.element_size() for v in self._stacked_item_cache.values()))
+        if self._item_cache is not None:
+            return int(sum(t.numel() * t.element_size() for item in self._item_cache for t in item.values()))
+        return 0
 
     def __len__(self) -> int:
         return len(self.paths)
@@ -704,6 +867,8 @@ class OCRAPSampleDataset(Dataset):
         return out
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        if self._stacked_item_cache is not None:
+            return {k: v[idx] for k, v in self._stacked_item_cache.items()}
         if self._item_cache is not None:
             return self._item_cache[idx]
         return self._build_item(idx)

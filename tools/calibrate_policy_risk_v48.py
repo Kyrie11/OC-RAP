@@ -24,7 +24,7 @@ from ocrap.algorithms.evidence_targets import (
     component_veto_terms_numpy,
 )
 from ocrap.data.serialization import load_npz_selected
-from ocrap.evaluation.metrics import best_shared_option_index, deployable_recovery_success, post_contact_deployability_score
+from ocrap.evaluation.metrics import best_option_indices, deployable_recovery_success, post_contact_deployability_score
 from ocrap.evaluation.certificate_stats import certificate_support_feasibility, wilson_interval, wilson_z
 from ocrap.models.data import MODEL_SAMPLE_NPZ_KEYS, expand_split_roles, iter_sample_paths_many, scalar_metadata_for_path
 from ocrap.models.inference import load_model_bundle, predict_samples
@@ -76,7 +76,7 @@ def _finite_sample_upper_quantile(values: list[float], alpha: float) -> float:
     return float(a[rank - 1])
 
 
-def _teacher_components(d: dict[str, Any], alpha: float, beta: float, top_m: int) -> dict[str, float]:
+def _teacher_components(d: dict[str, Any], alpha: float, beta: float, top_m: int, option_execution_semantics: str = "global") -> dict[str, float]:
     m = np.asarray(d["m_star"], dtype=np.float64)
     p = np.asarray(d["root_probs"], dtype=np.float64)
     c = np.asarray(d.get("c_star", np.eye(m.shape[0])), dtype=np.float64)
@@ -84,7 +84,10 @@ def _teacher_components(d: dict[str, Any], alpha: float, beta: float, top_m: int
     ov = np.asarray(d.get("option_valid", np.ones(m.shape[1])), dtype=bool)
     res = oc_mero(m, p, c, alpha=alpha, beta=beta, option_valid=ov, root_valid=rv,
                   use_lcvar=True, use_obs_kernel=True, top_m=top_m)
-    opt = best_shared_option_index(res.q, p, gamma=0.0, root_valid=rv, option_valid=ov)
+    opt = best_option_indices(
+        res.q, p, gamma=0.0, root_valid=rv, option_valid=ov,
+        semantics=option_execution_semantics,
+    )
     drs = float(deployable_recovery_success(m, p, opt, root_valid=rv))
     rd = float(_scalar(d, "r_dep_star", res.r_dep))
     ro = float(_scalar(d, "r_orc_star", res.r_orc))
@@ -488,6 +491,7 @@ def main() -> int:
     ap.add_argument("--dataset", required=True)
     ap.add_argument("--method-version", default="v48_19_support_aware_factorized_policy_risk_certificate")
     ap.add_argument("--checkpoint", required=True)
+    ap.add_argument("--option-execution-semantics", choices=["global", "observation_class"], default="global")
     ap.add_argument("--bucket", choices=["near", "contact"], required=True)
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--rows-output", type=Path)
@@ -632,7 +636,10 @@ def main() -> int:
             "candidate": int(_scalar(d, "candidate_index", 0)),
             "macro": int(_scalar(d, "prefix_macro_type_id", _scalar(d, "prefix_macro_id", -1))),
             "nominal": bool(float(_scalar(d, "is_nominal", 0)) > 0.5),
-            **_teacher_components(d, alpha, beta, top_m),
+            **_teacher_components(
+                d, alpha, beta, top_m,
+                option_execution_semantics=args.option_execution_semantics,
+            ),
             "hard": float(_scalar(d, "hard_violation", 0.0)),
             "feasible": bool(int(_scalar(d, "feasible", 1))),
         }
@@ -1484,6 +1491,7 @@ def main() -> int:
     result = {
         "method": str(args.method_version),
         "bucket": args.bucket,
+        "option_execution_semantics": args.option_execution_semantics,
         "dataset": args.dataset,
         "checkpoint": args.checkpoint,
         "certificate_mode": ("development_fit_only" if args.development_fit_only else "external_rule_full_verification" if args.verification_only else "internal_fit_verify_split"),

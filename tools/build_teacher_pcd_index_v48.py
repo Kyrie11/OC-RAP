@@ -20,7 +20,7 @@ from ocrap.algorithms.evidence_targets import ComponentVetoTolerances, component
 from ocrap.algorithms.ocmero import oc_mero
 from ocrap.data.serialization import load_npz_selected
 from ocrap.evaluation.metrics import (
-    best_shared_option_index,
+    best_option_indices,
     deployable_recovery_success,
     post_contact_deployability_score,
 )
@@ -32,7 +32,7 @@ def _scalar(d: dict[str, Any], key: str, default: Any) -> Any:
     return a.item() if a.shape == () else a
 
 
-def teacher_components(d: dict[str, Any], *, alpha: float, beta: float, top_m: int) -> dict[str, float]:
+def teacher_components(d: dict[str, Any], *, alpha: float, beta: float, top_m: int, option_execution_semantics: str = "global") -> dict[str, float]:
     m = np.asarray(d["m_star"], dtype=np.float64)
     p = np.asarray(d["root_probs"], dtype=np.float64)
     c = np.asarray(d.get("c_star", np.eye(m.shape[0])), dtype=np.float64)
@@ -42,7 +42,10 @@ def teacher_components(d: dict[str, Any], *, alpha: float, beta: float, top_m: i
         m, p, c, alpha=alpha, beta=beta, option_valid=ov, root_valid=rv,
         use_lcvar=True, use_obs_kernel=True, top_m=top_m,
     )
-    option = best_shared_option_index(result.q, p, gamma=0.0, root_valid=rv, option_valid=ov)
+    option = best_option_indices(
+        result.q, p, gamma=0.0, root_valid=rv, option_valid=ov,
+        semantics=option_execution_semantics,
+    )
     drs = float(deployable_recovery_success(m, p, option, root_valid=rv))
     r_dep = float(_scalar(d, "r_dep_star", result.r_dep))
     r_orc = float(_scalar(d, "r_orc_star", result.r_orc))
@@ -64,6 +67,7 @@ def main() -> int:
     ap.add_argument("--alpha", type=float, default=0.2)
     ap.add_argument("--beta", type=float, default=0.2)
     ap.add_argument("--top-m", type=int, default=8)
+    ap.add_argument("--option-execution-semantics", choices=["global", "observation_class"], default="global")
     ap.add_argument("--progress-every", type=int, default=1000)
     ap.add_argument("--positive-gain", type=float, default=0.015)
     ap.add_argument("--deployable-macro-ids", default="2,3,5,6,7")
@@ -108,7 +112,10 @@ def main() -> int:
             "candidate": int(_scalar(d, "candidate_index", 0)),
             "macro": int(_scalar(d, "prefix_macro_type_id", _scalar(d, "prefix_macro_id", -1))),
             "nominal": bool(float(_scalar(d, "is_nominal", 0.0)) > 0.5),
-            **teacher_components(d, alpha=args.alpha, beta=args.beta, top_m=args.top_m),
+            **teacher_components(
+                d, alpha=args.alpha, beta=args.beta, top_m=args.top_m,
+                option_execution_semantics=args.option_execution_semantics,
+            ),
         }
         rows.append(row)
         key = (bucket, scene, time_index)
@@ -261,6 +268,7 @@ def main() -> int:
         "event": "teacher_pcd_index_complete", "output": str(args.output),
         "num_samples": len(paths), "num_groups": len(groups), "alpha": args.alpha,
         "beta": args.beta, "top_m": args.top_m, "positive_gain": args.positive_gain,
+        "option_execution_semantics": args.option_execution_semantics,
         "deployable_macro_ids": sorted(deployable_macro_ids),
         "positive_advantage_groups": len(positive),
         "positive_advantage_groups_all_macros": len(positive_all),

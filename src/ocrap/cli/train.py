@@ -21,6 +21,8 @@ from ocrap.models.losses import (
     anti_oracle_loss,
     artifact_gap_loss,
     best_shared_option_loss,
+    observation_class_option_success_loss,
+    observation_class_best_option_loss,
     deployability_classification_loss,
     shared_option_admission_loss,
     shared_option_q_regression_loss,
@@ -37,13 +39,14 @@ from ocrap.models.losses import (
     macro_shared_success_calibration_loss,
     observation_consistent_recovery_advantage_loss,
     direct_uncertainty_recovery_value_loss,
-    _differentiable_shared_success,
-    _exact_teacher_shared_success,
+    _recovery_success_proxy,
+    _exact_teacher_recovery_success,
     _torch_pcd_score,
 )
 from ocrap.evaluation.metrics import (
-    best_shared_option_index,
+    best_option_indices,
     deployable_recovery_success,
+    option_execution_semantics,
     post_contact_deployability_score,
 )
 from ocrap.models.ocrap import OCRAPModel
@@ -311,6 +314,7 @@ def _direct_value_loss_from_outputs(
             float(x) for x in str(tcfg.get("direct_value_group_dro_severity_thresholds", "0.25,0.55")).split(",") if str(x).strip()
         ),
         exact_teacher_pcd=bool(tcfg.get("direct_value_exact_teacher_pcd", False)),
+        option_execution_semantics=str(tcfg.get("option_execution_semantics", "global")),
         preference_weight=float(tcfg.get("direct_value_preference_weight", 0.0)),
         preference_temperature=float(tcfg.get("direct_value_preference_temperature", 0.06)),
         preference_min_gap=float(tcfg.get("direct_value_preference_min_gap", 0.01)),
@@ -580,15 +584,18 @@ def _direct_policy_batch_stats(
     rank_score = out.get("direct_recovery_rank_logit", out["direct_recovery_value_logit"]).float().reshape(-1)
     trd = torch.nan_to_num(batch["r_dep_star"].float().reshape(-1), nan=-20.0, posinf=20.0, neginf=-20.0)
     tro = torch.nan_to_num(batch["r_orc_star"].float().reshape(-1), nan=-20.0, posinf=20.0, neginf=-20.0)
+    option_semantics = str(tcfg.get("option_execution_semantics", "global") or "global")
     if bool(tcfg.get("direct_value_exact_teacher_pcd", False)):
-        teacher_drs = _exact_teacher_shared_success(
+        teacher_drs = _exact_teacher_recovery_success(
             teacher_q, batch["m_star"].float(), batch["root_probs"].float(),
             batch["root_valid"], batch["option_valid"], gamma=option_gamma,
+            semantics=option_semantics,
         ).reshape(-1)
     else:
-        teacher_drs = _differentiable_shared_success(
+        teacher_drs = _recovery_success_proxy(
             teacher_q, batch["root_probs"].float(), batch["root_valid"], batch["option_valid"],
             gamma=option_gamma, temperature=max(0.08, option_temperature * 0.5),
+            semantics=option_semantics,
         ).reshape(-1)
     teacher_gap = torch.clamp(tro - trd, min=0.0)
     target = _torch_pcd_score(teacher_drs, trd, teacher_gap).detach().clamp(0.0, 1.0)
@@ -1663,6 +1670,14 @@ def _epoch(
             gamma=option_gamma,
             temperature=option_temperature,
         )
+        loss_option_class_success = observation_class_option_success_loss(
+            pred_q, teacher_q, batch["root_probs"].float(), batch["root_valid"], batch["option_valid"],
+            gamma=option_gamma, temperature=option_temperature,
+        )
+        loss_option_class_best = observation_class_best_option_loss(
+            pred_q, teacher_q, batch["root_probs"].float(), batch["root_valid"], batch["option_valid"],
+            gamma=option_gamma, temperature=option_temperature,
+        )
         loss_group_rank = groupwise_candidate_ranking_loss(
             r_dep,
             gap,
@@ -1928,6 +1943,8 @@ def _epoch(
             + float(lw.get("option_success", 0.0)) * loss_option_success
             + float(lw.get("option_success_bce", 0.0)) * loss_option_success_bce
             + float(lw.get("option_best", 0.2)) * loss_option_best
+            + float(lw.get("option_class_success", 0.0)) * loss_option_class_success
+            + float(lw.get("option_class_best", 0.0)) * loss_option_class_best
             + float(lw.get("group_ranking", 0.0)) * loss_group_rank
             + float(lw.get("group_ce", 0.0)) * loss_group_ce
             + float(lw.get("nominal_switch", 0.0)) * loss_nominal_switch
@@ -1968,6 +1985,8 @@ def _epoch(
             "loss_option_success": loss_option_success.item(),
             "loss_option_success_bce": loss_option_success_bce.item(),
             "loss_option_best": loss_option_best.item(),
+            "loss_option_class_success": loss_option_class_success.item(),
+            "loss_option_class_best": loss_option_class_best.item(),
             "loss_group_ranking": loss_group_rank.item(),
             "loss_group_ce": loss_group_ce.item(),
             "loss_nominal_switch": loss_nominal_switch.item(),
@@ -2176,8 +2195,10 @@ def _sampler_teacher_pcd(path: Path, cfg: dict) -> float:
         use_obs_kernel=bool(ocfg.get("use_obs_kernel", True)),
         top_m=int(ocfg.get("top_m", 8)),
     )
-    option = best_shared_option_index(
-        res.q, probs, gamma=0.0, root_valid=root_valid, option_valid=option_valid
+    semantics = option_execution_semantics(cfg)
+    option = best_option_indices(
+        res.q, probs, gamma=0.0, root_valid=root_valid, option_valid=option_valid,
+        semantics=semantics,
     )
     drs = deployable_recovery_success(m, probs, option, root_valid=root_valid)
     r_dep = float(np.asarray(d.get("r_dep_star", res.r_dep)).reshape(()))
@@ -2583,13 +2604,14 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
     val_ds = OCRAPSampleDataset(val_paths, cfg)
     dataset_materialize_seconds = float(perf_counter() - dataset_materialize_t0)
     def _cached_bytes(ds):
-        cache = getattr(ds, "_item_cache", None)
-        if cache is None:
-            return 0
-        return int(sum(t.numel() * t.element_size() for item in cache for t in item.values()))
+        fn = getattr(ds, "cached_tensor_bytes", None)
+        return int(fn()) if callable(fn) else 0
     print({
         "event": "dataset_materialization_done",
         "cache_samples_in_memory": bool(getattr(train_ds, "cache_samples_in_memory", False)),
+        "persistent_tensor_cache": bool(getattr(train_ds, "persistent_tensor_cache", False)),
+        "train_tensor_cache": getattr(train_ds, "tensor_cache_event", {}),
+        "val_tensor_cache": getattr(val_ds, "tensor_cache_event", {}),
         "seconds": round(dataset_materialize_seconds, 3),
         "train_cached_bytes": _cached_bytes(train_ds),
         "val_cached_bytes": _cached_bytes(val_ds),

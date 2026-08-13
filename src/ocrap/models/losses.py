@@ -247,6 +247,81 @@ def best_shared_option_loss(
 
 
 
+def observation_class_option_success_loss(
+    pred_q: torch.Tensor,
+    teacher_q: torch.Tensor,
+    root_probs: torch.Tensor,
+    root_valid: torch.Tensor,
+    option_valid: torch.Tensor,
+    gamma: float = 0.0,
+    temperature: float = 0.35,
+) -> torch.Tensor:
+    """Calibrate existential recovery success for each observation class.
+
+    Each row of OC-MERO q is already an observation-conditioned lower-tail
+    witness over compatible roots.  The target here is therefore whether that
+    class has *some* valid option, rather than whether one option works across
+    all distinguishable classes.
+    """
+    if pred_q.ndim != 3 or teacher_q.ndim != 3:
+        return pred_q.sum() * 0.0
+    mask = root_valid.bool().unsqueeze(-1) & option_valid.bool().unsqueeze(1) & torch.isfinite(teacher_q)
+    if not bool(mask.any()):
+        return pred_q.sum() * 0.0
+    tau = max(float(temperature), 1.0e-3)
+    pred_prob = torch.sigmoid((torch.nan_to_num(pred_q, nan=-20.0, posinf=20.0, neginf=-20.0) - float(gamma)) / tau)
+    pred_prob = torch.where(mask, pred_prob, torch.zeros_like(pred_prob))
+    teacher_success = ((teacher_q.detach() >= float(gamma)) & mask).any(dim=-1).float()
+    pred_exist = pred_prob.max(dim=-1).values.clamp(1.0e-4, 1.0 - 1.0e-4)
+    rv = root_valid.bool()
+    root_w = _root_weights(root_probs, root_valid)
+    valid = rv & mask.any(dim=-1)
+    if not bool(valid.any()):
+        return pred_q.sum() * 0.0
+    loss = F.binary_cross_entropy(pred_exist, teacher_success, reduction="none")
+    denom = (root_w * valid.float()).sum().clamp_min(1.0e-8)
+    return (loss * root_w * valid.float()).sum() / denom
+
+
+def observation_class_best_option_loss(
+    pred_q: torch.Tensor,
+    teacher_q: torch.Tensor,
+    root_probs: torch.Tensor,
+    root_valid: torch.Tensor,
+    option_valid: torch.Tensor,
+    gamma: float = 0.0,
+    temperature: float = 0.35,
+) -> torch.Tensor:
+    """Root/class-weighted CE for the OC-MERO recovery-option witness.
+
+    Distinguishable post-prefix observations may choose different options; only
+    observationally compatible roots are coupled inside each q row.  This is
+    the option-selection semantics used by Eq. OC-MERO in the paper.
+    """
+    if pred_q.ndim != 3 or teacher_q.ndim != 3:
+        return pred_q.sum() * 0.0
+    b, k, l = pred_q.shape
+    ov = option_valid.bool()
+    mask = root_valid.bool().unsqueeze(-1) & ov.unsqueeze(1) & torch.isfinite(teacher_q)
+    if not bool(mask.any()):
+        return pred_q.sum() * 0.0
+    teacher = torch.nan_to_num(teacher_q.detach(), nan=-1.0e9, posinf=5.0, neginf=-5.0)
+    # A tiny gamma-success tie-break makes the target stable around zero while
+    # preserving signed q as the primary ranking statistic.
+    tscore = teacher.clamp(-5.0, 5.0) + 0.01 * ((teacher >= float(gamma)) & mask).float()
+    tscore = torch.where(mask, tscore, torch.full_like(tscore, -1.0e9))
+    target = tscore.argmax(dim=-1)
+    tau = max(float(temperature), 1.0e-3)
+    logits = torch.nan_to_num(pred_q, nan=-20.0, posinf=20.0, neginf=-20.0) / tau
+    logits = torch.where(ov.unsqueeze(1), logits, torch.full_like(logits, -1.0e4))
+    ce = F.cross_entropy(logits.reshape(b * k, l), target.reshape(b * k), reduction="none").reshape(b, k)
+    valid = root_valid.bool() & mask.any(dim=-1)
+    root_w = _root_weights(root_probs, root_valid)
+    denom = (root_w * valid.float()).sum().clamp_min(1.0e-8)
+    return (ce * root_w * valid.float()).sum() / denom
+
+
+
 def groupwise_candidate_ranking_loss(
     pred_r_dep: torch.Tensor,
     pred_gap: torch.Tensor,
@@ -473,6 +548,51 @@ def _differentiable_shared_success(
 
 
 
+def _differentiable_observation_consistent_success(
+    pred_q: torch.Tensor,
+    root_probs: torch.Tensor,
+    root_valid: torch.Tensor,
+    option_valid: torch.Tensor,
+    *,
+    gamma: float = 0.0,
+    temperature: float = 0.25,
+) -> torch.Tensor:
+    """Differentiable DRS proxy with one option per observation-conditioned row."""
+    if pred_q.ndim != 3:
+        return pred_q.reshape(pred_q.shape[0], -1).mean(dim=-1) * 0.0
+    w = torch.clamp(root_probs.float(), min=0.0) * root_valid.bool().float()
+    w = w / w.sum(dim=-1, keepdim=True).clamp_min(1.0e-8)
+    valid = root_valid.bool().unsqueeze(-1) & option_valid.bool().unsqueeze(1)
+    logits = (pred_q.float() - float(gamma)) / max(float(temperature), 1.0e-3)
+    succ = torch.sigmoid(torch.nan_to_num(logits, nan=-20.0, posinf=20.0, neginf=-20.0))
+    succ = torch.where(valid, succ, torch.full_like(succ, -1.0))
+    per_class = succ.max(dim=-1).values.clamp(0.0, 1.0)
+    return (w * per_class).sum(dim=-1).clamp(0.0, 1.0)
+
+
+def _recovery_success_proxy(
+    pred_q: torch.Tensor,
+    root_probs: torch.Tensor,
+    root_valid: torch.Tensor,
+    option_valid: torch.Tensor,
+    *,
+    gamma: float = 0.0,
+    temperature: float = 0.25,
+    semantics: str = "global",
+) -> torch.Tensor:
+    mode = str(semantics).strip().lower()
+    if mode in {"observation_class", "observation_consistent", "ocmero"}:
+        return _differentiable_observation_consistent_success(
+            pred_q, root_probs, root_valid, option_valid, gamma=gamma, temperature=temperature
+        )
+    if mode in {"global", "global_shared", "single_global"}:
+        return _differentiable_shared_success(
+            pred_q, root_probs, root_valid, option_valid, gamma=gamma, temperature=temperature
+        )
+    raise ValueError(f"Unknown option execution semantics: {semantics!r}")
+
+
+
 
 
 def _exact_teacher_shared_success(
@@ -519,6 +639,59 @@ def _exact_teacher_shared_success(
     selected_valid = rv & torch.gather(ov.unsqueeze(1).expand(-1, k, -1), 2, gather_idx).squeeze(-1)
     success = selected_valid & torch.isfinite(selected_margin) & (selected_margin >= 0.0)
     return (w * success.float()).sum(dim=-1).clamp(0.0, 1.0).detach()
+
+
+def _exact_teacher_observation_consistent_success(
+    teacher_q: torch.Tensor,
+    teacher_m_star: torch.Tensor,
+    root_probs: torch.Tensor,
+    root_valid: torch.Tensor,
+    option_valid: torch.Tensor,
+    *,
+    gamma: float = 0.0,
+) -> torch.Tensor:
+    """Hard teacher DRS with recovery selected by observation-conditioned q row."""
+    if teacher_q.ndim != 3 or teacher_m_star.ndim != 3:
+        return teacher_q.reshape(teacher_q.shape[0], -1).mean(dim=-1) * 0.0
+    q = torch.nan_to_num(teacher_q.float(), nan=-1.0e9, posinf=5.0, neginf=-5.0)
+    m = torch.nan_to_num(teacher_m_star.float(), nan=-1.0e9, posinf=5.0, neginf=-5.0)
+    b, k, l = q.shape
+    ll = min(l, m.shape[2])
+    q = q[:, :, :ll]; m = m[:, :, :ll]; l = ll
+    rv = root_valid.bool()[:, :k]
+    ov = option_valid.bool()[:, :l]
+    w = torch.clamp(root_probs.float()[:, :k], min=0.0) * rv.float()
+    w = w / w.sum(dim=-1, keepdim=True).clamp_min(1.0e-8)
+    valid = rv.unsqueeze(-1) & ov.unsqueeze(1) & torch.isfinite(q)
+    score = q.clamp(-5.0, 5.0) + 0.01 * ((q >= float(gamma)) & valid).float()
+    score = torch.where(valid, score, torch.full_like(score, -1.0e9))
+    opt = score.argmax(dim=-1)
+    selected_margin = torch.gather(m, dim=2, index=opt.unsqueeze(-1)).squeeze(-1)
+    selected_valid = rv & torch.gather(ov.unsqueeze(1).expand(-1, k, -1), 2, opt.unsqueeze(-1)).squeeze(-1)
+    success = selected_valid & torch.isfinite(selected_margin) & (selected_margin >= 0.0)
+    return (w * success.float()).sum(dim=-1).clamp(0.0, 1.0).detach()
+
+
+def _exact_teacher_recovery_success(
+    teacher_q: torch.Tensor,
+    teacher_m_star: torch.Tensor,
+    root_probs: torch.Tensor,
+    root_valid: torch.Tensor,
+    option_valid: torch.Tensor,
+    *,
+    gamma: float = 0.0,
+    semantics: str = "global",
+) -> torch.Tensor:
+    mode = str(semantics).strip().lower()
+    if mode in {"observation_class", "observation_consistent", "ocmero"}:
+        return _exact_teacher_observation_consistent_success(
+            teacher_q, teacher_m_star, root_probs, root_valid, option_valid, gamma=gamma
+        )
+    if mode in {"global", "global_shared", "single_global"}:
+        return _exact_teacher_shared_success(
+            teacher_q, teacher_m_star, root_probs, root_valid, option_valid, gamma=gamma
+        )
+    raise ValueError(f"Unknown option execution semantics: {semantics!r}")
 
 def macro_shared_success_calibration_loss(
     pred_q: torch.Tensor,
@@ -1375,6 +1548,7 @@ def direct_uncertainty_recovery_value_loss(
     teacher_hard_violation: torch.Tensor | None = None,
     teacher_harm_proxy: torch.Tensor | None = None,
     exact_teacher_pcd: bool = False,
+    option_execution_semantics: str = "global",
     pred_rank_logit: torch.Tensor | None = None,
     preference_weight: float = 0.0,
     preference_temperature: float = 0.08,
@@ -1563,13 +1737,15 @@ def direct_uncertainty_recovery_value_loss(
         if bool(exact_teacher_pcd):
             if teacher_m_star is None:
                 raise ValueError("exact_teacher_pcd=true requires teacher_m_star")
-            teacher_drs = _exact_teacher_shared_success(
-                teacher_q, teacher_m_star, root_probs, root_valid, option_valid, gamma=success_gamma
+            teacher_drs = _exact_teacher_recovery_success(
+                teacher_q, teacher_m_star, root_probs, root_valid, option_valid,
+                gamma=success_gamma, semantics=option_execution_semantics,
             ).reshape(-1)
         else:
-            teacher_drs = _differentiable_shared_success(
+            teacher_drs = _recovery_success_proxy(
                 teacher_q, root_probs, root_valid, option_valid,
                 gamma=success_gamma, temperature=max(0.08, success_temperature * 0.5),
+                semantics=option_execution_semantics,
             ).reshape(-1)
     sh, ti = scene_hash.reshape(-1), time_index.reshape(-1)
     mac = macro_type_id.reshape(-1)

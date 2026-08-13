@@ -25,6 +25,13 @@ ADMISSION_PRIOR_MODE="${EVIDENCE_ADMISSION_PRIOR_MODE:-frontier_capped_slack}"
 EVIDENCE_INTERACTION_HIDDEN="${EVIDENCE_INTERACTION_HIDDEN:-64}"
 EVIDENCE_INTERACTION_DROPOUT="${EVIDENCE_INTERACTION_DROPOUT:-0.05}"
 EVIDENCE_CONSENSUS_PRIOR_SCALE="${EVIDENCE_CONSENSUS_PRIOR_SCALE:-0.50}"
+OPTION_EXECUTION_SEMANTICS="${OPTION_EXECUTION_SEMANTICS:-global}"
+# v48.46 can deliberately vary training supervision while keeping the
+# paper-consistent evaluation/certificate definition fixed across every arm.
+TRAIN_OPTION_EXECUTION_SEMANTICS="${TRAIN_OPTION_EXECUTION_SEMANTICS:-$OPTION_EXECUTION_SEMANTICS}"
+EVAL_OPTION_EXECUTION_SEMANTICS="${EVAL_OPTION_EXECUTION_SEMANTICS:-$OPTION_EXECUTION_SEMANTICS}"
+SERIAL_VARIANTS_ON_ONE_GPU="${SERIAL_VARIANTS_ON_ONE_GPU:-0}"
+export OPTION_EXECUTION_SEMANTICS TRAIN_OPTION_EXECUTION_SEMANTICS EVAL_OPTION_EXECUTION_SEMANTICS
 IMPLEMENTATION_VERSION="${OCRAP_IMPLEMENTATION_VERSION:-v48.36.4-IDEMPOTENT-TERMINAL-STATE-HOTFIX}"
 export OCRAP_IMPLEMENTATION_VERSION="$IMPLEMENTATION_VERSION"
 
@@ -418,6 +425,7 @@ if [[ "$rebuild_index" == 1 ]]; then
     --dataset "$TRAIN_NEAR,$TRAIN_CONTACT" \
     --output "$GROUP_INDEX" --summary-output "$GROUP_SUMMARY" \
     --alpha "$ALPHA" --beta "$BETA" --top-m "$TOP_M" \
+    --option-execution-semantics "$TRAIN_OPTION_EXECUTION_SEMANTICS" \
     --positive-gain "$POSITIVE_GAIN" --deployable-macro-ids "$DEPLOYABLE_MACRO_IDS" \
     --quality-mode warn \
     --component-harm-drs-tolerance "$COMPONENT_HARM_DRS_TOLERANCE" \
@@ -490,6 +498,7 @@ if [[ "$rebuild_val_index" == 1 ]]; then
     --dataset "$DEV_NEAR,$DEV_CONTACT" \
     --output "$VAL_GROUP_INDEX" --summary-output "$VAL_GROUP_SUMMARY" \
     --alpha "$ALPHA" --beta "$BETA" --top-m "$TOP_M" \
+    --option-execution-semantics "$TRAIN_OPTION_EXECUTION_SEMANTICS" \
     --positive-gain "$POSITIVE_GAIN" --deployable-macro-ids "$DEPLOYABLE_MACRO_IDS" \
     --quality-mode warn \
     --component-harm-drs-tolerance "$COMPONENT_HARM_DRS_TOLERANCE" \
@@ -564,6 +573,8 @@ PY_CACHE_MISSING
   V4836_ADAPTIVE_IDENTITY_MARGIN="${V4836_ADAPTIVE_IDENTITY_MARGIN:-0}" V4836_ENABLE_FINAL_CALIBRATION="${V4836_ENABLE_FINAL_CALIBRATION:-0}" \
   V4845_SOWR_MARGIN_WITNESS="${V4845_SOWR_MARGIN_WITNESS:-0}" V4845_SOWR_OBS_KERNEL="${V4845_SOWR_OBS_KERNEL:-0}" \
   SOWR_EPOCHS="${SOWR_EPOCHS:-8}" SOWR_PATIENCE="${SOWR_PATIENCE:-3}" SOWR_LR="${SOWR_LR:-0.00005}" SOWR_BATCH_SIZE="${SOWR_BATCH_SIZE:-72}" \
+  V4846_SEQUENTIAL_WITNESS="${V4846_SEQUENTIAL_WITNESS:-0}" V4846_WITNESS_OBS_EPOCHS="${V4846_WITNESS_OBS_EPOCHS:-5}" V4846_WITNESS_MARGIN_EPOCHS="${V4846_WITNESS_MARGIN_EPOCHS:-5}" \
+  V4846_WITNESS_PATIENCE="${V4846_WITNESS_PATIENCE:-2}" V4846_WITNESS_LR="${V4846_WITNESS_LR:-0.00004}" OPTION_EXECUTION_SEMANTICS="$TRAIN_OPTION_EXECUTION_SEMANTICS" \
   FACTOR_BENEFIT_MARGIN_REGRESSION_WEIGHT="${FACTOR_BENEFIT_MARGIN_REGRESSION_WEIGHT:-0.0}" FACTOR_BENEFIT_MARGIN_TEMPERATURE="${FACTOR_BENEFIT_MARGIN_TEMPERATURE:-0.025}" \
   FACTOR_COMPONENT_UNDERESTIMATION_WEIGHT="${FACTOR_COMPONENT_UNDERESTIMATION_WEIGHT:-0.0}" FACTOR_SAFE_POSITIVE_COMPONENT_OVERESTIMATION_WEIGHT="${FACTOR_SAFE_POSITIVE_COMPONENT_OVERESTIMATION_WEIGHT:-0.0}" \
   FACTOR_JOINT_RESERVE_REGRESSION_WEIGHT="${FACTOR_JOINT_RESERVE_REGRESSION_WEIGHT:-0.0}" FACTOR_JOINT_RESERVE_BOUNDARY_WEIGHT="${FACTOR_JOINT_RESERVE_BOUNDARY_WEIGHT:-0.0}" FACTOR_JOINT_RESERVE_BOUNDARY_WIDTH="${FACTOR_JOINT_RESERVE_BOUNDARY_WIDTH:-0.05}" \
@@ -630,13 +641,20 @@ if [[ "$RESUME_AFTER_ADAPTATION" == 1 ]]; then
   s0=0; s1=0
   printf 'balanced=0 precision=0 resume_after_adaptation=1 retraining=0\n' | tee "$OUTPUTDIR/logs/adaptation_status.log"
 else
-  run_variant balanced "$GPU0" & p0=$!
-  run_variant precision "$GPU1" & p1=$!
-  set +e
-  wait "$p0"; s0=$?
-  wait "$p1"; s1=$?
-  set -e
-  printf 'balanced=%s precision=%s resume_after_adaptation=0 retraining=1\n' "$s0" "$s1" | tee "$OUTPUTDIR/logs/adaptation_status.log"
+  if [[ "$SERIAL_VARIANTS_ON_ONE_GPU" == 1 ]]; then
+    set +e
+    run_variant balanced "$GPU0"; s0=$?
+    run_variant precision "$GPU1"; s1=$?
+    set -e
+  else
+    run_variant balanced "$GPU0" & p0=$!
+    run_variant precision "$GPU1" & p1=$!
+    set +e
+    wait "$p0"; s0=$?
+    wait "$p1"; s1=$?
+    set -e
+  fi
+  printf 'balanced=%s precision=%s resume_after_adaptation=0 retraining=1 serial_variants=%s\n' "$s0" "$s1" "$SERIAL_VARIANTS_ON_ONE_GPU" | tee "$OUTPUTDIR/logs/adaptation_status.log"
 fi
 
 if [[ "$s0" != 0 && "$s1" != 0 ]]; then
@@ -718,6 +736,7 @@ variants=""
 set +e
 OUTPUTDIR="$OUTPUTDIR" CAL_SAFE="$CAL_SAFE" CERT_NEAR="$CERT_NEAR" CERT_CONTACT="$CERT_CONTACT" DEV_NEAR="$DEV_NEAR" DEV_CONTACT="$DEV_CONTACT" \
 GPU0="$GPU0" GPU1="$GPU1" VARIANTS="$variants" PROPOSAL_TOP_K="$PROPOSAL_TOP_K" V4836_ATTEMPT_ID="$ATTEMPT_ID" \
+  OPTION_EXECUTION_SEMANTICS="$EVAL_OPTION_EXECUTION_SEMANTICS" \
   OPPORTUNITY_LABEL_MODE=raw_benefit GATE_POSITIVE_MODE=safe_benefit bash scripts/calibrate_v48_36_shared_certificate_pool.sh >"$OUTPUTDIR/logs/certificate_controller.log" 2>&1
 raw_cert_rc=$?
 set -e
