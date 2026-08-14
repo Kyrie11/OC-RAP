@@ -2890,6 +2890,15 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_evidence_roct_option_temperature=float(
             model_cfg.get("direct_recovery_evidence_roct_option_temperature", 0.35)
         ),
+        direct_recovery_evidence_native_certificate_preservation=bool(
+            model_cfg.get("direct_recovery_evidence_native_certificate_preservation", False)
+        ),
+        direct_recovery_evidence_native_drs_tolerance=float(
+            model_cfg.get("direct_recovery_evidence_native_drs_tolerance", 0.05)
+        ),
+        direct_recovery_evidence_native_deployability_tolerance=float(
+            model_cfg.get("direct_recovery_evidence_native_deployability_tolerance", 0.05)
+        ),
         direct_recovery_evidence_calibrator_shared=bool(model_cfg.get("direct_recovery_evidence_calibrator_shared", False)),
         direct_recovery_evidence_calibrator_regime_scale=float(model_cfg.get("direct_recovery_evidence_calibrator_regime_scale", 0.25)),
         direct_recovery_evidence_unified_experts=bool(model_cfg.get("direct_recovery_evidence_unified_experts", False)),
@@ -3309,6 +3318,15 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             ),
             "direct_recovery_evidence_roct_option_temperature": float(
                 model_cfg.get("direct_recovery_evidence_roct_option_temperature", 0.35)
+            ),
+            "direct_recovery_evidence_native_certificate_preservation": bool(
+                model_cfg.get("direct_recovery_evidence_native_certificate_preservation", False)
+            ),
+            "direct_recovery_evidence_native_drs_tolerance": float(
+                model_cfg.get("direct_recovery_evidence_native_drs_tolerance", 0.05)
+            ),
+            "direct_recovery_evidence_native_deployability_tolerance": float(
+                model_cfg.get("direct_recovery_evidence_native_deployability_tolerance", 0.05)
             ),
             "direct_recovery_evidence_calibrator_shared": bool(model_cfg.get("direct_recovery_evidence_calibrator_shared", False)),
             "direct_recovery_evidence_calibrator_regime_scale": float(model_cfg.get("direct_recovery_evidence_calibrator_regime_scale", 0.25)),

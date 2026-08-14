@@ -1,3 +1,71 @@
+## v48.48 — NCP-DRFC / NATIVE CERTIFICATE PRESERVATION + CLEAN FRONTIER CAUSAL TEST (2026-08-14)
+
+**类别：基于 v48.47 authoritative/engineering-mixed 结果的算法主线升级 + GPU 资源隔离修复。没有新增 Safe/Near/Contact identifier、router、regime-specific policy/threshold/loss/budget。**
+
+### v48.47 结果状态与可归因边界
+
+- A、B、D/Main 均为 authoritative `RC=20`、`pipeline_valid=true`，certificate 与 Natural gate 已执行，`test_roots_read=false`。因此它们是有效算法负结果。
+- C 为 authoritative `RC=30`、`pipeline_valid=false`，停止在 adaptation；Balanced 的 DRFC witness 在首个训练 backward 时发生 `torch.OutOfMemoryError`，certificate/gate 未执行，因此 **C 不能用于 DRFC-alone 算法归因**。
+- C OOM 不是 DRFC 数值爆炸：失败时当前进程 PyTorch 仅约 `124 MiB` allocated、`~50 MiB` reserved，但同一 A30 已有另一个进程占用约 `20.86 GiB`，另有 Precision 约 `1.68 GiB`，23.60 GiB 卡只剩 `24.44 MiB`。D/Main 的同一 DRFC stage 在另一卡完整完成并得到 RC20，证明本次 C 是 GPU 资源租约/调度工程故障。
+- persistent tensor cache 已命中；10,015 train + 3,526 val 样本的 materialization 仅约 `1.25 s`，因此此前 NPZ/IO 已不再是当前主要 runtime 瓶颈。现在主要是实际 witness/factor/certificate compute 与 GPU contention。
+
+### v48.47 最可靠算法结论
+
+1. **DWOK 不吸收。** B 把 observation validation loss 从约 `0.7284` 降到 `0.6462`，但 Precision Near/Contact 的 DRS/deployability safe-positive false-veto 基本不动（Near DRS `11/16`、deployability `14/16`; Contact DRS `20/31`、deployability `30/31`），certificate recall 也未改善。说明更精细的 observation-kernel weighting 可以学到自己的目标，却不是当前 final admission 的主导瓶颈。
+2. **当前 DRFC 实现不直接吸收，但保留其“直接对齐 decision frontier”的方向。** D 的 frontier validation loss 从约 `0.8166` 降到 `0.4538`，Contact development sign 从 reference `1/37` 提升到 `3/37`，certificate 得到 `1/20` positive；但 Near deployability false-veto反而 `14/16 -> 16/16`，Contact仍 `30/31`，Precision Contact harmful UCB90 约 `0.342`，风险不可接受。由于 C 工程失败，本轮仍缺少 clean DRFC-alone 主效应。
+3. **proposal generation 仍不是主瓶颈。** v48.46 final certificate 已证明 top-5 proposal 对 Near safe-positive groups `9/9`、Contact `20/20` 可达，Contact positive-group any-hit约 `96.9%`、oracle-best hit约 `90.6%`；v48.47 没有出现相反证据。继续禁止 top-k/candidate-width/macro-count 扩张。
+4. **更强接口诊断：frontier 学得动，但 final component proxy 不跟。** v48.47-D 明确显示 upstream `margin_head -> OC-MERO` 的 DRFC objective 大幅改善，而最终 certificate 中 DRS/deployability false-veto 几乎不移动。当前 factor/OCAF 链把 paper-native OC-MERO 证书压成 detached compact signature，再由 learned component head 重新预测 DRS/deployability harmful coordinates；这个 proxy-of-proxy 接口允许 sign/scale 再次坍缩。这比“继续加 downstream residual/head”更符合现有证据。
+
+### 论文主线升级：Decision-Sufficient Observation-Consistent Recoverability + Native Certificate Preservation
+
+- **保留 observation-consistency 作为必要的 deployability semantics，而不再把 observation aliasing 叙述为 Near/Contact 当前经验 failure 的主要来源。** 它解决 hidden branch identity leakage 的规范性问题。
+- **decision-sufficiency 的可检验含义升级为 certificate preservation：** selector 真正使用的关键恢复坐标（DRS、deployability）必须从 OC-MERO 到 non-compensatory CRISP/OCAF admission 保持物理方向与零边界，不能被第二个任意 learned proxy 重新编码后反转。
+- Safe/Near/Contact 仍只作为 evaluation strata。同一 OC-MERO、同一 NCP mapping、同一 risk budget 和同一 selector 在三种 regime 下运行。
+
+### 新算法因素 X：Native Certificate Preservation (NCP)
+
+NCP **不增加任何可学习参数**。在 final ordinal-evidence/component-veto path 中，DRS 和 deployability 两个核心 coordinate 不再由 downstream component head 自由重预测，而直接由 model 的 paper-native OC-MERO 预测证书构造：
+
+- `DRS_native(a)`：从 observation-conditioned `q[i,l]` 取每个 row 的 best option，并以 `q_best>=0` 的**硬预测 DRS**按 root probability 聚合；与 paper-facing observation-class predicted DRS 使用同一零边界。
+- `DEP_native(a)=sigmoid(R_dep(a))`：与 component teacher deployability target 同一尺度。
+- 对每个 candidate，以 nominal 为 anchor 构造 harmful physical margin：
+  `H_drs = DRS_native(nom)-DRS_native(cand)-eps_DRS`，
+  `H_dep = DEP_native(nom)-DEP_native(cand)-eps_DEP`。
+- 两个 margin 以已有 slack temperature 映射到 non-compensatory component logits；gap 与其它独立证据保持原机制。
+
+因此 NCP 具有显式单调性：提高 candidate 的 native DRS/R_dep 绝不会增加对应 harmful logit；benefit head 也不能补偿一个 positive native veto。它删除 proxy，而不是新增 residual。
+
+### 新一轮严格 2x2
+
+四臂全部固定 `observation_class` training/evaluation semantics、同一个 rebuilt source、dedicated calibration protocol、top-k=5、dual-ROCT、harm budgets 和 Natural gate：
+
+- **A:** v48.47 paper-consistent reference；NCP=off，DRFC=off。
+- **B:** A + NCP；DRFC=off。`B-A` 直接检验 certificate-to-proxy interface 是否为主瓶颈。
+- **C:** A + **clean DRFC-alone**；NCP=off。补回 v48.47-C 因 RC30/OOM 缺失的 DRFC main effect。
+- **D/Main:** NCP + DRFC。`D-B-C+A` 检验 DRFC 是否只有在 native certificate 被 downstream preservation 后才能传到最终 admission。
+
+强解释规则：若 B 显著降低 false-veto 且 UCB 不恶化，则 proxy interface 是主瓶颈；若 C 的 witness objective 改善但 final frontier仍不动、而 D 显著优于 C，则构成很强的“DRFC 被旧 proxy 衰减”证据；若 B/C/D 都不能移动 false-veto，则停止 downstream selector 优化，转向 teacher margin normalization、constraint scale 与 continuous recovery-option teacher coverage 审计。
+
+### v48.48 screening / stop rule
+
+- **Near-contact:** Precision deployability false-veto从 `14/16` 优先降到 `<=10/16`，DRS false-veto从 `11/16` 降到 `<=8/16`；certificate recall至少 `>=0.20`，harmful-selected UCB90 `<=0.25`。进一步 paper-readiness 目标仍是 recall约 `0.25-0.33`、precision LCB `>=0.40`，并由 paired/bootstrap CI 支持 TTC/clearance 改善。
+- **Contact:** deployability false-veto从 `30/31` 降到 `<=24/31`，development safe-positive `pred_adv>=0` 至少 `>=6/37`；certificate recall至少 `>=0.10` 且 UCB90 `<=0.25`。进一步目标为 recall `0.20-0.30`、secondary-collision absolute reduction约 `>=2 pp`、post-contact TTC约 `+0.2 s`，并改善 stable-stop/rejoin/impact severity。
+- **Safe:** 不新增 Safe-specific policy。当前仅有 standard calibration，最终论文必须补 scene-disjoint paired closed-loop non-inferiority：nominal utility/progress/comfort 不显著下降、intervention/FRA 受控。
+- 上述是项目内部 CCF-A readiness bar，不是任何 venue 官方阈值。
+
+### 工程与性能修复
+
+1. **修复 v48.47-C GPU OOM 根因。** 2x2 launcher 仍保持 `A@GPU0+B@GPU1`、`C@GPU0+D@GPU1` 两 arm 同时运行，但默认 `V4848_VARIANT_MODE=serial`：每个 arm 内 Balanced/Precision 串行，保证每张卡同一时间只有一个训练 variant。
+2. 启动每个 arm 前通过 `nvidia-smi` 建立 GPU capacity lease；serial 默认要求 `>=12,000 MiB` free，parallel debug 模式默认 `>=20,000 MiB`，不足则等待而不是盲目启动。超时按 RC30 engineering fail 处理并保存 preexisting compute-app memory provenance。
+3. 2x2 默认要求 `GPU0 != GPU1`；只有显式 debug 开关才允许共享同一 GPU id，避免两个 arm 对同一卡同时“成功租约”的竞态。
+4. 继续保留 persistent tensor mmap cache、selective NPZ decoding、witness fast path、30s只读 GPU/host telemetry；`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` 仅用于减少 allocator fragmentation，不把它当作容量修复。
+5. NCP flag/tolerances 已加入 train config、checkpoint metadata、inference reconstruction、factor-cache key 与 model contract；v48.47 DRFC witness stage显式强制 NCP off，防止 D 的 downstream factor泄漏进 C/DRFC witness，从而保持2x2因果隔离。
+6. NCP native DRS 使用 hard `q_best>=0` paper-facing predicted DRS，不再在 certificate interface 引入另一个 soft-DDS/DRS proxy。
+
+### 继续禁止的历史失败方向
+
+不重复 threshold-grid densification、top-k expansion、candidate/macro width 扩张、aggressive positive oversampling、hardest-negative population distortion、generic pairwise/listwise stacking、full joint Stage-2、learned admission residual、v48.38 one-sided tail、v48.39 unbounded factors、v48.40 frontier-tanh、v48.41 full component factorization、v48.42 partial pooling/rank skip、v48.43 POET free alias transport、v48.45 joint SOWR、v48.46 generic staged witness、v48.47 DWOK、broad encoder fine-tuning，以及任何 regime-conditioned router/policy/threshold/budget。
+
 ## v48.47 — DS-OFR / DECISION-SUFFICIENT OBSERVATION & RECOVERY-FRONTIER CALIBRATION (2026-08-13)
 
 **类别：基于 v48.46 authoritative 2x2 的算法升级 + attribution-safe 执行优化。没有新增 Safe/Near/Contact identifier、router、regime-specific policy/threshold/loss/budget。**

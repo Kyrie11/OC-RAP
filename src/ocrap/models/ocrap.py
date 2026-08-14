@@ -347,6 +347,9 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_roct_beta: float = 0.2,
         direct_recovery_evidence_roct_top_m: int = 8,
         direct_recovery_evidence_roct_option_temperature: float = 0.35,
+        direct_recovery_evidence_native_certificate_preservation: bool = False,
+        direct_recovery_evidence_native_drs_tolerance: float = 0.05,
+        direct_recovery_evidence_native_deployability_tolerance: float = 0.05,
         direct_recovery_evidence_calibrator_shared: bool = False,
         direct_recovery_evidence_calibrator_regime_scale: float = 0.25,
         direct_recovery_evidence_unified_experts: bool = False,
@@ -514,6 +517,22 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_evidence_roct_option_temperature = float(
             max(1.0e-4, direct_recovery_evidence_roct_option_temperature)
         )
+        # v48.48 NCP: preserve paper-native OC-MERO DRS/deployability coordinates
+        # at the final non-compensatory admission interface instead of asking a
+        # downstream proxy head to learn their sign/scale again.
+        self.direct_recovery_evidence_native_certificate_preservation = bool(
+            direct_recovery_evidence_native_certificate_preservation
+        )
+        self.direct_recovery_evidence_native_drs_tolerance = float(
+            max(0.0, direct_recovery_evidence_native_drs_tolerance)
+        )
+        self.direct_recovery_evidence_native_deployability_tolerance = float(
+            max(0.0, direct_recovery_evidence_native_deployability_tolerance)
+        )
+        if self.direct_recovery_evidence_native_certificate_preservation and int(direct_recovery_evidence_component_count) < 2:
+            raise ValueError(
+                "native certificate preservation requires DRS and deployability component coordinates"
+            )
         self.direct_recovery_evidence_roct_signature_dim = 4
         if not (0.0 < self.direct_recovery_evidence_roct_alpha <= 1.0):
             raise ValueError("direct_recovery_evidence_roct_alpha must be in (0,1]")
@@ -1511,7 +1530,8 @@ class OCRAPModel(nn.Module):
         option_temperature: float,
         root_valid: torch.Tensor | None = None,
         option_valid: torch.Tensor | None = None,
-    ) -> torch.Tensor:
+        return_native_certificate: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Return the frozen observation-consistent recovery compatibility signature.
 
         v48.43 POET only measured whether roots remain observation-aliased.  The
@@ -1594,12 +1614,64 @@ class OCRAPModel(nn.Module):
         if rv is not None:
             shared_feasible = torch.where(rv, shared_feasible, torch.zeros_like(shared_feasible))
         shared_feasible_mass = (p * shared_feasible).sum(dim=-1).clamp(0.0, 1.0)
+        # NCP must preserve the same *hard* predicted DRS coordinate used by
+        # paper-facing observation-class evaluation, rather than reintroducing
+        # another smooth proxy at the certificate->selector interface.  q already
+        # contains the compatibility-weighted lower-tail option value for each
+        # post-prefix observation row; q_best>=0 therefore implements the exact
+        # predicted observation-consistent recovery-success indicator.
+        hard_shared_feasible = (q_best >= 0.0).to(dtype=p.dtype)
+        if rv is not None:
+            hard_shared_feasible = torch.where(
+                rv, hard_shared_feasible, torch.zeros_like(hard_shared_feasible)
+            )
+        native_drs = (p * hard_shared_feasible).sum(dim=-1).clamp(0.0, 1.0)
 
         dep_unit = (0.5 * (torch.tanh(r_dep) + 1.0)).clamp(0.0, 1.0)
         gap_unit = torch.tanh(torch.relu(gap)).clamp(0.0, 1.0)
-        return torch.stack(
+        signature = torch.stack(
             [dep_unit, gap_unit, conflict_pressure, shared_feasible_mass], dim=-1
         )
+        if not return_native_certificate:
+            return signature
+        # Native certificate coordinates consumed by v48.48 NCP.  The first
+        # coordinate is the exact predicted observation-class DRS used by the
+        # paper-facing evaluator; the second uses the same sigmoid(R_dep) scale
+        # as the component teacher target.  Both are in [0,1] and higher-is-safer.
+        native_certificate = torch.stack(
+            [native_drs, torch.sigmoid(r_dep).clamp(0.0, 1.0)], dim=-1
+        )
+        return signature, native_certificate
+
+    def _direct_recovery_option_compatibility_evidence(
+        self,
+        memory: torch.Tensor,
+        x: torch.Tensor,
+        option_features: torch.Tensor | None,
+        root_valid: torch.Tensor | None = None,
+        option_valid: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Compute frozen ROCT signature and native OC-MERO certificate once."""
+        with torch.no_grad():
+            root_tokens = self._decode_roots(memory.detach())
+            root_logits = self.root_logit_head(root_tokens).squeeze(-1)
+            obs_embeddings = self.obs_embed_head(root_tokens)
+            root_expand = root_tokens.unsqueeze(2).expand(-1, -1, self.num_options, -1)
+            opt_expand = self._option_tokens(x, option_features)
+            margins = self.margin_head(torch.cat([root_expand, opt_expand], dim=-1)).squeeze(-1)
+            signature, native = self._recovery_option_compatibility_signature(
+                root_logits, obs_embeddings, margins, self.tau_obs,
+                self.direct_recovery_evidence_roct_alpha,
+                self.direct_recovery_evidence_roct_beta,
+                self.direct_recovery_evidence_roct_top_m,
+                self.direct_recovery_evidence_roct_option_temperature,
+                root_valid=root_valid, option_valid=option_valid,
+                return_native_certificate=True,
+            )
+            return (
+                signature.to(dtype=memory.dtype).detach(),
+                native.to(dtype=memory.dtype).detach(),
+            )
 
     def _direct_recovery_option_compatibility_signature(
         self,
@@ -1609,22 +1681,10 @@ class OCRAPModel(nn.Module):
         root_valid: torch.Tensor | None = None,
         option_valid: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Compute frozen candidate-specific ROCT evidence for direct-only adaptation."""
-        with torch.no_grad():
-            root_tokens = self._decode_roots(memory.detach())
-            root_logits = self.root_logit_head(root_tokens).squeeze(-1)
-            obs_embeddings = self.obs_embed_head(root_tokens)
-            root_expand = root_tokens.unsqueeze(2).expand(-1, -1, self.num_options, -1)
-            opt_expand = self._option_tokens(x, option_features)
-            margins = self.margin_head(torch.cat([root_expand, opt_expand], dim=-1)).squeeze(-1)
-            return self._recovery_option_compatibility_signature(
-                root_logits, obs_embeddings, margins, self.tau_obs,
-                self.direct_recovery_evidence_roct_alpha,
-                self.direct_recovery_evidence_roct_beta,
-                self.direct_recovery_evidence_roct_top_m,
-                self.direct_recovery_evidence_roct_option_temperature,
-                root_valid=root_valid, option_valid=option_valid,
-            ).to(dtype=memory.dtype).detach()
+        signature, _native = self._direct_recovery_option_compatibility_evidence(
+            memory, x, option_features, root_valid=root_valid, option_valid=option_valid
+        )
+        return signature
 
     def _apply_direct_set_context(
         self,
@@ -1721,6 +1781,36 @@ class OCRAPModel(nn.Module):
             out.index_copy_(0, idx, rows)
         return out
 
+    def _native_certificate_component_logits(
+        self,
+        native_certificate: torch.Tensor | None,
+        group_index: torch.Tensor | None,
+        is_nominal: torch.Tensor | None,
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+        """Convert native [DRS, deployability] to harmful component logits.
+
+        The component teacher convention is nominal - candidate - tolerance,
+        with positive meaning harmful.  The mapping is regime-agnostic and
+        strictly monotone in the paper-native OC-MERO certificate.
+        """
+        if not self.direct_recovery_evidence_native_certificate_preservation:
+            return None, None
+        if native_certificate is None:
+            raise RuntimeError(
+                "native certificate preservation enabled but OC-MERO native certificate is missing"
+            )
+        native = native_certificate.to(dtype=torch.float32)
+        if native.dim() != 2 or native.shape[-1] < 2:
+            raise RuntimeError("native OC-MERO certificate must have shape [batch, >=2]")
+        rel = self._candidate_minus_nominal(native[:, :2], group_index, is_nominal)
+        tol = rel.new_tensor([
+            self.direct_recovery_evidence_native_drs_tolerance,
+            self.direct_recovery_evidence_native_deployability_tolerance,
+        ])
+        harmful_margins = -rel - tol.unsqueeze(0)
+        logits = harmful_margins / max(self.direct_recovery_evidence_slack_temperature, 1.0e-6)
+        return logits, harmful_margins
+
     def _direct_outputs(
         self,
         memory: torch.Tensor,
@@ -1730,6 +1820,7 @@ class OCRAPModel(nn.Module):
         is_nominal: torch.Tensor | None = None,
         postprefix_observation_signature: torch.Tensor | None = None,
         recovery_option_compatibility_signature: torch.Tensor | None = None,
+        native_recovery_certificate: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """Evaluate the policy-level recovery branch.
 
@@ -1795,6 +1886,20 @@ class OCRAPModel(nn.Module):
             )
             out["direct_recovery_evidence_roct_signature"] = roct_signature_abs
             out["direct_recovery_evidence_roct_signature_relative"] = roct_signature_rel
+        native_component_logits, native_component_margins = self._native_certificate_component_logits(
+            native_recovery_certificate, group_index, is_nominal
+        )
+        if native_recovery_certificate is not None:
+            out["direct_recovery_evidence_native_certificate"] = native_recovery_certificate.detach()
+        if native_component_logits is not None:
+            native_component_logits = native_component_logits.to(
+                device=memory.device, dtype=memory.dtype
+            )
+            native_component_margins = native_component_margins.to(
+                device=memory.device, dtype=memory.dtype
+            )
+            out["direct_recovery_evidence_native_component_logits"] = native_component_logits
+            out["direct_recovery_evidence_native_component_margins"] = native_component_margins
         rank_base: torch.Tensor | None = None
         if self.direct_value_heads is not None:
             all_direct = torch.stack([head(direct_features) for head in self.direct_value_heads], dim=1)
@@ -2274,6 +2379,12 @@ class OCRAPModel(nn.Module):
                         out["direct_recovery_evidence_roct_deployability_correction"] = (
                             roct_deployability_correction
                         )
+                    if native_component_logits is not None:
+                        unified_component_harm_logits = unified_component_harm_logits.clone()
+                        unified_component_harm_logits[:, :2] = native_component_logits
+                        out["direct_recovery_evidence_native_certificate_preserved"] = (
+                            unified_component_harm_logits.new_ones(())
+                        )
                     reliability = self._direct_recovery_evidence_component_reliability.to(
                         device=unified_component_harm_logits.device,
                         dtype=unified_component_harm_logits.dtype,
@@ -2516,6 +2627,12 @@ class OCRAPModel(nn.Module):
                         )
                         out["direct_recovery_evidence_roct_deployability_correction"] = (
                             roct_deployability_correction
+                        )
+                    if native_component_logits is not None:
+                        unified_component_harm_logits = unified_component_harm_logits.clone()
+                        unified_component_harm_logits[:, :2] = native_component_logits
+                        out["direct_recovery_evidence_native_certificate_preserved"] = (
+                            unified_component_harm_logits.new_ones(())
                         )
                     unified_harm_logit = unified_component_harm_logits.amax(dim=-1)
                     evidence_calibrator_residual = torch.cat(
@@ -2807,13 +2924,19 @@ class OCRAPModel(nn.Module):
         memory = self._scene_tokens(x)
         if direct_only:
             roct_signature = None
-            if self.direct_evidence_roct_benefit is not None or self.direct_evidence_roct_deployability is not None:
-                roct_signature = self._direct_recovery_option_compatibility_signature(
+            native_certificate = None
+            if (
+                self.direct_evidence_roct_benefit is not None
+                or self.direct_evidence_roct_deployability is not None
+                or self.direct_recovery_evidence_native_certificate_preservation
+            ):
+                roct_signature, native_certificate = self._direct_recovery_option_compatibility_evidence(
                     memory, x, option_features, root_valid=root_valid, option_valid=option_valid
                 )
             return self._direct_outputs(
                 memory, x, bucket_id, group_index, is_nominal,
                 recovery_option_compatibility_signature=roct_signature,
+                native_recovery_certificate=native_certificate,
             )
         scene_token = memory[:, 0]
         root_tokens = self._decode_roots(memory)
@@ -2857,21 +2980,30 @@ class OCRAPModel(nn.Module):
                     root_logits.detach(), obs_embeddings.detach(), self.tau_obs
                 ).to(dtype=memory.dtype)
         roct_signature = None
-        if self.direct_evidence_roct_benefit is not None or self.direct_evidence_roct_deployability is not None:
+        native_certificate = None
+        if (
+            self.direct_evidence_roct_benefit is not None
+            or self.direct_evidence_roct_deployability is not None
+            or self.direct_recovery_evidence_native_certificate_preservation
+        ):
             with torch.no_grad():
-                roct_signature = self._recovery_option_compatibility_signature(
+                roct_signature, native_certificate = self._recovery_option_compatibility_signature(
                     root_logits.detach(), obs_embeddings.detach(), margins.detach(), self.tau_obs,
                     self.direct_recovery_evidence_roct_alpha,
                     self.direct_recovery_evidence_roct_beta,
                     self.direct_recovery_evidence_roct_top_m,
                     self.direct_recovery_evidence_roct_option_temperature,
                     root_valid=root_valid, option_valid=option_valid,
-                ).to(dtype=memory.dtype).detach()
+                    return_native_certificate=True,
+                )
+                roct_signature = roct_signature.to(dtype=memory.dtype).detach()
+                native_certificate = native_certificate.to(dtype=memory.dtype).detach()
         out.update(
             self._direct_outputs(
                 memory, x, bucket_id, group_index, is_nominal,
                 postprefix_observation_signature=postprefix_signature,
                 recovery_option_compatibility_signature=roct_signature,
+                native_recovery_certificate=native_certificate,
             )
         )
         if self.root_signature_head is not None:

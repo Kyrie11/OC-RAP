@@ -8,7 +8,7 @@ set -Eeuo pipefail
 # V4847_VARIANT_MODE=serial，不改变任何算法、数据、gate 或随机种子。
 # ================================================================
 
-export OCRAP_REPO="${OCRAP_REPO:-/home/senzeyu2/code/OC-RAP}"
+export OCRAP_REPO="${OCRAP_REPO:-/home/senzeyu2/code/OC-RAP-v48.47}"
 export BASE_OUT="${BASE_OUT:-/home/senzeyu2/code/OC-RAP/runs}"
 export OCRAP_ROOT="${OCRAP_ROOT:-/data0/senzeyu2/dataset/OCRAP}"
 export GPU0="${GPU0:-0}"

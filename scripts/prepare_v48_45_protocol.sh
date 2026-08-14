@@ -2,7 +2,9 @@
 set -Eeuo pipefail
 # Engineering-only bootstrap for the scene-disjoint v48.45 calibration protocol.
 # It reads calibration_{near_contact,contact,safe} only. No test_* root is read.
-
+REPO="${OCRAP_REPO:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
+cd "$REPO"
+export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"
 
 OCRAP_ROOT="${OCRAP_ROOT:-/data0/senzeyu2/dataset/OCRAP}"
 PROTOCOL_ROOT="${PROTOCOL_ROOT:-$OCRAP_ROOT/calibration_v48_14_prism_4814}"

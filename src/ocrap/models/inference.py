@@ -261,6 +261,18 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_evidence_roct_option_temperature",
             model_cfg.get("direct_recovery_evidence_roct_option_temperature", 0.35),
         )),
+        direct_recovery_evidence_native_certificate_preservation=bool(ckpt.get(
+            "direct_recovery_evidence_native_certificate_preservation",
+            model_cfg.get("direct_recovery_evidence_native_certificate_preservation", False),
+        )),
+        direct_recovery_evidence_native_drs_tolerance=float(ckpt.get(
+            "direct_recovery_evidence_native_drs_tolerance",
+            model_cfg.get("direct_recovery_evidence_native_drs_tolerance", 0.05),
+        )),
+        direct_recovery_evidence_native_deployability_tolerance=float(ckpt.get(
+            "direct_recovery_evidence_native_deployability_tolerance",
+            model_cfg.get("direct_recovery_evidence_native_deployability_tolerance", 0.05),
+        )),
         direct_recovery_evidence_calibrator_shared=bool(ckpt.get("direct_recovery_evidence_calibrator_shared", model_cfg.get("direct_recovery_evidence_calibrator_shared", False))),
         direct_recovery_evidence_calibrator_regime_scale=float(ckpt.get("direct_recovery_evidence_calibrator_regime_scale", model_cfg.get("direct_recovery_evidence_calibrator_regime_scale", 0.25))),
         direct_recovery_evidence_unified_experts=bool(ckpt.get("direct_recovery_evidence_unified_experts", model_cfg.get("direct_recovery_evidence_unified_experts", False))),
@@ -443,6 +455,15 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     )
     cfg["model"]["direct_recovery_evidence_roct_option_temperature"] = float(
         model.direct_recovery_evidence_roct_option_temperature
+    )
+    cfg["model"]["direct_recovery_evidence_native_certificate_preservation"] = bool(
+        model.direct_recovery_evidence_native_certificate_preservation
+    )
+    cfg["model"]["direct_recovery_evidence_native_drs_tolerance"] = float(
+        model.direct_recovery_evidence_native_drs_tolerance
+    )
+    cfg["model"]["direct_recovery_evidence_native_deployability_tolerance"] = float(
+        model.direct_recovery_evidence_native_deployability_tolerance
     )
     cfg["model"]["direct_recovery_evidence_calibrator_shared"] = bool(ckpt.get("direct_recovery_evidence_calibrator_shared", model_cfg.get("direct_recovery_evidence_calibrator_shared", False)))
     cfg["model"]["direct_recovery_evidence_calibrator_regime_scale"] = float(ckpt.get("direct_recovery_evidence_calibrator_regime_scale", model_cfg.get("direct_recovery_evidence_calibrator_regime_scale", 0.25)))
