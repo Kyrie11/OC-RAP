@@ -642,9 +642,13 @@ if [[ "$RESUME_AFTER_ADAPTATION" == 1 ]]; then
   printf 'balanced=0 precision=0 resume_after_adaptation=1 retraining=0\n' | tee "$OUTPUTDIR/logs/adaptation_status.log"
 else
   if [[ "$SERIAL_VARIANTS_ON_ONE_GPU" == 1 ]]; then
+    # run_variant also toggles errexit internally while collecting failure
+    # provenance. Keep that shell-option state inside a subshell so a failed
+    # Balanced adaptation cannot abort the serial controller before Precision
+    # is attempted and both exit codes are recorded.
     set +e
-    run_variant balanced "$GPU0"; s0=$?
-    run_variant precision "$GPU1"; s1=$?
+    ( run_variant balanced "$GPU0" ); s0=$?
+    ( run_variant precision "$GPU1" ); s1=$?
     set -e
   else
     run_variant balanced "$GPU0" & p0=$!

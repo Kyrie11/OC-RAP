@@ -61,3 +61,45 @@ def test_v4848_comparator_requires_all_four_pipeline_valid_arms() -> None:
     assert "pipeline_valid" in text
     assert "native_certificate_preservation" in text
     assert "clean DRFC main effect" in text
+
+
+def test_v4848_serial_workers_isolate_errexit_state() -> None:
+    calibration = (ROOT / "scripts/calibrate_v48_36_shared_certificate_pool.sh").read_text(encoding="utf-8")
+    controller = (ROOT / "scripts/run_v48_36_ocaf_dedicated.sh").read_text(encoding="utf-8")
+    # Natural RC=20 from Balanced certificate must be captured rather than
+    # letting a function-local `set -e` terminate the serial controller.
+    assert '( calibrate_variant balanced "$GPU0" ); S0=$?' in calibration
+    assert '( calibrate_variant precision "$GPU1" ); S1=$?' in calibration
+    # The same shell-state leak exists for nonzero adaptation failures; isolate
+    # those workers too so the second variant and failure provenance still run.
+    assert '( run_variant balanced "$GPU0" ); s0=$?' in controller
+    assert '( run_variant precision "$GPU1" ); s1=$?' in controller
+
+
+def test_v4848_serial_errexit_regression_executes_both_natural_failures(tmp_path: Path) -> None:
+    import subprocess
+
+    script = tmp_path / "errexit_regression.sh"
+    script.write_text(
+        """#!/usr/bin/env bash
+set -Eeuo pipefail
+calibrate_variant(){ local name="$1"; echo "$name"; set -e; return 20; }
+S0=0; S1=0
+set +e
+( calibrate_variant balanced ); S0=$?
+( calibrate_variant precision ); S1=$?
+set -e
+printf 'S0=%s S1=%s\n' "$S0" "$S1"
+""",
+        encoding="utf-8",
+    )
+    completed = subprocess.run(["bash", str(script)], text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.splitlines() == ["balanced", "precision", "S0=20 S1=20"]
+
+
+def test_v4848_launcher_attempts_second_wave_even_after_engineering_failure() -> None:
+    text = (ROOT / "scripts/run_v48_48_ncp_2x2_two_gpu.sh").read_text(encoding="utf-8")
+    pair_loop = text.split('for pair in "A B" "C D"; do', 1)[1].split('done', 1)[0]
+    assert '[[ "$engineering_failed" == 0 ]] || break' not in pair_loop
+    assert "all four waves were attempted but attribution is blocked" in text

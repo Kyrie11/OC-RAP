@@ -1,3 +1,31 @@
+## v48.48.1 — SERIAL CERTIFICATE TERMINAL-CONTRACT ENGINEERING HOTFIX (2026-08-17)
+
+**类别：纯工程修复；NCP/DRFC 算法、模型参数、loss、dataset/split、top-k、risk budget、threshold、Natural gate 与 2x2 factor matrix 均不变。**
+
+### 上传的 v48.48 A/B 为什么不能做算法归因
+
+- A/B 均为 authoritative `RC=30`、`pipeline_valid=false`；两者 adaptation 的 Balanced/Precision exit code 都是 `0`，certificate controller 已进入证书计算，但 terminal status contract 因缺失 `dedicated_recalibration_status.json` 与 `NEXT_COMMANDS_STATUS.json` 返回 raw RC=4，随后被 controller 归一化为 RC30。
+- 因为 A/B 非 pipeline-valid，且原 2x2 launcher 在第一波发现 engineering failure 后立即 `break`，C/D 根本未执行。因此本轮不满足 v48.48 预注册的四臂归因条件，**禁止把 A/B 当作 NCP 的算法负结果，也禁止做 B-A / C-A / interaction 结论。**
+
+### 根因：serial 模式下 Bash `errexit` 状态从函数泄漏到 caller
+
+`calibrate_v48_36_shared_certificate_pool.sh` 的 `calibrate_variant()` 为了区分 certificate 自然拒绝与工程失败，会在函数内部多次切换 `set +e` / `set -e`，并在 Near/Contact 都是有效 Natural-gate miss 时返回 `20`。v48.48 新增 `SERIAL_VARIANTS_ON_ONE_GPU=1` 后，caller 原本先 `set +e` 再直接调用函数并捕获 `$?`；但 Bash 函数与 caller 共享 shell option，函数末尾的 `set -e` 会把 parent 的 errexit 重新打开。于是 Balanced 返回 `20` 的瞬间，shell 在执行 `S0=$?` 前退出：Precision 不运行，final status writer 不运行，最终缺少上述两个 terminal JSON，status contract 再把它误分类为 RC30。
+
+该机制与上传结果完全一致：A/B adaptation 都成功；GPU lease 时显存充足，不是 OOM；controller log 在 Balanced certificate 完成后中止；两臂都缺失相同 terminal JSON。
+
+### 工程修复
+
+1. serial worker 路径统一隔离 Bash shell-option 状态：certificate 的 `calibrate_variant` 与 adaptation 的 `run_variant` 都在独立 subshell 中执行并由 parent 捕获 exit code。这样函数内部 `set -e` 只能影响 subshell；Natural certificate RC20 或某个 adaptation RC30 都不会在 exit code 被记录前意外终止 parent，Balanced 失败也不会阻止 Precision 的诊断执行。对于本次 A/B，关键修复是 certificate 路径，因此 `dedicated_recalibration_status.json` / `NEXT_COMMANDS_STATUS.json` writer 能继续运行。
+2. v48.48 2x2 launcher 不再在 A/B 第一波出现工程失败时 `break`。它仍然严格禁止在任一 arm 非 RC0/20 时运行 comparator/算法归因，但会继续尝试 C/D，以便一次实验获得四臂完整工程诊断，避免“第一波坏掉导致第二波完全没有证据”。
+3. runtime telemetry summary 无论 2x2 是否有 engineering failure 都会生成；comparator 仍只在四臂工程有效时执行，因此不会降低因果归因门槛。
+4. 新增 v48.48 回归测试：静态验证 serial 两 variant 都使用 subshell；执行一个复现 Bash `errexit` 语义的最小测试，要求两个自然 RC20 都被捕获；验证 launcher 第一波工程失败不再阻止第二波，同时 attribution 仍 fail-closed。
+
+### 下一轮执行与解释
+
+- 建议从 clean output 重新跑完整 A/B/C/D；不要把这次 RC30 目录做算法复用或拼接归因。shared v48.45 source 仍保持 hash-sealed，不需重训。
+- 只有四臂 `authoritative_exit_code in {0,20}`、`pipeline_valid=true` 且 `OC-RAP-v48.48-NCP-DRFC-2x2-audit.json` 的 attribution contract valid，才恢复 NCP/DRFC 算法归因。
+- 本 hotfix 不改变任何算法因素，所以修复前后的 RC 差异只能解释为 pipeline correctness，不应计入算法增益。
+
 ## v48.48 — NCP-DRFC / NATIVE CERTIFICATE PRESERVATION + CLEAN FRONTIER CAUSAL TEST (2026-08-14)
 
 **类别：基于 v48.47 authoritative/engineering-mixed 结果的算法主线升级 + GPU 资源隔离修复。没有新增 Safe/Near/Contact identifier、router、regime-specific policy/threshold/loss/budget。**

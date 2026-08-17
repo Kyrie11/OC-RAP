@@ -358,9 +358,15 @@ PY
 VARIANTS="${VARIANTS:-balanced,precision}"
 S0=0; S1=0; P0=""; P1=""
 if [[ "$SERIAL_VARIANTS_ON_ONE_GPU" == 1 ]]; then
+  # calibrate_variant intentionally toggles errexit while it classifies natural
+  # certificate RCs (0/20/30). Bash shell options are process-global, so calling
+  # the function directly here can leak its final `set -e` back into this caller.
+  # A natural Balanced RC=20 would then terminate the script before S0 is
+  # captured, before Precision runs, and before terminal status JSON is written.
+  # Isolate each variant in a subshell so its shell-option state cannot escape.
   set +e
-  if [[ ",$VARIANTS," == *,balanced,* ]]; then calibrate_variant balanced "$GPU0"; S0=$?; fi
-  if [[ ",$VARIANTS," == *,precision,* ]]; then calibrate_variant precision "$GPU1"; S1=$?; fi
+  if [[ ",$VARIANTS," == *,balanced,* ]]; then ( calibrate_variant balanced "$GPU0" ); S0=$?; fi
+  if [[ ",$VARIANTS," == *,precision,* ]]; then ( calibrate_variant precision "$GPU1" ); S1=$?; fi
   set -e
 else
   if [[ ",$VARIANTS," == *,balanced,* ]]; then calibrate_variant balanced "$GPU0" & P0=$!; fi

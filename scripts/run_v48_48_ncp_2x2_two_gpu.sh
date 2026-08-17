@@ -150,21 +150,25 @@ wait_one(){
 }
 
 engineering_failed=0
+# Run both waves even if one arm in the first wave has an engineering failure.
+# Attribution remains fail-closed below, but completing C/D gives a full
+# engineering diagnosis instead of silently losing half of the 2x2 evidence.
 for pair in "A B" "C D"; do
   read -r left right <<<"$pair"
   run_arm "$left" "$GPU0" & p0=$!
   run_arm "$right" "$GPU1" & p1=$!
   wait_one "$p0" "$left" || engineering_failed=1
   wait_one "$p1" "$right" || engineering_failed=1
-  [[ "$engineering_failed" == 0 ]] || break
 done
+
+python tools/summarize_v48_46_runtime_telemetry.py \
+  --input "$PERF_LOG" --output "$BASE_OUT/OC-RAP-v48.48-runtime-telemetry-summary.json" || true
 
 if [[ "$engineering_failed" == 0 ]]; then
   python tools/compare_v48_48_ncp_2x2.py \
     --a "$(arm_out A)" --b "$(arm_out B)" --c "$(arm_out C)" --d "$(arm_out D)" \
     --output "$BASE_OUT/OC-RAP-v48.48-NCP-DRFC-2x2-audit.json"
-  python tools/summarize_v48_46_runtime_telemetry.py \
-    --input "$PERF_LOG" --output "$BASE_OUT/OC-RAP-v48.48-runtime-telemetry-summary.json" || true
 else
+  echo "one or more v48.48 arms had an engineering failure; all four waves were attempted but attribution is blocked" >&2
   exit 1
 fi
