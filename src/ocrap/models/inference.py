@@ -265,6 +265,14 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_evidence_native_certificate_preservation",
             model_cfg.get("direct_recovery_evidence_native_certificate_preservation", False),
         )),
+        direct_recovery_evidence_native_margin_complete_preservation=bool(ckpt.get(
+            "direct_recovery_evidence_native_margin_complete_preservation",
+            model_cfg.get("direct_recovery_evidence_native_margin_complete_preservation", False),
+        )),
+        direct_recovery_evidence_native_advantage_preservation=bool(ckpt.get(
+            "direct_recovery_evidence_native_advantage_preservation",
+            model_cfg.get("direct_recovery_evidence_native_advantage_preservation", False),
+        )),
         direct_recovery_evidence_native_drs_tolerance=float(ckpt.get(
             "direct_recovery_evidence_native_drs_tolerance",
             model_cfg.get("direct_recovery_evidence_native_drs_tolerance", 0.05),
@@ -272,6 +280,14 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         direct_recovery_evidence_native_deployability_tolerance=float(ckpt.get(
             "direct_recovery_evidence_native_deployability_tolerance",
             model_cfg.get("direct_recovery_evidence_native_deployability_tolerance", 0.05),
+        )),
+        direct_recovery_evidence_native_gap_tolerance=float(ckpt.get(
+            "direct_recovery_evidence_native_gap_tolerance",
+            model_cfg.get("direct_recovery_evidence_native_gap_tolerance", 0.05),
+        )),
+        direct_recovery_evidence_native_positive_gain=float(ckpt.get(
+            "direct_recovery_evidence_native_positive_gain",
+            model_cfg.get("direct_recovery_evidence_native_positive_gain", 0.015),
         )),
         direct_recovery_evidence_calibrator_shared=bool(ckpt.get("direct_recovery_evidence_calibrator_shared", model_cfg.get("direct_recovery_evidence_calibrator_shared", False))),
         direct_recovery_evidence_calibrator_regime_scale=float(ckpt.get("direct_recovery_evidence_calibrator_regime_scale", model_cfg.get("direct_recovery_evidence_calibrator_regime_scale", 0.25))),
@@ -459,11 +475,23 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_evidence_native_certificate_preservation"] = bool(
         model.direct_recovery_evidence_native_certificate_preservation
     )
+    cfg["model"]["direct_recovery_evidence_native_margin_complete_preservation"] = bool(
+        model.direct_recovery_evidence_native_margin_complete_preservation
+    )
+    cfg["model"]["direct_recovery_evidence_native_advantage_preservation"] = bool(
+        model.direct_recovery_evidence_native_advantage_preservation
+    )
     cfg["model"]["direct_recovery_evidence_native_drs_tolerance"] = float(
         model.direct_recovery_evidence_native_drs_tolerance
     )
     cfg["model"]["direct_recovery_evidence_native_deployability_tolerance"] = float(
         model.direct_recovery_evidence_native_deployability_tolerance
+    )
+    cfg["model"]["direct_recovery_evidence_native_gap_tolerance"] = float(
+        model.direct_recovery_evidence_native_gap_tolerance
+    )
+    cfg["model"]["direct_recovery_evidence_native_positive_gain"] = float(
+        model.direct_recovery_evidence_native_positive_gain
     )
     cfg["model"]["direct_recovery_evidence_calibrator_shared"] = bool(ckpt.get("direct_recovery_evidence_calibrator_shared", model_cfg.get("direct_recovery_evidence_calibrator_shared", False)))
     cfg["model"]["direct_recovery_evidence_calibrator_regime_scale"] = float(ckpt.get("direct_recovery_evidence_calibrator_regime_scale", model_cfg.get("direct_recovery_evidence_calibrator_regime_scale", 0.25)))

@@ -1,3 +1,100 @@
+## v48.49 — DCP-DRFC / DECISION-COMPLETE NATIVE CERTIFICATE PRESERVATION (2026-08-17)
+
+**类别：基于用户最新上传、已经通过 terminal-contract hotfix 后重跑的 v48.48 A/B/C/D authoritative 2x2 的算法升级。没有新增 Safe/Near/Contact identifier、router、regime-specific policy/threshold/loss/budget；proposal top-k、risk budget、calibration split 与 observation-class execution semantics 均保持不变。**
+
+### 先纠正 v48.48.1 历史状态：本次上传的四臂已经可做算法归因
+
+v48.48.1 条目记录的是 hotfix 之前那次 A/B `RC=30`、C/D 未执行的历史工程失败；**本次用户上传的是 hotfix 后完整重跑的新结果，不能套用旧结论。** 当前四臂 A/B/C/D 均为 authoritative `RC=20`、`pipeline_valid=true`，certificate 与 Natural gate 已执行，`test_roots_read=false`，且上传结果的 2x2 attribution contract `valid=true`。因此 B-A、C-A 与 D-B-C+A 都是有效算法证据；RC20 表示 Natural gate miss，不是工程失败。
+
+### v48.48 给出的强机制证据：NCP 方向成立，但只保留两个坐标还不完整
+
+Precision certificate 的关键变化：
+
+- **Near:** A 的 deployability/DRS safe-positive false-veto 为 `14/16`、`11/16`；D/Main (NCP+DRFC) 变为 `8/16`、`0/16`。harmful-selected UCB90 也从 `0.2274` 降到 `0.0425`。
+- **Contact:** A 的 deployability/DRS false-veto 为 `30/31`、`20/31`；D/Main 变为 `18/31`、`0/31`。
+- DRFC witness 本身确实学得动：C/D Precision frontier validation objective 约 `0.785 -> 0.460`。因此“upstream frontier 可学习，但旧 proxy interface 阻断传导”的 v48.48 诊断得到更强支持。
+- 2x2 interaction 很大：Near deployability false-veto `A14,B12,C15,D8`，interaction `-5`；Contact `A30,B27,C30,D18`，interaction `-9`。DRS interaction 更强（Near `-8`，Contact `-24`）。这支持 **NCP 与 DRFC 是互补而非简单并列堆叠**。
+
+但最终 recovery capture 仍不够：D/Main Near certificate recall 仍 `0.1111`，Contact仍 `0`；development safe-positive `pred_adv>=0` Near `0/19`、Contact `1/37`。Natural gate 的 dominant failure layer 是 `development_rule_fit`。
+
+### 新瓶颈不是 proposal，而是 v48.48 NCP 的“决策不完整”
+
+v48.48 D/Main 暴露两个新的接口缺口：
+
+1. **Hard-DRS saturation / local geometry loss.** v48.48 为了严格对齐 paper-facing DRS，把每个 observation row 的 `q_best>=0` 变成硬 indicator 后再聚合。它保留零边界，但把边界两侧的 margin depth 全部压平。结果 D/Main 的 DRS false-veto 降到 0，却同时让 harmful false-safe 激增到 Near `73.9%`、Contact `96.5%`。这不是应该继续“放松 DRS”，而是说明 admission 需要保留同一零边界附近的连续几何。
+2. **Gap 与 positive advantage 没有被 native-preserve.** D/Main 中 gap 从过去不主导变成 Near `5/16`、Contact `6/31` safe-positive false-veto。更关键的是当前训练/校准的 benefit teacher 本身就是 signed PCD advantage，`PCD = DRS × sigmoid(R_dep) × exp(-gap)`；v48.48 NCP 只覆盖 DRS/R_dep 两个 harm component，positive-side benefit 仍由 learned proxy 自由重编码，所以 component veto 改善并没有自动产生正的 admission evidence。
+
+proposal generation 继续不作为主修改方向：此前 top-5 safe-positive oracle availability 与 any-hit 已经证明好动作大多存在，本轮也没有相反证据。继续禁止 top-k/candidate/macro width 扩张与 aggressive resampling。
+
+### v48.49 主线：Decision-Complete Preservation (DCP)
+
+论文故事进一步收敛为：
+
+`recovery-sufficient roots -> observation-consistent legal recovery -> DRFC-calibrated OC-MERO native certificate -> decision-complete native transport -> non-compensatory admission`。
+
+Observation consistency 仍回答“哪些 recovery 在部署时是合法可执行的”；DRFC 回答“OC-MERO frontier 是否直接对齐决策边界”；DCP 回答“该 certificate 到 final admission 时，**负向 veto 与正向 advantage 两侧是否都保留会改变决策的 native sign/order/local geometry**”。三种 regime 仅作为同一策略从 normal 到 critical continuum 的 evaluation strata。
+
+### 因素 X：Margin-Complete Native Preservation (MC-NCP)
+
+仍保留 v48.48 paper-facing hard DRS 作为报告指标，不改论文 DRS 定义；但 final component transport 不再只使用 hard indicator：
+
+- `boundary_DRS = Σ_i p_i sigmoid(q_best_i / tau_q)`，其中 `tau_q=0.35` 直接复用已经冻结、全局共享的 ROCT option temperature；它与 hard DRS 使用相同 `q_best=0` 边界，但保留边界距离。这里把它定义为 **boundary-resolved native recovery-success coordinate**，不冒充新的 paper DRS。
+- `DEP_native = sigmoid(R_dep)` 保持不变。
+- `GAP_quality = exp(-max(gap,0))` 与 teacher/component target 同方向。
+- final harmful margin 固定为 `nominal_native - candidate_native - tolerance`，分别覆盖 DRS/DEP/GAP 三个 non-compensatory component。
+
+X 不增加 learnable parameter、不新调 temperature、不读 regime 标签；其目的不是放宽 hard veto，而是让 admission 恢复可校准的 local ordering，并阻止 gap 继续由第二层 proxy 重编码。
+
+### 因素 Y：Native Advantage Preservation (NAP)
+
+positive-side 不再让 learned benefit proxy 任意改变 OC-MERO recovery value 的符号。直接构造：
+
+`V_native = boundary_DRS × sigmoid(R_dep) × exp(-max(gap,0))`
+
+`benefit_margin = V_native(candidate) - V_native(nominal) - positive_gain`
+
+并使用已有 `benefit_margin_temperature` 映射为 benefit logit。当前 `positive_gain=0.015`，与现有 factor teacher 的 safe-benefit boundary 对齐。**这里是 overwrite learned benefit proxy，而不是 residual/新 head**，因此与 v48.37 HAF、v48.38/39 benefit-range 修改不同，不重复历史失败方向。
+
+### 新的严格 2x2：所有 arm 都固定 v48.48-D 的 NCP+DRFC
+
+- **A:** v48.48-D reference：NCP + DRFC，X=off，Y=off。
+- **B:** A + MC-NCP (X)。回答 hard DRS/gap interface 是否是新的 safety-side bottleneck。
+- **C:** A + NAP (Y)。回答 positive advantage proxy 是否是 `development_rule_fit` 的主瓶颈。
+- **D/Main:** A + X + Y = full DCP。`D-B-C+A` 检验 safety-side 与 benefit-side native preservation 的交互。
+
+所有 arm 继续固定 `observation_class` train/eval semantics、ROCT、top-k=5、source checkpoint、calibration protocol 与 risk budget，并在 `V48_49_FACTOR_CONTRACT.json` 明确 `strategy_regime_conditioning=false`、`test_roots_read=false`。
+
+### v48.49 go/stop 读法
+
+- **Near:** 优先要求 development safe-positive sign 从当前 `0/19` 真正抬起，同时 certificate recall 至少越过 `0.20`；harmful UCB90 保持 `<=0.25`。MC-NCP 应显著降低当前 D/Main 的 DRS harmful false-safe `0.739` 与 gap false-veto `5/16`，且不要把 deployability false-veto重新推回 `>8/16`。
+- **Contact:** development sign 至少朝原预注册 `>=6/37` 推进，certificate recall `>=0.10` 且 UCB90 `<=0.25`；MC-NCP 必须显著修复 DRS harmful false-safe `0.965` 和 gap false-veto `6/31`。若只增加 selected 数而 safe-positive recall 不涨，视为无效。
+- **Safe:** 不引入 Safe-specific policy。只有 authoritative RC=0 / Natural gate pass 后，才执行自动生成的 Safe paired non-inferiority 与 stress/closed-loop 命令。
+- 若 B 修复 component geometry、C 修复 development benefit sign、D 同时改善且通过 gate，则 DCP 是非常强的 mechanism-complete story；若 C/D 仍无法产生正 benefit sign，则停止 selector/OCAF 修改，转向 **teacher PCD correctness、margin/constraint normalization 与 predicted-vs-teacher native-coordinate calibration**，而不是继续加网络。
+
+### 数据集审计对本轮设计的额外启示
+
+12 个 train/val/calibration/test × safe/near/contact 报告均 `failure_count=0`、scene leakage count=0，并有 Waymax runtime support。关键 critical-regime shift 是：train Near/Contact `R_dep` mean 都约 `-1.79`、negative-deployable fraction `~0.55/0.54`，而 calibration/test 明显更靠近边界（Near calibration/test mean约 `-0.51/-0.69`；Contact约 `-0.35/-0.57`），同时 calibration/test alias incompatibility 与 option diversity 较高。这个 shift 进一步支持“保留统一的 physical sign/order + 做 calibration”而不是增加 regime-specific capacity。
+
+Safe report 中大量 warning 主要来自“缺少 targeted futures”的 validator 规则：Safe 数据本身只含 replay/reactive futures，且 artifact/alias incompatibility 为 0；这些 warning 需要在论文/数据报告中解释为 **regime-appropriate future-source contract warning**，不要误写成数据失败。建议后续单独修 validator 的 Safe contract，以免审稿材料出现 20k 级 warning 噪声，但本轮不把它混入算法因素。
+
+### 闭环授权与 `LAUNCH_RC`
+
+本次四臂的最终 `logs/v48_48_launcher.rc` / runtime authoritative RC 都是 `20`，不是 `0`。局部 adaptation/launcher 子步骤出现 `0` 只表示该子步骤正常，不代表 Natural gate 通过。`NEXT_COMMANDS_STATUS.json` 明确 `reason=natural_gate_failed`、`generated=false`。因此 **当前 v48.48 不应执行论文-authoritative closed-loop/test**。
+
+v48.49 新增 `scripts/run_v48_49_postgate_if_authorized.sh`：它只有在 D/Main `AUTHORITATIVE_RUN_STATUS.authoritative_exit_code==0`、pipeline/certificate/gate contract 完整、full DCP factor contract 成立、且 controller 已生成 `NEXT_COMMANDS.txt` 时才执行后续 Safe paired non-inferiority + stress/closed-loop；RC20 会 fail-closed 拒绝。
+
+### 工程落地与防回归
+
+- 新 flags 已打通 train config、checkpoint metadata、inference reconstruction、model contract 与 run provenance：`native_margin_complete_preservation`、`native_advantage_preservation`、`native_gap_tolerance`、`native_positive_gain`。
+- DCP 在模型层不增加参数；v48.49 regression test 验证 state_dict key 与 v48.48-D 一致、hard paper DRS coordinate 保持、MC-NCP/NAP 单调性、无 regime/bucket 输入。
+- 2-GPU launcher 沿用 v48.48.1 已修复的 GPU lease + arm 并行/variant 串行 + subshell errexit 隔离，不重新引入已知 OOM/terminal-state bug。
+- 当前实现额外输出 native certificate/component/benefit diagnostics，便于下一轮直接判断是 safety-side 还是 benefit-side 未传导。
+
+### 继续禁止的历史失败方向
+
+继续不重复 threshold-grid densification、top-k/candidate/macro expansion、aggressive positive oversampling、hardest-negative population distortion、generic pairwise/listwise stacking、full joint Stage-2、learned admission residual、one-sided safe-positive tail、unbounded factors、frontier-tanh、full component factorization、partial pooling/rank skip、POET、joint SOWR、generic obs->margin SOWR、DWOK、broad encoder fine-tuning，以及任何 regime-conditioned router/policy/threshold/budget。v48.49 的两条轴都是 **删除/替换 proxy 的确定性 native transport**，不是这些旧方向的变体。
+
+
 ## v48.48.1 — SERIAL CERTIFICATE TERMINAL-CONTRACT ENGINEERING HOTFIX (2026-08-17)
 
 **类别：纯工程修复；NCP/DRFC 算法、模型参数、loss、dataset/split、top-k、risk budget、threshold、Natural gate 与 2x2 factor matrix 均不变。**

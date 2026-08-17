@@ -348,8 +348,12 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_roct_top_m: int = 8,
         direct_recovery_evidence_roct_option_temperature: float = 0.35,
         direct_recovery_evidence_native_certificate_preservation: bool = False,
+        direct_recovery_evidence_native_margin_complete_preservation: bool = False,
+        direct_recovery_evidence_native_advantage_preservation: bool = False,
         direct_recovery_evidence_native_drs_tolerance: float = 0.05,
         direct_recovery_evidence_native_deployability_tolerance: float = 0.05,
+        direct_recovery_evidence_native_gap_tolerance: float = 0.05,
+        direct_recovery_evidence_native_positive_gain: float = 0.015,
         direct_recovery_evidence_calibrator_shared: bool = False,
         direct_recovery_evidence_calibrator_regime_scale: float = 0.25,
         direct_recovery_evidence_unified_experts: bool = False,
@@ -523,15 +527,44 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_evidence_native_certificate_preservation = bool(
             direct_recovery_evidence_native_certificate_preservation
         )
+        # v48.49 DCP: extend v48.48 NCP from two hard risk coordinates to a
+        # decision-complete, monotone native transport.  The margin-complete arm
+        # preserves local zero-boundary geometry and native gap quality; the
+        # advantage arm transports the same native recovery value to the benefit
+        # side of the non-compensatory reserve.  Both are regime-agnostic and add
+        # no learned parameters.
+        self.direct_recovery_evidence_native_margin_complete_preservation = bool(
+            direct_recovery_evidence_native_margin_complete_preservation
+        )
+        self.direct_recovery_evidence_native_advantage_preservation = bool(
+            direct_recovery_evidence_native_advantage_preservation
+        )
         self.direct_recovery_evidence_native_drs_tolerance = float(
             max(0.0, direct_recovery_evidence_native_drs_tolerance)
         )
         self.direct_recovery_evidence_native_deployability_tolerance = float(
             max(0.0, direct_recovery_evidence_native_deployability_tolerance)
         )
+        self.direct_recovery_evidence_native_gap_tolerance = float(
+            max(0.0, direct_recovery_evidence_native_gap_tolerance)
+        )
+        self.direct_recovery_evidence_native_positive_gain = float(
+            max(0.0, direct_recovery_evidence_native_positive_gain)
+        )
+        if (
+            self.direct_recovery_evidence_native_margin_complete_preservation
+            or self.direct_recovery_evidence_native_advantage_preservation
+        ) and not self.direct_recovery_evidence_native_certificate_preservation:
+            raise ValueError(
+                "v48.49 native decision-complete transport requires native certificate preservation"
+            )
         if self.direct_recovery_evidence_native_certificate_preservation and int(direct_recovery_evidence_component_count) < 2:
             raise ValueError(
                 "native certificate preservation requires DRS and deployability component coordinates"
+            )
+        if self.direct_recovery_evidence_native_margin_complete_preservation and int(direct_recovery_evidence_component_count) < 3:
+            raise ValueError(
+                "native margin-complete preservation requires DRS, deployability, and gap component coordinates"
             )
         self.direct_recovery_evidence_roct_signature_dim = 4
         if not (0.0 < self.direct_recovery_evidence_roct_alpha <= 1.0):
@@ -1634,12 +1667,15 @@ class OCRAPModel(nn.Module):
         )
         if not return_native_certificate:
             return signature
-        # Native certificate coordinates consumed by v48.48 NCP.  The first
-        # coordinate is the exact predicted observation-class DRS used by the
-        # paper-facing evaluator; the second uses the same sigmoid(R_dep) scale
-        # as the component teacher target.  Both are in [0,1] and higher-is-safer.
+        # v48.49 keeps the first two v48.48 coordinates byte-for-byte compatible
+        # and appends two monotone native coordinates.  shared_feasible_mass is a
+        # strictly monotone boundary-resolution of q_best around the *same* zero
+        # frontier (tau is the already-frozen global ROCT option temperature).
+        # gap_quality exactly matches the teacher convention exp(-max(gap,0)).
+        dep_score = torch.sigmoid(r_dep).clamp(0.0, 1.0)
+        gap_quality = torch.exp(-torch.relu(gap).clamp(max=20.0)).clamp(0.0, 1.0)
         native_certificate = torch.stack(
-            [native_drs, torch.sigmoid(r_dep).clamp(0.0, 1.0)], dim=-1
+            [native_drs, dep_score, shared_feasible_mass, gap_quality], dim=-1
         )
         return signature, native_certificate
 
@@ -1787,11 +1823,14 @@ class OCRAPModel(nn.Module):
         group_index: torch.Tensor | None,
         is_nominal: torch.Tensor | None,
     ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
-        """Convert native [DRS, deployability] to harmful component logits.
+        """Transport native recovery coordinates to non-compensatory harm logits.
 
-        The component teacher convention is nominal - candidate - tolerance,
-        with positive meaning harmful.  The mapping is regime-agnostic and
-        strictly monotone in the paper-native OC-MERO certificate.
+        v48.48 NCP preserves [hard DRS, sigmoid(R_dep)].  v48.49 DCP optionally
+        upgrades this to [boundary-resolved DRS, sigmoid(R_dep), gap-quality].
+        Every coordinate is higher-is-safer and only a fixed monotone transform
+        of OC-MERO output; no learned proxy or regime-specific routing rule is
+        introduced.  The component convention remains
+        ``nominal - candidate - tolerance``, so positive still means harmful.
         """
         if not self.direct_recovery_evidence_native_certificate_preservation:
             return None, None
@@ -1800,16 +1839,70 @@ class OCRAPModel(nn.Module):
                 "native certificate preservation enabled but OC-MERO native certificate is missing"
             )
         native = native_certificate.to(dtype=torch.float32)
-        if native.dim() != 2 or native.shape[-1] < 2:
-            raise RuntimeError("native OC-MERO certificate must have shape [batch, >=2]")
-        rel = self._candidate_minus_nominal(native[:, :2], group_index, is_nominal)
-        tol = rel.new_tensor([
-            self.direct_recovery_evidence_native_drs_tolerance,
-            self.direct_recovery_evidence_native_deployability_tolerance,
-        ])
+        min_width = 4 if self.direct_recovery_evidence_native_margin_complete_preservation else 2
+        if native.dim() != 2 or native.shape[-1] < min_width:
+            raise RuntimeError(
+                f"native OC-MERO certificate must have shape [batch, >={min_width}]"
+            )
+        if self.direct_recovery_evidence_native_margin_complete_preservation:
+            # Coordinate order presented to the downstream component contract is
+            # still DRS, deployability, gap.  Only the DRS transport changes from
+            # the lossy hard indicator to its zero-centred monotone boundary mass.
+            safer = torch.stack([native[:, 2], native[:, 1], native[:, 3]], dim=-1)
+            tolerances = [
+                self.direct_recovery_evidence_native_drs_tolerance,
+                self.direct_recovery_evidence_native_deployability_tolerance,
+                self.direct_recovery_evidence_native_gap_tolerance,
+            ]
+        else:
+            safer = native[:, :2]
+            tolerances = [
+                self.direct_recovery_evidence_native_drs_tolerance,
+                self.direct_recovery_evidence_native_deployability_tolerance,
+            ]
+        rel = self._candidate_minus_nominal(safer, group_index, is_nominal)
+        tol = rel.new_tensor(tolerances)
         harmful_margins = -rel - tol.unsqueeze(0)
         logits = harmful_margins / max(self.direct_recovery_evidence_slack_temperature, 1.0e-6)
         return logits, harmful_margins
+
+    def _native_certificate_benefit_logit(
+        self,
+        native_certificate: torch.Tensor | None,
+        group_index: torch.Tensor | None,
+        is_nominal: torch.Tensor | None,
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
+        """Return native signed recovery-advantage evidence for v48.49 DCP.
+
+        The training/calibration benefit target is the candidate-minus-nominal
+        deployability-score advantage.  DCP computes the *predicted native* score
+        from the same three OC-MERO coordinates used by the certificate:
+
+            V_native = boundary_DRS * sigmoid(R_dep) * exp(-max(gap, 0)).
+
+        The benefit factor is centred at the preregistered positive-gain boundary,
+        so logit zero has an explicit cross-scene physical meaning.  This deletes
+        the second learned proxy on the positive side of admission rather than
+        adding another head.
+        """
+        if not self.direct_recovery_evidence_native_advantage_preservation:
+            return None, None, None
+        if native_certificate is None:
+            raise RuntimeError(
+                "native advantage preservation enabled but OC-MERO native certificate is missing"
+            )
+        native = native_certificate.to(dtype=torch.float32)
+        if native.dim() != 2 or native.shape[-1] < 4:
+            raise RuntimeError("native advantage preservation requires [batch, >=4] certificate")
+        native_value = (native[:, 2] * native[:, 1] * native[:, 3]).clamp(0.0, 1.0)
+        rel_adv = self._candidate_minus_nominal(
+            native_value.unsqueeze(-1), group_index, is_nominal
+        ).squeeze(-1)
+        benefit_margin = rel_adv - self.direct_recovery_evidence_native_positive_gain
+        benefit_logit = benefit_margin / max(
+            self.direct_recovery_evidence_benefit_margin_temperature, 1.0e-6
+        )
+        return benefit_logit, benefit_margin, native_value
 
     def _direct_outputs(
         self,
@@ -1889,6 +1982,11 @@ class OCRAPModel(nn.Module):
         native_component_logits, native_component_margins = self._native_certificate_component_logits(
             native_recovery_certificate, group_index, is_nominal
         )
+        native_benefit_logit, native_benefit_margin, native_recovery_value = (
+            self._native_certificate_benefit_logit(
+                native_recovery_certificate, group_index, is_nominal
+            )
+        )
         if native_recovery_certificate is not None:
             out["direct_recovery_evidence_native_certificate"] = native_recovery_certificate.detach()
         if native_component_logits is not None:
@@ -1900,6 +1998,13 @@ class OCRAPModel(nn.Module):
             )
             out["direct_recovery_evidence_native_component_logits"] = native_component_logits
             out["direct_recovery_evidence_native_component_margins"] = native_component_margins
+        if native_benefit_logit is not None:
+            native_benefit_logit = native_benefit_logit.to(device=memory.device, dtype=memory.dtype)
+            native_benefit_margin = native_benefit_margin.to(device=memory.device, dtype=memory.dtype)
+            native_recovery_value = native_recovery_value.to(device=memory.device, dtype=memory.dtype)
+            out["direct_recovery_evidence_native_benefit_logit"] = native_benefit_logit
+            out["direct_recovery_evidence_native_benefit_margin"] = native_benefit_margin
+            out["direct_recovery_evidence_native_recovery_value"] = native_recovery_value
         rank_base: torch.Tensor | None = None
         if self.direct_value_heads is not None:
             all_direct = torch.stack([head(direct_features) for head in self.direct_value_heads], dim=1)
@@ -2381,7 +2486,8 @@ class OCRAPModel(nn.Module):
                         )
                     if native_component_logits is not None:
                         unified_component_harm_logits = unified_component_harm_logits.clone()
-                        unified_component_harm_logits[:, :2] = native_component_logits
+                        native_width = int(native_component_logits.shape[-1])
+                        unified_component_harm_logits[:, :native_width] = native_component_logits
                         out["direct_recovery_evidence_native_certificate_preserved"] = (
                             unified_component_harm_logits.new_ones(())
                         )
@@ -2630,7 +2736,8 @@ class OCRAPModel(nn.Module):
                         )
                     if native_component_logits is not None:
                         unified_component_harm_logits = unified_component_harm_logits.clone()
-                        unified_component_harm_logits[:, :2] = native_component_logits
+                        native_width = int(native_component_logits.shape[-1])
+                        unified_component_harm_logits[:, :native_width] = native_component_logits
                         out["direct_recovery_evidence_native_certificate_preserved"] = (
                             unified_component_harm_logits.new_ones(())
                         )
@@ -2681,6 +2788,15 @@ class OCRAPModel(nn.Module):
 
             out["direct_recovery_evidence_calibrator_input"] = calibrator_input
             out["direct_recovery_evidence_calibrator_residual"] = evidence_calibrator_residual
+
+        if native_benefit_logit is not None:
+            # v48.49 NAP: overwrite, do not add.  The point is to remove the free
+            # learned proxy on the benefit side exactly as v48.48 NCP removed it
+            # for critical safety components.
+            unified_benefit_logit = native_benefit_logit
+            out["direct_recovery_evidence_native_advantage_preserved"] = (
+                native_benefit_logit.new_ones(())
+            )
 
         if delta is not None:
             nominal_mask = None

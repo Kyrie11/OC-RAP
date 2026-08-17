@@ -66,6 +66,10 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--expect-native-certificate-preservation", choices=("true", "false", "any"), default="any")
     ap.add_argument("--expect-native-drs-tolerance", type=float, default=None)
     ap.add_argument("--expect-native-deployability-tolerance", type=float, default=None)
+    ap.add_argument("--expect-native-margin-complete-preservation", choices=("true", "false", "any"), default="any")
+    ap.add_argument("--expect-native-advantage-preservation", choices=("true", "false", "any"), default="any")
+    ap.add_argument("--expect-native-gap-tolerance", type=float, default=None)
+    ap.add_argument("--expect-native-positive-gain", type=float, default=None)
     ap.add_argument("--expect-consensus-prior-scale", type=float, default=0.50)
     ap.add_argument("--reliability-override", default="", help="Ablation override; empty uses support contract")
     return ap
@@ -147,6 +151,10 @@ def main() -> int:
         "direct_recovery_evidence_native_certificate_preservation": bool(model.direct_recovery_evidence_native_certificate_preservation),
         "direct_recovery_evidence_native_drs_tolerance": float(model.direct_recovery_evidence_native_drs_tolerance),
         "direct_recovery_evidence_native_deployability_tolerance": float(model.direct_recovery_evidence_native_deployability_tolerance),
+        "direct_recovery_evidence_native_margin_complete_preservation": bool(model.direct_recovery_evidence_native_margin_complete_preservation),
+        "direct_recovery_evidence_native_advantage_preservation": bool(model.direct_recovery_evidence_native_advantage_preservation),
+        "direct_recovery_evidence_native_gap_tolerance": float(model.direct_recovery_evidence_native_gap_tolerance),
+        "direct_recovery_evidence_native_positive_gain": float(model.direct_recovery_evidence_native_positive_gain),
         "direct_recovery_evidence_consensus_prior_scale": float(model.direct_recovery_evidence_consensus_prior_scale),
         "interaction_bridge_present": model.direct_evidence_interaction_bridge is not None,
     }
@@ -223,6 +231,16 @@ def main() -> int:
         ),
         "direct_recovery_evidence_native_drs_tolerance": args.expect_native_drs_tolerance,
         "direct_recovery_evidence_native_deployability_tolerance": args.expect_native_deployability_tolerance,
+        "direct_recovery_evidence_native_margin_complete_preservation": (
+            None if args.expect_native_margin_complete_preservation == "any"
+            else args.expect_native_margin_complete_preservation == "true"
+        ),
+        "direct_recovery_evidence_native_advantage_preservation": (
+            None if args.expect_native_advantage_preservation == "any"
+            else args.expect_native_advantage_preservation == "true"
+        ),
+        "direct_recovery_evidence_native_gap_tolerance": args.expect_native_gap_tolerance,
+        "direct_recovery_evidence_native_positive_gain": args.expect_native_positive_gain,
         "direct_recovery_evidence_consensus_prior_scale": float(args.expect_consensus_prior_scale),
         "interaction_bridge_present": args.expect_context_source == "physical_interaction",
     }
