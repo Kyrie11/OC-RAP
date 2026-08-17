@@ -172,3 +172,32 @@ def test_v4849_arm_and_comparator_define_clean_2x2() -> None:
     assert "V4849_VARIANT_MODE:-serial" in launcher
     assert "OC-RAP-v48.49-DCP-DRFC-2x2-audit.json" in launcher
     assert "OC-RAP-v48.49-NCP-DRFC-2x2-audit.json" not in launcher
+
+
+def test_v4849_dcp_flags_are_stage_locally_disabled_during_drfc_witness() -> None:
+    """Regression for uploaded B/C/D RC30 stage-isolation failure."""
+    stage = (ROOT / "scripts/adapt_ocrap_v48_47_dsofr_witness_stage.sh").read_text(encoding="utf-8")
+    assert "EVIDENCE_NATIVE_CERTIFICATE_PRESERVATION=false" in stage
+    assert "EVIDENCE_NATIVE_MARGIN_COMPLETE_PRESERVATION=false" in stage
+    assert "EVIDENCE_NATIVE_ADVANTAGE_PRESERVATION=false" in stage
+    assert "'native_certificate_preservation':False" in stage
+    assert "'native_margin_complete_preservation':False" in stage
+    assert "'native_advantage_preservation':False" in stage
+
+
+def test_no_nested_stage_disables_ncp_without_dependent_dcp_flags() -> None:
+    """Guard future stage-isolation edits against the same flag-leak class."""
+    scripts = ROOT / "scripts"
+    exceptions = {"run_v48_48_ncp_ablation_arm.sh"}
+    offenders = []
+    for path in scripts.glob("*.sh"):
+        text = path.read_text(encoding="utf-8")
+        if path.name in exceptions:
+            continue
+        if "EVIDENCE_NATIVE_CERTIFICATE_PRESERVATION=false" in text:
+            if (
+                "EVIDENCE_NATIVE_MARGIN_COMPLETE_PRESERVATION=false" not in text
+                or "EVIDENCE_NATIVE_ADVANTAGE_PRESERVATION=false" not in text
+            ):
+                offenders.append(path.name)
+    assert offenders == []

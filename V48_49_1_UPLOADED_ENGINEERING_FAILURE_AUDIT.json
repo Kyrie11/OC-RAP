@@ -1,0 +1,162 @@
+{
+  "event": "v48_49_uploaded_engineering_failure_audit",
+  "version": "v48.49.1-engineering-hotfix",
+  "created_unix": 1786982551.8983932,
+  "attribution_valid": false,
+  "new_algorithm_attribution": "none",
+  "arms": {
+    "A": {
+      "authoritative_exit_code": 20,
+      "pipeline_valid": true,
+      "runtime_exit_code": 20,
+      "factor_contract": {
+        "native_certificate_preservation": true,
+        "recovery_frontier_calibration": true,
+        "native_margin_complete_preservation": false,
+        "native_advantage_preservation": false
+      },
+      "test_roots_read": false
+    },
+    "B": {
+      "authoritative_exit_code": 30,
+      "pipeline_valid": false,
+      "runtime_exit_code": 30,
+      "factor_contract": {
+        "native_certificate_preservation": true,
+        "recovery_frontier_calibration": true,
+        "native_margin_complete_preservation": true,
+        "native_advantage_preservation": false
+      },
+      "test_roots_read": false,
+      "failure_signatures": [
+        {
+          "variant": "balanced",
+          "stage": "v48_47_recovery_frontier",
+          "exit_code": 1,
+          "exception_type": "ValueError",
+          "message": "v48.49 native decision-complete transport requires native certificate preservation",
+          "location": {
+            "file": "/home/senzeyu2/code/OC-RAP/src/ocrap/models/ocrap.py",
+            "line": 558,
+            "function": "__init__"
+          }
+        },
+        {
+          "variant": "precision",
+          "stage": "v48_47_recovery_frontier",
+          "exit_code": 1,
+          "exception_type": "ValueError",
+          "message": "v48.49 native decision-complete transport requires native certificate preservation",
+          "location": {
+            "file": "/home/senzeyu2/code/OC-RAP/src/ocrap/models/ocrap.py",
+            "line": 558,
+            "function": "__init__"
+          }
+        }
+      ]
+    },
+    "C": {
+      "authoritative_exit_code": 30,
+      "pipeline_valid": false,
+      "runtime_exit_code": 30,
+      "factor_contract": {
+        "native_certificate_preservation": true,
+        "recovery_frontier_calibration": true,
+        "native_margin_complete_preservation": false,
+        "native_advantage_preservation": true
+      },
+      "test_roots_read": false,
+      "failure_signatures": [
+        {
+          "variant": "balanced",
+          "stage": "v48_47_recovery_frontier",
+          "exit_code": 1,
+          "exception_type": "ValueError",
+          "message": "v48.49 native decision-complete transport requires native certificate preservation",
+          "location": {
+            "file": "/home/senzeyu2/code/OC-RAP/src/ocrap/models/ocrap.py",
+            "line": 558,
+            "function": "__init__"
+          }
+        },
+        {
+          "variant": "precision",
+          "stage": "v48_47_recovery_frontier",
+          "exit_code": 1,
+          "exception_type": "ValueError",
+          "message": "v48.49 native decision-complete transport requires native certificate preservation",
+          "location": {
+            "file": "/home/senzeyu2/code/OC-RAP/src/ocrap/models/ocrap.py",
+            "line": 558,
+            "function": "__init__"
+          }
+        }
+      ]
+    },
+    "D": {
+      "authoritative_exit_code": 30,
+      "pipeline_valid": false,
+      "runtime_exit_code": 30,
+      "factor_contract": {
+        "native_certificate_preservation": true,
+        "recovery_frontier_calibration": true,
+        "native_margin_complete_preservation": true,
+        "native_advantage_preservation": true
+      },
+      "test_roots_read": false,
+      "failure_signatures": [
+        {
+          "variant": "balanced",
+          "stage": "v48_47_recovery_frontier",
+          "exit_code": 1,
+          "exception_type": "ValueError",
+          "message": "v48.49 native decision-complete transport requires native certificate preservation",
+          "location": {
+            "file": "/home/senzeyu2/code/OC-RAP/src/ocrap/models/ocrap.py",
+            "line": 558,
+            "function": "__init__"
+          }
+        },
+        {
+          "variant": "precision",
+          "stage": "v48_47_recovery_frontier",
+          "exit_code": 1,
+          "exception_type": "ValueError",
+          "message": "v48.49 native decision-complete transport requires native certificate preservation",
+          "location": {
+            "file": "/home/senzeyu2/code/OC-RAP/src/ocrap/models/ocrap.py",
+            "line": 558,
+            "function": "__init__"
+          }
+        }
+      ]
+    }
+  },
+  "root_cause": {
+    "class": "nested_stage_environment_flag_leak",
+    "stage": "v48_47_recovery_frontier",
+    "outer_contract_correct": true,
+    "historical_stage_forced_native_certificate_preservation_false": true,
+    "dependent_v48_49_flags_inherited_from_outer_arm": true,
+    "illegal_combination": "native_certificate_preservation=false with margin_complete and/or native_advantage=true",
+    "not_supported_by_evidence": [
+      "algorithm_failure",
+      "oom",
+      "nan_or_gradient_instability",
+      "dataset_failure",
+      "source_checkpoint_missing",
+      "gpu_contention"
+    ]
+  },
+  "fix": {
+    "script": "scripts/adapt_ocrap_v48_47_dsofr_witness_stage.sh",
+    "child_process_masks": [
+      "EVIDENCE_NATIVE_CERTIFICATE_PRESERVATION=false",
+      "EVIDENCE_NATIVE_MARGIN_COMPLETE_PRESERVATION=false",
+      "EVIDENCE_NATIVE_ADVANTAGE_PRESERVATION=false"
+    ],
+    "stage_contract_records_all_three_false": true,
+    "algorithm_changed": false,
+    "operator_command_changed": false
+  }
+}

@@ -19,6 +19,13 @@ OPTION_SEMANTICS="${OPTION_EXECUTION_SEMANTICS:-observation_class}"
   echo "v48.47 requires paper-consistent OPTION_EXECUTION_SEMANTICS=observation_class" >&2; exit 2;
 }
 
+# This script is a nested witness-only process.  Mask all downstream native
+# admission transports for the whole child process so outer v48.48/v48.49 arm
+# flags cannot leak into OCRAPModel construction during DRFC calibration.
+export EVIDENCE_NATIVE_CERTIFICATE_PRESERVATION=false
+export EVIDENCE_NATIVE_MARGIN_COMPLETE_PRESERVATION=false
+export EVIDENCE_NATIVE_ADVANTAGE_PRESERVATION=false
+
 case "$STAGE" in
   decision_obs)
     prefixes="obs_embed_head"
@@ -63,6 +70,12 @@ d={
  'decision_weighted_observation_loss':dw,'root_logit_head_frozen':True,
  'witness_fast_path':stage,'frozen_modules_eval':True,
  'shared_encoder_frozen':True,'root_decoder_frozen':True,'direct_policy_heads_frozen':True,
+ # Stage-local isolation contract: v48.47 calibrates only the native witness.
+ # Later deterministic admission transports (v48.48 NCP / v48.49 DCP) must be
+ # disabled while this witness checkpoint is being produced.
+ 'native_certificate_preservation':False,
+ 'native_margin_complete_preservation':False,
+ 'native_advantage_preservation':False,
  'strategy_regime_conditioning':False,'test_roots_read':False,
  'train_mix':train_mix,'val_mix':val_mix,'group_index':group_index,
  'group_index_sha256':hashlib.sha256(pathlib.Path(group_index).read_bytes()).hexdigest(),
@@ -89,7 +102,8 @@ EVIDENCE_CALIBRATOR_ENABLED=false EVIDENCE_CALIBRATOR_CONTEXT_SOURCE=relative EV
 EVIDENCE_FACTORIZED_HARM_INTERACTION=false EVIDENCE_PARTIAL_POOL_HARM_RESIDUAL=false EVIDENCE_RANK_BENEFIT_SKIP=false \
 EVIDENCE_POSTPREFIX_OBS_TRANSPORT_BENEFIT=false EVIDENCE_POSTPREFIX_OBS_TRANSPORT_HARM=false \
 EVIDENCE_ROCT_BENEFIT=false EVIDENCE_ROCT_DEPLOYABILITY=false EVIDENCE_UNIFIED_EXPERTS=false EVIDENCE_COMPONENT_HEADS=false \
-EVIDENCE_NATIVE_CERTIFICATE_PRESERVATION=false EVIDENCE_CONCORD=false EVIDENCE_ADMISSION_HEAD=false EVIDENCE_FRONTIER=false EVIDENCE_RESERVE_FACTOR_ALIGNMENT=false \
+EVIDENCE_NATIVE_CERTIFICATE_PRESERVATION=false EVIDENCE_NATIVE_MARGIN_COMPLETE_PRESERVATION=false EVIDENCE_NATIVE_ADVANTAGE_PRESERVATION=false \
+EVIDENCE_CONCORD=false EVIDENCE_ADMISSION_HEAD=false EVIDENCE_FRONTIER=false EVIDENCE_RESERVE_FACTOR_ALIGNMENT=false \
 EVIDENCE_ADMISSION_PRIOR_MODE=risk_centered EVIDENCE_JOINT_RESERVE_TEMPERATURE=0.025 EVIDENCE_COMPONENT_RELIABILITY= \
 DIRECT_ONLY_FAST_PATH=false WITNESS_FAST_PATH="$STAGE" FROZEN_MODULES_EVAL=true DIRECT_VALUE_WEIGHT=0 OPTION_EXECUTION_SEMANTICS=observation_class \
 DECISION_WEIGHTED_OBS_ENABLED="$dw_obs" \

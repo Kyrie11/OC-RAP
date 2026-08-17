@@ -1,0 +1,40 @@
+OC-RAP v48.49.1 engineering hotfix validation
+Date: 2026-08-17
+
+Uploaded-run attribution:
+- A: authoritative RC20, pipeline_valid=true (valid reference only)
+- B/C/D: authoritative RC30, pipeline_valid=false
+- new v48.49 factor attribution: INVALID / NONE
+- common failure stage: v48_47_recovery_frontier
+- common exception: ValueError: v48.49 native decision-complete transport requires native certificate preservation
+
+Root cause:
+- outer v48.49 factor contracts are correct
+- nested v48.47 witness stage intentionally forced NCP=false
+- new v48.49 MC-NCP/NAP flags leaked from parent arm environment
+- illegal dependent flag combination caused model constructor to fail closed
+
+Hotfix:
+- witness child process masks NCP + MC-NCP + NAP together
+- train-call environment masks all three again
+- witness stage JSON records all three false
+- regression prevents nested NCP-off stages from omitting dependent DCP masks
+- algorithm factors/parameters/loss/data/gate/commands unchanged
+
+Validation completed in this environment:
+- focused v48.49 DCP + v48.48 NCP + v48.47 DRFC: 27 passed
+- v48.45.6 stage-isolation I/O: 7 passed
+- v48.36.2 stage transfer: 6 passed
+- v48.36.3 terminal state: 6 passed
+- v48.36.4 idempotent terminal state: 6 passed
+- v48.45.1 engineering hotfix regression: 18 passed
+- v48.36 OCAF regression: 14 passed / 1 skipped
+- unique total: 84 passed / 1 skipped
+- compileall src/tools/tests: PASS
+- scripts/*.sh bash -n: 111/111 PASS
+- OC-RAP-v48.49-DCP-DRFC-two-GPU-run-commands-ZH.txt bash -n: PASS
+- operator command SHA256 unchanged from uploaded v48.49 code: PASS
+
+Limitations:
+- no A30 GPU or /data0 OCRAP datasets are available in this sandbox, so a real end-to-end rerun is not claimed here.
+- a previous combined legacy pytest invocation hit the tool timeout; the critical suites above were rerun separately and are the only tests counted as passed.

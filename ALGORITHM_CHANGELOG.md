@@ -1,3 +1,43 @@
+## v48.49.1 — DCP DRFC WITNESS-STAGE FLAG-ISOLATION ENGINEERING HOTFIX (2026-08-17)
+
+**类别：纯工程修复。v48.49 DCP/DRFC 算法、2x2 因素定义、模型参数、loss、dataset/split、proposal top-k、risk budget、threshold、calibration protocol、Natural gate 与原双 GPU 执行指令均不变。**
+
+### 本次上传结果不能做 v48.49 新算法归因
+
+- A 为 authoritative `RC=20`、`pipeline_valid=true`，certificate/Natural gate 正常执行；这只能说明 v48.48-D reference 路径本轮仍可完整运行。
+- B/C/D 均为 authoritative `RC=30`、`pipeline_valid=false`，Balanced 与 Precision 都在 adaptation 的 `v48_47_recovery_frontier` 阶段、模型构造前失败。
+- 三臂的唯一一致 failure signature 是 `ValueError: v48.49 native decision-complete transport requires native certificate preservation`。因此 B-A、C-A、D-B-C+A 都不成立，**禁止把本轮 B/C/D 当作 MC-NCP/NAP/DCP 的算法负结果**。
+
+### 根因：历史 witness isolation 只关闭了 NCP，没有关闭 v48.49 新增的依赖 flag
+
+`run_v48_49_dcp_ablation_arm.sh` 的外层 factor contract 是正确的：B/C/D 都保持 `native_certificate_preservation=true`，并分别打开 MC-NCP/NAP。问题发生在嵌套的 `adapt_ocrap_v48_47_dsofr_witness_stage.sh`。该历史 stage 为了只训练 paper-native `margin_head`，会显式设置 `EVIDENCE_NATIVE_CERTIFICATE_PRESERVATION=false`，但 v48.49 新增后没有同步清零：
+
+- `EVIDENCE_NATIVE_MARGIN_COMPLETE_PRESERVATION`；
+- `EVIDENCE_NATIVE_ADVANTAGE_PRESERVATION`。
+
+于是 B/C/D 从父级环境继承 DCP=true，而 witness 子阶段又把 NCP=false，形成非法组合 `DCP=true + NCP=false`。`OCRAPModel.__init__` 的 dependency guard 正确 fail-closed，因此这是 **stage-local environment/config isolation bug**，不是算法、数据、GPU 或训练稳定性失败。A 两个 DCP flag 都为 false，所以不会触发。
+
+### 修复
+
+1. 在 v48.47 witness 子进程入口统一 `export` 三个 downstream native transport flag 为 false：NCP、MC-NCP、NAP。该脚本本身是 child process，因此不会把 false 泄漏回父级 v48.49 arm。
+2. 在真正调用 `train_ocrap_v48_trac_sr.sh` 的 stage-local environment 中再次显式把三者一起置 false，形成双层 fail-closed isolation。
+3. `V48_47_WITNESS_STAGE.json` 新增三个 false 字段，明确记录该 witness checkpoint 的 native-transport isolation contract。
+4. 新增 v48.49 regression：任何 nested stage 若显式关闭 NCP，就必须同时关闭两个依赖 DCP flag，避免未来新增 factor 后再次发生同类父级环境泄漏。
+
+### 其他工程审计
+
+- B/C/D Balanced/Precision failure signature 完全一致；未发现 OOM、NaN、segfault、缺失 dataset/source checkpoint 或 GPU lease 争用的第二故障源。
+- v48.49 新 flag 已覆盖 train config、checkpoint metadata、inference reconstruction、model contract 与 factor-cache contract；当前失败点只位于 DRFC witness isolation 边界。
+- 原 `OC-RAP-v48.49-DCP-DRFC-two-GPU-run-commands-ZH.txt` 未修改。删除本次不完整 run 后，可直接使用原指令重跑。
+
+### 验证
+
+- v48.49/v48.48/v48.47 focused regression：通过。
+- stage-isolation、stage-transfer、terminal-state、idempotent terminal 与既有 engineering-hotfix regression：通过。
+- OCAF regression：通过（保留既有 1 skipped）。
+- `compileall`：PASS；全部 `scripts/*.sh` 与原 v48.49 根执行指令 `bash -n`：PASS。
+- 本 hotfix 没有任何算法参数或实验因素改动，因此在完整四臂重跑前继续冻结 v48.49 算法判断。
+
 ## v48.49 — DCP-DRFC / DECISION-COMPLETE NATIVE CERTIFICATE PRESERVATION (2026-08-17)
 
 **类别：基于用户最新上传、已经通过 terminal-contract hotfix 后重跑的 v48.48 A/B/C/D authoritative 2x2 的算法升级。没有新增 Safe/Near/Contact identifier、router、regime-specific policy/threshold/loss/budget；proposal top-k、risk budget、calibration split 与 observation-class execution semantics 均保持不变。**
