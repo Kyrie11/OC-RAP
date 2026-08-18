@@ -59,7 +59,7 @@ python tools/check_v48_45_sowr_source_architecture.py \
 python - "$RUN/V48_47_WITNESS_STAGE.json" "$STAGE" "$OPTION_SEMANTICS" "$prefixes" \
   "$TRAIN_MIX" "$VAL_MIX" "$GROUP_INDEX" "$dw_obs" "$epochs" "$loss_margin" "$loss_obs" "$loss_frontier" \
   "${V4847_OBS_CONFLICT_SCALE:-3.0}" "${V4847_OBS_CONFLICT_TEMPERATURE:-0.20}" "${V4847_OBS_MAX_WEIGHT:-4.0}" \
-  "${V4847_FRONTIER_SIGN_TEMPERATURE:-0.08}" "${V4847_FRONTIER_REGRESSION_WEIGHT:-1.0}" "${V4847_FRONTIER_SIGN_WEIGHT:-0.50}" "${V4850_DECISION_EQUIVALENT_FRONTIER:-false}" "${V4851_BOUNDARY_COMPLETE_FRONTIER:-false}" "${V4850_FRONTIER_GAP_TOLERANCE:-0.05}" "${V4850_FRONTIER_POSITIVE_GAIN:-0.015}" "${V4850_FRONTIER_PCD_WEIGHT:-1.0}" <<'PY_STAGE'
+  "${V4847_FRONTIER_SIGN_TEMPERATURE:-0.08}" "${V4847_FRONTIER_REGRESSION_WEIGHT:-1.0}" "${V4847_FRONTIER_SIGN_WEIGHT:-0.50}" "${V4850_DECISION_EQUIVALENT_FRONTIER:-false}" "${V4851_BOUNDARY_COMPLETE_FRONTIER:-false}" "${V4850_FRONTIER_GAP_TOLERANCE:-0.05}" "${V4850_FRONTIER_POSITIVE_GAIN:-0.015}" "${V4850_FRONTIER_PCD_WEIGHT:-1.0}" "${V4852_PHYSICAL_TEACHER_SIGN_ALIGNMENT:-false}" <<'PY_STAGE'
 import hashlib,json,pathlib,sys,time
 p=pathlib.Path(sys.argv[1])
 stage,sem,prefixes=sys.argv[2:5]
@@ -87,6 +87,10 @@ d={
  'decision_equivalent_frontier':sys.argv[19].lower()=='true',
  'boundary_complete_frontier':sys.argv[20].lower()=='true','frontier_gap_tolerance':float(sys.argv[21]),
  'frontier_positive_gain':float(sys.argv[22]),'frontier_pcd_weight':float(sys.argv[23]),
+ 'physical_teacher_sign_alignment':sys.argv[24].lower()=='true',
+ 'teacher_sign_coordinate':('q_selected_mstar_physical_drs_exact_pcd' if sys.argv[24].lower()=='true' else 'q_hard_proxy_drs_exact_pcd'),
+ 'student_sign_coordinate':'hard_qbest_ge_zero_root_mass_exact_pcd',
+ 'frontier_order_coordinate':'smooth_boundary_drs_smooth_pcd',
  'created_unix':time.time(),
 }
 p.write_text(json.dumps(d,indent=2)+'\n',encoding='utf-8')
@@ -123,6 +127,7 @@ RECOVERY_FRONTIER_POSITIVE_GAIN="${V4850_FRONTIER_POSITIVE_GAIN:-0.015}" \
 RECOVERY_FRONTIER_PCD_WEIGHT="${V4850_FRONTIER_PCD_WEIGHT:-1.0}" \
 RECOVERY_FRONTIER_DECISION_EQUIVALENT="${V4850_DECISION_EQUIVALENT_FRONTIER:-false}" \
 RECOVERY_FRONTIER_BOUNDARY_COMPLETE="${V4851_BOUNDARY_COMPLETE_FRONTIER:-false}" \
+RECOVERY_FRONTIER_PHYSICAL_TEACHER_SIGN_ALIGNMENT="${V4852_PHYSICAL_TEACHER_SIGN_ALIGNMENT:-false}" \
 RECOVERY_FRONTIER_SIGN_TEMPERATURE="${V4847_FRONTIER_SIGN_TEMPERATURE:-0.08}" \
 RECOVERY_FRONTIER_REGRESSION_WEIGHT="${V4847_FRONTIER_REGRESSION_WEIGHT:-1.0}" \
 RECOVERY_FRONTIER_SIGN_WEIGHT="${V4847_FRONTIER_SIGN_WEIGHT:-0.50}" \

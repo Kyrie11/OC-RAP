@@ -96,6 +96,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.recovery_frontier_pcd_weight="${RECOVERY_FRONTIER_PCD_WEIGHT:-1.0}" \
   --set training.recovery_frontier_decision_equivalent="${RECOVERY_FRONTIER_DECISION_EQUIVALENT:-false}" \
   --set training.recovery_frontier_boundary_complete="${RECOVERY_FRONTIER_BOUNDARY_COMPLETE:-false}" \
+  --set training.recovery_frontier_physical_teacher_sign_alignment="${RECOVERY_FRONTIER_PHYSICAL_TEACHER_SIGN_ALIGNMENT:-false}" \
   --set training.recovery_frontier_sign_temperature="${RECOVERY_FRONTIER_SIGN_TEMPERATURE:-0.08}" \
   --set training.recovery_frontier_regression_weight="${RECOVERY_FRONTIER_REGRESSION_WEIGHT:-1.0}" \
   --set training.recovery_frontier_sign_weight="${RECOVERY_FRONTIER_SIGN_WEIGHT:-0.50}" \

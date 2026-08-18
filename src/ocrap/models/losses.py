@@ -605,6 +605,9 @@ def boundary_complete_frontier_calibration_loss(
     regression_weight: float = 1.0,
     sign_weight: float = 0.50,
     pcd_weight: float = 1.0,
+    teacher_m_star: torch.Tensor | None = None,
+    physical_teacher_sign_alignment: bool = False,
+    option_execution_semantics: str = "observation_class",
 ) -> torch.Tensor:
     """Boundary-complete calibration for one unified recovery certificate.
 
@@ -624,6 +627,11 @@ def boundary_complete_frontier_calibration_loss(
 
     The existing ``positive_gain`` is reused as the global material-benefit
     boundary; all regimes share exactly the same primitive and parameters.
+
+    With ``physical_teacher_sign_alignment=True`` (v48.52 PSA), only the
+    *teacher sign* coordinate changes: q still selects the observation-consistent
+    recovery action, while physical ``m_star >= 0`` determines root success.
+    The smooth q-based order channel is intentionally unchanged.
     """
     if pred_q.ndim != 3 or teacher_q.ndim != 3:
         return pred_r_dep.sum() * 0.0
@@ -659,10 +667,33 @@ def boundary_complete_frontier_calibration_loss(
     teacher_q_best = torch.where(
         teacher_mask, teacher_q_safe, teacher_q_safe.new_full((), -20.0)
     ).amax(dim=-1)
-    teacher_hard_exist = (teacher_q_best >= float(gamma)).float()
     teacher_soft_exist = torch.sigmoid((teacher_q_best - float(gamma)) / tau)
-    teacher_hard_drs = (teacher_w * teacher_hard_exist).sum(dim=-1).clamp(0.0, 1.0)
     teacher_smooth_drs = (teacher_w * teacher_soft_exist).sum(dim=-1).clamp(0.0, 1.0)
+
+    # v48.52 PSA: the sign teacher must be semantically identical to the
+    # physical certificate consumed by calibration.  Teacher q selects the
+    # legal observation-consistent recovery option, but success is evaluated on
+    # the corresponding physical m_star margin.  The student coordinate remains
+    # the deployed hard q-boundary (with STE gradients), while the smooth q
+    # geometry remains the order/magnitude teacher.  This changes only the sign
+    # supervision target; it adds no head, threshold, regime input, or policy.
+    if bool(physical_teacher_sign_alignment):
+        if teacher_m_star is None:
+            raise ValueError(
+                "physical_teacher_sign_alignment=true requires teacher_m_star"
+            )
+        teacher_hard_drs = _exact_teacher_recovery_success(
+            teacher_q.detach(),
+            teacher_m_star.detach(),
+            teacher_root_probs.detach(),
+            root_valid,
+            option_valid,
+            gamma=float(gamma),
+            semantics=str(option_execution_semantics),
+        )
+    else:
+        teacher_hard_exist = (teacher_q_best >= float(gamma)).float()
+        teacher_hard_drs = (teacher_w * teacher_hard_exist).sum(dim=-1).clamp(0.0, 1.0)
 
     pred_dep = torch.sigmoid(pred_r_dep.float().reshape(-1))
     teacher_dep = torch.sigmoid(teacher_r_dep.detach().float().reshape(-1))

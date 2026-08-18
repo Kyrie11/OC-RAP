@@ -1,3 +1,102 @@
+## v48.52 — DCP-DRFC-BCDE-PSA / PHYSICAL SIGN ALIGNMENT (2026-08-18)
+
+**类别：由 v48.51 authoritative 2×2 与代码语义审计共同触发的单轴 correctness experiment。主线继续是一个 regime-agnostic planning primitive；Safe / near-contact / contact 只作为 normal→critical continuum 上的数据/评测 strata。没有新增 regime identifier/router、regime-specific policy/threshold/loss/budget、proposal top-k、candidate family、learned admission head、重采样或模型容量。**
+
+### v48.51 的可靠结论：BC-DE 原则部分成立，但 BC-NAP 不应进入 Main
+
+v48.51 四臂 attribution contract valid，均为 authoritative RC20 / pipeline-valid algorithm rejection，certificate/Natural gate 实际执行且 test roots 未读取。因此 B-A、C-A 与 interaction 是有效机制证据。
+
+Precision 关键结果：
+
+| Arm | 机制 | Near cert recall | Near harmful UCB90 | Near dev joint sign | Contact cert recall | Contact harmful UCB90 | Contact dev joint sign |
+|---|---|---:|---:|---:|---:|---:|---:|
+| A | smooth NAP reference | 0.222 | 0.112 | 0/19 | 0 | 0.567 | 0/37 |
+| B | A + BC-FC | **0.333** | **0.042** | **4/19** | **0.050** | 0.351 | 0/37 |
+| C | A + BC-NAP | 0.222 | 0.130 | 0/19 | 0 | 0.356 | 3/37 |
+| D | BC-FC + BC-NAP | **0.333** | 0.100 | **4/19** | 0 | **0.240** | **6/37** |
+
+**Accept BC-FC principle.** B 是唯一同时提高 Near certificate recall、降低 harmful UCB、打开 development sign 的单因素机制。这继续支持“部署真正消费的 hard/exact decision boundary 必须进入 upstream calibration；hard/discontinuous coordinate 负责 sign，smooth boundary geometry 负责 continuous magnitude/order”的主线。
+
+**Reject BC-NAP as a Main transport.** C 只带来部分 candidate/proposal ranking 改善，没有 development sign；D 与 B 组合后 Near candidate/proposal safe-positive ranking 下降，而且 Contact certificate recall 从 B 的 0.05 退回 0。BC-NAP 因此保留为诊断机制，不再进入后续 Main。原 v48.49 smooth NAP 保留。
+
+### dominant bottleneck 已从 boundary quantization 下移到 physical sign correctness
+
+v48.51 已经部分解决“boundary quantization vs local ordering”冲突。当前更上游、优先级更高的问题来自代码级语义审计：BC-FC 的 teacher hard DRS 在 v48.51 仍由 `teacher_q_best >= gamma` 构造；但 Natural-gate/evaluator 的物理 teacher DRS 实际是：
+
+`teacher q -> 选择 observation-consistent legal option -> 在该 option 上用 m_star >= 0 判 root 物理恢复成功 -> root-probability aggregation`。
+
+因此 v48.51-B 虽然证明 hard-sign/smooth-order 分工有效，但其 **teacher sign supervision 仍是 q-hard proxy，而不是最终被 gate 消费的 physical certificate**。继续调 frontier loss weight、temperature、threshold 或 downstream transport 会把 teacher-error 与 centering-error 混在一起，违反 v48.51 已预注册的 stop rule。
+
+### v48.52 单一新因素：Physical Sign Alignment (PSA)
+
+v48.52 保留 v48.51-B 的 BC-FC + smooth NAP，明确关闭 BC-NAP、exact-only NAP、old v48.50 DEFC、MC-NCP。唯一新因素是 teacher-side sign definition：
+
+- **Student/deployed sign coordinate 不变**：model predicted q 上的 hard `q_best>=gamma` DRS，forward exact / backward STE；
+- **Teacher option selection 不变**：teacher OC-MERO q 选择 observation-consistent legal recovery option；
+- **Teacher physical success 改正**：所选 option 的 root 是否成功由对应 `m_star>=0` 判定，而不是再次用 q>=0；
+- **Order/magnitude channel 完全不变**：smooth boundary DRS + smooth PCD 继续做 continuous SmoothL1；
+- sign channel 仍只做 balanced sign BCE；没有让 hard DRS 做 continuous magnitude regression。
+
+这把 BC-DE 的方法原则收敛为：**decision equivalence 不只要求 student 的部署坐标对齐；supervision 的 material sign 也必须与最终 physical certificate 语义同构。** 论文可称为 *Physical Boundary-Complete Decision Equivalence*，PSA 是该原则的 correctness realization，而不是新增一个独立 policy module。
+
+### 为什么现在不直接加 final evidence centering
+
+v48.51 Contact 已经显示 latent physical/exact sign 与 final learned opportunity/pred-adv 之间仍存在 centering gap；但在 teacher sign correctness 修正前直接改 evidence centering 会混入 upstream label mismatch，无法得到干净因果结论。因此 v48.52 先做 PSA。
+
+- 若 PSA 显著改善 DRS safe-positive veto / physical joint sign，但 final opportunity/pred-adv 仍压在负侧，则下一 dominant bottleneck 才可可靠定位为 **Boundary-Complete Evidence Centering**；下一版只做该单轴。
+- 若 PSA 连 physical sign consistency 都不能改善，则停止 BC-FC/transport 微调，转入 DEP/GAP teacher normalization、root-probability reliability 与 teacher/native component correctness audit。
+
+### Safe / Near / Contact 的统一目标不变
+
+- **Safe**：不降低 Natural-gate 标准来强行获取 RC0。Safe standard calibration valid 只是必要条件；critical gate 真正 RC0 后才授权 scene-disjoint paired non-inferiority + closed-loop。
+- **Near-contact**：v48.51-B 已把 recall 拉到 0.333 且 harmful UCB 到 0.042，说明 recovery signal 存在；当前主要缺口是 precision/centering 与 component false-veto，而不是 proposal availability。
+- **Contact**：hard safe-benefit certificate 继续作为“是否授权 intervention”的最终 material criterion，但不是唯一 dense ranking target。模型应先学会对 prefix action 的 continuous post-contact recoverability potential 排序，再由 exact physical certificate 决定是否达到可授权改善。当前数据没有独立 secondary-collision probability 标签，因此 v48.52 不凭空加入该 loss；二次碰撞/re-contact 更适合作为 RC0 后 closed-loop endpoint。
+
+### v48.52 A/B 与历史 reference 复用
+
+为减少无效计算，本版不再做四臂。严格单轴：
+
+- **A/reference**：v48.51-B = BC-FC + smooth NAP + q-hard teacher-sign proxy；
+- **B/Main**：A + PSA，唯一差异是 physical teacher sign。
+
+默认尝试复用已有 `ocrap_v48_51_dcp_drfc_bcde_ablation_B`。只有 historical authoritative status、protocol-seal SHA、source checkpoint SHA、gate semantics、factor contract、两 variant BC-FC witness stage 全部一致时才授权复用；否则 fail-closed 自动回退 fresh A/B。复用不改变算法归因，只避免重复训练完全相同的 A。
+
+### 数值语义不变的 runtime 优化
+
+v48.51 telemetry 显示两张 24GB GPU 峰值仅约 919MB、平均利用率约 20%，大部分采样低于 30%；pipeline 明显受 Python/NPZ/I/O/小粒度 inference 与重复 calibration forward 限制。v48.52 新增 **standard-calibration prediction cache**：
+
+- cache 位于当前 calibration 原子临时目录，不跨 run 持久化；
+- cache identity 绑定 checkpoint SHA256 + inference-config SHA256；
+- pooled `near+contact` pass 生成的原始 float score 后续 Near/Contact 标准 calibration 原样复用；
+- cache miss 时仍走原 `predict_sample`；all-hit 时模型甚至无需再次 deserialize；
+- threshold/delta/split bookkeeping 不进入 inference signature，因为它们不改变 model forward；
+- 不启用 AMP/TF32、跨 scene 合批、候选重排或其他可能改变数值/集合语义的优化。
+
+### v48.52 预注册 go/stop
+
+不偷看 test roots，优先比较 B(Main)-A(reference)：
+
+1. **Near**：至少不应丢掉 v48.51-B 的 certificate recall 0.333 / harmful UCB 0.042 量级；重点看 DRS safe-positive false-veto、development joint sign 与 precision/centering是否改善。
+2. **Contact**：首先看 teacher/native physical-sign alignment 是否改善，而不是只看最终 recall；若 physical sign改善但 final learned sign仍差，触发下一版 evidence-centering，而不是再改 certificate transport。
+3. **Safety**：只有 Main authoritative RC0 才执行 gate-generated `NEXT_COMMANDS.txt`；RC20 继续 fail-closed，不人为放宽 Natural gate。
+4. **Attribution**：A/B identity 不一致、reference reuse contract失败且 fresh A未完成、PSA factor/stage contract不完整，均视为 engineering failure，禁止算法归因。
+
+### 明确新增 stop signal
+
+- **BC-NAP Main path：STOP**。不再重复 hard-material-sign/smooth-deadband downstream transport；保留 smooth NAP。
+- **BC-FC weight/temperature search：PAUSE**。在 PSA correctness 未验证前不搜索 sign weight、order weight、temperature。
+- **RC20 threshold relaxation：STOP**。不能为解锁 Safe而降低 precision/harm gate。
+- 继续禁止：MC-NCP、exact-only NAP、top-k/candidate/macro 扩张、aggressive oversampling、hardest-negative population distortion、generic pairwise/listwise、learned admission residual、regime-conditioned policy/router/threshold/budget、broad encoder fine-tuning，以及 changelog 已记录的其余无效路线。
+
+### 代码落地与工程合同
+
+- `boundary_complete_frontier_calibration_loss` 新增 PSA flag；只有 boundary-complete 分支接收 `teacher_m_star`，legacy v48.50 DEFC 接口保持不变。
+- PSA teacher DRS 复用 evaluator 相同 semantics：q 选择 option、m_star 判 physical success、root probs 聚合。
+- checkpoint training cfg、witness stage contract、factor cache identity 与 model/training contract 全部接线 PSA flag。
+- 新增 `check_v48_52_psa_contract.py`，在 certificate 前 fail-closed 校验 Balanced/Precision witness checkpoint 与 stage metadata。
+- 新增 `check_v48_52_reference_reuse.py`、A/B comparator、RC0-only post-gate wrapper 与 two-GPU launcher。
+- standard calibration 新增 checkpoint/config-SHA prediction cache，测试要求 cache hit 不再次 model-forward，并保持 calibration 数值语义。
+
 ## v48.51 — DCP-DRFC-BCDE / BOUNDARY-COMPLETE DECISION EQUIVALENCE (2026-08-18)
 
 **类别：由修复后、可归因的 v48.50 A/B/C/D authoritative 2×2 直接触发的机制升级。继续保持一个 regime-agnostic planning primitive；Safe / near-contact / contact 只作同一 normal→critical continuum 上的数据与评测分层。没有增加 regime identifier/router、regime-specific policy/threshold/loss/budget、proposal top-k、candidate family、learned admission head 或重采样。**

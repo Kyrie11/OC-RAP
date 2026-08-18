@@ -736,6 +736,29 @@ for variant in balanced precision; do
   fi
 done
 
+# v48.52 optional fail-closed semantic preflight.  PSA changes only the
+# boundary-complete witness teacher-sign target, so verify the nested witness
+# checkpoint/stage contract before any calibration/certificate population is
+# touched.  Historical versions are unaffected unless the explicit flag is set.
+if [[ "${V4852_REQUIRE_PSA_CONTRACT:-0}" == 1 ]]; then
+  for variant in balanced precision; do
+    [[ "$variant" == balanced && "$s0" != 0 ]] && continue
+    [[ "$variant" == precision && "$s1" != 0 ]] && continue
+    set +e
+    python tools/check_v48_52_psa_contract.py \
+      --run "$OUTPUTDIR/candidates/$variant" \
+      --expect-physical "${V4852_PHYSICAL_TEACHER_SIGN_ALIGNMENT:-false}" \
+      --output "$OUTPUTDIR/candidates/$variant/V48_52_PSA_CONTRACT.json" \
+      >"$OUTPUTDIR/logs/v48_52_psa_contract_${variant}.log" 2>&1
+    psa_contract_rc=$?
+    set -e
+    if [[ "$psa_contract_rc" != 0 ]]; then
+      write_pipeline_failure v48_52_psa_contract "$psa_contract_rc" "$OUTPUTDIR/candidates/$variant/V48_52_PSA_CONTRACT.json" "$s0" "$s1"
+      exit 30
+    fi
+  done
+fi
+
 variants=""
 [[ "$s0" == 0 ]] && variants="balanced"
 [[ "$s1" == 0 ]] && variants="${variants:+$variants,}precision"

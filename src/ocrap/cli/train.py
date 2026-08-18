@@ -1682,6 +1682,9 @@ def _epoch(
                         regression_weight=float(tcfg.get("recovery_frontier_regression_weight", 1.0)),
                         sign_weight=float(tcfg.get("recovery_frontier_sign_weight", 0.50)),
                         pcd_weight=float(tcfg.get("recovery_frontier_pcd_weight", 1.0)),
+                        teacher_m_star=batch["m_star"].float(),
+                        physical_teacher_sign_alignment=bool(tcfg.get("recovery_frontier_physical_teacher_sign_alignment", False)),
+                        option_execution_semantics=str(tcfg.get("option_execution_semantics", "observation_class")),
                     )
                 elif bool(tcfg.get("recovery_frontier_decision_equivalent", False)):
                     loss_recovery_frontier = decision_equivalent_frontier_calibration_loss(
@@ -1856,6 +1859,9 @@ def _epoch(
                     regression_weight=float(tcfg.get("recovery_frontier_regression_weight", 1.0)),
                     sign_weight=float(tcfg.get("recovery_frontier_sign_weight", 0.50)),
                     pcd_weight=float(tcfg.get("recovery_frontier_pcd_weight", 1.0)),
+                    teacher_m_star=batch["m_star"].float(),
+                    physical_teacher_sign_alignment=bool(tcfg.get("recovery_frontier_physical_teacher_sign_alignment", False)),
+                    option_execution_semantics=str(tcfg.get("option_execution_semantics", "observation_class")),
                 )
             elif bool(tcfg.get("recovery_frontier_decision_equivalent", False)):
                 loss_recovery_frontier = decision_equivalent_frontier_calibration_loss(

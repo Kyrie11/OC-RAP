@@ -231,6 +231,12 @@ calibrate_variant() {
   # reordering changes no score, threshold, dataset or gate semantics.
   local datasets=("$CERT_NEAR,$CERT_CONTACT" "$CAL_SAFE" "$CERT_NEAR" "$CERT_CONTACT")
   local buckets=(mix safe near contact)
+  # v48.52: the mix pass already computes the exact model score for every
+  # Near/Contact certificate sample.  Reuse those byte-identical float scores
+  # in the later per-bucket standard calibration passes under a checkpoint/config
+  # SHA-bound cache.  The cache lives inside this atomic tmp directory and is
+  # never reused across runs or checkpoints.
+  local standard_prediction_cache="$tmp/standard_prediction_cache_v48.json"
   local mins=(180 80 100 140)
   local allowed=(certificate_pool calibration certificate_pool certificate_pool)
   for i in 0 1 2 3; do
@@ -241,6 +247,7 @@ calibrate_variant() {
       --set calibration.allowed_split_ids="${allowed[$i]}" \
       --set calibration.exact_split_ids=true \
       --set calibration.allow_validation_fallback=false \
+      --set calibration.prediction_cache_json="$standard_prediction_cache" \
       --set training.option_execution_semantics="$OPTION_EXECUTION_SEMANTICS" \
       --set calibration.option_execution_semantics="$OPTION_EXECUTION_SEMANTICS" \
       --set evaluation.option_execution_semantics="$OPTION_EXECUTION_SEMANTICS" \
