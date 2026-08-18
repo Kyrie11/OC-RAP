@@ -1,0 +1,35 @@
+# OC-RAP v48.53 DCP-DRFC-BCDE-CSE — 两 GPU 运行指令
+# 目标：严格检验 Certificate Structural Equivalence (CSE)。
+# A/B 默认复用刚完成的 v48.52 A/B；通过 fail-closed identity contract 后只新跑 C/D。
+
+cd /home/senzeyu2/code/OC-RAP-v48.53-DCP-DRFC-BCDE-CSE
+
+# 推荐：保留刚得到的 v48.52 A/B 目录，不要删除：
+# /home/senzeyu2/code/OC-RAP/runs/ocrap_v48_52_dcp_drfc_bcde_psa_ablation_A
+# /home/senzeyu2/code/OC-RAP/runs/ocrap_v48_52_dcp_drfc_bcde_psa_main
+# launcher 会校验 protocol seal、source checkpoint SHA、factor/witness contract、RC 与 test-root seal。
+# 验证通过：只运行 C/D；验证失败：自动回退 fresh A/B -> C/D 两波，不会强行复用不可比结果。
+
+GPU0=0 GPU1=1 \
+BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+bash scripts/run_v48_53_dcp_drfc_bcde_cse_two_gpu.sh
+
+# 如需主动强制 fresh 四臂（通常不需要）：
+# V4853_FORCE_FRESH_REFERENCE=1 GPU0=0 GPU1=1 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+#   bash scripts/run_v48_53_dcp_drfc_bcde_cse_two_gpu.sh
+
+# 默认新输出：
+# /home/senzeyu2/code/OC-RAP/runs/ocrap_v48_53_dcp_drfc_bcde_cse_ablation_C
+# /home/senzeyu2/code/OC-RAP/runs/ocrap_v48_53_dcp_drfc_bcde_cse_main
+# /home/senzeyu2/code/OC-RAP/runs/OC-RAP-v48.53-DCP-DRFC-BCDE-CSE-2x2-audit.json
+# /home/senzeyu2/code/OC-RAP/runs/OC-RAP-v48.53-runtime-telemetry-summary.json
+# /home/senzeyu2/code/OC-RAP/runs/OC-RAP-v48.53-runtime-telemetry.jsonl
+# /home/senzeyu2/code/OC-RAP/runs/OC-RAP-v48.53-AB-reference-reuse-contract.json
+#
+# 如果自动回退 fresh A/B，还会生成：
+# /home/senzeyu2/code/OC-RAP/runs/ocrap_v48_53_dcp_drfc_bcde_cse_ablation_A
+# /home/senzeyu2/code/OC-RAP/runs/ocrap_v48_53_dcp_drfc_bcde_cse_ablation_B
+#
+# 结果读取顺序：B-A（已知 teacher-only PSA） -> C-A（student-only physical） -> D-B-C+A（structural-equivalence interaction）。
+# 不要先只看 D/Main recall。
+# D/Main authoritative RC=20 时 Safe/test/closed-loop 必须继续 BLOCKED；只有 RC=0 才会自动执行 NEXT_COMMANDS.txt。

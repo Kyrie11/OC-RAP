@@ -283,6 +283,10 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_evidence_native_boundary_complete_advantage_preservation",
             model_cfg.get("direct_recovery_evidence_native_boundary_complete_advantage_preservation", False),
         )),
+        direct_recovery_evidence_physical_student_drs=bool(ckpt.get(
+            "direct_recovery_evidence_physical_student_drs",
+            model_cfg.get("direct_recovery_evidence_physical_student_drs", False),
+        )),
         direct_recovery_evidence_native_drs_tolerance=float(ckpt.get(
             "direct_recovery_evidence_native_drs_tolerance",
             model_cfg.get("direct_recovery_evidence_native_drs_tolerance", 0.05),
@@ -496,6 +500,9 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     )
     cfg["model"]["direct_recovery_evidence_native_boundary_complete_advantage_preservation"] = bool(
         model.direct_recovery_evidence_native_boundary_complete_advantage_preservation
+    )
+    cfg["model"]["direct_recovery_evidence_physical_student_drs"] = bool(
+        model.direct_recovery_evidence_physical_student_drs
     )
     cfg["model"]["direct_recovery_evidence_native_drs_tolerance"] = float(
         model.direct_recovery_evidence_native_drs_tolerance

@@ -685,7 +685,7 @@ for variant in balanced precision; do
     --expect-factorized-harm-interaction "${EVIDENCE_FACTORIZED_HARM_INTERACTION:-false}" --expect-partial-pool-harm-residual "${EVIDENCE_PARTIAL_POOL_HARM_RESIDUAL:-false}" --expect-partial-pool-harm-residual-scale "${EVIDENCE_PARTIAL_POOL_HARM_RESIDUAL_SCALE:-0.50}" --expect-rank-benefit-skip "${EVIDENCE_RANK_BENEFIT_SKIP:-false}" --expect-rank-benefit-gain-init "${EVIDENCE_RANK_BENEFIT_GAIN_INIT:-1.0}" --expect-postprefix-obs-transport-benefit "${EVIDENCE_POSTPREFIX_OBS_TRANSPORT_BENEFIT:-false}" --expect-postprefix-obs-transport-harm "${EVIDENCE_POSTPREFIX_OBS_TRANSPORT_HARM:-false}" --expect-postprefix-obs-transport-scale "${EVIDENCE_POSTPREFIX_OBS_TRANSPORT_SCALE:-1.0}" \
     --expect-roct-benefit "${EVIDENCE_ROCT_BENEFIT:-false}" --expect-roct-deployability "${EVIDENCE_ROCT_DEPLOYABILITY:-false}" --expect-roct-scale "${EVIDENCE_ROCT_SCALE:-1.0}" --expect-roct-alpha "${EVIDENCE_ROCT_ALPHA:-0.20}" --expect-roct-beta "${EVIDENCE_ROCT_BETA:-0.20}" --expect-roct-top-m "${EVIDENCE_ROCT_TOP_M:-8}" --expect-roct-option-temperature "${EVIDENCE_ROCT_OPTION_TEMPERATURE:-0.35}" \
     --expect-native-certificate-preservation "${EVIDENCE_NATIVE_CERTIFICATE_PRESERVATION:-false}" --expect-native-drs-tolerance "${EVIDENCE_NATIVE_DRS_TOLERANCE:-0.05}" --expect-native-deployability-tolerance "${EVIDENCE_NATIVE_DEPLOYABILITY_TOLERANCE:-0.05}" \
-    --expect-native-margin-complete-preservation "${EVIDENCE_NATIVE_MARGIN_COMPLETE_PRESERVATION:-false}" --expect-native-advantage-preservation "${EVIDENCE_NATIVE_ADVANTAGE_PRESERVATION:-false}" --expect-native-exact-advantage-preservation "${EVIDENCE_NATIVE_EXACT_ADVANTAGE_PRESERVATION:-false}" --expect-native-boundary-complete-advantage-preservation "${EVIDENCE_NATIVE_BOUNDARY_COMPLETE_ADVANTAGE_PRESERVATION:-false}" --expect-native-gap-tolerance "${EVIDENCE_NATIVE_GAP_TOLERANCE:-0.05}" --expect-native-positive-gain "${EVIDENCE_NATIVE_POSITIVE_GAIN:-${FACTOR_RECOVERY_ADVANTAGE_POSITIVE_GAIN:-0.015}}" \
+    --expect-native-margin-complete-preservation "${EVIDENCE_NATIVE_MARGIN_COMPLETE_PRESERVATION:-false}" --expect-native-advantage-preservation "${EVIDENCE_NATIVE_ADVANTAGE_PRESERVATION:-false}" --expect-native-exact-advantage-preservation "${EVIDENCE_NATIVE_EXACT_ADVANTAGE_PRESERVATION:-false}" --expect-native-boundary-complete-advantage-preservation "${EVIDENCE_NATIVE_BOUNDARY_COMPLETE_ADVANTAGE_PRESERVATION:-false}" --expect-native-physical-student-drs "${EVIDENCE_PHYSICAL_STUDENT_DRS:-false}" --expect-native-gap-tolerance "${EVIDENCE_NATIVE_GAP_TOLERANCE:-0.05}" --expect-native-positive-gain "${EVIDENCE_NATIVE_POSITIVE_GAIN:-${FACTOR_RECOVERY_ADVANTAGE_POSITIVE_GAIN:-0.015}}" \
     --expect-admission-head "$([[ "${V4838_RFR_RESERVE_ONLY:-0}" == 1 ]] && echo false || echo true)" \
     --expect-benefit-margin-temperature "${FACTOR_BENEFIT_MARGIN_TEMPERATURE:-0.025}" --expect-joint-reserve-temperature "${EVIDENCE_JOINT_RESERVE_TEMPERATURE:-0.025}" \
     --expect-component-prior-logit -2.0 --expect-component-count 5 --expect-component-scale "${EVIDENCE_COMPONENT_SCALE:-6.0}" \
@@ -754,6 +754,31 @@ if [[ "${V4852_REQUIRE_PSA_CONTRACT:-0}" == 1 ]]; then
     set -e
     if [[ "$psa_contract_rc" != 0 ]]; then
       write_pipeline_failure v48_52_psa_contract "$psa_contract_rc" "$OUTPUTDIR/candidates/$variant/V48_52_PSA_CONTRACT.json" "$s0" "$s1"
+      exit 30
+    fi
+  done
+fi
+
+# v48.53 fail-closed Certificate Structural Equivalence preflight.  Unlike
+# v48.52 teacher-only PSA, CSE can alter both the witness sign supervision and
+# the deployed/native hard DRS coordinate.  Verify both sides explicitly before
+# calibration so an asymmetric or stale checkpoint cannot be attributed as an
+# algorithm result.
+if [[ "${V4853_REQUIRE_CSE_CONTRACT:-0}" == 1 ]]; then
+  for variant in balanced precision; do
+    [[ "$variant" == balanced && "$s0" != 0 ]] && continue
+    [[ "$variant" == precision && "$s1" != 0 ]] && continue
+    set +e
+    python tools/check_v48_53_cse_contract.py \
+      --run "$OUTPUTDIR/candidates/$variant" \
+      --expect-teacher-physical "${V4852_PHYSICAL_TEACHER_SIGN_ALIGNMENT:-false}" \
+      --expect-student-physical "${V4853_PHYSICAL_STUDENT_SIGN_ALIGNMENT:-false}" \
+      --output "$OUTPUTDIR/candidates/$variant/V48_53_CSE_CONTRACT.json" \
+      >"$OUTPUTDIR/logs/v48_53_cse_contract_${variant}.log" 2>&1
+    cse_contract_rc=$?
+    set -e
+    if [[ "$cse_contract_rc" != 0 ]]; then
+      write_pipeline_failure v48_53_cse_contract "$cse_contract_rc" "$OUTPUTDIR/candidates/$variant/V48_53_CSE_CONTRACT.json" "$s0" "$s1"
       exit 30
     fi
   done

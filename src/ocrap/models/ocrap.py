@@ -352,6 +352,7 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_native_advantage_preservation: bool = False,
         direct_recovery_evidence_native_exact_advantage_preservation: bool = False,
         direct_recovery_evidence_native_boundary_complete_advantage_preservation: bool = False,
+        direct_recovery_evidence_physical_student_drs: bool = False,
         direct_recovery_evidence_native_drs_tolerance: float = 0.05,
         direct_recovery_evidence_native_deployability_tolerance: float = 0.05,
         direct_recovery_evidence_native_gap_tolerance: float = 0.05,
@@ -553,6 +554,15 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_evidence_native_boundary_complete_advantage_preservation = bool(
             direct_recovery_evidence_native_boundary_complete_advantage_preservation
         )
+        # v48.53 CSE: q chooses the observation-consistent recovery option,
+        # while the selected predicted physical margin owns root success.  This
+        # mirrors the teacher/evaluator certificate composition and is enabled
+        # only as an explicit experimental factor.
+        self.direct_recovery_evidence_physical_student_drs = bool(
+            direct_recovery_evidence_physical_student_drs
+        )
+        if self.direct_recovery_evidence_physical_student_drs and not self.direct_recovery_evidence_native_certificate_preservation:
+            raise ValueError("physical student DRS requires native certificate preservation")
         if self.direct_recovery_evidence_native_exact_advantage_preservation and not self.direct_recovery_evidence_native_advantage_preservation:
             raise ValueError("exact native advantage preservation requires native advantage preservation")
         if self.direct_recovery_evidence_native_boundary_complete_advantage_preservation and not self.direct_recovery_evidence_native_advantage_preservation:
@@ -1584,6 +1594,7 @@ class OCRAPModel(nn.Module):
         root_valid: torch.Tensor | None = None,
         option_valid: torch.Tensor | None = None,
         return_native_certificate: bool = False,
+        physical_student_drs: bool = False,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Return the frozen observation-consistent recovery compatibility signature.
 
@@ -1667,17 +1678,39 @@ class OCRAPModel(nn.Module):
         if rv is not None:
             shared_feasible = torch.where(rv, shared_feasible, torch.zeros_like(shared_feasible))
         shared_feasible_mass = (p * shared_feasible).sum(dim=-1).clamp(0.0, 1.0)
-        # NCP must preserve the same *hard* predicted DRS coordinate used by
-        # paper-facing observation-class evaluation, rather than reintroducing
-        # another smooth proxy at the certificate->selector interface.  q already
-        # contains the compatibility-weighted lower-tail option value for each
-        # post-prefix observation row; q_best>=0 therefore implements the exact
-        # predicted observation-consistent recovery-success indicator.
-        hard_shared_feasible = (q_best >= 0.0).to(dtype=p.dtype)
-        if rv is not None:
+        # v48.53 CSE tests whether the *student/deployment* certificate must
+        # share the same composition as the physical teacher: robust q selects
+        # the observation-consistent option, then the selected predicted margin
+        # (not q itself) owns the physical zero crossing.  The legacy q-hard
+        # coordinate is retained byte-for-byte when the factor is disabled.
+        if bool(physical_student_drs):
+            valid_q = torch.ones_like(q, dtype=torch.bool)
+            if rv is not None:
+                valid_q = valid_q & rv.unsqueeze(-1)
+            if ov is not None:
+                valid_q = valid_q & ov.unsqueeze(1)
+            valid_q = valid_q & torch.isfinite(q)
+            option_score = q.clamp(-5.0, 5.0) + 0.01 * ((q >= 0.0) & valid_q).to(dtype=q.dtype)
+            option_score = torch.where(valid_q, option_score, torch.full_like(option_score, -1.0e9))
+            opt = option_score.argmax(dim=-1)
+            selected_margin = torch.gather(margins.float(), 2, opt.unsqueeze(-1)).squeeze(-1)
+            selected_valid = torch.ones_like(selected_margin, dtype=torch.bool)
+            if rv is not None:
+                selected_valid = selected_valid & rv
+            if ov is not None:
+                selected_valid = selected_valid & torch.gather(
+                    ov.unsqueeze(1).expand(-1, K, -1), 2, opt.unsqueeze(-1)
+                ).squeeze(-1)
+            hard_shared_feasible = (selected_margin >= 0.0).to(dtype=p.dtype)
             hard_shared_feasible = torch.where(
-                rv, hard_shared_feasible, torch.zeros_like(hard_shared_feasible)
+                selected_valid, hard_shared_feasible, torch.zeros_like(hard_shared_feasible)
             )
+        else:
+            hard_shared_feasible = (q_best >= 0.0).to(dtype=p.dtype)
+            if rv is not None:
+                hard_shared_feasible = torch.where(
+                    rv, hard_shared_feasible, torch.zeros_like(hard_shared_feasible)
+                )
         native_drs = (p * hard_shared_feasible).sum(dim=-1).clamp(0.0, 1.0)
 
         dep_unit = (0.5 * (torch.tanh(r_dep) + 1.0)).clamp(0.0, 1.0)
@@ -1723,6 +1756,7 @@ class OCRAPModel(nn.Module):
                 self.direct_recovery_evidence_roct_option_temperature,
                 root_valid=root_valid, option_valid=option_valid,
                 return_native_certificate=True,
+                physical_student_drs=self.direct_recovery_evidence_physical_student_drs,
             )
             return (
                 signature.to(dtype=memory.dtype).detach(),

@@ -580,6 +580,60 @@ def decision_equivalent_frontier_calibration_loss(
 
 
 
+
+def _physical_student_observation_consistent_success_st(
+    pred_q: torch.Tensor,
+    pred_margins: torch.Tensor,
+    root_probs: torch.Tensor,
+    root_valid: torch.Tensor,
+    option_valid: torch.Tensor,
+    *,
+    gamma: float = 0.0,
+    temperature: float = 0.35,
+) -> torch.Tensor:
+    """Differentiable student analogue of the physical teacher DRS.
+
+    The executed observation-consistent option is selected by the student's
+    robust OC-MERO q row.  Root success is then evaluated on the student's
+    *physical margin* for that selected option, matching the teacher/evaluator
+    composition ``q selects -> margin sign certifies -> root mass aggregates``.
+
+    Forward values are hard at the physical margin zero boundary.  Backward
+    gradients use only a sigmoid STE on the selected margin; option selection
+    remains the exact hard q selection, so no new soft router is introduced.
+    """
+    if pred_q.ndim != 3 or pred_margins.ndim != 3:
+        return pred_q.reshape(pred_q.shape[0], -1).mean(dim=-1) * 0.0
+    q = torch.nan_to_num(pred_q.float(), nan=-1.0e9, posinf=5.0, neginf=-5.0)
+    m = torch.nan_to_num(pred_margins.float(), nan=-1.0e9, posinf=5.0, neginf=-5.0)
+    b, k, l = q.shape
+    if m.shape[:2] != (b, k):
+        raise ValueError(f"pred_margins shape {tuple(m.shape)} incompatible with pred_q {tuple(q.shape)}")
+    ll = min(l, m.shape[2])
+    q = q[:, :, :ll]
+    m = m[:, :, :ll]
+    l = ll
+    rv = root_valid.bool()[:, :k]
+    ov = option_valid.bool()[:, :l]
+    w = _root_weights(root_probs[:, :k], rv)
+    valid = rv.unsqueeze(-1) & ov.unsqueeze(1) & torch.isfinite(q)
+    score = q.clamp(-5.0, 5.0) + 0.01 * ((q >= float(gamma)) & valid).float()
+    score = torch.where(valid, score, torch.full_like(score, -1.0e9))
+    opt = score.argmax(dim=-1)
+    selected_margin = torch.gather(m, dim=2, index=opt.unsqueeze(-1)).squeeze(-1)
+    selected_valid = rv & torch.gather(
+        ov.unsqueeze(1).expand(-1, k, -1), 2, opt.unsqueeze(-1)
+    ).squeeze(-1)
+    tau = max(float(temperature), 1.0e-4)
+    # Physical success is a margin-zero event. ``gamma`` belongs to the q-side
+    # option-selection semantics only; moving the margin crossing with gamma
+    # would break structural equivalence with both the teacher and deployment.
+    soft = torch.sigmoid(selected_margin / tau)
+    hard = (selected_margin >= 0.0).to(dtype=soft.dtype)
+    success_st = hard.detach() + soft - soft.detach()
+    success_st = torch.where(selected_valid, success_st, torch.zeros_like(success_st))
+    return (w * success_st).sum(dim=-1).clamp(0.0, 1.0)
+
 def boundary_complete_frontier_calibration_loss(
     pred_r_dep: torch.Tensor,
     pred_gap: torch.Tensor,
@@ -607,6 +661,8 @@ def boundary_complete_frontier_calibration_loss(
     pcd_weight: float = 1.0,
     teacher_m_star: torch.Tensor | None = None,
     physical_teacher_sign_alignment: bool = False,
+    pred_margins: torch.Tensor | None = None,
+    physical_student_sign_alignment: bool = False,
     option_execution_semantics: str = "observation_class",
 ) -> torch.Tensor:
     """Boundary-complete calibration for one unified recovery certificate.
@@ -631,7 +687,13 @@ def boundary_complete_frontier_calibration_loss(
     With ``physical_teacher_sign_alignment=True`` (v48.52 PSA), only the
     *teacher sign* coordinate changes: q still selects the observation-consistent
     recovery action, while physical ``m_star >= 0`` determines root success.
-    The smooth q-based order channel is intentionally unchanged.
+
+    v48.53 adds the complementary student-side factor.  With
+    ``physical_student_sign_alignment=True``, the student hard DRS uses the same
+    composition: predicted q selects the legal option, the selected predicted
+    physical margin owns the zero crossing, and predicted root mass aggregates
+    success.  The smooth q-based order channel remains intentionally unchanged,
+    preserving the v48.51-supported local ordering mechanism.
     """
     if pred_q.ndim != 3 or teacher_q.ndim != 3:
         return pred_r_dep.sum() * 0.0
@@ -654,12 +716,28 @@ def boundary_complete_frontier_calibration_loss(
         pred_mask, pred_q_safe, pred_q_safe.new_full((), -20.0)
     ).amax(dim=-1)
     pred_soft_exist = torch.sigmoid((pred_q_best - float(gamma)) / tau)
-    pred_hard_exist = (pred_q_best >= float(gamma)).to(dtype=pred_soft_exist.dtype)
-    pred_exist_st = (
-        pred_hard_exist.detach() + pred_soft_exist - pred_soft_exist.detach()
-    )
-    pred_hard_drs = (pred_w * pred_exist_st).sum(dim=-1).clamp(0.0, 1.0)
     pred_smooth_drs = (pred_w * pred_soft_exist).sum(dim=-1).clamp(0.0, 1.0)
+    if bool(physical_student_sign_alignment):
+        if pred_margins is None:
+            raise ValueError(
+                "physical_student_sign_alignment=true requires pred_margins"
+            )
+        if str(option_execution_semantics).strip().lower() not in {
+            "observation_class", "observation_consistent", "ocmero"
+        }:
+            raise ValueError(
+                "physical_student_sign_alignment currently requires observation_class semantics"
+            )
+        pred_hard_drs = _physical_student_observation_consistent_success_st(
+            pred_q, pred_margins, pred_root_probs, root_valid, option_valid,
+            gamma=float(gamma), temperature=float(option_temperature),
+        )
+    else:
+        pred_hard_exist = (pred_q_best >= float(gamma)).to(dtype=pred_soft_exist.dtype)
+        pred_exist_st = (
+            pred_hard_exist.detach() + pred_soft_exist - pred_soft_exist.detach()
+        )
+        pred_hard_drs = (pred_w * pred_exist_st).sum(dim=-1).clamp(0.0, 1.0)
 
     teacher_q_safe = torch.nan_to_num(
         teacher_q.detach().float(), nan=-20.0, posinf=20.0, neginf=-20.0
@@ -670,13 +748,13 @@ def boundary_complete_frontier_calibration_loss(
     teacher_soft_exist = torch.sigmoid((teacher_q_best - float(gamma)) / tau)
     teacher_smooth_drs = (teacher_w * teacher_soft_exist).sum(dim=-1).clamp(0.0, 1.0)
 
-    # v48.52 PSA: the sign teacher must be semantically identical to the
-    # physical certificate consumed by calibration.  Teacher q selects the
-    # legal observation-consistent recovery option, but success is evaluated on
-    # the corresponding physical m_star margin.  The student coordinate remains
-    # the deployed hard q-boundary (with STE gradients), while the smooth q
-    # geometry remains the order/magnitude teacher.  This changes only the sign
-    # supervision target; it adds no head, threshold, regime input, or policy.
+    # v48.52/v48.53 sign teacher: teacher q selects the legal
+    # observation-consistent recovery option; when PSA is enabled, success is
+    # evaluated on the corresponding physical m_star margin.  v48.53 can also
+    # align the student hard certificate to the same q-select -> margin-sign ->
+    # root-mass composition above.  In either case, smooth q geometry remains
+    # the order/magnitude channel.  No new head, threshold, regime input, or
+    # policy router is introduced.
     if bool(physical_teacher_sign_alignment):
         if teacher_m_star is None:
             raise ValueError(

@@ -1684,6 +1684,8 @@ def _epoch(
                         pcd_weight=float(tcfg.get("recovery_frontier_pcd_weight", 1.0)),
                         teacher_m_star=batch["m_star"].float(),
                         physical_teacher_sign_alignment=bool(tcfg.get("recovery_frontier_physical_teacher_sign_alignment", False)),
+                        pred_margins=out["margins"],
+                        physical_student_sign_alignment=bool(tcfg.get("recovery_frontier_physical_student_sign_alignment", False)),
                         option_execution_semantics=str(tcfg.get("option_execution_semantics", "observation_class")),
                     )
                 elif bool(tcfg.get("recovery_frontier_decision_equivalent", False)):
@@ -1861,6 +1863,8 @@ def _epoch(
                     pcd_weight=float(tcfg.get("recovery_frontier_pcd_weight", 1.0)),
                     teacher_m_star=batch["m_star"].float(),
                     physical_teacher_sign_alignment=bool(tcfg.get("recovery_frontier_physical_teacher_sign_alignment", False)),
+                    pred_margins=out["margins"],
+                    physical_student_sign_alignment=bool(tcfg.get("recovery_frontier_physical_student_sign_alignment", False)),
                     option_execution_semantics=str(tcfg.get("option_execution_semantics", "observation_class")),
                 )
             elif bool(tcfg.get("recovery_frontier_decision_equivalent", False)):
@@ -2979,6 +2983,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_evidence_native_boundary_complete_advantage_preservation=bool(
             model_cfg.get("direct_recovery_evidence_native_boundary_complete_advantage_preservation", False)
         ),
+        direct_recovery_evidence_physical_student_drs=bool(
+            model_cfg.get("direct_recovery_evidence_physical_student_drs", False)
+        ),
         direct_recovery_evidence_native_drs_tolerance=float(
             model_cfg.get("direct_recovery_evidence_native_drs_tolerance", 0.05)
         ),
@@ -3425,6 +3432,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             ),
             "direct_recovery_evidence_native_boundary_complete_advantage_preservation": bool(
                 model_cfg.get("direct_recovery_evidence_native_boundary_complete_advantage_preservation", False)
+            ),
+            "direct_recovery_evidence_physical_student_drs": bool(
+                model_cfg.get("direct_recovery_evidence_physical_student_drs", False)
             ),
             "direct_recovery_evidence_native_drs_tolerance": float(
                 model_cfg.get("direct_recovery_evidence_native_drs_tolerance", 0.05)

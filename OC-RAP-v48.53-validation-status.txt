@@ -1,0 +1,59 @@
+OC-RAP v48.53 DCP-DRFC-BCDE-CSE — validation status
+Date: 2026-08-18
+
+Scope
+-----
+This is the v48.53 Certificate Structural Equivalence (CSE) implementation built on the uploaded v48.52 DCP-DRFC-BCDE-PSA source. It preserves the single regime-agnostic planning primitive. Safe / near-contact / contact are dataset/evaluation strata only; no regime-conditioned policy/router/threshold/budget/loss is introduced.
+
+Algorithm contract
+------------------
+PASS  v48.53 strict 2x2 factors are isolated:
+      A = q-proxy teacher + q-hard student/deployment
+      B = physical teacher + q-hard student/deployment (teacher-only PSA; known v48.52 negative arm)
+      C = q-proxy teacher + physical student/deployment
+      D = physical teacher + physical student/deployment (CSE Main)
+PASS  BC-FC=true and smooth NAP=true are frozen in all arms.
+PASS  BC-NAP=false, exact-only NAP=false, MC-NCP=false, old v48.50 DEFC=false in all arms.
+PASS  Student physical certificate forward composition is:
+      predicted q selects observation-consistent option -> selected predicted margin >= 0 -> predicted root mass aggregates DRS.
+PASS  Student physical margin zero crossing is exactly 0.0; backward STE is only through the selected predicted margin. q-side option selection remains hard.
+PASS  Smooth q-based order/magnitude channel is unchanged.
+PASS  No new head, network capacity, proposal top-k, tuned threshold, resampling, or regime input.
+PASS  v48.53 CSE witness/model/factor contracts fail closed on stale or asymmetric factor wiring.
+
+Regression tests with explicit exit 0
+-------------------------------------
+PASS  v48.47-v48.53 targeted algorithm regressions: 49 passed.
+PASS  model/training/engineering/stage-transfer group: 39 passed.
+PASS  OCAF/protocol-bootstrap/engineering/stage-isolation group: 43 passed, 1 skipped.
+PASS  terminal-state group: 6 passed.
+PASS  idempotent-terminal group: 6 passed.
+TOTAL explicit active/compatibility results: 143 passed, 1 skipped.
+PASS  final v48.53 focused rerun after final source edits: 5 passed.
+
+Notes on test invocation
+------------------------
+One intermediate test invocation used PYTHONPATH=src and could not import the repository-root tools package. Re-running with the repository-normal PYTHONPATH=src:. produced 39/39 passes. This was a test-command environment issue, not a code defect, and is not counted as a failed regression above.
+
+Static / shell validation
+-------------------------
+PASS  python -m compileall -q src tools tests
+PASS  143 shell/run-command files: bash -n, BAD=0
+PASS  root OC-RAP-v48.53-DCP-DRFC-BCDE-CSE-two-GPU-run-commands-ZH.txt syntax
+
+Synthetic fail-closed / attribution validation
+----------------------------------------------
+PASS  v48.53 2x2 comparator accepts a synthetic identity-matched A/B/C/D and reports attribution_contract.valid=true with no factor errors or identity mismatches.
+PASS  v48.52 A/B reference reuse checker accepts an identity-matched reference pair and rejects mismatched protocol/source/factor contracts.
+PASS  RC20 D/Main post-gate is blocked and does not execute NEXT_COMMANDS.txt.
+PASS  RC0 + complete symmetric CSE D/Main contract executes gate-generated NEXT_COMMANDS.txt.
+
+Runtime policy
+--------------
+PASS  v48.52 standard-calibration checkpoint/config-SHA prediction cache is retained.
+PASS  default v48.53 launcher validates/reuses v48.52 A/B and runs only new C/D when identity-safe; otherwise it falls back to fresh A/B -> C/D.
+NOT USED: AMP/TF32, cross-scene/group batching, candidate reordering, or other changes that could alter numerical/set semantics.
+
+Environment limitation
+----------------------
+The current sandbox does not contain the user's /data0/... datasets or A30 runtime, so no claim is made that real v48.53 end-to-end training/certification has been executed here. The real experiment must be run on the user's machine with the provided launcher.

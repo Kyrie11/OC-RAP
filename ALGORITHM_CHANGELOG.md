@@ -1,3 +1,116 @@
+## v48.53 — DCP-DRFC-BCDE-CSE / CERTIFICATE STRUCTURAL EQUIVALENCE (2026-08-18)
+
+**类别：由 v48.52 PSA authoritative A/B 负结果与代码结构审计共同触发的严格 2×2 falsification experiment。主线仍是一个 regime-agnostic planning primitive；Safe / near-contact / contact 只作为同一 normal→critical continuum 上的 dataset/evaluation strata。没有新增 regime identifier/router、regime-specific policy/threshold/budget/loss、proposal top-k、candidate family、learned admission head、重采样或网络容量。**
+
+### v48.52 的可靠归因：teacher-only PSA 明确 reject，但 BC-FC 的 hard-sign / smooth-order 原则未被推翻
+
+v48.52 A/B attribution contract valid，A 与 B protocol/source/gate identity 一致，均为 authoritative `RC=20`、`pipeline_valid=true`、certificate/Natural gate 实际执行、`test_roots_read=false`。历史 v48.51-B 因 protocol seal SHA mismatch 被正确拒绝复用，因此 A 是 fresh、byte/protocol-compatible 的 BC-FC + smooth-NAP reference；B-A 只隔离 teacher-side Physical Sign Alignment。
+
+Precision 关键结果：
+
+| regime | metric | A / q-proxy teacher | B / teacher PSA | B-A |
+|---|---|---:|---:|---:|
+| Near | certificate recall | **0.333** | 0.222 | -0.111 |
+| Near | harmful-selected UCB90 | **0.042** | 0.074 | +0.032 |
+| Near | candidate safe-positive AUC | **0.448** | 0.397 | -0.051 |
+| Near | development recall | **0.375** | 0.125 | -0.250 |
+| Near | development joint sign | **4/19** | 1/19 | -3/19 |
+| Contact | certificate recall | **0.050** | 0 | -0.050 |
+| Contact | harmful-selected UCB90 | **0.351** | 0.473 | +0.122 |
+| Contact | candidate safe-positive AUC | **0.632** | 0.540 | -0.093 |
+| Contact | development exact-positive | **7/37** | 0/37 | -7/37 |
+| Contact | development joint sign | 0/37 | 0/37 | 0 |
+
+PSA 因此不是 neutral experiment，而是**系统性负向**。Near/Contact 的 recall、ranking 与 physical/exact sign 都没有形成 Pareto improvement；Contact latent exact-positive geometry甚至从 7/37 清零。
+
+**STOP: teacher-only PSA.** 不再通过调 sign weight、temperature、margin anchor、PSA strength 或 threshold 尝试“救回”v48.52-B。
+
+但这个结果**不推翻 v48.51 的 BC-FC 结论**。A 本身就是 v48.51-B 的 fresh reference：Near recall 0.333 / harmful UCB 0.042，继续支持 hard/discontinuous coordinate负责 material sign、smooth q geometry负责 hard-equivalence class 内 local order/magnitude。v48.52 推翻的是更强命题：“只要把 teacher hard sign 改成 physical certificate，student/deployment 保持 q-hard realization 也会更好”。
+
+### v48.52 负结果揭示的新 dominant bottleneck：teacher–student certificate structural mismatch
+
+代码审计确认 v48.52-B 的两侧不是同一个事件：
+
+- **teacher PSA**：`teacher q -> 选择 observation-consistent option -> selected m_star >= 0 判 root physical success -> teacher root mass 聚合 DRS`；
+- **student/deployment**：`predicted q_best >= 0 -> predicted root mass 聚合 DRS`。
+
+`q` 是 observation-compatible lower-tail robust recovery value；`m_star(selected)` 是被选 action 在具体 root 上的 physical margin。它们拥有相关但不同的语义。v48.52 只物理化 teacher、没有物理化 student/deployment，相当于让 BCE 监督一个 student representation不能结构同构实现的 target，同时 smooth order channel仍继续优化 q-depth。这会在共享 `margin_head` 上产生 target/representation conflict，能够解释 PSA 同时伤害 Near 与 Contact。
+
+因此当前第一瓶颈**不是 final evidence centering**。v48.52 没有满足上一版预注册的“physical sign correctness先改善、final learned sign仍负”条件，不能进入 Boundary-Complete Evidence Centering。当前第一瓶颈改为：
+
+> **Certificate Structural Equivalence：teacher 与 student/deployment 的 hard certificate composition 必须先同构，才能讨论 learned evidence 是否仍有 centering error。**
+
+predicted-root reliability 仍可能是绝对性能共同瓶颈，但 v48.52 A/B 的 `root_logit_head` 冻结且 source checkpoint一致，所以它不能解释 PSA 的 B-A 负效应。历史 root-logit recalibration STOP 继续有效，禁止重开该路线。
+
+### v48.53 方法假设：Certificate Structural Equivalence (CSE)
+
+将 *Physical Boundary-Complete Decision Equivalence* 收敛为三个同一原则下的必要条件，而不是继续增加模块：
+
+1. **Observation consistency**：hidden future/root identity不能进入 recovery decision；
+2. **Boundary completeness**：hard certificate只负责 material sign，smooth q geometry负责 hard-equivalence class 内 local order/magnitude；
+3. **Certificate structural equivalence**：teacher、student训练坐标与 deployment hard certificate采用相同的组合结构。
+
+v48.53 新增的 student/deployment physical hard DRS 为：
+
+`predicted q -> 选择 observation-consistent option -> selected predicted margin >= 0 判 root physical success -> predicted root mass 聚合 DRS`。
+
+训练 forward 使用相同 hard zero crossing；backward只在**被 q 选中的 predicted margin**上使用 sigmoid straight-through gradient。q-side option selection保持 hard，不引入 soft router；smooth q-based DRS/PCD order channel保持 v48.51 byte-semantics不变。最终 native/deployment DRS coordinate 0 同样采用 q-selected predicted-margin physical success。没有新增 head、参数、threshold、regime输入或策略分支。
+
+物理 margin zero crossing固定为 0；q 的 `gamma` 只服务 option-selection boundary/tie semantics，不能平移 physical margin boundary。
+
+### v48.53 严格 2×2
+
+两个 causal factors：
+
+- **X = teacher physical sign alignment**（v48.52 PSA）；
+- **Y = student/deployment physical certificate alignment**（v48.53 新因素）。
+
+四臂：
+
+- **A:** X=0, Y=0 — q-proxy teacher + q-hard student/deployment（v48.52 A reference）；
+- **B:** X=1, Y=0 — teacher-only PSA（v48.52 B，已知负向）；
+- **C:** X=0, Y=1 — student/deployment-only physical certificate；
+- **D/Main:** X=1, Y=1 — teacher/student/deployment structurally equivalent physical certificate。
+
+所有 arm 固定 BC-FC=true、smooth NAP=true、BC-NAP=false、exact-only NAP=false、MC-NCP=false、old DEFC=false、ROCT/top-k/source/data/calibration/risk protocol不变；所有 arm `strategy_regime_conditioning=false`。
+
+读取顺序必须是：**B-A（已知） -> C-A -> D-B-C+A**。如果 B、C 单边都负但 D 有显著正 interaction，这将是最强的 CSE 机制证据；不能只看 D 最终 recall。
+
+### v48.53 runtime / reference design
+
+默认 fail-closed 检查并复用现有 v48.52 A/B：要求 current protocol seal、source checkpoint SHA、gate semantics、authoritative RC0/20、factor contract、Balanced/Precision witness contracts全部一致。通过后只新跑 C/D，分别占 GPU0/GPU1，每个 arm内部 Balanced/Precision串行；若任何 identity不一致则自动回退 fresh A/B -> C/D 两波。
+
+继续保留 v48.52 standard-calibration prediction cache；不启用 AMP/TF32、跨 scene/group 合批、candidate reorder等可能改变数值或集合语义的加速。
+
+### v48.53 预注册 go / stop
+
+优先看 component/native geometry，而不是先追 RC0：
+
+1. **Structural-equivalence evidence**：D 相对 B 必须恢复/改善 physical DRS geometry；Near 至少不能继续 PSA 型 collapse，重点看 DRS safe-positive false-veto、harmful false-safe、exact/native sign 与 candidate/proposal safe-positive AUC。
+2. **Near mechanism screen**：D Precision certificate recall期望恢复到 `>=0.25`，harmful-selected UCB90 `<=0.15`；development joint sign期望至少回到 A 的 `4/19` 量级。此处是机制 screen，不是最终论文 gate。
+3. **Contact mechanism screen**：首先要求 D 不再出现 v48.52-B 的 `0/37` exact-positive collapse；优先看 exact/native physical-positive fraction是否恢复到 A 的 `7/37` 量级、candidate/proposal ranking是否不再明显低于 A，以及 harmful UCB是否下降。certificate recall `>=0.05` 视为恢复 A 信号，`>=0.10` 才视为下一阶段明显进展。
+4. **若 D 改善 physical/native geometry，但 final opportunity/pred_adv 仍明显负偏**：这时才触发下一单轴 **Boundary-Complete Evidence Centering**，因为 teacher/student/deployment correctness 已被支持。
+5. **若 D 仍不能改善或强负 interaction**：STOP BC-FC/CSE/transport family；转入 DEP/GAP teacher normalization、teacher component correctness 与 predicted-root reliability的**诊断审计**。仍禁止重新训练 root logits；是否需要新的 root uncertainty representation必须另立机制假设，而不能把已拒绝的 root-logit recalibration换名字重做。
+6. **Safe**：继续只在 D/Main authoritative RC0 后执行 gate-generated scene-disjoint Safe paired non-inferiority + stress/closed-loop。RC20 不放宽 gate。
+
+### 新增 / 延续 stop signals
+
+- **teacher-only PSA：STOP**；不做 PSA strength/weight/temperature search。
+- **BC-NAP Main：STOP**；保持 smooth NAP。
+- **old hard-magnitude DEFC：STOP**；hard coordinate不回归 continuous magnitude。
+- **root-logit recalibration：STOP**；v48.45.6/46 已有负结果，v48.52 A/B也无法把其作为 causal解释。
+- **threshold relaxation / grid densification：STOP**；不能为 Safe 解锁而改 Natural gate标准。
+- 继续禁止：MC-NCP tolerance调节、exact-only NAP、top-k/candidate/macro扩张、aggressive oversampling、hardest-negative population distortion、generic pairwise/listwise stacking、learned admission residual、one-sided component penalty、unbounded factors、broad encoder fine-tuning、以及任何 regime-conditioned policy/router/threshold/budget。
+
+### v48.53 代码/工程合同
+
+- `boundary_complete_frontier_calibration_loss` 新增 student-side physical factor；缺 `pred_margins` 时 fail-closed。
+- student physical hard DRS 的 option selection与 teacher相同；physical zero crossing固定 `selected_margin>=0`；backward只对 selected margin用 STE。
+- `OCRAPModel` native certificate新增 `direct_recovery_evidence_physical_student_drs`；只有 coordinate 0 DRS 改为 physical composition，DEP、smooth boundary mass、gap-quality保持不变。
+- checkpoint/config/inference reconstruction、model contract、factor-cache identity、v48.47 nested witness stage、v48.53 stage contract全部接线新 flag。
+- 新增 v48.53 CSE witness checker、A/B reuse checker、2×2 comparator、two-GPU launcher与 RC0-only post-gate wrapper。
+- C/D final model与训练 witness的 student physical flag必须一致；任何 stale/asymmetric contract在 calibration前提升为 RC30，禁止归因为算法结果。
+
 ## v48.52 — DCP-DRFC-BCDE-PSA / PHYSICAL SIGN ALIGNMENT (2026-08-18)
 
 **类别：由 v48.51 authoritative 2×2 与代码语义审计共同触发的单轴 correctness experiment。主线继续是一个 regime-agnostic planning primitive；Safe / near-contact / contact 只作为 normal→critical continuum 上的数据/评测 strata。没有新增 regime identifier/router、regime-specific policy/threshold/loss/budget、proposal top-k、candidate family、learned admission head、重采样或模型容量。**
