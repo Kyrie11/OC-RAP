@@ -28,6 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--support-contract", type=Path, required=True)
     ap.add_argument("--expect-frontier", choices=("true", "false"), default="true")
+    ap.add_argument("--expect-value-regime-conditioning", choices=("true", "false", "any"), default="any")
     ap.add_argument("--expect-admission-bounded", choices=("true", "false"), default="false")
     ap.add_argument("--expect-context-source", choices=("relative", "tournament", "physical_relative", "physical_interaction"), default="physical_interaction")
     ap.add_argument("--expect-context-enabled", choices=("true", "false"), default="true")
@@ -68,6 +69,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--expect-native-deployability-tolerance", type=float, default=None)
     ap.add_argument("--expect-native-margin-complete-preservation", choices=("true", "false", "any"), default="any")
     ap.add_argument("--expect-native-advantage-preservation", choices=("true", "false", "any"), default="any")
+    ap.add_argument("--expect-native-exact-advantage-preservation", choices=("true", "false", "any"), default="any")
     ap.add_argument("--expect-native-gap-tolerance", type=float, default=None)
     ap.add_argument("--expect-native-positive-gain", type=float, default=None)
     ap.add_argument("--expect-consensus-prior-scale", type=float, default=0.50)
@@ -92,6 +94,7 @@ def main() -> int:
     model = bundle.model
     actual_reliability = tuple(float(x) for x in model.direct_recovery_evidence_component_reliability)
     actual = {
+        "direct_recovery_value_regime_conditioning": bool(model.direct_recovery_value_regime_conditioning),
         "direct_recovery_evidence_frontier": bool(model.direct_recovery_evidence_frontier),
         "direct_recovery_evidence_calibrator_context": bool(model.direct_recovery_evidence_calibrator_context),
         "direct_recovery_evidence_calibrator_context_source": str(model.direct_recovery_evidence_calibrator_context_source),
@@ -153,12 +156,17 @@ def main() -> int:
         "direct_recovery_evidence_native_deployability_tolerance": float(model.direct_recovery_evidence_native_deployability_tolerance),
         "direct_recovery_evidence_native_margin_complete_preservation": bool(model.direct_recovery_evidence_native_margin_complete_preservation),
         "direct_recovery_evidence_native_advantage_preservation": bool(model.direct_recovery_evidence_native_advantage_preservation),
+        "direct_recovery_evidence_native_exact_advantage_preservation": bool(model.direct_recovery_evidence_native_exact_advantage_preservation),
         "direct_recovery_evidence_native_gap_tolerance": float(model.direct_recovery_evidence_native_gap_tolerance),
         "direct_recovery_evidence_native_positive_gain": float(model.direct_recovery_evidence_native_positive_gain),
         "direct_recovery_evidence_consensus_prior_scale": float(model.direct_recovery_evidence_consensus_prior_scale),
         "interaction_bridge_present": model.direct_evidence_interaction_bridge is not None,
     }
     expected = {
+        "direct_recovery_value_regime_conditioning": (
+            None if args.expect_value_regime_conditioning == "any"
+            else args.expect_value_regime_conditioning == "true"
+        ),
         "direct_recovery_evidence_frontier": args.expect_frontier == "true",
         "direct_recovery_evidence_calibrator_context": args.expect_context_enabled == "true",
         "direct_recovery_evidence_calibrator_context_source": args.expect_context_source,
@@ -239,6 +247,10 @@ def main() -> int:
             None if args.expect_native_advantage_preservation == "any"
             else args.expect_native_advantage_preservation == "true"
         ),
+        "direct_recovery_evidence_native_exact_advantage_preservation": (
+            None if args.expect_native_exact_advantage_preservation == "any"
+            else args.expect_native_exact_advantage_preservation == "true"
+        ),
         "direct_recovery_evidence_native_gap_tolerance": args.expect_native_gap_tolerance,
         "direct_recovery_evidence_native_positive_gain": args.expect_native_positive_gain,
         "direct_recovery_evidence_consensus_prior_scale": float(args.expect_consensus_prior_scale),
@@ -272,7 +284,7 @@ def main() -> int:
         "actual": actual,
         "valid": not mismatches,
         "mismatches": mismatches,
-        "regime_routing": False,
+        "regime_routing": bool(actual["direct_recovery_value_regime_conditioning"]),
         "shared_deployment_rule_required": True,
         "noncompensatory_frontier_cap": args.expect_admission_prior_mode in {"frontier_capped_slack", "joint_reserve"},
         "deterministic_joint_reserve": args.expect_admission_prior_mode == "joint_reserve",

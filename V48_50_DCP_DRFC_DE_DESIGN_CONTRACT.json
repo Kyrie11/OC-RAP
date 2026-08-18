@@ -1,0 +1,108 @@
+{
+  "schema": "v48.50-dcp-drfc-de-design-contract-v1",
+  "version": "v48.50-DCP-DRFC-DE",
+  "paper_story": "Observation-Consistent, Decision-Sufficient Recoverability",
+  "algorithm_principle": "Decision-Equivalent Certificate Transport",
+  "regime_conditioning": {
+    "policy": false,
+    "router": false,
+    "threshold": false,
+    "risk_budget": false,
+    "loss": false,
+    "evaluation_strata_only": [
+      "safe",
+      "near_contact",
+      "contact"
+    ],
+    "model_contract_requires_direct_recovery_value_regime_conditioning_false": true
+  },
+  "fixed_base": {
+    "native_certificate_preservation": true,
+    "recovery_frontier_calibration": true,
+    "native_advantage_preservation": true,
+    "native_margin_complete_preservation": false,
+    "proposal_top_k": 5,
+    "source_run": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_45_source_rebuild_s7",
+    "shared_calibration_and_risk_protocol": true
+  },
+  "axes": {
+    "X_DEFC": {
+      "name": "Decision-Equivalent Frontier Calibration",
+      "new_learnable_head": false,
+      "predicted_coordinates": [
+        "hard_DRS_using_predicted_root_probabilities",
+        "sigmoid_R_dep",
+        "exp_neg_positive_gap",
+        "exact_PCD"
+      ],
+      "teacher_coordinates": [
+        "hard_DRS_using_teacher_root_probabilities",
+        "sigmoid_R_dep_teacher",
+        "exp_neg_positive_gap_teacher",
+        "exact_PCD_teacher"
+      ],
+      "hard_DRS_forward": "exact_indicator_q_best_ge_zero",
+      "hard_DRS_backward": "straight_through_sigmoid_surrogate"
+    },
+    "Y_ENAP": {
+      "name": "Exact Native Advantage Preservation",
+      "new_learnable_head": false,
+      "formula": "V_exact = DRS_hard * sigmoid(R_dep) * exp(-relu(gap))",
+      "benefit_margin": "V_exact(candidate)-V_exact(nominal)-0.015"
+    }
+  },
+  "arms": {
+    "A": {
+      "DEFC": false,
+      "E_NAP": false,
+      "meaning": "v48.49-C reference: old DRFC + smooth NAP"
+    },
+    "B": {
+      "DEFC": true,
+      "E_NAP": false,
+      "meaning": "upstream decision-equivalent calibration only"
+    },
+    "C": {
+      "DEFC": false,
+      "E_NAP": true,
+      "meaning": "downstream exact PCD transport only"
+    },
+    "D": {
+      "DEFC": true,
+      "E_NAP": true,
+      "meaning": "full DCP-DRFC-DE"
+    }
+  },
+  "preregistered_screen": {
+    "near_precision": {
+      "recall_min": 0.25,
+      "harmful_ucb90_max": 0.25,
+      "deployability_false_veto_max": "6/16",
+      "ranking_floor": "not below v48.49-C"
+    },
+    "contact_first_screen": {
+      "development_safe_positive_joint_sign_min": "6/37",
+      "certificate_recall_min": 0.1,
+      "harmful_ucb90_max": 0.25,
+      "deployability_false_veto_max": "14/31"
+    },
+    "safe": {
+      "require_standard_calibration_valid": true,
+      "paired_scene_disjoint_closed_loop_only_after_authoritative_rc0": true
+    }
+  },
+  "stop_rule": "If B/D still cannot move Contact positive sign, stop selector/OCAF/threshold/top-k search and audit teacher margin/constraint normalization, root-probability calibration, recovery-option coverage, and teacher PCD recomputation.",
+  "rejected_or_frozen_directions": [
+    "MC-NCP",
+    "POET",
+    "SOWR",
+    "DWOK",
+    "unbounded factors",
+    "learned admission residual",
+    "top-k/candidate expansion",
+    "aggressive positive oversampling",
+    "generic pair/listwise stacking",
+    "broad encoder fine-tuning",
+    "regime-conditioned router/policy/threshold/budget"
+  ]
+}

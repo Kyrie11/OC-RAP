@@ -1,0 +1,30 @@
+OC-RAP v48.50 DCP-DRFC-DE VALIDATION STATUS
+Date: 2026-08-17
+
+Algorithm-focused regression after final fixes:
+- v48.47 / v48.48 native-NCP / v48.49 DCP / v48.50 DE tests
+RESULT: 35 passed, 9 warnings.
+
+Terminal/stage-isolation regression:
+- v48.36 terminal state + idempotence + v48.45.6 stage isolation
+RESULT: 19 passed.
+
+Static checks:
+- python -m compileall -q src tools tests: PASS
+- bash -n over all 114 scripts/*.sh: PASS
+
+Fail-closed post-gate wrapper synthetic validation:
+- authoritative RC=20: non-zero exit; NEXT_COMMANDS.txt not executed.
+- authoritative RC=0 + valid D contract + generated NEXT_COMMANDS.txt: authorized and executed.
+RESULT: PASS.
+
+Engineering bugs found/fixed during v48.50 landing:
+1. Initial v48.50 arm OUTPUTDIR still targeted v48_49 names. Fixed to isolated v48_50 directories and regression-guarded.
+2. DEFC predicted validity initially could inherit teacher finite/NaN missingness. Fixed to deployment-available root/option validity on prediction side only.
+3. A text replacement temporarily broke legacy v48.47 teacher_mask scope. Fixed; v48.47 regression passes.
+4. Model contract now fail-closes direct_recovery_value_regime_conditioning=false.
+
+Known legacy debt / what is NOT claimed:
+- A broader legacy batch had 4 v48.31 failures/package expectations already failing or absent in the original v48.49 package: one brittle source-window assertion and three missing legacy v48.31 scripts.
+- This delivery does NOT claim a full historical test-suite pass.
+- No real GPU training/calibration was run here because the /data0 datasets and user A30 runtime are unavailable in this environment. Real v48.50 algorithm results require the provided two-GPU commands.

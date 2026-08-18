@@ -25,6 +25,7 @@ OPTION_SEMANTICS="${OPTION_EXECUTION_SEMANTICS:-observation_class}"
 export EVIDENCE_NATIVE_CERTIFICATE_PRESERVATION=false
 export EVIDENCE_NATIVE_MARGIN_COMPLETE_PRESERVATION=false
 export EVIDENCE_NATIVE_ADVANTAGE_PRESERVATION=false
+export EVIDENCE_NATIVE_EXACT_ADVANTAGE_PRESERVATION=false
 
 case "$STAGE" in
   decision_obs)
@@ -58,7 +59,7 @@ python tools/check_v48_45_sowr_source_architecture.py \
 python - "$RUN/V48_47_WITNESS_STAGE.json" "$STAGE" "$OPTION_SEMANTICS" "$prefixes" \
   "$TRAIN_MIX" "$VAL_MIX" "$GROUP_INDEX" "$dw_obs" "$epochs" "$loss_margin" "$loss_obs" "$loss_frontier" \
   "${V4847_OBS_CONFLICT_SCALE:-3.0}" "${V4847_OBS_CONFLICT_TEMPERATURE:-0.20}" "${V4847_OBS_MAX_WEIGHT:-4.0}" \
-  "${V4847_FRONTIER_SIGN_TEMPERATURE:-0.08}" "${V4847_FRONTIER_REGRESSION_WEIGHT:-1.0}" "${V4847_FRONTIER_SIGN_WEIGHT:-0.50}" <<'PY_STAGE'
+  "${V4847_FRONTIER_SIGN_TEMPERATURE:-0.08}" "${V4847_FRONTIER_REGRESSION_WEIGHT:-1.0}" "${V4847_FRONTIER_SIGN_WEIGHT:-0.50}" "${V4850_DECISION_EQUIVALENT_FRONTIER:-false}" "${V4850_FRONTIER_GAP_TOLERANCE:-0.05}" "${V4850_FRONTIER_POSITIVE_GAIN:-0.015}" "${V4850_FRONTIER_PCD_WEIGHT:-1.0}" <<'PY_STAGE'
 import hashlib,json,pathlib,sys,time
 p=pathlib.Path(sys.argv[1])
 stage,sem,prefixes=sys.argv[2:5]
@@ -75,7 +76,7 @@ d={
  # disabled while this witness checkpoint is being produced.
  'native_certificate_preservation':False,
  'native_margin_complete_preservation':False,
- 'native_advantage_preservation':False,
+ 'native_advantage_preservation':False,'native_exact_advantage_preservation':False,
  'strategy_regime_conditioning':False,'test_roots_read':False,
  'train_mix':train_mix,'val_mix':val_mix,'group_index':group_index,
  'group_index_sha256':hashlib.sha256(pathlib.Path(group_index).read_bytes()).hexdigest(),
@@ -83,6 +84,8 @@ d={
  'loss_recovery_frontier':float(sys.argv[12]),
  'obs_conflict_scale':float(sys.argv[13]),'obs_conflict_temperature':float(sys.argv[14]),'obs_max_weight':float(sys.argv[15]),
  'frontier_sign_temperature':float(sys.argv[16]),'frontier_regression_weight':float(sys.argv[17]),'frontier_sign_weight':float(sys.argv[18]),
+ 'decision_equivalent_frontier':sys.argv[19].lower()=='true','frontier_gap_tolerance':float(sys.argv[20]),
+ 'frontier_positive_gain':float(sys.argv[21]),'frontier_pcd_weight':float(sys.argv[22]),
  'created_unix':time.time(),
 }
 p.write_text(json.dumps(d,indent=2)+'\n',encoding='utf-8')
@@ -102,7 +105,7 @@ EVIDENCE_CALIBRATOR_ENABLED=false EVIDENCE_CALIBRATOR_CONTEXT_SOURCE=relative EV
 EVIDENCE_FACTORIZED_HARM_INTERACTION=false EVIDENCE_PARTIAL_POOL_HARM_RESIDUAL=false EVIDENCE_RANK_BENEFIT_SKIP=false \
 EVIDENCE_POSTPREFIX_OBS_TRANSPORT_BENEFIT=false EVIDENCE_POSTPREFIX_OBS_TRANSPORT_HARM=false \
 EVIDENCE_ROCT_BENEFIT=false EVIDENCE_ROCT_DEPLOYABILITY=false EVIDENCE_UNIFIED_EXPERTS=false EVIDENCE_COMPONENT_HEADS=false \
-EVIDENCE_NATIVE_CERTIFICATE_PRESERVATION=false EVIDENCE_NATIVE_MARGIN_COMPLETE_PRESERVATION=false EVIDENCE_NATIVE_ADVANTAGE_PRESERVATION=false \
+EVIDENCE_NATIVE_CERTIFICATE_PRESERVATION=false EVIDENCE_NATIVE_MARGIN_COMPLETE_PRESERVATION=false EVIDENCE_NATIVE_ADVANTAGE_PRESERVATION=false EVIDENCE_NATIVE_EXACT_ADVANTAGE_PRESERVATION=false \
 EVIDENCE_CONCORD=false EVIDENCE_ADMISSION_HEAD=false EVIDENCE_FRONTIER=false EVIDENCE_RESERVE_FACTOR_ALIGNMENT=false \
 EVIDENCE_ADMISSION_PRIOR_MODE=risk_centered EVIDENCE_JOINT_RESERVE_TEMPERATURE=0.025 EVIDENCE_COMPONENT_RELIABILITY= \
 DIRECT_ONLY_FAST_PATH=false WITNESS_FAST_PATH="$STAGE" FROZEN_MODULES_EVAL=true DIRECT_VALUE_WEIGHT=0 OPTION_EXECUTION_SEMANTICS=observation_class \
@@ -114,6 +117,10 @@ DECISION_WEIGHTED_OBS_MAX_WEIGHT="${V4847_OBS_MAX_WEIGHT:-4.0}" \
 RECOVERY_FRONTIER_OPTION_TEMPERATURE="${V4847_FRONTIER_OPTION_TEMPERATURE:-0.35}" \
 RECOVERY_FRONTIER_DEPLOYABILITY_TOLERANCE="${V4847_FRONTIER_DEP_TOLERANCE:-0.05}" \
 RECOVERY_FRONTIER_DRS_TOLERANCE="${V4847_FRONTIER_DRS_TOLERANCE:-0.05}" \
+RECOVERY_FRONTIER_GAP_TOLERANCE="${V4850_FRONTIER_GAP_TOLERANCE:-0.05}" \
+RECOVERY_FRONTIER_POSITIVE_GAIN="${V4850_FRONTIER_POSITIVE_GAIN:-0.015}" \
+RECOVERY_FRONTIER_PCD_WEIGHT="${V4850_FRONTIER_PCD_WEIGHT:-1.0}" \
+RECOVERY_FRONTIER_DECISION_EQUIVALENT="${V4850_DECISION_EQUIVALENT_FRONTIER:-false}" \
 RECOVERY_FRONTIER_SIGN_TEMPERATURE="${V4847_FRONTIER_SIGN_TEMPERATURE:-0.08}" \
 RECOVERY_FRONTIER_REGRESSION_WEIGHT="${V4847_FRONTIER_REGRESSION_WEIGHT:-1.0}" \
 RECOVERY_FRONTIER_SIGN_WEIGHT="${V4847_FRONTIER_SIGN_WEIGHT:-0.50}" \

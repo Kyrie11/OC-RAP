@@ -350,6 +350,7 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_native_certificate_preservation: bool = False,
         direct_recovery_evidence_native_margin_complete_preservation: bool = False,
         direct_recovery_evidence_native_advantage_preservation: bool = False,
+        direct_recovery_evidence_native_exact_advantage_preservation: bool = False,
         direct_recovery_evidence_native_drs_tolerance: float = 0.05,
         direct_recovery_evidence_native_deployability_tolerance: float = 0.05,
         direct_recovery_evidence_native_gap_tolerance: float = 0.05,
@@ -539,6 +540,13 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_evidence_native_advantage_preservation = bool(
             direct_recovery_evidence_native_advantage_preservation
         )
+        # v48.50: exact-coordinate NAP uses the hard predicted DRS that the
+        # teacher/evaluator use, rather than the v48.49 smooth boundary mass.
+        self.direct_recovery_evidence_native_exact_advantage_preservation = bool(
+            direct_recovery_evidence_native_exact_advantage_preservation
+        )
+        if self.direct_recovery_evidence_native_exact_advantage_preservation and not self.direct_recovery_evidence_native_advantage_preservation:
+            raise ValueError("exact native advantage preservation requires native advantage preservation")
         self.direct_recovery_evidence_native_drs_tolerance = float(
             max(0.0, direct_recovery_evidence_native_drs_tolerance)
         )
@@ -1875,10 +1883,11 @@ class OCRAPModel(nn.Module):
         """Return native signed recovery-advantage evidence for v48.49 DCP.
 
         The training/calibration benefit target is the candidate-minus-nominal
-        deployability-score advantage.  DCP computes the *predicted native* score
-        from the same three OC-MERO coordinates used by the certificate:
+        deployability-score advantage.  v48.49 used a boundary-smoothed DRS in
+        this product.  v48.50 can switch to the exact hard predicted DRS used by
+        the teacher/evaluator, making the forward value decision-equivalent:
 
-            V_native = boundary_DRS * sigmoid(R_dep) * exp(-max(gap, 0)).
+            V_native = DRS_hard * sigmoid(R_dep) * exp(-max(gap, 0)).
 
         The benefit factor is centred at the preregistered positive-gain boundary,
         so logit zero has an explicit cross-scene physical meaning.  This deletes
@@ -1894,7 +1903,12 @@ class OCRAPModel(nn.Module):
         native = native_certificate.to(dtype=torch.float32)
         if native.dim() != 2 or native.shape[-1] < 4:
             raise RuntimeError("native advantage preservation requires [batch, >=4] certificate")
-        native_value = (native[:, 2] * native[:, 1] * native[:, 3]).clamp(0.0, 1.0)
+        drs_coordinate = (
+            native[:, 0]
+            if self.direct_recovery_evidence_native_exact_advantage_preservation
+            else native[:, 2]
+        )
+        native_value = (drs_coordinate * native[:, 1] * native[:, 3]).clamp(0.0, 1.0)
         rel_adv = self._candidate_minus_nominal(
             native_value.unsqueeze(-1), group_index, is_nominal
         ).squeeze(-1)

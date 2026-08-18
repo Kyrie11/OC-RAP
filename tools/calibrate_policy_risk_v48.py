@@ -672,6 +672,11 @@ def main() -> int:
                 if pred.direct_recovery_component_margins is None
                 else [float(x) for x in np.asarray(pred.direct_recovery_component_margins).reshape(-1)]
             )
+            row["native_certificate"] = (
+                None
+                if pred.direct_recovery_native_certificate is None
+                else [float(x) for x in np.asarray(pred.direct_recovery_native_certificate).reshape(-1)]
+            )
             if args.risk_source in {"heads", "ordinal_evidence"} and (row["opp_logit"] is None or row["harm_logit"] is None):
                 raise ValueError("risk-source=heads/ordinal_evidence requires opportunity/harm outputs")
         if gi == 1 or gi % 200 == 0 or gi == len(raw):
@@ -734,12 +739,38 @@ def main() -> int:
                 tolerances=component_tolerances,
             )
             component_margin = float(np.max(component_terms))
+            native_pair_margins = None
+            native_exact_adv_margin = None
+            native_smooth_adv_margin = None
+            r_native = r.get("native_certificate")
+            n_native = nom.get("native_certificate")
+            if (
+                isinstance(r_native, list) and isinstance(n_native, list)
+                and len(r_native) >= 4 and len(n_native) >= 4
+            ):
+                # Diagnostic only: these coordinates never alter the calibrated rule.
+                # They make v48.50's exact-vs-smooth and upstream-calibration hypotheses
+                # directly falsifiable from development/certificate proposal rows.
+                native_pair_margins = [
+                    float(n_native[0] - r_native[0] - component_tolerances[0]),
+                    float(n_native[1] - r_native[1] - component_tolerances[1]),
+                    float(n_native[3] - r_native[3] - component_tolerances[2]),
+                ]
+                r_exact = float(r_native[0] * r_native[1] * r_native[3])
+                n_exact = float(n_native[0] * n_native[1] * n_native[3])
+                r_smooth = float(r_native[2] * r_native[1] * r_native[3])
+                n_smooth = float(n_native[2] * n_native[1] * n_native[3])
+                native_exact_adv_margin = float(r_exact - n_exact - args.positive_gain)
+                native_smooth_adv_margin = float(r_smooth - n_smooth - args.positive_gain)
             pairs.append({
                 "candidate": r["candidate"], "macro": r["macro"], "deviation": r["deviation"],
                 "pred_adv": pred_adv, "rank_adv": rank_adv, "delta_std": delta_std,
                 "opportunity": opportunity, "harm": harm, "head_harm": head_harm,
                 "predicted_component_harm": r.get("component_harm"),
                 "predicted_component_margins": r.get("component_margins"),
+                "predicted_native_pair_margins": native_pair_margins,
+                "native_exact_adv_margin": native_exact_adv_margin,
+                "native_smooth_adv_margin": native_smooth_adv_margin,
                 "teacher_adv": teacher_adv,
                 "teacher_component_veto_margin": component_margin,
                 "teacher_component_veto_terms": [float(x) for x in component_terms],

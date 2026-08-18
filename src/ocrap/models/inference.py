@@ -32,6 +32,8 @@ class Prediction:
     direct_recovery_delta_std: float | None = None
     direct_recovery_component_harm: np.ndarray | None = None
     direct_recovery_component_margins: np.ndarray | None = None
+    # v48.50 diagnostic-only native OC-MERO coordinates: [hard DRS, dep, smooth boundary DRS, gap quality].
+    direct_recovery_native_certificate: np.ndarray | None = None
 
 
 @dataclass
@@ -273,6 +275,10 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_evidence_native_advantage_preservation",
             model_cfg.get("direct_recovery_evidence_native_advantage_preservation", False),
         )),
+        direct_recovery_evidence_native_exact_advantage_preservation=bool(ckpt.get(
+            "direct_recovery_evidence_native_exact_advantage_preservation",
+            model_cfg.get("direct_recovery_evidence_native_exact_advantage_preservation", False),
+        )),
         direct_recovery_evidence_native_drs_tolerance=float(ckpt.get(
             "direct_recovery_evidence_native_drs_tolerance",
             model_cfg.get("direct_recovery_evidence_native_drs_tolerance", 0.05),
@@ -480,6 +486,9 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     )
     cfg["model"]["direct_recovery_evidence_native_advantage_preservation"] = bool(
         model.direct_recovery_evidence_native_advantage_preservation
+    )
+    cfg["model"]["direct_recovery_evidence_native_exact_advantage_preservation"] = bool(
+        model.direct_recovery_evidence_native_exact_advantage_preservation
     )
     cfg["model"]["direct_recovery_evidence_native_drs_tolerance"] = float(
         model.direct_recovery_evidence_native_drs_tolerance
@@ -790,6 +799,7 @@ def predict_samples(
     direct_delta_std_np = None
     direct_component_harm_np = None
     direct_component_margins_np = None
+    direct_native_certificate_np = None
     if "direct_recovery_value_logit" in out:
         direct_tensor = out["direct_recovery_value_logit"]
         if str(getattr(bundle.model, "direct_recovery_value_output", "probability")) != "score":
@@ -814,6 +824,10 @@ def predict_samples(
         if "direct_recovery_evidence_predicted_component_margins" in out:
             direct_component_margins_np = out[
                 "direct_recovery_evidence_predicted_component_margins"
+            ].detach().cpu().numpy().astype(np.float32)
+        if "direct_recovery_evidence_native_certificate" in out:
+            direct_native_certificate_np = out[
+                "direct_recovery_evidence_native_certificate"
             ].detach().cpu().numpy().astype(np.float32)
     preds: list[Prediction] = []
     for i in range(len(ds)):
@@ -840,6 +854,9 @@ def predict_samples(
                 ),
                 direct_recovery_component_margins=(
                     None if direct_component_margins_np is None else direct_component_margins_np[i].copy()
+                ),
+                direct_recovery_native_certificate=(
+                    None if direct_native_certificate_np is None else direct_native_certificate_np[i].copy()
                 ),
             )
         )
@@ -911,6 +928,12 @@ def predict_sample(d: dict[str, Any], bundle: ModelBundle | None, cfg: dict | No
             None
             if "direct_recovery_evidence_predicted_component_margins" not in out
             else out["direct_recovery_evidence_predicted_component_margins"]
+            .squeeze(0).detach().cpu().numpy().astype(np.float32)
+        ),
+        direct_recovery_native_certificate=(
+            None
+            if "direct_recovery_evidence_native_certificate" not in out
+            else out["direct_recovery_evidence_native_certificate"]
             .squeeze(0).detach().cpu().numpy().astype(np.float32)
         ),
     )

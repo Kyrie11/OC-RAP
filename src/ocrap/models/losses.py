@@ -420,6 +420,165 @@ def observation_consistent_frontier_calibration_loss(
     return float(regression_weight) * regression + float(sign_weight) * sign_loss
 
 
+def decision_equivalent_frontier_calibration_loss(
+    pred_r_dep: torch.Tensor,
+    pred_gap: torch.Tensor,
+    pred_q: torch.Tensor,
+    teacher_r_dep: torch.Tensor,
+    teacher_r_orc: torch.Tensor,
+    teacher_q: torch.Tensor,
+    pred_root_probs: torch.Tensor,
+    teacher_root_probs: torch.Tensor,
+    root_valid: torch.Tensor,
+    option_valid: torch.Tensor,
+    scene_hash: torch.Tensor,
+    time_index: torch.Tensor,
+    is_nominal: torch.Tensor,
+    *,
+    gamma: float = 0.0,
+    option_temperature: float = 0.35,
+    deployability_tolerance: float = 0.05,
+    drs_tolerance: float = 0.05,
+    gap_tolerance: float = 0.05,
+    positive_gain: float = 0.015,
+    sign_temperature: float = 0.08,
+    regression_weight: float = 1.0,
+    sign_weight: float = 0.50,
+    pcd_weight: float = 1.0,
+) -> torch.Tensor:
+    """Forward-exact, backward-smooth calibration of deployed OC-MERO coordinates.
+
+    v48.49 exposed a semantic gap: the deployment path uses a *hard* predicted DRS
+    and exact PCD ``DRS * sigmoid(R_dep) * exp(-gap)``, while the DRFC witness and
+    NAP transport used a smooth boundary mass.  Sharing a zero crossing is not
+    sufficient when the downstream decision depends on coordinate magnitude and
+    candidate-relative ordering.
+
+    This loss therefore makes the forward values decision-equivalent to deployment:
+
+    * predicted DRS uses the hard ``q_best >= gamma`` event and the model's own
+      predicted root probabilities (the same weights used at inference);
+    * deployability uses ``sigmoid(R_dep)``;
+    * gap uses ``exp(-max(gap, 0))``; and
+    * positive recovery value uses their exact multiplicative PCD.
+
+    Gradients through the hard DRS event use a straight-through sigmoid surrogate,
+    so no extra learned head, regime label, policy route, or threshold is introduced.
+    The objective is symmetric on both sides of every decision boundary and only
+    updates the existing recovery witness when used by the v48.50 witness stage.
+    """
+    if pred_q.ndim != 3 or teacher_q.ndim != 3:
+        return pred_r_dep.sum() * 0.0
+    b, k, _ = pred_q.shape
+    rv = root_valid.bool()
+    ov = option_valid.bool()
+    if rv.shape != (b, k):
+        raise ValueError("root_valid shape mismatch")
+    pred_mask = rv.unsqueeze(-1) & ov.unsqueeze(1)
+    teacher_mask = pred_mask & torch.isfinite(teacher_q)
+    if not bool(teacher_mask.any()):
+        return pred_r_dep.sum() * 0.0
+
+    pred_w = _root_weights(pred_root_probs, root_valid)
+    teacher_w = _root_weights(teacher_root_probs, root_valid).detach()
+    tau = max(float(option_temperature), 1.0e-4)
+    q_safe = torch.nan_to_num(pred_q.float(), nan=-20.0, posinf=20.0, neginf=-20.0)
+    # Deployment validity is determined by root/option masks, not by whether a
+    # teacher witness is finite. Teacher finiteness is used only on the target
+    # side; otherwise training would silently give the predicted certificate a
+    # teacher-dependent mask that inference never has.
+    q_masked = torch.where(pred_mask, q_safe, q_safe.new_full((), -20.0))
+    q_best = q_masked.amax(dim=-1)
+    soft_exist = torch.sigmoid((q_best - float(gamma)) / tau)
+    hard_exist = (q_best >= float(gamma)).to(dtype=soft_exist.dtype)
+    # Forward hard, backward smooth.  This is a decision-coordinate surrogate,
+    # not a replacement of the deployed coordinate.
+    exist_st = hard_exist.detach() + soft_exist - soft_exist.detach()
+    pred_drs = (pred_w * exist_st).sum(dim=-1).clamp(0.0, 1.0)
+
+    teacher_exist = (((teacher_q.detach() >= float(gamma)) & teacher_mask).any(dim=-1)).float()
+    teacher_drs = (teacher_w * teacher_exist).sum(dim=-1).clamp(0.0, 1.0)
+
+    pred_dep = torch.sigmoid(pred_r_dep.float().reshape(-1))
+    teacher_dep = torch.sigmoid(teacher_r_dep.detach().float().reshape(-1))
+    pred_gap_quality = torch.exp(-torch.relu(pred_gap.float().reshape(-1)).clamp(max=20.0))
+    teacher_gap = torch.relu(
+        teacher_r_orc.detach().float().reshape(-1)
+        - teacher_r_dep.detach().float().reshape(-1)
+    )
+    teacher_gap_quality = torch.exp(-teacher_gap.clamp(max=20.0))
+    pred_pcd = (pred_drs * pred_dep * pred_gap_quality).clamp(0.0, 1.0)
+    teacher_pcd = (teacher_drs * teacher_dep * teacher_gap_quality).clamp(0.0, 1.0).detach()
+
+    sh = scene_hash.reshape(-1)
+    ti = time_index.reshape(-1)
+    nominal = is_nominal.reshape(-1) > 0.5
+    finite = (
+        torch.isfinite(pred_drs) & torch.isfinite(teacher_drs)
+        & torch.isfinite(pred_dep) & torch.isfinite(teacher_dep)
+        & torch.isfinite(pred_gap_quality) & torch.isfinite(teacher_gap_quality)
+        & torch.isfinite(pred_pcd) & torch.isfinite(teacher_pcd)
+    )
+    if not bool(finite.any()):
+        return pred_r_dep.sum() * 0.0
+
+    pred_terms: list[torch.Tensor] = []
+    target_terms: list[torch.Tensor] = []
+    keys = torch.stack([sh, ti], dim=-1)
+    for key in torch.unique(keys[finite], dim=0):
+        idx = torch.where(finite & (sh == key[0]) & (ti == key[1]))[0]
+        noms = idx[nominal[idx]]
+        recs = idx[~nominal[idx]]
+        if noms.numel() != 1 or recs.numel() == 0:
+            continue
+        nom = noms[0]
+        pred_harm = torch.stack(
+            [
+                pred_drs[nom].expand_as(pred_drs[recs]) - pred_drs[recs] - float(drs_tolerance),
+                pred_dep[nom].expand_as(pred_dep[recs]) - pred_dep[recs] - float(deployability_tolerance),
+                pred_gap_quality[nom].expand_as(pred_gap_quality[recs]) - pred_gap_quality[recs] - float(gap_tolerance),
+            ],
+            dim=-1,
+        )
+        teacher_harm = torch.stack(
+            [
+                teacher_drs[nom].expand_as(teacher_drs[recs]) - teacher_drs[recs] - float(drs_tolerance),
+                teacher_dep[nom].expand_as(teacher_dep[recs]) - teacher_dep[recs] - float(deployability_tolerance),
+                teacher_gap_quality[nom].expand_as(teacher_gap_quality[recs]) - teacher_gap_quality[recs] - float(gap_tolerance),
+            ],
+            dim=-1,
+        )
+        pred_benefit = pred_pcd[recs] - pred_pcd[nom] - float(positive_gain)
+        teacher_benefit = teacher_pcd[recs] - teacher_pcd[nom] - float(positive_gain)
+        pred_terms.append(torch.cat([pred_harm, (float(pcd_weight) * pred_benefit).unsqueeze(-1)], dim=-1))
+        target_terms.append(torch.cat([teacher_harm, (float(pcd_weight) * teacher_benefit).unsqueeze(-1)], dim=-1))
+
+    if not pred_terms:
+        return pred_r_dep.sum() * 0.0
+    pred = torch.cat(pred_terms, dim=0)
+    target = torch.cat(target_terms, dim=0).detach()
+    regression = F.smooth_l1_loss(pred, target)
+
+    sign_tau = max(float(sign_temperature), 1.0e-4)
+    sign_losses: list[torch.Tensor] = []
+    for j in range(pred.shape[-1]):
+        tgt = (target[:, j] > 0.0).float()
+        logits = pred[:, j] / sign_tau
+        pos = tgt > 0.5
+        neg = ~pos
+        if bool(pos.any()) and bool(neg.any()):
+            weights = torch.where(
+                pos,
+                0.5 / pos.float().mean().clamp_min(1.0e-6),
+                0.5 / neg.float().mean().clamp_min(1.0e-6),
+            )
+            sign_losses.append(F.binary_cross_entropy_with_logits(logits, tgt, weight=weights))
+        else:
+            sign_losses.append(F.binary_cross_entropy_with_logits(logits, tgt))
+    sign_loss = torch.stack(sign_losses).mean()
+    return float(regression_weight) * regression + float(sign_weight) * sign_loss
+
+
 def observation_class_option_success_loss(
     pred_q: torch.Tensor,
     teacher_q: torch.Tensor,

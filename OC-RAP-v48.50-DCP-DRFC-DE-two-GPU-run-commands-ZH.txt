@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# OC-RAP v48.50 DCP-DRFC-DE — 两张 GPU authoritative 2x2
+# Safe / near_contact / contact 只作为数据与评测分层；没有 regime-conditioned policy/router/threshold/budget。
+set -Eeuo pipefail
+
+REPO=/home/senzeyu2/code/OC-RAP-v48.50-DCP-DRFC-DE
+BASE_OUT=/home/senzeyu2/code/OC-RAP/runs
+SOURCE_RUN=/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_45_source_rebuild_s7
+OCRAP_ROOT=/data0/senzeyu2/dataset/OCRAP
+GPU0=0
+GPU1=1
+
+cd "$REPO"
+export BASE_OUT SOURCE_RUN OCRAP_ROOT GPU0 GPU1
+export V4850_VARIANT_MODE=serial
+export SERIAL_VARIANTS_ON_ONE_GPU=1
+
+bash scripts/run_v48_50_dcp_de_2x2_two_gpu.sh
+
+AUDIT="$BASE_OUT/OC-RAP-v48.50-DCP-DRFC-DE-2x2-audit.json"
+MAIN="$BASE_OUT/ocrap_v48_50_dcp_de_main"
+
+echo "===== v48.50 2x2 audit ====="
+python - "$AUDIT" "$MAIN/AUTHORITATIVE_RUN_STATUS.json" <<'PY_STATUS'
+import json,sys
+au=json.load(open(sys.argv[1],encoding='utf-8'))
+st=json.load(open(sys.argv[2],encoding='utf-8'))
+print('attribution_valid =', (au.get('attribution_contract') or {}).get('valid'))
+print('D_authoritative_RC =', st.get('authoritative_exit_code'))
+print('D_pipeline_valid =', st.get('pipeline_valid'))
+print('D_status_valid =', st.get('valid'))
+PY_STATUS
+
+RC=$(python - "$MAIN/AUTHORITATIVE_RUN_STATUS.json" <<'PY_RC'
+import json,sys
+print(int(json.load(open(sys.argv[1],encoding='utf-8')).get('authoritative_exit_code',99)))
+PY_RC
+)
+if [[ "$RC" == "0" ]]; then
+  MAIN_RUN="$MAIN" bash scripts/run_v48_50_postgate_if_authorized.sh
+elif [[ "$RC" == "20" ]]; then
+  echo "BLOCKED: D/Main Natural gate failed (RC=20). Do not run authoritative test/closed-loop."
+else
+  echo "ENGINEERING FAILURE: D/Main authoritative RC=$RC; inspect logs before any algorithm interpretation." >&2
+  exit 1
+fi
+
+cd "$BASE_OUT"
+for name in \
+  ocrap_v48_50_dcp_de_ablation_A \
+  ocrap_v48_50_dcp_de_ablation_B \
+  ocrap_v48_50_dcp_de_ablation_C \
+  ocrap_v48_50_dcp_de_main; do
+  [[ -d "$name" ]] || continue
+  zip -qr "${name}.zip" "$name"
+done
+cp -f "$AUDIT" "$BASE_OUT/OC-RAP-v48.50-DCP-DRFC-DE-2x2-audit.upload.json"
+
+echo "Upload the four v48.50 run ZIPs + OC-RAP-v48.50-DCP-DRFC-DE-2x2-audit.upload.json for the next attribution round."
