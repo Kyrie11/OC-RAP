@@ -293,3 +293,14 @@ def test_decision_equivalent_predicted_mask_does_not_depend_on_teacher_finitenes
     loss_pos = decision_equivalent_frontier_calibration_loss(pred_q=q_pos, **common)
     loss_neg = decision_equivalent_frontier_calibration_loss(pred_q=q_neg, **common)
     assert not torch.allclose(loss_pos, loss_neg, atol=1e-7, rtol=0.0)
+
+def test_v4850_calibration_native_diagnostics_use_named_tolerances() -> None:
+    calibrator = (ROOT / "tools/calibrate_policy_risk_v48.py").read_text(encoding="utf-8")
+    # Regression for the real v48.50 four-arm RC30: ComponentVetoTolerances is
+    # a dataclass, not a tuple.  The diagnostic-only native pair margins must
+    # use the same named coordinates as component_veto_terms_numpy().
+    assert "component_tolerances[" not in calibrator
+    assert "component_tolerances.drs" in calibrator
+    assert "component_tolerances.deployability_gate" in calibrator
+    assert "component_tolerances.gap_discount" in calibrator
+

@@ -1,3 +1,57 @@
+## v48.50.1 — CALIBRATION NATIVE-DIAGNOSTIC ENGINEERING HOTFIX + INFERENCE-ONLY SPEEDUP (2026-08-18)
+
+**类别：纯工程修复与数值语义不变的推理开销优化。DCP-DRFC-DE 算法、v48.50 A/B/C/D 2×2 因素、模型参数、loss、dataset/split、proposal top-k、risk budget、threshold、calibration protocol、Natural gate、输出目录与双 GPU 执行指令均不变。**
+
+### 本次上传的 v48.50 A/B/C/D 全部禁止做算法归因
+
+四个 arm 都是 authoritative `RC=30`、`pipeline_valid=false`，统一停在 `certificate` stage；Balanced/Precision 的训练/适配路径已经返回 RC=0，但 near/contact development diagnostic 在 calibration 产物写出前异常退出，导致 `calibration/direct_value_risk_{near,contact}_v48.json` 缺失。A/B/C/D、Balanced/Precision、Near/Contact 的 traceback 完全同型，因此这不是 DEFC/E-NAP 的算法负结果。
+
+唯一一致异常为：
+
+```text
+TypeError: 'ComponentVetoTolerances' object is not subscriptable
+  tools/calibrate_policy_risk_v48.py:755-757
+```
+
+### 根因与修复
+
+`ComponentVetoTolerances` 是 frozen dataclass，字段为 `.drs / .deployability_gate / .gap_discount / ...`。v48.50 新增的 native-certificate diagnostic 却误写为 `component_tolerances[0/1/2]`。该段只做 candidate-vs-nominal native component margin 诊断，但它位于 calibration JSON 原子提交之前，所以 Python 异常被 fail-closed controller 正确提升为 RC30，并连带使四臂都看起来像 `ENGINEERING FAILURE`。
+
+修复为 named-field access：
+
+- hard DRS margin 使用 `component_tolerances.drs`；
+- deployability margin 使用 `component_tolerances.deployability_gate`；
+- gap-quality margin 使用 `component_tolerances.gap_discount`。
+
+新增 v48.50 regression，禁止 calibrator 再出现 `component_tolerances[...]`，并要求三个 named field 同时存在。修复不改变任何 certificate 数学定义或阈值。
+
+### 工程与逻辑审计结论
+
+- v48.50 factor contract 仍是严格 2×2：A=old DRFC+smooth NAP，B=+DEFC，C=+Exact NAP，D=DEFC+Exact NAP；MC-NCP 四臂均关闭。
+- D/Main model/factor contract 继续 fail-close `direct_recovery_value_regime_conditioning=false`、`strategy_regime_conditioning=false`、`test_roots_read=false`。Safe/Near/Contact 只作 dataset/evaluation strata。
+- calibration controller 的临时目录、必需 artifact 检查、shared-rule SHA、Balanced/Precision 子进程隔离与最终目录原子替换逻辑保持不变；unexpected RC 继续规范化为 RC30。
+- post-gate wrapper 重新做 synthetic contract：RC20 被拒绝且不执行 `NEXT_COMMANDS.txt`；RC0 + valid D factor contract 才授权执行。
+- 当前根执行指令仍写入原 v48.50 输出目录：`ocrap_v48_50_dcp_de_ablation_A/B/C` 与 `ocrap_v48_50_dcp_de_main`；没有改输出目录。
+- 搜索当前执行路径未发现第二种 traceback/failure signature；上传四臂的所有 Python traceback 都收敛到同一 dataclass 下标错误。
+
+### 数值语义不变的运行优化
+
+纯推理入口 `predict_samples` / `predict_sample` 从 `torch.no_grad()` 改为 `torch.inference_mode()`。模型、batch/group 组织、候选顺序、算子、dtype 和输出转换均不变；同一 synthetic candidate set 上与原版逐字段 bitwise identical，`r_dep/r_orc/gap/q/root_probs/c_star/margins/direct value/std` 最大绝对差均为 0。没有启用 TF32、AMP、跨 scene 合批、候选重排或其他可能改变结果的优化。A30 上具体吞吐提升需实机测量。
+
+### 修复后验证
+
+- v48.47--v48.50 algorithm-focused regression：`36 passed`（包含本次新 regression）。
+- inference hotpath 定向测试：`1 passed`；原版 vs `inference_mode` synthetic 输出 bitwise-equivalent。
+- `python -m compileall -q src tools tests`：PASS。
+- 仓库全部 `*.sh` 共 115 个：`bash -n` PASS；v48.50 根双 GPU 指令：`bash -n` PASS。
+- post-gate synthetic：RC20 blocked / RC0 authorized：PASS。
+- 先前已完成的 active terminal/stage-isolation suites 共 `93 passed, 1 skipped`；一次把更多 slow/historical tests 合并在当前容器执行时触及 120 s 工具上限，因此仍不声称 full historical pytest 全通过。历史缺失脚本/旧版本测试债务不在 v48.50 active path。
+- 当前环境没有用户 `/data0/...` datasets 与 A30，因此不能在此做真实训练/calibration end-to-end；真实结果必须删除旧四个结果目录后在目标机器重跑原 v48.50 双 GPU 指令。
+
+### 重跑与归因规则
+
+删除旧四个 v48.50 结果目录后，继续执行根目录 `OC-RAP-v48.50-DCP-DRFC-DE-two-GPU-run-commands-ZH.txt`。只有 arm authoritative RC∈{0,20}、`pipeline_valid=true`、certificate/gate executed 且 factor identity valid 时，才允许解释 `B-A`、`C-A`、`D-B-C+A`；不要从本轮 RC30 结果推导任何 DEFC/E-NAP 算法结论。
+
 ## v48.50 — DCP-DRFC-DE / DECISION-EQUIVALENT CERTIFICATE TRANSPORT (2026-08-17)
 
 **类别：由 v48.49 authoritative 2x2 直接触发的机制升级。模型仍为 DCP-DRFC；没有增加 learnable head、Safe/Near/Contact identifier、regime router、regime-specific threshold/loss/budget、proposal top-k、candidate family 或重采样。所有 arm 继续使用同一 observation-class policy/certificate。**

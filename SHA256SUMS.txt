@@ -1,5 +1,5 @@
-5007793062c2e99338cc0cb11b1b7353cc67d0f07595c7c51a026a8917387bd3  ./ALGORITHM_CHANGELOG.md
-b8ee82ac319165f458bb397553c37daae43e8aef34a7e93415ad96ba7c1a9ed3  ./ALGORITHM_CHANGELOG_V48.md
+09292042b7c0afd5ca8309ad4a2ac26199e0b05afa941d3b8b80459d4b013582  ./ALGORITHM_CHANGELOG.md
+9bcb2ea02fd729ba463b5e7da8b2fd925e125d7bbd45ff8c47c99839fdad776f  ./ALGORITHM_CHANGELOG_V48.md
 7418980991d25749468e371bb61afa7117cff3613da061116d02c7c5dda45357  ./OC-RAP-CCF-A-targets.csv
 56d95dd7e7531662641aec3f87c9d1df04112c4931d20473e3da53e7077006d9  ./OC-RAP-v48.42-results-and-v48.43-design-ZH.md
 82d4884200ae1f6eafa205edb4f25c700cd8a22f9074294013245781f5b31752  ./OC-RAP-v48.42-valid-2x2-audit.json
@@ -41,7 +41,8 @@ ba6031a3cc96979e1ede69e35628505a3e707b46679bb42f0894d279150e2df4  ./OC-RAP-v48.4
 42d4565be8a9b3ec63c0aeb51da160efbb8ae2c2fb96f636c9f722929cdf2d1e  ./OC-RAP-v48.49-results-and-v48.50-DCP-DRFC-DE-design-ZH.md
 cd5419f28fbf7eec36df709b5920c728f8d591e7c28b7045c62247ba21c6d7d7  ./OC-RAP-v48.49.1-validation-status.txt
 479d7a93b6fcd42e2e3e7504e5a69f5ac272aab8406c96aabdaf9635f0d8668b  ./OC-RAP-v48.50-DCP-DRFC-DE-two-GPU-run-commands-ZH.txt
-3318c2cbf3cd5d2b940d0ad3f7dc898da86f88a131772524afa5fd86ea32c0c0  ./OC-RAP-v48.50-validation-status.txt
+27de1a6d425a75232edcdb05681dd11b7e5abcae4165e50ee285be5294b897de  ./OC-RAP-v48.50-validation-status.txt
+3bd69c511238d95273e622cb92b52fad1c3bf6d442b6de33c1793aa65691f8ab  ./OC-RAP-v48.50.1-engineering-failure-root-cause-and-fix-ZH.md
 850c321081af9855be62ff952b95a0198e5817728611f9632be86c1b707969f6  ./OC-RAP-v50.3-run-commands-ZH.txt
 367caa323610dccbd391ae471e20fee2eaf5a7ca0ee1dfde66ee3bac668e7bb6  ./OC-RAP-v50.4-video-selection-fix-analysis-ZH.md
 98e5078a5c7e0dc0bc4df531312f0b1425c00d9945f6993b087cabce613f158e  ./OC-RAP-v50.4-video-selection-fix-manifest.json
@@ -56,6 +57,7 @@ cdc11a47034cacd16b44657057d5618c7fc361e882a498e3c43642c145d89d63  ./V48_45_5_ENG
 11e5483053022450e2f0cb010510808e41574f89123842abdd2d2ed4cf57bf4e  ./V48_48_NCP_DRFC_DELIVERY.json
 1f4bd749238a723c8541ab370af2aca7200b8391b5488c91fcbc9338344d781c  ./V48_49_1_ENGINEERING_HOTFIX.json
 9cd0411cd9a27ea172a75649abb3f591615af69225eaea2c29379b9c5c96030f  ./V48_49_1_UPLOADED_ENGINEERING_FAILURE_AUDIT.json
+7630103d0129f331df3e4d8f3c87617f89862342bcec64f00e62e82397ee37b4  ./V48_50_1_ENGINEERING_HOTFIX.json
 643202a0ff75eed8ab191b4bb20fe6a1a1666eb2cdf56ece60cf174be07b1b9d  ./V48_50_DCP_DRFC_DE_DESIGN_CONTRACT.json
 c34111404b22728a7918e6b42d39b19997a3b7e681aba67f92d675be2aac8ad4  ./configs/ablations/full_future_roots.yaml
 4a925ab5e9a1dbc0ec8ea5009301aa051a20b2000db2e1a5560b52f7dbea7d00  ./configs/ablations/no_occlusion_bev.yaml
@@ -297,7 +299,7 @@ db947c8638bd82970985168d1db647df5e488b660d73ec3760cf7f5373d01bc6  ./src/ocrap/me
 2a91ea30fe04b37501e9740b5523da9245378da9956472047023b1b50bcc2ae8  ./src/ocrap/models/__init__.py
 73151d4af4ec4e63cc83e4ebab147b6cf0e9d3b88bebcce84a82a3e3cddcf5cd  ./src/ocrap/models/data.py
 360b1fd32509f695145f585373031b4a36a5aba526c64385b052f15e154ee5b8  ./src/ocrap/models/encoders.py
-ffb94953217f61c9970217bcdc2b69e2b8bc07318eee5e03245bfdc483cf75fc  ./src/ocrap/models/inference.py
+9f876f3c08f177a4762a2ce1959f20b5bbdebf23ba4c22e5017b492c7fb35910  ./src/ocrap/models/inference.py
 58a02a0346ffcf9d553e5cc663669b6dd7de05102a271397ca2167d8cd99fa9b  ./src/ocrap/models/losses.py
 9c16f5958e2491731f883d80a29771189362fcfbc1e3188d0d5df079fcb3c157  ./src/ocrap/models/ocrap.py
 e93df6fe26906172dedecdef4f87ccc59d9ec9d75ba109203ef25804b2ab4faa  ./src/ocrap/observation.py
@@ -424,7 +426,7 @@ c7f58e6d4ba02b14b711df54a6dfd1600a27ff6cedc2667beb92928cf3c2f4c3  ./tests/test_v
 ef451d54987347ce0c9149b936620d50f8c876436363c805013708ca7a1b929c  ./tests/test_v48_48_native_certificate_preservation.py
 a6154f30e7353f046a7f4f4f1f630e6b1681adeab668facb9e1028b1887bfcc3  ./tests/test_v48_48_ncp.py
 d9ee0522c3e97bcfe88ce2256fc010218313ac0010b2d39c6f3247d6d2cca6ba  ./tests/test_v48_49_dcp.py
-bd7b2cce391d463dc10f18d64893e6f1be3a041322e9fca24ed4bf5ef2afefa9  ./tests/test_v48_50_decision_equivalent_dcp.py
+a82d8dce609aaae730c74ca5d5f65b17e01d8a6c03fb6f23360be94b98fe8e45  ./tests/test_v48_50_decision_equivalent_dcp.py
 6db7da5809552ea5ece586fec78f59ae7fd07f98313888b9b4aa02b971b370f9  ./tests/test_v48_5_ecpr.py
 5a802cb2171f2a281385eb04194f8710b4c160530fdadfe99241e41801990a35  ./tests/test_v48_6_rpgc.py
 14afe61a22eb44f259966fd1195e8342866bc2cdd141524a479b65631f8b0346  ./tests/test_v48_7_spire.py
@@ -462,7 +464,7 @@ acfe176131b0da4fee2d7c225834969f2163e4c0e4dfc814e40876ba4096c2f1  ./tools/calibr
 4775a985bcc8f9ba412818d77ba51a6ee6c0d4cc73b46f45491121180a999f68  ./tools/calibrate_direct_value_risk_v45.py
 9378ba85049e0fdfb8fd486782816ddc29589bb7d7c05ab4b75f4861a26b7b01  ./tools/calibrate_direct_value_risk_v46.py
 50f481a411cfeb2428dd1a53fc5a33aecc7b18935de907043e517a7fab3661cd  ./tools/calibrate_direct_value_risk_v47.py
-541bed97e1dd4611092693aae7d61cb64ed97566ce2ab249aa7878e25ad97296  ./tools/calibrate_policy_risk_v48.py
+37ab7c2b8ea0415e57f45493213a5473062c659a901f8cf4cf5383388455cc62  ./tools/calibrate_policy_risk_v48.py
 e318cf5330917571b1e2fdc5a499f11a030fe438c1afb676acdd995ae8170ee5  ./tools/calibrate_shared_continuous_rule_v48_35.py
 4a24f5c8589a1d0cd513d40da64b14bf5e7e40435c71d07a2be59f07e6bb2ede  ./tools/calibrate_shared_continuous_rule_v48_36.py
 171ddf93f0959a6916d291b5546ae393cfe0d09247e381dc9e8972da05dd3e7e  ./tools/cap_dataset_scene_time_groups.py

@@ -752,9 +752,13 @@ def main() -> int:
                 # They make v48.50's exact-vs-smooth and upstream-calibration hypotheses
                 # directly falsifiable from development/certificate proposal rows.
                 native_pair_margins = [
-                    float(n_native[0] - r_native[0] - component_tolerances[0]),
-                    float(n_native[1] - r_native[1] - component_tolerances[1]),
-                    float(n_native[3] - r_native[3] - component_tolerances[2]),
+                    float(n_native[0] - r_native[0] - component_tolerances.drs),
+                    float(
+                        n_native[1]
+                        - r_native[1]
+                        - component_tolerances.deployability_gate
+                    ),
+                    float(n_native[3] - r_native[3] - component_tolerances.gap_discount),
                 ]
                 r_exact = float(r_native[0] * r_native[1] * r_native[3])
                 n_exact = float(n_native[0] * n_native[1] * n_native[3])

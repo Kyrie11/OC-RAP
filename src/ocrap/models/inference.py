@@ -716,7 +716,7 @@ def teacher_prediction_from_sample(d: dict[str, Any], cfg: dict | None = None) -
     )
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def predict_samples(
     ds: list[dict[str, Any]],
     bundle: ModelBundle | None,
@@ -863,7 +863,7 @@ def predict_samples(
     return preds
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def predict_sample(d: dict[str, Any], bundle: ModelBundle | None, cfg: dict | None = None) -> Prediction:
     if bundle is None:
         return teacher_prediction_from_sample(d, cfg)
