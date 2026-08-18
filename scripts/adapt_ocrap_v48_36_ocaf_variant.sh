@@ -213,6 +213,7 @@ factor_cache_contract_args=(
   --setting "native_margin_complete_preservation=${EVIDENCE_NATIVE_MARGIN_COMPLETE_PRESERVATION:-false}"
   --setting "native_advantage_preservation=${EVIDENCE_NATIVE_ADVANTAGE_PRESERVATION:-false}"
   --setting "native_exact_advantage_preservation=${EVIDENCE_NATIVE_EXACT_ADVANTAGE_PRESERVATION:-false}"
+  --setting "native_boundary_complete_advantage_preservation=${EVIDENCE_NATIVE_BOUNDARY_COMPLETE_ADVANTAGE_PRESERVATION:-false}"
   --setting "native_gap_tolerance=${EVIDENCE_NATIVE_GAP_TOLERANCE:-0.05}"
   --setting "native_positive_gain=${EVIDENCE_NATIVE_POSITIVE_GAIN:-${FACTOR_RECOVERY_ADVANTAGE_POSITIVE_GAIN:-0.015}}"
   --setting "sowr_margin_witness=${V4845_SOWR_MARGIN_WITNESS:-0}"

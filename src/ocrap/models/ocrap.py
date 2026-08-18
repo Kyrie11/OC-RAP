@@ -351,6 +351,7 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_native_margin_complete_preservation: bool = False,
         direct_recovery_evidence_native_advantage_preservation: bool = False,
         direct_recovery_evidence_native_exact_advantage_preservation: bool = False,
+        direct_recovery_evidence_native_boundary_complete_advantage_preservation: bool = False,
         direct_recovery_evidence_native_drs_tolerance: float = 0.05,
         direct_recovery_evidence_native_deployability_tolerance: float = 0.05,
         direct_recovery_evidence_native_gap_tolerance: float = 0.05,
@@ -545,8 +546,19 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_evidence_native_exact_advantage_preservation = bool(
             direct_recovery_evidence_native_exact_advantage_preservation
         )
+        # v48.51 BC-NAP: the hard certificate owns material decision sign, while
+        # the boundary-resolved coordinate owns ordering inside the existing
+        # positive-gain equivalence band. This is parameter-free and uses the
+        # same global materiality boundary as calibration.
+        self.direct_recovery_evidence_native_boundary_complete_advantage_preservation = bool(
+            direct_recovery_evidence_native_boundary_complete_advantage_preservation
+        )
         if self.direct_recovery_evidence_native_exact_advantage_preservation and not self.direct_recovery_evidence_native_advantage_preservation:
             raise ValueError("exact native advantage preservation requires native advantage preservation")
+        if self.direct_recovery_evidence_native_boundary_complete_advantage_preservation and not self.direct_recovery_evidence_native_advantage_preservation:
+            raise ValueError("boundary-complete native advantage preservation requires native advantage preservation")
+        if self.direct_recovery_evidence_native_exact_advantage_preservation and self.direct_recovery_evidence_native_boundary_complete_advantage_preservation:
+            raise ValueError("exact and boundary-complete native advantage preservation are mutually exclusive")
         self.direct_recovery_evidence_native_drs_tolerance = float(
             max(0.0, direct_recovery_evidence_native_drs_tolerance)
         )
@@ -1883,16 +1895,15 @@ class OCRAPModel(nn.Module):
         """Return native signed recovery-advantage evidence for v48.49 DCP.
 
         The training/calibration benefit target is the candidate-minus-nominal
-        deployability-score advantage.  v48.49 used a boundary-smoothed DRS in
-        this product.  v48.50 can switch to the exact hard predicted DRS used by
-        the teacher/evaluator, making the forward value decision-equivalent:
+        deployability-score advantage. v48.49 used a boundary-smoothed DRS;
+        v48.50 tested a full exact hard-DRS replacement. v48.51 adds a
+        boundary-complete mode: exact hard PCD owns material sign outside the
+        existing positive-gain band, while smooth PCD resolves ordering inside
+        the hard certificate's equivalence region.
 
-            V_native = DRS_hard * sigmoid(R_dep) * exp(-max(gap, 0)).
-
-        The benefit factor is centred at the preregistered positive-gain boundary,
-        so logit zero has an explicit cross-scene physical meaning.  This deletes
-        the second learned proxy on the positive side of admission rather than
-        adding another head.
+        The benefit factor remains centred at the preregistered positive-gain
+        boundary, so logit zero has an explicit cross-scene physical meaning.
+        No learned proxy, regime route, or new threshold is introduced.
         """
         if not self.direct_recovery_evidence_native_advantage_preservation:
             return None, None, None
@@ -1903,15 +1914,43 @@ class OCRAPModel(nn.Module):
         native = native_certificate.to(dtype=torch.float32)
         if native.dim() != 2 or native.shape[-1] < 4:
             raise RuntimeError("native advantage preservation requires [batch, >=4] certificate")
-        drs_coordinate = (
-            native[:, 0]
-            if self.direct_recovery_evidence_native_exact_advantage_preservation
-            else native[:, 2]
-        )
-        native_value = (drs_coordinate * native[:, 1] * native[:, 3]).clamp(0.0, 1.0)
-        rel_adv = self._candidate_minus_nominal(
-            native_value.unsqueeze(-1), group_index, is_nominal
-        ).squeeze(-1)
+        exact_value = (native[:, 0] * native[:, 1] * native[:, 3]).clamp(0.0, 1.0)
+        smooth_value = (native[:, 2] * native[:, 1] * native[:, 3]).clamp(0.0, 1.0)
+        if self.direct_recovery_evidence_native_boundary_complete_advantage_preservation:
+            # Boundary-complete decision equivalence: outside the already
+            # preregistered materiality band, the deployed hard certificate is
+            # authoritative for sign. Inside that equivalence band the hard DRS
+            # is intentionally under-resolved, so retain v48.49's smooth local
+            # ordering rather than collapsing all ties. No new threshold is
+            # introduced: positive_gain is the same physical benefit boundary
+            # used by the Natural gate and the frontier loss.
+            exact_rel = self._candidate_minus_nominal(
+                exact_value.unsqueeze(-1), group_index, is_nominal
+            ).squeeze(-1)
+            smooth_rel = self._candidate_minus_nominal(
+                smooth_value.unsqueeze(-1), group_index, is_nominal
+            ).squeeze(-1)
+            gain = float(self.direct_recovery_evidence_native_positive_gain)
+            rel_adv = torch.where(
+                exact_rel >= gain,
+                torch.maximum(exact_rel, smooth_rel),
+                torch.where(
+                    exact_rel <= -gain,
+                    torch.minimum(exact_rel, smooth_rel),
+                    smooth_rel,
+                ),
+            )
+            # The returned per-row value is diagnostic only for BC-NAP because
+            # the effective transport is candidate-relative by construction.
+            # Keep the smooth physical PCD here so existing diagnostics remain
+            # comparable to v48.49-A; the authoritative decision quantity is
+            # direct_recovery_evidence_native_benefit_margin below.
+            native_value = smooth_value
+        else:
+            native_value = exact_value if self.direct_recovery_evidence_native_exact_advantage_preservation else smooth_value
+            rel_adv = self._candidate_minus_nominal(
+                native_value.unsqueeze(-1), group_index, is_nominal
+            ).squeeze(-1)
         benefit_margin = rel_adv - self.direct_recovery_evidence_native_positive_gain
         benefit_logit = benefit_margin / max(
             self.direct_recovery_evidence_benefit_margin_temperature, 1.0e-6
@@ -2810,6 +2849,11 @@ class OCRAPModel(nn.Module):
             unified_benefit_logit = native_benefit_logit
             out["direct_recovery_evidence_native_advantage_preserved"] = (
                 native_benefit_logit.new_ones(())
+            )
+            out["direct_recovery_evidence_native_boundary_complete_advantage_preserved"] = (
+                native_benefit_logit.new_tensor(
+                    1.0 if self.direct_recovery_evidence_native_boundary_complete_advantage_preservation else 0.0
+                )
             )
 
         if delta is not None:

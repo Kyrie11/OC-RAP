@@ -579,6 +579,218 @@ def decision_equivalent_frontier_calibration_loss(
     return float(regression_weight) * regression + float(sign_weight) * sign_loss
 
 
+
+def boundary_complete_frontier_calibration_loss(
+    pred_r_dep: torch.Tensor,
+    pred_gap: torch.Tensor,
+    pred_q: torch.Tensor,
+    teacher_r_dep: torch.Tensor,
+    teacher_r_orc: torch.Tensor,
+    teacher_q: torch.Tensor,
+    pred_root_probs: torch.Tensor,
+    teacher_root_probs: torch.Tensor,
+    root_valid: torch.Tensor,
+    option_valid: torch.Tensor,
+    scene_hash: torch.Tensor,
+    time_index: torch.Tensor,
+    is_nominal: torch.Tensor,
+    *,
+    gamma: float = 0.0,
+    option_temperature: float = 0.35,
+    deployability_tolerance: float = 0.05,
+    drs_tolerance: float = 0.05,
+    gap_tolerance: float = 0.05,
+    positive_gain: float = 0.015,
+    sign_temperature: float = 0.08,
+    regression_weight: float = 1.0,
+    sign_weight: float = 0.50,
+    pcd_weight: float = 1.0,
+) -> torch.Tensor:
+    """Boundary-complete calibration for one unified recovery certificate.
+
+    v48.50 showed two complementary failure modes: a fully smooth frontier
+    preserves local ranking but can miss the deployed material sign, whereas
+    regressing the discontinuous hard DRS magnitude improves some signs but can
+    destroy boundary-local ordering and veto true safe-positive recoveries.
+
+    BC-DE therefore assigns the two coordinates different jobs without adding a
+    head, regime input, selector, or tunable threshold:
+
+    * **sign channel**: hard deployed DRS (forward hard / backward smooth STE),
+      exact deployability, exact gap quality, and exact PCD supervise which side
+      of each physical decision boundary the candidate belongs to;
+    * **order channel**: boundary-resolved DRS and its smooth PCD supervise
+      continuous magnitudes/ranking inside the hard equivalence classes.
+
+    The existing ``positive_gain`` is reused as the global material-benefit
+    boundary; all regimes share exactly the same primitive and parameters.
+    """
+    if pred_q.ndim != 3 or teacher_q.ndim != 3:
+        return pred_r_dep.sum() * 0.0
+    b, k, _ = pred_q.shape
+    rv = root_valid.bool()
+    ov = option_valid.bool()
+    if rv.shape != (b, k):
+        raise ValueError("root_valid shape mismatch")
+    pred_mask = rv.unsqueeze(-1) & ov.unsqueeze(1)
+    teacher_mask = pred_mask & torch.isfinite(teacher_q)
+    if not bool(teacher_mask.any()):
+        return pred_r_dep.sum() * 0.0
+
+    pred_w = _root_weights(pred_root_probs, root_valid)
+    teacher_w = _root_weights(teacher_root_probs, root_valid).detach()
+    tau = max(float(option_temperature), 1.0e-4)
+
+    pred_q_safe = torch.nan_to_num(pred_q.float(), nan=-20.0, posinf=20.0, neginf=-20.0)
+    pred_q_best = torch.where(
+        pred_mask, pred_q_safe, pred_q_safe.new_full((), -20.0)
+    ).amax(dim=-1)
+    pred_soft_exist = torch.sigmoid((pred_q_best - float(gamma)) / tau)
+    pred_hard_exist = (pred_q_best >= float(gamma)).to(dtype=pred_soft_exist.dtype)
+    pred_exist_st = (
+        pred_hard_exist.detach() + pred_soft_exist - pred_soft_exist.detach()
+    )
+    pred_hard_drs = (pred_w * pred_exist_st).sum(dim=-1).clamp(0.0, 1.0)
+    pred_smooth_drs = (pred_w * pred_soft_exist).sum(dim=-1).clamp(0.0, 1.0)
+
+    teacher_q_safe = torch.nan_to_num(
+        teacher_q.detach().float(), nan=-20.0, posinf=20.0, neginf=-20.0
+    )
+    teacher_q_best = torch.where(
+        teacher_mask, teacher_q_safe, teacher_q_safe.new_full((), -20.0)
+    ).amax(dim=-1)
+    teacher_hard_exist = (teacher_q_best >= float(gamma)).float()
+    teacher_soft_exist = torch.sigmoid((teacher_q_best - float(gamma)) / tau)
+    teacher_hard_drs = (teacher_w * teacher_hard_exist).sum(dim=-1).clamp(0.0, 1.0)
+    teacher_smooth_drs = (teacher_w * teacher_soft_exist).sum(dim=-1).clamp(0.0, 1.0)
+
+    pred_dep = torch.sigmoid(pred_r_dep.float().reshape(-1))
+    teacher_dep = torch.sigmoid(teacher_r_dep.detach().float().reshape(-1))
+    pred_gap_quality = torch.exp(-torch.relu(pred_gap.float().reshape(-1)).clamp(max=20.0))
+    teacher_gap = torch.relu(
+        teacher_r_orc.detach().float().reshape(-1)
+        - teacher_r_dep.detach().float().reshape(-1)
+    )
+    teacher_gap_quality = torch.exp(-teacher_gap.clamp(max=20.0))
+
+    pred_exact_pcd = (pred_hard_drs * pred_dep * pred_gap_quality).clamp(0.0, 1.0)
+    teacher_exact_pcd = (
+        teacher_hard_drs * teacher_dep * teacher_gap_quality
+    ).clamp(0.0, 1.0).detach()
+    pred_smooth_pcd = (pred_smooth_drs * pred_dep * pred_gap_quality).clamp(0.0, 1.0)
+    teacher_smooth_pcd = (
+        teacher_smooth_drs * teacher_dep * teacher_gap_quality
+    ).clamp(0.0, 1.0).detach()
+
+    sh = scene_hash.reshape(-1)
+    ti = time_index.reshape(-1)
+    nominal = is_nominal.reshape(-1) > 0.5
+    finite = (
+        torch.isfinite(pred_hard_drs) & torch.isfinite(teacher_hard_drs)
+        & torch.isfinite(pred_smooth_drs) & torch.isfinite(teacher_smooth_drs)
+        & torch.isfinite(pred_dep) & torch.isfinite(teacher_dep)
+        & torch.isfinite(pred_gap_quality) & torch.isfinite(teacher_gap_quality)
+        & torch.isfinite(pred_exact_pcd) & torch.isfinite(teacher_exact_pcd)
+        & torch.isfinite(pred_smooth_pcd) & torch.isfinite(teacher_smooth_pcd)
+    )
+    if not bool(finite.any()):
+        return pred_r_dep.sum() * 0.0
+
+    pred_order_terms: list[torch.Tensor] = []
+    target_order_terms: list[torch.Tensor] = []
+    pred_sign_terms: list[torch.Tensor] = []
+    target_sign_terms: list[torch.Tensor] = []
+    keys = torch.stack([sh, ti], dim=-1)
+    for key in torch.unique(keys[finite], dim=0):
+        idx = torch.where(finite & (sh == key[0]) & (ti == key[1]))[0]
+        noms = idx[nominal[idx]]
+        recs = idx[~nominal[idx]]
+        if noms.numel() != 1 or recs.numel() == 0:
+            continue
+        nom = noms[0]
+
+        # Continuous/order channel: only the DRS/PCD coordinates use the smooth
+        # boundary resolution. DEP and gap are already continuous exact physical
+        # coordinates and therefore appear unchanged in both channels.
+        pred_order_harm = torch.stack(
+            [
+                pred_smooth_drs[nom].expand_as(pred_smooth_drs[recs]) - pred_smooth_drs[recs] - float(drs_tolerance),
+                pred_dep[nom].expand_as(pred_dep[recs]) - pred_dep[recs] - float(deployability_tolerance),
+                pred_gap_quality[nom].expand_as(pred_gap_quality[recs]) - pred_gap_quality[recs] - float(gap_tolerance),
+            ],
+            dim=-1,
+        )
+        teacher_order_harm = torch.stack(
+            [
+                teacher_smooth_drs[nom].expand_as(teacher_smooth_drs[recs]) - teacher_smooth_drs[recs] - float(drs_tolerance),
+                teacher_dep[nom].expand_as(teacher_dep[recs]) - teacher_dep[recs] - float(deployability_tolerance),
+                teacher_gap_quality[nom].expand_as(teacher_gap_quality[recs]) - teacher_gap_quality[recs] - float(gap_tolerance),
+            ],
+            dim=-1,
+        )
+        pred_order_benefit = pred_smooth_pcd[recs] - pred_smooth_pcd[nom] - float(positive_gain)
+        teacher_order_benefit = teacher_smooth_pcd[recs] - teacher_smooth_pcd[nom] - float(positive_gain)
+        pred_order_terms.append(
+            torch.cat([pred_order_harm, (float(pcd_weight) * pred_order_benefit).unsqueeze(-1)], dim=-1)
+        )
+        target_order_terms.append(
+            torch.cat([teacher_order_harm, (float(pcd_weight) * teacher_order_benefit).unsqueeze(-1)], dim=-1)
+        )
+
+        # Decision/sign channel: exact deployed hard DRS and exact PCD own the
+        # zero crossing. This channel is never used for magnitude regression.
+        pred_sign_harm = torch.stack(
+            [
+                pred_hard_drs[nom].expand_as(pred_hard_drs[recs]) - pred_hard_drs[recs] - float(drs_tolerance),
+                pred_dep[nom].expand_as(pred_dep[recs]) - pred_dep[recs] - float(deployability_tolerance),
+                pred_gap_quality[nom].expand_as(pred_gap_quality[recs]) - pred_gap_quality[recs] - float(gap_tolerance),
+            ],
+            dim=-1,
+        )
+        teacher_sign_harm = torch.stack(
+            [
+                teacher_hard_drs[nom].expand_as(teacher_hard_drs[recs]) - teacher_hard_drs[recs] - float(drs_tolerance),
+                teacher_dep[nom].expand_as(teacher_dep[recs]) - teacher_dep[recs] - float(deployability_tolerance),
+                teacher_gap_quality[nom].expand_as(teacher_gap_quality[recs]) - teacher_gap_quality[recs] - float(gap_tolerance),
+            ],
+            dim=-1,
+        )
+        pred_sign_benefit = pred_exact_pcd[recs] - pred_exact_pcd[nom] - float(positive_gain)
+        teacher_sign_benefit = teacher_exact_pcd[recs] - teacher_exact_pcd[nom] - float(positive_gain)
+        pred_sign_terms.append(
+            torch.cat([pred_sign_harm, (float(pcd_weight) * pred_sign_benefit).unsqueeze(-1)], dim=-1)
+        )
+        target_sign_terms.append(
+            torch.cat([teacher_sign_harm, (float(pcd_weight) * teacher_sign_benefit).unsqueeze(-1)], dim=-1)
+        )
+
+    if not pred_order_terms:
+        return pred_r_dep.sum() * 0.0
+    pred_order = torch.cat(pred_order_terms, dim=0)
+    target_order = torch.cat(target_order_terms, dim=0).detach()
+    pred_sign = torch.cat(pred_sign_terms, dim=0)
+    target_sign = torch.cat(target_sign_terms, dim=0).detach()
+    regression = F.smooth_l1_loss(pred_order, target_order)
+
+    sign_tau = max(float(sign_temperature), 1.0e-4)
+    sign_losses: list[torch.Tensor] = []
+    for j in range(pred_sign.shape[-1]):
+        tgt = (target_sign[:, j] > 0.0).float()
+        logits = pred_sign[:, j] / sign_tau
+        pos = tgt > 0.5
+        neg = ~pos
+        if bool(pos.any()) and bool(neg.any()):
+            weights = torch.where(
+                pos,
+                0.5 / pos.float().mean().clamp_min(1.0e-6),
+                0.5 / neg.float().mean().clamp_min(1.0e-6),
+            )
+            sign_losses.append(F.binary_cross_entropy_with_logits(logits, tgt, weight=weights))
+        else:
+            sign_losses.append(F.binary_cross_entropy_with_logits(logits, tgt))
+    sign_loss = torch.stack(sign_losses).mean()
+    return float(regression_weight) * regression + float(sign_weight) * sign_loss
+
 def observation_class_option_success_loss(
     pred_q: torch.Tensor,
     teacher_q: torch.Tensor,

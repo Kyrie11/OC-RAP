@@ -26,6 +26,7 @@ from ocrap.models.losses import (
     recovery_conflict_pair_weights,
     observation_consistent_frontier_calibration_loss,
     decision_equivalent_frontier_calibration_loss,
+    boundary_complete_frontier_calibration_loss,
     deployability_classification_loss,
     shared_option_admission_loss,
     shared_option_q_regression_loss,
@@ -1666,7 +1667,23 @@ def _epoch(
                         use_obs_kernel=not bool((cfg.get("ablation", {}) or {}).get("without_observation_kernel", False)),
                         top_m=int(ocfg.get("top_m", 8)),
                     )
-                if bool(tcfg.get("recovery_frontier_decision_equivalent", False)):
+                if bool(tcfg.get("recovery_frontier_boundary_complete", False)):
+                    loss_recovery_frontier = boundary_complete_frontier_calibration_loss(
+                        r_dep, _gap, pred_q, batch["r_dep_star"].float(), batch["r_orc_star"].float(), teacher_q,
+                        root_p, batch["root_probs"].float(), batch["root_valid"], batch["option_valid"],
+                        batch["scene_hash"], batch["time_index"], batch["is_nominal"].float(),
+                        gamma=option_gamma,
+                        option_temperature=float(tcfg.get("recovery_frontier_option_temperature", tcfg.get("option_success_temperature", 0.35))),
+                        deployability_tolerance=float(tcfg.get("recovery_frontier_deployability_tolerance", 0.05)),
+                        drs_tolerance=float(tcfg.get("recovery_frontier_drs_tolerance", 0.05)),
+                        gap_tolerance=float(tcfg.get("recovery_frontier_gap_tolerance", 0.05)),
+                        positive_gain=float(tcfg.get("recovery_frontier_positive_gain", 0.015)),
+                        sign_temperature=float(tcfg.get("recovery_frontier_sign_temperature", 0.08)),
+                        regression_weight=float(tcfg.get("recovery_frontier_regression_weight", 1.0)),
+                        sign_weight=float(tcfg.get("recovery_frontier_sign_weight", 0.50)),
+                        pcd_weight=float(tcfg.get("recovery_frontier_pcd_weight", 1.0)),
+                    )
+                elif bool(tcfg.get("recovery_frontier_decision_equivalent", False)):
                     loss_recovery_frontier = decision_equivalent_frontier_calibration_loss(
                         r_dep, _gap, pred_q, batch["r_dep_star"].float(), batch["r_orc_star"].float(), teacher_q,
                         root_p, batch["root_probs"].float(), batch["root_valid"], batch["option_valid"],
@@ -1824,7 +1841,23 @@ def _epoch(
             gamma=option_gamma, temperature=option_temperature,
         )
         if float(lw.get("recovery_frontier", 0.0)) > 0.0:
-            if bool(tcfg.get("recovery_frontier_decision_equivalent", False)):
+            if bool(tcfg.get("recovery_frontier_boundary_complete", False)):
+                loss_recovery_frontier = boundary_complete_frontier_calibration_loss(
+                    r_dep, gap, pred_q, batch["r_dep_star"].float(), batch["r_orc_star"].float(), teacher_q,
+                    root_p, batch["root_probs"].float(), batch["root_valid"], batch["option_valid"],
+                    batch["scene_hash"], batch["time_index"], batch["is_nominal"].float(),
+                    gamma=option_gamma,
+                    option_temperature=float(tcfg.get("recovery_frontier_option_temperature", option_temperature)),
+                    deployability_tolerance=float(tcfg.get("recovery_frontier_deployability_tolerance", 0.05)),
+                    drs_tolerance=float(tcfg.get("recovery_frontier_drs_tolerance", 0.05)),
+                    gap_tolerance=float(tcfg.get("recovery_frontier_gap_tolerance", 0.05)),
+                    positive_gain=float(tcfg.get("recovery_frontier_positive_gain", 0.015)),
+                    sign_temperature=float(tcfg.get("recovery_frontier_sign_temperature", 0.08)),
+                    regression_weight=float(tcfg.get("recovery_frontier_regression_weight", 1.0)),
+                    sign_weight=float(tcfg.get("recovery_frontier_sign_weight", 0.50)),
+                    pcd_weight=float(tcfg.get("recovery_frontier_pcd_weight", 1.0)),
+                )
+            elif bool(tcfg.get("recovery_frontier_decision_equivalent", False)):
                 loss_recovery_frontier = decision_equivalent_frontier_calibration_loss(
                     r_dep, gap, pred_q, batch["r_dep_star"].float(), batch["r_orc_star"].float(), teacher_q,
                     root_p, batch["root_probs"].float(), batch["root_valid"], batch["option_valid"],
@@ -2937,6 +2970,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_evidence_native_exact_advantage_preservation=bool(
             model_cfg.get("direct_recovery_evidence_native_exact_advantage_preservation", False)
         ),
+        direct_recovery_evidence_native_boundary_complete_advantage_preservation=bool(
+            model_cfg.get("direct_recovery_evidence_native_boundary_complete_advantage_preservation", False)
+        ),
         direct_recovery_evidence_native_drs_tolerance=float(
             model_cfg.get("direct_recovery_evidence_native_drs_tolerance", 0.05)
         ),
@@ -3380,6 +3416,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             ),
             "direct_recovery_evidence_native_exact_advantage_preservation": bool(
                 model_cfg.get("direct_recovery_evidence_native_exact_advantage_preservation", False)
+            ),
+            "direct_recovery_evidence_native_boundary_complete_advantage_preservation": bool(
+                model_cfg.get("direct_recovery_evidence_native_boundary_complete_advantage_preservation", False)
             ),
             "direct_recovery_evidence_native_drs_tolerance": float(
                 model_cfg.get("direct_recovery_evidence_native_drs_tolerance", 0.05)

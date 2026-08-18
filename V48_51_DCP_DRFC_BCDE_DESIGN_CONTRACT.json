@@ -1,0 +1,76 @@
+{
+  "schema": "v48.51-dcp-drfc-bcde-design-contract-v1",
+  "version": "v48.51-DCP-DRFC-BCDE",
+  "paper_principle": "Boundary-Complete Decision Equivalence",
+  "storyline": [
+    "recovery-sufficient roots",
+    "observation-consistent legal recovery",
+    "OC-MERO native certificate",
+    "boundary-complete decision-equivalent transport",
+    "non-compensatory calibrated admission"
+  ],
+  "policy_contract": {
+    "shared_across_safe_near_contact_contact": true,
+    "strategy_regime_conditioning": false,
+    "direct_recovery_value_regime_conditioning": false,
+    "regime_specific_thresholds": false,
+    "regime_specific_budgets": false,
+    "test_roots_read_during_attribution": false
+  },
+  "frozen_from_v48_50_A": {
+    "native_certificate_preservation": true,
+    "smooth_native_advantage_preservation": true,
+    "native_margin_complete_preservation": false,
+    "exact_only_native_advantage_preservation": false,
+    "old_decision_equivalent_frontier": false,
+    "proposal_top_k": 5,
+    "positive_gain": 0.015,
+    "mc_ncp": false
+  },
+  "axis_x": {
+    "name": "BC-FC",
+    "full_name": "Boundary-Complete Frontier Calibration",
+    "learned_parameters_added": 0,
+    "trainable_module": "existing margin_head",
+    "sign_channel": "hard predicted DRS + exact DEP + exact GAPQ + exact PCD; balanced sign BCE",
+    "order_channel": "smooth boundary DRS + exact DEP + exact GAPQ + smooth PCD; symmetric SmoothL1",
+    "new_thresholds": 0
+  },
+  "axis_y": {
+    "name": "BC-NAP",
+    "full_name": "Boundary-Complete Native Advantage Preservation",
+    "learned_parameters_added": 0,
+    "exact_materiality_rule": "outside +/- positive_gain, exact native relative recovery value owns sign",
+    "equivalence_rule": "inside the materiality band, smooth native relative recovery value owns local order",
+    "deadband_source": "existing native_positive_gain",
+    "new_thresholds": 0
+  },
+  "arms": {
+    "A": {"bc_frontier": false, "bc_nap": false},
+    "B": {"bc_frontier": true, "bc_nap": false},
+    "C": {"bc_frontier": false, "bc_nap": true},
+    "D": {"bc_frontier": true, "bc_nap": true}
+  },
+  "pre_registered_screen": {
+    "near": {
+      "precision_certificate_recall_min": 0.25,
+      "harmful_selected_ucb90_max": 0.25,
+      "development_joint_sign_floor": "at least 4/19 and no ranking collapse relative to v48.50-A"
+    },
+    "contact": {
+      "development_joint_sign_min": "6/37",
+      "precision_certificate_recall_min": 0.10,
+      "harmful_selected_ucb90_max": 0.25
+    },
+    "safe": {
+      "standard_calibration_valid_required": true,
+      "paired_non_inferiority_only_after_main_rc0": true
+    }
+  },
+  "stop_rules": [
+    "Do not tune MC-NCP, exact-only NAP, old hard-magnitude DEFC, threshold grids, proposal top-k, resampling, or regime routers.",
+    "If BC-FC repeats v48.50-B safe-positive DRS veto/ranking collapse, audit predicted-root calibration and teacher/native component correctness instead of tuning loss temperature/weight.",
+    "If BC-NAP cannot preserve Near ranking while lifting Contact sign, stop admission-transport variants and audit teacher PCD, DEP/GAP normalization, and root/recovery witness calibration.",
+    "If B and C are individually positive but D has strong negative interaction, audit shared margin-head gradient conflict before adding capacity."
+  ]
+}

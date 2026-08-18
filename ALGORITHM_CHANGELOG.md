@@ -1,3 +1,125 @@
+## v48.51 — DCP-DRFC-BCDE / BOUNDARY-COMPLETE DECISION EQUIVALENCE (2026-08-18)
+
+**类别：由修复后、可归因的 v48.50 A/B/C/D authoritative 2×2 直接触发的机制升级。继续保持一个 regime-agnostic planning primitive；Safe / near-contact / contact 只作同一 normal→critical continuum 上的数据与评测分层。没有增加 regime identifier/router、regime-specific policy/threshold/loss/budget、proposal top-k、candidate family、learned admission head 或重采样。**
+
+### v48.50.1 工程事故已经被本次新结果覆盖；本轮四臂可做算法归因
+
+本次新上传结果是在 `ComponentVetoTolerances` hotfix 后完整重跑得到。A/B/C/D 均为 authoritative `RC=20`、`pipeline_valid=true`、certificate executed、Natural gate evaluated、`test_roots_read=false`；2×2 attribution contract valid，四臂 calibration/source/protocol identity 一致。因此本条目的 B-A、C-A、D-B-C+A 都是算法证据，不能再套用 v48.50.1 那次 RC30 的工程结论。
+
+v48.50 Precision certificate / development 的核心结果：
+
+| Arm | 机制 | Near cert recall | Near harmful UCB90 | Near dev joint sign | Contact cert recall | Contact harmful UCB90 | Contact dev joint sign |
+|---|---|---:|---:|---:|---:|---:|---:|
+| A | old DRFC + smooth NAP | **0.222** | 0.112 | 0/19 | 0 | 0.567 | 0/37 |
+| B | A + DEFC | **0.222** | **0.042** | **4/19** | **0.050** | 0.382 | 0/37 |
+| C | A + exact NAP | 0 | 0.064 | 0/19 | 0 | 0.362 | **3/37** |
+| D | DEFC + exact NAP | 0.111 | **0.035** | 1/19 | **0.050** | 0.292 | **4/37** |
+
+四臂都仍为 RC20；这里的“改善”只表示机制信号，不表示已经通过 Natural gate。
+
+### v48.50 的正确归因：exactness 必须分工，不能整体替换 smooth geometry
+
+#### 1. DEFC：保留机制原则，但拒绝当前“hard coordinate 同时承担 sign + magnitude”实现
+
+B-A 在 Near 给出真实正向信号：development recall `0 -> 0.375`、joint semantic eligible `0/19 -> 4/19`，certificate harmful-selected UCB90 `0.112 -> 0.042`；Contact 也首次选到 `1/20` positive，UCB90 `0.567 -> 0.382`。这证明 **deployed exact boundary 必须进入 upstream calibration**。
+
+但 B 不是 clean win：Near candidate safe-positive AUC `0.527 -> 0.431`，precision `0.049 -> 0.026`；Contact candidate/proposal safe-positive AUC `0.681/0.627 -> 0.617/0.595`。更重要的是，DEFC 把 Near harmful DRS false-safe 从约 `73.5% -> 37.5%` 的同时，在 certificate Near 引入 `7/16` DRS safe-positive false-veto；Contact development DRS safe-positive false-veto也从 `0/37 -> 11/37`。因此 v48.50 DEFC 的问题不是“exact boundary 没用”，而是 **把量化的 hard DRS 同时拿来回归连续 magnitude/order，发生 over-rotation**。
+
+结论：accept **exact sign supervision**；reject **hard-coordinate magnitude regression**。
+
+#### 2. Exact NAP：作为 full downstream replacement 明确 reject，但 hard exact sign 本身有信息
+
+C-A 让 Near certificate recall `0.222 -> 0`，Contact candidate safe-positive AUC `0.681 -> 0.579`、proposal safe-positive AUC `0.627 -> 0.464`。这直接证明 v48.49-C 的 smooth boundary NAP 并非“错误 proxy”；它提供了 hard DRS equivalence class 内真实有用的 local ordering/tie resolution。
+
+同时 C 的 Contact development final positive sign从 `0/37 -> 3/37`，D 到 `4/37`；A 自己的 Contact exact native sign 也已有 `3/37`，只是 smooth final transport把它压回 0。说明 **hard exact coordinate 对 material sign 有信息，但不应独占 ranking**。
+
+结论：reject **Exact-NAP full overwrite**；retain **smooth NAP ordering**，并把 hard exact certificate降为 material-sign anchor。
+
+#### 3. D/Main：没有证明“两个 exact 机制叠加就会互补”
+
+Near 的 interaction 对 development joint sign 为负：B 已有 `4/19`，D 只剩 `1/19`；Contact 虽 D 到 `4/37`，但 certificate UCB90 仍 `0.292 > 0.25`，recall 仅 0.05。D 不支配 B/C，说明 exact-only downstream transport会抵消 upstream 的一部分收益。v48.51 不再直接复用 D。
+
+### 当前 dominant bottleneck
+
+1. **Boundary quantization vs local ordering conflict（首要机制瓶颈）**：hard DRS 对 deployed sign 是正确坐标，但它把同一 hard state 内的 q-depth 全部压平；smooth DRS 有 ranking 信息，却不能单独保证 material decision sign。当前模型没有显式把这两个职责分开。
+2. **Benefit precision / centering 是当前直接的 Natural-gate bottleneck**：四臂 Precision development 的 `min_precision_lcb` 都失败。最好的 Near development 是 B：raw precision `0.088`、LCB90 `0.043`，距离协议要求的 fit `0.50` / verify `0.40` 很远；Contact development 四臂 precision 都为 0。也就是说当前不是简单“recall 不够”，而是大量 neutral/non-beneficial candidate 仍跨过共享 admission rule。
+3. **Contact sign/centering 仍是最大 regime-level empirical gap**：最好 Contact certificate recall 只有 0.05；development joint sign最多 4/37，远低于前一版预注册的第一阶段 `>=6/37`；Main certificate harmful UCB90 仍 0.292。
+4. **DEP/GAP transport 仍存在 sensitivity/specificity trade-off**：Contact safe-positive 的 deployability/gap-quality false-veto 仍高，DEFC 只在部分坐标上改善 harmful false-safe，没形成同时降低两类错误的完整 Pareto improvement。
+5. **proposal availability 不是当前主因**：所有 arm development 都报告 proposal oracle feasible，Near 有 9 个、Contact 有 20 个 safe-positive proposal groups。继续扩大 top-k/candidate/macro width 会违反已有 stop signal。
+6. **Safe 论文证据仍未解锁**：standard calibration valid，但所有 Main 都是 RC20，因此 scene-disjoint paired Safe non-inferiority 与 authoritative closed-loop 仍被 fail-closed post-gate 阻断。不能把“Safe calibration valid”写成“Safe policy non-inferior”。
+
+### v48.51 方法主线：Boundary-Complete Decision Equivalence (BC-DE)
+
+论文主线升级为：
+
+`recovery-sufficient roots -> observation-consistent legal recovery -> OC-MERO certificate -> boundary-complete decision-equivalent transport -> non-compensatory calibrated admission`。
+
+**Observation consistency** 约束 recovery decision 不使用 hidden future/root identity；**Boundary-complete decision equivalence** 进一步要求 transport 同时保留两类 decision-sufficient information：
+
+- **material boundary sign**：由部署时真正消费的 hard/exact certificate 决定；
+- **within-equivalence-class order**：当 hard certificate本身无法区分候选时，由与同一零边界一致的 smooth boundary geometry提供局部排序。
+
+这不是“hard + smooth 两个模块加权融合”，而是一个职责分解：**hard owns sign; smooth owns unresolved order**。Safe/Near/Contact 不参与该分解，三者共享同一个 primitive、相同参数和相同 materiality boundary。
+
+### 因素 X：BC-FC / Boundary-Complete Frontier Calibration
+
+只更新既有 `margin_head`，没有新增参数。把 v48.50 DEFC 的一个 loss channel拆成两个语义通道：
+
+- **sign channel**：hard predicted DRS（forward exact + backward STE）、`sigmoid(R_dep)`、`exp(-relu(gap))` 与 exact PCD；只做 balanced sign BCE，确保物理 zero crossing / material boundary 不被 proxy 改写；
+- **order channel**：boundary-resolved smooth DRS、相同 DEP/GAP 与 smooth PCD；做 symmetric SmoothL1 magnitude regression，保留 q-depth 和 candidate-relative ordering。
+
+因此不再要求 discontinuous hard DRS 的数值幅值拟合 teacher 幅值；它只承担它真正可靠的职责——decision sign。旧 v48.50 `decision_equivalent_frontier_calibration_loss` 在 v48.51 2×2 中明确关闭，不与 BC-FC 堆叠。
+
+### 因素 Y：BC-NAP / Boundary-Complete Native Advantage Preservation
+
+保留 v48.49 smooth NAP，并新增 parameter-free material-sign/deadband transport。令：
+
+- `d_exact = V_exact(candidate)-V_exact(nominal)`；
+- `d_smooth = V_smooth(candidate)-V_smooth(nominal)`；
+- `g = positive_gain = 0.015`（沿用既有全局物理 materiality boundary，不新增可调阈值）。
+
+规则为：
+
+- 若 `d_exact >= g`：hard certificate 已明确 materially positive，`d_BC=max(d_exact,d_smooth)`，禁止 smooth 把正号改负；
+- 若 `d_exact <= -g`：hard certificate 已明确 materially negative，`d_BC=min(d_exact,d_smooth)`，禁止 smooth 把负号改正；
+- 若 `|d_exact| < g`：exact certificate位于 material equivalence band 内，本身分辨率不足，令 `d_BC=d_smooth` 保留 local ordering；
+- 最终 `benefit_margin=d_BC-g`。
+
+BC-NAP 不增加 head/residual/参数；deadband 直接复用已有 `positive_gain`，因此不是新 threshold search。它专门针对 v48.50 观测到的“Near 需要 smooth tie-resolution，而 Contact 有部分 exact positive sign 被 smooth erase”的矛盾。
+
+### v48.51 严格 2×2
+
+- **A:** v48.50-A reference = old DRFC + smooth NAP。
+- **B:** A + BC-FC，只测 upstream boundary-complete calibration。
+- **C:** A + BC-NAP，只测 downstream hard-sign/smooth-order transport。
+- **D/Main:** BC-FC + BC-NAP。
+
+所有 arm 固定：NCP=true、smooth NAP=true、MC-NCP=false、v48.50 exact-only NAP=false、v48.50 old DEFC=false、ROCT/top-k/source/dataset/calibration/risk protocol 不变。`D-B-C+A` 仍只在 attribution contract valid 时解释。
+
+### v48.51 预注册 go/stop
+
+第一阶段目标仍以 development/certificate 为准，不偷看 test：
+
+- **Near:** D Precision certificate recall `>=0.25`，harmful-selected UCB90 `<=0.25`；development joint sign至少不低于 B(v48.50) 的 `4/19`，且 candidate safe-positive AUC 不应再出现 v48.50-B 的明显塌陷。
+- **Contact:** development joint sign至少 `>=6/37`；certificate recall `>=0.10`、harmful UCB90 `<=0.25`。这是进入 Safe/closed-loop 前的最小 mechanism screen，不是最终论文目标。
+- **Safe:** standard calibration valid 是必要条件；只有 D/Main authoritative RC=0 且自动生成 `NEXT_COMMANDS.txt` 后，才允许 scene-disjoint paired Safe non-inferiority + stress/closed-loop。
+- 若 **BC-FC(B)** 仍出现 v48.50-B 型 DRS safe-positive veto/排序塌陷，停止 frontier loss 权重/temperature 搜索，直接转入 predicted-root probability calibration 与 teacher/native component correctness audit。
+- 若 **BC-NAP(C)** 不能在保留 A 的 Near recall/AUC 的同时提高 Contact sign，则说明 exact-vs-smooth transport不是主瓶颈，停止 admission/value transport变体，转入 teacher PCD decomposition、DEP/GAP normalization 与 recovery-witness/root-probability calibration。
+- 若 B/C 各自有正向主效应但 D 仍有强负交互，优先检查共同 `margin_head` 对 DRS/DEP/GAP 的 gradient conflict；不要再通过新 router/regime conditioning 规避冲突。
+
+### 明确不重复的历史路线
+
+继续禁止：MC-NCP tolerance 微调、exact-only NAP、旧 v48.50 hard-coordinate magnitude DEFC、threshold-grid densification、proposal top-k/candidate/macro width 扩张、aggressive positive oversampling、hardest-negative population distortion、generic pairwise/listwise stacking、full joint Stage-2、learned admission residual、one-sided safe-positive component penalty、unbounded factors、frontier-tanh、full component factorization/partial pooling/rank skip、POET、SOWR、DWOK、broad encoder fine-tuning，以及任何 Safe/Near/Contact-conditioned policy/router/threshold/budget。
+
+### 代码落地
+
+- 新增 `boundary_complete_frontier_calibration_loss`，把 exact sign supervision 与 smooth magnitude/order regression分离；train fast-path 与 general path 均接通。
+- 新增 `direct_recovery_evidence_native_boundary_complete_advantage_preservation`；parameter-free，要求 NAP 已启用，并与 exact-only NAP fail-closed 互斥。
+- checkpoint metadata、inference reconstruction、model contract、training shell、factor-cache settings、v48.47 nested witness stage isolation全部接通新 flag。
+- 新增 `run_v48_51_dcp_drfc_bcde_ablation_arm.sh`、两 GPU launcher、2×2 comparator 与 RC0-only post-gate wrapper；输出目录独立为 `ocrap_v48_51_dcp_drfc_bcde_*`。
+- comparator额外发布 diagnostic-only `boundary_complete_adv_*`，但不读 test roots、不进入 policy。
+- 新增 v48.51 regression：BC-NAP material sign不能被相反 smooth ranking翻转；hard-equivalence band 内必须保留 smooth ordering；BC-NAP不增加参数；BC-FC 对同一 hard pattern仍保留 boundary-depth magnitude信息；2×2 factor isolation 与 non-regime contract fail-closed。
+
 ## v48.50.1 — CALIBRATION NATIVE-DIAGNOSTIC ENGINEERING HOTFIX + INFERENCE-ONLY SPEEDUP (2026-08-18)
 
 **类别：纯工程修复与数值语义不变的推理开销优化。DCP-DRFC-DE 算法、v48.50 A/B/C/D 2×2 因素、模型参数、loss、dataset/split、proposal top-k、risk budget、threshold、calibration protocol、Natural gate、输出目录与双 GPU 执行指令均不变。**
