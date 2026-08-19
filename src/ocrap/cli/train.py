@@ -405,6 +405,12 @@ def _direct_value_loss_from_outputs(
         ordinal_evidence_component_margin_target_scale=float(
             tcfg.get("direct_value_ordinal_evidence_component_margin_target_scale", 0.10)
         ),
+        ordinal_evidence_component_margin_canonical_scales=tcfg.get(
+            "direct_value_ordinal_evidence_component_margin_canonical_scales", ""
+        ),
+        ordinal_evidence_component_margin_regression_reliability=tcfg.get(
+            "direct_value_ordinal_evidence_component_margin_regression_reliability", ""
+        ),
         ordinal_evidence_component_underestimation_weight=float(
             tcfg.get("direct_value_ordinal_evidence_component_underestimation_weight", 0.0)
         ),

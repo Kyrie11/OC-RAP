@@ -1,3 +1,104 @@
+## v48.55 — DCP-DRFC-BCDE-TCBC / COORDINATE-TYPED COMPONENT BOUNDARY CALIBRATION (2026-08-19)
+
+**类别：由 v48.54 authoritative A/B 对 IPBD 的跨严重度负迁移直接触发的 component-correctness 2×2。主线仍是一个 regime-agnostic planning primitive；Safe / near-contact / contact 只是 normal→critical continuum 上的 dataset/evaluation strata。没有新增 regime identifier/router、regime-specific policy/threshold/loss/budget、proposal top-k、candidate family、learned admission residual、重采样、root-logit recalibration 或网络容量。**
+
+### v48.54 工程状态：只有 Main 是预期行为，不是缺失消融
+
+v48.54 是单轴 A/B：A 语义复用 v48.53-A，只有 IPBD Main/B 需要重新训练。`OC-RAP-v48.54-A-reference-reuse-contract.json` 为 `valid=true`、`errors=[]`，source checkpoint SHA、五个 canonical manifest SHA 与 gate semantic checks 全部匹配，且 `strategy_regime_conditioning=false`、`test_roots_read=false`。Main 为 authoritative `RC=20`、`pipeline_valid=true`、certificate/Natural gate真实执行；没有 RC30、Traceback、OOM 或缺失必需 artifact。因此本轮结果可做可靠 B-A 归因。
+
+### v48.54 可靠归因：IPBD 作为统一主机制失败，physical-margin distillation family STOP
+
+Precision 核心 B-A：
+
+| regime | metric | A q-hard reference | B IPBD | B-A |
+|---|---:|---:|---:|---:|
+| Near | certificate recall | **0.333** | **0.000** | -0.333 |
+| Near | harmful UCB90 | **0.042** | 0.247 | +0.205 |
+| Near | candidate safe-positive AUC | **0.448** | 0.320 | -0.128 |
+| Near | proposal safe-positive AUC | **0.491** | 0.384 | -0.108 |
+| Near | development recall | **0.375** | 0 | -0.375 |
+| Near | development joint sign | **4/19** | 0/19 | -4/19 |
+| Near | dev DRS harmful false-safe | **0.419** | 0.706 | +0.287 |
+| Contact | certificate recall | **0.050** | 0 | -0.050 |
+| Contact | harmful UCB90 | 0.351 | **0.340** | -0.011 |
+| Contact | candidate safe-positive AUC | 0.632 | **0.736** | +0.103 |
+| Contact | proposal safe-positive AUC | 0.611 | **0.688** | +0.077 |
+| Contact | dev DRS harmful false-safe | 0.789 | **0.560** | -0.229 |
+| Contact | dev exact/native positive | **7/37** | 4/37 | -3/37 |
+
+IPBD 因而不是“final centering 遮住了一个已正确的 upstream mechanism”。它确实证明 selected-option physical margin 含有 Contact-specific discrimination/specificity 信息，但同一个 training-only privileged signal 通过共享 witness 注入后会让 Near ranking、DRS specificity、joint sign 与 final evidence 同时崩塌。**未满足进入 Boundary-Complete Evidence Centering 的先决条件。**
+
+**REJECT / STOP：**
+
+- IPBD 作为 unified Main STOP；不再调 IPBD weight/temperature、selected-margin sampling 或分桶权重；
+- physical-margin distillation family 整体 STOP（teacher-only PSA、student/native physical hard DRS、symmetric CSE 已在 v48.52/v48.53 STOP）；
+- 不用 Contact 的局部收益为理由引入 regime-conditioned physical loss/router；
+- 不进入 final evidence centering，直到 upstream component/native geometry 在 Near+Contact 同时形成 Pareto improvement；
+- root-logit recalibration 继续 STOP；v48.54 B-A 的 root logits/source checkpoint均冻结一致，不能解释该负效应。
+
+### v48.50→v48.54 的收窄链：应保存 decision invariant，而不是复制 privileged realization
+
+1. **v48.50**：Exact-only transport 会丢失 local order；证明 exactness 不是越多越好。
+2. **v48.51**：BC-FC 支持 `hard/discontinuous sign + smooth local order` 的职责分离；这是截至目前最稳定的主机制原则。
+3. **v48.52**：teacher-only physical sign（PSA）系统性负向；否定“只把 teacher 物理化就更正确”。
+4. **v48.53**：student/deployment physical replacement 与 symmetric CSE 仍失败；否定“内部 certificate computation 必须 structural imitation”。
+5. **v48.54**：即便 deployment q-hard invariant完全不改，training-only physical margin distillation仍造成 Contact gain / Near collapse；否定“privileged physical signal 只要不进入 deployment 就天然无害”。
+
+因此论文主线不再强调 *physical certificate realization*，而收敛为：
+
+> **Invariant-Preserving Boundary-Complete Decision Equivalence：部署的 material boundary 必须保持 decision-equivalent；不同数学类型的证书坐标应按其类型校准，而 privileged physical geometry 只能在证明跨严重度 Pareto 安全后进入共享表示。**
+
+当前仍支持：`q-hard` material sign、smooth q local order、observation-class execution、shared regime-agnostic policy。需要继续被验证的是 **heterogeneous component coordinates 的 calibration geometry**。
+
+### 新 dominant bottleneck：coordinate-typed component supervision geometry / cross-regime scale consistency
+
+v48.54 的 component readout显示共享 factor head存在明显坐标过旋转：同一个 IPBD 对 Contact 的 DRS specificity/ranking有利，却让 Near DRS、ranking、opportunity/pred-adv同时恶化；certificate component 中 GAP 甚至出现极端 safe-positive false-veto。当前三个被支持的 component margin 又被统一使用 raw SmoothL1 magnitude regression，但其数学类型并不相同：
+
+- DRS 是离散/量化的 root-mass boundary coordinate；
+- deployability 与 gap-quality 是连续非线性坐标；
+- pooled adaptation-train 的典型 RMS 约为 DRS `0.419`、DEP `0.223`、GAP `0.356`，尺度明显不一致。
+
+因此下一步不再改 hard certificate，而验证：**discontinuous component 是否只应承担 boundary/sign supervision；continuous components 是否应使用 regime-free、train-only、零点/顺序保持的尺度规范化。**
+
+### v48.55 严格 2×2：Coordinate-Typed Component Boundary Calibration (TCBC)
+
+两个 causal factors：
+
+- **X = DRS boundary-only magnitude contract**：DRS 保留原 component BCE / hard veto / q-hard deployment，但从 explicit continuous SmoothL1 magnitude regression 中移除。没有删除 DRS sign supervision。
+- **Y = continuous DEP/GAP pooled-RMS linear canonicalization**：只从 pooled adaptation-train Near+Contact teacher index计算 component RMS；DEP/GAP target 使用 `0.10 * raw_margin / pooled_RMS_k`。DRS在 Y 轴保持 identity（scale=0.10）；zero crossing、component内 order 与 hard veto不变。没有 `tanh`、clipping、regime权重或 dev/certificate/test拟合。
+
+四臂：
+
+- **A:** X=0, Y=0 — 当前 q-hard BC-FC + smooth-NAP raw-component reference；优先语义复用 v48.53-A。
+- **B:** X=1, Y=0 — DRS boundary classification only；DEP/GAP raw regression。
+- **C:** X=0, Y=1 — DRS raw regression；DEP/GAP pooled-RMS-linear canonicalization。
+- **D/Main:** X=1, Y=1 — TCBC。
+
+所有 arm 固定：BC-FC=true、smooth NAP=true、BC-NAP=false、PSA/CSE/IPBD=false、physical native DRS=false、root logits不训练、hard component veto不变、proposal top-k=5、source/data/gate不变、`strategy_regime_conditioning=false`、`test_roots_read=false`。
+
+### v48.55 preregistered readout / go-stop
+
+读取顺序必须是 **B-A → C-A → D-B-C+A**，而不是先看 D recall。
+
+1. **B-A / DRS typed supervision**：若 Near DRS harmful false-safe / false-veto改善或不退化，同时 Near recall/ranking保持，并且 Contact不显著损失，则支持“discontinuous DRS 不应做 continuous magnitude regression”。
+2. **C-A / DEP-GAP canonicalization**：若 Near/Contact 的 deployability/gap false-veto 与 harmful false-safe同时向 Pareto方向移动，并保持 candidate/proposal ranking，则支持 pooled scale mismatch 是 causal bottleneck。
+3. **D interaction**：只有 D 的绝对 Near/Contact native/component geometry、harmful UCB 与 ranking均回到/超过 A，才可称 TCBC complementary；不能用 floor arithmetic 的正 interaction代替绝对改善。
+4. **若 component/native geometry 跨 Near+Contact Pareto 改善，但 opportunity/pred_adv仍系统性负偏**：此时才正式进入 **Boundary-Complete Evidence Centering**。
+5. **若 X/Y/D 都不能改善 component Pareto**：STOP component-normalization family；下一步改为 teacher component correctness audit（重新核对 DEP/GAP target定义/normalization/source labels），之后才做 root-uncertainty diagnosis。仍不重开 root-logit recalibration。
+6. **Safe**：仅 D/Main authoritative RC0 后才执行 scene-disjoint paired Safe non-inferiority + stress/closed-loop；RC20 不放宽 gate。
+
+### v48.55 runtime / engineering contract
+
+- A reference reuse继续使用 semantic identity：source checkpoint SHA + 五个 canonical manifest SHA + gate semantics + factor contract；忽略 transient protocol-seal byte timestamp。
+- 正常情况下只新跑 B/C/D：B、C 分别独占一张 GPU并行，D 再用两张 GPU并行 Balanced/Precision。
+- Y 轴 scale artifact由 train teacher index生成并绑定 index SHA；`strategy_regime_conditioning=false`、`test_roots_read=false`。
+- `V48_55_TCBC_CONTRACT.json` 在 certificate access 前 fail-closed 验证 target mode、regression reliability 与 scale artifact；任何 mismatch -> RC30 engineering failure，不允许做算法归因。
+
+### 延续 stop signals
+
+继续禁止：IPBD/physical-margin distillation、teacher-only PSA、student/native physical hard DRS、symmetric CSE、hard q/margin AND/OR transport、BC-NAP、old hard-magnitude DEFC、MC-NCP tolerance search、exact-only NAP、root-logit recalibration、threshold relaxation/grid densification、top-k/candidate/macro expansion、aggressive oversampling、hardest-negative population distortion、generic pairwise/listwise stacking、learned admission residual、one-sided component penalty、unbounded factors、v48.40 frontier-tanh、v48.41 full component factorization、broad encoder fine-tuning，以及任何 regime-conditioned policy/router/threshold/budget。
+
+
 ## v48.54 — DCP-DRFC-BCDE-IPBD / INVARIANT-PRESERVING PHYSICAL BOUNDARY DISTILLATION (2026-08-19)
 
 **类别：由 v48.53 authoritative 2×2 对 CSE 的否证与 C-arm 的局部正信号共同触发的单轴机制实验。主线继续是一个 regime-agnostic planning primitive；Safe / near-contact / contact 仅是 normal→critical continuum 上的 dataset/evaluation strata。没有新增 regime identifier/router、regime-specific policy/threshold/loss/budget、proposal top-k、candidate family、learned admission head、重采样或网络容量。**

@@ -466,6 +466,42 @@ if [[ "$target_rc" != 0 ]]; then
   exit 30
 fi
 
+# v48.55 TCBC optional train-only, regime-free coordinate canonicalization.
+# Scales are computed from the pooled adaptation-training teacher index only;
+# dev/certificate/test labels never enter this transform.  DRS remains an
+# identity transform under the Y factor, while DEP/GAP receive linear RMS
+# normalization that preserves zero crossings and within-component ordering.
+if [[ "${V4855_COMPONENT_CANONICALIZATION:-0}" == 1 ]]; then
+  COMPONENT_SCALE_FILE="$OUTPUTDIR/V48_55_COMPONENT_BOUNDARY_SCALES.json"
+  set +e
+  python tools/compute_v48_55_component_boundary_scales.py \
+    --index "$GROUP_INDEX" --output "$COMPONENT_SCALE_FILE" \
+    --target-scale "${FACTOR_COMPONENT_MARGIN_TARGET_SCALE:-0.10}" \
+    --drs-tolerance "$COMPONENT_HARM_DRS_TOLERANCE" \
+    --dep-tolerance "$COMPONENT_HARM_DEP_TOLERANCE" \
+    --gap-tolerance "$COMPONENT_HARM_GAP_TOLERANCE" \
+    --hard-tolerance "$COMPONENT_HARM_HARD_TOLERANCE" \
+    --proxy-tolerance "$COMPONENT_HARM_PROXY_TOLERANCE" \
+    >"$OUTPUTDIR/logs/v48_55_component_boundary_scales.log" 2>&1
+  scale_rc=$?
+  set -e
+  if [[ "$scale_rc" != 0 ]]; then
+    write_pipeline_failure v48_55_component_scale "$scale_rc" "$COMPONENT_SCALE_FILE"
+    exit 30
+  fi
+  FACTOR_COMPONENT_MARGIN_CANONICAL_SCALES="$(python - "$COMPONENT_SCALE_FILE" <<'PY_V4855_SCALES'
+import json,sys
+d=json.load(open(sys.argv[1]))
+if d.get('strategy_regime_conditioning') or d.get('test_roots_read'):
+    raise SystemExit(4)
+s=str(d.get('canonical_scales_csv','')).strip()
+if not s: raise SystemExit(4)
+print(s)
+PY_V4855_SCALES
+)"
+  export FACTOR_COMPONENT_MARGIN_CANONICAL_SCALES
+fi
+
 # Validation batching must use labels computed from adaptation-dev itself.
 # Reuse is allowed only after the same exact dataset/label contract audit used
 # for the training index; otherwise rebuild fail-closed.
@@ -577,6 +613,8 @@ PY_CACHE_MISSING
   V4846_WITNESS_PATIENCE="${V4846_WITNESS_PATIENCE:-2}" V4846_WITNESS_LR="${V4846_WITNESS_LR:-0.00004}" OPTION_EXECUTION_SEMANTICS="$TRAIN_OPTION_EXECUTION_SEMANTICS" \
   FACTOR_BENEFIT_MARGIN_REGRESSION_WEIGHT="${FACTOR_BENEFIT_MARGIN_REGRESSION_WEIGHT:-0.0}" FACTOR_BENEFIT_MARGIN_TEMPERATURE="${FACTOR_BENEFIT_MARGIN_TEMPERATURE:-0.025}" \
   FACTOR_COMPONENT_UNDERESTIMATION_WEIGHT="${FACTOR_COMPONENT_UNDERESTIMATION_WEIGHT:-0.0}" FACTOR_SAFE_POSITIVE_COMPONENT_OVERESTIMATION_WEIGHT="${FACTOR_SAFE_POSITIVE_COMPONENT_OVERESTIMATION_WEIGHT:-0.0}" \
+  FACTOR_COMPONENT_MARGIN_TARGET_MODE="${FACTOR_COMPONENT_MARGIN_TARGET_MODE:-raw}" FACTOR_COMPONENT_MARGIN_TARGET_SCALE="${FACTOR_COMPONENT_MARGIN_TARGET_SCALE:-0.10}" \
+  FACTOR_COMPONENT_MARGIN_CANONICAL_SCALES="${FACTOR_COMPONENT_MARGIN_CANONICAL_SCALES:-}" FACTOR_COMPONENT_MARGIN_REGRESSION_RELIABILITY="${FACTOR_COMPONENT_MARGIN_REGRESSION_RELIABILITY:-}" \
   FACTOR_JOINT_RESERVE_REGRESSION_WEIGHT="${FACTOR_JOINT_RESERVE_REGRESSION_WEIGHT:-0.0}" FACTOR_JOINT_RESERVE_BOUNDARY_WEIGHT="${FACTOR_JOINT_RESERVE_BOUNDARY_WEIGHT:-0.0}" FACTOR_JOINT_RESERVE_BOUNDARY_WIDTH="${FACTOR_JOINT_RESERVE_BOUNDARY_WIDTH:-0.05}" \
   EVIDENCE_JOINT_RESERVE_TEMPERATURE="${EVIDENCE_JOINT_RESERVE_TEMPERATURE:-0.025}" \
   V4836_FACTOR_CACHE_RUN="$factor_cache" \
@@ -802,6 +840,37 @@ if [[ "${V4854_REQUIRE_IPBD_CONTRACT:-0}" == 1 ]]; then
     set -e
     if [[ "$ipbd_contract_rc" != 0 ]]; then
       write_pipeline_failure v48_54_ipbd_contract "$ipbd_contract_rc" "$OUTPUTDIR/candidates/$variant/V48_54_IPBD_CONTRACT.json" "$s0" "$s1"
+      exit 30
+    fi
+  done
+fi
+
+
+# v48.55 fail-closed Coordinate-Typed Component Boundary Calibration preflight.
+# This contract verifies that the DRS sign-only factor changes only continuous
+# magnitude regression support, while the DEP/GAP factor uses the pooled
+# train-only linear scales published at the run root.  Hard-veto and q-hard
+# deployment semantics remain unchanged.
+if [[ "${V4855_REQUIRE_TCBC_CONTRACT:-0}" == 1 ]]; then
+  for variant in balanced precision; do
+    [[ "$variant" == balanced && "$s0" != 0 ]] && continue
+    [[ "$variant" == precision && "$s1" != 0 ]] && continue
+    tcbc_scale_args=()
+    if [[ "${V4855_COMPONENT_CANONICALIZATION:-0}" == 1 ]]; then
+      tcbc_scale_args=(--scale-file "$OUTPUTDIR/V48_55_COMPONENT_BOUNDARY_SCALES.json")
+    fi
+    set +e
+    python tools/check_v48_55_tcbc_contract.py \
+      --run "$OUTPUTDIR/candidates/$variant" \
+      --expect-drs-sign-only "${V4855_DRS_SIGN_ONLY:-false}" \
+      --expect-continuous-canonicalization "${V4855_COMPONENT_CANONICALIZATION:-false}" \
+      "${tcbc_scale_args[@]}" \
+      --output "$OUTPUTDIR/candidates/$variant/V48_55_TCBC_CONTRACT.json" \
+      >"$OUTPUTDIR/logs/v48_55_tcbc_contract_${variant}.log" 2>&1
+    tcbc_contract_rc=$?
+    set -e
+    if [[ "$tcbc_contract_rc" != 0 ]]; then
+      write_pipeline_failure v48_55_tcbc_contract "$tcbc_contract_rc" "$OUTPUTDIR/candidates/$variant/V48_55_TCBC_CONTRACT.json" "$s0" "$s1"
       exit 30
     fi
   done

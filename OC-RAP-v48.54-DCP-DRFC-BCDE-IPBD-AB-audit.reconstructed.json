@@ -1,0 +1,1821 @@
+{
+  "arms": {
+    "A": {
+      "attribution_identity": {
+        "gate_dataset_manifest_sha256": {
+          "contact_certificate": "56379598d38360ba6cfebd1d6130f6cf8baac4142dd3b9956e045bdffd536306",
+          "contact_threshold_fit_dev": "4d18a8c9b7f39d2842fec1e0518f89d07ab331b98c286563f83fe8adec3b1471",
+          "near_certificate": "7a6f49bd5efba0ea496617efda6931f9b283cd7cf3c208b15abd06c2c74fa4f3",
+          "near_threshold_fit_dev": "2191cfd8d2d976ea0d086ab75e01b55f78f2da709f515430b3ac78cd3af4878a",
+          "safe_calibration": "9790f61b42945c1cfefb5f7085fe9a7765aa961ecb3a365b5cfa1e7bdd77f32c"
+        },
+        "gate_protocol": {
+          "benefit": {
+            "gate_positive_mode": "safe_benefit",
+            "opportunity_label_mode": "raw_benefit",
+            "positive_gain": 0.015
+          },
+          "certificate_labels_used_for_threshold_fit": false,
+          "certificate_mode": "external_rule_full_verification",
+          "confidence": {
+            "bound_type": "one_sided",
+            "level": 0.9
+          },
+          "contact": {
+            "fit": {
+              "max_harmful_group_ucb": 0.14,
+              "max_harmful_selected_ucb": 0.22,
+              "min_precision_lcb": 0.5,
+              "min_selected": 16
+            },
+            "verify": {
+              "max_harmful_group_ucb": 0.16,
+              "max_harmful_selected_ucb": 0.25,
+              "min_precision_lcb": 0.4,
+              "min_selected": 10
+            }
+          },
+          "datasets": [
+            {
+              "manifest": "/data0/senzeyu2/dataset/OCRAP/calibration_safe/manifest.csv",
+              "manifest_sha256": "9790f61b42945c1cfefb5f7085fe9a7765aa961ecb3a365b5cfa1e7bdd77f32c",
+              "role": "safe_calibration",
+              "root": "/data0/senzeyu2/dataset/OCRAP/calibration_safe"
+            },
+            {
+              "manifest": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_near_contact/manifest.csv",
+              "manifest_sha256": "7a6f49bd5efba0ea496617efda6931f9b283cd7cf3c208b15abd06c2c74fa4f3",
+              "role": "near_certificate",
+              "root": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_near_contact"
+            },
+            {
+              "manifest": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_contact/manifest.csv",
+              "manifest_sha256": "56379598d38360ba6cfebd1d6130f6cf8baac4142dd3b9956e045bdffd536306",
+              "role": "contact_certificate",
+              "root": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_contact"
+            },
+            {
+              "manifest": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_near_contact/manifest.csv",
+              "manifest_sha256": "2191cfd8d2d976ea0d086ab75e01b55f78f2da709f515430b3ac78cd3af4878a",
+              "role": "near_threshold_fit_dev",
+              "root": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_near_contact"
+            },
+            {
+              "manifest": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_contact/manifest.csv",
+              "manifest_sha256": "4d18a8c9b7f39d2842fec1e0518f89d07ab331b98c286563f83fe8adec3b1471",
+              "role": "contact_threshold_fit_dev",
+              "root": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_contact"
+            }
+          ],
+          "fit_verify_scene_disjoint": true,
+          "harm": {
+            "component_tolerances": {
+              "deployability_gate": 0.05,
+              "drs": 0.05,
+              "gap_discount": 0.05,
+              "hard_violation": 0.05,
+              "harm_proxy": 0.05
+            },
+            "label_mode": "component_veto",
+            "negative_gain_legacy": 0.01
+          },
+          "near": {
+            "fit": {
+              "max_harmful_group_ucb": 0.12,
+              "max_harmful_selected_ucb": 0.22,
+              "min_precision_lcb": 0.5,
+              "min_selected": 10
+            },
+            "verify": {
+              "max_harmful_group_ucb": 0.14,
+              "max_harmful_selected_ucb": 0.25,
+              "min_precision_lcb": 0.4,
+              "min_selected": 8
+            }
+          },
+          "policy": {
+            "option_execution_semantics": "observation_class",
+            "proposal_top_k": 5,
+            "selection_semantics": "rank_topk_then_filter_then_evidence_rerank"
+          },
+          "shared_deployment_rule": true,
+          "strategy_regime_conditioning": false,
+          "test_roots_read": false,
+          "threshold_source": "pooled_evidence_adapt_dev_shared_rule",
+          "version": "v48.36-OCAF"
+        },
+        "gate_protocol_sha256": "0b6ed9494cb7805b28847f5c5cdbc0c5a610fe2e3ace1e284835c2cfaed24c94",
+        "source_checkpoint_sha256": {
+          "balanced": "070218c66e506d66f25a12bf53b4127581992d75481bbb635d7ea658f4cfd352",
+          "precision": "8f7528b76ce4b2424c5f153fe3109844de27a08a976a067b1292baee393f768d"
+        },
+        "source_run_resolved": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_45_source_rebuild_s7"
+      },
+      "authoritative_exit_code": 20,
+      "certificate_executed": true,
+      "contact": {
+        "certificate": {
+          "candidate_harm_auc": 0.6352671897519447,
+          "candidate_positive_auc": 0.5688500121489812,
+          "candidate_safe_positive_auc": 0.6324532085561497,
+          "components": {
+            "deployability": {
+              "harmful_false_safe_fraction": 0.31975403535741737,
+              "harmful_false_safe_n": 416,
+              "harmful_n": 1301,
+              "harmful_vs_safe_positive_auc": 0.6710966750142571,
+              "safe_positive_false_veto_fraction": 0.5161290322580645,
+              "safe_positive_false_veto_n": 16,
+              "safe_positive_harm_median": 0.5701719522476196,
+              "safe_positive_n": 31
+            },
+            "drs": {
+              "harmful_false_safe_fraction": 0.7425057647963106,
+              "harmful_false_safe_n": 966,
+              "harmful_n": 1301,
+              "harmful_vs_safe_positive_auc": 0.5871538022860827,
+              "safe_positive_false_veto_fraction": 0.03225806451612903,
+              "safe_positive_false_veto_n": 1,
+              "safe_positive_harm_median": 0.11920291930437088,
+              "safe_positive_n": 31
+            },
+            "gap": {
+              "harmful_false_safe_fraction": 0.7140661029976941,
+              "harmful_false_safe_n": 929,
+              "harmful_n": 1301,
+              "harmful_vs_safe_positive_auc": 0.5486102501797625,
+              "safe_positive_false_veto_fraction": 0.0967741935483871,
+              "safe_positive_false_veto_n": 3,
+              "safe_positive_harm_median": 0.4533117413520813,
+              "safe_positive_n": 31
+            },
+            "hard_rule": {
+              "harmful_false_safe_fraction": 1.0,
+              "harmful_false_safe_n": 1301,
+              "harmful_n": 1301,
+              "harmful_vs_safe_positive_auc": 0.5,
+              "safe_positive_false_veto_fraction": 0.0,
+              "safe_positive_false_veto_n": 0,
+              "safe_positive_harm_median": 0.11920291930437088,
+              "safe_positive_n": 31
+            },
+            "harm_proxy": {
+              "harmful_false_safe_fraction": 1.0,
+              "harmful_false_safe_n": 1301,
+              "harmful_n": 1301,
+              "harmful_vs_safe_positive_auc": 0.5,
+              "safe_positive_false_veto_fraction": 0.0,
+              "safe_positive_false_veto_n": 0,
+              "safe_positive_harm_median": 0.11920291930437088,
+              "safe_positive_n": 31
+            }
+          },
+          "harmful_selected": 16,
+          "harmful_selected_ucb90": 0.3508081402462616,
+          "native_geometry": {
+            "available": true,
+            "boundary_complete_adv_margin_median": -0.0279159331714547,
+            "boundary_complete_adv_nonnegative_fraction": 0.06451612903225806,
+            "coordinates": {
+              "deployability": {
+                "harmful_false_safe_fraction": 0.31975403535741737,
+                "harmful_false_safe_n": 416,
+                "harmful_n": 1301,
+                "safe_positive_false_veto_fraction": 0.5161290322580645,
+                "safe_positive_false_veto_n": 16,
+                "safe_positive_n": 31
+              },
+              "drs": {
+                "harmful_false_safe_fraction": 0.7425057647963106,
+                "harmful_false_safe_n": 966,
+                "harmful_n": 1301,
+                "safe_positive_false_veto_fraction": 0.03225806451612903,
+                "safe_positive_false_veto_n": 1,
+                "safe_positive_n": 31
+              },
+              "gap_quality": {
+                "harmful_false_safe_fraction": 0.46041506533435816,
+                "harmful_false_safe_n": 599,
+                "harmful_n": 1301,
+                "safe_positive_false_veto_fraction": 0.8064516129032258,
+                "safe_positive_false_veto_n": 25,
+                "safe_positive_n": 31
+              }
+            },
+            "exact_adv_margin_median": -0.015,
+            "exact_adv_nonnegative_fraction": 0.0,
+            "exact_smooth_sign_disagreement_fraction": 0.06451612903225806,
+            "safe_positive_n": 31,
+            "smooth_adv_margin_median": -0.0279159331714547,
+            "smooth_adv_nonnegative_fraction": 0.06451612903225806
+          },
+          "positive_recall": 0.05,
+          "positive_selected": 1,
+          "precision": 0.01694915254237288,
+          "proposal_conditional_harm_auc": 0.6141575274177468,
+          "proposal_harm_auc": 0.6690394659472173,
+          "proposal_positive_auc": 0.5359943482868245,
+          "proposal_safe_positive_auc": 0.6108156028368794,
+          "selected": 59
+        },
+        "development": {
+          "constraint_deficit": 112.32240955369238,
+          "constraint_failures": 3,
+          "harmful_selected": 4,
+          "harmful_selected_ucb90": 0.38665958509451837,
+          "positive_recall": 0.0,
+          "positive_selected": 0,
+          "precision": 0.0,
+          "precision_lcb90": 0.0,
+          "proposal_oracle_feasible": true,
+          "proposal_safe_positive_groups": 20,
+          "selected": 17,
+          "valid": false
+        },
+        "development_sign_geometry": {
+          "harmful_n": 432,
+          "harmful_pred_adv_median": -0.42211976647377014,
+          "harmful_pred_adv_nonnegative_fraction": 0.032407407407407406,
+          "native_geometry": {
+            "available": true,
+            "boundary_complete_adv_margin_median": -0.039321432878814955,
+            "boundary_complete_adv_nonnegative_fraction": 0.1891891891891892,
+            "coordinates": {
+              "deployability": {
+                "harmful_false_safe_fraction": 0.41203703703703703,
+                "harmful_false_safe_n": 178,
+                "harmful_n": 432,
+                "safe_positive_false_veto_fraction": 0.5945945945945946,
+                "safe_positive_false_veto_n": 22,
+                "safe_positive_n": 37
+              },
+              "drs": {
+                "harmful_false_safe_fraction": 0.7893518518518519,
+                "harmful_false_safe_n": 341,
+                "harmful_n": 432,
+                "safe_positive_false_veto_fraction": 0.2972972972972973,
+                "safe_positive_false_veto_n": 11,
+                "safe_positive_n": 37
+              },
+              "gap_quality": {
+                "harmful_false_safe_fraction": 0.375,
+                "harmful_false_safe_n": 162,
+                "harmful_n": 432,
+                "safe_positive_false_veto_fraction": 0.6756756756756757,
+                "safe_positive_false_veto_n": 25,
+                "safe_positive_n": 37
+              }
+            },
+            "exact_adv_margin_median": -0.015,
+            "exact_adv_nonnegative_fraction": 0.1891891891891892,
+            "exact_smooth_sign_disagreement_fraction": 0.1891891891891892,
+            "safe_positive_n": 37,
+            "smooth_adv_margin_median": -0.039321432878814955,
+            "smooth_adv_nonnegative_fraction": 0.0
+          },
+          "safe_positive_harm_le_half_fraction": 0.24324324324324326,
+          "safe_positive_harm_median": 0.9837266693002621,
+          "safe_positive_joint_semantic_eligible_fraction": 0.0,
+          "safe_positive_n": 37,
+          "safe_positive_opportunity_ge_half_fraction": 0.0,
+          "safe_positive_opportunity_median": 0.3129360384878859,
+          "safe_positive_pred_adv_median": -0.3860395550727844,
+          "safe_positive_pred_adv_nonnegative_fraction": 0.0
+        }
+      },
+      "factor_contract": {
+        "_source_contract_file": "V48_53_FACTOR_CONTRACT.json",
+        "arm": "A",
+        "boundary_complete_frontier": true,
+        "created_unix": 1787094493.0964406,
+        "decision_equivalent_frontier": false,
+        "decision_weighted_observation": false,
+        "evaluation_option_execution_semantics": "observation_class",
+        "event": "v48_53_factor_contract",
+        "frontier_drs_gradient": "q_boundary_straight_through_sigmoid",
+        "frontier_gap_coordinate": "exp_neg_positive_gap",
+        "frontier_loss_weight": 2.0,
+        "frontier_order_coordinate": "smooth_boundary_drs_smooth_pcd",
+        "frontier_pcd_weight": 1.0,
+        "frontier_predicted_root_weights": true,
+        "native_advantage_coordinate": "smooth_boundary_drs",
+        "native_advantage_preservation": true,
+        "native_boundary_complete_advantage_preservation": false,
+        "native_certificate_preservation": true,
+        "native_deployability_tolerance": 0.05,
+        "native_drs_tolerance": 0.05,
+        "native_exact_advantage_preservation": false,
+        "native_gap_tolerance": 0.05,
+        "native_margin_complete_preservation": false,
+        "native_physical_student_drs": false,
+        "native_positive_gain": 0.015,
+        "new_tuned_thresholds": false,
+        "physical_student_sign_alignment": false,
+        "physical_teacher_sign_alignment": false,
+        "proposal_top_k": 5,
+        "recovery_frontier_calibration": true,
+        "reference_mechanism": "v48.52-A-BC-FC-smooth-NAP",
+        "root_logit_recalibration": false,
+        "same_downstream_dual_roct": true,
+        "standard_calibration_prediction_cache": true,
+        "strategy_regime_conditioning": false,
+        "student_sign_coordinate": "hard_qbest_ge_zero_root_mass_exact_pcd",
+        "teacher_sign_coordinate": "q_hard_proxy_drs_exact_pcd",
+        "test_roots_read": false,
+        "training_option_execution_semantics": "observation_class",
+        "version": "v48.53-DCP-DRFC-BCDE-CSE"
+      },
+      "gate_evaluated": true,
+      "gate_passed_false": true,
+      "near": {
+        "certificate": {
+          "candidate_harm_auc": 0.8103783632286996,
+          "candidate_positive_auc": 0.412593808630394,
+          "candidate_safe_positive_auc": 0.44753086419753085,
+          "components": {
+            "deployability": {
+              "harmful_false_safe_fraction": 0.27386934673366836,
+              "harmful_false_safe_n": 109,
+              "harmful_n": 398,
+              "harmful_vs_safe_positive_auc": 0.6038002512562815,
+              "safe_positive_false_veto_fraction": 0.5625,
+              "safe_positive_false_veto_n": 9,
+              "safe_positive_harm_median": 0.9174611270427704,
+              "safe_positive_n": 16
+            },
+            "drs": {
+              "harmful_false_safe_fraction": 0.6005025125628141,
+              "harmful_false_safe_n": 239,
+              "harmful_n": 398,
+              "harmful_vs_safe_positive_auc": 0.5835427135678392,
+              "safe_positive_false_veto_fraction": 0.375,
+              "safe_positive_false_veto_n": 6,
+              "safe_positive_harm_median": 0.11920291930437088,
+              "safe_positive_n": 16
+            },
+            "gap": {
+              "harmful_false_safe_fraction": 0.7512562814070352,
+              "harmful_false_safe_n": 299,
+              "harmful_n": 398,
+              "harmful_vs_safe_positive_auc": 0.4946608040201005,
+              "safe_positive_false_veto_fraction": 0.1875,
+              "safe_positive_false_veto_n": 3,
+              "safe_positive_harm_median": 0.46430689096450806,
+              "safe_positive_n": 16
+            },
+            "hard_rule": {
+              "harmful_false_safe_fraction": 1.0,
+              "harmful_false_safe_n": 398,
+              "harmful_n": 398,
+              "harmful_vs_safe_positive_auc": 0.5,
+              "safe_positive_false_veto_fraction": 0.0,
+              "safe_positive_false_veto_n": 0,
+              "safe_positive_harm_median": 0.11920291930437088,
+              "safe_positive_n": 16
+            },
+            "harm_proxy": {
+              "harmful_false_safe_fraction": 1.0,
+              "harmful_false_safe_n": 398,
+              "harmful_n": 398,
+              "harmful_vs_safe_positive_auc": 0.5,
+              "safe_positive_false_veto_fraction": 0.0,
+              "safe_positive_false_veto_n": 0,
+              "safe_positive_harm_median": 0.11920291930437088,
+              "safe_positive_n": 16
+            }
+          },
+          "harmful_selected": 1,
+          "harmful_selected_ucb90": 0.04189143055264766,
+          "native_geometry": {
+            "available": true,
+            "boundary_complete_adv_margin_median": -0.0629477808813243,
+            "boundary_complete_adv_nonnegative_fraction": 0.375,
+            "coordinates": {
+              "deployability": {
+                "harmful_false_safe_fraction": 0.27386934673366836,
+                "harmful_false_safe_n": 109,
+                "harmful_n": 398,
+                "safe_positive_false_veto_fraction": 0.5625,
+                "safe_positive_false_veto_n": 9,
+                "safe_positive_n": 16
+              },
+              "drs": {
+                "harmful_false_safe_fraction": 0.6005025125628141,
+                "harmful_false_safe_n": 239,
+                "harmful_n": 398,
+                "safe_positive_false_veto_fraction": 0.375,
+                "safe_positive_false_veto_n": 6,
+                "safe_positive_n": 16
+              },
+              "gap_quality": {
+                "harmful_false_safe_fraction": 0.45226130653266333,
+                "harmful_false_safe_n": 180,
+                "harmful_n": 398,
+                "safe_positive_false_veto_fraction": 0.75,
+                "safe_positive_false_veto_n": 12,
+                "safe_positive_n": 16
+              }
+            },
+            "exact_adv_margin_median": -0.015,
+            "exact_adv_nonnegative_fraction": 0.3125,
+            "exact_smooth_sign_disagreement_fraction": 0.0625,
+            "safe_positive_n": 16,
+            "smooth_adv_margin_median": -0.0629477808813243,
+            "smooth_adv_nonnegative_fraction": 0.375
+          },
+          "positive_recall": 0.3333333333333333,
+          "positive_selected": 3,
+          "precision": 0.038461538461538464,
+          "proposal_conditional_harm_auc": 0.7207446808510638,
+          "proposal_harm_auc": 0.8288956207482994,
+          "proposal_positive_auc": 0.4469642857142857,
+          "proposal_safe_positive_auc": 0.49113475177304966,
+          "selected": 78
+        },
+        "development": {
+          "constraint_deficit": 112.32240955369238,
+          "constraint_failures": 3,
+          "harmful_selected": 4,
+          "harmful_selected_ucb90": 0.20663595750917446,
+          "positive_recall": 0.375,
+          "positive_selected": 3,
+          "precision": 0.08823529411764706,
+          "precision_lcb90": 0.04343548955759459,
+          "proposal_oracle_feasible": true,
+          "proposal_safe_positive_groups": 9,
+          "selected": 34,
+          "valid": false
+        },
+        "development_sign_geometry": {
+          "harmful_n": 136,
+          "harmful_pred_adv_median": -0.49110856652259827,
+          "harmful_pred_adv_nonnegative_fraction": 0.058823529411764705,
+          "native_geometry": {
+            "available": true,
+            "boundary_complete_adv_margin_median": -0.022029134905463158,
+            "boundary_complete_adv_nonnegative_fraction": 0.2631578947368421,
+            "coordinates": {
+              "deployability": {
+                "harmful_false_safe_fraction": 0.38235294117647056,
+                "harmful_false_safe_n": 52,
+                "harmful_n": 136,
+                "safe_positive_false_veto_fraction": 0.5263157894736842,
+                "safe_positive_false_veto_n": 10,
+                "safe_positive_n": 19
+              },
+              "drs": {
+                "harmful_false_safe_fraction": 0.41911764705882354,
+                "harmful_false_safe_n": 57,
+                "harmful_n": 136,
+                "safe_positive_false_veto_fraction": 0.0,
+                "safe_positive_false_veto_n": 0,
+                "safe_positive_n": 19
+              },
+              "gap_quality": {
+                "harmful_false_safe_fraction": 0.40441176470588236,
+                "harmful_false_safe_n": 55,
+                "harmful_n": 136,
+                "safe_positive_false_veto_fraction": 0.5263157894736842,
+                "safe_positive_false_veto_n": 10,
+                "safe_positive_n": 19
+              }
+            },
+            "exact_adv_margin_median": -0.015,
+            "exact_adv_nonnegative_fraction": 0.10526315789473684,
+            "exact_smooth_sign_disagreement_fraction": 0.21052631578947367,
+            "safe_positive_n": 19,
+            "smooth_adv_margin_median": -0.026893489055310114,
+            "smooth_adv_nonnegative_fraction": 0.21052631578947367
+          },
+          "safe_positive_harm_le_half_fraction": 0.47368421052631576,
+          "safe_positive_harm_median": 0.5330980881441378,
+          "safe_positive_joint_semantic_eligible_fraction": 0.21052631578947367,
+          "safe_positive_n": 19,
+          "safe_positive_opportunity_ge_half_fraction": 0.21052631578947367,
+          "safe_positive_opportunity_median": 0.3686832574938324,
+          "safe_positive_pred_adv_median": -0.1742306351661682,
+          "safe_positive_pred_adv_nonnegative_fraction": 0.21052631578947367
+        }
+      },
+      "pipeline_valid": true,
+      "run": "/mnt/data/v4854_current/refA/ocrap_v48_53_dcp_drfc_bcde_cse_ablation_A",
+      "safe_balanced": {
+        "available": true,
+        "gamma_rec": 0.5714231729507446,
+        "num_negative": 136,
+        "num_samples": 2544,
+        "policy_natural_gate_evaluated": false,
+        "reason": "no dedicated scene-disjoint Safe policy certificate population is registered; Safe is checked by calibrated recovery threshold plus paired non-inferiority closed loop",
+        "standard_calibration_valid": true,
+        "test_roots_read": false
+      },
+      "safe_precision": {
+        "available": true,
+        "gamma_rec": 0.5714231729507446,
+        "num_negative": 136,
+        "num_samples": 2544,
+        "policy_natural_gate_evaluated": false,
+        "reason": "no dedicated scene-disjoint Safe policy certificate population is registered; Safe is checked by calibrated recovery threshold plus paired non-inferiority closed loop",
+        "standard_calibration_valid": true,
+        "test_roots_read": false
+      },
+      "witness_balanced": {
+        "enabled": true,
+        "stages": [
+          {
+            "best_epoch": 3,
+            "best_val": {
+              "loss": 1.2375309873357525,
+              "loss_dep": 0.0,
+              "loss_margin": 0.5586779378671506,
+              "loss_obs": 0.0,
+              "loss_option_q": 0.0,
+              "loss_recovery_frontier": 0.548930751646843
+            },
+            "checkpoint": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_53_dcp_drfc_bcde_cse_ablation_A/candidates/balanced/v48_47_recovery_frontier/model_v48_47_witness/best.pt",
+            "checkpoint_sha256": "ca5aedd43bfbfd58cbc0047df431cf1f3970600d0f40d8187602c6e0c44f3017",
+            "created_unix": 1787094659.2507274,
+            "delta_best_minus_initial": {
+              "loss": -0.7637783848488799,
+              "loss_dep": 0.0,
+              "loss_margin": -0.02551320327051776,
+              "loss_obs": 0.0,
+              "loss_option_q": 0.0,
+              "loss_recovery_frontier": -0.3787000416711995
+            },
+            "event": "v48_47_witness_stage_complete",
+            "initial_val": {
+              "loss": 2.0013093721846325,
+              "loss_dep": 0.0,
+              "loss_margin": 0.5841911411376683,
+              "loss_obs": 0.0,
+              "loss_option_q": 0.0,
+              "loss_recovery_frontier": 0.9276307933180425
+            },
+            "option_execution_semantics": "observation_class",
+            "source_checkpoint": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_45_source_rebuild_s7/candidates/balanced/model_v48_trac_sr/best.pt",
+            "source_sha256": "070218c66e506d66f25a12bf53b4127581992d75481bbb635d7ea658f4cfd352",
+            "stage": "frontier",
+            "stage_contract": {
+              "boundary_complete_frontier": true,
+              "created_unix": 1787094591.551943,
+              "decision_equivalent_frontier": false,
+              "decision_weighted_observation_loss": false,
+              "direct_policy_heads_frozen": true,
+              "epochs": 5,
+              "event": "v48_47_witness_stage_contract",
+              "frontier_gap_tolerance": 0.05,
+              "frontier_order_coordinate": "smooth_boundary_drs_smooth_pcd",
+              "frontier_pcd_weight": 1.0,
+              "frontier_positive_gain": 0.015,
+              "frontier_regression_weight": 1.0,
+              "frontier_sign_temperature": 0.08,
+              "frontier_sign_weight": 0.5,
+              "frozen_modules_eval": true,
+              "group_index": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_53_dcp_drfc_bcde_cse_ablation_A/evidence_adapt_teacher_pcd_index.jsonl",
+              "group_index_sha256": "74585bb9e3735251efd0ff4a9a126a26063824c1490fd98c43aa23c9450f1e09",
+              "loss_margin": 0.25,
+              "loss_obs": 0.0,
+              "loss_recovery_frontier": 2.0,
+              "native_advantage_preservation": false,
+              "native_boundary_complete_advantage_preservation": false,
+              "native_certificate_preservation": false,
+              "native_exact_advantage_preservation": false,
+              "native_margin_complete_preservation": false,
+              "obs_conflict_scale": 3.0,
+              "obs_conflict_temperature": 0.2,
+              "obs_max_weight": 4.0,
+              "option_execution_semantics": "observation_class",
+              "physical_student_sign_alignment": false,
+              "physical_teacher_sign_alignment": false,
+              "root_decoder_frozen": true,
+              "root_logit_head_frozen": true,
+              "shared_encoder_frozen": true,
+              "stage": "frontier",
+              "strategy_regime_conditioning": false,
+              "student_sign_coordinate": "hard_qbest_ge_zero_root_mass_exact_pcd",
+              "teacher_sign_coordinate": "q_hard_proxy_drs_exact_pcd",
+              "test_roots_read": false,
+              "train_mix": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_train_near_contact,/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_train_contact",
+              "trainable_param_prefixes": [
+                "margin_head"
+              ],
+              "val_mix": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_near_contact,/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_contact",
+              "version": "v48.47-DS-OFR",
+              "witness_fast_path": "frontier"
+            },
+            "strategy_regime_conditioning": false,
+            "test_roots_read": false,
+            "trainable_param_prefixes": [
+              "margin_head"
+            ],
+            "version": "v48.47-DS-OFR"
+          }
+        ]
+      },
+      "witness_precision": {
+        "enabled": true,
+        "stages": [
+          {
+            "best_epoch": 3,
+            "best_val": {
+              "loss": 1.2375309873357525,
+              "loss_dep": 0.0,
+              "loss_margin": 0.5586779378671506,
+              "loss_obs": 0.0,
+              "loss_option_q": 0.0,
+              "loss_recovery_frontier": 0.548930751646843
+            },
+            "checkpoint": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_53_dcp_drfc_bcde_cse_ablation_A/candidates/precision/v48_47_recovery_frontier/model_v48_47_witness/best.pt",
+            "checkpoint_sha256": "99b9a7bc5538c4619d6e0ca42b5f52b7668a27193db0bf2b99410beed1fafc97",
+            "created_unix": 1787095097.3817968,
+            "delta_best_minus_initial": {
+              "loss": -0.7637783848488799,
+              "loss_dep": 0.0,
+              "loss_margin": -0.02551320327051776,
+              "loss_obs": 0.0,
+              "loss_option_q": 0.0,
+              "loss_recovery_frontier": -0.3787000416711995
+            },
+            "event": "v48_47_witness_stage_complete",
+            "initial_val": {
+              "loss": 2.0013093721846325,
+              "loss_dep": 0.0,
+              "loss_margin": 0.5841911411376683,
+              "loss_obs": 0.0,
+              "loss_option_q": 0.0,
+              "loss_recovery_frontier": 0.9276307933180425
+            },
+            "option_execution_semantics": "observation_class",
+            "source_checkpoint": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_45_source_rebuild_s7/candidates/precision/model_v48_trac_sr/best.pt",
+            "source_sha256": "8f7528b76ce4b2424c5f153fe3109844de27a08a976a067b1292baee393f768d",
+            "stage": "frontier",
+            "stage_contract": {
+              "boundary_complete_frontier": true,
+              "created_unix": 1787095027.0684536,
+              "decision_equivalent_frontier": false,
+              "decision_weighted_observation_loss": false,
+              "direct_policy_heads_frozen": true,
+              "epochs": 5,
+              "event": "v48_47_witness_stage_contract",
+              "frontier_gap_tolerance": 0.05,
+              "frontier_order_coordinate": "smooth_boundary_drs_smooth_pcd",
+              "frontier_pcd_weight": 1.0,
+              "frontier_positive_gain": 0.015,
+              "frontier_regression_weight": 1.0,
+              "frontier_sign_temperature": 0.08,
+              "frontier_sign_weight": 0.5,
+              "frozen_modules_eval": true,
+              "group_index": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_53_dcp_drfc_bcde_cse_ablation_A/evidence_adapt_teacher_pcd_index.jsonl",
+              "group_index_sha256": "74585bb9e3735251efd0ff4a9a126a26063824c1490fd98c43aa23c9450f1e09",
+              "loss_margin": 0.25,
+              "loss_obs": 0.0,
+              "loss_recovery_frontier": 2.0,
+              "native_advantage_preservation": false,
+              "native_boundary_complete_advantage_preservation": false,
+              "native_certificate_preservation": false,
+              "native_exact_advantage_preservation": false,
+              "native_margin_complete_preservation": false,
+              "obs_conflict_scale": 3.0,
+              "obs_conflict_temperature": 0.2,
+              "obs_max_weight": 4.0,
+              "option_execution_semantics": "observation_class",
+              "physical_student_sign_alignment": false,
+              "physical_teacher_sign_alignment": false,
+              "root_decoder_frozen": true,
+              "root_logit_head_frozen": true,
+              "shared_encoder_frozen": true,
+              "stage": "frontier",
+              "strategy_regime_conditioning": false,
+              "student_sign_coordinate": "hard_qbest_ge_zero_root_mass_exact_pcd",
+              "teacher_sign_coordinate": "q_hard_proxy_drs_exact_pcd",
+              "test_roots_read": false,
+              "train_mix": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_train_near_contact,/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_train_contact",
+              "trainable_param_prefixes": [
+                "margin_head"
+              ],
+              "val_mix": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_near_contact,/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_contact",
+              "version": "v48.47-DS-OFR",
+              "witness_fast_path": "frontier"
+            },
+            "strategy_regime_conditioning": false,
+            "test_roots_read": false,
+            "trainable_param_prefixes": [
+              "margin_head"
+            ],
+            "version": "v48.47-DS-OFR"
+          }
+        ]
+      }
+    },
+    "B": {
+      "attribution_identity": {
+        "gate_dataset_manifest_sha256": {
+          "contact_certificate": "56379598d38360ba6cfebd1d6130f6cf8baac4142dd3b9956e045bdffd536306",
+          "contact_threshold_fit_dev": "4d18a8c9b7f39d2842fec1e0518f89d07ab331b98c286563f83fe8adec3b1471",
+          "near_certificate": "7a6f49bd5efba0ea496617efda6931f9b283cd7cf3c208b15abd06c2c74fa4f3",
+          "near_threshold_fit_dev": "2191cfd8d2d976ea0d086ab75e01b55f78f2da709f515430b3ac78cd3af4878a",
+          "safe_calibration": "9790f61b42945c1cfefb5f7085fe9a7765aa961ecb3a365b5cfa1e7bdd77f32c"
+        },
+        "gate_protocol": {
+          "benefit": {
+            "gate_positive_mode": "safe_benefit",
+            "opportunity_label_mode": "raw_benefit",
+            "positive_gain": 0.015
+          },
+          "certificate_labels_used_for_threshold_fit": false,
+          "certificate_mode": "external_rule_full_verification",
+          "confidence": {
+            "bound_type": "one_sided",
+            "level": 0.9
+          },
+          "contact": {
+            "fit": {
+              "max_harmful_group_ucb": 0.14,
+              "max_harmful_selected_ucb": 0.22,
+              "min_precision_lcb": 0.5,
+              "min_selected": 16
+            },
+            "verify": {
+              "max_harmful_group_ucb": 0.16,
+              "max_harmful_selected_ucb": 0.25,
+              "min_precision_lcb": 0.4,
+              "min_selected": 10
+            }
+          },
+          "datasets": [
+            {
+              "manifest": "/data0/senzeyu2/dataset/OCRAP/calibration_safe/manifest.csv",
+              "manifest_sha256": "9790f61b42945c1cfefb5f7085fe9a7765aa961ecb3a365b5cfa1e7bdd77f32c",
+              "role": "safe_calibration",
+              "root": "/data0/senzeyu2/dataset/OCRAP/calibration_safe"
+            },
+            {
+              "manifest": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_near_contact/manifest.csv",
+              "manifest_sha256": "7a6f49bd5efba0ea496617efda6931f9b283cd7cf3c208b15abd06c2c74fa4f3",
+              "role": "near_certificate",
+              "root": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_near_contact"
+            },
+            {
+              "manifest": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_contact/manifest.csv",
+              "manifest_sha256": "56379598d38360ba6cfebd1d6130f6cf8baac4142dd3b9956e045bdffd536306",
+              "role": "contact_certificate",
+              "root": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_contact"
+            },
+            {
+              "manifest": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_near_contact/manifest.csv",
+              "manifest_sha256": "2191cfd8d2d976ea0d086ab75e01b55f78f2da709f515430b3ac78cd3af4878a",
+              "role": "near_threshold_fit_dev",
+              "root": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_near_contact"
+            },
+            {
+              "manifest": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_contact/manifest.csv",
+              "manifest_sha256": "4d18a8c9b7f39d2842fec1e0518f89d07ab331b98c286563f83fe8adec3b1471",
+              "role": "contact_threshold_fit_dev",
+              "root": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_contact"
+            }
+          ],
+          "fit_verify_scene_disjoint": true,
+          "harm": {
+            "component_tolerances": {
+              "deployability_gate": 0.05,
+              "drs": 0.05,
+              "gap_discount": 0.05,
+              "hard_violation": 0.05,
+              "harm_proxy": 0.05
+            },
+            "label_mode": "component_veto",
+            "negative_gain_legacy": 0.01
+          },
+          "near": {
+            "fit": {
+              "max_harmful_group_ucb": 0.12,
+              "max_harmful_selected_ucb": 0.22,
+              "min_precision_lcb": 0.5,
+              "min_selected": 10
+            },
+            "verify": {
+              "max_harmful_group_ucb": 0.14,
+              "max_harmful_selected_ucb": 0.25,
+              "min_precision_lcb": 0.4,
+              "min_selected": 8
+            }
+          },
+          "policy": {
+            "option_execution_semantics": "observation_class",
+            "proposal_top_k": 5,
+            "selection_semantics": "rank_topk_then_filter_then_evidence_rerank"
+          },
+          "shared_deployment_rule": true,
+          "strategy_regime_conditioning": false,
+          "test_roots_read": false,
+          "threshold_source": "pooled_evidence_adapt_dev_shared_rule",
+          "version": "v48.36-OCAF"
+        },
+        "gate_protocol_sha256": "0b6ed9494cb7805b28847f5c5cdbc0c5a610fe2e3ace1e284835c2cfaed24c94",
+        "source_checkpoint_sha256": {
+          "balanced": "070218c66e506d66f25a12bf53b4127581992d75481bbb635d7ea658f4cfd352",
+          "precision": "8f7528b76ce4b2424c5f153fe3109844de27a08a976a067b1292baee393f768d"
+        },
+        "source_run_resolved": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_45_source_rebuild_s7"
+      },
+      "authoritative_exit_code": 20,
+      "certificate_executed": true,
+      "contact": {
+        "certificate": {
+          "candidate_harm_auc": 0.6790852796104163,
+          "candidate_positive_auc": 0.6432330174598215,
+          "candidate_safe_positive_auc": 0.7357341800356506,
+          "components": {
+            "deployability": {
+              "harmful_false_safe_fraction": 0.6717909300538047,
+              "harmful_false_safe_n": 874,
+              "harmful_n": 1301,
+              "harmful_vs_safe_positive_auc": 0.7674741513971882,
+              "safe_positive_false_veto_fraction": 0.06451612903225806,
+              "safe_positive_false_veto_n": 2,
+              "safe_positive_harm_median": 0.09574703872203827,
+              "safe_positive_n": 31
+            },
+            "drs": {
+              "harmful_false_safe_fraction": 0.606456571867794,
+              "harmful_false_safe_n": 789,
+              "harmful_n": 1301,
+              "harmful_vs_safe_positive_auc": 0.680630284396618,
+              "safe_positive_false_veto_fraction": 0.12903225806451613,
+              "safe_positive_false_veto_n": 4,
+              "safe_positive_harm_median": 0.11920291930437088,
+              "safe_positive_n": 31
+            },
+            "gap": {
+              "harmful_false_safe_fraction": 0.03151421983089931,
+              "harmful_false_safe_n": 41,
+              "harmful_n": 1301,
+              "harmful_vs_safe_positive_auc": 0.5105006074731596,
+              "safe_positive_false_veto_fraction": 0.967741935483871,
+              "safe_positive_false_veto_n": 30,
+              "safe_positive_harm_median": 0.6336150765419006,
+              "safe_positive_n": 31
+            },
+            "hard_rule": {
+              "harmful_false_safe_fraction": 1.0,
+              "harmful_false_safe_n": 1301,
+              "harmful_n": 1301,
+              "harmful_vs_safe_positive_auc": 0.5,
+              "safe_positive_false_veto_fraction": 0.0,
+              "safe_positive_false_veto_n": 0,
+              "safe_positive_harm_median": 0.11920291930437088,
+              "safe_positive_n": 31
+            },
+            "harm_proxy": {
+              "harmful_false_safe_fraction": 1.0,
+              "harmful_false_safe_n": 1301,
+              "harmful_n": 1301,
+              "harmful_vs_safe_positive_auc": 0.5,
+              "safe_positive_false_veto_fraction": 0.0,
+              "safe_positive_false_veto_n": 0,
+              "safe_positive_harm_median": 0.11920291930437088,
+              "safe_positive_n": 31
+            }
+          },
+          "harmful_selected": 1,
+          "harmful_selected_ucb90": 0.33957008436081637,
+          "native_geometry": {
+            "available": true,
+            "boundary_complete_adv_margin_median": -0.0818519340618019,
+            "boundary_complete_adv_nonnegative_fraction": 0.25806451612903225,
+            "coordinates": {
+              "deployability": {
+                "harmful_false_safe_fraction": 0.6717909300538047,
+                "harmful_false_safe_n": 874,
+                "harmful_n": 1301,
+                "safe_positive_false_veto_fraction": 0.06451612903225806,
+                "safe_positive_false_veto_n": 2,
+                "safe_positive_n": 31
+              },
+              "drs": {
+                "harmful_false_safe_fraction": 0.606456571867794,
+                "harmful_false_safe_n": 789,
+                "harmful_n": 1301,
+                "safe_positive_false_veto_fraction": 0.12903225806451613,
+                "safe_positive_false_veto_n": 4,
+                "safe_positive_n": 31
+              },
+              "gap_quality": {
+                "harmful_false_safe_fraction": 0.4465795541890853,
+                "harmful_false_safe_n": 581,
+                "harmful_n": 1301,
+                "safe_positive_false_veto_fraction": 0.9032258064516129,
+                "safe_positive_false_veto_n": 28,
+                "safe_positive_n": 31
+              }
+            },
+            "exact_adv_margin_median": -0.07863757975223194,
+            "exact_adv_nonnegative_fraction": 0.06451612903225806,
+            "exact_smooth_sign_disagreement_fraction": 0.22580645161290322,
+            "safe_positive_n": 31,
+            "smooth_adv_margin_median": -0.031165124803703856,
+            "smooth_adv_nonnegative_fraction": 0.2903225806451613
+          },
+          "positive_recall": 0.0,
+          "positive_selected": 0,
+          "precision": 0.0,
+          "proposal_conditional_harm_auc": 0.623741756334606,
+          "proposal_harm_auc": 0.6600001385012777,
+          "proposal_positive_auc": 0.6306970509383378,
+          "proposal_safe_positive_auc": 0.6880540780141844,
+          "selected": 8
+        },
+        "development": {
+          "constraint_deficit": 195.0,
+          "constraint_failures": 5,
+          "harmful_selected": 0,
+          "harmful_selected_ucb90": 1.0,
+          "positive_recall": 0.0,
+          "positive_selected": 0,
+          "precision": 0.0,
+          "precision_lcb90": 0.0,
+          "proposal_oracle_feasible": true,
+          "proposal_safe_positive_groups": 20,
+          "selected": 0,
+          "valid": false
+        },
+        "development_sign_geometry": {
+          "harmful_n": 432,
+          "harmful_pred_adv_median": -0.42369788885116577,
+          "harmful_pred_adv_nonnegative_fraction": 0.0,
+          "native_geometry": {
+            "available": true,
+            "boundary_complete_adv_margin_median": -0.07551171529430588,
+            "boundary_complete_adv_nonnegative_fraction": 0.13513513513513514,
+            "coordinates": {
+              "deployability": {
+                "harmful_false_safe_fraction": 0.6064814814814815,
+                "harmful_false_safe_n": 262,
+                "harmful_n": 432,
+                "safe_positive_false_veto_fraction": 0.1891891891891892,
+                "safe_positive_false_veto_n": 7,
+                "safe_positive_n": 37
+              },
+              "drs": {
+                "harmful_false_safe_fraction": 0.5601851851851852,
+                "harmful_false_safe_n": 242,
+                "harmful_n": 432,
+                "safe_positive_false_veto_fraction": 0.2702702702702703,
+                "safe_positive_false_veto_n": 10,
+                "safe_positive_n": 37
+              },
+              "gap_quality": {
+                "harmful_false_safe_fraction": 0.42592592592592593,
+                "harmful_false_safe_n": 184,
+                "harmful_n": 432,
+                "safe_positive_false_veto_fraction": 0.6756756756756757,
+                "safe_positive_false_veto_n": 25,
+                "safe_positive_n": 37
+              }
+            },
+            "exact_adv_margin_median": -0.05978261835756925,
+            "exact_adv_nonnegative_fraction": 0.10810810810810811,
+            "exact_smooth_sign_disagreement_fraction": 0.02702702702702703,
+            "safe_positive_n": 37,
+            "smooth_adv_margin_median": -0.051152864180938104,
+            "smooth_adv_nonnegative_fraction": 0.13513513513513514
+          },
+          "safe_positive_harm_le_half_fraction": 0.21621621621621623,
+          "safe_positive_harm_median": 0.5961784345445069,
+          "safe_positive_joint_semantic_eligible_fraction": 0.0,
+          "safe_positive_n": 37,
+          "safe_positive_opportunity_ge_half_fraction": 0.13513513513513514,
+          "safe_positive_opportunity_median": 0.2644321795034664,
+          "safe_positive_pred_adv_median": -0.23556780815124512,
+          "safe_positive_pred_adv_nonnegative_fraction": 0.0
+        }
+      },
+      "factor_contract": {
+        "_source_contract_file": "V48_54_FACTOR_CONTRACT.json",
+        "arm": "B",
+        "boundary_complete_frontier": true,
+        "created_unix": 1787108215.8289142,
+        "decision_equivalent_frontier": false,
+        "decision_weighted_observation": false,
+        "evaluation_option_execution_semantics": "observation_class",
+        "event": "v48_54_factor_contract",
+        "frontier_drs_gradient": "q_boundary_straight_through_sigmoid",
+        "frontier_gap_coordinate": "exp_neg_positive_gap",
+        "frontier_loss_weight": 2.0,
+        "frontier_order_coordinate": "smooth_boundary_drs_smooth_pcd",
+        "frontier_pcd_weight": 1.0,
+        "frontier_predicted_root_weights": true,
+        "frontier_sign_temperature": 0.08,
+        "invariant_physical_boundary_distillation": true,
+        "native_advantage_coordinate": "smooth_boundary_drs",
+        "native_advantage_preservation": true,
+        "native_boundary_complete_advantage_preservation": false,
+        "native_certificate_preservation": true,
+        "native_deployability_tolerance": 0.05,
+        "native_drs_tolerance": 0.05,
+        "native_exact_advantage_preservation": false,
+        "native_gap_tolerance": 0.05,
+        "native_margin_complete_preservation": false,
+        "native_physical_student_drs": false,
+        "native_positive_gain": 0.015,
+        "new_tuned_thresholds": false,
+        "physical_boundary_distillation_coordinate": "teacher_q_selected_mstar_zero_to_predicted_margin",
+        "physical_boundary_distillation_weight": 0.5,
+        "physical_student_sign_alignment": false,
+        "physical_teacher_sign_alignment": false,
+        "proposal_top_k": 5,
+        "recovery_frontier_calibration": true,
+        "reference_mechanism": "v48.53-A-BC-FC-smooth-NAP-qhard",
+        "root_logit_recalibration": false,
+        "same_downstream_dual_roct": true,
+        "standard_calibration_prediction_cache": true,
+        "strategy_regime_conditioning": false,
+        "student_sign_coordinate": "hard_qbest_ge_zero_root_mass_exact_pcd",
+        "teacher_sign_coordinate": "q_hard_proxy_drs_exact_pcd",
+        "test_roots_read": false,
+        "training_option_execution_semantics": "observation_class",
+        "version": "v48.54-DCP-DRFC-BCDE-IPBD"
+      },
+      "gate_evaluated": true,
+      "gate_passed_false": true,
+      "near": {
+        "certificate": {
+          "candidate_harm_auc": 0.679865470852018,
+          "candidate_positive_auc": 0.3030018761726079,
+          "candidate_safe_positive_auc": 0.31984702093397743,
+          "components": {
+            "deployability": {
+              "harmful_false_safe_fraction": 0.7336683417085427,
+              "harmful_false_safe_n": 292,
+              "harmful_n": 398,
+              "harmful_vs_safe_positive_auc": 0.4629396984924623,
+              "safe_positive_false_veto_fraction": 0.5,
+              "safe_positive_false_veto_n": 8,
+              "safe_positive_harm_median": 0.5002456307411194,
+              "safe_positive_n": 16
+            },
+            "drs": {
+              "harmful_false_safe_fraction": 0.6582914572864321,
+              "harmful_false_safe_n": 262,
+              "harmful_n": 398,
+              "harmful_vs_safe_positive_auc": 0.49725188442211055,
+              "safe_positive_false_veto_fraction": 0.4375,
+              "safe_positive_false_veto_n": 7,
+              "safe_positive_harm_median": 0.11920291930437088,
+              "safe_positive_n": 16
+            },
+            "gap": {
+              "harmful_false_safe_fraction": 0.04522613065326633,
+              "harmful_false_safe_n": 18,
+              "harmful_n": 398,
+              "harmful_vs_safe_positive_auc": 0.4269786432160804,
+              "safe_positive_false_veto_fraction": 1.0,
+              "safe_positive_false_veto_n": 16,
+              "safe_positive_harm_median": 0.647655576467514,
+              "safe_positive_n": 16
+            },
+            "hard_rule": {
+              "harmful_false_safe_fraction": 1.0,
+              "harmful_false_safe_n": 398,
+              "harmful_n": 398,
+              "harmful_vs_safe_positive_auc": 0.5,
+              "safe_positive_false_veto_fraction": 0.0,
+              "safe_positive_false_veto_n": 0,
+              "safe_positive_harm_median": 0.11920291930437088,
+              "safe_positive_n": 16
+            },
+            "harm_proxy": {
+              "harmful_false_safe_fraction": 1.0,
+              "harmful_false_safe_n": 398,
+              "harmful_n": 398,
+              "harmful_vs_safe_positive_auc": 0.5,
+              "safe_positive_false_veto_fraction": 0.0,
+              "safe_positive_false_veto_n": 0,
+              "safe_positive_harm_median": 0.11920291930437088,
+              "safe_positive_n": 16
+            }
+          },
+          "harmful_selected": 0,
+          "harmful_selected_ucb90": 0.24725712712067496,
+          "native_geometry": {
+            "available": true,
+            "boundary_complete_adv_margin_median": -0.17394018539824002,
+            "boundary_complete_adv_nonnegative_fraction": 0.25,
+            "coordinates": {
+              "deployability": {
+                "harmful_false_safe_fraction": 0.7336683417085427,
+                "harmful_false_safe_n": 292,
+                "harmful_n": 398,
+                "safe_positive_false_veto_fraction": 0.5,
+                "safe_positive_false_veto_n": 8,
+                "safe_positive_n": 16
+              },
+              "drs": {
+                "harmful_false_safe_fraction": 0.6582914572864321,
+                "harmful_false_safe_n": 262,
+                "harmful_n": 398,
+                "safe_positive_false_veto_fraction": 0.4375,
+                "safe_positive_false_veto_n": 7,
+                "safe_positive_n": 16
+              },
+              "gap_quality": {
+                "harmful_false_safe_fraction": 0.4748743718592965,
+                "harmful_false_safe_n": 189,
+                "harmful_n": 398,
+                "safe_positive_false_veto_fraction": 0.5625,
+                "safe_positive_false_veto_n": 9,
+                "safe_positive_n": 16
+              }
+            },
+            "exact_adv_margin_median": -0.14601826169570253,
+            "exact_adv_nonnegative_fraction": 0.1875,
+            "exact_smooth_sign_disagreement_fraction": 0.0625,
+            "safe_positive_n": 16,
+            "smooth_adv_margin_median": -0.12140581944377074,
+            "smooth_adv_nonnegative_fraction": 0.25
+          },
+          "positive_recall": 0.0,
+          "positive_selected": 0,
+          "precision": 0.0,
+          "proposal_conditional_harm_auc": 0.5965397923875433,
+          "proposal_harm_auc": 0.746949794922382,
+          "proposal_positive_auc": 0.3702675416456335,
+          "proposal_safe_positive_auc": 0.3835087719298246,
+          "selected": 5
+        },
+        "development": {
+          "constraint_deficit": 195.0,
+          "constraint_failures": 5,
+          "harmful_selected": 0,
+          "harmful_selected_ucb90": 0.15432405881264954,
+          "positive_recall": 0.0,
+          "positive_selected": 0,
+          "precision": 0.0,
+          "precision_lcb90": 0.0,
+          "proposal_oracle_feasible": true,
+          "proposal_safe_positive_groups": 9,
+          "selected": 9,
+          "valid": false
+        },
+        "development_sign_geometry": {
+          "harmful_n": 136,
+          "harmful_pred_adv_median": -0.4244823604822159,
+          "harmful_pred_adv_nonnegative_fraction": 0.0,
+          "native_geometry": {
+            "available": true,
+            "boundary_complete_adv_margin_median": -0.21078431999829617,
+            "boundary_complete_adv_nonnegative_fraction": 0.15789473684210525,
+            "coordinates": {
+              "deployability": {
+                "harmful_false_safe_fraction": 0.7058823529411765,
+                "harmful_false_safe_n": 96,
+                "harmful_n": 136,
+                "safe_positive_false_veto_fraction": 0.47368421052631576,
+                "safe_positive_false_veto_n": 9,
+                "safe_positive_n": 19
+              },
+              "drs": {
+                "harmful_false_safe_fraction": 0.7058823529411765,
+                "harmful_false_safe_n": 96,
+                "harmful_n": 136,
+                "safe_positive_false_veto_fraction": 0.21052631578947367,
+                "safe_positive_false_veto_n": 4,
+                "safe_positive_n": 19
+              },
+              "gap_quality": {
+                "harmful_false_safe_fraction": 0.3897058823529412,
+                "harmful_false_safe_n": 53,
+                "harmful_n": 136,
+                "safe_positive_false_veto_fraction": 0.2631578947368421,
+                "safe_positive_false_veto_n": 5,
+                "safe_positive_n": 19
+              }
+            },
+            "exact_adv_margin_median": -0.13022362694597633,
+            "exact_adv_nonnegative_fraction": 0.10526315789473684,
+            "exact_smooth_sign_disagreement_fraction": 0.05263157894736842,
+            "safe_positive_n": 19,
+            "smooth_adv_margin_median": -0.09746429447546255,
+            "smooth_adv_nonnegative_fraction": 0.15789473684210525
+          },
+          "safe_positive_harm_le_half_fraction": 0.0,
+          "safe_positive_harm_median": 0.8280551666866414,
+          "safe_positive_joint_semantic_eligible_fraction": 0.0,
+          "safe_positive_n": 19,
+          "safe_positive_opportunity_ge_half_fraction": 0.15789473684210525,
+          "safe_positive_opportunity_median": 0.12463124823774407,
+          "safe_positive_pred_adv_median": -0.4854525625705719,
+          "safe_positive_pred_adv_nonnegative_fraction": 0.0
+        }
+      },
+      "pipeline_valid": true,
+      "run": "/mnt/data/v4854_current/main/ocrap_v48_54_dcp_drfc_bcde_ipbd_main",
+      "safe_balanced": {
+        "available": true,
+        "gamma_rec": 0.7992163300514221,
+        "num_negative": 136,
+        "num_samples": 2544,
+        "policy_natural_gate_evaluated": false,
+        "reason": "no dedicated scene-disjoint Safe policy certificate population is registered; Safe is checked by calibrated recovery threshold plus paired non-inferiority closed loop",
+        "standard_calibration_valid": true,
+        "test_roots_read": false
+      },
+      "safe_precision": {
+        "available": true,
+        "gamma_rec": 0.7992163300514221,
+        "num_negative": 136,
+        "num_samples": 2544,
+        "policy_natural_gate_evaluated": false,
+        "reason": "no dedicated scene-disjoint Safe policy certificate population is registered; Safe is checked by calibrated recovery threshold plus paired non-inferiority closed loop",
+        "standard_calibration_valid": true,
+        "test_roots_read": false
+      },
+      "witness_balanced": {
+        "enabled": true,
+        "stages": [
+          {
+            "best_epoch": 5,
+            "best_val": {
+              "loss": 1.7211651876780099,
+              "loss_dep": 0.0,
+              "loss_margin": 0.8616806972419006,
+              "loss_obs": 0.0,
+              "loss_option_q": 0.0,
+              "loss_physical_boundary_distill": 1.0609584945849377,
+              "loss_recovery_frontier": 0.48763288356368
+            },
+            "checkpoint": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_54_dcp_drfc_bcde_ipbd_main/candidates/balanced/v48_47_recovery_frontier/model_v48_47_witness/best.pt",
+            "checkpoint_sha256": "0bcd85f2e35ef23e2608adc9e536663acfa879ee7204c5ffa0551e9bdc5192fa",
+            "created_unix": 1787108524.4935944,
+            "delta_best_minus_initial": {
+              "loss": -2.927597322486979,
+              "loss_dep": 0.0,
+              "loss_margin": 0.2774895561042322,
+              "loss_obs": 0.0,
+              "loss_option_q": 0.0,
+              "loss_physical_boundary_distill": -4.23394770753769,
+              "loss_recovery_frontier": -0.43999790975436254
+            },
+            "event": "v48_47_witness_stage_complete",
+            "initial_val": {
+              "loss": 4.648762510164989,
+              "loss_dep": 0.0,
+              "loss_margin": 0.5841911411376683,
+              "loss_obs": 0.0,
+              "loss_option_q": 0.0,
+              "loss_physical_boundary_distill": 5.294906202122628,
+              "loss_recovery_frontier": 0.9276307933180425
+            },
+            "option_execution_semantics": "observation_class",
+            "source_checkpoint": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_45_source_rebuild_s7/candidates/balanced/model_v48_trac_sr/best.pt",
+            "source_sha256": "070218c66e506d66f25a12bf53b4127581992d75481bbb635d7ea658f4cfd352",
+            "stage": "frontier",
+            "stage_contract": {
+              "boundary_complete_frontier": true,
+              "created_unix": 1787108441.5217838,
+              "decision_equivalent_frontier": false,
+              "decision_weighted_observation_loss": false,
+              "direct_policy_heads_frozen": true,
+              "epochs": 5,
+              "event": "v48_47_witness_stage_contract",
+              "frontier_gap_tolerance": 0.05,
+              "frontier_order_coordinate": "smooth_boundary_drs_smooth_pcd",
+              "frontier_pcd_weight": 1.0,
+              "frontier_positive_gain": 0.015,
+              "frontier_regression_weight": 1.0,
+              "frontier_sign_temperature": 0.08,
+              "frontier_sign_weight": 0.5,
+              "frozen_modules_eval": true,
+              "group_index": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_54_dcp_drfc_bcde_ipbd_main/evidence_adapt_teacher_pcd_index.jsonl",
+              "group_index_sha256": "74585bb9e3735251efd0ff4a9a126a26063824c1490fd98c43aa23c9450f1e09",
+              "invariant_physical_boundary_distillation": true,
+              "loss_margin": 0.25,
+              "loss_obs": 0.0,
+              "loss_recovery_frontier": 2.0,
+              "native_advantage_preservation": false,
+              "native_boundary_complete_advantage_preservation": false,
+              "native_certificate_preservation": false,
+              "native_exact_advantage_preservation": false,
+              "native_margin_complete_preservation": false,
+              "obs_conflict_scale": 3.0,
+              "obs_conflict_temperature": 0.2,
+              "obs_max_weight": 4.0,
+              "option_execution_semantics": "observation_class",
+              "physical_boundary_distillation_coordinate": "teacher_q_selected_mstar_zero_to_predicted_margin",
+              "physical_boundary_distillation_weight": 0.5,
+              "physical_student_sign_alignment": false,
+              "physical_teacher_sign_alignment": false,
+              "root_decoder_frozen": true,
+              "root_logit_head_frozen": true,
+              "shared_encoder_frozen": true,
+              "stage": "frontier",
+              "strategy_regime_conditioning": false,
+              "student_sign_coordinate": "hard_qbest_ge_zero_root_mass_exact_pcd",
+              "teacher_sign_coordinate": "q_hard_proxy_drs_exact_pcd",
+              "test_roots_read": false,
+              "train_mix": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_train_near_contact,/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_train_contact",
+              "trainable_param_prefixes": [
+                "margin_head"
+              ],
+              "val_mix": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_near_contact,/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_contact",
+              "version": "v48.47-DS-OFR",
+              "witness_fast_path": "frontier"
+            },
+            "strategy_regime_conditioning": false,
+            "test_roots_read": false,
+            "trainable_param_prefixes": [
+              "margin_head"
+            ],
+            "version": "v48.47-DS-OFR"
+          }
+        ]
+      },
+      "witness_precision": {
+        "enabled": true,
+        "stages": [
+          {
+            "best_epoch": 5,
+            "best_val": {
+              "loss": 1.7211651876780099,
+              "loss_dep": 0.0,
+              "loss_margin": 0.8616806972419006,
+              "loss_obs": 0.0,
+              "loss_option_q": 0.0,
+              "loss_physical_boundary_distill": 1.0609584945849377,
+              "loss_recovery_frontier": 0.48763288356368
+            },
+            "checkpoint": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_54_dcp_drfc_bcde_ipbd_main/candidates/precision/v48_47_recovery_frontier/model_v48_47_witness/best.pt",
+            "checkpoint_sha256": "248135b0fc027dace11bf0e74e47d4a13cd9db2ddba54a85564c8e1d7df45a6c",
+            "created_unix": 1787108525.6720157,
+            "delta_best_minus_initial": {
+              "loss": -2.927597322486979,
+              "loss_dep": 0.0,
+              "loss_margin": 0.2774895561042322,
+              "loss_obs": 0.0,
+              "loss_option_q": 0.0,
+              "loss_physical_boundary_distill": -4.23394770753769,
+              "loss_recovery_frontier": -0.43999790975436254
+            },
+            "event": "v48_47_witness_stage_complete",
+            "initial_val": {
+              "loss": 4.648762510164989,
+              "loss_dep": 0.0,
+              "loss_margin": 0.5841911411376683,
+              "loss_obs": 0.0,
+              "loss_option_q": 0.0,
+              "loss_physical_boundary_distill": 5.294906202122628,
+              "loss_recovery_frontier": 0.9276307933180425
+            },
+            "option_execution_semantics": "observation_class",
+            "source_checkpoint": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_45_source_rebuild_s7/candidates/precision/model_v48_trac_sr/best.pt",
+            "source_sha256": "8f7528b76ce4b2424c5f153fe3109844de27a08a976a067b1292baee393f768d",
+            "stage": "frontier",
+            "stage_contract": {
+              "boundary_complete_frontier": true,
+              "created_unix": 1787108441.5991518,
+              "decision_equivalent_frontier": false,
+              "decision_weighted_observation_loss": false,
+              "direct_policy_heads_frozen": true,
+              "epochs": 5,
+              "event": "v48_47_witness_stage_contract",
+              "frontier_gap_tolerance": 0.05,
+              "frontier_order_coordinate": "smooth_boundary_drs_smooth_pcd",
+              "frontier_pcd_weight": 1.0,
+              "frontier_positive_gain": 0.015,
+              "frontier_regression_weight": 1.0,
+              "frontier_sign_temperature": 0.08,
+              "frontier_sign_weight": 0.5,
+              "frozen_modules_eval": true,
+              "group_index": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_54_dcp_drfc_bcde_ipbd_main/evidence_adapt_teacher_pcd_index.jsonl",
+              "group_index_sha256": "74585bb9e3735251efd0ff4a9a126a26063824c1490fd98c43aa23c9450f1e09",
+              "invariant_physical_boundary_distillation": true,
+              "loss_margin": 0.25,
+              "loss_obs": 0.0,
+              "loss_recovery_frontier": 2.0,
+              "native_advantage_preservation": false,
+              "native_boundary_complete_advantage_preservation": false,
+              "native_certificate_preservation": false,
+              "native_exact_advantage_preservation": false,
+              "native_margin_complete_preservation": false,
+              "obs_conflict_scale": 3.0,
+              "obs_conflict_temperature": 0.2,
+              "obs_max_weight": 4.0,
+              "option_execution_semantics": "observation_class",
+              "physical_boundary_distillation_coordinate": "teacher_q_selected_mstar_zero_to_predicted_margin",
+              "physical_boundary_distillation_weight": 0.5,
+              "physical_student_sign_alignment": false,
+              "physical_teacher_sign_alignment": false,
+              "root_decoder_frozen": true,
+              "root_logit_head_frozen": true,
+              "shared_encoder_frozen": true,
+              "stage": "frontier",
+              "strategy_regime_conditioning": false,
+              "student_sign_coordinate": "hard_qbest_ge_zero_root_mass_exact_pcd",
+              "teacher_sign_coordinate": "q_hard_proxy_drs_exact_pcd",
+              "test_roots_read": false,
+              "train_mix": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_train_near_contact,/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_train_contact",
+              "trainable_param_prefixes": [
+                "margin_head"
+              ],
+              "val_mix": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_near_contact,/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_contact",
+              "version": "v48.47-DS-OFR",
+              "witness_fast_path": "frontier"
+            },
+            "strategy_regime_conditioning": false,
+            "test_roots_read": false,
+            "trainable_param_prefixes": [
+              "margin_head"
+            ],
+            "version": "v48.47-DS-OFR"
+          }
+        ]
+      }
+    }
+  },
+  "attribution_contract": {
+    "factor_contract_errors": [],
+    "identities": {
+      "A": {
+        "gate_dataset_manifest_sha256": {
+          "contact_certificate": "56379598d38360ba6cfebd1d6130f6cf8baac4142dd3b9956e045bdffd536306",
+          "contact_threshold_fit_dev": "4d18a8c9b7f39d2842fec1e0518f89d07ab331b98c286563f83fe8adec3b1471",
+          "near_certificate": "7a6f49bd5efba0ea496617efda6931f9b283cd7cf3c208b15abd06c2c74fa4f3",
+          "near_threshold_fit_dev": "2191cfd8d2d976ea0d086ab75e01b55f78f2da709f515430b3ac78cd3af4878a",
+          "safe_calibration": "9790f61b42945c1cfefb5f7085fe9a7765aa961ecb3a365b5cfa1e7bdd77f32c"
+        },
+        "gate_protocol": {
+          "benefit": {
+            "gate_positive_mode": "safe_benefit",
+            "opportunity_label_mode": "raw_benefit",
+            "positive_gain": 0.015
+          },
+          "certificate_labels_used_for_threshold_fit": false,
+          "certificate_mode": "external_rule_full_verification",
+          "confidence": {
+            "bound_type": "one_sided",
+            "level": 0.9
+          },
+          "contact": {
+            "fit": {
+              "max_harmful_group_ucb": 0.14,
+              "max_harmful_selected_ucb": 0.22,
+              "min_precision_lcb": 0.5,
+              "min_selected": 16
+            },
+            "verify": {
+              "max_harmful_group_ucb": 0.16,
+              "max_harmful_selected_ucb": 0.25,
+              "min_precision_lcb": 0.4,
+              "min_selected": 10
+            }
+          },
+          "datasets": [
+            {
+              "manifest": "/data0/senzeyu2/dataset/OCRAP/calibration_safe/manifest.csv",
+              "manifest_sha256": "9790f61b42945c1cfefb5f7085fe9a7765aa961ecb3a365b5cfa1e7bdd77f32c",
+              "role": "safe_calibration",
+              "root": "/data0/senzeyu2/dataset/OCRAP/calibration_safe"
+            },
+            {
+              "manifest": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_near_contact/manifest.csv",
+              "manifest_sha256": "7a6f49bd5efba0ea496617efda6931f9b283cd7cf3c208b15abd06c2c74fa4f3",
+              "role": "near_certificate",
+              "root": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_near_contact"
+            },
+            {
+              "manifest": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_contact/manifest.csv",
+              "manifest_sha256": "56379598d38360ba6cfebd1d6130f6cf8baac4142dd3b9956e045bdffd536306",
+              "role": "contact_certificate",
+              "root": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_contact"
+            },
+            {
+              "manifest": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_near_contact/manifest.csv",
+              "manifest_sha256": "2191cfd8d2d976ea0d086ab75e01b55f78f2da709f515430b3ac78cd3af4878a",
+              "role": "near_threshold_fit_dev",
+              "root": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_near_contact"
+            },
+            {
+              "manifest": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_contact/manifest.csv",
+              "manifest_sha256": "4d18a8c9b7f39d2842fec1e0518f89d07ab331b98c286563f83fe8adec3b1471",
+              "role": "contact_threshold_fit_dev",
+              "root": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_contact"
+            }
+          ],
+          "fit_verify_scene_disjoint": true,
+          "harm": {
+            "component_tolerances": {
+              "deployability_gate": 0.05,
+              "drs": 0.05,
+              "gap_discount": 0.05,
+              "hard_violation": 0.05,
+              "harm_proxy": 0.05
+            },
+            "label_mode": "component_veto",
+            "negative_gain_legacy": 0.01
+          },
+          "near": {
+            "fit": {
+              "max_harmful_group_ucb": 0.12,
+              "max_harmful_selected_ucb": 0.22,
+              "min_precision_lcb": 0.5,
+              "min_selected": 10
+            },
+            "verify": {
+              "max_harmful_group_ucb": 0.14,
+              "max_harmful_selected_ucb": 0.25,
+              "min_precision_lcb": 0.4,
+              "min_selected": 8
+            }
+          },
+          "policy": {
+            "option_execution_semantics": "observation_class",
+            "proposal_top_k": 5,
+            "selection_semantics": "rank_topk_then_filter_then_evidence_rerank"
+          },
+          "shared_deployment_rule": true,
+          "strategy_regime_conditioning": false,
+          "test_roots_read": false,
+          "threshold_source": "pooled_evidence_adapt_dev_shared_rule",
+          "version": "v48.36-OCAF"
+        },
+        "gate_protocol_sha256": "0b6ed9494cb7805b28847f5c5cdbc0c5a610fe2e3ace1e284835c2cfaed24c94",
+        "source_checkpoint_sha256": {
+          "balanced": "070218c66e506d66f25a12bf53b4127581992d75481bbb635d7ea658f4cfd352",
+          "precision": "8f7528b76ce4b2424c5f153fe3109844de27a08a976a067b1292baee393f768d"
+        },
+        "source_run_resolved": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_45_source_rebuild_s7"
+      },
+      "B": {
+        "gate_dataset_manifest_sha256": {
+          "contact_certificate": "56379598d38360ba6cfebd1d6130f6cf8baac4142dd3b9956e045bdffd536306",
+          "contact_threshold_fit_dev": "4d18a8c9b7f39d2842fec1e0518f89d07ab331b98c286563f83fe8adec3b1471",
+          "near_certificate": "7a6f49bd5efba0ea496617efda6931f9b283cd7cf3c208b15abd06c2c74fa4f3",
+          "near_threshold_fit_dev": "2191cfd8d2d976ea0d086ab75e01b55f78f2da709f515430b3ac78cd3af4878a",
+          "safe_calibration": "9790f61b42945c1cfefb5f7085fe9a7765aa961ecb3a365b5cfa1e7bdd77f32c"
+        },
+        "gate_protocol": {
+          "benefit": {
+            "gate_positive_mode": "safe_benefit",
+            "opportunity_label_mode": "raw_benefit",
+            "positive_gain": 0.015
+          },
+          "certificate_labels_used_for_threshold_fit": false,
+          "certificate_mode": "external_rule_full_verification",
+          "confidence": {
+            "bound_type": "one_sided",
+            "level": 0.9
+          },
+          "contact": {
+            "fit": {
+              "max_harmful_group_ucb": 0.14,
+              "max_harmful_selected_ucb": 0.22,
+              "min_precision_lcb": 0.5,
+              "min_selected": 16
+            },
+            "verify": {
+              "max_harmful_group_ucb": 0.16,
+              "max_harmful_selected_ucb": 0.25,
+              "min_precision_lcb": 0.4,
+              "min_selected": 10
+            }
+          },
+          "datasets": [
+            {
+              "manifest": "/data0/senzeyu2/dataset/OCRAP/calibration_safe/manifest.csv",
+              "manifest_sha256": "9790f61b42945c1cfefb5f7085fe9a7765aa961ecb3a365b5cfa1e7bdd77f32c",
+              "role": "safe_calibration",
+              "root": "/data0/senzeyu2/dataset/OCRAP/calibration_safe"
+            },
+            {
+              "manifest": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_near_contact/manifest.csv",
+              "manifest_sha256": "7a6f49bd5efba0ea496617efda6931f9b283cd7cf3c208b15abd06c2c74fa4f3",
+              "role": "near_certificate",
+              "root": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_near_contact"
+            },
+            {
+              "manifest": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_contact/manifest.csv",
+              "manifest_sha256": "56379598d38360ba6cfebd1d6130f6cf8baac4142dd3b9956e045bdffd536306",
+              "role": "contact_certificate",
+              "root": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/certificate_pool_contact"
+            },
+            {
+              "manifest": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_near_contact/manifest.csv",
+              "manifest_sha256": "2191cfd8d2d976ea0d086ab75e01b55f78f2da709f515430b3ac78cd3af4878a",
+              "role": "near_threshold_fit_dev",
+              "root": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_near_contact"
+            },
+            {
+              "manifest": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_contact/manifest.csv",
+              "manifest_sha256": "4d18a8c9b7f39d2842fec1e0518f89d07ab331b98c286563f83fe8adec3b1471",
+              "role": "contact_threshold_fit_dev",
+              "root": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814/evidence_adapt_dev_contact"
+            }
+          ],
+          "fit_verify_scene_disjoint": true,
+          "harm": {
+            "component_tolerances": {
+              "deployability_gate": 0.05,
+              "drs": 0.05,
+              "gap_discount": 0.05,
+              "hard_violation": 0.05,
+              "harm_proxy": 0.05
+            },
+            "label_mode": "component_veto",
+            "negative_gain_legacy": 0.01
+          },
+          "near": {
+            "fit": {
+              "max_harmful_group_ucb": 0.12,
+              "max_harmful_selected_ucb": 0.22,
+              "min_precision_lcb": 0.5,
+              "min_selected": 10
+            },
+            "verify": {
+              "max_harmful_group_ucb": 0.14,
+              "max_harmful_selected_ucb": 0.25,
+              "min_precision_lcb": 0.4,
+              "min_selected": 8
+            }
+          },
+          "policy": {
+            "option_execution_semantics": "observation_class",
+            "proposal_top_k": 5,
+            "selection_semantics": "rank_topk_then_filter_then_evidence_rerank"
+          },
+          "shared_deployment_rule": true,
+          "strategy_regime_conditioning": false,
+          "test_roots_read": false,
+          "threshold_source": "pooled_evidence_adapt_dev_shared_rule",
+          "version": "v48.36-OCAF"
+        },
+        "gate_protocol_sha256": "0b6ed9494cb7805b28847f5c5cdbc0c5a610fe2e3ace1e284835c2cfaed24c94",
+        "source_checkpoint_sha256": {
+          "balanced": "070218c66e506d66f25a12bf53b4127581992d75481bbb635d7ea658f4cfd352",
+          "precision": "8f7528b76ce4b2424c5f153fe3109844de27a08a976a067b1292baee393f768d"
+        },
+        "source_run_resolved": "/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_45_source_rebuild_s7"
+      }
+    },
+    "meaning": "A/B keep the same q-hard BC-FC + smooth-NAP teacher/student/deployment certificate. B-A isolates training-only Invariant-Preserving Boundary Distillation: teacher q selects the legal observation-consistent option and only its m_star=0 physical boundary supervises the predicted margin. Native q-hard DRS, smooth order, thresholds, root logits and policy are unchanged; no regime-conditioned policy is introduced.",
+    "mismatched_arms": [],
+    "missing_reference_fields": false,
+    "reference_arm": "A",
+    "reference_source": "semantic-reuse-v48.53-A",
+    "valid": true
+  },
+  "diagnostic_only": true,
+  "effect_readout": {
+    "contact": {
+      "candidate_safe_positive_auc": {
+        "A": 0.6324532085561497,
+        "B": 0.7357341800356506,
+        "B_minus_A": 0.10328097147950088,
+        "higher_is_better": true
+      },
+      "certificate_harmful_ucb90": {
+        "A": 0.3508081402462616,
+        "B": 0.33957008436081637,
+        "B_minus_A": -0.011238055885445242,
+        "higher_is_better": false
+      },
+      "certificate_recall": {
+        "A": 0.05,
+        "B": 0.0,
+        "B_minus_A": -0.05,
+        "higher_is_better": true
+      },
+      "development_drs_harmful_false_safe_fraction": {
+        "A": 0.7893518518518519,
+        "B": 0.5601851851851852,
+        "B_minus_A": -0.22916666666666663,
+        "higher_is_better": false
+      },
+      "development_drs_safe_positive_false_veto_fraction": {
+        "A": 0.2972972972972973,
+        "B": 0.2702702702702703,
+        "B_minus_A": -0.02702702702702703,
+        "higher_is_better": false
+      },
+      "development_exact_adv_nonnegative_fraction": {
+        "A": 0.1891891891891892,
+        "B": 0.10810810810810811,
+        "B_minus_A": -0.08108108108108109,
+        "higher_is_better": true
+      },
+      "development_joint_semantic_eligible_fraction": {
+        "A": 0.0,
+        "B": 0.0,
+        "B_minus_A": 0.0,
+        "higher_is_better": true
+      },
+      "development_precision": {
+        "A": 0.0,
+        "B": 0.0,
+        "B_minus_A": 0.0,
+        "higher_is_better": true
+      },
+      "development_recall": {
+        "A": 0.0,
+        "B": 0.0,
+        "B_minus_A": 0.0,
+        "higher_is_better": true
+      },
+      "proposal_safe_positive_auc": {
+        "A": 0.6108156028368794,
+        "B": 0.6880540780141844,
+        "B_minus_A": 0.07723847517730498,
+        "higher_is_better": true
+      },
+      "safe_positive_opportunity_median": {
+        "A": 0.3129360384878859,
+        "B": 0.2644321795034664,
+        "B_minus_A": -0.0485038589844195,
+        "higher_is_better": true
+      },
+      "safe_positive_pred_adv_median": {
+        "A": -0.3860395550727844,
+        "B": -0.23556780815124512,
+        "B_minus_A": 0.1504717469215393,
+        "higher_is_better": true
+      }
+    },
+    "near": {
+      "candidate_safe_positive_auc": {
+        "A": 0.44753086419753085,
+        "B": 0.31984702093397743,
+        "B_minus_A": -0.12768384326355342,
+        "higher_is_better": true
+      },
+      "certificate_harmful_ucb90": {
+        "A": 0.04189143055264766,
+        "B": 0.24725712712067496,
+        "B_minus_A": 0.2053656965680273,
+        "higher_is_better": false
+      },
+      "certificate_recall": {
+        "A": 0.3333333333333333,
+        "B": 0.0,
+        "B_minus_A": -0.3333333333333333,
+        "higher_is_better": true
+      },
+      "development_drs_harmful_false_safe_fraction": {
+        "A": 0.41911764705882354,
+        "B": 0.7058823529411765,
+        "B_minus_A": 0.286764705882353,
+        "higher_is_better": false
+      },
+      "development_drs_safe_positive_false_veto_fraction": {
+        "A": 0.0,
+        "B": 0.21052631578947367,
+        "B_minus_A": 0.21052631578947367,
+        "higher_is_better": false
+      },
+      "development_exact_adv_nonnegative_fraction": {
+        "A": 0.10526315789473684,
+        "B": 0.10526315789473684,
+        "B_minus_A": 0.0,
+        "higher_is_better": true
+      },
+      "development_joint_semantic_eligible_fraction": {
+        "A": 0.21052631578947367,
+        "B": 0.0,
+        "B_minus_A": -0.21052631578947367,
+        "higher_is_better": true
+      },
+      "development_precision": {
+        "A": 0.08823529411764706,
+        "B": 0.0,
+        "B_minus_A": -0.08823529411764706,
+        "higher_is_better": true
+      },
+      "development_recall": {
+        "A": 0.375,
+        "B": 0.0,
+        "B_minus_A": -0.375,
+        "higher_is_better": true
+      },
+      "proposal_safe_positive_auc": {
+        "A": 0.49113475177304966,
+        "B": 0.3835087719298246,
+        "B_minus_A": -0.10762597984322508,
+        "higher_is_better": true
+      },
+      "safe_positive_opportunity_median": {
+        "A": 0.3686832574938324,
+        "B": 0.12463124823774407,
+        "B_minus_A": -0.24405200925608833,
+        "higher_is_better": true
+      },
+      "safe_positive_pred_adv_median": {
+        "A": -0.1742306351661682,
+        "B": -0.4854525625705719,
+        "B_minus_A": -0.3112219274044037,
+        "higher_is_better": true
+      }
+    }
+  },
+  "positive_gain": 0.015,
+  "schema": "v48.54-dcp-drfc-bcde-ipbd-ab-comparison-v1",
+  "test_roots_read": false
+}

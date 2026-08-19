@@ -35,6 +35,60 @@ def frontier_normalize_signed_margin(
     return s * torch.tanh(margin / s)
 
 
+
+
+def _component_vector(
+    raw: str | tuple[float, ...] | list[float] | None,
+    *,
+    ncomp: int,
+    default: float,
+    clamp_unit: bool = False,
+) -> list[float]:
+    if raw is None:
+        values: list[float] = []
+    elif isinstance(raw, str):
+        text = raw.strip()
+        values = [] if text.lower() in {"", "none", "null", "~"} else [
+            float(x.strip()) for x in text.split(",") if x.strip()
+        ]
+    else:
+        values = [float(x) for x in raw]
+    if not values:
+        values = [float(default)] * int(ncomp)
+    if len(values) < int(ncomp):
+        values.extend([float(default)] * (int(ncomp) - len(values)))
+    values = values[: int(ncomp)]
+    if clamp_unit:
+        values = [min(1.0, max(0.0, x)) for x in values]
+    return values
+
+
+def component_margin_regression_targets(
+    raw_margin: torch.Tensor,
+    *,
+    mode: str,
+    target_scale: float,
+    canonical_scales: str | tuple[float, ...] | list[float] | None = None,
+) -> torch.Tensor:
+    """Transform dense component margins without changing hard-veto semantics."""
+    target_mode = str(mode or "raw").strip().lower()
+    if target_mode == "raw":
+        return raw_margin
+    if target_mode == "frontier_tanh":
+        return frontier_normalize_signed_margin(raw_margin, target_scale)
+    if target_mode != "pooled_rms_linear":
+        raise ValueError(f"unsupported ordinal_evidence_component_margin_target_mode={mode!r}")
+    ncomp = int(raw_margin.shape[-1])
+    values = _component_vector(canonical_scales, ncomp=ncomp, default=float("nan"))
+    scales = raw_margin.new_tensor(values)
+    if (not torch.isfinite(scales).all()) or bool((scales <= 0).any()):
+        raise ValueError(f"invalid component canonical scales: {values!r}")
+    # v48.55 TCBC: linear, component-specific normalization.  It preserves
+    # the exact zero crossing and all within-component ordering and does not
+    # saturate large margins (unlike the historical v48.40 frontier_tanh).
+    return float(target_scale) * raw_margin / scales.unsqueeze(0)
+
+
 def anti_oracle_loss(pred_r_orc: torch.Tensor, pred_r_dep: torch.Tensor, teacher_artifact: torch.Tensor, delta_neg: float = 0.0) -> torch.Tensor:
     """Anti-oracle loss from Eq. (18): I_art * [R_dep - delta_neg]_+.
 
@@ -2356,6 +2410,8 @@ def direct_uncertainty_recovery_value_loss(
     ordinal_evidence_component_margin_regression_weight: float = 0.0,
     ordinal_evidence_component_margin_target_mode: str = "raw",
     ordinal_evidence_component_margin_target_scale: float = 0.10,
+    ordinal_evidence_component_margin_canonical_scales: str | tuple[float, ...] = "",
+    ordinal_evidence_component_margin_regression_reliability: str | tuple[float, ...] = "",
     ordinal_evidence_component_underestimation_weight: float = 0.0,
     ordinal_evidence_safe_positive_component_overestimation_weight: float = 0.0,
     ordinal_evidence_benefit_margin_regression_weight: float = 0.0,
@@ -3198,54 +3254,38 @@ def direct_uncertainty_recovery_value_loss(
                     target_component_margins_raw = factorized_component_margins[
                         :, : component_harm_delta_logits.shape[-1]
                     ].to(dtype=predicted_component_margins.dtype)
-                    component_margin_target_mode = str(
-                        ordinal_evidence_component_margin_target_mode or "raw"
-                    ).strip().lower()
-                    if component_margin_target_mode == "raw":
-                        target_component_margins_regression = target_component_margins_raw
-                    elif component_margin_target_mode == "frontier_tanh":
-                        target_component_margins_regression = frontier_normalize_signed_margin(
-                            target_component_margins_raw,
-                            ordinal_evidence_component_margin_target_scale,
-                        )
-                    else:
-                        raise ValueError(
-                            "unsupported ordinal_evidence_component_margin_target_mode="
-                            f"{ordinal_evidence_component_margin_target_mode!r}"
-                        )
+                    target_component_margins_regression = component_margin_regression_targets(
+                        target_component_margins_raw,
+                        mode=ordinal_evidence_component_margin_target_mode,
+                        target_scale=ordinal_evidence_component_margin_target_scale,
+                        canonical_scales=ordinal_evidence_component_margin_canonical_scales,
+                    )
                     regression_raw = F.smooth_l1_loss(
                         predicted_component_margins,
                         target_component_margins_regression,
                         reduction="none",
                     )
-                    raw_reliability = ordinal_evidence_component_reliability
-                    if raw_reliability is None:
-                        reliability_values = []
-                    elif isinstance(raw_reliability, str):
-                        reliability_text = raw_reliability.strip()
-                        if reliability_text.lower() in {"", "none", "null", "~"}:
-                            reliability_values = []
-                        else:
-                            reliability_values = [
-                                float(x.strip()) for x in reliability_text.split(",") if x.strip()
-                            ]
-                    else:
-                        reliability_values = [float(x) for x in raw_reliability]
-                    if not reliability_values:
-                        reliability_values = [1.0] * component_harm_delta_logits.shape[-1]
-                    if len(reliability_values) < component_harm_delta_logits.shape[-1]:
-                        reliability_values.extend(
-                            [1.0] * (component_harm_delta_logits.shape[-1] - len(reliability_values))
-                        )
+                    ncomp = int(component_harm_delta_logits.shape[-1])
                     component_reliability = predicted_component_margins.new_tensor(
-                        [
-                            min(1.0, max(0.0, x))
-                            for x in reliability_values[: component_harm_delta_logits.shape[-1]]
-                        ]
+                        _component_vector(
+                            ordinal_evidence_component_reliability,
+                            ncomp=ncomp, default=1.0, clamp_unit=True,
+                        )
                     )
-                    regression = (regression_raw * component_reliability).sum() / (
+                    # v48.55 separates sign support from explicit continuous-
+                    # distance regression support. DRS can remain fully
+                    # supervised by component BCE while being excluded from
+                    # SmoothL1 magnitude regression in the X factor.
+                    regression_reliability = predicted_component_margins.new_tensor(
+                        _component_vector(
+                            ordinal_evidence_component_margin_regression_reliability,
+                            ncomp=ncomp, default=1.0, clamp_unit=True,
+                        )
+                    )
+                    effective_regression_reliability = component_reliability * regression_reliability
+                    regression = (regression_raw * effective_regression_reliability).sum() / (
                         predicted_component_margins.shape[0]
-                        * component_reliability.sum().clamp_min(1.0e-6)
+                        * effective_regression_reliability.sum().clamp_min(1.0e-6)
                     )
                     terms.append(
                         float(ordinal_evidence_component_margin_regression_weight)
