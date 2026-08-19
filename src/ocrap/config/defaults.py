@@ -56,6 +56,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "future_priors": {"replay": 0.25, "reactive": 0.35, "targeted": 0.40},
     "control_limits": {"a_max": 3.0, "a_min": -6.0, "j_max": 6.0, "delta_max": 0.55, "steer_rate_max": 0.5, "v_max": 20.0},
     "margin_scales": {"distance": 2.0, "stop": 5.0, "accel": 1.0, "decel": 1.0, "steer": 0.1, "jerk": 2.0, "steer_rate": 0.1, "route": 1.0, "delta_v": 2.0, "yaw": 0.2, "inactive": 10.0},
+    "teacher_margin_semantics": {
+        "mode": "legacy",
+        "generic_recovery_floor": 0.6,
+        "route_blocked_ceiling": -0.8,
+        "avoid_secondary_floor": 0.9,
+    },
     "obs_distance": {"s_c": 2.0, "s_v": 2.0, "s_p": 2.0, "s_yaw": 0.2, "lambda_psi": 0.5, "lambda_v": 0.5, "lambda_type": 2.0, "lambda_occ": 1.0, "lambda_ego": 0.5, "lambda_map": 0.5, "p_unmatch": 5.0},
     "utility_weights": {"progress": 1.0, "comfort": 0.05, "route": 0.5, "logdiv": 0.05, "offroad": 5.0, "wrongway": 5.0},
     "split_ratios": {"train": 0.70, "val": 0.10, "calibration": 0.10, "test": 0.10},

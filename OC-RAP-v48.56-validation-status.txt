@@ -1,0 +1,43 @@
+OC-RAP v48.56 DCP-DRFC-BCDE-TCSA validation status
+Date: 2026-08-19
+
+RESEARCH DECISION
+- Boundary-Complete Evidence Centering: NOT AUTHORIZED.
+- Component-normalization family: STOP after v48.55.
+- Root-logit recalibration: remains STOP.
+- v48.56 role: teacher/component semantic correctness audit + strict-min-slack shadow only.
+
+UPLOADED V48.55 ATTRIBUTION
+- A reference reuse valid; no regime conditioning; no test roots.
+- B-A: DRS sign-only does not improve dev native/component geometry; Near cert recall 0.333->0.222.
+- C-A: DEP/GAP pooled RMS canonicalization does not improve native geometry; Contact UCB worsens 0.3508->0.3565.
+- D interaction: Contact recall 0.05->0.10 and UCB 0.3508->0.3306, but Contact dev geometry remains identical and Near recall remains 0.222.
+- Therefore TCBC does not satisfy the preregistered component-Pareto condition for centering.
+
+SEMANTIC AUDIT ON UPLOADED V48.55 INDEX
+- train Near beneficial/harmful conflict: 20/45 = 44.4%.
+- train Contact: 32/138 = 23.2%.
+- dev Near: 12/37 = 32.4%.
+- dev Contact: 25/88 = 28.4%.
+- GAP is the dominant overlap culprit.
+- R_dep zero-cross candidates are highly concentrated at exactly 0.5, motivating strict teacher-source rebuild before using R_dep rescue as a new target.
+
+CODE CHANGES
+- Added teacher_margin_semantics.mode = legacy | strict_min_slack.
+- Legacy behavior remains default for historical reproducibility.
+- strict_min_slack disables historical post-min floors/ceilings but keeps the explicit branch-intent artifact component in the first controlled shadow.
+- Added train/dev-only semantic audit with test-role input rejection.
+- Added cached R_dep/R_orc vs fresh OC-MERO audit when source roots are available.
+- Added strict calibration/protocol/index/audit shadow launchers.
+
+VALIDATION
+- V48.47-V48.56 targeted changed-path regression: 67 passed, 11 warnings, exit 0.
+- V48.56 new tests: 5 passed, exit 0.
+- python -m compileall -q src tools tests: PASS.
+- bash -n: all 133 repository .sh files PASS.
+- Uploaded v48.55 index-only TCSA audit: PASS and correctly blocks centering.
+- No real /data0 source NPZs are present in this environment, so cached-vs-fresh OC-MERO equality and the strict shadow rebuild are intentionally left for the user's training machine.
+
+HISTORICAL TEST DEBT (NOT INTRODUCED BY V48.56)
+- Aggregate full pytest is not clean in this delivery because several historical tests reference operator-command files not present in the uploaded package, and an old tools import expectation can fail under the current pytest import environment.
+- These unrelated historical failures were not masked by fabricating compatibility files; changed-path V48.56 regression is clean.

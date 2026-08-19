@@ -78,6 +78,15 @@ margin_scales:
   delta_v: 2.0
   yaw: 0.2
   inactive: 10.0
+# v48.56 makes historical post-min teacher heuristics explicit.  Correctness
+# experiments use strict_min_slack so m_star is the minimum active registered
+# component margin.  The first controlled shadow may still retain the explicit
+# branch-intent artifact component; that fixture is audited separately.
+teacher_margin_semantics:
+  mode: legacy
+  generic_recovery_floor: 0.6
+  route_blocked_ceiling: -0.8
+  avoid_secondary_floor: 0.9
 obs_distance:
   s_c: 2.0
   s_v: 2.0

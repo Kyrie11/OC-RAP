@@ -1,3 +1,118 @@
+## v48.56 — DCP-DRFC-BCDE-TCSA / TEACHER-COMPONENT SEMANTIC AUDIT + STRICT-MIN-SLACK SHADOW (2026-08-19)
+
+**类别：由 v48.55 TCBC 2×2 的否证结果直接触发的 correctness release。v48.56 不再增加 performance Main，不进入 Boundary-Complete Evidence Centering，也不重开 root-logit recalibration；先验证 teacher target、component decision role 与真实 deployed veto 是否语义一致。统一 planner、observation-class execution、q-hard BC-FC + smooth-NAP、shared/no-regime rule 均保持。**
+
+### v48.55 authoritative 2×2：TCBC 没有形成 upstream component Pareto，normalization family STOP
+
+A 为复用的 `q-hard BC-FC + smooth-NAP` reference；B 只移除 DRS continuous magnitude regression；C 只做 DEP/GAP pooled train-only RMS linear canonicalization；D= B+C。reference reuse contract `valid=true`、`errors=[]`、source/五个 manifest/gate semantics 一致，四臂均 `pipeline_valid=true`、authoritative RC20、certificate真实执行且 `test_roots_read=false`。
+
+严格按 **B-A → C-A → D-B-C+A**：
+
+| regime | metric | A | B | C | D | 关键结论 |
+|---|---:|---:|---:|---:|---:|---|
+| Near | cert recall | **0.333** | 0.222 | 0.222 | 0.222 | X/Y 均损失 0.111；D 无绝对恢复 |
+| Near | harmful UCB90 | **0.0419** | 0.0424 | 0.0424 | 0.0430 | 全部轻微更差 |
+| Near | candidate safe-positive AUC | 0.4475 | 0.4458 | 0.4481 | 0.4484 | 变化近零 |
+| Near | proposal safe-positive AUC | 0.4911 | 0.4832 | 0.4920 | 0.4925 | B 明显负；C/D 仅噪声级 |
+| Contact | cert recall | 0.050 | 0.050 | 0.050 | **0.100** | 仅 D interaction +0.05 |
+| Contact | harmful UCB90 | 0.3508 | 0.3508 | 0.3565 | **0.3306** | D interaction -0.0259，但仍远高于 verify cap 0.25 |
+| Contact | candidate safe-positive AUC | 0.63245 | 0.63246 | 0.63238 | 0.63238 | 实质不变 |
+| Contact | proposal safe-positive AUC | 0.61082 | 0.61093 | 0.61026 | 0.61026 | 实质不变 |
+
+更关键的是，**Near 与 Contact 的 development native/component geometry 在 A/B/C/D 上逐项相同**：DRS/DEP/GAP harmful false-safe 与 safe-positive false-veto、boundary-complete sign、exact sign、joint semantic eligibility、opportunity median、pred-adv median都没有被 X/Y 改动。Near dev recall始终 0.375；Contact dev recall始终 0，joint semantic eligible始终 0。
+
+因此：
+
+- **B-A** 不支持“仅取消 DRS magnitude regression 就能改善 deployed DRS geometry”；它保留了历史 `hard sign + smooth local order` 原则，但 v48.55 X 本身不是新的正机制。
+- **C-A** 否定 pooled-RMS scale mismatch 是当前 causal bottleneck；线性 zero/order-preserving normalization 没有移动 native component frontier。
+- **D interaction** 只能解释为 downstream selection-level 小交互；Contact 局部 recall/UCB改善没有对应 upstream geometry 改善，并且 Near 绝对 recall仍低于 A，不能称 complementary TCBC。
+- **STOP component-normalization family**：不再做 RMS target-scale、per-component scale、tanh/clip 或 Near/Contact 分桶 normalization 搜索。
+- **不满足 Evidence Centering 先决条件**：不能把固定负 pred-adv解释成“最后只差 centering”。
+
+### v48.55 回答研究问题：component 数学类型重要，但不能单独决定 calibration geometry
+
+v48.50–51 仍稳定支持：**discontinuous/material boundary 应承担 sign；smooth coordinate 在 hard-equivalence class 内承担 local order**。但 v48.55 否定了更强命题“continuous component 只要做统一尺度 canonicalization 就会更正确”。下一版把原则改为：
+
+> **Calibration geometry 由 `(decision role, mathematical type, deployed interface/transform)` 共同决定；decision role 优先于 coordinate type。**
+
+- DRS：material/discontinuous root-mass boundary；继续用 q-hard material sign + smooth q local order（BC-FC）。
+- DEP：当前代码是 `sigmoid(R_dep_nom)-sigmoid(R_dep_cand)-tol` 的 nominal-relative non-inferiority，而论文核心 admission 是 absolute deployable recoverability；必须先拆清“absolute admission boundary”与“relative preservation coordinate”的角色。
+- GAP：`exp(-gap)` 方向本身正确（gap 越小 quality 越高），但其**decision role**尚未正确。论文核心 CRISP 约束 R_dep/H/D；ODG/GAP主要是 oracle-artifact diagnostic。把 GAP直接作为 non-compensatory hard veto 需要额外理论/数据证据，不能由“它是 continuous coordinate”推出。
+
+### 新 dominant bottleneck：teacher-to-deployment decision-semantic alignment / component-role correctness
+
+v48.56 index audit在现有 v48.55 adaptation train/dev 上发现了直接 contradictory supervision：legacy benefit 使用 `DRS * sigmoid(R_dep) * exp(-GAP)` 的补偿式 PCD，而 harm label 使用五 component max 的 non-compensatory veto。
+
+| split/regime | legacy beneficial | beneficial ∩ harmful | conflict fraction | GAP culprit | 去掉 GAP hard-veto 后仍冲突 |
+|---|---:|---:|---:|---:|---:|
+| train Near | 45 | 20 | **44.4%** | 19/20 | 7 |
+| train Contact | 138 | 32 | **23.2%** | 30/32 | 22 |
+| dev Near | 37 | 12 | **32.4%** | 12/12 | 3 |
+| dev Contact | 88 | 25 | **28.4%** | 25/25 | 10 |
+
+其中 overlap 的 Contact train 中位数是 DRS `+0.96`、R_dep **-0.300**、GAP **+1.300**：即同一个 candidate 因 DRS 大幅提高而被 PCD 标成 positive，但 deployability 与 oracle gap反而恶化。Near overlap 中位数 DRS `+0.95`、R_dep `+1.936`、GAP `+1.625`，说明 Near主要是“R_dep rescue + GAP veto”冲突。**这不是尺度问题，而是补偿式 benefit 与 non-compensatory certificate 的 decision semantics 不一致。**
+
+进一步的 paper-native `R_dep` zero-cross screen显示当前数据有看似很强的 rescue support，但候选 `R_dep` 大量精确堆在 0.5：train Near 23 个 rescue 中 86.96%，train Contact 78 个中 91.03%，dev Near 21 个中 90.48%，dev Contact 38 个中 68.42%。代码追溯发现 teacher margin 在 `min(active normalized slacks)` 后还存在历史 post-min corrections：部分 generic recovery option 被 `max(m,0.6)`，secondary option可被 `max(m,0.9)`，route-blocked yield有 post-min ceiling。论文写的是纯 min normalized slack，因此**不能直接把 benefit 换成 R_dep rescue 后就训练**；必须先审计/rebuild teacher margin source。
+
+### v48.56 TCSA：先修 correctness contract，不做性能堆叠
+
+保留的核心机制组合：
+
+- observation-class option execution / no hidden-future identity；
+- q-hard material DRS boundary；
+- BC-FC：hard sign + smooth q local order；
+- smooth NAP/native advantage；
+- native certificate preservation；
+- shared regime-agnostic rule，Safe/Near/Contact仅作为 evaluation strata；
+- proposal top-k=5、source checkpoint/data role/gate semantics不变；
+- PSA/CSE/IPBD/physical-margin family继续 STOP；root-logit recalibration继续 STOP。
+
+新增 correctness mechanisms：
+
+1. `tools/audit_v48_56_teacher_component_semantics.py`：train/dev-only fail-closed semantic audit；量化 PCD-veto contradiction、DEP/GAP role、R_dep rescue support/plateau；若给定 source roots则 fresh OC-MERO重算并核对 cached `R_dep/R_orc`；显式拒绝 test-role path。
+2. `teacher_margin_semantics.mode`：
+   - `legacy` 保留 v48.55 历史结果可复现；
+   - `strict_min_slack` 禁止 post-min heuristic floor/ceiling，最终 margin保持 active registered component 的 min。
+3. 第一阶段 strict shadow **保留显式 branch-intent component**，但关闭 full-margin artifact override；原因是要单独隔离 post-min correction，不同时改变 oracle-artifact support/distribution。若 strict shadow仍异常，再单独做 paper-pure teacher fixture ablation。
+4. `scripts/build_v48_56_strict_teacher_calibration_shadow.sh` + `scripts/run_v48_56_strict_teacher_shadow.sh`：构建 scene-disjoint shadow calibration → deterministic adaptation protocol → teacher index → semantic audit；不读 test、不自动进入 performance training。
+
+### v48.56 GO / STOP 与下一算法候选
+
+本轮首先回答：
+
+1. cached `R_dep/R_orc` 是否与 fresh OC-MERO完全一致；
+2. 去掉 post-min correction后，0.5 plateau是否明显下降；
+3. Near/Contact是否仍有足够 scene/group-level material rescue；
+4. beneficial-vs-veto contradiction是否仍由 GAP/DEP decision-role mismatch主导；
+5. artifact-intent fixture是否是必要的 oracle-gap构造条件，还是自然/物理 teacher 已足够产生该现象。
+
+**只有 strict shadow通过 source correctness + support review 后，下一 performance mechanism 才测试：**
+
+> **Deployability-Boundary Rescue semantics**：把 paper-core absolute `R_dep` material boundary作为 primary rescue/admission evidence；把 nominal-relative DEP preservation保留为 secondary non-inferiority coordinate；GAP优先降为 diagnostic / anti-oracle / tie-break order evidence，而不是未经证明的 hard veto。仍然使用一个 shared planner，不引入 regime router。
+
+该候选不能在 v48.56 旧 teacher labels上直接启用，因为当前 R_dep plateau使得“过零”证据可能是 teacher construction artifact。
+
+### 明确不做
+
+- 本版不做 Boundary-Complete Evidence Centering；
+- 不做 root-logit recalibration；
+- 不再调 TCBC RMS/scale；
+- 不恢复 IPBD/PSA/CSE/physical margin；
+- 不做 Contact-only/Near-only loss、threshold、router；
+- 不做 top-k/candidate/macro expansion、threshold relaxation、oversampling；
+- 不用 Safe/test/closed-loop 结果选择 teacher semantics；Safe/test继续只在后续 authoritative RC0 后用于最终验证。
+
+### 论文主线同步
+
+论文最稳的主命题进一步收敛为：
+
+> **Observation consistency + boundary-complete decision equivalence + decision-role-consistent calibration.**
+
+“不同数学类型的 component 使用不同 calibration geometry”应改成次级原则；更强的一般原则是**先确定一个证据在部署决策中的角色（material admission / non-inferiority / diagnostic/order），再按其数学类型选择几何**。
+
+另需在最终论文中清理附录的 `Regime-conditioned recovery admission`：当前 authoritative代码/实验使用 `strategy_regime_conditioning=false` 和 shared rule；若保留该段会与最终算法主线及实验证据冲突。
+
+
 ## v48.55 — DCP-DRFC-BCDE-TCBC / COORDINATE-TYPED COMPONENT BOUNDARY CALIBRATION (2026-08-19)
 
 **类别：由 v48.54 authoritative A/B 对 IPBD 的跨严重度负迁移直接触发的 component-correctness 2×2。主线仍是一个 regime-agnostic planning primitive；Safe / near-contact / contact 只是 normal→critical continuum 上的 dataset/evaluation strata。没有新增 regime identifier/router、regime-specific policy/threshold/loss/budget、proposal top-k、candidate family、learned admission residual、重采样、root-logit recalibration 或网络容量。**
