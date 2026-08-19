@@ -27,6 +27,7 @@ from ocrap.models.losses import (
     observation_consistent_frontier_calibration_loss,
     decision_equivalent_frontier_calibration_loss,
     boundary_complete_frontier_calibration_loss,
+    selected_option_physical_boundary_distillation_loss,
     deployability_classification_loss,
     shared_option_admission_loss,
     shared_option_q_regression_loss,
@@ -1626,6 +1627,7 @@ def _epoch(
             loss_obs = zero
             loss_margin = zero
             loss_recovery_frontier = zero
+            loss_physical_boundary_distill = zero
             if witness_fast_mode == "decision_obs":
                 obs_pair_weights = recovery_conflict_pair_weights(
                     batch["m_star"].float(), batch["root_valid"], batch["option_valid"],
@@ -1666,6 +1668,13 @@ def _epoch(
                         use_lcvar=not bool((cfg.get("ablation", {}) or {}).get("without_lower_tail", False)),
                         use_obs_kernel=not bool((cfg.get("ablation", {}) or {}).get("without_observation_kernel", False)),
                         top_m=int(ocfg.get("top_m", 8)),
+                    )
+                if bool(tcfg.get("invariant_physical_boundary_distillation", False)):
+                    loss_physical_boundary_distill = selected_option_physical_boundary_distillation_loss(
+                        out["margins"], teacher_q, batch["m_star"].float(),
+                        batch["root_probs"].float(), batch["root_valid"], batch["option_valid"],
+                        gamma=option_gamma,
+                        temperature=float(tcfg.get("recovery_frontier_sign_temperature", 0.08)),
                     )
                 if bool(tcfg.get("recovery_frontier_boundary_complete", False)):
                     loss_recovery_frontier = boundary_complete_frontier_calibration_loss(
@@ -1720,6 +1729,7 @@ def _epoch(
                 total = (
                     float(lw.get("margin", 0.0)) * loss_margin
                     + float(lw.get("recovery_frontier", 0.0)) * loss_recovery_frontier
+                    + float(lw.get("physical_boundary_distill", 0.0)) * loss_physical_boundary_distill
                 )
             if training:
                 optimizer.zero_grad(set_to_none=True)
@@ -1734,6 +1744,7 @@ def _epoch(
                 "loss_margin": float(loss_margin.item()),
                 "loss_obs": float(loss_obs.item()),
                 "loss_recovery_frontier": float(loss_recovery_frontier.item()),
+                "loss_physical_boundary_distill": float(loss_physical_boundary_distill.item()),
                 "loss_dep": 0.0,
                 "loss_option_q": 0.0,
             }
@@ -1845,6 +1856,14 @@ def _epoch(
             pred_q, teacher_q, batch["root_probs"].float(), batch["root_valid"], batch["option_valid"],
             gamma=option_gamma, temperature=option_temperature,
         )
+        loss_physical_boundary_distill = r_dep.sum() * 0.0
+        if bool(tcfg.get("invariant_physical_boundary_distillation", False)):
+            loss_physical_boundary_distill = selected_option_physical_boundary_distillation_loss(
+                out["margins"], teacher_q, batch["m_star"].float(),
+                batch["root_probs"].float(), batch["root_valid"], batch["option_valid"],
+                gamma=option_gamma,
+                temperature=float(tcfg.get("recovery_frontier_sign_temperature", 0.08)),
+            )
         if float(lw.get("recovery_frontier", 0.0)) > 0.0:
             if bool(tcfg.get("recovery_frontier_boundary_complete", False)):
                 loss_recovery_frontier = boundary_complete_frontier_calibration_loss(
@@ -2166,6 +2185,7 @@ def _epoch(
             + float(lw.get("option_class_success", 0.0)) * loss_option_class_success
             + float(lw.get("option_class_best", 0.0)) * loss_option_class_best
             + float(lw.get("recovery_frontier", 0.0)) * loss_recovery_frontier
+            + float(lw.get("physical_boundary_distill", 0.0)) * loss_physical_boundary_distill
             + float(lw.get("group_ranking", 0.0)) * loss_group_rank
             + float(lw.get("group_ce", 0.0)) * loss_group_ce
             + float(lw.get("nominal_switch", 0.0)) * loss_nominal_switch
@@ -2209,6 +2229,7 @@ def _epoch(
             "loss_option_class_success": loss_option_class_success.item(),
             "loss_option_class_best": loss_option_class_best.item(),
             "loss_recovery_frontier": loss_recovery_frontier.item(),
+            "loss_physical_boundary_distill": loss_physical_boundary_distill.item(),
             "loss_group_ranking": loss_group_rank.item(),
             "loss_group_ce": loss_group_ce.item(),
             "loss_nominal_switch": loss_nominal_switch.item(),

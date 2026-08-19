@@ -784,6 +784,29 @@ if [[ "${V4853_REQUIRE_CSE_CONTRACT:-0}" == 1 ]]; then
   done
 fi
 
+# v48.54 fail-closed Invariant-Preserving Boundary Distillation preflight.
+# IPBD must be training-only: teacher/student/deployment hard sign coordinates
+# remain the validated q-hard BC-FC reference while the privileged selected-
+# option physical zero boundary is optionally distilled into predicted margins.
+if [[ "${V4854_REQUIRE_IPBD_CONTRACT:-0}" == 1 ]]; then
+  for variant in balanced precision; do
+    [[ "$variant" == balanced && "$s0" != 0 ]] && continue
+    [[ "$variant" == precision && "$s1" != 0 ]] && continue
+    set +e
+    python tools/check_v48_54_ipbd_contract.py \
+      --run "$OUTPUTDIR/candidates/$variant" \
+      --expect-ipbd "${V4854_INVARIANT_PHYSICAL_BOUNDARY_DISTILLATION:-false}" \
+      --output "$OUTPUTDIR/candidates/$variant/V48_54_IPBD_CONTRACT.json" \
+      >"$OUTPUTDIR/logs/v48_54_ipbd_contract_${variant}.log" 2>&1
+    ipbd_contract_rc=$?
+    set -e
+    if [[ "$ipbd_contract_rc" != 0 ]]; then
+      write_pipeline_failure v48_54_ipbd_contract "$ipbd_contract_rc" "$OUTPUTDIR/candidates/$variant/V48_54_IPBD_CONTRACT.json" "$s0" "$s1"
+      exit 30
+    fi
+  done
+fi
+
 variants=""
 [[ "$s0" == 0 ]] && variants="balanced"
 [[ "$s1" == 0 ]] && variants="${variants:+$variants,}precision"

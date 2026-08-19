@@ -634,6 +634,100 @@ def _physical_student_observation_consistent_success_st(
     success_st = torch.where(selected_valid, success_st, torch.zeros_like(success_st))
     return (w * success_st).sum(dim=-1).clamp(0.0, 1.0)
 
+
+def selected_option_physical_boundary_distillation_loss(
+    pred_margins: torch.Tensor,
+    teacher_q: torch.Tensor,
+    teacher_m_star: torch.Tensor,
+    teacher_root_probs: torch.Tensor,
+    root_valid: torch.Tensor,
+    option_valid: torch.Tensor,
+    *,
+    gamma: float = 0.0,
+    temperature: float = 0.08,
+) -> torch.Tensor:
+    """Distill the *selected* physical zero crossing without changing deployment.
+
+    v48.53 showed that replacing the deployed q-hard DRS by a selected-margin
+    physical DRS improves some candidate-level ranking/sensitivity diagnostics,
+    but catastrophically increases harmful false-safe mass.  The useful signal
+    is therefore treated as privileged training supervision rather than as a new
+    hard certificate coordinate.
+
+    The teacher OC-MERO q row selects the observation-consistent recovery option
+    for each valid root/class.  Only that option's physical ``m_star == 0``
+    boundary is distilled into the corresponding predicted margin.  Deployment
+    remains byte-semantically q-hard; this loss never changes native DRS,
+    admission thresholds, root logits, option routing, or regime behavior.
+
+    The loss is root-probability weighted and class-balanced by *probability
+    mass* rather than raw root count.  This keeps rare physical-positive and
+    physical-negative boundaries from being erased while introducing no new
+    tuned threshold: zero is the physical margin boundary, and ``temperature``
+    reuses the existing frontier sign temperature.
+    """
+    if pred_margins.ndim != 3 or teacher_q.ndim != 3 or teacher_m_star.ndim != 3:
+        return pred_margins.reshape(pred_margins.shape[0], -1).mean(dim=-1).mean() * 0.0
+    b, k, l = teacher_q.shape
+    if pred_margins.shape[:2] != (b, k) or teacher_m_star.shape[:2] != (b, k):
+        raise ValueError(
+            "selected-option physical boundary distillation shape mismatch: "
+            f"pred_margins={tuple(pred_margins.shape)} teacher_q={tuple(teacher_q.shape)} "
+            f"teacher_m_star={tuple(teacher_m_star.shape)}"
+        )
+    ll = min(l, pred_margins.shape[2], teacher_m_star.shape[2], option_valid.shape[-1])
+    tq = torch.nan_to_num(teacher_q.detach().float()[:, :, :ll], nan=-1.0e9, posinf=5.0, neginf=-5.0)
+    tm = torch.nan_to_num(teacher_m_star.detach().float()[:, :, :ll], nan=-1.0e9, posinf=5.0, neginf=-5.0)
+    pm = torch.nan_to_num(pred_margins.float()[:, :, :ll], nan=-20.0, posinf=20.0, neginf=-20.0)
+    rv = root_valid.bool()[:, :k]
+    ov = option_valid.bool()[:, :ll]
+    valid = rv.unsqueeze(-1) & ov.unsqueeze(1) & torch.isfinite(teacher_q.detach()[:, :, :ll])
+    if not bool(valid.any()):
+        return pred_margins.sum() * 0.0
+
+    # Keep the same deterministic teacher option-selection tie semantics used by
+    # the observation-consistent q witness.  The physical margin is *not* used
+    # to choose the option, so privileged future geometry cannot become a router.
+    score = tq.clamp(-5.0, 5.0) + 0.01 * ((tq >= float(gamma)) & valid).float()
+    score = torch.where(valid, score, torch.full_like(score, -1.0e9))
+    opt = score.argmax(dim=-1)
+    gather = opt.unsqueeze(-1)
+    pred_selected = torch.gather(pm, 2, gather).squeeze(-1)
+    teacher_selected = torch.gather(tm, 2, gather).squeeze(-1)
+    teacher_margin_finite = torch.gather(
+        torch.isfinite(teacher_m_star.detach()[:, :, :ll]), 2, gather
+    ).squeeze(-1)
+    selected_valid = rv & torch.gather(
+        ov.unsqueeze(1).expand(-1, k, -1), 2, gather
+    ).squeeze(-1) & teacher_margin_finite
+    if not bool(selected_valid.any()):
+        return pred_margins.sum() * 0.0
+
+    target = (teacher_selected >= 0.0).float()
+    tau = max(float(temperature), 1.0e-4)
+    logits = pred_selected / tau
+    root_w = _root_weights(teacher_root_probs[:, :k], rv).detach()
+    root_w = root_w * selected_valid.float()
+
+    # Balance by teacher root probability mass, not by root count.  This is
+    # deterministic and regime-agnostic; when a minibatch contains one class
+    # only, fall back to the unbalanced probability-weighted BCE.
+    pos_mass = (root_w * target).sum()
+    neg_mass = (root_w * (1.0 - target)).sum()
+    if float(pos_mass.detach().cpu()) > 0.0 and float(neg_mass.detach().cpu()) > 0.0:
+        class_w = torch.where(
+            target > 0.5,
+            0.5 / pos_mass.clamp_min(1.0e-8),
+            0.5 / neg_mass.clamp_min(1.0e-8),
+        )
+        weights = root_w * class_w
+        # The class-balanced weights sum to one by construction.
+        return (F.binary_cross_entropy_with_logits(logits, target, reduction="none") * weights).sum()
+    denom = root_w.sum().clamp_min(1.0e-8)
+    return (
+        F.binary_cross_entropy_with_logits(logits, target, reduction="none") * root_w
+    ).sum() / denom
+
 def boundary_complete_frontier_calibration_loss(
     pred_r_dep: torch.Tensor,
     pred_gap: torch.Tensor,

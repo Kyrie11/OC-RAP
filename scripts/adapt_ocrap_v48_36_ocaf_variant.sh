@@ -229,6 +229,7 @@ factor_cache_contract_args=(
   --setting "v4851_boundary_complete_frontier=${V4851_BOUNDARY_COMPLETE_FRONTIER:-false}"
   --setting "v4852_physical_teacher_sign_alignment=${V4852_PHYSICAL_TEACHER_SIGN_ALIGNMENT:-false}"
   --setting "v4853_physical_student_sign_alignment=${V4853_PHYSICAL_STUDENT_SIGN_ALIGNMENT:-false}"
+  --setting "v4854_invariant_physical_boundary_distillation=${V4854_INVARIANT_PHYSICAL_BOUNDARY_DISTILLATION:-false}"
   --setting "training_option_execution_semantics=$OPTION_EXECUTION_SEMANTICS"
   --setting "sowr_epochs=${SOWR_EPOCHS:-8}"
   --setting "sowr_learning_rate=${SOWR_LR:-0.00005}"

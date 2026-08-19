@@ -98,6 +98,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.recovery_frontier_boundary_complete="${RECOVERY_FRONTIER_BOUNDARY_COMPLETE:-false}" \
   --set training.recovery_frontier_physical_teacher_sign_alignment="${RECOVERY_FRONTIER_PHYSICAL_TEACHER_SIGN_ALIGNMENT:-false}" \
   --set training.recovery_frontier_physical_student_sign_alignment="${RECOVERY_FRONTIER_PHYSICAL_STUDENT_SIGN_ALIGNMENT:-false}" \
+  --set training.invariant_physical_boundary_distillation="${INVARIANT_PHYSICAL_BOUNDARY_DISTILLATION:-false}" \
   --set training.recovery_frontier_sign_temperature="${RECOVERY_FRONTIER_SIGN_TEMPERATURE:-0.08}" \
   --set training.recovery_frontier_regression_weight="${RECOVERY_FRONTIER_REGRESSION_WEIGHT:-1.0}" \
   --set training.recovery_frontier_sign_weight="${RECOVERY_FRONTIER_SIGN_WEIGHT:-0.50}" \
@@ -225,6 +226,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set loss_weights.option_best="${LOSS_OPTION_BEST:-0}" \
   --set loss_weights.option_class_success="${LOSS_OPTION_CLASS_SUCCESS:-0}" --set loss_weights.option_class_best="${LOSS_OPTION_CLASS_BEST:-0}" \
   --set loss_weights.recovery_frontier="${LOSS_RECOVERY_FRONTIER:-0}" \
+  --set loss_weights.physical_boundary_distill="${LOSS_PHYSICAL_BOUNDARY_DISTILL:-0}" \
   --set loss_weights.group_ce="${LOSS_GROUP_CE:-0}" \
   --set loss_weights.group_distill="${LOSS_GROUP_DISTILL:-0}" --set loss_weights.nominal_switch="${LOSS_NOMINAL_SWITCH:-0}" \
   --set loss_weights.safe_nominal="${LOSS_SAFE_NOMINAL:-0}" --set loss_weights.protective_macro="${LOSS_PROTECTIVE_MACRO:-0}" \

@@ -1,0 +1,78 @@
+{
+  "version": "v48.54-DCP-DRFC-BCDE-IPBD",
+  "method_principle": "Invariant-Preserving Physical Boundary Distillation for Physical Boundary-Complete Decision Equivalence",
+  "paper_story": {
+    "observation_consistency": "Recovery decisions cannot use hidden future/root identity.",
+    "boundary_completeness": "The deployed discontinuous q-hard certificate owns material decision sign; smooth q geometry owns local ordering within hard-equivalence classes.",
+    "invariant_preservation": "Decision equivalence requires preserving decision-relevant invariants, not structurally imitating the privileged physical certificate inside the deployed hard coordinate.",
+    "privileged_physical_boundary": "Selected-option physical margin is used only as training-time boundary supervision; it never becomes a deployment router or native hard DRS."
+  },
+  "v4853_falsification": {
+    "teacher_only_physical": "rejected",
+    "student_deployment_physical": "rejected_as_hard_native_coordinate_despite_local_ranking_signal",
+    "symmetric_physical_CSE": "rejected",
+    "reason": "D/Main did not restore A and harmful false-safe specificity worsened; positive arithmetic interactions were not sufficient for a Pareto mechanism win."
+  },
+  "frozen_common_stack": {
+    "boundary_complete_frontier": true,
+    "native_certificate_preservation": true,
+    "smooth_native_advantage_preservation": true,
+    "teacher_sign_coordinate": "q_hard_proxy_drs_exact_pcd",
+    "student_deployment_sign_coordinate": "hard_qbest_ge_zero_root_mass_exact_pcd",
+    "smooth_order_coordinate": "smooth_boundary_drs_smooth_pcd",
+    "physical_teacher_sign_alignment": false,
+    "physical_student_sign_alignment": false,
+    "native_physical_student_drs": false,
+    "boundary_complete_native_advantage_preservation": false,
+    "exact_only_native_advantage_preservation": false,
+    "margin_complete_ncp": false,
+    "proposal_top_k": 5,
+    "option_execution_semantics": "observation_class",
+    "strategy_regime_conditioning": false,
+    "root_logit_recalibration": false,
+    "new_tuned_thresholds": false,
+    "standard_calibration_prediction_cache": true
+  },
+  "single_axis": {
+    "A": {"invariant_physical_boundary_distillation": false, "reference": "semantic reuse of v48.53-A when valid, otherwise fresh v48.54-A"},
+    "B": {"invariant_physical_boundary_distillation": true, "main": true}
+  },
+  "ipbd": {
+    "teacher_option_selection": "teacher OC-MERO q selects the legal observation-consistent option",
+    "privileged_target": "1[m_star at the teacher-q-selected option >= 0]",
+    "student_target_coordinate": "predicted margin at that same selected option",
+    "loss": "teacher-root-probability-weighted class-balanced BCE at physical margin zero",
+    "physical_zero_crossing": 0.0,
+    "temperature": 0.08,
+    "loss_weight": 0.5,
+    "new_parameters": 0,
+    "new_thresholds": 0,
+    "deployment_change": false,
+    "regime_conditioning": false
+  },
+  "go_stop": {
+    "near": {
+      "certificate_recall_min": 0.25,
+      "harmful_selected_ucb90_preferred_max": 0.05,
+      "candidate_safe_positive_auc_reference": 0.44753086419753085,
+      "development_joint_sign_reference": "4/19"
+    },
+    "contact": {
+      "candidate_safe_positive_auc_reference": 0.6324532085561497,
+      "proposal_safe_positive_auc_reference": 0.6108156028368794,
+      "certificate_recall_reference": 0.05,
+      "harmful_selected_ucb90_reference": 0.3508081402462616,
+      "hard_requirement": "do not reproduce C/D harmful-false-safe specificity collapse"
+    },
+    "if_IPBD_preserves_qhard_specificity_and_improves_physical_ranking_but_final_evidence_stays_negative": "test Boundary-Complete Evidence Centering as the next single axis",
+    "if_IPBD_fails": "stop physical-margin distillation family and audit DEP/GAP teacher normalization, component correctness, and root uncertainty without reopening root-logit recalibration"
+  },
+  "reference_reuse_identity": [
+    "source checkpoint SHA256",
+    "five canonical dataset manifest SHA256 values",
+    "gate semantic protocol SHA/fields",
+    "reference factor contract"
+  ],
+  "safe_authorization": "Only B/Main authoritative RC=0 may execute gate-generated Safe paired non-inferiority and closed-loop commands.",
+  "test_roots_read": false
+}

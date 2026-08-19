@@ -14,6 +14,7 @@ GROUP_INDEX="${GROUP_INDEX:?GROUP_INDEX is required}"
 TRAIN_GPU="${TRAIN_GPU:-0}"
 VARIANT="${VARIANT:?VARIANT is required}"
 STAGE="${V4847_WITNESS_STAGE:?V4847_WITNESS_STAGE=decision_obs|frontier is required}"
+IPBD="${V4854_INVARIANT_PHYSICAL_BOUNDARY_DISTILLATION:-false}"
 OPTION_SEMANTICS="${OPTION_EXECUTION_SEMANTICS:-observation_class}"
 [[ "$OPTION_SEMANTICS" == observation_class ]] || {
   echo "v48.47 requires paper-consistent OPTION_EXECUTION_SEMANTICS=observation_class" >&2; exit 2;
@@ -59,7 +60,7 @@ python tools/check_v48_45_sowr_source_architecture.py \
 python - "$RUN/V48_47_WITNESS_STAGE.json" "$STAGE" "$OPTION_SEMANTICS" "$prefixes" \
   "$TRAIN_MIX" "$VAL_MIX" "$GROUP_INDEX" "$dw_obs" "$epochs" "$loss_margin" "$loss_obs" "$loss_frontier" \
   "${V4847_OBS_CONFLICT_SCALE:-3.0}" "${V4847_OBS_CONFLICT_TEMPERATURE:-0.20}" "${V4847_OBS_MAX_WEIGHT:-4.0}" \
-  "${V4847_FRONTIER_SIGN_TEMPERATURE:-0.08}" "${V4847_FRONTIER_REGRESSION_WEIGHT:-1.0}" "${V4847_FRONTIER_SIGN_WEIGHT:-0.50}" "${V4850_DECISION_EQUIVALENT_FRONTIER:-false}" "${V4851_BOUNDARY_COMPLETE_FRONTIER:-false}" "${V4850_FRONTIER_GAP_TOLERANCE:-0.05}" "${V4850_FRONTIER_POSITIVE_GAIN:-0.015}" "${V4850_FRONTIER_PCD_WEIGHT:-1.0}" "${V4852_PHYSICAL_TEACHER_SIGN_ALIGNMENT:-false}" "${V4853_PHYSICAL_STUDENT_SIGN_ALIGNMENT:-false}" <<'PY_STAGE'
+  "${V4847_FRONTIER_SIGN_TEMPERATURE:-0.08}" "${V4847_FRONTIER_REGRESSION_WEIGHT:-1.0}" "${V4847_FRONTIER_SIGN_WEIGHT:-0.50}" "${V4850_DECISION_EQUIVALENT_FRONTIER:-false}" "${V4851_BOUNDARY_COMPLETE_FRONTIER:-false}" "${V4850_FRONTIER_GAP_TOLERANCE:-0.05}" "${V4850_FRONTIER_POSITIVE_GAIN:-0.015}" "${V4850_FRONTIER_PCD_WEIGHT:-1.0}" "${V4852_PHYSICAL_TEACHER_SIGN_ALIGNMENT:-false}" "${V4853_PHYSICAL_STUDENT_SIGN_ALIGNMENT:-false}" "$IPBD" <<'PY_STAGE'
 import hashlib,json,pathlib,sys,time
 p=pathlib.Path(sys.argv[1])
 stage,sem,prefixes=sys.argv[2:5]
@@ -89,6 +90,9 @@ d={
  'frontier_positive_gain':float(sys.argv[22]),'frontier_pcd_weight':float(sys.argv[23]),
  'physical_teacher_sign_alignment':sys.argv[24].lower()=='true',
  'physical_student_sign_alignment':sys.argv[25].lower()=='true',
+ 'invariant_physical_boundary_distillation':sys.argv[26].lower()=='true',
+ 'physical_boundary_distillation_weight':(float(sys.argv[18]) if sys.argv[26].lower()=='true' else 0.0),
+ 'physical_boundary_distillation_coordinate':'teacher_q_selected_mstar_zero_to_predicted_margin',
  'teacher_sign_coordinate':('q_selected_mstar_physical_drs_exact_pcd' if sys.argv[24].lower()=='true' else 'q_hard_proxy_drs_exact_pcd'),
  'student_sign_coordinate':('q_selected_predicted_margin_physical_drs_exact_pcd' if sys.argv[25].lower()=='true' else 'hard_qbest_ge_zero_root_mass_exact_pcd'),
  'frontier_order_coordinate':'smooth_boundary_drs_smooth_pcd',
@@ -130,11 +134,13 @@ RECOVERY_FRONTIER_DECISION_EQUIVALENT="${V4850_DECISION_EQUIVALENT_FRONTIER:-fal
 RECOVERY_FRONTIER_BOUNDARY_COMPLETE="${V4851_BOUNDARY_COMPLETE_FRONTIER:-false}" \
 RECOVERY_FRONTIER_PHYSICAL_TEACHER_SIGN_ALIGNMENT="${V4852_PHYSICAL_TEACHER_SIGN_ALIGNMENT:-false}" \
 RECOVERY_FRONTIER_PHYSICAL_STUDENT_SIGN_ALIGNMENT="${V4853_PHYSICAL_STUDENT_SIGN_ALIGNMENT:-false}" \
+INVARIANT_PHYSICAL_BOUNDARY_DISTILLATION="$IPBD" \
 EVIDENCE_PHYSICAL_STUDENT_DRS=false \
 RECOVERY_FRONTIER_SIGN_TEMPERATURE="${V4847_FRONTIER_SIGN_TEMPERATURE:-0.08}" \
 RECOVERY_FRONTIER_REGRESSION_WEIGHT="${V4847_FRONTIER_REGRESSION_WEIGHT:-1.0}" \
 RECOVERY_FRONTIER_SIGN_WEIGHT="${V4847_FRONTIER_SIGN_WEIGHT:-0.50}" \
 LOSS_ASSIGN=0 LOSS_MARGIN="$loss_margin" LOSS_OBS="$loss_obs" LOSS_RECOVERY_FRONTIER="$loss_frontier" \
+LOSS_PHYSICAL_BOUNDARY_DISTILL="$( [[ "$IPBD" == true ]] && printf '%s' "${V4847_FRONTIER_SIGN_WEIGHT:-0.50}" || printf '0' )" \
 LOSS_DEP=0 LOSS_ORC=0 LOSS_ANTI_ORACLE=0 LOSS_ARTIFACT_GAP=0 LOSS_ADMISSION=0 \
 LOSS_OPTION_Q=0 LOSS_OPTION_ADMISSION=0 LOSS_OPTION_SUCCESS=0 LOSS_OPTION_SUCCESS_BCE=0 LOSS_OPTION_BEST=0 \
 LOSS_OPTION_CLASS_SUCCESS=0 LOSS_OPTION_CLASS_BEST=0 \
@@ -159,7 +165,7 @@ doc=json.loads(summary.read_text()); hist=doc.get('history') or []; best_epoch=i
 initial=(hist[0].get('val') if hist and int(hist[0].get('epoch',-1))==0 else {}) or {}; best={}
 for row in hist:
     if int(row.get('epoch',-999))==best_epoch: best=(row.get('val') or {}); break
-keys=['loss','loss_margin','loss_obs','loss_recovery_frontier','loss_dep','loss_option_q']
+keys=['loss','loss_margin','loss_obs','loss_recovery_frontier','loss_physical_boundary_distill','loss_dep','loss_option_q']
 out={'event':'v48_47_witness_stage_complete','version':'v48.47-DS-OFR','stage':stage,'created_unix':time.time(),
      'option_execution_semantics':'observation_class','trainable_param_prefixes':prefixes,
      'strategy_regime_conditioning':False,'test_roots_read':False,

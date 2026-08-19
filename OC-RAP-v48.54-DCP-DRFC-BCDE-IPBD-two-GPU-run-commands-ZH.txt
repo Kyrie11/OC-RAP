@@ -1,0 +1,32 @@
+# OC-RAP v48.54 DCP-DRFC-BCDE-IPBD 两张 GPU 执行指令
+#
+# 默认行为：
+# 1) 先准备/复核 v48.45 scene-disjoint protocol；
+# 2) 语义校验并尽量复用已有 v48.53-A：
+#    /home/senzeyu2/code/OC-RAP/runs/ocrap_v48_53_dcp_drfc_bcde_cse_ablation_A
+#    校验 source checkpoint SHA、5 个 canonical manifest SHA、gate semantics、factor contract；
+#    不再因含 transient created_unix 的 protocol-seal byte SHA变化而无意义重跑。
+# 3) 若复用成功，只新跑 v48.54 Main(B)，其 Balanced / Precision 分别使用 GPU0 / GPU1；
+# 4) 若复用失败，fail-closed 先 fresh A，再 Main B；
+# 5) Main RC=20 时严格阻断 Safe/test/closed-loop；只有 RC=0 才执行 NEXT_COMMANDS.txt。
+
+cd /home/senzeyu2/code/OC-RAP-v48.54-DCP-DRFC-BCDE-IPBD
+
+GPU0=0 GPU1=1 \
+BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+bash scripts/run_v48_54_dcp_drfc_bcde_ipbd_two_gpu.sh
+
+# 如果你明确希望不复用 v48.53-A、强制 fresh A/B：
+# V4854_FORCE_FRESH_REFERENCE=1 GPU0=0 GPU1=1 \
+# BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+# bash scripts/run_v48_54_dcp_drfc_bcde_ipbd_two_gpu.sh
+
+# 预期主要输出：
+# /home/senzeyu2/code/OC-RAP/runs/ocrap_v48_54_dcp_drfc_bcde_ipbd_main
+# /home/senzeyu2/code/OC-RAP/runs/OC-RAP-v48.54-DCP-DRFC-BCDE-IPBD-AB-audit.json
+# /home/senzeyu2/code/OC-RAP/runs/OC-RAP-v48.54-runtime-telemetry.jsonl
+# /home/senzeyu2/code/OC-RAP/runs/OC-RAP-v48.54-runtime-telemetry-summary.json
+# /home/senzeyu2/code/OC-RAP/runs/OC-RAP-v48.54-A-reference-reuse-contract.json
+#
+# 仅当 reference reuse 被拒绝时还会生成：
+# /home/senzeyu2/code/OC-RAP/runs/ocrap_v48_54_dcp_drfc_bcde_ipbd_ablation_A
