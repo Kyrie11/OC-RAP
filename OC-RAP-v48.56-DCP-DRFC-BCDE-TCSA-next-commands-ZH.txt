@@ -32,8 +32,17 @@ bash scripts/run_v48_56_teacher_component_semantic_audit.sh
 # 正式归因必须再用 0（全量）跑一次。
 
 # ================================================================
-# 2. 构建 strict-min-slack SHADOW calibration/protocol（本轮核心实验）
+# 2. 构建 strict-min-slack SHADOW calibration/protocol（runtime hotfix r1）
 # ================================================================
+# 本 hotfix 不改变 teacher/candidate/future/partition 语义，只修复 source scan 性能。
+# 默认 start=11000/stride=6 下，旧代码六 worker 会先昂贵 parse/convert 约 89,985 个
+# WOMD scenario，真正选中的只有 4,000；新代码在 serialized TFRecord 层先 partition，
+# 只对选中的 4,000 个执行 WOMD parse + Waymax SimulatorState/RawScenario construction。
+# 若本机 Waymax/TF 不支持 raw-prefilter，strict shadow 会立即 fail-closed，不会偷偷回慢路径。
+#
+# 如果旧脚本仍在运行，先终止旧 controller/workers，再替换成此代码；不要让新旧 controller
+# 同时写同一个 SHADOW_ROOT。优化开关已从 semantic resume fingerprint 排除，已有 partial shard
+# 可以直接 RESUME=1 续跑，不需要为了这个 hotfix 删除已生成的有效 samples。
 # 这不是替换 canonical 数据集，而是 teacher-source correctness 的受控 shadow。
 # 单变量变化：移除历史 post-min 0.6/0.9 floor 和 route-blocked post-min ceiling；
 # 第一阶段保留显式 branch-intent component，以避免同时改变 oracle-artifact 数据支持分布；
@@ -41,8 +50,22 @@ bash scripts/run_v48_56_teacher_component_semantic_audit.sh
 
 GPU0=0 GPU1=1 \
 SHADOW_ROOT=/data0/senzeyu2/dataset/OCRAP_v48_56_strict_teacher \
+RESUME=1 \
+V4856_HEARTBEAT_SECONDS=60 \
 V4856_RUN_BUILD=1 \
 bash scripts/run_v48_56_strict_teacher_shadow.sh
+
+
+# 运行时应很快看到类似：
+# {'event': 'v48_56_strict_shadow_runtime_scan_contract', ...
+#  'legacy_preprocessed_record_budget': 89985,
+#  'optimized_preprocessed_record_budget': 4000, ...}
+# worker log 中还应看到 event=waymax_raw_source_prefilter；如果 fast path 不可用会直接报错。
+# controller 每 60 s 输出 v48_56_worker_heartbeat，包含 raw_scenarios_seen、scene_time_groups、
+# samples_per_hour、stage_totals_s 和 log tail，可用来区分 source I/O、teacher rollout 与真正挂死。
+#
+# runtime contract：
+# /data0/senzeyu2/dataset/OCRAP_v48_56_strict_teacher/V48_56_STRICT_SHADOW_RUNTIME_SCAN_CONTRACT.json
 
 # 主要输出：
 # /data0/senzeyu2/dataset/OCRAP_v48_56_strict_teacher/calibration_v48_14_prism_4814/

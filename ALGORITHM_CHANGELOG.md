@@ -2,6 +2,25 @@
 
 **类别：由 v48.55 TCBC 2×2 的否证结果直接触发的 correctness release。v48.56 不再增加 performance Main，不进入 Boundary-Complete Evidence Centering，也不重开 root-logit recalibration；先验证 teacher target、component decision role 与真实 deployed veto 是否语义一致。统一 planner、observation-class execution、q-hard BC-FC + smooth-NAP、shared/no-regime rule 均保持。**
 
+### v48.56 runtime hotfix r1 — strict-teacher shadow source-scan amplification fix
+
+**类别：纯工程/运行时修复，不改变 strict-min-slack teacher、candidate、future、recovery option、regime、gate、dataset partition 或任何算法标签。**
+
+`run_v48_56_strict_teacher_shadow.sh` 长时间无完成的主因不是死循环，而是 Waymax source scan controls 放置位置错误造成的严重前处理放大：builder 为了实现 `scenario_start_index=11000, scenario_stride=6`，先把 source 端的 start/stride 清零，再把 `max_scenarios` 膨胀到目标 global index；而 Waymax `get_data_generator()` 在 Python 侧 partition filter 之前已经完成 WOMD parse、`SimulatorState` construction 和 RawScenario 转换。默认六个 worker 因此需要昂贵前处理约 **89,985** 个 source scenarios，最终真正进入各 worker partition 的只有 **4,000** 个，昂贵 source preprocessing 被放大约 **22.50×**。
+
+修复：
+
+- 新增 opt-in `waymax.prefilter_source_scan_controls`：在 serialized TFRecord stream 上先执行 `skip(start) -> shard(stride, worker) -> take(max_scenarios)`，之后才进行 WOMD parse / Waymax state construction；global source index、worker residue、scene-disjoint 语义保持完全一致。
+- strict shadow 强制 `waymax.require_source_scan_prefilter=true`；若安装的 Waymax/TF 版本不支持该 fast path，立即 fail-closed，而不是静默退回旧的数小时慢扫描。
+- source-prefilter/require 开关加入 resume volatile config；旧 partial shadow 与新 fast path 的 semantic resume fingerprint 保持一致，因此已有有效 sample 可以继续 `RESUME=1`。
+- 新增 worker heartbeat、live `dataset_status.json` / `build_stage_profile.json` 摘要、log tail；父脚本不再表现成“无输出地 wait 数小时”。已完成 shard 在 resume 模式直接复用。
+- Near/Contact 的 `teacher_rollout_top_k_options=0` **保持不变**：正式 strict shadow 仍执行 all-valid-option exact Waymax teacher，不用 screened/top-k teacher 伪装提速。
+- exact teacher 对 `option_valid=false` 的 option 不再执行 4 s Waymax rollout；最终 margin 历史上本来就会强制为 `-1e9`，因此这是语义等价的无效计算删除。
+- teacher index 构建时已经从每个 NPZ 的 `m_star/root_probs/c_star` fresh recompute OC-MERO。现在把 fresh-vs-cached error 和 cached-label-presence 写入 index；最终 TCSA audit复用这些字段，不再第三次全量重读 train+dev NPZ。缺失 cached `R_dep/R_orc` 仍 fail-closed，correctness contract 不放松。
+- 新增 runtime scan contract，默认配置会显式记录 `legacy_preprocessed_record_budget=89985`、`optimized_preprocessed_record_budget=4000` 和每个 worker 的 global index range。
+
+验证：source partition、raw-prefilter fallback/fail-closed、resume fingerprint、inline fresh OC-MERO source audit、invalid-option rollout skip 等新增/相关测试通过；v48.47–v48.56 changed-path regression 通过。完整历史 pytest 仍会首先遇到上传包本身缺失早期 `scripts/train_ocrap_v48_12_trident.sh` 的 packaging test failure，与本 hotfix 无关，未通过伪造历史文件规避。
+
 ### v48.55 authoritative 2×2：TCBC 没有形成 upstream component Pareto，normalization family STOP
 
 A 为复用的 `q-hard BC-FC + smooth-NAP` reference；B 只移除 DRS continuous magnitude regression；C 只做 DEP/GAP pooled train-only RMS linear canonicalization；D= B+C。reference reuse contract `valid=true`、`errors=[]`、source/五个 manifest/gate semantics 一致，四臂均 `pipeline_valid=true`、authoritative RC20、certificate真实执行且 `test_roots_read=false`。

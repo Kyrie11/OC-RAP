@@ -1289,6 +1289,15 @@ def _apply_scenario_scan_controls(
 
 def _scenario_source_config(cfg: dict) -> dict:
     """Return a source config with neutral scan controls and a sufficient cap."""
+    if _source_prefilters_scenario_scan_controls(cfg):
+        # Waymax can apply start/stride/worker on the raw serialized TFRecord
+        # stream before WOMD parsing / SimulatorState construction. In that
+        # mode the source iterator already emits exactly the requested worker
+        # partition, so do not neutralize the controls or inflate
+        # ``max_scenarios`` to ``start + stride * requested``. The latter is
+        # semantically correct but extremely expensive for large reserved start
+        # indices because every worker parses all skipped scenarios first.
+        return dict(cfg)
     start = max(0, int(cfg.get("scenario_start_index", 0)))
     stride = max(1, int(cfg.get("scenario_stride", 1)))
     worker = int(cfg.get("scenario_worker_index", 0)) % stride
@@ -1310,9 +1319,31 @@ def _scenario_source_config(cfg: dict) -> dict:
     return source_cfg
 
 
+def _source_prefilters_scenario_scan_controls(cfg: dict) -> bool:
+    """Whether the concrete source applies deterministic scan controls itself.
+
+    This is intentionally opt-in. Generic/synthetic/WOMD-proto sources keep the
+    historical builder-level partitioning contract. The optimized Waymax path
+    is enabled explicitly by long-running dataset construction scripts after
+    they opt into raw-TFRecord prefiltering.
+    """
+    if str(cfg.get("data_source", "synthetic_artifact")) != "womd":
+        return False
+    if str(cfg.get("simulation_backend", "ocrap_surrogate")) != "waymax_closed_loop":
+        return False
+    wx = cfg.get("waymax", {}) if isinstance(cfg.get("waymax", {}), dict) else {}
+    return bool(wx.get("prefilter_source_scan_controls", False))
+
+
 def _selected_scenario_iterator(cfg: dict) -> Iterator[RawScenario]:
     source_cfg = _scenario_source_config(cfg)
     source_iter = scenario_iterator(source_cfg)
+    if _source_prefilters_scenario_scan_controls(cfg):
+        # ``iter_waymax_womd_scenarios`` already applies the exact global
+        # start/stride/worker partition before expensive preprocessing. A
+        # second builder-level filter would incorrectly skip the selected rows.
+        yield from source_iter
+        return
     yield from _apply_scenario_scan_controls(
         source_iter,
         start_index=int(cfg.get("scenario_start_index", 0)),
@@ -1647,6 +1678,10 @@ _RESUME_VOLATILE_CFG_KEYS = {
     "compress_npz",
     "fsync_npz",
     "checkpoint_manifest_each_scene_time",
+    # Source-scan accelerators alter only when/where raw records are filtered;
+    # they preserve the exact global source indices and sample semantics.
+    "prefilter_source_scan_controls",
+    "require_source_scan_prefilter",
 }
 
 # Scan-scope controls change which deterministic part of the source is visited,
@@ -1938,9 +1973,9 @@ def _build_dataset_unlocked(
     scenario_start_index = max(0, int(cfg.get("scenario_start_index", 0)))
     scenario_stride = max(1, int(cfg.get("scenario_stride", 1)))
     scenario_worker_index = int(cfg.get("scenario_worker_index", 0)) % scenario_stride
-    # Apply start/stride/worker controls centrally and exactly once.  The source
-    # iterator receives neutral controls plus a cap large enough to reach the
-    # requested global source indices.
+    # Apply start/stride/worker exactly once. Generic sources keep the historical
+    # builder-level filtering contract; the opt-in Waymax fast path delegates the
+    # same global-index partition to the raw TFRecord stream before WOMD parsing.
     raw_iter = iter(_selected_scenario_iterator(cfg))
     progress_bar = None
     profile_path = out / "build_profile.csv"
@@ -2251,6 +2286,10 @@ def _build_dataset_unlocked(
         "scenario_stride": int(scenario_stride),
         "scenario_worker_index": int(scenario_worker_index),
         "source_max_scenarios": _scenario_source_config(cfg).get("max_scenarios"),
+        "source_scan_controls_mode": (
+            "source_raw_prefilter" if _source_prefilters_scenario_scan_controls(cfg)
+            else "builder_post_source_filter"
+        ),
         "scene_time_groups": int(scene_time_groups),
         "skipped_no_planning_times": int(skipped_no_planning_times),
         "unique_raw_scene_ids": int(len(raw_scene_ids)),

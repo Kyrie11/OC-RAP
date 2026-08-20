@@ -235,11 +235,73 @@ def _audit_index(path: Path, deployable_macros: set[int]) -> dict[str, Any]:
             },
         }
 
+    freshness_keys = {
+        "r_dep": "fresh_ocmero_r_dep_abs_error",
+        "r_orc": "fresh_ocmero_r_orc_abs_error",
+        "gap": "fresh_ocmero_gap_abs_error",
+    }
+    freshness_available = bool(rows) and all(
+        all(key in r for key in freshness_keys.values()) for r in rows
+    )
+    freshness = None
+    if freshness_available:
+        atol = 1e-6
+        max_err = {
+            name: max((float(r.get(key, 0.0)) for r in rows), default=0.0)
+            for name, key in freshness_keys.items()
+        }
+        mismatch = {
+            name: sum(float(r.get(key, 0.0)) > atol for r in rows)
+            for name, key in freshness_keys.items()
+        }
+        missing = {
+            "r_dep": sum(not bool(r.get("cached_r_dep_present", False)) for r in rows),
+            "r_orc": sum(not bool(r.get("cached_r_orc_present", False)) for r in rows),
+        }
+        freshness = {
+            "source": "teacher_index_inline_fresh_ocmero",
+            "checked_samples": len(rows),
+            "atol": atol,
+            "max_abs_error": max_err,
+            "mismatch_counts": mismatch,
+            "missing_cached_label_counts": missing,
+            "source_labels_match_fresh_ocmero": (
+                all(int(v) == 0 for v in mismatch.values())
+                and all(int(v) == 0 for v in missing.values())
+            ),
+        }
+
     return {
         "index": str(path.resolve()),
         "rows": len(rows),
         "groups": len({(int(r.get("bucket", -1)), str(r.get("scene", "")), int(r.get("time", 0))) for r in rows}),
         "by_regime": by_regime,
+        "source_recomputation": freshness,
+    }
+
+
+def _combine_index_freshness(parts: list[dict[str, Any]]) -> dict[str, Any] | None:
+    recs = [p.get("source_recomputation") for p in parts if p.get("source_recomputation")]
+    if not recs:
+        return None
+    keys = ("r_dep", "r_orc", "gap")
+    return {
+        "source": "teacher_index_inline_fresh_ocmero",
+        "checked_samples": sum(int(r.get("checked_samples", 0)) for r in recs),
+        "atol": min(float(r.get("atol", 1e-6)) for r in recs),
+        "max_abs_error": {
+            k: max(float(r.get("max_abs_error", {}).get(k, 0.0)) for r in recs) for k in keys
+        },
+        "mismatch_counts": {
+            k: sum(int(r.get("mismatch_counts", {}).get(k, 0)) for r in recs) for k in keys
+        },
+        "missing_cached_label_counts": {
+            k: sum(int(r.get("missing_cached_label_counts", {}).get(k, 0)) for r in recs)
+            for k in ("r_dep", "r_orc")
+        },
+        "source_labels_match_fresh_ocmero": all(
+            bool(r.get("source_labels_match_fresh_ocmero", False)) for r in recs
+        ),
     }
 
 
@@ -312,6 +374,8 @@ def main() -> int:
     _reject_test_inputs(str(args.train_index), str(args.dev_index or ""), str(args.dataset))
 
     macros = {int(x.strip()) for x in str(args.deployable_macro_ids).split(",") if x.strip()}
+    train_audit = _audit_index(args.train_index, macros)
+    dev_audit = _audit_index(args.dev_index, macros) if args.dev_index else None
     report: dict[str, Any] = {
         "event": "v48_56_teacher_component_semantic_audit",
         "version": "v48.56-DCP-DRFC-BCDE-TCSA",
@@ -323,15 +387,19 @@ def main() -> int:
             "teacher_source": "DRS uses observation-class option semantics; cached R_dep/R_orc must match fresh OC-MERO on the stored m_star contract",
             "component_semantics": "legacy PCD is compensatory whereas component_veto is non-compensatory; overlap is a direct contradictory-supervision diagnostic",
         },
-        "train": _audit_index(args.train_index, macros),
+        "train": train_audit,
     }
-    if args.dev_index:
-        report["dev"] = _audit_index(args.dev_index, macros)
+    if dev_audit is not None:
+        report["dev"] = dev_audit
     if args.dataset:
         report["source_recomputation"] = _audit_dataset_sources(
             args.dataset, alpha=args.alpha, beta=args.beta, top_m=args.top_m,
             max_samples=args.max_source_samples, atol=args.source_atol,
         )
+    else:
+        inline = _combine_index_freshness([x for x in [train_audit, dev_audit] if x is not None])
+        if inline is not None:
+            report["source_recomputation"] = inline
 
     # Fail-closed research decision: no evidence centering while the legacy target
     # has material benefit/harm contradictions or source labels are stale.

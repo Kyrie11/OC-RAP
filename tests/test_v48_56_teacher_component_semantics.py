@@ -141,3 +141,57 @@ def test_v48_56_audit_refuses_test_role_inputs() -> None:
     spec.loader.exec_module(mod)
     with pytest.raises(ValueError, match="refuses test-role input"):
         mod._reject_test_inputs("/data/OCRAP/test_contact", "/tmp/dev_index.jsonl")
+
+
+def test_v48_56_audit_can_reuse_inline_fresh_ocmero_checks(tmp_path: Path) -> None:
+    row = {
+        "path": "/tmp/evidence_adapt_train_near_contact/nom.npz",
+        "bucket": 1, "scene": "s", "time": 1, "candidate": 0, "macro": 0,
+        "nominal": True, "teacher_pcd": 0.0, "teacher_drs": 0.0,
+        "teacher_r_dep": -1.0, "teacher_gap": 0.0,
+        "teacher_hard_violation": 0.0, "teacher_harm_proxy": 0.0,
+        "component_veto_margin": 0.0, "component_harmful": False, "beneficial": False,
+        "fresh_ocmero_r_dep_abs_error": 0.0,
+        "fresh_ocmero_r_orc_abs_error": 0.0,
+        "fresh_ocmero_gap_abs_error": 0.0,
+        "cached_r_dep_present": True,
+        "cached_r_orc_present": True,
+    }
+    idx = tmp_path / "idx.jsonl"
+    idx.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    from importlib.util import module_from_spec, spec_from_file_location
+    tool_path = Path(__file__).resolve().parents[1] / "tools" / "audit_v48_56_teacher_component_semantics.py"
+    spec = spec_from_file_location("v4856_audit_inline", tool_path)
+    assert spec and spec.loader
+    mod = module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    rec = mod._audit_index(idx, {2, 3, 5, 6, 7})["source_recomputation"]
+    assert rec["checked_samples"] == 1
+    assert rec["source_labels_match_fresh_ocmero"] is True
+
+
+def test_v48_56_inline_freshness_fails_if_cached_labels_are_missing(tmp_path: Path) -> None:
+    row = {
+        "path": "/tmp/evidence_adapt_train_near_contact/nom.npz",
+        "bucket": 1, "scene": "s", "time": 1, "candidate": 0, "macro": 0,
+        "nominal": True, "teacher_pcd": 0.0, "teacher_drs": 0.0,
+        "teacher_r_dep": -1.0, "teacher_gap": 0.0,
+        "teacher_hard_violation": 0.0, "teacher_harm_proxy": 0.0,
+        "component_veto_margin": 0.0, "component_harmful": False, "beneficial": False,
+        "fresh_ocmero_r_dep_abs_error": 0.0,
+        "fresh_ocmero_r_orc_abs_error": 0.0,
+        "fresh_ocmero_gap_abs_error": 0.0,
+        "cached_r_dep_present": False,
+        "cached_r_orc_present": False,
+    }
+    idx = tmp_path / "idx_missing.jsonl"
+    idx.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    from importlib.util import module_from_spec, spec_from_file_location
+    tool_path = Path(__file__).resolve().parents[1] / "tools" / "audit_v48_56_teacher_component_semantics.py"
+    spec = spec_from_file_location("v4856_audit_inline_missing", tool_path)
+    assert spec and spec.loader
+    mod = module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    rec = mod._audit_index(idx, {2, 3, 5, 6, 7})["source_recomputation"]
+    assert rec["missing_cached_label_counts"] == {"r_dep": 1, "r_orc": 1}
+    assert rec["source_labels_match_fresh_ocmero"] is False

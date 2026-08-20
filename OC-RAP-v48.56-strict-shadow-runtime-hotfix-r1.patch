@@ -1,0 +1,1888 @@
+diff -ruN '--exclude=SHA256SUMS.txt' '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' /mnt/data/ocrap_v4856_orig/ALGORITHM_CHANGELOG.md ./ALGORITHM_CHANGELOG.md
+--- /mnt/data/ocrap_v4856_orig/ALGORITHM_CHANGELOG.md	2026-08-19 08:52:39.000000000 +0000
++++ ./ALGORITHM_CHANGELOG.md	2026-08-20 00:10:57.987847330 +0000
+@@ -2,6 +2,25 @@
+ 
+ **类别：由 v48.55 TCBC 2×2 的否证结果直接触发的 correctness release。v48.56 不再增加 performance Main，不进入 Boundary-Complete Evidence Centering，也不重开 root-logit recalibration；先验证 teacher target、component decision role 与真实 deployed veto 是否语义一致。统一 planner、observation-class execution、q-hard BC-FC + smooth-NAP、shared/no-regime rule 均保持。**
+ 
++### v48.56 runtime hotfix r1 — strict-teacher shadow source-scan amplification fix
++
++**类别：纯工程/运行时修复，不改变 strict-min-slack teacher、candidate、future、recovery option、regime、gate、dataset partition 或任何算法标签。**
++
++`run_v48_56_strict_teacher_shadow.sh` 长时间无完成的主因不是死循环，而是 Waymax source scan controls 放置位置错误造成的严重前处理放大：builder 为了实现 `scenario_start_index=11000, scenario_stride=6`，先把 source 端的 start/stride 清零，再把 `max_scenarios` 膨胀到目标 global index；而 Waymax `get_data_generator()` 在 Python 侧 partition filter 之前已经完成 WOMD parse、`SimulatorState` construction 和 RawScenario 转换。默认六个 worker 因此需要昂贵前处理约 **89,985** 个 source scenarios，最终真正进入各 worker partition 的只有 **4,000** 个，昂贵 source preprocessing 被放大约 **22.50×**。
++
++修复：
++
++- 新增 opt-in `waymax.prefilter_source_scan_controls`：在 serialized TFRecord stream 上先执行 `skip(start) -> shard(stride, worker) -> take(max_scenarios)`，之后才进行 WOMD parse / Waymax state construction；global source index、worker residue、scene-disjoint 语义保持完全一致。
++- strict shadow 强制 `waymax.require_source_scan_prefilter=true`；若安装的 Waymax/TF 版本不支持该 fast path，立即 fail-closed，而不是静默退回旧的数小时慢扫描。
++- source-prefilter/require 开关加入 resume volatile config；旧 partial shadow 与新 fast path 的 semantic resume fingerprint 保持一致，因此已有有效 sample 可以继续 `RESUME=1`。
++- 新增 worker heartbeat、live `dataset_status.json` / `build_stage_profile.json` 摘要、log tail；父脚本不再表现成“无输出地 wait 数小时”。已完成 shard 在 resume 模式直接复用。
++- Near/Contact 的 `teacher_rollout_top_k_options=0` **保持不变**：正式 strict shadow 仍执行 all-valid-option exact Waymax teacher，不用 screened/top-k teacher 伪装提速。
++- exact teacher 对 `option_valid=false` 的 option 不再执行 4 s Waymax rollout；最终 margin 历史上本来就会强制为 `-1e9`，因此这是语义等价的无效计算删除。
++- teacher index 构建时已经从每个 NPZ 的 `m_star/root_probs/c_star` fresh recompute OC-MERO。现在把 fresh-vs-cached error 和 cached-label-presence 写入 index；最终 TCSA audit复用这些字段，不再第三次全量重读 train+dev NPZ。缺失 cached `R_dep/R_orc` 仍 fail-closed，correctness contract 不放松。
++- 新增 runtime scan contract，默认配置会显式记录 `legacy_preprocessed_record_budget=89985`、`optimized_preprocessed_record_budget=4000` 和每个 worker 的 global index range。
++
++验证：source partition、raw-prefilter fallback/fail-closed、resume fingerprint、inline fresh OC-MERO source audit、invalid-option rollout skip 等新增/相关测试通过；v48.47–v48.56 changed-path regression 通过。完整历史 pytest 仍会首先遇到上传包本身缺失早期 `scripts/train_ocrap_v48_12_trident.sh` 的 packaging test failure，与本 hotfix 无关，未通过伪造历史文件规避。
++
+ ### v48.55 authoritative 2×2：TCBC 没有形成 upstream component Pareto，normalization family STOP
+ 
+ A 为复用的 `q-hard BC-FC + smooth-NAP` reference；B 只移除 DRS continuous magnitude regression；C 只做 DEP/GAP pooled train-only RMS linear canonicalization；D= B+C。reference reuse contract `valid=true`、`errors=[]`、source/五个 manifest/gate semantics 一致，四臂均 `pipeline_valid=true`、authoritative RC20、certificate真实执行且 `test_roots_read=false`。
+diff -ruN '--exclude=SHA256SUMS.txt' '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' /mnt/data/ocrap_v4856_orig/ALGORITHM_CHANGELOG_V48.md ./ALGORITHM_CHANGELOG_V48.md
+--- /mnt/data/ocrap_v4856_orig/ALGORITHM_CHANGELOG_V48.md	2026-08-19 08:52:39.000000000 +0000
++++ ./ALGORITHM_CHANGELOG_V48.md	2026-08-20 00:10:57.988358707 +0000
+@@ -2,6 +2,25 @@
+ 
+ **类别：由 v48.55 TCBC 2×2 的否证结果直接触发的 correctness release。v48.56 不再增加 performance Main，不进入 Boundary-Complete Evidence Centering，也不重开 root-logit recalibration；先验证 teacher target、component decision role 与真实 deployed veto 是否语义一致。统一 planner、observation-class execution、q-hard BC-FC + smooth-NAP、shared/no-regime rule 均保持。**
+ 
++### v48.56 runtime hotfix r1 — strict-teacher shadow source-scan amplification fix
++
++**类别：纯工程/运行时修复，不改变 strict-min-slack teacher、candidate、future、recovery option、regime、gate、dataset partition 或任何算法标签。**
++
++`run_v48_56_strict_teacher_shadow.sh` 长时间无完成的主因不是死循环，而是 Waymax source scan controls 放置位置错误造成的严重前处理放大：builder 为了实现 `scenario_start_index=11000, scenario_stride=6`，先把 source 端的 start/stride 清零，再把 `max_scenarios` 膨胀到目标 global index；而 Waymax `get_data_generator()` 在 Python 侧 partition filter 之前已经完成 WOMD parse、`SimulatorState` construction 和 RawScenario 转换。默认六个 worker 因此需要昂贵前处理约 **89,985** 个 source scenarios，最终真正进入各 worker partition 的只有 **4,000** 个，昂贵 source preprocessing 被放大约 **22.50×**。
++
++修复：
++
++- 新增 opt-in `waymax.prefilter_source_scan_controls`：在 serialized TFRecord stream 上先执行 `skip(start) -> shard(stride, worker) -> take(max_scenarios)`，之后才进行 WOMD parse / Waymax state construction；global source index、worker residue、scene-disjoint 语义保持完全一致。
++- strict shadow 强制 `waymax.require_source_scan_prefilter=true`；若安装的 Waymax/TF 版本不支持该 fast path，立即 fail-closed，而不是静默退回旧的数小时慢扫描。
++- source-prefilter/require 开关加入 resume volatile config；旧 partial shadow 与新 fast path 的 semantic resume fingerprint 保持一致，因此已有有效 sample 可以继续 `RESUME=1`。
++- 新增 worker heartbeat、live `dataset_status.json` / `build_stage_profile.json` 摘要、log tail；父脚本不再表现成“无输出地 wait 数小时”。已完成 shard 在 resume 模式直接复用。
++- Near/Contact 的 `teacher_rollout_top_k_options=0` **保持不变**：正式 strict shadow 仍执行 all-valid-option exact Waymax teacher，不用 screened/top-k teacher 伪装提速。
++- exact teacher 对 `option_valid=false` 的 option 不再执行 4 s Waymax rollout；最终 margin 历史上本来就会强制为 `-1e9`，因此这是语义等价的无效计算删除。
++- teacher index 构建时已经从每个 NPZ 的 `m_star/root_probs/c_star` fresh recompute OC-MERO。现在把 fresh-vs-cached error 和 cached-label-presence 写入 index；最终 TCSA audit复用这些字段，不再第三次全量重读 train+dev NPZ。缺失 cached `R_dep/R_orc` 仍 fail-closed，correctness contract 不放松。
++- 新增 runtime scan contract，默认配置会显式记录 `legacy_preprocessed_record_budget=89985`、`optimized_preprocessed_record_budget=4000` 和每个 worker 的 global index range。
++
++验证：source partition、raw-prefilter fallback/fail-closed、resume fingerprint、inline fresh OC-MERO source audit、invalid-option rollout skip 等新增/相关测试通过；v48.47–v48.56 changed-path regression 通过。完整历史 pytest 仍会首先遇到上传包本身缺失早期 `scripts/train_ocrap_v48_12_trident.sh` 的 packaging test failure，与本 hotfix 无关，未通过伪造历史文件规避。
++
+ ### v48.55 authoritative 2×2：TCBC 没有形成 upstream component Pareto，normalization family STOP
+ 
+ A 为复用的 `q-hard BC-FC + smooth-NAP` reference；B 只移除 DRS continuous magnitude regression；C 只做 DEP/GAP pooled train-only RMS linear canonicalization；D= B+C。reference reuse contract `valid=true`、`errors=[]`、source/五个 manifest/gate semantics 一致，四臂均 `pipeline_valid=true`、authoritative RC20、certificate真实执行且 `test_roots_read=false`。
+diff -ruN '--exclude=SHA256SUMS.txt' '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' /mnt/data/ocrap_v4856_orig/OC-RAP-v48.56-DCP-DRFC-BCDE-TCSA-next-commands-ZH.txt ./OC-RAP-v48.56-DCP-DRFC-BCDE-TCSA-next-commands-ZH.txt
+--- /mnt/data/ocrap_v4856_orig/OC-RAP-v48.56-DCP-DRFC-BCDE-TCSA-next-commands-ZH.txt	2026-08-19 08:52:38.000000000 +0000
++++ ./OC-RAP-v48.56-DCP-DRFC-BCDE-TCSA-next-commands-ZH.txt	2026-08-20 00:11:08.039955729 +0000
+@@ -32,8 +32,17 @@
+ # 正式归因必须再用 0（全量）跑一次。
+ 
+ # ================================================================
+-# 2. 构建 strict-min-slack SHADOW calibration/protocol（本轮核心实验）
++# 2. 构建 strict-min-slack SHADOW calibration/protocol（runtime hotfix r1）
+ # ================================================================
++# 本 hotfix 不改变 teacher/candidate/future/partition 语义，只修复 source scan 性能。
++# 默认 start=11000/stride=6 下，旧代码六 worker 会先昂贵 parse/convert 约 89,985 个
++# WOMD scenario，真正选中的只有 4,000；新代码在 serialized TFRecord 层先 partition，
++# 只对选中的 4,000 个执行 WOMD parse + Waymax SimulatorState/RawScenario construction。
++# 若本机 Waymax/TF 不支持 raw-prefilter，strict shadow 会立即 fail-closed，不会偷偷回慢路径。
++#
++# 如果旧脚本仍在运行，先终止旧 controller/workers，再替换成此代码；不要让新旧 controller
++# 同时写同一个 SHADOW_ROOT。优化开关已从 semantic resume fingerprint 排除，已有 partial shard
++# 可以直接 RESUME=1 续跑，不需要为了这个 hotfix 删除已生成的有效 samples。
+ # 这不是替换 canonical 数据集，而是 teacher-source correctness 的受控 shadow。
+ # 单变量变化：移除历史 post-min 0.6/0.9 floor 和 route-blocked post-min ceiling；
+ # 第一阶段保留显式 branch-intent component，以避免同时改变 oracle-artifact 数据支持分布；
+@@ -41,9 +50,23 @@
+ 
+ GPU0=0 GPU1=1 \
+ SHADOW_ROOT=/data0/senzeyu2/dataset/OCRAP_v48_56_strict_teacher \
++RESUME=1 \
++V4856_HEARTBEAT_SECONDS=60 \
+ V4856_RUN_BUILD=1 \
+ bash scripts/run_v48_56_strict_teacher_shadow.sh
+ 
++
++# 运行时应很快看到类似：
++# {'event': 'v48_56_strict_shadow_runtime_scan_contract', ...
++#  'legacy_preprocessed_record_budget': 89985,
++#  'optimized_preprocessed_record_budget': 4000, ...}
++# worker log 中还应看到 event=waymax_raw_source_prefilter；如果 fast path 不可用会直接报错。
++# controller 每 60 s 输出 v48_56_worker_heartbeat，包含 raw_scenarios_seen、scene_time_groups、
++# samples_per_hour、stage_totals_s 和 log tail，可用来区分 source I/O、teacher rollout 与真正挂死。
++#
++# runtime contract：
++# /data0/senzeyu2/dataset/OCRAP_v48_56_strict_teacher/V48_56_STRICT_SHADOW_RUNTIME_SCAN_CONTRACT.json
++
+ # 主要输出：
+ # /data0/senzeyu2/dataset/OCRAP_v48_56_strict_teacher/calibration_v48_14_prism_4814/
+ #   V48_56_STRICT_TEACHER_TRAIN_INDEX.jsonl
+diff -ruN '--exclude=SHA256SUMS.txt' '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' /mnt/data/ocrap_v4856_orig/OC-RAP-v48.56-runtime-hotfix-r1-validation-status.txt ./OC-RAP-v48.56-runtime-hotfix-r1-validation-status.txt
+--- /mnt/data/ocrap_v4856_orig/OC-RAP-v48.56-runtime-hotfix-r1-validation-status.txt	1970-01-01 00:00:00.000000000 +0000
++++ ./OC-RAP-v48.56-runtime-hotfix-r1-validation-status.txt	2026-08-20 00:13:02.926957826 +0000
+@@ -0,0 +1,35 @@
++OC-RAP v48.56 strict-shadow runtime hotfix r1 validation
++Date: 2026-08-19
++
++Scope
++- Runtime/engineering only; no change to strict_min_slack teacher semantics, candidate/future construction, recovery option set, regime labels, gate semantics, source global-index partition, or Near/Contact exact-teacher top_k=0 contract.
++
++Root-cause static audit
++- strict shadow defaults: scenario_start_index=11000, scenario_stride=6.
++- old builder neutralized source scan controls and inflated source max_scenarios per worker.
++- old expensive preprocess budgets: 14595,14596,15197,15198,15199,15200 = 89985 total.
++- selected worker records: 600+600+700+700+700+700 = 4000.
++- expensive source preprocessing amplification: 22.49625x.
++- optimized path applies raw serialized TFRecord skip/shard/take before WOMD parse / SimulatorState / RawScenario conversion.
++
++Runtime correctness tests
++- pytest -q tests/data/test_dataset_rebuild_integrity.py tests/data/test_waymax_source_prefilter.py tests/test_v48_56_teacher_component_semantics.py tests/test_v48_56_runtime_optimization.py
++- PASS: 20 passed.
++
++v48.47-v48.56 changed-path regression
++- PASS: 82 passed, 11 warnings.
++- Covered v48.47 DSOFR through v48.56 TCSA plus dataset rebuild/source prefilter tests.
++
++Static validation
++- python -m compileall -q src tools tests: PASS.
++- scripts/*.sh bash -n: PASS, 132/132.
++
++Full historical pytest note
++- `pytest -q -x` reaches 142 passed before the first failure.
++- First failure is pre-existing packaging/history debt: tests/test_v48_12_trident.py expects missing scripts/train_ocrap_v48_12_trident.sh in the uploaded package.
++- This file is absent in the user-provided source zip as well; the runtime hotfix does not fabricate it.
++
++Environment limitation
++- Current delivery container has JAX but does not have TensorFlow, Waymax, the user WOMD /data0 dataset, or the training GPUs.
++- Therefore no real WOMD/Waymax full-shadow wall-clock benchmark is claimed here.
++- The strict build now performs an installed-Waymax raw-prefilter API preflight on the training machine and fails closed if unavailable.
+diff -ruN '--exclude=SHA256SUMS.txt' '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' /mnt/data/ocrap_v4856_orig/OC-RAP-v48.56-strict-shadow-runtime-diagnosis-and-fix-ZH.md ./OC-RAP-v48.56-strict-shadow-runtime-diagnosis-and-fix-ZH.md
+--- /mnt/data/ocrap_v4856_orig/OC-RAP-v48.56-strict-shadow-runtime-diagnosis-and-fix-ZH.md	1970-01-01 00:00:00.000000000 +0000
++++ ./OC-RAP-v48.56-strict-shadow-runtime-diagnosis-and-fix-ZH.md	2026-08-20 00:12:23.466267147 +0000
+@@ -0,0 +1,163 @@
++# OC-RAP v48.56 strict-teacher shadow：8 小时长运行问题诊断与 runtime hotfix r1
++
++## 1. 结论
++
++这次 `bash scripts/run_v48_56_strict_teacher_shadow.sh` 长时间不结束的首要原因不是算法死循环，也不是 GPU 互锁，而是 **Waymax source partition 被放在了昂贵 WOMD/Waymax 前处理之后**，在 `scenario_start_index=11000` 的 strict-shadow 配置下产生了严重的 source-scan amplification。
++
++原实现为了在 builder 层得到全局索引
++
++```text
++global_index = start + worker + n * stride
++```
++
++会先在 source config 中把 `scenario_start_index/scenario_stride/scenario_worker_index` 归零，然后把 source `max_scenarios` 扩张到目标 global index。Waymax loader 随后用 `get_data_generator()` 对这些记录先做 WOMD TFExample parse、`SimulatorState` construction，并进一步转换为 `RawScenario`；builder 最后才丢掉不属于当前 worker residue 的记录。
++
++默认 strict-shadow 六 worker 的旧 expensive-source budget 是：
++
++| shard | worker | 真正需要 | 旧 source expensive preprocess budget |
++|---|---:|---:|---:|
++| Safe | 0 | 600 | 14,595 |
++| Safe | 1 | 600 | 14,596 |
++| Near | 2 | 700 | 15,197 |
++| Near | 3 | 700 | 15,198 |
++| Contact | 4 | 700 | 15,199 |
++| Contact | 5 | 700 | 15,200 |
++| **总计** | | **4,000** | **89,985** |
++
++因此旧代码对昂贵的 WOMD parse / Waymax state / RawScenario construction 的调用量约被放大 **22.50×**。注意这表示昂贵前处理次数的下降，不应机械理解为 wall-clock 必然缩短 22.50×；raw TFRecord 顺序流仍需走过 start 之前的 serialized records，而且 Near/Contact exact teacher 本身仍然很重。
++
++## 2. 为什么看起来像“卡死”
++
++原 `build_v48_56_strict_teacher_calibration_shadow.sh` 把两个 worker 的 stdout/stderr 全部重定向到文件，然后父 shell 直接 `wait`。在 worker 长时间做 source conversion 或 exact teacher 时，父终端没有进度信息，因此表现为几个小时“没有反应”。
++
++代码中没有找到会让本链条无限迭代的算法 loop：Waymax DatasetConfig 使用 `repeat=1`；builder 的主循环在 source iterator Exhaust 后结束；父脚本的 `wait` 是在等待真实 worker。真正的问题是 **有限但被异常放大的工作量 + 不透明的运行状态**。
++
++## 3. 第二个真实成本：Near/Contact exact teacher
++
++Near 与 Contact strict shadow 明确使用：
++
++```text
++waymax.teacher_rollout_top_k_options=0
++```
++
++这是 all-valid-option exact Waymax teacher。它不能为了提速直接改成 `top_k=4`，否则 strict shadow 的 teacher semantics 会变化，correctness audit 不再是同一个实验。
++
++因此 runtime hotfix 保留 `top_k_options=0`。优化 source amplification 后，如果 heartbeat 中 `teacher_margins` 成为主要 stage，这是合理的剩余计算成本，而不是继续把它误判成 source 卡死。
++
++另外发现一个语义等价的无效计算：历史代码即便 `option_valid=false`，仍先执行完整 4 s Waymax recovery rollout，最后才把 margin 强制成 `-1e9`。hotfix 现在直接跳过这种 invalid-option exact rollout；最终 teacher margin 不变。
++
++## 4. 已落地修复
++
++### 4.1 Raw TFRecord prefilter
++
++新增：
++
++```text
++waymax.prefilter_source_scan_controls=true
++waymax.require_source_scan_prefilter=true   # strict-shadow only
++```
++
++Waymax fast path现在按如下顺序：
++
++```text
++serialized TFRecord stream
++  -> skip(scenario_start_index)
++  -> shard(scenario_stride, scenario_worker_index)
++  -> take(max_scenarios)
++  -> WOMD parse
++  -> Waymax SimulatorState
++  -> RawScenario
++```
++
++所以 expensive parse/state conversion 只发生在当前 worker 真正需要的记录上。global index、scene id、worker residue、scene-disjoint partition 不变。
++
++strict shadow 设为 `require_source_scan_prefilter=true`：若安装的 Waymax/TensorFlow 版本不兼容，直接 fail-closed，不允许静默退回旧慢路径。
++
++### 4.2 Resume compatibility
++
++`prefilter_source_scan_controls` 与 `require_source_scan_prefilter` 只改变 transport/runtime，不改变 sample generation semantics，已经从 semantic resume fingerprint 中排除。因此用旧代码运行 8 小时后留下的 partial shard，只要其原始 teacher/config 相同，可以在新代码中继续 `RESUME=1`，无需仅因为本 hotfix 删除有效 sample。
++
++### 4.3 Heartbeat / live profile
++
++每个 worker 开启 runtime profiling，controller 周期输出：
++
++- `dataset_status.json`
++- `build_stage_profile.json`
++- `raw_scenarios_seen`
++- `scene_time_groups`
++- `new_samples_written`
++- `samples_per_hour`
++- `stage_totals_s`
++- worker log tail / log age
++
++因此下一次可以直接区分：source scan、planning-time selection、future generation、teacher margins、NPZ I/O 中谁是真正的 dominant runtime。
++
++### 4.4 Completed-shard reuse
++
++`RESUME=1` 时，如果某一 safe/near/contact worker shard 已经同时存在非空 `manifest.csv` 和 `dataset_summary.json`，该 shard不重新运行。partial shard继续走 dataset builder 的原有 atomic/resume contract。
++
++### 4.5 删除 semantic audit 的第三次全量 NPZ read
++
++`build_teacher_pcd_index_v48.py` 本来已经加载每个 NPZ 并用 `m_star/root_probs/c_star` fresh recompute OC-MERO。旧 strict runner 构建 train index、dev index后，semantic audit 又把 train+dev NPZ 全量打开一次，仅为了重复做同一 source consistency check。
++
++现在 index 直接保存：
++
++- fresh `R_dep/R_orc/GAP`
++- fresh-vs-cached absolute error
++- cached `r_dep_star/r_orc_star` 是否真实存在
++
++最终 semantic audit复用 index 中的 fresh fields。若 cached label 缺失仍然 fail-closed，因此不是通过放松 correctness 换速度。
++
++### 4.6 Runtime scan contract
++
++build 一开始输出并写入：
++
++```text
++V48_56_STRICT_SHADOW_RUNTIME_SCAN_CONTRACT.json
++```
++
++默认应记录：
++
++```text
++legacy_preprocessed_record_budget = 89985
++optimized_preprocessed_record_budget = 4000
++avoided_expensive_preprocess_records = 85985
++legacy_to_optimized_preprocess_ratio = 22.49625
++```
++
++## 5. 下一次运行时如何判断是否正常
++
++首先停止旧 controller 及其仍存活 worker，避免新旧进程同时写同一个 `SHADOW_ROOT`。然后用同一个 shadow root、`RESUME=1` 运行新代码。
++
++启动后应先看到：
++
++```text
++event=v48_56_waymax_raw_prefilter_preflight
++status=pass
++```
++
++以及 runtime scan contract。worker log 中应看到：
++
++```text
++event=waymax_raw_source_prefilter
++```
++
++controller 默认每 60 秒打印一次 `v48_56_worker_heartbeat`。
++
++如果 `raw_scenarios_seen` 持续增加而 `stage_totals_s.teacher_margins` 占主导，说明程序没有挂死，而是正在执行正式 all-option exact teacher。若 source fast path不可用，新版会直接报错退出，不再允许它无提示地回退到旧的数小时扫描。
++
++## 6. 验证范围
++
++本交付环境没有用户训练机上的 TensorFlow、Waymax、WOMD `/data0/...` 和对应 GPU 环境，因此无法在这里声称完成真实 full-shadow wall-clock benchmark。已完成的是：
++
++- raw/global-index partition arithmetic regression；
++- optimized fast path / legacy fallback / required-fast fail-closed / mid-stream duplicate prevention；
++- builder source-delegation contract；
++- old-partial/new-fast resume fingerprint equivalence；
++- invalid-option exact rollout elimination；
++- inline fresh OC-MERO + cached-label-presence correctness；
++- v48.47–v48.56 relevant changed-path regression；
++- Python compileall；
++- 全部当前 `scripts/*.sh` 的 `bash -n`。
++
++完整历史 pytest 的第一个失败仍来自上传代码包缺失早期历史文件 `scripts/train_ocrap_v48_12_trident.sh`，属于 package history debt，不是本次 runtime hotfix 引入；没有通过补造历史脚本去伪造全套通过。
+diff -ruN '--exclude=SHA256SUMS.txt' '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' /mnt/data/ocrap_v4856_orig/OC-RAP-v48.56-strict-shadow-runtime-hotfix-r1.patch ./OC-RAP-v48.56-strict-shadow-runtime-hotfix-r1.patch
+--- /mnt/data/ocrap_v4856_orig/OC-RAP-v48.56-strict-shadow-runtime-hotfix-r1.patch	1970-01-01 00:00:00.000000000 +0000
++++ ./OC-RAP-v48.56-strict-shadow-runtime-hotfix-r1.patch	2026-08-20 00:13:12.293170244 +0000
+@@ -0,0 +1,310 @@
++diff -ruN '--exclude=SHA256SUMS.txt' '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' /mnt/data/ocrap_v4856_orig/ALGORITHM_CHANGELOG.md ./ALGORITHM_CHANGELOG.md
++--- /mnt/data/ocrap_v4856_orig/ALGORITHM_CHANGELOG.md	2026-08-19 08:52:39.000000000 +0000
+++++ ./ALGORITHM_CHANGELOG.md	2026-08-20 00:10:57.987847330 +0000
++@@ -2,6 +2,25 @@
++ 
++ **类别：由 v48.55 TCBC 2×2 的否证结果直接触发的 correctness release。v48.56 不再增加 performance Main，不进入 Boundary-Complete Evidence Centering，也不重开 root-logit recalibration；先验证 teacher target、component decision role 与真实 deployed veto 是否语义一致。统一 planner、observation-class execution、q-hard BC-FC + smooth-NAP、shared/no-regime rule 均保持。**
++ 
+++### v48.56 runtime hotfix r1 — strict-teacher shadow source-scan amplification fix
+++
+++**类别：纯工程/运行时修复，不改变 strict-min-slack teacher、candidate、future、recovery option、regime、gate、dataset partition 或任何算法标签。**
+++
+++`run_v48_56_strict_teacher_shadow.sh` 长时间无完成的主因不是死循环，而是 Waymax source scan controls 放置位置错误造成的严重前处理放大：builder 为了实现 `scenario_start_index=11000, scenario_stride=6`，先把 source 端的 start/stride 清零，再把 `max_scenarios` 膨胀到目标 global index；而 Waymax `get_data_generator()` 在 Python 侧 partition filter 之前已经完成 WOMD parse、`SimulatorState` construction 和 RawScenario 转换。默认六个 worker 因此需要昂贵前处理约 **89,985** 个 source scenarios，最终真正进入各 worker partition 的只有 **4,000** 个，昂贵 source preprocessing 被放大约 **22.50×**。
+++
+++修复：
+++
+++- 新增 opt-in `waymax.prefilter_source_scan_controls`：在 serialized TFRecord stream 上先执行 `skip(start) -> shard(stride, worker) -> take(max_scenarios)`，之后才进行 WOMD parse / Waymax state construction；global source index、worker residue、scene-disjoint 语义保持完全一致。
+++- strict shadow 强制 `waymax.require_source_scan_prefilter=true`；若安装的 Waymax/TF 版本不支持该 fast path，立即 fail-closed，而不是静默退回旧的数小时慢扫描。
+++- source-prefilter/require 开关加入 resume volatile config；旧 partial shadow 与新 fast path 的 semantic resume fingerprint 保持一致，因此已有有效 sample 可以继续 `RESUME=1`。
+++- 新增 worker heartbeat、live `dataset_status.json` / `build_stage_profile.json` 摘要、log tail；父脚本不再表现成“无输出地 wait 数小时”。已完成 shard 在 resume 模式直接复用。
+++- Near/Contact 的 `teacher_rollout_top_k_options=0` **保持不变**：正式 strict shadow 仍执行 all-valid-option exact Waymax teacher，不用 screened/top-k teacher 伪装提速。
+++- exact teacher 对 `option_valid=false` 的 option 不再执行 4 s Waymax rollout；最终 margin 历史上本来就会强制为 `-1e9`，因此这是语义等价的无效计算删除。
+++- teacher index 构建时已经从每个 NPZ 的 `m_star/root_probs/c_star` fresh recompute OC-MERO。现在把 fresh-vs-cached error 和 cached-label-presence 写入 index；最终 TCSA audit复用这些字段，不再第三次全量重读 train+dev NPZ。缺失 cached `R_dep/R_orc` 仍 fail-closed，correctness contract 不放松。
+++- 新增 runtime scan contract，默认配置会显式记录 `legacy_preprocessed_record_budget=89985`、`optimized_preprocessed_record_budget=4000` 和每个 worker 的 global index range。
+++
+++验证：source partition、raw-prefilter fallback/fail-closed、resume fingerprint、inline fresh OC-MERO source audit、invalid-option rollout skip 等新增/相关测试通过；v48.47–v48.56 changed-path regression 通过。完整历史 pytest 仍会首先遇到上传包本身缺失早期 `scripts/train_ocrap_v48_12_trident.sh` 的 packaging test failure，与本 hotfix 无关，未通过伪造历史文件规避。
+++
++ ### v48.55 authoritative 2×2：TCBC 没有形成 upstream component Pareto，normalization family STOP
++ 
++ A 为复用的 `q-hard BC-FC + smooth-NAP` reference；B 只移除 DRS continuous magnitude regression；C 只做 DEP/GAP pooled train-only RMS linear canonicalization；D= B+C。reference reuse contract `valid=true`、`errors=[]`、source/五个 manifest/gate semantics 一致，四臂均 `pipeline_valid=true`、authoritative RC20、certificate真实执行且 `test_roots_read=false`。
++diff -ruN '--exclude=SHA256SUMS.txt' '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' /mnt/data/ocrap_v4856_orig/ALGORITHM_CHANGELOG_V48.md ./ALGORITHM_CHANGELOG_V48.md
++--- /mnt/data/ocrap_v4856_orig/ALGORITHM_CHANGELOG_V48.md	2026-08-19 08:52:39.000000000 +0000
+++++ ./ALGORITHM_CHANGELOG_V48.md	2026-08-20 00:10:57.988358707 +0000
++@@ -2,6 +2,25 @@
++ 
++ **类别：由 v48.55 TCBC 2×2 的否证结果直接触发的 correctness release。v48.56 不再增加 performance Main，不进入 Boundary-Complete Evidence Centering，也不重开 root-logit recalibration；先验证 teacher target、component decision role 与真实 deployed veto 是否语义一致。统一 planner、observation-class execution、q-hard BC-FC + smooth-NAP、shared/no-regime rule 均保持。**
++ 
+++### v48.56 runtime hotfix r1 — strict-teacher shadow source-scan amplification fix
+++
+++**类别：纯工程/运行时修复，不改变 strict-min-slack teacher、candidate、future、recovery option、regime、gate、dataset partition 或任何算法标签。**
+++
+++`run_v48_56_strict_teacher_shadow.sh` 长时间无完成的主因不是死循环，而是 Waymax source scan controls 放置位置错误造成的严重前处理放大：builder 为了实现 `scenario_start_index=11000, scenario_stride=6`，先把 source 端的 start/stride 清零，再把 `max_scenarios` 膨胀到目标 global index；而 Waymax `get_data_generator()` 在 Python 侧 partition filter 之前已经完成 WOMD parse、`SimulatorState` construction 和 RawScenario 转换。默认六个 worker 因此需要昂贵前处理约 **89,985** 个 source scenarios，最终真正进入各 worker partition 的只有 **4,000** 个，昂贵 source preprocessing 被放大约 **22.50×**。
+++
+++修复：
+++
+++- 新增 opt-in `waymax.prefilter_source_scan_controls`：在 serialized TFRecord stream 上先执行 `skip(start) -> shard(stride, worker) -> take(max_scenarios)`，之后才进行 WOMD parse / Waymax state construction；global source index、worker residue、scene-disjoint 语义保持完全一致。
+++- strict shadow 强制 `waymax.require_source_scan_prefilter=true`；若安装的 Waymax/TF 版本不支持该 fast path，立即 fail-closed，而不是静默退回旧的数小时慢扫描。
+++- source-prefilter/require 开关加入 resume volatile config；旧 partial shadow 与新 fast path 的 semantic resume fingerprint 保持一致，因此已有有效 sample 可以继续 `RESUME=1`。
+++- 新增 worker heartbeat、live `dataset_status.json` / `build_stage_profile.json` 摘要、log tail；父脚本不再表现成“无输出地 wait 数小时”。已完成 shard 在 resume 模式直接复用。
+++- Near/Contact 的 `teacher_rollout_top_k_options=0` **保持不变**：正式 strict shadow 仍执行 all-valid-option exact Waymax teacher，不用 screened/top-k teacher 伪装提速。
+++- exact teacher 对 `option_valid=false` 的 option 不再执行 4 s Waymax rollout；最终 margin 历史上本来就会强制为 `-1e9`，因此这是语义等价的无效计算删除。
+++- teacher index 构建时已经从每个 NPZ 的 `m_star/root_probs/c_star` fresh recompute OC-MERO。现在把 fresh-vs-cached error 和 cached-label-presence 写入 index；最终 TCSA audit复用这些字段，不再第三次全量重读 train+dev NPZ。缺失 cached `R_dep/R_orc` 仍 fail-closed，correctness contract 不放松。
+++- 新增 runtime scan contract，默认配置会显式记录 `legacy_preprocessed_record_budget=89985`、`optimized_preprocessed_record_budget=4000` 和每个 worker 的 global index range。
+++
+++验证：source partition、raw-prefilter fallback/fail-closed、resume fingerprint、inline fresh OC-MERO source audit、invalid-option rollout skip 等新增/相关测试通过；v48.47–v48.56 changed-path regression 通过。完整历史 pytest 仍会首先遇到上传包本身缺失早期 `scripts/train_ocrap_v48_12_trident.sh` 的 packaging test failure，与本 hotfix 无关，未通过伪造历史文件规避。
+++
++ ### v48.55 authoritative 2×2：TCBC 没有形成 upstream component Pareto，normalization family STOP
++ 
++ A 为复用的 `q-hard BC-FC + smooth-NAP` reference；B 只移除 DRS continuous magnitude regression；C 只做 DEP/GAP pooled train-only RMS linear canonicalization；D= B+C。reference reuse contract `valid=true`、`errors=[]`、source/五个 manifest/gate semantics 一致，四臂均 `pipeline_valid=true`、authoritative RC20、certificate真实执行且 `test_roots_read=false`。
++diff -ruN '--exclude=SHA256SUMS.txt' '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' /mnt/data/ocrap_v4856_orig/OC-RAP-v48.56-DCP-DRFC-BCDE-TCSA-next-commands-ZH.txt ./OC-RAP-v48.56-DCP-DRFC-BCDE-TCSA-next-commands-ZH.txt
++--- /mnt/data/ocrap_v4856_orig/OC-RAP-v48.56-DCP-DRFC-BCDE-TCSA-next-commands-ZH.txt	2026-08-19 08:52:38.000000000 +0000
+++++ ./OC-RAP-v48.56-DCP-DRFC-BCDE-TCSA-next-commands-ZH.txt	2026-08-20 00:11:08.039955729 +0000
++@@ -32,8 +32,17 @@
++ # 正式归因必须再用 0（全量）跑一次。
++ 
++ # ================================================================
++-# 2. 构建 strict-min-slack SHADOW calibration/protocol（本轮核心实验）
+++# 2. 构建 strict-min-slack SHADOW calibration/protocol（runtime hotfix r1）
++ # ================================================================
+++# 本 hotfix 不改变 teacher/candidate/future/partition 语义，只修复 source scan 性能。
+++# 默认 start=11000/stride=6 下，旧代码六 worker 会先昂贵 parse/convert 约 89,985 个
+++# WOMD scenario，真正选中的只有 4,000；新代码在 serialized TFRecord 层先 partition，
+++# 只对选中的 4,000 个执行 WOMD parse + Waymax SimulatorState/RawScenario construction。
+++# 若本机 Waymax/TF 不支持 raw-prefilter，strict shadow 会立即 fail-closed，不会偷偷回慢路径。
+++#
+++# 如果旧脚本仍在运行，先终止旧 controller/workers，再替换成此代码；不要让新旧 controller
+++# 同时写同一个 SHADOW_ROOT。优化开关已从 semantic resume fingerprint 排除，已有 partial shard
+++# 可以直接 RESUME=1 续跑，不需要为了这个 hotfix 删除已生成的有效 samples。
++ # 这不是替换 canonical 数据集，而是 teacher-source correctness 的受控 shadow。
++ # 单变量变化：移除历史 post-min 0.6/0.9 floor 和 route-blocked post-min ceiling；
++ # 第一阶段保留显式 branch-intent component，以避免同时改变 oracle-artifact 数据支持分布；
++@@ -41,9 +50,23 @@
++ 
++ GPU0=0 GPU1=1 \
++ SHADOW_ROOT=/data0/senzeyu2/dataset/OCRAP_v48_56_strict_teacher \
+++RESUME=1 \
+++V4856_HEARTBEAT_SECONDS=60 \
++ V4856_RUN_BUILD=1 \
++ bash scripts/run_v48_56_strict_teacher_shadow.sh
++ 
+++
+++# 运行时应很快看到类似：
+++# {'event': 'v48_56_strict_shadow_runtime_scan_contract', ...
+++#  'legacy_preprocessed_record_budget': 89985,
+++#  'optimized_preprocessed_record_budget': 4000, ...}
+++# worker log 中还应看到 event=waymax_raw_source_prefilter；如果 fast path 不可用会直接报错。
+++# controller 每 60 s 输出 v48_56_worker_heartbeat，包含 raw_scenarios_seen、scene_time_groups、
+++# samples_per_hour、stage_totals_s 和 log tail，可用来区分 source I/O、teacher rollout 与真正挂死。
+++#
+++# runtime contract：
+++# /data0/senzeyu2/dataset/OCRAP_v48_56_strict_teacher/V48_56_STRICT_SHADOW_RUNTIME_SCAN_CONTRACT.json
+++
++ # 主要输出：
++ # /data0/senzeyu2/dataset/OCRAP_v48_56_strict_teacher/calibration_v48_14_prism_4814/
++ #   V48_56_STRICT_TEACHER_TRAIN_INDEX.jsonl
++diff -ruN '--exclude=SHA256SUMS.txt' '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' /mnt/data/ocrap_v4856_orig/OC-RAP-v48.56-runtime-hotfix-r1-validation-status.txt ./OC-RAP-v48.56-runtime-hotfix-r1-validation-status.txt
++--- /mnt/data/ocrap_v4856_orig/OC-RAP-v48.56-runtime-hotfix-r1-validation-status.txt	1970-01-01 00:00:00.000000000 +0000
+++++ ./OC-RAP-v48.56-runtime-hotfix-r1-validation-status.txt	2026-08-20 00:13:02.926957826 +0000
++@@ -0,0 +1,35 @@
+++OC-RAP v48.56 strict-shadow runtime hotfix r1 validation
+++Date: 2026-08-19
+++
+++Scope
+++- Runtime/engineering only; no change to strict_min_slack teacher semantics, candidate/future construction, recovery option set, regime labels, gate semantics, source global-index partition, or Near/Contact exact-teacher top_k=0 contract.
+++
+++Root-cause static audit
+++- strict shadow defaults: scenario_start_index=11000, scenario_stride=6.
+++- old builder neutralized source scan controls and inflated source max_scenarios per worker.
+++- old expensive preprocess budgets: 14595,14596,15197,15198,15199,15200 = 89985 total.
+++- selected worker records: 600+600+700+700+700+700 = 4000.
+++- expensive source preprocessing amplification: 22.49625x.
+++- optimized path applies raw serialized TFRecord skip/shard/take before WOMD parse / SimulatorState / RawScenario conversion.
+++
+++Runtime correctness tests
+++- pytest -q tests/data/test_dataset_rebuild_integrity.py tests/data/test_waymax_source_prefilter.py tests/test_v48_56_teacher_component_semantics.py tests/test_v48_56_runtime_optimization.py
+++- PASS: 20 passed.
+++
+++v48.47-v48.56 changed-path regression
+++- PASS: 82 passed, 11 warnings.
+++- Covered v48.47 DSOFR through v48.56 TCSA plus dataset rebuild/source prefilter tests.
+++
+++Static validation
+++- python -m compileall -q src tools tests: PASS.
+++- scripts/*.sh bash -n: PASS, 132/132.
+++
+++Full historical pytest note
+++- `pytest -q -x` reaches 142 passed before the first failure.
+++- First failure is pre-existing packaging/history debt: tests/test_v48_12_trident.py expects missing scripts/train_ocrap_v48_12_trident.sh in the uploaded package.
+++- This file is absent in the user-provided source zip as well; the runtime hotfix does not fabricate it.
+++
+++Environment limitation
+++- Current delivery container has JAX but does not have TensorFlow, Waymax, the user WOMD /data0 dataset, or the training GPUs.
+++- Therefore no real WOMD/Waymax full-shadow wall-clock benchmark is claimed here.
+++- The strict build now performs an installed-Waymax raw-prefilter API preflight on the training machine and fails closed if unavailable.
++diff -ruN '--exclude=SHA256SUMS.txt' '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' /mnt/data/ocrap_v4856_orig/OC-RAP-v48.56-strict-shadow-runtime-diagnosis-and-fix-ZH.md ./OC-RAP-v48.56-strict-shadow-runtime-diagnosis-and-fix-ZH.md
++--- /mnt/data/ocrap_v4856_orig/OC-RAP-v48.56-strict-shadow-runtime-diagnosis-and-fix-ZH.md	1970-01-01 00:00:00.000000000 +0000
+++++ ./OC-RAP-v48.56-strict-shadow-runtime-diagnosis-and-fix-ZH.md	2026-08-20 00:12:23.466267147 +0000
++@@ -0,0 +1,163 @@
+++# OC-RAP v48.56 strict-teacher shadow：8 小时长运行问题诊断与 runtime hotfix r1
+++
+++## 1. 结论
+++
+++这次 `bash scripts/run_v48_56_strict_teacher_shadow.sh` 长时间不结束的首要原因不是算法死循环，也不是 GPU 互锁，而是 **Waymax source partition 被放在了昂贵 WOMD/Waymax 前处理之后**，在 `scenario_start_index=11000` 的 strict-shadow 配置下产生了严重的 source-scan amplification。
+++
+++原实现为了在 builder 层得到全局索引
+++
+++```text
+++global_index = start + worker + n * stride
+++```
+++
+++会先在 source config 中把 `scenario_start_index/scenario_stride/scenario_worker_index` 归零，然后把 source `max_scenarios` 扩张到目标 global index。Waymax loader 随后用 `get_data_generator()` 对这些记录先做 WOMD TFExample parse、`SimulatorState` construction，并进一步转换为 `RawScenario`；builder 最后才丢掉不属于当前 worker residue 的记录。
+++
+++默认 strict-shadow 六 worker 的旧 expensive-source budget 是：
+++
+++| shard | worker | 真正需要 | 旧 source expensive preprocess budget |
+++|---|---:|---:|---:|
+++| Safe | 0 | 600 | 14,595 |
+++| Safe | 1 | 600 | 14,596 |
+++| Near | 2 | 700 | 15,197 |
+++| Near | 3 | 700 | 15,198 |
+++| Contact | 4 | 700 | 15,199 |
+++| Contact | 5 | 700 | 15,200 |
+++| **总计** | | **4,000** | **89,985** |
+++
+++因此旧代码对昂贵的 WOMD parse / Waymax state / RawScenario construction 的调用量约被放大 **22.50×**。注意这表示昂贵前处理次数的下降，不应机械理解为 wall-clock 必然缩短 22.50×；raw TFRecord 顺序流仍需走过 start 之前的 serialized records，而且 Near/Contact exact teacher 本身仍然很重。
+++
+++## 2. 为什么看起来像“卡死”
+++
+++原 `build_v48_56_strict_teacher_calibration_shadow.sh` 把两个 worker 的 stdout/stderr 全部重定向到文件，然后父 shell 直接 `wait`。在 worker 长时间做 source conversion 或 exact teacher 时，父终端没有进度信息，因此表现为几个小时“没有反应”。
+++
+++代码中没有找到会让本链条无限迭代的算法 loop：Waymax DatasetConfig 使用 `repeat=1`；builder 的主循环在 source iterator Exhaust 后结束；父脚本的 `wait` 是在等待真实 worker。真正的问题是 **有限但被异常放大的工作量 + 不透明的运行状态**。
+++
+++## 3. 第二个真实成本：Near/Contact exact teacher
+++
+++Near 与 Contact strict shadow 明确使用：
+++
+++```text
+++waymax.teacher_rollout_top_k_options=0
+++```
+++
+++这是 all-valid-option exact Waymax teacher。它不能为了提速直接改成 `top_k=4`，否则 strict shadow 的 teacher semantics 会变化，correctness audit 不再是同一个实验。
+++
+++因此 runtime hotfix 保留 `top_k_options=0`。优化 source amplification 后，如果 heartbeat 中 `teacher_margins` 成为主要 stage，这是合理的剩余计算成本，而不是继续把它误判成 source 卡死。
+++
+++另外发现一个语义等价的无效计算：历史代码即便 `option_valid=false`，仍先执行完整 4 s Waymax recovery rollout，最后才把 margin 强制成 `-1e9`。hotfix 现在直接跳过这种 invalid-option exact rollout；最终 teacher margin 不变。
+++
+++## 4. 已落地修复
+++
+++### 4.1 Raw TFRecord prefilter
+++
+++新增：
+++
+++```text
+++waymax.prefilter_source_scan_controls=true
+++waymax.require_source_scan_prefilter=true   # strict-shadow only
+++```
+++
+++Waymax fast path现在按如下顺序：
+++
+++```text
+++serialized TFRecord stream
+++  -> skip(scenario_start_index)
+++  -> shard(scenario_stride, scenario_worker_index)
+++  -> take(max_scenarios)
+++  -> WOMD parse
+++  -> Waymax SimulatorState
+++  -> RawScenario
+++```
+++
+++所以 expensive parse/state conversion 只发生在当前 worker 真正需要的记录上。global index、scene id、worker residue、scene-disjoint partition 不变。
+++
+++strict shadow 设为 `require_source_scan_prefilter=true`：若安装的 Waymax/TensorFlow 版本不兼容，直接 fail-closed，不允许静默退回旧慢路径。
+++
+++### 4.2 Resume compatibility
+++
+++`prefilter_source_scan_controls` 与 `require_source_scan_prefilter` 只改变 transport/runtime，不改变 sample generation semantics，已经从 semantic resume fingerprint 中排除。因此用旧代码运行 8 小时后留下的 partial shard，只要其原始 teacher/config 相同，可以在新代码中继续 `RESUME=1`，无需仅因为本 hotfix 删除有效 sample。
+++
+++### 4.3 Heartbeat / live profile
+++
+++每个 worker 开启 runtime profiling，controller 周期输出：
+++
+++- `dataset_status.json`
+++- `build_stage_profile.json`
+++- `raw_scenarios_seen`
+++- `scene_time_groups`
+++- `new_samples_written`
+++- `samples_per_hour`
+++- `stage_totals_s`
+++- worker log tail / log age
+++
+++因此下一次可以直接区分：source scan、planning-time selection、future generation、teacher margins、NPZ I/O 中谁是真正的 dominant runtime。
+++
+++### 4.4 Completed-shard reuse
+++
+++`RESUME=1` 时，如果某一 safe/near/contact worker shard 已经同时存在非空 `manifest.csv` 和 `dataset_summary.json`，该 shard不重新运行。partial shard继续走 dataset builder 的原有 atomic/resume contract。
+++
+++### 4.5 删除 semantic audit 的第三次全量 NPZ read
+++
+++`build_teacher_pcd_index_v48.py` 本来已经加载每个 NPZ 并用 `m_star/root_probs/c_star` fresh recompute OC-MERO。旧 strict runner 构建 train index、dev index后，semantic audit 又把 train+dev NPZ 全量打开一次，仅为了重复做同一 source consistency check。
+++
+++现在 index 直接保存：
+++
+++- fresh `R_dep/R_orc/GAP`
+++- fresh-vs-cached absolute error
+++- cached `r_dep_star/r_orc_star` 是否真实存在
+++
+++最终 semantic audit复用 index 中的 fresh fields。若 cached label 缺失仍然 fail-closed，因此不是通过放松 correctness 换速度。
+++
+++### 4.6 Runtime scan contract
+++
+++build 一开始输出并写入：
+++
+++```text
+++V48_56_STRICT_SHADOW_RUNTIME_SCAN_CONTRACT.json
+++```
+++
+++默认应记录：
+++
+++```text
+++legacy_preprocessed_record_budget = 89985
+++optimized_preprocessed_record_budget = 4000
+++avoided_expensive_preprocess_records = 85985
+++legacy_to_optimized_preprocess_ratio = 22.49625
+++```
+++
+++## 5. 下一次运行时如何判断是否正常
+++
+++首先停止旧 controller 及其仍存活 worker，避免新旧进程同时写同一个 `SHADOW_ROOT`。然后用同一个 shadow root、`RESUME=1` 运行新代码。
+++
+++启动后应先看到：
+++
+++```text
+++event=v48_56_waymax_raw_prefilter_preflight
+++status=pass
+++```
+++
+++以及 runtime scan contract。worker log 中应看到：
+++
+++```text
+++event=waymax_raw_source_prefilter
+++```
+++
+++controller 默认每 60 秒打印一次 `v48_56_worker_heartbeat`。
+++
+++如果 `raw_scenarios_seen` 持续增加而 `stage_totals_s.teacher_margins` 占主导，说明程序没有挂死，而是正在执行正式 all-option exact teacher。若 source fast path不可用，新版会直接报错退出，不再允许它无提示地回退到旧的数小时扫描。
+++
+++## 6. 验证范围
+++
+++本交付环境没有用户训练机上的 TensorFlow、Waymax、WOMD `/data0/...` 和对应 GPU 环境，因此无法在这里声称完成真实 full-shadow wall-clock benchmark。已完成的是：
+++
+++- raw/global-index partition arithmetic regression；
+++- optimized fast path / legacy fallback / required-fast fail-closed / mid-stream duplicate prevention；
+++- builder source-delegation contract；
+++- old-partial/new-fast resume fingerprint equivalence；
+++- invalid-option exact rollout elimination；
+++- inline fresh OC-MERO + cached-label-presence correctness；
+++- v48.47–v48.56 relevant changed-path regression；
+++- Python compileall；
+++- 全部当前 `scripts/*.sh` 的 `bash -n`。
+++
+++完整历史 pytest 的第一个失败仍来自上传代码包缺失早期历史文件 `scripts/train_ocrap_v48_12_trident.sh`，属于 package history debt，不是本次 runtime hotfix 引入；没有通过补造历史脚本去伪造全套通过。
+diff -ruN '--exclude=SHA256SUMS.txt' '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' /mnt/data/ocrap_v4856_orig/V48_56_STRICT_SHADOW_RUNTIME_FIX_CONTRACT.json ./V48_56_STRICT_SHADOW_RUNTIME_FIX_CONTRACT.json
+--- /mnt/data/ocrap_v4856_orig/V48_56_STRICT_SHADOW_RUNTIME_FIX_CONTRACT.json	1970-01-01 00:00:00.000000000 +0000
++++ ./V48_56_STRICT_SHADOW_RUNTIME_FIX_CONTRACT.json	2026-08-20 00:13:02.927702574 +0000
+@@ -0,0 +1,67 @@
++{
++  "event": "v48_56_strict_shadow_runtime_hotfix_contract",
++  "version": "v48.56-DCP-DRFC-BCDE-TCSA-runtime-hotfix-r1",
++  "runtime_only": true,
++  "algorithm_semantics_changed": false,
++  "source_partition": {
++    "scenario_start_index": 11000,
++    "scenario_stride": 6,
++    "worker_assignment": {
++      "safe": [0, 1],
++      "near": [2, 3],
++      "contact": [4, 5]
++    },
++    "selected_records": 4000,
++    "legacy_expensive_preprocess_budget": 89985,
++    "optimized_expensive_preprocess_budget": 4000,
++    "avoided_expensive_preprocess_records": 85985,
++    "legacy_to_optimized_preprocess_ratio": 22.49625,
++    "selection_formula_unchanged": "global_index = start + worker + n * stride"
++  },
++  "source_prefilter": {
++    "enabled_in_strict_shadow": true,
++    "required_in_strict_shadow": true,
++    "order": [
++      "serialized_tfrecord_stream",
++      "skip(start)",
++      "shard(stride, worker)",
++      "take(max_scenarios)",
++      "womd_parse",
++      "waymax_simulator_state",
++      "raw_scenario"
++    ],
++    "legacy_fallback_allowed_for_generic_opt_in": true,
++    "legacy_fallback_allowed_for_strict_shadow": false
++  },
++  "resume": {
++    "prefilter_flags_excluded_from_semantic_fingerprint": true,
++    "partial_shadow_reusable_with_resume": true
++  },
++  "teacher": {
++    "near_contact_teacher_rollout_top_k_options": 0,
++    "contact_teacher_rollout_top_k_options": 0,
++    "all_valid_option_exact_teacher_preserved": true,
++    "invalid_option_exact_rollout_skipped": true,
++    "invalid_option_final_margin": -1000000000.0
++  },
++  "semantic_audit_io": {
++    "fresh_ocmero_computed_during_index_build": true,
++    "cached_label_presence_persisted": true,
++    "final_audit_reuses_inline_freshness": true,
++    "redundant_third_full_npz_pass_removed": true,
++    "missing_cached_labels_fail_closed": true
++  },
++  "monitoring": {
++    "worker_heartbeat": true,
++    "build_stage_profile": true,
++    "dataset_status": true,
++    "completed_shard_reuse": true
++  },
++  "validation": {
++    "runtime_targeted_tests_passed": 20,
++    "v48_47_to_v48_56_changed_path_tests_passed": 82,
++    "python_compileall": "pass",
++    "shell_bash_n": "132/132 pass",
++    "real_waymax_wallclock_benchmark": "not_available_in_delivery_environment"
++  }
++}
+diff -ruN '--exclude=SHA256SUMS.txt' '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' /mnt/data/ocrap_v4856_orig/scripts/build_v48_56_strict_teacher_calibration_shadow.sh ./scripts/build_v48_56_strict_teacher_calibration_shadow.sh
+--- /mnt/data/ocrap_v4856_orig/scripts/build_v48_56_strict_teacher_calibration_shadow.sh	2026-08-19 08:48:54.000000000 +0000
++++ ./scripts/build_v48_56_strict_teacher_calibration_shadow.sh	2026-08-20 00:11:42.551048043 +0000
+@@ -33,6 +33,7 @@
+ MIN_CAL_CONTACT_SCENES="${MIN_CAL_CONTACT_SCENES:-120}"
+ RUN_DIAGNOSTICS="${RUN_DIAGNOSTICS:-1}"
+ REQUIRE_JAX_GPU="${REQUIRE_JAX_GPU:-1}"
++HEARTBEAT_SECONDS="${V4856_HEARTBEAT_SECONDS:-60}"
+ START_STAGE="${START_STAGE:-safe}"  # safe | near | contact | merge
+ case "$START_STAGE" in safe|near|contact|merge) ;; *) echo "invalid START_STAGE=$START_STAGE" >&2; exit 2 ;; esac
+ stage_rank(){ case "$1" in safe) echo 0;; near) echo 1;; contact) echo 2;; merge) echo 3;; esac; }
+@@ -73,6 +74,22 @@
+ VAL_SHARDS=$(find "$WOMD_ROOT/validation" -maxdepth 1 -name 'validation_tfexample.tfrecord-*-of-00150' | wc -l)
+ [[ "$VAL_SHARDS" -eq 150 ]] || die "expected 150 standard validation shards, found $VAL_SHARDS"
+ [[ "$GPU0" != "$GPU1" ]] || die "GPU0 and GPU1 must differ"
++# Fail before worker launch if this installed Waymax cannot expose the raw TFRecord
++# stream required by the v48.56 performance fix.  Run this CPU-only so TensorFlow
++# cannot contend with JAX for worker GPU memory.
++CUDA_VISIBLE_DEVICES="" "$PYTHON_BIN" - <<'PY_WAYMAX_PREFLIGHT'
++import inspect
++from waymax.dataloader import dataloader_utils
++fn = getattr(dataloader_utils, "tf_examples_dataset", None)
++if fn is None:
++    raise SystemExit("Waymax dataloader_utils.tf_examples_dataset is unavailable; strict raw prefilter cannot run")
++params = set(inspect.signature(fn).parameters)
++missing = {"path", "data_format", "preprocess_fn"} - params
++if missing:
++    raise SystemExit(f"Waymax tf_examples_dataset signature is incompatible; missing={sorted(missing)}")
++print({"event":"v48_56_waymax_raw_prefilter_preflight","status":"pass","signature":sorted(params)}, flush=True)
++PY_WAYMAX_PREFLIGHT
++
+ if [[ "$REQUIRE_JAX_GPU" == 1 ]]; then
+   for gpu in "$GPU0" "$GPU1"; do
+     CUDA_VISIBLE_DEVICES="$gpu" XLA_PYTHON_CLIENT_PREALLOCATE=false "$PYTHON_BIN" - <<'PY'
+@@ -85,6 +102,39 @@
+   done
+ fi
+ 
++# Runtime-only scan contract.  This makes the historical amplification visible
++# before launching any expensive teacher workers and is useful when diagnosing
++# a partial/resumed build.
++"$PYTHON_BIN" - "$OUTPUT_ROOT/V48_56_STRICT_SHADOW_RUNTIME_SCAN_CONTRACT.json" \
++  "$CALIBRATION_START_INDEX" "$PARTITION_STRIDE" \
++  "$SAFE_RAW_PER_WORKER" "$NEAR_RAW_PER_WORKER" "$CONTACT_RAW_PER_WORKER" <<'PY_SCAN_CONTRACT'
++import json, sys
++from pathlib import Path
++out=Path(sys.argv[1]); start=int(sys.argv[2]); stride=int(sys.argv[3])
++ns={"safe":int(sys.argv[4]), "near":int(sys.argv[5]), "contact":int(sys.argv[6])}
++spec=[("safe",0,ns["safe"]),("safe",1,ns["safe"]),("near",2,ns["near"]),("near",3,ns["near"]),("contact",4,ns["contact"]),("contact",5,ns["contact"])]
++workers=[]; legacy_total=0; selected_total=0
++for regime, worker, n in spec:
++    last=start+worker+(max(n,1)-1)*stride if n else None
++    legacy_cap=(last+1) if last is not None else 0
++    legacy_total += legacy_cap; selected_total += n
++    workers.append({"regime":regime,"worker":worker,"selected_records":n,"first_global_index":start+worker,"last_global_index":last,"legacy_preprocessed_record_budget":legacy_cap})
++payload={
++    "event":"v48_56_strict_shadow_runtime_scan_contract",
++    "selection_formula":"global_index = scenario_start_index + worker + n * scenario_stride",
++    "scenario_start_index":start,"scenario_stride":stride,"workers":workers,
++    "legacy_preprocessed_record_budget":legacy_total,
++    "optimized_preprocessed_record_budget":selected_total,
++    "avoided_expensive_preprocess_records":legacy_total-selected_total,
++    "legacy_to_optimized_preprocess_ratio":(legacy_total/selected_total if selected_total else None),
++    "raw_prefilter_required":True,
++    "semantic_change":False,
++    "note":"Near/contact all-option exact teacher rollouts remain enabled; this contract only removes pre-teacher source-scan amplification.",
++}
++out.parent.mkdir(parents=True,exist_ok=True); out.write_text(json.dumps(payload,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
++print(payload, flush=True)
++PY_SCAN_CONTRACT
++
+ COMMON=(
+   --set data_source=womd
+   --set simulation_backend=waymax_closed_loop
+@@ -98,6 +148,8 @@
+   --set num_roots=8
+   --set num_recovery_options=12
+   --set waymax.dataloader_include_sdc_paths=true
++  --set waymax.prefilter_source_scan_controls=true
++  --set waymax.require_source_scan_prefilter=true
+   --set 'waymax.metrics_to_run=[log_divergence,overlap,offroad,sdc_wrongway,sdc_off_route,sdc_progression,kinematic_infeasibility]'
+   --set waymax.teacher_backend=hybrid
+   --set waymax.use_jit_scan_rollouts=true
+@@ -115,6 +167,9 @@
+   --set regime_thresholds.use_paper_regime_definitions=true
+   --set io.compress_npz=false
+   --set io.fsync_npz=false
++  --set profiling.enabled=true
++  --set profiling.log_every_sample=false
++  --set profiling.profile_flush_scene_times=1
+ )
+ 
+ build_safe(){ local worker="$1" out="$2" gpu="$3";
+@@ -184,26 +239,102 @@
+     --set dataset_quality.artifact_pass_apply_override_to_screened=true --set dataset_quality.artifact_pass_compute_future_metrics=false \
+     --output "$out"; }
+ 
+-wait_pair(){ local p0="$1" p1="$2" n0="$3" n1="$4" s0=0 s1=0; set +e; wait "$p0"; s0=$?; wait "$p1"; s1=$?; set -e;
+-  [[ "$s0" == 0 && "$s1" == 0 ]] || die "calibration workers failed: $n0=$s0 $n1=$s1"; }
++worker_heartbeat(){
++  local name="$1" out="$2" log="$3"
++  "$PYTHON_BIN" - "$name" "$out" "$log" <<'PY_HEARTBEAT'
++import json, os, sys
++from pathlib import Path
++name, out, log = sys.argv[1:]
++out_p = Path(out)
++status_p = out_p / "dataset_status.json"
++profile_p = out_p / "build_stage_profile.json"
++payload = {"worker": name}
++for p, key in [(status_p, "status"), (profile_p, "profile")]:
++    if p.is_file():
++        try:
++            payload[key] = json.loads(p.read_text(encoding="utf-8"))
++        except Exception as exc:
++            payload[key] = {"read_error": f"{type(exc).__name__}: {exc}"}
++if Path(log).is_file():
++    try:
++        # Do not reread a multi-GB worker log every heartbeat. Seek near EOF and
++        # decode only a small tail window.
++        lp = Path(log)
++        with lp.open("rb") as f:
++            size = f.seek(0, 2)
++            f.seek(max(0, size - 16384))
++            lines = f.read().decode("utf-8", errors="replace").splitlines()
++        payload["log_tail"] = lines[-2:]
++        payload["log_age_s"] = max(0.0, __import__("time").time() - lp.stat().st_mtime)
++    except Exception:
++        pass
++print({"event": "v48_56_worker_heartbeat", **payload}, flush=True)
++PY_HEARTBEAT
++}
++
++wait_pair(){
++  local p0="$1" p1="$2" n0="$3" n1="$4" o0="$5" o1="$6" l0="$7" l1="$8"
++  local done0=0 done1=0 s0=0 s1=0
++  while [[ "$done0" == 0 || "$done1" == 0 ]]; do
++    local running
++    running="$(jobs -pr || true)"
++    if [[ "$done0" == 0 ]] && ! grep -qx -- "$p0" <<<"$running"; then
++      set +e; wait "$p0"; s0=$?; set -e; done0=1
++      echo "[v48.56] worker complete: $n0 rc=$s0"
++    fi
++    if [[ "$done1" == 0 ]] && ! grep -qx -- "$p1" <<<"$running"; then
++      set +e; wait "$p1"; s1=$?; set -e; done1=1
++      echo "[v48.56] worker complete: $n1 rc=$s1"
++    fi
++    if [[ "$done0" == 0 || "$done1" == 0 ]]; then
++      [[ "$done0" == 1 ]] || worker_heartbeat "$n0" "$o0" "$l0"
++      [[ "$done1" == 1 ]] || worker_heartbeat "$n1" "$o1" "$l1"
++      sleep "$HEARTBEAT_SECONDS"
++    fi
++  done
++  [[ "$s0" == 0 && "$s1" == 0 ]] || die "calibration workers failed: $n0=$s0 $n1=$s1"
++}
++
++shard_complete(){
++  local out="$1"
++  [[ -s "$out/manifest.csv" && -s "$out/dataset_summary.json" ]]
++}
+ 
+ if should_run safe; then
+   CURRENT_STAGE="build_safe"; write_status running "$CURRENT_STAGE" "workers 0,1"
+-  build_safe 0 "$SHARD_DIR/calibration_safe_w0" "$GPU0" >"$LOG_DIR/calibration_safe_w0.log" 2>&1 & P0=$!
+-  build_safe 1 "$SHARD_DIR/calibration_safe_w1" "$GPU1" >"$LOG_DIR/calibration_safe_w1.log" 2>&1 & P1=$!
+-  wait_pair "$P0" "$P1" safe_w0 safe_w1
++  if [[ "$RESUME" == 1 ]] && shard_complete "$SHARD_DIR/calibration_safe_w0" && shard_complete "$SHARD_DIR/calibration_safe_w1"; then
++    echo "[v48.56] reusing completed safe shards"
++  else
++    build_safe 0 "$SHARD_DIR/calibration_safe_w0" "$GPU0" >"$LOG_DIR/calibration_safe_w0.log" 2>&1 & P0=$!
++    build_safe 1 "$SHARD_DIR/calibration_safe_w1" "$GPU1" >"$LOG_DIR/calibration_safe_w1.log" 2>&1 & P1=$!
++    wait_pair "$P0" "$P1" safe_w0 safe_w1 \
++      "$SHARD_DIR/calibration_safe_w0" "$SHARD_DIR/calibration_safe_w1" \
++      "$LOG_DIR/calibration_safe_w0.log" "$LOG_DIR/calibration_safe_w1.log"
++  fi
+ fi
+ if should_run near; then
+   CURRENT_STAGE="build_near_contact"; write_status running "$CURRENT_STAGE" "workers 2,3; contact logs are not expected yet"
+-  build_near 2 "$SHARD_DIR/calibration_near_w2" "$GPU0" >"$LOG_DIR/calibration_near_w2.log" 2>&1 & P0=$!
+-  build_near 3 "$SHARD_DIR/calibration_near_w3" "$GPU1" >"$LOG_DIR/calibration_near_w3.log" 2>&1 & P1=$!
+-  wait_pair "$P0" "$P1" near_w2 near_w3
++  if [[ "$RESUME" == 1 ]] && shard_complete "$SHARD_DIR/calibration_near_w2" && shard_complete "$SHARD_DIR/calibration_near_w3"; then
++    echo "[v48.56] reusing completed near-contact shards"
++  else
++    build_near 2 "$SHARD_DIR/calibration_near_w2" "$GPU0" >"$LOG_DIR/calibration_near_w2.log" 2>&1 & P0=$!
++    build_near 3 "$SHARD_DIR/calibration_near_w3" "$GPU1" >"$LOG_DIR/calibration_near_w3.log" 2>&1 & P1=$!
++    wait_pair "$P0" "$P1" near_w2 near_w3 \
++      "$SHARD_DIR/calibration_near_w2" "$SHARD_DIR/calibration_near_w3" \
++      "$LOG_DIR/calibration_near_w2.log" "$LOG_DIR/calibration_near_w3.log"
++  fi
+ fi
+ if should_run contact; then
+   CURRENT_STAGE="build_contact"; write_status running "$CURRENT_STAGE" "workers 4,5"
+-  build_contact 4 "$SHARD_DIR/calibration_contact_w4" "$GPU0" >"$LOG_DIR/calibration_contact_w4.log" 2>&1 & P0=$!
+-  build_contact 5 "$SHARD_DIR/calibration_contact_w5" "$GPU1" >"$LOG_DIR/calibration_contact_w5.log" 2>&1 & P1=$!
+-  wait_pair "$P0" "$P1" contact_w4 contact_w5
++  if [[ "$RESUME" == 1 ]] && shard_complete "$SHARD_DIR/calibration_contact_w4" && shard_complete "$SHARD_DIR/calibration_contact_w5"; then
++    echo "[v48.56] reusing completed contact shards"
++  else
++    build_contact 4 "$SHARD_DIR/calibration_contact_w4" "$GPU0" >"$LOG_DIR/calibration_contact_w4.log" 2>&1 & P0=$!
++    build_contact 5 "$SHARD_DIR/calibration_contact_w5" "$GPU1" >"$LOG_DIR/calibration_contact_w5.log" 2>&1 & P1=$!
++    wait_pair "$P0" "$P1" contact_w4 contact_w5 \
++      "$SHARD_DIR/calibration_contact_w4" "$SHARD_DIR/calibration_contact_w5" \
++      "$LOG_DIR/calibration_contact_w4.log" "$LOG_DIR/calibration_contact_w5.log"
++  fi
+ fi
+ 
+ CURRENT_STAGE="merge_filter_audit"; write_status running "$CURRENT_STAGE" "merging and enforcing scene disjointness"
+diff -ruN '--exclude=SHA256SUMS.txt' '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' /mnt/data/ocrap_v4856_orig/scripts/run_v48_56_strict_teacher_shadow.sh ./scripts/run_v48_56_strict_teacher_shadow.sh
+--- /mnt/data/ocrap_v4856_orig/scripts/run_v48_56_strict_teacher_shadow.sh	2026-08-19 08:48:56.000000000 +0000
++++ ./scripts/run_v48_56_strict_teacher_shadow.sh	2026-08-20 00:03:59.917123452 +0000
+@@ -10,12 +10,17 @@
+ PROTOCOL_ROOT="${PROTOCOL_ROOT:-$SHADOW_ROOT/calibration_v48_14_prism_4814}"
+ GPU0="${GPU0:-0}"; GPU1="${GPU1:-1}"
+ RUN_BUILD="${V4856_RUN_BUILD:-1}"
++INDEX_PROGRESS_EVERY="${V4856_INDEX_PROGRESS_EVERY:-250}"
++
++phase(){ printf '[v48.56][%s] %s\n' "$(date -Iseconds)" "$*"; }
+ 
+ if [[ "$RUN_BUILD" == 1 ]]; then
++  phase "building strict-min-slack shadow datasets"
+   OUTPUT_ROOT="$SHADOW_ROOT" GPU0="$GPU0" GPU1="$GPU1" \
+     bash scripts/build_v48_56_strict_teacher_calibration_shadow.sh
+ fi
+ 
++phase "preparing scene-disjoint calibration protocol"
+ OCRAP_ROOT="$SHADOW_ROOT" PROTOCOL_ROOT="$PROTOCOL_ROOT" \
+ CAL_SAFE="$SHADOW_ROOT/calibration_safe" \
+ CAL_NEAR="$SHADOW_ROOT/calibration_near_contact" \
+@@ -27,18 +32,23 @@
+ TRAIN_INDEX="$PROTOCOL_ROOT/V48_56_STRICT_TEACHER_TRAIN_INDEX.jsonl"
+ DEV_INDEX="$PROTOCOL_ROOT/V48_56_STRICT_TEACHER_DEV_INDEX.jsonl"
+ 
++phase "building train teacher index (fresh OC-MERO verification is computed inline)"
+ "$PYTHON_BIN" tools/build_teacher_pcd_index_v48.py \
+   --dataset "$TRAIN_DATA" --option-execution-semantics observation_class \
+-  --quality-mode warn --output "$TRAIN_INDEX" \
++  --quality-mode warn --progress-every "$INDEX_PROGRESS_EVERY" --output "$TRAIN_INDEX" \
+   --summary-output "$PROTOCOL_ROOT/V48_56_STRICT_TEACHER_TRAIN_INDEX_SUMMARY.json"
++phase "building dev teacher index (fresh OC-MERO verification is computed inline)"
+ "$PYTHON_BIN" tools/build_teacher_pcd_index_v48.py \
+   --dataset "$DEV_DATA" --option-execution-semantics observation_class \
+-  --quality-mode warn --output "$DEV_INDEX" \
++  --quality-mode warn --progress-every "$INDEX_PROGRESS_EVERY" --output "$DEV_INDEX" \
+   --summary-output "$PROTOCOL_ROOT/V48_56_STRICT_TEACHER_DEV_INDEX_SUMMARY.json"
+ 
++# The index builder already reloads every NPZ and recomputes OC-MERO from m_star.
++# Re-reading the complete train+dev dataset here was a redundant third I/O pass.
++# The audit consumes the inline fresh-vs-cached errors from the two indexes.
++phase "running teacher-component semantic audit from inline fresh OC-MERO checks"
+ "$PYTHON_BIN" tools/audit_v48_56_teacher_component_semantics.py \
+   --train-index "$TRAIN_INDEX" --dev-index "$DEV_INDEX" \
+-  --dataset "$TRAIN_DATA,$DEV_DATA" \
+   --output "$PROTOCOL_ROOT/V48_56_STRICT_TEACHER_COMPONENT_SEMANTIC_AUDIT.json"
+ 
+ printf '[v48.56] strict teacher shadow READY for analysis: %s\n' "$PROTOCOL_ROOT"
+diff -ruN '--exclude=SHA256SUMS.txt' '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' /mnt/data/ocrap_v4856_orig/src/ocrap/config/defaults.py ./src/ocrap/config/defaults.py
+--- /mnt/data/ocrap_v4856_orig/src/ocrap/config/defaults.py	2026-08-19 08:42:32.000000000 +0000
++++ ./src/ocrap/config/defaults.py	2026-08-20 00:03:24.194658598 +0000
+@@ -421,7 +421,13 @@
+     "scenario_worker_index": 0,
+     "waymax": {
+         "append_scenario_index_to_id": True,
+-            "retain_official_scenario_id": True,
++        "retain_official_scenario_id": True,
++        # Optional dataset-build acceleration. When enabled, start/stride/worker
++        # selection is applied to serialized TFRecords before WOMD parsing and
++        # SimulatorState construction. Disabled by default for compatibility;
++        # long reserved-index builders (v48.56 strict shadow) opt in explicitly.
++        "prefilter_source_scan_controls": False,
++        "require_source_scan_prefilter": False,
+         "strict": True,
+         "dataloader_include_sdc_paths": True,
+         "num_paths": 45,
+diff -ruN '--exclude=SHA256SUMS.txt' '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' /mnt/data/ocrap_v4856_orig/src/ocrap/data/build/builder.py ./src/ocrap/data/build/builder.py
+--- /mnt/data/ocrap_v4856_orig/src/ocrap/data/build/builder.py	2026-08-19 12:35:02.000000000 +0000
++++ ./src/ocrap/data/build/builder.py	2026-08-20 00:07:40.580260377 +0000
+@@ -1289,6 +1289,15 @@
+ 
+ def _scenario_source_config(cfg: dict) -> dict:
+     """Return a source config with neutral scan controls and a sufficient cap."""
++    if _source_prefilters_scenario_scan_controls(cfg):
++        # Waymax can apply start/stride/worker on the raw serialized TFRecord
++        # stream before WOMD parsing / SimulatorState construction. In that
++        # mode the source iterator already emits exactly the requested worker
++        # partition, so do not neutralize the controls or inflate
++        # ``max_scenarios`` to ``start + stride * requested``. The latter is
++        # semantically correct but extremely expensive for large reserved start
++        # indices because every worker parses all skipped scenarios first.
++        return dict(cfg)
+     start = max(0, int(cfg.get("scenario_start_index", 0)))
+     stride = max(1, int(cfg.get("scenario_stride", 1)))
+     worker = int(cfg.get("scenario_worker_index", 0)) % stride
+@@ -1310,9 +1319,31 @@
+     return source_cfg
+ 
+ 
++def _source_prefilters_scenario_scan_controls(cfg: dict) -> bool:
++    """Whether the concrete source applies deterministic scan controls itself.
++
++    This is intentionally opt-in. Generic/synthetic/WOMD-proto sources keep the
++    historical builder-level partitioning contract. The optimized Waymax path
++    is enabled explicitly by long-running dataset construction scripts after
++    they opt into raw-TFRecord prefiltering.
++    """
++    if str(cfg.get("data_source", "synthetic_artifact")) != "womd":
++        return False
++    if str(cfg.get("simulation_backend", "ocrap_surrogate")) != "waymax_closed_loop":
++        return False
++    wx = cfg.get("waymax", {}) if isinstance(cfg.get("waymax", {}), dict) else {}
++    return bool(wx.get("prefilter_source_scan_controls", False))
++
++
+ def _selected_scenario_iterator(cfg: dict) -> Iterator[RawScenario]:
+     source_cfg = _scenario_source_config(cfg)
+     source_iter = scenario_iterator(source_cfg)
++    if _source_prefilters_scenario_scan_controls(cfg):
++        # ``iter_waymax_womd_scenarios`` already applies the exact global
++        # start/stride/worker partition before expensive preprocessing. A
++        # second builder-level filter would incorrectly skip the selected rows.
++        yield from source_iter
++        return
+     yield from _apply_scenario_scan_controls(
+         source_iter,
+         start_index=int(cfg.get("scenario_start_index", 0)),
+@@ -1647,6 +1678,10 @@
+     "compress_npz",
+     "fsync_npz",
+     "checkpoint_manifest_each_scene_time",
++    # Source-scan accelerators alter only when/where raw records are filtered;
++    # they preserve the exact global source indices and sample semantics.
++    "prefilter_source_scan_controls",
++    "require_source_scan_prefilter",
+ }
+ 
+ # Scan-scope controls change which deterministic part of the source is visited,
+@@ -1938,9 +1973,9 @@
+     scenario_start_index = max(0, int(cfg.get("scenario_start_index", 0)))
+     scenario_stride = max(1, int(cfg.get("scenario_stride", 1)))
+     scenario_worker_index = int(cfg.get("scenario_worker_index", 0)) % scenario_stride
+-    # Apply start/stride/worker controls centrally and exactly once.  The source
+-    # iterator receives neutral controls plus a cap large enough to reach the
+-    # requested global source indices.
++    # Apply start/stride/worker exactly once. Generic sources keep the historical
++    # builder-level filtering contract; the opt-in Waymax fast path delegates the
++    # same global-index partition to the raw TFRecord stream before WOMD parsing.
+     raw_iter = iter(_selected_scenario_iterator(cfg))
+     progress_bar = None
+     profile_path = out / "build_profile.csv"
+@@ -2251,6 +2286,10 @@
+         "scenario_stride": int(scenario_stride),
+         "scenario_worker_index": int(scenario_worker_index),
+         "source_max_scenarios": _scenario_source_config(cfg).get("max_scenarios"),
++        "source_scan_controls_mode": (
++            "source_raw_prefilter" if _source_prefilters_scenario_scan_controls(cfg)
++            else "builder_post_source_filter"
++        ),
+         "scene_time_groups": int(scene_time_groups),
+         "skipped_no_planning_times": int(skipped_no_planning_times),
+         "unique_raw_scene_ids": int(len(raw_scene_ids)),
+diff -ruN '--exclude=SHA256SUMS.txt' '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' /mnt/data/ocrap_v4856_orig/src/ocrap/data/waymax_loader.py ./src/ocrap/data/waymax_loader.py
+--- /mnt/data/ocrap_v4856_orig/src/ocrap/data/waymax_loader.py	2026-08-19 12:35:02.000000000 +0000
++++ ./src/ocrap/data/waymax_loader.py	2026-08-20 00:03:24.773078864 +0000
+@@ -2,6 +2,7 @@
+ 
+ import functools
+ import hashlib
++import inspect
+ import os
+ import re
+ from typing import Any, Iterator
+@@ -254,6 +255,142 @@
+     )
+ 
+ 
++def _raw_scan_plan(cfg: dict, max_scenarios: int | None) -> dict[str, int | None]:
++    """Return deterministic raw-record scan controls for one Waymax worker.
++
++    The desired global source indices are
++
++    ``start + worker + n * stride`` for ``n in [0, max_scenarios)``.
++
++    Keeping this arithmetic in a small pure helper makes it possible to test the
++    optimized TensorFlow prefilter without importing Waymax/TensorFlow in unit
++    tests.
++    """
++    start = max(0, int(cfg.get("scenario_start_index", 0)))
++    stride = max(1, int(cfg.get("scenario_stride", 1)))
++    worker = int(cfg.get("scenario_worker_index", 0)) % stride
++    limit = None if max_scenarios is None else max(0, int(max_scenarios))
++    first = start + worker
++    last = None if limit is None or limit <= 0 else first + (limit - 1) * stride
++    return {
++        "start": start,
++        "stride": stride,
++        "worker": worker,
++        "limit": limit,
++        "first_global_index": first,
++        "last_global_index": last,
++    }
++
++
++def _tf_examples_raw_dataset(dataset_cfg: Any, wx_dataloader: Any):
++    """Build Waymax's deterministic TFRecord stream without WOMD parsing.
++
++    Waymax's public ``get_data_generator`` maps ``preprocess_fn`` over the whole
++    stream *before* Python can apply ``scenario_start_index``.  For a reserved
++    start such as 11000 that means every worker parses/converts >11k scenarios
++    that are immediately discarded.  Here we reuse Waymax's own raw dataset
++    construction with an identity preprocess, then apply skip/shard/take before
++    the expensive WOMD parser.
++
++    The implementation filters keyword arguments against the installed Waymax
++    signature so it remains compatible with nearby Waymax revisions.
++    """
++    try:
++        from waymax.dataloader import dataloader_utils as wx_dataloader_utils  # type: ignore
++    except Exception:
++        wx_dataloader_utils = getattr(wx_dataloader, "dataloader_utils", None)
++    if wx_dataloader_utils is None or not hasattr(wx_dataloader_utils, "tf_examples_dataset"):
++        raise RuntimeError("installed Waymax does not expose dataloader_utils.tf_examples_dataset")
++
++    fn = wx_dataloader_utils.tf_examples_dataset
++    kwargs = {
++        "path": dataset_cfg.path,
++        "data_format": dataset_cfg.data_format,
++        # Identity preprocessing keeps the stream as serialized TFExamples.
++        "preprocess_fn": lambda serialized: serialized,
++        "shuffle_seed": getattr(dataset_cfg, "shuffle_seed", None),
++        "shuffle_buffer_size": getattr(dataset_cfg, "shuffle_buffer_size", 100),
++        "repeat": getattr(dataset_cfg, "repeat", 1),
++        "batch_dims": (),
++        "num_shards": getattr(dataset_cfg, "num_shards", 1),
++        "deterministic": getattr(dataset_cfg, "deterministic", True),
++        "drop_remainder": False,
++        "tf_data_service_address": getattr(dataset_cfg, "tf_data_service_address", None),
++        "batch_by_scenario": True,
++    }
++    try:
++        accepted = set(inspect.signature(fn).parameters)
++        kwargs = {k: v for k, v in kwargs.items() if k in accepted}
++    except (TypeError, ValueError):
++        pass
++    return fn(**kwargs)
++
++
++def _iter_prefiltered_waymax_payloads(
++    *,
++    dataset_cfg: Any,
++    parse: Any,
++    postprocess: Any,
++    wx_dataloader: Any,
++    cfg: dict,
++    max_scenarios: int | None,
++) -> Iterator[tuple[int, Any]]:
++    """Yield ``(global_source_index, postprocessed_payload)`` efficiently.
++
++    Scan controls are applied to raw serialized TFRecords before
++    ``preprocess_serialized_womd_data`` and before SimulatorState construction.
++    This preserves the exact deterministic source-index partition while
++    removing the O(start_index * workers) parse/conversion cost.
++    """
++    import tensorflow as tf  # type: ignore
++    import jax  # type: ignore
++
++    if bool(getattr(dataset_cfg, "distributed", False)):
++        raise RuntimeError("raw source prefilter currently requires Waymax distributed=False")
++    if tuple(getattr(dataset_cfg, "batch_dims", ()) or ()):
++        raise RuntimeError("raw source prefilter currently requires empty Waymax batch_dims")
++    if getattr(dataset_cfg, "shuffle_seed", None) is not None:
++        raise RuntimeError("raw source prefilter requires shuffle_seed=None for stable global source indices")
++
++    plan = _raw_scan_plan(cfg, max_scenarios)
++    limit = plan["limit"]
++    if limit == 0:
++        return
++
++    ds = _tf_examples_raw_dataset(dataset_cfg, wx_dataloader)
++    # Important: skip/shard/take happen while elements are still serialized
++    # TFRecord strings. Only the selected worker partition is parsed below.
++    ds = ds.skip(int(plan["start"]))
++    ds = ds.shard(int(plan["stride"]), int(plan["worker"]))
++    if limit is not None:
++        ds = ds.take(int(limit))
++    ds = ds.map(
++        parse,
++        num_parallel_calls=tf.data.AUTOTUNE,
++        deterministic=bool(getattr(dataset_cfg, "deterministic", True)),
++    )
++    ds = ds.prefetch(tf.data.AUTOTUNE)
++    postprocess_fn = jax.jit(postprocess)
++
++    print(
++        {
++            "event": "waymax_raw_source_prefilter",
++            "start": int(plan["start"]),
++            "stride": int(plan["stride"]),
++            "worker": int(plan["worker"]),
++            "limit": None if limit is None else int(limit),
++            "first_global_index": int(plan["first_global_index"]),
++            "last_global_index": (
++                None if plan["last_global_index"] is None else int(plan["last_global_index"])
++            ),
++        },
++        flush=True,
++    )
++    for local_i, example in enumerate(ds.as_numpy_iterator()):
++        global_i = int(plan["first_global_index"]) + local_i * int(plan["stride"])
++        yield global_i, postprocess_fn(example)
++
++
+ def _route_from_sdc_paths(state: Any, max_points: int) -> np.ndarray:
+     route = np.zeros((max_points, 6), dtype=np.float32)
+     paths = getattr(state, "sdc_paths", None)
+@@ -490,10 +627,76 @@
+         )
+     else:
+         parse = functools.partial(wx_dataloader.preprocess_serialized_womd_data, config=dataset_cfg)
+-    gen = wx_dataloader.get_data_generator(dataset_cfg, parse, _postprocess)
+     start_index = max(0, int(cfg.get("scenario_start_index", 0)))
+     stride = max(1, int(cfg.get("scenario_stride", 1)))
+     worker_index = int(cfg.get("scenario_worker_index", 0)) % stride
++    wx_cfg = cfg.get("waymax", {}) if isinstance(cfg.get("waymax", {}), dict) else {}
++    raw_prefilter = bool(wx_cfg.get("prefilter_source_scan_controls", False))
++    require_raw_prefilter = bool(wx_cfg.get("require_source_scan_prefilter", False))
++
++    if require_raw_prefilter and not raw_prefilter:
++        raise RuntimeError(
++            "waymax.require_source_scan_prefilter=true requires "
++            "waymax.prefilter_source_scan_controls=true"
++        )
++
++    if raw_prefilter:
++        prefilter_emitted = 0
++        try:
++            indexed_gen: Iterator[tuple[int, Any]] = _iter_prefiltered_waymax_payloads(
++                dataset_cfg=dataset_cfg,
++                parse=parse,
++                postprocess=_postprocess,
++                wx_dataloader=wx_dataloader,
++                cfg=cfg,
++                max_scenarios=max_scenarios,
++            )
++            for i, payload in indexed_gen:
++                state = payload["state"] if isinstance(payload, dict) else payload
++                saved_id, base_id, legacy_id = _scenario_identity_from_payload(
++                    payload if isinstance(payload, dict) else {}, i, state, cfg
++                )
++                raw = raw_scenario_from_waymax_state(state, saved_id, i, cfg)
++                raw.metadata.update({
++                    "original_scenario_id": base_id,
++                    "official_scenario_id": base_id if not base_id.startswith("waymax_") else None,
++                    "legacy_scenario_id": legacy_id,
++                    "scenario_id_source": "official_womd" if not base_id.startswith("waymax_") else "legacy_state_hash",
++                    "womd_source_role": _infer_womd_source_role(patterns),
++                    "womd_source_pattern": _paths_to_waymax_path(patterns),
++                    "waymax_max_num_objects": int(getattr(dataset_cfg, "max_num_objects", cfg.get("max_agents", 64))),
++                    "waymax_source_scan_prefiltered": True,
++                })
++                yield raw
++                prefilter_emitted += 1
++            return
++        except Exception as exc:
++            if prefilter_emitted:
++                # Never restart the legacy source after partially yielding the
++                # optimized stream: doing so would duplicate source indices in
++                # the same dataset build. A mid-stream error is a real failure.
++                raise
++            if require_raw_prefilter:
++                raise RuntimeError(
++                    "required Waymax raw source prefilter is unavailable; refusing "
++                    "to fall back to the historical O(start_index * workers) scan. "
++                    f"Underlying error: {type(exc).__name__}: {exc}"
++                ) from exc
++            # Preserve exact historical semantics if an installed Waymax/TF
++            # revision does not expose the raw dataset API. The fallback is
++            # slower but still applies the same global source partition.
++            print(
++                {
++                    "event": "waymax_raw_source_prefilter_fallback",
++                    "error": f"{type(exc).__name__}: {exc}",
++                    "start": start_index,
++                    "stride": stride,
++                    "worker": worker_index,
++                },
++                flush=True,
++            )
++
++    gen = wx_dataloader.get_data_generator(dataset_cfg, parse, _postprocess)
+     emitted = 0
+     for i, payload in enumerate(gen):
+         if i < start_index:
+@@ -515,6 +718,7 @@
+             "womd_source_role": _infer_womd_source_role(patterns),
+             "womd_source_pattern": _paths_to_waymax_path(patterns),
+             "waymax_max_num_objects": int(getattr(dataset_cfg, "max_num_objects", cfg.get("max_agents", 64))),
++            "waymax_source_scan_prefiltered": False,
+         })
+         yield raw
+         emitted += 1
+diff -ruN '--exclude=SHA256SUMS.txt' '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' /mnt/data/ocrap_v4856_orig/src/ocrap/simulation/waymax_rollout.py ./src/ocrap/simulation/waymax_rollout.py
+--- /mnt/data/ocrap_v4856_orig/src/ocrap/simulation/waymax_rollout.py	2026-08-19 12:35:00.000000000 +0000
++++ ./src/ocrap/simulation/waymax_rollout.py	2026-08-20 00:10:23.783649197 +0000
+@@ -1247,6 +1247,31 @@
+         waymax_metric_cache_hits = 0
+         for l, opt in enumerate(options):
+             rec_states, rec_controls, cdiag = controllers[l]
++            # Invalid recovery options are masked to -1e9 by OC-RAP regardless of
++            # the Waymax rollout result.  The historical path still executed a
++            # full 4 s exact rollout before applying that mask, wasting one JAX
++            # scan per invalid option/future.  Skip only the physical rollout;
++            # preserve structural diagnostics and the exact final margin.
++            if not opt.valid:
++                sd = structural_label_diags[l] or structural_diags[l]
++                row.append(
++                    TeacherDiagnostics(
++                        active=({f"structural_{k}": bool(v) for k, v in sd.active.items()} if sd is not None else {}),
++                        component_margins=({f"structural_{k}": float(v) for k, v in sd.component_margins.items()} if sd is not None else {}),
++                        controller_diagnostics={
++                            **(cdiag or {}),
++                            "waymax_recovery_rollout": False,
++                            "waymax_invalid_option_skipped": True,
++                            "waymax_hybrid_teacher_margin": bool(hybrid_teacher),
++                            "waymax_teacher_backend": teacher_backend,
++                            "waymax_teacher_metrics_stride": int(metric_stride),
++                            "waymax_teacher_rollout_top_k_options": int(rollout_top_k),
++                            "waymax_teacher_rollout_option_modes": sorted(rollout_modes),
++                        },
++                    )
++                )
++                M[j, l] = -1e9
++                continue
+             if screened_hybrid and rollout_indices is not None and l not in rollout_indices:
+                 sd = structural_label_diags[l] or structural_diags[l]
+                 assert sd is not None
+@@ -1360,6 +1385,7 @@
+         fut.metadata["waymax_teacher_rollouts_executed"] = int(waymax_rollouts_executed)
+         fut.metadata["waymax_teacher_metric_cache_hits"] = int(waymax_metric_cache_hits)
+         fut.metadata["waymax_teacher_rollouts_possible"] = int(len(options))
++        fut.metadata["waymax_teacher_invalid_options_skipped"] = int(sum(not bool(opt.valid) for opt in options))
+         fut.metadata["waymax_teacher_screened_hybrid"] = bool(screened_hybrid)
+         all_diag.append(row)
+     return M, all_diag
+diff -ruN '--exclude=SHA256SUMS.txt' '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' /mnt/data/ocrap_v4856_orig/tests/data/test_dataset_rebuild_integrity.py ./tests/data/test_dataset_rebuild_integrity.py
+--- /mnt/data/ocrap_v4856_orig/tests/data/test_dataset_rebuild_integrity.py	2026-08-19 12:35:08.000000000 +0000
++++ ./tests/data/test_dataset_rebuild_integrity.py	2026-08-20 00:07:52.253356453 +0000
+@@ -1,5 +1,6 @@
+ from __future__ import annotations
+ 
++import copy
+ from types import SimpleNamespace
+ 
+ import numpy as np
+@@ -7,6 +8,7 @@
+ 
+ from ocrap.config.defaults import DEFAULT_CONFIG
+ from ocrap.data.build import builder, regimes
++from ocrap.data import waymax_loader
+ 
+ 
+ def _history() -> SimpleNamespace:
+@@ -100,6 +102,58 @@
+     assert result["scenario_worker_index"] == 1
+ 
+ 
++def test_builder_delegates_scan_controls_to_waymax_raw_prefilter(tmp_path, monkeypatch):
++    captured: dict = {}
++
++    def fake_iterator(cfg):
++        captured.update(cfg)
++        return iter(())
++
++    monkeypatch.setattr(builder, "scenario_iterator", fake_iterator)
++    cfg = copy.deepcopy(DEFAULT_CONFIG)
++    cfg.update(
++        {
++            "data_source": "womd",
++            "simulation_backend": "waymax_closed_loop",
++            "progress": False,
++            "scenario_start_index": 11000,
++            "scenario_stride": 6,
++            "scenario_worker_index": 4,
++            "max_scenarios": 700,
++            "io": {"compress_npz": False, "fsync_npz": False},
++        }
++    )
++    cfg["waymax"]["prefilter_source_scan_controls"] = True
++
++    result = builder.build_dataset(tmp_path / "empty-prefilter", cfg)
++
++    # The source gets the real partition instead of a neutralized config whose
++    # max_scenarios would be inflated to ~15k.
++    assert captured["scenario_start_index"] == 11000
++    assert captured["scenario_stride"] == 6
++    assert captured["scenario_worker_index"] == 4
++    assert captured["max_scenarios"] == 700
++    assert result["source_max_scenarios"] == 700
++    assert result["source_scan_controls_mode"] == "source_raw_prefilter"
++
++
++def test_waymax_raw_scan_plan_matches_builder_partition_indices():
++    cfg = {
++        "scenario_start_index": 11000,
++        "scenario_stride": 6,
++        "scenario_worker_index": 4,
++    }
++    plan = waymax_loader._raw_scan_plan(cfg, 700)
++    assert plan == {
++        "start": 11000,
++        "stride": 6,
++        "worker": 4,
++        "limit": 700,
++        "first_global_index": 11004,
++        "last_global_index": 15198,
++    }
++
++
+ def test_scenario_scan_partitions_are_disjoint_and_start_relative():
+     source = list(range(40))
+     partitions = [
+@@ -128,6 +182,14 @@
+     cfg_b.update({"max_scenarios": 1000, "scenario_worker_index": 1, "scenario_stride": 6})
+     assert builder._resume_config_fingerprint(cfg_a) == builder._resume_config_fingerprint(cfg_b)
+ 
++    # Raw Waymax source prefiltering is a performance-only transport change.
++    # It must not invalidate partial v48.56 strict-shadow shards that were
++    # created before the optimization was introduced.
++    cfg_fast = copy.deepcopy(cfg_a)
++    cfg_fast.setdefault("waymax", {})["prefilter_source_scan_controls"] = True
++    cfg_fast["waymax"]["require_source_scan_prefilter"] = True
++    assert builder._resume_config_fingerprint(cfg_a) == builder._resume_config_fingerprint(cfg_fast)
++
+     cfg_c = dict(cfg_a)
+     cfg_c["num_targeted_futures"] = int(cfg_a.get("num_targeted_futures", 0)) + 1
+     assert builder._resume_config_fingerprint(cfg_a) != builder._resume_config_fingerprint(cfg_c)
+diff -ruN '--exclude=SHA256SUMS.txt' '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' /mnt/data/ocrap_v4856_orig/tests/data/test_waymax_source_prefilter.py ./tests/data/test_waymax_source_prefilter.py
+--- /mnt/data/ocrap_v4856_orig/tests/data/test_waymax_source_prefilter.py	1970-01-01 00:00:00.000000000 +0000
++++ ./tests/data/test_waymax_source_prefilter.py	2026-08-20 00:04:37.251551413 +0000
+@@ -0,0 +1,149 @@
++from __future__ import annotations
++
++from types import SimpleNamespace
++
++import pytest
++
++from ocrap.data import waymax_loader
++
++
++class _DummyLoader:
++    @staticmethod
++    def preprocess_serialized_womd_data(_serialized, config=None):
++        return {"config": config}
++
++    @staticmethod
++    def get_data_generator(_dataset_cfg, _parse, _postprocess):
++        # Global source indices 0..5. The fallback selection tests below use
++        # start=1, stride=2, worker=1 -> indices 2 and 4.
++        for i in range(6):
++            yield {"state": f"legacy-state-{i}", "scenario_id": None}
++
++
++class _DummyFactories:
++    @staticmethod
++    def simulator_state_from_womd_dict(example, include_sdc_paths=True):
++        return example
++
++
++def _patch_minimal_waymax(monkeypatch):
++    monkeypatch.setattr(
++        waymax_loader,
++        "_require_waymax",
++        lambda: (None, None, None, _DummyLoader, _DummyFactories),
++    )
++    monkeypatch.setattr(
++        waymax_loader,
++        "_make_dataset_config",
++        lambda _patterns, _cfg: SimpleNamespace(max_num_objects=64),
++    )
++    monkeypatch.setattr(
++        waymax_loader,
++        "_scenario_identity_from_payload",
++        lambda _payload, idx, _state, _cfg=None: (
++            f"scene__wx{idx:08d}", "scene", "waymax_legacy"
++        ),
++    )
++
++    def fake_raw(_state, scenario_id, scenario_index, _cfg):
++        return SimpleNamespace(
++            scenario_id=scenario_id,
++            metadata={"_waymax_scenario_index": int(scenario_index)},
++        )
++
++    monkeypatch.setattr(waymax_loader, "raw_scenario_from_waymax_state", fake_raw)
++
++
++def test_prefiltered_waymax_iterator_preserves_global_source_indices(monkeypatch):
++    _patch_minimal_waymax(monkeypatch)
++
++    def fake_prefilter(**_kwargs):
++        yield 11004, {"state": "fast-a", "scenario_id": None}
++        yield 11010, {"state": "fast-b", "scenario_id": None}
++
++    monkeypatch.setattr(waymax_loader, "_iter_prefiltered_waymax_payloads", fake_prefilter)
++    cfg = {
++        "max_agents": 64,
++        "scenario_start_index": 11000,
++        "scenario_stride": 6,
++        "scenario_worker_index": 4,
++        "waymax": {
++            "retain_official_scenario_id": False,
++            "prefilter_source_scan_controls": True,
++        },
++    }
++    rows = list(waymax_loader.iter_waymax_womd_scenarios("dummy@150", 2, cfg))
++    assert [r.metadata["_waymax_scenario_index"] for r in rows] == [11004, 11010]
++    assert [r.scenario_id for r in rows] == ["scene__wx00011004", "scene__wx00011010"]
++    assert all(r.metadata["waymax_source_scan_prefiltered"] for r in rows)
++
++
++def test_prefilter_failure_before_first_row_falls_back_to_legacy_partition(monkeypatch):
++    _patch_minimal_waymax(monkeypatch)
++
++    def failing_prefilter(**_kwargs):
++        raise RuntimeError("unsupported raw API")
++        yield  # pragma: no cover
++
++    monkeypatch.setattr(waymax_loader, "_iter_prefiltered_waymax_payloads", failing_prefilter)
++    cfg = {
++        "max_agents": 64,
++        "scenario_start_index": 1,
++        "scenario_stride": 2,
++        "scenario_worker_index": 1,
++        "waymax": {
++            "retain_official_scenario_id": False,
++            "prefilter_source_scan_controls": True,
++        },
++    }
++    rows = list(waymax_loader.iter_waymax_womd_scenarios("dummy@2", 2, cfg))
++    assert [r.metadata["_waymax_scenario_index"] for r in rows] == [2, 4]
++    assert all(not r.metadata["waymax_source_scan_prefiltered"] for r in rows)
++
++
++def test_prefilter_midstream_failure_does_not_restart_and_duplicate(monkeypatch):
++    _patch_minimal_waymax(monkeypatch)
++
++    def failing_midstream(**_kwargs):
++        yield 10, {"state": "fast-a", "scenario_id": None}
++        raise RuntimeError("midstream failure")
++
++    monkeypatch.setattr(waymax_loader, "_iter_prefiltered_waymax_payloads", failing_midstream)
++    cfg = {
++        "max_agents": 64,
++        "scenario_start_index": 10,
++        "scenario_stride": 1,
++        "scenario_worker_index": 0,
++        "waymax": {
++            "retain_official_scenario_id": False,
++            "prefilter_source_scan_controls": True,
++        },
++    }
++    it = waymax_loader.iter_waymax_womd_scenarios("dummy@2", 2, cfg)
++    first = next(it)
++    assert first.metadata["_waymax_scenario_index"] == 10
++    with pytest.raises(RuntimeError, match="midstream failure"):
++        next(it)
++
++
++def test_required_prefilter_fails_fast_instead_of_slow_fallback(monkeypatch):
++    _patch_minimal_waymax(monkeypatch)
++
++    def failing_prefilter(**_kwargs):
++        raise RuntimeError("unsupported raw API")
++        yield  # pragma: no cover
++
++    monkeypatch.setattr(waymax_loader, "_iter_prefiltered_waymax_payloads", failing_prefilter)
++    cfg = {
++        "max_agents": 64,
++        "scenario_start_index": 11000,
++        "scenario_stride": 6,
++        "scenario_worker_index": 4,
++        "waymax": {
++            "retain_official_scenario_id": False,
++            "prefilter_source_scan_controls": True,
++            "require_source_scan_prefilter": True,
++        },
++    }
++    with pytest.raises(RuntimeError, match="refusing to fall back"):
++        list(waymax_loader.iter_waymax_womd_scenarios("dummy@150", 2, cfg))
+diff -ruN '--exclude=SHA256SUMS.txt' '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' /mnt/data/ocrap_v4856_orig/tests/test_v48_56_runtime_optimization.py ./tests/test_v48_56_runtime_optimization.py
+--- /mnt/data/ocrap_v4856_orig/tests/test_v48_56_runtime_optimization.py	1970-01-01 00:00:00.000000000 +0000
++++ ./tests/test_v48_56_runtime_optimization.py	2026-08-20 00:10:15.317705944 +0000
+@@ -0,0 +1,57 @@
++from __future__ import annotations
++
++from types import SimpleNamespace
++
++import numpy as np
++
++from ocrap.simulation import waymax_rollout
++from ocrap.simulation.teacher.margins import TeacherDiagnostics
++
++
++def test_invalid_waymax_recovery_option_skips_exact_rollout(monkeypatch) -> None:
++    state = SimpleNamespace()
++    env = SimpleNamespace()
++    history = SimpleNamespace(metadata={"_waymax_state": state})
++    prefix = SimpleNamespace()
++    future = SimpleNamespace(metadata={}, _waymax_state_after_prefix=state, _waymax_env=env)
++    option = SimpleNamespace(mode="pull_over", valid=False)
++
++    monkeypatch.setattr(
++        waymax_rollout,
++        "rollout_recovery_controller",
++        lambda *_args, **_kwargs: (
++            np.zeros((40, 7), dtype=np.float32),
++            np.zeros((39, 4), dtype=np.float32),
++            {"mode": "pull_over"},
++        ),
++    )
++    monkeypatch.setattr(waymax_rollout, "_sdc_index", lambda _state: 0)
++    monkeypatch.setattr(
++        waymax_rollout,
++        "teacher_margin",
++        lambda *_args, **_kwargs: (
++            0.25,
++            TeacherDiagnostics(active={"clearance": True}, component_margins={"clearance": 0.25}, controller_diagnostics={}),
++        ),
++    )
++
++    def should_not_roll(*_args, **_kwargs):  # pragma: no cover - executed only on regression
++        raise AssertionError("invalid option must not execute exact Waymax rollout")
++
++    monkeypatch.setattr(waymax_rollout, "_rollout_bicycle_controls_scan", should_not_roll)
++    margins, diag = waymax_rollout.compute_waymax_future_option_margins(
++        history,
++        prefix,
++        [future],
++        [option],
++        {
++            "recovery_horizon_s": 4.0,
++            "sample_rate_hz": 10.0,
++            "waymax": {"teacher_backend": "hybrid", "teacher_rollout_top_k_options": 0},
++            "artifact": {"use_margin_override": False},
++        },
++    )
++    assert margins.shape == (1, 1)
++    assert float(margins[0, 0]) == -1e9
++    assert diag[0][0].controller_diagnostics["waymax_invalid_option_skipped"] is True
++    assert diag[0][0].controller_diagnostics["waymax_recovery_rollout"] is False
+diff -ruN '--exclude=SHA256SUMS.txt' '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' /mnt/data/ocrap_v4856_orig/tests/test_v48_56_teacher_component_semantics.py ./tests/test_v48_56_teacher_component_semantics.py
+--- /mnt/data/ocrap_v4856_orig/tests/test_v48_56_teacher_component_semantics.py	2026-08-19 08:51:10.000000000 +0000
++++ ./tests/test_v48_56_teacher_component_semantics.py	2026-08-20 00:09:10.169255160 +0000
+@@ -141,3 +141,57 @@
+     spec.loader.exec_module(mod)
+     with pytest.raises(ValueError, match="refuses test-role input"):
+         mod._reject_test_inputs("/data/OCRAP/test_contact", "/tmp/dev_index.jsonl")
++
++
++def test_v48_56_audit_can_reuse_inline_fresh_ocmero_checks(tmp_path: Path) -> None:
++    row = {
++        "path": "/tmp/evidence_adapt_train_near_contact/nom.npz",
++        "bucket": 1, "scene": "s", "time": 1, "candidate": 0, "macro": 0,
++        "nominal": True, "teacher_pcd": 0.0, "teacher_drs": 0.0,
++        "teacher_r_dep": -1.0, "teacher_gap": 0.0,
++        "teacher_hard_violation": 0.0, "teacher_harm_proxy": 0.0,
++        "component_veto_margin": 0.0, "component_harmful": False, "beneficial": False,
++        "fresh_ocmero_r_dep_abs_error": 0.0,
++        "fresh_ocmero_r_orc_abs_error": 0.0,
++        "fresh_ocmero_gap_abs_error": 0.0,
++        "cached_r_dep_present": True,
++        "cached_r_orc_present": True,
++    }
++    idx = tmp_path / "idx.jsonl"
++    idx.write_text(json.dumps(row) + "\n", encoding="utf-8")
++    from importlib.util import module_from_spec, spec_from_file_location
++    tool_path = Path(__file__).resolve().parents[1] / "tools" / "audit_v48_56_teacher_component_semantics.py"
++    spec = spec_from_file_location("v4856_audit_inline", tool_path)
++    assert spec and spec.loader
++    mod = module_from_spec(spec)
++    spec.loader.exec_module(mod)
++    rec = mod._audit_index(idx, {2, 3, 5, 6, 7})["source_recomputation"]
++    assert rec["checked_samples"] == 1
++    assert rec["source_labels_match_fresh_ocmero"] is True
++
++
++def test_v48_56_inline_freshness_fails_if_cached_labels_are_missing(tmp_path: Path) -> None:
++    row = {
++        "path": "/tmp/evidence_adapt_train_near_contact/nom.npz",
++        "bucket": 1, "scene": "s", "time": 1, "candidate": 0, "macro": 0,
++        "nominal": True, "teacher_pcd": 0.0, "teacher_drs": 0.0,
++        "teacher_r_dep": -1.0, "teacher_gap": 0.0,
++        "teacher_hard_violation": 0.0, "teacher_harm_proxy": 0.0,
++        "component_veto_margin": 0.0, "component_harmful": False, "beneficial": False,
++        "fresh_ocmero_r_dep_abs_error": 0.0,
++        "fresh_ocmero_r_orc_abs_error": 0.0,
++        "fresh_ocmero_gap_abs_error": 0.0,
++        "cached_r_dep_present": False,
++        "cached_r_orc_present": False,
++    }
++    idx = tmp_path / "idx_missing.jsonl"
++    idx.write_text(json.dumps(row) + "\n", encoding="utf-8")
++    from importlib.util import module_from_spec, spec_from_file_location
++    tool_path = Path(__file__).resolve().parents[1] / "tools" / "audit_v48_56_teacher_component_semantics.py"
++    spec = spec_from_file_location("v4856_audit_inline_missing", tool_path)
++    assert spec and spec.loader
++    mod = module_from_spec(spec)
++    spec.loader.exec_module(mod)
++    rec = mod._audit_index(idx, {2, 3, 5, 6, 7})["source_recomputation"]
++    assert rec["missing_cached_label_counts"] == {"r_dep": 1, "r_orc": 1}
++    assert rec["source_labels_match_fresh_ocmero"] is False
+diff -ruN '--exclude=SHA256SUMS.txt' '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' /mnt/data/ocrap_v4856_orig/tools/audit_v48_56_teacher_component_semantics.py ./tools/audit_v48_56_teacher_component_semantics.py
+--- /mnt/data/ocrap_v4856_orig/tools/audit_v48_56_teacher_component_semantics.py	2026-08-19 08:48:49.000000000 +0000
++++ ./tools/audit_v48_56_teacher_component_semantics.py	2026-08-20 00:09:01.853312818 +0000
+@@ -235,11 +235,73 @@
+             },
+         }
+ 
++    freshness_keys = {
++        "r_dep": "fresh_ocmero_r_dep_abs_error",
++        "r_orc": "fresh_ocmero_r_orc_abs_error",
++        "gap": "fresh_ocmero_gap_abs_error",
++    }
++    freshness_available = bool(rows) and all(
++        all(key in r for key in freshness_keys.values()) for r in rows
++    )
++    freshness = None
++    if freshness_available:
++        atol = 1e-6
++        max_err = {
++            name: max((float(r.get(key, 0.0)) for r in rows), default=0.0)
++            for name, key in freshness_keys.items()
++        }
++        mismatch = {
++            name: sum(float(r.get(key, 0.0)) > atol for r in rows)
++            for name, key in freshness_keys.items()
++        }
++        missing = {
++            "r_dep": sum(not bool(r.get("cached_r_dep_present", False)) for r in rows),
++            "r_orc": sum(not bool(r.get("cached_r_orc_present", False)) for r in rows),
++        }
++        freshness = {
++            "source": "teacher_index_inline_fresh_ocmero",
++            "checked_samples": len(rows),
++            "atol": atol,
++            "max_abs_error": max_err,
++            "mismatch_counts": mismatch,
++            "missing_cached_label_counts": missing,
++            "source_labels_match_fresh_ocmero": (
++                all(int(v) == 0 for v in mismatch.values())
++                and all(int(v) == 0 for v in missing.values())
++            ),
++        }
++
+     return {
+         "index": str(path.resolve()),
+         "rows": len(rows),
+         "groups": len({(int(r.get("bucket", -1)), str(r.get("scene", "")), int(r.get("time", 0))) for r in rows}),
+         "by_regime": by_regime,
++        "source_recomputation": freshness,
++    }
++
++
++def _combine_index_freshness(parts: list[dict[str, Any]]) -> dict[str, Any] | None:
++    recs = [p.get("source_recomputation") for p in parts if p.get("source_recomputation")]
++    if not recs:
++        return None
++    keys = ("r_dep", "r_orc", "gap")
++    return {
++        "source": "teacher_index_inline_fresh_ocmero",
++        "checked_samples": sum(int(r.get("checked_samples", 0)) for r in recs),
++        "atol": min(float(r.get("atol", 1e-6)) for r in recs),
++        "max_abs_error": {
++            k: max(float(r.get("max_abs_error", {}).get(k, 0.0)) for r in recs) for k in keys
++        },
++        "mismatch_counts": {
++            k: sum(int(r.get("mismatch_counts", {}).get(k, 0)) for r in recs) for k in keys
++        },
++        "missing_cached_label_counts": {
++            k: sum(int(r.get("missing_cached_label_counts", {}).get(k, 0)) for r in recs)
++            for k in ("r_dep", "r_orc")
++        },
++        "source_labels_match_fresh_ocmero": all(
++            bool(r.get("source_labels_match_fresh_ocmero", False)) for r in recs
++        ),
+     }
+ 
+ 
+@@ -312,6 +374,8 @@
+     _reject_test_inputs(str(args.train_index), str(args.dev_index or ""), str(args.dataset))
+ 
+     macros = {int(x.strip()) for x in str(args.deployable_macro_ids).split(",") if x.strip()}
++    train_audit = _audit_index(args.train_index, macros)
++    dev_audit = _audit_index(args.dev_index, macros) if args.dev_index else None
+     report: dict[str, Any] = {
+         "event": "v48_56_teacher_component_semantic_audit",
+         "version": "v48.56-DCP-DRFC-BCDE-TCSA",
+@@ -323,15 +387,19 @@
+             "teacher_source": "DRS uses observation-class option semantics; cached R_dep/R_orc must match fresh OC-MERO on the stored m_star contract",
+             "component_semantics": "legacy PCD is compensatory whereas component_veto is non-compensatory; overlap is a direct contradictory-supervision diagnostic",
+         },
+-        "train": _audit_index(args.train_index, macros),
++        "train": train_audit,
+     }
+-    if args.dev_index:
+-        report["dev"] = _audit_index(args.dev_index, macros)
++    if dev_audit is not None:
++        report["dev"] = dev_audit
+     if args.dataset:
+         report["source_recomputation"] = _audit_dataset_sources(
+             args.dataset, alpha=args.alpha, beta=args.beta, top_m=args.top_m,
+             max_samples=args.max_source_samples, atol=args.source_atol,
+         )
++    else:
++        inline = _combine_index_freshness([x for x in [train_audit, dev_audit] if x is not None])
++        if inline is not None:
++            report["source_recomputation"] = inline
+ 
+     # Fail-closed research decision: no evidence centering while the legacy target
+     # has material benefit/harm contradictions or source labels are stale.
+diff -ruN '--exclude=SHA256SUMS.txt' '--exclude=.pytest_cache' '--exclude=__pycache__' '--exclude=*.pyc' /mnt/data/ocrap_v4856_orig/tools/build_teacher_pcd_index_v48.py ./tools/build_teacher_pcd_index_v48.py
+--- /mnt/data/ocrap_v4856_orig/tools/build_teacher_pcd_index_v48.py	2026-08-19 12:35:20.000000000 +0000
++++ ./tools/build_teacher_pcd_index_v48.py	2026-08-20 00:09:01.323669107 +0000
+@@ -32,7 +32,7 @@
+     return a.item() if a.shape == () else a
+ 
+ 
+-def teacher_components(d: dict[str, Any], *, alpha: float, beta: float, top_m: int, option_execution_semantics: str = "global") -> dict[str, float]:
++def teacher_components(d: dict[str, Any], *, alpha: float, beta: float, top_m: int, option_execution_semantics: str = "global") -> dict[str, Any]:
+     m = np.asarray(d["m_star"], dtype=np.float64)
+     p = np.asarray(d["root_probs"], dtype=np.float64)
+     c = np.asarray(d.get("c_star", np.eye(m.shape[0])), dtype=np.float64)
+@@ -47,14 +47,30 @@
+         semantics=option_execution_semantics,
+     )
+     drs = float(deployable_recovery_success(m, p, option, root_valid=rv))
+-    r_dep = float(_scalar(d, "r_dep_star", result.r_dep))
+-    r_orc = float(_scalar(d, "r_orc_star", result.r_orc))
++    fresh_r_dep = float(result.r_dep)
++    fresh_r_orc = float(result.r_orc)
++    cached_r_dep_present = "r_dep_star" in d
++    cached_r_orc_present = "r_orc_star" in d
++    r_dep = float(_scalar(d, "r_dep_star", fresh_r_dep))
++    r_orc = float(_scalar(d, "r_orc_star", fresh_r_orc))
+     gap = max(0.0, r_orc - r_dep)
++    fresh_gap = max(0.0, fresh_r_orc - fresh_r_dep)
+     return {
+         "teacher_pcd": float(post_contact_deployability_score(drs, r_dep, gap)),
+         "teacher_drs": drs,
+         "teacher_r_dep": r_dep,
+         "teacher_gap": gap,
++        # The index already recomputes OC-MERO from stored m_star/root_probs/C.
++        # Persist those fresh values so v48.56 source-label correctness can be
++        # audited without reopening every NPZ a second time after index build.
++        "fresh_ocmero_r_dep": fresh_r_dep,
++        "fresh_ocmero_r_orc": fresh_r_orc,
++        "fresh_ocmero_gap": fresh_gap,
++        "fresh_ocmero_r_dep_abs_error": abs(r_dep - fresh_r_dep),
++        "fresh_ocmero_r_orc_abs_error": abs(r_orc - fresh_r_orc),
++        "fresh_ocmero_gap_abs_error": abs(gap - fresh_gap),
++        "cached_r_dep_present": bool(cached_r_dep_present),
++        "cached_r_orc_present": bool(cached_r_orc_present),
+         "teacher_hard_violation": float(_scalar(d, "hard_violation", 0.0)),
+         "teacher_harm_proxy": float(_scalar(d, "harm_proxy", 0.0)),
+     }
+@@ -294,7 +310,29 @@
+         },
+         "by_bucket": by_bucket, "all_macro_by_bucket": all_macro_by_bucket,
+         "quality_mode": args.quality_mode,
++        "source_recomputation": {
++            "checked_samples": len(rows),
++            "atol": 1e-6,
++            "max_abs_error": {
++                "r_dep": max((float(r.get("fresh_ocmero_r_dep_abs_error", 0.0)) for r in rows), default=0.0),
++                "r_orc": max((float(r.get("fresh_ocmero_r_orc_abs_error", 0.0)) for r in rows), default=0.0),
++                "gap": max((float(r.get("fresh_ocmero_gap_abs_error", 0.0)) for r in rows), default=0.0),
++            },
++            "mismatch_counts": {
++                "r_dep": sum(float(r.get("fresh_ocmero_r_dep_abs_error", 0.0)) > 1e-6 for r in rows),
++                "r_orc": sum(float(r.get("fresh_ocmero_r_orc_abs_error", 0.0)) > 1e-6 for r in rows),
++                "gap": sum(float(r.get("fresh_ocmero_gap_abs_error", 0.0)) > 1e-6 for r in rows),
++            },
++            "missing_cached_label_counts": {
++                "r_dep": sum(not bool(r.get("cached_r_dep_present", False)) for r in rows),
++                "r_orc": sum(not bool(r.get("cached_r_orc_present", False)) for r in rows),
++            },
++        },
+     }
++    summary["source_recomputation"]["source_labels_match_fresh_ocmero"] = (
++        all(int(v) == 0 for v in summary["source_recomputation"]["mismatch_counts"].values())
++        and all(int(v) == 0 for v in summary["source_recomputation"]["missing_cached_label_counts"].values())
++    )
+     failures: list[str] = []
+     limits = {
+         "near": (args.min_positive_groups_near, args.min_positive_scenes_near),

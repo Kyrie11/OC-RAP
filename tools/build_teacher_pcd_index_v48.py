@@ -32,7 +32,7 @@ def _scalar(d: dict[str, Any], key: str, default: Any) -> Any:
     return a.item() if a.shape == () else a
 
 
-def teacher_components(d: dict[str, Any], *, alpha: float, beta: float, top_m: int, option_execution_semantics: str = "global") -> dict[str, float]:
+def teacher_components(d: dict[str, Any], *, alpha: float, beta: float, top_m: int, option_execution_semantics: str = "global") -> dict[str, Any]:
     m = np.asarray(d["m_star"], dtype=np.float64)
     p = np.asarray(d["root_probs"], dtype=np.float64)
     c = np.asarray(d.get("c_star", np.eye(m.shape[0])), dtype=np.float64)
@@ -47,14 +47,30 @@ def teacher_components(d: dict[str, Any], *, alpha: float, beta: float, top_m: i
         semantics=option_execution_semantics,
     )
     drs = float(deployable_recovery_success(m, p, option, root_valid=rv))
-    r_dep = float(_scalar(d, "r_dep_star", result.r_dep))
-    r_orc = float(_scalar(d, "r_orc_star", result.r_orc))
+    fresh_r_dep = float(result.r_dep)
+    fresh_r_orc = float(result.r_orc)
+    cached_r_dep_present = "r_dep_star" in d
+    cached_r_orc_present = "r_orc_star" in d
+    r_dep = float(_scalar(d, "r_dep_star", fresh_r_dep))
+    r_orc = float(_scalar(d, "r_orc_star", fresh_r_orc))
     gap = max(0.0, r_orc - r_dep)
+    fresh_gap = max(0.0, fresh_r_orc - fresh_r_dep)
     return {
         "teacher_pcd": float(post_contact_deployability_score(drs, r_dep, gap)),
         "teacher_drs": drs,
         "teacher_r_dep": r_dep,
         "teacher_gap": gap,
+        # The index already recomputes OC-MERO from stored m_star/root_probs/C.
+        # Persist those fresh values so v48.56 source-label correctness can be
+        # audited without reopening every NPZ a second time after index build.
+        "fresh_ocmero_r_dep": fresh_r_dep,
+        "fresh_ocmero_r_orc": fresh_r_orc,
+        "fresh_ocmero_gap": fresh_gap,
+        "fresh_ocmero_r_dep_abs_error": abs(r_dep - fresh_r_dep),
+        "fresh_ocmero_r_orc_abs_error": abs(r_orc - fresh_r_orc),
+        "fresh_ocmero_gap_abs_error": abs(gap - fresh_gap),
+        "cached_r_dep_present": bool(cached_r_dep_present),
+        "cached_r_orc_present": bool(cached_r_orc_present),
         "teacher_hard_violation": float(_scalar(d, "hard_violation", 0.0)),
         "teacher_harm_proxy": float(_scalar(d, "harm_proxy", 0.0)),
     }
@@ -294,7 +310,29 @@ def main() -> int:
         },
         "by_bucket": by_bucket, "all_macro_by_bucket": all_macro_by_bucket,
         "quality_mode": args.quality_mode,
+        "source_recomputation": {
+            "checked_samples": len(rows),
+            "atol": 1e-6,
+            "max_abs_error": {
+                "r_dep": max((float(r.get("fresh_ocmero_r_dep_abs_error", 0.0)) for r in rows), default=0.0),
+                "r_orc": max((float(r.get("fresh_ocmero_r_orc_abs_error", 0.0)) for r in rows), default=0.0),
+                "gap": max((float(r.get("fresh_ocmero_gap_abs_error", 0.0)) for r in rows), default=0.0),
+            },
+            "mismatch_counts": {
+                "r_dep": sum(float(r.get("fresh_ocmero_r_dep_abs_error", 0.0)) > 1e-6 for r in rows),
+                "r_orc": sum(float(r.get("fresh_ocmero_r_orc_abs_error", 0.0)) > 1e-6 for r in rows),
+                "gap": sum(float(r.get("fresh_ocmero_gap_abs_error", 0.0)) > 1e-6 for r in rows),
+            },
+            "missing_cached_label_counts": {
+                "r_dep": sum(not bool(r.get("cached_r_dep_present", False)) for r in rows),
+                "r_orc": sum(not bool(r.get("cached_r_orc_present", False)) for r in rows),
+            },
+        },
     }
+    summary["source_recomputation"]["source_labels_match_fresh_ocmero"] = (
+        all(int(v) == 0 for v in summary["source_recomputation"]["mismatch_counts"].values())
+        and all(int(v) == 0 for v in summary["source_recomputation"]["missing_cached_label_counts"].values())
+    )
     failures: list[str] = []
     limits = {
         "near": (args.min_positive_groups_near, args.min_positive_scenes_near),

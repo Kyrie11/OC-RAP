@@ -421,7 +421,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "scenario_worker_index": 0,
     "waymax": {
         "append_scenario_index_to_id": True,
-            "retain_official_scenario_id": True,
+        "retain_official_scenario_id": True,
+        # Optional dataset-build acceleration. When enabled, start/stride/worker
+        # selection is applied to serialized TFRecords before WOMD parsing and
+        # SimulatorState construction. Disabled by default for compatibility;
+        # long reserved-index builders (v48.56 strict shadow) opt in explicitly.
+        "prefilter_source_scan_controls": False,
+        "require_source_scan_prefilter": False,
         "strict": True,
         "dataloader_include_sdc_paths": True,
         "num_paths": 45,

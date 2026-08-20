@@ -1247,6 +1247,31 @@ def compute_waymax_future_option_margins(history: SceneHistory, prefix: Candidat
         waymax_metric_cache_hits = 0
         for l, opt in enumerate(options):
             rec_states, rec_controls, cdiag = controllers[l]
+            # Invalid recovery options are masked to -1e9 by OC-RAP regardless of
+            # the Waymax rollout result.  The historical path still executed a
+            # full 4 s exact rollout before applying that mask, wasting one JAX
+            # scan per invalid option/future.  Skip only the physical rollout;
+            # preserve structural diagnostics and the exact final margin.
+            if not opt.valid:
+                sd = structural_label_diags[l] or structural_diags[l]
+                row.append(
+                    TeacherDiagnostics(
+                        active=({f"structural_{k}": bool(v) for k, v in sd.active.items()} if sd is not None else {}),
+                        component_margins=({f"structural_{k}": float(v) for k, v in sd.component_margins.items()} if sd is not None else {}),
+                        controller_diagnostics={
+                            **(cdiag or {}),
+                            "waymax_recovery_rollout": False,
+                            "waymax_invalid_option_skipped": True,
+                            "waymax_hybrid_teacher_margin": bool(hybrid_teacher),
+                            "waymax_teacher_backend": teacher_backend,
+                            "waymax_teacher_metrics_stride": int(metric_stride),
+                            "waymax_teacher_rollout_top_k_options": int(rollout_top_k),
+                            "waymax_teacher_rollout_option_modes": sorted(rollout_modes),
+                        },
+                    )
+                )
+                M[j, l] = -1e9
+                continue
             if screened_hybrid and rollout_indices is not None and l not in rollout_indices:
                 sd = structural_label_diags[l] or structural_diags[l]
                 assert sd is not None
@@ -1360,6 +1385,7 @@ def compute_waymax_future_option_margins(history: SceneHistory, prefix: Candidat
         fut.metadata["waymax_teacher_rollouts_executed"] = int(waymax_rollouts_executed)
         fut.metadata["waymax_teacher_metric_cache_hits"] = int(waymax_metric_cache_hits)
         fut.metadata["waymax_teacher_rollouts_possible"] = int(len(options))
+        fut.metadata["waymax_teacher_invalid_options_skipped"] = int(sum(not bool(opt.valid) for opt in options))
         fut.metadata["waymax_teacher_screened_hybrid"] = bool(screened_hybrid)
         all_diag.append(row)
     return M, all_diag

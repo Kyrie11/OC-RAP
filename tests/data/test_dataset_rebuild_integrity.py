@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from types import SimpleNamespace
 
 import numpy as np
@@ -7,6 +8,7 @@ import pytest
 
 from ocrap.config.defaults import DEFAULT_CONFIG
 from ocrap.data.build import builder, regimes
+from ocrap.data import waymax_loader
 
 
 def _history() -> SimpleNamespace:
@@ -100,6 +102,58 @@ def test_builder_applies_scenario_scan_controls_once(tmp_path, monkeypatch):
     assert result["scenario_worker_index"] == 1
 
 
+def test_builder_delegates_scan_controls_to_waymax_raw_prefilter(tmp_path, monkeypatch):
+    captured: dict = {}
+
+    def fake_iterator(cfg):
+        captured.update(cfg)
+        return iter(())
+
+    monkeypatch.setattr(builder, "scenario_iterator", fake_iterator)
+    cfg = copy.deepcopy(DEFAULT_CONFIG)
+    cfg.update(
+        {
+            "data_source": "womd",
+            "simulation_backend": "waymax_closed_loop",
+            "progress": False,
+            "scenario_start_index": 11000,
+            "scenario_stride": 6,
+            "scenario_worker_index": 4,
+            "max_scenarios": 700,
+            "io": {"compress_npz": False, "fsync_npz": False},
+        }
+    )
+    cfg["waymax"]["prefilter_source_scan_controls"] = True
+
+    result = builder.build_dataset(tmp_path / "empty-prefilter", cfg)
+
+    # The source gets the real partition instead of a neutralized config whose
+    # max_scenarios would be inflated to ~15k.
+    assert captured["scenario_start_index"] == 11000
+    assert captured["scenario_stride"] == 6
+    assert captured["scenario_worker_index"] == 4
+    assert captured["max_scenarios"] == 700
+    assert result["source_max_scenarios"] == 700
+    assert result["source_scan_controls_mode"] == "source_raw_prefilter"
+
+
+def test_waymax_raw_scan_plan_matches_builder_partition_indices():
+    cfg = {
+        "scenario_start_index": 11000,
+        "scenario_stride": 6,
+        "scenario_worker_index": 4,
+    }
+    plan = waymax_loader._raw_scan_plan(cfg, 700)
+    assert plan == {
+        "start": 11000,
+        "stride": 6,
+        "worker": 4,
+        "limit": 700,
+        "first_global_index": 11004,
+        "last_global_index": 15198,
+    }
+
+
 def test_scenario_scan_partitions_are_disjoint_and_start_relative():
     source = list(range(40))
     partitions = [
@@ -127,6 +181,14 @@ def test_resume_fingerprint_ignores_scan_scope_but_not_teacher_semantics():
     cfg_b = dict(cfg_a)
     cfg_b.update({"max_scenarios": 1000, "scenario_worker_index": 1, "scenario_stride": 6})
     assert builder._resume_config_fingerprint(cfg_a) == builder._resume_config_fingerprint(cfg_b)
+
+    # Raw Waymax source prefiltering is a performance-only transport change.
+    # It must not invalidate partial v48.56 strict-shadow shards that were
+    # created before the optimization was introduced.
+    cfg_fast = copy.deepcopy(cfg_a)
+    cfg_fast.setdefault("waymax", {})["prefilter_source_scan_controls"] = True
+    cfg_fast["waymax"]["require_source_scan_prefilter"] = True
+    assert builder._resume_config_fingerprint(cfg_a) == builder._resume_config_fingerprint(cfg_fast)
 
     cfg_c = dict(cfg_a)
     cfg_c["num_targeted_futures"] = int(cfg_a.get("num_targeted_futures", 0)) + 1

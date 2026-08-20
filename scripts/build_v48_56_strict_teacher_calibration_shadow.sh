@@ -33,6 +33,7 @@ MIN_CAL_NEAR_SCENES="${MIN_CAL_NEAR_SCENES:-120}"
 MIN_CAL_CONTACT_SCENES="${MIN_CAL_CONTACT_SCENES:-120}"
 RUN_DIAGNOSTICS="${RUN_DIAGNOSTICS:-1}"
 REQUIRE_JAX_GPU="${REQUIRE_JAX_GPU:-1}"
+HEARTBEAT_SECONDS="${V4856_HEARTBEAT_SECONDS:-60}"
 START_STAGE="${START_STAGE:-safe}"  # safe | near | contact | merge
 case "$START_STAGE" in safe|near|contact|merge) ;; *) echo "invalid START_STAGE=$START_STAGE" >&2; exit 2 ;; esac
 stage_rank(){ case "$1" in safe) echo 0;; near) echo 1;; contact) echo 2;; merge) echo 3;; esac; }
@@ -73,6 +74,22 @@ resume_args=(); [[ "$RESUME" == 1 ]] && resume_args+=(--resume)
 VAL_SHARDS=$(find "$WOMD_ROOT/validation" -maxdepth 1 -name 'validation_tfexample.tfrecord-*-of-00150' | wc -l)
 [[ "$VAL_SHARDS" -eq 150 ]] || die "expected 150 standard validation shards, found $VAL_SHARDS"
 [[ "$GPU0" != "$GPU1" ]] || die "GPU0 and GPU1 must differ"
+# Fail before worker launch if this installed Waymax cannot expose the raw TFRecord
+# stream required by the v48.56 performance fix.  Run this CPU-only so TensorFlow
+# cannot contend with JAX for worker GPU memory.
+CUDA_VISIBLE_DEVICES="" "$PYTHON_BIN" - <<'PY_WAYMAX_PREFLIGHT'
+import inspect
+from waymax.dataloader import dataloader_utils
+fn = getattr(dataloader_utils, "tf_examples_dataset", None)
+if fn is None:
+    raise SystemExit("Waymax dataloader_utils.tf_examples_dataset is unavailable; strict raw prefilter cannot run")
+params = set(inspect.signature(fn).parameters)
+missing = {"path", "data_format", "preprocess_fn"} - params
+if missing:
+    raise SystemExit(f"Waymax tf_examples_dataset signature is incompatible; missing={sorted(missing)}")
+print({"event":"v48_56_waymax_raw_prefilter_preflight","status":"pass","signature":sorted(params)}, flush=True)
+PY_WAYMAX_PREFLIGHT
+
 if [[ "$REQUIRE_JAX_GPU" == 1 ]]; then
   for gpu in "$GPU0" "$GPU1"; do
     CUDA_VISIBLE_DEVICES="$gpu" XLA_PYTHON_CLIENT_PREALLOCATE=false "$PYTHON_BIN" - <<'PY'
@@ -84,6 +101,39 @@ if not any(getattr(d,'platform','') == 'gpu' for d in jax.devices()):
 PY
   done
 fi
+
+# Runtime-only scan contract.  This makes the historical amplification visible
+# before launching any expensive teacher workers and is useful when diagnosing
+# a partial/resumed build.
+"$PYTHON_BIN" - "$OUTPUT_ROOT/V48_56_STRICT_SHADOW_RUNTIME_SCAN_CONTRACT.json" \
+  "$CALIBRATION_START_INDEX" "$PARTITION_STRIDE" \
+  "$SAFE_RAW_PER_WORKER" "$NEAR_RAW_PER_WORKER" "$CONTACT_RAW_PER_WORKER" <<'PY_SCAN_CONTRACT'
+import json, sys
+from pathlib import Path
+out=Path(sys.argv[1]); start=int(sys.argv[2]); stride=int(sys.argv[3])
+ns={"safe":int(sys.argv[4]), "near":int(sys.argv[5]), "contact":int(sys.argv[6])}
+spec=[("safe",0,ns["safe"]),("safe",1,ns["safe"]),("near",2,ns["near"]),("near",3,ns["near"]),("contact",4,ns["contact"]),("contact",5,ns["contact"])]
+workers=[]; legacy_total=0; selected_total=0
+for regime, worker, n in spec:
+    last=start+worker+(max(n,1)-1)*stride if n else None
+    legacy_cap=(last+1) if last is not None else 0
+    legacy_total += legacy_cap; selected_total += n
+    workers.append({"regime":regime,"worker":worker,"selected_records":n,"first_global_index":start+worker,"last_global_index":last,"legacy_preprocessed_record_budget":legacy_cap})
+payload={
+    "event":"v48_56_strict_shadow_runtime_scan_contract",
+    "selection_formula":"global_index = scenario_start_index + worker + n * scenario_stride",
+    "scenario_start_index":start,"scenario_stride":stride,"workers":workers,
+    "legacy_preprocessed_record_budget":legacy_total,
+    "optimized_preprocessed_record_budget":selected_total,
+    "avoided_expensive_preprocess_records":legacy_total-selected_total,
+    "legacy_to_optimized_preprocess_ratio":(legacy_total/selected_total if selected_total else None),
+    "raw_prefilter_required":True,
+    "semantic_change":False,
+    "note":"Near/contact all-option exact teacher rollouts remain enabled; this contract only removes pre-teacher source-scan amplification.",
+}
+out.parent.mkdir(parents=True,exist_ok=True); out.write_text(json.dumps(payload,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+print(payload, flush=True)
+PY_SCAN_CONTRACT
 
 COMMON=(
   --set data_source=womd
@@ -98,6 +148,8 @@ COMMON=(
   --set num_roots=8
   --set num_recovery_options=12
   --set waymax.dataloader_include_sdc_paths=true
+  --set waymax.prefilter_source_scan_controls=true
+  --set waymax.require_source_scan_prefilter=true
   --set 'waymax.metrics_to_run=[log_divergence,overlap,offroad,sdc_wrongway,sdc_off_route,sdc_progression,kinematic_infeasibility]'
   --set waymax.teacher_backend=hybrid
   --set waymax.use_jit_scan_rollouts=true
@@ -115,6 +167,9 @@ COMMON=(
   --set regime_thresholds.use_paper_regime_definitions=true
   --set io.compress_npz=false
   --set io.fsync_npz=false
+  --set profiling.enabled=true
+  --set profiling.log_every_sample=false
+  --set profiling.profile_flush_scene_times=1
 )
 
 build_safe(){ local worker="$1" out="$2" gpu="$3";
@@ -184,26 +239,102 @@ build_contact(){ local worker="$1" out="$2" gpu="$3";
     --set dataset_quality.artifact_pass_apply_override_to_screened=true --set dataset_quality.artifact_pass_compute_future_metrics=false \
     --output "$out"; }
 
-wait_pair(){ local p0="$1" p1="$2" n0="$3" n1="$4" s0=0 s1=0; set +e; wait "$p0"; s0=$?; wait "$p1"; s1=$?; set -e;
-  [[ "$s0" == 0 && "$s1" == 0 ]] || die "calibration workers failed: $n0=$s0 $n1=$s1"; }
+worker_heartbeat(){
+  local name="$1" out="$2" log="$3"
+  "$PYTHON_BIN" - "$name" "$out" "$log" <<'PY_HEARTBEAT'
+import json, os, sys
+from pathlib import Path
+name, out, log = sys.argv[1:]
+out_p = Path(out)
+status_p = out_p / "dataset_status.json"
+profile_p = out_p / "build_stage_profile.json"
+payload = {"worker": name}
+for p, key in [(status_p, "status"), (profile_p, "profile")]:
+    if p.is_file():
+        try:
+            payload[key] = json.loads(p.read_text(encoding="utf-8"))
+        except Exception as exc:
+            payload[key] = {"read_error": f"{type(exc).__name__}: {exc}"}
+if Path(log).is_file():
+    try:
+        # Do not reread a multi-GB worker log every heartbeat. Seek near EOF and
+        # decode only a small tail window.
+        lp = Path(log)
+        with lp.open("rb") as f:
+            size = f.seek(0, 2)
+            f.seek(max(0, size - 16384))
+            lines = f.read().decode("utf-8", errors="replace").splitlines()
+        payload["log_tail"] = lines[-2:]
+        payload["log_age_s"] = max(0.0, __import__("time").time() - lp.stat().st_mtime)
+    except Exception:
+        pass
+print({"event": "v48_56_worker_heartbeat", **payload}, flush=True)
+PY_HEARTBEAT
+}
+
+wait_pair(){
+  local p0="$1" p1="$2" n0="$3" n1="$4" o0="$5" o1="$6" l0="$7" l1="$8"
+  local done0=0 done1=0 s0=0 s1=0
+  while [[ "$done0" == 0 || "$done1" == 0 ]]; do
+    local running
+    running="$(jobs -pr || true)"
+    if [[ "$done0" == 0 ]] && ! grep -qx -- "$p0" <<<"$running"; then
+      set +e; wait "$p0"; s0=$?; set -e; done0=1
+      echo "[v48.56] worker complete: $n0 rc=$s0"
+    fi
+    if [[ "$done1" == 0 ]] && ! grep -qx -- "$p1" <<<"$running"; then
+      set +e; wait "$p1"; s1=$?; set -e; done1=1
+      echo "[v48.56] worker complete: $n1 rc=$s1"
+    fi
+    if [[ "$done0" == 0 || "$done1" == 0 ]]; then
+      [[ "$done0" == 1 ]] || worker_heartbeat "$n0" "$o0" "$l0"
+      [[ "$done1" == 1 ]] || worker_heartbeat "$n1" "$o1" "$l1"
+      sleep "$HEARTBEAT_SECONDS"
+    fi
+  done
+  [[ "$s0" == 0 && "$s1" == 0 ]] || die "calibration workers failed: $n0=$s0 $n1=$s1"
+}
+
+shard_complete(){
+  local out="$1"
+  [[ -s "$out/manifest.csv" && -s "$out/dataset_summary.json" ]]
+}
 
 if should_run safe; then
   CURRENT_STAGE="build_safe"; write_status running "$CURRENT_STAGE" "workers 0,1"
-  build_safe 0 "$SHARD_DIR/calibration_safe_w0" "$GPU0" >"$LOG_DIR/calibration_safe_w0.log" 2>&1 & P0=$!
-  build_safe 1 "$SHARD_DIR/calibration_safe_w1" "$GPU1" >"$LOG_DIR/calibration_safe_w1.log" 2>&1 & P1=$!
-  wait_pair "$P0" "$P1" safe_w0 safe_w1
+  if [[ "$RESUME" == 1 ]] && shard_complete "$SHARD_DIR/calibration_safe_w0" && shard_complete "$SHARD_DIR/calibration_safe_w1"; then
+    echo "[v48.56] reusing completed safe shards"
+  else
+    build_safe 0 "$SHARD_DIR/calibration_safe_w0" "$GPU0" >"$LOG_DIR/calibration_safe_w0.log" 2>&1 & P0=$!
+    build_safe 1 "$SHARD_DIR/calibration_safe_w1" "$GPU1" >"$LOG_DIR/calibration_safe_w1.log" 2>&1 & P1=$!
+    wait_pair "$P0" "$P1" safe_w0 safe_w1 \
+      "$SHARD_DIR/calibration_safe_w0" "$SHARD_DIR/calibration_safe_w1" \
+      "$LOG_DIR/calibration_safe_w0.log" "$LOG_DIR/calibration_safe_w1.log"
+  fi
 fi
 if should_run near; then
   CURRENT_STAGE="build_near_contact"; write_status running "$CURRENT_STAGE" "workers 2,3; contact logs are not expected yet"
-  build_near 2 "$SHARD_DIR/calibration_near_w2" "$GPU0" >"$LOG_DIR/calibration_near_w2.log" 2>&1 & P0=$!
-  build_near 3 "$SHARD_DIR/calibration_near_w3" "$GPU1" >"$LOG_DIR/calibration_near_w3.log" 2>&1 & P1=$!
-  wait_pair "$P0" "$P1" near_w2 near_w3
+  if [[ "$RESUME" == 1 ]] && shard_complete "$SHARD_DIR/calibration_near_w2" && shard_complete "$SHARD_DIR/calibration_near_w3"; then
+    echo "[v48.56] reusing completed near-contact shards"
+  else
+    build_near 2 "$SHARD_DIR/calibration_near_w2" "$GPU0" >"$LOG_DIR/calibration_near_w2.log" 2>&1 & P0=$!
+    build_near 3 "$SHARD_DIR/calibration_near_w3" "$GPU1" >"$LOG_DIR/calibration_near_w3.log" 2>&1 & P1=$!
+    wait_pair "$P0" "$P1" near_w2 near_w3 \
+      "$SHARD_DIR/calibration_near_w2" "$SHARD_DIR/calibration_near_w3" \
+      "$LOG_DIR/calibration_near_w2.log" "$LOG_DIR/calibration_near_w3.log"
+  fi
 fi
 if should_run contact; then
   CURRENT_STAGE="build_contact"; write_status running "$CURRENT_STAGE" "workers 4,5"
-  build_contact 4 "$SHARD_DIR/calibration_contact_w4" "$GPU0" >"$LOG_DIR/calibration_contact_w4.log" 2>&1 & P0=$!
-  build_contact 5 "$SHARD_DIR/calibration_contact_w5" "$GPU1" >"$LOG_DIR/calibration_contact_w5.log" 2>&1 & P1=$!
-  wait_pair "$P0" "$P1" contact_w4 contact_w5
+  if [[ "$RESUME" == 1 ]] && shard_complete "$SHARD_DIR/calibration_contact_w4" && shard_complete "$SHARD_DIR/calibration_contact_w5"; then
+    echo "[v48.56] reusing completed contact shards"
+  else
+    build_contact 4 "$SHARD_DIR/calibration_contact_w4" "$GPU0" >"$LOG_DIR/calibration_contact_w4.log" 2>&1 & P0=$!
+    build_contact 5 "$SHARD_DIR/calibration_contact_w5" "$GPU1" >"$LOG_DIR/calibration_contact_w5.log" 2>&1 & P1=$!
+    wait_pair "$P0" "$P1" contact_w4 contact_w5 \
+      "$SHARD_DIR/calibration_contact_w4" "$SHARD_DIR/calibration_contact_w5" \
+      "$LOG_DIR/calibration_contact_w4.log" "$LOG_DIR/calibration_contact_w5.log"
+  fi
 fi
 
 CURRENT_STAGE="merge_filter_audit"; write_status running "$CURRENT_STAGE" "merging and enforcing scene disjointness"
