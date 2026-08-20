@@ -1,0 +1,15 @@
+{
+  "event": "v48_49_1_engineering_hotfix",
+  "version": "v48.49.1",
+  "date": "2026-08-17",
+  "algorithm_changed": false,
+  "commands_changed": false,
+  "root_cause": "v48.47 witness stage disabled NCP but inherited v48.49 dependent DCP flags from outer arm",
+  "files_modified": [
+    "scripts/adapt_ocrap_v48_47_dsofr_witness_stage.sh",
+    "tests/test_v48_49_dcp.py",
+    "ALGORITHM_CHANGELOG.md",
+    "ALGORITHM_CHANGELOG_V48.md"
+  ],
+  "expected_rerun": "delete incomplete v48.49 result directories and rerun the unchanged OC-RAP-v48.49-DCP-DRFC-two-GPU-run-commands-ZH.txt"
+}

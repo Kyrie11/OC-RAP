@@ -1,0 +1,86 @@
+{
+  "event": "v48_48_ncp_drfc_delivery",
+  "version": "v48.48-NCP-DRFC",
+  "created_unix": 1786688918.6501513,
+  "basis": {
+    "v48_47_A": {
+      "rc": 20,
+      "pipeline_valid": true
+    },
+    "v48_47_B": {
+      "rc": 20,
+      "pipeline_valid": true
+    },
+    "v48_47_C": {
+      "rc": 30,
+      "pipeline_valid": false,
+      "classification": "engineering_failure_gpu_capacity_contention"
+    },
+    "v48_47_D": {
+      "rc": 20,
+      "pipeline_valid": true
+    }
+  },
+  "scientific_conclusions": [
+    "DWOK learns its observation objective but does not move the final DRS/deployability frontier; do not absorb it.",
+    "v48.47 D shows DRFC objective improvement but weak/unsafe final propagation; clean DRFC-alone effect is missing because C failed engineering.",
+    "Proposal generation remains well-covered; do not expand top-k/candidate width/macros.",
+    "Primary current hypothesis is certificate-to-proxy attenuation: native OC-MERO frontier is re-predicted by a downstream component proxy."
+  ],
+  "algorithm": {
+    "name": "Native Certificate Preservation + clean DRFC causal test",
+    "ncp_adds_parameters": false,
+    "ncp_coordinates": [
+      "hard predicted observation-class DRS",
+      "sigmoid(R_dep)"
+    ],
+    "factor_matrix": {
+      "A": {
+        "ncp": false,
+        "drfc": false
+      },
+      "B": {
+        "ncp": true,
+        "drfc": false
+      },
+      "C": {
+        "ncp": false,
+        "drfc": true
+      },
+      "D": {
+        "ncp": true,
+        "drfc": true
+      }
+    },
+    "option_execution_semantics": "observation_class",
+    "strategy_regime_conditioning": false,
+    "proposal_top_k": 5
+  },
+  "engineering": {
+    "two_arm_parallelism": [
+      [
+        "A",
+        "B"
+      ],
+      [
+        "C",
+        "D"
+      ]
+    ],
+    "default_variant_mode": "serial",
+    "serial_min_free_gpu_mb": 12000,
+    "parallel_debug_min_free_gpu_mb": 20000,
+    "gpu_capacity_lease": true,
+    "requires_distinct_gpu_ids": true,
+    "persistent_tensor_cache": true,
+    "witness_fast_path": true
+  },
+  "validation": {
+    "passed": 147,
+    "skipped": 1,
+    "shell_scripts_bash_n": 109,
+    "compileall": true,
+    "same_local_nounset_findings": 0
+  },
+  "test_roots_read": false
+}

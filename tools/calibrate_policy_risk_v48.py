@@ -539,6 +539,8 @@ def main() -> int:
     ap.add_argument("--component-harm-gap-tolerance", type=float, default=0.05)
     ap.add_argument("--component-harm-hard-tolerance", type=float, default=0.05)
     ap.add_argument("--component-harm-proxy-tolerance", type=float, default=0.05)
+    ap.add_argument("--dep-boundary-aligned", action="store_true")
+    ap.add_argument("--gap-ordinal-only", action="store_true")
     ap.add_argument("--min-opportunity", type=float, default=0.05)
     ap.add_argument("--max-harm-probability", type=float, default=0.80)
     ap.add_argument("--min-score-advantage", type=float, default=0.0)
@@ -607,6 +609,8 @@ def main() -> int:
         gap_discount=args.component_harm_gap_tolerance,
         hard_violation=args.component_harm_hard_tolerance,
         harm_proxy=args.component_harm_proxy_tolerance,
+        deployability_boundary_aligned=bool(args.dep_boundary_aligned),
+        gap_ordinal_only=bool(args.gap_ordinal_only),
     )
     runtime_cfg = {"selection": {"active_bucket_name": "near_contact" if args.bucket == "near" else "contact"}}
     bundle = load_model_bundle(args.checkpoint, runtime_cfg)
@@ -751,14 +755,20 @@ def main() -> int:
                 # Diagnostic only: these coordinates never alter the calibrated rule.
                 # They make v48.50's exact-vs-smooth and upstream-calibration hypotheses
                 # directly falsifiable from development/certificate proposal rows.
+                native_dep_margin = (
+                    float(0.5 - r_native[1])
+                    if bool(component_tolerances.deployability_boundary_aligned)
+                    else float(n_native[1] - r_native[1] - component_tolerances.deployability_gate)
+                )
+                native_gap_margin = (
+                    float(-abs(component_tolerances.gap_discount))
+                    if bool(component_tolerances.gap_ordinal_only)
+                    else float(n_native[3] - r_native[3] - component_tolerances.gap_discount)
+                )
                 native_pair_margins = [
                     float(n_native[0] - r_native[0] - component_tolerances.drs),
-                    float(
-                        n_native[1]
-                        - r_native[1]
-                        - component_tolerances.deployability_gate
-                    ),
-                    float(n_native[3] - r_native[3] - component_tolerances.gap_discount),
+                    native_dep_margin,
+                    native_gap_margin,
                 ]
                 r_exact = float(r_native[0] * r_native[1] * r_native[3])
                 n_exact = float(n_native[0] * n_native[1] * n_native[3])
@@ -776,6 +786,16 @@ def main() -> int:
                 "native_exact_adv_margin": native_exact_adv_margin,
                 "native_smooth_adv_margin": native_smooth_adv_margin,
                 "teacher_adv": teacher_adv,
+                "teacher_candidate_drs": float(r["teacher_drs"]),
+                "teacher_nominal_drs": float(nom["teacher_drs"]),
+                "teacher_candidate_r_dep": float(r["teacher_r_dep"]),
+                "teacher_nominal_r_dep": float(nom["teacher_r_dep"]),
+                "teacher_candidate_gap": float(r["teacher_gap"]),
+                "teacher_nominal_gap": float(nom["teacher_gap"]),
+                "teacher_candidate_hard": float(r["teacher_hard"]),
+                "teacher_nominal_hard": float(nom["teacher_hard"]),
+                "teacher_candidate_harm_proxy": float(r["teacher_harm_proxy"]),
+                "teacher_nominal_harm_proxy": float(nom["teacher_harm_proxy"]),
                 "teacher_component_veto_margin": component_margin,
                 "teacher_component_veto_terms": [float(x) for x in component_terms],
                 "teacher_harmful": bool(component_margin > 0.0) if args.harm_label_mode == "component_veto" else bool(teacher_adv <= -args.negative_gain),

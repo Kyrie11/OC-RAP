@@ -166,6 +166,8 @@ calibrate_variant() {
     --max-hard="${POLICY_METRIC_MAX_HARD:-1.0}"
     --min-nominal-deviation="${POLICY_METRIC_MIN_NOMINAL_DEVIATION:-0.002}"
   )
+  if [[ "${EVIDENCE_DEP_BOUNDARY_ALIGNED:-false}" == "true" ]]; then common+=(--dep-boundary-aligned); fi
+  if [[ "${EVIDENCE_GAP_ORDINAL_ONLY:-false}" == "true" ]]; then common+=(--gap-ordinal-only); fi
   set +e
   # Extract the exact top-k proposal rows separately for audit only.  These
   # per-stratum jobs do not authorize deployment thresholds.

@@ -1,0 +1,125 @@
+# OC-RAP v48.48.1 NCP-DRFC engineering hotfix — 双 GPU 2x2 执行指令
+# 目标：A/B 同时分别跑 GPU0/GPU1；完成后 C/D 同时分别跑 GPU0/GPU1。
+# 默认每个 arm 内 Balanced/Precision 串行，修复 v48.47-C 因同卡/外部进程显存竞争导致的 OOM。
+# 重要：不要重训/删除已经 hash-sealed 的 v48.45 shared source。
+
+set -Eeuo pipefail
+
+# ===== 0. 仅需按本机修改这四项 =====
+export OCRAP_REPO=/home/senzeyu2/code/OC-RAP-v48.48.1
+export BASE_OUT=/home/senzeyu2/code/OC-RAP/runs
+export OCRAP_ROOT=/data0/senzeyu2/dataset/OCRAP
+export GPU0=0
+export GPU1=1
+
+# ===== 1. 固定实验/性能设置 =====
+export PROTOCOL_ROOT="$OCRAP_ROOT/calibration_v48_14_prism_4814"
+export CAL_NEAR="$OCRAP_ROOT/calibration_near_contact"
+export CAL_CONTACT="$OCRAP_ROOT/calibration_contact"
+export CAL_SAFE="$OCRAP_ROOT/calibration_safe"
+export OCRAP_TENSOR_CACHE_DIR="$OCRAP_ROOT/.ocrap_tensor_cache_v4846"
+
+# 科学默认：两个 arm 并行，但一个 arm 内 Balanced/Precision 串行。
+# 这仍然让两张 GPU 同时满负载工作，并避免 v48.47-C 的四进程显存竞争。
+export V4848_VARIANT_MODE=serial
+
+# 每个 arm 启动前必须有足够 free VRAM。A30=24GB 时 serial 默认 12GB 是保守下限。
+# 如果 GPU 被其他作业占用，脚本会等待而不是盲目启动；超时才 RC30。
+export V4848_GPU_MIN_FREE_MB=12000
+export V4848_GPU_WAIT_TIMEOUT_MIN=240
+export V4848_GPU_POLL_SECONDS=30
+export V4848_TELEMETRY_INTERVAL_S=30
+
+# DataLoader / CPU；persistent mmap tensor cache 保持开启。
+export ABLATION_NUM_WORKERS=3
+export ABLATION_PREFETCH_FACTOR=3
+export ABLATION_OMP_NUM_THREADS=1
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
+cd "$OCRAP_REPO"
+
+# ===== 2. 关键 preflight：代码、数据和 shared source =====
+python -m compileall -q src tools
+bash -n scripts/run_v48_48_ncp_ablation_arm.sh
+bash -n scripts/run_v48_48_ncp_2x2_two_gpu.sh
+bash -n scripts/calibrate_v48_36_shared_certificate_pool.sh
+# v48.48.1 hotfix 必须存在：serial worker 用 subshell 隔离函数内部 set -e。
+grep -F '( calibrate_variant balanced "$GPU0" ); S0=$?' scripts/calibrate_v48_36_shared_certificate_pool.sh
+grep -F '( run_variant balanced "$GPU0" ); s0=$?' scripts/run_v48_36_ocaf_dedicated.sh
+pytest -q \
+  tests/test_v48_48_ncp.py \
+  tests/test_v48_48_native_certificate_preservation.py \
+  tests/test_v48_36_3_terminal_state_hotfix.py::test_v48_36_controller_and_calibration_use_same_attempt_namespace \
+  tests/test_v48_36_3_terminal_state_hotfix.py::test_calibration_launcher_fails_closed_without_attempt_id
+
+SOURCE_RUN="$BASE_OUT/ocrap_v48_45_source_rebuild_s7"
+test -s "$SOURCE_RUN/SOURCE_REBUILD_COMPLETE.json"
+test -s "$SOURCE_RUN/candidates/balanced/model_v48_trac_sr/best.pt"
+test -s "$SOURCE_RUN/candidates/precision/model_v48_trac_sr/best.pt"
+
+test -d "$OCRAP_ROOT/calibration_near_contact"
+test -d "$OCRAP_ROOT/calibration_contact"
+test -d "$OCRAP_ROOT/calibration_safe"
+
+# 必须是两张不同的卡；避免两个 arm 被误配到同一个 GPU。
+test "$GPU0" != "$GPU1"
+nvidia-smi --id="$GPU0" --query-gpu=name,memory.total,memory.free --format=csv,noheader
+nvidia-smi --id="$GPU1" --query-gpu=name,memory.total,memory.free --format=csv,noheader
+
+# ===== 3. 正式执行 v48.48 2x2 =====
+# 工程 hotfix：即使第一波有 RC30，也会继续尝试第二波 C/D；但 comparator 仍 fail-closed。
+# A = reference
+# B = Native Certificate Preservation only
+# C = clean DRFC only（补回 v48.47-C engineering fail 缺失的主效应）
+# D/Main = NCP + DRFC
+set +e
+bash scripts/run_v48_48_ncp_2x2_two_gpu.sh 2>&1 | tee "$BASE_OUT/OC-RAP-v48.48-NCP-DRFC-2x2.console.log"
+LAUNCH_RC=${PIPESTATUS[0]}
+set -e
+
+echo "v48.48.1 launcher rc=$LAUNCH_RC"
+
+# ===== 4. 终态审计 =====
+python - <<'PY'
+import json, pathlib, os
+base=pathlib.Path(os.environ['BASE_OUT'])
+runs={
+ 'A':base/'ocrap_v48_48_ncp_ablation_A',
+ 'B':base/'ocrap_v48_48_ncp_ablation_B',
+ 'C':base/'ocrap_v48_48_ncp_ablation_C',
+ 'D':base/'ocrap_v48_48_ncp_main',
+}
+for arm,p in runs.items():
+    f=p/'AUTHORITATIVE_RUN_STATUS.json'
+    if not f.exists():
+        print(arm,'MISSING AUTHORITATIVE_RUN_STATUS',p)
+        continue
+    d=json.loads(f.read_text())
+    print(arm, {
+      'authoritative_exit_code': d.get('authoritative_exit_code'),
+      'pipeline_valid': d.get('pipeline_valid'),
+      'test_roots_read': d.get('test_roots_read'),
+      'attempt_id': d.get('attempt_id'),
+    })
+    sched=p/'V48_48_GPU_SCHEDULER_DECISION.json'
+    if sched.exists():
+        s=json.loads(sched.read_text())
+        print('  scheduler', {k:s.get(k) for k in ['gpu','free_mb_at_launch','variant_mode','preexisting_compute_apps']})
+
+audit=base/'OC-RAP-v48.48-NCP-DRFC-2x2-audit.json'
+print('2x2 audit:', audit, 'exists=', audit.exists())
+if audit.exists():
+    d=json.loads(audit.read_text())
+    print('attribution_valid=', d.get('attribution_contract',{}).get('valid', d.get('valid')))
+PY
+
+# 解释规则：
+# - 任一 arm RC30/其它非0/20：工程失败，禁止算法归因；先修工程。
+# - 四臂均 RC0/20 且 comparator valid：可以做 B-A、C-A、D-B-C+A 因果归因。
+# - RC20 本身是 Natural gate miss，不是 pipeline fail。
+# - 不要在结果回来前修改 top-k、threshold、risk budget、loss weight 或 dataset split。
+
+# ===== 可选：只有确认两张 GPU 均为独占、且 telemetry 显示显存/compute 都有明显余量时 =====
+# export V4848_VARIANT_MODE=parallel
+# export V4848_GPU_MIN_FREE_MB=20000
+# 然后重新做一整轮 clean run。不要同一 2x2 中混用 serial/parallel execution mode。

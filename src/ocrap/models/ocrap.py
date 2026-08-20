@@ -355,6 +355,7 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_physical_student_drs: bool = False,
         direct_recovery_evidence_native_drs_tolerance: float = 0.05,
         direct_recovery_evidence_native_deployability_tolerance: float = 0.05,
+        direct_recovery_evidence_native_dep_boundary_aligned: bool = False,
         direct_recovery_evidence_native_gap_tolerance: float = 0.05,
         direct_recovery_evidence_native_positive_gain: float = 0.015,
         direct_recovery_evidence_calibrator_shared: bool = False,
@@ -574,6 +575,9 @@ class OCRAPModel(nn.Module):
         )
         self.direct_recovery_evidence_native_deployability_tolerance = float(
             max(0.0, direct_recovery_evidence_native_deployability_tolerance)
+        )
+        self.direct_recovery_evidence_native_dep_boundary_aligned = bool(
+            direct_recovery_evidence_native_dep_boundary_aligned
         )
         self.direct_recovery_evidence_native_gap_tolerance = float(
             max(0.0, direct_recovery_evidence_native_gap_tolerance)
@@ -1883,8 +1887,10 @@ class OCRAPModel(nn.Module):
         upgrades this to [boundary-resolved DRS, sigmoid(R_dep), gap-quality].
         Every coordinate is higher-is-safer and only a fixed monotone transform
         of OC-MERO output; no learned proxy or regime-specific routing rule is
-        introduced.  The component convention remains
-        ``nominal - candidate - tolerance``, so positive still means harmful.
+        introduced.  Legacy coordinates use ``nominal-candidate-tolerance``.
+        Under v48.56 DRAC, DEP may instead use the exact absolute
+        ``0.5-sigmoid(R_dep_candidate)`` boundary margin; positive still means
+        harmful in either convention.
         """
         if not self.direct_recovery_evidence_native_certificate_preservation:
             return None, None
@@ -1917,6 +1923,14 @@ class OCRAPModel(nn.Module):
         rel = self._candidate_minus_nominal(safer, group_index, is_nominal)
         tol = rel.new_tensor(tolerances)
         harmful_margins = -rel - tol.unsqueeze(0)
+        if self.direct_recovery_evidence_native_dep_boundary_aligned:
+            # v48.56 DRAC: deployability is boundary-bearing.  The teacher
+            # non-deployable label is R_dep<0, equivalent to sigmoid(R_dep)<0.5.
+            # Use that absolute zero boundary directly instead of nominal-relative
+            # quality degradation.  DRS remains nominal-relative; GAP (if present
+            # in historical margin-complete modes) is unchanged.
+            harmful_margins = harmful_margins.clone()
+            harmful_margins[:, 1] = 0.5 - safer[:, 1]
         logits = harmful_margins / max(self.direct_recovery_evidence_slack_temperature, 1.0e-6)
         return logits, harmful_margins
 

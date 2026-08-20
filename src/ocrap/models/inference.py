@@ -295,6 +295,10 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_evidence_native_deployability_tolerance",
             model_cfg.get("direct_recovery_evidence_native_deployability_tolerance", 0.05),
         )),
+        direct_recovery_evidence_native_dep_boundary_aligned=bool(ckpt.get(
+            "direct_recovery_evidence_native_dep_boundary_aligned",
+            model_cfg.get("direct_recovery_evidence_native_dep_boundary_aligned", False),
+        )),
         direct_recovery_evidence_native_gap_tolerance=float(ckpt.get(
             "direct_recovery_evidence_native_gap_tolerance",
             model_cfg.get("direct_recovery_evidence_native_gap_tolerance", 0.05),
@@ -509,6 +513,9 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     )
     cfg["model"]["direct_recovery_evidence_native_deployability_tolerance"] = float(
         model.direct_recovery_evidence_native_deployability_tolerance
+    )
+    cfg["model"]["direct_recovery_evidence_native_dep_boundary_aligned"] = bool(
+        model.direct_recovery_evidence_native_dep_boundary_aligned
     )
     cfg["model"]["direct_recovery_evidence_native_gap_tolerance"] = float(
         model.direct_recovery_evidence_native_gap_tolerance

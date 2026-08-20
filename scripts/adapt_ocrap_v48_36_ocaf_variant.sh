@@ -64,6 +64,8 @@ python tools/build_v48_32_factor_support_contract.py \
   --gap-tolerance "${COMPONENT_HARM_GAP_TOLERANCE:-0.05}" \
   --hard-tolerance "${COMPONENT_HARM_HARD_TOLERANCE:-0.05}" \
   --proxy-tolerance "${COMPONENT_HARM_PROXY_TOLERANCE:-0.05}" \
+  $([[ "${EVIDENCE_DEP_BOUNDARY_ALIGNED:-false}" == "true" ]] && printf %s "--dep-boundary-aligned") \
+  $([[ "${EVIDENCE_GAP_ORDINAL_ONLY:-false}" == "true" ]] && printf %s "--gap-ordinal-only") \
   --require-readable-samples
 # shellcheck disable=SC1090
 source "$SUPPORT_ENV"
@@ -216,6 +218,7 @@ factor_cache_contract_args=(
   --setting "native_boundary_complete_advantage_preservation=${EVIDENCE_NATIVE_BOUNDARY_COMPLETE_ADVANTAGE_PRESERVATION:-false}"
   --setting "native_physical_student_drs=${EVIDENCE_PHYSICAL_STUDENT_DRS:-false}"
   --setting "native_gap_tolerance=${EVIDENCE_NATIVE_GAP_TOLERANCE:-0.05}"
+  --setting "native_dep_boundary_aligned=${EVIDENCE_DEP_BOUNDARY_ALIGNED:-false}"
   --setting "native_positive_gain=${EVIDENCE_NATIVE_POSITIVE_GAIN:-${FACTOR_RECOVERY_ADVANTAGE_POSITIVE_GAIN:-0.015}}"
   --setting "sowr_margin_witness=${V4845_SOWR_MARGIN_WITNESS:-0}"
   --setting "sowr_obs_kernel=${V4845_SOWR_OBS_KERNEL:-0}"
@@ -230,6 +233,8 @@ factor_cache_contract_args=(
   --setting "v4852_physical_teacher_sign_alignment=${V4852_PHYSICAL_TEACHER_SIGN_ALIGNMENT:-false}"
   --setting "v4853_physical_student_sign_alignment=${V4853_PHYSICAL_STUDENT_SIGN_ALIGNMENT:-false}"
   --setting "v4854_invariant_physical_boundary_distillation=${V4854_INVARIANT_PHYSICAL_BOUNDARY_DISTILLATION:-false}"
+  --setting "v4856_dep_boundary_aligned=${EVIDENCE_DEP_BOUNDARY_ALIGNED:-false}"
+  --setting "v4856_gap_ordinal_only=${EVIDENCE_GAP_ORDINAL_ONLY:-false}"
   --setting "training_option_execution_semantics=$OPTION_EXECUTION_SEMANTICS"
   --setting "sowr_epochs=${SOWR_EPOCHS:-8}"
   --setting "sowr_learning_rate=${SOWR_LR:-0.00005}"

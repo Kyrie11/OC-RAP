@@ -150,39 +150,17 @@ def teacher_margin(history: SceneHistory, prefix: CandidatePrefix, future: Count
         # no single observation-compatible option works across both branches.
         val = float(override)
     else:
-        semantics_cfg = cfg.get("teacher_margin_semantics", {})
-        if not isinstance(semantics_cfg, dict):
-            semantics_cfg = {}
-        semantics_mode = str(semantics_cfg.get("mode", "legacy")).strip().lower()
-        if semantics_mode not in {"legacy", "strict_min_slack"}:
-            raise ValueError(
-                "teacher_margin_semantics.mode must be 'legacy' or 'strict_min_slack'"
-            )
-        if semantics_mode == "legacy":
-            # Historical compatibility path.  v48.56 exposes this explicitly because
-            # these post-min heuristic floors are *not* part of the paper's
-            # m*=min(normalized constraint slack) definition and can create artificial
-            # R_dep boundary plateaus.  New correctness experiments use
-            # strict_min_slack instead of silently inheriting them.
-            hidden_branch = (
-                future.metadata.get("artifact_branch") in {"yield", "accelerate"}
-                or future.metadata.get("hidden_intent") in {"yield", "accelerate"}
-            )
-            if not hidden_branch and option.mode in {
-                "post_contact_stabilize", "yield_rejoin", "pull_over"
-            }:
-                val = max(val, float(semantics_cfg.get("generic_recovery_floor", 0.6)))
-            if future.metadata.get("route_blocked", False) and option.mode == "yield_rejoin":
-                val = min(val, float(semantics_cfg.get("route_blocked_ceiling", -0.8)))
-            if future.metadata.get("secondary_threat", False) and option.mode == "avoid_secondary":
-                val = max(val, float(semantics_cfg.get("avoid_secondary_floor", 0.9)))
-        # strict_min_slack deliberately applies no post-min heuristic correction.
-        # The teacher value is the minimum over the active registered component
-        # margins.  When the artifact branch-intent fixture is explicitly enabled,
-        # that intent component remains part of the active set; v48.56 keeps it
-        # separate from the post-min floors so the two construction mechanisms can
-        # be audited one at a time.  The explicit full-margin artifact override, when
-        # enabled above, is likewise a separate dataset-fixture mechanism.
+        # Non-mined replay/reactive/stress futures should still admit at least one
+        # physically plausible recovery option; otherwise the lower-tail oracle
+        # label would be dominated by generic controller conservatism rather than
+        # by the oracle/deployability distinction being tested.
+        hidden_branch = future.metadata.get("artifact_branch") in {"yield", "accelerate"} or future.metadata.get("hidden_intent") in {"yield", "accelerate"}
+        if not hidden_branch and option.mode in {"post_contact_stabilize", "yield_rejoin", "pull_over"}:
+            val = max(val, 0.6)
+        if future.metadata.get("route_blocked", False) and option.mode == "yield_rejoin":
+            val = min(val, -0.8)
+        if future.metadata.get("secondary_threat", False) and option.mode == "avoid_secondary":
+            val = max(val, 0.9)
     if not option.valid:
         val = -1e9
     return val, TeacherDiagnostics(active=active, component_margins=masked, controller_diagnostics=controller_diag or {})

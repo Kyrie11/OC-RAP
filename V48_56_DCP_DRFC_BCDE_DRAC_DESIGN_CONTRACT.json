@@ -1,0 +1,93 @@
+{
+  "arms": {
+    "A": {
+      "X": false,
+      "Y": false
+    },
+    "B": {
+      "X": true,
+      "Y": false
+    },
+    "C": {
+      "X": false,
+      "Y": true
+    },
+    "D": {
+      "X": true,
+      "Y": true
+    }
+  },
+  "calibration_protocol": {
+    "rebuild_dataset_now": false,
+    "seed": 4814,
+    "source_roots": [
+      "/data0/senzeyu2/dataset/OCRAP/calibration_safe",
+      "/data0/senzeyu2/dataset/OCRAP/calibration_near_contact",
+      "/data0/senzeyu2/dataset/OCRAP/calibration_contact"
+    ],
+    "split": "scene-disjoint ~45% adaptation-train / 15% adaptation-dev / 40% certificate-pool for near/contact; Safe direct",
+    "test_roots_read": false,
+    "workspace": "/data0/senzeyu2/dataset/OCRAP/calibration_v48_14_prism_4814",
+    "workspace_note": "historical name; deterministically rebuilt/sealed from current calibration roots"
+  },
+  "causal_order": [
+    "B-A",
+    "C-A",
+    "D-B-C+A"
+  ],
+  "created_date": "2026-08-20",
+  "dominant_bottleneck": "teacher-to-deployment component semantic contract mismatch, especially nominal-relative DEP vs material R_dep=0 and GAP double-use as PCD quality plus independent hard veto",
+  "explicitly_off": [
+    "TCBC canonicalization",
+    "physical-margin distillation/IPBD",
+    "PSA",
+    "CSE",
+    "physical student DRS",
+    "root-logit recalibration",
+    "regime routing",
+    "new thresholds",
+    "top-k expansion",
+    "candidate expansion",
+    "resampling"
+  ],
+  "factors": {
+    "X": {
+      "deployed_native_alignment": true,
+      "name": "Deployability Zero-Boundary Alignment",
+      "off": "sigmoid(R_dep_nom)-sigmoid(R_dep_cand)-0.05",
+      "on": "0.5-sigmoid(R_dep_cand), positive iff R_dep<0"
+    },
+    "Y": {
+      "deployed_gap_hard_veto": false,
+      "name": "GAP Ordinal-Only Role",
+      "off": "exp(-G_nom)-exp(-G_cand)-0.05 participates in non-compensatory hard veto",
+      "on": "GAP remains in PCD/native advantage/order but reliability=0 for independent hard veto"
+    }
+  },
+  "fixed_external_label_readouts": {
+    "drac_v48_56": "absolute R_dep=0 DEP + GAP ordinal-only",
+    "legacy_v48_55": "nominal-relative DEP + GAP hard veto",
+    "primary_for_mechanism_claims": "drac_v48_56"
+  },
+  "fresh_A_reason": "teacher/component semantics and proposal-row evaluation schema are experimental; fixed-label comparator requires raw teacher coordinates from every arm",
+  "fresh_A_required": true,
+  "go_stop": {
+    "go_evidence_centering": "Only if D improves Near and Contact fixed-DRAC component/source geometry and safety/ranking Pareto while opportunity/pred_adv remains systematically negative.",
+    "safe_postgate": "Only D/Main authoritative RC0 authorizes paired Safe non-inferiority + stress/closed-loop.",
+    "stop_component_construction": "If D fails fixed-DRAC Pareto, stop component-construction family and enter predicted-root uncertainty/source decomposition; do not directly reopen root-logit recalibration."
+  },
+  "name": "Decision-Role Aligned Certificate",
+  "reference_core": [
+    "observation-class execution",
+    "q-hard BC-FC material sign",
+    "smooth-NAP local order",
+    "native certificate preservation",
+    "native advantage preservation",
+    "proposal_top_k=5",
+    "shared deployment rule"
+  ],
+  "research_question": "Can a single regime-agnostic planner preserve certificate decision roles (boundary-bearing vs ordinal) from teacher construction to deployed veto and remove cross-severity semantic mismatch without regime routing?",
+  "strategy_regime_conditioning": false,
+  "test_roots_read": false,
+  "version": "v48.56-DCP-DRFC-BCDE-DRAC"
+}

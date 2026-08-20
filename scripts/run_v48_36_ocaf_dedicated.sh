@@ -381,6 +381,8 @@ index_contract_args=(
   --component-harm-hard-tolerance "$COMPONENT_HARM_HARD_TOLERANCE"
   --component-harm-proxy-tolerance "$COMPONENT_HARM_PROXY_TOLERANCE"
 )
+if [[ "${EVIDENCE_DEP_BOUNDARY_ALIGNED:-false}" == "true" ]]; then index_contract_args+=(--dep-boundary-aligned); fi
+if [[ "${EVIDENCE_GAP_ORDINAL_ONLY:-false}" == "true" ]]; then index_contract_args+=(--gap-ordinal-only); fi
 val_index_contract_args=(
   --summary "$VAL_GROUP_SUMMARY"
   --expected-dataset "$DEV_NEAR,$DEV_CONTACT"
@@ -393,6 +395,8 @@ val_index_contract_args=(
   --component-harm-hard-tolerance "$COMPONENT_HARM_HARD_TOLERANCE"
   --component-harm-proxy-tolerance "$COMPONENT_HARM_PROXY_TOLERANCE"
 )
+if [[ "${EVIDENCE_DEP_BOUNDARY_ALIGNED:-false}" == "true" ]]; then val_index_contract_args+=(--dep-boundary-aligned); fi
+if [[ "${EVIDENCE_GAP_ORDINAL_ONLY:-false}" == "true" ]]; then val_index_contract_args+=(--gap-ordinal-only); fi
 
 rebuild_index="${REBUILD_ADAPT_INDEX:-0}"
 if [[ "$rebuild_index" != 1 && -f "$GROUP_INDEX" && -f "$GROUP_SUMMARY" ]]; then
@@ -418,6 +422,10 @@ else
   rebuild_index=1
 fi
 
+V4856_TEACHER_ROLE_ARGS=()
+if [[ "${EVIDENCE_DEP_BOUNDARY_ALIGNED:-false}" == "true" ]]; then V4856_TEACHER_ROLE_ARGS+=(--dep-boundary-aligned); fi
+if [[ "${EVIDENCE_GAP_ORDINAL_ONLY:-false}" == "true" ]]; then V4856_TEACHER_ROLE_ARGS+=(--gap-ordinal-only); fi
+
 if [[ "$rebuild_index" == 1 ]]; then
   rm -f "$GROUP_INDEX" "$GROUP_SUMMARY"
   set +e
@@ -433,6 +441,7 @@ if [[ "$rebuild_index" == 1 ]]; then
     --component-harm-gap-tolerance "$COMPONENT_HARM_GAP_TOLERANCE" \
     --component-harm-hard-tolerance "$COMPONENT_HARM_HARD_TOLERANCE" \
     --component-harm-proxy-tolerance "$COMPONENT_HARM_PROXY_TOLERANCE" \
+    "${V4856_TEACHER_ROLE_ARGS[@]}" \
     >"$OUTPUTDIR/logs/build_adapt_teacher_index.log" 2>&1
   index_rc=$?
   set -e
@@ -542,6 +551,7 @@ if [[ "$rebuild_val_index" == 1 ]]; then
     --component-harm-gap-tolerance "$COMPONENT_HARM_GAP_TOLERANCE" \
     --component-harm-hard-tolerance "$COMPONENT_HARM_HARD_TOLERANCE" \
     --component-harm-proxy-tolerance "$COMPONENT_HARM_PROXY_TOLERANCE" \
+    "${V4856_TEACHER_ROLE_ARGS[@]}" \
     >"$OUTPUTDIR/logs/build_adapt_dev_teacher_index.log" 2>&1
   val_index_rc=$?
   set -e
@@ -871,6 +881,27 @@ if [[ "${V4855_REQUIRE_TCBC_CONTRACT:-0}" == 1 ]]; then
     set -e
     if [[ "$tcbc_contract_rc" != 0 ]]; then
       write_pipeline_failure v48_55_tcbc_contract "$tcbc_contract_rc" "$OUTPUTDIR/candidates/$variant/V48_55_TCBC_CONTRACT.json" "$s0" "$s1"
+      exit 30
+    fi
+  done
+fi
+
+# v48.56 fail-closed Decision-Role Aligned Certificate preflight.
+if [[ "${V4856_REQUIRE_DRAC_CONTRACT:-0}" == 1 ]]; then
+  for variant in balanced precision; do
+    [[ "$variant" == balanced && "$s0" != 0 ]] && continue
+    [[ "$variant" == precision && "$s1" != 0 ]] && continue
+    set +e
+    python tools/check_v48_56_drac_contract.py \
+      --run "$OUTPUTDIR/candidates/$variant" \
+      --expect-dep-boundary-aligned "${EVIDENCE_DEP_BOUNDARY_ALIGNED:-false}" \
+      --expect-gap-ordinal-only "${EVIDENCE_GAP_ORDINAL_ONLY:-false}" \
+      --output "$OUTPUTDIR/candidates/$variant/V48_56_DRAC_CONTRACT.json" \
+      >"$OUTPUTDIR/logs/v48_56_drac_contract_${variant}.log" 2>&1
+    drac_contract_rc=$?
+    set -e
+    if [[ "$drac_contract_rc" != 0 ]]; then
+      write_pipeline_failure v48_56_drac_contract "$drac_contract_rc" "$OUTPUTDIR/candidates/$variant/V48_56_DRAC_CONTRACT.json" "$s0" "$s1"
       exit 30
     fi
   done

@@ -96,6 +96,8 @@ def _contract_audit(args: argparse.Namespace, summary: dict[str, Any]) -> dict[s
             "gap_discount": float(args.component_harm_gap_tolerance),
             "hard_violation": float(args.component_harm_hard_tolerance),
             "harm_proxy": float(args.component_harm_proxy_tolerance),
+            "deployability_boundary_aligned": bool(args.dep_boundary_aligned),
+            "gap_ordinal_only": bool(args.gap_ordinal_only),
         },
     }
     failures: list[str] = []
@@ -111,7 +113,10 @@ def _contract_audit(args: argparse.Namespace, summary: dict[str, Any]) -> dict[s
         failures.append("index contract mismatch: top_m")
     actual_tol = actual.get("component_harm_tolerances") or {}
     for key, value in expected["component_harm_tolerances"].items():
-        if not _float_equal(actual_tol.get(key), value):
+        if isinstance(value, bool):
+            if bool(actual_tol.get(key, False)) != value:
+                failures.append(f"index contract mismatch: component_harm_tolerances.{key}")
+        elif not _float_equal(actual_tol.get(key), value):
             failures.append(f"index contract mismatch: component_harm_tolerances.{key}")
     return {"valid": not failures, "expected": expected, "actual": actual, "failures": failures}
 
@@ -132,6 +137,8 @@ def main() -> int:
     ap.add_argument("--component-harm-gap-tolerance", type=float, default=0.05)
     ap.add_argument("--component-harm-hard-tolerance", type=float, default=0.05)
     ap.add_argument("--component-harm-proxy-tolerance", type=float, default=0.05)
+    ap.add_argument("--dep-boundary-aligned", action="store_true")
+    ap.add_argument("--gap-ordinal-only", action="store_true")
     args = ap.parse_args()
     try:
         summary = json.loads(args.summary.read_text(encoding="utf-8"))

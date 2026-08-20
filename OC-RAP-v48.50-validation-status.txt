@@ -1,0 +1,51 @@
+OC-RAP v48.50.1 DCP-DRFC-DE ENGINEERING HOTFIX VALIDATION STATUS
+Date: 2026-08-18
+
+Uploaded v48.50 A/B/C/D failure audit:
+- All four arms: authoritative RC=30, pipeline_valid=false, stage=certificate.
+- All Balanced/Precision x Near/Contact diagnostic tracebacks converge to:
+  TypeError: 'ComponentVetoTolerances' object is not subscriptable
+  in tools/calibrate_policy_risk_v48.py native-certificate diagnostics.
+- No second Python traceback signature found in the uploaded runs.
+- Current uploaded results are NOT valid for algorithm attribution.
+
+Fix:
+- Replaced component_tolerances[0/1/2] with named dataclass fields:
+  .drs / .deployability_gate / .gap_discount.
+- Added v48.50 regression guard.
+- No algorithm/factor/data/threshold/risk-budget/calibration/output-directory changes.
+
+Final focused regression after hotfix:
+- v48.47 / v48.48 native-NCP / v48.49 DCP / v48.50 DE tests
+RESULT: 36 passed, 9 warnings.
+
+Inference-only performance optimization:
+- predict_samples / predict_sample: torch.no_grad -> torch.inference_mode.
+- Deterministic synthetic comparison against pre-optimization source:
+  r_dep/r_orc/gap/q/root_probs/c_star/margins/direct value/std are bitwise identical;
+  max absolute difference = 0 for every compared field.
+- Focused closed-loop inference hotpath test: 1 passed.
+
+Static checks after final code changes:
+- python -m compileall -q src tools tests: PASS
+- bash -n over all 115 repository *.sh files: PASS
+- bash -n OC-RAP-v48.50-DCP-DRFC-DE-two-GPU-run-commands-ZH.txt: PASS
+
+Fail-closed post-gate wrapper synthetic validation after final code changes:
+- authoritative RC=20: blocked; NEXT_COMMANDS.txt not executed.
+- authoritative RC=0 + valid D contract + generated NEXT_COMMANDS.txt: authorized and executed.
+RESULT: PASS.
+
+Additional active-path audit already completed in this session before the inference-only decorator optimization:
+- terminal/stage-isolation + v48.47-v48.50 critical suites: 93 passed, 1 skipped.
+- The inference-only optimization is separately covered by bitwise-equivalence + hotpath tests above.
+
+Known historical-test limitation / what is NOT claimed:
+- A combined slow/historical pytest run can exceed the current 120s tool execution window.
+- The repository also retains legacy missing-script/package-expectation debt outside the v48.50 active path.
+- This delivery does NOT claim a full historical test-suite pass.
+
+Environment limitation:
+- Real /data0 datasets and the user's A30 runtime are unavailable here.
+- No real v48.50 GPU training/calibration end-to-end result is claimed.
+- Delete old RC30 output directories and rerun the unchanged v48.50 two-GPU command file on the target machine.

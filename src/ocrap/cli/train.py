@@ -395,6 +395,8 @@ def _direct_value_loss_from_outputs(
         ordinal_evidence_factorized_harm_gap_tolerance=float(tcfg.get("direct_value_ordinal_evidence_factorized_harm_gap_tolerance", 0.05)),
         ordinal_evidence_factorized_harm_hard_tolerance=float(tcfg.get("direct_value_ordinal_evidence_factorized_harm_hard_tolerance", 0.05)),
         ordinal_evidence_factorized_harm_proxy_tolerance=float(tcfg.get("direct_value_ordinal_evidence_factorized_harm_proxy_tolerance", 0.05)),
+        ordinal_evidence_dep_boundary_aligned=bool(tcfg.get("direct_value_ordinal_evidence_dep_boundary_aligned", False)),
+        ordinal_evidence_gap_ordinal_only=bool(tcfg.get("direct_value_ordinal_evidence_gap_ordinal_only", False)),
         ordinal_evidence_component_tail_weight=float(tcfg.get("direct_value_ordinal_evidence_component_tail_weight", 0.0)),
         ordinal_evidence_component_margin_regression_weight=float(
             tcfg.get("direct_value_ordinal_evidence_component_margin_regression_weight", 0.0)
@@ -643,6 +645,8 @@ def _direct_policy_batch_stats(
         gap_discount=float(tcfg.get("direct_value_ordinal_evidence_factorized_harm_gap_tolerance", 0.05)),
         hard_violation=float(tcfg.get("direct_value_ordinal_evidence_factorized_harm_hard_tolerance", 0.05)),
         harm_proxy=float(tcfg.get("direct_value_ordinal_evidence_factorized_harm_proxy_tolerance", 0.05)),
+        deployability_boundary_aligned=bool(tcfg.get("direct_value_ordinal_evidence_dep_boundary_aligned", False)),
+        gap_ordinal_only=bool(tcfg.get("direct_value_ordinal_evidence_gap_ordinal_only", False)),
     )
     bid = batch.get("bucket_id", torch.full_like(batch["time_index"], 3)).reshape(-1)
     sh = batch["scene_hash"].reshape(-1)
@@ -3019,6 +3023,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_evidence_native_deployability_tolerance=float(
             model_cfg.get("direct_recovery_evidence_native_deployability_tolerance", 0.05)
         ),
+        direct_recovery_evidence_native_dep_boundary_aligned=bool(
+            model_cfg.get("direct_recovery_evidence_native_dep_boundary_aligned", False)
+        ),
         direct_recovery_evidence_native_gap_tolerance=float(
             model_cfg.get("direct_recovery_evidence_native_gap_tolerance", 0.05)
         ),
@@ -3468,6 +3475,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             ),
             "direct_recovery_evidence_native_deployability_tolerance": float(
                 model_cfg.get("direct_recovery_evidence_native_deployability_tolerance", 0.05)
+            ),
+            "direct_recovery_evidence_native_dep_boundary_aligned": bool(
+                model_cfg.get("direct_recovery_evidence_native_dep_boundary_aligned", False)
             ),
             "direct_recovery_evidence_native_gap_tolerance": float(
                 model_cfg.get("direct_recovery_evidence_native_gap_tolerance", 0.05)

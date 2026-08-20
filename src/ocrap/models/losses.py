@@ -2406,6 +2406,8 @@ def direct_uncertainty_recovery_value_loss(
     ordinal_evidence_factorized_harm_gap_tolerance: float = 0.05,
     ordinal_evidence_factorized_harm_hard_tolerance: float = 0.05,
     ordinal_evidence_factorized_harm_proxy_tolerance: float = 0.05,
+    ordinal_evidence_dep_boundary_aligned: bool = False,
+    ordinal_evidence_gap_ordinal_only: bool = False,
     ordinal_evidence_component_tail_weight: float = 0.0,
     ordinal_evidence_component_margin_regression_weight: float = 0.0,
     ordinal_evidence_component_margin_target_mode: str = "raw",
@@ -2645,6 +2647,8 @@ def direct_uncertainty_recovery_value_loss(
                 gap_discount=float(ordinal_evidence_factorized_harm_gap_tolerance),
                 hard_violation=float(ordinal_evidence_factorized_harm_hard_tolerance),
                 harm_proxy=float(ordinal_evidence_factorized_harm_proxy_tolerance),
+                deployability_boundary_aligned=bool(ordinal_evidence_dep_boundary_aligned),
+                gap_ordinal_only=bool(ordinal_evidence_gap_ordinal_only),
             )
             factorized_component_margins = component_veto_terms_torch(
                 candidate_drs=teacher_drs[recs],

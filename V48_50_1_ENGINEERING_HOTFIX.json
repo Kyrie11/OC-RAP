@@ -1,0 +1,33 @@
+{
+  "schema": "v48.50.1-engineering-hotfix-v1",
+  "date": "2026-08-18",
+  "algorithm_changed": false,
+  "experiment_design_changed": false,
+  "output_directories_changed": false,
+  "uploaded_results_attributable": false,
+  "uploaded_failure": {
+    "arms": ["A", "B", "C", "D"],
+    "authoritative_exit_code": 30,
+    "pipeline_valid": false,
+    "stage": "certificate",
+    "exception": "TypeError: 'ComponentVetoTolerances' object is not subscriptable",
+    "file": "tools/calibrate_policy_risk_v48.py",
+    "cause": "v48.50 native-certificate diagnostic indexed frozen dataclass ComponentVetoTolerances as a tuple"
+  },
+  "fix": {
+    "drs_tolerance": "component_tolerances.drs",
+    "deployability_tolerance": "component_tolerances.deployability_gate",
+    "gap_tolerance": "component_tolerances.gap_discount",
+    "regression_guard_added": true
+  },
+  "performance_optimization": {
+    "scope": ["predict_samples", "predict_sample"],
+    "change": "torch.no_grad -> torch.inference_mode",
+    "mathematical_semantics_changed": false,
+    "synthetic_bitwise_equivalence": true,
+    "max_abs_diff": 0.0,
+    "gpu_speedup_claimed": false
+  },
+  "regime_conditioned_policy": false,
+  "rerun_command_file": "OC-RAP-v48.50-DCP-DRFC-DE-two-GPU-run-commands-ZH.txt"
+}

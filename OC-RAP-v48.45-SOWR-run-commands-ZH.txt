@@ -1,0 +1,118 @@
+# OC-RAP v48.45 SOWR — 下一轮执行指令（A/B/C/D，双 GPU）
+# 目标：验证 frozen shared-option recovery witness 是否是 v48.44 的统一瓶颈。
+# A/B/C/D 全部保持 v48.44-D dual ROCT + top-k=5 + shared continuous rule + 原风险预算不变。
+# 唯一 2x2 因子：B=root probability+margin witness；C=observation kernel；D=两者。
+# 算法绝不读取 Safe/Near/Contact regime id；regime 只作为数据分层/审计切片。
+
+set -Eeuo pipefail
+cd /home/senzeyu2/code/OC-RAP-v48.45-SOWR
+export OCRAP_REPO="$PWD"
+export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
+BASE_OUT=/home/senzeyu2/code/OC-RAP/runs
+mkdir -p "$BASE_OUT"
+
+# 0) preflight，不读取 held-out test roots。
+python -m compileall -q src tools tests
+for f in scripts/*.sh; do bash -n "$f"; done
+PYTHONPATH="$PWD/src" pytest -q \
+  tests/test_v48_36_ocaf.py \
+  tests/test_v48_36_2_stage_transfer_hotfix.py \
+  tests/test_v48_36_3_terminal_state_hotfix.py \
+  tests/test_v48_36_4_idempotent_terminal_state.py \
+  tests/test_v48_37_haf.py \
+  tests/test_v48_38_rfr.py \
+  tests/test_v48_39_drfr.py \
+  tests/test_v48_40_dcfr.py \
+  tests/test_v48_41_fcfr.py \
+  tests/test_v48_42_hpfr.py \
+  tests/test_v48_42_1_metric_provenance_hotfix.py \
+  tests/test_v48_43_poet.py \
+  tests/test_v48_44_roct.py \
+  tests/test_v48_45_sowr.py
+
+# 1) 四个 arm 并行在两张 GPU 上跑。每个 arm 内 Balanced->GPU0、Precision->GPU1。
+# MAX_PARALLEL_ARMS=4 时每张 GPU 最多同时 4 个训练进程。
+# 显存不足只改 MAX_PARALLEL_ARMS=2，不要改 batch/loss/gate/top-k/ROCT scale。
+GPU0=0 GPU1=1 \
+BASE_OUT="$BASE_OUT" \
+MAX_PARALLEL_ARMS=4 \
+ABLATION_OMP_NUM_THREADS=1 \
+ABLATION_NUM_WORKERS=1 \
+ABLATION_PREFETCH_FACTOR=2 \
+bash scripts/run_v48_45_sowr_2x2_parallel.sh
+LAUNCHER_RC=$?
+echo "launcher_rc=$LAUNCHER_RC"
+
+# OOM fallback：
+# GPU0=0 GPU1=1 BASE_OUT="$BASE_OUT" MAX_PARALLEL_ARMS=2 \
+# ABLATION_OMP_NUM_THREADS=1 ABLATION_NUM_WORKERS=1 ABLATION_PREFETCH_FACTOR=2 \
+# bash scripts/run_v48_45_sowr_2x2_parallel.sh
+
+A_OUT="$BASE_OUT/ocrap_v48_45_sowr_ablation_A"
+B_OUT="$BASE_OUT/ocrap_v48_45_sowr_ablation_B"
+C_OUT="$BASE_OUT/ocrap_v48_45_sowr_ablation_C"
+D_OUT="$BASE_OUT/ocrap_v48_45_sowr_main"
+
+# 2) 只认 AUTHORITATIVE_RUN_STATUS.json。
+for RUN in "$A_OUT" "$B_OUT" "$C_OUT" "$D_OUT"; do
+  echo "===== $RUN ====="
+  python -m json.tool "$RUN/AUTHORITATIVE_RUN_STATUS.json"
+done
+# RC=30 工程/协议失败：禁止算法归因。
+# RC=20 有效 Natural-gate failure：允许 2x2 归因，但不读 held-out test。
+# RC=0 gate 通过：仍先完成 2x2，只有 D/Main 可执行 controller 授权 NEXT_COMMANDS。
+
+# 3) development/certificate-only 对比。
+python tools/compare_v48_45_sowr_2x2.py \
+  --a "$A_OUT" --b "$B_OUT" --c "$C_OUT" --d "$D_OUT" \
+  --output "$BASE_OUT/ocrap_v48_45_sowr_2x2_comparison.json" \
+  > "$BASE_OUT/ocrap_v48_45_sowr_2x2_comparison.stdout.json"
+for RUN in "$A_OUT" "$B_OUT" "$C_OUT" "$D_OUT"; do
+  python tools/summarize_v48_44_roct_frontier_diagnostics.py \
+    --outputdir "$RUN" --variant precision \
+    --output "$RUN/V48_45_PRECISION_FRONTIER_DIAGNOSTICS.json" > /dev/null
+done
+
+# 4) 预注册解释规则：实验后不要换指标。
+# A：v48.44-D dual-ROCT reference，无 SOWR。
+# B：A + root_logit_head + margin_head。
+# C：A + obs_embed_head。
+# D：A + B + C。downstream selector/ROCT/gate/top-k 完全相同。
+#
+# B / Near 强 go：
+#   - cert deployability safe-positive false-veto <=12/18；
+#   - dep harmful-vs-safe-positive AUC >=0.56；
+#   - harmful false-safe / harmful-selected UCB 不反弹；
+#   - SOWR_COMPLETE: margin/option_q/option_best val loss 相对 initial 有一致改善。
+#   仅训练 loss 降或仅 false-veto 平移，不算 frontier rotation。
+#
+# C / Contact 强 go：
+#   - dev safe-positive pred_adv>=0 从 0/37 变为非零；强信号 >=25%；
+#   - candidate/proposal safe-positive AUC 相对 A 约 +0.05；
+#   - cert recall 向 >=0.20；harmful-selected UCB 不恶化；
+#   - 仅 loss_obs 下降不算算法成功。
+#
+# D / shared-rule 强 go：
+#   - 同一 shared rule 下 Near/Contact dev positive_selected 都 >0；
+#   - fit harmful-selected UCB <=0.22，verify <=0.25，禁止放宽预算；
+#   - 保留 B 的 Near frontier signal 和 C 的 Contact sign signal；
+#   - Near dev->certificate deployability generalization gap 显著收窄。
+#
+# 内部 CCF-A readiness（非 venue 官方阈值）：
+#   Near verify recall 0.25-0.33、harmful UCB <=0.25；min-TTC p05 +>=0.2s 和/或 clearance +>=0.1m（带 CI）；NUP loss <=2-3%。
+#   Contact verify recall 0.20-0.30、harmful UCB <=0.25；secondary collision absolute >=2pp reduction；post-contact TTC +>=0.2s；stable-stop/rejoin 改善且 yaw non-inferior。
+#
+# 若 B/C/D 全失败：禁止加大 ROCT scale/width、松 harm budget、dense threshold、top-k expansion、oversampling、generic rank/harm residual、regime routing。
+# 下一步转 recovery-option set/continuous parameter coverage、margin teacher calibration、option-resolved witness identifiability。
+
+# 5) 只有 D/Main RC=0 才进入 controller 授权后续。
+if python - "$D_OUT/AUTHORITATIVE_RUN_STATUS.json" <<'PY_NEXT'
+import json,sys
+x=json.load(open(sys.argv[1]))
+raise SystemExit(0 if int(x.get('authoritative_exit_code',-1)) == 0 else 1)
+PY_NEXT
+then
+  echo "D/Main RC=0. 只执行 controller-authorized next commands:"
+  cat "$D_OUT/NEXT_COMMANDS.txt"
+  # 人工确认资源/路径后：bash "$D_OUT/NEXT_COMMANDS.txt"
+fi

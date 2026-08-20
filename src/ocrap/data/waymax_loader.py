@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import functools
 import hashlib
-import inspect
 import os
 import re
 from typing import Any, Iterator
@@ -255,142 +254,6 @@ def _make_dataset_config(patterns: Any, cfg: dict):
     )
 
 
-def _raw_scan_plan(cfg: dict, max_scenarios: int | None) -> dict[str, int | None]:
-    """Return deterministic raw-record scan controls for one Waymax worker.
-
-    The desired global source indices are
-
-    ``start + worker + n * stride`` for ``n in [0, max_scenarios)``.
-
-    Keeping this arithmetic in a small pure helper makes it possible to test the
-    optimized TensorFlow prefilter without importing Waymax/TensorFlow in unit
-    tests.
-    """
-    start = max(0, int(cfg.get("scenario_start_index", 0)))
-    stride = max(1, int(cfg.get("scenario_stride", 1)))
-    worker = int(cfg.get("scenario_worker_index", 0)) % stride
-    limit = None if max_scenarios is None else max(0, int(max_scenarios))
-    first = start + worker
-    last = None if limit is None or limit <= 0 else first + (limit - 1) * stride
-    return {
-        "start": start,
-        "stride": stride,
-        "worker": worker,
-        "limit": limit,
-        "first_global_index": first,
-        "last_global_index": last,
-    }
-
-
-def _tf_examples_raw_dataset(dataset_cfg: Any, wx_dataloader: Any):
-    """Build Waymax's deterministic TFRecord stream without WOMD parsing.
-
-    Waymax's public ``get_data_generator`` maps ``preprocess_fn`` over the whole
-    stream *before* Python can apply ``scenario_start_index``.  For a reserved
-    start such as 11000 that means every worker parses/converts >11k scenarios
-    that are immediately discarded.  Here we reuse Waymax's own raw dataset
-    construction with an identity preprocess, then apply skip/shard/take before
-    the expensive WOMD parser.
-
-    The implementation filters keyword arguments against the installed Waymax
-    signature so it remains compatible with nearby Waymax revisions.
-    """
-    try:
-        from waymax.dataloader import dataloader_utils as wx_dataloader_utils  # type: ignore
-    except Exception:
-        wx_dataloader_utils = getattr(wx_dataloader, "dataloader_utils", None)
-    if wx_dataloader_utils is None or not hasattr(wx_dataloader_utils, "tf_examples_dataset"):
-        raise RuntimeError("installed Waymax does not expose dataloader_utils.tf_examples_dataset")
-
-    fn = wx_dataloader_utils.tf_examples_dataset
-    kwargs = {
-        "path": dataset_cfg.path,
-        "data_format": dataset_cfg.data_format,
-        # Identity preprocessing keeps the stream as serialized TFExamples.
-        "preprocess_fn": lambda serialized: serialized,
-        "shuffle_seed": getattr(dataset_cfg, "shuffle_seed", None),
-        "shuffle_buffer_size": getattr(dataset_cfg, "shuffle_buffer_size", 100),
-        "repeat": getattr(dataset_cfg, "repeat", 1),
-        "batch_dims": (),
-        "num_shards": getattr(dataset_cfg, "num_shards", 1),
-        "deterministic": getattr(dataset_cfg, "deterministic", True),
-        "drop_remainder": False,
-        "tf_data_service_address": getattr(dataset_cfg, "tf_data_service_address", None),
-        "batch_by_scenario": True,
-    }
-    try:
-        accepted = set(inspect.signature(fn).parameters)
-        kwargs = {k: v for k, v in kwargs.items() if k in accepted}
-    except (TypeError, ValueError):
-        pass
-    return fn(**kwargs)
-
-
-def _iter_prefiltered_waymax_payloads(
-    *,
-    dataset_cfg: Any,
-    parse: Any,
-    postprocess: Any,
-    wx_dataloader: Any,
-    cfg: dict,
-    max_scenarios: int | None,
-) -> Iterator[tuple[int, Any]]:
-    """Yield ``(global_source_index, postprocessed_payload)`` efficiently.
-
-    Scan controls are applied to raw serialized TFRecords before
-    ``preprocess_serialized_womd_data`` and before SimulatorState construction.
-    This preserves the exact deterministic source-index partition while
-    removing the O(start_index * workers) parse/conversion cost.
-    """
-    import tensorflow as tf  # type: ignore
-    import jax  # type: ignore
-
-    if bool(getattr(dataset_cfg, "distributed", False)):
-        raise RuntimeError("raw source prefilter currently requires Waymax distributed=False")
-    if tuple(getattr(dataset_cfg, "batch_dims", ()) or ()):
-        raise RuntimeError("raw source prefilter currently requires empty Waymax batch_dims")
-    if getattr(dataset_cfg, "shuffle_seed", None) is not None:
-        raise RuntimeError("raw source prefilter requires shuffle_seed=None for stable global source indices")
-
-    plan = _raw_scan_plan(cfg, max_scenarios)
-    limit = plan["limit"]
-    if limit == 0:
-        return
-
-    ds = _tf_examples_raw_dataset(dataset_cfg, wx_dataloader)
-    # Important: skip/shard/take happen while elements are still serialized
-    # TFRecord strings. Only the selected worker partition is parsed below.
-    ds = ds.skip(int(plan["start"]))
-    ds = ds.shard(int(plan["stride"]), int(plan["worker"]))
-    if limit is not None:
-        ds = ds.take(int(limit))
-    ds = ds.map(
-        parse,
-        num_parallel_calls=tf.data.AUTOTUNE,
-        deterministic=bool(getattr(dataset_cfg, "deterministic", True)),
-    )
-    ds = ds.prefetch(tf.data.AUTOTUNE)
-    postprocess_fn = jax.jit(postprocess)
-
-    print(
-        {
-            "event": "waymax_raw_source_prefilter",
-            "start": int(plan["start"]),
-            "stride": int(plan["stride"]),
-            "worker": int(plan["worker"]),
-            "limit": None if limit is None else int(limit),
-            "first_global_index": int(plan["first_global_index"]),
-            "last_global_index": (
-                None if plan["last_global_index"] is None else int(plan["last_global_index"])
-            ),
-        },
-        flush=True,
-    )
-    for local_i, example in enumerate(ds.as_numpy_iterator()):
-        global_i = int(plan["first_global_index"]) + local_i * int(plan["stride"])
-        yield global_i, postprocess_fn(example)
-
-
 def _route_from_sdc_paths(state: Any, max_points: int) -> np.ndarray:
     route = np.zeros((max_points, 6), dtype=np.float32)
     paths = getattr(state, "sdc_paths", None)
@@ -627,76 +490,10 @@ def iter_waymax_womd_scenarios(patterns: Any, max_scenarios: int | None, parser_
         )
     else:
         parse = functools.partial(wx_dataloader.preprocess_serialized_womd_data, config=dataset_cfg)
+    gen = wx_dataloader.get_data_generator(dataset_cfg, parse, _postprocess)
     start_index = max(0, int(cfg.get("scenario_start_index", 0)))
     stride = max(1, int(cfg.get("scenario_stride", 1)))
     worker_index = int(cfg.get("scenario_worker_index", 0)) % stride
-    wx_cfg = cfg.get("waymax", {}) if isinstance(cfg.get("waymax", {}), dict) else {}
-    raw_prefilter = bool(wx_cfg.get("prefilter_source_scan_controls", False))
-    require_raw_prefilter = bool(wx_cfg.get("require_source_scan_prefilter", False))
-
-    if require_raw_prefilter and not raw_prefilter:
-        raise RuntimeError(
-            "waymax.require_source_scan_prefilter=true requires "
-            "waymax.prefilter_source_scan_controls=true"
-        )
-
-    if raw_prefilter:
-        prefilter_emitted = 0
-        try:
-            indexed_gen: Iterator[tuple[int, Any]] = _iter_prefiltered_waymax_payloads(
-                dataset_cfg=dataset_cfg,
-                parse=parse,
-                postprocess=_postprocess,
-                wx_dataloader=wx_dataloader,
-                cfg=cfg,
-                max_scenarios=max_scenarios,
-            )
-            for i, payload in indexed_gen:
-                state = payload["state"] if isinstance(payload, dict) else payload
-                saved_id, base_id, legacy_id = _scenario_identity_from_payload(
-                    payload if isinstance(payload, dict) else {}, i, state, cfg
-                )
-                raw = raw_scenario_from_waymax_state(state, saved_id, i, cfg)
-                raw.metadata.update({
-                    "original_scenario_id": base_id,
-                    "official_scenario_id": base_id if not base_id.startswith("waymax_") else None,
-                    "legacy_scenario_id": legacy_id,
-                    "scenario_id_source": "official_womd" if not base_id.startswith("waymax_") else "legacy_state_hash",
-                    "womd_source_role": _infer_womd_source_role(patterns),
-                    "womd_source_pattern": _paths_to_waymax_path(patterns),
-                    "waymax_max_num_objects": int(getattr(dataset_cfg, "max_num_objects", cfg.get("max_agents", 64))),
-                    "waymax_source_scan_prefiltered": True,
-                })
-                yield raw
-                prefilter_emitted += 1
-            return
-        except Exception as exc:
-            if prefilter_emitted:
-                # Never restart the legacy source after partially yielding the
-                # optimized stream: doing so would duplicate source indices in
-                # the same dataset build. A mid-stream error is a real failure.
-                raise
-            if require_raw_prefilter:
-                raise RuntimeError(
-                    "required Waymax raw source prefilter is unavailable; refusing "
-                    "to fall back to the historical O(start_index * workers) scan. "
-                    f"Underlying error: {type(exc).__name__}: {exc}"
-                ) from exc
-            # Preserve exact historical semantics if an installed Waymax/TF
-            # revision does not expose the raw dataset API. The fallback is
-            # slower but still applies the same global source partition.
-            print(
-                {
-                    "event": "waymax_raw_source_prefilter_fallback",
-                    "error": f"{type(exc).__name__}: {exc}",
-                    "start": start_index,
-                    "stride": stride,
-                    "worker": worker_index,
-                },
-                flush=True,
-            )
-
-    gen = wx_dataloader.get_data_generator(dataset_cfg, parse, _postprocess)
     emitted = 0
     for i, payload in enumerate(gen):
         if i < start_index:
@@ -718,7 +515,6 @@ def iter_waymax_womd_scenarios(patterns: Any, max_scenarios: int | None, parser_
             "womd_source_role": _infer_womd_source_role(patterns),
             "womd_source_pattern": _paths_to_waymax_path(patterns),
             "waymax_max_num_objects": int(getattr(dataset_cfg, "max_num_objects", cfg.get("max_agents", 64))),
-            "waymax_source_scan_prefiltered": False,
         })
         yield raw
         emitted += 1

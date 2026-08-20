@@ -53,16 +53,23 @@ def _terms(
     row: dict[str, Any],
     nominal: dict[str, Any],
     tolerances: tuple[float, float, float, float, float],
+    *, dep_boundary_aligned: bool = False, gap_ordinal_only: bool = False,
 ) -> list[float]:
     drs_tol, dep_tol, gap_tol, hard_tol, proxy_tol = tolerances
+    candidate_dep = _sigmoid(float(row["teacher_r_dep"]))
+    nominal_dep = _sigmoid(float(nominal["teacher_r_dep"]))
+    dep_term = 0.5 - candidate_dep if dep_boundary_aligned else nominal_dep - candidate_dep - dep_tol
+    gap_term = (
+        -abs(gap_tol)
+        if gap_ordinal_only
+        else math.exp(-max(0.0, min(float(nominal["teacher_gap"]), 20.0)))
+        - math.exp(-max(0.0, min(float(row["teacher_gap"]), 20.0)))
+        - gap_tol
+    )
     return [
         float(nominal["teacher_drs"]) - float(row["teacher_drs"]) - drs_tol,
-        _sigmoid(float(nominal["teacher_r_dep"]))
-        - _sigmoid(float(row["teacher_r_dep"]))
-        - dep_tol,
-        math.exp(-max(0.0, min(float(nominal["teacher_gap"]), 20.0)))
-        - math.exp(-max(0.0, min(float(row["teacher_gap"]), 20.0)))
-        - gap_tol,
+        dep_term,
+        gap_term,
         float(row.get("teacher_hard_violation", 0.0))
         - float(nominal.get("teacher_hard_violation", 0.0))
         - hard_tol,
@@ -83,6 +90,8 @@ def main() -> int:
     ap.add_argument("--gap-tolerance", type=float, default=0.05)
     ap.add_argument("--hard-tolerance", type=float, default=0.05)
     ap.add_argument("--proxy-tolerance", type=float, default=0.05)
+    ap.add_argument("--dep-boundary-aligned", action="store_true")
+    ap.add_argument("--gap-ordinal-only", action="store_true")
     ap.add_argument("--max-hard", type=float, default=1.0)
     ap.add_argument("--min-nominal-deviation", type=float, default=0.002)
     ap.add_argument("--min-positive", type=int, default=40)
@@ -148,7 +157,11 @@ def main() -> int:
             elif dev < float(args.min_nominal_deviation):
                 skipped["low_deviation"] += 1
                 continue
-            for index, value in enumerate(_terms(row, nominal, tolerances)):
+            for index, value in enumerate(_terms(
+                row, nominal, tolerances,
+                dep_boundary_aligned=bool(args.dep_boundary_aligned),
+                gap_ordinal_only=bool(args.gap_ordinal_only),
+            )):
                 values[index].append(float(value))
             eligible += 1
 
@@ -194,6 +207,8 @@ def main() -> int:
         "num_eligible_candidates": eligible,
         "deviation_fallback_candidates": fallback_deviation,
         "component_tolerances": dict(zip(COMPONENTS, tolerances)),
+        "deployability_boundary_aligned": bool(args.dep_boundary_aligned),
+        "gap_ordinal_only": bool(args.gap_ordinal_only),
         "eligibility": {
             "macro_ids": sorted(macros),
             "max_hard": float(args.max_hard),

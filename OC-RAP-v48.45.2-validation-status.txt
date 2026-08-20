@@ -1,0 +1,30 @@
+OC-RAP v48.45.2 source-rebuild support validation
+
+Uploaded failure diagnosis:
+- A/B/C: authoritative RC=30
+- failure stage: source_checkpoint_contract
+- historical source_run_exists=false
+- balanced/precision best.pt both missing
+- adaptation not reached; certificate/gate not reached; test_roots_read=false
+
+Historical reproducibility:
+- tests/test_v48_13_terra.py showed the archived train_ocrap_v48_13_terra.sh is absent.
+- The two historical-script assertions are now explicit SKIP, not fabricated reconstruction.
+
+Regression completed after final source-rebuild/source-resolution edits:
+- v48.13 + v48.36 OCAF: 17 passed / 3 skipped
+- v48.36 stage-transfer/terminal/idempotence: 18 passed
+- v48.37-v48.40: 23 passed
+- v48.41-v48.43: 26 passed
+- v48.44-v48.45: 24 passed
+TOTAL: 108 passed / 3 skipped
+
+Additional checks:
+- v48.45 SOWR + engineering/source-rebuild tests: 17 passed
+- synthetic rebuilt-source quality contract: PASS
+- python compileall: PASS
+- shell scripts: 99/99 bash -n PASS
+- shell backslash-continuation/comment hazard scan: 0 hits
+- new operator command file: bash -n PASS
+
+No real GPU/WOMD training was executed in this sandbox. Source-model quality and Natural gate outcomes require the user's actual datasets/GPUs.

@@ -1,10 +1,12 @@
 """Teacher targets for factorized recovery admission evidence.
 
 The admission benefit target is the signed OC-RAP deployability-score advantage.
-The harm target is deliberately non-compensatory: a recovery candidate is vetoed
-when any safety-relevant component degrades beyond its tolerance relative to the
-nominal prefix, even when other components improve enough to yield positive total
-PCD advantage.  Keeping this logic in one module prevents train/certificate drift.
+The hard-harm target is deliberately non-compensatory for components whose
+deployment role is boundary-bearing.  Historical versions used only
+nominal-relative degradation margins; v48.56 additionally permits DEP to be
+anchored to the absolute R_dep=0 deployment boundary and GAP to remain an
+ordinal PCD/order coordinate without an independent hard veto.  Keeping these
+role semantics in one module prevents train/certificate drift.
 """
 from __future__ import annotations
 
@@ -17,13 +19,24 @@ import torch
 
 @dataclass(frozen=True)
 class ComponentVetoTolerances:
-    """Nominal-relative tolerances in normalized component space."""
+    """Component thresholds plus explicit decision-role semantics.
+
+    Scalar tolerances retain the historical nominal-relative meaning.  The two
+    v48.56 flags may instead assign DEP an absolute recoverability boundary and
+    GAP an ordinal-only role.
+    """
 
     drs: float = 0.05
     deployability_gate: float = 0.05
     gap_discount: float = 0.05
     hard_violation: float = 0.05
     harm_proxy: float = 0.05
+    # v48.56 DRAC: semantic role typing is explicit.  DEP can be anchored to
+    # the teacher deployability boundary R_dep=0 instead of a nominal-relative
+    # quality drop; GAP can remain an ordinal PCD factor without becoming an
+    # independent non-compensatory veto.  Defaults preserve all earlier versions.
+    deployability_boundary_aligned: bool = False
+    gap_ordinal_only: bool = False
 
 
 def _sigmoid_np(x: float | np.ndarray) -> np.ndarray:
@@ -59,11 +72,23 @@ def component_veto_terms_numpy(
     nominal_dep = float(_sigmoid_np(nominal_r_dep))
     candidate_gap_quality = math.exp(-max(0.0, min(float(candidate_gap), 20.0)))
     nominal_gap_quality = math.exp(-max(0.0, min(float(nominal_gap), 20.0)))
+    dep_margin = (
+        0.5 - candidate_dep
+        if bool(t.deployability_boundary_aligned)
+        else nominal_dep - candidate_dep - float(t.deployability_gate)
+    )
+    # GAP remains inside teacher PCD / native advantage.  In ordinal-only mode
+    # it is deliberately neutral for the hard component-veto contract.
+    gap_margin = (
+        -abs(float(t.gap_discount))
+        if bool(t.gap_ordinal_only)
+        else nominal_gap_quality - candidate_gap_quality - float(t.gap_discount)
+    )
     return np.asarray(
         [
             float(nominal_drs) - float(candidate_drs) - float(t.drs),
-            nominal_dep - candidate_dep - float(t.deployability_gate),
-            nominal_gap_quality - candidate_gap_quality - float(t.gap_discount),
+            dep_margin,
+            gap_margin,
             float(candidate_hard) - float(nominal_hard) - float(t.hard_violation),
             float(candidate_harm_proxy) - float(nominal_harm_proxy) - float(t.harm_proxy),
         ],
@@ -87,9 +112,11 @@ def component_veto_margin_numpy(
 ) -> float:
     """Return the largest normalized safety-component degradation.
 
-    Positive values indicate that at least one component exceeds its allowed
-    nominal-relative degradation.  The maximum implements a non-compensatory
-    veto: an improvement in one component cannot hide a regression in another.
+    Positive values indicate that at least one active boundary-bearing
+    component violates its configured semantic constraint.  In legacy mode the
+    constraints are nominal-relative; v48.56 can instead use the absolute DEP
+    boundary and remove GAP from the hard-veto set.  The maximum remains
+    non-compensatory across active hard components.
     """
 
     terms = component_veto_terms_numpy(
@@ -136,13 +163,23 @@ def component_veto_terms_torch(
     )
     candidate_gap_quality = torch.exp(-candidate_gap.float().clamp(0.0, 20.0))
     nominal_gap_quality = torch.exp(-nominal_gap.float().clamp(0.0, 20.0))
+    candidate_dep = torch.sigmoid(candidate_r_dep.float())
+    nominal_dep = torch.sigmoid(nominal_r_dep.float())
+    dep_margin = (
+        0.5 - candidate_dep
+        if bool(t.deployability_boundary_aligned)
+        else nominal_dep - candidate_dep - float(t.deployability_gate)
+    )
+    gap_margin = (
+        torch.full_like(candidate_gap_quality, -abs(float(t.gap_discount)))
+        if bool(t.gap_ordinal_only)
+        else nominal_gap_quality - candidate_gap_quality - float(t.gap_discount)
+    )
     return torch.stack(
         [
             nominal_drs.float() - candidate_drs.float() - float(t.drs),
-            torch.sigmoid(nominal_r_dep.float())
-            - torch.sigmoid(candidate_r_dep.float())
-            - float(t.deployability_gate),
-            nominal_gap_quality - candidate_gap_quality - float(t.gap_discount),
+            dep_margin,
+            gap_margin,
             candidate_hard.float() - nominal_hard.float() - float(t.hard_violation),
             candidate_harm_proxy.float()
             - nominal_harm_proxy.float()
