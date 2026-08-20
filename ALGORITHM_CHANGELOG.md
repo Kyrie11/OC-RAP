@@ -5746,3 +5746,34 @@ The historical v48.13 source also cannot be reproduced byte/recipe-identically f
 ### Unified-regime note
 
 S0 pools Safe/Near/Contact for recovery-witness learning and does not add any new SOWR regime router or regime-specific admission rule. The inherited v48 source-policy checkpoint geometry still contains the legacy two `direct_delta_adapters`; this pre-existing design debt is held fixed in the rebuilt round to avoid confounding source recovery with a separate algorithm refactor. If strict removal of all bucket-conditioned policy internals is required for the final paper, it must be evaluated as a separate controlled experiment after SOWR attribution.
+
+## v48.56-RUNTIME-FASTPATH — teacher-index I/O/cache/timing optimization (engineering-only)
+
+**类别：纯工程性能优化；V48.56 DRAC 算法、实验因子与输出目录不变。**
+
+### Trigger
+
+上传的 partial `ocrap_v48_56_dcp_drfc_bcde_drac_ablation_A` 显示：
+
+- 10,015 adaptation-train samples 的 teacher index 用时约 5,235 s / 87.25 min；
+- 3,526 adaptation-dev samples 的 teacher index 再用时约 1,756 s / 29.27 min；
+- 合计约 6,991 s / 116.52 min；
+- 此时 Balanced/Precision adaptation logs 仍为空，故 dominant runtime bottleneck 位于 GPU training 前的 teacher preprocessing。
+
+### Engineering changes
+
+1. **Teacher-only NPZ member subset.** 新增 `TEACHER_PCD_NPZ_KEYS`（15 keys），`build_teacher_pcd_index_v48.py` 不再读取 33-key `MODEL_SAMPLE_NPZ_KEYS`。明确排除 BEV、history、map、route、prefix trajectory、root signature、recovery parameter 等 teacher 不消费的大数组。
+2. **Deterministic parallel teacher build.** teacher rows 可用 `V4856_TEACHER_INDEX_WORKERS` 并行独立构造；`executor.map` 保持 sample/JSONL row 顺序，默认 4 workers、chunksize 16。
+3. **Raw teacher-coordinate reuse across A/B/C/D.** Fresh A 仍然重新训练与评估；B/C/D 只复用 A 的 raw `teacher_pcd/drs/r_dep/gap/hard/harm_proxy`，再按各 arm 的 DEP/GAP role 重新计算 component labels 和 summary。Reuse 前校验 dataset manifests、alpha/beta/top-m、option semantics、row schema/count；不匹配自动 fresh rebuild。
+4. **Interrupted-A salvage.** two-GPU launcher 在删除同名 incomplete A 以前，先保存已经完整生成的 train/dev teacher index 到 `$BASE_OUT/.v48_56_raw_teacher_cache/`。因此当前两小时 partial A 的 deterministic preprocessing 不必重做。
+5. **Stage timing.** 每个 arm 新增 `logs/runtime_stage_timing.jsonl`；全局新增 `OC-RAP-v48.56-stage-timing.jsonl` 与 `OC-RAP-v48.56-stage-timing-summary.json`。Teacher progress 额外记录 elapsed、samples/s、ETA、worker count、`npz|raw_reuse` source mode。
+6. **Interrupted telemetry summary.** launcher 的 EXIT cleanup 会尽量刷新 runtime telemetry/timing summary，便于下一轮直接按 stage wall time 判断是否继续优化。
+
+### Exactness / attribution contract
+
+- 不修改 DRAC A/B/C/D 定义、DEP/GAP teacher semantics、q-hard BC-FC、smooth NAP、loss、batch size、epoch/patience、data split、seed、top-k、gate、certificate 或 threshold。
+- 不复用 A 的模型/checkpoint/calibration/certificate，只复用 deterministic raw teacher preprocessing。
+- Synthetic old/new teacher JSONL rows逐项完全一致；semantic summary 完全一致。
+- Synthetic raw-reuse C 与 direct fresh C 的 rows/semantic summary 完全一致。
+- `compileall` PASS；132/132 shell `bash -n` PASS；V48.45–V48.56 regression 113 passed；runtime-focused tests 22 passed。
+- 全仓库已知历史缺口仍为缺失 `scripts/train_ocrap_v48_12_trident.sh`，与本次优化无关。

@@ -51,6 +51,19 @@ MODEL_SAMPLE_NPZ_KEYS: frozenset[str] = frozenset({
     "i_art_star",
 })
 
+# v48.56 engineering-only teacher-index fast path.  The teacher index never
+# constructs model features; it only consumes OC-MERO matrices/probabilities,
+# cached recovery scalars and grouping metadata.  Keeping this subset separate
+# avoids decompressing BEV/map/history/prefix/signature tensors for every
+# calibration sample.  This changes no teacher value or row ordering.
+TEACHER_PCD_NPZ_KEYS: frozenset[str] = frozenset({
+    "m_star", "root_probs", "c_star", "root_valid", "option_valid",
+    "r_dep_star", "r_orc_star", "hard_violation", "harm_proxy",
+    "scene_id", "time_index", "candidate_index", "prefix_macro_type_id",
+    "prefix_macro_id", "is_nominal",
+})
+
+
 NOMINAL_DEVIATION_NPZ_KEYS: frozenset[str] = frozenset({
     "scene_id", "time_index", "is_nominal", "prefix_states",
 })

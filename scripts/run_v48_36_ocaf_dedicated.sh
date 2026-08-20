@@ -45,8 +45,26 @@ COMPONENT_HARM_DEP_TOLERANCE="${COMPONENT_HARM_DEP_TOLERANCE:-0.05}"
 COMPONENT_HARM_GAP_TOLERANCE="${COMPONENT_HARM_GAP_TOLERANCE:-0.05}"
 COMPONENT_HARM_HARD_TOLERANCE="${COMPONENT_HARM_HARD_TOLERANCE:-0.05}"
 COMPONENT_HARM_PROXY_TOLERANCE="${COMPONENT_HARM_PROXY_TOLERANCE:-0.05}"
+# Independent teacher rows are deterministic.  A small process pool removes
+# Python/ZIP decompression serialization while preserving executor.map order.
+V4856_TEACHER_INDEX_WORKERS="${V4856_TEACHER_INDEX_WORKERS:-4}"
+V4856_TEACHER_INDEX_CHUNKSIZE="${V4856_TEACHER_INDEX_CHUNKSIZE:-16}"
 
 mkdir -p "$OUTPUTDIR/logs"
+# v48.56 engineering-only stage timing.  This is append-only diagnostic output
+# and is never consumed by training, calibration or certificate decisions.
+V4856_RUNTIME_TIMING_LOG="${V4856_RUNTIME_TIMING_LOG:-$OUTPUTDIR/logs/runtime_stage_timing.jsonl}"
+: > "$V4856_RUNTIME_TIMING_LOG"
+v4856_timing_event() {
+  local event="$1" stage="$2" start="${3:-}" rc="${4:-}"
+  local now duration_json rc_json
+  now="$(date +%s.%N)"
+  if [[ -n "$start" ]]; then duration_json="$(awk -v a="$start" -v b="$now" 'BEGIN{printf "%.6f", b-a}')"; else duration_json="null"; fi
+  if [[ -n "$rc" ]]; then rc_json="$rc"; else rc_json="null"; fi
+  printf '{"unix":%s,"event":"%s","stage":"%s","duration_seconds":%s,"rc":%s}\n' \
+    "$now" "$event" "$stage" "$duration_json" "$rc_json" >> "$V4856_RUNTIME_TIMING_LOG"
+}
+V4856_PIPELINE_T0="$(date +%s.%N)"; v4856_timing_event start pipeline "$V4856_PIPELINE_T0"
 # Re-entry is audited before ATTEMPT_STARTED.json or any active terminal marker is
 # changed.  Repeated invocations therefore return an existing active RC=0/20 result, and
 # an exact archived RC=20 resume-refusal clobber is restored safely.
@@ -398,6 +416,7 @@ val_index_contract_args=(
 if [[ "${EVIDENCE_DEP_BOUNDARY_ALIGNED:-false}" == "true" ]]; then val_index_contract_args+=(--dep-boundary-aligned); fi
 if [[ "${EVIDENCE_GAP_ORDINAL_ONLY:-false}" == "true" ]]; then val_index_contract_args+=(--gap-ordinal-only); fi
 
+teacher_train_t0="$(date +%s.%N)"; v4856_timing_event start teacher_index_train "$teacher_train_t0"
 rebuild_index="${REBUILD_ADAPT_INDEX:-0}"
 if [[ "$rebuild_index" != 1 && -f "$GROUP_INDEX" && -f "$GROUP_SUMMARY" ]]; then
   set +e
@@ -426,6 +445,10 @@ V4856_TEACHER_ROLE_ARGS=()
 if [[ "${EVIDENCE_DEP_BOUNDARY_ALIGNED:-false}" == "true" ]]; then V4856_TEACHER_ROLE_ARGS+=(--dep-boundary-aligned); fi
 if [[ "${EVIDENCE_GAP_ORDINAL_ONLY:-false}" == "true" ]]; then V4856_TEACHER_ROLE_ARGS+=(--gap-ordinal-only); fi
 
+V4856_RAW_REUSE_TRAIN_ARGS=()
+if [[ -n "${V4856_RAW_TEACHER_INDEX:-}" && -n "${V4856_RAW_TEACHER_SUMMARY:-}" &&       -f "${V4856_RAW_TEACHER_INDEX}" && -f "${V4856_RAW_TEACHER_SUMMARY}" ]]; then
+  V4856_RAW_REUSE_TRAIN_ARGS=(--reuse-raw-index "$V4856_RAW_TEACHER_INDEX" --reuse-raw-summary "$V4856_RAW_TEACHER_SUMMARY" --reuse-raw-fallback-to-build)
+fi
 if [[ "$rebuild_index" == 1 ]]; then
   rm -f "$GROUP_INDEX" "$GROUP_SUMMARY"
   set +e
@@ -436,6 +459,8 @@ if [[ "$rebuild_index" == 1 ]]; then
     --option-execution-semantics "$TRAIN_OPTION_EXECUTION_SEMANTICS" \
     --positive-gain "$POSITIVE_GAIN" --deployable-macro-ids "$DEPLOYABLE_MACRO_IDS" \
     --quality-mode warn \
+    --workers "$V4856_TEACHER_INDEX_WORKERS" --worker-chunksize "$V4856_TEACHER_INDEX_CHUNKSIZE" \
+    "${V4856_RAW_REUSE_TRAIN_ARGS[@]}" \
     --component-harm-drs-tolerance "$COMPONENT_HARM_DRS_TOLERANCE" \
     --component-harm-dep-tolerance "$COMPONENT_HARM_DEP_TOLERANCE" \
     --component-harm-gap-tolerance "$COMPONENT_HARM_GAP_TOLERANCE" \
@@ -474,6 +499,7 @@ if [[ "$target_rc" != 0 ]]; then
   write_pipeline_failure target_support "$target_rc" "$OUTPUTDIR/SUPPORT_TARGET_SUPPORT.json"
   exit 30
 fi
+v4856_timing_event end teacher_index_train "$teacher_train_t0" 0
 
 # v48.55 TCBC optional train-only, regime-free coordinate canonicalization.
 # Scales are computed from the pooled adaptation-training teacher index only;
@@ -514,6 +540,7 @@ fi
 # Validation batching must use labels computed from adaptation-dev itself.
 # Reuse is allowed only after the same exact dataset/label contract audit used
 # for the training index; otherwise rebuild fail-closed.
+teacher_dev_t0="$(date +%s.%N)"; v4856_timing_event start teacher_index_dev "$teacher_dev_t0"
 rebuild_val_index="${REBUILD_ADAPT_DEV_INDEX:-0}"
 if [[ "$rebuild_val_index" != 1 && -f "$VAL_GROUP_INDEX" && -f "$VAL_GROUP_SUMMARY" ]]; then
   set +e
@@ -536,6 +563,10 @@ else
   fi
   rebuild_val_index=1
 fi
+V4856_RAW_REUSE_DEV_ARGS=()
+if [[ -n "${V4856_RAW_DEV_TEACHER_INDEX:-}" && -n "${V4856_RAW_DEV_TEACHER_SUMMARY:-}" &&       -f "${V4856_RAW_DEV_TEACHER_INDEX}" && -f "${V4856_RAW_DEV_TEACHER_SUMMARY}" ]]; then
+  V4856_RAW_REUSE_DEV_ARGS=(--reuse-raw-index "$V4856_RAW_DEV_TEACHER_INDEX" --reuse-raw-summary "$V4856_RAW_DEV_TEACHER_SUMMARY" --reuse-raw-fallback-to-build)
+fi
 if [[ "$rebuild_val_index" == 1 ]]; then
   rm -f "$VAL_GROUP_INDEX" "$VAL_GROUP_SUMMARY"
   set +e
@@ -546,6 +577,8 @@ if [[ "$rebuild_val_index" == 1 ]]; then
     --option-execution-semantics "$TRAIN_OPTION_EXECUTION_SEMANTICS" \
     --positive-gain "$POSITIVE_GAIN" --deployable-macro-ids "$DEPLOYABLE_MACRO_IDS" \
     --quality-mode warn \
+    --workers "$V4856_TEACHER_INDEX_WORKERS" --worker-chunksize "$V4856_TEACHER_INDEX_CHUNKSIZE" \
+    "${V4856_RAW_REUSE_DEV_ARGS[@]}" \
     --component-harm-drs-tolerance "$COMPONENT_HARM_DRS_TOLERANCE" \
     --component-harm-dep-tolerance "$COMPONENT_HARM_DEP_TOLERANCE" \
     --component-harm-gap-tolerance "$COMPONENT_HARM_GAP_TOLERANCE" \
@@ -570,9 +603,11 @@ if [[ "$val_contract_rc" != 0 ]]; then
   write_pipeline_failure validation_teacher_index_contract "$val_contract_rc" "$OUTPUTDIR/VAL_SUPPORT_INDEX_CONTRACT.json"
   exit 30
 fi
+v4856_timing_event end teacher_index_dev "$teacher_dev_t0" 0
 
 run_variant() {
   local variant="$1" gpu="$2"
+  local variant_t0="$(date +%s.%N)"; v4856_timing_event start "adapt_${variant}" "$variant_t0"
   local source="$SOURCE_RUN/candidates/$variant/model_v48_trac_sr/best.pt"
   local run="$OUTPUTDIR/candidates/$variant"
   local factor_cache=""
@@ -682,9 +717,11 @@ PY_ADAPT_FAIL
   else
     rm -f "$OUTPUTDIR/ADAPTATION_FAILED_${variant}.json"
   fi
+  v4856_timing_event end "adapt_${variant}" "$variant_t0" "$rc"
   return "$rc"
 }
 
+adapt_all_t0="$(date +%s.%N)"; v4856_timing_event start adaptation_all "$adapt_all_t0"
 if [[ "$RESUME_AFTER_ADAPTATION" == 1 ]]; then
   s0=0; s1=0
   printf 'balanced=0 precision=0 resume_after_adaptation=1 retraining=0\n' | tee "$OUTPUTDIR/logs/adaptation_status.log"
@@ -910,6 +947,7 @@ fi
 variants=""
 [[ "$s0" == 0 ]] && variants="balanced"
 [[ "$s1" == 0 ]] && variants="${variants:+$variants,}precision"
+certificate_t0="$(date +%s.%N)"; v4856_timing_event start certificate_controller "$certificate_t0"
 set +e
 OUTPUTDIR="$OUTPUTDIR" CAL_SAFE="$CAL_SAFE" CERT_NEAR="$CERT_NEAR" CERT_CONTACT="$CERT_CONTACT" DEV_NEAR="$DEV_NEAR" DEV_CONTACT="$DEV_CONTACT" \
 GPU0="$GPU0" GPU1="$GPU1" VARIANTS="$variants" PROPOSAL_TOP_K="$PROPOSAL_TOP_K" V4836_ATTEMPT_ID="$ATTEMPT_ID" \
@@ -921,6 +959,7 @@ case "$raw_cert_rc" in
   0|20) cert_rc="$raw_cert_rc" ;;
   *) cert_rc=30 ;;
 esac
+v4856_timing_event end certificate_controller "$certificate_t0" "$cert_rc"
 
 if [[ "$cert_rc" == 30 ]]; then
   write_pipeline_failure certificate "$raw_cert_rc" "$OUTPUTDIR/logs/certificate_controller.log" "$s0" "$s1"
@@ -1015,4 +1054,5 @@ if [[ "$post_learning_rc" != 0 || "$post_learning_contract_rc" != 0 ]]; then
   write_pipeline_failure post_terminal_diagnostics 4 "learning_gates_rc=$post_learning_rc snapshot_contract_rc=$post_learning_contract_rc" "$s0" "$s1"
   exit 30
 fi
+v4856_timing_event end pipeline "$V4856_PIPELINE_T0" "$cert_rc"
 exit "$cert_rc"
