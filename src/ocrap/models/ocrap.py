@@ -347,6 +347,7 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_roct_beta: float = 0.2,
         direct_recovery_evidence_roct_top_m: int = 8,
         direct_recovery_evidence_roct_option_temperature: float = 0.35,
+        direct_recovery_evidence_common_measure_root_mass: bool = False,
         direct_recovery_evidence_native_certificate_preservation: bool = False,
         direct_recovery_evidence_native_margin_complete_preservation: bool = False,
         direct_recovery_evidence_native_advantage_preservation: bool = False,
@@ -524,6 +525,17 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_evidence_roct_top_m = int(direct_recovery_evidence_roct_top_m)
         self.direct_recovery_evidence_roct_option_temperature = float(
             max(1.0e-4, direct_recovery_evidence_roct_option_temperature)
+        )
+        # v48.57 CMRI (Common-Measure Root Invariance): a scene-time candidate
+        # set is a collection of counterfactual actions under one observed latent
+        # world distribution.  OC-MERO comparisons therefore use the unique
+        # nominal candidate's predicted root logits as a shared integration
+        # measure while keeping every candidate's observation kernel and recovery
+        # margins action-specific.  The raw root logits are never retrained or
+        # recalibrated by this mechanism; it is a zero-parameter projection at the
+        # recovery aggregation boundary.
+        self.direct_recovery_evidence_common_measure_root_mass = bool(
+            direct_recovery_evidence_common_measure_root_mass
         )
         # v48.48 NCP: preserve paper-native OC-MERO DRS/deployability coordinates
         # at the final non-compensatory admission interface instead of asking a
@@ -1453,6 +1465,66 @@ class OCRAPModel(nn.Module):
             out.index_copy_(0, idx, group_rows - nominal_row)
         return out
 
+    @staticmethod
+    def _common_measure_root_logits(
+        root_logits: torch.Tensor,
+        group_index: torch.Tensor | None,
+        is_nominal: torch.Tensor | None,
+        root_valid: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Broadcast one nominal root posterior across each counterfactual set.
+
+        v48.57 CMRI separates the *latent-world measure* from action-specific
+        recovery consequences.  The learned root decoder is left untouched; only
+        the logits consumed by OC-MERO/native-certificate aggregation are
+        projected.  Malformed groups (no unique nominal, singleton, mismatched
+        metadata) fail closed to their original logits instead of borrowing a
+        root posterior from another scene-time group.
+
+        Using the nominal anchor rather than a candidate-set average is important:
+        the common measure must not change when proposal candidates are added,
+        removed, or reordered.  A second fail-closed condition requires the
+        root-valid support mask to be identical across the group when masks are
+        supplied.  Otherwise a nominal mass could be projected onto a root slot
+        whose candidate margin was never supervised, which would no longer be a
+        mathematically common measure.
+        """
+        if group_index is None or is_nominal is None or root_logits.shape[0] <= 1:
+            return root_logits
+        groups = group_index.to(device=root_logits.device)
+        groups = groups.reshape(-1, 1) if groups.dim() == 1 else groups.reshape(groups.shape[0], -1)
+        nominal_mask = is_nominal.to(device=root_logits.device).reshape(-1) > 0.5
+        if groups.shape[0] != root_logits.shape[0] or nominal_mask.shape[0] != root_logits.shape[0]:
+            return root_logits
+        valid_mask = None
+        if root_valid is not None:
+            candidate_valid = root_valid.to(device=root_logits.device, dtype=torch.bool)
+            candidate_valid = (
+                candidate_valid.reshape(-1, 1)
+                if candidate_valid.dim() == 1
+                else candidate_valid.reshape(candidate_valid.shape[0], -1)
+            )
+            if candidate_valid.shape != root_logits.shape:
+                return root_logits
+            valid_mask = candidate_valid
+        projected = root_logits.clone()
+        for key in torch.unique(groups, dim=0):
+            idx = torch.where((groups == key.unsqueeze(0)).all(dim=1))[0]
+            if idx.numel() <= 1:
+                continue
+            noms = idx[nominal_mask[idx]]
+            if noms.numel() != 1:
+                continue
+            if valid_mask is not None:
+                group_valid = valid_mask.index_select(0, idx)
+                nominal_valid = valid_mask.index_select(0, noms[:1])
+                if not bool(torch.all(group_valid == nominal_valid)):
+                    continue
+            nominal_logits = root_logits.index_select(0, noms[:1])
+            shared_logits = nominal_logits.expand(idx.numel(), -1).contiguous()
+            projected.index_copy_(0, idx, shared_logits)
+        return projected
+
     def _direct_candidate_raw_relative_features(
         self,
         x: torch.Tensor,
@@ -1741,6 +1813,8 @@ class OCRAPModel(nn.Module):
         memory: torch.Tensor,
         x: torch.Tensor,
         option_features: torch.Tensor | None,
+        group_index: torch.Tensor | None = None,
+        is_nominal: torch.Tensor | None = None,
         root_valid: torch.Tensor | None = None,
         option_valid: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -1748,6 +1822,10 @@ class OCRAPModel(nn.Module):
         with torch.no_grad():
             root_tokens = self._decode_roots(memory.detach())
             root_logits = self.root_logit_head(root_tokens).squeeze(-1)
+            if self.direct_recovery_evidence_common_measure_root_mass:
+                root_logits = self._common_measure_root_logits(
+                    root_logits, group_index, is_nominal, root_valid
+                )
             obs_embeddings = self.obs_embed_head(root_tokens)
             root_expand = root_tokens.unsqueeze(2).expand(-1, -1, self.num_options, -1)
             opt_expand = self._option_tokens(x, option_features)
@@ -1772,11 +1850,15 @@ class OCRAPModel(nn.Module):
         memory: torch.Tensor,
         x: torch.Tensor,
         option_features: torch.Tensor | None,
+        group_index: torch.Tensor | None = None,
+        is_nominal: torch.Tensor | None = None,
         root_valid: torch.Tensor | None = None,
         option_valid: torch.Tensor | None = None,
     ) -> torch.Tensor:
         signature, _native = self._direct_recovery_option_compatibility_evidence(
-            memory, x, option_features, root_valid=root_valid, option_valid=option_valid
+            memory, x, option_features,
+            group_index=group_index, is_nominal=is_nominal,
+            root_valid=root_valid, option_valid=option_valid
         )
         return signature
 
@@ -3153,7 +3235,9 @@ class OCRAPModel(nn.Module):
                 or self.direct_recovery_evidence_native_certificate_preservation
             ):
                 roct_signature, native_certificate = self._direct_recovery_option_compatibility_evidence(
-                    memory, x, option_features, root_valid=root_valid, option_valid=option_valid
+                    memory, x, option_features,
+                    group_index=group_index, is_nominal=is_nominal,
+                    root_valid=root_valid, option_valid=option_valid
                 )
             return self._direct_outputs(
                 memory, x, bucket_id, group_index, is_nominal,
@@ -3164,6 +3248,11 @@ class OCRAPModel(nn.Module):
         root_tokens = self._decode_roots(memory)
 
         root_logits = self.root_logit_head(root_tokens).squeeze(-1)
+        recovery_root_logits = root_logits
+        if self.direct_recovery_evidence_common_measure_root_mass:
+            recovery_root_logits = self._common_measure_root_logits(
+                root_logits, group_index, is_nominal, root_valid
+            )
         obs_embeddings = self.obs_embed_head(root_tokens)
 
         margins = None
@@ -3183,6 +3272,11 @@ class OCRAPModel(nn.Module):
             "obs_embeddings": obs_embeddings,
             "c_star": C,
         }
+        if self.direct_recovery_evidence_common_measure_root_mass:
+            # Diagnostic/deployment-side recovery measure.  ``root_logits`` stays
+            # raw so legacy root losses, calibration diagnostics, and checkpoint
+            # semantics remain byte-compatible when CMRI is enabled downstream.
+            out["recovery_root_logits"] = recovery_root_logits
         if margins is not None:
             out["margins"] = margins
         # v48.47 DS-OFR witness stages update only the paper-native observation
@@ -3199,7 +3293,7 @@ class OCRAPModel(nn.Module):
         ):
             with torch.no_grad():
                 postprefix_signature = self._postprefix_observation_equivalence_signature(
-                    root_logits.detach(), obs_embeddings.detach(), self.tau_obs
+                    recovery_root_logits.detach(), obs_embeddings.detach(), self.tau_obs
                 ).to(dtype=memory.dtype)
         roct_signature = None
         native_certificate = None
@@ -3210,7 +3304,7 @@ class OCRAPModel(nn.Module):
         ):
             with torch.no_grad():
                 roct_signature, native_certificate = self._recovery_option_compatibility_signature(
-                    root_logits.detach(), obs_embeddings.detach(), margins.detach(), self.tau_obs,
+                    recovery_root_logits.detach(), obs_embeddings.detach(), margins.detach(), self.tau_obs,
                     self.direct_recovery_evidence_roct_alpha,
                     self.direct_recovery_evidence_roct_beta,
                     self.direct_recovery_evidence_roct_top_m,

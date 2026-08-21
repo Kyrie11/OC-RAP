@@ -80,6 +80,7 @@ ROCT_ALPHA="${EVIDENCE_ROCT_ALPHA:-0.2}"
 ROCT_BETA="${EVIDENCE_ROCT_BETA:-0.2}"
 ROCT_TOP_M="${EVIDENCE_ROCT_TOP_M:-8}"
 ROCT_OPTION_TEMPERATURE="${EVIDENCE_ROCT_OPTION_TEMPERATURE:-0.35}"
+COMMON_MEASURE_ROOT_MASS="${EVIDENCE_COMMON_MEASURE_ROOT_MASS:-false}"
 
 FRONTIER_ENABLED="${EVIDENCE_FRONTIER:-true}"
 COMPONENT_PRIOR_LOGIT="${EVIDENCE_COMPONENT_PRIOR_LOGIT:--2.0}"
@@ -210,6 +211,7 @@ cat > "$RUN/STAGE_ARCHITECTURE.json" <<JSON
   "roct_beta": $ROCT_BETA,
   "roct_top_m": $ROCT_TOP_M,
   "roct_option_temperature": $ROCT_OPTION_TEMPERATURE,
+  "common_measure_root_mass": $COMMON_MEASURE_ROOT_MASS,
   "roct_regime_conditioned": false,
   "component_margin_target_mode": "$COMPONENT_MARGIN_TARGET_MODE",
   "component_margin_target_scale": $COMPONENT_MARGIN_TARGET_SCALE,
@@ -491,6 +493,7 @@ meta={
  'roct_beta':float(doc.get('direct_recovery_evidence_roct_beta',0.2) or 0.2),
  'roct_top_m':int(doc.get('direct_recovery_evidence_roct_top_m',8) or 8),
  'roct_option_temperature':float(doc.get('direct_recovery_evidence_roct_option_temperature',0.35) or 0.35),
+ 'common_measure_root_mass':bool(doc.get('direct_recovery_evidence_common_measure_root_mass',False)),
  'algorithm_variant':algorithm_variant,
  'test_roots_read':False,
 }

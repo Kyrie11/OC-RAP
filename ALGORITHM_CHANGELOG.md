@@ -1,3 +1,96 @@
+## v48.57 — DCP-DRFC-BCDE-CMRI / COMMON-MEASURE ROOT INVARIANCE (2026-08-21)
+
+**类别：由 v48.56 DRAC authoritative 2×2 的否证直接触发的 predicted-root/source-decomposition 单轴实验。v48.57 不再修改 teacher/component label semantics，不重开 component normalization、root-logit recalibration、threshold relaxation、proposal expansion、physical-teacher distillation 或 regime conditioning。A 为严格验证的 v48.56-A reference；B/Main 只增加一个零参数 counterfactual common-measure projection。**
+
+### v48.56 authoritative 归因：B−A → C−A → D−B−C+A
+
+v48.56 fresh A/B/C/D 的 source checkpoint、dataset manifest、shared protocol、top-k=5、observation-class execution、no-test 与 regime-agnostic deployment contract 一致，因此可以把四臂差异解释为 DZBA/GOR 的因果干预，而不是 evaluator/schema 漂移。
+
+**B−A / DZBA：REJECT。** 把 DEP 从 nominal-relative degradation 改成 candidate absolute `R_dep<0` boundary，确实把 DEP harmful false-safe 压到接近 0，但代价是 Near/Contact safe-positive false-veto 直接升到 1.0；Precision certificate recall 从 A 的 Near `0.3333` / Contact `0.0500` 同时降为 `0`，Near fixed-DRAC candidate safe-positive AUC `0.4979→0.3534`，Contact `0.6330→0.5903`，Contact 最终退化成 abstain-all。该结果说明 **`R_dep=0` boundary 本身有物理意义，但不能被塞进 candidate-vs-nominal relative harm max-veto 中承担同一个逻辑角色。** 不做 DZBA tolerance sweep，不在 0 边界周围继续调 gate。
+
+**C−A / GOR：standalone algorithm REJECT，但保留 semantic lesson。** 在 fixed-DRAC external labels 下，Near candidate ranking `0.4979→0.5169`，Contact `0.6330→0.6310`，说明“GAP 缺少独立 material boundary、应主要作为 ordinal/oracle-artifact evidence”并没有被 ranking 层否证；但 certificate recall Near `0.3333→0.2222`、Contact `0.0500→0`，harmful UCB 同时变差。因此不能把 GOR 当作有效算法，也不继续调 GAP reliability/threshold；只能把“不要无依据地把 GAP 升级成 hard feasibility veto”作为后续 architecture 的语义约束。
+
+**D−B−C+A：NO SYNERGY / structural masking。** D 与 B 的 candidate/proposal/deployment readout 逐位一致，但 checkpoint/training provenance 不同、Y factor 实际开启，因此不是误复用同一模型。原因是 X 的 absolute DEP boundary 通过 native-certificate preservation 直接占据 noncompensatory max-veto，导致 Y 的 GAP role change 被 floor/abstention 遮蔽。D 不满足预注册的 fixed-semantics Near+Contact upstream/native Pareto 条件，因此 **Boundary-Complete Evidence Centering 仍未获授权。**
+
+### v48.56 收紧后的否证链
+
+v48.55 已排除“component 的数学类型/数值尺度是 dominant bottleneck”；v48.56 又进一步排除：
+
+> **仅在同一个 noncompensatory component max-veto 内重新定义 decision role，就足以同时表达 relative improvement 与 absolute feasibility。**
+
+teacher audit 也支持这个结论：legacy semantics 下 raw-beneficial/harm conflicts 全部由 GAP 参与；改成 DRAC fixed semantics 后冲突并未消失，而是转移到 DEP。根因不是“GAP 还是 DEP 哪个阈值更准”，而是两个逻辑问题被压进了一个 veto：
+
+1. **relative improvement:** candidate 是否比 nominal 更可恢复；
+2. **absolute admission:** candidate 自身是否跨过部署可行性边界。
+
+`R_dep=0` 仍值得保留为未来独立 admission boundary，但 v48.57 不把这第二层 architecture 同 CMRI 一起加入，避免两条假设同轮混杂。
+
+### 当前 dominant bottleneck：candidate-conditioned latent source drift
+
+v48.56-A Precision cache 的 preliminary source audit 显示，部署模型对 Near/Contact 的错误不是简单的统一绝对 bias，而是 **真正有 teacher-positive relative recovery gain 的 candidate 被 predicted source 反向排序**：
+
+- Safe：teacher-positive candidate 的 predicted relative `R_dep` median `+0.2808`，capture@+0.015=`0.7578`；
+- Near：median `-0.4648`，capture=`0.3108`；
+- Contact：median `-0.5607`，capture=`0.1371`。
+
+同时 absolute `R_dep` false-veto 为 Safe `0.1148`、Near `0.3275`、Contact `0.5481`，而 false-safe 都很低。这与 v48.56 development 中 Near/Contact 持续负 `pred_adv` 的现象一致，说明剩余错误主要在 **upstream predicted recovery source / candidate-vs-nominal source comparability**，而不是 final centering 或 component threshold。
+
+代码审计发现：teacher root mass 表达同一 observation 下 latent future branches；deployment root decoder 却会被每个 counterfactual candidate prefix 重新条件化。于是 candidate-vs-nominal recovery comparison 同时改变了两件事：`consequence given root` 与 `measure over roots`。如果 action prefix 本应改变后果而不是事前 latent-world measure，这会产生 action-dependent source drift。
+
+### v48.57 CMRI：Common-Measure Root Invariance
+
+对一个完整 scene-time counterfactual candidate set，令唯一 nominal 的 predicted root posterior 为
+
+`p_ref(z)=p_theta(z | x_nom)`。
+
+B/Main 在 OC-MERO/native recovery evidence 聚合处统一使用 `p_ref` 作为 candidate 与 nominal 的积分测度；candidate-specific observation compatibility `C_a`、recovery margins `M_a`、option validity 保持不变。raw root head、raw root logits、root supervision/loss 都不修改。
+
+实现约束：
+
+- **zero parameter / no retraining of root logits / no temperature scaling；**
+- 使用 nominal anchor，不使用 proposal-set mean，因此添加、删除、重排 alternative candidate 不会改变 common measure；
+- 仅当 group 中 **恰有一个 nominal 且所有 candidate 的 `root_valid` support 完全一致** 时启用；否则 fail-closed 到 legacy per-candidate root posterior；
+- singleton `predict_sample` 不猜 nominal，自动 fail-closed；完整 `predict_samples` / group training 才可激活；
+- checkpoint、factor-cache、stage architecture、inference-model contract 全链记录 CMRI flag，stale cache/config mismatch fail-closed；
+- raw `root_logits` 保留不变；另发布 `recovery_root_logits/recovery_root_probs` 供 recovery aggregation 与 source audit 使用。
+
+CMRI 的论文级 motivation 不是“再校准一次 root 概率”，而是：
+
+> **Counterfactual recovery candidates should be compared under a common latent-world measure; action-specific computation should change conditional consequences, not silently redefine the probability measure under which alternatives are compared.**
+
+这形成 **source–consequence factorization / counterfactual common-measure consistency**，和 OC-RAP 的 observation consistency 主线同构，而不是额外 heuristic。
+
+### v48.57 source-decomposition audit 与强 STOP 条件
+
+新增 `tools/audit_v48_57_root_source_decomposition.py`，只读 adaptation-dev，不读 test，比较：
+
+- predicted candidate→nominal root JS；
+- teacher candidate→nominal root JS；
+- excess predicted root drift；
+- predicted↔teacher root JS（legacy/common measure）；
+- legacy vs CMRI relative `R_dep` error、sign accuracy、safe-positive AUC、teacher-positive capture；
+- native DEP 与 recomputed common-measure `R_dep` 一致性；
+- CMRI eligible group coverage；
+- root slot alignment：root signature/future-signature identity cosine、nearest-slot identity rate、best-vs-identity gap。
+
+**GO：** 只有 root/source audit 的变化方向与机制预测一致，并且 B/Main 在 Near+Contact 同时形成 source/capture/native/deployment Pareto improvement，才保留 CMRI。若 upstream 已形成 Pareto、但 `pred_adv` 仍残余系统性负偏，再重新讨论 evidence centering。
+
+**STOP CMRI：** 任一关键条件失败即停止 common-measure family：root-support/slot alignment 弱；teacher candidate→nominal root drift 与 predicted drift 同量级（说明 teacher 也认为 root measure 应 action-dependent）；common measure 不改善 relative source geometry；或 source geometry改善但 Near+Contact deployment 无配套收益。STOP 后进入 margin/C/source-substitution decomposition，**不重开 root-logit recalibration，不加 root temperature，不调阈值。**
+
+### 实验与工程
+
+v48.57 不人为构造第二个无理论必要的 2×2：
+
+- **A/reference：** 经 SHA/protocol/semantic contract 验证的 v48.56-A；若缺失或不合法，launcher 自动 fresh rerun exact A；
+- **B/Main：** A + CMRI only；
+- Balanced / Precision 在 GPU0/GPU1 并行，避免 v48.56 GPU1 长时间空闲；
+- B 的 Precision/Balanced root-source audits 也分别并行到两张 GPU；
+- test roots 仍禁止进入 adaptation / audit / threshold fit。
+
+新增/修改：`src/ocrap/models/ocrap.py`、`src/ocrap/models/inference.py`、`src/ocrap/cli/train.py`、训练/adapter/model-contract wiring、`tests/test_v48_57_common_measure_root_invariance.py`、reference reuse checker、source-decomposition audit、single-axis comparator、A/B launcher 与 two-GPU launcher。
+
+**继续 STOP：** TCBC/component normalization、DRS regression-weight search、DZBA boundary tolerance search、GOR threshold/reliability search、root-logit recalibration/retraining、threshold relaxation/grid densification、proposal/top-k/macro expansion、BC-NAP exact-only、hard magnitude DEFC、MC-NCP tolerance、PSA/CSE/IPBD physical distillation/structural imitation、aggressive resampling/generic ranking stack/learned residual、broad encoder fine-tuning、regime-conditioned router/policy/threshold/budget。
+
 ## v48.56 — DCP-DRFC-BCDE-DRAC / DECISION-ROLE ALIGNED CERTIFICATE (2026-08-20)
 
 **类别：由 v48.55 authoritative 2×2 对 TCBC 的否证和 teacher/component correctness audit 直接触发的 certificate-semantics 2×2。主线继续保持一个 observation-consistent、regime-agnostic planning primitive；Safe / near-contact / contact 仅作为同一 normal→critical continuum 上的 dataset/evaluation strata。没有新增 regime identifier/router、regime-specific policy/threshold/loss/budget、proposal top-k、candidate family、root-logit recalibration、encoder capacity、重采样或阈值搜索。**

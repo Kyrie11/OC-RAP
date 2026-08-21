@@ -34,6 +34,9 @@ class Prediction:
     direct_recovery_component_margins: np.ndarray | None = None
     # v48.50 diagnostic-only native OC-MERO coordinates: [hard DRS, dep, smooth boundary DRS, gap quality].
     direct_recovery_native_certificate: np.ndarray | None = None
+    # v48.57 diagnostic-only recovery integration measure.  It is identical to
+    # ``root_probs`` unless CMRI is active on a complete scene-time group.
+    recovery_root_probs: np.ndarray | None = None
 
 
 @dataclass
@@ -263,6 +266,10 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_evidence_roct_option_temperature",
             model_cfg.get("direct_recovery_evidence_roct_option_temperature", 0.35),
         )),
+        direct_recovery_evidence_common_measure_root_mass=bool(ckpt.get(
+            "direct_recovery_evidence_common_measure_root_mass",
+            model_cfg.get("direct_recovery_evidence_common_measure_root_mass", False),
+        )),
         direct_recovery_evidence_native_certificate_preservation=bool(ckpt.get(
             "direct_recovery_evidence_native_certificate_preservation",
             model_cfg.get("direct_recovery_evidence_native_certificate_preservation", False),
@@ -490,6 +497,9 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_evidence_roct_option_temperature"] = float(
         model.direct_recovery_evidence_roct_option_temperature
     )
+    cfg["model"]["direct_recovery_evidence_common_measure_root_mass"] = bool(
+        model.direct_recovery_evidence_common_measure_root_mass
+    )
     cfg["model"]["direct_recovery_evidence_native_certificate_preservation"] = bool(
         model.direct_recovery_evidence_native_certificate_preservation
     )
@@ -681,6 +691,10 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_evidence_consensus_prior_scale",
             model_cfg.get("direct_recovery_evidence_consensus_prior_scale", 1.0),
         )),
+        "direct_recovery_evidence_common_measure_root_mass": bool(ckpt.get(
+            "direct_recovery_evidence_common_measure_root_mass",
+            model_cfg.get("direct_recovery_evidence_common_measure_root_mass", False),
+        )),
     }
     actual_contract = {
         "direct_recovery_evidence_calibrator_context": bool(model.direct_recovery_evidence_calibrator_context),
@@ -702,6 +716,9 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         ),
         "direct_recovery_evidence_consensus_prior_scale": float(
             model.direct_recovery_evidence_consensus_prior_scale
+        ),
+        "direct_recovery_evidence_common_measure_root_mass": bool(
+            model.direct_recovery_evidence_common_measure_root_mass
         ),
     }
     if expected_contract != actual_contract:
@@ -789,6 +806,10 @@ def predict_samples(
         root_valid=root_valid, option_valid=option_valid,
     )
     p = torch.softmax(out["root_logits"].masked_fill(~root_valid, -1.0e4), dim=-1)
+    recovery_p = torch.softmax(
+        out.get("recovery_root_logits", out["root_logits"]).masked_fill(~root_valid, -1.0e4),
+        dim=-1,
+    )
     r_dep, r_orc, gap, q = torch_oc_mero(
         out["margins"],
         p,
@@ -807,6 +828,7 @@ def predict_samples(
     gap_np = gap.detach().cpu().numpy().astype(np.float32)
     q_np = q.detach().cpu().numpy().astype(np.float32)
     p_np = p.detach().cpu().numpy().astype(np.float32)
+    recovery_p_np = recovery_p.detach().cpu().numpy().astype(np.float32)
     c_np = out["c_star"].detach().cpu().numpy().astype(np.float32)
     m_np = out["margins"].detach().cpu().numpy().astype(np.float32)
     direct_mean_np = None
@@ -879,6 +901,7 @@ def predict_samples(
                 direct_recovery_native_certificate=(
                     None if direct_native_certificate_np is None else direct_native_certificate_np[i].copy()
                 ),
+                recovery_root_probs=recovery_p_np[i].copy(),
             )
         )
     return preds
@@ -957,4 +980,5 @@ def predict_sample(d: dict[str, Any], bundle: ModelBundle | None, cfg: dict | No
             else out["direct_recovery_evidence_native_certificate"]
             .squeeze(0).detach().cpu().numpy().astype(np.float32)
         ),
+        recovery_root_probs=p.squeeze(0).detach().cpu().numpy().astype(np.float32),
     )

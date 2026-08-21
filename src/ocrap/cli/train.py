@@ -2999,6 +2999,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_evidence_roct_option_temperature=float(
             model_cfg.get("direct_recovery_evidence_roct_option_temperature", 0.35)
         ),
+        direct_recovery_evidence_common_measure_root_mass=bool(
+            model_cfg.get("direct_recovery_evidence_common_measure_root_mass", False)
+        ),
         direct_recovery_evidence_native_certificate_preservation=bool(
             model_cfg.get("direct_recovery_evidence_native_certificate_preservation", False)
         ),
@@ -3451,6 +3454,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             ),
             "direct_recovery_evidence_roct_option_temperature": float(
                 model_cfg.get("direct_recovery_evidence_roct_option_temperature", 0.35)
+            ),
+            "direct_recovery_evidence_common_measure_root_mass": bool(
+                model_cfg.get("direct_recovery_evidence_common_measure_root_mass", False)
             ),
             "direct_recovery_evidence_native_certificate_preservation": bool(
                 model_cfg.get("direct_recovery_evidence_native_certificate_preservation", False)

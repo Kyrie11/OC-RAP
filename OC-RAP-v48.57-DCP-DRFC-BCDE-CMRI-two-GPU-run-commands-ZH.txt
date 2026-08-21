@@ -1,0 +1,12 @@
+OC-RAP v48.57 — DCP-DRFC-BCDE-CMRI
+
+正式双 GPU 指令（代码根目录执行）：
+
+GPU0=0 GPU1=1 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs bash scripts/run_v48_57_dcp_drfc_bcde_cmri_two_gpu.sh
+
+说明：
+1. 默认严格验证并复用 runs/ocrap_v48_56_dcp_drfc_bcde_drac_ablation_A 作为 A/reference；若不存在或 contract 不合法，会自动 fresh rerun exact A。
+2. 如需强制 fresh A：V4857_FORCE_FRESH_A=1 GPU0=0 GPU1=1 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs bash scripts/run_v48_57_dcp_drfc_bcde_cmri_two_gpu.sh
+3. B/Main 是唯一 scientific intervention：CMRI。Balanced/Precision 并行使用两张 GPU。
+4. launcher 会自动运行 Precision/Balanced root-source decomposition audit，并生成 single-axis comparison。
+5. 运行结束上传：ocrap_v48_57_dcp_drfc_bcde_cmri_main.zip 和 OC-RAP-v48.57-CMRI-audits.zip。

@@ -209,6 +209,7 @@ factor_cache_contract_args=(
   --setting "roct_beta=${EVIDENCE_ROCT_BETA:-0.2}"
   --setting "roct_top_m=${EVIDENCE_ROCT_TOP_M:-8}"
   --setting "roct_option_temperature=${EVIDENCE_ROCT_OPTION_TEMPERATURE:-0.35}"
+  --setting "common_measure_root_mass=${EVIDENCE_COMMON_MEASURE_ROOT_MASS:-false}"
   --setting "native_certificate_preservation=${EVIDENCE_NATIVE_CERTIFICATE_PRESERVATION:-false}"
   --setting "native_drs_tolerance=${EVIDENCE_NATIVE_DRS_TOLERANCE:-0.05}"
   --setting "native_deployability_tolerance=${EVIDENCE_NATIVE_DEPLOYABILITY_TOLERANCE:-0.05}"
