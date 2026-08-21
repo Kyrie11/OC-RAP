@@ -64,6 +64,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.freeze_param_prefixes="${FREEZE_PARAM_PREFIXES:-}" \
   --set training.trainable_param_prefixes="${TRAINABLE_PARAM_PREFIXES:-}" \
   --set training.strict_init_prefixes="${STRICT_INIT_PREFIXES:-}" \
+  --set training.strict_init_allowed_missing_prefixes="${STRICT_INIT_ALLOWED_MISSING_PREFIXES:-}" \
   --set training.direct_only_fast_path="${DIRECT_ONLY_FAST_PATH:-true}" \
   --set training.witness_fast_path="${WITNESS_FAST_PATH:-}" \
   --set training.frozen_modules_eval="${FROZEN_MODULES_EVAL:-false}" \

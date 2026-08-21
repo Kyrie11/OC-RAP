@@ -1,3 +1,24 @@
+## v48.58.1 — RIFA PARALLEL-VARIANT / STAGE-I ISOLATION ENGINEERING HOTFIX (2026-08-21)
+
+**类别：工程正确性修复；不改变 v48.58 RIFA 的算法假设、A/B/C 定义、teacher truth、fixed top-k、Stage-II placement、AFE 特征/目标/阈值或正式运行指令。此前上传的 v48.58 结果判为 engineering-invalid，必须用同一 v48.58 指令重跑。**
+
+### 发现的两个阻断性问题
+
+1. `scripts/run_v48_58_dcp_drfc_bcde_rifa_two_gpu.sh::train_afe()` 原来在单个 `local` 命令中同时声明 `v/gpu/src/dst`。Bash 会在局部赋值生效前展开同一命令右值，而前面的 `materialize_native_arm()` 又把全局循环变量 `v` 留在 `precision`。结果 balanced/precision 两个后台进程都读取 `reference_A/candidates/precision` 并写入 `C_RUN/candidates/precision`，发生 checkpoint/log/contract 并发覆盖；balanced provenance 丢失。
+2. v48.58 直接调用 `adapt_ocrap_v48_36_ocaf_single_stage.sh` 时没有显式关闭历史 learned admission head；该脚本默认 `EVIDENCE_ADMISSION_HEAD=true`，因此相对 v48.56-A 又新增了 `direct_evidence_concord_admission_calibrator.*` 6 个 state keys。现有 `V48_58_STAGE_I_STATE_ISOLATION.json` 已正确报 `valid=false`。这违反了 C/Main “仅新增 9 参数 AFE、Stage-I bitwise identity” 的预注册 contract。
+
+### 修复
+
+- `materialize_native_arm()` 将 `v/src/dst` 全部函数局部化；`train_afe()` 分四行声明 `v/gpu/src/dst`，消除 Bash 同命令展开与全局 loop-variable 泄漏。
+- formal V58 launcher 显式 `EVIDENCE_ADMISSION_HEAD=false`，保持 v48.56-A 的 Stage-I architecture，只允许新增 `direct_absolute_feasibility_head.{weight,bias}`。
+- 新增 `training.strict_init_allowed_missing_prefixes` opt-in fail-early contract；V58 仅允许 source checkpoint 缺失 `direct_absolute_feasibility_head`。任何额外 destination key、source-only key 或 shape mismatch 在训练开始时直接失败，不再等 20 epochs 后才由 state-isolation 报错。历史 launcher 默认空值，行为不变。
+- 新增 `tools/check_v48_58_variant_isolation.py`：训练后同时检查 B 的 balanced/precision checkpoint 与对应 A reference bitwise 一致、C 的 init checkpoint 精确指向同 variant A、C balanced/precision 输出路径互异、trainable prefix 只有 AFE、两份 Stage-I isolation 均 valid、native/learned policy contract 正确。该 audit 被加入 `OC-RAP-v48.58-RIFA-audits.zip`。
+- RIFA 专项测试增加 parallel-variant path isolation 与 Stage-I architecture guard，防止同类回归。
+
+### 归因状态
+
+当前上传的 v48.58 main/native-B 包 **不能做 B-A / C-B / C-A 算法归因**：A reference reuse contract 本身有效，但 C 的 variant provenance 与 Stage-I isolation 已失败，且正式 calibration/comparison 阶段未完整产生。修复版保持原命令与原算法实验设计，重跑后再按 teacher-boundary → B-A → C-B → state isolation → C-A deployment 顺序判断 RIFA/two-stage。
+
 ## v48.58 — DCP-DRFC-BCDE-RIFA / ROLE-ISOLATED FEASIBILITY ADMISSION (2026-08-21)
 
 **类别：由 v48.57 CMRI 的 source-mechanism 否证与 v48.56 DZBA 的重新归因共同触发的 role-separation 实验。v48.58 不保留 CMRI，不修改 root logits / teacher root / proposal family，不进入 evidence centering，不恢复 GAP hard veto，不调 `R_dep=0` boundary。研究问题被压缩为：在一个统一、regime-agnostic planner 中，candidate-vs-nominal recovery improvement 与 candidate absolute feasibility 是否必须由两个逻辑层和两个不同 source contract 承担？**

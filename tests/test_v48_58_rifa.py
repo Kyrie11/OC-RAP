@@ -99,3 +99,19 @@ def test_enabling_afe_does_not_change_stage_i_outputs_before_training() -> None:
     for key in ('root_logits','margins','c_star','direct_recovery_value_logit',
                 'direct_recovery_evidence_native_certificate'):
         assert torch.equal(a[key],b[key]), key
+
+
+def test_v58_launcher_keeps_parallel_variants_path_isolated() -> None:
+    from pathlib import Path
+    script = (Path(__file__).resolve().parents[1] / 'scripts' / 'run_v48_58_dcp_drfc_bcde_rifa_two_gpu.sh').read_text()
+    assert 'local v src dst' in script
+    assert 'local v="$1"\n  local gpu="$2"\n  local src="$REFERENCE_A/candidates/$v"\n  local dst="$C_RUN/candidates/$v"' in script
+    assert 'local v="$1" gpu="$2" src="$REFERENCE_A/candidates/$v"' not in script
+    assert 'check_v48_58_variant_isolation.py' in script
+
+
+def test_v58_launcher_forbids_legacy_admission_head_and_allows_only_afe_init_missing() -> None:
+    from pathlib import Path
+    script = (Path(__file__).resolve().parents[1] / 'scripts' / 'run_v48_58_dcp_drfc_bcde_rifa_two_gpu.sh').read_text()
+    assert 'export EVIDENCE_ADMISSION_HEAD=false' in script
+    assert 'STRICT_INIT_ALLOWED_MISSING_PREFIXES=direct_absolute_feasibility_head' in script

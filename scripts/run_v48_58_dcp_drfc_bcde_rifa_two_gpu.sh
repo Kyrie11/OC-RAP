@@ -14,6 +14,10 @@ REF_AUDIT="$BASE_OUT/OC-RAP-v48.58-reference-reuse-contract.json"
 FEAS_AUDIT="$BASE_OUT/OC-RAP-v48.58-RIFA-feasibility-role-audit.json"
 COMPARE="$BASE_OUT/OC-RAP-v48.58-DCP-DRFC-BCDE-RIFA-comparison.json"
 mkdir -p "$BASE_OUT"
+# Reruns are fail-clean: remove stale top-level products before any new work so
+# an aborted execution cannot be mistaken for a completed v48.58 experiment.
+rm -f "$REF_AUDIT" "$FEAS_AUDIT" "$COMPARE" \
+      "$B_RUN.zip" "$C_RUN.zip" "$BASE_OUT/OC-RAP-v48.58-RIFA-audits.zip"
 
 # v48.58 is deliberately NOT a CMRI continuation. Stage-I is the validated
 # v48.56-A semantic reference. B and C add only a lexicographic absolute
@@ -36,6 +40,7 @@ for d in "$CERT_NEAR" "$CERT_CONTACT" "$DEV_NEAR" "$DEV_CONTACT" "$TRAIN_NEAR" "
 done
 
 materialize_native_arm(){
+  local v src dst
   rm -rf "$B_RUN"; mkdir -p "$B_RUN/candidates" "$B_RUN/logs"
   for v in balanced precision; do
     src="$REFERENCE_A/candidates/$v"; dst="$B_RUN/candidates/$v"
@@ -71,6 +76,10 @@ export EVIDENCE_RESERVE_FACTOR_ALIGNMENT=true EVIDENCE_ADMISSION_PRIOR_MODE=join
 export EVIDENCE_NATIVE_CERTIFICATE_PRESERVATION=true EVIDENCE_NATIVE_MARGIN_COMPLETE_PRESERVATION=false EVIDENCE_NATIVE_ADVANTAGE_PRESERVATION=true
 export EVIDENCE_NATIVE_EXACT_ADVANTAGE_PRESERVATION=false EVIDENCE_NATIVE_BOUNDARY_COMPLETE_ADVANTAGE_PRESERVATION=false EVIDENCE_PHYSICAL_STUDENT_DRS=false
 export EVIDENCE_DEP_BOUNDARY_ALIGNED=false EVIDENCE_GAP_ORDINAL_ONLY=false EVIDENCE_COMMON_MEASURE_ROOT_MASS=false
+# v48.58.1 engineering hotfix: the v48.56-A Stage-I checkpoint does not contain
+# the historical learned admission calibrator.  RIFA adds only the 9-parameter
+# absolute-feasibility head, so fail closed against accidental re-instantiation.
+export EVIDENCE_ADMISSION_HEAD=false
 export EVIDENCE_NATIVE_DRS_TOLERANCE=0.05 EVIDENCE_NATIVE_DEPLOYABILITY_TOLERANCE=0.05 EVIDENCE_NATIVE_GAP_TOLERANCE=0.05 EVIDENCE_NATIVE_POSITIVE_GAIN=0.015
 export EVIDENCE_CALIBRATOR_CONTEXT_SOURCE=physical_interaction PROPOSAL_TOP_K=5
 export TRAIN_OPTION_EXECUTION_SEMANTICS=observation_class EVAL_OPTION_EXECUTION_SEMANTICS=observation_class OPTION_EXECUTION_SEMANTICS=observation_class
@@ -78,7 +87,14 @@ export ORDINAL_EVIDENCE_COMPONENT_MARGIN_TARGET_MODE=raw ORDINAL_EVIDENCE_COMPON
 export ORDINAL_EVIDENCE_COMPONENT_MARGIN_REGRESSION_RELIABILITY="1,1,1,0,0"
 
 train_afe(){
-  local v="$1" gpu="$2" src="$REFERENCE_A/candidates/$v" dst="$C_RUN/candidates/$v"
+  # Do not combine these declarations: bash expands RHS values before the local
+  # assignments take effect.  The old one-line declaration therefore captured
+  # the global loop variable left by materialize_native_arm (v=precision), making
+  # both background jobs use/write the precision variant.
+  local v="$1"
+  local gpu="$2"
+  local src="$REFERENCE_A/candidates/$v"
+  local dst="$C_RUN/candidates/$v"
   mkdir -p "$dst"
   if [[ -f "$src/FACTOR_SUPPORT_CONTRACT.env" ]]; then set -a; source "$src/FACTOR_SUPPORT_CONTRACT.env"; set +a; else export EVIDENCE_COMPONENT_RELIABILITY="1,1,1,0,0"; fi
   RUN="$dst" MODEL_DIR="$dst/model_v48_trac_sr" VARIANT="$v" TRAIN_GPU="$gpu" \
@@ -87,6 +103,7 @@ train_afe(){
   GROUP_INDEX="$REFERENCE_A/evidence_adapt_teacher_pcd_index.jsonl" \
   VAL_GROUP_INDEX="$REFERENCE_A/evidence_adapt_dev_teacher_pcd_index.jsonl" \
   EVIDENCE_TRAINABLE_PREFIXES_OVERRIDE=direct_absolute_feasibility_head \
+  STRICT_INIT_ALLOWED_MISSING_PREFIXES=direct_absolute_feasibility_head \
   ABSOLUTE_FEASIBILITY_HEAD=true ABSOLUTE_FEASIBILITY_WEIGHT=1.0 \
   GROUP_BATCH_STRATIFIED=false GROUP_BATCHING_REPLACEMENT=false \
   BEST_METRIC=direct_absolute_feasibility_bce BEST_METRIC_MIN_DELTA=0.00001 \
@@ -107,6 +124,9 @@ train_afe precision "$GPU1" & p1=$!
 wait "$p0"; r0=$?; wait "$p1"; r1=$?
 set -e
 [[ "$r0" == 0 && "$r1" == 0 ]] || { echo "v48.58 AFE training failed balanced=$r0 precision=$r1" >&2; exit 30; }
+python tools/check_v48_58_variant_isolation.py \
+  --reference-run "$REFERENCE_A" --native-run "$B_RUN" --learned-run "$C_RUN" \
+  --output "$C_RUN/V48_58_VARIANT_ISOLATION.json"
 python - "$C_RUN/V48_58_FACTOR_CONTRACT.json" <<'PY'
 import json,pathlib,sys,time
 p=pathlib.Path(sys.argv[1]); p.write_text(json.dumps({
@@ -141,5 +161,6 @@ python tools/compare_v48_58_rifa.py --a "$REFERENCE_A" --b "$B_RUN" --c "$C_RUN"
 cd "$BASE_OUT"
 for run in "$B_RUN" "$C_RUN"; do b="$(basename "$run")"; rm -f "$b.zip"; zip -qr "$b.zip" "$b"; done
 zip -qj OC-RAP-v48.58-RIFA-audits.zip "$REF_AUDIT" "$FEAS_AUDIT" "$COMPARE" \
+  "$C_RUN/V48_58_VARIANT_ISOLATION.json" \
   "$C_RUN/candidates/balanced/V48_58_STAGE_I_STATE_ISOLATION.json" "$C_RUN/candidates/precision/V48_58_STAGE_I_STATE_ISOLATION.json"
 echo "v48.58 complete. Upload $(basename "$B_RUN").zip + $(basename "$C_RUN").zip + OC-RAP-v48.58-RIFA-audits.zip"

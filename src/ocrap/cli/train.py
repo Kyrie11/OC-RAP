@@ -3194,6 +3194,38 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         }
         print(init_load_info, flush=True)
 
+        # v48.58.1: optional fail-early staged-architecture contract.  This is
+        # intentionally opt-in so historical runs remain byte/behavior compatible.
+        # When set, every destination key missing from the source checkpoint must
+        # belong to an explicitly allowed new prefix, and source-only/shape-mismatch
+        # tensors are forbidden.  RIFA uses this to permit only its new AFE head.
+        allowed_missing_prefixes = tuple(
+            x.strip()
+            for x in str(tcfg.get("strict_init_allowed_missing_prefixes", "") or "").split(",")
+            if x.strip()
+        )
+        if allowed_missing_prefixes:
+            disallowed_missing = sorted(
+                key for key in missing
+                if not any(key == prefix or key.startswith(prefix + ".") for prefix in allowed_missing_prefixes)
+            )
+            unexpected_keys = sorted(set(unexpected) | set(unexpected_in_source))
+            if disallowed_missing or unexpected_keys or shape_mismatch:
+                raise RuntimeError(
+                    "strict staged-checkpoint allowed-missing contract failed: "
+                    + json.dumps({
+                        "allowed_missing_prefixes": list(allowed_missing_prefixes),
+                        "disallowed_missing_keys": disallowed_missing,
+                        "unexpected_source_keys": unexpected_keys,
+                        "shape_mismatch_keys": shape_mismatch,
+                    }, sort_keys=True)
+                )
+            print({
+                "event": "strict_init_allowed_missing_verified",
+                "allowed_missing_prefixes": list(allowed_missing_prefixes),
+                "missing_keys": list(missing),
+            }, flush=True)
+
         # v48.10 COPE: staged training must not silently discard the learned
         # preference adapter because Stage C was instantiated with a different
         # hidden width.  Prefixes listed here are an architecture contract: all
