@@ -13,10 +13,11 @@ C_RUN="$BASE_OUT/ocrap_v48_58_dcp_drfc_bcde_rifa_main"
 REF_AUDIT="$BASE_OUT/OC-RAP-v48.58-reference-reuse-contract.json"
 FEAS_AUDIT="$BASE_OUT/OC-RAP-v48.58-RIFA-feasibility-role-audit.json"
 COMPARE="$BASE_OUT/OC-RAP-v48.58-DCP-DRFC-BCDE-RIFA-comparison.json"
+PIPELINE_COMPLETE="$BASE_OUT/OC-RAP-v48.58-PIPELINE_COMPLETE.json"
 mkdir -p "$BASE_OUT"
 # Reruns are fail-clean: remove stale top-level products before any new work so
 # an aborted execution cannot be mistaken for a completed v48.58 experiment.
-rm -f "$REF_AUDIT" "$FEAS_AUDIT" "$COMPARE" \
+rm -f "$REF_AUDIT" "$FEAS_AUDIT" "$COMPARE" "$PIPELINE_COMPLETE" \
       "$B_RUN.zip" "$C_RUN.zip" "$BASE_OUT/OC-RAP-v48.58-RIFA-audits.zip"
 
 # v48.58 is deliberately NOT a CMRI continuation. Stage-I is the validated
@@ -49,7 +50,7 @@ materialize_native_arm(){
     cp --reflink=auto "$src/model_v48_trac_sr/best.pt" "$dst/model_v48_trac_sr/best.pt"
     [[ -f "$src/model_v48_trac_sr/train_summary.json" ]] && cp "$src/model_v48_trac_sr/train_summary.json" "$dst/model_v48_trac_sr/train_summary.json"
     cp "$src/POLICY_CONTRACT.env" "$dst/POLICY_CONTRACT.env"
-    printf '\nABSOLUTE_FEASIBILITY_MODE=native\nABSOLUTE_FEASIBILITY_THRESHOLD=0.5\nSELECTION_SEMANTICS=rank_topk_then_absolute_feasibility_then_relative_filter_then_evidence_rerank\n' >> "$dst/POLICY_CONTRACT.env"
+    python tools/rewrite_v48_58_policy_contract.py --contract "$dst/POLICY_CONTRACT.env" --mode native --threshold 0.5
     [[ -f "$src/FACTOR_SUPPORT_CONTRACT.env" ]] && cp "$src/FACTOR_SUPPORT_CONTRACT.env" "$dst/FACTOR_SUPPORT_CONTRACT.env"
   done
   python - "$B_RUN/V48_58_FACTOR_CONTRACT.json" <<'PY'
@@ -125,7 +126,8 @@ wait "$p0"; r0=$?; wait "$p1"; r1=$?
 set -e
 [[ "$r0" == 0 && "$r1" == 0 ]] || { echo "v48.58 AFE training failed balanced=$r0 precision=$r1" >&2; exit 30; }
 python tools/check_v48_58_variant_isolation.py \
-  --reference-run "$REFERENCE_A" --native-run "$B_RUN" --learned-run "$C_RUN" \
+  --reference-run "$REFERENCE_A" --reference-contract "$REF_AUDIT" \
+  --native-run "$B_RUN" --learned-run "$C_RUN" \
   --output "$C_RUN/V48_58_VARIANT_ISOLATION.json"
 python - "$C_RUN/V48_58_FACTOR_CONTRACT.json" <<'PY'
 import json,pathlib,sys,time
@@ -145,6 +147,7 @@ run_calibration(){
   local run="$1" mode="$2" attempt="$3"
   set +e
   OUTPUTDIR="$run" GPU0="$GPU0" GPU1="$GPU1" V4836_ATTEMPT_ID="$attempt" \
+  OCRAP_IMPLEMENTATION_VERSION="v48.58.2-RIFA-SELECTION-CONTRACT-HOTFIX" \
   CAL_SAFE="$CAL_SAFE" CERT_NEAR="$CERT_NEAR" CERT_CONTACT="$CERT_CONTACT" DEV_NEAR="$DEV_NEAR" DEV_CONTACT="$DEV_CONTACT" \
   ABSOLUTE_FEASIBILITY_MODE="$mode" ABSOLUTE_FEASIBILITY_THRESHOLD=0.5 OPTION_EXECUTION_SEMANTICS=observation_class \
   HARM_LABEL_MODE=component_veto OPPORTUNITY_LABEL_MODE=raw_benefit GATE_POSITIVE_MODE=safe_benefit PROPOSAL_TOP_K=5 \
@@ -157,10 +160,13 @@ run_calibration "$C_RUN" learned "v48.58-C-AFE-$(date +%s)"
 
 python tools/audit_v48_58_feasibility_role.py --arm "A=$REFERENCE_A" --arm "B=$B_RUN" --arm "C_Main=$C_RUN" --output "$FEAS_AUDIT"
 python tools/compare_v48_58_rifa.py --a "$REFERENCE_A" --b "$B_RUN" --c "$C_RUN" --feasibility-audit "$FEAS_AUDIT" --output "$COMPARE"
+python tools/check_v48_58_pipeline_complete.py \
+  --reference-contract "$REF_AUDIT" --native-run "$B_RUN" --learned-run "$C_RUN" \
+  --feasibility-audit "$FEAS_AUDIT" --comparison "$COMPARE" --output "$PIPELINE_COMPLETE"
 
 cd "$BASE_OUT"
 for run in "$B_RUN" "$C_RUN"; do b="$(basename "$run")"; rm -f "$b.zip"; zip -qr "$b.zip" "$b"; done
-zip -qj OC-RAP-v48.58-RIFA-audits.zip "$REF_AUDIT" "$FEAS_AUDIT" "$COMPARE" \
+zip -qj OC-RAP-v48.58-RIFA-audits.zip "$REF_AUDIT" "$FEAS_AUDIT" "$COMPARE" "$PIPELINE_COMPLETE" \
   "$C_RUN/V48_58_VARIANT_ISOLATION.json" \
   "$C_RUN/candidates/balanced/V48_58_STAGE_I_STATE_ISOLATION.json" "$C_RUN/candidates/precision/V48_58_STAGE_I_STATE_ISOLATION.json"
 echo "v48.58 complete. Upload $(basename "$B_RUN").zip + $(basename "$C_RUN").zip + OC-RAP-v48.58-RIFA-audits.zip"

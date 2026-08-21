@@ -38,8 +38,10 @@ def summarize(rows, positive_gain=.015):
        'absolute_feasibility_accuracy_at_0_5':float(np.mean([(p>=.5)==y for p,y in zip(ps,feasible)])),
        'safe_positive_pass_fraction':(sum(float(r['absolute_feasibility_probability'])>=.5 for r in safe)/len(safe) if safe else None),
        'harmful_pass_fraction':(sum(float(r['absolute_feasibility_probability'])>=.5 for r in harmful)/len(harmful) if harmful else None),
-       'teacher_infeasible_pass_fraction':(sum(p>=.5 for p,y in zip(ps,feasible) if not y)/max(1,sum(not y for y in feasible))),
-       'teacher_feasible_reject_fraction':(sum(p<.5 for p,y in zip(ps,feasible) if y)/max(1,sum(y for y in feasible))),
+       'teacher_infeasible_count':sum(not y for y in feasible),
+       'teacher_feasible_count':sum(y for y in feasible),
+       'teacher_infeasible_pass_fraction':(sum(p>=.5 for p,y in zip(ps,feasible) if not y)/sum(not y for y in feasible) if any(not y for y in feasible) else None),
+       'teacher_feasible_reject_fraction':(sum(p<.5 for p,y in zip(ps,feasible) if y)/sum(y for y in feasible) if any(y for y in feasible) else None),
       })
     return d
 

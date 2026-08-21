@@ -38,6 +38,15 @@ def main() -> int:
     missing=[x for x in common_required if not (r/x).is_file()]
     if not factor_name:
         missing.append('V48_56_FACTOR_CONTRACT.json|V48_57_FACTOR_CONTRACT.json')
+    candidate_checkpoint_paths={
+        name:r/'candidates'/name/'model_v48_trac_sr'/'best.pt' for name in ('balanced','precision')
+    }
+    candidate_summary_paths={
+        name:r/'candidates'/name/'model_v48_trac_sr'/'train_summary.json' for name in ('balanced','precision')
+    }
+    candidate_missing=[str(p) for p in [*candidate_checkpoint_paths.values(), *candidate_summary_paths.values()] if not p.is_file()]
+    if candidate_missing:
+        missing.extend(candidate_missing)
     checks={"reference_exists":r.is_dir(),"required_files_present":not missing}
     errors=[]
     if missing: errors.append({'missing':missing})
@@ -72,11 +81,26 @@ def main() -> int:
         checks['pipeline_valid']=bool(status.get('pipeline_valid')) and int(status.get('authoritative_exit_code',99)) in {0,20}
         overlaps=protocol.get('scene_overlaps',{}) or {}
         checks['scene_disjoint']=all(int(v)==0 for v in overlaps.values())
+        reference_candidate_checkpoint_sha256={}
+        reference_candidate_checkpoint_size_bytes={}
         for name in ('balanced','precision'):
             c=(source.get('checks',{}) or {}).get(name,{})
             checks[f'source_{name}_hash_valid']=bool(c.get('manifest_hash_match')) and bool(c.get('nonempty'))
+            ckpt=candidate_checkpoint_paths[name]
+            summary_path=candidate_summary_paths[name]
+            actual_sha=_sha(ckpt)
+            reference_candidate_checkpoint_sha256[name]=actual_sha
+            reference_candidate_checkpoint_size_bytes[name]=ckpt.stat().st_size
+            summary=_json(summary_path)
+            expected_sha=str(summary.get('source_factor_checkpoint_sha256') or summary.get('metric_source_checkpoint_sha256') or '').strip()
+            checks[f'reference_{name}_checkpoint_matches_train_summary']=bool(expected_sha) and actual_sha == expected_sha
+            if not checks[f'reference_{name}_checkpoint_matches_train_summary']:
+                errors.append({'reference_checkpoint_hash_mismatch':{'variant':name,'expected':expected_sha,'actual':actual_sha}})
         if not checks['exact_v48_56_A_semantics']:
             errors.append({'factor_contract_mismatch':{k:{'expected':v,'actual':factor.get(k)} for k,v in expected.items() if factor.get(k)!=v}})
+    if missing:
+        reference_candidate_checkpoint_sha256={}
+        reference_candidate_checkpoint_size_bytes={}
     valid=all(bool(v) for k,v in checks.items() if k != 'factor_contract_source')
     doc={
         'schema':'ocrap-v48.58-reference-reuse-contract-v1','valid':valid,
@@ -85,6 +109,11 @@ def main() -> int:
         'source_checkpoint_sha256':{
             k:v.get('sha256') for k,v in ((source.get('checks',{}) or {}).items()) if isinstance(v,dict)
         },
+        'upstream_source_checkpoint_sha256':{
+            k:v.get('sha256') for k,v in ((source.get('checks',{}) or {}).items()) if isinstance(v,dict)
+        },
+        'reference_candidate_checkpoint_sha256':reference_candidate_checkpoint_sha256,
+        'reference_candidate_checkpoint_size_bytes':reference_candidate_checkpoint_size_bytes,
         'reuse_rationale':'v48.58 holds Stage-I exactly at validated v48.56-A semantics; only the new lexicographic absolute-feasibility stage is intervened on',
         'test_roots_read':False,
     }

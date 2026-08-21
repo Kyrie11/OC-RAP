@@ -1607,9 +1607,17 @@ def main() -> int:
             "learned_gate_rejection"
         ),
         "selection_rule": (
-            "physical -> preference top-k proposal -> evidence rerank -> value challenge"
+            (
+                "physical -> preference top-k proposal -> absolute feasibility -> relative evidence -> evidence rerank -> value challenge"
+                if args.absolute_feasibility_mode != "off"
+                else "physical -> preference top-k proposal -> relative evidence -> evidence rerank -> value challenge"
+            )
             if args.evidence_rerank_top_k else
             ("physical -> preference top1 -> evidence -> value challenge" if args.policy_first_no_fallback else "physical -> gain-distribution opportunity/harm -> preference top1 -> value challenge")
+        ),
+        "absolute_feasibility_mode": args.absolute_feasibility_mode,
+        "absolute_feasibility_threshold": (
+            float(args.absolute_feasibility_threshold) if args.absolute_feasibility_mode != "off" else None
         ),
         "risk_source": args.risk_source,
         "harm_label_mode": args.harm_label_mode,

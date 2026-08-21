@@ -19,15 +19,19 @@ def _load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _env(path: Path) -> dict[str, str]:
+def _env(path: Path) -> tuple[dict[str, str], dict[str, list[str]]]:
     out: dict[str, str] = {}
+    duplicates: dict[str, list[str]] = {}
     for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         k, v = line.split("=", 1)
+        k=k.strip(); v=v.strip()
+        if k in out:
+            duplicates.setdefault(k, [out[k]]).append(v)
         out[k] = v
-    return out
+    return out, duplicates
 
 
 def _resolved(value: str | Path) -> str:
@@ -37,12 +41,19 @@ def _resolved(value: str | Path) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description="v48.58 fail-closed balanced/precision provenance isolation")
     ap.add_argument("--reference-run", type=Path, required=True)
+    ap.add_argument("--reference-contract", type=Path, required=True)
     ap.add_argument("--native-run", type=Path, required=True)
     ap.add_argument("--learned-run", type=Path, required=True)
     ap.add_argument("--output", type=Path, required=True)
     args = ap.parse_args()
 
     errors: list[str] = []
+    reference_contract = _load_json(args.reference_contract)
+    if not bool(reference_contract.get("valid")):
+        errors.append("reference reuse contract is not valid")
+    if _resolved(reference_contract.get("reference_run", "")) != _resolved(args.reference_run):
+        errors.append("reference reuse contract points to a different reference run")
+    reference_snapshot = reference_contract.get("reference_candidate_checkpoint_sha256") or {}
     variants: dict[str, dict] = {}
     learned_checkpoint_paths: list[str] = []
     for variant in ("balanced", "precision"):
@@ -68,8 +79,8 @@ def main() -> int:
         native_sha = _sha256(native_ckpt)
         summary = _load_json(learned_summary_path)
         state = _load_json(state_path)
-        native_policy = _env(native_policy_path)
-        learned_policy = _env(learned_policy_path)
+        native_policy, native_duplicates = _env(native_policy_path)
+        learned_policy, learned_duplicates = _env(learned_policy_path)
 
         expected_ref = _resolved(ref_ckpt)
         expected_learned = _resolved(learned_ckpt)
@@ -78,18 +89,27 @@ def main() -> int:
         trainable = list(summary.get("trainable_param_prefixes") or [])
         trainable_ok = trainable == ["direct_absolute_feasibility_head"]
         native_copy_ok = ref_sha == native_sha
+        reference_snapshot_ok = str(reference_snapshot.get(variant, "")) == ref_sha
         state_ok = bool(state.get("valid")) and bool(state.get("stage_i_bitwise_identity"))
         state_ref_ok = _resolved(state.get("reference", "")) == expected_ref
         state_adapted_ok = _resolved(state.get("adapted", "")) == expected_learned
+        expected_order = "rank_topk_then_absolute_feasibility_then_relative_filter_then_evidence_rerank"
+        critical_keys={"ABSOLUTE_FEASIBILITY_MODE","ABSOLUTE_FEASIBILITY_THRESHOLD","SELECTION_SEMANTICS"}
+        native_duplicate_critical=sorted(k for k in native_duplicates if k in critical_keys)
+        learned_duplicate_critical=sorted(k for k in learned_duplicates if k in critical_keys)
         native_policy_ok = (
             native_policy.get("ABSOLUTE_FEASIBILITY_MODE") == "native"
             and native_policy.get("ABSOLUTE_FEASIBILITY_THRESHOLD") == "0.5"
+            and native_policy.get("SELECTION_SEMANTICS") == expected_order
+            and not native_duplicate_critical
         )
         learned_policy_ok = (
             learned_policy.get("ABSOLUTE_FEASIBILITY_MODE") == "learned"
             and learned_policy.get("ABSOLUTE_FEASIBILITY_THRESHOLD") == "0.5"
+            and learned_policy.get("SELECTION_SEMANTICS") == expected_order
+            and not learned_duplicate_critical
         )
-        valid = all((init_ok, checkpoint_ok, trainable_ok, native_copy_ok, state_ok,
+        valid = all((init_ok, checkpoint_ok, trainable_ok, native_copy_ok, reference_snapshot_ok, state_ok,
                      state_ref_ok, state_adapted_ok, native_policy_ok, learned_policy_ok))
         if not valid:
             errors.append(f"{variant}: provenance/isolation contract failed")
@@ -101,6 +121,8 @@ def main() -> int:
             "native_checkpoint": _resolved(native_ckpt),
             "native_sha256": native_sha,
             "native_is_bitwise_reference": native_copy_ok,
+            "reference_snapshot_sha256": reference_snapshot.get(variant),
+            "reference_snapshot_matches_current": reference_snapshot_ok,
             "learned_checkpoint": expected_learned,
             "learned_init_checkpoint": _resolved(summary.get("init_checkpoint", "")),
             "learned_init_matches_same_variant_reference": init_ok,
@@ -112,6 +134,8 @@ def main() -> int:
             "state_adapted_matches_variant": state_adapted_ok,
             "native_policy_contract_valid": native_policy_ok,
             "learned_policy_contract_valid": learned_policy_ok,
+            "native_policy_duplicate_critical_keys": native_duplicate_critical,
+            "learned_policy_duplicate_critical_keys": learned_duplicate_critical,
         }
 
     distinct_learned_paths = len(learned_checkpoint_paths) == 2 and len(set(learned_checkpoint_paths)) == 2

@@ -11,11 +11,20 @@ from typing import Any
 
 def _env(path: Path) -> dict[str, str]:
     out: dict[str, str] = {}
+    critical = {
+        "PROPOSAL_TOP_K",
+        "SELECTION_SEMANTICS",
+        "ABSOLUTE_FEASIBILITY_MODE",
+        "ABSOLUTE_FEASIBILITY_THRESHOLD",
+    }
     for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if line and not line.startswith("#") and "=" in line:
             k, v = line.split("=", 1)
-            out[k.strip()] = v.strip().strip('"').strip("'")
+            k=k.strip(); v=v.strip().strip('"').strip("'")
+            if k in critical and k in out and out[k] != v:
+                raise SystemExit(f"conflicting duplicate policy-contract key {k}: {out[k]!r} vs {v!r}")
+            out[k] = v
     return out
 
 
@@ -25,6 +34,51 @@ def _same(a: Any, b: Any, tol: float = 1e-12) -> bool:
     except (TypeError, ValueError):
         return False
 
+
+
+LEGACY_SELECTION_SEMANTICS = "rank_topk_then_filter_then_evidence_rerank"
+RIFA_SELECTION_SEMANTICS = "rank_topk_then_absolute_feasibility_then_relative_filter_then_evidence_rerank"
+ABSOLUTE_FEASIBILITY_MODES = {"off", "native", "learned"}
+
+
+def _selection_contract(policy: dict[str, str], protocol_policy: dict[str, Any]) -> dict[str, Any]:
+    """Resolve the exact deployed selector semantics from the registered policy.
+
+    v48.58 inserts an absolute-feasibility stage between frozen rank top-k and
+    the legacy relative evidence filter.  Older v48.36 runs remain valid with
+    ``off``.  The check is intentionally symmetric: POLICY_CONTRACT.env and
+    GATE_SPEC.json must agree on mode, threshold and ordering.
+    """
+    policy_mode = str(policy.get("ABSOLUTE_FEASIBILITY_MODE", "off")).strip().lower()
+    gate_mode = str(protocol_policy.get("absolute_feasibility_mode", "off")).strip().lower()
+    mode_valid = policy_mode in ABSOLUTE_FEASIBILITY_MODES and gate_mode == policy_mode
+    expected = RIFA_SELECTION_SEMANTICS if policy_mode != "off" else LEGACY_SELECTION_SEMANTICS
+    policy_order = str(policy.get("SELECTION_SEMANTICS", "")).strip()
+    gate_order = str(protocol_policy.get("selection_semantics", "")).strip()
+    order_valid = mode_valid and policy_order == expected and gate_order == expected
+    if policy_mode == "off":
+        threshold_valid = (
+            "ABSOLUTE_FEASIBILITY_THRESHOLD" not in policy
+            or _same(policy.get("ABSOLUTE_FEASIBILITY_THRESHOLD"), 0.5)
+        ) and (
+            "absolute_feasibility_threshold" not in protocol_policy
+            or _same(protocol_policy.get("absolute_feasibility_threshold"), 0.5)
+        )
+    else:
+        threshold_valid = (
+            _same(policy.get("ABSOLUTE_FEASIBILITY_THRESHOLD"), 0.5)
+            and _same(protocol_policy.get("absolute_feasibility_threshold"), 0.5)
+        )
+    return {
+        "mode": policy_mode,
+        "gate_mode": gate_mode,
+        "mode_valid": mode_valid,
+        "threshold_valid": threshold_valid,
+        "expected_selection_semantics": expected,
+        "policy_selection_semantics": policy_order,
+        "gate_selection_semantics": gate_order,
+        "selection_semantics_valid": order_valid,
+    }
 
 def _sha256(path: Path) -> str:
     h = hashlib.sha256()
@@ -209,7 +263,9 @@ def main() -> int:
 
     failures: list[str] = []
     checks: dict[str, Any] = {}
-    expected_order = "rank_topk_then_filter_then_evidence_rerank"
+    policy_protocol = protocol.get("policy") or {}
+    selection_contract = _selection_contract(policy, policy_protocol)
+    expected_order = selection_contract["expected_selection_semantics"]
     expected_topk = int(policy.get("PROPOSAL_TOP_K", "-1"))
     checks["single_shared_rule"] = (
         int(shared.get("shared_rule_count", 0)) == 1
@@ -223,10 +279,9 @@ def main() -> int:
         and float(selected_rule.get("harm_threshold", 2.0)) <= float(semantic_domain.get("max_harm_threshold", 0.5))
         and float(selected_rule.get("score_threshold", -1.0)) >= float(semantic_domain.get("min_score_threshold", 0.0))
     )
-    checks["selection_semantics"] = (
-        policy.get("SELECTION_SEMANTICS") == expected_order
-        and ((protocol.get("policy") or {}).get("selection_semantics")) == expected_order
-    )
+    checks["absolute_feasibility_mode"] = bool(selection_contract["mode_valid"])
+    checks["absolute_feasibility_threshold"] = bool(selection_contract["threshold_valid"])
+    checks["selection_semantics"] = bool(selection_contract["selection_semantics_valid"])
     checks["proposal_top_k"] = (
         expected_topk > 0
         and int((protocol.get("policy") or {}).get("proposal_top_k", -1)) == expected_topk
@@ -284,6 +339,7 @@ def main() -> int:
         "shared_rule_sha256": hashlib.sha256(args.shared_rule.read_bytes()).hexdigest(),
         "single_deployment_rule": True,
         "strategy_regime_conditioning": False,
+        "selection_contract": selection_contract,
         "checks": checks,
         "failure_reasons": failures,
         "test_roots_read": False,

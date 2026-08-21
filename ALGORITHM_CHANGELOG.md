@@ -1,3 +1,30 @@
+## v48.58.2 — RIFA SELECTION-CONTRACT / CERTIFICATE RC30 ENGINEERING HOTFIX (2026-08-21)
+
+**类别：纯工程与 provenance 正确性修复；v48.58 RIFA 算法、A/B/C 定义、teacher truth、fixed top-k、AFE 9 参数 head、0.5 threshold、Stage-II placement 和正式运行指令均不改变。v48.58.1 当前上传结果因 certificate contract checker 的旧 selector 语义硬编码而 RC=30，不能做算法归因。**
+
+### 当前 RC=30 根因
+
+- v48.58.1 已正确修复 balanced/precision 并行路径与 Stage-I isolation；本轮 `V48_58_VARIANT_ISOLATION.json` 的 balanced/precision 均 `valid=true`。
+- RIFA 实际部署顺序和 `GATE_SPEC.json` 已是 `rank_topk_then_absolute_feasibility_then_relative_filter_then_evidence_rerank`。
+- 但通用 `check_v48_36_metric_calibration_contract.py` 仍将唯一合法顺序硬编码为历史 `rank_topk_then_filter_then_evidence_rerank`，导致 balanced/precision 两个 metric contract 都只在 `selection_semantics` 一项失败并返回 RC=31；certificate controller 因此在读 certificate pool 前 fail-closed，顶层映射为 RC=30。
+- 这属于 checker/schema drift，不是 RIFA 的 algorithmic RC=20，也不是 two-stage/AFE 的实验结论。
+
+### v48.58.2 修复
+
+1. Metric/calibration contract checker 现在由 `ABSOLUTE_FEASIBILITY_MODE` 推导合法 selector：`off` 保持历史顺序；`native|learned` 必须使用 RIFA 顺序。POLICY_CONTRACT 与 GATE_SPEC 必须在 mode、固定 0.5 threshold、selector 顺序上完全一致。
+2. B arm 不再通过 append 覆盖旧 `SELECTION_SEMANTICS`；新增 `rewrite_v48_58_policy_contract.py`，删除旧 critical keys 后写入唯一 canonical RIFA keys，消除同一 env 文件中互相矛盾的 duplicate selector。
+3. `calibrate_policy_risk_v48.py` 的结果元数据显式记录 absolute-feasibility mode/threshold，并让 human-readable `selection_rule` 与实际 two-stage 调用链一致。
+4. Reference reuse audit 新增 V48.56-A **candidate checkpoint 本体** SHA256/size 快照，并验证其与 candidate train summary 中 byte-pinned factor checkpoint SHA 一致；保留历史 `source_checkpoint_sha256` 字段并新增语义明确的 `upstream_source_checkpoint_sha256`。
+5. Variant-isolation checker 新增强制 `--reference-contract`，在 AFE 训练后再次核对 A candidate checkpoint SHA 未发生变化；同时要求 native/learned policy 都有唯一且正确的 RIFA selector key，拒绝 critical duplicate keys。
+6. Formal calibration artifacts写入 `OCRAP_IMPLEMENTATION_VERSION=v48.58.2-RIFA-SELECTION-CONTRACT-HOTFIX`，便于把算法版本 v48.58 与工程 hotfix provenance 区分开。
+7. 新增 regression tests 覆盖 legacy/off、RIFA/native、RIFA/learned selector contract，错误 legacy-order fail-closed，canonical policy rewrite，以及 reference snapshot wiring。
+8. 修复 `compare_v48_58_rifa.py` 的旧 schema 读取：deployment recall/precision/harm UCB 从真实 `fit|verify` 子结构提取，RIFA selector 使用 `proposal_deployed_rule_*`，不再依赖已弃用/不存在的顶层 alias。
+9. 新增 `check_v48_58_pipeline_complete.py`。只有 B/C 两个 variant 的 metric contract、dev proposal rows、certificate rows、standard calibration、certificate completion、C 的 Stage-I isolation、feasibility audit 和 A/B/C comparison 全部存在且 provenance 有效，才写 `OC-RAP-v48.58-PIPELINE_COMPLETE.json(valid=true, attribution_ready=true)` 并允许 launcher 打印 complete。
+
+### 归因规则
+
+当前 v48.58.1 上传结果仍然是 engineering-invalid：certificate pool 尚未被正式执行，B/C 的 final calibration、feasibility audit 和 A/B/C comparison 未完整生成。不得据此判断 two-stage/RIFA/AFE 有效或无效。使用同一 `scripts/run_v48_58_dcp_drfc_bcde_rifa_two_gpu.sh` 重跑；只有 resulting RC=0 或 RC=20 且 audits/comparison 完整时才进入算法归因。
+
 ## v48.58.1 — RIFA PARALLEL-VARIANT / STAGE-I ISOLATION ENGINEERING HOTFIX (2026-08-21)
 
 **类别：工程正确性修复；不改变 v48.58 RIFA 的算法假设、A/B/C 定义、teacher truth、fixed top-k、Stage-II placement、AFE 特征/目标/阈值或正式运行指令。此前上传的 v48.58 结果判为 engineering-invalid，必须用同一 v48.58 指令重跑。**
