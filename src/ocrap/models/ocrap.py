@@ -348,6 +348,7 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_roct_top_m: int = 8,
         direct_recovery_evidence_roct_option_temperature: float = 0.35,
         direct_recovery_evidence_common_measure_root_mass: bool = False,
+        direct_recovery_absolute_feasibility_head: bool = False,
         direct_recovery_evidence_native_certificate_preservation: bool = False,
         direct_recovery_evidence_native_margin_complete_preservation: bool = False,
         direct_recovery_evidence_native_advantage_preservation: bool = False,
@@ -536,6 +537,13 @@ class OCRAPModel(nn.Module):
         # recovery aggregation boundary.
         self.direct_recovery_evidence_common_measure_root_mass = bool(
             direct_recovery_evidence_common_measure_root_mass
+        )
+        # v48.58 RIFA: absolute feasibility is a logically separate deployment
+        # predicate from candidate-vs-nominal recovery improvement.  The readout
+        # consumes only frozen absolute OC-MERO/ROCT coordinates; no regime id,
+        # relative score, threshold search, or proposal-set statistic enters it.
+        self.direct_recovery_absolute_feasibility_head = bool(
+            direct_recovery_absolute_feasibility_head
         )
         # v48.48 NCP: preserve paper-native OC-MERO DRS/deployability coordinates
         # at the final non-compensatory admission interface instead of asking a
@@ -1183,6 +1191,23 @@ class OCRAPModel(nn.Module):
         self.direct_evidence_roct_deployability = (
             _make_roct_adapter() if self.direct_recovery_evidence_roct_deployability else None
         )
+
+        # v48.58 RIFA / Absolute Feasibility Evidence (AFE).  This is deliberately
+        # a nine-parameter linear readout over [ROCT_abs(4), native_cert_abs(4)].
+        # It is initialized to the raw native DEP zero boundary exactly at
+        # dep_score=0.5; head-only adaptation can then correct source error without
+        # rotating any Stage-I relative ranking/evidence representation.
+        self.direct_absolute_feasibility_head = None
+        if self.direct_recovery_absolute_feasibility_head:
+            self.direct_absolute_feasibility_head = nn.Linear(
+                self.direct_recovery_evidence_roct_signature_dim + 4, 1
+            )
+            with torch.no_grad():
+                self.direct_absolute_feasibility_head.weight.zero_()
+                self.direct_absolute_feasibility_head.bias.fill_(-2.0)
+                # Native certificate coordinate 1 is sigmoid(R_dep).
+                dep_index = self.direct_recovery_evidence_roct_signature_dim + 1
+                self.direct_absolute_feasibility_head.weight[0, dep_index] = 4.0
 
         # v48.20 UNISON-BRIDGE: a single shared evidence model consumes both
         # frozen source experts, their consensus/disagreement, and the frozen
@@ -2172,6 +2197,26 @@ class OCRAPModel(nn.Module):
         )
         if native_recovery_certificate is not None:
             out["direct_recovery_evidence_native_certificate"] = native_recovery_certificate.detach()
+        if self.direct_absolute_feasibility_head is not None:
+            if recovery_option_compatibility_signature is None or native_recovery_certificate is None:
+                raise RuntimeError(
+                    "absolute feasibility head requires absolute ROCT signature and native certificate"
+                )
+            absolute_feasibility_features = torch.cat(
+                [
+                    recovery_option_compatibility_signature.to(dtype=memory.dtype).detach(),
+                    native_recovery_certificate.to(dtype=memory.dtype).detach(),
+                ],
+                dim=-1,
+            )
+            absolute_feasibility_logit = self.direct_absolute_feasibility_head(
+                absolute_feasibility_features
+            ).squeeze(-1)
+            out["direct_recovery_absolute_feasibility_features"] = absolute_feasibility_features
+            out["direct_recovery_absolute_feasibility_logit"] = absolute_feasibility_logit
+            out["direct_recovery_absolute_feasibility_probability"] = torch.sigmoid(
+                absolute_feasibility_logit
+            )
         if native_component_logits is not None:
             native_component_logits = native_component_logits.to(
                 device=memory.device, dtype=memory.dtype
@@ -3233,6 +3278,7 @@ class OCRAPModel(nn.Module):
                 self.direct_evidence_roct_benefit is not None
                 or self.direct_evidence_roct_deployability is not None
                 or self.direct_recovery_evidence_native_certificate_preservation
+                or self.direct_absolute_feasibility_head is not None
             ):
                 roct_signature, native_certificate = self._direct_recovery_option_compatibility_evidence(
                     memory, x, option_features,
@@ -3301,6 +3347,7 @@ class OCRAPModel(nn.Module):
             self.direct_evidence_roct_benefit is not None
             or self.direct_evidence_roct_deployability is not None
             or self.direct_recovery_evidence_native_certificate_preservation
+            or self.direct_absolute_feasibility_head is not None
         ):
             with torch.no_grad():
                 roct_signature, native_certificate = self._recovery_option_compatibility_signature(

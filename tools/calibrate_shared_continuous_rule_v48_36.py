@@ -113,7 +113,8 @@ def _select(
     for group in groups:
         eligible = [
             r for r in group["proposal"]
-            if float(r["opportunity"]) >= rule["opportunity_threshold"]
+            if bool(r.get("absolute_feasibility_pass", True))
+            and float(r["opportunity"]) >= rule["opportunity_threshold"]
             and float(r["harm"]) <= rule["harm_threshold"]
         ]
         if not eligible:

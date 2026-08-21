@@ -65,6 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--expect-roct-top-m", type=int, default=None)
     ap.add_argument("--expect-roct-option-temperature", type=float, default=None)
     ap.add_argument("--expect-common-measure-root-mass", choices=("true", "false", "any"), default="any")
+    ap.add_argument("--expect-absolute-feasibility-head", choices=("true", "false", "any"), default="any")
     ap.add_argument("--expect-native-certificate-preservation", choices=("true", "false", "any"), default="any")
     ap.add_argument("--expect-native-drs-tolerance", type=float, default=None)
     ap.add_argument("--expect-native-deployability-tolerance", type=float, default=None)
@@ -155,6 +156,7 @@ def main() -> int:
         "direct_recovery_evidence_roct_top_m": int(model.direct_recovery_evidence_roct_top_m),
         "direct_recovery_evidence_roct_option_temperature": float(model.direct_recovery_evidence_roct_option_temperature),
         "direct_recovery_evidence_common_measure_root_mass": bool(model.direct_recovery_evidence_common_measure_root_mass),
+        "direct_recovery_absolute_feasibility_head": bool(model.direct_recovery_absolute_feasibility_head),
         "direct_recovery_evidence_native_certificate_preservation": bool(model.direct_recovery_evidence_native_certificate_preservation),
         "direct_recovery_evidence_native_drs_tolerance": float(model.direct_recovery_evidence_native_drs_tolerance),
         "direct_recovery_evidence_native_deployability_tolerance": float(model.direct_recovery_evidence_native_deployability_tolerance),
@@ -242,6 +244,10 @@ def main() -> int:
         "direct_recovery_evidence_common_measure_root_mass": (
             None if args.expect_common_measure_root_mass == "any"
             else args.expect_common_measure_root_mass == "true"
+        ),
+        "direct_recovery_absolute_feasibility_head": (
+            None if args.expect_absolute_feasibility_head == "any"
+            else args.expect_absolute_feasibility_head == "true"
         ),
         "direct_recovery_evidence_native_certificate_preservation": (
             None if args.expect_native_certificate_preservation == "any"

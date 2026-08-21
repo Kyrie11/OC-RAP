@@ -47,6 +47,22 @@ export HARM_LABEL_MODE="${HARM_LABEL_MODE:-component_veto}"
 export OPPORTUNITY_LABEL_MODE="${OPPORTUNITY_LABEL_MODE:-raw_benefit}"
 export GATE_POSITIVE_MODE="${GATE_POSITIVE_MODE:-safe_benefit}"
 export OPTION_EXECUTION_SEMANTICS="${OPTION_EXECUTION_SEMANTICS:-global}"
+export ABSOLUTE_FEASIBILITY_MODE="${ABSOLUTE_FEASIBILITY_MODE:-off}"
+export ABSOLUTE_FEASIBILITY_THRESHOLD="${ABSOLUTE_FEASIBILITY_THRESHOLD:-0.5}"
+case "$ABSOLUTE_FEASIBILITY_MODE" in off|native|learned) ;; *) echo "invalid ABSOLUTE_FEASIBILITY_MODE=$ABSOLUTE_FEASIBILITY_MODE" >&2; exit 31;; esac
+if [[ "$ABSOLUTE_FEASIBILITY_MODE" != off ]]; then
+  if ! python - "$ABSOLUTE_FEASIBILITY_THRESHOLD" <<'PY_RIFA_THRESHOLD'
+import math,sys
+try:
+    value=float(sys.argv[1])
+except Exception:
+    raise SystemExit(1)
+raise SystemExit(0 if math.isfinite(value) and abs(value-0.5) <= 1.0e-12 else 1)
+PY_RIFA_THRESHOLD
+  then
+    echo "v48.58 RIFA formal protocol requires ABSOLUTE_FEASIBILITY_THRESHOLD=0.5" >&2; exit 31
+  fi
+fi
 SERIAL_VARIANTS_ON_ONE_GPU="${SERIAL_VARIANTS_ON_ONE_GPU:-0}"
 export COMPONENT_HARM_DRS_TOLERANCE="${COMPONENT_HARM_DRS_TOLERANCE:-0.05}"
 export COMPONENT_HARM_DEP_TOLERANCE="${COMPONENT_HARM_DEP_TOLERANCE:-0.05}"
@@ -94,13 +110,22 @@ def bucket(prefix):
                  'max_harmful_group_ucb':f(f'{prefix}_MAX_VERIFY_HARM_UCB'),
                  'max_harmful_selected_ucb':f(f'{prefix}_MAX_VERIFY_SELECTED_HARM_UCB')},
     }
+abs_mode=os.environ.get('ABSOLUTE_FEASIBILITY_MODE','off')
+policy={'proposal_top_k':i('PROPOSAL_TOP_K'),
+        'selection_semantics':'rank_topk_then_filter_then_evidence_rerank',
+        'option_execution_semantics':os.environ.get('OPTION_EXECUTION_SEMANTICS','global')}
+if abs_mode != 'off':
+    policy.update({
+      'selection_semantics':'rank_topk_then_absolute_feasibility_then_relative_filter_then_evidence_rerank',
+      'absolute_feasibility_mode':abs_mode,
+      'absolute_feasibility_threshold':f('ABSOLUTE_FEASIBILITY_THRESHOLD'),
+    })
 protocol={
  'version':'v48.36-OCAF',
  'confidence':{'level':f('CERTIFICATE_CONFIDENCE_LEVEL'),'bound_type':os.environ['CERTIFICATE_BOUND_TYPE']},
  'benefit':{'positive_gain':f('POSITIVE_GAIN'),'opportunity_label_mode':os.environ['OPPORTUNITY_LABEL_MODE'],
             'gate_positive_mode':os.environ.get('GATE_POSITIVE_MODE','safe_benefit')},
- 'policy':{'proposal_top_k':i('PROPOSAL_TOP_K'),'selection_semantics':'rank_topk_then_filter_then_evidence_rerank',
-           'option_execution_semantics':os.environ.get('OPTION_EXECUTION_SEMANTICS','global')},
+ 'policy':policy,
  'harm':{'negative_gain_legacy':f('NEGATIVE_GAIN'),'label_mode':os.environ['HARM_LABEL_MODE'],
          'component_tolerances':{
            'drs':f('COMPONENT_HARM_DRS_TOLERANCE'),
@@ -148,6 +173,7 @@ calibrate_variant() {
     --checkpoint "$ckpt" --method-version=v48_36_continuous_frontier_dev_frozen_policy_risk_certificate --risk-source="${RISK_SOURCE:-ordinal_evidence}"
     --option-execution-semantics="$OPTION_EXECUTION_SEMANTICS"
     --conditional-recovery-ranking --proposal-top-k "${PROPOSAL_TOP_K:-5}" --evidence-rerank-top-k
+    --absolute-feasibility-mode="$ABSOLUTE_FEASIBILITY_MODE" --absolute-feasibility-threshold="$ABSOLUTE_FEASIBILITY_THRESHOLD"
     --macro-constraint-mode="${MACRO_CONSTRAINT_MODE:-opportunity_normalized}"
     --positive-gain="$POSITIVE_GAIN" --negative-gain="$NEGATIVE_GAIN"
     --max-selected-macro-share="${MAX_SELECTED_MACRO_SHARE:-0.95}"

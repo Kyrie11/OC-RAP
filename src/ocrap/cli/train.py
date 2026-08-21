@@ -270,6 +270,47 @@ def _profile_paths(paths: list[Path], *, stage: str, max_scalar_scan: int | None
 
 
 
+def _absolute_feasibility_bce(
+    out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor]
+) -> torch.Tensor:
+    """Candidate-only BCE for the v48.58 absolute deployability predicate.
+
+    The target is exactly 1[R_dep^*(candidate) >= 0].  Nominal rows are excluded
+    because RIFA uses this output only as the second-stage recovery admission
+    predicate, never as a nominal-relative utility or ranking target.
+    """
+    logit = out.get("direct_recovery_absolute_feasibility_logit")
+    if logit is None:
+        return batch["r_dep_star"].float().sum() * 0.0
+    logits = logit.float().reshape(-1)
+    target_r_dep = batch["r_dep_star"].float().reshape(-1)
+    is_nominal = batch["is_nominal"].reshape(-1) > 0.5
+    bucket = batch.get("bucket_id", torch.full_like(batch["time_index"], 3)).reshape(-1)
+    mask = (~is_nominal) & torch.isfinite(target_r_dep) & ((bucket == 1) | (bucket == 2))
+    if not bool(mask.any()):
+        return logits.sum() * 0.0
+    target = (target_r_dep[mask] >= 0.0).to(dtype=logits.dtype)
+    return F.binary_cross_entropy_with_logits(logits[mask], target)
+
+
+def _absolute_feasibility_accuracy(
+    out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor]
+) -> float:
+    logit = out.get("direct_recovery_absolute_feasibility_logit")
+    if logit is None:
+        return 0.0
+    logits = logit.float().reshape(-1)
+    target_r_dep = batch["r_dep_star"].float().reshape(-1)
+    is_nominal = batch["is_nominal"].reshape(-1) > 0.5
+    bucket = batch.get("bucket_id", torch.full_like(batch["time_index"], 3)).reshape(-1)
+    mask = (~is_nominal) & torch.isfinite(target_r_dep) & ((bucket == 1) | (bucket == 2))
+    if not bool(mask.any()):
+        return 0.0
+    pred = logits[mask] >= 0.0
+    target = target_r_dep[mask] >= 0.0
+    return float((pred == target).float().mean().item())
+
+
 def _direct_value_loss_from_outputs(
     out: dict[str, torch.Tensor],
     batch: dict[str, torch.Tensor],
@@ -530,6 +571,10 @@ def _direct_value_loss_from_outputs(
         out.get("direct_recovery_rank_logit"),
         out.get("direct_recovery_delta_mean"), out.get("direct_recovery_delta_logvar"),
     )
+    absolute_feasibility_weight = float(tcfg.get("direct_value_absolute_feasibility_weight", 0.0))
+    absolute_feasibility_loss = _absolute_feasibility_bce(out, batch)
+    aggregate = aggregate + absolute_feasibility_weight * absolute_feasibility_loss
+
     expert_outputs = out.get("direct_expert_outputs")
     specialist_weight = float(tcfg.get("direct_value_expert_specialization_weight", 0.35))
     if expert_outputs is None or expert_outputs.ndim != 3 or specialist_weight <= 0.0:
@@ -1608,6 +1653,8 @@ def _epoch(
                 "direct_opportunity_mean": float(torch.sigmoid(out["direct_recovery_opportunity_logit"]).float().mean().item()) if "direct_recovery_opportunity_logit" in out else 0.0,
                 "direct_harm_mean": float(torch.sigmoid(out["direct_recovery_harm_logit"]).float().mean().item()) if "direct_recovery_harm_logit" in out else 0.0,
                 "direct_expert_disagreement_mean": float(out["direct_expert_disagreement"][:, 0].float().mean().item()) if "direct_expert_disagreement" in out else 0.0,
+                "direct_absolute_feasibility_bce": float(_absolute_feasibility_bce(out, batch).item()),
+                "direct_absolute_feasibility_accuracy": _absolute_feasibility_accuracy(out, batch),
             }
             for k, v in vals.items():
                 totals[k] = totals.get(k, 0.0) + float(v) * bsz
@@ -2221,6 +2268,8 @@ def _epoch(
         n += bsz
         vals = {
             "loss": total.item(),
+            "direct_absolute_feasibility_bce": float(_absolute_feasibility_bce(out, batch).item()),
+            "direct_absolute_feasibility_accuracy": _absolute_feasibility_accuracy(out, batch),
             "loss_root": loss_root.item(),
             "loss_margin": loss_margin.item(),
             "loss_sig": loss_sig.item(),
@@ -3002,6 +3051,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_evidence_common_measure_root_mass=bool(
             model_cfg.get("direct_recovery_evidence_common_measure_root_mass", False)
         ),
+        direct_recovery_absolute_feasibility_head=bool(
+            model_cfg.get("direct_recovery_absolute_feasibility_head", False)
+        ),
         direct_recovery_evidence_native_certificate_preservation=bool(
             model_cfg.get("direct_recovery_evidence_native_certificate_preservation", False)
         ),
@@ -3457,6 +3509,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             ),
             "direct_recovery_evidence_common_measure_root_mass": bool(
                 model_cfg.get("direct_recovery_evidence_common_measure_root_mass", False)
+            ),
+            "direct_recovery_absolute_feasibility_head": bool(
+                model_cfg.get("direct_recovery_absolute_feasibility_head", False)
             ),
             "direct_recovery_evidence_native_certificate_preservation": bool(
                 model_cfg.get("direct_recovery_evidence_native_certificate_preservation", False)

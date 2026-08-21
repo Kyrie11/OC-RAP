@@ -81,6 +81,15 @@ ROCT_BETA="${EVIDENCE_ROCT_BETA:-0.2}"
 ROCT_TOP_M="${EVIDENCE_ROCT_TOP_M:-8}"
 ROCT_OPTION_TEMPERATURE="${EVIDENCE_ROCT_OPTION_TEMPERATURE:-0.35}"
 COMMON_MEASURE_ROOT_MASS="${EVIDENCE_COMMON_MEASURE_ROOT_MASS:-false}"
+ABSOLUTE_FEASIBILITY_HEAD="${ABSOLUTE_FEASIBILITY_HEAD:-false}"
+ABSOLUTE_FEASIBILITY_WEIGHT="${ABSOLUTE_FEASIBILITY_WEIGHT:-0.0}"
+if [[ "$ABSOLUTE_FEASIBILITY_HEAD" == true ]]; then
+  SELECTION_SEMANTICS="rank_topk_then_absolute_feasibility_then_relative_filter_then_evidence_rerank"
+  ABSOLUTE_FEASIBILITY_MODE_CONTRACT="learned"
+else
+  SELECTION_SEMANTICS="rank_topk_then_filter_then_evidence_rerank"
+  ABSOLUTE_FEASIBILITY_MODE_CONTRACT="off"
+fi
 
 FRONTIER_ENABLED="${EVIDENCE_FRONTIER:-true}"
 COMPONENT_PRIOR_LOGIT="${EVIDENCE_COMPONENT_PRIOR_LOGIT:--2.0}"
@@ -212,6 +221,8 @@ cat > "$RUN/STAGE_ARCHITECTURE.json" <<JSON
   "roct_top_m": $ROCT_TOP_M,
   "roct_option_temperature": $ROCT_OPTION_TEMPERATURE,
   "common_measure_root_mass": $COMMON_MEASURE_ROOT_MASS,
+  "absolute_feasibility_head": $ABSOLUTE_FEASIBILITY_HEAD,
+  "absolute_feasibility_weight": $ABSOLUTE_FEASIBILITY_WEIGHT,
   "roct_regime_conditioned": false,
   "component_margin_target_mode": "$COMPONENT_MARGIN_TARGET_MODE",
   "component_margin_target_scale": $COMPONENT_MARGIN_TARGET_SCALE,
@@ -256,7 +267,11 @@ cat > "$RUN/STAGE_ARCHITECTURE.json" <<JSON
   "eligibility_logit_temperature": $ELIGIBILITY_LOGIT_TEMPERATURE,
   "eligible_opportunity_threshold": $ELIGIBLE_OPPORTUNITY_THRESHOLD,
   "eligible_harm_threshold": $ELIGIBLE_HARM_THRESHOLD,
-  "selection_semantics": "rank_topk_then_filter_then_evidence_rerank",
+  "selection_semantics": "$SELECTION_SEMANTICS",
+  "absolute_feasibility_mode": "$ABSOLUTE_FEASIBILITY_MODE_CONTRACT",
+  "absolute_feasibility_target": "$([[ "$ABSOLUTE_FEASIBILITY_HEAD" == true ]] && echo '1[R_dep_star(candidate)>=0]' || echo none)",
+  "absolute_feasibility_threshold": 0.5,
+  "absolute_feasibility_threshold_search": false,
   "safe_hard_negative_weight": $SAFE_HARD_NEGATIVE_WEIGHT,
   "safe_hard_negative_margin": $SAFE_HARD_NEGATIVE_MARGIN,
   "safe_hard_negative_teacher_scale": ${ORDINAL_EVIDENCE_SAFE_HARD_NEGATIVE_TEACHER_SCALE:-0.0},
@@ -399,6 +414,7 @@ POLICY_METRIC_FACET_FALSE_EXCESS_WEIGHT="${POLICY_METRIC_FACET_FALSE_EXCESS_WEIG
 COMPONENT_HARM_DRS_TOLERANCE="${COMPONENT_HARM_DRS_TOLERANCE:-0.05}" COMPONENT_HARM_DEP_TOLERANCE="${COMPONENT_HARM_DEP_TOLERANCE:-0.05}" \
 COMPONENT_HARM_GAP_TOLERANCE="${COMPONENT_HARM_GAP_TOLERANCE:-0.05}" COMPONENT_HARM_HARD_TOLERANCE="${COMPONENT_HARM_HARD_TOLERANCE:-0.05}" \
 COMPONENT_HARM_PROXY_TOLERANCE="${COMPONENT_HARM_PROXY_TOLERANCE:-0.05}" \
+ABSOLUTE_FEASIBILITY_HEAD="$ABSOLUTE_FEASIBILITY_HEAD" ABSOLUTE_FEASIBILITY_WEIGHT="$ABSOLUTE_FEASIBILITY_WEIGHT" \
 GROUP_DRO_WEIGHT=0 OPPORTUNITY_AUX_WEIGHT=0 HARM_W=0 EXPERT_SPECIALIZATION_WEIGHT=0 \
   bash scripts/train_ocrap_v48_trac_sr.sh
 
@@ -415,7 +431,9 @@ OPPORTUNITY_LABEL_MODE=raw_benefit
 GATE_POSITIVE_MODE=safe_benefit
 ADMISSION_LABEL_MODE=$([[ "$ADMISSION_PRIOR_MODE" == joint_reserve ]] && echo deterministic_joint_physical_reserve || echo continuous_safe_utility_with_component_veto)
 CALIBRATION_PROTOCOL=v48_36_ocaf_shared_rule_dev_frozen_full_certificate_verification
-SELECTION_SEMANTICS=rank_topk_then_filter_then_evidence_rerank
+SELECTION_SEMANTICS=$SELECTION_SEMANTICS
+ABSOLUTE_FEASIBILITY_MODE=$ABSOLUTE_FEASIBILITY_MODE_CONTRACT
+ABSOLUTE_FEASIBILITY_THRESHOLD=0.5
 EOF
 
 python - "$RUN" "$MODEL_DIR/best.pt" "$INIT_CKPT" "$MAX_CALIBRATOR_PARAMS" "$BEST_METRIC_NAME" "$COMPONENT_HEADS" "$SETWISE_WEIGHT" "$COMPONENT_TAIL_WEIGHT" "$TRAINABLE_PREFIXES" "$CAL_CONTEXT_SOURCE" "$CONSENSUS_PRIOR_SCALE" "$ALGORITHM_VARIANT" <<'PY_VERIFY'

@@ -1,3 +1,113 @@
+## v48.58 — DCP-DRFC-BCDE-RIFA / ROLE-ISOLATED FEASIBILITY ADMISSION (2026-08-21)
+
+**类别：由 v48.57 CMRI 的 source-mechanism 否证与 v48.56 DZBA 的重新归因共同触发的 role-separation 实验。v48.58 不保留 CMRI，不修改 root logits / teacher root / proposal family，不进入 evidence centering，不恢复 GAP hard veto，不调 `R_dep=0` boundary。研究问题被压缩为：在一个统一、regime-agnostic planner 中，candidate-vs-nominal recovery improvement 与 candidate absolute feasibility 是否必须由两个逻辑层和两个不同 source contract 承担？**
+
+### v48.57 归因：严格按 root-source → relative-Rdep → native → deployment
+
+v48.57 A/B 的 source checkpoint、dataset manifests、shared calibration protocol、top-k=5、observation-class execution、no-test 与 factor contract 均一致；B/Main 相对 A 唯一机制干预为 CMRI，因此本轮可做因果归因。
+
+**1. root-source mechanism audit：CMRI FAIL。**
+
+- Contact：strict CMRI eligible group coverage `0.9793`，root-support identity `0.9974`，说明 common-measure projection 实际有机会作用；但 legacy relative-`R_dep` median absolute error `0.45715`，common-measure substitution 后反而为 `0.47514`。safe-positive AUC `0.44257→0.45365`、positive capture `0.16788→0.19708` 有局部改善，但 sign accuracy `0.39476→0.39345` 不升；root-JS 与 common-measure error gain 的相关性约 `-0.053`，不支持 “candidate-conditioned root drift 是当前 relative recovery error 的 dominant cause”。
+- Near：root-support identity 仅 `0.7195`，strict CMRI eligible group coverage **0**。因此 B 在 Near 的部署变化不能归因于 common-measure projection，只能是共享参数训练/间接迁移；作为机制证据无效。
+- root slot identity 也弱：Near root-signature nearest-slot identity median `0.1667`，Contact `0.25`；future-signature 分别约 `0.50/0.375`。这进一步否定在当前 representation 上继续扩张 common-measure family。
+
+**结论：STOP CMRI/common-measure family。** 不把 CMRI 吸收到主方法，不搜索 root temperature、root-logit recalibration/retraining、candidate-set averaging、soft support matching 或 root-slot alignment trick。
+
+**2. source / relative-`R_dep` geometry：没有 Near+Contact Pareto。** Near 的 common substitution 与 legacy geometry 几乎完全相同；Contact 虽有 safe-positive AUC/capture 小幅上升，但 median absolute error恶化、sign accuracy不升。CMRI 没通过 source-level prerequisite，因此后续任何 final metric 改善都不能作为机制验证。
+
+**3. native geometry：只有 Contact 局部迁移，不构成机制 Pareto。** Near DRS/DEP/GAP native geometry与 safe-positive native smooth advantage基本不动，pred-adv nonnegative fraction `0.3125→0.25`；Contact pred-adv median `-0.1894→-0.1352`，nonnegative fraction `0.0645→0.0968`，但 DEP harmful false-safe略升、GAP harmful false-safe也升。不能解释为 common-measure source correction成功。
+
+**4. certificate/dev deployment：CMRI REJECT。** Precision certificate Near recall `0.3333→0.1111`、harmful selected UCB90 `0.0419→0.0650`、proposal safe-positive AUC `0.4911→0.4064`；Contact recall `0.05→0.10`，但 harmful selected UCB90 `0.3508→0.4123`。Development Near recall持平但precision下降，Contact仍 abstain-all，safe-positive pred-adv median `-0.3860→-0.3931`。A/B均因 `development_rule_fit` rejected，CMRI 不满足 absorption 条件，centering 仍未获授权。
+
+### v48.56 DZBA 的进一步收紧：否证 placement/source，不是否证 `R_dep=0`
+
+对 v48.57 Precision proposal rows 重新做 teacher-side absolute-boundary audit：
+
+- dev Near：19 个 safe-positive candidate，`R_dep(candidate)>=0` fraction = `1.0`；136 harmful 中 `R_dep(candidate)<0` fraction = `0.9779`；
+- dev Contact：37 safe-positive 全部 `>=0`；432 harmful 中 `<0` fraction = `0.9815`；
+- certificate Near：16 safe-positive 全部 `>=0`；398 harmful 中 `<0` fraction = `0.9673`；
+- certificate Contact：31 safe-positive 全部 `>=0`；1301 harmful 中 `<0` fraction = `0.9708`。
+
+因此 `R_dep=0` 是当前 teacher semantics 下非常强的 **absolute feasibility admission boundary**。v48.56-B/D 的 collapse 不能解释为“这个 boundary 错了”；真正被否证的是：
+
+> **把 absolute candidate feasibility 作为 candidate-vs-nominal relative harm max-veto 的一个 component，并直接用高误差 native DEP source 做 hard overwrite。**
+
+这把 v48.55→57 的证据链进一步收紧为：component scale/type 不是主因 → component role 重写仍不足 → root common measure 不是主因 → **relative improvement 与 absolute admission 的逻辑层必须显式解耦，同时 absolute feasibility source 自身需要独立 correctness contract。**
+
+### oracle Stage-II diagnostic：proposal support 已足够，剩余是 admission/source + relative score
+
+在 **已经冻结的 top-k proposal rows** 上，仅用 teacher `R_dep(candidate)>=0` 做离线结构上界（不用于部署）：dev Near/Contact safe-opportunity recall 分别 `1.0 / 0.9412`，certificate Near/Contact均 `1.0`；说明当前 proposal family/top-k 已包含绝大多数可恢复正例，**不授权 proposal expansion**。
+
+若在 teacher-feasible 之后再要求现有 `pred_adv>=0`，recall 立刻降到 dev Near `0.375`、dev Contact `0`、certificate Near `0.2222`、certificate Contact `0.10`。因此当前存在两个串联 bottleneck：
+
+1. absolute feasibility source / placement；
+2. 在 feasibility 正确后仍残留的 relative evidence sign/centering，Contact 最严重。
+
+v48.58 只验证第 1 个 bottleneck。只有它形成真正 Near+Contact upstream/source Pareto 后，才允许下一轮重新评估 centering；本轮不把两者堆在一起。
+
+### 当前 dominant bottleneck
+
+> **Absolute-feasibility source reliability + logical conflation between relative recovery improvement and absolute deployment admission.**
+
+teacher-side `R_dep=0` boundary清晰，但 native predicted DEP 在 critical regimes 有明显 safe-positive false-veto；与此同时 relative `pred_adv` 仍系统负偏。v48.58 的任务不是增加一个更复杂的 final score，而是把 absolute predicate 从 relative score中拿出来，并验证一个 role-isolated source 能否恢复 boundary correctness，且 Stage-I representation bitwise 不动。
+
+### v48.58 RIFA：Recovery-Improvement → Feasibility Admission
+
+RIFA 是 **lexicographic architecture**，不是 additive score fusion：
+
+1. **Stage-I / recovery-improvement proposal：** 完全冻结 v48.56-A 的 candidate ranker，先得到固定 top-k；
+2. **Stage-II / absolute feasibility admission：** 只在这个固定 top-k 内判断 candidate 自身是否满足 absolute feasibility；不允许 Stage-II 扩大 proposal set；
+3. 通过 Stage-II 的 candidate 才进入既有 relative opportunity/harm filter 与 evidence rerank；如果 top-k 中没有可行 candidate，则 abstain，不向 top-k 外 fallback。
+
+因此 absolute feasibility 不再和 DRS/GAP/relative harm做 max-score competition，也不能被 benefit补偿；relative improvement也不再被要求同时学习 candidate 自身的 absolute boundary。
+
+#### A/B/C 因果实验
+
+- **A/reference：relative-only。** 严格复用合法 v48.56-A；CMRI=off，DRAC X/Y=off，top-k=5，其余 Stage-I contract不动。
+- **B/native RIFA：结构性干预。** 同一 A checkpoint、**0 新参数 / 0 训练**；固定 top-k 后增加 raw native predicate `sigmoid(pred R_dep)>=0.5`。`B-A` 只回答“把 absolute feasibility 放到独立 lexicographic stage 会发生什么，以及 raw native source 是否重现 v48.56 的 false-veto”。
+- **C/Main / learned AFE：source correction。** 与 B 完全相同的 Stage-II placement，但 absolute source替换为 **Absolute Feasibility Evidence (AFE)**：`Linear(8,1)`，仅 9 参数，输入为 detached `[ROCT_abs(4), native_certificate_abs(4)]`，target严格为 `1[R_dep_star(candidate)>=0]`。只用 scene-disjoint Near+Contact adaptation-train candidate；nominal/Safe不进入该 head 的 supervision；无 regime-id、无 relative pred-adv/opportunity/harm输入、无 root重新训练、无 class-weight/threshold搜索。阈值固定 `0.5`。
+
+AFE 初始化 **精确等价 raw native boundary**：所有 weight=0、bias=-2，仅 native `sigmoid(R_dep)` 坐标 weight=4，因此 `p_AFE=0.5` 精确对应 native DEP score `0.5`。C 从 B 的 source predicate 连续起步，而不是随机加入一个 learned gate。
+
+Stage-I 参数全部冻结；AFE features全部 `.detach()`。新增 state-isolation checker 要求 source A 与 C 的共同 `state_dict` tensor **bitwise identical**，只允许新增 `direct_absolute_feasibility_head.{weight,bias}` 两个 key。这样 `C-B` 才是纯 absolute-source correction，而不是隐藏的 ranking fine-tune。
+
+### v48.58 preregistered attribution / GO-STOP
+
+读取顺序：
+
+1. **teacher-boundary support**：固定 external truth继续是 `R_dep(candidate)>=0`，不随 arm移动；
+2. **B−A / structural placement**：记录 raw-native Stage-II 的 safe-positive pass、teacher-infeasible pass、harmful pass与最终 selection变化。B 若重现 high false-veto，不判 two-stage architecture失败，只证明 raw native source不可靠；
+3. **C−B / source correction（核心）**：C 必须在 Near+Contact 同时降低 teacher-feasible reject / safe-positive reject，同时不显著增加 teacher-infeasible pass；absolute-feasibility AUC/accuracy应改善。Stage-I bitwise isolation必须通过；
+4. **C−A / full RIFA**：source改善必须向 dev/certificate recall/precision/harm UCB一致传导，而不是只改善一个离线 AUC；
+5. **Safe/non-interference**：Stage-I bitwise保持；只有 authoritative RC0 后才继续 gate-generated paired Safe/stress/closed-loop，不用 RC20 放宽规则；
+6. **Centering authorization**：只有 C 在 Near+Contact 的 feasibility-source/native/deployment形成 Pareto，且剩余失败仍由 systematic negative `pred_adv` 主导，下一版才可做 Boundary-Complete Evidence Centering；否则继续 source decomposition，不堆 centering。
+
+**RIFA STOP：** learned AFE 不优于 raw native boundary；Near/Contact出现 cross-severity tradeoff；safe-positive false-veto仍主导；teacher-infeasible pass明显上升；Stage-I state isolation失败；或 source geometry改善却不传导到 deployment。任何一种都不做 AFE hidden-size、class-weight、threshold、feature-stack sweep，而回到更上游的 margin/C absolute-source decomposition。
+
+### regime-specific diagnosis（evaluation strata，不是 runtime routing）
+
+- **Safe：** 不是当前 mechanism bottleneck；v48.57 formal gate仍 RC20，因此不能宣称最终 Safe closed-loop non-inferiority。v48.58 以 Stage-I bitwise isolation和统一 physical predicate保持 non-interference，只有主 gate RC0 后再做 paired Safe/stress验证。
+- **Near：** CMRI strict coverage=0，root common-measure不是可执行解释。当前主要是 absolute feasibility source false-veto + 后续 relative score偏负；oracle teacher-feasible top-k说明 proposal support不是主因。
+- **Contact：** Stage-I candidate/proposal ranking相对 Near更强，但 dev safe-positive `pred_adv` 仍全部为负，导致 abstain-all。teacher-feasible top-k几乎完全覆盖正例，所以最有价值的顺序是先修 absolute admission source，再判断 final centering；不能反过来先调 threshold。
+
+### 明确保留 / 明确停止
+
+**保留：** observation-consistent OC-MERO、q-hard material BC-FC + smooth local order、native certificate/advantage preservation的既有 reference semantics、observation-class execution、scene-disjoint adaptation-dev/certificate protocol、shared regime-agnostic planner、fixed top-k proposal，以及 `R_dep=0` 作为 absolute feasibility truth boundary。
+
+**停止/避免：** CMRI/common-measure family；TCBC/component normalization/RMS/per-component scale；DRS regression-weight；DZBA 作为 relative harm max-veto与 boundary tolerance sweep；GOR standalone/GAP threshold-reliability；root-logit recalibration/retraining/temperature；proposal top-k/macro expansion；threshold relaxation/grid densification；PSA/CSE/IPBD physical teacher/student/distillation；exact-only NAP、hard magnitude DEFC、MC-NCP tolerance；generic ranking stack、learned final-admission residual、aggressive oversampling、broad encoder fine-tuning；regime-specific router/policy/threshold/budget。
+
+AFE **不是历史 learned final-admission residual 的重开**：它不接收 final relative score、不输出 residual、不修改 Stage-I，监督事件是独立 absolute physical predicate，且仅有 9 个参数、固定阈值、exact-boundary initialization。
+
+### engineering / fail-closed contract
+
+新增：AFE head与 checkpoint/inference reconstruction；candidate-only absolute BCE/accuracy；lexicographic Stage-II filter；formal threshold `0.5` hard lock；reference reuse checker；Stage-I bitwise state-isolation checker；feasibility-role audit；A/B/C comparator；双 GPU launcher；RIFA专项单测。
+
+formal launcher 将 Balanced/Precision AFE head 分别放 GPU0/GPU1 并行；B 不训练。A reference若 source hash/protocol/no-test/semantic contract非法则 fail-closed，不静默复用。Stage-II 只过滤 frozen top-k，不允许 lower-ranked candidate因前五个被拒绝而补入，从而避免 proposal expansion伪装成 feasibility improvement。
+
+AFE 是低维 absolute predicate calibration，adaptation-train candidate 的 feasibility label并不存在严重类别失衡；因此 v48.58 formal launcher 显式关闭历史 ranking 路径的 stratified / with-replacement group sampling（`GROUP_BATCH_STRATIFIED=false`, `GROUP_BATCHING_REPLACEMENT=false`）。每轮遍历 scene-time groups，不用旧的 safe-positive oversampling 给 9 参数 head 人为改变训练分布。
+
+
 ## v48.57 — DCP-DRFC-BCDE-CMRI / COMMON-MEASURE ROOT INVARIANCE (2026-08-21)
 
 **类别：由 v48.56 DRAC authoritative 2×2 的否证直接触发的 predicted-root/source-decomposition 单轴实验。v48.57 不再修改 teacher/component label semantics，不重开 component normalization、root-logit recalibration、threshold relaxation、proposal expansion、physical-teacher distillation 或 regime conditioning。A 为严格验证的 v48.56-A reference；B/Main 只增加一个零参数 counterfactual common-measure projection。**

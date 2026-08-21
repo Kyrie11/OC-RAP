@@ -206,7 +206,10 @@ def _top1(
             # an out-of-distribution fallback.
             ordered = sorted(physical, key=lambda r: (-r.get("rank_adv", r["pred_adv"]), r["candidate"]))
             proposal = ordered[: min(max(1, int(proposal_top_k)), len(ordered))]
-            eligible = [r for r in proposal if r["opportunity"] >= opp_thr and r["harm"] <= harm_thr]
+            # v48.58 RIFA: Stage-II admission is lexicographic and therefore
+            # filters only the already-frozen Stage-I rank proposal.
+            stage2 = [r for r in proposal if bool(r.get("absolute_feasibility_pass", True))]
+            eligible = [r for r in stage2 if r["opportunity"] >= opp_thr and r["harm"] <= harm_thr]
             if not eligible:
                 continue
             best = sorted(eligible, key=lambda r: (-float(r["pred_adv"]), int(r["candidate"])))[0]
@@ -223,10 +226,12 @@ def _top1(
                 alternatives.append(0.0)
             second = max(alternatives) if alternatives else float(best.get("rank_adv", best["pred_adv"]) - 1.0)
             rank_margin = float(best.get("rank_adv", best["pred_adv"]) - second)
-            if best["opportunity"] < opp_thr or best["harm"] > harm_thr:
+            if (not bool(best.get("absolute_feasibility_pass", True))
+                    or best["opportunity"] < opp_thr or best["harm"] > harm_thr):
                 continue
         else:
-            eligible = [r for r in physical if r["opportunity"] >= opp_thr and r["harm"] <= harm_thr]
+            eligible = [r for r in physical if bool(r.get("absolute_feasibility_pass", True))
+                        and r["opportunity"] >= opp_thr and r["harm"] <= harm_thr]
             if not eligible:
                 continue
             best = sorted(eligible, key=lambda r: (-r.get("rank_adv", r["pred_adv"]), r["candidate"]))[0]
@@ -541,6 +546,10 @@ def main() -> int:
     ap.add_argument("--component-harm-proxy-tolerance", type=float, default=0.05)
     ap.add_argument("--dep-boundary-aligned", action="store_true")
     ap.add_argument("--gap-ordinal-only", action="store_true")
+    ap.add_argument("--absolute-feasibility-mode", choices=["off", "native", "learned"], default="off",
+                    help="v48.58 fixed Stage-II absolute feasibility source; never threshold-fitted.")
+    ap.add_argument("--absolute-feasibility-threshold", type=float, default=0.5,
+                    help="Fixed v48.58 admission boundary. Formal RIFA runs must keep 0.5.")
     ap.add_argument("--min-opportunity", type=float, default=0.05)
     ap.add_argument("--max-harm-probability", type=float, default=0.80)
     ap.add_argument("--min-score-advantage", type=float, default=0.0)
@@ -681,6 +690,14 @@ def main() -> int:
                 if pred.direct_recovery_native_certificate is None
                 else [float(x) for x in np.asarray(pred.direct_recovery_native_certificate).reshape(-1)]
             )
+            row["absolute_feasibility_probability"] = (
+                None if pred.direct_recovery_absolute_feasibility is None
+                else float(pred.direct_recovery_absolute_feasibility)
+            )
+            row["absolute_feasibility_logit"] = (
+                None if pred.direct_recovery_absolute_feasibility_logit is None
+                else float(pred.direct_recovery_absolute_feasibility_logit)
+            )
             if args.risk_source in {"heads", "ordinal_evidence"} and (row["opp_logit"] is None or row["harm_logit"] is None):
                 raise ValueError("risk-source=heads/ordinal_evidence requires opportunity/harm outputs")
         if gi == 1 or gi % 200 == 0 or gi == len(raw):
@@ -776,10 +793,31 @@ def main() -> int:
                 n_smooth = float(n_native[2] * n_native[1] * n_native[3])
                 native_exact_adv_margin = float(r_exact - n_exact - args.positive_gain)
                 native_smooth_adv_margin = float(r_smooth - n_smooth - args.positive_gain)
+            if args.absolute_feasibility_mode == "off":
+                absolute_feasibility_probability = None
+                absolute_feasibility_pass = True
+            elif args.absolute_feasibility_mode == "native":
+                r_native_for_admission = r.get("native_certificate")
+                if not isinstance(r_native_for_admission, list) or len(r_native_for_admission) < 2:
+                    raise ValueError("absolute-feasibility-mode=native requires native certificate coordinate 1")
+                absolute_feasibility_probability = float(r_native_for_admission[1])
+                absolute_feasibility_pass = bool(
+                    absolute_feasibility_probability >= float(args.absolute_feasibility_threshold)
+                )
+            else:
+                if r.get("absolute_feasibility_probability") is None:
+                    raise ValueError("absolute-feasibility-mode=learned requires AFE checkpoint output")
+                absolute_feasibility_probability = float(r["absolute_feasibility_probability"])
+                absolute_feasibility_pass = bool(
+                    absolute_feasibility_probability >= float(args.absolute_feasibility_threshold)
+                )
             pairs.append({
                 "candidate": r["candidate"], "macro": r["macro"], "deviation": r["deviation"],
                 "pred_adv": pred_adv, "rank_adv": rank_adv, "delta_std": delta_std,
                 "opportunity": opportunity, "harm": harm, "head_harm": head_harm,
+                "absolute_feasibility_mode": args.absolute_feasibility_mode,
+                "absolute_feasibility_probability": absolute_feasibility_probability,
+                "absolute_feasibility_pass": absolute_feasibility_pass,
                 "predicted_component_harm": r.get("component_harm"),
                 "predicted_component_margins": r.get("component_margins"),
                 "predicted_native_pair_margins": native_pair_margins,
@@ -1130,6 +1168,7 @@ def main() -> int:
                 ),
                 "deployed_rule_eligible": bool(
                     rule is not None
+                    and bool(candidate_row.get("absolute_feasibility_pass", True))
                     and float(candidate_row["opportunity"]) >= float(rule["opportunity_threshold"])
                     and float(candidate_row["harm"]) <= float(rule["harm_threshold"])
                 ),

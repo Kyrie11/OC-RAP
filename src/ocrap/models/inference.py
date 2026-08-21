@@ -27,6 +27,8 @@ class Prediction:
     direct_recovery_opportunity_logit: float | None = None
     direct_recovery_harm: float | None = None
     direct_recovery_harm_logit: float | None = None
+    direct_recovery_absolute_feasibility: float | None = None
+    direct_recovery_absolute_feasibility_logit: float | None = None
     direct_recovery_rank: float | None = None
     direct_recovery_delta: float | None = None
     direct_recovery_delta_std: float | None = None
@@ -270,6 +272,10 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_evidence_common_measure_root_mass",
             model_cfg.get("direct_recovery_evidence_common_measure_root_mass", False),
         )),
+        direct_recovery_absolute_feasibility_head=bool(ckpt.get(
+            "direct_recovery_absolute_feasibility_head",
+            model_cfg.get("direct_recovery_absolute_feasibility_head", False),
+        )),
         direct_recovery_evidence_native_certificate_preservation=bool(ckpt.get(
             "direct_recovery_evidence_native_certificate_preservation",
             model_cfg.get("direct_recovery_evidence_native_certificate_preservation", False),
@@ -500,6 +506,9 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_evidence_common_measure_root_mass"] = bool(
         model.direct_recovery_evidence_common_measure_root_mass
     )
+    cfg["model"]["direct_recovery_absolute_feasibility_head"] = bool(
+        model.direct_recovery_absolute_feasibility_head
+    )
     cfg["model"]["direct_recovery_evidence_native_certificate_preservation"] = bool(
         model.direct_recovery_evidence_native_certificate_preservation
     )
@@ -695,6 +704,10 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_evidence_common_measure_root_mass",
             model_cfg.get("direct_recovery_evidence_common_measure_root_mass", False),
         )),
+        "direct_recovery_absolute_feasibility_head": bool(ckpt.get(
+            "direct_recovery_absolute_feasibility_head",
+            model_cfg.get("direct_recovery_absolute_feasibility_head", False),
+        )),
     }
     actual_contract = {
         "direct_recovery_evidence_calibrator_context": bool(model.direct_recovery_evidence_calibrator_context),
@@ -719,6 +732,9 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         ),
         "direct_recovery_evidence_common_measure_root_mass": bool(
             model.direct_recovery_evidence_common_measure_root_mass
+        ),
+        "direct_recovery_absolute_feasibility_head": bool(
+            model.direct_recovery_absolute_feasibility_head
         ),
     }
     if expected_contract != actual_contract:
@@ -837,6 +853,8 @@ def predict_samples(
     direct_opp_logit_np = None
     direct_harm_np = None
     direct_harm_logit_np = None
+    direct_abs_feas_np = None
+    direct_abs_feas_logit_np = None
     direct_rank_np = None
     direct_delta_np = None
     direct_delta_std_np = None
@@ -855,6 +873,9 @@ def predict_samples(
         if "direct_recovery_harm_logit" in out:
             direct_harm_logit_np = out["direct_recovery_harm_logit"].detach().cpu().numpy().astype(np.float32)
             direct_harm_np = torch.sigmoid(out["direct_recovery_harm_logit"]).detach().cpu().numpy().astype(np.float32)
+        if "direct_recovery_absolute_feasibility_probability" in out:
+            direct_abs_feas_np = out["direct_recovery_absolute_feasibility_probability"].detach().cpu().numpy().astype(np.float32)
+            direct_abs_feas_logit_np = out["direct_recovery_absolute_feasibility_logit"].detach().cpu().numpy().astype(np.float32)
         if "direct_recovery_rank_logit" in out:
             direct_rank_np = out["direct_recovery_rank_logit"].detach().cpu().numpy().astype(np.float32)
         if "direct_recovery_delta_mean" in out:
@@ -889,6 +910,8 @@ def predict_samples(
                 direct_recovery_opportunity_logit=(None if direct_opp_logit_np is None else float(direct_opp_logit_np[i])),
                 direct_recovery_harm=(None if direct_harm_np is None else float(direct_harm_np[i])),
                 direct_recovery_harm_logit=(None if direct_harm_logit_np is None else float(direct_harm_logit_np[i])),
+                direct_recovery_absolute_feasibility=(None if direct_abs_feas_np is None else float(direct_abs_feas_np[i])),
+                direct_recovery_absolute_feasibility_logit=(None if direct_abs_feas_logit_np is None else float(direct_abs_feas_logit_np[i])),
                 direct_recovery_rank=(None if direct_rank_np is None else float(direct_rank_np[i])),
                 direct_recovery_delta=(None if direct_delta_np is None else float(direct_delta_np[i])),
                 direct_recovery_delta_std=(None if direct_delta_std_np is None else float(direct_delta_std_np[i])),
@@ -959,6 +982,8 @@ def predict_sample(d: dict[str, Any], bundle: ModelBundle | None, cfg: dict | No
         direct_recovery_opportunity_logit=(None if "direct_recovery_opportunity_logit" not in out else float(out["direct_recovery_opportunity_logit"].squeeze(0).detach().cpu().item())),
         direct_recovery_harm=(None if "direct_recovery_harm_logit" not in out else float(torch.sigmoid(out["direct_recovery_harm_logit"]).squeeze(0).detach().cpu().item())),
         direct_recovery_harm_logit=(None if "direct_recovery_harm_logit" not in out else float(out["direct_recovery_harm_logit"].squeeze(0).detach().cpu().item())),
+        direct_recovery_absolute_feasibility=(None if "direct_recovery_absolute_feasibility_probability" not in out else float(out["direct_recovery_absolute_feasibility_probability"].squeeze(0).detach().cpu().item())),
+        direct_recovery_absolute_feasibility_logit=(None if "direct_recovery_absolute_feasibility_logit" not in out else float(out["direct_recovery_absolute_feasibility_logit"].squeeze(0).detach().cpu().item())),
         direct_recovery_rank=(None if "direct_recovery_rank_logit" not in out else float(out["direct_recovery_rank_logit"].squeeze(0).detach().cpu().item())),
         direct_recovery_delta=(None if "direct_recovery_delta_mean" not in out else float(out["direct_recovery_delta_mean"].squeeze(0).detach().cpu().item())),
         direct_recovery_delta_std=(None if "direct_recovery_delta_logvar" not in out else float(torch.exp(0.5 * out["direct_recovery_delta_logvar"]).squeeze(0).detach().cpu().item())),
