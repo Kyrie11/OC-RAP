@@ -1,3 +1,67 @@
+## v48.59 — DCP-DRFC-BCDE-RIFA-ORFC / OPTION-RESOLVED FEASIBILITY CORRECTION (2026-08-21)
+
+**类别：由 v48.58 authoritative A/B/C 对 RIFA source-correction 的否证直接触发的 absolute-source 单轴实验。保留 two-stage/role-separation 结构作为待验证架构假设，但正式 STOP v48.58 的 8-D AFE 实例；本轮仍不进入 evidence centering，不扩大 proposal，不使用 regime router/threshold/budget，不重训 root 或整套 margin head。研究问题收窄为：当前 absolute-feasibility failure 是否来自把 option-resolved recovery witness 压缩成 8-D aggregate 后再做线性分类，而不是来自 `R_dep=0` teacher boundary 本身？**
+
+### v48.58 authoritative 结果：工程有效，但 AFE source correction FAIL
+
+本轮上传的 `OC-RAP-v48.58-PIPELINE_COMPLETE.json` 为 `valid=true / attribution_ready=true / test_roots_read=false`，reference reuse、balanced/precision variant isolation 与 Stage-I bitwise isolation均有效，因此可以按预注册顺序做 B−A / C−B / C−A 归因。
+
+**C−B 没有建立 source-discrimination Pareto。** AFE 确实大幅降低 raw-native 的 teacher-feasible reject，但同时把大量 teacher-infeasible/harmful candidate 放进来；AUC 并未对应改善：
+
+- Balanced dev Near AUC `0.7690 -> 0.7628`，teacher-feasible reject `0.5707 -> 0.1685`，teacher-infeasible pass `0.0214 -> 0.5429`；
+- Balanced cert Near AUC `0.8168 -> 0.8194`，feasible reject `0.5369 -> 0.1946`，infeasible pass `0 -> 0.4286`；
+- Balanced dev Contact AUC `0.6856 -> 0.6788`，feasible reject `1.0 -> 0.2880`，infeasible pass `0 -> 0.4587`；
+- Balanced cert Contact AUC `0.7033 -> 0.6988`，feasible reject `1.0 -> 0.3225`，infeasible pass `0 -> 0.3762`；Precision 复现同一结构。
+
+因此 v48.58-C 的主要作用是 **移动 fixed-0.5 operating point，而不是改善 feasibility ordering/source correctness**。Contact 上 accuracy 变高不能单独视为机制成功，因为 B 在 0.5 处接近全负预测；预注册要求同时改善 AUC/feasible reject，并控制 infeasible/harmful pass，C 明确未满足。
+
+**C−A deployment 也没有产生新 Pareto。** Precision dev Near C 与 A 完全相同（recall `0.375`）；cert Near均为 `0.3333`，C harmful UCB `0.0424` 与 A `0.0419`近似；dev Contact A/B/C 全 abstain；cert Contact C 与 A recall均 `0.05`，harmful UCB `0.3565` 略差于 A `0.3508`。Balanced 同样没有形成正向 propagation。Formal main gate仍为 RC20，因此 Safe paired/stress/closed-loop没有获得授权，不能宣称最终 Safe non-inferiority。
+
+### two-stage / RIFA 的精确结论
+
+- **没有被否证的是 role separation 的语义必要性。** teacher `R_dep(candidate)>=0` 仍强烈分离 safe-positive 与 harmful；fixed top-5 proposal 对 certificate Near/Contact 的 proposal-constrained oracle positive 分别覆盖 `9/9`、`20/20`。所以 “relative recovery improvement 与 absolute candidate feasibility 不应塞进同一个 relative veto” 仍有强证据。
+- **没有被验证的是 deployed RIFA mechanism。** v48.58 的 8-D AFE source correction正式 STOP；不能把 C 的 pass-rate 上升写成 two-stage 已验证。
+- 当前串联 bottleneck **没有被 v48.58 解掉**；它被进一步定位为 `absolute-source representation/correctness -> joint relative evidence`。Centering 仍未获授权，因为 source prerequisite 失败。
+
+### Near / Contact 的 residual bottleneck（统一 policy，不做 regime-conditioned routing）
+
+**Near：** top-5 support 足够；C/Precision safe-positive proposal 中 AFE pass约 `0.42/0.50`（dev/cert），但 relative evidence仍有明显误拒。cert safe-positive 中 opportunity pass `0.375`、harm pass `0.25`、pred-adv nonnegative `0.3125`，所有 relative rule 联合后仅 `0.0625`。Near 因此是“absolute source 未可靠 + relative tuple 也弱”，而不是搜索空间不足。
+
+**Contact：** support 更明确：certificate top-5 oracle recovery positives `20/20`，top-8不再增加。C/Precision dev safe-positive 的 `pred_adv` median约 `-0.386`，nonnegative fraction `0`；opportunity pass也为 `0`。certificate safe-positive pred-adv/opportunity pass均约 `0.0645`，harm pass约 `0.3226`，relative-all（不含 AFE）仍为 `0`。因此 Contact 不是“没有安全 action”，而是 **已有 recovery action 无法被 absolute source + relative evidence contract 正确识别/承认**。在论文目标上，post-contact stability/secondary-collision/escape headroom 仍由统一 teacher margin 的 active constraints 表达，不引入 Contact-specific policy。
+
+### v48.59 假设：ORFC = Option-Resolved Feasibility Correction
+
+v48.58 AFE 输入仅为 `[ROCT_abs(4), native_certificate_abs(4)]`。这些是 frozen predicted root/observation/margin 经 OC-MERO 后的压缩 aggregate；当前 C 的 AUC基本不升，却能把 operating point整体推向 pass，说明继续给这个 8-D readout加 width/feature/threshold 没有证据基础。
+
+v48.59 改为最小的 **pre-OC-MERO option-resolved source correction**：
+
+`m_tilde_{k,l}(a) = stopgrad(m_hat_{k,l}(a)) + b_l`
+
+其中 `b in R^24` 是全局、regime-agnostic recovery-option bias。root logits、observation compatibility、option validity和所有 Stage-I tensors均冻结；随后用**原样 OC-MERO**重新计算 corrected `R_dep`，Stage-II 仍使用 `sigmoid(R_dep_corrected)>=0.5`。target仍严格为 `1[R_dep_star(candidate)>=0]`，candidate-only Near+Contact adaptation-train；Safe/nominal不监督该 source。
+
+关键连续性：`b=0` 时 corrected source **执行上精确等价 v48.58-B raw native source**。因此 D−B 只检验“option-resolved margin source calibration”这一条假设，不混入新 threshold、new proposal、final score residual或 Stage-I fine-tuning。
+
+### A/B/C/D 归因与 GO/STOP
+
+- A：v48.56-A relative-only reference（复用）；
+- B：v48.58 raw native RIFA（复用）；
+- C：v48.58 8-D AFE（复用，已判 source correction FAIL，作为 compressed-source control）；
+- **D/Main：v48.59 ORFC**，只训练 24 个 `direct_absolute_option_margin_bias` 参数。
+
+主比较是 **D−B**；D−C 用来回答 option-resolved source 是否确实优于 aggregate AFE。顺序仍是 source geometry → state isolation → deployment，不先看 final recall。
+
+**GO prerequisite：** Near 与 Contact 都出现真正 source-order improvement（AUC/ordering提升，而不只是 0.5 pass率移动）；相对 B 显著降低 teacher-feasible/safe-positive reject，同时 teacher-infeasible/harmful pass明显低于 C；Stage-I bitwise identity有效；然后 source gain向 dev/certificate deployment传播且不产生跨 severity 风险回归。只有这些成立，下一轮才允许研究 Boundary-Complete Evidence Centering，而且首先要审计 opportunity/harm/pred_adv/rank-margin 的联合失败，不能默认只给 `pred_adv` 加常数 bias。
+
+**STOP：** D 仍只改变 operating point而不改善 AUC/order；Near/Contact source tradeoff；source gain不传到 deployment；或 isolation/provenance失败。若 STOP，不做 option-bias threshold/LR grid、AFE feature-stack/width/class-weight、proposal expansion或 regime-specific rule；转而审计 teacher/predicted **per-option margin coverage / option taxonomy / witness identifiability**，再决定是否需要新的 recovery-option representation。
+
+### 工程实现
+
+- `OCrapModel` 新增 `direct_recovery_absolute_option_margin_correction` 与唯一参数 `direct_absolute_option_margin_bias[24]`；AFE 与 ORFC fail-closed mutual exclusion。
+- ORFC 所用 root/observation/margin witness全部在 `no_grad` 下冻结，bias 后重走原 `_recovery_option_compatibility_signature/OC-MERO`，输出沿用通用 `direct_recovery_absolute_feasibility_logit/probability`，因此现有 BCE、inference 与 formal Stage-II selector无需新旁路。
+- checkpoint/inference reconstruction、train config、adaptation plumbing、fixed threshold contract均接通。
+- 新增 v48.59 state-isolation、variant-isolation、A/B/C/D feasibility audit/comparator、pipeline-complete checker与 two-GPU launcher。formal run复用已 attribution-ready 的 v48.58 B/C，不重复消耗 GPU 训练旧 arms。
+- 专项/回归测试确认零 bias == native boundary、梯度只到 option bias、source checkpoint只允许新增一个 24-D state key、AFE/ORFC互斥。
+
 ## v48.58.2 — RIFA SELECTION-CONTRACT / CERTIFICATE RC30 ENGINEERING HOTFIX (2026-08-21)
 
 **类别：纯工程与 provenance 正确性修复；v48.58 RIFA 算法、A/B/C 定义、teacher truth、fixed top-k、AFE 9 参数 head、0.5 threshold、Stage-II placement 和正式运行指令均不改变。v48.58.1 当前上传结果因 certificate contract checker 的旧 selector 语义硬编码而 RC=30，不能做算法归因。**

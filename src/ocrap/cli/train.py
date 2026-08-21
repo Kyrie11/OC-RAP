@@ -3054,6 +3054,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_absolute_feasibility_head=bool(
             model_cfg.get("direct_recovery_absolute_feasibility_head", False)
         ),
+        direct_recovery_absolute_option_margin_correction=bool(
+            model_cfg.get("direct_recovery_absolute_option_margin_correction", False)
+        ),
         direct_recovery_evidence_native_certificate_preservation=bool(
             model_cfg.get("direct_recovery_evidence_native_certificate_preservation", False)
         ),
@@ -3544,6 +3547,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             ),
             "direct_recovery_absolute_feasibility_head": bool(
                 model_cfg.get("direct_recovery_absolute_feasibility_head", False)
+            ),
+            "direct_recovery_absolute_option_margin_correction": bool(
+                model_cfg.get("direct_recovery_absolute_option_margin_correction", False)
             ),
             "direct_recovery_evidence_native_certificate_preservation": bool(
                 model_cfg.get("direct_recovery_evidence_native_certificate_preservation", False)

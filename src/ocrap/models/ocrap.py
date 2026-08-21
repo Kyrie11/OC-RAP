@@ -349,6 +349,7 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_roct_option_temperature: float = 0.35,
         direct_recovery_evidence_common_measure_root_mass: bool = False,
         direct_recovery_absolute_feasibility_head: bool = False,
+        direct_recovery_absolute_option_margin_correction: bool = False,
         direct_recovery_evidence_native_certificate_preservation: bool = False,
         direct_recovery_evidence_native_margin_complete_preservation: bool = False,
         direct_recovery_evidence_native_advantage_preservation: bool = False,
@@ -545,6 +546,22 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_absolute_feasibility_head = bool(
             direct_recovery_absolute_feasibility_head
         )
+        # v48.59 ORFC (Option-Resolved Feasibility Correction): instead of
+        # reclassifying an 8-D compressed absolute summary, learn only one
+        # global correction per recovery option and re-run the unchanged
+        # OC-MERO absolute source.  The correction is regime-agnostic, never
+        # sees candidate-vs-nominal evidence, and is zero-initialized so the
+        # initial predicate is exactly the v48.58-B native R_dep=0 boundary.
+        self.direct_recovery_absolute_option_margin_correction = bool(
+            direct_recovery_absolute_option_margin_correction
+        )
+        if (
+            self.direct_recovery_absolute_feasibility_head
+            and self.direct_recovery_absolute_option_margin_correction
+        ):
+            raise ValueError(
+                "AFE and option-resolved absolute margin correction are mutually exclusive"
+            )
         # v48.48 NCP: preserve paper-native OC-MERO DRS/deployability coordinates
         # at the final non-compensatory admission interface instead of asking a
         # downstream proxy head to learn their sign/scale again.
@@ -1209,6 +1226,15 @@ class OCRAPModel(nn.Module):
                 dep_index = self.direct_recovery_evidence_roct_signature_dim + 1
                 self.direct_absolute_feasibility_head.weight[0, dep_index] = 4.0
 
+        # v48.59 ORFC source correction.  A single option-wise bias vector is
+        # the only trainable state.  It changes the absolute recovery margins
+        # before OC-MERO aggregation, not the Stage-I rank/relative evidence.
+        self.direct_absolute_option_margin_bias = None
+        if self.direct_recovery_absolute_option_margin_correction:
+            self.direct_absolute_option_margin_bias = nn.Parameter(
+                torch.zeros(self.num_options, dtype=torch.float32)
+            )
+
         # v48.20 UNISON-BRIDGE: a single shared evidence model consumes both
         # frozen source experts, their consensus/disagreement, and the frozen
         # proposal context.  No bucket/regime id is exposed to this model.
@@ -1869,6 +1895,62 @@ class OCRAPModel(nn.Module):
                 signature.to(dtype=memory.dtype).detach(),
                 native.to(dtype=memory.dtype).detach(),
             )
+
+    def _direct_option_corrected_absolute_feasibility(
+        self,
+        memory: torch.Tensor,
+        x: torch.Tensor,
+        option_features: torch.Tensor | None,
+        group_index: torch.Tensor | None = None,
+        is_nominal: torch.Tensor | None = None,
+        root_valid: torch.Tensor | None = None,
+        option_valid: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor] | None:
+        """v48.59 ORFC absolute source with option-resolved margin correction.
+
+        All Stage-I witness tensors are computed under no-grad and detached.
+        Gradients can flow only to ``direct_absolute_option_margin_bias``.
+        The corrected margins are passed through the exact same observation-
+        consistent OC-MERO operator as the native source, so zero bias is
+        execution-identical to v48.58-B and the 0.5 probability threshold is
+        still exactly the physical R_dep=0 boundary.
+        """
+        if self.direct_absolute_option_margin_bias is None:
+            return None
+        with torch.no_grad():
+            root_tokens = self._decode_roots(memory.detach())
+            root_logits = self.root_logit_head(root_tokens).squeeze(-1)
+            if self.direct_recovery_evidence_common_measure_root_mass:
+                root_logits = self._common_measure_root_logits(
+                    root_logits, group_index, is_nominal, root_valid
+                )
+            obs_embeddings = self.obs_embed_head(root_tokens)
+            root_expand = root_tokens.unsqueeze(2).expand(-1, -1, self.num_options, -1)
+            opt_expand = self._option_tokens(x, option_features)
+            base_margins = self.margin_head(
+                torch.cat([root_expand, opt_expand], dim=-1)
+            ).squeeze(-1)
+            root_logits = root_logits.detach()
+            obs_embeddings = obs_embeddings.detach()
+            base_margins = base_margins.detach()
+        corrected_margins = base_margins + self.direct_absolute_option_margin_bias.view(1, 1, -1)
+        _signature, native = self._recovery_option_compatibility_signature(
+            root_logits,
+            obs_embeddings,
+            corrected_margins,
+            self.tau_obs,
+            self.direct_recovery_evidence_roct_alpha,
+            self.direct_recovery_evidence_roct_beta,
+            self.direct_recovery_evidence_roct_top_m,
+            self.direct_recovery_evidence_roct_option_temperature,
+            root_valid=root_valid,
+            option_valid=option_valid,
+            return_native_certificate=True,
+            physical_student_drs=self.direct_recovery_evidence_physical_student_drs,
+        )
+        probability = native[:, 1].to(dtype=memory.dtype).clamp(1.0e-6, 1.0 - 1.0e-6)
+        logit = torch.logit(probability)
+        return logit, probability
 
     def _direct_recovery_option_compatibility_signature(
         self,
@@ -3285,11 +3367,23 @@ class OCRAPModel(nn.Module):
                     group_index=group_index, is_nominal=is_nominal,
                     root_valid=root_valid, option_valid=option_valid
                 )
-            return self._direct_outputs(
+            direct_out = self._direct_outputs(
                 memory, x, bucket_id, group_index, is_nominal,
                 recovery_option_compatibility_signature=roct_signature,
                 native_recovery_certificate=native_certificate,
             )
+            corrected_abs = self._direct_option_corrected_absolute_feasibility(
+                memory, x, option_features, group_index=group_index, is_nominal=is_nominal,
+                root_valid=root_valid, option_valid=option_valid,
+            )
+            if corrected_abs is not None:
+                abs_logit, abs_probability = corrected_abs
+                direct_out["direct_recovery_absolute_feasibility_logit"] = abs_logit
+                direct_out["direct_recovery_absolute_feasibility_probability"] = abs_probability
+                direct_out["direct_recovery_absolute_option_margin_bias"] = (
+                    self.direct_absolute_option_margin_bias
+                )
+            return direct_out
         scene_token = memory[:, 0]
         root_tokens = self._decode_roots(memory)
 
@@ -3369,6 +3463,17 @@ class OCRAPModel(nn.Module):
                 native_recovery_certificate=native_certificate,
             )
         )
+        corrected_abs = self._direct_option_corrected_absolute_feasibility(
+            memory, x, option_features, group_index=group_index, is_nominal=is_nominal,
+            root_valid=root_valid, option_valid=option_valid,
+        )
+        if corrected_abs is not None:
+            abs_logit, abs_probability = corrected_abs
+            out["direct_recovery_absolute_feasibility_logit"] = abs_logit
+            out["direct_recovery_absolute_feasibility_probability"] = abs_probability
+            out["direct_recovery_absolute_option_margin_bias"] = (
+                self.direct_absolute_option_margin_bias
+            )
         if self.root_signature_head is not None:
             out["root_signature"] = self.root_signature_head(root_tokens)
         if self.root_future_signature_head is not None:
