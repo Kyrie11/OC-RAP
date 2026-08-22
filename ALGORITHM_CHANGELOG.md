@@ -1,3 +1,29 @@
+## v48.60.1 — CPHR FULL-PREFIX / TIME-ALIGNMENT ENGINEERING HOTFIX (2026-08-22)
+
+**类别：纯工程/语义一致性修复；不修改 v48.60 CPHR 的算法假设、6-D feature definition、6 个非负权重、teacher target、0.5 threshold、A/B/C/D/E 归因设计、fixed top-5、Stage-I checkpoint 或正式运行指令。当前上传的 v48.60.0 结果判为 engineering-invalid，必须用同一 v48.60 指令重跑后才能做 CPHR 的 GO/STOP 科学归因。**
+
+### 阻断性问题
+
+上传的 v48.60.0 代码在 `OCrapModel._direct_absolute_physical_headroom_features()` 中从 structured encoder 的历史 `prefix_flat_dim=80` block 反解 `prefix_states`。但数据中的 executable prefix 为默认 `prefix_horizon_s=1.0, sample_rate_hz=10`，即 **10 x 9 = 90** 个 state scalars；80-D block只保存前80个数，而旧 CPHR 又只取其中 `floor(80/9)=8` 个完整 state。因此所谓 `terminal_clearance / clearance_recovery_gain / stopping_reserve / stability reserve` 实际只看到第8个完整 prefix state，**不是完整 executable prefix 的真实末端**。此外 `prefix_generation._rollout()` 中 `prefix_states[0]` 已对应第一个 `dt=0.1s` 执行状态，而旧 CPHR 对邻车 constant-velocity extrapolation 使用 `t=0,0.1,...`，存在 **一个采样周期的时间对齐偏移**。
+
+这个问题不会使训练或 certificate pipeline 崩溃，因此 v48.60.0 的 `PIPELINE_COMPLETE`、state-isolation、variant-isolation 可以全部 PASS；但它改变了 CPHR 声称被检验的 physical-headroom quantity，尤其直接污染 `terminal_*` 与 `stopping_reserve`，所以 RC20 **不能归因成 CPHR hypothesis scientific failure**。
+
+### 修复（算法不变）
+
+1. 六个 CPHR feature 现在在 data/inference layer 直接从 NPZ 的**完整** `prefix_states`、完整 `prefix_controls`、decision-time `ego_state`、`agent_history[-1]`、`agent_valid[-1]` 计算；不读取任何 teacher/future tensor。
+2. 该 6-D tensor 作为 **Stage-II-only side channel** 传入 model；历史 flat encoder input 完全不变，因此 v48.56-A Stage-I 仍可 bitwise frozen，input_dim/checkpoint architecture 不变。
+3. 邻车 CV 外推时间改为 `t_i=(i+1)/sample_rate_hz`，与 `prefix_generation._rollout()` 的 executable-state timestamp contract 对齐；terminal quantities严格使用 `prefix_states[-1]`。
+4. control/yaw/distance normalization从同一运行 config 的 `control_limits`、`margin_scales`、`yaw_rate_max_rps`、`d_safe0_m`、`safe_time_headway_s` 读取；默认值与 v48.60 设计常数一致。
+5. CPHR forward **fail-closed**：缺失 full-prefix side channel 时直接报错，不再允许静默退回 80-D truncated reconstruction。
+6. checkpoint 新增 `direct_recovery_absolute_physical_headroom_feature_schema=2` 和 `feature_source=full_executable_prefix_side_channel`；inference 拒绝旧 schema=0 的 v48.60.0 CPHR checkpoint，避免把旧权重套在新 feature semantics 上。
+7. persistent tensor-cache schema 由3升到4，强制重建包含正确 CPHR side channel 的 cache，避免复用旧缓存。
+8. `check_v48_60_state_isolation.py` 与 `check_v48_60_pipeline_complete.py` 新增强制 feature-schema/source contract；工程版本升级为 `v48.60.1-CPHR-FULLPREFIX`。
+9. regression test 新增“escape只发生在旧80-D block看不到的最后两个 states”以及 prefix timestamp 对齐和 missing-side-channel fail-closed case。
+
+### 归因规则
+
+**当前已上传 v48.60.0 的 E-B/E-C/E-D 数值只能作为 debug observation，不进入论文证据链。** 即使旧结果表现为 Near/Contact AUC 全降、0.5 operating point 放宽，也不能据此正式 STOP CPHR，因为核心 physical feature 被错误实现。重跑同一 `run_v48_60_dcp_drfc_bcde_rifa_cphr_two_gpu.sh` 后，只有 `OC-RAP-v48.60-PIPELINE_COMPLETE.json` 明确记录 `engineering_version=v48.60.1-CPHR-FULLPREFIX`、两 variant state-isolation 中 `physical_headroom_feature_contract_valid=true`，且其余 attribution guards继续通过，才恢复 v48.60 原预注册的 E−B source → cross-regime Pareto → deployment 归因顺序。
+
 ## v48.60 — DCP-DRFC-BCDE-RIFA-CPHR / CONTEXTUAL PHYSICAL HEADROOM RESERVE (2026-08-22)
 
 **类别：由 v48.59 ORFC 的 attribution-ready cross-severity STOP 直接触发的 absolute-source 单轴实验。v48.59 工程链条有效，因此本节首先固定其科学结论：role separation / fixed-proposal two-stage 的结构与因果隔离已经实现，但 AFE/ORFC 两个 deployed source-correction 实例均未通过 Near+Contact source Pareto；Centering 仍未获授权。v48.60 不修改 Stage-I、不扩大 proposal、不做 threshold search、不使用 regime router/policy/threshold/budget，也不蒸馏 privileged teacher component margin。**

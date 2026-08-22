@@ -6,6 +6,8 @@ import torch
 
 ALLOWED_KEY = 'direct_absolute_physical_headroom_weight'
 EXPECTED_NUM_OPTIONS = 6
+EXPECTED_FEATURE_SCHEMA = 2
+EXPECTED_FEATURE_SOURCE = 'full_executable_prefix_side_channel'
 
 def load(path: Path):
     try: return torch.load(path, map_location='cpu', weights_only=False)
@@ -34,7 +36,10 @@ def main() -> int:
     new_shape=(tuple(new_tensor.shape) if isinstance(new_tensor,torch.Tensor) else None)
     new_numel=(int(new_tensor.numel()) if isinstance(new_tensor,torch.Tensor) else None)
     expected=(added==[ALLOWED_KEY] and new_shape==(EXPECTED_NUM_OPTIONS,) and new_numel==EXPECTED_NUM_OPTIONS)
-    valid=(not removed and not shape and not changed and expected)
+    feature_schema=int(da.get('direct_recovery_absolute_physical_headroom_feature_schema',0) or 0)
+    feature_source=str(da.get('direct_recovery_absolute_physical_headroom_feature_source','') or '')
+    feature_contract=(feature_schema==EXPECTED_FEATURE_SCHEMA and feature_source==EXPECTED_FEATURE_SOURCE)
+    valid=(not removed and not shape and not changed and expected and feature_contract)
     doc={
       'schema':'ocrap-v48.60-cphr-state-isolation-v1','valid':valid,
       'reference':str(a.reference.resolve(strict=False)),'adapted':str(a.adapted.resolve(strict=False)),
@@ -44,6 +49,9 @@ def main() -> int:
       'added_state_keys':added,'removed_state_keys':removed,'shape_mismatch_keys':shape,
       'new_tensor_shape':new_shape,'new_tensor_numel':new_numel,
       'only_physical_headroom_weight_added':expected,
+      'physical_headroom_feature_schema':feature_schema,
+      'physical_headroom_feature_source':feature_source,
+      'physical_headroom_feature_contract_valid':feature_contract,
       'stage_i_bitwise_identity':not changed and not removed and not shape,
       'test_roots_read':False,
     }

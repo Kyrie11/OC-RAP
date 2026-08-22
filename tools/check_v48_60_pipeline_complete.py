@@ -44,6 +44,8 @@ def main() -> int:
             "trainable_parameters": 6, "threshold": 0.5, "threshold_search": False,
             "regime_id_input": False, "proposal_top_k": 5, "proposal_expansion": False,
             "centering": False, "test_roots_read": False,
+            "physical_feature_schema": 2,
+            "physical_feature_source": "full_executable_prefix_side_channel",
         }
         for k, v in required.items():
             if fd.get(k) != v: errors.append(f"factor contract mismatch {k}={fd.get(k)!r}")
@@ -73,15 +75,19 @@ def main() -> int:
                     sc.get("expected_selection_semantics") == RIFA and not md.get("test_roots_read")):
                 errors.append(f"{v}: metric contract invalid")
         st = base / "V48_60_STAGE_I_STATE_ISOLATION.json"
-        if st.is_file() and not load(st).get("valid"):
-            errors.append(f"{v}: state isolation invalid")
+        if st.is_file():
+            sd = load(st)
+            if not sd.get("valid"):
+                errors.append(f"{v}: state isolation invalid")
+            if not sd.get("physical_headroom_feature_contract_valid"):
+                errors.append(f"{v}: full-prefix CPHR feature contract invalid")
     for p in top:
         if p.is_file(): hashes[str(p)] = sha(p)
     valid = not errors
     doc = {
-        "schema": "ocrap-v48.60-cphr-pipeline-complete-v1", "valid": valid,
+        "schema": "ocrap-v48.60-cphr-pipeline-complete-v2", "valid": valid,
         "attribution_ready": valid, "algorithm_version": "v48.60-DCP-DRFC-BCDE-RIFA-CPHR",
-        "engineering_version": "v48.60.0-CPHR", "errors": errors,
+        "engineering_version": "v48.60.1-CPHR-FULLPREFIX", "errors": errors,
         "artifact_sha256": hashes, "test_roots_read": False,
     }
     a.output.parent.mkdir(parents=True, exist_ok=True)

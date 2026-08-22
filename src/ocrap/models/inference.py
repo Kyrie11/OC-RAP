@@ -8,7 +8,14 @@ import numpy as np
 import torch
 
 from ocrap.algorithms.ocmero import oc_mero, torch_oc_mero
-from ocrap.models.data import OPTION_FEATURE_DIM, fix_sample_geometry, sample_to_feature, samples_to_feature_matrix
+from ocrap.models.data import (
+    OPTION_FEATURE_DIM,
+    DIRECT_ABSOLUTE_PHYSICAL_HEADROOM_FEATURE_SCHEMA,
+    direct_absolute_physical_headroom_features_from_sample,
+    fix_sample_geometry,
+    sample_to_feature,
+    samples_to_feature_matrix,
+)
 from ocrap.models.ocrap import OCRAPModel
 
 
@@ -143,6 +150,18 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     d_obs = int(ckpt.get("d_obs", (cfg.get("model", {}) or {}).get("d_obs", 64)))
     tau_obs = float(ckpt.get("tau_obs", (cfg.get("model", {}) or {}).get("tau_obs", (cfg.get("ocmero", {}) or {}).get("tau_obs", 1.0))))
     model_cfg = cfg.get("model", {}) if isinstance(cfg.get("model", {}), dict) else {}
+    cphr_enabled = bool(ckpt.get(
+        "direct_recovery_absolute_physical_headroom_correction",
+        model_cfg.get("direct_recovery_absolute_physical_headroom_correction", False),
+    ))
+    if cphr_enabled:
+        feature_schema = int(ckpt.get("direct_recovery_absolute_physical_headroom_feature_schema", 0) or 0)
+        if feature_schema != DIRECT_ABSOLUTE_PHYSICAL_HEADROOM_FEATURE_SCHEMA:
+            raise RuntimeError(
+                "legacy/unknown CPHR checkpoint feature semantics: "
+                f"schema={feature_schema}; v48.60.1 requires full-prefix schema="
+                f"{DIRECT_ABSOLUTE_PHYSICAL_HEADROOM_FEATURE_SCHEMA}. Rerun v48.60 CPHR training."
+            )
     encoder_type = str(ckpt.get("encoder_type", model_cfg.get("encoder_type", "mlp")))
     feature_layout = ckpt.get("feature_layout", None)
     model = OCRAPModel(
@@ -845,8 +864,14 @@ def predict_samples(
     is_nominal = torch.tensor([
         1.0 if float(np.asarray(d.get("is_nominal", 0)).reshape(-1)[0]) > 0.5 else 0.0 for d in ds
     ], dtype=torch.float32, device=bundle.device)
+    cphr_features = None
+    if bool(getattr(bundle.model, "direct_recovery_absolute_physical_headroom_correction", False)):
+        cphr_features = torch.from_numpy(np.stack([
+            direct_absolute_physical_headroom_features_from_sample(d, bundle.cfg) for d in ds
+        ], axis=0)).float().to(bundle.device)
     out = bundle.model(
         xs, option_features, bucket_id=bucket_ids, group_index=group_index, is_nominal=is_nominal,
+        absolute_physical_headroom_features=cphr_features,
         root_valid=root_valid, option_valid=option_valid,
     )
     p = torch.softmax(out["root_logits"].masked_fill(~root_valid, -1.0e4), dim=-1)
@@ -979,8 +1004,14 @@ def predict_sample(d: dict[str, Any], bundle: ModelBundle | None, cfg: dict | No
     singleton_nominal = torch.tensor([
         1.0 if float(np.asarray(d.get("is_nominal", 0)).reshape(-1)[0]) > 0.5 else 0.0
     ], dtype=torch.float32, device=bundle.device)
+    cphr_features = None
+    if bool(getattr(bundle.model, "direct_recovery_absolute_physical_headroom_correction", False)):
+        cphr_features = torch.from_numpy(
+            direct_absolute_physical_headroom_features_from_sample(d, bundle.cfg)
+        ).float().unsqueeze(0).to(bundle.device)
     out = bundle.model(
         x, option_features, bucket_id=bucket_id, group_index=singleton_group, is_nominal=singleton_nominal,
+        absolute_physical_headroom_features=cphr_features,
         root_valid=root_valid, option_valid=option_valid,
     )
     p = torch.softmax(out["root_logits"].masked_fill(~root_valid, -1.0e4), dim=-1)

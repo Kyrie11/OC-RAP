@@ -3,10 +3,15 @@ from __future__ import annotations
 from dataclasses import asdict
 from pathlib import Path
 
+import numpy as np
 import torch
 
 from ocrap.cli.train import _absolute_feasibility_bce
 from ocrap.models.encoders import FlatFeatureLayout
+from ocrap.models.data import (
+    DIRECT_ABSOLUTE_PHYSICAL_HEADROOM_FEATURE_SCHEMA,
+    direct_absolute_physical_headroom_features_from_sample,
+)
 from ocrap.models.ocrap import OCRAPModel
 
 
@@ -60,6 +65,44 @@ def _physical_x(escape: bool = False) -> torch.Tensor:
     return x
 
 
+def _raw_physical_sample(*, late_escape: bool = False, agent_vx: float = 0.0) -> dict:
+    ego = np.zeros(9, dtype=np.float32)
+    ego[6] = 2.0
+    ego[7] = 4.8
+    ego[8] = 2.0
+    states = np.zeros((10, 9), dtype=np.float32)
+    states[:, 6] = 2.0
+    states[:, 7] = 4.8
+    states[:, 8] = 2.0
+    if late_escape:
+        # Deliberately leave the first eight complete states unchanged.  The
+        # legacy v48.60.0 80-D reconstruction could not see this terminal escape.
+        states[8, 0] = 4.0
+        states[9, 0] = 8.0
+    controls = np.zeros((9, 4), dtype=np.float32)
+    hist = np.zeros((1, 2, 16), dtype=np.float32)
+    hist[0, 1, 0] = 0.5
+    hist[0, 1, 3] = float(agent_vx)
+    hist[0, 1, 10] = 4.8
+    hist[0, 1, 11] = 2.0
+    valid = np.asarray([[True, True]], dtype=bool)
+    return {
+        "ego_state": ego,
+        "prefix_states": states,
+        "prefix_controls": controls,
+        "agent_history": hist,
+        "agent_valid": valid,
+    }
+
+
+def _full_feature_tensor(*, late_escape: bool = False, agent_vx: float = 0.0) -> torch.Tensor:
+    feat = direct_absolute_physical_headroom_features_from_sample(
+        _raw_physical_sample(late_escape=late_escape, agent_vx=agent_vx),
+        {"sample_rate_hz": 10.0, "model": {"feature_max_agents": 2}},
+    )
+    return torch.from_numpy(feat).float().unsqueeze(0)
+
+
 def test_cphr_zero_weight_is_exact_native_source() -> None:
     model = _model().eval()
     x = _physical_x(escape=True).repeat(3, 1)
@@ -68,7 +111,7 @@ def test_cphr_zero_weight_is_exact_native_source() -> None:
         [0.2, 0.50, 0.3, 0.4],
         [0.2, 0.90, 0.3, 0.4],
     ])
-    out = model._direct_physical_headroom_absolute_feasibility(x, native)
+    out = model._direct_physical_headroom_absolute_feasibility(x, native, _full_feature_tensor(late_escape=True).repeat(3, 1))
     assert out is not None
     _, p, feat, weight = out
     assert torch.allclose(p, native[:, 1], atol=2e-6, rtol=0)
@@ -76,16 +119,37 @@ def test_cphr_zero_weight_is_exact_native_source() -> None:
     assert torch.equal(weight, torch.zeros(6))
 
 
-def test_cphr_signed_clearance_retains_contact_and_escape_headroom() -> None:
-    model = _model().eval()
-    stay = model._direct_absolute_physical_headroom_features(_physical_x(False))[0]
-    escape = model._direct_absolute_physical_headroom_features(_physical_x(True))[0]
+def test_cphr_signed_clearance_retains_contact_and_true_terminal_escape_headroom() -> None:
+    stay = _full_feature_tensor(late_escape=False)[0]
+    escape = _full_feature_tensor(late_escape=True)[0]
     assert torch.isfinite(stay).all() and torch.isfinite(escape).all()
     # Contact remains negative rather than clipped to zero.
     assert float(stay[0]) < 0.0
-    # Terminal clearance and clearance recovery gain increase for an escaping prefix.
+    # The escape occurs only after the first 8 complete states, so this explicitly
+    # guards against the old 80-D/truncated-prefix implementation.
     assert float(escape[1]) > float(stay[1])
     assert float(escape[2]) > float(stay[2])
+    assert float(escape[1]) > 0.0
+
+
+def test_cphr_prefix_timestamps_start_at_first_rollout_dt() -> None:
+    # An agent moving +x should be extrapolated for 0.1 s at prefix_states[0],
+    # not treated as if that executable state occurred at decision time t=0.
+    static = _full_feature_tensor(late_escape=False, agent_vx=0.0)[0]
+    moving = _full_feature_tensor(late_escape=False, agent_vx=1.0)[0]
+    assert float(moving[0]) != float(static[0])
+
+
+def test_cphr_fails_closed_without_full_prefix_side_channel() -> None:
+    model = _model().eval()
+    x = _physical_x(True)
+    native = torch.tensor([[0.2, 0.5, 0.3, 0.4]])
+    try:
+        model._direct_physical_headroom_absolute_feasibility(x, native, None)
+    except RuntimeError as exc:
+        assert "full-prefix features missing" in str(exc)
+    else:
+        raise AssertionError("legacy truncated-prefix CPHR path must be disabled")
 
 
 def test_cphr_bce_gradient_isolated_to_six_weights() -> None:
@@ -100,7 +164,9 @@ def test_cphr_bce_gradient_isolated_to_six_weights() -> None:
         [0.0, 0.55, 0.0, 0.0],
         [0.0, 0.55, 0.0, 0.0],
     ])
-    direct = model._direct_physical_headroom_absolute_feasibility(x, native)
+    direct = model._direct_physical_headroom_absolute_feasibility(
+        x, native, torch.cat([_full_feature_tensor(late_escape=False), _full_feature_tensor(late_escape=True), _full_feature_tensor(late_escape=False), _full_feature_tensor(late_escape=True)], dim=0)
+    )
     assert direct is not None
     logit, prob, feat, weight = direct
     out = {"direct_recovery_absolute_feasibility_logit": logit}
@@ -195,6 +261,8 @@ def test_cphr_checkpoint_inference_roundtrip(tmp_path) -> None:
         "option_feature_dim": 0,
         "direct_recovery_value_head": True,
         "direct_recovery_absolute_physical_headroom_correction": True,
+        "direct_recovery_absolute_physical_headroom_feature_schema": DIRECT_ABSOLUTE_PHYSICAL_HEADROOM_FEATURE_SCHEMA,
+        "direct_recovery_absolute_physical_headroom_feature_source": "full_executable_prefix_side_channel",
         "direct_recovery_evidence_native_certificate_preservation": True,
         "cfg": {
             "model": {
@@ -216,3 +284,48 @@ def test_cphr_checkpoint_inference_roundtrip(tmp_path) -> None:
     assert bundle.model.direct_recovery_absolute_physical_headroom_correction
     assert bundle.model.direct_absolute_physical_headroom_weight is not None
     assert torch.equal(bundle.model.direct_absolute_physical_headroom_weight, torch.zeros(6))
+
+
+def test_cphr_legacy_checkpoint_schema_rejected(tmp_path) -> None:
+    from ocrap.models.inference import load_model_bundle
+    L = _layout()
+    model = _model().eval()
+    ckpt = {
+        "model_state": model.state_dict(),
+        "input_dim": L.total_dim,
+        "num_roots": 3,
+        "num_options": 2,
+        "d_model": 16,
+        "d_obs": 8,
+        "tau_obs": 1.0,
+        "encoder_type": "structured_transformer",
+        "feature_layout": asdict(L),
+        "d_signature": 0,
+        "d_future_signature": 0,
+        "option_feature_dim": 0,
+        "direct_recovery_value_head": True,
+        "direct_recovery_absolute_physical_headroom_correction": True,
+        # v48.60.0 checkpoints omitted the feature schema and must never be
+        # silently interpreted under the corrected full-prefix semantics.
+        "direct_recovery_evidence_native_certificate_preservation": True,
+        "cfg": {
+            "model": {
+                "transformer_layers": 1,
+                "transformer_heads": 4,
+                "dropout": 0.0,
+                "encoder_type": "structured_transformer",
+                "direct_recovery_value_head": True,
+                "direct_recovery_absolute_physical_headroom_correction": True,
+                "direct_recovery_evidence_native_certificate_preservation": True,
+            },
+            "runtime": {"device": "cpu"},
+        },
+    }
+    p = tmp_path / "legacy_cphr.pt"
+    torch.save(ckpt, p)
+    try:
+        load_model_bundle(p)
+    except RuntimeError as exc:
+        assert "legacy/unknown CPHR checkpoint feature semantics" in str(exc)
+    else:
+        raise AssertionError("v48.60.0 CPHR checkpoint must be rejected")

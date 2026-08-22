@@ -352,6 +352,171 @@ def _agent_features(d: dict[str, Any], max_agents: int) -> np.ndarray:
     return np.concatenate([summary, packed.reshape(-1)], axis=0)
 
 
+
+
+# v48.60.1 engineering correction.  CPHR must use the complete executable
+# prefix, not the historically truncated 80-D encoder block.  Keep the feature
+# schema explicit so stale v48.60.0 checkpoints/caches cannot be reused silently.
+DIRECT_ABSOLUTE_PHYSICAL_HEADROOM_FEATURE_SCHEMA = 2
+DIRECT_ABSOLUTE_PHYSICAL_HEADROOM_FEATURE_DIM = 6
+
+
+def direct_absolute_physical_headroom_features_from_sample(
+    d: dict[str, Any], cfg: dict | None = None
+) -> np.ndarray:
+    """Compute the six CPHR coordinates from full observable sample tensors.
+
+    This is deliberately a side-channel *to the CPHR source only*.  The frozen
+    Stage-I encoder continues to consume the exact historical flat feature row.
+    Inputs are restricted to decision-time observation plus the executable
+    candidate prefix: ``ego_state``, ``agent_history[-1]``, ``agent_valid[-1]``,
+    ``prefix_states`` and ``prefix_controls``.  No future/teacher tensor is read.
+
+    Feature order is unchanged from v48.60.0:
+      0 signed minimum-clearance reserve
+      1 signed terminal-clearance reserve
+      2 clearance recovery gain
+      3 stopping reserve
+      4 control-envelope reserve
+      5 stability reserve
+    """
+    cfg = cfg or {}
+    states = np.asarray(d.get("prefix_states", np.zeros((0, 9))), dtype=np.float32)
+    controls = np.asarray(d.get("prefix_controls", np.zeros((0, 4))), dtype=np.float32)
+    ego = np.asarray(d.get("ego_state", np.zeros((9,))), dtype=np.float32).reshape(-1)
+    hist = np.asarray(d.get("agent_history", np.zeros((0, 0, 16))), dtype=np.float32)
+    valid = np.asarray(d.get("agent_valid", np.zeros((0, 0))), dtype=bool)
+
+    if states.ndim != 2 or states.shape[0] < 1 or states.shape[1] < 9:
+        raise ValueError(
+            f"CPHR requires full prefix_states[T,>=9], got shape={getattr(states, 'shape', None)}"
+        )
+    if ego.size < 9:
+        raise ValueError(f"CPHR requires ego_state[>=9], got shape={ego.shape}")
+    if controls.ndim != 2:
+        controls = np.zeros((0, 4), dtype=np.float32)
+    if controls.shape[1] < 4 and controls.shape[0] > 0:
+        raise ValueError(f"CPHR requires prefix_controls[T,>=4], got shape={controls.shape}")
+
+    model_cfg = cfg.get("model", {}) if isinstance(cfg.get("model", {}), dict) else {}
+    max_agents = int(model_cfg.get("feature_max_agents", 32))
+    ego_xy = ego[:2].astype(np.float64, copy=False)
+    ego_len = max(abs(float(ego[7])), 1.0e-3)
+    ego_wid = max(abs(float(ego[8])), 1.0e-3)
+    ego_rad = 0.5 * float(np.hypot(ego_len, ego_wid))
+
+    # Match the encoder's observable-neighbour contract: current valid non-ego
+    # agents, nearest-first, capped at feature_max_agents.  Unlike v48.60.0 we do
+    # not round-trip through normalized packed tokens, so no prefix information
+    # is lost before the CPHR calculation.
+    agents: list[tuple[float, np.ndarray]] = []
+    if hist.ndim == 3 and hist.shape[0] > 0 and hist.shape[1] > 1 and valid.ndim >= 2 and valid.shape[0] > 0:
+        last = hist[-1]
+        vmask = valid[-1].reshape(-1)
+        for aidx in range(1, min(last.shape[0], vmask.size)):
+            if not bool(vmask[aidx]):
+                continue
+            row = np.asarray(last[aidx], dtype=np.float64).reshape(-1)
+            if row.size < 12 or not np.isfinite(row[:12]).all():
+                continue
+            rel = row[:2] - ego_xy
+            agents.append((float(np.linalg.norm(rel)), row))
+    agents.sort(key=lambda z: z[0])
+    agents = agents[:max_agents]
+
+    T = int(states.shape[0])
+    sample_rate = float(cfg.get("sample_rate_hz", 10.0) or 10.0)
+    if not np.isfinite(sample_rate) or sample_rate <= 0.0:
+        raise ValueError(f"invalid sample_rate_hz for CPHR: {sample_rate}")
+    dt = 1.0 / sample_rate
+    # prefix_generation._rollout stores the first executable state after one
+    # integration interval, so its physical timestamp is dt rather than 0.
+    times = (np.arange(T, dtype=np.float64) + 1.0) * dt
+    prefix_xy_rel = states[:, :2].astype(np.float64) - ego_xy[None, :]
+
+    if agents:
+        rel0 = np.stack([row[:2] - ego_xy for _, row in agents], axis=0)
+        vel = np.stack([row[3:5] for _, row in agents], axis=0)
+        alen = np.asarray([max(abs(float(row[10])), 1.0e-3) for _, row in agents], dtype=np.float64)
+        awid = np.asarray([max(abs(float(row[11])), 1.0e-3) for _, row in agents], dtype=np.float64)
+        arad = 0.5 * np.hypot(alen, awid)
+        agent_future = rel0[None, :, :] + times[:, None, None] * vel[None, :, :]
+        delta = prefix_xy_rel[:, None, :] - agent_future
+        signed_clearance = np.linalg.norm(delta, axis=-1) - ego_rad - arad[None, :]
+        c_min = float(np.min(signed_clearance))
+        c_terminal = float(np.min(signed_clearance[-1]))
+        c0 = float(np.min(np.linalg.norm(rel0, axis=-1) - ego_rad - arad))
+    else:
+        c_min = c_terminal = c0 = 40.0
+
+    speed = np.abs(states[:, 6].astype(np.float64))
+    max_speed = float(np.max(speed))
+    terminal_speed = float(speed[-1])
+    d_safe0 = float(cfg.get("d_safe0_m", 1.0))
+    headway = float(cfg.get("safe_time_headway_s", 0.5))
+    scales = cfg.get("margin_scales", {}) if isinstance(cfg.get("margin_scales", {}), dict) else {}
+    distance_scale = max(float(scales.get("distance", 2.0)), 1.0e-6)
+    stop_scale = max(float(scales.get("stop", 5.0)), 1.0e-6)
+    d_safe = d_safe0 + headway * max_speed
+
+    h_min_clear = np.tanh((c_min - d_safe) / distance_scale)
+    h_terminal_clear = np.tanh((c_terminal - d_safe) / distance_scale)
+    h_clear_gain = np.tanh((c_terminal - c0) / distance_scale)
+
+    limits = cfg.get("control_limits", {}) if isinstance(cfg.get("control_limits", {}), dict) else {}
+    a_max = float(limits.get("a_max", 3.0))
+    a_min = float(limits.get("a_min", -6.0))
+    delta_max = float(limits.get("delta_max", 0.55))
+    jerk_max = float(limits.get("j_max", 6.0))
+    steer_rate_max = float(limits.get("steer_rate_max", 0.5))
+    stop_decel = max(abs(a_min), 1.0e-3)
+    stop_required = terminal_speed * terminal_speed / (2.0 * stop_decel) + d_safe0
+    h_stop = np.tanh((c_terminal - stop_required) / stop_scale)
+
+    if controls.shape[0] > 0:
+        c = controls[:, :4].astype(np.float64)
+        accel_scale = max(float(scales.get("accel", 1.0)), 1.0e-6)
+        decel_scale = max(float(scales.get("decel", 1.0)), 1.0e-6)
+        steer_scale = max(float(scales.get("steer", 0.1)), 1.0e-6)
+        jerk_scale = max(float(scales.get("jerk", 2.0)), 1.0e-6)
+        rate_scale = max(float(scales.get("steer_rate", 0.1)), 1.0e-6)
+        ctrl_terms = np.asarray([
+            (a_max - float(np.max(np.maximum(c[:, 0], 0.0)))) / accel_scale,
+            (abs(a_min) - float(np.max(np.maximum(-c[:, 0], 0.0)))) / decel_scale,
+            (delta_max - float(np.max(np.abs(c[:, 1])))) / steer_scale,
+            (jerk_max - float(np.max(np.abs(c[:, 2])))) / jerk_scale,
+            (steer_rate_max - float(np.max(np.abs(c[:, 3])))) / rate_scale,
+        ], dtype=np.float64)
+    else:
+        # No control action consumes no envelope; this matches the old padded-zero
+        # semantics while avoiding a fabricated extra timestep.
+        ctrl_terms = np.asarray([
+            a_max / max(float(scales.get("accel", 1.0)), 1.0e-6),
+            abs(a_min) / max(float(scales.get("decel", 1.0)), 1.0e-6),
+            delta_max / max(float(scales.get("steer", 0.1)), 1.0e-6),
+            jerk_max / max(float(scales.get("jerk", 2.0)), 1.0e-6),
+            steer_rate_max / max(float(scales.get("steer_rate", 0.1)), 1.0e-6),
+        ], dtype=np.float64)
+    h_control = np.tanh(float(np.min(ctrl_terms)))
+
+    yaw_rate_max = float(cfg.get("yaw_rate_max_rps", 0.6))
+    yaw_scale = max(float(scales.get("yaw", 0.2)), 1.0e-6)
+    yaw_rate = float(np.max(np.abs(states[:, 5].astype(np.float64))))
+    h_stability = np.tanh((yaw_rate_max - yaw_rate) / yaw_scale)
+
+    out = np.asarray([
+        h_min_clear,
+        h_terminal_clear,
+        h_clear_gain,
+        h_stop,
+        h_control,
+        h_stability,
+    ], dtype=np.float32)
+    if out.shape != (DIRECT_ABSOLUTE_PHYSICAL_HEADROOM_FEATURE_DIM,) or not np.isfinite(out).all():
+        raise ValueError(f"invalid CPHR feature vector: {out}")
+    return out
+
+
 def _feature_layout_values(cfg: dict | None = None) -> dict[str, int]:
     cfg = cfg or {}
     model_cfg = cfg.get("model", {}) if isinstance(cfg.get("model", {}), dict) else {}
@@ -641,7 +806,7 @@ def _nominal_deviation_by_path(paths: list[Path]) -> list[float]:
     return out
 
 
-_PERSISTENT_TENSOR_CACHE_SCHEMA = 3
+_PERSISTENT_TENSOR_CACHE_SCHEMA = 4
 
 def _load_persistent_tensor_cache_payload(cache_path: Path) -> dict[str, Any] | None:
     """Load an immutable decoded-tensor cache with mmap when supported.
@@ -700,6 +865,8 @@ def _persistent_tensor_cache_key(
     d_signature: int, d_future_signature: int, feature_dim: int,
 ) -> str:
     training = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
+    model_cfg = cfg.get("model", {}) if isinstance(cfg.get("model", {}), dict) else {}
+    cphr_features_enabled = bool(model_cfg.get("direct_recovery_absolute_physical_headroom_correction", False))
     payload = {
         "schema": _PERSISTENT_TENSOR_CACHE_SCHEMA,
         "manifests": _dataset_manifest_fingerprint(paths),
@@ -718,6 +885,8 @@ def _persistent_tensor_cache_key(
         "prefix_param_dim": int(cfg.get("prefix_param_dim", 5)),
         "bev_channels": int(cfg.get("bev_channels", 7)),
         "exact_eligibility": bool(training.get("direct_policy_metric_exact_eligibility", False)),
+        "cphr_full_prefix_features": cphr_features_enabled,
+        "cphr_feature_schema": (DIRECT_ABSOLUTE_PHYSICAL_HEADROOM_FEATURE_SCHEMA if cphr_features_enabled else 0),
         "npz_keys": sorted(MODEL_SAMPLE_NPZ_KEYS),
     }
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
@@ -877,6 +1046,11 @@ class OCRAPSampleDataset(Dataset):
             "root_future_signature": torch.from_numpy(fixed["root_future_signature"]),
             "option_features": torch.from_numpy(fixed["option_features"]),
         }
+        model_cfg = self.cfg.get("model", {}) if isinstance(self.cfg.get("model", {}), dict) else {}
+        if bool(model_cfg.get("direct_recovery_absolute_physical_headroom_correction", False)):
+            out["direct_absolute_physical_headroom_features"] = torch.from_numpy(
+                direct_absolute_physical_headroom_features_from_sample(d, self.cfg)
+            )
         return out
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:

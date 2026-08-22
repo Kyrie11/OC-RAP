@@ -1606,6 +1606,7 @@ def _epoch(
                     batch["x"].float(), batch.get("option_features"),
                     bucket_id=batch.get("bucket_id"), group_index=group_index,
                     is_nominal=batch.get("is_nominal"), direct_only=True,
+                    absolute_physical_headroom_features=batch.get("direct_absolute_physical_headroom_features"),
                     root_valid=batch.get("root_valid"), option_valid=batch.get("option_valid"),
                 )
             root_valid = batch["root_valid"].bool()
@@ -1671,6 +1672,7 @@ def _epoch(
         out = model(
             batch["x"].float(), batch.get("option_features"), bucket_id=batch.get("bucket_id"),
             group_index=group_index, is_nominal=batch.get("is_nominal"),
+            absolute_physical_headroom_features=batch.get("direct_absolute_physical_headroom_features"),
             root_valid=batch.get("root_valid"), option_valid=batch.get("option_valid"),
             witness_only=bool(witness_fast_mode),
             witness_observation_only=(witness_fast_mode == "decision_obs"),
@@ -3568,6 +3570,13 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             ),
             "direct_recovery_absolute_physical_headroom_correction": bool(
                 model_cfg.get("direct_recovery_absolute_physical_headroom_correction", False)
+            ),
+            "direct_recovery_absolute_physical_headroom_feature_schema": (
+                2 if bool(model_cfg.get("direct_recovery_absolute_physical_headroom_correction", False)) else 0
+            ),
+            "direct_recovery_absolute_physical_headroom_feature_source": (
+                "full_executable_prefix_side_channel"
+                if bool(model_cfg.get("direct_recovery_absolute_physical_headroom_correction", False)) else "disabled"
             ),
             "direct_recovery_evidence_native_certificate_preservation": bool(
                 model_cfg.get("direct_recovery_evidence_native_certificate_preservation", False)

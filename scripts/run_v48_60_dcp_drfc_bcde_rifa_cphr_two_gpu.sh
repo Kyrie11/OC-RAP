@@ -24,7 +24,8 @@ rm -f "$REF_AUDIT" "$FEAS_AUDIT" "$COMPARE" "$PIPELINE_COMPLETE" "$E_RUN.zip" "$
 # V48.60 is a single-axis follow-up to the V48.59 cross-severity ORFC STOP.
 # A/B/C/D are reused bitwise.  E/Main changes only the absolute-feasibility source:
 # six zero-initialized bounded non-negative weights on deployable signed physical
-# headroom computed from the executable prefix/current observed agents, added to
+# headroom computed from the COMPLETE executable prefix/current observed agents,
+# carried as a Stage-II-only side channel so the frozen Stage-I flat input is unchanged, added to
 # the frozen native R_dep logit.  No regime id, free bias, threshold search,
 # centering, proposal expansion, root retraining, or margin-head retraining.
 bash scripts/prepare_v48_45_protocol.sh
@@ -105,6 +106,7 @@ p=pathlib.Path(sys.argv[1]);p.write_text(json.dumps({
  'stage_i':'bitwise v48.56-A checkpoint','stage_ii':'Contextual Physical Headroom Reserve (CPHR)',
  'source_intervention':'native R_dep logit + bounded nonnegative linear correction over six signed observable physical headroom coordinates',
  'physical_features':['min_clearance_reserve','terminal_clearance_reserve','clearance_recovery_gain','stopping_reserve','control_envelope_reserve','stability_reserve'],
+ 'physical_feature_schema':2,'physical_feature_source':'full_executable_prefix_side_channel','prefix_timestamp_contract':'prefix_states[i] occurs at (i+1)/sample_rate_hz',
  'trainable_state':'direct_absolute_physical_headroom_weight[6]','trainable_parameters':6,
  'initialization':'all zeros; no bias; execution-exact native B source at epoch 0','weight_constraint':'elementwise [0,2]',
  'target':'1[R_dep_star(candidate) >= 0]','scope':'candidate-only Near+Contact adaptation-train; shared regime-agnostic function at execution','threshold':0.5,'threshold_search':False,
@@ -116,7 +118,7 @@ PY
 run_calibration(){
   set +e
   OUTPUTDIR="$E_RUN" GPU0="$GPU0" GPU1="$GPU1" V4836_ATTEMPT_ID="v48.60-E-CPHR-$(date +%s)" \
-  OCRAP_IMPLEMENTATION_VERSION="v48.60.0-CPHR" \
+  OCRAP_IMPLEMENTATION_VERSION="v48.60.1-CPHR-FULLPREFIX" \
   CAL_SAFE="$CAL_SAFE" CERT_NEAR="$CERT_NEAR" CERT_CONTACT="$CERT_CONTACT" DEV_NEAR="$DEV_NEAR" DEV_CONTACT="$DEV_CONTACT" \
   ABSOLUTE_FEASIBILITY_MODE=learned ABSOLUTE_FEASIBILITY_THRESHOLD=0.5 OPTION_EXECUTION_SEMANTICS=observation_class \
   HARM_LABEL_MODE=component_veto OPPORTUNITY_LABEL_MODE=raw_benefit GATE_POSITIVE_MODE=safe_benefit PROPOSAL_TOP_K=5 \
