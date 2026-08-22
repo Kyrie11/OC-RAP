@@ -351,6 +351,7 @@ class OCRAPModel(nn.Module):
         direct_recovery_absolute_feasibility_head: bool = False,
         direct_recovery_absolute_option_margin_correction: bool = False,
         direct_recovery_absolute_physical_headroom_correction: bool = False,
+        direct_recovery_absolute_executable_witness_correction: bool = False,
         direct_recovery_evidence_native_certificate_preservation: bool = False,
         direct_recovery_evidence_native_margin_complete_preservation: bool = False,
         direct_recovery_evidence_native_advantage_preservation: bool = False,
@@ -565,14 +566,22 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_absolute_physical_headroom_correction = bool(
             direct_recovery_absolute_physical_headroom_correction
         )
+        # v48.61 ERWF (Executable Recovery Witness Field): a candidate x recovery-
+        # option continuation field, computed only from the executable prefix,
+        # deterministic recovery controller and current observation.  The field
+        # corrects frozen root-option margins before the unchanged OC-MERO source.
+        self.direct_recovery_absolute_executable_witness_correction = bool(
+            direct_recovery_absolute_executable_witness_correction
+        )
         absolute_source_count = sum([
             self.direct_recovery_absolute_feasibility_head,
             self.direct_recovery_absolute_option_margin_correction,
             self.direct_recovery_absolute_physical_headroom_correction,
+            self.direct_recovery_absolute_executable_witness_correction,
         ])
         if absolute_source_count > 1:
             raise ValueError(
-                "AFE, ORFC option-margin correction, and CPHR physical-headroom correction are mutually exclusive"
+                "AFE, ORFC, CPHR, and ERWF absolute-source corrections are mutually exclusive"
             )
         # v48.48 NCP: preserve paper-native OC-MERO DRS/deployability coordinates
         # at the final non-compensatory admission interface instead of asking a
@@ -1259,6 +1268,19 @@ class OCRAPModel(nn.Module):
             if self.encoder_type != "structured_transformer":
                 raise ValueError("CPHR requires structured_transformer flat feature layout")
             self.direct_absolute_physical_headroom_weight = nn.Parameter(
+                torch.zeros(6, dtype=torch.float32)
+            )
+
+        # v48.61 ERWF.  The six shared weights operate on option-resolved
+        # executable continuation witness coordinates.  They are deliberately
+        # shared across recovery modes and roots: all structure comes from the
+        # physical candidate x option field, not an option ID bias or regime
+        # router.  Zero initialization is execution-exact v48.58-B.
+        self.direct_absolute_executable_witness_weight = None
+        if self.direct_recovery_absolute_executable_witness_correction:
+            if self.encoder_type != "structured_transformer":
+                raise ValueError("ERWF requires structured_transformer flat feature layout")
+            self.direct_absolute_executable_witness_weight = nn.Parameter(
                 torch.zeros(6, dtype=torch.float32)
             )
 
@@ -1971,6 +1993,99 @@ class OCRAPModel(nn.Module):
         correction = (features * weights.view(1, -1)).sum(dim=-1)
         logit = native_logit + correction
         probability = torch.sigmoid(logit)
+        return logit, probability, features, weights
+
+
+    def _direct_absolute_executable_witness_features(
+        self,
+        supplied_features: torch.Tensor | None,
+        *,
+        batch_size: int,
+        dtype: torch.dtype,
+        device: torch.device,
+    ) -> torch.Tensor:
+        """Validate the v48.61 option-resolved ERWF side channel [B,L,6]."""
+        if supplied_features is None:
+            raise RuntimeError(
+                "ERWF features missing: v48.61 requires the full executable "
+                "candidate x recovery-option continuation witness side-channel"
+            )
+        feat = supplied_features.to(device=device, dtype=dtype)
+        expected = (int(batch_size), int(self.num_options), 6)
+        if feat.ndim != 3 or tuple(feat.shape) != expected:
+            raise RuntimeError(
+                f"invalid ERWF feature shape {tuple(feat.shape)}; expected {expected}"
+            )
+        if not bool(torch.isfinite(feat).all()):
+            raise RuntimeError("non-finite ERWF feature value")
+        return feat.detach()
+
+    def _direct_executable_witness_absolute_feasibility(
+        self,
+        memory: torch.Tensor,
+        x: torch.Tensor,
+        option_features: torch.Tensor | None,
+        executable_witness_features: torch.Tensor | None,
+        group_index: torch.Tensor | None = None,
+        is_nominal: torch.Tensor | None = None,
+        root_valid: torch.Tensor | None = None,
+        option_valid: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor] | None:
+        """v48.61 ERWF source: correct native margins with executable witnesses.
+
+        Frozen Stage-I predicts root probabilities, observation equivalence and
+        root x option margins exactly as before.  ERWF adds one shared signed
+        physical correction to each option's margin, then re-runs the unchanged
+        observation-consistent OC-MERO source.  No candidate-level threshold
+        shift, free option bias, regime ID or privileged teacher component enters
+        the source.  At zero weights this is execution-identical to native B.
+        """
+        if self.direct_absolute_executable_witness_weight is None:
+            return None
+        with torch.no_grad():
+            root_tokens = self._decode_roots(memory.detach())
+            root_logits = self.root_logit_head(root_tokens).squeeze(-1)
+            if self.direct_recovery_evidence_common_measure_root_mass:
+                root_logits = self._common_measure_root_logits(
+                    root_logits, group_index, is_nominal, root_valid
+                )
+            obs_embeddings = self.obs_embed_head(root_tokens)
+            root_expand = root_tokens.unsqueeze(2).expand(-1, -1, self.num_options, -1)
+            opt_expand = self._option_tokens(x, option_features)
+            base_margins = self.margin_head(
+                torch.cat([root_expand, opt_expand], dim=-1)
+            ).squeeze(-1)
+            root_logits = root_logits.detach()
+            obs_embeddings = obs_embeddings.detach()
+            base_margins = base_margins.detach()
+        features = self._direct_absolute_executable_witness_features(
+            executable_witness_features,
+            batch_size=x.shape[0],
+            dtype=memory.dtype,
+            device=memory.device,
+        )
+        # A shared non-negative physical readout preserves coordinate semantics;
+        # the signed features themselves determine whether a particular
+        # continuation raises or lowers that option's margin.
+        weights = self.direct_absolute_executable_witness_weight.clamp(0.0, 2.0)
+        option_correction = torch.einsum("blf,f->bl", features, weights)
+        corrected_margins = base_margins + option_correction.unsqueeze(1)
+        _signature, native = self._recovery_option_compatibility_signature(
+            root_logits,
+            obs_embeddings,
+            corrected_margins,
+            self.tau_obs,
+            self.direct_recovery_evidence_roct_alpha,
+            self.direct_recovery_evidence_roct_beta,
+            self.direct_recovery_evidence_roct_top_m,
+            self.direct_recovery_evidence_roct_option_temperature,
+            root_valid=root_valid,
+            option_valid=option_valid,
+            return_native_certificate=True,
+            physical_student_drs=self.direct_recovery_evidence_physical_student_drs,
+        )
+        probability = native[:, 1].to(dtype=memory.dtype).clamp(1.0e-6, 1.0 - 1.0e-6)
+        logit = torch.logit(probability)
         return logit, probability, features, weights
 
     def _direct_option_corrected_absolute_feasibility(
@@ -3435,6 +3550,7 @@ class OCRAPModel(nn.Module):
         witness_only: bool = False,
         witness_observation_only: bool = False,
         absolute_physical_headroom_features: torch.Tensor | None = None,
+        absolute_executable_witness_features: torch.Tensor | None = None,
         root_valid: torch.Tensor | None = None,
         option_valid: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
@@ -3450,6 +3566,7 @@ class OCRAPModel(nn.Module):
                 or self.direct_recovery_evidence_native_certificate_preservation
                 or self.direct_absolute_feasibility_head is not None
                 or self.direct_absolute_physical_headroom_weight is not None
+                or self.direct_absolute_executable_witness_weight is not None
             ):
                 roct_signature, native_certificate = self._direct_recovery_option_compatibility_evidence(
                     memory, x, option_features,
@@ -3473,6 +3590,17 @@ class OCRAPModel(nn.Module):
                 direct_out["direct_recovery_absolute_option_margin_bias"] = (
                     self.direct_absolute_option_margin_bias
                 )
+            erwf_abs = self._direct_executable_witness_absolute_feasibility(
+                memory, x, option_features, absolute_executable_witness_features,
+                group_index=group_index, is_nominal=is_nominal,
+                root_valid=root_valid, option_valid=option_valid,
+            )
+            if erwf_abs is not None:
+                abs_logit, abs_probability, erwf_features, erwf_weights = erwf_abs
+                direct_out["direct_recovery_absolute_feasibility_logit"] = abs_logit
+                direct_out["direct_recovery_absolute_feasibility_probability"] = abs_probability
+                direct_out["direct_recovery_absolute_executable_witness_features"] = erwf_features
+                direct_out["direct_recovery_absolute_executable_witness_weight"] = erwf_weights
             return direct_out
         scene_token = memory[:, 0]
         root_tokens = self._decode_roots(memory)
@@ -3566,6 +3694,17 @@ class OCRAPModel(nn.Module):
             out["direct_recovery_absolute_option_margin_bias"] = (
                 self.direct_absolute_option_margin_bias
             )
+        erwf_abs = self._direct_executable_witness_absolute_feasibility(
+            memory, x, option_features, absolute_executable_witness_features,
+            group_index=group_index, is_nominal=is_nominal,
+            root_valid=root_valid, option_valid=option_valid,
+        )
+        if erwf_abs is not None:
+            abs_logit, abs_probability, erwf_features, erwf_weights = erwf_abs
+            out["direct_recovery_absolute_feasibility_logit"] = abs_logit
+            out["direct_recovery_absolute_feasibility_probability"] = abs_probability
+            out["direct_recovery_absolute_executable_witness_features"] = erwf_features
+            out["direct_recovery_absolute_executable_witness_weight"] = erwf_weights
         if self.root_signature_head is not None:
             out["root_signature"] = self.root_signature_head(root_tokens)
         if self.root_future_signature_head is not None:

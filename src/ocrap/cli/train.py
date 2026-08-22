@@ -1607,6 +1607,7 @@ def _epoch(
                     bucket_id=batch.get("bucket_id"), group_index=group_index,
                     is_nominal=batch.get("is_nominal"), direct_only=True,
                     absolute_physical_headroom_features=batch.get("direct_absolute_physical_headroom_features"),
+                    absolute_executable_witness_features=batch.get("direct_absolute_executable_witness_features"),
                     root_valid=batch.get("root_valid"), option_valid=batch.get("option_valid"),
                 )
             root_valid = batch["root_valid"].bool()
@@ -1648,6 +1649,10 @@ def _epoch(
                 if cphr is not None:
                     with torch.no_grad():
                         cphr.clamp_(0.0, 2.0)
+                erwf = getattr(model, "direct_absolute_executable_witness_weight", None)
+                if erwf is not None:
+                    with torch.no_grad():
+                        erwf.clamp_(0.0, 2.0)
             bsz = int(batch["x"].shape[0])
             n += bsz
             vals = {
@@ -1673,6 +1678,7 @@ def _epoch(
             batch["x"].float(), batch.get("option_features"), bucket_id=batch.get("bucket_id"),
             group_index=group_index, is_nominal=batch.get("is_nominal"),
             absolute_physical_headroom_features=batch.get("direct_absolute_physical_headroom_features"),
+            absolute_executable_witness_features=batch.get("direct_absolute_executable_witness_features"),
             root_valid=batch.get("root_valid"), option_valid=batch.get("option_valid"),
             witness_only=bool(witness_fast_mode),
             witness_observation_only=(witness_fast_mode == "decision_obs"),
@@ -1805,6 +1811,10 @@ def _epoch(
                 if cphr is not None:
                     with torch.no_grad():
                         cphr.clamp_(0.0, 2.0)
+                erwf = getattr(model, "direct_absolute_executable_witness_weight", None)
+                if erwf is not None:
+                    with torch.no_grad():
+                        erwf.clamp_(0.0, 2.0)
             bsz = int(batch["x"].shape[0]); n += bsz
             vals = {
                 "loss": float(total.item()),
@@ -2278,6 +2288,10 @@ def _epoch(
             if cphr is not None:
                 with torch.no_grad():
                     cphr.clamp_(0.0, 2.0)
+            erwf = getattr(model, "direct_absolute_executable_witness_weight", None)
+            if erwf is not None:
+                with torch.no_grad():
+                    erwf.clamp_(0.0, 2.0)
         bsz = int(batch["x"].shape[0])
         n += bsz
         vals = {
@@ -3074,6 +3088,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_absolute_physical_headroom_correction=bool(
             model_cfg.get("direct_recovery_absolute_physical_headroom_correction", False)
         ),
+        direct_recovery_absolute_executable_witness_correction=bool(
+            model_cfg.get("direct_recovery_absolute_executable_witness_correction", False)
+        ),
         direct_recovery_evidence_native_certificate_preservation=bool(
             model_cfg.get("direct_recovery_evidence_native_certificate_preservation", False)
         ),
@@ -3577,6 +3594,16 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "direct_recovery_absolute_physical_headroom_feature_source": (
                 "full_executable_prefix_side_channel"
                 if bool(model_cfg.get("direct_recovery_absolute_physical_headroom_correction", False)) else "disabled"
+            ),
+            "direct_recovery_absolute_executable_witness_correction": bool(
+                model_cfg.get("direct_recovery_absolute_executable_witness_correction", False)
+            ),
+            "direct_recovery_absolute_executable_witness_feature_schema": (
+                1 if bool(model_cfg.get("direct_recovery_absolute_executable_witness_correction", False)) else 0
+            ),
+            "direct_recovery_absolute_executable_witness_feature_source": (
+                "option_resolved_executable_recovery_continuation_side_channel"
+                if bool(model_cfg.get("direct_recovery_absolute_executable_witness_correction", False)) else "disabled"
             ),
             "direct_recovery_evidence_native_certificate_preservation": bool(
                 model_cfg.get("direct_recovery_evidence_native_certificate_preservation", False)

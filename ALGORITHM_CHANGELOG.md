@@ -1,3 +1,96 @@
+## v48.61 — DCP-DRFC-BCDE-RIFA-ERWF / EXECUTABLE RECOVERY WITNESS FIELD (2026-08-22)
+
+**类别：由 engineering-valid v48.60.1 CPHR authoritative STOP 直接触发的 absolute-source representation 单轴实验。A/B/C/D/E 全部复用；F/Main 只新增 6 个共享非负参数，并把干预位置从 candidate-level static source correction 推进到 candidate × recovery-option 的 executable continuation witness。Stage-I、fixed top-5、RIFA 顺序、0.5 threshold、teacher truth、Near+Contact adaptation protocol 均不改变；无 Safe/Near/Contact policy router，无 option-specific free bias，无 teacher future/component margin distillation，无 centering。**
+
+### v48.60.1 authoritative 结果：工程有效，CPHR scientific STOP
+
+v48.60.1 的 `OC-RAP-v48.60-PIPELINE_COMPLETE.json` 为 `valid=true / attribution_ready=true / engineering_version=v48.60.1-CPHR-FULLPREFIX / errors=[] / test_roots_read=false`。reference reuse 的 dataset/protocol/source checkpoint/scene-disjoint/hash 全通过；balanced/precision 的 Stage-I shared tensors bitwise frozen，唯一新增 state 为 `direct_absolute_physical_headroom_weight[6]`；full-prefix side-channel schema/time alignment 也通过。当前代码独立回归确认 focused v48.60 10/10、v48.46→v48.60 118/118、compileall、137 shell syntax 全通过。因此本轮 E−B 可以正式进入论文证据链。
+
+**CPHR 没有建立任何 source-order Pareto。** 相对 raw native B，absolute-feasibility AUC 在 balanced/precision × dev/certificate × Near/Contact **8/8 全部下降**。Precision：cert Contact `0.70356 -> 0.70104`，dev Contact `0.68967 -> 0.67516`，cert Near `0.81729 -> 0.78785`，dev Near `0.76337 -> 0.72296`；Balanced 同向（cert Contact `0.70330 -> 0.70070`，dev Contact `0.68563 -> 0.67174`，cert Near `0.81678 -> 0.78705`，dev Near `0.76902 -> 0.72884`）。
+
+同时 CPHR 与 AFE/ORFC 一样明显放宽 operating point：Precision E teacher-infeasible pass 分别约 `0.4263 / 0.4239 / 0.5011 / 0.5108`（cert Contact / cert Near / dev Contact / dev Near），harmful pass约 `0.4274 / 0.4271 / 0.5046 / 0.5221`。这不是 native B 的 false-veto 被“有选择地”修复，而是 **大量 feasible 与 infeasible 一起被放行，同时 ordering 下降**。因此 v48.60 预注册的 “Near+Contact source AUC/order同时改善、且 harmful/infeasible pass显著低于 C/D” 条件明确失败。
+
+**Deployment 也没有传播。** Precision cert Contact F(旧 E/CPHR) 相比 A/C/D 反而从 `1/20` positive selected 变为 `0/20`，recall `0`，同时仍 selected 58、harmful selected 16；cert Near仍是 `3/9`；dev Contact仍为 0；dev Near没有建立新 Pareto。因此 CPHR 正式 **STOP**。
+
+### v48.60 后三层结论
+
+1. **two-stage 结构实现与因果隔离：VALIDATED，并被 v48.60.1 再次加强。** 现在已经连续证明可以只替换 Stage-II absolute source，同时 Stage-I proposal/ranking state bitwise冻结；这是一条可靠实验接口，不等于性能正结果。
+2. **absolute/relative role separation 的语义必要性：STRONGLY CORROBORATED。** 本轮 safe-positive candidate 的 teacher `R_dep_star>=0` fraction 在 balanced/precision 的 Near/Contact dev/certificate 继续全部为 `1.0`，harmful candidate 的 `R_dep_star<0` fraction约 `0.967–0.981`。失败的是 deployed source representation，而不是 teacher absolute boundary 或 role placement。
+3. **two-stage/RIFA 提升 planner performance：仍 NOT VALIDATED。** B raw source 过度保守；C AFE 是 operating-point shift；D ORFC 是 option-only cross-severity tradeoff；E CPHR 是 candidate-context-only ordering degradation。two-stage 是必要的可审计 decomposition，但目前尚无一个 deployed absolute witness source 能把架构优势转成 planner gain。
+
+### dominant bottleneck 更新：option-conditioned executable recovery-continuation witness identifiability
+
+v48.59 的 `context-dependent recovery-witness identifiability` 现在还可再收紧。CPHR 已经回答：**仅知道 candidate 本身的 clearance / terminal free space / stopping / control / stability headroom，即使 full-prefix、time-aligned、可部署，也不足以知道它是否真的可恢复。**
+
+现有失败链形成了一个排除式结论：
+
+- AFE：candidate-level compressed generic classifier 不解决 ordering；
+- ORFC：只依赖 recovery option identity 的 global correction 不解决跨 scene/severity；
+- CPHR：只依赖 candidate-level static physical context 的 correction 8/8 降 AUC；
+- proposal top-5：Near/Contact recovery opportunity support 已饱和，不能继续归因于搜索宽度；
+- teacher `R_dep=0` boundary：继续稳定，不能归因于 truth boundary错误。
+
+因此缺失量更接近：
+
+> **给定 candidate `a`，哪一个具体 recovery option `g_l` 从该 candidate 的 executable terminal state 出发，能在后续 continuation 中恢复 clearance/stopping/control/stability headroom；也就是 action × recovery-option × continuation 的 witness，而不是 action-only 或 option-only scalar。**
+
+这与 teacher 的 root × recovery-option margin 语义更对齐，也解释了为何 Contact 特别困难：Contact 的“当前 headroom”天然可能为负，但一个 post-contact stabilize / escape / avoid-secondary continuation 仍可能是正确 recovery witness。Near 则需要在保留 native 较好 coarse ordering 的同时识别真正可继续恢复的 option，避免 C/D/E 式全局放行。
+
+### Near / Contact / Safe 当前状态
+
+**Near：proposal 已解决，source coarse ordering尚可，fine admission/ranking弱。** Native source AUC约 `0.76–0.82`，明显优于 Contact；top-5 certificate 已覆盖 `9/9` oracle recovery positives，top-8不增加。问题是 fixed 0.5 native source仍高 false-veto，而 C/D/E 放宽 gate 又破坏 discrimination。Stage-I within-proposal rank 与 teacher 在 precision certificate/dev 约 `-0.145/-0.154`，说明 source正确后仍有下游 fine-ranking bottleneck。优化原则是 **preserve Near native ordering，增加 option-conditioned positive witness，而不是整体抬高概率。**
+
+**Contact：proposal 同样不是主因，但 absolute witness 与 relative ranking都更差。** top-5 certificate 已覆盖 `20/20` recovery positives（dev也有完整 proposal oracle support），native source AUC仅约 `0.69–0.70` 且固定0.5几乎 abstain；CPHR放行后 harmful/infeasible约一半一起通过。candidate rank-teacher correlation约 `-0.15~-0.17`。Contact需要辨认“哪个 recovery continuation 真正脱离/稳定/避免二次碰撞”，而不是把当前 contact overlap 当作不可恢复，也不能只靠 current clearance gain。
+
+**Safe：继续是统一 policy 的 non-interference stratum，不新增 Safe-specific supervision/router/threshold。** F/Main source仍在同一函数上执行，但正式 source GO 前不把 Safe指标用于训练或调参。只有 absolute-source机制通过后才做 paired Safe/stress/closed-loop，检查 nominal utility/intervention/comfort/collision；三个 regime 始终是 evaluation strata，不是 policy state。
+
+### v48.61 新假设：ERWF = Executable Recovery Witness Field
+
+对每个 candidate `a` 与每个有效 recovery option `g_l`，从 **真实 executable prefix terminal state** 调用现有 deterministic `rollout_recovery_controller`，只用当前 `agent_history[-1]` 做 constant-velocity agent extrapolation，在既有 `recovery_horizon_s` 上构造：
+
+`phi_l(a) = [min_clearance, terminal_clearance, clearance_gain, terminal_stopping_reserve, control_envelope_reserve, stability_reserve]`。
+
+六个坐标均是 signed、tanh-bounded、部署可观测的 continuation quantity。然后只在 frozen root × option margin 上做：
+
+`m_tilde_{k,l}(a) = stopgrad(m_native_{k,l}(a)) + w^T phi_l(a)`, `0 <= w_j <= 2`。
+
+`w in R^6` **跨 root、option、Near/Contact共享**，没有 option-specific bias；candidate×option差异完全来自 executable continuation field。随后重走**原样 observation-consistent OC-MERO**得到 absolute source，threshold仍0.5。`w=0` 时执行精确等价 v48.58-B。
+
+ERWF 与历史失败方向的边界：
+
+- 不是 ORFC：没有 `b_l` option identity bias；是 `candidate × option continuation`；
+- 不是 CPHR：不是 candidate prefix 的一个6-D静态向量；每个 recovery option各有自己的 continuation witness；
+- 不是 AFE：不是压缩后 generic classifier，不直接移动 final logit readout；干预在 root-option margin→OC-MERO之前；
+- 不是 IPBD/PSA/CSE：不读取 teacher future/component margin/root privileged realization；
+- 不是 SOWR/root/margin retraining：整个 Stage-I encoder/root/obs/margin head bitwise frozen；
+- 不是 regime policy：无 Safe/Near/Contact ID、router、threshold或budget；
+- 不是 relative centering：本轮不改 opportunity/harm/pred_adv/evidence score。
+
+论文叙事候选主线由此从“headroom classifier”提升为：**recoverability is not a property of the candidate state alone; it is witnessed by the existence of an executable recovery continuation under an observation-consistent uncertainty model.** Absolute admission 使用 `phi_l(a)` 的 existential recovery witness；若未来 source被验证，再独立研究同一 field 的 candidate-vs-nominal relative difference，而不能与本轮同时修改。
+
+### A/B/C/D/E/F 预注册归因
+
+- A：v48.56 relative-only reference（复用）；
+- B：v48.58 raw native source（复用）；
+- C：v48.58 AFE（复用，STOP）；
+- D：v48.59 ORFC（复用，STOP）；
+- E：v48.60.1 CPHR（复用，STOP）；
+- **F/Main：v48.61 ERWF，仅训练 `direct_absolute_executable_witness_weight[6]`。**
+
+主比较 **F−B**；F−E 专门隔离“option-resolved continuation”相对“candidate-only context”的信息增益；F−D 隔离“candidate×option continuation”相对“option-only identity”的信息增益。
+
+强 GO：balanced/precision × dev/certificate × Near/Contact 的 **8 个 F−B source AUC 全正**，且至少6/8提升 `>=0.01`；teacher-infeasible/harmful pass必须明显低于 C/D/E permissive family（逐 cell 预注册为至少低于其最好者0.05），而不是仅移动0.5 operating point；Stage-I bitwise isolation、6-D-only state、fixed top-5/threshold/RIFA contract全部有效。然后才看 F−A deployment propagation。
+
+STOP：任一 source cell相对B下降；只改善 pass rate；harmful/infeasible仍处于C/D/E水平；或 source gain不传播。若 ERWF 也 STOP，不做 ERWF width/horizon/threshold/option-weight grid；进一步转向 **recovery option taxonomy/coverage 与 teacher-source identifiability audit**，检查现有 deterministic option library是否本身不足以表示 teacher recovery witness，而不是继续 scalar calibration。
+
+### v48.61 工程验证
+
+- ERWF 专项回归：`9/9 PASS`，覆盖 option-resolved field、teacher/future/regime leakage guard、zero-weight execution-exact native-B、missing-side-channel fail-closed、6-D gradient isolation、mutual exclusion、checkpoint schema/legacy rejection、checkpoint→vectorized inference、launcher contract。
+- post-v48.46→v48.61 回归：`127/127 PASS`。
+- `python -m compileall -q src tools`：PASS。
+- `scripts/*.sh` 共 `137/137` 个 `bash -n`：PASS。
+- 新 ERWF checkpoint schema/source 被 inference fail-closed 验证；旧/无 schema 的 ERWF checkpoint 不允许加载。
+
 ## v48.60.1 — CPHR FULL-PREFIX / TIME-ALIGNMENT ENGINEERING HOTFIX (2026-08-22)
 
 **类别：纯工程/语义一致性修复；不修改 v48.60 CPHR 的算法假设、6-D feature definition、6 个非负权重、teacher target、0.5 threshold、A/B/C/D/E 归因设计、fixed top-5、Stage-I checkpoint 或正式运行指令。当前上传的 v48.60.0 结果判为 engineering-invalid，必须用同一 v48.60 指令重跑后才能做 CPHR 的 GO/STOP 科学归因。**

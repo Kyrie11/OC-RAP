@@ -1,0 +1,75 @@
+{
+  "algorithm_version": "v48.61-DCP-DRFC-BCDE-RIFA-ERWF",
+  "arms": {
+    "A": "v48.56 relative-only",
+    "B": "v48.58 native absolute source",
+    "C": "v48.58 AFE",
+    "D": "v48.59 ORFC",
+    "E": "v48.60.1 CPHR",
+    "F": "v48.61 ERWF"
+  },
+  "causal_intervention": {
+    "absolute_threshold": 0.5,
+    "centering": false,
+    "initialization": "zeros; exact native-B source at epoch 0",
+    "option_specific_bias": false,
+    "proposal_expansion": false,
+    "proposal_top_k": 5,
+    "regime_id_input": false,
+    "relative_score_intervention": false,
+    "selection_semantics": "rank_topk_then_absolute_feasibility_then_relative_filter_then_evidence_rerank",
+    "stage_i": "bitwise frozen v48.56-A",
+    "teacher_future_input": false,
+    "trainable_parameters": 6,
+    "trainable_state": "direct_absolute_executable_witness_weight[6]",
+    "weight_constraint": "elementwise [0,2]"
+  },
+  "equation": "m_tilde[k,l](a) = stopgrad(m_native[k,l](a)) + w^T phi_l(a), followed by unchanged observation-consistent OC-MERO",
+  "forbidden_followups_if_stop": [
+    "ERWF threshold/LR/horizon/width grid",
+    "option-specific free bias",
+    "proposal expansion",
+    "regime routing/policy/threshold/budget",
+    "generic AFE width/class-weight sweep",
+    "broad root/margin encoder tuning",
+    "privileged teacher-physical distillation"
+  ],
+  "go_requires": [
+    "F-B absolute-feasibility AUC positive in all 8 balanced/precision x dev/certificate x Near/Contact cells",
+    "at least 6/8 AUC gains >= 0.01",
+    "teacher-infeasible/harmful pass is at least 0.05 below the best permissive C/D/E pass in every cell",
+    "Stage-I bitwise frozen; only six shared ERWF weights added",
+    "source gain precedes deployment gain"
+  ],
+  "if_stop_next_question": "recovery option taxonomy/coverage and teacher-source identifiability",
+  "name": "Executable Recovery Witness Field",
+  "primary_comparison": "F-B",
+  "safe_role": "shared-policy non-interference evaluation only after source GO",
+  "schema": "ocrap-v48.61-erwf-design-contract-v1",
+  "scientific_question": "Can deployable absolute recoverability be identified by an executable candidate x recovery-option continuation witness, after candidate-only static headroom failed?",
+  "secondary_comparisons": [
+    "F-E",
+    "F-D"
+  ],
+  "stop_if": [
+    "any F-B AUC cell regresses",
+    "only operating point/pass rate changes",
+    "harmful/infeasible pass stays in C/D/E range",
+    "state/provenance fails"
+  ],
+  "witness_field": {
+    "agent_prediction": "constant velocity from current observation only",
+    "dimensions": [
+      "recovery_min_clearance_reserve",
+      "recovery_terminal_clearance_reserve",
+      "recovery_clearance_gain",
+      "recovery_terminal_stopping_reserve",
+      "recovery_control_envelope_reserve",
+      "recovery_stability_reserve"
+    ],
+    "feature_schema": 1,
+    "feature_source": "option_resolved_executable_recovery_continuation_side_channel",
+    "recovery_horizon": "existing cfg recovery_horizon_s; not swept",
+    "source": "full executable candidate prefix terminal + current observed agents + existing deterministic recovery controller"
+  }
+}

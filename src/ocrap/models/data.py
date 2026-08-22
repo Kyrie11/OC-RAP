@@ -17,6 +17,8 @@ from torch.utils.data import Dataset
 
 from ocrap.data.build.diagnose import iter_sample_paths
 from ocrap.data.serialization import load_npz_selected
+from ocrap.data.schema import CandidatePrefix, RecoveryOption
+from ocrap.simulation.teacher.controllers import rollout_recovery_controller
 
 
 RECOVERY_MODE_VOCAB = [
@@ -517,6 +519,245 @@ def direct_absolute_physical_headroom_features_from_sample(
     return out
 
 
+
+
+# v48.61 ERWF (Executable Recovery Witness Field).  Unlike CPHR's one vector
+# per candidate, ERWF builds one signed observable continuation-witness vector
+# per *recovery option*.  The side channel therefore has shape [L, 6] and is
+# consumed only by the Stage-II absolute source.  Stage-I features remain byte-
+# semantically unchanged.
+DIRECT_EXECUTABLE_RECOVERY_WITNESS_FEATURE_SCHEMA = 1
+DIRECT_EXECUTABLE_RECOVERY_WITNESS_FEATURE_DIM = 6
+
+
+def _decode_recovery_mode(value: Any) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    arr = np.asarray(value)
+    if arr.shape == ():
+        value = arr.item()
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        return str(value)
+    return str(value)
+
+
+def direct_executable_recovery_witness_features_from_sample(
+    d: dict[str, Any], cfg: dict | None = None, *, num_options: int | None = None
+) -> np.ndarray:
+    """Return the v48.61 option-resolved executable recovery witness field.
+
+    For every valid recovery option ``g_l`` this function rolls the existing
+    deterministic recovery controller *after the candidate prefix*, starting at
+    the true terminal prefix state.  Surrounding agents are extrapolated only
+    from the current observable history using constant velocity.  No
+    counterfactual future, root identity, teacher margin/component, regime ID or
+    held-out label is read.
+
+    Each option receives six signed, tanh-bounded coordinates, all with the same
+    physical zero semantics as CPHR but evaluated over the recovery
+    continuation rather than over the candidate prefix itself:
+
+      0 minimum clearance reserve over the recovery continuation
+      1 terminal clearance reserve after the recovery continuation
+      2 clearance recovery gain relative to candidate-prefix terminal clearance
+      3 terminal stopping reserve
+      4 recovery-controller control-envelope reserve
+      5 recovery-controller stability reserve
+
+    The field is padded to ``num_options`` with zeros; padded/invalid options are
+    separately masked by ``option_valid`` and never enter OC-MERO.  This makes
+    ERWF candidate x option structured while preserving one regime-agnostic
+    shared physical field and the frozen Stage-I representation.
+    """
+    cfg = cfg or {}
+    states = np.asarray(d.get("prefix_states", np.zeros((0, 9))), dtype=np.float32)
+    controls = np.asarray(d.get("prefix_controls", np.zeros((0, 4))), dtype=np.float32)
+    ego = np.asarray(d.get("ego_state", np.zeros((9,))), dtype=np.float32).reshape(-1)
+    hist = np.asarray(d.get("agent_history", np.zeros((0, 0, 16))), dtype=np.float32)
+    valid_hist = np.asarray(d.get("agent_valid", np.zeros((0, 0))), dtype=bool)
+    modes = np.asarray(d.get("recovery_modes", []), dtype=object).reshape(-1)
+    params = np.asarray(d.get("recovery_params", np.zeros((0, 3))), dtype=np.float32)
+    option_valid_raw = np.asarray(d.get("option_valid", np.ones((len(modes),), dtype=bool)), dtype=bool).reshape(-1)
+
+    if states.ndim != 2 or states.shape[0] < 1 or states.shape[1] < 9:
+        raise ValueError(
+            f"ERWF requires full prefix_states[T,>=9], got shape={getattr(states, 'shape', None)}"
+        )
+    if ego.size < 9:
+        raise ValueError(f"ERWF requires ego_state[>=9], got shape={ego.shape}")
+    if controls.ndim != 2:
+        controls = np.zeros((0, 4), dtype=np.float32)
+    if controls.shape[0] > 0 and controls.shape[1] < 4:
+        raise ValueError(f"ERWF requires prefix_controls[T,>=4], got shape={controls.shape}")
+    if params.ndim != 2:
+        raise ValueError(f"ERWF requires recovery_params[L,P], got shape={params.shape}")
+    raw_L = int(max(len(modes), params.shape[0], option_valid_raw.size))
+    if raw_L <= 0:
+        raise ValueError("ERWF requires recovery_modes/recovery_params/option_valid")
+    L = int(num_options if num_options is not None else raw_L)
+    if L < raw_L:
+        raise ValueError(f"ERWF num_options={L} cannot shrink raw recovery option count={raw_L}")
+
+    sample_rate = float(cfg.get("sample_rate_hz", 10.0) or 10.0)
+    recovery_horizon_s = float(cfg.get("recovery_horizon_s", 4.0) or 4.0)
+    if not np.isfinite(sample_rate) or sample_rate <= 0.0:
+        raise ValueError(f"invalid sample_rate_hz for ERWF: {sample_rate}")
+    if not np.isfinite(recovery_horizon_s) or recovery_horizon_s <= 0.0:
+        raise ValueError(f"invalid recovery_horizon_s for ERWF: {recovery_horizon_s}")
+    dt = 1.0 / sample_rate
+    horizon_steps = max(2, int(round(recovery_horizon_s * sample_rate)))
+
+    prefix = CandidatePrefix(
+        macro_id=int(np.asarray(d.get("prefix_macro_id", 0)).reshape(-1)[0]),
+        macro_name=str(np.asarray(d.get("prefix_macro_name", "candidate")).reshape(-1)[0]),
+        params=np.asarray(d.get("prefix_param", np.zeros((0,), dtype=np.float32)), dtype=np.float32).reshape(-1),
+        prefix_states=states,
+        prefix_controls=controls,
+        utility=float(np.asarray(d.get("utility", 0.0)).reshape(-1)[0]),
+        feasible=bool(float(np.asarray(d.get("feasible", 1.0)).reshape(-1)[0]) > 0.5),
+        hard_violation=float(np.asarray(d.get("hard_violation", 0.0)).reshape(-1)[0]),
+        harm_proxy=float(np.asarray(d.get("harm_proxy", 0.0)).reshape(-1)[0]),
+    )
+
+    # Observable agents: same nearest-current-agent contract as CPHR.  Use a
+    # circle support approximation for efficient vectorized distance evolution;
+    # the scientific intervention in v48.61 is continuation/option resolution,
+    # not a new collision-geometry estimator.
+    model_cfg = cfg.get("model", {}) if isinstance(cfg.get("model", {}), dict) else {}
+    max_agents = int(model_cfg.get("feature_max_agents", 32))
+    ego_xy = ego[:2].astype(np.float64, copy=False)
+    ego_len = max(abs(float(ego[7])), 1.0e-3)
+    ego_wid = max(abs(float(ego[8])), 1.0e-3)
+    ego_rad = 0.5 * float(np.hypot(ego_len, ego_wid))
+    agents: list[tuple[float, np.ndarray]] = []
+    if hist.ndim == 3 and hist.shape[0] > 0 and hist.shape[1] > 1 and valid_hist.ndim >= 2 and valid_hist.shape[0] > 0:
+        last = hist[-1]
+        vmask = valid_hist[-1].reshape(-1)
+        for aidx in range(1, min(last.shape[0], vmask.size)):
+            if not bool(vmask[aidx]):
+                continue
+            row = np.asarray(last[aidx], dtype=np.float64).reshape(-1)
+            if row.size < 12 or not np.isfinite(row[:12]).all():
+                continue
+            agents.append((float(np.linalg.norm(row[:2] - ego_xy)), row))
+    agents.sort(key=lambda z: z[0])
+    agents = agents[:max_agents]
+
+    if agents:
+        rel0 = np.stack([row[:2] - ego_xy for _, row in agents], axis=0)
+        vel = np.stack([row[3:5] for _, row in agents], axis=0)
+        alen = np.asarray([max(abs(float(row[10])), 1.0e-3) for _, row in agents], dtype=np.float64)
+        awid = np.asarray([max(abs(float(row[11])), 1.0e-3) for _, row in agents], dtype=np.float64)
+        arad = 0.5 * np.hypot(alen, awid)
+    else:
+        rel0 = np.zeros((0, 2), dtype=np.float64)
+        vel = np.zeros((0, 2), dtype=np.float64)
+        arad = np.zeros((0,), dtype=np.float64)
+
+    prefix_duration = float(states.shape[0]) * dt
+    terminal_xy_rel = states[-1, :2].astype(np.float64) - ego_xy
+    if agents:
+        agent_at_prefix_end = rel0 + prefix_duration * vel
+        terminal_delta = terminal_xy_rel[None, :] - agent_at_prefix_end
+        prefix_terminal_clear = float(
+            np.min(np.linalg.norm(terminal_delta, axis=-1) - ego_rad - arad)
+        )
+    else:
+        prefix_terminal_clear = 40.0
+
+    scales = cfg.get("margin_scales", {}) if isinstance(cfg.get("margin_scales", {}), dict) else {}
+    distance_scale = max(float(scales.get("distance", 2.0)), 1.0e-6)
+    stop_scale = max(float(scales.get("stop", 5.0)), 1.0e-6)
+    accel_scale = max(float(scales.get("accel", 1.0)), 1.0e-6)
+    decel_scale = max(float(scales.get("decel", 1.0)), 1.0e-6)
+    steer_scale = max(float(scales.get("steer", 0.1)), 1.0e-6)
+    jerk_scale = max(float(scales.get("jerk", 2.0)), 1.0e-6)
+    rate_scale = max(float(scales.get("steer_rate", 0.1)), 1.0e-6)
+    yaw_scale = max(float(scales.get("yaw", 0.2)), 1.0e-6)
+    d_safe0 = float(cfg.get("d_safe0_m", 1.0))
+    headway = float(cfg.get("safe_time_headway_s", 0.5))
+    limits = cfg.get("control_limits", {}) if isinstance(cfg.get("control_limits", {}), dict) else {}
+    a_max = float(limits.get("a_max", 3.0))
+    a_min = float(limits.get("a_min", -6.0))
+    delta_max = float(limits.get("delta_max", 0.55))
+    jerk_max = float(limits.get("j_max", 6.0))
+    steer_rate_max = float(limits.get("steer_rate_max", 0.5))
+    yaw_rate_max = float(cfg.get("yaw_rate_max_rps", 0.6))
+    stop_decel = max(abs(a_min), 1.0e-3)
+
+    field = np.zeros((L, DIRECT_EXECUTABLE_RECOVERY_WITNESS_FEATURE_DIM), dtype=np.float32)
+    for l in range(raw_L):
+        valid_l = bool(option_valid_raw[l]) if l < option_valid_raw.size else True
+        if not valid_l:
+            continue
+        if l >= len(modes) or l >= params.shape[0]:
+            raise ValueError(f"ERWF option {l} missing mode/params")
+        mode = _decode_recovery_mode(modes[l])
+        option = RecoveryOption(
+            option_id=l,
+            mode=mode,
+            params=np.asarray(params[l], dtype=np.float32).reshape(-1),
+            valid=True,
+        )
+        rec_states, rec_controls, _diag = rollout_recovery_controller(
+            prefix, option, horizon_steps, cfg
+        )
+        rec_states = np.asarray(rec_states, dtype=np.float64)
+        rec_controls = np.asarray(rec_controls, dtype=np.float64)
+        if rec_states.ndim != 2 or rec_states.shape[0] < 1 or rec_states.shape[1] < 9:
+            raise ValueError(f"ERWF recovery rollout invalid for option={l}: shape={rec_states.shape}")
+
+        max_speed = float(np.max(np.abs(rec_states[:, 6])))
+        terminal_speed = float(abs(rec_states[-1, 6]))
+        d_safe = d_safe0 + headway * max_speed
+        if agents:
+            # rec_states[0] is exactly the candidate terminal state at
+            # prefix_duration; later rows are separated by dt.
+            times = prefix_duration + np.arange(rec_states.shape[0], dtype=np.float64) * dt
+            agent_future = rel0[None, :, :] + times[:, None, None] * vel[None, :, :]
+            rec_xy_rel = rec_states[:, :2] - ego_xy[None, :]
+            delta = rec_xy_rel[:, None, :] - agent_future
+            signed_clearance = np.linalg.norm(delta, axis=-1) - ego_rad - arad[None, :]
+            c_min = float(np.min(signed_clearance))
+            c_terminal = float(np.min(signed_clearance[-1]))
+        else:
+            c_min = c_terminal = 40.0
+
+        h_min_clear = np.tanh((c_min - d_safe) / distance_scale)
+        h_terminal_clear = np.tanh((c_terminal - d_safe) / distance_scale)
+        h_clear_gain = np.tanh((c_terminal - prefix_terminal_clear) / distance_scale)
+        stop_required = terminal_speed * terminal_speed / (2.0 * stop_decel) + d_safe0
+        h_stop = np.tanh((c_terminal - stop_required) / stop_scale)
+
+        if rec_controls.ndim == 2 and rec_controls.shape[0] > 0 and rec_controls.shape[1] >= 4:
+            rc = rec_controls[:, :4]
+            ctrl_terms = np.asarray([
+                (a_max - float(np.max(np.maximum(rc[:, 0], 0.0)))) / accel_scale,
+                (abs(a_min) - float(np.max(np.maximum(-rc[:, 0], 0.0)))) / decel_scale,
+                (delta_max - float(np.max(np.abs(rc[:, 1])))) / steer_scale,
+                (jerk_max - float(np.max(np.abs(rc[:, 2])))) / jerk_scale,
+                (steer_rate_max - float(np.max(np.abs(rc[:, 3])))) / rate_scale,
+            ], dtype=np.float64)
+            h_control = np.tanh(float(np.min(ctrl_terms)))
+        else:
+            h_control = np.float64(1.0)
+        yaw = float(np.max(np.abs(rec_states[:, 5])))
+        h_stability = np.tanh((yaw_rate_max - yaw) / yaw_scale)
+        field[l] = np.asarray([
+            h_min_clear,
+            h_terminal_clear,
+            h_clear_gain,
+            h_stop,
+            h_control,
+            h_stability,
+        ], dtype=np.float32)
+
+    if field.shape != (L, DIRECT_EXECUTABLE_RECOVERY_WITNESS_FEATURE_DIM) or not np.isfinite(field).all():
+        raise ValueError(f"invalid ERWF feature field shape/value: shape={field.shape}")
+    return field
+
+
 def _feature_layout_values(cfg: dict | None = None) -> dict[str, int]:
     cfg = cfg or {}
     model_cfg = cfg.get("model", {}) if isinstance(cfg.get("model", {}), dict) else {}
@@ -867,6 +1108,7 @@ def _persistent_tensor_cache_key(
     training = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
     model_cfg = cfg.get("model", {}) if isinstance(cfg.get("model", {}), dict) else {}
     cphr_features_enabled = bool(model_cfg.get("direct_recovery_absolute_physical_headroom_correction", False))
+    erwf_features_enabled = bool(model_cfg.get("direct_recovery_absolute_executable_witness_correction", False))
     payload = {
         "schema": _PERSISTENT_TENSOR_CACHE_SCHEMA,
         "manifests": _dataset_manifest_fingerprint(paths),
@@ -887,6 +1129,10 @@ def _persistent_tensor_cache_key(
         "exact_eligibility": bool(training.get("direct_policy_metric_exact_eligibility", False)),
         "cphr_full_prefix_features": cphr_features_enabled,
         "cphr_feature_schema": (DIRECT_ABSOLUTE_PHYSICAL_HEADROOM_FEATURE_SCHEMA if cphr_features_enabled else 0),
+        "erwf_option_resolved_features": erwf_features_enabled,
+        "erwf_feature_schema": (DIRECT_EXECUTABLE_RECOVERY_WITNESS_FEATURE_SCHEMA if erwf_features_enabled else 0),
+        "erwf_recovery_horizon_s": (float(cfg.get("recovery_horizon_s", 4.0)) if erwf_features_enabled else 0.0),
+        "erwf_sample_rate_hz": (float(cfg.get("sample_rate_hz", 10.0)) if erwf_features_enabled else 0.0),
         "npz_keys": sorted(MODEL_SAMPLE_NPZ_KEYS),
     }
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
@@ -1050,6 +1296,12 @@ class OCRAPSampleDataset(Dataset):
         if bool(model_cfg.get("direct_recovery_absolute_physical_headroom_correction", False)):
             out["direct_absolute_physical_headroom_features"] = torch.from_numpy(
                 direct_absolute_physical_headroom_features_from_sample(d, self.cfg)
+            )
+        if bool(model_cfg.get("direct_recovery_absolute_executable_witness_correction", False)):
+            out["direct_absolute_executable_witness_features"] = torch.from_numpy(
+                direct_executable_recovery_witness_features_from_sample(
+                    d, self.cfg, num_options=self.num_options
+                )
             )
         return out
 

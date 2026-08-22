@@ -11,7 +11,9 @@ from ocrap.algorithms.ocmero import oc_mero, torch_oc_mero
 from ocrap.models.data import (
     OPTION_FEATURE_DIM,
     DIRECT_ABSOLUTE_PHYSICAL_HEADROOM_FEATURE_SCHEMA,
+    DIRECT_EXECUTABLE_RECOVERY_WITNESS_FEATURE_SCHEMA,
     direct_absolute_physical_headroom_features_from_sample,
+    direct_executable_recovery_witness_features_from_sample,
     fix_sample_geometry,
     sample_to_feature,
     samples_to_feature_matrix,
@@ -162,6 +164,18 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
                 f"schema={feature_schema}; v48.60.1 requires full-prefix schema="
                 f"{DIRECT_ABSOLUTE_PHYSICAL_HEADROOM_FEATURE_SCHEMA}. Rerun v48.60 CPHR training."
             )
+    erwf_enabled = bool(ckpt.get(
+        "direct_recovery_absolute_executable_witness_correction",
+        model_cfg.get("direct_recovery_absolute_executable_witness_correction", False),
+    ))
+    if erwf_enabled:
+        feature_schema = int(ckpt.get("direct_recovery_absolute_executable_witness_feature_schema", 0) or 0)
+        if feature_schema != DIRECT_EXECUTABLE_RECOVERY_WITNESS_FEATURE_SCHEMA:
+            raise RuntimeError(
+                "legacy/unknown ERWF checkpoint feature semantics: "
+                f"schema={feature_schema}; v48.61 requires option-resolved executable witness schema="
+                f"{DIRECT_EXECUTABLE_RECOVERY_WITNESS_FEATURE_SCHEMA}. Rerun v48.61 ERWF training."
+            )
     encoder_type = str(ckpt.get("encoder_type", model_cfg.get("encoder_type", "mlp")))
     feature_layout = ckpt.get("feature_layout", None)
     model = OCRAPModel(
@@ -302,6 +316,10 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         direct_recovery_absolute_physical_headroom_correction=bool(ckpt.get(
             "direct_recovery_absolute_physical_headroom_correction",
             model_cfg.get("direct_recovery_absolute_physical_headroom_correction", False),
+        )),
+        direct_recovery_absolute_executable_witness_correction=bool(ckpt.get(
+            "direct_recovery_absolute_executable_witness_correction",
+            model_cfg.get("direct_recovery_absolute_executable_witness_correction", False),
         )),
         direct_recovery_evidence_native_certificate_preservation=bool(ckpt.get(
             "direct_recovery_evidence_native_certificate_preservation",
@@ -542,6 +560,9 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_absolute_physical_headroom_correction"] = bool(
         model.direct_recovery_absolute_physical_headroom_correction
     )
+    cfg["model"]["direct_recovery_absolute_executable_witness_correction"] = bool(
+        model.direct_recovery_absolute_executable_witness_correction
+    )
     cfg["model"]["direct_recovery_evidence_native_certificate_preservation"] = bool(
         model.direct_recovery_evidence_native_certificate_preservation
     )
@@ -749,6 +770,10 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_absolute_physical_headroom_correction",
             model_cfg.get("direct_recovery_absolute_physical_headroom_correction", False),
         )),
+        "direct_recovery_absolute_executable_witness_correction": bool(ckpt.get(
+            "direct_recovery_absolute_executable_witness_correction",
+            model_cfg.get("direct_recovery_absolute_executable_witness_correction", False),
+        )),
     }
     actual_contract = {
         "direct_recovery_evidence_calibrator_context": bool(model.direct_recovery_evidence_calibrator_context),
@@ -782,6 +807,9 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         ),
         "direct_recovery_absolute_physical_headroom_correction": bool(
             model.direct_recovery_absolute_physical_headroom_correction
+        ),
+        "direct_recovery_absolute_executable_witness_correction": bool(
+            model.direct_recovery_absolute_executable_witness_correction
         ),
     }
     if expected_contract != actual_contract:
@@ -869,9 +897,17 @@ def predict_samples(
         cphr_features = torch.from_numpy(np.stack([
             direct_absolute_physical_headroom_features_from_sample(d, bundle.cfg) for d in ds
         ], axis=0)).float().to(bundle.device)
+    erwf_features = None
+    if bool(getattr(bundle.model, "direct_recovery_absolute_executable_witness_correction", False)):
+        erwf_features = torch.from_numpy(np.stack([
+            direct_executable_recovery_witness_features_from_sample(
+                d, bundle.cfg, num_options=bundle.model.num_options
+            ) for d in ds
+        ], axis=0)).float().to(bundle.device)
     out = bundle.model(
         xs, option_features, bucket_id=bucket_ids, group_index=group_index, is_nominal=is_nominal,
         absolute_physical_headroom_features=cphr_features,
+        absolute_executable_witness_features=erwf_features,
         root_valid=root_valid, option_valid=option_valid,
     )
     p = torch.softmax(out["root_logits"].masked_fill(~root_valid, -1.0e4), dim=-1)
@@ -1009,9 +1045,17 @@ def predict_sample(d: dict[str, Any], bundle: ModelBundle | None, cfg: dict | No
         cphr_features = torch.from_numpy(
             direct_absolute_physical_headroom_features_from_sample(d, bundle.cfg)
         ).float().unsqueeze(0).to(bundle.device)
+    erwf_features = None
+    if bool(getattr(bundle.model, "direct_recovery_absolute_executable_witness_correction", False)):
+        erwf_features = torch.from_numpy(
+            direct_executable_recovery_witness_features_from_sample(
+                d, bundle.cfg, num_options=bundle.model.num_options
+            )
+        ).float().unsqueeze(0).to(bundle.device)
     out = bundle.model(
         x, option_features, bucket_id=bucket_id, group_index=singleton_group, is_nominal=singleton_nominal,
         absolute_physical_headroom_features=cphr_features,
+        absolute_executable_witness_features=erwf_features,
         root_valid=root_valid, option_valid=option_valid,
     )
     p = torch.softmax(out["root_logits"].masked_fill(~root_valid, -1.0e4), dim=-1)
