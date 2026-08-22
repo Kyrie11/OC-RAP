@@ -350,6 +350,7 @@ class OCRAPModel(nn.Module):
         direct_recovery_evidence_common_measure_root_mass: bool = False,
         direct_recovery_absolute_feasibility_head: bool = False,
         direct_recovery_absolute_option_margin_correction: bool = False,
+        direct_recovery_absolute_physical_headroom_correction: bool = False,
         direct_recovery_evidence_native_certificate_preservation: bool = False,
         direct_recovery_evidence_native_margin_complete_preservation: bool = False,
         direct_recovery_evidence_native_advantage_preservation: bool = False,
@@ -555,12 +556,23 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_absolute_option_margin_correction = bool(
             direct_recovery_absolute_option_margin_correction
         )
-        if (
-            self.direct_recovery_absolute_feasibility_head
-            and self.direct_recovery_absolute_option_margin_correction
-        ):
+        # v48.60 CPHR (Contextual Physical Headroom Reserve): source-only,
+        # regime-agnostic correction of the native absolute deployability logit
+        # using signed continuous headroom computed from the executable prefix
+        # and currently observed agents.  The six weights are zero-initialized,
+        # non-negative/bounded at use time, and there is no free bias, so epoch 0
+        # is exactly the v48.58-B native R_dep=0 source rather than a threshold shift.
+        self.direct_recovery_absolute_physical_headroom_correction = bool(
+            direct_recovery_absolute_physical_headroom_correction
+        )
+        absolute_source_count = sum([
+            self.direct_recovery_absolute_feasibility_head,
+            self.direct_recovery_absolute_option_margin_correction,
+            self.direct_recovery_absolute_physical_headroom_correction,
+        ])
+        if absolute_source_count > 1:
             raise ValueError(
-                "AFE and option-resolved absolute margin correction are mutually exclusive"
+                "AFE, ORFC option-margin correction, and CPHR physical-headroom correction are mutually exclusive"
             )
         # v48.48 NCP: preserve paper-native OC-MERO DRS/deployability coordinates
         # at the final non-compensatory admission interface instead of asking a
@@ -1235,6 +1247,21 @@ class OCRAPModel(nn.Module):
                 torch.zeros(self.num_options, dtype=torch.float32)
             )
 
+        # v48.60 CPHR.  Feature order:
+        # [minimum clearance reserve, terminal clearance reserve, clearance gain,
+        #  stopping reserve, control-envelope reserve, stability reserve].
+        # Every coordinate is signed and bounded by tanh.  Positive means more
+        # physical recovery headroom.  No regime indicator or teacher component
+        # is an input; all six weights start at zero and are used through [0,2]
+        # projection, preserving a bounded monotone physical correction.
+        self.direct_absolute_physical_headroom_weight = None
+        if self.direct_recovery_absolute_physical_headroom_correction:
+            if self.encoder_type != "structured_transformer":
+                raise ValueError("CPHR requires structured_transformer flat feature layout")
+            self.direct_absolute_physical_headroom_weight = nn.Parameter(
+                torch.zeros(6, dtype=torch.float32)
+            )
+
         # v48.20 UNISON-BRIDGE: a single shared evidence model consumes both
         # frozen source experts, their consensus/disagreement, and the frozen
         # proposal context.  No bucket/regime id is exposed to this model.
@@ -1896,6 +1923,122 @@ class OCRAPModel(nn.Module):
                 native.to(dtype=memory.dtype).detach(),
             )
 
+    def _direct_absolute_physical_headroom_features(self, x: torch.Tensor) -> torch.Tensor:
+        """Return six regime-agnostic signed continuous physical headroom coordinates.
+
+        The computation uses only executable-prefix state/control geometry and the
+        currently observed neighbouring-agent state already present in the model
+        input.  A constant-velocity extrapolation is deliberately used instead of
+        hidden future identity.  Signed circle clearance is retained (negative under
+        overlap) so Contact is not collapsed to the same zero as Near-Contact.
+        """
+        if self.encoder_type != "structured_transformer":
+            raise RuntimeError("CPHR physical features require structured_transformer")
+        L = FlatFeatureLayout(**self.feature_layout)
+        # Exact historical flat-feature offsets.
+        ego_start = 0
+        prefix_param_start = ego_start + int(L.ego_dim)
+        macro_start = prefix_param_start + int(L.prefix_param_dim)
+        scalar_start = macro_start + int(L.num_macros)
+        prefix_start = scalar_start + int(L.scalar_dim)
+        control_start = prefix_start + int(L.prefix_flat_dim)
+        agent_summary_start = control_start + int(L.control_flat_dim)
+        agents_start = agent_summary_start + int(L.agent_summary_dim)
+
+        ego = x[:, ego_start:prefix_param_start].to(dtype=torch.float32)
+        prefix_flat = x[:, prefix_start:control_start].to(dtype=torch.float32)
+        control_flat = x[:, control_start:agent_summary_start].to(dtype=torch.float32)
+        agent_flat = x[:, agents_start:agents_start + int(L.feature_max_agents * L.agent_token_dim)].to(dtype=torch.float32)
+
+        # Prefix states are serialized in 9-D OC-RAP ego-state format.  Use the
+        # complete states available inside the fixed 80-D historical prefix block.
+        state_dim = 9
+        n_state = max(1, int(L.prefix_flat_dim) // state_dim)
+        states = prefix_flat[:, : n_state * state_dim].reshape(x.shape[0], n_state, state_dim)
+        n_ctrl = max(1, int(L.control_flat_dim) // 4)
+        controls = control_flat[:, : n_ctrl * 4].reshape(x.shape[0], n_ctrl, 4)
+        agents = agent_flat.reshape(x.shape[0], int(L.feature_max_agents), int(L.agent_token_dim))
+
+        ego_xy = ego[:, :2]
+        prefix_rel_xy = states[:, :, :2] - ego_xy.unsqueeze(1)
+        # Packed agent layout from models.data._agent_features.
+        agent_rel_xy = agents[:, :, 0:2] * 80.0
+        agent_vel = agents[:, :, 2:4] * 20.0
+        agent_len = agents[:, :, 7].abs() * 10.0
+        agent_wid = agents[:, :, 8].abs() * 5.0
+        agent_valid = (agent_len > 1.0e-4) & (agent_wid > 1.0e-4)
+
+        ego_len = ego[:, 7].abs().clamp_min(1.0e-3) if ego.shape[1] > 7 else torch.full((x.shape[0],), 4.8, device=x.device)
+        ego_wid = ego[:, 8].abs().clamp_min(1.0e-3) if ego.shape[1] > 8 else torch.full((x.shape[0],), 2.0, device=x.device)
+        ego_rad = 0.5 * torch.sqrt(ego_len.square() + ego_wid.square())
+        agent_rad = 0.5 * torch.sqrt(agent_len.square() + agent_wid.square())
+
+        # Prefix generation and closed-loop metric contracts use dt=0.1 s.
+        t = torch.arange(n_state, dtype=torch.float32, device=x.device) * 0.1
+        agent_future = agent_rel_xy.unsqueeze(1) + agent_vel.unsqueeze(1) * t.view(1, n_state, 1, 1)
+        delta = prefix_rel_xy.unsqueeze(2) - agent_future
+        signed_clearance = torch.linalg.vector_norm(delta, dim=-1) - ego_rad[:, None, None] - agent_rad[:, None, :]
+        large = torch.full_like(signed_clearance, 40.0)
+        signed_clearance = torch.where(agent_valid[:, None, :], signed_clearance, large)
+        any_agent = agent_valid.any(dim=1)
+        c_min = signed_clearance.amin(dim=(1, 2))
+        c_terminal = signed_clearance[:, -1, :].amin(dim=1)
+        c0 = (torch.linalg.vector_norm(agent_rel_xy, dim=-1) - ego_rad[:, None] - agent_rad)
+        c0 = torch.where(agent_valid, c0, torch.full_like(c0, 40.0)).amin(dim=1)
+        c_min = torch.where(any_agent, c_min, torch.full_like(c_min, 40.0))
+        c_terminal = torch.where(any_agent, c_terminal, torch.full_like(c_terminal, 40.0))
+        c0 = torch.where(any_agent, c0, torch.full_like(c0, 40.0))
+
+        speed = states[:, :, 6].abs()
+        max_speed = speed.amax(dim=1)
+        terminal_speed = speed[:, -1]
+        d_safe = 1.0 + 0.5 * max_speed
+        h_min_clear = torch.tanh((c_min - d_safe) / 2.0)
+        h_terminal_clear = torch.tanh((c_terminal - d_safe) / 2.0)
+        h_clear_gain = torch.tanh((c_terminal - c0) / 2.0)
+        # Conservative stopping distance under 6 m/s^2 service/emergency reserve.
+        stop_required = terminal_speed.square() / 12.0 + 1.0
+        h_stop = torch.tanh((c_terminal - stop_required) / 5.0)
+
+        a = controls[:, :, 0]
+        steer = controls[:, :, 1]
+        jerk = controls[:, :, 2]
+        steer_rate = controls[:, :, 3]
+        ctrl_terms = torch.stack([
+            (3.0 - torch.relu(a).amax(dim=1)) / 1.0,
+            (6.0 - torch.relu(-a).amax(dim=1)) / 1.0,
+            (0.55 - steer.abs().amax(dim=1)) / 0.10,
+            (6.0 - jerk.abs().amax(dim=1)) / 2.0,
+            (0.50 - steer_rate.abs().amax(dim=1)) / 0.10,
+        ], dim=-1)
+        h_control = torch.tanh(ctrl_terms.amin(dim=-1))
+        yaw_rate = states[:, :, 5].abs().amax(dim=1)
+        h_stability = torch.tanh((0.60 - yaw_rate) / 0.20)
+
+        return torch.stack([
+            h_min_clear, h_terminal_clear, h_clear_gain, h_stop, h_control, h_stability
+        ], dim=-1).to(dtype=x.dtype)
+
+    def _direct_physical_headroom_absolute_feasibility(
+        self, x: torch.Tensor, native_recovery_certificate: torch.Tensor | None
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor] | None:
+        """v48.60 CPHR source-only correction of native absolute feasibility."""
+        if self.direct_absolute_physical_headroom_weight is None:
+            return None
+        if native_recovery_certificate is None:
+            raise RuntimeError("CPHR requires frozen native OC-MERO certificate")
+        native_probability = native_recovery_certificate[:, 1].detach().to(dtype=x.dtype).clamp(1.0e-6, 1.0 - 1.0e-6)
+        native_logit = torch.logit(native_probability)
+        features = self._direct_absolute_physical_headroom_features(x).detach()
+        # Projected bounded weights encode the physical monotonicity assumption:
+        # more signed headroom cannot reduce feasibility.  The no-bias source is
+        # exact-native at initialization and cannot learn a global threshold shift.
+        weights = self.direct_absolute_physical_headroom_weight.clamp(0.0, 2.0)
+        correction = (features * weights.view(1, -1)).sum(dim=-1)
+        logit = native_logit + correction
+        probability = torch.sigmoid(logit)
+        return logit, probability, features, weights
+
     def _direct_option_corrected_absolute_feasibility(
         self,
         memory: torch.Tensor,
@@ -2299,6 +2442,15 @@ class OCRAPModel(nn.Module):
             out["direct_recovery_absolute_feasibility_probability"] = torch.sigmoid(
                 absolute_feasibility_logit
             )
+        physical_abs = self._direct_physical_headroom_absolute_feasibility(
+            x, native_recovery_certificate
+        )
+        if physical_abs is not None:
+            absolute_feasibility_logit, absolute_feasibility_probability, physical_features, physical_weights = physical_abs
+            out["direct_recovery_absolute_feasibility_logit"] = absolute_feasibility_logit
+            out["direct_recovery_absolute_feasibility_probability"] = absolute_feasibility_probability
+            out["direct_recovery_absolute_physical_headroom_features"] = physical_features
+            out["direct_recovery_absolute_physical_headroom_weight"] = physical_weights
         if native_component_logits is not None:
             native_component_logits = native_component_logits.to(
                 device=memory.device, dtype=memory.dtype
@@ -3361,6 +3513,7 @@ class OCRAPModel(nn.Module):
                 or self.direct_evidence_roct_deployability is not None
                 or self.direct_recovery_evidence_native_certificate_preservation
                 or self.direct_absolute_feasibility_head is not None
+                or self.direct_absolute_physical_headroom_weight is not None
             ):
                 roct_signature, native_certificate = self._direct_recovery_option_compatibility_evidence(
                     memory, x, option_features,
@@ -3442,6 +3595,7 @@ class OCRAPModel(nn.Module):
             or self.direct_evidence_roct_deployability is not None
             or self.direct_recovery_evidence_native_certificate_preservation
             or self.direct_absolute_feasibility_head is not None
+            or self.direct_absolute_physical_headroom_weight is not None
         ):
             with torch.no_grad():
                 roct_signature, native_certificate = self._recovery_option_compatibility_signature(

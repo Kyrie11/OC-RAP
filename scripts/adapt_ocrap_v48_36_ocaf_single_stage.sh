@@ -83,12 +83,17 @@ ROCT_OPTION_TEMPERATURE="${EVIDENCE_ROCT_OPTION_TEMPERATURE:-0.35}"
 COMMON_MEASURE_ROOT_MASS="${EVIDENCE_COMMON_MEASURE_ROOT_MASS:-false}"
 ABSOLUTE_FEASIBILITY_HEAD="${ABSOLUTE_FEASIBILITY_HEAD:-false}"
 ABSOLUTE_OPTION_MARGIN_CORRECTION="${ABSOLUTE_OPTION_MARGIN_CORRECTION:-false}"
+ABSOLUTE_PHYSICAL_HEADROOM_CORRECTION="${ABSOLUTE_PHYSICAL_HEADROOM_CORRECTION:-false}"
 ABSOLUTE_FEASIBILITY_WEIGHT="${ABSOLUTE_FEASIBILITY_WEIGHT:-0.0}"
-if [[ "$ABSOLUTE_FEASIBILITY_HEAD" == true && "$ABSOLUTE_OPTION_MARGIN_CORRECTION" == true ]]; then
-  echo "AFE and ORFC option-margin correction are mutually exclusive" >&2
+_abs_source_count=0
+[[ "$ABSOLUTE_FEASIBILITY_HEAD" == true ]] && _abs_source_count=$((_abs_source_count+1))
+[[ "$ABSOLUTE_OPTION_MARGIN_CORRECTION" == true ]] && _abs_source_count=$((_abs_source_count+1))
+[[ "$ABSOLUTE_PHYSICAL_HEADROOM_CORRECTION" == true ]] && _abs_source_count=$((_abs_source_count+1))
+if (( _abs_source_count > 1 )); then
+  echo "AFE, ORFC option-margin correction, and CPHR physical-headroom correction are mutually exclusive" >&2
   exit 30
 fi
-if [[ "$ABSOLUTE_FEASIBILITY_HEAD" == true || "$ABSOLUTE_OPTION_MARGIN_CORRECTION" == true ]]; then
+if (( _abs_source_count == 1 )); then
   SELECTION_SEMANTICS="rank_topk_then_absolute_feasibility_then_relative_filter_then_evidence_rerank"
   ABSOLUTE_FEASIBILITY_MODE_CONTRACT="learned"
 else
@@ -228,6 +233,7 @@ cat > "$RUN/STAGE_ARCHITECTURE.json" <<JSON
   "common_measure_root_mass": $COMMON_MEASURE_ROOT_MASS,
   "absolute_feasibility_head": $ABSOLUTE_FEASIBILITY_HEAD,
   "absolute_option_margin_correction": $ABSOLUTE_OPTION_MARGIN_CORRECTION,
+  "absolute_physical_headroom_correction": $ABSOLUTE_PHYSICAL_HEADROOM_CORRECTION,
   "absolute_feasibility_weight": $ABSOLUTE_FEASIBILITY_WEIGHT,
   "roct_regime_conditioned": false,
   "component_margin_target_mode": "$COMPONENT_MARGIN_TARGET_MODE",
@@ -275,7 +281,7 @@ cat > "$RUN/STAGE_ARCHITECTURE.json" <<JSON
   "eligible_harm_threshold": $ELIGIBLE_HARM_THRESHOLD,
   "selection_semantics": "$SELECTION_SEMANTICS",
   "absolute_feasibility_mode": "$ABSOLUTE_FEASIBILITY_MODE_CONTRACT",
-  "absolute_feasibility_target": "$([[ "$ABSOLUTE_FEASIBILITY_HEAD" == true || "$ABSOLUTE_OPTION_MARGIN_CORRECTION" == true ]] && echo '1[R_dep_star(candidate)>=0]' || echo none)",
+  "absolute_feasibility_target": "$([[ "$ABSOLUTE_FEASIBILITY_HEAD" == true || "$ABSOLUTE_OPTION_MARGIN_CORRECTION" == true || "$ABSOLUTE_PHYSICAL_HEADROOM_CORRECTION" == true ]] && echo '1[R_dep_star(candidate)>=0]' || echo none)",
   "absolute_feasibility_threshold": 0.5,
   "absolute_feasibility_threshold_search": false,
   "safe_hard_negative_weight": $SAFE_HARD_NEGATIVE_WEIGHT,
@@ -420,7 +426,7 @@ POLICY_METRIC_FACET_FALSE_EXCESS_WEIGHT="${POLICY_METRIC_FACET_FALSE_EXCESS_WEIG
 COMPONENT_HARM_DRS_TOLERANCE="${COMPONENT_HARM_DRS_TOLERANCE:-0.05}" COMPONENT_HARM_DEP_TOLERANCE="${COMPONENT_HARM_DEP_TOLERANCE:-0.05}" \
 COMPONENT_HARM_GAP_TOLERANCE="${COMPONENT_HARM_GAP_TOLERANCE:-0.05}" COMPONENT_HARM_HARD_TOLERANCE="${COMPONENT_HARM_HARD_TOLERANCE:-0.05}" \
 COMPONENT_HARM_PROXY_TOLERANCE="${COMPONENT_HARM_PROXY_TOLERANCE:-0.05}" \
-ABSOLUTE_FEASIBILITY_HEAD="$ABSOLUTE_FEASIBILITY_HEAD" ABSOLUTE_OPTION_MARGIN_CORRECTION="$ABSOLUTE_OPTION_MARGIN_CORRECTION" ABSOLUTE_FEASIBILITY_WEIGHT="$ABSOLUTE_FEASIBILITY_WEIGHT" \
+ABSOLUTE_FEASIBILITY_HEAD="$ABSOLUTE_FEASIBILITY_HEAD" ABSOLUTE_OPTION_MARGIN_CORRECTION="$ABSOLUTE_OPTION_MARGIN_CORRECTION" ABSOLUTE_PHYSICAL_HEADROOM_CORRECTION="$ABSOLUTE_PHYSICAL_HEADROOM_CORRECTION" ABSOLUTE_FEASIBILITY_WEIGHT="$ABSOLUTE_FEASIBILITY_WEIGHT" \
 GROUP_DRO_WEIGHT=0 OPPORTUNITY_AUX_WEIGHT=0 HARM_W=0 EXPERT_SPECIALIZATION_WEIGHT=0 \
   bash scripts/train_ocrap_v48_trac_sr.sh
 

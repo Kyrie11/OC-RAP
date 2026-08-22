@@ -1643,6 +1643,10 @@ def _epoch(
                 if grad_clip > 0:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
                 optimizer.step()
+                cphr = getattr(model, "direct_absolute_physical_headroom_weight", None)
+                if cphr is not None:
+                    with torch.no_grad():
+                        cphr.clamp_(0.0, 2.0)
             bsz = int(batch["x"].shape[0])
             n += bsz
             vals = {
@@ -1795,6 +1799,10 @@ def _epoch(
                 if grad_clip > 0:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
                 optimizer.step()
+                cphr = getattr(model, "direct_absolute_physical_headroom_weight", None)
+                if cphr is not None:
+                    with torch.no_grad():
+                        cphr.clamp_(0.0, 2.0)
             bsz = int(batch["x"].shape[0]); n += bsz
             vals = {
                 "loss": float(total.item()),
@@ -2264,6 +2272,10 @@ def _epoch(
             if grad_clip > 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
             optimizer.step()
+            cphr = getattr(model, "direct_absolute_physical_headroom_weight", None)
+            if cphr is not None:
+                with torch.no_grad():
+                    cphr.clamp_(0.0, 2.0)
         bsz = int(batch["x"].shape[0])
         n += bsz
         vals = {
@@ -3057,6 +3069,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_absolute_option_margin_correction=bool(
             model_cfg.get("direct_recovery_absolute_option_margin_correction", False)
         ),
+        direct_recovery_absolute_physical_headroom_correction=bool(
+            model_cfg.get("direct_recovery_absolute_physical_headroom_correction", False)
+        ),
         direct_recovery_evidence_native_certificate_preservation=bool(
             model_cfg.get("direct_recovery_evidence_native_certificate_preservation", False)
         ),
@@ -3550,6 +3565,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             ),
             "direct_recovery_absolute_option_margin_correction": bool(
                 model_cfg.get("direct_recovery_absolute_option_margin_correction", False)
+            ),
+            "direct_recovery_absolute_physical_headroom_correction": bool(
+                model_cfg.get("direct_recovery_absolute_physical_headroom_correction", False)
             ),
             "direct_recovery_evidence_native_certificate_preservation": bool(
                 model_cfg.get("direct_recovery_evidence_native_certificate_preservation", False)

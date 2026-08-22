@@ -300,6 +300,7 @@ model:
   direct_recovery_evidence_calibrator_context: false
   direct_recovery_evidence_calibrator_context_detach: true
   direct_recovery_evidence_calibrator_context_source: relative
+  direct_recovery_absolute_physical_headroom_correction: false
   direct_recovery_evidence_interaction_hidden: 64
   direct_recovery_evidence_interaction_dropout: 0.05
   direct_recovery_evidence_calibrator_shared: false
@@ -672,3 +673,4 @@ ablation:
   transformer_layers: 2
   transformer_heads: 4
   dropout: 0.1
+

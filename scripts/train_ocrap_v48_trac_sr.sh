@@ -185,6 +185,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set model.direct_recovery_evidence_common_measure_root_mass="${EVIDENCE_COMMON_MEASURE_ROOT_MASS:-false}" \
   --set model.direct_recovery_absolute_feasibility_head="${ABSOLUTE_FEASIBILITY_HEAD:-false}" \
   --set model.direct_recovery_absolute_option_margin_correction="${ABSOLUTE_OPTION_MARGIN_CORRECTION:-false}" \
+  --set model.direct_recovery_absolute_physical_headroom_correction="${ABSOLUTE_PHYSICAL_HEADROOM_CORRECTION:-false}" \
   --set model.direct_recovery_evidence_native_certificate_preservation="${EVIDENCE_NATIVE_CERTIFICATE_PRESERVATION:-false}" \
   --set model.direct_recovery_evidence_native_margin_complete_preservation="${EVIDENCE_NATIVE_MARGIN_COMPLETE_PRESERVATION:-false}" \
   --set model.direct_recovery_evidence_native_advantage_preservation="${EVIDENCE_NATIVE_ADVANTAGE_PRESERVATION:-false}" \

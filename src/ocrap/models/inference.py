@@ -280,6 +280,10 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_absolute_option_margin_correction",
             model_cfg.get("direct_recovery_absolute_option_margin_correction", False),
         )),
+        direct_recovery_absolute_physical_headroom_correction=bool(ckpt.get(
+            "direct_recovery_absolute_physical_headroom_correction",
+            model_cfg.get("direct_recovery_absolute_physical_headroom_correction", False),
+        )),
         direct_recovery_evidence_native_certificate_preservation=bool(ckpt.get(
             "direct_recovery_evidence_native_certificate_preservation",
             model_cfg.get("direct_recovery_evidence_native_certificate_preservation", False),
@@ -516,6 +520,9 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_absolute_option_margin_correction"] = bool(
         model.direct_recovery_absolute_option_margin_correction
     )
+    cfg["model"]["direct_recovery_absolute_physical_headroom_correction"] = bool(
+        model.direct_recovery_absolute_physical_headroom_correction
+    )
     cfg["model"]["direct_recovery_evidence_native_certificate_preservation"] = bool(
         model.direct_recovery_evidence_native_certificate_preservation
     )
@@ -719,6 +726,10 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_absolute_option_margin_correction",
             model_cfg.get("direct_recovery_absolute_option_margin_correction", False),
         )),
+        "direct_recovery_absolute_physical_headroom_correction": bool(ckpt.get(
+            "direct_recovery_absolute_physical_headroom_correction",
+            model_cfg.get("direct_recovery_absolute_physical_headroom_correction", False),
+        )),
     }
     actual_contract = {
         "direct_recovery_evidence_calibrator_context": bool(model.direct_recovery_evidence_calibrator_context),
@@ -749,6 +760,9 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         ),
         "direct_recovery_absolute_option_margin_correction": bool(
             model.direct_recovery_absolute_option_margin_correction
+        ),
+        "direct_recovery_absolute_physical_headroom_correction": bool(
+            model.direct_recovery_absolute_physical_headroom_correction
         ),
     }
     if expected_contract != actual_contract:

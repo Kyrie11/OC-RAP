@@ -1,3 +1,84 @@
+## v48.60 — DCP-DRFC-BCDE-RIFA-CPHR / CONTEXTUAL PHYSICAL HEADROOM RESERVE (2026-08-22)
+
+**类别：由 v48.59 ORFC 的 attribution-ready cross-severity STOP 直接触发的 absolute-source 单轴实验。v48.59 工程链条有效，因此本节首先固定其科学结论：role separation / fixed-proposal two-stage 的结构与因果隔离已经实现，但 AFE/ORFC 两个 deployed source-correction 实例均未通过 Near+Contact source Pareto；Centering 仍未获授权。v48.60 不修改 Stage-I、不扩大 proposal、不做 threshold search、不使用 regime router/policy/threshold/budget，也不蒸馏 privileged teacher component margin。**
+
+### v48.59 authoritative 结果：可归因，ORFC scientific STOP
+
+当前 `OC-RAP-v48.59-reference-reuse-contract.json` 的 dataset/protocol/source/hash/scene-disjoint 检查全部通过，`OC-RAP-v48.59-PIPELINE_COMPLETE.json` 为 `valid=true / attribution_ready=true / errors=[] / test_roots_read=false`；balanced/precision 的 Stage-I isolation 与 variant provenance 均有效。因此 D−B、D−C、D−A 可以做可靠归因。Formal gate 的 RC20 是算法证据失败，不是工程失败。
+
+**外部 teacher boundary 继续成立。** 在 balanced/precision 的 dev/certificate Near/Contact proposal rows 中，safe-positive 的 `R_dep_star(candidate)>=0` fraction 均为 `1.0`；harmful 的 `R_dep_star(candidate)<0` fraction约 `0.967–0.981`。所以 absolute truth boundary 本身没有被 v48.59 否证。
+
+**ORFC 没有建立 Near+Contact source-discrimination Pareto。** Precision 为例：
+
+- cert Contact：native B AUC `0.7036` → ORFC D `0.7134`，有小幅正向 ordering signal；但 teacher-infeasible pass `0 -> 0.4072`，harmful pass `0 -> 0.4043`；
+- dev Contact：AUC `0.6897 -> 0.6977`，但 infeasible pass `0 -> 0.4966`、harmful pass `0 -> 0.5000`；
+- cert Near：AUC **`0.8173 -> 0.7807`**，明显恶化；infeasible pass `0 -> 0.4340`；
+- dev Near：AUC **`0.7634 -> 0.7314`**，明显恶化；infeasible pass约 `0.5396`。
+
+Balanced 复现相同方向：Contact AUC小幅升，而 Near AUC明显下降。ORFC 因此触发预注册的 **cross-severity source tradeoff** STOP 条件。它并不是“option-resolved information 缺失被成功修复”，而是一个 **context-free global option bias 对不同 scene/headroom context 产生相反 source-order effect**。
+
+**D−A deployment 没有新 Pareto。** Precision certificate Contact D 与 A 都是 recall `0.05`、harmful UCB90约 `0.3508`；certificate Near D 与 A 都是 recall `0.3333`、harmful UCB90约 `0.0419`；dev Contact仍 abstain-all，dev Near D 与 A均 recall `0.375`。Balanced 同样基本回到 A 的 deployment 行为。ORFC 主要让 absolute Stage-II 变得更透明，但没有建立新的 end-to-end recovery gain。
+
+### two-stage / role separation 截止 v48.59 的精确结论
+
+1. **结构实现与可归因性：VALIDATED。** fixed top-5 在 absolute Stage-II 前冻结；AFE/ORFC 只改变 Stage-II source；Stage-I bitwise frozen；0.5 threshold fixed；无 regime input；无 proposal fallback/expansion。因而 architecture decomposition 确实被工程和实验设计实现，而不是概念图。
+2. **role separation 的语义必要性：SUPPORTED。** teacher `R_dep=0` absolute boundary稳定、fixed top-5 proposal对 recovery positives的 oracle support已足够，且历史 DZBA 表明把 absolute predicate塞进 relative max-veto位置会失败。relative improvement 与 absolute feasibility 应分角色仍是当前最合理的结构结论。
+3. **deployed two-stage mechanism 的性能有效性：NOT YET VALIDATED。** raw B高 false-veto；AFE C主要移动 operating point；ORFC D出现 Contact/Near tradeoff。不能写成“RIFA/two-stage 已经提升 planner”。
+4. **Centering：仍未授权。** source correctness prerequisite尚未完成；此时同时改 relative evidence 会破坏现有因果链。
+
+### 当前 dominant bottleneck：context-dependent recovery-witness identifiability
+
+v48.58 已排除“8-D AFE只需更强 classifier”；v48.59 又排除“每个 recovery option 一个全局 margin bias即可”。当前问题进一步收紧为：
+
+> **absolute deployable feasibility 的误差不是全局 scalar calibration，而是 action/scene-dependent recovery headroom 与预测 recovery witness 之间的识别错误。**
+
+也就是说，相同 recovery option 在不同 clearance、stopping reserve、control envelope、stability/headroom context 中需要不同 absolute correction。这个 context 必须来自部署可观测的连续物理量，而不能来自 Safe/Near/Contact regime id。
+
+Near/Contact 的后续串联问题仍然存在：proposal support足够后，模型需要先可靠 admit absolute-feasible action；随后还要解决 relative opportunity/harm/pred-adv/evidence-margin 的联合误拒。当前不能把后者提前和 source correction叠加。
+
+### v48.60 假设：CPHR = Contextual Physical Headroom Reserve
+
+CPHR 只在 **absolute Stage-II source** 上引入一个透明的、可证伪的 contextual correction。对 candidate `a`，从 executable prefix 与当前观测 agent 计算六个 signed continuous headroom：
+
+1. minimum clearance reserve；
+2. terminal clearance reserve；
+3. clearance recovery gain；
+4. stopping reserve；
+5. control-envelope reserve；
+6. stability/yaw reserve。
+
+邻车只做 constant-velocity extrapolation；不使用 hidden future identity、regime id、teacher component margin realization、relative `pred_adv/opportunity/harm`。signed clearance 在 overlap 时保持负值，所以 Contact 不会被 clip 成和 Near 相同的退化常数。
+
+source 定义为：
+
+`logit p_F^CPHR(a) = logit(sigmoid(R_dep_native(a))) + sum_j w_j h_j(a)`
+
+其中只有 6 个 `w_j` 可训练，执行/优化后强制 `0 <= w_j <= 2`，**没有 free bias**。全部权重零初始化，因此 epoch 0 **执行上精确等价 v48.58-B raw native source**；固定 threshold仍为 `0.5`。非负权重使“更多 signed physical headroom 不应降低 feasibility”成为显式单调性约束，而不是交给自由 MLP 学习。
+
+这与历史 PSA/CSE/IPBD/DRFC/OCAF 的区别必须保持：CPHR 不蒸馏 teacher privileged margin、不重训 margin/root、不把 physics融合成 relative/final compensatory score；它只检验 **可观测 action-conditioned physical headroom 是否能解释 v48.59 暴露出的 context-dependent absolute-source error**。
+
+### A/B/C/D/E 归因与 GO/STOP
+
+- A：v48.56 relative-only reference（复用）；
+- B：v48.58 raw native RIFA（复用）；
+- C：v48.58 AFE（复用，已 STOP）；
+- D：v48.59 ORFC（复用，已 STOP）；
+- **E/Main：v48.60 CPHR**，只训练 `direct_absolute_physical_headroom_weight[6]`。
+
+主比较是 **E−B**；E−C/E−D 分别回答 contextual physical correction 是否优于 compressed AFE 与 context-free option bias。固定 top-5、0.5 threshold、Stage-I checkpoint、teacher truth、scene-disjoint protocol全部不动。
+
+**GO prerequisite：** Near 与 Contact 的 absolute-feasibility AUC/order都改善，不再出现 v48.59 cross-severity tradeoff；teacher-feasible/safe-positive reject下降，同时 teacher-infeasible/harmful pass显著低于 C/D；balanced/precision同向；Stage-I bitwise isolation有效；source gain再向 dev/certificate deployment传播。只有这些成立，下一版才允许把同一 physical-headroom concept作为 *relative* anchor做独立 centering 实验。
+
+**STOP：** Near/Contact AUC再次trade off；仅 pass-rate/accuracy at 0.5 移动；infeasible/harmful pass仍在 C/D水平；source gain不传 deployment；或 isolation/provenance失败。若 STOP，停止 lightweight scalar/source calibration family，转向 recovery-option/witness representation、option coverage/taxonomy 和可识别性/teacher-source audit，而不是继续加 MLP、bias、threshold、class weight或 proposal。
+
+### 工程实现与兼容性
+
+- `OCrapModel` 新增 `direct_recovery_absolute_physical_headroom_correction` 与唯一 6-D 参数 `direct_absolute_physical_headroom_weight`；AFE/ORFC/CPHR 三种 absolute source fail-closed互斥。
+- CPHR features直接由既有 structured flat input中的 candidate prefix/current observed agents构造，全部 detach；native OC-MERO certificate保持冻结。
+- checkpoint/train/inference reconstruction、adaptation env、fixed RIFA selector均接通；optimizer step后对 6-D weights投影到 `[0,2]`。
+- 新增 v48.60 state/variant isolation、A/B/C/D/E audit/comparator、pipeline-complete checker与 two-GPU launcher。
+- **原 v48.59 指令保持兼容且未改变。** 新 generic env默认为 `ABSOLUTE_PHYSICAL_HEADROOM_CORRECTION=false`，旧 launcher不设置该 flag，行为保持 ORFC-only。
+
 ## v48.59 — DCP-DRFC-BCDE-RIFA-ORFC / OPTION-RESOLVED FEASIBILITY CORRECTION (2026-08-21)
 
 **类别：由 v48.58 authoritative A/B/C 对 RIFA source-correction 的否证直接触发的 absolute-source 单轴实验。保留 two-stage/role-separation 结构作为待验证架构假设，但正式 STOP v48.58 的 8-D AFE 实例；本轮仍不进入 evidence centering，不扩大 proposal，不使用 regime router/threshold/budget，不重训 root 或整套 margin head。研究问题收窄为：当前 absolute-feasibility failure 是否来自把 option-resolved recovery witness 压缩成 8-D aggregate 后再做线性分类，而不是来自 `R_dep=0` teacher boundary 本身？**
