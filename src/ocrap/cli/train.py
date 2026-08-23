@@ -3146,6 +3146,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_semantic_witness_path_stop_alignment=bool(
             model_cfg.get("direct_recovery_semantic_witness_path_stop_alignment", True)
         ),
+        direct_recovery_semantic_witness_classlocal_transport=bool(
+            model_cfg.get("direct_recovery_semantic_witness_classlocal_transport", False)
+        ),
         direct_recovery_evidence_native_certificate_preservation=bool(
             model_cfg.get("direct_recovery_evidence_native_certificate_preservation", False)
         ),
@@ -3695,6 +3698,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             ),
             "direct_recovery_semantic_witness_path_stop_alignment": bool(
                 model_cfg.get("direct_recovery_semantic_witness_path_stop_alignment", True)
+            ),
+            "direct_recovery_semantic_witness_classlocal_transport": bool(
+                model_cfg.get("direct_recovery_semantic_witness_classlocal_transport", False)
             ),
             "direct_recovery_evidence_native_certificate_preservation": bool(
                 model_cfg.get("direct_recovery_evidence_native_certificate_preservation", False)

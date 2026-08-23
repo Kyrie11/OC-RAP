@@ -1,3 +1,76 @@
+## v48.65 — OC-CLRW: Observation-Class-Local Recovery Witness (2026-08-23)
+
+**Entry condition / v48.64.1 authoritative result.** The rerun with the v48.64.1 engineering hotfix is fully attribution-ready: the top-level sentinel is `valid=true`, `attribution_ready=true`, `engineering_version=v48.64.1-OC-SARW-ENGFIX`, `errors=[]`, `test_roots_read=false`. I/J/K all complete for balanced/precision, each reaches 21 completed epochs, emits training/evidence-completion/calibration artifacts, keeps all 170 shared Stage-I tensors bitwise identical to the v48.56-A source, and adds only `direct_absolute_semantic_witness_gain[2]`. The v48.64 result is therefore a **scientific STOP, not an engineering failure**.
+
+### What v48.64 actually proved
+
+The preregistered K/Main gate fails despite one important representation-level success.
+
+- **AUC gate fails strongly.** K-B is positive only in the two dev-Contact cells (`+0.00378` balanced, `+0.00338` precision). It regresses on dev-Near (`-0.03847/-0.03877`), certificate-Near (`-0.03755/-0.03670`) and certificate-Contact (`-0.01101/-0.01132`). Thus 2/8 are positive and 0/8 reach `+0.01`, versus the required 8/8 positive and >=6/8 >=`+0.01`.
+- **Selectivity remains controlled.** K harmful and teacher-infeasible pass stay about `0.08--0.095` in all eight cells, well below the 0.25 cap and the permissive v48.61-F family.
+- **The active-set repair restores physical sign availability but not admission.** Safe-positive positive-common-option coverage rises in all eight cells: Near from 0 to roughly `0.158--0.438`, Contact from roughly `0.161` to `0.459--0.516`. However safe-positive *pass at threshold 0.5* is exactly unchanged from H in all eight cells: 0 for dev-Near/dev-Contact/certificate-Near and 0.032258 for certificate-Contact.
+- **The recovered physical witness is not selective.** With active-set alignment, teacher-infeasible/harmful rows also gain positive physical witness coverage (roughly `0.33--0.44`), often comparable to or larger than safe-positive Near coverage. Hence v48.64 repaired a false-negative sign-collapse mechanism, but did not identify the teacher-feasible subset.
+- **Limiting constraints move after the repair.** For K safe-positive rows, stopping/stability cease to dominate. The limiting coordinate is now almost entirely **control + clearance** (Near: control about `0.67--0.82`, remainder clearance; Contact: control about `0.55--0.62`, remainder clearance). This falsifies the idea that another stopping/stability tweak is the dominant next move.
+
+### Factor attribution: active-set supported; path-stop not supported as a Main component
+
+- I_ACTIVESET alone reproduces essentially all of K's witness-coverage restoration. Its AUC effect versus H is small and slightly negative in every cell, so it is **a valid representation repair but not an end-to-end source solution**.
+- J_PATHSTOP does not restore Near safe-positive witness coverage at all. It gives only a local dev-Near AUC increase of about `+0.0057` while regressing certificate-Near, dev-Contact and certificate-Contact. K-I path-stop conditional effects are negative in six cells and only about `+0.0057` in dev-Near. Therefore path-stop is **not carried into the v48.65 Main arm**; legacy stopping is frozen to avoid confounding the next causal test.
+
+### New causal diagnosis: the correction locus is over-coupled across distinguishable observation classes
+
+The paper/OC-MERO information pattern is observation-class local: compatible hidden roots must share a recovery option, but distinguishable post-prefix observation classes may select different options. V48.64 does not violate the final OC-MERO max itself, but its learned semantics correction is formed at the **candidate-global option** level: one support `c_l(a)` and one option correction are computed for the whole candidate and then broadcast to every latent root before rerunning OC-MERO. This couples distinguishable observation classes before the operator is allowed to make their different executable choices.
+
+V48.65 tests one narrow hypothesis:
+
+> **After compatible-root aggregation, the signed recovery correction must be transported at `q[i,l]`, local to post-prefix observation class `i`, before the per-class option maximum.**
+
+No new network capacity, option identity, regime signal, threshold, proposal budget, teacher-future input, root/margin retraining or relative-ranking intervention is introduced.
+
+### OC-CLRW mechanism
+
+1. Compute frozen native OC-MERO `q_base[i,l]` from the unchanged root logits, observation embeddings and base root-option margins.
+2. Define class-local option support by the same frozen relative-option temperature, now at `q_base[i,l]` rather than as one candidate-global `c_l`.
+3. Reuse the v48.64 observable non-compensatory physical viability `v_l`; active-set alignment remains a factorial switch and path-stop is fixed OFF (legacy stopping).
+4. Positive correction is class-local: `gain_pos * c[i,l] * relu(v_l)`.
+5. Negative evidence is also class-local and quantifier-aligned: for each observation class, penalize only `relu(-max_l c[i,l]v_l)`, i.e. failure of all locally supported options.
+6. Apply the correction directly to `q_base[i,l]`, maximize over valid options per class, then apply the unchanged outer lower-tail OC-MERO aggregation. Zero gains are execution-exact native B.
+
+The only trainable state remains `direct_absolute_semantic_witness_gain[2]`, shared across every root/option/scene and Near/Contact.
+
+### Pre-registered 2x2 correction-locus experiment
+
+Historical and new arms form a clean 2x2 with legacy stopping fixed:
+
+- **H (historical v48.63):** candidate-global correction, active-set OFF;
+- **I (historical v48.64 I_ACTIVESET):** candidate-global correction, active-set ON;
+- **L_CLASSLOCAL:** class-local correction, active-set OFF;
+- **M/Main OC-CLRW:** class-local correction, active-set ON.
+
+Interpretation: `L-H` isolates class-local transport without active-set repair; `M-I` is the primary conditional class-local effect after the validated active-set repair; `M-L` isolates active-set under class-local transport; `(M-I)-(L-H)` is the interaction.
+
+### Truth-contract audit (read-only; no dataset reconstruction)
+
+The manuscript states that teacher margin is the signed minimum of active normalized constraint slacks. The current teacher implementation additionally contains deliberate structural logic: artifact margin override and non-hidden-branch floors/overrides (`0.6`, `0.9`, `-0.8`). Teacher clearance also clips box overlap to zero while the observable finite-time source retains signed penetration. These facts do **not** invalidate the v48.64 attribution—the run faithfully used the frozen labels—but they are a paper/target-semantics debt and must not be silently treated as a pure physical signed-min teacher.
+
+V48.65 therefore adds `audit_v48_65_teacher_certificate_semantics.py`. It is read-only, refuses test-like roots, reconstructs no dataset, recomputes stored `R_dep*` from stored `m_star/root_probs/c_star` with exact OC-MERO, reports structural plateaus, and measures the counterfactual gap between class-local per-observation option choice and one globally shared option across observation classes. The audit is an engineering/truth-contract prerequisite, not an extra training target.
+
+### V48.65 preregistered GO
+
+M/Main must simultaneously satisfy:
+
+1. `M-B` absolute-feasibility AUC > 0 in all 8 balanced/precision x dev/certificate x Near/Contact cells, with >= `+0.01` in at least 6/8;
+2. harmful and teacher-infeasible pass <= 0.25 and at least 0.10 below v48.61-F in every cell;
+3. safe-positive pass strictly exceeds v48.64 I_ACTIVESET in all 8 cells and improves by >= 0.15 in at least 6/8;
+4. read-only teacher truth-contract audit is valid, exact OC-MERO recomputation matches stored labels, `test_roots_read=false`, `dataset_reconstruction=false`;
+5. only the two shared gains train; Stage-I remains bitwise identical; fixed top-5, threshold 0.5 and RIFA order remain unchanged.
+
+Only after source GO may M-A deployment propagation and paired Safe nominal-utility non-interference be interpreted.
+
+### Forbidden directions remain in force
+
+Do not iterate on threshold/LR/horizon/feature-weight/class-weight grids; proposal expansion/densification/top-K search; option-specific free bias; generic AFE/MLP capacity; candidate-only CPHR; compensatory ERWF sum; per-option negative veto; quantifier-gain sweep; Safe/Near/Contact router/policy/threshold/budget; broad root/margin/encoder retraining; privileged teacher-future/component-margin distillation; relative centering/ranker changes before source GO; or recovery-option library expansion before a teacher-option-support audit demonstrates genuine missing support.
+
 ## v48.64.1 — OC-SARW ENGINEERING HOTFIX: canonical train-summary / completion-contract path (2026-08-23)
 
 **Algorithm status:** unchanged from v48.64.0.  This is an engineering-only hotfix; OC-SARW features, active-set/path-stop semantics, two shared gains, losses, top-K=5, threshold=0.5, RIFA order, I/J/K factor definitions, data splits and output directories are unchanged.

@@ -4,6 +4,7 @@ import torch
 from torch import nn
 
 from ocrap.algorithms.ocmero import torch_oc_mero
+from ocrap.algorithms.lcv import torch_weighted_lcvar
 from .encoders import FlatFeatureLayout, MLPEncoder, StructuredTokenEncoder
 
 
@@ -357,6 +358,7 @@ class OCRAPModel(nn.Module):
         direct_recovery_absolute_semantic_witness_correction: bool = False,
         direct_recovery_semantic_witness_active_set_alignment: bool = True,
         direct_recovery_semantic_witness_path_stop_alignment: bool = True,
+        direct_recovery_semantic_witness_classlocal_transport: bool = False,
         direct_recovery_evidence_native_certificate_preservation: bool = False,
         direct_recovery_evidence_native_margin_complete_preservation: bool = False,
         direct_recovery_evidence_native_advantage_preservation: bool = False,
@@ -605,6 +607,14 @@ class OCRAPModel(nn.Module):
         )
         self.direct_recovery_semantic_witness_path_stop_alignment = bool(
             direct_recovery_semantic_witness_path_stop_alignment
+        )
+        # v48.65 OC-CLRW: keep the v48.64 observable physical barrier but
+        # transport its bounded correction at the OC-MERO observation-class
+        # q[i,l] interface. Distinguishable observation classes may therefore
+        # support different recovery options while compatible roots remain
+        # coupled inside q. This is a factor flag, never a regime input.
+        self.direct_recovery_semantic_witness_classlocal_transport = bool(
+            direct_recovery_semantic_witness_classlocal_transport
         )
         absolute_source_count = sum([
             self.direct_recovery_absolute_feasibility_head,
@@ -2539,7 +2549,8 @@ class OCRAPModel(nn.Module):
     ) -> tuple[
         torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
         torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
-        torch.Tensor, torch.Tensor,
+        torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None,
+        torch.Tensor | None,
     ] | None:
         """v48.64 OC-SARW: semantics-aligned common executable witness.
 
@@ -2663,6 +2674,128 @@ class OCRAPModel(nn.Module):
         common_support = common_support.detach().to(dtype=memory.dtype)
 
         gains = self.direct_absolute_semantic_witness_gain.clamp(0.0, 2.0)
+
+        # v48.65 OC-CLRW factor: the paper's OC-MERO information pattern is
+        # observation-class local.  q[i,l] has already aggregated all roots
+        # that are compatible with anchor observation i, so it is the correct
+        # locus for a deployable correction.  v48.64 instead formed one
+        # candidate-level support c_l and broadcast the same correction to all
+        # roots.  The class-local branch leaves v48.64 numerical behavior
+        # execution-exact when disabled (covered by regression tests).
+        if self.direct_recovery_semantic_witness_classlocal_transport:
+            obs = obs_embeddings.float()
+            dist2_q = (obs.unsqueeze(2) - obs.unsqueeze(1)).square().mean(dim=-1)
+            compatibility_q = torch.exp(
+                -dist2_q / max(float(self.tau_obs), 1.0e-6)
+            ).clamp(0.0, 1.0)
+            eye_q = torch.eye(K, dtype=torch.bool, device=compatibility_q.device).unsqueeze(0)
+            compatibility_q = torch.where(
+                eye_q, torch.ones_like(compatibility_q), compatibility_q
+            )
+            native_r_dep, _native_r_orc, _native_gap, q_base = torch_oc_mero(
+                base_margins.float(), p, compatibility_q,
+                alpha=float(self.direct_recovery_evidence_roct_alpha),
+                beta=float(self.direct_recovery_evidence_roct_beta),
+                option_valid=ov, root_valid=rv, use_lcvar=True, use_obs_kernel=True,
+                top_m=int(self.direct_recovery_evidence_roct_top_m),
+            )
+            q_for_support = q_base
+            if ov is not None:
+                q_for_support = q_for_support.masked_fill(~ov.unsqueeze(1), -1.0e9)
+            q_best = q_for_support.amax(dim=-1, keepdim=True)
+            class_support = torch.exp(
+                ((q_for_support - q_best) / tau).clamp(-20.0, 0.0)
+            )
+            if ov is not None:
+                class_support = torch.where(
+                    ov.unsqueeze(1), class_support, torch.zeros_like(class_support)
+                )
+            if rv is not None:
+                class_support = torch.where(
+                    rv.unsqueeze(-1), class_support, torch.zeros_like(class_support)
+                )
+
+            class_supported_viability = (
+                class_support * physical_viability.float().unsqueeze(1)
+            )
+            if ov is not None:
+                class_supported_for_best = class_supported_viability.masked_fill(
+                    ~ov.unsqueeze(1), -1.0e9
+                )
+            else:
+                class_supported_for_best = class_supported_viability
+            per_class_best, per_class_best_option = class_supported_for_best.max(dim=-1)
+            if rv is not None:
+                per_class_best = torch.where(rv, per_class_best, torch.zeros_like(per_class_best))
+
+            # Rescue only the option that is locally compatible with each
+            # observation class; a class receives a negative correction only
+            # when all locally supported observable continuations fail.
+            positive_rescue_q = (
+                gains[0] * class_support.to(dtype=memory.dtype)
+                * torch.relu(physical_viability).unsqueeze(1)
+            )
+            class_failure = torch.relu(-per_class_best).to(dtype=memory.dtype)
+            q_corrected = (
+                q_base.to(dtype=memory.dtype) + positive_rescue_q
+                - gains[1] * class_failure.unsqueeze(-1)
+            )
+            if ov is not None:
+                q_corrected = torch.where(
+                    ov.unsqueeze(1), q_corrected, torch.full_like(q_corrected, -1.0e9)
+                )
+            r_per_class = q_corrected.amax(dim=-1)
+            corrected_r_dep = torch_weighted_lcvar(
+                r_per_class.float(), p.float(),
+                float(self.direct_recovery_evidence_roct_alpha),
+            )
+            probability = torch.sigmoid(corrected_r_dep).to(dtype=memory.dtype).clamp(
+                1.0e-6, 1.0 - 1.0e-6
+            )
+            logit = torch.logit(probability)
+
+            classlocal_lcvar_viability = torch_weighted_lcvar(
+                per_class_best.float(), p.float(),
+                float(self.direct_recovery_evidence_roct_alpha),
+            ).to(dtype=memory.dtype)
+            viable_root_mass = (
+                p * (per_class_best > 0.0).to(dtype=p.dtype)
+            ).sum(dim=-1).to(dtype=memory.dtype)
+            selected_support = torch.gather(
+                class_support, 2, per_class_best_option.unsqueeze(-1)
+            ).squeeze(-1)
+            selected_support_mean = (p * selected_support).sum(dim=-1).to(dtype=memory.dtype)
+
+            # For limiting-constraint diagnosis choose the weakest valid
+            # observation class, then that class's best supported option.
+            weak_score = per_class_best.clone()
+            if rv is not None:
+                weak_score = weak_score.masked_fill(~rv, float('inf'))
+            weak_class = weak_score.argmin(dim=-1)
+            batch_index = torch.arange(B, device=memory.device)
+            best_option = per_class_best_option[batch_index, weak_class]
+            best_barriers = barrier_stack[batch_index, best_option]
+            best_limiting_constraint = limiting_constraint[batch_index, best_option].to(dtype=memory.dtype)
+
+            # Compatibility field retained for the existing audit schema: in
+            # class-local mode this counts observation classes that have at
+            # least one positive supported option (not root-option pairs).
+            positive_class = per_class_best > 0.0
+            if rv is not None:
+                positive_class = positive_class & rv
+            positive_option_count = positive_class.sum(dim=1).to(dtype=memory.dtype)
+            max_common_support = class_support.amax(dim=(1, 2)).to(dtype=memory.dtype)
+            universal_failure = torch.relu(-classlocal_lcvar_viability)
+            return (
+                logit, probability, features, gains, physical_viability.detach(),
+                class_support.detach().to(dtype=memory.dtype),
+                classlocal_lcvar_viability.detach(), universal_failure.detach(),
+                positive_option_count.detach(), max_common_support.detach(),
+                best_barriers.detach(), best_limiting_constraint.detach(),
+                classlocal_lcvar_viability.detach(), viable_root_mass.detach(),
+                selected_support_mean.detach(),
+            )
+
         positive_rescue = gains[0] * common_support * torch.relu(physical_viability)
         supported_viability = common_support * physical_viability
         if ov is not None:
@@ -2702,6 +2835,7 @@ class OCRAPModel(nn.Module):
             best_common_viability.detach(), universal_failure.detach(),
             positive_option_count.detach(), max_common_support.detach(),
             best_barriers.detach(), best_limiting_constraint.detach(),
+            None, None, None,
         )
 
     def _direct_option_corrected_absolute_feasibility(
@@ -4261,7 +4395,8 @@ class OCRAPModel(nn.Module):
             if semantic_abs is not None:
                 (abs_logit, abs_probability, sw_features, sw_gains, sw_viability, sw_support,
                  sw_best, sw_failure, sw_positive_count, sw_max_support, sw_best_barriers,
-                 sw_limiting_constraint) = semantic_abs
+                 sw_limiting_constraint, sw_classlocal_lcvar, sw_classlocal_viable_mass,
+                 sw_classlocal_support_mean) = semantic_abs
                 direct_out["direct_recovery_absolute_feasibility_logit"] = abs_logit
                 direct_out["direct_recovery_absolute_feasibility_probability"] = abs_probability
                 direct_out["direct_recovery_absolute_semantic_witness_features"] = sw_features
@@ -4274,6 +4409,10 @@ class OCRAPModel(nn.Module):
                 direct_out["direct_recovery_absolute_semantic_max_common_support"] = sw_max_support
                 direct_out["direct_recovery_absolute_semantic_best_barriers"] = sw_best_barriers
                 direct_out["direct_recovery_absolute_semantic_limiting_constraint"] = sw_limiting_constraint
+                if sw_classlocal_lcvar is not None:
+                    direct_out["direct_recovery_absolute_semantic_classlocal_lcvar_viability"] = sw_classlocal_lcvar
+                    direct_out["direct_recovery_absolute_semantic_classlocal_viable_root_mass"] = sw_classlocal_viable_mass
+                    direct_out["direct_recovery_absolute_semantic_classlocal_selected_support_mean"] = sw_classlocal_support_mean
             return direct_out
         scene_token = memory[:, 0]
         root_tokens = self._decode_roots(memory)
@@ -4419,7 +4558,8 @@ class OCRAPModel(nn.Module):
         if semantic_abs is not None:
             (abs_logit, abs_probability, sw_features, sw_gains, sw_viability, sw_support,
              sw_best, sw_failure, sw_positive_count, sw_max_support, sw_best_barriers,
-             sw_limiting_constraint) = semantic_abs
+             sw_limiting_constraint, sw_classlocal_lcvar, sw_classlocal_viable_mass,
+             sw_classlocal_support_mean) = semantic_abs
             out["direct_recovery_absolute_feasibility_logit"] = abs_logit
             out["direct_recovery_absolute_feasibility_probability"] = abs_probability
             out["direct_recovery_absolute_semantic_witness_features"] = sw_features
@@ -4432,6 +4572,10 @@ class OCRAPModel(nn.Module):
             out["direct_recovery_absolute_semantic_max_common_support"] = sw_max_support
             out["direct_recovery_absolute_semantic_best_barriers"] = sw_best_barriers
             out["direct_recovery_absolute_semantic_limiting_constraint"] = sw_limiting_constraint
+            if sw_classlocal_lcvar is not None:
+                out["direct_recovery_absolute_semantic_classlocal_lcvar_viability"] = sw_classlocal_lcvar
+                out["direct_recovery_absolute_semantic_classlocal_viable_root_mass"] = sw_classlocal_viable_mass
+                out["direct_recovery_absolute_semantic_classlocal_selected_support_mean"] = sw_classlocal_support_mean
         if self.root_signature_head is not None:
             out["root_signature"] = self.root_signature_head(root_tokens)
         if self.root_future_signature_head is not None:

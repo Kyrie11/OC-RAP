@@ -54,6 +54,10 @@ class Prediction:
     direct_recovery_semantic_max_common_support: float | None = None
     direct_recovery_semantic_best_barriers: np.ndarray | None = None
     direct_recovery_semantic_limiting_constraint: int | None = None
+    # v48.65 diagnostic-only observation-class-local certificate summaries.
+    direct_recovery_semantic_classlocal_lcvar_viability: float | None = None
+    direct_recovery_semantic_classlocal_viable_root_mass: float | None = None
+    direct_recovery_semantic_classlocal_selected_support_mean: float | None = None
     direct_recovery_rank: float | None = None
     direct_recovery_delta: float | None = None
     direct_recovery_delta_std: float | None = None
@@ -393,6 +397,10 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_semantic_witness_path_stop_alignment",
             model_cfg.get("direct_recovery_semantic_witness_path_stop_alignment", True),
         )),
+        direct_recovery_semantic_witness_classlocal_transport=bool(ckpt.get(
+            "direct_recovery_semantic_witness_classlocal_transport",
+            model_cfg.get("direct_recovery_semantic_witness_classlocal_transport", False),
+        )),
         direct_recovery_evidence_native_certificate_preservation=bool(ckpt.get(
             "direct_recovery_evidence_native_certificate_preservation",
             model_cfg.get("direct_recovery_evidence_native_certificate_preservation", False),
@@ -650,6 +658,9 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_semantic_witness_path_stop_alignment"] = bool(
         model.direct_recovery_semantic_witness_path_stop_alignment
     )
+    cfg["model"]["direct_recovery_semantic_witness_classlocal_transport"] = bool(
+        model.direct_recovery_semantic_witness_classlocal_transport
+    )
     cfg["model"]["direct_recovery_evidence_native_certificate_preservation"] = bool(
         model.direct_recovery_evidence_native_certificate_preservation
     )
@@ -881,6 +892,10 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_semantic_witness_path_stop_alignment",
             model_cfg.get("direct_recovery_semantic_witness_path_stop_alignment", True),
         )),
+        "direct_recovery_semantic_witness_classlocal_transport": bool(ckpt.get(
+            "direct_recovery_semantic_witness_classlocal_transport",
+            model_cfg.get("direct_recovery_semantic_witness_classlocal_transport", False),
+        )),
     }
     actual_contract = {
         "direct_recovery_evidence_calibrator_context": bool(model.direct_recovery_evidence_calibrator_context),
@@ -932,6 +947,9 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         ),
         "direct_recovery_semantic_witness_path_stop_alignment": bool(
             model.direct_recovery_semantic_witness_path_stop_alignment
+        ),
+        "direct_recovery_semantic_witness_classlocal_transport": bool(
+            model.direct_recovery_semantic_witness_classlocal_transport
         ),
     }
     if expected_contract != actual_contract:
@@ -1095,6 +1113,9 @@ def predict_samples(
     direct_sw_max_support_np = None
     direct_sw_best_barriers_np = None
     direct_sw_limiting_constraint_np = None
+    direct_sw_classlocal_lcvar_np = None
+    direct_sw_classlocal_viable_mass_np = None
+    direct_sw_classlocal_support_mean_np = None
     direct_rank_np = None
     direct_delta_np = None
     direct_delta_std_np = None
@@ -1128,6 +1149,10 @@ def predict_samples(
             direct_sw_max_support_np = out["direct_recovery_absolute_semantic_max_common_support"].detach().cpu().numpy().astype(np.float32)
             direct_sw_best_barriers_np = out["direct_recovery_absolute_semantic_best_barriers"].detach().cpu().numpy().astype(np.float32)
             direct_sw_limiting_constraint_np = out["direct_recovery_absolute_semantic_limiting_constraint"].detach().cpu().numpy().astype(np.int64)
+            if "direct_recovery_absolute_semantic_classlocal_lcvar_viability" in out:
+                direct_sw_classlocal_lcvar_np = out["direct_recovery_absolute_semantic_classlocal_lcvar_viability"].detach().cpu().numpy().astype(np.float32)
+                direct_sw_classlocal_viable_mass_np = out["direct_recovery_absolute_semantic_classlocal_viable_root_mass"].detach().cpu().numpy().astype(np.float32)
+                direct_sw_classlocal_support_mean_np = out["direct_recovery_absolute_semantic_classlocal_selected_support_mean"].detach().cpu().numpy().astype(np.float32)
         if "direct_recovery_rank_logit" in out:
             direct_rank_np = out["direct_recovery_rank_logit"].detach().cpu().numpy().astype(np.float32)
         if "direct_recovery_delta_mean" in out:
@@ -1174,6 +1199,9 @@ def predict_samples(
                 direct_recovery_semantic_max_common_support=(None if direct_sw_max_support_np is None else float(direct_sw_max_support_np[i])),
                 direct_recovery_semantic_best_barriers=(None if direct_sw_best_barriers_np is None else direct_sw_best_barriers_np[i].copy()),
                 direct_recovery_semantic_limiting_constraint=(None if direct_sw_limiting_constraint_np is None else int(direct_sw_limiting_constraint_np[i])),
+                direct_recovery_semantic_classlocal_lcvar_viability=(None if direct_sw_classlocal_lcvar_np is None else float(direct_sw_classlocal_lcvar_np[i])),
+                direct_recovery_semantic_classlocal_viable_root_mass=(None if direct_sw_classlocal_viable_mass_np is None else float(direct_sw_classlocal_viable_mass_np[i])),
+                direct_recovery_semantic_classlocal_selected_support_mean=(None if direct_sw_classlocal_support_mean_np is None else float(direct_sw_classlocal_support_mean_np[i])),
                 direct_recovery_rank=(None if direct_rank_np is None else float(direct_rank_np[i])),
                 direct_recovery_delta=(None if direct_delta_np is None else float(direct_delta_np[i])),
                 direct_recovery_delta_std=(None if direct_delta_std_np is None else float(direct_delta_std_np[i])),
@@ -1289,6 +1317,9 @@ def predict_sample(d: dict[str, Any], bundle: ModelBundle | None, cfg: dict | No
         direct_recovery_semantic_max_common_support=(None if "direct_recovery_absolute_semantic_max_common_support" not in out else float(out["direct_recovery_absolute_semantic_max_common_support"].squeeze(0).detach().cpu().item())),
         direct_recovery_semantic_best_barriers=(None if "direct_recovery_absolute_semantic_best_barriers" not in out else out["direct_recovery_absolute_semantic_best_barriers"].squeeze(0).detach().cpu().numpy().astype(np.float32)),
         direct_recovery_semantic_limiting_constraint=(None if "direct_recovery_absolute_semantic_limiting_constraint" not in out else int(out["direct_recovery_absolute_semantic_limiting_constraint"].squeeze(0).detach().cpu().item())),
+        direct_recovery_semantic_classlocal_lcvar_viability=(None if "direct_recovery_absolute_semantic_classlocal_lcvar_viability" not in out else float(out["direct_recovery_absolute_semantic_classlocal_lcvar_viability"].squeeze(0).detach().cpu().item())),
+        direct_recovery_semantic_classlocal_viable_root_mass=(None if "direct_recovery_absolute_semantic_classlocal_viable_root_mass" not in out else float(out["direct_recovery_absolute_semantic_classlocal_viable_root_mass"].squeeze(0).detach().cpu().item())),
+        direct_recovery_semantic_classlocal_selected_support_mean=(None if "direct_recovery_absolute_semantic_classlocal_selected_support_mean" not in out else float(out["direct_recovery_absolute_semantic_classlocal_selected_support_mean"].squeeze(0).detach().cpu().item())),
         direct_recovery_rank=(None if "direct_recovery_rank_logit" not in out else float(out["direct_recovery_rank_logit"].squeeze(0).detach().cpu().item())),
         direct_recovery_delta=(None if "direct_recovery_delta_mean" not in out else float(out["direct_recovery_delta_mean"].squeeze(0).detach().cpu().item())),
         direct_recovery_delta_std=(None if "direct_recovery_delta_logvar" not in out else float(torch.exp(0.5 * out["direct_recovery_delta_logvar"]).squeeze(0).detach().cpu().item())),

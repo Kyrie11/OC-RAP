@@ -738,6 +738,18 @@ def main() -> int:
                 None if pred.direct_recovery_semantic_limiting_constraint is None
                 else int(pred.direct_recovery_semantic_limiting_constraint)
             )
+            row["semantic_classlocal_lcvar_viability"] = (
+                None if pred.direct_recovery_semantic_classlocal_lcvar_viability is None
+                else float(pred.direct_recovery_semantic_classlocal_lcvar_viability)
+            )
+            row["semantic_classlocal_viable_root_mass"] = (
+                None if pred.direct_recovery_semantic_classlocal_viable_root_mass is None
+                else float(pred.direct_recovery_semantic_classlocal_viable_root_mass)
+            )
+            row["semantic_classlocal_selected_support_mean"] = (
+                None if pred.direct_recovery_semantic_classlocal_selected_support_mean is None
+                else float(pred.direct_recovery_semantic_classlocal_selected_support_mean)
+            )
             if args.risk_source in {"heads", "ordinal_evidence"} and (row["opp_logit"] is None or row["harm_logit"] is None):
                 raise ValueError("risk-source=heads/ordinal_evidence requires opportunity/harm outputs")
         if gi == 1 or gi % 200 == 0 or gi == len(raw):
@@ -868,6 +880,9 @@ def main() -> int:
                 "semantic_max_common_support": r.get("semantic_max_common_support"),
                 "semantic_best_barriers": r.get("semantic_best_barriers"),
                 "semantic_limiting_constraint": r.get("semantic_limiting_constraint"),
+                "semantic_classlocal_lcvar_viability": r.get("semantic_classlocal_lcvar_viability"),
+                "semantic_classlocal_viable_root_mass": r.get("semantic_classlocal_viable_root_mass"),
+                "semantic_classlocal_selected_support_mean": r.get("semantic_classlocal_selected_support_mean"),
                 "predicted_component_harm": r.get("component_harm"),
                 "predicted_component_margins": r.get("component_margins"),
                 "predicted_native_pair_margins": native_pair_margins,
