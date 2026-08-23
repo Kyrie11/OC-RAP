@@ -13,9 +13,11 @@ from ocrap.models.data import (
     DIRECT_ABSOLUTE_PHYSICAL_HEADROOM_FEATURE_SCHEMA,
     DIRECT_EXECUTABLE_RECOVERY_WITNESS_FEATURE_SCHEMA,
     DIRECT_COMMON_RECOVERY_WITNESS_FEATURE_SCHEMA,
+    DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA,
     direct_absolute_physical_headroom_features_from_sample,
     direct_executable_recovery_witness_features_from_sample,
     direct_common_recovery_witness_features_from_sample,
+    direct_semantic_recovery_witness_features_from_sample,
     fix_sample_geometry,
     sample_to_feature,
     samples_to_feature_matrix,
@@ -45,6 +47,13 @@ class Prediction:
     direct_recovery_quantifier_universal_failure: float | None = None
     direct_recovery_quantifier_positive_option_count: float | None = None
     direct_recovery_quantifier_max_common_support: float | None = None
+    # v48.64 diagnostic-only semantics-aligned witness summaries.
+    direct_recovery_semantic_best_common_viability: float | None = None
+    direct_recovery_semantic_universal_failure: float | None = None
+    direct_recovery_semantic_positive_option_count: float | None = None
+    direct_recovery_semantic_max_common_support: float | None = None
+    direct_recovery_semantic_best_barriers: np.ndarray | None = None
+    direct_recovery_semantic_limiting_constraint: int | None = None
     direct_recovery_rank: float | None = None
     direct_recovery_delta: float | None = None
     direct_recovery_delta_std: float | None = None
@@ -207,6 +216,18 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
                 f"schema={feature_schema}; v48.63 requires quantifier common-witness schema="
                 f"{DIRECT_COMMON_RECOVERY_WITNESS_FEATURE_SCHEMA}. Rerun v48.63 training."
             )
+    semantic_witness_enabled = bool(ckpt.get(
+        "direct_recovery_absolute_semantic_witness_correction",
+        model_cfg.get("direct_recovery_absolute_semantic_witness_correction", False),
+    ))
+    if semantic_witness_enabled:
+        feature_schema = int(ckpt.get("direct_recovery_absolute_semantic_witness_feature_schema", 0) or 0)
+        if feature_schema != DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA:
+            raise RuntimeError(
+                "legacy/unknown OC-SARW checkpoint feature semantics: "
+                f"schema={feature_schema}; v48.64 requires semantic-witness schema="
+                f"{DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA}. Rerun v48.64 training."
+            )
     encoder_type = str(ckpt.get("encoder_type", model_cfg.get("encoder_type", "mlp")))
     feature_layout = ckpt.get("feature_layout", None)
     model = OCRAPModel(
@@ -359,6 +380,18 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         direct_recovery_absolute_quantifier_witness_correction=bool(ckpt.get(
             "direct_recovery_absolute_quantifier_witness_correction",
             model_cfg.get("direct_recovery_absolute_quantifier_witness_correction", False),
+        )),
+        direct_recovery_absolute_semantic_witness_correction=bool(ckpt.get(
+            "direct_recovery_absolute_semantic_witness_correction",
+            model_cfg.get("direct_recovery_absolute_semantic_witness_correction", False),
+        )),
+        direct_recovery_semantic_witness_active_set_alignment=bool(ckpt.get(
+            "direct_recovery_semantic_witness_active_set_alignment",
+            model_cfg.get("direct_recovery_semantic_witness_active_set_alignment", True),
+        )),
+        direct_recovery_semantic_witness_path_stop_alignment=bool(ckpt.get(
+            "direct_recovery_semantic_witness_path_stop_alignment",
+            model_cfg.get("direct_recovery_semantic_witness_path_stop_alignment", True),
         )),
         direct_recovery_evidence_native_certificate_preservation=bool(ckpt.get(
             "direct_recovery_evidence_native_certificate_preservation",
@@ -608,6 +641,15 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_absolute_quantifier_witness_correction"] = bool(
         model.direct_recovery_absolute_quantifier_witness_correction
     )
+    cfg["model"]["direct_recovery_absolute_semantic_witness_correction"] = bool(
+        model.direct_recovery_absolute_semantic_witness_correction
+    )
+    cfg["model"]["direct_recovery_semantic_witness_active_set_alignment"] = bool(
+        model.direct_recovery_semantic_witness_active_set_alignment
+    )
+    cfg["model"]["direct_recovery_semantic_witness_path_stop_alignment"] = bool(
+        model.direct_recovery_semantic_witness_path_stop_alignment
+    )
     cfg["model"]["direct_recovery_evidence_native_certificate_preservation"] = bool(
         model.direct_recovery_evidence_native_certificate_preservation
     )
@@ -827,6 +869,18 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_absolute_quantifier_witness_correction",
             model_cfg.get("direct_recovery_absolute_quantifier_witness_correction", False),
         )),
+        "direct_recovery_absolute_semantic_witness_correction": bool(ckpt.get(
+            "direct_recovery_absolute_semantic_witness_correction",
+            model_cfg.get("direct_recovery_absolute_semantic_witness_correction", False),
+        )),
+        "direct_recovery_semantic_witness_active_set_alignment": bool(ckpt.get(
+            "direct_recovery_semantic_witness_active_set_alignment",
+            model_cfg.get("direct_recovery_semantic_witness_active_set_alignment", True),
+        )),
+        "direct_recovery_semantic_witness_path_stop_alignment": bool(ckpt.get(
+            "direct_recovery_semantic_witness_path_stop_alignment",
+            model_cfg.get("direct_recovery_semantic_witness_path_stop_alignment", True),
+        )),
     }
     actual_contract = {
         "direct_recovery_evidence_calibrator_context": bool(model.direct_recovery_evidence_calibrator_context),
@@ -869,6 +923,15 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         ),
         "direct_recovery_absolute_quantifier_witness_correction": bool(
             model.direct_recovery_absolute_quantifier_witness_correction
+        ),
+        "direct_recovery_absolute_semantic_witness_correction": bool(
+            model.direct_recovery_absolute_semantic_witness_correction
+        ),
+        "direct_recovery_semantic_witness_active_set_alignment": bool(
+            model.direct_recovery_semantic_witness_active_set_alignment
+        ),
+        "direct_recovery_semantic_witness_path_stop_alignment": bool(
+            model.direct_recovery_semantic_witness_path_stop_alignment
         ),
     }
     if expected_contract != actual_contract:
@@ -973,11 +1036,19 @@ def predict_samples(
                 d, bundle.cfg, num_options=bundle.model.num_options
             ) for d in ds
         ], axis=0)).float().to(bundle.device)
+    semantic_witness_features = None
+    if bool(getattr(bundle.model, "direct_recovery_absolute_semantic_witness_correction", False)):
+        semantic_witness_features = torch.from_numpy(np.stack([
+            direct_semantic_recovery_witness_features_from_sample(
+                d, bundle.cfg, num_options=bundle.model.num_options
+            ) for d in ds
+        ], axis=0)).float().to(bundle.device)
     out = bundle.model(
         xs, option_features, bucket_id=bucket_ids, group_index=group_index, is_nominal=is_nominal,
         absolute_physical_headroom_features=cphr_features,
         absolute_executable_witness_features=erwf_features,
         absolute_common_witness_features=common_witness_features,
+        absolute_semantic_witness_features=semantic_witness_features,
         root_valid=root_valid, option_valid=option_valid,
     )
     p = torch.softmax(out["root_logits"].masked_fill(~root_valid, -1.0e4), dim=-1)
@@ -1018,6 +1089,12 @@ def predict_samples(
     direct_qw_failure_np = None
     direct_qw_positive_count_np = None
     direct_qw_max_support_np = None
+    direct_sw_best_np = None
+    direct_sw_failure_np = None
+    direct_sw_positive_count_np = None
+    direct_sw_max_support_np = None
+    direct_sw_best_barriers_np = None
+    direct_sw_limiting_constraint_np = None
     direct_rank_np = None
     direct_delta_np = None
     direct_delta_std_np = None
@@ -1044,6 +1121,13 @@ def predict_samples(
             direct_qw_failure_np = out["direct_recovery_absolute_quantifier_universal_failure"].detach().cpu().numpy().astype(np.float32)
             direct_qw_positive_count_np = out["direct_recovery_absolute_quantifier_positive_option_count"].detach().cpu().numpy().astype(np.float32)
             direct_qw_max_support_np = out["direct_recovery_absolute_quantifier_max_common_support"].detach().cpu().numpy().astype(np.float32)
+        if "direct_recovery_absolute_semantic_best_common_viability" in out:
+            direct_sw_best_np = out["direct_recovery_absolute_semantic_best_common_viability"].detach().cpu().numpy().astype(np.float32)
+            direct_sw_failure_np = out["direct_recovery_absolute_semantic_universal_failure"].detach().cpu().numpy().astype(np.float32)
+            direct_sw_positive_count_np = out["direct_recovery_absolute_semantic_positive_option_count"].detach().cpu().numpy().astype(np.float32)
+            direct_sw_max_support_np = out["direct_recovery_absolute_semantic_max_common_support"].detach().cpu().numpy().astype(np.float32)
+            direct_sw_best_barriers_np = out["direct_recovery_absolute_semantic_best_barriers"].detach().cpu().numpy().astype(np.float32)
+            direct_sw_limiting_constraint_np = out["direct_recovery_absolute_semantic_limiting_constraint"].detach().cpu().numpy().astype(np.int64)
         if "direct_recovery_rank_logit" in out:
             direct_rank_np = out["direct_recovery_rank_logit"].detach().cpu().numpy().astype(np.float32)
         if "direct_recovery_delta_mean" in out:
@@ -1084,6 +1168,12 @@ def predict_samples(
                 direct_recovery_quantifier_universal_failure=(None if direct_qw_failure_np is None else float(direct_qw_failure_np[i])),
                 direct_recovery_quantifier_positive_option_count=(None if direct_qw_positive_count_np is None else float(direct_qw_positive_count_np[i])),
                 direct_recovery_quantifier_max_common_support=(None if direct_qw_max_support_np is None else float(direct_qw_max_support_np[i])),
+                direct_recovery_semantic_best_common_viability=(None if direct_sw_best_np is None else float(direct_sw_best_np[i])),
+                direct_recovery_semantic_universal_failure=(None if direct_sw_failure_np is None else float(direct_sw_failure_np[i])),
+                direct_recovery_semantic_positive_option_count=(None if direct_sw_positive_count_np is None else float(direct_sw_positive_count_np[i])),
+                direct_recovery_semantic_max_common_support=(None if direct_sw_max_support_np is None else float(direct_sw_max_support_np[i])),
+                direct_recovery_semantic_best_barriers=(None if direct_sw_best_barriers_np is None else direct_sw_best_barriers_np[i].copy()),
+                direct_recovery_semantic_limiting_constraint=(None if direct_sw_limiting_constraint_np is None else int(direct_sw_limiting_constraint_np[i])),
                 direct_recovery_rank=(None if direct_rank_np is None else float(direct_rank_np[i])),
                 direct_recovery_delta=(None if direct_delta_np is None else float(direct_delta_np[i])),
                 direct_recovery_delta_std=(None if direct_delta_std_np is None else float(direct_delta_std_np[i])),
@@ -1145,11 +1235,19 @@ def predict_sample(d: dict[str, Any], bundle: ModelBundle | None, cfg: dict | No
                 d, bundle.cfg, num_options=bundle.model.num_options
             )
         ).float().unsqueeze(0).to(bundle.device)
+    semantic_witness_features = None
+    if bool(getattr(bundle.model, "direct_recovery_absolute_semantic_witness_correction", False)):
+        semantic_witness_features = torch.from_numpy(
+            direct_semantic_recovery_witness_features_from_sample(
+                d, bundle.cfg, num_options=bundle.model.num_options
+            )
+        ).float().unsqueeze(0).to(bundle.device)
     out = bundle.model(
         x, option_features, bucket_id=bucket_id, group_index=singleton_group, is_nominal=singleton_nominal,
         absolute_physical_headroom_features=cphr_features,
         absolute_executable_witness_features=erwf_features,
         absolute_common_witness_features=common_witness_features,
+        absolute_semantic_witness_features=semantic_witness_features,
         root_valid=root_valid, option_valid=option_valid,
     )
     p = torch.softmax(out["root_logits"].masked_fill(~root_valid, -1.0e4), dim=-1)
@@ -1185,6 +1283,12 @@ def predict_sample(d: dict[str, Any], bundle: ModelBundle | None, cfg: dict | No
         direct_recovery_quantifier_universal_failure=(None if "direct_recovery_absolute_quantifier_universal_failure" not in out else float(out["direct_recovery_absolute_quantifier_universal_failure"].squeeze(0).detach().cpu().item())),
         direct_recovery_quantifier_positive_option_count=(None if "direct_recovery_absolute_quantifier_positive_option_count" not in out else float(out["direct_recovery_absolute_quantifier_positive_option_count"].squeeze(0).detach().cpu().item())),
         direct_recovery_quantifier_max_common_support=(None if "direct_recovery_absolute_quantifier_max_common_support" not in out else float(out["direct_recovery_absolute_quantifier_max_common_support"].squeeze(0).detach().cpu().item())),
+        direct_recovery_semantic_best_common_viability=(None if "direct_recovery_absolute_semantic_best_common_viability" not in out else float(out["direct_recovery_absolute_semantic_best_common_viability"].squeeze(0).detach().cpu().item())),
+        direct_recovery_semantic_universal_failure=(None if "direct_recovery_absolute_semantic_universal_failure" not in out else float(out["direct_recovery_absolute_semantic_universal_failure"].squeeze(0).detach().cpu().item())),
+        direct_recovery_semantic_positive_option_count=(None if "direct_recovery_absolute_semantic_positive_option_count" not in out else float(out["direct_recovery_absolute_semantic_positive_option_count"].squeeze(0).detach().cpu().item())),
+        direct_recovery_semantic_max_common_support=(None if "direct_recovery_absolute_semantic_max_common_support" not in out else float(out["direct_recovery_absolute_semantic_max_common_support"].squeeze(0).detach().cpu().item())),
+        direct_recovery_semantic_best_barriers=(None if "direct_recovery_absolute_semantic_best_barriers" not in out else out["direct_recovery_absolute_semantic_best_barriers"].squeeze(0).detach().cpu().numpy().astype(np.float32)),
+        direct_recovery_semantic_limiting_constraint=(None if "direct_recovery_absolute_semantic_limiting_constraint" not in out else int(out["direct_recovery_absolute_semantic_limiting_constraint"].squeeze(0).detach().cpu().item())),
         direct_recovery_rank=(None if "direct_recovery_rank_logit" not in out else float(out["direct_recovery_rank_logit"].squeeze(0).detach().cpu().item())),
         direct_recovery_delta=(None if "direct_recovery_delta_mean" not in out else float(out["direct_recovery_delta_mean"].squeeze(0).detach().cpu().item())),
         direct_recovery_delta_std=(None if "direct_recovery_delta_logvar" not in out else float(torch.exp(0.5 * out["direct_recovery_delta_logvar"]).squeeze(0).detach().cpu().item())),

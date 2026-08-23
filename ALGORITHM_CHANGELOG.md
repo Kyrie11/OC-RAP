@@ -1,3 +1,102 @@
+## v48.64 — OC-SARW: Observation-Consistent Semantics-Aligned Recovery Witness (2026-08-23)
+
+**Status entering this version.** The uploaded v48.63 OC-QARW run is engineering-valid and attribution-ready (`v48.63.0-OC-QARW`): standalone comparison/audit/reference hashes match the pipeline sentinel; reference reuse remains scene-disjoint and exact-v48.56-A; balanced/precision Stage-I shared tensors are bitwise unchanged and only `direct_absolute_quantifier_witness_gain[2]` is added; fixed top-5, fixed 0.5 RIFA order, `test_roots_read=false`, focused tests and post-v48.46 regression all pass. The v48.63 RC20 is therefore a scientific STOP, not an engineering failure.
+
+### Authoritative v48.63 result: quantifier alignment is not the causal bottleneck
+
+V48.63 changed only v48.62's option-set logic from per-option negative veto to `exists-success / forall-failure`, while holding the 10-D physical field and common-option support fixed. It **does not restore witness recall and is operationally almost identical to v48.62**:
+
+- preregistered source gate: STOP;
+- H-B AUC remains negative in 6/8 balanced/precision x dev/certificate x Near/Contact cells: certificate Contact about `-0.0088`, certificate Near about `-0.031`, dev Near about `-0.0436`; only dev Contact is positive (`+0.0063~+0.0065`);
+- H-G AUC is exactly 0 in six cells and about `-5.8e-7` in the two certificate-Contact cells;
+- harmful / teacher-infeasible pass stays controlled at about `0.06~0.10`, so quantifier alignment does **not** relapse to v48.61-F's permissive `~0.41~0.57` false-pass family;
+- but safe-positive pass is unchanged from G in all eight cells: 0 in Near/dev-Contact and only `0.0323` in certificate-Contact.
+
+Thus the v48.62 diagnosis "per-option failure creates excessive veto" was logically correct but **not causally dominant**. Removing that veto cannot help if the positive physical witness itself is absent.
+
+### Quantifier-coverage diagnostic: the bottleneck is physical-witness fidelity, not common-option support
+
+V48.63's new diagnostic-only fields expose the decisive mechanism:
+
+- certificate-Near safe-positive `any_positive_common_option_fraction = 0` in both variants, with `max_common_support_mean ~= 0.95`;
+- dev-Near safe-positive `any_positive_common_option_fraction = 0`, with `max_common_support_mean ~= 0.92`;
+- certificate/dev Contact safe-positive positive-common-option coverage is only `~0.161`, while common support remains high (`~0.81~0.84`);
+- harmful rows often have **more** positive common options than safe-positive rows (Near about `0.19~0.26`, Contact about `0.19~0.29`).
+
+Safe-positive teacher labels remain on the nonnegative `R_dep*` side, and teacher construction evaluates the same stored `recovery_modes/recovery_params` with the same deterministic `rollout_recovery_controller`. This means the evidence does **not** show that a *new option identity* is required. It does **not**, however, prove that the raw observable physical field already contains a positive option: teacher margins use future-dependent active masks and structural post-processing/floors, so the present gap may be teacher-to-observation margin identifiability rather than option-set coverage. Recovery-option library expansion is therefore **not authorized yet**; the next intervention must first test whether deployable constraint semantics can recover the missing sign without adding options or copying privileged teacher-future information.
+
+The dominant absolute-source bottleneck is tightened to:
+
+> **observation-only active-constraint recovery-margin fidelity:** identify the correct active physical constraints and their path-native margins from the current observation so a teacher-recoverable common option is not assigned negative observable viability.
+
+### Concrete v48.63 proxy/teacher semantic mismatch
+
+Code audit isolates two non-privileged semantic mismatches that can directly create false-negative witnesses while preserving v48.62 selectivity:
+
+1. **Stability active-set mismatch.** The v48.62/v48.63 source always places stability inside the non-compensatory minimum. The structural teacher activates stability only when contact/post-contact stabilization semantics make it relevant. In stable Near candidates this turns an otherwise irrelevant continuation-yaw coordinate into a hard veto.
+2. **Stopping-coordinate mismatch.** The source uses terminal radial clearance minus stopping distance. The structural stopping constraint is a path-capacity question: available stopping distance minus required stopping distance, and it is active only for stop/brake_lane/yield_rejoin/pull_over semantics. Radial terminal clearance is not the same physical quantity and can be near zero even when the executable path has ample stopping capacity.
+
+These mismatches are especially consistent with Near safe-positive rows having high common support but best common viability only slightly below zero. Missing route/harm/secondary constraints can create false positives, but they do not explain the observed safe-positive collapse and are therefore not added in this intervention.
+
+### V48.64 intervention: OC-SARW
+
+V48.64 keeps **all** v48.63 structure fixed: candidate x recovery-option deterministic continuation, current-observation CV agent prediction, 10-D finite-time clearance/stability field, observation-aliased same-option common support, non-compensatory barrier, and `exists-success / forall-failure` quantifier logic. It adds two deterministic observable semantic coordinates and no learned capacity beyond the same two shared gains.
+
+#### 1. Executable path-capacity stopping reserve
+
+For each option rollout, accumulate path arc length and find the first **predicted physical collision** (`signed_clearance <= 0`) under the same current-observation CV agent forecast. The available stopping path is the arc length to that conflict; if no conflict is predicted, use the public `default_available_distance_m` cap. Required stopping distance uses the option-native first recovery parameter and the recovery-start speed, matching the structural stopping-demand form. This coordinate is activated only for stop/brake_lane/yield_rejoin/pull_over options.
+
+#### 2. Observable stability active set
+
+Stability enters the hard minimum only if observable semantics justify it: the executable prefix has already entered contact/overlap, the prefix is dynamically unstable, or the recovery option is explicitly `post_contact_stabilize`. No Safe/Near/Contact regime label is read. When inactive, stability contributes the neutral hard-margin value rather than vetoing a candidate.
+
+The v48.63 finite-time recovery / no-secondary-deterioration stability barrier is unchanged whenever stability is active.
+
+#### 3. Frozen common witness and quantifier logic
+
+For option `l`, v48.64 still computes frozen `c_l` (same-option common support) and a non-compensatory physical viability `v_l`. Positive evidence remains
+
+`alpha * c_l * relu(v_l)`.
+
+Universal negative evidence remains
+
+`-beta * relu(-max_l(c_l * v_l))`.
+
+Only `direct_absolute_semantic_witness_gain[2]` trains, shared across roots/options/Near/Contact and bounded `[0,2]`; zero gain is execution-exact native B.
+
+### Pre-registered 2x2 factor experiment
+
+V48.64 is intentionally not one opaque Main arm:
+
+- **H**: frozen v48.63 OC-QARW baseline;
+- **I_ACTIVESET**: stability active-set alignment only;
+- **J_PATHSTOP**: path-capacity stopping semantics only;
+- **K/Main OC-SARW**: both semantic repairs.
+
+This identifies whether safe-positive witness coverage is restored by active-set semantics, stopping semantics, or their interaction. Every new arm trains the same two shared gains from the same v48.56-A reference; Stage-I/common support/quantifier logic stay frozen.
+
+Primary GO requires all of:
+
+1. K-B source AUC improves in all 8 Near/Contact cells and by >= `+0.01` in at least 6/8;
+2. teacher-infeasible/harmful pass remains <= `0.25` and at least `0.10` below v48.61-F in every cell;
+3. safe-positive pass improves over H in all 8 cells and by >= `+0.15` in at least 6/8;
+4. safe-positive positive-common-option coverage improves over H in all 8 cells and by >= `+0.15` in at least 6/8;
+5. I/J/K factor/state provenance is valid, only two shared gains train, fixed top-5 / 0.5 threshold / RIFA order remain unchanged;
+6. only after source GO may K-A deployment propagation and paired Safe nominal-utility non-interference be interpreted.
+
+### Diagnostic-only limiting-constraint decomposition
+
+Proposal rows additionally record the K/I/J best supported option's four hard barriers (`clearance`, `stopping`, `control`, `stability`) and limiting-constraint ID, plus positive-option coverage/common support. These diagnostics do not enter training or selection. If v48.64 STOPs, they determine the next representation layer:
+
+- high common support + low positive coverage + clearance-dominated safe-positive failures -> observation-uncertainty / dynamic-occupancy reachability is next;
+- high common support + stop/stability dominated failures -> constraint semantics remain incomplete;
+- low common support -> root/common-option representation is next;
+- recovery-option taxonomy/library expansion is authorized **only** if a separate teacher-option-support audit demonstrates that the existing option set lacks the teacher witness. The current v48.63 evidence does not show that.
+
+### Explicitly forbidden next iterations
+
+Continue to forbid: threshold/LR/horizon/feature-weight grids; proposal expansion/densification; option-specific free bias; generic AFE classifiers; candidate-only CPHR; compensatory ERWF sums; v48.62 per-option negative veto; tuning v48.63 quantifier gains as a new search axis; Safe/Near/Contact router/policy/threshold/budget; broad root/margin/encoder retraining; privileged teacher-future/component-margin distillation; and relative centering/ranking changes before absolute-source GO. Also forbid recovery-option library expansion before a teacher-option-coverage audit demonstrates actual missing support.
+
 ## v48.63 — OC-QARW: Observation-Consistent Quantifier-Aligned Recovery Witness (2026-08-22)
 
 **Status entering this version.** The uploaded v48.62 OC-CWRF run is engineering-valid and attribution-ready (`v48.62.0-OC-CWRF`): reference reuse, scene disjointness, Stage-I bitwise isolation, balanced/precision variant isolation, fixed top-5 / fixed 0.5 RIFA policy order, artifact SHA256, and `test_roots_read=false` all pass. The v48.62 RC20 is a scientific gate failure, not an engineering failure.

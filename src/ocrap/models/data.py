@@ -545,6 +545,7 @@ def _decode_recovery_mode(value: Any) -> str:
 def direct_executable_recovery_witness_features_from_sample(
     d: dict[str, Any], cfg: dict | None = None, *, num_options: int | None = None,
     include_recovery_stability_tail: bool = False,
+    include_semantic_alignment_tail: bool = False,
 ) -> np.ndarray:
     """Return the v48.61 option-resolved executable recovery witness field.
 
@@ -667,6 +668,21 @@ def direct_executable_recovery_witness_features_from_sample(
     else:
         prefix_terminal_clear = 40.0
 
+    # v48.64 observable active-set evidence.  This is deliberately derived
+    # from the executable candidate prefix and current observation only; no
+    # regime label or teacher-future contact flag is exposed.  A stability
+    # constraint is considered physically active when the prefix itself has
+    # already entered contact/near-overlap or is dynamically unstable.
+    if agents:
+        prefix_times = (np.arange(states.shape[0], dtype=np.float64) + 1.0) * dt
+        prefix_agent_future = rel0[None, :, :] + prefix_times[:, None, None] * vel[None, :, :]
+        prefix_xy_rel = states[:, :2].astype(np.float64) - ego_xy[None, :]
+        prefix_delta = prefix_xy_rel[:, None, :] - prefix_agent_future
+        prefix_signed_clearance = np.linalg.norm(prefix_delta, axis=-1) - ego_rad - arad[None, :]
+        prefix_min_clear = float(np.min(prefix_signed_clearance))
+    else:
+        prefix_min_clear = 40.0
+
     scales = cfg.get("margin_scales", {}) if isinstance(cfg.get("margin_scales", {}), dict) else {}
     distance_scale = max(float(scales.get("distance", 2.0)), 1.0e-6)
     stop_scale = max(float(scales.get("stop", 5.0)), 1.0e-6)
@@ -687,7 +703,7 @@ def direct_executable_recovery_witness_features_from_sample(
     yaw_rate_max = float(cfg.get("yaw_rate_max_rps", 0.6))
     stop_decel = max(abs(a_min), 1.0e-3)
 
-    feature_dim = 10 if include_recovery_stability_tail else DIRECT_EXECUTABLE_RECOVERY_WITNESS_FEATURE_DIM
+    feature_dim = (12 if include_semantic_alignment_tail else (10 if include_recovery_stability_tail else DIRECT_EXECUTABLE_RECOVERY_WITNESS_FEATURE_DIM))
     field = np.zeros((L, feature_dim), dtype=np.float32)
     for l in range(raw_L):
         valid_l = bool(option_valid_raw[l]) if l < option_valid_raw.size else True
@@ -767,6 +783,35 @@ def direct_executable_recovery_witness_features_from_sample(
                 h_terminal_stability, h_stability_gain,
                 h_clearance_floor_gain, h_stability_floor_gain,
             ])
+        if include_semantic_alignment_tail:
+            # Constraint-native stopping semantics: stopping reserve is path
+            # capacity, not radial terminal clearance.  We use the executable
+            # recovery path and the same observable-agent CV prediction already
+            # used by the continuation witness.  If no predicted conflict occurs,
+            # the public default available distance supplies the open-path cap.
+            if agents:
+                step_delta = np.diff(rec_states[:, :2], axis=0)
+                step_len = np.linalg.norm(step_delta, axis=-1)
+                path_s = np.concatenate([[0.0], np.cumsum(step_len)])
+                min_clear_t = np.min(signed_clearance, axis=1)
+                conflict = np.flatnonzero(min_clear_t <= 0.0)
+                if conflict.size:
+                    s_available = float(path_s[int(conflict[0])])
+                else:
+                    s_available = float(cfg.get("default_available_distance_m", 60.0))
+            else:
+                s_available = float(cfg.get("default_available_distance_m", 60.0))
+            # Match the structural teacher's option-native stopping demand:
+            # the first option parameter controls the stopping/braking scale.
+            # This is only activated later for stopping-semantic options.
+            option_decel = max(2.0 * abs(float(option.params[0])) if option.params.size else 4.0, 1.0)
+            teacher_style_stop_required = float(rec_states[0, 6] ** 2 / option_decel)
+            h_path_stop = np.tanh((s_available - teacher_style_stop_required) / stop_scale)
+            prefix_unstable = float(np.max(np.abs(states[:, 5]))) > yaw_rate_max
+            stability_active = bool(
+                mode == "post_contact_stabilize" or prefix_min_clear <= 0.0 or prefix_unstable
+            )
+            values.extend([h_path_stop, 1.0 if stability_active else 0.0])
         field[l] = np.asarray(values, dtype=np.float32)
 
     if field.shape != (L, feature_dim) or not np.isfinite(field).all():
@@ -808,6 +853,36 @@ def direct_common_recovery_witness_features_from_sample(
     )
     if out.ndim != 2 or out.shape[1] != DIRECT_COMMON_RECOVERY_WITNESS_FEATURE_DIM:
         raise ValueError(f"invalid OC-CWRF feature field shape: {out.shape}")
+    return out
+
+
+# v48.64 OC-SARW (Observation-Consistent Semantics-Aligned Recovery Witness).
+# The first ten coordinates are execution-identical to v48.62/v48.63.  The
+# final two coordinates repair the two constraint-semantics mismatches exposed
+# by the v48.63 quantifier-coverage diagnostic: path-capacity stopping reserve
+# and an observable stability active-set indicator.
+DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA = 1
+DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_DIM = 12
+
+
+def direct_semantic_recovery_witness_features_from_sample(
+    d: dict[str, Any], cfg: dict | None = None, *, num_options: int | None = None
+) -> np.ndarray:
+    """Return the v48.64 semantics-aligned option-resolved witness field.
+
+    Coordinates 0--9 are exactly OC-CWRF/OC-QARW.  Coordinate 10 is a
+    path-capacity stopping reserve computed from the executable continuation
+    and current observable agents.  Coordinate 11 is an observable active-set
+    indicator for stability (prefix contact/instability or explicit
+    post-contact-stabilize semantics).  Neither coordinate reads a regime id,
+    teacher future/component margin, held-out label, or latent-root identity.
+    """
+    out = direct_executable_recovery_witness_features_from_sample(
+        d, cfg, num_options=num_options, include_recovery_stability_tail=True,
+        include_semantic_alignment_tail=True,
+    )
+    if out.ndim != 2 or out.shape[1] != DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_DIM:
+        raise ValueError(f"invalid OC-SARW feature field shape: {out.shape}")
     return out
 
 
@@ -1100,7 +1175,7 @@ def _nominal_deviation_by_path(paths: list[Path]) -> list[float]:
     return out
 
 
-_PERSISTENT_TENSOR_CACHE_SCHEMA = 6
+_PERSISTENT_TENSOR_CACHE_SCHEMA = 7
 
 def _load_persistent_tensor_cache_payload(cache_path: Path) -> dict[str, Any] | None:
     """Load an immutable decoded-tensor cache with mmap when supported.
@@ -1166,6 +1241,9 @@ def _persistent_tensor_cache_key(
         model_cfg.get("direct_recovery_absolute_common_witness_correction", False)
         or model_cfg.get("direct_recovery_absolute_quantifier_witness_correction", False)
     )
+    semantic_witness_features_enabled = bool(
+        model_cfg.get("direct_recovery_absolute_semantic_witness_correction", False)
+    )
     payload = {
         "schema": _PERSISTENT_TENSOR_CACHE_SCHEMA,
         "manifests": _dataset_manifest_fingerprint(paths),
@@ -1194,6 +1272,10 @@ def _persistent_tensor_cache_key(
         "common_witness_feature_schema": (DIRECT_COMMON_RECOVERY_WITNESS_FEATURE_SCHEMA if common_witness_features_enabled else 0),
         "common_witness_recovery_horizon_s": (float(cfg.get("recovery_horizon_s", 4.0)) if common_witness_features_enabled else 0.0),
         "common_witness_sample_rate_hz": (float(cfg.get("sample_rate_hz", 10.0)) if common_witness_features_enabled else 0.0),
+        "semantic_witness_option_resolved_features": semantic_witness_features_enabled,
+        "semantic_witness_feature_schema": (DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA if semantic_witness_features_enabled else 0),
+        "semantic_witness_recovery_horizon_s": (float(cfg.get("recovery_horizon_s", 4.0)) if semantic_witness_features_enabled else 0.0),
+        "semantic_witness_sample_rate_hz": (float(cfg.get("sample_rate_hz", 10.0)) if semantic_witness_features_enabled else 0.0),
         "npz_keys": sorted(MODEL_SAMPLE_NPZ_KEYS),
     }
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
@@ -1370,6 +1452,12 @@ class OCRAPSampleDataset(Dataset):
         ):
             out["direct_absolute_common_witness_features"] = torch.from_numpy(
                 direct_common_recovery_witness_features_from_sample(
+                    d, self.cfg, num_options=self.num_options
+                )
+            )
+        if bool(model_cfg.get("direct_recovery_absolute_semantic_witness_correction", False)):
+            out["direct_absolute_semantic_witness_features"] = torch.from_numpy(
+                direct_semantic_recovery_witness_features_from_sample(
                     d, self.cfg, num_options=self.num_options
                 )
             )

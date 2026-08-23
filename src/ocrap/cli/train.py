@@ -1609,6 +1609,7 @@ def _epoch(
                     absolute_physical_headroom_features=batch.get("direct_absolute_physical_headroom_features"),
                     absolute_executable_witness_features=batch.get("direct_absolute_executable_witness_features"),
                     absolute_common_witness_features=batch.get("direct_absolute_common_witness_features"),
+                    absolute_semantic_witness_features=batch.get("direct_absolute_semantic_witness_features"),
                     root_valid=batch.get("root_valid"), option_valid=batch.get("option_valid"),
                 )
             root_valid = batch["root_valid"].bool()
@@ -1662,6 +1663,10 @@ def _epoch(
                 if quantifier_witness is not None:
                     with torch.no_grad():
                         quantifier_witness.clamp_(0.0, 2.0)
+                semantic_witness = getattr(model, "direct_absolute_semantic_witness_gain", None)
+                if semantic_witness is not None:
+                    with torch.no_grad():
+                        semantic_witness.clamp_(0.0, 2.0)
             bsz = int(batch["x"].shape[0])
             n += bsz
             vals = {
@@ -1689,6 +1694,7 @@ def _epoch(
             absolute_physical_headroom_features=batch.get("direct_absolute_physical_headroom_features"),
             absolute_executable_witness_features=batch.get("direct_absolute_executable_witness_features"),
             absolute_common_witness_features=batch.get("direct_absolute_common_witness_features"),
+            absolute_semantic_witness_features=batch.get("direct_absolute_semantic_witness_features"),
             root_valid=batch.get("root_valid"), option_valid=batch.get("option_valid"),
             witness_only=bool(witness_fast_mode),
             witness_observation_only=(witness_fast_mode == "decision_obs"),
@@ -1833,6 +1839,10 @@ def _epoch(
                 if quantifier_witness is not None:
                     with torch.no_grad():
                         quantifier_witness.clamp_(0.0, 2.0)
+                semantic_witness = getattr(model, "direct_absolute_semantic_witness_gain", None)
+                if semantic_witness is not None:
+                    with torch.no_grad():
+                        semantic_witness.clamp_(0.0, 2.0)
             bsz = int(batch["x"].shape[0]); n += bsz
             vals = {
                 "loss": float(total.item()),
@@ -2318,6 +2328,10 @@ def _epoch(
             if quantifier_witness is not None:
                 with torch.no_grad():
                     quantifier_witness.clamp_(0.0, 2.0)
+            semantic_witness = getattr(model, "direct_absolute_semantic_witness_gain", None)
+            if semantic_witness is not None:
+                with torch.no_grad():
+                    semantic_witness.clamp_(0.0, 2.0)
         bsz = int(batch["x"].shape[0])
         n += bsz
         vals = {
@@ -3123,6 +3137,15 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_absolute_quantifier_witness_correction=bool(
             model_cfg.get("direct_recovery_absolute_quantifier_witness_correction", False)
         ),
+        direct_recovery_absolute_semantic_witness_correction=bool(
+            model_cfg.get("direct_recovery_absolute_semantic_witness_correction", False)
+        ),
+        direct_recovery_semantic_witness_active_set_alignment=bool(
+            model_cfg.get("direct_recovery_semantic_witness_active_set_alignment", True)
+        ),
+        direct_recovery_semantic_witness_path_stop_alignment=bool(
+            model_cfg.get("direct_recovery_semantic_witness_path_stop_alignment", True)
+        ),
         direct_recovery_evidence_native_certificate_preservation=bool(
             model_cfg.get("direct_recovery_evidence_native_certificate_preservation", False)
         ),
@@ -3656,6 +3679,22 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "direct_recovery_absolute_quantifier_witness_feature_source": (
                 "quantifier_aligned_common_finite_time_recovery_witness"
                 if bool(model_cfg.get("direct_recovery_absolute_quantifier_witness_correction", False)) else "disabled"
+            ),
+            "direct_recovery_absolute_semantic_witness_correction": bool(
+                model_cfg.get("direct_recovery_absolute_semantic_witness_correction", False)
+            ),
+            "direct_recovery_absolute_semantic_witness_feature_schema": (
+                1 if bool(model_cfg.get("direct_recovery_absolute_semantic_witness_correction", False)) else 0
+            ),
+            "direct_recovery_absolute_semantic_witness_feature_source": (
+                "semantics_aligned_common_executable_recovery_witness"
+                if bool(model_cfg.get("direct_recovery_absolute_semantic_witness_correction", False)) else "disabled"
+            ),
+            "direct_recovery_semantic_witness_active_set_alignment": bool(
+                model_cfg.get("direct_recovery_semantic_witness_active_set_alignment", True)
+            ),
+            "direct_recovery_semantic_witness_path_stop_alignment": bool(
+                model_cfg.get("direct_recovery_semantic_witness_path_stop_alignment", True)
             ),
             "direct_recovery_evidence_native_certificate_preservation": bool(
                 model_cfg.get("direct_recovery_evidence_native_certificate_preservation", False)

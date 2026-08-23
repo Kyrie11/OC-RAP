@@ -714,6 +714,30 @@ def main() -> int:
                 None if pred.direct_recovery_quantifier_max_common_support is None
                 else float(pred.direct_recovery_quantifier_max_common_support)
             )
+            row["semantic_best_common_viability"] = (
+                None if pred.direct_recovery_semantic_best_common_viability is None
+                else float(pred.direct_recovery_semantic_best_common_viability)
+            )
+            row["semantic_universal_failure"] = (
+                None if pred.direct_recovery_semantic_universal_failure is None
+                else float(pred.direct_recovery_semantic_universal_failure)
+            )
+            row["semantic_positive_option_count"] = (
+                None if pred.direct_recovery_semantic_positive_option_count is None
+                else float(pred.direct_recovery_semantic_positive_option_count)
+            )
+            row["semantic_max_common_support"] = (
+                None if pred.direct_recovery_semantic_max_common_support is None
+                else float(pred.direct_recovery_semantic_max_common_support)
+            )
+            row["semantic_best_barriers"] = (
+                None if pred.direct_recovery_semantic_best_barriers is None
+                else [float(x) for x in np.asarray(pred.direct_recovery_semantic_best_barriers).reshape(-1)]
+            )
+            row["semantic_limiting_constraint"] = (
+                None if pred.direct_recovery_semantic_limiting_constraint is None
+                else int(pred.direct_recovery_semantic_limiting_constraint)
+            )
             if args.risk_source in {"heads", "ordinal_evidence"} and (row["opp_logit"] is None or row["harm_logit"] is None):
                 raise ValueError("risk-source=heads/ordinal_evidence requires opportunity/harm outputs")
         if gi == 1 or gi % 200 == 0 or gi == len(raw):
@@ -838,6 +862,12 @@ def main() -> int:
                 "quantifier_universal_failure": r.get("quantifier_universal_failure"),
                 "quantifier_positive_option_count": r.get("quantifier_positive_option_count"),
                 "quantifier_max_common_support": r.get("quantifier_max_common_support"),
+                "semantic_best_common_viability": r.get("semantic_best_common_viability"),
+                "semantic_universal_failure": r.get("semantic_universal_failure"),
+                "semantic_positive_option_count": r.get("semantic_positive_option_count"),
+                "semantic_max_common_support": r.get("semantic_max_common_support"),
+                "semantic_best_barriers": r.get("semantic_best_barriers"),
+                "semantic_limiting_constraint": r.get("semantic_limiting_constraint"),
                 "predicted_component_harm": r.get("component_harm"),
                 "predicted_component_margins": r.get("component_margins"),
                 "predicted_native_pair_margins": native_pair_margins,
