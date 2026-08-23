@@ -22,7 +22,7 @@ def check_run(run:Path,active:bool,pathstop:bool,errors:list[str],hashes:dict):
   for k,v in req.items():
    if d.get(k)!=v:errors.append(f'{run.name}: factor {k}={d.get(k)!r} expected {v!r}')
  for v in ('balanced','precision'):
-  base=run/'candidates'/v;cal=base/'calibration';req=[base/'model_v48_trac_sr'/'best.pt',base/'train_summary.json',base/'V48_64_STAGE_I_STATE_ISOLATION.json',base/'POLICY_CONTRACT.env',cal/'METRIC_CALIBRATION_CONTRACT.json',cal/'dev_diagnostic_near_v48.json',cal/'dev_diagnostic_contact_v48.json',cal/'dev_diagnostic_near_v48.proposal_rows.jsonl',cal/'dev_diagnostic_contact_v48.proposal_rows.jsonl',cal/'direct_value_risk_near_v48.json',cal/'direct_value_risk_contact_v48.json',cal/'direct_value_risk_near_v48.proposal_rows.jsonl',cal/'direct_value_risk_contact_v48.proposal_rows.jsonl']
+  base=run/'candidates'/v;cal=base/'calibration';req=[base/'model_v48_trac_sr'/'best.pt',base/'model_v48_trac_sr'/'train_summary.json',base/'TRAINING_COMPLETE.json',base/'EVIDENCE_CORRECTION_COMPLETE.json',base/'V48_64_STAGE_I_STATE_ISOLATION.json',base/'POLICY_CONTRACT.env',cal/'METRIC_CALIBRATION_CONTRACT.json',cal/'dev_diagnostic_near_v48.json',cal/'dev_diagnostic_contact_v48.json',cal/'dev_diagnostic_near_v48.proposal_rows.jsonl',cal/'dev_diagnostic_contact_v48.proposal_rows.jsonl',cal/'direct_value_risk_near_v48.json',cal/'direct_value_risk_contact_v48.json',cal/'direct_value_risk_near_v48.proposal_rows.jsonl',cal/'direct_value_risk_contact_v48.proposal_rows.jsonl']
   miss=[str(p) for p in req if not p.is_file() or p.stat().st_size==0]
   if miss:errors.append(f'{run.name}/{v}: missing/empty {miss}')
   metric=cal/'METRIC_CALIBRATION_CONTRACT.json'
@@ -46,6 +46,6 @@ def main():
  check_run(a.active_run,True,False,errors,hashes);check_run(a.path_run,False,True,errors,hashes);check_run(a.main_run,True,True,errors,hashes)
  for p in (a.reference_contract,a.v63_complete,a.feasibility_audit,a.comparison):
   if p.is_file():hashes[str(p)]=sha(p)
- valid=not errors;doc={'schema':'ocrap-v48.64-sarw-pipeline-complete-v1','valid':valid,'attribution_ready':valid,'algorithm_version':'v48.64-DCP-DRFC-BCDE-RIFA-OC-SARW','engineering_version':'v48.64.0-OC-SARW','errors':errors,'artifact_sha256':hashes,'factorial_arms':{'I_ACTIVESET':str(a.active_run),'J_PATHSTOP':str(a.path_run),'K_Main_OCSARW':str(a.main_run)},'test_roots_read':False}
+ valid=not errors;doc={'schema':'ocrap-v48.64-sarw-pipeline-complete-v1','valid':valid,'attribution_ready':valid,'algorithm_version':'v48.64-DCP-DRFC-BCDE-RIFA-OC-SARW','engineering_version':'v48.64.1-OC-SARW-ENGFIX','errors':errors,'artifact_sha256':hashes,'factorial_arms':{'I_ACTIVESET':str(a.active_run),'J_PATHSTOP':str(a.path_run),'K_Main_OCSARW':str(a.main_run)},'test_roots_read':False}
  a.output.parent.mkdir(parents=True,exist_ok=True);a.output.write_text(json.dumps(doc,indent=2,sort_keys=True)+'\n');print(json.dumps({'event':'v48_64_sarw_pipeline_complete','valid':valid,'output':str(a.output)}));return 0 if valid else 30
 if __name__=='__main__':raise SystemExit(main())

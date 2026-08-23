@@ -165,3 +165,14 @@ def test_sarw_shell_plumbing_and_launcher_contract():
     for z in ('EVIDENCE_TRAINABLE_PREFIXES_OVERRIDE=direct_absolute_semantic_witness_gain','STRICT_INIT_ALLOWED_MISSING_PREFIXES=direct_absolute_semantic_witness_gain','ABSOLUTE_SEMANTIC_WITNESS_CORRECTION=true','SEMANTIC_WITNESS_ACTIVE_SET_ALIGNMENT="$active"','SEMANTIC_WITNESS_PATH_STOP_ALIGNMENT="$pathstop"','MAX_EVIDENCE_CALIBRATOR_PARAMS=2','PROPOSAL_TOP_K=5','ABSOLUTE_FEASIBILITY_THRESHOLD=0.5','I_ACTIVESET','J_PATHSTOP','K_Main_OCSARW'):
         assert z in launch
     assert 'EVIDENCE_CENTER' not in launch.upper() and 'PRED_ADV_CENTER' not in launch.upper()
+    # Engineering contract: train.py writes the summary under model_v48_trac_sr/.
+    # V48.64.0 accidentally checked candidates/<variant>/train_summary.json and
+    # stopped after I_ACTIVESET despite successful training.  Keep both runtime
+    # checkers pinned to the canonical producer path.
+    vi=(root/'tools/check_v48_64_variant_isolation.py').read_text()
+    pc=(root/'tools/check_v48_64_pipeline_complete.py').read_text()
+    for checker in (vi,pc):
+        assert "'model_v48_trac_sr'/'train_summary.json'" in checker
+        assert "base/'train_summary.json'" not in checker
+    assert 'TRAINING_COMPLETE.json' in vi and 'EVIDENCE_CORRECTION_COMPLETE.json' in vi
+    assert 'TRAINING_COMPLETE.json' in pc and 'EVIDENCE_CORRECTION_COMPLETE.json' in pc

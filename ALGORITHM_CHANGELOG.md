@@ -1,3 +1,19 @@
+## v48.64.1 — OC-SARW ENGINEERING HOTFIX: canonical train-summary / completion-contract path (2026-08-23)
+
+**Algorithm status:** unchanged from v48.64.0.  This is an engineering-only hotfix; OC-SARW features, active-set/path-stop semantics, two shared gains, losses, top-K=5, threshold=0.5, RIFA order, I/J/K factor definitions, data splits and output directories are unchanged.
+
+**Why the uploaded v48.64.0 result is not attribution-ready.**  Both I_ACTIVESET trainings completed normally (balanced and precision reached 21 completed epochs and emitted `TRAINING_COMPLETE.json`, `EVIDENCE_CORRECTION_COMPLETE.json`, `model_v48_trac_sr/best.pt` and `model_v48_trac_sr/train_summary.json`).  The new v48.64 checker nevertheless looked for the non-existent path `candidates/<variant>/train_summary.json`.  `check_v48_64_variant_isolation.py` therefore wrote `valid=false` immediately after I_ACTIVESET, and `set -Eeuo pipefail` stopped the launcher before J_PATHSTOP, K/Main, calibration, comparison and pipeline-complete artifacts.  The same wrong summary path also existed in `check_v48_64_pipeline_complete.py`, so a one-line first-stage fix alone would have produced a second false engineering failure at the end.
+
+**Fixes.**
+
+- Both v48.64 checkers now consume the canonical producer path `candidates/<variant>/model_v48_trac_sr/train_summary.json`.
+- Variant isolation now additionally requires `TRAINING_COMPLETE.json` and `EVIDENCE_CORRECTION_COMPLETE.json` and verifies their checkpoint paths/SHA256, epoch metadata, source checkpoint, exact two-parameter trainable prefix, no regime input and `test_roots_read=false`.
+- Final pipeline completeness requires the same two completion markers for every I/J/K x balanced/precision arm.
+- Calibration metadata is stamped `v48.64.1-OC-SARW-ENGFIX-*`; the final sentinel engineering version is `v48.64.1-OC-SARW-ENGFIX`.
+- Focused regression tests now fail if either checker regresses to the wrong non-canonical summary path.
+
+**Required action.**  Discard the uploaded partial v48.64.0 result for scientific attribution and rerun the **same v48.64 command**.  The launcher intentionally preserves the same output directories and removes/recreates I/J/K so the repaired run is clean.
+
 ## v48.64 — OC-SARW: Observation-Consistent Semantics-Aligned Recovery Witness (2026-08-23)
 
 **Status entering this version.** The uploaded v48.63 OC-QARW run is engineering-valid and attribution-ready (`v48.63.0-OC-QARW`): standalone comparison/audit/reference hashes match the pipeline sentinel; reference reuse remains scene-disjoint and exact-v48.56-A; balanced/precision Stage-I shared tensors are bitwise unchanged and only `direct_absolute_quantifier_witness_gain[2]` is added; fixed top-5, fixed 0.5 RIFA order, `test_roots_read=false`, focused tests and post-v48.46 regression all pass. The v48.63 RC20 is therefore a scientific STOP, not an engineering failure.
