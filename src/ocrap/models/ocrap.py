@@ -352,6 +352,7 @@ class OCRAPModel(nn.Module):
         direct_recovery_absolute_option_margin_correction: bool = False,
         direct_recovery_absolute_physical_headroom_correction: bool = False,
         direct_recovery_absolute_executable_witness_correction: bool = False,
+        direct_recovery_absolute_common_witness_correction: bool = False,
         direct_recovery_evidence_native_certificate_preservation: bool = False,
         direct_recovery_evidence_native_margin_complete_preservation: bool = False,
         direct_recovery_evidence_native_advantage_preservation: bool = False,
@@ -573,15 +574,22 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_absolute_executable_witness_correction = bool(
             direct_recovery_absolute_executable_witness_correction
         )
+        # v48.62 OC-CWRF: finite-time physical recovery barrier + observation-
+        # consistent common-option support.  This is one shared source mechanism,
+        # not a regime router or an option-specific free bias.
+        self.direct_recovery_absolute_common_witness_correction = bool(
+            direct_recovery_absolute_common_witness_correction
+        )
         absolute_source_count = sum([
             self.direct_recovery_absolute_feasibility_head,
             self.direct_recovery_absolute_option_margin_correction,
             self.direct_recovery_absolute_physical_headroom_correction,
             self.direct_recovery_absolute_executable_witness_correction,
+            self.direct_recovery_absolute_common_witness_correction,
         ])
         if absolute_source_count > 1:
             raise ValueError(
-                "AFE, ORFC, CPHR, and ERWF absolute-source corrections are mutually exclusive"
+                "AFE, ORFC, CPHR, ERWF, and OC-CWRF absolute-source corrections are mutually exclusive"
             )
         # v48.48 NCP: preserve paper-native OC-MERO DRS/deployability coordinates
         # at the final non-compensatory admission interface instead of asking a
@@ -1282,6 +1290,19 @@ class OCRAPModel(nn.Module):
                 raise ValueError("ERWF requires structured_transformer flat feature layout")
             self.direct_absolute_executable_witness_weight = nn.Parameter(
                 torch.zeros(6, dtype=torch.float32)
+            )
+
+        # v48.62 OC-CWRF learns only two global calibration gains.  All
+        # selectivity comes from a deterministic non-compensatory physical
+        # recovery barrier and frozen observation-consistent root commonality.
+        # gain[0] rescues a positive common witness; gain[1] vetoes a negative
+        # physical witness.  Both start at zero => execution-exact native B.
+        self.direct_absolute_common_witness_gain = None
+        if self.direct_recovery_absolute_common_witness_correction:
+            if self.encoder_type != "structured_transformer":
+                raise ValueError("OC-CWRF requires structured_transformer flat feature layout")
+            self.direct_absolute_common_witness_gain = nn.Parameter(
+                torch.zeros(2, dtype=torch.float32)
             )
 
         # v48.20 UNISON-BRIDGE: a single shared evidence model consumes both
@@ -2087,6 +2108,181 @@ class OCRAPModel(nn.Module):
         probability = native[:, 1].to(dtype=memory.dtype).clamp(1.0e-6, 1.0 - 1.0e-6)
         logit = torch.logit(probability)
         return logit, probability, features, weights
+
+    def _direct_absolute_common_witness_features(
+        self,
+        supplied_features: torch.Tensor | None,
+        *,
+        batch_size: int,
+        dtype: torch.dtype,
+        device: torch.device,
+    ) -> torch.Tensor:
+        """Validate the v48.62 OC-CWRF side channel [B,L,10]."""
+        if supplied_features is None:
+            raise RuntimeError(
+                "OC-CWRF features missing: v48.62 requires the option-resolved "
+                "finite-time recovery witness side-channel"
+            )
+        feat = supplied_features.to(device=device, dtype=dtype)
+        expected = (int(batch_size), int(self.num_options), 10)
+        if feat.ndim != 3 or tuple(feat.shape) != expected:
+            raise RuntimeError(
+                f"invalid OC-CWRF feature shape {tuple(feat.shape)}; expected {expected}"
+            )
+        if not bool(torch.isfinite(feat).all()):
+            raise RuntimeError("non-finite OC-CWRF feature value")
+        return feat.detach()
+
+    def _direct_common_witness_absolute_feasibility(
+        self,
+        memory: torch.Tensor,
+        x: torch.Tensor,
+        option_features: torch.Tensor | None,
+        common_witness_features: torch.Tensor | None,
+        group_index: torch.Tensor | None = None,
+        is_nominal: torch.Tensor | None = None,
+        root_valid: torch.Tensor | None = None,
+        option_valid: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor] | None:
+        """v48.62 OC-CWRF source: non-compensatory common recovery witness.
+
+        Two facts are required before an option receives positive rescue:
+        (1) its executable continuation establishes a finite-time physical
+            recovery barrier, and
+        (2) the *same option* remains a plausible recovery across observation-
+            equivalent latent roots.
+
+        Physical hard constraints are composed by min, not a compensatory sum.
+        Clearance/stability use ``max(invariant, finite-time recovery)`` so a
+        Contact state is not rejected merely because the initial point already
+        violates a barrier.  The frozen root model provides only relative
+        option-commonality; no latent root ID, teacher future, regime ID or free
+        per-option parameter is introduced.  Zero gains exactly recover native B.
+        """
+        if self.direct_absolute_common_witness_gain is None:
+            return None
+        with torch.no_grad():
+            root_tokens = self._decode_roots(memory.detach())
+            root_logits = self.root_logit_head(root_tokens).squeeze(-1)
+            if self.direct_recovery_evidence_common_measure_root_mass:
+                root_logits = self._common_measure_root_logits(
+                    root_logits, group_index, is_nominal, root_valid
+                )
+            obs_embeddings = self.obs_embed_head(root_tokens)
+            root_expand = root_tokens.unsqueeze(2).expand(-1, -1, self.num_options, -1)
+            opt_expand = self._option_tokens(x, option_features)
+            base_margins = self.margin_head(
+                torch.cat([root_expand, opt_expand], dim=-1)
+            ).squeeze(-1)
+            root_logits = root_logits.detach()
+            obs_embeddings = obs_embeddings.detach()
+            base_margins = base_margins.detach()
+
+        features = self._direct_absolute_common_witness_features(
+            common_witness_features,
+            batch_size=x.shape[0], dtype=memory.dtype, device=memory.device,
+        )
+        (h_min, h_terminal, h_gain, h_stop, h_control, h_stab_min,
+         h_stab_terminal, h_stab_gain, h_clear_floor_gain, h_stab_floor_gain) = [
+            features[..., i] for i in range(10)
+        ]
+        # Invariance OR finite-time recovery.  A recovery branch is accepted only
+        # if it reaches a positive terminal barrier, improves from the initial
+        # violated state, and never becomes worse than that initial state.  This
+        # prevents terminal-only recovery from hiding secondary contact/instability.
+        clear_recovery = torch.minimum(h_terminal, h_gain)
+        clear_recovery_ok = (clear_recovery > 0.0) & (h_clear_floor_gain >= 0.0)
+        clearance_barrier = torch.where(clear_recovery_ok, clear_recovery, h_min)
+        stab_recovery = torch.minimum(h_stab_terminal, h_stab_gain)
+        stab_recovery_ok = (stab_recovery > 0.0) & (h_stab_floor_gain >= 0.0)
+        stability_barrier = torch.where(stab_recovery_ok, stab_recovery, h_stab_min)
+
+        if option_features is None:
+            raise RuntimeError("OC-CWRF requires recovery option semantic features")
+        of = option_features.to(device=memory.device, dtype=memory.dtype)
+        if of.ndim != 3 or of.shape[0] != x.shape[0] or of.shape[1] != self.num_options or of.shape[2] < 8:
+            raise RuntimeError(f"invalid option feature shape for OC-CWRF: {tuple(of.shape)}")
+        # Public option semantics, not learned per-option bias.  Stopping reserve
+        # is a hard barrier only for modes whose controller semantics require it.
+        stop_active = (of[..., 0] > 0.5) | (of[..., 1] > 0.5) | (of[..., 3] > 0.5) | (of[..., 4] > 0.5)
+        stop_barrier = torch.where(stop_active, h_stop, torch.ones_like(h_stop))
+        physical_viability = torch.minimum(
+            torch.minimum(clearance_barrier, stop_barrier),
+            torch.minimum(h_control, stability_barrier),
+        )
+
+        # Frozen observation-consistent common-option support.  Use relative
+        # option preference within each root, avoiding the native source's global
+        # negative offset from turning commonality into another false veto.
+        logits = root_logits.float()
+        B, K = logits.shape
+        rv = root_valid.to(device=logits.device, dtype=torch.bool) if root_valid is not None else None
+        if rv is not None and rv.dim() == 1:
+            rv = rv.unsqueeze(0).expand(B, -1)
+        if rv is not None and rv.shape != logits.shape:
+            rv = None
+        if rv is not None:
+            logits = logits.masked_fill(~rv, -1.0e4)
+        p = torch.softmax(logits, dim=-1)
+        if rv is not None:
+            p = torch.where(rv, p, torch.zeros_like(p))
+            p = p / p.sum(dim=-1, keepdim=True).clamp_min(1.0e-8)
+
+        ov = option_valid.to(device=base_margins.device, dtype=torch.bool) if option_valid is not None else None
+        if ov is not None and ov.dim() == 1:
+            ov = ov.unsqueeze(0).expand(B, -1)
+        if ov is not None and (ov.shape[0] != B or ov.shape[1] != self.num_options):
+            ov = None
+        margin_for_best = base_margins.float()
+        if ov is not None:
+            margin_for_best = margin_for_best.masked_fill(~ov.unsqueeze(1), -1.0e4)
+        best = margin_for_best.amax(dim=-1, keepdim=True)
+        tau = max(float(self.direct_recovery_evidence_roct_option_temperature), 1.0e-4)
+        relative_support = torch.exp(((margin_for_best - best) / tau).clamp(-20.0, 0.0))
+        if ov is not None:
+            relative_support = torch.where(ov.unsqueeze(1), relative_support, torch.zeros_like(relative_support))
+        if rv is not None:
+            relative_support = torch.where(rv.unsqueeze(-1), relative_support, torch.zeros_like(relative_support))
+
+        obs = obs_embeddings.float()
+        dist2 = (obs.unsqueeze(2) - obs.unsqueeze(1)).square().mean(dim=-1)
+        compatibility = torch.exp(-dist2 / max(float(self.tau_obs), 1.0e-6)).clamp(0.0, 1.0)
+        eye = torch.eye(K, dtype=torch.bool, device=compatibility.device).unsqueeze(0)
+        offdiag = compatibility * (~eye).to(dtype=compatibility.dtype)
+        if rv is not None:
+            offdiag = offdiag * (rv.unsqueeze(2) & rv.unsqueeze(1)).to(dtype=offdiag.dtype)
+        pair_weight = p.unsqueeze(2) * p.unsqueeze(1) * offdiag
+        alias_mass = pair_weight.sum(dim=(1, 2))
+        pair_common = torch.minimum(relative_support.unsqueeze(2), relative_support.unsqueeze(1))
+        common_num = (pair_weight.unsqueeze(-1) * pair_common).sum(dim=(1, 2))
+        pair_common_support = common_num / alias_mass.unsqueeze(-1).clamp_min(1.0e-8)
+        root_weighted_support = (p.unsqueeze(-1) * relative_support).sum(dim=1)
+        common_support = torch.where(
+            (alias_mass > 1.0e-8).unsqueeze(-1), pair_common_support, root_weighted_support
+        ).clamp(0.0, 1.0)
+        if ov is not None:
+            common_support = torch.where(ov, common_support, torch.zeros_like(common_support))
+        common_support = common_support.detach().to(dtype=memory.dtype)
+
+        gains = self.direct_absolute_common_witness_gain.clamp(0.0, 2.0)
+        option_correction = (
+            gains[0] * common_support * torch.relu(physical_viability)
+            - gains[1] * torch.relu(-physical_viability)
+        )
+        corrected_margins = base_margins + option_correction.unsqueeze(1)
+        _signature, native = self._recovery_option_compatibility_signature(
+            root_logits, obs_embeddings, corrected_margins, self.tau_obs,
+            self.direct_recovery_evidence_roct_alpha,
+            self.direct_recovery_evidence_roct_beta,
+            self.direct_recovery_evidence_roct_top_m,
+            self.direct_recovery_evidence_roct_option_temperature,
+            root_valid=root_valid, option_valid=option_valid,
+            return_native_certificate=True,
+            physical_student_drs=self.direct_recovery_evidence_physical_student_drs,
+        )
+        probability = native[:, 1].to(dtype=memory.dtype).clamp(1.0e-6, 1.0 - 1.0e-6)
+        logit = torch.logit(probability)
+        return logit, probability, features, gains, physical_viability.detach(), common_support
 
     def _direct_option_corrected_absolute_feasibility(
         self,
@@ -3551,6 +3747,7 @@ class OCRAPModel(nn.Module):
         witness_observation_only: bool = False,
         absolute_physical_headroom_features: torch.Tensor | None = None,
         absolute_executable_witness_features: torch.Tensor | None = None,
+        absolute_common_witness_features: torch.Tensor | None = None,
         root_valid: torch.Tensor | None = None,
         option_valid: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
@@ -3567,6 +3764,7 @@ class OCRAPModel(nn.Module):
                 or self.direct_absolute_feasibility_head is not None
                 or self.direct_absolute_physical_headroom_weight is not None
                 or self.direct_absolute_executable_witness_weight is not None
+                or self.direct_absolute_common_witness_gain is not None
             ):
                 roct_signature, native_certificate = self._direct_recovery_option_compatibility_evidence(
                     memory, x, option_features,
@@ -3601,6 +3799,19 @@ class OCRAPModel(nn.Module):
                 direct_out["direct_recovery_absolute_feasibility_probability"] = abs_probability
                 direct_out["direct_recovery_absolute_executable_witness_features"] = erwf_features
                 direct_out["direct_recovery_absolute_executable_witness_weight"] = erwf_weights
+            common_abs = self._direct_common_witness_absolute_feasibility(
+                memory, x, option_features, absolute_common_witness_features,
+                group_index=group_index, is_nominal=is_nominal,
+                root_valid=root_valid, option_valid=option_valid,
+            )
+            if common_abs is not None:
+                abs_logit, abs_probability, cw_features, cw_gains, cw_viability, cw_support = common_abs
+                direct_out["direct_recovery_absolute_feasibility_logit"] = abs_logit
+                direct_out["direct_recovery_absolute_feasibility_probability"] = abs_probability
+                direct_out["direct_recovery_absolute_common_witness_features"] = cw_features
+                direct_out["direct_recovery_absolute_common_witness_gain"] = cw_gains
+                direct_out["direct_recovery_absolute_common_witness_viability"] = cw_viability
+                direct_out["direct_recovery_absolute_common_option_support"] = cw_support
             return direct_out
         scene_token = memory[:, 0]
         root_tokens = self._decode_roots(memory)
@@ -3661,6 +3872,7 @@ class OCRAPModel(nn.Module):
             or self.direct_recovery_evidence_native_certificate_preservation
             or self.direct_absolute_feasibility_head is not None
             or self.direct_absolute_physical_headroom_weight is not None
+            or self.direct_absolute_common_witness_gain is not None
         ):
             with torch.no_grad():
                 roct_signature, native_certificate = self._recovery_option_compatibility_signature(
@@ -3705,6 +3917,19 @@ class OCRAPModel(nn.Module):
             out["direct_recovery_absolute_feasibility_probability"] = abs_probability
             out["direct_recovery_absolute_executable_witness_features"] = erwf_features
             out["direct_recovery_absolute_executable_witness_weight"] = erwf_weights
+        common_abs = self._direct_common_witness_absolute_feasibility(
+            memory, x, option_features, absolute_common_witness_features,
+            group_index=group_index, is_nominal=is_nominal,
+            root_valid=root_valid, option_valid=option_valid,
+        )
+        if common_abs is not None:
+            abs_logit, abs_probability, cw_features, cw_gains, cw_viability, cw_support = common_abs
+            out["direct_recovery_absolute_feasibility_logit"] = abs_logit
+            out["direct_recovery_absolute_feasibility_probability"] = abs_probability
+            out["direct_recovery_absolute_common_witness_features"] = cw_features
+            out["direct_recovery_absolute_common_witness_gain"] = cw_gains
+            out["direct_recovery_absolute_common_witness_viability"] = cw_viability
+            out["direct_recovery_absolute_common_option_support"] = cw_support
         if self.root_signature_head is not None:
             out["root_signature"] = self.root_signature_head(root_tokens)
         if self.root_future_signature_head is not None:

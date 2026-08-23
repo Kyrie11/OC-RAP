@@ -1,3 +1,104 @@
+## v48.62 — DCP-DRFC-BCDE-RIFA-OC-CWRF / OBSERVATION-CONSISTENT COMMON-WITNESS RECOVERY FIELD (2026-08-22)
+
+**类别：由 engineering-valid v48.61 ERWF authoritative STOP 直接触发的 absolute-source composition 单轴实验。A/B/C/D/E/F 全部复用；G/Main 继续保持 Stage-I、fixed top-5、0.5 threshold、RIFA relative layer、teacher truth 和 Near+Contact adaptation protocol 不变，只把 v48.61 已显示方向性信息的 executable candidate×option continuation 从“6-D 可补偿线性和”重构成“非补偿 finite-time recovery barrier × observation-consistent common-option witness”。仅新增 2 个共享 bounded gains；无 regime router/policy/threshold/budget，无 option-specific free bias，无 teacher future/component-margin distillation，无 relative centering/ranking intervention。**
+
+### v48.61 authoritative 结果：工程有效，ERWF scientific STOP，但出现真实 representation signal
+
+v48.61 的 standalone comparison/audit/reference SHA 与 `OC-RAP-v48.61-PIPELINE_COMPLETE.json` 完全一致；pipeline 为 `valid=true / attribution_ready=true / engineering_version=v48.61.0-ERWF / errors=[] / test_roots_read=false`。reference reuse 的 dataset/protocol/source/hash/scene-disjoint 全通过；balanced/precision 的 state isolation 只新增 `direct_absolute_executable_witness_weight[6]`，shared Stage-I state bitwise identity；训练/校准/certificate均完整。独立代码回归：post-v48.46→v48.61 127/127 PASS、ERWF focused 9/9 PASS、compileall PASS、137/137 shell `bash -n` PASS。因此 F−B/F−E/F−D 可以进入科学证据链。
+
+ERWF 按预注册标准 **STOP**：8 个 F−B source AUC 中只有 6/8 为正，而且全部正增益都小于 `+0.01`；balanced/precision 的 `dev_near` 分别为 `-0.00140/-0.00117`。具体：
+
+- balanced cert Contact `+0.00364`，cert Near `+0.00263`，dev Contact `+0.00559`，dev Near `-0.00140`；
+- precision cert Contact `+0.00383`，cert Near `+0.00287`，dev Contact `+0.00537`，dev Near `-0.00117`。
+
+同时 F 的 teacher-infeasible/harmful pass 仍处于 permissive family：balanced cert Contact约 `0.409/0.409`，cert Near `0.452/0.458`，dev Contact `0.489/0.487`，dev Near `0.543/0.562`；precision方向相同（约 `0.409/0.409`, `0.452/0.460`, `0.483/0.484`, `0.547/0.566`）。预注册要求“8/8 F−B>0 且至少6/8>=+0.01，同时 harmful/infeasible 显著低于C/D/E”，明确失败。
+
+但是与 v48.60 CPHR 的 **8/8 相对B下降**不同，ERWF 给出了可信的方向性 representation evidence：**F−E 在 8/8 cell 全部改善**，Near约 `+0.032~+0.039`，Contact约 `+0.006~+0.020`。这意味着“candidate×recovery-option 的 executable continuation”确实比“candidate-only static headroom”更接近缺失量。F−D 又表现为 Near显著优于ORFC、Contact略低于ORFC：option identity 在Contact有一部分信号，但 global option bias 会破坏Near；continuation context 能消除大部分 cross-severity tradeoff，却尚不能形成 selective feasibility witness。
+
+### planner propagation：absolute source 与 downstream relative ranking 现在被更清楚地分离
+
+F/Main deployment 几乎逐格回到 A(relative-only) 的行为：
+
+- balanced cert Contact：A=F=`0/20` positive，8 harmful，34 selected；cert Near：A=F=`1/9`，0 harmful，52 selected；dev Contact都0 selected；dev Near都`1/8`；
+- precision cert Contact：A `1/20, 16 harmful, 59 selected`，F `1/20, 16 harmful, 58 selected`；cert Near A=F=`3/9, 1 harmful, 78 selected`；dev Contact都0；dev Near A=F=`3/8, 0 harmful,16 selected`。
+
+因此 v48.61 对两个性能条件的判决必须分开：
+
+1. **selective absolute witness source：出现 representation-level positive signal，但没有解决。** executable continuation 是有效轴；当前 composition 不具 selectivity。
+2. **downstream relative ranking：没有任何新验证，仍是独立 bottleneck。** 一旦 gate 允许执行，最终选择几乎由冻结的 relative layer 决定，并复现 A 的 recall/harm pattern。
+
+论文状态进一步收紧为：**role-isolated architecture is necessary and auditable; executable continuation is an informative absolute-witness representation, but deployable recovery requires a selective observation-consistent common witness, and the downstream relative selector remains separately unresolved.**
+
+### v48.61 哪些机制有效 / 无效
+
+**保留：candidate×option executable continuation。** 有效性来源是它把静态 candidate 状态升级成“执行 candidate 后某个 recovery option 实际会产生怎样的后续轨迹”，因此 F−E 8/8 改善，并把 ORFC 的 Near大幅退化基本消除。
+
+**STOP：six-coordinate compensatory linear scalarization。** 当前 `w^T phi_l(a)` 允许 control/stability 的正余量补偿 clearance/stopping 的关键违例；这与 teacher 的 active-constraint `min` 非补偿语义不一致。其症状正是 AUC只有微小变化，但 harmful/infeasible 仍约一半被放行；dev Near甚至 safe-positive pass低于 harmful pass。
+
+**STOP：root-agnostic positive rescue。** ERWF 对某 option 的 correction 同样加到所有 latent roots，没有要求 observation-aliased roots 共享同一个 recovery option。数据结构中 Near/Contact 都存在 incompatible observation-alias pairs，而 Safe为0；因此“单一物理 continuation 看起来可行”还不足以等价于 paper-level observation-consistent deployability。
+
+**STOP：terminal-only recovery 可以掩盖 continuation 中的 secondary deterioration。** Contact允许初始 clearance/stability 已违反是正确的，但不能仅凭 terminal恢复就忽略 recovery过程中进一步重叠/失稳。v48.62 增加 path-floor preservation witness，要求有限时间恢复过程中不比初始已违反状态更差。
+
+### dominant bottleneck 再收紧：observation-consistent selective common recovery-witness identifiability
+
+v48.59→v48.61 的排除链现在是：generic candidate classifier 不够；option-only prior 不够；candidate-only physical context 不够；candidate×option executable continuation **有信息但不够 selective**。缺失条件更准确地写成：
+
+> **存在一个 recovery option `g_l`，其 executable continuation 在非补偿 active physical barriers 上形成有限时间 recovery witness，并且同一个 `g_l` 在 observation-equivalent latent roots 上保持共同可执行/共同偏好。**
+
+即 `exists g_l: physical_finite_time_recovery(a,g_l) AND common_option_support(g_l | observation-equivalent roots)`。
+
+Near 与 Contact 应在**同一个 absolute-source mechanism**中共同解决，而不是拆成 regime-conditioned policies；两者共享“common witness validity”这个本质，只是 severity不同。Near要求保留已有较好的 coarse ordering并拒绝伪 positive witness；Contact允许 initial violation，但要求 finite-time escape/stabilization 且禁止 secondary deterioration。Safe继续是相同机制下的 non-interference stratum；source GO 前不读取 Safe test 做调参。
+
+### 明确禁止的下一步迭代方向
+
+- threshold / LR / horizon / width / class-weight / feature-weight grid 作为主修复；
+- proposal top-k expansion / densification；
+- ORFC式 option-specific free bias；
+- AFE式 generic final classifier；
+- CPHR式 candidate-only static physical scalar correction；
+- ERWF式 signed coordinates compensatory linear sum；
+- Safe/Near/Contact regime router、policy、threshold、budget；
+- broad encoder/root/margin-head retraining；
+- teacher privileged future/component margin distillation；
+- absolute source 尚未GO前同时修改 relative centering/opportunity/harm/pred_adv/reranker；
+- 为了修当前结果直接扩大 agent predictor/uncertainty model；若 OC-CWRF 仍失败，再单独授权 motion uncertainty/reachability 或 recovery-option taxonomy/coverage audit。
+
+### v48.62 新机制：OC-CWRF = Observation-Consistent Common-Witness Recovery Field
+
+对 candidate `a` 与 option `g_l`，仍从真实 executable-prefix terminal state 调用现有 deterministic recovery controller，只用当前 observed agents 的 CV extrapolation。保留 ERWF 六坐标并新增 recovery-tail/path-preservation坐标：terminal stability、stability recovery gain、clearance floor gain、stability floor gain，共10维 raw witness field；**这些坐标不再被训练线性相加。**
+
+物理 witness 先按逻辑结构组成：
+
+- clearance：若 continuation 全程 invariant，则用 minimum clearance barrier；若当前已违反，则仅当 terminal clearance重新为正、相对初始改善、且 continuation最差 clearance不比初始更差时，允许 finite-time recovery branch；
+- stability：同样使用 invariance OR finite-time recovery，并要求 peak yaw不比初始已违反状态更差；
+- stopping：只对公开语义上需要 stopping reserve 的 stop/brake_lane/yield_rejoin/pull_over option 激活；
+- control envelope：始终是硬 barrier；
+- 最终 physical viability 是上述 active barriers 的 `min`，禁止一个物理余量补偿另一个硬违例。
+
+然后从**冻结** root logits / obs embeddings / root×option margins 构造 same-option common support。每个 root 内先用相对 option preference（减去该root最佳margin后指数化）消除 native global negative offset；再对 observation-compatible root pair取同一 option support 的 pairwise minimum并按 root probability×observation compatibility聚合。它高只说明“同一个 option 在 aliased roots中共同成立”，不暴露 hidden root ID，也没有 free option parameter。
+
+仅训练两个共享 gains：
+
+`delta_l = alpha * common_support_l * [physical_viability_l]_+ - beta * [-physical_viability_l]_+`, `0<=alpha,beta<=2`。
+
+`alpha=beta=0` 时 execution-exact native B。正向 rescue 必须同时满足 **physical witness AND same-option observation consistency**；负物理 witness可以直接 veto。两参数只校准两个逻辑分支的量纲，novelty在 common-witness factorization 与 finite-time non-compensatory barrier，不在参数搜索。
+
+### v48.62 A/B/C/D/E/F/G 预注册归因
+
+A/B/C/D/E/F全部复用；**G/Main** 从同一个 v48.56-A reference checkpoint初始化，只新增 `direct_absolute_common_witness_gain[2]`。主比较 G−B；G−F隔离“common-witness non-compensatory composition”相对ERWF表示本身；G−D检验是否能保留Contact option signal同时不牺牲Near。Stage-I state checker要求 shared tensor bitwise identical且只新增2参数；feature schema/source fail-closed。
+
+强 GO：8个 G−B source AUC全部>0且至少6/8>=+0.01；每个cell teacher-infeasible/harmful pass显著低于C/D/E/F permissive family（至少比前序最好者再低0.05）；fixed top-5、threshold0.5、RIFA order、state/provenance全部通过。只有 source GO 才读取 G−A deployment并随后启动 paired Safe/stress/closed-loop non-interference。
+
+STOP：任一 source cell相对B回退、仍大量 permissive false-pass、或只有0.5 operating-point变化。若 OC-CWRF STOP，下一步不扫本机制参数；转向 **recovery-option taxonomy/coverage × observation-uncertainty reachability** 的独立可识别性审计，判断是 option library本身不能覆盖 teacher witness，还是 CV point prediction无法支持 common witness。
+
+### v48.62 工程实现/回归
+
+- 新 flag：`model.direct_recovery_absolute_common_witness_correction`；与 AFE/ORFC/CPHR/ERWF fail-closed互斥。
+- 新 side channel：`direct_absolute_common_witness_features[B,L,10]`，persistent cache schema升级，checkpoint schema/source显式记录；无 schema checkpoint拒绝加载。
+- 唯一 trainable state：`direct_absolute_common_witness_gain[2]`，训练后逐步投影至 `[0,2]`。
+- focused v48.62 tests覆盖：10-D option field、privileged/regime leakage guard、Contact finite-time recovery与secondary-deterioration veto、aliased-root same-option common support、zero-gain exact native-B、2-param gradient isolation、missing side-channel fail-closed、absolute-source mutual exclusion、checkpoint schema/legacy rejection、vectorized inference与launcher contract。
+- v48.46→v48.62 targeted regression、compileall、全 shell syntax在交付前重新执行并记录。
+
 ## v48.61 — DCP-DRFC-BCDE-RIFA-ERWF / EXECUTABLE RECOVERY WITNESS FIELD (2026-08-22)
 
 **类别：由 engineering-valid v48.60.1 CPHR authoritative STOP 直接触发的 absolute-source representation 单轴实验。A/B/C/D/E 全部复用；F/Main 只新增 6 个共享非负参数，并把干预位置从 candidate-level static source correction 推进到 candidate × recovery-option 的 executable continuation witness。Stage-I、fixed top-5、RIFA 顺序、0.5 threshold、teacher truth、Near+Contact adaptation protocol 均不改变；无 Safe/Near/Contact policy router，无 option-specific free bias，无 teacher future/component margin distillation，无 centering。**

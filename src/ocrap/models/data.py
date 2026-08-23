@@ -543,7 +543,8 @@ def _decode_recovery_mode(value: Any) -> str:
 
 
 def direct_executable_recovery_witness_features_from_sample(
-    d: dict[str, Any], cfg: dict | None = None, *, num_options: int | None = None
+    d: dict[str, Any], cfg: dict | None = None, *, num_options: int | None = None,
+    include_recovery_stability_tail: bool = False,
 ) -> np.ndarray:
     """Return the v48.61 option-resolved executable recovery witness field.
 
@@ -686,7 +687,8 @@ def direct_executable_recovery_witness_features_from_sample(
     yaw_rate_max = float(cfg.get("yaw_rate_max_rps", 0.6))
     stop_decel = max(abs(a_min), 1.0e-3)
 
-    field = np.zeros((L, DIRECT_EXECUTABLE_RECOVERY_WITNESS_FEATURE_DIM), dtype=np.float32)
+    feature_dim = 10 if include_recovery_stability_tail else DIRECT_EXECUTABLE_RECOVERY_WITNESS_FEATURE_DIM
+    field = np.zeros((L, feature_dim), dtype=np.float32)
     for l in range(raw_L):
         valid_l = bool(option_valid_raw[l]) if l < option_valid_raw.size else True
         if not valid_l:
@@ -744,18 +746,69 @@ def direct_executable_recovery_witness_features_from_sample(
             h_control = np.float64(1.0)
         yaw = float(np.max(np.abs(rec_states[:, 5])))
         h_stability = np.tanh((yaw_rate_max - yaw) / yaw_scale)
-        field[l] = np.asarray([
+        values = [
             h_min_clear,
             h_terminal_clear,
             h_clear_gain,
             h_stop,
             h_control,
             h_stability,
-        ], dtype=np.float32)
+        ]
+        if include_recovery_stability_tail:
+            terminal_yaw = float(abs(rec_states[-1, 5]))
+            initial_yaw = float(abs(rec_states[0, 5]))
+            h_terminal_stability = np.tanh((yaw_rate_max - terminal_yaw) / yaw_scale)
+            h_stability_gain = np.tanh((initial_yaw - terminal_yaw) / yaw_scale)
+            # Path-preservation witnesses prevent a terminal recovery from hiding
+            # a worse secondary excursion during the recovery continuation.
+            h_clearance_floor_gain = np.tanh((c_min - prefix_terminal_clear) / distance_scale)
+            h_stability_floor_gain = np.tanh((initial_yaw - yaw) / yaw_scale)
+            values.extend([
+                h_terminal_stability, h_stability_gain,
+                h_clearance_floor_gain, h_stability_floor_gain,
+            ])
+        field[l] = np.asarray(values, dtype=np.float32)
 
-    if field.shape != (L, DIRECT_EXECUTABLE_RECOVERY_WITNESS_FEATURE_DIM) or not np.isfinite(field).all():
+    if field.shape != (L, feature_dim) or not np.isfinite(field).all():
         raise ValueError(f"invalid ERWF feature field shape/value: shape={field.shape}")
     return field
+
+
+# v48.62 OC-CWRF (Observation-Consistent Common-Witness Recovery Field).
+# The first six coordinates are execution-identical to ERWF.  Two recovery-tail
+# stability coordinates make post-contact recovery non-compensatory without
+# treating the already-violated initial state as permanently infeasible.
+DIRECT_COMMON_RECOVERY_WITNESS_FEATURE_SCHEMA = 1
+DIRECT_COMMON_RECOVERY_WITNESS_FEATURE_DIM = 10
+
+
+def direct_common_recovery_witness_features_from_sample(
+    d: dict[str, Any], cfg: dict | None = None, *, num_options: int | None = None
+) -> np.ndarray:
+    """Return the v48.62 option-resolved finite-time recovery witness field.
+
+    Feature order:
+      0 continuation minimum-clearance reserve
+      1 continuation terminal-clearance reserve
+      2 clearance recovery gain from candidate terminal
+      3 terminal stopping reserve
+      4 controller control-envelope reserve
+      5 minimum stability reserve over the continuation
+      6 terminal stability reserve
+      7 stability recovery gain (initial |yaw| - terminal |yaw|)
+      8 clearance floor gain (minimum continuation clearance - initial clearance)
+      9 stability floor gain (initial |yaw| - maximum continuation |yaw|)
+
+    No regime ID, latent-root identity, teacher component/future or held-out label
+    is read.  This is the same deterministic executable continuation used by
+    ERWF, augmented only with finite-time recovery semantics for stability.
+    """
+    out = direct_executable_recovery_witness_features_from_sample(
+        d, cfg, num_options=num_options, include_recovery_stability_tail=True
+    )
+    if out.ndim != 2 or out.shape[1] != DIRECT_COMMON_RECOVERY_WITNESS_FEATURE_DIM:
+        raise ValueError(f"invalid OC-CWRF feature field shape: {out.shape}")
+    return out
 
 
 def _feature_layout_values(cfg: dict | None = None) -> dict[str, int]:
@@ -1047,7 +1100,7 @@ def _nominal_deviation_by_path(paths: list[Path]) -> list[float]:
     return out
 
 
-_PERSISTENT_TENSOR_CACHE_SCHEMA = 4
+_PERSISTENT_TENSOR_CACHE_SCHEMA = 5
 
 def _load_persistent_tensor_cache_payload(cache_path: Path) -> dict[str, Any] | None:
     """Load an immutable decoded-tensor cache with mmap when supported.
@@ -1109,6 +1162,7 @@ def _persistent_tensor_cache_key(
     model_cfg = cfg.get("model", {}) if isinstance(cfg.get("model", {}), dict) else {}
     cphr_features_enabled = bool(model_cfg.get("direct_recovery_absolute_physical_headroom_correction", False))
     erwf_features_enabled = bool(model_cfg.get("direct_recovery_absolute_executable_witness_correction", False))
+    common_witness_features_enabled = bool(model_cfg.get("direct_recovery_absolute_common_witness_correction", False))
     payload = {
         "schema": _PERSISTENT_TENSOR_CACHE_SCHEMA,
         "manifests": _dataset_manifest_fingerprint(paths),
@@ -1133,6 +1187,10 @@ def _persistent_tensor_cache_key(
         "erwf_feature_schema": (DIRECT_EXECUTABLE_RECOVERY_WITNESS_FEATURE_SCHEMA if erwf_features_enabled else 0),
         "erwf_recovery_horizon_s": (float(cfg.get("recovery_horizon_s", 4.0)) if erwf_features_enabled else 0.0),
         "erwf_sample_rate_hz": (float(cfg.get("sample_rate_hz", 10.0)) if erwf_features_enabled else 0.0),
+        "common_witness_option_resolved_features": common_witness_features_enabled,
+        "common_witness_feature_schema": (DIRECT_COMMON_RECOVERY_WITNESS_FEATURE_SCHEMA if common_witness_features_enabled else 0),
+        "common_witness_recovery_horizon_s": (float(cfg.get("recovery_horizon_s", 4.0)) if common_witness_features_enabled else 0.0),
+        "common_witness_sample_rate_hz": (float(cfg.get("sample_rate_hz", 10.0)) if common_witness_features_enabled else 0.0),
         "npz_keys": sorted(MODEL_SAMPLE_NPZ_KEYS),
     }
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
@@ -1300,6 +1358,12 @@ class OCRAPSampleDataset(Dataset):
         if bool(model_cfg.get("direct_recovery_absolute_executable_witness_correction", False)):
             out["direct_absolute_executable_witness_features"] = torch.from_numpy(
                 direct_executable_recovery_witness_features_from_sample(
+                    d, self.cfg, num_options=self.num_options
+                )
+            )
+        if bool(model_cfg.get("direct_recovery_absolute_common_witness_correction", False)):
+            out["direct_absolute_common_witness_features"] = torch.from_numpy(
+                direct_common_recovery_witness_features_from_sample(
                     d, self.cfg, num_options=self.num_options
                 )
             )
