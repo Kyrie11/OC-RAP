@@ -1,3 +1,114 @@
+## v48.63 — OC-QARW: Observation-Consistent Quantifier-Aligned Recovery Witness (2026-08-22)
+
+**Status entering this version.** The uploaded v48.62 OC-CWRF run is engineering-valid and attribution-ready (`v48.62.0-OC-CWRF`): reference reuse, scene disjointness, Stage-I bitwise isolation, balanced/precision variant isolation, fixed top-5 / fixed 0.5 RIFA policy order, artifact SHA256, and `test_roots_read=false` all pass. The v48.62 RC20 is a scientific gate failure, not an engineering failure.
+
+### Authoritative v48.62 scientific result
+
+V48.62 was designed to replace v48.61 ERWF's compensatory six-coordinate sum with (i) a non-compensatory finite-time physical recovery barrier and (ii) same-option support across observation-aliased latent roots. It **succeeds at selectivity but fails at source ordering / witness recall**:
+
+- teacher-infeasible / harmful pass collapses from the permissive v48.61 ERWF range (~0.41--0.57) to ~0.06--0.10 in all balanced/precision x dev/certificate x Near/Contact cells;
+- however safe-positive pass collapses to 0 in 6/8 cells and only 0.0323 in the two certificate-Contact cells;
+- teacher-feasible reject is ~0.47--0.85;
+- G-B source AUC improves only on dev-Contact (+0.00650 balanced, +0.00634 precision) and regresses on certificate-Contact (~-0.0088), certificate-Near (~-0.031), and dev-Near (~-0.0436), replicated in both variants;
+- therefore the preregistered v48.62 decision is **STOP** despite the selectivity sub-gate passing.
+
+The mechanistic conclusion is not that the non-compensatory/common-witness idea is useless. V48.62 provides the first clean evidence that this composition can eliminate the v48.61 **false recovery witness admission** mode. The failure is the opposite extreme: a broad false-veto shift that suppresses teacher-feasible/safe-positive rows at least as strongly as harmful rows and damages the already-useful native Near ordering.
+
+### New diagnosis: a quantifier mismatch in v48.62
+
+Recoverability has existential semantics over the recovery-option set:
+
+\[
+\text{feasible}(a) \iff \exists l:\; \text{CommonExecutableWitness}(a,g_l)>0.
+\]
+
+The logical dual for a negative feasibility veto is universal:
+
+\[
+\text{infeasible}(a) \Leftarrow \forall l:\; \text{CommonExecutableWitness}(a,g_l)<0.
+\]
+
+V48.62 violated this duality. Its negative term was **option-local**,
+
+\[
+\Delta_l^{G}=\alpha c_l[v_l]_+ - \beta[-v_l]_+,
+\]
+
+so every failed / irrelevant recovery option pushed its margin down even if a different observation-consistent option remained a valid executable continuation. Positive rescue required common support, while negative veto did not. This is a semantic asymmetry, not a threshold problem.
+
+The dominant absolute-source bottleneck is therefore tightened from
+`observation-consistent selective common recovery-witness identifiability` to:
+
+> **quantifier-aligned selective common-witness coverage:** identify whether *at least one* observation-consistent executable recovery continuation succeeds, and issue a negative veto only when *all* supported common recovery options fail.
+
+Near and Contact remain one shared mechanism problem rather than two policies. Near requires preserving native-B coarse ordering while selectively rescuing true witnesses; Contact requires permitting initial violation / finite-time recovery without secondary deterioration. Both are instances of the same `exists-success / forall-failure` recovery logic. No regime router is introduced.
+
+### V48.63 intervention: OC-QARW
+
+V48.63 keeps the exact v48.62 10-D option-resolved executable continuation field, finite-time non-compensatory barrier, frozen root probabilities / observation embeddings / native margins, and observation-consistent same-option support. It changes **only the logical composition of negative evidence**.
+
+For option `l`, let `v_l(a)` be the v48.62 non-compensatory physical viability and `c_l(a)` the v48.62 frozen common-option support. Define:
+
+\[
+q_l(a)=c_l(a)v_l(a),\qquad q^*(a)=\max_{l\in\mathcal G_{valid}} q_l(a).
+\]
+
+Positive rescue remains existential and option-local:
+
+\[
+\Delta^+_l(a)=\alpha c_l(a)[v_l(a)]_+.
+\]
+
+Negative evidence becomes candidate-level universal failure:
+
+\[
+u(a)=[-q^*(a)]_+,\qquad
+\Delta^-_l(a)=-\beta u(a)\quad \forall l.
+\]
+
+Thus:
+
+\[
+\boxed{\Delta_l^{H}=\alpha c_l[v_l]_+-\beta[-\max_j(c_jv_j)]_+}.
+\]
+
+A single failed option can no longer veto a candidate when another common option is viable. Low common support weakens a negative claim: absence of common-support evidence is not treated as proof of infeasibility.
+
+Only `direct_absolute_quantifier_witness_gain[2]` is trainable, both shared across roots, options, variants, and Near/Contact. Gains are zero-initialized and clamped to `[0,2]`; zero gain is execution-exact v48.58-B native source. Stage-I, top-5 proposal, threshold 0.5, RIFA order, teacher target, root/margin heads, and relative ranking remain frozen.
+
+### Diagnostic coverage audit (new, diagnostic only)
+
+Calibration proposal rows now record:
+
+- `quantifier_best_common_viability`;
+- `quantifier_universal_failure`;
+- `quantifier_positive_option_count`;
+- `quantifier_max_common_support`.
+
+The v48.63 feasibility audit reports these by safe-positive, harmful, teacher-feasible, and teacher-infeasible populations. They are not training features and do not alter selection. Their purpose is to distinguish:
+
+1. **logical-composition failure** — witness coverage exists but the source composes it incorrectly; from
+2. **option/taxonomy or uncertainty coverage failure** — safe-positive candidates simply have no observable common executable witness under the current recovery library / CV uncertainty model.
+
+### Pre-registered scientific gate
+
+Primary comparison is **H-B**. H-G isolates quantifier alignment from the v48.62 per-option veto; H-F checks whether the v48.61 continuation information is retained without returning to permissive false pass.
+
+GO requires all of:
+
+1. H-B source AUC improves in all 8 balanced/precision x dev/certificate x Near/Contact cells, with >= +0.01 in at least 6/8;
+2. teacher-infeasible and harmful pass remain <= 0.25 and at least 0.10 below v48.61-F in every cell;
+3. safe-positive pass improves over v48.62-G in all 8 cells and by >= +0.15 in at least 6/8;
+4. only the two shared OC-QARW gains train and Stage-I remains bitwise identical;
+5. fixed top-5, fixed 0.5 threshold, unchanged RIFA/relative ranking, no regime ID/router, no teacher-future feature;
+6. only after source GO may H-A deployment propagation and paired Safe nominal-utility non-interference be interpreted.
+
+If OC-QARW STOPs, **do not sweep its gains/threshold/LR/horizon**. Use the quantifier-coverage diagnostics to move to the next representation question: recovery-option taxonomy/coverage versus observation-uncertainty reachability. If safe-positive rows lack any positive common option, the existing recovery library / witness field is insufficient; if coverage exists but ordering remains poor, the observation-uncertainty representation is the next bottleneck.
+
+### Explicitly forbidden next iterations
+
+Do not return to: threshold/LR/horizon grids; proposal expansion/densification; option-specific free biases; generic AFE MLP/width/class-weight sweeps; candidate-only CPHR scalar correction; compensatory ERWF coordinate sums; v48.62 per-option negative veto; regime-conditioned routing/policy/threshold/budget; broad root/margin/encoder retraining; privileged teacher-future/component distillation; or relative centering/ranking changes before the absolute source passes its gate.
+
 ## v48.62 — DCP-DRFC-BCDE-RIFA-OC-CWRF / OBSERVATION-CONSISTENT COMMON-WITNESS RECOVERY FIELD (2026-08-22)
 
 **类别：由 engineering-valid v48.61 ERWF authoritative STOP 直接触发的 absolute-source composition 单轴实验。A/B/C/D/E/F 全部复用；G/Main 继续保持 Stage-I、fixed top-5、0.5 threshold、RIFA relative layer、teacher truth 和 Near+Contact adaptation protocol 不变，只把 v48.61 已显示方向性信息的 executable candidate×option continuation 从“6-D 可补偿线性和”重构成“非补偿 finite-time recovery barrier × observation-consistent common-option witness”。仅新增 2 个共享 bounded gains；无 regime router/policy/threshold/budget，无 option-specific free bias，无 teacher future/component-margin distillation，无 relative centering/ranking intervention。**

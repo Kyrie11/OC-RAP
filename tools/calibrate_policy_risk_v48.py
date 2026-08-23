@@ -698,6 +698,22 @@ def main() -> int:
                 None if pred.direct_recovery_absolute_feasibility_logit is None
                 else float(pred.direct_recovery_absolute_feasibility_logit)
             )
+            row["quantifier_best_common_viability"] = (
+                None if pred.direct_recovery_quantifier_best_common_viability is None
+                else float(pred.direct_recovery_quantifier_best_common_viability)
+            )
+            row["quantifier_universal_failure"] = (
+                None if pred.direct_recovery_quantifier_universal_failure is None
+                else float(pred.direct_recovery_quantifier_universal_failure)
+            )
+            row["quantifier_positive_option_count"] = (
+                None if pred.direct_recovery_quantifier_positive_option_count is None
+                else float(pred.direct_recovery_quantifier_positive_option_count)
+            )
+            row["quantifier_max_common_support"] = (
+                None if pred.direct_recovery_quantifier_max_common_support is None
+                else float(pred.direct_recovery_quantifier_max_common_support)
+            )
             if args.risk_source in {"heads", "ordinal_evidence"} and (row["opp_logit"] is None or row["harm_logit"] is None):
                 raise ValueError("risk-source=heads/ordinal_evidence requires opportunity/harm outputs")
         if gi == 1 or gi % 200 == 0 or gi == len(raw):
@@ -818,6 +834,10 @@ def main() -> int:
                 "absolute_feasibility_mode": args.absolute_feasibility_mode,
                 "absolute_feasibility_probability": absolute_feasibility_probability,
                 "absolute_feasibility_pass": absolute_feasibility_pass,
+                "quantifier_best_common_viability": r.get("quantifier_best_common_viability"),
+                "quantifier_universal_failure": r.get("quantifier_universal_failure"),
+                "quantifier_positive_option_count": r.get("quantifier_positive_option_count"),
+                "quantifier_max_common_support": r.get("quantifier_max_common_support"),
                 "predicted_component_harm": r.get("component_harm"),
                 "predicted_component_margins": r.get("component_margins"),
                 "predicted_native_pair_margins": native_pair_margins,

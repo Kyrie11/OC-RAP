@@ -40,6 +40,11 @@ class Prediction:
     direct_recovery_harm_logit: float | None = None
     direct_recovery_absolute_feasibility: float | None = None
     direct_recovery_absolute_feasibility_logit: float | None = None
+    # v48.63 diagnostic-only quantifier witness summaries.
+    direct_recovery_quantifier_best_common_viability: float | None = None
+    direct_recovery_quantifier_universal_failure: float | None = None
+    direct_recovery_quantifier_positive_option_count: float | None = None
+    direct_recovery_quantifier_max_common_support: float | None = None
     direct_recovery_rank: float | None = None
     direct_recovery_delta: float | None = None
     direct_recovery_delta_std: float | None = None
@@ -190,6 +195,18 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
                 f"schema={feature_schema}; v48.62 requires common-witness schema="
                 f"{DIRECT_COMMON_RECOVERY_WITNESS_FEATURE_SCHEMA}. Rerun v48.62 training."
             )
+    quantifier_witness_enabled = bool(ckpt.get(
+        "direct_recovery_absolute_quantifier_witness_correction",
+        model_cfg.get("direct_recovery_absolute_quantifier_witness_correction", False),
+    ))
+    if quantifier_witness_enabled:
+        feature_schema = int(ckpt.get("direct_recovery_absolute_quantifier_witness_feature_schema", 0) or 0)
+        if feature_schema != DIRECT_COMMON_RECOVERY_WITNESS_FEATURE_SCHEMA:
+            raise RuntimeError(
+                "legacy/unknown OC-QARW checkpoint feature semantics: "
+                f"schema={feature_schema}; v48.63 requires quantifier common-witness schema="
+                f"{DIRECT_COMMON_RECOVERY_WITNESS_FEATURE_SCHEMA}. Rerun v48.63 training."
+            )
     encoder_type = str(ckpt.get("encoder_type", model_cfg.get("encoder_type", "mlp")))
     feature_layout = ckpt.get("feature_layout", None)
     model = OCRAPModel(
@@ -338,6 +355,10 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         direct_recovery_absolute_common_witness_correction=bool(ckpt.get(
             "direct_recovery_absolute_common_witness_correction",
             model_cfg.get("direct_recovery_absolute_common_witness_correction", False),
+        )),
+        direct_recovery_absolute_quantifier_witness_correction=bool(ckpt.get(
+            "direct_recovery_absolute_quantifier_witness_correction",
+            model_cfg.get("direct_recovery_absolute_quantifier_witness_correction", False),
         )),
         direct_recovery_evidence_native_certificate_preservation=bool(ckpt.get(
             "direct_recovery_evidence_native_certificate_preservation",
@@ -584,6 +605,9 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_absolute_common_witness_correction"] = bool(
         model.direct_recovery_absolute_common_witness_correction
     )
+    cfg["model"]["direct_recovery_absolute_quantifier_witness_correction"] = bool(
+        model.direct_recovery_absolute_quantifier_witness_correction
+    )
     cfg["model"]["direct_recovery_evidence_native_certificate_preservation"] = bool(
         model.direct_recovery_evidence_native_certificate_preservation
     )
@@ -799,6 +823,10 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_absolute_common_witness_correction",
             model_cfg.get("direct_recovery_absolute_common_witness_correction", False),
         )),
+        "direct_recovery_absolute_quantifier_witness_correction": bool(ckpt.get(
+            "direct_recovery_absolute_quantifier_witness_correction",
+            model_cfg.get("direct_recovery_absolute_quantifier_witness_correction", False),
+        )),
     }
     actual_contract = {
         "direct_recovery_evidence_calibrator_context": bool(model.direct_recovery_evidence_calibrator_context),
@@ -838,6 +866,9 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         ),
         "direct_recovery_absolute_common_witness_correction": bool(
             model.direct_recovery_absolute_common_witness_correction
+        ),
+        "direct_recovery_absolute_quantifier_witness_correction": bool(
+            model.direct_recovery_absolute_quantifier_witness_correction
         ),
     }
     if expected_contract != actual_contract:
@@ -933,7 +964,10 @@ def predict_samples(
             ) for d in ds
         ], axis=0)).float().to(bundle.device)
     common_witness_features = None
-    if bool(getattr(bundle.model, "direct_recovery_absolute_common_witness_correction", False)):
+    if bool(
+        getattr(bundle.model, "direct_recovery_absolute_common_witness_correction", False)
+        or getattr(bundle.model, "direct_recovery_absolute_quantifier_witness_correction", False)
+    ):
         common_witness_features = torch.from_numpy(np.stack([
             direct_common_recovery_witness_features_from_sample(
                 d, bundle.cfg, num_options=bundle.model.num_options
@@ -980,6 +1014,10 @@ def predict_samples(
     direct_harm_logit_np = None
     direct_abs_feas_np = None
     direct_abs_feas_logit_np = None
+    direct_qw_best_np = None
+    direct_qw_failure_np = None
+    direct_qw_positive_count_np = None
+    direct_qw_max_support_np = None
     direct_rank_np = None
     direct_delta_np = None
     direct_delta_std_np = None
@@ -1001,6 +1039,11 @@ def predict_samples(
         if "direct_recovery_absolute_feasibility_probability" in out:
             direct_abs_feas_np = out["direct_recovery_absolute_feasibility_probability"].detach().cpu().numpy().astype(np.float32)
             direct_abs_feas_logit_np = out["direct_recovery_absolute_feasibility_logit"].detach().cpu().numpy().astype(np.float32)
+        if "direct_recovery_absolute_quantifier_best_common_viability" in out:
+            direct_qw_best_np = out["direct_recovery_absolute_quantifier_best_common_viability"].detach().cpu().numpy().astype(np.float32)
+            direct_qw_failure_np = out["direct_recovery_absolute_quantifier_universal_failure"].detach().cpu().numpy().astype(np.float32)
+            direct_qw_positive_count_np = out["direct_recovery_absolute_quantifier_positive_option_count"].detach().cpu().numpy().astype(np.float32)
+            direct_qw_max_support_np = out["direct_recovery_absolute_quantifier_max_common_support"].detach().cpu().numpy().astype(np.float32)
         if "direct_recovery_rank_logit" in out:
             direct_rank_np = out["direct_recovery_rank_logit"].detach().cpu().numpy().astype(np.float32)
         if "direct_recovery_delta_mean" in out:
@@ -1037,6 +1080,10 @@ def predict_samples(
                 direct_recovery_harm_logit=(None if direct_harm_logit_np is None else float(direct_harm_logit_np[i])),
                 direct_recovery_absolute_feasibility=(None if direct_abs_feas_np is None else float(direct_abs_feas_np[i])),
                 direct_recovery_absolute_feasibility_logit=(None if direct_abs_feas_logit_np is None else float(direct_abs_feas_logit_np[i])),
+                direct_recovery_quantifier_best_common_viability=(None if direct_qw_best_np is None else float(direct_qw_best_np[i])),
+                direct_recovery_quantifier_universal_failure=(None if direct_qw_failure_np is None else float(direct_qw_failure_np[i])),
+                direct_recovery_quantifier_positive_option_count=(None if direct_qw_positive_count_np is None else float(direct_qw_positive_count_np[i])),
+                direct_recovery_quantifier_max_common_support=(None if direct_qw_max_support_np is None else float(direct_qw_max_support_np[i])),
                 direct_recovery_rank=(None if direct_rank_np is None else float(direct_rank_np[i])),
                 direct_recovery_delta=(None if direct_delta_np is None else float(direct_delta_np[i])),
                 direct_recovery_delta_std=(None if direct_delta_std_np is None else float(direct_delta_std_np[i])),
@@ -1089,7 +1136,10 @@ def predict_sample(d: dict[str, Any], bundle: ModelBundle | None, cfg: dict | No
             )
         ).float().unsqueeze(0).to(bundle.device)
     common_witness_features = None
-    if bool(getattr(bundle.model, "direct_recovery_absolute_common_witness_correction", False)):
+    if bool(
+        getattr(bundle.model, "direct_recovery_absolute_common_witness_correction", False)
+        or getattr(bundle.model, "direct_recovery_absolute_quantifier_witness_correction", False)
+    ):
         common_witness_features = torch.from_numpy(
             direct_common_recovery_witness_features_from_sample(
                 d, bundle.cfg, num_options=bundle.model.num_options
@@ -1131,6 +1181,10 @@ def predict_sample(d: dict[str, Any], bundle: ModelBundle | None, cfg: dict | No
         direct_recovery_harm_logit=(None if "direct_recovery_harm_logit" not in out else float(out["direct_recovery_harm_logit"].squeeze(0).detach().cpu().item())),
         direct_recovery_absolute_feasibility=(None if "direct_recovery_absolute_feasibility_probability" not in out else float(out["direct_recovery_absolute_feasibility_probability"].squeeze(0).detach().cpu().item())),
         direct_recovery_absolute_feasibility_logit=(None if "direct_recovery_absolute_feasibility_logit" not in out else float(out["direct_recovery_absolute_feasibility_logit"].squeeze(0).detach().cpu().item())),
+        direct_recovery_quantifier_best_common_viability=(None if "direct_recovery_absolute_quantifier_best_common_viability" not in out else float(out["direct_recovery_absolute_quantifier_best_common_viability"].squeeze(0).detach().cpu().item())),
+        direct_recovery_quantifier_universal_failure=(None if "direct_recovery_absolute_quantifier_universal_failure" not in out else float(out["direct_recovery_absolute_quantifier_universal_failure"].squeeze(0).detach().cpu().item())),
+        direct_recovery_quantifier_positive_option_count=(None if "direct_recovery_absolute_quantifier_positive_option_count" not in out else float(out["direct_recovery_absolute_quantifier_positive_option_count"].squeeze(0).detach().cpu().item())),
+        direct_recovery_quantifier_max_common_support=(None if "direct_recovery_absolute_quantifier_max_common_support" not in out else float(out["direct_recovery_absolute_quantifier_max_common_support"].squeeze(0).detach().cpu().item())),
         direct_recovery_rank=(None if "direct_recovery_rank_logit" not in out else float(out["direct_recovery_rank_logit"].squeeze(0).detach().cpu().item())),
         direct_recovery_delta=(None if "direct_recovery_delta_mean" not in out else float(out["direct_recovery_delta_mean"].squeeze(0).detach().cpu().item())),
         direct_recovery_delta_std=(None if "direct_recovery_delta_logvar" not in out else float(torch.exp(0.5 * out["direct_recovery_delta_logvar"]).squeeze(0).detach().cpu().item())),

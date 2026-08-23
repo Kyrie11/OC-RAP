@@ -1658,6 +1658,10 @@ def _epoch(
                 if common_witness is not None:
                     with torch.no_grad():
                         common_witness.clamp_(0.0, 2.0)
+                quantifier_witness = getattr(model, "direct_absolute_quantifier_witness_gain", None)
+                if quantifier_witness is not None:
+                    with torch.no_grad():
+                        quantifier_witness.clamp_(0.0, 2.0)
             bsz = int(batch["x"].shape[0])
             n += bsz
             vals = {
@@ -1825,6 +1829,10 @@ def _epoch(
                 if common_witness is not None:
                     with torch.no_grad():
                         common_witness.clamp_(0.0, 2.0)
+                quantifier_witness = getattr(model, "direct_absolute_quantifier_witness_gain", None)
+                if quantifier_witness is not None:
+                    with torch.no_grad():
+                        quantifier_witness.clamp_(0.0, 2.0)
             bsz = int(batch["x"].shape[0]); n += bsz
             vals = {
                 "loss": float(total.item()),
@@ -2306,6 +2314,10 @@ def _epoch(
             if common_witness is not None:
                 with torch.no_grad():
                     common_witness.clamp_(0.0, 2.0)
+            quantifier_witness = getattr(model, "direct_absolute_quantifier_witness_gain", None)
+            if quantifier_witness is not None:
+                with torch.no_grad():
+                    quantifier_witness.clamp_(0.0, 2.0)
         bsz = int(batch["x"].shape[0])
         n += bsz
         vals = {
@@ -3108,6 +3120,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_absolute_common_witness_correction=bool(
             model_cfg.get("direct_recovery_absolute_common_witness_correction", False)
         ),
+        direct_recovery_absolute_quantifier_witness_correction=bool(
+            model_cfg.get("direct_recovery_absolute_quantifier_witness_correction", False)
+        ),
         direct_recovery_evidence_native_certificate_preservation=bool(
             model_cfg.get("direct_recovery_evidence_native_certificate_preservation", False)
         ),
@@ -3631,6 +3646,16 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             "direct_recovery_absolute_common_witness_feature_source": (
                 "observation_consistent_option_resolved_finite_time_recovery_witness"
                 if bool(model_cfg.get("direct_recovery_absolute_common_witness_correction", False)) else "disabled"
+            ),
+            "direct_recovery_absolute_quantifier_witness_correction": bool(
+                model_cfg.get("direct_recovery_absolute_quantifier_witness_correction", False)
+            ),
+            "direct_recovery_absolute_quantifier_witness_feature_schema": (
+                1 if bool(model_cfg.get("direct_recovery_absolute_quantifier_witness_correction", False)) else 0
+            ),
+            "direct_recovery_absolute_quantifier_witness_feature_source": (
+                "quantifier_aligned_common_finite_time_recovery_witness"
+                if bool(model_cfg.get("direct_recovery_absolute_quantifier_witness_correction", False)) else "disabled"
             ),
             "direct_recovery_evidence_native_certificate_preservation": bool(
                 model_cfg.get("direct_recovery_evidence_native_certificate_preservation", False)

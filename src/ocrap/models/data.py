@@ -1100,7 +1100,7 @@ def _nominal_deviation_by_path(paths: list[Path]) -> list[float]:
     return out
 
 
-_PERSISTENT_TENSOR_CACHE_SCHEMA = 5
+_PERSISTENT_TENSOR_CACHE_SCHEMA = 6
 
 def _load_persistent_tensor_cache_payload(cache_path: Path) -> dict[str, Any] | None:
     """Load an immutable decoded-tensor cache with mmap when supported.
@@ -1162,7 +1162,10 @@ def _persistent_tensor_cache_key(
     model_cfg = cfg.get("model", {}) if isinstance(cfg.get("model", {}), dict) else {}
     cphr_features_enabled = bool(model_cfg.get("direct_recovery_absolute_physical_headroom_correction", False))
     erwf_features_enabled = bool(model_cfg.get("direct_recovery_absolute_executable_witness_correction", False))
-    common_witness_features_enabled = bool(model_cfg.get("direct_recovery_absolute_common_witness_correction", False))
+    common_witness_features_enabled = bool(
+        model_cfg.get("direct_recovery_absolute_common_witness_correction", False)
+        or model_cfg.get("direct_recovery_absolute_quantifier_witness_correction", False)
+    )
     payload = {
         "schema": _PERSISTENT_TENSOR_CACHE_SCHEMA,
         "manifests": _dataset_manifest_fingerprint(paths),
@@ -1361,7 +1364,10 @@ class OCRAPSampleDataset(Dataset):
                     d, self.cfg, num_options=self.num_options
                 )
             )
-        if bool(model_cfg.get("direct_recovery_absolute_common_witness_correction", False)):
+        if bool(
+            model_cfg.get("direct_recovery_absolute_common_witness_correction", False)
+            or model_cfg.get("direct_recovery_absolute_quantifier_witness_correction", False)
+        ):
             out["direct_absolute_common_witness_features"] = torch.from_numpy(
                 direct_common_recovery_witness_features_from_sample(
                     d, self.cfg, num_options=self.num_options
