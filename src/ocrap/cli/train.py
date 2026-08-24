@@ -3149,6 +3149,12 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_semantic_witness_classlocal_transport=bool(
             model_cfg.get("direct_recovery_semantic_witness_classlocal_transport", False)
         ),
+        direct_recovery_semantic_witness_route_alignment=bool(
+            model_cfg.get("direct_recovery_semantic_witness_route_alignment", False)
+        ),
+        direct_recovery_semantic_witness_reentry_alignment=bool(
+            model_cfg.get("direct_recovery_semantic_witness_reentry_alignment", False)
+        ),
         direct_recovery_evidence_native_certificate_preservation=bool(
             model_cfg.get("direct_recovery_evidence_native_certificate_preservation", False)
         ),
@@ -3687,10 +3693,17 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
                 model_cfg.get("direct_recovery_absolute_semantic_witness_correction", False)
             ),
             "direct_recovery_absolute_semantic_witness_feature_schema": (
-                1 if bool(model_cfg.get("direct_recovery_absolute_semantic_witness_correction", False)) else 0
+                (2 if (
+                    bool(model_cfg.get("direct_recovery_semantic_witness_route_alignment", False))
+                    or bool(model_cfg.get("direct_recovery_semantic_witness_reentry_alignment", False))
+                ) else 1)
+                if bool(model_cfg.get("direct_recovery_absolute_semantic_witness_correction", False)) else 0
             ),
             "direct_recovery_absolute_semantic_witness_feature_source": (
-                "semantics_aligned_common_executable_recovery_witness"
+                ("active_constraint_coverage_common_executable_recovery_witness"
+                 if (bool(model_cfg.get("direct_recovery_semantic_witness_route_alignment", False))
+                     or bool(model_cfg.get("direct_recovery_semantic_witness_reentry_alignment", False)))
+                 else "semantics_aligned_common_executable_recovery_witness")
                 if bool(model_cfg.get("direct_recovery_absolute_semantic_witness_correction", False)) else "disabled"
             ),
             "direct_recovery_semantic_witness_active_set_alignment": bool(
@@ -3701,6 +3714,12 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             ),
             "direct_recovery_semantic_witness_classlocal_transport": bool(
                 model_cfg.get("direct_recovery_semantic_witness_classlocal_transport", False)
+            ),
+            "direct_recovery_semantic_witness_route_alignment": bool(
+                model_cfg.get("direct_recovery_semantic_witness_route_alignment", False)
+            ),
+            "direct_recovery_semantic_witness_reentry_alignment": bool(
+                model_cfg.get("direct_recovery_semantic_witness_reentry_alignment", False)
             ),
             "direct_recovery_evidence_native_certificate_preservation": bool(
                 model_cfg.get("direct_recovery_evidence_native_certificate_preservation", False)

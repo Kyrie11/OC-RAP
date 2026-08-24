@@ -14,6 +14,7 @@ from ocrap.models.data import (
     DIRECT_EXECUTABLE_RECOVERY_WITNESS_FEATURE_SCHEMA,
     DIRECT_COMMON_RECOVERY_WITNESS_FEATURE_SCHEMA,
     DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA,
+    DIRECT_ACTIVE_CONSTRAINT_RECOVERY_WITNESS_FEATURE_SCHEMA,
     direct_absolute_physical_headroom_features_from_sample,
     direct_executable_recovery_witness_features_from_sample,
     direct_common_recovery_witness_features_from_sample,
@@ -226,11 +227,24 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     ))
     if semantic_witness_enabled:
         feature_schema = int(ckpt.get("direct_recovery_absolute_semantic_witness_feature_schema", 0) or 0)
-        if feature_schema != DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA:
+        route_alignment = bool(ckpt.get(
+            "direct_recovery_semantic_witness_route_alignment",
+            model_cfg.get("direct_recovery_semantic_witness_route_alignment", False),
+        ))
+        reentry_alignment = bool(ckpt.get(
+            "direct_recovery_semantic_witness_reentry_alignment",
+            model_cfg.get("direct_recovery_semantic_witness_reentry_alignment", False),
+        ))
+        expected_semantic_schema = (
+            DIRECT_ACTIVE_CONSTRAINT_RECOVERY_WITNESS_FEATURE_SCHEMA
+            if (route_alignment or reentry_alignment)
+            else DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA
+        )
+        if feature_schema != expected_semantic_schema:
             raise RuntimeError(
                 "legacy/unknown OC-SARW checkpoint feature semantics: "
-                f"schema={feature_schema}; v48.64 requires semantic-witness schema="
-                f"{DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA}. Rerun v48.64 training."
+                f"schema={feature_schema}; configuration requires semantic-witness schema="
+                f"{expected_semantic_schema}. Rerun the matching training version."
             )
     encoder_type = str(ckpt.get("encoder_type", model_cfg.get("encoder_type", "mlp")))
     feature_layout = ckpt.get("feature_layout", None)
@@ -400,6 +414,14 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         direct_recovery_semantic_witness_classlocal_transport=bool(ckpt.get(
             "direct_recovery_semantic_witness_classlocal_transport",
             model_cfg.get("direct_recovery_semantic_witness_classlocal_transport", False),
+        )),
+        direct_recovery_semantic_witness_route_alignment=bool(ckpt.get(
+            "direct_recovery_semantic_witness_route_alignment",
+            model_cfg.get("direct_recovery_semantic_witness_route_alignment", False),
+        )),
+        direct_recovery_semantic_witness_reentry_alignment=bool(ckpt.get(
+            "direct_recovery_semantic_witness_reentry_alignment",
+            model_cfg.get("direct_recovery_semantic_witness_reentry_alignment", False),
         )),
         direct_recovery_evidence_native_certificate_preservation=bool(ckpt.get(
             "direct_recovery_evidence_native_certificate_preservation",
@@ -661,6 +683,12 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_semantic_witness_classlocal_transport"] = bool(
         model.direct_recovery_semantic_witness_classlocal_transport
     )
+    cfg["model"]["direct_recovery_semantic_witness_route_alignment"] = bool(
+        model.direct_recovery_semantic_witness_route_alignment
+    )
+    cfg["model"]["direct_recovery_semantic_witness_reentry_alignment"] = bool(
+        model.direct_recovery_semantic_witness_reentry_alignment
+    )
     cfg["model"]["direct_recovery_evidence_native_certificate_preservation"] = bool(
         model.direct_recovery_evidence_native_certificate_preservation
     )
@@ -896,6 +924,14 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_semantic_witness_classlocal_transport",
             model_cfg.get("direct_recovery_semantic_witness_classlocal_transport", False),
         )),
+        "direct_recovery_semantic_witness_route_alignment": bool(ckpt.get(
+            "direct_recovery_semantic_witness_route_alignment",
+            model_cfg.get("direct_recovery_semantic_witness_route_alignment", False),
+        )),
+        "direct_recovery_semantic_witness_reentry_alignment": bool(ckpt.get(
+            "direct_recovery_semantic_witness_reentry_alignment",
+            model_cfg.get("direct_recovery_semantic_witness_reentry_alignment", False),
+        )),
     }
     actual_contract = {
         "direct_recovery_evidence_calibrator_context": bool(model.direct_recovery_evidence_calibrator_context),
@@ -950,6 +986,12 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         ),
         "direct_recovery_semantic_witness_classlocal_transport": bool(
             model.direct_recovery_semantic_witness_classlocal_transport
+        ),
+        "direct_recovery_semantic_witness_route_alignment": bool(
+            model.direct_recovery_semantic_witness_route_alignment
+        ),
+        "direct_recovery_semantic_witness_reentry_alignment": bool(
+            model.direct_recovery_semantic_witness_reentry_alignment
         ),
     }
     if expected_contract != actual_contract:

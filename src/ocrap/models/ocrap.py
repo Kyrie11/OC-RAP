@@ -359,6 +359,8 @@ class OCRAPModel(nn.Module):
         direct_recovery_semantic_witness_active_set_alignment: bool = True,
         direct_recovery_semantic_witness_path_stop_alignment: bool = True,
         direct_recovery_semantic_witness_classlocal_transport: bool = False,
+        direct_recovery_semantic_witness_route_alignment: bool = False,
+        direct_recovery_semantic_witness_reentry_alignment: bool = False,
         direct_recovery_evidence_native_certificate_preservation: bool = False,
         direct_recovery_evidence_native_margin_complete_preservation: bool = False,
         direct_recovery_evidence_native_advantage_preservation: bool = False,
@@ -615,6 +617,17 @@ class OCRAPModel(nn.Module):
         # coupled inside q. This is a factor flag, never a regime input.
         self.direct_recovery_semantic_witness_classlocal_transport = bool(
             direct_recovery_semantic_witness_classlocal_transport
+        )
+        # v48.66 OC-ACRW: after v48.65 falsified class-local transport as the
+        # dominant source bottleneck, extend the *candidate-global* executable
+        # witness with observation-certifiable active constraints that were
+        # absent from the v48.64 physical certificate.  These are factor flags,
+        # not regime routers or learned per-option parameters.
+        self.direct_recovery_semantic_witness_route_alignment = bool(
+            direct_recovery_semantic_witness_route_alignment
+        )
+        self.direct_recovery_semantic_witness_reentry_alignment = bool(
+            direct_recovery_semantic_witness_reentry_alignment
         )
         absolute_source_count = sum([
             self.direct_recovery_absolute_feasibility_head,
@@ -2198,14 +2211,23 @@ class OCRAPModel(nn.Module):
         self, supplied_features: torch.Tensor | None, *, batch_size: int,
         dtype: torch.dtype, device: torch.device,
     ) -> torch.Tensor:
-        """Validate the v48.64 OC-SARW side channel [B,L,12]."""
+        """Validate the v48.64/v48.66 semantic witness side channel.
+
+        v48.64/v48.65 use schema-1 [B,L,12].  v48.66 keeps those coordinates
+        byte-semantically identical and appends route/re-entry in schema-2
+        [B,L,14] whenever either active-constraint factor is enabled.
+        """
         if supplied_features is None:
             raise RuntimeError(
                 "OC-SARW features missing: v48.64 requires the semantics-aligned "
                 "option-resolved recovery witness side-channel"
             )
         feat = supplied_features.to(device=device, dtype=dtype)
-        expected = (int(batch_size), int(self.num_options), 12)
+        feature_dim = 14 if (
+            self.direct_recovery_semantic_witness_route_alignment
+            or self.direct_recovery_semantic_witness_reentry_alignment
+        ) else 12
+        expected = (int(batch_size), int(self.num_options), feature_dim)
         if feat.ndim != 3 or tuple(feat.shape) != expected:
             raise RuntimeError(
                 f"invalid OC-SARW feature shape {tuple(feat.shape)}; expected {expected}"
@@ -2594,6 +2616,12 @@ class OCRAPModel(nn.Module):
         (h_min, h_terminal, h_gain, h_stop_legacy, h_control, h_stab_min,
          h_stab_terminal, h_stab_gain, h_clear_floor_gain, h_stab_floor_gain,
          h_path_stop, stability_active_obs) = [features[..., i] for i in range(12)]
+        if features.shape[-1] >= 14:
+            h_route = features[..., 12]
+            h_reentry = features[..., 13]
+        else:
+            h_route = torch.ones_like(h_min)
+            h_reentry = torch.ones_like(h_min)
 
         clear_recovery = torch.minimum(h_terminal, h_gain)
         clear_recovery_ok = (clear_recovery > 0.0) & (h_clear_floor_gain >= 0.0)
@@ -2617,9 +2645,12 @@ class OCRAPModel(nn.Module):
         else:
             stability_barrier = raw_stability_barrier
 
-        barrier_stack = torch.stack(
-            [clearance_barrier, stop_barrier, h_control, stability_barrier], dim=-1
-        )
+        barriers = [clearance_barrier, stop_barrier, h_control, stability_barrier]
+        if self.direct_recovery_semantic_witness_route_alignment:
+            barriers.append(h_route)
+        if self.direct_recovery_semantic_witness_reentry_alignment:
+            barriers.append(h_reentry)
+        barrier_stack = torch.stack(barriers, dim=-1)
         physical_viability, limiting_constraint = barrier_stack.min(dim=-1)
 
         # Exact frozen common-option support from v48.62/v48.63.

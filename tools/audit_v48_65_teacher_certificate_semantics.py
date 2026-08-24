@@ -13,10 +13,20 @@ paper does not silently describe a continuous signed-min teacher if the released
 labels contain structural post-processing plateaus.
 """
 from __future__ import annotations
-import argparse, json, math
+import argparse, json, math, sys
 from collections import Counter
 from pathlib import Path
 import numpy as np
+
+# Keep this read-only audit runnable both from the launcher and as a standalone
+# tool/test.  The official launcher already exports PYTHONPATH; this bootstrap
+# removes a packaging/test-harness dependency without changing any algorithm or
+# experimental output semantics.
+_REPO = Path(__file__).resolve().parents[1]
+_SRC = _REPO / "src"
+for _p in (str(_SRC), str(_REPO)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 from ocrap.algorithms.ocmero import oc_mero
 from ocrap.algorithms.lcv import weighted_lcvar

@@ -1,3 +1,99 @@
+## v48.66 — OC-ACRW: Observation-Consistent Active-Constraint Recovery Witness (2026-08-24)
+
+**Entry condition / v48.65 authoritative result.** The uploaded v48.65 pipeline is engineering-valid and attribution-ready: `valid=true`, `attribution_ready=true`, `engineering_version=v48.65.0-OC-CLRW`, `errors=[]`, `test_roots_read=false`, `dataset_reconstruction=false`. Reference reuse is valid, the L/M balanced+precision runs are complete, and the v48.65 scientific decision is therefore attributable rather than engineering-incomplete.
+
+### V48.65 preregistered decision: OC-CLRW = STOP
+
+V48.65 directly tested the v48.64.2 hypothesis that the remaining bottleneck was the **observation-class-local correction locus**. The result falsifies that hypothesis as the dominant current bottleneck.
+
+- **Primary AUC gate fails strongly.** M-B is positive only in the two dev-Contact cells (`+0.006112` balanced, `+0.005561` precision), while dev-Near is `-0.060947/-0.061287`, certificate-Near is `-0.037580/-0.036691`, and certificate-Contact is `-0.012737/-0.012653`. Thus only 2/8 cells improve and 0/8 reach `+0.01`.
+- **Selectivity remains controlled, so this is not the v48.61 permissive relapse.** M harmful / teacher-infeasible pass is about `0.083--0.125`, below the preregistered 0.25 cap in all eight cells.
+- **Safe-positive admission is essentially not restored.** M-I safe-positive pass is zero in six cells and only `+0.032258` in the two certificate-Contact cells; the preregistered 8/8 / 6-of-8 gate fails.
+- **The class-local factor itself is harmful on Near.** `L-H` is about `-0.01669/-0.01672` on dev-Near and `-0.00520/-0.00514` on certificate-Near. `M-I` reproduces the same negative conditional effect (`-0.01681/-0.01684` dev-Near; `-0.00515/-0.00508` certificate-Near). The active-set interaction is only around `1e-4--1e-3`, so there is no hidden beneficial interaction masking a good class-local main effect.
+- **Native B remains the strongest coarse Near ordering.** B is approximately `0.763--0.769` on dev-Near and `0.817` on certificate-Near, whereas M falls to about `0.702--0.708` and `0.779--0.781`. The next intervention must therefore preserve native ordering and alter only the absolute witness boundary.
+
+### Teacher truth audit changes the mechanism verdict
+
+The read-only v48.65 audit exactly recomputes stored `R_dep*` from stored `m_star/root_probs/c_star` (`max abs error = 1.19e-7`, 100% <= `1e-6`) without reading test roots or reconstructing data. More importantly, among 13,153 teacher-feasible samples:
+
+- mean `class-local OC-MERO score - globally-shared-one-option score = 0.0`;
+- fraction whose feasibility sign requires class-local option choice = `0.0`;
+- fraction with different best options across observation classes is only `0.004866`.
+
+Therefore the **paper's OC-MERO information structure remains valid**, but the current datasets/teacher boundary do not provide evidence that extra learned class-local correction transport is the missing feasibility mechanism. The v48.64.2 statement “observation-class-local selective signed-certificate composition/transport is the dominant bottleneck” is downgraded from a plausible hypothesis to a **falsified current bottleneck**.
+
+There is also a concrete v48.65 mechanism-design weakness: `class_support = exp((q[i,l]-max_l q[i,l])/tau)` gives every valid observation class at least one option with support exactly 1. Consequently `semantic_max_common_support` becomes identically 1 in class-local mode and ceases to encode absolute cross-root/common-witness credibility. A relative within-class preference is not an absolute admission certificate. This explains why moving the correction locus can preserve false witnesses even when the information-pattern semantics are formally local.
+
+### The “which witness should be trusted?” problem is not solved
+
+Positive observable certificates remain poorly selective. In M, among candidates with `semantic_best_common_viability > 0`, teacher-feasible precision is only about:
+
+- balanced: dev-Near `0.453`, dev-Contact `0.617`, certificate-Near `0.528`, certificate-Contact `0.520`;
+- precision: dev-Near `0.453`, dev-Contact `0.619`, certificate-Near `0.528`, certificate-Contact `0.518`.
+
+Moreover, false-positive positive-certificate candidates often have **larger** existing clearance/stopping barriers than true positives. For balanced certificate-Near, TP barrier means `[clearance, stop, control, stability] = [0.665, 0.685, 0.976, 0.997]` while FP means are `[0.773, 0.818, 0.960, 0.984]`; certificate-Contact is similarly `[0.664, 0.655, 0.988, 0.999]` versus `[0.706, 0.804, 0.981, 0.996]`. Hence another threshold/weight sweep on the existing four barriers is not a causal solution.
+
+A currently omitted observation-only signal is route/deviation. Within M positive-certificate rows, lower candidate deviation predicts teacher feasibility with AUC about `0.59` on certificate-Near and `0.58--0.59` on certificate-Contact, and TP deviation is consistently lower than FP on certificate splits. Code audit also confirms that the deployed physical viability currently takes the non-compensatory minimum only over `clearance / stopping / control / stability`, whereas the structural teacher active set additionally contains `route / harm / secondary` (plus intent for hidden branches). This matches the v48.65 preregistered fallback branch: **observation-only active-constraint completeness**.
+
+### Updated dominant bottleneck
+
+The Near/Contact unified bottleneck is now:
+
+> **observation-only active-constraint coverage for selective signed executable-recovery certificates**.
+
+Equivalent paper wording:
+
+> map an observation-consistent executable recovery continuation to a signed certificate over all *observation-certifiable active constraints*, permitting finite-time re-entry from an already violated Contact state while requiring persistent re-entry / no secondary deterioration, without hidden future information.
+
+Near is primarily a viable-set preservation problem; Contact is finite-time re-entry followed by persistence. They remain two regimes of one certificate construction problem, not two runtime policies.
+
+### V48.64 hypotheses after V48.65
+
+- **Stability active-set alignment remains supported as a representation/sign repair.** V48.65 does not overturn v48.64: active-set alignment restored positive witness availability, but `M-L` AUC effects are again only tiny negative values. It is retained as a frozen prerequisite, not advertised as the final source solution.
+- **Path-capacity stopping remains non-dominant.** V48.65 supplies no evidence to reverse the v48.64 rejection; the current false-positive positive certificates often have *higher* stopping barrier than true positives. J_PATHSTOP stays out of Main.
+- **Class-local learned correction transport is now rejected as Main.** OC-MERO itself stays class-local as the theoretical deployability operator; only the extra learned CLRW correction is removed.
+
+### V48.66 intervention: OC-ACRW
+
+V48.66 returns the learned correction to the v48.64 candidate-global same-option common-support locus, keeps active-set alignment ON, keeps path-stop OFF/legacy, and adds **no new learned parameters**. The same two shared gains remain the only trainable state. The first 12 OC-SARW/OC-CLRW side-channel coordinates are byte-for-byte unchanged when the new factors are disabled; schema 2 appends two observation-only signed barriers only for v48.66 arms.
+
+1. **Executable route consistency (`h_route`).** For every recovery option except `post_contact_stabilize`, compute maximum absolute lateral route deviation on the deterministic executable recovery rollout and form `tanh((route_dev_max - d_route)/route_scale)`. It uses only current candidate/recovery execution and mirrors the teacher's physical route coordinate without reading hidden `route_blocked`.
+2. **Persistent post-contact re-entry (`h_reentry`).** If the observed prefix is already in contact/overlap, or the option explicitly expresses post-contact/secondary recovery, use the same current-observation constant-velocity occupancy forecast as the clearance witness. Find the first time the executable continuation re-enters positive safe-clearance reserve, then require the reserve to remain nonnegative for the rest of the rollout. If no re-entry occurs, retain the signed terminal reserve. This catches a secondary deterioration/re-contact that v48.62 finite-time escape can miss when the later penetration is shallower than the initial violation.
+3. Both are **non-compensatory barriers**: enabled coordinates join the hard minimum; there is no free bias, compensatory sum, threshold tuning, or regime-dependent activation.
+
+### Pre-registered 2x2 active-constraint-coverage experiment
+
+Historical **I_ACTIVESET** is the common baseline (candidate-global correction, active-set ON, path-stop OFF). New arms:
+
+- **N_ROUTE:** I + route barrier only;
+- **O_REENTRY:** I + persistent re-entry barrier only;
+- **P/Main OC-ACRW:** I + route + persistent re-entry.
+
+Attribution order is `P-B` primary source gate; `N-I` route main effect; `O-I` re-entry main effect; `P-O` and `P-N` conditional effects; `P-I-(N-I)-(O-I)` interaction. `P-M65` is diagnostic only and tests recovery from the rejected class-local intervention.
+
+P/Main GO requires all of:
+
+1. `P-B` absolute-feasibility AUC > 0 in all 8 cells, with >= `+0.01` in at least 6/8;
+2. harmful and teacher-infeasible pass <= 0.25 and at least 0.10 below v48.61-F in every cell;
+3. safe-positive pass strictly exceeds I_ACTIVESET in all 8 cells and improves by >= 0.15 in at least 6/8;
+4. positive-certificate teacher-feasible precision strictly exceeds I in all 8 cells and improves by >= 0.10 in at least 6/8;
+5. teacher-infeasible positive-certificate coverage is below I in all 8 cells and reduced by >= 0.10 in at least 6/8;
+6. only `direct_absolute_semantic_witness_gain[2]` trains; Stage-I is bitwise identical; fixed top-5, threshold 0.5 and RIFA order remain unchanged; `test_roots_read=false`.
+
+Only after source GO may deployment propagation and paired Safe nominal-utility non-interference be interpreted.
+
+### Truth-contract debt remains explicit
+
+The manuscript currently describes the teacher margin as the signed minimum of active normalized physical slacks. The actual teacher additionally applies mined-artifact overrides and structural `0.6 / 0.9 / -0.8` floors/overrides; the v48.65 audit finds exact `0.6` occupancy in about `1.13%` of finite option-root margins and `R_dep*=0.5` in about `53.64%` of audited samples. This does not invalidate frozen-label attribution, but a CCF-A submission must either (a) define the teacher as this explicit structural certificate, including the post-processing, or (b) later regenerate labels under a genuinely pure active-slack certificate and rerun. V48.66 does neither; it keeps the current datasets frozen so the next causal experiment remains comparable.
+
+### Forbidden directions remain in force
+
+Continue to forbid threshold/LR/horizon/feature-weight/class-weight grids; proposal expansion/densification/top-K search; option-specific free bias; generic AFE/MLP; candidate-only CPHR; compensatory ERWF; per-option negative veto; quantifier-gain sweep; Safe/Near/Contact router/policy/threshold/budget; broad root/margin/encoder retraining; privileged teacher-future/component-margin distillation; relative centering/ranker changes before source GO; recovery-option expansion without teacher-option-support evidence; class-local learned correction as Main; and J_PATHSTOP as Main. Robust-control/friction and observation-only harm/impact proxies are **deferred**, not mixed into v48.66; they are only next branches if the route/re-entry factorial says active-constraint coverage is still incomplete.
+
+### Engineering hygiene
+
+The v48.65 read-only teacher audit had a standalone-test portability issue: invoking it from a subprocess without the launcher-exported `PYTHONPATH` could raise `ModuleNotFoundError: ocrap`. V48.66 adds a local `src/` bootstrap to that audit only. This is not an algorithm change and does not alter any v48.65 result or output path.
+
 ## v48.65 — OC-CLRW: Observation-Class-Local Recovery Witness (2026-08-23)
 
 **Entry condition / v48.64.1 authoritative result.** The rerun with the v48.64.1 engineering hotfix is fully attribution-ready: the top-level sentinel is `valid=true`, `attribution_ready=true`, `engineering_version=v48.64.1-OC-SARW-ENGFIX`, `errors=[]`, `test_roots_read=false`. I/J/K all complete for balanced/precision, each reaches 21 completed epochs, emits training/evidence-completion/calibration artifacts, keeps all 170 shared Stage-I tensors bitwise identical to the v48.56-A source, and adds only `direct_absolute_semantic_witness_gain[2]`. The v48.64 result is therefore a **scientific STOP, not an engineering failure**.

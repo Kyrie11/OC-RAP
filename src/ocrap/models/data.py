@@ -546,6 +546,7 @@ def direct_executable_recovery_witness_features_from_sample(
     d: dict[str, Any], cfg: dict | None = None, *, num_options: int | None = None,
     include_recovery_stability_tail: bool = False,
     include_semantic_alignment_tail: bool = False,
+    include_active_constraint_tail: bool = False,
 ) -> np.ndarray:
     """Return the v48.61 option-resolved executable recovery witness field.
 
@@ -573,6 +574,10 @@ def direct_executable_recovery_witness_features_from_sample(
     shared physical field and the frozen Stage-I representation.
     """
     cfg = cfg or {}
+    if include_active_constraint_tail and not (include_recovery_stability_tail and include_semantic_alignment_tail):
+        raise ValueError(
+            "active-constraint tail requires the full v48.64 semantic witness prefix (12 coordinates)"
+        )
     states = np.asarray(d.get("prefix_states", np.zeros((0, 9))), dtype=np.float32)
     controls = np.asarray(d.get("prefix_controls", np.zeros((0, 4))), dtype=np.float32)
     ego = np.asarray(d.get("ego_state", np.zeros((9,))), dtype=np.float32).reshape(-1)
@@ -692,6 +697,8 @@ def direct_executable_recovery_witness_features_from_sample(
     jerk_scale = max(float(scales.get("jerk", 2.0)), 1.0e-6)
     rate_scale = max(float(scales.get("steer_rate", 0.1)), 1.0e-6)
     yaw_scale = max(float(scales.get("yaw", 0.2)), 1.0e-6)
+    route_scale = max(float(scales.get("route", 1.0)), 1.0e-6)
+    route_dev_max = float(cfg.get("route_dev_max_m", 2.5))
     d_safe0 = float(cfg.get("d_safe0_m", 1.0))
     headway = float(cfg.get("safe_time_headway_s", 0.5))
     limits = cfg.get("control_limits", {}) if isinstance(cfg.get("control_limits", {}), dict) else {}
@@ -703,7 +710,11 @@ def direct_executable_recovery_witness_features_from_sample(
     yaw_rate_max = float(cfg.get("yaw_rate_max_rps", 0.6))
     stop_decel = max(abs(a_min), 1.0e-3)
 
-    feature_dim = (12 if include_semantic_alignment_tail else (10 if include_recovery_stability_tail else DIRECT_EXECUTABLE_RECOVERY_WITNESS_FEATURE_DIM))
+    feature_dim = (
+        14 if include_active_constraint_tail else
+        (12 if include_semantic_alignment_tail else
+         (10 if include_recovery_stability_tail else DIRECT_EXECUTABLE_RECOVERY_WITNESS_FEATURE_DIM))
+    )
     field = np.zeros((L, feature_dim), dtype=np.float32)
     for l in range(raw_L):
         valid_l = bool(option_valid_raw[l]) if l < option_valid_raw.size else True
@@ -812,6 +823,49 @@ def direct_executable_recovery_witness_features_from_sample(
                 mode == "post_contact_stabilize" or prefix_min_clear <= 0.0 or prefix_unstable
             )
             values.extend([h_path_stop, 1.0 if stability_active else 0.0])
+        if include_active_constraint_tail:
+            # v48.66 observable active-constraint coverage repair.
+            #
+            # Route is fully observation-certifiable and uses the same local
+            # executable-recovery coordinate as the structural teacher.  It is
+            # inactive for post-contact stabilization exactly as in the teacher
+            # active mask.  No hidden route_blocked flag is read.
+            route_active = mode != "post_contact_stabilize"
+            d_route = float(np.max(np.abs(rec_states[:, 1]))) if rec_states.size else 0.0
+            h_route = (
+                np.tanh((route_dev_max - d_route) / route_scale)
+                if route_active else np.float64(1.0)
+            )
+
+            # Persistent re-entry is the observation-only counterpart of the
+            # secondary-collision requirement.  The existing v48.62 finite-time
+            # clearance logic correctly permits recovery from an already
+            # violated initial state, but it may still accept a later re-contact
+            # if that excursion is shallower than the initial penetration.  Once
+            # an observed-contact recovery re-enters the positive safe-clearance
+            # set, require that it remains there for the rest of the executable
+            # continuation.  This uses only the same current-observation CV
+            # occupancy forecast already used by the clearance witness.
+            reentry_active = bool(
+                prefix_min_clear <= 0.0 or mode in {"post_contact_stabilize", "avoid_secondary"}
+            )
+            if not reentry_active:
+                h_reentry = np.float64(1.0)
+            elif not agents:
+                h_reentry = np.float64(1.0)
+            else:
+                min_clear_t = np.min(signed_clearance, axis=1)
+                reserve_t = min_clear_t - d_safe
+                reentered = np.flatnonzero(reserve_t >= 0.0)
+                if reentered.size:
+                    first_reentry = int(reentered[0])
+                    persistent_reserve = float(np.min(reserve_t[first_reentry:]))
+                else:
+                    # No finite-time re-entry: preserve signed boundary rather
+                    # than inventing a free veto or a tuned threshold.
+                    persistent_reserve = float(reserve_t[-1])
+                h_reentry = np.tanh(persistent_reserve / distance_scale)
+            values.extend([h_route, h_reentry])
         field[l] = np.asarray(values, dtype=np.float32)
 
     if field.shape != (L, feature_dim) or not np.isfinite(field).all():
@@ -864,6 +918,12 @@ def direct_common_recovery_witness_features_from_sample(
 DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA = 1
 DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_DIM = 12
 
+# v48.66 extends the v48.64/v48.65 side channel without changing its first
+# twelve coordinates.  Schema 2 appends two observation-only active-constraint
+# coordinates: route consistency and post-contact persistent re-entry.
+DIRECT_ACTIVE_CONSTRAINT_RECOVERY_WITNESS_FEATURE_SCHEMA = 2
+DIRECT_ACTIVE_CONSTRAINT_RECOVERY_WITNESS_FEATURE_DIM = 14
+
 
 def direct_semantic_recovery_witness_features_from_sample(
     d: dict[str, Any], cfg: dict | None = None, *, num_options: int | None = None
@@ -877,11 +937,22 @@ def direct_semantic_recovery_witness_features_from_sample(
     post-contact-stabilize semantics).  Neither coordinate reads a regime id,
     teacher future/component margin, held-out label, or latent-root identity.
     """
+    cfg = cfg or {}
+    model_cfg = cfg.get("model", {}) if isinstance(cfg.get("model", {}), dict) else {}
+    active_constraint_tail = bool(
+        model_cfg.get("direct_recovery_semantic_witness_route_alignment", False)
+        or model_cfg.get("direct_recovery_semantic_witness_reentry_alignment", False)
+    )
     out = direct_executable_recovery_witness_features_from_sample(
         d, cfg, num_options=num_options, include_recovery_stability_tail=True,
         include_semantic_alignment_tail=True,
+        include_active_constraint_tail=active_constraint_tail,
     )
-    if out.ndim != 2 or out.shape[1] != DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_DIM:
+    expected_dim = (
+        DIRECT_ACTIVE_CONSTRAINT_RECOVERY_WITNESS_FEATURE_DIM
+        if active_constraint_tail else DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_DIM
+    )
+    if out.ndim != 2 or out.shape[1] != expected_dim:
         raise ValueError(f"invalid OC-SARW feature field shape: {out.shape}")
     return out
 
@@ -1244,6 +1315,17 @@ def _persistent_tensor_cache_key(
     semantic_witness_features_enabled = bool(
         model_cfg.get("direct_recovery_absolute_semantic_witness_correction", False)
     )
+    semantic_route_alignment = bool(
+        model_cfg.get("direct_recovery_semantic_witness_route_alignment", False)
+    )
+    semantic_reentry_alignment = bool(
+        model_cfg.get("direct_recovery_semantic_witness_reentry_alignment", False)
+    )
+    semantic_feature_schema = (
+        DIRECT_ACTIVE_CONSTRAINT_RECOVERY_WITNESS_FEATURE_SCHEMA
+        if semantic_witness_features_enabled and (semantic_route_alignment or semantic_reentry_alignment)
+        else (DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA if semantic_witness_features_enabled else 0)
+    )
     payload = {
         "schema": _PERSISTENT_TENSOR_CACHE_SCHEMA,
         "manifests": _dataset_manifest_fingerprint(paths),
@@ -1273,7 +1355,9 @@ def _persistent_tensor_cache_key(
         "common_witness_recovery_horizon_s": (float(cfg.get("recovery_horizon_s", 4.0)) if common_witness_features_enabled else 0.0),
         "common_witness_sample_rate_hz": (float(cfg.get("sample_rate_hz", 10.0)) if common_witness_features_enabled else 0.0),
         "semantic_witness_option_resolved_features": semantic_witness_features_enabled,
-        "semantic_witness_feature_schema": (DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA if semantic_witness_features_enabled else 0),
+        "semantic_witness_feature_schema": semantic_feature_schema,
+        "semantic_witness_route_alignment": semantic_route_alignment,
+        "semantic_witness_reentry_alignment": semantic_reentry_alignment,
         "semantic_witness_recovery_horizon_s": (float(cfg.get("recovery_horizon_s", 4.0)) if semantic_witness_features_enabled else 0.0),
         "semantic_witness_sample_rate_hz": (float(cfg.get("sample_rate_hz", 10.0)) if semantic_witness_features_enabled else 0.0),
         "npz_keys": sorted(MODEL_SAMPLE_NPZ_KEYS),
