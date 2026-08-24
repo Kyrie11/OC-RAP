@@ -361,6 +361,8 @@ class OCRAPModel(nn.Module):
         direct_recovery_semantic_witness_classlocal_transport: bool = False,
         direct_recovery_semantic_witness_route_alignment: bool = False,
         direct_recovery_semantic_witness_reentry_alignment: bool = False,
+        direct_recovery_semantic_witness_control_projection: bool = False,
+        direct_recovery_semantic_witness_boundary_transport: bool = False,
         direct_recovery_evidence_native_certificate_preservation: bool = False,
         direct_recovery_evidence_native_margin_complete_preservation: bool = False,
         direct_recovery_evidence_native_advantage_preservation: bool = False,
@@ -628,6 +630,17 @@ class OCRAPModel(nn.Module):
         )
         self.direct_recovery_semantic_witness_reentry_alignment = bool(
             direct_recovery_semantic_witness_reentry_alignment
+        )
+        # v48.67 OC-PBRW separates two failure layers exposed by v48.66:
+        # (1) realize the recovery controller inside the observable actuator
+        # envelope by construction; (2) transport a trusted positive witness
+        # toward the absolute zero boundary with a bounded residual rather than
+        # an arbitrary additive offset. Neither flag is regime-conditioned.
+        self.direct_recovery_semantic_witness_control_projection = bool(
+            direct_recovery_semantic_witness_control_projection
+        )
+        self.direct_recovery_semantic_witness_boundary_transport = bool(
+            direct_recovery_semantic_witness_boundary_transport
         )
         absolute_source_count = sum([
             self.direct_recovery_absolute_feasibility_head,
@@ -2226,6 +2239,8 @@ class OCRAPModel(nn.Module):
         feature_dim = 14 if (
             self.direct_recovery_semantic_witness_route_alignment
             or self.direct_recovery_semantic_witness_reentry_alignment
+            or self.direct_recovery_semantic_witness_control_projection
+            or self.direct_recovery_semantic_witness_boundary_transport
         ) else 12
         expected = (int(batch_size), int(self.num_options), feature_dim)
         if feat.ndim != 3 or tuple(feat.shape) != expected:
@@ -2538,8 +2553,33 @@ class OCRAPModel(nn.Module):
             positive_option_count = (supported_viability > 0.0).sum(dim=-1).to(dtype=memory.dtype)
             max_common_support = common_support.amax(dim=-1)
         universal_failure = torch.relu(-best_common_viability)
-        option_correction = positive_rescue - gains[1] * universal_failure.unsqueeze(-1)
-        corrected_margins = base_margins + option_correction.unsqueeze(1)
+        if self.direct_recovery_semantic_witness_boundary_transport:
+            # v48.67 bounded boundary transport.  The v48.66 additive lift had
+            # no relation to a root-option's native deficit: even an all-positive
+            # trusted witness could remain below R_dep=0.  Convert the tanh
+            # certificate back to a normalized signed reserve and interpolate
+            # monotonically toward the common-support-scaled positive target.
+            # gain=0 is exact native B; gain=2 reaches the trusted target without
+            # lowering an already safer native margin.
+            eps = torch.finfo(physical_viability.dtype).eps * 16.0
+            cert_margin = torch.atanh(physical_viability.clamp(-1.0 + eps, 1.0 - eps))
+            # Absolute admission needs the sign/boundary, not arbitrarily large
+            # slack magnitude.  Cap at one normalized reserve unit so the
+            # transport cannot explode when every active barrier is far safe.
+            cert_margin = torch.relu(cert_margin.float()).clamp(max=1.0)
+            certified_target = common_support.float() * cert_margin
+            target = certified_target.unsqueeze(1).to(dtype=base_margins.dtype)
+            rho = (gains[0] / 2.0).clamp(0.0, 1.0)
+            positive_delta = torch.relu(target - base_margins)
+            positive_delta = positive_delta * (certified_target > 0.0).unsqueeze(1).to(dtype=positive_delta.dtype)
+            corrected_margins = (
+                base_margins + rho * positive_delta
+                - gains[1] * universal_failure.unsqueeze(-1).unsqueeze(1)
+            )
+        else:
+            positive_rescue = gains[0] * common_support * torch.relu(physical_viability)
+            option_correction = positive_rescue - gains[1] * universal_failure.unsqueeze(-1)
+            corrected_margins = base_margins + option_correction.unsqueeze(1)
         _signature, native = self._recovery_option_compatibility_signature(
             root_logits, obs_embeddings, corrected_margins, self.tau_obs,
             self.direct_recovery_evidence_roct_alpha,
@@ -2645,7 +2685,16 @@ class OCRAPModel(nn.Module):
         else:
             stability_barrier = raw_stability_barrier
 
-        barriers = [clearance_barrier, stop_barrier, h_control, stability_barrier]
+        # In the projected-control factor the actual executable recovery trace
+        # is already magnitude/rate/jerk feasible by construction.  Do not
+        # re-veto the same policy using the historical desired-command barrier;
+        # certify only the remaining environment/state-dependent constraints.
+        effective_control_barrier = (
+            torch.ones_like(h_control)
+            if self.direct_recovery_semantic_witness_control_projection
+            else h_control
+        )
+        barriers = [clearance_barrier, stop_barrier, effective_control_barrier, stability_barrier]
         if self.direct_recovery_semantic_witness_route_alignment:
             barriers.append(h_route)
         if self.direct_recovery_semantic_witness_reentry_alignment:
@@ -2827,7 +2876,6 @@ class OCRAPModel(nn.Module):
                 selected_support_mean.detach(),
             )
 
-        positive_rescue = gains[0] * common_support * torch.relu(physical_viability)
         supported_viability = common_support * physical_viability
         if ov is not None:
             masked_supported = supported_viability.masked_fill(~ov, -1.0e4)
@@ -2843,8 +2891,33 @@ class OCRAPModel(nn.Module):
             positive_option_count = (supported_viability > 0.0).sum(dim=-1).to(dtype=memory.dtype)
             max_common_support = common_support.amax(dim=-1)
         universal_failure = torch.relu(-best_common_viability)
-        option_correction = positive_rescue - gains[1] * universal_failure.unsqueeze(-1)
-        corrected_margins = base_margins + option_correction.unsqueeze(1)
+        if self.direct_recovery_semantic_witness_boundary_transport:
+            # v48.67 bounded boundary transport.  The v48.66 additive lift had
+            # no relation to a root-option's native deficit: even an all-positive
+            # trusted witness could remain below R_dep=0.  Convert the tanh
+            # certificate back to a normalized signed reserve and interpolate
+            # monotonically toward the common-support-scaled positive target.
+            # gain=0 is exact native B; gain=2 reaches the trusted target without
+            # lowering an already safer native margin.
+            eps = torch.finfo(physical_viability.dtype).eps * 16.0
+            cert_margin = torch.atanh(physical_viability.clamp(-1.0 + eps, 1.0 - eps))
+            # Absolute admission needs the sign/boundary, not arbitrarily large
+            # slack magnitude.  Cap at one normalized reserve unit so the
+            # transport cannot explode when every active barrier is far safe.
+            cert_margin = torch.relu(cert_margin.float()).clamp(max=1.0)
+            certified_target = common_support.float() * cert_margin
+            target = certified_target.unsqueeze(1).to(dtype=base_margins.dtype)
+            rho = (gains[0] / 2.0).clamp(0.0, 1.0)
+            positive_delta = torch.relu(target - base_margins)
+            positive_delta = positive_delta * (certified_target > 0.0).unsqueeze(1).to(dtype=positive_delta.dtype)
+            corrected_margins = (
+                base_margins + rho * positive_delta
+                - gains[1] * universal_failure.unsqueeze(-1).unsqueeze(1)
+            )
+        else:
+            positive_rescue = gains[0] * common_support * torch.relu(physical_viability)
+            option_correction = positive_rescue - gains[1] * universal_failure.unsqueeze(-1)
+            corrected_margins = base_margins + option_correction.unsqueeze(1)
         _signature, native = self._recovery_option_compatibility_signature(
             root_logits, obs_embeddings, corrected_margins, self.tau_obs,
             self.direct_recovery_evidence_roct_alpha,

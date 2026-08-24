@@ -7,7 +7,10 @@ import numpy as np
 from ocrap.data.schema import CandidatePrefix, RecoveryOption
 
 
-def rollout_recovery_controller(prefix: CandidatePrefix, option: RecoveryOption, horizon_steps: int, cfg: dict) -> tuple[np.ndarray, np.ndarray, dict]:
+def rollout_recovery_controller(
+    prefix: CandidatePrefix, option: RecoveryOption, horizon_steps: int, cfg: dict,
+    *, project_control_envelope: bool = False,
+) -> tuple[np.ndarray, np.ndarray, dict]:
     dt = 1.0 / float(cfg.get("sample_rate_hz", 10.0))
     state0 = prefix.prefix_states[-1].copy()
     states = np.zeros((horizon_steps, prefix.prefix_states.shape[1]), dtype=np.float32)
@@ -15,7 +18,21 @@ def rollout_recovery_controller(prefix: CandidatePrefix, option: RecoveryOption,
     states[0] = state0
     mode = option.mode
     p = np.asarray(option.params, dtype=np.float32)
-    diag: dict[str, float | bool | str] = {"mode": mode}
+    diag: dict[str, float | bool | str] = {"mode": mode, "projected_control_envelope": bool(project_control_envelope)}
+    limits = cfg.get("control_limits", {}) if isinstance(cfg.get("control_limits", {}), dict) else {}
+    a_max = float(limits.get("a_max", 3.0))
+    a_min = float(limits.get("a_min", -6.0))
+    delta_max = abs(float(limits.get("delta_max", 0.55)))
+    jerk_max = abs(float(limits.get("j_max", 6.0)))
+    steer_rate_max = abs(float(limits.get("steer_rate_max", 0.5)))
+    if prefix.prefix_controls.ndim == 2 and prefix.prefix_controls.shape[0] > 0 and prefix.prefix_controls.shape[1] >= 2:
+        prev_a_cmd = float(np.clip(prefix.prefix_controls[-1, 0], a_min, a_max))
+        prev_steer_cmd = float(np.clip(prefix.prefix_controls[-1, 1], -delta_max, delta_max))
+    else:
+        prev_a_cmd = 0.0
+        prev_steer_cmd = 0.0
+    max_abs_a_projection = 0.0
+    max_abs_steer_projection = 0.0
     for t in range(1, horizon_steps):
         prev = states[t - 1].copy()
         speed = max(0.0, float(prev[6]))
@@ -61,6 +78,25 @@ def rollout_recovery_controller(prefix: CandidatePrefix, option: RecoveryOption,
             a = a_dec
             steer = np.clip(0.12 * np.sign(d_y) * min(abs(d_y), s_clear / 3.0), -0.55, 0.55)
             diag["used_s_clear"] = s_clear
+
+        # v48.67 OC-PBRW factor.  The historical controller emits a desired
+        # acceleration/steer command and only *afterwards* measures jerk/rate.
+        # For the optional projected executable witness, realize the same
+        # recovery mode through the actuator envelope by construction.  The
+        # default is False, so teacher labels and every pre-v48.67 path remain
+        # execution-exact.
+        if project_control_envelope:
+            desired_a = float(a)
+            desired_steer = float(steer)
+            a_lo = max(a_min, prev_a_cmd - jerk_max * dt)
+            a_hi = min(a_max, prev_a_cmd + jerk_max * dt)
+            steer_lo = max(-delta_max, prev_steer_cmd - steer_rate_max * dt)
+            steer_hi = min(delta_max, prev_steer_cmd + steer_rate_max * dt)
+            a = float(np.clip(desired_a, a_lo, a_hi))
+            steer = float(np.clip(desired_steer, steer_lo, steer_hi))
+            max_abs_a_projection = max(max_abs_a_projection, abs(desired_a - a))
+            max_abs_steer_projection = max(max_abs_steer_projection, abs(desired_steer - steer))
+
         speed_next = max(0.0, speed + a * dt)
         yaw_rate = speed_next * math.tan(float(steer)) / max(float(cfg.get("wheelbase_m", 2.8)), 1e-3)
         heading_next = heading + yaw_rate * dt
@@ -76,7 +112,16 @@ def rollout_recovery_controller(prefix: CandidatePrefix, option: RecoveryOption,
         if t - 1 < len(controls):
             controls[t - 1, 0] = a
             controls[t - 1, 1] = steer
-            if t > 1:
+            if project_control_envelope:
+                controls[t - 1, 2] = (a - prev_a_cmd) / dt
+                controls[t - 1, 3] = (steer - prev_steer_cmd) / dt
+            elif t > 1:
                 controls[t - 1, 2] = (controls[t - 1, 0] - controls[t - 2, 0]) / dt
                 controls[t - 1, 3] = (controls[t - 1, 1] - controls[t - 2, 1]) / dt
+        if project_control_envelope:
+            prev_a_cmd = float(a)
+            prev_steer_cmd = float(steer)
+    if project_control_envelope:
+        diag["max_abs_a_projection"] = float(max_abs_a_projection)
+        diag["max_abs_steer_projection"] = float(max_abs_steer_projection)
     return states, controls, diag

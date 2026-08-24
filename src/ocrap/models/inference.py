@@ -15,6 +15,7 @@ from ocrap.models.data import (
     DIRECT_COMMON_RECOVERY_WITNESS_FEATURE_SCHEMA,
     DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA,
     DIRECT_ACTIVE_CONSTRAINT_RECOVERY_WITNESS_FEATURE_SCHEMA,
+    DIRECT_PROJECTED_BOUNDARY_RECOVERY_WITNESS_FEATURE_SCHEMA,
     direct_absolute_physical_headroom_features_from_sample,
     direct_executable_recovery_witness_features_from_sample,
     direct_common_recovery_witness_features_from_sample,
@@ -235,10 +236,20 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_semantic_witness_reentry_alignment",
             model_cfg.get("direct_recovery_semantic_witness_reentry_alignment", False),
         ))
+        control_projection = bool(ckpt.get(
+            "direct_recovery_semantic_witness_control_projection",
+            model_cfg.get("direct_recovery_semantic_witness_control_projection", False),
+        ))
+        boundary_transport = bool(ckpt.get(
+            "direct_recovery_semantic_witness_boundary_transport",
+            model_cfg.get("direct_recovery_semantic_witness_boundary_transport", False),
+        ))
         expected_semantic_schema = (
-            DIRECT_ACTIVE_CONSTRAINT_RECOVERY_WITNESS_FEATURE_SCHEMA
-            if (route_alignment or reentry_alignment)
-            else DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA
+            DIRECT_PROJECTED_BOUNDARY_RECOVERY_WITNESS_FEATURE_SCHEMA
+            if (control_projection or boundary_transport)
+            else (DIRECT_ACTIVE_CONSTRAINT_RECOVERY_WITNESS_FEATURE_SCHEMA
+                  if (route_alignment or reentry_alignment)
+                  else DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA)
         )
         if feature_schema != expected_semantic_schema:
             raise RuntimeError(
@@ -422,6 +433,14 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         direct_recovery_semantic_witness_reentry_alignment=bool(ckpt.get(
             "direct_recovery_semantic_witness_reentry_alignment",
             model_cfg.get("direct_recovery_semantic_witness_reentry_alignment", False),
+        )),
+        direct_recovery_semantic_witness_control_projection=bool(ckpt.get(
+            "direct_recovery_semantic_witness_control_projection",
+            model_cfg.get("direct_recovery_semantic_witness_control_projection", False),
+        )),
+        direct_recovery_semantic_witness_boundary_transport=bool(ckpt.get(
+            "direct_recovery_semantic_witness_boundary_transport",
+            model_cfg.get("direct_recovery_semantic_witness_boundary_transport", False),
         )),
         direct_recovery_evidence_native_certificate_preservation=bool(ckpt.get(
             "direct_recovery_evidence_native_certificate_preservation",
@@ -689,6 +708,12 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_semantic_witness_reentry_alignment"] = bool(
         model.direct_recovery_semantic_witness_reentry_alignment
     )
+    cfg["model"]["direct_recovery_semantic_witness_control_projection"] = bool(
+        model.direct_recovery_semantic_witness_control_projection
+    )
+    cfg["model"]["direct_recovery_semantic_witness_boundary_transport"] = bool(
+        model.direct_recovery_semantic_witness_boundary_transport
+    )
     cfg["model"]["direct_recovery_evidence_native_certificate_preservation"] = bool(
         model.direct_recovery_evidence_native_certificate_preservation
     )
@@ -932,6 +957,14 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_semantic_witness_reentry_alignment",
             model_cfg.get("direct_recovery_semantic_witness_reentry_alignment", False),
         )),
+        "direct_recovery_semantic_witness_control_projection": bool(ckpt.get(
+            "direct_recovery_semantic_witness_control_projection",
+            model_cfg.get("direct_recovery_semantic_witness_control_projection", False),
+        )),
+        "direct_recovery_semantic_witness_boundary_transport": bool(ckpt.get(
+            "direct_recovery_semantic_witness_boundary_transport",
+            model_cfg.get("direct_recovery_semantic_witness_boundary_transport", False),
+        )),
     }
     actual_contract = {
         "direct_recovery_evidence_calibrator_context": bool(model.direct_recovery_evidence_calibrator_context),
@@ -992,6 +1025,12 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         ),
         "direct_recovery_semantic_witness_reentry_alignment": bool(
             model.direct_recovery_semantic_witness_reentry_alignment
+        ),
+        "direct_recovery_semantic_witness_control_projection": bool(
+            model.direct_recovery_semantic_witness_control_projection
+        ),
+        "direct_recovery_semantic_witness_boundary_transport": bool(
+            model.direct_recovery_semantic_witness_boundary_transport
         ),
     }
     if expected_contract != actual_contract:

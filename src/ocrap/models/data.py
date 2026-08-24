@@ -547,6 +547,7 @@ def direct_executable_recovery_witness_features_from_sample(
     include_recovery_stability_tail: bool = False,
     include_semantic_alignment_tail: bool = False,
     include_active_constraint_tail: bool = False,
+    project_control_envelope: bool = False,
 ) -> np.ndarray:
     """Return the v48.61 option-resolved executable recovery witness field.
 
@@ -730,7 +731,8 @@ def direct_executable_recovery_witness_features_from_sample(
             valid=True,
         )
         rec_states, rec_controls, _diag = rollout_recovery_controller(
-            prefix, option, horizon_steps, cfg
+            prefix, option, horizon_steps, cfg,
+            project_control_envelope=bool(project_control_envelope),
         )
         rec_states = np.asarray(rec_states, dtype=np.float64)
         rec_controls = np.asarray(rec_controls, dtype=np.float64)
@@ -924,6 +926,13 @@ DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_DIM = 12
 DIRECT_ACTIVE_CONSTRAINT_RECOVERY_WITNESS_FEATURE_SCHEMA = 2
 DIRECT_ACTIVE_CONSTRAINT_RECOVERY_WITNESS_FEATURE_DIM = 14
 
+# v48.67 keeps the 14-dimensional active-constraint field but changes how the
+# executable recovery trace may be realized: schema 3 explicitly records the
+# actuator-projected witness contract so persistent caches/checkpoints cannot
+# silently mix projected and historical unprojected traces.
+DIRECT_PROJECTED_BOUNDARY_RECOVERY_WITNESS_FEATURE_SCHEMA = 3
+DIRECT_PROJECTED_BOUNDARY_RECOVERY_WITNESS_FEATURE_DIM = 14
+
 
 def direct_semantic_recovery_witness_features_from_sample(
     d: dict[str, Any], cfg: dict | None = None, *, num_options: int | None = None
@@ -939,14 +948,22 @@ def direct_semantic_recovery_witness_features_from_sample(
     """
     cfg = cfg or {}
     model_cfg = cfg.get("model", {}) if isinstance(cfg.get("model", {}), dict) else {}
+    control_projection = bool(
+        model_cfg.get("direct_recovery_semantic_witness_control_projection", False)
+    )
+    boundary_transport = bool(
+        model_cfg.get("direct_recovery_semantic_witness_boundary_transport", False)
+    )
     active_constraint_tail = bool(
         model_cfg.get("direct_recovery_semantic_witness_route_alignment", False)
         or model_cfg.get("direct_recovery_semantic_witness_reentry_alignment", False)
+        or control_projection or boundary_transport
     )
     out = direct_executable_recovery_witness_features_from_sample(
         d, cfg, num_options=num_options, include_recovery_stability_tail=True,
         include_semantic_alignment_tail=True,
         include_active_constraint_tail=active_constraint_tail,
+        project_control_envelope=control_projection,
     )
     expected_dim = (
         DIRECT_ACTIVE_CONSTRAINT_RECOVERY_WITNESS_FEATURE_DIM
@@ -1321,10 +1338,18 @@ def _persistent_tensor_cache_key(
     semantic_reentry_alignment = bool(
         model_cfg.get("direct_recovery_semantic_witness_reentry_alignment", False)
     )
+    semantic_control_projection = bool(
+        model_cfg.get("direct_recovery_semantic_witness_control_projection", False)
+    )
+    semantic_boundary_transport = bool(
+        model_cfg.get("direct_recovery_semantic_witness_boundary_transport", False)
+    )
     semantic_feature_schema = (
-        DIRECT_ACTIVE_CONSTRAINT_RECOVERY_WITNESS_FEATURE_SCHEMA
-        if semantic_witness_features_enabled and (semantic_route_alignment or semantic_reentry_alignment)
-        else (DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA if semantic_witness_features_enabled else 0)
+        DIRECT_PROJECTED_BOUNDARY_RECOVERY_WITNESS_FEATURE_SCHEMA
+        if semantic_witness_features_enabled and (semantic_control_projection or semantic_boundary_transport)
+        else (DIRECT_ACTIVE_CONSTRAINT_RECOVERY_WITNESS_FEATURE_SCHEMA
+              if semantic_witness_features_enabled and (semantic_route_alignment or semantic_reentry_alignment)
+              else (DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA if semantic_witness_features_enabled else 0))
     )
     payload = {
         "schema": _PERSISTENT_TENSOR_CACHE_SCHEMA,
@@ -1358,6 +1383,8 @@ def _persistent_tensor_cache_key(
         "semantic_witness_feature_schema": semantic_feature_schema,
         "semantic_witness_route_alignment": semantic_route_alignment,
         "semantic_witness_reentry_alignment": semantic_reentry_alignment,
+        "semantic_witness_control_projection": semantic_control_projection,
+        "semantic_witness_boundary_transport": semantic_boundary_transport,
         "semantic_witness_recovery_horizon_s": (float(cfg.get("recovery_horizon_s", 4.0)) if semantic_witness_features_enabled else 0.0),
         "semantic_witness_sample_rate_hz": (float(cfg.get("sample_rate_hz", 10.0)) if semantic_witness_features_enabled else 0.0),
         "npz_keys": sorted(MODEL_SAMPLE_NPZ_KEYS),

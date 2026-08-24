@@ -3155,6 +3155,12 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_semantic_witness_reentry_alignment=bool(
             model_cfg.get("direct_recovery_semantic_witness_reentry_alignment", False)
         ),
+        direct_recovery_semantic_witness_control_projection=bool(
+            model_cfg.get("direct_recovery_semantic_witness_control_projection", False)
+        ),
+        direct_recovery_semantic_witness_boundary_transport=bool(
+            model_cfg.get("direct_recovery_semantic_witness_boundary_transport", False)
+        ),
         direct_recovery_evidence_native_certificate_preservation=bool(
             model_cfg.get("direct_recovery_evidence_native_certificate_preservation", False)
         ),
@@ -3693,10 +3699,13 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
                 model_cfg.get("direct_recovery_absolute_semantic_witness_correction", False)
             ),
             "direct_recovery_absolute_semantic_witness_feature_schema": (
-                (2 if (
+                (3 if (
+                    bool(model_cfg.get("direct_recovery_semantic_witness_control_projection", False))
+                    or bool(model_cfg.get("direct_recovery_semantic_witness_boundary_transport", False))
+                ) else (2 if (
                     bool(model_cfg.get("direct_recovery_semantic_witness_route_alignment", False))
                     or bool(model_cfg.get("direct_recovery_semantic_witness_reentry_alignment", False))
-                ) else 1)
+                ) else 1))
                 if bool(model_cfg.get("direct_recovery_absolute_semantic_witness_correction", False)) else 0
             ),
             "direct_recovery_absolute_semantic_witness_feature_source": (
@@ -3720,6 +3729,12 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             ),
             "direct_recovery_semantic_witness_reentry_alignment": bool(
                 model_cfg.get("direct_recovery_semantic_witness_reentry_alignment", False)
+            ),
+            "direct_recovery_semantic_witness_control_projection": bool(
+                model_cfg.get("direct_recovery_semantic_witness_control_projection", False)
+            ),
+            "direct_recovery_semantic_witness_boundary_transport": bool(
+                model_cfg.get("direct_recovery_semantic_witness_boundary_transport", False)
             ),
             "direct_recovery_evidence_native_certificate_preservation": bool(
                 model_cfg.get("direct_recovery_evidence_native_certificate_preservation", False)
