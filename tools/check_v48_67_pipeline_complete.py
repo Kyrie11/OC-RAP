@@ -44,6 +44,6 @@ def main():
  check_run(a.control_run,True,False,errors,hashes);check_run(a.boundary_run,False,True,errors,hashes);check_run(a.main_run,True,True,errors,hashes)
  for p in (a.reference_contract,a.v66_complete,a.feasibility_audit,a.boundary_audit,a.comparison):
   if p.is_file():hashes[str(p)]=sha(p)
- valid=not errors;doc={'schema':'ocrap-v48.67-pbrw-pipeline-complete-v1','valid':valid,'attribution_ready':valid,'algorithm_version':'v48.67-DCP-DRFC-BCDE-RIFA-OC-PBRW','engineering_version':'v48.67.0-OC-PBRW','errors':errors,'artifact_sha256':hashes,'factorial_arms':{'Q_CTRLPROJ':str(a.control_run),'R_BOUNDARY':str(a.boundary_run),'S_Main_OCPBRW':str(a.main_run),'historical_P66':'v48.66 OC-ACRW Main'},'test_roots_read':False,'dataset_reconstruction':False}
+ valid=not errors;doc={'schema':'ocrap-v48.67-pbrw-pipeline-complete-v1','valid':valid,'attribution_ready':valid,'algorithm_version':'v48.67-DCP-DRFC-BCDE-RIFA-OC-PBRW','engineering_version':'v48.67.1-OC-PBRW-ENGFIX','errors':errors,'artifact_sha256':hashes,'factorial_arms':{'Q_CTRLPROJ':str(a.control_run),'R_BOUNDARY':str(a.boundary_run),'S_Main_OCPBRW':str(a.main_run),'historical_P66':'v48.66 OC-ACRW Main'},'test_roots_read':False,'dataset_reconstruction':False}
  a.output.parent.mkdir(parents=True,exist_ok=True);a.output.write_text(json.dumps(doc,indent=2,sort_keys=True)+'\n');print(json.dumps({'event':'v48_67_pbrw_pipeline_complete','valid':valid,'output':str(a.output)}));return 0 if valid else 30
 if __name__=='__main__':raise SystemExit(main())

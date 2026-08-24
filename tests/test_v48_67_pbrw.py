@@ -7,7 +7,7 @@ from types import MethodType
 import numpy as np
 import torch
 
-from ocrap.cli.train import _absolute_feasibility_bce
+from ocrap.cli.train import _absolute_feasibility_bce, _semantic_witness_checkpoint_feature_contract
 from ocrap.data.schema import CandidatePrefix, RecoveryOption
 from ocrap.models.data import (
     DIRECT_ACTIVE_CONSTRAINT_RECOVERY_WITNESS_FEATURE_SCHEMA,
@@ -95,6 +95,29 @@ def _force_support_and_margins(m, margins: torch.Tensor):
         return vals.expand(z.shape[0],-1,-1).unsqueeze(-1)
     m.margin_head.forward=MethodType(mf,m.margin_head)
 
+
+
+def test_pbrw_training_checkpoint_feature_contract_tracks_schema3_source():
+    base={
+        'direct_recovery_absolute_semantic_witness_correction': True,
+        'direct_recovery_semantic_witness_route_alignment': True,
+        'direct_recovery_semantic_witness_reentry_alignment': True,
+    }
+    assert _semantic_witness_checkpoint_feature_contract(base) == (
+        2, 'active_constraint_coverage_common_executable_recovery_witness'
+    )
+    assert _semantic_witness_checkpoint_feature_contract({**base,
+        'direct_recovery_semantic_witness_control_projection': True}) == (
+        3, 'projected_boundary_common_executable_recovery_witness'
+    )
+    assert _semantic_witness_checkpoint_feature_contract({**base,
+        'direct_recovery_semantic_witness_boundary_transport': True}) == (
+        3, 'projected_boundary_common_executable_recovery_witness'
+    )
+    assert _semantic_witness_checkpoint_feature_contract({
+        'direct_recovery_absolute_semantic_witness_correction': True
+    }) == (1, 'semantics_aligned_common_executable_recovery_witness')
+    assert _semantic_witness_checkpoint_feature_contract({}) == (0, 'disabled')
 
 def test_pbrw_projected_controller_enforces_magnitude_jerk_and_rate_without_changing_default():
     d=_sample(); states=d['prefix_states']; ctrls=d['prefix_controls']

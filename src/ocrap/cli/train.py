@@ -58,6 +58,29 @@ from ocrap.models.ocrap import OCRAPModel
 from ocrap.utils.seed import seed_everything
 
 
+def _semantic_witness_checkpoint_feature_contract(model_cfg: dict) -> tuple[int, str]:
+    """Return the checkpoint metadata contract for semantic-witness features.
+
+    Engineering-only helper: keep the serialized schema and source identifier in
+    lockstep with the flags that select v48.64/v48.66/v48.67 feature semantics.
+    It does not change feature construction, model outputs, losses, or training.
+    """
+    enabled = bool(model_cfg.get("direct_recovery_absolute_semantic_witness_correction", False))
+    if not enabled:
+        return 0, "disabled"
+    if (
+        bool(model_cfg.get("direct_recovery_semantic_witness_control_projection", False))
+        or bool(model_cfg.get("direct_recovery_semantic_witness_boundary_transport", False))
+    ):
+        return 3, "projected_boundary_common_executable_recovery_witness"
+    if (
+        bool(model_cfg.get("direct_recovery_semantic_witness_route_alignment", False))
+        or bool(model_cfg.get("direct_recovery_semantic_witness_reentry_alignment", False))
+    ):
+        return 2, "active_constraint_coverage_common_executable_recovery_witness"
+    return 1, "semantics_aligned_common_executable_recovery_witness"
+
+
 def _device(cfg: dict) -> torch.device:
     tcfg = cfg.get("training", {}) if isinstance(cfg.get("training", {}), dict) else {}
     requested = str(tcfg.get("device", "auto"))
@@ -3699,21 +3722,10 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
                 model_cfg.get("direct_recovery_absolute_semantic_witness_correction", False)
             ),
             "direct_recovery_absolute_semantic_witness_feature_schema": (
-                (3 if (
-                    bool(model_cfg.get("direct_recovery_semantic_witness_control_projection", False))
-                    or bool(model_cfg.get("direct_recovery_semantic_witness_boundary_transport", False))
-                ) else (2 if (
-                    bool(model_cfg.get("direct_recovery_semantic_witness_route_alignment", False))
-                    or bool(model_cfg.get("direct_recovery_semantic_witness_reentry_alignment", False))
-                ) else 1))
-                if bool(model_cfg.get("direct_recovery_absolute_semantic_witness_correction", False)) else 0
+                _semantic_witness_checkpoint_feature_contract(model_cfg)[0]
             ),
             "direct_recovery_absolute_semantic_witness_feature_source": (
-                ("active_constraint_coverage_common_executable_recovery_witness"
-                 if (bool(model_cfg.get("direct_recovery_semantic_witness_route_alignment", False))
-                     or bool(model_cfg.get("direct_recovery_semantic_witness_reentry_alignment", False)))
-                 else "semantics_aligned_common_executable_recovery_witness")
-                if bool(model_cfg.get("direct_recovery_absolute_semantic_witness_correction", False)) else "disabled"
+                _semantic_witness_checkpoint_feature_contract(model_cfg)[1]
             ),
             "direct_recovery_semantic_witness_active_set_alignment": bool(
                 model_cfg.get("direct_recovery_semantic_witness_active_set_alignment", True)

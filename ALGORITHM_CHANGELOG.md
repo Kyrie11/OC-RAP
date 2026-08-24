@@ -6874,3 +6874,25 @@ S0 pools Safe/Near/Contact for recovery-witness learning and does not add any ne
 - Synthetic raw-reuse C 与 direct fresh C 的 rows/semantic summary 完全一致。
 - `compileall` PASS；132/132 shell `bash -n` PASS；V48.45–V48.56 regression 113 passed；runtime-focused tests 22 passed。
 - 全仓库已知历史缺口仍为缺失 `scripts/train_ocrap_v48_12_trident.sh`，与本次优化无关。
+
+## v48.67.1 OC-PBRW-ENGFIX — checkpoint semantic-witness metadata hotfix (2026-08-24)
+
+**类别：纯工程修复；V48.67 OC-PBRW 算法、训练目标、数据、输出目录与运行命令不变。**
+
+### Trigger
+
+首次 V48.67 Q_CTRLPROJ 运行中，balanced/precision 都完成 21 epochs，并生成一致的 `TRAINING_COMPLETE.json` / `EVIDENCE_CORRECTION_COMPLETE.json`；170 个历史 shared tensors bitwise unchanged，且只新增 `direct_absolute_semantic_witness_gain[2]`。但两侧 `V48_67_STAGE_I_STATE_ISOLATION.json` 均为 `valid=false`，唯一失败项是 `semantic_witness_feature_contract_valid=false`：checkpoint 正确写入 schema 3，却仍沿用 V48.66 的 source identifier `active_constraint_coverage_common_executable_recovery_witness`，而 V48.67 checker/factor contract 预注册要求 `projected_boundary_common_executable_recovery_witness`。launcher 使用 `set -Eeuo pipefail`，因此在第一个 Q arm 后 RC30 退出，R_BOUNDARY、S_Main、calibration、comparison 与 PIPELINE_COMPLETE 均未运行；当前 partial Q 结果不可用于 V48.67 scientific attribution。
+
+### Root cause and repair
+
+1. `src/ocrap/cli/train.py` 的 checkpoint serializer 已将 `control_projection || boundary_transport` 映射为 semantic feature schema 3，但 feature-source 分支只检查 `route_alignment || reentry_alignment`，导致 schema/source metadata 脱节。
+2. 新增 `_semantic_witness_checkpoint_feature_contract(model_cfg)`，统一返回 `(schema, source)`；V48.67 projection/boundary 任一启用时严格写入 `(3, projected_boundary_common_executable_recovery_witness)`，V48.66 route/reentry-only 保持 `(2, active_constraint_coverage_common_executable_recovery_witness)`，V48.64 保持 schema 1，disabled 保持 schema 0。
+3. 新增回归测试覆盖 v48.64/v48.66/v48.67/disabled 四种 metadata contract，避免以后 schema 与 source 再次漂移。
+4. pipeline engineering marker 更新为 `v48.67.1-OC-PBRW-ENGFIX`；算法版本仍为 `v48.67-DCP-DRFC-BCDE-RIFA-OC-PBRW`。
+5. 不放宽 state/variant/pipeline checker。checker 仍 fail-closed 要求 schema/source/flags 全部精确匹配。
+
+### Attribution contract
+
+- **算法不变**：control projection、boundary transport、route/re-entry certificate、2 shared gains、loss、top-K=5、threshold=0.5、RIFA 顺序、train/val/calibration/certificate roots 全部不变。
+- **输出目录不变**，launcher filename 与运行命令不变；launcher 开头仍清理 Q/R/S，因此修复后应完整重跑 V48.67，不能把这次 engineering-incomplete Q 与新 R/S 拼接。
+- 只有新的 `OC-RAP-v48.67-PIPELINE_COMPLETE.json` 满足 `valid=true`, `attribution_ready=true`, `engineering_version=v48.67.1-OC-PBRW-ENGFIX`, `errors=[]`, `test_roots_read=false` 后，才允许执行 V48.67 的预注册算法归因。
