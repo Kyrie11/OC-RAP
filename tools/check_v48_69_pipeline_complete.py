@@ -90,13 +90,17 @@ def main():
         d=load(a.v68_comparison); pr=d.get('preregistered_decision') or {}
         if not (pr.get('status')=='STOP' and pr.get('projection_fidelity_mechanism_gate') is True and pr.get('robust_occupancy_mechanism_gate') is False):
             errors.append('V48.68 scientific branch prerequisite invalid')
+    if a.demand_audit.is_file():
+        dd=load(a.demand_audit)
+        if not dd.get('valid'):
+            errors.append('demand trust audit invalid or row alignment incomplete')
     check_run(a.dtrw_run,errors,hashes)
     for p in tops:
         if p.is_file(): hashes[str(p)]=sha(p)
     valid=not errors
     doc={
         'schema':'ocrap-v48.69-dtrw-pipeline-complete-v1','valid':valid,'attribution_ready':valid,
-        'algorithm_version':'v48.69-DCP-DRFC-BCDE-RIFA-OC-DTRW','engineering_version':'v48.69.0-OC-DTRW',
+        'algorithm_version':'v48.69-DCP-DRFC-BCDE-RIFA-OC-DTRW','engineering_version':'v48.69.1-OC-DTRW-ENGFIX',
         'errors':errors,'artifact_sha256':hashes,
         'factorial_arms':{'D69_Main_OCDTRW':str(a.dtrw_run),'historical_T68':'v48.68 T_FIDELITY','historical_Q67':'v48.67 Q_CTRLPROJ','historical_P66':'v48.66 OC-ACRW Main'},
         'test_roots_read':False,'dataset_reconstruction':False,

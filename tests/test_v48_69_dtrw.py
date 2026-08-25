@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from pathlib import Path
+import re
+import runpy
 from types import MethodType
 
 import numpy as np
@@ -228,7 +230,49 @@ def test_v4869_pipeline_checker_requires_v4868_validated_branch():
     assert "robust_occupancy_mechanism_gate') is False" in text
     assert "EXPECTED_SCHEMA=5" in text
     assert "EXPECTED_SOURCE='demand_tempered_projected_recovery_witness'" in text
+    assert "'engineering_version':'v48.69.1-OC-DTRW-ENGFIX'" in text
+    assert "demand trust audit invalid or row alignment incomplete" in text
 
+
+
+def test_v4869_runner_embedded_python_is_syntax_valid():
+    """Regression for the v48.69 factor-contract heredoc SyntaxError."""
+    script = Path(__file__).resolve().parents[1] / 'scripts' / 'run_v48_69_dcp_drfc_bcde_rifa_dtrw_two_gpu.sh'
+    text = script.read_text()
+    blocks = re.findall(r"<<'PY2'\n(.*?)\nPY2", text, flags=re.S)
+    assert len(blocks) >= 2
+    for i, source in enumerate(blocks):
+        compile(source, f'{script.name}:PY2[{i}]', 'exec')
+
+
+def test_v4869_truth_debt_keeps_exact_zero_teacher_boundary():
+    mod = runpy.run_path(str(Path(__file__).resolve().parents[1] / 'tools' / 'audit_v48_69_truth_debt.py'))
+    row = {
+        'teacher_candidate_r_dep': 0.0,
+        'teacher_adv': 0.0,
+        'teacher_harmful': False,
+        'semantic_best_common_viability': -0.1,
+        'absolute_feasibility_pass': False,
+    }
+    out = mod['summ']([row])
+    assert out['teacher_feasible']['rows'] == 1
+
+
+def test_v4869_demand_audit_fails_closed_on_row_set_mismatch():
+    mod = runpy.run_path(str(Path(__file__).resolve().parents[1] / 'tools' / 'audit_v48_69_demand_trust.py'))
+    key = ('scene-1', 1.0, 'fold-0', 'cand-0')
+    row = {
+        'teacher_candidate_r_dep': 0.1,
+        'teacher_adv': 0.02,
+        'teacher_harmful': False,
+        'semantic_best_common_viability': 0.2,
+        'semantic_max_common_support': 0.8,
+        'absolute_feasibility_pass': False,
+    }
+    out = mod['summarize']({key: row}, {})
+    assert out['row_set_equal'] is False
+    assert out['positive_certificate_set_equal'] is False
+    assert out['missing_in_D_count'] == 1
 
 def test_v4869_changelog_records_v4868_branch_decision():
     text = (Path(__file__).resolve().parents[1] / 'ALGORITHM_CHANGELOG.md').read_text()
