@@ -548,6 +548,8 @@ def direct_executable_recovery_witness_features_from_sample(
     include_semantic_alignment_tail: bool = False,
     include_active_constraint_tail: bool = False,
     project_control_envelope: bool = False,
+    projection_fidelity_weighting: bool = False,
+    robust_occupancy_envelope: bool = False,
 ) -> np.ndarray:
     """Return the v48.61 option-resolved executable recovery witness field.
 
@@ -655,22 +657,53 @@ def direct_executable_recovery_witness_features_from_sample(
     if agents:
         rel0 = np.stack([row[:2] - ego_xy for _, row in agents], axis=0)
         vel = np.stack([row[3:5] for _, row in agents], axis=0)
+        # Current observed acceleration is part of AGENT_FEATURES (ax, ay) and
+        # is therefore deployable.  v48.68 optionally treats CV and a bounded
+        # constant-acceleration continuation as an observation-consistent
+        # occupancy set; no teacher future or hidden branch metadata is used.
+        acc = np.stack([row[5:7] for _, row in agents], axis=0)
         alen = np.asarray([max(abs(float(row[10])), 1.0e-3) for _, row in agents], dtype=np.float64)
         awid = np.asarray([max(abs(float(row[11])), 1.0e-3) for _, row in agents], dtype=np.float64)
         arad = 0.5 * np.hypot(alen, awid)
     else:
         rel0 = np.zeros((0, 2), dtype=np.float64)
         vel = np.zeros((0, 2), dtype=np.float64)
+        acc = np.zeros((0, 2), dtype=np.float64)
         arad = np.zeros((0,), dtype=np.float64)
+
+    # Acceleration is held only for the already-configured prefix horizon and
+    # then propagated with the resulting velocity.  This avoids an unbounded
+    # four-second constant-acceleration extrapolation while introducing no new
+    # tuned horizon.  When robust_occupancy_envelope=False the helper is exactly
+    # the historical CV forecast.
+    accel_hold_s = max(float(cfg.get("prefix_horizon_s", 1.0) or 1.0), dt)
+
+    def _agent_future(times: np.ndarray) -> tuple[np.ndarray, np.ndarray | None]:
+        tt = np.asarray(times, dtype=np.float64).reshape(-1)
+        cv = rel0[None, :, :] + tt[:, None, None] * vel[None, :, :]
+        if not robust_occupancy_envelope or not agents:
+            return cv, None
+        hold = np.minimum(tt, accel_hold_s)
+        accel_disp = (tt * hold - 0.5 * hold * hold)[:, None, None] * acc[None, :, :]
+        ca = cv + accel_disp
+        return cv, ca
+
+    def _signed_clearance(ego_xy_rel_t: np.ndarray, times: np.ndarray) -> np.ndarray:
+        cv, ca = _agent_future(times)
+        delta_cv = ego_xy_rel_t[:, None, :] - cv
+        clear_cv = np.linalg.norm(delta_cv, axis=-1) - ego_rad - arad[None, :]
+        if ca is None:
+            return clear_cv
+        delta_ca = ego_xy_rel_t[:, None, :] - ca
+        clear_ca = np.linalg.norm(delta_ca, axis=-1) - ego_rad - arad[None, :]
+        return np.minimum(clear_cv, clear_ca)
 
     prefix_duration = float(states.shape[0]) * dt
     terminal_xy_rel = states[-1, :2].astype(np.float64) - ego_xy
     if agents:
-        agent_at_prefix_end = rel0 + prefix_duration * vel
-        terminal_delta = terminal_xy_rel[None, :] - agent_at_prefix_end
-        prefix_terminal_clear = float(
-            np.min(np.linalg.norm(terminal_delta, axis=-1) - ego_rad - arad)
-        )
+        prefix_terminal_clear = float(_signed_clearance(
+            terminal_xy_rel.reshape(1, 2), np.asarray([prefix_duration], dtype=np.float64)
+        ).min())
     else:
         prefix_terminal_clear = 40.0
 
@@ -681,10 +714,8 @@ def direct_executable_recovery_witness_features_from_sample(
     # already entered contact/near-overlap or is dynamically unstable.
     if agents:
         prefix_times = (np.arange(states.shape[0], dtype=np.float64) + 1.0) * dt
-        prefix_agent_future = rel0[None, :, :] + prefix_times[:, None, None] * vel[None, :, :]
         prefix_xy_rel = states[:, :2].astype(np.float64) - ego_xy[None, :]
-        prefix_delta = prefix_xy_rel[:, None, :] - prefix_agent_future
-        prefix_signed_clearance = np.linalg.norm(prefix_delta, axis=-1) - ego_rad - arad[None, :]
+        prefix_signed_clearance = _signed_clearance(prefix_xy_rel, prefix_times)
         prefix_min_clear = float(np.min(prefix_signed_clearance))
     else:
         prefix_min_clear = 40.0
@@ -730,6 +761,11 @@ def direct_executable_recovery_witness_features_from_sample(
             params=np.asarray(params[l], dtype=np.float32).reshape(-1),
             valid=True,
         )
+        raw_rec_states = raw_rec_controls = None
+        if project_control_envelope and projection_fidelity_weighting:
+            raw_rec_states, raw_rec_controls, _raw_diag = rollout_recovery_controller(
+                prefix, option, horizon_steps, cfg, project_control_envelope=False,
+            )
         rec_states, rec_controls, _diag = rollout_recovery_controller(
             prefix, option, horizon_steps, cfg,
             project_control_envelope=bool(project_control_envelope),
@@ -746,10 +782,8 @@ def direct_executable_recovery_witness_features_from_sample(
             # rec_states[0] is exactly the candidate terminal state at
             # prefix_duration; later rows are separated by dt.
             times = prefix_duration + np.arange(rec_states.shape[0], dtype=np.float64) * dt
-            agent_future = rel0[None, :, :] + times[:, None, None] * vel[None, :, :]
             rec_xy_rel = rec_states[:, :2] - ego_xy[None, :]
-            delta = rec_xy_rel[:, None, :] - agent_future
-            signed_clearance = np.linalg.norm(delta, axis=-1) - ego_rad - arad[None, :]
+            signed_clearance = _signed_clearance(rec_xy_rel, times)
             c_min = float(np.min(signed_clearance))
             c_terminal = float(np.min(signed_clearance[-1]))
         else:
@@ -761,8 +795,13 @@ def direct_executable_recovery_witness_features_from_sample(
         stop_required = terminal_speed * terminal_speed / (2.0 * stop_decel) + d_safe0
         h_stop = np.tanh((c_terminal - stop_required) / stop_scale)
 
-        if rec_controls.ndim == 2 and rec_controls.shape[0] > 0 and rec_controls.shape[1] >= 4:
-            rc = rec_controls[:, :4]
+        control_source = (
+            np.asarray(raw_rec_controls, dtype=np.float64)
+            if (project_control_envelope and projection_fidelity_weighting and raw_rec_controls is not None)
+            else rec_controls
+        )
+        if control_source.ndim == 2 and control_source.shape[0] > 0 and control_source.shape[1] >= 4:
+            rc = control_source[:, :4]
             ctrl_terms = np.asarray([
                 (a_max - float(np.max(np.maximum(rc[:, 0], 0.0)))) / accel_scale,
                 (abs(a_min) - float(np.max(np.maximum(-rc[:, 0], 0.0)))) / decel_scale,
@@ -933,6 +972,13 @@ DIRECT_ACTIVE_CONSTRAINT_RECOVERY_WITNESS_FEATURE_DIM = 14
 DIRECT_PROJECTED_BOUNDARY_RECOVERY_WITNESS_FEATURE_SCHEMA = 3
 DIRECT_PROJECTED_BOUNDARY_RECOVERY_WITNESS_FEATURE_DIM = 14
 
+# v48.68 keeps the 14-D layout but changes two observation-only semantics:
+# robust CV/CA occupancy and soft projection-fidelity weighting.  A distinct
+# schema prevents persistent caches/checkpoints from mixing those values with
+# v48.67 even though the tensor shape is unchanged.
+DIRECT_ROBUST_TRUST_RECOVERY_WITNESS_FEATURE_SCHEMA = 4
+DIRECT_ROBUST_TRUST_RECOVERY_WITNESS_FEATURE_DIM = 14
+
 
 def direct_semantic_recovery_witness_features_from_sample(
     d: dict[str, Any], cfg: dict | None = None, *, num_options: int | None = None
@@ -954,16 +1000,24 @@ def direct_semantic_recovery_witness_features_from_sample(
     boundary_transport = bool(
         model_cfg.get("direct_recovery_semantic_witness_boundary_transport", False)
     )
+    projection_fidelity = bool(
+        model_cfg.get("direct_recovery_semantic_witness_projection_fidelity_weighting", False)
+    )
+    robust_occupancy = bool(
+        model_cfg.get("direct_recovery_semantic_witness_robust_occupancy", False)
+    )
     active_constraint_tail = bool(
         model_cfg.get("direct_recovery_semantic_witness_route_alignment", False)
         or model_cfg.get("direct_recovery_semantic_witness_reentry_alignment", False)
-        or control_projection or boundary_transport
+        or control_projection or boundary_transport or projection_fidelity or robust_occupancy
     )
     out = direct_executable_recovery_witness_features_from_sample(
         d, cfg, num_options=num_options, include_recovery_stability_tail=True,
         include_semantic_alignment_tail=True,
         include_active_constraint_tail=active_constraint_tail,
         project_control_envelope=control_projection,
+        projection_fidelity_weighting=projection_fidelity,
+        robust_occupancy_envelope=robust_occupancy,
     )
     expected_dim = (
         DIRECT_ACTIVE_CONSTRAINT_RECOVERY_WITNESS_FEATURE_DIM
@@ -1344,12 +1398,20 @@ def _persistent_tensor_cache_key(
     semantic_boundary_transport = bool(
         model_cfg.get("direct_recovery_semantic_witness_boundary_transport", False)
     )
+    semantic_projection_fidelity = bool(
+        model_cfg.get("direct_recovery_semantic_witness_projection_fidelity_weighting", False)
+    )
+    semantic_robust_occupancy = bool(
+        model_cfg.get("direct_recovery_semantic_witness_robust_occupancy", False)
+    )
     semantic_feature_schema = (
-        DIRECT_PROJECTED_BOUNDARY_RECOVERY_WITNESS_FEATURE_SCHEMA
-        if semantic_witness_features_enabled and (semantic_control_projection or semantic_boundary_transport)
-        else (DIRECT_ACTIVE_CONSTRAINT_RECOVERY_WITNESS_FEATURE_SCHEMA
-              if semantic_witness_features_enabled and (semantic_route_alignment or semantic_reentry_alignment)
-              else (DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA if semantic_witness_features_enabled else 0))
+        DIRECT_ROBUST_TRUST_RECOVERY_WITNESS_FEATURE_SCHEMA
+        if semantic_witness_features_enabled and (semantic_projection_fidelity or semantic_robust_occupancy)
+        else (DIRECT_PROJECTED_BOUNDARY_RECOVERY_WITNESS_FEATURE_SCHEMA
+              if semantic_witness_features_enabled and (semantic_control_projection or semantic_boundary_transport)
+              else (DIRECT_ACTIVE_CONSTRAINT_RECOVERY_WITNESS_FEATURE_SCHEMA
+                    if semantic_witness_features_enabled and (semantic_route_alignment or semantic_reentry_alignment)
+                    else (DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA if semantic_witness_features_enabled else 0)))
     )
     payload = {
         "schema": _PERSISTENT_TENSOR_CACHE_SCHEMA,
@@ -1385,6 +1447,8 @@ def _persistent_tensor_cache_key(
         "semantic_witness_reentry_alignment": semantic_reentry_alignment,
         "semantic_witness_control_projection": semantic_control_projection,
         "semantic_witness_boundary_transport": semantic_boundary_transport,
+        "semantic_witness_projection_fidelity_weighting": semantic_projection_fidelity,
+        "semantic_witness_robust_occupancy": semantic_robust_occupancy,
         "semantic_witness_recovery_horizon_s": (float(cfg.get("recovery_horizon_s", 4.0)) if semantic_witness_features_enabled else 0.0),
         "semantic_witness_sample_rate_hz": (float(cfg.get("sample_rate_hz", 10.0)) if semantic_witness_features_enabled else 0.0),
         "npz_keys": sorted(MODEL_SAMPLE_NPZ_KEYS),

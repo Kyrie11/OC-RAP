@@ -1,3 +1,62 @@
+## v48.68 — OC-RTRW: Observation-Consistent Robust-Trust Recovery Witness (2026-08-24)
+
+**Entry condition / v48.67.1 authoritative result.** The corrected v48.67.1 OC-PBRW rerun is engineering-valid and attribution-ready: `valid=true`, `attribution_ready=true`, `engineering_version=v48.67.1-OC-PBRW-ENGFIX`, `errors=[]`, `test_roots_read=false`, `dataset_reconstruction=false`. Q/R/S balanced+precision runs completed training/calibration, schema-3 state/variant isolation is valid, 170 Stage-I shared tensors remain bitwise unchanged, and only `direct_absolute_semantic_witness_gain[2]` trains. Therefore v48.67 is a **scientific STOP**, not an engineering failure.
+
+### V48.67 preregistered decision: OC-PBRW = STOP, with actuator realization validated as a partial mechanism
+
+- **Primary source gate FAIL strongly.** S-B AUC is negative in all 8 cells. Balanced deltas are approximately `-0.07116` dev-Near, `-0.04890` certificate-Near, `-0.02446` dev-Contact, `-0.02640` certificate-Contact; precision is `-0.07151`, `-0.04792`, `-0.02497`, `-0.02607`. Thus 0/8 improve and 0/8 reach `+0.01`.
+- **Selectivity gate PASS only in the historical preregistered sense.** S harmful/TI pass stays around `0.11--0.14`, below 0.25 and still far below v48.61-F, but it regresses materially from v48.66 P (`~0.05--0.06`).
+- **Safe-positive admission FAIL.** S-P66 pass improves in 6/8 cells but only by about `0.054--0.065`; dev-Near remains zero. No cell reaches the preregistered `+0.15` requirement.
+- **Safe-positive witness coverage improves 8/8 but is too weak.** S/Q positive-certificate coverage rises in every cell, but only 1/8 gains reach `+0.15`; Contact gains are only about `+0.032--0.081`.
+- **Trust non-regression FAIL in all 8 cells.** Positive-certificate teacher-feasible precision drops by about `0.041--0.125` versus P66: dev-Near falls from `~0.603` to `~0.494--0.500`, dev-Contact from `~0.734` to `~0.609--0.611`, certificate-Near from `~0.638` to `~0.550`, and certificate-Contact from `~0.610` to `~0.568--0.570`.
+- **Q control-projection mechanism is mechanically successful but scientifically insufficient.** On every safe-positive cell, projected Q makes `control_nonpositive_fraction=0` and `control_eq_minus1_fraction=0`, eliminating the artificial post-hoc actuator veto. It also restores some positive certificates in all 8 cells. However Q-P66 AUC is negative in all 8 cells and the restored witnesses are poorly selective.
+- **R/S boundary transport is a real boundary-lift primitive but fails as a source mechanism.** R raises `pass|positive-certificate` for certificate-Contact from 0.2 to 0.6, and S-Q raises dev-Contact from 0 to 0.25, proving that some trusted witnesses previously failed to cross the 0.5 admission boundary. But it also raises harmful/TI admission and decreases source AUC; S-Q does not improve conditional pass on dev-Near/certificate-Near. Boundary transport must therefore be deferred until witness trust is repaired.
+
+### New evidence from candidate-aligned Q vs P66 analysis
+
+Aligning proposal rows by `(scene,time,candidate)` shows that most certificates newly admitted by actuator projection are false:
+
+- balanced: newly-positive precision is about `0.25` dev-Near, `0.263` dev-Contact, `0.273` certificate-Near, `0.335` certificate-Contact;
+- precision is nearly identical (`~0.217/0.263/0.273/0.331`).
+
+The raw pre-projection control violation carries information that Q discards. For example on balanced dev-Near newly true certificates have mean old control barrier about `-0.34`, whereas newly false certificates are about `-0.94`; analogous separation appears in dev-Contact/certificate-Near. At the same time, Q's single-CV projected clearance is often **more optimistic for newly false than newly true certificates**. This is the key v48.67 causal localization.
+
+### Updated diagnosis of the v48.66 two-layer root cause
+
+**Layer A — true-recovery realization: partially solved, then refined.** V48.67 proves the policy should enforce jerk/rate/magnitude constraints by construction rather than post-hoc veto. That part is validated. But “actuator-feasible” is not equivalent to “trustworthy”: projection can make a very unrealistic desired command mechanically feasible while erasing how hard the intervention had to work. The missing state is now **realization fidelity / latent actuation uncertainty**, not another hard control barrier.
+
+**Layer B — witness-to-absolute-boundary transport: still real, but not currently actionable.** R/S show that a correct positive certificate can fail to cross `R_dep=0`, so the boundary debt is genuine. However the v48.67 bounded transport is nonselective with respect to true vs false positive certificates and therefore amplifies false admission. Do not iterate its gain/shape while witness trust is below P66.
+
+### Updated unified Near/Contact dominant bottleneck
+
+> **observation-consistent robust witness credibility under latent actuation and occupancy uncertainty after actuator-feasible recovery realization.**
+
+Near and Contact share the same failure: after a projected recovery is constructed, the observable certificate is too confident about whether that trajectory is physically credible under partially observed dynamics. Near manifests this as optimistic clearance/route viability near the collision boundary; Contact manifests it as optimistic post-contact recovery/secondary-collision viability. These are different active constraints of one regime-agnostic recovery certificate, not grounds for a regime router.
+
+### V48.68 intervention: OC-RTRW
+
+V48.68 freezes the validated v48.67 projected controller ON, v48.66 route+re-entry constraints ON, v48.64 active-set alignment ON, class-local/path-stop OFF, and **boundary transport OFF**. OC-MERO/RIFA/top-5/0.5, relative ranking, option library, teacher labels and datasets remain frozen. Only the same two shared gains train.
+
+1. **Projection-fidelity trust (`T_FIDELITY`).** The actual recovery trajectory remains actuator-projected and physically executable. In parallel, compute the same recovery mode with the raw desired commands only to measure the normalized control-envelope violation. Convert violation magnitude to the strictly-positive confidence `f=1/(1+ReLU(-atanh(h_control_raw)))` and multiply the frozen common-support weight by `f`. This cannot flip witness sign or reintroduce a hard control veto; it only preserves the information “how much projection was required” when deciding how much positive rescue to trust.
+2. **Observation-only robust occupancy (`U_OCCUPANCY`).** Replace a single constant-velocity agent forecast by a conservative set containing CV and a continuation using the **currently observed** agent acceleration. Acceleration is held only for the already-configured `prefix_horizon_s`, then the resulting velocity is propagated; no new tuned horizon is introduced. Clearance, conflict capacity and persistent re-entry use the minimum signed clearance over the set. No future/teacher/regime information is read.
+3. **Main (`V_Main_OC-RTRW`).** Combine both factors. New schema 4 / source `robust_trust_projected_recovery_witness` prevents cache/checkpoint mixing with v48.67 schema 3 while retaining the same 14-D layout.
+
+### Preregistered 2x2 experiment
+
+Historical **Q67_CTRLPROJ** is the common baseline. New arms:
+
+- **T_FIDELITY:** projected recovery + soft projection-fidelity trust, historical CV occupancy;
+- **U_OCCUPANCY:** projected recovery + robust CV/current-acceleration occupancy, no fidelity weighting;
+- **V/Main OC-RTRW:** both factors.
+
+Attribution order: `V-B` primary source gate; `T-Q67` isolates projection-fidelity trust; `U-Q67` isolates robust occupancy; `V-U` and `V-T` are conditional main effects and `V-Q67-(T-Q67)-(U-Q67)` is the interaction. A read-only robust-trust audit records certificate retained/lost/gained sets and their teacher-feasible precision.
+
+Main GO requires all of: `V-B` AUC >0 in 8/8 and >=+0.01 in >=6/8; harmful/TI pass <=0.25 and >=0.10 below F in every cell; safe-positive pass and positive-certificate coverage >P66 in 8/8 and >=+0.05 in >=6/8; positive-certificate precision no worse than P66 by >0.03. T must preserve the Q certificate-set sizes exactly and improve source AUC in >=6/8 while not increasing harmful/TI pass in >=6/8. U must improve positive-certificate precision over Q in every cell, by >=0.05 in >=6/8, while safe-positive certificate coverage does not fall by more than 0.05 in any cell.
+
+### Continue to avoid
+
+All historical exclusions remain. Add two explicit v48.67 lessons: **do not carry boundary transport into Main before witness trust GO**, and **do not treat projected control as unconditional confidence 1 while discarding projection severity**. Also do not replace CV by teacher future or hidden friction; uncertainty must remain observation-only and regime-agnostic.
+
 ## v48.67 — OC-PBRW: Observation-Consistent Projected Boundary Recovery Witness (2026-08-24)
 
 **Entry condition / v48.66 authoritative result.** The uploaded v48.66 OC-ACRW result is engineering-valid and attribution-ready: top-level `valid=true`, `attribution_ready=true`, `engineering_version=v48.66.0-OC-ACRW`, `errors=[]`, `test_roots_read=false`, `dataset_reconstruction=false`. Reference reuse remains valid and scene-disjoint. N_ROUTE / O_REENTRY / P_Main all completed balanced+precision training/calibration; each run records 21 completed epochs, a distinct checkpoint provenance, Stage-I bitwise isolation, and only `direct_absolute_semantic_witness_gain[2]` as trainable state. Therefore v48.66 is a **scientific STOP**, not an engineering failure.

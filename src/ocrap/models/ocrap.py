@@ -363,6 +363,8 @@ class OCRAPModel(nn.Module):
         direct_recovery_semantic_witness_reentry_alignment: bool = False,
         direct_recovery_semantic_witness_control_projection: bool = False,
         direct_recovery_semantic_witness_boundary_transport: bool = False,
+        direct_recovery_semantic_witness_projection_fidelity_weighting: bool = False,
+        direct_recovery_semantic_witness_robust_occupancy: bool = False,
         direct_recovery_evidence_native_certificate_preservation: bool = False,
         direct_recovery_evidence_native_margin_complete_preservation: bool = False,
         direct_recovery_evidence_native_advantage_preservation: bool = False,
@@ -641,6 +643,18 @@ class OCRAPModel(nn.Module):
         )
         self.direct_recovery_semantic_witness_boundary_transport = bool(
             direct_recovery_semantic_witness_boundary_transport
+        )
+        # v48.68 OC-RTRW: Q_CTRLPROJ removed the post-hoc control veto but
+        # admitted many low-trust witnesses.  Preserve the magnitude of the raw
+        # desired-command control violation as a *soft support fidelity* rather
+        # than a hard feasibility veto, and optionally robustify observable
+        # occupancy with CV/observed-acceleration hypotheses.  Both are shared
+        # observation-only semantics, never regime inputs.
+        self.direct_recovery_semantic_witness_projection_fidelity_weighting = bool(
+            direct_recovery_semantic_witness_projection_fidelity_weighting
+        )
+        self.direct_recovery_semantic_witness_robust_occupancy = bool(
+            direct_recovery_semantic_witness_robust_occupancy
         )
         absolute_source_count = sum([
             self.direct_recovery_absolute_feasibility_head,
@@ -2241,6 +2255,8 @@ class OCRAPModel(nn.Module):
             or self.direct_recovery_semantic_witness_reentry_alignment
             or self.direct_recovery_semantic_witness_control_projection
             or self.direct_recovery_semantic_witness_boundary_transport
+            or self.direct_recovery_semantic_witness_projection_fidelity_weighting
+            or self.direct_recovery_semantic_witness_robust_occupancy
         ) else 12
         expected = (int(batch_size), int(self.num_options), feature_dim)
         if feat.ndim != 3 or tuple(feat.shape) != expected:
@@ -2752,6 +2768,25 @@ class OCRAPModel(nn.Module):
         if ov is not None:
             common_support = torch.where(ov, common_support, torch.zeros_like(common_support))
         common_support = common_support.detach().to(dtype=memory.dtype)
+
+        # v48.68 projection-fidelity factor.  Under Q_CTRLPROJ the actual
+        # applied controls are feasible by construction, so h_control must not
+        # become a hard veto.  However v48.67 showed that erasing the raw
+        # desired-command violation entirely admits many false certificates.
+        # Convert the raw normalized control violation into a strictly-positive
+        # confidence multiplier: zero/positive reserve -> 1, one violated
+        # normalized unit -> 1/2, larger violations decay smoothly.  Because the
+        # multiplier never changes sign, witness *existence* is unchanged; only
+        # the amount of positive rescue is discounted when realizing the mode
+        # requires a large actuator projection.
+        if self.direct_recovery_semantic_witness_projection_fidelity_weighting:
+            eps_fid = torch.finfo(h_control.dtype).eps * 16.0
+            raw_control_margin = torch.atanh(
+                h_control.float().clamp(-1.0 + eps_fid, 1.0 - eps_fid)
+            )
+            control_violation = torch.relu(-raw_control_margin)
+            projection_fidelity = (1.0 / (1.0 + control_violation)).to(dtype=memory.dtype)
+            common_support = common_support * projection_fidelity
 
         gains = self.direct_absolute_semantic_witness_gain.clamp(0.0, 2.0)
 

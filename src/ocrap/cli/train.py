@@ -69,6 +69,11 @@ def _semantic_witness_checkpoint_feature_contract(model_cfg: dict) -> tuple[int,
     if not enabled:
         return 0, "disabled"
     if (
+        bool(model_cfg.get("direct_recovery_semantic_witness_projection_fidelity_weighting", False))
+        or bool(model_cfg.get("direct_recovery_semantic_witness_robust_occupancy", False))
+    ):
+        return 4, "robust_trust_projected_recovery_witness"
+    if (
         bool(model_cfg.get("direct_recovery_semantic_witness_control_projection", False))
         or bool(model_cfg.get("direct_recovery_semantic_witness_boundary_transport", False))
     ):
@@ -3184,6 +3189,12 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_semantic_witness_boundary_transport=bool(
             model_cfg.get("direct_recovery_semantic_witness_boundary_transport", False)
         ),
+        direct_recovery_semantic_witness_projection_fidelity_weighting=bool(
+            model_cfg.get("direct_recovery_semantic_witness_projection_fidelity_weighting", False)
+        ),
+        direct_recovery_semantic_witness_robust_occupancy=bool(
+            model_cfg.get("direct_recovery_semantic_witness_robust_occupancy", False)
+        ),
         direct_recovery_evidence_native_certificate_preservation=bool(
             model_cfg.get("direct_recovery_evidence_native_certificate_preservation", False)
         ),
@@ -3747,6 +3758,12 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             ),
             "direct_recovery_semantic_witness_boundary_transport": bool(
                 model_cfg.get("direct_recovery_semantic_witness_boundary_transport", False)
+            ),
+            "direct_recovery_semantic_witness_projection_fidelity_weighting": bool(
+                model_cfg.get("direct_recovery_semantic_witness_projection_fidelity_weighting", False)
+            ),
+            "direct_recovery_semantic_witness_robust_occupancy": bool(
+                model_cfg.get("direct_recovery_semantic_witness_robust_occupancy", False)
             ),
             "direct_recovery_evidence_native_certificate_preservation": bool(
                 model_cfg.get("direct_recovery_evidence_native_certificate_preservation", False)
