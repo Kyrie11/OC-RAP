@@ -276,7 +276,7 @@ def test_v4869_demand_audit_fails_closed_on_row_set_mismatch():
 
 def test_v4869_changelog_records_v4868_branch_decision():
     text = (Path(__file__).resolve().parents[1] / 'ALGORITHM_CHANGELOG.md').read_text()
-    assert text.startswith('## v48.69 — OC-DTRW')
+    assert '## v48.69 — OC-DTRW' in text
     assert 'T_FIDELITY is a clean mechanism GO' in text
     assert 'U_OCCUPANCY is a mechanism STOP' in text
     assert 'do not use a hard minimum over CV and current-acceleration occupancy' in text

@@ -18,6 +18,7 @@ from ocrap.models.data import (
     DIRECT_PROJECTED_BOUNDARY_RECOVERY_WITNESS_FEATURE_SCHEMA,
     DIRECT_ROBUST_TRUST_RECOVERY_WITNESS_FEATURE_SCHEMA,
     DIRECT_DEMAND_TEMPERED_RECOVERY_WITNESS_FEATURE_SCHEMA,
+    DIRECT_OCCUPANCY_TEMPERED_RECOVERY_WITNESS_FEATURE_SCHEMA,
     direct_absolute_physical_headroom_features_from_sample,
     direct_executable_recovery_witness_features_from_sample,
     direct_common_recovery_witness_features_from_sample,
@@ -258,8 +259,14 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_semantic_witness_robust_occupancy",
             model_cfg.get("direct_recovery_semantic_witness_robust_occupancy", False),
         ))
+        soft_occupancy_disagreement = bool(ckpt.get(
+            "direct_recovery_semantic_witness_soft_occupancy_disagreement",
+            model_cfg.get("direct_recovery_semantic_witness_soft_occupancy_disagreement", False),
+        ))
         expected_semantic_schema = (
-            DIRECT_DEMAND_TEMPERED_RECOVERY_WITNESS_FEATURE_SCHEMA
+            DIRECT_OCCUPANCY_TEMPERED_RECOVERY_WITNESS_FEATURE_SCHEMA
+            if soft_occupancy_disagreement
+            else (DIRECT_DEMAND_TEMPERED_RECOVERY_WITNESS_FEATURE_SCHEMA
             if demand_normalized_fidelity
             else (DIRECT_ROBUST_TRUST_RECOVERY_WITNESS_FEATURE_SCHEMA
             if (projection_fidelity or robust_occupancy)
@@ -267,7 +274,7 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
                   if (control_projection or boundary_transport)
                   else (DIRECT_ACTIVE_CONSTRAINT_RECOVERY_WITNESS_FEATURE_SCHEMA
                         if (route_alignment or reentry_alignment)
-                        else DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA)))
+                        else DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA))))
         )
         if feature_schema != expected_semantic_schema:
             raise RuntimeError(
@@ -471,6 +478,10 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         direct_recovery_semantic_witness_robust_occupancy=bool(ckpt.get(
             "direct_recovery_semantic_witness_robust_occupancy",
             model_cfg.get("direct_recovery_semantic_witness_robust_occupancy", False),
+        )),
+        direct_recovery_semantic_witness_soft_occupancy_disagreement=bool(ckpt.get(
+            "direct_recovery_semantic_witness_soft_occupancy_disagreement",
+            model_cfg.get("direct_recovery_semantic_witness_soft_occupancy_disagreement", False),
         )),
         direct_recovery_evidence_native_certificate_preservation=bool(ckpt.get(
             "direct_recovery_evidence_native_certificate_preservation",
@@ -753,6 +764,9 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_semantic_witness_robust_occupancy"] = bool(
         model.direct_recovery_semantic_witness_robust_occupancy
     )
+    cfg["model"]["direct_recovery_semantic_witness_soft_occupancy_disagreement"] = bool(
+        model.direct_recovery_semantic_witness_soft_occupancy_disagreement
+    )
     cfg["model"]["direct_recovery_evidence_native_certificate_preservation"] = bool(
         model.direct_recovery_evidence_native_certificate_preservation
     )
@@ -1016,6 +1030,10 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_semantic_witness_robust_occupancy",
             model_cfg.get("direct_recovery_semantic_witness_robust_occupancy", False),
         )),
+        "direct_recovery_semantic_witness_soft_occupancy_disagreement": bool(ckpt.get(
+            "direct_recovery_semantic_witness_soft_occupancy_disagreement",
+            model_cfg.get("direct_recovery_semantic_witness_soft_occupancy_disagreement", False),
+        )),
     }
     actual_contract = {
         "direct_recovery_evidence_calibrator_context": bool(model.direct_recovery_evidence_calibrator_context),
@@ -1091,6 +1109,9 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         ),
         "direct_recovery_semantic_witness_robust_occupancy": bool(
             model.direct_recovery_semantic_witness_robust_occupancy
+        ),
+        "direct_recovery_semantic_witness_soft_occupancy_disagreement": bool(
+            model.direct_recovery_semantic_witness_soft_occupancy_disagreement
         ),
     }
     if expected_contract != actual_contract:

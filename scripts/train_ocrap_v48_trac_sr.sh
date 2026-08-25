@@ -200,6 +200,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set model.direct_recovery_semantic_witness_projection_fidelity_weighting="${SEMANTIC_WITNESS_PROJECTION_FIDELITY:-false}" \
   --set model.direct_recovery_semantic_witness_demand_normalized_fidelity="${SEMANTIC_WITNESS_DEMAND_NORMALIZED_FIDELITY:-false}" \
   --set model.direct_recovery_semantic_witness_robust_occupancy="${SEMANTIC_WITNESS_ROBUST_OCCUPANCY:-false}" \
+  --set model.direct_recovery_semantic_witness_soft_occupancy_disagreement="${SEMANTIC_WITNESS_SOFT_OCCUPANCY_DISAGREEMENT:-false}" \
   --set model.direct_recovery_evidence_native_certificate_preservation="${EVIDENCE_NATIVE_CERTIFICATE_PRESERVATION:-false}" \
   --set model.direct_recovery_evidence_native_margin_complete_preservation="${EVIDENCE_NATIVE_MARGIN_COMPLETE_PRESERVATION:-false}" \
   --set model.direct_recovery_evidence_native_advantage_preservation="${EVIDENCE_NATIVE_ADVANTAGE_PRESERVATION:-false}" \

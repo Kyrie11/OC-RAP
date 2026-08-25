@@ -1,3 +1,80 @@
+## v48.70 — OC-DOTW: Observation-Consistent Demand–Occupancy-Tempered Recovery Witness (2026-08-25)
+
+**Entry condition / v48.69 authoritative result.** The uploaded V48.69.1 OC-DTRW result is engineering-valid and attribution-ready: `valid=true`, `attribution_ready=true`, `engineering_version=v48.69.1-OC-DTRW-ENGFIX`, `errors=[]`, `test_roots_read=false`, `dataset_reconstruction=false`. Balanced/precision both completed 21 epochs, calibration, state isolation and variant isolation; 170 historical Stage-I tensors remain bitwise unchanged and the only added trainable state is `direct_absolute_semantic_witness_gain[2]`. Therefore V48.69 is a **scientific STOP**, not an engineering failure.
+
+### V48.69 preregistered decision: OC-DTRW = STOP
+
+- **Primary source gate FAIL.** D-B AUC is positive only in the two dev-Contact cells (`+0.000482` balanced, `+0.000249` precision); the other six cells are negative. Near is strongly negative (`-0.02294/-0.02290` dev, `-0.02062/-0.01995` certificate), certificate-Contact is `-0.00475/-0.00436`. Thus 2/8 are positive and 0/8 reach `+0.01`.
+- **Selectivity remains healthy.** Harmful and teacher-infeasible pass stay around `0.055--0.065` and satisfy every preregistered cap. This is not a permissive relapse.
+- **Demand-tempering mechanism FAIL directionally.** D and T68 have the exact same positive-certificate set in all 8 cells, but D-T68 AUC is negative in **8/8** (roughly `-3e-4` to `-2e-6`) and there are **zero newly-passed rows in all 8 cells**. D safe-positive pass is identical to T68 and P66 in every cell.
+- **Demand relaxation is real but nonselective.** D/T safe-positive common-support ratios are substantial in Near (`~1.51--1.54` dev and `~1.98--2.04` certificate), yet teacher-infeasible/harmful support also rises (`~1.35--1.45` in Near). In Contact the safe-positive relaxation is much smaller (`~1.11` dev, `~1.26` certificate) and still does not change admission.
+- **Learned positive rescue is already saturated.** Both balanced and precision converge to effective semantic gains `[2,0]`. Therefore LR/gain/feature-scale sweeps have no causal justification.
+
+The falsified hypothesis is now explicit: **observable recovery demand is not sufficient evidence that a large actuator projection is trustworthy.** Urgency can explain why a large correction is necessary, but it does not establish that the projected recovery remains credible under partially observed external dynamics.
+
+### Dominant bottleneck after V48.69
+
+The V48.67--69 chain now separates three layers:
+
+1. actuator-feasible recovery construction is validated;
+2. projection severity is validated as a soft credibility signal;
+3. demand-only forgiveness of that severity is falsified.
+
+The remaining upstream bottleneck is therefore:
+
+> **observation-consistent external-dynamics credibility of an actuator-projected recovery, especially deterministic-CV clearance optimism, before any absolute-boundary transport is reopened.**
+
+This is supported by row-level V48.69 diagnostics: inside the unchanged positive-certificate set, current CV clearance frequently orders teacher-infeasible witnesses as *safer* than teacher-feasible witnesses. This is not a threshold problem. However V48.68 already showed that hard `min(CV, current-acceleration)` occupancy is also wrong because it preferentially removed high-precision certificates. The next experiment must use predictive disagreement as **soft epistemic trust**, not as another hard physical constraint.
+
+A separate downstream debt is also strengthened: exact `teacher_candidate_r_dep == 0.5` structural-floor rows account for roughly `91--96%` of teacher-feasible Near samples and `92--93%` of teacher-feasible Contact samples (safe-positive floor fraction is `~94%` in Near and `~51--74%` in Contact). The paper currently describes teacher margin as a pure minimum of active normalized slacks, while implementation also contains structural floors/overrides. This does not invalidate V48.69 attribution because labels were frozen, but it remains a publication truth-contract debt. It is read-only audited in V48.70; datasets/teacher labels are not changed in this causal round.
+
+### V48.70 intervention: OC-DOTW
+
+V48.70 keeps V48.67 actuator projection ON, V48.68 projection-fidelity trust ON, V48.66 route + persistent-reentry constraints ON and V48.64 active-set alignment ON. It keeps the rejected V48.68 hard robust-occupancy min OFF, V48.67 boundary transport OFF, class-local/path-stop OFF, and freezes Stage-I, relative ranker, top-K=5, threshold=0.5, option library, teacher labels and datasets. Only `direct_absolute_semantic_witness_gain[2]` remains trainable.
+
+For each actuator-projected recovery option `l`, compute both observation-only predictions that already existed in V48.68:
+
+- historical constant velocity `CV`;
+- bounded current-observed-acceleration continuation `CA`, where observed acceleration is held only for the already-configured `prefix_horizon_s` and the resulting velocity is then propagated.
+
+Unlike V48.68, **CA does not enter the signed physical certificate**. The first 14 witness coordinates remain byte-semantically identical to the historical CV path. Append one diagnostic coordinate
+
+`delta_occ,l = max_{t,agent} ReLU(clear_CV(t,agent) - clear_CA(t,agent)) / distance_scale`,
+
+stored as `tanh(delta_occ,l)`, and define the strictly-positive trust multiplier
+
+`w_occ,l = 1 / (1 + delta_occ,l)`.
+
+Positive common support is multiplied by `w_occ,l`. Therefore occupancy disagreement can only attenuate rescue support when CV is optimistic relative to the observation-supported acceleration counterfactual; it **cannot change physical witness sign/set**, cannot invent a new option, and introduces no threshold, new horizon or trainable parameter. Schema 6 / source `demand_occupancy_tempered_projected_recovery_witness` prevents cache/checkpoint mixing.
+
+### Preregistered 2x2 causal design
+
+Historical arms are reused; only two new arms train:
+
+| Arm | Demand normalization | Soft occupancy disagreement | Hard CV/CA min | Boundary transport |
+| --- | --- | --- | --- | --- |
+| T68_FIDELITY | OFF | OFF | OFF | OFF |
+| D69_DTRW | ON | OFF | OFF | OFF |
+| E70_OCCSOFT | OFF | ON | OFF | OFF |
+| G70/Main OC-DOTW | ON | ON | OFF | OFF |
+
+Attribution order is fixed:
+
+1. exact positive-certificate-set identity `E==T` and `G==D` first proves the intervention is trust/support, not hidden certificate deletion;
+2. `E-T68` isolates soft occupancy disagreement without demand;
+3. `G-D69` isolates the same occupancy factor under demand normalization;
+4. within-positive-certificate probability AUC plus teacher-feasible-vs-TI support contraction is the **primary trust-identification mechanism gate**;
+5. `G-E` tests whether demand becomes useful only after occupancy uncertainty is represented;
+6. `G-B`, selectivity and safe-positive admission are then reported as the higher-level full-source gate;
+7. truth-floor strata are diagnostic only; boundary transport remains OFF until trust-identification GO;
+8. deployment propagation and paired Safe nominal-utility remain deferred until full absolute source GO.
+
+This round is deliberately **not allowed to fake admission progress**. Since `0<w_occ<=1`, E/G cannot create a new positive physical certificate, and with v48.67 boundary transport frozen they are not structurally expected to rescue an already-subthreshold safe-positive solely by increasing evidence. The full CCF-A source GO criterion is still reported unchanged (`G-B` positive 8/8, >=+0.01 in >=6/8, selectivity valid, and safe-positive admission above P66), but the preregistered scientific decision has an intermediate state: **MECHANISM_GO_SOURCE_STOP**. It is awarded only if certificate identity is exact and E-T or G-D improves source AUC plus within-certificate probability ordering in at least 6/8 cells, without harmful/TI relapse and with preferential support retention for teacher-feasible over teacher-infeasible witnesses. That state authorizes exactly one next causal step: a trust-conditioned boundary-transport factorial. If the trust gate fails, boundary transport remains prohibited and the next branch is richer observation-only occupancy reachability/interaction modeling, not an acceleration or threshold grid.
+
+### Continue to avoid
+
+All historical exclusions remain. V48.69 additionally falsifies **demand-only projection forgiveness as Main**. Continue to forbid threshold/LR/horizon/feature/class-weight grids, proposal/top-K expansion, generic AFE/MLP, candidate-only CPHR, compensatory ERWF, per-option negative veto, quantifier-gain sweeps, regime routers/policies/thresholds/budgets, broad root/margin/encoder retraining, privileged teacher-future/component-margin distillation, relative-ranker changes before source GO, option-library expansion without teacher-option-support evidence, class-local Main, path-stop Main, reintroduction of hard control veto, unconditional projected-control confidence, V48.68 hard CV/current-acceleration min, acceleration multiplier/horizon/threshold sweeps, and V48.67 boundary transport before an upstream trust mechanism GO.
+
 ## v48.69 — OC-DTRW: Observation-Consistent Demand-Tempered Recovery Witness (2026-08-24)
 
 **Engineering hotfix v48.69.1 (algorithm unchanged).** The original v48.69 launcher contained a malformed Python heredoc in the post-training `V48_69_FACTOR_CONTRACT.json` writer (`+'\n'` was serialized as a literal line break inside a single-quoted Python string). Because `bash -n` cannot parse embedded Python, both D69 trainings and state/variant isolation completed before the launcher failed with `SyntaxError`. v48.69.1 repairs that writer, adds a regression test that compiles every quoted `PY2` heredoc before release, fixes the read-only truth-debt audit so exact `teacher_candidate_r_dep == 0.0` remains teacher-feasible, and makes the T68↔D69 demand-trust audit fail closed on missing/extra/duplicate proposal rows instead of validating certificate identity only on the set intersection. The final pipeline now requires a valid exact-row-alignment demand audit. `src/ocrap/**`, OC-DTRW equations, trainable state, datasets, thresholds, arm definitions and the v48.69 run command are unchanged. Engineering sentinel: `v48.69.1-OC-DTRW-ENGFIX`.
