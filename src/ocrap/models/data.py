@@ -979,6 +979,13 @@ DIRECT_PROJECTED_BOUNDARY_RECOVERY_WITNESS_FEATURE_DIM = 14
 DIRECT_ROBUST_TRUST_RECOVERY_WITNESS_FEATURE_SCHEMA = 4
 DIRECT_ROBUST_TRUST_RECOVERY_WITNESS_FEATURE_DIM = 14
 
+# v48.69 keeps the exact same 14-D observable side-channel as v48.68 T; only
+# the model-side interpretation of raw projection severity changes by
+# observation-derived recovery demand.  A distinct schema prevents checkpoint
+# or persistent-cache mixing despite byte-identical feature tensors.
+DIRECT_DEMAND_TEMPERED_RECOVERY_WITNESS_FEATURE_SCHEMA = 5
+DIRECT_DEMAND_TEMPERED_RECOVERY_WITNESS_FEATURE_DIM = 14
+
 
 def direct_semantic_recovery_witness_features_from_sample(
     d: dict[str, Any], cfg: dict | None = None, *, num_options: int | None = None
@@ -1003,13 +1010,17 @@ def direct_semantic_recovery_witness_features_from_sample(
     projection_fidelity = bool(
         model_cfg.get("direct_recovery_semantic_witness_projection_fidelity_weighting", False)
     )
+    demand_normalized_fidelity = bool(
+        model_cfg.get("direct_recovery_semantic_witness_demand_normalized_fidelity", False)
+    )
     robust_occupancy = bool(
         model_cfg.get("direct_recovery_semantic_witness_robust_occupancy", False)
     )
     active_constraint_tail = bool(
         model_cfg.get("direct_recovery_semantic_witness_route_alignment", False)
         or model_cfg.get("direct_recovery_semantic_witness_reentry_alignment", False)
-        or control_projection or boundary_transport or projection_fidelity or robust_occupancy
+        or control_projection or boundary_transport or projection_fidelity
+        or demand_normalized_fidelity or robust_occupancy
     )
     out = direct_executable_recovery_witness_features_from_sample(
         d, cfg, num_options=num_options, include_recovery_stability_tail=True,
@@ -1401,17 +1412,22 @@ def _persistent_tensor_cache_key(
     semantic_projection_fidelity = bool(
         model_cfg.get("direct_recovery_semantic_witness_projection_fidelity_weighting", False)
     )
+    semantic_demand_normalized_fidelity = bool(
+        model_cfg.get("direct_recovery_semantic_witness_demand_normalized_fidelity", False)
+    )
     semantic_robust_occupancy = bool(
         model_cfg.get("direct_recovery_semantic_witness_robust_occupancy", False)
     )
     semantic_feature_schema = (
-        DIRECT_ROBUST_TRUST_RECOVERY_WITNESS_FEATURE_SCHEMA
+        DIRECT_DEMAND_TEMPERED_RECOVERY_WITNESS_FEATURE_SCHEMA
+        if semantic_witness_features_enabled and semantic_demand_normalized_fidelity
+        else (DIRECT_ROBUST_TRUST_RECOVERY_WITNESS_FEATURE_SCHEMA
         if semantic_witness_features_enabled and (semantic_projection_fidelity or semantic_robust_occupancy)
         else (DIRECT_PROJECTED_BOUNDARY_RECOVERY_WITNESS_FEATURE_SCHEMA
               if semantic_witness_features_enabled and (semantic_control_projection or semantic_boundary_transport)
               else (DIRECT_ACTIVE_CONSTRAINT_RECOVERY_WITNESS_FEATURE_SCHEMA
                     if semantic_witness_features_enabled and (semantic_route_alignment or semantic_reentry_alignment)
-                    else (DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA if semantic_witness_features_enabled else 0)))
+                    else (DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA if semantic_witness_features_enabled else 0))))
     )
     payload = {
         "schema": _PERSISTENT_TENSOR_CACHE_SCHEMA,

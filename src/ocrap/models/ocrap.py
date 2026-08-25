@@ -364,6 +364,7 @@ class OCRAPModel(nn.Module):
         direct_recovery_semantic_witness_control_projection: bool = False,
         direct_recovery_semantic_witness_boundary_transport: bool = False,
         direct_recovery_semantic_witness_projection_fidelity_weighting: bool = False,
+        direct_recovery_semantic_witness_demand_normalized_fidelity: bool = False,
         direct_recovery_semantic_witness_robust_occupancy: bool = False,
         direct_recovery_evidence_native_certificate_preservation: bool = False,
         direct_recovery_evidence_native_margin_complete_preservation: bool = False,
@@ -653,6 +654,22 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_semantic_witness_projection_fidelity_weighting = bool(
             direct_recovery_semantic_witness_projection_fidelity_weighting
         )
+        # v48.69 OC-DTRW keeps the validated v48.68 projection-fidelity signal
+        # but tempers it by observation-derived recovery demand.  Urgent Near/
+        # Contact recoveries often require a large actuator projection even when
+        # they are the correct safe action; a Safe-like low-demand state should
+        # retain the exact v48.68 penalty.  This is a shared observation-only
+        # trust semantic, never a regime flag.
+        self.direct_recovery_semantic_witness_demand_normalized_fidelity = bool(
+            direct_recovery_semantic_witness_demand_normalized_fidelity
+        )
+        if self.direct_recovery_semantic_witness_demand_normalized_fidelity and not (
+            self.direct_recovery_semantic_witness_projection_fidelity_weighting
+            and self.direct_recovery_semantic_witness_control_projection
+        ):
+            raise ValueError(
+                "demand-normalized projection fidelity requires projection-fidelity weighting and control projection"
+            )
         self.direct_recovery_semantic_witness_robust_occupancy = bool(
             direct_recovery_semantic_witness_robust_occupancy
         )
@@ -2256,6 +2273,7 @@ class OCRAPModel(nn.Module):
             or self.direct_recovery_semantic_witness_control_projection
             or self.direct_recovery_semantic_witness_boundary_transport
             or self.direct_recovery_semantic_witness_projection_fidelity_weighting
+            or self.direct_recovery_semantic_witness_demand_normalized_fidelity
             or self.direct_recovery_semantic_witness_robust_occupancy
         ) else 12
         expected = (int(batch_size), int(self.num_options), feature_dim)
@@ -2785,7 +2803,45 @@ class OCRAPModel(nn.Module):
                 h_control.float().clamp(-1.0 + eps_fid, 1.0 - eps_fid)
             )
             control_violation = torch.relu(-raw_control_margin)
-            projection_fidelity = (1.0 / (1.0 + control_violation)).to(dtype=memory.dtype)
+            if self.direct_recovery_semantic_witness_demand_normalized_fidelity:
+                # v48.69 OC-DTRW: v48.68 T proved raw projection severity is a
+                # useful trust signal, but it disproportionately suppressed the
+                # scarce safe-positive candidates that are already in an
+                # observed recovery-demanding state.  Reconstruct the normalized
+                # candidate-terminal clearance deficit directly from the frozen
+                # signed witness coordinates:
+                #   atanh(h_gain)-atanh(h_terminal)
+                #     = (d_safe-prefix_terminal_clearance)/distance_scale.
+                # The stability analogue is identical in normalized yaw units.
+                # A zero-demand state is execution-exact v48.68 T.  Increasing
+                # observed demand only *tempers* the soft projection penalty; it
+                # never changes physical witness sign or creates a free rescue.
+                clear_terminal_margin = torch.atanh(
+                    h_terminal.float().clamp(-1.0 + eps_fid, 1.0 - eps_fid)
+                )
+                clear_gain_margin = torch.atanh(
+                    h_gain.float().clamp(-1.0 + eps_fid, 1.0 - eps_fid)
+                )
+                clearance_demand = torch.relu(clear_gain_margin - clear_terminal_margin)
+
+                stab_terminal_margin = torch.atanh(
+                    h_stab_terminal.float().clamp(-1.0 + eps_fid, 1.0 - eps_fid)
+                )
+                stab_gain_margin = torch.atanh(
+                    h_stab_gain.float().clamp(-1.0 + eps_fid, 1.0 - eps_fid)
+                )
+                stability_demand = torch.relu(stab_gain_margin - stab_terminal_margin)
+                if self.direct_recovery_semantic_witness_active_set_alignment:
+                    stability_demand = stability_demand * (stability_active_obs > 0.5).to(
+                        dtype=stability_demand.dtype
+                    )
+                recovery_demand = torch.maximum(clearance_demand, stability_demand)
+                projection_fidelity = (
+                    (1.0 + recovery_demand)
+                    / (1.0 + recovery_demand + control_violation)
+                ).to(dtype=memory.dtype)
+            else:
+                projection_fidelity = (1.0 / (1.0 + control_violation)).to(dtype=memory.dtype)
             common_support = common_support * projection_fidelity
 
         gains = self.direct_absolute_semantic_witness_gain.clamp(0.0, 2.0)

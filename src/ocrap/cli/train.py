@@ -68,6 +68,8 @@ def _semantic_witness_checkpoint_feature_contract(model_cfg: dict) -> tuple[int,
     enabled = bool(model_cfg.get("direct_recovery_absolute_semantic_witness_correction", False))
     if not enabled:
         return 0, "disabled"
+    if bool(model_cfg.get("direct_recovery_semantic_witness_demand_normalized_fidelity", False)):
+        return 5, "demand_tempered_projected_recovery_witness"
     if (
         bool(model_cfg.get("direct_recovery_semantic_witness_projection_fidelity_weighting", False))
         or bool(model_cfg.get("direct_recovery_semantic_witness_robust_occupancy", False))
@@ -3192,6 +3194,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_semantic_witness_projection_fidelity_weighting=bool(
             model_cfg.get("direct_recovery_semantic_witness_projection_fidelity_weighting", False)
         ),
+        direct_recovery_semantic_witness_demand_normalized_fidelity=bool(
+            model_cfg.get("direct_recovery_semantic_witness_demand_normalized_fidelity", False)
+        ),
         direct_recovery_semantic_witness_robust_occupancy=bool(
             model_cfg.get("direct_recovery_semantic_witness_robust_occupancy", False)
         ),
@@ -3761,6 +3766,9 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             ),
             "direct_recovery_semantic_witness_projection_fidelity_weighting": bool(
                 model_cfg.get("direct_recovery_semantic_witness_projection_fidelity_weighting", False)
+            ),
+            "direct_recovery_semantic_witness_demand_normalized_fidelity": bool(
+                model_cfg.get("direct_recovery_semantic_witness_demand_normalized_fidelity", False)
             ),
             "direct_recovery_semantic_witness_robust_occupancy": bool(
                 model_cfg.get("direct_recovery_semantic_witness_robust_occupancy", False)

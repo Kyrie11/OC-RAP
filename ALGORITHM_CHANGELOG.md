@@ -1,3 +1,88 @@
+## v48.69 — OC-DTRW: Observation-Consistent Demand-Tempered Recovery Witness (2026-08-24)
+
+**Entry condition / v48.68 authoritative result.** The uploaded v48.68 OC-RTRW run is engineering-valid and attribution-ready: `valid=true`, `attribution_ready=true`, `engineering_version=v48.68.0-OC-RTRW`, `errors=[]`, `test_roots_read=false`, `dataset_reconstruction=false`. T/U/V balanced+precision each complete training and dedicated recalibration; the uploaded comparison / feasibility-role / robust-trust / reference-reuse SHA256 values exactly match `OC-RAP-v48.68-PIPELINE_COMPLETE.json`. All six adapted checkpoints report valid state/variant isolation, schema 4 / source `robust_trust_projected_recovery_witness`, 170 shared Stage-I tensors bitwise unchanged, and only `direct_absolute_semantic_witness_gain[2]` trainable. The result is therefore a **scientific STOP**, not an engineering failure.
+
+### V48.68 preregistered decision: Main OC-RTRW = STOP, with projection-fidelity trust decisively validated and the hard occupancy envelope falsified
+
+- **Primary source gate FAIL.** V-B AUC is positive only in the two dev-Contact cells and never reaches `+0.01`. Balanced V-B is `-0.02046` dev-Near, `-0.01601` certificate-Near, `+0.00145` dev-Contact, `-0.00292` certificate-Contact; precision is `-0.02042`, `-0.01538`, `+0.00108`, `-0.00250`. Thus 2/8 are positive and 0/8 meet the preregistered `+0.01` effect.
+- **Selectivity gate PASS strongly.** Main V harmful / teacher-infeasible pass remains about `0.043--0.051` across the eight cells, recovering approximately the v48.66 P selectivity level and staying far below v48.61-F.
+- **Safe-positive admission gate FAIL completely.** V safe-positive pass is exactly equal to P66 in all 8 cells. The main model therefore does not turn its additional witness coverage into additional absolute admission.
+- **Safe-positive witness-coverage gate FAIL.** V-P66 positive-certificate coverage improves in dev-Near (`+0.0526--0.0556`), dev-Contact (`+0.0541`) and certificate-Near (`+0.1176--0.125`), but certificate-Contact is unchanged. The preregistered 8/8 improvement condition fails.
+- **Trust non-regression versus P66 FAIL 8/8.** V positive-certificate teacher-feasible precision is about `0.393` dev-Near, `0.610--0.612` dev-Contact, `0.55` certificate-Near and `0.555--0.557` certificate-Contact, versus P66 `~0.603/~0.734--0.736/~0.638/~0.610`. The Main therefore remains too permissive at the *certificate sign* level even though the learned output admission itself is selective.
+- **V nevertheless improves on its direct Q67 baseline in source ranking 8/8.** V-Q67 AUC is approximately `+0.0326` dev-Near, `+0.0192` certificate-Near, `+0.00785` dev-Contact and `+0.0159--0.0160` certificate-Contact. This matters mechanistically: the new trust factors repair part of the v48.67 regression even though they do not exceed native B.
+
+### T_FIDELITY is a clean mechanism GO
+
+The sign-preserving projection-fidelity branch satisfies its preregistered mechanism gate in every cell:
+
+- the Q67 positive-certificate set is **exactly unchanged 8/8**;
+- T-Q67 AUC is positive 8/8: about `+0.0302` dev-Near, `+0.0070` dev-Contact, `+0.0149--0.0150` certificate-Near and `+0.0141` certificate-Contact;
+- harmful and teacher-infeasible pass do not increase in any cell and typically fall from about `0.10` to `0.055--0.065`;
+- therefore the raw amount of actuator projection is a genuine **soft credibility signal**, not a physical hard-veto condition.
+
+This validates the v48.67 inference that actuator feasibility must be enforced by construction while *how hard the controller had to project* remains useful epistemic evidence. Do not reintroduce the historical hard control veto.
+
+### U_OCCUPANCY is a mechanism STOP and falsifies the CV/current-acceleration hard-min implementation
+
+The observation-only CV/current-acceleration envelope modestly improves AUC versus Q67, but it fails the mechanism that motivated it: positive-certificate precision does not improve systematically and witness recall is damaged. The row-aligned audit is decisive:
+
+- balanced dev-Near: U removes 26 Q-positive certificates whose teacher-feasible precision is `0.7308` (including two safe-positive rows), while the retained 56 have precision only `0.3929`;
+- precision dev-Near: the removed 25 have precision `0.72`, while the retained 56 are again `0.3929`;
+- certificate-Contact loses rows with precision about `0.625--0.627` while retained rows are only `~0.554--0.557`;
+- certificate-Near / dev-Contact filtering is approximately neutral, not strongly selective.
+
+Therefore **instantaneous observed acceleration cannot be treated as an equally plausible hard adversarial trajectory via a minimum with CV**. The conceptual issue of future occupancy uncertainty remains, but this particular hard-envelope approximation is rejected. It must not be iterated with another acceleration multiplier/horizon/threshold sweep.
+
+### New bottleneck revealed by v48.68: absolute projection severity is correct in direction but miscalibrated for urgent recovery demand
+
+T proves projection severity contains trust information, but the absolute penalty suppresses the scarce teacher-safe-positive rows disproportionately. For example, Q67 safe-positive common support is roughly `0.92--0.95` in Near; T reduces it to about `0.17--0.33`. By contrast the T teacher-feasible population retains mean support around `0.57--0.62` in Near. Contact shows the same direction: certificate-Contact safe-positive support falls to about `0.256`, while teacher-feasible support is about `0.445`; dev-Contact safe-positive is about `0.343--0.345` versus teacher-feasible `~0.517--0.520`.
+
+This means the quantity `raw_projection_violation` conflates two causes:
+
+1. **implausible/aggressive recovery proposal** — large correction should reduce trust; and
+2. **physically demanded emergency action** — Near/Contact observations can legitimately require a strong projected maneuver, so the same absolute correction magnitude should not erase rescue evidence.
+
+The dominant problem is no longer actuator executability itself and is not the rejected CA occupancy hard-min. It is now:
+
+> **observation-conditioned trust calibration after actuator-feasible realization: distinguish large projection caused by genuine observable recovery demand from large projection caused by an implausible recovery proposal, while preserving the strong native Near ordering.**
+
+This is still one cross-regime problem. A Safe-like observation has little active recovery deficit and should receive the full v48.68 T penalty; a Near/Contact observation with a directly observed clearance/stability deficit may justify stronger actuation. No regime ID/router is necessary.
+
+### V48.69 intervention: OC-DTRW
+
+V48.69 keeps the validated v48.67 actuator projection ON, v48.68 projection-fidelity signal ON, v48.66 route + persistent-reentry constraints ON, and v48.64 active-set alignment ON. It freezes robust occupancy hard-min OFF, boundary transport OFF, class-local/path-stop OFF, and retains the exact OC-MERO/RIFA top-5 / threshold-0.5 / relative ranker / recovery-option library / teacher data. Only the same two shared gains train.
+
+The intervention changes **only the soft projection-fidelity multiplier**. From the existing signed witness coordinates, reconstruct observation-derived normalized active recovery demand without adding a new learned feature or threshold:
+
+- clearance demand: `d_clear = ReLU(atanh(h_gain) - atanh(h_terminal)) = ReLU((d_safe - prefix_terminal_clearance)/distance_scale)`;
+- active stability demand: `d_stab = 1[stability active] * ReLU(atanh(h_stab_gain) - atanh(h_stab_terminal))`, equal to the observed normalized excess of initial yaw-rate magnitude over the stability limit;
+- shared demand: `d = max(d_clear, d_stab)`.
+
+For raw pre-projection control violation `u = ReLU(-atanh(h_control_raw))`, replace v48.68 T's `1/(1+u)` by
+
+`f_DTRW = (1+d)/(1+d+u)`.
+
+Properties are preregistered and structural: `d=0` is execution-exact v48.68 T; `0 < f_DTRW <= 1`; increasing observed demand only tempers the soft penalty and cannot flip witness sign; no positive witness is created without the existing physical certificate; no regime label, teacher future, new horizon or tunable threshold is introduced. The 14-D physical side-channel is byte-identical to T68; schema 5 / source `demand_tempered_projected_recovery_witness` exists only to prevent cache/checkpoint semantic mixing.
+
+### V48.69 preregistered experiment and decision order
+
+There is one new Main arm **D69_DTRW**, compared against historical T68/Q67/P66/B/F. This is intentionally narrower than another 2x2 because v48.68 already cleanly accepted T and rejected U.
+
+Attribution order:
+
+1. `D-B` is the primary source gate;
+2. `D-T68` isolates demand normalization of the validated projection-fidelity mechanism;
+3. certificate-set identity between D and T proves the intervention is soft trust transport rather than a hidden physical veto;
+4. newly-passed rows test whether demand tempering preferentially rescues true / safe-positive candidates without permissive relapse;
+5. a read-only truth-debt audit partitions stored teacher-feasible / safe-positive rows by exact `teacher_candidate_r_dep == 0.5`; this is diagnostic only and does not alter labels or model inputs;
+6. boundary transport and deployment/Safe nominal-utility evaluation stay deferred until source/trust/admission GO.
+
+Main GO requires all of: `D-B` AUC >0 in 8/8 and >=+0.01 in >=6/8; harmful/TI pass remains under the historical F-based cap in every cell; D safe-positive pass >P66 8/8 and improves by >=0.05 in >=6/8; the DTRW mechanism preserves the exact T68 positive-certificate set in 8/8, has D-T68 AUC >0 in >=6/8, keeps harmful/TI within `T68 + 0.02` in every cell, improves safe-positive pass over T68 in >=6/8 and by >=0.05 in >=4/8. No post-hoc secondary experiment is interpreted as a source GO unless this preregistered decision passes.
+
+### Continue to avoid
+
+All historical exclusions remain. Add two v48.68-specific exclusions: **do not use a hard minimum over CV and current-acceleration occupancy as the recovery certificate**, and **do not apply the absolute projection-fidelity penalty without accounting for directly observed recovery demand**. Do not respond to v48.68 by sweeping the fidelity formula coefficient, acceleration horizon/multiplier, feasibility threshold, learning rate or top-K. Boundary transport remains a demonstrated but downstream debt and stays OFF until the upstream witness-trust/admission layer is source-valid.
+
 ## v48.68 — OC-RTRW: Observation-Consistent Robust-Trust Recovery Witness (2026-08-24)
 
 **Entry condition / v48.67.1 authoritative result.** The corrected v48.67.1 OC-PBRW rerun is engineering-valid and attribution-ready: `valid=true`, `attribution_ready=true`, `engineering_version=v48.67.1-OC-PBRW-ENGFIX`, `errors=[]`, `test_roots_read=false`, `dataset_reconstruction=false`. Q/R/S balanced+precision runs completed training/calibration, schema-3 state/variant isolation is valid, 170 Stage-I shared tensors remain bitwise unchanged, and only `direct_absolute_semantic_witness_gain[2]` trains. Therefore v48.67 is a **scientific STOP**, not an engineering failure.
