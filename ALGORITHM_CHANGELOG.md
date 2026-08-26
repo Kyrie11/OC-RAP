@@ -1,3 +1,79 @@
+## v48.71 — OC-BORW: Observation-Consistent Boundary-Localized Occupancy Reachability Witness (2026-08-25)
+
+**Entry condition / v48.70 authoritative result.** The uploaded V48.70 OC-DOTW run is engineering-valid and attribution-ready: runtime provenance imports `ocrap`, `train.py`, `data.py`, `ocrap.py`, and `inference.py` from the intended repository; E70/G70 use schema 6 / source `demand_occupancy_tempered_projected_recovery_witness`; the final sentinel is `valid=true`, `attribution_ready=true`, `engineering_version=v48.70.0-OC-DOTW`, `errors=[]`, `test_roots_read=false`, `dataset_reconstruction=false`. Reference reuse, protocol, source hashes and scene-disjointness are valid. E/G balanced+precision each completed 21 epochs, keep 170 historical Stage-I tensors bitwise unchanged, and add only `direct_absolute_semantic_witness_gain[2]`. Therefore V48.70 is a **scientific STOP**, not an engineering failure.
+
+### V48.70 preregistered decision: OC-DOTW = STOP with a useful but non-selective ordering cue
+
+- **Certificate-set identity PASS.** `E70==T68` and `G70==D69` for the positive-certificate set in all 8 cells. The v48.70 factor is genuinely soft confidence/support, not hidden hard certificate deletion.
+- **AUC/order signal is real.** E-T68 and G-D69 source AUC improve in **8/8** cells. E-T68 gains are about `+0.01297/+0.01291` dev-Near, `+0.00196/+0.00219` dev-Contact, `+0.01987/+0.01971` certificate-Near, and `+0.00335/+0.00318` certificate-Contact (balanced/precision). Within the unchanged positive-certificate set, probability AUC also improves 8/8, approximately `+0.030` dev-Near, `+0.011` dev-Contact, `+0.037` certificate-Near and `+0.005` certificate-Contact.
+- **Primary trust-identification gate FAIL.** The preregistered requirement that teacher-feasible positive witnesses be attenuated less than teacher-infeasible witnesses passes only **4/8**, not >=6/8. It succeeds on both dev splits and fails on both certificate splits for both balanced/precision. Example balanced certificate-Near support retention is about `0.232` for teacher-feasible versus `0.241` for teacher-infeasible; certificate-Contact is about `0.244` versus `0.267`. Thus raw CV-vs-current-CA disagreement is not a physically selective trust mechanism.
+- **Attenuation is very strong and mostly rejection-oriented.** E/G retain only roughly `15--31%` of historical support depending on split/category, while the positive-certificate sign/set is unchanged. This removes many passes (`lost_pass` is large on certificate/Contact splits) but creates none. Positive-certificate admission precision can look excellent after filtering (e.g. certificate-Near pass precision reaches `0.97`), but this is **precision by abstention**, not successful identification of true recovery: the underlying positive-certificate teacher-feasible fraction remains around `0.49--0.61` because certificate membership is unchanged.
+- **Demand interaction remains falsified.** G-E AUC is negative in all 8 cells (tiny but consistently negative), so v48.69 demand normalization does not become useful after adding occupancy disagreement. Demand leaves Main.
+- **Full source gate FAIL.** G-B is positive only in the two dev-Contact cells (~`+0.00246`), while Near is about `-0.010`, certificate-Near approximately zero/slightly negative, and certificate-Contact about `-0.0012--0.0014`. Safe-positive pass remains unchanged versus P66 in all 8 cells. Selectivity itself remains healthy, so this is not permissive relapse.
+
+### Truth-contract interaction exposed by V48.70
+
+The read-only truth-floor audit makes the apparent v48.70 improvement more conditional than aggregate AUC suggests. Exact `teacher_candidate_r_dep == 0.5` rows are roughly `91--96%` of teacher-feasible Near and `92--93%` of teacher-feasible Contact. On balanced certificate-Near, E70 full AUC improves from about `0.79645` (T68) to `0.81632`, but after excluding exact-0.5 feasible rows AUC **falls** from about `0.48836` to `0.47797`. Certificate-Contact similarly improves in full AUC (`0.69856 -> 0.70191`) while non-floor AUC falls (`0.58290 -> 0.57914`). Therefore V48.70 cannot be interpreted as a validated physical recovery-credibility mechanism. It is a useful rejection/calibration cue whose gain partly aligns with the structural teacher floor.
+
+This creates a new publication rule: future trust mechanisms must be preregistered against both the frozen teacher label and a **non-floor physical-consistency stratum**. If full-label and non-floor conclusions conflict, do not distort the physical certificate to fit the floor; adjudicate the teacher/paper truth contract before reopening boundary transport.
+
+### Updated dominant bottleneck after V48.70
+
+V48.67 validated actuator-feasible recovery construction; V48.68 validated projection severity as soft credibility information; V48.69 falsified demand-only forgiveness; V48.70 shows that one-point occupancy disagreement has ordering information but is not selectively aligned with physical recovery credibility.
+
+The dominant bottleneck is now:
+
+> **observation-consistent, boundary-relevant external-dynamics reachability for an actuator-projected recovery: distinguish uncertainty magnitude from uncertainty that actually erodes the signed recovery safety reserve.**
+
+The current raw statistic `max ReLU(clear_CV-clear_CA)` conflates two situations: a large prediction disagreement far from every safety boundary, and a disagreement that actually drives a plausible future through the clearance boundary. It also represents external dynamics with only one current-acceleration point hypothesis. V48.71 tests both missing semantics separately.
+
+### V48.71 intervention: OC-BORW
+
+**OC-BORW = Observation-Consistent Boundary-Localized Occupancy Reachability Witness.** It keeps the historical CV trajectory as the signed physical certificate and changes only the *confidence in positive rescue*. No new trainable parameter, regime input, threshold, horizon, teacher future, dataset reconstruction, root/margin retraining, option expansion or boundary transport is introduced. The only trainable state remains `direct_absolute_semantic_witness_gain[2]`.
+
+For each currently observed surrounding agent, construct an observation-history acceleration ambiguity set. From all valid observed `(a_x,a_y)` samples plus zero acceleration, form the componentwise acceleration box and its circumscribed L2 ball with center `a_c` and radius `r_a`. The set is propagated from the current observed state using the already-configured `prefix_horizon_s` acceleration-hold interval; after that interval velocity is held constant. For time `t`, with `h=min(t,prefix_horizon_s)` and `g(t)=t h - 0.5 h^2`, the occupancy tube center/radius are
+
+`x_c(t)=x_0+v_0 t+g(t) a_c`,
+
+`r_x(t)=g(t) r_a`.
+
+The lower clearance of a projected ego recovery against this set is distance to the tube center minus ego/agent support radii and `r_x(t)`. This is an observation-only set-valued reachable occupancy, not a learned future predictor and not a privileged teacher trajectory.
+
+V48.71 then separates **prediction model richness** from **boundary localization**:
+
+- raw uncertainty/optimism: `delta_raw = max ReLU(clear_CV - clear_alt) / distance_scale`;
+- boundary exposure: `delta_bnd = max ReLU(d_safe - clear_alt) / distance_scale`.
+
+For a positive witness, confidence is `w=1/(1+delta)`. Since `w>0`, sign and positive-certificate set are unchanged. For a CV-positive witness, `delta_bnd` is nonzero only if the alternative occupancy representation actually threatens/crosses the physical clearance frontier. Large disagreement that remains far from the boundary no longer receives an automatic penalty.
+
+Schema 7 / source `boundary_localized_history_reachability_projected_recovery_witness` appends four diagnostics after the frozen 14-D CV semantics: coordinate 14 = v48.70 current-CA raw optimism, 15 = current-CA boundary deficit, 16 = history-tube raw optimism, 17 = history-tube boundary deficit. The first 14 coordinates remain execution-exact to the historical CV semantic witness.
+
+### Preregistered 2x2 causal design
+
+V48.70 E70 is reused as the current-point/raw baseline. Three new arms train:
+
+| Arm | External-dynamics representation | Trust statistic | Demand | Boundary transport |
+| --- | --- | --- | --- | --- |
+| E70_OCCSOFT | current-acceleration point | raw CV optimism | OFF | OFF |
+| H71_BOUNDARY_LOCAL | current-acceleration point | **boundary deficit** | OFF | OFF |
+| J71_HISTORY_TUBE | **history reachable tube** | raw CV optimism | OFF | OFF |
+| K71/Main OC-BORW | **history reachable tube** | **boundary deficit** | OFF | OFF |
+
+Attribution order is fixed:
+
+1. H/J/K positive-certificate sets must be exactly equal to E70 in 8/8 cells, proving no hidden hard deletion.
+2. `H-E70` isolates boundary localization with the same current-acceleration counterfactual.
+3. `J-E70` isolates history-set reachability while preserving the raw optimism statistic.
+4. `K-H`, `K-J`, `K-E70`, and the factorial interaction identify whether both semantics are necessary.
+5. Main trust ordering requires `K-E70` source AUC improvement in >=6/8, positive-certificate probability AUC improvement in >=6/8, harmful/TI non-relapse in every cell, and teacher-feasible support retention greater than teacher-infeasible in >=6/8.
+6. **Non-floor physical-consistency gate:** `K-E70` AUC after excluding exact-`R_dep*=0.5` feasible rows must improve in >=6/8. This is mandatory; an aggregate-label-only gain is not sufficient evidence for a physical certificate.
+7. Full source GO remains higher-level: `K-B` AUC positive 8/8 with >=+0.01 in >=6/8, historical selectivity caps valid, and safe-positive admission >P66 8/8 with >=+0.05 in >=6/8.
+8. If trust ordering + non-floor physical consistency GO but full source remains STOP, the only authorized next branch is **trust-conditioned boundary transport**. If label ordering improves but non-floor physical consistency fails, next is **teacher truth-contract adjudication before boundary transport**. If trust itself fails, next is interaction-aware observation-only occupancy reachability, not a hyperparameter sweep.
+
+### Continue to avoid
+
+All historical exclusions remain. V48.70 adds: **do not treat raw one-point prediction disagreement as a validated recovery-credibility mechanism and do not reopen boundary transport merely because aggregate AUC improved.** V48.71 Main removes demand normalization. Continue to forbid threshold/LR/horizon/feature/class-weight grids, proposal/top-K expansion, generic AFE/MLP, candidate-only CPHR, compensatory ERWF, per-option negative veto, quantifier sweeps, regime routers/policies/thresholds/budgets, broad root/margin/encoder retraining, privileged teacher-future/component-margin distillation, relative-ranker modification before source GO, option-library expansion without teacher-option-support evidence, class-local Main, path-stop Main, hard post-hoc control veto, unconditional projected-control confidence, V48.68 hard CV/current-acceleration min, acceleration multiplier/horizon sweeps, demand-only projection forgiveness, stacking v48.70 raw occupancy trust with v48.71, and v48.67 boundary transport before a physically selective trust mechanism passes the non-floor gate.
+
 ## v48.70 — OC-DOTW: Observation-Consistent Demand–Occupancy-Tempered Recovery Witness (2026-08-25)
 
 **Entry condition / v48.69 authoritative result.** The uploaded V48.69.1 OC-DTRW result is engineering-valid and attribution-ready: `valid=true`, `attribution_ready=true`, `engineering_version=v48.69.1-OC-DTRW-ENGFIX`, `errors=[]`, `test_roots_read=false`, `dataset_reconstruction=false`. Balanced/precision both completed 21 epochs, calibration, state isolation and variant isolation; 170 historical Stage-I tensors remain bitwise unchanged and the only added trainable state is `direct_absolute_semantic_witness_gain[2]`. Therefore V48.69 is a **scientific STOP**, not an engineering failure.

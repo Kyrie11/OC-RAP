@@ -19,6 +19,7 @@ from ocrap.models.data import (
     DIRECT_ROBUST_TRUST_RECOVERY_WITNESS_FEATURE_SCHEMA,
     DIRECT_DEMAND_TEMPERED_RECOVERY_WITNESS_FEATURE_SCHEMA,
     DIRECT_OCCUPANCY_TEMPERED_RECOVERY_WITNESS_FEATURE_SCHEMA,
+    DIRECT_BOUNDARY_OCCUPANCY_REACHABILITY_WITNESS_FEATURE_SCHEMA,
     direct_absolute_physical_headroom_features_from_sample,
     direct_executable_recovery_witness_features_from_sample,
     direct_common_recovery_witness_features_from_sample,
@@ -263,8 +264,18 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_semantic_witness_soft_occupancy_disagreement",
             model_cfg.get("direct_recovery_semantic_witness_soft_occupancy_disagreement", False),
         ))
+        boundary_localized_occupancy_trust = bool(ckpt.get(
+            "direct_recovery_semantic_witness_boundary_localized_occupancy_trust",
+            model_cfg.get("direct_recovery_semantic_witness_boundary_localized_occupancy_trust", False),
+        ))
+        history_occupancy_reachability = bool(ckpt.get(
+            "direct_recovery_semantic_witness_history_occupancy_reachability",
+            model_cfg.get("direct_recovery_semantic_witness_history_occupancy_reachability", False),
+        ))
         expected_semantic_schema = (
-            DIRECT_OCCUPANCY_TEMPERED_RECOVERY_WITNESS_FEATURE_SCHEMA
+            DIRECT_BOUNDARY_OCCUPANCY_REACHABILITY_WITNESS_FEATURE_SCHEMA
+            if (boundary_localized_occupancy_trust or history_occupancy_reachability)
+            else (DIRECT_OCCUPANCY_TEMPERED_RECOVERY_WITNESS_FEATURE_SCHEMA
             if soft_occupancy_disagreement
             else (DIRECT_DEMAND_TEMPERED_RECOVERY_WITNESS_FEATURE_SCHEMA
             if demand_normalized_fidelity
@@ -274,7 +285,7 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
                   if (control_projection or boundary_transport)
                   else (DIRECT_ACTIVE_CONSTRAINT_RECOVERY_WITNESS_FEATURE_SCHEMA
                         if (route_alignment or reentry_alignment)
-                        else DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA))))
+                        else DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA)))))
         )
         if feature_schema != expected_semantic_schema:
             raise RuntimeError(
@@ -482,6 +493,14 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         direct_recovery_semantic_witness_soft_occupancy_disagreement=bool(ckpt.get(
             "direct_recovery_semantic_witness_soft_occupancy_disagreement",
             model_cfg.get("direct_recovery_semantic_witness_soft_occupancy_disagreement", False),
+        )),
+        direct_recovery_semantic_witness_boundary_localized_occupancy_trust=bool(ckpt.get(
+            "direct_recovery_semantic_witness_boundary_localized_occupancy_trust",
+            model_cfg.get("direct_recovery_semantic_witness_boundary_localized_occupancy_trust", False),
+        )),
+        direct_recovery_semantic_witness_history_occupancy_reachability=bool(ckpt.get(
+            "direct_recovery_semantic_witness_history_occupancy_reachability",
+            model_cfg.get("direct_recovery_semantic_witness_history_occupancy_reachability", False),
         )),
         direct_recovery_evidence_native_certificate_preservation=bool(ckpt.get(
             "direct_recovery_evidence_native_certificate_preservation",
@@ -767,6 +786,12 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_semantic_witness_soft_occupancy_disagreement"] = bool(
         model.direct_recovery_semantic_witness_soft_occupancy_disagreement
     )
+    cfg["model"]["direct_recovery_semantic_witness_boundary_localized_occupancy_trust"] = bool(
+        model.direct_recovery_semantic_witness_boundary_localized_occupancy_trust
+    )
+    cfg["model"]["direct_recovery_semantic_witness_history_occupancy_reachability"] = bool(
+        model.direct_recovery_semantic_witness_history_occupancy_reachability
+    )
     cfg["model"]["direct_recovery_evidence_native_certificate_preservation"] = bool(
         model.direct_recovery_evidence_native_certificate_preservation
     )
@@ -1034,6 +1059,14 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_semantic_witness_soft_occupancy_disagreement",
             model_cfg.get("direct_recovery_semantic_witness_soft_occupancy_disagreement", False),
         )),
+        "direct_recovery_semantic_witness_boundary_localized_occupancy_trust": bool(ckpt.get(
+            "direct_recovery_semantic_witness_boundary_localized_occupancy_trust",
+            model_cfg.get("direct_recovery_semantic_witness_boundary_localized_occupancy_trust", False),
+        )),
+        "direct_recovery_semantic_witness_history_occupancy_reachability": bool(ckpt.get(
+            "direct_recovery_semantic_witness_history_occupancy_reachability",
+            model_cfg.get("direct_recovery_semantic_witness_history_occupancy_reachability", False),
+        )),
     }
     actual_contract = {
         "direct_recovery_evidence_calibrator_context": bool(model.direct_recovery_evidence_calibrator_context),
@@ -1112,6 +1145,12 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         ),
         "direct_recovery_semantic_witness_soft_occupancy_disagreement": bool(
             model.direct_recovery_semantic_witness_soft_occupancy_disagreement
+        ),
+        "direct_recovery_semantic_witness_boundary_localized_occupancy_trust": bool(
+            model.direct_recovery_semantic_witness_boundary_localized_occupancy_trust
+        ),
+        "direct_recovery_semantic_witness_history_occupancy_reachability": bool(
+            model.direct_recovery_semantic_witness_history_occupancy_reachability
         ),
     }
     if expected_contract != actual_contract:

@@ -551,6 +551,8 @@ def direct_executable_recovery_witness_features_from_sample(
     projection_fidelity_weighting: bool = False,
     robust_occupancy_envelope: bool = False,
     soft_occupancy_disagreement: bool = False,
+    boundary_localized_occupancy_trust: bool = False,
+    history_occupancy_reachability: bool = False,
 ) -> np.ndarray:
     """Return the v48.61 option-resolved executable recovery witness field.
 
@@ -641,7 +643,7 @@ def direct_executable_recovery_witness_features_from_sample(
     ego_len = max(abs(float(ego[7])), 1.0e-3)
     ego_wid = max(abs(float(ego[8])), 1.0e-3)
     ego_rad = 0.5 * float(np.hypot(ego_len, ego_wid))
-    agents: list[tuple[float, np.ndarray]] = []
+    agents: list[tuple[float, int, np.ndarray]] = []
     if hist.ndim == 3 and hist.shape[0] > 0 and hist.shape[1] > 1 and valid_hist.ndim >= 2 and valid_hist.shape[0] > 0:
         last = hist[-1]
         vmask = valid_hist[-1].reshape(-1)
@@ -651,26 +653,60 @@ def direct_executable_recovery_witness_features_from_sample(
             row = np.asarray(last[aidx], dtype=np.float64).reshape(-1)
             if row.size < 12 or not np.isfinite(row[:12]).all():
                 continue
-            agents.append((float(np.linalg.norm(row[:2] - ego_xy)), row))
+            agents.append((float(np.linalg.norm(row[:2] - ego_xy)), aidx, row))
     agents.sort(key=lambda z: z[0])
     agents = agents[:max_agents]
 
     if agents:
-        rel0 = np.stack([row[:2] - ego_xy for _, row in agents], axis=0)
-        vel = np.stack([row[3:5] for _, row in agents], axis=0)
+        rel0 = np.stack([row[:2] - ego_xy for _, _, row in agents], axis=0)
+        vel = np.stack([row[3:5] for _, _, row in agents], axis=0)
         # Current observed acceleration is part of AGENT_FEATURES (ax, ay) and
         # is therefore deployable.  v48.68 optionally treats CV and a bounded
         # constant-acceleration continuation as an observation-consistent
         # occupancy set; no teacher future or hidden branch metadata is used.
-        acc = np.stack([row[5:7] for _, row in agents], axis=0)
-        alen = np.asarray([max(abs(float(row[10])), 1.0e-3) for _, row in agents], dtype=np.float64)
-        awid = np.asarray([max(abs(float(row[11])), 1.0e-3) for _, row in agents], dtype=np.float64)
+        acc = np.stack([row[5:7] for _, _, row in agents], axis=0)
+        alen = np.asarray([max(abs(float(row[10])), 1.0e-3) for _, _, row in agents], dtype=np.float64)
+        awid = np.asarray([max(abs(float(row[11])), 1.0e-3) for _, _, row in agents], dtype=np.float64)
         arad = 0.5 * np.hypot(alen, awid)
+
+        # v48.71 OC-BORW: construct a set-valued, observation-only acceleration
+        # envelope from the complete valid history of each currently observed
+        # agent.  The axis-aligned acceleration box contains every observed
+        # acceleration sample and zero acceleration (the historical CV model).
+        # We propagate its circumscribed L2 ball analytically, so the resulting
+        # occupancy tube is a conservative reachable set without a new learned
+        # predictor, hidden future, regime id, threshold, or tuned horizon.
+        hist_acc_center_rows: list[np.ndarray] = []
+        hist_acc_radius_rows: list[float] = []
+        for _, aidx, row in agents:
+            if hist.ndim == 3 and valid_hist.ndim >= 2 and aidx < hist.shape[1] and aidx < valid_hist.shape[1]:
+                mask = np.asarray(valid_hist[:, aidx], dtype=bool).reshape(-1)
+                ah = np.asarray(hist[:, aidx, 5:7], dtype=np.float64)
+                mask = mask[: ah.shape[0]] & np.isfinite(ah).all(axis=1)
+                ah = ah[mask]
+            else:
+                ah = np.zeros((0, 2), dtype=np.float64)
+            if ah.size == 0:
+                ah = np.asarray(row[5:7], dtype=np.float64).reshape(1, 2)
+            # Include zero acceleration because CV remains the signed reference
+            # model; the ambiguity set therefore represents persistence/decay
+            # uncertainty around the observable acceleration history.
+            ah = np.concatenate([np.zeros((1, 2), dtype=np.float64), ah], axis=0)
+            amin = np.min(ah, axis=0)
+            amax = np.max(ah, axis=0)
+            center = 0.5 * (amin + amax)
+            radius = 0.5 * float(np.linalg.norm(amax - amin))
+            hist_acc_center_rows.append(center)
+            hist_acc_radius_rows.append(radius)
+        hist_acc_center = np.stack(hist_acc_center_rows, axis=0)
+        hist_acc_radius = np.asarray(hist_acc_radius_rows, dtype=np.float64)
     else:
         rel0 = np.zeros((0, 2), dtype=np.float64)
         vel = np.zeros((0, 2), dtype=np.float64)
         acc = np.zeros((0, 2), dtype=np.float64)
         arad = np.zeros((0,), dtype=np.float64)
+        hist_acc_center = np.zeros((0, 2), dtype=np.float64)
+        hist_acc_radius = np.zeros((0,), dtype=np.float64)
 
     # Acceleration is held only for the already-configured prefix horizon and
     # then propagated with the resulting velocity.  This avoids an unbounded
@@ -682,7 +718,7 @@ def direct_executable_recovery_witness_features_from_sample(
     def _agent_future(times: np.ndarray) -> tuple[np.ndarray, np.ndarray | None]:
         tt = np.asarray(times, dtype=np.float64).reshape(-1)
         cv = rel0[None, :, :] + tt[:, None, None] * vel[None, :, :]
-        if not (robust_occupancy_envelope or soft_occupancy_disagreement) or not agents:
+        if not (robust_occupancy_envelope or soft_occupancy_disagreement or boundary_localized_occupancy_trust or history_occupancy_reachability) or not agents:
             return cv, None
         hold = np.minimum(tt, accel_hold_s)
         accel_disp = (tt * hold - 0.5 * hold * hold)[:, None, None] * acc[None, :, :]
@@ -698,6 +734,21 @@ def direct_executable_recovery_witness_features_from_sample(
         delta_ca = ego_xy_rel_t[:, None, :] - ca
         clear_ca = np.linalg.norm(delta_ca, axis=-1) - ego_rad - arad[None, :]
         return clear_cv, clear_ca
+
+    def _history_tube_clearance(ego_xy_rel_t: np.ndarray, times: np.ndarray) -> np.ndarray | None:
+        if not history_occupancy_reachability or not agents:
+            return None
+        tt = np.asarray(times, dtype=np.float64).reshape(-1)
+        hold = np.minimum(tt, accel_hold_s)
+        coeff = (tt * hold - 0.5 * hold * hold)[:, None]
+        center = (
+            rel0[None, :, :]
+            + tt[:, None, None] * vel[None, :, :]
+            + coeff[:, :, None] * hist_acc_center[None, :, :]
+        )
+        radius = coeff * hist_acc_radius[None, :]
+        delta = ego_xy_rel_t[:, None, :] - center
+        return np.linalg.norm(delta, axis=-1) - ego_rad - arad[None, :] - radius
 
     def _signed_clearance(ego_xy_rel_t: np.ndarray, times: np.ndarray) -> np.ndarray:
         clear_cv, clear_ca = _signed_clearance_components(ego_xy_rel_t, times)
@@ -750,10 +801,11 @@ def direct_executable_recovery_witness_features_from_sample(
     stop_decel = max(abs(a_min), 1.0e-3)
 
     feature_dim = (
-        15 if soft_occupancy_disagreement else
+        18 if (boundary_localized_occupancy_trust or history_occupancy_reachability) else
+        (15 if soft_occupancy_disagreement else
         (14 if include_active_constraint_tail else
         (12 if include_semantic_alignment_tail else
-         (10 if include_recovery_stability_tail else DIRECT_EXECUTABLE_RECOVERY_WITNESS_FEATURE_DIM)))
+         (10 if include_recovery_stability_tail else DIRECT_EXECUTABLE_RECOVERY_WITNESS_FEATURE_DIM))))
     )
     field = np.zeros((L, feature_dim), dtype=np.float32)
     for l in range(raw_L):
@@ -799,21 +851,38 @@ def direct_executable_recovery_witness_features_from_sample(
             )
             c_min = float(np.min(signed_clearance))
             c_terminal = float(np.min(signed_clearance[-1]))
-            if soft_occupancy_disagreement and clear_ca is not None:
-                # v48.70 OC-DOTW: use CV-vs-observed-acceleration disagreement
-                # only as epistemic trust.  Positive values mean the historical
-                # single-CV model is optimistic about clearance somewhere along
-                # this *projected* recovery trace.  This never replaces the CV
-                # clearance used by the physical certificate and therefore does
-                # not change witness sign/set.
+            # v48.70 diagnostic retained for exact historical comparison.
+            # It measures raw point-prediction disagreement irrespective of the
+            # physical safety boundary and is intentionally *not* the v48.71 Main
+            # trust variable.
+            if clear_ca is not None:
                 occupancy_optimism_gap = float(
                     np.max(np.maximum(clear_cv - clear_ca, 0.0)) / distance_scale
                 )
+                current_boundary_deficit = float(
+                    np.max(np.maximum(d_safe - clear_ca, 0.0)) / distance_scale
+                )
             else:
                 occupancy_optimism_gap = 0.0
+                current_boundary_deficit = 0.0
+
+            clear_hist_tube = _history_tube_clearance(rec_xy_rel, times)
+            if clear_hist_tube is not None:
+                history_optimism_gap = float(
+                    np.max(np.maximum(clear_cv - clear_hist_tube, 0.0)) / distance_scale
+                )
+                history_boundary_deficit = float(
+                    np.max(np.maximum(d_safe - clear_hist_tube, 0.0)) / distance_scale
+                )
+            else:
+                history_optimism_gap = 0.0
+                history_boundary_deficit = 0.0
         else:
             c_min = c_terminal = 40.0
             occupancy_optimism_gap = 0.0
+            current_boundary_deficit = 0.0
+            history_optimism_gap = 0.0
+            history_boundary_deficit = 0.0
 
         h_min_clear = np.tanh((c_min - d_safe) / distance_scale)
         h_terminal_clear = np.tanh((c_terminal - d_safe) / distance_scale)
@@ -933,10 +1002,21 @@ def direct_executable_recovery_witness_features_from_sample(
                     persistent_reserve = float(reserve_t[-1])
                 h_reentry = np.tanh(persistent_reserve / distance_scale)
             values.extend([h_route, h_reentry])
-        if soft_occupancy_disagreement:
-            # Strictly non-negative bounded diagnostic.  Model-side recovery of
-            # atanh(.) yields the normalized CV optimism gap without a new
-            # threshold, horizon, or trainable parameter.
+        if boundary_localized_occupancy_trust or history_occupancy_reachability:
+            # v48.71 schema-7 diagnostics.  Coordinate 14 preserves v48.70 raw
+            # current-CA optimism for direct ablation.  Coordinate 15 is the
+            # current-CA *boundary deficit*.  Coordinates 16/17 are the analogous
+            # history-reachability-tube optimism and boundary deficit.  All are
+            # non-negative confidence diagnostics; the signed CV certificate in
+            # coordinates 0--13 remains unchanged.
+            values.extend([
+                float(np.tanh(occupancy_optimism_gap)),
+                float(np.tanh(current_boundary_deficit)),
+                float(np.tanh(history_optimism_gap)),
+                float(np.tanh(history_boundary_deficit)),
+            ])
+        elif soft_occupancy_disagreement:
+            # Strictly non-negative bounded v48.70 diagnostic.
             values.append(float(np.tanh(occupancy_optimism_gap)))
         field[l] = np.asarray(values, dtype=np.float32)
 
@@ -1025,6 +1105,14 @@ DIRECT_DEMAND_TEMPERED_RECOVERY_WITNESS_FEATURE_DIM = 14
 DIRECT_OCCUPANCY_TEMPERED_RECOVERY_WITNESS_FEATURE_SCHEMA = 6
 DIRECT_OCCUPANCY_TEMPERED_RECOVERY_WITNESS_FEATURE_DIM = 15
 
+# v48.71 OC-BORW replaces raw point-disagreement trust with a boundary-localized
+# observation-history reachability construction.  The first 14 coordinates stay
+# byte-semantically identical to v48.68-T; coordinate 14 is the v48.70 current-CA
+# raw optimism diagnostic, 15 is current-CA boundary deficit, 16 is history-tube
+# raw optimism, and 17 is history-tube boundary deficit.
+DIRECT_BOUNDARY_OCCUPANCY_REACHABILITY_WITNESS_FEATURE_SCHEMA = 7
+DIRECT_BOUNDARY_OCCUPANCY_REACHABILITY_WITNESS_FEATURE_DIM = 18
+
 
 def direct_semantic_recovery_witness_features_from_sample(
     d: dict[str, Any], cfg: dict | None = None, *, num_options: int | None = None
@@ -1058,11 +1146,18 @@ def direct_semantic_recovery_witness_features_from_sample(
     soft_occupancy_disagreement = bool(
         model_cfg.get("direct_recovery_semantic_witness_soft_occupancy_disagreement", False)
     )
+    boundary_localized_occupancy_trust = bool(
+        model_cfg.get("direct_recovery_semantic_witness_boundary_localized_occupancy_trust", False)
+    )
+    history_occupancy_reachability = bool(
+        model_cfg.get("direct_recovery_semantic_witness_history_occupancy_reachability", False)
+    )
     active_constraint_tail = bool(
         model_cfg.get("direct_recovery_semantic_witness_route_alignment", False)
         or model_cfg.get("direct_recovery_semantic_witness_reentry_alignment", False)
         or control_projection or boundary_transport or projection_fidelity
         or demand_normalized_fidelity or robust_occupancy or soft_occupancy_disagreement
+        or boundary_localized_occupancy_trust or history_occupancy_reachability
     )
     out = direct_executable_recovery_witness_features_from_sample(
         d, cfg, num_options=num_options, include_recovery_stability_tail=True,
@@ -1072,12 +1167,16 @@ def direct_semantic_recovery_witness_features_from_sample(
         projection_fidelity_weighting=projection_fidelity,
         robust_occupancy_envelope=robust_occupancy,
         soft_occupancy_disagreement=soft_occupancy_disagreement,
+        boundary_localized_occupancy_trust=boundary_localized_occupancy_trust,
+        history_occupancy_reachability=history_occupancy_reachability,
     )
     expected_dim = (
-        DIRECT_OCCUPANCY_TEMPERED_RECOVERY_WITNESS_FEATURE_DIM
+        DIRECT_BOUNDARY_OCCUPANCY_REACHABILITY_WITNESS_FEATURE_DIM
+        if (boundary_localized_occupancy_trust or history_occupancy_reachability) else
+        (DIRECT_OCCUPANCY_TEMPERED_RECOVERY_WITNESS_FEATURE_DIM
         if soft_occupancy_disagreement else
         (DIRECT_ACTIVE_CONSTRAINT_RECOVERY_WITNESS_FEATURE_DIM
-         if active_constraint_tail else DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_DIM)
+         if active_constraint_tail else DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_DIM))
     )
     if out.ndim != 2 or out.shape[1] != expected_dim:
         raise ValueError(f"invalid OC-SARW feature field shape: {out.shape}")
@@ -1466,8 +1565,16 @@ def _persistent_tensor_cache_key(
     semantic_soft_occupancy_disagreement = bool(
         model_cfg.get("direct_recovery_semantic_witness_soft_occupancy_disagreement", False)
     )
+    semantic_boundary_localized_occupancy_trust = bool(
+        model_cfg.get("direct_recovery_semantic_witness_boundary_localized_occupancy_trust", False)
+    )
+    semantic_history_occupancy_reachability = bool(
+        model_cfg.get("direct_recovery_semantic_witness_history_occupancy_reachability", False)
+    )
     semantic_feature_schema = (
-        DIRECT_OCCUPANCY_TEMPERED_RECOVERY_WITNESS_FEATURE_SCHEMA
+        DIRECT_BOUNDARY_OCCUPANCY_REACHABILITY_WITNESS_FEATURE_SCHEMA
+        if semantic_witness_features_enabled and (semantic_boundary_localized_occupancy_trust or semantic_history_occupancy_reachability)
+        else (DIRECT_OCCUPANCY_TEMPERED_RECOVERY_WITNESS_FEATURE_SCHEMA
         if semantic_witness_features_enabled and semantic_soft_occupancy_disagreement
         else (DIRECT_DEMAND_TEMPERED_RECOVERY_WITNESS_FEATURE_SCHEMA
         if semantic_witness_features_enabled and semantic_demand_normalized_fidelity
@@ -1477,7 +1584,7 @@ def _persistent_tensor_cache_key(
               if semantic_witness_features_enabled and (semantic_control_projection or semantic_boundary_transport)
               else (DIRECT_ACTIVE_CONSTRAINT_RECOVERY_WITNESS_FEATURE_SCHEMA
                     if semantic_witness_features_enabled and (semantic_route_alignment or semantic_reentry_alignment)
-                    else (DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA if semantic_witness_features_enabled else 0)))))
+                    else (DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA if semantic_witness_features_enabled else 0))))))
     )
     payload = {
         "schema": _PERSISTENT_TENSOR_CACHE_SCHEMA,
@@ -1516,6 +1623,8 @@ def _persistent_tensor_cache_key(
         "semantic_witness_projection_fidelity_weighting": semantic_projection_fidelity,
         "semantic_witness_robust_occupancy": semantic_robust_occupancy,
         "semantic_witness_soft_occupancy_disagreement": semantic_soft_occupancy_disagreement,
+        "semantic_witness_boundary_localized_occupancy_trust": semantic_boundary_localized_occupancy_trust,
+        "semantic_witness_history_occupancy_reachability": semantic_history_occupancy_reachability,
         "semantic_witness_recovery_horizon_s": (float(cfg.get("recovery_horizon_s", 4.0)) if semantic_witness_features_enabled else 0.0),
         "semantic_witness_sample_rate_hz": (float(cfg.get("sample_rate_hz", 10.0)) if semantic_witness_features_enabled else 0.0),
         "npz_keys": sorted(MODEL_SAMPLE_NPZ_KEYS),

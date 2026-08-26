@@ -367,6 +367,8 @@ class OCRAPModel(nn.Module):
         direct_recovery_semantic_witness_demand_normalized_fidelity: bool = False,
         direct_recovery_semantic_witness_robust_occupancy: bool = False,
         direct_recovery_semantic_witness_soft_occupancy_disagreement: bool = False,
+        direct_recovery_semantic_witness_boundary_localized_occupancy_trust: bool = False,
+        direct_recovery_semantic_witness_history_occupancy_reachability: bool = False,
         direct_recovery_evidence_native_certificate_preservation: bool = False,
         direct_recovery_evidence_native_margin_complete_preservation: bool = False,
         direct_recovery_evidence_native_advantage_preservation: bool = False,
@@ -686,6 +688,42 @@ class OCRAPModel(nn.Module):
         ):
             raise ValueError(
                 "soft occupancy disagreement requires projection-fidelity weighting and control projection"
+            )
+        # v48.71 OC-BORW: raw CV-vs-CA displacement disagreement is not itself
+        # a safety quantity.  Separate (a) localization at the physical
+        # clearance boundary and (b) a set-valued acceleration reachability tube
+        # derived from observed history.  Both are strictly-positive support
+        # trust only; CV remains the signed certificate and boundary transport
+        # remains a separate downstream mechanism.
+        self.direct_recovery_semantic_witness_boundary_localized_occupancy_trust = bool(
+            direct_recovery_semantic_witness_boundary_localized_occupancy_trust
+        )
+        self.direct_recovery_semantic_witness_history_occupancy_reachability = bool(
+            direct_recovery_semantic_witness_history_occupancy_reachability
+        )
+        if (
+            self.direct_recovery_semantic_witness_boundary_localized_occupancy_trust
+            or self.direct_recovery_semantic_witness_history_occupancy_reachability
+        ) and not (
+            self.direct_recovery_semantic_witness_projection_fidelity_weighting
+            and self.direct_recovery_semantic_witness_control_projection
+        ):
+            raise ValueError(
+                "boundary-localized/history occupancy trust requires projection-fidelity weighting and control projection"
+            )
+        if (
+            self.direct_recovery_semantic_witness_boundary_localized_occupancy_trust
+            or self.direct_recovery_semantic_witness_history_occupancy_reachability
+        ) and self.direct_recovery_semantic_witness_soft_occupancy_disagreement:
+            raise ValueError(
+                "v48.71 occupancy reachability trust replaces, rather than stacks, v48.70 soft occupancy disagreement"
+            )
+        if (
+            self.direct_recovery_semantic_witness_boundary_localized_occupancy_trust
+            or self.direct_recovery_semantic_witness_history_occupancy_reachability
+        ) and self.direct_recovery_semantic_witness_robust_occupancy:
+            raise ValueError(
+                "v48.71 occupancy reachability trust cannot be combined with the rejected hard robust-occupancy min"
             )
         absolute_source_count = sum([
             self.direct_recovery_absolute_feasibility_head,
@@ -2282,7 +2320,11 @@ class OCRAPModel(nn.Module):
             )
         feat = supplied_features.to(device=device, dtype=dtype)
         feature_dim = (
-            15 if self.direct_recovery_semantic_witness_soft_occupancy_disagreement else
+            18 if (
+                self.direct_recovery_semantic_witness_boundary_localized_occupancy_trust
+                or self.direct_recovery_semantic_witness_history_occupancy_reachability
+            ) else
+            (15 if self.direct_recovery_semantic_witness_soft_occupancy_disagreement else
             (14 if (
                 self.direct_recovery_semantic_witness_route_alignment
                 or self.direct_recovery_semantic_witness_reentry_alignment
@@ -2291,7 +2333,7 @@ class OCRAPModel(nn.Module):
                 or self.direct_recovery_semantic_witness_projection_fidelity_weighting
                 or self.direct_recovery_semantic_witness_demand_normalized_fidelity
                 or self.direct_recovery_semantic_witness_robust_occupancy
-            ) else 12)
+            ) else 12))
         )
         expected = (int(batch_size), int(self.num_options), feature_dim)
         if feat.ndim != 3 or tuple(feat.shape) != expected:
@@ -2716,6 +2758,15 @@ class OCRAPModel(nn.Module):
         h_occupancy_optimism = (
             features[..., 14] if features.shape[-1] >= 15 else torch.zeros_like(h_min)
         )
+        h_current_boundary_deficit = (
+            features[..., 15] if features.shape[-1] >= 18 else torch.zeros_like(h_min)
+        )
+        h_history_occupancy_optimism = (
+            features[..., 16] if features.shape[-1] >= 18 else torch.zeros_like(h_min)
+        )
+        h_history_boundary_deficit = (
+            features[..., 17] if features.shape[-1] >= 18 else torch.zeros_like(h_min)
+        )
 
         clear_recovery = torch.minimum(h_terminal, h_gain)
         clear_recovery_ok = (clear_recovery > 0.0) & (h_clear_floor_gain >= 0.0)
@@ -2865,19 +2916,43 @@ class OCRAPModel(nn.Module):
             common_support = common_support * projection_fidelity
 
         if self.direct_recovery_semantic_witness_soft_occupancy_disagreement:
-            # v48.68 showed that hard min(CV, CA) destroys high-precision
-            # witnesses, while v48.69 showed that observation demand alone
-            # cannot identify credible large projections.  Treat model
-            # disagreement as epistemic confidence only: CV remains the signed
-            # physical certificate, and a positive multiplier can only attenuate
-            # rescue support when the CV forecast is optimistic relative to the
-            # bounded observed-acceleration counterfactual.
+            # v48.70 raw point-disagreement trust (historical ablation only).
             eps_occ = torch.finfo(h_occupancy_optimism.dtype).eps * 16.0
             occupancy_optimism_gap = torch.relu(torch.atanh(
                 h_occupancy_optimism.float().clamp(-1.0 + eps_occ, 1.0 - eps_occ)
             ))
             occupancy_trust = (1.0 / (1.0 + occupancy_optimism_gap)).to(dtype=memory.dtype)
             common_support = common_support * occupancy_trust
+
+        if (
+            self.direct_recovery_semantic_witness_boundary_localized_occupancy_trust
+            or self.direct_recovery_semantic_witness_history_occupancy_reachability
+        ):
+            # v48.71 OC-BORW factorial semantics:
+            #   H: current-CA boundary deficit (boundary localization only)
+            #   J: history-tube raw CV optimism (history reachability only)
+            #   K: history-tube boundary deficit (both factors / Main)
+            # The trust variable is a normalized non-negative reserve deficit,
+            # and w=1/(1+deficit) is strictly positive.  Thus the intervention
+            # cannot alter witness existence/sign and only discounts the amount
+            # of positive rescue when an observation-supported occupancy model
+            # actually threatens the physical clearance boundary.
+            if self.direct_recovery_semantic_witness_history_occupancy_reachability:
+                h_occ_risk = (
+                    h_history_boundary_deficit
+                    if self.direct_recovery_semantic_witness_boundary_localized_occupancy_trust
+                    else h_history_occupancy_optimism
+                )
+            else:
+                h_occ_risk = h_current_boundary_deficit
+            eps_occ71 = torch.finfo(h_occ_risk.dtype).eps * 16.0
+            occupancy_risk = torch.relu(torch.atanh(
+                h_occ_risk.float().clamp(-1.0 + eps_occ71, 1.0 - eps_occ71)
+            ))
+            occupancy_reachability_trust = (1.0 / (1.0 + occupancy_risk)).to(
+                dtype=memory.dtype
+            )
+            common_support = common_support * occupancy_reachability_trust
 
         gains = self.direct_absolute_semantic_witness_gain.clamp(0.0, 2.0)
 
