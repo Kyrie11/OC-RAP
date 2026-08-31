@@ -19,7 +19,8 @@ def f(r,k,default=None):
   x=float(r.get(k));return x if math.isfinite(x) else default
  except Exception:return default
 def pos(r):return (f(r,'semantic_best_common_viability',-1e9) or -1e9)>0
-def feas(r):return (f(r,'teacher_candidate_r_dep',-1e9) or -1e9)>=0
+def feas(r):
+ v=f(r,'teacher_candidate_r_dep',None);return v is not None and v>=0
 def safe(r,g=.015):return (f(r,'teacher_adv',-1e9) or -1e9)>=g and not bool(r.get('teacher_harmful',False))
 def passed(r):return (f(r,'absolute_feasibility_probability',0.0) or 0.0)>=.5
 def mean(z):return float(np.mean(z)) if z else None

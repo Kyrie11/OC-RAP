@@ -15,6 +15,7 @@ from ocrap.models.data import (
     OPTION_FEATURE_DIM,
     direct_semantic_recovery_witness_features_from_sample,
     option_features_from_sample,
+    _persistent_tensor_cache_key,
 )
 from ocrap.models.encoders import FlatFeatureLayout
 from ocrap.models.ocrap import OCRAPModel
@@ -195,8 +196,7 @@ def test_v4873_requires_nested_empirical_hull_chain():
 
 def test_v4873_runner_contract_freezes_forbidden_directions():
     p=Path(__file__).resolve().parents[1]/"scripts/run_v48_73_dcp_drfc_bcde_rifa_irrw_two_gpu.sh"
-    if not p.exists():
-        pytest.skip("runner added after core-mechanism test authoring")
+    assert p.is_file()
     text=p.read_text()
     assert "N73_ANCHORED_HULL" in text and "O73_Main_OCIRRW" in text
     assert "SEMANTIC_WITNESS_INTERACTION_BOX_SUPPORT=true" in text
@@ -207,3 +207,72 @@ def test_v4873_runner_contract_freezes_forbidden_directions():
     assert "SEMANTIC_WITNESS_DEMAND_NORMALIZED_FIDELITY=false" in text
     assert "SEMANTIC_WITNESS_HISTORY_OCCUPANCY_REACHABILITY=false" in text
     assert "PROPOSAL_TOP_K=5" in text
+
+
+
+def test_v4873_shell_wiring_reaches_train_config():
+    root = Path(__file__).resolve().parents[1]
+    adapt = (root / "scripts/adapt_ocrap_v48_36_ocaf_single_stage.sh").read_text()
+    train = (root / "scripts/train_ocrap_v48_trac_sr.sh").read_text()
+    for name in (
+        "SEMANTIC_WITNESS_INTERACTION_ANCHOR_SUPPORT",
+        "SEMANTIC_WITNESS_INTERACTION_RESPONSE_SUPPORT",
+    ):
+        assert f'{name}="${{{name}:-false}}"' in adapt
+        assert f'{name}="${name}"' in adapt
+        assert name in train
+    assert "model.direct_recovery_semantic_witness_interaction_anchor_support" in train
+    assert "model.direct_recovery_semantic_witness_interaction_response_support" in train
+
+
+def test_v4873_schema9_anchor_and_response_share_persistent_cache(tmp_path):
+    root = tmp_path / "dataset"
+    samples = root / "samples"
+    samples.mkdir(parents=True)
+    sample = samples / "row.npz"
+    sample.write_bytes(b"not-opened-by-cache-key")
+    (root / "manifest.csv").write_text(
+        "path,split_id\nsamples/row.npz,evidence_adapt_train_near_contact\n"
+    )
+
+    def cfg(response: bool):
+        c = _cfg(anchor=True, response=response)
+        c["model"]["direct_recovery_absolute_semantic_witness_correction"] = True
+        c["training"] = {"direct_policy_metric_exact_eligibility": False}
+        return c
+
+    kwargs = dict(
+        paths=[sample], num_roots=3, num_options=2,
+        d_signature=8, d_future_signature=8, feature_dim=_layout().total_dim,
+    )
+    n_key = _persistent_tensor_cache_key(cfg=cfg(False), **kwargs)
+    o_key = _persistent_tensor_cache_key(cfg=cfg(True), **kwargs)
+    assert n_key == o_key
+
+
+def test_v4873_runner_preregisters_required_attribution_order():
+    text = (
+        Path(__file__).resolve().parents[1]
+        / "scripts/run_v48_73_dcp_drfc_bcde_rifa_irrw_two_gpu.sh"
+    ).read_text()
+    assert 'train_irrw_arm "$N_RUN" N73_ANCHORED_HULL false' in text
+    assert 'train_irrw_arm "$O_RUN" O73_Main_OCIRRW true' in text
+    assert "audit_v48_73_interaction_response.py" in text
+    assert "compare_v48_73_irrw.py" in text
+    assert "check_v48_73_pipeline_complete.py" in text
+    assert "retain_supported_directional_set_then_interaction_response_dynamics" in text
+
+
+
+def test_v4873_response_audit_preserves_exact_zero_teacher_feasibility():
+    import importlib.util
+    root = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location(
+        "audit_v48_73_interaction_response",
+        root / "tools/audit_v48_73_interaction_response.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    assert module.feas({"teacher_candidate_r_dep": 0.0}) is True
+    assert module.feas({"teacher_candidate_r_dep": -1.0e-6}) is False

@@ -740,6 +740,12 @@ def direct_executable_recovery_witness_features_from_sample(
         )
         for agent_idx, row in enumerate(hist_acc_samples_rows):
             hist_acc_samples[agent_idx, : row.shape[0], :] = row
+        max_hist_jerk_samples = max((row.shape[0] for row in hist_jerk_samples_rows), default=1)
+        hist_jerk_samples = np.zeros(
+            (len(hist_jerk_samples_rows), max_hist_jerk_samples, 2), dtype=np.float64
+        )
+        for agent_idx, row in enumerate(hist_jerk_samples_rows):
+            hist_jerk_samples[agent_idx, : row.shape[0], :] = row
     else:
         rel0 = np.zeros((0, 2), dtype=np.float64)
         vel = np.zeros((0, 2), dtype=np.float64)
@@ -751,6 +757,7 @@ def direct_executable_recovery_witness_features_from_sample(
         hist_acc_samples_rows = []
         hist_acc_samples = np.zeros((0, 1, 2), dtype=np.float64)
         hist_jerk_samples_rows = []
+        hist_jerk_samples = np.zeros((0, 1, 2), dtype=np.float64)
 
     # Acceleration is held only for the already-configured prefix horizon and
     # then propagated with the resulting velocity.  This avoids an unbounded
@@ -844,68 +851,68 @@ def direct_executable_recovery_witness_features_from_sample(
         base = dist - ego_rad - arad[None, :]
         return base - coeff * support_box, base - coeff * support_hull
 
-    def _interaction_response_clearance(
-        ego_xy_rel_t: np.ndarray, times: np.ndarray, *, jerk_limited: bool
-    ) -> np.ndarray | None:
-        """v48.73 current-state-anchored interaction-response reachability.
+    def _interaction_response_clearances(
+        ego_xy_rel_t: np.ndarray, times: np.ndarray
+    ) -> tuple[np.ndarray | None, np.ndarray | None]:
+        """Return v48.73 anchored-ramp and observed-jerk response clearances.
 
-        V48.72's empirical acceleration hull is joint and candidate-oriented, but
-        it is temporally static: any historical acceleration can be applied at the
-        first future instant and held for the full existing prefix horizon.  This
-        helper preserves the same empirical hull and interaction normal while
-        constraining how inward acceleration can evolve from the *currently
-        observed* acceleration.
+        V48.72's empirical acceleration hull is candidate-oriented but
+        temporally static: any stale history acceleration can be charged from
+        the first future instant and held for the entire existing prefix
+        horizon. V48.73 preserves the joint empirical hull and line-of-sight
+        support while anchoring the future response at the latest observation.
 
-        N73 (jerk_limited=False) uses a parameter-free linear ramp from current
-        acceleration to the historical-hull directional support over the already
-        configured prefix horizon.  O73/Main uses the maximum observed directional
-        jerk to approach the same hull support, capped by that support.  Neither
-        branch reads teacher future, adds a learned predictor, tunes a new horizon,
-        or changes the historical CV signed certificate.
+        N73 uses a parameter-free linear ramp from current acceleration to the
+        empirical-hull directional support over the existing prefix horizon.
+        O73/Main replaces that artificial ramp rate with the maximum observed
+        directional jerk, capped at the same hull support. Both diagnostics are
+        emitted together so the causal arms share one tensor cache and common
+        geometry. Zero padding is exact because zero is explicitly in every
+        acceleration and jerk ambiguity set.
         """
         if not (interaction_anchor_support or interaction_response_support) or not agents:
-            return None
+            return None, None
         tt = np.asarray(times, dtype=np.float64).reshape(-1)
         h = np.minimum(tt, accel_hold_s)
         cv = rel0[None, :, :] + tt[:, None, None] * vel[None, :, :]
         rel = ego_xy_rel_t[:, None, :] - cv
         dist = np.linalg.norm(rel, axis=-1)
         n = rel / np.maximum(dist[..., None], 1.0e-9)
-        inward_disp = np.zeros_like(dist)
-        H = max(float(accel_hold_s), 1.0e-9)
-        for aidx, samples in enumerate(hist_acc_samples_rows):
-            aa = np.asarray(samples, dtype=np.float64).reshape(-1, 2)
-            sigma_a = np.max(n[:, aidx, :] @ aa.T, axis=1)
-            sigma_a = np.maximum(sigma_a, 0.0)
-            a0 = np.sum(n[:, aidx, :] * acc[aidx][None, :], axis=1)
-            # Current acceleration is one member of the historical set, hence
-            # sigma_a >= a0 up to floating error.  Clamp defensively to preserve
-            # monotone inward reachability under noisy input.
-            sigma_a = np.maximum(sigma_a, a0)
-            if not jerk_limited:
-                # a(s)=a0 + (sigma_a-a0)s/H, 0<=s<=h.
-                c0 = tt * h - 0.5 * h * h
-                c1 = 0.5 * tt * h * h - (h * h * h) / 3.0
-                inward_disp[:, aidx] = a0 * c0 + ((sigma_a - a0) / H) * c1
-                continue
 
-            jj = np.asarray(hist_jerk_samples_rows[aidx], dtype=np.float64).reshape(-1, 2)
-            sigma_j = np.max(n[:, aidx, :] @ jj.T, axis=1)
-            sigma_j = np.maximum(sigma_j, 0.0)
-            gap = np.maximum(sigma_a - a0, 0.0)
-            hit = np.full_like(gap, np.inf)
-            moving = sigma_j > 1.0e-12
-            hit[moving] = gap[moving] / sigma_j[moving]
-            q = np.minimum(h, hit)
-            # Integral_0^q (t-s)(a0+j s) ds.
-            first = a0 * (tt * q - 0.5 * q * q) + sigma_j * (0.5 * tt * q * q - (q * q * q) / 3.0)
-            # After reaching the historical hull support, keep it only until the
-            # pre-existing acceleration-hold horizon h; velocity then propagates
-            # naturally through the (t-s) kernel.
-            second = sigma_a * (tt * (h - q) - 0.5 * (h * h - q * q))
-            inward_disp[:, aidx] = first + second
-        lower_sep = dist - inward_disp
-        return lower_sep - ego_rad - arad[None, :]
+        sigma_a = np.max(
+            np.einsum("taj,asj->tas", n, hist_acc_samples, optimize=True),
+            axis=-1,
+        )
+        sigma_a = np.maximum(sigma_a, 0.0)
+        a0 = np.einsum("taj,aj->ta", n, acc, optimize=True)
+        sigma_a = np.maximum(sigma_a, a0)
+
+        H = max(float(accel_hold_s), 1.0e-9)
+        c0 = tt * h - 0.5 * h * h
+        c1 = 0.5 * tt * h * h - (h * h * h) / 3.0
+        anchor_disp = a0 * c0[:, None] + ((sigma_a - a0) / H) * c1[:, None]
+
+        sigma_j = np.max(
+            np.einsum("taj,asj->tas", n, hist_jerk_samples, optimize=True),
+            axis=-1,
+        )
+        sigma_j = np.maximum(sigma_j, 0.0)
+        gap = np.maximum(sigma_a - a0, 0.0)
+        hit = np.full_like(gap, np.inf)
+        moving = sigma_j > 1.0e-12
+        hit[moving] = gap[moving] / sigma_j[moving]
+        q = np.minimum(h[:, None], hit)
+        tt2 = tt[:, None]
+        hh = h[:, None]
+        first = (
+            a0 * (tt2 * q - 0.5 * q * q)
+            + sigma_j * (0.5 * tt2 * q * q - (q * q * q) / 3.0)
+        )
+        second = sigma_a * (tt2 * (hh - q) - 0.5 * (hh * hh - q * q))
+        response_disp = first + second
+
+        base = dist - ego_rad - arad[None, :]
+        return base - anchor_disp, base - response_disp
 
     def _signed_clearance(ego_xy_rel_t: np.ndarray, times: np.ndarray) -> np.ndarray:
         clear_cv, clear_ca = _signed_clearance_components(ego_xy_rel_t, times)
@@ -1048,11 +1055,8 @@ def direct_executable_recovery_witness_features_from_sample(
                 float(np.max(np.maximum(clear_cv - clear_interaction_hull, 0.0)) / distance_scale)
                 if clear_interaction_hull is not None else 0.0
             )
-            clear_interaction_anchor = _interaction_response_clearance(
-                rec_xy_rel, times, jerk_limited=False
-            )
-            clear_interaction_response = _interaction_response_clearance(
-                rec_xy_rel, times, jerk_limited=True
+            clear_interaction_anchor, clear_interaction_response = (
+                _interaction_response_clearances(rec_xy_rel, times)
             )
             interaction_anchor_optimism = (
                 float(np.max(np.maximum(clear_cv - clear_interaction_anchor, 0.0)) / distance_scale)
@@ -1859,12 +1863,22 @@ def _persistent_tensor_cache_key(
     # diagnostics in every sample.  The box/hull booleans only select the model
     # coordinate and therefore must not split the expensive tensor cache.
     # Keep this narrowly scoped: schema 7 H/J/K genuinely construct different
-    # tensors, while schema 9 has additional response coordinates.
+    # tensors. Schema 8 materializes both box/hull diagnostics; schema 9
+    # materializes both anchored-ramp and observed-jerk diagnostics. Their arm
+    # booleans only select the model coordinate and must not split the expensive
+    # decoded tensor cache.
     cache_interaction_box_support = semantic_interaction_box_support
     cache_interaction_hull_support = semantic_interaction_hull_support
+    cache_interaction_anchor_support = semantic_interaction_anchor_support
+    cache_interaction_response_support = semantic_interaction_response_support
     if semantic_feature_schema == DIRECT_INTERACTION_ORIENTED_RECOVERY_WITNESS_FEATURE_SCHEMA:
         cache_interaction_box_support = True
         cache_interaction_hull_support = True
+    elif semantic_feature_schema == DIRECT_INTERACTION_RESPONSE_RECOVERY_WITNESS_FEATURE_SCHEMA:
+        cache_interaction_box_support = True
+        cache_interaction_hull_support = True
+        cache_interaction_anchor_support = True
+        cache_interaction_response_support = True
     payload = {
         "schema": _PERSISTENT_TENSOR_CACHE_SCHEMA,
         "manifests": _dataset_manifest_fingerprint(paths),
@@ -1906,8 +1920,8 @@ def _persistent_tensor_cache_key(
         "semantic_witness_history_occupancy_reachability": semantic_history_occupancy_reachability,
         "semantic_witness_interaction_box_support": cache_interaction_box_support,
         "semantic_witness_interaction_hull_support": cache_interaction_hull_support,
-        "semantic_witness_interaction_anchor_support": semantic_interaction_anchor_support,
-        "semantic_witness_interaction_response_support": semantic_interaction_response_support,
+        "semantic_witness_interaction_anchor_support": cache_interaction_anchor_support,
+        "semantic_witness_interaction_response_support": cache_interaction_response_support,
         "semantic_witness_recovery_horizon_s": (float(cfg.get("recovery_horizon_s", 4.0)) if semantic_witness_features_enabled else 0.0),
         "semantic_witness_sample_rate_hz": (float(cfg.get("sample_rate_hz", 10.0)) if semantic_witness_features_enabled else 0.0),
         "npz_keys": sorted(MODEL_SAMPLE_NPZ_KEYS),

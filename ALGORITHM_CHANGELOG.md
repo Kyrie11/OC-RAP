@@ -1,3 +1,105 @@
+## v48.73 — OC-IRRW: Observation-Consistent Interaction-Response Reachability Witness (2026-08-31)
+
+### Entry condition and authoritative V48.72 decision
+
+The uploaded V48.72 OC-IORW experiment is engineering-valid and attribution-ready. The final sentinel reports `valid=true`, `attribution_ready=true`, `engineering_version=v48.72.0-OC-IORW`, `errors=[]`, `test_roots_read=false`, and `dataset_reconstruction=false`. Runtime-import paths and SHA256 values match the uploaded code for `ocrap`, `train.py`, `data.py`, `ocrap.py`, and `inference.py`; reference dataset/protocol/source/checkpoint/scene-disjoint contracts pass. L72/M72 balanced+precision each complete 21 epochs, preserve all 170 shared Stage-I tensors bitwise, and add only `direct_absolute_semantic_witness_gain[2]`. The result archives omit the `best.pt` binaries, so the checkpoints cannot be independently reloaded offline; mutually consistent checkpoint SHA, state-isolation, variant-isolation, runtime-provenance, and pipeline records make this a disclosed packaging limitation rather than an attribution blocker.
+
+V48.72 is a **scientific STOP** under its preregistration:
+
+- certificate sign/set identity is exact for `L==J`, `M==J`, and `M==L` in 8/8 cells;
+- `M-J71` source AUC and within-positive-certificate probability AUC are positive in 6/8 cells, but both certificate-Contact cells are negative and effect sizes are mostly `1e-4--1e-3`;
+- teacher-feasible support retention exceeds teacher-infeasible retention in only the two dev-Near cells (2/8), far below the required 6/8;
+- harmful/teacher-infeasible non-relapse passes 8/8 under the preregistered +0.02 tolerance, so the failure is not a permissive-collapse artifact;
+- excluding exact-`R_dep*=0.5` teacher-feasible rows, `M-J71` is positive only in the two certificate-Near cells, zero in dev-Near, and negative in dev/certificate-Contact; the non-floor physical gate fails;
+- `M-B` is positive in only 4/8 cells, never reaches `+0.01`, safe-positive pass is unchanged in 6/8 cells and is `-0.032258` in both certificate-Contact cells;
+- final comparison therefore records `interaction_oriented_reachability_go=false`, `full_source_go=false`, `status=STOP`, and `next_branch=retain_supported_directional_set_then_interaction_response_dynamics`.
+
+### Mechanism conclusion and promotion policy
+
+The V48.72 result does **not** support promoting OC-IORW as a complete Main feasibility source. It does support retaining one narrower primitive: the empirical **joint** acceleration hull `conv({0,a_tau})` with candidate/recovery-oriented support is a better experimental geometry than an isotropic circumball or component-box corner construction. `M-L` is positive in 6/8 cells and the empirical hull excludes physically unobserved Cartesian corners. This primitive is retained only as a frozen geometric scaffold for V48.73, not as a validated trust mechanism.
+
+The decisive failure is temporal, especially in Contact. V48.72 treats every historical acceleration vector as exchangeable in time: a stale extreme can be selected at the first future instant and held through the entire existing acceleration-hold horizon. Row-level retention shows that this static relaxation often benefits teacher-infeasible/harmful Contact witnesses more than teacher-feasible/safe-positive witnesses. The dominant bottleneck is therefore tightened from static interaction geometry to:
+
+`current-state-anchored, temporally reachable external interaction response for observation-only recovery credibility`.
+
+This remains one regime-agnostic policy. Near expresses viability preservation under plausible response dynamics; Contact expresses finite-time/persistent re-entry without secondary deterioration under the same response dynamics. No regime ID, router, threshold, proposal budget, or policy specialization is introduced.
+
+### V48.73 intervention: OC-IRRW
+
+V48.73 keeps the historical CV signed certificate and all V48.72 coordinates, Stage-I, OC-MERO/RIFA, executable candidate×option continuation, active-set alignment, route/persistent-reentry semantics, actuator projection, projection-fidelity confidence, top-K=5, threshold=0.5, datasets, teacher labels, and the two-parameter semantic witness gain. Boundary transport and demand normalization remain OFF.
+
+For projected recovery position `x_e(t)` and the agent CV center `x_j^CV(t)`, define the candidate-specific line-of-sight normal
+
+`n_j(t) = (x_e(t)-x_j^CV(t)) / ||x_e(t)-x_j^CV(t)||`.
+
+The retained empirical acceleration support is
+
+`sigma_a,j(t) = max_{a in conv({0,a_tau})} n_j(t)^T a`,
+
+and the latest observed acceleration projection is
+
+`a_0,j(t) = n_j(t)^T a_current`.
+
+V48.72 effectively permits `sigma_a` from time zero. V48.73 adds two nested temporal arms, both using only the observation history and the already configured `prefix_horizon_s = H`.
+
+**N73_ANCHORED_HULL.** Use a parameter-free current-state-anchored ramp
+
+`a_N(s;t,j) = a_0,j(t) + (sigma_a,j(t)-a_0,j(t)) s/H`, for `0<=s<=min(t,H)`.
+
+The inward displacement support is the exact convolution
+
+`Delta_N(t,j) = integral_0^h (t-s) a_N(s;t,j) ds`, `h=min(t,H)`.
+
+**O73/Main OC-IRRW.** Estimate consecutive-valid observation-history jerk vectors using their true timestamp gaps, include zero, and define
+
+`sigma_j,j(t) = max_{q in conv({0,j_tau})} [n_j(t)^T q]_+`.
+
+The reachable directional acceleration is
+
+`a_O(s;t,j) = min(sigma_a,j(t), a_0,j(t) + s sigma_j,j(t))`,
+
+again only through `h=min(t,H)`. Its inward displacement is
+
+`Delta_O(t,j) = integral_0^h (t-s) a_O(s;t,j) ds`.
+
+The lower directional clearances are
+
+`c_N/O(t,j) = ||x_e(t)-x_j^CV(t)|| - Delta_N/O(t,j) - r_e - r_j`,
+
+and the non-negative optimism diagnostics are the maximum CV-to-N/O clearance erosion normalized by the historical distance scale. As in V48.72, trust is strictly positive, so the signed positive-certificate sign/set cannot change. N isolates current-state anchoring; `O-N` isolates the observed response-rate constraint.
+
+Schema 9 / source `interaction_response_history_reachability_projected_recovery_witness` has 22 coordinates. Coordinates 0--19 are execution-exact V48.72; coordinate 20 is N73 anchored-ramp optimism and coordinate 21 is O73 jerk-limited response optimism. Only the selected temporal coordinate replaces V48.72 static-hull trust; static and temporal trust are not multiplied together.
+
+### Preregistered causal decision
+
+Attribution order is fixed and fail-closed:
+
+1. `N==M72`, `O==M72`, and `O==N` positive-certificate sign/set must be exact in 8/8 cells.
+2. `N-M72` isolates current-state anchoring; `O-N73` isolates observed response-rate reachability; `O-M72` is the Main trust comparison.
+3. Main ordering requires `O-M72` source AUC positive in at least 6/8 cells and within-positive-certificate probability AUC positive in at least 6/8.
+4. Dual selective retention is mandatory: teacher-feasible retention must exceed teacher-infeasible in at least 6/8 **and** safe-positive retention must exceed harmful in at least 6/8; harmful/TI admission must be no more than `M72+0.02` in every cell and must also satisfy the historical absolute selectivity caps against F61.
+5. Excluding exact-0.5 teacher-feasible rows, `O-M72` non-floor AUC must be positive in at least 6/8. Aggregate label ordering without this gate is not physical-mechanism GO.
+6. Full source GO additionally requires `O-B` positive 8/8, at least 6/8 `>=+0.01`, all historical selectivity caps, and safe-positive pass above P66 in 8/8 with at least 6/8 `>=+0.05`.
+7. If trust + non-floor GO but full source STOP, the only authorized next branch is trust-conditioned boundary transport. If aggregate ordering GO but non-floor STOP, enter teacher truth-contract adjudication. If anchor GO but response-rate STOP, retain current-state anchoring and rethink the observation-derived response set. Otherwise stop interaction-response reachability without parameter sweeps.
+
+### Engineering and performance changes
+
+The uploaded V48.72 source already contained dormant schema-9 core/model/checker code, but it was not reachable from the active training shell and no V48.73 runner existed. This delivery activates it only through explicit V48.73 flags and keeps all V48.72 flags execution-isolated.
+
+- wire `SEMANTIC_WITNESS_INTERACTION_ANCHOR_SUPPORT` and `SEMANTIC_WITNESS_INTERACTION_RESPONSE_SUPPORT` through adaptation telemetry and training config;
+- add the two-GPU N/O runner, factor contracts, calibration, row-level response audit, truth-floor audit, comparison, and final pipeline sentinel;
+- fix the dormant response-audit truth predicate so exact `teacher_candidate_r_dep == 0.0` remains teacher-feasible; this is an engineering correctness fix to the future V48.73 attribution tool, not an algorithm change;
+- canonicalize schema-9 N/O persistent-cache keys because both diagnostics are materialized in every sample;
+- compute acceleration and jerk support in ordered vectorized kernels, reuse one CV geometry, and generate N/O clearances together instead of two per-agent Python-loop passes;
+- randomized 512×2×22 feature comparison against the pre-optimization dormant implementation is bitwise equal (`max_abs_difference=0`, zero mismatched values);
+- synthetic median feature-kernel speedup is approximately `1.10x`; the larger expected wall-clock saving is avoiding a second schema-9 cold tensor build.
+
+### Continue to avoid
+
+All historical exclusions remain: no threshold/LR/horizon/feature-scale/class-weight grids; no proposal/top-K expansion; no generic AFE/MLP or broad encoder/root/margin retraining; no candidate-only CPHR, compensatory ERWF, per-option negative veto, quantifier/gain sweep, regime router/policy/threshold/budget, privileged future/component-margin distillation, relative-ranker changes before source GO, option-library expansion without teacher-option support, class-local Main, path-stop Main, reintroduction of post-hoc hard control veto, unconditional projected-control confidence, V48.68 hard CV/CA min, demand-only forgiveness, raw one-point disagreement as trusted credibility, V48.71 boundary-deficit localization, or V48.67 boundary transport before an upstream trust + non-floor GO.
+
+V48.72 additionally forbids promoting the component box or static empirical hull as a complete trust mechanism and forbids box/hull/support-scale sweeps. V48.73 changes temporal reachability semantics only.
+
 ## v48.72 — OC-IORW: Observation-Consistent Interaction-Oriented Reachability Witness (2026-08-31)
 
 ### Entry condition and authoritative V48.71 decision
