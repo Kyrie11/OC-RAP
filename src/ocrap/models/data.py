@@ -7,6 +7,7 @@ import hashlib
 import json
 import time
 import fcntl
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -728,6 +729,17 @@ def direct_executable_recovery_witness_features_from_sample(
         hist_acc_center = np.stack(hist_acc_center_rows, axis=0)
         hist_acc_radius = np.asarray(hist_acc_radius_rows, dtype=np.float64)
         hist_acc_halfwidth = np.stack(hist_acc_halfwidth_rows, axis=0)
+        # Schema-8/9 diagnostics consume both the directional component-box
+        # and empirical-joint-hull support.  Pad the per-agent observation
+        # histories once so all agent/time support values can be evaluated in
+        # one ordered NumPy kernel.  Padding with zero is exact because zero is
+        # already an explicit member of every empirical acceleration set.
+        max_hist_acc_samples = max((row.shape[0] for row in hist_acc_samples_rows), default=1)
+        hist_acc_samples = np.zeros(
+            (len(hist_acc_samples_rows), max_hist_acc_samples, 2), dtype=np.float64
+        )
+        for agent_idx, row in enumerate(hist_acc_samples_rows):
+            hist_acc_samples[agent_idx, : row.shape[0], :] = row
     else:
         rel0 = np.zeros((0, 2), dtype=np.float64)
         vel = np.zeros((0, 2), dtype=np.float64)
@@ -737,6 +749,7 @@ def direct_executable_recovery_witness_features_from_sample(
         hist_acc_radius = np.zeros((0,), dtype=np.float64)
         hist_acc_halfwidth = np.zeros((0, 2), dtype=np.float64)
         hist_acc_samples_rows = []
+        hist_acc_samples = np.zeros((0, 1, 2), dtype=np.float64)
         hist_jerk_samples_rows = []
 
     # Acceleration is held only for the already-configured prefix horizon and
@@ -781,26 +794,31 @@ def direct_executable_recovery_witness_features_from_sample(
         delta = ego_xy_rel_t[:, None, :] - center
         return np.linalg.norm(delta, axis=-1) - ego_rad - arad[None, :] - radius
 
-    def _interaction_support_clearance(
-        ego_xy_rel_t: np.ndarray, times: np.ndarray, *, empirical_hull: bool
-    ) -> np.ndarray | None:
-        """Lower clearance under an observation-history acceleration set.
+    def _interaction_support_clearances(
+        ego_xy_rel_t: np.ndarray, times: np.ndarray
+    ) -> tuple[np.ndarray | None, np.ndarray | None]:
+        """Return component-box and empirical-hull directional clearances.
 
-        v48.71 converted the componentwise acceleration box into an isotropic
+        V48.71 converted the componentwise acceleration box into an isotropic
         circumscribed ball.  That is conservative but direction-blind: lateral
         acceleration spread is charged even when it cannot move the agent toward
-        the candidate recovery.  v48.72 evaluates the support function along the
-        candidate-specific CV line of sight.  For the box arm the ambiguity set
-        is [a_min,a_max].  For the hull arm it is conv({0,a_tau}); support of a
-        convex hull is exactly the maximum sample projection.
+        the candidate recovery.  V48.72 evaluates support along the
+        candidate-specific CV line of sight.  The box support is analytic; the
+        empirical convex-hull support is the maximum projection of the observed
+        joint acceleration samples (plus zero).
 
-        For n = (x_ego-x_agent_CV)/||.|| and displacement coefficient g(t),
-            ||r-g a|| >= n^T(r-g a) = ||r|| - g n^T a.
-        Taking max over the acceleration ambiguity set therefore gives a valid
-        directional lower bound on separation for that set.
+        Both diagnostics are always emitted by schema 8, irrespective of which
+        one the model consumes.  Computing their common CV geometry once is an
+        execution-exact engineering optimization and lets the two causal arms
+        reuse one persistent tensor cache.
         """
-        if not (interaction_box_support or interaction_hull_support or interaction_anchor_support or interaction_response_support) or not agents:
-            return None
+        if not (
+            interaction_box_support
+            or interaction_hull_support
+            or interaction_anchor_support
+            or interaction_response_support
+        ) or not agents:
+            return None, None
         tt = np.asarray(times, dtype=np.float64).reshape(-1)
         hold = np.minimum(tt, accel_hold_s)
         coeff = (tt * hold - 0.5 * hold * hold)[:, None]
@@ -808,20 +826,23 @@ def direct_executable_recovery_witness_features_from_sample(
         rel = ego_xy_rel_t[:, None, :] - cv
         dist = np.linalg.norm(rel, axis=-1)
         n = rel / np.maximum(dist[..., None], 1.0e-9)
-        if empirical_hull:
-            support = np.zeros_like(dist)
-            for aidx, samples in enumerate(hist_acc_samples_rows):
-                aa = np.asarray(samples, dtype=np.float64).reshape(-1, 2)
-                # zero is explicitly in aa; support is therefore non-negative.
-                support[:, aidx] = np.max(n[:, aidx, :] @ aa.T, axis=1)
-        else:
-            support = (
-                np.sum(n * hist_acc_center[None, :, :], axis=-1)
-                + np.sum(np.abs(n) * hist_acc_halfwidth[None, :, :], axis=-1)
-            )
-            support = np.maximum(support, 0.0)
-        lower_sep = dist - coeff * support
-        return lower_sep - ego_rad - arad[None, :]
+
+        support_box = (
+            np.sum(n * hist_acc_center[None, :, :], axis=-1)
+            + np.sum(np.abs(n) * hist_acc_halfwidth[None, :, :], axis=-1)
+        )
+        support_box = np.maximum(support_box, 0.0)
+
+        # [time, agent, sample].  Padded zero samples are semantically neutral
+        # because zero is already part of every hull, and preserve the old
+        # per-agent max-projection result exactly after float32 feature storage.
+        sample_projection = np.einsum(
+            "taj,asj->tas", n, hist_acc_samples, optimize=True
+        )
+        support_hull = np.max(sample_projection, axis=-1)
+
+        base = dist - ego_rad - arad[None, :]
+        return base - coeff * support_box, base - coeff * support_hull
 
     def _interaction_response_clearance(
         ego_xy_rel_t: np.ndarray, times: np.ndarray, *, jerk_limited: bool
@@ -1016,11 +1037,8 @@ def direct_executable_recovery_witness_features_from_sample(
                 history_optimism_gap = 0.0
                 history_boundary_deficit = 0.0
 
-            clear_interaction_box = _interaction_support_clearance(
-                rec_xy_rel, times, empirical_hull=False
-            )
-            clear_interaction_hull = _interaction_support_clearance(
-                rec_xy_rel, times, empirical_hull=True
+            clear_interaction_box, clear_interaction_hull = (
+                _interaction_support_clearances(rec_xy_rel, times)
             )
             interaction_box_optimism = (
                 float(np.max(np.maximum(clear_cv - clear_interaction_box, 0.0)) / distance_scale)
@@ -1837,6 +1855,16 @@ def _persistent_tensor_cache_key(
                     if semantic_witness_features_enabled and (semantic_route_alignment or semantic_reentry_alignment)
                     else (DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA if semantic_witness_features_enabled else 0))))))))
     )
+    # Schema 8 materializes both directional-box and empirical-hull
+    # diagnostics in every sample.  The box/hull booleans only select the model
+    # coordinate and therefore must not split the expensive tensor cache.
+    # Keep this narrowly scoped: schema 7 H/J/K genuinely construct different
+    # tensors, while schema 9 has additional response coordinates.
+    cache_interaction_box_support = semantic_interaction_box_support
+    cache_interaction_hull_support = semantic_interaction_hull_support
+    if semantic_feature_schema == DIRECT_INTERACTION_ORIENTED_RECOVERY_WITNESS_FEATURE_SCHEMA:
+        cache_interaction_box_support = True
+        cache_interaction_hull_support = True
     payload = {
         "schema": _PERSISTENT_TENSOR_CACHE_SCHEMA,
         "manifests": _dataset_manifest_fingerprint(paths),
@@ -1876,8 +1904,8 @@ def _persistent_tensor_cache_key(
         "semantic_witness_soft_occupancy_disagreement": semantic_soft_occupancy_disagreement,
         "semantic_witness_boundary_localized_occupancy_trust": semantic_boundary_localized_occupancy_trust,
         "semantic_witness_history_occupancy_reachability": semantic_history_occupancy_reachability,
-        "semantic_witness_interaction_box_support": semantic_interaction_box_support,
-        "semantic_witness_interaction_hull_support": semantic_interaction_hull_support,
+        "semantic_witness_interaction_box_support": cache_interaction_box_support,
+        "semantic_witness_interaction_hull_support": cache_interaction_hull_support,
         "semantic_witness_interaction_anchor_support": semantic_interaction_anchor_support,
         "semantic_witness_interaction_response_support": semantic_interaction_response_support,
         "semantic_witness_recovery_horizon_s": (float(cfg.get("recovery_horizon_s", 4.0)) if semantic_witness_features_enabled else 0.0),
@@ -1895,6 +1923,22 @@ def _stack_tensor_items(items: list[dict[str, torch.Tensor]]) -> dict[str, torch
         raise ValueError("persistent tensor cache item-key mismatch")
     return {k: torch.stack([x[k] for x in items], dim=0).contiguous() for k in keys}
 
+
+def _build_items_ordered(build_item, num_items: int, workers: int) -> list[dict[str, torch.Tensor]]:
+    """Build cache items concurrently without changing dataset order.
+
+    ``Executor.map`` preserves input order.  The default remains one worker so
+    historical workflows retain their resource profile; V48.72 explicitly opts
+    into parallel decode/feature construction.
+    """
+    count = int(num_items)
+    worker_count = max(1, int(workers))
+    if count <= 0:
+        return []
+    if worker_count == 1:
+        return [build_item(i) for i in range(count)]
+    with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="ocrap-cache") as pool:
+        return list(pool.map(build_item, range(count)))
 
 
 class OCRAPSampleDataset(Dataset):
@@ -1925,6 +1969,9 @@ class OCRAPSampleDataset(Dataset):
         # tensors once removes repeated ZIP decompression across 8--20 epochs.
         # It is opt-in so non-v48 workflows keep their historical memory profile.
         self.persistent_tensor_cache = bool(training_cfg.get("persistent_tensor_cache", False))
+        self.persistent_tensor_cache_build_workers = max(
+            1, int(training_cfg.get("persistent_tensor_cache_build_workers", 1) or 1)
+        )
         cache_dir_raw = str(training_cfg.get("persistent_tensor_cache_dir", "") or "").strip()
         self.persistent_tensor_cache_dir = Path(cache_dir_raw).expanduser() if cache_dir_raw else None
         self.cache_samples_in_memory = bool(training_cfg.get("cache_samples_in_memory", False)) or self.persistent_tensor_cache
@@ -1950,8 +1997,10 @@ class OCRAPSampleDataset(Dataset):
         cache_path = cache_dir / f"ocrap_tensor_items_{key}.pt"
         lock_path = cache_dir / f"ocrap_tensor_items_{key}.lock"
         t0 = time.perf_counter()
+        lock_wait_start = time.perf_counter()
         with lock_path.open("a+b") as lockf:
             fcntl.flock(lockf.fileno(), fcntl.LOCK_EX)
+            lock_wait_seconds = float(time.perf_counter() - lock_wait_start)
             try:
                 if cache_path.is_file():
                     payload = _load_persistent_tensor_cache_payload(cache_path)
@@ -1968,12 +2017,19 @@ class OCRAPSampleDataset(Dataset):
                             self.tensor_cache_event = {
                                 "enabled": True, "hit": True, "key": key, "path": str(cache_path),
                                 "seconds": float(time.perf_counter() - t0),
+                                "lock_wait_seconds": lock_wait_seconds,
+                                "build_seconds": 0.0,
+                                "build_workers": self.persistent_tensor_cache_build_workers,
                             }
                             return
                     # Corrupt/stale same-name artifact should never be trusted.
                     cache_path.unlink(missing_ok=True)
-                items = [self._build_item(i) for i in range(len(self.paths))]
+                build_start = time.perf_counter()
+                items = _build_items_ordered(
+                    self._build_item, len(self.paths), self.persistent_tensor_cache_build_workers
+                )
                 tensors = _stack_tensor_items(items)
+                build_seconds = float(time.perf_counter() - build_start)
                 payload = {
                     "schema": _PERSISTENT_TENSOR_CACHE_SCHEMA, "key": key,
                     "num_items": len(self.paths), "tensors": tensors,
@@ -1985,6 +2041,9 @@ class OCRAPSampleDataset(Dataset):
                 self.tensor_cache_event = {
                     "enabled": True, "hit": False, "key": key, "path": str(cache_path),
                     "seconds": float(time.perf_counter() - t0),
+                    "lock_wait_seconds": lock_wait_seconds,
+                    "build_seconds": build_seconds,
+                    "build_workers": self.persistent_tensor_cache_build_workers,
                 }
             finally:
                 fcntl.flock(lockf.fileno(), fcntl.LOCK_UN)

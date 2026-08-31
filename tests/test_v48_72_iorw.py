@@ -15,6 +15,8 @@ from ocrap.models.data import (
     OPTION_FEATURE_DIM,
     direct_semantic_recovery_witness_features_from_sample,
     option_features_from_sample,
+    _build_items_ordered,
+    _persistent_tensor_cache_key,
 )
 from ocrap.models.encoders import FlatFeatureLayout
 from ocrap.models.ocrap import OCRAPModel
@@ -282,3 +284,56 @@ def test_v4872_runner_freezes_boundary_transport_and_old_occupancy_trust():
     assert "SEMANTIC_WITNESS_BOUNDARY_TRANSPORT=false" in text
     assert "SEMANTIC_WITNESS_DEMAND_NORMALIZED_FIDELITY=false" in text
     assert "PROPOSAL_TOP_K=5" in text
+
+
+def test_v4872_box_and_hull_arms_materialize_identical_schema8_tensors():
+    d = _sample(xy=(42.0, 11.0), acc_hist=((-2.0, 0.2), (0.1, -1.7), (-0.8, -0.4)))
+    box = direct_semantic_recovery_witness_features_from_sample(
+        d, _cfg(box=True, hull=False), num_options=2
+    )
+    hull = direct_semantic_recovery_witness_features_from_sample(
+        d, _cfg(box=True, hull=True), num_options=2
+    )
+    assert np.array_equal(box, hull)
+
+
+def test_v4872_box_and_hull_share_persistent_tensor_cache_key(tmp_path):
+    sample = tmp_path / "samples" / "sample_000.npz"
+    sample.parent.mkdir(parents=True)
+    sample.write_bytes(b"cache-key-fixture")
+    base = _cfg(box=True, hull=False)
+    base["model"]["direct_recovery_absolute_semantic_witness_correction"] = True
+    base["training"] = {"persistent_tensor_cache": True}
+    alt = _cfg(box=True, hull=True)
+    alt["model"]["direct_recovery_absolute_semantic_witness_correction"] = True
+    alt["training"] = {"persistent_tensor_cache": True}
+    kwargs = dict(
+        num_roots=3, num_options=2, d_signature=4,
+        d_future_signature=4, feature_dim=123,
+    )
+    assert _persistent_tensor_cache_key([sample], base, **kwargs) == _persistent_tensor_cache_key(
+        [sample], alt, **kwargs
+    )
+
+
+def test_v4872_ordered_parallel_cache_builder_preserves_values_and_order():
+    def build(i):
+        return {"x": torch.tensor([float(i)]), "y": torch.tensor(i, dtype=torch.int64)}
+
+    serial = _build_items_ordered(build, 37, 1)
+    parallel = _build_items_ordered(build, 37, 8)
+    assert len(serial) == len(parallel) == 37
+    for expected, actual in zip(serial, parallel):
+        assert expected.keys() == actual.keys()
+        assert all(torch.equal(expected[k], actual[k]) for k in expected)
+
+
+def test_v4872_training_wrappers_wire_interaction_flags_and_cache_workers():
+    root = Path(__file__).resolve().parents[1]
+    train = (root / "scripts/train_ocrap_v48_trac_sr.sh").read_text()
+    adapt = (root / "scripts/adapt_ocrap_v48_36_ocaf_single_stage.sh").read_text()
+    assert "persistent_tensor_cache_build_workers" in train
+    assert "SEMANTIC_WITNESS_INTERACTION_BOX_SUPPORT" in train
+    assert "SEMANTIC_WITNESS_INTERACTION_HULL_SUPPORT" in train
+    assert "SEMANTIC_WITNESS_INTERACTION_BOX_SUPPORT" in adapt
+    assert "SEMANTIC_WITNESS_INTERACTION_HULL_SUPPORT" in adapt

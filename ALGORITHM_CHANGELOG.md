@@ -1,3 +1,65 @@
+## v48.72 — OC-IORW: Observation-Consistent Interaction-Oriented Reachability Witness (2026-08-31)
+
+### Entry condition and authoritative V48.71 decision
+
+The uploaded V48.71 OC-BORW pipeline is engineering-valid and attribution-ready: `valid=true`, `attribution_ready=true`, `engineering_version=v48.71.0-OC-BORW`, `errors=[]`, `test_roots_read=false`, and `dataset_reconstruction=false`. H/J/K balanced+precision all completed 21 epochs, preserve all 170 shared Stage-I tensors bitwise, and add only `direct_absolute_semantic_witness_gain[2]`. Runtime provenance, reference reuse, factor isolation, variant isolation and recalibration artifacts pass. The uploaded result archives omit checkpoint binaries, so offline `best.pt` reload was unavailable; the mutually consistent checkpoint hashes/state/provenance records make this a disclosed audit limitation, not an attribution blocker.
+
+V48.71 is a **scientific STOP**:
+
+- H/J/K preserve the E70 positive-certificate sign/set in all 8 cells: the intervention changes confidence, not the signed CV certificate.
+- K-E70 source AUC and positive-certificate probability AUC are positive only in the two dev-Near cells (2/8 each).
+- Teacher-feasible support retention exceeds teacher-infeasible retention in only 5/8 cells; the preregistered trust requirement was 6/8.
+- Excluding exact-`R_dep*=0.5` feasible rows, K-E70 AUC is positive in only 4/8 cells and only by about `+0.0022--+0.0029`; dev-Contact is about `-0.0050-- -0.0054`.
+- K-B is positive only in the two dev-Contact cells and by less than `+0.002`; safe-positive pass relative to P66 is unchanged in all 8 cells.
+- Harmful/teacher-infeasible pass remains low (`~0.011--0.023`), so the failure is not permissive relapse.
+
+The factorial attribution is decisive. H-E70 (current-acceleration point + the V48.71 boundary deficit) is negative in 8/8 cells, with certificate-Near around `-0.019`. J-E70 (history-derived set + raw optimism) is positive in 6/8 cells, failing only dev-Contact. K-H is positive in 8/8, whereas K-J is positive in only 4/8 and negative on both certificate splits. Therefore observation-history/set-valued external-dynamics information carries a reproducible signal, but the V48.71 boundary-localization statistic and isotropic history circumball are not promotable.
+
+### Promotion and exclusions after V48.71
+
+Retain: OC-MERO/RIFA information and role structure, one regime-agnostic policy, frozen Stage-I/top-K=5/threshold=0.5, candidate-by-option executable continuation, non-compensatory common witness, active-set alignment, route/persistent-reentry diagnostics, actuator projection, projection-severity soft confidence, and the hypothesis that observation history contains external-dynamics credibility information.
+
+Do not promote: H71 boundary deficit, J71 isotropic circumball as the final reachable set, K71 OC-BORW, or boundary transport. Existing exclusions remain binding: threshold/LR/horizon/feature-scale grids; unsupported proposal or option-library expansion; generic AFE/MLP; candidate-only or compensatory replacement; per-option negative veto; quantifier sweep; regime router/expert/threshold/budget; broad encoder/root/margin retraining; privileged-future distillation; class-local Main; path-stop Main; post-hoc hard control veto; hard CV/CA minimum; demand-only forgiveness; and modifying the relative ranker/deployment before absolute-source GO.
+
+### Updated dominant bottleneck
+
+The dominant bottleneck is now **candidate/recovery-conditioned interaction geometry for observation-only external-dynamics reachability**. A credible set must measure how surrounding-agent uncertainty can move *toward the specific projected recovery*, rather than charge all acceleration dispersion through a direction-blind radius. Temporal interaction-response realism is deferred until this geometry question is isolated.
+
+### V48.72 intervention
+
+**OC-IORW = Observation-Consistent Interaction-Oriented Reachability Witness.** It removes the failed boundary-localization factor from Main and compares two nested acceleration sets under the same soft raw-CV-optimism trust semantics. The historical signed CV certificate, actuator projection, projection fidelity, route/re-entry, active-set alignment, Stage-I, relative ranker, top-K, threshold, options, labels and datasets remain frozen. Boundary transport stays OFF. The only trainable state remains `direct_absolute_semantic_witness_gain[2]`.
+
+For projected ego recovery position `x_e(t)` and an agent's CV center `x_j^CV(t)`, define `r(t)=x_e(t)-x_j^CV(t)` and `n(t)=r(t)/||r(t)||`. With the existing acceleration-hold displacement coefficient `g(t)`, an observation-derived acceleration set `A_j` gives
+
+`d_lower(t,j) = ||r(t)|| - g(t) h_Aj(n(t)) - r_ego - r_agent`,
+
+where `h_A(n)=max_{a in A} n^T a`. This is a conservative candidate-conditioned lower bound because `||r-g a|| >= n^T(r-g a)`.
+
+- **L72_BOX_SUPPORT:** `A_j=[a_min,a_max]` from valid observed accelerations plus zero. Its analytic support is `n^T a_center + |n|^T a_halfwidth`. This isolates V48.71's direction-blind/tangential overcharge.
+- **M72/Main OC-IORW:** `A_j=conv({0,a_tau})`, the empirical joint acceleration hull. Its support is `max_tau n^T a_tau`. This additionally removes Cartesian corner combinations that were never jointly observed.
+
+Schema 8 / 20-D materializes both diagnostics; coordinates 0--17 remain execution-exact V48.71 history diagnostics. L and M differ only in which stored coordinate the Stage-II source consumes. The trust multiplier is strictly positive, so neither arm can change positive-certificate sign/membership.
+
+### Preregistered causal order
+
+1. L/J71, M/J71 and M/L positive-certificate sets must be exact-identical in all 8 cells.
+2. `L-J71` identifies the direction-blind circumball effect.
+3. `M-L` identifies the unobserved Cartesian-corner effect.
+4. `M-J71` is the Main interaction-oriented geometry effect.
+5. Main trust GO requires `M-J71` source AUC positive in at least 6/8, positive-certificate probability AUC positive in at least 6/8, teacher-feasible support retention greater than teacher-infeasible in at least 6/8, and harmful/TI non-relapse in every cell.
+6. Non-floor physical-consistency independently requires `M-J71` AUC after excluding exact-0.5 feasible rows positive in at least 6/8.
+7. Full-source GO still requires M-B positive 8/8 with at least 6/8 `>=+0.01`, historical selectivity, and safe-positive pass above P66 8/8 with at least 6/8 `>=+0.05`.
+8. Trust + non-floor GO with source STOP authorizes a future trust-conditioned boundary-transport factorial. Label-ordering GO with non-floor STOP triggers teacher truth-contract adjudication. Geometry STOP advances to observation-only interaction-response dynamics; do not tune support scale, threshold or horizon.
+
+### Execution-exact acceleration work
+
+- Schema-8 L/M materialize the same 20-D tensors, so the persistent-cache key canonicalizes the box/hull selector and both arms share one train/val cache.
+- Component-box and empirical-hull supports share one CV-relative geometry pass; empirical support uses an ordered vectorized projection kernel.
+- Cold-cache construction supports ordered parallel decode/feature generation via `training.persistent_tensor_cache_build_workers`; the historical default is 1, and the V48.72 launcher requests 8. `Executor.map` preserves dataset order.
+- Cache telemetry separates `lock_wait_seconds` from `build_seconds` and records worker count.
+- Randomized old/new equivalence testing over 64 samples is bitwise-identical in float32. L/M materialized tensors and cache keys are exact-identical; serial and 8-thread construction are exact-identical.
+- V48.71 logs spent approximately 390--487 seconds per arm in dataset materialization. Cache sharing removes the second L/M cold rebuild; the actual parallel-build speedup must be measured on the target machine and is not preregistered as a scientific effect.
+
 ## v48.71 — OC-BORW: Observation-Consistent Boundary-Localized Occupancy Reachability Witness (2026-08-25)
 
 **Entry condition / v48.70 authoritative result.** The uploaded V48.70 OC-DOTW run is engineering-valid and attribution-ready: runtime provenance imports `ocrap`, `train.py`, `data.py`, `ocrap.py`, and `inference.py` from the intended repository; E70/G70 use schema 6 / source `demand_occupancy_tempered_projected_recovery_witness`; the final sentinel is `valid=true`, `attribution_ready=true`, `engineering_version=v48.70.0-OC-DOTW`, `errors=[]`, `test_roots_read=false`, `dataset_reconstruction=false`. Reference reuse, protocol, source hashes and scene-disjointness are valid. E/G balanced+precision each completed 21 epochs, keep 170 historical Stage-I tensors bitwise unchanged, and add only `direct_absolute_semantic_witness_gain[2]`. Therefore V48.70 is a **scientific STOP**, not an engineering failure.

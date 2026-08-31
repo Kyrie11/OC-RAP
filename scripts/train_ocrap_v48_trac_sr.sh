@@ -83,6 +83,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.num_workers="${NUM_WORKERS:-6}" --set training.persistent_workers=true \
   --set training.prefetch_factor="${PREFETCH_FACTOR:-2}" --set training.cache_samples_in_memory="${CACHE_SAMPLES_IN_MEMORY:-false}" \
   --set training.persistent_tensor_cache="${PERSISTENT_TENSOR_CACHE:-false}" --set training.persistent_tensor_cache_dir="${PERSISTENT_TENSOR_CACHE_DIR:-}" \
+  --set training.persistent_tensor_cache_build_workers="${PERSISTENT_TENSOR_CACHE_BUILD_WORKERS:-1}" \
   --set training.option_execution_semantics="${OPTION_EXECUTION_SEMANTICS:-global}" \
   --set training.decision_weighted_obs_enabled="${DECISION_WEIGHTED_OBS_ENABLED:-false}" \
   --set training.decision_weighted_obs_gamma="${DECISION_WEIGHTED_OBS_GAMMA:-0.0}" \
@@ -203,6 +204,8 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set model.direct_recovery_semantic_witness_soft_occupancy_disagreement="${SEMANTIC_WITNESS_SOFT_OCCUPANCY_DISAGREEMENT:-false}" \
   --set model.direct_recovery_semantic_witness_boundary_localized_occupancy_trust="${SEMANTIC_WITNESS_BOUNDARY_LOCALIZED_OCCUPANCY_TRUST:-false}" \
   --set model.direct_recovery_semantic_witness_history_occupancy_reachability="${SEMANTIC_WITNESS_HISTORY_OCCUPANCY_REACHABILITY:-false}" \
+  --set model.direct_recovery_semantic_witness_interaction_box_support="${SEMANTIC_WITNESS_INTERACTION_BOX_SUPPORT:-false}" \
+  --set model.direct_recovery_semantic_witness_interaction_hull_support="${SEMANTIC_WITNESS_INTERACTION_HULL_SUPPORT:-false}" \
   --set model.direct_recovery_evidence_native_certificate_preservation="${EVIDENCE_NATIVE_CERTIFICATE_PRESERVATION:-false}" \
   --set model.direct_recovery_evidence_native_margin_complete_preservation="${EVIDENCE_NATIVE_MARGIN_COMPLETE_PRESERVATION:-false}" \
   --set model.direct_recovery_evidence_native_advantage_preservation="${EVIDENCE_NATIVE_ADVANTAGE_PRESERVATION:-false}" \
