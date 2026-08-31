@@ -1,0 +1,57 @@
+{
+  "copies": [
+    {
+      "from": "tools/audit_v48_73_truth_strata.py",
+      "to": "tools/audit_v48_74_truth_strata.py"
+    },
+    {
+      "from": "tools/audit_v48_73_interaction_response.py",
+      "to": "tools/audit_v48_74_interaction_response.py"
+    },
+    {
+      "from": "tools/check_v48_73_runtime_code_contract.py",
+      "to": "tools/check_v48_74_runtime_code_contract.py"
+    },
+    {
+      "from": "tools/check_v48_73_pipeline_complete.py",
+      "to": "tools/check_v48_74_pipeline_complete.py"
+    },
+    {
+      "from": "tools/check_v48_73_variant_isolation.py",
+      "to": "tools/check_v48_74_variant_isolation.py"
+    },
+    {
+      "from": "tools/check_v48_73_state_isolation.py",
+      "to": "tools/check_v48_74_state_isolation.py"
+    },
+    {
+      "from": "tools/compare_v48_73_irrw.py",
+      "to": "tools/compare_v48_74_svbw.py"
+    },
+    {
+      "from": "tools/audit_v48_73_feasibility_role.py",
+      "to": "tools/audit_v48_74_feasibility_role.py"
+    },
+    {
+      "from": "tests/test_v48_73_irrw.py",
+      "to": "tests/test_v48_74_svbw.py"
+    },
+    {
+      "from": "scripts/run_v48_73_dcp_drfc_bcde_rifa_irrw_two_gpu.sh",
+      "to": "scripts/run_v48_74_dcp_drfc_bcde_rifa_svbw_two_gpu.sh"
+    }
+  ],
+  "metadata_patches": [
+    "src/ocrap/cli/train.py"
+  ],
+  "targets": [
+    {
+      "file": "src/ocrap/cli/train.py",
+      "functions": [
+        "_semantic_witness_checkpoint_feature_contract"
+      ],
+      "returns_wrapped": 10
+    }
+  ],
+  "warnings": []
+}

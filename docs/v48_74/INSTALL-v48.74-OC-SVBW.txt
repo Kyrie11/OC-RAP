@@ -1,0 +1,11 @@
+1. Back up the current OC-RAP working tree and uncommitted changes.
+2. From /home/senzeyu2/code, unzip the full drop-in archive.
+3. Verify that src/ocrap/v48_74_signed_viability.py exists.
+4. Set PYTHONPATH to the repository src and root, and set PYTHONNOUSERSITE=1.
+5. Run tools/check_v48_74_runtime_code_contract.py. Do not start training unless valid=true.
+6. Run the two-GPU script. P/Q share one schema-10 tensor cache; do not delete the cache between arms.
+7. Keep all best.pt files in the final audit package.
+
+The overlay is disabled by default. V48.73 remains unchanged unless
+OCRAP_V48_74_SIGNED_VIABILITY=1 is set. When enabled, the adapter fails closed if
+it cannot resolve a time-resolved signed-clearance trace and matching time grid.

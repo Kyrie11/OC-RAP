@@ -7359,3 +7359,91 @@ S0 pools Safe/Near/Contact for recovery-witness learning and does not add any ne
 - **算法不变**：control projection、boundary transport、route/re-entry certificate、2 shared gains、loss、top-K=5、threshold=0.5、RIFA 顺序、train/val/calibration/certificate roots 全部不变。
 - **输出目录不变**，launcher filename 与运行命令不变；launcher 开头仍清理 Q/R/S，因此修复后应完整重跑 V48.67，不能把这次 engineering-incomplete Q 与新 R/S 拼接。
 - 只有新的 `OC-RAP-v48.67-PIPELINE_COMPLETE.json` 满足 `valid=true`, `attribution_ready=true`, `engineering_version=v48.67.1-OC-PBRW-ENGFIX`, `errors=[]`, `test_roots_read=false` 后，才允许执行 V48.67 的预注册算法归因。
+
+## V48.73 OC-IRRW result adjudication and V48.74 OC-SVBW preregistration
+
+### V48.73 engineering decision
+
+- The uploaded `OC-RAP-v48.73-PIPELINE_COMPLETE.json`, runtime-code contract, reference-reuse contract, feasibility-role audit, interaction-response audit, truth-floor audit, and both result archives are mutually consistent.
+- Four N73/O73 balanced/precision trainings completed the registered 21-epoch protocol. Stage-I isolation remained bitwise unchanged (170 shared tensors); the only newly trainable state remained `direct_absolute_semantic_witness_gain[2]`.
+- No engineering blocker was found. The result is attribution-ready. The result archives still omit the four `best.pt` binaries; this is a reproducibility-packaging debt, not an attribution blocker.
+
+### V48.73 scientific decision: STOP
+
+- Positive-certificate identity and harmful/TI non-relapse passed.
+- `N73-M72` and `O73-N73` moved different selectivity axes, but no registered cell simultaneously satisfied both `safe-positive retention > harmful retention` and `teacher-feasible retention > teacher-infeasible retention`.
+- `O73-M72` ordering effects were only on the order of `1e-4` to low `1e-3`; paired scene-cluster resampling intervals crossed zero.
+- Non-floor physical consistency and full-source/safe-positive admission did not pass.
+- Therefore neither current-state anchoring nor jerk-limited history response is promoted. The entire acceleration-history/interaction-response reachability branch is stopped. Do not sweep response rate, jerk scale, history length, hold horizon, source gain, threshold, or feature normalization.
+
+### Evidence-chain conclusion after V48.71-V48.73
+
+1. Set-valued observation history contains some reproducible information (V48.71 J over H).
+2. Joint empirical support is better than component-box Cartesian corners as a spatial representation (V48.72 M over L in most cells).
+3. Spatial support, current-state anchoring, and history-derived jerk do not produce cross-split dual selectivity, non-floor consistency, or positive-witness admission (V48.72-V48.73).
+4. The dominant missing semantics is no longer “a richer exogenous response set.” It is whether the actuator-projected executable recovery itself satisfies a unified finite-time signed-viability condition.
+
+### V48.74 algorithm: OC-SVBW
+
+`OC-SVBW = Observation-Consistent Signed-Viability Barrier Witness`.
+
+For each projected candidate-option recovery and observed agent continuation, let `h_j(t)` be signed clearance, positive outside contact and negative in penetration, and let `tau(t)` be remaining executable-recovery time. Define the parameter-free finite-time barrier residuals
+
+```text
+beta_1 = h_dot + h / tau
+beta_2 = h_ddot + 2 h_dot / tau + 2 h / tau^2
+```
+
+Equivalently, use the length-scaled forms
+
+```text
+B_1 = h + tau h_dot
+B_2 = h + tau h_dot + 0.5 tau^2 h_ddot.
+```
+
+The same signed expression enforces reserve preservation in Safe, prevents boundary crossing in Near-Contact, and requires penetration debt to be repaid by the recovery deadline in Contact. No regime identifier, router, expert, threshold, or budget is used.
+
+Nested arms:
+
+- `P74_FIRST_ORDER_SVBW`: first-order debt from negative `B_1`.
+- `Q74_MAIN_OC_SVBW`: non-compensatory high-order debt `max(debt(B_1), debt(B_2))`.
+
+Both arms materialize schema 10 with 22 features. Coordinates 0-19 retain the accepted base semantics; coordinate 20 is first-order signed finite-time viability debt and coordinate 21 is high-order signed finite-time viability debt. Both arms share one persistent tensor cache. The only trainable state remains the two role-isolated absolute-semantic witness gains.
+
+### V48.74 preregistered decision order
+
+1. Engineering/runtime/reference/state-isolation gates, then 8/8 positive-certificate sign/set identity.
+2. `P74 - accepted projection-fidelity reference`: first-order finite-time viability.
+3. `Q74 - P74`: high-order/acceleration contribution.
+4. `Q74 - accepted reference`: complete source ordering.
+5. Dual selectivity must hold in at least 6/8 cells on both axes: teacher-feasible over teacher-infeasible and safe-positive over harmful; harmful/TI admission must not relapse.
+6. Exclude exact-0.5 teacher-floor rows and require positive non-floor ordering in at least 6/8 cells.
+7. Full-source GO requires 8/8 positive source deltas, at least 6/8 `delta AUC >= +0.01`, and safe-positive admission improvement over P66 in 8/8 with at least 6/8 `>= +0.05`, while preserving historical selectivity caps.
+8. Treat effects of only `1e-4` scale with scene-cluster intervals crossing zero as scientific STOP even if a sign-count gate is nominally met.
+
+Branch rules:
+
+- P GO, Q-P STOP: retain first-order barrier only.
+- Q-P and Q-main GO: promote Q74.
+- Ordering/dual-selectivity GO but non-floor STOP: stop geometry and adjudicate the teacher structural-floor truth contract.
+- Trust/non-floor GO but full-source STOP: boundary transport may be reopened in the following version, not in V48.74.
+- P and Q both STOP: stop further geometric/kinematic witness design and move to a preregistered supervision truth-contract experiment; no parameter sweep.
+
+### New prohibitions carried forward from V48.73
+
+- Do not promote N73 anchoring or O73 jerk response into Main.
+- Do not recombine N73/O73 through learned weights, min/max/gain sweeps, or regime-specific selection.
+- Do not add acceleration-history length, jerk clipping, response horizon, support scale, or current-acceleration interpolation sweeps.
+- Do not reopen boundary transport before V48.74 (or another source) passes both dual-selectivity and non-floor gates.
+- Do not interpret floor-dominated full-label AUC changes as physical success without the registered non-floor audit.
+
+All earlier prohibitions remain active: no regime-conditioned policy/router/expert/threshold/budget; no proposal/top-K expansion; no generic AFE/MLP or broad encoder/root retraining; no privileged-future or component-margin distillation; no class-local/path-stop Main; no threshold/LR/horizon/feature-scale/class-weight grids; no source-GO-before-relative-ranker change; no post-hoc hard control veto; no hard `min(CV, CA)`; and no unsupported recovery-option expansion.
+
+### V48.74 execution-performance contract
+
+- P/Q compute both diagnostics in one vectorized pass and use one canonical persistent-cache key.
+- The second arm must be a cache hit; do not rematerialize the dataset.
+- Time grids and derivative coefficients are reused, and no Python loop is added over time.
+- Historical reference checkpoints/results are reused by hash rather than rerun.
+- The V48.74 overlay leaves V48.73 behavior unchanged when disabled and fails closed if a time-resolved signed-clearance trace cannot be resolved.
+- To preserve clean attribution, the first V48.74 implementation retains the shared V48.73 base materializer and pays any dormant history computation at most once. Removal of those dormant calculations is allowed only after execution-exact equivalence has been demonstrated on the target dataset or after OC-SVBW is promoted.
