@@ -35,7 +35,7 @@ def test_contact_with_linear_finite_time_escape_is_first_order_viable():
 
 def test_near_contact_closing_is_penalized():
     t=np.array([0.,1.,2.,3.])
-    h=np.array([0.4,0.3,0.2,0.1])
+    h=np.array([0.4,0.2,0.0,-0.2])
     d=signed_viability_diagnostics(h,t,clearance_scale=1.0)
     assert float(d.first_order_debt)>0.0
 

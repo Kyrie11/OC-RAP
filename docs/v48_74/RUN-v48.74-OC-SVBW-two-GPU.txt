@@ -1,26 +1,20 @@
 # Install from the parent directory to avoid OC-RAP/OC-RAP nesting.
 cd /home/senzeyu2/code
-unzip -o /path/to/OC-RAP-v48.74-DCP-DRFC-BCDE-RIFA-OC-SVBW-drop-in.zip
+unzip -o /path/to/OC-RAP-v48.74.1-OC-SVBW-ENGFIX-drop-in.zip
 cd /home/senzeyu2/code/OC-RAP
 
+# Optional manual fail-closed provenance preflight (the launcher runs it again).
 export PYTHONPATH="$PWD/src:$PWD${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONNOUSERSITE=1
 export OCRAP_V48_74_SIGNED_VIABILITY=1
-
-# Fail-closed provenance preflight.
 python tools/check_v48_74_runtime_code_contract.py \
   --repo "$PWD" \
   --output /home/senzeyu2/code/OC-RAP/runs/OC-RAP-v48.74-runtime-code-contract.manual.json
 
-# Run only if the preflight reports valid=true and attribution_ready=true.
+# Original user command: unchanged.
 GPU0=0 GPU1=1 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
-  PERSISTENT_TENSOR_CACHE_BUILD_WORKERS=8 \
   bash scripts/run_v48_74_dcp_drfc_bcde_rifa_svbw_two_gpu.sh
 
-# Required result artifacts (the runner may use the exact historical internal arm
-# labels in subdirectories; the audit bundle must identify the semantic mapping):
-#   coordinate 20 / former N-selector -> P74_FIRST_ORDER_SVBW
-#   coordinate 21 / former O-selector -> Q74_MAIN_OC_SVBW
-#
-# Upload the P74 result zip, Q74 main result zip, all audits/contracts/sentinel,
-# and the four best.pt checkpoints (or immutable checkpoint manifest).
+# Semantic mapping retained behind historical internal output directories:
+# coordinate 20 / response=false -> P74_FIRST_ORDER_SVBW
+# coordinate 21 / response=true  -> Q74_MAIN_OC_SVBW

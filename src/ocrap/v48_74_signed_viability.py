@@ -32,7 +32,7 @@ except Exception:  # pragma: no cover
 
 V48_74_ENV = "OCRAP_V48_74_SIGNED_VIABILITY"
 V48_74_SOURCE = "signed_finite_time_viability_projected_recovery_witness"
-V48_74_ENGINEERING_VERSION = "v48.74.0-OC-SVBW"
+V48_74_ENGINEERING_VERSION = "v48.74.1-OC-SVBW-ENGFIX"
 V48_74_SCHEMA = 10
 V48_74_FEATURE_DIM = 22
 

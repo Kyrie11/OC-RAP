@@ -1,5 +1,9 @@
 from __future__ import annotations
-from ocrap.v48_74_signed_viability import apply_v48_74_feature_overlay as _ocrap_apply_v48_74_feature_overlay, enabled as _ocrap_v48_74_enabled
+from ocrap.v48_74_signed_viability import (
+    V48_74_SCHEMA as _V48_74_SCHEMA,
+    V48_74_SOURCE as _V48_74_SOURCE,
+    enabled as _ocrap_v48_74_enabled,
+)
 from pathlib import Path
 from time import perf_counter
 from collections import Counter
@@ -21,62 +25,40 @@ from ocrap.models.ocrap import OCRAPModel
 from ocrap.utils.seed import seed_everything
 
 def _semantic_witness_checkpoint_feature_contract(model_cfg: dict) -> tuple[int, str]:
-    """Return the checkpoint metadata contract for semantic-witness features.
+    """Return the serialized semantic-witness feature contract.
 
-    Engineering-only helper: keep the serialized schema and source identifier in
-    lockstep with the flags that select v48.64/v48.66/v48.67 feature semantics.
-    It does not change feature construction, model outputs, losses, or training.
+    V48.74 is an engineering-compatible overlay on the historical V48.73
+    selector flags, but it is a distinct feature schema/source.  Keep the
+    checkpoint metadata fail-closed and do not let schema-10 checkpoints be
+    confused with V48.73 schema 9.  With the V48.74 switch disabled, historical
+    behavior is unchanged.
     """
     enabled = bool(model_cfg.get('direct_recovery_absolute_semantic_witness_correction', False))
     if not enabled:
-        _v48_74_return_0 = (0, 'disabled')
-        if _ocrap_v48_74_enabled():
-            _v48_74_return_0 = _ocrap_apply_v48_74_feature_overlay(_v48_74_return_0, locals())
-        return _v48_74_return_0
-    if bool(model_cfg.get('direct_recovery_semantic_witness_interaction_anchor_support', False)) or bool(model_cfg.get('direct_recovery_semantic_witness_interaction_response_support', False)):
-        _v48_74_return_1 = (9, ('signed_finite_time_viability_projected_recovery_witness' if __import__("os").getenv('OCRAP_V48_74_SIGNED_VIABILITY', "").lower() in ("1", "true", "yes", "on") else 'interaction_response_history_reachability_projected_recovery_witness'))
-        if _ocrap_v48_74_enabled():
-            _v48_74_return_1 = _ocrap_apply_v48_74_feature_overlay(_v48_74_return_1, locals())
-        return _v48_74_return_1
+        return (0, 'disabled')
+    temporal_selector = bool(
+        model_cfg.get('direct_recovery_semantic_witness_interaction_anchor_support', False)
+        or model_cfg.get('direct_recovery_semantic_witness_interaction_response_support', False)
+    )
+    if temporal_selector and _ocrap_v48_74_enabled():
+        return (_V48_74_SCHEMA, _V48_74_SOURCE)
+    if temporal_selector:
+        return (9, 'interaction_response_history_reachability_projected_recovery_witness')
     if bool(model_cfg.get('direct_recovery_semantic_witness_interaction_box_support', False)) or bool(model_cfg.get('direct_recovery_semantic_witness_interaction_hull_support', False)):
-        _v48_74_return_2 = (8, 'interaction_oriented_history_reachability_projected_recovery_witness')
-        if _ocrap_v48_74_enabled():
-            _v48_74_return_2 = _ocrap_apply_v48_74_feature_overlay(_v48_74_return_2, locals())
-        return _v48_74_return_2
+        return (8, 'interaction_oriented_history_reachability_projected_recovery_witness')
     if bool(model_cfg.get('direct_recovery_semantic_witness_boundary_localized_occupancy_trust', False)) or bool(model_cfg.get('direct_recovery_semantic_witness_history_occupancy_reachability', False)):
-        _v48_74_return_3 = (7, 'boundary_localized_history_reachability_projected_recovery_witness')
-        if _ocrap_v48_74_enabled():
-            _v48_74_return_3 = _ocrap_apply_v48_74_feature_overlay(_v48_74_return_3, locals())
-        return _v48_74_return_3
+        return (7, 'boundary_localized_history_reachability_projected_recovery_witness')
     if bool(model_cfg.get('direct_recovery_semantic_witness_soft_occupancy_disagreement', False)):
-        _v48_74_return_4 = (6, 'demand_occupancy_tempered_projected_recovery_witness')
-        if _ocrap_v48_74_enabled():
-            _v48_74_return_4 = _ocrap_apply_v48_74_feature_overlay(_v48_74_return_4, locals())
-        return _v48_74_return_4
+        return (6, 'demand_occupancy_tempered_projected_recovery_witness')
     if bool(model_cfg.get('direct_recovery_semantic_witness_demand_normalized_fidelity', False)):
-        _v48_74_return_5 = (5, 'demand_tempered_projected_recovery_witness')
-        if _ocrap_v48_74_enabled():
-            _v48_74_return_5 = _ocrap_apply_v48_74_feature_overlay(_v48_74_return_5, locals())
-        return _v48_74_return_5
+        return (5, 'demand_tempered_projected_recovery_witness')
     if bool(model_cfg.get('direct_recovery_semantic_witness_projection_fidelity_weighting', False)) or bool(model_cfg.get('direct_recovery_semantic_witness_robust_occupancy', False)):
-        _v48_74_return_6 = (4, 'robust_trust_projected_recovery_witness')
-        if _ocrap_v48_74_enabled():
-            _v48_74_return_6 = _ocrap_apply_v48_74_feature_overlay(_v48_74_return_6, locals())
-        return _v48_74_return_6
+        return (4, 'robust_trust_projected_recovery_witness')
     if bool(model_cfg.get('direct_recovery_semantic_witness_control_projection', False)) or bool(model_cfg.get('direct_recovery_semantic_witness_boundary_transport', False)):
-        _v48_74_return_7 = (3, 'projected_boundary_common_executable_recovery_witness')
-        if _ocrap_v48_74_enabled():
-            _v48_74_return_7 = _ocrap_apply_v48_74_feature_overlay(_v48_74_return_7, locals())
-        return _v48_74_return_7
+        return (3, 'projected_boundary_common_executable_recovery_witness')
     if bool(model_cfg.get('direct_recovery_semantic_witness_route_alignment', False)) or bool(model_cfg.get('direct_recovery_semantic_witness_reentry_alignment', False)):
-        _v48_74_return_8 = (2, 'active_constraint_coverage_common_executable_recovery_witness')
-        if _ocrap_v48_74_enabled():
-            _v48_74_return_8 = _ocrap_apply_v48_74_feature_overlay(_v48_74_return_8, locals())
-        return _v48_74_return_8
-    _v48_74_return_9 = (1, 'semantics_aligned_common_executable_recovery_witness')
-    if _ocrap_v48_74_enabled():
-        _v48_74_return_9 = _ocrap_apply_v48_74_feature_overlay(_v48_74_return_9, locals())
-    return _v48_74_return_9
+        return (2, 'active_constraint_coverage_common_executable_recovery_witness')
+    return (1, 'semantics_aligned_common_executable_recovery_witness')
 
 def _device(cfg: dict) -> torch.device:
     tcfg = cfg.get('training', {}) if isinstance(cfg.get('training', {}), dict) else {}

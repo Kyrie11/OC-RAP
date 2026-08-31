@@ -20,6 +20,12 @@ from ocrap.data.build.diagnose import iter_sample_paths
 from ocrap.data.serialization import load_npz_selected
 from ocrap.data.schema import CandidatePrefix, RecoveryOption
 from ocrap.simulation.teacher.controllers import rollout_recovery_controller
+from ocrap.v48_74_signed_viability import (
+    V48_74_FEATURE_DIM as DIRECT_SIGNED_VIABILITY_RECOVERY_WITNESS_FEATURE_DIM,
+    V48_74_SCHEMA as DIRECT_SIGNED_VIABILITY_RECOVERY_WITNESS_FEATURE_SCHEMA,
+    enabled as _v48_74_signed_viability_enabled,
+    signed_viability_diagnostics as _v48_74_signed_viability_diagnostics,
+)
 
 
 RECOVERY_MODE_VOCAB = [
@@ -1004,6 +1010,8 @@ def direct_executable_recovery_witness_features_from_sample(
         max_speed = float(np.max(np.abs(rec_states[:, 6])))
         terminal_speed = float(abs(rec_states[-1, 6]))
         d_safe = d_safe0 + headway * max_speed
+        signed_viability_debt1 = 0.0
+        signed_viability_debt2 = 0.0
         if agents:
             # rec_states[0] is exactly the candidate terminal state at
             # prefix_duration; later rows are separated by dt.
@@ -1015,6 +1023,27 @@ def direct_executable_recovery_witness_features_from_sample(
                 if robust_occupancy_envelope and clear_ca is not None
                 else clear_cv
             )
+            if _v48_74_signed_viability_enabled() and (interaction_anchor_support or interaction_response_support):
+                # V48.74 OC-SVBW consumes the *same actuator-projected recovery*
+                # and historical observation-only CV agent continuation already
+                # used by the accepted physical witness.  Time is placed on the
+                # final axis; the non-time agent axis is reduced by worst-case
+                # debt.  Pair radii provide a physical, parameter-free length
+                # normalization and introduce no learned/swept hyperparameter.
+                pair_scale = np.maximum(ego_rad + arad, 1.0e-8)
+                svbw = _v48_74_signed_viability_diagnostics(
+                    np.asarray(signed_clearance, dtype=np.float64).T,
+                    times,
+                    clearance_scale=pair_scale,
+                    reduce_axes=(0,),
+                )
+                signed_viability_debt1 = float(np.asarray(svbw.first_order_debt).reshape(()))
+                signed_viability_debt2 = float(np.asarray(svbw.second_order_debt).reshape(()))
+                if not (np.isfinite(signed_viability_debt1) and np.isfinite(signed_viability_debt2)):
+                    raise ValueError(
+                        f"non-finite V48.74 signed-viability debt for option={l}: "
+                        f"d1={signed_viability_debt1}, d2={signed_viability_debt2}"
+                    )
             c_min = float(np.min(signed_clearance))
             c_terminal = float(np.min(signed_clearance[-1]))
             # v48.70 diagnostic retained for exact historical comparison.
@@ -1196,10 +1225,19 @@ def direct_executable_recovery_witness_features_from_sample(
                 h_reentry = np.tanh(persistent_reserve / distance_scale)
             values.extend([h_route, h_reentry])
         if interaction_anchor_support or interaction_response_support:
-            # v48.73 schema-9: coordinates 0--19 are execution-exact v48.72
-            # diagnostics.  20 is current-acceleration-anchored ramp optimism;
-            # 21 is observed-jerk-limited response optimism.  The v48.72 box/hull
-            # diagnostics are retained even though only one v48.73 trust is consumed.
+            # Coordinates 0--19 stay execution-exact to v48.72/v48.73.
+            # With the V48.74 switch enabled, coordinates 20/21 are the raw
+            # normalized first/high-order finite-time signed-viability debts.
+            # With the switch disabled, preserve historical v48.73 schema-9
+            # tanh(anchor/jerk optimism) values bitwise.
+            tail_20_21 = (
+                [float(signed_viability_debt1), float(signed_viability_debt2)]
+                if _v48_74_signed_viability_enabled()
+                else [
+                    float(np.tanh(interaction_anchor_optimism)),
+                    float(np.tanh(interaction_response_optimism)),
+                ]
+            )
             values.extend([
                 float(np.tanh(occupancy_optimism_gap)),
                 float(np.tanh(current_boundary_deficit)),
@@ -1207,8 +1245,7 @@ def direct_executable_recovery_witness_features_from_sample(
                 float(np.tanh(history_boundary_deficit)),
                 float(np.tanh(interaction_box_optimism)),
                 float(np.tanh(interaction_hull_optimism)),
-                float(np.tanh(interaction_anchor_optimism)),
-                float(np.tanh(interaction_response_optimism)),
+                *tail_20_21,
             ])
         elif interaction_box_support or interaction_hull_support:
             # v48.72 schema-8: coordinates 0--17 are execution-exact v48.71
@@ -1841,7 +1878,10 @@ def _persistent_tensor_cache_key(
         model_cfg.get("direct_recovery_semantic_witness_interaction_response_support", False)
     )
     semantic_feature_schema = (
-        DIRECT_INTERACTION_RESPONSE_RECOVERY_WITNESS_FEATURE_SCHEMA
+        DIRECT_SIGNED_VIABILITY_RECOVERY_WITNESS_FEATURE_SCHEMA
+        if semantic_witness_features_enabled and _v48_74_signed_viability_enabled()
+        and (semantic_interaction_anchor_support or semantic_interaction_response_support)
+        else (DIRECT_INTERACTION_RESPONSE_RECOVERY_WITNESS_FEATURE_SCHEMA
         if semantic_witness_features_enabled and (semantic_interaction_anchor_support or semantic_interaction_response_support)
         else (DIRECT_INTERACTION_ORIENTED_RECOVERY_WITNESS_FEATURE_SCHEMA
         if semantic_witness_features_enabled and (semantic_interaction_box_support or semantic_interaction_hull_support)
@@ -1857,7 +1897,7 @@ def _persistent_tensor_cache_key(
               if semantic_witness_features_enabled and (semantic_control_projection or semantic_boundary_transport)
               else (DIRECT_ACTIVE_CONSTRAINT_RECOVERY_WITNESS_FEATURE_SCHEMA
                     if semantic_witness_features_enabled and (semantic_route_alignment or semantic_reentry_alignment)
-                    else (DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA if semantic_witness_features_enabled else 0))))))))
+                    else (DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA if semantic_witness_features_enabled else 0)))))))))
     )
     # Schema 8 materializes both directional-box and empirical-hull
     # diagnostics in every sample.  The box/hull booleans only select the model
@@ -1874,7 +1914,10 @@ def _persistent_tensor_cache_key(
     if semantic_feature_schema == DIRECT_INTERACTION_ORIENTED_RECOVERY_WITNESS_FEATURE_SCHEMA:
         cache_interaction_box_support = True
         cache_interaction_hull_support = True
-    elif semantic_feature_schema == DIRECT_INTERACTION_RESPONSE_RECOVERY_WITNESS_FEATURE_SCHEMA:
+    elif semantic_feature_schema in {
+        DIRECT_INTERACTION_RESPONSE_RECOVERY_WITNESS_FEATURE_SCHEMA,
+        DIRECT_SIGNED_VIABILITY_RECOVERY_WITNESS_FEATURE_SCHEMA,
+    }:
         cache_interaction_box_support = True
         cache_interaction_hull_support = True
         cache_interaction_anchor_support = True
@@ -1909,6 +1952,9 @@ def _persistent_tensor_cache_key(
         "common_witness_sample_rate_hz": (float(cfg.get("sample_rate_hz", 10.0)) if common_witness_features_enabled else 0.0),
         "semantic_witness_option_resolved_features": semantic_witness_features_enabled,
         "semantic_witness_feature_schema": semantic_feature_schema,
+        "semantic_witness_v48_74_signed_viability": bool(
+            semantic_witness_features_enabled and _v48_74_signed_viability_enabled()
+        ),
         "semantic_witness_route_alignment": semantic_route_alignment,
         "semantic_witness_reentry_alignment": semantic_reentry_alignment,
         "semantic_witness_control_projection": semantic_control_projection,

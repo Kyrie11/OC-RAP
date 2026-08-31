@@ -7447,3 +7447,54 @@ All earlier prohibitions remain active: no regime-conditioned policy/router/expe
 - Historical reference checkpoints/results are reused by hash rather than rerun.
 - The V48.74 overlay leaves V48.73 behavior unchanged when disabled and fails closed if a time-resolved signed-clearance trace cannot be resolved.
 - To preserve clean attribution, the first V48.74 implementation retains the shared V48.73 base materializer and pays any dormant history computation at most once. Removal of those dormant calculations is allowed only after execution-exact equivalence has been demonstrated on the target dataset or after OC-SVBW is promoted.
+
+## v48.74.1 OC-SVBW-ENGFIX — runtime provenance + schema-10 execution wiring hotfix (2026-08-31)
+
+**类别：工程/集成修复；V48.74 OC-SVBW 科学假设、P/Q 数学定义、训练目标、数据、top-K、0.5 阈值、RIFA 顺序与外部运行命令不变。**
+
+### Trigger
+
+首次执行 `scripts/run_v48_74_dcp_drfc_bcde_rifa_svbw_two_gpu.sh` 在 GPU 训练前被 runtime preflight 以 RC30 拦截。顶层错误为 `runtime import outside repository`，其中 `ocrap` 与 `ocrap.data` 来自当前 repository，但 checker 尝试导入不存在的历史模块名 `ocrap.ocrap` 和 `ocrap.inference`。当前代码布局实际为 `ocrap.models.ocrap` 与 `ocrap.models.inference`。
+
+继续审计发现，仅修正 import 名称仍不足以获得可归因的 V48.74：初版 schema-10 standalone module 未真正接入 active dataset/model path；训练 materializer 的 coordinate 20/21 仍是 V48.73 anchor/jerk optimism，model 仍按 tanh/atanh schema-9 解释，checkpoint/state/pipeline contract 也残留 schema 9/V48.73 source identifier。该状态即使绕过 preflight 并完成 GPU 训练，也不能归因给 OC-SVBW。
+
+### Engineering repair
+
+1. `tools/check_v48_74_runtime_code_contract.py` 改为验证精确的当前模块路径：`ocrap`, `ocrap.data`, `ocrap.cli.train`, `ocrap.models.data`, `ocrap.models.ocrap`, `ocrap.models.inference`, `ocrap.v48_74_signed_viability`；同时在训练前验证 P74/Q74 checkpoint serializer 均返回 schema 10 + `signed_finite_time_viability_projected_recovery_witness`。
+2. `src/ocrap/models/data.py` 将 V48.74 signed-viability 计算接到真实 feature materializer。对每个 actuator-projected candidate×option recovery，复用既有 observation-only CV signed-clearance trace，按 agent×time 计算 `B1/B2` debt；coordinate 0–19 保持历史语义，20/21 写入 raw normalized first/high-order debt。Q 使用 `max(d1,d2_raw)`，保持 high-order non-compensation。
+3. V48.74 debt 以 ego/agent pair radius 作为物理长度归一化 `s_j`，不增加 learned/tuned threshold、horizon、gain 或 regime-specific 参数。
+4. `src/ocrap/models/ocrap.py` 在 V48.74 开关开启时直接将 coordinate 20/21 解释为 raw debt，并应用 `w=1/(1+d)`；开关关闭时保持 V48.73 tanh/atanh interaction-response 解释不变。
+5. `src/ocrap/cli/train.py` checkpoint metadata contract 直接序列化 schema 10/source；不再尝试对 `(schema, source)` tuple 使用 feature overlay。
+6. `check_v48_74_state_isolation.py`, factor contract, comparison, pipeline checker 全部升级到 schema 10/source，并将因果顺序恢复为 `P74 - accepted projection-fidelity reference`, `Q74 - P74`, `Q74 - accepted reference`。
+7. runner 的科学 prerequisite 改为 V48.73 STOP/branch-closed contract；accepted reference 使用历史 T68 projection-fidelity arm。P/Q 仍复用原内部 `svbw_anchor`/`svbw_main` 输出目录，因此外部启动命令与主结果路径兼容。
+8. 工程版本标记升级为 `v48.74.1-OC-SVBW-ENGFIX`；算法版本仍为 `v48.74-DCP-DRFC-BCDE-RIFA-OC-SVBW`。
+
+### Attribution invariants preserved
+
+- OC-MERO information pattern 与 RIFA role isolation 不变。
+- Stage-I/root/proposal/relative ranker 不训练；唯一新增可训练状态仍是 `direct_absolute_semantic_witness_gain[2]`。
+- route/re-entry、active-set alignment、actuator projection、projection-fidelity 保持；boundary transport、demand normalization、robust occupancy/hard CV-CA、regime router 均保持 OFF。
+- train/val/calibration/certificate roots 不变；不读取 final-test roots，不重构 dataset，不读取 teacher future/regime id。
+- positive viability trust 严格大于 0，因此 P/reference、Q/reference、Q/P positive-certificate sign/set 仍必须 exact-identical。
+- 当 `OCRAP_V48_74_SIGNED_VIABILITY` 未开启时，V48.73 synthetic 22-D feature 输出与修复前版本 bitwise identical。
+
+### Validation
+
+- V48.74 runtime-code preflight: `valid=true`, `attribution_ready=true`, `errors=[]`; P/Q serializer 均为 schema 10/source expected。
+- V48.64–V48.74 focused: 94/94 PASS。
+- V48.46–V48.74 relevant matrix: 222 PASS / 1 deselected historical telemetry test。该 deselected test 依赖当前上传包本来就缺失的 `tools.summarize_v48_46_runtime_telemetry`，与 V48.74 diff 无关；若不 deselect，唯一 failure 即该 pre-existing missing tool。
+- `python -m compileall -q src tools tests`: PASS。
+- recursive `scripts/*.sh` `bash -n`: 151/151 PASS。
+- V48.74-disabled synthetic feature check: patched vs uploaded original V48.73 path bitwise equal, max abs difference 0。
+- V48.74-enabled synthetic check: coordinates 0–19 bitwise equal to historical path; `d1>=0`, `d2>=d1`; nonzero-debt case verified。
+
+### Run compatibility
+
+The same user command remains valid:
+
+```bash
+GPU0=0 GPU1=1 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+  bash scripts/run_v48_74_dcp_drfc_bcde_rifa_svbw_two_gpu.sh
+```
+
+The launcher still fail-closes before GPU work if actual runtime code, V48.73 prerequisite attribution, or schema-10 serializer/source identity is wrong.

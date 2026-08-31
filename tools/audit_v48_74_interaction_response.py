@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import os as _v48_74_os
-_v48_74_os.environ.setdefault("OCRAP_V48_74_SIGNED_VIABILITY", "1")
 import argparse,json,math
 from pathlib import Path
 import numpy as np
@@ -49,11 +47,12 @@ def summarize(base,new):
  out['selective_retention']={'teacher_feasible_ratio_gt_teacher_infeasible':(tf is not None and ti is not None and tf>ti),'safe_positive_ratio_gt_harmful':(sp is not None and hm is not None and sp>hm),'teacher_feasible_minus_infeasible':None if tf is None or ti is None else tf-ti,'safe_positive_minus_harmful':None if sp is None or hm is None else sp-hm}
  return out
 def main():
- ap=argparse.ArgumentParser(description='v48.74 temporal signed-viability reachability row-level audit');ap.add_argument('--m72',type=Path,required=True);ap.add_argument('--n73',type=Path,required=True);ap.add_argument('--o73',type=Path,required=True);ap.add_argument('--output',type=Path,required=True);a=ap.parse_args();doc={'schema':'ocrap-v48.74-svbw-signed-viability-audit-v1','test_roots_read':False,'dataset_reconstruction':False,'comparisons':{}}
+ ap=argparse.ArgumentParser(description='v48.74 signed finite-time viability row-level causal audit');ap.add_argument('--reference',type=Path,required=True);ap.add_argument('--p74',type=Path,required=True);ap.add_argument('--q74',type=Path,required=True);ap.add_argument('--output',type=Path,required=True);a=ap.parse_args()
+ doc={'schema':'ocrap-v48.74-svbw-signed-viability-audit-v2','reference_semantics':'accepted projection-fidelity reference','test_roots_read':False,'dataset_reconstruction':False,'comparisons':{}}
  for v in VARIANTS:
   doc['comparisons'][v]={}
   for k in KINDS:
-   m=rows(a.m72,v,k);n=rows(a.n73,v,k);o=rows(a.o73,v,k)
-   doc['comparisons'][v][k]={'N73_minus_M72':summarize(m,n),'O73_minus_M72':summarize(m,o),'O73_minus_N73':summarize(n,o)}
- a.output.parent.mkdir(parents=True,exist_ok=True);a.output.write_text(json.dumps(doc,indent=2,sort_keys=True)+'\n');print(json.dumps({'event':'v48_74_svbw_interaction_response_audit','output':str(a.output)}))
+   ref=rows(a.reference,v,k);p=rows(a.p74,v,k);q=rows(a.q74,v,k)
+   doc['comparisons'][v][k]={'P74_minus_reference':summarize(ref,p),'Q74_minus_P74':summarize(p,q),'Q74_minus_reference':summarize(ref,q)}
+ a.output.parent.mkdir(parents=True,exist_ok=True);a.output.write_text(json.dumps(doc,indent=2,sort_keys=True)+'\n');print(json.dumps({'event':'v48_74_svbw_signed_viability_audit','output':str(a.output)}))
 if __name__=='__main__':main()

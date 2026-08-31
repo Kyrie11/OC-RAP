@@ -1,57 +1,65 @@
 {
-  "copies": [
-    {
-      "from": "tools/audit_v48_73_truth_strata.py",
-      "to": "tools/audit_v48_74_truth_strata.py"
-    },
-    {
-      "from": "tools/audit_v48_73_interaction_response.py",
-      "to": "tools/audit_v48_74_interaction_response.py"
-    },
-    {
-      "from": "tools/check_v48_73_runtime_code_contract.py",
-      "to": "tools/check_v48_74_runtime_code_contract.py"
-    },
-    {
-      "from": "tools/check_v48_73_pipeline_complete.py",
-      "to": "tools/check_v48_74_pipeline_complete.py"
-    },
-    {
-      "from": "tools/check_v48_73_variant_isolation.py",
-      "to": "tools/check_v48_74_variant_isolation.py"
-    },
-    {
-      "from": "tools/check_v48_73_state_isolation.py",
-      "to": "tools/check_v48_74_state_isolation.py"
-    },
-    {
-      "from": "tools/compare_v48_73_irrw.py",
-      "to": "tools/compare_v48_74_svbw.py"
-    },
-    {
-      "from": "tools/audit_v48_73_feasibility_role.py",
-      "to": "tools/audit_v48_74_feasibility_role.py"
-    },
-    {
-      "from": "tests/test_v48_73_irrw.py",
-      "to": "tests/test_v48_74_svbw.py"
-    },
-    {
-      "from": "scripts/run_v48_73_dcp_drfc_bcde_rifa_irrw_two_gpu.sh",
-      "to": "scripts/run_v48_74_dcp_drfc_bcde_rifa_svbw_two_gpu.sh"
-    }
+  "additional_blockers_found": [
+    "schema-10 signed-viability module was not wired into the active dataset feature materializer",
+    "model still decoded coordinates 20/21 with the V48.73 tanh/atanh interaction-response semantics",
+    "checkpoint/state/factor/pipeline contracts still contained schema-9/V48.73 source semantics",
+    "runner attribution prerequisites/comparisons still followed the V48.73 M72/N73/O73 experiment"
   ],
-  "metadata_patches": [
-    "src/ocrap/cli/train.py"
+  "algorithm_version": "v48.74-DCP-DRFC-BCDE-RIFA-OC-SVBW",
+  "category": "engineering_and_integration_hotfix_algorithm_hypothesis_unchanged",
+  "engineering_version": "v48.74.1-OC-SVBW-ENGFIX",
+  "fixed_files": [
+    "ALGORITHM_CHANGELOG.md",
+    "V48_74_PATCH_REPORT.json",
+    "docs/v48_74/INSTALL-v48.74-OC-SVBW.txt",
+    "docs/v48_74/RUN-v48.74-OC-SVBW-two-GPU.txt",
+    "scripts/run_v48_74_dcp_drfc_bcde_rifa_svbw_two_gpu.sh",
+    "src/ocrap/cli/train.py",
+    "src/ocrap/models/data.py",
+    "src/ocrap/models/ocrap.py",
+    "src/ocrap/v48_74_signed_viability.py",
+    "tests/test_v48_74_signed_viability.py",
+    "tests/test_v48_74_svbw.py",
+    "tools/audit_v48_74_feasibility_role.py",
+    "tools/audit_v48_74_interaction_response.py",
+    "tools/check_v48_74_pipeline_complete.py",
+    "tools/check_v48_74_runtime_code_contract.py",
+    "tools/check_v48_74_state_isolation.py",
+    "tools/compare_v48_74_svbw.py"
   ],
-  "targets": [
-    {
-      "file": "src/ocrap/cli/train.py",
-      "functions": [
-        "_semantic_witness_checkpoint_feature_contract"
-      ],
-      "returns_wrapped": 10
-    }
-  ],
-  "warnings": []
+  "preserved_contract": {
+    "boundary_transport": false,
+    "coordinate_20": "first_order_signed_finite_time_viability_debt",
+    "coordinate_21": "non_compensatory_high_order_signed_finite_time_viability_debt",
+    "dataset_reconstruction": false,
+    "feature_dim": 22,
+    "proposal_top_k": 5,
+    "regime_conditioned": false,
+    "schema": 10,
+    "source": "signed_finite_time_viability_projected_recovery_witness",
+    "teacher_future_input": false,
+    "test_roots_read": false,
+    "threshold": 0.5,
+    "trainable_state": "direct_absolute_semantic_witness_gain[2]"
+  },
+  "trigger": {
+    "current_imports": [
+      "ocrap.models.ocrap",
+      "ocrap.models.inference"
+    ],
+    "obsolete_imports": [
+      "ocrap.ocrap",
+      "ocrap.inference"
+    ],
+    "reported_error": "runtime import outside repository"
+  },
+  "validation": {
+    "compileall": "PASS",
+    "runtime_preflight_valid": true,
+    "shell_bash_n": "151/151 PASS",
+    "v48_46_to_v48_74_relevant": "222 PASS, 1 deselected pre-existing missing telemetry-tool test",
+    "v48_64_to_v48_74_focused": "94/94 PASS",
+    "v48_73_disabled_path_bitwise_equal": true,
+    "v48_73_disabled_path_max_abs_difference": 0.0
+  }
 }
