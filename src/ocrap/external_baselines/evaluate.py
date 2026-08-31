@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections import Counter
+import hashlib
+import json
 from time import perf_counter
 from pathlib import Path
 from typing import Any
@@ -8,7 +10,7 @@ from typing import Any
 import numpy as np
 import torch
 
-from ocrap.data.serialization import load_npz, write_json
+from ocrap.data.serialization import write_json
 from ocrap.evaluation.metrics import (
     best_shared_option_index,
     deployable_recovery_success,
@@ -17,12 +19,16 @@ from ocrap.evaluation.metrics import (
     post_contact_deployability_score,
     summarize_selection_metrics,
 )
-from ocrap.external_baselines.data import group_sample_paths, _branch_arrays, _topology_arrays, _history_arrays, _actor_topology_arrays, _map_topology_arrays, use_teacher_branch_context
+from ocrap.external_baselines.data import (
+    group_sample_paths, load_external_sample, _branch_arrays, _topology_arrays,
+    _history_arrays, _history_scene_arrays, _prefix_traj_array,
+    _actor_topology_arrays, _map_topology_arrays, use_teacher_branch_context,
+)
 from ocrap.external_baselines.models import build_model_from_cfg
-from ocrap.external_baselines.runtime import configure_cuda_runtime
+from ocrap.external_baselines.runtime import configure_cuda_runtime, resolve_amp_dtype
 from ocrap.external_baselines.observed_risk import observed_risk_profile, observed_risk_profiles
 from ocrap.external_baselines.policies import ExternalSelection, select_external_policy
-from ocrap.models.data import sample_to_feature
+from ocrap.models.data import samples_to_feature_matrix
 
 
 def _scalar(d: dict[str, Any], key: str, default: float = 0.0) -> float:
@@ -91,21 +97,20 @@ def _predict_group(model: torch.nn.Module | None, samples: list[dict[str, Any]],
     bcfg = (cfg.get("external_baselines", {}) or {})
     mcfg = (bcfg.get("model", {}) or {})
     arch = str(mcfg.get("arch", bcfg.get("baseline", ""))).lower()
-    need_history = arch in {"gameformer", "gameformer_lite", "gameformer_levelk"}
-    need_topology = arch in {"betop", "betop_lite", "betopnet", "betopnet_lite"}
+    need_history = arch in {"gameformer", "gameformer_lite", "gameformer_levelk", "plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter", "pdm_hybrid", "pdm_hybrid_adapter"}
+    need_topology = arch in {"betop", "betop_lite", "betopnet", "betopnet_lite", "plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter"}
     use_branch_context = use_teacher_branch_context(cfg)
 
     max_candidates = int(bcfg.get("max_candidates", len(samples)))
     n = min(len(samples), max_candidates)
-    feats = [sample_to_feature(d, cfg) for d in samples[:n]]
-    if not feats:
+    feats = samples_to_feature_matrix(samples[:n], cfg, shared_scene=True)
+    if feats.size == 0:
         return None
-    D = int(feats[0].shape[0])
+    D = int(feats.shape[1])
     x = np.zeros((1, max_candidates, D), dtype=np.float32)
     mask = np.zeros((1, max_candidates), dtype=bool)
-    for i, f in enumerate(feats):
-        x[0, i] = f
-        mask[0, i] = True
+    x[0, :n] = feats[:n]
+    mask[0, :n] = True
 
     kwargs: dict[str, torch.Tensor | None] = {}
     if use_branch_context:
@@ -129,17 +134,21 @@ def _predict_group(model: torch.nn.Module | None, samples: list[dict[str, Any]],
         })
 
     if need_history:
-        ego0, neigh0, _, pref0, _ = _history_arrays(samples[0], cfg)
+        ego0, neigh0, nv0, origin0, _yaw0, rot0 = _history_scene_arrays(samples[0], cfg)
+        pref0, _ = _prefix_traj_array(samples[0], cfg, origin0, rot0)
         H, A_hist, T = int(ego0.shape[0]), int(neigh0.shape[0]), int(pref0.shape[0])
         ego_history = np.zeros((1, max_candidates, H, 9), dtype=np.float32)
         neighbor_history = np.zeros((1, max_candidates, A_hist, H, 9), dtype=np.float32)
         neighbor_valid = np.zeros((1, max_candidates, A_hist, H), dtype=bool)
         prefix_traj = np.zeros((1, max_candidates, T, 2), dtype=np.float32)
         prefix_valid = np.zeros((1, max_candidates, T), dtype=bool)
+        if n:
+            ego_history[0, :n] = ego0[None, ...]
+            neighbor_history[0, :n] = neigh0[None, ...]
+            neighbor_valid[0, :n] = nv0[None, ...]
         for i, d in enumerate(samples[:n]):
-            eh, nh, nv, pt, pv = _history_arrays(d, cfg)
-            ego_history[0, i], neighbor_history[0, i] = eh, nh
-            neighbor_valid[0, i], prefix_traj[0, i], prefix_valid[0, i] = nv, pt, pv
+            pt, pv = _prefix_traj_array(d, cfg, origin0, rot0)
+            prefix_traj[0, i], prefix_valid[0, i] = pt, pv
         kwargs.update({
             "ego_history": torch.from_numpy(ego_history).to(device, non_blocking=True),
             "neighbor_history": torch.from_numpy(neighbor_history).to(device, non_blocking=True),
@@ -169,17 +178,21 @@ def _predict_group(model: torch.nn.Module | None, samples: list[dict[str, Any]],
             "map_topology_mask": torch.from_numpy(map_topology_mask).to(device, non_blocking=True),
         })
 
+    training_cfg = ((cfg.get("external_baselines", {}) or {}).get("training", {}) or {})
+    amp_enabled = bool(training_cfg.get("amp", True)) and device.type == "cuda"
+    amp_dtype = resolve_amp_dtype(training_cfg, device)
     with torch.inference_mode():
-        out = model(
-            torch.from_numpy(x).to(device, non_blocking=True),
-            torch.from_numpy(mask).to(device, non_blocking=True),
-            **kwargs,
-        )
+        with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=amp_enabled):
+            out = model(
+                torch.from_numpy(x).to(device, non_blocking=True),
+                torch.from_numpy(mask).to(device, non_blocking=True),
+                **kwargs,
+            )
     result: dict[str, np.ndarray] = {}
     for k, v in out.items():
         if isinstance(v, list):
             continue
-        result[k] = v.squeeze(0).detach().cpu().numpy()[:n]
+        result[k] = v.squeeze(0).detach().float().cpu().numpy()[:n]
     return result
 
 def _yaw_rate_violation_proxy(d: dict[str, Any], yaw_rate_max: float = 0.6) -> float:
@@ -348,7 +361,7 @@ def evaluate_external_baselines(
     eval_start = perf_counter()
     for gi, paths in enumerate(groups, 1):
         tick = perf_counter()
-        samples = [load_npz(p) for p in paths]
+        samples = [load_external_sample(p) for p in paths]
         samples = sorted(samples, key=lambda d: int(np.asarray(d.get("candidate_index", 0)).item()))
         timing["load_s"] += perf_counter() - tick
         tick = perf_counter()
@@ -358,13 +371,17 @@ def evaluate_external_baselines(
         # conditioned risk profiles. Compute them once per candidate group rather
         # than once per method and once again for the selected record.
         oracle_names = {"oracle_filter", "oracle_recovery_filter", "branchwise_oracle_filter", "oracle_branchwise_recovery"}
-        learned_names = {"route_bc", "route_bc_lite", "waymax_bc", "waymax_bc_lite", "wayformer_bc", "wayformer_style_bc", "route_bc_wayformer", "gameformer", "gameformer_lite", "gameformer_levelk", "betop", "betop_lite", "betopnet", "betopnet_lite"}
-        need_profiles = any(m.lower() not in oracle_names | learned_names for m in methods)
+        learned_names = {"route_bc", "route_bc_lite", "waymax_bc", "waymax_bc_lite", "wayformer_bc", "wayformer_style_bc", "route_bc_wayformer", "gameformer", "gameformer_lite", "gameformer_levelk", "betop", "betop_lite", "betopnet", "betopnet_lite", "plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter", "pdm_hybrid", "pdm_hybrid_adapter"}
+        # PDM-Hybrid combines learned refinement logits with the same observation-
+        # only PDM risk scorer, so it still requires profiles at selection time.
+        profiled_learned = {"pdm_hybrid", "pdm_hybrid_adapter"}
+        pure_learned = learned_names - profiled_learned
+        need_profiles = any(m.lower() not in oracle_names | pure_learned for m in methods)
         tick = perf_counter()
         profiles = observed_risk_profiles(samples, model_cfg) if need_profiles else None
         timing["observed_risk_s"] += perf_counter() - tick
         for method in methods:
-            use_profiles = profiles if method.lower() not in oracle_names | learned_names else None
+            use_profiles = profiles if method.lower() not in oracle_names | pure_learned else None
             tick = perf_counter()
             sel = select_external_policy(method, samples, model_cfg, model_outputs=model_outputs, precomputed_profiles=use_profiles)
             selection_s = perf_counter() - tick
@@ -374,7 +391,7 @@ def evaluate_external_baselines(
             records_by_method[method].append(record)
         if gi == 1 or gi % 500 == 0:
             print({"event": "external_eval_progress", "groups_done": gi, "num_groups": len(groups)}, flush=True)
-    learned_methods = {"route_bc", "route_bc_lite", "waymax_bc", "waymax_bc_lite", "wayformer_bc", "wayformer_style_bc", "route_bc_wayformer", "gameformer", "gameformer_lite", "gameformer_levelk", "betop", "betop_lite", "betopnet", "betopnet_lite"}
+    learned_methods = {"route_bc", "route_bc_lite", "waymax_bc", "waymax_bc_lite", "wayformer_bc", "wayformer_style_bc", "route_bc_wayformer", "gameformer", "gameformer_lite", "gameformer_levelk", "betop", "betop_lite", "betopnet", "betopnet_lite", "plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter", "pdm_hybrid", "pdm_hybrid_adapter"}
     oracle_methods = {"oracle_filter", "oracle_recovery_filter", "branchwise_oracle_filter", "oracle_branchwise_recovery"}
     summaries = {}
     for m in methods:
@@ -389,10 +406,13 @@ def evaluate_external_baselines(
     timing["total_s"] = perf_counter() - eval_start
     timing["groups_per_second"] = float(len(groups) / max(timing["total_s"], 1e-9))
     timing["candidates_per_second"] = float(sum(len(x) for x in groups) / max(timing["total_s"], 1e-9))
+    requested_cfg_raw = json.dumps(cfg, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
     result = {
+        "artifact_status": "complete",
         "dataset": str(dataset),
         "split": split,
         "checkpoint": str(checkpoint) if checkpoint else None,
+        "requested_config_fingerprint": hashlib.sha256(requested_cfg_raw.encode("utf-8")).hexdigest(),
         "method_order": methods,
         "methods": summaries,
         "timing": timing,

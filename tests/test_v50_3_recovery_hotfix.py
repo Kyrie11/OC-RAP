@@ -109,9 +109,9 @@ def test_journal_finalizer_refuses_unknown_expected_count(tmp_path: Path) -> Non
 def test_external_index_uses_complete_artifacts_over_stale_failed_phase(tmp_path: Path) -> None:
     root = tmp_path / "external"
     expected = {
-        "safe": ["nominal_replay", "wayformer_bc", "gameformer_lite", "betopnet_lite"],
-        "near": ["gameformer_lite", "marc_lite", "racp_lite", "predictive_safety_filter", "dro_cvar_filter", "cvar_risk_filter", "expected_risk_filter"],
-        "contact": ["postimpact_mpc_lite", "post_crash_braking", "post_collision_restoration", "severity_minimization"],
+        "safe": ["gameformer_lite", "plantf", "pluto", "pdm_closed", "pdm_hybrid", "idm"],
+        "near": ["marc_lite", "racp_lite", "robust_scenario_mpc", "predictive_safety_filter", "dr_cvar_safety_filter", "conformal_predictive_safety_filter"],
+        "contact": ["postimpact_mpc_lite", "post_crash_braking", "postimpact_motion_tvlqr", "post_collision_restoration", "compensatory_postimpact_mpc", "robust_postimpact_control"],
     }
     for regime, methods in expected.items():
         (root / f"{regime}.phase.json").parent.mkdir(parents=True, exist_ok=True)

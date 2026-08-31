@@ -69,6 +69,16 @@ def _semantic_witness_checkpoint_feature_contract(model_cfg: dict) -> tuple[int,
     if not enabled:
         return 0, "disabled"
     if (
+        bool(model_cfg.get("direct_recovery_semantic_witness_interaction_anchor_support", False))
+        or bool(model_cfg.get("direct_recovery_semantic_witness_interaction_response_support", False))
+    ):
+        return 9, "interaction_response_history_reachability_projected_recovery_witness"
+    if (
+        bool(model_cfg.get("direct_recovery_semantic_witness_interaction_box_support", False))
+        or bool(model_cfg.get("direct_recovery_semantic_witness_interaction_hull_support", False))
+    ):
+        return 8, "interaction_oriented_history_reachability_projected_recovery_witness"
+    if (
         bool(model_cfg.get("direct_recovery_semantic_witness_boundary_localized_occupancy_trust", False))
         or bool(model_cfg.get("direct_recovery_semantic_witness_history_occupancy_reachability", False))
     ):
@@ -3216,6 +3226,18 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
         direct_recovery_semantic_witness_history_occupancy_reachability=bool(
             model_cfg.get("direct_recovery_semantic_witness_history_occupancy_reachability", False)
         ),
+        direct_recovery_semantic_witness_interaction_box_support=bool(
+            model_cfg.get("direct_recovery_semantic_witness_interaction_box_support", False)
+        ),
+        direct_recovery_semantic_witness_interaction_hull_support=bool(
+            model_cfg.get("direct_recovery_semantic_witness_interaction_hull_support", False)
+        ),
+        direct_recovery_semantic_witness_interaction_anchor_support=bool(
+            model_cfg.get("direct_recovery_semantic_witness_interaction_anchor_support", False)
+        ),
+        direct_recovery_semantic_witness_interaction_response_support=bool(
+            model_cfg.get("direct_recovery_semantic_witness_interaction_response_support", False)
+        ),
         direct_recovery_evidence_native_certificate_preservation=bool(
             model_cfg.get("direct_recovery_evidence_native_certificate_preservation", False)
         ),
@@ -3797,6 +3819,18 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None = None) 
             ),
             "direct_recovery_semantic_witness_history_occupancy_reachability": bool(
                 model_cfg.get("direct_recovery_semantic_witness_history_occupancy_reachability", False)
+            ),
+            "direct_recovery_semantic_witness_interaction_box_support": bool(
+                model_cfg.get("direct_recovery_semantic_witness_interaction_box_support", False)
+            ),
+            "direct_recovery_semantic_witness_interaction_hull_support": bool(
+                model_cfg.get("direct_recovery_semantic_witness_interaction_hull_support", False)
+            ),
+            "direct_recovery_semantic_witness_interaction_anchor_support": bool(
+                model_cfg.get("direct_recovery_semantic_witness_interaction_anchor_support", False)
+            ),
+            "direct_recovery_semantic_witness_interaction_response_support": bool(
+                model_cfg.get("direct_recovery_semantic_witness_interaction_response_support", False)
             ),
             "direct_recovery_evidence_native_certificate_preservation": bool(
                 model_cfg.get("direct_recovery_evidence_native_certificate_preservation", False)

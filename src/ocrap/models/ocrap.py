@@ -369,6 +369,10 @@ class OCRAPModel(nn.Module):
         direct_recovery_semantic_witness_soft_occupancy_disagreement: bool = False,
         direct_recovery_semantic_witness_boundary_localized_occupancy_trust: bool = False,
         direct_recovery_semantic_witness_history_occupancy_reachability: bool = False,
+        direct_recovery_semantic_witness_interaction_box_support: bool = False,
+        direct_recovery_semantic_witness_interaction_hull_support: bool = False,
+        direct_recovery_semantic_witness_interaction_anchor_support: bool = False,
+        direct_recovery_semantic_witness_interaction_response_support: bool = False,
         direct_recovery_evidence_native_certificate_preservation: bool = False,
         direct_recovery_evidence_native_margin_complete_preservation: bool = False,
         direct_recovery_evidence_native_advantage_preservation: bool = False,
@@ -725,6 +729,67 @@ class OCRAPModel(nn.Module):
             raise ValueError(
                 "v48.71 occupancy reachability trust cannot be combined with the rejected hard robust-occupancy min"
             )
+
+        # v48.72 OC-IORW: use the same observation-history acceleration evidence
+        # as v48.71, but resolve reachable occupancy along the candidate-specific
+        # ego-agent interaction normal rather than via an isotropic circumscribed
+        # ball.  The hull arm further removes unobserved Cartesian corner
+        # combinations by using the support function of conv({0,a_tau}).
+        self.direct_recovery_semantic_witness_interaction_box_support = bool(
+            direct_recovery_semantic_witness_interaction_box_support
+        )
+        self.direct_recovery_semantic_witness_interaction_hull_support = bool(
+            direct_recovery_semantic_witness_interaction_hull_support
+        )
+        interaction_oriented = (
+            self.direct_recovery_semantic_witness_interaction_box_support
+            or self.direct_recovery_semantic_witness_interaction_hull_support
+        )
+        if interaction_oriented and not (
+            self.direct_recovery_semantic_witness_projection_fidelity_weighting
+            and self.direct_recovery_semantic_witness_control_projection
+        ):
+            raise ValueError(
+                "v48.72 interaction-oriented reachability requires projection-fidelity weighting and control projection"
+            )
+        if interaction_oriented and (
+            self.direct_recovery_semantic_witness_soft_occupancy_disagreement
+            or self.direct_recovery_semantic_witness_boundary_localized_occupancy_trust
+            or self.direct_recovery_semantic_witness_history_occupancy_reachability
+            or self.direct_recovery_semantic_witness_robust_occupancy
+        ):
+            raise ValueError(
+                "v48.72 interaction-oriented reachability replaces prior occupancy trust mechanisms rather than stacking them"
+            )
+        if self.direct_recovery_semantic_witness_interaction_hull_support and not self.direct_recovery_semantic_witness_interaction_box_support:
+            # Hull support is the nested Main arm.  Requiring the box flag makes
+            # its metadata encode the causal chain explicitly while the model
+            # consumes only the hull coordinate when enabled.
+            raise ValueError("v48.72 hull support requires interaction box support flag")
+
+        # v48.73 OC-IRRW: retain v48.72 joint/directional acceleration geometry,
+        # but constrain its temporal evolution from the current observed state.
+        self.direct_recovery_semantic_witness_interaction_anchor_support = bool(
+            direct_recovery_semantic_witness_interaction_anchor_support
+        )
+        self.direct_recovery_semantic_witness_interaction_response_support = bool(
+            direct_recovery_semantic_witness_interaction_response_support
+        )
+        interaction_response = (
+            self.direct_recovery_semantic_witness_interaction_anchor_support
+            or self.direct_recovery_semantic_witness_interaction_response_support
+        )
+        if interaction_response and not (
+            self.direct_recovery_semantic_witness_interaction_box_support
+            and self.direct_recovery_semantic_witness_interaction_hull_support
+            and self.direct_recovery_semantic_witness_projection_fidelity_weighting
+            and self.direct_recovery_semantic_witness_control_projection
+        ):
+            raise ValueError(
+                "v48.73 interaction-response reachability requires the v48.72 empirical-hull projected-recovery chain"
+            )
+        if self.direct_recovery_semantic_witness_interaction_response_support and not self.direct_recovery_semantic_witness_interaction_anchor_support:
+            raise ValueError("v48.73 response support requires interaction anchor support flag")
         absolute_source_count = sum([
             self.direct_recovery_absolute_feasibility_head,
             self.direct_recovery_absolute_option_margin_correction,
@@ -2320,7 +2385,15 @@ class OCRAPModel(nn.Module):
             )
         feat = supplied_features.to(device=device, dtype=dtype)
         feature_dim = (
-            18 if (
+            22 if (
+                self.direct_recovery_semantic_witness_interaction_anchor_support
+                or self.direct_recovery_semantic_witness_interaction_response_support
+            ) else
+            (20 if (
+                self.direct_recovery_semantic_witness_interaction_box_support
+                or self.direct_recovery_semantic_witness_interaction_hull_support
+            ) else
+            (18 if (
                 self.direct_recovery_semantic_witness_boundary_localized_occupancy_trust
                 or self.direct_recovery_semantic_witness_history_occupancy_reachability
             ) else
@@ -2333,7 +2406,7 @@ class OCRAPModel(nn.Module):
                 or self.direct_recovery_semantic_witness_projection_fidelity_weighting
                 or self.direct_recovery_semantic_witness_demand_normalized_fidelity
                 or self.direct_recovery_semantic_witness_robust_occupancy
-            ) else 12))
+            ) else 12))))
         )
         expected = (int(batch_size), int(self.num_options), feature_dim)
         if feat.ndim != 3 or tuple(feat.shape) != expected:
@@ -2767,6 +2840,18 @@ class OCRAPModel(nn.Module):
         h_history_boundary_deficit = (
             features[..., 17] if features.shape[-1] >= 18 else torch.zeros_like(h_min)
         )
+        h_interaction_box_optimism = (
+            features[..., 18] if features.shape[-1] >= 20 else torch.zeros_like(h_min)
+        )
+        h_interaction_hull_optimism = (
+            features[..., 19] if features.shape[-1] >= 20 else torch.zeros_like(h_min)
+        )
+        h_interaction_anchor_optimism = (
+            features[..., 20] if features.shape[-1] >= 22 else torch.zeros_like(h_min)
+        )
+        h_interaction_response_optimism = (
+            features[..., 21] if features.shape[-1] >= 22 else torch.zeros_like(h_min)
+        )
 
         clear_recovery = torch.minimum(h_terminal, h_gain)
         clear_recovery_ok = (clear_recovery > 0.0) & (h_clear_floor_gain >= 0.0)
@@ -2953,6 +3038,33 @@ class OCRAPModel(nn.Module):
                 dtype=memory.dtype
             )
             common_support = common_support * occupancy_reachability_trust
+
+        if (
+            self.direct_recovery_semantic_witness_interaction_box_support
+            or self.direct_recovery_semantic_witness_interaction_hull_support
+        ):
+            # v48.72 uses static interaction-oriented ambiguity geometry.  v48.73
+            # keeps those diagnostics execution-exact but *replaces* their trust
+            # multiplier with a current-state-anchored temporal response support
+            # when the new nested flags are enabled.  No occupancy trust factors
+            # are stacked.  Every selected risk is non-negative and w>0, so the
+            # historical CV physical-certificate sign/set remains frozen.
+            if self.direct_recovery_semantic_witness_interaction_response_support:
+                h_occ = h_interaction_response_optimism
+            elif self.direct_recovery_semantic_witness_interaction_anchor_support:
+                h_occ = h_interaction_anchor_optimism
+            else:
+                h_occ = (
+                    h_interaction_hull_optimism
+                    if self.direct_recovery_semantic_witness_interaction_hull_support
+                    else h_interaction_box_optimism
+                )
+            eps_occ = torch.finfo(h_occ.dtype).eps * 16.0
+            interaction_risk = torch.relu(torch.atanh(
+                h_occ.float().clamp(-1.0 + eps_occ, 1.0 - eps_occ)
+            ))
+            interaction_trust = (1.0 / (1.0 + interaction_risk)).to(dtype=memory.dtype)
+            common_support = common_support * interaction_trust
 
         gains = self.direct_absolute_semantic_witness_gain.clamp(0.0, 2.0)
 

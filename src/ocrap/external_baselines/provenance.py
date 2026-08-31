@@ -57,6 +57,51 @@ REGISTRY: tuple[BaselineProvenance, ...] = (
         "GameFormer level-k adapter",
     ),
     BaselineProvenance(
+        "plantf", ("plantf", "plan_tf", "plantf_adapter"), ("safe",),
+        "Rethinking Imitation-based Planner for Autonomous Driving", 2024,
+        "https://arxiv.org/abs/2309.10443", "https://github.com/jchengai/planTF",
+        "WOMD candidate-lattice architecture adaptation", "paper-core adaptation",
+        ("pure imitation policy", "compact state/vector attention", "state-dropout regularization", "closed-loop candidate policy scoring"),
+        ("nuPlan feature builder/trajectory decoder replaced by OC-RAP tensors and executable prefixes", "not checkpoint-compatible with the official repository"),
+        "PlanTF adapter",
+    ),
+    BaselineProvenance(
+        "pluto", ("pluto", "pluto_adapter"), ("safe",),
+        "PLUTO: Pushing the Limit of Imitation Learning-based Planning for Autonomous Driving", 2024,
+        "https://arxiv.org/abs/2404.14327", "https://github.com/jchengai/pluto",
+        "WOMD candidate-lattice architecture adaptation", "paper-core adaptation",
+        ("longitudinal/lateral maneuver-aware queries", "imitation objective", "contrastive imitation signal", "candidate-level closed-loop selection"),
+        ("nuPlan renderer/augmentations and native trajectory decoder are not reproduced", "contrastive learning is implemented within the common candidate set rather than the authors' full batch augmentation pipeline"),
+        "PLUTO adapter",
+    ),
+    BaselineProvenance(
+        "pdm_closed", ("pdm_closed", "pdm_closed_adapter"), ("safe",),
+        "Parting with Misconceptions about Learning-based Vehicle Motion Planning", 2023,
+        "https://arxiv.org/abs/2306.07962", "https://github.com/autonomousvision/tuplan_garage",
+        "finite-lattice PDM-Closed adaptation", "paper-core adaptation",
+        ("route-centered proposal scoring", "IDM-style longitudinal preference", "collision/TTC safety", "progress and comfort scoring"),
+        ("native nuPlan centerline proposal generator and scorer geometry are replaced by the common OC-RAP executable candidate lattice",),
+        "PDM-Closed adapter",
+    ),
+    BaselineProvenance(
+        "pdm_hybrid", ("pdm_hybrid", "pdm_hybrid_adapter"), ("safe",),
+        "Parting with Misconceptions about Learning-based Vehicle Motion Planning", 2023,
+        "https://arxiv.org/abs/2306.07962", "https://github.com/autonomousvision/tuplan_garage",
+        "finite-lattice PDM-Hybrid adaptation", "paper-core adaptation",
+        ("PDM closed-loop rule score", "learned long-horizon ego refinement", "rule-plus-learned hybrid selection"),
+        ("native nuPlan PDM proposal generator and ego-forecasting model are replaced by OC-RAP candidates and a regime-trained refinement head",),
+        "PDM-Hybrid adapter",
+    ),
+    BaselineProvenance(
+        "idm", ("idm", "idm_planner"), ("safe",),
+        "Congested Traffic States in Empirical Observations and Microscopic Simulations (Intelligent Driver Model)", 2000,
+        "https://doi.org/10.1103/PhysRevE.62.1805", None,
+        "finite-lattice IDM control projection", "equation-core adaptation",
+        ("IDM desired acceleration", "front-gap and relative-speed interaction", "comfortable headway/deceleration parameters"),
+        ("continuous IDM acceleration is projected onto the nearest feasible executable candidate", "lateral path choice comes from the common candidate set"),
+        "IDM projection",
+    ),
+    BaselineProvenance(
         "betopnet_lite", ("betop", "betop_lite", "betopnet", "betopnet_lite"), ("safe",),
         "Reasoning Multi-Agent Behavioral Topology for Interactive Autonomous Driving", 2024,
         "https://arxiv.org/abs/2409.18031", "https://github.com/OpenDriveLab/BeTop",
@@ -76,12 +121,39 @@ REGISTRY: tuple[BaselineProvenance, ...] = (
     ),
     BaselineProvenance(
         "racp_lite", ("racp", "racp_lite", "risk_aware_contingency"), ("near",),
-        "RACP: Risk-Aware Contingency Planning with Multi-Modal Predictions", 2025,
+        "RACP: Risk-Aware Contingency Planning with Multi-Modal Predictions", 2024,
         "https://arxiv.org/abs/2402.17387", "https://github.com/KhMustafa/Risk-aware-contingency-planning-with-multi-modal-predictions",
         "finite-lattice belief/risk reproduction", "paper-core adaptation",
         ("belief-weighted multimodal prediction", "non-anticipative shared prefix", "branch risk with expected/CVaR mixture", "chance constraint", "utility-risk optimization"),
         ("continuous branch MPC is replaced by candidate enumeration", "not API/checkpoint compatible with official code", "belief update is prior-predictive until new online evidence arrives"),
         "RACP candidate-lattice planner",
+    ),
+    BaselineProvenance(
+        "robust_scenario_mpc", ("robust_scenario_mpc", "scenario_mpc", "batkovic_scenario_mpc"), ("near",),
+        "A Robust Scenario MPC Approach for Uncertain Multi-Modal Obstacles", 2021,
+        "https://doi.org/10.1109/LCSYS.2020.3006819", None,
+        "finite-lattice scenario MPC adaptation", "paper-core adaptation",
+        ("multi-modal scenario costs", "worst-scenario robust satisfaction", "expected-cost term", "smooth executable control preference"),
+        ("tube feedback policy and continuous MPC optimizer are replaced by explicit scoring of the shared executable candidate lattice",),
+        "Robust scenario MPC adapter",
+    ),
+    BaselineProvenance(
+        "dr_cvar_safety_filter", ("dr_cvar_safety_filter", "distributionally_robust_cvar_filter", "safaoui_dr_cvar_filter"), ("near",),
+        "Distributionally Robust CVaR-Based Safety Filtering for Motion Planning in Uncertain Environments", 2024,
+        "https://arxiv.org/abs/2309.08821", None,
+        "finite-lattice DR-CVaR safety-filter adaptation", "paper-core approximation",
+        ("sample-based obstacle uncertainty", "distributionally robust CVaR inflation", "minimal correction of a reference plan", "clearance admission"),
+        ("paper's DRO safe-halfspace construction and continuous MPC correction are replaced by a conservative Wasserstein-CVaR bound and nearest admitted candidate",),
+        "DR-CVaR safety filter adapter",
+    ),
+    BaselineProvenance(
+        "conformal_predictive_safety_filter", ("conformal_predictive_safety_filter", "conformal_safety_filter", "cpsf"), ("near",),
+        "Conformal Predictive Safety Filter for RL Controllers in Dynamic Environments", 2023,
+        "https://arxiv.org/abs/2306.02551", None,
+        "split-conformal finite-lattice safety-filter adaptation", "paper-core approximation",
+        ("held-out calibration only", "observation-only uncertainty/risk score", "frozen conformal admission threshold", "minimal-deviation safety projection"),
+        ("trajectory-wise conformal prediction intervals and learned RL safety filter are represented by binary risk admission over executable candidates",),
+        "Conformal predictive safety filter adapter",
     ),
     BaselineProvenance(
         "expected_risk_filter", ("expected_risk", "expected_risk_filter", "expected_risk_planner"), ("near",),
@@ -129,10 +201,12 @@ REGISTRY: tuple[BaselineProvenance, ...] = (
     ),
     BaselineProvenance(
         "post_crash_braking", ("post_crash_braking", "post_crash_braking_rule", "stable_stop", "stable_stop_rule", "postcrash_stable_stop"), ("contact",),
-        "Post-crash braking / stable-stop control (rule baseline)", None, None, None,
-        "deterministic rule baseline", "exact protocol definition",
-        ("braking/stabilization macro restriction", "terminal-speed and yaw-rate gates", "secondary-risk gate"), (),
-        "Post-crash stable stop",
+        "A System for Autonomous Braking of a Vehicle Following Collision", 2017,
+        "https://doi.org/10.4271/2017-01-1581", None,
+        "finite-lattice autonomous post-impact braking adaptation", "paper-core adaptation",
+        ("collision-triggered autonomous braking", "ABS-level stable-stop intent", "terminal-speed stabilization", "secondary-risk gate"),
+        ("hydraulic/ABS actuator dynamics are not present in WOMD; braking is projected onto executable brake/stabilize candidates",),
+        "Autonomous post-impact braking",
     ),
     BaselineProvenance(
         "post_collision_restoration", ("post_collision_restoration", "trajectory_restoration", "post_collision_trajectory_restoration", "post_collision_restoration_heuristic", "ackermann_restoration"), ("contact",),
@@ -143,6 +217,33 @@ REGISTRY: tuple[BaselineProvenance, ...] = (
         "Post-collision restoration",
     ),
     BaselineProvenance(
+        "postimpact_motion_tvlqr", ("postimpact_motion_tvlqr", "postimpact_motion_planning", "wang2022_postimpact", "postimpact_tvlqr"), ("contact",),
+        "Post-Impact Motion Planning and Tracking Control for Autonomous Vehicles", 2022,
+        "https://doi.org/10.1186/s10033-022-00745-w", None,
+        "finite-lattice post-impact planning/control adaptation", "paper-core adaptation",
+        ("post-impact trajectory re-alignment", "obstacle-potential avoidance", "TVLQR-like tracking/stability objective", "control-effort allocation proxy"),
+        ("polynomial/APF continuous planner, TVLQR generalized-force dynamics, and wheel torque allocator are replaced by candidate-level objectives because WOMD lacks wheel-force state",),
+        "Post-impact APF/TVLQR adapter",
+    ),
+    BaselineProvenance(
+        "compensatory_postimpact_mpc", ("compensatory_postimpact_mpc", "cao_postimpact_mpc"), ("contact",),
+        "Compensatory Model Predictive Control for Post-impact Trajectory Tracking via Active Front Steering and Differential Torque Vectoring", 2021,
+        "https://doi.org/10.1177/0954407020979087", None,
+        "finite-lattice FCC-MPC adaptation", "paper-core adaptation",
+        ("lateral/yaw deviation attenuation", "feedforward-feedback compensation objective", "input/rate and adhesion proxies", "secondary-collision risk term"),
+        ("wheel-level active-front-steering and differential-torque-vectoring allocation is unavailable in WOMD and is represented through candidate feasibility/control costs",),
+        "Compensatory post-impact MPC adapter",
+    ),
+    BaselineProvenance(
+        "robust_postimpact_control", ("robust_postimpact_control", "postimpact_sliding_mode", "ao_postimpact_control"), ("contact",),
+        "Advanced Post-impact Safety and Stability Control for Electric Vehicles", 2022,
+        "https://doi.org/10.1049/itr2.12230", None,
+        "finite-lattice sliding-mode/QP adaptation", "paper-core adaptation",
+        ("course/lateral sliding surfaces", "yaw/stability recovery", "adhesion-aware robust allocation proxy", "fault-tolerant control-rate preference"),
+        ("in-wheel-motor fault model and convex wheel-torque allocation cannot be reconstructed from WOMD and are represented by executable-candidate feasibility/adhesion costs",),
+        "Robust post-impact stability-control adapter",
+    ),
+    BaselineProvenance(
         "severity_minimization", ("severity_minimization", "severity_minimization_planner", "unavoidable_collision_planner", "crash_mitigation_planner", "uc_severity_planner"), ("contact",),
         "Motion planning for autonomous vehicles with the inclusion of post-impact motions for minimising collision risk", 2023,
         "https://doi.org/10.1080/00423114.2022.2088396", None, "finite-lattice severity objective", "paper-core adaptation",
@@ -151,6 +252,19 @@ REGISTRY: tuple[BaselineProvenance, ...] = (
         "Unavoidable-collision severity minimization",
     ),
 )
+
+
+MAIN_TABLE_BY_REGIME: dict[str, tuple[str, ...]] = {
+    "safe": ("gameformer_lite", "plantf", "pluto", "pdm_closed", "pdm_hybrid", "idm"),
+    "near": ("marc_lite", "racp_lite", "robust_scenario_mpc", "predictive_safety_filter", "dr_cvar_safety_filter", "conformal_predictive_safety_filter"),
+    "contact": ("postimpact_mpc_lite", "post_crash_braking", "postimpact_motion_tvlqr", "post_collision_restoration", "compensatory_postimpact_mpc", "robust_postimpact_control"),
+}
+
+LEGACY_OR_DIAGNOSTIC_BY_REGIME: dict[str, tuple[str, ...]] = {
+    "safe": ("nominal_replay", "wayformer_bc", "betopnet_lite"),
+    "near": ("gameformer_lite", "expected_risk_filter", "cvar_risk_filter", "dro_cvar_filter", "oracle_recovery_filter"),
+    "contact": ("severity_minimization",),
+}
 
 
 def find_provenance(name: str) -> BaselineProvenance | None:

@@ -9,6 +9,11 @@ from typing import Any
 
 
 METRICS = {
+    "safe": [
+        ("collision_scene_rate", -1.5), ("offroad_scene_rate", -1.0),
+        ("minimum_clearance_m", 0.75), ("minimum_ttc_s", 0.75),
+        ("closed_loop_bounded_NUP", 1.5), ("intervention_rate", -0.5),
+    ],
     "near": [
         ("collision_scene_rate", -1.0), ("offroad_scene_rate", -1.0),
         ("scene_min_clearance_m_p05", 1.0), ("scene_ttc_s_p05", 1.0),

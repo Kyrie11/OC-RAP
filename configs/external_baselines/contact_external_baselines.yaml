@@ -1,10 +1,15 @@
+# Main-table contact/post-impact baselines. These are post-impact control or
+# recovery methods; pre-impact unavoidable-collision severity planners are kept
+# only as legacy/supplementary baselines.
 external_baselines:
   baseline: postimpact_mpc_lite
   methods:
     - postimpact_mpc_lite
     - post_crash_braking
+    - postimpact_motion_tvlqr
     - post_collision_restoration
-    - severity_minimization
+    - compensatory_postimpact_mpc
+    - robust_postimpact_control
   max_candidates: 24
   policy:
     contact_dt: 0.1
@@ -12,7 +17,6 @@ external_baselines:
     vehicle_mass: 1750.0
     vehicle_iz: 2350.0
 
-    # Observation-only multi-modal future-risk model.
     risk_dt: 0.1
     risk_clearance_buffer_m: 0.75
     risk_clearance_scale_m: 2.0
@@ -22,7 +26,7 @@ external_baselines:
     backup_reaction_time_s: 0.25
     cvar_alpha: 0.20
 
-    # Planning-integrated post-impact MPC finite-lattice adapter.
+    # Wang et al. 2023 planning-integrated post-impact MPC.
     postimpact_dt: 0.1
     postimpact_mu: 0.75
     postimpact_sbd_margin: 4.0
@@ -44,7 +48,7 @@ external_baselines:
     postimpact_adhesion_gate: 1.25
     postimpact_risk_gate: 1.25
 
-    # Post-crash braking / stable-stop controller.
+    # Lu et al. 2017 autonomous post-impact braking / stable stop.
     stable_stop_terminal_speed_weight: 1.8
     stable_stop_yaw_rate_weight: 2.0
     stable_stop_yaw_acc_weight: 0.20
@@ -58,7 +62,20 @@ external_baselines:
     stable_stop_yaw_rate_gate: 1.4
     stable_stop_risk_gate: 1.25
 
-    # Two-stage sinusoidal steering/tractive-force restoration heuristic.
+    # Wang et al. 2022 polynomial/APF motion planning + TVLQR tracking adapter.
+    tvlqr_lateral_weight: 1.2
+    tvlqr_heading_weight: 1.0
+    tvlqr_yaw_rate_weight: 1.5
+    tvlqr_yaw_acc_weight: 0.15
+    tvlqr_apf_risk_weight: 4.5
+    tvlqr_cvar_weight: 2.0
+    tvlqr_control_weight: 0.12
+    tvlqr_control_rate_weight: 0.05
+    tvlqr_progress_weight: 0.10
+    tvlqr_yaw_rate_gate: 2.2
+    tvlqr_risk_gate: 1.5
+
+    # Ghosh et al. 2026 heuristic steering/tractive-force restoration.
     restoration_tau0: 0.1
     restoration_tau1: 0.45
     restoration_tau2: 0.65
@@ -82,22 +99,42 @@ external_baselines:
     restoration_yaw_rate_gate: 2.2
     restoration_risk_gate: 1.5
 
-    # Unavoidable-contact severity minimization.
-    severity_collision_probability_weight: 8.0
-    severity_observed_risk_weight: 5.0
-    severity_tail_risk_weight: 2.5
-    severity_relative_speed_weight: 3.0
-    severity_delta_v_weight: 2.0
-    severity_residual_energy_weight: 0.8
-    severity_instability_weight: 1.2
-    severity_backup_margin_weight: 0.08
-    severity_utility_tiebreak: 0.05
-    severity_contact_macro_bonus: 0.20
+    # Cao et al. 2021 FCC-MPC via AFS + differential torque vectoring.
+    comp_mpc_lateral_weight: 1.4
+    comp_mpc_heading_weight: 1.1
+    comp_mpc_yaw_rate_weight: 1.5
+    comp_mpc_yaw_acc_weight: 0.12
+    comp_mpc_control_weight: 0.16
+    comp_mpc_control_rate_weight: 0.05
+    comp_mpc_adhesion_weight: 1.0
+    comp_mpc_expected_risk_weight: 4.0
+    comp_mpc_cvar_weight: 2.0
+    comp_mpc_utility_weight: 0.10
+    comp_mpc_yaw_rate_gate: 2.2
+    comp_mpc_risk_gate: 1.5
+
+    # Ao et al. 2022 sliding-mode + fault-tolerant convex-QP allocation.
+    robust_pic_lambda_y: 0.8
+    robust_pic_lambda_heading: 0.7
+    robust_pic_adhesion_target: 0.9
+    robust_pic_surface_y_weight: 1.4
+    robust_pic_surface_heading_weight: 1.6
+    robust_pic_yaw_rate_weight: 1.2
+    robust_pic_adhesion_weight: 1.2
+    robust_pic_control_rate_weight: 0.08
+    robust_pic_expected_risk_weight: 4.5
+    robust_pic_cvar_weight: 2.5
+    robust_pic_adhesion_gate: 1.30
+    robust_pic_risk_gate: 1.5
+  training:
+    validate_dataset: true
+    device: cpu
+    epochs: 1
 
 closed_loop:
-  label_mode: selected
+  label_mode: fast
   force_teacher_baselines: false
-  external_sparse_labels: false
+  external_sparse_labels: true
   exhaustive_teacher_labels: false
   num_recovery_options: 12
   save_partial: false

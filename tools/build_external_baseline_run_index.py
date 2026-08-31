@@ -7,11 +7,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-EXPECTED = {
-    "safe": ["nominal_replay", "wayformer_bc", "gameformer_lite", "betopnet_lite"],
-    "near": ["gameformer_lite", "marc_lite", "racp_lite", "predictive_safety_filter", "dro_cvar_filter", "cvar_risk_filter", "expected_risk_filter"],
-    "contact": ["postimpact_mpc_lite", "post_crash_braking", "post_collision_restoration", "severity_minimization"],
-}
+from ocrap.external_baselines.provenance import MAIN_TABLE_BY_REGIME
+
+EXPECTED = {regime: list(methods) for regime, methods in MAIN_TABLE_BY_REGIME.items()}
 
 
 def read_json(path: Path) -> dict[str, Any] | None:
@@ -90,8 +88,8 @@ def main() -> int:
         }
     complete = not failed and int(args.launcher_exit_code) == 0
     doc = {
-        "event": "all_regime_external_baselines_v50_3",
-        "schema_version": 3,
+        "event": "all_regime_external_baselines_v50_4",
+        "schema_version": 4,
         "root": str(args.root),
         "launcher_exit_code": int(args.launcher_exit_code),
         "closed_loop_enabled": closed_loop,

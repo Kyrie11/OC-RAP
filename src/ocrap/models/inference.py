@@ -20,6 +20,8 @@ from ocrap.models.data import (
     DIRECT_DEMAND_TEMPERED_RECOVERY_WITNESS_FEATURE_SCHEMA,
     DIRECT_OCCUPANCY_TEMPERED_RECOVERY_WITNESS_FEATURE_SCHEMA,
     DIRECT_BOUNDARY_OCCUPANCY_REACHABILITY_WITNESS_FEATURE_SCHEMA,
+    DIRECT_INTERACTION_ORIENTED_RECOVERY_WITNESS_FEATURE_SCHEMA,
+    DIRECT_INTERACTION_RESPONSE_RECOVERY_WITNESS_FEATURE_SCHEMA,
     direct_absolute_physical_headroom_features_from_sample,
     direct_executable_recovery_witness_features_from_sample,
     direct_common_recovery_witness_features_from_sample,
@@ -272,8 +274,28 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_semantic_witness_history_occupancy_reachability",
             model_cfg.get("direct_recovery_semantic_witness_history_occupancy_reachability", False),
         ))
+        interaction_box_support = bool(ckpt.get(
+            "direct_recovery_semantic_witness_interaction_box_support",
+            model_cfg.get("direct_recovery_semantic_witness_interaction_box_support", False),
+        ))
+        interaction_hull_support = bool(ckpt.get(
+            "direct_recovery_semantic_witness_interaction_hull_support",
+            model_cfg.get("direct_recovery_semantic_witness_interaction_hull_support", False),
+        ))
+        interaction_anchor_support = bool(ckpt.get(
+            "direct_recovery_semantic_witness_interaction_anchor_support",
+            model_cfg.get("direct_recovery_semantic_witness_interaction_anchor_support", False),
+        ))
+        interaction_response_support = bool(ckpt.get(
+            "direct_recovery_semantic_witness_interaction_response_support",
+            model_cfg.get("direct_recovery_semantic_witness_interaction_response_support", False),
+        ))
         expected_semantic_schema = (
-            DIRECT_BOUNDARY_OCCUPANCY_REACHABILITY_WITNESS_FEATURE_SCHEMA
+            DIRECT_INTERACTION_RESPONSE_RECOVERY_WITNESS_FEATURE_SCHEMA
+            if (interaction_anchor_support or interaction_response_support)
+            else (DIRECT_INTERACTION_ORIENTED_RECOVERY_WITNESS_FEATURE_SCHEMA
+            if (interaction_box_support or interaction_hull_support)
+            else (DIRECT_BOUNDARY_OCCUPANCY_REACHABILITY_WITNESS_FEATURE_SCHEMA
             if (boundary_localized_occupancy_trust or history_occupancy_reachability)
             else (DIRECT_OCCUPANCY_TEMPERED_RECOVERY_WITNESS_FEATURE_SCHEMA
             if soft_occupancy_disagreement
@@ -285,7 +307,7 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
                   if (control_projection or boundary_transport)
                   else (DIRECT_ACTIVE_CONSTRAINT_RECOVERY_WITNESS_FEATURE_SCHEMA
                         if (route_alignment or reentry_alignment)
-                        else DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA)))))
+                        else DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA)))))))
         )
         if feature_schema != expected_semantic_schema:
             raise RuntimeError(
@@ -501,6 +523,22 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         direct_recovery_semantic_witness_history_occupancy_reachability=bool(ckpt.get(
             "direct_recovery_semantic_witness_history_occupancy_reachability",
             model_cfg.get("direct_recovery_semantic_witness_history_occupancy_reachability", False),
+        )),
+        direct_recovery_semantic_witness_interaction_box_support=bool(ckpt.get(
+            "direct_recovery_semantic_witness_interaction_box_support",
+            model_cfg.get("direct_recovery_semantic_witness_interaction_box_support", False),
+        )),
+        direct_recovery_semantic_witness_interaction_hull_support=bool(ckpt.get(
+            "direct_recovery_semantic_witness_interaction_hull_support",
+            model_cfg.get("direct_recovery_semantic_witness_interaction_hull_support", False),
+        )),
+        direct_recovery_semantic_witness_interaction_anchor_support=bool(ckpt.get(
+            "direct_recovery_semantic_witness_interaction_anchor_support",
+            model_cfg.get("direct_recovery_semantic_witness_interaction_anchor_support", False),
+        )),
+        direct_recovery_semantic_witness_interaction_response_support=bool(ckpt.get(
+            "direct_recovery_semantic_witness_interaction_response_support",
+            model_cfg.get("direct_recovery_semantic_witness_interaction_response_support", False),
         )),
         direct_recovery_evidence_native_certificate_preservation=bool(ckpt.get(
             "direct_recovery_evidence_native_certificate_preservation",
@@ -792,6 +830,18 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_semantic_witness_history_occupancy_reachability"] = bool(
         model.direct_recovery_semantic_witness_history_occupancy_reachability
     )
+    cfg["model"]["direct_recovery_semantic_witness_interaction_box_support"] = bool(
+        model.direct_recovery_semantic_witness_interaction_box_support
+    )
+    cfg["model"]["direct_recovery_semantic_witness_interaction_hull_support"] = bool(
+        model.direct_recovery_semantic_witness_interaction_hull_support
+    )
+    cfg["model"]["direct_recovery_semantic_witness_interaction_anchor_support"] = bool(
+        model.direct_recovery_semantic_witness_interaction_anchor_support
+    )
+    cfg["model"]["direct_recovery_semantic_witness_interaction_response_support"] = bool(
+        model.direct_recovery_semantic_witness_interaction_response_support
+    )
     cfg["model"]["direct_recovery_evidence_native_certificate_preservation"] = bool(
         model.direct_recovery_evidence_native_certificate_preservation
     )
@@ -1067,6 +1117,22 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_semantic_witness_history_occupancy_reachability",
             model_cfg.get("direct_recovery_semantic_witness_history_occupancy_reachability", False),
         )),
+        "direct_recovery_semantic_witness_interaction_box_support": bool(ckpt.get(
+            "direct_recovery_semantic_witness_interaction_box_support",
+            model_cfg.get("direct_recovery_semantic_witness_interaction_box_support", False),
+        )),
+        "direct_recovery_semantic_witness_interaction_hull_support": bool(ckpt.get(
+            "direct_recovery_semantic_witness_interaction_hull_support",
+            model_cfg.get("direct_recovery_semantic_witness_interaction_hull_support", False),
+        )),
+        "direct_recovery_semantic_witness_interaction_anchor_support": bool(ckpt.get(
+            "direct_recovery_semantic_witness_interaction_anchor_support",
+            model_cfg.get("direct_recovery_semantic_witness_interaction_anchor_support", False),
+        )),
+        "direct_recovery_semantic_witness_interaction_response_support": bool(ckpt.get(
+            "direct_recovery_semantic_witness_interaction_response_support",
+            model_cfg.get("direct_recovery_semantic_witness_interaction_response_support", False),
+        )),
     }
     actual_contract = {
         "direct_recovery_evidence_calibrator_context": bool(model.direct_recovery_evidence_calibrator_context),
@@ -1151,6 +1217,18 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         ),
         "direct_recovery_semantic_witness_history_occupancy_reachability": bool(
             model.direct_recovery_semantic_witness_history_occupancy_reachability
+        ),
+        "direct_recovery_semantic_witness_interaction_box_support": bool(
+            model.direct_recovery_semantic_witness_interaction_box_support
+        ),
+        "direct_recovery_semantic_witness_interaction_hull_support": bool(
+            model.direct_recovery_semantic_witness_interaction_hull_support
+        ),
+        "direct_recovery_semantic_witness_interaction_anchor_support": bool(
+            model.direct_recovery_semantic_witness_interaction_anchor_support
+        ),
+        "direct_recovery_semantic_witness_interaction_response_support": bool(
+            model.direct_recovery_semantic_witness_interaction_response_support
         ),
     }
     if expected_contract != actual_contract:

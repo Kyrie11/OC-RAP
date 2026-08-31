@@ -160,19 +160,50 @@ class GameFormerFutureEncoder(nn.Module):
         self.step_mlp = nn.Sequential(nn.Linear(8, d_model), nn.GELU(), nn.Dropout(dropout), nn.Linear(d_model, d_model))
         self.pool = nn.Sequential(nn.LayerNorm(d_model), nn.Linear(d_model, d_model), nn.GELU())
 
+    @staticmethod
+    def _stable_motion_state(traj_xy: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return velocity and heading without an undefined atan2 backward.
+
+        The decoder trajectory is a cumulative displacement from the current ego
+        origin, so the first finite difference must use (0, 0) as its previous
+        point.  The old code reused the first predicted point itself, artificially
+        forcing the first velocity to zero and feeding ``atan2(0, 0)`` into the
+        graph.  That angle has an undefined mathematical derivative and can yield
+        non-finite CUDA/BF16 gradients even when every forward loss is finite.
+        Genuine stationary steps still have no defined heading, so give them a
+        neutral +x direction *before* atan2; the boolean branch deliberately
+        carries zero heading gradient for those near-stationary steps.
+        """
+        # Do the finite-difference / angle math in FP32 even when the surrounding
+        # GameFormer forward is under BF16 autocast.  This is tiny compared with
+        # attention/LSTM compute and removes precision-sensitive angle gradients.
+        traj32 = traj_xy.float()
+        origin = torch.zeros_like(traj32[..., :1, :])
+        prev = torch.cat([origin, traj32[..., :-1, :]], dim=-2)
+        dxy = traj32 - prev
+        motion_sq = dxy.square().sum(dim=-1)
+        moving = motion_sq > 1.0e-8
+        safe_dx = torch.where(moving, dxy[..., 0], torch.ones_like(dxy[..., 0]))
+        safe_dy = torch.where(moving, dxy[..., 1], torch.zeros_like(dxy[..., 1]))
+        heading = torch.atan2(safe_dy, safe_dx).unsqueeze(-1)
+        vel = dxy / 0.1
+        return vel, heading
+
     def forward(self, traj_xy: torch.Tensor, scores: torch.Tensor) -> torch.Tensor:
         # traj_xy: [B,N,M,T,2], scores: [B,N,M]
         B, N, M, T, _ = traj_xy.shape
-        prev = torch.cat([traj_xy[..., :1, :], traj_xy[..., :-1, :]], dim=-2)
-        dxy = traj_xy - prev
-        vel = dxy / 0.1
-        heading = torch.atan2(dxy[..., 1], dxy[..., 0]).unsqueeze(-1)
-        size = torch.ones(B, N, M, T, 2, device=traj_xy.device, dtype=traj_xy.dtype)
-        valid = torch.ones(B, N, M, T, 1, device=traj_xy.device, dtype=traj_xy.dtype)
-        state = torch.cat([traj_xy, heading, vel, size, valid], dim=-1)
+        vel32, heading32 = self._stable_motion_state(traj_xy)
+        # Keep the learned MLP in the surrounding autocast dtype for throughput;
+        # only the numerically sensitive geometric transform above is FP32.
+        state_dtype = traj_xy.dtype
+        size = torch.ones(B, N, M, T, 2, device=traj_xy.device, dtype=state_dtype)
+        valid = torch.ones(B, N, M, T, 1, device=traj_xy.device, dtype=state_dtype)
+        state = torch.cat([traj_xy, heading32.to(state_dtype), vel32.to(state_dtype), size, valid], dim=-1)
         step = self.step_mlp(state)
         pooled = step.max(dim=-2).values
-        weights = torch.softmax(scores, dim=-1).unsqueeze(-1)
+        # Softmax is cheap and is a second numerically sensitive reduction.
+        # Evaluate it in FP32 and cast the probabilities back for the weighted sum.
+        weights = torch.softmax(scores.float().clamp(-50.0, 50.0), dim=-1).to(pooled.dtype).unsqueeze(-1)
         return self.pool((pooled * weights).sum(dim=2))
 
 
@@ -575,6 +606,215 @@ class BeTopNetLite(nn.Module):
         return out
 
 
+class _SceneContextEncoder(nn.Module):
+    """Observation-only scene encoder shared by direct-planning adapters.
+
+    The external-baseline dataset exposes the same deployable history/map tensors
+    to all adapters.  This encoder deliberately avoids OC-RAP teacher/root labels.
+    """
+
+    def __init__(self, d_model: int, dropout: float, actor_dim: int = ACTOR_TOPO_FEATURE_DIM, map_dim: int = MAP_TOPO_FEATURE_DIM) -> None:
+        super().__init__()
+        self.ego = nn.Sequential(nn.Linear(GAMEFORMER_STATE_DIM, d_model), nn.GELU(), nn.LayerNorm(d_model))
+        self.neighbor = nn.Sequential(nn.Linear(GAMEFORMER_STATE_DIM, d_model), nn.GELU())
+        self.actor = nn.Sequential(nn.Linear(actor_dim, d_model), nn.GELU())
+        self.map = nn.Sequential(nn.Linear(map_dim, d_model), nn.GELU())
+        self.fuse = nn.Sequential(nn.LayerNorm(4 * d_model), nn.Linear(4 * d_model, d_model), nn.GELU(), nn.Dropout(dropout))
+
+    @staticmethod
+    def _masked_mean(x: torch.Tensor, mask: torch.Tensor | None, dim: int) -> torch.Tensor:
+        if mask is None:
+            return x.mean(dim=dim)
+        w = mask.to(dtype=x.dtype).unsqueeze(-1)
+        return (x * w).sum(dim=dim) / w.sum(dim=dim).clamp_min(1.0)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        *,
+        ego_history: torch.Tensor | None = None,
+        neighbor_history: torch.Tensor | None = None,
+        neighbor_valid: torch.Tensor | None = None,
+        actor_topology_features: torch.Tensor | None = None,
+        actor_topology_mask: torch.Tensor | None = None,
+        map_topology_features: torch.Tensor | None = None,
+        map_topology_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        B, N, _ = x.shape
+        z0 = x.new_zeros(B, N, self.ego[0].out_features)
+        if ego_history is not None and ego_history.numel():
+            z_ego = self.ego(ego_history[..., -1, :])
+        else:
+            z_ego = z0
+        if neighbor_history is not None and neighbor_history.numel():
+            nh = self.neighbor(neighbor_history)
+            hist_mask = neighbor_valid.bool() if neighbor_valid is not None else None
+            nh = self._masked_mean(nh, hist_mask, dim=-2)
+            agent_mask = hist_mask.any(dim=-1) if hist_mask is not None else None
+            z_nei = self._masked_mean(nh, agent_mask, dim=-2)
+        else:
+            z_nei = z0
+        if actor_topology_features is not None and actor_topology_features.numel():
+            af = self.actor(actor_topology_features)
+            z_actor = self._masked_mean(af, actor_topology_mask.bool() if actor_topology_mask is not None else None, dim=-2)
+        else:
+            z_actor = z0
+        if map_topology_features is not None and map_topology_features.numel():
+            mf = self.map(map_topology_features)
+            z_map = self._masked_mean(mf, map_topology_mask.bool() if map_topology_mask is not None else None, dim=-2)
+        else:
+            z_map = z0
+        return self.fuse(torch.cat([z_ego, z_nei, z_actor, z_map], dim=-1))
+
+
+class PlanTFAdapter(nn.Module):
+    """PlanTF paper-core adapter over the common OC-RAP candidate lattice.
+
+    It keeps the two design ideas that transfer cleanly across datasets: a compact
+    vector/state representation fused by self-attention, and state-dropout during
+    imitation training to reduce over-reliance on scene state.  The official
+    nuPlan trajectory decoder is replaced by scoring executable candidate prefixes.
+    """
+
+    def __init__(self, input_dim: int, max_candidates: int = 32, d_model: int = 128, num_layers: int = 4, num_heads: int = 8, dropout: float = 0.10, state_dropout: float = 0.25, actor_topology_feature_dim: int = ACTOR_TOPO_FEATURE_DIM, map_topology_feature_dim: int = MAP_TOPO_FEATURE_DIM) -> None:
+        super().__init__()
+        self.max_candidates = int(max_candidates)
+        self.d_model = int(d_model)
+        self.state_dropout = float(state_dropout)
+        self.token = nn.Sequential(nn.LayerNorm(input_dim), nn.Linear(input_dim, d_model), nn.GELU())
+        self.context = _SceneContextEncoder(d_model, dropout, actor_topology_feature_dim, map_topology_feature_dim)
+        self.pos = nn.Parameter(torch.zeros(1, self.max_candidates, d_model))
+        layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=int(num_heads), dim_feedforward=4*d_model, dropout=float(dropout), activation='gelu', batch_first=True, norm_first=True)
+        self.encoder = _make_transformer_encoder(layer, int(num_layers))
+        self.norm = nn.LayerNorm(d_model)
+        self.policy_head = nn.Sequential(nn.Linear(d_model, d_model), nn.GELU(), nn.Dropout(dropout), nn.Linear(d_model, 1))
+        self.scalar_heads = ScalarHeads(d_model)
+
+    def _position(self, n: int) -> torch.Tensor:
+        if n <= self.pos.shape[1]:
+            return self.pos[:, :n]
+        return torch.cat([self.pos, self.pos[:, -1:].expand(1, n-self.pos.shape[1], -1)], dim=1)
+
+    def forward(self, x: torch.Tensor, mask: torch.Tensor | None = None, **kwargs: torch.Tensor) -> dict[str, torch.Tensor]:
+        h = self.token(x)
+        ctx = self.context(x, **{k: kwargs.get(k) for k in ('ego_history','neighbor_history','neighbor_valid','actor_topology_features','actor_topology_mask','map_topology_features','map_topology_mask')})
+        if self.training and self.state_dropout > 0:
+            keep = (torch.rand(ctx.shape[:-1], device=ctx.device) >= self.state_dropout).to(ctx.dtype).unsqueeze(-1)
+            ctx = ctx * keep
+        h = h + ctx + self._position(h.shape[1])
+        h = self.encoder(h, src_key_padding_mask=None if mask is None else ~mask.bool())
+        h = self.norm(h)
+        logits = self.policy_head(h).squeeze(-1)
+        if mask is not None:
+            logits = logits.masked_fill(~mask.bool(), -1.0e4)
+        out = {'logits': logits}
+        out.update(self.scalar_heads(h))
+        return out
+
+
+class PLUTOAdapter(nn.Module):
+    """PLUTO query-style lateral/longitudinal imitation adapter.
+
+    Maneuver queries model lateral and longitudinal intent jointly.  Candidate
+    prefix displacement supplies the maneuver coordinate, while a scene-query
+    contrastive head provides the CIL-style within-scene discrimination signal.
+    """
+
+    def __init__(self, input_dim: int, max_candidates: int = 32, d_model: int = 192, num_layers: int = 4, num_heads: int = 8, dropout: float = 0.10, lateral_queries: int = 5, longitudinal_queries: int = 5, contrastive_temperature: float = 0.10, actor_topology_feature_dim: int = ACTOR_TOPO_FEATURE_DIM, map_topology_feature_dim: int = MAP_TOPO_FEATURE_DIM) -> None:
+        super().__init__()
+        self.max_candidates = int(max_candidates)
+        self.d_model = int(d_model)
+        self.temperature = max(float(contrastive_temperature), 1e-3)
+        self.token = nn.Sequential(nn.LayerNorm(input_dim), nn.Linear(input_dim, d_model), nn.GELU())
+        self.context = _SceneContextEncoder(d_model, dropout, actor_topology_feature_dim, map_topology_feature_dim)
+        self.maneuver = nn.Sequential(nn.Linear(4, d_model), nn.GELU(), nn.Linear(d_model, d_model))
+        self.lat_q = nn.Parameter(torch.randn(1, int(lateral_queries), d_model) * 0.02)
+        self.lon_q = nn.Parameter(torch.randn(1, int(longitudinal_queries), d_model) * 0.02)
+        self.query_attn = nn.MultiheadAttention(d_model, int(num_heads), dropout=float(dropout), batch_first=True)
+        self.pos = nn.Parameter(torch.zeros(1, self.max_candidates, d_model))
+        layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=int(num_heads), dim_feedforward=4*d_model, dropout=float(dropout), activation='gelu', batch_first=True, norm_first=True)
+        self.encoder = _make_transformer_encoder(layer, int(num_layers))
+        self.norm = nn.LayerNorm(d_model)
+        self.policy_head = nn.Linear(d_model, 1)
+        self.scalar_heads = ScalarHeads(d_model)
+        self.scene_proj = nn.Linear(d_model, d_model)
+        self.cand_proj = nn.Linear(d_model, d_model)
+
+    def _position(self, n: int) -> torch.Tensor:
+        if n <= self.pos.shape[1]: return self.pos[:, :n]
+        return torch.cat([self.pos, self.pos[:, -1:].expand(1, n-self.pos.shape[1], -1)], dim=1)
+
+    def _maneuver_features(self, x: torch.Tensor, prefix_traj: torch.Tensor | None, prefix_valid: torch.Tensor | None) -> torch.Tensor:
+        B,N,_ = x.shape
+        if prefix_traj is None or prefix_traj.numel() == 0:
+            return x.new_zeros(B,N,4)
+        pt = prefix_traj
+        if prefix_valid is None:
+            end = pt[..., -1, :]
+        else:
+            idx = prefix_valid.long().sum(dim=-1).clamp_min(1) - 1
+            gather = idx[..., None, None].expand(B,N,1,2)
+            end = torch.gather(pt, dim=-2, index=gather).squeeze(-2)
+        start = pt[..., 0, :]
+        d = end - start
+        dist = torch.linalg.norm(d, dim=-1, keepdim=True)
+        lat_ratio = d[..., 1:2] / dist.clamp_min(1e-3)
+        return torch.cat([d, dist, lat_ratio], dim=-1)
+
+    def forward(self, x: torch.Tensor, mask: torch.Tensor | None = None, prefix_traj: torch.Tensor | None = None, prefix_valid: torch.Tensor | None = None, **kwargs: torch.Tensor) -> dict[str, torch.Tensor]:
+        B,N,_ = x.shape
+        ctx = self.context(x, **{k: kwargs.get(k) for k in ('ego_history','neighbor_history','neighbor_valid','actor_topology_features','actor_topology_mask','map_topology_features','map_topology_mask')})
+        h = self.token(x) + ctx + self.maneuver(self._maneuver_features(x, prefix_traj, prefix_valid)) + self._position(N)
+        queries = torch.cat([self.lat_q.expand(B,-1,-1), self.lon_q.expand(B,-1,-1)], dim=1)
+        qctx,_ = self.query_attn(h, queries, queries, need_weights=False)
+        h = self.encoder(h + qctx, src_key_padding_mask=None if mask is None else ~mask.bool())
+        h = self.norm(h)
+        logits = self.policy_head(h).squeeze(-1)
+        if mask is not None: logits = logits.masked_fill(~mask.bool(), -1.0e4)
+        valid = mask.to(h.dtype).unsqueeze(-1) if mask is not None else torch.ones_like(h[..., :1])
+        scene = (h * valid).sum(dim=1) / valid.sum(dim=1).clamp_min(1.0)
+        c = F.normalize(self.cand_proj(h), dim=-1)
+        s = F.normalize(self.scene_proj(scene), dim=-1).unsqueeze(-1)
+        contrastive_logits = torch.matmul(c, s).squeeze(-1) / self.temperature
+        if mask is not None: contrastive_logits = contrastive_logits.masked_fill(~mask.bool(), -1.0e4)
+        out={'logits': logits, 'pluto_contrastive_logits': contrastive_logits}
+        out.update(self.scalar_heads(h))
+        return out
+
+
+class PDMHybridAdapter(nn.Module):
+    """Learned long-horizon refinement head used by the PDM-Hybrid selector."""
+
+    def __init__(self, input_dim: int, max_candidates: int = 32, d_model: int = 128, num_layers: int = 3, num_heads: int = 4, dropout: float = 0.10) -> None:
+        super().__init__()
+        self.max_candidates=int(max_candidates)
+        self.token=nn.Sequential(nn.LayerNorm(input_dim), nn.Linear(input_dim,d_model), nn.GELU())
+        self.traj=nn.Sequential(nn.Linear(4,d_model), nn.GELU())
+        self.pos=nn.Parameter(torch.zeros(1,self.max_candidates,d_model))
+        layer=nn.TransformerEncoderLayer(d_model=d_model,nhead=int(num_heads),dim_feedforward=4*d_model,dropout=float(dropout),activation='gelu',batch_first=True,norm_first=True)
+        self.encoder=_make_transformer_encoder(layer,int(num_layers))
+        self.norm=nn.LayerNorm(d_model)
+        self.policy_head=nn.Linear(d_model,1)
+        self.scalar_heads=ScalarHeads(d_model)
+
+    def forward(self,x:torch.Tensor,mask:torch.Tensor|None=None,prefix_traj:torch.Tensor|None=None,prefix_valid:torch.Tensor|None=None,**_:torch.Tensor)->dict[str,torch.Tensor]:
+        B,N,_=x.shape
+        mf=x.new_zeros(B,N,4)
+        if prefix_traj is not None and prefix_traj.numel():
+            start=prefix_traj[...,0,:]
+            if prefix_valid is None: end=prefix_traj[...,-1,:]
+            else:
+                idx=prefix_valid.long().sum(dim=-1).clamp_min(1)-1
+                end=torch.gather(prefix_traj,-2,idx[...,None,None].expand(B,N,1,2)).squeeze(-2)
+            d=end-start; mf=torch.cat([d, torch.linalg.norm(d,dim=-1,keepdim=True), d[...,1:2].abs()],dim=-1)
+        pos=self.pos[:,:N] if N<=self.pos.shape[1] else torch.cat([self.pos,self.pos[:,-1:].expand(1,N-self.pos.shape[1],-1)],dim=1)
+        h=self.encoder(self.token(x)+self.traj(mf)+pos,src_key_padding_mask=None if mask is None else ~mask.bool())
+        h=self.norm(h); logits=self.policy_head(h).squeeze(-1)
+        if mask is not None: logits=logits.masked_fill(~mask.bool(),-1e4)
+        out={'logits':logits,'pdm_refinement_logits':logits}
+        out.update(self.scalar_heads(h)); return out
+
+
 CandidateSetTransformer = WayformerRouteBC
 
 
@@ -606,6 +846,24 @@ def build_model_from_cfg(input_dim: int, cfg: dict[str, Any]) -> nn.Module:
             use_teacher_branch_context=bool(mcfg.get("use_teacher_branch_context", False)),
             traj_step_scale=float(mcfg.get("traj_step_scale", 1.5)),
         )
+    if arch in {"plantf", "plan_tf", "plantf_adapter"} or baseline in {"plantf", "plan_tf", "plantf_adapter"}:
+        return PlanTFAdapter(
+            **common,
+            state_dropout=float(mcfg.get("state_dropout", 0.25)),
+            actor_topology_feature_dim=int(mcfg.get("actor_topology_feature_dim", ACTOR_TOPO_FEATURE_DIM)),
+            map_topology_feature_dim=int(mcfg.get("map_topology_feature_dim", MAP_TOPO_FEATURE_DIM)),
+        )
+    if arch in {"pluto", "pluto_adapter"} or baseline in {"pluto", "pluto_adapter"}:
+        return PLUTOAdapter(
+            **common,
+            lateral_queries=int(mcfg.get("lateral_queries", 5)),
+            longitudinal_queries=int(mcfg.get("longitudinal_queries", 5)),
+            contrastive_temperature=float(mcfg.get("contrastive_temperature", 0.10)),
+            actor_topology_feature_dim=int(mcfg.get("actor_topology_feature_dim", ACTOR_TOPO_FEATURE_DIM)),
+            map_topology_feature_dim=int(mcfg.get("map_topology_feature_dim", MAP_TOPO_FEATURE_DIM)),
+        )
+    if arch in {"pdm_hybrid", "pdm_hybrid_adapter"} or baseline in {"pdm_hybrid", "pdm_hybrid_adapter"}:
+        return PDMHybridAdapter(**common)
     if arch in {"betop", "betop_lite", "betopnet", "betopnet_lite"} or "betop" in baseline:
         return BeTopNetLite(
             **common,

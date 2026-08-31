@@ -93,9 +93,14 @@ def test_nonoracle_policies_are_invariant_to_teacher_label_mutation() -> None:
         d["hard_violation"] = np.float32(50.0 * i)
         d["harm_proxy"] = np.float32(100.0 * (1 - i))
     methods = [
-        "marc_lite", "racp_lite", "expected_risk_filter", "cvar_risk_filter",
-        "dro_cvar_filter", "predictive_safety_filter", "postimpact_mpc_lite",
-        "post_crash_braking", "post_collision_restoration", "severity_minimization",
+        "pdm_closed", "idm",
+        "marc_lite", "racp_lite", "robust_scenario_mpc",
+        "predictive_safety_filter", "dr_cvar_safety_filter",
+        "conformal_predictive_safety_filter",
+        "expected_risk_filter", "cvar_risk_filter", "dro_cvar_filter",
+        "postimpact_mpc_lite", "post_crash_braking", "postimpact_motion_tvlqr",
+        "post_collision_restoration", "compensatory_postimpact_mpc",
+        "robust_postimpact_control", "severity_minimization",
     ]
     for method in methods:
         a = select_external_policy(method, samples, _cfg())
@@ -113,7 +118,7 @@ def test_learned_policy_selection_uses_logits_only() -> None:
         "harm": np.asarray([0.0, 999.0]),
         "r_orc": np.asarray([999.0, -999.0]),
     }
-    for method in ["gameformer_lite", "wayformer_bc", "betopnet_lite"]:
+    for method in ["gameformer_lite", "plantf", "pluto", "pdm_hybrid", "wayformer_bc", "betopnet_lite"]:
         sel = select_external_policy(method, samples, _cfg(), model_outputs=outputs)
         assert sel.selected_index == 1
 
@@ -188,3 +193,13 @@ def test_group_risk_scoring_reuses_actor_forecast(monkeypatch) -> None:
         np.testing.assert_allclose(a.losses, b.losses)
         assert np.isclose(a.expected_loss, b.expected_loss)
         assert np.isclose(a.cvar_loss, b.cvar_loss)
+
+
+def test_imitation_target_never_falls_back_to_ocrap_feasibility() -> None:
+    from ocrap.external_baselines.data import _target_index
+
+    samples = [_sample(detour=False, nominal=True), _sample(detour=True, nominal=False)]
+    samples[0]["feasible"] = np.int32(0)
+    samples[1]["feasible"] = np.int32(1)
+    cfg = {"external_baselines": {"supervision_target": "logged_nominal", "allow_teacher_supervision": False}}
+    assert _target_index(samples, "plantf", cfg) == 0

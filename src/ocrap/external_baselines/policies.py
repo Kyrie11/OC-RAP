@@ -606,6 +606,129 @@ def _severity_minimization_cost(d: dict[str, Any], cfg: dict[str, Any], risk: Ob
     }
 
 
+
+def _postimpact_motion_tvlqr_cost(
+    d: dict[str, Any], cfg: dict[str, Any], risk: ObservedRiskProfile | None = None
+) -> tuple[float, dict[str, float]]:
+    """Finite-lattice adapter of Wang et al. (2022) post-impact planning/control.
+
+    The paper combines polynomial/APF post-impact motion planning, TVLQR force
+    tracking, and nonlinear control allocation. WOMD does not contain wheel-level
+    force/torque states, so the common-lattice implementation retains the
+    trajectory re-alignment, obstacle-potential, stability, and control-effort
+    objectives while selecting among executable candidate prefixes.
+    """
+    pcfg = ((cfg.get("external_baselines", {}) or {}).get("policy", {}) or {})
+    stats = _motion_stats(d, cfg)
+    risk = risk or observed_risk_profile(d, cfg)
+    lateral = abs(float(stats["terminal_lateral_delta"]))
+    heading = abs(float(stats["heading_delta"]))
+    yaw_rate = float(stats["yaw_rate"])
+    yaw_acc = float(stats["yaw_acc"])
+    control = float(stats["accel_effort"]) + 0.8 * float(stats["steer_effort"])
+    control_rate = float(stats["jerk"]) + 0.5 * float(stats["steer_rate"])
+    # The APF obstacle term is represented by the observation-only risk field:
+    # proximity drives expected loss/CVaR upward without accessing teacher labels.
+    cost = (
+        float(pcfg.get("tvlqr_lateral_weight", 1.2)) * lateral
+        + float(pcfg.get("tvlqr_heading_weight", 1.0)) * heading
+        + float(pcfg.get("tvlqr_yaw_rate_weight", 1.5)) * yaw_rate
+        + float(pcfg.get("tvlqr_yaw_acc_weight", 0.15)) * yaw_acc
+        + float(pcfg.get("tvlqr_apf_risk_weight", 4.5)) * risk.expected_loss
+        + float(pcfg.get("tvlqr_cvar_weight", 2.0)) * risk.cvar_loss
+        + float(pcfg.get("tvlqr_control_weight", 0.12)) * control
+        + float(pcfg.get("tvlqr_control_rate_weight", 0.05)) * control_rate
+        - float(pcfg.get("tvlqr_progress_weight", 0.10)) * _scalar(d, "utility", 0.0)
+    )
+    return float(cost), {
+        "lateral_error": lateral,
+        "heading_error": heading,
+        "yaw_rate": yaw_rate,
+        "observed_expected_risk": float(risk.expected_loss),
+        "observed_cvar_risk": float(risk.cvar_loss),
+    }
+
+
+def _compensatory_postimpact_mpc_cost(
+    d: dict[str, Any], cfg: dict[str, Any], risk: ObservedRiskProfile | None = None
+) -> tuple[float, dict[str, float]]:
+    """Finite-lattice FCC-MPC adapter for post-impact trajectory tracking.
+
+    Cao et al. use active front steering plus differential torque vectoring to
+    attenuate lateral/yaw deviations after impact.  OC-RAP cannot reproduce the
+    wheel-level allocator from WOMD, so this adapter scores executable candidate
+    prefixes by the same tracking/stability/control-effort objectives.
+    """
+    pcfg = ((cfg.get("external_baselines", {}) or {}).get("policy", {}) or {})
+    stats = _motion_stats(d, cfg)
+    risk = risk or observed_risk_profile(d, cfg)
+    lat_err = abs(float(stats["terminal_lateral_delta"]))
+    heading_err = abs(float(stats["heading_delta"]))
+    yaw_rate = float(stats["yaw_rate"])
+    yaw_acc = float(stats["yaw_acc"])
+    adhesion = max(0.0, float(stats["adhesion_proxy"]) - 1.0)
+    control_effort = float(stats["steer_effort"]) + 0.35 * float(stats["accel_effort"])
+    rate_effort = float(stats["steer_rate"]) + 0.20 * float(stats["jerk"])
+    cost = (
+        float(pcfg.get("comp_mpc_lateral_weight", 1.4)) * lat_err
+        + float(pcfg.get("comp_mpc_heading_weight", 1.1)) * heading_err
+        + float(pcfg.get("comp_mpc_yaw_rate_weight", 1.5)) * yaw_rate
+        + float(pcfg.get("comp_mpc_yaw_acc_weight", 0.12)) * yaw_acc
+        + float(pcfg.get("comp_mpc_control_weight", 0.16)) * control_effort
+        + float(pcfg.get("comp_mpc_control_rate_weight", 0.05)) * rate_effort
+        + float(pcfg.get("comp_mpc_adhesion_weight", 1.0)) * adhesion
+        + float(pcfg.get("comp_mpc_expected_risk_weight", 4.0)) * risk.expected_loss
+        + float(pcfg.get("comp_mpc_cvar_weight", 2.0)) * risk.cvar_loss
+        - float(pcfg.get("comp_mpc_utility_weight", 0.10)) * _scalar(d, "utility", 0.0)
+    )
+    return float(cost), {
+        "lateral_error": lat_err,
+        "heading_error": heading_err,
+        "yaw_rate": yaw_rate,
+        "adhesion_proxy": float(stats["adhesion_proxy"]),
+        "observed_cvar_risk": float(risk.cvar_loss),
+    }
+
+
+def _robust_postimpact_control_cost(
+    d: dict[str, Any], cfg: dict[str, Any], risk: ObservedRiskProfile | None = None
+) -> tuple[float, dict[str, float]]:
+    """Sliding-surface/QP-allocation objective adapter for Ao et al. (2022).
+
+    The original controller regulates course angle/lateral displacement with a
+    sliding-mode upper layer and a fault-tolerant convex allocator.  WOMD has no
+    post-impact wheel-torque state, therefore robust allocation is represented by
+    candidate feasibility plus adhesion/control-rate penalties, not fabricated
+    wheel-level dynamics.
+    """
+    pcfg = ((cfg.get("external_baselines", {}) or {}).get("policy", {}) or {})
+    stats = _motion_stats(d, cfg)
+    risk = risk or observed_risk_profile(d, cfg)
+    lam_y = float(pcfg.get("robust_pic_lambda_y", 0.8))
+    lam_psi = float(pcfg.get("robust_pic_lambda_heading", 0.7))
+    e_y = float(stats["terminal_lateral_delta"])
+    e_psi = float(stats["heading_delta"])
+    yaw = float(stats["yaw_rate"])
+    s_y = abs(e_y + lam_y * e_psi)
+    s_psi = abs(e_psi + lam_psi * yaw)
+    adhesion_excess = max(0.0, float(stats["adhesion_proxy"]) - float(pcfg.get("robust_pic_adhesion_target", 0.9)))
+    cost = (
+        float(pcfg.get("robust_pic_surface_y_weight", 1.4)) * s_y
+        + float(pcfg.get("robust_pic_surface_heading_weight", 1.6)) * s_psi
+        + float(pcfg.get("robust_pic_yaw_rate_weight", 1.2)) * yaw
+        + float(pcfg.get("robust_pic_adhesion_weight", 1.2)) * adhesion_excess
+        + float(pcfg.get("robust_pic_control_rate_weight", 0.08)) * (float(stats["steer_rate"]) + 0.25 * float(stats["jerk"]))
+        + float(pcfg.get("robust_pic_expected_risk_weight", 4.5)) * risk.expected_loss
+        + float(pcfg.get("robust_pic_cvar_weight", 2.5)) * risk.cvar_loss
+    )
+    return float(cost), {
+        "sliding_surface_y": s_y,
+        "sliding_surface_heading": s_psi,
+        "yaw_rate": yaw,
+        "adhesion_proxy": float(stats["adhesion_proxy"]),
+        "observed_cvar_risk": float(risk.cvar_loss),
+    }
+
 def _temporal_contingency_risk(
     profile: ObservedRiskProfile,
     branch_fraction: float,
@@ -730,6 +853,35 @@ def select_external_policy(
         admitted[idx] = True
         return ExternalSelection(idx, reason, admitted, score)
 
+
+    if baseline in {"plantf", "plan_tf", "plantf_adapter"}:
+        admitted = np.zeros(n, dtype=bool)
+        if model_outputs is not None and "logits" in model_outputs:
+            score = np.asarray(model_outputs["logits"], dtype=float).reshape(-1)[:n]
+            idx = _best(score, feasible)
+            reason = "plantf_state_dropout_imitation_candidate_adapter"
+        else:
+            score = -dev
+            idx = 0 if feasible[0] else _best(score, feasible)
+            reason = "plantf_checkpoint_missing_nominal_fallback"
+        admitted[idx] = True
+        return ExternalSelection(idx, reason, admitted, score)
+
+    if baseline in {"pluto", "pluto_adapter"}:
+        admitted = np.zeros(n, dtype=bool)
+        if model_outputs is not None and "logits" in model_outputs:
+            base_logits = np.asarray(model_outputs["logits"], dtype=float).reshape(-1)[:n]
+            contrast = np.asarray(model_outputs.get("pluto_contrastive_logits", np.zeros_like(base_logits)), dtype=float).reshape(-1)[:n]
+            score = base_logits + float(pcfg.get("pluto_contrastive_selection_weight", 0.15)) * contrast
+            idx = _best(score, feasible)
+            reason = "pluto_query_cil_candidate_adapter"
+        else:
+            score = -dev
+            idx = 0 if feasible[0] else _best(score, feasible)
+            reason = "pluto_checkpoint_missing_nominal_fallback"
+        admitted[idx] = True
+        return ExternalSelection(idx, reason, admitted, score)
+
     if baseline in {"oracle_filter", "oracle_recovery_filter", "branchwise_oracle_filter", "oracle_branchwise_recovery"}:
         # Deliberate non-deployable upper bound.  This is the only selector that
         # may consume OC-RAP teacher tensors.
@@ -761,6 +913,90 @@ def select_external_policy(
     backup_margin = np.asarray([p.backup_margin for p in profiles], dtype=float)
     min_clearance = np.asarray([p.min_clearance for p in profiles], dtype=float)
     severity = np.asarray([p.severity_proxy for p in profiles], dtype=float)
+
+
+    if baseline in {"idm", "idm_planner"}:
+        # Intelligent Driver Model longitudinal controller projected onto the
+        # common executable candidate lattice. Candidate 0 is the route/nominal
+        # reference; observed front-vehicle state determines the IDM acceleration.
+        a_max = float(pcfg.get("idm_max_accel_mps2", 1.5))
+        b = float(pcfg.get("idm_comfort_decel_mps2", 2.0))
+        T_headway = float(pcfg.get("idm_time_headway_s", 1.5))
+        s0 = float(pcfg.get("idm_min_gap_m", 2.0))
+        v0 = max(float(pcfg.get("idm_target_speed_mps", 13.0)), 0.5)
+        delta = float(pcfg.get("idm_accel_exponent", 4.0))
+        candidate_accel = np.zeros(n, dtype=float)
+        idm_target = np.zeros(n, dtype=float)
+        for i, d in enumerate(samples):
+            stats = _motion_stats(d, cfg)
+            v = max(float(stats["initial_speed"]), 0.0)
+            gap, lead_v = _front_obstacle_gap_and_speed(d)
+            interaction = 0.0
+            if np.isfinite(gap):
+                dv = max(v - lead_v, 0.0)
+                s_star = s0 + v * T_headway + v * dv / max(2.0 * np.sqrt(max(a_max * b, 1e-6)), 1e-3)
+                interaction = (s_star / max(gap, 0.5)) ** 2
+            idm_target[i] = a_max * (1.0 - (v / v0) ** delta - interaction)
+            ctrl = np.asarray(d.get("prefix_controls", np.zeros((0, 0))), dtype=float)
+            candidate_accel[i] = float(np.nanmean(ctrl[: min(5, len(ctrl)), 0])) if ctrl.ndim == 2 and ctrl.shape[0] and ctrl.shape[1] >= 1 else 0.0
+        admitted = feasible & (collision_prob <= float(pcfg.get("idm_collision_probability_gate", 0.55)))
+        score = (
+            -float(pcfg.get("idm_accel_tracking_weight", 1.0)) * np.abs(candidate_accel - idm_target)
+            -float(pcfg.get("idm_deviation_weight", 0.10)) * dev
+            -float(pcfg.get("idm_risk_weight", 1.5)) * exp_risk
+            +float(pcfg.get("idm_utility_weight", 0.15)) * utility
+        )
+        idx = _best(score, admitted if admitted.any() else feasible)
+        return ExternalSelection(idx, "idm_longitudinal_control_candidate_projection", admitted, score)
+
+    if baseline in {"pdm_closed", "pdm_closed_adapter"}:
+        # PDM-Closed core: route-centered IDM proposals are scored by collision/
+        # TTC safety, progress and comfort. The native nuPlan proposal generator
+        # is replaced by OC-RAP's common candidate lattice for action fairness.
+        hard_safe = (collision_prob <= float(pcfg.get("pdm_collision_probability_gate", 0.45))) & (min_clearance >= float(pcfg.get("pdm_min_clearance_gate_m", -0.25)))
+        admitted = feasible & hard_safe
+        score = (
+            float(pcfg.get("pdm_progress_weight", 5.0)) * utility
+            - float(pcfg.get("pdm_ttc_weight", 5.0)) * cvar_risk
+            - float(pcfg.get("pdm_comfort_weight", 2.0)) * smooth
+            - float(pcfg.get("pdm_deviation_weight", 0.20)) * dev
+            + float(pcfg.get("pdm_backup_margin_weight", 0.10)) * np.clip(backup_margin, -20.0, 20.0)
+        )
+        idx = _best(score, admitted if admitted.any() else feasible)
+        return ExternalSelection(idx, "pdm_closed_idm_proposal_scoring_candidate_adapter", admitted, score)
+
+    if baseline in {"pdm_hybrid", "pdm_hybrid_adapter"}:
+        # PDM-Hybrid preserves the PDM safety/progress scorer and adds a learned
+        # long-horizon refinement term. This branch intentionally needs both the
+        # checkpoint logits and the observation-only safety profile.
+        learned = np.asarray(model_outputs.get("pdm_refinement_logits", model_outputs.get("logits", np.zeros(n))) if model_outputs is not None else np.zeros(n), dtype=float).reshape(-1)[:n]
+        admitted = feasible & (collision_prob <= float(pcfg.get("pdm_collision_probability_gate", 0.45))) & (min_clearance >= float(pcfg.get("pdm_min_clearance_gate_m", -0.25)))
+        rule_score = (
+            float(pcfg.get("pdm_progress_weight", 5.0)) * utility
+            - float(pcfg.get("pdm_ttc_weight", 5.0)) * cvar_risk
+            - float(pcfg.get("pdm_comfort_weight", 2.0)) * smooth
+            - float(pcfg.get("pdm_deviation_weight", 0.20)) * dev
+        )
+        score = rule_score + float(pcfg.get("pdm_hybrid_learned_weight", 0.25)) * learned
+        idx = _best(score, admitted if admitted.any() else feasible)
+        reason = "pdm_hybrid_rule_plus_learned_refinement_candidate_adapter" if model_outputs is not None else "pdm_hybrid_checkpoint_missing_rule_only_fallback"
+        return ExternalSelection(idx, reason, admitted, score)
+
+    if baseline in {"robust_scenario_mpc", "scenario_mpc", "batkovic_scenario_mpc"}:
+        # Batkovic et al.: expected scenario cost plus robust satisfaction across
+        # multimodal obstacle futures. Here every candidate is a finite-horizon
+        # control sequence and the scenario constraints are evaluated explicitly.
+        robust_gate = (worst_risk <= float(pcfg.get("scenario_mpc_worst_risk_gate", 1.50))) & (min_clearance >= float(pcfg.get("scenario_mpc_min_clearance_gate_m", -0.50)))
+        admitted = feasible & robust_gate
+        score = (
+            float(pcfg.get("scenario_mpc_utility_weight", 1.0)) * utility
+            - float(pcfg.get("scenario_mpc_expected_weight", 1.5)) * exp_risk
+            - float(pcfg.get("scenario_mpc_worst_weight", 2.5)) * worst_risk
+            - float(pcfg.get("scenario_mpc_smoothness_weight", 0.12)) * smooth
+            - float(pcfg.get("scenario_mpc_deviation_weight", 0.05)) * dev
+        )
+        idx = _best(score, admitted if admitted.any() else feasible)
+        return ExternalSelection(idx, "robust_multimodal_scenario_mpc_candidate_adapter", admitted, score)
 
     if baseline in {"marc", "marc_lite", "marc_contingency"}:
         # MARC-style multi-policy contingency planning.  Each semantic macro is
@@ -854,13 +1090,49 @@ def select_external_policy(
         return ExternalSelection(idx, "cvar_observation_conditioned_tail_risk_filter", admitted, score)
 
     if baseline in {"dro_cvar", "dro_cvar_filter", "dro_cvar_safety_filter", "dr_cvar_filter"}:
+        # Legacy v48/v49 dispersion surrogate retained only for reproducibility;
+        # it is deliberately not used by the v50 main near-contact table.
         ambiguity = float(pcfg.get("dro_ambiguity_radius", 0.10))
         dispersion = np.asarray([float(np.sqrt(np.sum(p.weights * (p.losses - p.expected_loss) ** 2))) for p in profiles], dtype=float)
         risk = cvar_risk + ambiguity * dispersion / max(float(pcfg.get("cvar_alpha", 0.2)), 1e-3)
         admitted = feasible & (risk <= float(pcfg.get("dro_cvar_threshold", 0.65)))
         score = utility - float(pcfg.get("dro_cvar_risk_weight", 3.5)) * risk - float(pcfg.get("risk_deviation_weight", 0.05)) * dev
         idx = _best(score, admitted if admitted.any() else feasible)
-        return ExternalSelection(idx, "wasserstein_inspired_cvar_dispersion_surrogate", admitted, score)
+        return ExternalSelection(idx, "legacy_wasserstein_inspired_dispersion_surrogate_not_main_table", admitted, score)
+
+    if baseline in {"dr_cvar_safety_filter", "distributionally_robust_cvar_filter", "safaoui_dr_cvar_filter"}:
+        # Paper-core finite-lattice approximation of Safaoui & Summers. For a
+        # Lipschitz loss under a 1-Wasserstein ambiguity ball, empirical CVaR is
+        # conservatively inflated by epsilon*L/alpha. The original safe-halfspace
+        # continuous MPC correction is replaced by choosing the closest admitted
+        # executable OC-RAP candidate.
+        alpha = max(float(pcfg.get("cvar_alpha", 0.20)), 1e-3)
+        eps = max(float(pcfg.get("dr_cvar_wasserstein_radius", 0.08)), 0.0)
+        lipschitz = max(float(pcfg.get("dr_cvar_loss_lipschitz", 1.0)), 0.0)
+        robust_cvar = cvar_risk + eps * lipschitz / alpha
+        admitted = feasible & (robust_cvar <= float(pcfg.get("dr_cvar_threshold", 1.20))) & (min_clearance >= float(pcfg.get("dr_cvar_min_clearance_gate_m", -0.50)))
+        score = (
+            -float(pcfg.get("dr_cvar_deviation_weight", 2.0)) * dev
+            + float(pcfg.get("dr_cvar_utility_weight", 0.30)) * utility
+            - float(pcfg.get("dr_cvar_risk_weight", 2.5)) * robust_cvar
+        )
+        idx = 0 if admitted[0] else _best(score, admitted if admitted.any() else feasible)
+        return ExternalSelection(idx, "distributionally_robust_cvar_minimal_correction_candidate_adapter", admitted, score)
+
+    if baseline in {"conformal_predictive_safety_filter", "conformal_safety_filter", "cpsf"}:
+        # Threshold is estimated exclusively on calibration_near_contact by
+        # tools/calibrate_external_baselines.py. Minimal-deviation projection
+        # mirrors the conformal predictive safety-filter objective.
+        p_threshold = float(pcfg.get("conformal_collision_probability_threshold", 0.25))
+        clearance_margin = float(pcfg.get("conformal_min_clearance_m", 0.0))
+        admitted = feasible & (collision_prob <= p_threshold) & (min_clearance >= clearance_margin)
+        score = (
+            -float(pcfg.get("conformal_deviation_weight", 2.0)) * dev
+            + float(pcfg.get("conformal_utility_weight", 0.25)) * utility
+            - float(pcfg.get("conformal_risk_weight", 1.0)) * cvar_risk
+        )
+        idx = 0 if admitted[0] else _best(score, admitted if admitted.any() else feasible)
+        return ExternalSelection(idx, "split_conformal_predictive_safety_filter_candidate_projection", admitted, score)
 
     if baseline in {"predictive_safety_filter", "psf", "cbf_backup_filter", "predictive_cbf_backup", "backup_cbf_filter"}:
         accel = np.zeros(n, dtype=float)
@@ -938,6 +1210,42 @@ def select_external_policy(
         admitted = feasible & restoration_macro & np.asarray(speed_ok, dtype=bool) & np.asarray(yaw_ok, dtype=bool) & (cvar_risk <= float(pcfg.get("restoration_risk_gate", 1.5)))
         idx = _best(score, admitted if admitted.any() else feasible)
         return ExternalSelection(idx, "post_collision_trajectory_restoration_observed_risk", admitted, score)
+
+
+    if baseline in {"postimpact_motion_tvlqr", "postimpact_motion_planning", "wang2022_postimpact", "postimpact_tvlqr"}:
+        details_list, costs = [], []
+        for d, p in zip(samples, profiles):
+            c, details = _postimpact_motion_tvlqr_cost(d, cfg, p)
+            costs.append(c); details_list.append(details)
+        cost = np.asarray(costs, dtype=float)
+        score = -cost
+        yaw = np.asarray([x["yaw_rate"] for x in details_list], dtype=float)
+        admitted = feasible & (yaw <= float(pcfg.get("tvlqr_yaw_rate_gate", 2.2))) & (cvar_risk <= float(pcfg.get("tvlqr_risk_gate", 1.5)))
+        idx = _best(score, admitted if admitted.any() else feasible)
+        return ExternalSelection(idx, "wang2022_polynomial_apf_tvlqr_candidate_adapter", admitted, score)
+
+    if baseline in {"compensatory_postimpact_mpc", "cao_postimpact_mpc"}:
+        details_list, costs = [], []
+        for d, p in zip(samples, profiles):
+            c, details = _compensatory_postimpact_mpc_cost(d, cfg, p)
+            costs.append(c); details_list.append(details)
+        cost = np.asarray(costs, dtype=float)
+        score = -cost
+        admitted = feasible & (np.asarray([x["yaw_rate"] for x in details_list]) <= float(pcfg.get("comp_mpc_yaw_rate_gate", 2.2))) & (cvar_risk <= float(pcfg.get("comp_mpc_risk_gate", 1.5)))
+        idx = _best(score, admitted if admitted.any() else feasible)
+        return ExternalSelection(idx, "cao_compensatory_postimpact_fcc_mpc_candidate_adapter", admitted, score)
+
+    if baseline in {"robust_postimpact_control", "postimpact_sliding_mode", "ao_postimpact_control"}:
+        details_list, costs = [], []
+        for d, p in zip(samples, profiles):
+            c, details = _robust_postimpact_control_cost(d, cfg, p)
+            costs.append(c); details_list.append(details)
+        cost = np.asarray(costs, dtype=float)
+        score = -cost
+        adhesion = np.asarray([x["adhesion_proxy"] for x in details_list], dtype=float)
+        admitted = feasible & (adhesion <= float(pcfg.get("robust_pic_adhesion_gate", 1.30))) & (cvar_risk <= float(pcfg.get("robust_pic_risk_gate", 1.5)))
+        idx = _best(score, admitted if admitted.any() else feasible)
+        return ExternalSelection(idx, "ao_sliding_mode_fault_tolerant_postimpact_candidate_adapter", admitted, score)
 
     if baseline in {"severity_minimization", "severity_minimization_planner", "unavoidable_collision_planner", "crash_mitigation_planner", "uc_severity_planner"}:
         details_list = []

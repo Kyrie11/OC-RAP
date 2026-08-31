@@ -30,6 +30,10 @@ from ocrap.utils.regimes import bucket_aliases as canonical_bucket_aliases, cano
 
 EXTERNAL_CLOSED_LOOP_METHODS = {
     "marc", "marc_lite", "marc_contingency",
+    "robust_scenario_mpc", "scenario_mpc", "batkovic_scenario_mpc",
+    "dr_cvar_safety_filter", "distributionally_robust_cvar_filter", "safaoui_dr_cvar_filter",
+    "conformal_predictive_safety_filter", "conformal_safety_filter", "cpsf",
+    "pdm_closed", "pdm_closed_adapter", "idm", "idm_planner",
     "racp", "racp_lite", "risk_aware_contingency",
     "expected_risk", "expected_risk_filter", "expected_risk_planner",
     "cvar_risk", "cvar_risk_filter", "cvar_planner",
@@ -38,11 +42,16 @@ EXTERNAL_CLOSED_LOOP_METHODS = {
     "oracle_filter", "oracle_recovery_filter", "branchwise_oracle_filter", "oracle_branchwise_recovery",
     "postimpact_mpc", "postimpact_mpc_lite", "post_impact_mpc_lite", "postimpact_mpc_paper", "integrated_postimpact_mpc",
     "post_crash_braking", "post_crash_braking_rule", "stable_stop", "stable_stop_rule", "postcrash_stable_stop",
+    "postimpact_motion_tvlqr", "postimpact_motion_planning", "wang2022_postimpact", "postimpact_tvlqr",
     "post_collision_restoration", "trajectory_restoration", "post_collision_trajectory_restoration", "post_collision_restoration_heuristic", "ackermann_restoration",
     "severity_minimization", "severity_minimization_planner", "unavoidable_collision_planner", "crash_mitigation_planner", "uc_severity_planner",
+    "compensatory_postimpact_mpc", "cao_postimpact_mpc",
+    "robust_postimpact_control", "postimpact_sliding_mode", "ao_postimpact_control",
     "gameformer", "gameformer_lite", "gameformer_levelk",
     "route_bc", "route_bc_lite", "waymax_bc", "waymax_bc_lite", "wayformer_bc", "wayformer_style_bc", "route_bc_wayformer",
     "betop", "betop_lite", "betopnet", "betopnet_lite",
+    "plantf", "plan_tf", "plantf_adapter",
+    "pluto", "pluto_adapter", "pdm_hybrid", "pdm_hybrid_adapter",
 }
 # Only the deliberately non-deployable oracle upper bound consumes OC-RAP
 # counterfactual teacher tensors during action selection.
@@ -53,6 +62,9 @@ EXTERNAL_LEARNED_METHODS = {
     "gameformer", "gameformer_lite", "gameformer_levelk",
     "route_bc", "route_bc_lite", "waymax_bc", "waymax_bc_lite", "wayformer_bc", "wayformer_style_bc", "route_bc_wayformer",
     "betop", "betop_lite", "betopnet", "betopnet_lite",
+    "plantf", "plan_tf", "plantf_adapter",
+    "pluto", "pluto_adapter",
+    "pdm_hybrid", "pdm_hybrid_adapter",
 }
 
 
@@ -1250,6 +1262,11 @@ def _rollout_one_scene(
     same_macro_run_length = 0
     audit_bucket_name = bucket_name or str((cfg.get("selection", {}) or {}).get("active_bucket_name", "") or "")
     drs_gamma = _drs_success_gamma_for_bucket(gamma, cfg, audit_bucket_name)
+    # ``_select_prefix`` computes the same execution semantics locally for the
+    # main selector path.  The selected/top-k teacher-label audit below lives in
+    # this outer scope and must use the identical semantics explicitly; without
+    # this binding the audit raised NameError while the actual rollout continued.
+    option_semantics = option_execution_semantics(cfg)
 
     # These settings are invariant across replans.  Constructing/deep-copying
     # them at every simulator step was pure overhead.

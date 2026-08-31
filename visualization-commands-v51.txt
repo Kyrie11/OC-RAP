@@ -1,0 +1,139 @@
+# OC-RAP v51 multi-regime qualitative visualization
+# Run from /home/senzeyu2/code/OC-RAP after replacing the repository with the patched zip.
+
+# -----------------------------------------------------------------------------
+# 1. Environment
+# -----------------------------------------------------------------------------
+cd /home/senzeyu2/code/OC-RAP
+
+export OCRAP_ROOT="/data0/senzeyu2/dataset/OCRAP"
+export CUDA_DEVICES="0,1"
+
+# This is the OUT used by your new optimized external-baseline run:
+export EXTERNAL_RESULTS_ROOT="/home/senzeyu2/code/OC-RAP/runs/external_baselines_v50"
+# New Safe learned checkpoints are written by run_all_regime_external_baselines_optimized.sh here:
+export EXTERNAL_CHECKPOINT_ROOT="$EXTERNAL_RESULTS_ROOT/checkpoints"
+
+# Keep these two consistent with the OC-RAP full metric run/checkpoint you already use.
+export OCRAP_RESULTS_ROOT="/home/senzeyu2/code/OC-RAP/runs/ocrap_three_regime_closed_loop_v50_1_full"
+export OCRAP_MODEL_RUN="/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_34_barrier_crossfit_dedicated_4834"
+export MODEL_VARIANT="balanced"
+export ALLOW_DIAGNOSTIC_RC20=1
+
+export COMPARISON_OUT="/home/senzeyu2/code/OC-RAP/runs/external_comparison_v51_multiregime"
+export FPS=10
+export TRACE_MAX_STEPS=60
+export CAMERA_MODE=fixed
+export VIEW_RADIUS_M=35
+export VIDEO_FORMAT=mp4
+export MIN_VIDEO_DURATION_S=5.0
+export FALLBACK_MIN_VIDEO_DURATION_S=3.0
+
+# -----------------------------------------------------------------------------
+# 2. Recommended two-stage workflow: metric-only selection first
+# -----------------------------------------------------------------------------
+# This does NOT rerun full benchmark metrics. It builds tables + deterministic
+# 5 Safe / 5 Near / 5 Contact selection artifacts from the existing full journals.
+BUILD_VIDEOS=false \
+OCRAP_RESULTS_ROOT="$OCRAP_RESULTS_ROOT" \
+EXTERNAL_RESULTS_ROOT="$EXTERNAL_RESULTS_ROOT" \
+EXTERNAL_CHECKPOINT_ROOT="$EXTERNAL_CHECKPOINT_ROOT" \
+OUT="$COMPARISON_OUT" \
+bash scripts/build_external_comparison_artifacts.sh
+
+# Inspect what was selected BEFORE rendering anything.
+python - <<'PY'
+import json, os, pathlib
+root=pathlib.Path(os.environ['COMPARISON_OUT'])/'selection'
+for regime in ('safe','near','contact'):
+    p=root/f'{regime}_selection.json'; d=json.load(p.open())
+    print('\n', regime.upper(), 'clip=', d['selected_clip_duration_s'], 'mode=', d['duration_selection_mode'])
+    print('preferred candidates=', d['num_preferred_duration_candidates'], 'fallback candidates=', d['num_fallback_duration_candidates'])
+    for x in d['selected']:
+        print(x['category_rank'], x['target_key'], 'tier=', x['selection_tier'], 'score=', round(x['score'],3),
+              'best=', x['best_external_method'], 'worst=', x['worst_external_method'])
+PY
+
+# -----------------------------------------------------------------------------
+# 3. Selective trace rerun + all synchronized videos
+# -----------------------------------------------------------------------------
+# This reruns ONLY the 15 selected targets. For each target it reruns OC-RAP and
+# all six current external baselines in that regime with render_trace=true.
+SELECTION_ROOT="$COMPARISON_OUT/selection" \
+EXTERNAL_RESULTS_ROOT="$EXTERNAL_RESULTS_ROOT" \
+EXTERNAL_CHECKPOINT_ROOT="$EXTERNAL_CHECKPOINT_ROOT" \
+OCRAP_ROOT="$OCRAP_ROOT" \
+OCRAP_MODEL_RUN="$OCRAP_MODEL_RUN" \
+MODEL_VARIANT="$MODEL_VARIANT" \
+ALLOW_DIAGNOSTIC_RC20="$ALLOW_DIAGNOSTIC_RC20" \
+CUDA_DEVICES="$CUDA_DEVICES" \
+TRACE_MAX_STEPS="$TRACE_MAX_STEPS" \
+FPS="$FPS" CAMERA_MODE="$CAMERA_MODE" VIEW_RADIUS_M="$VIEW_RADIUS_M" FORMAT="$VIDEO_FORMAT" \
+OUT="$COMPARISON_OUT/selective_traces" \
+bash scripts/run_selected_regime_visualization_traces.sh
+
+# -----------------------------------------------------------------------------
+# 4. Validate target resolution and preflight
+# -----------------------------------------------------------------------------
+for regime in safe near contact; do
+  echo "===== $regime target resolution ====="
+  python - "$COMPARISON_OUT/selective_traces/$regime/target_resolution.json" <<'PY'
+import json,sys
+d=json.load(open(sys.argv[1])); print({k:d[k] for k in ('num_requested','num_resolved','num_failed','valid')})
+assert d['num_requested']==5 and d['num_resolved']==5 and d['num_failed']==0 and d['valid']
+PY
+  echo "===== $regime preflight ====="
+  python - "$COMPARISON_OUT/selective_traces/$regime/preflight.json" <<'PY'
+import json,sys
+d=json.load(open(sys.argv[1]));
+keys=('num_requested_target_keys','num_matching_requested_target_keys','target_keys_valid','schema_supports_closed_loop')
+print({k:d.get(k) for k in keys})
+assert d.get('num_requested_target_keys')==5 and d.get('num_matching_requested_target_keys')==5
+assert d.get('target_keys_valid') is True and d.get('schema_supports_closed_loop') is True
+PY
+done
+
+# -----------------------------------------------------------------------------
+# 5. Validate videos
+# -----------------------------------------------------------------------------
+python -m json.tool "$COMPARISON_OUT/selective_traces/videos/REGIME_VIDEO_INDEX.json" | head -240
+find "$COMPARISON_OUT/selective_traces/videos" -type f -name '*.mp4' -printf '%p %s bytes\n' | sort > "$COMPARISON_OUT/selective_traces/videos/MP4_FILES.txt"
+wc -l "$COMPARISON_OUT/selective_traces/videos/MP4_FILES.txt"
+# Current 6-baseline-per-regime setup: 15 scenes * (6 external + OC-RAP + best pair + worst pair) = 135 MP4.
+# Each regime should contain 45 MP4.
+for regime in safe near contact; do
+  echo -n "$regime: "
+  find "$COMPARISON_OUT/selective_traces/videos/$regime" -type f -name '*.mp4' | wc -l
+done
+
+# -----------------------------------------------------------------------------
+# 6. One-shot alternative
+# -----------------------------------------------------------------------------
+# If you do not need to inspect the metric-only selection first, section 2+3 can
+# be replaced by this single command:
+# BUILD_VIDEOS=true \
+# OCRAP_RESULTS_ROOT="$OCRAP_RESULTS_ROOT" EXTERNAL_RESULTS_ROOT="$EXTERNAL_RESULTS_ROOT" \
+# EXTERNAL_CHECKPOINT_ROOT="$EXTERNAL_CHECKPOINT_ROOT" OCRAP_ROOT="$OCRAP_ROOT" \
+# OCRAP_MODEL_RUN="$OCRAP_MODEL_RUN" MODEL_VARIANT="$MODEL_VARIANT" ALLOW_DIAGNOSTIC_RC20=1 \
+# CUDA_DEVICES="$CUDA_DEVICES" TRACE_MAX_STEPS="$TRACE_MAX_STEPS" FPS="$FPS" \
+# CAMERA_MODE="$CAMERA_MODE" VIEW_RADIUS_M="$VIEW_RADIUS_M" VIDEO_FORMAT="$VIDEO_FORMAT" \
+# OUT="$COMPARISON_OUT" bash scripts/build_external_comparison_artifacts.sh
+
+# -----------------------------------------------------------------------------
+# 7. Rerender only (do not rerun any planner)
+# -----------------------------------------------------------------------------
+TRACE_ROOT="$COMPARISON_OUT/selective_traces" \
+SELECTION_ROOT="$COMPARISON_OUT/selection" \
+OUT="$COMPARISON_OUT/selective_traces/videos_rerendered" \
+FPS="$FPS" FORMAT="$VIDEO_FORMAT" CAMERA_MODE="$CAMERA_MODE" VIEW_RADIUS_M="$VIEW_RADIUS_M" \
+bash scripts/build_regime_visualization_videos.sh
+
+# -----------------------------------------------------------------------------
+# 8. Regression tests
+# -----------------------------------------------------------------------------
+PYTHONPATH=src pytest -q \
+  tests/test_regime_visualization_v51.py \
+  tests/test_v50_full_regime_runtime.py \
+  tests/test_v48_34_1_rc30_model_contract_hotfix.py \
+  tests/test_v50_3_recovery_hotfix.py \
+  tests/test_external_baseline_cuda_runtime.py

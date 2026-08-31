@@ -553,6 +553,10 @@ def direct_executable_recovery_witness_features_from_sample(
     soft_occupancy_disagreement: bool = False,
     boundary_localized_occupancy_trust: bool = False,
     history_occupancy_reachability: bool = False,
+    interaction_box_support: bool = False,
+    interaction_hull_support: bool = False,
+    interaction_anchor_support: bool = False,
+    interaction_response_support: bool = False,
 ) -> np.ndarray:
     """Return the v48.61 option-resolved executable recovery witness field.
 
@@ -678,16 +682,35 @@ def direct_executable_recovery_witness_features_from_sample(
         # predictor, hidden future, regime id, threshold, or tuned horizon.
         hist_acc_center_rows: list[np.ndarray] = []
         hist_acc_radius_rows: list[float] = []
+        hist_acc_halfwidth_rows: list[np.ndarray] = []
+        hist_acc_samples_rows: list[np.ndarray] = []
+        hist_jerk_samples_rows: list[np.ndarray] = []
         for _, aidx, row in agents:
+            valid_idx = np.zeros((0,), dtype=np.int64)
             if hist.ndim == 3 and valid_hist.ndim >= 2 and aidx < hist.shape[1] and aidx < valid_hist.shape[1]:
                 mask = np.asarray(valid_hist[:, aidx], dtype=bool).reshape(-1)
-                ah = np.asarray(hist[:, aidx, 5:7], dtype=np.float64)
-                mask = mask[: ah.shape[0]] & np.isfinite(ah).all(axis=1)
-                ah = ah[mask]
+                ah_all = np.asarray(hist[:, aidx, 5:7], dtype=np.float64)
+                mask = mask[: ah_all.shape[0]] & np.isfinite(ah_all).all(axis=1)
+                valid_idx = np.flatnonzero(mask)
+                ah = ah_all[mask]
             else:
                 ah = np.zeros((0, 2), dtype=np.float64)
             if ah.size == 0:
                 ah = np.asarray(row[5:7], dtype=np.float64).reshape(1, 2)
+                valid_idx = np.asarray([0], dtype=np.int64)
+            # v48.73 OC-IRRW: retain temporal adjacency instead of treating the
+            # history acceleration set as if any old vector could appear at t=0.
+            # Jerk is estimated only between consecutive *valid observations*,
+            # dividing by their true sample-index gap.  Zero is always included,
+            # so directional response support is non-negative and can express
+            # persistence without inventing an inward response.
+            if ah.shape[0] >= 2 and valid_idx.size == ah.shape[0]:
+                gaps = np.maximum(np.diff(valid_idx).astype(np.float64) * dt, dt)
+                jerk = np.diff(ah, axis=0) / gaps[:, None]
+                jerk = jerk[np.isfinite(jerk).all(axis=1)]
+            else:
+                jerk = np.zeros((0, 2), dtype=np.float64)
+            jerk = np.concatenate([np.zeros((1, 2), dtype=np.float64), jerk], axis=0)
             # Include zero acceleration because CV remains the signed reference
             # model; the ambiguity set therefore represents persistence/decay
             # uncertainty around the observable acceleration history.
@@ -695,11 +718,16 @@ def direct_executable_recovery_witness_features_from_sample(
             amin = np.min(ah, axis=0)
             amax = np.max(ah, axis=0)
             center = 0.5 * (amin + amax)
-            radius = 0.5 * float(np.linalg.norm(amax - amin))
+            halfwidth = 0.5 * (amax - amin)
+            radius = float(np.linalg.norm(halfwidth))
             hist_acc_center_rows.append(center)
             hist_acc_radius_rows.append(radius)
+            hist_acc_halfwidth_rows.append(halfwidth)
+            hist_acc_samples_rows.append(ah)
+            hist_jerk_samples_rows.append(jerk)
         hist_acc_center = np.stack(hist_acc_center_rows, axis=0)
         hist_acc_radius = np.asarray(hist_acc_radius_rows, dtype=np.float64)
+        hist_acc_halfwidth = np.stack(hist_acc_halfwidth_rows, axis=0)
     else:
         rel0 = np.zeros((0, 2), dtype=np.float64)
         vel = np.zeros((0, 2), dtype=np.float64)
@@ -707,6 +735,9 @@ def direct_executable_recovery_witness_features_from_sample(
         arad = np.zeros((0,), dtype=np.float64)
         hist_acc_center = np.zeros((0, 2), dtype=np.float64)
         hist_acc_radius = np.zeros((0,), dtype=np.float64)
+        hist_acc_halfwidth = np.zeros((0, 2), dtype=np.float64)
+        hist_acc_samples_rows = []
+        hist_jerk_samples_rows = []
 
     # Acceleration is held only for the already-configured prefix horizon and
     # then propagated with the resulting velocity.  This avoids an unbounded
@@ -718,7 +749,7 @@ def direct_executable_recovery_witness_features_from_sample(
     def _agent_future(times: np.ndarray) -> tuple[np.ndarray, np.ndarray | None]:
         tt = np.asarray(times, dtype=np.float64).reshape(-1)
         cv = rel0[None, :, :] + tt[:, None, None] * vel[None, :, :]
-        if not (robust_occupancy_envelope or soft_occupancy_disagreement or boundary_localized_occupancy_trust or history_occupancy_reachability) or not agents:
+        if not (robust_occupancy_envelope or soft_occupancy_disagreement or boundary_localized_occupancy_trust or history_occupancy_reachability or interaction_box_support or interaction_hull_support or interaction_anchor_support or interaction_response_support) or not agents:
             return cv, None
         hold = np.minimum(tt, accel_hold_s)
         accel_disp = (tt * hold - 0.5 * hold * hold)[:, None, None] * acc[None, :, :]
@@ -736,7 +767,7 @@ def direct_executable_recovery_witness_features_from_sample(
         return clear_cv, clear_ca
 
     def _history_tube_clearance(ego_xy_rel_t: np.ndarray, times: np.ndarray) -> np.ndarray | None:
-        if not history_occupancy_reachability or not agents:
+        if not (history_occupancy_reachability or interaction_box_support or interaction_hull_support or interaction_anchor_support or interaction_response_support) or not agents:
             return None
         tt = np.asarray(times, dtype=np.float64).reshape(-1)
         hold = np.minimum(tt, accel_hold_s)
@@ -749,6 +780,111 @@ def direct_executable_recovery_witness_features_from_sample(
         radius = coeff * hist_acc_radius[None, :]
         delta = ego_xy_rel_t[:, None, :] - center
         return np.linalg.norm(delta, axis=-1) - ego_rad - arad[None, :] - radius
+
+    def _interaction_support_clearance(
+        ego_xy_rel_t: np.ndarray, times: np.ndarray, *, empirical_hull: bool
+    ) -> np.ndarray | None:
+        """Lower clearance under an observation-history acceleration set.
+
+        v48.71 converted the componentwise acceleration box into an isotropic
+        circumscribed ball.  That is conservative but direction-blind: lateral
+        acceleration spread is charged even when it cannot move the agent toward
+        the candidate recovery.  v48.72 evaluates the support function along the
+        candidate-specific CV line of sight.  For the box arm the ambiguity set
+        is [a_min,a_max].  For the hull arm it is conv({0,a_tau}); support of a
+        convex hull is exactly the maximum sample projection.
+
+        For n = (x_ego-x_agent_CV)/||.|| and displacement coefficient g(t),
+            ||r-g a|| >= n^T(r-g a) = ||r|| - g n^T a.
+        Taking max over the acceleration ambiguity set therefore gives a valid
+        directional lower bound on separation for that set.
+        """
+        if not (interaction_box_support or interaction_hull_support or interaction_anchor_support or interaction_response_support) or not agents:
+            return None
+        tt = np.asarray(times, dtype=np.float64).reshape(-1)
+        hold = np.minimum(tt, accel_hold_s)
+        coeff = (tt * hold - 0.5 * hold * hold)[:, None]
+        cv = rel0[None, :, :] + tt[:, None, None] * vel[None, :, :]
+        rel = ego_xy_rel_t[:, None, :] - cv
+        dist = np.linalg.norm(rel, axis=-1)
+        n = rel / np.maximum(dist[..., None], 1.0e-9)
+        if empirical_hull:
+            support = np.zeros_like(dist)
+            for aidx, samples in enumerate(hist_acc_samples_rows):
+                aa = np.asarray(samples, dtype=np.float64).reshape(-1, 2)
+                # zero is explicitly in aa; support is therefore non-negative.
+                support[:, aidx] = np.max(n[:, aidx, :] @ aa.T, axis=1)
+        else:
+            support = (
+                np.sum(n * hist_acc_center[None, :, :], axis=-1)
+                + np.sum(np.abs(n) * hist_acc_halfwidth[None, :, :], axis=-1)
+            )
+            support = np.maximum(support, 0.0)
+        lower_sep = dist - coeff * support
+        return lower_sep - ego_rad - arad[None, :]
+
+    def _interaction_response_clearance(
+        ego_xy_rel_t: np.ndarray, times: np.ndarray, *, jerk_limited: bool
+    ) -> np.ndarray | None:
+        """v48.73 current-state-anchored interaction-response reachability.
+
+        V48.72's empirical acceleration hull is joint and candidate-oriented, but
+        it is temporally static: any historical acceleration can be applied at the
+        first future instant and held for the full existing prefix horizon.  This
+        helper preserves the same empirical hull and interaction normal while
+        constraining how inward acceleration can evolve from the *currently
+        observed* acceleration.
+
+        N73 (jerk_limited=False) uses a parameter-free linear ramp from current
+        acceleration to the historical-hull directional support over the already
+        configured prefix horizon.  O73/Main uses the maximum observed directional
+        jerk to approach the same hull support, capped by that support.  Neither
+        branch reads teacher future, adds a learned predictor, tunes a new horizon,
+        or changes the historical CV signed certificate.
+        """
+        if not (interaction_anchor_support or interaction_response_support) or not agents:
+            return None
+        tt = np.asarray(times, dtype=np.float64).reshape(-1)
+        h = np.minimum(tt, accel_hold_s)
+        cv = rel0[None, :, :] + tt[:, None, None] * vel[None, :, :]
+        rel = ego_xy_rel_t[:, None, :] - cv
+        dist = np.linalg.norm(rel, axis=-1)
+        n = rel / np.maximum(dist[..., None], 1.0e-9)
+        inward_disp = np.zeros_like(dist)
+        H = max(float(accel_hold_s), 1.0e-9)
+        for aidx, samples in enumerate(hist_acc_samples_rows):
+            aa = np.asarray(samples, dtype=np.float64).reshape(-1, 2)
+            sigma_a = np.max(n[:, aidx, :] @ aa.T, axis=1)
+            sigma_a = np.maximum(sigma_a, 0.0)
+            a0 = np.sum(n[:, aidx, :] * acc[aidx][None, :], axis=1)
+            # Current acceleration is one member of the historical set, hence
+            # sigma_a >= a0 up to floating error.  Clamp defensively to preserve
+            # monotone inward reachability under noisy input.
+            sigma_a = np.maximum(sigma_a, a0)
+            if not jerk_limited:
+                # a(s)=a0 + (sigma_a-a0)s/H, 0<=s<=h.
+                c0 = tt * h - 0.5 * h * h
+                c1 = 0.5 * tt * h * h - (h * h * h) / 3.0
+                inward_disp[:, aidx] = a0 * c0 + ((sigma_a - a0) / H) * c1
+                continue
+
+            jj = np.asarray(hist_jerk_samples_rows[aidx], dtype=np.float64).reshape(-1, 2)
+            sigma_j = np.max(n[:, aidx, :] @ jj.T, axis=1)
+            sigma_j = np.maximum(sigma_j, 0.0)
+            gap = np.maximum(sigma_a - a0, 0.0)
+            hit = np.full_like(gap, np.inf)
+            moving = sigma_j > 1.0e-12
+            hit[moving] = gap[moving] / sigma_j[moving]
+            q = np.minimum(h, hit)
+            # Integral_0^q (t-s)(a0+j s) ds.
+            first = a0 * (tt * q - 0.5 * q * q) + sigma_j * (0.5 * tt * q * q - (q * q * q) / 3.0)
+            # After reaching the historical hull support, keep it only until the
+            # pre-existing acceleration-hold horizon h; velocity then propagates
+            # naturally through the (t-s) kernel.
+            second = sigma_a * (tt * (h - q) - 0.5 * (h * h - q * q))
+            inward_disp[:, aidx] = first + second
+        lower_sep = dist - inward_disp
+        return lower_sep - ego_rad - arad[None, :]
 
     def _signed_clearance(ego_xy_rel_t: np.ndarray, times: np.ndarray) -> np.ndarray:
         clear_cv, clear_ca = _signed_clearance_components(ego_xy_rel_t, times)
@@ -801,11 +937,13 @@ def direct_executable_recovery_witness_features_from_sample(
     stop_decel = max(abs(a_min), 1.0e-3)
 
     feature_dim = (
-        18 if (boundary_localized_occupancy_trust or history_occupancy_reachability) else
+        22 if (interaction_anchor_support or interaction_response_support) else
+        (20 if (interaction_box_support or interaction_hull_support or interaction_anchor_support or interaction_response_support) else
+        (18 if (boundary_localized_occupancy_trust or history_occupancy_reachability) else
         (15 if soft_occupancy_disagreement else
         (14 if include_active_constraint_tail else
         (12 if include_semantic_alignment_tail else
-         (10 if include_recovery_stability_tail else DIRECT_EXECUTABLE_RECOVERY_WITNESS_FEATURE_DIM))))
+         (10 if include_recovery_stability_tail else DIRECT_EXECUTABLE_RECOVERY_WITNESS_FEATURE_DIM))))))
     )
     field = np.zeros((L, feature_dim), dtype=np.float32)
     for l in range(raw_L):
@@ -877,12 +1015,45 @@ def direct_executable_recovery_witness_features_from_sample(
             else:
                 history_optimism_gap = 0.0
                 history_boundary_deficit = 0.0
+
+            clear_interaction_box = _interaction_support_clearance(
+                rec_xy_rel, times, empirical_hull=False
+            )
+            clear_interaction_hull = _interaction_support_clearance(
+                rec_xy_rel, times, empirical_hull=True
+            )
+            interaction_box_optimism = (
+                float(np.max(np.maximum(clear_cv - clear_interaction_box, 0.0)) / distance_scale)
+                if clear_interaction_box is not None else 0.0
+            )
+            interaction_hull_optimism = (
+                float(np.max(np.maximum(clear_cv - clear_interaction_hull, 0.0)) / distance_scale)
+                if clear_interaction_hull is not None else 0.0
+            )
+            clear_interaction_anchor = _interaction_response_clearance(
+                rec_xy_rel, times, jerk_limited=False
+            )
+            clear_interaction_response = _interaction_response_clearance(
+                rec_xy_rel, times, jerk_limited=True
+            )
+            interaction_anchor_optimism = (
+                float(np.max(np.maximum(clear_cv - clear_interaction_anchor, 0.0)) / distance_scale)
+                if clear_interaction_anchor is not None else 0.0
+            )
+            interaction_response_optimism = (
+                float(np.max(np.maximum(clear_cv - clear_interaction_response, 0.0)) / distance_scale)
+                if clear_interaction_response is not None else 0.0
+            )
         else:
             c_min = c_terminal = 40.0
             occupancy_optimism_gap = 0.0
             current_boundary_deficit = 0.0
             history_optimism_gap = 0.0
             history_boundary_deficit = 0.0
+            interaction_box_optimism = 0.0
+            interaction_hull_optimism = 0.0
+            interaction_anchor_optimism = 0.0
+            interaction_response_optimism = 0.0
 
         h_min_clear = np.tanh((c_min - d_safe) / distance_scale)
         h_terminal_clear = np.tanh((c_terminal - d_safe) / distance_scale)
@@ -1002,7 +1173,34 @@ def direct_executable_recovery_witness_features_from_sample(
                     persistent_reserve = float(reserve_t[-1])
                 h_reentry = np.tanh(persistent_reserve / distance_scale)
             values.extend([h_route, h_reentry])
-        if boundary_localized_occupancy_trust or history_occupancy_reachability:
+        if interaction_anchor_support or interaction_response_support:
+            # v48.73 schema-9: coordinates 0--19 are execution-exact v48.72
+            # diagnostics.  20 is current-acceleration-anchored ramp optimism;
+            # 21 is observed-jerk-limited response optimism.  The v48.72 box/hull
+            # diagnostics are retained even though only one v48.73 trust is consumed.
+            values.extend([
+                float(np.tanh(occupancy_optimism_gap)),
+                float(np.tanh(current_boundary_deficit)),
+                float(np.tanh(history_optimism_gap)),
+                float(np.tanh(history_boundary_deficit)),
+                float(np.tanh(interaction_box_optimism)),
+                float(np.tanh(interaction_hull_optimism)),
+                float(np.tanh(interaction_anchor_optimism)),
+                float(np.tanh(interaction_response_optimism)),
+            ])
+        elif interaction_box_support or interaction_hull_support:
+            # v48.72 schema-8: coordinates 0--17 are execution-exact v48.71
+            # diagnostics.  18 is component-box directional support optimism;
+            # 19 is empirical-convex-hull directional support optimism.
+            values.extend([
+                float(np.tanh(occupancy_optimism_gap)),
+                float(np.tanh(current_boundary_deficit)),
+                float(np.tanh(history_optimism_gap)),
+                float(np.tanh(history_boundary_deficit)),
+                float(np.tanh(interaction_box_optimism)),
+                float(np.tanh(interaction_hull_optimism)),
+            ])
+        elif boundary_localized_occupancy_trust or history_occupancy_reachability:
             # v48.71 schema-7 diagnostics.  Coordinate 14 preserves v48.70 raw
             # current-CA optimism for direct ablation.  Coordinate 15 is the
             # current-CA *boundary deficit*.  Coordinates 16/17 are the analogous
@@ -1113,6 +1311,21 @@ DIRECT_OCCUPANCY_TEMPERED_RECOVERY_WITNESS_FEATURE_DIM = 15
 DIRECT_BOUNDARY_OCCUPANCY_REACHABILITY_WITNESS_FEATURE_SCHEMA = 7
 DIRECT_BOUNDARY_OCCUPANCY_REACHABILITY_WITNESS_FEATURE_DIM = 18
 
+# v48.72 OC-IORW appends two interaction-oriented reachability diagnostics.
+# The signed CV certificate and all first 18 coordinates remain execution-exact
+# to v48.71 schema 7.  Coordinate 18 is support-function erosion for the full
+# componentwise history box; coordinate 19 uses the tighter empirical convex
+# hull conv({0,a_tau}), excluding unobserved Cartesian corner combinations.
+DIRECT_INTERACTION_ORIENTED_RECOVERY_WITNESS_FEATURE_SCHEMA = 8
+DIRECT_INTERACTION_ORIENTED_RECOVERY_WITNESS_FEATURE_DIM = 20
+
+# v48.73 OC-IRRW retains every v48.72 coordinate and appends two temporal
+# interaction-response diagnostics.  Coordinate 20 anchors the empirical hull to
+# current acceleration with a parameter-free ramp over the existing prefix hold;
+# coordinate 21 additionally restricts evolution by observed history jerk.
+DIRECT_INTERACTION_RESPONSE_RECOVERY_WITNESS_FEATURE_SCHEMA = 9
+DIRECT_INTERACTION_RESPONSE_RECOVERY_WITNESS_FEATURE_DIM = 22
+
 
 def direct_semantic_recovery_witness_features_from_sample(
     d: dict[str, Any], cfg: dict | None = None, *, num_options: int | None = None
@@ -1152,12 +1365,26 @@ def direct_semantic_recovery_witness_features_from_sample(
     history_occupancy_reachability = bool(
         model_cfg.get("direct_recovery_semantic_witness_history_occupancy_reachability", False)
     )
+    interaction_box_support = bool(
+        model_cfg.get("direct_recovery_semantic_witness_interaction_box_support", False)
+    )
+    interaction_hull_support = bool(
+        model_cfg.get("direct_recovery_semantic_witness_interaction_hull_support", False)
+    )
+    interaction_anchor_support = bool(
+        model_cfg.get("direct_recovery_semantic_witness_interaction_anchor_support", False)
+    )
+    interaction_response_support = bool(
+        model_cfg.get("direct_recovery_semantic_witness_interaction_response_support", False)
+    )
     active_constraint_tail = bool(
         model_cfg.get("direct_recovery_semantic_witness_route_alignment", False)
         or model_cfg.get("direct_recovery_semantic_witness_reentry_alignment", False)
         or control_projection or boundary_transport or projection_fidelity
         or demand_normalized_fidelity or robust_occupancy or soft_occupancy_disagreement
         or boundary_localized_occupancy_trust or history_occupancy_reachability
+        or interaction_box_support or interaction_hull_support
+        or interaction_anchor_support or interaction_response_support
     )
     out = direct_executable_recovery_witness_features_from_sample(
         d, cfg, num_options=num_options, include_recovery_stability_tail=True,
@@ -1169,14 +1396,22 @@ def direct_semantic_recovery_witness_features_from_sample(
         soft_occupancy_disagreement=soft_occupancy_disagreement,
         boundary_localized_occupancy_trust=boundary_localized_occupancy_trust,
         history_occupancy_reachability=history_occupancy_reachability,
+        interaction_box_support=interaction_box_support,
+        interaction_hull_support=interaction_hull_support,
+        interaction_anchor_support=interaction_anchor_support,
+        interaction_response_support=interaction_response_support,
     )
     expected_dim = (
-        DIRECT_BOUNDARY_OCCUPANCY_REACHABILITY_WITNESS_FEATURE_DIM
+        DIRECT_INTERACTION_RESPONSE_RECOVERY_WITNESS_FEATURE_DIM
+        if (interaction_anchor_support or interaction_response_support) else
+        (DIRECT_INTERACTION_ORIENTED_RECOVERY_WITNESS_FEATURE_DIM
+        if (interaction_box_support or interaction_hull_support) else
+        (DIRECT_BOUNDARY_OCCUPANCY_REACHABILITY_WITNESS_FEATURE_DIM
         if (boundary_localized_occupancy_trust or history_occupancy_reachability) else
         (DIRECT_OCCUPANCY_TEMPERED_RECOVERY_WITNESS_FEATURE_DIM
         if soft_occupancy_disagreement else
         (DIRECT_ACTIVE_CONSTRAINT_RECOVERY_WITNESS_FEATURE_DIM
-         if active_constraint_tail else DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_DIM))
+         if active_constraint_tail else DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_DIM))))
     )
     if out.ndim != 2 or out.shape[1] != expected_dim:
         raise ValueError(f"invalid OC-SARW feature field shape: {out.shape}")
@@ -1571,8 +1806,24 @@ def _persistent_tensor_cache_key(
     semantic_history_occupancy_reachability = bool(
         model_cfg.get("direct_recovery_semantic_witness_history_occupancy_reachability", False)
     )
+    semantic_interaction_box_support = bool(
+        model_cfg.get("direct_recovery_semantic_witness_interaction_box_support", False)
+    )
+    semantic_interaction_hull_support = bool(
+        model_cfg.get("direct_recovery_semantic_witness_interaction_hull_support", False)
+    )
+    semantic_interaction_anchor_support = bool(
+        model_cfg.get("direct_recovery_semantic_witness_interaction_anchor_support", False)
+    )
+    semantic_interaction_response_support = bool(
+        model_cfg.get("direct_recovery_semantic_witness_interaction_response_support", False)
+    )
     semantic_feature_schema = (
-        DIRECT_BOUNDARY_OCCUPANCY_REACHABILITY_WITNESS_FEATURE_SCHEMA
+        DIRECT_INTERACTION_RESPONSE_RECOVERY_WITNESS_FEATURE_SCHEMA
+        if semantic_witness_features_enabled and (semantic_interaction_anchor_support or semantic_interaction_response_support)
+        else (DIRECT_INTERACTION_ORIENTED_RECOVERY_WITNESS_FEATURE_SCHEMA
+        if semantic_witness_features_enabled and (semantic_interaction_box_support or semantic_interaction_hull_support)
+        else (DIRECT_BOUNDARY_OCCUPANCY_REACHABILITY_WITNESS_FEATURE_SCHEMA
         if semantic_witness_features_enabled and (semantic_boundary_localized_occupancy_trust or semantic_history_occupancy_reachability)
         else (DIRECT_OCCUPANCY_TEMPERED_RECOVERY_WITNESS_FEATURE_SCHEMA
         if semantic_witness_features_enabled and semantic_soft_occupancy_disagreement
@@ -1584,7 +1835,7 @@ def _persistent_tensor_cache_key(
               if semantic_witness_features_enabled and (semantic_control_projection or semantic_boundary_transport)
               else (DIRECT_ACTIVE_CONSTRAINT_RECOVERY_WITNESS_FEATURE_SCHEMA
                     if semantic_witness_features_enabled and (semantic_route_alignment or semantic_reentry_alignment)
-                    else (DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA if semantic_witness_features_enabled else 0))))))
+                    else (DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA if semantic_witness_features_enabled else 0))))))))
     )
     payload = {
         "schema": _PERSISTENT_TENSOR_CACHE_SCHEMA,
@@ -1625,6 +1876,10 @@ def _persistent_tensor_cache_key(
         "semantic_witness_soft_occupancy_disagreement": semantic_soft_occupancy_disagreement,
         "semantic_witness_boundary_localized_occupancy_trust": semantic_boundary_localized_occupancy_trust,
         "semantic_witness_history_occupancy_reachability": semantic_history_occupancy_reachability,
+        "semantic_witness_interaction_box_support": semantic_interaction_box_support,
+        "semantic_witness_interaction_hull_support": semantic_interaction_hull_support,
+        "semantic_witness_interaction_anchor_support": semantic_interaction_anchor_support,
+        "semantic_witness_interaction_response_support": semantic_interaction_response_support,
         "semantic_witness_recovery_horizon_s": (float(cfg.get("recovery_horizon_s", 4.0)) if semantic_witness_features_enabled else 0.0),
         "semantic_witness_sample_rate_hz": (float(cfg.get("sample_rate_hz", 10.0)) if semantic_witness_features_enabled else 0.0),
         "npz_keys": sorted(MODEL_SAMPLE_NPZ_KEYS),

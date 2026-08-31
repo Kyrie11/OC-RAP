@@ -9,8 +9,15 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from ocrap.data.serialization import load_npz
-from ocrap.models.data import iter_sample_paths_many, manifest_metadata_for_path, sample_to_feature, scalar_metadata_for_path
+from ocrap.data.serialization import load_npz_selected
+from ocrap.models.data import (
+    MODEL_SAMPLE_NPZ_KEYS,
+    iter_sample_paths_many,
+    manifest_metadata_for_path,
+    sample_to_feature,
+    samples_to_feature_matrix,
+    scalar_metadata_for_path,
+)
 
 
 # The external-baseline adapters intentionally derive all supervision from the
@@ -19,6 +26,19 @@ from ocrap.models.data import iter_sample_paths_many, manifest_metadata_for_path
 ACTOR_TOPO_FEATURE_DIM = 16
 MAP_TOPO_FEATURE_DIM = 14
 GAMEFORMER_STATE_DIM = 9
+
+# Read only arrays that external planners actually consume.  OC-RAP NPZs can
+# contain large teacher-future/debug tensors; decompressing those for imitation
+# planners is pure I/O overhead and was particularly expensive for near/contact
+# datasets with 11/13 future branches per sample.
+EXTERNAL_BASELINE_NPZ_KEYS: frozenset[str] = MODEL_SAMPLE_NPZ_KEYS | frozenset({
+    "dt", "oracle_gap_star", "post_contact_deployability",
+    "prefix_macro_name", "yaw_rate", "yaw_rate_series", "initial_speed", "regime_label",
+})
+
+
+def load_external_sample(path: str | Path) -> dict[str, Any]:
+    return load_npz_selected(path, EXTERNAL_BASELINE_NPZ_KEYS)
 
 
 def use_teacher_branch_context(cfg: dict[str, Any]) -> bool:
@@ -200,6 +220,15 @@ def _group_metadata(path_key: str) -> tuple[str, int, int]:
 
 
 def group_sample_paths(dataset: str | Path, split: str | set[str] = "train") -> list[list[Path]]:
+    """Group every sample present in the requested dataset split.
+
+    Dataset directories such as ``train_safe`` / ``train_near_contact`` /
+    ``train_contact`` are experimental strata, not purity constraints.  The
+    external baselines therefore consume the *entire* split exactly as it was
+    constructed, including any cross-regime hard examples that are present in
+    that directory.  This matches OC-RAP's training-data exposure and avoids an
+    asymmetric filtering advantage for external baselines.
+    """
     paths = iter_sample_paths_many(dataset)
     grouped: dict[tuple[str, str, int], list[tuple[int, Path]]] = defaultdict(list)
     for p in paths:
@@ -209,7 +238,7 @@ def group_sample_paths(dataset: str | Path, split: str | set[str] = "train") -> 
         scene_id, time_index, candidate_index = _group_metadata(str(p.resolve()))
         grouped[(dataset_label_for_path(p), scene_id, time_index)].append((candidate_index, p))
     out: list[list[Path]] = []
-    for _, group in sorted(grouped.items(), key=lambda kv: (kv[0][0], kv[0][1], kv[0][2])):
+    for _key, group in sorted(grouped.items(), key=lambda kv: (kv[0][0], kv[0][1], kv[0][2])):
         out.append([p for _, p in sorted(group, key=lambda item: (item[0], str(item[1])))])
     return out
 
@@ -264,22 +293,10 @@ def _wrap_angle(x: np.ndarray | float) -> np.ndarray | float:
     return (np.asarray(x) + np.pi) % (2.0 * np.pi) - np.pi
 
 
-def _history_arrays(d: dict[str, Any], cfg: dict[str, Any]) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Return deployable GameFormer-style histories in the current ego frame.
-
-    OC-RAP stores 16-D WOMD actor features, whereas the compact GameFormer
-    adapter consumes nine channels.  We preserve position, velocity,
-    acceleration and heading information, but express all planar quantities in
-    the last observed ego frame.  The candidate-prefix target is likewise
-    relative, which prevents the decoder from learning global-map coordinates.
-    """
-    H = _cfg_int(cfg, ("external_baselines", "model", "history_len"), 11)
-    A = _cfg_int(cfg, ("external_baselines", "model", "neighbors_to_predict"), 8)
-    T = _cfg_int(cfg, ("external_baselines", "model", "future_len"), 20)
+def _history_frame(d: dict[str, Any]) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float, np.ndarray]:
     hist = np.asarray(d.get("agent_history", np.zeros((0, 0, 0))), dtype=np.float32)
     valid = np.asarray(d.get("agent_valid", np.zeros((0, 0))), dtype=bool)
     ego_state = np.asarray(d.get("ego_state", np.zeros((9,))), dtype=np.float32).reshape(-1)
-
     origin = ego_state[:2].astype(np.float32) if ego_state.size >= 2 else np.zeros(2, dtype=np.float32)
     yaw0 = float(ego_state[4]) if ego_state.size >= 5 else 0.0
     if hist.ndim == 3 and valid.ndim == 2 and hist.shape[:2] == valid.shape and hist.shape[1] > 0:
@@ -292,6 +309,16 @@ def _history_arrays(d: dict[str, Any], cfg: dict[str, Any]) -> tuple[np.ndarray,
                 yaw0 = float(e[7])
     c, sn = float(np.cos(yaw0)), float(np.sin(yaw0))
     rot = np.asarray([[c, sn], [-sn, c]], dtype=np.float32)
+    return hist, valid, ego_state, origin, yaw0, rot
+
+
+def _history_scene_arrays(
+    d: dict[str, Any], cfg: dict[str, Any]
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float, np.ndarray]:
+    """Build scene/time history once for all candidate prefixes in a group."""
+    H = _cfg_int(cfg, ("external_baselines", "model", "history_len"), 11)
+    A = _cfg_int(cfg, ("external_baselines", "model", "neighbors_to_predict"), 8)
+    hist, valid, ego_state, origin, yaw0, rot = _history_frame(d)
 
     def encode(raw: np.ndarray) -> np.ndarray:
         out = np.zeros((raw.shape[0], GAMEFORMER_STATE_DIM), dtype=np.float32)
@@ -329,11 +356,23 @@ def _history_arrays(d: dict[str, Any], cfg: dict[str, Any]) -> tuple[np.ndarray,
             pseudo[0, 3:5] = ego_state[2:4]
         pseudo[0, 7] = yaw0
         ego_hist[:] = encode(pseudo)[0]
+    return ego_hist, neigh_hist, neigh_valid.astype(bool), origin, yaw0, rot
 
+
+def _prefix_traj_array(
+    d: dict[str, Any], cfg: dict[str, Any], origin: np.ndarray, rot: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    T = _cfg_int(cfg, ("external_baselines", "model", "future_len"), 20)
     prefix_xy, prefix_valid = _resample_xy(_ego_prefix_xy(d), T)
     prefix_xy = (prefix_xy - origin[None, :]) @ rot.T
-    return ego_hist, neigh_hist, neigh_valid.astype(bool), np.nan_to_num(prefix_xy), prefix_valid.astype(bool)
+    return np.nan_to_num(prefix_xy), prefix_valid.astype(bool)
 
+
+def _history_arrays(d: dict[str, Any], cfg: dict[str, Any]) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Return deployable GameFormer-style histories in the current ego frame."""
+    ego_hist, neigh_hist, neigh_valid, origin, _yaw0, rot = _history_scene_arrays(d, cfg)
+    prefix_xy, prefix_valid = _prefix_traj_array(d, cfg, origin, rot)
+    return ego_hist, neigh_hist, neigh_valid, prefix_xy, prefix_valid
 
 def _crossing_binary(src_xy: np.ndarray, tgt_xy: np.ndarray, threshold: float = 3.0) -> bool:
     """Binary behavior-braid proxy following BeTop's x-time crossing idea."""
@@ -498,10 +537,11 @@ def _target_index(samples: list[dict[str, Any]], baseline: str, cfg: dict[str, A
     mode = str(bcfg.get("supervision_target", "logged_nominal")).lower()
     allow_teacher = bool(bcfg.get("allow_teacher_supervision", False))
     if mode != "teacher_rank" or not allow_teacher:
-        if nominal_idx < feasible.size and feasible[nominal_idx]:
-            return nominal_idx
-        ids = np.where(feasible)[0]
-        return int(ids[0]) if ids.size else nominal_idx
+        # Pure imitation planners must imitate the logged trajectory even when
+        # OC-RAP's candidate-level feasibility annotation marks that prefix as
+        # undesirable. Falling back to a different "feasible" candidate would
+        # silently inject OC-RAP supervision into the external baseline.
+        return nominal_idx
 
     utility = np.asarray([_scalar(d, "utility", 0.0) for d in samples], dtype=np.float32)
     hard = np.asarray([_scalar(d, "hard_violation", 0.0) for d in samples], dtype=np.float32)
@@ -527,15 +567,15 @@ class ExternalGroupDataset(Dataset):
         self.groups = group_sample_paths(dataset, split=split)
         if not self.groups:
             raise ValueError(f"No grouped samples found in {dataset!s} for split={split!r}")
-        first = load_npz(self.groups[0][0])
+        first = load_external_sample(self.groups[0][0])
         self.feature_dim = int(sample_to_feature(first, cfg).shape[0])
         bcfg = cfg.get("external_baselines", {}) if isinstance(cfg.get("external_baselines", {}), dict) else {}
         mcfg = bcfg.get("model", {}) if isinstance(bcfg.get("model", {}), dict) else {}
         self.arch = str(mcfg.get("arch", self.baseline)).lower()
         self.max_candidates = int(bcfg.get("max_candidates", max(len(g) for g in self.groups)))
         self.use_teacher_branch_context = use_teacher_branch_context(cfg)
-        self.need_history = self.arch in {"gameformer", "gameformer_lite", "gameformer_levelk"}
-        self.need_topology = self.arch in {"betop", "betop_lite", "betopnet", "betopnet_lite"}
+        self.need_history = self.arch in {"gameformer", "gameformer_lite", "gameformer_levelk", "plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter", "pdm_hybrid", "pdm_hybrid_adapter"}
+        self.need_topology = self.arch in {"betop", "betop_lite", "betopnet", "betopnet_lite", "plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter"}
 
         if self.use_teacher_branch_context:
             m0, rf0, _, _, _ = _branch_arrays(first, cfg)
@@ -576,7 +616,7 @@ class ExternalGroupDataset(Dataset):
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         paths = self.groups[idx][: self.max_candidates]
-        samples = [load_npz(p) for p in paths]
+        samples = [load_external_sample(p) for p in paths]
         n = len(samples)
         x = np.zeros((self.max_candidates, self.feature_dim), dtype=np.float32)
         mask = np.zeros((self.max_candidates,), dtype=bool)
@@ -614,9 +654,16 @@ class ExternalGroupDataset(Dataset):
                 "map_topology_mask": np.zeros((self.max_candidates, self.num_topology_map), dtype=bool),
             })
 
+        feature_matrix = samples_to_feature_matrix(samples, self.cfg, shared_scene=True)
+        if n:
+            x[:n] = feature_matrix[:n]
+            mask[:n] = True
+
+        shared_history = _history_scene_arrays(samples[0], self.cfg) if self.need_history and samples else None
+        if shared_history is not None:
+            shared_eh, shared_nh, shared_nv, shared_origin, _shared_yaw, shared_rot = shared_history
+
         for i, d in enumerate(samples):
-            x[i] = sample_to_feature(d, self.cfg)
-            mask[i] = True
             utility[i] = _scalar(d, "utility", 0.0)
             hard[i] = _scalar(d, "hard_violation", 0.0)
             harm[i] = _scalar(d, "harm_proxy", 0.0)
@@ -631,10 +678,13 @@ class ExternalGroupDataset(Dataset):
                 out_arrays["root_valid"][i] = rv
                 out_arrays["option_valid"][i] = ov
             if self.need_history:
-                eh, nh, nv, pt, pv = _history_arrays(d, self.cfg)
-                out_arrays["ego_history"][i] = eh
-                out_arrays["neighbor_history"][i] = nh
-                out_arrays["neighbor_valid"][i] = nv
+                # Candidates in one group share scene/time history.  Reuse the
+                # expensive LSTM input construction and only transform the
+                # candidate-specific prefix trajectory.
+                pt, pv = _prefix_traj_array(d, self.cfg, shared_origin, shared_rot)
+                out_arrays["ego_history"][i] = shared_eh
+                out_arrays["neighbor_history"][i] = shared_nh
+                out_arrays["neighbor_valid"][i] = shared_nv
                 out_arrays["prefix_traj"][i] = pt
                 out_arrays["prefix_valid"][i] = pv
             if self.need_topology:
