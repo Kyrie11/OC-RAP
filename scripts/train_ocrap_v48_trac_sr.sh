@@ -365,6 +365,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.direct_value_ordinal_evidence_target_probability="${ORDINAL_EVIDENCE_TARGET_PROBABILITY:-0.60}" \
   --set training.direct_value_evidence_calibrator_anchor_weight="${EVIDENCE_CALIBRATOR_ANCHOR_WEIGHT:-0.0}" \
   --set training.direct_value_absolute_feasibility_weight="${ABSOLUTE_FEASIBILITY_WEIGHT:-0.0}" \
+  --set training.direct_value_absolute_feasibility_truth_contract="${ABSOLUTE_FEASIBILITY_TRUTH_CONTRACT:-legacy_full}" \
   --set training.direct_value_ordinal_evidence_proposal_topk_weight="${ORDINAL_EVIDENCE_PROPOSAL_TOPK_WEIGHT:-0.0}" \
   --set training.direct_value_ordinal_evidence_proposal_topk="${ORDINAL_EVIDENCE_PROPOSAL_TOPK:-3}" \
   --set training.direct_value_ordinal_evidence_proposal_rank_decay="${ORDINAL_EVIDENCE_PROPOSAL_RANK_DECAY:-0.75}" \

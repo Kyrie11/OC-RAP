@@ -7499,3 +7499,88 @@ GPU0=0 GPU1=1 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
 
 The launcher still fail-closes before GPU work if actual runtime code, V48.73 prerequisite attribution, or schema-10 serializer/source identity is wrong.
 \n\n## v48.74.2 OC-SVBW-ENGFIX — schema-10 inference/calibration contract hotfix (2026-09-01)\n\n**类别：纯工程修复；V48.74 OC-SVBW 的 P/Q 数学定义、feature values、训练目标、数据、Stage-I、RIFA、top-K=5、0.5 threshold、boundary transport 状态和外部运行命令全部不变。**\n\n### Trigger / attribution decision\n\nV48.74.1 的 runtime provenance 与 reference-reuse contract 均已通过，P74/Q74 的 balanced/precision 四个训练也均完成 21 epochs，state isolation 显示 170 个共享 Stage-I tensors bitwise unchanged、唯一新增 trainable state 仍为 `direct_absolute_semantic_witness_gain[2]`，checkpoint metadata 均为 schema 10/source `signed_finite_time_viability_projected_recovery_witness`。\n\n但正式 launcher 在训练完成后的 adaptation-dev/certificate proposal extraction 阶段返回 RC30。`src/ocrap/models/inference.py::load_model_bundle` 仍按历史 V48.73 selector flags 推断 semantic-witness schema：P74/Q74 为了复用 coordinate-20/21 selector，仍启用 `interaction_anchor_support` / `interaction_response_support`，旧 loader 因而要求 schema 9，并拒绝实际正确的 schema-10 checkpoint：\n\n```text\nlegacy/unknown OC-SARW checkpoint feature semantics:\nschema=10; configuration requires semantic-witness schema=9\n```\n\n结果是 balanced/precision 的 dev-Near/dev-Contact proposal extraction 全部失败，calibration risk artifacts 未生成，certificate gate 未评估，`CALIBRATION_FAILED.json` / `NEXT_COMMANDS_BLOCKED.json` 记录 RC30。因此当前 V48.74.1 partial results **engineering-incomplete，不允许 scientific attribution**；不得使用已训练 checkpoint 的 partial train metrics 提前判断 P74/Q74 GO/STOP。\n\n### Root cause\n\nV48.74.1 已经正确升级了训练 serializer、dataset materializer 和 model raw-debt consumption，但 inference checkpoint validator 没有同步升级。它只根据历史 feature-selector booleans 重建 expected schema，而没有先识别 V48.74 的 serialized `(schema=10, source=signed_finite_time_viability_projected_recovery_witness)` contract。\n\n这不是算法错误，也不是 dataset/reconstruction/runtime-path 错误；是 **training/checkpoint contract 与 inference/calibration contract 的最后一处版本漂移**。\n\n### Engineering repair\n\n1. `load_model_bundle` 先读取 serialized semantic feature `schema` 与 `source`。只要任一侧声明 V48.74，就要求两者必须精确组成 schema-10/source pair；不接受半升级 metadata。\n2. 对合法 schema-10 checkpoint，expected schema 固定为 10，不再被继承的 V48.73 anchor/response selector 映射回 schema 9。\n3. schema-10 inference 额外要求 `OCRAP_V48_74_SIGNED_VIABILITY=1`。这样 calibration/evaluation 的 feature materializer 与 model raw-debt decoder 必须和 checkpoint 同时处于 V48.74 语义，避免 silent schema mismatch。正式 V48.74 launcher 已在进程级 `export` 该变量，因此用户命令不变。\n4. V48.73 以及 schema 1--9 的历史 selector-derived validation 逻辑不变。\n5. 新增 P74/Q74 synthetic checkpoint round-trip regression，直接覆盖本次 RC30 路径；另有 overlay-off fail-closed regression，防止 schema-10 checkpoint 在 V48.73 feature mode 下被静默加载。\n6. 工程版本升级为 `v48.74.2-OC-SVBW-ENGFIX`；算法版本仍为 `v48.74-DCP-DRFC-BCDE-RIFA-OC-SVBW`。\n\n### Run / attribution contract\n\n外部命令仍为：\n\n```bash\nGPU0=0 GPU1=1 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \\\n  bash scripts/run_v48_74_dcp_drfc_bcde_rifa_svbw_two_gpu.sh\n```\n\n建议完整重跑而不是把 V48.74.1 的 trained P/Q checkpoint 与新 calibration artifacts 手工拼接。只有新的 top-level pipeline sentinel 满足 `valid=true`, `attribution_ready=true`, `engineering_version=v48.74.2-OC-SVBW-ENGFIX`, `errors=[]`, `test_roots_read=false` 后，才恢复原 V48.74 preregistration：`P74-reference -> Q74-P74 -> Q74-reference -> dual selectivity -> non-floor -> full source`。\n
+## v48.75 — OC-STCA: Observation-Consistent Structural-Truth Contract Adjudication (2026-09-01)
+
+### Entry condition: authoritative V48.74.2 decision
+
+V48.74.2 OC-SVBW is engineering-valid and attribution-ready. Runtime/checkpoint schema-10 contracts, reference reuse, P/Q balanced+precision training, recalibration, state/variant isolation, row alignment, signed-viability audit, truth-floor audit, and the final pipeline sentinel all complete without RC30 engineering failure. The final engineering version is `v48.74.2-OC-SVBW-ENGFIX`; `test_roots_read=false` and `dataset_reconstruction=false`.
+
+V48.74 is a **scientific STOP** under its preregistration.
+
+- P74 first-order signed finite-time viability has a reproducible but incomplete ordering signal: P-reference source/probability ordering is positive in 6/8 cells, with the two Near splits in both balanced/precision reaching roughly `+0.005--+0.007`. The material-effect and ordering gates pass.
+- P74 fails the required dual-selectivity gate: `safe-positive retention > harmful retention` fails in **8/8** cells, while teacher-feasible retention exceeds teacher-infeasible only in 6/8. P74 also fails the preregistered non-floor gate (4/8 positive).
+- Q74 high-order acceleration debt has no meaningful incremental value. `Q-P` is zero or order `1e-5--1e-4`; the high-order increment gate fails. No B2/acceleration term is promoted.
+- Q74-reference ordering remains positive in 6/8 and Q74 non-floor ordering is positive in 6/8, but the non-floor effects are only order `1e-5--1e-3`; dual selectivity still fails because safe-positive retention is lower than harmful retention in every cell.
+- Certificate sign/set identity is exact for P/reference, Q/reference and Q/P in 8/8, so the failure is not caused by silently changing witness availability.
+- Absolute harmful/teacher-infeasible admission remains approximately `0.043--0.053`, well below the historical 0.25 cap. The failure is therefore selective recall/admission, not permissive relapse.
+- Q-native-B full-source ordering is positive only in the two dev-Contact cells and never reaches `+0.01`. Safe-positive admission versus P66 improves in **0/8** cells.
+- Final comparison records `status=STOP`, `full_source_go=false`, and the preregistered next branch `signed_viability_stop_then_supervision_truth_contract_no_parameter_sweep`.
+
+### Mechanism conclusion
+
+V48.74 closes the geometric/kinematic witness-enrichment branch. First-order finite-time signed viability is retained only as an **ablation/diagnostic statistic**: it contains some teacher-feasibility ordering information, especially in Near, but it is not a valid Main trust mechanism because it systematically attenuates intervention-safe recovery at least as much as harmful recovery. The high-order acceleration extension is rejected rather than tuned.
+
+The V48.74 truth-floor audit explains why further barrier tuning is not causally justified. Exact `R_dep*=0.5` structural-plateau rows occupy roughly 91--96% of teacher-feasible samples across the formal Near/Contact cells. Safe-positive plateau prevalence is especially high in Near (~94% in both dev and certificate) and remains substantial in Contact (~51% dev, ~74% certificate), whereas harmful rows are essentially absent from this plateau. Thus the historical absolute BCE treats many structurally admitted but physically ambiguous rows as ordinary positive recoverability labels. A physically stricter signed-viability trust can therefore improve teacher-feasible/infeasible ordering while simultaneously hurting `safe-positive > harmful` retention.
+
+The immediate dominant bottleneck is tightened to:
+
+`identifiable supervision semantics for physical deployable recoverability under a structural teacher contract`.
+
+This is upstream of boundary transport, relative ranking, and three-regime deployment. No additional clearance/trajectory/response heuristic is authorized until the target semantics are adjudicated.
+
+### V48.75 intervention: structural-plateau censored absolute supervision
+
+V48.75 does **not** reconstruct data, rewrite teacher files, change OC-MERO labels, or introduce a new planner feature. It adds one fail-closed supervision policy to the existing two-parameter absolute source:
+
+- `legacy_full` (default): historical execution-exact behavior; every finite non-nominal Near/Contact candidate is supervised by `1[R_dep_star >= 0]`.
+- `censor_exact_0p5`: candidates with exact `R_dep_star == 0.5` within fixed tolerance `1e-8` are excluded from the absolute-feasibility BCE and its model-selection metric. They are **not relabelled negative**. All non-floor candidate targets remain the historical sign predicate. All other losses/teacher tensors remain untouched.
+
+The fixed value/tolerance come from the preregistered read-only truth-floor audit and are not exposed as a grid or tunable hyperparameter. `scripts/adapt_ocrap_v48_36_ocaf_single_stage.sh` defaults to `legacy_full`, so all historical launchers remain execution-compatible. The new lower-level training wiring serializes `training.direct_value_absolute_feasibility_truth_contract` into the checkpoint for attribution.
+
+### Factorial experiment
+
+Historical arms are reused without retraining:
+
+- `Q67_CTRLPROJ`: actuator-projected recovery, projection-fidelity OFF, historical full supervision.
+- `T68_FIDELITY`: same projected recovery, projection-fidelity ON, historical full supervision.
+
+Only two new arms train:
+
+- `C75_PROJ_CENSORED`: Q67 mechanism with `censor_exact_0p5` supervision.
+- `D75_FIDELITY_CENSORED` / Main: T68 mechanism with `censor_exact_0p5` supervision.
+
+All four cells use the same V48.56-A Stage-I/root/proposal source, route + persistent-reentry semantics, actuator projection, top-K=5, threshold=0.5, option library, datasets, and RIFA order. Boundary transport is OFF. C/D add only `direct_absolute_semantic_witness_gain[2]` and preserve all shared Stage-I tensors bitwise.
+
+Causal comparisons:
+
+1. `C75-Q67`: causal effect of structural-plateau censoring with projection only.
+2. `D75-T68`: causal effect of censoring with the historically retained projection-fidelity primitive.
+3. `D75-C75`: projection-fidelity effect under censored/non-floor supervision.
+4. `(D75-C75) - (T68-Q67)`: descriptive interaction showing whether the historical fidelity conclusion survives truth-contract adjudication.
+
+### Preregistered decision
+
+Engineering/state/row contracts must pass before any scientific interpretation. C/Q67 and D/T68 positive-certificate sign/set and teacher labels must remain exact because V48.75 changes supervision only.
+
+The **primary endpoint is non-floor absolute-feasibility ordering**, not full-label AUC. Full-label AUC is diagnostic because exact-0.5 rows were deliberately removed from the new BCE.
+
+- A supervision main effect (`C-Q` or `D-T`) requires non-floor AUC positive in at least 6/8 cells and at least 4/8 cells `>= +0.005` (or a positive preregistered paired bootstrap lower bound if added later without changing the deterministic gate).
+- `D-C` must be positive in at least 6/8 non-floor cells to retain projection fidelity under the adjudicated target. Otherwise the historical projection-fidelity promotion is demoted for Main use.
+- Harmful and teacher-infeasible absolute admission for D75 must remain <=0.25 in every cell.
+- Non-floor safe-positive sample support is reported explicitly. If fewer than five non-floor safe positives are available in more than two cells, V48.75 may identify a truth-contract conflict but is underpowered for planner-policy promotion.
+- If censoring improves non-floor ordering while full-label ordering degrades, this is **not** a failure of the adjudication: it is evidence that structural-floor supervision and physical recoverability are causally conflicting targets.
+- `truth_contract_causal_confound_go=true` does not authorize boundary transport or a final SOTA claim. It requires reconciliation of the paper/teacher truth contract before another planner mechanism is promoted.
+- If censoring fails to improve non-floor ordering, the structural floor remains a publication debt but is not the dominant training cause; the next work must audit the absolute supervision/representation interface, still without returning to geometric/kinematic parameter sweeps.
+
+### Continue to avoid / newly forbidden
+
+All prior exclusions remain in force: no Safe/Near/Contact router/expert/policy/threshold/budget; no threshold/LR/horizon/feature-scale/class-weight/gain grids; no proposal/top-K expansion; no unsupported option-library expansion; no generic AFE/MLP or broad encoder/root/margin retraining; no candidate-only CPHR, compensatory ERWF, per-option negative veto, quantifier sweep, privileged future/component-margin distillation, class-local/path-stop Main, post-hoc hard control veto, hard CV/CA min, demand-only forgiveness, raw one-point disagreement, V48.71 boundary-deficit localization, or relative-ranker changes before an absolute source is scientifically valid.
+
+V48.74 adds the following explicit exclusions:
+
+- do not promote P74/Q74 OC-SVBW into Main;
+- do not tune `B1/B2`, `tau`, derivative smoothing, signed-viability normalization, debt scale, high-order weight, or P/Q mixing;
+- do not reinterpret Q74's tiny `Q-P` effect as evidence for a high-order CBF branch;
+- do not reopen boundary transport on the basis of Q74's 6/8 non-floor sign count because dual selectivity and full source both failed;
+- do not reconstruct datasets or silently relabel exact-0.5 plateau rows negative; V48.75 uses censoring/unknown supervision only;
+- do not treat a full-label AUC decrease under V48.75 as sufficient reason to restore structural-floor positives if non-floor physical ordering improves.
