@@ -238,7 +238,7 @@ def _absolute_feasibility_supervision_mask(
     """
     cfg = tcfg or {}
     policy = str(cfg.get('direct_value_absolute_feasibility_truth_contract', 'legacy_full')).strip().lower()
-    if policy not in {'legacy_full', 'censor_exact_0p5'}:
+    if policy not in {'legacy_full', 'censor_exact_0p5', 'censor_structural_tail'}:
         raise ValueError(f'unsupported absolute feasibility truth contract: {policy!r}')
     target_r_dep = batch['r_dep_star'].float().reshape(-1)
     is_nominal = batch['is_nominal'].reshape(-1) > 0.5
@@ -250,6 +250,20 @@ def _absolute_feasibility_supervision_mask(
         # audits.  These constants are not exposed as sweepable hyperparameters.
         floor_mask = base_mask & (torch.abs(target_r_dep - 0.5) <= 1.0e-8)
         base_mask = base_mask & ~floor_mask
+    elif policy == 'censor_structural_tail':
+        # V48.79 OC-PSTC: use the precomputed *nested teacher-tail* exposure
+        # index only as a supervision censor.  The model never receives the
+        # exposure or any future/teacher metadata as an input feature.  Unlike
+        # V48.75, exact numerical plateaus are not the criterion: a row is kept
+        # iff its active nested OC-MERO tail is conservatively guaranteed not
+        # to traverse any root-option cell that can invoke the teacher's
+        # structural floor/override/hidden-branch rules.
+        physical = batch.get('absolute_truth_physical_identifiable')
+        if physical is None:
+            raise ValueError('censor_structural_tail requires absolute_truth_physical_identifiable in the batch')
+        physical = physical.reshape(-1) > 0.5
+        floor_mask = base_mask & ~physical
+        base_mask = base_mask & physical
     target = (target_r_dep >= 0.0).to(dtype=torch.float32)
     return base_mask, target, floor_mask
 
@@ -1543,7 +1557,7 @@ def train(dataset: str, output: str, cfg: dict, val_dataset: str | None=None) ->
     def _cached_bytes(ds):
         fn = getattr(ds, 'cached_tensor_bytes', None)
         return int(fn()) if callable(fn) else 0
-    print({'event': 'dataset_materialization_done', 'cache_samples_in_memory': bool(getattr(train_ds, 'cache_samples_in_memory', False)), 'persistent_tensor_cache': bool(getattr(train_ds, 'persistent_tensor_cache', False)), 'train_tensor_cache': getattr(train_ds, 'tensor_cache_event', {}), 'val_tensor_cache': getattr(val_ds, 'tensor_cache_event', {}), 'seconds': round(dataset_materialize_seconds, 3), 'train_cached_bytes': _cached_bytes(train_ds), 'val_cached_bytes': _cached_bytes(val_ds)}, flush=True)
+    print({'event': 'dataset_materialization_done', 'cache_samples_in_memory': bool(getattr(train_ds, 'cache_samples_in_memory', False)), 'persistent_tensor_cache': bool(getattr(train_ds, 'persistent_tensor_cache', False)), 'train_tensor_cache': getattr(train_ds, 'tensor_cache_event', {}), 'val_tensor_cache': getattr(val_ds, 'tensor_cache_event', {}), 'train_truth_contract': getattr(train_ds, 'absolute_truth_contract_event', {}), 'val_truth_contract': getattr(val_ds, 'absolute_truth_contract_event', {}), 'seconds': round(dataset_materialize_seconds, 3), 'train_cached_bytes': _cached_bytes(train_ds), 'val_cached_bytes': _cached_bytes(val_ds)}, flush=True)
     first = train_ds[0]
     num_roots = int(train_ds.num_roots)
     num_options = int(train_ds.num_options)

@@ -7981,3 +7981,128 @@ V48.77/V48.78 additionally forbid:
 - learned root/observation ID embeddings for the new source;
 - interpreting the deterministic nested-tail influence as a new relative ranker (native `q` and best-option responsibility remain frozen);
 - speed optimizations that alter dropout mode, batching, optimizer trajectory or checkpoint-selection semantics during the V48.78 scientific test.
+
+## v48.79 — OC-PSTC: Observation-Consistent Physical–Structural Truth Contract (2026-09-01)
+
+### Entry condition / authoritative V48.78 result
+
+V48.78 OC-RTSI is engineering-valid and scientifically attributable. The top-level completion contract is `valid=true`, `attribution_ready=true`, `engineering_version=v48.78.0-OC-RTSI`, `errors=[]`, `test_roots_read=false`, and `dataset_reconstruction=false`. Runtime provenance and reference reuse pass. Unlike the preceding result packages, both I78/J78 balanced/precision runs retain `best.pt`; their byte SHA256 values match the recorded `TRAINING_COMPLETE.json` hashes. All 170 shared Stage-I tensors remain bitwise identical and the only added trainable tensor is `direct_absolute_root_tail_source_scale[1]`.
+
+V48.78 is a preregistered **scientific STOP**:
+
+- I78 generic zero-translation inner-tail root-shape source fails: `I78-E76` non-floor AUC is positive in 2/8 cells, 0/8 reaches `+0.005`; Huber improves in only 4/8 and 0/8 reaches `-0.01`.
+- J78 nested deployability-tail localization provides a real but insufficient incremental signal over I78: `J78-I78` AUC is positive in 8/8 and Huber lower in 8/8, but only 2/8 reaches the registered AUC `+0.003` threshold and only 2/8 reaches the Huber `-0.005` threshold. Paired scene-cluster bootstrap intervals for the small AUC increments cross zero.
+- The complete `J78-E76` mechanism improves signed-margin Huber in 8/8 cells but improves non-floor AUC in only 2/8. This means nested tail localization is learning some signed-tail sensitivity/magnitude while failing to produce the correct deployable feasible/infeasible ordering.
+- Full source remains STOP: `J78-C75` full AUC is positive in only 2/8 cells, no cell reaches the registered `+0.01`, and all four adequately powered non-floor Contact safe-positive cells have exactly zero admission improvement.
+- Harmful/teacher-infeasible selectivity remains controlled; the failure is not permissive relapse.
+- I78 selects scale `~0.00815` at epoch 1 and J78 selects scale `~0.05377` at epoch 11 in both balanced and precision variants. The intervention is active; the scientific hypothesis, not optimization plumbing, is what fails the registered material gates.
+
+The V48.78 comparison explicitly registers the next branch:
+
+`root_tail_source_stop_close_low_capacity_absolute_source_adapter_family_then_teacher_truth_contract_adjudication_before_any_new_source_capacity`.
+
+### Algorithm-family closure implied by V48.77 + V48.78
+
+V48.77 already closes **option-wise scalar/gain transport**, because an option-constant shift is translation-equivariant through inner LCVAR and cannot reshape the latent-root lower tail. V48.78 now closes the next low-capacity adapter family as a final source solution:
+
+- generic one-scalar zero-translation inner-tail deformation;
+- nested-tail-localized one-scalar deformation;
+- larger gain tables / active-type gain tables / option translation refinements.
+
+The deterministic exact nested OC-MERO tail-influence operator is **retained as a diagnostic/formal scaffold**, not promoted as the absolute source. The evidence says it identifies where signed-tail sensitivity lives, but not yet what semantically identifiable scalar that tail should represent.
+
+No larger root embedding, observation-class embedding, generic MLP, soft tail mixer, class-local correction, gain/LR/threshold sweep, boundary transport, relative-ranker change, regime router, or dataset reconstruction is authorized by V48.78.
+
+### Updated dominant bottleneck
+
+The dominant bottleneck is no longer “where is the deployable lower tail?” alone. V48.78 partially answers that localization question but still fails ordering and admission. The unresolved layer is tightened to:
+
+`semantic identifiability of the nested deployable-tail target: physical signed recovery margin vs structural deployability contract`.
+
+The current stored teacher margin is not a single pure physical slack. The implementation first forms an active physical/component minimum but can then apply structural semantics on the same numeric coordinate, including the current `0.6` recovery-mode floor, `-0.8` route override, `0.9` secondary-recovery floor, and hidden/artifact branch semantics. This is a paper/teacher truth-contract debt regardless of V48.79 outcome.
+
+V48.75 already disproved the crude hypothesis that **exact-0.5 candidate censoring alone** is the dominant training fix. Therefore V48.79 must not repeat numerical-floor censoring or relabel floor rows negative. Instead it tests whether the *actual nested OC-MERO active tail* is structurally exposed.
+
+### V48.79 scientific question
+
+V48.79 OC-PSTC asks one causal question only:
+
+> If the J78 nested root-tail source is supervised only on candidates whose active teacher OC-MERO tail is conservatively identifiable as physical (not exposed to teacher structural floors/overrides/hidden branches), does its physical signed-margin ordering become materially learnable?
+
+This is a **truth-contract adjudication probe**, not a new source model. The source representation, trajectory/certificate construction, Stage-I proposal/root path, relative ranker, option library, threshold, RIFA order and one-scalar trainable capacity are frozen to J78.
+
+### Nested Tail Structural Exposure (NTSE)
+
+For every stored candidate, V48.79 recomputes the teacher's exact nested OC-MERO path from stored `m_star`, `root_probs`, `root_valid`, `c_star`, `option_valid` using the same stable-sort/fractional-tail alpha/beta LCVAR and top-M compatibility rule.
+
+For each root-option cell, a conservative structural bitmask is formed from already stored teacher-generation metadata:
+
+- recovery modes `post_contact_stabilize`, `yield_rejoin`, or `pull_over` can invoke the `0.6` structural floor when not in a hidden branch;
+- `route_blocked × yield_rejoin` can invoke the `-0.8` override;
+- `secondary_threat × avoid_secondary` can invoke the `0.9` floor;
+- hidden/artifact `yield` or `accelerate` branch semantics are structural.
+
+Because the dataset stores root-aggregated `m_star` rather than every pre-override future-option physical component margin, the structural mark is intentionally fail-closed: if **any** future assigned to a root could invoke the rule for an option, that root-option cell is marked potentially structural. This may exclude extra candidates, but cannot certify a known-exposed tail as physical.
+
+`structural_exposure_mass` is the exact product of outer alpha-tail influence and inner beta-tail influence landing on marked root-option cells along the teacher-selected nested path. A candidate is `physical_identifiable` iff:
+
+1. recomputed `R_dep` matches stored `r_dep_star` within `1e-5`; and
+2. nested structural exposure mass is exactly zero (within `1e-12`).
+
+This index is a supervision/audit sidecar only. The model never receives structural exposure, future metadata, hidden intent, teacher branch identity or a regime ID.
+
+### Clean causal intervention
+
+Historical J78 is reused. Only one new arm trains:
+
+| Arm | Source representation | Truth contract | Objective |
+| --- | --- | --- | --- |
+| historical J78 | nested zero-translation root-tail, one scalar | exact-0.5 censored | signed Huber |
+| `K79_PHYSICAL_TAIL_PROBE` | **execution-identical J78 source, one scalar** | **nested physical-identifiable tail only** | signed Huber |
+
+K79 initializes from the same frozen V48.56-A Stage-I reference as J78, not from J78's trained scalar. Therefore `K79-J78` isolates supervision truth semantics rather than warm-start continuation.
+
+The truth index for train+dev is built before training. Certificate structural metadata is deliberately not read until K79 training/model selection and calibration are finished, preventing certificate information from entering optimization.
+
+### V48.79 preregistered adjudication
+
+1. Engineering/runtime/reference/state isolation must pass. Both K79 variants must keep all 170 shared Stage-I tensors bitwise identical; the only added tensor is `direct_absolute_root_tail_source_scale[1]`. Both `best.pt` files must be retained and hash-consistent.
+2. K79/J78 teacher labels and positive-certificate sign/set must be exact-identical in all 8 balanced/precision × dev/certificate × Near/Contact cells. This is a supervision-contract test, not a certificate rewrite.
+3. A held-out cell is powered for the physical AUC test only if the physical-identifiable subset contains at least 20 teacher-feasible and 20 teacher-infeasible proposal rows. Primary adjudication requires at least 6/8 powered cells; otherwise the result is `UNDERPOWERED_TRUTH_ADJUDICATION`, not a false algorithm STOP/GO.
+4. **Physical–structural truth-confound GO** uses the material physical-ordering standard inherited from V48.75 and the signed-error axis introduced by V48.76:
+   - on powered physical-identifiable cells, `K79-J78` AUC is positive in at least 6/8 and at least 4/8 `delta >= +0.005`;
+   - signed-margin Huber is lower in at least 6/8 and at least 4/8 `delta <= -0.01`.
+5. Absolute selectivity remains fail-closed on the full population: K79 harmful and teacher-infeasible pass fractions are `<=0.25` and no more than `+0.02` above J78 in every cell.
+6. Exact `R_dep*=0.5` is **not** automatically censored. If a 0.5 row has zero nested structural exposure, it remains valid physical supervision. Conversely, a structurally exposed row is censored regardless of its numerical value.
+7. If truth-confound GO: do **not** promote K79/J78 as a final source and do not reopen boundary transport. The next method step is to formalize a two-object contract: a physical signed recovery reserve/debt and a structural deployability/admissibility contract, then decide how they compose under OC-MERO/RIFA.
+8. If powered and STOP: structural mixing remains a paper semantic debt but is not the dominant cause of the low-capacity root-tail source failure. The entire low-capacity adapter/probe family remains closed; only then may a higher-capacity **structured OC-MERO source** be proposed, still not a generic MLP.
+9. If underpowered: no algorithm promotion or new representation is authorized from this experiment. Report the identifiability support limitation; do not silently reconstruct the dataset in this version.
+
+### Near / Contact interpretation registered for V48.79
+
+Near and Contact remain supervision/evaluation strata of one planner, never runtime router states.
+
+- **Near:** the physical object is positive but small nested lower-tail recovery headroom. Because historical non-floor safe-positive support is extremely small, Near promotion must rely primarily on signed ordering, physical consistency and dev-to-certificate generalization rather than one-row admission fractions.
+- **Contact:** the same object occupies the negative/debt side. The physical margin should represent whether executable recovery repays penetration/re-contact/secondary-risk debt across the observation-compatible lower tail. Structural recovery-mode admissibility may constrain what recovery is legal, but a `0.6` or `0.9` structural floor must not be interpreted as measured physical reserve. Contact remains the more statistically informative causal regime in current data.
+
+### Performance contract
+
+V48.78 confirms that cold tensor materialization is significant but no longer the dominant repeated cost once the persistent cache is warm. I78 paid approximately 944 s wall-clock dataset materialization across the concurrent balanced/precision pair; J78 hit the cache and materialized in ~24 s, while its training loops still took approximately 2422 s (balanced) / 2861 s (precision). Thus the main remaining cost is repeated frozen model forward/validation per epoch, not NPZ decode alone.
+
+V48.79 makes two execution-preserving reductions without changing scientific evidence:
+
+- only one new arm (K79) trains; J78 is reused historically;
+- K79 reuses the V48.78 persistent feature-tensor cache because the truth sidecar is attached **after** cached model tensors and is excluded from the tensor cache key.
+
+Epoch snapshots remain disabled; only preregistered `best.pt` is retained. No frozen-encoder/sufficient-state cache is introduced in V48.79 because the historical frozen forward path is not yet proven execution-equivalent under all training-mode/dropout semantics. Such a cache remains an engineering-only future optimization requiring a separate exactness test.
+
+### Continue to avoid / newly explicit exclusions
+
+All earlier exclusions remain in force. V48.79 additionally forbids:
+
+- treating the V48.78 nested-tail localization signal as source GO merely because J-I is directionally positive;
+- increasing root-tail scalar count, learning root embeddings, observation-class embeddings, tail mixers or option-specific tail corrections before truth adjudication;
+- repeating exact-0.5 tolerance sweeps or relabeling floor rows negative;
+- using future/teacher structural metadata as model features;
+- rewriting teacher files or reconstructing the dataset in this experiment;
+- interpreting a truth-confound GO as immediate permission for boundary transport or external-baseline promotion.

@@ -1655,6 +1655,32 @@ def _fix_square(x: np.ndarray, n: int, *, fill_offdiag: float = 0.0, diag: float
 
 
 
+
+@lru_cache(maxsize=8)
+def _load_absolute_truth_index(path_str: str) -> dict[str, dict[str, Any]]:
+    path = Path(path_str).expanduser().resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"absolute feasibility truth index not found: {path}")
+    out: dict[str, dict[str, Any]] = {}
+    with path.open("r", encoding="utf-8") as f:
+        for line_no, line in enumerate(f, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except Exception as exc:
+                raise ValueError(f"invalid truth-index JSONL at {path}:{line_no}: {exc}") from exc
+            sample_path = str(row.get("sample_path", "")).strip()
+            if not sample_path:
+                raise ValueError(f"missing sample_path in truth-index row {path}:{line_no}")
+            key = str(Path(sample_path).expanduser().resolve())
+            if key in out:
+                raise ValueError(f"duplicate sample_path in truth index: {key}")
+            out[key] = row
+    return out
+
+
 def bucket_id_for_path(path: str | Path) -> int:
     """Coarse regime id inferred from the current dataset root path.
 
@@ -2018,6 +2044,42 @@ class OCRAPSampleDataset(Dataset):
         self.d_future_signature = max(_model_target_dim(self.cfg, "d_future_signature", first_fsig), first_fsig)
         self.feature_dim = int(sample_to_feature(first, self.cfg).shape[0])
         training_cfg = self.cfg.get("training", {}) if isinstance(self.cfg.get("training", {}), dict) else {}
+        truth_policy = str(training_cfg.get("direct_value_absolute_feasibility_truth_contract", "legacy_full")).strip().lower()
+        self.absolute_truth_contract_event: dict[str, Any] = {"policy": truth_policy, "enabled": False}
+        self._absolute_truth_records: list[dict[str, Any]] | None = None
+        if truth_policy == "censor_structural_tail":
+            truth_index_raw = str(training_cfg.get("direct_value_absolute_feasibility_truth_index", "") or "").strip()
+            if not truth_index_raw:
+                raise ValueError("censor_structural_tail requires training.direct_value_absolute_feasibility_truth_index")
+            truth_index_path = Path(truth_index_raw).expanduser().resolve()
+            index = _load_absolute_truth_index(str(truth_index_path))
+            records: list[dict[str, Any]] = []
+            missing: list[str] = []
+            invalid: list[str] = []
+            for sample_path in self.paths:
+                key = str(sample_path.resolve())
+                rec = index.get(key)
+                if rec is None:
+                    missing.append(key)
+                    continue
+                if not bool(rec.get("valid", False)):
+                    invalid.append(key)
+                records.append(rec)
+            if missing or invalid or len(records) != len(self.paths):
+                raise ValueError(
+                    "absolute truth index fail-closed: "
+                    f"missing={len(missing)} invalid={len(invalid)} indexed={len(records)} expected={len(self.paths)}; "
+                    f"examples_missing={missing[:3]} examples_invalid={invalid[:3]}"
+                )
+            self._absolute_truth_records = records
+            physical = sum(bool(r.get("physical_identifiable", False)) for r in records)
+            self.absolute_truth_contract_event = {
+                "policy": truth_policy, "enabled": True, "index": str(truth_index_path),
+                "rows": len(records), "physical_identifiable_rows": int(physical),
+                "structurally_exposed_rows": int(len(records) - physical),
+                "physical_identifiable_fraction": float(physical / max(len(records), 1)),
+                "max_r_dep_abs_error": float(max((float(r.get("r_dep_abs_error", 0.0)) for r in records), default=0.0)),
+            }
         self.nominal_deviation = (
             _nominal_deviation_by_path(self.paths)
             if bool(training_cfg.get("direct_policy_metric_exact_eligibility", False))
@@ -2190,10 +2252,20 @@ class OCRAPSampleDataset(Dataset):
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         if self._stacked_item_cache is not None:
-            return {k: v[idx] for k, v in self._stacked_item_cache.items()}
-        if self._item_cache is not None:
-            return self._item_cache[idx]
-        return self._build_item(idx)
+            out = {k: v[idx] for k, v in self._stacked_item_cache.items()}
+        elif self._item_cache is not None:
+            out = dict(self._item_cache[idx])
+        else:
+            out = self._build_item(idx)
+        if self._absolute_truth_records is not None:
+            rec = self._absolute_truth_records[idx]
+            out["absolute_truth_physical_identifiable"] = torch.tensor(
+                float(bool(rec.get("physical_identifiable", False))), dtype=torch.float32
+            )
+            out["absolute_truth_structural_exposure"] = torch.tensor(
+                float(rec.get("structural_exposure_mass", 0.0)), dtype=torch.float32
+            )
+        return out
 
 
 def split_paths_by_npz_split(paths: list[Path], split: str | set[str]) -> list[Path]:
