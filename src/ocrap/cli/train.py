@@ -258,7 +258,7 @@ def _absolute_feasibility_bce(
     batch: dict[str, torch.Tensor],
     tcfg: dict | None = None,
 ) -> torch.Tensor:
-    """Candidate-only BCE for the absolute deployability predicate."""
+    """Candidate-only BCE for the absolute deployability sign predicate."""
     logit = out.get('direct_recovery_absolute_feasibility_logit')
     if logit is None:
         return batch['r_dep_star'].float().sum() * 0.0
@@ -267,6 +267,44 @@ def _absolute_feasibility_bce(
     if not bool(mask.any()):
         return logits.sum() * 0.0
     return F.binary_cross_entropy_with_logits(logits[mask], target[mask].to(dtype=logits.dtype))
+
+def _absolute_feasibility_signed_margin_huber(
+    out: dict[str, torch.Tensor],
+    batch: dict[str, torch.Tensor],
+    tcfg: dict | None = None,
+) -> torch.Tensor:
+    """Robust signed-margin supervision in the native R_dep coordinate.
+
+    V48.76 OC-ICSM keeps the V48.75 exact-0.5 censor mask but no longer
+    collapses every remaining teacher margin to a binary sign.  The semantic
+    absolute-source logit is the logit of sigmoid(predicted R_dep), so it is in
+    the same signed zero-boundary coordinate as ``r_dep_star``.  Smooth-L1
+    (Huber with fixed beta=1) preserves that coordinate while preventing the
+    long negative tail from dominating.  No margin scale, class weight or
+    regime-specific parameter is introduced.
+    """
+    logit = out.get('direct_recovery_absolute_feasibility_logit')
+    if logit is None:
+        return batch['r_dep_star'].float().sum() * 0.0
+    logits = logit.float().reshape(-1)
+    mask, _target, _floor_mask = _absolute_feasibility_supervision_mask(batch, tcfg)
+    target_margin = batch['r_dep_star'].float().reshape(-1)
+    if not bool(mask.any()):
+        return logits.sum() * 0.0
+    return F.smooth_l1_loss(logits[mask], target_margin[mask].to(dtype=logits.dtype), beta=1.0)
+
+def _absolute_feasibility_supervision_loss(
+    out: dict[str, torch.Tensor],
+    batch: dict[str, torch.Tensor],
+    tcfg: dict | None = None,
+) -> torch.Tensor:
+    cfg = tcfg or {}
+    objective = str(cfg.get('direct_value_absolute_feasibility_supervision_objective', 'binary_sign')).strip().lower()
+    if objective == 'binary_sign':
+        return _absolute_feasibility_bce(out, batch, cfg)
+    if objective == 'signed_margin_huber':
+        return _absolute_feasibility_signed_margin_huber(out, batch, cfg)
+    raise ValueError(f'unsupported absolute feasibility supervision objective: {objective!r}')
 
 def _absolute_feasibility_accuracy(
     out: dict[str, torch.Tensor],
@@ -318,7 +356,7 @@ def _direct_value_loss_from_outputs(out: dict[str, torch.Tensor], batch: dict[st
         return direct_uncertainty_recovery_value_loss(value_logit, value_logvar, batch['r_dep_star'].float(), batch['r_orc_star'].float(), teacher_q, batch['root_probs'].float(), batch['root_valid'], batch['option_valid'], batch['scene_hash'], batch['time_index'], batch.get('prefix_macro_type_id', batch.get('candidate_index', torch.zeros_like(batch['time_index']))), batch['is_nominal'].float(), batch.get('bucket_id', torch.full_like(batch['time_index'], 3)), pred_opportunity_logit=opportunity_logit, pred_harm_logit=harm_logit, pred_component_harm_logits=component_harm_logits, pred_admission_logit=admission_logit, pred_rank_logit=rank_logit, pred_delta_mean=delta_mean, pred_delta_logvar=delta_logvar, evidence_calibrator_residual=out.get('direct_recovery_evidence_calibrator_residual'), teacher_m_star=batch['m_star'].float(), teacher_hard_violation=batch.get('hard_violation'), teacher_harm_proxy=batch.get('harm_proxy'), **kwargs)
     aggregate = compute(out['direct_recovery_value_logit'], out['direct_recovery_value_logvar'], out.get('direct_recovery_opportunity_logit'), out.get('direct_recovery_harm_logit'), out.get('direct_recovery_evidence_component_harm_logits'), out.get('direct_recovery_admission_logit'), out.get('direct_recovery_rank_logit'), out.get('direct_recovery_delta_mean'), out.get('direct_recovery_delta_logvar'))
     absolute_feasibility_weight = float(tcfg.get('direct_value_absolute_feasibility_weight', 0.0))
-    absolute_feasibility_loss = _absolute_feasibility_bce(out, batch, tcfg)
+    absolute_feasibility_loss = _absolute_feasibility_supervision_loss(out, batch, tcfg)
     aggregate = aggregate + absolute_feasibility_weight * absolute_feasibility_loss
     expert_outputs = out.get('direct_expert_outputs')
     specialist_weight = float(tcfg.get('direct_value_expert_specialization_weight', 0.35))
@@ -922,7 +960,7 @@ def _epoch(model: OCRAPModel, loader: DataLoader, cfg: dict, device: torch.devic
                         semantic_witness.clamp_(0.0, 2.0)
             bsz = int(batch['x'].shape[0])
             n += bsz
-            vals = {'loss': float(total.item()), 'loss_direct_recovery_value': float(loss_direct_value.item()), 'loss_encoder_anchor': float(loss_encoder_anchor.item()), 'direct_score_mean': float(out['direct_recovery_value_logit'].float().mean().item()), 'direct_opportunity_mean': float(torch.sigmoid(out['direct_recovery_opportunity_logit']).float().mean().item()) if 'direct_recovery_opportunity_logit' in out else 0.0, 'direct_harm_mean': float(torch.sigmoid(out['direct_recovery_harm_logit']).float().mean().item()) if 'direct_recovery_harm_logit' in out else 0.0, 'direct_expert_disagreement_mean': float(out['direct_expert_disagreement'][:, 0].float().mean().item()) if 'direct_expert_disagreement' in out else 0.0, 'direct_absolute_feasibility_bce': float(_absolute_feasibility_bce(out, batch, tcfg).item()), 'direct_absolute_feasibility_accuracy': _absolute_feasibility_accuracy(out, batch, tcfg)}
+            vals = {'loss': float(total.item()), 'loss_direct_recovery_value': float(loss_direct_value.item()), 'loss_encoder_anchor': float(loss_encoder_anchor.item()), 'direct_score_mean': float(out['direct_recovery_value_logit'].float().mean().item()), 'direct_opportunity_mean': float(torch.sigmoid(out['direct_recovery_opportunity_logit']).float().mean().item()) if 'direct_recovery_opportunity_logit' in out else 0.0, 'direct_harm_mean': float(torch.sigmoid(out['direct_recovery_harm_logit']).float().mean().item()) if 'direct_recovery_harm_logit' in out else 0.0, 'direct_expert_disagreement_mean': float(out['direct_expert_disagreement'][:, 0].float().mean().item()) if 'direct_expert_disagreement' in out else 0.0, 'direct_absolute_feasibility_bce': float(_absolute_feasibility_bce(out, batch, tcfg).item()), 'direct_absolute_signed_margin_huber': float(_absolute_feasibility_signed_margin_huber(out, batch, tcfg).item()), 'direct_absolute_feasibility_accuracy': _absolute_feasibility_accuracy(out, batch, tcfg)}
             vals.update(_absolute_feasibility_supervision_stats(batch, tcfg))
             for k, v in vals.items():
                 totals[k] = totals.get(k, 0.0) + float(v) * bsz
@@ -1089,7 +1127,7 @@ def _epoch(model: OCRAPModel, loader: DataLoader, cfg: dict, device: torch.devic
                     semantic_witness.clamp_(0.0, 2.0)
         bsz = int(batch['x'].shape[0])
         n += bsz
-        vals = {'loss': total.item(), 'direct_absolute_feasibility_bce': float(_absolute_feasibility_bce(out, batch, tcfg).item()), 'direct_absolute_feasibility_accuracy': _absolute_feasibility_accuracy(out, batch, tcfg), 'loss_root': loss_root.item(), 'loss_margin': loss_margin.item(), 'loss_sig': loss_sig.item(), 'loss_future_sig': loss_future_sig.item(), 'loss_obs': loss_obs.item(), 'loss_dep': loss_dep.item(), 'loss_orc': loss_orc.item(), 'loss_art': loss_art.item(), 'loss_gap': loss_gap.item(), 'loss_admission': loss_admit.item(), 'loss_option_q': loss_option_q.item(), 'loss_option_admission': loss_option_admit.item(), 'loss_option_success': loss_option_success.item(), 'loss_option_success_bce': loss_option_success_bce.item(), 'loss_option_best': loss_option_best.item(), 'loss_option_class_success': loss_option_class_success.item(), 'loss_option_class_best': loss_option_class_best.item(), 'loss_recovery_frontier': loss_recovery_frontier.item(), 'loss_physical_boundary_distill': loss_physical_boundary_distill.item(), 'loss_group_ranking': loss_group_rank.item(), 'loss_group_ce': loss_group_ce.item(), 'loss_nominal_switch': loss_nominal_switch.item(), 'loss_group_distill': loss_group_distill.item(), 'loss_safe_nominal': loss_safe_nominal.item(), 'loss_protective_macro': loss_protective_macro.item(), 'loss_macro_drs': loss_macro_drs.item(), 'loss_ddc': loss_ddc.item(), 'loss_teacher_pcd_direct': loss_teacher_pcd_direct.item(), 'loss_recovery_advantage': loss_recovery_advantage.item(), 'loss_direct_recovery_value': loss_direct_value.item(), 'loss_direct_router_balance': loss_direct_router_balance.item(), 'loss_utility': loss_util.item(), 'pred_r_dep_mean': r_dep.mean().item(), 'teacher_r_dep_mean': batch['r_dep_star'].float().mean().item()}
+        vals = {'loss': total.item(), 'direct_absolute_feasibility_bce': float(_absolute_feasibility_bce(out, batch, tcfg).item()), 'direct_absolute_signed_margin_huber': float(_absolute_feasibility_signed_margin_huber(out, batch, tcfg).item()), 'direct_absolute_feasibility_accuracy': _absolute_feasibility_accuracy(out, batch, tcfg), 'loss_root': loss_root.item(), 'loss_margin': loss_margin.item(), 'loss_sig': loss_sig.item(), 'loss_future_sig': loss_future_sig.item(), 'loss_obs': loss_obs.item(), 'loss_dep': loss_dep.item(), 'loss_orc': loss_orc.item(), 'loss_art': loss_art.item(), 'loss_gap': loss_gap.item(), 'loss_admission': loss_admit.item(), 'loss_option_q': loss_option_q.item(), 'loss_option_admission': loss_option_admit.item(), 'loss_option_success': loss_option_success.item(), 'loss_option_success_bce': loss_option_success_bce.item(), 'loss_option_best': loss_option_best.item(), 'loss_option_class_success': loss_option_class_success.item(), 'loss_option_class_best': loss_option_class_best.item(), 'loss_recovery_frontier': loss_recovery_frontier.item(), 'loss_physical_boundary_distill': loss_physical_boundary_distill.item(), 'loss_group_ranking': loss_group_rank.item(), 'loss_group_ce': loss_group_ce.item(), 'loss_nominal_switch': loss_nominal_switch.item(), 'loss_group_distill': loss_group_distill.item(), 'loss_safe_nominal': loss_safe_nominal.item(), 'loss_protective_macro': loss_protective_macro.item(), 'loss_macro_drs': loss_macro_drs.item(), 'loss_ddc': loss_ddc.item(), 'loss_teacher_pcd_direct': loss_teacher_pcd_direct.item(), 'loss_recovery_advantage': loss_recovery_advantage.item(), 'loss_direct_recovery_value': loss_direct_value.item(), 'loss_direct_router_balance': loss_direct_router_balance.item(), 'loss_utility': loss_util.item(), 'pred_r_dep_mean': r_dep.mean().item(), 'teacher_r_dep_mean': batch['r_dep_star'].float().mean().item()}
         vals.update(_absolute_feasibility_supervision_stats(batch, tcfg))
         for k, v in vals.items():
             totals[k] = totals.get(k, 0.0) + float(v) * bsz

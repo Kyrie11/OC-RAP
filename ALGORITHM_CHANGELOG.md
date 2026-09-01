@@ -7584,3 +7584,64 @@ V48.74 adds the following explicit exclusions:
 - do not reopen boundary transport on the basis of Q74's 6/8 non-floor sign count because dual selectivity and full source both failed;
 - do not reconstruct datasets or silently relabel exact-0.5 plateau rows negative; V48.75 uses censoring/unknown supervision only;
 - do not treat a full-label AUC decrease under V48.75 as sufficient reason to restore structural-floor positives if non-floor physical ordering improves.
+
+## v48.76 — OC-ICSM: Observation-Consistent Interval-Censored Signed-Margin Supervision (2026-09-01)
+
+### Entry condition / authoritative V48.75 result
+
+V48.75 OC-STCA is engineering-valid and attribution-ready: runtime provenance, reference reuse, C75/D75 state and variant isolation, dedicated recalibration, row alignment, truth-contract audit and the final sentinel all pass with `engineering_version=v48.75.0-OC-STCA`, `errors=[]`, `test_roots_read=false`, and `dataset_reconstruction=false`. V48.75 is a **scientific STOP** under its preregistration. Exact-0.5 censoring improves the full-label AUC mainly because it suppresses probability on the structural plateau, but the preregistered primary non-floor AUC improves in only 2/8 cells for both `C75-Q67` and `D75-T68`, so `truth_contract_causal_confound_go=false`. `D75-C75` is exactly zero in all eight cells and projection fidelity is not promoted under censored supervision.
+
+The stronger mechanistic observation is that all four C75/D75 best checkpoints choose epoch 0 and preserve `direct_absolute_semantic_witness_gain=[0,0]`; C75 and D75 therefore collapse execution-exactly to the frozen native absolute source. The validation BCE changes during training are below the preregistered `1e-5` checkpoint-improvement threshold and are far too small to explain the required `~5e-3` scientific effect. This is not an engineering failure or a reason to sweep the checkpoint threshold. It shows that, after removing the structural plateau from binary supervision, the existing two-gain semantic transport has no material direction preferred by the sign-only loss.
+
+Consequently the exact-0.5 structural floor remains a **paper/teacher truth-contract debt** but is not supported as the dominant training cause within the current source interface. The next registered branch is `truth_floor_debt_not_dominant_training_cause_audit_absolute_supervision_representation_no_geometry_sweep`.
+
+### Updated dominant bottleneck
+
+The bottleneck is tightened to:
+
+`absolute-supervision geometry -> structured source representation interface for observation-consistent signed recoverability`.
+
+The absolute source is supposed to represent a signed deployable-recovery distance to the `R_dep=0` boundary using only deployable observation information. V48.75 continued to supervise that source only through the binary sign `1[R_dep*>=0]`; after censoring the 0.5 plateau, this discards the magnitude and relative distance-to-boundary information in the remaining teacher margin. Before adding any new source capacity, V48.76 isolates whether this **supervision geometry** is the blocker.
+
+### V48.76 intervention
+
+OC-ICSM changes no planner feature and adds no trainable parameter. Exact `R_dep*=0.5` rows remain censored exactly as in V48.75. For every remaining non-nominal Near/Contact candidate, the absolute-source logit is already the logit of `sigmoid(predicted R_dep)` and therefore shares the teacher margin's signed zero-boundary coordinate. V48.76 replaces only the absolute-source training objective:
+
+- historical C75/D75: binary sign BCE on non-floor rows;
+- new E76/F76: fixed-beta Smooth-L1 / Huber regression from predicted signed `R_dep` to the raw non-floor `R_dep*` teacher margin, with `beta=1.0` fixed in code.
+
+No scale, class weight, regime weight, threshold, margin grid or new hyperparameter is introduced. The Huber objective is robust to the long negative teacher-margin tail while retaining the exact zero boundary. Default generic training remains `binary_sign`, so historical launchers are execution-compatible.
+
+Factorial design reuses C75/D75 and trains only:
+
+- `E76_MARGIN_PROJ`: actuator projection, projection fidelity OFF, exact-0.5 censored, signed-margin Huber;
+- `F76_MARGIN_FIDELITY` / Main: same plus the historical projection-fidelity factor.
+
+Causal comparisons are `E76-C75` and `F76-D75` for supervision geometry, `F76-E76` for projection fidelity under signed-margin supervision, and historical `D75-C75` as the sign-supervision fidelity reference. Stage-I, roots, proposals, option library, OC-MERO, active-set/route/re-entry semantics, actuator projection, RIFA, top-K=5, 0.5 admission threshold and relative ranker remain frozen. Boundary transport remains OFF. The only trainable state is still `direct_absolute_semantic_witness_gain[2]`.
+
+### Preregistered decision
+
+A signed-margin supervision mechanism GO requires either `E76-C75` or `F76-D75` to satisfy **both**:
+
+1. non-floor source AUC positive in at least 6/8 balanced/precision x dev/certificate x Near/Contact cells, with at least 4/8 `>= +0.005`;
+2. non-floor signed-margin Huber error lower in at least 6/8 cells, with at least 4/8 decreasing by `>=0.01`.
+
+Fidelity is retained under the new supervision only if `F76-E76` non-floor AUC is positive in at least 6/8 and Huber error decreases in at least 6/8. Harmful and teacher-infeasible absolute admission must remain <=0.25 in every F76 cell. Positive-certificate sign/set and teacher labels must remain exact-identical across each causal comparison. Non-floor safe-positive sample support remains a mandatory power diagnostic; because Near currently contains only about one non-floor safe-positive row per formal split, no final Near planner-promotion claim is allowed from V48.76 alone.
+
+If signed-margin supervision GO, the next task is to formalize a dual physical-vs-structural teacher/deployment contract before any boundary transport is reopened. If signed-margin supervision STOP, then the two-gain semantic transport is the identified representation bottleneck and the next experiment may introduce a **structured absolute-source interface**; it still may not return to generic AFE/MLP, broad encoder/root/margin retraining or geometry/kinematic sweeps.
+
+### Continue to avoid
+
+All historical exclusions remain. V48.75 additionally forbids treating exact-0.5 censoring as a validated causal fix, changing the censor tolerance, relabelling floor rows negative, or using the full-label AUC gain to claim physical improvement. V48.76 explicitly keeps **no geometry/kinematic parameter sweep**: do not reopen ball/box/hull/anchor/jerk, B1/B2, clearance thresholds, `tau`, debt scales, support scales, projection-fidelity scales, LR/class-weight/gain grids, proposal expansion, regime-conditioned policies, boundary transport, relative-ranker changes, generic AFE/MLP, learned admission residuals, root-logit recalibration, option-specific biases or broad Stage-I retraining.
+
+### V48.76 scientific-iteration stop / CCF-A readiness target
+
+Do not continue creating source mechanisms indefinitely.  Once an engineering-valid absolute source satisfies the following preregistered *internal* readiness conditions, freeze the source and move to downstream/external evaluation instead of another mechanism iteration:
+
+1. Near/Contact, balanced/precision, dev/certificate: source AUC versus frozen native B is positive in 8/8 cells and at least 6/8 cells improve by >= +0.01.
+2. The same source has non-floor physical ordering positive in >=6/8 cells with a material effect (>= +0.005 or a positive paired scene-cluster bootstrap lower bound where registered), rather than relying on exact-0.5 structural-floor strata.
+3. Harmful and teacher-infeasible admission remains <=0.25 in all 8 cells and does not show a permissive relapse toward V48.61-F.
+4. Safe-positive admission/retention improves materially where the formal split contains adequate support.  The current Near non-floor safe-positive count is too small for a final policy-promotion claim; this must be reported as a power limitation rather than hidden by aggregate AUC.
+5. Only after 1--4, freeze absolute-source learning, then evaluate the already-frozen relative RIFA path and paired Safe non-interference / nominal utility.  Only after those pass should the work enter external-baseline and final three-regime closed-loop SOTA comparison.
+
+These are an internal stopping rule for mechanism iteration, not a claim that V48.76 already satisfies them.
