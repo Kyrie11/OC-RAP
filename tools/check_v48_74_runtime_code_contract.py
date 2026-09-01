@@ -52,9 +52,9 @@ def main() -> int:
     if not frag.get("enabled"): errors.append("V48.74 signed-viability mode not enabled")
     if frag.get("schema")!=10 or frag.get("feature_dim")!=22: errors.append("schema/dimension mismatch")
     if frag.get("source")!='signed_finite_time_viability_projected_recovery_witness': errors.append("feature source mismatch")
-    if frag.get("engineering_version")!='v48.74.1-OC-SVBW-ENGFIX': errors.append("engineering version mismatch")
+    if frag.get("engineering_version")!='v48.74.2-OC-SVBW-ENGFIX': errors.append("engineering version mismatch")
 
-    train=modules.get('ocrap.cli.train'); data=modules.get('ocrap.models.data')
+    train=modules.get('ocrap.cli.train'); data=modules.get('ocrap.models.data'); inference=modules.get('ocrap.models.inference')
     serializer={}
     if train is not None:
         for label,response in (("P74_FIRST_ORDER_SVBW",False),("Q74_MAIN_OC_SVBW",True)):
@@ -71,9 +71,25 @@ def main() -> int:
         if int(getattr(data,'DIRECT_SIGNED_VIABILITY_RECOVERY_WITNESS_FEATURE_DIM',-1))!=22:
             errors.append('models.data feature-dim constant mismatch')
 
+    inference_contract={}
+    if inference is not None:
+        for label,response in (("P74_FIRST_ORDER_SVBW",False),("Q74_MAIN_OC_SVBW",True)):
+            try:
+                ok=inference._v48_74_schema10_checkpoint_contract(
+                    feature_schema=10,
+                    feature_source='signed_finite_time_viability_projected_recovery_witness',
+                    interaction_anchor_support=True,
+                    interaction_response_support=bool(response),
+                )
+                inference_contract[label]={"valid":bool(ok),"schema":10,"source":'signed_finite_time_viability_projected_recovery_witness'}
+                if not ok: errors.append(f"{label} inference schema-10 contract not recognized")
+            except Exception as e:
+                inference_contract[label]={"valid":False,"error":repr(e)}
+                errors.append(f"{label} inference schema-10 contract failed")
+
     out={
         "valid":not errors,"attribution_ready":not errors,"errors":errors,
-        "contract":frag,"runtime_modules":paths,"checkpoint_serializer":serializer,
+        "contract":frag,"runtime_modules":paths,"checkpoint_serializer":serializer,"inference_checkpoint_contract":inference_contract,
         "test_roots_read":False,"dataset_reconstruction":False,
     }
     Path(a.output).parent.mkdir(parents=True,exist_ok=True); Path(a.output).write_text(json.dumps(out,indent=2,sort_keys=True)+"\n")

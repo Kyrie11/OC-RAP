@@ -209,6 +209,100 @@ def test_v4874_p_q_share_schema10_persistent_cache(tmp_path,monkeypatch):
     assert _persistent_tensor_cache_key(cfg=cfg(False),**kwargs)==_persistent_tensor_cache_key(cfg=cfg(True),**kwargs)
 
 
+
+def test_v4874_checkpoint_schema10_roundtrip_through_inference(tmp_path: Path, monkeypatch):
+    """Calibration/inference must load both registered V48.74 selector arms.
+
+    This is the exact path that previously raised RC30 after training because the
+    loader inferred schema 9 solely from the inherited V48.73 selector flags.
+    """
+    from ocrap.models.inference import load_model_bundle
+    monkeypatch.setenv("OCRAP_V48_74_SIGNED_VIABILITY", "1")
+    L = _layout()
+    for response in (False, True):
+        m = _model(response=response).eval()
+        model_cfg = {
+            "transformer_layers": 1, "transformer_heads": 4, "dropout": 0.0,
+            "encoder_type": "structured_transformer",
+            "option_feature_dim": OPTION_FEATURE_DIM,
+            "direct_recovery_value_head": True,
+            "direct_recovery_absolute_semantic_witness_correction": True,
+            "direct_recovery_semantic_witness_active_set_alignment": True,
+            "direct_recovery_semantic_witness_path_stop_alignment": False,
+            "direct_recovery_semantic_witness_classlocal_transport": False,
+            "direct_recovery_semantic_witness_route_alignment": True,
+            "direct_recovery_semantic_witness_reentry_alignment": True,
+            "direct_recovery_semantic_witness_control_projection": True,
+            "direct_recovery_semantic_witness_boundary_transport": False,
+            "direct_recovery_semantic_witness_projection_fidelity_weighting": True,
+            "direct_recovery_semantic_witness_demand_normalized_fidelity": False,
+            "direct_recovery_semantic_witness_robust_occupancy": False,
+            "direct_recovery_semantic_witness_soft_occupancy_disagreement": False,
+            "direct_recovery_semantic_witness_boundary_localized_occupancy_trust": False,
+            "direct_recovery_semantic_witness_history_occupancy_reachability": False,
+            "direct_recovery_semantic_witness_interaction_box_support": True,
+            "direct_recovery_semantic_witness_interaction_hull_support": True,
+            "direct_recovery_semantic_witness_interaction_anchor_support": True,
+            "direct_recovery_semantic_witness_interaction_response_support": response,
+            "direct_recovery_evidence_native_certificate_preservation": True,
+        }
+        ckpt = {
+            "model_state": m.state_dict(), "input_dim": L.total_dim,
+            "num_roots": 3, "num_options": 2, "d_model": 16, "d_obs": 8,
+            "tau_obs": 1.0, "encoder_type": "structured_transformer",
+            "feature_layout": asdict(L), "d_signature": 0, "d_future_signature": 0,
+            "option_feature_dim": OPTION_FEATURE_DIM, **model_cfg,
+            "direct_recovery_absolute_semantic_witness_feature_schema": 10,
+            "direct_recovery_absolute_semantic_witness_feature_source":
+                "signed_finite_time_viability_projected_recovery_witness",
+            "cfg": {"sample_rate_hz": 10.0, "recovery_horizon_s": 4.0,
+                    "training": {"device": "cpu"}, "model": model_cfg},
+        }
+        path = tmp_path / ("q74.pt" if response else "p74.pt")
+        torch.save(ckpt, path)
+        bundle = load_model_bundle(path)
+        assert bundle is not None
+        assert bundle.model.direct_recovery_semantic_witness_interaction_response_support is response
+
+
+def test_v4874_checkpoint_schema10_inference_fails_closed_without_overlay(tmp_path: Path, monkeypatch):
+    from ocrap.models.inference import load_model_bundle
+    L = _layout(); m = _model(response=False).eval()
+    model_cfg = {
+        "transformer_layers": 1, "transformer_heads": 4, "dropout": 0.0,
+        "encoder_type": "structured_transformer", "option_feature_dim": OPTION_FEATURE_DIM,
+        "direct_recovery_value_head": True,
+        "direct_recovery_absolute_semantic_witness_correction": True,
+        "direct_recovery_semantic_witness_active_set_alignment": True,
+        "direct_recovery_semantic_witness_path_stop_alignment": False,
+        "direct_recovery_semantic_witness_classlocal_transport": False,
+        "direct_recovery_semantic_witness_route_alignment": True,
+        "direct_recovery_semantic_witness_reentry_alignment": True,
+        "direct_recovery_semantic_witness_control_projection": True,
+        "direct_recovery_semantic_witness_boundary_transport": False,
+        "direct_recovery_semantic_witness_projection_fidelity_weighting": True,
+        "direct_recovery_semantic_witness_interaction_box_support": True,
+        "direct_recovery_semantic_witness_interaction_hull_support": True,
+        "direct_recovery_semantic_witness_interaction_anchor_support": True,
+        "direct_recovery_semantic_witness_interaction_response_support": False,
+        "direct_recovery_evidence_native_certificate_preservation": True,
+    }
+    ckpt = {
+        "model_state": m.state_dict(), "input_dim": L.total_dim, "num_roots": 3,
+        "num_options": 2, "d_model": 16, "d_obs": 8, "tau_obs": 1.0,
+        "encoder_type": "structured_transformer", "feature_layout": asdict(L),
+        "d_signature": 0, "d_future_signature": 0, "option_feature_dim": OPTION_FEATURE_DIM,
+        **model_cfg, "direct_recovery_absolute_semantic_witness_feature_schema": 10,
+        "direct_recovery_absolute_semantic_witness_feature_source":
+            "signed_finite_time_viability_projected_recovery_witness",
+        "cfg": {"sample_rate_hz": 10.0, "recovery_horizon_s": 4.0,
+                "training": {"device": "cpu"}, "model": model_cfg},
+    }
+    path = tmp_path / "p74.pt"; torch.save(ckpt, path)
+    monkeypatch.delenv("OCRAP_V48_74_SIGNED_VIABILITY", raising=False)
+    with pytest.raises(RuntimeError, match="OCRAP_V48_74_SIGNED_VIABILITY=1"):
+        load_model_bundle(path)
+
 def test_v4874_runner_preregisters_signed_viability_and_frozen_directions():
     text=(Path(__file__).resolve().parents[1]/"scripts/run_v48_74_dcp_drfc_bcde_rifa_svbw_two_gpu.sh").read_text()
     assert 'train_svbw_arm "$N_RUN" P74_FIRST_ORDER_SVBW false' in text

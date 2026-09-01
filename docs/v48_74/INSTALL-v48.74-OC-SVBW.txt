@@ -8,7 +8,7 @@ V48.74.1 OC-SVBW-ENGFIX installation / attribution guard
 6. Run the original two-GPU command unchanged. P/Q share one schema-10 tensor cache; do not delete the cache between arms.
 7. Keep the P74 and Q74 result archives, all audits/contracts/sentinel, and the four best.pt checkpoints (or immutable checkpoint manifest).
 
-Engineering marker: v48.74.1-OC-SVBW-ENGFIX.
+Engineering marker: v48.74.2-OC-SVBW-ENGFIX.
 Algorithm marker remains: v48.74-DCP-DRFC-BCDE-RIFA-OC-SVBW.
 
 When OCRAP_V48_74_SIGNED_VIABILITY is absent, the historical V48.73 schema-9 path remains unchanged.

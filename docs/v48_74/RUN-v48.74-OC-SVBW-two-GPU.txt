@@ -1,6 +1,6 @@
 # Install from the parent directory to avoid OC-RAP/OC-RAP nesting.
 cd /home/senzeyu2/code
-unzip -o /path/to/OC-RAP-v48.74.1-OC-SVBW-ENGFIX-drop-in.zip
+unzip -o /path/to/OC-RAP-v48.74.2-OC-SVBW-ENGFIX-drop-in.zip
 cd /home/senzeyu2/code/OC-RAP
 
 # Optional manual fail-closed provenance preflight (the launcher runs it again).

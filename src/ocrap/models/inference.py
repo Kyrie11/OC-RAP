@@ -22,6 +22,7 @@ from ocrap.models.data import (
     DIRECT_BOUNDARY_OCCUPANCY_REACHABILITY_WITNESS_FEATURE_SCHEMA,
     DIRECT_INTERACTION_ORIENTED_RECOVERY_WITNESS_FEATURE_SCHEMA,
     DIRECT_INTERACTION_RESPONSE_RECOVERY_WITNESS_FEATURE_SCHEMA,
+    DIRECT_SIGNED_VIABILITY_RECOVERY_WITNESS_FEATURE_SCHEMA,
     direct_absolute_physical_headroom_features_from_sample,
     direct_executable_recovery_witness_features_from_sample,
     direct_common_recovery_witness_features_from_sample,
@@ -31,6 +32,10 @@ from ocrap.models.data import (
     samples_to_feature_matrix,
 )
 from ocrap.models.ocrap import OCRAPModel
+from ocrap.v48_74_signed_viability import (
+    V48_74_SOURCE as _V48_74_SOURCE,
+    enabled as _v48_74_signed_viability_enabled,
+)
 
 
 @dataclass
@@ -83,6 +88,47 @@ class ModelBundle:
     model: OCRAPModel
     cfg: dict[str, Any]
     device: torch.device
+
+
+def _v48_74_schema10_checkpoint_contract(
+    *,
+    feature_schema: int,
+    feature_source: str,
+    interaction_anchor_support: bool,
+    interaction_response_support: bool,
+) -> bool:
+    """Validate and identify the V48.74 schema-10 inference contract.
+
+    Returns ``False`` for historical schema/source pairs so the caller can use
+    the legacy selector-derived mapping.  If either half of the V48.74 pair is
+    present, validation is fail-closed: schema, source, selector, and overlay
+    mode must all agree.  This helper is intentionally callable from the
+    runtime preflight so the exact post-training RC30 path is checked before
+    any GPU work starts.
+    """
+    schema_match = int(feature_schema) == DIRECT_SIGNED_VIABILITY_RECOVERY_WITNESS_FEATURE_SCHEMA
+    source_match = str(feature_source) == _V48_74_SOURCE
+    if not (schema_match or source_match):
+        return False
+    if not (schema_match and source_match):
+        raise RuntimeError(
+            "incomplete V48.74 signed-viability checkpoint feature contract: "
+            f"schema={feature_schema}, source={feature_source!r}; expected "
+            f"schema={DIRECT_SIGNED_VIABILITY_RECOVERY_WITNESS_FEATURE_SCHEMA}, "
+            f"source={_V48_74_SOURCE!r}."
+        )
+    if not (interaction_anchor_support or interaction_response_support):
+        raise RuntimeError(
+            "V48.74 signed-viability checkpoint requires the registered "
+            "coordinate-20/21 selector flags."
+        )
+    if not _v48_74_signed_viability_enabled():
+        raise RuntimeError(
+            "V48.74 signed-viability checkpoint requires "
+            "OCRAP_V48_74_SIGNED_VIABILITY=1 so inference feature "
+            "materialization and raw-debt decoding match schema 10."
+        )
+    return True
 
 
 def _device_from_cfg(cfg: dict) -> torch.device:
@@ -290,25 +336,40 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_semantic_witness_interaction_response_support",
             model_cfg.get("direct_recovery_semantic_witness_interaction_response_support", False),
         ))
-        expected_semantic_schema = (
-            DIRECT_INTERACTION_RESPONSE_RECOVERY_WITNESS_FEATURE_SCHEMA
-            if (interaction_anchor_support or interaction_response_support)
-            else (DIRECT_INTERACTION_ORIENTED_RECOVERY_WITNESS_FEATURE_SCHEMA
-            if (interaction_box_support or interaction_hull_support)
-            else (DIRECT_BOUNDARY_OCCUPANCY_REACHABILITY_WITNESS_FEATURE_SCHEMA
-            if (boundary_localized_occupancy_trust or history_occupancy_reachability)
-            else (DIRECT_OCCUPANCY_TEMPERED_RECOVERY_WITNESS_FEATURE_SCHEMA
-            if soft_occupancy_disagreement
-            else (DIRECT_DEMAND_TEMPERED_RECOVERY_WITNESS_FEATURE_SCHEMA
-            if demand_normalized_fidelity
-            else (DIRECT_ROBUST_TRUST_RECOVERY_WITNESS_FEATURE_SCHEMA
-            if (projection_fidelity or robust_occupancy)
-            else (DIRECT_PROJECTED_BOUNDARY_RECOVERY_WITNESS_FEATURE_SCHEMA
-                  if (control_projection or boundary_transport)
-                  else (DIRECT_ACTIVE_CONSTRAINT_RECOVERY_WITNESS_FEATURE_SCHEMA
-                        if (route_alignment or reentry_alignment)
-                        else DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA)))))))
-        )
+        feature_source = str(ckpt.get(
+            "direct_recovery_absolute_semantic_witness_feature_source", ""
+        ) or "")
+        if _v48_74_schema10_checkpoint_contract(
+            feature_schema=feature_schema,
+            feature_source=feature_source,
+            interaction_anchor_support=interaction_anchor_support,
+            interaction_response_support=interaction_response_support,
+        ):
+            # V48.74 deliberately reuses the V48.73 anchor/response selector
+            # booleans to select coordinates 20/21 while upgrading the actual
+            # feature contract to schema 10.  The helper above validates the
+            # serialized pair before this historical selector mapping is used.
+            expected_semantic_schema = DIRECT_SIGNED_VIABILITY_RECOVERY_WITNESS_FEATURE_SCHEMA
+        else:
+            expected_semantic_schema = (
+                DIRECT_INTERACTION_RESPONSE_RECOVERY_WITNESS_FEATURE_SCHEMA
+                if (interaction_anchor_support or interaction_response_support)
+                else (DIRECT_INTERACTION_ORIENTED_RECOVERY_WITNESS_FEATURE_SCHEMA
+                if (interaction_box_support or interaction_hull_support)
+                else (DIRECT_BOUNDARY_OCCUPANCY_REACHABILITY_WITNESS_FEATURE_SCHEMA
+                if (boundary_localized_occupancy_trust or history_occupancy_reachability)
+                else (DIRECT_OCCUPANCY_TEMPERED_RECOVERY_WITNESS_FEATURE_SCHEMA
+                if soft_occupancy_disagreement
+                else (DIRECT_DEMAND_TEMPERED_RECOVERY_WITNESS_FEATURE_SCHEMA
+                if demand_normalized_fidelity
+                else (DIRECT_ROBUST_TRUST_RECOVERY_WITNESS_FEATURE_SCHEMA
+                if (projection_fidelity or robust_occupancy)
+                else (DIRECT_PROJECTED_BOUNDARY_RECOVERY_WITNESS_FEATURE_SCHEMA
+                      if (control_projection or boundary_transport)
+                      else (DIRECT_ACTIVE_CONSTRAINT_RECOVERY_WITNESS_FEATURE_SCHEMA
+                            if (route_alignment or reentry_alignment)
+                            else DIRECT_SEMANTIC_RECOVERY_WITNESS_FEATURE_SCHEMA)))))))
+            )
         if feature_schema != expected_semantic_schema:
             raise RuntimeError(
                 "legacy/unknown OC-SARW checkpoint feature semantics: "
