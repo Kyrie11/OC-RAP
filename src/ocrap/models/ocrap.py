@@ -5,7 +5,7 @@ from torch import nn
 
 from ocrap.algorithms.ocmero import torch_oc_mero
 from ocrap.v48_74_signed_viability import enabled as _v48_74_signed_viability_enabled
-from ocrap.algorithms.lcv import torch_weighted_lcvar
+from ocrap.algorithms.lcv import torch_normalize_weights, torch_weighted_lcvar, torch_weighted_lcvar_influence
 from .encoders import FlatFeatureLayout, MLPEncoder, StructuredTokenEncoder
 
 
@@ -366,6 +366,8 @@ class OCRAPModel(nn.Module):
         direct_recovery_semantic_witness_boundary_transport: bool = False,
         direct_recovery_semantic_witness_projection_fidelity_weighting: bool = False,
         direct_recovery_semantic_witness_active_constraint_typed_source: bool = False,
+        direct_recovery_semantic_witness_root_tail_source: bool = False,
+        direct_recovery_semantic_witness_tail_localization: bool = False,
         direct_recovery_semantic_witness_demand_normalized_fidelity: bool = False,
         direct_recovery_semantic_witness_robust_occupancy: bool = False,
         direct_recovery_semantic_witness_soft_occupancy_disagreement: bool = False,
@@ -672,6 +674,26 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_semantic_witness_active_constraint_typed_source = bool(
             direct_recovery_semantic_witness_active_constraint_typed_source
         )
+        # v48.78 OC-RTSI closes the option-wise gain-transport family after
+        # V48.77 STOP.  The new source changes *within-option root-tail shape*
+        # with a single observation-coordinate vector shared by every option,
+        # candidate and regime.  A weighted zero-mean projection removes the
+        # option-translation degree exactly.  The optional nested-tail flag uses
+        # only the frozen OC-MERO LCVAR influence (no teacher future or labels).
+        self.direct_recovery_semantic_witness_root_tail_source = bool(
+            direct_recovery_semantic_witness_root_tail_source
+        )
+        self.direct_recovery_semantic_witness_tail_localization = bool(
+            direct_recovery_semantic_witness_tail_localization
+        )
+        if self.direct_recovery_semantic_witness_tail_localization and not self.direct_recovery_semantic_witness_root_tail_source:
+            raise ValueError("tail localization requires the v48.78 root-tail source")
+        if self.direct_recovery_semantic_witness_root_tail_source and self.direct_recovery_semantic_witness_active_constraint_typed_source:
+            raise ValueError("v48.78 root-tail source replaces the v48.77 active-constraint gain table")
+        if self.direct_recovery_semantic_witness_root_tail_source and self.direct_recovery_semantic_witness_classlocal_transport:
+            raise ValueError("v48.78 root-tail source cannot be combined with learned class-local transport")
+        if self.direct_recovery_semantic_witness_root_tail_source and self.direct_recovery_semantic_witness_boundary_transport:
+            raise ValueError("v48.78 root-tail source does not reopen boundary transport")
         # v48.69 OC-DTRW keeps the validated v48.68 projection-fidelity signal
         # but tempers it by observation-derived recovery demand.  Urgent Near/
         # Contact recoveries often require a large actuator projection even when
@@ -1548,12 +1570,28 @@ class OCRAPModel(nn.Module):
         # table is shared across roots/options/regimes and zero-init remains
         # execution-exact native B.
         self.direct_absolute_semantic_witness_gain = None
-        if self.direct_recovery_absolute_semantic_witness_correction:
+        if self.direct_recovery_absolute_semantic_witness_correction and not self.direct_recovery_semantic_witness_root_tail_source:
             if self.encoder_type != "structured_transformer":
                 raise ValueError("OC-SARW requires structured_transformer flat feature layout")
             gain_shape = (6, 2) if self.direct_recovery_semantic_witness_active_constraint_typed_source else (2,)
             self.direct_absolute_semantic_witness_gain = nn.Parameter(
                 torch.zeros(gain_shape, dtype=torch.float32)
+            )
+
+        # v48.78 OC-RTSI source state.  The only learned degree of freedom is
+        # a single non-negative global scale on a *deterministic OC-MERO tail
+        # basis*.  No observation-class/root embedding is learned or consumed
+        # by this source.  The root x option deformation is p-centered for every
+        # option, so it is algebraically outside the v48.64--77 option-translation
+        # family while avoiding the v48.65 class-local learned-transport branch.
+        self.direct_absolute_root_tail_source_scale = None
+        if self.direct_recovery_semantic_witness_root_tail_source:
+            if not self.direct_recovery_absolute_semantic_witness_correction:
+                raise ValueError("v48.78 root-tail source requires the semantic executable-witness source")
+            if self.encoder_type != "structured_transformer":
+                raise ValueError("v48.78 root-tail source requires structured_transformer")
+            self.direct_absolute_root_tail_source_scale = nn.Parameter(
+                torch.zeros(1, dtype=torch.float32)
             )
 
         # v48.20 UNISON-BRIDGE: a single shared evidence model consumes both
@@ -2812,7 +2850,7 @@ class OCRAPModel(nn.Module):
         Both switches are global factor-ablation flags, never regime inputs.
         Zero gains remain execution-exact native B.
         """
-        if self.direct_absolute_semantic_witness_gain is None:
+        if self.direct_absolute_semantic_witness_gain is None and self.direct_absolute_root_tail_source_scale is None:
             return None
         with torch.no_grad():
             root_tokens = self._decode_roots(memory.detach())
@@ -3092,7 +3130,12 @@ class OCRAPModel(nn.Module):
             interaction_trust = (1.0 / (1.0 + interaction_risk)).to(dtype=memory.dtype)
             common_support = common_support * interaction_trust
 
-        gains = self.direct_absolute_semantic_witness_gain.clamp(0.0, 2.0)
+        gains = (
+            self.direct_absolute_semantic_witness_gain.clamp(0.0, 2.0)
+            if self.direct_absolute_semantic_witness_gain is not None
+            else torch.zeros(2, dtype=memory.dtype, device=memory.device)
+        )
+        root_tail_source = self.direct_recovery_semantic_witness_root_tail_source
         typed_source = self.direct_recovery_semantic_witness_active_constraint_typed_source
         if typed_source:
             if gains.shape != (6, 2):
@@ -3240,7 +3283,125 @@ class OCRAPModel(nn.Module):
             positive_option_count = (supported_viability > 0.0).sum(dim=-1).to(dtype=memory.dtype)
             max_common_support = common_support.amax(dim=-1)
         universal_failure = torch.relu(-best_common_viability)
-        if typed_source:
+        if root_tail_source:
+            # V48.78 OC-RTSI: learn the *shape* of the deployable lower tail,
+            # not another option-wise translation.  The basis is derived only
+            # from the frozen nested OC-MERO operator; the sole trainable state
+            # is a shared scalar scale.  This is deliberately not the v48.65
+            # learned class-local transport: no class/root embedding, ID, or
+            # learned mixer enters the source.
+            if self.direct_absolute_root_tail_source_scale is None:
+                raise RuntimeError("v48.78 root-tail source is enabled without its source scale")
+            if self.direct_recovery_semantic_witness_projection_fidelity_weighting:
+                raise RuntimeError("v48.78 preregistered root-tail source keeps projection fidelity OFF")
+
+            p_rt = p.float()
+            scale_rt = self.direct_absolute_root_tail_source_scale.to(
+                device=memory.device, dtype=torch.float32
+            ).clamp(0.0, 2.0).reshape(1, 1, 1)
+
+            # Keep the historical physical witness and common-option support
+            # as a signed option amplitude.  Unlike v48.64--77, this amplitude
+            # is never broadcast as a constant option translation.
+            option_amplitude = (common_support.float() * physical_viability.float()).detach()
+
+            # Build the exact observation-compatible inner LCVAR influence for
+            # every anchor and option.  I78 averages these lower-tail exposures
+            # under the frozen root measure; J78 additionally composes them with
+            # the outer LCVAR influence and the native deployable best option.
+            with torch.no_grad():
+                C_eff = compatibility.float()
+                top_m = int(self.direct_recovery_evidence_roct_top_m)
+                if top_m > 0 and top_m < K:
+                    vals_rt, idx_rt = torch.topk(C_eff, k=top_m, dim=-1)
+                    C_sparse = torch.zeros_like(C_eff).scatter(-1, idx_rt, vals_rt)
+                    eye_rt = torch.eye(K, dtype=torch.bool, device=memory.device).unsqueeze(0)
+                    C_eff = torch.where(
+                        eye_rt, torch.maximum(C_sparse, torch.ones_like(C_sparse)), C_sparse
+                    )
+
+                scores_rt = base_margins.float().transpose(1, 2)  # [B,L,Kroot]
+                inner_exposure = torch.zeros(
+                    (B, K, self.num_options), dtype=torch.float32, device=memory.device
+                )
+                inner_by_anchor: list[torch.Tensor] = []
+                for anchor_i in range(K):
+                    w_i = torch_normalize_weights(C_eff[:, anchor_i, :] * p_rt)
+                    w_i = w_i.unsqueeze(1).expand(-1, self.num_options, -1)
+                    inner_inf = torch_weighted_lcvar_influence(
+                        scores_rt, w_i, float(self.direct_recovery_evidence_roct_beta)
+                    )  # [B,L,Kroot]
+                    inner_by_anchor.append(inner_inf)
+                    inner_exposure = inner_exposure + (
+                        p_rt[:, anchor_i].view(B, 1, 1) * inner_inf.transpose(1, 2)
+                    )
+
+                tail_basis = inner_exposure
+                if self.direct_recovery_semantic_witness_tail_localization:
+                    _rdep_rt, _rorc_rt, _gap_rt, q_rt = torch_oc_mero(
+                        base_margins.float(), p_rt, compatibility.float(),
+                        alpha=float(self.direct_recovery_evidence_roct_alpha),
+                        beta=float(self.direct_recovery_evidence_roct_beta),
+                        option_valid=ov, root_valid=rv, use_lcvar=True, use_obs_kernel=True,
+                        top_m=top_m,
+                    )
+                    q_for_best_rt = q_rt
+                    if ov is not None:
+                        q_for_best_rt = q_for_best_rt.masked_fill(~ov.unsqueeze(1), -1.0e9)
+                    best_l_rt = q_for_best_rt.argmax(dim=-1)
+                    r_per_anchor_rt = q_for_best_rt.amax(dim=-1)
+                    outer_inf = torch_weighted_lcvar_influence(
+                        r_per_anchor_rt, p_rt, float(self.direct_recovery_evidence_roct_alpha)
+                    )
+                    nested_exposure = torch.zeros_like(inner_exposure)
+                    for anchor_i, inner_inf in enumerate(inner_by_anchor):
+                        chosen = torch.nn.functional.one_hot(
+                            best_l_rt[:, anchor_i], num_classes=self.num_options
+                        ).to(dtype=inner_inf.dtype)
+                        nested_exposure = nested_exposure + (
+                            outer_inf[:, anchor_i].view(B, 1, 1)
+                            * inner_inf.transpose(1, 2)
+                            * chosen.unsqueeze(1)
+                        )
+                    tail_basis = nested_exposure
+
+                if rv is not None:
+                    tail_basis = torch.where(
+                        rv.unsqueeze(-1), tail_basis, torch.zeros_like(tail_basis)
+                    )
+                if ov is not None:
+                    tail_basis = torch.where(
+                        ov.unsqueeze(1), tail_basis, torch.zeros_like(tail_basis)
+                    )
+
+                # Remove the option-wise p-weighted translation exactly, then
+                # normalize only the deterministic basis magnitude.  A constant
+                # tail exposure therefore becomes the zero intervention rather
+                # than another hidden gain transport.
+                basis_mean = (p_rt.unsqueeze(-1) * tail_basis).sum(dim=1, keepdim=True)
+                centered_basis = tail_basis - basis_mean
+                basis_norm = centered_basis.abs().amax(dim=1, keepdim=True)
+                tail_basis = torch.where(
+                    basis_norm > 1.0e-8,
+                    centered_basis / basis_norm.clamp_min(1.0e-8),
+                    torch.zeros_like(centered_basis),
+                ).detach()
+
+            root_tail_delta = (
+                scale_rt
+                * option_amplitude.unsqueeze(1)
+                * tail_basis
+            )
+            if rv is not None:
+                root_tail_delta = torch.where(
+                    rv.unsqueeze(-1), root_tail_delta, torch.zeros_like(root_tail_delta)
+                )
+            if ov is not None:
+                root_tail_delta = torch.where(
+                    ov.unsqueeze(1), root_tail_delta, torch.zeros_like(root_tail_delta)
+                )
+            corrected_margins = base_margins + root_tail_delta.to(dtype=base_margins.dtype)
+        elif typed_source:
             # V48.77 OC-ACTSI structured source interface.  The physical sign
             # remains the exact non-compensatory minimum.  Learning sees only
             # the *identity of the binding constraint* of each option, which is
@@ -4792,6 +4953,7 @@ class OCRAPModel(nn.Module):
                 or self.direct_absolute_common_witness_gain is not None
                 or self.direct_absolute_quantifier_witness_gain is not None
                 or self.direct_absolute_semantic_witness_gain is not None
+                or self.direct_absolute_root_tail_source_scale is not None
             ):
                 roct_signature, native_certificate = self._direct_recovery_option_compatibility_evidence(
                     memory, x, option_features,
@@ -4871,6 +5033,8 @@ class OCRAPModel(nn.Module):
                 direct_out["direct_recovery_absolute_feasibility_probability"] = abs_probability
                 direct_out["direct_recovery_absolute_semantic_witness_features"] = sw_features
                 direct_out["direct_recovery_absolute_semantic_witness_gain"] = sw_gains
+                if self.direct_absolute_root_tail_source_scale is not None:
+                    direct_out["direct_recovery_absolute_root_tail_source_scale"] = self.direct_absolute_root_tail_source_scale
                 direct_out["direct_recovery_absolute_semantic_witness_viability"] = sw_viability
                 direct_out["direct_recovery_absolute_semantic_common_option_support"] = sw_support
                 direct_out["direct_recovery_absolute_semantic_best_common_viability"] = sw_best
@@ -5034,6 +5198,8 @@ class OCRAPModel(nn.Module):
             out["direct_recovery_absolute_feasibility_probability"] = abs_probability
             out["direct_recovery_absolute_semantic_witness_features"] = sw_features
             out["direct_recovery_absolute_semantic_witness_gain"] = sw_gains
+            if self.direct_absolute_root_tail_source_scale is not None:
+                out["direct_recovery_absolute_root_tail_source_scale"] = self.direct_absolute_root_tail_source_scale
             out["direct_recovery_absolute_semantic_witness_viability"] = sw_viability
             out["direct_recovery_absolute_semantic_common_option_support"] = sw_support
             out["direct_recovery_absolute_semantic_best_common_viability"] = sw_best

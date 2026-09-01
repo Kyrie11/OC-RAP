@@ -100,6 +100,29 @@ def torch_weighted_lcvar(scores: torch.Tensor, weights: torch.Tensor, alpha: flo
     return (take * sorted_scores).sum(dim=-1) / float(alpha)
 
 
+def torch_weighted_lcvar_influence(
+    scores: torch.Tensor, weights: torch.Tensor, alpha: float, eps: float = EPS
+) -> torch.Tensor:
+    """Return the deterministic LCVAR subgradient w.r.t. ``scores``.
+
+    The implementation uses the exact same stable sort and fractional tail take
+    as :func:`torch_weighted_lcvar`.  The returned tensor has the same shape as
+    ``scores`` and sums to one along the last dimension whenever the normalized
+    support is non-empty.  It contains no learned quantity and is intended for
+    v48.78's preregistered *tail attribution* only.
+    """
+    if not (0.0 < float(alpha) <= 1.0):
+        raise ValueError(f"alpha must be in (0,1], got {alpha}")
+    w = torch_normalize_weights(weights, eps)
+    _sorted_scores, idx = torch.sort(scores, dim=-1, descending=False, stable=True)
+    sorted_weights = torch.gather(w, -1, idx)
+    cumsum_prev = _exclusive_cumulative_weights(sorted_weights)
+    remaining = torch.clamp(float(alpha) - cumsum_prev, min=0.0)
+    take = torch.minimum(sorted_weights, remaining) / float(alpha)
+    influence = torch.zeros_like(take).scatter(-1, idx, take)
+    return influence
+
+
 def torch_weighted_mean(scores: torch.Tensor, weights: torch.Tensor, eps: float = EPS) -> torch.Tensor:
     w = torch_normalize_weights(weights, eps)
     return (scores * w).sum(dim=-1)

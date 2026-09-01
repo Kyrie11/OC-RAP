@@ -105,7 +105,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set training.recovery_frontier_regression_weight="${RECOVERY_FRONTIER_REGRESSION_WEIGHT:-1.0}" \
   --set training.recovery_frontier_sign_weight="${RECOVERY_FRONTIER_SIGN_WEIGHT:-0.50}" \
   --set training.progress=true \
-  --set training.save_every_epoch=true --set training.best_metric="${BEST_METRIC:-direct_policy_risk_fold_worst}" \
+  --set training.save_every_epoch="${SAVE_EVERY_EPOCH:-true}" --set training.save_latest="${SAVE_LATEST:-true}" --set training.best_metric="${BEST_METRIC:-direct_policy_risk_fold_worst}" \
   --set training.best_metric_mode=min --set training.best_metric_min_delta="${BEST_METRIC_MIN_DELTA:-0.000001}" \
   --set training.evaluate_initial_checkpoint="${EVALUATE_INITIAL_CHECKPOINT:-false}" \
   --set training.group_batching=true --set training.group_batching_replacement="${GROUP_BATCHING_REPLACEMENT:-true}" \
@@ -200,6 +200,8 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python -u -m ocrap.cli train \
   --set model.direct_recovery_semantic_witness_boundary_transport="${SEMANTIC_WITNESS_BOUNDARY_TRANSPORT:-false}" \
   --set model.direct_recovery_semantic_witness_projection_fidelity_weighting="${SEMANTIC_WITNESS_PROJECTION_FIDELITY:-false}" \
   --set model.direct_recovery_semantic_witness_active_constraint_typed_source="${SEMANTIC_WITNESS_ACTIVE_CONSTRAINT_TYPED_SOURCE:-false}" \
+  --set model.direct_recovery_semantic_witness_root_tail_source="${SEMANTIC_WITNESS_ROOT_TAIL_SOURCE:-false}" \
+  --set model.direct_recovery_semantic_witness_tail_localization="${SEMANTIC_WITNESS_TAIL_LOCALIZATION:-false}" \
   --set model.direct_recovery_semantic_witness_demand_normalized_fidelity="${SEMANTIC_WITNESS_DEMAND_NORMALIZED_FIDELITY:-false}" \
   --set model.direct_recovery_semantic_witness_robust_occupancy="${SEMANTIC_WITNESS_ROBUST_OCCUPANCY:-false}" \
   --set model.direct_recovery_semantic_witness_soft_occupancy_disagreement="${SEMANTIC_WITNESS_SOFT_OCCUPANCY_DISAGREEMENT:-false}" \

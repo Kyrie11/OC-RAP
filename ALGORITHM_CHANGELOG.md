@@ -7783,3 +7783,201 @@ V48.77 adds these explicit prohibitions:
 - do not tune per-constraint gain bounds, regularizers, or class weights;
 - do not interpret a single favorable active-constraint row as mechanism GO without the preregistered cross-split source/Huber gates;
 - if OC-ACTSI fails, do not recycle it through different table sizes or merge rare constraint rows; close the gain-transport family as registered.
+
+## v48.78 — OC-RTSI: Observation-Consistent Root-Tail Source Interface (2026-09-01)
+
+### Entry condition / authoritative V48.77 result
+
+V48.77 OC-ACTSI is engineering-valid and attribution-ready. Runtime-code provenance, reference reuse, G77/H77 state isolation, variant isolation, row alignment, signed-margin truth contract, recalibration artifacts and the top-level sentinel are mutually consistent with `engineering_version=v48.77.0-OC-ACTSI`, `errors=[]`, `test_roots_read=false`, and `dataset_reconstruction=false`. The uploaded result packages omit `best.pt`, so byte-level independent checkpoint reload is unavailable in the analysis environment, but the recorded checkpoint hashes/state isolation/runtime provenance and row-level outputs are internally closed; this is a reproducibility packaging debt rather than an attribution blocker. From V48.78 onward every run zip must retain the final `best.pt` files while epoch snapshots are suppressed.
+
+V48.77 is a **scientific STOP** under its preregistration:
+
+- `G77-E76` non-floor AUC is positive in only 4/8 cells and no cell reaches the registered `+0.005` material threshold;
+- `G77-E76` signed-margin Huber decreases in 6/8 cells, but no cell reaches the registered `-0.01` material threshold;
+- `H77-F76` is execution-exact zero in all 8 AUC and all 8 Huber cells. Both H77 best checkpoints select the zero 6x2 table;
+- full-source and adequately-powered safe-positive admission gates fail;
+- harmful/TI selectivity remains controlled, so this is not a permissive-relapse failure.
+
+G77 learns a non-trivial typed table (route, stopping, persistent-reentry and negative stability/route terms are non-zero), which shows that binding-constraint identity contains some optimization signal. However, the effect is not a stable source mechanism: relative to E76, the typed source systematically gives tiny Contact improvements while degrading Near ordering, and certificate/generalization behavior does not meet the material cross-cell gate. H77 collapsing to zero under projection-fidelity weighting further shows that “split the global gain more finely” is not the remaining solution.
+
+The formal V48.77 next branch is therefore:
+
+`active_typed_transport_stop_close_gain_transport_family_then_structured_ocmero_tail_source_interface_no_gain_sweep`.
+
+### New algebraic diagnosis: why the V48.64–77 gain-transport family is structurally limited
+
+Every candidate-global semantic source from V48.64 through V48.77 ultimately applies an option-wise scalar translation
+
+```text
+M'_{k,l} = M_{k,l} + delta_l
+```
+
+to every observation-compatible latent root `k` of the same option `l`. V48.77 only makes `delta_l` depend on the binding active-constraint type; it still remains root-constant for a given option.
+
+Weighted lower-tail CVaR is translation equivariant:
+
+```text
+LCVaR_beta(M[:,l] + delta_l; w) = LCVaR_beta(M[:,l]; w) + delta_l.
+```
+
+Therefore no option-wise gain table—2 parameters, 6x2, or any larger constraint table—can change the **within-option root-tail shape**: it cannot alter which compatible latent roots constitute the lower deployable tail or how signed recovery debt is distributed inside that tail. It can only move the whole option. This algebraic limitation explains the historical pattern of small calibration/order shifts without consistent safe-positive admission.
+
+This result closes the option-translation/gain family. V48.78 may not revisit gain-table size, per-constraint scales, soft binding mixers, LR/gain/threshold grids, or option/regime-specific transport.
+
+### Updated dominant bottleneck
+
+The dominant unresolved layer is tightened to:
+
+`observation-consistent deployable lower-tail shape representation for the signed absolute recovery source`.
+
+Equivalently: given an already actuator-realizable executable recovery and the existing observation-compatible root distribution, the source must represent **which latent roots actually determine the nested OC-MERO lower tail and how the executable recovery changes their signed reserve/debt**, rather than adding the same rescue/debt offset to every root of an option.
+
+This keeps the paper main line unified:
+
+```text
+observation-consistent deployability (OC-MERO)
+-> executable candidate x option recovery
+-> actuator-realizable continuation
+-> common/non-compensatory physical witness
+-> signed root-tail recoverability source
+-> role-isolated absolute admission (RIFA)
+-> only then downstream boundary/deployment validation.
+```
+
+Near and Contact remain evaluation/supervision strata of one policy, never runtime regime inputs. Near corresponds to lower-tail positive headroom approaching zero; Contact corresponds to lower-tail negative recovery/penetration debt that must return across the same zero boundary.
+
+### V48.78 intervention: deterministic OC-MERO tail basis + one shared scale
+
+V48.78 deliberately avoids the previously rejected V48.65 **learned class-local transport**. It learns no observation-class vector, root embedding adapter, option ID, regime ID, class-local bias, or generic MLP. Instead, the source basis is the exact deterministic lower-tail influence of the already frozen OC-MERO operator.
+
+The only new trainable state is
+
+```text
+direct_absolute_root_tail_source_scale[1]
+```
+
+initialized to zero and constrained by the historical `[0,2]` non-negative box. All Stage-I/root/proposal/relative-ranking tensors remain frozen.
+
+For the existing root probabilities `p_k`, observation compatibility `C_ik`, root-option native margins `M_kl`, and physical common-witness signed option amplitude
+
+```text
+a_l = c_l * v_l,
+```
+
+V48.78 first computes the exact inner-LCVAR score influence for every observation anchor `i`, option `l`, and latent root `k` using the same stable sort/fractional tail rule as production `torch_weighted_lcvar`.
+
+#### I78_ROOT_SHAPE — observation-compatible inner-tail shape
+
+For each `(i,l)`, let `s_ilk` be the exact beta-LCVAR influence of root `k` under weights proportional to `C_ik p_k`. I78 forms a deterministic option-root tail exposure
+
+```text
+u_kl = sum_i p_i s_ilk.
+```
+
+It then removes the exact `p`-weighted mean within every option and normalizes only the deterministic basis magnitude:
+
+```text
+b_kl = u_kl - sum_j p_j u_jl,
+max_k |b_kl| -> 1 when non-degenerate.
+```
+
+The learned residual is
+
+```text
+delta_kl = rho * a_l * b_kl,
+```
+
+with one shared scalar `rho`. By construction
+
+```text
+sum_k p_k delta_kl = 0
+```
+
+for every option. Thus I78 has **zero option-wise translation capacity** and can only test lower-tail shape.
+
+#### J78_MAIN_RTSI — exact nested deployability-tail localization
+
+J78 uses the same inner influence but additionally applies the exact alpha-LCVAR influence of each observation anchor on `R_dep` and the native `q[i,l]` best-option responsibility. Its deterministic root-option exposure is the nested OC-MERO subgradient path from root-option margins to deployable recovery. The exposure is again p-centered and normalized before multiplying the same one shared `rho * a_l`.
+
+J78 therefore tests whether the missing source structure is specifically the **nested deployability tail**, rather than generic lower-tail reshaping.
+
+Both arms preserve:
+
+- signed-Huber supervision, beta=1.0;
+- exact-0.5 truth censoring, without relabelling floor rows negative;
+- actuator projection ON;
+- projection-fidelity weighting OFF (V48.77 did not re-promote it under signed supervision);
+- route/re-entry/active-set semantics unchanged;
+- certificate sign/set unchanged;
+- Stage-I, root probabilities, proposal library, top-K=5, threshold=0.5 and relative ranker frozen;
+- boundary transport OFF;
+- no teacher future and no dataset reconstruction.
+
+### Clean nested causal experiment
+
+Historical C75 and E76 are reused; only I78/J78 train:
+
+| Arm | Source representation | Tail localization | Supervision |
+| --- | --- | --- | --- |
+| historical C75 | native / zero semantic transport | — | censored binary sign |
+| historical E76 | global option translation | — | signed Huber |
+| `I78_ROOT_SHAPE` | **zero-translation root-tail residual** | inner observation-compatible LCVAR | signed Huber |
+| `J78_MAIN_RTSI` | **zero-translation root-tail residual** | **exact nested OC-MERO deployability tail** | signed Huber |
+
+Primary comparisons:
+
+```text
+I78 - E76 : does non-translational root-tail shape beat the best signed global source?
+J78 - I78 : does exact nested deployability-tail localization add causal value?
+J78 - E76 : complete structured root-tail source effect
+J78 - C75 : final absolute-source diagnostic versus the native censored reference.
+```
+
+### V48.78 preregistered decision order
+
+1. Runtime/reference/state/variant contracts must pass. I/J checkpoints may add **only** `direct_absolute_root_tail_source_scale`, shape `[1]`, and all shared Stage-I tensors must remain bitwise identical. `best.pt` must be retained in the result packages.
+2. Teacher labels and positive-certificate sign/set must remain exact-identical for all registered causal comparisons.
+3. `I78-E76` root-shape GO requires both:
+   - non-floor AUC positive in at least 6/8 cells and at least 4/8 `>= +0.005`;
+   - non-floor signed-margin Huber lower in at least 6/8 and at least 4/8 `<= -0.01`.
+4. `J78-I78` nested-tail incremental GO requires:
+   - non-floor AUC positive in at least 6/8 and at least 4/8 `>= +0.003`;
+   - Huber lower in at least 6/8 and at least 4/8 `<= -0.005`.
+5. `J78-E76` complete root-tail source uses the stronger I78 material thresholds.
+6. Harmful/TI remains fail-closed: I/J must be `<=0.25` in every cell and no more than `+0.02` above E76.
+7. Full-source GO versus C75 remains stringent: full AUC positive 8/8 with at least 6/8 `>=+0.01`; non-floor AUC positive at least 6/8 with at least 4/8 `>=+0.005`; every adequately powered non-floor safe-positive cell must be non-decreasing and at least three must improve pass fraction by `>=0.05`.
+8. If J78 mechanism GO but full source STOP, the next step is **physical recovery margin vs structural deployability truth-contract adjudication before boundary transport**.
+9. If only I78 GO, promote only the zero-translation inner-tail shape and adjudicate the truth contract; do not retain nested localization by default.
+10. If I/J both STOP, close the low-capacity absolute-source adapter family. The next work must adjudicate teacher/physical structural semantics before adding any new source capacity; no new gain table, learned class-local source, generic MLP, or parameter sweep is allowed.
+
+### Experiment-runtime diagnosis and execution-preserving optimizations
+
+V48.77 timing shows that the slowdown is **both** increased experiment count and repeated frozen-model computation, but the latter dominates per epoch:
+
+- G77 balanced/precision each materialize the dataset in about 55 s, then train for 15 epochs after the initial validation; median epoch wall time is roughly 156 s / 127 s and total training wall time about 2394 s / 1989 s.
+- H77 materialization is only about 11 s (filesystem cache warm) but five epochs still cost about 873 s / 771 s total, with roughly 164 s / 146 s per epoch.
+- Therefore dataset decode/materialization is not the dominant wall-clock term. The major cost is repeatedly running the frozen structured encoder/root decoder/native semantic source every epoch even though only a tiny source state is trainable. This remains a known engineering optimization opportunity; changing it to a frozen-sufficient-state cache is intentionally **not** mixed into the V48.78 scientific intervention because historical training keeps frozen modules in training mode by default and a cache could silently change dropout/numerical semantics.
+
+V48.78 applies only execution-preserving low-risk optimizations:
+
+- enable the existing persistent tensor cache for train/val data;
+- I/J use the same semantic feature schema and a shared cache directory, so the second arm reuses the exact materialized tensor cache;
+- cold cache construction uses `PERSISTENT_TENSOR_CACHE_BUILD_WORKERS=8` by default;
+- `OMP_NUM_THREADS=1`, `MKL_NUM_THREADS=1` to reduce oversubscription;
+- expose backward-compatible `training.save_latest`; V48.78 sets both `SAVE_EVERY_EPOCH=false` and `SAVE_LATEST=false`, while still overwriting `best.pt` whenever the preregistered validation metric improves;
+- result zips retain final `best.pt` only instead of all epoch snapshots.
+
+A future **engineering-only** frozen-sufficient-state cache may be implemented after the V48.78 scientific branch is adjudicated, but it must first prove bitwise-equivalent frozen source outputs under the exact target training-mode contract. Do not change batch size, AMP mode, dropout/eval mode, validation cadence, LR, patience or sampler solely for speed during V48.78.
+
+### Continue to avoid / newly explicit exclusions
+
+All historical exclusions remain active. In particular: no Safe/Near/Contact router/expert/policy/threshold/budget; no LR/threshold/horizon/feature-scale/class-weight/gain grids; no proposal/top-K or unsupported option expansion; no generic AFE/MLP or broad encoder/root/margin retraining; no privileged future; no class-local/path-stop Main; no post-hoc hard control veto; no hard CV/CA minimum; no demand-only forgiveness; no ball/box/hull/anchor/jerk or B1/B2 reopening; no boundary transport before an upstream absolute source is valid; no relative-ranker modification before absolute-source GO; no option-specific bias; and no root-logit recalibration.
+
+V48.77/V48.78 additionally forbid:
+
+- any further 2-gain / 6x2 / larger active-type option-translation table;
+- learned soft binding-type mixtures or merged/expanded active rows;
+- reusing V48.65-style learned observation-class-local transport;
+- learned root/observation ID embeddings for the new source;
+- interpreting the deterministic nested-tail influence as a new relative ranker (native `q` and best-option responsibility remain frozen);
+- speed optimizations that alter dropout mode, batching, optimizer trajectory or checkpoint-selection semantics during the V48.78 scientific test.
