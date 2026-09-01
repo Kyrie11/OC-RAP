@@ -69,7 +69,11 @@ export ORDINAL_EVIDENCE_COMPONENT_MARGIN_REGRESSION_RELIABILITY="1,1,1,0,0"
 train_stca_arm(){
  local run="$1" arm="$2" fidelity="$3";mkdir -p "$run/candidates" "$run/logs"
  train_one(){
-  local v="$1" gpu="$2" src="$REFERENCE_A/candidates/$v" dst="$run/candidates/$v";mkdir -p "$dst"
+  local v="$1"
+  local gpu="$2"
+  local src="$REFERENCE_A/candidates/$v"
+  local dst="$run/candidates/$v"
+  mkdir -p "$dst"
   if [[ -f "$src/FACTOR_SUPPORT_CONTRACT.env" ]];then set -a;source "$src/FACTOR_SUPPORT_CONTRACT.env";set +a;else export EVIDENCE_COMPONENT_RELIABILITY="1,1,1,0,0";fi
   RUN="$dst" MODEL_DIR="$dst/model_v48_trac_sr" VARIANT="$v" TRAIN_GPU="$gpu" INIT_CKPT="$src/model_v48_trac_sr/best.pt" \
   TRAIN_MIX="$TRAIN_NEAR,$TRAIN_CONTACT" VAL_MIX="$DEV_NEAR,$DEV_CONTACT" GROUP_INDEX="$REFERENCE_A/evidence_adapt_teacher_pcd_index.jsonl" VAL_GROUP_INDEX="$REFERENCE_A/evidence_adapt_dev_teacher_pcd_index.jsonl" \
