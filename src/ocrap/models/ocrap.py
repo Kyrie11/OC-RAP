@@ -365,6 +365,7 @@ class OCRAPModel(nn.Module):
         direct_recovery_semantic_witness_control_projection: bool = False,
         direct_recovery_semantic_witness_boundary_transport: bool = False,
         direct_recovery_semantic_witness_projection_fidelity_weighting: bool = False,
+        direct_recovery_semantic_witness_active_constraint_typed_source: bool = False,
         direct_recovery_semantic_witness_demand_normalized_fidelity: bool = False,
         direct_recovery_semantic_witness_robust_occupancy: bool = False,
         direct_recovery_semantic_witness_soft_occupancy_disagreement: bool = False,
@@ -661,6 +662,15 @@ class OCRAPModel(nn.Module):
         # observation-only semantics, never regime inputs.
         self.direct_recovery_semantic_witness_projection_fidelity_weighting = bool(
             direct_recovery_semantic_witness_projection_fidelity_weighting
+        )
+        # v48.77 OC-ACTSI: a signed min-certificate is piecewise by its active
+        # constraint.  The historical two-gain transport collapses that mode
+        # identity before learning.  Preserve the same non-compensatory physical
+        # certificate, but allow the signed-margin source to use one shared
+        # positive/negative slope per active constraint.  This is not a regime
+        # router, option-ID bias, feature-weighted sum, or final admission head.
+        self.direct_recovery_semantic_witness_active_constraint_typed_source = bool(
+            direct_recovery_semantic_witness_active_constraint_typed_source
         )
         # v48.69 OC-DTRW keeps the validated v48.68 projection-fidelity signal
         # but tempers it by observation-derived recovery demand.  Urgent Near/
@@ -1531,14 +1541,19 @@ class OCRAPModel(nn.Module):
                 torch.zeros(2, dtype=torch.float32)
             )
 
-        # v48.64 OC-SARW keeps the v48.63 two-gain quantifier interface so the
-        # scientific intervention is constraint semantics rather than capacity.
+        # v48.64 OC-SARW keeps the v48.63 two-gain quantifier interface.
+        # v48.77 OC-ACTSI conditionally replaces only that scalar interface by
+        # a 6 x 2 active-constraint typed table.  Rows follow the exact barrier
+        # stack [clearance, stopping, control, stability, route, re-entry]; the
+        # table is shared across roots/options/regimes and zero-init remains
+        # execution-exact native B.
         self.direct_absolute_semantic_witness_gain = None
         if self.direct_recovery_absolute_semantic_witness_correction:
             if self.encoder_type != "structured_transformer":
                 raise ValueError("OC-SARW requires structured_transformer flat feature layout")
+            gain_shape = (6, 2) if self.direct_recovery_semantic_witness_active_constraint_typed_source else (2,)
             self.direct_absolute_semantic_witness_gain = nn.Parameter(
-                torch.zeros(2, dtype=torch.float32)
+                torch.zeros(gain_shape, dtype=torch.float32)
             )
 
         # v48.20 UNISON-BRIDGE: a single shared evidence model consumes both
@@ -3078,6 +3093,16 @@ class OCRAPModel(nn.Module):
             common_support = common_support * interaction_trust
 
         gains = self.direct_absolute_semantic_witness_gain.clamp(0.0, 2.0)
+        typed_source = self.direct_recovery_semantic_witness_active_constraint_typed_source
+        if typed_source:
+            if gains.shape != (6, 2):
+                raise RuntimeError(f"OC-ACTSI requires semantic gain shape (6,2), got {tuple(gains.shape)}")
+            if self.direct_recovery_semantic_witness_classlocal_transport:
+                raise RuntimeError("OC-ACTSI is candidate-global and cannot be combined with class-local transport")
+            if self.direct_recovery_semantic_witness_boundary_transport:
+                raise RuntimeError("OC-ACTSI does not reopen boundary transport")
+            if barrier_stack.shape[-1] != 6:
+                raise RuntimeError("OC-ACTSI requires the fixed six-slot active-constraint stack including route and re-entry")
 
         # v48.65 OC-CLRW factor: the paper's OC-MERO information pattern is
         # observation-class local.  q[i,l] has already aggregated all roots
@@ -3215,7 +3240,24 @@ class OCRAPModel(nn.Module):
             positive_option_count = (supported_viability > 0.0).sum(dim=-1).to(dtype=memory.dtype)
             max_common_support = common_support.amax(dim=-1)
         universal_failure = torch.relu(-best_common_viability)
-        if self.direct_recovery_semantic_witness_boundary_transport:
+        if typed_source:
+            # V48.77 OC-ACTSI structured source interface.  The physical sign
+            # remains the exact non-compensatory minimum.  Learning sees only
+            # the *identity of the binding constraint* of each option, which is
+            # the natural piecewise mode of a min-defined signed viability
+            # function.  Positive rescue is therefore typed per option.  When
+            # every option is infeasible, the negative correction is typed by
+            # the least-infeasible common option (the same best_option used by
+            # the universal-failure diagnostic) and remains candidate-global.
+            type_index = limiting_constraint.to(dtype=torch.long).clamp(0, 5)
+            pos_gain = gains[:, 0][type_index]
+            positive_rescue = pos_gain.to(dtype=memory.dtype) * common_support * torch.relu(physical_viability)
+            batch_index_typed = torch.arange(B, device=memory.device)
+            failure_type = type_index[batch_index_typed, best_option]
+            neg_gain = gains[:, 1][failure_type].to(dtype=memory.dtype)
+            option_correction = positive_rescue - (neg_gain * universal_failure).unsqueeze(-1)
+            corrected_margins = base_margins + option_correction.unsqueeze(1)
+        elif self.direct_recovery_semantic_witness_boundary_transport:
             # v48.67 bounded boundary transport.  The v48.66 additive lift had
             # no relation to a root-option's native deficit: even an all-positive
             # trusted witness could remain below R_dep=0.  Convert the tanh

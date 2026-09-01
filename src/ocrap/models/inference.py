@@ -565,6 +565,10 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_semantic_witness_projection_fidelity_weighting",
             model_cfg.get("direct_recovery_semantic_witness_projection_fidelity_weighting", False),
         )),
+        direct_recovery_semantic_witness_active_constraint_typed_source=bool(ckpt.get(
+            "direct_recovery_semantic_witness_active_constraint_typed_source",
+            model_cfg.get("direct_recovery_semantic_witness_active_constraint_typed_source", False),
+        )),
         direct_recovery_semantic_witness_demand_normalized_fidelity=bool(ckpt.get(
             "direct_recovery_semantic_witness_demand_normalized_fidelity",
             model_cfg.get("direct_recovery_semantic_witness_demand_normalized_fidelity", False),
@@ -876,6 +880,9 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_semantic_witness_projection_fidelity_weighting"] = bool(
         model.direct_recovery_semantic_witness_projection_fidelity_weighting
     )
+    cfg["model"]["direct_recovery_semantic_witness_active_constraint_typed_source"] = bool(
+        model.direct_recovery_semantic_witness_active_constraint_typed_source
+    )
     cfg["model"]["direct_recovery_semantic_witness_demand_normalized_fidelity"] = bool(
         model.direct_recovery_semantic_witness_demand_normalized_fidelity
     )
@@ -1158,6 +1165,10 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_semantic_witness_projection_fidelity_weighting",
             model_cfg.get("direct_recovery_semantic_witness_projection_fidelity_weighting", False),
         )),
+        "direct_recovery_semantic_witness_active_constraint_typed_source": bool(ckpt.get(
+            "direct_recovery_semantic_witness_active_constraint_typed_source",
+            model_cfg.get("direct_recovery_semantic_witness_active_constraint_typed_source", False),
+        )),
         "direct_recovery_semantic_witness_demand_normalized_fidelity": bool(ckpt.get(
             "direct_recovery_semantic_witness_demand_normalized_fidelity",
             model_cfg.get("direct_recovery_semantic_witness_demand_normalized_fidelity", False),
@@ -1263,6 +1274,9 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         ),
         "direct_recovery_semantic_witness_projection_fidelity_weighting": bool(
             model.direct_recovery_semantic_witness_projection_fidelity_weighting
+        ),
+        "direct_recovery_semantic_witness_active_constraint_typed_source": bool(
+            model.direct_recovery_semantic_witness_active_constraint_typed_source
         ),
         "direct_recovery_semantic_witness_demand_normalized_fidelity": bool(
             model.direct_recovery_semantic_witness_demand_normalized_fidelity

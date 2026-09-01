@@ -7645,3 +7645,141 @@ Do not continue creating source mechanisms indefinitely.  Once an engineering-va
 5. Only after 1--4, freeze absolute-source learning, then evaluate the already-frozen relative RIFA path and paired Safe non-interference / nominal utility.  Only after those pass should the work enter external-baseline and final three-regime closed-loop SOTA comparison.
 
 These are an internal stopping rule for mechanism iteration, not a claim that V48.76 already satisfies them.
+
+## v48.77 — OC-ACTSI: Observation-Consistent Active-Constraint Typed Source Interface (2026-09-01)
+
+### Entry condition / authoritative V48.76 result
+
+V48.76 OC-ICSM is engineering-valid and attribution-ready: runtime-code provenance matches the delivered V48.76 repository, reference reuse is valid, E76/F76 keep all 170 shared Stage-I tensors bitwise unchanged, the only learned state is the semantic witness gain, no test root is read, and no dataset reconstruction occurs. The formal V48.76 comparison is a **scientific STOP** with the preregistered next branch
+
+` signed_margin_supervision_stop_two_gain_transport_representation_bottleneck_then_structured_absolute_source_interface `.
+
+The signed-Huber intervention is not completely signal-free: `E76-C75` improves non-floor AUC in 6/8 cells, but only 2/8 reach `+0.005`; its non-floor Huber error decreases in 6/8 cells, but 0/8 reach the registered `-0.01` material threshold. `F76-D75` is exactly zero in all eight non-floor AUC and Huber comparisons. Both F76 best checkpoints select epoch 0 with `direct_absolute_semantic_witness_gain=[0,0]`, whereas E76 learns the same small nonzero two-gain vector in balanced/precision. Thus continuous signed supervision exposes a weak usable direction, but the **global two-slope semantic transport does not provide a sufficiently expressive/compatible absolute-source interface**, especially once projection-fidelity weighting changes the support distribution.
+
+This is not an authorization to tune LR, gain bounds, fidelity scale, checkpoint min-delta, class weights, thresholds, geometry, or recovery horizons. Those directions remain excluded by the prior preregistration.
+
+### Updated dominant bottleneck
+
+The current bottleneck is tightened from generic “supervision geometry” to:
+
+`piecewise structured absolute-source representation for observation-consistent signed recoverability`.
+
+The accepted semantic physical viability is already a non-compensatory minimum over a fixed active-constraint stack
+
+```text
+h_l = min_k h_lk,
+
+k in {clearance, stopping, control, stability, route, persistent re-entry}.
+```
+
+This signed minimum is piecewise: locally, its geometry is determined by the binding constraint `a_l = argmin_k h_lk`. V48.76 nevertheless maps every positive witness and every universal failure through the same two global slopes. That imposes the unsupported assumption that a unit of clearance reserve, route reserve, stopping reserve, stability reserve, or persistent-reentry reserve has the same absolute-source transport geometry.
+
+Row-level V48.76 evidence motivates testing this representation hypothesis: the learned E76 correction has different error effects across binding-constraint strata, and adding projection-fidelity causes the globally shared optimum to collapse to zero rather than producing a consistent shared correction.
+
+### V48.77 intervention: active-constraint typed source, not a generic head
+
+V48.77 keeps the physical certificate, candidate×option continuation, OC-MERO operator, signed-Huber target, truth censoring, Stage-I, roots, proposals, option library, actuator projection, active-set/route/re-entry semantics, RIFA order, top-K=5, and the 0.5 absolute threshold unchanged.
+
+Only the trainable semantic transport interface changes. The historical parameter
+
+```text
+direct_absolute_semantic_witness_gain[2]
+```
+
+is replaced, when the new flag is enabled, by
+
+```text
+direct_absolute_semantic_witness_gain[6,2]
+```
+
+with rows ordered exactly as
+
+```text
+0 clearance
+1 stopping
+2 control
+3 stability
+4 route
+5 persistent re-entry
+```
+
+and columns
+
+```text
+0 positive rescue
+1 universal-failure correction.
+```
+
+For option `l`, let `v_l=min_k h_lk`, `a_l=argmin_k h_lk`, and `c_l` be the already-frozen common executable-witness support. The positive correction is
+
+```text
+Delta_l^+ = g^+_{a_l} c_l [v_l]_+.
+```
+
+If all common options fail, the existing candidate-global best common failure is retained. Let
+
+```text
+l* = argmax_l c_l v_l,
+a* = a_{l*},
+d = [-max_l c_l v_l]_+.
+```
+
+The negative correction uses only the active type of that least-infeasible common option:
+
+```text
+Delta^- = g^-_{a*} d,
+```
+
+and remains candidate-global. The resulting corrected root×option margins are passed through the **unchanged observation-consistent OC-MERO operator**.
+
+All gains are shared across roots, options, observation classes, and Safe/Near/Contact regimes. There is **no learned option-ID bias, regime ID, class-local transport, feature sum, compensatory rule, final-admission residual, root-logit calibration, or generic MLP**. Zero initialization is execution-exact native source. Gain clipping remains the historical `[0,2]` box and is not a new tuning dimension.
+
+This is a complementarity/active-set structured interface: learning is conditioned only on which physical constraint is locally binding in the already accepted min-certificate. It is deliberately the smallest structured representation test allowed by the V48.76 STOP branch.
+
+### Clean 2x2 causal design
+
+Historical signed-margin references are reused; only G77/H77 train:
+
+| Arm | Source interface | Projection fidelity | Truth | Objective |
+| --- | --- | --- | --- | --- |
+| historical E76 | global 2-gain | OFF | exact-0.5 censored | signed Huber |
+| historical F76 | global 2-gain | ON | exact-0.5 censored | signed Huber |
+| `G77_TYPED_PROJ` | **6x2 active-constraint typed** | OFF | exact-0.5 censored | signed Huber |
+| `H77_MAIN_ACTSI` | **6x2 active-constraint typed** | ON | exact-0.5 censored | signed Huber |
+
+Primary causal comparisons:
+
+```text
+G77 - E76 : structured source representation main effect without fidelity
+H77 - F76 : structured source representation main effect with fidelity
+H77 - G77 : projection fidelity under the structured source
+```
+
+Historical C75/D75 are also retained as execution-native references for the final absolute-source gate; no historical arm is retrained.
+
+### V48.77 preregistered decision order
+
+1. Engineering/runtime/reference/state isolation must pass. G/H checkpoints must contain exactly one new trainable tensor, shape `6x2`, 12 parameters total; all shared Stage-I tensors remain bitwise identical. Result packages must retain each `best.pt` so the next attribution can independently reload checkpoint bytes.
+2. Teacher labels and positive-certificate sign/set must be exact-identical for G/E, H/F, and H/G in all 8 balanced/precision × dev/certificate × Near/Contact cells. The intervention is a source representation test, not a certificate rewrite.
+3. A typed-source mechanism GO requires **either** G-E or H-F to satisfy both:
+   - non-floor AUC positive in at least 6/8 cells and at least 4/8 `delta >= +0.005`;
+   - non-floor signed-margin Huber lower in at least 6/8 cells and at least 4/8 `delta <= -0.01`.
+4. Projection fidelity is re-promoted under the new source only if H-G non-floor AUC is positive in at least 6/8, Huber decreases in at least 6/8, and harmful/TI admission does not relapse.
+5. Selectivity remains fail-closed: every new harmful/TI pass fraction must be `<=0.25` and no more than `+0.02` above its matched global-source reference.
+6. Full absolute-source GO remains substantially harder than mechanism GO. Versus the native C/D references, full-source AUC must improve in 8/8 cells with at least 6/8 `>=+0.01`; non-floor AUC must improve in at least 6/8 with at least 4/8 `>=+0.005`.
+7. Safe-positive admission is power-aware rather than hidden by aggregate AUC. A cell is considered adequately supported only when the native reference contains at least five non-floor safe-positive rows. All adequately powered cells must be non-decreasing and at least three must improve pass fraction by `>=0.05`. Current Near splits are known to be underpowered and cannot by themselves support a final Near promotion claim.
+8. If typed-source mechanism GO but full source STOP, first adjudicate the **physical recovery margin vs structural deployability truth contract** using the now-identified source; do not immediately reopen boundary transport.
+9. If typed source STOP, close the entire gain-transport family. The following version may only test a deeper structured OC-MERO tail/source representation; no gain/LR/threshold/fidelity/constraint-scale sweep is allowed.
+10. Only after full-source GO is the absolute source frozen and the work advances to frozen RIFA relative-path verification, paired Safe non-interference/nominal utility, external baselines, and final three-regime closed-loop evaluation.
+
+### Continue to avoid / newly explicit exclusions
+
+All historical exclusions remain active, including: no Safe/Near/Contact router/expert/policy/threshold/budget; no threshold/LR/horizon/feature-scale/class-weight/gain grids; no proposal/top-K expansion; no unsupported option-library expansion; no generic AFE/MLP or broad encoder/root/margin retraining; no privileged future/component-margin distillation; no class-local/path-stop Main; no post-hoc hard control veto; no hard CV/CA minimum; no demand-only forgiveness; no ball/box/hull/anchor/jerk or B1/B2 reopening; no boundary transport before an upstream source is valid; no relative-ranker modification before absolute-source GO; no learned final-admission residual; no option-specific bias; and no root-logit recalibration.
+
+V48.77 adds these explicit prohibitions:
+
+- do not learn an option-ID or regime-ID typed table;
+- do not replace hard binding-type selection with a learned soft mixer before the hard typed experiment is adjudicated;
+- do not tune per-constraint gain bounds, regularizers, or class weights;
+- do not interpret a single favorable active-constraint row as mechanism GO without the preregistered cross-split source/Huber gates;
+- if OC-ACTSI fails, do not recycle it through different table sizes or merge rare constraint rows; close the gain-transport family as registered.
