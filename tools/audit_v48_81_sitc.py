@@ -36,6 +36,6 @@ def compare(base,new,split,t):
 def main():
  ap=argparse.ArgumentParser();ap.add_argument('--l80',type=Path,required=True);ap.add_argument('--m81',type=Path,required=True);ap.add_argument('--truth-index',type=Path,required=True);ap.add_argument('--truth-summary',type=Path,required=True);ap.add_argument('--v80-truth-summary',type=Path,required=True);ap.add_argument('--output',type=Path,required=True);a=ap.parse_args();t=truth(a.truth_index)
  c={v:{s:compare(rows(a.l80,v,s),rows(a.m81,v,s),s,t) for s in KINDS} for v in VARS}
- doc={'schema':'ocrap-v48.81-sitc-audit-v1','engineering_version':'v48.81.0-OC-SITC','comparisons':{'M81_minus_L80':c},'truth_index_summary':json.loads(a.truth_summary.read_text()),'v48_80_truth_index_summary':json.loads(a.v80_truth_summary.read_text()),'teacher_labels_changed':False,'teacher_future_input_to_model':False,'dataset_reconstruction':False,'test_roots_read':False,'valid':True}
+ doc={'schema':'ocrap-v48.81-sitc-audit-v1','engineering_version':'v48.81.1-OC-SITC-ENGFIX','comparisons':{'M81_minus_L80':c},'truth_index_summary':json.loads(a.truth_summary.read_text()),'v48_80_truth_index_summary':json.loads(a.v80_truth_summary.read_text()),'teacher_labels_changed':False,'teacher_future_input_to_model':False,'dataset_reconstruction':False,'test_roots_read':False,'valid':True}
  a.output.write_text(json.dumps(doc,indent=2,sort_keys=True)+'\n')
 if __name__=='__main__':main()

@@ -1,3 +1,12 @@
+
+## V48.81.1 — OC-SITC engineering fix: mixed-future structural exposure
+
+- **No scientific algorithm change.** V48.81 OC-SITC, the one-scalar J78 source, interval-Huber objective, datasets, thresholds, Stage-I, RIFA, and launcher filename remain unchanged.
+- Fixed a root/future granularity mismatch in `v48_81_switch_inverse_truth_contract.py`: `m_star[k,l]` is an intra-root aggregate, while V48.79 structural reason bits are an ANY-over-futures exposure mask. Applying an inverse floor/cap to an aggregated root cell merely because *one* future could trigger that operator is invalid and caused `floor inverse empty: [0.5,0.5] below 0.6`.
+- Added ANY/ALL structural profiles. Exact switch inversion is now used only when the same structural operator applies uniformly to every future assigned to that root-option cell. Mixed exposure is fail-closed as unidentifiable (`[-BOUND,+BOUND]`) rather than incorrectly inverted. Hidden/artifact exposure remains unidentifiable.
+- Added `mixed_structural_cell_fraction` telemetry and a regression reproducing the reported `m_star=0.5` mixed-root case. Runtime preflight now checks this contract before GPU training.
+- Engineering version: `v48.81.1-OC-SITC-ENGFIX`. The existing command `bash scripts/run_v48_81_dcp_drfc_bcde_rifa_sitc_two_gpu.sh` remains compatible.
+
 ## v48.73 — OC-IRRW: Observation-Consistent Interaction-Response Reachability Witness (2026-08-31)
 
 ### Entry condition and authoritative V48.72 decision

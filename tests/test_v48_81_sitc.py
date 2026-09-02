@@ -36,3 +36,25 @@ def test_interval_loss_accepts_switch_inverse_policy():
     b={'is_nominal':torch.tensor([0.]),'bucket_id':torch.tensor([1]),'time_index':torch.tensor([0]),'r_dep_star':torch.tensor([.5]),'absolute_truth_interval_informative':torch.tensor([1.]),'absolute_truth_physical_lower':torch.tensor([.2]),'absolute_truth_physical_upper':torch.tensor([.6])}
     z=_absolute_feasibility_interval_huber({'direct_recovery_absolute_feasibility_logit':torch.tensor([.4])},b,{'direct_value_absolute_feasibility_truth_contract':'switch_inverse_interval_bounds'})
     assert float(z)==0.0
+
+
+def test_mixed_root_floor_exposure_is_unidentifiable_not_crash():
+    # m_star is an intra-root aggregate. One future may be structurally floored
+    # while another is not, so an aggregate value below 0.6 is legal and must
+    # not be inverted as if the floor applied uniformly to the whole root.
+    s={
+        'm_star':np.array([[.5]],np.float32),
+        'root_probs':np.array([1.],np.float32),
+        'root_valid':np.array([1],np.bool_),
+        'option_valid':np.array([1],np.bool_),
+        'c_star':np.eye(1,dtype=np.float32),
+        'root_assignments':np.array([0,0]),
+        'future_metadata':[{}, {'artifact_branch':'yield'}],
+        'recovery_modes':np.array(['post_contact_stabilize']),
+        'r_dep_star':np.array(.5,np.float32),
+    }
+    r=nested_tail_switch_inverse_interval(s)
+    assert r.valid
+    assert not r.exact_physical
+    assert not r.lower_finite and not r.upper_finite
+    assert r.mixed_structural_cell_fraction > 0
