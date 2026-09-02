@@ -238,7 +238,7 @@ def _absolute_feasibility_supervision_mask(
     """
     cfg = tcfg or {}
     policy = str(cfg.get('direct_value_absolute_feasibility_truth_contract', 'legacy_full')).strip().lower()
-    if policy not in {'legacy_full', 'censor_exact_0p5', 'censor_structural_tail', 'structural_interval_bounds'}:
+    if policy not in {'legacy_full', 'censor_exact_0p5', 'censor_structural_tail', 'structural_interval_bounds', 'switch_inverse_interval_bounds'}:
         raise ValueError(f'unsupported absolute feasibility truth contract: {policy!r}')
     target_r_dep = batch['r_dep_star'].float().reshape(-1)
     is_nominal = batch['is_nominal'].reshape(-1) > 0.5
@@ -325,8 +325,8 @@ def _absolute_feasibility_interval_huber(
     logits = logit.float().reshape(-1)
     cfg = tcfg or {}
     policy = str(cfg.get('direct_value_absolute_feasibility_truth_contract', 'legacy_full')).strip().lower()
-    if policy != 'structural_interval_bounds':
-        raise ValueError('signed_margin_interval_huber requires structural_interval_bounds truth contract')
+    if policy not in {'structural_interval_bounds', 'switch_inverse_interval_bounds'}:
+        raise ValueError('signed_margin_interval_huber requires an interval-bounds truth contract')
     is_nominal = batch['is_nominal'].reshape(-1) > 0.5
     bucket = batch.get('bucket_id', torch.full_like(batch['time_index'], 3)).reshape(-1)
     informative = batch.get('absolute_truth_interval_informative')

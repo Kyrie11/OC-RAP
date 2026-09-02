@@ -8155,3 +8155,58 @@ Historical J78 is the causal reference and only `L80_INTERVAL_TAIL_PROBE` trains
 ### Continue to avoid
 
 All historical exclusions remain. V48.80 additionally forbids: treating one-sided bounds as exact labels; using structural exposure/future metadata as model inputs; converting hidden-branch rows into pseudo-physical labels; interval-width/Huber-beta sweeps; rebuilding the dataset merely to increase physical-identifiable power; or using V48.79 underpower as permission to jump directly to a larger representation.
+
+## v48.81 — OC-SITC: Observation-Consistent Switch-Inverse Truth Contract (2026-09-02)
+
+### Entry condition / authoritative V48.80 result
+
+V48.80 OC-PISTC is engineering-valid and scientifically attributable, but its preregistered decision is **`PARTIAL_IDENTIFICATION_TRUTH_STOP`**. It resolves the V48.79 power failure: all eight Near/Contact × dev/certificate × balanced/precision evaluation cells have at least 100 informative interval-supervised rows, and interval Huber improves in 8/8 cells. However only 3/8 cells achieve the registered material Huber reduction (`<= -0.01`) and interval satisfaction improves in only 3/8, so the one-scalar J78 source does not obtain a promotion-quality benefit from the V48.80 coarse interval contract. Harmful/TI selectivity remains controlled.
+
+This STOP does **not** imply that the underlying WOMD-derived regime datasets are the dominant bottleneck. V48.79 underpower was caused by the supervision contract retaining only exact physical rows; V48.80 recovers 100% informative supervision without reconstructing the dataset. Dataset/protocol/scene-disjoint/reference contracts remain valid. Dataset reconstruction therefore remains prohibited unless a later experiment shows that a scientifically correct, identifiable source is power-limited or non-generalizing because of sample/provenance quality rather than model/truth semantics.
+
+### New mechanism diagnosis
+
+V48.80's physical intervals are valid but intentionally loose. For every cell that *could* be touched by a structural floor, it uses only `x <= y`, even when the stored output proves that the floor was inactive. The actual teacher applies an ordered monotone operator chain after the physical component minimum:
+
+1. recovery-mode floor `max(x, 0.6)`;
+2. route override `min(x, -0.8)` for blocked `yield_rejoin`;
+3. secondary-recovery floor `max(x, 0.9)` for `avoid_secondary`.
+
+For a monotone floor/cap, the observed output has an exact inverse image. If `max(x,c)=y>c`, then `x=y` is point-identified; only when `y=c` is the physical value merely upper-bounded by `c`. Analogously, `min(x,c)=y<c` point-identifies `x=y`, while `y=c` yields only a lower bound. Hidden/artifact hard replacements remain unidentifiable.
+
+Therefore V48.81 tests whether the remaining V48.80 weakness is caused by **operator-switch ambiguity**, not by data reconstruction or new model capacity.
+
+### V48.81 intervention
+
+Name: **OC-SITC — Observation-Consistent Switch-Inverse Truth Contract**.
+
+V48.81 keeps the execution-identical J78/L80 source:
+
+- one trainable `direct_absolute_root_tail_source_scale[1]`;
+- exact nested OC-MERO tail localization;
+- Stage-I / roots / proposals / relative ranker frozen;
+- actuator projection, route, re-entry and active-set semantics unchanged;
+- boundary transport OFF;
+- no regime ID, option ID, class-local transport, generic MLP or teacher metadata input;
+- teacher labels and dataset files unchanged.
+
+The only scientific intervention is the training-only truth sidecar. Each stored root-option margin is inverted through the **exact reverse order** of the structural monotone operators. The resulting cellwise physical inverse intervals are propagated through monotone OC-MERO to a candidate-level partially identified physical interval. This is a strict semantic refinement of V48.80, not a larger source.
+
+### Preregistered decision
+
+The M81 arm is compared against historical L80 under the refined interval audit. GO requires all of the following:
+
+1. runtime/reference/state/variant contracts and teacher-label identity pass;
+2. at least 6/8 cells retain >=100 informative rows;
+3. exact-physical candidate count increases in at least three of the four unique dev/certificate Near/Contact splits relative to V48.80;
+4. refined-interval Huber improves in at least 6/8 cells and at least 4/8 improve by `>=0.01`;
+5. refined-interval satisfaction improves in at least 6/8;
+6. harmful/TI remains <=0.25 and no more than +0.02 above L80.
+
+If GO, formally adopt **partially identified physical signed reserve/debt + structural deployability/admissibility contract** as the paper truth semantics, while keeping boundary transport OFF. If STOP, close the truth-contract-refinement family and move to a structured nested source representation; do not perform truth-threshold/floor-tolerance/grid sweeps.
+
+### Continue to avoid
+
+All historical exclusions remain active: no dataset reconstruction, regime router/expert/policy/threshold/budget, LR/gain/threshold/horizon grids, proposal/top-K or unsupported option expansion, generic AFE/MLP, broad encoder/root retraining, privileged future input, class-local/path-stop Main, post-hoc hard control veto, external ball/box/hull/anchor/jerk reopening, B1/B2 sweep, option-wise gain transport, low-capacity root-tail scale sweep, boundary transport before an upstream absolute source GO, or relative-ranker changes before absolute-source convergence.
+
+V48.81 additionally forbids treating `structural exposure bit = 1` as equivalent to `structural operator active`. Future truth-contract work must respect the exact inverse image of the ordered structural operator, not merely its possible activation metadata.

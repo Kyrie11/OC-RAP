@@ -2047,7 +2047,7 @@ class OCRAPSampleDataset(Dataset):
         truth_policy = str(training_cfg.get("direct_value_absolute_feasibility_truth_contract", "legacy_full")).strip().lower()
         self.absolute_truth_contract_event: dict[str, Any] = {"policy": truth_policy, "enabled": False}
         self._absolute_truth_records: list[dict[str, Any]] | None = None
-        if truth_policy in {"censor_structural_tail", "structural_interval_bounds"}:
+        if truth_policy in {"censor_structural_tail", "structural_interval_bounds", "switch_inverse_interval_bounds"}:
             truth_index_raw = str(training_cfg.get("direct_value_absolute_feasibility_truth_index", "") or "").strip()
             if not truth_index_raw:
                 raise ValueError(f"{truth_policy} requires training.direct_value_absolute_feasibility_truth_index")
