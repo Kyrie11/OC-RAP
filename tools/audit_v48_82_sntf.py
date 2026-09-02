@@ -36,5 +36,5 @@ def main():
  ap=argparse.ArgumentParser();ap.add_argument('--l80',type=Path,required=True);ap.add_argument('--n82',type=Path,required=True);ap.add_argument('--o82',type=Path,required=True);ap.add_argument('--truth-index',type=Path,required=True);ap.add_argument('--truth-summary',type=Path,required=True);ap.add_argument('--output',type=Path,required=True);a=ap.parse_args();t=truth(a.truth_index)
  comps={}
  for name,base,new in [('N82_minus_L80',a.l80,a.n82),('O82_minus_N82',a.n82,a.o82),('O82_minus_L80',a.l80,a.o82)]:comps[name]={v:{s:cmp(rows(base,v,s),rows(new,v,s),s,t) for s in KINDS} for v in VARS}
- doc={'schema':'ocrap-v48.82-sntf-audit-v1','engineering_version':'v48.82.0-OC-SNTF','comparisons':comps,'truth_index_summary':json.loads(a.truth_summary.read_text()),'teacher_labels_changed':False,'dataset_reconstruction':False,'test_roots_read':False,'valid':True};a.output.write_text(json.dumps(doc,indent=2,sort_keys=True)+'\n')
+ doc={'schema':'ocrap-v48.82-sntf-audit-v1','engineering_version':'v48.82.1-OC-SNTF-ENGFIX','comparisons':comps,'truth_index_summary':json.loads(a.truth_summary.read_text()),'teacher_labels_changed':False,'dataset_reconstruction':False,'test_roots_read':False,'valid':True};a.output.write_text(json.dumps(doc,indent=2,sort_keys=True)+'\n')
 if __name__=='__main__':main()

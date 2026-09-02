@@ -18,6 +18,19 @@ def main():
   m=OCRAPModel(16,num_roots=3,num_options=2,d_model=32,d_obs=8,encoder_type='structured_transformer',direct_recovery_absolute_semantic_witness_correction=True,direct_recovery_semantic_witness_root_tail_source=True,direct_recovery_semantic_witness_tail_localization=True,direct_recovery_semantic_witness_structured_tail_field=True,direct_recovery_semantic_witness_signed_tail_channels=signed)
   w=m.direct_absolute_structured_tail_field_weight
   if tuple(w.shape)!=(ch,32) or torch.count_nonzero(w).item()!=0 or m.direct_absolute_root_tail_source_scale is not None:errors.append(f'field contract signed={signed}')
- doc={'schema':'ocrap-v48.82-sntf-runtime-code-contract-v1','engineering_version':'v48.82.0-OC-SNTF','valid':not errors,'attribution_ready':not errors,'errors':errors,'runtime_modules':mods,'source_contract':{'root_tail_source':True,'tail_localization':True,'structured_tail_field':True,'single_channel_shape':[1,192],'signed_channel_shape':[2,192],'option_translation_zero_mean':True,'option_id_input':False,'regime_id_input':False,'generic_mlp':False,'boundary_transport':False},'supervision_contract':{'truth_contract':'structural_interval_bounds','objective':'signed_margin_interval_huber','teacher_metadata_input_to_model':False,'dataset_reconstruction':False},'test_roots_read':False}
+ from ocrap.cli.train import SceneTimeBatchSampler
+ sampler=SceneTimeBatchSampler(groups=[[0,1,2],[3,4,5]],batch_size=9,replacement=True,shuffle_within_group=False,stratified=False)
+ orig_multinomial=torch.multinomial
+ try:
+  torch.multinomial=lambda weights,num_samples,replacement: torch.tensor([0,0],dtype=torch.long)[:num_samples]
+  batches=list(iter(sampler))
+ finally:
+  torch.multinomial=orig_multinomial
+ sampler_ok=(batches==[[0,1,2],[0,1,2]] and all(len(b)==len(set(b)) for b in batches))
+ if not sampler_ok: errors.append(f'replacement group atomicity contract failed: {batches!r}')
+ oversized=list(SceneTimeBatchSampler(groups=[list(range(6)),[6,7]],batch_size=4,replacement=False,shuffle_within_group=False,shuffle_groups=False))
+ oversized_ok=(oversized==[list(range(6)),[6,7]])
+ if not oversized_ok: errors.append(f'oversized group atomicity contract failed: {oversized!r}')
+ doc={'schema':'ocrap-v48.82-sntf-runtime-code-contract-v1','engineering_version':'v48.82.1-OC-SNTF-ENGFIX','valid':not errors,'attribution_ready':not errors,'errors':errors,'runtime_modules':mods,'source_contract':{'root_tail_source':True,'tail_localization':True,'structured_tail_field':True,'single_channel_shape':[1,192],'signed_channel_shape':[2,192],'option_translation_zero_mean':True,'option_id_input':False,'regime_id_input':False,'generic_mlp':False,'boundary_transport':False},'sampler_contract':{'replacement_draws_preserved_across_epoch':True,'duplicate_group_within_minibatch_forbidden':True,'oversized_group_kept_atomic':True,'synthetic_duplicate_draw_passed':sampler_ok,'synthetic_oversized_group_passed':oversized_ok},'supervision_contract':{'truth_contract':'structural_interval_bounds','objective':'signed_margin_interval_huber','teacher_metadata_input_to_model':False,'dataset_reconstruction':False},'test_roots_read':False}
  a.output.parent.mkdir(parents=True,exist_ok=True);a.output.write_text(json.dumps(doc,indent=2,sort_keys=True)+'\n');print(json.dumps({'valid':not errors,'output':str(a.output)}));return 0 if not errors else 30
 if __name__=='__main__':raise SystemExit(main())

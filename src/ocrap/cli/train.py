@@ -1262,21 +1262,41 @@ class SceneTimeBatchSampler(Sampler[list[int]]):
         else:
             order = list(range(len(self.groups)))
         batch: list[int] = []
-        for gi in order:
-            inds = list(self.groups[int(gi)])
+        batch_group_ids: set[int] = set()
+        for gi_raw in order:
+            gi = int(gi_raw)
+            inds = list(self.groups[gi])
             if self.shuffle_within_group and len(inds) > 1:
                 perm = torch.randperm(len(inds)).tolist()
                 inds = [inds[i] for i in perm]
+
+            # Group-wise direct-recovery losses require each scene-time candidate
+            # set to occur exactly once in a minibatch.  Replacement sampling may
+            # draw the same group multiple times in an epoch; without this guard,
+            # two copies can be coalesced into one minibatch and duplicate the
+            # group's nominal candidate, violating the strict shape contract.
+            # Preserve replacement at the epoch level, but start a fresh minibatch
+            # before a repeated group.
+            if gi in batch_group_ids and batch:
+                yield batch
+                batch = []
+                batch_group_ids = set()
+
             if len(batch) + len(inds) > self.batch_size and batch:
                 yield batch
                 batch = []
+                batch_group_ids = set()
+
+            # Never split a scene-time group merely to satisfy nominal batch size:
+            # splitting can separate the unique nominal from its recovery
+            # candidates and makes group-wise losses ill-defined.  DataLoader batch
+            # samplers are allowed to yield an oversized atomic batch.
             if len(inds) > self.batch_size:
-                for j in range(0, len(inds), self.batch_size):
-                    chunk = inds[j:j + self.batch_size]
-                    if chunk:
-                        yield chunk
-            else:
-                batch.extend(inds)
+                yield inds
+                continue
+
+            batch.extend(inds)
+            batch_group_ids.add(gi)
         if batch:
             yield batch
 
@@ -1371,6 +1391,37 @@ def _make_group_batch_sampler(ds: OCRAPSampleDataset, cfg: dict, batch_size: int
         num_safe_pos += int(is_safe_pos)
     group_keys = list(groups_by_key.keys())
     groups = list(groups_by_key.values())
+
+    # Fail before GPU training if the exact group index itself violates the
+    # strict one-nominal-per-scene-time contract.  This distinguishes dataset /
+    # index corruption from minibatch assembly bugs and avoids wasting an epoch
+    # before the loss notices the problem.
+    if bool(tcfg.get('direct_value_strict_shape_contract', False)) and group_index:
+        missing_index_paths = [
+            os.path.abspath(os.fspath(ds.paths[i]))
+            for g in groups for i in g
+            if os.path.abspath(os.fspath(ds.paths[i])) not in group_index
+        ]
+        if missing_index_paths:
+            raise RuntimeError(
+                'strict group contract requires exact group-index coverage; '
+                f'missing_paths={len(missing_index_paths)} first={missing_index_paths[0]!r}'
+            )
+        invalid_nominal_groups: list[tuple[tuple[int, int, int], int]] = []
+        for key, g in zip(group_keys, groups):
+            nominal_count = sum(
+                int(bool(group_index[os.path.abspath(os.fspath(ds.paths[i]))].get('nominal', False)))
+                for i in g
+            )
+            if nominal_count != 1:
+                invalid_nominal_groups.append((key, nominal_count))
+                if len(invalid_nominal_groups) >= 8:
+                    break
+        if invalid_nominal_groups:
+            raise RuntimeError(
+                'strict group contract requires exactly one nominal in the source group index; '
+                f'examples={invalid_nominal_groups!r}'
+            )
     scene_group_counts = Counter(((k[0], k[1]) for k in group_keys))
     scene_balance_power = float(tcfg.get('group_batch_scene_balance_power', 0.0))
     mean_groups_per_scene = float(np.mean(list(scene_group_counts.values()))) if scene_group_counts else 1.0

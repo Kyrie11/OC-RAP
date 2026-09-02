@@ -1,3 +1,14 @@
+## V48.82.1 — OC-SNTF engineering fix: replacement-safe atomic scene-time batching
+
+- **No scientific algorithm change.** V48.82 OC-SNTF N82/O82 definitions, structured tail-field parameterization, signed reserve/debt channels, structural-interval supervision, datasets, Stage-I/RIFA state, learning rate, epochs, thresholds, boundary-transport OFF contract, and preregistered GO/STOP gates are unchanged.
+- The uploaded V48.82 run is engineering-incomplete. All four N82/O82 balanced/precision trainings reach the initial epoch-0 evaluation and then abort during epoch 1 with `direct recovery group contract requires exactly one nominal ... nominal_count=2`. No complete calibration/comparison/pipeline sentinel exists, so the partial run is not scientifically attributable.
+- Root cause: `SceneTimeBatchSampler` uses group-level weighted sampling with `replacement=true`. The same scene-time group can therefore be drawn twice in an epoch. The old batch assembler could coalesce both copies into one minibatch, duplicating every candidate in that group, including its unique nominal. The loss-side strict contract correctly rejected the malformed minibatch.
+- Engineering fix preserves replacement sampling **across the epoch** but forbids the same group from appearing twice in one minibatch: a repeated draw starts a fresh batch. Thus the intended weighted/stratified sampling distribution is retained without changing scientific sampling semantics.
+- Scene-time groups are now atomic even when a group is larger than the nominal batch size; they are yielded as one oversized minibatch rather than split, because splitting can separate the unique nominal from its recovery candidates.
+- Added a pre-GPU strict source-group audit: when an exact group index is present and `direct_value_strict_shape_contract=true`, every source scene-time group must be covered by the index and must contain exactly one nominal. Dataset/index corruption now fails before GPU training instead of after an epoch.
+- Runtime preflight now includes synthetic duplicate-replacement and oversized-group atomicity checks. Added three V48.82 regressions covering duplicate replacement draws, oversized groups, and invalid source nominal counts.
+- Engineering version is `v48.82.1-OC-SNTF-ENGFIX`; algorithm version remains `v48.82-DCP-DRFC-BCDE-RIFA-OC-SNTF`. The original launcher filename and GPU command remain compatible and clean the partial N/O runs before rebuilding.
+
 ## V48.81.2 — OC-SITC engineering fix: certifiable root-profile inversion
 
 - **No scientific algorithm change.** The V48.81 OC-SITC hypothesis, J78 one-scalar nested-tail source, signed interval-Huber objective, datasets, thresholds, Stage-I/RIFA state, boundary-transport OFF contract, preregistered GO/STOP conditions, and launcher filename remain unchanged.
