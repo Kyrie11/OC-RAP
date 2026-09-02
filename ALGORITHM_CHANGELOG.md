@@ -1,3 +1,12 @@
+## V48.81.2 — OC-SITC engineering fix: certifiable root-profile inversion
+
+- **No scientific algorithm change.** The V48.81 OC-SITC hypothesis, J78 one-scalar nested-tail source, signed interval-Huber objective, datasets, thresholds, Stage-I/RIFA state, boundary-transport OFF contract, preregistered GO/STOP conditions, and launcher filename remain unchanged.
+- V48.81.1 fixed mixed-future ANY-vs-ALL exposure but still assumed that an ALL bit computed from the available sidecar metadata proved uniform structural action over every future contributing to the stored root aggregate. The reported production failure `floor inverse empty: [0.5,0.5] below 0.6` disproves that assumption for at least one real root: a genuinely uniform `max(x,0.6)` followed by the registered intra-root monotone aggregation cannot produce a stored value of 0.5.
+- Switch inversion is now **certification-based and fail-closed**. A root-option cell is inverted only when metadata covers every assigned future, the option mode is present, the structural profile is uniform, no hidden/artifact branch is present, and the observed root aggregate lies in the mathematical range of the claimed ordered structural operator.
+- Incomplete metadata profiles, mixed structural profiles, and mathematically contradictory inverse images are mapped to an unbounded physical interval instead of aborting the entire truth-index build or fabricating a physical bound. This preserves the intended V48.81 semantic rule: only provably identifiable truth is supervised.
+- Added explicit `incomplete_profile_cell_fraction` and `inverse_contradiction_cell_fraction` telemetry. Runtime preflight now tests mixed-root exposure, incomplete sidecar coverage, and the exact production contradiction signature (`m_star=0.5` with a claimed uniform 0.6 floor). Route-cap and secondary-floor contradiction regressions were also added.
+- The original V48.81 command remains compatible and cleans partial truth indices/run outputs before rebuilding. Engineering version is `v48.81.2-OC-SITC-ENGFIX`.
+
 
 ## V48.81.1 — OC-SITC engineering fix: mixed-future structural exposure
 

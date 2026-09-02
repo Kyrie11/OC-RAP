@@ -58,3 +58,36 @@ def test_mixed_root_floor_exposure_is_unidentifiable_not_crash():
     assert not r.exact_physical
     assert not r.lower_finite and not r.upper_finite
     assert r.mixed_structural_cell_fraction > 0
+
+def test_incomplete_future_metadata_is_unidentifiable_not_crash():
+    s=sample(.5)
+    s['root_assignments']=np.array([0,0])
+    s['future_metadata']=[{}]  # second contributing future has no metadata sidecar
+    r=nested_tail_switch_inverse_interval(s)
+    assert r.valid
+    assert not r.lower_finite and not r.upper_finite
+    assert r.incomplete_profile_cell_fraction > 0
+
+
+def test_uniform_floor_contradiction_is_unidentifiable_not_crash():
+    # This is exactly the production failure signature: the sidecar claims a
+    # uniform 0.6 floor while the stored root aggregate is 0.5.  Such a pair is
+    # not invertible; it must be audited and censored rather than aborting the run.
+    r=nested_tail_switch_inverse_interval(sample(.5))
+    assert r.valid
+    assert not r.lower_finite and not r.upper_finite
+    assert r.inverse_contradiction_cell_fraction > 0
+
+
+def test_uniform_cap_contradiction_is_unidentifiable_not_crash():
+    r=nested_tail_switch_inverse_interval(sample(.2, mode='yield_rejoin', meta={'route_blocked':True}))
+    assert r.valid
+    assert not r.lower_finite and not r.upper_finite
+    assert r.inverse_contradiction_cell_fraction > 0
+
+
+def test_uniform_secondary_floor_contradiction_is_unidentifiable_not_crash():
+    r=nested_tail_switch_inverse_interval(sample(.5, mode='avoid_secondary', meta={'secondary_threat':True}))
+    assert r.valid
+    assert not r.lower_finite and not r.upper_finite
+    assert r.inverse_contradiction_cell_fraction > 0
