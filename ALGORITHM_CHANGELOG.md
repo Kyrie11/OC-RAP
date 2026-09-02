@@ -8273,3 +8273,92 @@ All prior exclusions remain: dataset reconstruction without direct evidence of d
 
 ### Engineering speed policy
 A frozen sufficient-state cache is **not enabled** in V48.82. The historical adaptation loop keeps the frozen transformer in training mode and the configured dropout is nonzero; caching frozen activations would freeze one stochastic dropout realization and can change gradients, validation values, early stopping, and best-checkpoint selection. Persistent input tensor caching, 8-worker truth-index build, `OMP_NUM_THREADS=1`, `MKL_NUM_THREADS=1`, and best-only checkpoint saving remain enabled. A sufficient-state cache requires a separate engineering-only equivalence experiment before use.
+
+## V48.83 OC-CRTF — Observation-Consistent Counterfactual Recovery Tail Field (2026-09-02)
+
+### Entry condition / authoritative V48.82.1 result
+V48.82.1 OC-SNTF is engineering-valid and attribution-ready after the sampler-only ENGFIX. Both N82/O82 balanced+precision runs complete 20 adaptation epochs plus the registered epoch-0 evaluation, retain `best.pt` at epoch 20, keep all 170 historical shared tensors bitwise unchanged, and train only the registered structured-tail field tensor. Runtime provenance, reference reuse, sampler atomicity, truth-index identity, calibration and the pipeline sentinel pass.
+
+The preregistered scientific status is **`SIGNED_NESTED_TAIL_FIELD_STOP`**:
+- `N82-L80`: 5/8 AUC positive, 2/8 material (`>=+0.005`), Huber 8/8 better, selectivity FAIL;
+- `O82-L80`: 6/8 AUC positive, 2/8 material, Huber 8/8 better, selectivity FAIL;
+- `O82-N82`: AUC 8/8 positive and Huber 8/8 better with matched selectivity PASS, but 0/8 material AUC cells.
+
+Therefore **signed reserve/debt channel separation is retained as a supported submechanism/scaffold, but neither N82 nor O82 is promoted as the absolute source**. The action-agnostic structured-tail-field family is closed: do not increase field rank/width, add root/option IDs, add an MLP, or sweep LR/threshold/field scale.
+
+### Key row-level causal diagnosis
+O82 does not merely fail because its AUC increment is small. Relative to L80 it creates many new admissions without allocating them to the desired safe recovery actions:
+- dev-Near balanced: 54 newly admitted, 0 safe-positive, 13 teacher-infeasible/harmful;
+- certificate-Near balanced: 135 newly admitted, 0 safe-positive, 19 teacher-infeasible/harmful;
+- dev-Contact balanced: 93 newly admitted, only 4 safe-positive, 22 teacher-infeasible and 21 harmful;
+- certificate-Contact balanced: 180 newly admitted, 0 safe-positive, 34 teacher-infeasible/harmful.
+Precision reproduces the same pattern. Safe-positive admission remains zero in both Near splits and certificate-Contact, while dev-Contact alone reaches 4/37. Thus the field learns a useful *absolute latent lower-tail reshaping* but not the causal statement required by planning: **which candidate action actually improves the weak-root recoverability relative to the nominal action**.
+
+The dominant bottleneck is tightened to:
+
+`candidate-action-relative weak-root recovery causality / observability under the deployable observation pattern`.
+
+Near and Contact remain one signed object, not router states:
+- Near: preserve positive lower-tail recovery reserve/headroom under the candidate action;
+- Contact: repay negative lower-tail penetration/re-contact/secondary-collision debt under the candidate action.
+
+### V48.83 causal intervention
+V48.83 introduces **OC-CRTF — Observation-Consistent Counterfactual Recovery Tail Field**. It does **not** add capacity relative to O82: the trainable source remains exactly the same shared `2 x d_model` signed field (384 parameters at d_model=192). It keeps the V48.82 signed reserve/debt split, exact nested OC-MERO tail localization, p-weighted zero option translation, V48.80 structural interval supervision, Stage-I/root/proposal freezing, RIFA order, actuator projection, route/re-entry semantics, top-K=5, threshold=0.5 and boundary transport OFF.
+
+The only scientific change is to replace the absolute root-option interaction
+
+`psi_kl(candidate) = LN(root_token_k(candidate) * option_token_l(candidate))`
+
+by the exact within-scene-time counterfactual response
+
+`Delta psi_kl = psi_kl(candidate) - psi_kl(nominal)`.
+
+The unique nominal is obtained through the existing exact `(bucket, scene, time)` group contract. Malformed groups fail closed to zero. Consequently the nominal row has **exactly zero source correction**. No teacher future/metadata, regime ID, root ID, option ID, observation-class ID, relative-ranker output or generic MLP enters the intervention.
+
+The signed field is then
+
+`field_kl = <w_reserve/debt, Delta psi_kl> / sqrt(d)`
+
+with channel selected by the frozen native root-option margin sign, followed by the unchanged exact nested-tail basis and p-centering. This tests whether the frozen Stage-I/root representation contains an observation-identifiable **action-induced deformation** of the deployable weak-root tail, rather than merely an absolute scene state correlated with teacher feasibility.
+
+### Preregistered decision
+Only one new arm is trained: `P83_COUNTERFACTUAL_TAIL_FIELD`; historical O82 and L80 are reused.
+
+Primary mechanism comparison `P83-O82`:
+1. source AUC positive in >=6/8 cells;
+2. >=4/8 cells `delta AUC >= +0.003`;
+3. interval Huber lower in >=6/8 and >=4/8 by at least `0.003`;
+4. harmful/TI <=0.25, no cell > O82+0.005, and both harmful+TI nonincrease in >=6/8;
+5. every powered safe-positive cell (>=5 rows) is non-decreasing, with >=2 cells improving pass by >=0.05, including at least one Near and one Contact cell.
+
+Full-source comparison `P83-L80`:
+1. AUC 8/8 positive and >=6/8 `delta>=+0.005`;
+2. interval Huber lower in >=6/8;
+3. harmful/TI <=0.25 and no cell > L80+0.02;
+4. powered safe-positive pass never decreases and has >=2 material `+0.05` cells including both Near and Contact.
+
+Branch rules:
+- full GO -> freeze the absolute source and move to paired Safe non-interference, Near critical-safety closed loop, Contact post-collision/secondary metrics, then external baselines;
+- mechanism GO but full-source STOP -> action-relative weak-root causality is validated; next adjudicate the already-known absolute-boundary debt without increasing source capacity;
+- P83 STOP -> close the entire frozen structured-tail adapter family and test whether Stage-I/root states themselves contain adequate action-observable recoverability information. No rank/width/LR/threshold/capacity sweep.
+
+### Dataset / truth / boundary policy
+Dataset reconstruction remains prohibited: V48.82 uses 100% informative V48.80 interval supervision and valid dataset/protocol/scene-disjoint contracts; the observed failure is selectivity/candidate-causality, not sample availability or dataset corruption. Truth-contract refinement remains closed; V48.80 interval bounds are frozen as a supervision scaffold. Boundary transport remains OFF in V48.83.
+
+### Safe speed policy
+V48.82 confirms that the dominant wall time is repeated frozen model forward/validation, not input tensor materialization: persistent tensor-cache hits take milliseconds to ~0.03 s while median registered epoch time is ~107--120 s across the four runs. V48.83 safely reduces wall time without numerical changes by:
+- training only the single new P83 arm;
+- running balanced and precision simultaneously on the two A30s;
+- reusing byte-verified V48.80/V48.82 truth indices when schema/SHA/roles are exact, rebuilding only on failed verification;
+- preserving persistent tensor cache, 8-worker truth builds, single-thread BLAS and best-only checkpoints.
+
+A frozen sufficient-state cache remains **disabled**. Frozen transformer/root modules still execute in train mode with nonzero dropout in the historical adaptation path; caching their activations would freeze a stochastic realization and can change source gradients, validation metrics, early stopping and best-checkpoint selection. It requires a separate engineering-only execution-equivalence experiment before any promotion.
+
+### Continue to avoid / newly closed directions
+All prior exclusions remain. V48.83 additionally forbids:
+- promotion of O82 merely because signed channels give 8/8 tiny increments;
+- field-rank/width/depth, LR, threshold or source-amplitude sweeps;
+- root ID / option ID / observation-class embeddings or a generic learned tail mixer;
+- treating teacher-feasible admission growth as recovery success when safe-positive admission does not improve;
+- reopening boundary transport before action-relative ordering/selectivity is validated;
+- dataset reconstruction to compensate for a source that cannot distinguish candidate-action effects.

@@ -370,6 +370,7 @@ class OCRAPModel(nn.Module):
         direct_recovery_semantic_witness_tail_localization: bool = False,
         direct_recovery_semantic_witness_structured_tail_field: bool = False,
         direct_recovery_semantic_witness_signed_tail_channels: bool = False,
+        direct_recovery_semantic_witness_counterfactual_tail_response: bool = False,
         direct_recovery_semantic_witness_demand_normalized_fidelity: bool = False,
         direct_recovery_semantic_witness_robust_occupancy: bool = False,
         direct_recovery_semantic_witness_soft_occupancy_disagreement: bool = False,
@@ -694,10 +695,18 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_semantic_witness_signed_tail_channels = bool(
             direct_recovery_semantic_witness_signed_tail_channels
         )
+        self.direct_recovery_semantic_witness_counterfactual_tail_response = bool(
+            direct_recovery_semantic_witness_counterfactual_tail_response
+        )
         if self.direct_recovery_semantic_witness_structured_tail_field and not self.direct_recovery_semantic_witness_root_tail_source:
             raise ValueError("v48.82 structured tail field requires root-tail source")
         if self.direct_recovery_semantic_witness_signed_tail_channels and not self.direct_recovery_semantic_witness_structured_tail_field:
             raise ValueError("v48.82 signed tail channels require structured tail field")
+        if self.direct_recovery_semantic_witness_counterfactual_tail_response and not (
+            self.direct_recovery_semantic_witness_structured_tail_field
+            and self.direct_recovery_semantic_witness_signed_tail_channels
+        ):
+            raise ValueError("v48.83 counterfactual tail response requires the signed structured tail field")
         if self.direct_recovery_semantic_witness_tail_localization and not self.direct_recovery_semantic_witness_root_tail_source:
             raise ValueError("tail localization requires the v48.78 root-tail source")
         if self.direct_recovery_semantic_witness_root_tail_source and self.direct_recovery_semantic_witness_active_constraint_typed_source:
@@ -1898,6 +1907,26 @@ class OCRAPModel(nn.Module):
             nominal_row = values.index_select(0, noms[:1])
             out.index_copy_(0, idx, group_rows - nominal_row)
         return out
+
+    @classmethod
+    def _counterfactual_tail_response(
+        cls,
+        interaction: torch.Tensor,
+        group_index: torch.Tensor | None,
+        is_nominal: torch.Tensor | None,
+    ) -> torch.Tensor:
+        """Candidate-minus-nominal latent root-option response for v48.83.
+
+        The absolute v48.82 root-option field can explain scene context even when
+        a candidate action did not *cause* a recoverability change.  V48.83 removes
+        that scene-common component by differencing the frozen root-option
+        interaction against the unique nominal action in the same scene-time
+        counterfactual set.  The operation uses observation/candidate-side frozen
+        states only: no teacher metadata, future label, regime ID or relative-ranker
+        output enters it.  Malformed groups fail closed to exact zeros through
+        :meth:`_candidate_minus_nominal`, and the nominal row is exactly zero.
+        """
+        return cls._candidate_minus_nominal(interaction, group_index, is_nominal)
 
     @staticmethod
     def _common_measure_root_logits(
@@ -3427,6 +3456,18 @@ class OCRAPModel(nn.Module):
                 # cannot translate an option wholesale.
                 interaction = root_expand.float() * opt_expand.float()
                 interaction = torch.nn.functional.layer_norm(interaction, (interaction.shape[-1],))
+                if self.direct_recovery_semantic_witness_counterfactual_tail_response:
+                    # V48.83 OC-CRTF: remove scene-common absolute-field leakage by
+                    # conditioning the frozen root-option interaction on the
+                    # candidate's *own* frozen root-option representation change relative
+                    # to the unique nominal action in the same scene-time group.  This
+                    # is a counterfactual latent response, not an absolute scene field.
+                    # Nominal rows and malformed groups receive exactly zero correction,
+                    # while no teacher label/future, regime ID, option ID or relative-
+                    # ranker output enters this source.
+                    interaction = self._counterfactual_tail_response(
+                        interaction, group_index, is_nominal
+                    ).detach()
                 w_field = self.direct_absolute_structured_tail_field_weight.to(
                     device=memory.device, dtype=torch.float32
                 )
