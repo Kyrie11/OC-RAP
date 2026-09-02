@@ -8228,3 +8228,37 @@ If GO, formally adopt **partially identified physical signed reserve/debt + stru
 All historical exclusions remain active: no dataset reconstruction, regime router/expert/policy/threshold/budget, LR/gain/threshold/horizon grids, proposal/top-K or unsupported option expansion, generic AFE/MLP, broad encoder/root retraining, privileged future input, class-local/path-stop Main, post-hoc hard control veto, external ball/box/hull/anchor/jerk reopening, B1/B2 sweep, option-wise gain transport, low-capacity root-tail scale sweep, boundary transport before an upstream absolute source GO, or relative-ranker changes before absolute-source convergence.
 
 V48.81 additionally forbids treating `structural exposure bit = 1` as equivalent to `structural operator active`. Future truth-contract work must respect the exact inverse image of the ordered structural operator, not merely its possible activation metadata.
+
+## V48.82 OC-SNTF — Observation-Consistent Signed Nested Tail Field
+
+### Entry condition / authoritative V48.81 result
+V48.81.2 OC-SITC is engineering-valid and attribution-ready, but the preregistered decision is `SWITCH_INVERSE_TRUTH_STOP`. Runtime/reference contracts pass, teacher labels are unchanged, no test roots are read, and the source capacity is execution-identical to J78/L80. The switch-inverse interval audit improves interval Huber in 8/8 cells (6/8 material) and interval satisfaction in 8/8, but exact-physical candidate count increases in 0/4 unique splits, so the preregistered truth GO fails. More importantly, both formal M81 best checkpoints select epoch 0 with `direct_absolute_root_tail_source_scale=[0]`. Therefore the apparent interval-metric gains are attributable to the refined evaluation/supervision set geometry rather than a learned recovery-source improvement. V48.81 does not authorize promotion of SITC as the final paper truth mechanism.
+
+V48.81 also shows that strict root-level inversion is not a productive next family: dev/certificate Near remains only ~80% informative because ~19% of root profiles are incomplete, while Contact is almost fully informative but mostly one-sided; inverse-contradiction cell fractions remain ~0.23 Near and ~0.31 Contact. Continue to retain partial-identification/structural-admissibility as a conceptual semantic decomposition, but close floor/cap/inverse/tolerance refinement as an algorithm-search family.
+
+### Dominant bottleneck
+The first open layer is now **observation-consistent root-wise signed source representation on the exact nested deployable tail**. The source must learn which observation-compatible weak roots retain positive recovery reserve (Near) or carry negative recovery debt (Contact). One-scalar tail deformation is insufficient; option-wise translation is already algebraically closed; truth-contract refinement does not activate the source.
+
+### V48.82 intervention
+V48.82 introduces **OC-SNTF**. It preserves the exact frozen Stage-I root tokens, option tokens, physical executable-recovery witness, and nested OC-MERO tail influence. It adds a shared diagonal bilinear root-option field
+
+`phi_kl = <w, normalize(r_k ⊙ o_l)>`
+
+localized by the exact nested-tail basis and scaled only by the magnitude of the frozen physical witness. The resulting root-wise delta is p-centered inside each option, so `sum_k p_k delta_kl = 0` and option-wise translation remains impossible. There are no root IDs, option IDs, observation-class IDs, regime IDs, generic MLPs, or learned tail mixers.
+
+Two nested causal arms are preregistered:
+- `N82_SINGLE_FIELD`: one shared field vector (192 parameters) for both signs;
+- `O82_SIGNED_FIELD` / Main: two shared field vectors (384 parameters), selected by the native root-option margin sign. This is a signed complementarity split (`reserve` vs `debt`), not a Near/Contact router.
+
+Both arms use the frozen V48.80 `structural_interval_bounds` supervision scaffold so source-representation attribution is not confounded by the V48.81 truth change. Boundary transport remains OFF.
+
+### Preregistered decision
+Compare `N82-L80` (structured root-wise field main effect), `O82-N82` (reserve/debt signed-channel increment), and `O82-L80` (full structured source). Promotion requires material source ordering, interval-Huber improvement, and historical selectivity, not only a lower training loss. The automated comparison requires for the full Main: source AUC 8/8 positive, at least 6/8 `>= +0.005`, interval Huber improved >=6/8, harmful/TI <=0.25, and no matched-reference relapse >0.02. The single-field mechanism requires >=6/8 positive AUC and >=4/8 material cells; the signed-channel increment requires >=6/8 positive AUC and >=6/8 Huber improvement.
+
+If O82 GO, freeze the structured absolute source and return to truth-semantics formalization plus closed-loop Safe/Near/Contact validation; boundary transport is still not automatically reopened. If O82 STOP, do not sweep field rank/width/LR/threshold. The next question becomes whether the frozen Stage-I root state itself contains enough observation-identifiable physical-recovery information; only then may a deeper explicitly nested source be considered.
+
+### Continue to avoid
+All prior exclusions remain: dataset reconstruction without direct evidence of dataset-quality dominance; regime router/expert/policy/threshold/budget; LR/gain/threshold/horizon/interval-width sweeps; proposal/top-K or unsupported option expansion; generic AFE/MLP; broad encoder/root retraining; privileged future input; class-local/path-stop Main; post-hoc hard control veto; ball/box/hull/anchor/jerk reopening; B1/B2 sweep; option-wise scalar/gain transport; one-scalar root-tail scale sweep; further floor/cap/switch-inverse/tolerance refinement; boundary transport before upstream absolute-source GO; and relative-ranker changes before absolute-source convergence.
+
+### Engineering speed policy
+A frozen sufficient-state cache is **not enabled** in V48.82. The historical adaptation loop keeps the frozen transformer in training mode and the configured dropout is nonzero; caching frozen activations would freeze one stochastic dropout realization and can change gradients, validation values, early stopping, and best-checkpoint selection. Persistent input tensor caching, 8-worker truth-index build, `OMP_NUM_THREADS=1`, `MKL_NUM_THREADS=1`, and best-only checkpoint saving remain enabled. A sufficient-state cache requires a separate engineering-only equivalence experiment before use.

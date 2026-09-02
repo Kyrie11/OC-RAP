@@ -577,6 +577,14 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_semantic_witness_tail_localization",
             model_cfg.get("direct_recovery_semantic_witness_tail_localization", False),
         )),
+        direct_recovery_semantic_witness_structured_tail_field=bool(ckpt.get(
+            "direct_recovery_semantic_witness_structured_tail_field",
+            model_cfg.get("direct_recovery_semantic_witness_structured_tail_field", False),
+        )),
+        direct_recovery_semantic_witness_signed_tail_channels=bool(ckpt.get(
+            "direct_recovery_semantic_witness_signed_tail_channels",
+            model_cfg.get("direct_recovery_semantic_witness_signed_tail_channels", False),
+        )),
         direct_recovery_semantic_witness_demand_normalized_fidelity=bool(ckpt.get(
             "direct_recovery_semantic_witness_demand_normalized_fidelity",
             model_cfg.get("direct_recovery_semantic_witness_demand_normalized_fidelity", False),
@@ -897,6 +905,12 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_semantic_witness_tail_localization"] = bool(
         model.direct_recovery_semantic_witness_tail_localization
     )
+    cfg["model"]["direct_recovery_semantic_witness_structured_tail_field"] = bool(
+        model.direct_recovery_semantic_witness_structured_tail_field
+    )
+    cfg["model"]["direct_recovery_semantic_witness_signed_tail_channels"] = bool(
+        model.direct_recovery_semantic_witness_signed_tail_channels
+    )
     cfg["model"]["direct_recovery_semantic_witness_demand_normalized_fidelity"] = bool(
         model.direct_recovery_semantic_witness_demand_normalized_fidelity
     )
@@ -1191,6 +1205,14 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_semantic_witness_tail_localization",
             model_cfg.get("direct_recovery_semantic_witness_tail_localization", False),
         )),
+        "direct_recovery_semantic_witness_structured_tail_field": bool(ckpt.get(
+            "direct_recovery_semantic_witness_structured_tail_field",
+            model_cfg.get("direct_recovery_semantic_witness_structured_tail_field", False),
+        )),
+        "direct_recovery_semantic_witness_signed_tail_channels": bool(ckpt.get(
+            "direct_recovery_semantic_witness_signed_tail_channels",
+            model_cfg.get("direct_recovery_semantic_witness_signed_tail_channels", False),
+        )),
         "direct_recovery_semantic_witness_demand_normalized_fidelity": bool(ckpt.get(
             "direct_recovery_semantic_witness_demand_normalized_fidelity",
             model_cfg.get("direct_recovery_semantic_witness_demand_normalized_fidelity", False),
@@ -1305,6 +1327,12 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         ),
         "direct_recovery_semantic_witness_tail_localization": bool(
             model.direct_recovery_semantic_witness_tail_localization
+        ),
+        "direct_recovery_semantic_witness_structured_tail_field": bool(
+            model.direct_recovery_semantic_witness_structured_tail_field
+        ),
+        "direct_recovery_semantic_witness_signed_tail_channels": bool(
+            model.direct_recovery_semantic_witness_signed_tail_channels
         ),
         "direct_recovery_semantic_witness_demand_normalized_fidelity": bool(
             model.direct_recovery_semantic_witness_demand_normalized_fidelity

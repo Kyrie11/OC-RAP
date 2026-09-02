@@ -368,6 +368,8 @@ class OCRAPModel(nn.Module):
         direct_recovery_semantic_witness_active_constraint_typed_source: bool = False,
         direct_recovery_semantic_witness_root_tail_source: bool = False,
         direct_recovery_semantic_witness_tail_localization: bool = False,
+        direct_recovery_semantic_witness_structured_tail_field: bool = False,
+        direct_recovery_semantic_witness_signed_tail_channels: bool = False,
         direct_recovery_semantic_witness_demand_normalized_fidelity: bool = False,
         direct_recovery_semantic_witness_robust_occupancy: bool = False,
         direct_recovery_semantic_witness_soft_occupancy_disagreement: bool = False,
@@ -686,6 +688,16 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_semantic_witness_tail_localization = bool(
             direct_recovery_semantic_witness_tail_localization
         )
+        self.direct_recovery_semantic_witness_structured_tail_field = bool(
+            direct_recovery_semantic_witness_structured_tail_field
+        )
+        self.direct_recovery_semantic_witness_signed_tail_channels = bool(
+            direct_recovery_semantic_witness_signed_tail_channels
+        )
+        if self.direct_recovery_semantic_witness_structured_tail_field and not self.direct_recovery_semantic_witness_root_tail_source:
+            raise ValueError("v48.82 structured tail field requires root-tail source")
+        if self.direct_recovery_semantic_witness_signed_tail_channels and not self.direct_recovery_semantic_witness_structured_tail_field:
+            raise ValueError("v48.82 signed tail channels require structured tail field")
         if self.direct_recovery_semantic_witness_tail_localization and not self.direct_recovery_semantic_witness_root_tail_source:
             raise ValueError("tail localization requires the v48.78 root-tail source")
         if self.direct_recovery_semantic_witness_root_tail_source and self.direct_recovery_semantic_witness_active_constraint_typed_source:
@@ -1585,14 +1597,26 @@ class OCRAPModel(nn.Module):
         # option, so it is algebraically outside the v48.64--77 option-translation
         # family while avoiding the v48.65 class-local learned-transport branch.
         self.direct_absolute_root_tail_source_scale = None
+        self.direct_absolute_structured_tail_field_weight = None
         if self.direct_recovery_semantic_witness_root_tail_source:
             if not self.direct_recovery_absolute_semantic_witness_correction:
                 raise ValueError("v48.78 root-tail source requires the semantic executable-witness source")
             if self.encoder_type != "structured_transformer":
                 raise ValueError("v48.78 root-tail source requires structured_transformer")
-            self.direct_absolute_root_tail_source_scale = nn.Parameter(
-                torch.zeros(1, dtype=torch.float32)
-            )
+            if self.direct_recovery_semantic_witness_structured_tail_field:
+                # V48.82 OC-SNTF: a shared diagonal bilinear root-option field.
+                # Zero initialization is execution-exact native; there are no
+                # root/option/regime IDs and no generic MLP.  The signed arm
+                # uses separate reserve/debt channels selected by the native
+                # root-option margin sign, not by a regime label.
+                channels = 2 if self.direct_recovery_semantic_witness_signed_tail_channels else 1
+                self.direct_absolute_structured_tail_field_weight = nn.Parameter(
+                    torch.zeros((channels, d_model), dtype=torch.float32)
+                )
+            else:
+                self.direct_absolute_root_tail_source_scale = nn.Parameter(
+                    torch.zeros(1, dtype=torch.float32)
+                )
 
         # v48.20 UNISON-BRIDGE: a single shared evidence model consumes both
         # frozen source experts, their consensus/disagreement, and the frozen
@@ -2850,7 +2874,7 @@ class OCRAPModel(nn.Module):
         Both switches are global factor-ablation flags, never regime inputs.
         Zero gains remain execution-exact native B.
         """
-        if self.direct_absolute_semantic_witness_gain is None and self.direct_absolute_root_tail_source_scale is None:
+        if self.direct_absolute_semantic_witness_gain is None and self.direct_absolute_root_tail_source_scale is None and self.direct_absolute_structured_tail_field_weight is None:
             return None
         with torch.no_grad():
             root_tokens = self._decode_roots(memory.detach())
@@ -3284,21 +3308,28 @@ class OCRAPModel(nn.Module):
             max_common_support = common_support.amax(dim=-1)
         universal_failure = torch.relu(-best_common_viability)
         if root_tail_source:
-            # V48.78 OC-RTSI: learn the *shape* of the deployable lower tail,
+            # V48.78 OC-RTSI / V48.82 OC-SNTF: reshape the deployable lower tail
+            # without restoring an option-wise translation degree.
             # not another option-wise translation.  The basis is derived only
             # from the frozen nested OC-MERO operator; the sole trainable state
             # is a shared scalar scale.  This is deliberately not the v48.65
             # learned class-local transport: no class/root embedding, ID, or
             # learned mixer enters the source.
-            if self.direct_absolute_root_tail_source_scale is None:
+            structured_tail_field = self.direct_recovery_semantic_witness_structured_tail_field
+            if structured_tail_field:
+                if self.direct_absolute_structured_tail_field_weight is None:
+                    raise RuntimeError("v48.82 structured tail field enabled without its weights")
+            elif self.direct_absolute_root_tail_source_scale is None:
                 raise RuntimeError("v48.78 root-tail source is enabled without its source scale")
             if self.direct_recovery_semantic_witness_projection_fidelity_weighting:
                 raise RuntimeError("v48.78 preregistered root-tail source keeps projection fidelity OFF")
 
             p_rt = p.float()
-            scale_rt = self.direct_absolute_root_tail_source_scale.to(
-                device=memory.device, dtype=torch.float32
-            ).clamp(0.0, 2.0).reshape(1, 1, 1)
+            scale_rt = None
+            if not structured_tail_field:
+                scale_rt = self.direct_absolute_root_tail_source_scale.to(
+                    device=memory.device, dtype=torch.float32
+                ).clamp(0.0, 2.0).reshape(1, 1, 1)
 
             # Keep the historical physical witness and common-option support
             # as a signed option amplitude.  Unlike v48.64--77, this amplitude
@@ -3387,11 +3418,36 @@ class OCRAPModel(nn.Module):
                     torch.zeros_like(centered_basis),
                 ).detach()
 
-            root_tail_delta = (
-                scale_rt
-                * option_amplitude.unsqueeze(1)
-                * tail_basis
-            )
+            if structured_tail_field:
+                # Shared observation-derived root-option interaction.  The
+                # elementwise product is a diagonal bilinear potential over the
+                # frozen root and option tokens.  It is multiplied by the exact
+                # nested-tail exposure and then p-centered per option, so the
+                # source can redistribute reserve/debt across latent roots but
+                # cannot translate an option wholesale.
+                interaction = root_expand.float() * opt_expand.float()
+                interaction = torch.nn.functional.layer_norm(interaction, (interaction.shape[-1],))
+                w_field = self.direct_absolute_structured_tail_field_weight.to(
+                    device=memory.device, dtype=torch.float32
+                )
+                field_all = torch.einsum('bkld,cd->bklc', interaction, w_field) / (float(self.d_model) ** 0.5)
+                if self.direct_recovery_semantic_witness_signed_tail_channels:
+                    channel = (base_margins.float() < 0.0).to(dtype=torch.long).unsqueeze(-1)
+                    field = field_all.gather(-1, channel).squeeze(-1)
+                else:
+                    field = field_all[..., 0]
+                # The old normalized tail basis supplies the exact nested-tail
+                # localization; abs(option_amplitude) is confidence only, so the
+                # field itself learns the signed reserve/debt direction.
+                raw_delta = tail_basis * torch.tanh(field) * option_amplitude.abs().unsqueeze(1)
+                mean_delta = (p_rt.unsqueeze(-1) * raw_delta).sum(dim=1, keepdim=True)
+                root_tail_delta = raw_delta - mean_delta
+            else:
+                root_tail_delta = (
+                    scale_rt
+                    * option_amplitude.unsqueeze(1)
+                    * tail_basis
+                )
             if rv is not None:
                 root_tail_delta = torch.where(
                     rv.unsqueeze(-1), root_tail_delta, torch.zeros_like(root_tail_delta)
@@ -4954,6 +5010,7 @@ class OCRAPModel(nn.Module):
                 or self.direct_absolute_quantifier_witness_gain is not None
                 or self.direct_absolute_semantic_witness_gain is not None
                 or self.direct_absolute_root_tail_source_scale is not None
+                or self.direct_absolute_structured_tail_field_weight is not None
             ):
                 roct_signature, native_certificate = self._direct_recovery_option_compatibility_evidence(
                     memory, x, option_features,
@@ -5035,6 +5092,8 @@ class OCRAPModel(nn.Module):
                 direct_out["direct_recovery_absolute_semantic_witness_gain"] = sw_gains
                 if self.direct_absolute_root_tail_source_scale is not None:
                     direct_out["direct_recovery_absolute_root_tail_source_scale"] = self.direct_absolute_root_tail_source_scale
+                if self.direct_absolute_structured_tail_field_weight is not None:
+                    direct_out["direct_recovery_absolute_structured_tail_field_weight"] = self.direct_absolute_structured_tail_field_weight
                 direct_out["direct_recovery_absolute_semantic_witness_viability"] = sw_viability
                 direct_out["direct_recovery_absolute_semantic_common_option_support"] = sw_support
                 direct_out["direct_recovery_absolute_semantic_best_common_viability"] = sw_best
@@ -5200,6 +5259,8 @@ class OCRAPModel(nn.Module):
             out["direct_recovery_absolute_semantic_witness_gain"] = sw_gains
             if self.direct_absolute_root_tail_source_scale is not None:
                 out["direct_recovery_absolute_root_tail_source_scale"] = self.direct_absolute_root_tail_source_scale
+            if self.direct_absolute_structured_tail_field_weight is not None:
+                out["direct_recovery_absolute_structured_tail_field_weight"] = self.direct_absolute_structured_tail_field_weight
             out["direct_recovery_absolute_semantic_witness_viability"] = sw_viability
             out["direct_recovery_absolute_semantic_common_option_support"] = sw_support
             out["direct_recovery_absolute_semantic_best_common_viability"] = sw_best
