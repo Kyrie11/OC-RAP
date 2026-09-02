@@ -2047,10 +2047,10 @@ class OCRAPSampleDataset(Dataset):
         truth_policy = str(training_cfg.get("direct_value_absolute_feasibility_truth_contract", "legacy_full")).strip().lower()
         self.absolute_truth_contract_event: dict[str, Any] = {"policy": truth_policy, "enabled": False}
         self._absolute_truth_records: list[dict[str, Any]] | None = None
-        if truth_policy == "censor_structural_tail":
+        if truth_policy in {"censor_structural_tail", "structural_interval_bounds"}:
             truth_index_raw = str(training_cfg.get("direct_value_absolute_feasibility_truth_index", "") or "").strip()
             if not truth_index_raw:
-                raise ValueError("censor_structural_tail requires training.direct_value_absolute_feasibility_truth_index")
+                raise ValueError(f"{truth_policy} requires training.direct_value_absolute_feasibility_truth_index")
             truth_index_path = Path(truth_index_raw).expanduser().resolve()
             index = _load_absolute_truth_index(str(truth_index_path))
             records: list[dict[str, Any]] = []
@@ -2072,12 +2072,15 @@ class OCRAPSampleDataset(Dataset):
                     f"examples_missing={missing[:3]} examples_invalid={invalid[:3]}"
                 )
             self._absolute_truth_records = records
-            physical = sum(bool(r.get("physical_identifiable", False)) for r in records)
+            physical = sum(bool(r.get("physical_identifiable", r.get("exact_physical", False))) for r in records)
+            informative = sum(bool(r.get("informative", True)) for r in records)
             self.absolute_truth_contract_event = {
                 "policy": truth_policy, "enabled": True, "index": str(truth_index_path),
                 "rows": len(records), "physical_identifiable_rows": int(physical),
                 "structurally_exposed_rows": int(len(records) - physical),
                 "physical_identifiable_fraction": float(physical / max(len(records), 1)),
+                "informative_interval_rows": int(informative),
+                "informative_interval_fraction": float(informative / max(len(records), 1)),
                 "max_r_dep_abs_error": float(max((float(r.get("r_dep_abs_error", 0.0)) for r in records), default=0.0)),
             }
         self.nominal_deviation = (
@@ -2264,6 +2267,15 @@ class OCRAPSampleDataset(Dataset):
             )
             out["absolute_truth_structural_exposure"] = torch.tensor(
                 float(rec.get("structural_exposure_mass", 0.0)), dtype=torch.float32
+            )
+            out["absolute_truth_physical_lower"] = torch.tensor(
+                float(rec.get("physical_lower", rec.get("r_dep_stored", -1.0e6))), dtype=torch.float32
+            )
+            out["absolute_truth_physical_upper"] = torch.tensor(
+                float(rec.get("physical_upper", rec.get("r_dep_stored", 1.0e6))), dtype=torch.float32
+            )
+            out["absolute_truth_interval_informative"] = torch.tensor(
+                float(bool(rec.get("informative", rec.get("physical_identifiable", False)))), dtype=torch.float32
             )
         return out
 

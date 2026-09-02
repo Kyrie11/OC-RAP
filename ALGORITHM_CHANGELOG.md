@@ -8106,3 +8106,52 @@ All earlier exclusions remain in force. V48.79 additionally forbids:
 - using future/teacher structural metadata as model features;
 - rewriting teacher files or reconstructing the dataset in this experiment;
 - interpreting a truth-confound GO as immediate permission for boundary transport or external-baseline promotion.
+
+## v48.80 — OC-PISTC: Observation-Consistent Partially-Identified Structural Truth Contract (2026-09-02)
+
+### Entry condition / authoritative V48.79 result
+
+V48.79 OC-PSTC is engineering-valid and attribution-ready, but its preregistered scientific status is **`UNDERPOWERED_TRUTH_ADJUDICATION`**, not GO and not an algorithmic STOP. Runtime provenance, reference reuse, checkpoint packaging, state isolation and label/certificate identity all pass. The hard NTSE physical-identifiable subset, however, contains only roughly 2.6%--6.4% of candidates. Only 2/8 formal cells satisfy the preregistered minimum of >=20 teacher-feasible and >=20 teacher-infeasible physical-identifiable proposal rows; dev-Contact contains zero physical-identifiable teacher-feasible rows. Therefore V48.79 does not authorize promotion of K79, rejection of the physical-vs-structural confound hypothesis, dataset reconstruction, or a new higher-capacity source representation.
+
+The underpower is itself mechanistic evidence: the current stored teacher target is structurally exposed along the exact nested OC-MERO active tail for the overwhelming majority of Near/Contact candidates. A hard `physical_identifiable` censor therefore throws away almost all supervision and cannot adjudicate whether a cleaner physical target would make the frozen J78 source learnable.
+
+### Updated dominant bottleneck
+
+The current first open layer is tightened to:
+
+`partial identifiability of the physical signed recovery reserve/debt under a structurally mixed teacher contract`.
+
+This is upstream of source capacity. The correct next question is not “how large should the source network be?”, but “what physical information is actually identifiable from the existing structurally transformed teacher target without reconstructing the dataset or exposing privileged metadata to the deployed model?”
+
+### V48.80 intervention
+
+OC-PISTC keeps the J78 nested zero-translation root-tail source, one trainable scalar, Stage-I, roots/proposals, OC-MERO, actuator projection, route/re-entry semantics, RIFA, top-K=5, threshold=0.5, relative ranker, option library and boundary transport execution-identical. It changes **truth supervision only**.
+
+For a teacher structural floor `y=max(x,c)`, the pre-floor physical value is only identified as `x<=y`; for the route negative override `y=min(x,c)`, the pre-override physical value is only identified as `x>=y`. Hidden/artifact branch replacement is not invertible from the stored root-level sample and remains uninformative. These one-sided cellwise bounds are propagated through the same monotone nested OC-MERO operator to produce a conservative candidate-level physical interval `[R_phys^-, R_phys^+]`.
+
+Training uses a fixed-beta interval Huber loss:
+
+```text
+loss = 0                              if R_hat in [R_phys^-, R_phys^+]
+loss = Huber(R_phys^- - R_hat)        if R_hat < R_phys^-
+loss = Huber(R_hat - R_phys^+)        if R_hat > R_phys^+
+```
+
+Exact physical rows reduce to ordinary signed-margin Huber. Structural floors provide only an upper bound; route caps provide only a lower bound; non-invertible hidden-branch rows provide no loss. Structural metadata remains a training-only sidecar and is never a model input. Teacher files are not rewritten and the dataset is not reconstructed.
+
+### Preregistered V48.80 adjudication
+
+Historical J78 is the causal reference and only `L80_INTERVAL_TAIL_PROBE` trains. The source capacity remains `direct_absolute_root_tail_source_scale[1]`.
+
+1. Engineering/runtime/reference/state isolation must pass and teacher labels must remain identical 8/8.
+2. At least 6/8 held-out cells must contain >=100 informative interval rows; otherwise the interval adjudication is underpowered.
+3. `L80-J78` interval-Huber error must improve in >=6/8 cells and improve by at least 0.01 in >=4/8 cells.
+4. Interval-satisfaction fraction must improve in >=6/8 cells.
+5. Harmful and teacher-infeasible admission must remain <=0.25 and <=J78+0.02 in all 8 cells.
+6. Exact physical rows are reported separately as a non-degradation diagnostic; V48.80 does not claim powered physical AUC where the current data do not support it.
+7. If interval truth GO, formalize the paper/teacher as two objects — partially identified physical signed recovery reserve/debt plus structural deployability/admissibility — before any boundary transport or source-capacity increase.
+8. If interval truth STOP, close the low-capacity truth-probe family. Only after that semantic adjudication may a higher-capacity **explicitly nested OC-MERO structured source** be considered; generic MLP/AFE remains forbidden.
+
+### Continue to avoid
+
+All historical exclusions remain. V48.80 additionally forbids: treating one-sided bounds as exact labels; using structural exposure/future metadata as model inputs; converting hidden-branch rows into pseudo-physical labels; interval-width/Huber-beta sweeps; rebuilding the dataset merely to increase physical-identifiable power; or using V48.79 underpower as permission to jump directly to a larger representation.
