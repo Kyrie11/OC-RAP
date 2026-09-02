@@ -8362,3 +8362,52 @@ All prior exclusions remain. V48.83 additionally forbids:
 - treating teacher-feasible admission growth as recovery success when safe-positive admission does not improve;
 - reopening boundary transport before action-relative ordering/selectivity is validated;
 - dataset reconstruction to compensate for a source that cannot distinguish candidate-action effects.
+
+## V48.84 OC-SAOP — Observation-Consistent Stage-I Action-Observability Probe (2026-09-02)
+
+### Entry condition / authoritative V48.83 result
+V48.83 OC-CRTF is engineering-valid and attribution-ready. Its preregistered status is **`COUNTERFACTUAL_RECOVERY_TAIL_FIELD_STOP`**. `P83-O82` has material source-AUC improvement in 6/8 cells and harmful/TI nonincrease in 8/8, proving that candidate-minus-nominal differencing removes much of O82's scene-common false-admission leakage. However it improves interval Huber in 0/8 cells, produces no material safe-positive gain, and removes the 4/37 dev-Contact safe-positive admissions previously recovered by O82. `P83-L80` also fails full-source GO. Therefore candidate-relative differencing is a useful diagnostic cue but **candidate-action-relative weak-root causality is not validated as an absolute source**.
+
+Per the V48.83 preregistered branch, the entire frozen structured-tail adapter family is now closed. Do not sweep field rank/width/depth, LR, threshold, state/delta mixing, generic MLPs, root/option IDs, or additive/multiplicative combinations of O82/P83. The next question is upstream: **does the frozen Stage-I/root representation itself contain adequate action-observable recovery information?**
+
+### V48.84 mechanism question
+V48.84 is an adjudication experiment, not a new production admission source. The planner checkpoint, absolute source, relative ranker, OC-MERO, truth contract, dataset, thresholds and boundary transport are not modified.
+
+For every scene-time candidate group, the validated V48.56-A Stage-I checkpoint is run in deterministic eval mode. Let `r_k(a)` be the frozen root token of candidate action `a`, and `a0` the unique nominal action. Define the observation-only root response
+
+`Delta r_k(a) = r_k(a) - r_k(a0)`.
+
+Using the nominal predicted root posterior as a common observation-consistent measure, V48.84 forms permutation-invariant root statistics (weighted mean/std and valid-root max/min). Two fixed representations are probed:
+
+1. **delta probe**: statistics of `Delta r_k(a)` only;
+2. **state-conditioned probe**: the same-dimensional delta statistics multiplied by a deterministic nominal-state gate `1+tanh(state_stats)`. The linear head has exactly the same parameter count as the delta-only probe.
+
+Both are tested by zero-init **linear** multi-task probes (safe-positive logit, harmful logit, continuous teacher recovery advantage). No MLP, root ID, option ID, regime ID, future/teacher metadata or relative-ranker output is a feature.
+
+A paired **within-scene-time permutation control** cyclically reassigns candidate delta features while preserving the scene, nominal state, label distribution and probe capacity. This destroys only candidate-action alignment. The primary scientific signal is therefore true-pair performance minus within-group shuffled performance, not raw probe capacity.
+
+### Preregistered V48.84 decision
+Across Near/Contact x dev/certificate x balanced/precision (8 cells):
+
+**Delta action-observability GO** requires:
+- true-pair safe-positive AUC > shuffled in >=6/8 cells;
+- >=6/8 cells improve safe-positive AUC by >=+0.03;
+- harmful AUC true-vs-shuffled improves by >=+0.03 in >=6/8;
+- top-1 safe-positive group recall improves by >=+0.05 in >=4/8 powered cells;
+- >=3/4 certificate cells have >=+0.03 safe-positive AUC gain over shuffled.
+
+**State-conditioned action-observability GO** requires, relative to the true delta-only probe:
+- safe-positive AUC positive in >=6/8 and >=+0.02 in >=4/8;
+- top-1 safe-positive recall non-decreasing in >=6/8;
+- >=2/4 Contact cells gain >=+0.02 safe-positive AUC.
+
+Branch rules:
+- delta GO, no context increment -> frozen roots already contain direct action-response information; the next source must change composition/calibration, not representation capacity;
+- state-conditioned GO -> frozen roots contain action information only when conditioned on the absolute weak-root state; the next production mechanism must explicitly factor **state need/debt x action response**, not return to an absolute or delta-only field;
+- both STOP -> frozen Stage-I/root action observability is insufficient. Only then may a **narrow action-response representation-learning** intervention be opened. Broad encoder/root retraining remains prohibited.
+
+### Unified Near/Contact interpretation
+Near and Contact remain one planner and one signed recovery object. Near asks whether a candidate action preserves positive recoverability reserve on the observation-compatible weak roots; Contact asks whether the action repays negative recovery debt. V48.84 tests whether those action effects are already observable in the frozen root state before designing another absolute source.
+
+### Continue to avoid
+All prior exclusions remain. V48.84 newly forbids using the P83 AUC/selectivity gain as permission to combine O82 and P83 fields, tune their mixing weight, increase field capacity, or reopen boundary transport. Dataset reconstruction remains prohibited because current evidence indicates a representation/action-observability question, not dataset corruption or supervision scarcity.
