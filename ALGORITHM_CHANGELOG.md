@@ -8506,3 +8506,83 @@ The known PyTorch `nested_tensor ... norm_first=True` message is a performance w
 
 ### Scientific invariance
 No OC-SARR algorithm, model forward, trainable parameter, loss, dataset, sampler, LR/epochs, threshold, Q/R arm definition, truth contract, RIFA/OC-MERO path, or preregistered GO/STOP condition changed.  Algorithm version remains V48.85 OC-SARR; engineering version is `v48.85.1-OC-SARR-ENGFIX`.  Existing V48.85 exclusions and branch rules remain unchanged.
+
+## V48.86 OC-CRSC — Observation-Consistent Counterfactual Recovery Supervision Contract (2026-09-03)
+
+### Entry condition / authoritative V48.85.1 result
+V48.85.1 OC-SARR is engineering-valid and attribution-ready. Q85/R85 preserve all 170 shared Stage-I tensors bitwise and train only `direct_absolute_action_response_adapter.action_projection`; runtime provenance, reference reuse, truth-index reuse, calibration, checkpoint SHA and the top-level pipeline contract are valid. The preregistered scientific status is **`STATE_ACTION_RECOVERY_REPRESENTATION_STOP`**:
+- `Q85-L80`: AUC positive 4/8, material `>=+0.01` 4/8, interval-Huber material improvement 8/8, absolute/matched selectivity FAIL, Contact safe-positive material but Near material FAIL;
+- `R85-Q85`: AUC positive 2/8, interval-Huber material improvement 8/8, selectivity FAIL, Contact safe-positive increment but Near still zero;
+- `R85-L80`: AUC positive 6/8 but only 2/8 `>=+0.01`, Huber material improvement 8/8, selectivity FAIL, Contact safe-positive material but Near material FAIL.
+
+The important positive result is that the raw executable candidate-minus-nominal action representation is **trainable and physically informative**: Q85/R85 improve the absolute interval-Huber in all 8 cells and recover safe-positive Contact actions in both dev and certificate splits (Q85 roughly 0.297 dev / 0.129 certificate; R85 roughly 0.351 / 0.161). This is substantially stronger than the preceding frozen-tail adapters and establishes a real action-to-recovery pathway.
+
+The failure is selective semantics, not representation inactivity. Q85 opens harmful/TI admission to roughly 0.17–0.35 and R85 further to roughly 0.18–0.39; Near safe-positive remains zero in every powered cell and dev-Near AUC falls by roughly 0.05. The parameter-free nominal-root state gate improves interval regression but worsens selectivity and does not recover Near, so **that specific V48.85 state-conditioning gate is closed**.
+
+### New dominant bottleneck
+The first open layer is now:
+
+`observation-consistent counterfactual action-response supervision for selective signed physical recovery`.
+
+V48.85 answers an important representation question: a narrow raw executable-action response can move the physical source and recover true Contact actions. What remains unresolved is *what quantity the action-response operator should be taught*. Candidate-absolute interval supervision asks the new adapter to help the whole candidate land inside a broad physical interval; because the frozen native source already carries the scene/root state, this encourages a broadly permissive rescue rather than the causal quantity introduced by the new adapter: **candidate-induced change relative to nominal**.
+
+Near and Contact remain one signed response object:
+- Near: a candidate should produce a positive response only when it preserves/increases weak-root recovery reserve relative to nominal;
+- Contact: a candidate should produce a positive response when it repays weak-root recovery debt relative to nominal;
+- structurally harmful actions must not receive a positive deployable response in either regime.
+
+Dataset reconstruction remains closed. The frozen V48.80 structural-interval scaffold is 100% informative in the formal train/dev/certificate roles used here; V48.85's failure is a learned permissive response under the current supervision contract, not lack of dataset rows.
+
+### V48.86 intervention
+Name: **OC-CRSC — Observation-Consistent Counterfactual Recovery Supervision Contract**.
+
+V48.86 deliberately keeps the V48.85 Q85 representation and capacity execution-identical: the same zero-initialized signed raw-action operator `action_projection[2,d_model,d_action]`, state conditioning OFF, shared Stage-I/root/proposal/relative-ranker frozen, OC-MERO/RIFA order unchanged, actuator projection/route/re-entry unchanged, top-K=5, threshold=0.5, V48.80 structural physical-interval scaffold unchanged, and boundary transport OFF. No new model parameter is introduced.
+
+For every candidate `a` and the unique nominal action `a0` in the same `(bucket,scene,time)` group, the physical candidate/nominal intervals imply a rigorous counterfactual response interval:
+
+`Delta R_phys(a) in [ L(a) - U(a0),  U(a) - L(a0) ]`.
+
+This is a monotone interval-difference statement; it does not require point-identifying either candidate or nominal physical truth. Teacher/future metadata are training-only sidecars and never model inputs.
+
+Two equal-capacity arms isolate supervision semantics:
+1. **S86_RESPONSE_INTERVAL** — train Q85's action-response representation only on the candidate-minus-nominal physical response interval. The predicted quantity is the model's signed absolute-margin response `m(a)-m(a0)`, not the candidate's absolute margin itself.
+2. **T86_SELECTIVE_RESPONSE / Main** — identical representation/capacity and physical response interval, plus pairwise structural response ordering: safe-beneficial deployable actions must rank above nominal in signed response, while component-harmful deployable actions must rank at/below nominal. This is implemented by pairwise logistic ordering, not by equating the PCD `+0.015` score threshold with an unrelated logit/probability magnitude.
+
+The deployable macro contract is kept exactly consistent with the teacher PCD builder: `{2,3,5,6,7}`. Macro 6 is explicitly included. Structural labels are derived from the exact teacher PCD/component-veto sidecar and are never deployment inputs.
+
+### Preregistered V48.86 decision
+Historical Q85 and L80 are reused; only S86/T86 are trained.
+
+**S86-Q85 response-supervision GO** requires:
+- source AUC positive >=6/8 and >=4/8 `delta>=+0.003`;
+- harmful/TI <=0.25;
+- both harmful and TI nonincrease in >=6/8 cells;
+- powered safe-positive pass never declines and has material `+0.05` improvement in at least one Near and one Contact cell.
+
+**T86-S86 structural-selectivity increment GO** requires:
+- source AUC positive >=6/8 and >=4/8 `delta>=+0.003`;
+- harmful/TI <=0.25;
+- both harmful and TI nonincrease in >=6/8 cells and both drop by at least 0.03 in >=4/8 cells;
+- powered safe-positive pass never declines and has material improvement in both Near and Contact.
+
+**T86-L80 full-source GO** requires:
+- source AUC positive 8/8 and >=6/8 `delta>=+0.01`;
+- harmful/TI <=0.25 and no cell above L80+0.02;
+- absolute interval Huber nondegrade in >=6/8 cells;
+- powered safe-positive pass never declines and has material improvement in both Near and Contact.
+
+Branch rules:
+- full GO -> stop absolute-source design, freeze source, verify frozen RIFA, then paired Safe non-interference, Near critical-safety closed loop, Contact post-collision/secondary metrics, and external baselines;
+- S86 and T86 mechanism GO but full source STOP -> counterfactual response + structural admissibility supervision is validated; next adjudicate the already-known downstream absolute-boundary debt without increasing representation capacity;
+- S86 GO / T86 STOP -> retain counterfactual response supervision, close the structural pairwise constraint, and retest the full source without a capacity sweep;
+- S86 STOP -> close the raw-action-response branch itself. The next allowed representation question is a **narrow observation-action interaction** (not broad encoder/root retraining) because response-aligned supervision would have failed on the existing raw executable action representation.
+
+### Continue to avoid / newly closed directions
+All previous exclusions remain. In addition:
+- close the V48.85 parameter-free nominal-root `1+tanh(LN(r_nominal))` state gate;
+- do not increase action-projection width/rank/depth or add an action MLP before the V48.86 supervision adjudication;
+- do not use the PCD `+0.015` threshold as a logit/probability-response magnitude (coordinate mismatch); it is only a safe-benefit label threshold;
+- do not reopen frozen structured-tail fields, option/root IDs, state/delta mixtures, gain tables, truth-refinement, external-geometry families, relative-ranker changes, boundary transport, regime routers, or dataset reconstruction.
+
+### Engineering / speed policy
+V48.86 keeps the safe execution optimizations already validated: persistent tensor cache, 8-worker sidecar build, single-thread BLAS, best-only checkpoint saving, and S86/T86 paired across the two A30s. Frozen sufficient-state activation caching remains disabled because frozen transformer/root modules execute under train mode with nonzero dropout; caching their activations would change the stochastic forward and invalidate exact attribution.

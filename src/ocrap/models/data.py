@@ -1657,6 +1657,38 @@ def _fix_square(x: np.ndarray, n: int, *, fill_offdiag: float = 0.0, diag: float
 
 
 @lru_cache(maxsize=8)
+def _load_action_response_truth_index(path_str: str) -> dict[str, dict[str, Any]]:
+    """Load V48.86 counterfactual action-response supervision sidecar.
+
+    The sidecar is training-only.  It binds each sample path to an
+    observation-consistent candidate-minus-nominal physical response interval
+    plus safe-benefit / structural-harm labels.  Nothing from this index is a
+    model input or a deployment-time feature.
+    """
+    path = Path(path_str).expanduser().resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"action-response truth index not found: {path}")
+    out: dict[str, dict[str, Any]] = {}
+    with path.open("r", encoding="utf-8") as f:
+        for line_no, line in enumerate(f, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except Exception as exc:
+                raise ValueError(f"invalid action-response truth JSONL at {path}:{line_no}: {exc}") from exc
+            sample_path = str(row.get("sample_path", "")).strip()
+            if not sample_path:
+                raise ValueError(f"missing sample_path in action-response truth row {path}:{line_no}")
+            key = str(Path(sample_path).expanduser().resolve())
+            if key in out:
+                raise ValueError(f"duplicate sample_path in action-response truth index: {key}")
+            out[key] = row
+    return out
+
+
+@lru_cache(maxsize=8)
 def _load_absolute_truth_index(path_str: str) -> dict[str, dict[str, Any]]:
     path = Path(path_str).expanduser().resolve()
     if not path.is_file():
@@ -2083,6 +2115,44 @@ class OCRAPSampleDataset(Dataset):
                 "informative_interval_fraction": float(informative / max(len(records), 1)),
                 "max_r_dep_abs_error": float(max((float(r.get("r_dep_abs_error", 0.0)) for r in records), default=0.0)),
             }
+
+        response_objective = str(training_cfg.get("direct_value_absolute_feasibility_supervision_objective", "")).strip().lower()
+        self.action_response_truth_event: dict[str, Any] = {"enabled": False, "objective": response_objective}
+        self._action_response_truth_records: list[dict[str, Any]] | None = None
+        if response_objective in {"counterfactual_response_interval_huber", "counterfactual_selective_response"}:
+            response_index_raw = str(training_cfg.get("direct_value_action_response_truth_index", "") or "").strip()
+            if not response_index_raw:
+                raise ValueError(f"{response_objective} requires training.direct_value_action_response_truth_index")
+            response_path = Path(response_index_raw).expanduser().resolve()
+            response_index = _load_action_response_truth_index(str(response_path))
+            response_records: list[dict[str, Any]] = []
+            response_missing: list[str] = []
+            response_invalid: list[str] = []
+            for sample_path in self.paths:
+                key = str(sample_path.resolve())
+                rec = response_index.get(key)
+                if rec is None:
+                    response_missing.append(key)
+                    continue
+                if not bool(rec.get("valid", False)):
+                    response_invalid.append(key)
+                response_records.append(rec)
+            if response_missing or response_invalid or len(response_records) != len(self.paths):
+                raise ValueError(
+                    "action-response truth index fail-closed: "
+                    f"missing={len(response_missing)} invalid={len(response_invalid)} indexed={len(response_records)} expected={len(self.paths)}; "
+                    f"examples_missing={response_missing[:3]} examples_invalid={response_invalid[:3]}"
+                )
+            self._action_response_truth_records = response_records
+            informative_response = sum(bool(r.get("response_informative", False)) for r in response_records)
+            safe_rows = sum(bool(r.get("safe_positive", False)) for r in response_records)
+            harmful_rows = sum(bool(r.get("component_harmful", False)) for r in response_records)
+            self.action_response_truth_event = {
+                "enabled": True, "objective": response_objective, "index": str(response_path),
+                "rows": len(response_records), "informative_rows": int(informative_response),
+                "informative_fraction": float(informative_response / max(len(response_records), 1)),
+                "safe_positive_rows": int(safe_rows), "component_harmful_rows": int(harmful_rows),
+            }
         self.nominal_deviation = (
             _nominal_deviation_by_path(self.paths)
             if bool(training_cfg.get("direct_policy_metric_exact_eligibility", False))
@@ -2277,6 +2347,17 @@ class OCRAPSampleDataset(Dataset):
             out["absolute_truth_interval_informative"] = torch.tensor(
                 float(bool(rec.get("informative", rec.get("physical_identifiable", False)))), dtype=torch.float32
             )
+        if self._action_response_truth_records is not None:
+            rec = self._action_response_truth_records[idx]
+            out["action_response_truth_informative"] = torch.tensor(
+                float(bool(rec.get("response_informative", False))), dtype=torch.float32
+            )
+            out["action_response_truth_lower"] = torch.tensor(float(rec.get("response_lower", -1.0e6)), dtype=torch.float32)
+            out["action_response_truth_upper"] = torch.tensor(float(rec.get("response_upper", 1.0e6)), dtype=torch.float32)
+            out["action_response_teacher_adv"] = torch.tensor(float(rec.get("teacher_adv", 0.0)), dtype=torch.float32)
+            out["action_response_component_harmful"] = torch.tensor(float(bool(rec.get("component_harmful", False))), dtype=torch.float32)
+            out["action_response_safe_positive"] = torch.tensor(float(bool(rec.get("safe_positive", False))), dtype=torch.float32)
+            out["action_response_deployable"] = torch.tensor(float(bool(rec.get("deployable", False))), dtype=torch.float32)
         return out
 
 

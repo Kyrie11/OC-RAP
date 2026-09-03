@@ -343,6 +343,102 @@ def _absolute_feasibility_interval_huber(
     distance = torch.where(x < lo, lo - x, torch.where(x > hi, x - hi, torch.zeros_like(x)))
     return F.smooth_l1_loss(distance[mask], torch.zeros_like(distance[mask]), beta=1.0)
 
+def _counterfactual_response_group_losses(
+    out: dict[str, torch.Tensor],
+    batch: dict[str, torch.Tensor],
+    *,
+    selective: bool,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """V48.86 counterfactual recovery-response supervision.
+
+    The trainable action adapter represents a candidate-induced response, so its
+    supervision is expressed relative to the unique nominal action in the same
+    observation-consistent scene-time group.  The physical response target is a
+    partially-identified signed interval supplied by a training-only sidecar.
+    The optional selective term is a structural deployability ordering contract:
+    safe-beneficial actions must rank above their nominal action in signed
+    recovery response, while structurally harmful actions must rank at or below
+    nominal.  These are pairwise ordering constraints because teacher_adv and
+    the signed physical-margin response live in different numerical coordinates.
+    No sidecar field is a model input.
+    """
+    logit = out.get('direct_recovery_absolute_feasibility_logit')
+    if logit is None:
+        z = batch['r_dep_star'].float().sum() * 0.0
+        return z, z, z
+    required = [
+        'action_response_truth_informative','action_response_truth_lower',
+        'action_response_truth_upper','action_response_safe_positive',
+        'action_response_component_harmful','action_response_deployable',
+    ]
+    missing=[k for k in required if k not in batch]
+    if missing:
+        raise ValueError(f'counterfactual response supervision missing sidecar fields: {missing}')
+    logits=logit.float().reshape(-1)
+    isn=batch['is_nominal'].reshape(-1)>0.5
+    bid=batch.get('bucket_id',torch.full_like(batch['time_index'],3)).reshape(-1)
+    sh=batch['scene_hash'].reshape(-1); ti=batch['time_index'].reshape(-1)
+    informative=batch['action_response_truth_informative'].reshape(-1)>0.5
+    lower=batch['action_response_truth_lower'].float().reshape(-1).to(logits.dtype)
+    upper=batch['action_response_truth_upper'].float().reshape(-1).to(logits.dtype)
+    safe=batch['action_response_safe_positive'].reshape(-1)>0.5
+    harmful=batch['action_response_component_harmful'].reshape(-1)>0.5
+    deployable=batch['action_response_deployable'].reshape(-1)>0.5
+    keys=torch.stack([bid,sh,ti],dim=1)
+    phys_terms=[]; safe_terms=[]; harm_terms=[]
+    for key in torch.unique(keys,dim=0):
+        idx=torch.where((keys==key.unsqueeze(0)).all(dim=1))[0]
+        noms=idx[isn[idx]]
+        if noms.numel()!=1:
+            raise ValueError(
+                f'counterfactual response group requires exactly one nominal; '
+                f'key={tuple(int(x) for x in key.tolist())} nominal_count={int(noms.numel())}'
+            )
+        recs=idx[(~isn[idx]) & ((bid[idx]==1)|(bid[idx]==2))]
+        if recs.numel()==0:
+            continue
+        nom=noms[0]
+        delta=logits[recs]-logits[nom]
+        m=informative[recs] & torch.isfinite(lower[recs]) & torch.isfinite(upper[recs])
+        if bool(m.any()):
+            d=delta[m]; lo=lower[recs][m]; hi=upper[recs][m]
+            dist=torch.where(d<lo,lo-d,torch.where(d>hi,d-hi,torch.zeros_like(d)))
+            phys_terms.append(torch.nn.functional.smooth_l1_loss(dist,torch.zeros_like(dist),beta=1.0,reduction='none'))
+        if selective:
+            # Structural supervision constrains only the *sign/order* of the
+            # signed recovery response.  teacher_adv lives in the PCD score
+            # coordinate, so reusing its +0.015 threshold as a probability or
+            # logit-response magnitude would mix incompatible units.  Pairwise
+            # logistic losses are parameter-free and have non-zero gradient at
+            # the zero-initialized action-response adapter.
+            dm=delta
+            sm=safe[recs] & deployable[recs]
+            hm=harmful[recs] & deployable[recs]
+            if bool(sm.any()):
+                safe_terms.append(torch.nn.functional.softplus(-dm[sm]))
+            if bool(hm.any()):
+                harm_terms.append(torch.nn.functional.softplus(dm[hm]))
+    anchor=logits.sum()*0.0
+    phys=torch.cat(phys_terms).mean() if phys_terms else anchor
+    safe_loss=torch.cat(safe_terms).mean() if safe_terms else anchor
+    harm_loss=torch.cat(harm_terms).mean() if harm_terms else anchor
+    return phys, safe_loss, harm_loss
+
+
+def _absolute_feasibility_counterfactual_response_interval_huber(
+    out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor]
+) -> torch.Tensor:
+    phys, _safe, _harm = _counterfactual_response_group_losses(out,batch,selective=False)
+    return phys
+
+
+def _absolute_feasibility_counterfactual_selective_response(
+    out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor]
+) -> torch.Tensor:
+    phys, safe_loss, harm_loss = _counterfactual_response_group_losses(out,batch,selective=True)
+    return phys + safe_loss + harm_loss
+
+
 def _absolute_feasibility_supervision_loss(
     out: dict[str, torch.Tensor],
     batch: dict[str, torch.Tensor],
@@ -356,6 +452,10 @@ def _absolute_feasibility_supervision_loss(
         return _absolute_feasibility_signed_margin_huber(out, batch, cfg)
     if objective == 'signed_margin_interval_huber':
         return _absolute_feasibility_interval_huber(out, batch, cfg)
+    if objective == 'counterfactual_response_interval_huber':
+        return _absolute_feasibility_counterfactual_response_interval_huber(out, batch)
+    if objective == 'counterfactual_selective_response':
+        return _absolute_feasibility_counterfactual_selective_response(out, batch)
     raise ValueError(f'unsupported absolute feasibility supervision objective: {objective!r}')
 
 def _absolute_feasibility_accuracy(
@@ -1012,7 +1112,7 @@ def _epoch(model: OCRAPModel, loader: DataLoader, cfg: dict, device: torch.devic
                         semantic_witness.clamp_(0.0, 2.0)
             bsz = int(batch['x'].shape[0])
             n += bsz
-            vals = {'loss': float(total.item()), 'loss_direct_recovery_value': float(loss_direct_value.item()), 'loss_encoder_anchor': float(loss_encoder_anchor.item()), 'direct_score_mean': float(out['direct_recovery_value_logit'].float().mean().item()), 'direct_opportunity_mean': float(torch.sigmoid(out['direct_recovery_opportunity_logit']).float().mean().item()) if 'direct_recovery_opportunity_logit' in out else 0.0, 'direct_harm_mean': float(torch.sigmoid(out['direct_recovery_harm_logit']).float().mean().item()) if 'direct_recovery_harm_logit' in out else 0.0, 'direct_expert_disagreement_mean': float(out['direct_expert_disagreement'][:, 0].float().mean().item()) if 'direct_expert_disagreement' in out else 0.0, 'direct_absolute_feasibility_bce': float(_absolute_feasibility_bce(out, batch, tcfg).item()), 'direct_absolute_signed_margin_huber': float(_absolute_feasibility_signed_margin_huber(out, batch, tcfg).item()), 'direct_absolute_signed_margin_interval_huber': float(_absolute_feasibility_interval_huber(out, batch, tcfg).item()) if str(tcfg.get('direct_value_absolute_feasibility_supervision_objective','')) == 'signed_margin_interval_huber' else 0.0, 'direct_absolute_feasibility_accuracy': _absolute_feasibility_accuracy(out, batch, tcfg)}
+            vals = {'loss': float(total.item()), 'loss_direct_recovery_value': float(loss_direct_value.item()), 'loss_encoder_anchor': float(loss_encoder_anchor.item()), 'direct_score_mean': float(out['direct_recovery_value_logit'].float().mean().item()), 'direct_opportunity_mean': float(torch.sigmoid(out['direct_recovery_opportunity_logit']).float().mean().item()) if 'direct_recovery_opportunity_logit' in out else 0.0, 'direct_harm_mean': float(torch.sigmoid(out['direct_recovery_harm_logit']).float().mean().item()) if 'direct_recovery_harm_logit' in out else 0.0, 'direct_expert_disagreement_mean': float(out['direct_expert_disagreement'][:, 0].float().mean().item()) if 'direct_expert_disagreement' in out else 0.0, 'direct_absolute_feasibility_bce': float(_absolute_feasibility_bce(out, batch, tcfg).item()), 'direct_absolute_signed_margin_huber': float(_absolute_feasibility_signed_margin_huber(out, batch, tcfg).item()), 'direct_absolute_signed_margin_interval_huber': float(_absolute_feasibility_interval_huber(out, batch, tcfg).item()) if str(tcfg.get('direct_value_absolute_feasibility_supervision_objective','')) == 'signed_margin_interval_huber' else 0.0, 'direct_absolute_counterfactual_response_interval_huber': float(_absolute_feasibility_counterfactual_response_interval_huber(out, batch).item()) if str(tcfg.get('direct_value_absolute_feasibility_supervision_objective','')) in {'counterfactual_response_interval_huber','counterfactual_selective_response'} else 0.0, 'direct_absolute_counterfactual_selective_response_loss': float(_absolute_feasibility_counterfactual_selective_response(out, batch).item()) if str(tcfg.get('direct_value_absolute_feasibility_supervision_objective','')) == 'counterfactual_selective_response' else 0.0, 'direct_absolute_feasibility_accuracy': _absolute_feasibility_accuracy(out, batch, tcfg)}
             vals.update(_absolute_feasibility_supervision_stats(batch, tcfg))
             for k, v in vals.items():
                 totals[k] = totals.get(k, 0.0) + float(v) * bsz
@@ -1179,7 +1279,7 @@ def _epoch(model: OCRAPModel, loader: DataLoader, cfg: dict, device: torch.devic
                     semantic_witness.clamp_(0.0, 2.0)
         bsz = int(batch['x'].shape[0])
         n += bsz
-        vals = {'loss': total.item(), 'direct_absolute_feasibility_bce': float(_absolute_feasibility_bce(out, batch, tcfg).item()), 'direct_absolute_signed_margin_huber': float(_absolute_feasibility_signed_margin_huber(out, batch, tcfg).item()), 'direct_absolute_signed_margin_interval_huber': float(_absolute_feasibility_interval_huber(out, batch, tcfg).item()) if str(tcfg.get('direct_value_absolute_feasibility_supervision_objective','')) == 'signed_margin_interval_huber' else 0.0, 'direct_absolute_feasibility_accuracy': _absolute_feasibility_accuracy(out, batch, tcfg), 'loss_root': loss_root.item(), 'loss_margin': loss_margin.item(), 'loss_sig': loss_sig.item(), 'loss_future_sig': loss_future_sig.item(), 'loss_obs': loss_obs.item(), 'loss_dep': loss_dep.item(), 'loss_orc': loss_orc.item(), 'loss_art': loss_art.item(), 'loss_gap': loss_gap.item(), 'loss_admission': loss_admit.item(), 'loss_option_q': loss_option_q.item(), 'loss_option_admission': loss_option_admit.item(), 'loss_option_success': loss_option_success.item(), 'loss_option_success_bce': loss_option_success_bce.item(), 'loss_option_best': loss_option_best.item(), 'loss_option_class_success': loss_option_class_success.item(), 'loss_option_class_best': loss_option_class_best.item(), 'loss_recovery_frontier': loss_recovery_frontier.item(), 'loss_physical_boundary_distill': loss_physical_boundary_distill.item(), 'loss_group_ranking': loss_group_rank.item(), 'loss_group_ce': loss_group_ce.item(), 'loss_nominal_switch': loss_nominal_switch.item(), 'loss_group_distill': loss_group_distill.item(), 'loss_safe_nominal': loss_safe_nominal.item(), 'loss_protective_macro': loss_protective_macro.item(), 'loss_macro_drs': loss_macro_drs.item(), 'loss_ddc': loss_ddc.item(), 'loss_teacher_pcd_direct': loss_teacher_pcd_direct.item(), 'loss_recovery_advantage': loss_recovery_advantage.item(), 'loss_direct_recovery_value': loss_direct_value.item(), 'loss_direct_router_balance': loss_direct_router_balance.item(), 'loss_utility': loss_util.item(), 'pred_r_dep_mean': r_dep.mean().item(), 'teacher_r_dep_mean': batch['r_dep_star'].float().mean().item()}
+        vals = {'loss': total.item(), 'direct_absolute_feasibility_bce': float(_absolute_feasibility_bce(out, batch, tcfg).item()), 'direct_absolute_signed_margin_huber': float(_absolute_feasibility_signed_margin_huber(out, batch, tcfg).item()), 'direct_absolute_signed_margin_interval_huber': float(_absolute_feasibility_interval_huber(out, batch, tcfg).item()) if str(tcfg.get('direct_value_absolute_feasibility_supervision_objective','')) == 'signed_margin_interval_huber' else 0.0, 'direct_absolute_counterfactual_response_interval_huber': float(_absolute_feasibility_counterfactual_response_interval_huber(out, batch).item()) if str(tcfg.get('direct_value_absolute_feasibility_supervision_objective','')) in {'counterfactual_response_interval_huber','counterfactual_selective_response'} else 0.0, 'direct_absolute_counterfactual_selective_response_loss': float(_absolute_feasibility_counterfactual_selective_response(out, batch).item()) if str(tcfg.get('direct_value_absolute_feasibility_supervision_objective','')) == 'counterfactual_selective_response' else 0.0, 'direct_absolute_feasibility_accuracy': _absolute_feasibility_accuracy(out, batch, tcfg), 'loss_root': loss_root.item(), 'loss_margin': loss_margin.item(), 'loss_sig': loss_sig.item(), 'loss_future_sig': loss_future_sig.item(), 'loss_obs': loss_obs.item(), 'loss_dep': loss_dep.item(), 'loss_orc': loss_orc.item(), 'loss_art': loss_art.item(), 'loss_gap': loss_gap.item(), 'loss_admission': loss_admit.item(), 'loss_option_q': loss_option_q.item(), 'loss_option_admission': loss_option_admit.item(), 'loss_option_success': loss_option_success.item(), 'loss_option_success_bce': loss_option_success_bce.item(), 'loss_option_best': loss_option_best.item(), 'loss_option_class_success': loss_option_class_success.item(), 'loss_option_class_best': loss_option_class_best.item(), 'loss_recovery_frontier': loss_recovery_frontier.item(), 'loss_physical_boundary_distill': loss_physical_boundary_distill.item(), 'loss_group_ranking': loss_group_rank.item(), 'loss_group_ce': loss_group_ce.item(), 'loss_nominal_switch': loss_nominal_switch.item(), 'loss_group_distill': loss_group_distill.item(), 'loss_safe_nominal': loss_safe_nominal.item(), 'loss_protective_macro': loss_protective_macro.item(), 'loss_macro_drs': loss_macro_drs.item(), 'loss_ddc': loss_ddc.item(), 'loss_teacher_pcd_direct': loss_teacher_pcd_direct.item(), 'loss_recovery_advantage': loss_recovery_advantage.item(), 'loss_direct_recovery_value': loss_direct_value.item(), 'loss_direct_router_balance': loss_direct_router_balance.item(), 'loss_utility': loss_util.item(), 'pred_r_dep_mean': r_dep.mean().item(), 'teacher_r_dep_mean': batch['r_dep_star'].float().mean().item()}
         vals.update(_absolute_feasibility_supervision_stats(batch, tcfg))
         for k, v in vals.items():
             totals[k] = totals.get(k, 0.0) + float(v) * bsz
