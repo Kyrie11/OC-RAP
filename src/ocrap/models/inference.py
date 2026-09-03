@@ -589,6 +589,14 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_semantic_witness_counterfactual_tail_response",
             model_cfg.get("direct_recovery_semantic_witness_counterfactual_tail_response", False),
         )),
+        direct_recovery_semantic_witness_action_response_adapter=bool(ckpt.get(
+            "direct_recovery_semantic_witness_action_response_adapter",
+            model_cfg.get("direct_recovery_semantic_witness_action_response_adapter", False),
+        )),
+        direct_recovery_semantic_witness_action_response_state_conditioning=bool(ckpt.get(
+            "direct_recovery_semantic_witness_action_response_state_conditioning",
+            model_cfg.get("direct_recovery_semantic_witness_action_response_state_conditioning", False),
+        )),
         direct_recovery_semantic_witness_demand_normalized_fidelity=bool(ckpt.get(
             "direct_recovery_semantic_witness_demand_normalized_fidelity",
             model_cfg.get("direct_recovery_semantic_witness_demand_normalized_fidelity", False),
@@ -918,6 +926,12 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_semantic_witness_counterfactual_tail_response"] = bool(
         model.direct_recovery_semantic_witness_counterfactual_tail_response
     )
+    cfg["model"]["direct_recovery_semantic_witness_action_response_adapter"] = bool(
+        model.direct_recovery_semantic_witness_action_response_adapter
+    )
+    cfg["model"]["direct_recovery_semantic_witness_action_response_state_conditioning"] = bool(
+        model.direct_recovery_semantic_witness_action_response_state_conditioning
+    )
     cfg["model"]["direct_recovery_semantic_witness_demand_normalized_fidelity"] = bool(
         model.direct_recovery_semantic_witness_demand_normalized_fidelity
     )
@@ -1224,6 +1238,14 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_semantic_witness_counterfactual_tail_response",
             model_cfg.get("direct_recovery_semantic_witness_counterfactual_tail_response", False),
         )),
+        "direct_recovery_semantic_witness_action_response_adapter": bool(ckpt.get(
+            "direct_recovery_semantic_witness_action_response_adapter",
+            model_cfg.get("direct_recovery_semantic_witness_action_response_adapter", False),
+        )),
+        "direct_recovery_semantic_witness_action_response_state_conditioning": bool(ckpt.get(
+            "direct_recovery_semantic_witness_action_response_state_conditioning",
+            model_cfg.get("direct_recovery_semantic_witness_action_response_state_conditioning", False),
+        )),
         "direct_recovery_semantic_witness_demand_normalized_fidelity": bool(ckpt.get(
             "direct_recovery_semantic_witness_demand_normalized_fidelity",
             model_cfg.get("direct_recovery_semantic_witness_demand_normalized_fidelity", False),
@@ -1347,6 +1369,12 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         ),
         "direct_recovery_semantic_witness_counterfactual_tail_response": bool(
             model.direct_recovery_semantic_witness_counterfactual_tail_response
+        ),
+        "direct_recovery_semantic_witness_action_response_adapter": bool(
+            model.direct_recovery_semantic_witness_action_response_adapter
+        ),
+        "direct_recovery_semantic_witness_action_response_state_conditioning": bool(
+            model.direct_recovery_semantic_witness_action_response_state_conditioning
         ),
         "direct_recovery_semantic_witness_demand_normalized_fidelity": bool(
             model.direct_recovery_semantic_witness_demand_normalized_fidelity

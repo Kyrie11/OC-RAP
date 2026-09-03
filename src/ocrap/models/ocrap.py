@@ -258,6 +258,64 @@ class FactorizedObservationConditionedActionFrontierBridge(nn.Module):
         return benefit, harm
 
 
+class ObservationConsistentActionResponseRootAdapter(nn.Module):
+    """Narrow absolute-only action-response representation for V48.85.
+
+    The shared Stage-I encoder/root decoder remain frozen.  The adapter consumes
+    only executable candidate-minus-nominal raw action features and emits a
+    root-token residual used *only* by the absolute recoverability margin path.
+    Two signed channels are selected by the frozen nominal root's best native
+    margin (reserve vs debt).  Optional state conditioning is deterministic and
+    parameter-free, so the Q/R arms have exactly the same trainable capacity.
+
+    The action projection is zero-initialized, making the intervention execution-
+    exact at initialization and making every nominal row exactly zero.
+    """
+    def __init__(self, action_dim: int, d_model: int, *, state_conditioned: bool):
+        super().__init__()
+        self.action_dim = int(action_dim)
+        self.d_model = int(d_model)
+        self.state_conditioned = bool(state_conditioned)
+        self.action_norm = nn.LayerNorm(self.action_dim, elementwise_affine=False)
+        self.action_projection = nn.Parameter(
+            torch.zeros((2, self.d_model, self.action_dim), dtype=torch.float32)
+        )
+
+    def forward(
+        self,
+        action_relative: torch.Tensor,
+        nominal_root_tokens: torch.Tensor,
+        nominal_root_best_margin: torch.Tensor,
+    ) -> torch.Tensor:
+        if action_relative.shape[-1] != self.action_dim:
+            raise ValueError(
+                f"action-response action dimension mismatch: {action_relative.shape[-1]} != {self.action_dim}"
+            )
+        if nominal_root_tokens.ndim != 3 or nominal_root_tokens.shape[-1] != self.d_model:
+            raise ValueError("action-response nominal root-token shape mismatch")
+        if nominal_root_best_margin.shape != nominal_root_tokens.shape[:2]:
+            raise ValueError("action-response nominal root-margin shape mismatch")
+        a = self.action_norm(action_relative.float())
+        projected = torch.einsum("ba,cda->bcd", a, self.action_projection.float())
+        channel = (nominal_root_best_margin.float() < 0.0).long()
+        gather_index = channel.unsqueeze(-1).unsqueeze(-1).expand(
+            -1, -1, 1, self.d_model
+        )
+        expanded = projected.unsqueeze(1).expand(
+            -1, nominal_root_tokens.shape[1], -1, -1
+        )
+        response = expanded.gather(2, gather_index).squeeze(2)
+        response = torch.tanh(response).to(dtype=nominal_root_tokens.dtype)
+        if self.state_conditioned:
+            state_gate = 1.0 + torch.tanh(
+                torch.nn.functional.layer_norm(
+                    nominal_root_tokens.float(), (self.d_model,)
+                )
+            )
+            response = response * state_gate.to(dtype=response.dtype)
+        return response
+
+
 class OCRAPModel(nn.Module):
     """Neural OC-RAP model with a learned root-query decoder.
 
@@ -371,6 +429,8 @@ class OCRAPModel(nn.Module):
         direct_recovery_semantic_witness_structured_tail_field: bool = False,
         direct_recovery_semantic_witness_signed_tail_channels: bool = False,
         direct_recovery_semantic_witness_counterfactual_tail_response: bool = False,
+        direct_recovery_semantic_witness_action_response_adapter: bool = False,
+        direct_recovery_semantic_witness_action_response_state_conditioning: bool = False,
         direct_recovery_semantic_witness_demand_normalized_fidelity: bool = False,
         direct_recovery_semantic_witness_robust_occupancy: bool = False,
         direct_recovery_semantic_witness_soft_occupancy_disagreement: bool = False,
@@ -698,6 +758,18 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_semantic_witness_counterfactual_tail_response = bool(
             direct_recovery_semantic_witness_counterfactual_tail_response
         )
+        self.direct_recovery_semantic_witness_action_response_adapter = bool(
+            direct_recovery_semantic_witness_action_response_adapter
+        )
+        self.direct_recovery_semantic_witness_action_response_state_conditioning = bool(
+            direct_recovery_semantic_witness_action_response_state_conditioning
+        )
+        if self.direct_recovery_semantic_witness_action_response_state_conditioning and not self.direct_recovery_semantic_witness_action_response_adapter:
+            raise ValueError("state-conditioned action response requires the action-response adapter")
+        if self.direct_recovery_semantic_witness_action_response_adapter and self.direct_recovery_semantic_witness_root_tail_source:
+            raise ValueError("v48.85 action-response adapter is mutually exclusive with the frozen root-tail adapter family")
+        if self.direct_recovery_semantic_witness_action_response_adapter and self.direct_recovery_semantic_witness_boundary_transport:
+            raise ValueError("v48.85 action-response adapter keeps boundary transport OFF")
         if self.direct_recovery_semantic_witness_structured_tail_field and not self.direct_recovery_semantic_witness_root_tail_source:
             raise ValueError("v48.82 structured tail field requires root-tail source")
         if self.direct_recovery_semantic_witness_signed_tail_channels and not self.direct_recovery_semantic_witness_structured_tail_field:
@@ -1591,12 +1663,30 @@ class OCRAPModel(nn.Module):
         # table is shared across roots/options/regimes and zero-init remains
         # execution-exact native B.
         self.direct_absolute_semantic_witness_gain = None
-        if self.direct_recovery_absolute_semantic_witness_correction and not self.direct_recovery_semantic_witness_root_tail_source:
+        if (
+            self.direct_recovery_absolute_semantic_witness_correction
+            and not self.direct_recovery_semantic_witness_root_tail_source
+            and not self.direct_recovery_semantic_witness_action_response_adapter
+        ):
             if self.encoder_type != "structured_transformer":
                 raise ValueError("OC-SARW requires structured_transformer flat feature layout")
             gain_shape = (6, 2) if self.direct_recovery_semantic_witness_active_constraint_typed_source else (2,)
             self.direct_absolute_semantic_witness_gain = nn.Parameter(
                 torch.zeros(gain_shape, dtype=torch.float32)
+            )
+
+        self.direct_absolute_action_response_adapter = None
+        if self.direct_recovery_semantic_witness_action_response_adapter:
+            if not self.direct_recovery_absolute_semantic_witness_correction:
+                raise ValueError("v48.85 action-response adapter requires the semantic absolute source path")
+            if self.encoder_type != "structured_transformer":
+                raise ValueError("v48.85 action-response adapter requires structured_transformer")
+            if self.direct_candidate_physical_feature_dim <= 0:
+                raise ValueError("v48.85 action-response adapter requires executable raw action features")
+            self.direct_absolute_action_response_adapter = ObservationConsistentActionResponseRootAdapter(
+                self.direct_candidate_physical_feature_dim,
+                self.d_model,
+                state_conditioned=self.direct_recovery_semantic_witness_action_response_state_conditioning,
             )
 
         # v48.78 OC-RTSI source state.  The only learned degree of freedom is
@@ -1906,6 +1996,35 @@ class OCRAPModel(nn.Module):
             group_rows = values.index_select(0, idx)
             nominal_row = values.index_select(0, noms[:1])
             out.index_copy_(0, idx, group_rows - nominal_row)
+        return out
+
+    @staticmethod
+    def _nominal_group_anchor(
+        values: torch.Tensor,
+        group_index: torch.Tensor | None,
+        is_nominal: torch.Tensor | None,
+    ) -> torch.Tensor:
+        """Broadcast the unique nominal value within each scene-time group.
+
+        Malformed groups fail closed to zeros.  This helper is used by V48.85
+        only to anchor the current recovery state; it never imports another
+        scene's state and does not expose labels or regime IDs.
+        """
+        out = torch.zeros_like(values)
+        if group_index is None or is_nominal is None or values.shape[0] <= 0:
+            return out
+        groups = group_index.to(device=values.device)
+        groups = groups.reshape(-1, 1) if groups.dim() == 1 else groups.reshape(groups.shape[0], -1)
+        nominal_mask = is_nominal.to(device=values.device).reshape(-1) > 0.5
+        if groups.shape[0] != values.shape[0] or nominal_mask.shape[0] != values.shape[0]:
+            return out
+        for key in torch.unique(groups, dim=0):
+            idx = torch.where((groups == key.unsqueeze(0)).all(dim=1))[0]
+            noms = idx[nominal_mask[idx]]
+            if noms.numel() != 1:
+                continue
+            nominal_value = values.index_select(0, noms[:1])
+            out.index_copy_(0, idx, nominal_value.expand(idx.numel(), *values.shape[1:]))
         return out
 
     @classmethod
@@ -2903,7 +3022,12 @@ class OCRAPModel(nn.Module):
         Both switches are global factor-ablation flags, never regime inputs.
         Zero gains remain execution-exact native B.
         """
-        if self.direct_absolute_semantic_witness_gain is None and self.direct_absolute_root_tail_source_scale is None and self.direct_absolute_structured_tail_field_weight is None:
+        if (
+            self.direct_absolute_semantic_witness_gain is None
+            and self.direct_absolute_root_tail_source_scale is None
+            and self.direct_absolute_structured_tail_field_weight is None
+            and self.direct_absolute_action_response_adapter is None
+        ):
             return None
         with torch.no_grad():
             root_tokens = self._decode_roots(memory.detach())
@@ -2915,12 +3039,30 @@ class OCRAPModel(nn.Module):
             obs_embeddings = self.obs_embed_head(root_tokens)
             root_expand = root_tokens.unsqueeze(2).expand(-1, -1, self.num_options, -1)
             opt_expand = self._option_tokens(x, option_features)
-            base_margins = self.margin_head(
+            native_base_margins = self.margin_head(
                 torch.cat([root_expand, opt_expand], dim=-1)
             ).squeeze(-1)
             root_logits = root_logits.detach()
             obs_embeddings = obs_embeddings.detach()
-            base_margins = base_margins.detach()
+            root_tokens = root_tokens.detach()
+            opt_expand = opt_expand.detach()
+            native_base_margins = native_base_margins.detach()
+
+        if self.direct_absolute_action_response_adapter is not None:
+            action_relative = self._direct_candidate_raw_relative_features(x, group_index, is_nominal)
+            nominal_roots = self._nominal_group_anchor(root_tokens, group_index, is_nominal)
+            nominal_margins = self._nominal_group_anchor(native_base_margins, group_index, is_nominal)
+            nominal_best = nominal_margins.amax(dim=-1)
+            root_response = self.direct_absolute_action_response_adapter(
+                action_relative, nominal_roots, nominal_best
+            )
+            adapted_roots = root_tokens + root_response.to(dtype=root_tokens.dtype)
+            adapted_expand = adapted_roots.unsqueeze(2).expand(-1, -1, self.num_options, -1)
+            base_margins = self.margin_head(
+                torch.cat([adapted_expand, opt_expand], dim=-1)
+            ).squeeze(-1)
+        else:
+            base_margins = native_base_margins
 
         features = self._direct_absolute_semantic_witness_features(
             semantic_witness_features,
@@ -3336,7 +3478,9 @@ class OCRAPModel(nn.Module):
             positive_option_count = (supported_viability > 0.0).sum(dim=-1).to(dtype=memory.dtype)
             max_common_support = common_support.amax(dim=-1)
         universal_failure = torch.relu(-best_common_viability)
-        if root_tail_source:
+        if self.direct_absolute_action_response_adapter is not None:
+            corrected_margins = base_margins
+        elif root_tail_source:
             # V48.78 OC-RTSI / V48.82 OC-SNTF: reshape the deployable lower tail
             # without restoring an option-wise translation degree.
             # not another option-wise translation.  The basis is derived only
@@ -5135,6 +5279,8 @@ class OCRAPModel(nn.Module):
                     direct_out["direct_recovery_absolute_root_tail_source_scale"] = self.direct_absolute_root_tail_source_scale
                 if self.direct_absolute_structured_tail_field_weight is not None:
                     direct_out["direct_recovery_absolute_structured_tail_field_weight"] = self.direct_absolute_structured_tail_field_weight
+                if self.direct_absolute_action_response_adapter is not None:
+                    direct_out["direct_recovery_absolute_action_response_projection"] = self.direct_absolute_action_response_adapter.action_projection
                 direct_out["direct_recovery_absolute_semantic_witness_viability"] = sw_viability
                 direct_out["direct_recovery_absolute_semantic_common_option_support"] = sw_support
                 direct_out["direct_recovery_absolute_semantic_best_common_viability"] = sw_best
@@ -5302,6 +5448,8 @@ class OCRAPModel(nn.Module):
                 out["direct_recovery_absolute_root_tail_source_scale"] = self.direct_absolute_root_tail_source_scale
             if self.direct_absolute_structured_tail_field_weight is not None:
                 out["direct_recovery_absolute_structured_tail_field_weight"] = self.direct_absolute_structured_tail_field_weight
+            if self.direct_absolute_action_response_adapter is not None:
+                out["direct_recovery_absolute_action_response_projection"] = self.direct_absolute_action_response_adapter.action_projection
             out["direct_recovery_absolute_semantic_witness_viability"] = sw_viability
             out["direct_recovery_absolute_semantic_common_option_support"] = sw_support
             out["direct_recovery_absolute_semantic_best_common_viability"] = sw_best

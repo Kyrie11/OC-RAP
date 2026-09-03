@@ -8411,3 +8411,98 @@ Near and Contact remain one planner and one signed recovery object. Near asks wh
 
 ### Continue to avoid
 All prior exclusions remain. V48.84 newly forbids using the P83 AUC/selectivity gain as permission to combine O82 and P83 fields, tune their mixing weight, increase field capacity, or reopen boundary transport. Dataset reconstruction remains prohibited because current evidence indicates a representation/action-observability question, not dataset corruption or supervision scarcity.
+
+## V48.85 OC-SARR — Observation-Consistent State-Action Recovery Representation (2026-09-02)
+
+### Entry condition / authoritative V48.84 result
+
+V48.84 OC-SAOP is engineering-valid and attribution-ready, but its preregistered status is **`STAGE_I_ACTION_OBSERVABILITY_STOP`**. The planner checkpoint is untouched, the paired within-scene-time action permutation control passes, and balanced/precision reproduce the same frozen V48.56-A Stage-I features as intended. The STOP is not evidence that the frozen roots contain literally zero action information: dev-Contact has a clear delta true-vs-shuffled safe AUC gain (~+0.072) and top-1 safe-recovery gain (~+0.318), and the state-conditioned probe has positive true-vs-shuffled continuous recovery-advantage correlation in all four unique splits. However the registered action-observability requirements fail decisively: delta safe AUC is positive/material in only 2/8 counted cells, harmful action observability in 0/8, certificate safe-AUC material in 0/4, and the equal-capacity state-conditioned probe has no registered material safe-AUC increment. Near and certificate action selection do not generalize beyond the scene-preserving shuffled control.
+
+Therefore the frozen Stage-I/root representation is **insufficient as a stable action-observable physical recovery representation**, even though it contains partial action-order/continuous-advantage cues. Per the V48.84 branch, the frozen structured-tail adapter family remains closed and the only newly opened layer is a narrow absolute-path action-response representation. Broad encoder/root retraining is still forbidden.
+
+### New dominant bottleneck
+
+The first open layer is now:
+
+`observation-consistent state-conditioned action-response representation for signed physical recovery reserve/debt`.
+
+The planner already has observation-consistent ambiguity structure, actuator-realizable recovery continuations, weak-root/nested-tail semantics, and evidence that reserve and debt require different local channels. What is missing is an observable representation of **how the executable candidate action changes physical recovery on the current latent recovery state**. V48.83 shows that a frozen candidate-minus-nominal latent delta reduces scene leakage but loses true Contact recovery; V48.84 shows that this missing signal cannot be recovered reliably by a linear probe of the frozen roots. The next intervention must therefore create that action-response representation narrowly, without reopening source-field capacity search.
+
+### V48.85 intervention
+
+Name: **OC-SARR — Observation-Consistent State-Action Recovery Representation**.
+
+V48.85 keeps shared Stage-I encoder/root-decoder parameters, root probabilities, relative ranker, OC-MERO information pattern, actuator projection, route/re-entry semantics, proposal set/top-K=5, threshold=0.5, V48.80 structural-interval truth scaffold, datasets and boundary transport execution-identical. It does **not** reopen the V48.82/V48.83 structured-tail field family.
+
+The new representation is absolute-path only. From the existing leakage-safe executable action slices (prefix parameters + macro + executable prefix states + controls; excluding ego/shared scene and scalar audit/label fields), form the exact same-scene-time counterfactual action response
+
+`Delta a = a_candidate - a_nominal`.
+
+A zero-initialized shared signed linear action operator maps `Delta a` into a root-token residual:
+
+`u^+/u^- = tanh(W^+/W^- LN(Delta a))`,
+
+where the channel is selected by the frozen nominal root's best native margin sign (positive reserve vs negative debt). The projection is the **only trainable tensor**, has no bias, and is shared across roots/options/regimes. `Delta a=0` makes every nominal source residual exactly zero.
+
+Two equal-capacity causal arms are registered:
+
+1. `Q85_ACTION_RESPONSE`: inject the signed action response directly into the frozen candidate root token only for the absolute margin path;
+2. `R85_STATE_ACTION_MAIN`: use the identical trainable tensor but multiply the root residual by the parameter-free nominal-root gate `1+tanh(LN(r_nominal,k))`. This creates root-local state x action interaction without adding parameters, root IDs, option IDs, regime IDs or an MLP.
+
+The frozen option tokens and frozen margin head then map the adapted root token to root-option physical margins before the unchanged OC-MERO source. The intervention therefore learns neither an option-wise scalar translation nor a free final admission residual.
+
+### Unified Near / Contact semantics
+
+The signed channels are not a regime router. Near asks whether the action response preserves/increases **positive recovery reserve** on weak roots; Contact asks whether the same response operator repays **negative recovery debt**. Both are represented by the same action-response layer, with channel selection determined by the frozen signed recovery state rather than a Near/Contact label.
+
+### Preregistered V48.85 decision
+
+Historical L80 is the stable low-capacity reference. Q85 and R85 have identical trainable capacity.
+
+**Q85-L80 action-response representation GO** requires:
+- source AUC positive in >=6/8 cells and >=4/8 `delta AUC >= +0.003`;
+- interval Huber lower in >=6/8 and >=4/8 by at least 0.003;
+- harmful/TI <=0.25 and no cell > L80+0.02;
+- powered safe-positive pass never declines, with >=2 cells improving by >=0.05 including at least one Near and one Contact cell.
+
+**R85-Q85 state-conditioning increment GO** requires:
+- source AUC positive in >=6/8 and >=4/8 `delta >= +0.003`;
+- interval Huber lower in >=6/8;
+- harmful/TI <=0.25, no cell > Q85+0.005 and false admission nonincrease in >=6/8;
+- powered safe-positive pass never declines and at least one Contact cell improves by >=0.05.
+
+**R85-L80 full-source GO** requires:
+- source AUC positive 8/8 and >=6/8 `delta >= +0.01`;
+- interval Huber lower in >=6/8;
+- historical selectivity caps and matched L80+0.02 caps;
+- powered safe-positive pass never declines, with >=2 material +0.05 cells including Near and Contact.
+
+Branch rules:
+- full-source GO -> stop absolute-source design, freeze it, verify frozen RIFA, then paired Safe non-interference, Near critical-safety closed loop, Contact post-collision/secondary metrics and external baselines;
+- Q85 and R85 mechanism GO but full source STOP -> state-conditioned raw action response is validated; adjudicate the already-known absolute-boundary debt without increasing representation capacity;
+- Q85 GO but R85 increment STOP -> retain the action-response representation without the state gate and retest the full source; no capacity sweep;
+- Q85 STOP -> the narrow action-response representation branch is falsified. Do not enlarge it. Next adjudicate action-response supervision/raw executable-action sufficiency before any representation expansion; broad encoder/root retraining remains forbidden.
+
+### Continue to avoid / newly closed directions
+
+All prior exclusions remain active. In particular, do **not** reopen: N82/O82/P83 frozen structured-tail fields, field rank/width/depth or state/delta mixing sweeps, option/root/class/regime IDs, generic MLP/tail mixers, option-wise scalar/gain transport, truth-contract floor/cap refinements, external ball/box/hull/anchor/jerk families, B1/B2 sweeps, source LR/threshold/gain grids, proposal/top-K expansion, relative-ranker modification, boundary transport before source GO, or dataset reconstruction.
+
+V48.85 additionally forbids using the narrow representation-learning authorization as permission for broad Stage-I/encoder retraining. Only the absolute-only action-response projection is trainable in this experiment.
+
+### Speed / reproducibility policy
+
+Frozen sufficient-state caching remains disabled because the historical adaptation path executes frozen transformer/root modules under train mode with nonzero dropout; caching would freeze a stochastic realization and can change gradients/early stopping/best checkpoint. Safe optimizations remain persistent tensor caching, 8-worker truth-index build/reuse, single-thread BLAS, best-only checkpoints, and pairing Q85/R85 on the two A30s for each variant.
+
+
+## V48.85.1 OC-SARR-ENGFIX — deterministic runtime-contract repair (2026-09-02)
+
+### Engineering blocker
+The original V48.85 runtime preflight could fail before any GPU training with `action-response synthetic contract failed`.  The failure was in the **synthetic checker**, not the OC-SARR forward.  The checker filled every coefficient of `action_projection` with the same constant.  OC-SARR applies a bias-free LayerNorm to the candidate-minus-nominal action first, so the normalized action has zero feature mean; a constant projection is therefore mathematically orthogonal to that vector and can collapse to exact zero.  Whether `torch.allclose` observed a residual state-conditioning difference depended on PyTorch/platform floating-point roundoff.
+
+### Repair
+The runtime contract now uses a deterministic, non-constant projection pattern and deterministic action/root inputs.  It separately fail-closes on shape, zero initialization, equal Q/R capacity, exact nominal zero, finite outputs, a material non-zero action response, and a material state-conditioning effect.  It records the maximum action response and Q/R state delta for audit.  No random tensors or roundoff-dependent `allclose` test remain.
+
+The known PyTorch `nested_tensor ... norm_first=True` message is a performance warning from Transformer construction and is suppressed only inside the runtime preflight; it is not treated as a correctness condition.
+
+### Scientific invariance
+No OC-SARR algorithm, model forward, trainable parameter, loss, dataset, sampler, LR/epochs, threshold, Q/R arm definition, truth contract, RIFA/OC-MERO path, or preregistered GO/STOP condition changed.  Algorithm version remains V48.85 OC-SARR; engineering version is `v48.85.1-OC-SARR-ENGFIX`.  Existing V48.85 exclusions and branch rules remain unchanged.
