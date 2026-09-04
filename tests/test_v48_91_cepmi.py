@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+from pathlib import Path
 from types import SimpleNamespace
 import numpy as np
 from ocrap.algorithms.lcv import normalize_weights, weighted_lcvar
@@ -7,6 +8,8 @@ from ocrap.v48_91_common_exogenous_physical_margin import (
     physical_margin_from_teacher_diag, future_physical_matrix, future_nested_tail_influence,
     audit_future_physical_response,
 )
+
+ROOT = Path(__file__).resolve().parents[1]
 
 def sample(assign, sources, metas, mf, probs=None):
     mf=np.asarray(mf,dtype=np.float64);assign=np.asarray(assign,dtype=np.int64);F,L=mf.shape;K=int(assign.max())+1
@@ -58,3 +61,85 @@ def test_different_exogenous_realization_is_not_matched():
     assert rec.valid
     assert rec.common_exogenous_tail_coverage==0.0
     assert rec.response_sign_identifiable_mass==0.0
+
+
+def _load_v4891_sidecar_tool_module():
+    import importlib.util
+    path = ROOT / "tools" / "build_v48_91_common_exogenous_physical_sidecar.py"
+    spec = importlib.util.spec_from_file_location("v4891_sidecar_tool", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_v48_91_1_legacy_wx_source_index_is_a_provenance_migration_key(tmp_path: Path) -> None:
+    mod = _load_v4891_sidecar_tool_module()
+    sample = {
+        "source_scenario_index": np.asarray(-1),
+        "womd_source_pattern": np.asarray(""),
+        "scene_id": np.asarray("waymax_deadbeef__wx00012659"),
+        "legacy_scenario_id": np.asarray(""),
+        "original_scenario_id": np.asarray(""),
+        "__path__": str(tmp_path / "waymax_deadbeef__wx00012659_t0029_a05.npz"),
+    }
+    prov = mod._resolve_replay_provenance(
+        sample,
+        source_pattern_override="/womd/validation/validation_tfexample.tfrecord@150",
+        replay_config_pattern=None,
+    )
+    assert prov["index"] == 12659
+    assert prov["index_source"] == "legacy_wx_migration_key"
+    assert prov["pattern_source"] == "cli_or_env_override"
+
+
+def test_v48_91_1_explicit_npz_provenance_remains_authoritative(tmp_path: Path) -> None:
+    mod = _load_v4891_sidecar_tool_module()
+    sample = {
+        "source_scenario_index": np.asarray(42),
+        "womd_source_pattern": np.asarray("/stored/validation.tfrecord@150"),
+        "scene_id": np.asarray("waymax_deadbeef__wx00012659"),
+        "__path__": str(tmp_path / "sample.npz"),
+    }
+    prov = mod._resolve_replay_provenance(
+        sample,
+        source_pattern_override="/override/validation.tfrecord@150",
+        replay_config_pattern="/config/validation.tfrecord@150",
+    )
+    assert prov["index"] == 42
+    assert prov["index_source"] == "npz"
+    assert prov["pattern"] == "/stored/validation.tfrecord@150"
+    assert prov["pattern_source"] == "npz"
+
+
+def test_v48_91_1_runner_accepts_read_only_womd_source_override() -> None:
+    runner = (ROOT / "scripts" / "run_v48_91_dcp_drfc_bcde_rifa_cepmi.sh").read_text()
+    assert "V4891_WOMD_SOURCE" in runner
+    assert "--womd-source-pattern" in runner
+
+
+def test_v48_91_1_origin_resume_contract_can_recover_pattern_and_build_config(tmp_path: Path) -> None:
+    mod = _load_v4891_sidecar_tool_module()
+    role = tmp_path / "protocol" / "evidence_adapt_dev_near_contact"
+    source = tmp_path / "calibration_near_contact"
+    raw = tmp_path / "raw_calibration_near_contact"
+    shard2 = tmp_path / "shards" / "calibration_near_w2"
+    shard3 = tmp_path / "shards" / "calibration_near_w3"
+    (role / "samples").mkdir(parents=True)
+    source.mkdir(); raw.mkdir(); shard2.mkdir(parents=True); shard3.mkdir(parents=True)
+    (role / "split_provenance.json").write_text(json.dumps({"source": str(source)}))
+    (source / "scene_filter_provenance.json").write_text(json.dumps({"source": str(raw)}))
+    (raw / "merged_dataset_summary.json").write_text(json.dumps({"input_roots": [str(shard2), str(shard3)]}))
+    for root, worker in ((shard2, 2), (shard3, 3)):
+        (root / "dataset_summary.json").write_text(json.dumps({
+            "scenario_start_index": 11000, "scenario_stride": 6, "scenario_worker_index": worker,
+            "generation": {"num_roots": 8, "num_recovery_options": 12},
+        }))
+        (root / "resume_contract.json").write_text(json.dumps({
+            "semantic_config": {"womd_patterns": "/exact/validation.tfrecord@150", "sample_rate_hz": 10}
+        }))
+    sample_path = role / "samples" / "waymax_deadbeef__wx00012658_t0029_a05.npz"
+    sample_path.write_bytes(b"")
+    origin = mod._origin_replay_metadata(sample_path, 12658)
+    assert origin["origin_shard_root"] == str(shard2)
+    assert origin["semantic_config"]["womd_patterns"] == "/exact/validation.tfrecord@150"

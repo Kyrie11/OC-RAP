@@ -9429,3 +9429,17 @@ runs/OC-RAP-v48.91-common-exogenous-future-physical-sidecar-summary.json
 
 ### Convergence / CCF-A status
 Absolute source remains **NOT CONVERGED**.  V48.90 does not change planner performance and therefore cannot justify Safe/Near/Contact SOTA claims.  The method-level contribution is increasingly centered on **identifiability before capacity**: OC-MERO defines deployable information structure, OC-CEPT transports action-dependent latent partitions, V48.91 tests whether the physical response is identifiable at the common-exogenous causal unit, and RIFA keeps any later absolute admission role-isolated.  External baselines and final closed-loop claims remain downstream of an authorized/frozen absolute source.
+
+## V48.91.1 engineering provenance migration fix (2026-09-04)
+
+V48.91.0 CEPMI correctly required exact raw replay before constructing the common-exogenous future-level physical sidecar, but the first target run exposed a historical provenance-schema mismatch in the frozen `calibration_v48_14_prism_4814` protocol samples.  Those legacy NPZ files predate explicit serialization of `womd_source_pattern` / `source_scenario_index`; however their immutable legacy scene/sample identity retains the deterministic Waymax global source index as `__wxNNNNNNNN` (for example `__wx00012659`).  Existing OC-RAP provenance/closed-loop code already treats this suffix as a migration key rather than semantic supervision.
+
+V48.91.1 is therefore **engineering-only**.  It does not change CEPMI mathematics, cohort membership, teacher labels, roots, proposals, OC-MERO, thresholds, or any planner parameter.  The sidecar builder now resolves replay provenance in this order:
+
+1. explicit NPZ provenance when present;
+2. otherwise an exact read-only raw WOMD pattern supplied through `V4891_WOMD_SOURCE` / `--womd-source-pattern` (or `womd_patterns` from an explicit `V4891_REPLAY_CONFIG`);
+3. when the explicit source index is absent, recover only the deterministic source index from the legacy `__wxNNNNNNNN` migration key.
+
+The replay remains fail-closed: the recovered raw scenario must reproduce stored history/ego state, future count/probabilities, exogenous future-class keys, and active root-option structural margins.  Therefore a wrong raw source pattern or wrong migration index cannot silently create a physical label.  The canonical NPZ is never modified; the sidecar summary records how pattern/index provenance was resolved.
+
+This fix does **not** authorize dataset reconstruction or future-level labels as planner inputs.  `m_future_physical` remains an offline teacher/audit sidecar used only to decide whether the already-preregistered common-exogenous physical response is identifiable.  Boundary transport and learned response remain OFF until CEPMI itself passes its original scientific gates.

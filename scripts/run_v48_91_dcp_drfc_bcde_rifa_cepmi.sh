@@ -15,6 +15,7 @@ V90_INDEX="${V4891_V90_INDEX:-$BASE_OUT/OC-RAP-v48.90-partition-transport-audit.
 V90_SUMMARY="${V4891_V90_SUMMARY:-$BASE_OUT/OC-RAP-v48.90-partition-transport-audit-summary.json}"
 V90_COMPARE="${V4891_V90_COMPARE:-$BASE_OUT/OC-RAP-v48.90-DCP-DRFC-BCDE-RIFA-OC-CEPT-comparison.json}"
 REPLAY_CONFIG="${V4891_REPLAY_CONFIG:-}"
+WOMD_SOURCE_PATTERN="${V4891_WOMD_SOURCE:-${WOMD_VAL:-}}"
 RUNTIME="$BASE_OUT/OC-RAP-v48.91-runtime-code-contract.json"
 SIDECAR="$BASE_OUT/OC-RAP-v48.91-common-exogenous-future-physical-sidecar.jsonl.gz"
 SIDECAR_SUMMARY="$BASE_OUT/OC-RAP-v48.91-common-exogenous-future-physical-sidecar-summary.json"
@@ -35,6 +36,7 @@ if not(c.get('valid') and q.get('exogenous_partition_transport_go') and q.get('p
 PY
 REPLAY_ARGS=()
 if [[ -n "$REPLAY_CONFIG" ]]; then REPLAY_ARGS+=(--replay-config "$REPLAY_CONFIG"); fi
+if [[ -n "$WOMD_SOURCE_PATTERN" ]]; then REPLAY_ARGS+=(--womd-source-pattern "$WOMD_SOURCE_PATTERN"); fi
 python tools/build_v48_91_common_exogenous_physical_sidecar.py \
   --v48-90-audit "$V90_INDEX" --output "$SIDECAR" --summary "$SIDECAR_SUMMARY" "${REPLAY_ARGS[@]}"
 python tools/build_v48_91_common_exogenous_physical_response_audit.py \
