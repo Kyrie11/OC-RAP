@@ -8586,3 +8586,108 @@ All previous exclusions remain. In addition:
 
 ### Engineering / speed policy
 V48.86 keeps the safe execution optimizations already validated: persistent tensor cache, 8-worker sidecar build, single-thread BLAS, best-only checkpoint saving, and S86/T86 paired across the two A30s. Frozen sufficient-state activation caching remains disabled because frozen transformer/root modules execute under train mode with nonzero dropout; caching their activations would change the stochastic forward and invalidate exact attribution.
+
+## V48.86 authoritative result + V48.87 OC-BARR (2026-09-03)
+
+### V48.86 reliability / scientific decision
+The uploaded V48.86 OC-CRSC run is engineering-valid and scientifically attributable. The top-level pipeline reports `valid=true`, `attribution_ready=true`, `errors=[]`, `test_roots_read=false`, `dataset_reconstruction=false`. Runtime-file SHA256 values match the uploaded V48.86 code. S86/T86 both complete balanced+precision training/calibration; all 170 shared Stage-I tensors remain bitwise unchanged and the only trainable V48.86 state is Q85's `direct_absolute_action_response_adapter.action_projection[2,192,141]`. Reference/dataset/protocol/scene-disjoint/checkpoint contracts pass.
+
+The preregistered scientific status is **`COUNTERFACTUAL_RECOVERY_SUPERVISION_STOP`**. There is no GO branch:
+- `S86-Q85`: source AUC is positive in 4/8 cells (material >=0.003 in 4/8), false admission drops in all 8 cells, but physical interval Huber worsens in 8/8 and powered safe-positive recall does not improve in Near or Contact. Contact safe-positive recall is actively lost.
+- `T86-S86`: 0/8 AUC increment and zero deployment-metric increment. All four formal S86/T86 runs select **epoch 0**, so the promoted checkpoints are exact zero-response initialization; T86's structural pairwise objective has no held-out promoted effect under the root-independent action operator.
+- `T86-L80`: AUC positive 6/8 but only 4/8 >=+0.01, interval Huber degrades 8/8, and no powered Near/Contact safe-positive recovery is admitted. Full-source GO fails.
+
+The most important partial success is S86's selectivity repair: relative to Q85 it reduces harmful/TI admission from roughly 0.18--0.35 to ~0--0.022 and improves Near source AUC by about +0.027 to +0.081. The failure is recall/selective action identity: it removes the Q85 Contact safe-positive recoveries (dev about 0.297 -> 0; certificate about 0.129 -> 0).
+
+A direct audit of the registered action-response truth sidecar explains why the response-interval objective alone is weakly identifying. Among deployable non-nominal candidates, approximately 94.5--94.7% of response intervals contain zero. In dev-Contact, only 17.5% of safe-positive candidates have a strictly positive response lower bound; 82.5% are still zero-compatible. Harmful deployable candidates are likewise mostly zero-compatible (~90--93%). Therefore S86 is mathematically valid but cannot by itself identify *which action direction should produce recovery*.
+
+### V48.86 mechanism promotion / closure
+**Retain / promote as evidence or formal scaffold:**
+- counterfactual candidate-minus-nominal response is the right causal object;
+- V48.86 interval-difference truth construction is a valid partial-identification scaffold;
+- structural safe-positive/harmful ordering remains a meaningful *supervision concept*, but its current action-only realization is not promoted;
+- OC-MERO observation consistency, actuator-realizable recovery construction, signed reserve/debt semantics, RIFA role isolation, top-K=5 and regime-agnostic policy remain frozen mainline components.
+
+**Close:**
+- the root-independent raw-action response representation as a sufficient production source;
+- V48.85 parameter-free multiplicative root-state gate and all scale/form/depth/mixing sweeps of it;
+- the current T86 pairwise ordering *on the root-independent operator* as a standalone Main mechanism;
+- action-projection rank/width/depth sweeps or action MLPs;
+- broad encoder/root retraining, root/option/class/regime IDs, regime router/expert/threshold/budget, proposal expansion, LR/gain/threshold grids, boundary transport before source GO, dataset reconstruction, frozen-tail-family reopening, and relative-ranker changes.
+
+### Updated dominant bottleneck
+The first open algorithmic layer is now:
+
+`observation-conditioned / latent-root-local action sensitivity for signed counterfactual recoverability`.
+
+The same executable candidate-minus-nominal action can have different recovery effects depending on the observation-compatible latent recovery state. V48.86 proves that teaching a root-independent action operator a better response target is insufficient: the representation must express an **observation x action interaction**, while remaining deployable and regime-agnostic.
+
+Near and Contact remain the two sides of the same signed object:
+- Near: preserve positive recovery reserve/headroom on the weak observation-compatible roots as the zero boundary is approached;
+- Contact: repay negative penetration/re-contact/secondary-collision debt and cross the same zero boundary with a persistent executable recovery.
+No Near/Contact router is allowed.
+
+### V48.87 intervention: OC-BARR
+Name: **Observation-Consistent Bilinear Action-Root Response (OC-BARR)**.
+
+V48.87 replaces Q85's root-independent action projection only inside the absolute source with a shared low-rank bilinear interaction between:
+1. the candidate-minus-nominal executable raw action `Delta a`, and
+2. the frozen nominal observation-derived latent root token `r_k`.
+
+For reserve/debt channel `c` selected only by the frozen native root margin:
+
+`u_c = tanh(A_c LN(Delta a))`
+
+`v_kc = tanh(B_c LN(r_k))`
+
+`Delta r_kc = C_c (u_c elementwise_mul v_kc) / sqrt(rank)`
+
+`response_k = tanh(Delta r_kc)`.
+
+Fixed rank is **51**, not swept. Trainable parameter count is:
+- action factor `A[2,51,141]`: 14,382;
+- root factor `B[2,51,192]`: 19,584;
+- output factor `C[2,192,51]`: 19,584;
+- total **53,550**, slightly below Q85's 54,144.
+
+The output factor is zero-initialized; action/root factors use Xavier initialization. Therefore epoch 0 is exact native behavior, a nominal `Delta a=0` has exact zero response, and the first backward pass has non-zero gradients through `C`. No new regime/state ID, generic MLP, boundary transport or Stage-I trainable state is added.
+
+This is **not** a reopening of V48.85's failed state gate. The old gate only scaled an already root-independent response after projection. BARR changes the response *direction itself* through a learned root-action cross term.
+
+### V48.87 necessary-and-sufficient factorial experiment
+Historical S86/T86 are reused. Only two new arms are trained:
+
+| Arm | Representation | Physical response interval | Structural ordering |
+|---|---|---:|---:|
+| historical S86 | action-only | yes | no |
+| historical T86 | action-only | yes | yes |
+| **U87_BILINEAR_RESPONSE_INTERVAL** | **bilinear root x action** | yes | no |
+| **V87/Main_BILINEAR_SELECTIVE_RESPONSE** | **bilinear root x action** | yes | yes |
+
+Causal comparisons:
+- `U87-S86`: representation increment under identical physical response-interval supervision;
+- `V87-T86`: **primary representation test** under identical selective supervision;
+- `V87-U87`: structural-ordering increment after the representation can interact with observation-derived roots;
+- `V87-L80`: full absolute-source GO.
+
+`V87-T86` is the primary representation gate because ~95% of deployable physical response intervals are zero-compatible; requiring U87 alone to solve action sign would confound representation quality with known target under-identification.
+
+Preregistered BARR interaction GO requires:
+1. V87 best epoch > 0 in both balanced and precision (held-out selective objective must actually promote a learned interaction);
+2. `V87-T86` source AUC positive >=6/8 and >=4/8 `delta>=+0.003`;
+3. harmful/TI <=0.25 in all cells;
+4. powered safe-positive pass gains >=+0.05 in at least one Near and one Contact cell;
+5. newly admitted harmful rows across the 8 audited cells <=8.
+
+U87 interval-only support is diagnostic and requires both variants best epoch >0, AUC positive >=5/8 and interval Huber nondegrade >=4/8. `V87-U87` structural increment GO requires AUC positive >=6/8, >=4/8 material, controlled false admission, and material safe-positive gains in both Near and Contact.
+
+Full `V87-L80` GO keeps the high publication gate: AUC 8/8 positive, >=6/8 `delta>=+0.01`, harmful/TI <=0.25 and <=L80+0.02, interval Huber nondegrade >=6/8, and material safe-positive improvement in both Near and Contact.
+
+Branch rules:
+- BARR interaction + full-source GO -> freeze absolute source, frozen-RIFA verification, Safe paired non-interference, Near critical-safety closed loop, Contact post-collision/secondary metrics, then external SOTA baselines;
+- BARR interaction GO / full-source STOP -> freeze the interaction representation and adjudicate only remaining target/boundary debt, no capacity increase;
+- U87 support GO / V87-U87 STOP -> retain bilinear+interval representation but close the current pairwise selective constraint;
+- BARR interaction STOP (especially best_epoch=0 again) -> close the low-rank root-action bilinear branch and move to **root-local response-target identifiability**; do not increase rank/depth or open a broad encoder/regime router.
+
+### Convergence state
+**NOT CONVERGED.** V48.86 does not meet the full absolute-source freeze condition, so external SOTA baselines and final Safe/Near/Contact closed-loop claims remain premature. V48.87 is the next registered adjudication.

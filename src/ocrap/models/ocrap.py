@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import torch
 from torch import nn
 
@@ -316,6 +318,90 @@ class ObservationConsistentActionResponseRootAdapter(nn.Module):
         return response
 
 
+class ObservationConsistentBilinearActionRootResponseAdapter(nn.Module):
+    """V48.87 narrow observation x action recovery-response operator.
+
+    V48.86 shows that a root-independent raw-action response cannot generalize
+    selective recovery: the same candidate-minus-nominal executable action must
+    be interpreted through the currently observable latent recovery root.  This
+    adapter therefore learns only a low-rank bilinear interaction between the
+    frozen nominal root token and the executable action delta.  It adds no
+    generic MLP, root/option/regime ID, router, or Stage-I retraining.
+
+    The reserve/debt channel is still selected by the frozen native root margin,
+    exactly as in V48.85. With rank=51 at d_model=192/action_dim=141, this has
+    53,550 trainable parameters, slightly fewer than Q85's 54,144.  The output
+    factor is zero-initialized while the action/root factors use Xavier init;
+    epoch 0 is execution-exact native behavior, nominal actions are exactly
+    zero, and first-step gradients are non-zero through the output factor.
+    """
+
+    def __init__(self, action_dim: int, d_model: int, *, rank: int = 51):
+        super().__init__()
+        self.action_dim = int(action_dim)
+        self.d_model = int(d_model)
+        self.rank = int(rank)
+        if self.rank <= 0:
+            raise ValueError("bilinear action-root response rank must be positive")
+        self.action_norm = nn.LayerNorm(self.action_dim, elementwise_affine=False)
+        self.root_norm = nn.LayerNorm(self.d_model, elementwise_affine=False)
+        self.action_factor = nn.Parameter(
+            torch.empty((2, self.rank, self.action_dim), dtype=torch.float32)
+        )
+        self.root_factor = nn.Parameter(
+            torch.empty((2, self.rank, self.d_model), dtype=torch.float32)
+        )
+        self.output_factor = nn.Parameter(
+            torch.zeros((2, self.d_model, self.rank), dtype=torch.float32)
+        )
+        nn.init.xavier_uniform_(self.action_factor)
+        nn.init.xavier_uniform_(self.root_factor)
+
+    @property
+    def trainable_parameter_count(self) -> int:
+        return int(
+            self.action_factor.numel()
+            + self.root_factor.numel()
+            + self.output_factor.numel()
+        )
+
+    def forward(
+        self,
+        action_relative: torch.Tensor,
+        nominal_root_tokens: torch.Tensor,
+        nominal_root_best_margin: torch.Tensor,
+    ) -> torch.Tensor:
+        if action_relative.shape[-1] != self.action_dim:
+            raise ValueError(
+                "bilinear action-root response action dimension mismatch: "
+                f"{action_relative.shape[-1]} != {self.action_dim}"
+            )
+        if nominal_root_tokens.ndim != 3 or nominal_root_tokens.shape[-1] != self.d_model:
+            raise ValueError("bilinear action-root response nominal root-token shape mismatch")
+        if nominal_root_best_margin.shape != nominal_root_tokens.shape[:2]:
+            raise ValueError("bilinear action-root response nominal root-margin shape mismatch")
+
+        a = self.action_norm(action_relative.float())
+        r = self.root_norm(nominal_root_tokens.float())
+        action_latent = torch.tanh(
+            torch.einsum("ba,cra->bcr", a, self.action_factor.float())
+        )
+        root_latent = torch.tanh(
+            torch.einsum("bkd,crd->bkcr", r, self.root_factor.float())
+        )
+        interaction = root_latent * action_latent.unsqueeze(1)
+        response_all = torch.einsum(
+            "bkcr,cdr->bkcd", interaction, self.output_factor.float()
+        ) / math.sqrt(float(self.rank))
+
+        channel = (nominal_root_best_margin.float() < 0.0).long()
+        gather_index = channel.unsqueeze(-1).unsqueeze(-1).expand(
+            -1, -1, 1, self.d_model
+        )
+        response = response_all.gather(2, gather_index).squeeze(2)
+        return torch.tanh(response).to(dtype=nominal_root_tokens.dtype)
+
+
 class OCRAPModel(nn.Module):
     """Neural OC-RAP model with a learned root-query decoder.
 
@@ -431,6 +517,7 @@ class OCRAPModel(nn.Module):
         direct_recovery_semantic_witness_counterfactual_tail_response: bool = False,
         direct_recovery_semantic_witness_action_response_adapter: bool = False,
         direct_recovery_semantic_witness_action_response_state_conditioning: bool = False,
+        direct_recovery_semantic_witness_action_root_bilinear_interaction: bool = False,
         direct_recovery_semantic_witness_demand_normalized_fidelity: bool = False,
         direct_recovery_semantic_witness_robust_occupancy: bool = False,
         direct_recovery_semantic_witness_soft_occupancy_disagreement: bool = False,
@@ -764,8 +851,19 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_semantic_witness_action_response_state_conditioning = bool(
             direct_recovery_semantic_witness_action_response_state_conditioning
         )
+        # V48.87 OC-BARR: replace Q85's root-independent action projection with
+        # a low-rank nominal-root x executable-action interaction.  This is the
+        # exact narrow observation x action branch preregistered after V48.86
+        # STOP, not a re-opening of the failed parameter-free V48.85 state gate.
+        self.direct_recovery_semantic_witness_action_root_bilinear_interaction = bool(
+            direct_recovery_semantic_witness_action_root_bilinear_interaction
+        )
         if self.direct_recovery_semantic_witness_action_response_state_conditioning and not self.direct_recovery_semantic_witness_action_response_adapter:
             raise ValueError("state-conditioned action response requires the action-response adapter")
+        if self.direct_recovery_semantic_witness_action_root_bilinear_interaction and not self.direct_recovery_semantic_witness_action_response_adapter:
+            raise ValueError("bilinear action-root interaction requires the action-response adapter path")
+        if self.direct_recovery_semantic_witness_action_root_bilinear_interaction and self.direct_recovery_semantic_witness_action_response_state_conditioning:
+            raise ValueError("V48.87 bilinear action-root interaction must not reopen the closed V48.85 state gate")
         if self.direct_recovery_semantic_witness_action_response_adapter and self.direct_recovery_semantic_witness_root_tail_source:
             raise ValueError("v48.85 action-response adapter is mutually exclusive with the frozen root-tail adapter family")
         if self.direct_recovery_semantic_witness_action_response_adapter and self.direct_recovery_semantic_witness_boundary_transport:
@@ -1683,11 +1781,20 @@ class OCRAPModel(nn.Module):
                 raise ValueError("v48.85 action-response adapter requires structured_transformer")
             if self.direct_candidate_physical_feature_dim <= 0:
                 raise ValueError("v48.85 action-response adapter requires executable raw action features")
-            self.direct_absolute_action_response_adapter = ObservationConsistentActionResponseRootAdapter(
-                self.direct_candidate_physical_feature_dim,
-                self.d_model,
-                state_conditioned=self.direct_recovery_semantic_witness_action_response_state_conditioning,
-            )
+            if self.direct_recovery_semantic_witness_action_root_bilinear_interaction:
+                self.direct_absolute_action_response_adapter = (
+                    ObservationConsistentBilinearActionRootResponseAdapter(
+                        self.direct_candidate_physical_feature_dim,
+                        self.d_model,
+                        rank=51,
+                    )
+                )
+            else:
+                self.direct_absolute_action_response_adapter = ObservationConsistentActionResponseRootAdapter(
+                    self.direct_candidate_physical_feature_dim,
+                    self.d_model,
+                    state_conditioned=self.direct_recovery_semantic_witness_action_response_state_conditioning,
+                )
 
         # v48.78 OC-RTSI source state.  The only learned degree of freedom is
         # a single non-negative global scale on a *deterministic OC-MERO tail
@@ -5280,7 +5387,12 @@ class OCRAPModel(nn.Module):
                 if self.direct_absolute_structured_tail_field_weight is not None:
                     direct_out["direct_recovery_absolute_structured_tail_field_weight"] = self.direct_absolute_structured_tail_field_weight
                 if self.direct_absolute_action_response_adapter is not None:
-                    direct_out["direct_recovery_absolute_action_response_projection"] = self.direct_absolute_action_response_adapter.action_projection
+                    if hasattr(self.direct_absolute_action_response_adapter, "action_projection"):
+                        direct_out["direct_recovery_absolute_action_response_projection"] = self.direct_absolute_action_response_adapter.action_projection
+                    else:
+                        direct_out["direct_recovery_absolute_action_response_action_factor"] = self.direct_absolute_action_response_adapter.action_factor
+                        direct_out["direct_recovery_absolute_action_response_root_factor"] = self.direct_absolute_action_response_adapter.root_factor
+                        direct_out["direct_recovery_absolute_action_response_output_factor"] = self.direct_absolute_action_response_adapter.output_factor
                 direct_out["direct_recovery_absolute_semantic_witness_viability"] = sw_viability
                 direct_out["direct_recovery_absolute_semantic_common_option_support"] = sw_support
                 direct_out["direct_recovery_absolute_semantic_best_common_viability"] = sw_best
@@ -5449,7 +5561,12 @@ class OCRAPModel(nn.Module):
             if self.direct_absolute_structured_tail_field_weight is not None:
                 out["direct_recovery_absolute_structured_tail_field_weight"] = self.direct_absolute_structured_tail_field_weight
             if self.direct_absolute_action_response_adapter is not None:
-                out["direct_recovery_absolute_action_response_projection"] = self.direct_absolute_action_response_adapter.action_projection
+                if hasattr(self.direct_absolute_action_response_adapter, "action_projection"):
+                    out["direct_recovery_absolute_action_response_projection"] = self.direct_absolute_action_response_adapter.action_projection
+                else:
+                    out["direct_recovery_absolute_action_response_action_factor"] = self.direct_absolute_action_response_adapter.action_factor
+                    out["direct_recovery_absolute_action_response_root_factor"] = self.direct_absolute_action_response_adapter.root_factor
+                    out["direct_recovery_absolute_action_response_output_factor"] = self.direct_absolute_action_response_adapter.output_factor
             out["direct_recovery_absolute_semantic_witness_viability"] = sw_viability
             out["direct_recovery_absolute_semantic_common_option_support"] = sw_support
             out["direct_recovery_absolute_semantic_best_common_viability"] = sw_best

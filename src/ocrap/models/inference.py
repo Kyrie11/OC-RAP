@@ -597,6 +597,10 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_semantic_witness_action_response_state_conditioning",
             model_cfg.get("direct_recovery_semantic_witness_action_response_state_conditioning", False),
         )),
+        direct_recovery_semantic_witness_action_root_bilinear_interaction=bool(ckpt.get(
+            "direct_recovery_semantic_witness_action_root_bilinear_interaction",
+            model_cfg.get("direct_recovery_semantic_witness_action_root_bilinear_interaction", False),
+        )),
         direct_recovery_semantic_witness_demand_normalized_fidelity=bool(ckpt.get(
             "direct_recovery_semantic_witness_demand_normalized_fidelity",
             model_cfg.get("direct_recovery_semantic_witness_demand_normalized_fidelity", False),
@@ -932,6 +936,9 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
     cfg["model"]["direct_recovery_semantic_witness_action_response_state_conditioning"] = bool(
         model.direct_recovery_semantic_witness_action_response_state_conditioning
     )
+    cfg["model"]["direct_recovery_semantic_witness_action_root_bilinear_interaction"] = bool(
+        model.direct_recovery_semantic_witness_action_root_bilinear_interaction
+    )
     cfg["model"]["direct_recovery_semantic_witness_demand_normalized_fidelity"] = bool(
         model.direct_recovery_semantic_witness_demand_normalized_fidelity
     )
@@ -1246,6 +1253,10 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             "direct_recovery_semantic_witness_action_response_state_conditioning",
             model_cfg.get("direct_recovery_semantic_witness_action_response_state_conditioning", False),
         )),
+        "direct_recovery_semantic_witness_action_root_bilinear_interaction": bool(ckpt.get(
+            "direct_recovery_semantic_witness_action_root_bilinear_interaction",
+            model_cfg.get("direct_recovery_semantic_witness_action_root_bilinear_interaction", False),
+        )),
         "direct_recovery_semantic_witness_demand_normalized_fidelity": bool(ckpt.get(
             "direct_recovery_semantic_witness_demand_normalized_fidelity",
             model_cfg.get("direct_recovery_semantic_witness_demand_normalized_fidelity", False),
@@ -1375,6 +1386,9 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         ),
         "direct_recovery_semantic_witness_action_response_state_conditioning": bool(
             model.direct_recovery_semantic_witness_action_response_state_conditioning
+        ),
+        "direct_recovery_semantic_witness_action_root_bilinear_interaction": bool(
+            model.direct_recovery_semantic_witness_action_root_bilinear_interaction
         ),
         "direct_recovery_semantic_witness_demand_normalized_fidelity": bool(
             model.direct_recovery_semantic_witness_demand_normalized_fidelity
