@@ -9276,3 +9276,156 @@ compileall src/tools/tests                  PASS
 recursive scripts bash -n                 167 PASS
 runtime-code preflight                    valid=true
 ```
+
+## V48.90 authoritative result + V48.91 OC-CEPMI (2026-09-04)
+
+### V48.90 engineering / attribution decision
+The uploaded V48.90 OC-CEPT result is engineering-valid and scientifically attributable.  Independent review of the delivered result artifacts and source establishes:
+
+```text
+valid                  = true
+attribution_ready      = true
+engineering_version    = v48.90.0-OC-CEPT
+errors                 = []
+planner_parameters_trained = 0
+teacher_labels_changed = false
+teacher_metadata_input_to_model = false
+test_roots_read        = false
+dataset_reconstruction = false
+boundary_transport     = false
+regime_conditioning    = false
+relative_ranker_modified = false
+```
+
+The runtime-code SHA contract matches the delivered V48.90 source.  V48.90 dedicated/contract tests pass, and the raw 11,373-row JSONL reproduces the summary/comparison gates.  This is an audit-only result, so absence of a planner checkpoint is expected rather than a reproducibility defect.
+
+### Strict V48.90 preregistered decision
+The authoritative result is:
+
+```text
+recipe_equivalence_quotient_go                  = true
+exogenous_partition_transport_go                = true
+partition_stability_directional_relevance_go    = true
+transport_physical_response_identifiability_go  = false
+matched_transport_response_training_authorized  = false
+status = PARTITION_TRANSPORT_GO_PHYSICAL_RESPONSE_UNDERIDENTIFIED
+```
+
+All four Near/Contact development/certificate roles pass the recipe-quotient and exogenous-transport correspondence gates.  Median exogenous tail transport coverage, purity and partition stability are all strong.  Registered safe-positive rows have mean/full partition stability equal to 1.0 in all four roles, while harmful full-stability fractions are only about 0.409 / 0.515 / 0.516 / 0.580.  Safe-positive-vs-harmful partition-stability AUC is about 0.796 / 0.742 / 0.742 / 0.710, with macro-stratified AUC about 0.803 / 0.774 / 0.757 / 0.738.
+
+Physical response is qualitatively different.  Median sign-identifiable mass and median informative response mass are zero in every role, response AUC is about 0.489 / 0.479 / 0.477 / 0.461, and tie-aware within-group top-1 lift is 0 / 0 / 0.009 / -0.020.  Safe-positive mean signed response is exactly zero in all four roles.  Therefore no response/source learner is authorized.
+
+### Mechanism attribution
+V48.90 resolves the V48.89 correspondence question rather than the physical-response question.
+
+1. Removing occurrence-level duplicate identity is correct.  Recipe classes are root-homogeneous and share enough probability mass to transport the deployable tail.
+2. Refining stochastic/augmented recipes by exogenous realization fingerprint is sufficient for the current cohort.  Candidate/nominal root split/merge is handled by probability-mass coupling, not a root-slot bijection.
+3. Partition stability is a reproducible **structural admissibility / rejector signal**.  It is not a physical recovery magnitude and does not by itself authorize an absolute-source correction.
+4. The remaining physical-response failure is not evidence that a larger root/action model is needed.  It is a supervision-granularity problem: current V48.90 response intervals are obtained by inverting `m_star` after future-level margins have already been intra-root aggregated and after structural floors/overrides may have acted.
+
+The code path makes the last point explicit.  Dataset construction computes full `M_future[F,L]` and full `TeacherDiagnostics[F][L]`, then clusters/aggregates to `m_star[K,L]`.  The canonical NPZ stores `m_star`, future provenance/assignments and only one sampled teacher diagnostic; it does **not** store the full future×option pre-structural physical-margin field.  Consequently, perfect root-partition transport cannot recover a signed action response that was discarded before serialization.
+
+### Promotion / closure after V48.90
+Promote as formal scaffolds:
+- recipe/exogenous counterfactual equivalence classes;
+- root-partition probability-mass transport invariant to root-slot permutations;
+- exact nested-tail partition stability as an offline structural-admissibility diagnostic;
+- the principle **transport before response**.
+
+Do **not** promote V48.90 partition stability as a runtime gate or final source.  Do not train any response model from the root-level inverse intervals.
+
+Newly close/freeze:
+- further root-slot / duplicate-occurrence / one-to-one root matching refinements under the current cohort;
+- partition-stability threshold/weight sweeps or direct runtime insertion;
+- any root/action response learner before a future-level physical response target passes identifiability;
+- reopening truth-inverse/floor-cap tolerance sweeps to rescue the V48.90 response score;
+- capacity/rank/MLP sweeps, boundary transport, relative-ranker changes, regime routers, proposal expansion, broad encoder/root retraining and dataset reconstruction.
+
+All earlier closed families remain closed.
+
+### Updated dominant bottleneck
+The dominant unresolved object is now:
+
+```text
+identifiability of pre-structural common-exogenous future-level
+signed physical recovery response on the exact deployable weak tail
+```
+
+or, in paper form:
+
+> **counterfactual causal supervision granularity for signed weak-tail recoverability after partition transport but before root aggregation and structural admissibility transforms.**
+
+Near and Contact remain one signed object.  Near requires positive response on transported weak-tail mass that is consuming recovery headroom; Contact requires negative recovery debt to be repaid on the same common-exogenous mass.  No regime-conditioned policy is introduced.
+
+### V48.91 OC-CEPMI
+Name: **Observation-Consistent Common-Exogenous Physical-Margin Identifiability (OC-CEPMI)**.
+
+V48.91 is the literal preregistered branch after `T90 GO + physical response STOP`.  It is audit-only, has zero planner parameters, stays on the exact V48.90 labeled cohort, and does not rewrite/reselect canonical dataset samples.
+
+The sidecar replays the original teacher construction only for the future/option cells needed by the candidate's exact nested OC-MERO tail.  For each replayed future-option cell it records:
+
+```text
+m_struct(f,l) = authoritative stored-teacher margin before root aggregation
+m_phys(f,l)   = min active TeacherDiagnostics.component_margins
+```
+
+`m_phys` is taken **before** the ordered structural floor/cap/hard-replacement transform.  Replay is fail-closed unless stored future probabilities/exogenous class keys and every replayed active root-option aggregate reproduce the canonical NPZ within tolerance.  The canonical dataset is untouched.
+
+The exact final OC-MERO influence is projected to future-option cells by composing:
+
+```text
+final nested OC-MERO root-option influence
+× intra-root stable-sort/fractional-LCVaR influence
+= future-option deployable-tail influence.
+```
+
+Candidate and nominal responses are then compared on the V48.90 exogenous-equivalence classes.  Duplicate occurrences remain exchangeable; if physical values vary inside a class, response is conservatively bounded by the class range rather than assigned a fake occurrence identity.  Unmatched exogenous mass remains ambiguous.
+
+### V48.91 preregistered authorization gates
+Engineering/replay exactness is fail-closed and must pass before science.  Scientific GO requires:
+
+```text
+safe-positive power                    >= 10 in all 4 roles
+common-exogenous tail coverage median  >= 0.80 in all 4 roles
+sign-identifiable response mass median >= 0.50 in >=3 roles
+informative response mass median       >= 0.50 in >=3 roles
+response safe-positive-vs-harmful AUC  >= 0.60 in >=3 roles,
+                                       including Near + Contact
+within-group tie-aware top1 lift       >= 0.10 in >=2 roles,
+                                       including Near + Contact
+sign-identifiability uplift vs V48.90 root intervals
+                                       >= +0.40 in >=3 roles
+```
+
+Macro-stratified response AUC is reported as a robustness diagnostic, not an alternate authorization path.
+
+Branch rules:
+- V48.91 physical-response GO -> authorize **one fixed-capacity** V48.92 transport-coupled signed response operator; no capacity sweep and boundary transport remains OFF;
+- V48.91 STOP -> close root-local response learning under the current counterfactual-future sidecars, retain partition stability only as a structural scaffold, and do not respond with an encoder/adapter/data/gain sweep.
+
+### V48.91 execution
+
+```bash
+cd /home/senzeyu2/code/OC-RAP
+
+# Optional only if the canonical dataset was built with a non-default YAML.
+# The replay always verifies stored future/exogenous/root-margin identity and
+# fails closed if the supplied/inferred generation config is not exact.
+# export V4891_REPLAY_CONFIG=/path/to/original_dataset_build.yaml
+
+BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+  bash scripts/run_v48_91_dcp_drfc_bcde_rifa_cepmi.sh
+```
+
+The replay may read the original WOMD/Waymax source referenced by the existing NPZ provenance, but it never changes sample membership, labels, roots, proposals or the canonical NPZ files.  This is an offline annotation/audit replay, **not dataset reconstruction**.
+
+Upload after completion:
+
+```text
+runs/OC-RAP-v48.91-OC-CEPMI-audits.zip
+runs/OC-RAP-v48.91-common-exogenous-physical-response-audit.jsonl
+runs/OC-RAP-v48.91-common-exogenous-future-physical-sidecar-summary.json
+```
+
+### Convergence / CCF-A status
+Absolute source remains **NOT CONVERGED**.  V48.90 does not change planner performance and therefore cannot justify Safe/Near/Contact SOTA claims.  The method-level contribution is increasingly centered on **identifiability before capacity**: OC-MERO defines deployable information structure, OC-CEPT transports action-dependent latent partitions, V48.91 tests whether the physical response is identifiable at the common-exogenous causal unit, and RIFA keeps any later absolute admission role-isolated.  External baselines and final closed-loop claims remain downstream of an authorized/frozen absolute source.
