@@ -8691,3 +8691,164 @@ Branch rules:
 
 ### Convergence state
 **NOT CONVERGED.** V48.86 does not meet the full absolute-source freeze condition, so external SOTA baselines and final Safe/Near/Contact closed-loop claims remain premature. V48.87 is the next registered adjudication.
+
+## V48.87 authoritative result + V48.88 OC-QTRR (2026-09-03)
+
+### V48.87 engineering reliability / attribution decision
+The uploaded V48.87 OC-BARR run is engineering-valid and scientifically attributable. The top-level pipeline/comparison/runtime/reference contracts report `valid=true`, `attribution_ready=true`, `errors=[]`, `test_roots_read=false`, and `dataset_reconstruction=false`. Runtime SHA256 values for the launcher, adaptation/train path, model/inference code, BARR audit and comparison match the uploaded V48.87 repository. U87/V87 balanced+precision runs complete held-out training and calibration; all 170 shared Stage-I tensors remain bitwise unchanged. The only added state is the registered BARR action/root/output factorization with 53,550 trainable parameters. U87 selects `best_epoch=4` in both variants and V87 selects `best_epoch=3` in both variants, so the intervention is genuinely learned rather than an epoch-0 no-op.
+
+The packaged result zips do not contain the final `best.pt` bytes. This is a reproducibility-packaging debt, but not an attribution blocker here: the fail-closed pipeline checker required those checkpoint files before packaging, independently hashed them, and verified the same hashes against `TRAINING_COMPLETE`, `EVIDENCE_CORRECTION_COMPLETE`, state isolation and the final manifest. Future runners should retain formal best checkpoints when practical.
+
+Independent offline verification on the delivered V48.87 code additionally passes V48.84--V48.87 focused tests, `compileall`, and launcher shell syntax. No engineering fault explains the scientific degradation below.
+
+### Strict preregistered V48.87 decision
+The authoritative scientific status is **`BILINEAR_ACTION_ROOT_INTERACTION_STOP`**. Every preregistered BARR Main gate fails.
+
+**U87-S86 (bilinear representation under the same physical response-interval objective): STOP.**
+- source AUC positive: 0/8; material `>=+0.003`: 0/8;
+- response-interval Huber non-degradation: 0/8;
+- absolute/matched selectivity: FAIL;
+- newly admitted harmful rows: 1,678; newly admitted safe-positive rows: 111;
+- the apparent safe-positive recall gain is therefore a permissive rescue, not a selective recovery mechanism.
+
+Representative balanced cells make the failure explicit. Dev-Near AUC changes `0.76902 -> 0.63610` while harmful pass changes `0.0219 -> 0.4380`; certificate-Near AUC `0.81678 -> 0.64912` while harmful pass `0 -> 0.3904`; dev-Contact AUC `0.68563 -> 0.52769` while harmful pass `0 -> 0.3580`; certificate-Contact AUC `0.70330 -> 0.55533` while harmful pass `0 -> 0.3619`. Interval Huber worsens in all four split/variant pairs as well. Precision reproduces the same pattern.
+
+**V87-T86 (primary BARR interaction gate under identical selective supervision): STOP.**
+- V87 is learned (`best_epoch=3` in both variants), satisfying only the activity prerequisite;
+- source AUC positive: 0/8; material cells: 0/8;
+- interval Huber non-degradation: 0/8;
+- absolute selectivity: FAIL (precision dev-Near TI pass is ~0.2518, and the remaining cells are far above the matched T86 baseline even when below 0.25);
+- newly admitted harmful: 747; newly admitted safe-positive: 84.
+
+The source-AUC deltas are all negative: balanced `[-0.09243,-0.07592,-0.06130,-0.05511]` and precision `[-0.09337,-0.07669,-0.06071,-0.05588]` for dev-Near, dev-Contact, certificate-Near, certificate-Contact respectively. Therefore the learned root x action capacity does not solve the registered representation hypothesis.
+
+**V87-U87 (structural selective objective increment): useful rejector signal, but formal STOP.**
+- AUC improves 8/8, every cell is `>=+0.01`;
+- interval Huber improves 8/8;
+- matched selectivity vs U87 passes;
+- but absolute selectivity still fails and safe-positive material gain is 0 cells.
+
+For example, balanced certificate-Near harmful pass falls `0.3904 -> 0.1511`, certificate-Contact `0.3619 -> 0.1620`, and dev-Contact `0.3580 -> 0.1640`. At the same time safe-positive pass falls, e.g. certificate-Near `0.7647 -> 0.4706`, certificate-Contact `0.5161 -> 0.4194`, and dev-Near `0.3333 -> 0.1111`. Thus structural ordering is retained only as a **selective rejection / regularization supervision principle**; the current V87 implementation is not promoted as a recovery source.
+
+**V87-L80 full source: STOP.**
+- source AUC positive: 0/8 and `>=+0.01`: 0/8;
+- interval Huber non-degradation: 0/8;
+- absolute/matched selectivity: FAIL;
+- all source-AUC deltas are negative (balanced approximately `-0.0627,-0.0665,-0.0515,-0.0537`; precision approximately `-0.0636,-0.0658,-0.0524,-0.0547`, ordered as dev-Near, dev-Contact, certificate-Near, certificate-Contact).
+
+Therefore V48.87 does **not** authorize deployment propagation, boundary transport, relative-ranker changes, or external SOTA evaluation.
+
+### Mechanism conclusion: capacity-matched is not identifiability-matched
+V48.87 falsifies the idea that the missing object can be solved merely by giving the absolute source a learned low-rank root x action interaction.
+
+BARR can represent a high-dimensional root-local action response, but the V48.86 truth sidecar supervises only a **candidate-level aggregate counterfactual response interval**, plus candidate-level structural ordering. That supervision does not identify an arbitrary root-option response field. There is a large local response nullspace: many root-option deformations can change internal margins/admission while remaining weakly or ambiguously constrained by the aggregate candidate target.
+
+U87 is the empirical signature of that mismatch: once the response field receives 53,550 root x action degrees of freedom, the optimizer learns a non-zero interaction but uses it to create broad rescue, sharply degrading AUC and interval loss while admitting harmful/TI candidates. V87's structural objective suppresses many of those directions, but because it is still candidate-level it cannot tell which weak-root response is the physically causal one; it removes true safe recoveries together with false ones.
+
+The new dominant bottleneck is therefore:
+
+`identifiability of action-induced signed recovery response on the deployable nested lower tail under candidate-level counterfactual supervision`.
+
+Equivalently, the next source must respect the **quotient space induced by the observable nested OC-MERO response functional** rather than learning arbitrary root-local response components that the available target cannot identify.
+
+### Near / Contact implication
+The unified signed semantics remain unchanged and no regime router is introduced.
+
+- **Near:** the missing object is which observation-compatible weak roots actually gain/preserve positive recovery headroom because of the candidate action. BARR can create apparent headroom in underconstrained root directions, hence the large false rescue.
+- **Contact:** the missing object is which weak roots actually repay negative penetration/re-contact/secondary-collision debt. The same under-identification lets BARR admit many actions whose latent deformation is not evidence of real debt repayment.
+
+Both are the same signed counterfactual object. Regime IDs, experts, thresholds or budgets remain forbidden.
+
+### Family closure / retained principles after V48.87
+**Close the low-rank learned root x action response family as a production source.** In particular, do not increase BARR rank, width or depth; do not replace the bilinear factors with an MLP/Transformer; do not mix BARR with N82/O82/P83 tail fields; do not add root/option/class/regime IDs; do not sweep LR/gain/threshold/horizon; do not broaden Stage-I/encoder/root retraining; and do not reopen boundary transport, relative-ranker modification, proposal expansion or dataset reconstruction.
+
+Retain only these supported principles/scaffolds:
+- OC-MERO observation-consistent information pattern and RIFA role isolation;
+- actuator-projected executable recovery, active-set, route and persistent-reentry semantics;
+- candidate-minus-nominal action is the causal action object;
+- signed reserve/debt channels are useful;
+- exact nested OC-MERO tail influence/localization is a deterministic formal scaffold;
+- V48.86 partially identified response intervals remain the supervision scaffold;
+- structural safe-positive/harmful ordering is useful as a rejector/regularizer, not yet a source.
+
+### V48.88 intervention: OC-QTRR
+Name: **Observation-Consistent Quotient Tail-Recovery Response (OC-QTRR)**.
+
+V48.88 directly tests the identifiability diagnosis. It removes learned root-local/nullspace capacity instead of adding more capacity.
+
+Let frozen native root-option margins for a candidate be `M`, and let the unchanged nested OC-MERO deployability functional be `F(M)=R_dep`. Using the production stable-sort/fractional-tail rules, compute one deterministic local cotangent/subgradient
+
+`g = dF/dM`
+
+at the frozen native point. The already-closed option-wise translation family is removed by restricting corrections to the per-option weighted-zero-translation tangent space
+
+`H_l = { delta_l : sum_k p_k delta_{kl} = 0 }`.
+
+For every option, project the nested cotangent into that tangent space with the Euclidean projector
+
+`g_perp,kl = g_kl - p_k (sum_j p_j g_jl)/(sum_j p_j^2)`.
+
+If `||g_perp||` is numerically non-zero, define the canonical unit-norm quotient lift
+
+`d = g_perp / ||g_perp||_F`;
+
+otherwise `d=0`. The rank tolerance is derived only from floating-point machine epsilon and tensor size; it is not a research hyperparameter.
+
+The **only learned object** is a candidate-level signed action coefficient. From the same leakage-safe executable action representation used by V48.85--87,
+
+`Delta a = a_candidate - a_nominal`,
+
+use two shared reserve/debt linear channels
+
+`eta_c(a) = tanh(<w_c, LN(Delta a)> / sqrt(d_a))`,
+
+with `c` selected by the frozen nominal native `R_dep` sign. The root-option correction is
+
+`delta M(a) = eta_c(a) d`.
+
+This has four hard structural properties:
+1. nominal `Delta a=0` gives exact zero correction;
+2. `sum_k p_k delta M_kl=0` for every option, so the closed option-translation family is not reopened;
+3. no learned root-local/nullspace response exists -- the root-option direction is determined by frozen OC-MERO geometry;
+4. Near/Contact remain one signed reserve/debt object; there is no regime conditioning.
+
+Trainable state is only `direct_absolute_quotient_tail_response_weight[2,141]` = **282 parameters**, about **0.53%** of BARR's 53,550. This is deliberately an **identifiability-constrained canonical local response test**, not an exact inverse reconstruction of root-local teacher responses and not a claim that the local cotangent is globally valid across OC-MERO active-set changes.
+
+### V48.88 causal arms
+Historical S86/T86/U87/V87 and L80 are reused. Only two new equal-capacity arms are trained:
+
+| Arm | Response representation | Physical interval | Structural ordering |
+|---|---|---:|---:|
+| historical U87 | free learned BARR root x action | yes | no |
+| historical V87 | free learned BARR root x action | yes | yes |
+| **W88_QUOTIENT_RESPONSE_INTERVAL** | **282-param action coefficient + deterministic quotient-tail lift** | yes | no |
+| **X88/Main_QUOTIENT_SELECTIVE_RESPONSE** | **same 282-param quotient representation** | yes | yes |
+
+Primary causal comparisons:
+- `W88-U87`: does removing the learned response nullspace repair the interval-only BARR failure?
+- `X88-V87`: does the same repair work under identical selective supervision?
+- `W88-S86` / `X88-T86`: does quotient-localized response add value over the root-independent historical source, rather than merely outperforming a catastrophic BARR baseline?
+- `X88-W88`: incremental value of structural ordering after identifiability restriction;
+- `X88-L80`: full absolute-source GO.
+
+### V48.88 preregistered decision
+**BARR nullspace repair (`X88-V87`)** requires both X variants to learn beyond epoch 0, AUC improvement 8/8 with >=6/8 `delta>=+0.02`, interval Huber non-degradation 8/8, absolute selectivity, and harmful/TI nonincrease in >=6/8.
+
+**Net identifiable response (`X88-T86`)** requires AUC positive >=6/8 with >=4/8 `delta>=+0.003`, Huber non-degradation >=6/8, absolute and matched selectivity, material powered safe-positive gains in both Near and Contact, and <=8 newly admitted harmful rows across the 8 audited cells.
+
+`quotient_tail_identifiability_go` requires **both** nullspace repair and net identifiable response. This prevents declaring success merely because a constrained model is better than the catastrophically permissive BARR.
+
+**W88 interval support** requires held-out learning, `W88-U87` AUC positive >=6/8 and Huber non-degrade >=6/8, plus `W88-S86` AUC positive >=5/8, Huber non-degrade >=4/8 and absolute selectivity.
+
+**X88-W88 structural increment GO** requires AUC positive >=6/8 with >=4/8 material `+0.003`, Huber non-degrade >=6/8, matched selectivity and material safe-positive gains in both Near and Contact.
+
+**Full `X88-L80` GO** keeps the publication-level gate: AUC positive 8/8, >=6/8 `delta>=+0.01`, Huber non-degrade >=6/8, absolute+matched selectivity, and material powered safe-positive gains in both Near and Contact.
+
+Branch rules:
+- quotient identifiability GO + full source GO -> freeze the absolute source, verify frozen RIFA, then Safe paired non-interference, Near closed-loop critical safety, Contact post-collision/secondary metrics and external SOTA baselines;
+- quotient identifiability GO / full source STOP -> freeze the identifiable response representation; only remaining target/absolute-boundary debt may be adjudicated, no capacity increase;
+- interval support GO / selective increment STOP -> retain the quotient interval response and close the current structural-order increment; no capacity sweep;
+- quotient-tail response STOP -> close the **entire aggregate-counterfactual-response adapter family** and next audit counterfactual root correspondence / root-local physical response identifiability. Do not add rank, MLP, broad encoder retraining, regime routing or dataset reconstruction.
+
+### Convergence state after V48.87
+**NOT CONVERGED.** V48.87 fails the full source gate. Final external SOTA tables and claims that Safe/Near/Contact have reached SOTA remain premature. V48.88 is a registered identifiability adjudication, not a claimed success.

@@ -292,6 +292,7 @@ cat > "$RUN/STAGE_ARCHITECTURE.json" <<JSON
   "semantic_witness_action_response_adapter": $SEMANTIC_WITNESS_ACTION_RESPONSE_ADAPTER,
   "semantic_witness_action_response_state_conditioning": $SEMANTIC_WITNESS_ACTION_RESPONSE_STATE_CONDITIONING,
   "semantic_witness_action_root_bilinear_interaction": $SEMANTIC_WITNESS_ACTION_ROOT_BILINEAR_INTERACTION,
+  "semantic_witness_quotient_tail_response": ${SEMANTIC_WITNESS_QUOTIENT_TAIL_RESPONSE:-false},
   "semantic_witness_tail_localization": $SEMANTIC_WITNESS_TAIL_LOCALIZATION,
   "semantic_witness_demand_normalized_fidelity": $SEMANTIC_WITNESS_DEMAND_NORMALIZED_FIDELITY,
   "semantic_witness_robust_occupancy": $SEMANTIC_WITNESS_ROBUST_OCCUPANCY,

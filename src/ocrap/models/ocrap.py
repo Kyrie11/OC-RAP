@@ -518,6 +518,7 @@ class OCRAPModel(nn.Module):
         direct_recovery_semantic_witness_action_response_adapter: bool = False,
         direct_recovery_semantic_witness_action_response_state_conditioning: bool = False,
         direct_recovery_semantic_witness_action_root_bilinear_interaction: bool = False,
+        direct_recovery_semantic_witness_quotient_tail_response: bool = False,
         direct_recovery_semantic_witness_demand_normalized_fidelity: bool = False,
         direct_recovery_semantic_witness_robust_occupancy: bool = False,
         direct_recovery_semantic_witness_soft_occupancy_disagreement: bool = False,
@@ -858,12 +859,30 @@ class OCRAPModel(nn.Module):
         self.direct_recovery_semantic_witness_action_root_bilinear_interaction = bool(
             direct_recovery_semantic_witness_action_root_bilinear_interaction
         )
+        # V48.88 OC-QTRR: after V48.87 shows that a high-dimensional root x
+        # action response is learnable but weakly identified by candidate-level
+        # counterfactual supervision, restrict the learned response to the
+        # identifiable quotient direction of the exact nested OC-MERO tail.
+        # Only a 2 x action_dim reserve/debt coefficient is learned; the root x
+        # option deformation direction is deterministic, p-translation-free,
+        # and computed from the frozen nested-tail cotangent.
+        self.direct_recovery_semantic_witness_quotient_tail_response = bool(
+            direct_recovery_semantic_witness_quotient_tail_response
+        )
         if self.direct_recovery_semantic_witness_action_response_state_conditioning and not self.direct_recovery_semantic_witness_action_response_adapter:
             raise ValueError("state-conditioned action response requires the action-response adapter")
         if self.direct_recovery_semantic_witness_action_root_bilinear_interaction and not self.direct_recovery_semantic_witness_action_response_adapter:
             raise ValueError("bilinear action-root interaction requires the action-response adapter path")
         if self.direct_recovery_semantic_witness_action_root_bilinear_interaction and self.direct_recovery_semantic_witness_action_response_state_conditioning:
             raise ValueError("V48.87 bilinear action-root interaction must not reopen the closed V48.85 state gate")
+        if self.direct_recovery_semantic_witness_quotient_tail_response and self.direct_recovery_semantic_witness_action_response_adapter:
+            raise ValueError("V48.88 quotient-tail response replaces the closed V48.85-87 action-response adapter family")
+        if self.direct_recovery_semantic_witness_quotient_tail_response and self.direct_recovery_semantic_witness_root_tail_source:
+            raise ValueError("V48.88 quotient-tail response is not a reopening of the frozen V48.78-83 tail-adapter family")
+        if self.direct_recovery_semantic_witness_quotient_tail_response and self.direct_recovery_semantic_witness_boundary_transport:
+            raise ValueError("V48.88 quotient-tail response keeps boundary transport OFF")
+        if self.direct_recovery_semantic_witness_quotient_tail_response and not self.direct_recovery_absolute_semantic_witness_correction:
+            raise ValueError("V48.88 quotient-tail response requires the semantic absolute source path")
         if self.direct_recovery_semantic_witness_action_response_adapter and self.direct_recovery_semantic_witness_root_tail_source:
             raise ValueError("v48.85 action-response adapter is mutually exclusive with the frozen root-tail adapter family")
         if self.direct_recovery_semantic_witness_action_response_adapter and self.direct_recovery_semantic_witness_boundary_transport:
@@ -1765,6 +1784,7 @@ class OCRAPModel(nn.Module):
             self.direct_recovery_absolute_semantic_witness_correction
             and not self.direct_recovery_semantic_witness_root_tail_source
             and not self.direct_recovery_semantic_witness_action_response_adapter
+            and not self.direct_recovery_semantic_witness_quotient_tail_response
         ):
             if self.encoder_type != "structured_transformer":
                 raise ValueError("OC-SARW requires structured_transformer flat feature layout")
@@ -1795,6 +1815,20 @@ class OCRAPModel(nn.Module):
                     self.d_model,
                     state_conditioned=self.direct_recovery_semantic_witness_action_response_state_conditioning,
                 )
+
+        # V48.88 OC-QTRR learns only the candidate-level signed coefficient that
+        # is identifiable from counterfactual response supervision.  The high-
+        # dimensional root x option response is a deterministic quotient lift
+        # along the exact nested-tail cotangent, not a learned field.
+        self.direct_absolute_quotient_tail_response_weight = None
+        if self.direct_recovery_semantic_witness_quotient_tail_response:
+            if self.encoder_type != "structured_transformer":
+                raise ValueError("V48.88 quotient-tail response requires structured_transformer")
+            if self.direct_candidate_physical_feature_dim <= 0:
+                raise ValueError("V48.88 quotient-tail response requires executable raw action features")
+            self.direct_absolute_quotient_tail_response_weight = nn.Parameter(
+                torch.zeros((2, self.direct_candidate_physical_feature_dim), dtype=torch.float32)
+            )
 
         # v48.78 OC-RTSI source state.  The only learned degree of freedom is
         # a single non-negative global scale on a *deterministic OC-MERO tail
@@ -2134,6 +2168,66 @@ class OCRAPModel(nn.Module):
             out.index_copy_(0, idx, nominal_value.expand(idx.numel(), *values.shape[1:]))
         return out
 
+    @staticmethod
+    def _quotient_tail_direction_from_cotangent(
+        root_probs: torch.Tensor,
+        cotangent: torch.Tensor,
+        root_valid: torch.Tensor | None = None,
+        option_valid: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Canonical V48.88 quotient direction for aggregate response supervision.
+
+        Candidate-level counterfactual supervision observes only the nested
+        deployability functional, so root-option response components in its
+        local nullspace are not identifiable.  Given the exact nested OC-MERO
+        cotangent ``g=dR_dep/dM``, this routine first removes the per-option
+        translation subspace ``sum_k p_k deltaM_kl = 0`` (closed after V48.77),
+        then returns the unit-Frobenius representative of the remaining
+        cotangent direction.  This exposes no learned root/option ID and creates
+        no free nullspace degrees of freedom.
+        """
+        p = root_probs.float()
+        g = cotangent.float()
+        if p.ndim != 2 or g.ndim != 3 or g.shape[:2] != p.shape:
+            raise ValueError("quotient-tail cotangent shape mismatch")
+        rv = root_valid
+        if rv is not None:
+            rv = rv.to(device=g.device, dtype=torch.bool)
+            if rv.ndim == 1:
+                rv = rv.unsqueeze(0).expand(p.shape[0], -1)
+            if rv.shape != p.shape:
+                raise ValueError("quotient-tail root-valid shape mismatch")
+            g = torch.where(rv.unsqueeze(-1), g, torch.zeros_like(g))
+        ov = option_valid
+        if ov is not None:
+            ov = ov.to(device=g.device, dtype=torch.bool)
+            if ov.ndim == 1:
+                ov = ov.unsqueeze(0).expand(p.shape[0], -1)
+            if ov.shape != (p.shape[0], g.shape[2]):
+                raise ValueError("quotient-tail option-valid shape mismatch")
+            g = torch.where(ov.unsqueeze(1), g, torch.zeros_like(g))
+        p_col = p.unsqueeze(-1)
+        pp = p.square().sum(dim=1, keepdim=True).unsqueeze(-1).clamp_min(1.0e-8)
+        coeff = (p_col * g).sum(dim=1, keepdim=True) / pp
+        projected = g - p_col * coeff
+        if rv is not None:
+            projected = torch.where(rv.unsqueeze(-1), projected, torch.zeros_like(projected))
+        if ov is not None:
+            projected = torch.where(ov.unsqueeze(1), projected, torch.zeros_like(projected))
+        norm = projected.square().sum(dim=(1, 2), keepdim=True).sqrt()
+        # Numerical-rank tolerance only: do not normalize floating-point residue
+        # from an exactly projected-out translation into a unit deformation.
+        tol = (
+            torch.finfo(projected.dtype).eps
+            * 128.0
+            * float(max(projected.shape[1] * projected.shape[2], 1)) ** 0.5
+        )
+        return torch.where(
+            norm > tol,
+            projected / norm.clamp_min(tol),
+            torch.zeros_like(projected),
+        )
+
     @classmethod
     def _counterfactual_tail_response(
         cls,
@@ -2213,6 +2307,32 @@ class OCRAPModel(nn.Module):
             shared_logits = nominal_logits.expand(idx.numel(), -1).contiguous()
             projected.index_copy_(0, idx, shared_logits)
         return projected
+
+    def _quotient_tail_response_coefficient(
+        self,
+        action_relative: torch.Tensor,
+        nominal_rdep: torch.Tensor,
+    ) -> torch.Tensor:
+        """V48.88 signed action coefficient for the identifiable quotient lift."""
+        if self.direct_absolute_quotient_tail_response_weight is None:
+            raise RuntimeError("quotient-tail response coefficient requested while source is disabled")
+        if action_relative.ndim != 2:
+            raise ValueError("quotient-tail action response expects [B,A] action features")
+        action_dim = int(action_relative.shape[-1])
+        if action_dim != int(self.direct_absolute_quotient_tail_response_weight.shape[-1]):
+            raise ValueError(
+                f"quotient-tail action dimension mismatch: {action_dim} != "
+                f"{int(self.direct_absolute_quotient_tail_response_weight.shape[-1])}"
+            )
+        if nominal_rdep.reshape(-1).shape[0] != action_relative.shape[0]:
+            raise ValueError("quotient-tail nominal deployability shape mismatch")
+        a = torch.nn.functional.layer_norm(action_relative.float(), (action_dim,))
+        all_channels = torch.einsum(
+            'ba,ca->bc', a, self.direct_absolute_quotient_tail_response_weight.float()
+        ) / (float(max(action_dim, 1)) ** 0.5)
+        all_channels = torch.tanh(all_channels)
+        channel = (nominal_rdep.reshape(-1).float() < 0.0).long()
+        return all_channels.gather(1, channel.unsqueeze(1)).squeeze(1)
 
     def _direct_candidate_raw_relative_features(
         self,
@@ -3134,6 +3254,7 @@ class OCRAPModel(nn.Module):
             and self.direct_absolute_root_tail_source_scale is None
             and self.direct_absolute_structured_tail_field_weight is None
             and self.direct_absolute_action_response_adapter is None
+            and self.direct_absolute_quotient_tail_response_weight is None
         ):
             return None
         with torch.no_grad():
@@ -3587,6 +3708,91 @@ class OCRAPModel(nn.Module):
         universal_failure = torch.relu(-best_common_viability)
         if self.direct_absolute_action_response_adapter is not None:
             corrected_margins = base_margins
+        elif self.direct_absolute_quotient_tail_response_weight is not None:
+            # V48.88 OC-QTRR: candidate-level counterfactual supervision only
+            # identifies the response component that changes the deployable
+            # nested-tail score.  A free root-token/root-option response therefore
+            # contains a large supervision-nullspace (V48.87 BARR failure).
+            #
+            # Build the exact native OC-MERO cotangent g=dR_dep/dM using the same
+            # stable fractional-tail influence as production aggregation, remove
+            # the already-closed per-option translation subspace, and allow the
+            # learned action delta to move margins only along that quotient-space
+            # direction.  No root-local response target is fabricated.
+            with torch.no_grad():
+                p_qt = p.float()
+                C_eff_qt = compatibility.float()
+                top_m_qt = int(self.direct_recovery_evidence_roct_top_m)
+                if top_m_qt > 0 and top_m_qt < K:
+                    vals_qt, idx_qt = torch.topk(C_eff_qt, k=top_m_qt, dim=-1)
+                    C_sparse_qt = torch.zeros_like(C_eff_qt).scatter(-1, idx_qt, vals_qt)
+                    eye_qt = torch.eye(K, dtype=torch.bool, device=memory.device).unsqueeze(0)
+                    C_eff_qt = torch.where(
+                        eye_qt, torch.maximum(C_sparse_qt, torch.ones_like(C_sparse_qt)), C_sparse_qt
+                    )
+
+                scores_qt = base_margins.float().transpose(1, 2)
+                inner_by_anchor_qt: list[torch.Tensor] = []
+                for anchor_i in range(K):
+                    w_i_qt = torch_normalize_weights(C_eff_qt[:, anchor_i, :] * p_qt)
+                    w_i_qt = w_i_qt.unsqueeze(1).expand(-1, self.num_options, -1)
+                    inner_by_anchor_qt.append(
+                        torch_weighted_lcvar_influence(
+                            scores_qt, w_i_qt, float(self.direct_recovery_evidence_roct_beta)
+                        )
+                    )
+
+                rdep_qt, _rorc_qt, _gap_qt, q_qt = torch_oc_mero(
+                    base_margins.float(), p_qt, compatibility.float(),
+                    alpha=float(self.direct_recovery_evidence_roct_alpha),
+                    beta=float(self.direct_recovery_evidence_roct_beta),
+                    option_valid=ov, root_valid=rv, use_lcvar=True, use_obs_kernel=True,
+                    top_m=top_m_qt,
+                )
+                q_best_qt = q_qt
+                if ov is not None:
+                    q_best_qt = q_best_qt.masked_fill(~ov.unsqueeze(1), -1.0e9)
+                best_l_qt = q_best_qt.argmax(dim=-1)
+                r_anchor_qt = q_best_qt.amax(dim=-1)
+                outer_qt = torch_weighted_lcvar_influence(
+                    r_anchor_qt, p_qt, float(self.direct_recovery_evidence_roct_alpha)
+                )
+                nested_cotangent = torch.zeros(
+                    (B, K, self.num_options), dtype=torch.float32, device=memory.device
+                )
+                for anchor_i, inner_inf_qt in enumerate(inner_by_anchor_qt):
+                    chosen_qt = torch.nn.functional.one_hot(
+                        best_l_qt[:, anchor_i], num_classes=self.num_options
+                    ).to(dtype=inner_inf_qt.dtype)
+                    nested_cotangent = nested_cotangent + (
+                        outer_qt[:, anchor_i].view(B, 1, 1)
+                        * inner_inf_qt.transpose(1, 2)
+                        * chosen_qt.unsqueeze(1)
+                    )
+                if rv is not None:
+                    nested_cotangent = torch.where(
+                        rv.unsqueeze(-1), nested_cotangent, torch.zeros_like(nested_cotangent)
+                    )
+                if ov is not None:
+                    nested_cotangent = torch.where(
+                        ov.unsqueeze(1), nested_cotangent, torch.zeros_like(nested_cotangent)
+                    )
+
+                quotient_direction = self._quotient_tail_direction_from_cotangent(
+                    p_qt, nested_cotangent, root_valid=rv, option_valid=ov
+                ).detach()
+                nominal_rdep_qt = self._nominal_group_anchor(
+                    rdep_qt.float().reshape(B, 1), group_index, is_nominal
+                ).reshape(B)
+
+            action_relative_qt = self._direct_candidate_raw_relative_features(
+                x, group_index, is_nominal
+            )
+            eta_qt = self._quotient_tail_response_coefficient(
+                action_relative_qt, nominal_rdep_qt
+            )
+            quotient_delta = eta_qt.view(B, 1, 1) * quotient_direction
+            corrected_margins = base_margins + quotient_delta.to(dtype=base_margins.dtype)
         elif root_tail_source:
             # V48.78 OC-RTSI / V48.82 OC-SNTF: reshape the deployable lower tail
             # without restoring an option-wise translation degree.
@@ -5303,6 +5509,8 @@ class OCRAPModel(nn.Module):
                 or self.direct_absolute_semantic_witness_gain is not None
                 or self.direct_absolute_root_tail_source_scale is not None
                 or self.direct_absolute_structured_tail_field_weight is not None
+                or self.direct_absolute_action_response_adapter is not None
+                or self.direct_absolute_quotient_tail_response_weight is not None
             ):
                 roct_signature, native_certificate = self._direct_recovery_option_compatibility_evidence(
                     memory, x, option_features,
@@ -5393,6 +5601,8 @@ class OCRAPModel(nn.Module):
                         direct_out["direct_recovery_absolute_action_response_action_factor"] = self.direct_absolute_action_response_adapter.action_factor
                         direct_out["direct_recovery_absolute_action_response_root_factor"] = self.direct_absolute_action_response_adapter.root_factor
                         direct_out["direct_recovery_absolute_action_response_output_factor"] = self.direct_absolute_action_response_adapter.output_factor
+                if self.direct_absolute_quotient_tail_response_weight is not None:
+                    direct_out["direct_recovery_absolute_quotient_tail_response_weight"] = self.direct_absolute_quotient_tail_response_weight
                 direct_out["direct_recovery_absolute_semantic_witness_viability"] = sw_viability
                 direct_out["direct_recovery_absolute_semantic_common_option_support"] = sw_support
                 direct_out["direct_recovery_absolute_semantic_best_common_viability"] = sw_best
@@ -5567,6 +5777,8 @@ class OCRAPModel(nn.Module):
                     out["direct_recovery_absolute_action_response_action_factor"] = self.direct_absolute_action_response_adapter.action_factor
                     out["direct_recovery_absolute_action_response_root_factor"] = self.direct_absolute_action_response_adapter.root_factor
                     out["direct_recovery_absolute_action_response_output_factor"] = self.direct_absolute_action_response_adapter.output_factor
+            if self.direct_absolute_quotient_tail_response_weight is not None:
+                out["direct_recovery_absolute_quotient_tail_response_weight"] = self.direct_absolute_quotient_tail_response_weight
             out["direct_recovery_absolute_semantic_witness_viability"] = sw_viability
             out["direct_recovery_absolute_semantic_common_option_support"] = sw_support
             out["direct_recovery_absolute_semantic_best_common_viability"] = sw_best
