@@ -11,6 +11,8 @@ import numpy as np
 import ocrap
 import ocrap.algorithms.lcv as lcv_module
 import ocrap.algorithms.ocmero as ocmero_module
+import ocrap.data.serialization as serialization_module
+import ocrap.v48_79_truth_contract as truth_contract_module
 import ocrap.v48_81_switch_inverse_truth_contract as switch_inverse_module
 import ocrap.v48_89_root_correspondence as rcpi_module
 from ocrap.v48_89_root_correspondence import (
@@ -83,6 +85,14 @@ def main() -> int:
         "ocrap": (Path(ocrap.__file__).resolve(), repo / "src/ocrap/__init__.py"),
         "ocrap.algorithms.lcv": (Path(lcv_module.__file__).resolve(), repo / "src/ocrap/algorithms/lcv.py"),
         "ocrap.algorithms.ocmero": (Path(ocmero_module.__file__).resolve(), repo / "src/ocrap/algorithms/ocmero.py"),
+        "ocrap.data.serialization": (
+            Path(serialization_module.__file__).resolve(),
+            repo / "src/ocrap/data/serialization.py",
+        ),
+        "ocrap.v48_79_truth_contract": (
+            Path(truth_contract_module.__file__).resolve(),
+            repo / "src/ocrap/v48_79_truth_contract.py",
+        ),
         "ocrap.v48_81_switch_inverse_truth_contract": (
             Path(switch_inverse_module.__file__).resolve(),
             repo / "src/ocrap/v48_81_switch_inverse_truth_contract.py",
@@ -125,8 +135,8 @@ def main() -> int:
             errors.append(f"synthetic contract failed: {key}")
 
     doc = {
-        "schema": "ocrap-v48.89-rcpi-runtime-code-contract-v1",
-        "engineering_version": "v48.89.0-OC-RCPI",
+        "schema": "ocrap-v48.89-rcpi-runtime-code-contract-v2",
+        "engineering_version": "v48.89.1-OC-RCPI-ENGFIX",
         "valid": not errors,
         "attribution_ready": not errors,
         "errors": errors,

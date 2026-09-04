@@ -43,6 +43,17 @@ def main() -> int:
     missing = [r for r in ROLES if r not in roles]
     if missing:
         errors.append(f"missing roles {missing}")
+    label_identity = audit.get("label_identity") or {}
+    for role in ROLES:
+        ident = label_identity.get(role) or {}
+        if not bool(ident.get("teacher_value_identity_on_overlap")):
+            errors.append(f"teacher label overlap identity invalid for {role}")
+        if int(ident.get("mismatches", 1)) != 0:
+            errors.append(f"teacher label overlap mismatch for {role}")
+        if int(ident.get("shared_rows", 0)) <= 0:
+            errors.append(f"balanced/precision proposal support has no shared rows for {role}")
+        if ident.get("cohort_policy") != "union_of_registered_balanced_precision_l80_proposals":
+            errors.append(f"unexpected V48.89 label cohort policy for {role}")
 
     power = {r: int(_v(roles.get(r, {}), "labeled_rows", 0)) >= 100 for r in ROLES}
     shared = {
@@ -141,8 +152,8 @@ def main() -> int:
         "directional_relevance_gate": directional,
     }
     doc = {
-        "schema": "ocrap-v48.89-rcpi-comparison-v1",
-        "engineering_version": "v48.89.0-OC-RCPI",
+        "schema": "ocrap-v48.89-rcpi-comparison-v2",
+        "engineering_version": "v48.89.1-OC-RCPI-ENGFIX",
         "valid": not errors,
         "attribution_ready": not errors,
         "errors": errors,
@@ -159,6 +170,7 @@ def main() -> int:
             "root_slot_identity_assumed": False,
             "correspondence_source": "shared counterfactual-future semantic branch identity",
             "physical_response_target": "matched-root pre-structural interval difference on exact nested OC-MERO tail",
+            "teacher_label_cohort": "union of registered balanced/precision L80 top-K proposal supports after overlap-value identity",
             "capacity_sweep": False,
         },
         "audit_summary": audit,

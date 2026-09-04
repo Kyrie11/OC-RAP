@@ -9013,3 +9013,67 @@ runs/OC-RAP-v48.89-root-correspondence-audit.jsonl
 
 ### Convergence state
 **NOT CONVERGED.** V48.88 does not meet the absolute-source freeze criterion. External SOTA baselines, paired Safe non-interference and final Near/Contact closed-loop claims remain blocked until a response target is both root-correspondent and physically identifiable, followed by an engineering-valid source GO.
+
+## V48.89.1 OC-RCPI-ENGFIX (2026-09-04)
+
+### Classification
+Pure engineering/audit-contract hotfix. **No planner algorithm, dataset, teacher target, OC-MERO operator, RIFA rule, Stage-I state, proposal budget, relative ranker, boundary transport, regime input, or trainable parameter is changed.** The original V48.89 scientific preregistration and branch rules remain authoritative.
+
+### Triggered failure
+The original V48.89 audit aborted in `build_v48_89_root_correspondence_audit.py::_labels()` with messages of the form:
+
+```text
+balanced/precision teacher-label identity failed role=dev_near:
+sizes=324/324 mismatches=0
+```
+
+The important diagnostic is `mismatches=0`: teacher-only values agreed for every candidate present in both variants. The failure came from requiring the **balanced and precision top-K proposal key sets themselves to be identical**.
+
+That requirement was invalid. `proposal_rows.jsonl` is built after sorting candidates by the checkpoint-dependent `rank_adv`; balanced and precision checkpoints may therefore legitimately place different candidates in top-K even though `teacher_adv`, `teacher_harmful`, `teacher_candidate_r_dep`, and `macro` are deterministic teacher fields. Proposal-membership identity is not teacher-label identity.
+
+### Engineering fixes
+1. **Separate label identity from proposal membership.**
+   - Teacher fields are now required to match exactly (numeric tolerance `1e-7`) on the balanced/precision overlap.
+   - Variant-specific top-K membership is allowed.
+   - The audit label cohort is the union of the two preregistered L80 proposal supports after overlap-value identity is proven.
+   - Every emitted labeled row records whether its label came from balanced, precision, or both.
+   - The summary records overlap/union/exclusive counts and whether key sets happened to be identical.
+
+2. **Fail closed on malformed teacher rows.** Missing/non-finite teacher fields, invalid identities, duplicate proposal keys, zero balanced/precision overlap, or true overlap-value conflicts remain engineering failures.
+
+3. **Weak semantic occurrence fallback is no longer counted as exact root correspondence.** Duplicate/metadata-poor future identities may still contribute to soft correspondence, but occurrence-order suffixes cannot make an `exact` root match. This makes the existing weak-identity preregistration genuinely fail closed rather than merely diagnostic.
+
+4. **Recovery-option identity is explicitly verified before root-local response differencing.** Candidate and nominal `recovery_modes` must have the same length and ordering. Physical response mass is counted only for options valid on both sides. This prevents an option-slot coincidence from being interpreted as a counterfactual response.
+
+5. **Future sidecar integrity is fail-closed.** Root-assignment/probability/valid arrays must align, valid futures must map to valid root indices, and probabilities must be finite/nonnegative. Silent truncation is removed.
+
+6. **Branch-vs-slot disagreement diagnostic is corrected.** It now compares the semantic best mapping to slot identity, rather than conflating non-exact correspondence with a mapping disagreement.
+
+7. **Weak-identity summary is bilateral.** The preregistered `semantic_identity_fallback_mass` is now the per-row max of candidate and nominal weak-fallback mass; candidate and nominal distributions are also reported separately.
+
+8. **Runtime/pipeline provenance is strengthened.** Runtime checks now include `data.serialization` and the V48.79 truth-contract dependency. Pipeline completion verifies V48.89.1 engineering-version identity, label-cohort contract, audit-index row count/SHA, and the full V48.88 STOP/root-correspondence prerequisite.
+
+### Scientific status
+The hotfix does **not** authorize a new algorithm mechanism and does not change V48.89's scientific question:
+
+```text
+counterfactual root correspondence
++ matched-root physical-response identifiability
+on the exact observation-compatible nested deployable lower tail
+```
+
+No regime router, rank/MLP/capacity sweep, boundary transport, dataset reconstruction, or aggregate-response adapter is reopened.
+
+### Compatibility
+The launcher filename and user command are unchanged:
+
+```bash
+BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+  bash scripts/run_v48_89_dcp_drfc_bcde_rifa_rcpi.sh
+```
+
+New engineering version:
+
+```text
+v48.89.1-OC-RCPI-ENGFIX
+```

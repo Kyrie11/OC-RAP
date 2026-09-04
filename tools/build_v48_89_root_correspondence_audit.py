@@ -30,6 +30,8 @@ KEYS = frozenset(
         "time_index",
         "candidate_index",
         "is_nominal",
+        "prefix_macro_type_id",
+        "prefix_macro_id",
         "m_star",
         "root_probs",
         "root_valid",
@@ -108,41 +110,100 @@ def _proposal_rows(run: Path, variant: str, role: str) -> list[dict[str, Any]]:
 
 
 def _label_key(row: dict[str, Any]) -> tuple[str, int, int]:
-    return str(row.get("scene", "")), int(row.get("time", -1)), int(row.get("candidate", -1))
+    if "scene" not in row or "time" not in row or "candidate" not in row:
+        raise ValueError("proposal row missing scene/time/candidate identity")
+    key = str(row["scene"]), int(row["time"]), int(row["candidate"])
+    if not key[0] or key[1] < 0 or key[2] < 0:
+        raise ValueError(f"invalid proposal identity {key}")
+    return key
+
+
+def _validate_teacher_label_row(row: dict[str, Any], *, role: str, variant: str) -> None:
+    required = ("teacher_adv", "teacher_harmful", "teacher_candidate_r_dep", "macro")
+    missing = [field for field in required if field not in row]
+    if missing:
+        raise ValueError(f"proposal row missing teacher fields role={role} variant={variant}: {missing}")
+    for field in ("teacher_adv", "teacher_candidate_r_dep"):
+        try:
+            value = float(row[field])
+        except Exception as exc:
+            raise ValueError(
+                f"proposal teacher field is not numeric role={role} variant={variant} field={field}"
+            ) from exc
+        if not math.isfinite(value):
+            raise ValueError(
+                f"proposal teacher field is not finite role={role} variant={variant} field={field} value={value}"
+            )
+    try:
+        int(row["macro"])
+    except Exception as exc:
+        raise ValueError(f"proposal macro is not integral role={role} variant={variant}") from exc
+
+
+def _teacher_rows_equal(a: dict[str, Any], b: dict[str, Any], *, atol: float = 1.0e-7) -> bool:
+    for field in ("teacher_adv", "teacher_candidate_r_dep"):
+        av, bv = float(a[field]), float(b[field])
+        if not (math.isfinite(av) and math.isfinite(bv)) or abs(av - bv) > atol:
+            return False
+    return bool(a["teacher_harmful"]) == bool(b["teacher_harmful"]) and int(a["macro"]) == int(b["macro"])
 
 
 def _labels(proposal_run: Path) -> tuple[dict[str, dict[tuple[str, int, int], dict[str, Any]]], dict[str, Any]]:
+    """Load teacher labels without conflating them with variant-specific proposal membership.
+
+    Balanced and precision checkpoints may legitimately rank different candidates into
+    their top-K proposal sets.  That is a policy-output difference, not a teacher-label
+    identity failure.  Teacher-only fields must agree on the overlap; after proving that,
+    the audit uses the union of both registered L80 proposal supports.
+    """
     by_role: dict[str, dict[tuple[str, int, int], dict[str, Any]]] = {}
     identity: dict[str, Any] = {}
     for role in ROLE_FILES:
         per_variant = {}
         for variant in VARIANTS:
             rows = _proposal_rows(proposal_run, variant, role)
+            for row in rows:
+                _validate_teacher_label_row(row, role=role, variant=variant)
             m = {_label_key(r): r for r in rows}
             if len(m) != len(rows):
                 raise ValueError(f"duplicate proposal key role={role} variant={variant}")
             per_variant[variant] = m
-        shared = set(per_variant["balanced"]).intersection(per_variant["precision"])
+        balanced_keys = set(per_variant["balanced"])
+        precision_keys = set(per_variant["precision"])
+        shared = balanced_keys.intersection(precision_keys)
+        union = balanced_keys.union(precision_keys)
+        if not shared:
+            raise ValueError(f"balanced/precision proposal supports have no overlap role={role}")
         mismatches = 0
         for key in shared:
             a, b = per_variant["balanced"][key], per_variant["precision"][key]
-            fields = ("teacher_adv", "teacher_harmful", "teacher_candidate_r_dep", "macro")
-            for field in fields:
-                av, bv = a.get(field), b.get(field)
-                if isinstance(av, (float, int)) and isinstance(bv, (float, int)):
-                    if abs(float(av) - float(bv)) > 1e-7:
-                        mismatches += 1
-                        break
-                elif av != bv:
-                    mismatches += 1
-                    break
-        if set(per_variant["balanced"]) != set(per_variant["precision"]) or mismatches:
+            if not _teacher_rows_equal(a, b):
+                mismatches += 1
+        if mismatches:
             raise ValueError(
-                f"balanced/precision teacher-label identity failed role={role}: "
-                f"sizes={len(per_variant['balanced'])}/{len(per_variant['precision'])} mismatches={mismatches}"
+                f"balanced/precision teacher-value identity failed role={role}: "
+                f"sizes={len(balanced_keys)}/{len(precision_keys)} shared={len(shared)} mismatches={mismatches}"
             )
-        by_role[role] = per_variant["balanced"]
-        identity[role] = {"rows": len(shared), "mismatches": mismatches, "exact_key_identity": True}
+        merged: dict[tuple[str, int, int], dict[str, Any]] = {}
+        for key in sorted(union):
+            variants = [variant for variant in VARIANTS if key in per_variant[variant]]
+            row = dict(per_variant[variants[0]][key])
+            row["_v4889_label_variants"] = variants
+            merged[key] = row
+        by_role[role] = merged
+        identity[role] = {
+            "balanced_rows": len(balanced_keys),
+            "precision_rows": len(precision_keys),
+            "shared_rows": len(shared),
+            "union_rows": len(union),
+            "balanced_only_rows": len(balanced_keys - precision_keys),
+            "precision_only_rows": len(precision_keys - balanced_keys),
+            "shared_fraction_of_union": len(shared) / max(1, len(union)),
+            "mismatches": mismatches,
+            "exact_key_identity": balanced_keys == precision_keys,
+            "teacher_value_identity_on_overlap": True,
+            "cohort_policy": "union_of_registered_balanced_precision_l80_proposals",
+        }
     return by_role, identity
 
 
@@ -222,7 +283,19 @@ def _summarize_role(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "shared_future_mass_candidate": _quantiles([float(r["shared_future_mass_candidate"]) for r in valid]),
         "shared_future_mass_nominal": _quantiles([float(r["shared_future_mass_nominal"]) for r in valid]),
         "semantic_identity_fallback_mass": _quantiles(
+            [
+                max(
+                    float(r["semantic_identity_fallback_fraction_candidate"]),
+                    float(r["semantic_identity_fallback_fraction_nominal"]),
+                )
+                for r in valid
+            ]
+        ),
+        "semantic_identity_fallback_mass_candidate": _quantiles(
             [float(r["semantic_identity_fallback_fraction_candidate"]) for r in valid]
+        ),
+        "semantic_identity_fallback_mass_nominal": _quantiles(
+            [float(r["semantic_identity_fallback_fraction_nominal"]) for r in valid]
         ),
         "exact_root_probability_mass": _quantiles(
             [float(r["exact_candidate_root_probability_mass"]) for r in valid]
@@ -284,7 +357,12 @@ def main() -> int:
     args = ap.parse_args()
 
     roots = [_parse_root(x) for x in args.root]
-    if {r for r, _ in roots} != set(ROLE_FILES):
+    role_names = [r for r, _ in roots]
+    if (
+        len(roots) != len(ROLE_FILES)
+        or set(role_names) != set(ROLE_FILES)
+        or len(set(role_names)) != len(role_names)
+    ):
         raise SystemExit(f"all roles required exactly once: {sorted(ROLE_FILES)}")
     proposal_run = args.proposal_run.expanduser().resolve()
     labels, label_identity = _labels(proposal_run)
@@ -308,6 +386,7 @@ def main() -> int:
     out_rows: list[dict[str, Any]] = []
     errors: list[str] = []
     for role in ROLE_FILES:
+        matched_label_keys: set[tuple[str, int, int]] = set()
         groups: dict[tuple[str, int], list[dict[str, Any]]] = defaultdict(list)
         for sample in samples_by_role[role]:
             groups[(sample["__scene__"], sample["__time__"])].append(sample)
@@ -329,9 +408,26 @@ def main() -> int:
                 ).to_dict()
                 lk = (candidate["__scene__"], candidate["__time__"], candidate["__candidate__"])
                 lab = labels[role].get(lk)
+                if lab is not None:
+                    matched_label_keys.add(lk)
+                    sample_r_dep = float(_scalar(candidate, "r_dep_star", float("nan")))
+                    label_r_dep = float(lab["teacher_candidate_r_dep"])
+                    if not math.isfinite(sample_r_dep) or abs(sample_r_dep - label_r_dep) > 1.0e-6:
+                        errors.append(
+                            f"proposal/dataset teacher R_dep mismatch role={role} key={lk}: "
+                            f"proposal={label_r_dep} dataset={sample_r_dep}"
+                        )
+                    sample_macro = int(
+                        _scalar(candidate, "prefix_macro_type_id", _scalar(candidate, "prefix_macro_id", -1))
+                    )
+                    if sample_macro != int(lab["macro"]):
+                        errors.append(
+                            f"proposal/dataset macro mismatch role={role} key={lk}: "
+                            f"proposal={int(lab['macro'])} dataset={sample_macro}"
+                        )
                 rec.update(
-                    schema="ocrap-v48.89-root-correspondence-row-v1",
-                    engineering_version="v48.89.0-OC-RCPI",
+                    schema="ocrap-v48.89-root-correspondence-row-v2",
+                    engineering_version="v48.89.1-OC-RCPI-ENGFIX",
                     dataset_role=role,
                     sample_path=candidate["__path__"],
                     nominal_sample_path=nominal["__path__"],
@@ -339,6 +435,7 @@ def main() -> int:
                     time_index=candidate["__time__"],
                     candidate_index=candidate["__candidate__"],
                     label_available=lab is not None,
+                    proposal_label_variants=list(lab.get("_v4889_label_variants", [])) if lab else [],
                     teacher_adv=float(lab.get("teacher_adv", float("nan"))) if lab else None,
                     teacher_harmful=bool(lab.get("teacher_harmful", False)) if lab else None,
                     teacher_feasible=(float(lab.get("teacher_candidate_r_dep", -1.0)) >= 0.0) if lab else None,
@@ -350,6 +447,12 @@ def main() -> int:
                 if not rec["valid"]:
                     errors.append(f"invalid pair role={role} key={lk}: {rec.get('error')}")
                 out_rows.append(rec)
+        unmatched_labels = set(labels[role]) - matched_label_keys
+        if unmatched_labels:
+            preview = sorted(unmatched_labels)[:5]
+            errors.append(
+                f"proposal labels missing from dataset role={role}: count={len(unmatched_labels)} preview={preview}"
+            )
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w", encoding="utf-8") as f:
@@ -358,8 +461,8 @@ def main() -> int:
 
     roles = {role: _summarize_role([r for r in out_rows if r["dataset_role"] == role]) for role in ROLE_FILES}
     summary = {
-        "schema": "ocrap-v48.89-root-correspondence-audit-summary-v1",
-        "engineering_version": "v48.89.0-OC-RCPI",
+        "schema": "ocrap-v48.89-root-correspondence-audit-summary-v2",
+        "engineering_version": "v48.89.1-OC-RCPI-ENGFIX",
         "valid": not errors,
         "attribution_ready": not errors,
         "errors": errors[:100],
@@ -369,7 +472,10 @@ def main() -> int:
         "output": str(args.output.resolve()),
         "output_sha256": _sha(args.output),
         "proposal_run": str(proposal_run),
-        "proposal_run_role": "teacher/safe-positive labels only; no model feature or training input",
+        "proposal_run_role": (
+            "teacher/safe-positive labels only; union of registered balanced/precision L80 proposal supports; "
+            "no model feature or training input"
+        ),
         "alpha": float(args.alpha),
         "beta": float(args.beta),
         "top_m": int(args.top_m),

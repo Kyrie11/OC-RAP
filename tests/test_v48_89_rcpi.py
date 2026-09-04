@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import numpy as np
+import pytest
 
 from ocrap.v48_89_root_correspondence import (
     audit_candidate_nominal_pair,
@@ -10,6 +12,7 @@ from ocrap.v48_89_root_correspondence import (
     root_option_physical_intervals,
     semantic_future_branch_keys,
 )
+from tools.build_v48_89_root_correspondence_audit import ROLE_FILES, _labels
 
 
 def _sample(assignments, margins, *, mode="stop", metadata=None):
@@ -96,3 +99,85 @@ def test_invalid_future_does_not_contribute_to_correspondence_mass():
     assert rec.valid
     assert rec.shared_future_mass_candidate == 1.0
     assert rec.shared_future_mass_nominal == 1.0
+
+
+def _proposal_row(scene: str, time: int, candidate: int, *, adv: float = 0.1):
+    return {
+        "scene": scene,
+        "time": time,
+        "candidate": candidate,
+        "teacher_adv": adv,
+        "teacher_harmful": False,
+        "teacher_candidate_r_dep": 0.2,
+        "macro": 2,
+    }
+
+
+def _write_proposal_support(root: Path, variant: str, role: str, rows) -> None:
+    p = root / "candidates" / variant / "calibration" / ROLE_FILES[role]
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+
+
+def test_label_identity_accepts_variant_specific_topk_membership_and_uses_union(tmp_path):
+    for role in ROLE_FILES:
+        _write_proposal_support(
+            tmp_path,
+            "balanced",
+            role,
+            [_proposal_row(f"{role}-scene", 1, 1), _proposal_row(f"{role}-scene", 1, 2)],
+        )
+        _write_proposal_support(
+            tmp_path,
+            "precision",
+            role,
+            [_proposal_row(f"{role}-scene", 1, 2), _proposal_row(f"{role}-scene", 1, 3)],
+        )
+    labels, identity = _labels(tmp_path)
+    for role in ROLE_FILES:
+        assert len(labels[role]) == 3
+        assert identity[role]["shared_rows"] == 1
+        assert identity[role]["union_rows"] == 3
+        assert identity[role]["exact_key_identity"] is False
+        assert identity[role]["teacher_value_identity_on_overlap"] is True
+        assert labels[role][(f"{role}-scene", 1, 2)]["_v4889_label_variants"] == ["balanced", "precision"]
+
+
+def test_label_identity_still_fails_on_teacher_value_conflict(tmp_path):
+    for role in ROLE_FILES:
+        balanced = [_proposal_row(f"{role}-scene", 1, 1)]
+        precision = [_proposal_row(f"{role}-scene", 1, 1)]
+        if role == "dev_near":
+            precision[0] = _proposal_row(f"{role}-scene", 1, 1, adv=0.2)
+        _write_proposal_support(tmp_path, "balanced", role, balanced)
+        _write_proposal_support(tmp_path, "precision", role, precision)
+    with pytest.raises(ValueError, match="teacher-value identity failed"):
+        _labels(tmp_path)
+
+
+def test_weak_occurrence_fallback_is_not_counted_as_exact_root_correspondence():
+    nominal = _sample(
+        [0, 1],
+        [[-1.0], [1.0]],
+        metadata=[{"reactive_variant": 0}, {"reactive_variant": 0}],
+    )
+    candidate = _sample(
+        [0, 1],
+        [[-0.5], [1.2]],
+        metadata=[{"reactive_variant": 0}, {"reactive_variant": 0}],
+    )
+    nominal["future_sources"] = np.asarray(["reactive", "reactive"])
+    candidate["future_sources"] = np.asarray(["reactive", "reactive"])
+    rec = audit_candidate_nominal_pair(candidate, nominal)
+    assert rec.valid
+    assert rec.semantic_identity_fallback_fraction_candidate == 1.0
+    assert rec.semantic_identity_fallback_fraction_nominal == 1.0
+    assert rec.nested_tail_exact_correspondence_mass == 0.0
+
+
+def test_recovery_option_identity_mismatch_fails_closed():
+    nominal = _sample([0, 1], [[-1.0], [1.0]], mode="stop")
+    candidate = _sample([0, 1], [[-0.5], [1.2]], mode="yield_rejoin")
+    rec = audit_candidate_nominal_pair(candidate, nominal)
+    assert not rec.valid
+    assert "recovery option identity/order mismatch" in str(rec.error)

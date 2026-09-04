@@ -38,20 +38,43 @@ def main() -> int:
     for p, name in [(args.runtime, "runtime"), (args.audit_summary, "audit_summary"), (args.comparison, "comparison")]:
         if p.is_file() and not _js(p).get("valid"):
             errors.append(f"{name} invalid")
+    expected_version = "v48.89.1-OC-RCPI-ENGFIX"
+    for p, name in [(args.runtime, "runtime"), (args.audit_summary, "audit_summary"), (args.comparison, "comparison")]:
+        if p.is_file() and _js(p).get("engineering_version") != expected_version:
+            errors.append(f"{name} engineering version mismatch")
     if args.audit_summary.is_file() and args.audit_index.is_file():
         summary = _js(args.audit_summary)
         if summary.get("output_sha256") != _sha(args.audit_index):
             errors.append("audit index sha mismatch")
         if summary.get("planner_parameters_trained") != 0:
             errors.append("V48.89 must be audit-only with zero planner parameters")
+        try:
+            row_count = sum(1 for line in args.audit_index.open("r", encoding="utf-8") if line.strip())
+        except Exception as exc:
+            errors.append(f"cannot read audit index: {exc}")
+        else:
+            if int(summary.get("rows", -1)) != row_count:
+                errors.append("audit index row count mismatch")
+        label_identity = summary.get("label_identity") or {}
+        for role in ("dev_near", "certificate_near", "dev_contact", "certificate_contact"):
+            ident = label_identity.get(role) or {}
+            if not bool(ident.get("teacher_value_identity_on_overlap")) or int(ident.get("mismatches", 1)) != 0:
+                errors.append(f"teacher label identity invalid for {role}")
+            if ident.get("cohort_policy") != "union_of_registered_balanced_precision_l80_proposals":
+                errors.append(f"teacher label cohort policy invalid for {role}")
     if args.v48_88_comparison.is_file():
         prev = _js(args.v48_88_comparison)
         pd = prev.get("preregistered_decision") or {}
-        if pd.get("status") != "QUOTIENT_TAIL_RESPONSE_STOP":
+        if not (
+            prev.get("valid")
+            and pd.get("status") == "QUOTIENT_TAIL_RESPONSE_STOP"
+            and not pd.get("quotient_tail_identifiability_go")
+            and "root_correspondence" in str(pd.get("next_branch", ""))
+        ):
             errors.append("V48.88 STOP prerequisite missing")
     doc = {
-        "schema": "ocrap-v48.89-rcpi-pipeline-complete-v1",
-        "engineering_version": "v48.89.0-OC-RCPI",
+        "schema": "ocrap-v48.89-rcpi-pipeline-complete-v2",
+        "engineering_version": expected_version,
         "valid": not errors,
         "attribution_ready": not errors,
         "errors": errors,

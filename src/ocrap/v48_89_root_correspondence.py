@@ -274,6 +274,7 @@ def _response_stats(
     n_lo: np.ndarray,
     n_hi: np.ndarray,
     n_exact: np.ndarray,
+    common_option_valid: np.ndarray | None = None,
 ) -> dict[str, float | None]:
     total = float(cand_mass.sum())
     if total <= 1e-12:
@@ -298,6 +299,9 @@ def _response_stats(
             m = float(cand_mass[kc, l])
             if m <= 0.0 or l >= n_lo.shape[1]:
                 continue
+            if common_option_valid is not None:
+                if l >= common_option_valid.size or not bool(common_option_valid[l]):
+                    continue
             clo, chi = float(c_lo[kc, l]), float(c_hi[kc, l])
             nlo, nhi = float(n_lo[kn, l]), float(n_hi[kn, l])
             lo_finite = clo > -0.5 * _BOUND and nhi < 0.5 * _BOUND
@@ -348,6 +352,21 @@ def audit_candidate_nominal_pair(
             raise ValueError("candidate/nominal m_star option shape mismatch")
         Kc, _L = cm.shape
         Kn = nm.shape[0]
+        cmodes = _string_vector(candidate.get("recovery_modes", []))
+        nmodes = _string_vector(nominal.get("recovery_modes", []))
+        if len(cmodes) != _L or len(nmodes) != _L:
+            raise ValueError(
+                f"candidate/nominal recovery_modes length mismatch: {len(cmodes)}/{len(nmodes)} != {_L}"
+            )
+        if cmodes != nmodes:
+            raise ValueError("candidate/nominal recovery option identity/order mismatch")
+        cov = np.asarray(candidate.get("option_valid", np.ones(_L)), dtype=bool).reshape(-1)
+        nov = np.asarray(nominal.get("option_valid", np.ones(_L)), dtype=bool).reshape(-1)
+        if cov.size < _L:
+            cov = np.pad(cov, (0, _L - cov.size), constant_values=False)
+        if nov.size < _L:
+            nov = np.pad(nov, (0, _L - nov.size), constant_values=False)
+        common_option_valid = cov[:_L] & nov[:_L]
         ca = np.asarray(candidate.get("root_assignments", []), dtype=np.int64).reshape(-1)
         na = np.asarray(nominal.get("root_assignments", []), dtype=np.int64).reshape(-1)
         cp = np.asarray(candidate.get("future_probs", []), dtype=np.float64).reshape(-1)
@@ -356,8 +375,18 @@ def audit_candidate_nominal_pair(
         nv = np.asarray(nominal.get("future_valid", np.ones_like(np_)), dtype=bool).reshape(-1)
         ckeys, cweak, ccoll = semantic_future_branch_keys(candidate)
         nkeys, nweak, ncoll = semantic_future_branch_keys(nominal)
-        nc = min(len(ckeys), ca.size, cp.size, cv.size)
-        nn = min(len(nkeys), na.size, np_.size, nv.size)
+        if not (len(ckeys) == ca.size == cp.size == cv.size):
+            raise ValueError(
+                "candidate future sidecar length mismatch: "
+                f"keys/assignments/probs/valid={len(ckeys)}/{ca.size}/{cp.size}/{cv.size}"
+            )
+        if not (len(nkeys) == na.size == np_.size == nv.size):
+            raise ValueError(
+                "nominal future sidecar length mismatch: "
+                f"keys/assignments/probs/valid={len(nkeys)}/{na.size}/{np_.size}/{nv.size}"
+            )
+        nc = len(ckeys)
+        nn = len(nkeys)
         c_mask = cv[:nc]
         n_mask = nv[:nn]
         ckeys = [k for k, keep in zip(ckeys[:nc], c_mask.tolist()) if keep]
@@ -366,6 +395,14 @@ def audit_candidate_nominal_pair(
         nweak = nweak[:nn][n_mask]
         ca = ca[:nc][c_mask]
         na = na[:nn][n_mask]
+        if np.any((ca < 0) | (ca >= Kc)):
+            raise ValueError("candidate valid future assigned to invalid root index")
+        if np.any((na < 0) | (na >= Kn)):
+            raise ValueError("nominal valid future assigned to invalid root index")
+        if np.any(~np.isfinite(cp[:nc][c_mask])) or np.any(cp[:nc][c_mask] < 0.0):
+            raise ValueError("candidate future probabilities must be finite and nonnegative")
+        if np.any(~np.isfinite(np_[:nn][n_mask])) or np.any(np_[:nn][n_mask] < 0.0):
+            raise ValueError("nominal future probabilities must be finite and nonnegative")
         cp = normalize_weights(cp[:nc][c_mask])
         np_ = normalize_weights(np_[:nn][n_mask])
         ci = {k: i for i, k in enumerate(ckeys)}
@@ -382,6 +419,8 @@ def audit_candidate_nominal_pair(
 
         csets = _root_branch_sets(ckeys, ca, Kc)
         nsets = _root_branch_sets(nkeys, na, Kn)
+        cweak_keys = {key for key, is_weak in zip(ckeys, cweak.tolist()) if is_weak}
+        nweak_keys = {key for key, is_weak in zip(nkeys, nweak.tolist()) if is_weak}
         mapping = np.full(Kc, -1, dtype=np.int64)
         purity = np.zeros(Kc, dtype=np.float64)
         exact = np.zeros(Kc, dtype=bool)
@@ -394,7 +433,12 @@ def audit_candidate_nominal_pair(
             mapping[kc] = kn
             purity[kc] = float(row[kn] / rs)
             # Exact correspondence is semantic set equality, not root-slot equality.
-            exact[kc] = bool(csets[kc] and csets[kc] == nsets[kn])
+            exact[kc] = bool(
+                csets[kc]
+                and csets[kc] == nsets[kn]
+                and not (csets[kc] & cweak_keys)
+                and not (nsets[kn] & nweak_keys)
+            )
         # Require mutual uniqueness: two candidate roots cannot both claim one nominal root.
         for kn in range(Kn):
             claim = [kc for kc in range(Kc) if exact[kc] and int(mapping[kc]) == kn]
@@ -413,13 +457,17 @@ def audit_candidate_nominal_pair(
 
         clo, chi, cex, _cinf = root_option_physical_intervals(candidate)
         nlo, nhi, nex, _ninf = root_option_physical_intervals(nominal)
-        branch_stats = _response_stats(ctail, exact_map, clo, chi, cex, nlo, nhi, nex)
+        branch_stats = _response_stats(
+            ctail, exact_map, clo, chi, cex, nlo, nhi, nex, common_option_valid=common_option_valid
+        )
         slot_map = np.arange(Kc, dtype=np.int64)
         slot_map[slot_map >= Kn] = -1
-        slot_stats = _response_stats(ctail, slot_map, clo, chi, cex, nlo, nhi, nex)
+        slot_stats = _response_stats(
+            ctail, slot_map, clo, chi, cex, nlo, nhi, nex, common_option_valid=common_option_valid
+        )
         valid_roots = [kc for kc in range(Kc) if csets[kc]]
         disagree = (
-            float(np.mean([int(exact_map[k] != slot_map[k]) for k in valid_roots]))
+            float(np.mean([int(mapping[k] != slot_map[k]) for k in valid_roots]))
             if valid_roots
             else 0.0
         )
