@@ -9077,3 +9077,202 @@ New engineering version:
 ```text
 v48.89.1-OC-RCPI-ENGFIX
 ```
+
+## V48.89.1 authoritative result + V48.90 OC-CEPT (2026-09-04)
+
+### V48.89.1 engineering reliability
+The repaired V48.89.1 OC-RCPI result is engineering-valid and may be scientifically attributed. The top-level pipeline and runtime contract agree on:
+
+```text
+valid                  = true
+attribution_ready      = true
+engineering_version    = v48.89.1-OC-RCPI-ENGFIX
+errors                 = []
+planner_parameters_trained = 0
+teacher_labels_changed = false
+teacher_metadata_input_to_model = false
+test_roots_read        = false
+dataset_reconstruction = false
+boundary_transport     = false
+regime_conditioning    = false
+relative_ranker_modified = false
+```
+
+Independent re-extraction of the delivered code reproduces the V48.89.1 runtime-code SHA contract and passes the ten dedicated RCPI tests and Python compilation. The balanced/precision L80 proposal supports are not required to have identical membership; teacher-only values agree on their overlap with zero mismatches in all four roles. Therefore the current STOP is not an engineering artifact.
+
+### Strict V48.89 preregistered decision
+The authoritative status is:
+
+```text
+COUNTERFACTUAL_ROOT_CORRESPONDENCE_STOP
+root_correspondence_go                         = false
+root_local_physical_response_identifiability_go = false
+matched_root_response_training_authorized       = false
+```
+
+The branch decomposition is unusually informative:
+
+- power: PASS in all four roles;
+- median shared-future mass: PASS in all four roles;
+- median soft nested-tail correspondence: PASS in all four roles;
+- median exact nested-tail correspondence: PASS in all four roles;
+- weak semantic fallback q90: **FAIL in all four roles** (Near about 0.30; Contact about 0.32);
+- median matched-tail sign-identifiable physical-response mass: **0 in all four roles**;
+- safe-positive vs harmful AUC of the V48.89 matched-root signed-response score: about 0.46--0.49, FAIL in all four roles;
+- safe-positive within-group top-1 lift: only dev-Near is positive enough; the other three roles fail.
+
+Thus V48.89 does not authorize any root-response training.
+
+### What the weak-identity STOP actually exposed
+The V48.89 individual-branch identity was deliberately fail-closed: repeated semantic branches received an occurrence suffix but were marked weak so array order could not become fake semantics. The current data-generation code reveals why the fallback mass is systematic rather than random noise.
+
+Waymax Near/Contact construction can materialize repeated stress futures with the same branch recipe. Remaining targeted slots reuse the same post-prefix rollout for repeated `waymax_sdc_post_prefix_control_stress`, low-friction, or control-delay recipes. Root clustering itself initially groups futures by the same source/branch metadata. Consequently, repeated future *instances* are often exchangeable copies and do not possess a meaningful one-to-one identity. Treating every copy as an individually identifiable counterfactual is an over-fine correspondence unit.
+
+However the opposite shortcut is also forbidden. Augmented hidden/visible/contact-surrogate branches can use seeds containing `prefix.macro_id`, actor selection/spawn or random impulse metadata. Two branches with the same coarse semantic label can therefore be different exogenous realizations under candidate and nominal actions. Simply removing the occurrence suffix and declaring semantic labels identical would fabricate causal correspondence.
+
+The correct next question is therefore not `root ID?`, but:
+
+```text
+which counterfactual future instances are exchangeable,
+which exogenous realizations are genuinely shared across actions,
+and how should candidate/nominal root partitions be coupled when roots split or merge?
+```
+
+### Exploratory partition-stability evidence (not a preregistered V48.89 GO)
+A row-level post-hoc diagnostic is strong enough to motivate, but not to promote, the next experiment. Across the 107 registered safe-positive rows (20 dev-Near, 18 certificate-Near, 38 dev-Contact, 31 certificate-Contact), every row has:
+
+```text
+candidate shared-future mass                = 1
+nested-tail exact correspondence mass       = 1
+branch-vs-slot mapping disagreement         = 0
+```
+
+Harmful rows satisfy the analogous full-stability condition much less often: approximately 40.9% dev-Near, 52.3% certificate-Near, 52.5% dev-Contact and 59.1% certificate-Contact. Using exact-tail correspondence as a score gives safe-positive-vs-harmful AUC about 0.796 / 0.739 / 0.737 / 0.709 (dev-Near / certificate-Near / dev-Contact / certificate-Contact), and the same ordering persists within each macro type. This is **exploratory evidence that counterfactual partition stability may be a structural rejector/admissibility cue**, not evidence for a physical recovery source.
+
+By contrast, even on fully stable rows the current pre-structural interval differencing does not identify true beneficial response: registered safe-positive rows have zero matched-tail sign-identifiable response mass in all four roles, while sign-identifiable mass occurs mainly on harmful/teacher-infeasible rows. Therefore the next version must not train from the current matched-root response target.
+
+### Promotion / closure after V48.89
+Retain:
+- OC-MERO observation-consistent information pattern and exact nested-tail localization;
+- RIFA role isolation and fixed-proposal semantics;
+- actuator-realizable executable recovery and active-set/route/persistent-reentry semantics;
+- signed reserve/debt interpretation as a shared three-regime mathematical object;
+- candidate-minus-nominal causality as a principle;
+- fail-closed identifiability auditing;
+- partition stability only as a **candidate structural-rejector hypothesis pending V48.90**, not yet as runtime policy logic.
+
+Newly close / forbid:
+- individual duplicate future-instance identity as the fundamental counterfactual correspondence unit;
+- any root-response head trained before exogenous partition correspondence is proven;
+- V48.89 matched-root signed-response score as a production source;
+- post-hoc promotion of partition stability without the prospective macro-stratified V48.90 gate.
+
+All earlier closures remain active: aggregate-counterfactual-response adapters, BARR/rank/MLP sweeps, frozen structured-tail adapters, option-wise gain transport, external ball/box/hull/anchor/jerk families, B1/B2 sweeps, truth-inverse refinements, boundary transport, relative-ranker modification, regime routers/experts, proposal expansion, broad encoder/root retraining and dataset reconstruction.
+
+### V48.90 OC-CEPT
+Name: **Observation-Consistent Counterfactual Equivalence-Partition Transport (OC-CEPT)**.
+
+V48.90 is the preregistered fail-closed branch after V48.89 correspondence STOP. It is audit-only and has **zero planner parameters**. It does not change the current dataset selection, teacher labels, OC-MERO, RIFA, Stage I, proposal set, thresholds or deployment behavior.
+
+For candidate action `a` and same-scene-time nominal `a0`, V48.90 has two nested correspondence levels.
+
+#### Q90 -- recipe equivalence quotient
+Future instances are collapsed into a candidate-independent recipe class
+
+```text
+e = (source, branch-defining metadata)
+```
+
+without an occurrence suffix. Repeated instances are only quotientable when their class remains root-homogeneous inside a sample. This explicitly tests whether V48.89's 0.30/0.32 weak mass was caused by over-granular duplicate identity rather than genuine ambiguity.
+
+For each shared class `e`, let `c_ke` and `n_je` be candidate/nominal probability mass assigned to roots `k` and `j`. The class contributes the coupling
+
+```text
+Pi_e(k,j) = min(c_e,n_e) * [c_ke/c_e] * [n_je/n_e].
+```
+
+The total `Pi=sum_e Pi_e` is a probability-mass transport between root partitions; no root-slot identity or one-to-one root map is assumed.
+
+#### T90/Main -- exogenous realization transport
+A semantic recipe is not sufficient for augmented/stochastic branches. Hidden spawn, visible-actor selection, contact impulse and related realization fields are appended to the class key when those perturbations are active. If the required realization fingerprint is absent, the class is unresolved; if candidate and nominal instantiate different perturbations, their mass is not matched.
+
+This prevents a shared string such as `hidden_vehicle_yield` from being interpreted as the same latent world when the generator actually sampled different actors/spawns because the candidate-specific construction changed.
+
+#### Nested-tail partition stability
+Let `t_k` be the candidate root mass induced by the exact production stable-sort/fractional-tail OC-MERO influence. For coupling row mass `m_k=sum_j Pi_kj`, candidate root probability `p_k`, and row purity `u_k=max_j Pi_kj/m_k`, define
+
+```text
+coverage_k = min(1, m_k/p_k)
+S_part = sum_k t_k * coverage_k * u_k.
+```
+
+`S_part=1` means the deployable weak tail is fully transported to a pure nominal partition; loss can come from unmatched exogenous mass or split/merge coupling. This is a structural correspondence quantity, not a learned feasibility score.
+
+V48.90 also propagates the existing pre-structural physical intervals through the transport support conservatively: a candidate root-option response is sign-identifiable only when the union of response intervals over every transport-supported nominal root has one sign. Unmatched tail mass is ambiguous. This is an audit; it does not train from the resulting score.
+
+### V48.90 preregistered gates
+**Q90 recipe quotient GO** requires:
+- >=100 labeled rows in all four roles;
+- recipe-unresolved semantic mass q90 <=0.05 on candidate and nominal in all roles;
+- duplicate-class root-homogeneity q10 >=0.99 on candidate and nominal in all roles;
+- recipe shared mass median >=0.95 in all roles;
+- recipe nested-tail transport coverage median >=0.90 in all roles;
+- recipe tail partition stability median >=0.85 in at least three roles.
+
+**T90 exogenous partition-transport GO** additionally requires:
+- unresolved exogenous mass q90 <=0.10 in all roles;
+- exogenous shared mass median >=0.80 in all roles;
+- exogenous nested-tail transport coverage median >=0.80 in all roles;
+- exogenous transport purity median >=0.90 in all roles;
+- exogenous tail partition stability median >=0.75 in all roles.
+
+**Partition-stability directional relevance** is deliberately separate from correspondence and cannot authorize a source. It requires safe-positive power >=10 in all roles, safe-positive-vs-harmful partition-stability AUC >=0.65 in at least three roles including Near and Contact, macro-stratified AUC >=0.62 in at least three roles including Near and Contact, and safe-positive mean stability > harmful mean stability in at least three roles.
+
+**Transport physical-response identifiability GO** requires T90 correspondence GO plus median sign-identifiable and informative tail mass >=0.50 in at least three roles, response AUC >=0.60 in at least three roles including Near and Contact, and within-group top-1 lift >=0.10 in at least two roles including Near and Contact.
+
+Only T90 correspondence GO + response identifiability GO authorizes a fixed-capacity transport-coupled signed response operator in a later version. Boundary transport remains OFF.
+
+Branch rules:
+- full transport/response GO -> one fixed-capacity transport-coupled signed response operator; no capacity sweep and no boundary transport;
+- transport correspondence GO / response STOP -> do **not** train a source; if partition directional relevance GO, retain partition stability only as a structural rejector scaffold and next build a non-input common-exogenous future-level physical-margin sidecar on the same sample cohort, without dataset reselection/reconstruction;
+- recipe quotient GO / exogenous transport STOP -> duplicate identity was over-granular but current branch realizations are not causally shared; do not train and audit common-randomness/exogenous provenance only;
+- recipe quotient STOP -> close root-local causal response under current counterfactual sidecars; no encoder/adapter/dataset sweep.
+
+### V48.90 execution
+
+```bash
+cd /home/senzeyu2/code/OC-RAP
+
+BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+  bash scripts/run_v48_90_dcp_drfc_bcde_rifa_cept.sh
+```
+
+The version is CPU/audit-only. Upload:
+
+```text
+runs/OC-RAP-v48.90-OC-CEPT-audits.zip
+runs/OC-RAP-v48.90-partition-transport-audit.jsonl
+```
+
+### Convergence state
+**NOT CONVERGED.** V48.89.1 does not authorize matched-root response training. External SOTA baselines and final Safe/Near/Contact deployment claims remain blocked. V48.90 is an identifiability/partition adjudication, not a claimed performance improvement.
+
+### V48.90 final engineering validation notes
+The final V48.90 delivery additionally fixes two audit-only implementation issues found during release validation; neither changes the preregistered scientific hypothesis:
+- runtime-contract synthetic booleans are explicitly converted to Python `bool`, so the fail-closed provenance JSON is serializable in the formal launcher;
+- `contact_surrogate=True` alone no longer forces an exogenous impulse fingerprint. The deterministic `waymax_secondary_collision_approach` recipe uses this semantic flag without a random impulse; only true augmented/stochastic realizations (hidden/visible augmentation, natural-hidden realization, `waymax_contact_impulse_surrogate`, or stored yaw/lateral impulse) require the realization fingerprint.
+
+The V48.90 top-1 diagnostic is tie-aware: when several candidates share the exact maximum score, expected top-1 accuracy averages uniformly over the maximizers rather than using row order. This prevents candidate-order artifacts in structural scores with many exact ties.
+
+Final local validation before packaging:
+
+```text
+V48.46-V48.63 regression                  143 PASS
+V48.64-V48.90 modern regression           192 PASS
+------------------------------------------------
+relevant regression total                 335 PASS
+V48.90 dedicated + contract                12 PASS
+compileall src/tools/tests                  PASS
+recursive scripts bash -n                 167 PASS
+runtime-code preflight                    valid=true
+```
