@@ -8852,3 +8852,164 @@ Branch rules:
 
 ### Convergence state after V48.87
 **NOT CONVERGED.** V48.87 fails the full source gate. Final external SOTA tables and claims that Safe/Near/Contact have reached SOTA remain premature. V48.88 is a registered identifiability adjudication, not a claimed success.
+
+## V48.88 authoritative result + V48.89 OC-RCPI (2026-09-04)
+
+### V48.88 engineering reliability / attribution decision
+The uploaded V48.88 OC-QTRR result is engineering-valid and scientifically attributable. The top-level pipeline, runtime-code contract, reference-reuse contract, state-isolation manifests, training-completion records, evidence-completion records and calibration artifacts agree on:
+
+```text
+valid                  = true
+attribution_ready      = true
+engineering_version    = v48.88.0-OC-QTRR
+errors                 = []
+test_roots_read        = false
+dataset_reconstruction = false
+boundary_transport     = false
+regime_conditioning    = false
+relative_ranker_modified = false
+```
+
+The runtime intervention contract is also satisfied: QTRR removes the p-weighted option-translation component, projects pure translation to zero, preserves exact native behavior at zero initialization, has exact zero nominal-action response, and adds only `direct_absolute_quotient_tail_response_weight[2,141]` (282 parameters, 0.5266% of V48.87 BARR). All 170 historical Stage-I tensors remain bitwise unchanged. W88/X88 balanced and precision both execute the registered training objective and terminate normally after six completed epochs because held-out early stopping selects the initial checkpoint.
+
+The user intentionally removed the four `best.pt` binaries from the uploaded result package. This prevents the strongest offline checkpoint-byte reload and row-level re-inference, but it does not block attribution here: checkpoint SHA/provenance, epoch-0 selection, state isolation, runtime code SHA, calibration outputs and the fail-closed top-level sentinel are mutually consistent. No engineering failure explains the zero learned response.
+
+Independent verification on the delivered code passes the V48.88/V48.89 dedicated tests, the modern V48.64--V48.89 regression set, the legacy V48.46--V48.63 regression set, `compileall`, and all active shell syntax checks.
+
+### Strict preregistered V48.88 decision
+The authoritative scientific status is:
+
+```text
+QUOTIENT_TAIL_RESPONSE_STOP
+```
+
+All registered GO branches fail:
+
+```text
+W88_heldout_learning                    = false
+X88_heldout_learning                    = false
+barr_nullspace_repair                   = false
+net_identifiable_response               = false
+interval_quotient_support               = false
+structural_selective_increment_go       = false
+quotient_tail_identifiability_go        = false
+full_source_go                          = false
+```
+
+The clean causal comparisons are exact no-ops because every formal best checkpoint is epoch 0:
+
+```text
+W88 - S86: source AUC delta = 0 in 8/8 cells
+            interval-Huber delta = 0 in 8/8 cells
+            safe-positive delta = 0 in 8/8 cells
+
+X88 - T86: source AUC delta = 0 in 8/8 cells
+            interval-Huber delta = 0 in 8/8 cells
+            safe-positive delta = 0 in 8/8 cells
+
+X88 - W88: source AUC delta = 0 in 8/8 cells
+            interval-Huber delta = 0 in 8/8 cells
+            safe-positive delta = 0 in 8/8 cells
+```
+
+W88/X88 appear dramatically better than U87/V87 because they return from BARR's permissive non-zero field to the zero-correction historical action-only source. This is a valid negative control, not QTRR mechanism success. Relative to U87/V87, AUC and interval Huber improve 8/8 and harmful/TI admission collapses, but safe-positive pass simultaneously drops to zero in every Near/Contact cell. QTRR therefore repairs a representation nullspace but does not identify a learnable recovery-response coefficient.
+
+`X88-L80` cannot be used as evidence for QTRR either. It has 6/8 positive AUC cells and four material Near cells, but interval Huber worsens in 8/8, no safe-positive candidate is newly admitted, and the same outputs are exactly reproduced by historical T86. The apparent Near ordering gain is inherited from the historical structural action-only reference, not caused by a learned quotient response.
+
+### Mechanism interpretation
+V48.87 and V48.88 together establish:
+
+```text
+free root x action field
+    -> unidentifiable aggregate-target nullspace
+    -> permissive false rescue
+
+single exact quotient-cotangent direction
+    -> nullspace removed
+    -> held-out optimizer selects zero response
+```
+
+Therefore the missing ingredient is not another projection, rank, gain, loss weight or generic encoder. The candidate-level partially identified interval still does not say which candidate root corresponds to which nominal root, nor which matched weak root receives positive reserve or negative debt change. A single aggregate response coefficient is statistically safest at zero when the same candidate can help some weak roots and harm others while preserving an ambiguous aggregate interval.
+
+The dominant bottleneck is tightened to:
+
+> **counterfactual root correspondence and root-local physical-response identifiability on the observation-compatible nested deployable lower tail.**
+
+### Promotion and closure decisions
+Retain only the following V48.88 components as formal/audit scaffolds:
+
+- exact nested OC-MERO cotangent computation;
+- p-weighted option-translation quotient projection;
+- zero-init/native-identity and nominal-zero contracts;
+- V48.87/V48.88 pair as a positive/negative nullspace-control ablation.
+
+Do **not** promote W88 or X88 as planner mechanisms. Do not promote QTRR into the Main source. Structural selective ordering remains useful only as a rejection/regularization principle; X88 itself is not promoted.
+
+The following family is now formally closed:
+
+```text
+aggregate counterfactual-response adapters
+    - action-only response
+    - state-gated action-only response
+    - aggregate-supervised low-rank root x action response
+    - quotient-cotangent scalar lift
+    - state/delta mixtures of the above
+    - rank/width/depth/table/gain/LR/threshold sweeps
+    - action/root generic MLP replacements
+```
+
+All prior exclusions remain active: no Safe/Near/Contact router or expert; no regime-specific threshold/budget; no proposal/top-K or unsupported option-library expansion; no class-local/path-stop Main; no post-hoc hard control veto; no external ball/box/hull/anchor/jerk restart; no B1/B2/high-order sweep; no further floor/cap/switch-inverse refinement; no boundary transport; no relative-ranker modification; no broad Stage-I/root retraining; and no dataset reconstruction.
+
+### Near / Contact interpretation
+Near remains unable to admit any registered safe-positive recovery. The next object is not generic danger recognition but **matched-root positive reserve preservation**: for the same counterfactual branch under candidate and nominal actions, does the candidate increase or preserve headroom specifically on the weak roots that form the deployable lower tail?
+
+Contact remains the same signed object on the negative side. The next object is **matched-root debt repayment**: does the candidate reduce penetration, re-contact or secondary-collision recovery debt on the corresponding weak roots and make that improvement persist through the nested deployable tail? This remains one regime-agnostic mechanism; no Contact-specific policy is authorized.
+
+### V48.89 OC-RCPI
+V48.89 is **Observation-Consistent Root-Correspondence Physical Identifiability**. It is an audit-only, zero-parameter preregistered adjudication. It does not train a planner head and does not modify data, labels, Stage I, RIFA, OC-MERO, relative ranking or deployment decisions.
+
+For each same-scene-time candidate/nominal pair:
+
+1. Construct candidate-independent semantic future-branch identities from stored counterfactual source and branch metadata. Duplicate identities are marked as weak order fallbacks rather than silently treated as exact.
+2. Match candidate roots to nominal roots through shared future-branch sets and probability mass, never through root-slot index.
+3. Recompute the exact stable-sort/fractional-tail nested OC-MERO cell influence.
+4. Invert the ordered structural teacher operators at every root-option cell to obtain conservative pre-structural physical intervals.
+5. For an exactly matched root pair and common option, form the physical response interval
+
+```text
+Delta M_phys[k,l](a)
+  in [ L_candidate[k,l] - U_nominal[match(k),l],
+       U_candidate[k,l] - L_nominal[match(k),l] ].
+```
+
+6. Measure how much exact nested-tail influence has root correspondence, informative response bounds, sign-identifiable response, and point-identifiable response. Compare the matched-root signed response score against safe-positive/harmful labels only as an offline diagnostic; teacher metadata never enters model input.
+
+V48.89 preregistered root-correspondence GO requires all four dev/certificate Near/Contact roles to have >=100 labeled rows, median shared future mass >=0.95, q90 weak semantic fallback <=0.05, median soft nested-tail correspondence >=0.85, and at least three roles with median exact tail correspondence >=0.75.
+
+Root-local physical-response identifiability GO additionally requires safe-positive power in all four roles, at least three roles with median sign-identifiable tail mass >=0.50, safe-positive-vs-harmful AUC >=0.60 in at least three roles including Near and Contact, and positive within-group top-1 lift >=0.10 in at least two roles including Near and Contact.
+
+Branch rules are fail-closed:
+
+- correspondence GO + response identifiability GO -> authorize one fixed-capacity matched-root signed response operator in the next version; no boundary transport;
+- correspondence GO + response identifiability STOP -> do not train a new source under current targets; audit or add a non-input future/root physical-margin sidecar without dataset reselection/reconstruction;
+- correspondence STOP -> do not train; audit counterfactual future identity and root-partition stability;
+- no outcome authorizes rank, MLP, broad encoder, router, boundary or dataset sweeps.
+
+### V48.89 execution
+
+```bash
+cd /home/senzeyu2/code/OC-RAP
+
+BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+  bash scripts/run_v48_89_dcp_drfc_bcde_rifa_rcpi.sh
+```
+
+This version is CPU/audit-only; `GPU0/GPU1` are unnecessary. Upload:
+
+```text
+runs/OC-RAP-v48.89-OC-RCPI-audits.zip
+runs/OC-RAP-v48.89-root-correspondence-audit.jsonl
+```
+
+### Convergence state
+**NOT CONVERGED.** V48.88 does not meet the absolute-source freeze criterion. External SOTA baselines, paired Safe non-interference and final Near/Contact closed-loop claims remain blocked until a response target is both root-correspondent and physically identifiable, followed by an engineering-valid source GO.
