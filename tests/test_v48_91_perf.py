@@ -9,6 +9,7 @@ import sys
 from types import SimpleNamespace
 
 import numpy as np
+from ocrap.v48_91_common_exogenous_physical_margin import ENGINEERING_VERSION
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -101,7 +102,7 @@ def test_v4891_merge_parts_is_disjoint_and_deterministic(tmp_path: Path):
         summ = tmp_path / f's{w}.json'
         summ.write_text(json.dumps({
             'valid': True, 'attribution_ready': True,
-            'engineering_version': 'v48.91.4-OC-CEPMI-REPLAYFIX2',
+            'engineering_version': ENGINEERING_VERSION,
             'requested_samples': 1, 'valid_samples': 1, 'labeled_candidate_pairs': 1,
             'worker_partition': {'num_workers': 2, 'worker_index': w},
             'replay_provenance_resolution_counts': {'index:legacy_wx_migration_key': 1},
@@ -146,3 +147,29 @@ def test_v4891_runner_exposes_safe_parallel_replay_controls():
     assert 'V4891_PROGRESS_EVERY' in text
     assert 'GPU0' in text and 'GPU1' in text
     assert 'merge_v48_91_common_exogenous_physical_sidecar_parts.py' in text
+
+
+def test_v4891_pipeline_rejects_mixed_engineering_versions(tmp_path: Path):
+    from ocrap.v48_91_common_exogenous_physical_margin import ENGINEERING_VERSION
+    def put(name, doc):
+        p = tmp_path / name
+        p.write_text(json.dumps(doc))
+        return p
+    runtime = put('runtime.json', {'valid': True, 'engineering_version': ENGINEERING_VERSION, 'planner_parameters_trained':0, 'dataset_reconstruction':False, 'teacher_metadata_input_to_model':False})
+    source = put('source.json', {'valid': True})
+    sidecar_summary = put('sidecar-summary.json', {'valid': True, 'engineering_version': ENGINEERING_VERSION, 'planner_parameters_trained':0, 'dataset_reconstruction':False, 'dataset_reselection':False, 'teacher_metadata_input_to_model':False})
+    audit_summary = put('audit-summary.json', {'valid': True, 'engineering_version': 'legacy-mixed-version', 'planner_parameters_trained':0, 'dataset_reconstruction':False, 'teacher_metadata_input_to_model':False})
+    comparison = put('comparison.json', {'valid': True, 'engineering_version': ENGINEERING_VERSION, 'planner_parameters_trained':0, 'dataset_reconstruction':False, 'teacher_metadata_input_to_model':False, 'boundary_transport':False, 'preregistered_decision':{'status':'STOP'}})
+    v4890 = put('v4890.json', {'preregistered_decision':{'exogenous_partition_transport_go':True,'transport_physical_response_identifiability_go':False}})
+    sidecar = put('sidecar.bin', {'x':1})
+    audit = put('audit.jsonl', {'x':1})
+    out = tmp_path / 'pipeline.json'
+    cmd = [sys.executable, str(ROOT / 'tools/check_v48_91_pipeline_complete.py'),
+           '--runtime',str(runtime),'--source-contract',str(source),'--sidecar',str(sidecar),
+           '--sidecar-summary',str(sidecar_summary),'--audit',str(audit),'--audit-summary',str(audit_summary),
+           '--comparison',str(comparison),'--v48-90-comparison',str(v4890),'--output',str(out)]
+    proc = subprocess.run(cmd, cwd=ROOT)
+    assert proc.returncode == 30
+    doc = json.loads(out.read_text())
+    assert not doc['valid']
+    assert any('audit_summary.engineering_version' in e for e in doc['errors'])

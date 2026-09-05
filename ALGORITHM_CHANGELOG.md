@@ -9621,3 +9621,150 @@ No change to OC-MERO, RIFA, Stage-I, V48.90 cohort membership, common-exogenous 
 - The lock never supplies a margin/label/model feature. Recipe/source index must match before a lock is accepted; future probability, exogenous class, and active root-margin replay remain fail-closed afterward.
 - Added a calibration protocol/source contract preflight: `calibration_v48_14_prism_4814` is checked as a deterministic view of `calibration_near_contact/contact`. Rebuilding/repartitioning the protocol is **not** an allowed fix for exogenous replay drift when source NPZ bytes are unchanged.
 - Continue to forbid V48.92/source training until the complete V48.91 engineering gate passes.
+
+## V48.91.6 — OC-CEPMI-RECIPELOCK (engineering-only, 2026-09-05)
+
+### Reliability verdict on the uploaded V48.91.5 run
+
+The uploaded V48.91.5 run is **engineering-incomplete and not scientifically attributable**. Both replay workers make substantial valid progress with zero errors and then fail-fast on the first canonical Contact sample whose optional visible-actor perturbation did not materialize in the historical calibration build:
+
+```text
+worker0: valid=213 / requested=3145
+stored future[3] = waymax_contact_impulse_surrogate
+current replay expected = waymax_visible_actor_visible_brake
+
+worker1: valid=548 / requested=3121
+stored future[3] = waymax_contact_impulse_surrogate
+current replay expected = waymax_visible_actor_visible_brake
+```
+
+No merged sidecar, physical-response audit, preregistered comparison, or `OC-RAP-v48.91-PIPELINE_COMPLETE.json` exists. Therefore **none of the V48.91 CEPMI GO/STOP gates may be adjudicated from this partial run**. In particular, it authorizes neither V48.92 response training nor closure of the current physical-response branch.
+
+The calibration protocol/source preflight itself is healthy: all 22,882 protocol samples are hardlink-identical to the registered calibration sources with zero missing/size/content mismatches. This is not a dataset-corruption or dataset-reconstruction problem.
+
+### Root cause 1: frozen exogenous realization was locked, but optional recipe *presence* was not
+
+V48.91.5 correctly made the realized actor/spawn/impulse of a materialized stochastic future authoritative from canonical NPZ metadata. However, the historical V48.14 future generator has a distinct semantic fact that also needs to be replayed exactly: visible-actor perturbation recipes are **optional materializations**.
+
+The historical/current generator contract is:
+
+```text
+try visible_brake
+  -> if no eligible visible actor: return None; append no future
+try visible_accelerate
+  -> if no eligible visible actor: return None; append no future
+then emit requested deterministic targeted recipes
+```
+
+Therefore a canonical future slot can legitimately contain `waymax_contact_impulse_surrogate` at index 3 instead of a visible-brake future. The dataset reports independently confirm that this is normal historical semantics rather than a malformed sample:
+
+```text
+calibration Contact samples = 16,843
+visible_brake futures        = 16,629
+visible_accelerate futures   = 16,629
+=> 214 Contact samples legitimately omit each visible branch
+
+calibration Near samples     = 6,039
+visible_brake futures        = 6,015
+visible_accelerate futures   = 6,015
+=> 24 Near samples legitimately omit each visible branch
+```
+
+V48.91.5 called the strict recipe lock **before** reproducing this historical optional-materialization decision. It therefore interpreted the next canonical deterministic recipe as a recipe mismatch.
+
+### V48.91.6 fix: frozen optional-recipe presence lock
+
+V48.91.6 adds audit-only `_audit_replay_optional_recipe_present(...)` before each optional visible perturbation. In audit replay:
+
+1. source and future index remain fail-closed;
+2. the canonical next future metadata determines whether the optional visible recipe actually existed;
+3. if the canonical next slot is a different targeted recipe, the absent optional branch is skipped exactly as in the historical builder;
+4. if the visible recipe did exist, the existing V48.91.5 `_audit_replay_future_lock(...)` remains mandatory and freezes its actor realization;
+5. every materialized future still passes the existing future probability, exact exogenous-class, and active root-margin replay checks.
+
+Production generation is unchanged because production configs do not contain `_audit_replay_future_metadata`; the helper is a no-op there.
+
+This is **not** a permissive identity relaxation. It freezes another part of the canonical exogenous realization contract: whether an optional stochastic recipe materialized at all.
+
+### Root cause 2: downstream engineering-version split would have blocked the run later
+
+A second latent blocker was found while auditing the incomplete pipeline. V48.91.5 updated sidecar/runtime artifacts to:
+
+```text
+v48.91.5-OC-CEPMI-EXOGLOCK
+```
+
+but several downstream tools still emitted/expected V48.91.4:
+
+```text
+merge_v48_91_common_exogenous_physical_sidecar_parts.py
+build_v48_91_common_exogenous_physical_response_audit.py
+compare_v48_91_cepmi.py
+```
+
+With `V4891_REPLAY_WORKERS=2`, the merge tool would therefore have rejected otherwise complete V48.91.5 part summaries after replay. This did not cause the uploaded failure only because both workers stopped earlier on the optional-recipe mismatch.
+
+V48.91.6 centralizes the engineering version in:
+
+```text
+src/ocrap/v48_91_common_exogenous_physical_margin.py
+ENGINEERING_VERSION = v48.91.6-OC-CEPMI-RECIPELOCK
+```
+
+and all sidecar/merge/audit/comparison/runtime/pipeline artifacts consume that shared constant. The final pipeline checker now also rejects mixed-version current-V48.91 artifacts explicitly rather than merely trusting each artifact's `valid` flag.
+
+### Scientific contract unchanged
+
+V48.91.6 changes **no scientific algorithm** and no preregistered V48.91 gate:
+
+```text
+planner parameters trained          = 0
+same V48.90 labeled cohort          = true
+dataset reconstruction/reselection  = false
+canonical NPZ rewrite               = false
+teacher labels changed              = false
+teacher metadata model input        = false
+common-exogenous equivalence        = unchanged
+physical pre-structural margin      = unchanged
+OC-MERO alpha/beta/tail semantics   = unchanged
+active recovery options             = unchanged
+boundary transport                  = false
+relative ranker                     = frozen
+regime conditioning                 = false
+capacity sweep                       = false
+```
+
+The original V48.91 preregistration remains the only scientific decision rule after a complete reliable rerun.
+
+### Checkpoint policy for the rerun
+
+Replay checkpoint reuse is already engineering-version strict. V48.91.5 checkpoint rows are therefore not eligible under V48.91.6. For a clean homogeneous rerun, use `V4891_CLEAR_REPLAY_CHECKPOINTS=1` once; after that, normal V48.91.6 resume remains safe.
+
+### Validation
+
+V48.91.6 engineering validation completed locally:
+
+```text
+V48.91 focused/performance tests         26 / 26 PASS
+V48.89 -> V48.91 focused chain           48 / 48 PASS
+V48.80 -> V48.91 modern regression       90 / 90 PASS
+compileall src/tools/tests               PASS
+all scripts bash -n                    168 / 168 PASS
+V48.91 runtime preflight                 valid=true
+frozen optional-recipe presence check    PASS
+shared engineering-version contract      PASS
+mixed-version pipeline rejection         PASS
+```
+
+The repository-wide historical `tests/test_v48_*.py` matrix is not a valid aggregate regression target for this package snapshot because legacy tests refer to files already absent in the uploaded V48.91.5 source (e.g. `scripts/train_ocrap_v48_12_trident.sh`). Those pre-existing legacy failures are not attributed to this patch and are not counted as passes.
+
+### Branch rule remains unchanged
+
+Only a **complete V48.91.6 engineering-valid rerun** may proceed to the pre-registered CEPMI scientific attribution. Until then:
+
+```text
+DO NOT analyze partial replay rows as algorithm evidence.
+DO NOT declare any V48.91 branch GO/STOP.
+DO NOT design or train V48.92.
+DO NOT reopen boundary transport / ranker / dataset / regime-router families.
+```

@@ -26,6 +26,9 @@ from ocrap.v48_89_root_correspondence import nested_tail_influence
 from ocrap.v48_90_partition_transport import future_class_keys
 
 
+ENGINEERING_VERSION = "v48.91.6-OC-CEPMI-RECIPELOCK"
+
+
 @dataclass(frozen=True)
 class FuturePhysicalResponseMetrics:
     valid: bool

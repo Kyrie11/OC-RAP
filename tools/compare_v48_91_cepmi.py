@@ -2,6 +2,7 @@
 from __future__ import annotations
 import argparse,json,math
 from pathlib import Path
+from ocrap.v48_91_common_exogenous_physical_margin import ENGINEERING_VERSION
 
 ROLES=('dev_near','certificate_near','dev_contact','certificate_contact')
 
@@ -13,6 +14,7 @@ def main()->int:
  ap=argparse.ArgumentParser();ap.add_argument('--summary',type=Path,required=True);ap.add_argument('--v48-90-summary',type=Path,required=True);ap.add_argument('--v48-90-comparison',type=Path,required=True);ap.add_argument('--output',type=Path,required=True);a=ap.parse_args()
  s=json.loads(a.summary.read_text());s90=json.loads(a.v48_90_summary.read_text());c90=json.loads(a.v48_90_comparison.read_text());errors=[]
  if not(s.get('valid') and s.get('attribution_ready')):errors.append('V48.91 audit invalid')
+ if str(s.get('engineering_version')) != ENGINEERING_VERSION:errors.append(f"V48.91 audit engineering_version={s.get('engineering_version')!r} != {ENGINEERING_VERSION!r}")
  q90=c90.get('preregistered_decision') or {}
  if not(q90.get('exogenous_partition_transport_go') and q90.get('partition_stability_directional_relevance_go') and not q90.get('transport_physical_response_identifiability_go')):errors.append('V48.90 prerequisite branch mismatch')
  rr=s.get('roles',{});rr90=s90.get('roles',{})
@@ -35,6 +37,6 @@ def main()->int:
  # second authorization path: physical response must satisfy the direct gate.
  status='COMMON_EXOGENOUS_PHYSICAL_RESPONSE_GO' if response_go else 'COMMON_EXOGENOUS_PHYSICAL_RESPONSE_STOP'
  next_branch=('authorize_v48_92_one_fixed_capacity_transport_coupled_signed_response_operator_no_capacity_sweep_no_boundary_transport' if response_go else 'close_root_local_response_learning_under_current_future_sidecars_retain_partition_stability_only_as_structural_scaffold_no_capacity_or_dataset_sweep')
- out={'schema':'ocrap-v48.91-cepmi-comparison-v1','engineering_version':'v48.91.4-OC-CEPMI-REPLAYFIX2','valid':not errors,'attribution_ready':not errors,'errors':errors,'experiment_type':'audit_only_common_exogenous_future_level_physical_margin_identifiability','preregistered_decision':{'v48_90_transport_prerequisite':not bool(errors),'safe_positive_power_gate':power,'common_exogenous_tail_coverage_gate':coverage,'response_sign_identifiable_mass_gate':sign,'response_informative_mass_gate':info,'response_auc_gate':auc,'response_macro_auc_diagnostic':macro,'response_top1_lift_gate':top,'sign_identifiability_uplift_vs_v48_90_root_interval_gate':uplift,'future_level_physical_response_go':response_go,'source_training_authorized':response_go,'status':status,'next_branch':next_branch},'planner_parameters_trained':0,'teacher_labels_changed':False,'teacher_metadata_input_to_model':False,'dataset_reconstruction':False,'dataset_reselection':False,'boundary_transport':False,'regime_conditioning':False,'relative_ranker_modified':False,'test_roots_read':False}
+ out={'schema':'ocrap-v48.91-cepmi-comparison-v1','engineering_version':ENGINEERING_VERSION,'valid':not errors,'attribution_ready':not errors,'errors':errors,'experiment_type':'audit_only_common_exogenous_future_level_physical_margin_identifiability','preregistered_decision':{'v48_90_transport_prerequisite':not bool(errors),'safe_positive_power_gate':power,'common_exogenous_tail_coverage_gate':coverage,'response_sign_identifiable_mass_gate':sign,'response_informative_mass_gate':info,'response_auc_gate':auc,'response_macro_auc_diagnostic':macro,'response_top1_lift_gate':top,'sign_identifiability_uplift_vs_v48_90_root_interval_gate':uplift,'future_level_physical_response_go':response_go,'source_training_authorized':response_go,'status':status,'next_branch':next_branch},'planner_parameters_trained':0,'teacher_labels_changed':False,'teacher_metadata_input_to_model':False,'dataset_reconstruction':False,'dataset_reselection':False,'boundary_transport':False,'regime_conditioning':False,'relative_ranker_modified':False,'test_roots_read':False}
  a.output.write_text(json.dumps(out,indent=2,sort_keys=True)+'\n');print(json.dumps(out['preregistered_decision'],sort_keys=True));return 0 if not errors else 30
 if __name__=='__main__':raise SystemExit(main())

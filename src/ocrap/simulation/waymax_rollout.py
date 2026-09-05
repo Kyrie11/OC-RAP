@@ -593,6 +593,45 @@ def _artifact_override_adjusted_value(val: float, option: RecoveryOption, future
     return min(float(val), float(override)), True
 
 
+def _audit_replay_optional_recipe_present(
+    cfg: dict, future_index: int, *, source: str, targeted_type: str
+) -> bool:
+    """Return whether an optional recipe existed at this frozen future slot.
+
+    V48.91 audit replay must reproduce the *materialized* canonical future list.
+    Visible-actor perturbations are optional in the historical V48.14 builder:
+    when no eligible visible actor existed, the branch returned ``None`` and the
+    next deterministic targeted recipe occupied the same future index.  A later
+    code version may see a different heuristic candidate set.  In audit-only
+    mode the frozen future metadata is therefore authoritative for *presence* of
+    an optional branch, just as V48.91.5 already makes it authoritative for the
+    stochastic realization of a branch that did materialize.
+
+    This helper is intentionally not a permissive identity check.  Source/index
+    are still fail-closed, and every recipe that is actually materialized is
+    subsequently validated by :func:`_audit_replay_future_lock` plus the final
+    exogenous-class and root-margin replay checks.  Production generation never
+    sets the audit metadata and always returns ``True`` here.
+    """
+    locks = cfg.get("_audit_replay_future_metadata")
+    sources = cfg.get("_audit_replay_future_sources")
+    if not isinstance(locks, list):
+        return True
+    if future_index < 0 or future_index >= len(locks):
+        raise ValueError(f"audit replay optional-recipe index out of range: {future_index}/{len(locks)}")
+    lock = locks[future_index]
+    if not isinstance(lock, dict):
+        raise ValueError(f"audit replay future lock must be dict at index {future_index}")
+    if isinstance(sources, list):
+        if future_index >= len(sources) or str(sources[future_index]) != str(source):
+            raise ValueError(
+                f"audit replay future source mismatch at index {future_index}: "
+                f"stored={sources[future_index] if future_index < len(sources) else None!r} expected={source!r}"
+            )
+    stored_type = str(lock.get("targeted_type", ""))
+    return (not stored_type) or stored_type == str(targeted_type)
+
+
 def _audit_replay_future_lock(cfg: dict, future_index: int, *, source: str, targeted_type: str | None = None) -> dict[str, Any] | None:
     """Return an audit-only frozen exogenous realization for one future index.
 
@@ -1036,8 +1075,17 @@ def generate_waymax_counterfactual_futures(history: SceneHistory, prefix: Candid
         for branch in ["visible_brake", "visible_accelerate"]:
             if targeted_added >= n_targeted:
                 break
+            expected_type = f"waymax_visible_actor_{branch}"
+            # Historical visible perturbations are optional: if no eligible actor
+            # existed, the builder emitted no future and the next stress recipe
+            # occupied this index.  V48.91.6 freezes that *recipe presence* from
+            # the canonical metadata before applying the V48.91.5 realization lock.
+            if not _audit_replay_optional_recipe_present(
+                cfg, len(futures), source="targeted", targeted_type=expected_type
+            ):
+                continue
             seed = stable_seed("waymax-visible", history.scene_id, history.time_index, prefix.macro_id, branch)
-            lock = _audit_replay_future_lock(cfg, len(futures), source="targeted", targeted_type=f"waymax_visible_actor_{branch}")
+            lock = _audit_replay_future_lock(cfg, len(futures), source="targeted", targeted_type=expected_type)
             aug_state, ameta = _augment_visible_reference(state0, history, prefix, cfg, branch=branch, seed=seed, replay_lock=lock)
             if aug_state is None:
                 continue

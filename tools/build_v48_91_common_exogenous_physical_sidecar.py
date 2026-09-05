@@ -27,10 +27,7 @@ from ocrap.simulation.futures import generate_counterfactual_futures
 from ocrap.simulation.teacher import compute_future_option_margins
 from ocrap.v48_89_root_correspondence import nested_tail_influence
 from ocrap.v48_90_partition_transport import future_class_keys
-from ocrap.v48_91_common_exogenous_physical_margin import future_physical_matrix
-
-
-ENGINEERING_VERSION='v48.91.5-OC-CEPMI-EXOGLOCK'
+from ocrap.v48_91_common_exogenous_physical_margin import ENGINEERING_VERSION, future_physical_matrix
 
 KEYS=frozenset({
     'scene_id','original_scenario_id','official_scenario_id','legacy_scenario_id','source_scenario_index',
@@ -635,7 +632,7 @@ def _replay_one(raw,sample:dict[str,Any],option_ids:list[int],base_cfg:dict[str,
         'history_cache_hit':bool(history_cache_hit),
         'replay_config_source':str(origin.get('replay_config_source','')),
         'replay_profile':origin.get('replay_profile') or {},
-        'audit_future_metadata_metrics_skipped':True,'frozen_exogenous_realization_lock':True,
+        'audit_future_metadata_metrics_skipped':True,'frozen_exogenous_realization_lock':True,'frozen_optional_recipe_presence_lock':True,
     }
 
 
@@ -827,7 +824,7 @@ def main()->int:
         'active_options_max':max(active_option_counts) if active_option_counts else 0,
         'sparse_source_iterator':True,'metadata_only_future_metrics_skipped':True,
         'canonical_v48_14_sample_local_replay_profile':True,
-        'sample_local_pass_final_layer':True,'profile_preflight':True,'provenance_chain_cache':True,'frozen_exogenous_realization_lock':True,
+        'sample_local_pass_final_layer':True,'profile_preflight':True,'provenance_chain_cache':True,'frozen_exogenous_realization_lock':True,'frozen_optional_recipe_presence_lock':True,
         'fail_fast_replay_errors':int(args.fail_fast_replay_errors),
         'checkpoint_rows_reused':len(checkpoint_rows),
         'checkpoint_path':str(args.checkpoint) if args.checkpoint else None,
@@ -929,7 +926,7 @@ def main()->int:
             'processed_samples':processed,'target_source_indices':target_source_indices,'history_cache_hits':history_hits,
             'history_cache_hit_fraction':float(history_hits/max(processed,1)),
             'sparse_source_iterator':True,'metadata_only_future_metrics_skipped':True,
-            'canonical_v48_14_sample_local_replay_profile':True,'sample_local_pass_final_layer':True,'profile_preflight':True,'provenance_chain_cache':True,'frozen_exogenous_realization_lock':True,'fail_fast_replay_errors':int(args.fail_fast_replay_errors),
+            'canonical_v48_14_sample_local_replay_profile':True,'sample_local_pass_final_layer':True,'profile_preflight':True,'provenance_chain_cache':True,'frozen_exogenous_realization_lock':True,'frozen_optional_recipe_presence_lock':True,'fail_fast_replay_errors':int(args.fail_fast_replay_errors),
             'checkpoint_rows_reused':len(checkpoint_rows),'checkpoint_path':str(args.checkpoint) if args.checkpoint else None,
             'stage_timing_seconds':{k:float(v) for k,v in sorted(stage_timing.items())},
             'active_options_mean':float(np.mean(active_option_counts)) if active_option_counts else 0.0,

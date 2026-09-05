@@ -310,3 +310,63 @@ def test_v48_91_5_waymax_replay_lock_is_index_and_recipe_strict() -> None:
         _audit_replay_future_lock(cfg, 1, source='targeted', targeted_type='waymax_visible_actor_visible_accelerate')
     with pytest.raises(ValueError, match='source mismatch'):
         _audit_replay_future_lock(cfg, 1, source='reactive', targeted_type='waymax_visible_actor_visible_brake')
+
+
+
+def test_v48_91_6_optional_visible_recipe_presence_follows_frozen_canonical_slot() -> None:
+    """Regression for canonical samples where a visible perturbation did not materialize.
+
+    V48.14 only appended visible-brake/accelerate futures when an eligible visible
+    actor existed.  In such samples the next deterministic targeted recipe (for
+    example contact impulse) legitimately occupies the same future index.  Audit
+    replay must skip the absent optional recipe rather than report a recipe
+    mismatch, while remaining strict about source/index and materialized recipes.
+    """
+    from ocrap.simulation.waymax_rollout import _audit_replay_optional_recipe_present
+    import pytest
+    cfg = {
+        '_audit_replay_future_sources': ['replay', 'reactive', 'reactive', 'targeted'],
+        '_audit_replay_future_metadata': [
+            {'rollout_variant':'natural_log_playback'},
+            {'rollout_variant':'waymax_log_playback_sdc_coast'},
+            {'rollout_variant':'waymax_log_playback_sdc_coast'},
+            {'targeted_type':'waymax_contact_impulse_surrogate'},
+        ],
+    }
+    assert not _audit_replay_optional_recipe_present(
+        cfg, 3, source='targeted', targeted_type='waymax_visible_actor_visible_brake'
+    )
+    assert not _audit_replay_optional_recipe_present(
+        cfg, 3, source='targeted', targeted_type='waymax_visible_actor_visible_accelerate'
+    )
+    assert _audit_replay_optional_recipe_present(
+        cfg, 3, source='targeted', targeted_type='waymax_contact_impulse_surrogate'
+    )
+    with pytest.raises(ValueError, match='source mismatch'):
+        _audit_replay_optional_recipe_present(
+            cfg, 3, source='reactive', targeted_type='waymax_visible_actor_visible_brake'
+        )
+
+
+def test_v48_91_6_optional_recipe_helper_is_production_noop_without_audit_metadata() -> None:
+    from ocrap.simulation.waymax_rollout import _audit_replay_optional_recipe_present
+    assert _audit_replay_optional_recipe_present(
+        {}, 999, source='targeted', targeted_type='waymax_visible_actor_visible_brake'
+    )
+
+
+def test_v48_91_6_downstream_artifacts_share_one_engineering_version_contract() -> None:
+    from ocrap.v48_91_common_exogenous_physical_margin import ENGINEERING_VERSION
+    assert ENGINEERING_VERSION == 'v48.91.6-OC-CEPMI-RECIPELOCK'
+    for rel in (
+        'tools/build_v48_91_common_exogenous_physical_sidecar.py',
+        'tools/merge_v48_91_common_exogenous_physical_sidecar_parts.py',
+        'tools/build_v48_91_common_exogenous_physical_response_audit.py',
+        'tools/compare_v48_91_cepmi.py',
+        'tools/check_v48_91_runtime_code_contract.py',
+        'tools/check_v48_91_pipeline_complete.py',
+    ):
+        text = (ROOT / rel).read_text()
+        assert 'ENGINEERING_VERSION' in text
+        assert 'v48.91.4-OC-CEPMI-REPLAYFIX2' not in text
+        assert 'v48.91.5-OC-CEPMI-EXOGLOCK' not in text

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # V48.91 OC-CEPMI: Common-Exogenous Physical-Margin Identifiability.
-# V48.91.5 engineering-only replay fix: frozen exogenous-realization lock plus final-layer canonical V48.14 sample-local
-# balanced-pass reconstruction, fail-fast identity guard, resumable exact replay,
-# plus the V48.91.2 sparse/history-cache/2-GPU acceleration.
+# V48.91.6 engineering-only replay fix: frozen optional-recipe presence + exogenous-realization locks,
+# final-layer canonical V48.14 sample-local balanced-pass reconstruction, fail-fast identity guard,
+# resumable exact replay, and the V48.91.2 sparse/history-cache/2-GPU acceleration.
 set -Eeuo pipefail
 REPO="${OCRAP_REPO:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$REPO"

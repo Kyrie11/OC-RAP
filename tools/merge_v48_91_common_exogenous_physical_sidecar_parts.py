@@ -8,8 +8,8 @@ import hashlib
 import json
 from pathlib import Path
 from typing import Any
+from ocrap.v48_91_common_exogenous_physical_margin import ENGINEERING_VERSION
 
-ENGINEERING_VERSION = 'v48.91.4-OC-CEPMI-REPLAYFIX2'
 
 
 def _sha(path: Path) -> str:
