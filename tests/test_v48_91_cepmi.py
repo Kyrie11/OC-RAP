@@ -215,3 +215,55 @@ def test_v48_91_3_checkpoint_resume_requires_same_version_options_and_npz_stat(t
     sample.write_bytes(b'abcd')
     got2 = mod._load_replay_checkpoint(ck, requested)
     assert str(sample) not in got2
+
+
+def test_v48_91_4_sample_local_pass_is_final_after_role_wide_summary_merge(monkeypatch, tmp_path: Path) -> None:
+    """Regression for the V48.91.3 all-sample future-class mismatch.
+
+    Historical shard summaries legitimately store the role-wide base config with
+    stochastic artifact mining enabled.  A frozen non-artifact sample must still
+    end with mining disabled because builder._cfg_with_artifact_mining(False) was
+    applied *after* the base config during original materialization.
+    """
+    mod = _load_v4891_sidecar_tool_module()
+    role = tmp_path / 'calibration_v48_14_prism_4814' / 'evidence_adapt_dev_near_contact' / 'samples'
+    role.mkdir(parents=True)
+    sample = {
+        '__path__': str(role / 'waymax_deadbeef__wx00011038_t0010_a00.npz'),
+        'future_metadata': json.dumps([
+            {'rollout_variant':'natural_log_playback','scenario_augmented':False},
+            {'visible_perturbation':True,'visible_branch':'visible_brake','scenario_augmented':True,'artifact_mined':False},
+        ]),
+        'future_sources': np.asarray(['replay','reactive','reactive'] + ['targeted'] * 8),
+        'm_star': np.zeros((8, 12), dtype=np.float32),
+        'agent_history': np.zeros((10, 32, 16), dtype=np.float32),
+        'womd_source_pattern': np.asarray('/raw/validation.tfrecord@150'),
+    }
+    monkeypatch.setattr(mod, '_origin_replay_metadata', lambda path, idx: {
+        'dataset_summary': {
+            'artifact': {'force_mine': True, 'mine_probability': 0.30, 'use_margin_override': False},
+            'dataset_quality': {'require_artifact_pairs': True},
+            'waymax': {'enable_augmented_hidden_roots': True, 'enable_visible_perturbation_roots': True},
+            'generation': {'num_reactive_futures': 2, 'num_targeted_futures': 8, 'num_roots': 8, 'num_recovery_options': 12},
+        },
+    })
+    cfg, _, origin = mod._config_for_sample(
+        sample, mod.load_config(None), resolved_pattern='/raw/validation.tfrecord@150', resolved_index=11038
+    )
+    assert origin['replay_profile']['artifact_pass'] is False
+    assert cfg['artifact']['force_mine'] is False
+    assert cfg['artifact']['mine_probability'] == 0.0
+    assert cfg['dataset_quality']['require_artifact_pairs'] is False
+    assert cfg['waymax']['enable_visible_perturbation_roots'] is True
+
+
+def test_v48_91_4_effective_profile_guard_rejects_late_summary_reenable(tmp_path: Path) -> None:
+    mod = _load_v4891_sidecar_tool_module()
+    bad = {
+        'artifact': {'force_mine': True, 'mine_probability': 0.3},
+        'dataset_quality': {'require_artifact_pairs': True},
+    }
+    meta = {'profile_id':'calibration_v48_14_prism_4814','role':'near','artifact_pass':False}
+    import pytest
+    with pytest.raises(ValueError, match='sample-local balanced-pass invariant'):
+        mod._assert_v4814_effective_profile(bad, meta)

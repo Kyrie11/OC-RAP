@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # V48.91 OC-CEPMI: Common-Exogenous Physical-Margin Identifiability.
-# V48.91.3 engineering-only replay fix: exact canonical V48.14 sample-local
+# V48.91.4 engineering-only replay fix: final-layer canonical V48.14 sample-local
 # balanced-pass reconstruction, fail-fast identity guard, resumable exact replay,
 # plus the V48.91.2 sparse/history-cache/2-GPU acceleration.
 set -Eeuo pipefail

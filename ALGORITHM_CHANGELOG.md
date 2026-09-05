@@ -9566,3 +9566,49 @@ These are execution/reliability changes only. They do not subsample the cohort, 
 
 ### Branch rule remains unchanged
 Only a **complete engineering-valid V48.91 replay** may be used to adjudicate CEPMI. If that rerun passes engineering reliability, then and only then apply the original preregistered V48.91 response-identifiability gates to decide whether a fixed-capacity V48.92 transport-coupled signed response operator is authorized. The current invalid V48.91.2 run authorizes neither V48.92 nor closure of the response-learning family.
+
+## V48.91.4 engineering replay merge-order fix + semantic preflight (2026-09-05)
+
+### Reliability verdict on the uploaded V48.91.3 run
+The uploaded V48.91.3 CEPMI run is **engineering-invalid and not scientifically attributable**. Both workers fail-fast on their first replayed sample with `exogenous future-class replay mismatch`; no valid sidecar row is produced, so none of the V48.91 physical-response GO/STOP gates may be adjudicated. This run authorizes neither a V48.92 learned response operator nor closure of the counterfactual-future root-local response family.
+
+### Exact root cause
+V48.91.3 correctly inferred the frozen sample as `artifact_pass=False` and initially applied the historical balanced-pass override (`force_mine=false`, `mine_probability=0`, `require_artifact_pairs=false`). However, `_config_for_sample()` applied that sample-local pass **before** merging the historical role-wide `dataset_summary` / origin base configuration. The later merge restored the shard-level base values (`artifact.force_mine=true`, `mine_probability=0.30` for Near or `0.25` for Contact, and `require_artifact_pairs=true`). Consequently, the first targeted future was replayed as an augmented hidden-yield branch instead of the stored visible-actor brake branch.
+
+This is a config-merge ordering bug in the offline replay tool. It is not an OC-CEPMI logic failure, not a dataset defect, and not evidence about physical-response identifiability.
+
+### V48.91.4 engineering fix
+Engineering version becomes:
+
+```text
+v48.91.4-OC-CEPMI-REPLAYFIX2
+```
+
+The effective replay config is now reconstructed in the same semantic order as the historical builder:
+
+```text
+base/default or exact resume config
+→ role-wide dataset summary / generation metadata
+→ stored sample dimensions/provenance
+→ FINAL sample-local _cfg_with_artifact_mining(False/True) equivalent
+→ audit-only compute_future_metrics=false/cache overrides
+```
+
+The sample-local balanced pass is therefore the final semantic layer and cannot be overwritten by a role-wide summary.
+
+A new fail-closed invariant checks the final effective configuration:
+
+- non-artifact sample: `force_mine=false`, `mine_probability=0`, `require_artifact_pairs=false`;
+- artifact sample: `force_mine=true`, `mine_probability=1`, `require_artifact_pairs=true`.
+
+A cheap profile preflight runs before raw WOMD scanning and reports one representative of every available `(Near/Contact × artifact/non-artifact)` profile. Thus this class of replay-config bug is detected before scanning ~11k raw records or launching expensive candidate-specific Waymax future generation.
+
+### Safe performance changes
+The V48.91.3 fail-fast timing shows that, for the first target sample, history construction is ~0.02 s and config reconstruction ~0.08 s, while counterfactual future generation is ~5.8–8.0 s. The ~40–50 s raw scan to the first index is a one-time worker cost. Therefore V48.91.4 does **not** approximate or prune future generation, recovery options, horizons, teacher margins, or the V48.90 cohort.
+
+The only additional safe optimization is caching immutable provenance-chain traversal (`split_provenance → scene_filter_provenance → merged summary → worker dataset_summary/resume_contract`) by protocol role root and source index. This removes repeated JSON/provenance traversal across many candidate NPZs without changing any replay value.
+
+V48.91.2/3 sparse raw iterator, 2-GPU scene-disjoint sharding, same-scene/time history cache, metadata-only future-metric skip, fail-fast, exact checkpoint/resume, and stage timing remain enabled.
+
+### Scientific contract unchanged
+No change to OC-MERO, RIFA, Stage-I, V48.90 cohort membership, common-exogenous equivalence classes, physical-margin definition, active options, alpha/beta/tail semantics, teacher labels, canonical NPZs, boundary transport, relative ranker, regime conditioning, or planner parameters (`0`). V48.91 remains an audit-only identifiability experiment.

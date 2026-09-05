@@ -30,7 +30,7 @@ from ocrap.v48_90_partition_transport import future_class_keys
 from ocrap.v48_91_common_exogenous_physical_margin import future_physical_matrix
 
 
-ENGINEERING_VERSION='v48.91.3-OC-CEPMI-REPLAYFIX'
+ENGINEERING_VERSION='v48.91.4-OC-CEPMI-REPLAYFIX2'
 
 KEYS=frozenset({
     'scene_id','original_scenario_id','official_scenario_id','legacy_scenario_id','source_scenario_index',
@@ -144,31 +144,33 @@ def _index_belongs_to_shard(summary: dict[str, Any], index: int) -> bool:
         return False
 
 
-def _origin_replay_metadata(sample_path: Path, source_index: int) -> dict[str, Any]:
-    """Best-effort read-only traversal back to the original calibration shard.
-
-    Protocol roots are scene-disjoint hardlink partitions.  Their
-    ``split_provenance.json`` points to ``calibration_{near,contact}``; that root
-    may point through ``scene_filter_provenance.json`` to a merged raw root, whose
-    ``merged_dataset_summary.json`` lists the original worker shards.  When those
-    artifacts still exist, recover the exact shard summary / resume semantic
-    config without changing the canonical protocol dataset.
-    """
-    result:dict[str,Any]={}
-    role_root=None
+def _protocol_role_root(sample_path: Path) -> Path | None:
     q=sample_path.resolve().parent
     for _ in range(6):
         if (q/'split_provenance.json').is_file():
-            role_root=q;break
-        if q.parent==q:break
+            return q
+        if q.parent==q:
+            break
         q=q.parent
-    if role_root is None:
-        return result
+    return None
+
+
+@lru_cache(maxsize=4096)
+def _origin_replay_metadata_cached(role_root_text: str, source_index: int) -> tuple[tuple[str, str], ...]:
+    """Cache immutable provenance traversal by protocol root + raw index.
+
+    Thousands of candidate NPZs share the same scene/source shard.  Re-reading
+    split/scene-filter/merged-summary/resume JSON for every candidate is pure
+    engineering overhead.  The tuple encoding keeps the cached value immutable;
+    callers receive a fresh dict below.
+    """
+    role_root=Path(role_root_text)
+    result:dict[str,Any]={}
     split=_read_json_if_exists(role_root/'split_provenance.json') or {}
     result['split_provenance_path']=str((role_root/'split_provenance.json').resolve())
     source_text=str(split.get('source') or '').strip()
     if not source_text:
-        return result
+        return tuple((k,json.dumps(v,sort_keys=True)) for k,v in sorted(result.items()))
     source_root=Path(source_text).expanduser()
     result['protocol_source_root']=str(source_root)
     roots=[source_root]
@@ -184,24 +186,31 @@ def _origin_replay_metadata(sample_path: Path, source_index: int) -> dict[str, A
             for x in merged.get('input_roots',[]) or []:
                 px=Path(str(x)).expanduser()
                 if px not in input_roots: input_roots.append(px)
-    # A source root can itself be a materialized builder output.
     candidates=input_roots or roots
     matches=[]
     for root in candidates:
         ds=_read_json_if_exists(root/'dataset_summary.json')
         if ds and _index_belongs_to_shard(ds,source_index):
             matches.append((root,ds))
-    if len(matches)!=1:
-        return result
-    root,ds=matches[0]
-    result['origin_shard_root']=str(root)
-    result['dataset_summary_path']=str((root/'dataset_summary.json').resolve())
-    result['dataset_summary']=ds
-    rc=_read_json_if_exists(root/'resume_contract.json')
-    if rc and isinstance(rc.get('semantic_config'),dict):
-        result['resume_contract_path']=str((root/'resume_contract.json').resolve())
-        result['semantic_config']=rc['semantic_config']
-    return result
+    if len(matches)==1:
+        root,ds=matches[0]
+        result['origin_shard_root']=str(root)
+        result['dataset_summary_path']=str((root/'dataset_summary.json').resolve())
+        result['dataset_summary']=ds
+        rc=_read_json_if_exists(root/'resume_contract.json')
+        if rc and isinstance(rc.get('semantic_config'),dict):
+            result['resume_contract_path']=str((root/'resume_contract.json').resolve())
+            result['semantic_config']=rc['semantic_config']
+    return tuple((k,json.dumps(v,sort_keys=True)) for k,v in sorted(result.items()))
+
+
+def _origin_replay_metadata(sample_path: Path, source_index: int) -> dict[str, Any]:
+    """Best-effort read-only traversal back to the original calibration shard."""
+    role_root=_protocol_role_root(sample_path)
+    if role_root is None:
+        return {}
+    packed=_origin_replay_metadata_cached(str(role_root),int(source_index))
+    return {k:json.loads(v) for k,v in packed}
 
 
 def _json_scalar(v:Any,default:Any)->Any:
@@ -402,6 +411,31 @@ def _apply_v4814_sample_local_balanced_pass(cfg: dict[str, Any], sample: dict[st
     out['artifact']=art;out['dataset_quality']=quality;out['waymax']=wx
     return out, {'profile_id':'calibration_v48_14_prism_4814','role':role,'artifact_pass':bool(artifact_pass)}
 
+def _assert_v4814_effective_profile(cfg: dict[str, Any], meta: dict[str, Any]) -> None:
+    """Fail closed if the final effective config violates the historical pass.
+
+    This is intentionally checked *after* all resume/summary merges so a future
+    schema migration cannot silently re-enable stochastic artifact mining.
+    """
+    if meta.get('profile_id') != 'calibration_v48_14_prism_4814':
+        return
+    art = cfg.get('artifact', {}) if isinstance(cfg.get('artifact', {}), dict) else {}
+    quality = cfg.get('dataset_quality', {}) if isinstance(cfg.get('dataset_quality', {}), dict) else {}
+    mined = bool(meta.get('artifact_pass'))
+    force = bool(art.get('force_mine', False))
+    prob = float(art.get('mine_probability', 0.0))
+    req = bool(quality.get('require_artifact_pairs', False))
+    if mined:
+        ok = force and abs(prob - 1.0) <= 1e-12 and req
+    else:
+        ok = (not force) and abs(prob) <= 1e-12 and (not req)
+    if not ok:
+        raise ValueError(
+            'V48.14 sample-local balanced-pass invariant violated after config merge: '
+            f"profile={meta} force_mine={force} mine_probability={prob} require_artifact_pairs={req}"
+        )
+
+
 def _config_for_sample(sample:dict[str,Any], base_cfg:dict[str,Any], *, resolved_pattern:str|None=None, resolved_index:int|None=None, explicit_replay_config:bool=False)->tuple[dict[str,Any],str|None,dict[str,Any]]:
     origin=_origin_replay_metadata(Path(sample['__path__']),int(resolved_index if resolved_index is not None else _legacy_source_index(sample)))
     profile_meta={'profile_id':None,'role':None,'artifact_pass':None}
@@ -419,13 +453,11 @@ def _config_for_sample(sample:dict[str,Any], base_cfg:dict[str,Any], *, resolved
     else:
         cfg=json.loads(json.dumps(base_cfg))
         origin['replay_config_source']='explicit_replay_config'
-    # The historical balanced builder applies a *sample-local* mining pass on
-    # top of the base shard config; recover it even when an exact resume config
-    # or explicit replay YAML is available.
-    cfg, local_pass_meta = _apply_v4814_sample_local_balanced_pass(cfg, sample)
-    if local_pass_meta.get('profile_id') is not None:
-        profile_meta = local_pass_meta
-    origin['replay_profile']=profile_meta
+    # Do NOT apply the sample-local balanced pass yet.  The origin/summary below
+    # contains the role-wide *base* shard config (force_mine=true with a
+    # stochastic mine_probability in the historical V48.14 build).  Applying
+    # the local no-mine/mined pass before merging that base config lets the
+    # summary overwrite it again, which changes the targeted-future ordering.
     origin_summary=origin.get('dataset_summary') if isinstance(origin.get('dataset_summary'),dict) else None
     sp=Path(origin['dataset_summary_path']) if origin.get('dataset_summary_path') else _find_summary(Path(sample['__path__']))
     if origin_summary is not None:
@@ -450,6 +482,16 @@ def _config_for_sample(sample:dict[str,Any], base_cfg:dict[str,Any], *, resolved
     cfg['max_agents']=int(np.asarray(sample['agent_history']).shape[1])
     cfg['data_source']='womd'; cfg['simulation_backend']='waymax_closed_loop'
     cfg['womd_patterns']=str(_scalar(sample,'womd_source_pattern','') or resolved_pattern or cfg.get('womd_patterns') or '')
+
+    # FINAL semantic layer: reproduce builder._cfg_with_artifact_mining() only
+    # after every role-wide resume/dataset-summary value has been merged.  This
+    # ordering is part of the historical data-generation contract.
+    cfg, local_pass_meta = _apply_v4814_sample_local_balanced_pass(cfg, sample)
+    if local_pass_meta.get('profile_id') is not None:
+        profile_meta = local_pass_meta
+    origin['replay_profile']=profile_meta
+    _assert_v4814_effective_profile(cfg, profile_meta)
+
     # Source scanning is performed externally by exact stored source index.
     cfg['scenario_start_index']=0; cfg['scenario_stride']=1; cfg['scenario_worker_index']=0
     # V48.91 does not consume generic per-future Waymax metric metadata. The
@@ -704,6 +746,7 @@ def main()->int:
     groups:dict[tuple[str,int],dict[int,list[str]]]=defaultdict(lambda:defaultdict(list))
     provenance_resolution_counts:dict[str,int]=defaultdict(int)
     resolved_indices:list[int]=[]
+    profile_preflight_samples:dict[tuple[str,bool],tuple[str,dict[str,Any],str,int]]={}
     replay_cfg_pattern=str(base.get('womd_patterns') or '')
     t0=time.perf_counter()
     for p,s in samples.items():
@@ -734,10 +777,36 @@ def main()->int:
                 'This does not require rebuilding or modifying the canonical dataset.'
             )
         resolved_indices.append(idx)
+        role=_canonical_v4814_protocol_role(p)
+        if role is not None:
+            metas=_stored_future_metadata(s)
+            artifact_pass=any(bool(m.get('artifact_mined',False)) or bool(m.get('artifact_branch')) for m in metas)
+            profile_preflight_samples.setdefault((role,bool(artifact_pass)),(p,s,pattern,idx))
         if maxobj<=0: maxobj=int(np.asarray(s['agent_history']).shape[1])
         if p not in checkpoint_rows:
             groups[(pattern,maxobj)][idx].append(p)
     provenance_seconds=time.perf_counter()-t0
+
+    # Cheap semantic preflight before scanning 10k+ raw WOMD records.  It checks
+    # the final effective sample-local mining state after all provenance/summary
+    # merges.  This would have caught the V48.91.3 merge-order bug immediately.
+    profile_preflight=[]
+    for (role,artifact_pass),(p,s,pattern,idx) in sorted(profile_preflight_samples.items()):
+        cfg,_,origin=_config_for_sample(
+            s,base,resolved_pattern=pattern,resolved_index=idx,
+            explicit_replay_config=bool(args.replay_config),
+        )
+        art=cfg.get('artifact',{}) if isinstance(cfg.get('artifact',{}),dict) else {}
+        quality=cfg.get('dataset_quality',{}) if isinstance(cfg.get('dataset_quality',{}),dict) else {}
+        rec={
+            'role':role,'artifact_pass':bool(artifact_pass),'sample_path':p,
+            'force_mine':bool(art.get('force_mine',False)),
+            'mine_probability':float(art.get('mine_probability',0.0)),
+            'require_artifact_pairs':bool(quality.get('require_artifact_pairs',False)),
+            'replay_config_source':str(origin.get('replay_config_source','')),
+        }
+        profile_preflight.append(rec)
+    print(json.dumps({'event':'v48.91_profile_preflight','worker_index':args.worker_index,'profiles':profile_preflight,'valid':True}),flush=True)
 
     target_source_indices=len(set(resolved_indices))
     active_option_counts=[len(v) for v in requested.values()]
@@ -751,6 +820,7 @@ def main()->int:
         'active_options_max':max(active_option_counts) if active_option_counts else 0,
         'sparse_source_iterator':True,'metadata_only_future_metrics_skipped':True,
         'canonical_v48_14_sample_local_replay_profile':True,
+        'sample_local_pass_final_layer':True,'profile_preflight':True,'provenance_chain_cache':True,
         'fail_fast_replay_errors':int(args.fail_fast_replay_errors),
         'checkpoint_rows_reused':len(checkpoint_rows),
         'checkpoint_path':str(args.checkpoint) if args.checkpoint else None,
@@ -852,7 +922,7 @@ def main()->int:
             'processed_samples':processed,'target_source_indices':target_source_indices,'history_cache_hits':history_hits,
             'history_cache_hit_fraction':float(history_hits/max(processed,1)),
             'sparse_source_iterator':True,'metadata_only_future_metrics_skipped':True,
-            'canonical_v48_14_sample_local_replay_profile':True,'fail_fast_replay_errors':int(args.fail_fast_replay_errors),
+            'canonical_v48_14_sample_local_replay_profile':True,'sample_local_pass_final_layer':True,'profile_preflight':True,'provenance_chain_cache':True,'fail_fast_replay_errors':int(args.fail_fast_replay_errors),
             'checkpoint_rows_reused':len(checkpoint_rows),'checkpoint_path':str(args.checkpoint) if args.checkpoint else None,
             'stage_timing_seconds':{k:float(v) for k,v in sorted(stage_timing.items())},
             'active_options_mean':float(np.mean(active_option_counts)) if active_option_counts else 0.0,
