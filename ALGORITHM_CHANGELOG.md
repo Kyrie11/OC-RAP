@@ -9768,3 +9768,182 @@ DO NOT declare any V48.91 branch GO/STOP.
 DO NOT design or train V48.92.
 DO NOT reopen boundary transport / ranker / dataset / regime-router families.
 ```
+
+## V48.91.6 authoritative result + V48.92 OC-FRAD (2026-09-05)
+
+### V48.91.6 engineering reliability
+The completed V48.91.6 OC-CEPMI-RECIPELOCK rerun is engineering-valid and scientifically attributable. The top-level sentinel is `valid=true`, `attribution_ready=true`, `engineering_version=v48.91.6-OC-CEPMI-RECIPELOCK`, `errors=[]`, `test_roots_read=false`, `dataset_reconstruction=false`, and `planner_parameters_trained=0`. Both replay shards complete all 6,266 requested unique canonical samples with zero replay errors. The merged sidecar, physical-response audit, comparison, runtime/source contracts and pipeline hashes are mutually consistent.
+
+The exact-replay identity is strong: maximum active root-margin reconstruction error is `3.55e-15`, maximum future-probability error is `2.98e-9`, and the calibration protocol checks 22,882/22,882 samples as hardlink-identical to the registered Near/Contact calibration sources with zero content mismatch. V48.91.6 therefore requires no engineering hotfix and no dataset reconstruction.
+
+### Strict preregistered scientific decision: V48.91 OC-CEPMI = STOP
+V48.91 was registered as an audit-only identifiability experiment after V48.90 correspondence/transport GO. It was allowed to authorize a learned response source only if the future-level physical response itself became sign-identifiable and action-selective across Near and Contact.
+
+Observed gates:
+
+```text
+safe-positive power >=10, all four roles                 PASS 4/4
+common-exogenous tail coverage median >=0.80             PASS 4/4
+informative-response mass median >=0.50                  PASS 4/4
+future-level sign-identifiable mass median >=0.50        FAIL 0/4
+safe-positive-vs-harmful response AUC >=0.60             PASS 1/4 (dev-Near only)
+tie-aware same-group top1 lift >=0.10                    PASS 1/4 (dev-Near only)
+sign-ID uplift vs V48.90 root interval >=+0.40           FAIL 0/4
+```
+
+Role diagnostics:
+
+```text
+Dev Near:          sign-ID median 0, AUC 0.739, top1 lift +0.123, safe response mean 0.55
+Certificate Near:  sign-ID median 0, AUC 0.593, top1 lift +0.020, safe response mean 0.222
+Dev Contact:       sign-ID median 0, AUC 0.455, top1 lift +0.009, safe response mean 0.0
+Certificate Contact: sign-ID median 0, AUC 0.450, top1 lift -0.002, safe response mean 0.0
+```
+
+The key interpretation is not residual correspondence uncertainty. V48.91 makes the common-exogenous response **informative and point-identifiable at median 1.0**, yet the sign-identifiable median remains zero. For safe-positive Contact specifically, coverage=1, point-identifiability=1 and sign-identifiability=0 with response score exactly zero for 100% of the safe-positive rows. In contrast harmful Contact rows have positive mean physical-response scores (`~0.08-0.10`). Therefore the current pre-structural physical weak-tail response is not merely noisy: for the dominant Contact safe-benefit cases it is exactly the wrong/silent decision target.
+
+Formal status:
+
+```text
+future_level_physical_response_go = false
+source_training_authorized        = false
+status = COMMON_EXOGENOUS_PHYSICAL_RESPONSE_STOP
+```
+
+### What is retained / promoted
+- **Q90 recipe equivalence and T90 probability-mass transport remain GO.** Correspondence is no longer the dominant bottleneck.
+- **Partition stability remains a replicated structural-admissibility/rejector scaffold.** V48.91 reproduces safe-positive partition stability mean=1.0, with safe-vs-harmful AUC approximately 0.796/0.742/0.742/0.710 for dev-Near/cert-Near/dev-Contact/cert-Contact.
+- **Exact future-level pre-structural replay is retained as a formal audit scaffold.** It successfully separates physical active-component margins from structural floors/caps/overrides and proves that the physical response is point-identifiable.
+- **The current root-local physical-response learning family is closed.** No learned V48.92 physical-response head is authorized.
+
+### New mechanistic conclusion: decision benefit is not a pure physical-margin-response label
+The registered `safe_positive` label uses candidate-minus-nominal **PCD** advantage. In the production/calibration code:
+
+```text
+PCD = DRS * sigmoid(R_dep) * exp(-oracle_deployable_gap)
+teacher_adv = PCD(candidate) - PCD(nominal)
+```
+
+V48.91 instead isolates only the pre-structural common-exogenous physical-margin response. Contact safe-positive rows can therefore have large positive PCD advantage while their exact physical response is zero. An explicit replay example shows candidate and nominal tail physical margins both at the same severe negative value while the stored structural margins differ, confirming that structural/deployability semantics can move decision advantage without moving the isolated physical margin.
+
+The dominant bottleneck is updated to:
+
+```text
+decision-semantic identifiability of action-induced recoverability benefit:
+which deployable mediator (shared-option success, structural deployability gate,
+or oracle-gap reduction) actually carries the candidate advantage after
+counterfactual partition transport?
+```
+
+This does **not** reopen regime-specific policies. Near and Contact remain two states of the same observation-consistent recovery decision; the next experiment searches for one shared action-benefit mediator across both regimes.
+
+### Newly closed / still-closed families
+All historical exclusions remain active, including regime routers/experts/thresholds/budgets; LR/gain/threshold/horizon/capacity sweeps; proposal/top-K and unsupported option-library expansion; generic AFE/MLP/broad encoder retraining; privileged-future inputs/distillation; class-local/path-stop Main; post-hoc hard control veto; CV/CA/ball/box/hull/anchor/jerk branches; B1/B2 sweeps; option-wise scalar/typed transport; frozen structured-tail field/rank/width/depth sweeps; truth-floor/switch-inverse refinement; boundary transport; relative-ranker modification; and dataset reconstruction.
+
+V48.91 adds the following explicit closures:
+
+1. **Do not train a larger root-local physical-response operator from the current V48.91 sidecar.** Sign identifiability and action selectivity failed after exact future-level replay.
+2. **Do not interpret exact-zero physical response as missing correspondence or measurement noise.** Point-identifiability and coverage are already high.
+3. **Do not repair Contact by a Contact-specific response threshold/router.** The failure is a target-semantics mismatch, not a regime-specific threshold problem.
+4. **Do not optimize the V48.91 physical-response score to match PCD safe-positive labels.** PCD is a factorized decision quantity and physical margin is only one candidate mediator.
+
+### V48.92 OC-FRAD — Observation-Consistent Factorized Recovery-Advantage Decomposition
+V48.92 follows the V48.91 STOP branch and is deliberately **audit-only**. It trains zero planner parameters and does not reopen the closed root-local physical-response family.
+
+Scientific contract:
+
+```text
+same V48.91 labeled cohort          YES
+planner parameters trained          0
+reuse exact V48.91 sidecar          YES
+raw WOMD/Waymax replay              NO
+dataset reconstruction/reselection  NO
+teacher labels changed              NO
+teacher metadata model input        NO
+boundary transport                  OFF
+relative ranker                     frozen
+regime conditioning                 NO
+capacity sweep                       NO
+```
+
+For every registered candidate/nominal pair, V48.92 reads the historical L80 teacher factorization and reconstructs
+
+```text
+D = DRS
+F = sigmoid(R_dep)
+G = exp(-gap)
+PCD = D * F * G
+```
+
+It then performs an exact, parameter-free 3-factor Shapley decomposition in the **same numerical coordinate as `teacher_adv`**:
+
+```text
+teacher_adv = phi_DRS + phi_DEP + phi_GAP
+```
+
+The Shapley average removes arbitrary factor-replacement ordering; the sum must reproduce the registered PCD advantage within `2e-6` or the audit fails closed.
+
+In parallel, V48.92 reuses the V48.91 future sidecar and the exact common-exogenous coupling to measure:
+
+```text
+physical_response_score        (frozen V48.91 result; identity checked)
+structural_response_score      (same tail/coupling, post-structural future margin)
+partition_stability            (retained V48.90 scaffold)
+physical/structural tail deltas and structural-distortion delta (diagnostic)
+```
+
+No learned weighting or mediator mixture is allowed.
+
+### V48.92 preregistered mediator gate
+A candidate shared mediator among `structural_response`, `phi_DRS`, `phi_DEP`, `phi_GAP` is considered identified only if the **same factor**, without regime-dependent tuning, satisfies:
+
+```text
+safe-positive-vs-harmful AUC >=0.65 in >=3/4 roles,
+  with at least one Near and one Contact role;
+macro-stratified AUC >=0.62 in >=3/4 roles,
+  with at least one Near and one Contact role;
+tie-aware same-group top1 lift >=0.10 in >=2 roles,
+  including Near and Contact.
+```
+
+The physical-response family remains closed regardless of its descriptive diagnostic. V48.92 itself never authorizes source training or boundary transport; it only identifies which decision semantic deserves the next fixed-capacity experiment.
+
+Branch logic:
+
+```text
+shared mediator GO
+  -> design exactly one fixed-capacity mediator-specific experiment in V48.93;
+     do not reopen root-local physical response, capacity sweeps, or boundary transport.
+
+no shared mediator GO
+  -> PCD action benefit is not reducible to one stable deployable mediator;
+     audit Stage-I / teacher action-benefit semantics before any new source capacity;
+     no encoder/data/MLP/grid sweep.
+```
+
+### Runtime / safe acceleration decision
+The V48.91 exact replay took about 3.26 h parallel wall time with two workers. This is primarily normal exact replay cost, not a materialization bug:
+
+```text
+worker0 sample replay: future generation ~73.3%, teacher margin ~24.1%
+worker1 sample replay: future generation ~75.2%, teacher margin ~22.5%
+```
+
+(Percentages depend on whether stage totals or total worker wall time is used; in either accounting future generation + teacher margin dominate overwhelmingly.) Existing sparse source iteration, two-worker GPU sharding, history/provenance caches, metadata-only metric skip, active-option computation, and exact checkpoint/resume already remove the safe overheads.
+
+It is **not** attribution-safe to approximate/prune future generation, horizons, option semantics, or teacher margins merely for speed. V48.92 instead removes the dominant repeated work structurally: it consumes the already hash-validated V48.91 merged sidecar and performs no WOMD/Waymax replay. This is the recommended safe acceleration path for the next scientific question.
+
+### CCF-A method-line status
+The paper's high-level line is stable and should not be rewritten around another feasibility head. The current evidence supports the following method stack:
+
+```text
+observation-consistent deployability
+-> actuator-realizable executable recovery
+-> counterfactual equivalence-partition probability transport
+-> identifiability-before-capacity
+-> factorized action-benefit semantics (V48.92 adjudication)
+-> role-isolated absolute admission
+-> unified Safe / Near / Contact deployment
+```
+
+The publication-level contribution is not the V48.92 Shapley audit itself. Its purpose is to determine which deployable causal/decision mediator is eligible to become the next algorithmic source, while preventing another cycle of feature/head/capacity fishing.
