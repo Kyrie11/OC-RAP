@@ -143,3 +143,75 @@ def test_v48_91_1_origin_resume_contract_can_recover_pattern_and_build_config(tm
     origin = mod._origin_replay_metadata(sample_path, 12658)
     assert origin["origin_shard_root"] == str(shard2)
     assert origin["semantic_config"]["womd_patterns"] == "/exact/validation.tfrecord@150"
+
+def test_v48_91_3_canonical_near_profile_reconstructs_nonartifact_balanced_pass(tmp_path: Path) -> None:
+    mod = _load_v4891_sidecar_tool_module()
+    role = tmp_path / 'calibration_v48_14_prism_4814' / 'evidence_adapt_dev_near_contact' / 'samples'
+    role.mkdir(parents=True)
+    sample = {
+        '__path__': str(role / 'waymax_deadbeef__wx00011038_t0010_a00.npz'),
+        'future_metadata': json.dumps([
+            {'rollout_variant':'natural_log_playback','scenario_augmented':False},
+            {'visible_perturbation':True,'visible_branch':'visible_brake','scenario_augmented':True,'artifact_mined':False},
+        ]),
+    }
+    prof, meta = mod._canonical_v4814_sample_profile(sample)
+    assert meta == {'profile_id':'calibration_v48_14_prism_4814','role':'near','artifact_pass':False}
+    assert prof['num_reactive_futures'] == 2
+    assert prof['num_targeted_futures'] == 8
+    assert prof['targeted_future_kinds'] == ['hidden_vehicle_yields','hidden_vehicle_accelerates','low_friction_braking','control_delay_noise']
+    assert prof['waymax']['enable_visible_perturbation_roots'] is True
+    assert prof['waymax']['augmented_hidden_from_unknown_only'] is True
+    assert prof['artifact']['force_mine'] is False
+    assert prof['artifact']['mine_probability'] == 0.0
+    assert prof['dataset_quality']['require_artifact_pairs'] is False
+
+
+def test_v48_91_3_canonical_contact_profile_reconstructs_mined_balanced_pass(tmp_path: Path) -> None:
+    mod = _load_v4891_sidecar_tool_module()
+    role = tmp_path / 'calibration_v48_14_prism_4814' / 'certificate_pool_contact' / 'samples'
+    role.mkdir(parents=True)
+    sample = {
+        '__path__': str(role / 'waymax_deadbeef__wx00011053_t0010_a13.npz'),
+        'future_metadata': json.dumps([
+            {'targeted_type':'waymax_hidden_vehicle_yield','scenario_augmented':True,'artifact_mined':True,'artifact_branch':'yield'},
+            {'targeted_type':'waymax_hidden_vehicle_accelerate','scenario_augmented':True,'artifact_mined':True,'artifact_branch':'accelerate'},
+        ]),
+    }
+    prof, meta = mod._canonical_v4814_sample_profile(sample)
+    assert meta == {'profile_id':'calibration_v48_14_prism_4814','role':'contact','artifact_pass':True}
+    assert prof['num_targeted_futures'] == 10
+    assert 'contact_impulse_surrogate' in prof['targeted_future_kinds']
+    assert 'secondary_collision_approach' in prof['targeted_future_kinds']
+    assert prof['artifact']['force_mine'] is True
+    assert prof['artifact']['mine_probability'] == 1.0
+    assert prof['artifact']['use_margin_override'] is True
+    assert prof['dataset_quality']['require_artifact_pairs'] is True
+    assert prof['waymax']['skip_waymax_rollout_for_augmented_override'] is True
+    assert prof['waymax']['apply_artifact_override_to_screened_options'] is True
+
+
+def test_v48_91_3_fail_fast_identity_guard_is_defaulted() -> None:
+    tool = (ROOT / 'tools' / 'build_v48_91_common_exogenous_physical_sidecar.py').read_text()
+    assert '--fail-fast-replay-errors' in tool
+    assert 'V4891_FAIL_FAST_REPLAY_ERRORS' in tool
+    assert "v48.91_replay_fail_fast" in tool
+
+def test_v48_91_3_checkpoint_resume_requires_same_version_options_and_npz_stat(tmp_path: Path) -> None:
+    mod = _load_v4891_sidecar_tool_module()
+    sample = tmp_path / 'sample.npz'
+    sample.write_bytes(b'abc')
+    requested = {str(sample): {1, 3}}
+    ck = tmp_path / 'checkpoint.jsonl'
+    row = {'valid': True, 'sample_path': str(sample), 'option_ids': [1,3]}
+    size, mtime = mod._checkpoint_stat(str(sample))
+    ck.write_text(json.dumps({
+        'engineering_version': mod.ENGINEERING_VERSION,
+        'sample_path': str(sample), 'option_ids': [1,3],
+        'sample_size': size, 'sample_mtime_ns': mtime, 'row': row,
+    })+'\n')
+    got = mod._load_replay_checkpoint(ck, requested)
+    assert str(sample) in got
+    sample.write_bytes(b'abcd')
+    got2 = mod._load_replay_checkpoint(ck, requested)
+    assert str(sample) not in got2

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # V48.91 OC-CEPMI: Common-Exogenous Physical-Margin Identifiability.
-# V48.91.2 engineering-only replay acceleration: sparse raw-source materialization,
-# same-scene/time history cache, optional 2-GPU process sharding, visible progress.
+# V48.91.3 engineering-only replay fix: exact canonical V48.14 sample-local
+# balanced-pass reconstruction, fail-fast identity guard, resumable exact replay,
+# plus the V48.91.2 sparse/history-cache/2-GPU acceleration.
 set -Eeuo pipefail
 REPO="${OCRAP_REPO:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$REPO"
@@ -18,6 +19,8 @@ REPLAY_CONFIG="${V4891_REPLAY_CONFIG:-}"
 WOMD_SOURCE_PATTERN="${V4891_WOMD_SOURCE:-${WOMD_VAL:-}}"
 REPLAY_WORKERS="${V4891_REPLAY_WORKERS:-1}"
 PROGRESS_EVERY="${V4891_PROGRESS_EVERY:-25}"
+REPLAY_RESUME="${V4891_REPLAY_RESUME:-1}"
+CLEAR_REPLAY_CHECKPOINTS="${V4891_CLEAR_REPLAY_CHECKPOINTS:-0}"
 GPU0="${GPU0:-}"
 GPU1="${GPU1:-}"
 RUNTIME="$BASE_OUT/OC-RAP-v48.91-runtime-code-contract.json"
@@ -31,6 +34,7 @@ AUDITS_ZIP="$BASE_OUT/OC-RAP-v48.91-OC-CEPMI-audits.zip"
 mkdir -p "$BASE_OUT"
 rm -f "$RUNTIME" "$SIDECAR" "$SIDECAR_SUMMARY" "$AUDIT" "$SUMMARY" "$COMPARE" "$COMPLETE" "$AUDITS_ZIP"
 rm -f "$BASE_OUT"/OC-RAP-v48.91-sidecar.part*.jsonl.gz "$BASE_OUT"/OC-RAP-v48.91-sidecar.part*.summary.json "$BASE_OUT"/OC-RAP-v48.91-sidecar.worker*.log
+if [[ "$CLEAR_REPLAY_CHECKPOINTS" == 1 ]]; then rm -f "$BASE_OUT"/OC-RAP-v48.91-sidecar.worker*.checkpoint.jsonl; fi
 
 python tools/check_v48_91_runtime_code_contract.py --repo "$REPO" --output "$RUNTIME"
 python - "$V90_INDEX" "$V90_SUMMARY" "$V90_COMPARE" <<'PY'
@@ -44,6 +48,7 @@ PY
 REPLAY_ARGS=()
 if [[ -n "$REPLAY_CONFIG" ]]; then REPLAY_ARGS+=(--replay-config "$REPLAY_CONFIG"); fi
 if [[ -n "$WOMD_SOURCE_PATTERN" ]]; then REPLAY_ARGS+=(--womd-source-pattern "$WOMD_SOURCE_PATTERN"); fi
+if [[ "$REPLAY_RESUME" == 1 ]]; then REPLAY_ARGS+=(--resume-checkpoint); else REPLAY_ARGS+=(--no-resume-checkpoint); fi
 
 if ! [[ "$REPLAY_WORKERS" =~ ^[0-9]+$ ]] || (( REPLAY_WORKERS < 1 || REPLAY_WORKERS > 2 )); then
   echo "V4891_REPLAY_WORKERS must be 1 or 2; got $REPLAY_WORKERS" >&2
@@ -55,11 +60,11 @@ if (( REPLAY_WORKERS == 1 )); then
   if [[ -n "$GPU0" ]]; then
     CUDA_VISIBLE_DEVICES="$GPU0" python tools/build_v48_91_common_exogenous_physical_sidecar.py \
       --v48-90-audit "$V90_INDEX" --output "$SIDECAR" --summary "$SIDECAR_SUMMARY" \
-      --num-workers 1 --worker-index 0 --progress-every "$PROGRESS_EVERY" "${REPLAY_ARGS[@]}"
+      --num-workers 1 --worker-index 0 --progress-every "$PROGRESS_EVERY" --checkpoint "$BASE_OUT/OC-RAP-v48.91-sidecar.worker0.checkpoint.jsonl" "${REPLAY_ARGS[@]}"
   else
     python tools/build_v48_91_common_exogenous_physical_sidecar.py \
       --v48-90-audit "$V90_INDEX" --output "$SIDECAR" --summary "$SIDECAR_SUMMARY" \
-      --num-workers 1 --worker-index 0 --progress-every "$PROGRESS_EVERY" "${REPLAY_ARGS[@]}"
+      --num-workers 1 --worker-index 0 --progress-every "$PROGRESS_EVERY" --checkpoint "$BASE_OUT/OC-RAP-v48.91-sidecar.worker0.checkpoint.jsonl" "${REPLAY_ARGS[@]}"
   fi
 else
   GPU0="${GPU0:-0}"
@@ -76,7 +81,7 @@ else
       CUDA_VISIBLE_DEVICES="$gpu" XLA_PYTHON_CLIENT_PREALLOCATE=false \
         python tools/build_v48_91_common_exogenous_physical_sidecar.py \
           --v48-90-audit "$V90_INDEX" --output "$part" --summary "$psum" \
-          --num-workers 2 --worker-index "$w" --progress-every "$PROGRESS_EVERY" "${REPLAY_ARGS[@]}" \
+          --num-workers 2 --worker-index "$w" --progress-every "$PROGRESS_EVERY" --checkpoint "$BASE_OUT/OC-RAP-v48.91-sidecar.worker${w}.checkpoint.jsonl" "${REPLAY_ARGS[@]}" \
         2>&1 | sed -u "s/^/[v48.91-w${w}] /" | tee "$log"
     ) &
     pids+=("$!")

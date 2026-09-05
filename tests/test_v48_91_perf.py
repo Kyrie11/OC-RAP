@@ -101,7 +101,7 @@ def test_v4891_merge_parts_is_disjoint_and_deterministic(tmp_path: Path):
         summ = tmp_path / f's{w}.json'
         summ.write_text(json.dumps({
             'valid': True, 'attribution_ready': True,
-            'engineering_version': 'v48.91.2-OC-CEPMI-PERF',
+            'engineering_version': 'v48.91.3-OC-CEPMI-REPLAYFIX',
             'requested_samples': 1, 'valid_samples': 1, 'labeled_candidate_pairs': 1,
             'worker_partition': {'num_workers': 2, 'worker_index': w},
             'replay_provenance_resolution_counts': {'index:legacy_wx_migration_key': 1},

@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-ENGINEERING_VERSION = 'v48.91.2-OC-CEPMI-PERF'
+ENGINEERING_VERSION = 'v48.91.3-OC-CEPMI-REPLAYFIX'
 
 
 def _sha(path: Path) -> str:

@@ -30,7 +30,7 @@ from ocrap.v48_90_partition_transport import future_class_keys
 from ocrap.v48_91_common_exogenous_physical_margin import future_physical_matrix
 
 
-ENGINEERING_VERSION='v48.91.2-OC-CEPMI-PERF'
+ENGINEERING_VERSION='v48.91.3-OC-CEPMI-REPLAYFIX'
 
 KEYS=frozenset({
     'scene_id','original_scenario_id','official_scenario_id','legacy_scenario_id','source_scenario_index',
@@ -240,12 +240,192 @@ def _find_summary(path:Path)->Path|None:
     return None
 
 
+
+
+def _stored_future_metadata(sample: dict[str, Any]) -> list[dict[str, Any]]:
+    metas = _json_scalar(sample.get('future_metadata'), [])
+    if not isinstance(metas, list):
+        return []
+    return [m for m in metas if isinstance(m, dict)]
+
+
+def _canonical_v4814_protocol_role(sample_path: str | Path) -> str | None:
+    parts = set(Path(str(sample_path)).parts)
+    if {'evidence_adapt_dev_near_contact','certificate_pool_near_contact'} & parts:
+        return 'near'
+    if {'evidence_adapt_dev_contact','certificate_pool_contact'} & parts:
+        return 'contact'
+    return None
+
+
+def _canonical_v4814_sample_profile(sample: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Recover the exact *sample-local* V48.14 calibration replay profile.
+
+    The canonical Near/Contact calibration was built with a balanced two-pass
+    materializer.  Non-artifact samples were generated with hidden-pair mining
+    forced OFF, while artifact samples were generated with mining forced ON and
+    a local structural override path.  Replaying every sample with the global
+    defaults (or even one role-wide config) therefore changes exogenous future
+    classes.  This migration uses only immutable protocol role + stored offline
+    future metadata to choose the historical pass; it never changes planner
+    inputs or canonical NPZ content.
+    """
+    role = _canonical_v4814_protocol_role(sample.get('__path__',''))
+    if role is None:
+        return {}, {'profile_id': None, 'role': None, 'artifact_pass': None}
+    metas = _stored_future_metadata(sample)
+    artifact_pass = any(bool(m.get('artifact_mined', False)) or bool(m.get('artifact_branch')) for m in metas)
+    profile: dict[str, Any] = {
+        'data_source': 'womd',
+        'simulation_backend': 'waymax_closed_loop',
+        'num_reactive_futures': 2,
+        'num_roots': 8,
+        'num_recovery_options': 12,
+        'waymax': {
+            'dataloader_include_sdc_paths': True,
+            'metrics_to_run': ['log_divergence','overlap','offroad','sdc_wrongway','sdc_off_route','sdc_progression','kinematic_infeasibility'],
+            'teacher_backend': 'hybrid',
+            'teacher_metrics_stride': 0,
+            'use_jit_scan_rollouts': True,
+            'cache_env_objects': True,
+            'cache_postprefix_rollouts': True,
+            'cache_teacher_metric_rollouts': True,
+            'cache_identical_teacher_rollouts': True,
+            'augmented_hidden_from_unknown_only': True,
+            'enable_augmented_hidden_roots': True,
+            'enable_visible_perturbation_roots': True,
+        },
+        'artifact': {
+            'enable_branch_intent_margin': True,
+            'branch_intent_compatible_margin': 1.0,
+            'branch_intent_incompatible_margin': -2.5,
+            'use_margin_override': False,
+        },
+        'dataset_quality': {
+            'require_nominal_per_scene_time': True,
+            'keep_nominal_even_if_quality_fails': True,
+            'min_accepted_prefixes_per_scene_time': 2,
+            'balanced_two_pass': True,
+            'balanced_rotate_prefix_order': True,
+            'artifact_pair_mode': 'balanced',
+            'artifact_quota_uses_label': True,
+            'require_artifact_pairs': True,
+            'artifact_pass_use_margin_override': True,
+            'artifact_pass_skip_augmented_waymax': True,
+            'artifact_pass_apply_override_to_screened': True,
+            'artifact_pass_compute_future_metrics': False,
+        },
+        'regime_thresholds': {
+            'include_prefix_collision_in_near': False,
+            'include_prefix_contact_in_post': False,
+            'use_paper_regime_definitions': True,
+        },
+    }
+    if role == 'near':
+        profile.update({
+            'num_targeted_futures': 8,
+            'targeted_future_kinds': ['hidden_vehicle_yields','hidden_vehicle_accelerates','low_friction_braking','control_delay_noise'],
+        })
+        profile['artifact'].update({'force_mine': True, 'mine_probability': 0.30})
+        profile['dataset_quality'].update({
+            'max_accepted_prefixes_per_scene_time': 8,
+            'min_artifact_prefixes_per_scene_time': 1,
+            'max_artifact_prefixes_per_scene_time': 2,
+            'min_nonartifact_prefixes_per_scene_time': 4,
+            'max_nonartifact_prefixes_per_scene_time': 6,
+            'max_artifact_attempts_per_scene_time': 24,
+            'max_nonartifact_attempts_per_scene_time': 12,
+        })
+    else:
+        profile.update({
+            'num_targeted_futures': 10,
+            'targeted_future_kinds': ['hidden_vehicle_yields','hidden_vehicle_accelerates','contact_impulse_surrogate','secondary_collision_approach','low_friction_braking','control_delay_noise'],
+        })
+        profile['artifact'].update({'force_mine': True, 'mine_probability': 0.25})
+        profile['dataset_quality'].update({
+            'max_accepted_prefixes_per_scene_time': 9,
+            'min_artifact_prefixes_per_scene_time': 1,
+            'max_artifact_prefixes_per_scene_time': 2,
+            'min_nonartifact_prefixes_per_scene_time': 5,
+            'max_nonartifact_prefixes_per_scene_time': 7,
+            'max_artifact_attempts_per_scene_time': 24,
+            'max_nonartifact_attempts_per_scene_time': 12,
+        })
+    # Reconstruct the builder's sample-local balanced pass exactly.
+    if artifact_pass:
+        profile['artifact'].update({'force_mine': True, 'mine_probability': 1.0, 'use_margin_override': True})
+        profile['dataset_quality']['require_artifact_pairs'] = True
+        profile['waymax'].update({
+            'skip_waymax_rollout_for_augmented_override': True,
+            'apply_artifact_override_to_screened_options': True,
+        })
+    else:
+        profile['artifact'].update({'force_mine': False, 'mine_probability': 0.0, 'use_margin_override': False})
+        profile['dataset_quality']['require_artifact_pairs'] = False
+    return profile, {
+        'profile_id': 'calibration_v48_14_prism_4814',
+        'role': role,
+        'artifact_pass': bool(artifact_pass),
+    }
+
+
+
+def _apply_v4814_sample_local_balanced_pass(cfg: dict[str, Any], sample: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Replay the builder-local no-mine/mined pass for one frozen sample.
+
+    Even an exact shard ``resume_contract.semantic_config`` records the *base*
+    Near/Contact configuration, while ``builder._cfg_with_artifact_mining``
+    changes several knobs per candidate materialization.  Recover that local
+    pass from immutable stored future metadata.
+    """
+    role = _canonical_v4814_protocol_role(sample.get('__path__',''))
+    if role is None:
+        return cfg, {'profile_id':None,'role':None,'artifact_pass':None}
+    metas = _stored_future_metadata(sample)
+    artifact_pass = any(bool(m.get('artifact_mined', False)) or bool(m.get('artifact_branch')) for m in metas)
+    out=json.loads(json.dumps(cfg))
+    art=dict(out.get('artifact',{}) or {})
+    quality=dict(out.get('dataset_quality',{}) or {})
+    wx=dict(out.get('waymax',{}) or {})
+    if artifact_pass:
+        art.update({'force_mine':True,'mine_probability':1.0,'use_margin_override':True})
+        quality['require_artifact_pairs']=True
+        if bool(quality.get('artifact_pass_skip_augmented_waymax', True)):
+            wx['skip_waymax_rollout_for_augmented_override']=True
+        if bool(quality.get('artifact_pass_apply_override_to_screened', True)):
+            wx['apply_artifact_override_to_screened_options']=True
+        if not bool(quality.get('artifact_pass_compute_future_metrics', False)):
+            wx['compute_future_metrics']=False
+    else:
+        art.update({'force_mine':False,'mine_probability':0.0})
+        quality['require_artifact_pairs']=False
+    out['artifact']=art;out['dataset_quality']=quality;out['waymax']=wx
+    return out, {'profile_id':'calibration_v48_14_prism_4814','role':role,'artifact_pass':bool(artifact_pass)}
+
 def _config_for_sample(sample:dict[str,Any], base_cfg:dict[str,Any], *, resolved_pattern:str|None=None, resolved_index:int|None=None, explicit_replay_config:bool=False)->tuple[dict[str,Any],str|None,dict[str,Any]]:
     origin=_origin_replay_metadata(Path(sample['__path__']),int(resolved_index if resolved_index is not None else _legacy_source_index(sample)))
+    profile_meta={'profile_id':None,'role':None,'artifact_pass':None}
     if (not explicit_replay_config) and isinstance(origin.get('semantic_config'),dict):
         cfg=deep_update(load_config(None),json.loads(json.dumps(origin['semantic_config'])))
+        origin['replay_config_source']='origin_resume_contract'
+    elif not explicit_replay_config:
+        profile,profile_meta=_canonical_v4814_sample_profile(sample)
+        if profile:
+            cfg=deep_update(load_config(None),profile)
+            origin['replay_config_source']='canonical_v48_14_sample_local_profile'
+        else:
+            cfg=json.loads(json.dumps(base_cfg))
+            origin['replay_config_source']='default_fallback'
     else:
         cfg=json.loads(json.dumps(base_cfg))
+        origin['replay_config_source']='explicit_replay_config'
+    # The historical balanced builder applies a *sample-local* mining pass on
+    # top of the base shard config; recover it even when an exact resume config
+    # or explicit replay YAML is available.
+    cfg, local_pass_meta = _apply_v4814_sample_local_balanced_pass(cfg, sample)
+    if local_pass_meta.get('profile_id') is not None:
+        profile_meta = local_pass_meta
+    origin['replay_profile']=profile_meta
     origin_summary=origin.get('dataset_summary') if isinstance(origin.get('dataset_summary'),dict) else None
     sp=Path(origin['dataset_summary_path']) if origin.get('dataset_summary_path') else _find_summary(Path(sample['__path__']))
     if origin_summary is not None:
@@ -320,8 +500,11 @@ def _history_check(history,sample:dict[str,Any])->dict[str,float]:
     return checks
 
 
-def _replay_one(raw,sample:dict[str,Any],option_ids:list[int],base_cfg:dict[str,Any],alpha_intra:float, *, resolved_pattern:str|None=None, resolved_index:int|None=None, explicit_replay_config:bool=False, history_cache:dict[tuple[Any,...],Any]|None=None)->dict[str,Any]:
+def _replay_one(raw,sample:dict[str,Any],option_ids:list[int],base_cfg:dict[str,Any],alpha_intra:float, *, resolved_pattern:str|None=None, resolved_index:int|None=None, explicit_replay_config:bool=False, history_cache:dict[tuple[Any,...],Any]|None=None, timing_accum:dict[str,float]|None=None)->dict[str,Any]:
+    timing_accum = timing_accum if timing_accum is not None else {}
+    t_stage=time.perf_counter()
     cfg,summary_path,origin=_config_for_sample(sample,base_cfg,resolved_pattern=resolved_pattern,resolved_index=resolved_index,explicit_replay_config=explicit_replay_config)
+    timing_accum['config_seconds']=timing_accum.get('config_seconds',0.0)+(time.perf_counter()-t_stage)
     t=int(_scalar(sample,'time_index',-1))
     hk=(
         t, summary_path, int(cfg.get('max_agents',-1)), float(cfg.get('sample_rate_hz',10.0)),
@@ -331,14 +514,19 @@ def _replay_one(raw,sample:dict[str,Any],option_ids:list[int],base_cfg:dict[str,
         int(cfg.get('bev_channels',7)), float(cfg.get('route_width',3.5)),
     )
     history_cache = history_cache if history_cache is not None else {}
+    t_stage=time.perf_counter()
     history = history_cache.get(hk)
     history_cache_hit = history is not None
     if history is None:
         history=construct_history(raw,t,cfg)
         history_cache[hk]=history
     hcheck=_history_check(history,sample)
+    timing_accum['history_seconds']=timing_accum.get('history_seconds',0.0)+(time.perf_counter()-t_stage)
     prefix=_prefix(sample)
+    t_stage=time.perf_counter()
     futures=generate_counterfactual_futures(history,prefix,cfg)
+    timing_accum['future_generation_seconds']=timing_accum.get('future_generation_seconds',0.0)+(time.perf_counter()-t_stage)
+    t_stage=time.perf_counter()
     stored_probs=np.asarray(sample['future_probs'],dtype=np.float64).reshape(-1)
     probs=np.asarray([f.prior for f in futures],dtype=np.float64); probs=normalize_weights(probs)
     if probs.size!=stored_probs.size: raise ValueError(f'future count mismatch {probs.size}!={stored_probs.size}')
@@ -349,11 +537,24 @@ def _replay_one(raw,sample:dict[str,Any],option_ids:list[int],base_cfg:dict[str,
                  'root_assignments':np.asarray(sample['root_assignments'])}
     stored_keys,stored_unres,_=future_class_keys(sample,exogenous=True)
     replay_keys,replay_unres,_=future_class_keys(replay_view,exogenous=True)
+    timing_accum['future_identity_seconds']=timing_accum.get('future_identity_seconds',0.0)+(time.perf_counter()-t_stage)
     if stored_keys!=replay_keys or not np.array_equal(stored_unres,replay_unres):
-        raise ValueError('exogenous future-class replay mismatch')
+        first = next((i for i,(a,b) in enumerate(zip(stored_keys,replay_keys)) if a!=b), None)
+        if first is None and len(stored_keys)!=len(replay_keys):
+            first=min(len(stored_keys),len(replay_keys))
+        prof=origin.get('replay_profile') or {}
+        raise ValueError(
+            'exogenous future-class replay mismatch '
+            f'profile={prof} first_index={first} stored_n={len(stored_keys)} replay_n={len(replay_keys)} '
+            f'stored_key={(stored_keys[first] if first is not None and first < len(stored_keys) else None)!r} '
+            f'replay_key={(replay_keys[first] if first is not None and first < len(replay_keys) else None)!r}'
+        )
 
     opts=_options(sample,option_ids)
+    t_stage=time.perf_counter()
     m_sub,diags=compute_future_option_margins(history,prefix,futures,opts,cfg)
+    timing_accum['teacher_margin_seconds']=timing_accum.get('teacher_margin_seconds',0.0)+(time.perf_counter()-t_stage)
+    t_stage=time.perf_counter()
     phys_sub=future_physical_matrix(diags,np.asarray([o.valid for o in opts],dtype=bool))
     F=int(stored_probs.size); L=int(np.asarray(sample['m_star']).shape[1])
     struct=np.full((F,L),np.nan,dtype=np.float64); phys=np.full((F,L),np.nan,dtype=np.float64)
@@ -369,6 +570,7 @@ def _replay_one(raw,sample:dict[str,Any],option_ids:list[int],base_cfg:dict[str,
             w=normalize_weights(stored_probs[idx])
             agg=float(weighted_lcvar(struct[idx,l],w,float(alpha_intra)))
             root_err=max(root_err,abs(agg-float(storedM[k,l])))
+    timing_accum['physical_projection_validation_seconds']=timing_accum.get('physical_projection_validation_seconds',0.0)+(time.perf_counter()-t_stage)
     if root_err>2e-5: raise ValueError(f'active root-margin replay mismatch max_abs={root_err}')
     return {
         'valid':True,'sample_path':sample['__path__'],'sample_sha256':_sha(Path(sample['__path__'])),
@@ -382,9 +584,64 @@ def _replay_one(raw,sample:dict[str,Any],option_ids:list[int],base_cfg:dict[str,
         'history_max_abs_error':hcheck,'dataset_summary_path':summary_path,
         'origin_shard_root':origin.get('origin_shard_root'),'origin_resume_contract_path':origin.get('resume_contract_path'),
         'history_cache_hit':bool(history_cache_hit),
+        'replay_config_source':str(origin.get('replay_config_source','')),
+        'replay_profile':origin.get('replay_profile') or {},
         'audit_future_metadata_metrics_skipped':True,
     }
 
+
+
+
+def _checkpoint_stat(path_text: str) -> tuple[int, int]:
+    st=Path(path_text).stat()
+    return int(st.st_size), int(st.st_mtime_ns)
+
+
+def _load_replay_checkpoint(path: Path | None, requested: dict[str, set[int]]) -> dict[str, dict[str, Any]]:
+    if path is None or not path.is_file():
+        return {}
+    out:dict[str,dict[str,Any]]={}
+    try:
+        with path.open('r',encoding='utf-8') as f:
+            for line in f:
+                try: rec=json.loads(line)
+                except Exception: continue
+                if rec.get('engineering_version') != ENGINEERING_VERSION:
+                    continue
+                p=str(rec.get('sample_path') or '')
+                if p not in requested:
+                    continue
+                if list(map(int,rec.get('option_ids') or [])) != sorted(map(int,requested[p])):
+                    continue
+                try:
+                    size,mtime=_checkpoint_stat(p)
+                except Exception:
+                    continue
+                if int(rec.get('sample_size',-1)) != size or int(rec.get('sample_mtime_ns',-1)) != mtime:
+                    continue
+                row=rec.get('row')
+                if isinstance(row,dict) and row.get('valid') and str(row.get('sample_path'))==p:
+                    out[p]=row
+    except Exception:
+        return {}
+    return out
+
+
+def _append_replay_checkpoint(handle, row: dict[str, Any], option_ids: list[int]) -> None:
+    if handle is None:
+        return
+    p=str(row['sample_path'])
+    size,mtime=_checkpoint_stat(p)
+    rec={
+        'engineering_version':ENGINEERING_VERSION,
+        'sample_path':p,
+        'option_ids':[int(x) for x in option_ids],
+        'sample_size':size,
+        'sample_mtime_ns':mtime,
+        'row':row,
+    }
+    handle.write(json.dumps(rec,sort_keys=True)+'\n')
+    handle.flush()
 
 def main()->int:
     ap=argparse.ArgumentParser()
@@ -397,7 +654,10 @@ def main()->int:
     ap.add_argument('--intra-root-alpha',type=float,default=0.2)
     ap.add_argument('--num-workers',type=int,default=1,help='independent replay shards; launcher can bind each shard to a separate GPU')
     ap.add_argument('--worker-index',type=int,default=0,help='0-based replay shard index')
-    ap.add_argument('--progress-every',type=int,default=25,help='emit replay progress every N samples (0 disables)')
+    ap.add_argument('--progress-every',type=int,default=max(0,int(os.environ.get('V4891_PROGRESS_EVERY','25'))),help='emit replay progress every N samples (0 disables)')
+    ap.add_argument('--fail-fast-replay-errors',type=int,default=max(1,int(os.environ.get('V4891_FAIL_FAST_REPLAY_ERRORS','1'))),help='stop the shard after N replay identity/config errors; default 1 prevents multi-hour invalid replays')
+    ap.add_argument('--checkpoint',type=Path,default=None,help='append-only valid-row replay checkpoint for exact resume')
+    ap.add_argument('--resume-checkpoint',action=argparse.BooleanOptionalAction,default=True,help='reuse valid rows from a same-version checkpoint when NPZ stat and requested options match')
     args=ap.parse_args()
     if args.num_workers < 1 or not (0 <= args.worker_index < args.num_workers):
         raise SystemExit(f'invalid worker partition index={args.worker_index} count={args.num_workers}')
@@ -440,6 +700,7 @@ def main()->int:
         raise SystemExit(f'no labeled V48.90 cohort samples/options to replay for shard {args.worker_index}/{args.num_workers}')
 
     t0=time.perf_counter(); samples={p:(loaded_samples[p] if p in loaded_samples else _load(Path(p))) for p in requested}; loaded_samples.update(samples); sample_load_seconds=time.perf_counter()-t0
+    checkpoint_rows=_load_replay_checkpoint(args.checkpoint,requested) if args.resume_checkpoint else {}
     groups:dict[tuple[str,int],dict[int,list[str]]]=defaultdict(lambda:defaultdict(list))
     provenance_resolution_counts:dict[str,int]=defaultdict(int)
     resolved_indices:list[int]=[]
@@ -474,7 +735,8 @@ def main()->int:
             )
         resolved_indices.append(idx)
         if maxobj<=0: maxobj=int(np.asarray(s['agent_history']).shape[1])
-        groups[(pattern,maxobj)][idx].append(p)
+        if p not in checkpoint_rows:
+            groups[(pattern,maxobj)][idx].append(p)
     provenance_seconds=time.perf_counter()-t0
 
     target_source_indices=len(set(resolved_indices))
@@ -488,10 +750,20 @@ def main()->int:
         'active_options_mean':float(np.mean(active_option_counts)) if active_option_counts else 0.0,
         'active_options_max':max(active_option_counts) if active_option_counts else 0,
         'sparse_source_iterator':True,'metadata_only_future_metrics_skipped':True,
+        'canonical_v48_14_sample_local_replay_profile':True,
+        'fail_fast_replay_errors':int(args.fail_fast_replay_errors),
+        'checkpoint_rows_reused':len(checkpoint_rows),
+        'checkpoint_path':str(args.checkpoint) if args.checkpoint else None,
     }),flush=True)
 
-    rows=[]; errors=[]; processed=0; history_hits=0; replay_seconds=0.0; raw_scan_seconds=0.0
-    for (pattern,maxobj),byidx in groups.items():
+    rows=list(checkpoint_rows.values()); errors=[]; processed=len(checkpoint_rows); history_hits=sum(int(bool(r.get('history_cache_hit'))) for r in rows); replay_seconds=0.0; raw_scan_seconds=0.0
+    stage_timing:dict[str,float]={}
+    checkpoint_handle=None
+    if args.checkpoint is not None:
+        args.checkpoint.parent.mkdir(parents=True,exist_ok=True)
+        checkpoint_handle=args.checkpoint.open('a',encoding='utf-8')
+    try:
+      for (pattern,maxobj),byidx in groups.items():
         parser_cfg=json.loads(json.dumps(base)); parser_cfg['data_source']='womd'; parser_cfg['simulation_backend']='waymax_closed_loop'; parser_cfg['womd_patterns']=pattern; parser_cfg['max_agents']=maxobj
         parser_cfg['scenario_start_index']=0; parser_cfg['scenario_stride']=1; parser_cfg['scenario_worker_index']=0
         parser_cfg['_selected_replay_progress_every']=max(0,int(os.environ.get('V4891_SOURCE_SCAN_PROGRESS_EVERY','1000')))
@@ -516,13 +788,23 @@ def main()->int:
                     row=_replay_one(
                         raw,s,sorted(requested[p]),base,args.intra_root_alpha,
                         resolved_pattern=pattern,resolved_index=idx,
-                        explicit_replay_config=bool(args.replay_config),history_cache=history_cache,
+                        explicit_replay_config=bool(args.replay_config),history_cache=history_cache,timing_accum=stage_timing,
                     )
                     row['dataset_roles']=sorted(path_to_role[p]); rows.append(row)
+                    _append_replay_checkpoint(checkpoint_handle,row,sorted(requested[p]))
                     history_hits += int(bool(row.get('history_cache_hit')))
                 except Exception as exc:
                     errors.append(f'{p}: {exc}')
                     rows.append({'valid':False,'sample_path':p,'error':str(exc),'dataset_roles':sorted(path_to_role[p])})
+                    if len(errors) >= int(args.fail_fast_replay_errors):
+                        print(json.dumps({
+                            'event':'v48.91_replay_fail_fast','worker_index':args.worker_index,
+                            'errors':len(errors),'last_error':errors[-1],
+                            'message':'stopping early before full-cohort replay because identity/config replay is invalid',
+                        }),flush=True)
+                        replay_seconds += time.perf_counter()-one_start
+                        processed += 1
+                        break
                 replay_seconds += time.perf_counter()-one_start
                 processed += 1
                 if args.progress_every > 0 and (processed % args.progress_every)==0:
@@ -534,9 +816,18 @@ def main()->int:
                         'history_cache_hits':history_hits,'elapsed_seconds':round(elapsed,3),
                         'samples_per_minute':round((processed/max(elapsed,1e-9))*60.0,3),
                     }),flush=True)
+            if len(errors) >= int(args.fail_fast_replay_errors):
+                break
         raw_scan_seconds += time.perf_counter()-scan_start
         missing=sorted(set(byidx)-seen)
-        if missing: errors.append(f'raw source indices not encountered pattern={pattern}: {missing[:20]} count={len(missing)}')
+        if missing and len(errors) < int(args.fail_fast_replay_errors):
+            errors.append(f'raw source indices not encountered pattern={pattern}: {missing[:20]} count={len(missing)}')
+        if len(errors) >= int(args.fail_fast_replay_errors):
+            break
+
+    finally:
+        if checkpoint_handle is not None:
+            checkpoint_handle.close()
 
     args.output.parent.mkdir(parents=True,exist_ok=True)
     with gzip.open(args.output,'wt',encoding='utf-8') as f:
@@ -561,6 +852,9 @@ def main()->int:
             'processed_samples':processed,'target_source_indices':target_source_indices,'history_cache_hits':history_hits,
             'history_cache_hit_fraction':float(history_hits/max(processed,1)),
             'sparse_source_iterator':True,'metadata_only_future_metrics_skipped':True,
+            'canonical_v48_14_sample_local_replay_profile':True,'fail_fast_replay_errors':int(args.fail_fast_replay_errors),
+            'checkpoint_rows_reused':len(checkpoint_rows),'checkpoint_path':str(args.checkpoint) if args.checkpoint else None,
+            'stage_timing_seconds':{k:float(v) for k,v in sorted(stage_timing.items())},
             'active_options_mean':float(np.mean(active_option_counts)) if active_option_counts else 0.0,
         },
         'canonical_npz_modified':False,'planner_parameters_trained':0,'teacher_labels_changed':False,
