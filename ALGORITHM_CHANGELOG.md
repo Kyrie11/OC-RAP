@@ -9947,3 +9947,146 @@ observation-consistent deployability
 ```
 
 The publication-level contribution is not the V48.92 Shapley audit itself. Its purpose is to determine which deployable causal/decision mediator is eligible to become the next algorithmic source, while preventing another cycle of feature/head/capacity fishing.
+
+## V48.92 authoritative result + V48.93 OC-FMCA (2026-09-05)
+
+### V48.92 engineering reliability / attribution decision
+The uploaded V48.92 OC-FRAD run is engineering-valid and attribution-ready. The runtime contract, audit summary, comparison and top-level pipeline all report `valid=true`, `attribution_ready=true`, `engineering_version=v48.92.0-OC-FRAD`, `errors=[]`, `test_roots_read=false`, `dataset_reconstruction=false`, `dataset_reselection=false`, `planner_parameters_trained=0`, `regime_conditioning=false`, `boundary_transport=false`, `relative_ranker_modified=false`, and `womd_replay_performed=false`. The manual and launcher-produced runtime contracts are byte-identical. Runtime SHA256 values for the V48.92 launcher/source/audit/checker files match the uploaded code.
+
+The V48.92 audit contains 4,823 rows. PCD reconstruction and exact 3-factor Shapley additivity both close to machine precision (`max error = 1.11e-16`), and the frozen V48.91 physical-response diagnostic is reproduced with exact zero identity error. Balanced/precision teacher-component values agree exactly on their shared proposal support. The packaged audits ZIP contains the same comparison/summary/runtime/pipeline bytes as the separately uploaded artifacts. Therefore no engineering hotfix or dataset reconstruction is required before scientific attribution.
+
+### Strict V48.92 preregistered screening decision
+V48.92 was registered as an **audit-only decision-semantic screening experiment** after V48.91 closed the pre-structural root-local physical-response family. A mediator passed if the same score, with no regime-specific tuning, achieved safe-positive-vs-harmful AUC >=0.65 in >=3/4 roles including Near+Contact, macro AUC >=0.62 in >=3/4 roles including Near+Contact, and tie-aware same-group top-1 lift >=0.10 in >=2 roles including Near+Contact.
+
+All four registered decision-semantic scores pass the marginal screening gate:
+
+| Score | Dev Near AUC | Dev Contact AUC | Cert Near AUC | Cert Contact AUC | Screening |
+|---|---:|---:|---:|---:|---|
+| structural response | 0.9672 | 0.9646 | 0.9497 | 0.9364 | GO |
+| Shapley DRS | 0.9832 | 0.9654 | 0.9673 | 0.9748 | GO |
+| Shapley deployability gate | 1.0000 | 0.9994 | 0.9994 | 0.9990 | GO |
+| Shapley gap discount | 0.7956 | 0.7363 | 0.7387 | 0.7177 | GO |
+
+The frozen V48.91 physical-response diagnostic remains STOP (`AUC ~= 0.739/0.455/0.593/0.450` for dev-Near/dev-Contact/cert-Near/cert-Contact), so V48.92 does not reopen that family. Formal status is `SHARED_RECOVERY_ADVANTAGE_MEDIATOR_GO`, but V48.92 itself authorizes **no source training** and keeps boundary transport OFF.
+
+### Important interpretation constraint: marginal screening GO is not unique causal-mediator identification
+V48.92 uses the exact production teacher relation
+
+`teacher_adv = PCD(candidate) - PCD(nominal)`
+
+with
+
+`PCD = DRS * sigmoid(R_dep) * exp(-gap)`.
+
+The three Shapley scores are exact additive components of that same `teacher_adv`, while `safe_positive` is defined by `teacher_adv >= 0.015 AND not teacher_harmful`. Consequently, high marginal AUC establishes that a factor covaries strongly with the registered decision advantage; it does **not** by itself establish that the factor is uniquely necessary, sufficient, or the correct standalone source target. This issue is especially visible because all four candidate mediators pass simultaneously.
+
+This is not an engineering failure and does not invalidate the registered V48.92 marginal GO. It does mean that post-hoc selecting the numerically highest AUC factor and immediately training it would violate the project's identifiability-before-capacity discipline and would amount to mediator fishing.
+
+### Exploratory row-level mechanism finding that motivates V48.93 (not a V48.92 preregistered gate)
+Exact one-factor PCD interventions reveal a strong complementarity pattern among the 107 registered safe-positive rows:
+
+- **Dev Near:** DRS necessary 16/20; deployability-gate necessary 4/20; gap necessary 0/20.
+- **Certificate Near:** DRS necessary 11/18; deployability-gate necessary 7/18; gap necessary 0/18.
+- **Dev Contact:** DRS necessary 22/38; deployability-gate necessary 16/38; gap necessary 0/38.
+- **Certificate Contact:** DRS necessary 23/31; deployability-gate necessary 6/31; gap necessary 0/31; 2/31 remain redundant/interaction cases under the +0.015 threshold.
+
+This is the exact product semantics expected from two different action-benefit states:
+
+1. when nominal DRS is inactive, the candidate must establish shared recovery success (`DRS activation`);
+2. when nominal DRS is already active/saturated, benefit is carried primarily by improvement in the deployability gate;
+3. gap discount is mostly a negative/rejector coordinate in this cohort rather than a positive safe-recovery generator.
+
+The same pattern appears in Near and Contact and therefore does **not** motivate a regime router. It suggests a factor-complementarity hypothesis, but because this row-level intervention was inspected after the V48.92 screen, it is treated as exploratory and is not promoted without a separately registered adjudication.
+
+### Mechanism promotion / closure after V48.92
+**Retain / promote as evidence or scaffold:**
+- V48.90 recipe-equivalence and common-exogenous probability-mass transport remain validated correspondence scaffolds;
+- partition stability remains a structural-admissibility/rejector scaffold;
+- exact V48.91 future-level physical replay remains an audit scaffold;
+- V48.92 exact PCD factorization/Shapley additivity is a useful decision-semantics audit scaffold;
+- structural response, DRS, deployability gate and gap discount are all retained as **screened decision-semantic coordinates**, not yet as unique learned source targets.
+
+**Do not promote:**
+- any V48.92 factor as a unique causal mediator solely from its marginal AUC;
+- the gap-discount coordinate as a positive recovery source (safe-positive gap contribution is zero or nearly zero in the dominant Near/Contact roles; its signal is predominantly rejection of harmful candidates);
+- structural future response as a deployment input or privileged-future distillation target;
+- the closed V48.91 pre-structural root-local physical-response family.
+
+**New explicit prohibitions:**
+1. Do not choose among multiple V48.92 marginal winners by post-hoc AUC ranking and call that a causal mediator.
+2. Do not learn arbitrary weights/mixtures of the four V48.92 scores; the three PCD Shapley components already sum exactly to the label coordinate, so a learned mixture would be label-reconstruction rather than mechanism identification.
+3. Do not reopen component/gain/LR/threshold/capacity sweeps, broad root/margin/encoder retraining, generic AFE/MLP, boundary transport, relative-ranker modification, regime routing, proposal expansion, privileged future input, or dataset reconstruction.
+4. Do not interpret the V48.92 deployability-gate AUC near 1.0 as proof that the existing absolute R_dep source is solved; V48.92 measures the teacher-side decision coordinate, not deployable prediction quality.
+
+### Updated dominant bottleneck
+The paper-level mainline remains stable. V48.92 sharpens the first unresolved layer from generic `decision-semantic identifiability` to:
+
+`unique-vs-complementary factor mediation of action-induced PCD recovery benefit under the same observation-consistent counterfactual cohort`.
+
+The key question is no longer whether decision factors carry signal—they all do. The unresolved question is whether one factor is necessary/sufficient across regimes, or whether recovery benefit has a mathematically structured complementarity (e.g. shared-success activation versus deployability improvement) that a future source must respect.
+
+Near and Contact remain one planner and one decision object:
+- Near: establish or preserve positive shared recovery success/headroom before the zero boundary is lost;
+- Contact: re-establish shared recovery success and/or improve deployability while repaying the same signed recovery debt;
+- the active decision factor may differ with the current physical/deployability state, but **not** by a Near/Contact regime ID.
+
+### Internal convergence state
+**NOT CONVERGED.** V48.92 trains zero planner parameters and therefore cannot satisfy the absolute-source freeze criterion. The physical-response family is closed, but a deployable source aligned with the screened decision semantics has not yet been validated. Safe paired non-interference, final Near closed-loop critical-safety, Contact secondary/post-impact metrics and external SOTA remain downstream of a scientifically frozen absolute source.
+
+## V48.93 OC-FMCA — Observation-Consistent Factor-Mediation Complementarity Adjudication
+
+### Why V48.93 is audit-only instead of immediately training one V48.92 winner
+The V48.92 preregistration did not specify a tie-break rule for the case where **multiple mediator candidates all satisfy the same GO gate**. All four did. Selecting the largest AUC after observing the results would be a post-hoc choice. To preserve the `identifiability-before-capacity` paper principle, V48.93 resolves this previously unspecified multi-winner branch before any new source capacity is introduced.
+
+Scientific contract:
+
+```text
+same V48.92 labeled cohort          YES
+planner parameters trained          0
+reuse V48.92 exact audit rows        YES
+raw WOMD/Waymax replay              NO
+dataset reconstruction/reselection  NO
+teacher labels changed              NO
+teacher metadata model input        NO
+boundary transport                  OFF
+relative ranker                     frozen
+regime conditioning                 NO
+capacity sweep                       NO
+```
+
+### Exact factor intervention
+For each PCD factor `j in {DRS, DEP, GAP}`, V48.93 computes two exact counterfactuals using the production PCD product:
+
+1. **factor knockout**
+   `A_-j = PCD(candidate with factor j reset to nominal) - PCD(nominal)`;
+2. **single-factor change**
+   `A_j = PCD(nominal with only factor j changed to candidate) - PCD(nominal)`.
+
+For a registered safe-positive row (`A_full >= +0.015`):
+- factor `j` is **necessary** iff `A_-j < +0.015`;
+- factor `j` is **sufficient** iff `A_j >= +0.015`.
+
+No Shapley attribution, learned threshold, weighting or factor-replacement order is used in this adjudication.
+
+### V48.93 preregistered decision
+A **single shared mediator GO** requires the same factor to satisfy:
+- safe-positive necessity fraction >=0.70 in >=3/4 roles including Near+Contact;
+- safe-positive sufficiency fraction >=0.60 in >=3/4 roles including Near+Contact;
+- harmful single-factor false-rescue fraction <=0.10 in all 4 roles.
+
+If no single factor passes, **factor-complementarity GO** requires:
+- `(DRS-necessary OR DEP-necessary)` safe-positive coverage >=0.90 in all 4 roles;
+- GAP necessity <=0.10 in all 4 roles;
+- multi-factor/unexplained safe-positive fraction <=0.10 in all 4 roles;
+- DRS-activation mode has >=5 safe-positive rows in >=3 roles including Near+Contact;
+- deployability-gain mode has >=5 safe-positive rows in >=3 roles including Near+Contact.
+
+Branch rules:
+- `SINGLE_PCD_MEDIATOR_GO` -> only that mediator may enter one fixed-capacity V48.94 experiment; no capacity or regime sweep.
+- `PCD_FACTOR_COMPLEMENTARITY_GO` -> one fixed-capacity **complementarity-aligned** experiment is authorized; it must use a parameter-free physical/decision-state switch rather than regime ID or a learned mixture, and GAP remains a non-compensatory rejector/quality coordinate unless separately supported.
+- `PCD_FACTOR_MEDIATION_STOP` -> do not add source capacity; audit Stage-I/teacher action-benefit semantics instead.
+
+V48.93 itself never authorizes boundary transport, relative-ranker changes, external SOTA evaluation, or dataset reconstruction.
+
+### Performance policy
+V48.93 reuses the 4,823-row V48.92 audit and performs only scalar exact PCD interventions. It performs no raw replay and no model training, so it avoids the multi-hour V48.91 Waymax cost by construction. No future/horizon/teacher approximation is introduced.
