@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # V48.91 OC-CEPMI: Common-Exogenous Physical-Margin Identifiability.
-# V48.91.4 engineering-only replay fix: final-layer canonical V48.14 sample-local
+# V48.91.5 engineering-only replay fix: frozen exogenous-realization lock plus final-layer canonical V48.14 sample-local
 # balanced-pass reconstruction, fail-fast identity guard, resumable exact replay,
 # plus the V48.91.2 sparse/history-cache/2-GPU acceleration.
 set -Eeuo pipefail
@@ -12,6 +12,11 @@ export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
 export XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}"
 BASE_OUT="${BASE_OUT:-/home/senzeyu2/code/OC-RAP/runs}"
+OCRAP_ROOT="${OCRAP_ROOT:-/data0/senzeyu2/dataset/OCRAP}"
+PROTOCOL_ROOT="${PROTOCOL_ROOT:-$OCRAP_ROOT/calibration_v48_14_prism_4814}"
+CAL_NEAR="${CAL_NEAR:-$OCRAP_ROOT/calibration_near_contact}"
+CAL_CONTACT="${CAL_CONTACT:-$OCRAP_ROOT/calibration_contact}"
+SOURCE_CONTRACT="$BASE_OUT/OC-RAP-v48.91-calibration-source-contract.json"
 V90_INDEX="${V4891_V90_INDEX:-$BASE_OUT/OC-RAP-v48.90-partition-transport-audit.jsonl}"
 V90_SUMMARY="${V4891_V90_SUMMARY:-$BASE_OUT/OC-RAP-v48.90-partition-transport-audit-summary.json}"
 V90_COMPARE="${V4891_V90_COMPARE:-$BASE_OUT/OC-RAP-v48.90-DCP-DRFC-BCDE-RIFA-OC-CEPT-comparison.json}"
@@ -37,6 +42,9 @@ rm -f "$BASE_OUT"/OC-RAP-v48.91-sidecar.part*.jsonl.gz "$BASE_OUT"/OC-RAP-v48.91
 if [[ "$CLEAR_REPLAY_CHECKPOINTS" == 1 ]]; then rm -f "$BASE_OUT"/OC-RAP-v48.91-sidecar.worker*.checkpoint.jsonl; fi
 
 python tools/check_v48_91_runtime_code_contract.py --repo "$REPO" --output "$RUNTIME"
+python tools/check_v48_91_calibration_source_contract.py \
+  --protocol-root "$PROTOCOL_ROOT" --cal-near "$CAL_NEAR" --cal-contact "$CAL_CONTACT" \
+  --output "$SOURCE_CONTRACT"
 python - "$V90_INDEX" "$V90_SUMMARY" "$V90_COMPARE" <<'PY'
 import json,pathlib,sys
 for p in map(pathlib.Path,sys.argv[1:]):
@@ -104,7 +112,7 @@ python tools/build_v48_91_common_exogenous_physical_response_audit.py \
   --output "$AUDIT" --summary "$SUMMARY"
 python tools/compare_v48_91_cepmi.py --summary "$SUMMARY" --v48-90-summary "$V90_SUMMARY" --v48-90-comparison "$V90_COMPARE" --output "$COMPARE"
 python tools/check_v48_91_pipeline_complete.py \
-  --runtime "$RUNTIME" --sidecar "$SIDECAR" --sidecar-summary "$SIDECAR_SUMMARY" --audit "$AUDIT" --audit-summary "$SUMMARY" \
+  --runtime "$RUNTIME" --source-contract "$SOURCE_CONTRACT" --sidecar "$SIDECAR" --sidecar-summary "$SIDECAR_SUMMARY" --audit "$AUDIT" --audit-summary "$SUMMARY" \
   --comparison "$COMPARE" --v48-90-comparison "$V90_COMPARE" --output "$COMPLETE"
-zip -qj "$AUDITS_ZIP" "$RUNTIME" "$SIDECAR_SUMMARY" "$SUMMARY" "$COMPARE" "$COMPLETE"
+zip -qj "$AUDITS_ZIP" "$RUNTIME" "$SOURCE_CONTRACT" "$SIDECAR_SUMMARY" "$SUMMARY" "$COMPARE" "$COMPLETE"
 printf 'V48.91 complete. Upload:\n%s\n%s\n%s\n' "$AUDITS_ZIP" "$AUDIT" "$SIDECAR_SUMMARY"

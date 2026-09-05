@@ -593,10 +593,64 @@ def _artifact_override_adjusted_value(val: float, option: RecoveryOption, future
     return min(float(val), float(override)), True
 
 
-def _augment_hidden_reference(state: Any, history: SceneHistory, prefix: CandidatePrefix, cfg: dict, *, branch: str, seed: int):
+def _audit_replay_future_lock(cfg: dict, future_index: int, *, source: str, targeted_type: str | None = None) -> dict[str, Any] | None:
+    """Return an audit-only frozen exogenous realization for one future index.
+
+    The production generator never sets ``_audit_replay_future_metadata``.  V48.91
+    sets it only while reconstructing the *already frozen* calibration future used
+    by V48.90 correspondence.  This does not supply a teacher margin or model
+    feature: it only replaces stochastic/candidate-set realization choices (actor,
+    hidden spawn, contact impulse) with the realization already serialized in the
+    canonical NPZ.  Recipe/source order must still match exactly and all downstream
+    future-probability/root-margin replay checks remain fail closed.
+    """
+    locks = cfg.get("_audit_replay_future_metadata")
+    sources = cfg.get("_audit_replay_future_sources")
+    if not isinstance(locks, list):
+        return None
+    if future_index < 0 or future_index >= len(locks):
+        raise ValueError(f"audit replay future lock index out of range: {future_index}/{len(locks)}")
+    lock = locks[future_index]
+    if not isinstance(lock, dict):
+        raise ValueError(f"audit replay future lock must be dict at index {future_index}")
+    if isinstance(sources, list):
+        if future_index >= len(sources) or str(sources[future_index]) != str(source):
+            raise ValueError(
+                f"audit replay future source mismatch at index {future_index}: "
+                f"stored={sources[future_index] if future_index < len(sources) else None!r} expected={source!r}"
+            )
+    if targeted_type is not None:
+        stored_type = str(lock.get("targeted_type", ""))
+        if stored_type and stored_type != str(targeted_type):
+            raise ValueError(
+                f"audit replay future recipe mismatch at index {future_index}: "
+                f"stored targeted_type={stored_type!r} expected={targeted_type!r}"
+            )
+    return lock
+
+
+def _locked_hidden_spawn(history: SceneHistory, cfg: dict, lock: dict[str, Any]) -> tuple[np.ndarray, dict] | None:
+    xy = lock.get("hidden_spawn_xy")
+    if not isinstance(xy, (list, tuple)) or len(xy) < 2:
+        return None
+    loc = np.asarray([float(xy[0]), float(xy[1])], dtype=np.float32)
+    unknown, visible_free = _is_unknown_spawn(history, loc, cfg)
+    meta = {
+        "hidden_spawn_xy": [float(loc[0]), float(loc[1])],
+        "from_unknown_mask": bool(lock.get("from_unknown_mask", unknown)),
+        "spawn_in_visible_free": bool(lock.get("spawn_in_visible_free", visible_free)),
+        "synthetic_hidden_spawn_fallback": bool(lock.get("synthetic_hidden_spawn_fallback", False)),
+    }
+    cell = lock.get("hidden_spawn_cell")
+    if isinstance(cell, (list, tuple)) and len(cell) >= 2:
+        meta["hidden_spawn_cell"] = [int(cell[0]), int(cell[1])]
+    return loc, meta
+
+
+def _augment_hidden_reference(state: Any, history: SceneHistory, prefix: CandidatePrefix, cfg: dict, *, branch: str, seed: int, replay_lock: dict[str, Any] | None = None):
     _, jnp, _, _, _, _ = _require_waymax()
     rng = np.random.default_rng(seed)
-    spawn = _sample_unknown_spawn(history, cfg, rng)
+    spawn = _locked_hidden_spawn(history, cfg, replay_lock) if replay_lock is not None else _sample_unknown_spawn(history, cfg, rng)
     if spawn is None:
         return None, {"skip_reason": "no_unknown_drivable_spawn"}
     local_xy, smeta = spawn
@@ -607,13 +661,21 @@ def _augment_hidden_reference(state: Any, history: SceneHistory, prefix: Candida
     t0 = int(history.metadata.get("waymax_planning_timestep", history.time_index))
     T_p = int(prefix.prefix_states.shape[0])
     delay = int(cfg.get("hidden_emergence_delay_steps", 2))
-    start = min(int(_as_np(state.log_trajectory.x).shape[-1]) - 1, t0 + T_p + delay)
+    if replay_lock is not None and "hidden_start_step" in replay_lock:
+        start = min(int(_as_np(state.log_trajectory.x).shape[-1]) - 1, t0 + int(replay_lock["hidden_start_step"]))
+    else:
+        start = min(int(_as_np(state.log_trajectory.x).shape[-1]) - 1, t0 + T_p + delay)
     tr = state.log_trajectory
     valid_np = _as_np(tr.valid).astype(bool)
     sdc = _sdc_index(state)
     candidates = [a for a in range(valid_np.shape[0]) if a != sdc]
     empty = [a for a in candidates if not valid_np[a].any()]
-    slot = int(empty[0]) if empty else int(min(candidates, key=lambda a: int(valid_np[a].sum())))
+    if replay_lock is not None and "hidden_actor_object_index" in replay_lock:
+        slot = int(replay_lock["hidden_actor_object_index"])
+        if slot == sdc or slot < 0 or slot >= valid_np.shape[0]:
+            raise ValueError(f"locked hidden actor index invalid: {slot}")
+    else:
+        slot = int(empty[0]) if empty else int(min(candidates, key=lambda a: int(valid_np[a].sum())))
     total_T = int(valid_np.shape[1])
     # Keep the augmentation logic identical to the old scalar update path, but
     # perform all edits on host NumPy arrays and send one batched replacement to
@@ -691,7 +753,7 @@ def _augment_hidden_reference(state: Any, history: SceneHistory, prefix: Candida
     return state.replace(log_trajectory=new_tr, object_metadata=new_md), meta
 
 
-def _augment_visible_reference(state: Any, history: SceneHistory, prefix: CandidatePrefix, cfg: dict, *, branch: str, seed: int):
+def _augment_visible_reference(state: Any, history: SceneHistory, prefix: CandidatePrefix, cfg: dict, *, branch: str, seed: int, replay_lock: dict[str, Any] | None = None):
     """Perturb a currently visible non-SDC actor so observation labels include negatives.
 
     Hidden yield/accelerate roots create the oracle-artifact alias pairs needed by
@@ -725,11 +787,24 @@ def _augment_visible_reference(state: Any, history: SceneHistory, prefix: Candid
             dist = float(np.linalg.norm(local))
             if dist <= float(cfg.get("visible_root_max_distance_m", 45.0)) and local[0] > -10.0:
                 candidates.append((dist, a))
-    if not candidates:
+    locked_slot = None
+    if replay_lock is not None and "visible_actor_object_index" in replay_lock:
+        locked_slot = int(replay_lock["visible_actor_object_index"])
+        if locked_slot == sdc or locked_slot < 0 or locked_slot >= valid.shape[0] or not valid[locked_slot, t0]:
+            raise ValueError(f"locked visible actor index invalid/not visible at planning time: {locked_slot}")
+    if not candidates and locked_slot is None:
         return None, {"skip_reason": "no_visible_actor_for_perturbation"}
     candidates.sort(key=lambda z: z[0])
-    # Pick among a few near actors deterministically but not always the closest.
-    _, slot = candidates[int(rng.integers(0, min(len(candidates), 3)))]
+    # Production uses the deterministic candidate-set draw below.  Audit replay
+    # may instead lock the actor to the realization already frozen in the NPZ;
+    # this is required when historical candidate-set heuristics/code versions
+    # differ, and does not alter the production path.  The locked actor need not
+    # still satisfy today's heuristic candidate set; frozen validity at t0 is the
+    # causal replay contract and downstream root-margin identity remains strict.
+    if locked_slot is not None:
+        slot = locked_slot
+    else:
+        _, slot = candidates[int(rng.integers(0, min(len(candidates), 3)))]
     total_T = x.shape[1]
     start = min(max(t0 + 1, 0), total_T - 1)
     end = min(total_T, t0 + max(T_p, 2) + int(cfg.get("visible_root_extra_steps", 8)))
@@ -942,7 +1017,8 @@ def generate_waymax_counterfactual_futures(history: SceneHistory, prefix: Candid
             if targeted_added >= n_targeted:
                 break
             seed = stable_seed("waymax-hidden", history.scene_id, history.time_index, prefix.macro_id, branch)
-            aug_state, ameta = _augment_hidden_reference(state0, history, prefix, cfg, branch=branch, seed=seed)
+            lock = _audit_replay_future_lock(cfg, len(futures), source="targeted", targeted_type=f"waymax_hidden_vehicle_{branch}")
+            aug_state, ameta = _augment_hidden_reference(state0, history, prefix, cfg, branch=branch, seed=seed, replay_lock=lock)
             if aug_state is None:
                 continue
             stp, env_a, dyn_a = _rollout_prefix(aug_state, history, prefix, cfg, allow_new=True)
@@ -961,7 +1037,8 @@ def generate_waymax_counterfactual_futures(history: SceneHistory, prefix: Candid
             if targeted_added >= n_targeted:
                 break
             seed = stable_seed("waymax-visible", history.scene_id, history.time_index, prefix.macro_id, branch)
-            aug_state, ameta = _augment_visible_reference(state0, history, prefix, cfg, branch=branch, seed=seed)
+            lock = _audit_replay_future_lock(cfg, len(futures), source="targeted", targeted_type=f"waymax_visible_actor_{branch}")
+            aug_state, ameta = _augment_visible_reference(state0, history, prefix, cfg, branch=branch, seed=seed, replay_lock=lock)
             if aug_state is None:
                 continue
             stp, env_v, dyn_v = _rollout_prefix(aug_state, history, prefix, cfg, allow_new=allow_new)
@@ -997,6 +1074,7 @@ def generate_waymax_counterfactual_futures(history: SceneHistory, prefix: Candid
             "waymax_prefix_rollout_reused": True,
             "teacher_base_reuses_replay_prefix_state": True,
         }
+        lock = _audit_replay_future_lock(cfg, len(futures), source="targeted", targeted_type=f"waymax_{kind}")
         accel = -2.0 if targeted_added % 2 == 0 else 1.2
         if kind == "contact_impulse_surrogate":
             # Waymax does not expose an API-level collision impulse perturbation
@@ -1005,10 +1083,12 @@ def generate_waymax_counterfactual_futures(history: SceneHistory, prefix: Candid
             # Waymax rollout state plus explicit contact-surrogate metadata.
             accel = -0.5
             rng = np.random.default_rng(stable_seed("waymax-contact-surrogate", history.scene_id, history.time_index, prefix.macro_id, targeted_added))
+            yaw_imp = float(lock["yaw_rate_impulse"]) if lock is not None and "yaw_rate_impulse" in lock else float(rng.choice([-0.55, 0.55]))
+            lat_imp = float(lock["lateral_velocity_impulse"]) if lock is not None and "lateral_velocity_impulse" in lock else float(rng.choice([-1.5, 1.5]))
             meta.update({
                 "contact_surrogate": True,
-                "yaw_rate_impulse": float(rng.choice([-0.55, 0.55])),
-                "lateral_velocity_impulse": float(rng.choice([-1.5, 1.5])),
+                "yaw_rate_impulse": yaw_imp,
+                "lateral_velocity_impulse": lat_imp,
             })
         elif kind == "secondary_collision_approach":
             accel = -1.2

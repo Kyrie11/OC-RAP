@@ -9612,3 +9612,12 @@ V48.91.2/3 sparse raw iterator, 2-GPU scene-disjoint sharding, same-scene/time h
 
 ### Scientific contract unchanged
 No change to OC-MERO, RIFA, Stage-I, V48.90 cohort membership, common-exogenous equivalence classes, physical-margin definition, active options, alpha/beta/tail semantics, teacher labels, canonical NPZs, boundary transport, relative ranker, regime conditioning, or planner parameters (`0`). V48.91 remains an audit-only identifiability experiment.
+
+## V48.91.5 — OC-CEPMI-EXOGLOCK (engineering-only)
+
+- **Scientific algorithm unchanged.** V48.91 remains audit-only, zero planner parameters, same V48.90 cohort, no dataset reconstruction/reselection, boundary transport OFF.
+- Fixed historical future replay drift after V48.91.4 narrowed the mismatch to the realized external actor: recipe/order/count matched but `visible_actor_object_index` differed because current actor-selection code/candidate set re-drew a different valid visible actor than the frozen calibration future.
+- Added a strictly audit-only **frozen exogenous-realization lock** sourced from the canonical NPZ `future_metadata` already used by V48.90 correspondence. It can lock visible actor index, hidden spawn/slot/start, and contact impulse realization while leaving future recipe/order and all physical/teacher computations unchanged.
+- The lock never supplies a margin/label/model feature. Recipe/source index must match before a lock is accepted; future probability, exogenous class, and active root-margin replay remain fail-closed afterward.
+- Added a calibration protocol/source contract preflight: `calibration_v48_14_prism_4814` is checked as a deterministic view of `calibration_near_contact/contact`. Rebuilding/repartitioning the protocol is **not** an allowed fix for exogenous replay drift when source NPZ bytes are unchanged.
+- Continue to forbid V48.92/source training until the complete V48.91 engineering gate passes.

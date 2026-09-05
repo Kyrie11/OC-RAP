@@ -30,7 +30,7 @@ from ocrap.v48_90_partition_transport import future_class_keys
 from ocrap.v48_91_common_exogenous_physical_margin import future_physical_matrix
 
 
-ENGINEERING_VERSION='v48.91.4-OC-CEPMI-REPLAYFIX2'
+ENGINEERING_VERSION='v48.91.5-OC-CEPMI-EXOGLOCK'
 
 KEYS=frozenset({
     'scene_id','original_scenario_id','official_scenario_id','legacy_scenario_id','source_scenario_index',
@@ -483,6 +483,13 @@ def _config_for_sample(sample:dict[str,Any], base_cfg:dict[str,Any], *, resolved
     cfg['data_source']='womd'; cfg['simulation_backend']='waymax_closed_loop'
     cfg['womd_patterns']=str(_scalar(sample,'womd_source_pattern','') or resolved_pattern or cfg.get('womd_patterns') or '')
 
+    # Audit-only frozen exogenous-realization lock.  V48.90 already defines
+    # correspondence using these serialized fingerprints.  V48.91 must replay
+    # the *same* realized future, not re-draw an actor/spawn with today's code.
+    # No margin/label is supplied and the production generator path is unchanged.
+    cfg['_audit_replay_future_metadata']=_stored_future_metadata(sample)
+    cfg['_audit_replay_future_sources']=_strvec(sample.get('future_sources',[]))
+
     # FINAL semantic layer: reproduce builder._cfg_with_artifact_mining() only
     # after every role-wide resume/dataset-summary value has been merged.  This
     # ordering is part of the historical data-generation contract.
@@ -628,7 +635,7 @@ def _replay_one(raw,sample:dict[str,Any],option_ids:list[int],base_cfg:dict[str,
         'history_cache_hit':bool(history_cache_hit),
         'replay_config_source':str(origin.get('replay_config_source','')),
         'replay_profile':origin.get('replay_profile') or {},
-        'audit_future_metadata_metrics_skipped':True,
+        'audit_future_metadata_metrics_skipped':True,'frozen_exogenous_realization_lock':True,
     }
 
 
@@ -820,7 +827,7 @@ def main()->int:
         'active_options_max':max(active_option_counts) if active_option_counts else 0,
         'sparse_source_iterator':True,'metadata_only_future_metrics_skipped':True,
         'canonical_v48_14_sample_local_replay_profile':True,
-        'sample_local_pass_final_layer':True,'profile_preflight':True,'provenance_chain_cache':True,
+        'sample_local_pass_final_layer':True,'profile_preflight':True,'provenance_chain_cache':True,'frozen_exogenous_realization_lock':True,
         'fail_fast_replay_errors':int(args.fail_fast_replay_errors),
         'checkpoint_rows_reused':len(checkpoint_rows),
         'checkpoint_path':str(args.checkpoint) if args.checkpoint else None,
@@ -922,7 +929,7 @@ def main()->int:
             'processed_samples':processed,'target_source_indices':target_source_indices,'history_cache_hits':history_hits,
             'history_cache_hit_fraction':float(history_hits/max(processed,1)),
             'sparse_source_iterator':True,'metadata_only_future_metrics_skipped':True,
-            'canonical_v48_14_sample_local_replay_profile':True,'sample_local_pass_final_layer':True,'profile_preflight':True,'provenance_chain_cache':True,'fail_fast_replay_errors':int(args.fail_fast_replay_errors),
+            'canonical_v48_14_sample_local_replay_profile':True,'sample_local_pass_final_layer':True,'profile_preflight':True,'provenance_chain_cache':True,'frozen_exogenous_realization_lock':True,'fail_fast_replay_errors':int(args.fail_fast_replay_errors),
             'checkpoint_rows_reused':len(checkpoint_rows),'checkpoint_path':str(args.checkpoint) if args.checkpoint else None,
             'stage_timing_seconds':{k:float(v) for k,v in sorted(stage_timing.items())},
             'active_options_mean':float(np.mean(active_option_counts)) if active_option_counts else 0.0,

@@ -267,3 +267,46 @@ def test_v48_91_4_effective_profile_guard_rejects_late_summary_reenable(tmp_path
     import pytest
     with pytest.raises(ValueError, match='sample-local balanced-pass invariant'):
         mod._assert_v4814_effective_profile(bad, meta)
+
+def test_v48_91_5_sidecar_injects_frozen_exogenous_realization_locks(monkeypatch, tmp_path: Path) -> None:
+    mod = _load_v4891_sidecar_tool_module()
+    role = tmp_path / 'calibration_v48_14_prism_4814' / 'evidence_adapt_dev_near_contact' / 'samples'
+    role.mkdir(parents=True)
+    metas = [
+        {'rollout_variant':'natural_log_playback','scenario_augmented':False},
+        {'rollout_variant':'waymax_log_playback_sdc_coast','scenario_augmented':False},
+        {'rollout_variant':'waymax_log_playback_sdc_coast','scenario_augmented':False},
+        {'targeted_type':'waymax_visible_actor_visible_brake','visible_actor_object_index':7,'visible_branch':'visible_brake','scenario_augmented':True},
+    ] + [{'targeted_type':'waymax_low_friction_braking','scenario_augmented':False}] * 7
+    sample = {
+        '__path__': str(role / 'waymax_deadbeef__wx00011038_t0010_a00.npz'),
+        'future_metadata': json.dumps(metas),
+        'future_sources': np.asarray(['replay','reactive','reactive'] + ['targeted'] * 8),
+        'm_star': np.zeros((8, 12), dtype=np.float32),
+        'agent_history': np.zeros((10, 32, 16), dtype=np.float32),
+        'womd_source_pattern': np.asarray('/raw/validation.tfrecord@150'),
+    }
+    monkeypatch.setattr(mod, '_origin_replay_metadata', lambda path, idx: {})
+    cfg, _, _ = mod._config_for_sample(
+        sample, mod.load_config(None), resolved_pattern='/raw/validation.tfrecord@150', resolved_index=11038
+    )
+    assert cfg['_audit_replay_future_sources'][3] == 'targeted'
+    assert cfg['_audit_replay_future_metadata'][3]['visible_actor_object_index'] == 7
+
+
+def test_v48_91_5_waymax_replay_lock_is_index_and_recipe_strict() -> None:
+    from ocrap.simulation.waymax_rollout import _audit_replay_future_lock
+    import pytest
+    cfg = {
+        '_audit_replay_future_sources': ['replay', 'targeted'],
+        '_audit_replay_future_metadata': [
+            {'rollout_variant':'natural_log_playback'},
+            {'targeted_type':'waymax_visible_actor_visible_brake','visible_actor_object_index':1},
+        ],
+    }
+    lock = _audit_replay_future_lock(cfg, 1, source='targeted', targeted_type='waymax_visible_actor_visible_brake')
+    assert lock['visible_actor_object_index'] == 1
+    with pytest.raises(ValueError, match='recipe mismatch'):
+        _audit_replay_future_lock(cfg, 1, source='targeted', targeted_type='waymax_visible_actor_visible_accelerate')
+    with pytest.raises(ValueError, match='source mismatch'):
+        _audit_replay_future_lock(cfg, 1, source='reactive', targeted_type='waymax_visible_actor_visible_brake')
