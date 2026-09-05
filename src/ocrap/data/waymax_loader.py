@@ -518,3 +518,83 @@ def iter_waymax_womd_scenarios(patterns: Any, max_scenarios: int | None, parser_
         })
         yield raw
         emitted += 1
+
+
+def iter_waymax_womd_scenarios_selected(
+    patterns: Any,
+    scenario_indices: Any,
+    parser_cfg: dict | None = None,
+) -> Iterator[RawScenario]:
+    """Iterate only explicitly requested global Waymax scenario indices.
+
+    This is an execution-equivalent targeted replay path for offline audits.
+    The ordinary :func:`iter_waymax_womd_scenarios` materializes a full
+    ``SimulatorState`` *and* converts it into ``RawScenario`` for every global
+    index before callers can discard irrelevant rows.  V48.91 replays a sparse
+    set of historical calibration indices, so doing that work for every scenario
+    up to the maximum requested index is pure overhead.
+
+    Here we keep the exact same TFExample parser and global enumeration order,
+    but delay ``simulator_state_from_womd_dict`` and ``raw_scenario_from_waymax_state``
+    until an index is actually requested.  Requested scenarios therefore use the
+    same conversion path and metadata as the production iterator; unrequested
+    scenarios are parsed only far enough to preserve deterministic enumeration.
+    """
+    targets = sorted({int(x) for x in scenario_indices if int(x) >= 0})
+    if not targets:
+        return
+    target_set = set(targets)
+    max_target = targets[-1]
+    cfg = parser_cfg or {}
+    _apply_jax_env(cfg)
+    _, _, _, wx_dataloader, womd_factories = _require_waymax()
+    dataset_cfg = _make_dataset_config(patterns, cfg)
+
+    # Keep preprocessing identical to the production iterator, but postpone the
+    # expensive WOMD-dict -> SimulatorState conversion until after index filtering.
+    def _identity_postprocess(example):
+        return example
+
+    wx_cfg = cfg.get("waymax", {}) if isinstance(cfg.get("waymax", {}), dict) else {}
+    retain_official_id = bool(wx_cfg.get("retain_official_scenario_id", True))
+    if retain_official_id:
+        parse = functools.partial(
+            _preprocess_serialized_womd_with_id, dataset_cfg=dataset_cfg, wx_dataloader=wx_dataloader
+        )
+    else:
+        parse = functools.partial(wx_dataloader.preprocess_serialized_womd_data, config=dataset_cfg)
+    gen = wx_dataloader.get_data_generator(dataset_cfg, parse, _identity_postprocess)
+
+    seen: set[int] = set()
+    progress_every = max(0, int(cfg.get('_selected_replay_progress_every', 0)))
+    for i, example in enumerate(gen):
+        if i > max_target:
+            break
+        if progress_every and i > 0 and (i % progress_every) == 0:
+            print(
+                f"[ocrap-profile] sparse Waymax source scan index={i}/{max_target} "
+                f"targets_materialized={len(seen)}/{len(target_set)}",
+                flush=True,
+            )
+        if i not in target_set:
+            continue
+        state = womd_factories.simulator_state_from_womd_dict(
+            example,
+            include_sdc_paths=bool(wx_cfg.get("dataloader_include_sdc_paths", True)),
+        )
+        payload = {"state": state, "scenario_id": example.get("scenario/id")}
+        saved_id, base_id, legacy_id = _scenario_identity_from_payload(payload, i, state, cfg)
+        raw = raw_scenario_from_waymax_state(state, saved_id, i, cfg)
+        raw.metadata.update({
+            "original_scenario_id": base_id,
+            "official_scenario_id": base_id if not base_id.startswith("waymax_") else None,
+            "legacy_scenario_id": legacy_id,
+            "scenario_id_source": "official_womd" if not base_id.startswith("waymax_") else "legacy_state_hash",
+            "womd_source_role": _infer_womd_source_role(patterns),
+            "womd_source_pattern": _paths_to_waymax_path(patterns),
+            "waymax_max_num_objects": int(getattr(dataset_cfg, "max_num_objects", cfg.get("max_agents", 64))),
+        })
+        yield raw
+        seen.add(i)
+        if len(seen) == len(target_set):
+            break

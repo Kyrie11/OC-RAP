@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 import argparse,gzip,hashlib,json,math
+from functools import lru_cache
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,10 @@ def _matrix(row:dict[str,Any],field:str)->np.ndarray:
  F=int(row['future_count']);L=int(row['option_count']);m=np.full((F,L),np.nan,dtype=np.float64)
  for k,v in row[field].items(): m[:,int(k)]=np.asarray(v,dtype=np.float64)
  return m
+
+@lru_cache(maxsize=16384)
+def _load_sample_cached(path_text:str):
+ return _load_sample(Path(path_text))
 
 def _mean(rows,field):
  v=[float(r[field]) for r in rows if r.get(field) is not None and math.isfinite(float(r[field]))]
@@ -73,6 +78,13 @@ def main()->int:
  ss=json.loads(args.sidecar_summary.read_text());
  if not(ss.get('valid') and ss.get('attribution_ready') and ss.get('dataset_reconstruction') is False and ss.get('dataset_reselection') is False): raise SystemExit('invalid V48.91 sidecar summary')
  sc=_load_sidecar(args.sidecar); out=[];errors=[]
+ matrix_cache={}
+ def get_matrix(path_text,field):
+  key=(path_text,field)
+  m=matrix_cache.get(key)
+  if m is None:
+   m=_matrix(sc[path_text],field); matrix_cache[key]=m
+  return m
  with args.v48_90_audit.open(encoding='utf-8') as f:
   for line in f:
    base=json.loads(line)
@@ -81,9 +93,9 @@ def main()->int:
    if cp not in sc or npth not in sc: errors.append(f'missing sidecar pair {cp} / {npth}');continue
    if not(sc[cp].get('valid') and sc[npth].get('valid')): errors.append(f'invalid sidecar pair {cp} / {npth}');continue
    try:
-    cs=_load_sample(Path(cp));ns=_load_sample(Path(npth));cst=_matrix(sc[cp],'m_future_structural');nst=_matrix(sc[npth],'m_future_structural');cph=_matrix(sc[cp],'m_future_physical');nph=_matrix(sc[npth],'m_future_physical')
+    cs=_load_sample_cached(cp);ns=_load_sample_cached(npth);cst=get_matrix(cp,'m_future_structural');nst=get_matrix(npth,'m_future_structural');cph=get_matrix(cp,'m_future_physical');nph=get_matrix(npth,'m_future_physical')
     m=audit_future_physical_response(cs,ns,cst,nst,cph,nph,alpha=args.alpha,beta=args.beta,intra_root_alpha=args.intra_root_alpha,top_m=args.top_m).to_dict()
-    m.update(schema='ocrap-v48.91-common-exogenous-future-physical-response-row-v1',engineering_version='v48.91.1-OC-CEPMI-PROVENANCEFIX',dataset_role=base['dataset_role'],scene_id=base['scene_id'],time_index=base['time_index'],candidate_index=base['candidate_index'],sample_path=cp,nominal_sample_path=npth,teacher_adv=base['teacher_adv'],teacher_harmful=base['teacher_harmful'],teacher_feasible=base['teacher_feasible'],safe_positive=base['safe_positive'],macro=base['macro'],partition_stability=base['exogenous_tail_partition_stability'],v48_90_signed_response_score=base['exogenous_transport_signed_response_score'],planner_parameters_trained=0,teacher_metadata_input_to_model=False,dataset_reconstruction=False,dataset_reselection=False)
+    m.update(schema='ocrap-v48.91-common-exogenous-future-physical-response-row-v1',engineering_version='v48.91.2-OC-CEPMI-PERF',dataset_role=base['dataset_role'],scene_id=base['scene_id'],time_index=base['time_index'],candidate_index=base['candidate_index'],sample_path=cp,nominal_sample_path=npth,teacher_adv=base['teacher_adv'],teacher_harmful=base['teacher_harmful'],teacher_feasible=base['teacher_feasible'],safe_positive=base['safe_positive'],macro=base['macro'],partition_stability=base['exogenous_tail_partition_stability'],v48_90_signed_response_score=base['exogenous_transport_signed_response_score'],planner_parameters_trained=0,teacher_metadata_input_to_model=False,dataset_reconstruction=False,dataset_reselection=False)
     if not m['valid']:errors.append(f'invalid physical response role={base["dataset_role"]} key={(base["scene_id"],base["time_index"],base["candidate_index"])}: {m["error"]}')
     out.append(m)
    except Exception as exc:errors.append(f'{cp}: {exc}')
@@ -91,6 +103,6 @@ def main()->int:
  with args.output.open('w',encoding='utf-8') as f:
   for r in out:f.write(json.dumps(r,sort_keys=True)+'\n')
  roles=sorted(set(r['dataset_role'] for r in out))
- summ={'schema':'ocrap-v48.91-common-exogenous-future-physical-response-summary-v1','engineering_version':'v48.91.1-OC-CEPMI-PROVENANCEFIX','valid':not errors,'attribution_ready':not errors,'errors':errors[:100],'rows':len(out),'roles':{role:_summ([r for r in out if r['dataset_role']==role]) for role in roles},'sidecar':str(args.sidecar.resolve()),'sidecar_sha256':_sha(args.sidecar),'sidecar_summary_sha256':_sha(args.sidecar_summary),'output':str(args.output.resolve()),'output_sha256':_sha(args.output),'planner_parameters_trained':0,'teacher_labels_changed':False,'teacher_metadata_input_to_model':False,'dataset_reconstruction':False,'dataset_reselection':False,'test_roots_read':False,'boundary_transport':False,'regime_conditioning':False}
+ summ={'schema':'ocrap-v48.91-common-exogenous-future-physical-response-summary-v1','engineering_version':'v48.91.2-OC-CEPMI-PERF','valid':not errors,'attribution_ready':not errors,'errors':errors[:100],'rows':len(out),'roles':{role:_summ([r for r in out if r['dataset_role']==role]) for role in roles},'sidecar':str(args.sidecar.resolve()),'sidecar_sha256':_sha(args.sidecar),'sidecar_summary_sha256':_sha(args.sidecar_summary),'output':str(args.output.resolve()),'output_sha256':_sha(args.output),'planner_parameters_trained':0,'teacher_labels_changed':False,'teacher_metadata_input_to_model':False,'dataset_reconstruction':False,'dataset_reselection':False,'test_roots_read':False,'boundary_transport':False,'regime_conditioning':False}
  args.summary.write_text(json.dumps(summ,indent=2,sort_keys=True)+'\n');print(json.dumps({'valid':summ['valid'],'rows':len(out),'errors':len(errors)}));return 0 if summ['valid'] else 30
 if __name__=='__main__':raise SystemExit(main())

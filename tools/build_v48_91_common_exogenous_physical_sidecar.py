@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import argparse
 from collections import defaultdict
+from functools import lru_cache
 import gzip
 import hashlib
 import json
 import math
+import os
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -19,13 +22,15 @@ from ocrap.config.yaml_io import load_config
 from ocrap.data.build.history import construct_history
 from ocrap.data.schema import CandidatePrefix, RecoveryOption
 from ocrap.data.serialization import load_npz_selected
-from ocrap.data.waymax_loader import iter_waymax_womd_scenarios
+from ocrap.data.waymax_loader import iter_waymax_womd_scenarios_selected
 from ocrap.simulation.futures import generate_counterfactual_futures
 from ocrap.simulation.teacher import compute_future_option_margins
 from ocrap.v48_89_root_correspondence import nested_tail_influence
 from ocrap.v48_90_partition_transport import future_class_keys
 from ocrap.v48_91_common_exogenous_physical_margin import future_physical_matrix
 
+
+ENGINEERING_VERSION='v48.91.2-OC-CEPMI-PERF'
 
 KEYS=frozenset({
     'scene_id','original_scenario_id','official_scenario_id','legacy_scenario_id','source_scenario_index',
@@ -51,6 +56,11 @@ def _scalar(d:dict[str,Any],key:str,default:Any)->Any:
 
 
 _LEGACY_SOURCE_INDEX_RE = re.compile(r"__wx(?P<index>[0-9]+)(?:$|[^0-9])")
+
+
+def _legacy_source_index_from_path(path: str | Path) -> int:
+    m = _LEGACY_SOURCE_INDEX_RE.search(Path(str(path)).name)
+    return int(m.group("index")) if m else -1
 
 
 def _legacy_source_index(sample: dict[str, Any]) -> int:
@@ -111,6 +121,7 @@ def _resolve_replay_provenance(
     }
 
 
+@lru_cache(maxsize=2048)
 def _read_json_if_exists(path: Path) -> dict[str, Any] | None:
     try:
         if path.is_file():
@@ -218,6 +229,7 @@ def _load(path:Path)->dict[str,Any]:
     return d
 
 
+@lru_cache(maxsize=2048)
 def _find_summary(path:Path)->Path|None:
     p=path.resolve().parent
     for _ in range(6):
@@ -260,6 +272,18 @@ def _config_for_sample(sample:dict[str,Any], base_cfg:dict[str,Any], *, resolved
     cfg['womd_patterns']=str(_scalar(sample,'womd_source_pattern','') or resolved_pattern or cfg.get('womd_patterns') or '')
     # Source scanning is performed externally by exact stored source index.
     cfg['scenario_start_index']=0; cfg['scenario_stride']=1; cfg['scenario_worker_index']=0
+    # V48.91 does not consume generic per-future Waymax metric metadata. The
+    # exact teacher margin is recomputed separately below, and exogenous class
+    # identity ignores ``waymax_metrics``. Skipping these metadata-only metric
+    # summaries is guarded by future-class and root-margin replay identity.
+    wx = dict(cfg.get('waymax', {}) or {})
+    wx['compute_future_metrics'] = False
+    wx['use_jit_scan_rollouts'] = True
+    wx['cache_env_objects'] = True
+    wx['cache_postprefix_rollouts'] = True
+    wx['cache_teacher_metric_rollouts'] = True
+    wx['cache_identical_teacher_rollouts'] = True
+    cfg['waymax'] = wx
     return cfg,(str(sp) if sp else None),origin
 
 
@@ -296,9 +320,23 @@ def _history_check(history,sample:dict[str,Any])->dict[str,float]:
     return checks
 
 
-def _replay_one(raw,sample:dict[str,Any],option_ids:list[int],base_cfg:dict[str,Any],alpha_intra:float, *, resolved_pattern:str|None=None, resolved_index:int|None=None, explicit_replay_config:bool=False)->dict[str,Any]:
+def _replay_one(raw,sample:dict[str,Any],option_ids:list[int],base_cfg:dict[str,Any],alpha_intra:float, *, resolved_pattern:str|None=None, resolved_index:int|None=None, explicit_replay_config:bool=False, history_cache:dict[tuple[Any,...],Any]|None=None)->dict[str,Any]:
     cfg,summary_path,origin=_config_for_sample(sample,base_cfg,resolved_pattern=resolved_pattern,resolved_index=resolved_index,explicit_replay_config=explicit_replay_config)
-    t=int(_scalar(sample,'time_index',-1)); history=construct_history(raw,t,cfg); hcheck=_history_check(history,sample)
+    t=int(_scalar(sample,'time_index',-1))
+    hk=(
+        t, summary_path, int(cfg.get('max_agents',-1)), float(cfg.get('sample_rate_hz',10.0)),
+        float(cfg.get('history_horizon_s',1.0)), float(cfg.get('prefix_horizon_s',1.0)),
+        float(cfg.get('recovery_horizon_s',4.0)), int(cfg.get('route_points',80)),
+        float(cfg.get('local_radius_m',80.0)), float(cfg.get('bev_resolution_m',1.0)),
+        int(cfg.get('bev_channels',7)), float(cfg.get('route_width',3.5)),
+    )
+    history_cache = history_cache if history_cache is not None else {}
+    history = history_cache.get(hk)
+    history_cache_hit = history is not None
+    if history is None:
+        history=construct_history(raw,t,cfg)
+        history_cache[hk]=history
+    hcheck=_history_check(history,sample)
     prefix=_prefix(sample)
     futures=generate_counterfactual_futures(history,prefix,cfg)
     stored_probs=np.asarray(sample['future_probs'],dtype=np.float64).reshape(-1)
@@ -343,6 +381,8 @@ def _replay_one(raw,sample:dict[str,Any],option_ids:list[int],base_cfg:dict[str,
         'future_probability_max_abs_error':perr,'active_root_margin_max_abs_error':float(root_err),
         'history_max_abs_error':hcheck,'dataset_summary_path':summary_path,
         'origin_shard_root':origin.get('origin_shard_root'),'origin_resume_contract_path':origin.get('resume_contract_path'),
+        'history_cache_hit':bool(history_cache_hit),
+        'audit_future_metadata_metrics_skipped':True,
     }
 
 
@@ -355,34 +395,65 @@ def main()->int:
     ap.add_argument('--womd-source-pattern',type=str,default=None,help='exact raw WOMD pattern used by legacy samples when NPZ provenance fields are absent; provenance only, never a model input')
     ap.add_argument('--alpha',type=float,default=0.2); ap.add_argument('--beta',type=float,default=0.2); ap.add_argument('--top-m',type=int,default=8)
     ap.add_argument('--intra-root-alpha',type=float,default=0.2)
+    ap.add_argument('--num-workers',type=int,default=1,help='independent replay shards; launcher can bind each shard to a separate GPU')
+    ap.add_argument('--worker-index',type=int,default=0,help='0-based replay shard index')
+    ap.add_argument('--progress-every',type=int,default=25,help='emit replay progress every N samples (0 disables)')
     args=ap.parse_args()
+    if args.num_workers < 1 or not (0 <= args.worker_index < args.num_workers):
+        raise SystemExit(f'invalid worker partition index={args.worker_index} count={args.num_workers}')
+    t_total=time.perf_counter()
     base=load_config(args.replay_config)
 
     requested:dict[str,set[int]]=defaultdict(set); path_to_role:dict[str,set[str]]=defaultdict(set); pair_count=0
+    loaded_samples:dict[str,dict[str,Any]]={}
+    def get_sample(path_text:str)->dict[str,Any]:
+        s=loaded_samples.get(path_text)
+        if s is None:
+            s=_load(Path(path_text)); loaded_samples[path_text]=s
+        return s
+    t0=time.perf_counter(); audit_rows_seen=0; audit_rows_selected=0
     with args.v48_90_audit.open(encoding='utf-8') as f:
         for line in f:
             r=json.loads(line)
             if not(r.get('valid') and r.get('label_available')): continue
+            audit_rows_seen += 1
             cp=str(Path(r['sample_path']).resolve()); npth=str(Path(r['nominal_sample_path']).resolve())
-            cs=_load(Path(cp)); mass,*_=nested_tail_influence(cs,alpha=args.alpha,beta=args.beta,top_m=args.top_m)
+            source_hint=_legacy_source_index_from_path(cp)
+            if source_hint < 0 and args.num_workers > 1:
+                # Newer samples can omit the legacy suffix because they serialize
+                # source_scenario_index explicitly.  Load only the candidate row
+                # when sharding needs that fallback.
+                source_hint=_legacy_source_index(get_sample(cp))
+            if args.num_workers > 1:
+                if source_hint < 0:
+                    raise SystemExit(f'cannot shard replay without source index: {cp}')
+                if (source_hint % args.num_workers) != args.worker_index:
+                    continue
+            audit_rows_selected += 1
+            cs=get_sample(cp); mass,*_=nested_tail_influence(cs,alpha=args.alpha,beta=args.beta,top_m=args.top_m)
             ids=np.where(np.sum(mass,axis=0)>1e-12)[0].tolist()
             if not ids: continue
             requested[cp].update(map(int,ids)); requested[npth].update(map(int,ids)); pair_count+=1
             role=str(r['dataset_role']); path_to_role[cp].add(role); path_to_role[npth].add(role)
-    if not requested: raise SystemExit('no labeled V48.90 cohort samples/options to replay')
+    audit_scan_seconds=time.perf_counter()-t0
+    if not requested:
+        raise SystemExit(f'no labeled V48.90 cohort samples/options to replay for shard {args.worker_index}/{args.num_workers}')
 
-    samples={p:_load(Path(p)) for p in requested}
+    t0=time.perf_counter(); samples={p:(loaded_samples[p] if p in loaded_samples else _load(Path(p))) for p in requested}; loaded_samples.update(samples); sample_load_seconds=time.perf_counter()-t0
     groups:dict[tuple[str,int],dict[int,list[str]]]=defaultdict(lambda:defaultdict(list))
     provenance_resolution_counts:dict[str,int]=defaultdict(int)
     resolved_indices:list[int]=[]
     replay_cfg_pattern=str(base.get('womd_patterns') or '')
+    t0=time.perf_counter()
     for p,s in samples.items():
         prov=_resolve_replay_provenance(
             s, source_pattern_override=args.womd_source_pattern, replay_config_pattern=replay_cfg_pattern
         )
         idx=int(prov['index'])
+        if args.num_workers > 1 and (idx % args.num_workers) != args.worker_index:
+            raise SystemExit(f'worker partition mismatch for {p}: source_index={idx}')
         # Historical protocol roots may still retain a provenance chain back to
-        # the original worker shard.  Prefer its immutable resume contract before
+        # the original worker shard. Prefer its immutable resume contract before
         # requiring a manual raw-source override.
         if not prov['pattern'] and idx>=0:
             origin_probe=_origin_replay_metadata(Path(p),idx)
@@ -404,37 +475,76 @@ def main()->int:
         resolved_indices.append(idx)
         if maxobj<=0: maxobj=int(np.asarray(s['agent_history']).shape[1])
         groups[(pattern,maxobj)][idx].append(p)
+    provenance_seconds=time.perf_counter()-t0
 
-    rows=[]; errors=[]
+    target_source_indices=len(set(resolved_indices))
+    active_option_counts=[len(v) for v in requested.values()]
+    print(json.dumps({
+        'event':'v48.91_replay_plan','engineering_version':ENGINEERING_VERSION,
+        'worker_index':args.worker_index,'num_workers':args.num_workers,
+        'audit_rows_seen':audit_rows_seen,'audit_rows_selected':audit_rows_selected,
+        'labeled_candidate_pairs':pair_count,'requested_samples':len(requested),
+        'target_source_indices':target_source_indices,
+        'active_options_mean':float(np.mean(active_option_counts)) if active_option_counts else 0.0,
+        'active_options_max':max(active_option_counts) if active_option_counts else 0,
+        'sparse_source_iterator':True,'metadata_only_future_metrics_skipped':True,
+    }),flush=True)
+
+    rows=[]; errors=[]; processed=0; history_hits=0; replay_seconds=0.0; raw_scan_seconds=0.0
     for (pattern,maxobj),byidx in groups.items():
         parser_cfg=json.loads(json.dumps(base)); parser_cfg['data_source']='womd'; parser_cfg['simulation_backend']='waymax_closed_loop'; parser_cfg['womd_patterns']=pattern; parser_cfg['max_agents']=maxobj
-        # Source indices stored in legacy ``__wx`` ids are global Waymax enumeration
-        # indices.  Neutralize any scan controls inherited from an optional replay
-        # config so the migration key keeps the same meaning.
         parser_cfg['scenario_start_index']=0; parser_cfg['scenario_stride']=1; parser_cfg['scenario_worker_index']=0
-        maxidx=max(byidx)
-        seen=set()
-        for raw in iter_waymax_womd_scenarios(pattern,max_scenarios=maxidx+1,parser_cfg=parser_cfg):
+        parser_cfg['_selected_replay_progress_every']=max(0,int(os.environ.get('V4891_SOURCE_SCAN_PROGRESS_EVERY','1000')))
+        target_indices=sorted(byidx)
+        print(json.dumps({
+            'event':'v48.91_raw_scan_start','worker_index':args.worker_index,
+            'target_indices':len(target_indices),'min_index':target_indices[0],'max_index':target_indices[-1],
+            'max_agents':maxobj,
+        }),flush=True)
+        seen=set(); scan_start=time.perf_counter()
+        for raw in iter_waymax_womd_scenarios_selected(pattern,target_indices,parser_cfg=parser_cfg):
             idx=int(raw.metadata.get('_waymax_scenario_index',-1))
             if idx not in byidx: continue
             seen.add(idx)
-            for p in byidx[idx]:
+            # Reuse the expensive map/route/BEV history construction across all
+            # candidate prefixes from the same raw scene/time.
+            history_cache:dict[tuple[Any,...],Any]={}
+            for p in sorted(byidx[idx]):
                 s=samples[p]
+                one_start=time.perf_counter()
                 try:
-                    row=_replay_one(raw,s,sorted(requested[p]),base,args.intra_root_alpha,resolved_pattern=pattern,resolved_index=idx,explicit_replay_config=bool(args.replay_config))
+                    row=_replay_one(
+                        raw,s,sorted(requested[p]),base,args.intra_root_alpha,
+                        resolved_pattern=pattern,resolved_index=idx,
+                        explicit_replay_config=bool(args.replay_config),history_cache=history_cache,
+                    )
                     row['dataset_roles']=sorted(path_to_role[p]); rows.append(row)
+                    history_hits += int(bool(row.get('history_cache_hit')))
                 except Exception as exc:
                     errors.append(f'{p}: {exc}')
                     rows.append({'valid':False,'sample_path':p,'error':str(exc),'dataset_roles':sorted(path_to_role[p])})
+                replay_seconds += time.perf_counter()-one_start
+                processed += 1
+                if args.progress_every > 0 and (processed % args.progress_every)==0:
+                    elapsed=time.perf_counter()-t_total
+                    print(json.dumps({
+                        'event':'v48.91_replay_progress','worker_index':args.worker_index,
+                        'processed':processed,'requested_samples':len(requested),
+                        'valid':sum(1 for r in rows if r.get('valid')),'errors':len(errors),
+                        'history_cache_hits':history_hits,'elapsed_seconds':round(elapsed,3),
+                        'samples_per_minute':round((processed/max(elapsed,1e-9))*60.0,3),
+                    }),flush=True)
+        raw_scan_seconds += time.perf_counter()-scan_start
         missing=sorted(set(byidx)-seen)
         if missing: errors.append(f'raw source indices not encountered pattern={pattern}: {missing[:20]} count={len(missing)}')
 
     args.output.parent.mkdir(parents=True,exist_ok=True)
     with gzip.open(args.output,'wt',encoding='utf-8') as f:
-        for r in rows: f.write(json.dumps(r,sort_keys=True)+'\n')
+        for r in sorted(rows,key=lambda x:str(x.get('sample_path',''))): f.write(json.dumps(r,sort_keys=True)+'\n')
     valid=[r for r in rows if r.get('valid')]
+    total_seconds=time.perf_counter()-t_total
     summary={
-        'schema':'ocrap-v48.91-common-exogenous-future-physical-sidecar-v1','engineering_version':'v48.91.1-OC-CEPMI-PROVENANCEFIX',
+        'schema':'ocrap-v48.91-common-exogenous-future-physical-sidecar-v1','engineering_version':ENGINEERING_VERSION,
         'valid':not errors and len(valid)==len(requested),'attribution_ready':not errors and len(valid)==len(requested),'errors':errors[:100],
         'requested_samples':len(requested),'valid_samples':len(valid),'labeled_candidate_pairs':pair_count,
         'output':str(args.output.resolve()),'output_sha256':_sha(args.output),
@@ -444,12 +554,21 @@ def main()->int:
         'replay_provenance_resolution_counts':dict(sorted(provenance_resolution_counts.items())),
         'legacy_provenance_migration_used':bool(provenance_resolution_counts.get('index:legacy_wx_migration_key',0) or provenance_resolution_counts.get('pattern:cli_or_env_override',0) or provenance_resolution_counts.get('pattern:replay_config',0)),
         'resolved_source_index_min':min(resolved_indices) if resolved_indices else None,'resolved_source_index_max':max(resolved_indices) if resolved_indices else None,
+        'worker_partition':{'num_workers':args.num_workers,'worker_index':args.worker_index,'rule':'source_scenario_index_mod_num_workers'},
+        'performance':{
+            'total_seconds':total_seconds,'audit_scan_seconds':audit_scan_seconds,'sample_load_seconds':sample_load_seconds,
+            'provenance_seconds':provenance_seconds,'raw_scan_and_replay_seconds':raw_scan_seconds,'sample_replay_accumulated_seconds':replay_seconds,
+            'processed_samples':processed,'target_source_indices':target_source_indices,'history_cache_hits':history_hits,
+            'history_cache_hit_fraction':float(history_hits/max(processed,1)),
+            'sparse_source_iterator':True,'metadata_only_future_metrics_skipped':True,
+            'active_options_mean':float(np.mean(active_option_counts)) if active_option_counts else 0.0,
+        },
         'canonical_npz_modified':False,'planner_parameters_trained':0,'teacher_labels_changed':False,
         'teacher_metadata_input_to_model':False,'dataset_reconstruction':False,'dataset_reselection':False,'test_roots_read':False,
         'purpose':'offline same-cohort teacher replay sidecar; canonical NPZ files and sample membership are never modified',
     }
     args.summary.write_text(json.dumps(summary,indent=2,sort_keys=True)+'\n')
-    print(json.dumps({'valid':summary['valid'],'requested_samples':len(requested),'errors':len(errors),'summary':str(args.summary)}))
+    print(json.dumps({'valid':summary['valid'],'worker_index':args.worker_index,'num_workers':args.num_workers,'requested_samples':len(requested),'errors':len(errors),'summary':str(args.summary),'performance':summary['performance']}),flush=True)
     return 0 if summary['valid'] else 30
 
 if __name__=='__main__': raise SystemExit(main())

@@ -9443,3 +9443,74 @@ V48.91.1 is therefore **engineering-only**.  It does not change CEPMI mathematic
 The replay remains fail-closed: the recovered raw scenario must reproduce stored history/ego state, future count/probabilities, exogenous future-class keys, and active root-option structural margins.  Therefore a wrong raw source pattern or wrong migration index cannot silently create a physical label.  The canonical NPZ is never modified; the sidecar summary records how pattern/index provenance was resolved.
 
 This fix does **not** authorize dataset reconstruction or future-level labels as planner inputs.  `m_future_physical` remains an offline teacher/audit sidecar used only to decide whether the already-preregistered common-exogenous physical response is identifiable.  Boundary transport and learned response remain OFF until CEPMI itself passes its original scientific gates.
+
+## V48.91.2 engineering-only sparse replay acceleration (2026-09-04)
+
+V48.91.1 provenance migration is scientifically unchanged, but the first successful raw replay exposed a severe **execution bottleneck** after the runtime preflight.  The launcher appeared to stall immediately after the valid runtime-contract JSON because the next stage performs the full common-exogenous Waymax teacher replay with no historical progress output.
+
+### Performance diagnosis
+The original V48.91.1 sidecar builder had four avoidable costs:
+
+1. `iter_waymax_womd_scenarios(...)` materialized a full Waymax `SimulatorState` and OC-RAP `RawScenario` for **every global WOMD index from 0 to the maximum requested index**, and only afterwards discarded indices outside the V48.90 cohort.  The actual CEPMI replay needs only a sparse set of historical `__wx...` source indices.
+2. Candidate prefixes from the same raw scene/time rebuilt `construct_history`, including map/route transformation and BEV occupancy rendering, once per candidate even though the observation history is identical.
+3. The replay recomputed generic per-future Waymax metric metadata during counterfactual future construction although CEPMI never consumes `future_metadata["waymax_metrics"]`.  The exact teacher margin is recomputed independently, and V48.90 exogenous class keys do not use that diagnostic field.
+4. A single Python/JAX replay process used only one accelerator in practice; the cohort naturally partitions by immutable `source_scenario_index`, so two independent processes can replay disjoint scenes without changing any sample or pair semantics.
+
+### V48.91.2 changes
+V48.91.2 is **engineering-only** and keeps the V48.91 scientific question, cohort, gates, labels and outputs unchanged.
+
+Execution-preserving optimizations:
+
+- add `iter_waymax_womd_scenarios_selected(...)`: preserve the same TFExample parser and global enumeration, but delay expensive `simulator_state_from_womd_dict` + `RawScenario` conversion until an explicitly requested source index is reached;
+- cache `construct_history` within each raw scenario by scene-time/config key;
+- force only the metadata-only `waymax.compute_future_metrics=false` during CEPMI future replay; exact teacher recovery metrics remain enabled, and replay still fails closed on future probability, exogenous-class identity and active root-margin reproduction;
+- keep exact JAX scan/env/post-prefix/teacher-metric caches enabled;
+- reuse already-loaded candidate NPZs during cohort planning and cache repeated nominal NPZ/matrix loads in the downstream response audit;
+- add optional two-process / two-GPU sharding with `source_scenario_index % 2`, so every scene and all of its candidate/nominal samples stay on one worker;
+- merge partial sidecars fail-closed: worker indices must be complete, sample paths disjoint, valid-row count must equal the sum of requested rows, and the merged sidecar is sorted deterministically;
+- add visible source-scan and sample-replay throughput telemetry so a long raw scan is no longer indistinguishable from a hang.
+
+No change to:
+
+```text
+OC-MERO / RIFA / Stage-I
+V48.90 cohort membership
+future probabilities or exogenous equivalence classes
+pre-structural physical-margin definition
+V48.91 authorization gates
+planner parameters trained = 0
+teacher labels
+canonical NPZ files
+boundary transport = OFF
+relative ranker
+regime conditioning
+dataset reconstruction/reselection
+```
+
+The irreducible remaining cost is candidate-specific Waymax prefix/future/recovery-teacher rollout.  V48.91.2 deliberately does **not** approximate, screen, shorten or subsample those registered cells.
+
+### Recommended execution
+Single-worker behavior remains available for maximum compatibility:
+
+```bash
+BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+  bash scripts/run_v48_91_dcp_drfc_bcde_rifa_cepmi.sh
+```
+
+Recommended on the two-A30 machine:
+
+```bash
+GPU0=0 GPU1=1 \
+V4891_REPLAY_WORKERS=2 \
+V4891_PROGRESS_EVERY=25 \
+BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+  bash scripts/run_v48_91_dcp_drfc_bcde_rifa_cepmi.sh
+```
+
+Optional scan telemetry cadence:
+
+```bash
+export V4891_SOURCE_SCAN_PROGRESS_EVERY=1000
+```
+
+This version is a performance/provenance engineering revision only; it must not be interpreted as a new scientific arm or as evidence for/against CEPMI.
