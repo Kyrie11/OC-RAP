@@ -11274,3 +11274,175 @@ Branch rules:
 3. **Stage-I action information STOP:** authorize one minimal Stage-I recovery representation objective as the next scientific layer.  Still no broad encoder/source sweep, regime router, boundary transport or dataset reconstruction.
 
 This audit is an `identifiability before capacity` step.  A deterministic downstream decoder cannot manufacture action-target information absent upstream (data-processing principle), but the fixed linear audit measures *practical decodability*, not an information-theoretic impossibility.  A STOP therefore authorizes a targeted representation objective; it does not justify arbitrary encoder widening.
+
+## V48.102 authoritative result + V48.103 OC-FCSS (2026-09-06)
+
+### V48.102 reliability / attribution decision
+
+The uploaded V48.102 OC-AITS artifacts are **engineering-valid and scientifically attributable**.  The top-level pipeline is `valid=true / attribution_ready=true / engineering_version=v48.102.0-OC-AITS / errors=[] / test_roots_read=false / dataset_reconstruction=false`.  The uploaded balanced/precision JSON/PT/comparison/runtime files are byte-identical to the copies inside `OC-RAP-v48.102-OC-AITS-audits.zip`, and their SHA256 values match the pipeline sentinel.  Runtime provenance for `models/data.py`, `models/inference.py`, `models/ocrap.py` and all active V48.102 files matches the uploaded V48.102 repository.
+
+V48.102 is audit-only.  It trains **0 planner, 0 Stage-I, 0 root-decoder and 0 source parameters**.  Each variant fits the registered fixed linear probes over the deterministic 2,880-D Stage-I summary (`CLS + 10 fixed semantic tokens + agent-set mean/std/max/min`) using the same V48.93 target-specific state/support/reserve semantics and within-group action permutation control as V48.96.  Balanced and precision probe states are byte-identical because both variants share the same historical Stage-I representation; the downstream balanced/precision source difference is outside the V48.102 audit interface.  This is expected, not a provenance failure.
+
+### Strict V48.102 preregistered result: all-STOP
+
+V48.102 is **`STAGE_I_ACTION_INFORMATION_SUFFICIENCY_STOP`**.
+
+- **Stage-I state observability: STOP.**  Only certificate-Contact passes the absolute `AUC >= 0.70` threshold in both variants (`0.732`).  dev-Near is `0.286`, dev-Contact `0.629`, and certificate-Near `0.0`.
+- **Stage-I support-action observability: STOP, with a strong Near-local signal.**  dev-Near reaches `AUC=0.8125`, true-minus-shuffle `+0.3047`, and top-1 lift `+0.60` in both variants.  certificate-Near has positive shuffle separation (`AUC=0.618`, margin `+0.345`) but misses the absolute `0.65` threshold.  dev-Contact is `0.636` with only `+0.034` shuffle margin; certificate-Contact is anti-informative (`0.452` vs shuffled `0.577`).  Therefore no registered cross-role support GO exists.
+- **Stage-I reserve/debt observability: STOP.**  dev-Near is the only cell above the registered absolute+shuffle threshold (`AUC=0.75`, margin `+0.125`), but it contains only one powered group.  dev-Contact and certificate-Contact are below shuffled, certificate-Near is only `0.548`, and no reserve top-1 lift cell passes the material gate.
+- **Full Stage-I control sufficiency: NO.**  State, Support and Reserve are all false; this is not the V48.102 partial-GO branch.
+
+The formal next branch is therefore exactly the preregistered all-STOP branch:
+
+`stage_i_action_information_insufficient_then_preregister_minimal_stage_i_recovery_representation_objective_no_source_or_broad_encoder_sweep`.
+
+### What V48.102 does and does not prove
+
+The all-STOP result is stronger than V48.101 in one way and deliberately weaker in another.
+
+It **does** reject the hypothesis that the frozen pre-root Stage-I representation already exposes one simple, cross-Near/Contact, jointly decodable statistic for nominal recovery state + support establishment + signed reserve/debt.  The signal is fragmented by semantic axis and role.  In particular, the upstream memory exposes a strong dev-Near support cue but not stable certificate-Contact support or reserve/debt.
+
+It does **not** prove that the raw `43 x 192` Stage-I token memory has zero mutual information with the required control object.  The preregistered audit first compresses the full token set into a deterministic 2,880-D summary and then uses a linear probe.  Tokenwise nonlinear interactions, especially which agent/semantic token is relevant to a specific recovery action, can be lost by that summary.  Therefore V48.102 STOP authorizes a minimal learned Stage-I-interface representation objective; it does not authorize an information-theoretic impossibility claim or a broad encoder widening/retraining sweep.
+
+### Theoretical conclusion after V48.100--102
+
+The durable conclusion remains and is strengthened:
+
+**static sufficiency != control sufficiency.**
+
+V48.100 learns a strong static recovery chart but weak support action dynamics.  V48.101 opens memory-to-root cross-attention and materially restores Near support action information, but static state organization and Contact reserve generalization regress.  V48.102 moves one layer upstream and shows that the frozen Stage-I summary itself does not expose a single linear statistic satisfying all state/support/reserve gates.
+
+Thus a deployable recovery representation must jointly encode:
+
+1. a **nominal recovery state** under the current observation-compatible information pattern; and
+2. an **action-conditioned recovery response** describing support establishment and signed reserve/debt change in the same semantic coordinate system.
+
+This is consistent with control-oriented representation literature such as DeepMDP, Action-Sufficient State Representations and action-conditional self-predictive representation learning: control-relevant latent states must preserve action-conditioned dynamics, not only static labels.  Predictive-state literature similarly motivates observable sufficient statistics rather than hidden-state reconstruction.
+
+### Near / Contact diagnosis after V48.102
+
+The unified signed object is retained; no runtime regime router is authorized.
+
+- **Near:** the strongest upstream positive signal is support establishment.  dev-Near Stage-I support is `0.8125` with a large permutation margin and top-1 lift.  V48.101 also substantially improved Near support after cross-attention.  The remaining defect is not absence of a local support cue; it is inability to make that cue coexist with a stable base-state coordinate and generalize to the certificate population.
+- **Contact:** Stage-I support is weakly positive on dev (`0.636`) but anti-informative on certificate (`0.452`), while reserve/debt is below shuffled on dev and certificate.  Contact therefore remains primarily a **signed debt/generalization** problem: the representation must identify which candidate establishes a valid recovery continuation and repays lower-tail debt across held-out scenes, not merely memorize a local action cue.
+
+The common mathematical interpretation remains:
+
+`Near = establish/preserve positive recovery support/headroom`
+
+`Contact = establish support + repay negative recovery debt`.
+
+### Promotion / closure after V48.102
+
+Promote/retain only as scientific principles or diagnostics:
+
+1. **Stage-I contains real local support-action information**, especially in dev-Near.  This positive signal must be preserved by the next representation.
+2. **State and response must be represented as distinct requirements.**  The V48.100--101 trade-off argues against forcing one unconstrained shared transport update to carry both.
+3. **Signed reserve/debt remains the unified Near/Contact semantic.**
+4. **Identifiability before capacity** remains mandatory: V48.102 does not authorize a source, boundary transport, broad encoder sweep or regime-specific policy.
+
+Do not promote OC-AITS as a production Main mechanism; it is an audit.  Also do not reinterpret the all-STOP result as permission to retry V48.101 with more heads, K/V-only variants, larger query/chart capacity, longer training, loss-weight/LR sweeps, state/delta learned mixing, source residuals or dataset reconstruction.
+
+### Main-stack status after V48.102
+
+The stable Main stack remains:
+
+`OC-MERO observation-consistent deployability`
+`+ actuator-realizable executable recovery`
+`+ counterfactual equivalence-partition transport`
+`+ identifiability before capacity`
+`+ support-establishment / signed reserve-debt semantics`
+`+ recovery base-state chart`
+`+ role-isolated RIFA`.
+
+V48.101 cross-attention and V48.102 AITS do **not** enter the production Main stack.  Their durable contribution is the representation-level evidence leading toward a future **control-sufficient recovery representation**.  Only a full state+support+reserve GO may promote that higher-level concept into Main.
+
+## V48.103 OC-FCSS — Observation-Consistent Factorized Control-Sufficient State
+
+### Why this is the V48.102 all-STOP branch
+
+V48.102 only falsifies *fixed-summary linear decodability*.  Before changing historical Stage-I encoder weights, V48.103 asks the smallest remaining representation question:
+
+> Can the **full frozen Stage-I token set** support a low-capacity semantic state in which nominal recovery state and candidate-induced response are factorized but composed in the same support/reserve coordinates?
+
+This is the preregistered minimal Stage-I recovery representation objective.  It is not a source/admission head and does not modify the planner.
+
+### Fixed-capacity factorized semantic representation
+
+Let frozen Stage-I memory be `M(o,a) in R^{T x d}`.  V48.103 learns exactly four content-addressed semantic set queries:
+
+1. nominal support-state channel;
+2. nominal signed reserve/debt-state channel;
+3. support-response potential;
+4. reserve/debt-response potential.
+
+Each channel contains one `d`-dimensional query, one `d`-dimensional readout and one bias.  At `d=192`:
+
+`4 * (192 + 192 + 1) = 1,540` trainable representation parameters.
+
+No hidden MLP, rank, width, expert, root/option/regime ID, source residual or learned state/delta mixing coefficient exists.
+
+For scene-time group nominal action `a0`, define four learned potentials `u_j(M)`.  The representation composes:
+
+`D(a) = sigmoid( u_state,D(M(a0)) + u_resp,D(M(a)) - u_resp,D(M(a0)) )`
+
+`R(a) = u_state,R(M(a0)) + u_resp,R(M(a)) - u_resp,R(M(a0))`.
+
+Therefore:
+
+- nominal response is **exactly zero**;
+- the base state cannot be rewritten by an action-response shortcut;
+- candidate response is explicitly counterfactual to the same nominal state;
+- Near and Contact share exactly the same signed support/reserve coordinates.
+
+This is a fixed **direct-sum state/response factorization**, not the historically forbidden learned O82/P83 state-delta mixture.  There is no mixing weight to sweep.
+
+### Supervision and evaluation
+
+Training uses the same dense teacher DRS/R_dep targets, the same train-only dimensionless scales and the same equal four-term semantic objective as V48.100:
+
+`absolute support + absolute reserve + candidate-minus-nominal support + candidate-minus-nominal reserve`.
+
+Teacher metadata is supervision only and never an input.  The planner, historical Stage-I encoder, root decoder, source, relative ranker, proposal set, threshold and datasets remain frozen.
+
+Held-out evaluation uses the exact V48.102/V48.101/V48.100/V48.96 target-specific state/support/reserve populations and within-group permutation controls.
+
+### V48.103 preregistered GO gates
+
+The absolute gates remain unchanged:
+
+```text
+State GO:
+  AUC >= 0.70 in >=6/8 cells;
+  >=3/4 roles including Near + Contact.
+
+Support GO:
+  AUC >= 0.65 AND true-minus-shuffled >= +0.05 in >=6/8;
+  >=3/4 roles including Near + Contact;
+  top1 lift >= +0.10 in >=4/8 with Near + Contact.
+
+Reserve/debt GO:
+  same action gate.
+```
+
+`FACTORIZED_CONTROL_SUFFICIENT_STATE_GO` requires State + Support + Reserve simultaneously.
+
+Diagnostic AUC deltas versus V48.102 Stage-I probes and V48.101 root semantics are reported but never replace the absolute preregistered gates.
+
+### V48.103 branch rules
+
+- **Full GO:** promote the factorized control-sufficient-state principle and authorize exactly one production `Stage-I semantic-token -> root transport` integration using the learned coordinates; still no source/capacity sweep.
+- **State + Support GO, Reserve STOP:** retain the factorized state/support representation and adjudicate one supported continuous reserve-flow objective; do not reopen encoder/source capacity.
+- **State + Reserve GO, Support STOP:** retain factorized state/reserve and adjudicate one support-establishment objective.
+- **Otherwise:** close the frozen Stage-I semantic-readout family.  Only then authorize a narrowly preregistered **last Stage-I transformer block** control-sufficient representation objective.  Broad encoder retraining, source/boundary transport and regime routing remain prohibited.
+
+### New exclusions after V48.102
+
+In addition to all prior exclusions:
+
+- do not call V48.102 STOP an information-theoretic absence result;
+- do not sweep the V48.102 summary statistics or linear-probe LR/epochs;
+- do not reopen V48.100/101 root query/chart/cross-attention variants;
+- do not create a learned state/delta mixing weight;
+- do not increase V48.103 query count, hidden width, rank or add an MLP if V48.103 fails;
+- do not open source, boundary transport, relative ranker, regime router or dataset reconstruction before a representation-level full GO.
