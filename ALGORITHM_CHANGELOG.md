@@ -10967,3 +10967,179 @@ V48.99 **does not** promote the observation-conditioned Jacobian into the Main s
 The dominant bottleneck is therefore sharpened to:
 
 **dynamical/control sufficiency of the recovery representation: one observation-conditioned root measure and semantic chart must simultaneously encode current support/reserve state and stable candidate-induced support/reserve changes across Near and Contact.**
+
+## V48.100 authoritative result + V48.101 OC-RCSA (2026-09-06)
+
+### V48.100 reliability / attribution decision
+
+The uploaded V48.100 OC-JRSD run is **engineering-valid and scientifically attributable**.  The top-level pipeline is `valid=true / attribution_ready=true / engineering_version=v48.100.0-OC-JRSD / errors=[] / test_roots_read=false / dataset_reconstruction=false`.  The six runtime files recorded by the runtime contract match the uploaded repository byte-for-byte, and the balanced/precision JSON/PT/comparison/runtime artifacts match the SHA256 values frozen by the pipeline sentinel.
+
+The two formal checkpoints contain exactly the preregistered 2,306 representation parameters:
+
+- root-query displacement: `8 x 192 = 1,536`;
+- two-coordinate recovery chart: `4 x 192 + 2 = 770`;
+- planner/source/Stage-I/root cross-attention/root self-attention/root FFN/root-logit-head trained parameters: **0**.
+
+The held-out state/support/reserve populations are exactly the V48.99 = V48.98 = V48.97.2 = V48.96 registered strata.  No regime id, teacher structural metadata, boundary transport, source/admission head, relative-ranker change or dataset reconstruction is present.  Focused V48.96--V48.101 tests, Python compilation and shell syntax checks pass in the delivered code.
+
+One interpretation caveat is recorded but is **not an engineering blocker**: balanced and precision both select epoch 59/60, and dev loss is still decreasing.  This means V48.100 STOP is a preregistered fixed-training-contract family decision, not an information-theoretic impossibility claim.  It does **not** authorize an epoch/LR/patience sweep.  More importantly, the final ten epochs improve absolute support loss by about 0.017 while improving delta-support loss by only about 0.00055--0.00064, so the unresolved support-action failure is not behaving like a uniformly undertrained objective.
+
+### Strict V48.100 preregistered decision
+
+V48.100 is **`JOINT_ROOT_SEMANTIC_DECODER_STOP`**.
+
+- **State representation: GO.**  State AUC passes 8/8 balanced/precision cells and all four Near/Contact dev/certificate roles.
+- **Support-action representation: STOP.**  Only precision/certificate-Contact satisfies the complete AUC + true-minus-shuffle gate; only one unique role passes the complete gate, far below the registered 6/8 and 3/4-role requirement.  Top-1 action ordering is locally positive in most cells, but pooled support semantics remain unstable.
+- **Reserve/debt representation: STOP, but closest to GO.**  Five of eight cells satisfy the complete AUC + permutation gate across three unique roles.  Dev-Contact and certificate-Near are strong; dev-Near is severely underpowered and precision dev-Near is anti-informative; certificate-Contact reserve AUC remains low.
+- **Full control-sufficient representation: NO.**  `State GO && Support GO && Reserve GO` is false, so no final source is authorized.
+
+The loss decomposition makes the failure mode more specific.  From epoch 0 to epoch 59, balanced/precision dev losses change approximately as follows:
+
+- absolute support normalized Huber: **-27.3% / -27.5%**;
+- delta-support normalized Huber: **-0.96% / -0.81%**;
+- absolute reserve normalized Huber: **-3.33% / -3.20%**;
+- delta-reserve normalized Huber: **-7.29% / -7.00%**.
+
+Thus V48.100 successfully learns a strong static support/state chart and a partially useful continuous reserve tangent, while the discrete candidate-induced support-establishment coordinate is almost stationary.  The learned query displacement also becomes large (`||delta_q|| ~= 2.02` versus `||q0|| ~= 1.78`) without resolving the support gate.  The durable conclusion is **not** that root information is absent: V48.96 already showed support-action observability in frozen root-set statistics.  The failure is that query-anchor movement through a frozen memory-to-root attention metric does not turn that information into a stable action-equivariant semantic coordinate.
+
+### Promotion / closure after V48.100
+
+Promote/retain as evidence or scaffold:
+
+1. **Recovery base-state chart.**  V48.100 strengthens it from the V48.97 7/8 state result to 8/8 state GO.  It remains part of the Main stack.
+2. **Joint absolute + counterfactual semantic supervision with fixed train-only coordinate normalization.**  It exposes the exact asymmetry between static support learning and action-induced support learning and remains the diagnostic objective for the next causal test.
+3. **Continuous reserve/debt dynamics as a partially supported submechanism.**  It is not production-ready, but 5/8 full action cells plus the delta-reserve loss reduction justify keeping signed reserve/debt semantics.
+
+Do **not** promote:
+
+- V48.100 root-query displacement as a Main mechanism;
+- the joint root-query + chart family as a control-sufficient representation;
+- any claim that more query capacity, a larger chart, more epochs or a different loss weight would solve the support problem.
+
+Per the V48.99/V48.100 preregistration, the **root-query + semantic-chart family is now closed**.  The next allowed representation intervention is root cross-attention semantic learning; broad encoder/source retraining remains closed.
+
+### Dominant bottleneck after V48.100
+
+The prior formulation, “dynamical/control sufficiency of the recovery representation,” can now be narrowed to:
+
+> **action-sensitive observation-to-root transport for shared-support establishment, while preserving the already stable recovery base-state chart and signed reserve/debt coordinate.**
+
+Equivalently, the semantic chart can represent *what state the recovery system is in*, but the frozen cross-attention transport does not reliably express *which candidate action changes the observation-compatible root measure enough to establish common support*.  This is a representation/transport problem, not a dataset, threshold, source-head or regime-routing problem.
+
+Near and Contact remain a single signed mathematical object under one planner:
+
+- Near: preserve positive lower-tail recovery headroom and establish common support before the zero boundary is lost;
+- Contact: repay negative recovery debt and sustain re-entry without re-contact/secondary deterioration.
+
+No runtime regime input is introduced.
+
+### Main-stack status
+
+The Main stack is **stable; do not replace it**:
+
+`OC-MERO observation-consistent deployability`
+`+ actuator-realizable executable recovery`
+`+ counterfactual equivalence-partition transport`
+`+ identifiability before capacity`
+`+ support-establishment / signed reserve-debt semantics`
+`+ recovery base-state chart`
+`+ role-isolated RIFA`.
+
+V48.100 does not earn promotion to “control-sufficient recovery representation.”  That stronger phrase is reserved for a future representation that passes State + Support + Reserve together.
+
+## V48.101 OC-RCSA — Observation-Consistent Root Cross-Attention Semantic Alignment
+
+### Why this is the preregistered next intervention
+
+V48.100 can move root-query anchors, but the mapping that decides how those queries read action-conditioned structured memory remains frozen.  V48.96 already provides evidence that support-action information exists in frozen root-set statistics; therefore broad encoder retraining is not yet justified.  The clean next causal question is whether the **existing root cross-attention transport kernel** is the missing semantic bottleneck.
+
+V48.101 opens no new layer or width.  It starts from each authoritative V48.100 balanced/precision state and:
+
+- freezes the entire V48.100 root-query displacement and two-coordinate semantic chart;
+- freezes Stage-I/structured encoder, root self-attention, root FFN, root-logit head, planner, source and relative ranker;
+- opens **only the existing `root_cross_attn` module** from the historical L80 model;
+- keeps the model in eval mode so opening gradients does not introduce a new dropout/stochastic-forward contract;
+- reuses the exact V48.100 four-term dimensionless objective and the exact train-only semantic scales stored in the V48.100 checkpoint.
+
+At `d=192`, the existing PyTorch multi-head cross-attention contains exactly:
+
+`3 d^2 + 3 d + d^2 + d = 148,224`
+
+trainable parameters.  These are historical parameters, not a new MLP/head and not a rank/width sweep.
+
+### Initial-function and provenance fail-closed contract
+
+Before one optimizer step, each V48.101 arm must reproduce its V48.100 held-out state/support/reserve metrics within `1e-7`, including registered rows/groups.  Failure is RC30 engineering STOP.
+
+The V48.101 result/state also records SHA256 for:
+
+- the L80 checkpoint actually used;
+- the V48.100 result JSON actually used;
+- the V48.100 representation state actually used;
+- the initial and final root cross-attention state.
+
+The final pipeline packages the learned attention state and verifies the V48.100 comparison SHA frozen by the V48.100 pipeline.  This closes the remaining prerequisite-provenance audit debt present in V48.100.
+
+### Scientific objective
+
+With V48.100 frozen query/chart `g_100` and action-conditioned structured memory `M(o,a)`, V48.101 learns only the historical cross-attention kernel `A_theta`:
+
+`mu_theta(o,a) = Decoder_frozen( A_theta(q_100, M(o,a)) )`
+
+`Z_theta(o,a) = g_100(mu_theta(o,a)) = [D_theta(o,a), R_theta(o,a)]`.
+
+It minimizes exactly the V48.100 normalized objective:
+
+`1/4 * (L_D + L_R + L_deltaD + L_deltaR)`.
+
+The causal hypothesis is that **a control-sufficient root measure requires semantic alignment of memory-to-root transport, not merely movement of root-query anchors through a frozen attention metric**.
+
+This is compatible with control-oriented representation learning principles: useful latent states must preserve action-conditioned dynamics, and attention provides a permutation-compatible mechanism for interactions over set-structured observations.  These are theoretical motivations, not substitutes for the preregistered OC-RAP evidence chain.
+
+### Preregistered V48.101 evaluation
+
+The exact V48.100/V48.99/V48.98/V48.97.2/V48.96 held-out populations and within-scene-time permutation controls are reused.
+
+The absolute gates are unchanged:
+
+**State GO**
+
+- AUC >= 0.70 in >= 6/8 balanced/precision cells;
+- >= 3/4 unique roles including Near + Contact.
+
+**Support-action GO**
+
+- true AUC >= 0.65 and true-minus-shuffled AUC >= +0.05 in >= 6/8 cells;
+- >= 3/4 roles including Near + Contact;
+- top-1 lift >= +0.10 in >= 4/8 cells with Near + Contact represented.
+
+**Reserve/debt GO** uses the same action gate.
+
+`ROOT_CROSS_ATTENTION_SEMANTIC_ALIGNMENT_GO` requires all three.  Because V48.100 support passes only 1/8 full cells, reaching this full gate necessarily requires a broad causal improvement in support establishment rather than a cosmetic change.
+
+Comparison additionally reports, but does not replace the preregistered gates with, per-cell AUC / shuffle-margin improvements versus V48.100 and semantic dev-loss improvement.
+
+### V48.101 branch rules
+
+- **Full State + Support + Reserve GO:** authorize exactly one final fixed-capacity observation-aligned source experiment, then freeze if the historical source gate passes.
+- **State + Reserve GO, Support STOP:** authorize exactly one hybrid support-guard representation; no smooth-support/source/threshold sweep.
+- **State + Support GO, Reserve STOP:** authorize exactly one supported continuous reserve-flow objective.
+- **Otherwise:** close the complete root-decoder semantic family (query/chart + root cross-attention) and move only to a preregistered Stage-I action-information-transport sufficiency audit before any upstream representation training.  No capacity or source sweep.
+
+Boundary transport, relative-ranker modification, regime routing and dataset reconstruction remain unauthorized in every V48.101 branch.
+
+### New / reiterated exclusions
+
+In addition to all historical exclusions, V48.100/101 explicitly forbid:
+
+- continuing V48.100 query/chart training as a rescue experiment or sweeping epochs/patience/LR;
+- root-query displacement scale/regularizer sweeps;
+- root cross-attention head-count/rank/width/depth sweeps;
+- K/V-only vs Q/K/V architecture fishing after seeing V48.101 results;
+- adding an attention MLP, root/option/regime ids or observation-class embeddings;
+- opening root self-attention/FFN/logit head together with cross-attention;
+- reopening source residuals, DRS/DEP thresholds, boundary transport or relative ranker before representation GO;
+- Near/Contact-specific attention, policy, threshold or budget;
+- dataset reconstruction as a response to V48.100 STOP.
+
+The V48.100 final-epoch caveat may be discussed as an optimization limitation, but it does not authorize any of the above sweeps.
