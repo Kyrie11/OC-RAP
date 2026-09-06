@@ -11701,3 +11701,117 @@ In addition to all historical exclusions:
 - do not replace the within-group permutation null with an easier null;
 - do not use per-role/regime token routers;
 - do not open source, boundary transport, relative ranker, broad encoder or dataset reconstruction before a representation-level control-sufficiency GO.
+
+## V48.105 authoritative result + V48.106 OC-PEAO (2026-09-06)
+
+### V48.105 reliability / attribution decision
+
+The uploaded V48.105 OC-PAEL artifacts are **engineering-valid and scientifically attributable**.  The uploaded runtime contract, pipeline manifest, balanced/precision JSON/PT, comparison, and audit ZIP are mutually SHA256-consistent.  Every active V48.105 runtime source hash matches the uploaded drop-in repository.  Both PT files contain only the preregistered audit probes and normalization statistics; no Stage-I, root-decoder, source, planner, relative-ranker, or admission weights are stored.  The pipeline is `valid=true / attribution_ready=true / errors=[]`, `stage_i_parameters_trained=0`, `root_decoder_parameters_trained=0`, `source_parameters_trained=0`, `planner_parameters_trained=0`, and `test_roots_read=false`.
+
+The historical final Stage-I reconstruction is exact (`historical_final_reconstruction_max_abs=0`) and the comparison implementation uses the unchanged V48.100--105 action gate (`AUC>=0.65`, true-minus-shuffled `>=0.05`, top-1 lift gate, cross-role Near+Contact requirements).  No engineering rerun is required.
+
+### Strict V48.105 preregistered decision
+
+Official status is **`PRELAST_ACTION_EQUIVARIANCE_LOCALIZATION_STOP`**.
+
+- Global pre-last State: STOP (`0/8` threshold cells).
+- Global pre-last Support: STOP (`2/8` threshold cells, both dev-Near; top-1 material `4/8`).
+- Global pre-last Reserve/debt: STOP (`0/8` threshold cells).
+- Fixed preregistered 1920-D action-interaction subspace: Support STOP and Reserve STOP.
+- Therefore pre-last control sufficiency is STOP and the preregistered next branch is exactly one Transformer block earlier, audit-only.
+
+### What V48.105 establishes
+
+1. **The final historical Stage-I block is constructive, not merely destructive.**  Relative to the V48.102 final Stage-I audit, the pre-last representation loses substantial State information and loses support separability in dev-Near/certificate-Near.  In particular, pre-last dev-Near reserve is strongly wrong-oriented (`AUC=0.0`, margin `-0.75`, top-1 lift `-1.0`) whereas the final Stage-I audit reaches `AUC=0.75`.  Thus the final block creates or reorients part of the recovery semantics; the V48.104 failure cannot be explained by “the final block alone corrupts an already-sufficient upstream statistic.”
+2. **Action-response association exists before the final block, but signed orientation is not transferable.**  Pre-last dev-Near support is a genuine positive cell (`AUC=0.671875`, margin `+0.1875`, top-1 lift `+0.4`).  Token diagnostics also show strong reserve association in the control token: mean control-token CKA-minus-shuffled is about `+0.375` over all eight cells, with all eight positive.  Yet the registered signed held-out ranking can be zero or wrong-sign.  Because linear CKA is insensitive to a global sign reversal of the label/feature direction, high CKA is evidence of association/magnitude, not of a stable signed action-response coordinate.
+3. **The a-priori action-interaction subspace is not sufficient.**  `control + scene_context + agents` fails both action axes.  Raw AUC can be high (for example certificate-Contact reserve ~0.79) while its shuffled margin and top-1 direction fail.  This rules out the hypothesis that the needed control statistic is already cleanly localized in that fixed subspace.
+4. **Most action-induced energy resides in the architecture-defined ego/history/prefix block, not scene context.**  Across the registered cells the `ego_history` group carries roughly 57% of support action energy and 60% of reserve action energy, while the control token carries ~21--22%.  This is diagnostic only and does not authorize post-hoc token selection; it does show that candidate prefix/trajectory coordinates participate materially in the response geometry.
+5. **The durable theory sharpens again:** `association != signed equivariance`.  V48.104 proves nominally invariant response learnability; V48.105 shows that the upstream representation may contain strong action-associated directions while those directions fail to retain the same sign/order across Near/Contact and dev/certificate populations.  The unresolved object is therefore a **cross-population signed action-response orientation**, not generic representation capacity.
+
+### Near / Contact after V48.105
+
+- **Near:** nominal-state preservation remains solved by the V48.103/V48.104 scaffold.  Pre-last support carries a real dev-Near direction (`0.672`, margin `+0.188`), but pre-last reserve is maximally wrong-oriented (`AUC=0`).  The current Near bottleneck is no longer “protect state and learn response simultaneously”; it is **make positive-support and positive-reserve candidate responses share a stable signed direction under the already-protected nominal state**.
+- **Contact:** pre-last dev-Contact support shows local ordering (`AUC~0.619`, margin `+0.136`, top-1 lift `+0.333`) but certificate-Contact support is below chance relative to the null; reserve has high raw certificate AUC (`0.75`) but no true-minus-shuffled gain and negative top-1 lift.  The current Contact bottleneck is **remove cross-split confounding and establish a signed debt-repayment direction that transfers**, not static Contact recognition.
+
+### Promotion / Main-stack status after V48.105
+
+V48.105 is an audit and contributes no production Main mechanism.  Promote/retain only the scientific protocol:
+
+- energy/CKA association must never be treated as proof of action equivariance;
+- signed held-out orientation and within-group permutation nulls are required;
+- continue layer-localization before opening capacity.
+
+The stable Main stack remains unchanged:
+
+`OC-MERO observation-consistent deployability`
+`+ actuator-realizable executable recovery`
+`+ counterfactual equivalence-partition transport`
+`+ identifiability before capacity`
+`+ support-establishment / signed reserve-debt semantics`
+`+ recovery base-state chart`
+`+ role-isolated RIFA`.
+
+The higher-level candidate replacement remains **nominal-invariant control-sufficient recovery representation**, but it is not promoted into Main until a full State+Support+Reserve representation GO.
+
+## V48.106 OC-PEAO — Observation-Consistent Pre-Encoder Action-Orientation Audit
+
+### Why V48.106 is the only authorized next step
+
+V48.105 formal STOP preregisters one block earlier action-interaction auditing with no training or source sweep.  The historical Stage-I encoder has two Transformer layers, so moving one block earlier from V48.105 lands at the **projected semantic token set before any Transformer layer**.  This is the earliest Stage-I representation and closes the remaining layer-location ambiguity without changing capacity.
+
+### Primary representation audit
+
+Let `H^0(a)` be the projected Stage-I token set before Transformer layer 1.  V48.106 reuses exactly the V48.102/V48.105 deterministic summary and probe family:
+
+- 11 fixed semantic token positions are retained;
+- unordered agent tokens use mean/std/max/min moments;
+- summary dimension remains `15d=2880` at `d=192`;
+- candidate features remain `Delta z(a)=Phi(H^0(a))-Phi(H^0(a0))` and state-conditioned reserve context `Delta z * (1+tanh(z0))`;
+- the exact same State/Support/Reserve linear-probe recipe and within-group action permutation null are reused;
+- the exact same fixed 1920-D action-interaction subspace from V48.105 is reused.  No token group is changed after seeing V48.105.
+
+All Stage-I/root/source/planner parameters remain frozen.  This is audit-only.
+
+### New signed-orientation diagnostic
+
+V48.105 exposes a blind spot of magnitude-only representation similarity: linear CKA can be large when a held-out action direction is sign-reversed.  V48.106 therefore preregisters one additional **diagnostic-only** signed statistic for each fixed architectural group and for the same action-interaction subspace:
+
+1. standardize with train-only mean/std;
+2. define a train response direction as the positive-minus-negative class mean in the standardized candidate-response coordinates;
+3. define the held-out response direction analogously;
+4. report their cosine, plus the same quantity under the within-group shuffled control.
+
+`+1` means the train and held-out directions have the same orientation, `-1` means a sign reversal.  This diagnostic does **not** control any V48.106 branch and cannot replace the registered AUC/top-1 gates.  It exists only to distinguish “association without orientation” from “same-signed transferable response.”
+
+### V48.106 preregistered gates
+
+Primary global and fixed action-interaction gates are unchanged from V48.105:
+
+```text
+State GO:
+  AUC >= 0.70 in >=6/8 cells;
+  >=3/4 roles including Near + Contact.
+
+Support GO / Reserve GO:
+  AUC >= 0.65 AND true-minus-shuffled >= +0.05 in >=6/8;
+  >=3/4 roles including Near + Contact;
+  top1 lift >= +0.10 in >=4/8 with Near + Contact.
+```
+
+Signed-orientation cosine is diagnostic only.
+
+### V48.106 preregistered branches
+
+- **Global State+Support+Reserve GO:** earliest Stage-I tokens are already control-sufficient; close encoder training and authorize one direct nominal-invariant input-anchored response transport, no source/capacity sweep.
+- **State+Support GO, Reserve STOP:** retain support sufficiency and adjudicate one signed reserve/debt orientation objective only.
+- **State+Reserve GO, Support STOP:** retain reserve sufficiency and adjudicate one support-establishment orientation objective only.
+- **Global action axes fail but both axes GO in the unchanged fixed action-interaction subspace:** authorize one fixed-subspace nominal-invariant response transport; no learned token routing.
+- **Otherwise:** the earliest frozen Stage-I representation itself does not expose a transferable control-sufficient response.  Close the frozen-layer audit family and preregister exactly the **first Stage-I Transformer block** for a nominal-invariant action-orientation objective.  The historical final block, FCSS readout, source, planner, boundary transport, broad encoder sweep, regime routing and dataset reconstruction remain closed.
+
+### New exclusions after V48.105
+
+- do not treat high CKA/energy as equivariance or sufficiency;
+- do not select the best V48.105 token group after seeing the audit;
+- do not change the V48.105 action-interaction subspace in V48.106;
+- do not retrain V48.104 final block, jointly train FCSS, or sweep LR/epoch/head/depth;
+- do not open source, boundary transport, relative ranker, regime router, broad encoder or dataset reconstruction before the representation branch authorizes it.
