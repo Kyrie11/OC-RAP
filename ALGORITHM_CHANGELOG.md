@@ -10584,3 +10584,113 @@ V48.97.2 keeps the V48.97 OC-ERSS representation, 770 parameters, training loss,
 
 ### Scientific branch
 **Do not analyze V48.97.1 as GO or STOP and do not design V48.98 from it.**  Rerun the unchanged V48.97 OC-ERSS scientific experiment under V48.97.2.  Only a complete `.2` pipeline with exact V48.96 evaluation-population identity may authorize either the one-final-source branch or the narrow Stage-I/root representation-learning branch.
+
+## V48.97.2 authoritative result + V48.98 OC-ERTA (2026-09-06)
+
+### V48.97.2 reliability / attribution decision
+
+The uploaded V48.97.2 OC-ERSS run is engineering-valid and scientifically attributable.  Runtime-code SHA256 values match the uploaded repository; balanced/precision JSON and state checkpoints match the top-level pipeline hashes; the learned checkpoints contain exactly 770 ERSS representation parameters and no planner/source parameters.  The candidate-only V48.93 join preserves every nominal reference, empty evaluation fails closed, and the action evaluation population is exactly the preregistered V48.96 state-matched population.  The comparison records the frozen V48.96 comparison SHA and the pipeline is `valid=true / attribution_ready=true`.
+
+### Strict V48.97 decision: state GO, action sufficient state STOP
+
+The preregistered status is **`EXECUTABLE_RECOVERY_SUFFICIENT_STATE_STOP`**.
+
+- **Nominal state representation: GO.**  State AUC passes 7/8 balanced/precision cells and covers all four unique Near/Contact dev/certificate roles.  Therefore the two semantic coordinates are adequate as a *base recovery-state chart*.
+- **Support-action representation: STOP.**  Only balanced/certificate-Contact and precision/certificate-Contact pass the registered AUC+within-group permutation gate.  The learned two-coordinate bottleneck does not preserve the V48.96 support-action signal across dev-Near/dev-Contact/certificate-Near.
+- **Reserve/debt action representation: STOP.**  Four of eight cells pass the AUC+permutation gate (balanced dev-Near/dev-Contact/certificate-Near and precision certificate-Near), but the registered 6/8 cross-regime requirement fails; certificate-Contact remains non-informative/anti-informative and precision dev-Near fails.
+- **Final source authorization: NO.**  V48.97 does not authorize the one-final-source branch.
+
+The important positive result is not a production ERSS source.  It is the separation
+
+`recovery base state is learnable  !=  action-induced recovery tangent is learnable by independent per-action compression`.
+
+V48.97 therefore improves the previous dominant bottleneck: the open object is no longer whether a cross-regime recovery *state* exists at all, but whether the candidate action induces a stable, observation-conditioned tangent in that state.
+
+### Family closure after V48.97
+
+The following family is now formally closed for this evidence chain:
+
+- frozen-root linear/nonlinear source/readout sweeps;
+- the V48.97 low-capacity per-action two-coordinate root-set extractor as a complete action sufficient state;
+- further width/rank/depth/LR/threshold sweeps of the ERSS extractor;
+- reusing V48.82/83 frozen structured-tail fields, V48.85 action-only projection, V48.87 BARR, V48.88 quotient response, or V48.94/95 native-certificate thresholds as substitutes for representation learning;
+- learned support/reserve mixtures or Near/Contact factor routers;
+- boundary transport, relative-ranker modification, proposal expansion, regime-conditioned policy, or dataset reconstruction as a response to this STOP.
+
+The V48.97 **base-state chart** remains a retained mechanism/scaffold.  Its state coordinates may be reused only frozen and only if nominal predictions remain identical; the failed action readout is not promoted.
+
+### Narrow Stage-I reopening authorized
+
+V48.97 STOP is the preregistered condition that ends the frozen representation family and permits one narrow Stage-I/root representation intervention.  This does **not** reopen generic encoder retraining, a generic MLP, a new source head, root/option/regime IDs, or a capacity sweep.
+
+The mathematical object is changed from a static state to a **recovery tangent bundle**:
+
+`Z(o,a0) = [D0, R0]`  (base state, already GO)
+
+`Tau(o,a;a0) = [Delta D, Delta R]`  (candidate-induced recovery tangent, still open).
+
+This distinction is forced by V48.97: static state is stable, while support/reserve action effects are not.
+
+## V48.98 OC-ERTA — Observation-Consistent Executable-Recovery Tangent Alignment
+
+### Intervention
+
+V48.98 freezes the V48.97.2 ERSS state chart, the historical L80 planner, structured transformer, root decoder, OC-MERO heads, source and relative ranker.  It modifies Stage-I representation only through one centered, rank-2 physical action-tangent update before the frozen transformer.
+
+For the three executable physical candidate-token blocks
+
+`j in {prefix_param, prefix_state, control}`
+
+and nominal action `a0`, define
+
+`e'_j(o,a;a0) = e_j(o,a) + U B_j [x_j(o,a) - x_j(o,a0)]`.
+
+`U` has two orthonormal columns and is shared by all token blocks; `B_j` maps each physical token difference into that two-dimensional tangent plane.  Rank is exactly two because the registered recovery state has exactly two semantic coordinates (shared support and signed reserve/debt); rank is not swept.  There is no bias, so nominal `a=a0` gives an exact zero Stage-I update.  Ego, agent, BEV, route, map and dynamics observation tokens are unchanged.  Observation conditioning arises only through the frozen transformer interaction between those shared scene tokens and the centered physical action tangent.
+
+At d_model=192 with the historical physical token dimensions (5 + 80 + 40), the only new trainable state is
+
+`2*192 + 2*(5+80+40) = 634 parameters`.
+
+No macro/regime/root/option identifier is an adapter input.
+
+### Representation objective
+
+Because V48.97 nominal state is already GO, V48.98 does **not** relearn it.  The V48.97.2 ERSS module is frozen and V48.98 trains only the unresolved tangent:
+
+`L_ERTA = 0.5 * Huber(Delta D_hat, Delta D_teacher)
+        + 0.5 * Huber(Delta R_hat, Delta R_teacher)`.
+
+Dense historical train/dev PCD indices are reused.  Teacher DRS/R_dep are supervision only and never runtime inputs.  Nominal support/reserve predictions must remain identical to V48.97.2 within 1e-7; any nominal drift is an engineering failure.
+
+### Why this is not a reopened source/action-head family
+
+- The intervention is before the structured transformer/root decoder and changes Stage-I action representation, not admission logits or root-option margins.
+- The source, OC-MERO certificate and relative ranker remain frozen and unused as training targets.
+- Candidate-minus-nominal centering is the already-supported causal action object; nominal behavior is exactly preserved.
+- The learned update is restricted to the two-dimensional recovery semantic tangent plane, eliminating the high-dimensional nullspace that invalidated BARR.
+- Only continuous executable physical action geometry/control is adapted; there is no Near/Contact router or categorical regime shortcut.
+
+### V48.98 preregistered decision
+
+The held-out evaluation population remains exactly the V48.97.2/V48.96 state-matched population with the same within-scene-time action permutation control.
+
+**State-chart preservation** is a hard contract, not a tunable gate:
+- every nominal support/reserve prediction must match frozen V48.97.2 within `1e-7`;
+- every state row count and state AUC must equal V48.97.2.
+
+**Support-tangent GO** requires the unchanged V48.97 action gate:
+- true AUC >=0.65 and true-minus-shuffled AUC >=+0.05 in >=6/8 cells;
+- >=3/4 unique roles including Near + Contact;
+- top-1 lift >=+0.10 in >=4/8 cells, including Near + Contact.
+
+**Reserve/debt-tangent GO** uses the identical gate.
+
+`EXECUTABLE_RECOVERY_TANGENT_ALIGNMENT_GO` requires state preservation + support-tangent GO + reserve/debt-tangent GO.
+
+Branch rules:
+- **GO:** authorize exactly one final fixed-capacity observation-aligned absolute-source experiment.  No source/rank/threshold/capacity sweep; boundary transport remains OFF.  If that final source passes the existing source-freeze gate, stop internal absolute-source iteration and proceed to frozen RIFA, Safe paired non-interference, Near critical-safety closed loop, Contact post-impact/secondary-collision evaluation, then external baselines.
+- **STOP:** close the centered rank-2 Stage-I recovery-tangent family.  Do not return to source/head tuning.  The only remaining representation question is a deeper, separately preregistered root-decoder/encoder semantic objective; broad retraining remains prohibited until that branch is explicitly adjudicated.
+
+### Convergence state entering V48.98
+
+**NOT CONVERGED.**  V48.97 materially reduces the convergence gap by establishing a cross-regime nominal recovery-state chart.  The remaining dominant bottleneck is now specifically **action-equivariant representation of shared-support establishment and signed reserve/debt change**.  V48.98 is a bounded representation-level experiment intended to determine whether that missing tangent can be written into Stage-I without disturbing the solved base state.
