@@ -10694,3 +10694,130 @@ Branch rules:
 ### Convergence state entering V48.98
 
 **NOT CONVERGED.**  V48.97 materially reduces the convergence gap by establishing a cross-regime nominal recovery-state chart.  The remaining dominant bottleneck is now specifically **action-equivariant representation of shared-support establishment and signed reserve/debt change**.  V48.98 is a bounded representation-level experiment intended to determine whether that missing tangent can be written into Stage-I without disturbing the solved base state.
+
+## V48.98 authoritative result + V48.99 OC-RJCA (2026-09-06)
+
+### V48.98 reliability / attribution decision
+
+The uploaded V48.98 OC-ERTA run is engineering-valid and scientifically attributable.  Runtime-file SHA256 values match the uploaded repository.  Balanced/precision JSON/PT artifacts match the pipeline sentinel; each learned state contains exactly 634 trainable Stage-I tangent parameters and no hidden planner/source/ERSS parameters.  The held-out evaluation population is exactly the V48.97.2/V48.96 state-matched population.  Nominal support/reserve predictions match V48.97.2 exactly (max absolute error 0), and every state AUC is bitwise/numerically identical to the frozen V48.97.2 chart.  Therefore the scientific failure can be attributed to the centered rank-2 Stage-I tangent mechanism rather than evaluation drift or state-chart regression.
+
+### Strict V48.98 preregistered decision
+
+V48.98 is **`EXECUTABLE_RECOVERY_TANGENT_ALIGNMENT_STOP`**.
+
+- State-chart preservation: **PASS**.
+- Support tangent: **STOP**.  Only precision/certificate-Contact satisfies the registered AUC + within-group permutation gate.  Support top-1 improves in several cells, but the score does not become a stable cross-regime action coordinate.
+- Reserve/debt tangent: **STOP**.  Five of eight cells satisfy the AUC + permutation gate (balanced dev-Near/dev-Contact/certificate-Near and precision dev-Near/certificate-Near), short of the preregistered 6/8 requirement; certificate-Contact remains below the AUC threshold and precision dev-Contact lacks sufficient permutation uplift.
+- Final source authorization: **NO**.
+
+The dense behavior is diagnostic and important: compared with V48.97.2, V48.98 reduces reserve/debt delta Huber by roughly 6–11% across dev/certificate and balanced/precision, while support-delta MAE worsens by roughly 3–5%.  Thus a globally shared smooth Stage-I tangent can improve the continuous reserve/debt coordinate but does not organize support establishment into a stable action direction.
+
+### New closure after V48.98
+
+The following family is now formally closed:
+
+1. **Centered global rank-2 Stage-I recovery tangent injection** of the form `U B delta_action` before the frozen transformer.
+2. Rank/width/token-block/LR/epoch sweeps of V48.98, including adding macro/category shortcuts to rescue it.
+3. Returning to source/admission heads, support/reserve mixtures, DRS/DEP thresholds, boundary transport, relative-ranker changes, proposal expansion or regime-specific experts in response to this STOP.
+4. Treating the action tangent as a globally state-independent vector field.
+
+The *mathematical action-tangent object* is not closed.  What is closed is the V48.98 realization that assumes one global action map can serve every observation-conditioned recovery state.
+
+### Mechanism interpretation entering V48.99
+
+V48.97 established a reusable base state `Z0=[D0,R0]`.  V48.98 shows that the remaining action effect cannot be represented by a state-independent tangent.  The minimal control-theoretic generalization is a **state-dependent action Jacobian**:
+
+`Delta Z ~= J(Z0, observation) Delta a`.
+
+This is the same structural distinction that separates purely linear lifted control models from control-affine/bilinear lifted dynamics: the control vector field depends on state.  Reopening this interaction does **not** reopen V48.87 BARR.  BARR used a high-rank root-by-action source deformation under underidentified aggregate supervision.  V48.99 instead uses:
+
+- exactly two recovery semantic coordinates;
+- dense DRS/R_dep component supervision already identified by V48.92–93;
+- candidate-minus-nominal centering;
+- no root-slot correspondence;
+- a permutation-equivariant root representation update;
+- a frozen V48.97 base-state chart;
+- no source/admission target.
+
+The bilinear *mathematical form* is narrowly reopened because V48.98 provides new evidence that state-independent actuation is the wrong approximation; the historical high-capacity source family remains closed.
+
+## V48.99 OC-RJCA — Observation-Consistent Recovery-Jacobian Control-Affine Alignment
+
+### Representation intervention
+
+V48.99 freezes the L80 structured encoder/transformer/root decoder, the V48.97.2 ERSS chart, OC-MERO/source/RIFA and all planner parameters.  It operates on the decoded candidate root set and learns only a two-dimensional observation-conditioned recovery Jacobian.
+
+Let the frozen V48.97 nominal semantic pooled states be `h_D(o,a0)` and `h_R(o,a0)`, and let `delta a` concatenate the executable continuous candidate-minus-nominal blocks `prefix_param`, `prefix_state` and `control`.  Define
+
+`eta(o,a;a0) = (A delta_a) odot C [1, LN(h_D), LN(h_R)]`,
+
+where `eta in R^2`.  This is a rank-2 bilinear/control-affine interaction between physical action and the current recovery state.  The two components are allocated over the unordered candidate root set using the **frozen V48.97 semantic attention measures**:
+
+`r'_k = r_k + alpha_D(k) eta_D u_D + alpha_R(k) eta_R u_R`.
+
+`[u_D,u_R]` is an orthonormal two-dimensional semantic basis.  The allocation is root-permutation equivariant and assumes no candidate/nominal root-slot bijection.  Root probabilities are recomputed from the modified root tokens before the frozen ERSS readout.
+
+Because `delta a=0` for the nominal candidate, the update is exactly zero and the V48.97 base-state chart is preserved by construction.
+
+At the registered `d_model=192` and physical action dimension `5+80+40=125`, the only trainable state is
+
+`2*192 + 2*125 + 2*(1+2*192) = 1,404 parameters`.
+
+No regime/root/option/macro identifier or teacher metadata is an input.
+
+### Coordinate-invariant semantic metric
+
+V48.98 also exposes a second mathematical issue: `D` is bounded/probability-like while `R_dep` is a signed unbounded coordinate, so the raw sum of equal-weight Huber losses is not invariant to a change of units.  V48.99 fixes the metric once from the training teacher deltas:
+
+`scale_D = RMS(Delta D_teacher)`,
+`scale_R = RMS(Delta R_teacher)`.
+
+The training objective is
+
+`L_RJCA = 0.5 Huber((Delta D_hat-Delta D_teacher)/scale_D)
+        + 0.5 Huber((Delta R_hat-Delta R_teacher)/scale_R)`.
+
+The scales are computed once, saved in the checkpoint and never swept.  This is semantic-coordinate normalization, not class weighting or hyperparameter search.
+
+### Preregistered evaluation and branch rules
+
+The held-out population and within-scene-time permutation controls must be **exactly identical** to V48.98/V48.97.2/V48.96.  Every nominal support/reserve prediction and state AUC must remain identical to V48.98; any drift is engineering failure.
+
+Support-Jacobian GO uses the unchanged action gate:
+
+```text
+true AUC >= 0.65 and true-minus-shuffled AUC >= +0.05 in >=6/8 cells;
+>=3/4 unique roles including Near + Contact;
+top-1 lift >= +0.10 in >=4/8 cells, including Near + Contact.
+```
+
+Reserve/debt-Jacobian GO uses the identical gate.
+
+`RECOVERY_JACOBIAN_ALIGNMENT_GO` requires state preservation + support GO + reserve GO.
+
+Branch rules:
+
+- **GO:** authorize exactly one final fixed-capacity observation-aligned source.  No source/rank/threshold/capacity sweep.  If the historical source-freeze gate passes, stop internal source iteration and proceed to frozen RIFA, Safe paired non-interference, Near closed-loop, Contact full post-impact/secondary-collision evaluation and external baselines.
+- **Reserve GO, support STOP:** close smooth support-Jacobian learning and adjudicate a separately preregistered hybrid/guard representation for support establishment.  Do not alter reserve or return to a source head.
+- **Support GO, reserve STOP:** retain the support Jacobian only as a representation mechanism and adjudicate a supported continuous reserve/debt flow objective.
+- **Both STOP:** close the state-conditioned low-rank root Jacobian and move to a separately preregistered joint root-decoder semantic objective; no adapter/source sweep.
+
+Boundary transport remains OFF.  Relative ranker, proposal set, dataset and regime-agnostic deployment semantics remain unchanged.
+
+### CCF-A main-line status entering V48.99
+
+Retained/promotion-ready mechanisms:
+
+`OC-MERO observation-consistent deployability`
+`+ actuator-realizable executable recovery`
+`+ counterfactual equivalence-partition probability-mass transport`
+`+ identifiability before capacity`
+`+ support-establishment / signed reserve-debt factor semantics`
+`+ V48.97 recovery base-state chart`
+`+ role-isolated RIFA`.
+
+The phrase **action tangent** remains the correct mathematical problem statement but the V48.98 *global Stage-I tangent implementation* is removed from the promoted mechanism stack.  V48.99 tests whether it should be replaced by an **observation-conditioned recovery Jacobian/control vector field**.
+
+The current dominant bottleneck is therefore sharpened to:
+
+**state-dependent, cross-regime action-equivariant recovery dynamics: the same executable action delta must induce the correct support/reserve change as a function of the current observation-conditioned recovery state.**
