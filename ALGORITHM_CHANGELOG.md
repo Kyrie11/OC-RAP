@@ -11446,3 +11446,135 @@ In addition to all prior exclusions:
 - do not create a learned state/delta mixing weight;
 - do not increase V48.103 query count, hidden width, rank or add an MLP if V48.103 fails;
 - do not open source, boundary transport, relative ranker, regime router or dataset reconstruction before a representation-level full GO.
+
+## V48.103 authoritative result + V48.104 OC-NICR (2026-09-06)
+
+### V48.103 reliability / attribution decision
+
+The uploaded V48.103 OC-FCSS artifacts are **engineering-valid and scientifically attributable**.  Runtime provenance is consistent with the uploaded repository, the pipeline is `valid=true / attribution_ready=true / engineering_version=v48.103.0-OC-FCSS / errors=[]`, and the balanced/precision JSON/PT artifacts match the pipeline SHA256 manifest.  Each checkpoint contains only the preregistered 1,540-parameter FCSS readout (`queries[4,192]`, `readouts[4,192]`, `bias[4]`); Stage-I, root decoder, source, planner and relative ranker remain frozen.  The historical evaluation populations and V48.102 prerequisite contract are unchanged.  No engineering hotfix or rerun is required.
+
+One non-blocking interpretation caveat is retained: both variants select epoch 59/60.  This does not authorize an LR/epoch/patience sweep.  The component trajectories are diagnostic: absolute support improves by about 33%, delta-reserve by about 12%, but **delta-support worsens by about 2.5--3.3%**.  The failure therefore is not a uniformly undertrained representation.
+
+### Strict V48.103 preregistered decision
+
+Official status is **`FACTORIZED_CONTROL_SUFFICIENT_STATE_STOP`**.
+
+- State: GO (`6/8`, all four roles represented).
+- Support-action: STOP (`3/8` threshold cells, only certificate Near/Contact roles represented; top-1 evidence exists but cannot replace the absolute gate).
+- Reserve/debt: STOP despite `6/8` threshold cells because the registered top-1/cross-role gate is not met and certificate-Contact remains anti-generalizing.
+- Full factorized control-sufficient state: STOP.
+
+If described informally as Full GO / Full STOP / Partial GO, this is **State-only partial evidence**, but it is **not** either preregistered partial-promotion branch (`State+Support` or `State+Reserve`).  Therefore the action branch is the formal STOP branch.
+
+### What V48.103 establishes
+
+1. **Nominal state / action-response factorization is useful as an architectural invariant.**  V48.101 damaged dev-Near state while recovering support; V48.103 restores strong nominal-state ordering (e.g. dev-Near 1.00/0.857 and certificate-Contact ~0.91/0.893) while the candidate response remains algebraically zero on nominal rows.  The concrete FCSS readout is not Main, but exact nominal invariance and separate state/response semantics should be retained.
+2. **Readout factorization is not representation factorization.**  Disjoint parameters are insufficient when both response channels read a frozen token geometry that is not action-equivariant.  The support-response channel can improve absolute candidate support while making the registered candidate-minus-nominal support loss worse.
+3. **Reserve/debt is closer to a learnable continuous response than support establishment.**  V48.103 improves dev-Contact reserve to ~0.74--0.75 and certificate-Near reserve to ~0.76--0.79, but certificate-Contact reserve collapses to ~0.31 and remains below the permutation null.  This is partial positive evidence, not promotion.
+4. **Static sufficiency != control sufficiency is strengthened.**  The new lesson is: `static sufficiency + parameter factorization != action-equivariant control sufficiency`.  A control-sufficient representation must preserve the nominal recovery state while making candidate-induced support/reserve changes explicit in the underlying token geometry.
+
+### Near / Contact after V48.103
+
+- **Near:** V48.103 proves that nominal recovery-state preservation and response parameter separation can coexist, but it does not preserve the strong dev-Near support signal seen in V48.101/V48.102.  The remaining object is **stable positive support establishment under an exactly preserved nominal state**.  Factorization advanced the state half but not the support-response half.
+- **Contact:** dev-Contact reserve improves materially, while certificate-Contact reserve becomes strongly wrong-signed relative to the permutation null.  The dominant Contact defect is now **cross-split action-conditioned debt-response generalization**, not static contact-state recognition.
+
+### Closure / promotion after V48.103
+
+Retain as principles/scaffolds:
+
+- exact nominal-state preservation;
+- explicit candidate-minus-nominal response semantics;
+- separate support and signed reserve/debt channels;
+- OC-MERO observation-consistent information pattern;
+- actuator-realizable executable recovery;
+- RIFA role isolation;
+- within-group action-permutation controls.
+
+Do **not** promote:
+
+- the V48.103 four-query FCSS readout as Main;
+- query-count/hidden-width/rank/MLP expansions;
+- learned state/delta mixing;
+- V48.100/101 query/chart/cross-attention reopening;
+- source, boundary transport, relative-ranker, regime router or dataset reconstruction.
+
+Per V48.103 preregistration, the frozen Stage-I semantic-readout family is closed.  The only authorized representation intervention is the **last Stage-I Transformer block** under a control-sufficient objective.
+
+## V48.104 OC-NICR — Observation-Consistent Nominal-Invariant Control Refinement
+
+### Causal hypothesis
+
+V48.103 shows a specific optimization conflict: the frozen token geometry lets the response readout reduce absolute support error while its candidate-minus-nominal support error gets worse.  Therefore V48.104 does not add another readout.  It asks whether one existing Stage-I interaction layer can reshape candidate-dependent token geometry while preserving the already-supported nominal state **by construction**.
+
+Let `H(a)` be the frozen output before the final Stage-I Transformer block, `B0` the frozen historical last block, `Btheta` its trainable copy initialized exactly from `B0`, and `N` the frozen final LayerNorm.  Define the block residual
+
+`Etheta(a) = Btheta(H(a)) - B0(H(a))`.
+
+For the unique same-group nominal action `a0`, V48.104 uses
+
+`Mtheta(a) = N( B0(H(a)) + Etheta(a) - Etheta(a0) )`.
+
+Hence
+
+`Mtheta(a0) = N(B0(H(a0))) = M0(a0)`
+
+**exactly for every parameter value**.  At initialization `Btheta=B0`, the complete V48.104 function reproduces V48.103 within the registered numerical tolerance for every candidate.
+
+The 1,540-parameter V48.103 FCSS readout is frozen.  Only the historical final Stage-I Transformer block is adapted (`444,864` parameters at `d=192`); every earlier Stage-I projection/block, the root decoder, source, planner and relative ranker remain frozen.  Dropout is disabled during this deterministic refinement.
+
+### Response-only objective
+
+V48.103's key failure is that absolute-support improvement can dominate an increasingly incorrect `delta-support` coordinate.  Since nominal state is now structurally invariant, V48.104 trains the last block **only** on the two registered candidate-minus-nominal terms:
+
+`L_response = 0.5 * (L_delta_support + L_delta_reserve)`
+
+using the same fixed V48.100 training-only RMS scales.  No static-state loss, loss-weight sweep, threshold sweep or new teacher signal is introduced.  Full absolute state/support/reserve metrics are still evaluated after training.
+
+This is a narrow action-conditional latent-dynamics objective, consistent with the durable control-representation principle that a useful latent state must preserve decision-relevant state while representing action-conditioned transitions.  It is not a new source/admission head.
+
+### V48.104 preregistered gates
+
+Engineering prerequisites:
+
+- V48.103 must be authoritative `FACTORIZED_CONTROL_SUFFICIENT_STATE_STOP` with State GO / Support STOP / Reserve STOP;
+- V48.104 initialization must reproduce the matching V48.103 held-out metrics;
+- nominal memory/state must remain exact V48.103 throughout;
+- only the last Stage-I Transformer block may change;
+- no source/planner/root-decoder/earlier-Stage-I parameter may change.
+
+Scientific gates remain the same absolute gates:
+
+```text
+State GO:
+  AUC >= 0.70 in >=6/8 cells;
+  >=3/4 roles including Near + Contact.
+
+Support GO:
+  AUC >= 0.65 AND true-minus-shuffled >= +0.05 in >=6/8;
+  >=3/4 roles including Near + Contact;
+  top1 lift >= +0.10 in >=4/8 with Near + Contact.
+
+Reserve/debt GO:
+  same action gate.
+```
+
+`NOMINAL_INVARIANT_CONTROL_REFINEMENT_GO` requires State + Support + Reserve simultaneously.  Because state is an engineering identity to V48.103, the scientific burden is entirely on the two action-response axes.
+
+### V48.104 preregistered branch rules
+
+- **Full GO:** promote the nominal-invariant control-sufficient representation principle and authorize exactly one production factorized Stage-I-to-root transport integration; no source/capacity sweep.
+- **State + Support GO, Reserve STOP:** retain nominal-invariant support establishment and preregister one supported continuous reserve-flow objective.
+- **State + Reserve GO, Support STOP:** retain nominal-invariant reserve/debt dynamics and preregister one support-establishment objective.
+- **Otherwise:** close last-block counterfactual refinement.  Next step is an audit of **pre-last-token action equivariance/localization**, not broad encoder/source training.
+
+### New exclusions after V48.103
+
+In addition to all historical exclusions:
+
+- do not increase the V48.103 readout/query capacity;
+- do not jointly fine-tune V48.103 readout and the last block in V48.104;
+- do not add a learned state/response mixing weight;
+- do not use absolute support/state losses to rescue response fitting in V48.104;
+- do not unfreeze more than the final Stage-I Transformer block;
+- do not sweep last-block depth, heads, LR, epochs or residual scale;
+- do not reopen source/boundary transport/relative ranker/regime-specific policy/dataset reconstruction before a representation-level Full GO.
