@@ -1,3 +1,11 @@
+
+## V48.104 engineering hotfix — nominal bit-exact centering
+
+- **Scope:** engineering-only; no algorithm, objective, preregistered gate, parameter set, or scientific conclusion changes.
+- **Bug:** `base_raw + residual - anchor` was evaluated as `(base_raw + residual) - anchor`; on CUDA FP32 this can leave ~1e-6 roundoff on nominal rows even when `residual == anchor`, causing the strict `nominal_memory_exact_identity` check to fail.
+- **Fix:** compute `centered_residual = residual - anchor` first, then `final_norm(base_raw + centered_residual)`.  The nominal centered residual is now bit-exact zero by construction, matching the V48.104 mathematical contract rather than weakening the check tolerance.
+- **Compatibility:** launcher, filenames, engineering/scientific version string, 444,864 trainable last-block parameters, response-only objective, and original two-GPU command remain unchanged.
+
 ## V48.82.1 — OC-SNTF engineering fix: replacement-safe atomic scene-time batching
 
 - **No scientific algorithm change.** V48.82 OC-SNTF N82/O82 definitions, structured tail-field parameterization, signed reserve/debt channels, structural-interval supervision, datasets, Stage-I/RIFA state, learning rate, epochs, thresholds, boundary-transport OFF contract, and preregistered GO/STOP gates are unchanged.

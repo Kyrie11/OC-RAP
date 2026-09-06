@@ -92,10 +92,16 @@ class NominalInvariantLastBlockRefinement(nn.Module):
         adapted_raw = self.adapted_last(prelast)
         residual = adapted_raw - base_raw
         anchor = residual.index_select(0, ni)
+        # IMPORTANT: center the residual *before* adding it back to base_raw.
+        # For nominal rows residual and anchor are the exact same tensor values,
+        # so this subtraction is bit-exact zero.  Writing
+        #     base_raw + residual - anchor
+        # evaluates as (base_raw + residual) - anchor and can leave ~1e-6 FP32
+        # roundoff (x + y - y != x bitwise), violating the preregistered exact
+        # nominal-memory identity despite preserving it algebraically.
+        centered_residual = residual - anchor
         # Apply the historical final norm once after counterfactual centering.
-        # At initialization residual is exactly zero; for nominal rows the
-        # centered residual is exactly zero for every parameter value.
-        return self.final_norm(base_raw + residual - anchor)
+        return self.final_norm(base_raw + centered_residual)
 
     def nominal_identity_error(
         self,

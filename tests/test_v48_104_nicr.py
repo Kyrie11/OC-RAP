@@ -17,9 +17,11 @@ def test_nominal_and_initial_identity():
     out=m.refined_memory(pre,ni,raw)
     assert torch.allclose(out,base,atol=1e-6,rtol=0.0)
     with torch.no_grad():
-        next(m.adapted_last.parameters()).add_(0.01)
+        next(m.adapted_last.parameters()).add_(0.5)
     out2=m.refined_memory(pre,ni,raw)
+    # Nominal identity is a structural invariant, not a tolerance-based one.
     assert torch.equal(out2[[0,3]],base[[0,3]])
+    assert m.nominal_identity_error(pre,ni,raw) == 0.0
     assert not torch.equal(out2[[1,2,4,5]],base[[1,2,4,5]])
 
 
