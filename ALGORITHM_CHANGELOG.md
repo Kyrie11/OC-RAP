@@ -10821,3 +10821,149 @@ The phrase **action tangent** remains the correct mathematical problem statement
 The current dominant bottleneck is therefore sharpened to:
 
 **state-dependent, cross-regime action-equivariant recovery dynamics: the same executable action delta must induce the correct support/reserve change as a function of the current observation-conditioned recovery state.**
+
+## V48.99 authoritative result + V48.100 OC-JRSD (2026-09-06)
+
+### V48.99 reliability / attribution decision
+
+The uploaded V48.99 OC-RJCA run is engineering-valid and scientifically attributable. Runtime-file SHA256 values match the uploaded repository; balanced/precision JSON/PT artifacts match the pipeline sentinel; each learned state contains exactly 1,404 trainable recovery-Jacobian parameters and no hidden planner/source/ERSS/Stage-I parameters. The held-out state/support/reserve population is exactly the V48.98 = V48.97.2 = V48.96 registered state-matched population. Nominal support/reserve predictions remain exact V48.97 identities (max absolute error 0), and every state AUC is unchanged. Therefore the scientific result can be attributed to the state-conditioned decoded-root Jacobian rather than evaluation drift or state-chart regression.
+
+### Strict V48.99 preregistered decision
+
+V48.99 is **`RECOVERY_JACOBIAN_ALIGNMENT_STOP`**.
+
+- State-chart preservation: **PASS**.
+- Support-Jacobian: **STOP**. Only balanced/certificate-Near satisfies the full AUC + within-group permutation gate. Several other cells show large true-minus-shuffled or top-1 improvements, but the score does not become a stable cross-regime support coordinate.
+- Reserve/debt-Jacobian: **STOP**. Four of eight cells satisfy the full AUC + permutation gate (balanced and precision dev-Contact + certificate-Near), below the registered 6/8 requirement and only two unique roles.
+- Final fixed-capacity source authorization: **NO**.
+
+Relative to V48.98, V48.99 reduces dense reserve/debt delta Huber by about 3.4--4.9% across dev/certificate and balanced/precision, while support-delta MAE worsens by about 3.0--3.9%. Thus observation conditioning helps the continuous reserve/debt coordinate but does not solve the support-establishment geometry.
+
+A second diagnostic is important and must not be mislabeled as GO: support top-1 material lift appears in most cells and reserve top-1 lift appears in most Contact/certificate-Near cells even when pooled AUC fails. This indicates local within-scene action ordering is often present, while the semantic coordinate is not globally calibrated across observation-conditioned groups. The correct conclusion is **local action information without one control-sufficient global chart**, not permission to tune a post-hoc gain or threshold.
+
+### New closure after V48.99
+
+The following family is now formally closed:
+
+1. **State-conditioned rank-2 decoded-root Jacobian adapters** of the V48.99 form `(A delta_a) odot C[1,h_D,h_R]` with fixed frozen ERSS allocation.
+2. Rank/width/context-depth/LR/epoch sweeps of that family, including adding more nominal-state context scalars or macro/regime shortcuts.
+3. Returning to source/admission heads, source residuals, DRS/DEP thresholds, support/reserve mixtures, boundary transport, proposal expansion, relative-ranker changes or regime experts in response to the STOP.
+4. Treating the remaining issue as a missing post-decoder Jacobian only.
+
+What is **not** closed is the mathematical requirement of action-equivariant recovery dynamics. V48.99 instead shows that learning a dynamics adapter after fixing the decoder/chart is insufficient.
+
+### Mechanism interpretation entering V48.100
+
+The V48.97--99 sequence now distinguishes **static sufficiency** from **control sufficiency**:
+
+- V48.97: a two-coordinate recovery chart can encode the nominal support/reserve state.
+- V48.98: a global state-independent tangent improves continuous reserve but fails joint action semantics.
+- V48.99: conditioning the tangent on the frozen recovery state improves several local action rankings and further lowers reserve regression error, yet cross-regime support/reserve AUC remains unstable.
+
+Therefore the remaining object is not another Jacobian formula. The representation map and the semantic chart must be learned so that the following diagram is jointly consistent:
+
+`(observation, candidate action) -> latent root measure -> (shared support, signed reserve/debt)`
+
+and the same coordinates must also satisfy candidate-minus-nominal action differences. This is the control-sufficient-state requirement: a representation is not sufficient merely because it predicts the current semantic state; its coordinates must also support stable action-conditioned changes.
+
+This interpretation is consistent with control-representation literature where useful latent states are learned jointly with transition/dynamics constraints rather than by fitting a state encoder and a dynamics model independently. V48.100 adopts that principle narrowly without reopening a broad encoder or source family.
+
+## V48.100 OC-JRSD — Observation-Consistent Joint Root-Semantic Decoder
+
+### Narrow representation reopening
+
+V48.100 is the preregistered **joint root-decoder semantic objective** after V48.99 STOP. It does not train a source, planner head, Stage-I encoder, root cross-attention weights, root self-attention weights, root FFN or root-logit head.
+
+The only trainable state is:
+
+1. a zero-initialized displacement of the existing L80 latent root queries, `delta_q`, shape `[1,K,d]`;
+2. the V48.97 two-coordinate ERSS semantic chart, initialized from the certified V48.97.2 state and then jointly optimized with `delta_q`.
+
+At the registered `K=8`, `d=192`:
+
+`root-query parameters = 8*192 = 1,536`
+
+`ERSS chart parameters = 4*192+2 = 770`
+
+`total joint representation parameters = 2,306`.
+
+No hidden width, rank, expert count or architecture sweep exists.
+
+### Control-sufficient commuting objective
+
+Let frozen structured memory be `M(o,a)`, the frozen decoder body with learnable query anchors be `F_deltaq`, and the jointly trained semantic chart be `g_phi`:
+
+`mu(o,a) = F_deltaq(M(o,a))`,
+
+`Z(o,a) = g_phi(mu(o,a)) = [D(o,a), R(o,a)]`.
+
+V48.100 jointly requires both:
+
+`Z(o,a) ~= Z_teacher(o,a)`
+
+and
+
+`Z(o,a)-Z(o,a0) ~= Z_teacher(o,a)-Z_teacher(o,a0)`.
+
+Thus the same coordinates must be statically meaningful and action-equivariant. Candidate/nominal root slots are never paired; only the final permutation-invariant semantic root measure is compared.
+
+The semantic metric is fixed from training labels only. Absolute support/reserve terms use centered RMS scales; candidate-minus-nominal support/reserve terms use RMS delta scales. The four normalized Huber terms are averaged equally. These scales are computed once, saved and never swept.
+
+### Why this is not a reopened source/head or V48.87 BARR
+
+- the output is only the two identified semantic coordinates `[D,R]`, not an admission score;
+- supervision is dense DRS/R_dep semantics already identified by V48.92--93, not aggregate source labels;
+- the trainable decoder degree of freedom is only the root-query anchor set plus the 770-parameter semantic chart;
+- decoder attention/FFN/logit weights remain frozen;
+- no root/option/regime id or future teacher metadata is input;
+- no root-slot correspondence is assumed;
+- candidate action dependence enters through the existing observation-conditioned structured memory, not a high-rank root x action residual.
+
+### Preregistered V48.100 evaluation
+
+The held-out state/support/reserve populations and within-scene-time permutation controls must exactly match V48.99/V48.98/V48.97.2/V48.96. Any population drift is engineering STOP.
+
+State GO uses the original recovery-chart gate:
+
+```text
+state AUC >= 0.70 in >=6/8 balanced/precision cells;
+>=3/4 unique roles including Near + Contact.
+```
+
+Support-action GO:
+
+```text
+true AUC >=0.65 AND true-minus-shuffled AUC >=+0.05
+in >=6/8 cells and >=3/4 roles including Near + Contact;
+within-group top1 lift >=+0.10 in >=4/8 cells,
+with Near + Contact represented.
+```
+
+Reserve/debt GO uses the same action gate.
+
+`JOINT_ROOT_SEMANTIC_DECODER_GO` requires **state GO + support GO + reserve GO**. Only full GO authorizes the single final fixed-capacity observation-aligned source experiment.
+
+Branch rules:
+
+- **Full GO:** one final fixed-capacity observation-aligned source, then freeze if the historical source gate passes; no sweep.
+- **State + reserve GO, support STOP:** retain the dynamically sufficient continuous chart, close smooth support learning and adjudicate one hybrid support-guard representation; no source/threshold sweep.
+- **State + support GO, reserve STOP:** retain support semantics and adjudicate one supported reserve-flow objective.
+- **Otherwise:** close the root-query + chart family and move only to a separately preregistered root cross-attention semantic objective; broad encoder/source retraining remains closed.
+
+### Main-line status entering V48.100
+
+Retained/promoted main mechanisms remain:
+
+`OC-MERO observation-consistent deployability`
+`+ actuator-realizable executable recovery`
+`+ counterfactual equivalence-partition probability-mass transport`
+`+ identifiability before capacity`
+`+ support-establishment / signed reserve-debt semantics`
+`+ recovery base-state chart`
+`+ role-isolated RIFA`.
+
+V48.99 **does not** promote the observation-conditioned Jacobian into the Main stack because it failed the full preregistered gate. Its durable contribution is the negative/diagnostic result that a frozen chart plus post-decoder local Jacobian is not control-sufficient.
+
+The dominant bottleneck is therefore sharpened to:
+
+**dynamical/control sufficiency of the recovery representation: one observation-conditioned root measure and semantic chart must simultaneously encode current support/reserve state and stable candidate-induced support/reserve changes across Near and Contact.**
