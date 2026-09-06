@@ -546,7 +546,7 @@ def main() -> int:
     ap.add_argument("--component-harm-proxy-tolerance", type=float, default=0.05)
     ap.add_argument("--dep-boundary-aligned", action="store_true")
     ap.add_argument("--gap-ordinal-only", action="store_true")
-    ap.add_argument("--absolute-feasibility-mode", choices=["off", "native", "learned"], default="off",
+    ap.add_argument("--absolute-feasibility-mode", choices=["off", "native", "learned", "support_reserve"], default="off",
                     help="v48.58 fixed Stage-II absolute feasibility source; never threshold-fitted.")
     ap.add_argument("--absolute-feasibility-threshold", type=float, default=0.5,
                     help="Fixed v48.58 admission boundary. Formal RIFA runs must keep 0.5.")
@@ -848,6 +848,8 @@ def main() -> int:
             if args.absolute_feasibility_mode == "off":
                 absolute_feasibility_probability = None
                 absolute_feasibility_pass = True
+                support_reserve_state = None
+                support_reserve_score = None
             elif args.absolute_feasibility_mode == "native":
                 r_native_for_admission = r.get("native_certificate")
                 if not isinstance(r_native_for_admission, list) or len(r_native_for_admission) < 2:
@@ -856,6 +858,22 @@ def main() -> int:
                 absolute_feasibility_pass = bool(
                     absolute_feasibility_probability >= float(args.absolute_feasibility_threshold)
                 )
+                support_reserve_state = None
+                support_reserve_score = None
+            elif args.absolute_feasibility_mode == "support_reserve":
+                from ocrap.v48_94_support_reserve_admission import support_reserve_admission
+                r_native_for_admission = r.get("native_certificate")
+                n_native_for_admission = nom.get("native_certificate")
+                if not isinstance(r_native_for_admission, list) or not isinstance(n_native_for_admission, list):
+                    raise ValueError("absolute-feasibility-mode=support_reserve requires candidate+nominal native certificates")
+                sr = support_reserve_admission(
+                    r_native_for_admission, n_native_for_admission,
+                    deployability_threshold=float(args.absolute_feasibility_threshold),
+                )
+                absolute_feasibility_probability = float(sr.score)
+                absolute_feasibility_pass = bool(sr.passed)
+                support_reserve_state = str(sr.state)
+                support_reserve_score = float(sr.score)
             else:
                 if r.get("absolute_feasibility_probability") is None:
                     raise ValueError("absolute-feasibility-mode=learned requires AFE checkpoint output")
@@ -863,6 +881,11 @@ def main() -> int:
                 absolute_feasibility_pass = bool(
                     absolute_feasibility_probability >= float(args.absolute_feasibility_threshold)
                 )
+                support_reserve_state = None
+                support_reserve_score = None
+            if args.absolute_feasibility_mode == "off":
+                support_reserve_state = None
+                support_reserve_score = None
             pairs.append({
                 "candidate": r["candidate"], "macro": r["macro"], "deviation": r["deviation"],
                 "pred_adv": pred_adv, "rank_adv": rank_adv, "delta_std": delta_std,
@@ -870,6 +893,10 @@ def main() -> int:
                 "absolute_feasibility_mode": args.absolute_feasibility_mode,
                 "absolute_feasibility_probability": absolute_feasibility_probability,
                 "absolute_feasibility_pass": absolute_feasibility_pass,
+                "support_reserve_state": support_reserve_state,
+                "support_reserve_score": support_reserve_score,
+                "native_candidate_certificate": (None if r_native is None else [float(x) for x in r_native]),
+                "native_nominal_certificate": (None if n_native is None else [float(x) for x in n_native]),
                 "quantifier_best_common_viability": r.get("quantifier_best_common_viability"),
                 "quantifier_universal_failure": r.get("quantifier_universal_failure"),
                 "quantifier_positive_option_count": r.get("quantifier_positive_option_count"),

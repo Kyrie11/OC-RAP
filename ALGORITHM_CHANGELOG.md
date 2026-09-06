@@ -10090,3 +10090,174 @@ V48.93 itself never authorizes boundary transport, relative-ranker changes, exte
 
 ### Performance policy
 V48.93 reuses the 4,823-row V48.92 audit and performs only scalar exact PCD interventions. It performs no raw replay and no model training, so it avoids the multi-hour V48.91 Waymax cost by construction. No future/horizon/teacher approximation is introduced.
+
+## V48.93 authoritative result + V48.94 OC-SRCA (2026-09-05)
+
+### V48.93 engineering / attribution decision
+The uploaded V48.93 OC-FMCA run is engineering-valid and attribution-ready. Runtime provenance and artifact SHA contracts are internally consistent, `planner_parameters_trained=0`, no teacher label/model-input mutation occurred, no raw WOMD replay or dataset reconstruction/reselection occurred, boundary transport stayed OFF, relative ranking stayed frozen, and no regime ID was used. The factor intervention reconstructs the production PCD candidate-minus-nominal advantage to machine precision (`max_advantage_identity_error ~= 1.11e-16`).
+
+### Strict preregistered V48.93 decision
+No single PCD factor is jointly necessary and sufficient across the registered Near/Contact roles:
+
+- **DRS single factor:** STOP as a universal Main mediator. Necessity/sufficiency is strong in some roles (`0.80` dev-Near, `0.742` certificate-Contact) but does not meet the preregistered >=3/4 cross-regime necessity gate; harmful single-factor false rescue remains <=0.059.
+- **Deployability single factor:** STOP as a universal Main mediator. Necessity/sufficiency is only about `0.19--0.42` across roles although false rescue is zero.
+- **GAP single factor:** STOP as a positive mediator. Necessity is exactly zero in all four roles; its useful signal remains rejector/quality semantics.
+- **DRS + deployability complementarity:** **GO.** `(DRS necessary OR deployability necessary)` covers `1.0/1.0/1.0/0.935` of safe-positive rows for dev-Near/dev-Contact/certificate-Near/certificate-Contact; GAP necessity is zero in all roles; unexplained/multi-factor mass is <=0.065; DRS-activation has power in all four roles and deployability-gain has preregistered power in three roles including Near and Contact.
+
+Formal status is `PCD_FACTOR_COMPLEMENTARITY_GO`. V48.93 itself still authorizes no source training, no boundary transport, no relative-ranker change, no regime-conditioned policy and no dataset reconstruction.
+
+### Mechanistic interpretation
+The safe-positive factorization is especially clean in this cohort:
+
+```text
+DRS-activation rows:
+  nominal teacher DRS = 0 exactly
+  candidate teacher DRS = 1 exactly
+
+Deployability-gain rows:
+  nominal teacher DRS = 1 exactly
+  candidate teacher DRS = 1 exactly
+```
+
+Thus the V48.93 result supports a **decision-state complementarity**, not a Near/Contact router:
+
+1. if the pre-intervention/nominal state lacks shared executable recovery support, a beneficial action must first establish support;
+2. once shared support is already present, further positive action benefit is carried by deployability reserve/debt improvement;
+3. GAP is not a positive generator and remains a quality/rejection coordinate.
+
+This is a statement about the registered PCD decision semantics. It does **not** prove that the frozen planner's predicted DRS/deployability coordinates can observe the same state transition. That deployable observability is the next required causal layer.
+
+### New closures after V48.93
+All historical exclusions remain active. V48.93 additionally closes:
+
+1. **DRS-only absolute source as a universal Main family.** It failed the single-factor necessity gate; do not rescue it with a DRS threshold/gain/temperature sweep.
+2. **Deployability-only absolute source as the final universal mechanism.** Teacher-side DEP is strongly selective but is not necessary/sufficient for the DRS-establishment mode; do not interpret near-perfect V48.92 DEP AUC as proof that the historical native `R_dep` source is solved.
+3. **GAP-only positive recovery source.** GAP necessity is 0/4 roles; retain GAP only as non-compensatory quality/rejection information unless a future preregistered experiment proves otherwise.
+4. **Learned DRS/DEP mixing weights, learned mode router, or Near/Contact-specific factor switch.** The supported switch is a physical/decision state, not a learned or regime-conditioned mixture.
+5. **Post-hoc O82/P83/physical-response/source composition fishing.** V48.93 only authorizes one fixed-capacity complementarity-aligned experiment.
+
+Still prohibited: regime routers/experts/thresholds/budgets; LR/gain/threshold/horizon/capacity grids; proposal/top-K/option-library expansion; generic AFE/MLP; broad encoder/root retraining; privileged future/teacher-metadata inputs or distillation; class-local/path-stop Main; post-hoc hard control veto; CV/CA and external ball/box/hull/anchor/jerk branches; B1/B2/high-order sweeps; option-wise scalar/typed gain transport; frozen structured-tail rank/width/depth sweeps; truth-floor/cap/switch-inverse refinement; reopening V48.91 root-local physical-response learning; boundary transport before absolute-source GO; relative-ranker modification before source freeze; and dataset reconstruction.
+
+## V48.94 OC-SRCA — Observation-Consistent Support-Reserve Complementarity Admission
+
+V48.94 is the single fixed-capacity experiment authorized by `PCD_FACTOR_COMPLEMENTARITY_GO`. It deliberately introduces **zero new learned planner parameters** and asks whether the V48.93 teacher-side decision state is already observable in the frozen native OC-MERO certificate.
+
+### Runtime-observable coordinates
+The historical native certificate is reused without retraining:
+
+```text
+coordinate 0: hard shared-recovery feasible root mass (native DRS-like support)
+coordinate 1: sigmoid(R_dep)
+coordinate 2: smooth shared-feasible mass
+coordinate 3: exp(-gap) quality
+```
+
+No teacher DRS, teacher R_dep, mediation label, structural metadata, future label, regime ID, root ID or option ID is used by the V48.94 source.
+
+### Parameter-free shared decision-state switch
+Let `D0` be the frozen **nominal** hard shared-recovery mass, `Da` the candidate hard support mass and `Fa=sigmoid(R_dep,a)`.
+
+The state switch is the same for every candidate in a scene/time group:
+
+```text
+D0 == 0:
+  state = support_establishment
+  score = Da
+  pass  = (Da > 0)
+
+D0 > 0:
+  state = reserve_debt
+  score = Da * Fa
+  pass  = (Da > 0) AND (Fa >= 0.5)
+```
+
+Both boundaries are inherited semantic boundaries, not fitted hyperparameters:
+
+- `D=0` is the exact support-existence boundary of the hard native certificate;
+- `F=0.5` is exactly the historical `R_dep=0` boundary.
+
+The reserve/debt branch is non-compensatory: a candidate that destroys shared support cannot be rescued by positive deployability. GAP is recorded for diagnostics but does not create positive admission in V48.94, consistent with V48.93's GAP-nonmediator result.
+
+This is **not** a regime-conditioned policy. The switch is determined by a pre-intervention observation-derived recovery-support state and is broadcast to all candidates in the same group. Safe, Near and Contact use the same mechanism; in Safe/support-rich states it naturally reduces to support-preserving deployability admission.
+
+### Causal isolation
+V48.94 retrains nothing. It reruns the frozen L80 checkpoint only to materialize the native certificate and requires the re-evaluated top-K candidate set to be exactly identical to the historical L80 proposal set. Balanced/precision are evaluated independently on dev-Near, dev-Contact, certificate-Near and certificate-Contact. V48.93 labels are joined only offline for audit/GO-STOP decisions and are never model inputs.
+
+### V48.94 preregistered gates
+**Deployable mode-observability gate** (unique roles, deduplicated across balanced/precision):
+
+```text
+predicted nominal-support state vs V48.93 mediation mode accuracy >= 0.75
+in >=3/4 roles, including Near + Contact,
+with >=5 labeled safe-positive mode rows in each passing role.
+```
+
+**Complementarity mechanism GO** requires all of:
+
+```text
+safe-positive-vs-harmful source AUC delta vs native DEP:
+  >0 in >=6/8 cells,
+  >=+0.01 in >=4/8 cells,
+  material cells include Near + Contact;
+
+harmful pass:
+  <=0.25 in 8/8,
+  <= native +0.02 in 8/8;
+
+teacher-infeasible pass:
+  <=0.25 in 8/8,
+  <= native +0.02 in 8/8;
+
+teacher-feasible-vs-infeasible AUC:
+  no worse than native by >0.01 in 8/8.
+```
+
+**Absolute-source freeze GO** is intentionally stricter and is the internal stopping condition for this source family:
+
+```text
+mode-observability GO;
+safe-positive-vs-harmful AUC delta >0 in 8/8;
+>=+0.01 in >=6/8;
+safe-positive pass nondecrease in 8/8;
+>=+0.05 in >=4/8 with Near + Contact represented;
+harmful/TI selectivity gates all pass;
+teacher-feasibility AUC nonregression all pass.
+```
+
+Branch rules:
+
+```text
+SUPPORT_RESERVE_ABSOLUTE_SOURCE_GO
+  -> STOP internal absolute-source design;
+     freeze source;
+     verify frozen RIFA;
+     run paired Safe non-interference / Near critical-safety / Contact post-impact closed loop;
+     then external baselines.
+
+SUPPORT_RESERVE_COMPLEMENTARITY_MECHANISM_GO_SOURCE_STOP
+  -> retain only the parameter-free support-state principle;
+     do not add capacity/weights/thresholds;
+     audit why powered safe-positive admission did not reach the freeze bar.
+
+SUPPORT_RESERVE_COMPLEMENTARITY_STOP
+  -> close this support-reserve source realization;
+     do not sweep DRS/DEP thresholds or capacities;
+     audit whether the frozen native certificate actually contains the action-observable support/reserve information before any new source.
+```
+
+Boundary transport remains OFF in every V48.94 branch. Dataset reconstruction remains forbidden. No external baseline is authorized until `SUPPORT_RESERVE_ABSOLUTE_SOURCE_GO` freezes the absolute source.
+
+### CCF-A method-line status
+The high-level paper line remains stable:
+
+```text
+observation-consistent deployability
+-> actuator-realizable executable recovery
+-> counterfactual equivalence-partition transport
+-> identifiability before capacity
+-> support-establishment / reserve-debt factor complementarity
+-> role-isolated absolute admission
+-> unified Safe / Near / Contact deployment
+```
+
+The contribution is not a two-branch heuristic. The scientific claim under test is that deployable recovery benefit has an observation-state-dependent complementarity: an action must first make shared recovery support exist, then preserve that support while increasing positive reserve or repaying negative debt. The state variable is shared across regimes and comes from the same native OC-MERO information pattern.
