@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import torch
 from torch import nn
 
-ENGINEERING_VERSION = "v48.97.1-OC-ERSS-EVALFIX"
+ENGINEERING_VERSION = "v48.97.2-OC-ERSS-STRATAFIX"
 ALGORITHM_NAME = "Observation-Consistent Executable-Recovery Sufficient State"
 
 

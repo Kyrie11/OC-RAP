@@ -324,6 +324,25 @@ def _role_rows(
             "teacher_harmful": bool(v.get("teacher_harmful")),
             "mediation_mode": str(v.get("mediation_mode")),
         })
+    # Reconstruct the exact V48.96 group-level mediation stratum.  V48.96
+    # evaluated support-action only inside groups whose unique safe-positive
+    # mediation mode was DRS activation, and reserve/debt only inside groups
+    # whose unique safe-positive mode was deployability gain.  The V48.97
+    # representation must be judged on that identical population.
+    by: dict[tuple[str, int], list[dict[str, Any]]] = defaultdict(list)
+    for r in out:
+        by[(str(r["scene"]), int(r["time"]))].append(r)
+    for rs in by.values():
+        safe_modes = {
+            str(r["mediation_mode"])
+            for r in rs
+            if (not bool(r["nominal"]))
+            and bool(r["safe_positive"])
+            and str(r["mediation_mode"]) in {"drs_activation", "deployability_gain"}
+        }
+        group_mode = next(iter(safe_modes)) if len(safe_modes) == 1 else None
+        for r in rs:
+            r["group_mode"] = group_mode
     return out
 
 
@@ -357,6 +376,14 @@ def _evaluation_contract(rows: list[dict[str, Any]], role: str) -> dict[str, Any
         "harmful_rows": len(harmful),
         "drs_activation_rows": len(drs),
         "deployability_gain_rows": len(dep),
+        "drs_activation_groups": sum(
+            1 for rs in by.values()
+            if rs and rs[0].get("group_mode") == "drs_activation"
+        ),
+        "deployability_gain_groups": sum(
+            1 for rs in by.values()
+            if rs and rs[0].get("group_mode") == "deployability_gain"
+        ),
         "missing_nominal_groups": missing_nominal[:10],
         "duplicate_nominal_groups": duplicate_nominal[:10],
         "valid": True,
@@ -413,6 +440,26 @@ def candidate_only_label_join_synthetic_check() -> bool:
     )
 
 
+def action_strata_match_v48_96_synthetic_check() -> bool:
+    # One DRS-mode group and one DEP-mode group.  Each contains a harmful
+    # candidate.  The support probe must see only the DRS-group harmful row;
+    # the reserve probe must see only the DEP-group harmful row.
+    rows = [
+        {"scene":"s1","time":1,"candidate":0,"nominal":True,"support":0.2,"reserve":-0.3,"safe_positive":False,"teacher_harmful":False,"mediation_mode":"nominal","group_mode":"drs_activation"},
+        {"scene":"s1","time":1,"candidate":1,"nominal":False,"support":0.8,"reserve":0.1,"safe_positive":True,"teacher_harmful":False,"mediation_mode":"drs_activation","group_mode":"drs_activation"},
+        {"scene":"s1","time":1,"candidate":2,"nominal":False,"support":0.1,"reserve":-0.8,"safe_positive":False,"teacher_harmful":True,"mediation_mode":"redundant_or_interaction","group_mode":"drs_activation"},
+        {"scene":"s2","time":2,"candidate":0,"nominal":True,"support":0.9,"reserve":0.1,"safe_positive":False,"teacher_harmful":False,"mediation_mode":"nominal","group_mode":"deployability_gain"},
+        {"scene":"s2","time":2,"candidate":3,"nominal":False,"support":0.95,"reserve":0.8,"safe_positive":True,"teacher_harmful":False,"mediation_mode":"deployability_gain","group_mode":"deployability_gain"},
+        {"scene":"s2","time":2,"candidate":4,"nominal":False,"support":0.7,"reserve":-0.5,"safe_positive":False,"teacher_harmful":True,"mediation_mode":"redundant_or_interaction","group_mode":"deployability_gain"},
+    ]
+    sup, _ = _action_metric(rows, "drs_activation", "support")
+    res, _ = _action_metric(rows, "deployability_gain", "reserve")
+    return bool(
+        sup["rows"] == 2 and sup["positive_rows"] == 1 and sup["negative_rows"] == 1
+        and res["rows"] == 2 and res["positive_rows"] == 1 and res["negative_rows"] == 1
+    )
+
+
 def _permute_scores_within_group(rows: list[dict[str, Any]], scores: np.ndarray) -> np.ndarray:
     out = np.asarray(scores, dtype=np.float64).copy()
     by: dict[tuple[str, int], list[int]] = defaultdict(list)
@@ -440,6 +487,12 @@ def _action_metric(rows: list[dict[str, Any]], mode: str, score_name: str) -> tu
             continue
         n = nom.get((r["scene"], int(r["time"])))
         if n is None:
+            continue
+        # Exact V48.96 evaluation strata: support-action is judged only
+        # inside DRS-activation groups and reserve/debt only inside
+        # deployability-gain groups.  Harmful candidates from other group
+        # states must not enter the negative population.
+        if r.get("group_mode") != mode:
             continue
         positive = bool(r["safe_positive"] and r["mediation_mode"] == mode)
         negative = bool(r["teacher_harmful"])
@@ -484,7 +537,7 @@ def _state_metric(rows: list[dict[str, Any]]) -> dict[str, Any]:
         n = next((r for r in rs if r["nominal"]), None)
         if n is None:
             continue
-        modes = {r["mediation_mode"] for r in rs if r["safe_positive"] and r["mediation_mode"] in {"drs_activation", "deployability_gain"}}
+        modes = {r.get("group_mode") for r in rs if r.get("group_mode") in {"drs_activation", "deployability_gain"}}
         if len(modes) != 1:
             continue
         mode = next(iter(modes))

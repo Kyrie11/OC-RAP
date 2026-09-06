@@ -11,7 +11,7 @@ from ocrap.v48_97_executable_recovery_state import (
 
 
 def test_v48_97_engineering_version():
-    assert ENGINEERING_VERSION == "v48.97.1-OC-ERSS-EVALFIX"
+    assert ENGINEERING_VERSION == "v48.97.2-OC-ERSS-STRATAFIX"
 
 
 def test_v48_97_parameter_count_fixed():
@@ -87,3 +87,26 @@ def test_v48_97_empty_eval_is_not_scientific_stop():
     errors = _evaluation_errors(obj, "balanced")
     assert errors
     assert any("state_empty_or_auc_null" in e for e in errors)
+
+
+def test_v48_97_action_strata_match_v48_96():
+    from tools.run_v48_97_executable_recovery_state import action_strata_match_v48_96_synthetic_check
+    assert action_strata_match_v48_96_synthetic_check()
+
+
+def test_v48_97_comparison_rejects_strata_drift():
+    from tools.compare_v48_97_erss import _strata_identity_errors
+    roles = ("dev_near", "dev_contact", "certificate_near", "certificate_contact")
+    def cell(nneg):
+        return {
+            "state": {"rows": 2, "drs_state_rows": 1, "dep_state_rows": 1, "auc": 0.8},
+            "support_true": {"rows": 2+nneg, "positive_rows": 2, "negative_rows": nneg, "powered_groups": 1, "auc": 0.7},
+            "support_shuffled": {"rows": 2+nneg, "positive_rows": 2, "negative_rows": nneg, "powered_groups": 1, "auc": 0.5},
+            "reserve_true": {"rows": 2+nneg, "positive_rows": 2, "negative_rows": nneg, "powered_groups": 1, "auc": 0.7},
+            "reserve_shuffled": {"rows": 2+nneg, "positive_rows": 2, "negative_rows": nneg, "powered_groups": 1, "auc": 0.5},
+        }
+    obj = {"cells": {r: cell(3) for r in roles}}
+    v96 = {"cells": {"balanced": {r: cell(1) for r in roles}}}
+    errs = _strata_identity_errors(obj, v96, "balanced")
+    assert errs
+    assert any("negative_rows" in e for e in errs)

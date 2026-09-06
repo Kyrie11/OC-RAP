@@ -86,6 +86,10 @@ def main() -> int:
             and v96.get("preregistered_status") == "FROZEN_ROOT_SUPPORT_RESERVE_OBSERVABILITY_STOP"
         ):
             errors.append("v48_96_stop_prerequisite")
+        expected_v96_comp = ((v96.get("artifacts") or {}).get("comparison") or {}).get("sha256")
+        actual_v96_comp = comp.get("v48_96_comparison_sha256")
+        if not expected_v96_comp or actual_v96_comp != expected_v96_comp:
+            errors.append("v48_96_evaluation_population_provenance")
     artifacts = {}
     for name, p in (
         ("runtime", a.runtime), ("balanced", a.balanced), ("precision", a.precision),

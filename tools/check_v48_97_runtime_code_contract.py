@@ -11,7 +11,10 @@ from ocrap.v48_97_executable_recovery_state import (
     ExecutableRecoverySufficientState,
     root_permutation_invariance_check,
 )
-from tools.run_v48_97_executable_recovery_state import candidate_only_label_join_synthetic_check
+from tools.run_v48_97_executable_recovery_state import (
+    candidate_only_label_join_synthetic_check,
+    action_strata_match_v48_96_synthetic_check,
+)
 
 FILES = [
     "scripts/run_v48_97_dcp_drfc_bcde_rifa_erss_two_gpu.sh",
@@ -52,6 +55,9 @@ def main() -> int:
     join_ok = candidate_only_label_join_synthetic_check()
     if not join_ok:
         errors.append("candidate_only_v93_join_preserves_nominal")
+    strata_ok = action_strata_match_v48_96_synthetic_check()
+    if not strata_ok:
+        errors.append("action_evaluation_strata_match_v48_96")
     out = {
         "schema": "ocrap-v48.97-runtime-code-contract-v1",
         "engineering_version": ENGINEERING_VERSION,
@@ -86,6 +92,7 @@ def main() -> int:
             "boundary_transport_off": True,
             "candidate_only_v93_join_preserves_nominal": join_ok,
             "empty_evaluation_fail_closed": True,
+            "action_evaluation_strata_match_v48_96": strata_ok,
         },
         "test_roots_read": False,
     }

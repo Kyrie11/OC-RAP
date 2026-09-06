@@ -10566,3 +10566,21 @@ The following are unchanged from V48.97.0:
 
 ### Branch rule
 **Do not analyze V48.97.0 as GO or STOP and do not design V48.98 from it.**  Rerun the same V48.97 OC-ERSS scientific experiment under V48.97.1.  Only a complete V48.97.1 pipeline with non-empty evaluation contracts and `valid=true / attribution_ready=true` may authorize either the final-source branch or the representation-learning branch.
+
+
+## V48.97.2 — OC-ERSS-STRATAFIX (engineering-only, 2026-09-06)
+
+### Reliability verdict on uploaded V48.97.1 result
+The uploaded V48.97.1 run is **not scientifically attributable**.  V48.97.1 correctly fixed the candidate-only V48.93 join and restored non-empty nominal references, but its held-out action evaluation silently drifted from the preregistered V48.96 population.  V48.96 defines support-action negatives only inside groups whose unique safe-positive mediation state is `drs_activation`, and reserve/debt negatives only inside `deployability_gain` groups.  V48.97.1 instead admitted every harmful candidate in the role into both action probes.  This expanded negative rows from the registered small state-matched sets to hundreds/thousands and can materially change AUC/top-1 and therefore GO/STOP.
+
+### Engineering fix
+V48.97.2 keeps the V48.97 OC-ERSS representation, 770 parameters, training loss, train/dev/certificate cohort, optimizer, epochs and all preregistered thresholds unchanged.  It changes evaluation/provenance only:
+
+1. Reconstruct the exact V48.96 `group_mode` from the unique safe-positive V48.93 mediation mode in each scene-time group.
+2. Support-action evaluation uses only `drs_activation` groups; reserve/debt evaluation uses only `deployability_gain` groups.  Harmful candidates from other states are excluded exactly as in V48.96.
+3. Comparison fail-closes unless state/support/reserve `rows`, positive/negative counts and powered-group counts are **identical** to V48.96 for every balanced/precision role.
+4. Comparison records the V48.96 comparison SHA; pipeline requires it to equal the comparison artifact SHA frozen by the V48.96 pipeline sentinel.
+5. Runtime preflight adds a synthetic state-strata isolation check.
+
+### Scientific branch
+**Do not analyze V48.97.1 as GO or STOP and do not design V48.98 from it.**  Rerun the unchanged V48.97 OC-ERSS scientific experiment under V48.97.2.  Only a complete `.2` pipeline with exact V48.96 evaluation-population identity may authorize either the one-final-source branch or the narrow Stage-I/root representation-learning branch.

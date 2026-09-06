@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +47,40 @@ def _evaluation_errors(obj: dict[str, Any], variant: str) -> list[str]:
     return errors
 
 
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _strata_identity_errors(obj: dict[str, Any], v96: dict[str, Any], variant: str) -> list[str]:
+    """Require V48.97 held-out evaluation population to equal V48.96 exactly."""
+    errors: list[str] = []
+    vcells = (v96.get("cells") or {}).get(variant) or {}
+    cells = obj.get("cells") or {}
+    for role in ROLES:
+        a = cells.get(role) or {}
+        b = vcells.get(role) or {}
+        for metric_name, fields in (
+            ("state", ("rows", "drs_state_rows", "dep_state_rows")),
+            ("support_true", ("rows", "positive_rows", "negative_rows", "powered_groups")),
+            ("support_shuffled", ("rows", "positive_rows", "negative_rows", "powered_groups")),
+            ("reserve_true", ("rows", "positive_rows", "negative_rows", "powered_groups")),
+            ("reserve_shuffled", ("rows", "positive_rows", "negative_rows", "powered_groups")),
+        ):
+            aa = a.get(metric_name) or {}
+            bb = b.get(metric_name) or {}
+            for field in fields:
+                if int(aa.get(field, -1)) != int(bb.get(field, -2)):
+                    errors.append(
+                        f"{variant}:{role}:{metric_name}:{field}:"
+                        f"v97={aa.get(field)}!=v96={bb.get(field)}"
+                    )
+    return errors
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--balanced", type=Path, required=True)
@@ -63,6 +98,8 @@ def main() -> int:
         errors.append("v48_96_stop_prerequisite_missing")
     errors.extend(_evaluation_errors(b, "balanced"))
     errors.extend(_evaluation_errors(p, "precision"))
+    errors.extend(_strata_identity_errors(b, v96, "balanced"))
+    errors.extend(_strata_identity_errors(p, v96, "precision"))
 
     state_cells: list[list[str]] = []
     support_cells: list[list[str]] = []
@@ -158,6 +195,8 @@ def main() -> int:
         "dataset_reconstruction": False,
         "dataset_reselection": False,
         "dense_metrics": dense,
+        "v48_96_comparison_sha256": _sha256(a.v48_96_comparison),
+        "evaluation_population_contract": "exact_v48_96_state_support_reserve_strata",
         "preregistered_decision": decision,
     }
     a.output.parent.mkdir(parents=True, exist_ok=True)
