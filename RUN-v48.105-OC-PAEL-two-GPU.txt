@@ -1,0 +1,17 @@
+cd /home/senzeyu2/code/OC-RAP
+export PYTHONPATH="$PWD/src:$PWD${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONNOUSERSITE=1
+
+python tools/check_v48_105_runtime_code_contract.py \
+  --repo "$PWD" \
+  --output /home/senzeyu2/code/OC-RAP/runs/OC-RAP-v48.105-runtime-code-contract.manual.json
+
+# Only continue if valid=true / attribution_ready=true / errors=[].
+GPU0=0 GPU1=1 \
+BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+  bash scripts/run_v48_105_dcp_drfc_bcde_rifa_pael_two_gpu.sh
+
+# Upload after completion:
+# runs/OC-RAP-v48.105-PAEL-balanced.json
+# runs/OC-RAP-v48.105-PAEL-precision.json
+# runs/OC-RAP-v48.105-OC-PAEL-audits.zip

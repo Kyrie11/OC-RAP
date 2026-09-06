@@ -11586,3 +11586,118 @@ In addition to all historical exclusions:
 - do not unfreeze more than the final Stage-I Transformer block;
 - do not sweep last-block depth, heads, LR, epochs or residual scale;
 - do not reopen source/boundary transport/relative ranker/regime-specific policy/dataset reconstruction before a representation-level Full GO.
+
+## V48.104 authoritative result + V48.105 OC-PAEL (2026-09-06)
+
+### V48.104 reliability / attribution decision
+
+The uploaded hotfixed V48.104 OC-NICR artifacts are **engineering-valid and scientifically attributable**.  The runtime contract is `valid=true / attribution_ready=true / errors=[]`; every active V48.104 runtime source hash matches the uploaded hotfix repository.  The pipeline SHA manifest matches the separately uploaded balanced/precision JSON/PT, comparison and runtime files, and the audit ZIP contains byte-identical copies.  Each PT stores only the preregistered adapted historical final Stage-I Transformer block (12 standard Transformer parameters; 444,864 parameters at `d=192`) plus provenance/training metadata.  It does not contain the V48.103 readout, source, planner or root-decoder weights.
+
+The hotfix is confirmed active: nominal residual centering is performed before adding the residual to the frozen base path, so nominal memory identity is bit-exact rather than tolerance-relaxed.  The result records `initial_v103_function_identity=true`, `nominal_memory_exact_identity=true`, `prelast_reconstruction_max_abs=0`, and `state_metrics_exact_v103.valid=true` at `1e-7`.  Evaluation populations are unchanged and all role contracts are valid.  No engineering rerun is required.
+
+### Strict V48.104 preregistered decision
+
+Official status is **`NOMINAL_INVARIANT_CONTROL_REFINEMENT_STOP`**.  Under the preregistered Full-GO / partial-GO / otherwise taxonomy, this is the formal **STOP branch**, not a partial-promotion branch:
+
+- State: GO by construction/identity (`6/8`, all four roles represented).
+- Support-action: STOP (`4/8` absolute action-gate cells; top-1 material signal `7/8`).
+- Reserve/debt: STOP (`5/8` absolute action-gate cells; top-1 material signal `6/8`).
+- Full State + Support + Reserve: STOP.
+
+The concrete next branch is therefore the preregistered `pre-last-token action equivariance/localization audit`; broad encoder, source, boundary transport and regime routing remain closed.
+
+### What V48.104 establishes
+
+1. **Nominal-invariant response learning is a real positive mechanism.**  Unlike V48.103, where absolute support improved while delta-support worsened, V48.104 preserves the V48.103 state exactly and simultaneously reduces both registered response losses.  Balanced dev delta-reserve decreases about 11.0% and delta-support about 10.2%; precision decreases about 11.4% and 8.2%, respectively.  Hence the V48.103 state/response optimization interference is causally removed by structural nominal invariance plus a response-only objective.
+2. **Loss-level action-response learnability is still weaker than cross-cell control sufficiency.**  Dense response losses improve monotonically through epoch 59/60, yet the absolute action gates do not close.  The residual defect is not a no-gradient or static-state corruption problem; it is a transfer/orientation problem in the action-conditioned latent geometry.
+3. **Near state preservation is no longer the bottleneck.**  Dev-Near state remains exactly V48.103 (1.00 balanced / 0.857 precision).  Balanced dev-Near support recovers from 0.508 to 0.656 and certificate-Near rises to 0.836/0.782, but precision dev-Near falls to 0.563.  The remaining Near defect is stable, variant-independent positive-support response geometry under an already-protected nominal state.
+4. **Contact debt generalization materially improves but remains below the absolute gate.**  Certificate-Contact reserve rises from ~0.306/0.319 to ~0.486/0.514 and its true-minus-shuffled margin becomes +0.153 in both variants, while dev-Contact reserve becomes 0.641/0.703.  The dev-to-certificate reserve AUC gap shrinks by roughly 65% (balanced) and 55% (precision).  This is strong positive evidence that nominal-invariant response refinement attacks the right mechanism, but certificate-Contact remains below 0.65 and therefore is not promoted.
+5. **The durable theory is sharpened:** `static sufficiency != control sufficiency`, `parameter factorization != representation factorization`, and now additionally `response-loss reduction != cross-distribution action equivariance`.  Control sufficiency requires a nominally invariant state plus an action-response coordinate whose orientation is stable across roles, variants and dev/certificate populations.
+
+### Promotion / closure after V48.104
+
+Promote as a **representation invariant / scaffold**, but not yet as a Main-Stack production block:
+
+- exact nominal-memory preservation by counterfactual centering;
+- candidate-minus-nominal response semantics;
+- response-only adaptation once nominal state is structurally protected;
+- separate support-establishment and signed reserve/debt evaluation with within-group permutation controls.
+
+Do **not** promote the concrete V48.104 last-block OC-NICR module to Main because Support and Reserve both formally STOP.  Do not continue its LR/epoch/depth/head/residual-scale family.  The last-block refinement family is closed by preregistration.
+
+## V48.105 OC-PAEL — Observation-Consistent Pre-Last Action-Equivariance Localization Audit
+
+### Causal question
+
+V48.104 shows that the final Stage-I block can reduce both response losses while preserving nominal state, but cannot make the response coordinate pass the cross-cell gates.  The next question is therefore not whether more final-block capacity helps.  It is:
+
+> **Does the frozen representation immediately before the historical final Stage-I Transformer block already expose a transferable candidate-minus-nominal support/reserve statistic, and if so is that statistic localized in the action/interaction token subspace?**
+
+This audit isolates the historical final Stage-I block by reusing **exactly the V48.102 summary operator and linear-probe recipe one layer earlier**.  No planner/model parameter is trained.
+
+### Pre-last representation and fixed localization partition
+
+Let `H^-(a)` denote the token set immediately before the historical final Stage-I Transformer block.  V48.105 applies the exact V48.102 deterministic summary:
+
+- keep the 11 fixed leading positions (`CLS + 10 semantic tokens`) explicitly;
+- summarize only the unordered agent token set with `mean/std/max/min`;
+- at `d=192`, the summary dimension remains `15d = 2880`.
+
+Candidate action features reuse the V48.102 definitions:
+
+`z0 = Phi(H^-(a0))`
+
+`Delta z(a) = Phi(H^-(a)) - Phi(H^-(a0))`
+
+`z_ctx(a) = Delta z(a) * (1 + tanh(z0))`.
+
+The same fixed linear probe recipe, train populations, target-specific State/Support/Reserve semantics and within-group action permutation null from V48.102 are reused.  This creates a direct layer-location comparison between V48.102 final Stage-I memory and V48.105 pre-last memory rather than a new capacity search.
+
+The 2880-D summary is partitioned *a priori* into five architecture-defined diagnostic groups:
+
+- `cls`: CLS token;
+- `ego_history`: ego, prefix parameters, macro/scalars and prefix-state tokens;
+- `control`: control token;
+- `scene_context`: agent-summary, BEV, route, map and dynamics tokens;
+- `agents`: permutation-invariant moments of the agent-token set.
+
+A single preregistered **action-interaction subspace** is also evaluated: `control + scene_context + agents` (1920 dimensions at `d=192`), excluding CLS and ego/history.  This is fixed before results; no best-token selection is allowed.  Per-group action-energy share and linear CKA versus the target-specific response label are diagnostic only and never substitute for the preregistered AUC gates.
+
+### V48.105 scientific gates
+
+The global pre-last summary uses the unchanged gates:
+
+```text
+State GO:
+  AUC >= 0.70 in >=6/8 cells;
+  >=3/4 roles including Near + Contact.
+
+Support GO:
+  AUC >=0.65 AND true-minus-shuffled >=+0.05 in >=6/8;
+  >=3/4 roles including Near + Contact;
+  top1 lift >=+0.10 in >=4/8 with Near + Contact.
+
+Reserve/debt GO:
+  same action gate.
+```
+
+The fixed action-interaction subspace is evaluated with the same Support/Reserve gates.  It is not allowed to replace a global Full GO; it only distinguishes nuisance/global-summary interference from an upstream absence of stable response geometry.
+
+### V48.105 preregistered branches
+
+- **Global pre-last State + Support + Reserve GO:** the response statistic is already sufficient before the historical final block.  Close encoder training and authorize exactly one direct **nominal-invariant pre-last response transport** into the retained factorized recovery coordinate; no source/capacity sweep.
+- **Global State + Support GO, Reserve STOP:** retain pre-last support sufficiency and adjudicate only one signed reserve/debt localization objective.
+- **Global State + Reserve GO, Support STOP:** retain pre-last reserve sufficiency and adjudicate only one support-establishment localization objective.
+- **Global action axes fail, but both Support and Reserve GO in the fixed action-interaction subspace:** the response statistic is localized but diluted by nuisance coordinates.  Authorize one fixed-subspace nominal-invariant response transport; no learned token router or subset search.
+- **Otherwise:** pre-last action equivariance is insufficient.  Close the pre-last readout family and move exactly one block earlier with the same action-interaction audit.  This is still an audit, not broad encoder training.
+
+### New exclusions after V48.104
+
+In addition to all historical exclusions:
+
+- do not continue V48.104 last-block LR/epoch/head/depth/residual-scale tuning;
+- do not jointly train the V48.103 FCSS readout with V48.104/V48.105;
+- do not select the best token/group after seeing V48.105; only the fixed global and action-interaction gates control branching;
+- do not replace the within-group permutation null with an easier null;
+- do not use per-role/regime token routers;
+- do not open source, boundary transport, relative ranker, broad encoder or dataset reconstruction before a representation-level control-sufficiency GO.
