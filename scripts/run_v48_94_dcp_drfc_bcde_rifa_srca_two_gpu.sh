@@ -28,7 +28,17 @@ if not(c.get('valid') and d.get('status')=='PCD_FACTOR_COMPLEMENTARITY_GO'): rai
 PY
 
 eval_variant(){
- local v="$1" gpu="$2"; local base="$L80_RUN/candidates/$v" ckpt="$base/model_v48_trac_sr/best.pt" out="$MAIN_RUN/candidates/$v/evaluation"; [[ -f "$ckpt" ]] || { echo "missing L80 checkpoint $ckpt" >&2; return 30; }; [[ -f "$base/POLICY_CONTRACT.env" ]] || { echo "missing L80 policy contract" >&2; return 30; }; mkdir -p "$out" "$MAIN_RUN/logs"; set -a; source "$base/POLICY_CONTRACT.env"; set +a
+ local v="$1"
+ local gpu="$2"
+ local base="$L80_RUN/candidates/$v"
+ local ckpt="$base/model_v48_trac_sr/best.pt"
+ local out="$MAIN_RUN/candidates/$v/evaluation"
+ [[ -f "$ckpt" ]] || { echo "missing L80 checkpoint $ckpt" >&2; return 30; }
+ [[ -f "$base/POLICY_CONTRACT.env" ]] || { echo "missing L80 policy contract" >&2; return 30; }
+ mkdir -p "$out" "$MAIN_RUN/logs"
+ set -a
+ source "$base/POLICY_CONTRACT.env"
+ set +a
  local common=(--checkpoint "$ckpt" --method-version=v48_94_oc_srca --risk-source="${RISK_SOURCE:-ordinal_evidence}" --option-execution-semantics=observation_class --conditional-recovery-ranking --proposal-top-k 5 --evidence-rerank-top-k --absolute-feasibility-mode=support_reserve --absolute-feasibility-threshold=0.5 --positive-gain=0.015 --negative-gain=0.010 --harm-label-mode=component_veto --opportunity-label-mode=raw_benefit --gate-positive-mode=safe_benefit --required-min-groups=1 --required-min-scenes=1 --min-fit-selected=1 --min-fit-precision-lcb=0 --max-fit-harmful-group-ucb=1 --max-fit-harmful-selected-ucb=1)
  CUDA_VISIBLE_DEVICES="$gpu" python -u tools/calibrate_policy_risk_v48.py --dataset "$DEV_NEAR" --allowed-splits=evidence_adapt_dev --bucket near "${common[@]}" --development-fit-only --output "$out/dev_diagnostic_near_v48.json" --proposal-rows-output "$out/dev_diagnostic_near_v48.proposal_rows.jsonl" >"$MAIN_RUN/logs/${v}_dev_near.log" 2>&1
  CUDA_VISIBLE_DEVICES="$gpu" python -u tools/calibrate_policy_risk_v48.py --dataset "$DEV_CONTACT" --allowed-splits=evidence_adapt_dev --bucket contact "${common[@]}" --development-fit-only --output "$out/dev_diagnostic_contact_v48.json" --proposal-rows-output "$out/dev_diagnostic_contact_v48.proposal_rows.jsonl" >"$MAIN_RUN/logs/${v}_dev_contact.log" 2>&1
