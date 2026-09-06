@@ -11143,3 +11143,134 @@ In addition to all historical exclusions, V48.100/101 explicitly forbid:
 - dataset reconstruction as a response to V48.100 STOP.
 
 The V48.100 final-epoch caveat may be discussed as an optimization limitation, but it does not authorize any of the above sweeps.
+
+## V48.101 authoritative result + V48.102 OC-AITS (2026-09-06)
+
+### V48.101 reliability / attribution decision
+
+The uploaded V48.101 OC-RCSA run is **engineering-valid and scientifically attributable**.  The top-level pipeline is `valid=true / attribution_ready=true / engineering_version=v48.101.0-OC-RCSA / errors=[] / test_roots_read=false / dataset_reconstruction=false`.  The six packaged result/runtime artifacts match the SHA256 values frozen by the pipeline sentinel, and the uploaded audit zip is byte-identical to the separately uploaded JSON/PT artifacts.  Both formal checkpoints load successfully and contain exactly the preregistered historical `root_cross_attn` state (`148,224` parameters).  The V48.101 runtime-file SHA256 values match the uploaded drop-in repository byte-for-byte.  The initial V48.100 function identity check passes at `1e-7`; V48.100 query/chart, Stage-I, root self-attention/FFN/logit head, source, planner and relative ranker remain frozen.
+
+Focused V48.96--V48.101 regression is independently re-run on the uploaded code and passes `41/41`.  No engineering hotfix or rerun is required.
+
+### Strict V48.101 preregistered result
+
+V48.101 is **`ROOT_CROSS_ATTENTION_SEMANTIC_ALIGNMENT_STOP`**.
+
+- **State representation remains formally GO, but regresses from V48.100.**  Six of eight cells remain >=0.70 across three roles, but dev-Near collapses from `1.0/1.0` in V48.100 to `0.143/0.286`, and certificate-Near falls to `0.80/0.70`.
+- **Support-action remains formal STOP, but root cross-attention carries the strongest positive causal signal of V48.101.**  Relative to V48.100, support AUC improves in 6/8 cells, true-minus-within-group-shuffle margin improves in 8/8 cells, and material top-1 lift appears in 6/8 cells.  Dev-Near rises from `0.398/0.438` to `0.695/0.750`; certificate-Near rises from `0.636/0.636` to `0.745/0.782`.  However only the two Near roles satisfy the complete absolute AUC+shuffle gate; Contact remains below the registered cross-regime threshold, especially certificate-Contact (`~0.60`).
+- **Reserve/debt remains STOP.**  Dev-Contact falls from `0.776/0.734` to `0.667/0.656`; certificate-Contact rises only to `0.472/0.444` and remains worse than shuffled.  The smaller dev-to-certificate gap is therefore not a generalization win; it is largely produced by lower dev performance.
+- **Full State+Support+Reserve GO is false.**  No final source experiment is authorized.
+
+Dense semantic dev loss nevertheless improves strongly versus V48.100 in both variants: total loss improves by about 13%, absolute support by ~24%, delta support by ~10.6%, absolute reserve by ~3.6--4.1%, and delta reserve by ~9.6--10.8%.  V48.101 reaches an interior best epoch (16/27 balanced, 17/28 precision) and then dev loss worsens while training loss keeps decreasing, so unlike V48.100 there is no final-epoch undertraining caveat.  The failure is a representation trade-off, not a simple request for more epochs.
+
+### Promotion / closure after V48.101
+
+Retain/promote as **supported principles/scaffolds**, not as a production Main block:
+
+1. **Action-sensitive cross-attention transport is causally relevant to support establishment.**  The 6/8 AUC, 8/8 shuffle-margin and 6/8 top-1 improvements show that opening the memory-to-root transport kernel recovers real candidate-specific support information.
+2. **Recovery base-state semantics remain necessary.**  V48.100 established an 8/8 static chart; V48.101 shows that action transport can destroy part of that state organization, so control sufficiency requires *joint preservation* of state and counterfactual response rather than optimizing either alone.
+3. **Signed reserve/debt remains the unified Near/Contact object.**  V48.101 does not justify a regime router; it instead exposes that the same transport must preserve positive headroom in Near and negative debt-repayment semantics in Contact.
+
+Do **not** promote V48.101 root cross-attention as Main, because Support and Reserve both fail their preregistered full gates and the Near static state regresses.  Per preregistration, close the complete root-decoder semantic intervention family (query/chart + root cross-attention).  Do not try head/rank/KV/QKV architecture fishing, attention-depth/width sweeps, loss-weight/LR/epoch sweeps, hybrid V48.100/V48.101 state-delta mixing, source/boundary transport, relative-ranker changes or Near/Contact-specific attention.
+
+### Theoretical conclusion after V48.100--101
+
+The durable result is a **state/action transport trade-off**:
+
+`static recovery-state sufficiency != action-response sufficiency`, and improving one shared decoder transport can increase candidate-specific support decodability while degrading the nominal state coordinate and Contact reserve generalization.
+
+A control-sufficient representation must therefore act as a sufficient statistic for both the current recovery state and the action-conditional recovery dynamics.  This is aligned with DeepMDP-style latent-dynamics representation learning, Action-Sufficient State Representations for partially observed control, and action-conditional self-predictive representation learning: downstream control requires a latent state that preserves action-conditioned dynamics, not merely static prediction.  These works provide theoretical motivation; the authorization for the next branch comes from the OC-RAP V48.96--101 causal evidence chain.
+
+### Near / Contact diagnosis
+
+- **Near support establishment is materially improved but not solved cross-regime.**  The two Near roles become the only roles that satisfy the full V48.101 support gate.  The remaining Near defect is joint consistency: the learned action transport improves support ordering but corrupts the dev-Near nominal state coordinate.
+- **Contact generalization is not improved in the required sense.**  Support improves mildly on dev-Contact but not certificate-Contact.  Reserve loses dev performance while certificate remains below chance-vs-shuffle.  The missing object is still one shared state/action representation that simultaneously establishes support and preserves debt-repayment ordering across dev/certificate.
+
+The unified object remains:
+
+`Near: establish/preserve positive lower-tail support/headroom`
+
+`Contact: establish support and repay negative lower-tail recovery debt`.
+
+### Dominant bottleneck after V48.101
+
+The bottleneck is sharpened from root-decoder tuning to:
+
+**sufficiency and decodability of the frozen Stage-I structured memory for observation-identifiable action-induced recovery state/response before root decoding.**
+
+V48.96 already proves that support-action information survives somewhere in the frozen root representation.  V48.101 proves that changing only root cross-attention can recover substantial support signal but cannot jointly preserve state and reserve.  The preregistered next step is therefore a layer-upstream information-transport audit, not another decoder/source mechanism.
+
+## V48.102 OC-AITS — Observation-Consistent Action-Information Transport Sufficiency Audit
+
+V48.102 is **audit-only** and implements exactly the next branch registered by V48.101.  It does not change the planner.
+
+Scientific contract:
+
+```text
+planner parameters trained          0
+Stage-I parameters trained          0
+root-decoder parameters trained     0
+source parameters trained           0
+same V48.93 target semantics        YES
+same V48.101 held-out populations   YES
+same AUC / shuffle / top1 gates     YES
+teacher metadata model input        NO
+boundary transport                  OFF
+relative ranker                     frozen
+regime conditioning                 NO
+dataset reconstruction              NO
+capacity / threshold sweep          NO
+```
+
+### Stage-I representation under audit
+
+The frozen structured encoder emits `CLS + 10 fixed semantic tokens + agent tokens`.  V48.102 constructs one deterministic, architecture-aware summary:
+
+- keep `CLS + 10` fixed semantic token positions explicitly;
+- summarize the agent-token set only with permutation-invariant `mean/std/max/min`;
+- at `d=192`, the resulting Stage-I summary has exactly `15 * 192 = 2880` coordinates;
+- no learned probe encoder, root/agent ID, regime ID or semantic router is introduced.
+
+For each scene-time group, row 0 is nominal and rows 1.. are candidates.  The audit forms:
+
+`state = z(a0)`
+
+`delta = z(a) - z(a0)`
+
+`context = delta * (1 + tanh(state))`.
+
+It then uses the **same fixed linear-probe recipe and within-group action permutation control as V48.96**:
+
+- state: distinguish nominal DRS-activation vs deployability-gain mode;
+- support: within DRS-activation strata, rank safe support-establishing actions above harmful actions;
+- reserve: within deployability-gain strata, rank safe reserve/debt-improving actions above harmful actions.
+
+The V48.101 evaluation populations are checked for exact row/class/group identity before any scientific decision.
+
+### V48.102 preregistered gates
+
+The absolute gates stay unchanged:
+
+```text
+State GO:
+  AUC >= 0.70 in >=6/8 cells
+  >=3/4 roles including Near + Contact
+
+Support GO:
+  AUC >= 0.65 and true-shuffle >= +0.05 in >=6/8
+  >=3/4 roles including Near + Contact
+  top1 lift >= +0.10 in >=4/8 with Near + Contact
+
+Reserve GO:
+  same action gate
+```
+
+`STAGE_I_ACTION_INFORMATION_SUFFICIENCY_GO` requires all three.  V48.102 also records per-cell Stage-I AUC minus V48.101 root-semantic AUC to localize where decodability is lost or created by downstream transport; this difference is diagnostic and does not replace the absolute gates.
+
+Branch rules:
+
+1. **Full Stage-I GO:** Stage-I already contains a jointly decodable control-sufficient statistic and the closed root-decoder family is the transport bottleneck.  Next authorize exactly one direct memory-to-recovery semantic transport experiment; no source/capacity sweep.
+2. **Partial Stage-I GO:** preserve the successful action semantic and preregister one minimal Stage-I recovery-sufficient representation objective; do not open source or broad encoder capacity.
+3. **Stage-I action information STOP:** authorize one minimal Stage-I recovery representation objective as the next scientific layer.  Still no broad encoder/source sweep, regime router, boundary transport or dataset reconstruction.
+
+This audit is an `identifiability before capacity` step.  A deterministic downstream decoder cannot manufacture action-target information absent upstream (data-processing principle), but the fixed linear audit measures *practical decodability*, not an information-theoretic impossibility.  A STOP therefore authorizes a targeted representation objective; it does not justify arbitrary encoder widening.

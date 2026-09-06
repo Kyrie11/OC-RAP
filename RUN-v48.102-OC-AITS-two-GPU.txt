@@ -1,0 +1,20 @@
+cd /home/senzeyu2/code
+unzip -o /path/to/OC-RAP-v48.102-DCP-DRFC-BCDE-RIFA-OC-AITS-drop-in.zip
+cd /home/senzeyu2/code/OC-RAP
+
+export PYTHONPATH="$PWD/src:$PWD${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONNOUSERSITE=1
+
+python tools/check_v48_102_runtime_code_contract.py \
+  --repo "$PWD" \
+  --output /home/senzeyu2/code/OC-RAP/runs/OC-RAP-v48.102-runtime-code-contract.manual.json
+
+# Start only if valid=true / attribution_ready=true / errors=[].
+GPU0=0 GPU1=1 \
+BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+  bash scripts/run_v48_102_dcp_drfc_bcde_rifa_aits_two_gpu.sh
+
+# Upload after completion:
+# runs/OC-RAP-v48.102-AITS-balanced.json
+# runs/OC-RAP-v48.102-AITS-precision.json
+# runs/OC-RAP-v48.102-OC-AITS-audits.zip
