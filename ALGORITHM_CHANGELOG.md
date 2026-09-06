@@ -10261,3 +10261,308 @@ observation-consistent deployability
 ```
 
 The contribution is not a two-branch heuristic. The scientific claim under test is that deployable recovery benefit has an observation-state-dependent complementarity: an action must first make shared recovery support exist, then preserve that support while increasing positive reserve or repaying negative debt. The state variable is shared across regimes and comes from the same native OC-MERO information pattern.
+
+## V48.94.1 authoritative result + V48.95 OC-NROA (2026-09-05)
+
+### V48.94.1 engineering / attribution decision
+The user-fixed V48.94 launcher is engineering-valid.  The only code change relative to the delivered V48.94 launcher is splitting a single `local v=... gpu=... base=...` declaration into sequential assignments so `set -u` does not expand `$v` before assignment.  The runtime launcher SHA matches the uploaded fixed code; no scientific flag, model, dataset, threshold, candidate set, or admission equation changed.  V48.94 results are therefore scientifically attributable.
+
+### Strict V48.94 preregistered result
+V48.94 OC-SRCA is **STOP**:
+
+- mode-observability GO = false (only dev-Near and certificate-Contact pass the 0.75 role threshold);
+- complementarity mechanism GO = false;
+- absolute-source freeze authorization = false;
+- teacher-feasibility AUC non-regression passes 0/8 cells;
+- harmful and teacher-infeasible matched selectivity passes 0/8 cells;
+- safe-positive pass improves materially in 6/8 cells, but certificate-Contact remains 0 and source AUC collapses there.
+
+The decisive failure is not that the V48.93 teacher-side support/reserve complementarity was disproved.  It is that the frozen native certificate does not reliably expose that state/action semantics.  In certificate-Contact, for example, the V48.94 safe-positive candidate hard-support coordinate is positive for 0/31 rows while harmful candidates have non-zero positive support mass, so the parameter-free support-establishment rule rejects all true recoveries and admits false ones.  The exact-zero hard-support coordinate is therefore not an observation-aligned realization of the V48.93 DRS mediation state.
+
+### New closures after V48.94
+All historical exclusions remain active.  V48.94 additionally closes:
+
+1. **The exact-zero native hard-DRS state switch as a deployable support/reserve source.** Do not rescue it with epsilon/threshold/temperature sweeps.
+2. **Direct substitution of native hard support for teacher DRS mediation state.** Their semantics are not observation-equivalent in the registered cohort.
+3. **Immediate source-capacity expansion after the V48.94 STOP.** Before any new source, diagnose whether the frozen native certificate contains threshold-free support-state and within-state action-response information at all.
+4. **Using V48.94 safe-positive pass gains alone as source success.** They coexist with 8/8 teacher-feasibility AUC degradation and selectivity relapse, so admission count without correct allocation is not a promotion criterion.
+
+Still prohibited: regime routers/experts/thresholds/budgets; DRS/DEP threshold sweeps; learned DRS/DEP mixing; GAP-positive source; LR/gain/horizon/capacity grids; proposal/top-K/option-library expansion; generic AFE/MLP; broad encoder/root retraining; privileged future/teacher-metadata model input or distillation; class-local/path-stop Main; post-hoc hard control veto; external ball/box/hull/anchor/jerk and B1/B2 sweeps; option-wise scalar/typed transport; frozen tail-field rank/width/depth sweeps; truth-floor/cap/inverse refinement; reopening V48.91 root-local physical-response learning; boundary transport; relative-ranker modification; and dataset reconstruction.
+
+## V48.95 OC-NROA — Observation-Consistent Native Recovery Observability Audit
+
+V48.95 implements the **only branch authorized by V48.94 STOP**: audit the frozen native support/reserve observability before adding any absolute-source capacity.
+
+Scientific contract:
+
+```text
+audit only                       YES
+planner parameters trained        0
+same V48.94 proposal rows         YES
+V48.93 mediation labels           offline audit only
+raw WOMD/Waymax replay            NO
+dataset reconstruction/reselect   NO
+teacher labels changed            NO
+teacher metadata model input      NO
+boundary transport                OFF
+relative ranker                   frozen
+regime conditioning               NO
+capacity / threshold sweep        NO
+```
+
+### Three separately adjudicated observability layers
+
+1. **Pre-intervention state observability.**  Does the frozen nominal certificate distinguish V48.93 `drs_activation` from `deployability_gain` mode?  The preregistered continuous support relaxation is native `nominal_smooth_support` (coordinate 2).  AUC is threshold-free; no operating threshold is fitted.
+2. **Support-establishment action observability.**  Within teacher-side nominal-DRS=0 audit strata only, does frozen `delta_smooth_support` rank safe-positive DRS-activation actions above harmful actions?
+3. **Reserve/debt action observability.**  Within teacher-side nominal-DRS=1 audit strata only, does frozen `delta_deployability` rank safe-positive deployability-gain actions above harmful actions?
+
+Teacher-side state labels are used only to define offline audit strata; they are never inputs to a planner or deployed score.  Additional native channels are reported diagnostically but cannot replace the preregistered primary channels post-hoc.
+
+### V48.95 preregistered GO gates
+
+For each primary channel, GO requires AUC threshold replication in >=6/8 balanced/precision cells and >=3/4 unique roles including Near and Contact:
+
+```text
+state observability:          AUC >= 0.70
+support-action observability: AUC >= 0.65
+reserve-action observability: AUC >= 0.65
+```
+
+`FROZEN_NATIVE_RECOVERY_OBSERVABILITY_GO` requires all three layers GO.  Even then V48.95 itself trains no source; it only authorizes one fixed-capacity observation-aligned source experiment with no threshold/capacity sweep.
+
+If any layer fails, formal status is `FROZEN_NATIVE_RECOVERY_OBSERVABILITY_STOP`: close the current native-certificate support/reserve realization and move upstream to a Stage-I/root **action-observability audit**.  Do not respond with a new MLP, wider field, learned state router, threshold sweep, boundary transport, relative-ranker modification or dataset reconstruction.
+
+### External-baseline authorization
+V48.94 did **not** reach `SUPPORT_RESERVE_ABSOLUTE_SOURCE_GO`, so Safe/Near closed-loop, full Contact evaluation and external SOTA baseline are not yet authorized by the preregistered internal stopping rule.  The fastest scientifically valid route remains: settle V48.95 observability, then either one final fixed-capacity observation-aligned source experiment (if GO) or close the frozen native source family and adjudicate representation observability (if STOP).
+
+## V48.95 authoritative result + V48.96 OC-SRROA (2026-09-06)
+
+### V48.95 engineering / attribution decision
+The uploaded V48.95 OC-NROA result is engineering-valid and scientifically attributable.  All six V48.95 runtime-file SHA256 values match the uploaded code, the audit/comparison/runtime SHA256 values match the final pipeline sentinel, and the V48.92--V48.95 dedicated regression set passes independently.  V48.95 is audit-only (`planner_parameters_trained=0`), reuses the exact V48.94 proposal rows, does not replay WOMD, does not reconstruct/reselect data, does not modify teacher labels or relative ranking, uses no regime ID, and keeps boundary transport OFF.
+
+### Strict preregistered V48.95 result
+Formal status is **`FROZEN_NATIVE_RECOVERY_OBSERVABILITY_STOP`**.  All three preregistered primary layers fail the required >=6/8 cross-regime replication:
+
+1. **State observability (`nominal_smooth_support`) — STOP.**  It reaches AUC >=0.70 only in certificate-Contact; dev-Contact is exactly chance (0.50), while Near remains ~0.66.
+2. **Support-establishment action observability (`delta_smooth_support`) — STOP.**  It is informative in the two certificate roles (~0.74--0.81) but does not replicate in dev-Near (~0.58--0.59) and is anti-informative in dev-Contact (~0.426).
+3. **Reserve/debt action observability (`delta_deployability`) — STOP.**  It is informative only in Contact (dev ~0.68, certificate ~0.81) and is strongly anti-informative in Near (dev ~0.19--0.20, certificate ~0.39).
+
+Therefore the current four-coordinate native certificate contains local useful signals but **not one stable Near/Contact support/reserve coordinate**.  V48.93's teacher-side support-establishment / reserve-debt complementarity is not disproved; what fails is its direct realization by the frozen native certificate.
+
+### Interpretation / additional closures
+V48.95 closes the **native-certificate support/reserve realization family** more broadly than V48.94:
+
+- do not replace the exact-zero hard-support switch with a smooth-support threshold sweep;
+- do not search DRS/smooth-support/deployability thresholds, temperatures, weights or learned factor mixtures;
+- do not select different native certificate coordinates for Near and Contact;
+- do not use the certificate-Contact / certificate-Near local AUC gains as permission for a regime-conditioned policy;
+- do not reopen V48.91 physical-response learning, V48.82/83 frozen tail fields, V48.85 action-only projection, V48.87 bilinear root-action capacity, or V48.88 quotient response by reparameterizing them.
+
+The negative conclusion is specific: **the compressed native certificate is insufficient as a stable cross-regime observable realization**.  V48.95 alone does not read the full frozen Stage-I/root tokens, so it does not by itself prove that the entire frozen representation lacks the newly identified V48.93 semantic.
+
+Historical evidence matters: V48.84's generic Stage-I/root action-observability probe already STOPped, and V48.85--V48.88 subsequently showed that narrow action projection, supervision repair, high-capacity root×action interaction and quotient projection do not produce a stable final source.  Therefore any new root audit must be target-specific to the *newly identified* V48.93 support/reserve semantic; repeating V48.84's generic probe is forbidden.
+
+### Dominant bottleneck after V48.95
+The current bottleneck is:
+
+> **target-specific decodability of support-establishment state and reserve/debt action response from the full frozen observation-conditioned root representation.**
+
+The paper-level line remains stable: observation-consistent deployability -> actuator-realizable executable recovery -> equivalence-partition transport -> identifiability before capacity -> support-establishment / reserve-debt complementarity -> observation-aligned absolute admission.  V48.95 says the current certificate compression is not the observation-aligned state variable.
+
+## V48.96 OC-SRROA — Observation-Consistent Support–Reserve Root Observability Audit
+
+V48.96 implements the only scientifically useful residual question before declaring the frozen representation family exhausted.  It is **audit-only** and changes no planner behavior.
+
+Scientific contract:
+
+```text
+planner parameters trained             0
+same frozen L80 checkpoint             YES
+Stage-I/root weights modified          NO
+V48.93 mediation semantics             offline labels only
+teacher metadata model input           NO
+regime ID                              NO
+boundary transport                     OFF
+relative ranker                        frozen
+proposal/source capacity sweep         NO
+threshold sweep                        NO
+WOMD replay                            NO
+```
+
+### Target-specific frozen-root probes
+Using the frozen L80 root tokens and root probabilities, V48.96 forms deterministic probability-weighted root statistics (mean/std/max/min).  It trains fixed-capacity **linear probes only for observability adjudication**, never for deployment:
+
+1. **State probe.**  Nominal root statistics must distinguish V48.93 `drs_activation` vs `deployability_gain` group state.
+2. **Support-action probe.**  Within nominal-DRS=0 groups, candidate-minus-nominal root-delta statistics must distinguish safe-positive DRS-establishing actions from harmful actions.
+3. **Reserve/debt action probe.**  Within nominal-DRS=1 groups, a deterministic equal-dimensional state-conditioned delta (`delta * (1+tanh(state))`) must distinguish safe-positive deployability-gain actions from harmful actions.
+
+Train labels are derived from the historical exact teacher-PCD index with the production PCD factorization.  Dev/certificate labels are restricted to and fail-closed against the registered V48.93 proposal cohort.  Action probes include an equal-capacity **within-scene-time candidate permutation control** so scene/state information cannot masquerade as action observability.
+
+### Preregistered V48.96 GO gates
+State GO:
+
+```text
+state AUC >= 0.70
+in >=6/8 balanced/precision cells,
+>=3/4 unique roles including Near + Contact.
+```
+
+Support-action GO:
+
+```text
+true AUC >=0.65 AND true-minus-shuffled AUC >=+0.05
+in >=6/8 cells and >=3/4 roles including Near + Contact;
+within-group top1 lift vs shuffled >=+0.10 in >=4/8 cells,
+with Near + Contact represented.
+```
+
+Reserve/debt action GO uses the same thresholds.
+
+`FROZEN_ROOT_SUPPORT_RESERVE_OBSERVABILITY_GO` requires all three layers GO.  It authorizes **one final fixed-capacity observation-aligned support/reserve source experiment only**; no width/rank/threshold/LR sweep and boundary transport remains OFF.
+
+If any layer STOPs, formal branch is **`FROZEN_ROOT_SUPPORT_RESERVE_OBSERVABILITY_STOP`**.  Then the entire frozen native-certificate + frozen Stage-I/root source-realization family is closed for this semantic.  Do not respond with another source head, field, mixer, threshold or capacity sweep.  Any future algorithmic reopening must explicitly change the representation-learning objective to make an observation-only executable-recovery support/reserve sufficient statistic observable, and requires a separate preregistration rather than silently reopening broad encoder/root retraining.
+
+### External-baseline / convergence rule
+V48.95 does not authorize final external baselines.  The fastest path is deliberately binary:
+
+- V48.96 GO -> exactly one final fixed-capacity source experiment; if it reaches the existing absolute-source freeze gate, freeze and immediately run frozen RIFA + Safe/Near/Contact closed loop + external baselines.
+- V48.96 STOP -> stop frozen-source iteration entirely.  The current architecture is not internally converged to a publishable absolute source; external baselines may be run only as **diagnostic historical baselines**, not as the final claimed OC-RAP result, until a representation-level reopening is scientifically authorized.
+
+## V48.96.1 engineering hotfix — SRROA feature-only / partition-safe probe (2026-09-06)
+
+V48.96.0 is **engineering-incomplete and must not be scientifically attributed** if it aborts with `absolute truth index fail-closed` while reading dev/certificate samples.  The L80 checkpoint correctly serializes its V48.80 training-only `structural_interval_bounds` truth contract and train/dev truth-index path.  V48.96.0 incorrectly passed that checkpoint training config unchanged into `OCRAPSampleDataset` during frozen-feature extraction, causing certificate samples to be checked against a supervision sidecar that is neither a model input nor part of the V48.96 audit contract.
+
+V48.96.1 is an engineering/audit-correctness hotfix only.  It does **not** change the registered V48.96 state/support/reserve targets, linear-probe capacity, optimization recipe, labels, cohort, GO gates, planner parameters, Stage-I weights, relative ranker, boundary transport, dataset, or any runtime planner behavior.
+
+Fixes:
+
+1. **Feature-only dataset contract.**  Frozen root-token extraction now neutralizes checkpoint *supervision-only* truth sidecars for the temporary `OCRAPSampleDataset` instance (`truth_contract=legacy_full`, empty truth/response index, `supervision_objective=binary_sign`) while preserving all model/input geometry.  The serialized checkpoint config is never mutated.  Runtime audit fails closed if a truth sidecar is nevertheless attached.
+2. **Pure nominal state probe.**  The state feature is now computed solely from the nominal root distribution.  It can no longer change with candidate validity masks; repeated candidates in one scene-time group must have bitwise-identical state features or the audit fails closed.
+3. **No root-slot bijection.**  Candidate and nominal root distributions are summarized independently with their own root probabilities/valid masks, then differenced in permutation-invariant statistic space.  V48.96.0's slot-wise `candidate_root[k]-nominal_root[k]` path is removed because V48.90 already established that action-dependent root partitions must not be treated as a root-slot bijection.
+4. **Cache invalidation / provenance.**  Engineering version is bumped to `v48.96.1-OC-SRROA-ENGFIX`; the versioned feature-cache key therefore cannot reuse V48.96.0 feature records.  Runtime preflight now checks truth-sidecar stripping and root-permutation invariance synthetically before GPU work begins.
+5. **Partial-run certificate-index hygiene.**  The launcher now rebuilds the registered certificate teacher-PCD index if either the index or its summary is missing, avoiding a later packaging failure after an interrupted prior run.  The index recipe and dataset roots are unchanged.
+
+The scientific branch remains exactly V48.96 OC-SRROA: `state -> support-action -> reserve/debt-action`, with the original preregistered GO/STOP thresholds and the original frozen-representation convergence rule.  No V48.97 algorithm is authorized until V48.96.1 completes.
+
+## V48.96.1 authoritative result + V48.97 OC-ERSS (2026-09-06)
+
+### V48.96.1 engineering / attribution decision
+The uploaded V48.96.1 OC-SRROA result is engineering-valid and attribution-ready. Runtime SHA256 values match the uploaded V48.96.1 repository, the feature-only Dataset correctly strips the historical V48.80 training truth sidecar, the nominal-state feature is candidate-invariant, candidate/nominal root sets are summarized independently without root-slot bijection, and balanced/precision artifacts match the top-level pipeline hashes. No planner parameter, Stage-I parameter, source parameter, relative ranker, teacher label, dataset root, proposal set, threshold, boundary transport, or regime input is modified by V48.96.1.
+
+### Strict V48.96 result: overall NO, support-action only YES
+The preregistered status is **`FROZEN_ROOT_SUPPORT_RESERVE_OBSERVABILITY_STOP`**.
+
+- **State observability: STOP.**  The target-specific nominal-state probe passes only certificate-Contact (AUC ~=0.893 in both variants).  dev-Near (~0.286), dev-Contact (~0.543) and certificate-Near (0.20) fail the registered cross-regime state gate.
+- **Support-action observability: GO as a submechanism.**  Six of eight balanced/precision cells pass the registered true-vs-shuffled AUC gate, covering dev-Near, dev-Contact and certificate-Near; dev-Near and dev-Contact also have material within-group top-1 lift.  The frozen roots therefore contain genuine candidate-specific support-establishment information, although certificate-Contact does not reproduce it.
+- **Reserve/debt action observability: STOP.**  No cell passes the full registered AUC+permutation gate.  certificate-Near has a local top-1 signal, but certificate-Contact is anti-informative relative to its within-group shuffle and dev-Contact has no material top-1 improvement.
+
+Therefore the answer to the V48.96 scientific question is **NO under the registered standard**: the frozen representation does not expose one stable cross-Near/Contact sufficient statistic containing *all three* required objects (support state, support action change, reserve/debt action change).  This is not evidence that the roots contain no recovery information at all; support-action information is a promoted submechanism.
+
+The result also has a power caveat that must not be hidden: V48.96's target-specific state/reserve evaluation subsets are small in several roles.  This does not change the preregistered STOP, but it means the scientific conclusion is about failure of the *registered stable-observability criterion*, not an information-theoretic proof of zero mutual information.  The dense teacher PCD sidecar contains thousands of rows and therefore remains useful for a representation-learning reopening without dataset reconstruction.
+
+### What is now formally closed
+V48.96 closes the **frozen readout/source-adapter family** for this semantic:
+
+- no further native-certificate DRS/support/deployability threshold, temperature, epsilon, weighting or coordinate routing;
+- no new linear/nonlinear absolute source head over the frozen root representation;
+- no reopening V48.82/83 frozen structured-tail fields, V48.85 action-only projection, V48.87 BARR or V48.88 quotient response by changing width/rank/scale;
+- no learned Near/Contact router or regime-specific support/reserve rule;
+- no boundary transport or relative-ranker change before a new observation-aligned state representation is validated;
+- no dataset reconstruction as a response to V48.96 STOP.
+
+### Narrow representation-level reopening is authorized
+V48.96 is the preregistered branch that permits a **new representation-learning objective**, because both the compressed certificate and the full frozen root readout failed to expose the complete support/reserve sufficient statistic.  This is a narrow exception to the historical broad-encoder/root-retraining prohibition.  It does **not** authorize generic encoder retraining, a larger source head, an MLP, root/option/regime IDs, or capacity sweeps.
+
+The only reopened scientific layer is:
+
+> learn an observation-only, permutation-invariant **executable-recovery sufficient state** whose explicit coordinates are (1) shared recovery support and (2) signed deployability reserve/debt.
+
+This reopening is supported by the V48.92--V48.96 evidence chain: V48.93 establishes support-establishment / deployability-gain complementarity; V48.94--95 show that the native certificate does not realize it; V48.96 shows that support-action information survives in the latent roots but nominal state and reserve/debt response are not stably linearly observable.
+
+## V48.97 OC-ERSS — Observation-Consistent Executable-Recovery Sufficient State
+
+V48.97 deliberately changes **representation**, not admission/source capacity.  The historical L80 planner, proposal set, relative ranker and all OC-MERO heads remain frozen.  A tiny fixed-capacity root-set representation module is trained off the frozen latent roots and discarded from the deployment path until it passes observability.
+
+### Representation object
+For candidate action `a`, with frozen root tokens `r_k(a)`, root probabilities `p_k(a)` and valid-root mask, V48.97 learns two permutation-invariant semantic queries over the unordered root set:
+
+```text
+D_hat(a) in [0,1] : shared executable-recovery support
+R_hat(a) in R     : signed deployability reserve / debt
+```
+
+Each coordinate uses one learned semantic query and one learned linear readout over probability-weighted root attention.  There is no hidden MLP, root id, option id, regime id, candidate rank or teacher metadata input.  At d_model=192 the entire representation has exactly `4*192+2 = 770` trainable parameters.  There is no rank/width/depth choice to sweep.
+
+### Why this is not a reopening of the failed source-head family
+The module is supervised on the **semantic state itself**, not on final candidate admission or teacher advantage.  It trains no planner/source parameter and V48.97 never inserts the learned representation into OC-MERO admission.  Its objective is the equal-weight average of four representation losses:
+
+1. absolute shared-support `D_hat(a) -> teacher_DRS(a)`;
+2. absolute signed reserve/debt `R_hat(a) -> teacher_R_dep(a)`;
+3. counterfactual support change `D_hat(a)-D_hat(a0)`;
+4. counterfactual reserve/debt change `R_hat(a)-R_hat(a0)`.
+
+The teacher PCD components are supervision only and are never model inputs.  This uses existing registered data and does not reconstruct the dataset.
+
+### Why this is not V48.87 BARR again
+V48.87 learned a high-dimensional root x action **absolute-source response field** under an aggregate target and failed through an identifiability/nullspace mechanism.  V48.97 instead learns a two-coordinate *sufficient-state representation* directly supervised by the two decision-semantic factors identified later by V48.93.  It has no learned root-option response field and no admission residual.
+
+### V48.97 preregistered decision
+After training on the historical train PCD index, the learned representation is evaluated on the exact V48.93 dev/certificate proposal cohort with the **same state/support/reserve observability gates as V48.96**, including within-scene-time action permutation controls.
+
+`EXECUTABLE_RECOVERY_SUFFICIENT_STATE_GO` requires all three:
+
+```text
+state AUC >=0.70 in >=6/8 cells,
+  >=3/4 roles including Near+Contact;
+
+support-action true AUC >=0.65 and true-shuffled >=+0.05
+  in >=6/8 cells, >=3/4 roles including Near+Contact,
+  plus top1 lift >=+0.10 in >=4/8 cells with Near+Contact;
+
+reserve/debt action uses the same gate.
+```
+
+If GO, exactly **one final fixed-capacity observation-aligned absolute-source experiment** is authorized.  No capacity/threshold/rank sweep and boundary transport remains OFF.  If that final source passes the existing source-freeze criterion, internal absolute-source iteration stops immediately and the workflow proceeds to frozen RIFA, Safe paired non-interference, Near critical-safety closed loop, Contact post-impact/secondary-collision evaluation and external baselines.
+
+If V48.97 STOPs, the low-capacity frozen-root sufficient-state extractor is also closed.  The next decision must be whether to reopen a *narrow Stage-I/root representation-learning objective itself*; do not respond with another source head/field/mixer.  Broad encoder retraining remains prohibited unless separately preregistered.
+
+### Convergence state entering V48.97
+**NOT CONVERGED**, but the remaining path is now bounded.  The largest unresolved gap is no longer counterfactual correspondence, physical replay, mediation semantics, source capacity, or certificate thresholding.  It is whether the deployable observation contains a learnable low-dimensional recovery sufficient state that generalizes across Near and Contact.  V48.97 is designed to answer that question before any final source or external baseline claim.
+
+## V48.97.1 — OC-ERSS-EVALFIX (engineering-only, 2026-09-06)
+
+### Reliability verdict on uploaded V48.97.0 result
+The uploaded V48.97.0 run is **not scientifically attributable**, despite its top-level `valid=true` sentinel.  The representation training itself completed and dense DRS/R_dep losses were produced, but every preregistered held-out state/support/reserve cell contained zero evaluation rows and null AUC.  Therefore the reported `EXECUTABLE_RECOVERY_SUFFICIENT_STATE_STOP` is an **engineering false STOP**, not an algorithmic result.
+
+### Root cause: candidate-only V48.93 label join dropped the nominal reference
+V48.93 factor-mediation audit intentionally serializes **candidate rows only**; it contains no nominal `candidate_index=0` rows.  V48.97.0 `_role_rows()` incorrectly required a V48.93 label for *every* teacher-index row, including nominal.  Consequently all nominal rows were discarded before evaluation.  `_state_metric()` could not find a nominal state and `_action_metric()` could not form candidate-minus-nominal deltas, so every role returned `rows=0` / `auc=null`.
+
+This is not a dataset-power result and not evidence against OC-ERSS.  The certificate teacher-PCD index and V48.93 candidate keys overlap as intended; the bug is solely the evaluation assembly contract.
+
+### Secondary reliability bug: empty evaluation failed open as scientific STOP
+V48.97.0 comparison treated null/empty metrics as ordinary threshold failures and still wrote `valid=true / attribution_ready=true`; the pipeline checker verified file/version presence but did not require non-empty held-out evaluation.  This allowed an empty evaluation set to masquerade as a preregistered scientific STOP.
+
+### Engineering fix
+V48.97.1 keeps the V48.97 scientific design unchanged and fixes only evaluation/provenance:
+
+1. **Candidate-only label join.** Nominal rows are retained directly from the dense teacher-PCD index and are assigned no safe/harmful/mediation label. Non-nominal candidate rows still require an exact V48.93 `(role, scene, time, candidate)` label.
+2. **Per-role evaluation contract.** Every role must contain matched candidate labels, exactly one nominal reference for every evaluated candidate group, safe-positive rows, harmful rows, DRS-activation rows and deployability-gain rows. Missing/duplicate nominal references fail closed.
+3. **Metric fail-closed.** State, support-action and reserve/debt metrics must each have non-empty evaluable rows and finite AUC. Empty/null cells raise an engineering failure before a scientific comparison is emitted.
+4. **Comparison/pipeline fail-closed.** Comparison and pipeline require valid evaluation contracts and non-empty state/support/reserve cells in all balanced/precision roles. Empty evaluation now yields an engineering STOP / RC30, never a scientific GO/STOP.
+5. **Runtime synthetic check.** Preflight verifies that a candidate-only V48.93 label map preserves nominal teacher-index rows under the evaluation join.
+
+### Scientific contract unchanged
+The following are unchanged from V48.97.0:
+
+- the 770-parameter permutation-invariant two-coordinate ERSS representation;
+- frozen L80 planner/root tokens;
+- DRS and signed R_dep representation targets;
+- equal-weight absolute + counterfactual semantic loss;
+- balanced/precision variants;
+- V48.93 cohort and mediation labels;
+- within-scene-time action permutation control;
+- all V48.97 preregistered state/support/reserve GO gates;
+- zero planner/source parameters, no regime conditioning, no boundary transport, no relative-ranker change, no dataset reconstruction/reselection.
+
+### Branch rule
+**Do not analyze V48.97.0 as GO or STOP and do not design V48.98 from it.**  Rerun the same V48.97 OC-ERSS scientific experiment under V48.97.1.  Only a complete V48.97.1 pipeline with non-empty evaluation contracts and `valid=true / attribution_ready=true` may authorize either the final-source branch or the representation-learning branch.
