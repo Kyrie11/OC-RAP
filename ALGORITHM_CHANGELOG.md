@@ -11815,3 +11815,144 @@ Signed-orientation cosine is diagnostic only.
 - do not change the V48.105 action-interaction subspace in V48.106;
 - do not retrain V48.104 final block, jointly train FCSS, or sweep LR/epoch/head/depth;
 - do not open source, boundary transport, relative ranker, regime router, broad encoder or dataset reconstruction before the representation branch authorizes it.
+
+## V48.106 authoritative result — OC-PEAO pre-encoder action-orientation audit
+
+### Reliability / attribution gate
+
+V48.106 is attribution-ready.  The uploaded runtime contract, balanced/precision JSONs, probe PT states, comparison and pipeline manifest are byte-identical to the copies inside the uploaded audits archive.  Runtime code SHA256 values match the delivered V48.106 drop-in.  The probe PT files contain only the preregistered linear probes plus train-only normalization statistics; no Stage-I/root/source/planner state is trained or stored.  The pipeline is `valid=true / attribution_ready=true / errors=[]`, `stage_i_parameters_trained=0`, `root_decoder_parameters_trained=0`, `source_parameters_trained=0`, `planner_parameters_trained=0`, and `test_roots_read=false`.
+
+The scientific contract remains audit-only before any Transformer layer, reuses exactly the V48.102 summary/probe family and V48.105 fixed 1920-D action-interaction subspace, and keeps the signed train-to-held-out orientation cosine diagnostic-only.  No engineering rerun is required.
+
+### Strict V48.106 preregistered decision
+
+Official status is **`PREENCODER_ACTION_ORIENTATION_STOP`**.
+
+- Global pre-encoder State: STOP (`0/8` threshold cells).
+- Global pre-encoder Support: STOP (`2/8`, both dev-Near; top-1 material `4/8`).
+- Global pre-encoder Reserve/debt: STOP (`0/8`).
+- Fixed preregistered 1920-D action-interaction subspace: **Reserve GO**, Support STOP.
+- Therefore global pre-encoder control sufficiency is STOP; neither preregistered partial branch is authorized because State is also STOP.
+- The preregistered next branch is exactly the **first historical Stage-I Transformer block** with a nominal-invariant action-orientation objective.  Source, second-block adaptation, broad encoder sweep, router, boundary transport and dataset reconstruction remain closed.
+
+### What V48.106 establishes
+
+1. **The earliest projected Stage-I tokens already contain useful action-response structure, but not a joint control-sufficient state.**  Full State/Support/Reserve all fail before Transformer interaction.  Hence a frozen downstream readout cannot be expected to recover one transferable control statistic directly from the projected tokens.
+2. **Reserve/debt information is already localized in the fixed action-interaction subspace.**  The unchanged `control + scene_context + agents` subspace reaches the preregistered Reserve GO.  Across both variants the positive reserve cells are dev-Near, certificate-Near and certificate-Contact; dev-Contact misses the absolute gate.  This is the first clean evidence that not all action-response semantics need to be created by Transformer mixing.
+3. **Support remains the missing transferable orientation.**  The same action-interaction subspace has only four positive support cells (dev-Near and dev-Contact in both variants) and fails certificate transfer.  Global pre-encoder support similarly has only dev-Near positive.  Thus the dominant unresolved axis is not generic action information but cross-population support-establishment orientation.
+4. **The signed-orientation diagnostic resolves the CKA ambiguity exposed by V48.105.**  For reserve, the action-interaction direction is weakly same-signed on average (`mean cosine ~+0.114`, all eight cells positive) while CKA-minus-shuffle is much larger (`~+0.405`).  For support, action-interaction mean signed cosine is approximately zero (`~+0.010`, only four positive cells), even though some local AUCs are strong.  Association magnitude therefore remains much easier than stable signed transfer.
+5. **Candidate prefix/ego-history coordinates carry a large share of the stable support direction before attention mixing.**  The preregistered diagnostic reports support signed orientation in `ego_history` as strongly positive on average (`~+0.680`, all eight cells positive) while the fixed action-interaction support orientation is near zero.  This does not authorize post-hoc token selection; it does show that the first Transformer block has a concrete, physically meaningful job: combine candidate-prefix state change with interaction context into a transferable recovery-response coordinate.
+6. **Layer-lineage ambiguity is now closed.**  V48.106 audits `H0` before block 1, V48.105 audits `H1` before block 2, and V48.102 audits final Stage-I output.  No frozen location exhibits full State+Support+Reserve sufficiency.  The first trainable location is therefore no longer a guess: the V48.106 preregistration and the complete frozen lineage both point to block 1.
+
+### Near / Contact after V48.106
+
+- **Near:** nominal-state preservation remains a solved scaffold from V48.103/V48.104.  At pre-encoder level dev-Near support is already genuinely separable (`AUC~0.695`, margin `+0.297`, top-1 lift `+0.8`), while global reserve is maximally wrong-oriented (`AUC=0`).  Yet the fixed action-interaction reserve subspace reaches `AUC=1.0`, margin `+0.5`, top-1 lift `+1.0`.  The Near bottleneck is therefore **cross-token composition**: positive-support evidence and positive-reserve evidence exist in different architectural coordinates and must be composed into one stable signed candidate response without touching the nominal state.
+- **Contact:** pre-encoder dev-Contact support is near the absolute threshold (`AUC~0.648`, margin `+0.193`, top-1 lift `+0.167`) while certificate support is weak.  Reserve is weak globally, but the fixed action-interaction subspace is very strong on certificate-Contact (`AUC~0.896`, margin `+0.431`) and misses dev-Contact.  The Contact bottleneck is therefore **cross-population orientation transfer after interaction mixing**, not absence of debt-repayment information.
+
+### Promotion / Main-stack status after V48.106
+
+V48.106 is an audit and adds no production mechanism to Main.  Retain/promote only the evidence protocol and theory:
+
+- `action informativeness != signed action equivariance`;
+- high CKA/energy must be accompanied by held-out sign/ranking and within-group permutation nulls;
+- representation-layer localization must precede capacity opening.
+
+The stable Main stack remains unchanged:
+
+`OC-MERO observation-consistent deployability`
+`+ actuator-realizable executable recovery`
+`+ counterfactual equivalence-partition transport`
+`+ identifiability before capacity`
+`+ support-establishment / signed reserve-debt semantics`
+`+ recovery base-state chart`
+`+ role-isolated RIFA`.
+
+The candidate higher-level replacement remains **nominal-invariant control-sufficient recovery representation**, pending a full State+Support+Reserve GO.
+
+## V48.107 OC-FNAO — First-Block Nominal-Invariant Action Orientation
+
+### Why V48.107 is the authorized training location
+
+V48.106 formal STOP explicitly preregisters the first Stage-I Transformer block.  This is not a broad encoder experiment: only historical block 1 is trainable.  Historical block 2, final norm, V48.103 factorized readout, root decoder, source, planner and relative ranker remain frozen.  The purpose is to test whether one existing interaction block can turn the already-observed but fragmented upstream action evidence into a transferable signed recovery-response coordinate.
+
+### Structural nominal invariance
+
+Let `H0(a)` be the projected token set before block 1, `B0` the frozen historical first block and `Btheta` the trainable copy.  Define
+
+```text
+Etheta(a) = Btheta(H0(a)) - B0(H0(a))
+H1theta(a) = B0(H0(a)) + Etheta(a) - Etheta(a0)
+```
+
+for the unique nominal action `a0` in the same scene-time group.  The implementation centers the residual before adding it back and explicitly preserves the frozen-tail nominal output, so
+
+```text
+H1theta(a0) == H1_0(a0)
+Mtheta(a0)  == M0(a0)
+```
+
+at the registered interfaces.  Thus the successful V48.103/V48.104 nominal-state scaffold cannot be traded away to improve candidate response.
+
+### Orientation objective: within-group ordinal recovery order
+
+V48.104 proves calibrated response regression can decrease while cross-population action gates remain open.  V48.106 further shows that the unresolved defect is signed orientation rather than generic magnitude.  V48.107 therefore does **not** repeat the four-term or response-Huber objective.
+
+For support and reserve/debt separately, every within-group pair with different teacher response defines only an ordering sign:
+
+```text
+s_ij = sign(y_i - y_j)
+L_ij = softplus(-s_ij * (p_i - p_j) / frozen_delta_scale)
+```
+
+Teacher magnitude is discarded after the pair sign is determined.  Tied pairs are excluded.  Support and reserve orientation means are averaged with fixed equal weight.  The only scales are the already-frozen V48.100 delta-support and delta-reserve metric scales.  There is no new loss-weight, rank, width, head-count, token-router or regime parameter.
+
+This objective is intentionally closer to the registered AUC/top-1 action-selection semantics: it asks whether action ordering is stable, not whether population-specific response calibration is numerically identical.  Pairwise ranking surrogates do not by themselves guarantee OOD generalization, so V48.107 still uses the unchanged held-out gates and permutation null as the scientific decision.
+
+### V48.107 fixed capacity and exclusions
+
+At `d=192` exactly one existing Transformer block is trainable: `444,864` parameters.
+
+Frozen:
+
+- every input projection / positional token parameter;
+- historical Stage-I block 2 and final norm;
+- V48.103 FCSS readout (`1,540` params);
+- all root-decoder/self-attention/cross-attention/logit components;
+- source, planner and relative ranker.
+
+No source, broad encoder, boundary transport, regime routing, dataset reconstruction, LR/epoch/head/depth/rank/width sweep or post-hoc token selection is authorized.
+
+### V48.107 preregistered gates
+
+Unchanged from V48.100--106:
+
+```text
+State GO:
+  AUC >= 0.70 in >=6/8 cells;
+  >=3/4 roles including Near + Contact.
+
+Support GO / Reserve GO:
+  AUC >= 0.65 AND true-minus-shuffled >= +0.05 in >=6/8 cells;
+  >=3/4 roles including Near + Contact;
+  top1 lift >= +0.10 in >=4/8 cells with Near + Contact represented.
+```
+
+Full GO requires State + Support + Reserve.
+
+### V48.107 preregistered branches
+
+- **Full GO:** close further representation search; authorize one production nominal-invariant control transport integration, no source sweep.
+- **State + Support GO, Reserve STOP:** keep support mechanism and run one signed reserve/debt orientation objective only.
+- **State + Reserve GO, Support STOP:** keep reserve mechanism and run one support-establishment orientation objective only.
+- **Otherwise STOP:** close the single-block orientation family and perform one raw-to-projected action-pathway audit before opening any broader encoder capacity.  The audit must determine whether the missing support orientation is already present in raw candidate-prefix/control variables and lost by projection, or absent before projection.  Source, router, boundary transport and dataset reconstruction remain closed.
+
+### Durable theory entering V48.107
+
+The current evidence chain is:
+
+`static sufficiency != control sufficiency`
+`+ parameter factorization != representation factorization`
+`+ response-loss reduction != cross-distribution control sufficiency`
+`+ action association != signed action equivariance`.
+
+V48.107 tests the constructive corollary: **a control-sufficient recovery representation should preserve the nominal state exactly while learning an ordinal, same-signed action response through the earliest interaction block that can combine candidate prefix and scene interaction information.**
