@@ -38,6 +38,40 @@ from typing import Any
 from select_critical_scenes_v48_34 import _evaluate as _pair_evaluate  # type: ignore
 
 
+# Compact full-run metrics carried into the rendering artifact.  These are
+# deliberately the same endpoint families used in the paper protocol; the
+# renderer labels them as full-run selection metrics so they are not confused
+# with the longer selective trace rerun used only for animation.
+METRIC_SPECS: dict[str, tuple[tuple[str, tuple[str, ...], str, str], ...]] = {
+    "safe": (
+        ("nup", ("closed_loop_bounded_NUP",), "NUP", "higher"),
+        ("intervention_rate", ("intervention_rate",), "Intervention", "lower"),
+        ("clearance_p05_m", ("min_clearance_m_p05", "min_clearance_m_min"), "Clearance p05", "higher"),
+        ("ttc_p05_s", ("ttc_s_p05", "ttc_s_min"), "TTC p05", "higher"),
+        ("overlap_any", ("overlap_any",), "Overlap", "lower"),
+        ("offroad_any", ("offroad_any",), "Off-road", "lower"),
+    ),
+    "near": (
+        ("ttc_p05_s", ("ttc_s_p05",), "TTC p05", "higher"),
+        ("clearance_p05_m", ("min_clearance_m_p05",), "Clearance p05", "higher"),
+        ("critical_ttc_exposure_s", ("critical_ttc_exposure_duration_s",), "Critical-TTC exposure", "lower"),
+        ("near_zero_clearance_rate", ("near_zero_clearance_exposure_rate",), "Near-zero exposure", "lower"),
+        ("overlap_any", ("overlap_any",), "Overlap", "lower"),
+        ("offroad_any", ("offroad_any",), "Off-road", "lower"),
+    ),
+    "contact": (
+        ("terminal_clearance_m", ("post_contact_terminal_clearance_m",), "Terminal clearance", "higher"),
+        ("free_space_auc_m", ("post_contact_free_space_auc_normalized_m",), "Free-space AUC", "higher"),
+        ("clearance_gain_m", ("post_contact_clearance_gain_m",), "Clearance gain", "higher"),
+        ("overlap_duration_s", ("post_contact_overlap_duration_s",), "Overlap duration", "lower"),
+        ("recontact", ("recontact_event",), "Re-contact", "lower"),
+        ("escape", ("post_contact_escape_event",), "Escape", "higher"),
+        ("stable_stop", ("new_stable_stop_quality_event",), "Stable stop", "higher"),
+        ("offroad_any", ("offroad_any",), "Off-road", "lower"),
+    ),
+}
+
+
 DEFAULT_THRESHOLDS = dict(
     minimum_positive_score=0.0,
     min_near_ttc_gain_s=0.25,
@@ -133,6 +167,13 @@ def _metric(scene: dict[str, Any], *names: str) -> float | None:
         if value is not None:
             return value
     return None
+
+
+def _metric_snapshot(regime: str, scene: dict[str, Any]) -> dict[str, float | None]:
+    out: dict[str, float | None] = {}
+    for key, names, _label, _direction in METRIC_SPECS[regime]:
+        out[key] = _metric(scene, *names)
+    return out
 
 
 def _duration_available_s(scene: dict[str, Any], horizon_steps: int, dt_s: float) -> float | None:
@@ -239,6 +280,7 @@ def _paired_rows(
     for key in sorted(ocrap):
         method_scene = ocrap[key]
         external_quality = {name: _absolute_score(regime, baselines[name][key]) for name in baseline_names}
+        external_metrics = {name: _metric_snapshot(regime, baselines[name][key]) for name in baseline_names}
         best_external = max(external_quality, key=lambda name: (external_quality[name], name))
         worst_external = min(external_quality, key=lambda name: (external_quality[name], name))
         ocrap_quality = _absolute_score(regime, method_scene)
@@ -253,6 +295,8 @@ def _paired_rows(
             "available_future_s": duration,
             "ocrap_absolute_score": ocrap_quality,
             "external_absolute_scores": external_quality,
+            "ocrap_metrics": _metric_snapshot(regime, method_scene),
+            "external_metrics": external_metrics,
             "best_external_method": best_external,
             "worst_external_method": worst_external,
         }
@@ -267,6 +311,8 @@ def _paired_rows(
             tier_rank, tier = _tier_safe(terms, missing, safe_score, best_gap)
             rows.append(common | {
                 "score": float(selection_score),
+                "primary_external_method": best_external,
+                "primary_comparator_reason": "highest per-scene external absolute Safe quality",
                 "selection_tier_rank": tier_rank,
                 "selection_tier": tier,
                 "evidence_profile": "nominal_preservation",
@@ -309,25 +355,31 @@ def _paired_rows(
                 "external_absolute_score": external_quality[name],
             }
 
+        # For Near/Contact the reviewer-facing comparator must be the *hardest*
+        # baseline under the same paired critical-safety score used for selection,
+        # not the weakest method and not an unrelated scalar-quality winner.
+        # Positive relative_score means OC-RAP is better, so the smallest value
+        # is the strongest/hardest external comparator on this target.
         hardest = min(baseline_names, key=lambda name: (per_baseline[name]["relative_score"], name))
         pair_best = per_baseline[best_external]
+        pair_primary = per_baseline[hardest]
         worst_pair_score = min(pair_scores)
         median_pair_score = float(statistics.median(pair_scores))
         best_pair_score = max(pair_scores)
         robust_score = 0.55 * worst_pair_score + 0.35 * median_pair_score + 0.10 * best_pair_score
         majority = math.ceil(len(baseline_names) / 2)
-        no_unsafe_vs_best = not pair_best["regression_reasons"] and not pair_best["missing_required_metrics"]
-        no_unsafe_any = all(not row["regression_reasons"] for row in per_baseline.values())
+        no_unsafe_vs_primary = not pair_primary["regression_reasons"] and not pair_primary["missing_required_metrics"]
+        no_unsafe_any = all(not row["regression_reasons"] and not row["missing_required_metrics"] for row in per_baseline.values())
         strict = (
-            no_unsafe_vs_best
-            and bool(pair_best["material_improvements"])
-            and pair_best["relative_score"] > 0.0
+            no_unsafe_vs_primary
+            and bool(pair_primary["material_improvements"])
+            and pair_primary["relative_score"] > 0.0
             and material_count >= majority
             and nonregressive_count == len(baseline_names)
         )
         if strict:
-            tier_rank, tier = 0, "beats_scene_best_strict"
-        elif no_unsafe_vs_best and material_count >= majority and median_pair_score > 0.0:
+            tier_rank, tier = 0, "beats_hardest_external_strict"
+        elif no_unsafe_vs_primary and material_count >= majority and median_pair_score > 0.0:
             tier_rank, tier = 1, "majority_material_gain"
         elif no_unsafe_any and median_pair_score >= 0.0:
             tier_rank, tier = 2, "all_nonregressive_best_available"
@@ -338,12 +390,15 @@ def _paired_rows(
             "score": float(robust_score),
             "selection_tier_rank": tier_rank,
             "selection_tier": tier,
-            "evidence_profile": str(pair_best.get("evidence_profile") or "balanced"),
-            "material_improvements": list(pair_best["material_improvements"]),
-            "regression_reasons": list(pair_best["regression_reasons"]),
-            "missing_required_metrics": list(pair_best["missing_required_metrics"]),
-            "terms": pair_best["terms"],
+            "evidence_profile": str(pair_primary.get("evidence_profile") or "balanced"),
+            "material_improvements": list(pair_primary["material_improvements"]),
+            "regression_reasons": list(pair_primary["regression_reasons"]),
+            "missing_required_metrics": list(pair_primary["missing_required_metrics"]),
+            "terms": pair_primary["terms"],
             "best_external_gap": float(pair_best["relative_score"]),
+            "primary_external_method": hardest,
+            "primary_comparator_reason": "lowest paired critical-safety score across all external baselines (hardest to beat)",
+            "primary_pair_score": float(pair_primary["relative_score"]),
             "hardest_external_method": hardest,
             "worst_pair_score": float(worst_pair_score),
             "median_pair_score": float(median_pair_score),
@@ -385,6 +440,25 @@ def _select_diverse(rows: list[dict[str, Any]], count: int, diversify: bool) -> 
     return selected
 
 
+def _global_external_ranking(regime: str, rows: list[dict[str, Any]], baseline_names: list[str]) -> list[dict[str, Any]]:
+    ranking: list[dict[str, Any]] = []
+    for name in baseline_names:
+        if regime == "safe":
+            values = [float(r["external_absolute_scores"][name]) for r in rows]
+            score = float(statistics.median(values))
+            ranking.append({"method": name, "median_external_absolute_score": score, "sort_value": -score})
+        else:
+            values = [float(r["per_baseline"][name]["relative_score"]) for r in rows]
+            # Lower OC-RAP-minus-baseline score means a harder external comparator.
+            score = float(statistics.median(values))
+            ranking.append({"method": name, "median_ocrap_relative_score": score, "sort_value": score})
+    ranking.sort(key=lambda r: (float(r["sort_value"]), str(r["method"])))
+    for rank, row in enumerate(ranking, 1):
+        row["rank"] = rank
+        row.pop("sort_value", None)
+    return ranking
+
+
 def _parse_baseline_specs(specs: list[str]) -> dict[str, Path]:
     out: dict[str, Path] = {}
     for spec in specs:
@@ -413,6 +487,10 @@ def main() -> int:
     ap.add_argument("--scenario-horizon-steps", type=int, default=91)
     ap.add_argument("--metric-dt-s", type=float, default=0.1)
     ap.add_argument("--diversify-evidence-profiles", action=argparse.BooleanOptionalAction, default=True)
+    ap.add_argument(
+        "--max-selected-tier-rank", type=int, default=None,
+        help="Fail closed if fewer than --num-scenes candidates exist at or above this evidence tier (0=strict, 1=strong).",
+    )
     for key, value in DEFAULT_THRESHOLDS.items():
         ap.add_argument("--" + key.replace("_", "-"), type=float, default=value)
     args = ap.parse_args()
@@ -440,8 +518,11 @@ def main() -> int:
         raise SystemExit(f"unpaired target sets: {json.dumps(mismatch, ensure_ascii=False)}")
 
     rows = _paired_rows(args.regime, ocrap, baselines, args)
-    long_rows = [r for r in rows if r["available_future_s"] is not None and float(r["available_future_s"]) + 1e-9 >= args.min_duration_s]
-    fallback_rows = [r for r in rows if r["available_future_s"] is not None and float(r["available_future_s"]) + 1e-9 >= args.fallback_min_duration_s]
+    tier_rows = rows
+    if args.max_selected_tier_rank is not None:
+        tier_rows = [r for r in rows if int(r["selection_tier_rank"]) <= int(args.max_selected_tier_rank)]
+    long_rows = [r for r in tier_rows if r["available_future_s"] is not None and float(r["available_future_s"]) + 1e-9 >= args.min_duration_s]
+    fallback_rows = [r for r in tier_rows if r["available_future_s"] is not None and float(r["available_future_s"]) + 1e-9 >= args.fallback_min_duration_s]
     if len(long_rows) >= args.num_scenes:
         duration_threshold = float(args.min_duration_s)
         duration_pool = long_rows
@@ -474,15 +555,23 @@ def main() -> int:
         for rank, row in enumerate(selected, 1)
     ]
 
+    global_ranking = _global_external_ranking(args.regime, rows, list(baselines))
+    global_strongest = str(global_ranking[0]["method"]) if global_ranking else None
+    selected = [row | {"global_strongest_external_method": global_strongest} for row in selected]
+
     doc = {
-        "event": "regime_visualization_scene_selection_v51",
+        "event": "regime_visualization_scene_selection_v52",
         "regime": args.regime,
         "exploratory_qualitative_only": True,
         "paper_population_claim_allowed": False,
         "selection_note": (
-            "Safe is ranked by high absolute OC-RAP closed-loop quality with safety guards; "
-            "Near/Contact are ranked by robust multi-baseline relative effects.  Selection is post-hoc qualitative evidence."
+            "All main-table external baselines participate in selection. Safe is ranked by high absolute OC-RAP closed-loop quality with safety guards; "
+            "Near/Contact are ranked by robust multi-baseline relative effects and the reviewer-facing comparator is the per-scene hardest baseline. "
+            "Selection is post-hoc qualitative evidence and does not replace population-level tables."
         ),
+        "max_selected_tier_rank": args.max_selected_tier_rank,
+        "global_external_ranking": global_ranking,
+        "global_strongest_external_method": global_strongest,
         "num_external_baselines": len(baselines),
         "external_baselines": list(baselines),
         "num_paired_targets": len(rows),
