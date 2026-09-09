@@ -33,19 +33,17 @@ source scripts/lib/v50_runtime.sh
 : "${CONTINUE_AFTER_REGIME_FAILURE:=true}"
 : "${SKIP_COMPLETE_METHODS:=true}"
 : "${USE_DYNAMIC_SCHEDULER:=auto}"
+: "${WOMD_ROOT:=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example}"
 : "${WOMD_NUM_SHARDS:=150}"
-: "${WOMD_VAL:=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord@150}"
-: "${WOMD_VAL_INTERACTIVE:=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation_interactive/validation_interactive_tfexample.tfrecord@150}"
-: "${SAFE_CL_WOMD:=$WOMD_VAL}"
-: "${NEAR_CL_WOMD:=$WOMD_VAL_INTERACTIVE}"
-: "${CONTACT_CL_WOMD:=$WOMD_VAL_INTERACTIVE}"
+: "${WOMD_VAL:=$WOMD_ROOT/validation/validation_tfexample.tfrecord@150}"
+: "${WOMD_VAL_INTERACTIVE:=$WOMD_ROOT/validation_interactive/validation_interactive_tfexample.tfrecord@150}"
+: "${SAFE_CL_WOMD:=auto}"
+: "${NEAR_CL_WOMD:=auto}"
+: "${CONTACT_CL_WOMD:=auto}"
 : "${EXTERNAL_CHECKPOINT_ROOT:=$OUT/checkpoints}"
 : "${SAFE_CHECKPOINT_ROOT:=$EXTERNAL_CHECKPOINT_ROOT/safe}"
 : "${NEAR_CHECKPOINT_ROOT:=$EXTERNAL_CHECKPOINT_ROOT/near}"
 
-SAFE_CL_WOMD="$(v50_normalize_womd_spec "$SAFE_CL_WOMD" "$WOMD_NUM_SHARDS")"
-NEAR_CL_WOMD="$(v50_normalize_womd_spec "$NEAR_CL_WOMD" "$WOMD_NUM_SHARDS")"
-CONTACT_CL_WOMD="$(v50_normalize_womd_spec "$CONTACT_CL_WOMD" "$WOMD_NUM_SHARDS")"
 mkdir -p "$OUT" "$OUT/safe" "$OUT/near" "$OUT/contact" "$SAFE_CHECKPOINT_ROOT" "$NEAR_CHECKPOINT_ROOT"
 
 write_phase() {
@@ -85,6 +83,7 @@ fi
 
 common=(
   OCRAP_ROOT="$OCRAP_ROOT"
+  WOMD_ROOT="$WOMD_ROOT"
   CUDA_DEVICES="$CUDA_DEVICES"
   OCRAP_SDPA_BACKEND="$OCRAP_SDPA_BACKEND"
   OCRAP_AMP_DTYPE="$OCRAP_AMP_DTYPE"

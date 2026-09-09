@@ -13,13 +13,19 @@ source scripts/lib/v50_runtime.sh
 : "${VAL_CONTACT:=$OCRAP_ROOT/val_contact}"
 : "${TEST_CONTACT:=$OCRAP_ROOT/test_contact}"
 : "${RUN:=runs/contact_external_baselines}"
-: "${WOMD_VAL_INTERACTIVE:=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation_interactive/validation_interactive_tfexample.tfrecord@150}"
-: "${CL_WOMD:=$WOMD_VAL_INTERACTIVE}"
+: "${WOMD_ROOT:=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example}"
+: "${WOMD_VAL:=$WOMD_ROOT/validation/validation_tfexample.tfrecord@150}"
+: "${WOMD_VAL_INTERACTIVE:=$WOMD_ROOT/validation_interactive/validation_interactive_tfexample.tfrecord@150}"
 : "${WOMD_NUM_SHARDS:=150}"
-CL_WOMD="$(v50_normalize_womd_spec "$CL_WOMD" "$WOMD_NUM_SHARDS")"
 : "${CL_MAX_SCENARIOS:=50}"
 : "${CL_BUCKET_DATASET:=$TEST_CONTACT}"
 : "${CL_BUCKET_SPLIT:=test}"
+: "${CL_WOMD:=auto}"
+if [[ "${CL_WOMD,,}" == auto ]]; then
+  CL_WOMD="$(v50_resolve_bucket_womd_spec "$CL_BUCKET_DATASET" "$CL_BUCKET_SPLIT" "$WOMD_ROOT" "$WOMD_NUM_SHARDS" auto)"
+else
+  CL_WOMD="$(v50_normalize_womd_spec "$CL_WOMD" "$WOMD_NUM_SHARDS")"
+fi
 : "${CL_MAX_TARGETS_PER_SCENE:=1}"
 : "${CL_TARGET_KEYS_FILE:=}"
 : "${CL_RENDER_TRACE:=false}"

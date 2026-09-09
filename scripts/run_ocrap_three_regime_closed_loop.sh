@@ -42,19 +42,32 @@ fi
 : "${CONTACT_GAMMA_REC:=${_auto_contact:-}}"
 : "${OCRAP_ROOT:=/data0/senzeyu2/dataset/OCRAP}"
 : "${OUT:=runs/ocrap_three_regime_closed_loop_v50}"
+: "${WOMD_ROOT:=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example}"
 : "${WOMD_NUM_SHARDS:=150}"
-: "${WOMD_VAL:=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord@150}"
-: "${WOMD_VAL_INTERACTIVE:=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation_interactive/validation_interactive_tfexample.tfrecord@150}"
-: "${SAFE_WOMD:=$WOMD_VAL}"
-: "${NEAR_WOMD:=$WOMD_VAL_INTERACTIVE}"
-: "${CONTACT_WOMD:=$WOMD_VAL_INTERACTIVE}"
-SAFE_WOMD="$(v50_normalize_womd_spec "$SAFE_WOMD" "$WOMD_NUM_SHARDS")"
-NEAR_WOMD="$(v50_normalize_womd_spec "$NEAR_WOMD" "$WOMD_NUM_SHARDS")"
-CONTACT_WOMD="$(v50_normalize_womd_spec "$CONTACT_WOMD" "$WOMD_NUM_SHARDS")"
+: "${WOMD_VAL:=$WOMD_ROOT/validation/validation_tfexample.tfrecord@150}"
+: "${WOMD_VAL_INTERACTIVE:=$WOMD_ROOT/validation_interactive/validation_interactive_tfexample.tfrecord@150}"
 : "${SAFE_BUCKET:=$OCRAP_ROOT/test_safe}"
 : "${NEAR_BUCKET:=$OCRAP_ROOT/test_near_contact}"
 : "${CONTACT_BUCKET:=$OCRAP_ROOT/test_contact}"
 : "${BUCKET_SPLIT:=test}"
+: "${SAFE_WOMD:=auto}"
+: "${NEAR_WOMD:=auto}"
+: "${CONTACT_WOMD:=auto}"
+if [[ "${SAFE_WOMD,,}" == auto ]]; then
+  SAFE_WOMD="$(v50_resolve_bucket_womd_spec "$SAFE_BUCKET" "$BUCKET_SPLIT" "$WOMD_ROOT" "$WOMD_NUM_SHARDS" auto)"
+else
+  SAFE_WOMD="$(v50_normalize_womd_spec "$SAFE_WOMD" "$WOMD_NUM_SHARDS")"
+fi
+if [[ "${NEAR_WOMD,,}" == auto ]]; then
+  NEAR_WOMD="$(v50_resolve_bucket_womd_spec "$NEAR_BUCKET" "$BUCKET_SPLIT" "$WOMD_ROOT" "$WOMD_NUM_SHARDS" auto)"
+else
+  NEAR_WOMD="$(v50_normalize_womd_spec "$NEAR_WOMD" "$WOMD_NUM_SHARDS")"
+fi
+if [[ "${CONTACT_WOMD,,}" == auto ]]; then
+  CONTACT_WOMD="$(v50_resolve_bucket_womd_spec "$CONTACT_BUCKET" "$BUCKET_SPLIT" "$WOMD_ROOT" "$WOMD_NUM_SHARDS" auto)"
+else
+  CONTACT_WOMD="$(v50_normalize_womd_spec "$CONTACT_WOMD" "$WOMD_NUM_SHARDS")"
+fi
 : "${CUDA_DEVICES:=0,1}"
 : "${MAX_SCENARIOS:=0}"
 : "${MAX_STEPS:=40}"

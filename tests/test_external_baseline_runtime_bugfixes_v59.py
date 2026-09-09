@@ -248,6 +248,9 @@ def test_cpsf_source_index_is_hint_and_falls_back_to_identity(monkeypatch, tmp_p
     assert data["source_index_mismatch_count"] == 1
 
 
-def test_near_launcher_defaults_closed_loop_to_standard_validation() -> None:
+def test_near_launcher_defaults_closed_loop_to_dataset_owned_replay_source() -> None:
     text = (ROOT / "scripts/run_near_contact_external_baselines_2gpu_optimized.sh").read_text()
-    assert ': "${CL_WOMD:=$WOMD_VAL}"' in text
+    assert ': "${CL_WOMD:=auto}"' in text
+    assert 'v50_resolve_bucket_womd_spec "$CL_BUCKET_DATASET" "$CL_BUCKET_SPLIT" "$WOMD_ROOT"' in text
+    assert 'validation/validation_tfexample.tfrecord@150' in text
+    assert 'validation_interactive/validation_interactive_tfexample.tfrecord@150' in text

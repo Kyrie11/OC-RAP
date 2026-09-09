@@ -14,18 +14,28 @@ source scripts/lib/v50_runtime.sh
 : "${CALIB_NEAR:=$OCRAP_ROOT/calibration_near_contact}"
 : "${TEST_NEAR:=$OCRAP_ROOT/test_near_contact}"
 : "${RUN:=runs/near_contact_external_baselines_optimized}"
-: "${WOMD_VAL:=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord@150}"
-: "${WOMD_VAL_INTERACTIVE:=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation_interactive/validation_interactive_tfexample.tfrecord@150}"
-# The canonical train/val/calibration/test Near buckets are built from standard
-# WOMD validation.  Closed-loop replay must use the same raw source so bucket
-# identities/time indices remain meaningful.  validation_interactive remains an
-# explicit user override via CL_WOMD, but is not the default for these buckets.
-: "${CL_WOMD:=$WOMD_VAL}"
+: "${WOMD_ROOT:=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example}"
+: "${WOMD_VAL:=$WOMD_ROOT/validation/validation_tfexample.tfrecord@150}"
+: "${WOMD_VAL_INTERACTIVE:=$WOMD_ROOT/validation_interactive/validation_interactive_tfexample.tfrecord@150}"
 : "${WOMD_NUM_SHARDS:=150}"
-CL_WOMD="$(v50_normalize_womd_spec "$CL_WOMD" "$WOMD_NUM_SHARDS")"
 : "${CL_MAX_SCENARIOS:=50}"
 : "${CL_BUCKET_DATASET:=$TEST_NEAR}"
 : "${CL_BUCKET_SPLIT:=test}"
+# Dataset provenance, not a launcher default, owns the replay collection.
+# Explicit CL_WOMD still overrides auto mode, but the normal path is robust to
+# either validation or validation_interactive buckets under WOMD_ROOT.
+: "${CL_WOMD:=auto}"
+if [[ "${CL_WOMD,,}" == auto ]]; then
+  CL_WOMD="$(v50_resolve_bucket_womd_spec "$CL_BUCKET_DATASET" "$CL_BUCKET_SPLIT" "$WOMD_ROOT" "$WOMD_NUM_SHARDS" auto)"
+else
+  CL_WOMD="$(v50_normalize_womd_spec "$CL_WOMD" "$WOMD_NUM_SHARDS")"
+fi
+: "${CALIB_WOMD:=auto}"
+if [[ "${CALIB_WOMD,,}" == auto ]]; then
+  CALIB_WOMD="$(v50_resolve_bucket_womd_spec "$CALIB_NEAR" calibration "$WOMD_ROOT" "$WOMD_NUM_SHARDS" auto)"
+else
+  CALIB_WOMD="$(v50_normalize_womd_spec "$CALIB_WOMD" "$WOMD_NUM_SHARDS")"
+fi
 : "${CL_MAX_TARGETS_PER_SCENE:=1}"
 : "${CL_TARGET_KEYS_FILE:=}"
 : "${CL_RENDER_TRACE:=false}"
@@ -165,7 +175,7 @@ fi
 calibration_valid() {
   local artifact="$1"
   [[ -f "$artifact" ]] || return 1
-  python - "$artifact" "$CONFIG" "$CALIB_NEAR" "$WOMD_VAL" "$CONFORMAL_DELTA" "$CONFORMAL_PREDICTION_HORIZON" "$CONFORMAL_MISSION_HORIZON" "$CONFORMAL_CALIBRATION_UNIT" <<'PY' >/dev/null
+  python - "$artifact" "$CONFIG" "$CALIB_NEAR" "$CALIB_WOMD" "$CONFORMAL_DELTA" "$CONFORMAL_PREDICTION_HORIZON" "$CONFORMAL_MISSION_HORIZON" "$CONFORMAL_CALIBRATION_UNIT" <<'PY' >/dev/null
 import hashlib, json, math, sys
 from pathlib import Path
 from ocrap.config import load_config
@@ -203,11 +213,11 @@ if [[ -n "$CONFORMAL_INTERVALS" ]]; then
 else
   if v50_bool_true "$DO_CALIBRATE"; then
     if v50_bool_true "$FORCE_RECALIBRATE" || ! calibration_valid "$CONFORMAL_CALIBRATION"; then
-      echo "[CALIBRATION] fitting CPSF horizon-wise conformal prediction intervals from $CALIB_NEAR against WOMD standard validation"
+      echo "[CALIBRATION] fitting CPSF horizon-wise conformal prediction intervals from $CALIB_NEAR against dataset-owned WOMD source: $CALIB_WOMD"
       echo "[CALIBRATION-RUNTIME] JAX compute backend=cpu; CUDA plugin discovery sees device $CPU_JAX_VISIBLE_DEVICE"
       run_env_jax_cpu python -u tools/calibrate_external_baselines.py \
         --config "$CONFIG" --dataset "$CALIB_NEAR" --split calibration \
-        --womd-pattern "$WOMD_VAL" --delta "$CONFORMAL_DELTA" \
+        --womd-pattern "$CALIB_WOMD" --delta "$CONFORMAL_DELTA" \
         --prediction-horizon "$CONFORMAL_PREDICTION_HORIZON" \
         --mission-horizon "$CONFORMAL_MISSION_HORIZON" \
         --calibration-unit "$CONFORMAL_CALIBRATION_UNIT" \
@@ -228,7 +238,7 @@ PY
 )"
   validate_intervals "$CONFORMAL_INTERVALS"
 fi
-export CONFORMAL_INTERVALS CONFORMAL_DELTA CONFORMAL_PREDICTION_HORIZON CONFORMAL_MISSION_HORIZON CONFORMAL_CALIBRATION_UNIT WOMD_VAL
+export CONFORMAL_INTERVALS CONFORMAL_DELTA CONFORMAL_PREDICTION_HORIZON CONFORMAL_MISSION_HORIZON CONFORMAL_CALIBRATION_UNIT WOMD_VAL CALIB_WOMD
 
 eval_near_batched() {
   # All Near methods are non-learning observation-only filters/controllers.  A

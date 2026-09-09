@@ -17,6 +17,17 @@ v50_validate_womd_spec() {
   "${args[@]}"
 }
 
+# Resolve a replay collection from the OC-RAP bucket provenance.  The caller
+# passes the WOMD tf_example root (the directory containing validation/ and
+# validation_interactive/); the dataset's stored womd_source_role owns the
+# choice.  This prevents launcher defaults from silently drifting across
+# collections.
+v50_resolve_bucket_womd_spec() {
+  local dataset="$1" split="${2:-test}" womd_root="$3" shards="${4:-150}" role="${5:-auto}"
+  python tools/resolve_womd_replay_source.py \
+    --dataset "$dataset" --split "$split" --womd-root "$womd_root" --shards "$shards" --role "$role"
+}
+
 v50_bool_true() {
   case "${1:-}" in
     1|true|TRUE|yes|YES|on|ON) return 0 ;;

@@ -23,6 +23,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from ocrap.external_baselines.provenance import MAIN_TABLE_BY_REGIME  # noqa: E402
+from resolve_womd_replay_source import resolve_for_dataset  # noqa: E402
 
 SAFE_LEARNED = {
     "gameformer_lite": "source_port_v54",
@@ -107,6 +108,11 @@ def main() -> int:
     ap.add_argument("--ocrap-results-root", type=Path, required=True,
                     help="Root containing safe/near/contact/closed_loop_ocrap.json from the frozen full metric run.")
     ap.add_argument("--ocrap-model-run", type=Path, required=True)
+    ap.add_argument("--ocrap-root", type=Path, required=True,
+                    help="OC-RAP dataset root containing test_safe/test_near_contact/test_contact.")
+    ap.add_argument("--womd-root", type=Path, required=True,
+                    help="WOMD tf_example root containing validation/ and validation_interactive/.")
+    ap.add_argument("--womd-shards", type=int, default=150)
     ap.add_argument("--variant", choices=("balanced", "precision"), default="balanced")
     ap.add_argument("--safe-external-root", type=Path, required=True)
     ap.add_argument("--near-external-root", type=Path, required=True)
@@ -117,6 +123,22 @@ def main() -> int:
     errors: list[str] = []
     roots = {"safe": args.safe_external_root, "near": args.near_external_root, "contact": args.contact_external_root}
     expected_methods = {k: list(v) for k, v in MAIN_TABLE_BY_REGIME.items()}
+    bucket_paths = {
+        "safe": args.ocrap_root / "test_safe",
+        "near": args.ocrap_root / "test_near_contact",
+        "contact": args.ocrap_root / "test_contact",
+    }
+    canonical_replay: dict[str, Any] = {}
+    for regime, bucket in bucket_paths.items():
+        try:
+            canonical_replay[regime] = resolve_for_dataset(
+                bucket, split="test", womd_root=args.womd_root, shards=args.womd_shards, role="auto"
+            )
+        except Exception as exc:
+            canonical_replay[regime] = {
+                "valid": False, "dataset": str(bucket.resolve()), "error": str(exc),
+            }
+            errors.append(f"cannot resolve canonical WOMD replay source for {regime}: {exc}")
 
     candidate_root = args.ocrap_model_run / "candidates" / args.variant
     if not (candidate_root / "model_v48_trac_sr" / "best.pt").is_file():
@@ -208,10 +230,27 @@ def main() -> int:
                 if sd.get("schema_supports_closed_loop") is not True:
                     errors.append(f"external closed-loop dataset support is not valid for {regime}: {support}")
                 od = ocrap_supports.get(regime) or {}
-                if od.get("exists") and od.get("raw_source_role") != sd.get("raw_source_role"):
+                canonical = canonical_replay.get(regime) or {}
+                expected_role = canonical.get("resolved_role")
+                if expected_role:
+                    ocrap_role = od.get("raw_source_role") if od.get("exists") else None
+                    external_role = sd.get("raw_source_role")
+                    if ocrap_role and ocrap_role != expected_role:
+                        errors.append(
+                            f"stale OC-RAP raw WOMD source role for {regime}: recorded={ocrap_role}, "
+                            f"bucket_provenance={expected_role}. Rerun that OC-RAP closed-loop regime with "
+                            f"WOMD_ROOT={args.womd_root} and {regime.upper()}_WOMD=auto before selecting submission videos."
+                        )
+                    if external_role and external_role != expected_role:
+                        errors.append(
+                            f"stale external raw WOMD source role for {regime}: recorded={external_role}, "
+                            f"bucket_provenance={expected_role}. Rerun that external closed-loop regime with "
+                            f"WOMD_ROOT={args.womd_root} and CL_WOMD=auto before selecting submission videos."
+                        )
+                elif od.get("exists") and od.get("raw_source_role") != sd.get("raw_source_role"):
                     errors.append(
                         f"raw WOMD source-role mismatch for {regime}: OC-RAP={od.get('raw_source_role')}, "
-                        f"external={sd.get('raw_source_role')}; qualitative comparison would not replay the same source collection"
+                        f"external={sd.get('raw_source_role')}; canonical bucket replay role could not be resolved"
                     )
             except Exception as exc:
                 errors.append(f"invalid external dataset support JSON {support}: {exc}")
@@ -235,11 +274,13 @@ def main() -> int:
                 external[regime]["conformal_calibration"]["sha256"] = _sha256(cal)
 
     doc = {
-        "schema": "ocrap-submission-visualization-input-contract-v52",
+        "schema": "ocrap-submission-visualization-input-contract-v53",
         "valid": not errors,
         "errors": errors,
         "variant": args.variant,
-        "path_contract": "separate user-run Safe/Near/Contact external roots; no fallback to historical external_baselines_v50",
+        "path_contract": "separate external roots + dataset-provenance-owned WOMD replay under one tf_example root",
+        "womd_root": str(args.womd_root.resolve()),
+        "canonical_replay": canonical_replay,
         "external_main_table_methods": expected_methods,
         "ocrap": {
             "model_run": str(args.ocrap_model_run.resolve()),
@@ -253,6 +294,8 @@ def main() -> int:
         },
         "external": external,
         "notes": [
+            "validation versus validation_interactive is resolved from each OC-RAP bucket's stored womd_source_role; launcher defaults do not own collection identity.",
+            "The WOMD physical root is the tf_example directory containing validation/ and validation_interactive/.",
             "mtime freshness is fail-closed but is not treated as cryptographic proof that an old journal was generated by a particular checkpoint; selective trace reruns explicitly load the resolved current checkpoints.",
             "Near/Contact current main-table methods are non-neural controllers/filters; only Safe GameFormer/PlanTF/PLUTO require learned checkpoints.",
         ],

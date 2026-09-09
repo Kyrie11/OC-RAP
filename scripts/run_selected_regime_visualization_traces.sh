@@ -8,6 +8,7 @@ export PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONNOUSERSITE=1
 
 : "${OCRAP_ROOT:=/data0/senzeyu2/dataset/OCRAP}"
+: "${WOMD_ROOT:=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example}"
 : "${OCRAP_MODEL_RUN:?set OCRAP_MODEL_RUN}"
 : "${MODEL_VARIANT:=balanced}"
 : "${SAFE_EXTERNAL_ROOT:=/home/senzeyu2/code/OC-RAP/runs/safe_external}"
@@ -32,22 +33,23 @@ if [[ "$CLEAN_TRACE_OUTPUT" == true ]]; then
 fi
 mkdir -p "$OUT/ocrap" "$OUT/external"
 
-# Reuse the *exact raw WOMD collections* recorded by the full OC-RAP run after
-# the provenance checker has verified the external run uses the same source role.
+# Replay from the collection resolved from the OC-RAP bucket provenance, not
+# from historical launcher defaults.  The input contract has already validated
+# that both full-metric sides were generated from this same role.
 readarray -t WOMD_SPECS < <(python - "$INPUT_CONTRACT" <<'PY'
 import json,sys
-d=json.load(open(sys.argv[1]))['ocrap']['dataset_support']
+d=json.load(open(sys.argv[1]))['canonical_replay']
 for r in ('safe','near','contact'):
     x=d[r]
-    assert x.get('schema_supports_closed_loop') is True and x.get('womd_pattern'), (r,x)
-    print(x['womd_pattern'])
+    assert x.get('valid') is True and x.get('womd_spec'), (r,x)
+    print(x['womd_spec'])
 PY
 )
 SAFE_WOMD="${WOMD_SPECS[0]}"; NEAR_WOMD="${WOMD_SPECS[1]}"; CONTACT_WOMD="${WOMD_SPECS[2]}"
 
 # Frozen OC-RAP submission model.  Explicit WOMD specs avoid historical launcher defaults.
 MODEL_RUN="$OCRAP_MODEL_RUN" MODEL_VARIANT="$MODEL_VARIANT" \
-OCRAP_ROOT="$OCRAP_ROOT" CUDA_DEVICES="$CUDA_DEVICES" \
+OCRAP_ROOT="$OCRAP_ROOT" WOMD_ROOT="$WOMD_ROOT" CUDA_DEVICES="$CUDA_DEVICES" \
 OUT="$OUT/ocrap" MAX_SCENARIOS=0 MAX_STEPS="$TRACE_MAX_STEPS" \
 SAFE_WOMD="$SAFE_WOMD" NEAR_WOMD="$NEAR_WOMD" CONTACT_WOMD="$CONTACT_WOMD" \
 SAFE_TARGET_KEYS_FILE="$SELECTION_ROOT/safe_target_keys.json" \
@@ -61,7 +63,7 @@ bash scripts/run_ocrap_three_regime_closed_loop.sh
 
 # Safe: three learned current checkpoints come from the user's independent Safe run.
 RUN="$OUT/external/safe" CHECKPOINT_ROOT="$SAFE_EXTERNAL_ROOT/checkpoints" \
-OCRAP_ROOT="$OCRAP_ROOT" CUDA_DEVICES="$CUDA_DEVICES" \
+OCRAP_ROOT="$OCRAP_ROOT" WOMD_ROOT="$WOMD_ROOT" CUDA_DEVICES="$CUDA_DEVICES" \
 DO_TRAIN=false DO_OFFLINE=false DO_CLOSED_LOOP=true RUN_NOMINAL_CONTROL=false RUN_LEGACY_SAFE=false \
 CL_WOMD="$SAFE_WOMD" CL_MAX_SCENARIOS=0 CL_MAX_STEPS="$TRACE_MAX_STEPS" \
 CL_TARGET_KEYS_FILE="$SELECTION_ROOT/safe_target_keys.json" CL_RENDER_TRACE=true \
@@ -69,7 +71,7 @@ SKIP_COMPLETE_METHODS=false CL_RESUME_FORCE=true \
 bash scripts/run_safe_regime_external_baselines.sh
 
 # Near: all six main-table methods are non-neural; reuse the calibration fitted in the user's near_external run.
-RUN="$OUT/external/near" OCRAP_ROOT="$OCRAP_ROOT" CUDA_DEVICES="$CUDA_DEVICES" \
+RUN="$OUT/external/near" OCRAP_ROOT="$OCRAP_ROOT" WOMD_ROOT="$WOMD_ROOT" CUDA_DEVICES="$CUDA_DEVICES" \
 DO_TRAIN=false DO_CALIBRATE=false DO_OFFLINE=false DO_CLOSED_LOOP=true RUN_ORACLE_CLOSED_LOOP=false RUN_LEGACY_NEAR=false \
 CONFORMAL_CALIBRATION="$NEAR_EXTERNAL_ROOT/conformal_calibration.json" \
 CL_WOMD="$NEAR_WOMD" CL_LABEL_MODE=selected CL_MAX_SCENARIOS=0 CL_MAX_STEPS="$TRACE_MAX_STEPS" \
@@ -78,7 +80,7 @@ SKIP_COMPLETE_METHODS=false CL_RESUME_FORCE=true \
 bash scripts/run_near_contact_external_baselines_2gpu_optimized.sh
 
 # Contact: current six methods are non-neural controllers/optimization adapters.
-RUN="$OUT/external/contact" OCRAP_ROOT="$OCRAP_ROOT" CUDA_DEVICES="$CUDA_DEVICES" \
+RUN="$OUT/external/contact" OCRAP_ROOT="$OCRAP_ROOT" WOMD_ROOT="$WOMD_ROOT" CUDA_DEVICES="$CUDA_DEVICES" \
 DO_TRAIN=false DO_OFFLINE=false DO_CLOSED_LOOP=true RUN_LEGACY_CONTACT=false \
 CL_WOMD="$CONTACT_WOMD" CL_MAX_SCENARIOS=0 CL_MAX_STEPS="$TRACE_MAX_STEPS" \
 CL_TARGET_KEYS_FILE="$SELECTION_ROOT/contact_target_keys.json" CL_RENDER_TRACE=true \

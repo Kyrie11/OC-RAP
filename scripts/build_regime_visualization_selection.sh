@@ -9,6 +9,9 @@ export PYTHONNOUSERSITE=1
 
 : "${OCRAP_RESULTS_ROOT:?set OCRAP_RESULTS_ROOT to the frozen V48.111 submission full-metric variant root (contains safe/near/contact)}"
 : "${OCRAP_MODEL_RUN:?set OCRAP_MODEL_RUN to the frozen V48.80 checkpoint/calibration owner}"
+: "${OCRAP_ROOT:=/data0/senzeyu2/dataset/OCRAP}"
+: "${WOMD_ROOT:=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example}"
+: "${WOMD_NUM_SHARDS:=150}"
 : "${MODEL_VARIANT:=balanced}"
 : "${SAFE_EXTERNAL_ROOT:=/home/senzeyu2/code/OC-RAP/runs/safe_external}"
 : "${NEAR_EXTERNAL_ROOT:=/home/senzeyu2/code/OC-RAP/runs/near_external}"
@@ -24,6 +27,9 @@ mkdir -p "$OUT/provenance" "$OUT/selection"
 python tools/check_regime_visualization_inputs.py \
   --ocrap-results-root "$OCRAP_RESULTS_ROOT" \
   --ocrap-model-run "$OCRAP_MODEL_RUN" \
+  --ocrap-root "$OCRAP_ROOT" \
+  --womd-root "$WOMD_ROOT" \
+  --womd-shards "$WOMD_NUM_SHARDS" \
   --variant "$MODEL_VARIANT" \
   --safe-external-root "$SAFE_EXTERNAL_ROOT" \
   --near-external-root "$NEAR_EXTERNAL_ROOT" \
