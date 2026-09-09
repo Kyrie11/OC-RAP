@@ -170,6 +170,45 @@ def _merge_runtime_cfg_for_inference(ckpt_cfg: dict[str, Any], runtime_cfg: dict
     return cfg
 
 
+def _apply_runtime_mechanism_knockouts(model: OCRAPModel, cfg: dict[str, Any]) -> list[str]:
+    """Apply explicit inference-only mechanism knockouts after checkpoint validation.
+
+    The checkpoint contract is validated *before* this helper runs.  These switches
+    are therefore publication ablations of a frozen checkpoint, not a way to load
+    an incompatible checkpoint.  Each knockout is fail-closed: requesting a
+    mechanism that is already disabled raises instead of silently producing a
+    no-op ablation.
+    """
+    ablation = cfg.get("ablation", {}) if isinstance(cfg.get("ablation", {}), dict) else {}
+    model_cfg = cfg.setdefault("model", {})
+    if not isinstance(model_cfg, dict):
+        raise RuntimeError("runtime model config must be a mapping for mechanism ablations")
+
+    switches = {
+        "disable_active_set_alignment": "direct_recovery_semantic_witness_active_set_alignment",
+        "disable_route_alignment": "direct_recovery_semantic_witness_route_alignment",
+        "disable_reentry_alignment": "direct_recovery_semantic_witness_reentry_alignment",
+        "disable_control_projection": "direct_recovery_semantic_witness_control_projection",
+    }
+    applied: list[str] = []
+    for ablation_key, attr in switches.items():
+        if not bool(ablation.get(ablation_key, False)):
+            continue
+        if not hasattr(model, attr):
+            raise RuntimeError(f"unknown model mechanism for ablation {ablation_key}: {attr}")
+        if not bool(getattr(model, attr)):
+            raise RuntimeError(
+                f"requested ablation {ablation_key} is a no-op because checkpoint mechanism {attr} is already OFF"
+            )
+        setattr(model, attr, False)
+        model_cfg[attr] = False
+        applied.append(ablation_key)
+
+    if applied:
+        model_cfg["inference_mechanism_knockouts"] = list(applied)
+    return applied
+
+
 def _infer_d_model(ckpt: dict[str, Any], cfg: dict[str, Any]) -> int:
     if "d_model" in ckpt:
         return int(ckpt["d_model"])
@@ -1437,6 +1476,7 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
             f"checkpoint/inference evidence contract mismatch: expected={expected_contract}, actual={actual_contract}"
         )
     cfg["model"]["inference_evidence_contract_verified"] = True
+    _apply_runtime_mechanism_knockouts(model, cfg)
     return ModelBundle(model=model, cfg=cfg, device=device)
 
 

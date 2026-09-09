@@ -435,6 +435,9 @@ def select_baseline(
                 rescue_challenge_nominal_guard_max_gap=_cfg_float(scfg, "rescue_challenge_nominal_guard_max_gap", -1.0, bucket_name),
                 intervention_cooldown_steps=int(_cfg_float(scfg, "intervention_cooldown_steps", 0.0, bucket_name)),
                 steps_since_last_intervention=(None if not _cfg_has_value(scfg, "steps_since_last_intervention", bucket_name) else _cfg_float(scfg, "steps_since_last_intervention", 1.0e9, bucket_name)),
+                ablation_without_absolute_admission=bool(
+                    (cfg.get("ablation", {}) or {}).get("without_rifa_absolute_admission", False)
+                ),
             )
             gap_arr = np.asarray(pred_gap if pred_gap is not None else np.zeros_like(pred_r_dep), dtype=float)
             score = pred_r_dep - beta * np.maximum(0.0, gap_arr)

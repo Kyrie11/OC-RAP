@@ -477,6 +477,7 @@ def calibrated_constrained_select(
     # is stronger than a soft rate penalty and prevents repeated braking bursts.
     intervention_cooldown_steps: int = 0,
     steps_since_last_intervention: float | None = None,
+    ablation_without_absolute_admission: bool = False,
 ) -> SelectionResult:
     """Soft calibrated OC-RAP selector.
 
@@ -547,7 +548,15 @@ def calibrated_constrained_select(
     recovery_harm_limit = float(gamma_D) if recovery_cert_max_harm is None else float(recovery_cert_max_harm)
     recovery_safe = feasible & (hard <= recovery_hard_limit) & (harm <= recovery_harm_limit)
 
-    scalar_admitted = safe & (rec_lcb >= float(gamma_rec))
+    # Publication ablation: remove only the RIFA absolute-admission set gate.
+    # Hard/harm feasibility, frozen calibration values, and all other selector
+    # scoring terms stay unchanged, so this is a local functional knockout rather
+    # than a hidden recalibration of the ablated policy.
+    scalar_admitted = (
+        safe.copy()
+        if bool(ablation_without_absolute_admission)
+        else (safe & (rec_lcb >= float(gamma_rec)))
+    )
 
     # v15 dual certificate.  The scalar OC-MERO LCB can be overly pessimistic
     # under the closed-loop distribution shift observed in v14, while the
