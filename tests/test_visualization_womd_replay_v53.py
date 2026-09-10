@@ -82,3 +82,82 @@ def test_launchers_use_dataset_owned_auto_replay():
     assert ': "${SAFE_CL_WOMD:=auto}"' in wrapper
     assert ': "${NEAR_CL_WOMD:=auto}"' in wrapper
     assert ': "${CONTACT_CL_WOMD:=auto}"' in wrapper
+
+
+def _make_legacy_dataset_with_resume_contract(root: Path, pattern: str, *, adopted_legacy: bool = False) -> Path:
+    samples = root / "samples"
+    samples.mkdir(parents=True)
+    p = samples / "sample_000.npz"
+    # Deliberately emulate the user's historical dataset: no womd_source_role.
+    np.savez_compressed(p, split_id=np.asarray("test"), scene_id=np.asarray("scene_0"), time_index=np.asarray(10))
+    with (root / "manifest.csv").open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=["path", "split_id", "scene_id", "time_index"])
+        w.writeheader()
+        w.writerow({"path": "samples/sample_000.npz", "split_id": "test", "scene_id": "scene_0", "time_index": 10})
+    (root / "resume_contract.json").write_text(
+        __import__("json").dumps({
+            "generator_version": "fixture",
+            "fingerprint": "abc",
+            "adopted_legacy": adopted_legacy,
+            "semantic_config": {"womd_patterns": pattern},
+        }),
+        encoding="utf-8",
+    )
+    return root
+
+
+def test_legacy_unknown_rows_fall_back_to_resume_contract_validation(tmp_path: Path):
+    data = _make_legacy_dataset_with_resume_contract(
+        tmp_path / "dataset",
+        "/archive/tf_example/validation/validation_tfexample.tfrecord@2",
+    )
+    womd = tmp_path / "tf_example"
+    _make_shards(womd, "validation")
+    doc = resolver.resolve_for_dataset(data, split="test", womd_root=womd, shards=2, role="auto")
+    assert doc["dataset_source_role"] == "validation"
+    assert doc["resolved_role"] == "validation"
+    assert doc["role_counts"] == {"unknown": 1}
+    assert "resume_contract.json:semantic_config.womd_patterns" == doc["dataset_source_role_source"]
+    assert doc["explicit_role_for_unprovenanced_legacy_dataset"] is False
+
+
+def test_legacy_unknown_rows_fall_back_to_resume_contract_interactive(tmp_path: Path):
+    data = _make_legacy_dataset_with_resume_contract(
+        tmp_path / "dataset",
+        "/archive/tf_example/validation_interactive/validation_interactive_tfexample.tfrecord@2",
+    )
+    womd = tmp_path / "tf_example"
+    _make_shards(womd, "validation_interactive")
+    doc = resolver.resolve_for_dataset(data, split="test", womd_root=womd, shards=2, role="auto")
+    assert doc["resolved_role"] == "validation_interactive"
+    assert doc["role_counts"] == {"unknown": 1}
+
+
+def test_stored_row_role_and_resume_contract_conflict_fails_closed(tmp_path: Path):
+    data = _make_dataset(tmp_path / "dataset", "validation")
+    (data / "resume_contract.json").write_text(
+        __import__("json").dumps({
+            "semantic_config": {
+                "womd_patterns": "/archive/tf_example/validation_interactive/validation_interactive_tfexample.tfrecord@2"
+            }
+        }),
+        encoding="utf-8",
+    )
+    womd = tmp_path / "tf_example"
+    _make_shards(womd, "validation")
+    with pytest.raises(RuntimeError, match="disagrees with dataset-level provenance"):
+        resolver.resolve_for_dataset(data, split="test", womd_root=womd, shards=2, role="auto")
+
+
+def test_explicit_role_can_declare_fully_unprovenanced_legacy_dataset(tmp_path: Path):
+    samples = tmp_path / "dataset" / "samples"
+    samples.mkdir(parents=True)
+    np.savez_compressed(samples / "sample_000.npz", split_id=np.asarray("test"))
+    womd = tmp_path / "tf_example"
+    _make_shards(womd, "validation")
+    doc = resolver.resolve_for_dataset(
+        tmp_path / "dataset", split="test", womd_root=womd, shards=2, role="validation"
+    )
+    assert doc["dataset_source_role"] == "unknown"
+    assert doc["resolved_role"] == "validation"
+    assert doc["explicit_role_for_unprovenanced_legacy_dataset"] is True
