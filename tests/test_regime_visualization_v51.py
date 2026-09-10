@@ -113,3 +113,22 @@ def test_favorable_delta_respects_metric_direction_and_missing_values():
     assert renderer._favorable_delta(3.0, 2.0, "higher") == 1.0
     assert renderer._favorable_delta(1.0, 2.0, "lower") == 1.0
     assert renderer._favorable_delta(None, 2.0, "higher") is None
+
+
+def test_submission_video_uses_compact_paper_display_names():
+    expected = {
+        "gameformer_lite": "GameFormer",
+        "pdm_closed": "PDM-C",
+        "marc_lite": "MARC",
+        "robust_scenario_mpc": "RobustMPC",
+        "predictive_safety_filter": "PSF",
+        "conformal_predictive_safety_filter": "CPSF",
+        "postimpact_mpc_lite": "PostMPC",
+        "postimpact_motion_tvlqr": "PostTVLQR",
+        "compensatory_postimpact_mpc": "CompMPC",
+        "robust_postimpact_control": "SMC-QP",
+    }
+    for method, label in expected.items():
+        assert renderer._display_name(method) == label
+    assert renderer._display_name("ocrap") == "OC-RAP"
+    assert renderer._short_comparator_role("lowest paired critical-safety score across all external baselines (hardest to beat)", "near") == "Hardest paired external"

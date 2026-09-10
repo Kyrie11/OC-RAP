@@ -107,14 +107,57 @@ def _safe_name(text: str) -> str:
     return value.strip("._-") or "model"
 
 
+# Compact paper-facing labels.  The provenance registry keeps the full method
+# names for tables/audits; videos deliberately use short labels so the world
+# view and metric panel stay readable at 16:9.
+PAPER_DISPLAY_NAMES: dict[str, str] = {
+    "ocrap": "OC-RAP",
+    # Safe
+    "gameformer_lite": "GameFormer",
+    "plantf": "PlanTF",
+    "pluto": "PLUTO",
+    "pdm_closed": "PDM-C",
+    "pdm_hybrid": "PDM-H",
+    "idm": "IDM",
+    # Near-contact
+    "marc_lite": "MARC",
+    "racp_lite": "RACP",
+    "robust_scenario_mpc": "RobustMPC",
+    "predictive_safety_filter": "PSF",
+    "dr_cvar_safety_filter": "DR-CVaR",
+    "conformal_predictive_safety_filter": "CPSF",
+    # Contact
+    "postimpact_mpc_lite": "PostMPC",
+    "post_crash_braking": "PostBrake",
+    "postimpact_motion_tvlqr": "PostTVLQR",
+    "post_collision_restoration": "PostRestore",
+    "compensatory_postimpact_mpc": "CompMPC",
+    "robust_postimpact_control": "SMC-QP",
+}
+
+
 def _display_name(method: str) -> str:
-    if method == "ocrap":
-        return "OC-RAP"
+    key = str(method).strip().lower()
+    if key in PAPER_DISPLAY_NAMES:
+        return PAPER_DISPLAY_NAMES[key]
     if find_provenance is not None:
         item = find_provenance(method)
         if item is not None:
             return str(item.reporting_name or item.canonical_name)
     return method
+
+
+def _short_comparator_role(text: str, regime: str) -> str:
+    low = str(text or "").lower()
+    if regime == "safe" or "highest per-scene" in low:
+        return "Strongest Safe external"
+    if "lowest paired" in low or "hardest" in low:
+        return "Hardest paired external"
+    if "regime-level strongest" in low or "global" in low:
+        return "Global strongest external"
+    if "weakest" in low or "worst" in low:
+        return "Weakest external (supp.)"
+    return "External comparator"
 
 
 PANEL_METRICS: dict[str, tuple[tuple[str, str, str, str, int], ...]] = {
@@ -523,16 +566,18 @@ def _draw_info_panel(ax, *, item: dict[str, Any], selection: dict[str, Any], reg
     y -= 0.036
     ax.text(0.0, y, "selection journals (not the longer trace rerun)", transform=ax.transAxes, va="top", fontsize=7.2, alpha=0.72)
     y -= 0.052
-    ax.text(0.0, y, f"Comparator: {_short_display(comparator)}", transform=ax.transAxes, va="top", fontsize=8.4, fontweight="bold")
+    comparator_name = _short_display(comparator, 18)
+    role_short = _short_comparator_role(comparator_role, regime)
+    ax.text(0.0, y, f"Comparator: {comparator_name}", transform=ax.transAxes, va="top", fontsize=8.4, fontweight="bold")
     y -= 0.028
-    ax.text(0.0, y, f"role: {comparator_role}", transform=ax.transAxes, va="top", fontsize=7.3, alpha=0.75)
+    ax.text(0.0, y, role_short, transform=ax.transAxes, va="top", fontsize=7.3, alpha=0.75)
     y -= 0.052
 
     om = item.get("ocrap_metrics") or {}
     em = (item.get("external_metrics") or {}).get(comparator, {}) or {}
-    ax.text(0.00, y, "metric", transform=ax.transAxes, fontsize=7.5, fontweight="bold")
+    ax.text(0.00, y, "Metric", transform=ax.transAxes, fontsize=7.5, fontweight="bold")
     ax.text(0.51, y, "OC-RAP", transform=ax.transAxes, fontsize=7.5, fontweight="bold", ha="right")
-    ax.text(0.76, y, "external", transform=ax.transAxes, fontsize=7.5, fontweight="bold", ha="right")
+    ax.text(0.76, y, comparator_name, transform=ax.transAxes, fontsize=7.5, fontweight="bold", ha="right")
     ax.text(0.99, y, "benefit Δ", transform=ax.transAxes, fontsize=7.5, fontweight="bold", ha="right")
     y -= 0.027
     for key, label, unit, direction, digits in PANEL_METRICS[regime]:
@@ -586,7 +631,7 @@ def _draw_info_panel(ax, *, item: dict[str, Any], selection: dict[str, Any], reg
 def _save_animation(fig, update, frame_count, fps, output: Path, use_mp4: bool):
     anim = animation.FuncAnimation(fig, update, frames=frame_count, interval=1000 / fps, blit=False)
     if use_mp4:
-        writer = animation.FFMpegWriter(fps=fps, bitrate=2200, metadata={"artist": "OC-RAP regime visualization v51"})
+        writer = animation.FFMpegWriter(fps=fps, bitrate=2200, metadata={"artist": "OC-RAP submission visualization v54"})
         anim.save(output, writer=writer)
     else:
         writer = animation.PillowWriter(fps=fps)
@@ -622,15 +667,16 @@ def _render_pair(*, methods, scenes, traces, item, selection, regime, displays, 
     timeline_ax = figure.add_subplot(grid[1, 0:2]); timeline_twin = timeline_ax.twinx()
     info_ax = figure.add_subplot(grid[:, 2])
     regime_title = "NEAR-CONTACT" if regime == "near" else regime.upper()
-    comparator_label = "strongest Safe external" if regime == "safe" else "hardest paired external"
+    comparator_name = _short_display(comparator, 20)
+    role_short = _short_comparator_role(comparator_role, regime)
     figure.suptitle(
-        f"{regime_title} · OC-RAP vs {comparator_label} · qualitative rank {item.get('category_rank')}",
-        fontsize=12.0, fontweight="bold", y=0.985,
+        f"{regime_title} · OC-RAP vs {comparator_name} · Rank {item.get('category_rank')}",
+        fontsize=12.2, fontweight="bold", y=0.985,
     )
     figure.text(
         0.5, 0.952,
-        f"same target · fixed world camera · selected using all {selection.get('num_external_baselines', '?')} main-table baselines · {comparator_role}",
-        ha="center", va="top", fontsize=8.0, alpha=0.78,
+        f"{role_short} · Same target · Fixed world camera · Selection used all {selection.get('num_external_baselines', '?')} baselines",
+        ha="center", va="top", fontsize=8.1, alpha=0.78,
     )
     figure.subplots_adjust(top=0.91, bottom=0.075, left=0.05, right=0.985, hspace=0.30, wspace=0.18)
     _draw_info_panel(info_ax, item=item, selection=selection, regime=regime, comparator=comparator, comparator_role=comparator_role)
