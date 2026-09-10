@@ -41,8 +41,10 @@ RENDER_TRACE="${RENDER_TRACE:-false}"
 RENDER_MAX_AGENTS="${RENDER_MAX_AGENTS:-48}"
 SAVE_PARTIAL="${SAVE_PARTIAL:-true}"
 RESUME_FORCE="${RESUME_FORCE:-false}"
+RESUME="${RESUME:-true}"
 PROFILE_TIMING="${PROFILE_TIMING:-true}"
 PREFLIGHT="${PREFLIGHT:-true}"
+PREFLIGHT_SUPPORT_JSON="${PREFLIGHT_SUPPORT_JSON:-}"
 PARTIAL_WRITE_EVERY_SCENES="${PARTIAL_WRITE_EVERY_SCENES:-32}"
 PROGRESS_EVERY_STEPS="${PROGRESS_EVERY_STEPS:-10}"
 # Full render traces are needed only for the ten selected qualitative reruns.
@@ -83,7 +85,13 @@ export MKL_NUM_THREADS="${MKL_NUM_THREADS:-4}"
 export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-4}"
 
 DATASET_SPEC="$(v50_normalize_womd_spec "$WOMD_VAL" "$WOMD_NUM_SHARDS")"
-if [[ -n "$BUCKET_DATASET" && "$PREFLIGHT" == true ]]; then
+if [[ -n "$BUCKET_DATASET" && -n "$PREFLIGHT_SUPPORT_JSON" ]]; then
+  [[ -f "$PREFLIGHT_SUPPORT_JSON" ]] || { echo "Missing PREFLIGHT_SUPPORT_JSON: $PREFLIGHT_SUPPORT_JSON" >&2; exit 2; }
+  # The outer ablation scheduler may validate each immutable regime/WOMD pair once
+  # and fan that verified support contract out to many functional knockouts.
+  # This removes repeated full bucket provenance scans without weakening checks.
+  cp -f "$PREFLIGHT_SUPPORT_JSON" "$RUN_DIR/closed_loop_dataset_support.json"
+elif [[ -n "$BUCKET_DATASET" && "$PREFLIGHT" == true ]]; then
   preflight_target_args=()
   if [[ -n "$TARGET_KEYS_FILE" ]]; then
     preflight_target_args=(--target-keys-file "$TARGET_KEYS_FILE")
@@ -115,6 +123,7 @@ ARGS=(
   --set "closed_loop.render_max_agents=$RENDER_MAX_AGENTS"
   --set "closed_loop.save_partial=$SAVE_PARTIAL"
   --set "closed_loop.resume_force=$RESUME_FORCE"
+  --set "closed_loop.resume=$RESUME"
   --set "closed_loop.partial_write_every_scenes=$PARTIAL_WRITE_EVERY_SCENES"
   --set "closed_loop.progress_every_steps=$PROGRESS_EVERY_STEPS"
   --set "closed_loop.result_scene_detail=$RESULT_SCENE_DETAIL"

@@ -7,8 +7,8 @@ from pathlib import Path
 ARM_META = {
     "no_obs_consistency": ("w/o observation consistency", ("near", "contact"), "main"),
     "mean_tail": ("mean instead of lower-tail", ("near", "contact"), "main"),
-    "no_actuator_projection": ("w/o actuator projection", ("near", "contact"), "main"),
-    "no_persistent_reentry": ("w/o persistent re-entry", ("contact",), "main"),
+    "no_actuator_projection": ("w/o recovery-witness actuator projection", ("near", "contact"), "main"),
+    "no_persistent_reentry": ("w/o recovery-witness persistent re-entry", ("contact",), "main"),
     "no_rifa_absolute_admission": ("w/o RIFA absolute admission", ("safe", "near", "contact"), "main"),
     "no_active_set_alignment": ("w/o active-set alignment", ("near", "contact"), "supplementary"),
     "no_route_alignment": ("w/o route alignment", ("near", "contact"), "supplementary"),
@@ -44,7 +44,7 @@ def main() -> int:
         w=csv.writer(f); w.writerow(["arm","reporting_name","tier","safe","near","contact"])
         for arm,(label,regimes,tier) in ARM_META.items():
             w.writerow([arm,label,tier,int("safe" in regimes),int("near" in regimes),int("contact" in regimes)])
-    lines=["# V48.111 submission ablation matrix","","> Functional knockouts use the same frozen V48.80 checkpoint and frozen per-bucket calibration. No ablation is retrained or recalibrated.","","| Ablation | Tier | Safe | Near | Contact |","|---|---|:---:|:---:|:---:|"]
+    lines=["# V48.111 submission ablation matrix","","> Functional knockouts use the same frozen V48.80 checkpoint and frozen per-bucket calibration. No ablation is retrained or recalibrated. Actuator-projection and re-entry knockouts modify executable recovery-witness/certification semantics; they do not replace Waymax dynamics or execute a separate low-level recovery controller.","","| Ablation | Tier | Safe | Near | Contact |","|---|---|:---:|:---:|:---:|"]
     for arm,(label,regimes,tier) in ARM_META.items():
         lines.append(f"| {label} | {tier} | {'✓' if 'safe' in regimes else '—'} | {'✓' if 'near' in regimes else '—'} | {'✓' if 'contact' in regimes else '—'} |")
     (args.output_dir/"ablation_matrix.md").write_text("\n".join(lines)+"\n",encoding="utf-8")
