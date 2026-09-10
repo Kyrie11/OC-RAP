@@ -44,7 +44,9 @@ printf '[CANONICAL] Safe=%s Near=%s Contact=%s\n' "$safe_role" "$near_role" "$co
 # v53 input contract in the user's current run.  We do not touch Safe or Near
 # external population results because they already match bucket provenance.
 archive_ocrap_regime() {
-  local regime="$1" src="$OCRAP_RESULTS_ROOT/$regime" dst="$backup/ocrap_$regime"
+  local regime="$1"
+  local src="$OCRAP_RESULTS_ROOT/$regime"
+  local dst="$backup/ocrap_$regime"
   mkdir -p "$dst"
   shopt -s nullglob
   local files=("$src"/closed_loop_ocrap.json* "$src"/closed_loop_ocrap.log "$src"/closed_loop_dataset_support.json)
