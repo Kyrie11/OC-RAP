@@ -7,6 +7,7 @@ REPO="${OCRAP_REPO:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"; cd
 export PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}"; export PYTHONNOUSERSITE=1
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"; export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
 BASE_OUT="${BASE_OUT:-/home/senzeyu2/code/OC-RAP/runs}"; GPU0="${GPU0:-0}"; GPU1="${GPU1:-1}"
+RUN_ID="${V48111_RUN_ID:-$(python -c 'import uuid; print(uuid.uuid4().hex)')}"; export V48111_RUN_ID="$RUN_ID"
 REFERENCE_A="${V48111_REFERENCE_A:-$BASE_OUT/ocrap_v48_56_dcp_drfc_bcde_drac_ablation_A}"
 L80_RUN="${V48111_L80:-$BASE_OUT/ocrap_v48_80_dcp_drfc_bcde_rifa_pistc_main}"
 V93_AUDIT="${V48111_V93_AUDIT:-$BASE_OUT/OC-RAP-v48.93-factor-mediation-audit.jsonl}"
@@ -19,10 +20,15 @@ RUNTIME="$BASE_OUT/OC-RAP-v48.111-runtime-code-contract.json"
 BOUT="$BASE_OUT/OC-RAP-v48.111-CNRO-balanced.json"; POUT="$BASE_OUT/OC-RAP-v48.111-CNRO-precision.json"
 BSTATE="$BASE_OUT/OC-RAP-v48.111-CNRO-balanced.pt"; PSTATE="$BASE_OUT/OC-RAP-v48.111-CNRO-precision.pt"
 COMPARE="$BASE_OUT/OC-RAP-v48.111-DCP-DRFC-BCDE-RIFA-OC-CNRO-comparison.json"
-COMPLETE="$BASE_OUT/OC-RAP-v48.111-PIPELINE_COMPLETE.json"; AUDITS_ZIP="$BASE_OUT/OC-RAP-v48.111-OC-CNRO-audits.zip"
-mkdir -p "$BASE_OUT" "$CACHE"; rm -f "$RUNTIME" "$BOUT" "$POUT" "$BSTATE" "$PSTATE" "$COMPARE" "$COMPLETE" "$AUDITS_ZIP"
+COMPLETE="$BASE_OUT/OC-RAP-v48.111-PIPELINE_COMPLETE.json"
+BUNDLE_MANIFEST="$BASE_OUT/OC-RAP-v48.111-OC-CNRO-result-bundle-manifest.json"
+RESULTS_ZIP="$BASE_OUT/OC-RAP-v48.111-OC-CNRO-results.zip"
+mkdir -p "$BASE_OUT" "$CACHE"
+# Remove both canonical prior outputs and legacy CNGO aliases so a manual glob cannot mix runs.
+rm -f "$RUNTIME" "$BOUT" "$POUT" "$BSTATE" "$PSTATE" "$COMPARE" "$COMPLETE" "$BUNDLE_MANIFEST" "$RESULTS_ZIP"
+rm -f "$BASE_OUT"/OC-RAP-v48.111-CNGO-* "$BASE_OUT"/OC-RAP-v48.111-DCP-DRFC-BCDE-RIFA-OC-CNGO-comparison.json "$BASE_OUT"/OC-RAP-v48.111-OC-CNGO-*.zip 2>/dev/null || true
 
-python tools/check_constraint_native_orientation_contract.py --repo "$REPO" --output "$RUNTIME"
+python tools/check_constraint_native_orientation_contract.py --repo "$REPO" --run-id "$RUN_ID" --output "$RUNTIME"
 python - "$V110_PIPELINE" "$V110_COMPARE" <<'PY'
 import hashlib,json,pathlib,sys
 p,c=map(pathlib.Path,sys.argv[1:]);want='5bb9bbac2b5a88cb9419308804afdfce22643cd986df284224e1c9f3617e1c9d'
@@ -43,14 +49,14 @@ run_one(){
   [[ -f "$ckpt" ]] || { echo "missing L80 checkpoint $ckpt" >&2; return 30; }
   CUDA_VISIBLE_DEVICES="$gpu" python tools/run_constraint_native_recovery_orientation_audit.py \
     --checkpoint "$ckpt" --train-index "$TRAIN_INDEX" --dev-index "$DEV_INDEX" --certificate-index "$CERT_INDEX" \
-    --v93-audit "$V93_AUDIT" --cache-dir "$CACHE/$v" --device cuda --variant "$v" --output "$out" --state-output "$state"
+    --v93-audit "$V93_AUDIT" --cache-dir "$CACHE/$v" --device cuda --variant "$v" --run-id "$RUN_ID" --output "$out" --state-output "$state"
 }
 set +e
 run_one balanced "$GPU0" "$BOUT" "$BSTATE" & p0=$!
 run_one precision "$GPU1" "$POUT" "$PSTATE" & p1=$!
 wait "$p0";r0=$?;wait "$p1";r1=$?;set -e
 [[ $r0 == 0 && $r1 == 0 ]] || { echo "V48.111 CNRO run failure balanced=$r0 precision=$r1" >&2; exit 30; }
-python tools/compare_constraint_native_recovery_orientation.py --balanced "$BOUT" --precision "$POUT" --v110-pipeline "$V110_PIPELINE" --v110-comparison "$V110_COMPARE" --output "$COMPARE"
-python tools/check_constraint_native_orientation_pipeline.py --runtime "$RUNTIME" --balanced "$BOUT" --precision "$POUT" --balanced-state "$BSTATE" --precision-state "$PSTATE" --comparison "$COMPARE" --v48-110-pipeline "$V110_PIPELINE" --v48-110-comparison "$V110_COMPARE" --output "$COMPLETE"
-cd "$BASE_OUT";zip -qj "$AUDITS_ZIP" "$RUNTIME" "$BOUT" "$POUT" "$BSTATE" "$PSTATE" "$COMPARE" "$COMPLETE"
-printf 'V48.111 complete. Upload:\n%s\n%s\n%s\n' "$BOUT" "$POUT" "$AUDITS_ZIP"
+python tools/compare_constraint_native_recovery_orientation.py --balanced "$BOUT" --precision "$POUT" --v110-pipeline "$V110_PIPELINE" --v110-comparison "$V110_COMPARE" --run-id "$RUN_ID" --output "$COMPARE"
+python tools/check_constraint_native_orientation_pipeline.py --runtime "$RUNTIME" --balanced "$BOUT" --precision "$POUT" --balanced-state "$BSTATE" --precision-state "$PSTATE" --comparison "$COMPARE" --v48-110-pipeline "$V110_PIPELINE" --v48-110-comparison "$V110_COMPARE" --run-id "$RUN_ID" --output "$COMPLETE"
+python tools/package_constraint_native_orientation_results.py --pipeline "$COMPLETE" --base-out "$BASE_OUT" --run-id "$RUN_ID" --manifest "$BUNDLE_MANIFEST" --output "$RESULTS_ZIP"
+printf 'V48.111 engineering-fixed result bundle ready. Upload ONLY this file:\n%s\nrun_instance_id=%s\n' "$RESULTS_ZIP" "$RUN_ID"

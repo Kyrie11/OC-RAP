@@ -4,7 +4,7 @@ import argparse, hashlib, json
 from pathlib import Path
 from typing import Any
 
-ENGINEERING_VERSION="v48.111.0-OC-CNRO"
+ENGINEERING_VERSION="v48.111.1-OC-CNRO-RESULTFIX"
 V110_ENGINEERING_VERSION="v48.110.0-OC-CATO"
 AUTHORITATIVE_V110_COMPARISON_SHA256="5bb9bbac2b5a88cb9419308804afdfce22643cd986df284224e1c9f3617e1c9d"
 ROLES=("dev_near","dev_contact","certificate_near","certificate_contact")
@@ -86,9 +86,11 @@ def _power(docs,space):
 def main()->int:
     ap=argparse.ArgumentParser()
     for k in ('balanced','precision','v110_pipeline','v110_comparison'):ap.add_argument('--'+k.replace('_','-'),dest=k,type=Path,required=True)
-    ap.add_argument('--output',type=Path,required=True);a=ap.parse_args();errors=[]
+    ap.add_argument('--run-id',required=True);ap.add_argument('--output',type=Path,required=True);a=ap.parse_args();errors=[]
     docs={v:json.loads(getattr(a,v).read_text()) for v in ('balanced','precision')}
-    for v,o in docs.items():errors+=_result_errors(o,v)
+    for v,o in docs.items():
+        errors+=_result_errors(o,v)
+        if o.get('run_instance_id') != a.run_id: errors.append(f'{v}:run_instance_id')
     p110=json.loads(a.v110_pipeline.read_text());c110=json.loads(a.v110_comparison.read_text());d110=c110.get('preregistered_decision') or {}
     if _sha(a.v110_comparison)!=AUTHORITATIVE_V110_COMPARISON_SHA256:errors.append('v110_comparison_sha')
     if not(p110.get('valid') and p110.get('attribution_ready') and p110.get('engineering_version')==V110_ENGINEERING_VERSION and p110.get('preregistered_status')=='CANDIDATE_AGENT_TOPOLOGY_STOP'):errors.append('v110_pipeline')
@@ -122,7 +124,7 @@ def main()->int:
          'capacity_matched_nearest_vs_active':True,'matched_dimension':188,'geometry_dimension':32,'balanced_precision_metric_identity':ident,'power_diagnostics':_power(docs,'active'),
          'scientific_note':'same strict convex solver removes optimizer ambiguity; 188-vs-188 active/nearest contrast additionally removes the V48.110 family-width confound',
          'source_training_authorized':False,'broad_encoder_training_authorized':False,'boundary_transport_authorized':False,'dataset_reconstruction_authorized':False,'regime_conditioned_policy_authorized':False}
-    out={'schema':'ocrap-v48.111-cnro-comparison-v1','engineering_version':ENGINEERING_VERSION,'valid':not errors,'attribution_ready':not errors,'errors':errors,'experiment_type':'audit_only_constraint_native_candidate_agent_recovery_orientation','preregistered_decision':dec,
+    out={'schema':'ocrap-v48.111-cnro-comparison-v1','engineering_version':ENGINEERING_VERSION,'scientific_version':'v48.111-OC-CNRO','run_instance_id':a.run_id,'valid':not errors,'attribution_ready':not errors,'errors':errors,'experiment_type':'audit_only_constraint_native_candidate_agent_recovery_orientation','preregistered_decision':dec,
          'planner_parameters_trained':0,'stage_i_parameters_trained':0,'root_decoder_parameters_trained':0,'source_parameters_trained':0,'relative_ranker_modified':False,'regime_conditioning':False,'boundary_transport':False,'teacher_metadata_input_to_model':False,'test_roots_read':False,
          'v48_110_pipeline_sha256':_sha(a.v110_pipeline),'v48_110_comparison_sha256':_sha(a.v110_comparison),'authoritative_v48_110_comparison_sha256':AUTHORITATIVE_V110_COMPARISON_SHA256}
     a.output.parent.mkdir(parents=True,exist_ok=True);a.output.write_text(json.dumps(out,indent=2,sort_keys=True)+'\n');print(json.dumps({'valid':out['valid'],'status':status,'errors':errors}));return 0 if out['valid'] else 30

@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import argparse,hashlib,json
+import argparse,hashlib,json,sys
 from pathlib import Path
-from ocrap.audits.constraint_native_orientation import ENGINEERING_VERSION, contract_checks
 ACTIVE=[
 'scripts/run_constraint_native_orientation_audit.sh',
 'src/ocrap/audits/constraint_native_orientation.py',
@@ -10,17 +9,34 @@ ACTIVE=[
 'tools/compare_constraint_native_recovery_orientation.py',
 'tools/check_constraint_native_orientation_contract.py',
 'tools/check_constraint_native_orientation_pipeline.py',
+'tools/package_constraint_native_orientation_results.py',
 ]
 def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 def main():
- ap=argparse.ArgumentParser();ap.add_argument('--repo',type=Path,required=True);ap.add_argument('--output',type=Path,required=True);a=ap.parse_args();repo=a.repo.resolve();errors=[];files={}
+ ap=argparse.ArgumentParser();ap.add_argument('--repo',type=Path,required=True);ap.add_argument('--run-id',required=True);ap.add_argument('--output',type=Path,required=True);a=ap.parse_args();repo=a.repo.resolve();errors=[];files={}
+ src=str((repo/'src').resolve())
+ if src not in sys.path: sys.path.insert(0,src)
+ import ocrap
+ import ocrap.audits.constraint_native_orientation as cnro_module
+ ENGINEERING_VERSION=cnro_module.ENGINEERING_VERSION
+ contract_checks=cnro_module.contract_checks
  for rel in ACTIVE:
   p=(repo/rel).resolve();ok=p.is_file() and str(p).startswith(str(repo));files[rel]={'exists':p.is_file(),'inside_repo':str(p).startswith(str(repo)),'path':str(p),'sha256':sha(p) if p.is_file() else None}
   if not ok:errors.append(f'runtime_file:{rel}')
+ imported={
+  'ocrap':str(Path(ocrap.__file__).resolve()),
+  'constraint_native_orientation':str(Path(cnro_module.__file__).resolve()),
+ }
+ expected_imports={
+  'ocrap':str((repo/'src/ocrap/__init__.py').resolve()),
+  'constraint_native_orientation':str((repo/'src/ocrap/audits/constraint_native_orientation.py').resolve()),
+ }
+ for k,v in imported.items():
+  if v != expected_imports[k]: errors.append(f'import_path:{k}:{v}')
  checks=contract_checks()
  for k,v in checks.items():
   if not v:errors.append(f'synthetic:{k}')
- out={'schema':'ocrap-v48.111-cnro-runtime-code-contract-v1','engineering_version':ENGINEERING_VERSION,'valid':not errors,'attribution_ready':not errors,'errors':errors,'runtime_files':files,
+ out={'schema':'ocrap-v48.111-cnro-runtime-code-contract-v1','engineering_version':ENGINEERING_VERSION,'scientific_version':'v48.111-OC-CNRO','run_instance_id':a.run_id,'valid':not errors,'attribution_ready':not errors,'errors':errors,'runtime_files':files,'imported_modules':imported,'expected_imported_modules':expected_imports,
       'scientific_contract':{
         'audit_only':True,'constraint_native_candidate_agent_geometry':True,'score_family':'linear_on_fixed_constraint_native_candidate_agent_response_features',
         'geometry_primitive':'candidate_minus_nominal_signed_clearance_path','boundary_context_channel':'delta_clearance_times_nominal_signed_clearance',

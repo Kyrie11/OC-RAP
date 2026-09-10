@@ -19,7 +19,7 @@ import torch
 
 from ocrap.models.encoders import FlatFeatureLayout
 
-ENGINEERING_VERSION = "v48.111.0-OC-CNRO"
+ENGINEERING_VERSION = "v48.111.1-OC-CNRO-RESULTFIX"
 ALGORITHM_NAME = "Observation-Consistent Constraint-Native Recovery Orientation Audit"
 
 RAW_CANDIDATE_DIM = 156

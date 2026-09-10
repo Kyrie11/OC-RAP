@@ -16,7 +16,7 @@ def test_cnro_ridge_is_unique_and_closed_form():
 def test_cnro_keeps_original_scientific_version_and_versioned_reference_contract():
     from pathlib import Path
     from ocrap.audits.constraint_native_orientation import ENGINEERING_VERSION
-    assert ENGINEERING_VERSION == "v48.111.0-OC-CNRO"
+    assert ENGINEERING_VERSION == "v48.111.1-OC-CNRO-RESULTFIX"
     repo = Path(__file__).resolve().parents[1]
     launcher = (repo / "scripts/run_constraint_native_orientation_audit.sh").read_text()
     assert "OC-RAP-v48.110-PIPELINE_COMPLETE.json" in launcher
@@ -24,6 +24,9 @@ def test_cnro_keeps_original_scientific_version_and_versioned_reference_contract
     assert "OC-RAP-v48.93-factor-mediation-audit.jsonl" in launcher
     assert "compare_constraint_native_recovery_orientation.py" in launcher
     assert "check_constraint_native_orientation_pipeline.py" in launcher
+    assert "package_constraint_native_orientation_results.py" in launcher
+    assert "CNGO" in launcher
+    assert "--run-id" in launcher
 
 
 def test_cnro_unversioned_code_keeps_v93_role_filter_semantics(tmp_path):
@@ -65,3 +68,16 @@ def test_cnro_unversioned_code_keeps_v93_role_filter_semantics(tmp_path):
     groups = label_groups(index, role_filter="dev_near", v93_map=build_v93_map(v93))
     assert len(groups) == 1
     assert [c["candidate"] for c in groups[0]["candidates"]] == [1]
+
+
+def test_cnro_result_packager_rejects_mixed_or_missing_artifacts(tmp_path):
+    import hashlib, importlib.util, json
+    from pathlib import Path
+    tool = Path(__file__).resolve().parents[1] / "tools" / "package_constraint_native_orientation_results.py"
+    spec = importlib.util.spec_from_file_location("cnro_packager_test", tool)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+    # The exact canonical map is a guard against accidental CNGO/CNRO mixing.
+    assert mod.EXPECTED["balanced"] == "OC-RAP-v48.111-CNRO-balanced.json"
+    assert "CNGO" not in " ".join(mod.EXPECTED.values())
+    assert mod.ENGINEERING_VERSION == "v48.111.1-OC-CNRO-RESULTFIX"
