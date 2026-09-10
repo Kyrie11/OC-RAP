@@ -1,36 +1,136 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import argparse,hashlib,json
+
+import argparse
+import hashlib
+import json
 from pathlib import Path
+
 import torch
-AUTHORITATIVE_V110_COMPARISON_SHA256='5bb9bbac2b5a88cb9419308804afdfce22643cd986df284224e1c9f3617e1c9d'
-def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
-def main():
- ap=argparse.ArgumentParser()
- for k in ('runtime','balanced','precision','balanced_state','precision_state','comparison','v48_110_pipeline','v48_110_comparison'):ap.add_argument('--'+k.replace('_','-'),dest=k,type=Path,required=True)
- ap.add_argument('--run-id',required=True);ap.add_argument('--output',type=Path,required=True);a=ap.parse_args();errors=[]
- docs={k:json.loads(getattr(a,k).read_text()) for k in ('runtime','balanced','precision','comparison','v48_110_pipeline','v48_110_comparison')}
- if not(docs['runtime'].get('valid') and docs['runtime'].get('attribution_ready') and docs['runtime'].get('engineering_version')=='v48.111.1-OC-CNRO-RESULTFIX' and docs['runtime'].get('run_instance_id')==a.run_id):errors.append('runtime')
- for v in ('balanced','precision'):
-  d=docs[v]
-  if not(d.get('valid') and d.get('engineering_version')=='v48.111.1-OC-CNRO-RESULTFIX' and d.get('variant')==v and d.get('audit_only') and d.get('convex_closed_form_ridge') and d.get('capacity_matched_nearest_vs_active') and d.get('run_instance_id')==a.run_id):errors.append(v)
- if not(docs['comparison'].get('valid') and docs['comparison'].get('attribution_ready') and docs['comparison'].get('engineering_version')=='v48.111.1-OC-CNRO-RESULTFIX' and docs['comparison'].get('run_instance_id')==a.run_id):errors.append('comparison')
- for v,k in (('balanced','balanced_state'),('precision','precision_state')):
-  try:
-   st=torch.load(getattr(a,k),map_location='cpu',weights_only=False)
-   if not(st.get('engineering_version')=='v48.111.1-OC-CNRO-RESULTFIX' and st.get('variant')==v and st.get('run_instance_id')==a.run_id): errors.append(k)
-  except Exception as exc:
-   errors.append(f'{k}:load:{type(exc).__name__}')
- if sha(a.v48_110_comparison)!=AUTHORITATIVE_V110_COMPARISON_SHA256:errors.append('v110_comparison_sha')
- if not(docs['v48_110_pipeline'].get('valid') and docs['v48_110_pipeline'].get('attribution_ready') and docs['v48_110_pipeline'].get('engineering_version')=='v48.110.0-OC-CATO' and docs['v48_110_pipeline'].get('preregistered_status')=='CANDIDATE_AGENT_TOPOLOGY_STOP'):errors.append('v110_pipeline')
- d110=docs['v48_110_comparison'].get('preregistered_decision') or {}
- if not(d110.get('status')=='CANDIDATE_AGENT_TOPOLOGY_STOP' and d110.get('next_branch')=='close_coordinatewise_agent_topology_then_preregister_constraint_native_candidate_agent_geometry_audit_no_training_or_source_sweep'):errors.append('v110_branch')
- artifacts={}
- for k in ('balanced','precision','balanced_state','precision_state','comparison','runtime'):
-  p=getattr(a,k);artifacts[k]={'path':str(p.resolve()),'sha256':sha(p)}
- status=(docs['comparison'].get('preregistered_decision') or {}).get('status')
- out={'schema':'ocrap-v48.111-cnro-pipeline-complete-v1','engineering_version':'v48.111.1-OC-CNRO-RESULTFIX','scientific_version':'v48.111-OC-CNRO','run_instance_id':a.run_id,'valid':not errors,'attribution_ready':not errors,'errors':errors,'experiment_type':'audit_only_constraint_native_candidate_agent_recovery_orientation','artifacts':artifacts,'preregistered_status':status,
-      'planner_parameters_trained':0,'stage_i_parameters_trained':0,'root_decoder_parameters_trained':0,'source_parameters_trained':0,'boundary_transport':False,'dataset_reconstruction':False,'regime_conditioning':False,'teacher_metadata_input_to_model':False,'test_roots_read':False,
-      'v48_110_pipeline_sha256':sha(a.v48_110_pipeline),'v48_110_comparison_sha256':sha(a.v48_110_comparison),'authoritative_v48_110_comparison_sha256':AUTHORITATIVE_V110_COMPARISON_SHA256}
- a.output.parent.mkdir(parents=True,exist_ok=True);a.output.write_text(json.dumps(out,indent=2,sort_keys=True)+'\n');print(json.dumps({'valid':out['valid'],'status':status,'errors':errors}));return 0 if out['valid'] else 30
-if __name__=='__main__':raise SystemExit(main())
+
+from ocrap.audits.heterogeneous_constraint_normal_cone import ENGINEERING_VERSION, SCIENTIFIC_VERSION
+
+AUTHORITATIVE_V111_COMPARISON_SHA256 = "ee2a3f13f2793dd8d0a4a1bdf73192a188d21bfac31c1549b3d6d0ae63cb8373"
+AUTHORITATIVE_V111_PIPELINE_SHA256 = "c155ac8277b2fe690be030eaaf4031e75873e1e22d2521ce56d10aabebb56187"
+
+
+def sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    for key in (
+        "runtime", "balanced", "precision", "balanced_state", "precision_state", "comparison",
+        "v48_111_pipeline", "v48_111_comparison",
+    ):
+        ap.add_argument("--" + key.replace("_", "-"), dest=key, type=Path, required=True)
+    ap.add_argument("--run-id", required=True)
+    ap.add_argument("--output", type=Path, required=True)
+    a = ap.parse_args()
+    errors: list[str] = []
+
+    docs = {
+        k: json.loads(getattr(a, k).read_text())
+        for k in ("runtime", "balanced", "precision", "comparison", "v48_111_pipeline", "v48_111_comparison")
+    }
+    if not (
+        docs["runtime"].get("valid")
+        and docs["runtime"].get("attribution_ready")
+        and docs["runtime"].get("engineering_version") == ENGINEERING_VERSION
+        and docs["runtime"].get("scientific_version") == SCIENTIFIC_VERSION
+        and docs["runtime"].get("run_instance_id") == a.run_id
+    ):
+        errors.append("runtime")
+
+    for variant in ("balanced", "precision"):
+        d = docs[variant]
+        if not (
+            d.get("valid")
+            and d.get("engineering_version") == ENGINEERING_VERSION
+            and d.get("scientific_version") == SCIENTIFIC_VERSION
+            and d.get("variant") == variant
+            and d.get("audit_only")
+            and d.get("convex_closed_form_ridge")
+            and d.get("capacity_matched_nominal_vs_candidate_cone")
+            and d.get("run_instance_id") == a.run_id
+        ):
+            errors.append(variant)
+
+    if not (
+        docs["comparison"].get("valid")
+        and docs["comparison"].get("attribution_ready")
+        and docs["comparison"].get("engineering_version") == ENGINEERING_VERSION
+        and docs["comparison"].get("scientific_version") == SCIENTIFIC_VERSION
+        and docs["comparison"].get("run_instance_id") == a.run_id
+    ):
+        errors.append("comparison")
+
+    for variant, key in (("balanced", "balanced_state"), ("precision", "precision_state")):
+        try:
+            st = torch.load(getattr(a, key), map_location="cpu", weights_only=False)
+            if not (
+                st.get("engineering_version") == ENGINEERING_VERSION
+                and st.get("scientific_version") == SCIENTIFIC_VERSION
+                and st.get("variant") == variant
+                and st.get("run_instance_id") == a.run_id
+            ):
+                errors.append(key)
+        except Exception as exc:
+            errors.append(f"{key}:load:{type(exc).__name__}")
+
+    if sha(a.v48_111_pipeline) != AUTHORITATIVE_V111_PIPELINE_SHA256:
+        errors.append("v111_pipeline_sha")
+    if sha(a.v48_111_comparison) != AUTHORITATIVE_V111_COMPARISON_SHA256:
+        errors.append("v111_comparison_sha")
+    d111 = docs["v48_111_comparison"].get("preregistered_decision") or {}
+    if not (
+        docs["v48_111_pipeline"].get("valid")
+        and docs["v48_111_pipeline"].get("attribution_ready")
+        and docs["v48_111_pipeline"].get("preregistered_status") == "CONSTRAINT_NATIVE_ACTIVE_GEOMETRY_STOP"
+    ):
+        errors.append("v111_pipeline")
+    if not (
+        d111.get("status") == "CONSTRAINT_NATIVE_ACTIVE_GEOMETRY_STOP"
+        and d111.get("next_branch")
+        == "close_fixed_cv_circle_agent_geometry_then_preregister_heterogeneous_active_constraint_normal_cone_audit_no_training_or_source_sweep"
+    ):
+        errors.append("v111_branch")
+
+    artifacts: dict[str, dict[str, str]] = {}
+    for key in ("balanced", "precision", "balanced_state", "precision_state", "comparison", "runtime"):
+        p = getattr(a, key)
+        artifacts[key] = {"path": str(p.resolve()), "sha256": sha(p)}
+    status = (docs["comparison"].get("preregistered_decision") or {}).get("status")
+    out = {
+        "schema": "ocrap-v48.112-hcnc-pipeline-complete-v1",
+        "engineering_version": ENGINEERING_VERSION,
+        "scientific_version": SCIENTIFIC_VERSION,
+        "run_instance_id": a.run_id,
+        "valid": not errors,
+        "attribution_ready": not errors,
+        "errors": errors,
+        "experiment_type": "audit_only_heterogeneous_active_constraint_normal_cone",
+        "artifacts": artifacts,
+        "preregistered_status": status,
+        "planner_parameters_trained": 0,
+        "stage_i_parameters_trained": 0,
+        "root_decoder_parameters_trained": 0,
+        "source_parameters_trained": 0,
+        "boundary_transport": False,
+        "dataset_reconstruction": False,
+        "regime_conditioning": False,
+        "teacher_metadata_input_to_model": False,
+        "test_roots_read": False,
+        "v48_111_pipeline_sha256": sha(a.v48_111_pipeline),
+        "v48_111_comparison_sha256": sha(a.v48_111_comparison),
+        "authoritative_v48_111_comparison_sha256": AUTHORITATIVE_V111_COMPARISON_SHA256,
+    }
+    a.output.parent.mkdir(parents=True, exist_ok=True)
+    a.output.write_text(json.dumps(out, indent=2, sort_keys=True) + "\n")
+    print(json.dumps({"valid": out["valid"], "status": status, "errors": errors}))
+    return 0 if out["valid"] else 30
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,52 +1,131 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import argparse,hashlib,json,sys
+
+import argparse
+import hashlib
+import json
+import sys
 from pathlib import Path
-ACTIVE=[
-'scripts/run_constraint_native_orientation_audit.sh',
-'src/ocrap/audits/constraint_native_orientation.py',
-'tools/run_constraint_native_recovery_orientation_audit.py',
-'tools/compare_constraint_native_recovery_orientation.py',
-'tools/check_constraint_native_orientation_contract.py',
-'tools/check_constraint_native_orientation_pipeline.py',
-'tools/package_constraint_native_orientation_results.py',
+
+ACTIVE = [
+    "scripts/run_constraint_native_orientation_audit.sh",
+    "src/ocrap/audits/constraint_native_orientation.py",
+    "src/ocrap/audits/heterogeneous_constraint_normal_cone.py",
+    "tools/run_constraint_native_recovery_orientation_audit.py",
+    "tools/compare_constraint_native_recovery_orientation.py",
+    "tools/check_constraint_native_orientation_contract.py",
+    "tools/check_constraint_native_orientation_pipeline.py",
+    "tools/package_constraint_native_orientation_results.py",
 ]
-def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
-def main():
- ap=argparse.ArgumentParser();ap.add_argument('--repo',type=Path,required=True);ap.add_argument('--run-id',required=True);ap.add_argument('--output',type=Path,required=True);a=ap.parse_args();repo=a.repo.resolve();errors=[];files={}
- src=str((repo/'src').resolve())
- if src not in sys.path: sys.path.insert(0,src)
- import ocrap
- import ocrap.audits.constraint_native_orientation as cnro_module
- ENGINEERING_VERSION=cnro_module.ENGINEERING_VERSION
- contract_checks=cnro_module.contract_checks
- for rel in ACTIVE:
-  p=(repo/rel).resolve();ok=p.is_file() and str(p).startswith(str(repo));files[rel]={'exists':p.is_file(),'inside_repo':str(p).startswith(str(repo)),'path':str(p),'sha256':sha(p) if p.is_file() else None}
-  if not ok:errors.append(f'runtime_file:{rel}')
- imported={
-  'ocrap':str(Path(ocrap.__file__).resolve()),
-  'constraint_native_orientation':str(Path(cnro_module.__file__).resolve()),
- }
- expected_imports={
-  'ocrap':str((repo/'src/ocrap/__init__.py').resolve()),
-  'constraint_native_orientation':str((repo/'src/ocrap/audits/constraint_native_orientation.py').resolve()),
- }
- for k,v in imported.items():
-  if v != expected_imports[k]: errors.append(f'import_path:{k}:{v}')
- checks=contract_checks()
- for k,v in checks.items():
-  if not v:errors.append(f'synthetic:{k}')
- out={'schema':'ocrap-v48.111-cnro-runtime-code-contract-v1','engineering_version':ENGINEERING_VERSION,'scientific_version':'v48.111-OC-CNRO','run_instance_id':a.run_id,'valid':not errors,'attribution_ready':not errors,'errors':errors,'runtime_files':files,'imported_modules':imported,'expected_imported_modules':expected_imports,
-      'scientific_contract':{
-        'audit_only':True,'constraint_native_candidate_agent_geometry':True,'score_family':'linear_on_fixed_constraint_native_candidate_agent_response_features',
-        'geometry_primitive':'candidate_minus_nominal_signed_clearance_path','boundary_context_channel':'delta_clearance_times_nominal_signed_clearance',
-        'prefix_complete_states':8,'active_pair_size':2,'nearest_pair_size':2,'geometry_dim':32,'matched_family_dim':188,'capacity_matched_nearest_vs_active':True,
-        'agent_set_definition':'historical_raw_agent_tokens_current_observation','external_continuation':'constant_velocity','active_selector':'minimum_cv_circle_clearance_over_first_8_complete_prefix_states',
-        'support_response_coordinate':'candidate_minus_nominal_raw_delta','reserve_response_coordinate':'delta_times_one_plus_tanh_nominal_raw_state',
-        'convex_closed_form_ridge':True,'strictly_convex_unique_solution':True,'iterative_optimizer_used':False,'ridge_lambda_rule':'1_over_axis_train_rows','nominal_zero_score_by_construction':True,
-        'candidate_identity_shuffle':'whole_feature_row_cyclic_permutation_within_scene_time_group','posthoc_feature_selection':False,
-        'stage_i_parameters_trained':0,'root_decoder_parameters_trained':0,'source_parameters_trained':0,'planner_parameters_trained':0,
-        'boundary_transport':False,'broad_encoder_training':False,'regime_conditioning':False,'teacher_metadata_input_to_model':False,'threshold_sweep':False,'capacity_sweep':False,'lr_or_epoch_sweep':False,
-      },'synthetic_checks':checks,'historical_code_dependency':False,'code_layout':'unversioned_semantic_modules','test_roots_read':False}
- a.output.parent.mkdir(parents=True,exist_ok=True);a.output.write_text(json.dumps(out,indent=2,sort_keys=True)+'\n');print(json.dumps({'valid':out['valid'],'errors':errors}));return 0 if out['valid'] else 30
-if __name__=='__main__':raise SystemExit(main())
+
+
+def sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--repo", type=Path, required=True)
+    ap.add_argument("--run-id", required=True)
+    ap.add_argument("--output", type=Path, required=True)
+    a = ap.parse_args()
+    repo = a.repo.resolve()
+    errors: list[str] = []
+    files: dict[str, dict] = {}
+
+    src = str((repo / "src").resolve())
+    if src not in sys.path:
+        sys.path.insert(0, src)
+    import ocrap
+    import ocrap.audits.constraint_native_orientation as legacy_primitives
+    import ocrap.audits.heterogeneous_constraint_normal_cone as hcnc
+
+    for rel in ACTIVE:
+        p = (repo / rel).resolve()
+        ok = p.is_file() and str(p).startswith(str(repo))
+        files[rel] = {
+            "exists": p.is_file(),
+            "inside_repo": str(p).startswith(str(repo)),
+            "path": str(p),
+            "sha256": sha(p) if p.is_file() else None,
+        }
+        if not ok:
+            errors.append(f"runtime_file:{rel}")
+
+    imported = {
+        "ocrap": str(Path(ocrap.__file__).resolve()),
+        "constraint_native_orientation": str(Path(legacy_primitives.__file__).resolve()),
+        "heterogeneous_constraint_normal_cone": str(Path(hcnc.__file__).resolve()),
+    }
+    expected_imports = {
+        "ocrap": str((repo / "src/ocrap/__init__.py").resolve()),
+        "constraint_native_orientation": str((repo / "src/ocrap/audits/constraint_native_orientation.py").resolve()),
+        "heterogeneous_constraint_normal_cone": str((repo / "src/ocrap/audits/heterogeneous_constraint_normal_cone.py").resolve()),
+    }
+    for k, v in imported.items():
+        if v != expected_imports[k]:
+            errors.append(f"import_path:{k}:{v}")
+
+    checks = hcnc.contract_checks()
+    for k, v in checks.items():
+        if not v:
+            errors.append(f"synthetic:{k}")
+
+    out = {
+        "schema": "ocrap-v48.112-hcnc-runtime-code-contract-v1",
+        "engineering_version": hcnc.ENGINEERING_VERSION,
+        "scientific_version": hcnc.SCIENTIFIC_VERSION,
+        "run_instance_id": a.run_id,
+        "valid": not errors,
+        "attribution_ready": not errors,
+        "errors": errors,
+        "runtime_files": files,
+        "imported_modules": imported,
+        "expected_imported_modules": expected_imports,
+        "scientific_contract": {
+            "audit_only": True,
+            "heterogeneous_active_constraint_normal_cone": True,
+            "constraint_names": ["clearance", "stopping", "route", "reentry"],
+            "constraint_response": "candidate_minus_nominal_normalized_signed_constraint_path",
+            "boundary_context_channel": "constraint_response_times_nominal_signed_constraint",
+            "prefix_complete_states": 8,
+            "external_continuation": "constant_velocity_for_observed_agents_only",
+            "nominal_cone_selector": "minimum_nominal_signed_constraint_per_prefix_time",
+            "candidate_cone_selector": "minimum_candidate_signed_constraint_per_prefix_time",
+            "cone_geometry_dim": hcnc.CONE_GEOMETRY_DIM,
+            "matched_family_dim": hcnc.MATCHED_DIM,
+            "capacity_matched_nominal_vs_candidate_cone": True,
+            "support_response_coordinate": "candidate_minus_nominal_raw_delta",
+            "reserve_response_coordinate": "delta_times_one_plus_tanh_nominal_raw_state",
+            "convex_closed_form_ridge": True,
+            "strictly_convex_unique_solution": True,
+            "iterative_optimizer_used": False,
+            "ridge_lambda_rule": "1_over_axis_train_rows",
+            "nominal_zero_score_by_construction": True,
+            "candidate_identity_shuffle": "whole_feature_row_cyclic_permutation_within_scene_time_group",
+            "posthoc_feature_selection": False,
+            "stage_i_parameters_trained": 0,
+            "root_decoder_parameters_trained": 0,
+            "source_parameters_trained": 0,
+            "planner_parameters_trained": 0,
+            "boundary_transport": False,
+            "broad_encoder_training": False,
+            "regime_conditioning": False,
+            "teacher_metadata_input_to_model": False,
+            "threshold_sweep": False,
+            "capacity_sweep": False,
+            "lr_or_epoch_sweep": False,
+        },
+        "synthetic_checks": checks,
+        "historical_code_dependency": False,
+        "code_layout": "unversioned_semantic_modules",
+        "test_roots_read": False,
+    }
+    a.output.parent.mkdir(parents=True, exist_ok=True)
+    a.output.write_text(json.dumps(out, indent=2, sort_keys=True) + "\n")
+    print(json.dumps({"valid": out["valid"], "errors": errors}))
+    return 0 if out["valid"] else 30
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

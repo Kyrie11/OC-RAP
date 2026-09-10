@@ -12514,3 +12514,227 @@ candidate-conditioned constraint-native recovery orientation
 ```
 
 and exactly one nominal-invariant response-carrier integration. Until then the historical recovery base-state chart remains Main and no source/Transformer/boundary/router modification is authorized.
+
+## V48.111 authoritative result — OC-CNRO constraint-native recovery-orientation audit
+
+### Reliability / attribution
+
+The rerun after the result-bundle engineering fix is engineering-valid and scientifically attributable.  The canonical V48.111 result bundle has one `run_instance_id` across runtime, balanced/precision JSON/PT, comparison and pipeline artifacts; every canonical artifact SHA256 is bound by the result-bundle manifest and no legacy CNGO artifact is present.  Runtime imports resolve to the current unversioned semantic implementation.  The audit remains exactly the preregistered audit-only experiment: 188-D vs 188-D active/nearest families, fixed first eight complete prefix states, observation-only CV continuation, whole-candidate cyclic shuffle, float64 class-balanced closed-form ridge, no Stage-I/root/source/planner training, no relative-ranker change, no boundary transport, no regime conditioning and no test-root access.  Maximum normal-equation residual is `1.4517e-12`.
+
+Balanced and precision raw audit metrics are exactly identical, so the eight legacy cells correspond to four unique role observations and must not be interpreted as eight independent population replications.  Reserve dev-Near is individually underpowered (6 rows, one powered group); the other registered cells remain usable and the overall STOP does not depend on that cell alone.
+
+### Preregistered scientific decision
+
+Official status is:
+
+```text
+CONSTRAINT_NATIVE_ACTIVE_GEOMETRY_STOP
+```
+
+The registered next branch is:
+
+```text
+close_fixed_cv_circle_agent_geometry
+-> heterogeneous_active_constraint_normal_cone_audit
+-> no_training_or_source_sweep
+```
+
+The matched active-minus-nearest selector gate fails on both axes.
+
+**Support:** active-minus-nearest AUC is positive in only 4/8 legacy cells (2/4 unique roles) and reaches `>= +0.01` only in the two duplicated dev-Near cells.  Unique-role deltas are:
+
+```text
+dev-Near            +0.015625
+dev-Contact         -0.005682
+certificate-Near    -0.018182
+certificate-Contact +0.001739
+```
+
+**Reserve/debt:** active-minus-nearest true AUC delta is exactly `0` in all 8 legacy cells.  Thus the candidate-specific collision-active agent selector adds no held-out Reserve ordering over the equal-capacity nearest-agent control.
+
+The active family itself also fails the historical action gate.  Support retains a local-order signal only in dev-Near; Reserve does not retain the registered local-order gate.  Therefore the preregistered pairwise-audit fallback is **not authorized**.
+
+### Mechanism interpretation
+
+V48.111 closes the **fixed-CV circle candidate-agent geometry family as a sufficient recovery-orientation mechanism**.  This conclusion is stronger than V48.110 because V48.111 removes the 1716-D-vs-3588-D capacity confound: both relational families use the same 188-D linear function class and the same unique convex owner.
+
+What is closed:
+
+- raw active-agent identity as a sufficient local recovery orientation;
+- fixed-CV circle signed-clearance response to a selected agent pair as a sufficient cross-population Support/Reserve orientation;
+- nearest/active selector refinements, pair-count expansion, width/rank expansion, LR/lambda/threshold/horizon/CV sweeps for this family;
+- a pairwise audit on the same CNRO features, because Reserve local-order did not pass.
+
+What is **not** closed:
+
+- candidate-conditioned active switching as a high-level constrained-control premise;
+- constraint-native signed response as the appropriate abstraction;
+- a unified positive-reserve / negative-debt object across Near and Contact.
+
+The key distinction is:
+
+```text
+active object / collision owner != active constraint normal cone
+```
+
+A selected agent can identify *who* participates in a collision-clearance boundary, but it does not identify *which heterogeneous constraint surface* is binding or the signed direction in which an action changes that boundary.  Support's dev-Near local signal shows that early candidate-induced clearance response is readable in-domain; its failure on certificate-Near/Contact shows that a homogeneous clearance-agent geometry is not a population-shared invariant.  Reserve/debt is even more decisive: active-vs-nearest gives no AUC gain at all.
+
+An independent coefficient diagnostic is consistent with this interpretation.  For Support, the 32-D relational block carries nontrivial norm (about 27% of the active-model coefficient norm).  For Reserve, the same block is only about 5.5% of the active-model norm, while the shuffled active geometry block is larger.  This is diagnostic, not a preregistered gate, but it argues against interpreting the Reserve failure as merely “the ridge forgot to use the appended dimensions.”
+
+### Unified Near / Contact bottleneck after V48.111
+
+The current dominant unresolved layer is:
+
+```text
+observation-consistent heterogeneous active-constraint orientation
+for signed executable-recovery reserve/debt
+```
+
+Near and Contact remain one mechanism:
+
+```text
+Near:    preserve positive headroom before a heterogeneous constraint reaches zero
+Contact: repay negative debt and achieve persistent re-entry across the same signed constraint system
+```
+
+No regime router, regime-specific threshold, expert or proposal budget is authorized.  The active constraint must change as a function of the observation and candidate trajectory, not as a function of a regime label.
+
+### Internal convergence status
+
+`NOT CONVERGED`.
+
+The system has a strong information-pattern and role-isolation backbone, but it still lacks a population-shared causal orientation that generalizes Support and Reserve across dev/certificate.  Until that layer is validated, do not modify the absolute source, boundary transport, broad encoder/root stack, relative ranker, dataset construction or external-baseline claim in response to this audit.
+
+## V48.112 OC-HCNC — Observation-Consistent Heterogeneous Constraint Normal-Cone Audit
+
+### Registered question
+
+Does **candidate-conditioned switching between heterogeneous signed constraints**, rather than switching between collision-agent identities inside one homogeneous clearance family, provide a population-shared recovery orientation across Support/Reserve and Near/Contact?
+
+V48.112 is an audit only.  It keeps V48.111's frozen candidate response coordinate, first eight complete prefix states, observation-only inputs, whole-candidate shuffle and unique closed-form ridge owner.  It changes only the relational scientific object.
+
+### Heterogeneous signed constraint field
+
+For each candidate prefix time `t`, construct four observation-only normalized signed constraints:
+
+```text
+clearance : CV circle separation reserve relative to d_safe(v)
+stopping  : executable free-path distance before safety-boundary conflict minus braking distance
+route     : local route-corridor reserve
+reentry   : contact-activated signed debt followed by suffix-persistent nonnegative reserve
+```
+
+Positive values are reserve; negative values are debt/violation.  Existing physical configuration scales define normalization and no learned centering is allowed, so zero remains the actual constraint boundary.
+
+For candidate `a` and nominal candidate `a0`:
+
+```text
+Delta h_j(t) = h_j^a(t) - h_j^a0(t)
+```
+
+The finite action response is treated as the discrete analogue of a constraint-normal directional response.  The second channel preserves boundary context:
+
+```text
+Delta h_j(t) * h_j^a0(t)
+```
+
+No teacher future or regime ID enters these quantities.
+
+### Equal-capacity causal contrast
+
+At every prefix time, select one binding constraint type by the minimum normalized signed constraint.
+
+```text
+nominal_cone:
+  selector = argmin_j h_j^a0(t)
+
+candidate_cone:
+  selector = argmin_j h_j^a(t)
+```
+
+The selected type is represented with a one-hot type-resolved pair of response channels, zero elsewhere:
+
+```text
+4 constraint types x 8 times x 2 channels = 64-D cone geometry
+156-D frozen candidate response + 64-D cone geometry = 220-D
+```
+
+Therefore `candidate_cone` and `nominal_cone` are **220-D vs 220-D** and differ only in whether the binding heterogeneous constraint is selected from candidate or nominal signed state.  This avoids another capacity confound.
+
+Re-entry activation is observation/candidate-geometry based: it becomes active only after current observation or the candidate prefix reaches physical contact.  It is not activated by `Contact` labels.  Thus the same signed field naturally remains inactive in benign Safe/Near states and becomes a debt constraint when contact occurs.
+
+### V48.111 identity prerequisite
+
+The launcher must verify exact SHA-bound authoritative V48.111 STOP artifacts before running V48.112.  V48.112's 156-D base family must reproduce V48.111 base held-out AUC exactly on every Support/Reserve role.  Any mismatch is an engineering STOP, not a scientific result.
+
+### Constraint-activity prerequisite
+
+Before interpreting a “heterogeneous cone” effect, the data must show that the mechanism actually activates:
+
+- candidate-vs-nominal selector switching in at least 3/4 unique roles, with Near and Contact represented;
+- at least two candidate-active constraint types in at least 3/4 unique roles;
+- persistent re-entry selected in at least one Contact role.
+
+Failure of this activity gate blocks promotion even if an AUC happens to increase.
+
+### Preregistered scientific gates
+
+Candidate-cone Support and Reserve each retain the historical action gate:
+
+```text
+AUC >= 0.65 AND true-minus-shuffled >= +0.05 in >=6/8 legacy cells;
+>=3/4 unique roles with Near + Contact represented;
+Top1 lift >= +0.10 in >=4/8 legacy cells with Near + Contact represented.
+```
+
+Candidate-conditioned switching additionally requires, separately for Support and Reserve:
+
+```text
+candidate_cone - nominal_cone AUC > 0
+in >=6/8 legacy cells / >=3/4 unique roles,
+with Near + Contact represented;
+
+and >=4/8 legacy cells >= +0.01.
+```
+
+Full HCNC GO requires:
+
+```text
+candidate Support GO
++ candidate Reserve GO
++ Support candidate-minus-nominal cone GO
++ Reserve candidate-minus-nominal cone GO
++ heterogeneous constraint-activity GO.
+```
+
+### Preregistered branches
+
+- **Both axes GO:** promote the principle `candidate-conditioned heterogeneous constraint-normal recovery orientation` and authorize exactly one nominal-invariant carrier experiment; no source/Transformer/boundary sweep.
+- **Support only:** keep the Support normal-cone mechanism and audit signed debt response only.
+- **Reserve only:** keep the Reserve normal-cone mechanism and audit Support-establishment response only.
+- **Both formal STOP but both local-order GO:** one convex pairwise audit on exactly the same 220-D features; no feature change.
+- **Otherwise STOP:** close prefix-level first-order constraint-cone orientation and preregister one candidate×option executable constraint-Jacobian audit.  Do not tune scales, horizons, thresholds or source capacity.
+
+### Families kept closed during V48.112
+
+Do not reopen:
+
+- fixed-CV raw-agent topology / CNRO selected-agent geometry;
+- nearest/active pair-count, width, rank, lambda, LR, threshold or horizon sweeps;
+- class-local learned transport, generic MLP/AFE or regime router;
+- source/root/Stage-I/relative-ranker training;
+- boundary transport;
+- dataset reconstruction;
+- Safe/Near/Contact-specific policies or thresholds.
+
+### Working theory
+
+The intended high-level statement is deliberately stronger than “add more safety features” and remains to be tested:
+
+```text
+Deployable recovery orientation is determined by the candidate-induced motion
+of an observation-consistent active constraint cone, not by the identity of a
+collision-active object.
+```
+
+If validated, the same cone supplies a unified signed semantics: positive active slack is recovery reserve; negative active slack is recovery debt.  V48.112 does not claim this theory is true in advance; the equal-capacity audit is the preregistered causal test.

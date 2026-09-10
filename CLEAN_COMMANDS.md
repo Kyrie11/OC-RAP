@@ -1,4 +1,4 @@
-# OC-RAP V48.111 cleaned workspace — commands
+# OC-RAP cleaned workspace — current commands
 
 > Publication WOMD role: **standard `validation`** for validation/test/calibration replay.  `validation_interactive` is supported only when explicitly requested for a separate diagnostic dataset whose provenance says so.
 
@@ -15,25 +15,32 @@ export PYTHONPATH="$PWD/src:$PWD${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONNOUSERSITE=1
 ```
 
-## 0. Important V48.111 reference contract
+## 0. Current V48.112 scientific reference contract
 
-The V48.111 launcher intentionally keeps versioned **scientific inputs and outputs** even though its Python implementation filenames are unversioned. Before running it, `$BASE_OUT` must contain the authoritative V48.110 STOP/pipeline/comparison artifacts plus the V48.93/V48.96 sidecar/index artifacts required by the original audit. The launcher verifies the V48.110 comparison SHA/status/next-branch fail-closed and applies the original V48.93 role filter.
+The unversioned orientation launcher now runs **V48.112 OC-HCNC**.  It treats the completed V48.111 CNRO STOP artifacts as immutable versioned scientific inputs and verifies their exact SHA/status/registered next branch before any V48.112 GPU audit starts.  Python implementation filenames remain semantic/unversioned; scientific inputs and outputs remain versioned.
 
-## 1. V48.111 OC-CNRO audit
+## 1. Current orientation audit — V48.112 OC-HCNC
 
-V48.111 is **audit-only**.  It fits the registered dimension-matched closed-form ridge probes and does **not** train Stage-I, root, source, or planner parameters.
+V48.112 is **audit-only**.  It compares equal-capacity 220-D nominal-cone and candidate-cone closed-form ridge probes over heterogeneous signed constraints (clearance/stopping/route/persistent re-entry).  It does **not** train Stage-I, root, source, relative ranker or planner parameters.
 
 ```bash
+cd /home/senzeyu2/code/OC-RAP
 GPU0=0 GPU1=1 \
-BASE_OUT="$BASE_OUT" \
+BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
 bash scripts/run_constraint_native_orientation_audit.sh
 ```
 
-The runner still reads the frozen scientific assets used by the registered V48.111 experiment, including the V48.80 owner checkpoint and teacher-PCD indexes.  Those are data/checkpoint inputs, not historical code imports.
+On success, upload only:
 
-### About “OC-RAP training” in V48.111
+```text
+/home/senzeyu2/code/OC-RAP/runs/OC-RAP-v48.112-OC-HCNC-results.zip
+```
 
-There is no scientifically registered V48.111 planner-training stage: the registered experiment explicitly freezes the planner and performs only the CNRO audit.  The generic engine still supports `python -m ocrap.cli train`, but running it with an arbitrary config would **not reproduce V48.111**.  This cleaned package therefore does not invent a fake V48.111 training command.
+The runner still reads the frozen V48.80 owner checkpoint, V48.93/V48.96 evidence/index artifacts, and the authoritative V48.111 result artifacts.  These are scientific provenance inputs, not historical code imports.
+
+### About OC-RAP training in V48.112
+
+There is no registered V48.112 planner-training stage.  Running generic `python -m ocrap.cli train` would not reproduce this audit.  The current step is intentionally an attribution audit before any source/Main promotion.
 
 ## 2. Direct OC-RAP three-regime closed-loop test
 

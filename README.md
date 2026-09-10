@@ -1,12 +1,12 @@
-# OC-RAP — cleaned V48.111 audit workspace
+# OC-RAP — cleaned audit/deployment workspace
 
-This repository is the cleaned engineering workspace for the V48.111 OC-CNRO audit plus the
+This repository is the cleaned engineering workspace for the current V48.112 OC-HCNC audit plus the
 publication-facing evaluation utilities used by the deployed OC-RAP stack.
 
 ## What is active
 
-- `scripts/run_constraint_native_orientation_audit.sh`: the semantic V48.111 scientific launcher.
-  V48.111 is an **audit-only** capacity-matched closed-form CNRO experiment; it does not train or
+- `scripts/run_constraint_native_orientation_audit.sh`: the stable semantic scientific launcher.  It currently runs V48.112 OC-HCNC.
+  V48.112 is an **audit-only** capacity-matched closed-form heterogeneous constraint-cone experiment; it does not train or
   mutate the frozen OC-RAP planner.
 - `scripts/run_ocrap_evaluation.sh`: direct Safe / Near-Contact / Contact closed-loop evaluation of
   an existing frozen OC-RAP model run.
@@ -34,8 +34,8 @@ provenance identifiers, not imports of old code.
 `ALGORITHM_CHANGELOG.md` is retained as a historical scientific record only. It may mention removed
 historical launchers; none of those names are executable dependencies of the cleaned workspace.
 
-The V48.111 launcher still consumes versioned V48.110/V48.93/V48.96 result/index artifacts by design; those are scientific provenance inputs, not old-code dependencies. See `VERSION_POLICY_AND_AUDIT_RECHECK.md` for the distinction and the r2 re-audit correction.
+The current launcher consumes versioned frozen scientific assets by design, including the authoritative V48.111 STOP result plus V48.80/V48.93/V48.96 checkpoint/evidence assets.  These are provenance inputs, not old-code dependencies.  Source/tool/test filenames remain semantic and unversioned.
 
 Use `scripts/analyze_dataset_properties.sh` for a read-only 12-bucket dataset/property/construction-provenance export.
 
-See `CLEAN_COMMANDS.md` for operator commands and `MERGE_CLEANUP_REPORT.md` for the merge/validation audit.
+See `CLEAN_COMMANDS.md` for operator commands and `ALGORITHM_CHANGELOG.md` for the scientific audit history and preregistered branches.
