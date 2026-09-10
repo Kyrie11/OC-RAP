@@ -9,15 +9,15 @@ from .observed_risk import (
     ObservedRiskContext, ObservedRiskProfile, build_observed_risk_context,
     observed_risk_profile, observed_risk_profiles, observed_risk_profiles_and_context,
 )
-from .paper_core_ports_v56 import (
+from .paper_core_ports import (
     cpsf_constrained_projection_port, dr_cvar_safe_halfspace_port,
     integrated_postimpact_mpc_pso_port, postimpact_motion_tvlqr_port,
 )
-from .paper_core_ports_v57 import (
+from .postimpact_ports import (
     compensatory_postimpact_mpc_port, post_collision_restoration_port,
     post_crash_braking_port, robust_postimpact_control_port,
 )
-from .paper_core_ports_v58 import severity_minimization_port
+from .severity_ports import severity_minimization_port
 
 
 @dataclass
@@ -1638,11 +1638,11 @@ def select_external_policy(
         "dr_cvar_safety_filter", "distributionally_robust_cvar_filter", "safaoui_dr_cvar_filter",
         "conformal_predictive_safety_filter", "conformal_safety_filter", "cpsf",
     }
-    v56_predictor_free_paper_ports = {
+    predictor_free_paper_ports = {
         "postimpact_mpc", "postimpact_mpc_lite", "post_impact_mpc_lite", "postimpact_mpc_paper", "integrated_postimpact_mpc",
         "postimpact_motion_tvlqr", "postimpact_motion_planning", "wang2022_postimpact", "postimpact_tvlqr",
     }
-    if baseline in context_only_paper_ports | v56_predictor_free_paper_ports:
+    if baseline in context_only_paper_ports | predictor_free_paper_ports:
         risk_context = None
         if baseline in context_only_paper_ports:
             risk_context = precomputed_context if precomputed_context is not None else build_observed_risk_context(samples[0], cfg)

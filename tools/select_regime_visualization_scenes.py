@@ -33,9 +33,9 @@ from types import SimpleNamespace
 from typing import Any
 
 # Reuse the already-audited paired near/contact effect contract so the new
-# multi-baseline selector stays numerically consistent with the previous v50
+# multi-baseline selector stays numerically consistent with the previous validated
 # qualitative selector.
-from select_critical_scenes_v48_34 import _evaluate as _pair_evaluate  # type: ignore
+from critical_scene_metrics import _evaluate as _pair_evaluate  # type: ignore
 
 
 # Compact full-run metrics carried into the rendering artifact.  These are

@@ -2520,7 +2520,7 @@ def _dataset_label_for_sample_path(path: Path) -> str:
 def _load_target_key_filter(path_value: str | Path | None) -> set[str]:
     """Load target keys from JSON, JSONL or one-key-per-line text.
 
-    Selection files written by ``select_critical_scenes_v48_34.py`` are
+    Selection files written by ``critical_scene_metrics.py`` are
     accepted directly, as are ``{"target_keys": [...]}`` documents.
     """
     raw = str(path_value or "").strip()

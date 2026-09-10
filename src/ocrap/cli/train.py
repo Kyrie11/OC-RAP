@@ -1,8 +1,8 @@
 from __future__ import annotations
-from ocrap.v48_74_signed_viability import (
-    V48_74_SCHEMA as _V48_74_SCHEMA,
-    V48_74_SOURCE as _V48_74_SOURCE,
-    enabled as _ocrap_v48_74_enabled,
+from ocrap.signed_viability import (
+    SIGNED_VIABILITY_SCHEMA as _SIGNED_VIABILITY_SCHEMA,
+    SIGNED_VIABILITY_SOURCE as _SIGNED_VIABILITY_SOURCE,
+    enabled as _signed_viability_overlay_enabled,
 )
 from pathlib import Path
 from time import perf_counter
@@ -27,10 +27,10 @@ from ocrap.utils.seed import seed_everything
 def _semantic_witness_checkpoint_feature_contract(model_cfg: dict) -> tuple[int, str]:
     """Return the serialized semantic-witness feature contract.
 
-    V48.74 is an engineering-compatible overlay on the historical V48.73
+    signed-viability is an engineering-compatible overlay on the historical V48.73
     selector flags, but it is a distinct feature schema/source.  Keep the
     checkpoint metadata fail-closed and do not let schema-10 checkpoints be
-    confused with V48.73 schema 9.  With the V48.74 switch disabled, historical
+    confused with V48.73 schema 9.  With the signed-viability switch disabled, historical
     behavior is unchanged.
     """
     enabled = bool(model_cfg.get('direct_recovery_absolute_semantic_witness_correction', False))
@@ -40,8 +40,8 @@ def _semantic_witness_checkpoint_feature_contract(model_cfg: dict) -> tuple[int,
         model_cfg.get('direct_recovery_semantic_witness_interaction_anchor_support', False)
         or model_cfg.get('direct_recovery_semantic_witness_interaction_response_support', False)
     )
-    if temporal_selector and _ocrap_v48_74_enabled():
-        return (_V48_74_SCHEMA, _V48_74_SOURCE)
+    if temporal_selector and _signed_viability_overlay_enabled():
+        return (_SIGNED_VIABILITY_SCHEMA, _SIGNED_VIABILITY_SOURCE)
     if temporal_selector:
         return (9, 'interaction_response_history_reachability_projected_recovery_witness')
     if bool(model_cfg.get('direct_recovery_semantic_witness_interaction_box_support', False)) or bool(model_cfg.get('direct_recovery_semantic_witness_interaction_hull_support', False)):
@@ -246,7 +246,7 @@ def _absolute_feasibility_supervision_mask(
     base_mask = ~is_nominal & torch.isfinite(target_r_dep) & ((bucket == 1) | (bucket == 2))
     floor_mask = torch.zeros_like(base_mask)
     if policy == 'censor_exact_0p5':
-        # Fixed semantic contract from the v48.71-v48.74 read-only truth-floor
+        # Fixed semantic contract from the v48.71-signed-viability read-only truth-floor
         # audits.  These constants are not exposed as sweepable hyperparameters.
         floor_mask = base_mask & (torch.abs(target_r_dep - 0.5) <= 1.0e-8)
         base_mask = base_mask & ~floor_mask

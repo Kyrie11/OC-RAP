@@ -132,7 +132,7 @@ def main() -> int:
     for regime, bucket in bucket_paths.items():
         try:
             canonical_replay[regime] = resolve_for_dataset(
-                bucket, split="test", womd_root=args.womd_root, shards=args.womd_shards, role="auto"
+                bucket, split="test", womd_root=args.womd_root, shards=args.womd_shards, role="validation"
             )
         except Exception as exc:
             canonical_replay[regime] = {
@@ -164,7 +164,7 @@ def main() -> int:
             errors.append(f"invalid OC-RAP calibration JSON {gamma}: {exc}")
 
     deployable_contract_path = args.output.parent / "V48.111-DEPLOYABLE-STACK.json"
-    deployable_checker = REPO / "tools" / "check_v48_111_deployable_stack.py"
+    deployable_checker = REPO / "tools" / "check_deployable_stack.py"
     deployable_contract: dict[str, Any] = {"path": str(deployable_contract_path.resolve()), "valid": False}
     if deployable_checker.is_file():
         deployable_contract_path.parent.mkdir(parents=True, exist_ok=True)

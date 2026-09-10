@@ -20,11 +20,11 @@ from ocrap.data.build.diagnose import iter_sample_paths
 from ocrap.data.serialization import load_npz_selected
 from ocrap.data.schema import CandidatePrefix, RecoveryOption
 from ocrap.simulation.teacher.controllers import rollout_recovery_controller
-from ocrap.v48_74_signed_viability import (
-    V48_74_FEATURE_DIM as DIRECT_SIGNED_VIABILITY_RECOVERY_WITNESS_FEATURE_DIM,
-    V48_74_SCHEMA as DIRECT_SIGNED_VIABILITY_RECOVERY_WITNESS_FEATURE_SCHEMA,
-    enabled as _v48_74_signed_viability_enabled,
-    signed_viability_diagnostics as _v48_74_signed_viability_diagnostics,
+from ocrap.signed_viability import (
+    SIGNED_VIABILITY_FEATURE_DIM as DIRECT_SIGNED_VIABILITY_RECOVERY_WITNESS_FEATURE_DIM,
+    SIGNED_VIABILITY_SCHEMA as DIRECT_SIGNED_VIABILITY_RECOVERY_WITNESS_FEATURE_SCHEMA,
+    enabled as _signed_viability_enabled,
+    signed_viability_diagnostics as _signed_viability_diagnostics,
 )
 
 
@@ -1023,15 +1023,15 @@ def direct_executable_recovery_witness_features_from_sample(
                 if robust_occupancy_envelope and clear_ca is not None
                 else clear_cv
             )
-            if _v48_74_signed_viability_enabled() and (interaction_anchor_support or interaction_response_support):
-                # V48.74 OC-SVBW consumes the *same actuator-projected recovery*
+            if _signed_viability_enabled() and (interaction_anchor_support or interaction_response_support):
+                # signed-viability OC-SVBW consumes the *same actuator-projected recovery*
                 # and historical observation-only CV agent continuation already
                 # used by the accepted physical witness.  Time is placed on the
                 # final axis; the non-time agent axis is reduced by worst-case
                 # debt.  Pair radii provide a physical, parameter-free length
                 # normalization and introduce no learned/swept hyperparameter.
                 pair_scale = np.maximum(ego_rad + arad, 1.0e-8)
-                svbw = _v48_74_signed_viability_diagnostics(
+                svbw = _signed_viability_diagnostics(
                     np.asarray(signed_clearance, dtype=np.float64).T,
                     times,
                     clearance_scale=pair_scale,
@@ -1041,7 +1041,7 @@ def direct_executable_recovery_witness_features_from_sample(
                 signed_viability_debt2 = float(np.asarray(svbw.second_order_debt).reshape(()))
                 if not (np.isfinite(signed_viability_debt1) and np.isfinite(signed_viability_debt2)):
                     raise ValueError(
-                        f"non-finite V48.74 signed-viability debt for option={l}: "
+                        f"non-finite signed-viability signed-viability debt for option={l}: "
                         f"d1={signed_viability_debt1}, d2={signed_viability_debt2}"
                     )
             c_min = float(np.min(signed_clearance))
@@ -1226,13 +1226,13 @@ def direct_executable_recovery_witness_features_from_sample(
             values.extend([h_route, h_reentry])
         if interaction_anchor_support or interaction_response_support:
             # Coordinates 0--19 stay execution-exact to v48.72/v48.73.
-            # With the V48.74 switch enabled, coordinates 20/21 are the raw
+            # With the signed-viability switch enabled, coordinates 20/21 are the raw
             # normalized first/high-order finite-time signed-viability debts.
             # With the switch disabled, preserve historical v48.73 schema-9
             # tanh(anchor/jerk optimism) values bitwise.
             tail_20_21 = (
                 [float(signed_viability_debt1), float(signed_viability_debt2)]
-                if _v48_74_signed_viability_enabled()
+                if _signed_viability_enabled()
                 else [
                     float(np.tanh(interaction_anchor_optimism)),
                     float(np.tanh(interaction_response_optimism)),
@@ -1937,7 +1937,7 @@ def _persistent_tensor_cache_key(
     )
     semantic_feature_schema = (
         DIRECT_SIGNED_VIABILITY_RECOVERY_WITNESS_FEATURE_SCHEMA
-        if semantic_witness_features_enabled and _v48_74_signed_viability_enabled()
+        if semantic_witness_features_enabled and _signed_viability_enabled()
         and (semantic_interaction_anchor_support or semantic_interaction_response_support)
         else (DIRECT_INTERACTION_RESPONSE_RECOVERY_WITNESS_FEATURE_SCHEMA
         if semantic_witness_features_enabled and (semantic_interaction_anchor_support or semantic_interaction_response_support)
@@ -2011,7 +2011,7 @@ def _persistent_tensor_cache_key(
         "semantic_witness_option_resolved_features": semantic_witness_features_enabled,
         "semantic_witness_feature_schema": semantic_feature_schema,
         "semantic_witness_v48_74_signed_viability": bool(
-            semantic_witness_features_enabled and _v48_74_signed_viability_enabled()
+            semantic_witness_features_enabled and _signed_viability_enabled()
         ),
         "semantic_witness_route_alignment": semantic_route_alignment,
         "semantic_witness_reentry_alignment": semantic_reentry_alignment,

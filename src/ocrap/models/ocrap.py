@@ -6,7 +6,7 @@ import torch
 from torch import nn
 
 from ocrap.algorithms.ocmero import torch_oc_mero
-from ocrap.v48_74_signed_viability import enabled as _v48_74_signed_viability_enabled
+from ocrap.signed_viability import enabled as _signed_viability_enabled
 from ocrap.algorithms.lcv import torch_normalize_weights, torch_weighted_lcvar, torch_weighted_lcvar_influence
 from .encoders import FlatFeatureLayout, MLPEncoder, StructuredTokenEncoder
 
@@ -3536,14 +3536,14 @@ class OCRAPModel(nn.Module):
                     if self.direct_recovery_semantic_witness_interaction_hull_support
                     else h_interaction_box_optimism
                 )
-            if _v48_74_signed_viability_enabled() and (
+            if _signed_viability_enabled() and (
                 self.direct_recovery_semantic_witness_interaction_anchor_support
                 or self.direct_recovery_semantic_witness_interaction_response_support
             ):
-                # V48.74 coordinates 20/21 are already raw non-negative
+                # signed-viability coordinates 20/21 are already raw non-negative
                 # normalized viability debts, so consume them directly.  The
                 # historical v48.72/v48.73 coordinates are tanh-encoded and keep
-                # the exact atanh decoder below when the V48.74 switch is off.
+                # the exact atanh decoder below when the signed-viability switch is off.
                 interaction_risk = torch.relu(h_occ.float())
             else:
                 eps_occ = torch.finfo(h_occ.dtype).eps * 16.0

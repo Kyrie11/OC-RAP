@@ -32,9 +32,9 @@ from ocrap.models.data import (
     samples_to_feature_matrix,
 )
 from ocrap.models.ocrap import OCRAPModel
-from ocrap.v48_74_signed_viability import (
-    V48_74_SOURCE as _V48_74_SOURCE,
-    enabled as _v48_74_signed_viability_enabled,
+from ocrap.signed_viability import (
+    SIGNED_VIABILITY_SOURCE as _SIGNED_VIABILITY_SOURCE,
+    enabled as _signed_viability_enabled,
 )
 
 
@@ -90,41 +90,41 @@ class ModelBundle:
     device: torch.device
 
 
-def _v48_74_schema10_checkpoint_contract(
+def _signed_viability_checkpoint_contract(
     *,
     feature_schema: int,
     feature_source: str,
     interaction_anchor_support: bool,
     interaction_response_support: bool,
 ) -> bool:
-    """Validate and identify the V48.74 schema-10 inference contract.
+    """Validate and identify the signed-viability schema-10 inference contract.
 
     Returns ``False`` for historical schema/source pairs so the caller can use
-    the legacy selector-derived mapping.  If either half of the V48.74 pair is
+    the legacy selector-derived mapping.  If either half of the signed-viability pair is
     present, validation is fail-closed: schema, source, selector, and overlay
     mode must all agree.  This helper is intentionally callable from the
     runtime preflight so the exact post-training RC30 path is checked before
     any GPU work starts.
     """
     schema_match = int(feature_schema) == DIRECT_SIGNED_VIABILITY_RECOVERY_WITNESS_FEATURE_SCHEMA
-    source_match = str(feature_source) == _V48_74_SOURCE
+    source_match = str(feature_source) == _SIGNED_VIABILITY_SOURCE
     if not (schema_match or source_match):
         return False
     if not (schema_match and source_match):
         raise RuntimeError(
-            "incomplete V48.74 signed-viability checkpoint feature contract: "
+            "incomplete signed-viability signed-viability checkpoint feature contract: "
             f"schema={feature_schema}, source={feature_source!r}; expected "
             f"schema={DIRECT_SIGNED_VIABILITY_RECOVERY_WITNESS_FEATURE_SCHEMA}, "
-            f"source={_V48_74_SOURCE!r}."
+            f"source={_SIGNED_VIABILITY_SOURCE!r}."
         )
     if not (interaction_anchor_support or interaction_response_support):
         raise RuntimeError(
-            "V48.74 signed-viability checkpoint requires the registered "
+            "signed-viability signed-viability checkpoint requires the registered "
             "coordinate-20/21 selector flags."
         )
-    if not _v48_74_signed_viability_enabled():
+    if not _signed_viability_enabled():
         raise RuntimeError(
-            "V48.74 signed-viability checkpoint requires "
+            "signed-viability signed-viability checkpoint requires "
             "OCRAP_V48_74_SIGNED_VIABILITY=1 so inference feature "
             "materialization and raw-debt decoding match schema 10."
         )
@@ -378,13 +378,13 @@ def load_model_bundle(checkpoint: str | Path | None, runtime_cfg: dict | None = 
         feature_source = str(ckpt.get(
             "direct_recovery_absolute_semantic_witness_feature_source", ""
         ) or "")
-        if _v48_74_schema10_checkpoint_contract(
+        if _signed_viability_checkpoint_contract(
             feature_schema=feature_schema,
             feature_source=feature_source,
             interaction_anchor_support=interaction_anchor_support,
             interaction_response_support=interaction_response_support,
         ):
-            # V48.74 deliberately reuses the V48.73 anchor/response selector
+            # signed-viability deliberately reuses the V48.73 anchor/response selector
             # booleans to select coordinates 20/21 while upgrading the actual
             # feature contract to schema 10.  The helper above validates the
             # serialized pair before this historical selector mapping is used.

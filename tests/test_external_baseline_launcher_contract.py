@@ -26,9 +26,9 @@ def _method_lines(block: str) -> tuple[str, ...]:
 
 
 def test_regime_launchers_match_main_table_registry() -> None:
-    safe = (ROOT / "scripts/run_safe_regime_external_baselines.sh").read_text()
-    near = (ROOT / "scripts/run_near_contact_external_baselines_2gpu_optimized.sh").read_text()
-    contact = (ROOT / "scripts/run_contact_external_baselines.sh").read_text()
+    safe = (ROOT / "scripts/run_external_baselines_safe.sh").read_text()
+    near = (ROOT / "scripts/run_external_baselines_near.sh").read_text()
+    contact = (ROOT / "scripts/run_external_baselines_contact.sh").read_text()
 
     assert _method_lines(_block(safe, "SPECS")) == MAIN_TABLE_BY_REGIME["safe"]
     assert _method_lines(_block(near, "METHODS")) == MAIN_TABLE_BY_REGIME["near"]
@@ -37,26 +37,47 @@ def test_regime_launchers_match_main_table_registry() -> None:
 
 def test_launchers_are_two_gpu_bounded_and_wire_train_calibration() -> None:
     for rel in (
-        "scripts/run_safe_regime_external_baselines.sh",
-        "scripts/run_near_contact_external_baselines_2gpu_optimized.sh",
-        "scripts/run_contact_external_baselines.sh",
+        "scripts/run_external_baselines_safe.sh",
+        "scripts/run_external_baselines_near.sh",
+        "scripts/run_external_baselines_contact.sh",
     ):
         text = (ROOT / rel).read_text()
         assert ': "${CUDA_DEVICES:=0,1}"' in text
-        assert ': "${MAX_PARALLEL:=2}"' in text
-        assert '((MAX_PARALLEL <= 2)) || MAX_PARALLEL=2' in text
+        assert ': "${JOBS_PER_GPU:=1}"' in text
+        assert 'GPU_SLOTS=()' in text
+        assert '((MAX_PARALLEL <= ${#GPU_SLOTS[@]})) || MAX_PARALLEL="${#GPU_SLOTS[@]}"' in text
 
-    near = (ROOT / "scripts/run_near_contact_external_baselines_2gpu_optimized.sh").read_text()
+    near = (ROOT / "scripts/run_external_baselines_near.sh").read_text()
     assert 'tools/calibrate_external_baselines.py' in near
     assert 'DO_CALIBRATE' in near
     assert 'CONFORMAL_INTERVALS' in near
     assert 'conformal_prediction_intervals_m' in near
-    assert 'validation/validation_tfexample.tfrecord@150' in near
+    assert 'runtime_resolve_bucket_womd_spec' in near
+    assert 'CALIB_WOMD_ROLE' in near
 
-    contact = (ROOT / "scripts/run_contact_external_baselines.sh").read_text()
+    contact = (ROOT / "scripts/run_external_baselines_contact.sh").read_text()
     assert 'tools/register_external_nonlearning_baselines.py' in contact
     assert 'DO_TRAIN' in contact
 
-    master = (ROOT / "scripts/run_all_regime_external_baselines_optimized.sh").read_text()
+    master = (ROOT / "scripts/run_external_baselines_all.sh").read_text()
     assert 'DO_TRAIN="$DO_TRAIN_CONTACT"' in master
     assert 'DO_CALIBRATE="$DO_CALIBRATE_NEAR"' in master
+
+
+def test_clean_wrapper_defaults_publication_role_and_propagates_force_reregister() -> None:
+    text = (ROOT / "scripts/run_external_baselines.sh").read_text()
+    assert 'WOMD_ROLE="${PRIMARY_WOMD_ROLE:-validation}"' in text
+    assert 'CL_WOMD_ROLE="$WOMD_ROLE"' in text
+    assert 'CALIB_WOMD_ROLE="$WOMD_ROLE"' in text
+    assert 'FORCE_REREGISTER="$FORCE_RETRAIN"' in text
+
+
+def test_nonlearning_launchers_support_registration_reuse() -> None:
+    for rel in (
+        "scripts/run_external_baselines_safe.sh",
+        "scripts/run_external_baselines_near.sh",
+        "scripts/run_external_baselines_contact.sh",
+    ):
+        text = (ROOT / rel).read_text()
+        assert "check_external_nonlearning_registration.py" in text
+        assert "FORCE_REREGISTER" in text
