@@ -135,7 +135,13 @@ def _dataset_level_role_evidence(dataset: str | Path) -> list[dict[str, Any]]:
     # source keys are considered; unrelated output paths are intentionally not
     # searched recursively because names such as ``test_near_contact`` do not
     # prove a raw WOMD collection.
-    for filename in ("dataset_summary.json", "dataset_status.json"):
+    for filename in (
+        "womd_replay_contract.json",
+        "dataset_summary.json",
+        "dataset_status.json",
+        "merged_dataset_summary.json",
+        "scene_filter_provenance.json",
+    ):
         path = root / filename
         doc = _read_json(path)
         if doc is None:
@@ -146,6 +152,7 @@ def _dataset_level_role_evidence(dataset: str | Path) -> list[dict[str, Any]]:
             ("womd_pattern", "pattern"),
             ("raw_womd_pattern", "pattern"),
             ("source_womd_pattern", "pattern"),
+            ("source_womd_patterns", "pattern"),
         ):
             raw = doc.get(key)
             role = _clean_role(raw) if kind == "role" else _role_from_source_text(raw)

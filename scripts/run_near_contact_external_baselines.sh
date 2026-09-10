@@ -1,13 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+REPO="${OCRAP_REPO:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
+cd "$REPO"
+export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"
+# shellcheck source=scripts/lib/v50_runtime.sh
+source scripts/lib/v50_runtime.sh
+
 : "${OCRAP_ROOT:=/data0/senzeyu2/dataset/OCRAP}"
 : "${TRAIN_NEAR:=$OCRAP_ROOT/train_near_contact}"
 : "${VAL_NEAR:=$OCRAP_ROOT/val_near_contact}"
 : "${TEST_NEAR:=$OCRAP_ROOT/test_near_contact}"
 : "${RUN:=runs/near_contact_external_baselines}"
-: "${WOMD_VAL_INTERACTIVE:=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation_interactive/validation_interactive_tfexample.tfrecord}"
-: "${CL_WOMD:=${WOMD_VAL_INTERACTIVE}@150}"
+: "${WOMD_ROOT:=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example}"
+: "${WOMD_NUM_SHARDS:=150}"
+: "${CL_WOMD:=auto}"
+: "${CL_WOMD_ROLE:=auto}"
+# Historical versions of this launcher hard-coded validation_interactive.  That
+# is incompatible with the paper's current held-out buckets, which are built
+# from standard validation. Resolve from bucket provenance or require an
+# explicit role for an unprovenanced legacy bucket.
+if [[ "${CL_WOMD,,}" == auto ]]; then
+  CL_WOMD="$(v50_resolve_bucket_womd_spec "$TEST_NEAR" test "$WOMD_ROOT" "$WOMD_NUM_SHARDS" "$CL_WOMD_ROLE")"
+else
+  CL_WOMD="$(v50_normalize_womd_spec "$CL_WOMD" "$WOMD_NUM_SHARDS")"
+fi
 : "${CL_MAX_SCENARIOS:=50}"
 : "${CL_ORACLE_MAX_SCENARIOS:=$CL_MAX_SCENARIOS}"
 : "${CL_MAX_STEPS:=40}"

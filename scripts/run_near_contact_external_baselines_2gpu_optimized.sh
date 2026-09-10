@@ -25,17 +25,14 @@ source scripts/lib/v50_runtime.sh
 # Explicit CL_WOMD still overrides auto mode, but the normal path is robust to
 # either validation or validation_interactive buckets under WOMD_ROOT.
 : "${CL_WOMD:=auto}"
+: "${CL_WOMD_ROLE:=auto}"
 if [[ "${CL_WOMD,,}" == auto ]]; then
-  CL_WOMD="$(v50_resolve_bucket_womd_spec "$CL_BUCKET_DATASET" "$CL_BUCKET_SPLIT" "$WOMD_ROOT" "$WOMD_NUM_SHARDS" auto)"
+  CL_WOMD="$(v50_resolve_bucket_womd_spec "$CL_BUCKET_DATASET" "$CL_BUCKET_SPLIT" "$WOMD_ROOT" "$WOMD_NUM_SHARDS" "$CL_WOMD_ROLE")"
 else
   CL_WOMD="$(v50_normalize_womd_spec "$CL_WOMD" "$WOMD_NUM_SHARDS")"
 fi
 : "${CALIB_WOMD:=auto}"
-if [[ "${CALIB_WOMD,,}" == auto ]]; then
-  CALIB_WOMD="$(v50_resolve_bucket_womd_spec "$CALIB_NEAR" calibration "$WOMD_ROOT" "$WOMD_NUM_SHARDS" auto)"
-else
-  CALIB_WOMD="$(v50_normalize_womd_spec "$CALIB_WOMD" "$WOMD_NUM_SHARDS")"
-fi
+: "${CALIB_WOMD_ROLE:=auto}"
 : "${CL_MAX_TARGETS_PER_SCENE:=1}"
 : "${CL_TARGET_KEYS_FILE:=}"
 : "${CL_RENDER_TRACE:=false}"
@@ -70,6 +67,20 @@ fi
 : "${CONFORMAL_CALIBRATION_UNIT:=group}"
 : "${CONFORMAL_CALIBRATION:=$RUN/conformal_calibration.json}"
 : "${CONFORMAL_INTERVALS:=}"
+# A raw calibration replay source is needed only when intervals are loaded from
+# or fitted into a calibration artifact. Explicit interval injection does not
+# require legacy calibration provenance.
+if [[ -z "$CONFORMAL_INTERVALS" ]]; then
+  if [[ "${CALIB_WOMD,,}" == auto ]]; then
+    CALIB_WOMD="$(v50_resolve_bucket_womd_spec "$CALIB_NEAR" calibration "$WOMD_ROOT" "$WOMD_NUM_SHARDS" "$CALIB_WOMD_ROLE")"
+  else
+    CALIB_WOMD="$(v50_normalize_womd_spec "$CALIB_WOMD" "$WOMD_NUM_SHARDS")"
+  fi
+elif [[ "${CALIB_WOMD,,}" == auto ]]; then
+  CALIB_WOMD=""
+else
+  CALIB_WOMD="$(v50_normalize_womd_spec "$CALIB_WOMD" "$WOMD_NUM_SHARDS")"
+fi
 : "${CUDA_DEVICES:=0,1}"
 : "${JOBS_PER_GPU:=1}"                    # metric-only reruns can safely opt into 2-3
 : "${MAX_PARALLEL:=}"                     # empty => all GPU slots
@@ -379,7 +390,7 @@ d['conformal_calibration']={
     'mission_horizon': int(os.environ['CONFORMAL_MISSION_HORIZON']),
     'calibration_unit': os.environ['CONFORMAL_CALIBRATION_UNIT'],
     'prediction_intervals_m': json.loads(os.environ['CONFORMAL_INTERVALS']),
-    'raw_calibration_womd_spec': os.environ['WOMD_VAL'],
+    'raw_calibration_womd_spec': os.environ.get('CALIB_WOMD') or None,
 }
 with open(p,'w') as f: json.dump(d,f,indent=2)
 print({'event':'near_contact_closed_loop_summary_augmented','output':p,'num_methods':len(d.get('methods',[]))})

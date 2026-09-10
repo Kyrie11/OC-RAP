@@ -35,22 +35,38 @@ export PYTHONNOUSERSITE=1
 : "${FALLBACK_MAX_PARALLEL:=2}"
 : "${XLA_PYTHON_CLIENT_PREALLOCATE:=false}"
 
+# The paper/rebuild contract fixes every held-out replay bucket to standard WOMD
+# validation.  Keep this explicit in the publication repair harness: the resolver
+# still rejects any bucket that contains conflicting stored provenance, while an
+# unprovenanced legacy bucket may be declared only through this explicit role.
+: "${PRIMARY_WOMD_ROLE:=validation}"
+: "${SAFE_WOMD_ROLE:=$PRIMARY_WOMD_ROLE}"
+: "${NEAR_WOMD_ROLE:=$PRIMARY_WOMD_ROLE}"
+: "${CONTACT_WOMD_ROLE:=$PRIMARY_WOMD_ROLE}"
+: "${NEAR_CALIB_WOMD_ROLE:=$PRIMARY_WOMD_ROLE}"
+# Refit only when the existing artifact is incompatible unless explicitly forced.
+: "${NEAR_FORCE_RECALIBRATE:=false}"
+
 stamp="$(date +%Y%m%d-%H%M%S)"
 backup="$BASE_OUT/metric_repair_backup_v55/$stamp"
 mkdir -p "$backup"
 
-resolve_role() {
-  local dataset="$1"
+resolve_bucket() {
+  local dataset="$1" split="$2" role="$3"
   python tools/resolve_womd_replay_source.py \
-    --dataset "$dataset" --split test --womd-root "$WOMD_ROOT" --shards 150 --json \
-    | python -c 'import json,sys; d=json.load(sys.stdin); print(d["resolved_role"])'
+    --dataset "$dataset" --split "$split" --womd-root "$WOMD_ROOT" --shards 150 --role "$role" --json \
+    | python -c 'import json,sys; d=json.load(sys.stdin); print(d["resolved_role"] + "\t" + d["womd_spec"])'
 }
 
-echo '[PREFLIGHT] resolving each bucket from stored dataset provenance (never hard-code validation vs validation_interactive)'
-safe_role="$(resolve_role "$OCRAP_ROOT/test_safe")"
-near_role="$(resolve_role "$OCRAP_ROOT/test_near_contact")"
-contact_role="$(resolve_role "$OCRAP_ROOT/test_contact")"
-printf '[SOURCE] test_safe=%s test_near_contact=%s test_contact=%s\n' "$safe_role" "$near_role" "$contact_role"
+echo '[PREFLIGHT] enforcing the paper source contract: standard WOMD validation for held-out test + Near calibration'
+IFS=$'\t' read -r safe_role safe_womd < <(resolve_bucket "$OCRAP_ROOT/test_safe" test "$SAFE_WOMD_ROLE")
+IFS=$'\t' read -r near_role near_womd < <(resolve_bucket "$OCRAP_ROOT/test_near_contact" test "$NEAR_WOMD_ROLE")
+IFS=$'\t' read -r contact_role contact_womd < <(resolve_bucket "$OCRAP_ROOT/test_contact" test "$CONTACT_WOMD_ROLE")
+IFS=$'\t' read -r near_calib_role near_calib_womd < <(resolve_bucket "$OCRAP_ROOT/calibration_near_contact" calibration "$NEAR_CALIB_WOMD_ROLE")
+printf '[SOURCE] test_safe=%s test_near_contact=%s test_contact=%s calibration_near_contact=%s\n' \
+  "$safe_role" "$near_role" "$contact_role" "$near_calib_role"
+printf '[WOMD] safe=%s\n[WOMD] near=%s\n[WOMD] contact=%s\n[WOMD] near_calibration=%s\n' \
+  "$safe_womd" "$near_womd" "$contact_womd" "$near_calib_womd"
 
 archive_matches() {
   local dst="$1"; shift
@@ -68,7 +84,8 @@ archive_matches() {
 }
 
 # Remove only evaluation artifacts. Keep model checkpoints, calibration files,
-# train summaries and JAX caches so there is no retraining/recalibration cost.
+# train summaries and JAX caches. CPSF calibration is reused only if source/config
+# provenance matches; otherwise it is refit on standard validation.
 IFS=',' read -r -a _variants <<< "$VARIANTS"
 for variant in "${_variants[@]}"; do
   variant="$(echo "$variant" | xargs)"; [[ -n "$variant" ]] || continue
@@ -105,12 +122,19 @@ if [[ -e "$TABLE_OUT" ]]; then
   mv "$TABLE_OUT" "$backup/$(basename "$TABLE_OUT")"
   echo "[ARCHIVE] $TABLE_OUT -> $backup/"
 fi
+# Near CPSF is the only main-table external baseline that fits a raw-WOMD
+# calibration artifact. Preserve the old artifact before validating/refitting it.
+if [[ -f "$NEAR_EXTERNAL_ROOT/conformal_calibration.json" ]]; then
+  mkdir -p "$backup/external/near"
+  cp -a "$NEAR_EXTERNAL_ROOT/conformal_calibration.json" "$backup/external/near/conformal_calibration.before_v55.json"
+fi
 
-echo '[1/5] OC-RAP: rerun all three regimes for both frozen variants; no training/recalibration.'
+echo '[1/5] OC-RAP: rerun all three regimes for both frozen variants; no model training/recalibration.'
 GPU0=0 GPU1=1 \
 CUDA_DEVICES="$CUDA_DEVICES" \
 BASE_OUT="$BASE_OUT" \
 OCRAP_ROOT="$OCRAP_ROOT" WOMD_ROOT="$WOMD_ROOT" \
+SAFE_WOMD="$safe_womd" NEAR_WOMD="$near_womd" CONTACT_WOMD="$contact_womd" \
 VARIANTS="$VARIANTS" \
 MODEL_RUN="$MODEL_RUN" \
 MAX_SCENARIOS="$MAX_SCENARIOS" \
@@ -123,7 +147,7 @@ bash scripts/run_v48_111_submission_three_regime.sh
 run_safe() {
   local jpg="$1" mp="$2"
   OCRAP_ROOT="$OCRAP_ROOT" WOMD_ROOT="$WOMD_ROOT" CUDA_DEVICES="$CUDA_DEVICES" \
-  RUN="$SAFE_EXTERNAL_ROOT" CL_WOMD=auto CL_MAX_SCENARIOS="$MAX_SCENARIOS" CL_MAX_STEPS="$MAX_STEPS" \
+  RUN="$SAFE_EXTERNAL_ROOT" CL_WOMD="$safe_womd" CL_MAX_SCENARIOS="$MAX_SCENARIOS" CL_MAX_STEPS="$MAX_STEPS" \
   CL_NUM_CANDIDATES="$NUM_CANDIDATES" CL_LABEL_MODE=fast \
   DO_TRAIN=false DO_OFFLINE=false DO_CLOSED_LOOP=true RUN_NOMINAL_CONTROL=false RUN_LEGACY_SAFE=false \
   SKIP_COMPLETE_METHODS=true CL_RESUME_FORCE=false JOBS_PER_GPU="$jpg" MAX_PARALLEL="$mp" \
@@ -133,9 +157,10 @@ run_safe() {
 run_near() {
   local jpg="$1" mp="$2"
   OCRAP_ROOT="$OCRAP_ROOT" WOMD_ROOT="$WOMD_ROOT" CUDA_DEVICES="$CUDA_DEVICES" \
-  RUN="$NEAR_EXTERNAL_ROOT" CL_WOMD=auto CL_MAX_SCENARIOS="$MAX_SCENARIOS" CL_MAX_STEPS="$MAX_STEPS" \
+  RUN="$NEAR_EXTERNAL_ROOT" CL_WOMD="$near_womd" CALIB_WOMD="$near_calib_womd" \
+  CL_MAX_SCENARIOS="$MAX_SCENARIOS" CL_MAX_STEPS="$MAX_STEPS" \
   CL_NUM_CANDIDATES="$NUM_CANDIDATES" CL_NUM_RECOVERY_OPTIONS="$NUM_RECOVERY_OPTIONS" CL_LABEL_MODE=fast \
-  DO_TRAIN=false DO_CALIBRATE=false DO_OFFLINE=false DO_CLOSED_LOOP=true \
+  DO_TRAIN=false DO_CALIBRATE=true FORCE_RECALIBRATE="$NEAR_FORCE_RECALIBRATE" DO_OFFLINE=false DO_CLOSED_LOOP=true \
   RUN_ORACLE_CLOSED_LOOP=false RUN_LEGACY_NEAR=false \
   SKIP_COMPLETE_METHODS=true CL_RESUME_FORCE=false JOBS_PER_GPU="$jpg" MAX_PARALLEL="$mp" \
   XLA_PYTHON_CLIENT_PREALLOCATE="$XLA_PYTHON_CLIENT_PREALLOCATE" \
@@ -144,7 +169,7 @@ run_near() {
 run_contact() {
   local jpg="$1" mp="$2"
   OCRAP_ROOT="$OCRAP_ROOT" WOMD_ROOT="$WOMD_ROOT" CUDA_DEVICES="$CUDA_DEVICES" \
-  RUN="$CONTACT_EXTERNAL_ROOT" CL_WOMD=auto CL_MAX_SCENARIOS="$MAX_SCENARIOS" CL_MAX_STEPS="$MAX_STEPS" \
+  RUN="$CONTACT_EXTERNAL_ROOT" CL_WOMD="$contact_womd" CL_MAX_SCENARIOS="$MAX_SCENARIOS" CL_MAX_STEPS="$MAX_STEPS" \
   CL_NUM_CANDIDATES="$NUM_CANDIDATES" CL_NUM_RECOVERY_OPTIONS="$NUM_RECOVERY_OPTIONS" CL_LABEL_MODE=fast \
   DO_TRAIN=false DO_OFFLINE=false DO_CLOSED_LOOP=true RUN_LEGACY_CONTACT=false \
   SKIP_COMPLETE_METHODS=true CL_RESUME_FORCE=false JOBS_PER_GPU="$jpg" MAX_PARALLEL="$mp" \
@@ -158,14 +183,14 @@ run_with_memory_fallback() {
   if "$fn" "$JOBS_PER_GPU" "$MAX_PARALLEL"; then
     return 0
   fi
-  echo "[WARN] $label failed at high concurrency; retrying incomplete methods with JOBS_PER_GPU=$FALLBACK_JOBS_PER_GPU MAX_PARALLEL=$FALLBACK_MAX_PARALLEL" >&2
+  echo "[WARN] $label failed; retrying incomplete methods at lower concurrency (useful for resource failures): JOBS_PER_GPU=$FALLBACK_JOBS_PER_GPU MAX_PARALLEL=$FALLBACK_MAX_PARALLEL" >&2
   "$fn" "$FALLBACK_JOBS_PER_GPU" "$FALLBACK_MAX_PARALLEL"
 }
 
 echo '[2/5] Safe external baselines: reuse checkpoints, metric-only replay.'
 run_with_memory_fallback SAFE run_safe
 
-echo '[3/5] Near-contact external baselines: reuse checkpoints + existing conformal calibration; skip audit-only selected teacher labels.'
+echo '[3/5] Near-contact external baselines: reuse non-learning registrations; validate/refit CPSF calibration on the declared standard-validation source; skip audit-only selected teacher labels.'
 run_with_memory_fallback NEAR run_near
 
 echo '[4/5] Contact external baselines: controllers are already registered; metric-only replay.'
@@ -209,4 +234,4 @@ printf '\n[DONE] Corrected closed-loop results are in the original run roots.\n'
 printf '  OC-RAP:   %s\n  Safe ext: %s\n  Near ext: %s\n  Contact:  %s\n  Tables:   %s\n' \
   "$OCRAP_SUBMISSION_ROOT" "$SAFE_EXTERNAL_ROOT" "$NEAR_EXTERNAL_ROOT" "$CONTACT_EXTERNAL_ROOT" "$TABLE_OUT"
 printf 'Old metric artifacts were archived at: %s\n' "$backup"
-printf '%s\n' '[IMPORTANT] Do NOT run repair_submission_visualization_stale_replays_v54.sh after this full rerun; all launchers already resolve CL_WOMD from dataset provenance with auto.'
+printf '%s\n' '[IMPORTANT] Do NOT run repair_submission_visualization_stale_replays_v54.sh after this full rerun; this harness has already pinned and verified the publication WOMD validation source.'
