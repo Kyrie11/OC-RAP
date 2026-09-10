@@ -235,7 +235,13 @@ for spec in "${SELECTED_SPECS[@]}"; do
 done
 
 preflight_one() {
-  local regime="$1" bucket="$2" womd="$3" out="$PREFLIGHT_ROOT/$regime.closed_loop_dataset_support.json"
+  # Under `set -u`, do not reference a variable from another assignment in the
+  # same `local` command: RHS expansion happens before the assignments become
+  # visible, so `$regime` would be considered unbound here.
+  local regime="$1"
+  local bucket="$2"
+  local womd="$3"
+  local out="$PREFLIGHT_ROOT/$regime.closed_loop_dataset_support.json"
   if [[ "${NEED_REGIME[$regime]}" != 1 ]]; then return 0; fi
   echo "[PREFLIGHT once] regime=$regime"
   python tools/check_closed_loop_dataset_support.py \
@@ -304,7 +310,10 @@ run_claimed_job() {
   local gpu="$1" jf="$2"
   local arm variant regime config checkpoint gamma womd bucket preflight
   IFS=$'\t' read -r arm variant regime config checkpoint gamma womd bucket preflight < "$jf"
-  local root="$OUT_ROOT/$arm/$variant" run_dir="$root/$regime" artifact="$run_dir/closed_loop_ocrap.json"
+  # Same nounset rule as preflight_one(): initialize dependent locals in order.
+  local root="$OUT_ROOT/$arm/$variant"
+  local run_dir="$root/$regime"
+  local artifact="$run_dir/closed_loop_ocrap.json"
   local started="$(v50_iso_now)" rc=0
 
   if bool_true "$SKIP_COMPLETE_CORRECTED" && python tools/check_closed_loop_artifact.py --output "$artifact" --quiet && is_corrected_artifact "$artifact"; then
