@@ -17,7 +17,10 @@ SCHEMA: dict[str, list[tuple[str, str, str]]] = {
         ("collision_scene_rate", "Collision scene rate ↓", "rate"),
         ("offroad_scene_rate", "Off-road scene rate ↓", "rate"),
         ("minimum_clearance_m", "Minimum clearance [m] ↑", "float"),
+        ("scene_min_clearance_m_p05", "Scene clearance p05 [m] ↑", "float"),
+        ("scene_min_clearance_m_median", "Scene clearance median [m] ↑", "float"),
         ("minimum_ttc_s", "Minimum TTC [s] ↑", "float"),
+        ("scene_ttc_s_p05", "Scene TTC p05 [s] ↑", "float"),
         ("closed_loop_bounded_NUP", "Bounded NUP ↑", "float"),
         ("intervention_rate", "Intervention rate", "rate"),
         ("decision_latency_ms", "Decision latency [ms] ↓", "float"),
@@ -27,6 +30,7 @@ SCHEMA: dict[str, list[tuple[str, str, str]]] = {
         ("collision_scene_rate", "Collision scene rate ↓", "rate"),
         ("offroad_scene_rate", "Off-road scene rate ↓", "rate"),
         ("scene_min_clearance_m_p05", "Scene clearance p05 [m] ↑", "float"),
+        ("scene_min_clearance_noncollision_m_p05", "Non-collision scene clearance p05 [m] ↑", "float"),
         ("scene_ttc_s_p05", "Scene TTC p05 [s] ↑", "float"),
         ("terminal_clearance_m", "Terminal clearance [m] ↑", "float"),
         ("terminal_ttc_s", "Terminal TTC [s] ↑", "float"),
@@ -38,15 +42,28 @@ SCHEMA: dict[str, list[tuple[str, str, str]]] = {
     ],
     "contact": [
         ("num_scenes", "Scenes", "count"),
-        ("post_contact_terminal_clearance_m", "Terminal clearance [m] ↑", "float"),
-        ("post_contact_free_space_auc_normalized_m", "Free-space AUC [m] ↑", "float"),
-        ("post_contact_clearance_gain_m", "Clearance gain [m] ↑", "float"),
-        ("post_contact_escape_scene_rate", "Escape scene rate ↑", "rate"),
-        ("recontact_scene_rate", "Re-contact scene rate ↓", "rate"),
-        ("secondary_overlap_scene_rate", "Secondary-overlap rate ↓", "rate"),
+        ("counterfactual_contact_target_scene_rate", "Counterfactual-contact target rate", "rate"),
+        ("observed_contact_scene_rate", "Observed-contact scene rate", "rate"),
+        ("post_contact_metric_eligible_scene_rate", "Post-contact metric eligibility", "rate"),
+        ("collision_scene_rate", "Collision scene rate ↓", "rate"),
+        ("scene_min_clearance_m_p05", "Scene clearance p05 [m] ↑", "float"),
+        ("scene_min_clearance_noncollision_m_p05", "Non-collision scene clearance p05 [m] ↑", "float"),
+        ("terminal_clearance_m", "Terminal clearance [m] ↑", "float"),
+        ("clearance_recovery_gain_m", "Clearance recovery gain [m] ↑", "float"),
+        ("overlap_duration_s", "Overlap duration [s] ↓", "float"),
+        ("penetration_scene_rate", "OBB penetration scene rate ↓", "rate"),
+        ("penetration_duration_s", "OBB penetration duration [s] ↓", "float"),
+        ("scene_max_penetration_depth_m_mean", "Mean scene max penetration [m] ↓", "float"),
+        ("penetration_depth_auc_m_s", "Penetration-depth AUC [m·s] ↓", "float"),
+        ("post_contact_terminal_clearance_m", "Observed-contact terminal clearance [m] ↑", "float"),
+        ("post_contact_free_space_auc_normalized_m", "Observed-contact free-space AUC [m] ↑", "float"),
+        ("post_contact_clearance_gain_m", "Observed-contact clearance gain [m] ↑", "float"),
+        ("post_contact_escape_scene_rate", "Observed-contact escape rate ↑", "rate"),
+        ("recontact_scene_rate", "Observed-contact re-contact rate ↓", "rate"),
+        ("secondary_overlap_scene_rate", "Observed-contact secondary-overlap rate ↓", "rate"),
         ("new_stable_stop_quality_scene_rate", "Stable-stop-quality rate ↑", "rate"),
         ("offroad_scene_rate", "Off-road scene rate ↓", "rate"),
-        ("post_contact_overlap_duration_s", "Post-contact overlap [s] ↓", "float"),
+        ("post_contact_overlap_duration_s", "Observed-contact overlap [s] ↓", "float"),
         ("decision_latency_ms", "Decision latency [ms] ↓", "float"),
     ],
 }
@@ -87,10 +104,19 @@ def _get(doc: dict[str, Any], key: str) -> float | int | None:
     if key == "decision_latency_ms":
         timing = doc.get("timing", {}) or {}
         per = timing.get("per_decision_s", {}) or {}
+        # Publication latency is observation -> deployable action selection.
+        # Never include teacher/audit labels or simulator/metric bookkeeping.
+        if "deployed_planner" in per:
+            return _finite(1000.0 * float(per["deployed_planner"]))
+        deployed = ["state_history", "candidate_features", "policy_selection"]
+        values = [float(per[k]) for k in deployed if k in per and per[k] is not None and math.isfinite(float(per[k]))]
+        if values:
+            return _finite(1000.0 * sum(values))
+        # Very old artifacts exposed only a single total and cannot be safely
+        # decomposed; retain compatibility as a last-resort fallback.
         if "total" in per:
             return _finite(1000.0 * float(per["total"]))
-        values = [float(v) for v in per.values() if v is not None and math.isfinite(float(v))]
-        return _finite(1000.0 * sum(values)) if values else None
+        return None
     if key in doc:
         return _finite(doc.get(key))
     wm = doc.get("waymax_metrics", {}) or {}
@@ -160,15 +186,29 @@ def main() -> int:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     stem = f"{args.regime}_comparison"
+    contact_eligibility = {
+        method: _get(doc, "post_contact_metric_eligible_scene_rate")
+        for method, _, doc in entries
+    } if args.regime == "contact" else None
+    contact_post_metrics_fully_paired = (
+        bool(contact_eligibility)
+        and all(v is not None and abs(float(v) - 1.0) <= 1.0e-12 for v in contact_eligibility.values())
+    ) if args.regime == "contact" else None
     json_doc = {
         "schema_version": 2, "regime": args.regime, "paired_scene_set": paired,
         "paired_scene_count": paired_count,
         "metric_protocol": (
-            "physical post-contact metrics only; certificate metrics intentionally omitted" if args.regime == "contact"
+            "counterfactual-contact target cohort; generic physical metrics use all paired scenes, while post_contact_* metrics are strictly anchored only on observed Waymax overlap" if args.regime == "contact"
             else "deployable physical closed-loop metrics; expensive selected/all-candidate teacher certificate audits are excluded from the main table" if args.regime == "near"
             else "deployable physical closed-loop metrics"
         ),
-        "contact_protocol": "physical post-contact metrics only; certificate metrics intentionally omitted" if args.regime == "contact" else None,
+        "contact_protocol": (
+            "test_contact is a counterfactual contact-surrogate cohort in the current dataset build; raw WOMD replay does not materialize the contact impulse. "
+            "Therefore post_contact_* values are conditional diagnostics only when an actual simulator overlap is observed and must not be described as a fully paired post-impact benchmark unless eligibility is 1.0 for every method."
+            if args.regime == "contact" else None
+        ),
+        "contact_post_metrics_fully_paired": contact_post_metrics_fully_paired,
+        "post_contact_metric_eligibility_by_method": contact_eligibility,
         "metrics": [{"key": k, "label": label, "kind": kind} for k, label, kind in SCHEMA[args.regime]],
         "rows": rows,
     }
@@ -181,7 +221,10 @@ def main() -> int:
     headers = ["Method"] + [x[1] for x in SCHEMA[args.regime]]
     lines = ["# " + args.regime.capitalize() + " regime comparison", "", f"Paired target set: **{paired}**" + (f" ({paired_count} scenes)" if paired_count is not None else ""), ""]
     if args.regime == "contact":
-        lines += ["> Contact is evaluated with post-contact physical recovery/escape metrics; FRA/DRS/ODG are intentionally excluded.", ""]
+        lines += [
+            "> Current `test_contact` is a counterfactual contact-surrogate cohort. Generic physical columns use the paired cohort; `post_contact_*` columns are strict observed-overlap diagnostics and are not a fully paired post-impact comparison unless observed-contact eligibility is 100% for every method.",
+            "",
+        ]
     elif args.regime == "near":
         lines += ["> The main Near table uses deployable physical closed-loop metrics. Exact teacher-label FRA/DRS/ODG audits are optional diagnostics and are not mixed into the runtime comparison.", ""]
     lines += ["| " + " | ".join(headers) + " |", "|" + "---|" * len(headers)]

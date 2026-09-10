@@ -4,7 +4,7 @@
 The raw closed-loop evaluator intentionally emits a superset of metrics.  This
 script applies the paper reporting contract: Safe publishes nominal closed-loop
 quality/comfort, Near publishes closed-loop plus low-headroom recovery metrics,
-and Contact publishes post-contact recovery/stability metrics only.
+and Contact publishes generic contact-surrogate physical metrics plus strictly observed-contact recovery diagnostics.
 """
 from __future__ import annotations
 
@@ -38,6 +38,7 @@ SAFE = (
     "minimum_clearance_m",
     "scene_min_clearance_m_median",
     "scene_min_clearance_m_p05",
+    "scene_min_clearance_noncollision_m_p05",
     "minimum_ttc_s",
     "scene_ttc_s_median",
     "scene_ttc_s_p05",
@@ -59,6 +60,7 @@ NEAR = (
     "offroad_scene_rate",
     "minimum_clearance_m",
     "scene_min_clearance_m_p05",
+    "scene_min_clearance_noncollision_m_p05",
     "minimum_ttc_s",
     "scene_ttc_s_p05",
     "near_contact_exposure_rate",
@@ -90,8 +92,22 @@ NEAR = (
     "intervention_scene_rate",
 )
 CONTACT = (
+    "counterfactual_contact_target_scene_rate",
+    "observed_contact_scene_rate",
+    "post_contact_metric_eligible_scene_rate",
+    "collision_scene_rate",
+    "offroad_scene_rate",
+    "scene_min_clearance_m_p05",
+    "scene_min_clearance_noncollision_m_p05",
+    "scene_ttc_s_p05",
+    "terminal_clearance_m",
+    "clearance_recovery_gain_m",
     "overlap_episode_count",
     "overlap_duration_s",
+    "penetration_scene_rate",
+    "penetration_duration_s",
+    "scene_max_penetration_depth_m_mean",
+    "penetration_depth_auc_m_s",
     "longest_overlap_run_s",
     "post_contact_terminal_clearance_m",
     "post_contact_free_space_auc_m_s",
@@ -150,7 +166,7 @@ def main() -> int:
     contract_note = {
         "safe": "Nominal closed-loop safety, comfort, preservation and unintended intervention only; no post-contact recovery metrics.",
         "near": "Closed-loop safety plus low-headroom/extreme exposure, recovery and selected-candidate OC-RAP teacher diagnostics; no post-contact metrics.",
-        "contact": "Post-contact escape, re-contact, stable-stop and free-space recovery only; ordinary nominal/near closed-loop metrics are intentionally excluded from the publication summary.",
+        "contact": "Current test_contact is a counterfactual contact-surrogate cohort. Generic physical metrics are valid on the full paired cohort; post_contact_* metrics are strict observed-overlap diagnostics only and are conditional on observed_contact_scene_rate.",
     }[args.regime]
     doc = {
         "schema_version": 1,

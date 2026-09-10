@@ -7,15 +7,19 @@ from typing import Any
 REGIME_KEYS = {
     "safe": [
         "num_scenes", "num_decisions", "collision_scene_rate", "offroad_scene_rate",
+        "scene_min_clearance_m_p05", "scene_min_clearance_noncollision_m_p05", "scene_ttc_s_p05",
         "closed_loop_bounded_NUP", "intervention_rate",
     ],
     "near": [
         "num_scenes", "num_decisions", "collision_scene_rate", "offroad_scene_rate",
-        "scene_min_clearance_m_p05", "scene_ttc_s_p05", "critical_ttc_exposure_duration_s",
+        "scene_min_clearance_m_p05", "scene_min_clearance_noncollision_m_p05", "scene_ttc_s_p05", "critical_ttc_exposure_duration_s",
         "closed_loop_bounded_NUP", "intervention_rate",
     ],
     "contact": [
-        "num_scenes", "num_decisions", "post_contact_terminal_clearance_m",
+        "num_scenes", "num_decisions", "counterfactual_contact_target_scene_rate", "observed_contact_scene_rate",
+        "post_contact_metric_eligible_scene_rate", "collision_scene_rate", "scene_min_clearance_m_p05", "scene_min_clearance_noncollision_m_p05",
+        "terminal_clearance_m", "clearance_recovery_gain_m", "overlap_duration_s", "penetration_scene_rate", "penetration_duration_s",
+        "scene_max_penetration_depth_m_mean", "penetration_depth_auc_m_s", "post_contact_terminal_clearance_m",
         "post_contact_free_space_auc_normalized_m", "post_contact_clearance_gain_m",
         "post_contact_escape_scene_rate", "recontact_scene_rate", "secondary_overlap_scene_rate",
         "new_stable_stop_quality_scene_rate", "post_contact_overlap_duration_s", "offroad_scene_rate",

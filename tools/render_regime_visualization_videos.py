@@ -178,12 +178,12 @@ PANEL_METRICS: dict[str, tuple[tuple[str, str, str, str, int], ...]] = {
         ("offroad_any", "Off-road", "", "lower", 0),
     ),
     "contact": (
+        ("clearance_p05_m", "Clearance p05", " m", "higher", 2),
         ("terminal_clearance_m", "Terminal clearance", " m", "higher", 2),
-        ("free_space_auc_m", "Free-space AUC", " m", "higher", 2),
-        ("clearance_gain_m", "Clearance gain", " m", "higher", 2),
+        ("clearance_gain_m", "Clearance recovery", " m", "higher", 2),
         ("overlap_duration_s", "Overlap duration", " s", "lower", 2),
-        ("recontact", "Re-contact", "", "lower", 0),
-        ("escape", "Escape", "", "higher", 0),
+        ("penetration_duration_s", "Penetration duration", " s", "lower", 2),
+        ("max_penetration_depth_m", "Max penetration", " m", "lower", 2),
         ("stable_stop", "Stable stop", "", "higher", 0),
     ),
 }
@@ -341,8 +341,9 @@ def _contact_marker(trace, regime):
     for row in trace:
         if (_metric_float(row, "overlap") or 0.0) > 0.5:
             return _sdc(row), "observed overlap"
-    if regime == "contact" and trace:
-        return _sdc(trace[0]), "post-contact rollout start"
+    # Contact bucket membership is a counterfactual-surrogate label in the
+    # current dataset build, not proof that raw WOMD replay starts post-impact.
+    # Do not draw a fabricated contact marker when no simulator overlap occurs.
     return None, None
 
 
@@ -415,6 +416,7 @@ def _draw_frame(ax, trace, sim_index, title, center, radius, contact_xy, contact
         f"candidate={row.get('selected_candidate_index')}  reason={reason}",
     ]
     for key, label, unit in (("ttc_s", "TTC", "s"), ("min_clearance_m", "clearance", "m"),
+                             ("signed_clearance_m", "signed gap", "m"), ("penetration_depth_m", "penetration", "m"),
                              ("ego_speed_mps", "speed", "m/s"), ("overlap", "overlap", ""), ("offroad", "offroad", "")):
         value = _metric_float(row, key)
         if value is not None:
@@ -524,12 +526,13 @@ def _summary(scene: dict[str, Any], regime: str) -> str:
         ]
     else:
         parts = [
-            f"terminal clearance={_fmt(_scene_metric(scene, 'post_contact_terminal_clearance_m'), ' m')}",
-            f"free-space AUC={_fmt(_scene_metric(scene, 'post_contact_free_space_auc_normalized_m'), ' m')}",
-            f"overlap duration={_fmt(_scene_metric(scene, 'post_contact_overlap_duration_s'), ' s')}",
-            f"recontact={_fmt(_scene_metric(scene, 'recontact_event'), digits=0)}",
+            f"clearance p05={_fmt(_scene_metric(scene, 'min_clearance_m_p05'), ' m')}",
+            f"terminal clearance={_fmt(_scene_metric(scene, 'terminal_clearance_m'), ' m')}",
+            f"recovery gain={_fmt(_scene_metric(scene, 'clearance_recovery_gain_m'), ' m')}",
+            f"overlap duration={_fmt(_scene_metric(scene, 'overlap_duration_s'), ' s')}",
+            f"penetration duration={_fmt(_scene_metric(scene, 'penetration_duration_s'), ' s')}",
+            f"max penetration={_fmt(_scene_metric(scene, 'penetration_depth_m_max'), ' m')}",
             f"stable stop={_fmt(_scene_metric(scene, 'new_stable_stop_quality_event'), digits=0)}",
-            f"escape={_fmt(_scene_metric(scene, 'post_contact_escape_event'), digits=0)}",
         ]
     return " | ".join(parts)
 
@@ -666,7 +669,7 @@ def _render_pair(*, methods, scenes, traces, item, selection, regime, displays, 
     axes = {ocrap: figure.add_subplot(grid[0, 0]), comparator: figure.add_subplot(grid[0, 1])}
     timeline_ax = figure.add_subplot(grid[1, 0:2]); timeline_twin = timeline_ax.twinx()
     info_ax = figure.add_subplot(grid[:, 2])
-    regime_title = "NEAR-CONTACT" if regime == "near" else regime.upper()
+    regime_title = "NEAR-CONTACT" if regime == "near" else ("CONTACT-SURROGATE" if regime == "contact" else regime.upper())
     comparator_name = _short_display(comparator, 20)
     role_short = _short_comparator_role(comparator_role, regime)
     figure.suptitle(

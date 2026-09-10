@@ -71,13 +71,19 @@ fi
 : "${CONFORMAL_CALIBRATION:=$RUN/conformal_calibration.json}"
 : "${CONFORMAL_INTERVALS:=}"
 : "${CUDA_DEVICES:=0,1}"
-: "${MAX_PARALLEL:=2}"
+: "${JOBS_PER_GPU:=1}"                    # metric-only reruns can safely opt into 2-3
+: "${MAX_PARALLEL:=}"                     # empty => all GPU slots
 
 IFS=',' read -r -a GPU_LIST <<< "$CUDA_DEVICES"
 ((${#GPU_LIST[@]})) || GPU_LIST=(0 1)
+((JOBS_PER_GPU >= 1)) || JOBS_PER_GPU=1
+GPU_SLOTS=()
+for ((_slot=0; _slot<JOBS_PER_GPU; _slot++)); do
+  for _gpu in "${GPU_LIST[@]}"; do GPU_SLOTS+=("$_gpu"); done
+done
+[[ -n "$MAX_PARALLEL" ]] || MAX_PARALLEL="${#GPU_SLOTS[@]}"
 ((MAX_PARALLEL >= 1)) || MAX_PARALLEL=1
-((MAX_PARALLEL <= 2)) || MAX_PARALLEL=2
-((MAX_PARALLEL <= ${#GPU_LIST[@]})) || MAX_PARALLEL="${#GPU_LIST[@]}"
+((MAX_PARALLEL <= ${#GPU_SLOTS[@]})) || MAX_PARALLEL="${#GPU_SLOTS[@]}"
 CPU_COUNT="$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 8)"
 : "${THREADS_PER_JOB:=$(( CPU_COUNT / (2 * MAX_PARALLEL) ))}"
 ((THREADS_PER_JOB >= 1)) || THREADS_PER_JOB=1
@@ -265,7 +271,7 @@ run_queue_dynamic() {
   local next=0 active=0 failed=0 done_pid status gpu item i
   declare -A PID_GPU=() PID_ITEM=()
   launch_one() { local x="$1" g="$2"; "$runner" "$x" "$g" & local p=$!; PID_GPU[$p]="$g"; PID_ITEM[$p]="$x"; active=$((active+1)); }
-  for ((i=0;i<MAX_PARALLEL && next<${#items[@]};i++)); do launch_one "${items[$next]}" "${GPU_LIST[$i]}"; next=$((next+1)); done
+  for ((i=0;i<MAX_PARALLEL && next<${#items[@]};i++)); do launch_one "${items[$next]}" "${GPU_SLOTS[$i]}"; next=$((next+1)); done
   while ((active>0)); do
     done_pid=""; if wait -n -p done_pid; then status=0; else status=$?; fi
     gpu="${PID_GPU[$done_pid]}"; item="${PID_ITEM[$done_pid]}"; unset 'PID_GPU[$done_pid]' 'PID_ITEM[$done_pid]'; active=$((active-1))
@@ -278,7 +284,7 @@ run_queue_fixed() {
   local runner="$1"; shift; local -a items=("$@") pids=() names=(); local base j idx failed=0
   for ((base=0;base<${#items[@]};base+=MAX_PARALLEL)); do
     pids=(); names=()
-    for ((j=0;j<MAX_PARALLEL && base+j<${#items[@]};j++)); do idx=$((base+j)); "$runner" "${items[$idx]}" "${GPU_LIST[$j]}" & pids+=("$!"); names+=("${items[$idx]}"); done
+    for ((j=0;j<MAX_PARALLEL && base+j<${#items[@]};j++)); do idx=$((base+j)); "$runner" "${items[$idx]}" "${GPU_SLOTS[$j]}" & pids+=("$!"); names+=("${items[$idx]}"); done
     for j in "${!pids[@]}"; do wait "${pids[$j]}" || { echo "[ERROR] ${names[$j]} failed" >&2; failed=1; }; done
   done
   return "$failed"

@@ -33,6 +33,8 @@ source scripts/lib/v50_runtime.sh
 : "${CONTINUE_AFTER_REGIME_FAILURE:=true}"
 : "${SKIP_COMPLETE_METHODS:=true}"
 : "${USE_DYNAMIC_SCHEDULER:=auto}"
+: "${JOBS_PER_GPU:=1}"
+: "${MAX_PARALLEL:=}"
 : "${WOMD_ROOT:=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example}"
 : "${WOMD_NUM_SHARDS:=150}"
 : "${WOMD_VAL:=$WOMD_ROOT/validation/validation_tfexample.tfrecord@150}"
@@ -96,6 +98,8 @@ common=(
   DO_CLOSED_LOOP="$DO_CLOSED_LOOP"
   SKIP_COMPLETE_METHODS="$SKIP_COMPLETE_METHODS"
   WOMD_NUM_SHARDS="$WOMD_NUM_SHARDS"
+  JOBS_PER_GPU="$JOBS_PER_GPU"
+  MAX_PARALLEL="$MAX_PARALLEL"
 )
 
 run_regime() {

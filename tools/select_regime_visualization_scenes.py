@@ -13,7 +13,7 @@ Safe:
   low unnecessary intervention) with hard collision/off-road guards.  Relative
   external performance is disclosed but is not the primary ranking signal.
 Near-Contact / Contact:
-  rank robust relative gains against the complete external-baseline set.  The
+  rank robust relative gains against the complete external-baseline set. Contact uses generic physical recovery on the current counterfactual contact-surrogate cohort; observed-contact-only diagnostics are not required for selection.  The
   strongest tier requires a material gain over the per-scene best external
   comparator and no unsafe regression.  Lower tiers are deterministic fallbacks
   and are explicitly labeled in the output.
@@ -60,13 +60,14 @@ METRIC_SPECS: dict[str, tuple[tuple[str, tuple[str, ...], str, str], ...]] = {
         ("offroad_any", ("offroad_any",), "Off-road", "lower"),
     ),
     "contact": (
-        ("terminal_clearance_m", ("post_contact_terminal_clearance_m",), "Terminal clearance", "higher"),
-        ("free_space_auc_m", ("post_contact_free_space_auc_normalized_m",), "Free-space AUC", "higher"),
-        ("clearance_gain_m", ("post_contact_clearance_gain_m",), "Clearance gain", "higher"),
-        ("overlap_duration_s", ("post_contact_overlap_duration_s",), "Overlap duration", "lower"),
-        ("recontact", ("recontact_event",), "Re-contact", "lower"),
-        ("escape", ("post_contact_escape_event",), "Escape", "higher"),
+        ("clearance_p05_m", ("min_clearance_m_p05",), "Clearance p05", "higher"),
+        ("terminal_clearance_m", ("terminal_clearance_m",), "Terminal clearance", "higher"),
+        ("clearance_gain_m", ("clearance_recovery_gain_m",), "Clearance recovery", "higher"),
+        ("overlap_duration_s", ("overlap_duration_s",), "Overlap duration", "lower"),
+        ("penetration_duration_s", ("penetration_duration_s",), "Penetration duration", "lower"),
+        ("max_penetration_depth_m", ("penetration_depth_m_max",), "Max penetration", "lower"),
         ("stable_stop", ("new_stable_stop_quality_event",), "Stable stop", "higher"),
+        ("overlap_any", ("overlap_any",), "Overlap", "lower"),
         ("offroad_any", ("offroad_any",), "Off-road", "lower"),
     ),
 }
@@ -93,6 +94,10 @@ DEFAULT_THRESHOLDS = dict(
     max_contact_terminal_clearance_regression_m=0.10,
     max_contact_auc_regression_m=0.25,
     max_contact_overlap_duration_regression_s=0.10,
+    min_contact_penetration_duration_reduction_s=0.10,
+    min_contact_penetration_depth_reduction_m=0.05,
+    max_contact_penetration_duration_regression_s=0.10,
+    max_contact_penetration_depth_regression_m=0.05,
     max_contact_yaw_rate_regression_radps=0.50,
     max_contact_jerk_regression_mps3=4.0,
     max_contact_route_progress_regression_m=2.0,
@@ -230,15 +235,24 @@ def _near_absolute(scene: dict[str, Any]) -> float:
 
 
 def _contact_absolute(scene: dict[str, Any]) -> float:
+    """Absolute quality on the current Contact *surrogate* cohort.
+
+    The dataset builder does not materialize a physical post-impact impulse in
+    raw WOMD replay, so population qualitative ranking must not fabricate a
+    contact anchor.  Use generic physical recovery/stability metrics that are
+    defined for every paired target; observed-contact diagnostics remain
+    supplementary when an actual overlap occurs.
+    """
     return float(
-        1.30 * _bounded(_metric(scene, "post_contact_terminal_clearance_m"), 1.0, 3.0)
-        + 1.05 * _bounded(_metric(scene, "post_contact_free_space_auc_normalized_m"), 1.0, 3.0)
-        + 0.75 * _bounded(_metric(scene, "post_contact_clearance_gain_m"), 0.75, 3.0)
-        + 1.20 * _finite(_metric(scene, "post_contact_escape_event"))
-        + 1.20 * _finite(_metric(scene, "new_stable_stop_quality_event"))
-        - 2.75 * _finite(_metric(scene, "recontact_event"))
-        - 1.20 * _bounded(_metric(scene, "post_contact_overlap_duration_s"), 0.5, 3.0)
-        - 2.5 * _finite(_metric(scene, "offroad_any"))
+        1.10 * _bounded(_metric(scene, "min_clearance_m_p05"), 1.0, 3.0)
+        + 1.10 * _bounded(_metric(scene, "terminal_clearance_m"), 2.0, 3.0)
+        + 0.80 * _bounded(_metric(scene, "clearance_recovery_gain_m"), 1.0, 3.0)
+        - 1.10 * _bounded(_metric(scene, "overlap_duration_s"), 0.5, 3.0)
+        - 1.00 * _bounded(_metric(scene, "penetration_duration_s"), 0.25, 3.0)
+        - 0.85 * _bounded(_metric(scene, "penetration_depth_m_max"), 0.25, 3.0)
+        + 1.00 * _finite(_metric(scene, "new_stable_stop_quality_event"))
+        - 3.25 * _finite(_metric(scene, "overlap_any"))
+        - 2.50 * _finite(_metric(scene, "offroad_any"))
         - 0.20 * _bounded(_metric(scene, "yaw_rate_p95"), 0.5, 2.0)
         - 0.10 * _bounded(_metric(scene, "jerk_p95"), 4.0, 2.0)
     )
@@ -252,6 +266,106 @@ def _absolute_score(regime: str, scene: dict[str, Any]) -> float:
     if regime == "contact":
         return _contact_absolute(scene)
     raise ValueError(regime)
+
+
+def _delta_metric(method: dict[str, Any], control: dict[str, Any], *names: str) -> float | None:
+    a = _metric(method, *names)
+    b = _metric(control, *names)
+    return None if a is None or b is None else float(a - b)
+
+
+def _evaluate_contact_surrogate(
+    method: dict[str, Any],
+    control: dict[str, Any],
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    """Paired Contact-surrogate score with no fabricated post-impact anchor."""
+    raw_terms = {
+        "clearance_p05_m": _delta_metric(method, control, "min_clearance_m_p05"),
+        "terminal_clearance_m": _delta_metric(method, control, "terminal_clearance_m"),
+        "clearance_gain_m": _delta_metric(method, control, "clearance_recovery_gain_m"),
+        "overlap_duration_s": _delta_metric(method, control, "overlap_duration_s"),
+        "penetration_duration_s": _delta_metric(method, control, "penetration_duration_s"),
+        "max_penetration_depth_m": _delta_metric(method, control, "penetration_depth_m_max"),
+        "stable_stop": _delta_metric(method, control, "new_stable_stop_quality_event"),
+        "overlap_any": _delta_metric(method, control, "overlap_any"),
+        "offroad_any": _delta_metric(method, control, "offroad_any"),
+        "yaw_rate_p95": _delta_metric(method, control, "yaw_rate_p95"),
+        "jerk_p95": _delta_metric(method, control, "jerk_p95"),
+        "route_progression_m": _delta_metric(method, control, "route_progression_m"),
+        "bounded_nup": _delta_metric(method, control, "closed_loop_bounded_NUP"),
+    }
+    required = (
+        "clearance_p05_m", "terminal_clearance_m", "clearance_gain_m",
+        "overlap_duration_s", "penetration_duration_s", "max_penetration_depth_m",
+        "stable_stop", "overlap_any", "offroad_any",
+    )
+    missing = [name for name in required if raw_terms[name] is None]
+    terms = raw_terms
+    components = {
+        "clearance_p05": 1.20 * _bounded(terms["clearance_p05_m"], 0.5),
+        "terminal_clearance": 1.10 * _bounded(terms["terminal_clearance_m"], 0.75),
+        "clearance_recovery": 0.80 * _bounded(terms["clearance_gain_m"], 0.5),
+        "overlap_duration": -1.15 * _bounded(terms["overlap_duration_s"], 0.20),
+        "penetration_duration": -1.10 * _bounded(terms["penetration_duration_s"], 0.10),
+        "penetration_depth": -0.95 * _bounded(terms["max_penetration_depth_m"], 0.10),
+        "stable_stop": 1.20 * _finite(terms["stable_stop"]),
+        "overlap_any": -2.50 * _finite(terms["overlap_any"]),
+        "offroad_any": -2.50 * _finite(terms["offroad_any"]),
+        "yaw_stability": -0.35 * _bounded(terms["yaw_rate_p95"], 0.25, 2.0),
+        "jerk_stability": -0.20 * _bounded(terms["jerk_p95"], 2.0, 2.0),
+        "route_progress": 0.25 * _bounded(terms["route_progression_m"], 0.5, 2.0),
+        "bounded_nup": 0.20 * _bounded(terms["bounded_nup"], 0.10, 2.0),
+    }
+    material: list[str] = []
+    if _finite(terms["terminal_clearance_m"]) >= args.min_contact_terminal_clearance_gain_m:
+        material.append("terminal_clearance")
+    if _finite(terms["clearance_gain_m"]) >= args.min_contact_clearance_gain_m:
+        material.append("clearance_recovery")
+    if _finite(terms["overlap_duration_s"]) <= -args.min_contact_overlap_duration_reduction_s:
+        material.append("overlap_duration_reduced")
+    if _finite(terms["penetration_duration_s"]) <= -args.min_contact_penetration_duration_reduction_s:
+        material.append("penetration_duration_reduced")
+    if _finite(terms["max_penetration_depth_m"]) <= -args.min_contact_penetration_depth_reduction_m:
+        material.append("penetration_depth_reduced")
+    if _finite(terms["stable_stop"]) > 0.0:
+        material.append("new_stable_stop")
+
+    regressions: list[str] = []
+    guards = {
+        "terminal_clearance_regression": _finite(terms["terminal_clearance_m"]) < -args.max_contact_terminal_clearance_regression_m,
+        "overlap_duration_regression": _finite(terms["overlap_duration_s"]) > args.max_contact_overlap_duration_regression_s,
+        "penetration_duration_regression": _finite(terms["penetration_duration_s"]) > args.max_contact_penetration_duration_regression_s,
+        "penetration_depth_regression": _finite(terms["max_penetration_depth_m"]) > args.max_contact_penetration_depth_regression_m,
+        "new_overlap_regression": _finite(terms["overlap_any"]) > 1.0e-9,
+        "offroad_regression": _finite(terms["offroad_any"]) > 1.0e-9,
+    }
+    if terms["yaw_rate_p95"] is not None:
+        guards["yaw_rate_regression"] = _finite(terms["yaw_rate_p95"]) > args.max_contact_yaw_rate_regression_radps
+    if terms["jerk_p95"] is not None:
+        guards["jerk_regression"] = _finite(terms["jerk_p95"]) > args.max_contact_jerk_regression_mps3
+    if terms["route_progression_m"] is not None:
+        guards["route_progress_regression"] = _finite(terms["route_progression_m"]) < -args.max_contact_route_progress_regression_m
+    regressions.extend(name for name, failed in guards.items() if failed)
+
+    profile_effects = {
+        "clearance_recovery": max(_bounded(terms["terminal_clearance_m"], 0.75), _bounded(terms["clearance_gain_m"], 0.5)),
+        "penetration_avoidance": max(_bounded(-_finite(terms["penetration_duration_s"]), 0.10), _bounded(-_finite(terms["max_penetration_depth_m"]), 0.10)),
+        "overlap_avoidance": _bounded(-_finite(terms["overlap_duration_s"]), 0.20),
+        "stabilization": _finite(terms["stable_stop"]),
+    }
+    profile, effect = max(profile_effects.items(), key=lambda item: (item[1], item[0]))
+    if effect <= 0.0:
+        profile = "balanced_nonregressive"
+    return {
+        "score": float(sum(components.values())),
+        "score_components": components,
+        "terms": terms,
+        "material": material,
+        "regressions": sorted(set(regressions)),
+        "missing": missing,
+        "evidence_profile": profile,
+    }
 
 
 def _tier_safe(terms: dict[str, float | None], missing: list[str], score: float, gap_to_best: float) -> tuple[int, str]:
@@ -336,7 +450,11 @@ def _paired_rows(
         material_count = 0
         nonregressive_count = 0
         for name in baseline_names:
-            evaluation = _pair_evaluate(regime, method_scene, baselines[name][key], threshold_ns)
+            evaluation = (
+                _evaluate_contact_surrogate(method_scene, baselines[name][key], threshold_ns)
+                if regime == "contact"
+                else _pair_evaluate(regime, method_scene, baselines[name][key], threshold_ns)
+            )
             pair_scores.append(float(evaluation["score"]))
             material = list(evaluation["material"])
             regressions = list(evaluation["regressions"])
@@ -567,6 +685,7 @@ def main() -> int:
         "selection_note": (
             "All main-table external baselines participate in selection. Safe is ranked by high absolute OC-RAP closed-loop quality with safety guards; "
             "Near/Contact are ranked by robust multi-baseline relative effects and the reviewer-facing comparator is the per-scene hardest baseline. "
+            "For Contact, current test_contact is a counterfactual contact-surrogate cohort, so selection uses generic physical recovery/overlap/penetration/stability metrics rather than fabricated post-contact anchors. "
             "Selection is post-hoc qualitative evidence and does not replace population-level tables."
         ),
         "max_selected_tier_rank": args.max_selected_tier_rank,

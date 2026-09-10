@@ -24,7 +24,14 @@ from ocrap.external_baselines.policies import select_external_policy
 from ocrap.external_baselines.evaluate import _load_checkpoint as _load_external_checkpoint, _predict_group as _predict_external_group
 from ocrap.simulation.waymax_rollout import _as_np, _bicycle_action, _make_env, _metric_summary, _sdc_index
 from ocrap.planning.route_lattice import project_to_route
-from ocrap.utils.geometry import compute_ttc, min_box_clearance, rotation_matrix
+from ocrap.utils.geometry import (
+    compute_ttc,
+    min_box_clearance,
+    min_oriented_box_clearance,
+    min_oriented_box_signed_clearance,
+    min_oriented_box_ttc,
+    rotation_matrix,
+)
 from ocrap.utils.regimes import bucket_aliases as canonical_bucket_aliases, canonical_regime_name, is_post_contact_bucket
 
 
@@ -536,7 +543,7 @@ def _current_timestep(state: Any) -> int:
         return 0
 
 
-def _state_geometry_metrics(state: Any, sdc: int) -> dict[str, float]:
+def _state_geometry_metrics(state: Any, sdc: int, *, publication_exact: bool = True) -> dict[str, float]:
     """Current-step physical margins used to interpret near/contact behavior.
 
     The paper defines near-contact using clearance/TTC, but earlier closed-loop
@@ -566,12 +573,26 @@ def _state_geometry_metrics(state: Any, sdc: int) -> dict[str, float]:
         ego_state[3], ego_state[4] = float(vx[sdc]), float(vy[sdc])
         ego_state[7] = float(yaw[sdc])
         ego_state[10], ego_state[11], ego_state[12] = float(length[sdc]), float(width[sdc]), float(height[sdc])
-        return {
-            "min_clearance_m": float(min_box_clearance(ego_box, boxes, other_valid)),
-            "ttc_s": float(compute_ttc(ego_state, boxes, other_valid)),
+        legacy_clearance = float(min_box_clearance(ego_box, boxes, other_valid))
+        legacy_ttc = float(compute_ttc(ego_state, boxes, other_valid))
+        exact_signed_clearance = float(min_oriented_box_signed_clearance(ego_box, boxes, other_valid))
+        exact_clearance = max(0.0, exact_signed_clearance)
+        exact_ttc = float(min_oriented_box_ttc(ego_box, boxes, other_valid))
+        out = {
+            "min_clearance_m": exact_clearance if publication_exact else legacy_clearance,
+            "ttc_s": exact_ttc if publication_exact else legacy_ttc,
             "ego_speed_mps": float(np.hypot(vx[sdc], vy[sdc])),
             "ego_yaw_rad": float(yaw[sdc]),
         }
+        if publication_exact:
+            out["signed_clearance_m"] = exact_signed_clearance
+            out["penetration_depth_m"] = max(0.0, -exact_signed_clearance)
+            # Retain the historical proxies as diagnostics so old/new artifacts
+            # can be compared without allowing them to contaminate publication
+            # clearance/TTC columns.
+            out["legacy_circle_clearance_m"] = legacy_clearance
+            out["legacy_center_ttc_s"] = legacy_ttc
+        return out
     except Exception:
         return {}
 
@@ -700,7 +721,11 @@ def _observable_regime_name(state: Any, sdc: int, cfg: dict, fallback: str = "")
     tau_d = float(thresholds.get("tau_d", 2.0))
     tau_ttc = float(thresholds.get("tau_ttc", 3.0))
     tau_contact = float(thresholds.get("tau_contact", 0.8))
-    metrics = _state_geometry_metrics(state, sdc)
+    # Keep the optional legacy observation-router behavior frozen.  The paper's
+    # deployed stack has auto_regime_from_observation disabled, but this guard
+    # prevents a reporting-only metric correction from silently changing action
+    # selection in old diagnostic configurations.
+    metrics = _state_geometry_metrics(state, sdc, publication_exact=False)
     if not metrics:
         return str(fallback or "safe")
     clearance = float(metrics.get("min_clearance_m", float("inf")))
@@ -719,11 +744,19 @@ def _state_geometry_snapshot(state: Any, sdc: int, *, timestep: int | None = Non
         t = _current_timestep(state) if timestep is None else int(timestep)
         # _state_geometry_metrics intentionally uses state's current timestep.
         # Test/runtime calls pass the current value, so this preserves semantics.
-        metrics = _state_geometry_metrics(state, sdc)
+        metrics_full = _state_geometry_metrics(state, sdc)
+        # Preserve this legacy helper's four-field hot-path contract.  Signed
+        # clearance/penetration diagnostics are publication-reporting fields
+        # collected directly by the closed-loop runner and should not enlarge
+        # callers that use this compact snapshot helper.
+        keep = ("min_clearance_m", "ttc_s", "ego_speed_mps", "ego_yaw_rad")
+        metrics = {k: metrics_full[k] for k in keep if k in metrics_full}
         xy = [float(_as_np(tr.x)[sdc, t]), float(_as_np(tr.y)[sdc, t])]
         return metrics, xy
     except Exception:
-        return _state_geometry_metrics(state, sdc), []
+        metrics_full = _state_geometry_metrics(state, sdc)
+        keep = ("min_clearance_m", "ttc_s", "ego_speed_mps", "ego_yaw_rad")
+        return {k: metrics_full[k] for k in keep if k in metrics_full}, []
 
 
 def _step_metrics_geometry_snapshot(waymax_env: Any, state: Any, sdc: int) -> tuple[dict[str, float], list[float], int, bool]:
@@ -1237,6 +1270,11 @@ def _rollout_one_scene(
     render_roadgraph_radius_m = max(10.0, float(cl_cfg.get("render_roadgraph_radius_m", 80.0)))
     route_reference_global: np.ndarray | None = None
     route_reference_source: str | None = None
+    # Capture the target state explicitly.  Historically publication metrics
+    # started only after the first executed control, which could miss the very
+    # low-clearance/contact state the regime selector had chosen as t=0.
+    initial_metrics = _metric_summary(wx_env, state, sdc)
+    initial_metrics.update(_state_geometry_metrics(state, sdc))
     try:
         initial_tr = state.sim_trajectory
         initial_tt = _current_timestep(state)
@@ -1258,7 +1296,7 @@ def _rollout_one_scene(
                     state, sdc, max_agents=render_max_agents,
                     selected_macro="nominal", selected_candidate_index=0,
                     selection_reason="initial",
-                    metrics=_state_geometry_metrics(state, sdc),
+                    metrics=initial_metrics,
                 )
             )
         except Exception as exc:
@@ -1745,7 +1783,13 @@ def _rollout_one_scene(
     metric_names = sorted({k for m in metric_trace for k in m.keys()})
     metric_summary: dict[str, float] = {}
     for name in metric_names:
-        vals = [float(m.get(name, 0.0)) for m in metric_trace if np.isfinite(float(m.get(name, 0.0)))]
+        # Missing metrics are missing observations, not zero-valued samples.
+        # The previous m.get(..., 0.0) path biased means/minima and could create
+        # false events whenever Waymax omitted one metric at a step.
+        vals = [
+            float(m[name]) for m in metric_trace
+            if name in m and np.isfinite(float(m[name]))
+        ]
         if vals:
             metric_summary[f"{name}_mean"] = float(np.mean(vals))
             metric_summary[f"{name}_max"] = float(np.max(vals))
@@ -1753,10 +1797,59 @@ def _rollout_one_scene(
             if name in {"min_clearance_m", "ttc_s", "ego_speed_mps"}:
                 metric_summary[f"{name}_min"] = float(np.min(vals))
                 metric_summary[f"{name}_p05"] = float(np.quantile(vals, 0.05))
-    clearance_vals = [float(m["min_clearance_m"]) for m in metric_trace if "min_clearance_m" in m and np.isfinite(float(m["min_clearance_m"]))]
-    ttc_vals = [float(m["ttc_s"]) for m in metric_trace if "ttc_s" in m and np.isfinite(float(m["ttc_s"]))]
-    speed_vals = [float(m["ego_speed_mps"]) for m in metric_trace if "ego_speed_mps" in m and np.isfinite(float(m["ego_speed_mps"]))]
-    yaw_vals = [float(m["ego_yaw_rad"]) for m in metric_trace if "ego_yaw_rad" in m and np.isfinite(float(m["ego_yaw_rad"]))]
+    # Preserve the physical t0..tN state index even when a metric is missing.
+    # Filtering first would compress time and could turn a missing observation
+    # into a shorter apparent exposure / time-to-minimum.
+    def _aligned_state_metric(name: str) -> list[float]:
+        return [float(initial_metrics.get(name, float("nan")))] + [
+            float(m.get(name, float("nan"))) for m in metric_trace
+        ]
+
+    clearance_state_all = _aligned_state_metric("min_clearance_m")
+    ttc_state_all = _aligned_state_metric("ttc_s")
+    signed_clearance_state_all = _aligned_state_metric("signed_clearance_m")
+    penetration_state_all = _aligned_state_metric("penetration_depth_m")
+    speed_state_all = _aligned_state_metric("ego_speed_mps")
+    yaw_state_all = _aligned_state_metric("ego_yaw_rad")
+
+    clearance_vals = [x for x in clearance_state_all[1:] if np.isfinite(x)]
+    ttc_vals = [x for x in ttc_state_all[1:] if np.isfinite(x)]
+    signed_clearance_vals = [x for x in signed_clearance_state_all[1:] if np.isfinite(x)]
+    penetration_vals = [x for x in penetration_state_all[1:] if np.isfinite(x)]
+    speed_vals = [x for x in speed_state_all[1:] if np.isfinite(x)]
+    yaw_vals = [x for x in yaw_state_all[1:] if np.isfinite(x)]
+    clearance_state_vals = [x for x in clearance_state_all if np.isfinite(x)]
+    ttc_state_vals = [x for x in ttc_state_all if np.isfinite(x)]
+    signed_clearance_state_vals = [x for x in signed_clearance_state_all if np.isfinite(x)]
+    penetration_state_vals = [x for x in penetration_state_all if np.isfinite(x)]
+    speed_state_vals = [x for x in speed_state_all if np.isfinite(x)]
+    yaw_state_vals = [x for x in yaw_state_all if np.isfinite(x)]
+    if clearance_state_vals:
+        metric_summary["min_clearance_m_min"] = float(np.min(clearance_state_vals))
+        metric_summary["min_clearance_m_p05"] = float(np.quantile(clearance_state_vals, 0.05))
+    if ttc_state_vals:
+        metric_summary["ttc_s_min"] = float(np.min(ttc_state_vals))
+        metric_summary["ttc_s_p05"] = float(np.quantile(ttc_state_vals, 0.05))
+    if signed_clearance_state_vals:
+        metric_summary["signed_clearance_m_min"] = float(np.min(signed_clearance_state_vals))
+        metric_summary["signed_clearance_m_p05"] = float(np.quantile(signed_clearance_state_vals, 0.05))
+    if penetration_state_vals:
+        metric_summary["penetration_depth_m_max"] = float(np.max(penetration_state_vals))
+        metric_summary["penetration_depth_m_p95"] = float(np.quantile(penetration_state_vals, 0.95))
+    # Keep all publication state distributions on one t0..tN support.
+    for _name, _values in (
+        ("min_clearance_m", clearance_state_vals),
+        ("ttc_s", ttc_state_vals),
+        ("signed_clearance_m", signed_clearance_state_vals),
+        ("penetration_depth_m", penetration_state_vals),
+        ("ego_speed_mps", speed_state_vals),
+    ):
+        if _values:
+            _arr = np.asarray(_values, dtype=np.float64)
+            metric_summary[f"{_name}_mean"] = float(np.mean(_arr))
+            metric_summary[f"{_name}_max"] = float(np.max(_arr))
+            metric_summary[f"{_name}_min"] = float(np.min(_arr))
+            metric_summary[f"{_name}_p05"] = float(np.quantile(_arr, 0.05))
     # WOMD/Waymax motion states are sampled at 10 Hz by default.  Make the
     # interval configurable so the Safe paired report can publish comfort and
     # heading-rate statistics instead of silently omitting them.
@@ -1764,8 +1857,8 @@ def _rollout_one_scene(
     metric_dt_s = max(metric_dt_s, 1.0e-3)
     acceleration = np.asarray([], dtype=np.float64)
     jerk = np.asarray([], dtype=np.float64)
-    if len(speed_vals) >= 2:
-        acceleration = np.diff(np.asarray(speed_vals, dtype=np.float64)) / metric_dt_s
+    if len(speed_state_vals) >= 2:
+        acceleration = np.diff(np.asarray(speed_state_vals, dtype=np.float64)) / metric_dt_s
         metric_summary["acceleration_abs_p95_mps2"] = float(np.quantile(np.abs(acceleration), 0.95)) if acceleration.size else 0.0
         metric_summary["acceleration_max_mps2"] = float(np.max(acceleration)) if acceleration.size else 0.0
         metric_summary["deceleration_max_mps2"] = float(max(0.0, -np.min(acceleration))) if acceleration.size else 0.0
@@ -1774,13 +1867,23 @@ def _rollout_one_scene(
         metric_summary["jerk_p95"] = float(np.quantile(np.abs(jerk), 0.95)) if jerk.size else 0.0
         metric_summary["jerk_max_abs"] = float(np.max(np.abs(jerk))) if jerk.size else 0.0
     yaw_rate = np.asarray([], dtype=np.float64)
-    if len(yaw_vals) >= 2:
-        yaw_unwrapped = np.unwrap(np.asarray(yaw_vals, dtype=np.float64))
+    if len(yaw_state_vals) >= 2:
+        yaw_unwrapped = np.unwrap(np.asarray(yaw_state_vals, dtype=np.float64))
         yaw_rate = np.diff(yaw_unwrapped) / metric_dt_s
         metric_summary["yaw_rate_p95"] = float(np.quantile(np.abs(yaw_rate), 0.95)) if yaw_rate.size else 0.0
         metric_summary["yaw_rate_max_abs"] = float(np.max(np.abs(yaw_rate))) if yaw_rate.size else 0.0
-    overlap_flags = [bool(float(m.get("overlap", 0.0)) > 0.0) for m in metric_trace]
-    offroad_flags = [bool(float(m.get("offroad", 0.0)) > 0.0) for m in metric_trace]
+    overlap_state_all = [float(initial_metrics.get("overlap", float("nan")))] + [
+        float(m.get("overlap", float("nan"))) for m in metric_trace
+    ]
+    offroad_state_all = [float(initial_metrics.get("offroad", float("nan")))] + [
+        float(m.get("offroad", float("nan"))) for m in metric_trace
+    ]
+    overlap_flags = [bool(np.isfinite(x) and x > 0.0) for x in overlap_state_all[1:]]
+    offroad_flags = [bool(np.isfinite(x) and x > 0.0) for x in offroad_state_all[1:]]
+    initial_overlap = bool(np.isfinite(overlap_state_all[0]) and overlap_state_all[0] > 0.0)
+    initial_offroad = bool(np.isfinite(offroad_state_all[0]) and offroad_state_all[0] > 0.0)
+    metric_summary["overlap_any"] = float(any(np.isfinite(x) and x > 0.0 for x in overlap_state_all))
+    metric_summary["offroad_any"] = float(any(np.isfinite(x) and x > 0.0 for x in offroad_state_all))
 
     def _binary_run_stats(flags: list[bool]) -> tuple[int, int]:
         episodes = 0
@@ -1795,21 +1898,28 @@ def _rollout_one_scene(
                 longest = max(longest, run)
                 run = 0
         return episodes, longest
-    overlap_episode_count = int(sum(flag and (i == 0 or not overlap_flags[i - 1]) for i, flag in enumerate(overlap_flags)))
+    overlap_flags_with_initial = [initial_overlap] + overlap_flags
+    overlap_episode_count = int(sum(flag and (i == 0 or not overlap_flags_with_initial[i - 1]) for i, flag in enumerate(overlap_flags_with_initial)))
     metric_steps = int(len(metric_trace))
-    near_count = int(sum(c <= 2.0 for c in clearance_vals))
-    critical_ttc_count = int(sum(t <= 3.0 for t in ttc_vals))
-    near_zero_clearance_count = int(sum(c <= 0.05 for c in clearance_vals))
+    # Duration/rate metrics represent the N executed intervals [t_i,t_{i+1}).
+    # Use the N left-endpoint states, i.e. include target t=0 and exclude the
+    # terminal state, instead of silently dropping the target state or counting
+    # N+1 samples as N+1 time intervals.
+    clearance_exposure_vals = [x for x in clearance_state_all[:-1] if np.isfinite(x)]
+    ttc_exposure_vals = [x for x in ttc_state_all[:-1] if np.isfinite(x)]
+    near_count = int(sum(c <= 2.0 for c in clearance_exposure_vals))
+    critical_ttc_count = int(sum(t <= 3.0 for t in ttc_exposure_vals))
+    near_zero_clearance_count = int(sum(c <= 0.05 for c in clearance_exposure_vals))
     metric_summary["num_metric_steps"] = metric_steps
     metric_summary["near_contact_exposure_count"] = near_count
     metric_summary["critical_ttc_exposure_count"] = critical_ttc_count
     metric_summary["near_zero_clearance_exposure_count"] = near_zero_clearance_count
-    metric_summary["near_contact_exposure_rate"] = float(near_count / max(len(clearance_vals), 1)) if clearance_vals else 0.0
-    metric_summary["critical_ttc_exposure_rate"] = float(critical_ttc_count / max(len(ttc_vals), 1)) if ttc_vals else 0.0
+    metric_summary["near_contact_exposure_rate"] = float(near_count / max(len(clearance_exposure_vals), 1)) if clearance_exposure_vals else 0.0
+    metric_summary["critical_ttc_exposure_rate"] = float(critical_ttc_count / max(len(ttc_exposure_vals), 1)) if ttc_exposure_vals else 0.0
     metric_summary["near_contact_exposure_duration_s"] = float(near_count * metric_dt_s)
     metric_summary["critical_ttc_exposure_duration_s"] = float(critical_ttc_count * metric_dt_s)
-    near_flags = [bool(c <= 2.0) for c in clearance_vals]
-    critical_ttc_flags = [bool(t <= 3.0) for t in ttc_vals]
+    near_flags = [bool(c <= 2.0) for c in clearance_exposure_vals]
+    critical_ttc_flags = [bool(t <= 3.0) for t in ttc_exposure_vals]
     near_episodes, near_longest = _binary_run_stats(near_flags)
     ttc_episodes, ttc_longest = _binary_run_stats(critical_ttc_flags)
     metric_summary["near_contact_exposure_episode_count"] = float(near_episodes)
@@ -1818,23 +1928,27 @@ def _rollout_one_scene(
     metric_summary["critical_ttc_exposure_episode_count"] = float(ttc_episodes)
     metric_summary["critical_ttc_longest_exposure_run_steps"] = float(ttc_longest)
     metric_summary["critical_ttc_longest_exposure_run_s"] = float(ttc_longest * metric_dt_s)
-    if clearance_vals:
-        min_clearance_idx = int(np.argmin(np.asarray(clearance_vals)))
+    finite_clearance_idx = [i for i, x in enumerate(clearance_state_all) if np.isfinite(x)]
+    if finite_clearance_idx:
+        min_clearance_idx = min(finite_clearance_idx, key=lambda i: clearance_state_all[i])
         metric_summary["time_to_min_clearance_steps"] = float(min_clearance_idx)
         metric_summary["time_to_min_clearance_s"] = float(min_clearance_idx * metric_dt_s)
-        metric_summary["terminal_clearance_m"] = float(clearance_vals[-1])
-        metric_summary["clearance_recovery_gain_m"] = float(clearance_vals[-1] - clearance_vals[min_clearance_idx])
+        terminal_clearance = float(clearance_state_all[finite_clearance_idx[-1]])
+        metric_summary["terminal_clearance_m"] = terminal_clearance
+        metric_summary["clearance_recovery_gain_m"] = float(terminal_clearance - clearance_state_all[min_clearance_idx])
     else:
         metric_summary["time_to_min_clearance_steps"] = float("nan")
         metric_summary["time_to_min_clearance_s"] = float("nan")
         metric_summary["terminal_clearance_m"] = float("nan")
         metric_summary["clearance_recovery_gain_m"] = float("nan")
-    if ttc_vals:
-        min_ttc_idx = int(np.argmin(np.asarray(ttc_vals)))
+    finite_ttc_idx = [i for i, x in enumerate(ttc_state_all) if np.isfinite(x)]
+    if finite_ttc_idx:
+        min_ttc_idx = min(finite_ttc_idx, key=lambda i: ttc_state_all[i])
         metric_summary["time_to_min_ttc_steps"] = float(min_ttc_idx)
         metric_summary["time_to_min_ttc_s"] = float(min_ttc_idx * metric_dt_s)
-        metric_summary["terminal_ttc_s"] = float(ttc_vals[-1])
-        metric_summary["ttc_recovery_gain_s"] = float(ttc_vals[-1] - ttc_vals[min_ttc_idx])
+        terminal_ttc = float(ttc_state_all[finite_ttc_idx[-1]])
+        metric_summary["terminal_ttc_s"] = terminal_ttc
+        metric_summary["ttc_recovery_gain_s"] = float(terminal_ttc - ttc_state_all[min_ttc_idx])
     else:
         metric_summary["time_to_min_ttc_steps"] = float("nan")
         metric_summary["time_to_min_ttc_s"] = float("nan")
@@ -1843,21 +1957,41 @@ def _rollout_one_scene(
     # Continuous margin-deficit integrals are less brittle than a single minimum
     # and distinguish a brief close pass from sustained unsafe proximity.
     metric_summary["clearance_deficit_auc_m_s"] = float(
-        sum(max(0.0, 2.0 - c) for c in clearance_vals) * metric_dt_s
+        sum(max(0.0, 2.0 - c) for c in clearance_exposure_vals) * metric_dt_s
     )
     metric_summary["ttc_deficit_auc_s2"] = float(
-        sum(max(0.0, 3.0 - t) for t in ttc_vals) * metric_dt_s
+        sum(max(0.0, 3.0 - t) for t in ttc_exposure_vals) * metric_dt_s
     )
-    # A radius-based clearance <= 5 cm is not equivalent to simulator contact.
-    # Keep the legacy key for compatibility, but publish the unambiguous name.
-    metric_summary["near_zero_clearance_exposure_rate"] = float(near_zero_clearance_count / max(len(clearance_vals), 1)) if clearance_vals else 0.0
+    # Geometric clearance <= 5 cm is still not identical to Waymax overlap.
+    # Keep the legacy contact_exposure_rate alias for artifact compatibility.
+    metric_summary["near_zero_clearance_exposure_rate"] = float(near_zero_clearance_count / max(len(clearance_exposure_vals), 1)) if clearance_exposure_vals else 0.0
     metric_summary["contact_exposure_rate"] = metric_summary["near_zero_clearance_exposure_rate"]
     metric_summary["overlap_episode_count"] = overlap_episode_count
     metric_summary["secondary_overlap_event"] = float(overlap_episode_count >= 2)
-    overlap_duration_steps = int(sum(overlap_flags))
+    overlap_interval_values = overlap_state_all[:-1]
+    offroad_interval_values = offroad_state_all[:-1]
+    overlap_interval_flags = [bool(np.isfinite(x) and x > 0.0) for x in overlap_interval_values]
+    offroad_interval_flags = [bool(np.isfinite(x) and x > 0.0) for x in offroad_interval_values]
+    overlap_observed_intervals = [x for x in overlap_interval_values if np.isfinite(x)]
+    offroad_observed_intervals = [x for x in offroad_interval_values if np.isfinite(x)]
+    # Override generic post-step means: step rates are interval occupancies and
+    # therefore use left endpoints t0..t(N-1), including the target state.
+    metric_summary["overlap_mean"] = (
+        float(np.mean(overlap_observed_intervals)) if overlap_observed_intervals else float("nan")
+    )
+    metric_summary["offroad_mean"] = (
+        float(np.mean(offroad_observed_intervals)) if offroad_observed_intervals else float("nan")
+    )
+    overlap_duration_steps = int(sum(overlap_interval_flags))
+    penetration_interval_vals = [x for x in penetration_state_all[:-1] if np.isfinite(x)]
+    penetration_flags = [bool(x > 1.0e-9) for x in penetration_interval_vals]
+    metric_summary["penetration_any"] = float(any(x > 1.0e-9 for x in penetration_state_vals)) if penetration_state_vals else 0.0
+    metric_summary["penetration_duration_steps"] = float(sum(penetration_flags))
+    metric_summary["penetration_duration_s"] = float(sum(penetration_flags) * metric_dt_s)
+    metric_summary["penetration_depth_auc_m_s"] = float(sum(max(0.0, x) for x in penetration_interval_vals) * metric_dt_s)
     longest_overlap_run_steps = 0
     overlap_run = 0
-    for flag in overlap_flags + [False]:
+    for flag in overlap_interval_flags + [False]:
         if flag:
             overlap_run += 1
         else:
@@ -1868,48 +2002,67 @@ def _rollout_one_scene(
     metric_summary["longest_overlap_run_steps"] = float(longest_overlap_run_steps)
     metric_summary["longest_overlap_run_s"] = float(longest_overlap_run_steps * metric_dt_s)
 
-    # Contact-only escape-space diagnostics.  These are computed from observable
-    # closed-loop geometry, not from the offline PCD teacher.  A sustained escape
-    # requires three consecutive non-overlap steps above a configurable clearance.
-    aligned_clearance = [
-        float(m.get("min_clearance_m", float("nan"))) for m in metric_trace
-    ]
-    observed_first_contact_idx = next((i for i, flag in enumerate(overlap_flags) if flag), None)
+    # Contact-only escape-space diagnostics.  These must be anchored by an
+    # observed simulator overlap.  Merely belonging to test_contact is not an
+    # observed collision: the current dataset builder labels that bucket from a
+    # counterfactual contact-surrogate branch while population closed-loop replays
+    # the original WOMD state.  Treating bucket start as a contact anchor therefore
+    # fabricates post-contact/re-contact semantics.
+    aligned_clearance = clearance_state_all
+    contact_overlap_flags = [initial_overlap] + overlap_flags
+    observed_first_contact_idx = next((i for i, flag in enumerate(contact_overlap_flags) if flag), None)
     is_post_contact_target = _is_post_contact_bucket_name(bucket_name)
-    # Targeted post-contact rollouts may start after the initiating collision. In
-    # that case step 0 is the causal contact anchor even when the first simulated
-    # state is already separated. Any later overlap episode is a re-contact.
-    contact_anchor_idx = (
-        0 if is_post_contact_target else observed_first_contact_idx
+    post_contact_eligible = bool(
+        observed_first_contact_idx is not None
+        and observed_first_contact_idx < len(contact_overlap_flags) - 1
     )
+    contact_anchor_idx = observed_first_contact_idx if post_contact_eligible else None
+    metric_summary["counterfactual_contact_target"] = float(is_post_contact_target)
+    metric_summary["observed_contact_event"] = float(observed_first_contact_idx is not None)
+    metric_summary["post_contact_metric_eligible"] = float(post_contact_eligible)
     metric_summary["first_contact_step"] = (
         float(observed_first_contact_idx) if observed_first_contact_idx is not None else float("nan")
     )
     metric_summary["contact_anchor_step"] = (
         float(contact_anchor_idx) if contact_anchor_idx is not None else float("nan")
     )
-    overlap_starts = [i for i, flag in enumerate(overlap_flags) if flag and (i == 0 or not overlap_flags[i - 1])]
-    if is_post_contact_target:
-        recontact_starts = [i for i in overlap_starts if i > 0 or not overlap_flags[0]]
-    elif observed_first_contact_idx is not None:
-        recontact_starts = overlap_starts[1:]
+    overlap_starts = [
+        i for i, flag in enumerate(contact_overlap_flags)
+        if flag and (i == 0 or not contact_overlap_flags[i - 1])
+    ]
+    if post_contact_eligible:
+        recontact_starts = [i for i in overlap_starts[1:] if i > int(observed_first_contact_idx)]
+        metric_summary["recontact_episode_count"] = float(len(recontact_starts))
+        metric_summary["recontact_event"] = float(bool(recontact_starts))
+        metric_summary["secondary_overlap_event"] = metric_summary["recontact_event"]
     else:
-        recontact_starts = []
-    metric_summary["recontact_episode_count"] = float(len(recontact_starts))
-    metric_summary["recontact_event"] = float(bool(recontact_starts))
-    metric_summary["secondary_overlap_event"] = metric_summary["recontact_event"]
+        # Not an eligible post-contact rollout.  NaN keeps aggregate scene rates
+        # conditional on a real observed contact instead of counting unobserved
+        # contact as a successful no-recontact outcome.
+        metric_summary["recontact_episode_count"] = float("nan")
+        metric_summary["recontact_event"] = float("nan")
+        metric_summary["secondary_overlap_event"] = float("nan")
+
     if contact_anchor_idx is not None:
         post_indices = [
-            i for i in range(contact_anchor_idx, len(metric_trace))
+            i for i in range(contact_anchor_idx, len(aligned_clearance))
             if np.isfinite(aligned_clearance[i])
         ]
         post_clearance = [aligned_clearance[i] for i in post_indices]
-        post_overlap_flags = overlap_flags[contact_anchor_idx:]
+        # Integrals/durations live on intervals.  From an anchor state at index
+        # a there are len(states)-1-a intervals until the terminal state.
+        post_interval_indices = [
+            i for i in range(contact_anchor_idx, max(contact_anchor_idx, len(aligned_clearance) - 1))
+            if np.isfinite(aligned_clearance[i])
+        ]
+        post_clearance_intervals = [aligned_clearance[i] for i in post_interval_indices]
+        post_overlap_flags = contact_overlap_flags[contact_anchor_idx:-1] if len(contact_overlap_flags) >= 2 else []
         metric_summary["post_contact_overlap_duration_s"] = float(
             sum(bool(x) for x in post_overlap_flags) * metric_dt_s
         )
         metric_summary["post_contact_overlap_rate"] = float(
-            sum(bool(x) for x in post_overlap_flags) / max(len(post_overlap_flags), 1)
+            sum(bool(x) for x in post_overlap_flags) / len(post_overlap_flags)
+            if post_overlap_flags else float("nan")
         )
         metric_summary["post_contact_clearance_m_max"] = (
             float(max(post_clearance)) if post_clearance else float("nan")
@@ -1918,16 +2071,19 @@ def _rollout_one_scene(
             float(np.mean(post_clearance)) if post_clearance else float("nan")
         )
         metric_summary["post_contact_free_space_auc_m_s"] = float(
-            sum(max(0.0, c) for c in post_clearance) * metric_dt_s
+            sum(max(0.0, c) for c in post_clearance_intervals) * metric_dt_s
         )
-        post_duration_s = max(metric_dt_s, len(post_clearance) * metric_dt_s)
-        metric_summary["post_contact_free_space_auc_normalized_m"] = float(
-            metric_summary["post_contact_free_space_auc_m_s"] / post_duration_s
+        post_duration_s = len(post_clearance_intervals) * metric_dt_s
+        metric_summary["post_contact_free_space_auc_normalized_m"] = (
+            float(metric_summary["post_contact_free_space_auc_m_s"] / post_duration_s)
+            if post_duration_s > 0.0 else float("nan")
         )
         contact_clearance_target = float(cl_cfg.get("post_contact_clearance_target_m", 0.5) or 0.5)
         metric_summary["post_contact_clearance_deficit_auc_m_s"] = float(
-            sum(max(0.0, contact_clearance_target - c) for c in post_clearance) * metric_dt_s
+            sum(max(0.0, contact_clearance_target - c) for c in post_clearance_intervals) * metric_dt_s
         )
+        metric_summary["post_contact_num_intervals"] = float(len(post_clearance_intervals))
+        metric_summary["post_contact_overlap_count"] = float(sum(bool(x) for x in post_overlap_flags))
         metric_summary["post_contact_terminal_clearance_m"] = (
             float(post_clearance[-1]) if post_clearance else float("nan")
         )
@@ -1941,12 +2097,12 @@ def _rollout_one_scene(
         escape_clearance = float(cl_cfg.get("post_contact_escape_clearance_m", 0.5) or 0.5)
         escape_sustain_steps = max(1, int(cl_cfg.get("post_contact_escape_sustain_steps", 3) or 3))
         escape_idx = None
-        for end in range(contact_anchor_idx + escape_sustain_steps - 1, len(metric_trace)):
+        for end in range(contact_anchor_idx + escape_sustain_steps - 1, len(aligned_clearance)):
             begin = end - escape_sustain_steps + 1
             window_clearance = aligned_clearance[begin : end + 1]
             if (
                 all(np.isfinite(c) and c >= escape_clearance for c in window_clearance)
-                and not any(overlap_flags[begin : end + 1])
+                and not any(contact_overlap_flags[begin : end + 1])
             ):
                 escape_idx = begin
                 break
@@ -1959,26 +2115,32 @@ def _rollout_one_scene(
             if escape_idx is not None else float("nan")
         )
     else:
-        metric_summary["post_contact_overlap_duration_s"] = float("nan")
-        metric_summary["post_contact_overlap_rate"] = float("nan")
-        metric_summary["post_contact_clearance_m_max"] = float("nan")
-        metric_summary["post_contact_clearance_m_mean"] = float("nan")
-        metric_summary["post_contact_free_space_auc_m_s"] = float("nan")
-        metric_summary["post_contact_free_space_auc_normalized_m"] = float("nan")
-        metric_summary["post_contact_clearance_deficit_auc_m_s"] = float("nan")
-        metric_summary["post_contact_terminal_clearance_m"] = float("nan")
-        metric_summary["time_to_peak_post_contact_clearance_s"] = float("nan")
-        metric_summary["post_contact_clearance_gain_m"] = float("nan")
-        metric_summary["post_contact_escape_event"] = 0.0
-        metric_summary["time_to_post_contact_escape_steps"] = float("nan")
-        metric_summary["time_to_post_contact_escape_s"] = float("nan")
+        for key in (
+            "post_contact_overlap_duration_s",
+            "post_contact_overlap_rate",
+            "post_contact_clearance_m_max",
+            "post_contact_clearance_m_mean",
+            "post_contact_free_space_auc_m_s",
+            "post_contact_free_space_auc_normalized_m",
+            "post_contact_clearance_deficit_auc_m_s",
+            "post_contact_terminal_clearance_m",
+            "time_to_peak_post_contact_clearance_s",
+            "post_contact_clearance_gain_m",
+            "post_contact_escape_event",
+            "time_to_post_contact_escape_steps",
+            "time_to_post_contact_escape_s",
+        ):
+            metric_summary[key] = float("nan")
+        metric_summary["post_contact_num_intervals"] = 0.0
+        metric_summary["post_contact_overlap_count"] = 0.0
     stable_sustain_steps = max(3, int(cl_cfg.get("stable_stop_sustain_steps", 5) or 5))
     stable_speed_mps = float(cl_cfg.get("stable_stop_speed_mps", 0.5) or 0.5)
     stable_yaw_rate = float(cl_cfg.get("stable_stop_yaw_rate_radps", 0.25) or 0.25)
-    yaw_rate_aligned = [0.0] + np.abs(yaw_rate).tolist() if yaw_rate.size else [0.0] * len(speed_vals)
-    tail_speeds = speed_vals[-stable_sustain_steps:] if speed_vals else []
-    tail_overlaps = overlap_flags[-stable_sustain_steps:] if overlap_flags else []
-    tail_offroad = offroad_flags[-stable_sustain_steps:] if offroad_flags else []
+    yaw_rate_aligned = [0.0] + np.abs(yaw_rate).tolist() if yaw_rate.size else [0.0] * len(speed_state_vals)
+    offroad_flags_with_initial = [initial_offroad] + offroad_flags
+    tail_speeds = speed_state_vals[-stable_sustain_steps:] if speed_state_vals else []
+    tail_overlaps = contact_overlap_flags[-stable_sustain_steps:] if contact_overlap_flags else []
+    tail_offroad = offroad_flags_with_initial[-stable_sustain_steps:] if offroad_flags_with_initial else []
     tail_yaw_rate = yaw_rate_aligned[-stable_sustain_steps:] if yaw_rate_aligned else []
     stable_tail = (
         len(tail_speeds) >= stable_sustain_steps
@@ -1989,7 +2151,7 @@ def _rollout_one_scene(
         stable_tail and not any(tail_offroad)
         and (not tail_yaw_rate or max(tail_yaw_rate) <= stable_yaw_rate)
     )
-    initial_moving = bool(speed_vals) and max(speed_vals[: min(stable_sustain_steps, len(speed_vals))]) > stable_speed_mps
+    initial_moving = bool(speed_state_vals) and max(speed_state_vals[: min(stable_sustain_steps, len(speed_state_vals))]) > stable_speed_mps
     metric_summary["stable_stop_event"] = float(stable_tail)
     metric_summary["stable_stop_quality_event"] = float(stable_tail_quality)
     metric_summary["stable_stop_eligible"] = float(initial_moving)
@@ -1997,14 +2159,14 @@ def _rollout_one_scene(
     metric_summary["new_stable_stop_quality_event"] = float(initial_moving and stable_tail_quality)
     stable_idx = None
     stable_quality_idx = None
-    if initial_moving and len(speed_vals) >= stable_sustain_steps:
-        for j in range(stable_sustain_steps - 1, len(speed_vals)):
+    if initial_moving and len(speed_state_vals) >= stable_sustain_steps:
+        for j in range(stable_sustain_steps - 1, len(speed_state_vals)):
             begin = j - stable_sustain_steps + 1
-            speed_ok = max(speed_vals[begin : j + 1]) <= stable_speed_mps
-            overlap_ok = not any(overlap_flags[begin : j + 1])
+            speed_ok = max(speed_state_vals[begin : j + 1]) <= stable_speed_mps
+            overlap_ok = not any(contact_overlap_flags[begin : j + 1])
             if stable_idx is None and speed_ok and overlap_ok:
                 stable_idx = begin
-            offroad_ok = not any(offroad_flags[begin : j + 1])
+            offroad_ok = not any(offroad_flags_with_initial[begin : j + 1])
             yaw_ok = max(yaw_rate_aligned[begin : j + 1]) <= stable_yaw_rate
             if speed_ok and overlap_ok and offroad_ok and yaw_ok:
                 stable_quality_idx = begin
@@ -2177,6 +2339,9 @@ def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, s
             "canonical_regimes": sorted({str(s.get("canonical_regime", "")) for s in scene_results}),
             "gamma_rec_values": sorted({float(s.get("gamma_rec", 0.0)) for s in scene_results}),
             "post_contact_target_count": int(sum(bool(s.get("post_contact_target", False)) for s in scene_results)),
+            "publication_geometry_metric": "exact_oriented_box_signed_clearance+penetration+swept_sat_constant_velocity_ttc_v55",
+            "publication_metrics_include_target_state_t0": True,
+            "legacy_policy_regime_geometry_preserved": True,
         },
     }
     for k in keys:
@@ -2235,6 +2400,26 @@ def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, s
     agg["new_stable_stop_scene_rate"] = _scene_mean("new_stable_stop_event")
     agg["new_stable_stop_quality_scene_rate"] = _scene_mean("new_stable_stop_quality_event")
     agg["post_contact_escape_scene_rate"] = _scene_mean("post_contact_escape_event")
+    agg["observed_contact_scene_rate"] = _scene_mean("observed_contact_event")
+    agg["post_contact_metric_eligible_scene_rate"] = _scene_mean("post_contact_metric_eligible")
+    agg["counterfactual_contact_target_scene_rate"] = _scene_mean("counterfactual_contact_target")
+    agg["penetration_scene_rate"] = _scene_mean("penetration_any")
+    agg["penetration_duration_s"] = _scene_mean("penetration_duration_s")
+    agg["penetration_depth_auc_m_s"] = _scene_mean("penetration_depth_auc_m_s")
+    agg["scene_max_penetration_depth_m_mean"] = _scene_mean("penetration_depth_m_max")
+    # Contact-conditioned rates have a contact-dependent denominator.  Rebuild
+    # this one from explicit interval counts instead of weighting by each
+    # scene's full rollout length.
+    post_overlap_num = sum(
+        float((sc.get("metric_summary", {}) or {}).get("post_contact_overlap_count", 0.0) or 0.0)
+        for sc in scene_results
+    )
+    post_overlap_den = sum(
+        float((sc.get("metric_summary", {}) or {}).get("post_contact_num_intervals", 0.0) or 0.0)
+        for sc in scene_results
+    )
+    if post_overlap_den > 0.0:
+        wm["post_contact_overlap_rate"] = float(post_overlap_num / post_overlap_den)
     agg["minimum_clearance_m"] = wm.get("min_clearance_m_min")
     agg["minimum_ttc_s"] = wm.get("ttc_s_min")
     # Distribution across scenes is the publication-level unit; do not average
@@ -2244,6 +2429,17 @@ def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, s
         if vals:
             agg["waymax_metrics"][f"scene_{base}_median"] = float(np.median(vals))
             agg["waymax_metrics"][f"scene_{base}_p05"] = float(np.quantile(vals, 0.05))
+    noncollision_clearance = [
+        float((s.get("metric_summary", {}) or {}).get("min_clearance_m_min"))
+        for s in scene_results
+        if (s.get("metric_summary", {}) or {}).get("min_clearance_m_min") is not None
+        and np.isfinite(float((s.get("metric_summary", {}) or {}).get("min_clearance_m_min")))
+        and float((s.get("metric_summary", {}) or {}).get("overlap_any", 0.0) or 0.0) <= 0.0
+    ]
+    if noncollision_clearance:
+        agg["waymax_metrics"]["scene_min_clearance_noncollision_m_median"] = float(np.median(noncollision_clearance))
+        agg["waymax_metrics"]["scene_min_clearance_noncollision_m_p05"] = float(np.quantile(noncollision_clearance, 0.05))
+        agg["waymax_metrics"]["scene_min_clearance_noncollision_num_scenes"] = float(len(noncollision_clearance))
     macro_counts: dict[str, int] = {}
     reason_counts: dict[str, int] = {}
     audit_best_macro_counts: dict[str, int] = {}
@@ -2287,10 +2483,26 @@ def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, s
         for name in timing_names
     }
     timing_wall = float(sum(float((s.get("timing", {}) or {}).get("wall_s", 0.0)) for s in scene_results))
+    per_decision_timing = {name: float(value / max(int(agg["num_decisions"]), 1)) for name, value in timing_totals.items()}
+    deployed_timing_names = ("state_history", "candidate_features", "policy_selection")
+    evaluation_only_timing_names = ("teacher_labels", "audit_labels", "waymax_step_metrics")
+    per_decision_timing["deployed_planner"] = float(
+        sum(timing_totals.get(name, 0.0) for name in deployed_timing_names)
+        / max(int(agg["num_decisions"]), 1)
+    )
+    per_decision_timing["evaluation_overhead"] = float(
+        sum(timing_totals.get(name, 0.0) for name in evaluation_only_timing_names)
+        / max(int(agg["num_decisions"]), 1)
+    )
+    per_decision_timing["total_measured"] = float(
+        sum(timing_totals.values()) / max(int(agg["num_decisions"]), 1)
+    )
     agg["timing"] = {
         "scene_wall_sum_s": timing_wall,
         "totals_s": timing_totals,
-        "per_decision_s": {name: float(value / max(int(agg["num_decisions"]), 1)) for name, value in timing_totals.items()},
+        "per_decision_s": per_decision_timing,
+        "deployed_planner_components": list(deployed_timing_names),
+        "evaluation_only_components": list(evaluation_only_timing_names),
         "measured_fraction": float(sum(timing_totals.values()) / max(timing_wall, 1.0e-9)),
     }
     return agg
