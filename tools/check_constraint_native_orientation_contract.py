@@ -15,6 +15,7 @@ ACTIVE = [
     "src/ocrap/audits/common_option_constraint_work.py",
     "src/ocrap/audits/recovery_set_constraint_flow.py",
     "src/ocrap/audits/weak_root_recovery_set_flow.py",
+    "src/ocrap/audits/tail_boundary_crossing_flow.py",
     "tools/run_constraint_native_recovery_orientation_audit.py",
     "tools/compare_constraint_native_recovery_orientation.py",
     "tools/check_constraint_native_orientation_contract.py",
@@ -47,26 +48,30 @@ def main() -> int:
     import ocrap.audits.common_option_constraint_work as ccw
     import ocrap.audits.recovery_set_constraint_flow as rscf
     import ocrap.audits.weak_root_recovery_set_flow as wrcf
+    import ocrap.audits.tail_boundary_crossing_flow as tbcf
 
     for rel in ACTIVE:
         p = (repo / rel).resolve()
-        ok = p.is_file() and str(p).startswith(str(repo))
+        inside = str(p).startswith(str(repo))
+        ok = p.is_file() and inside
         files[rel] = {
-            "exists": p.is_file(), "inside_repo": str(p).startswith(str(repo)),
+            "exists": p.is_file(), "inside_repo": inside,
             "path": str(p), "sha256": sha(p) if p.is_file() else None,
         }
         if not ok:
             errors.append(f"runtime_file:{rel}")
 
-    imported = {
-        "ocrap": str(Path(ocrap.__file__).resolve()),
-        "constraint_native_orientation": str(Path(base_primitives.__file__).resolve()),
-        "heterogeneous_constraint_normal_cone": str(Path(hcnc.__file__).resolve()),
-        "executable_constraint_jacobian": str(Path(ecj.__file__).resolve()),
-        "common_option_constraint_work": str(Path(ccw.__file__).resolve()),
-        "recovery_set_constraint_flow": str(Path(rscf.__file__).resolve()),
-        "weak_root_recovery_set_flow": str(Path(wrcf.__file__).resolve()),
+    modules = {
+        "ocrap": ocrap,
+        "constraint_native_orientation": base_primitives,
+        "heterogeneous_constraint_normal_cone": hcnc,
+        "executable_constraint_jacobian": ecj,
+        "common_option_constraint_work": ccw,
+        "recovery_set_constraint_flow": rscf,
+        "weak_root_recovery_set_flow": wrcf,
+        "tail_boundary_crossing_flow": tbcf,
     }
+    imported = {k: str(Path(v.__file__).resolve()) for k, v in modules.items()}
     expected = {
         "ocrap": str((repo / "src/ocrap/__init__.py").resolve()),
         "constraint_native_orientation": str((repo / "src/ocrap/audits/constraint_native_orientation.py").resolve()),
@@ -75,20 +80,21 @@ def main() -> int:
         "common_option_constraint_work": str((repo / "src/ocrap/audits/common_option_constraint_work.py").resolve()),
         "recovery_set_constraint_flow": str((repo / "src/ocrap/audits/recovery_set_constraint_flow.py").resolve()),
         "weak_root_recovery_set_flow": str((repo / "src/ocrap/audits/weak_root_recovery_set_flow.py").resolve()),
+        "tail_boundary_crossing_flow": str((repo / "src/ocrap/audits/tail_boundary_crossing_flow.py").resolve()),
     }
     for k, v in imported.items():
         if v != expected[k]:
             errors.append(f"import_path:{k}:{v}")
 
-    checks = wrcf.contract_checks()
+    checks = tbcf.contract_checks()
     for k, v in checks.items():
         if not v:
             errors.append(f"synthetic:{k}")
 
     out = {
-        "schema": "ocrap-v48.116-wrcf-runtime-code-contract-v1",
-        "engineering_version": wrcf.ENGINEERING_VERSION,
-        "scientific_version": wrcf.SCIENTIFIC_VERSION,
+        "schema": "ocrap-v48.117-tbcf-runtime-code-contract-v1",
+        "engineering_version": tbcf.ENGINEERING_VERSION,
+        "scientific_version": tbcf.SCIENTIFIC_VERSION,
         "run_instance_id": a.run_id,
         "valid": not errors,
         "attribution_ready": not errors,
@@ -100,10 +106,14 @@ def main() -> int:
         "historical_code_dependency": False,
         "scientific_contract": {
             "audit_only": True,
-            "weak_root_cotangent_recovery_set_flow": True,
-            "tail_measure_source": "frozen_nominal_native_model_root_logits_margins_and_observation_compatibility",
-            "tail_measure_candidate_independent": True,
-            "tail_measure_teacher_value_free": True,
+            "tail_boundary_crossing_flow": True,
+            "boundary_measure_source": "outer_ocmero_weak_anchor_influence_then_compatibility_root_exposure_then_zero_margin_boundary_witnesses",
+            "boundary_measure_candidate_independent": True,
+            "boundary_measure_teacher_value_free": True,
+            "zero_boundary_threshold": 0.0,
+            "zero_boundary_threshold_sweep": False,
+            "boundary_hitting_channels": ["prefix_zero_boundary_survival", "suffix_persistent_safe_reentry"],
+            "historical_cotangent_measure_retained_as_factorial_control": True,
             "frozen_root_validity_mask_used": True,
             "frozen_root_decoder_read_only": True,
             "frozen_margin_head_read_only": True,
@@ -114,18 +124,18 @@ def main() -> int:
             "existing_recovery_horizon_only": True,
             "work_bins": 8,
             "work_bins_cover_full_horizon": True,
-            "integral_channels": ["bin_mean_delta_h", "bin_mean_delta_h_times_h0"],
-            "constraint_work_channels": ["positive_reserve_work", "negative_debt_repayment_work"],
-            "work_conservation_identity": "tail_weighted_reserve_work_plus_debt_work_equals_tail_weighted_bin_delta_h",
-            "option_aggregation": "nominal_ocmero_nested_lcvar_cotangent_pushforward_over_recovery_options",
+            "constraint_work_control_channels": ["positive_reserve_work", "negative_debt_repayment_work"],
+            "boundary_crossing_semantics": "first_violation_survival_and_persistent_safe_reentry_at_signed_zero_boundary",
+            "option_aggregation": "weak_root_exposure_pushforward_through_zero_margin_boundary_witnesses",
             "model_physical_option_alignment": "raw_physical_prefix_plus_invalid_checkpoint_padding_only",
-            "padded_model_options_must_be_invalid_and_zero_tail_mass": True,
+            "padded_model_options_must_be_invalid_and_zero_measure_mass": True,
             "pre_readout_candidate_option_selector": False,
             "downstream_ocmero_option_selection_unchanged": True,
             "option_permutation_invariant": True,
-            "tail_geometry_dim": wrcf.TAIL_GEOMETRY_DIM,
-            "matched_family_dim": wrcf.MATCHED_DIM,
+            "boundary_geometry_dim": tbcf.BOUNDARY_GEOMETRY_DIM,
+            "matched_family_dim": tbcf.MATCHED_DIM,
             "capacity_matched_all_families": True,
+            "factorial_families": ["base", "cotangent_hitting", "boundary_work", "boundary_hitting"],
             "candidate_identity_shuffle": "whole_feature_row_cyclic_permutation_within_scene_time_group",
             "convex_closed_form_ridge": True,
             "strictly_convex_unique_solution": True,

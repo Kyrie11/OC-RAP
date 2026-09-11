@@ -42,10 +42,17 @@ from ocrap.audits.recovery_set_constraint_flow import (
     contract_checks as rscf_contract_checks,
 )
 from ocrap.audits.weak_root_recovery_set_flow import (
+    ENGINEERING_VERSION as WRCF_ENGINEERING_VERSION,
+    MATCHED_DIM as WRCF_MATCHED_DIM,
+    SCIENTIFIC_VERSION as WRCF_SCIENTIFIC_VERSION,
+    TAIL_GEOMETRY_DIM,
+    contract_checks as wrcf_contract_checks,
+)
+from ocrap.audits.tail_boundary_crossing_flow import (
+    BOUNDARY_GEOMETRY_DIM,
     ENGINEERING_VERSION,
     MATCHED_DIM,
     SCIENTIFIC_VERSION,
-    TAIL_GEOMETRY_DIM,
     contract_checks,
 )
 
@@ -92,13 +99,22 @@ def test_historical_rscf_contract_checks():
     assert RSCF_SCIENTIFIC_VERSION == "v48.115-OC-RSCF"
 
 
-def test_current_wrcf_contract_checks():
-    checks = contract_checks()
+def test_historical_wrcf_contract_checks():
+    checks = wrcf_contract_checks()
     assert checks and all(checks.values()), checks
     assert TAIL_GEOMETRY_DIM == 64
+    assert WRCF_MATCHED_DIM == 220
+    assert WRCF_ENGINEERING_VERSION == "v48.116.1-OC-WRCF"
+    assert WRCF_SCIENTIFIC_VERSION == "v48.116-OC-WRCF"
+
+
+def test_current_tbcf_contract_checks():
+    checks = contract_checks()
+    assert checks and all(checks.values()), checks
+    assert BOUNDARY_GEOMETRY_DIM == 64
     assert MATCHED_DIM == 220
-    assert ENGINEERING_VERSION == "v48.116.1-OC-WRCF"
-    assert SCIENTIFIC_VERSION == "v48.116-OC-WRCF"
+    assert ENGINEERING_VERSION == "v48.117.0-OC-TBCF"
+    assert SCIENTIFIC_VERSION == "v48.117-OC-TBCF"
 
 
 def test_ridge_owner_is_still_unique_and_closed_form():
@@ -111,17 +127,18 @@ def test_ridge_owner_is_still_unique_and_closed_form():
     assert model.normal_equation_residual <= 1e-7
 
 
-def test_current_launcher_reuses_authoritative_v115_and_keeps_command_name():
+def test_current_launcher_reuses_authoritative_v116_and_keeps_command_name():
     repo = Path(__file__).resolve().parents[1]
     launcher = (repo / "scripts/run_constraint_native_orientation_audit.sh").read_text()
-    assert "OC-RAP-v48.115-PIPELINE_COMPLETE.json" in launcher
-    assert "OC-RAP-v48.115-DCP-DRFC-BCDE-RIFA-OC-RSCF-comparison.json" in launcher
-    assert "OC-RAP-v48.115-RSCF-balanced.json" in launcher
-    assert "OC-RAP-v48.115-RSCF-precision.json" in launcher
-    assert "OC-RAP-v48.93-factor-mediation-audit.jsonl" in launcher
+    assert "OC-RAP-v48.116-PIPELINE_COMPLETE.json" in launcher
+    assert "OC-RAP-v48.116-DCP-DRFC-BCDE-RIFA-OC-WRCF-comparison.json" in launcher
     assert "OC-RAP-v48.116-WRCF-balanced.json" in launcher
-    assert "OC-RAP-v48.116-OC-WRCF-results.zip" in launcher
-    assert "weak-root-conditioned recovery-set flow branch" in launcher
+    assert "OC-RAP-v48.116-WRCF-precision.json" in launcher
+    assert "OC-RAP-v48.93-factor-mediation-audit.jsonl" in launcher
+    assert "OC-RAP-v48.117-TBCF-balanced.json" in launcher
+    assert "OC-RAP-v48.117-OC-TBCF-results.zip" in launcher
+    assert "tail-boundary crossing-flow branch" in launcher
+    assert "close_first_order_nominal_ocmero_cotangent_option_pushforward" in launcher
     assert "--run-id" in launcher
 
 def test_unversioned_runner_keeps_v93_role_filter_semantics(tmp_path):
@@ -171,24 +188,26 @@ def test_unversioned_runner_keeps_v93_role_filter_semantics(tmp_path):
     assert [c["candidate"] for c in groups[0]["candidates"]] == [1]
 
 
-def test_current_result_packager_uses_only_canonical_v116_artifacts():
+def test_current_result_packager_uses_only_canonical_v117_artifacts():
     tool = Path(__file__).resolve().parents[1] / "tools" / "package_constraint_native_orientation_results.py"
     spec = importlib.util.spec_from_file_location("orientation_packager_test", tool)
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    assert mod.EXPECTED["balanced"] == "OC-RAP-v48.116-WRCF-balanced.json"
-    assert mod.EXPECTED["precision"] == "OC-RAP-v48.116-WRCF-precision.json"
-    assert mod.ENGINEERING_VERSION == "v48.116.1-OC-WRCF"
-    assert mod.SCIENTIFIC_VERSION == "v48.116-OC-WRCF"
+    assert mod.EXPECTED["balanced"] == "OC-RAP-v48.117-TBCF-balanced.json"
+    assert mod.EXPECTED["precision"] == "OC-RAP-v48.117-TBCF-precision.json"
+    assert mod.ENGINEERING_VERSION == "v48.117.0-OC-TBCF"
+    assert mod.SCIENTIFIC_VERSION == "v48.117-OC-TBCF"
 
 
-def test_v116_comparison_preregisters_weak_root_tail_flow():
+def test_v117_comparison_preregisters_tail_boundary_crossing_flow():
     repo = Path(__file__).resolve().parents[1]
     text = (repo / "tools/compare_constraint_native_recovery_orientation.py").read_text()
     assert '"reentry_contact_coverage_go"' in text
-    assert "tail_integral_vs_v48_115_uniform_integral_support_gate" in text
-    assert "tail_work_vs_v48_115_uniform_work_support_gate" in text
-    assert "tail_work_vs_tail_integral_support_gate" in text
-    assert "WEAK_ROOT_RECOVERY_SET_FLOW_GO" in text
-    assert "nominal_ocmero_tail_weighted" in text
+    assert "boundary_hitting_vs_v116_support" in text
+    assert "boundary_work_vs_v116_reserve" in text
+    assert "boundary_measure_effect_under_hitting" in text
+    assert "hitting_effect_under_boundary_measure" in text
+    assert "TAIL_BOUNDARY_CROSSING_FLOW_GO" in text
+    assert "TAIL_BOUNDARY_CROSSING_FLOW_STOP" in text
+    assert "close_static_boundary_witness_hitting_flow" in text

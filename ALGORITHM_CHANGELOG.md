@@ -13534,3 +13534,232 @@ sum omega_physical = 1.
 No renormalization, option remapping, candidate-dependent selection, feature change, capacity change, root/source/planner training, threshold change, horizon change, cohort change, or preregistered decision change is introduced. The scientific version remains `v48.116-OC-WRCF`; only the engineering version advances from `v48.116.0-OC-WRCF` to `v48.116.1-OC-WRCF`.
 
 Additional fail-closed diagnostics now record model option count, physical option count, padding count, prefix-validity identity, padded-option validity, padded tail mass, and physical-measure unit-mass error. The preregistered activity gate treats any violation as an exact-contract failure.
+
+## V48.116 completed attribution — exact weak-tail cotangent is valid but option ownership collapses
+
+The repaired `v48.116.1-OC-WRCF` execution passes both engineering and scientific attribution gates.  The canonical bundle closes exactly against its manifest; the runtime source hashes match the executed checkout; all active probes are closed-form strictly-convex ridge fits with Support/Reserve train counts `159/61`; the maximum recorded normal-equation residual is approximately `5.57e-10`; balanced and precision scientific states are exact duplicates and therefore remain four unique population roles rather than eight independent repeats.  The model/physical option-padding repair is exercised in the real run with all padded slots invalid and zero weak-tail mass.
+
+The preregistered scientific outcome is:
+
+```text
+status = WEAK_ROOT_RECOVERY_SET_FLOW_STOP
+next   = close first-order nominal OC-MERO cotangent option push-forward
+         -> tail-boundary crossing-flow audit
+            with no training/capacity/regime/source sweep
+```
+
+The STOP is scientifically informative.  The exact nested-LCVAR cotangent, unit-mass push-forward, permutation contract, physical flow activity and Contact re-entry coverage are all valid; however the preregistered **nontrivial tail option measure** gate fails in every unique role.  With twelve common valid recovery options available in every role, the nominal cotangent push-forward has only approximately:
+
+```text
+                         mean positive options   effective options
+  dev-Near                     1.482                 1.362
+  dev-Contact                  1.333                 1.187
+  certificate-Near            1.431                 1.331
+  certificate-Contact         1.267                 1.166
+```
+
+Thus the first-order option measure is mathematically exact but almost a delta measure.  This is not an implementation accident: differentiating a functional containing `max_option` selects the active maximizing option almost everywhere.  Pushing that cotangent from root-option space into option space therefore reintroduces, in first-order form, the single-option ownership instability that V48.115 had already shown must be removed.
+
+### What V48.116 still preserves
+
+The weak-root premise is **not** closed.  Observation-compatible lower-tail semantics remain the correct information law; what is closed is only the first-order `dR_dep/dM -> option` push-forward as a complete recovery-set ownership measure.
+
+The signed reserve/debt coordinate remains useful.  Under the same weak-tail measure, `tail_work - tail_integral` Reserve AUC is:
+
+```text
+  dev-Near          +0.500000  [Reserve cell underpowered]
+  dev-Contact       +0.098958
+  certificate-Near  -0.047619
+  certificate-Contact +0.152778
+```
+
+The preregistered Reserve increment gate is GO in three of four unique roles, including both Contact populations.  On Support, certificate-Contact shows a large `+0.513043` work-over-integral increase and reaches absolute Support AUC approximately `0.7061`, but dev-Contact and certificate-Near reverse, so the Support increment gate remains STOP.
+
+Relative to V48.115 uniform work, V48.116 tail work improves Support in dev-Near (`+0.1953`) and certificate-Contact (`+0.1843`) but reverses dev-Contact (`-0.0682`) and certificate-Near (`-0.0364`).  Reserve improves only certificate-Contact (`+0.125`) while dev-Contact and certificate-Near reverse.  Neither absolute Reserve orientation nor the full Support/Reserve cross-population gate is satisfied.
+
+Therefore V48.116 does **not** authorize a Main/carrier integration.
+
+### Directions closed after V48.116
+
+The following option-ownership families are now closed as complete transferable carriers:
+
+```text
+candidate-selected option ownership                         [V48.113--V48.114]
+uniform option-set first moment                             [V48.115]
+first-order nominal OC-MERO max-option cotangent push-forward [V48.116]
+```
+
+The evidence does not justify reopening any previously closed capacity, source, regime, threshold, horizon, learned-root-adapter or candidate-selector branch.  Frozen roots remain available only as an observation-compatible population measure.
+
+### Dominant bottleneck after V48.116
+
+The bottleneck is narrower than weak-tail weighting itself:
+
+> **Population-stable orientation requires ownership and temporal topology of the signed viability boundary, not a point estimate of option identity, a uniform option mean, or the first derivative of a max-option functional.**
+
+Near asks whether a candidate delays or prevents the first loss of positive recovery reserve.  Contact asks whether a candidate repays debt and advances the time after which the recovery trajectory stays permanently on the safe side.  These are two sides of the same zero-level viability boundary.
+
+The strongest next falsifiable proposition is therefore:
+
+> **Conditional on observation-compatible weak-root exposure, deployable recovery orientation is controlled by the zero-level boundary of the executable recovery set and by the deformation of its first-violation / persistent-reentry times.**
+
+This proposition is strictly stronger and more specific than “use more temporal features”: the threshold is fixed by the signed recoverability semantics at exactly zero; the operator is order-sensitive; and Near/Contact use the same functional with no regime router.
+
+## V48.117 OC-TBCF — Observation-Consistent Tail-Boundary Crossing Flow Audit
+
+Engineering version: `v48.117.0-OC-TBCF`  
+Scientific version: `v48.117-OC-TBCF`
+
+V48.117 is an **audit-only**, equal-capacity 2x2 causal mechanism experiment.  It changes neither the frozen planner nor the recovery library.  It factorizes the V48.116 failure into (A) recovery-option ownership and (B) temporal representation.
+
+### Factor A — weak-root-exposed zero-boundary ownership
+
+Let the frozen nominal model provide the same root probabilities `p`, observation compatibility `C`, and root-option margins `M` used by OC-MERO.  V48.117 reuses the outer OC-MERO lower-tail influence over observation anchors, but deliberately removes `max_option` from the option-measure push-forward.
+
+For outer weak-anchor influence `a_i`, define source-root exposure before option selection:
+
+```text
+rho_j = sum_i a_i * normalize(C_eff[i,j] * p_j),
+sum_j rho_j = 1.
+```
+
+For each exposed source root `j`, define an exact zero-level recovery-set witness measure.  Among valid recovery options:
+
+```text
+l_safe(j) = option(s) with the smallest M[j,l] >= 0,
+l_debt(j) = option(s) with the largest  M[j,l] <  0.
+```
+
+If both sides exist, each side receives one half of that root's mass; exact ties on a side share its half uniformly.  If only one side exists, its nearest-zero option(s) receive unit mass.  There is no epsilon band, learned temperature, margin threshold or option-count tuning.
+
+The candidate-independent boundary option measure is
+
+```text
+omega_boundary[l] = sum_j rho_j * B[j,l],
+sum_l omega_boundary[l] = 1.
+```
+
+This is a discrete zero-level-set witness measure.  Unlike the V48.116 cotangent push-forward, it can represent both the last debt-bearing mode and the first reserve-bearing mode around the deployability boundary without differentiating through `max_option`.
+
+### Factor B — first-violation / persistent-reentry topology
+
+For every same-option actuator-projected signed constraint path `h_l,c(t)`, define two zero-threshold temporal channels:
+
+```text
+survival_l,c(t)  = 1[min_{s<=t} h_l,c(s) >= 0]
+persistent_l,c(t)= 1[min_{s>=t} h_l,c(s) >= 0]
+```
+
+`survival` is the survival function of the first signed-boundary violation time.  `persistent` turns on only after the path has entered a suffix that never crosses negative again, so it is a stable re-entry / debt-clearance time.  Candidate-minus-nominal differences are averaged in the same eight contiguous full-horizon bins.
+
+The representation remains:
+
+```text
+8 bins x 4 constraints x 2 channels = 64-D
+156-D historical candidate response + 64-D = 220-D.
+```
+
+No Near/Contact regime label enters either channel.
+
+### Capacity-matched 2x2 experiment
+
+V48.117 fits only four closed-form ridge spaces:
+
+```text
+base               = historical 156-D response
+cotangent_hitting  = V48.116 cotangent measure + new hitting topology
+boundary_work      = new zero-boundary measure + historical signed work
+boundary_hitting   = new zero-boundary measure + new hitting topology
+```
+
+The authoritative V48.116 `tail_work` artifact is the historical control.  The preregistered contrasts identify:
+
+```text
+cotangent_hitting - V48.116 tail_work
+    representation effect under the old cotangent measure;
+
+boundary_work - V48.116 tail_work
+    option-measure effect under signed work;
+
+boundary_hitting - cotangent_hitting
+    boundary-measure effect under the new hitting representation;
+
+boundary_hitting - boundary_work
+    hitting-topology effect under the new boundary measure;
+
+boundary_hitting - V48.116 tail_work
+    total effect of the proposed mechanism.
+```
+
+All spaces use the same cohorts, frozen checkpoints, 220-D dimension, whole-row candidate shuffle and `lambda = 1 / N_axis`.  No iterative optimizer, learned set encoder, post-hoc feature selection, threshold sweep, horizon sweep, option-count sweep, source training, root training, planner training, regime conditioning or boundary-transport module is allowed.
+
+### V48.117 absolute and increment gates
+
+Absolute Support/Reserve gates remain unchanged:
+
+```text
+AUC >= 0.65 AND true-minus-shuffle AUC >= 0.05 in >= 6/8 legacy cells,
+covering >= 3/4 unique roles with both Near and Contact;
+Top1 lift >= 0.10 in >= 4/8 cells,
+covering >= 2 unique roles with both Near and Contact.
+```
+
+Every historical/internal increment gate remains:
+
+```text
+Delta AUC > 0 in >= 6/8 legacy cells,
+covering >= 3/4 unique roles with both Near and Contact,
+and Delta AUC >= 0.01 in >= 4/8 cells.
+```
+
+The activity/identifiability gate requires:
+
+- exact option/weight permutation invariance <= `1e-10`;
+- exact boundary option-measure and root-exposure unit mass <= `1e-10`;
+- exact model/physical padding alignment with zero padded measure mass;
+- nonzero `cotangent_hitting`, `boundary_work`, and `boundary_hitting` in >=3/4 roles with Near+Contact;
+- physically diverse multi-option executable recovery flow in >=3/4 roles;
+- mean boundary-positive option count >=2 in >=3/4 roles with Near+Contact;
+- positive two-sided zero-boundary root mass in >=3/4 roles with Near+Contact;
+- Contact re-entry coverage.
+
+Balanced/precision exact identity is explicitly reported and, when exact, counts as four unique roles rather than eight replicates.  Dev-Near Reserve remains flagged underpowered by the existing power diagnostic and cannot by itself establish a mechanism claim.
+
+### Preregistered V48.117 decision tree
+
+```text
+boundary_hitting absolute Support+Reserve GO
++ boundary_hitting vs V48.116 tail_work Support+Reserve GO
++ activity / nontrivial-boundary / re-entry GO
+  -> TAIL_BOUNDARY_CROSSING_FLOW_GO;
+     promote the combined zero-boundary hitting carrier;
+     authorize exactly one Main/carrier integration,
+     with no source/boundary/regime/capacity co-change.
+
+If, additionally,
+boundary_hitting - cotangent_hitting Support+Reserve GO
++ boundary_hitting - boundary_work Support+Reserve GO,
+  -> full_factorial_mechanism_attribution_go = true;
+     the separate ownership and hitting factors may both be claimed.
+
+boundary_work absolute Support+Reserve GO
++ boundary_work vs V48.116 tail_work Support+Reserve GO
++ activity/re-entry GO
+  -> TAIL_BOUNDARY_MEASURE_WORK_GO;
+     retain signed work under the new boundary ownership measure;
+     authorize one Main/carrier integration of that narrower carrier.
+
+Support-only / Reserve-only
+  -> retain only the proven axis and audit the missing axis with the next
+     viability-survival envelope object; no capacity/regime/source sweep.
+
+both axes local-order only
+  -> one convex pairwise audit on exactly the same boundary-hitting features.
+
+otherwise STOP
+  -> close static zero-boundary witness + fixed-bin hitting flow;
+     next branch = recovery-set viability survival-envelope audit,
+     with no training/capacity/regime/source/horizon/threshold sweep.
+```
+
+The stable user command and launcher filename remain unchanged.  The launcher fails closed on the exact authoritative V48.116 pipeline/comparison/balanced/precision SHAs, `WEAK_ROOT_RECOVERY_SET_FLOW_STOP`, and its registered tail-boundary next branch before any GPU work starts.

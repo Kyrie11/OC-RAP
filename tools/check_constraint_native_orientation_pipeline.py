@@ -8,10 +8,21 @@ from pathlib import Path
 
 import torch
 
-from ocrap.audits.weak_root_recovery_set_flow import ENGINEERING_VERSION, SCIENTIFIC_VERSION, MATCHED_DIM, TAIL_GEOMETRY_DIM
+from ocrap.audits.tail_boundary_crossing_flow import (
+    BOUNDARY_GEOMETRY_DIM, ENGINEERING_VERSION, MATCHED_DIM, SCIENTIFIC_VERSION,
+)
 
-AUTHORITATIVE_V115_COMPARISON_SHA256 = "70d5fe0ed97ad08f1d571ba73add12a152e0b1115312b420ff481a233e037b42"
-AUTHORITATIVE_V115_PIPELINE_SHA256 = "eaf196f55c8b5d9ab32111e7c2ea27eacd7a01ce123fa50237d51562da15c4e2"
+AUTHORITATIVE_V116_COMPARISON_SHA256 = "cca845f43b2d3e0c7a774f87ab26faad79de739a96217ef1a72242acf94d8f0f"
+AUTHORITATIVE_V116_PIPELINE_SHA256 = "105d6e47cb046f5dac106bf2930004a89f032ab92faf5b3c988d1ee11b500e9e"
+V116_NEXT = "close_first_order_nominal_ocmero_cotangent_option_pushforward_then_preregister_tail_boundary_crossing_flow_audit_no_training_capacity_regime_or_source_sweep"
+VALID_STATUSES = {
+    "TAIL_BOUNDARY_CROSSING_FLOW_GO",
+    "TAIL_BOUNDARY_MEASURE_WORK_GO",
+    "TAIL_BOUNDARY_CROSSING_SUPPORT_ONLY",
+    "TAIL_BOUNDARY_CROSSING_RESERVE_ONLY",
+    "TAIL_BOUNDARY_CROSSING_LOCAL_ORDER_ONLY",
+    "TAIL_BOUNDARY_CROSSING_FLOW_STOP",
+}
 
 
 def sha(path: Path) -> str:
@@ -20,7 +31,7 @@ def sha(path: Path) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    for key in ("runtime", "balanced", "precision", "balanced_state", "precision_state", "comparison", "v48_115_pipeline", "v48_115_comparison"):
+    for key in ("runtime", "balanced", "precision", "balanced_state", "precision_state", "comparison", "v48_116_pipeline", "v48_116_comparison"):
         ap.add_argument("--" + key.replace("_", "-"), dest=key, type=Path, required=True)
     ap.add_argument("--run-id", required=True)
     ap.add_argument("--output", type=Path, required=True)
@@ -28,7 +39,7 @@ def main() -> int:
     errors: list[str] = []
 
     docs: dict[str, dict] = {}
-    for key in ("runtime", "balanced", "precision", "comparison", "v48_115_pipeline", "v48_115_comparison"):
+    for key in ("runtime", "balanced", "precision", "comparison", "v48_116_pipeline", "v48_116_comparison"):
         p = getattr(a, key)
         try:
             docs[key] = json.loads(p.read_text())
@@ -43,15 +54,18 @@ def main() -> int:
         and rt.get("engineering_version") == ENGINEERING_VERSION
         and rt.get("scientific_version") == SCIENTIFIC_VERSION
         and rt.get("run_instance_id") == a.run_id
-        and sc.get("weak_root_cotangent_recovery_set_flow") is True
-        and sc.get("tail_measure_candidate_independent") is True
-        and sc.get("tail_measure_teacher_value_free") is True
+        and sc.get("tail_boundary_crossing_flow") is True
+        and sc.get("boundary_measure_candidate_independent") is True
+        and sc.get("boundary_measure_teacher_value_free") is True
+        and sc.get("zero_boundary_threshold") == 0.0
+        and sc.get("zero_boundary_threshold_sweep") is False
         and sc.get("frozen_root_validity_mask_used") is True
         and sc.get("frozen_root_decoder_read_only") is True
         and sc.get("pre_readout_candidate_option_selector") is False
         and sc.get("same_option_inside_each_weighted_summand") is True
         and sc.get("matched_family_dim") == MATCHED_DIM
-        and sc.get("tail_geometry_dim") == TAIL_GEOMETRY_DIM
+        and sc.get("boundary_geometry_dim") == BOUNDARY_GEOMETRY_DIM
+        and sc.get("boundary_transport") is False
     ):
         errors.append("runtime")
 
@@ -62,10 +76,10 @@ def main() -> int:
             and d.get("scientific_version") == SCIENTIFIC_VERSION and d.get("variant") == variant
             and d.get("audit_only") and d.get("convex_closed_form_ridge")
             and d.get("strictly_convex_unique_solution")
-            and d.get("capacity_matched_all_tail_families")
+            and d.get("capacity_matched_all_boundary_families")
             and d.get("matched_family_dimension") == MATCHED_DIM
-            and d.get("tail_geometry_dimension") == TAIL_GEOMETRY_DIM
-            and d.get("candidate_independent_tail_measure") is True
+            and d.get("boundary_geometry_dimension") == BOUNDARY_GEOMETRY_DIM
+            and d.get("candidate_independent_boundary_measure") is True
             and d.get("frozen_root_decoder_read_only") is True
             and d.get("frozen_margin_head_read_only") is True
             and d.get("same_option_inside_each_weighted_summand") is True
@@ -73,6 +87,8 @@ def main() -> int:
             and d.get("teacher_margin_probability_compatibility_fields_used") is False
             and d.get("teacher_future_fields_used") is False
             and d.get("root_decoder_parameters_trained") == 0
+            and d.get("source_parameters_trained") == 0
+            and d.get("boundary_transport") is False
             and d.get("run_instance_id") == a.run_id
         ):
             errors.append(variant)
@@ -84,7 +100,9 @@ def main() -> int:
         and cmp.get("engineering_version") == ENGINEERING_VERSION
         and cmp.get("scientific_version") == SCIENTIFIC_VERSION
         and cmp.get("run_instance_id") == a.run_id
-        and decision.get("status") != "V48_116_ENGINEERING_STOP"
+        and decision.get("status") in VALID_STATUSES
+        and decision.get("boundary_transport_authorized") is False
+        and decision.get("source_training_authorized") is False
     ):
         errors.append("comparison")
 
@@ -103,21 +121,21 @@ def main() -> int:
         except Exception as exc:
             errors.append(f"{key}:load:{type(exc).__name__}")
 
-    if sha(a.v48_115_pipeline) != AUTHORITATIVE_V115_PIPELINE_SHA256:
-        errors.append("v115_pipeline_sha")
-    if sha(a.v48_115_comparison) != AUTHORITATIVE_V115_COMPARISON_SHA256:
-        errors.append("v115_comparison_sha")
-    d115 = docs["v48_115_comparison"].get("preregistered_decision") or {}
+    if sha(a.v48_116_pipeline) != AUTHORITATIVE_V116_PIPELINE_SHA256:
+        errors.append("v116_pipeline_sha")
+    if sha(a.v48_116_comparison) != AUTHORITATIVE_V116_COMPARISON_SHA256:
+        errors.append("v116_comparison_sha")
+    d116 = docs["v48_116_comparison"].get("preregistered_decision") or {}
     if not (
-        docs["v48_115_pipeline"].get("valid")
-        and docs["v48_115_pipeline"].get("attribution_ready")
-        and docs["v48_115_pipeline"].get("preregistered_status") == "RECOVERY_SET_CONSTRAINT_FLOW_STOP"
-        and docs["v48_115_comparison"].get("valid")
-        and docs["v48_115_comparison"].get("attribution_ready")
-        and d115.get("status") == "RECOVERY_SET_CONSTRAINT_FLOW_STOP"
-        and d115.get("next_branch") == "close_observation_only_option_set_mean_flow_then_preregister_ocmero_weak_root_conditioned_recovery_set_flow_audit_frozen_roots_no_training_or_capacity_sweep"
+        docs["v48_116_pipeline"].get("valid")
+        and docs["v48_116_pipeline"].get("attribution_ready")
+        and docs["v48_116_pipeline"].get("preregistered_status") == "WEAK_ROOT_RECOVERY_SET_FLOW_STOP"
+        and docs["v48_116_comparison"].get("valid")
+        and docs["v48_116_comparison"].get("attribution_ready")
+        and d116.get("status") == "WEAK_ROOT_RECOVERY_SET_FLOW_STOP"
+        and d116.get("next_branch") == V116_NEXT
     ):
-        errors.append("v115_prerequisite")
+        errors.append("v116_prerequisite")
 
     artifacts = {}
     for key in ("runtime", "balanced", "precision", "balanced_state", "precision_state", "comparison"):
@@ -125,19 +143,19 @@ def main() -> int:
         artifacts[key] = {"path": str(p.resolve()), "sha256": sha(p)}
 
     out = {
-        "schema": "ocrap-v48.116-wrcf-pipeline-complete-v1",
+        "schema": "ocrap-v48.117-tbcf-pipeline-complete-v1",
         "engineering_version": ENGINEERING_VERSION,
         "scientific_version": SCIENTIFIC_VERSION,
         "run_instance_id": a.run_id,
         "valid": not errors,
         "attribution_ready": not errors,
         "errors": errors,
-        "experiment_type": "audit_only_nominal_ocmero_weak_root_cotangent_recovery_set_flow",
+        "experiment_type": "audit_only_tail_boundary_crossing_flow",
         "preregistered_status": decision.get("status"),
         "artifacts": artifacts,
-        "authoritative_v48_115_comparison_sha256": AUTHORITATIVE_V115_COMPARISON_SHA256,
-        "v48_115_pipeline_sha256": sha(a.v48_115_pipeline),
-        "v48_115_comparison_sha256": sha(a.v48_115_comparison),
+        "authoritative_v48_116_comparison_sha256": AUTHORITATIVE_V116_COMPARISON_SHA256,
+        "v48_116_pipeline_sha256": sha(a.v48_116_pipeline),
+        "v48_116_comparison_sha256": sha(a.v48_116_comparison),
         "dataset_reconstruction": False,
         "planner_parameters_trained": 0,
         "stage_i_parameters_trained": 0,
