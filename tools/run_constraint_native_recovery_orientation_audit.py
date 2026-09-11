@@ -38,17 +38,18 @@ from ocrap.audits.tail_boundary_crossing_flow import (
     nominal_tail_boundary_measure,
     boundary_measure_diagnostics,
 )
-from ocrap.audits.viability_survival_envelope import (
+from ocrap.audits.viability_order_profile import (
     ALGORITHM_NAME,
     ENGINEERING_VERSION,
     MATCHED_DIM,
     SCIENTIFIC_VERSION,
-    ENVELOPE_GEOMETRY_DIM,
+    PROFILE_GEOMETRY_DIM,
+    ORDER_MASSES,
     base_features,
     fit_set_flow_scaler,
     matched_features,
-    exposed_envelope_geometry,
-    full_envelope_geometry,
+    exposed_profile_geometry,
+    full_profile_geometry,
     option_permutation_invariance_error,
 )
 
@@ -57,7 +58,7 @@ ROLES = ("dev_near", "dev_contact", "certificate_near", "certificate_contact")
 # Deliberately excludes teacher m_star/root/future labels.  The scientific
 # feature path reads only current observation, candidate prefix, and the fixed
 # recovery option library.  Labels enter later through the historical indices.
-VSE_SAMPLE_KEYS: frozenset[str] = frozenset({
+VOP_SAMPLE_KEYS: frozenset[str] = frozenset({
     "scene_id", "time_index", "candidate_index", "is_nominal",
     "agent_history", "agent_valid", "ego_state",
     "prefix_states", "prefix_controls", "prefix_param", "prefix_macro_id", "prefix_macro_name",
@@ -222,14 +223,21 @@ def _merge_pair_diags(diags: list[dict[str, Any]]) -> dict[str, Any]:
             "candidate_count": 0,
             "mean_common_valid_option_count": 0.0,
             "min_common_valid_option_count": 0,
-            "exposed_envelope_nonzero_fraction": 0.0,
-            "full_envelope_nonzero_fraction": 0.0,
+            "exposed_profile_nonzero_fraction": 0.0,
+            "full_profile_nonzero_fraction": 0.0,
             "option_flow_diverse_fraction": 0.0,
             "reentry_set_available_fraction": 0.0,
             "max_option_permutation_invariance_error": 0.0,
-            "max_envelope_decomposition_error": 0.0,
-            "mean_exposed_winner_union_count": 0.0,
-            "mean_full_winner_union_count": 0.0,
+            "max_order_monotonicity_error": 0.0,
+            "mean_exposed_prefix_order_spread": 0.0,
+            "mean_exposed_suffix_order_spread": 0.0,
+            "mean_full_prefix_order_spread": 0.0,
+            "mean_full_suffix_order_spread": 0.0,
+            "mean_exposed_prefix_noncollapsed_fraction": 0.0,
+            "mean_exposed_suffix_noncollapsed_fraction": 0.0,
+            "mean_full_prefix_noncollapsed_fraction": 0.0,
+            "mean_full_suffix_noncollapsed_fraction": 0.0,
+            "mean_full_eligible_option_count": 0.0,
             "mean_full_prefix_coverage_fraction": 0.0,
             "mean_full_suffix_coverage_fraction": 0.0,
         }
@@ -238,14 +246,21 @@ def _merge_pair_diags(diags: list[dict[str, Any]]) -> dict[str, Any]:
         "candidate_count": len(diags),
         "mean_common_valid_option_count": float(np.mean(counts)),
         "min_common_valid_option_count": int(min(counts)),
-        "exposed_envelope_nonzero_fraction": float(np.mean([bool(d.get("exposed_envelope_nonzero", False)) for d in diags])),
-        "full_envelope_nonzero_fraction": float(np.mean([bool(d.get("full_envelope_nonzero", False)) for d in diags])),
+        "exposed_profile_nonzero_fraction": float(np.mean([bool(d.get("exposed_profile_nonzero", False)) for d in diags])),
+        "full_profile_nonzero_fraction": float(np.mean([bool(d.get("full_profile_nonzero", False)) for d in diags])),
         "option_flow_diverse_fraction": float(np.mean([bool(d.get("option_flow_diverse", False)) for d in diags])),
         "reentry_set_available_fraction": float(np.mean([bool(d.get("reentry_available_in_set", False)) for d in diags])),
         "max_option_permutation_invariance_error": float(max(float(d.get("option_permutation_invariance_error", 0.0)) for d in diags)),
-        "max_envelope_decomposition_error": float(max(float(d.get("envelope_decomposition_error", 0.0)) for d in diags)),
-        "mean_exposed_winner_union_count": float(np.mean([max(int(d.get("exposed_prefix_winner_union_count", 0)), int(d.get("exposed_suffix_winner_union_count", 0))) for d in diags])),
-        "mean_full_winner_union_count": float(np.mean([max(int(d.get("full_prefix_winner_union_count", 0)), int(d.get("full_suffix_winner_union_count", 0))) for d in diags])),
+        "max_order_monotonicity_error": float(max(float(d.get("order_monotonicity_error", 0.0)) for d in diags)),
+        "mean_exposed_prefix_order_spread": float(np.mean([float(d.get("exposed_prefix_order_spread", 0.0)) for d in diags])),
+        "mean_exposed_suffix_order_spread": float(np.mean([float(d.get("exposed_suffix_order_spread", 0.0)) for d in diags])),
+        "mean_full_prefix_order_spread": float(np.mean([float(d.get("full_prefix_order_spread", 0.0)) for d in diags])),
+        "mean_full_suffix_order_spread": float(np.mean([float(d.get("full_suffix_order_spread", 0.0)) for d in diags])),
+        "mean_exposed_prefix_noncollapsed_fraction": float(np.mean([float(d.get("exposed_prefix_noncollapsed_fraction", 0.0)) for d in diags])),
+        "mean_exposed_suffix_noncollapsed_fraction": float(np.mean([float(d.get("exposed_suffix_noncollapsed_fraction", 0.0)) for d in diags])),
+        "mean_full_prefix_noncollapsed_fraction": float(np.mean([float(d.get("full_prefix_noncollapsed_fraction", 0.0)) for d in diags])),
+        "mean_full_suffix_noncollapsed_fraction": float(np.mean([float(d.get("full_suffix_noncollapsed_fraction", 0.0)) for d in diags])),
+        "mean_full_eligible_option_count": float(np.mean([float(d.get("full_eligible_option_count", 0.0)) for d in diags])),
         "mean_full_prefix_coverage_fraction": float(np.mean([float(d.get("full_prefix_coverage_fraction", 0.0)) for d in diags])),
         "mean_full_suffix_coverage_fraction": float(np.mean([float(d.get("full_suffix_coverage_fraction", 0.0)) for d in diags])),
     }
@@ -322,18 +337,18 @@ def extract_records(
     model = bundle.model.eval()
     [par.requires_grad_(False) for par in model.parameters()]
     if not isinstance(model.encoder, StructuredTokenEncoder):
-        raise RuntimeError("V48.118 requires StructuredTokenEncoder")
+        raise RuntimeError("V48.119 requires StructuredTokenEncoder")
     enc = model.encoder.eval()
     dev = bundle.device
     if len(enc.encoder.layers) != 2:
-        raise RuntimeError("V48.118 requires historical two-layer Stage-I")
+        raise RuntimeError("V48.119 requires historical two-layer Stage-I")
 
     ocfg = bundle.cfg.get("ocmero", {}) if isinstance(bundle.cfg.get("ocmero", {}), dict) else {}
     ablation = bundle.cfg.get("ablation", {}) if isinstance(bundle.cfg.get("ablation", {}), dict) else {}
     if bool(ablation.get("without_lower_tail", False)) or not bool(ocfg.get("use_lcvar", True)):
-        raise RuntimeError("V48.118 requires native lower-tail OC-MERO enabled")
+        raise RuntimeError("V48.119 requires native lower-tail OC-MERO enabled")
     if bool(ablation.get("without_observation_kernel", False)) or not bool(ocfg.get("use_obs_kernel", True)):
-        raise RuntimeError("V48.118 requires native observation-compatibility kernel enabled")
+        raise RuntimeError("V48.119 requires native observation-compatibility kernel enabled")
     alpha = float(ocfg.get("alpha", 0.2))
     beta = float(ocfg.get("beta", 0.2))
     top_m = int(ocfg.get("top_m", 8))
@@ -341,15 +356,15 @@ def extract_records(
     cfg, feature_event = feature_only_dataset_cfg(bundle.cfg, cache_dir=str(cache_dir / "tensor"), workers=8)
     ds = OCRAPSampleDataset(paths, cfg)
     if ds.absolute_truth_contract_event.get("enabled") or ds.action_response_truth_event.get("enabled"):
-        raise RuntimeError("V48.118 feature-only dataset unexpectedly attached truth sidecars")
+        raise RuntimeError("V48.119 feature-only dataset unexpectedly attached truth sidecars")
     if [str(pth.resolve()) for pth in paths] != [str(pth.resolve()) for pth in ds.paths]:
-        raise RuntimeError("V48.118 dataset path order differs from index")
+        raise RuntimeError("V48.119 dataset path order differs from index")
     idx = {str(pth.resolve()): i for i, pth in enumerate(ds.paths)}
 
     # Deterministic physical path deliberately excludes teacher m_star/root/future
     # fields.  Weak-root weights come from the *frozen model's nominal prediction*,
     # never from teacher root_probs/m_star/c_star arrays or held-out labels.
-    raw_sample = {str(pth.resolve()): load_npz_selected(pth, VSE_SAMPLE_KEYS) for pth in paths}
+    raw_sample = {str(pth.resolve()): load_npz_selected(pth, VOP_SAMPLE_KEYS) for pth in paths}
 
     records: list[dict[str, Any]] = []
     pair_diags: list[dict[str, Any]] = []
@@ -377,7 +392,7 @@ def extract_records(
                 option_valid=option_valid0, witness_only=True,
             )
         if "margins" not in native or "root_logits" not in native or "c_star" not in native:
-            raise RuntimeError("V48.118 frozen nominal model did not expose native OC-MERO fields")
+            raise RuntimeError("V48.119 frozen nominal model did not expose native OC-MERO fields")
 
         nominal_path = str(Path(g["nominal_path"]).resolve())
         d0 = raw_sample[nominal_path]
@@ -389,15 +404,15 @@ def extract_records(
         raw_option_features = option_features_from_sample(dict(d0))
         physical_L = int(len(f0.option_valid))
         if raw_option_features.shape[0] != physical_L:
-            raise RuntimeError("V48.118 raw option-feature/physical-library count mismatch")
+            raise RuntimeError("V48.119 raw option-feature/physical-library count mismatch")
         if model_option_features.shape[0] < physical_L:
-            raise RuntimeError("V48.118 model option geometry shrinks physical recovery library")
+            raise RuntimeError("V48.119 model option geometry shrinks physical recovery library")
         if not np.allclose(model_option_features[:physical_L], raw_option_features, rtol=0.0, atol=1.0e-7, equal_nan=True):
-            raise RuntimeError("V48.118 model/physical recovery-option semantic ordering mismatch")
+            raise RuntimeError("V48.119 model/physical recovery-option semantic ordering mismatch")
         if model_option_features.shape[0] > physical_L and not np.allclose(
             model_option_features[physical_L:], 0.0, rtol=0.0, atol=1.0e-12
         ):
-            raise RuntimeError("V48.118 padded model option features are not structural zeros")
+            raise RuntimeError("V48.119 padded model option features are not structural zeros")
 
         margins_np = native["margins"][0].detach().cpu().numpy()
         root_logits_np = native["root_logits"][0].detach().cpu().numpy()
@@ -413,7 +428,7 @@ def extract_records(
         )
         exposed_option_mask = np.asarray(physical_boundary_weights > 1.0e-12, dtype=bool)
         if not exposed_option_mask.any():
-            raise RuntimeError("V48.118 weak-root boundary support is empty")
+            raise RuntimeError("V48.119 weak-root boundary support is empty")
         bdiag = boundary_measure_diagnostics(bm)
         bdiag.update(boundary_align)
         boundary_measure_diags.append(bdiag)
@@ -423,21 +438,26 @@ def extract_records(
             dc = raw_sample[cp_path]
             validate_group_contract(d0, dc)
             fc = executable_constraint_field_from_sample(dc, bundle.cfg, num_options=len(f0.option_valid))
-            ee, eed = exposed_envelope_geometry(fc, f0, exposed_option_mask)
-            fe, fed = full_envelope_geometry(fc, f0)
+            ee, eed = exposed_profile_geometry(fc, f0, exposed_option_mask)
+            fe, fed = full_profile_geometry(fc, f0)
             physical_diag = set_flow_diagnostics(fc, f0)
             diag = dict(physical_diag)
             diag.update({
-                "exposed_envelope_nonzero": bool(np.any(np.abs(ee) > 1.0e-12)),
-                "full_envelope_nonzero": bool(np.any(np.abs(fe) > 1.0e-12)),
+                "exposed_profile_nonzero": bool(np.any(np.abs(ee) > 1.0e-12)),
+                "full_profile_nonzero": bool(np.any(np.abs(fe) > 1.0e-12)),
                 "option_permutation_invariance_error": option_permutation_invariance_error(
                     fc, f0, exposed_option_mask
                 ),
-                "envelope_decomposition_error": max(eed.max_decomposition_error, fed.max_decomposition_error),
-                "exposed_prefix_winner_union_count": eed.prefix_winner_union_count,
-                "exposed_suffix_winner_union_count": eed.suffix_winner_union_count,
-                "full_prefix_winner_union_count": fed.prefix_winner_union_count,
-                "full_suffix_winner_union_count": fed.suffix_winner_union_count,
+                "order_monotonicity_error": max(eed.max_monotonicity_error, fed.max_monotonicity_error),
+                "exposed_prefix_order_spread": eed.mean_prefix_order_spread,
+                "exposed_suffix_order_spread": eed.mean_suffix_order_spread,
+                "full_prefix_order_spread": fed.mean_prefix_order_spread,
+                "full_suffix_order_spread": fed.mean_suffix_order_spread,
+                "exposed_prefix_noncollapsed_fraction": eed.prefix_noncollapsed_fraction,
+                "exposed_suffix_noncollapsed_fraction": eed.suffix_noncollapsed_fraction,
+                "full_prefix_noncollapsed_fraction": fed.prefix_noncollapsed_fraction,
+                "full_suffix_noncollapsed_fraction": fed.suffix_noncollapsed_fraction,
+                "full_eligible_option_count": fed.mean_eligible_option_count,
                 "full_prefix_coverage_fraction": fed.prefix_coverage_fraction,
                 "full_suffix_coverage_fraction": fed.suffix_coverage_fraction,
             })
@@ -447,15 +467,15 @@ def extract_records(
                 "group_mode": g["group_mode"], "safe_positive": bool(c["safe_positive"]),
                 "teacher_harmful": bool(c["teacher_harmful"]), "mediation_mode": c["mediation_mode"],
                 "raw_state": stn[j], "support_u": dn[j], "reserve_u": qn[j],
-                "exposed_envelope_geometry": ee,
-                "full_envelope_geometry": fe,
+                "exposed_profile_geometry": ee,
+                "full_profile_geometry": fe,
             })
 
     merged = _merge_pair_diags(pair_diags)
     boundary_merged = _merge_boundary_measure_diags(boundary_measure_diags)
     event = {
         "records": len(records), "groups": len(groups), "raw_candidate_dim": RAW_CANDIDATE_DIM,
-        "envelope_geometry_dim": ENVELOPE_GEOMETRY_DIM, "matched_dim": MATCHED_DIM,
+        "profile_geometry_dim": PROFILE_GEOMETRY_DIM, "matched_dim": MATCHED_DIM,
         "constraint_names": ["clearance", "stopping", "route", "reentry"],
         "constraint_semantics": {
             "clearance": "actuator_projected_recovery_cv_signed_safety_reserve",
@@ -463,16 +483,18 @@ def extract_records(
             "route": "recovery_route_corridor_signed_reserve",
             "reentry": "physical_contact_activated_persistent_suffix_signed_reserve",
         },
-        "recovery_response": "joint_max_min_prefix_survival_and_suffix_reentry_envelope_over_executable_recovery_set",
+        "recovery_response": "fractional_upper_order_profile_of_same_option_joint_prefix_and_suffix_viability",
         "primary_option_set": "all_common_valid_recovery_options",
         "control_option_set": "support_of_frozen_weak_root_zero_boundary_witness_measure",
         "boundary_support_measure_source": "v48_117_outer_ocmero_weak_anchor_exposure_zero_margin_witness_support_only",
-        "boundary_support_weights_used_in_envelope": False,
-        "envelope_channels": ["signed_joint_prefix_viability_envelope", "signed_joint_suffix_persistent_reentry_envelope"],
+        "boundary_support_weights_used_in_profile": False,
+        "profile_channels": ["joint_prefix_viability_order_profile", "joint_suffix_persistent_reentry_order_profile"],
+        "order_masses": [float(x) for x in ORDER_MASSES],
+        "order_profile_definition": "exact_fractional_upper_tail_mean_over_joint_option_viability_margins",
         "zero_boundary_threshold": 0.0,
         "pre_readout_fixed_option_selector": False,
         "active_option_identity_exported": False,
-        "set_envelope_option_identity_may_switch_over_time": True,
+        "option_identity_exported": False,
         "actuator_projection": True,
         "pair_diagnostics": merged,
         "boundary_support_diagnostics": boundary_merged,
@@ -504,8 +526,8 @@ def _perm_indices(records: list[dict[str, Any]]) -> np.ndarray:
 
 def _arrays(records: list[dict[str, Any]], key: str):
     u = np.stack([r[key] for r in records]).astype(np.float64)
-    ee = np.stack([r["exposed_envelope_geometry"] for r in records]).astype(np.float64)
-    fe = np.stack([r["full_envelope_geometry"] for r in records]).astype(np.float64)
+    ee = np.stack([r["exposed_profile_geometry"] for r in records]).astype(np.float64)
+    fe = np.stack([r["full_profile_geometry"] for r in records]).astype(np.float64)
     y = np.asarray([r["label"] for r in records], dtype=np.int64)
     return u, ee, fe, y
 
@@ -516,8 +538,8 @@ def _fit_axis(records: list[dict[str, Any]], key: str) -> dict[str, Any]:
     pi = _perm_indices(records)
     feats = {
         "base": base_features(u, sc),
-        "exposed_envelope": matched_features(u, ee, sc),
-        "full_envelope": matched_features(u, fe, sc),
+        "exposed_profile": matched_features(u, ee, sc),
+        "full_profile": matched_features(u, fe, sc),
     }
     models: dict[str, Any] = {}
     for space, feat in feats.items():
@@ -554,7 +576,7 @@ def _metric(records: list[dict[str, Any]], scores: np.ndarray) -> dict[str, Any]
 
 
 def _eval_axis(records: list[dict[str, Any]], key: str, fit: dict[str, Any]) -> dict[str, tuple[dict[str, Any], dict[str, Any]]]:
-    spaces = ("base", "exposed_envelope", "full_envelope")
+    spaces = ("base", "exposed_profile", "full_profile")
     if not records:
         return {space: (_metric([], np.array([])), _metric([], np.array([]))) for space in spaces}
     u, ee, fe, _ = _arrays(records, key)
@@ -562,8 +584,8 @@ def _eval_axis(records: list[dict[str, Any]], key: str, fit: dict[str, Any]) -> 
     sc = fit["scaler"]; m = fit["models"]
     feats = {
         "base": base_features(u, sc),
-        "exposed_envelope": matched_features(u, ee, sc),
-        "full_envelope": matched_features(u, fe, sc),
+        "exposed_profile": matched_features(u, ee, sc),
+        "full_profile": matched_features(u, fe, sc),
     }
     out: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
     for space, f in feats.items():
@@ -576,7 +598,7 @@ def _eval_axis(records: list[dict[str, Any]], key: str, fit: dict[str, Any]) -> 
 
 
 def _eval_family(dev_records: list[dict[str, Any]], cert_records: list[dict[str, Any]], family: dict[str, Any]) -> dict[str, Any]:
-    cells = {k: {} for k in ("base", "exposed_envelope", "full_envelope")}
+    cells = {k: {} for k in ("base", "exposed_profile", "full_profile")}
     for role in ROLES:
         src = dev_records if role.startswith("dev_") else cert_records
         rr = split_role(src, role)
@@ -645,7 +667,7 @@ def main() -> int:
         ce += r
         events[role] = e
     if not tr or not dv or not ce:
-        raise RuntimeError("V48.118 empty audit records")
+        raise RuntimeError("V48.119 empty audit records")
 
     fam = _fit_family(tr)
     cells = _eval_family(dv, ce, fam)
@@ -655,7 +677,7 @@ def main() -> int:
         for v in fam[axis]["models"].values()
     )
     result = {
-        "schema": "ocrap-v48.118-viability-survival-envelope-audit-v1",
+        "schema": "ocrap-v48.119-viability-order-profile-audit-v1",
         "engineering_version": ENGINEERING_VERSION,
         "scientific_version": SCIENTIFIC_VERSION,
         "run_instance_id": a.run_id,
@@ -666,8 +688,8 @@ def main() -> int:
         "checkpoint": str(a.checkpoint.resolve()),
         "checkpoint_sha256": sha256(a.checkpoint),
         "base_cells": cells["base"],
-        "exposed_envelope_cells": cells["exposed_envelope"],
-        "full_envelope_cells": cells["full_envelope"],
+        "exposed_profile_cells": cells["exposed_profile"],
+        "full_profile_cells": cells["full_profile"],
         "events": events,
         "train_counts": fam["counts"],
         "convex_closed_form_ridge": True,
@@ -675,23 +697,26 @@ def main() -> int:
         "iterative_optimizer_used": False,
         "ridge_lambda_rule": "1_over_axis_train_rows",
         "max_normal_equation_residual": max_resid,
-        "score_family": "linear_on_signed_joint_recovery_set_viability_survival_envelope_features",
+        "score_family": "linear_on_signed_joint_recovery_set_viability_order_profile_features",
         "nominal_zero_score_by_construction": True,
         "constraint_names": ["clearance", "stopping", "route", "reentry"],
-        "constraint_response": "joint_max_min_prefix_survival_and_suffix_persistent_reentry_envelope",
-        "envelope_channels": ["signed_joint_prefix_viability_envelope", "signed_joint_suffix_persistent_reentry_envelope"],
-        "option_aggregation": "permutation_invariant_max_over_common_valid_recovery_options_after_joint_constraint_min",
+        "constraint_response": "same_option_joint_prefix_and_suffix_viability_order_profile",
+        "profile_channels": ["joint_prefix_viability_order_profile", "joint_suffix_persistent_reentry_order_profile"],
+        "option_aggregation": "permutation_invariant_fractional_upper_tail_means_of_joint_viability_order_statistics",
         "primary_option_set": "all_common_valid_recovery_options",
         "control_option_set": "support_of_frozen_v48_117_weak_root_zero_boundary_witnesses",
-        "boundary_support_weights_used": False,
+        "boundary_support_weights_used_in_profile": False,
+        "order_masses": [float(x) for x in ORDER_MASSES],
+        "order_profile_definition": "exact_fractional_upper_tail_mean_over_joint_option_viability_margins",
+        "uniform_mean_standalone_family": False,
         "active_option_identity_exported": False,
-        "set_envelope_option_identity_may_switch_over_time": True,
+        "option_identity_exported": False,
         "frozen_root_decoder_read_only": True,
         "frozen_margin_head_read_only": True,
         "work_bins": 8,
-        "envelope_geometry_dimension": ENVELOPE_GEOMETRY_DIM,
+        "profile_geometry_dimension": PROFILE_GEOMETRY_DIM,
         "matched_family_dimension": MATCHED_DIM,
-        "capacity_matched_all_envelope_families": True,
+        "capacity_matched_all_profile_families": True,
         "candidate_identity_shuffle": "whole_feature_row_cyclic_permutation_within_scene_time_group",
         "actuator_projection": True,
         "frozen_root_validity_mask_used": True,
@@ -717,7 +742,7 @@ def main() -> int:
     a.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     torch.save(
         {
-            "schema": "ocrap-v48.118-viability-survival-envelope-state-v1",
+            "schema": "ocrap-v48.119-viability-order-profile-state-v1",
             "engineering_version": ENGINEERING_VERSION,
             "scientific_version": SCIENTIFIC_VERSION,
             "run_instance_id": a.run_id,
