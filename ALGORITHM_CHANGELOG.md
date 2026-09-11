@@ -13092,3 +13092,179 @@ otherwise STOP
 ### Engineering implementation
 
 The stable command and launcher filename are unchanged.  V48.114 adds the semantic module `src/ocrap/audits/common_option_constraint_work.py`; the existing executable-constraint field now retains its full-horizon signed paths in addition to the historical eight knots, without changing the V48.113 knot outputs.  Runtime provenance, pipeline fail-closed checking, canonical result packaging, and tests are updated to V48.114.
+
+## V48.115 OC-RSCF — Observation-Consistent Recovery-Set Constraint Flow Audit
+
+**Category:** preregistered audit-only successor to the engineering-valid V48.114 OC-CCW scientific STOP. No planner/Stage-I/root/source/relative-ranker parameter is trained; no boundary transport, regime conditioning, dataset reconstruction, threshold/horizon/option-count/capacity sweep, or teacher-future feature is introduced.
+
+### Authoritative V48.114 result and scientific decision
+
+V48.114 passes the engineering/scientific attribution gate. Runtime provenance, canonical artifact SHA closure, a single `run_instance_id`, zero trainable planner/source state, and closed-form strictly-convex ridge ownership are intact. Balanced and precision are exact scientific duplicates, hence the effective evidence is four unique roles. The independent state audit gives 159 Support rows and 61 Reserve rows; the largest relevant normal-equation residual is about `1.81e-9`.
+
+The preregistered result is nevertheless:
+
+```text
+status = COMMON_OPTION_CONSTRAINT_WORK_STOP
+next   = close_selected_option_fixed_bin_work_family
+         -> selector-free recovery-set constraint-flow audit
+```
+
+The failure is not inactivity. All four constraints and multiple recovery modes are exercised; option switching occurs in all roles; full-horizon integral response and positive-reserve work are nonzero in every role; debt work is nonzero in both Contact roles; post-contact re-entry coverage passes; and the reserve/debt work conservation identity holds to approximately `5.3e-15`.
+
+The factorized result is informative rather than uniformly null:
+
+```text
+Integral vs V48.113 pointwise Support: GO as a contrast only
+  dev-Near +0.0234, dev-Contact -0.1136,
+  cert-Near +0.4000, cert-Contact +0.0522
+but absolute candidate-integral Support remains STOP,
+and integral Reserve is STOP.
+
+Signed work vs integral Reserve: GO as a contrast only
+  dev-Near +0.5000 [underpowered], dev-Contact +0.0625,
+  cert-Near -0.2619, cert-Contact +0.1944
+but candidate-work absolute Reserve remains STOP.
+
+Candidate-work vs nominal-work Support: GO as a contrast only
+  dev-Near -0.1250, dev-Contact +0.0170,
+  cert-Near +0.0727, cert-Contact +0.0070
+while the corresponding Reserve selector contrast is STOP.
+```
+
+Therefore V48.114 does **not** prove the previously hypothesized complete `full-horizon signed constraint work` operator across Near/Contact, dev/certificate, and Support/Reserve. Carrier/Main integration remains unauthorized.
+
+### What is retained versus closed
+
+Retain as mechanism evidence, not Main modules:
+
+- full-horizon accumulation carries genuine Support information, especially certificate-Near;
+- the reserve/debt decomposition carries genuine Contact debt-side information;
+- candidate-conditioned option ownership can improve Support ordering in several populations;
+- actuator-realizable heterogeneous constraint paths, re-entry semantics, same-option causal correspondence, OC-MERO information legality, and RIFA role isolation remain valid foundations.
+
+Close as a complete transferable mechanism:
+
+```text
+selected-option sparse ECJ
+selected-option fixed-bin integral/work representation
+hard pre-readout option ownership as the causal state representation
+```
+
+The following previously closed directions remain closed: fixed-CV active-agent geometry, prefix HCNC as a complete mechanism, agent/constraint count expansion, width/rank/attention/MLP growth, LR/lambda/threshold/horizon sweeps, class-local learned transport, generic AFE, regime router/expert/policy/budget, Stage-I/root/source/relative-ranker retraining, boundary transport, unsupported option-library expansion, and dataset reconstruction.
+
+No old closed family is reopened in V48.115. The registered STOP fallback may later use **frozen existing roots for an offline weak-root-conditioned audit**; that is not root-decoder retraining and does not reopen the closed root-training direction.
+
+### Dominant bottleneck after V48.114
+
+The bottleneck is narrowed from temporal sparsity/work semantics to:
+
+```text
+population-stable candidate-induced deformation of the executable recovery set
+BEFORE recovery-option selection.
+```
+
+V48.114 shows that a hard max-min-selected option is not a stable carrier of the action-causal quantity: Support option ownership has partial signal, but Reserve/debt selection changes sign across populations. Since the recovery library itself is finite and common, option identity should be treated as a set element during causal representation; legal option selection remains a downstream OC-MERO operation.
+
+The theory to falsify is:
+
+> **Deployable recoverability is governed by a permutation-invariant deformation of the common executable recovery set induced by the candidate action; recovery-option selection is a downstream decision operation, not part of the causal state representation.**
+
+This matches the central OC-MERO information pattern: each fixed option must first be evaluated under the observation-compatible uncertainty set before option selection is legal. V48.115 applies the analogous discipline one layer earlier to the candidate-response representation.
+
+### V48.115 representation
+
+For every recovery option `g_l` that is valid for both candidate and nominal, V48.115 computes the exact same-option actuator-projected full-horizon constraint response. It then aggregates **all common valid options before any hard selector**.
+
+Two equal-capacity selector-free families are registered:
+
+```text
+set_integral = E_l[ bin_mean(Delta h), bin_mean(Delta h * h0) ]
+
+set_work = E_l[
+    [h_a]_+ - [h_0]_+,
+    [-h_0]_+ - [-h_a]_+
+]
+```
+
+where `E_l` is the uniform empirical mean over the finite common valid recovery-option set. This is a parameter-free first moment: it is permutation-invariant to recovery-option ordering, preserves same-option causal correspondence inside every summand, and cannot leak a candidate-conditioned argmax identity into the feature path. It does **not** remove option selection from OC-MERO; it defers selection to its legally defined downstream location.
+
+The exact work identity is preserved after set aggregation:
+
+```text
+E_l[reserve_work] + E_l[debt_work] = E_l[Delta h].
+```
+
+The historical eight full-horizon bins and four constraints are unchanged:
+
+```text
+8 bins x 4 constraints x 2 channels = 64-D
+156-D frozen candidate response + 64-D = 220-D
+```
+
+Thus V48.115 changes neither statistical feature width, optimizer, cohort, horizon, root model, nor option library.
+
+### Factorized causal experiment
+
+V48.115 fits only:
+
+```text
+base         = historical 156-D frozen candidate response
+set_integral = 156-D + selector-free full-horizon integral set flow
+set_work     = 156-D + selector-free reserve/debt set work
+```
+
+All use the same class-balanced strictly-convex closed-form ridge and whole-feature-row cyclic candidate shuffle.
+
+Primary contrasts:
+
+```text
+set_integral - V48.114 candidate_integral
+    tests removal of premature hard option selection for integral response.
+
+set_work - V48.114 candidate_work
+    tests removal of premature hard option selection for signed work.
+
+set_work - set_integral
+    tests whether signed reserve/debt decomposition is still additionally useful
+    once option selection is removed.
+```
+
+The activity gate additionally requires exact set-work conservation and option-permutation invariance (`<=1e-10`), nonzero and option-diverse set flow over >=3/4 unique roles with Near+Contact, at least two common options, and re-entry availability in a Contact role.
+
+### Preregistered promotion / STOP tree
+
+Absolute Support and Reserve gates retain V48.114 thresholds; balanced/precision exact duplicates still count as four unique roles.
+
+```text
+set_work absolute Support+Reserve GO
++ set_work vs V48.114 selected-work Support+Reserve GO
++ activity/re-entry GO
++ set_work vs set_integral Support+Reserve GO
+  -> RECOVERY_SET_CONSTRAINT_FLOW_GO;
+     promote selector-free signed recovery-set flow;
+     authorize exactly one Main/carrier integration.
+
+set_work core GO, decomposition not required
+  -> promote selector-free recovery-set flow only;
+     do not claim reserve/debt decomposition is necessary;
+     authorize one carrier integration.
+
+set_integral core GO
+  -> promote selector-free integral recovery-set flow only;
+     authorize one carrier integration.
+
+Support-only or Reserve-only
+  -> retain only that axis and audit the missing weak-tail axis.
+
+both axes only local-order GO
+  -> one pairwise audit on the exact same selector-free set features.
+
+otherwise STOP
+  -> close observation-only uniform option-set mean flow;
+     next branch = OC-MERO weak-root-conditioned recovery-set flow audit
+     using frozen roots only, with no root training/capacity/regime/source sweep.
+```
+
+### Engineering implementation
+
+The stable launcher filename and user command remain unchanged. V48.115 adds the semantic module `src/ocrap/audits/recovery_set_constraint_flow.py`, updates the unversioned runner/comparator/runtime/pipeline/packager, and fails closed on the exact authoritative V48.114 SHA/status/registered branch before GPU work.

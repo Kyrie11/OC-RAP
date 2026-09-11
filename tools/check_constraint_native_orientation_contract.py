@@ -13,6 +13,7 @@ ACTIVE = [
     "src/ocrap/audits/heterogeneous_constraint_normal_cone.py",
     "src/ocrap/audits/executable_constraint_jacobian.py",
     "src/ocrap/audits/common_option_constraint_work.py",
+    "src/ocrap/audits/recovery_set_constraint_flow.py",
     "tools/run_constraint_native_recovery_orientation_audit.py",
     "tools/compare_constraint_native_recovery_orientation.py",
     "tools/check_constraint_native_orientation_contract.py",
@@ -43,6 +44,7 @@ def main() -> int:
     import ocrap.audits.heterogeneous_constraint_normal_cone as hcnc
     import ocrap.audits.executable_constraint_jacobian as ecj
     import ocrap.audits.common_option_constraint_work as ccw
+    import ocrap.audits.recovery_set_constraint_flow as rscf
 
     for rel in ACTIVE:
         p = (repo / rel).resolve()
@@ -62,6 +64,7 @@ def main() -> int:
         "heterogeneous_constraint_normal_cone": str(Path(hcnc.__file__).resolve()),
         "executable_constraint_jacobian": str(Path(ecj.__file__).resolve()),
         "common_option_constraint_work": str(Path(ccw.__file__).resolve()),
+        "recovery_set_constraint_flow": str(Path(rscf.__file__).resolve()),
     }
     expected = {
         "ocrap": str((repo / "src/ocrap/__init__.py").resolve()),
@@ -69,20 +72,21 @@ def main() -> int:
         "heterogeneous_constraint_normal_cone": str((repo / "src/ocrap/audits/heterogeneous_constraint_normal_cone.py").resolve()),
         "executable_constraint_jacobian": str((repo / "src/ocrap/audits/executable_constraint_jacobian.py").resolve()),
         "common_option_constraint_work": str((repo / "src/ocrap/audits/common_option_constraint_work.py").resolve()),
+        "recovery_set_constraint_flow": str((repo / "src/ocrap/audits/recovery_set_constraint_flow.py").resolve()),
     }
     for k, v in imported.items():
         if v != expected[k]:
             errors.append(f"import_path:{k}:{v}")
 
-    checks = ccw.contract_checks()
+    checks = rscf.contract_checks()
     for k, v in checks.items():
         if not v:
             errors.append(f"synthetic:{k}")
 
     out = {
-        "schema": "ocrap-v48.114-ccw-runtime-code-contract-v1",
-        "engineering_version": ccw.ENGINEERING_VERSION,
-        "scientific_version": ccw.SCIENTIFIC_VERSION,
+        "schema": "ocrap-v48.115-rscf-runtime-code-contract-v1",
+        "engineering_version": rscf.ENGINEERING_VERSION,
+        "scientific_version": rscf.SCIENTIFIC_VERSION,
         "run_instance_id": a.run_id,
         "valid": not errors,
         "attribution_ready": not errors,
@@ -94,20 +98,22 @@ def main() -> int:
         "historical_code_dependency": False,
         "scientific_contract": {
             "audit_only": True,
-            "common_option_full_horizon_constraint_work": True,
+            "selector_free_recovery_set_constraint_flow": True,
             "constraint_names": ["clearance", "stopping", "route", "reentry"],
-            "same_option_candidate_minus_nominal": True,
+            "same_option_inside_each_set_summand": True,
             "actuator_projection": True,
             "existing_recovery_horizon_only": True,
-            "work_bins": ccw.WORK_BINS,
+            "work_bins": rscf.WORK_BINS,
             "work_bins_cover_full_horizon": True,
-            "integral_control_channels": ["bin_mean_delta_h", "bin_mean_delta_h_times_h0"],
+            "integral_channels": ["bin_mean_delta_h", "bin_mean_delta_h_times_h0"],
             "constraint_work_channels": ["positive_reserve_work", "negative_debt_repayment_work"],
             "work_conservation_identity": "reserve_work_plus_debt_work_equals_bin_mean_delta_h",
-            "nominal_option_selector": "nominal_maximin_over_full_executable_recovery_constraint_path",
-            "candidate_option_selector": "candidate_maximin_over_full_executable_recovery_constraint_path",
-            "work_geometry_dim": ccw.WORK_GEOMETRY_DIM,
-            "matched_family_dim": ccw.MATCHED_DIM,
+            "option_aggregation": "uniform_empirical_mean_over_all_common_valid_recovery_options",
+            "pre_readout_hard_option_selector": False,
+            "downstream_ocmero_option_selection_unchanged": True,
+            "option_permutation_invariant": True,
+            "set_geometry_dim": rscf.SET_GEOMETRY_DIM,
+            "matched_family_dim": rscf.MATCHED_DIM,
             "capacity_matched_all_families": True,
             "candidate_identity_shuffle": "whole_feature_row_cyclic_permutation_within_scene_time_group",
             "convex_closed_form_ridge": True,
@@ -121,6 +127,7 @@ def main() -> int:
             "threshold_sweep": False,
             "capacity_sweep": False,
             "horizon_sweep": False,
+            "option_count_sweep": False,
             "planner_parameters_trained": 0,
             "stage_i_parameters_trained": 0,
             "root_decoder_parameters_trained": 0,

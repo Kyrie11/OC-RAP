@@ -1,12 +1,12 @@
 # OC-RAP — cleaned audit/deployment workspace
 
-This repository is the cleaned engineering workspace for the current V48.113 OC-ECJ audit plus the
+This repository is the cleaned engineering workspace for the current V48.115 OC-RSCF audit plus the
 publication-facing evaluation utilities used by the deployed OC-RAP stack.
 
 ## What is active
 
-- `scripts/run_constraint_native_orientation_audit.sh`: the stable semantic scientific launcher.  It currently runs V48.113 OC-ECJ.
-  V48.113 is an **audit-only** equal-capacity closed-form executable constraint-Jacobian experiment. It evaluates
+- `scripts/run_constraint_native_orientation_audit.sh`: the stable semantic scientific launcher.  It currently runs V48.115 OC-RSCF.
+  V48.115 is an **audit-only** equal-capacity closed-form selector-free recovery-set constraint-flow experiment. It evaluates
   same-option candidate-minus-nominal signed constraint response over the existing actuator-projected recovery continuation;
   it does not train or mutate the frozen OC-RAP planner.
 - `scripts/run_ocrap_evaluation.sh`: direct Safe / Near-Contact / Contact closed-loop evaluation of
