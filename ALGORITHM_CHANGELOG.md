@@ -12738,3 +12738,182 @@ collision-active object.
 ```
 
 If validated, the same cone supplies a unified signed semantics: positive active slack is recovery reserve; negative active slack is recovery debt.  V48.112 does not claim this theory is true in advance; the equal-capacity audit is the preregistered causal test.
+
+## V48.112 authoritative result — OC-HCNC heterogeneous constraint normal-cone audit
+
+### Reliability / attribution
+
+The authoritative V48.112 bundle is engineering-valid and attribution-ready.  Runtime imports resolve to the expected cleaned repository, the result bundle is SHA-bound to one run instance, the V48.111 prerequisite hashes match, and both balanced/precision probes use the same 220-D capacity-matched closed-form ridge family.  No Stage-I/root/source/planner parameter is trained, no test root is read, no dataset is reconstructed, no regime identifier is exposed, and boundary transport remains disabled.  The maximum normal-equation residual is approximately `7.33e-11`, so optimizer ambiguity is not a plausible explanation for the result.
+
+Balanced and precision metrics are exact duplicates; they therefore count as four unique roles, not eight statistically independent repetitions.
+
+### Preregistered scientific decision
+
+V48.112 is a **scientific STOP**:
+
+```text
+status = HETEROGENEOUS_CONSTRAINT_NORMAL_CONE_STOP
+next_branch = close_prefix_level_first_order_constraint_cone_then_preregister_candidate_option_executable_constraint_jacobian_audit_no_training_or_source_sweep
+```
+
+The candidate-cone Support and Reserve absolute gates both fail.  The matched candidate-minus-nominal Support gate also fails: its unique-role AUC deltas are approximately `+0.00781` (dev-Near), `-0.07386` (dev-Contact), `-0.14545` (certificate-Near), and `-0.04000` (certificate-Contact).  The matched Reserve contrast is more informative: `0.00000` (dev-Near), `+0.19271` (dev-Contact), `-0.16667` (certificate-Near), and `+0.01389` (certificate-Contact).  Thus candidate-conditioned heterogeneous constraints carry a strong Contact debt-side local signal, but it is not a cross-role population-shared orientation.
+
+The heterogeneity premise did activate: all four unique roles exhibit candidate-vs-nominal selector switching, with candidate-any-switch fractions about `0.319`, `0.342`, `0.414`, and `0.404`; clearance, stopping, and route all become active constraint types.  However persistent re-entry is selected in **zero** evaluation roles, so the preregistered activity gate fails.  This is not an implementation failure: the V48.112 re-entry constraint is activated only after physical contact is already observed or reached inside the first-eight-state candidate prefix.  It appears only four times in the training candidate prefixes and never in the held-out audit prefixes.  Therefore prefix-level geometry cannot test the post-contact persistence semantics that motivated the constraint in the first place.
+
+### Mechanism interpretation and family closure
+
+V48.112 rejects the stronger statement that a **prefix-level first-order heterogeneous active-constraint cone** is a sufficient transferable recovery orientation.  It does not reject heterogeneous signed constraints themselves.  Compared with V48.111, changing the object from selected-agent CV clearance to active constraint type produces a large local Contact Reserve improvement (`+0.19271` on dev-Contact and `+0.01389` on certificate-Contact), while V48.111 Reserve active-minus-nearest was exactly zero in every role.  This supports the higher-level premise that recovery debt is constraint-structured rather than object-identity-structured.
+
+An exploratory coefficient audit also confirms that the 64-D heterogeneous geometry is not being ignored by the convex probe: its coefficient block has substantial norm on both Support and Reserve.  Therefore the scientific failure should not be described as “the model ignored the new features.”  The failure is transfer/selectivity: prefix state alone does not say how an **executable recovery option** will move the active signed constraints over the continuation where re-entry and debt repayment actually occur.
+
+The closed family after V48.112 is therefore:
+
+```text
+fixed-CV selected-agent geometry
++ prefix-level first-order heterogeneous cone
+```
+
+Do not reopen pair-count/width/rank/regularization/LR/threshold/horizon sweeps, class-local learned correction, generic MLP/AFE, regime routing, Stage-I/root/source/relative-ranker training, boundary transport, or dataset reconstruction to rescue this audit.
+
+### Unified Near / Contact bottleneck after V48.112
+
+The dominant unresolved object is now:
+
+```text
+observation-consistent candidate × recovery-option executable constraint response
+over the same signed reserve/debt geometry
+```
+
+Near and Contact remain states of one signed recovery system.  Near asks whether a common executable continuation preserves positive headroom on the binding constraints.  Contact asks whether the same continuation repays negative constraint debt and reaches persistent non-contact without route/stopping deterioration.  The difference is the sign and active constraint trajectory, not a regime-specific policy or router.
+
+The largest remaining gap to internal convergence is the absence of a population-shared, observation-only causal operator connecting a candidate action and a fixed executable recovery option to the **time evolution** of the constraints that actually determine deployable recoverability.  OC-MERO/RIFA, actuator-realizable continuation, signed reserve/debt semantics, and the importance of candidate-conditioned switching have stronger evidence than this missing operator.
+
+## V48.113 OC-ECJ — Observation-Consistent Executable Constraint Jacobian Audit
+
+### Registered question
+
+V48.113 implements exactly the branch registered by V48.112 STOP.  It asks whether recovery orientation becomes transferable when the signed response is measured **after executing the same recovery option**, rather than only inside the first eight candidate-prefix states.
+
+No new model head, trainable source, horizon, threshold, regime router, teacher future, or boundary transport is introduced.  V48.113 remains an audit-only closed-form convex experiment.
+
+### Same-option executable constraint response
+
+For candidate `a`, nominal candidate `a0`, and valid recovery option `g_l`, let `Phi(a,g_l)` be the existing deterministic actuator-projected recovery rollout.  For each signed constraint `c` in
+
+```text
+clearance, stopping, route, persistent re-entry
+```
+
+at eight fixed knots spanning the **already configured** recovery horizon, define the finite-difference response
+
+```text
+Delta h_l,c(t; a) = h_c(Phi(a,g_l), t) - h_c(Phi(a0,g_l), t).
+```
+
+The response always uses the **same option identity** on the candidate and nominal sides.  This prevents a cross-option comparison from being mistaken for an action derivative.  Two channels are retained per constraint/knot:
+
+```text
+Delta h_l,c(t)
+Delta h_l,c(t) * h_l,c^nominal(t)
+```
+
+so the geometry remains `4 x 8 x 2 = 64-D`, and with the unchanged 156-D candidate response each family is 220-D.
+
+All recovery rollouts use the existing actuator projection.  Re-entry becomes active from observation/prefix/recovery physical contact and then requires a persistent nonnegative suffix reserve; it is never activated by a Contact label.
+
+### Equal-capacity selector experiment
+
+For every candidate, score each valid recovery option by the minimum signed constraint over its complete executable continuation and select the deterministic max-min option.  V48.113 compares:
+
+```text
+nominal_option:
+  option selected under the nominal prefix;
+  candidate-minus-nominal response evaluated with that same option.
+
+candidate_option:
+  option selected under the candidate prefix;
+  candidate-minus-nominal response evaluated with that same option.
+```
+
+Both remain 220-D.  The comparison therefore separates two questions without changing function-class capacity: whether executable same-option constraint response is informative at all, and whether candidate-conditioned option selection adds information beyond a nominally selected executable option.
+
+### V48.112 identity prerequisite
+
+Before running, the launcher must verify the authoritative V48.112 STOP artifacts and exact SHA values for its pipeline, comparison, balanced result, and precision result.  The V48.113 base family must reproduce V48.112 base held-out AUC exactly.  Any mismatch is an engineering STOP.
+
+### Preregistered scientific gates
+
+The candidate-option Support and Reserve absolute action gates keep the historical high standard:
+
+```text
+AUC >= 0.65 AND true-minus-shuffled >= +0.05 in >=6/8 legacy cells;
+>=3/4 unique roles with Near + Contact represented;
+Top1 lift >= +0.10 in >=4/8 legacy cells with Near + Contact represented.
+```
+
+The primary causal test is the executable-continuation increment over the authoritative V48.112 prefix candidate-cone, separately for Support and Reserve:
+
+```text
+candidate_option AUC - V48.112 candidate_cone AUC > 0
+in >=6/8 legacy cells / >=3/4 unique roles,
+with Near + Contact represented;
+
+and >=4/8 legacy cells >= +0.01.
+```
+
+Candidate-adaptive option selection is a separate secondary gate, again separately for Support and Reserve:
+
+```text
+candidate_option - nominal_option AUC > 0
+in >=6/8 legacy cells / >=3/4 unique roles,
+with Near + Contact represented;
+
+and >=4/8 legacy cells >= +0.01.
+```
+
+Activity is deliberately decomposed.  The **core ECJ activity gate** requires heterogeneous candidate-selected active-constraint types in at least 3/4 unique roles with Near and Contact coverage.  The **adaptive-selector activity gate** separately requires candidate-vs-nominal option switching and recovery-mode diversity in at least 3/4 unique roles.  Persistent re-entry coverage is a third, explicit post-contact evidence gate: at least one Contact role must contain an actually re-entry-active selected continuation before the result may be promoted as a complete unified post-contact mechanism.  It is not part of the core ECJ gate because the paper-level Contact bucket can be generated by a counterfactual contact-surrogate and does not imply an observed overlap at the audit anchor.
+
+### Preregistered branches
+
+```text
+core executable-Jacobian GO + adaptive selector GO + re-entry coverage GO
+  -> promote same-option ECJ + candidate-conditioned option selector;
+     authorize exactly one nominal-invariant carrier experiment.
+
+core/adaptive GO but re-entry coverage missing
+  -> retain the supported executable-Jacobian mechanism, but do not claim a
+     complete post-contact mechanism and do not integrate it into Main; first
+     obtain an observed-contact re-entry coverage audit without a regime router.
+
+core executable-Jacobian GO + selector STOP + re-entry coverage GO
+  -> promote same-option executable constraint Jacobian only;
+     keep option selector frozen; authorize one carrier experiment.
+
+Reserve-only / Support-only
+  -> keep only the corresponding mechanism conclusion and audit the missing axis.
+
+both axes formal STOP but both local-order GO
+  -> one convex pairwise audit on the exact same features.
+
+otherwise STOP
+  -> close selected-option first-order Jacobian family;
+     next branch = common-option constraint-work audit;
+     no capacity, threshold, horizon, regime or source sweep.
+```
+
+### Families kept closed during V48.113
+
+All V48.112 closures remain binding: fixed-CV agent geometry; prefix-level first-order HCNC as a complete mechanism; pair/width/rank/lambda/LR/threshold/horizon sweeps; class-local transport; generic MLP/AFE; regime-specific policies; Stage-I/root/source/relative-ranker modification; boundary transport; and dataset reconstruction.
+
+### Working theory
+
+V48.113 tests a sharper CCF-A-level statement:
+
+```text
+Deployable recoverability is not determined by the identity of a dangerous object
+or by a prefix-only active constraint label.  It is determined by the signed work
+that a candidate action, through a common executable recovery continuation, performs
+on the constraints that bind the deployable recovery set.
+```
+
+This keeps one mathematical object across all regimes: positive constraint work preserves recovery reserve in Near/Safe; negative debt that is repaid over the same continuation describes Contact recovery.  V48.113 does not assume this theory is true; the equal-capacity, same-option audit is the preregistered falsification test.

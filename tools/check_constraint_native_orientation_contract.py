@@ -11,6 +11,7 @@ ACTIVE = [
     "scripts/run_constraint_native_orientation_audit.sh",
     "src/ocrap/audits/constraint_native_orientation.py",
     "src/ocrap/audits/heterogeneous_constraint_normal_cone.py",
+    "src/ocrap/audits/executable_constraint_jacobian.py",
     "tools/run_constraint_native_recovery_orientation_audit.py",
     "tools/compare_constraint_native_recovery_orientation.py",
     "tools/check_constraint_native_orientation_contract.py",
@@ -37,8 +38,9 @@ def main() -> int:
     if src not in sys.path:
         sys.path.insert(0, src)
     import ocrap
-    import ocrap.audits.constraint_native_orientation as legacy_primitives
+    import ocrap.audits.constraint_native_orientation as base_primitives
     import ocrap.audits.heterogeneous_constraint_normal_cone as hcnc
+    import ocrap.audits.executable_constraint_jacobian as ecj
 
     for rel in ACTIVE:
         p = (repo / rel).resolve()
@@ -54,76 +56,76 @@ def main() -> int:
 
     imported = {
         "ocrap": str(Path(ocrap.__file__).resolve()),
-        "constraint_native_orientation": str(Path(legacy_primitives.__file__).resolve()),
+        "constraint_native_orientation": str(Path(base_primitives.__file__).resolve()),
         "heterogeneous_constraint_normal_cone": str(Path(hcnc.__file__).resolve()),
+        "executable_constraint_jacobian": str(Path(ecj.__file__).resolve()),
     }
-    expected_imports = {
+    expected = {
         "ocrap": str((repo / "src/ocrap/__init__.py").resolve()),
         "constraint_native_orientation": str((repo / "src/ocrap/audits/constraint_native_orientation.py").resolve()),
         "heterogeneous_constraint_normal_cone": str((repo / "src/ocrap/audits/heterogeneous_constraint_normal_cone.py").resolve()),
+        "executable_constraint_jacobian": str((repo / "src/ocrap/audits/executable_constraint_jacobian.py").resolve()),
     }
     for k, v in imported.items():
-        if v != expected_imports[k]:
+        if v != expected[k]:
             errors.append(f"import_path:{k}:{v}")
 
-    checks = hcnc.contract_checks()
+    checks = ecj.contract_checks()
     for k, v in checks.items():
         if not v:
             errors.append(f"synthetic:{k}")
 
     out = {
-        "schema": "ocrap-v48.112-hcnc-runtime-code-contract-v1",
-        "engineering_version": hcnc.ENGINEERING_VERSION,
-        "scientific_version": hcnc.SCIENTIFIC_VERSION,
+        "schema": "ocrap-v48.113-ecj-runtime-code-contract-v1",
+        "engineering_version": ecj.ENGINEERING_VERSION,
+        "scientific_version": ecj.SCIENTIFIC_VERSION,
         "run_instance_id": a.run_id,
         "valid": not errors,
         "attribution_ready": not errors,
         "errors": errors,
         "runtime_files": files,
         "imported_modules": imported,
-        "expected_imported_modules": expected_imports,
+        "expected_imported_modules": expected,
+        "code_layout": "unversioned_semantic_modules",
+        "historical_code_dependency": False,
         "scientific_contract": {
             "audit_only": True,
-            "heterogeneous_active_constraint_normal_cone": True,
+            "candidate_option_executable_constraint_jacobian": True,
             "constraint_names": ["clearance", "stopping", "route", "reentry"],
-            "constraint_response": "candidate_minus_nominal_normalized_signed_constraint_path",
-            "boundary_context_channel": "constraint_response_times_nominal_signed_constraint",
-            "prefix_complete_states": 8,
-            "external_continuation": "constant_velocity_for_observed_agents_only",
-            "nominal_cone_selector": "minimum_nominal_signed_constraint_per_prefix_time",
-            "candidate_cone_selector": "minimum_candidate_signed_constraint_per_prefix_time",
-            "cone_geometry_dim": hcnc.CONE_GEOMETRY_DIM,
-            "matched_family_dim": hcnc.MATCHED_DIM,
-            "capacity_matched_nominal_vs_candidate_cone": True,
-            "support_response_coordinate": "candidate_minus_nominal_raw_delta",
-            "reserve_response_coordinate": "delta_times_one_plus_tanh_nominal_raw_state",
+            "constraint_response": "same_option_actuator_projected_candidate_minus_nominal_signed_constraint_path",
+            "actuator_projection": True,
+            "recovery_knots": ecj.RECOVERY_KNOTS,
+            "existing_recovery_horizon_only": True,
+            "nominal_option_selector": "nominal_maximin_over_full_executable_recovery_constraint_path",
+            "candidate_option_selector": "candidate_maximin_over_full_executable_recovery_constraint_path",
+            "jacobian_geometry_dim": ecj.JACOBIAN_GEOMETRY_DIM,
+            "matched_family_dim": ecj.MATCHED_DIM,
+            "capacity_matched_nominal_vs_candidate_option": True,
+            "candidate_identity_shuffle": "whole_feature_row_cyclic_permutation_within_scene_time_group",
             "convex_closed_form_ridge": True,
             "strictly_convex_unique_solution": True,
-            "iterative_optimizer_used": False,
             "ridge_lambda_rule": "1_over_axis_train_rows",
-            "nominal_zero_score_by_construction": True,
-            "candidate_identity_shuffle": "whole_feature_row_cyclic_permutation_within_scene_time_group",
+            "teacher_npz_fields_loaded_into_feature_path": False,
+            "teacher_metadata_input_to_model": False,
+            "iterative_optimizer_used": False,
             "posthoc_feature_selection": False,
+            "lr_or_epoch_sweep": False,
+            "threshold_sweep": False,
+            "capacity_sweep": False,
+            "planner_parameters_trained": 0,
             "stage_i_parameters_trained": 0,
             "root_decoder_parameters_trained": 0,
             "source_parameters_trained": 0,
-            "planner_parameters_trained": 0,
+            "relative_ranker_modified": False,
             "boundary_transport": False,
-            "broad_encoder_training": False,
             "regime_conditioning": False,
-            "teacher_metadata_input_to_model": False,
-            "threshold_sweep": False,
-            "capacity_sweep": False,
-            "lr_or_epoch_sweep": False,
         },
         "synthetic_checks": checks,
-        "historical_code_dependency": False,
-        "code_layout": "unversioned_semantic_modules",
         "test_roots_read": False,
     }
     a.output.parent.mkdir(parents=True, exist_ok=True)
     a.output.write_text(json.dumps(out, indent=2, sort_keys=True) + "\n")
-    print(json.dumps({"valid": out["valid"], "errors": errors}))
+    print(json.dumps({"valid": out["valid"], "attribution_ready": out["attribution_ready"], "errors": errors}))
     return 0 if out["valid"] else 30
 
 

@@ -17,7 +17,12 @@ from ocrap.audits.constraint_native_orientation import (
 )
 from ocrap.audits.heterogeneous_constraint_normal_cone import (
     CONE_GEOMETRY_DIM,
+    MATCHED_DIM as HCNC_MATCHED_DIM,
+    contract_checks as hcnc_contract_checks,
+)
+from ocrap.audits.executable_constraint_jacobian import (
     ENGINEERING_VERSION,
+    JACOBIAN_GEOMETRY_DIM,
     MATCHED_DIM,
     SCIENTIFIC_VERSION,
     contract_checks,
@@ -32,13 +37,20 @@ def test_legacy_cnro_primitive_contract_remains_available():
     assert LEGACY_MATCHED_DIM == 188
 
 
-def test_current_hcnc_contract_checks():
-    checks = contract_checks()
+def test_hcnc_prerequisite_primitive_remains_available():
+    checks = hcnc_contract_checks()
     assert checks and all(checks.values()), checks
     assert CONE_GEOMETRY_DIM == 64
+    assert HCNC_MATCHED_DIM == 220
+
+
+def test_current_ecj_contract_checks():
+    checks = contract_checks()
+    assert checks and all(checks.values()), checks
+    assert JACOBIAN_GEOMETRY_DIM == 64
     assert MATCHED_DIM == 220
-    assert ENGINEERING_VERSION == "v48.112.0-OC-HCNC"
-    assert SCIENTIFIC_VERSION == "v48.112-OC-HCNC"
+    assert ENGINEERING_VERSION == "v48.113.0-OC-ECJ"
+    assert SCIENTIFIC_VERSION == "v48.113-OC-ECJ"
 
 
 def test_ridge_owner_is_still_unique_and_closed_form():
@@ -51,17 +63,16 @@ def test_ridge_owner_is_still_unique_and_closed_form():
     assert model.normal_equation_residual <= 1e-7
 
 
-def test_current_launcher_reuses_authoritative_v111_and_keeps_command_name():
+def test_current_launcher_reuses_authoritative_v112_and_keeps_command_name():
     repo = Path(__file__).resolve().parents[1]
     launcher = (repo / "scripts/run_constraint_native_orientation_audit.sh").read_text()
-    assert "OC-RAP-v48.111-PIPELINE_COMPLETE.json" in launcher
-    assert "OC-RAP-v48.111-DCP-DRFC-BCDE-RIFA-OC-CNRO-comparison.json" in launcher
-    assert "OC-RAP-v48.111-CNRO-balanced.json" in launcher
-    assert "OC-RAP-v48.111-CNRO-precision.json" in launcher
-    assert "OC-RAP-v48.93-factor-mediation-audit.jsonl" in launcher
+    assert "OC-RAP-v48.112-PIPELINE_COMPLETE.json" in launcher
+    assert "OC-RAP-v48.112-DCP-DRFC-BCDE-RIFA-OC-HCNC-comparison.json" in launcher
     assert "OC-RAP-v48.112-HCNC-balanced.json" in launcher
-    assert "OC-RAP-v48.112-OC-HCNC-results.zip" in launcher
-    assert "CNGO" not in launcher
+    assert "OC-RAP-v48.112-HCNC-precision.json" in launcher
+    assert "OC-RAP-v48.93-factor-mediation-audit.jsonl" in launcher
+    assert "OC-RAP-v48.113-ECJ-balanced.json" in launcher
+    assert "OC-RAP-v48.113-OC-ECJ-results.zip" in launcher
     assert "--run-id" in launcher
 
 
@@ -112,13 +123,22 @@ def test_unversioned_runner_keeps_v93_role_filter_semantics(tmp_path):
     assert [c["candidate"] for c in groups[0]["candidates"]] == [1]
 
 
-def test_current_result_packager_uses_only_canonical_v112_artifacts():
+def test_current_result_packager_uses_only_canonical_v113_artifacts():
     tool = Path(__file__).resolve().parents[1] / "tools" / "package_constraint_native_orientation_results.py"
     spec = importlib.util.spec_from_file_location("orientation_packager_test", tool)
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    assert mod.EXPECTED["balanced"] == "OC-RAP-v48.112-HCNC-balanced.json"
-    assert mod.EXPECTED["precision"] == "OC-RAP-v48.112-HCNC-precision.json"
-    assert mod.ENGINEERING_VERSION == "v48.112.0-OC-HCNC"
-    assert mod.SCIENTIFIC_VERSION == "v48.112-OC-HCNC"
+    assert mod.EXPECTED["balanced"] == "OC-RAP-v48.113-ECJ-balanced.json"
+    assert mod.EXPECTED["precision"] == "OC-RAP-v48.113-ECJ-precision.json"
+    assert mod.ENGINEERING_VERSION == "v48.113.0-OC-ECJ"
+    assert mod.SCIENTIFIC_VERSION == "v48.113-OC-ECJ"
+
+
+def test_v113_comparison_separates_core_activity_from_reentry_coverage():
+    repo = Path(__file__).resolve().parents[1]
+    text = (repo / "tools/compare_constraint_native_recovery_orientation.py").read_text()
+    assert '"reentry_contact_coverage_go"' in text
+    assert "core_go = _cross(constraint_diverse_roles, 3)" in text
+    assert "adaptive_go = _cross(option_switch_roles, 3) and _cross(mode_diverse_roles, 3)" in text
+    assert "EXECUTABLE_CONSTRAINT_JACOBIAN_CORE_GO_REENTRY_COVERAGE_PENDING" in text

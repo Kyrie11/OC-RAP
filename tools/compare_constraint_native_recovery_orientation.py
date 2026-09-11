@@ -7,17 +7,17 @@ import json
 from pathlib import Path
 from typing import Any
 
-from ocrap.audits.heterogeneous_constraint_normal_cone import (
-    CONE_GEOMETRY_DIM,
+from ocrap.audits.executable_constraint_jacobian import (
     ENGINEERING_VERSION,
+    JACOBIAN_GEOMETRY_DIM,
     MATCHED_DIM,
     SCIENTIFIC_VERSION,
 )
 
-AUTHORITATIVE_V111_COMPARISON_SHA256 = "ee2a3f13f2793dd8d0a4a1bdf73192a188d21bfac31c1549b3d6d0ae63cb8373"
-AUTHORITATIVE_V111_PIPELINE_SHA256 = "c155ac8277b2fe690be030eaaf4031e75873e1e22d2521ce56d10aabebb56187"
-AUTHORITATIVE_V111_BALANCED_SHA256 = "df5dd1a3a590774255f09e92de3e5d4a9762272fb871a3e64abfe6c3d8eb7e19"
-AUTHORITATIVE_V111_PRECISION_SHA256 = "ec431e27086a2fe2f30f278a1c3fbfbafca5e4d62094a87dc838e9b52e627b66"
+AUTHORITATIVE_V112_COMPARISON_SHA256 = "0f07aed5ad1d52572a91b3491dbb63d21f1e2c231c1321bb52a66e5cbe351d64"
+AUTHORITATIVE_V112_PIPELINE_SHA256 = "426329407549b0408c4d6a225fa40239c13115f49b05d834a6c631f1e460e6ea"
+AUTHORITATIVE_V112_BALANCED_SHA256 = "20bc2c049f4793ca8ff74fe428ffeaf1284fad74ce03036e1f45ff20bf212a1b"
+AUTHORITATIVE_V112_PRECISION_SHA256 = "16129135e0509566e31604e6a80c5a5a82788d2452eca1d00c19cd0459953995"
 ROLES = ("dev_near", "dev_contact", "certificate_near", "certificate_contact")
 
 
@@ -58,109 +58,81 @@ def _action_gate(docs: dict[str, Any], space: str, metric: str) -> dict[str, Any
     }
 
 
-def _switch_gate(docs: dict[str, Any], metric: str) -> dict[str, Any]:
+def _matched_increment_gate(docs: dict[str, Any], metric: str) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    positive: list[list[str]] = []
+    material: list[list[str]] = []
+    roles: set[str] = set()
+    for variant, d in docs.items():
+        for role in ROLES:
+            ca = d["candidate_option_cells"][role][f"{metric}_true"].get("auc")
+            no = d["nominal_option_cells"][role][f"{metric}_true"].get("auc")
+            delta = None if ca is None or no is None else float(ca) - float(no)
+            rows.append({
+                "variant": variant, "role": role,
+                "candidate_option_auc": ca, "nominal_option_auc": no,
+                "candidate_minus_nominal_option": delta,
+            })
+            if delta is not None and delta > 0.0:
+                positive.append([variant, role]); roles.add(role)
+            if delta is not None and delta >= 0.01:
+                material.append([variant, role])
+    go = len(positive) >= 6 and _cross(roles, 3) and len(material) >= 4
+    return {
+        "go": bool(go), "positive_cells": positive, "material_cells": material,
+        "roles": sorted(roles), "rows": rows,
+    }
+
+
+def _continuation_increment_gate(docs: dict[str, Any], hist: dict[str, Any], metric: str) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     positive: list[list[str]] = []
     material: list[list[str]] = []
     roles: set[str] = set()
     for variant in ("balanced", "precision"):
         for role in ROLES:
-            n = docs[variant]["nominal_cone_cells"][role][f"{metric}_true"].get("auc")
-            c = docs[variant]["candidate_cone_cells"][role][f"{metric}_true"].get("auc")
-            delta = None if n is None or c is None else float(c) - float(n)
+            now = docs[variant]["candidate_option_cells"][role][f"{metric}_true"].get("auc")
+            old = hist[variant]["candidate_cone_cells"][role][f"{metric}_true"].get("auc")
+            delta = None if now is None or old is None else float(now) - float(old)
             rows.append({
-                "variant": variant,
-                "role": role,
-                "nominal_cone_auc": n,
-                "candidate_cone_auc": c,
-                "candidate_minus_nominal_cone": delta,
+                "variant": variant, "role": role,
+                "candidate_option_auc": now, "v48_112_candidate_cone_auc": old,
+                "executable_continuation_minus_prefix_cone": delta,
             })
-            if delta is not None and delta > 0:
-                positive.append([variant, role])
-                roles.add(role)
+            if delta is not None and delta > 0.0:
+                positive.append([variant, role]); roles.add(role)
             if delta is not None and delta >= 0.01:
                 material.append([variant, role])
     go = len(positive) >= 6 and _cross(roles, 3) and len(material) >= 4
     return {
-        "go": bool(go),
-        "positive_cells": positive,
-        "material_cells": material,
-        "roles": sorted(roles),
-        "rows": rows,
+        "go": bool(go), "positive_cells": positive, "material_cells": material,
+        "roles": sorted(roles), "rows": rows,
     }
 
 
-def _result_errors(obj: dict[str, Any], variant: str) -> list[str]:
-    e: list[str] = []
-    checks = [
-        (obj.get("valid") is True, "valid"),
-        (obj.get("engineering_version") == ENGINEERING_VERSION, "version"),
-        (obj.get("scientific_version") == SCIENTIFIC_VERSION, "scientific_version"),
-        (obj.get("variant") == variant, "variant"),
-        (obj.get("audit_only") is True, "audit"),
-        (obj.get("convex_closed_form_ridge") is True, "convex"),
-        (obj.get("strictly_convex_unique_solution") is True, "unique"),
-        (obj.get("iterative_optimizer_used") is False, "no_iterative_optimizer"),
-        (obj.get("score_family") == "linear_on_fixed_heterogeneous_constraint_normal_cone_response_features", "score_family"),
-        (obj.get("nominal_zero_score_by_construction") is True, "nominal_zero"),
-        (obj.get("capacity_matched_nominal_vs_candidate_cone") is True, "capacity_match"),
-        (int(obj.get("matched_family_dimension", -1)) == MATCHED_DIM, "matched_dim"),
-        (int(obj.get("cone_geometry_dimension", -1)) == CONE_GEOMETRY_DIM, "geometry_dim"),
-        (float(obj.get("max_normal_equation_residual", 1.0)) <= 1.0e-7, "normal_residual"),
-        (obj.get("constraint_names") == ["clearance", "stopping", "route", "reentry"], "constraint_names"),
-        (int(obj.get("stage_i_parameters_trained", -1)) == 0, "stage_i"),
-        (int(obj.get("root_decoder_parameters_trained", -1)) == 0, "root"),
-        (int(obj.get("source_parameters_trained", -1)) == 0, "source"),
-        (int(obj.get("planner_parameters_trained", -1)) == 0, "planner"),
-        (obj.get("regime_conditioning") is False, "regime"),
-        (obj.get("boundary_transport") is False, "boundary"),
-        (obj.get("teacher_metadata_input_to_model") is False, "teacher"),
-        (obj.get("test_roots_read") is False, "test_roots"),
-    ]
-    for ok, name in checks:
-        if not ok:
-            e.append(f"{variant}:{name}")
-    for space in ("base", "nominal_cone", "candidate_cone"):
-        for role in ROLES:
-            if role not in obj.get(f"{space}_cells", {}):
-                e.append(f"{variant}:{space}:{role}")
-    for ev, evo in obj.get("events", {}).items():
-        if float(evo.get("agent_set_candidate_delta_max_abs", 1.0)) > 1.0e-6:
-            e.append(f"{variant}:{ev}:agent_delta")
-        if int(evo.get("agent_mask_candidate_delta_count", 1)) != 0:
-            e.append(f"{variant}:{ev}:agent_mask")
-    return e
-
-
 def _variant_identity(docs: dict[str, Any]) -> dict[str, Any]:
-    diffs: list[list[Any]] = []
-    for space in ("base", "nominal_cone", "candidate_cone"):
+    diffs: list[str] = []
+    for space in ("base", "nominal_option", "candidate_option"):
         for role in ROLES:
-            for metric in ("support", "reserve"):
-                for suffix in ("auc", "auc_vs_shuffled", "top1", "top1_vs_shuffled"):
-                    a = docs["balanced"][f"{space}_cells"][role][f"{metric}_true"].get(suffix)
-                    b = docs["precision"][f"{space}_cells"][role][f"{metric}_true"].get(suffix)
-                    if a is None and b is None:
-                        continue
-                    if a is None or b is None or abs(float(a) - float(b)) > 1.0e-12:
-                        diffs.append([space, role, metric, suffix, a, b])
-    return {"exact": not diffs, "differences": diffs, "effective_unique_roles_if_exact": 4 if not diffs else 8}
+            for metric in ("support_true", "support_shuffled", "reserve_true", "reserve_shuffled"):
+                a = docs["balanced"][f"{space}_cells"][role][metric]
+                b = docs["precision"][f"{space}_cells"][role][metric]
+                for key in ("auc", "top1", "rows", "positive_rows", "negative_rows", "powered_groups"):
+                    if a.get(key) != b.get(key):
+                        diffs.append(f"{space}:{role}:{metric}:{key}")
+    return {"exact": not diffs, "differences": diffs, "effective_unique_roles_if_exact": 4}
 
 
 def _power(docs: dict[str, Any], space: str) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for variant in ("balanced", "precision"):
         for role in ROLES:
-            for metric in ("support", "reserve"):
-                m = docs[variant][f"{space}_cells"][role][f"{metric}_true"]
+            for axis in ("support", "reserve"):
+                m = docs[variant][f"{space}_cells"][role][f"{axis}_true"]
                 out.append({
-                    "variant": variant,
-                    "role": role,
-                    "axis": metric,
-                    "rows": m.get("rows"),
-                    "positive_rows": m.get("positive_rows"),
-                    "negative_rows": m.get("negative_rows"),
-                    "powered_groups": m.get("powered_groups"),
+                    "variant": variant, "role": role, "axis": axis,
+                    "rows": m.get("rows"), "positive_rows": m.get("positive_rows"),
+                    "negative_rows": m.get("negative_rows"), "powered_groups": m.get("powered_groups"),
                     "underpowered": bool(
                         (m.get("powered_groups") or 0) < 3
                         or (m.get("positive_rows") or 0) < 5
@@ -172,51 +144,98 @@ def _power(docs: dict[str, Any], space: str) -> list[dict[str, Any]]:
 
 def _activity_gate(docs: dict[str, Any]) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
-    switch_roles: set[str] = set()
-    heterogeneous_roles: set[str] = set()
+    option_switch_roles: set[str] = set()
+    mode_diverse_roles: set[str] = set()
+    constraint_diverse_roles: set[str] = set()
     reentry_contact_roles: set[str] = set()
-    # balanced/precision raw feature extraction should be identical, but keep
-    # both in the record for protocol visibility.
     for variant in ("balanced", "precision"):
         d = docs[variant]
         for role in ROLES:
-            ev = d.get("events", {}).get(role, {})
-            diag = ev.get("selector_diagnostics", {})
-            switch_fraction = float(diag.get("selector_switch_fraction", 0.0) or 0.0)
-            counts = diag.get("candidate_active_type_counts", {}) or {}
-            active_types = sorted(k for k, v in counts.items() if int(v) > 0)
-            any_switch_fraction = float(diag.get("candidate_any_switch_fraction", 0.0) or 0.0)
+            diag = ((d.get("events") or {}).get(role, {}).get("pair_diagnostics") or {})
+            switch = float(diag.get("option_switch_fraction", 0.0) or 0.0)
+            modes = diag.get("candidate_selected_mode_counts", {}) or {}
+            active = diag.get("candidate_selected_active_type_counts", {}) or {}
+            reentry = float(diag.get("candidate_selected_reentry_active_fraction", 0.0) or 0.0)
             rows.append({
-                "variant": variant,
-                "role": role,
-                "selector_switch_fraction": switch_fraction,
-                "candidate_any_switch_fraction": any_switch_fraction,
-                "active_types": active_types,
-                "candidate_active_type_counts": counts,
+                "variant": variant, "role": role,
+                "option_switch_fraction": switch,
+                "candidate_selected_mode_counts": modes,
+                "candidate_selected_active_type_counts": active,
+                "candidate_selected_reentry_active_fraction": reentry,
+                "field_reentry_available_fraction": float(diag.get("field_reentry_available_fraction", 0.0) or 0.0),
             })
-            if any_switch_fraction > 0.0:
-                switch_roles.add(role)
-            if len(active_types) >= 2:
-                heterogeneous_roles.add(role)
-            if "contact" in role and int(counts.get("reentry", 0)) > 0:
+            if switch > 0.0:
+                option_switch_roles.add(role)
+            if sum(int(v) > 0 for v in modes.values()) >= 2:
+                mode_diverse_roles.add(role)
+            if sum(int(v) > 0 for v in active.values()) >= 2:
+                constraint_diverse_roles.add(role)
+            if "contact" in role and reentry > 0.0:
                 reentry_contact_roles.add(role)
-    go = (
-        _cross(switch_roles, 3)
-        and _cross(heterogeneous_roles, 3)
-        and len(reentry_contact_roles) >= 1
-    )
+    # Core ECJ activity is about whether the executable continuation actually
+    # exposes heterogeneous binding constraints.  Recovery-mode diversity and
+    # candidate-vs-nominal option switching are prerequisites only for claiming
+    # an adaptive selector effect.  Re-entry coverage is reported separately:
+    # the paper-level Contact bucket may be a counterfactual contact-surrogate
+    # target and therefore does not imply an observed overlap at the audit
+    # anchor.  Requiring re-entry for the *core* ECJ gate would conflate dataset
+    # role semantics with observable physical contact.  A full post-contact
+    # promotion still requires explicit re-entry evidence.
+    core_go = _cross(constraint_diverse_roles, 3)
+    adaptive_go = _cross(option_switch_roles, 3) and _cross(mode_diverse_roles, 3)
+    reentry_go = len(reentry_contact_roles) >= 1
     return {
-        "go": bool(go),
-        "switch_roles": sorted(switch_roles),
-        "heterogeneous_roles": sorted(heterogeneous_roles),
+        "go": bool(core_go),
+        "adaptive_selector_activity_go": bool(adaptive_go),
+        "reentry_contact_coverage_go": bool(reentry_go),
+        "option_switch_roles": sorted(option_switch_roles),
+        "mode_diverse_roles": sorted(mode_diverse_roles),
+        "constraint_diverse_roles": sorted(constraint_diverse_roles),
         "reentry_contact_roles": sorted(reentry_contact_roles),
         "rows": rows,
     }
 
 
+def _result_errors(d: dict[str, Any], variant: str) -> list[str]:
+    errors: list[str] = []
+    required = {
+        "valid": True,
+        "variant": variant,
+        "audit_only": True,
+        "convex_closed_form_ridge": True,
+        "strictly_convex_unique_solution": True,
+        "iterative_optimizer_used": False,
+        "capacity_matched_nominal_vs_candidate_option": True,
+        "actuator_projection": True,
+        "teacher_npz_fields_loaded_into_feature_path": False,
+        "planner_parameters_trained": 0,
+        "stage_i_parameters_trained": 0,
+        "root_decoder_parameters_trained": 0,
+        "source_parameters_trained": 0,
+        "relative_ranker_modified": False,
+        "regime_conditioning": False,
+        "boundary_transport": False,
+        "teacher_metadata_input_to_model": False,
+        "test_roots_read": False,
+        "posthoc_feature_selection": False,
+    }
+    for k, v in required.items():
+        if d.get(k) != v:
+            errors.append(f"{variant}:{k}")
+    if d.get("engineering_version") != ENGINEERING_VERSION:
+        errors.append(f"{variant}:engineering_version")
+    if d.get("scientific_version") != SCIENTIFIC_VERSION:
+        errors.append(f"{variant}:scientific_version")
+    if int(d.get("jacobian_geometry_dimension", -1)) != JACOBIAN_GEOMETRY_DIM:
+        errors.append(f"{variant}:geometry_dim")
+    if int(d.get("matched_family_dimension", -1)) != MATCHED_DIM:
+        errors.append(f"{variant}:matched_dim")
+    return errors
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
-    for key in ("balanced", "precision", "v111_pipeline", "v111_comparison", "v111_balanced", "v111_precision"):
+    for key in ("balanced", "precision", "v112_pipeline", "v112_comparison", "v112_balanced", "v112_precision"):
         ap.add_argument("--" + key.replace("_", "-"), dest=key, type=Path, required=True)
     ap.add_argument("--run-id", required=True)
     ap.add_argument("--output", type=Path, required=True)
@@ -229,95 +248,120 @@ def main() -> int:
         if obj.get("run_instance_id") != a.run_id:
             errors.append(f"{v}:run_instance_id")
 
-    p111 = json.loads(a.v111_pipeline.read_text())
-    c111 = json.loads(a.v111_comparison.read_text())
-    b111 = json.loads(a.v111_balanced.read_text())
-    p111r = json.loads(a.v111_precision.read_text())
-    d111 = c111.get("preregistered_decision") or {}
+    p112 = json.loads(a.v112_pipeline.read_text())
+    c112 = json.loads(a.v112_comparison.read_text())
+    b112 = json.loads(a.v112_balanced.read_text())
+    p112r = json.loads(a.v112_precision.read_text())
+    d112 = c112.get("preregistered_decision") or {}
 
-    if _sha(a.v111_pipeline) != AUTHORITATIVE_V111_PIPELINE_SHA256:
-        errors.append("v111_pipeline_sha")
-    if _sha(a.v111_comparison) != AUTHORITATIVE_V111_COMPARISON_SHA256:
-        errors.append("v111_comparison_sha")
-    if _sha(a.v111_balanced) != AUTHORITATIVE_V111_BALANCED_SHA256:
-        errors.append("v111_balanced_sha")
-    if _sha(a.v111_precision) != AUTHORITATIVE_V111_PRECISION_SHA256:
-        errors.append("v111_precision_sha")
+    if _sha(a.v112_pipeline) != AUTHORITATIVE_V112_PIPELINE_SHA256:
+        errors.append("v112_pipeline_sha")
+    if _sha(a.v112_comparison) != AUTHORITATIVE_V112_COMPARISON_SHA256:
+        errors.append("v112_comparison_sha")
+    if _sha(a.v112_balanced) != AUTHORITATIVE_V112_BALANCED_SHA256:
+        errors.append("v112_balanced_sha")
+    if _sha(a.v112_precision) != AUTHORITATIVE_V112_PRECISION_SHA256:
+        errors.append("v112_precision_sha")
     if not (
-        p111.get("valid")
-        and p111.get("attribution_ready")
-        and p111.get("scientific_version") == "v48.111-OC-CNRO"
-        and p111.get("preregistered_status") == "CONSTRAINT_NATIVE_ACTIVE_GEOMETRY_STOP"
+        p112.get("valid") and p112.get("attribution_ready")
+        and p112.get("scientific_version") == "v48.112-OC-HCNC"
+        and p112.get("preregistered_status") == "HETEROGENEOUS_CONSTRAINT_NORMAL_CONE_STOP"
     ):
-        errors.append("v111_pipeline")
+        errors.append("v112_pipeline")
     if not (
-        c111.get("valid")
-        and c111.get("attribution_ready")
-        and d111.get("status") == "CONSTRAINT_NATIVE_ACTIVE_GEOMETRY_STOP"
-        and d111.get("next_branch")
-        == "close_fixed_cv_circle_agent_geometry_then_preregister_heterogeneous_active_constraint_normal_cone_audit_no_training_or_source_sweep"
+        c112.get("valid") and c112.get("attribution_ready")
+        and d112.get("status") == "HETEROGENEOUS_CONSTRAINT_NORMAL_CONE_STOP"
+        and d112.get("next_branch")
+        == "close_prefix_level_first_order_constraint_cone_then_preregister_candidate_option_executable_constraint_jacobian_audit_no_training_or_source_sweep"
     ):
-        errors.append("v111_branch")
+        errors.append("v112_branch")
 
-    historical = {"balanced": b111, "precision": p111r}
-    # Exact V48.111 base identity: same cohort, response coordinate, scaler rule,
-    # convex ridge owner and deterministic shuffle.
+    historical = {"balanced": b112, "precision": p112r}
+    # Preserve the exact V48.112 base owner/cohort/null before attributing the
+    # executable-continuation intervention.
     for metric in ("support", "reserve"):
         for variant in ("balanced", "precision"):
             for role in ROLES:
                 got = docs[variant]["base_cells"][role][f"{metric}_true"].get("auc")
                 exp = historical[variant]["base_cells"][role][f"{metric}_true"].get("auc")
                 if got is None or exp is None or abs(float(got) - float(exp)) > 1.0e-12:
-                    errors.append(f"{variant}:{role}:{metric}:v111_base_identity")
+                    errors.append(f"{variant}:{role}:{metric}:v112_base_identity")
 
-    ngs = _action_gate(docs, "nominal_cone", "support") if not errors else {"go": False, "local_order": False}
-    ngr = _action_gate(docs, "nominal_cone", "reserve") if not errors else {"go": False, "local_order": False}
-    cgs = _action_gate(docs, "candidate_cone", "support") if not errors else {"go": False, "local_order": False}
-    cgr = _action_gate(docs, "candidate_cone", "reserve") if not errors else {"go": False, "local_order": False}
-    sis = _switch_gate(docs, "support") if not errors else {"go": False, "rows": []}
-    sir = _switch_gate(docs, "reserve") if not errors else {"go": False, "rows": []}
-    activity = _activity_gate(docs) if not errors else {"go": False, "rows": []}
+    ngs = _action_gate(docs, "nominal_option", "support") if not errors else {"go": False, "local_order": False}
+    ngr = _action_gate(docs, "nominal_option", "reserve") if not errors else {"go": False, "local_order": False}
+    cgs = _action_gate(docs, "candidate_option", "support") if not errors else {"go": False, "local_order": False}
+    cgr = _action_gate(docs, "candidate_option", "reserve") if not errors else {"go": False, "local_order": False}
+    sis = _matched_increment_gate(docs, "support") if not errors else {"go": False, "rows": []}
+    sir = _matched_increment_gate(docs, "reserve") if not errors else {"go": False, "rows": []}
+    cis = _continuation_increment_gate(docs, historical, "support") if not errors else {"go": False, "rows": []}
+    cir = _continuation_increment_gate(docs, historical, "reserve") if not errors else {"go": False, "rows": []}
+    activity = _activity_gate(docs) if not errors else {
+        "go": False,
+        "adaptive_selector_activity_go": False,
+        "reentry_contact_coverage_go": False,
+        "rows": [],
+    }
 
+    core_go = bool(cgs.get("go") and cgr.get("go") and cis.get("go") and cir.get("go") and activity.get("go"))
+    adaptive_go = bool(core_go and sis.get("go") and sir.get("go") and activity.get("adaptive_selector_activity_go"))
+    reentry_coverage_go = bool(activity.get("reentry_contact_coverage_go"))
+    unified_post_contact_go = bool(core_go and reentry_coverage_go)
     if errors:
-        status = "V48_112_ENGINEERING_STOP"
-        branch = "fix_v48_112_engineering_and_rerun_same_heterogeneous_constraint_normal_cone_audit"
-    elif cgs.get("go") and cgr.get("go") and sis.get("go") and sir.get("go") and activity.get("go"):
-        status = "HETEROGENEOUS_CONSTRAINT_NORMAL_CONE_BOTH_AXES_GO"
-        branch = "promote_candidate_conditioned_heterogeneous_constraint_normal_cone_then_preregister_one_nominal_invariant_carrier_no_source_or_transformer_sweep"
-    elif cgs.get("go") and sis.get("go") and not (cgr.get("go") and sir.get("go")):
-        status = "HETEROGENEOUS_CONSTRAINT_NORMAL_CONE_SUPPORT_ONLY"
-        branch = "support_normal_cone_go_reserve_stop_then_audit_signed_debt_constraint_response_only"
-    elif cgr.get("go") and sir.get("go") and not (cgs.get("go") and sis.get("go")):
-        status = "HETEROGENEOUS_CONSTRAINT_NORMAL_CONE_RESERVE_ONLY"
-        branch = "reserve_normal_cone_go_support_stop_then_audit_support_establishment_constraint_response_only"
+        status = "V48_113_ENGINEERING_STOP"
+        branch = "fix_v48_113_engineering_and_rerun_same_executable_constraint_jacobian_audit"
+    elif adaptive_go and reentry_coverage_go:
+        status = "EXECUTABLE_CONSTRAINT_JACOBIAN_ADAPTIVE_GO"
+        branch = "promote_same_option_executable_constraint_jacobian_and_candidate_option_selector_then_preregister_one_nominal_invariant_carrier_no_source_or_boundary_sweep"
+    elif adaptive_go:
+        status = "EXECUTABLE_CONSTRAINT_JACOBIAN_ADAPTIVE_GO_REENTRY_COVERAGE_PENDING"
+        branch = "retain_same_option_ecj_and_candidate_option_selector_but_require_observed_contact_reentry_coverage_before_unified_carrier_or_main_promotion"
+    elif core_go and reentry_coverage_go:
+        status = "EXECUTABLE_CONSTRAINT_JACOBIAN_CORE_GO_SELECTOR_STOP"
+        branch = "promote_same_option_executable_constraint_jacobian_only_keep_option_selector_frozen_then_preregister_one_nominal_invariant_carrier"
+    elif core_go:
+        status = "EXECUTABLE_CONSTRAINT_JACOBIAN_CORE_GO_REENTRY_COVERAGE_PENDING"
+        branch = "retain_same_option_ecj_but_require_observed_contact_reentry_coverage_before_unified_carrier_or_main_promotion_keep_selector_frozen"
+    elif cgr.get("go") and cir.get("go") and not (cgs.get("go") and cis.get("go")):
+        status = "EXECUTABLE_CONSTRAINT_JACOBIAN_RESERVE_ONLY"
+        branch = "retain_debt_side_executable_jacobian_diagnostic_then_audit_support_establishment_on_same_option_no_new_capacity"
+    elif cgs.get("go") and cis.get("go") and not (cgr.get("go") and cir.get("go")):
+        status = "EXECUTABLE_CONSTRAINT_JACOBIAN_SUPPORT_ONLY"
+        branch = "retain_support_side_executable_jacobian_diagnostic_then_audit_signed_debt_on_same_option_no_new_capacity"
     elif cgs.get("local_order") and cgr.get("local_order"):
-        status = "HETEROGENEOUS_CONSTRAINT_NORMAL_CONE_LOCAL_ORDER_ONLY"
-        branch = "same_heterogeneous_normal_cone_features_then_one_convex_pairwise_audit_no_feature_or_source_change"
+        status = "EXECUTABLE_CONSTRAINT_JACOBIAN_LOCAL_ORDER_ONLY"
+        branch = "same_executable_jacobian_features_then_one_convex_pairwise_audit_no_feature_or_source_change"
     else:
-        status = "HETEROGENEOUS_CONSTRAINT_NORMAL_CONE_STOP"
-        branch = "close_prefix_level_first_order_constraint_cone_then_preregister_candidate_option_executable_constraint_jacobian_audit_no_training_or_source_sweep"
+        status = "EXECUTABLE_CONSTRAINT_JACOBIAN_STOP"
+        branch = "close_selected_option_first_order_jacobian_then_preregister_common_option_constraint_work_audit_no_capacity_or_regime_sweep"
 
     ident = _variant_identity(docs)
     decision = {
         "status": status,
         "next_branch": branch,
-        "nominal_cone_support_gate": ngs,
-        "nominal_cone_reserve_gate": ngr,
-        "candidate_cone_support_gate": cgs,
-        "candidate_cone_reserve_gate": cgr,
-        "candidate_minus_nominal_cone_support_gate": sis,
-        "candidate_minus_nominal_cone_reserve_gate": sir,
-        "constraint_activity_gate": activity,
-        "capacity_matched_nominal_vs_candidate_cone": True,
+        "nominal_option_support_gate": ngs,
+        "nominal_option_reserve_gate": ngr,
+        "candidate_option_support_gate": cgs,
+        "candidate_option_reserve_gate": cgr,
+        "candidate_minus_nominal_option_support_gate": sis,
+        "candidate_minus_nominal_option_reserve_gate": sir,
+        "executable_continuation_vs_v48_112_prefix_support_gate": cis,
+        "executable_continuation_vs_v48_112_prefix_reserve_gate": cir,
+        "executable_option_activity_gate": activity,
+        "core_executable_constraint_jacobian_go": core_go,
+        "adaptive_candidate_option_selector_go": adaptive_go,
+        "reentry_contact_coverage_go": reentry_coverage_go,
+        "unified_post_contact_executable_jacobian_go": unified_post_contact_go,
+        "capacity_matched_nominal_vs_candidate_option": True,
         "matched_dimension": MATCHED_DIM,
-        "geometry_dimension": CONE_GEOMETRY_DIM,
+        "geometry_dimension": JACOBIAN_GEOMETRY_DIM,
         "constraint_names": ["clearance", "stopping", "route", "reentry"],
         "balanced_precision_metric_identity": ident,
-        "power_diagnostics": _power(docs, "candidate_cone"),
+        "power_diagnostics": _power(docs, "candidate_option"),
         "scientific_note": (
-            "candidate and nominal cone families share the same 220-D linear function class; "
-            "their only relational difference is whether active constraint type is selected by "
-            "the candidate or nominal signed heterogeneous constraint state"
+            "candidate and nominal option families share the same 220-D linear class; every response compares "
+            "candidate and nominal under the same actuator-projected recovery option. The candidate family changes "
+            "only which observation-only max-min executable option is selected. Cross-version continuation gates "
+            "compare the 220-D executable readout to the authoritative 220-D V48.112 prefix-cone readout."
         ),
         "source_training_authorized": False,
         "broad_encoder_training_authorized": False,
@@ -326,14 +370,14 @@ def main() -> int:
         "regime_conditioned_policy_authorized": False,
     }
     out = {
-        "schema": "ocrap-v48.112-hcnc-comparison-v1",
+        "schema": "ocrap-v48.113-ecj-comparison-v1",
         "engineering_version": ENGINEERING_VERSION,
         "scientific_version": SCIENTIFIC_VERSION,
         "run_instance_id": a.run_id,
         "valid": not errors,
         "attribution_ready": not errors,
         "errors": errors,
-        "experiment_type": "audit_only_heterogeneous_active_constraint_normal_cone",
+        "experiment_type": "audit_only_candidate_option_executable_constraint_jacobian",
         "preregistered_decision": decision,
         "planner_parameters_trained": 0,
         "stage_i_parameters_trained": 0,
@@ -344,11 +388,11 @@ def main() -> int:
         "boundary_transport": False,
         "teacher_metadata_input_to_model": False,
         "test_roots_read": False,
-        "v48_111_pipeline_sha256": _sha(a.v111_pipeline),
-        "v48_111_comparison_sha256": _sha(a.v111_comparison),
-        "v48_111_balanced_sha256": _sha(a.v111_balanced),
-        "v48_111_precision_sha256": _sha(a.v111_precision),
-        "authoritative_v48_111_comparison_sha256": AUTHORITATIVE_V111_COMPARISON_SHA256,
+        "v48_112_pipeline_sha256": _sha(a.v112_pipeline),
+        "v48_112_comparison_sha256": _sha(a.v112_comparison),
+        "v48_112_balanced_sha256": _sha(a.v112_balanced),
+        "v48_112_precision_sha256": _sha(a.v112_precision),
+        "authoritative_v48_112_comparison_sha256": AUTHORITATIVE_V112_COMPARISON_SHA256,
     }
     a.output.parent.mkdir(parents=True, exist_ok=True)
     a.output.write_text(json.dumps(out, indent=2, sort_keys=True) + "\n")
