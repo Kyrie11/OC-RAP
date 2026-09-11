@@ -140,6 +140,11 @@ def _activity_gate(docs: dict[str, Any]) -> dict[str, Any]:
                 "mean_tail_outer_positive_root_count": float(tail.get("mean_outer_positive_root_count", 0.0)),
                 "max_option_weight_sum_error": float(tail.get("max_option_weight_sum_error", 1.0)),
                 "max_cotangent_mass_error": float(tail.get("max_cotangent_mass_error", 1.0)),
+                "max_model_padding_count": int(tail.get("max_model_padding_count", 0)),
+                "all_model_padding_invalid": bool(tail.get("all_model_padding_invalid", False)),
+                "all_model_physical_valid_prefix_match": bool(tail.get("all_model_physical_valid_prefix_match", False)),
+                "max_padded_tail_mass": float(tail.get("max_padded_tail_mass", 1.0)),
+                "max_physical_tail_mass_error": float(tail.get("max_physical_tail_mass_error", 1.0)),
             }
             rows.append(row)
             if row["tail_work_nonzero_fraction"] > 0.0: tail_work.add(role)
@@ -154,6 +159,10 @@ def _activity_gate(docs: dict[str, Any]) -> dict[str, Any]:
                 or row["max_tail_option_permutation_invariance_error"] > 1.0e-10
                 or row["max_option_weight_sum_error"] > 1.0e-10
                 or row["max_cotangent_mass_error"] > 1.0e-10
+                or not row["all_model_padding_invalid"]
+                or not row["all_model_physical_valid_prefix_match"]
+                or row["max_padded_tail_mass"] > 1.0e-10
+                or row["max_physical_tail_mass_error"] > 1.0e-10
             ):
                 exact = False
     core = bool(

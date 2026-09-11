@@ -61,12 +61,88 @@ from ocrap.audits.recovery_set_constraint_flow import (
     matched_features,
 )
 
-ENGINEERING_VERSION = "v48.116.0-OC-WRCF"
+ENGINEERING_VERSION = "v48.116.1-OC-WRCF"
 SCIENTIFIC_VERSION = "v48.116-OC-WRCF"
 ALGORITHM_NAME = "Observation-Consistent Weak-Root Cotangent Recovery-Set Constraint Flow Audit"
 
 TAIL_GEOMETRY_DIM = WORK_GEOMETRY_DIM
 MATCHED_DIM = RAW_CANDIDATE_DIM + TAIL_GEOMETRY_DIM
+
+
+
+
+def align_model_option_measure_to_physical_library(
+    model_option_valid: np.ndarray,
+    physical_option_valid: np.ndarray,
+    model_option_weights: np.ndarray,
+    *,
+    atol: float = 1.0e-12,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Project a padded model option measure onto the raw physical library.
+
+    OCRAPSampleDataset pads recovery-option tensors to the checkpoint geometry,
+    while ExecutableConstraintField deliberately keeps the raw NPZ recovery
+    library.  V48.116 only permits *structural invalid padding*: physical
+    options must occupy the leading model slots with exactly the same validity
+    mask, every extra model slot must be invalid, and the OC-MERO tail measure
+    must assign zero mass to those padded slots.  Under those conditions
+    dropping the padding is an exact representation change, not a scientific
+    change to the weak-tail measure.
+
+    Any extra *valid* model option, prefix-mask disagreement, or nonzero padded
+    tail mass fails closed because then model-to-physical option identity would
+    be ambiguous.
+    """
+    mv = np.asarray(model_option_valid, dtype=bool).reshape(-1)
+    pv = np.asarray(physical_option_valid, dtype=bool).reshape(-1)
+    w = np.asarray(model_option_weights, dtype=np.float64).reshape(-1)
+    if w.size != mv.size:
+        raise ValueError(
+            f"WRCF model option-weight/valid length mismatch weights={w.size} valid={mv.size}"
+        )
+    if pv.size <= 0:
+        raise ValueError("WRCF physical recovery library is empty")
+    if mv.size < pv.size:
+        raise ValueError(
+            f"WRCF model option geometry cannot shrink physical library model={mv.size} physical={pv.size}"
+        )
+    if not np.array_equal(mv[: pv.size], pv):
+        bad = np.flatnonzero(mv[: pv.size] != pv).tolist()
+        raise ValueError(
+            "WRCF model/physical option-valid prefix mismatch "
+            f"model={mv[:pv.size].astype(int).tolist()} "
+            f"physical={pv.astype(int).tolist()} differing_indices={bad}"
+        )
+    if np.any(mv[pv.size :]):
+        bad = (np.flatnonzero(mv[pv.size :]) + pv.size).tolist()
+        raise ValueError(
+            "WRCF model has extra valid recovery options with no physical counterpart "
+            f"indices={bad}"
+        )
+    if np.any(~np.isfinite(w)) or np.any(w < -atol):
+        raise ValueError("WRCF invalid model option measure")
+    padded_mass = float(np.sum(np.abs(w[pv.size :])))
+    if padded_mass > atol:
+        raise ValueError(
+            f"WRCF nominal OC-MERO assigns mass to invalid padded options mass={padded_mass}"
+        )
+    wp = np.asarray(w[: pv.size], dtype=np.float64)
+    if np.any((~pv) & (np.abs(wp) > atol)):
+        raise ValueError("WRCF nominal OC-MERO assigns mass to invalid physical option")
+    mass = float(wp.sum())
+    if abs(mass - 1.0) > 1.0e-10:
+        raise ValueError(
+            f"WRCF physical option measure must preserve unit mass after removing padding, got {mass}"
+        )
+    return wp, {
+        "model_option_count": int(mv.size),
+        "physical_option_count": int(pv.size),
+        "model_padding_count": int(mv.size - pv.size),
+        "model_padding_all_invalid": bool(not np.any(mv[pv.size :])),
+        "model_physical_valid_prefix_match": True,
+        "padded_tail_mass": padded_mass,
+        "physical_tail_mass": mass,
+    }
 
 
 @dataclass(frozen=True)
@@ -171,7 +247,7 @@ def nominal_ocmero_tail_measure(
             q[i, l] = weighted_lcvar(M[:, l], w_i, beta)
             inner[i, l] = _lcvar_influence(M[:, l], w_i, beta)
 
-    best = np.argmax(q, axis=1).astype(np.int64, copy=False)
+    best = np.argmax(np.where(ov[None, :], q, -np.inf), axis=1).astype(np.int64, copy=False)
     r_anchor = q[np.arange(K), best]
     outer = _lcvar_influence(r_anchor, p, alpha)
     outer = np.where(rv, outer, 0.0)
@@ -346,6 +422,11 @@ def contract_checks() -> dict[str, bool]:
         alpha=0.5, beta=0.5, top_m=3,
     )
     d = tail_measure_diagnostics(tm)
+    padded_w, padded_diag = align_model_option_measure_to_physical_library(
+        np.asarray([True, True, False, False, False]),
+        np.asarray([True, True, False]),
+        np.asarray([0.25, 0.75, 0.0, 0.0, 0.0]),
+    )
     # Verify the NumPy subgradient against a finite directional difference away
     # from ties.  This is a synthetic contract only, never a scientific metric.
     direction = np.asarray([
@@ -368,12 +449,21 @@ def contract_checks() -> dict[str, bool]:
         "weak_root_tail_nonempty": int(d["tail_outer_positive_root_count"]) >= 1,
         "tail_option_measure_nonempty": int(d["tail_positive_option_count"]) >= 1,
         "cotangent_directional_derivative_exact": abs(fd - predicted) <= 1.0e-5,
+        "padded_model_option_alignment_exact": bool(
+            np.allclose(padded_w, np.asarray([0.25, 0.75, 0.0]), atol=0.0, rtol=0.0)
+            and padded_diag["model_padding_count"] == 2
+            and padded_diag["model_padding_all_invalid"]
+            and padded_diag["model_physical_valid_prefix_match"]
+            and padded_diag["padded_tail_mass"] == 0.0
+            and abs(float(padded_diag["physical_tail_mass"]) - 1.0) <= 1.0e-12
+        ),
     }
 
 
 __all__ = [
     "ENGINEERING_VERSION", "SCIENTIFIC_VERSION", "ALGORITHM_NAME",
     "TAIL_GEOMETRY_DIM", "MATCHED_DIM", "WeakRootTailMeasure",
+    "align_model_option_measure_to_physical_library",
     "nominal_ocmero_tail_measure", "weak_root_integral_geometry",
     "weak_root_work_geometry", "weak_root_work_conservation_error",
     "weak_root_option_permutation_invariance_error",

@@ -4,6 +4,7 @@ import numpy as np
 
 from ocrap.audits.weak_root_recovery_set_flow import (
     MATCHED_DIM,
+    align_model_option_measure_to_physical_library,
     TAIL_GEOMETRY_DIM,
     contract_checks,
     nominal_ocmero_tail_measure,
@@ -57,3 +58,49 @@ def test_tail_measure_is_deterministic_and_candidate_independent_by_interface():
     d = tail_measure_diagnostics(a)
     assert d["tail_outer_positive_root_count"] >= 1
     assert d["tail_positive_option_count"] >= 1
+
+
+def test_model_physical_option_alignment_accepts_only_invalid_checkpoint_padding():
+    physical, diag = align_model_option_measure_to_physical_library(
+        np.asarray([True, False, True, False, False]),
+        np.asarray([True, False, True]),
+        np.asarray([0.4, 0.0, 0.6, 0.0, 0.0]),
+    )
+    assert np.array_equal(physical, np.asarray([0.4, 0.0, 0.6]))
+    assert diag["model_option_count"] == 5
+    assert diag["physical_option_count"] == 3
+    assert diag["model_padding_count"] == 2
+    assert diag["model_padding_all_invalid"] is True
+    assert diag["model_physical_valid_prefix_match"] is True
+    assert diag["padded_tail_mass"] == 0.0
+    assert abs(diag["physical_tail_mass"] - 1.0) <= 1e-12
+
+
+def test_model_physical_option_alignment_rejects_extra_valid_model_option():
+    import pytest
+    with pytest.raises(ValueError, match="extra valid recovery options"):
+        align_model_option_measure_to_physical_library(
+            np.asarray([True, True, True]),
+            np.asarray([True, True]),
+            np.asarray([0.5, 0.5, 0.0]),
+        )
+
+
+def test_model_physical_option_alignment_rejects_prefix_identity_mismatch():
+    import pytest
+    with pytest.raises(ValueError, match="option-valid prefix mismatch"):
+        align_model_option_measure_to_physical_library(
+            np.asarray([True, False, False]),
+            np.asarray([True, True]),
+            np.asarray([1.0, 0.0, 0.0]),
+        )
+
+
+def test_model_physical_option_alignment_rejects_padded_tail_mass():
+    import pytest
+    with pytest.raises(ValueError, match="mass to invalid padded options"):
+        align_model_option_measure_to_physical_library(
+            np.asarray([True, True, False]),
+            np.asarray([True, True]),
+            np.asarray([0.45, 0.45, 0.10]),
+        )

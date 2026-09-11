@@ -118,6 +118,8 @@ def main() -> int:
             "constraint_work_channels": ["positive_reserve_work", "negative_debt_repayment_work"],
             "work_conservation_identity": "tail_weighted_reserve_work_plus_debt_work_equals_tail_weighted_bin_delta_h",
             "option_aggregation": "nominal_ocmero_nested_lcvar_cotangent_pushforward_over_recovery_options",
+            "model_physical_option_alignment": "raw_physical_prefix_plus_invalid_checkpoint_padding_only",
+            "padded_model_options_must_be_invalid_and_zero_tail_mass": True,
             "pre_readout_candidate_option_selector": False,
             "downstream_ocmero_option_selection_unchanged": True,
             "option_permutation_invariant": True,

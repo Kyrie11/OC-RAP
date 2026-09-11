@@ -19,6 +19,8 @@ export PYTHONNOUSERSITE=1
 
 The stable unversioned orientation launcher now runs **V48.116 OC-WRCF**. It treats the completed V48.115 OC-RSCF STOP artifacts as immutable scientific inputs and verifies their exact SHA/status/registered next branch before any V48.116 audit starts. Python implementation filenames remain semantic/unversioned; scientific inputs and outputs remain versioned.
 
+Engineering note: the current implementation is **v48.116.1-OC-WRCF**. It accepts only exact trailing invalid checkpoint padding when aligning the frozen model option geometry to the raw physical recovery library; the scientific version, command, output filenames, preregistered gates, and WRCF operator are unchanged.
+
 ## 1. Current orientation audit — V48.116 OC-WRCF
 
 V48.116 is **audit-only**. It keeps the historical 156-D candidate response, four actuator-projected executable constraints, recovery horizon, recovery library, cohorts and 220-D convex capacity fixed. It replaces V48.115's uniform recovery-option measure with the exact option push-forward of the **frozen nominal native OC-MERO nested-LCVAR cotangent**. The cotangent uses frozen model-predicted root logits/margins/compatibility and the existing root-valid support mask; teacher `m_star`, teacher root probabilities/compatibility, future signatures and held-out labels do not construct the feature. Root/margin heads are read-only.

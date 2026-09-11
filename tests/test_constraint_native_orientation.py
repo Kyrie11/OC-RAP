@@ -97,7 +97,7 @@ def test_current_wrcf_contract_checks():
     assert checks and all(checks.values()), checks
     assert TAIL_GEOMETRY_DIM == 64
     assert MATCHED_DIM == 220
-    assert ENGINEERING_VERSION == "v48.116.0-OC-WRCF"
+    assert ENGINEERING_VERSION == "v48.116.1-OC-WRCF"
     assert SCIENTIFIC_VERSION == "v48.116-OC-WRCF"
 
 
@@ -179,7 +179,7 @@ def test_current_result_packager_uses_only_canonical_v116_artifacts():
     spec.loader.exec_module(mod)
     assert mod.EXPECTED["balanced"] == "OC-RAP-v48.116-WRCF-balanced.json"
     assert mod.EXPECTED["precision"] == "OC-RAP-v48.116-WRCF-precision.json"
-    assert mod.ENGINEERING_VERSION == "v48.116.0-OC-WRCF"
+    assert mod.ENGINEERING_VERSION == "v48.116.1-OC-WRCF"
     assert mod.SCIENTIFIC_VERSION == "v48.116-OC-WRCF"
 
 

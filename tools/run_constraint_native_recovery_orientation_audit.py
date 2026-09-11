@@ -13,7 +13,7 @@ import numpy as np
 import torch
 
 from ocrap.data.serialization import load_npz_selected
-from ocrap.models.data import OCRAPSampleDataset
+from ocrap.models.data import OCRAPSampleDataset, option_features_from_sample
 from ocrap.models.inference import load_model_bundle
 from ocrap.models.encoders import StructuredTokenEncoder
 from ocrap.audits.constraint_native_orientation import (
@@ -39,6 +39,7 @@ from ocrap.audits.weak_root_recovery_set_flow import (
     MATCHED_DIM,
     SCIENTIFIC_VERSION,
     TAIL_GEOMETRY_DIM,
+    align_model_option_measure_to_physical_library,
     base_features,
     fit_set_flow_scaler,
     matched_features,
@@ -253,6 +254,11 @@ def _merge_tail_measure_diags(diags: list[dict[str, Any]]) -> dict[str, Any]:
             "min_outer_positive_root_count": 0,
             "max_option_weight_sum_error": 0.0,
             "max_cotangent_mass_error": 0.0,
+            "max_model_padding_count": 0,
+            "all_model_padding_invalid": True,
+            "all_model_physical_valid_prefix_match": True,
+            "max_padded_tail_mass": 0.0,
+            "max_physical_tail_mass_error": 0.0,
         }
     return {
         "group_count": len(diags),
@@ -264,6 +270,11 @@ def _merge_tail_measure_diags(diags: list[dict[str, Any]]) -> dict[str, Any]:
         "min_outer_positive_root_count": int(min(d["tail_outer_positive_root_count"] for d in diags)),
         "max_option_weight_sum_error": float(max(abs(float(d["tail_option_weight_sum"]) - 1.0) for d in diags)),
         "max_cotangent_mass_error": float(max(abs(float(d["tail_cotangent_mass"]) - 1.0) for d in diags)),
+        "max_model_padding_count": int(max(int(d.get("model_padding_count", 0)) for d in diags)),
+        "all_model_padding_invalid": bool(all(bool(d.get("model_padding_all_invalid", False)) for d in diags)),
+        "all_model_physical_valid_prefix_match": bool(all(bool(d.get("model_physical_valid_prefix_match", False)) for d in diags)),
+        "max_padded_tail_mass": float(max(float(d.get("padded_tail_mass", 1.0)) for d in diags)),
+        "max_physical_tail_mass_error": float(max(abs(float(d.get("physical_tail_mass", 0.0)) - 1.0) for d in diags)),
     }
 
 
@@ -366,9 +377,37 @@ def extract_records(
         f0 = executable_constraint_field_from_sample(d0, bundle.cfg)
         if first_field_diag is None:
             first_field_diag = dict(f0.diagnostics)
+        # The frozen model uses fixed checkpoint geometry and therefore may
+        # contain invalid padded option slots.  The physical recovery field uses
+        # the raw NPZ library only.  Verify exact prefix identity and permit only
+        # invalid structural padding; extra valid model options still fail closed.
         ov_np = option_valid0[0].detach().cpu().numpy().astype(bool)
-        if ov_np.shape != f0.option_valid.shape or not np.array_equal(ov_np, f0.option_valid):
-            raise RuntimeError("V48.116 model/physical nominal option-valid contract mismatch")
+        model_option_features = option_features0[0].detach().cpu().numpy()
+        raw_option_features = option_features_from_sample(dict(d0))
+        physical_L = int(len(f0.option_valid))
+        if raw_option_features.shape[0] != physical_L:
+            raise RuntimeError(
+                "V48.116 raw option-feature/physical-library count mismatch "
+                f"features={raw_option_features.shape[0]} physical={physical_L}"
+            )
+        if model_option_features.shape[0] < physical_L:
+            raise RuntimeError(
+                "V48.116 model option geometry shrinks physical recovery library "
+                f"model={model_option_features.shape[0]} physical={physical_L}"
+            )
+        if not np.allclose(
+            model_option_features[:physical_L], raw_option_features,
+            rtol=0.0, atol=1.0e-7, equal_nan=True,
+        ):
+            raise RuntimeError(
+                "V48.116 model/physical recovery-option semantic ordering mismatch"
+            )
+        if model_option_features.shape[0] > physical_L and not np.allclose(
+            model_option_features[physical_L:], 0.0, rtol=0.0, atol=1.0e-12
+        ):
+            raise RuntimeError(
+                "V48.116 padded model option features are not structural zeros"
+            )
 
         measure = nominal_ocmero_tail_measure(
             native["margins"][0].detach().cpu().numpy(),
@@ -380,7 +419,11 @@ def extract_records(
             beta=beta,
             top_m=top_m,
         )
+        physical_option_weights, alignment_diag = align_model_option_measure_to_physical_library(
+            ov_np, f0.option_valid, measure.option_weights
+        )
         tdiag = tail_measure_diagnostics(measure)
+        tdiag.update(alignment_diag)
         tail_measure_diags.append(tdiag)
 
         for j, c in enumerate(g["candidates"]):
@@ -388,16 +431,16 @@ def extract_records(
             dc = raw_sample[cp_path]
             validate_group_contract(d0, dc)
             fc = executable_constraint_field_from_sample(dc, bundle.cfg, num_options=len(f0.option_valid))
-            tail_integral = weak_root_integral_geometry(fc, f0, measure.option_weights)
-            tail_work = weak_root_work_geometry(fc, f0, measure.option_weights)
+            tail_integral = weak_root_integral_geometry(fc, f0, physical_option_weights)
+            tail_work = weak_root_work_geometry(fc, f0, physical_option_weights)
             physical_diag = set_flow_diagnostics(fc, f0)
             diag = dict(physical_diag)
             diag.update({
                 "tail_integral_nonzero": bool(np.any(np.abs(tail_integral) > 1.0e-12)),
                 "tail_work_nonzero": bool(np.any(np.abs(tail_work) > 1.0e-12)),
-                "tail_work_conservation_error": weak_root_work_conservation_error(fc, f0, measure.option_weights),
+                "tail_work_conservation_error": weak_root_work_conservation_error(fc, f0, physical_option_weights),
                 "tail_option_permutation_invariance_error": weak_root_option_permutation_invariance_error(
-                    fc, f0, measure.option_weights
+                    fc, f0, physical_option_weights
                 ),
             })
             pair_diags.append(diag)

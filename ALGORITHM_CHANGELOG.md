@@ -13503,3 +13503,34 @@ src/ocrap/audits/weak_root_recovery_set_flow.py
 ```
 
 and updates the existing unversioned runner, comparator, runtime checker, pipeline checker and packager.  The launcher fails closed on the exact authoritative V48.115 pipeline/comparison/balanced/precision SHA, STOP status and registered next branch before any GPU work.
+
+## V48.116.1 engineering correction — fixed model/physical option-padding contract (scientific V48.116 unchanged)
+
+The first real V48.116 execution failed before any WRCF scientific statistic was produced:
+
+```text
+RuntimeError: V48.116 model/physical nominal option-valid contract mismatch
+```
+
+This was an engineering-contract bug, not a failure of the V48.116 weak-root cotangent hypothesis. `OCRAPSampleDataset.fix_sample_geometry()` pads option tensors to the frozen checkpoint/config geometry, whereas `ExecutableConstraintField` intentionally preserves the raw NPZ recovery library. The original runner incorrectly required the padded model-side `option_valid` and raw physical `option_valid` arrays to have identical shapes.
+
+The correction preserves the exact V48.116 scientific operator:
+
+1. Compute the native nominal OC-MERO nested-LCVAR cotangent in the **full frozen model geometry** exactly as preregistered.
+2. Verify that physical recovery options occupy the leading model slots with identical validity semantics and identical option-feature ordering.
+3. Permit only trailing **structural invalid padding** introduced by fixed checkpoint geometry.
+4. Require every padded model slot to be invalid and require the nominal OC-MERO option push-forward to assign exactly zero mass to all padded slots.
+5. Remove only those zero-mass invalid padding slots before pairing the option measure with the raw physical executable constraint field.
+6. Continue to fail closed if the model contains any extra valid option without a physical counterpart, if real-option validity/order differs, or if padded slots receive nonzero tail mass.
+
+Therefore the physical option weights after alignment are mathematically identical to the preregistered WRCF measure on the real recovery library:
+
+```text
+omega_physical = omega_model[:L_physical],
+sum omega_model[L_physical:] = 0,
+sum omega_physical = 1.
+```
+
+No renormalization, option remapping, candidate-dependent selection, feature change, capacity change, root/source/planner training, threshold change, horizon change, cohort change, or preregistered decision change is introduced. The scientific version remains `v48.116-OC-WRCF`; only the engineering version advances from `v48.116.0-OC-WRCF` to `v48.116.1-OC-WRCF`.
+
+Additional fail-closed diagnostics now record model option count, physical option count, padding count, prefix-validity identity, padded-option validity, padded tail mass, and physical-measure unit-mass error. The preregistered activity gate treats any violation as an exact-contract failure.

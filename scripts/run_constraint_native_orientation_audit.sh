@@ -2,6 +2,8 @@
 # Stable constraint-native orientation audit entrypoint.
 # V48.116 OC-WRCF: nominal OC-MERO weak-root cotangent weighted recovery-set
 # constraint-flow audit after authoritative V48.115 RSCF STOP.
+# v48.116.1 engineering repair: exact model-padding -> raw physical-library alignment;
+# scientific version, weights, features, gates, cohorts, and command remain unchanged.
 # Audit only: frozen root/margin heads are read-only; no planner/source training.
 set -Eeuo pipefail
 
