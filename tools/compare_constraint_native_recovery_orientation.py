@@ -7,18 +7,19 @@ import json
 from pathlib import Path
 from typing import Any
 
-from ocrap.audits.executable_constraint_jacobian import (
+from ocrap.audits.common_option_constraint_work import (
     ENGINEERING_VERSION,
-    JACOBIAN_GEOMETRY_DIM,
     MATCHED_DIM,
     SCIENTIFIC_VERSION,
+    WORK_GEOMETRY_DIM,
 )
 
-AUTHORITATIVE_V112_COMPARISON_SHA256 = "0f07aed5ad1d52572a91b3491dbb63d21f1e2c231c1321bb52a66e5cbe351d64"
-AUTHORITATIVE_V112_PIPELINE_SHA256 = "426329407549b0408c4d6a225fa40239c13115f49b05d834a6c631f1e460e6ea"
-AUTHORITATIVE_V112_BALANCED_SHA256 = "20bc2c049f4793ca8ff74fe428ffeaf1284fad74ce03036e1f45ff20bf212a1b"
-AUTHORITATIVE_V112_PRECISION_SHA256 = "16129135e0509566e31604e6a80c5a5a82788d2452eca1d00c19cd0459953995"
+AUTHORITATIVE_V113_PIPELINE_SHA256 = "141164bc3881f734ec64963cf32c1f1b07ac0180e4835cc27b078b02b923930a"
+AUTHORITATIVE_V113_COMPARISON_SHA256 = "6ca24f95aaca4198eb565547abdcdd4d7d37aebc2bdf9758b6b003653411cc00"
+AUTHORITATIVE_V113_BALANCED_SHA256 = "544ff65a97ccb54cb90e081e437dfc165f6fb3cda08932c67656e7671efa7baf"
+AUTHORITATIVE_V113_PRECISION_SHA256 = "ee709ea955731e05277709f0622a9d8cf6bfab58962f01372eb392c3073e4048"
 ROLES = ("dev_near", "dev_contact", "certificate_near", "certificate_contact")
+SPACES = ("base", "nominal_integral", "candidate_integral", "nominal_work", "candidate_work")
 
 
 def _sha(path: Path) -> str:
@@ -34,6 +35,12 @@ def _cross(roles: set[str], n: int) -> bool:
 
 
 def _action_gate(docs: dict[str, Any], space: str, metric: str) -> dict[str, Any]:
+    """Absolute orientation vs within-group whole-row candidate shuffle.
+
+    The legacy 6/8 count is retained for continuity, but balanced/precision
+    exact identity is explicitly reported and the gate additionally requires
+    at least 3/4 unique roles with Near+Contact coverage.
+    """
     positive: list[list[str]] = []
     top: list[list[str]] = []
     roles: set[str] = set()
@@ -58,61 +65,82 @@ def _action_gate(docs: dict[str, Any], space: str, metric: str) -> dict[str, Any
     }
 
 
-def _matched_increment_gate(docs: dict[str, Any], metric: str) -> dict[str, Any]:
+def _within_increment_gate(
+    docs: dict[str, Any],
+    treatment: str,
+    control: str,
+    metric: str,
+    *,
+    label: str,
+) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     positive: list[list[str]] = []
     material: list[list[str]] = []
     roles: set[str] = set()
     for variant, d in docs.items():
         for role in ROLES:
-            ca = d["candidate_option_cells"][role][f"{metric}_true"].get("auc")
-            no = d["nominal_option_cells"][role][f"{metric}_true"].get("auc")
-            delta = None if ca is None or no is None else float(ca) - float(no)
+            ta = d[f"{treatment}_cells"][role][f"{metric}_true"].get("auc")
+            co = d[f"{control}_cells"][role][f"{metric}_true"].get("auc")
+            delta = None if ta is None or co is None else float(ta) - float(co)
             rows.append({
-                "variant": variant, "role": role,
-                "candidate_option_auc": ca, "nominal_option_auc": no,
-                "candidate_minus_nominal_option": delta,
+                "variant": variant,
+                "role": role,
+                f"{treatment}_auc": ta,
+                f"{control}_auc": co,
+                label: delta,
             })
             if delta is not None and delta > 0.0:
-                positive.append([variant, role]); roles.add(role)
+                positive.append([variant, role])
+                roles.add(role)
             if delta is not None and delta >= 0.01:
                 material.append([variant, role])
     go = len(positive) >= 6 and _cross(roles, 3) and len(material) >= 4
     return {
-        "go": bool(go), "positive_cells": positive, "material_cells": material,
-        "roles": sorted(roles), "rows": rows,
+        "go": bool(go),
+        "positive_cells": positive,
+        "material_cells": material,
+        "roles": sorted(roles),
+        "rows": rows,
     }
 
 
-def _continuation_increment_gate(docs: dict[str, Any], hist: dict[str, Any], metric: str) -> dict[str, Any]:
+def _historical_increment_gate(
+    docs: dict[str, Any], hist: dict[str, Any], space: str, metric: str, *, label: str
+) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     positive: list[list[str]] = []
     material: list[list[str]] = []
     roles: set[str] = set()
     for variant in ("balanced", "precision"):
         for role in ROLES:
-            now = docs[variant]["candidate_option_cells"][role][f"{metric}_true"].get("auc")
-            old = hist[variant]["candidate_cone_cells"][role][f"{metric}_true"].get("auc")
+            now = docs[variant][f"{space}_cells"][role][f"{metric}_true"].get("auc")
+            old = hist[variant]["candidate_option_cells"][role][f"{metric}_true"].get("auc")
             delta = None if now is None or old is None else float(now) - float(old)
             rows.append({
-                "variant": variant, "role": role,
-                "candidate_option_auc": now, "v48_112_candidate_cone_auc": old,
-                "executable_continuation_minus_prefix_cone": delta,
+                "variant": variant,
+                "role": role,
+                f"v48_114_{space}_auc": now,
+                "v48_113_candidate_option_auc": old,
+                label: delta,
             })
             if delta is not None and delta > 0.0:
-                positive.append([variant, role]); roles.add(role)
+                positive.append([variant, role])
+                roles.add(role)
             if delta is not None and delta >= 0.01:
                 material.append([variant, role])
     go = len(positive) >= 6 and _cross(roles, 3) and len(material) >= 4
     return {
-        "go": bool(go), "positive_cells": positive, "material_cells": material,
-        "roles": sorted(roles), "rows": rows,
+        "go": bool(go),
+        "positive_cells": positive,
+        "material_cells": material,
+        "roles": sorted(roles),
+        "rows": rows,
     }
 
 
 def _variant_identity(docs: dict[str, Any]) -> dict[str, Any]:
     diffs: list[str] = []
-    for space in ("base", "nominal_option", "candidate_option"):
+    for space in SPACES:
         for role in ROLES:
             for metric in ("support_true", "support_shuffled", "reserve_true", "reserve_shuffled"):
                 a = docs["balanced"][f"{space}_cells"][role][metric]
@@ -130,9 +158,13 @@ def _power(docs: dict[str, Any], space: str) -> list[dict[str, Any]]:
             for axis in ("support", "reserve"):
                 m = docs[variant][f"{space}_cells"][role][f"{axis}_true"]
                 out.append({
-                    "variant": variant, "role": role, "axis": axis,
-                    "rows": m.get("rows"), "positive_rows": m.get("positive_rows"),
-                    "negative_rows": m.get("negative_rows"), "powered_groups": m.get("powered_groups"),
+                    "variant": variant,
+                    "role": role,
+                    "axis": axis,
+                    "rows": m.get("rows"),
+                    "positive_rows": m.get("positive_rows"),
+                    "negative_rows": m.get("negative_rows"),
+                    "powered_groups": m.get("powered_groups"),
                     "underpowered": bool(
                         (m.get("powered_groups") or 0) < 3
                         or (m.get("positive_rows") or 0) < 5
@@ -144,54 +176,74 @@ def _power(docs: dict[str, Any], space: str) -> list[dict[str, Any]]:
 
 def _activity_gate(docs: dict[str, Any]) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
+    constraint_diverse_roles: set[str] = set()
+    response_roles: set[str] = set()
+    reserve_work_roles: set[str] = set()
+    debt_work_contact_roles: set[str] = set()
+    reentry_contact_roles: set[str] = set()
     option_switch_roles: set[str] = set()
     mode_diverse_roles: set[str] = set()
-    constraint_diverse_roles: set[str] = set()
-    reentry_contact_roles: set[str] = set()
+    conservation_ok = True
     for variant in ("balanced", "precision"):
-        d = docs[variant]
         for role in ROLES:
-            diag = ((d.get("events") or {}).get(role, {}).get("pair_diagnostics") or {})
+            diag = ((docs[variant].get("events") or {}).get(role, {}).get("pair_diagnostics") or {})
+            active = diag.get("candidate_selected_active_type_counts", {}) or {}
             switch = float(diag.get("option_switch_fraction", 0.0) or 0.0)
             modes = diag.get("candidate_selected_mode_counts", {}) or {}
-            active = diag.get("candidate_selected_active_type_counts", {}) or {}
             reentry = float(diag.get("candidate_selected_reentry_active_fraction", 0.0) or 0.0)
+            response = float(diag.get("integral_response_nonzero_fraction", 0.0) or 0.0)
+            reserve = float(diag.get("reserve_work_nonzero_fraction", 0.0) or 0.0)
+            debt = float(diag.get("debt_work_nonzero_fraction", 0.0) or 0.0)
+            cerr = float(diag.get("max_work_conservation_error", 0.0) or 0.0)
+            conservation_ok = conservation_ok and cerr <= 1.0e-10
             rows.append({
-                "variant": variant, "role": role,
+                "variant": variant,
+                "role": role,
                 "option_switch_fraction": switch,
                 "candidate_selected_mode_counts": modes,
                 "candidate_selected_active_type_counts": active,
                 "candidate_selected_reentry_active_fraction": reentry,
                 "field_reentry_available_fraction": float(diag.get("field_reentry_available_fraction", 0.0) or 0.0),
+                "integral_response_nonzero_fraction": response,
+                "reserve_work_nonzero_fraction": reserve,
+                "debt_work_nonzero_fraction": debt,
+                "max_work_conservation_error": cerr,
             })
+            if sum(int(v) > 0 for v in active.values()) >= 2:
+                constraint_diverse_roles.add(role)
+            if response > 0.0:
+                response_roles.add(role)
+            if reserve > 0.0:
+                reserve_work_roles.add(role)
+            if "contact" in role and debt > 0.0:
+                debt_work_contact_roles.add(role)
+            if "contact" in role and reentry > 0.0:
+                reentry_contact_roles.add(role)
             if switch > 0.0:
                 option_switch_roles.add(role)
             if sum(int(v) > 0 for v in modes.values()) >= 2:
                 mode_diverse_roles.add(role)
-            if sum(int(v) > 0 for v in active.values()) >= 2:
-                constraint_diverse_roles.add(role)
-            if "contact" in role and reentry > 0.0:
-                reentry_contact_roles.add(role)
-    # Core ECJ activity is about whether the executable continuation actually
-    # exposes heterogeneous binding constraints.  Recovery-mode diversity and
-    # candidate-vs-nominal option switching are prerequisites only for claiming
-    # an adaptive selector effect.  Re-entry coverage is reported separately:
-    # the paper-level Contact bucket may be a counterfactual contact-surrogate
-    # target and therefore does not imply an observed overlap at the audit
-    # anchor.  Requiring re-entry for the *core* ECJ gate would conflate dataset
-    # role semantics with observable physical contact.  A full post-contact
-    # promotion still requires explicit re-entry evidence.
-    core_go = _cross(constraint_diverse_roles, 3)
-    adaptive_go = _cross(option_switch_roles, 3) and _cross(mode_diverse_roles, 3)
-    reentry_go = len(reentry_contact_roles) >= 1
+    core = (
+        conservation_ok
+        and _cross(constraint_diverse_roles, 3)
+        and _cross(response_roles, 3)
+        and _cross(reserve_work_roles, 3)
+        and len(debt_work_contact_roles) >= 1
+    )
+    selector = _cross(option_switch_roles, 3) and _cross(mode_diverse_roles, 3)
+    reentry = len(reentry_contact_roles) >= 1
     return {
-        "go": bool(core_go),
-        "adaptive_selector_activity_go": bool(adaptive_go),
-        "reentry_contact_coverage_go": bool(reentry_go),
+        "go": bool(core),
+        "selector_activity_go": bool(selector),
+        "reentry_contact_coverage_go": bool(reentry),
+        "work_conservation_go": bool(conservation_ok),
+        "constraint_diverse_roles": sorted(constraint_diverse_roles),
+        "integral_response_roles": sorted(response_roles),
+        "reserve_work_roles": sorted(reserve_work_roles),
+        "debt_work_contact_roles": sorted(debt_work_contact_roles),
+        "reentry_contact_roles": sorted(reentry_contact_roles),
         "option_switch_roles": sorted(option_switch_roles),
         "mode_diverse_roles": sorted(mode_diverse_roles),
-        "constraint_diverse_roles": sorted(constraint_diverse_roles),
-        "reentry_contact_roles": sorted(reentry_contact_roles),
         "rows": rows,
     }
 
@@ -205,7 +257,7 @@ def _result_errors(d: dict[str, Any], variant: str) -> list[str]:
         "convex_closed_form_ridge": True,
         "strictly_convex_unique_solution": True,
         "iterative_optimizer_used": False,
-        "capacity_matched_nominal_vs_candidate_option": True,
+        "capacity_matched_all_work_families": True,
         "actuator_projection": True,
         "teacher_npz_fields_loaded_into_feature_path": False,
         "planner_parameters_trained": 0,
@@ -226,16 +278,18 @@ def _result_errors(d: dict[str, Any], variant: str) -> list[str]:
         errors.append(f"{variant}:engineering_version")
     if d.get("scientific_version") != SCIENTIFIC_VERSION:
         errors.append(f"{variant}:scientific_version")
-    if int(d.get("jacobian_geometry_dimension", -1)) != JACOBIAN_GEOMETRY_DIM:
+    if int(d.get("work_geometry_dimension", -1)) != WORK_GEOMETRY_DIM:
         errors.append(f"{variant}:geometry_dim")
     if int(d.get("matched_family_dimension", -1)) != MATCHED_DIM:
         errors.append(f"{variant}:matched_dim")
+    if d.get("constraint_work_channels") != ["positive_reserve_work", "negative_debt_repayment_work"]:
+        errors.append(f"{variant}:work_channels")
     return errors
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    for key in ("balanced", "precision", "v112_pipeline", "v112_comparison", "v112_balanced", "v112_precision"):
+    for key in ("balanced", "precision", "v113_pipeline", "v113_comparison", "v113_balanced", "v113_precision"):
         ap.add_argument("--" + key.replace("_", "-"), dest=key, type=Path, required=True)
     ap.add_argument("--run-id", required=True)
     ap.add_argument("--output", type=Path, required=True)
@@ -243,125 +297,151 @@ def main() -> int:
     errors: list[str] = []
 
     docs = {v: json.loads(getattr(a, v).read_text()) for v in ("balanced", "precision")}
-    for v, obj in docs.items():
-        errors += _result_errors(obj, v)
+    for variant, obj in docs.items():
+        errors += _result_errors(obj, variant)
         if obj.get("run_instance_id") != a.run_id:
-            errors.append(f"{v}:run_instance_id")
+            errors.append(f"{variant}:run_instance_id")
 
-    p112 = json.loads(a.v112_pipeline.read_text())
-    c112 = json.loads(a.v112_comparison.read_text())
-    b112 = json.loads(a.v112_balanced.read_text())
-    p112r = json.loads(a.v112_precision.read_text())
-    d112 = c112.get("preregistered_decision") or {}
+    p113 = json.loads(a.v113_pipeline.read_text())
+    c113 = json.loads(a.v113_comparison.read_text())
+    b113 = json.loads(a.v113_balanced.read_text())
+    q113 = json.loads(a.v113_precision.read_text())
+    d113 = c113.get("preregistered_decision") or {}
 
-    if _sha(a.v112_pipeline) != AUTHORITATIVE_V112_PIPELINE_SHA256:
-        errors.append("v112_pipeline_sha")
-    if _sha(a.v112_comparison) != AUTHORITATIVE_V112_COMPARISON_SHA256:
-        errors.append("v112_comparison_sha")
-    if _sha(a.v112_balanced) != AUTHORITATIVE_V112_BALANCED_SHA256:
-        errors.append("v112_balanced_sha")
-    if _sha(a.v112_precision) != AUTHORITATIVE_V112_PRECISION_SHA256:
-        errors.append("v112_precision_sha")
-    if not (
-        p112.get("valid") and p112.get("attribution_ready")
-        and p112.get("scientific_version") == "v48.112-OC-HCNC"
-        and p112.get("preregistered_status") == "HETEROGENEOUS_CONSTRAINT_NORMAL_CONE_STOP"
+    for path, want, name in (
+        (a.v113_pipeline, AUTHORITATIVE_V113_PIPELINE_SHA256, "v113_pipeline_sha"),
+        (a.v113_comparison, AUTHORITATIVE_V113_COMPARISON_SHA256, "v113_comparison_sha"),
+        (a.v113_balanced, AUTHORITATIVE_V113_BALANCED_SHA256, "v113_balanced_sha"),
+        (a.v113_precision, AUTHORITATIVE_V113_PRECISION_SHA256, "v113_precision_sha"),
     ):
-        errors.append("v112_pipeline")
+        if _sha(path) != want:
+            errors.append(name)
     if not (
-        c112.get("valid") and c112.get("attribution_ready")
-        and d112.get("status") == "HETEROGENEOUS_CONSTRAINT_NORMAL_CONE_STOP"
-        and d112.get("next_branch")
-        == "close_prefix_level_first_order_constraint_cone_then_preregister_candidate_option_executable_constraint_jacobian_audit_no_training_or_source_sweep"
+        p113.get("valid") and p113.get("attribution_ready")
+        and p113.get("scientific_version") == "v48.113-OC-ECJ"
+        and p113.get("preregistered_status") == "EXECUTABLE_CONSTRAINT_JACOBIAN_STOP"
     ):
-        errors.append("v112_branch")
+        errors.append("v113_pipeline")
+    if not (
+        c113.get("valid") and c113.get("attribution_ready")
+        and d113.get("status") == "EXECUTABLE_CONSTRAINT_JACOBIAN_STOP"
+        and d113.get("next_branch")
+        == "close_selected_option_first_order_jacobian_then_preregister_common_option_constraint_work_audit_no_capacity_or_regime_sweep"
+    ):
+        errors.append("v113_branch")
 
-    historical = {"balanced": b112, "precision": p112r}
-    # Preserve the exact V48.112 base owner/cohort/null before attributing the
-    # executable-continuation intervention.
-    for metric in ("support", "reserve"):
-        for variant in ("balanced", "precision"):
+    historical = {"balanced": b113, "precision": q113}
+    # Exact cohort/base/checkpoint identity is required before cross-version
+    # attribution.  This turns the V48.113 pointwise ECJ into an immutable
+    # equal-capacity historical control rather than silently refitting it.
+    for variant in ("balanced", "precision"):
+        if docs[variant].get("checkpoint_sha256") != historical[variant].get("checkpoint_sha256"):
+            errors.append(f"{variant}:checkpoint_identity")
+        for metric in ("support", "reserve"):
             for role in ROLES:
                 got = docs[variant]["base_cells"][role][f"{metric}_true"].get("auc")
                 exp = historical[variant]["base_cells"][role][f"{metric}_true"].get("auc")
                 if got is None or exp is None or abs(float(got) - float(exp)) > 1.0e-12:
-                    errors.append(f"{variant}:{role}:{metric}:v112_base_identity")
+                    errors.append(f"{variant}:{role}:{metric}:v113_base_identity")
 
-    ngs = _action_gate(docs, "nominal_option", "support") if not errors else {"go": False, "local_order": False}
-    ngr = _action_gate(docs, "nominal_option", "reserve") if not errors else {"go": False, "local_order": False}
-    cgs = _action_gate(docs, "candidate_option", "support") if not errors else {"go": False, "local_order": False}
-    cgr = _action_gate(docs, "candidate_option", "reserve") if not errors else {"go": False, "local_order": False}
-    sis = _matched_increment_gate(docs, "support") if not errors else {"go": False, "rows": []}
-    sir = _matched_increment_gate(docs, "reserve") if not errors else {"go": False, "rows": []}
-    cis = _continuation_increment_gate(docs, historical, "support") if not errors else {"go": False, "rows": []}
-    cir = _continuation_increment_gate(docs, historical, "reserve") if not errors else {"go": False, "rows": []}
-    activity = _activity_gate(docs) if not errors else {
-        "go": False,
-        "adaptive_selector_activity_go": False,
-        "reentry_contact_coverage_go": False,
-        "rows": [],
-    }
-
-    core_go = bool(cgs.get("go") and cgr.get("go") and cis.get("go") and cir.get("go") and activity.get("go"))
-    adaptive_go = bool(core_go and sis.get("go") and sir.get("go") and activity.get("adaptive_selector_activity_go"))
-    reentry_coverage_go = bool(activity.get("reentry_contact_coverage_go"))
-    unified_post_contact_go = bool(core_go and reentry_coverage_go)
     if errors:
-        status = "V48_113_ENGINEERING_STOP"
-        branch = "fix_v48_113_engineering_and_rerun_same_executable_constraint_jacobian_audit"
-    elif adaptive_go and reentry_coverage_go:
-        status = "EXECUTABLE_CONSTRAINT_JACOBIAN_ADAPTIVE_GO"
-        branch = "promote_same_option_executable_constraint_jacobian_and_candidate_option_selector_then_preregister_one_nominal_invariant_carrier_no_source_or_boundary_sweep"
-    elif adaptive_go:
-        status = "EXECUTABLE_CONSTRAINT_JACOBIAN_ADAPTIVE_GO_REENTRY_COVERAGE_PENDING"
-        branch = "retain_same_option_ecj_and_candidate_option_selector_but_require_observed_contact_reentry_coverage_before_unified_carrier_or_main_promotion"
-    elif core_go and reentry_coverage_go:
-        status = "EXECUTABLE_CONSTRAINT_JACOBIAN_CORE_GO_SELECTOR_STOP"
-        branch = "promote_same_option_executable_constraint_jacobian_only_keep_option_selector_frozen_then_preregister_one_nominal_invariant_carrier"
-    elif core_go:
-        status = "EXECUTABLE_CONSTRAINT_JACOBIAN_CORE_GO_REENTRY_COVERAGE_PENDING"
-        branch = "retain_same_option_ecj_but_require_observed_contact_reentry_coverage_before_unified_carrier_or_main_promotion_keep_selector_frozen"
-    elif cgr.get("go") and cir.get("go") and not (cgs.get("go") and cis.get("go")):
-        status = "EXECUTABLE_CONSTRAINT_JACOBIAN_RESERVE_ONLY"
-        branch = "retain_debt_side_executable_jacobian_diagnostic_then_audit_support_establishment_on_same_option_no_new_capacity"
-    elif cgs.get("go") and cis.get("go") and not (cgr.get("go") and cir.get("go")):
-        status = "EXECUTABLE_CONSTRAINT_JACOBIAN_SUPPORT_ONLY"
-        branch = "retain_support_side_executable_jacobian_diagnostic_then_audit_signed_debt_on_same_option_no_new_capacity"
-    elif cgs.get("local_order") and cgr.get("local_order"):
-        status = "EXECUTABLE_CONSTRAINT_JACOBIAN_LOCAL_ORDER_ONLY"
-        branch = "same_executable_jacobian_features_then_one_convex_pairwise_audit_no_feature_or_source_change"
+        action = lambda *args, **kwargs: {"go": False, "local_order": False, "rows": []}
+        increment = lambda *args, **kwargs: {"go": False, "rows": []}
+        iw_s = action(); iw_r = action(); cw_s = action(); cw_r = action(); nw_s = action(); nw_r = action()
+        hist_i_s = increment(); hist_i_r = increment(); hist_w_s = increment(); hist_w_r = increment()
+        decomp_s = increment(); decomp_r = increment(); selector_s = increment(); selector_r = increment()
+        activity = {"go": False, "selector_activity_go": False, "reentry_contact_coverage_go": False, "rows": []}
     else:
-        status = "EXECUTABLE_CONSTRAINT_JACOBIAN_STOP"
-        branch = "close_selected_option_first_order_jacobian_then_preregister_common_option_constraint_work_audit_no_capacity_or_regime_sweep"
+        iw_s = _action_gate(docs, "candidate_integral", "support")
+        iw_r = _action_gate(docs, "candidate_integral", "reserve")
+        cw_s = _action_gate(docs, "candidate_work", "support")
+        cw_r = _action_gate(docs, "candidate_work", "reserve")
+        nw_s = _action_gate(docs, "nominal_work", "support")
+        nw_r = _action_gate(docs, "nominal_work", "reserve")
+        hist_i_s = _historical_increment_gate(docs, historical, "candidate_integral", "support", label="integral_minus_v48_113_pointwise")
+        hist_i_r = _historical_increment_gate(docs, historical, "candidate_integral", "reserve", label="integral_minus_v48_113_pointwise")
+        hist_w_s = _historical_increment_gate(docs, historical, "candidate_work", "support", label="work_minus_v48_113_pointwise")
+        hist_w_r = _historical_increment_gate(docs, historical, "candidate_work", "reserve", label="work_minus_v48_113_pointwise")
+        decomp_s = _within_increment_gate(docs, "candidate_work", "candidate_integral", "support", label="work_minus_integral")
+        decomp_r = _within_increment_gate(docs, "candidate_work", "candidate_integral", "reserve", label="work_minus_integral")
+        selector_s = _within_increment_gate(docs, "candidate_work", "nominal_work", "support", label="candidate_minus_nominal_work")
+        selector_r = _within_increment_gate(docs, "candidate_work", "nominal_work", "reserve", label="candidate_minus_nominal_work")
+        activity = _activity_gate(docs)
+
+    integral_core_go = bool(iw_s.get("go") and iw_r.get("go") and hist_i_s.get("go") and hist_i_r.get("go") and activity.get("go"))
+    work_core_go = bool(cw_s.get("go") and cw_r.get("go") and hist_w_s.get("go") and hist_w_r.get("go") and activity.get("go"))
+    signed_decomposition_go = bool(work_core_go and decomp_s.get("go") and decomp_r.get("go"))
+    adaptive_selector_go = bool(work_core_go and selector_s.get("go") and selector_r.get("go") and activity.get("selector_activity_go"))
+    reentry_coverage_go = bool(activity.get("reentry_contact_coverage_go"))
+    unified_work_go = bool(work_core_go and reentry_coverage_go)
+
+    if errors:
+        status = "V48_114_ENGINEERING_STOP"
+        branch = "fix_v48_114_engineering_and_rerun_same_common_option_constraint_work_audit"
+    elif signed_decomposition_go and reentry_coverage_go:
+        status = "COMMON_OPTION_CONSTRAINT_WORK_GO"
+        branch = (
+            "promote_full_horizon_signed_constraint_work"
+            + ("_and_candidate_option_selector" if adaptive_selector_go else "_keep_selector_frozen")
+            + "_then_preregister_one_nominal_invariant_carrier_no_source_or_boundary_sweep"
+        )
+    elif signed_decomposition_go:
+        status = "COMMON_OPTION_CONSTRAINT_WORK_GO_REENTRY_COVERAGE_PENDING"
+        branch = "retain_signed_constraint_work_but_require_observed_contact_reentry_coverage_before_unified_carrier_promotion"
+    elif integral_core_go and not signed_decomposition_go:
+        status = "FULL_HORIZON_INTEGRAL_RESPONSE_GO_SIGNED_DECOMPOSITION_STOP"
+        branch = "promote_temporal_integral_response_only_keep_reserve_debt_decomposition_out_of_main_then_preregister_one_carrier"
+    elif cw_r.get("go") and hist_w_r.get("go") and not (cw_s.get("go") and hist_w_s.get("go")):
+        status = "COMMON_OPTION_CONSTRAINT_WORK_RESERVE_ONLY"
+        branch = "retain_debt_repayment_work_diagnostic_then_audit_support_establishment_as_set_valued_common_option_survival_no_new_capacity"
+    elif cw_s.get("go") and hist_w_s.get("go") and not (cw_r.get("go") and hist_w_r.get("go")):
+        status = "COMMON_OPTION_CONSTRAINT_WORK_SUPPORT_ONLY"
+        branch = "retain_reserve_preservation_work_diagnostic_then_audit_contact_debt_occupation_measure_no_regime_specific_policy"
+    elif cw_s.get("local_order") and cw_r.get("local_order"):
+        status = "COMMON_OPTION_CONSTRAINT_WORK_LOCAL_ORDER_ONLY"
+        branch = "same_constraint_work_features_then_one_convex_pairwise_audit_no_feature_or_source_change"
+    else:
+        status = "COMMON_OPTION_CONSTRAINT_WORK_STOP"
+        branch = "close_selected_option_fixed_bin_work_family_then_preregister_selector_free_recovery_set_constraint_flow_audit_no_capacity_or_regime_sweep"
 
     ident = _variant_identity(docs)
     decision = {
         "status": status,
         "next_branch": branch,
-        "nominal_option_support_gate": ngs,
-        "nominal_option_reserve_gate": ngr,
-        "candidate_option_support_gate": cgs,
-        "candidate_option_reserve_gate": cgr,
-        "candidate_minus_nominal_option_support_gate": sis,
-        "candidate_minus_nominal_option_reserve_gate": sir,
-        "executable_continuation_vs_v48_112_prefix_support_gate": cis,
-        "executable_continuation_vs_v48_112_prefix_reserve_gate": cir,
-        "executable_option_activity_gate": activity,
-        "core_executable_constraint_jacobian_go": core_go,
-        "adaptive_candidate_option_selector_go": adaptive_go,
+        "candidate_integral_support_gate": iw_s,
+        "candidate_integral_reserve_gate": iw_r,
+        "candidate_work_support_gate": cw_s,
+        "candidate_work_reserve_gate": cw_r,
+        "nominal_work_support_gate": nw_s,
+        "nominal_work_reserve_gate": nw_r,
+        "integral_vs_v48_113_pointwise_support_gate": hist_i_s,
+        "integral_vs_v48_113_pointwise_reserve_gate": hist_i_r,
+        "work_vs_v48_113_pointwise_support_gate": hist_w_s,
+        "work_vs_v48_113_pointwise_reserve_gate": hist_w_r,
+        "signed_work_vs_integral_support_gate": decomp_s,
+        "signed_work_vs_integral_reserve_gate": decomp_r,
+        "candidate_vs_nominal_work_support_gate": selector_s,
+        "candidate_vs_nominal_work_reserve_gate": selector_r,
+        "constraint_work_activity_gate": activity,
+        "full_horizon_integral_core_go": integral_core_go,
+        "common_option_constraint_work_core_go": work_core_go,
+        "signed_reserve_debt_decomposition_go": signed_decomposition_go,
+        "adaptive_candidate_option_selector_go": adaptive_selector_go,
         "reentry_contact_coverage_go": reentry_coverage_go,
-        "unified_post_contact_executable_jacobian_go": unified_post_contact_go,
-        "capacity_matched_nominal_vs_candidate_option": True,
+        "unified_post_contact_constraint_work_go": unified_work_go,
+        "capacity_matched_all_families": True,
         "matched_dimension": MATCHED_DIM,
-        "geometry_dimension": JACOBIAN_GEOMETRY_DIM,
+        "geometry_dimension": WORK_GEOMETRY_DIM,
+        "work_bins": 8,
         "constraint_names": ["clearance", "stopping", "route", "reentry"],
+        "work_channels": ["positive_reserve_work", "negative_debt_repayment_work"],
         "balanced_precision_metric_identity": ident,
-        "power_diagnostics": _power(docs, "candidate_option"),
+        "power_diagnostics": _power(docs, "candidate_work"),
         "scientific_note": (
-            "candidate and nominal option families share the same 220-D linear class; every response compares "
-            "candidate and nominal under the same actuator-projected recovery option. The candidate family changes "
-            "only which observation-only max-min executable option is selected. Cross-version continuation gates "
-            "compare the 220-D executable readout to the authoritative 220-D V48.112 prefix-cone readout."
+            "V48.114 keeps the V48.113 selector, constraints, horizon, base 156-D response, and 220-D convex capacity fixed. "
+            "The integral arm isolates full-horizon accumulation from sparse point samples using the historical ECJ channels. "
+            "The work arm then changes only the two temporal channels to positive-reserve work and negative-debt repayment, whose sum equals the signed response exactly. "
+            "All candidate-minus-nominal comparisons use one common actuator-projected recovery option identity; no teacher future or regime label enters the feature path."
         ),
         "source_training_authorized": False,
         "broad_encoder_training_authorized": False,
@@ -370,14 +450,14 @@ def main() -> int:
         "regime_conditioned_policy_authorized": False,
     }
     out = {
-        "schema": "ocrap-v48.113-ecj-comparison-v1",
+        "schema": "ocrap-v48.114-ccw-comparison-v1",
         "engineering_version": ENGINEERING_VERSION,
         "scientific_version": SCIENTIFIC_VERSION,
         "run_instance_id": a.run_id,
         "valid": not errors,
         "attribution_ready": not errors,
         "errors": errors,
-        "experiment_type": "audit_only_candidate_option_executable_constraint_jacobian",
+        "experiment_type": "audit_only_common_option_full_horizon_constraint_work",
         "preregistered_decision": decision,
         "planner_parameters_trained": 0,
         "stage_i_parameters_trained": 0,
@@ -388,11 +468,11 @@ def main() -> int:
         "boundary_transport": False,
         "teacher_metadata_input_to_model": False,
         "test_roots_read": False,
-        "v48_112_pipeline_sha256": _sha(a.v112_pipeline),
-        "v48_112_comparison_sha256": _sha(a.v112_comparison),
-        "v48_112_balanced_sha256": _sha(a.v112_balanced),
-        "v48_112_precision_sha256": _sha(a.v112_precision),
-        "authoritative_v48_112_comparison_sha256": AUTHORITATIVE_V112_COMPARISON_SHA256,
+        "v48_113_pipeline_sha256": _sha(a.v113_pipeline),
+        "v48_113_comparison_sha256": _sha(a.v113_comparison),
+        "v48_113_balanced_sha256": _sha(a.v113_balanced),
+        "v48_113_precision_sha256": _sha(a.v113_precision),
+        "authoritative_v48_113_comparison_sha256": AUTHORITATIVE_V113_COMPARISON_SHA256,
     }
     a.output.parent.mkdir(parents=True, exist_ok=True)
     a.output.write_text(json.dumps(out, indent=2, sort_keys=True) + "\n")

@@ -29,19 +29,22 @@ from ocrap.audits.constraint_native_orientation import (
     ridge_scores,
 )
 from ocrap.audits.executable_constraint_jacobian import (
-    ALGORITHM_NAME,
-    ENGINEERING_VERSION,
-    JACOBIAN_GEOMETRY_DIM,
-    MATCHED_DIM,
-    SCIENTIFIC_VERSION,
-    base_features,
     best_option_index,
     executable_constraint_field_from_sample,
-    fit_jacobian_scaler,
-    jacobian_geometry,
-    matched_features,
-    pair_diagnostics,
     validate_group_contract,
+)
+from ocrap.audits.common_option_constraint_work import (
+    ALGORITHM_NAME,
+    ENGINEERING_VERSION,
+    MATCHED_DIM,
+    SCIENTIFIC_VERSION,
+    WORK_GEOMETRY_DIM,
+    base_features,
+    constraint_work_geometry,
+    fit_work_scaler,
+    integral_response_geometry,
+    matched_features,
+    pair_work_diagnostics,
 )
 
 ROLES = ("dev_near", "dev_contact", "certificate_near", "certificate_contact")
@@ -49,7 +52,7 @@ ROLES = ("dev_near", "dev_contact", "certificate_near", "certificate_contact")
 # Deliberately excludes teacher m_star/root/future labels.  The scientific
 # feature path reads only current observation, candidate prefix, and the fixed
 # recovery option library.  Labels enter later through the historical indices.
-ECJ_SAMPLE_KEYS: frozenset[str] = frozenset({
+CCW_SAMPLE_KEYS: frozenset[str] = frozenset({
     "scene_id", "time_index", "candidate_index", "is_nominal",
     "agent_history", "agent_valid", "ego_state",
     "prefix_states", "prefix_controls", "prefix_param", "prefix_macro_id", "prefix_macro_name",
@@ -218,6 +221,10 @@ def _merge_pair_diags(diags: list[dict[str, Any]]) -> dict[str, Any]:
             "candidate_selected_active_type_counts": {},
             "candidate_selected_reentry_active_fraction": 0.0,
             "field_reentry_available_fraction": 0.0,
+            "reserve_work_nonzero_fraction": 0.0,
+            "debt_work_nonzero_fraction": 0.0,
+            "integral_response_nonzero_fraction": 0.0,
+            "max_work_conservation_error": 0.0,
         }
     candidate_modes: dict[str, int] = defaultdict(int)
     nominal_modes: dict[str, int] = defaultdict(int)
@@ -225,12 +232,20 @@ def _merge_pair_diags(diags: list[dict[str, Any]]) -> dict[str, Any]:
     switched = 0
     reentry_selected = 0
     field_reentry = 0
+    reserve_work_nonzero = 0
+    debt_work_nonzero = 0
+    integral_response_nonzero = 0
+    conservation_errors: list[float] = []
     for d in diags:
         switched += int(bool(d["option_switched"]))
         candidate_modes[str(d["candidate_mode"])] += 1
         nominal_modes[str(d["nominal_mode"])] += 1
         reentry_selected += int(bool(d["candidate_selected_reentry_active"]))
         field_reentry += int(int(d.get("candidate_field_reentry_active_options", 0)) > 0)
+        reserve_work_nonzero += int(bool(d.get("reserve_work_nonzero", False)))
+        debt_work_nonzero += int(bool(d.get("debt_work_nonzero", False)))
+        integral_response_nonzero += int(bool(d.get("integral_response_nonzero", False)))
+        conservation_errors.append(float(d.get("work_conservation_error", 0.0)))
         for k, v in (d.get("candidate_selected_active_type_counts") or {}).items():
             active[str(k)] += int(v)
     n = len(diags)
@@ -242,6 +257,10 @@ def _merge_pair_diags(diags: list[dict[str, Any]]) -> dict[str, Any]:
         "candidate_selected_active_type_counts": dict(sorted(active.items())),
         "candidate_selected_reentry_active_fraction": float(reentry_selected / n),
         "field_reentry_available_fraction": float(field_reentry / n),
+        "reserve_work_nonzero_fraction": float(reserve_work_nonzero / n),
+        "debt_work_nonzero_fraction": float(debt_work_nonzero / n),
+        "integral_response_nonzero_fraction": float(integral_response_nonzero / n),
+        "max_work_conservation_error": float(max(conservation_errors) if conservation_errors else 0.0),
     }
 
 
@@ -277,23 +296,23 @@ def extract_records(
     model = bundle.model.eval()
     [p.requires_grad_(False) for p in model.parameters()]
     if not isinstance(model.encoder, StructuredTokenEncoder):
-        raise RuntimeError("V48.113 requires StructuredTokenEncoder")
+        raise RuntimeError("V48.114 requires StructuredTokenEncoder")
     enc = model.encoder.eval()
     dev = bundle.device
     if len(enc.encoder.layers) != 2:
-        raise RuntimeError("V48.113 requires historical two-layer Stage-I")
+        raise RuntimeError("V48.114 requires historical two-layer Stage-I")
 
     cfg, feature_event = feature_only_dataset_cfg(bundle.cfg, cache_dir=str(cache_dir / "tensor"), workers=8)
     ds = OCRAPSampleDataset(paths, cfg)
     if ds.absolute_truth_contract_event.get("enabled") or ds.action_response_truth_event.get("enabled"):
-        raise RuntimeError("V48.113 feature-only dataset unexpectedly attached truth sidecars")
+        raise RuntimeError("V48.114 feature-only dataset unexpectedly attached truth sidecars")
     if [str(p.resolve()) for p in paths] != [str(p.resolve()) for p in ds.paths]:
-        raise RuntimeError("V48.113 dataset path order differs from index")
+        raise RuntimeError("V48.114 dataset path order differs from index")
     idx = {str(p.resolve()): i for i, p in enumerate(ds.paths)}
 
     # Independent raw-sample map used only by the deterministic executable
     # recovery constraint path.  Teacher root/margin arrays are not loaded.
-    raw_sample = {str(p.resolve()): load_npz_selected(p, ECJ_SAMPLE_KEYS) for p in paths}
+    raw_sample = {str(p.resolve()): load_npz_selected(p, CCW_SAMPLE_KEYS) for p in paths}
 
     records: list[dict[str, Any]] = []
     pair_diags: list[dict[str, Any]] = []
@@ -325,9 +344,11 @@ def extract_records(
             fc = executable_constraint_field_from_sample(dc, bundle.cfg, num_options=len(f0.option_valid))
             ln = best_option_index(f0)
             lc = best_option_index(fc)
-            gn = jacobian_geometry(fc, f0, ln)
-            gc = jacobian_geometry(fc, f0, lc)
-            diag = pair_diagnostics(fc, f0)
+            nominal_integral = integral_response_geometry(fc, f0, ln)
+            candidate_integral = integral_response_geometry(fc, f0, lc)
+            nominal_work = constraint_work_geometry(fc, f0, ln)
+            candidate_work = constraint_work_geometry(fc, f0, lc)
+            diag = pair_work_diagnostics(fc, f0)
             pair_diags.append(diag)
             records.append({
                 "group": tuple(g["key"]),
@@ -339,8 +360,10 @@ def extract_records(
                 "raw_state": stn[j],
                 "support_u": dn[j],
                 "reserve_u": qn[j],
-                "nominal_option_geometry": gn,
-                "candidate_option_geometry": gc,
+                "nominal_integral_geometry": nominal_integral,
+                "candidate_integral_geometry": candidate_integral,
+                "nominal_work_geometry": nominal_work,
+                "candidate_work_geometry": candidate_work,
                 "candidate_option": int(lc),
                 "nominal_option": int(ln),
                 "candidate_mode": diag["candidate_mode"],
@@ -353,7 +376,7 @@ def extract_records(
         "records": len(records),
         "groups": len(groups),
         "raw_candidate_dim": RAW_CANDIDATE_DIM,
-        "jacobian_geometry_dim": JACOBIAN_GEOMETRY_DIM,
+        "work_geometry_dim": WORK_GEOMETRY_DIM,
         "matched_dim": MATCHED_DIM,
         "constraint_names": ["clearance", "stopping", "route", "reentry"],
         "constraint_semantics": {
@@ -362,7 +385,10 @@ def extract_records(
             "route": "recovery_route_corridor_signed_reserve",
             "reentry": "physical_contact_activated_persistent_suffix_signed_reserve",
         },
-        "recovery_response": "same_recovery_option_candidate_minus_nominal_signed_constraint_path",
+        "recovery_response": "same_recovery_option_full_horizon_constraint_work",
+        "integral_control": "eight_contiguous_full_horizon_bins_of_delta_h_and_delta_h_times_h0",
+        "constraint_work": "eight_contiguous_full_horizon_bins_of_positive_reserve_work_and_negative_debt_repayment",
+        "work_identity": "reserve_work_plus_debt_work_equals_bin_mean_candidate_minus_nominal_signed_response",
         "option_control": "nominal_prefix_maximin_executable_recovery_option",
         "option_treatment": "candidate_prefix_maximin_executable_recovery_option",
         "option_selection_score": "max_over_valid_options_of_min_over_full_recovery_horizon_active_signed_constraints",
@@ -391,29 +417,29 @@ def _perm_indices(records: list[dict[str, Any]]) -> np.ndarray:
 
 def _arrays(records: list[dict[str, Any]], key: str):
     u = np.stack([r[key] for r in records]).astype(np.float64)
-    gn = np.stack([r["nominal_option_geometry"] for r in records]).astype(np.float64)
-    gc = np.stack([r["candidate_option_geometry"] for r in records]).astype(np.float64)
+    ni = np.stack([r["nominal_integral_geometry"] for r in records]).astype(np.float64)
+    ci = np.stack([r["candidate_integral_geometry"] for r in records]).astype(np.float64)
+    nw = np.stack([r["nominal_work_geometry"] for r in records]).astype(np.float64)
+    cw = np.stack([r["candidate_work_geometry"] for r in records]).astype(np.float64)
     y = np.asarray([r["label"] for r in records], dtype=np.int64)
-    return u, gn, gc, y
-
+    return u, ni, ci, nw, cw, y
 
 def _fit_axis(records: list[dict[str, Any]], key: str) -> dict[str, Any]:
-    u, gn, gc, y = _arrays(records, key)
-    sc = fit_jacobian_scaler(u)
+    u, ni, ci, nw, cw, y = _arrays(records, key)
+    sc = fit_work_scaler(u)
     pi = _perm_indices(records)
-    fb = base_features(u, sc)
-    fn = matched_features(u, gn, sc)
-    fc = matched_features(u, gc, sc)
-    models = {
-        "base_true": fit_closed_form_ridge(fb, y),
-        "base_shuffle": fit_closed_form_ridge(fb[pi], y),
-        "nominal_option_true": fit_closed_form_ridge(fn, y),
-        "nominal_option_shuffle": fit_closed_form_ridge(fn[pi], y),
-        "candidate_option_true": fit_closed_form_ridge(fc, y),
-        "candidate_option_shuffle": fit_closed_form_ridge(fc[pi], y),
+    feats = {
+        "base": base_features(u, sc),
+        "nominal_integral": matched_features(u, ni, sc),
+        "candidate_integral": matched_features(u, ci, sc),
+        "nominal_work": matched_features(u, nw, sc),
+        "candidate_work": matched_features(u, cw, sc),
     }
+    models: dict[str, Any] = {}
+    for space, feat in feats.items():
+        models[f"{space}_true"] = fit_closed_form_ridge(feat, y)
+        models[f"{space}_shuffle"] = fit_closed_form_ridge(feat[pi], y)
     return {"scaler": sc, "models": models, "count": len(records)}
-
 
 def _fit_family(records: list[dict[str, Any]]) -> dict[str, Any]:
     su = action_subset(records, "drs_activation")
@@ -446,29 +472,31 @@ def _metric(records: list[dict[str, Any]], scores: np.ndarray) -> dict[str, Any]
 
 
 def _eval_axis(records: list[dict[str, Any]], key: str, fit: dict[str, Any]) -> dict[str, tuple[dict[str, Any], dict[str, Any]]]:
+    spaces = ("base", "nominal_integral", "candidate_integral", "nominal_work", "candidate_work")
     if not records:
-        return {s: (_metric([], np.array([])), _metric([], np.array([]))) for s in ("base", "nominal_option", "candidate_option")}
-    u, gn, gc, _ = _arrays(records, key)
+        return {space: (_metric([], np.array([])), _metric([], np.array([]))) for space in spaces}
+    u, ni, ci, nw, cw, _ = _arrays(records, key)
     pi = _perm_indices(records)
     sc = fit["scaler"]
     m = fit["models"]
     feats = {
         "base": base_features(u, sc),
-        "nominal_option": matched_features(u, gn, sc),
-        "candidate_option": matched_features(u, gc, sc),
+        "nominal_integral": matched_features(u, ni, sc),
+        "candidate_integral": matched_features(u, ci, sc),
+        "nominal_work": matched_features(u, nw, sc),
+        "candidate_work": matched_features(u, cw, sc),
     }
     out: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
     for space, f in feats.items():
         t = _metric(records, ridge_scores(m[f"{space}_true"], f))
-        s = _metric(records, ridge_scores(m[f"{space}_shuffle"], f[pi]))
-        t["auc_vs_shuffled"] = None if t["auc"] is None or s["auc"] is None else float(t["auc"] - s["auc"])
-        t["top1_vs_shuffled"] = None if t["top1"] is None or s["top1"] is None else float(t["top1"] - s["top1"])
-        out[space] = (t, s)
+        sh = _metric(records, ridge_scores(m[f"{space}_shuffle"], f[pi]))
+        t["auc_vs_shuffled"] = None if t["auc"] is None or sh["auc"] is None else float(t["auc"] - sh["auc"])
+        t["top1_vs_shuffled"] = None if t["top1"] is None or sh["top1"] is None else float(t["top1"] - sh["top1"])
+        out[space] = (t, sh)
     return out
 
-
 def _eval_family(dev_records: list[dict[str, Any]], cert_records: list[dict[str, Any]], family: dict[str, Any]) -> dict[str, Any]:
-    cells = {k: {} for k in ("base", "nominal_option", "candidate_option")}
+    cells = {k: {} for k in ("base", "nominal_integral", "candidate_integral", "nominal_work", "candidate_work")}
     for role in ROLES:
         src = dev_records if role.startswith("dev_") else cert_records
         rr = split_role(src, role)
@@ -541,7 +569,7 @@ def main() -> int:
         ce += r
         events[role] = e
     if not tr or not dv or not ce:
-        raise RuntimeError("V48.113 empty audit records")
+        raise RuntimeError("V48.114 empty audit records")
 
     fam = _fit_family(tr)
     cells = _eval_family(dv, ce, fam)
@@ -551,7 +579,7 @@ def main() -> int:
         for v in fam[axis]["models"].values()
     )
     result = {
-        "schema": "ocrap-v48.113-executable-constraint-jacobian-audit-v1",
+        "schema": "ocrap-v48.114-common-option-constraint-work-audit-v1",
         "engineering_version": ENGINEERING_VERSION,
         "scientific_version": SCIENTIFIC_VERSION,
         "run_instance_id": a.run_id,
@@ -562,8 +590,10 @@ def main() -> int:
         "checkpoint": str(a.checkpoint.resolve()),
         "checkpoint_sha256": sha256(a.checkpoint),
         "base_cells": cells["base"],
-        "nominal_option_cells": cells["nominal_option"],
-        "candidate_option_cells": cells["candidate_option"],
+        "nominal_integral_cells": cells["nominal_integral"],
+        "candidate_integral_cells": cells["candidate_integral"],
+        "nominal_work_cells": cells["nominal_work"],
+        "candidate_work_cells": cells["candidate_work"],
         "events": events,
         "train_counts": fam["counts"],
         "convex_closed_form_ridge": True,
@@ -571,16 +601,19 @@ def main() -> int:
         "iterative_optimizer_used": False,
         "ridge_lambda_rule": "1_over_axis_train_rows",
         "max_normal_equation_residual": max_resid,
-        "score_family": "linear_on_fixed_same_option_executable_constraint_response_features",
+        "score_family": "linear_on_fixed_same_option_full_horizon_integral_or_signed_constraint_work_features",
         "nominal_zero_score_by_construction": True,
         "constraint_names": ["clearance", "stopping", "route", "reentry"],
-        "constraint_response": "same_option_actuator_projected_candidate_minus_nominal_signed_constraint_path",
+        "constraint_response": "same_option_actuator_projected_full_horizon_signed_constraint_work",
+        "integral_response_channels": ["bin_mean_delta_h", "bin_mean_delta_h_times_h0"],
+        "constraint_work_channels": ["positive_reserve_work", "negative_debt_repayment_work"],
+        "work_conservation_identity": "reserve_work_plus_debt_work_equals_bin_mean_delta_h",
         "nominal_option_selector": "nominal_maximin_over_full_executable_recovery_constraint_path",
         "candidate_option_selector": "candidate_maximin_over_full_executable_recovery_constraint_path",
-        "recovery_knots": 8,
-        "jacobian_geometry_dimension": JACOBIAN_GEOMETRY_DIM,
+        "work_bins": 8,
+        "work_geometry_dimension": WORK_GEOMETRY_DIM,
         "matched_family_dimension": MATCHED_DIM,
-        "capacity_matched_nominal_vs_candidate_option": True,
+        "capacity_matched_all_work_families": True,
         "candidate_identity_shuffle": "whole_feature_row_cyclic_permutation_within_scene_time_group",
         "actuator_projection": True,
         "teacher_npz_fields_loaded_into_feature_path": False,
@@ -600,7 +633,7 @@ def main() -> int:
     a.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     torch.save(
         {
-            "schema": "ocrap-v48.113-executable-constraint-jacobian-state-v1",
+            "schema": "ocrap-v48.114-common-option-constraint-work-state-v1",
             "engineering_version": ENGINEERING_VERSION,
             "scientific_version": SCIENTIFIC_VERSION,
             "run_instance_id": a.run_id,

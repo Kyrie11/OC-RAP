@@ -12917,3 +12917,178 @@ on the constraints that bind the deployable recovery set.
 ```
 
 This keeps one mathematical object across all regimes: positive constraint work preserves recovery reserve in Near/Safe; negative debt that is repaid over the same continuation describes Contact recovery.  V48.113 does not assume this theory is true; the equal-capacity, same-option audit is the preregistered falsification test.
+
+## V48.114 OC-CCW — Observation-Consistent Common-Option Constraint Work Audit
+
+**Category:** preregistered audit-only successor to the engineering-valid V48.113 OC-ECJ scientific STOP.  No planner/Stage-I/root/source/relative-ranker parameter is trained; no boundary transport, regime conditioning, dataset reconstruction, threshold/horizon/capacity sweep, or teacher-future feature is introduced.
+
+### Authoritative V48.113 result and reliability gate
+
+V48.113 is engineering-valid and scientifically attributable.  Its canonical result bundle has one run instance, a valid runtime-code contract, a valid bundle manifest, closed artifact SHA provenance, `test_roots_read=false`, no teacher metadata in the feature path, and strictly convex closed-form ridge fits with maximum normal-equation residual about `2.1e-9`.  Balanced and precision are exact scientific-metric duplicates, so the effective evidence is **four unique roles**, not eight independent replications.
+
+V48.113 is nevertheless a preregistered scientific STOP:
+
+```text
+status = EXECUTABLE_CONSTRAINT_JACOBIAN_STOP
+next   = close_selected_option_first_order_jacobian
+         -> common-option constraint-work audit
+```
+
+Unique-role candidate-option minus nominal-option AUC deltas were:
+
+```text
+                    Dev Near   Dev Contact   Cert Near   Cert Contact
+Support             +0.10938     +0.06818    -0.20000      +0.17391
+Reserve/debt         0.00000     +0.00521    +0.23810      -0.16667
+```
+
+The Support selector contrast is therefore real in three of four roles, but it reverses strongly on certificate-Near.  Reserve/debt has a different population reversal, especially certificate-Contact.  The executable candidate-option readout also fails the primary V48.112 continuation gate: relative to the 220-D V48.112 prefix cone its unique-role AUC deltas were
+
+```text
+                    Dev Near   Dev Contact   Cert Near   Cert Contact
+Support             -0.32813     +0.09659    +0.10909      -0.05913
+Reserve/debt         0.00000     -0.01042    +0.33333      -0.22222
+```
+
+The failure is not lack of mechanism activity.  Candidate-vs-nominal option switching occurs in every role (`~0.42--0.49`), multiple recovery modes and all four signed constraint types are exercised, and persistent re-entry is now genuinely active on selected executable continuations in both Contact roles (about `0.50` dev-Contact and `0.47` certificate-Contact; field-level re-entry availability is `~0.84--0.87`).  Thus the V48.112 post-contact coverage debt is closed.  The V48.113 feature block is also not ignored: the 64-D geometry carries roughly `58--71%` of total coefficient norm in the fitted true probes.
+
+The promoted conclusion is therefore **not** the selected-option ECJ.  What survives is the higher-level evidence that recovery is constraint-structured, the candidate changes binding constraints and recovery-option ownership, and actual executable continuations expose re-entry/debt semantics.  What is closed is the claim that eight sparse pointwise samples of one max-min-selected option form a population-shared Support/Reserve orientation.
+
+### Dominant bottleneck after V48.113
+
+The remaining object is narrowed to:
+
+```text
+full-horizon signed work on the executable recovery constraint trajectory,
+with positive-reserve preservation and negative-debt repayment kept on the
+same zero-boundary semantics.
+```
+
+Near is currently limited by transfer of support/headroom preservation: the adaptive selector improves dev-Near Support but reverses on certificate-Near, so the planner does not yet possess a population-stable description of how an action preserves shrinking positive reserve.  Contact is limited more sharply by debt-side transfer: re-entry is now physically present, yet certificate-Contact Reserve ordering reverses.  Missing re-entry coverage can no longer explain the Contact failure.
+
+All prior closed families remain closed: fixed-CV active-agent geometry, prefix HCNC as a complete mechanism, selected-option sparse first-order ECJ as a complete mechanism, pair/width/rank/lambda/LR/threshold/horizon sweeps, class-local learned transport, generic MLP/AFE, regime routers/experts/policies/budgets, Stage-I/root/source/relative-ranker retraining, boundary transport, option-library expansion without evidence, and dataset reconstruction.
+
+### Registered V48.114 question
+
+V48.114 asks whether V48.113 failed because a sparse pointwise response does not represent the **accumulated work** performed over the full executable continuation.  Candidate and nominal still execute the same recovery-option identity inside every response.  The historical candidate/nominal max-min selectors are held fixed as explicit controls rather than redesigned.
+
+For every full-horizon signed constraint value `h`, candidate value `h_a`, and nominal value `h_0`, define two zero-boundary-aligned work channels:
+
+```text
+reserve_work = [h_a]_+ - [h_0]_+
+debt_work    = [-h_0]_+ - [-h_a]_+
+```
+
+so that exactly
+
+```text
+reserve_work + debt_work = h_a - h_0.
+```
+
+Positive reserve work means the candidate creates/preserves positive headroom.  Positive debt work means it repays negative recovery debt.  A crossing from negative to positive naturally contains both repayment and new reserve without a regime switch.
+
+The already configured recovery horizon is partitioned into **eight fixed contiguous bins**.  Every horizon state is used exactly once.  Per bin and per constraint, V48.114 averages the two work channels, giving
+
+```text
+8 bins x 4 constraints x 2 channels = 64-D.
+156-D frozen candidate response + 64-D = 220-D.
+```
+
+No horizon or bin-count sweep is allowed.
+
+### Factorized equal-capacity experiment
+
+V48.114 fits five fixed 220-D/156-D convex spaces on the exact historical cohorts:
+
+```text
+base               = historical frozen 156-D candidate response
+nominal_integral   = 156-D + full-horizon bin mean(Delta h, Delta h*h0)
+                      on the nominal-selected same option
+candidate_integral = same integral control on the candidate-selected same option
+nominal_work       = 156-D + (reserve work, debt work)
+                      on the nominal-selected same option
+candidate_work     = same signed-work representation on the candidate-selected same option
+```
+
+The `candidate_integral` arm is a critical causal control: it changes sparse point sampling to full-horizon accumulation while retaining the historical ECJ channels.  `candidate_work - candidate_integral` therefore tests the additional signed reserve/debt decomposition without changing capacity, selector, cohort, horizon, or optimizer.  `candidate_work - nominal_work` separately tests whether the adaptive option selector remains necessary after the work representation is introduced.
+
+All probes remain class-balanced, strictly convex closed-form ridge with the historical `lambda=1/N_axis` rule.  The null remains whole-feature-row cyclic permutation within each scene-time group.  No post-hoc feature selection is allowed.
+
+### V48.113 identity prerequisite
+
+The stable launcher must verify the exact authoritative V48.113 artifacts before GPU work:
+
+```text
+pipeline   141164bc3881f734ec64963cf32c1f1b07ac0180e4835cc27b078b02b923930a
+comparison 6ca24f95aaca4198eb565547abdcdd4d7d37aebc2bdf9758b6b003653411cc00
+balanced   544ff65a97ccb54cb90e081e437dfc165f6fb3cda08932c67656e7671efa7baf
+precision  ee709ea955731e05277709f0622a9d8cf6bfab58962f01372eb392c3073e4048
+```
+
+It must also verify V48.113 status `EXECUTABLE_CONSTRAINT_JACOBIAN_STOP` and the exact registered common-option constraint-work next branch.  The V48.114 comparison additionally requires frozen owner-checkpoint SHA identity and exact base-AUC identity with V48.113.
+
+### Preregistered gates
+
+For each axis, an absolute action-orientation gate requires the candidate family to satisfy:
+
+```text
+AUC >= 0.65 and true-minus-shuffled AUC >= +0.05 in >= 6/8 legacy cells,
+covering >= 3/4 unique roles with both Near and Contact;
+and Top-1 true-minus-shuffled >= +0.10 in >= 4/8 cells,
+covering >= 2 unique roles with both Near and Contact.
+```
+
+Balanced/precision exact identity is explicitly reported; the unique-role requirement prevents the 8-cell count from being treated as eight independent replications.
+
+The primary historical increment gate compares each V48.114 candidate family to the authoritative V48.113 `candidate_option` 220-D pointwise ECJ:
+
+```text
+AUC delta > 0 in >= 6/8 cells,
+covering >= 3/4 unique roles with Near + Contact,
+and >= 4/8 cells >= +0.01.
+```
+
+The same rule is applied to:
+
+```text
+candidate_integral - V48.113 candidate_option  # temporal integration effect
+candidate_work     - V48.113 candidate_option  # total work-operator effect
+candidate_work     - candidate_integral         # reserve/debt decomposition effect
+candidate_work     - nominal_work               # adaptive selector effect
+```
+
+The activity/contract gate independently requires exact work conservation (`max error <= 1e-10`), heterogeneous active constraints and nonzero integral/reserve work over >=3/4 unique roles with Near+Contact, nonzero debt work in at least one Contact role, and observed/recovery-contact re-entry activity in at least one Contact role before a complete unified post-contact promotion.
+
+### Preregistered branches
+
+```text
+candidate_work absolute GO
++ candidate_work vs V48.113 pointwise GO
++ candidate_work vs candidate_integral GO
++ re-entry coverage GO
+  -> COMMON_OPTION_CONSTRAINT_WORK_GO;
+     promote full-horizon signed constraint work only;
+     promote adaptive selector only if its separate support+reserve gate also GO;
+     authorize exactly one nominal-invariant carrier experiment.
+
+full-horizon candidate_integral core GO
+but signed work decomposition gate STOP
+  -> promote temporal integration only;
+     do not claim reserve/debt decomposition as necessary.
+
+Support-only or Reserve-only
+  -> retain only the corresponding mechanism conclusion and audit the missing
+     axis without changing capacity/threshold/regime/source.
+
+both axes formal STOP but both local-order GO
+  -> one convex pairwise audit on the exact same work features.
+
+otherwise STOP
+  -> close selected-option fixed-bin work family;
+     next branch = selector-free recovery-set constraint-flow audit;
+     no capacity, threshold, horizon, regime, source, or dataset sweep.
+```
+
+### Engineering implementation
+
+The stable command and launcher filename are unchanged.  V48.114 adds the semantic module `src/ocrap/audits/common_option_constraint_work.py`; the existing executable-constraint field now retains its full-horizon signed paths in addition to the historical eight knots, without changing the V48.113 knot outputs.  Runtime provenance, pipeline fail-closed checking, canonical result packaging, and tests are updated to V48.114.

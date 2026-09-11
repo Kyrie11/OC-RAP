@@ -61,8 +61,10 @@ MATCHED_DIM = RAW_CANDIDATE_DIM + JACOBIAN_GEOMETRY_DIM
 
 @dataclass(frozen=True)
 class ExecutableConstraintField:
-    values: np.ndarray          # [L, 8, 4], normalized signed constraints
-    masks: np.ndarray           # [L, 8, 4], semantic activity
+    values: np.ndarray          # [L, 8, 4], normalized signed constraints at audit knots
+    masks: np.ndarray           # [L, 8, 4], semantic activity at audit knots
+    full_values: np.ndarray     # [L, T, 4], full executable-horizon signed constraints
+    full_masks: np.ndarray      # [L, T, 4], full executable-horizon semantic activity
     option_valid: np.ndarray    # [L]
     option_scores: np.ndarray   # [L], full-horizon max-min input scores
     option_modes: tuple[str, ...]
@@ -307,6 +309,8 @@ def executable_constraint_field_from_sample(
     L = len(options)
     values = np.zeros((L, RECOVERY_KNOTS, NUM_CONSTRAINTS), dtype=np.float64)
     masks = np.zeros_like(values, dtype=bool)
+    full_values = np.zeros((L, horizon_steps, NUM_CONSTRAINTS), dtype=np.float64)
+    full_masks = np.zeros_like(full_values, dtype=bool)
     scores = np.full((L,), -np.inf, dtype=np.float64)
     valid = np.asarray([bool(o.valid) for o in options], dtype=bool)
     prefix_duration = float(len(prefix.prefix_states)) / sample_rate
@@ -396,6 +400,8 @@ def executable_constraint_field_from_sample(
         for ci, name in enumerate(CONSTRAINT_NAMES):
             full_horizon_active_type_counts[name] += int(np.count_nonzero(active == ci))
         scores[l] = float(np.min(z))
+        full_values[l] = full_v
+        full_masks[l] = full_m
         values[l] = full_v[knot_idx]
         masks[l] = full_m[knot_idx]
 
@@ -422,6 +428,8 @@ def executable_constraint_field_from_sample(
     return ExecutableConstraintField(
         values=values,
         masks=masks,
+        full_values=full_values,
+        full_masks=full_masks,
         option_valid=valid,
         option_scores=scores,
         option_modes=tuple(o.mode for o in options),
@@ -585,6 +593,8 @@ def contract_checks() -> dict[str, bool]:
     perm_ok = bool(
         np.allclose(fc.values, fp.values, rtol=0.0, atol=1.0e-10)
         and np.array_equal(fc.masks, fp.masks)
+        and np.allclose(fc.full_values, fp.full_values, rtol=0.0, atol=1.0e-10)
+        and np.array_equal(fc.full_masks, fp.full_masks)
         and np.allclose(fc.option_scores, fp.option_scores, rtol=0.0, atol=1.0e-10)
     )
 

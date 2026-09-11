@@ -21,10 +21,17 @@ from ocrap.audits.heterogeneous_constraint_normal_cone import (
     contract_checks as hcnc_contract_checks,
 )
 from ocrap.audits.executable_constraint_jacobian import (
-    ENGINEERING_VERSION,
+    ENGINEERING_VERSION as ECJ_ENGINEERING_VERSION,
     JACOBIAN_GEOMETRY_DIM,
+    MATCHED_DIM as ECJ_MATCHED_DIM,
+    SCIENTIFIC_VERSION as ECJ_SCIENTIFIC_VERSION,
+    contract_checks as ecj_contract_checks,
+)
+from ocrap.audits.common_option_constraint_work import (
+    ENGINEERING_VERSION,
     MATCHED_DIM,
     SCIENTIFIC_VERSION,
+    WORK_GEOMETRY_DIM,
     contract_checks,
 )
 
@@ -44,13 +51,22 @@ def test_hcnc_prerequisite_primitive_remains_available():
     assert HCNC_MATCHED_DIM == 220
 
 
-def test_current_ecj_contract_checks():
-    checks = contract_checks()
+def test_ecj_prerequisite_contract_checks():
+    checks = ecj_contract_checks()
     assert checks and all(checks.values()), checks
     assert JACOBIAN_GEOMETRY_DIM == 64
+    assert ECJ_MATCHED_DIM == 220
+    assert ECJ_ENGINEERING_VERSION == "v48.113.0-OC-ECJ"
+    assert ECJ_SCIENTIFIC_VERSION == "v48.113-OC-ECJ"
+
+
+def test_current_ccw_contract_checks():
+    checks = contract_checks()
+    assert checks and all(checks.values()), checks
+    assert WORK_GEOMETRY_DIM == 64
     assert MATCHED_DIM == 220
-    assert ENGINEERING_VERSION == "v48.113.0-OC-ECJ"
-    assert SCIENTIFIC_VERSION == "v48.113-OC-ECJ"
+    assert ENGINEERING_VERSION == "v48.114.0-OC-CCW"
+    assert SCIENTIFIC_VERSION == "v48.114-OC-CCW"
 
 
 def test_ridge_owner_is_still_unique_and_closed_form():
@@ -63,16 +79,16 @@ def test_ridge_owner_is_still_unique_and_closed_form():
     assert model.normal_equation_residual <= 1e-7
 
 
-def test_current_launcher_reuses_authoritative_v112_and_keeps_command_name():
+def test_current_launcher_reuses_authoritative_v113_and_keeps_command_name():
     repo = Path(__file__).resolve().parents[1]
     launcher = (repo / "scripts/run_constraint_native_orientation_audit.sh").read_text()
-    assert "OC-RAP-v48.112-PIPELINE_COMPLETE.json" in launcher
-    assert "OC-RAP-v48.112-DCP-DRFC-BCDE-RIFA-OC-HCNC-comparison.json" in launcher
-    assert "OC-RAP-v48.112-HCNC-balanced.json" in launcher
-    assert "OC-RAP-v48.112-HCNC-precision.json" in launcher
-    assert "OC-RAP-v48.93-factor-mediation-audit.jsonl" in launcher
+    assert "OC-RAP-v48.113-PIPELINE_COMPLETE.json" in launcher
+    assert "OC-RAP-v48.113-DCP-DRFC-BCDE-RIFA-OC-ECJ-comparison.json" in launcher
     assert "OC-RAP-v48.113-ECJ-balanced.json" in launcher
-    assert "OC-RAP-v48.113-OC-ECJ-results.zip" in launcher
+    assert "OC-RAP-v48.113-ECJ-precision.json" in launcher
+    assert "OC-RAP-v48.93-factor-mediation-audit.jsonl" in launcher
+    assert "OC-RAP-v48.114-CCW-balanced.json" in launcher
+    assert "OC-RAP-v48.114-OC-CCW-results.zip" in launcher
     assert "--run-id" in launcher
 
 
@@ -123,22 +139,23 @@ def test_unversioned_runner_keeps_v93_role_filter_semantics(tmp_path):
     assert [c["candidate"] for c in groups[0]["candidates"]] == [1]
 
 
-def test_current_result_packager_uses_only_canonical_v113_artifacts():
+def test_current_result_packager_uses_only_canonical_v114_artifacts():
     tool = Path(__file__).resolve().parents[1] / "tools" / "package_constraint_native_orientation_results.py"
     spec = importlib.util.spec_from_file_location("orientation_packager_test", tool)
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    assert mod.EXPECTED["balanced"] == "OC-RAP-v48.113-ECJ-balanced.json"
-    assert mod.EXPECTED["precision"] == "OC-RAP-v48.113-ECJ-precision.json"
-    assert mod.ENGINEERING_VERSION == "v48.113.0-OC-ECJ"
-    assert mod.SCIENTIFIC_VERSION == "v48.113-OC-ECJ"
+    assert mod.EXPECTED["balanced"] == "OC-RAP-v48.114-CCW-balanced.json"
+    assert mod.EXPECTED["precision"] == "OC-RAP-v48.114-CCW-precision.json"
+    assert mod.ENGINEERING_VERSION == "v48.114.0-OC-CCW"
+    assert mod.SCIENTIFIC_VERSION == "v48.114-OC-CCW"
 
 
-def test_v113_comparison_separates_core_activity_from_reentry_coverage():
+def test_v114_comparison_factorizes_integration_work_and_selector():
     repo = Path(__file__).resolve().parents[1]
     text = (repo / "tools/compare_constraint_native_recovery_orientation.py").read_text()
     assert '"reentry_contact_coverage_go"' in text
-    assert "core_go = _cross(constraint_diverse_roles, 3)" in text
-    assert "adaptive_go = _cross(option_switch_roles, 3) and _cross(mode_diverse_roles, 3)" in text
-    assert "EXECUTABLE_CONSTRAINT_JACOBIAN_CORE_GO_REENTRY_COVERAGE_PENDING" in text
+    assert "integral_vs_v48_113_pointwise_support_gate" in text
+    assert "signed_work_vs_integral_support_gate" in text
+    assert "candidate_vs_nominal_work_support_gate" in text
+    assert "COMMON_OPTION_CONSTRAINT_WORK_GO" in text

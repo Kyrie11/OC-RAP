@@ -12,6 +12,7 @@ ACTIVE = [
     "src/ocrap/audits/constraint_native_orientation.py",
     "src/ocrap/audits/heterogeneous_constraint_normal_cone.py",
     "src/ocrap/audits/executable_constraint_jacobian.py",
+    "src/ocrap/audits/common_option_constraint_work.py",
     "tools/run_constraint_native_recovery_orientation_audit.py",
     "tools/compare_constraint_native_recovery_orientation.py",
     "tools/check_constraint_native_orientation_contract.py",
@@ -41,6 +42,7 @@ def main() -> int:
     import ocrap.audits.constraint_native_orientation as base_primitives
     import ocrap.audits.heterogeneous_constraint_normal_cone as hcnc
     import ocrap.audits.executable_constraint_jacobian as ecj
+    import ocrap.audits.common_option_constraint_work as ccw
 
     for rel in ACTIVE:
         p = (repo / rel).resolve()
@@ -59,26 +61,28 @@ def main() -> int:
         "constraint_native_orientation": str(Path(base_primitives.__file__).resolve()),
         "heterogeneous_constraint_normal_cone": str(Path(hcnc.__file__).resolve()),
         "executable_constraint_jacobian": str(Path(ecj.__file__).resolve()),
+        "common_option_constraint_work": str(Path(ccw.__file__).resolve()),
     }
     expected = {
         "ocrap": str((repo / "src/ocrap/__init__.py").resolve()),
         "constraint_native_orientation": str((repo / "src/ocrap/audits/constraint_native_orientation.py").resolve()),
         "heterogeneous_constraint_normal_cone": str((repo / "src/ocrap/audits/heterogeneous_constraint_normal_cone.py").resolve()),
         "executable_constraint_jacobian": str((repo / "src/ocrap/audits/executable_constraint_jacobian.py").resolve()),
+        "common_option_constraint_work": str((repo / "src/ocrap/audits/common_option_constraint_work.py").resolve()),
     }
     for k, v in imported.items():
         if v != expected[k]:
             errors.append(f"import_path:{k}:{v}")
 
-    checks = ecj.contract_checks()
+    checks = ccw.contract_checks()
     for k, v in checks.items():
         if not v:
             errors.append(f"synthetic:{k}")
 
     out = {
-        "schema": "ocrap-v48.113-ecj-runtime-code-contract-v1",
-        "engineering_version": ecj.ENGINEERING_VERSION,
-        "scientific_version": ecj.SCIENTIFIC_VERSION,
+        "schema": "ocrap-v48.114-ccw-runtime-code-contract-v1",
+        "engineering_version": ccw.ENGINEERING_VERSION,
+        "scientific_version": ccw.SCIENTIFIC_VERSION,
         "run_instance_id": a.run_id,
         "valid": not errors,
         "attribution_ready": not errors,
@@ -90,17 +94,21 @@ def main() -> int:
         "historical_code_dependency": False,
         "scientific_contract": {
             "audit_only": True,
-            "candidate_option_executable_constraint_jacobian": True,
+            "common_option_full_horizon_constraint_work": True,
             "constraint_names": ["clearance", "stopping", "route", "reentry"],
-            "constraint_response": "same_option_actuator_projected_candidate_minus_nominal_signed_constraint_path",
+            "same_option_candidate_minus_nominal": True,
             "actuator_projection": True,
-            "recovery_knots": ecj.RECOVERY_KNOTS,
             "existing_recovery_horizon_only": True,
+            "work_bins": ccw.WORK_BINS,
+            "work_bins_cover_full_horizon": True,
+            "integral_control_channels": ["bin_mean_delta_h", "bin_mean_delta_h_times_h0"],
+            "constraint_work_channels": ["positive_reserve_work", "negative_debt_repayment_work"],
+            "work_conservation_identity": "reserve_work_plus_debt_work_equals_bin_mean_delta_h",
             "nominal_option_selector": "nominal_maximin_over_full_executable_recovery_constraint_path",
             "candidate_option_selector": "candidate_maximin_over_full_executable_recovery_constraint_path",
-            "jacobian_geometry_dim": ecj.JACOBIAN_GEOMETRY_DIM,
-            "matched_family_dim": ecj.MATCHED_DIM,
-            "capacity_matched_nominal_vs_candidate_option": True,
+            "work_geometry_dim": ccw.WORK_GEOMETRY_DIM,
+            "matched_family_dim": ccw.MATCHED_DIM,
+            "capacity_matched_all_families": True,
             "candidate_identity_shuffle": "whole_feature_row_cyclic_permutation_within_scene_time_group",
             "convex_closed_form_ridge": True,
             "strictly_convex_unique_solution": True,
@@ -112,6 +120,7 @@ def main() -> int:
             "lr_or_epoch_sweep": False,
             "threshold_sweep": False,
             "capacity_sweep": False,
+            "horizon_sweep": False,
             "planner_parameters_trained": 0,
             "stage_i_parameters_trained": 0,
             "root_decoder_parameters_trained": 0,
