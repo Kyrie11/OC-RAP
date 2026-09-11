@@ -13763,3 +13763,70 @@ otherwise STOP
 ```
 
 The stable user command and launcher filename remain unchanged.  The launcher fails closed on the exact authoritative V48.116 pipeline/comparison/balanced/precision SHAs, `WEAK_ROOT_RECOVERY_SET_FLOW_STOP`, and its registered tail-boundary next branch before any GPU work starts.
+
+## V48.117 completed attribution — zero-boundary ownership and hitting topology are real but their static first moment is not a transferable carrier
+
+Engineering/scientific attribution passed on the uploaded V48.117 OC-TBCF run.  The result bundle is internally canonical, runtime/source provenance is closed, balanced/precision are exact metric duplicates and therefore count as four unique population roles, the 220-D probes are unique closed-form ridge solutions, and the production boundary/activity contracts are exact to floating-point tolerance.  The preregistered status is `TAIL_BOUNDARY_CROSSING_FLOW_STOP`; V48.117 does **not** authorize Main/carrier integration.
+
+The STOP is nevertheless strongly diagnostic.  V48.117 fixes V48.116's nearly singular option measure: the boundary-witness measure has about 2.30--2.55 effective recovery options and about 2.89--3.20 positive options across the four unique roles, with nonzero hitting/work activity and Contact re-entry coverage everywhere.  Thus the remaining failure cannot be attributed to option-measure collapse or feature inactivity.
+
+The 2x2 factorial audit isolates two retained mechanisms:
+
+- replacing the V48.116 max-option cotangent measure by the non-degenerate zero-margin boundary-witness measure improves **Support under hitting in all four unique roles**; the preregistered boundary-measure Support contrast is GO;
+- replacing signed work by first-violation / persistent-safe-reentry topology improves **Reserve under the boundary measure in three of four unique roles**; the preregistered hitting-topology Reserve contrast is GO.
+
+Neither factor is sufficient as a complete carrier.  The combined `boundary_hitting` family fails absolute Support and Reserve transfer: dev-Near Support and dev-Contact Reserve are strong, but both certificate populations remain unstable.  `full_factorial_mechanism_attribution_go=false`.
+
+Scientific closure after V48.117:
+
+- close the **static zero-boundary witness weighted first moment** as a complete population-stable recovery-set carrier;
+- close **fixed-bin option-wise hitting averages** as a complete population-stable temporal carrier;
+- retain signed zero-boundary semantics, weak-root observation legality, non-degenerate boundary ownership as Support evidence, and first-violation/persistent-reentry topology as Reserve evidence;
+- keep hard candidate option selection, uniform option averaging, first-order max-option cotangent ownership, generic capacity growth, regime routers, source/root retraining, boundary transport, and threshold/horizon sweeps closed.
+
+The dominant bottleneck is now narrower: deployment orientation requires an **existential set-level viability object**, not an option-wise first moment.  At each time, recoverability asks whether there exists one executable recovery option that jointly satisfies all active constraints over the relevant prefix (Near) or suffix (Contact).  The next registered branch is therefore the recovery-set viability survival-envelope audit.
+
+## V48.118 OC-VSE — Observation-Consistent Recovery-Set Viability Survival Envelope Audit
+
+Engineering version: `v48.118.0-OC-VSE`  
+Scientific version: `v48.118-OC-VSE`
+
+V48.118 is audit-only and follows the exact V48.117 STOP branch.  It changes neither the frozen planner nor the recovery library, cohorts, horizon, physical constraints, candidate shuffle, or 220-D probe capacity.  It removes the remaining static option-wise averaging and tests a permutation-invariant signed max-min recovery-set envelope.
+
+For recovery option `l`, constraint `c`, and physical signed margin `h_lc(t)`, define
+
+```text
+p_lc(t) = min_{s<=t} h_lc(s)
+q_lc(t) = min_{s>=t} h_lc(s)
+
+m_pre_l(t) = min_c p_lc(t)
+m_suf_l(t) = min_c q_lc(t)
+
+V_pre(t) = max_l m_pre_l(t)
+V_suf(t) = max_l m_suf_l(t)
+```
+
+`V_pre(t) >= 0` means that **one same recovery option exists** that has remained jointly viable through the whole prefix.  `V_suf(t) >= 0` means that **one same recovery option exists** that is jointly safe for the whole remaining suffix.  Thus the zero crossing of `V_pre` is set-level first loss of viability, while the zero crossing of `V_suf` is set-level persistent-safe re-entry.  The maximizing option may switch as time changes but its identity is never exported to the readout.
+
+To preserve the existing 64-D physical geometry without learned set capacity, every scalar envelope value is attributed exactly to the active bottleneck constraint(s) of all exactly tied maximizing options; these contributions sum back to the scalar envelope.  Candidate-minus-nominal prefix/suffix contributions are averaged in the existing eight horizon bins:
+
+```text
+8 bins x 4 constraints x 2 envelope channels = 64-D
+156-D frozen candidate response + 64-D = 220-D
+```
+
+Two equal-capacity families are preregistered:
+
+```text
+exposed_envelope = envelope restricted to the SUPPORT (not weights) of
+                   V48.117's frozen weak-root zero-boundary witnesses
+full_envelope    = envelope over all common valid recovery options [PRIMARY]
+```
+
+This directly tests whether the static weak-root witness subset remains useful once first-moment averaging is removed, or whether deployment viability requires the full executable recovery set.  No learned attention/DeepSets encoder, temperature, epsilon band, threshold sweep, option-count sweep, source/root training, regime router, horizon sweep, or capacity increase is introduced.
+
+Absolute Support/Reserve gates remain unchanged from the prior audits.  Historical increment gates compare each V48.118 family against authoritative V48.117 `boundary_hitting`.  `full_envelope - exposed_envelope` is preregistered as the internal full-set attribution contrast.
+
+Promotion is fail-closed.  `VIABILITY_SURVIVAL_ENVELOPE_GO` requires the primary full envelope to pass absolute Support and Reserve, beat V48.117 on both axes, and pass exact activity/re-entry/dynamic-winner contracts.  Only then is exactly one Main/carrier integration authorized.  An exposed-envelope GO has an analogous one-carrier authorization.  Support-only, Reserve-only, local-order-only, and STOP branches remain isolated.  The STOP branch closes the signed joint max-min survival envelope and preregisters a recovery-set viability order-profile audit without training/capacity/regime/source/horizon/threshold sweeps.
+
+The stable launcher filename and user command remain unchanged.  Before GPU work, it verifies the exact authoritative V48.117 pipeline/comparison/balanced/precision SHAs, `TAIL_BOUNDARY_CROSSING_FLOW_STOP`, and the registered V48.118 next branch.

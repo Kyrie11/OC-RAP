@@ -50,6 +50,13 @@ from ocrap.audits.weak_root_recovery_set_flow import (
 )
 from ocrap.audits.tail_boundary_crossing_flow import (
     BOUNDARY_GEOMETRY_DIM,
+    ENGINEERING_VERSION as TBCF_ENGINEERING_VERSION,
+    MATCHED_DIM as TBCF_MATCHED_DIM,
+    SCIENTIFIC_VERSION as TBCF_SCIENTIFIC_VERSION,
+    contract_checks as tbcf_contract_checks,
+)
+from ocrap.audits.viability_survival_envelope import (
+    ENVELOPE_GEOMETRY_DIM,
     ENGINEERING_VERSION,
     MATCHED_DIM,
     SCIENTIFIC_VERSION,
@@ -108,13 +115,22 @@ def test_historical_wrcf_contract_checks():
     assert WRCF_SCIENTIFIC_VERSION == "v48.116-OC-WRCF"
 
 
-def test_current_tbcf_contract_checks():
-    checks = contract_checks()
+def test_historical_tbcf_contract_checks():
+    checks = tbcf_contract_checks()
     assert checks and all(checks.values()), checks
     assert BOUNDARY_GEOMETRY_DIM == 64
+    assert TBCF_MATCHED_DIM == 220
+    assert TBCF_ENGINEERING_VERSION == "v48.117.0-OC-TBCF"
+    assert TBCF_SCIENTIFIC_VERSION == "v48.117-OC-TBCF"
+
+
+def test_current_vse_contract_checks():
+    checks = contract_checks()
+    assert checks and all(checks.values()), checks
+    assert ENVELOPE_GEOMETRY_DIM == 64
     assert MATCHED_DIM == 220
-    assert ENGINEERING_VERSION == "v48.117.0-OC-TBCF"
-    assert SCIENTIFIC_VERSION == "v48.117-OC-TBCF"
+    assert ENGINEERING_VERSION == "v48.118.0-OC-VSE"
+    assert SCIENTIFIC_VERSION == "v48.118-OC-VSE"
 
 
 def test_ridge_owner_is_still_unique_and_closed_form():
@@ -127,18 +143,18 @@ def test_ridge_owner_is_still_unique_and_closed_form():
     assert model.normal_equation_residual <= 1e-7
 
 
-def test_current_launcher_reuses_authoritative_v116_and_keeps_command_name():
+def test_current_launcher_reuses_authoritative_v117_and_keeps_command_name():
     repo = Path(__file__).resolve().parents[1]
     launcher = (repo / "scripts/run_constraint_native_orientation_audit.sh").read_text()
-    assert "OC-RAP-v48.116-PIPELINE_COMPLETE.json" in launcher
-    assert "OC-RAP-v48.116-DCP-DRFC-BCDE-RIFA-OC-WRCF-comparison.json" in launcher
-    assert "OC-RAP-v48.116-WRCF-balanced.json" in launcher
-    assert "OC-RAP-v48.116-WRCF-precision.json" in launcher
-    assert "OC-RAP-v48.93-factor-mediation-audit.jsonl" in launcher
+    assert "OC-RAP-v48.117-PIPELINE_COMPLETE.json" in launcher
+    assert "OC-RAP-v48.117-DCP-DRFC-BCDE-RIFA-OC-TBCF-comparison.json" in launcher
     assert "OC-RAP-v48.117-TBCF-balanced.json" in launcher
-    assert "OC-RAP-v48.117-OC-TBCF-results.zip" in launcher
-    assert "tail-boundary crossing-flow branch" in launcher
-    assert "close_first_order_nominal_ocmero_cotangent_option_pushforward" in launcher
+    assert "OC-RAP-v48.117-TBCF-precision.json" in launcher
+    assert "OC-RAP-v48.93-factor-mediation-audit.jsonl" in launcher
+    assert "OC-RAP-v48.118-VSE-balanced.json" in launcher
+    assert "OC-RAP-v48.118-OC-VSE-results.zip" in launcher
+    assert "viability survival-envelope branch" in launcher
+    assert "close_static_boundary_witness_hitting_flow" in launcher
     assert "--run-id" in launcher
 
 def test_unversioned_runner_keeps_v93_role_filter_semantics(tmp_path):
@@ -188,26 +204,75 @@ def test_unversioned_runner_keeps_v93_role_filter_semantics(tmp_path):
     assert [c["candidate"] for c in groups[0]["candidates"]] == [1]
 
 
-def test_current_result_packager_uses_only_canonical_v117_artifacts():
+def test_current_result_packager_uses_only_canonical_v118_artifacts():
     tool = Path(__file__).resolve().parents[1] / "tools" / "package_constraint_native_orientation_results.py"
     spec = importlib.util.spec_from_file_location("orientation_packager_test", tool)
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    assert mod.EXPECTED["balanced"] == "OC-RAP-v48.117-TBCF-balanced.json"
-    assert mod.EXPECTED["precision"] == "OC-RAP-v48.117-TBCF-precision.json"
-    assert mod.ENGINEERING_VERSION == "v48.117.0-OC-TBCF"
-    assert mod.SCIENTIFIC_VERSION == "v48.117-OC-TBCF"
+    assert mod.EXPECTED["balanced"] == "OC-RAP-v48.118-VSE-balanced.json"
+    assert mod.EXPECTED["precision"] == "OC-RAP-v48.118-VSE-precision.json"
+    assert mod.ENGINEERING_VERSION == "v48.118.0-OC-VSE"
+    assert mod.SCIENTIFIC_VERSION == "v48.118-OC-VSE"
 
-
-def test_v117_comparison_preregisters_tail_boundary_crossing_flow():
+def test_v118_comparison_preregisters_viability_survival_envelope():
     repo = Path(__file__).resolve().parents[1]
     text = (repo / "tools/compare_constraint_native_recovery_orientation.py").read_text()
     assert '"reentry_contact_coverage_go"' in text
-    assert "boundary_hitting_vs_v116_support" in text
-    assert "boundary_work_vs_v116_reserve" in text
-    assert "boundary_measure_effect_under_hitting" in text
-    assert "hitting_effect_under_boundary_measure" in text
-    assert "TAIL_BOUNDARY_CROSSING_FLOW_GO" in text
-    assert "TAIL_BOUNDARY_CROSSING_FLOW_STOP" in text
-    assert "close_static_boundary_witness_hitting_flow" in text
+    assert "full_envelope_vs_v117_support" in text
+    assert "exposed_envelope_vs_v117_reserve" in text
+    assert "full_set_effect_support" in text
+    assert "VIABILITY_SURVIVAL_ENVELOPE_GO" in text
+    assert "VIABILITY_SURVIVAL_ENVELOPE_STOP" in text
+    assert "close_signed_joint_max_min_survival_envelope" in text
+
+
+def _vse_field(full_values: np.ndarray):
+    from ocrap.audits.executable_constraint_jacobian import ExecutableConstraintField
+    arr = np.asarray(full_values, dtype=np.float64)
+    L, T, C = arr.shape
+    masks = np.ones_like(arr, dtype=bool)
+    return ExecutableConstraintField(
+        values=arr.copy(), masks=masks.copy(), full_values=arr.copy(), full_masks=masks.copy(),
+        option_valid=np.ones(L, dtype=bool), option_scores=np.zeros(L, dtype=np.float64),
+        option_modes=tuple(f"m{i}" for i in range(L)), diagnostics={},
+    )
+
+
+def test_vse_joint_envelope_rejects_cross_option_frankenstein_feasibility():
+    from ocrap.audits.viability_survival_envelope import _field_envelope
+    # At every time option 0 fails constraint 1 and option 1 fails constraint 0.
+    # A per-constraint max would look safe, but no same recovery option is jointly safe.
+    x = np.ones((2, 4, 4), dtype=np.float64)
+    x[0, :, 1] = -0.25
+    x[1, :, 0] = -0.40
+    f = _vse_field(x)
+    contrib, diag = _field_envelope(f, f.full_masks, np.ones(2, dtype=bool), reverse=False)
+    scalar = np.asarray(diag["scalar_envelope"])
+    assert np.all(scalar < 0.0)
+    assert np.allclose(contrib.sum(axis=1), scalar, atol=1e-12, rtol=0.0)
+
+
+def test_vse_prefix_envelope_encodes_first_joint_viability_loss():
+    from ocrap.audits.viability_survival_envelope import _field_envelope
+    x = np.ones((2, 5, 4), dtype=np.float64)
+    x[0, 2:, 0] = -0.2
+    x[1, 4:, 1] = -0.3
+    f = _vse_field(x)
+    _, diag = _field_envelope(f, f.full_masks, np.ones(2, dtype=bool), reverse=False)
+    scalar = np.asarray(diag["scalar_envelope"])
+    assert np.all(scalar[:4] > 0.0)  # option 1 keeps one full prefix viable
+    assert scalar[4] < 0.0          # by t=4 every option has violated some constraint
+
+
+def test_vse_suffix_envelope_encodes_persistent_safe_reentry():
+    from ocrap.audits.viability_survival_envelope import _field_envelope
+    x = np.ones((2, 5, 4), dtype=np.float64)
+    x[0, :3, 0] = -0.5
+    x[1, :2, 1] = -0.4
+    f = _vse_field(x)
+    _, diag = _field_envelope(f, f.full_masks, np.ones(2, dtype=bool), reverse=True)
+    scalar = np.asarray(diag["scalar_envelope"])
+    assert scalar[0] < 0.0
+    assert scalar[1] < 0.0
+    assert np.all(scalar[2:] > 0.0)  # option 1 has a persistent-safe suffix from t=2

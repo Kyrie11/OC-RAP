@@ -15,20 +15,17 @@ export PYTHONPATH="$PWD/src:$PWD${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONNOUSERSITE=1
 ```
 
-## 0. Current V48.117 scientific reference contract
+## 0. Current V48.118 scientific reference contract
 
-The stable unversioned orientation launcher now runs **V48.117 OC-TBCF**. It treats the completed V48.116.1 / scientific V48.116 OC-WRCF STOP artifacts as immutable scientific inputs and verifies their exact SHA/status/registered next branch before any V48.117 audit starts. Python implementation filenames remain semantic/unversioned; scientific inputs and outputs remain versioned.
+The stable unversioned orientation launcher now runs **V48.118 OC-VSE**. It treats the completed V48.117 OC-TBCF STOP artifacts as immutable scientific inputs and verifies their exact SHA/status/registered next branch before any V48.118 audit starts. Python implementation filenames remain semantic/unversioned; scientific inputs and outputs remain versioned.
 
-V48.116 established an exact but nearly singular nominal OC-MERO first-order option measure: the average effective support was only about 1.17--1.36 recovery options, so its preregistered nontrivial-tail-measure gate failed. V48.117 therefore does not widen capacity. It tests a zero-threshold recovery-set boundary measure and an order-sensitive crossing representation under an equal-capacity 2x2 factorial audit.
+V48.117 proved that zero-boundary ownership is non-degenerate and helps Support, while first-violation / persistent-reentry topology helps Reserve, but their static weighted first moment still fails certificate transfer. V48.118 therefore tests the preregistered set-level existential alternative: a signed joint max-min viability survival envelope.
 
-## 1. Current orientation audit — V48.117 OC-TBCF
+## 1. Current orientation audit — V48.118 OC-VSE
 
-V48.117 is **audit-only**. The historical 156-D candidate response, four actuator-projected executable constraints, recovery horizon, recovery library, cohorts, candidate shuffle and 220-D closed-form ridge capacity are fixed. The two controlled factors are:
+V48.118 is **audit-only**. The 156-D frozen candidate response, four actuator-projected executable constraints, recovery horizon/library, cohorts, candidate shuffle and 220-D closed-form ridge capacity remain fixed. The primary feature computes prefix and suffix running joint margins for each recovery option and then takes a permutation-invariant max over options. It therefore represents whether **one same executable recovery option exists** that preserves all constraints through a prefix or a remaining suffix.
 
-- **measure:** historical nominal OC-MERO max-option cotangent push-forward versus candidate-independent weak-root exposure followed by exact zero-margin recovery-boundary witnesses;
-- **representation:** signed reserve/debt work versus zero-boundary first-violation survival and persistent-safe re-entry channels.
-
-The new boundary measure uses frozen nominal model root logits/margins/compatibility and the existing root-valid structural support mask; teacher `m_star`, teacher root probabilities/compatibility, future signatures and held-out labels do not construct the feature. Root/margin heads are read-only. The zero boundary is fixed at exactly `0.0`; there is no threshold, horizon, option-count, capacity, source, regime, LR or epoch sweep.
+The primary `full_envelope` uses all common valid recovery options. The equal-capacity `exposed_envelope` control uses only the support (not the weights) of V48.117's frozen weak-root zero-boundary witnesses. No option identity, regime label, teacher future value, learned set encoder, threshold, horizon, option-count, capacity, source, LR or epoch sweep is introduced.
 
 Run exactly:
 
@@ -42,12 +39,12 @@ bash scripts/run_constraint_native_orientation_audit.sh
 Upload only:
 
 ```text
-/home/senzeyu2/code/OC-RAP/runs/OC-RAP-v48.117-OC-TBCF-results.zip
+/home/senzeyu2/code/OC-RAP/runs/OC-RAP-v48.118-OC-VSE-results.zip
 ```
 
-### About OC-RAP training in V48.117
+### About OC-RAP training in V48.118
 
-There is no registered V48.117 planner/root/source training stage. Running generic `python -m ocrap.cli train` would not reproduce this audit. A Main/carrier integration is authorized only if the preregistered V48.117 cross-population Support+Reserve gates pass.
+There is no registered V48.118 planner/root/source training stage. Running generic `python -m ocrap.cli train` would not reproduce this audit. A Main/carrier integration is authorized only if the preregistered V48.118 cross-population Support+Reserve gates pass.
 
 ## 2. Direct OC-RAP three-regime closed-loop test
 

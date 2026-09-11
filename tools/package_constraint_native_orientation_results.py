@@ -8,19 +8,19 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ocrap.audits.tail_boundary_crossing_flow import ENGINEERING_VERSION, SCIENTIFIC_VERSION
+from ocrap.audits.viability_survival_envelope import ENGINEERING_VERSION, SCIENTIFIC_VERSION
 
 EXPECTED = {
-    "runtime": "OC-RAP-v48.117-runtime-code-contract.json",
-    "balanced": "OC-RAP-v48.117-TBCF-balanced.json",
-    "precision": "OC-RAP-v48.117-TBCF-precision.json",
-    "balanced_state": "OC-RAP-v48.117-TBCF-balanced.pt",
-    "precision_state": "OC-RAP-v48.117-TBCF-precision.pt",
-    "comparison": "OC-RAP-v48.117-DCP-DRFC-BCDE-RIFA-OC-TBCF-comparison.json",
+    "runtime": "OC-RAP-v48.118-runtime-code-contract.json",
+    "balanced": "OC-RAP-v48.118-VSE-balanced.json",
+    "precision": "OC-RAP-v48.118-VSE-precision.json",
+    "balanced_state": "OC-RAP-v48.118-VSE-balanced.pt",
+    "precision_state": "OC-RAP-v48.118-VSE-precision.pt",
+    "comparison": "OC-RAP-v48.118-DCP-DRFC-BCDE-RIFA-OC-VSE-comparison.json",
 }
-PIPELINE_NAME = "OC-RAP-v48.117-PIPELINE_COMPLETE.json"
-MANIFEST_NAME = "OC-RAP-v48.117-OC-TBCF-result-bundle-manifest.json"
-RESULT_NAME = "OC-RAP-v48.117-OC-TBCF-results.zip"
+PIPELINE_NAME = "OC-RAP-v48.118-PIPELINE_COMPLETE.json"
+MANIFEST_NAME = "OC-RAP-v48.118-OC-VSE-result-bundle-manifest.json"
+RESULT_NAME = "OC-RAP-v48.118-OC-VSE-results.zip"
 
 
 def sha(path: Path) -> str:
@@ -40,21 +40,15 @@ def main() -> int:
     ap.add_argument("--output", type=Path, required=True)
     a = ap.parse_args()
     errors: list[str] = []
-
     pipe = json.loads(a.pipeline.read_text()) if a.pipeline.is_file() else {}
-    if not (pipe.get("valid") and pipe.get("attribution_ready")):
-        errors.append("pipeline_not_valid")
-    if pipe.get("engineering_version") != ENGINEERING_VERSION:
-        errors.append("pipeline_engineering_version")
-    if pipe.get("scientific_version") != SCIENTIFIC_VERSION:
-        errors.append("pipeline_scientific_version")
-    if pipe.get("run_instance_id") != a.run_id:
-        errors.append("pipeline_run_instance_id")
+    if not (pipe.get("valid") and pipe.get("attribution_ready")): errors.append("pipeline_not_valid")
+    if pipe.get("engineering_version") != ENGINEERING_VERSION: errors.append("pipeline_engineering_version")
+    if pipe.get("scientific_version") != SCIENTIFIC_VERSION: errors.append("pipeline_scientific_version")
+    if pipe.get("run_instance_id") != a.run_id: errors.append("pipeline_run_instance_id")
 
     allowed = set(EXPECTED.values()) | {PIPELINE_NAME, MANIFEST_NAME, RESULT_NAME}
-    stale = sorted(str(p) for p in a.base_out.glob("OC-RAP-v48.117-*") if p.name not in allowed)
-    if stale:
-        errors.append("noncanonical_v48_117_artifacts_present")
+    stale = sorted(str(p) for p in a.base_out.glob("OC-RAP-v48.118-*") if p.name not in allowed)
+    if stale: errors.append("noncanonical_v48_118_artifacts_present")
 
     resolved: list[Path] = []
     files: dict[str, dict[str, object]] = {}
@@ -62,23 +56,19 @@ def main() -> int:
     for key, name in EXPECTED.items():
         rec = arts.get(key) or {}
         p = Path(str(rec.get("path", "")))
-        if p.name != name:
-            errors.append(f"{key}:noncanonical_name:{p.name}")
+        if p.name != name: errors.append(f"{key}:noncanonical_name:{p.name}")
         if not p.is_file():
             errors.append(f"{key}:missing")
             continue
         actual = sha(p)
-        if actual != rec.get("sha256"):
-            errors.append(f"{key}:sha")
+        if actual != rec.get("sha256"): errors.append(f"{key}:sha")
         resolved.append(p)
         files[name] = {"sha256": actual, "size": p.stat().st_size}
 
-    if a.pipeline.name != PIPELINE_NAME:
-        errors.append("pipeline_noncanonical_name")
+    if a.pipeline.name != PIPELINE_NAME: errors.append("pipeline_noncanonical_name")
     files[PIPELINE_NAME] = {"sha256": sha(a.pipeline), "size": a.pipeline.stat().st_size}
-
     manifest = {
-        "schema": "ocrap-v48.117-tbcf-result-bundle-manifest-v1",
+        "schema": "ocrap-v48.118-vse-result-bundle-manifest-v1",
         "engineering_version": ENGINEERING_VERSION,
         "scientific_version": SCIENTIFIC_VERSION,
         "run_instance_id": a.run_id,
@@ -86,18 +76,16 @@ def main() -> int:
         "errors": errors,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "files": files,
-        "noncanonical_v48_117_artifacts": stale,
+        "noncanonical_v48_118_artifacts": stale,
     }
     a.manifest.parent.mkdir(parents=True, exist_ok=True)
     a.manifest.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     if errors:
         print(json.dumps({"valid": False, "errors": errors}))
         return 30
-
     members = [a.pipeline, a.manifest] + resolved
     with zipfile.ZipFile(a.output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
-        for p in members:
-            zf.write(p, arcname=p.name)
+        for p in members: zf.write(p, arcname=p.name)
     print(json.dumps({"valid": True, "output": str(a.output), "members": [p.name for p in members]}))
     return 0
 

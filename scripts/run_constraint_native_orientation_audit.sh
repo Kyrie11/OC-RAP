@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Stable constraint-native orientation audit entrypoint.
-# V48.117 OC-TBCF: weak-root-exposed zero-boundary ownership and
-# first-violation / persistent-reentry crossing-flow audit after authoritative
-# V48.116 WRCF STOP.
+# V48.118 OC-VSE: recovery-set joint viability survival-envelope audit after
+# authoritative V48.117 OC-TBCF STOP. The primary family is a set-level
+# max-min envelope over all common valid recovery options; no Main integration.
 # Audit only: frozen root/margin heads are read-only; no planner/source/root training.
 set -Eeuo pipefail
 
@@ -26,55 +26,55 @@ CERT_INDEX="${OCRAP_ORIENTATION_CERT_INDEX:-$BASE_OUT/OC-RAP-v48.96-certificate-
 TRAIN_INDEX="$REFERENCE_A/evidence_adapt_teacher_pcd_index.jsonl"
 DEV_INDEX="$REFERENCE_A/evidence_adapt_dev_teacher_pcd_index.jsonl"
 
-# V48.116 is an immutable versioned scientific input, not a source-code dependency.
-V116_PIPELINE="${OCRAP_ORIENTATION_V116_PIPELINE:-$BASE_OUT/OC-RAP-v48.116-PIPELINE_COMPLETE.json}"
-V116_COMPARE="${OCRAP_ORIENTATION_V116_COMPARE:-$BASE_OUT/OC-RAP-v48.116-DCP-DRFC-BCDE-RIFA-OC-WRCF-comparison.json}"
-V116_BALANCED="${OCRAP_ORIENTATION_V116_BALANCED:-$BASE_OUT/OC-RAP-v48.116-WRCF-balanced.json}"
-V116_PRECISION="${OCRAP_ORIENTATION_V116_PRECISION:-$BASE_OUT/OC-RAP-v48.116-WRCF-precision.json}"
+# V48.117 is an immutable versioned scientific input, not a source-code dependency.
+V117_PIPELINE="${OCRAP_ORIENTATION_V117_PIPELINE:-$BASE_OUT/OC-RAP-v48.117-PIPELINE_COMPLETE.json}"
+V117_COMPARE="${OCRAP_ORIENTATION_V117_COMPARE:-$BASE_OUT/OC-RAP-v48.117-DCP-DRFC-BCDE-RIFA-OC-TBCF-comparison.json}"
+V117_BALANCED="${OCRAP_ORIENTATION_V117_BALANCED:-$BASE_OUT/OC-RAP-v48.117-TBCF-balanced.json}"
+V117_PRECISION="${OCRAP_ORIENTATION_V117_PRECISION:-$BASE_OUT/OC-RAP-v48.117-TBCF-precision.json}"
 
-CACHE="${OCRAP_ORIENTATION_INPUT_CACHE:-$BASE_OUT/.ocrap_v48_117_tbcf_cache}"
-RUNTIME="$BASE_OUT/OC-RAP-v48.117-runtime-code-contract.json"
-BOUT="$BASE_OUT/OC-RAP-v48.117-TBCF-balanced.json"
-POUT="$BASE_OUT/OC-RAP-v48.117-TBCF-precision.json"
-BSTATE="$BASE_OUT/OC-RAP-v48.117-TBCF-balanced.pt"
-PSTATE="$BASE_OUT/OC-RAP-v48.117-TBCF-precision.pt"
-COMPARE="$BASE_OUT/OC-RAP-v48.117-DCP-DRFC-BCDE-RIFA-OC-TBCF-comparison.json"
-COMPLETE="$BASE_OUT/OC-RAP-v48.117-PIPELINE_COMPLETE.json"
-BUNDLE_MANIFEST="$BASE_OUT/OC-RAP-v48.117-OC-TBCF-result-bundle-manifest.json"
-RESULTS_ZIP="$BASE_OUT/OC-RAP-v48.117-OC-TBCF-results.zip"
+CACHE="${OCRAP_ORIENTATION_INPUT_CACHE:-$BASE_OUT/.ocrap_v48_118_vse_cache}"
+RUNTIME="$BASE_OUT/OC-RAP-v48.118-runtime-code-contract.json"
+BOUT="$BASE_OUT/OC-RAP-v48.118-VSE-balanced.json"
+POUT="$BASE_OUT/OC-RAP-v48.118-VSE-precision.json"
+BSTATE="$BASE_OUT/OC-RAP-v48.118-VSE-balanced.pt"
+PSTATE="$BASE_OUT/OC-RAP-v48.118-VSE-precision.pt"
+COMPARE="$BASE_OUT/OC-RAP-v48.118-DCP-DRFC-BCDE-RIFA-OC-VSE-comparison.json"
+COMPLETE="$BASE_OUT/OC-RAP-v48.118-PIPELINE_COMPLETE.json"
+BUNDLE_MANIFEST="$BASE_OUT/OC-RAP-v48.118-OC-VSE-result-bundle-manifest.json"
+RESULTS_ZIP="$BASE_OUT/OC-RAP-v48.118-OC-VSE-results.zip"
 
 mkdir -p "$BASE_OUT" "$CACHE"
 rm -f "$RUNTIME" "$BOUT" "$POUT" "$BSTATE" "$PSTATE" "$COMPARE" "$COMPLETE" "$BUNDLE_MANIFEST" "$RESULTS_ZIP"
 
-# Fail before GPU work if checkout/import path does not satisfy V48.117.
+# Fail before GPU work if checkout/import path does not satisfy V48.118.
 python tools/check_constraint_native_orientation_contract.py \
   --repo "$REPO" --run-id "$RUN_ID" --output "$RUNTIME"
 
-# Authoritative V48.116 STOP is the only branch that licenses this audit.
-python - "$V116_PIPELINE" "$V116_COMPARE" "$V116_BALANCED" "$V116_PRECISION" <<'PY'
+# Authoritative V48.117 STOP is the only branch that licenses this audit.
+python - "$V117_PIPELINE" "$V117_COMPARE" "$V117_BALANCED" "$V117_PRECISION" <<'PY'
 import hashlib, json, pathlib, sys
 p, c, b, q = map(pathlib.Path, sys.argv[1:])
 want = {
-    p: '105d6e47cb046f5dac106bf2930004a89f032ab92faf5b3c988d1ee11b500e9e',
-    c: 'cca845f43b2d3e0c7a774f87ab26faad79de739a96217ef1a72242acf94d8f0f',
-    b: 'c35ecae10f6ed9729314e19f8e46203e0c763eaad902a2cd3470f4d8c01746c3',
-    q: '87b9e08e11b4fb58def4c58c0577f82117e23f0b6137972ebb967cd06f77bede',
+    p: '674902c61b68c05387798f011d5e0b9639efd1eff5f3e1b08b3222d819f7c399',
+    c: '8a4e54a71dfc77821842041a053002ef8b4b10c9b6a778270384b7da219fc99b',
+    b: '9574b2d30a772c6952f3c5ffd601b2bc15ae5703892c51d8162ced9fc08a8d24',
+    q: '836d45e7cf3f8f32692847bde8aefdd985523fe63bee333a16a031d92bee9ea8',
 }
 for path, digest in want.items():
     if not path.is_file():
-        raise SystemExit(f'missing V48.116 prerequisite {path}')
+        raise SystemExit(f'missing V48.117 prerequisite {path}')
     got = hashlib.sha256(path.read_bytes()).hexdigest()
     if got != digest:
-        raise SystemExit(f'authoritative V48.116 SHA mismatch {path.name}: {got}')
+        raise SystemExit(f'authoritative V48.117 SHA mismatch {path.name}: {got}')
 pd = json.loads(p.read_text())
 cd = json.loads(c.read_text())
 d = cd.get('preregistered_decision') or {}
-if not (pd.get('valid') and pd.get('attribution_ready') and pd.get('preregistered_status') == 'WEAK_ROOT_RECOVERY_SET_FLOW_STOP'):
-    raise SystemExit('authoritative V48.116 STOP pipeline prerequisite missing')
-if not (cd.get('valid') and cd.get('attribution_ready') and d.get('status') == 'WEAK_ROOT_RECOVERY_SET_FLOW_STOP'):
-    raise SystemExit('authoritative V48.116 comparison STOP prerequisite missing')
-if d.get('next_branch') != 'close_first_order_nominal_ocmero_cotangent_option_pushforward_then_preregister_tail_boundary_crossing_flow_audit_no_training_capacity_regime_or_source_sweep':
-    raise SystemExit('V48.116 did not authorize tail-boundary crossing-flow branch')
+if not (pd.get('valid') and pd.get('attribution_ready') and pd.get('preregistered_status') == 'TAIL_BOUNDARY_CROSSING_FLOW_STOP'):
+    raise SystemExit('authoritative V48.117 STOP pipeline prerequisite missing')
+if not (cd.get('valid') and cd.get('attribution_ready') and d.get('status') == 'TAIL_BOUNDARY_CROSSING_FLOW_STOP'):
+    raise SystemExit('authoritative V48.117 comparison STOP prerequisite missing')
+if d.get('next_branch') != 'close_static_boundary_witness_hitting_flow_then_preregister_recovery_set_viability_survival_envelope_audit_no_training_capacity_regime_source_horizon_or_threshold_sweep':
+    raise SystemExit('V48.117 did not authorize recovery-set viability survival-envelope branch')
 PY
 
 for f in "$TRAIN_INDEX" "$DEV_INDEX" "$CERT_INDEX" "$V93_AUDIT"; do
@@ -109,17 +109,17 @@ wait "$p0"; r0=$?
 wait "$p1"; r1=$?
 set -e
 [[ $r0 == 0 && $r1 == 0 ]] || {
-  echo "V48.117 TBCF run failure balanced=$r0 precision=$r1" >&2
+  echo "V48.118 VSE run failure balanced=$r0 precision=$r1" >&2
   exit 30
 }
 
 python tools/compare_constraint_native_recovery_orientation.py \
   --balanced "$BOUT" \
   --precision "$POUT" \
-  --v116-pipeline "$V116_PIPELINE" \
-  --v116-comparison "$V116_COMPARE" \
-  --v116-balanced "$V116_BALANCED" \
-  --v116-precision "$V116_PRECISION" \
+  --v117-pipeline "$V117_PIPELINE" \
+  --v117-comparison "$V117_COMPARE" \
+  --v117-balanced "$V117_BALANCED" \
+  --v117-precision "$V117_PRECISION" \
   --run-id "$RUN_ID" \
   --output "$COMPARE"
 
@@ -130,8 +130,8 @@ python tools/check_constraint_native_orientation_pipeline.py \
   --balanced-state "$BSTATE" \
   --precision-state "$PSTATE" \
   --comparison "$COMPARE" \
-  --v48-116-pipeline "$V116_PIPELINE" \
-  --v48-116-comparison "$V116_COMPARE" \
+  --v48-117-pipeline "$V117_PIPELINE" \
+  --v48-117-comparison "$V117_COMPARE" \
   --run-id "$RUN_ID" \
   --output "$COMPLETE"
 
@@ -142,4 +142,4 @@ python tools/package_constraint_native_orientation_results.py \
   --manifest "$BUNDLE_MANIFEST" \
   --output "$RESULTS_ZIP"
 
-printf 'V48.117 OC-TBCF result bundle ready. Upload ONLY this file:\n%s\nrun_instance_id=%s\n' "$RESULTS_ZIP" "$RUN_ID"
+printf 'V48.118 OC-VSE result bundle ready. Upload ONLY this file:\n%s\nrun_instance_id=%s\n' "$RESULTS_ZIP" "$RUN_ID"

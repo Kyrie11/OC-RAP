@@ -16,6 +16,7 @@ ACTIVE = [
     "src/ocrap/audits/recovery_set_constraint_flow.py",
     "src/ocrap/audits/weak_root_recovery_set_flow.py",
     "src/ocrap/audits/tail_boundary_crossing_flow.py",
+    "src/ocrap/audits/viability_survival_envelope.py",
     "tools/run_constraint_native_recovery_orientation_audit.py",
     "tools/compare_constraint_native_recovery_orientation.py",
     "tools/check_constraint_native_orientation_contract.py",
@@ -49,15 +50,13 @@ def main() -> int:
     import ocrap.audits.recovery_set_constraint_flow as rscf
     import ocrap.audits.weak_root_recovery_set_flow as wrcf
     import ocrap.audits.tail_boundary_crossing_flow as tbcf
+    import ocrap.audits.viability_survival_envelope as vse
 
     for rel in ACTIVE:
         p = (repo / rel).resolve()
         inside = str(p).startswith(str(repo))
         ok = p.is_file() and inside
-        files[rel] = {
-            "exists": p.is_file(), "inside_repo": inside,
-            "path": str(p), "sha256": sha(p) if p.is_file() else None,
-        }
+        files[rel] = {"exists": p.is_file(), "inside_repo": inside, "path": str(p), "sha256": sha(p) if p.is_file() else None}
         if not ok:
             errors.append(f"runtime_file:{rel}")
 
@@ -70,6 +69,7 @@ def main() -> int:
         "recovery_set_constraint_flow": rscf,
         "weak_root_recovery_set_flow": wrcf,
         "tail_boundary_crossing_flow": tbcf,
+        "viability_survival_envelope": vse,
     }
     imported = {k: str(Path(v.__file__).resolve()) for k, v in modules.items()}
     expected = {
@@ -81,20 +81,21 @@ def main() -> int:
         "recovery_set_constraint_flow": str((repo / "src/ocrap/audits/recovery_set_constraint_flow.py").resolve()),
         "weak_root_recovery_set_flow": str((repo / "src/ocrap/audits/weak_root_recovery_set_flow.py").resolve()),
         "tail_boundary_crossing_flow": str((repo / "src/ocrap/audits/tail_boundary_crossing_flow.py").resolve()),
+        "viability_survival_envelope": str((repo / "src/ocrap/audits/viability_survival_envelope.py").resolve()),
     }
     for k, v in imported.items():
         if v != expected[k]:
             errors.append(f"import_path:{k}:{v}")
 
-    checks = tbcf.contract_checks()
+    checks = vse.contract_checks()
     for k, v in checks.items():
         if not v:
             errors.append(f"synthetic:{k}")
 
     out = {
-        "schema": "ocrap-v48.117-tbcf-runtime-code-contract-v1",
-        "engineering_version": tbcf.ENGINEERING_VERSION,
-        "scientific_version": tbcf.SCIENTIFIC_VERSION,
+        "schema": "ocrap-v48.118-vse-runtime-code-contract-v1",
+        "engineering_version": vse.ENGINEERING_VERSION,
+        "scientific_version": vse.SCIENTIFIC_VERSION,
         "run_instance_id": a.run_id,
         "valid": not errors,
         "attribution_ready": not errors,
@@ -106,36 +107,35 @@ def main() -> int:
         "historical_code_dependency": False,
         "scientific_contract": {
             "audit_only": True,
-            "tail_boundary_crossing_flow": True,
-            "boundary_measure_source": "outer_ocmero_weak_anchor_influence_then_compatibility_root_exposure_then_zero_margin_boundary_witnesses",
-            "boundary_measure_candidate_independent": True,
-            "boundary_measure_teacher_value_free": True,
+            "viability_survival_envelope": True,
+            "primary_option_set": "all_common_valid_recovery_options",
+            "control_option_set": "support_of_frozen_v48_117_weak_root_zero_boundary_witnesses",
+            "boundary_support_weights_used": False,
+            "envelope_definition": "max_option_min_constraint_running_signed_margin",
+            "envelope_channels": ["signed_joint_prefix_viability_envelope", "signed_joint_suffix_persistent_reentry_envelope"],
+            "set_envelope_option_identity_may_switch_over_time": True,
+            "active_option_identity_exported": False,
             "zero_boundary_threshold": 0.0,
             "zero_boundary_threshold_sweep": False,
-            "boundary_hitting_channels": ["prefix_zero_boundary_survival", "suffix_persistent_safe_reentry"],
-            "historical_cotangent_measure_retained_as_factorial_control": True,
             "frozen_root_validity_mask_used": True,
             "frozen_root_decoder_read_only": True,
             "frozen_margin_head_read_only": True,
             "root_decoder_parameters_trained": 0,
             "constraint_names": ["clearance", "stopping", "route", "reentry"],
-            "same_option_inside_each_weighted_summand": True,
             "actuator_projection": True,
             "existing_recovery_horizon_only": True,
             "work_bins": 8,
             "work_bins_cover_full_horizon": True,
-            "constraint_work_control_channels": ["positive_reserve_work", "negative_debt_repayment_work"],
-            "boundary_crossing_semantics": "first_violation_survival_and_persistent_safe_reentry_at_signed_zero_boundary",
-            "option_aggregation": "weak_root_exposure_pushforward_through_zero_margin_boundary_witnesses",
+            "option_aggregation": "permutation_invariant_max_over_common_valid_recovery_options_after_joint_constraint_min",
             "model_physical_option_alignment": "raw_physical_prefix_plus_invalid_checkpoint_padding_only",
-            "padded_model_options_must_be_invalid_and_zero_measure_mass": True,
+            "padded_model_options_must_be_invalid_and_zero_boundary_witness_mass": True,
             "pre_readout_candidate_option_selector": False,
             "downstream_ocmero_option_selection_unchanged": True,
             "option_permutation_invariant": True,
-            "boundary_geometry_dim": tbcf.BOUNDARY_GEOMETRY_DIM,
-            "matched_family_dim": tbcf.MATCHED_DIM,
+            "envelope_geometry_dim": vse.ENVELOPE_GEOMETRY_DIM,
+            "matched_family_dim": vse.MATCHED_DIM,
             "capacity_matched_all_families": True,
-            "factorial_families": ["base", "cotangent_hitting", "boundary_work", "boundary_hitting"],
+            "families": ["base", "exposed_envelope", "full_envelope"],
             "candidate_identity_shuffle": "whole_feature_row_cyclic_permutation_within_scene_time_group",
             "convex_closed_form_ridge": True,
             "strictly_convex_unique_solution": True,
