@@ -15,13 +15,13 @@ export PYTHONPATH="$PWD/src:$PWD${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONNOUSERSITE=1
 ```
 
-## 0. Current V48.115 scientific reference contract
+## 0. Current V48.116 scientific reference contract
 
-The stable unversioned orientation launcher now runs **V48.115 OC-RSCF**. It treats the completed V48.114 OC-CCW STOP artifacts as immutable scientific inputs and verifies their exact SHA/status/registered next branch before any V48.115 audit starts. Python implementation filenames remain semantic/unversioned; scientific inputs and outputs remain versioned.
+The stable unversioned orientation launcher now runs **V48.116 OC-WRCF**. It treats the completed V48.115 OC-RSCF STOP artifacts as immutable scientific inputs and verifies their exact SHA/status/registered next branch before any V48.116 audit starts. Python implementation filenames remain semantic/unversioned; scientific inputs and outputs remain versioned.
 
-## 1. Current orientation audit — V48.115 OC-RSCF
+## 1. Current orientation audit — V48.116 OC-WRCF
 
-V48.115 is **audit-only**. It keeps the historical 156-D frozen candidate response, four actuator-projected executable constraints, recovery horizon, recovery library, cohorts, and 220-D linear capacity fixed. It removes the pre-readout hard recovery-option selector and represents the full common valid recovery library by a permutation-invariant empirical-set mean of same-option full-horizon integral flow or signed reserve/debt work. Option selection remains downstream in OC-MERO. It does **not** train Stage-I, root, source, relative ranker or planner parameters.
+V48.116 is **audit-only**. It keeps the historical 156-D candidate response, four actuator-projected executable constraints, recovery horizon, recovery library, cohorts and 220-D convex capacity fixed. It replaces V48.115's uniform recovery-option measure with the exact option push-forward of the **frozen nominal native OC-MERO nested-LCVAR cotangent**. The cotangent uses frozen model-predicted root logits/margins/compatibility and the existing root-valid support mask; teacher `m_star`, teacher root probabilities/compatibility, future signatures and held-out labels do not construct the feature. Root/margin heads are read-only.
 
 Run exactly:
 
@@ -35,14 +35,12 @@ bash scripts/run_constraint_native_orientation_audit.sh
 Upload only:
 
 ```text
-/home/senzeyu2/code/OC-RAP/runs/OC-RAP-v48.115-OC-RSCF-results.zip
+/home/senzeyu2/code/OC-RAP/runs/OC-RAP-v48.116-OC-WRCF-results.zip
 ```
 
-The runner still reads the frozen V48.80 owner checkpoint, V48.93/V48.96 evidence/index artifacts, and the authoritative V48.114 result artifacts. These are scientific provenance inputs, not historical source-code imports.
+### About OC-RAP training in V48.116
 
-### About OC-RAP training in V48.115
-
-There is no registered V48.115 planner-training stage. Running generic `python -m ocrap.cli train` would not reproduce this audit. The current step is intentionally a factorized attribution audit before any source/Main promotion.
+There is no registered V48.116 planner/root/source training stage. Running generic `python -m ocrap.cli train` would not reproduce this audit. This step is the preregistered weak-tail attribution test before any carrier/Main promotion.
 
 ## 2. Direct OC-RAP three-regime closed-loop test
 

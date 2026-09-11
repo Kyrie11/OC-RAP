@@ -35,10 +35,17 @@ from ocrap.audits.common_option_constraint_work import (
     contract_checks as ccw_contract_checks,
 )
 from ocrap.audits.recovery_set_constraint_flow import (
+    ENGINEERING_VERSION as RSCF_ENGINEERING_VERSION,
+    MATCHED_DIM as RSCF_MATCHED_DIM,
+    SCIENTIFIC_VERSION as RSCF_SCIENTIFIC_VERSION,
+    SET_GEOMETRY_DIM,
+    contract_checks as rscf_contract_checks,
+)
+from ocrap.audits.weak_root_recovery_set_flow import (
     ENGINEERING_VERSION,
     MATCHED_DIM,
     SCIENTIFIC_VERSION,
-    SET_GEOMETRY_DIM,
+    TAIL_GEOMETRY_DIM,
     contract_checks,
 )
 
@@ -76,13 +83,22 @@ def test_historical_ccw_contract_checks():
     assert CCW_SCIENTIFIC_VERSION == "v48.114-OC-CCW"
 
 
-def test_current_rscf_contract_checks():
-    checks = contract_checks()
+def test_historical_rscf_contract_checks():
+    checks = rscf_contract_checks()
     assert checks and all(checks.values()), checks
     assert SET_GEOMETRY_DIM == 64
+    assert RSCF_MATCHED_DIM == 220
+    assert RSCF_ENGINEERING_VERSION == "v48.115.0-OC-RSCF"
+    assert RSCF_SCIENTIFIC_VERSION == "v48.115-OC-RSCF"
+
+
+def test_current_wrcf_contract_checks():
+    checks = contract_checks()
+    assert checks and all(checks.values()), checks
+    assert TAIL_GEOMETRY_DIM == 64
     assert MATCHED_DIM == 220
-    assert ENGINEERING_VERSION == "v48.115.0-OC-RSCF"
-    assert SCIENTIFIC_VERSION == "v48.115-OC-RSCF"
+    assert ENGINEERING_VERSION == "v48.116.0-OC-WRCF"
+    assert SCIENTIFIC_VERSION == "v48.116-OC-WRCF"
 
 
 def test_ridge_owner_is_still_unique_and_closed_form():
@@ -95,17 +111,17 @@ def test_ridge_owner_is_still_unique_and_closed_form():
     assert model.normal_equation_residual <= 1e-7
 
 
-def test_current_launcher_reuses_authoritative_v114_and_keeps_command_name():
+def test_current_launcher_reuses_authoritative_v115_and_keeps_command_name():
     repo = Path(__file__).resolve().parents[1]
     launcher = (repo / "scripts/run_constraint_native_orientation_audit.sh").read_text()
-    assert "OC-RAP-v48.114-PIPELINE_COMPLETE.json" in launcher
-    assert "OC-RAP-v48.114-DCP-DRFC-BCDE-RIFA-OC-CCW-comparison.json" in launcher
-    assert "OC-RAP-v48.114-CCW-balanced.json" in launcher
-    assert "OC-RAP-v48.114-CCW-precision.json" in launcher
-    assert "OC-RAP-v48.93-factor-mediation-audit.jsonl" in launcher
+    assert "OC-RAP-v48.115-PIPELINE_COMPLETE.json" in launcher
+    assert "OC-RAP-v48.115-DCP-DRFC-BCDE-RIFA-OC-RSCF-comparison.json" in launcher
     assert "OC-RAP-v48.115-RSCF-balanced.json" in launcher
-    assert "OC-RAP-v48.115-OC-RSCF-results.zip" in launcher
-    assert "selector-free recovery-set flow branch" in launcher
+    assert "OC-RAP-v48.115-RSCF-precision.json" in launcher
+    assert "OC-RAP-v48.93-factor-mediation-audit.jsonl" in launcher
+    assert "OC-RAP-v48.116-WRCF-balanced.json" in launcher
+    assert "OC-RAP-v48.116-OC-WRCF-results.zip" in launcher
+    assert "weak-root-conditioned recovery-set flow branch" in launcher
     assert "--run-id" in launcher
 
 def test_unversioned_runner_keeps_v93_role_filter_semantics(tmp_path):
@@ -155,24 +171,24 @@ def test_unversioned_runner_keeps_v93_role_filter_semantics(tmp_path):
     assert [c["candidate"] for c in groups[0]["candidates"]] == [1]
 
 
-def test_current_result_packager_uses_only_canonical_v115_artifacts():
+def test_current_result_packager_uses_only_canonical_v116_artifacts():
     tool = Path(__file__).resolve().parents[1] / "tools" / "package_constraint_native_orientation_results.py"
     spec = importlib.util.spec_from_file_location("orientation_packager_test", tool)
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    assert mod.EXPECTED["balanced"] == "OC-RAP-v48.115-RSCF-balanced.json"
-    assert mod.EXPECTED["precision"] == "OC-RAP-v48.115-RSCF-precision.json"
-    assert mod.ENGINEERING_VERSION == "v48.115.0-OC-RSCF"
-    assert mod.SCIENTIFIC_VERSION == "v48.115-OC-RSCF"
+    assert mod.EXPECTED["balanced"] == "OC-RAP-v48.116-WRCF-balanced.json"
+    assert mod.EXPECTED["precision"] == "OC-RAP-v48.116-WRCF-precision.json"
+    assert mod.ENGINEERING_VERSION == "v48.116.0-OC-WRCF"
+    assert mod.SCIENTIFIC_VERSION == "v48.116-OC-WRCF"
 
 
-def test_v115_comparison_preregisters_selector_free_set_flow():
+def test_v116_comparison_preregisters_weak_root_tail_flow():
     repo = Path(__file__).resolve().parents[1]
     text = (repo / "tools/compare_constraint_native_recovery_orientation.py").read_text()
     assert '"reentry_contact_coverage_go"' in text
-    assert "set_integral_vs_v48_114_selected_integral_support_gate" in text
-    assert "set_work_vs_v48_114_selected_work_support_gate" in text
-    assert "set_work_vs_set_integral_support_gate" in text
-    assert "RECOVERY_SET_CONSTRAINT_FLOW_GO" in text
-    assert "ocmero_weak_root_conditioned_recovery_set_flow_audit" in text
+    assert "tail_integral_vs_v48_115_uniform_integral_support_gate" in text
+    assert "tail_work_vs_v48_115_uniform_work_support_gate" in text
+    assert "tail_work_vs_tail_integral_support_gate" in text
+    assert "WEAK_ROOT_RECOVERY_SET_FLOW_GO" in text
+    assert "nominal_ocmero_tail_weighted" in text

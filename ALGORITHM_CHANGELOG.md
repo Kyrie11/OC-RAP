@@ -13268,3 +13268,238 @@ otherwise STOP
 ### Engineering implementation
 
 The stable launcher filename and user command remain unchanged. V48.115 adds the semantic module `src/ocrap/audits/recovery_set_constraint_flow.py`, updates the unversioned runner/comparator/runtime/pipeline/packager, and fails closed on the exact authoritative V48.114 SHA/status/registered branch before GPU work.
+
+## V48.116 OC-WRCF — Observation-Consistent Weak-Root Cotangent Recovery-Set Constraint Flow Audit
+
+**Category:** preregistered audit-only successor to the engineering-valid V48.115 OC-RSCF scientific STOP.  No planner, Stage-I, root decoder, margin head, source, relative-ranker, or boundary parameter is trained.  No regime conditioning, dataset reconstruction, threshold/horizon/option-count/capacity sweep, learned root adapter, or candidate-conditioned recovery-option selector is introduced.
+
+### Authoritative V48.115 attribution
+
+V48.115 passes the engineering/scientific attribution gate: canonical artifact SHA closure is exact; runtime source provenance matches the uploaded checkout; the balanced/precision states are closed-form strictly-convex ridge fits with Support/Reserve train counts `159/61`; the maximum recorded normal-equation residual is approximately `3.90e-10`; option-order invariance and set-work conservation are numerical-exact; all four roles have twelve common valid recovery options, nonzero set flow, diverse option flow, and Contact re-entry coverage.  Balanced/precision metrics and coefficients are exact duplicates in the completed V48.115 run, so scientific interpretation remains four unique population roles rather than eight independent repeats.
+
+The preregistered scientific decision is:
+
+```text
+status = RECOVERY_SET_CONSTRAINT_FLOW_STOP
+next   = close observation-only uniform option-set mean flow
+         -> OC-MERO weak-root-conditioned recovery-set flow audit
+            with frozen roots, no training/capacity/regime/source sweep
+```
+
+The STOP is informative rather than null.
+
+1. Removing the V48.114 candidate-dependent hard option selector is beneficial for **signed set work relative to selected work** on both axes in three of four unique roles:
+
+```text
+Support, V48.115 set-work - V48.114 selected-work:
+  dev-Near          +0.015625
+  dev-Contact       +0.068182
+  certificate-Near  +0.254545
+  certificate-Contact -0.121739
+
+Reserve, V48.115 set-work - V48.114 selected-work:
+  dev-Near          +0.500000   [underpowered]
+  dev-Contact       +0.239583
+  certificate-Near  +0.071429
+  certificate-Contact -0.194444
+```
+
+Both historical selector-removal gates are GO.  Thus V48.114's premature candidate-dependent option ownership was a real bottleneck; it is not reopened.
+
+2. Uniform selector-free aggregation is nevertheless not a population-stable absolute representation.  Neither `set_integral` nor `set_work` satisfies the absolute Support/Reserve gate.  In particular, certificate-Contact is the systematic reversal for selector removal, while certificate-Near remains weak in absolute signed-work orientation.
+
+3. Signed reserve/debt coordinates continue to carry Contact-specific mechanism signal after selector removal:
+
+```text
+Reserve, set-work - set-integral:
+  dev-Contact         +0.135417
+  certificate-Contact +0.055556
+```
+
+and Support also improves in both Contact roles.  The decomposition therefore remains a valid physical coordinate system, but it is not itself a complete transferable carrier because certificate-Near reverses and the absolute gates remain STOP.
+
+4. Dev-Near Reserve remains underpowered (`6` rows, `2/4` class split, one powered group); its AUC must never be used as the decisive mechanism gate.
+
+### Directions closed after V48.115
+
+The following are now closed as complete transferable representations:
+
+```text
+candidate-selected sparse pointwise executable Jacobian       [V48.113]
+candidate-selected fixed-bin integral/work                    [V48.114]
+uniform first moment over the whole recovery-option set       [V48.115]
+```
+
+The V48.115 result does **not** reopen hard option selection.  It instead proves that two different option measures fail for complementary reasons: a candidate-dependent delta measure is unstable across populations, while the uniform measure dilutes tail-relevant recovery structure.
+
+Previously closed families remain closed: fixed-CV active-agent geometry, prefix HCNC as a complete mechanism, learned root/source/action-response adapters, root-local physical-response learning from underidentified future sidecars, generic capacity growth, rank/attention/MLP widening, LR/lambda/threshold/horizon sweeps, regime routers/experts, Stage-I/root/source retraining, boundary transport, unsupported option-library expansion, and dataset reconstruction.
+
+### Dominant bottleneck after V48.115
+
+The dominant bottleneck is now narrower than “recovery-set deformation before selection”:
+
+> **Which part of the executable recovery-set deformation is owned by the observation-compatible deployability lower tail?**
+
+V48.115 assigns equal mass to all valid recovery options.  OC-MERO does not: deployable recoverability is a nested lower-tail functional over observation-compatible latent roots followed by legal common-option choice.  Therefore a uniform option average can preserve physically real flow while suppressing the subset of flow that controls the deployability boundary.
+
+The strongest falsifiable next proposition is:
+
+> **Population-stable recovery orientation is obtained by pairing candidate-induced executable constraint flow with the candidate-independent weak-tail sensitivity measure of the nominal OC-MERO functional, rather than with either a candidate-selected option or a uniform option measure.**
+
+This is a direct consequence of the paper's information pattern.  Let the frozen nominal native model predict root logits `z0`, compatibility `C0`, and root-by-option margin matrix `M0`.  With the paper-native OC-MERO functional
+
+```text
+R_dep(M; p, C) = LCVAR_alpha_i [ max_l LCVAR_beta_j(M[j,l]; C[i,j] p[j]) ],
+```
+
+V48.116 uses the exact deterministic stable-sort subgradient at the nominal anchor
+
+```text
+G[j,l] = d R_dep(M0) / d M0[j,l].
+```
+
+Because both inner and outer LCVAR influences are normalized and the selected option is fixed only at the **nominal common measure**, `G >= 0` and `sum_{j,l} G[j,l] = 1`.  Push it forward over roots:
+
+```text
+omega[l] = sum_j G[j,l],
+omega[l] >= 0,
+sum_l omega[l] = 1.
+```
+
+`omega` is computed once from the frozen nominal anchor and held fixed for every candidate in the scene-time group.  Therefore it cannot leak a candidate-conditioned argmax identity into the causal representation.  It is a common pre-treatment integration measure, not another adaptive selector.
+
+### V48.116 physical representation
+
+For every common valid recovery option `g_l`, retain the V48.115 same-option actuator-projected full-horizon physical flow:
+
+```text
+F_integral_l = [ bin_mean(Delta h_l), bin_mean(Delta h_l * h0_l) ]
+
+F_work_l = [
+    [h_a,l]_+ - [h_0,l]_+,
+    [-h_0,l]_+ - [-h_a,l]_+
+]
+```
+
+Then replace only the option measure:
+
+```text
+tail_integral = sum_l omega[l] F_integral_l
+tail_work     = sum_l omega[l] F_work_l.
+```
+
+The signed identity remains exact after tail integration:
+
+```text
+tail_reserve_work + tail_debt_work = tail_delta_h.
+```
+
+The historical feature width is unchanged:
+
+```text
+8 bins x 4 constraints x 2 channels = 64-D
+156-D frozen candidate response + 64-D = 220-D
+```
+
+No learned set encoder, root adapter, attention module, extra option embedding, or tuning dimension is introduced.
+
+### Frozen-root audit boundary
+
+V48.116 is deliberately an **offline attribution audit**.  It reads the frozen model's native nominal `root_logits`, predicted margins and predicted observation compatibility; it does not use teacher `m_star`, teacher `root_probs`, teacher `c_star`, root future signatures, or held-out labels to construct the tail weights.  It reuses only the existing `root_valid` structural support mask from the frozen root set.  The root decoder and margin head are read-only and train zero parameters.
+
+This does not reopen the previously closed learned root-source direction.  Roots define an integration measure over a physically grounded executable constraint-flow object; they are not trained to predict the action-response target.
+
+### Factorized causal experiment
+
+V48.116 fits only equal-capacity closed-form ridge probes:
+
+```text
+base          = historical 156-D frozen candidate response
+tail_integral = 156-D + nominal-OC-MERO-cotangent weighted integral flow
+tail_work     = 156-D + nominal-OC-MERO-cotangent weighted signed work
+```
+
+Primary preregistered contrasts:
+
+```text
+tail_integral - V48.115 set_integral
+    isolates weak-tail option measure vs uniform option measure.
+
+tail_work - V48.115 set_work
+    isolates weak-tail option measure for signed reserve/debt flow.
+
+tail_work - tail_integral
+    tests whether signed reserve/debt coordinates remain additionally useful
+    once the option measure is aligned to OC-MERO's deployability tail.
+```
+
+Absolute gates are unchanged:
+
+```text
+AUC >= 0.65 AND true-minus-shuffle AUC >= 0.05 in >= 6/8 legacy cells,
+covering >= 3/4 unique roles with both Near and Contact;
+Top1 lift >= 0.10 in >= 4/8 cells,
+covering >= 2 unique roles with both Near and Contact.
+```
+
+Increment gates are unchanged:
+
+```text
+Delta AUC > 0 in >= 6/8 legacy cells,
+covering >= 3/4 unique roles with Near and Contact,
+and Delta AUC >= 0.01 in >= 4/8 cells.
+```
+
+The activity/identifiability gate additionally requires:
+
+- exact tail work conservation <= `1e-10`;
+- joint option/weight permutation invariance <= `1e-10`;
+- exact cotangent and option-pushforward unit mass <= `1e-10`;
+- nonzero tail-integral and tail-work in >=3/4 roles with Near+Contact;
+- physically diverse multi-option recovery flow in >=3/4 roles;
+- a nonempty weak-root lower tail in >=3/4 roles;
+- a nontrivial tail option measure (mean >=2 positive options) in >=3/4 roles;
+- Contact re-entry coverage.
+
+### Preregistered V48.116 promotion / STOP tree
+
+```text
+tail_work absolute Support+Reserve GO
++ tail_work vs V48.115 uniform-work Support+Reserve GO
++ activity/nontrivial-tail/re-entry GO
++ tail_work vs tail_integral Support+Reserve GO
+  -> WEAK_ROOT_RECOVERY_SET_FLOW_GO;
+     promote nominal-OC-MERO tail-weighted signed constraint flow;
+     authorize exactly one carrier/Main integration experiment,
+     with no source/boundary/regime/capacity co-change.
+
+work core GO but signed decomposition not additionally required
+  -> promote tail-weighted recovery flow, not the decomposition claim;
+     one carrier integration only.
+
+tail-integral core GO
+  -> promote tail-weighted integral flow only;
+     one carrier integration only.
+
+Support-only or Reserve-only
+  -> retain only the proven axis and audit the missing zero-boundary hitting
+     functional under the exact same tail measure.
+
+both axes only local-order GO
+  -> one convex pairwise audit on exactly the same tail-weighted features.
+
+otherwise STOP
+  -> close first-order nominal OC-MERO cotangent option push-forward;
+     next branch = tail-boundary crossing / hitting-time flow audit,
+     with no training, capacity, regime, source, horizon or threshold sweep.
+```
+
+### Engineering implementation
+
+The stable launcher and user command remain unchanged.  V48.116 adds only the semantic module:
+
+```text
+src/ocrap/audits/weak_root_recovery_set_flow.py
+```
+
+and updates the existing unversioned runner, comparator, runtime checker, pipeline checker and packager.  The launcher fails closed on the exact authoritative V48.115 pipeline/comparison/balanced/precision SHA, STOP status and registered next branch before any GPU work.

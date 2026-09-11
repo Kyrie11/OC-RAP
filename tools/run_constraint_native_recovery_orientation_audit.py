@@ -32,18 +32,22 @@ from ocrap.audits.executable_constraint_jacobian import (
     executable_constraint_field_from_sample,
     validate_group_contract,
 )
-from ocrap.audits.recovery_set_constraint_flow import (
+from ocrap.audits.recovery_set_constraint_flow import set_flow_diagnostics
+from ocrap.audits.weak_root_recovery_set_flow import (
     ALGORITHM_NAME,
     ENGINEERING_VERSION,
     MATCHED_DIM,
     SCIENTIFIC_VERSION,
-    SET_GEOMETRY_DIM,
+    TAIL_GEOMETRY_DIM,
     base_features,
     fit_set_flow_scaler,
     matched_features,
-    recovery_set_integral_geometry,
-    recovery_set_work_geometry,
-    set_flow_diagnostics,
+    nominal_ocmero_tail_measure,
+    tail_measure_diagnostics,
+    weak_root_integral_geometry,
+    weak_root_work_geometry,
+    weak_root_work_conservation_error,
+    weak_root_option_permutation_invariance_error,
 )
 
 ROLES = ("dev_near", "dev_contact", "certificate_near", "certificate_contact")
@@ -51,7 +55,7 @@ ROLES = ("dev_near", "dev_contact", "certificate_near", "certificate_contact")
 # Deliberately excludes teacher m_star/root/future labels.  The scientific
 # feature path reads only current observation, candidate prefix, and the fixed
 # recovery option library.  Labels enter later through the historical indices.
-RSCF_SAMPLE_KEYS: frozenset[str] = frozenset({
+WRCF_SAMPLE_KEYS: frozenset[str] = frozenset({
     "scene_id", "time_index", "candidate_index", "is_nominal",
     "agent_history", "agent_valid", "ego_state",
     "prefix_states", "prefix_controls", "prefix_param", "prefix_macro_id", "prefix_macro_name",
@@ -216,25 +220,50 @@ def _merge_pair_diags(diags: list[dict[str, Any]]) -> dict[str, Any]:
             "candidate_count": 0,
             "mean_common_valid_option_count": 0.0,
             "min_common_valid_option_count": 0,
-            "set_work_nonzero_fraction": 0.0,
-            "set_integral_nonzero_fraction": 0.0,
+            "tail_work_nonzero_fraction": 0.0,
+            "tail_integral_nonzero_fraction": 0.0,
             "option_flow_diverse_fraction": 0.0,
             "reentry_set_available_fraction": 0.0,
-            "max_set_work_conservation_error": 0.0,
-            "max_option_permutation_invariance_error": 0.0,
+            "max_tail_work_conservation_error": 0.0,
+            "max_tail_option_permutation_invariance_error": 0.0,
         }
-    n = len(diags)
     counts = [int(d.get("common_valid_option_count", 0)) for d in diags]
     return {
-        "candidate_count": n,
+        "candidate_count": len(diags),
         "mean_common_valid_option_count": float(np.mean(counts)),
         "min_common_valid_option_count": int(min(counts)),
-        "set_work_nonzero_fraction": float(np.mean([bool(d.get("set_work_nonzero", False)) for d in diags])),
-        "set_integral_nonzero_fraction": float(np.mean([bool(d.get("set_integral_nonzero", False)) for d in diags])),
+        "tail_work_nonzero_fraction": float(np.mean([bool(d.get("tail_work_nonzero", False)) for d in diags])),
+        "tail_integral_nonzero_fraction": float(np.mean([bool(d.get("tail_integral_nonzero", False)) for d in diags])),
         "option_flow_diverse_fraction": float(np.mean([bool(d.get("option_flow_diverse", False)) for d in diags])),
         "reentry_set_available_fraction": float(np.mean([bool(d.get("reentry_available_in_set", False)) for d in diags])),
-        "max_set_work_conservation_error": float(max(float(d.get("set_work_conservation_error", 0.0)) for d in diags)),
-        "max_option_permutation_invariance_error": float(max(float(d.get("option_permutation_invariance_error", 0.0)) for d in diags)),
+        "max_tail_work_conservation_error": float(max(float(d.get("tail_work_conservation_error", 0.0)) for d in diags)),
+        "max_tail_option_permutation_invariance_error": float(max(float(d.get("tail_option_permutation_invariance_error", 0.0)) for d in diags)),
+    }
+
+
+def _merge_tail_measure_diags(diags: list[dict[str, Any]]) -> dict[str, Any]:
+    if not diags:
+        return {
+            "group_count": 0,
+            "mean_positive_option_count": 0.0,
+            "min_positive_option_count": 0,
+            "mean_effective_option_count": 0.0,
+            "min_effective_option_count": 0.0,
+            "mean_outer_positive_root_count": 0.0,
+            "min_outer_positive_root_count": 0,
+            "max_option_weight_sum_error": 0.0,
+            "max_cotangent_mass_error": 0.0,
+        }
+    return {
+        "group_count": len(diags),
+        "mean_positive_option_count": float(np.mean([d["tail_positive_option_count"] for d in diags])),
+        "min_positive_option_count": int(min(d["tail_positive_option_count"] for d in diags)),
+        "mean_effective_option_count": float(np.mean([d["tail_effective_option_count"] for d in diags])),
+        "min_effective_option_count": float(min(d["tail_effective_option_count"] for d in diags)),
+        "mean_outer_positive_root_count": float(np.mean([d["tail_outer_positive_root_count"] for d in diags])),
+        "min_outer_positive_root_count": int(min(d["tail_outer_positive_root_count"] for d in diags)),
+        "max_option_weight_sum_error": float(max(abs(float(d["tail_option_weight_sum"]) - 1.0) for d in diags)),
+        "max_cotangent_mass_error": float(max(abs(float(d["tail_cotangent_mass"]) - 1.0) for d in diags)),
     }
 
 
@@ -258,45 +287,57 @@ def extract_records(
         needed.extend(Path(c["path"]) for c in g["candidates"])
     seen: set[str] = set()
     paths: list[Path] = []
-    for p in needed:
-        q = str(p.resolve())
+    for pth in needed:
+        q = str(pth.resolve())
         if q not in seen:
             seen.add(q)
-            paths.append(p)
+            paths.append(pth)
 
     bundle = load_model_bundle(checkpoint, {"training": {"device": device}})
     if bundle is None:
         raise RuntimeError(f"cannot load checkpoint {checkpoint}")
     model = bundle.model.eval()
-    [p.requires_grad_(False) for p in model.parameters()]
+    [par.requires_grad_(False) for par in model.parameters()]
     if not isinstance(model.encoder, StructuredTokenEncoder):
-        raise RuntimeError("V48.115 requires StructuredTokenEncoder")
+        raise RuntimeError("V48.116 requires StructuredTokenEncoder")
     enc = model.encoder.eval()
     dev = bundle.device
     if len(enc.encoder.layers) != 2:
-        raise RuntimeError("V48.115 requires historical two-layer Stage-I")
+        raise RuntimeError("V48.116 requires historical two-layer Stage-I")
+
+    ocfg = bundle.cfg.get("ocmero", {}) if isinstance(bundle.cfg.get("ocmero", {}), dict) else {}
+    ablation = bundle.cfg.get("ablation", {}) if isinstance(bundle.cfg.get("ablation", {}), dict) else {}
+    if bool(ablation.get("without_lower_tail", False)) or not bool(ocfg.get("use_lcvar", True)):
+        raise RuntimeError("V48.116 requires native lower-tail OC-MERO enabled")
+    if bool(ablation.get("without_observation_kernel", False)) or not bool(ocfg.get("use_obs_kernel", True)):
+        raise RuntimeError("V48.116 requires native observation-compatibility kernel enabled")
+    alpha = float(ocfg.get("alpha", 0.2))
+    beta = float(ocfg.get("beta", 0.2))
+    top_m = int(ocfg.get("top_m", 8))
 
     cfg, feature_event = feature_only_dataset_cfg(bundle.cfg, cache_dir=str(cache_dir / "tensor"), workers=8)
     ds = OCRAPSampleDataset(paths, cfg)
     if ds.absolute_truth_contract_event.get("enabled") or ds.action_response_truth_event.get("enabled"):
-        raise RuntimeError("V48.115 feature-only dataset unexpectedly attached truth sidecars")
-    if [str(p.resolve()) for p in paths] != [str(p.resolve()) for p in ds.paths]:
-        raise RuntimeError("V48.115 dataset path order differs from index")
-    idx = {str(p.resolve()): i for i, p in enumerate(ds.paths)}
+        raise RuntimeError("V48.116 feature-only dataset unexpectedly attached truth sidecars")
+    if [str(pth.resolve()) for pth in paths] != [str(pth.resolve()) for pth in ds.paths]:
+        raise RuntimeError("V48.116 dataset path order differs from index")
+    idx = {str(pth.resolve()): i for i, pth in enumerate(ds.paths)}
 
-    # Independent raw-sample map used only by the deterministic executable
-    # recovery constraint path.  Teacher root/margin arrays are not loaded.
-    raw_sample = {str(p.resolve()): load_npz_selected(p, RSCF_SAMPLE_KEYS) for p in paths}
+    # Deterministic physical path deliberately excludes teacher m_star/root/future
+    # fields.  Weak-root weights come from the *frozen model's nominal prediction*,
+    # never from teacher root_probs/m_star/c_star arrays or held-out labels.
+    raw_sample = {str(pth.resolve()): load_npz_selected(pth, WRCF_SAMPLE_KEYS) for pth in paths}
 
     records: list[dict[str, Any]] = []
     pair_diags: list[dict[str, Any]] = []
+    tail_measure_diags: list[dict[str, Any]] = []
     first_field_diag: dict[str, Any] | None = None
 
     for g in groups:
         ordered = [g["nominal_path"]] + [c["path"] for c in g["candidates"]]
-        if any(str(Path(p).resolve()) not in idx for p in ordered):
+        if any(str(Path(pth).resolve()) not in idx for pth in ordered):
             continue
-        items = [ds[idx[str(Path(p).resolve())]] for p in ordered]
+        items = [ds[idx[str(Path(pth).resolve())]] for pth in ordered]
         x = _stack(items, "x").to(dev)
         with torch.no_grad():
             raw = raw_candidate_pathway(x, enc.layout)
@@ -305,20 +346,60 @@ def extract_records(
             dn = delta.cpu().numpy()
             qn = reserve_context.cpu().numpy()
 
+            nominal_item = items[0]
+            x0 = nominal_item["x"].unsqueeze(0).to(dev)
+            option_features0 = nominal_item["option_features"].unsqueeze(0).to(dev)
+            root_valid0 = nominal_item["root_valid"].unsqueeze(0).to(dev)
+            option_valid0 = nominal_item["option_valid"].unsqueeze(0).to(dev)
+            native = model(
+                x0,
+                option_features0,
+                root_valid=root_valid0,
+                option_valid=option_valid0,
+                witness_only=True,
+            )
+        if "margins" not in native or "root_logits" not in native or "c_star" not in native:
+            raise RuntimeError("V48.116 frozen nominal model did not expose native OC-MERO fields")
+
         nominal_path = str(Path(g["nominal_path"]).resolve())
         d0 = raw_sample[nominal_path]
         f0 = executable_constraint_field_from_sample(d0, bundle.cfg)
         if first_field_diag is None:
             first_field_diag = dict(f0.diagnostics)
+        ov_np = option_valid0[0].detach().cpu().numpy().astype(bool)
+        if ov_np.shape != f0.option_valid.shape or not np.array_equal(ov_np, f0.option_valid):
+            raise RuntimeError("V48.116 model/physical nominal option-valid contract mismatch")
+
+        measure = nominal_ocmero_tail_measure(
+            native["margins"][0].detach().cpu().numpy(),
+            native["root_logits"][0].detach().cpu().numpy(),
+            native["c_star"][0].detach().cpu().numpy(),
+            root_valid=root_valid0[0].detach().cpu().numpy().astype(bool),
+            option_valid=ov_np,
+            alpha=alpha,
+            beta=beta,
+            top_m=top_m,
+        )
+        tdiag = tail_measure_diagnostics(measure)
+        tail_measure_diags.append(tdiag)
 
         for j, c in enumerate(g["candidates"]):
             cp_path = str(Path(c["path"]).resolve())
             dc = raw_sample[cp_path]
             validate_group_contract(d0, dc)
             fc = executable_constraint_field_from_sample(dc, bundle.cfg, num_options=len(f0.option_valid))
-            set_integral = recovery_set_integral_geometry(fc, f0)
-            set_work = recovery_set_work_geometry(fc, f0)
-            diag = set_flow_diagnostics(fc, f0)
+            tail_integral = weak_root_integral_geometry(fc, f0, measure.option_weights)
+            tail_work = weak_root_work_geometry(fc, f0, measure.option_weights)
+            physical_diag = set_flow_diagnostics(fc, f0)
+            diag = dict(physical_diag)
+            diag.update({
+                "tail_integral_nonzero": bool(np.any(np.abs(tail_integral) > 1.0e-12)),
+                "tail_work_nonzero": bool(np.any(np.abs(tail_work) > 1.0e-12)),
+                "tail_work_conservation_error": weak_root_work_conservation_error(fc, f0, measure.option_weights),
+                "tail_option_permutation_invariance_error": weak_root_option_permutation_invariance_error(
+                    fc, f0, measure.option_weights
+                ),
+            })
             pair_diags.append(diag)
             records.append({
                 "group": tuple(g["key"]),
@@ -330,16 +411,17 @@ def extract_records(
                 "raw_state": stn[j],
                 "support_u": dn[j],
                 "reserve_u": qn[j],
-                "set_integral_geometry": set_integral,
-                "set_work_geometry": set_work,
+                "tail_integral_geometry": tail_integral,
+                "tail_work_geometry": tail_work,
             })
 
     merged = _merge_pair_diags(pair_diags)
+    tail_merged = _merge_tail_measure_diags(tail_measure_diags)
     event = {
         "records": len(records),
         "groups": len(groups),
         "raw_candidate_dim": RAW_CANDIDATE_DIM,
-        "set_geometry_dim": SET_GEOMETRY_DIM,
+        "tail_geometry_dim": TAIL_GEOMETRY_DIM,
         "matched_dim": MATCHED_DIM,
         "constraint_names": ["clearance", "stopping", "route", "reentry"],
         "constraint_semantics": {
@@ -348,24 +430,33 @@ def extract_records(
             "route": "recovery_route_corridor_signed_reserve",
             "reentry": "physical_contact_activated_persistent_suffix_signed_reserve",
         },
-        "recovery_response": "selector_free_empirical_mean_of_same_option_full_horizon_constraint_flows",
+        "recovery_response": "nominal_ocmero_weak_tail_cotangent_weighted_same_option_full_horizon_constraint_flow",
+        "tail_measure_source": "frozen_nominal_native_model_root_logits_margins_and_observation_compatibility",
+        "tail_measure_candidate_independent": True,
+        "tail_measure_teacher_free": True,
         "integral_control": "eight_contiguous_full_horizon_bins_of_delta_h_and_delta_h_times_h0",
         "constraint_work": "eight_contiguous_full_horizon_bins_of_positive_reserve_work_and_negative_debt_repayment",
-        "work_identity": "mean_option_reserve_work_plus_mean_option_debt_work_equals_mean_option_bin_delta_h",
-        "option_aggregation": "uniform_empirical_mean_over_all_common_valid_recovery_options",
-        "selector_free_feature_path": True,
-        "same_option_inside_each_set_summand": True,
+        "work_identity": "tail_weighted_reserve_work_plus_debt_work_equals_tail_weighted_bin_delta_h",
+        "option_aggregation": "nominal_ocmero_nested_lcvar_cotangent_pushforward_over_recovery_options",
+        "pre_readout_candidate_selector": False,
+        "same_option_inside_each_weighted_summand": True,
         "actuator_projection": True,
         "pair_diagnostics": merged,
+        "tail_measure_diagnostics": tail_merged,
+        "ocmero_contract": {"alpha": alpha, "beta": beta, "top_m": top_m, "use_lcvar": True, "use_obs_kernel": True},
         "field_contract_example": first_field_diag or {},
         "feature_only_dataset_contract": feature_event,
         "tensor_cache_event": ds.tensor_cache_event,
         "encoder_layer_count": 2,
-        "teacher_npz_fields_loaded_into_feature_path": False,
+        "frozen_root_decoder_read_only": True,
+        "frozen_margin_head_read_only": True,
+        "frozen_root_validity_mask_used": True,
+        "teacher_npz_fields_loaded_into_feature_path": ["root_valid"],
+        "teacher_margin_probability_compatibility_fields_used": False,
+        "teacher_future_fields_used": False,
     }
     torch.save({"cache_key": key, "records": records, "event": event}, cp)
     return records, event
-
 
 def _perm_indices(records: list[dict[str, Any]]) -> np.ndarray:
     groups: dict[tuple[Any, ...], list[int]] = defaultdict(list)
@@ -380,8 +471,8 @@ def _perm_indices(records: list[dict[str, Any]]) -> np.ndarray:
 
 def _arrays(records: list[dict[str, Any]], key: str):
     u = np.stack([r[key] for r in records]).astype(np.float64)
-    si = np.stack([r["set_integral_geometry"] for r in records]).astype(np.float64)
-    sw = np.stack([r["set_work_geometry"] for r in records]).astype(np.float64)
+    si = np.stack([r["tail_integral_geometry"] for r in records]).astype(np.float64)
+    sw = np.stack([r["tail_work_geometry"] for r in records]).astype(np.float64)
     y = np.asarray([r["label"] for r in records], dtype=np.int64)
     return u, si, sw, y
 
@@ -391,8 +482,8 @@ def _fit_axis(records: list[dict[str, Any]], key: str) -> dict[str, Any]:
     pi = _perm_indices(records)
     feats = {
         "base": base_features(u, sc),
-        "set_integral": matched_features(u, si, sc),
-        "set_work": matched_features(u, sw, sc),
+        "tail_integral": matched_features(u, si, sc),
+        "tail_work": matched_features(u, sw, sc),
     }
     models: dict[str, Any] = {}
     for space, feat in feats.items():
@@ -431,7 +522,7 @@ def _metric(records: list[dict[str, Any]], scores: np.ndarray) -> dict[str, Any]
 
 
 def _eval_axis(records: list[dict[str, Any]], key: str, fit: dict[str, Any]) -> dict[str, tuple[dict[str, Any], dict[str, Any]]]:
-    spaces = ("base", "set_integral", "set_work")
+    spaces = ("base", "tail_integral", "tail_work")
     if not records:
         return {space: (_metric([], np.array([])), _metric([], np.array([]))) for space in spaces}
     u, si, sw, _ = _arrays(records, key)
@@ -440,8 +531,8 @@ def _eval_axis(records: list[dict[str, Any]], key: str, fit: dict[str, Any]) -> 
     m = fit["models"]
     feats = {
         "base": base_features(u, sc),
-        "set_integral": matched_features(u, si, sc),
-        "set_work": matched_features(u, sw, sc),
+        "tail_integral": matched_features(u, si, sc),
+        "tail_work": matched_features(u, sw, sc),
     }
     out: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
     for space, f in feats.items():
@@ -453,7 +544,7 @@ def _eval_axis(records: list[dict[str, Any]], key: str, fit: dict[str, Any]) -> 
     return out
 
 def _eval_family(dev_records: list[dict[str, Any]], cert_records: list[dict[str, Any]], family: dict[str, Any]) -> dict[str, Any]:
-    cells = {k: {} for k in ("base", "set_integral", "set_work")}
+    cells = {k: {} for k in ("base", "tail_integral", "tail_work")}
     for role in ROLES:
         src = dev_records if role.startswith("dev_") else cert_records
         rr = split_role(src, role)
@@ -526,7 +617,7 @@ def main() -> int:
         ce += r
         events[role] = e
     if not tr or not dv or not ce:
-        raise RuntimeError("V48.115 empty audit records")
+        raise RuntimeError("V48.116 empty audit records")
 
     fam = _fit_family(tr)
     cells = _eval_family(dv, ce, fam)
@@ -536,7 +627,7 @@ def main() -> int:
         for v in fam[axis]["models"].values()
     )
     result = {
-        "schema": "ocrap-v48.115-recovery-set-constraint-flow-audit-v1",
+        "schema": "ocrap-v48.116-weak-root-recovery-set-flow-audit-v1",
         "engineering_version": ENGINEERING_VERSION,
         "scientific_version": SCIENTIFIC_VERSION,
         "run_instance_id": a.run_id,
@@ -547,8 +638,8 @@ def main() -> int:
         "checkpoint": str(a.checkpoint.resolve()),
         "checkpoint_sha256": sha256(a.checkpoint),
         "base_cells": cells["base"],
-        "set_integral_cells": cells["set_integral"],
-        "set_work_cells": cells["set_work"],
+        "tail_integral_cells": cells["tail_integral"],
+        "tail_work_cells": cells["tail_work"],
         "events": events,
         "train_counts": fam["counts"],
         "convex_closed_form_ridge": True,
@@ -556,23 +647,28 @@ def main() -> int:
         "iterative_optimizer_used": False,
         "ridge_lambda_rule": "1_over_axis_train_rows",
         "max_normal_equation_residual": max_resid,
-        "score_family": "linear_on_selector_free_recovery_set_full_horizon_integral_or_signed_constraint_flow_features",
+        "score_family": "linear_on_nominal_ocmero_weak_tail_weighted_full_horizon_integral_or_signed_constraint_flow_features",
         "nominal_zero_score_by_construction": True,
         "constraint_names": ["clearance", "stopping", "route", "reentry"],
-        "constraint_response": "selector_free_empirical_recovery_set_of_same_option_actuator_projected_constraint_flows",
+        "constraint_response": "nominal_ocmero_weak_tail_weighted_same_option_actuator_projected_constraint_flows",
         "integral_response_channels": ["bin_mean_delta_h", "bin_mean_delta_h_times_h0"],
         "constraint_work_channels": ["positive_reserve_work", "negative_debt_repayment_work"],
         "work_conservation_identity": "reserve_work_plus_debt_work_equals_bin_mean_delta_h",
-        "option_aggregation": "uniform_empirical_mean_over_all_common_valid_recovery_options",
-        "selector_free_feature_path": True,
-        "same_option_inside_each_set_summand": True,
+        "option_aggregation": "nominal_ocmero_nested_lcvar_cotangent_pushforward_over_recovery_options",
+        "candidate_independent_tail_measure": True,
+        "frozen_root_decoder_read_only": True,
+        "frozen_margin_head_read_only": True,
+        "same_option_inside_each_weighted_summand": True,
         "work_bins": 8,
-        "set_geometry_dimension": SET_GEOMETRY_DIM,
+        "tail_geometry_dimension": TAIL_GEOMETRY_DIM,
         "matched_family_dimension": MATCHED_DIM,
-        "capacity_matched_all_set_families": True,
+        "capacity_matched_all_tail_families": True,
         "candidate_identity_shuffle": "whole_feature_row_cyclic_permutation_within_scene_time_group",
         "actuator_projection": True,
-        "teacher_npz_fields_loaded_into_feature_path": False,
+        "frozen_root_validity_mask_used": True,
+        "teacher_npz_fields_loaded_into_feature_path": ["root_valid"],
+        "teacher_margin_probability_compatibility_fields_used": False,
+        "teacher_future_fields_used": False,
         "planner_parameters_trained": 0,
         "stage_i_parameters_trained": 0,
         "root_decoder_parameters_trained": 0,
@@ -589,7 +685,7 @@ def main() -> int:
     a.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     torch.save(
         {
-            "schema": "ocrap-v48.115-recovery-set-constraint-flow-state-v1",
+            "schema": "ocrap-v48.116-weak-root-recovery-set-flow-state-v1",
             "engineering_version": ENGINEERING_VERSION,
             "scientific_version": SCIENTIFIC_VERSION,
             "run_instance_id": a.run_id,

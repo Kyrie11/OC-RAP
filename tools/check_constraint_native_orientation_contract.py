@@ -14,6 +14,7 @@ ACTIVE = [
     "src/ocrap/audits/executable_constraint_jacobian.py",
     "src/ocrap/audits/common_option_constraint_work.py",
     "src/ocrap/audits/recovery_set_constraint_flow.py",
+    "src/ocrap/audits/weak_root_recovery_set_flow.py",
     "tools/run_constraint_native_recovery_orientation_audit.py",
     "tools/compare_constraint_native_recovery_orientation.py",
     "tools/check_constraint_native_orientation_contract.py",
@@ -45,15 +46,14 @@ def main() -> int:
     import ocrap.audits.executable_constraint_jacobian as ecj
     import ocrap.audits.common_option_constraint_work as ccw
     import ocrap.audits.recovery_set_constraint_flow as rscf
+    import ocrap.audits.weak_root_recovery_set_flow as wrcf
 
     for rel in ACTIVE:
         p = (repo / rel).resolve()
         ok = p.is_file() and str(p).startswith(str(repo))
         files[rel] = {
-            "exists": p.is_file(),
-            "inside_repo": str(p).startswith(str(repo)),
-            "path": str(p),
-            "sha256": sha(p) if p.is_file() else None,
+            "exists": p.is_file(), "inside_repo": str(p).startswith(str(repo)),
+            "path": str(p), "sha256": sha(p) if p.is_file() else None,
         }
         if not ok:
             errors.append(f"runtime_file:{rel}")
@@ -65,6 +65,7 @@ def main() -> int:
         "executable_constraint_jacobian": str(Path(ecj.__file__).resolve()),
         "common_option_constraint_work": str(Path(ccw.__file__).resolve()),
         "recovery_set_constraint_flow": str(Path(rscf.__file__).resolve()),
+        "weak_root_recovery_set_flow": str(Path(wrcf.__file__).resolve()),
     }
     expected = {
         "ocrap": str((repo / "src/ocrap/__init__.py").resolve()),
@@ -73,20 +74,21 @@ def main() -> int:
         "executable_constraint_jacobian": str((repo / "src/ocrap/audits/executable_constraint_jacobian.py").resolve()),
         "common_option_constraint_work": str((repo / "src/ocrap/audits/common_option_constraint_work.py").resolve()),
         "recovery_set_constraint_flow": str((repo / "src/ocrap/audits/recovery_set_constraint_flow.py").resolve()),
+        "weak_root_recovery_set_flow": str((repo / "src/ocrap/audits/weak_root_recovery_set_flow.py").resolve()),
     }
     for k, v in imported.items():
         if v != expected[k]:
             errors.append(f"import_path:{k}:{v}")
 
-    checks = rscf.contract_checks()
+    checks = wrcf.contract_checks()
     for k, v in checks.items():
         if not v:
             errors.append(f"synthetic:{k}")
 
     out = {
-        "schema": "ocrap-v48.115-rscf-runtime-code-contract-v1",
-        "engineering_version": rscf.ENGINEERING_VERSION,
-        "scientific_version": rscf.SCIENTIFIC_VERSION,
+        "schema": "ocrap-v48.116-wrcf-runtime-code-contract-v1",
+        "engineering_version": wrcf.ENGINEERING_VERSION,
+        "scientific_version": wrcf.SCIENTIFIC_VERSION,
         "run_instance_id": a.run_id,
         "valid": not errors,
         "attribution_ready": not errors,
@@ -98,28 +100,37 @@ def main() -> int:
         "historical_code_dependency": False,
         "scientific_contract": {
             "audit_only": True,
-            "selector_free_recovery_set_constraint_flow": True,
+            "weak_root_cotangent_recovery_set_flow": True,
+            "tail_measure_source": "frozen_nominal_native_model_root_logits_margins_and_observation_compatibility",
+            "tail_measure_candidate_independent": True,
+            "tail_measure_teacher_value_free": True,
+            "frozen_root_validity_mask_used": True,
+            "frozen_root_decoder_read_only": True,
+            "frozen_margin_head_read_only": True,
+            "root_decoder_parameters_trained": 0,
             "constraint_names": ["clearance", "stopping", "route", "reentry"],
-            "same_option_inside_each_set_summand": True,
+            "same_option_inside_each_weighted_summand": True,
             "actuator_projection": True,
             "existing_recovery_horizon_only": True,
-            "work_bins": rscf.WORK_BINS,
+            "work_bins": 8,
             "work_bins_cover_full_horizon": True,
             "integral_channels": ["bin_mean_delta_h", "bin_mean_delta_h_times_h0"],
             "constraint_work_channels": ["positive_reserve_work", "negative_debt_repayment_work"],
-            "work_conservation_identity": "reserve_work_plus_debt_work_equals_bin_mean_delta_h",
-            "option_aggregation": "uniform_empirical_mean_over_all_common_valid_recovery_options",
-            "pre_readout_hard_option_selector": False,
+            "work_conservation_identity": "tail_weighted_reserve_work_plus_debt_work_equals_tail_weighted_bin_delta_h",
+            "option_aggregation": "nominal_ocmero_nested_lcvar_cotangent_pushforward_over_recovery_options",
+            "pre_readout_candidate_option_selector": False,
             "downstream_ocmero_option_selection_unchanged": True,
             "option_permutation_invariant": True,
-            "set_geometry_dim": rscf.SET_GEOMETRY_DIM,
-            "matched_family_dim": rscf.MATCHED_DIM,
+            "tail_geometry_dim": wrcf.TAIL_GEOMETRY_DIM,
+            "matched_family_dim": wrcf.MATCHED_DIM,
             "capacity_matched_all_families": True,
             "candidate_identity_shuffle": "whole_feature_row_cyclic_permutation_within_scene_time_group",
             "convex_closed_form_ridge": True,
             "strictly_convex_unique_solution": True,
             "ridge_lambda_rule": "1_over_axis_train_rows",
-            "teacher_npz_fields_loaded_into_feature_path": False,
+            "teacher_npz_fields_loaded_into_feature_path": ["root_valid"],
+            "teacher_margin_probability_compatibility_fields_used": False,
+            "teacher_future_fields_used": False,
             "teacher_metadata_input_to_model": False,
             "iterative_optimizer_used": False,
             "posthoc_feature_selection": False,
@@ -130,7 +141,6 @@ def main() -> int:
             "option_count_sweep": False,
             "planner_parameters_trained": 0,
             "stage_i_parameters_trained": 0,
-            "root_decoder_parameters_trained": 0,
             "source_parameters_trained": 0,
             "relative_ranker_modified": False,
             "boundary_transport": False,
