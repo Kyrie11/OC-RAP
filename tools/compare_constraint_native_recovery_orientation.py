@@ -7,21 +7,22 @@ import json
 from pathlib import Path
 from typing import Any
 
-from ocrap.audits.viability_order_profile import (
+from ocrap.audits.viability_rank_transport import (
     ENGINEERING_VERSION,
     SCIENTIFIC_VERSION,
     MATCHED_DIM,
-    PROFILE_GEOMETRY_DIM,
-    ORDER_MASSES,
+    TRANSPORT_GEOMETRY_DIM,
+    TRANSPORT_MODE_DEGREES,
 )
 
-AUTHORITATIVE_V118_PIPELINE_SHA256 = "8ded1afa8a7fc002fc39a19c11da8669dc702f2704e8141e742182f241af05ee"
-AUTHORITATIVE_V118_COMPARISON_SHA256 = "ebe8b2bc18baa33db9f62c809d22eb7b4c9d28f0fcd8f6f4140f66287e3a3184"
-AUTHORITATIVE_V118_BALANCED_SHA256 = "f5125fded56405945ddc1ffe6aa6c54f3349c7e85235e6e377ba546fb0d45128"
-AUTHORITATIVE_V118_PRECISION_SHA256 = "3126b02c91cdccb22ef0baa810b424e9e6b78e2de55d4acff9a314f9e076f275"
+AUTHORITATIVE_V119_PIPELINE_SHA256 = "bc39b55fcebe811b3b5ccbf0e891e821f1c3c710109fea3717be0e1661cdfe26"
+AUTHORITATIVE_V119_COMPARISON_SHA256 = "9cd14b65b06b3ad91905a9c952dffdf586469a27381f13eabb5da11561617de9"
+AUTHORITATIVE_V119_BALANCED_SHA256 = "4dadefcc96c3c399216916646c6875313078d479bee56e43742ba3432cfac98d"
+AUTHORITATIVE_V119_PRECISION_SHA256 = "59c42753f022b4ce53e805677b3c4e8a49ccfed0cc73325f687ddeeb08f0e038"
+V119_NEXT = "close_fixed_quartile_viability_order_profile_then_preregister_recovery_set_viability_rank_transport_audit_no_training_capacity_regime_source_horizon_or_threshold_sweep"
 
 ROLES = ("dev_near", "dev_contact", "certificate_near", "certificate_contact")
-SPACES = ("base", "exposed_profile", "full_profile")
+SPACES = ("base", "exposed_transport", "full_transport")
 
 
 def _sha(path: Path) -> str:
@@ -97,8 +98,8 @@ def _historical(
             delta = None if a is None or b is None else float(a) - float(b)
             rows.append({
                 "variant": variant, "role": role,
-                f"v48_119_{treatment}_auc": a,
-                f"v48_118_{old_space}_auc": b,
+                f"v48_120_{treatment}_auc": a,
+                f"v48_119_{old_space}_auc": b,
                 label: delta,
             })
             if delta is not None and delta > 0:
@@ -118,8 +119,9 @@ def _activity(docs: dict[str, Any]) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     exposed_nonzero: set[str] = set()
     full_nonzero: set[str] = set()
-    exposed_noncollapsed: set[str] = set()
-    full_noncollapsed: set[str] = set()
+    exposed_shape: set[str] = set()
+    full_shape: set[str] = set()
+    reassignment: set[str] = set()
     diverse: set[str] = set()
     multi: set[str] = set()
     reentry: set[str] = set()
@@ -134,20 +136,23 @@ def _activity(docs: dict[str, Any]) -> dict[str, Any]:
                 "role": role,
                 "mean_common_valid_option_count": float(p.get("mean_common_valid_option_count", 0.0)),
                 "min_common_valid_option_count": int(p.get("min_common_valid_option_count", 0)),
-                "exposed_profile_nonzero_fraction": float(p.get("exposed_profile_nonzero_fraction", 0.0)),
-                "full_profile_nonzero_fraction": float(p.get("full_profile_nonzero_fraction", 0.0)),
+                "exposed_transport_nonzero_fraction": float(p.get("exposed_transport_nonzero_fraction", 0.0)),
+                "full_transport_nonzero_fraction": float(p.get("full_transport_nonzero_fraction", 0.0)),
                 "option_flow_diverse_fraction": float(p.get("option_flow_diverse_fraction", 0.0)),
                 "reentry_set_available_fraction": float(p.get("reentry_set_available_fraction", 0.0)),
                 "max_option_permutation_invariance_error": float(p.get("max_option_permutation_invariance_error", 1.0)),
-                "max_order_monotonicity_error": float(p.get("max_order_monotonicity_error", 1.0)),
-                "mean_exposed_prefix_noncollapsed_fraction": float(p.get("mean_exposed_prefix_noncollapsed_fraction", 0.0)),
-                "mean_exposed_suffix_noncollapsed_fraction": float(p.get("mean_exposed_suffix_noncollapsed_fraction", 0.0)),
-                "mean_full_prefix_noncollapsed_fraction": float(p.get("mean_full_prefix_noncollapsed_fraction", 0.0)),
-                "mean_full_suffix_noncollapsed_fraction": float(p.get("mean_full_suffix_noncollapsed_fraction", 0.0)),
-                "mean_exposed_prefix_order_spread": float(p.get("mean_exposed_prefix_order_spread", 0.0)),
-                "mean_exposed_suffix_order_spread": float(p.get("mean_exposed_suffix_order_spread", 0.0)),
-                "mean_full_prefix_order_spread": float(p.get("mean_full_prefix_order_spread", 0.0)),
-                "mean_full_suffix_order_spread": float(p.get("mean_full_suffix_order_spread", 0.0)),
+                "mean_exposed_prefix_transport_energy": float(p.get("mean_exposed_prefix_transport_energy", 0.0)),
+                "mean_exposed_suffix_transport_energy": float(p.get("mean_exposed_suffix_transport_energy", 0.0)),
+                "mean_full_prefix_transport_energy": float(p.get("mean_full_prefix_transport_energy", 0.0)),
+                "mean_full_suffix_transport_energy": float(p.get("mean_full_suffix_transport_energy", 0.0)),
+                "mean_exposed_prefix_shape_energy": float(p.get("mean_exposed_prefix_shape_energy", 0.0)),
+                "mean_exposed_suffix_shape_energy": float(p.get("mean_exposed_suffix_shape_energy", 0.0)),
+                "mean_full_prefix_shape_energy": float(p.get("mean_full_prefix_shape_energy", 0.0)),
+                "mean_full_suffix_shape_energy": float(p.get("mean_full_suffix_shape_energy", 0.0)),
+                "mean_exposed_prefix_rank_inversion_fraction": float(p.get("mean_exposed_prefix_rank_inversion_fraction", 0.0)),
+                "mean_exposed_suffix_rank_inversion_fraction": float(p.get("mean_exposed_suffix_rank_inversion_fraction", 0.0)),
+                "mean_full_prefix_rank_inversion_fraction": float(p.get("mean_full_prefix_rank_inversion_fraction", 0.0)),
+                "mean_full_suffix_rank_inversion_fraction": float(p.get("mean_full_suffix_rank_inversion_fraction", 0.0)),
                 "mean_full_eligible_option_count": float(p.get("mean_full_eligible_option_count", 0.0)),
                 "mean_full_prefix_coverage_fraction": float(p.get("mean_full_prefix_coverage_fraction", 0.0)),
                 "mean_full_suffix_coverage_fraction": float(p.get("mean_full_suffix_coverage_fraction", 0.0)),
@@ -160,16 +165,16 @@ def _activity(docs: dict[str, Any]) -> dict[str, Any]:
                 "max_physical_tail_mass_error": float(b.get("max_physical_tail_mass_error", 1.0)),
             }
             rows.append(row)
-            if row["exposed_profile_nonzero_fraction"] > 0: exposed_nonzero.add(role)
-            if row["full_profile_nonzero_fraction"] > 0: full_nonzero.add(role)
-            if max(row["mean_exposed_prefix_noncollapsed_fraction"], row["mean_exposed_suffix_noncollapsed_fraction"]) > 0: exposed_noncollapsed.add(role)
-            if max(row["mean_full_prefix_noncollapsed_fraction"], row["mean_full_suffix_noncollapsed_fraction"]) > 0: full_noncollapsed.add(role)
+            if row["exposed_transport_nonzero_fraction"] > 0: exposed_nonzero.add(role)
+            if row["full_transport_nonzero_fraction"] > 0: full_nonzero.add(role)
+            if max(row["mean_exposed_prefix_shape_energy"], row["mean_exposed_suffix_shape_energy"]) > 0: exposed_shape.add(role)
+            if max(row["mean_full_prefix_shape_energy"], row["mean_full_suffix_shape_energy"]) > 0: full_shape.add(role)
+            if max(row["mean_full_prefix_rank_inversion_fraction"], row["mean_full_suffix_rank_inversion_fraction"]) > 0: reassignment.add(role)
             if row["option_flow_diverse_fraction"] > 0: diverse.add(role)
             if row["min_common_valid_option_count"] >= 2 and row["mean_full_eligible_option_count"] >= 2: multi.add(role)
             if "contact" in role and row["reentry_set_available_fraction"] > 0: reentry.add(role)
             if (
                 row["max_option_permutation_invariance_error"] > 1e-10
-                or row["max_order_monotonicity_error"] > 1e-10
                 or row["max_option_weight_sum_error"] > 1e-10
                 or row["max_root_exposure_mass_error"] > 1e-10
                 or not row["all_model_padding_invalid"]
@@ -179,19 +184,22 @@ def _activity(docs: dict[str, Any]) -> dict[str, Any]:
             ):
                 exact = False
     core = bool(
-        exact and _cross(exposed_nonzero, 3) and _cross(full_nonzero, 3)
+        exact
+        and _cross(exposed_nonzero, 3) and _cross(full_nonzero, 3)
+        and _cross(exposed_shape, 3) and _cross(full_shape, 3)
+        and _cross(reassignment, 3)
         and _cross(diverse, 3) and _cross(multi, 3)
-        and _cross(exposed_noncollapsed, 3) and _cross(full_noncollapsed, 3)
         and len(reentry) == 2
     )
     return {
         "go": core,
         "core_activity_go": core,
-        "exact_order_contract_go": exact,
-        "exposed_profile_nonzero_roles": sorted(exposed_nonzero),
-        "full_profile_nonzero_roles": sorted(full_nonzero),
-        "exposed_profile_noncollapsed_roles": sorted(exposed_noncollapsed),
-        "full_profile_noncollapsed_roles": sorted(full_noncollapsed),
+        "exact_transport_contract_go": exact,
+        "exposed_transport_nonzero_roles": sorted(exposed_nonzero),
+        "full_transport_nonzero_roles": sorted(full_nonzero),
+        "exposed_rank_shape_roles": sorted(exposed_shape),
+        "full_rank_shape_roles": sorted(full_shape),
+        "rank_reassignment_roles": sorted(reassignment),
         "physical_option_flow_diverse_roles": sorted(diverse),
         "multi_option_roles": sorted(multi),
         "reentry_contact_roles": sorted(reentry),
@@ -212,7 +220,8 @@ def _variant_identity(docs: dict[str, Any]) -> dict[str, Any]:
                     x = a[f"{space}_cells"][role][f"{axis}_{kind}"]
                     y = b[f"{space}_cells"][role][f"{axis}_{kind}"]
                     for metric in ("auc", "top1", "auc_vs_shuffled", "top1_vs_shuffled"):
-                        if x.get(metric) != y.get(metric): diffs.append(f"{space}:{role}:{axis}:{kind}:{metric}")
+                        if x.get(metric) != y.get(metric):
+                            diffs.append(f"{space}:{role}:{axis}:{kind}:{metric}")
     return {"exact": not diffs, "differences": diffs, "effective_unique_roles_if_exact": 4}
 
 
@@ -235,20 +244,20 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--balanced", type=Path, required=True)
     ap.add_argument("--precision", type=Path, required=True)
-    ap.add_argument("--v118-pipeline", type=Path, required=True)
-    ap.add_argument("--v118-comparison", type=Path, required=True)
-    ap.add_argument("--v118-balanced", type=Path, required=True)
-    ap.add_argument("--v118-precision", type=Path, required=True)
+    ap.add_argument("--v119-pipeline", type=Path, required=True)
+    ap.add_argument("--v119-comparison", type=Path, required=True)
+    ap.add_argument("--v119-balanced", type=Path, required=True)
+    ap.add_argument("--v119-precision", type=Path, required=True)
     ap.add_argument("--run-id", required=True)
     ap.add_argument("--output", type=Path, required=True)
     a = ap.parse_args()
 
     errors: list[str] = []
     want = {
-        a.v118_pipeline: AUTHORITATIVE_V118_PIPELINE_SHA256,
-        a.v118_comparison: AUTHORITATIVE_V118_COMPARISON_SHA256,
-        a.v118_balanced: AUTHORITATIVE_V118_BALANCED_SHA256,
-        a.v118_precision: AUTHORITATIVE_V118_PRECISION_SHA256,
+        a.v119_pipeline: AUTHORITATIVE_V119_PIPELINE_SHA256,
+        a.v119_comparison: AUTHORITATIVE_V119_COMPARISON_SHA256,
+        a.v119_balanced: AUTHORITATIVE_V119_BALANCED_SHA256,
+        a.v119_precision: AUTHORITATIVE_V119_PRECISION_SHA256,
     }
     for p, digest in want.items():
         if not p.is_file(): errors.append(f"missing_authoritative_input:{p.name}")
@@ -264,25 +273,25 @@ def main() -> int:
             if d.get("scientific_version") != SCIENTIFIC_VERSION: errors.append(f"scientific_version_{variant}")
             if d.get("run_instance_id") != a.run_id: errors.append(f"run_id_{variant}")
             if int(d.get("matched_family_dimension", -1)) != MATCHED_DIM: errors.append(f"matched_dim_{variant}")
-            if int(d.get("profile_geometry_dimension", -1)) != PROFILE_GEOMETRY_DIM: errors.append(f"profile_dim_{variant}")
+            if int(d.get("transport_geometry_dimension", -1)) != TRANSPORT_GEOMETRY_DIM: errors.append(f"transport_dim_{variant}")
         except Exception as exc:
             errors.append(f"read_{variant}:{exc}")
 
     hist: dict[str, Any] = {}
     if not errors:
         try:
-            hp = json.loads(a.v118_pipeline.read_text())
-            hc = json.loads(a.v118_comparison.read_text())
-            if not (hp.get("valid") and hp.get("attribution_ready") and hp.get("preregistered_status") == "VIABILITY_SURVIVAL_ENVELOPE_STOP"):
-                errors.append("v118_pipeline_stop_prerequisite")
+            hp = json.loads(a.v119_pipeline.read_text())
+            hc = json.loads(a.v119_comparison.read_text())
+            if not (hp.get("valid") and hp.get("attribution_ready") and hp.get("preregistered_status") == "VIABILITY_ORDER_PROFILE_STOP"):
+                errors.append("v119_pipeline_stop_prerequisite")
             hd = hc.get("preregistered_decision") or {}
-            if not (hc.get("valid") and hc.get("attribution_ready") and hd.get("status") == "VIABILITY_SURVIVAL_ENVELOPE_STOP"):
-                errors.append("v118_comparison_stop_prerequisite")
-            if hd.get("next_branch") != "close_signed_joint_max_min_survival_envelope_then_preregister_recovery_set_viability_order_profile_audit_no_training_capacity_regime_source_horizon_or_threshold_sweep":
-                errors.append("v118_next_branch_mismatch")
+            if not (hc.get("valid") and hc.get("attribution_ready") and hd.get("status") == "VIABILITY_ORDER_PROFILE_STOP"):
+                errors.append("v119_comparison_stop_prerequisite")
+            if hd.get("next_branch") != V119_NEXT:
+                errors.append("v119_next_branch_mismatch")
             hist = {
-                "balanced": json.loads(a.v118_balanced.read_text()),
-                "precision": json.loads(a.v118_precision.read_text()),
+                "balanced": json.loads(a.v119_balanced.read_text()),
+                "precision": json.loads(a.v119_precision.read_text()),
             }
         except Exception as exc:
             errors.append(f"historical_read:{exc}")
@@ -290,68 +299,68 @@ def main() -> int:
     gates: dict[str, Any] = {}
     activity: dict[str, Any] = {"go": False}
     if not errors:
-        for space in ("exposed_profile", "full_profile"):
+        for space in ("exposed_transport", "full_transport"):
             for axis in ("support", "reserve"):
                 gates[f"{space}_{axis}"] = _action_gate(docs, space, axis)
         for axis in ("support", "reserve"):
-            gates[f"full_profile_vs_v118_{axis}"] = _historical(
-                docs, hist, "full_profile", "full_envelope", axis,
-                f"full_profile_minus_v118_full_envelope_{axis}",
+            gates[f"full_transport_vs_v119_{axis}"] = _historical(
+                docs, hist, "full_transport", "full_profile", axis,
+                f"full_transport_minus_v119_full_profile_{axis}",
             )
-            gates[f"exposed_profile_vs_v118_{axis}"] = _historical(
-                docs, hist, "exposed_profile", "exposed_envelope", axis,
-                f"exposed_profile_minus_v118_exposed_envelope_{axis}",
+            gates[f"exposed_transport_vs_v119_{axis}"] = _historical(
+                docs, hist, "exposed_transport", "exposed_profile", axis,
+                f"exposed_transport_minus_v119_exposed_profile_{axis}",
             )
-            gates[f"full_set_profile_effect_{axis}"] = _within(
-                docs, "full_profile", "exposed_profile", axis,
-                f"full_minus_exposed_profile_{axis}",
+            gates[f"full_set_transport_effect_{axis}"] = _within(
+                docs, "full_transport", "exposed_transport", axis,
+                f"full_minus_exposed_transport_{axis}",
             )
         activity = _activity(docs)
 
-    status = "V48_119_ENGINEERING_STOP"
-    branch = "fix_v48_119_engineering_and_rerun_same_viability_order_profile_audit"
+    status = "V48_120_ENGINEERING_STOP"
+    branch = "fix_v48_120_engineering_and_rerun_same_viability_rank_transport_audit"
     if not errors:
         full_core = bool(
-            gates["full_profile_support"]["go"] and gates["full_profile_reserve"]["go"]
-            and gates["full_profile_vs_v118_support"]["go"] and gates["full_profile_vs_v118_reserve"]["go"]
+            gates["full_transport_support"]["go"] and gates["full_transport_reserve"]["go"]
+            and gates["full_transport_vs_v119_support"]["go"] and gates["full_transport_vs_v119_reserve"]["go"]
             and activity.get("go")
         )
         exposed_core = bool(
-            gates["exposed_profile_support"]["go"] and gates["exposed_profile_reserve"]["go"]
-            and gates["exposed_profile_vs_v118_support"]["go"] and gates["exposed_profile_vs_v118_reserve"]["go"]
+            gates["exposed_transport_support"]["go"] and gates["exposed_transport_reserve"]["go"]
+            and gates["exposed_transport_vs_v119_support"]["go"] and gates["exposed_transport_vs_v119_reserve"]["go"]
             and activity.get("go")
         )
         if full_core:
-            status = "VIABILITY_ORDER_PROFILE_GO"
-            branch = "authorize_exactly_one_full_viability_order_profile_main_carrier_integration_no_source_boundary_regime_or_capacity_cochange"
+            status = "VIABILITY_RANK_TRANSPORT_GO"
+            branch = "authorize_exactly_one_full_viability_rank_transport_main_carrier_integration_no_source_boundary_regime_or_capacity_cochange"
         elif exposed_core:
-            status = "EXPOSED_VIABILITY_ORDER_PROFILE_GO"
-            branch = "authorize_exactly_one_exposed_viability_order_profile_main_carrier_integration_no_source_boundary_regime_or_capacity_cochange"
-        elif gates["full_profile_support"]["go"] and gates["full_profile_vs_v118_support"]["go"]:
-            status = "VIABILITY_ORDER_PROFILE_SUPPORT_ONLY"
-            branch = "retain_full_viability_order_profile_support_axis_then_audit_missing_reserve_persistence_without_training_capacity_regime_source_horizon_or_threshold_sweep"
-        elif gates["full_profile_reserve"]["go"] and gates["full_profile_vs_v118_reserve"]["go"]:
-            status = "VIABILITY_ORDER_PROFILE_RESERVE_ONLY"
-            branch = "retain_full_viability_order_profile_reserve_axis_then_audit_missing_support_exposure_without_training_capacity_regime_source_horizon_or_threshold_sweep"
-        elif gates["full_profile_support"].get("local_order") and gates["full_profile_reserve"].get("local_order"):
-            status = "VIABILITY_ORDER_PROFILE_LOCAL_ORDER_ONLY"
-            branch = "preregister_one_pairwise_audit_on_exact_same_viability_order_profile_features"
+            status = "EXPOSED_VIABILITY_RANK_TRANSPORT_GO"
+            branch = "authorize_exactly_one_exposed_viability_rank_transport_main_carrier_integration_no_source_boundary_regime_or_capacity_cochange"
+        elif gates["full_transport_support"]["go"] and gates["full_transport_vs_v119_support"]["go"]:
+            status = "VIABILITY_RANK_TRANSPORT_SUPPORT_ONLY"
+            branch = "retain_full_viability_rank_transport_support_axis_then_audit_missing_reserve_persistence_without_training_capacity_regime_source_horizon_or_threshold_sweep"
+        elif gates["full_transport_reserve"]["go"] and gates["full_transport_vs_v119_reserve"]["go"]:
+            status = "VIABILITY_RANK_TRANSPORT_RESERVE_ONLY"
+            branch = "retain_full_viability_rank_transport_reserve_axis_then_audit_missing_support_exposure_without_training_capacity_regime_source_horizon_or_threshold_sweep"
+        elif gates["full_transport_support"].get("local_order") and gates["full_transport_reserve"].get("local_order"):
+            status = "VIABILITY_RANK_TRANSPORT_LOCAL_ORDER_ONLY"
+            branch = "preregister_one_pairwise_audit_on_exact_same_viability_rank_transport_features"
         else:
-            status = "VIABILITY_ORDER_PROFILE_STOP"
-            branch = "close_fixed_quartile_viability_order_profile_then_preregister_recovery_set_viability_rank_transport_audit_no_training_capacity_regime_source_horizon_or_threshold_sweep"
+            status = "VIABILITY_RANK_TRANSPORT_STOP"
+            branch = "close_nominal_rank_viability_transport_then_preregister_recovery_set_rank_persistence_coupling_audit_no_training_capacity_regime_source_horizon_or_threshold_sweep"
 
     ident = _variant_identity(docs) if docs else {"exact": False, "differences": ["no_docs"], "effective_unique_roles_if_exact": 4}
     full_set_attribution_go = bool(
-        not errors and gates.get("full_set_profile_effect_support", {}).get("go")
-        and gates.get("full_set_profile_effect_reserve", {}).get("go")
+        not errors and gates.get("full_set_transport_effect_support", {}).get("go")
+        and gates.get("full_set_transport_effect_reserve", {}).get("go")
     )
     decision = {
         "status": status,
         "next_branch": branch,
         "balanced_precision_metric_identity": ident,
         "power_diagnostics": _power(docs) if docs else [],
-        "viability_order_profile_activity_gate": activity,
-        "full_set_vs_exposed_profile_attribution_go": full_set_attribution_go,
+        "viability_rank_transport_activity_gate": activity,
+        "full_set_vs_exposed_transport_attribution_go": full_set_attribution_go,
         "reentry_contact_coverage_go": bool(activity.get("reentry_contact_coverage_go")),
         "boundary_transport_authorized": False,
         "broad_encoder_training_authorized": False,
@@ -359,35 +368,37 @@ def main() -> int:
         "regime_conditioned_policy_authorized": False,
         "dataset_reconstruction_authorized": False,
         "matched_dimension": MATCHED_DIM,
-        "geometry_dimension": PROFILE_GEOMETRY_DIM,
-        "order_masses": [float(x) for x in ORDER_MASSES],
+        "geometry_dimension": TRANSPORT_GEOMETRY_DIM,
+        "transport_mode_degrees": [int(x) for x in TRANSPORT_MODE_DEGREES],
+        "transport_basis": "exact_shifted_legendre_degree_0_to_3_on_nominal_rank_intervals",
+        "rank_coordinate": "candidate_independent_nominal_same_option_viability_order",
         "constraint_names": ["clearance", "stopping", "route", "reentry"],
         "scientific_note": (
-            "V48.119 keeps V48.118's same-option joint prefix/suffix viability margins but replaces the single rank-1 "
-            "max envelope with a fixed four-level upper order profile at masses 1/4, 1/2, 3/4 and 1. The profile "
-            "therefore retains frontier viability and recovery-set depth without exporting option identity. Equal-capacity "
-            "exposed-support and full-set families isolate whether weak-root observation exposure or full executable "
-            "redundancy supplies the transferable order structure. The gamma=1 coordinate is not a standalone uniform-mean "
-            "family. No learned set encoder, threshold, horizon, source, capacity or regime sweep is introduced."
+            "V48.120 retains V48.119 same-option joint prefix/suffix viability, but replaces independently re-sorted "
+            "static order profiles with a candidate-independent nominal-rank transport field. The same recovery option is "
+            "followed from its nominal viability rank under the candidate; signed margin displacement over nominal rank is "
+            "integrated exactly against shifted Legendre modes 0..3. This preserves same-option causal correspondence and "
+            "captures global shift, frontier-tail tilt, curvature and rank asymmetry without rank cuts, quantile sweeps, "
+            "option identity export, learned set encoders, regime routing, boundary transport, or capacity/source/horizon/threshold changes."
         ),
     }
     decision.update({k + "_gate": v for k, v in gates.items()})
 
     out = {
-        "schema": "ocrap-v48.119-vop-comparison-v1",
+        "schema": "ocrap-v48.120-vrt-comparison-v1",
         "engineering_version": ENGINEERING_VERSION,
         "scientific_version": SCIENTIFIC_VERSION,
         "run_instance_id": a.run_id,
         "valid": not errors,
         "attribution_ready": not errors,
         "errors": errors,
-        "experiment_type": "audit_only_recovery_set_viability_order_profile",
+        "experiment_type": "audit_only_recovery_set_viability_rank_transport",
         "preregistered_decision": decision,
-        "authoritative_v48_118_comparison_sha256": AUTHORITATIVE_V118_COMPARISON_SHA256,
-        "v48_118_pipeline_sha256": _sha(a.v118_pipeline) if a.v118_pipeline.is_file() else None,
-        "v48_118_comparison_sha256": _sha(a.v118_comparison) if a.v118_comparison.is_file() else None,
-        "v48_118_balanced_sha256": _sha(a.v118_balanced) if a.v118_balanced.is_file() else None,
-        "v48_118_precision_sha256": _sha(a.v118_precision) if a.v118_precision.is_file() else None,
+        "authoritative_v48_119_comparison_sha256": AUTHORITATIVE_V119_COMPARISON_SHA256,
+        "v48_119_pipeline_sha256": _sha(a.v119_pipeline) if a.v119_pipeline.is_file() else None,
+        "v48_119_comparison_sha256": _sha(a.v119_comparison) if a.v119_comparison.is_file() else None,
+        "v48_119_balanced_sha256": _sha(a.v119_balanced) if a.v119_balanced.is_file() else None,
+        "v48_119_precision_sha256": _sha(a.v119_precision) if a.v119_precision.is_file() else None,
         "stage_i_parameters_trained": 0,
         "root_decoder_parameters_trained": 0,
         "source_parameters_trained": 0,

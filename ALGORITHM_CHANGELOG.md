@@ -13831,3 +13831,103 @@ Promotion is fail-closed.  `VIABILITY_SURVIVAL_ENVELOPE_GO` requires the primary
 
 The stable launcher filename and user command remain unchanged.  Before GPU work, it verifies the exact authoritative V48.117 pipeline/comparison/balanced/precision SHAs, `TAIL_BOUNDARY_CROSSING_FLOW_STOP`, and the registered V48.118 next branch.
 \n\n## V48.118 completed attribution — joint viability is valid, but rank-1 existential envelopes over-compress recovery-set order\n\nThe uploaded V48.118 OC-VSE production run passed engineering reliability and scientific-attribution gates. The result bundle was canonical, runtime/source provenance matched the uploaded checkout, the probes were unique closed-form ridge solutions with the inherited 220-D capacity, and balanced/precision were exact scientific duplicates and therefore counted as four unique population roles. The preregistered decision is `VIABILITY_SURVIVAL_ENVELOPE_STOP`; V48.118 does **not** authorize Main/carrier integration.\n\nThe activity result is strong rather than degenerate: both exposed and full envelopes are nonzero in all four roles, option permutation invariance is exact, the envelope decomposition closes to floating-point tolerance, all roles have multiple physical recovery options and Contact re-entry coverage, and the full prefix/suffix envelope has complete temporal coverage. The failure is therefore scientific, not an inactivity or implementation failure.\n\nThe decisive new diagnostic is that the full rank-1 envelope is extremely switch-prone. Although every role has 12 common valid recovery options, the mean union of options that win the full prefix/suffix envelope is about 11 of 12 options. A single `max_l` statistic therefore repeatedly changes which recovery option defines the carrier while discarding the order/redundancy structure behind the current winner.\n\nThe preregistered contrasts further isolate what remains useful:\n\n- `full_envelope - exposed_envelope` on **Reserve** is GO in three of four unique roles (dev-Contact, certificate-Near, certificate-Contact; dev-Near is tied and underpowered). Full recovery-set breadth therefore contains real Reserve/recovery-redundancy information.\n- On **Support**, the same full-set effect splits by regime: it hurts dev-Near and certificate-Near but helps dev-Contact and certificate-Contact. Thus the full recovery library cannot simply replace observation-exposed support for all populations.\n- The exposed envelope partially repairs certificate-Near Support relative to V48.117 boundary hitting, while the full envelope notably improves certificate-Contact Support and Reserve. This is consistent with Near requiring an observation-relevant viable core and Contact requiring broader recovery redundancy after contact.\n\nScientific closure after V48.118:\n\n- close the **signed joint rank-1 max-min survival envelope** (both full and exposed forms) as a complete population-stable carrier;\n- retain same-option joint constraint viability, signed zero-boundary semantics, prefix first-loss / suffix persistent-safe-reentry topology, weak-root observation exposure, and the full-set Reserve redundancy signal;\n- do **not** reopen candidate hard selection, a standalone uniform mean, first-order max-option cotangent ownership, static weighted first moments, generic capacity growth, regime routers, source/root retraining, boundary transport, or horizon/threshold sweeps.\n\nThe dominant bottleneck is now **population-stable viability order/redundancy structure**: the model needs a set functional that keeps both frontier quality and the depth of alternative viable recoveries without exporting option identity or routing on Near/Contact labels. The exact preregistered STOP branch is the recovery-set viability order-profile audit.\n\n## V48.119 OC-VOP — Observation-Consistent Recovery-Set Viability Order Profile Audit\n\nEngineering version: `v48.119.0-OC-VOP`  \nScientific version: `v48.119-OC-VOP`\n\nV48.119 is audit-only and follows the exact V48.118 STOP branch. It keeps V48.118's same-option joint prefix/suffix viability margins and replaces only the unstable rank-1 reduction over recovery options. No planner/root/source parameters, cohorts, physical constraints, recovery horizon/library, candidate shuffle, or probe capacity are changed.\n\nFor each option set `S`, time `t`, and same-option joint viability margin `q_l(t)`, define the exact empirical upper-tail mean\n\n```text\nU_gamma(t) = average of the best gamma fraction of {q_l(t): l in S}\n```\n\nwith exact fractional boundary mass and the fixed preregistered order masses\n\n```text\ngamma = 0.25, 0.50, 0.75, 1.00.\n```\n\nAs `gamma` grows, `U_gamma` moves from frontier viability toward recovery-set depth. These four masses are fixed by the existing geometry budget and are not a hyperparameter sweep. `gamma=1` is never tested as an independent family; it is only one coordinate of the four-level profile, so the historically closed uniform-mean carrier is not reopened.\n\nTwo equal-capacity families are preregistered:\n\n```text\nexposed_profile = order profile on the SUPPORT, not weights, of V48.117\n                  frozen weak-root zero-boundary witnesses\nfull_profile    = order profile on all common valid recovery options [PRIMARY]\n```\n\nThe representation is permutation-invariant and exports no option identity. Prefix and suffix candidate-minus-nominal order profiles are averaged in the same eight temporal bins:\n\n```text\n8 bins x 2 temporal channels x 4 order masses = 64-D\n156-D frozen candidate response + 64-D = 220-D\n```\n\nThe preregistered activity gate requires exact option permutation invariance and order-profile monotonicity, nonzero and noncollapsed order profiles across Near+Contact populations, multiple physical recovery options, exact frozen boundary-support/padding contracts for the exposed control, and Contact re-entry coverage. Absolute Support/Reserve gates remain unchanged. Historical increment gates compare `full_profile` with V48.118 `full_envelope` and `exposed_profile` with V48.118 `exposed_envelope`; `full_profile - exposed_profile` is the internal redundancy attribution contrast.\n\nPromotion is fail-closed. `VIABILITY_ORDER_PROFILE_GO` requires the primary full profile to pass absolute Support and Reserve, beat the authoritative V48.118 full envelope on both axes, and pass the exact activity contract. Only then is exactly one full-profile Main/carrier integration authorized. `EXPOSED_VIABILITY_ORDER_PROFILE_GO` has the analogous requirement for the exposed family. Support-only, Reserve-only and local-order-only branches remain isolated. Otherwise `VIABILITY_ORDER_PROFILE_STOP` closes the fixed quartile order profile and preregisters a recovery-set viability rank-transport audit, with no training/capacity/regime/source/horizon/threshold sweep.\n\nThe stable launcher filename and user command remain unchanged. Before GPU work it verifies exact authoritative V48.118 pipeline/comparison/balanced/precision SHAs, `VIABILITY_SURVIVAL_ENVELOPE_STOP`, and the exact registered V48.119 branch.\n
+## V48.119 completed attribution — fixed viability-depth profiles are active, but independent re-sorting erases candidate-induced rank reassignment
+
+Engineering/scientific attribution passed on the uploaded V48.119 OC-VOP production run. The canonical result bundle closes byte-for-byte against the standalone artifacts, runtime active-source SHAs match the uploaded checkout, the VOP probes remain unique closed-form ridge solutions at the inherited 220-D capacity, and balanced/precision are exact scientific duplicates and therefore count as four unique population roles rather than eight replicates. The preregistered decision is `VIABILITY_ORDER_PROFILE_STOP`; V48.119 does **not** authorize Main/carrier integration.
+
+The STOP is not caused by an inactive order representation. Both exposed and full profiles are nonzero and noncollapsed in all four roles; option permutation invariance is exact, order monotonicity closes to floating-point tolerance, all roles retain 12 common valid recovery options with diverse physical flow, and Contact re-entry coverage is present. Full-set prefix order profiles are noncollapsed for roughly 0.88--0.91 of evaluated times and suffix profiles are noncollapsed for 1.0 of evaluated times, with substantial order spread. Therefore static viability depth is present in the data and represented correctly.
+
+The preregistered transfer results nevertheless remain inconsistent:
+
+- `full_profile - V48.118 full_envelope` on Support improves dev-Contact and certificate-Near but degrades dev-Near and certificate-Contact; on Reserve it materially improves only certificate-Contact.
+- `exposed_profile - V48.118 exposed_envelope` improves Support for the two Contact roles but degrades both Near roles; Reserve improves only dev-Contact.
+- `full_profile - exposed_profile` is positive on Support for dev-Contact/certificate-Near and on Reserve for dev-Contact/certificate-Contact, but neither axis satisfies the registered cross-population gate.
+
+These results close the **fixed 25/50/75/100% upper-order profile** (both exposed and full variants) as a complete population-stable carrier. They do not close same-option joint viability, signed prefix/suffix topology, observation-exposed support, full-set redundancy, or the general notion of viability rank structure.
+
+The new causal defect is more specific. V48.119 computes candidate and nominal order profiles after independently sorting each recovery set. This preserves each marginal viability distribution but discards the correspondence between a nominal recovery option and its candidate-perturbed margin. After V48.118 showed near-library-wide winner switching, this means V48.119 can describe *how deep* the candidate and nominal sets are but not **which nominal viability ranks were deformed, crossed, or reassigned by the candidate**. The dominant bottleneck is therefore candidate-induced, same-option **viability rank transport** under a fixed observation-consistent nominal anchor.
+
+Near remains dominated by observation-relevant rank deformation: the exposed V48.119 Support carrier stays useful on dev-Near but loses transfer on certificate-Near, and both Near roles are worse than their V48.118 exposed-envelope counterpart. A static order histogram cannot distinguish whether a candidate damages the nominally most relevant recovery modes or merely reshuffles equally deep alternatives.
+
+Contact retains a meaningful redundancy signal: dev-Contact Reserve remains strong and certificate-Contact Reserve rises under the full profile, consistent with persistent-safe re-entry depending on a broad debt-clearing recovery set. Yet Support transfer reverses across dev/certificate, again showing that static rank occupancy is insufficient. Contact therefore needs the **transport/persistence of debt-clearing recovery modes through the nominal rank field**, not merely the final order-profile shape.
+
+Scientific closure after V48.119:
+
+- close fixed-quartile static viability order profiles as complete carriers;
+- retain same-option joint viability, signed prefix first-loss / suffix persistent-safe-reentry, weak-root observation support, full recovery redundancy and rank structure as scientific primitives;
+- continue to keep hard option selection, standalone uniform averaging, rank-1 envelopes, static weighted first moments, generic capacity growth, regime routers, source/root retraining, boundary transport and threshold/horizon/option-count/rank-cut sweeps closed.
+
+The exact preregistered STOP branch is the recovery-set viability rank-transport audit.
+
+## V48.120 OC-VRT — Observation-Consistent Recovery-Set Viability Rank Transport Audit
+
+Engineering version: `v48.120.0-OC-VRT`  
+Scientific version: `v48.120-OC-VRT`
+
+V48.120 is audit-only and follows the exact V48.119 STOP branch. It keeps the same-option joint prefix/suffix viability margins, cohorts, frozen checkpoints, executable constraint physics, recovery library/horizon, whole-row candidate shuffle, and 220-D closed-form ridge capacity fixed. It changes only the set representation from independently re-sorted static order summaries to a same-option displacement field on a candidate-independent **nominal viability-rank coordinate**.
+
+For each temporal channel and option `l`, let `q_l^0(t)` be the nominal same-option joint viability margin and `q_l^a(t)` the candidate margin. Define
+
+```text
+d_l(t) = q_l^a(t) - q_l^0(t).
+```
+
+At each time, common valid recovery options are ordered **only by nominal `q_l^0(t)`**, worst to best, creating rank coordinate `u in [0,1]`. Candidate margins are never sorted to define that coordinate. Exact nominal ties share one rank interval and contribute the mean displacement of the tied same-option recoveries, so arbitrary within-tie identity order cannot affect the result.
+
+The signed displacement field `d(u,t)` is projected by exact interval integration onto the first four shifted-Legendre modes:
+
+```text
+P0(u) = 1
+P1(u) = 2u - 1
+P2(u) = 6u^2 - 6u + 1
+P3(u) = 20u^3 - 30u^2 + 12u - 1
+```
+
+These fixed modes encode global viability shift, frontier-versus-tail tilt, curvature and higher-order rank asymmetry. They introduce no rank cut, quantile mass, temperature or tuning sweep. Prefix and suffix transport modes are averaged in the inherited eight temporal bins:
+
+```text
+8 bins x 2 temporal channels x 4 fixed transport modes = 64-D
+156-D frozen candidate response + 64-D = 220-D
+```
+
+Two equal-capacity families are preregistered:
+
+```text
+exposed_transport = nominal-rank transport restricted to the SUPPORT, not weights,
+                    of V48.117 frozen weak-root zero-boundary witnesses
+full_transport    = nominal-rank transport over all common valid recovery options [PRIMARY]
+```
+
+Option identity is used internally only to preserve same-option causal correspondence between nominal and candidate margins; no identity is exported to the readout. A pairwise same-option rank-inversion fraction is recorded only as a preregistered activity diagnostic, not as a feature.
+
+Absolute Support/Reserve gates remain unchanged. Historical increment gates compare `full_transport` against authoritative V48.119 `full_profile` and `exposed_transport` against V48.119 `exposed_profile`. `full_transport - exposed_transport` is the internal full-set attribution contrast.
+
+The activity gate requires exact option permutation/padding/mass contracts, nonzero transport and nonzero higher-rank shape energy in at least three of four unique roles with both Near and Contact, positive full-set same-option rank reassignment/inversion in at least three of four roles with Near+Contact, multiple diverse recovery options, and Contact re-entry coverage.
+
+Promotion is fail-closed:
+
+```text
+full_transport absolute Support+Reserve GO
++ full_transport vs V48.119 full_profile Support+Reserve GO
++ exact transport / rank-reassignment / re-entry activity GO
+  -> VIABILITY_RANK_TRANSPORT_GO;
+     authorize exactly one full rank-transport Main/carrier integration,
+     with no source/boundary/regime/capacity co-change.
+
+exposed_transport absolute Support+Reserve GO
++ exposed_transport vs V48.119 exposed_profile Support+Reserve GO
++ exact activity GO
+  -> EXPOSED_VIABILITY_RANK_TRANSPORT_GO;
+     authorize exactly one exposed rank-transport Main/carrier integration.
+
+Support-only / Reserve-only / local-order-only
+  -> retain only the proven axis and audit the missing mechanism without reopening
+     training/capacity/regime/source/horizon/threshold sweeps.
+
+otherwise STOP
+  -> close nominal-rank viability transport as a complete carrier;
+     next branch = recovery-set rank-persistence coupling audit,
+     with no training/capacity/regime/source/horizon/threshold sweep.
+```
+
+The stable launcher filename and user command remain unchanged. Before GPU work, it verifies the exact authoritative V48.119 pipeline/comparison/balanced/precision SHAs, `VIABILITY_ORDER_PROFILE_STOP`, and the exact registered V48.120 rank-transport branch.

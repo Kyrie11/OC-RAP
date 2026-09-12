@@ -15,17 +15,26 @@ export PYTHONPATH="$PWD/src:$PWD${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONNOUSERSITE=1
 ```
 
-## 0. Current V48.119 scientific reference contract
+## 0. Current V48.120 scientific reference contract
 
-The stable unversioned orientation launcher now runs **V48.119 OC-VOP**. It treats the completed V48.118 OC-VSE STOP artifacts as immutable scientific inputs and verifies their exact SHA/status/registered next branch before any V48.119 audit starts. Python implementation filenames remain semantic/unversioned; scientific inputs and outputs remain versioned.
+The stable unversioned orientation launcher now runs **V48.120 OC-VRT**. It treats the completed V48.119 OC-VOP STOP artifacts as immutable scientific inputs and verifies their exact SHA/status/registered rank-transport next branch before any V48.120 audit starts. Python implementation filenames remain semantic/unversioned; scientific inputs and outputs remain versioned.
 
-V48.118 showed that the same-option joint viability construction is active and exact, but a single rank-1 `max` envelope is not population-stable: the winning option identity switches across almost the entire recovery library, while full-set breadth helps Reserve but hurts Near Support. V48.119 therefore tests the preregistered **viability order profile** hypothesis: transferable recoverability may require the order/redundancy structure of joint viable options, not only the current best extreme.
+V48.119 established that fixed quartile viability order profiles are strongly active and non-collapsed, yet still fail population-stable Support/Reserve transfer. The missing information is not static recovery depth itself: V48.119 independently re-sorts the candidate and nominal option sets before comparing their order summaries, erasing which **same recovery option** moved from which nominal viability rank under a candidate perturbation. V48.120 therefore tests the preregistered **viability rank transport** hypothesis.
 
-## 1. Current orientation audit — V48.119 OC-VOP
+## 1. Current orientation audit — V48.120 OC-VRT
 
-V48.119 is **audit-only**. The 156-D frozen candidate response, actuator-projected executable constraints, recovery horizon/library, cohorts, candidate shuffle and 220-D closed-form ridge capacity remain fixed. For each recovery option it retains V48.118's same-option joint prefix/suffix viability margin, then summarizes the option set by exact fractional upper-tail means at the fixed preregistered masses `0.25, 0.50, 0.75, 1.00`.
+V48.120 is **audit-only**. The 156-D frozen candidate response, actuator-projected executable constraints, recovery horizon/library, cohorts, whole-row candidate shuffle and 220-D closed-form ridge capacity remain fixed. For each recovery option it retains the same-option joint prefix/suffix viability margin. At each time, a candidate-independent coordinate is formed from the **nominal** recovery viability order; candidate values are never sorted to define this coordinate. The same recovery option is followed under the candidate and contributes its signed margin displacement `candidate - nominal` over that nominal-rank interval.
 
-The primary `full_profile` uses all common valid recovery options. The equal-capacity `exposed_profile` control uses only the support (not the weights) of V48.117's frozen weak-root zero-boundary witnesses. The four masses are fixed by the inherited 64-D geometry budget and are **not tuned**. The `gamma=1` coordinate is not evaluated as a standalone uniform-mean family; uniform averaging remains closed as a complete carrier. No option identity, regime label, teacher future value, learned set encoder, threshold, horizon, option-count, capacity, source, LR or epoch sweep is introduced.
+Exact nominal ties share one rank interval and contribute their mean same-option displacement, avoiding arbitrary within-tie identity order. The displacement field on rank `u in [0,1]` is integrated exactly against the first four fixed shifted-Legendre modes (degrees `0,1,2,3`): global shift, frontier-vs-tail tilt, curvature and higher-order rank asymmetry. These modes are fixed by the inherited 64-D budget; there are no rank cuts, temperatures, quantile masses or rank hyperparameter sweeps.
+
+The primary `full_transport` uses all common valid recovery options. The equal-capacity `exposed_transport` control uses only the support (not the weights) of V48.117's frozen weak-root zero-boundary witnesses. Same-option identity is used only internally for causal correspondence and is never exported to the linear readout.
+
+```text
+8 bins x 2 temporal channels x 4 fixed transport modes = 64-D
+156-D frozen candidate response + 64-D = 220-D
+```
+
+No regime label, teacher future value, learned set encoder, boundary transport, threshold, horizon, option-count, rank-cut, source, capacity, LR or epoch sweep is introduced.
 
 Run exactly:
 
@@ -39,12 +48,12 @@ bash scripts/run_constraint_native_orientation_audit.sh
 Upload only:
 
 ```text
-/home/senzeyu2/code/OC-RAP/runs/OC-RAP-v48.119-OC-VOP-results.zip
+/home/senzeyu2/code/OC-RAP/runs/OC-RAP-v48.120-OC-VRT-results.zip
 ```
 
-### About OC-RAP training in V48.119
+### About OC-RAP training in V48.120
 
-There is no registered V48.119 planner/root/source training stage. Running generic `python -m ocrap.cli train` would not reproduce this audit. A Main/carrier integration is authorized only if one preregistered order-profile family passes absolute Support+Reserve, historical improvement and activity gates.
+There is no registered V48.120 planner/root/source training stage. Running generic `python -m ocrap.cli train` would not reproduce this audit. Main/carrier integration is authorized only if one preregistered rank-transport family passes absolute Support+Reserve, historical improvement and exact activity/re-entry gates.
 
 ## 2. Direct OC-RAP three-regime closed-loop test
 

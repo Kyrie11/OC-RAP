@@ -1,12 +1,12 @@
 # OC-RAP — cleaned audit/deployment workspace
 
-This repository is the cleaned engineering workspace for the current V48.119 OC-VOP audit plus the
+This repository is the cleaned engineering workspace for the current V48.120 OC-VRT audit plus the
 publication-facing evaluation utilities used by the deployed OC-RAP stack.
 
 ## What is active
 
-- `scripts/run_constraint_native_orientation_audit.sh`: the stable semantic scientific launcher.  It currently runs V48.119 OC-VOP.
-  V48.119 is an **audit-only** equal-capacity recovery-set viability-order experiment: it keeps same-option joint prefix/suffix viability from V48.118 but replaces the unstable rank-1 max with fixed 25/50/75/100% fractional upper-order profiles. Exposed-support and full-set families remain matched at 220-D. It does not train or mutate the frozen OC-RAP planner.
+- `scripts/run_constraint_native_orientation_audit.sh`: the stable semantic scientific launcher.  It currently runs V48.120 OC-VRT.
+  V48.120 is an **audit-only** equal-capacity recovery-set viability-rank-transport experiment: it keeps V48.119 same-option joint prefix/suffix viability but replaces independently re-sorted static order profiles with candidate-induced signed margin transport over a candidate-independent nominal recovery-rank coordinate. Exposed-support and full-set families remain matched at 220-D. It does not train or mutate the frozen OC-RAP planner.
 - `scripts/run_ocrap_evaluation.sh`: direct Safe / Near-Contact / Contact closed-loop evaluation of
   an existing frozen OC-RAP model run.
 - `scripts/run_external_baselines.sh`: direct external-baseline train/registration/calibration/test
@@ -33,7 +33,7 @@ provenance identifiers, not imports of old code.
 `ALGORITHM_CHANGELOG.md` is retained as a historical scientific record only. It may mention removed
 historical launchers; none of those names are executable dependencies of the cleaned workspace.
 
-The current launcher consumes versioned frozen scientific assets by design, including the authoritative V48.117 STOP result plus V48.80/V48.93/V48.96 checkpoint/evidence assets.  These are provenance inputs, not old-code dependencies.  Source/tool/test filenames remain semantic and unversioned.
+The current launcher consumes versioned frozen scientific assets by design, including the authoritative V48.119 STOP result plus V48.80/V48.93/V48.96 checkpoint/evidence assets.  These are provenance inputs, not old-code dependencies.  Source/tool/test filenames remain semantic and unversioned.
 
 Use `scripts/analyze_dataset_properties.sh` for a read-only 12-bucket dataset/property/construction-provenance export.
 
