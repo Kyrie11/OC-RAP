@@ -1,6 +1,6 @@
 # OC-RAP cleaned workspace — current commands
 
-> Publication WOMD role: standard `validation` is the expected publication replay source. V48.124 resolves the exact source from bucket provenance and records it; `validation_interactive` is never silently substituted. The TeX/source-provenance mismatch must be reconciled separately before submission.
+> Publication WOMD role: all publication validation/test/calibration buckets use standard WOMD `validation`. V48.124 explicitly requests `validation` and fails closed if bucket provenance disagrees. `validation_interactive` is not a publication/test source. Any TeX text claiming otherwise is a paper error and must be corrected to `validation`; do not change the code/data source to match the typo.
 
 ## 0. Common environment
 

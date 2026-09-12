@@ -14311,7 +14311,7 @@ close_zero_boundary_viability_state_transition
 
 ## V48.124 OC-FMSA — Observation-Consistent Fixed-Main Stability and Non-Interference Adjudication
 
-Engineering version: `v48.124.0-OC-FMSA`  
+Engineering version: `v48.124.1-OC-FMSA`  
 Scientific version: `v48.124-OC-FMSA`
 
 V48.124 is deliberately **not a new recovery algorithm or representation family**. It freezes the deployed L80 Main and the V48.123-supported theory skeleton, performs no carrier integration after the V48.123 STOP, and asks whether the fixed system is stable enough for final external-baseline comparison.
@@ -14350,3 +14350,14 @@ otherwise
 ```
 
 This is the Main-freeze criterion. V48.124 GO, not another internal AUC gain, is what makes the current Main **external-baseline-ready**. If V48.124 STOPs, the scientific mechanism family remains frozen: only the failed system axis may be repaired or revalidated, and reopening a recovery mechanism would require genuinely new independent evidence rather than post-hoc feature search.
+
+
+### V48.124.1 engineering hotfix — `set -u` local initialization + standard-validation publication contract
+
+This is an **engineering/provenance patch only**; scientific version remains `v48.124-OC-FMSA`, and the five preregistered V48.124 gates, metrics, paired-bootstrap rule (`5000`, seed `2027`, zero margin), frozen Main, mechanism freeze, and GO/STOP branches are unchanged.
+
+- Fixed `scripts/run_constraint_native_orientation_audit.sh` under `set -u`: dependent local variables are now initialized on separate commands (`variant -> root`, `regime -> keyfile`, `outdir -> output`). Bash expands right-hand sides before all assignments in one `local` command are complete, so the previous form could raise `variant: unbound variable` before any scientific work.
+- V48.124 now explicitly passes `WOMD_ROLE=validation` for nominal and frozen-Main full-regime runs. This reflects the authoritative dataset fact that all publication/test buckets use standard WOMD `validation`. Bucket provenance disagreement is fail-closed. `validation_interactive` remains unsupported for V48.124 publication adjudication.
+- The coverage gate now requires a standard-validation source even if nominal/balanced/precision all agree on some other collection.
+- Added regression checks for both the `set -u` initialization bug and the standard-validation source contract.
+- Paper text stating that these test sets use `validation-interactive` is incorrect and must be corrected to standard `validation`; no dataset/source substitution is authorized.

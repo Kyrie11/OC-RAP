@@ -61,8 +61,13 @@ def fixture():
 def test_coverage_requires_same_targets_source_and_bucket():
     n = result(); b = result(); p = result()
     assert coverage_gate(n, b, p)["go"]
-    p["source"] = "womd/interactive@150"
+    p["source"] = "womd/validation_interactive/validation_interactive_tfexample.tfrecord@150"
     assert not coverage_gate(n, b, p)["go"]
+    n = result(source="womd/validation_interactive/validation_interactive_tfexample.tfrecord@150")
+    b = result(source="womd/validation_interactive/validation_interactive_tfexample.tfrecord@150")
+    p = result(source="womd/validation_interactive/validation_interactive_tfexample.tfrecord@150")
+    gate = coverage_gate(n, b, p)
+    assert gate["same_womd_source"] and not gate["standard_validation_source"] and not gate["go"]
 
 
 def test_sentinel_determinism_ignores_timing_but_not_science():

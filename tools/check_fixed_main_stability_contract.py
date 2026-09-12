@@ -43,6 +43,13 @@ def main() -> int:
         if not exists or not inside: errors.append(f'invalid_runtime_file:{rel}')
     version_named=[str(p.relative_to(repo)) for p in repo.rglob('*.py') if '48.124' in p.name.lower() or 'v48_124' in p.name.lower()]
     if version_named: errors.append('version_named_python_files_present')
+    launcher_path=repo/'scripts/run_constraint_native_orientation_audit.sh'
+    launcher_text=launcher_path.read_text(encoding='utf-8') if launcher_path.is_file() else ''
+    local_init_safe=(
+        'local variant="$1" root=' not in launcher_text
+        and 'keyfile="$KEY_DIR/$regime.json"' not in launcher_text.split('local variant="$1" regime=',1)[-1].split('\n',1)[0]
+        and 'local outdir="$SENTINEL_DIR/$variant/$regime" output=' not in launcher_text
+    )
     synthetic={
         'mechanism_family_frozen': True,
         'no_new_recovery_mechanism': True,
@@ -53,7 +60,8 @@ def main() -> int:
         'paired_bootstrap_seed_fixed': True,
         'sentinel_rule_lexicographic_common_target': True,
         'no_regime_router': True,
-        'source_role_not_hardcoded_to_interactive': True,
+        'source_role_fixed_to_standard_validation': launcher_text.count('WOMD_ROLE=validation') >= 2,
+        'set_u_local_initialization_safe': local_init_safe,
     }
     valid=not errors and all(synthetic.values())
     doc={
@@ -70,7 +78,7 @@ def main() -> int:
             'safe_control':'same_target_nominal_replay','near_control':'same_target_nominal_replay','contact_control':'same_target_nominal_replay',
             'determinism_sentinel':'lexicographically_first_common_target_per_regime_replayed_once_per_fixed_main_variant',
             'paired_bootstrap_draws':5000,'paired_bootstrap_seed':2027,'noninterference_margin':0.0,
-            'womd_source_resolution':'bucket_provenance_auto_no_silent_validation_interactive_substitution',
+            'womd_source_resolution':'standard_validation_only_with_bucket_provenance_conflict_fail_closed',
         },
         'synthetic_checks':synthetic,
     }

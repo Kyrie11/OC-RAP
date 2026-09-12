@@ -224,6 +224,12 @@ def test_current_launcher_reuses_authoritative_v123_freeze_branch_and_keeps_comm
     assert "run_nominal_three_regime_control.sh" in launcher
     assert "run_ocrap_three_regime_evaluation.sh" in launcher
     assert "--bootstrap 5000 --seed 2027" in launcher
+    assert launcher.count("WOMD_ROLE=validation") >= 2
+    assert 'local variant="$1" root=' not in launcher
+    assert 'local outdir="$SENTINEL_DIR/$variant/$regime" output=' not in launcher
+    assert 'local variant="$1"\n  local root="$L80_RUN/candidates/$variant"' in launcher
+    assert 'local keyfile="$KEY_DIR/$regime.json"' in launcher
+    assert 'local output="$outdir/closed_loop_ocrap.json"' in launcher
     assert "--run-id" in launcher
 
 def test_unversioned_runner_keeps_v93_role_filter_semantics(tmp_path):

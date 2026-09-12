@@ -19,7 +19,7 @@ The Main is external-baseline-ready only if exact bucket coverage/source identit
 
 ## WOMD publication contract
 
-Training data use WOMD `training`. Primary validation/test/calibration replay is expected to use standard WOMD `validation`, while `validation_interactive` is diagnostic-only unless a bucket's recorded provenance explicitly requires it. V48.124 resolves the replay source from bucket provenance and records the exact source used. This is intentionally audit-visible because the paper/source-role wording must be reconciled rather than silently changed in code.
+Training data use WOMD `training`. All publication validation/test/calibration replay in this codebase uses standard WOMD `validation`; `validation_interactive` is not a publication/test source. V48.124 explicitly requests `validation` and fails closed if bucket provenance disagrees. Any paper text claiming `validation-interactive` for these test sets is incorrect and must be changed to standard `validation`; the code must not be changed to match that paper typo.
 
 ## Historical compatibility versus code dependency
 

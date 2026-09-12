@@ -69,7 +69,8 @@ if not (cd.get('valid') and cd.get('attribution_ready') and d.get('status')==sta
 PY
 
 resolve_candidate_root() {
-  local variant="$1" root="$L80_RUN/candidates/$variant"
+  local variant="$1"
+  local root="$L80_RUN/candidates/$variant"
   if [[ ! -f "$root/model_v48_trac_sr/best.pt" && -f "$L80_RUN/dedicated_candidates/$variant/model_v48_trac_sr/best.pt" ]]; then
     root="$L80_RUN/dedicated_candidates/$variant"
   fi
@@ -83,15 +84,15 @@ BCAL="$BROOT/calibration/gamma_rec_by_bucket_v48.json"
 PCAL="$PROOT/calibration/gamma_rec_by_bucket_v48.json"
 for f in "$BCKPT" "$PCKPT" "$BCAL" "$PCAL"; do [[ -f "$f" ]] || { echo "missing frozen Main artifact $f" >&2; exit 30; }; done
 
-# Full same-target nominal control. WOMD source is resolved from bucket provenance,
-# never silently substituted with validation-interactive.
-env OUT="$NOMINAL_OUT" CUDA_DEVICES="$GPU0,$GPU1" MAX_SCENARIOS=0 INCLUDE_SCENES_IN_RESULT=true RESULT_SCENE_DETAIL=metrics \
+# Full same-target nominal control. All publication/test buckets are standard
+# WOMD validation. Explicit role + bucket provenance disagreement fails closed.
+env WOMD_ROLE=validation OUT="$NOMINAL_OUT" CUDA_DEVICES="$GPU0,$GPU1" MAX_SCENARIOS=0 INCLUDE_SCENES_IN_RESULT=true RESULT_SCENE_DETAIL=metrics \
   bash scripts/run_nominal_three_regime_control.sh
 
 # Frozen Main, balanced then precision robustness variant. No retraining/recalibration.
 run_variant() {
   local variant="$1" out="$2"
-  env MODEL_RUN="$L80_RUN" MODEL_VARIANT="$variant" OUT="$out" CUDA_DEVICES="$GPU0,$GPU1" \
+  env WOMD_ROLE=validation MODEL_RUN="$L80_RUN" MODEL_VARIANT="$variant" OUT="$out" CUDA_DEVICES="$GPU0,$GPU1" \
     MAX_SCENARIOS=0 INCLUDE_SCENES_IN_RESULT=true RESULT_SCENE_DETAIL=metrics SCENE_JOURNAL_DETAIL=metrics \
     bash scripts/run_ocrap_three_regime_evaluation.sh
 }
@@ -122,8 +123,10 @@ done
 # Replay the lexicographically first common target per regime exactly once for
 # each frozen Main robustness variant. Source/gamma are read from the full run.
 run_sentinel() {
-  local variant="$1" regime="$2" full="$3" ckpt="$4" gpu="$5" keyfile="$KEY_DIR/$regime.json"
-  local outdir="$SENTINEL_DIR/$variant/$regime" output="$outdir/closed_loop_ocrap.json"
+  local variant="$1" regime="$2" full="$3" ckpt="$4" gpu="$5"
+  local keyfile="$KEY_DIR/$regime.json"
+  local outdir="$SENTINEL_DIR/$variant/$regime"
+  local output="$outdir/closed_loop_ocrap.json"
   local vals source bucket gamma
   vals="$(python - "$full" <<'PY'
 import json,sys

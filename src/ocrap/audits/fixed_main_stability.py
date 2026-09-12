@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 import math
 
-ENGINEERING_VERSION = "v48.124.0-OC-FMSA"
+ENGINEERING_VERSION = "v48.124.1-OC-FMSA"
 SCIENTIFIC_VERSION = "v48.124-OC-FMSA"
 ALGORITHM_NAME = "Observation-Consistent Fixed-Main Stability and Non-Interference Adjudication"
 
@@ -160,6 +160,13 @@ def target_keys(result: dict[str, Any]) -> list[str]:
     return sorted(set(out))
 
 
+def _is_standard_validation_source(source: Any) -> bool:
+    s = str(source or "").strip().lower().replace("\\", "/").replace("-", "_")
+    if not s or "validation_interactive" in s:
+        return False
+    return "/validation/" in s or "validation@" in s or "validation_tfexample" in s
+
+
 def coverage_gate(nominal: dict[str, Any], balanced: dict[str, Any], precision: dict[str, Any]) -> dict[str, Any]:
     nk, bk, pk = target_keys(nominal), target_keys(balanced), target_keys(precision)
     expected = int(nominal.get("bucket_target_count") or len(nk))
@@ -170,13 +177,16 @@ def coverage_gate(nominal: dict[str, Any], balanced: dict[str, Any], precision: 
     )
     same = nk == bk == pk and len(nk) == expected
     same_bucket = len({str(x.get("bucket_dataset") or "") for x in (nominal, balanced, precision)}) == 1
-    same_source = len({str(x.get("source") or "") for x in (nominal, balanced, precision)}) == 1
+    sources = [str(x.get("source") or "") for x in (nominal, balanced, precision)]
+    same_source = len(set(sources)) == 1
+    standard_validation = all(_is_standard_validation_source(x) for x in sources)
     return {
-        "go": bool(complete and same and same_bucket and same_source),
+        "go": bool(complete and same and same_bucket and same_source and standard_validation),
         "complete": bool(complete),
         "same_target_keys": bool(same),
         "same_bucket_dataset": bool(same_bucket),
         "same_womd_source": bool(same_source),
+        "standard_validation_source": bool(standard_validation),
         "source": nominal.get("source"),
         "bucket_dataset": nominal.get("bucket_dataset"),
         "num_target_keys": len(nk),
