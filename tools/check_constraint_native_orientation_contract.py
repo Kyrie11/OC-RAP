@@ -16,7 +16,7 @@ ACTIVE = [
     "src/ocrap/audits/recovery_set_constraint_flow.py",
     "src/ocrap/audits/weak_root_recovery_set_flow.py",
     "src/ocrap/audits/tail_boundary_crossing_flow.py",
-    "src/ocrap/audits/signed_viability_rank_state.py",
+    "src/ocrap/audits/zero_boundary_viability_transition.py",
     "tools/run_constraint_native_recovery_orientation_audit.py",
     "tools/compare_constraint_native_recovery_orientation.py",
     "tools/check_constraint_native_orientation_contract.py",
@@ -50,7 +50,7 @@ def main() -> int:
     import ocrap.audits.recovery_set_constraint_flow as rscf
     import ocrap.audits.weak_root_recovery_set_flow as wrcf
     import ocrap.audits.tail_boundary_crossing_flow as tbcf
-    import ocrap.audits.signed_viability_rank_state as svrt
+    import ocrap.audits.zero_boundary_viability_transition as zbst
 
     for rel in ACTIVE:
         p = (repo / rel).resolve()
@@ -72,7 +72,7 @@ def main() -> int:
         "recovery_set_constraint_flow": rscf,
         "weak_root_recovery_set_flow": wrcf,
         "tail_boundary_crossing_flow": tbcf,
-        "signed_viability_rank_state": svrt,
+        "zero_boundary_viability_transition": zbst,
     }
     imported = {k: str(Path(v.__file__).resolve()) for k, v in modules.items()}
     expected = {
@@ -84,20 +84,21 @@ def main() -> int:
         "recovery_set_constraint_flow": str((repo / "src/ocrap/audits/recovery_set_constraint_flow.py").resolve()),
         "weak_root_recovery_set_flow": str((repo / "src/ocrap/audits/weak_root_recovery_set_flow.py").resolve()),
         "tail_boundary_crossing_flow": str((repo / "src/ocrap/audits/tail_boundary_crossing_flow.py").resolve()),
-        "signed_viability_rank_state": str((repo / "src/ocrap/audits/signed_viability_rank_state.py").resolve()),
+        "zero_boundary_viability_transition": str((repo / "src/ocrap/audits/zero_boundary_viability_transition.py").resolve()),
     }
     for k, want in expected.items():
         if imported.get(k) != want:
             errors.append(f"import_path:{k}")
 
-    checks = svrt.contract_checks()
+    checks = zbst.contract_checks()
     if not checks or not all(bool(v) for v in checks.values()):
         errors.append("synthetic_contract")
 
     sc = {
         "audit_only": True,
-        "signed_viability_rank_state_transport": True,
-        "absolute_signed_nominal_viability_state": True,
+        "zero_boundary_viability_state_transition": True,
+        "zero_boundary_transition_decomposition": True,
+        "instantaneous_rank_transport_exactly_recoverable": True,
         "boundary_transport": False,
         "candidate_identity_shuffle": "whole_feature_row_cyclic_permutation_within_scene_time_group",
         "capacity_matched_all_families": True,
@@ -106,21 +107,21 @@ def main() -> int:
         "threshold_sweep": False,
         "option_count_sweep": False,
         "rank_cut_sweep": False,
-        "signed_state_threshold_or_scale_sweep": False,
+        "zero_boundary_threshold_or_window_sweep": False,
         "lr_or_epoch_sweep": False,
         "constraint_names": ["clearance", "stopping", "route", "reentry"],
-        "state_channels": [
-            "joint_prefix_signed_viability_rank_state_transport",
-            "joint_suffix_persistent_reentry_signed_rank_state_transport",
+        "transition_channels": [
+            "joint_prefix_zero_boundary_reserve_debt_transition",
+            "joint_suffix_persistent_reentry_zero_boundary_transition",
         ],
-        "state_mode_names": [str(x) for x in svrt.STATE_MODE_NAMES],
-        "signed_state_basis": "fixed_global_rank_signed_state_and_rank_x_signed_state_modes",
+        "transition_mode_names": [str(x) for x in zbst.TRANSITION_MODE_NAMES],
+        "transition_basis": "exact_positive_part_reserve_and_debt_repayment_x_nominal_rank",
         "rank_coordinate": "candidate_independent_nominal_same_option_viability_midranks",
         "candidate_rank_sort_used_for_coordinate": False,
-        "option_aggregation": "same_option_signed_margin_displacement_projected_on_nominal_rank_x_absolute_signed_state_basis",
+        "option_aggregation": "same_option_zero_boundary_reserve_and_debt_repayment_transition_projected_on_nominal_rank",
         "primary_option_set": "all_common_valid_recovery_options",
         "control_option_set": "support_of_frozen_v48_117_weak_root_zero_boundary_witnesses",
-        "boundary_support_weights_used_in_signed_state": False,
+        "boundary_support_weights_used_in_transition": False,
         "active_option_identity_exported": False,
         "pre_readout_candidate_option_selector": False,
         "frozen_root_decoder_read_only": True,
@@ -130,33 +131,23 @@ def main() -> int:
         "teacher_margin_probability_compatibility_fields_used": False,
         "teacher_metadata_input_to_model": False,
         "teacher_npz_fields_loaded_into_feature_path": ["root_valid"],
-        "planner_parameters_trained": 0,
-        "stage_i_parameters_trained": 0,
-        "root_decoder_parameters_trained": 0,
-        "source_parameters_trained": 0,
-        "posthoc_feature_selection": False,
-        "regime_conditioning": False,
-        "relative_ranker_modified": False,
-        "convex_closed_form_ridge": True,
-        "strictly_convex_unique_solution": True,
-        "iterative_optimizer_used": False,
+        "planner_parameters_trained": 0, "stage_i_parameters_trained": 0,
+        "root_decoder_parameters_trained": 0, "source_parameters_trained": 0,
+        "posthoc_feature_selection": False, "regime_conditioning": False,
+        "relative_ranker_modified": False, "convex_closed_form_ridge": True,
+        "strictly_convex_unique_solution": True, "iterative_optimizer_used": False,
         "ridge_lambda_rule": "1_over_axis_train_rows",
-        "matched_family_dim": svrt.MATCHED_DIM,
-        "state_geometry_dim": svrt.STATE_GEOMETRY_DIM,
-        "work_bins": 8,
-        "work_bins_cover_full_horizon": True,
-        "existing_recovery_horizon_only": True,
-        "zero_boundary_threshold": 0.0,
-        "zero_boundary_threshold_sweep": False,
-        "option_permutation_invariant": True,
-        "same_option_joint_constraint_viability": True,
-        "same_option_nominal_rank_correspondence": True,
-        "downstream_ocmero_option_selection_unchanged": True,
+        "matched_family_dim": zbst.MATCHED_DIM, "transition_geometry_dim": zbst.TRANSITION_GEOMETRY_DIM,
+        "work_bins": 8, "work_bins_cover_full_horizon": True, "existing_recovery_horizon_only": True,
+        "zero_boundary_threshold": 0.0, "zero_boundary_threshold_sweep": False,
+        "option_permutation_invariant": True, "same_option_joint_constraint_viability": True,
+        "same_option_nominal_rank_correspondence": True, "downstream_ocmero_option_selection_unchanged": True,
     }
+
     out = {
-        "schema": "ocrap-v48.122-svrt-runtime-code-contract-v1",
-        "engineering_version": svrt.ENGINEERING_VERSION,
-        "scientific_version": svrt.SCIENTIFIC_VERSION,
+        "schema": "ocrap-v48.123-zbst-runtime-code-contract-v1",
+        "engineering_version": zbst.ENGINEERING_VERSION,
+        "scientific_version": zbst.SCIENTIFIC_VERSION,
         "run_instance_id": a.run_id,
         "valid": not errors,
         "attribution_ready": not errors,

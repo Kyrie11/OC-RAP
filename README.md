@@ -1,12 +1,12 @@
 # OC-RAP — cleaned audit/deployment workspace
 
-This repository is the cleaned engineering workspace for the current V48.122 OC-SVRT audit plus the
+This repository is the cleaned engineering workspace for the current V48.123 OC-ZBST audit plus the
 publication-facing evaluation utilities used by the deployed OC-RAP stack.
 
 ## What is active
 
-- `scripts/run_constraint_native_orientation_audit.sh`: the stable semantic scientific launcher. It currently runs V48.122 OC-SVRT.
-  V48.122 is an **audit-only** equal-capacity signed viability rank-state transport experiment. It retains candidate-independent nominal recovery ordering and same-option candidate causal correspondence, and adds only the absolute signed nominal viability level relative to the physical zero boundary as the preregistered missing primitive. Exposed-support and full-set families remain matched at 220-D. It does not train or mutate the frozen OC-RAP planner.
+- `scripts/run_constraint_native_orientation_audit.sh`: the stable semantic scientific launcher. It currently runs V48.123 OC-ZBST.
+  V48.123 is the final **audit-only** equal-capacity recovery-set explanatory experiment. It keeps candidate-independent nominal ordering and same-option causal correspondence, and exactly decomposes candidate displacement at the physical zero boundary into safe-side reserve transition and unsafe-side debt repayment. Exposed-support and full-set families remain matched at 220-D. It does not train or mutate the frozen OC-RAP planner.
 - `scripts/run_ocrap_evaluation.sh`: direct Safe / Near-Contact / Contact closed-loop evaluation of
   an existing frozen OC-RAP model run.
 - `scripts/run_external_baselines.sh`: direct external-baseline train/registration/calibration/test
@@ -33,7 +33,7 @@ provenance identifiers, not imports of old code.
 `ALGORITHM_CHANGELOG.md` is retained as a historical scientific record only. It may mention removed
 historical launchers; none of those names are executable dependencies of the cleaned workspace.
 
-The current launcher consumes versioned frozen scientific assets by design, including the authoritative V48.121 STOP result plus V48.80/V48.93/V48.96 checkpoint/evidence assets. These are provenance inputs, not old-code dependencies. Source/tool/test filenames remain semantic and unversioned.
+The current launcher consumes versioned frozen scientific assets by design, including the authoritative V48.122 STOP result plus V48.80/V48.93/V48.96 checkpoint/evidence assets. These are provenance inputs, not old-code dependencies. Source/tool/test filenames remain semantic and unversioned.
 
 Use `scripts/analyze_dataset_properties.sh` for a read-only 12-bucket dataset/property/construction-provenance export.
 

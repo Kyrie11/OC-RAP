@@ -14158,3 +14158,114 @@ otherwise STOP
 The STOP successor is held out deliberately. If linear signed state is still insufficient, the next distinct proposition is whether **explicit zero-boundary transition topology**—not another rank/statistics basis—is required to distinguish reserve preservation from debt repayment through zero. No such transition feature is included in V48.122.
 
 The stable launcher filename and user command remain unchanged. Before GPU work, V48.122 verifies the exact authoritative V48.121 pipeline/comparison/balanced/precision SHAs, `VIABILITY_RANK_PERSISTENCE_COUPLING_STOP`, and the exact registered signed-rank-state branch.
+
+## V48.122 completed attribution — signed nominal state is informative, but static rank-state weighting is not the final carrier
+
+The uploaded V48.122 OC-SVRT production run passed both reliability and scientific-attribution gates. The canonical bundle closes byte-for-byte against the standalone artifacts, the runtime source hashes match the frozen checkout, all registered probes remain closed-form and capacity matched, and balanced/precision are exact scientific duplicates and therefore count as four unique roles. The preregistered decision is `SIGNED_VIABILITY_RANK_STATE_TRANSPORT_STOP`; no Main integration is authorized.
+
+The STOP is not an inactivity result. Absolute signed nominal state, same-option rank reassignment, exposed/full signed-state energy, multiple physical recovery options, exact padding/mass contracts and Contact re-entry are all active. The decisive result is mixed rather than null:
+
+- `exposed_signed_state` versus V48.121 `exposed_persistence` passes the preregistered historical Support increment gate. Support AUC changes are approximately `+0.0469` dev-Near, `-0.1420` dev-Contact, `+0.2182` certificate-Near and `+0.0278` certificate-Contact. The large certificate-Near recovery establishes that absolute signed headroom/debt contains observation-exposed Support information that relative rank/persistence alone omitted.
+- the primary `full_signed_state` is not population stable. Relative to V48.121 `full_persistence`, Support changes are approximately `-0.2109` dev-Near, `-0.0114` dev-Contact, `+0.0909` certificate-Near and `+0.0904` certificate-Contact; Reserve changes are `0` on underpowered dev-Near, `-0.2500` dev-Contact, `-0.0476` certificate-Near and `+0.0833` certificate-Contact.
+- certificate-Contact Reserve is the strongest signed-state positive signal (`AUC≈0.722`, true-vs-shuffle `≈+0.403`), and `full - exposed` Reserve is about `+0.292` there. Conversely, broad full-set state weighting damages dev-Contact Reserve and Near Support. Thus absolute signed depth is real but cannot be used as a single static multiplicative weight over the whole executable set.
+
+Scientific closure after V48.122:
+
+- close **static linear signed nominal rank-state transport as a complete carrier**;
+- retain candidate-independent nominal ordering and same-option causal correspondence;
+- retain absolute signed physical state as an observation-exposed Support primitive because the exposed historical Support gate passes;
+- retain full executable recovery breadth/depth for Contact Reserve/debt, but only when its semantics are separated from safe-side reserve preservation;
+- retain V48.121 temporal rank-persistence as a partial primitive, not a standalone carrier;
+- continue to keep hard option selection, generic capacity growth, regime routers, learned state scales, boundary transport, source/root retraining and threshold/horizon/option-count/rank-cut sweeps closed.
+
+The V48.122 proposition — whether the correct recovery-set coordinate must contain both relative nominal order and absolute signed physical state — receives a **partial yes, insufficient as a static carrier**. The remaining confound is the physical meaning of the sign. The same displacement can mean safe-side reserve preservation, unsafe-side debt repayment, crossing into safety, or destruction of existing reserve. Multiplying displacement by the signed nominal level does not explicitly distinguish these transition types and therefore mixes mechanisms that should have different semantics across populations.
+
+The dominant bottleneck is tightened to **population-stable zero-boundary state-transition decomposition of same-option viability: observation-exposed reserve preservation on the safe side and executable-set debt repayment/re-entry on the unsafe side**. This is now an explanatory question about the already stable mechanism skeleton, not a request for a broader encoder or a new recovery statistic family.
+
+The exact registered STOP branch is:
+
+```text
+close_signed_viability_rank_state_transport
+-> preregister zero_boundary_viability_state_transition_audit
+-> no training/capacity/regime/source/horizon/threshold sweep
+```
+
+## V48.123 OC-ZBST — Observation-Consistent Zero-Boundary Viability State Transition Audit
+
+Engineering version: `v48.123.0-OC-ZBST`  
+Scientific version: `v48.123-OC-ZBST`
+
+V48.123 is the preregistered final explanatory recovery-set audit. It retains the actuator-realizable constraint field, same-option joint prefix/suffix viability, candidate-independent nominal ordering, exact same-option candidate correspondence, observation-exposed support control, full executable option set, recovery horizon/library, whole-row shuffle null and fixed 220-D closed-form ridge capacity. It does **not** add a new learned mechanism.
+
+For nominal and candidate same-option signed joint viability margins `q0` and `qa`, define the exact positive-part decomposition at the existing physical zero boundary:
+
+```text
+DeltaReserve      = [qa]_+ - [q0]_+
+DeltaDebtRepayment = [-q0]_+ - [-qa]_+
+qa - q0           = DeltaReserve + DeltaDebtRepayment     # exact identity
+```
+
+Positive `DeltaReserve` means the candidate adds or preserves safe-side headroom. Positive `DeltaDebtRepayment` means the candidate repays unsafe-side debt toward or through re-entry. No Near/Contact label is used; the decomposition follows only from the signed physical margin. Let `r` be the exact candidate-independent nominal midrank and `x=2r-1`. Four fixed modes are used:
+
+```text
+DeltaReserve
+x * DeltaReserve
+DeltaDebtRepayment
+x * DeltaDebtRepayment
+```
+
+The previous V48.120 global transport and nominal-rank tilt are exactly recoverable by summing the reserve and debt modes. Therefore V48.123 does not discard the already supported nominal-order/same-option carrier geometry; it resolves which side of the zero boundary generated the transport. Exact nominal ties remain identity-invariant and candidate values never define the rank coordinate.
+
+The inherited fixed capacity is unchanged:
+
+```text
+8 bins x 2 temporal channels x 4 fixed transition modes = 64-D
+156-D frozen candidate response + 64-D = 220-D
+```
+
+Two equal-capacity families are preregistered:
+
+```text
+exposed_transition = zero-boundary transitions on the SUPPORT, not weights,
+                     of V48.117 frozen weak-root zero-boundary witnesses
+full_transition    = zero-boundary transitions on all common valid recovery options [PRIMARY]
+```
+
+Activity requires exact option permutation/padding/mass/decomposition contracts, nonzero exposed/full transition features, reserve-transition and debt-repayment energy, real zero-boundary crossing, same-option rank reassignment, multiple diverse recovery options, and Contact re-entry across at least 3/4 unique roles with Near+Contact represented. Debt-to-reserve and reserve-to-debt crossing directions are recorded explicitly. No transition threshold/window, decay, learned scale, rank cut, candidate rank coordinate, option identity export or regime router is allowed.
+
+Absolute Support/Reserve and historical increment gates are unchanged. Historical controls are authoritative V48.122 `full_signed_state` and `exposed_signed_state`. Promotion is fail-closed:
+
+```text
+full_transition absolute Support+Reserve GO
++ full_transition vs V48.122 full_signed_state Support+Reserve GO
++ exact transition/reassignment/re-entry activity GO
+  -> ZERO_BOUNDARY_VIABILITY_STATE_TRANSITION_GO;
+     authorize exactly one full zero-boundary transition Main/carrier integration,
+     with no source/boundary/regime/capacity co-change.
+
+exposed_transition absolute Support+Reserve GO
++ exposed_transition vs V48.122 exposed_signed_state Support+Reserve GO
++ exact activity GO
+  -> EXPOSED_ZERO_BOUNDARY_VIABILITY_STATE_TRANSITION_GO;
+     authorize exactly one exposed zero-boundary transition Main/carrier integration.
+
+Support-only / Reserve-only / local-order-only
+  -> retain only the proven axis and proceed to fixed-Main adjudication;
+     do not open another recovery representation family.
+
+otherwise STOP
+  -> close zero-boundary transition as a complete carrier;
+     freeze the recovery-set mechanism family;
+     preregister fixed-Main stability/non-interference adjudication;
+     no new recovery mechanism/capacity/regime/source/horizon/threshold sweep.
+```
+
+### Recovery-main freeze criterion registered with V48.123
+
+V48.123 is the last planned explanatory recovery-set representation audit. The **mechanism/theory family freezes regardless of V48.123 GO or STOP** once the production V48.123 run passes reliability/scientific attribution and its preregistered decision is applied. A GO selects exactly one carrier for one controlled Main integration; a STOP closes the carrier search and preserves the previously supported mechanism skeleton without adding a replacement statistic.
+
+The **Main algorithm becomes external-baseline-ready only after a separate fixed-Main stability/non-interference adjudication**, with no new recovery mechanism. That adjudication must verify: clean provenance and deterministic rerun consistency; unchanged OC-MERO/RIFA legality; no material regression on powered Near/Contact Support/Reserve populations relative to the frozen pre-integration Main; no newly negative true-vs-shuffle signal in previously positive powered cells; Near closed-loop safety/non-interference; Contact debt-repayment/re-entry secondary metrics; and no source/root/regime/capacity co-change. Only after this freeze check should the expensive external SOTA comparison be treated as final submission evidence.
+
+This stopping rule is intentional. It prevents the scientific narrative from degenerating into endless feature search and makes the final theory falsifiable: deployable recovery is modeled as an observation-consistent, same-option signed set-transport process whose relative ordering, physical zero boundary, exposed support, executable redundancy and temporal re-entry semantics have each been independently adjudicated.
+
+The stable launcher filename and user command remain unchanged. Before GPU work, V48.123 verifies the exact authoritative V48.122 pipeline/comparison/balanced/precision SHAs, `SIGNED_VIABILITY_RANK_STATE_TRANSPORT_STOP`, and the exact registered zero-boundary transition branch.

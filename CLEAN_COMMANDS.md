@@ -15,48 +15,32 @@ export PYTHONPATH="$PWD/src:$PWD${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONNOUSERSITE=1
 ```
 
-## 0. Current V48.122 scientific reference contract
+## 0. Current V48.123 scientific reference contract
 
-The stable unversioned orientation launcher now runs **V48.122 OC-SVRT**. It treats the completed V48.121 OC-VRPC STOP artifacts as immutable scientific inputs and verifies their exact SHA/status/registered signed-rank-state next branch before any V48.122 audit starts. Python implementation filenames remain semantic/unversioned; scientific inputs and outputs remain versioned.
+The stable unversioned orientation launcher now runs **V48.123 OC-ZBST**. It treats the completed V48.122 OC-SVRT STOP artifacts as immutable scientific inputs and verifies their exact SHA/status/registered zero-boundary transition branch before any V48.123 audit starts. Python implementation filenames remain semantic/unversioned; scientific inputs and outputs remain versioned.
 
-V48.121 gave a partial positive answer to the rank-persistence hypothesis: exposed rank persistence improved Support AUC over V48.120 in all four unique roles, while full-set persistence added Reserve information in three roles. But neither exposed nor full persistence passed the absolute cross-population Support+Reserve gate. The remaining preregistered question is therefore whether relative nominal rank/persistence is missing the **absolute signed nominal viability level relative to the physical zero boundary**—the information that distinguishes shallow positive reserve from deep reserve and shallow debt from deep debt.
+V48.122 showed that absolute signed nominal viability is informative but not sufficient as a static rank-state carrier. The final preregistered representation question is whether candidate displacement must be decomposed at the existing physical zero boundary into **safe-side reserve transition** and **unsafe-side debt repayment**. This is an explanatory decomposition of the existing mechanism skeleton, not a new learned mechanism family.
 
-## 1. Current orientation audit — V48.122 OC-SVRT
+## 1. Current orientation audit — V48.123 OC-ZBST
 
-V48.122 is **audit-only**. The 156-D frozen candidate response, actuator-projected executable constraints, same-option joint prefix/suffix viability margins, candidate-independent nominal ordering, same-option candidate correspondence, recovery horizon/library, cohorts, whole-row candidate shuffle, and 220-D closed-form ridge capacity remain fixed.
-
-For each recovery option and temporal channel:
+V48.123 is **audit-only**. For every same recovery option and temporal channel:
 
 ```text
-q0_l(t) = nominal same-option joint signed viability margin
-qa_l(t) = candidate same-option joint signed viability margin
-d_l(t)  = qa_l(t) - q0_l(t)
-r_l(t)  = exact candidate-independent nominal midrank
-x_l(t)  = 2 r_l(t) - 1
-s_l(t)  = q0_l(t)    # absolute signed nominal viability state; zero is physical reserve/debt boundary
+DeltaReserve       = max(qa, 0) - max(q0, 0)
+DeltaDebtRepayment = max(-q0, 0) - max(-qa, 0)
+qa - q0            = DeltaReserve + DeltaDebtRepayment
+r                   = exact candidate-independent nominal midrank
+x                   = 2r - 1
 ```
 
-Exact nominal ties share one midrank. Candidate values never define the coordinate. No state centering, learned scale, clipping, temperature, threshold, rank cut, or persistence-window sweep is introduced.
-
-The candidate displacement is coupled to four fixed modes:
+The four fixed transition modes are `DeltaReserve`, `x*DeltaReserve`, `DeltaDebtRepayment`, and `x*DeltaDebtRepayment`. The first+third exactly recover V48.120 global displacement; the second+fourth exactly recover nominal-rank tilt. No threshold/window/decay, learned scale, candidate rank coordinate, option identity export, regime router or capacity change is introduced.
 
 ```text
-1                 global signed viability shift
-x                 nominal-rank tilt
-s = q0            signed nominal-state coupling
-x * s             rank-by-signed-state interaction
-```
-
-The first two modes retain the instantaneous global/rank control from V48.120/121. The latter two are the only new primitive, testing whether absolute reserve/debt depth resolves the remaining population instability.
-
-The primary `full_signed_state` uses all common valid recovery options. The equal-capacity `exposed_signed_state` control uses only the support (not weights) of V48.117 frozen weak-root zero-boundary witnesses. Option identity is used only internally for same-option correspondence and is never exported to the readout.
-
-```text
-8 bins x 2 temporal channels x 4 fixed state modes = 64-D
+8 bins x 2 temporal channels x 4 transition modes = 64-D
 156-D frozen candidate response + 64-D = 220-D
 ```
 
-No regime label, teacher future value, boundary transport, source/root/planner training, capacity, horizon, threshold, option-count, rank-cut, LR, or epoch sweep is introduced.
+Primary `full_transition` uses all common valid recovery options. Equal-capacity `exposed_transition` uses only the support of V48.117 frozen weak-root zero-boundary witnesses.
 
 Run exactly:
 
@@ -70,12 +54,12 @@ bash scripts/run_constraint_native_orientation_audit.sh
 Upload only:
 
 ```text
-/home/senzeyu2/code/OC-RAP/runs/OC-RAP-v48.122-OC-SVRT-results.zip
+/home/senzeyu2/code/OC-RAP/runs/OC-RAP-v48.123-OC-ZBST-results.zip
 ```
 
-### About OC-RAP training in V48.122
+### About OC-RAP training in V48.123
 
-There is no registered V48.122 planner/root/source training stage. Running generic `python -m ocrap.cli train` would not reproduce this audit. Main/carrier integration is authorized only if a preregistered signed-state family passes absolute Support+Reserve, historical-improvement, and exact signed-state/reassignment/re-entry activity gates.
+There is no registered V48.123 planner/root/source training stage. V48.123 is the last planned explanatory recovery-set carrier audit. Whether it GOes or STOPs, the next stage is a **fixed-Main stability/non-interference adjudication with no new recovery mechanism family**. External baseline comparison becomes final evidence only after that freeze adjudication.
 
 ## 2. Direct OC-RAP three-regime closed-loop test
 

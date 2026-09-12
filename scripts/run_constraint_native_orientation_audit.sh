@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Stable constraint-native orientation audit entrypoint.
-# V48.122 OC-SVRT: signed nominal viability rank-state transport audit after
-# authoritative V48.121 OC-VRPC STOP. Candidate-independent nominal rank and
-# same-option candidate causal correspondence are retained; the only new primitive
-# is the absolute signed nominal viability level relative to the physical zero boundary.
+# V48.123 OC-ZBST: zero-boundary viability state-transition audit after
+# authoritative V48.122 OC-SVRT STOP. Candidate-independent nominal rank and
+# same-option causal correspondence are retained; the candidate displacement is
+# exactly decomposed into safe-side reserve transition and debt repayment.
 # Audit only: no planner/source/root training, regime routing, boundary transport,
-# capacity/rank-cut/state-threshold/horizon/option-count sweep, or Main integration.
+# capacity/rank-cut/transition-window/horizon/option-count sweep, or Main integration.
 set -Eeuo pipefail
 
 REPO="${OCRAP_REPO:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
@@ -28,55 +28,51 @@ CERT_INDEX="${OCRAP_ORIENTATION_CERT_INDEX:-$BASE_OUT/OC-RAP-v48.96-certificate-
 TRAIN_INDEX="$REFERENCE_A/evidence_adapt_teacher_pcd_index.jsonl"
 DEV_INDEX="$REFERENCE_A/evidence_adapt_dev_teacher_pcd_index.jsonl"
 
-# V48.121 is an immutable versioned scientific input, not a source-code dependency.
-V121_PIPELINE="${OCRAP_ORIENTATION_V121_PIPELINE:-$BASE_OUT/OC-RAP-v48.121-PIPELINE_COMPLETE.json}"
-V121_COMPARE="${OCRAP_ORIENTATION_V121_COMPARE:-$BASE_OUT/OC-RAP-v48.121-DCP-DRFC-BCDE-RIFA-OC-VRPC-comparison.json}"
-V121_BALANCED="${OCRAP_ORIENTATION_V121_BALANCED:-$BASE_OUT/OC-RAP-v48.121-VRPC-balanced.json}"
-V121_PRECISION="${OCRAP_ORIENTATION_V121_PRECISION:-$BASE_OUT/OC-RAP-v48.121-VRPC-precision.json}"
+# V48.122 is an immutable versioned scientific input, not a source-code dependency.
+V122_PIPELINE="${OCRAP_ORIENTATION_V122_PIPELINE:-$BASE_OUT/OC-RAP-v48.122-PIPELINE_COMPLETE.json}"
+V122_COMPARE="${OCRAP_ORIENTATION_V122_COMPARE:-$BASE_OUT/OC-RAP-v48.122-DCP-DRFC-BCDE-RIFA-OC-SVRT-comparison.json}"
+V122_BALANCED="${OCRAP_ORIENTATION_V122_BALANCED:-$BASE_OUT/OC-RAP-v48.122-SVRT-balanced.json}"
+V122_PRECISION="${OCRAP_ORIENTATION_V122_PRECISION:-$BASE_OUT/OC-RAP-v48.122-SVRT-precision.json}"
 
-CACHE="${OCRAP_ORIENTATION_INPUT_CACHE:-$BASE_OUT/.ocrap_v48_122_svrt_cache}"
-RUNTIME="$BASE_OUT/OC-RAP-v48.122-runtime-code-contract.json"
-BOUT="$BASE_OUT/OC-RAP-v48.122-SVRT-balanced.json"
-POUT="$BASE_OUT/OC-RAP-v48.122-SVRT-precision.json"
-BSTATE="$BASE_OUT/OC-RAP-v48.122-SVRT-balanced.pt"
-PSTATE="$BASE_OUT/OC-RAP-v48.122-SVRT-precision.pt"
-COMPARE="$BASE_OUT/OC-RAP-v48.122-DCP-DRFC-BCDE-RIFA-OC-SVRT-comparison.json"
-COMPLETE="$BASE_OUT/OC-RAP-v48.122-PIPELINE_COMPLETE.json"
-BUNDLE_MANIFEST="$BASE_OUT/OC-RAP-v48.122-OC-SVRT-result-bundle-manifest.json"
-RESULTS_ZIP="$BASE_OUT/OC-RAP-v48.122-OC-SVRT-results.zip"
+CACHE="${OCRAP_ORIENTATION_INPUT_CACHE:-$BASE_OUT/.ocrap_v48_123_zbst_cache}"
+RUNTIME="$BASE_OUT/OC-RAP-v48.123-runtime-code-contract.json"
+BOUT="$BASE_OUT/OC-RAP-v48.123-ZBST-balanced.json"
+POUT="$BASE_OUT/OC-RAP-v48.123-ZBST-precision.json"
+BSTATE="$BASE_OUT/OC-RAP-v48.123-ZBST-balanced.pt"
+PSTATE="$BASE_OUT/OC-RAP-v48.123-ZBST-precision.pt"
+COMPARE="$BASE_OUT/OC-RAP-v48.123-DCP-DRFC-BCDE-RIFA-OC-ZBST-comparison.json"
+COMPLETE="$BASE_OUT/OC-RAP-v48.123-PIPELINE_COMPLETE.json"
+BUNDLE_MANIFEST="$BASE_OUT/OC-RAP-v48.123-OC-ZBST-result-bundle-manifest.json"
+RESULTS_ZIP="$BASE_OUT/OC-RAP-v48.123-OC-ZBST-results.zip"
 
 mkdir -p "$BASE_OUT" "$CACHE"
 rm -f "$RUNTIME" "$BOUT" "$POUT" "$BSTATE" "$PSTATE" "$COMPARE" "$COMPLETE" "$BUNDLE_MANIFEST" "$RESULTS_ZIP"
 
-# Fail before GPU work if checkout/import path does not satisfy V48.122.
+# Fail before GPU work if checkout/import path does not satisfy V48.123.
 python tools/check_constraint_native_orientation_contract.py \
   --repo "$REPO" --run-id "$RUN_ID" --output "$RUNTIME"
 
-# Authoritative V48.121 STOP is the only branch that licenses this audit.
-python - "$V121_PIPELINE" "$V121_COMPARE" "$V121_BALANCED" "$V121_PRECISION" <<'PY'
+# Authoritative V48.122 STOP is the only branch that licenses this audit.
+python - "$V122_PIPELINE" "$V122_COMPARE" "$V122_BALANCED" "$V122_PRECISION" <<'PY'
 import hashlib, json, pathlib, sys
 p, c, b, q = map(pathlib.Path, sys.argv[1:])
 want = {
-    p: 'b2e08fbe1b1b1e2b676a3d9bd0e9b84082fd35844b8fa6dd0cb7fa193d22e6e6',
-    c: '7557a98d23f79d146c620c51deabe41ade063295f906fec02c07836e8af1513f',
-    b: '2b5cdc822071a4e1d2258e080e8ee3413e347099a11e40e77f1cd0803c7012fe',
-    q: 'b51eb9bfcf353a6df6337fcfe83fd303e69716241ac274af6e0d73471e829d24',
+    p: '5432df0f0937969d01616f96f8a27e992932d9c297813b6866dd42831b111e8e',
+    c: '6d32da4ace62ed2f01dc76bcda55a80623e339195b28267ac93c2dde92914fe2',
+    b: '4ed2c1c5ddd2bc2fe7647664bb053cd4066e2997362a9b1db3a55814583b660f',
+    q: 'd03c8ba6b34287f61df1345a56372d5601bd9dd0b58cf509fe71ac09f7b1911d',
 }
 for path, digest in want.items():
-    if not path.is_file():
-        raise SystemExit(f'missing V48.121 prerequisite {path}')
+    if not path.is_file(): raise SystemExit(f'missing V48.122 prerequisite {path}')
     got = hashlib.sha256(path.read_bytes()).hexdigest()
-    if got != digest:
-        raise SystemExit(f'authoritative V48.121 SHA mismatch {path.name}: {got}')
-pd = json.loads(p.read_text())
-cd = json.loads(c.read_text())
-d = cd.get('preregistered_decision') or {}
-if not (pd.get('valid') and pd.get('attribution_ready') and pd.get('preregistered_status') == 'VIABILITY_RANK_PERSISTENCE_COUPLING_STOP'):
-    raise SystemExit('authoritative V48.121 STOP pipeline prerequisite missing')
-if not (cd.get('valid') and cd.get('attribution_ready') and d.get('status') == 'VIABILITY_RANK_PERSISTENCE_COUPLING_STOP'):
-    raise SystemExit('authoritative V48.121 STOP comparison prerequisite missing')
-if d.get('next_branch') != 'close_nominal_rank_persistence_coupling_then_preregister_signed_viability_rank_state_transport_audit_no_training_capacity_regime_source_horizon_or_threshold_sweep':
-    raise SystemExit('V48.121 did not authorize signed viability rank-state transport branch')
+    if got != digest: raise SystemExit(f'authoritative V48.122 SHA mismatch {path.name}: {got}')
+pd=json.loads(p.read_text()); cd=json.loads(c.read_text()); d=cd.get('preregistered_decision') or {}
+if not (pd.get('valid') and pd.get('attribution_ready') and pd.get('preregistered_status') == 'SIGNED_VIABILITY_RANK_STATE_TRANSPORT_STOP'):
+    raise SystemExit('authoritative V48.122 STOP pipeline prerequisite missing')
+if not (cd.get('valid') and cd.get('attribution_ready') and d.get('status') == 'SIGNED_VIABILITY_RANK_STATE_TRANSPORT_STOP'):
+    raise SystemExit('authoritative V48.122 STOP comparison prerequisite missing')
+if d.get('next_branch') != 'close_signed_viability_rank_state_transport_then_preregister_zero_boundary_viability_state_transition_audit_no_training_capacity_regime_source_horizon_or_threshold_sweep':
+    raise SystemExit('V48.122 did not authorize zero-boundary viability state-transition branch')
 PY
 
 for f in "$TRAIN_INDEX" "$DEV_INDEX" "$CERT_INDEX" "$V93_AUDIT"; do
@@ -100,22 +96,22 @@ run_one precision "$GPU1" "$POUT" "$PSTATE" & p1=$!
 wait "$p0"; r0=$?
 wait "$p1"; r1=$?
 set -e
-[[ $r0 == 0 && $r1 == 0 ]] || { echo "V48.122 SVRT run failure balanced=$r0 precision=$r1" >&2; exit 30; }
+[[ $r0 == 0 && $r1 == 0 ]] || { echo "V48.123 ZBST run failure balanced=$r0 precision=$r1" >&2; exit 30; }
 
 python tools/compare_constraint_native_recovery_orientation.py \
   --balanced "$BOUT" --precision "$POUT" \
-  --v121-pipeline "$V121_PIPELINE" --v121-comparison "$V121_COMPARE" \
-  --v121-balanced "$V121_BALANCED" --v121-precision "$V121_PRECISION" \
+  --v122-pipeline "$V122_PIPELINE" --v122-comparison "$V122_COMPARE" \
+  --v122-balanced "$V122_BALANCED" --v122-precision "$V122_PRECISION" \
   --run-id "$RUN_ID" --output "$COMPARE"
 
 python tools/check_constraint_native_orientation_pipeline.py \
   --runtime "$RUNTIME" --balanced "$BOUT" --precision "$POUT" \
   --balanced-state "$BSTATE" --precision-state "$PSTATE" --comparison "$COMPARE" \
-  --v48-121-pipeline "$V121_PIPELINE" --v48-121-comparison "$V121_COMPARE" \
+  --v48-122-pipeline "$V122_PIPELINE" --v48-122-comparison "$V122_COMPARE" \
   --run-id "$RUN_ID" --output "$COMPLETE"
 
 python tools/package_constraint_native_orientation_results.py \
   --pipeline "$COMPLETE" --base-out "$BASE_OUT" --run-id "$RUN_ID" \
   --manifest "$BUNDLE_MANIFEST" --output "$RESULTS_ZIP"
 
-printf 'V48.122 OC-SVRT result bundle ready. Upload ONLY this file:\n%s\nrun_instance_id=%s\n' "$RESULTS_ZIP" "$RUN_ID"
+printf 'V48.123 OC-ZBST result bundle ready. Upload ONLY this file:\n%s\nrun_instance_id=%s\n' "$RESULTS_ZIP" "$RUN_ID"

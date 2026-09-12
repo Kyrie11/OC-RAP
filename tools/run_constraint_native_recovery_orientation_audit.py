@@ -38,18 +38,18 @@ from ocrap.audits.tail_boundary_crossing_flow import (
     nominal_tail_boundary_measure,
     boundary_measure_diagnostics,
 )
-from ocrap.audits.signed_viability_rank_state import (
+from ocrap.audits.zero_boundary_viability_transition import (
     ALGORITHM_NAME,
     ENGINEERING_VERSION,
     MATCHED_DIM,
     SCIENTIFIC_VERSION,
-    STATE_GEOMETRY_DIM,
-    STATE_MODE_NAMES,
+    TRANSITION_GEOMETRY_DIM,
+    TRANSITION_MODE_NAMES,
     base_features,
     fit_set_flow_scaler,
     matched_features,
-    exposed_signed_state_geometry,
-    full_signed_state_geometry,
+    exposed_transition_geometry,
+    full_transition_geometry,
     option_permutation_invariance_error,
 )
 
@@ -58,7 +58,7 @@ ROLES = ("dev_near", "dev_contact", "certificate_near", "certificate_contact")
 # Deliberately excludes teacher m_star/root/future labels.  The scientific
 # feature path reads only current observation, candidate prefix, and the fixed
 # recovery option library.  Labels enter later through the historical indices.
-SVRT_SAMPLE_KEYS: frozenset[str] = frozenset({
+ZBST_SAMPLE_KEYS: frozenset[str] = frozenset({
     "scene_id", "time_index", "candidate_index", "is_nominal",
     "agent_history", "agent_valid", "ego_state",
     "prefix_states", "prefix_controls", "prefix_param", "prefix_macro_id", "prefix_macro_name",
@@ -223,82 +223,99 @@ def _merge_pair_diags(diags: list[dict[str, Any]]) -> dict[str, Any]:
             "candidate_count": 0,
             "mean_common_valid_option_count": 0.0,
             "min_common_valid_option_count": 0,
-            "exposed_signed_state_nonzero_fraction": 0.0,
-            "full_signed_state_nonzero_fraction": 0.0,
+            "exposed_transition_nonzero_fraction": 0.0,
+            "full_transition_nonzero_fraction": 0.0,
             "option_flow_diverse_fraction": 0.0,
             "reentry_set_available_fraction": 0.0,
             "max_option_permutation_invariance_error": 0.0,
-            "mean_exposed_prefix_coupling_energy": 0.0,
-            "mean_exposed_suffix_coupling_energy": 0.0,
-            "mean_full_prefix_coupling_energy": 0.0,
-            "mean_full_suffix_coupling_energy": 0.0,
-            "mean_exposed_prefix_signed_state_energy": 0.0,
-            "mean_exposed_suffix_signed_state_energy": 0.0,
-            "mean_full_prefix_signed_state_energy": 0.0,
-            "mean_full_suffix_signed_state_energy": 0.0,
+            "mean_exposed_prefix_transition_energy": 0.0,
+            "mean_exposed_suffix_transition_energy": 0.0,
+            "mean_full_prefix_transition_energy": 0.0,
+            "mean_full_suffix_transition_energy": 0.0,
+            "mean_exposed_prefix_reserve_transition_energy": 0.0,
+            "mean_exposed_suffix_reserve_transition_energy": 0.0,
+            "mean_full_prefix_reserve_transition_energy": 0.0,
+            "mean_full_suffix_reserve_transition_energy": 0.0,
+            "mean_exposed_prefix_debt_repayment_energy": 0.0,
+            "mean_exposed_suffix_debt_repayment_energy": 0.0,
+            "mean_full_prefix_debt_repayment_energy": 0.0,
+            "mean_full_suffix_debt_repayment_energy": 0.0,
             "mean_exposed_prefix_nonzero_fraction": 0.0,
             "mean_exposed_suffix_nonzero_fraction": 0.0,
             "mean_full_prefix_nonzero_fraction": 0.0,
             "mean_full_suffix_nonzero_fraction": 0.0,
-            "mean_exposed_prefix_abs_nominal_state": 0.0,
-            "mean_exposed_suffix_abs_nominal_state": 0.0,
-            "mean_full_prefix_abs_nominal_state": 0.0,
-            "mean_full_suffix_abs_nominal_state": 0.0,
-            "mean_exposed_prefix_two_sided_state_fraction": 0.0,
-            "mean_exposed_suffix_two_sided_state_fraction": 0.0,
-            "mean_full_prefix_two_sided_state_fraction": 0.0,
-            "mean_full_suffix_two_sided_state_fraction": 0.0,
             "mean_exposed_prefix_zero_crossing_fraction": 0.0,
             "mean_exposed_suffix_zero_crossing_fraction": 0.0,
             "mean_full_prefix_zero_crossing_fraction": 0.0,
             "mean_full_suffix_zero_crossing_fraction": 0.0,
+            "mean_exposed_prefix_debt_to_reserve_fraction": 0.0,
+            "mean_exposed_suffix_debt_to_reserve_fraction": 0.0,
+            "mean_full_prefix_debt_to_reserve_fraction": 0.0,
+            "mean_full_suffix_debt_to_reserve_fraction": 0.0,
+            "mean_exposed_prefix_reserve_to_debt_fraction": 0.0,
+            "mean_exposed_suffix_reserve_to_debt_fraction": 0.0,
+            "mean_full_prefix_reserve_to_debt_fraction": 0.0,
+            "mean_full_suffix_reserve_to_debt_fraction": 0.0,
             "mean_exposed_prefix_rank_inversion_fraction": 0.0,
             "mean_exposed_suffix_rank_inversion_fraction": 0.0,
             "mean_full_prefix_rank_inversion_fraction": 0.0,
             "mean_full_suffix_rank_inversion_fraction": 0.0,
+            "max_exposed_prefix_displacement_decomposition_error": 0.0,
+            "max_exposed_suffix_displacement_decomposition_error": 0.0,
+            "max_full_prefix_displacement_decomposition_error": 0.0,
+            "max_full_suffix_displacement_decomposition_error": 0.0,
             "mean_full_eligible_option_count": 0.0,
             "mean_full_prefix_coverage_fraction": 0.0,
             "mean_full_suffix_coverage_fraction": 0.0,
         }
     counts = [int(d.get("common_valid_option_count", 0)) for d in diags]
     mean = lambda key: float(np.mean([float(d.get(key, 0.0)) for d in diags]))
+    maxv = lambda key: float(max(float(d.get(key, 0.0)) for d in diags))
     return {
         "candidate_count": len(diags),
         "mean_common_valid_option_count": float(np.mean(counts)),
         "min_common_valid_option_count": int(min(counts)),
-        "exposed_signed_state_nonzero_fraction": float(np.mean([bool(d.get("exposed_signed_state_nonzero", False)) for d in diags])),
-        "full_signed_state_nonzero_fraction": float(np.mean([bool(d.get("full_signed_state_nonzero", False)) for d in diags])),
+        "exposed_transition_nonzero_fraction": float(np.mean([bool(d.get("exposed_transition_nonzero", False)) for d in diags])),
+        "full_transition_nonzero_fraction": float(np.mean([bool(d.get("full_transition_nonzero", False)) for d in diags])),
         "option_flow_diverse_fraction": float(np.mean([bool(d.get("option_flow_diverse", False)) for d in diags])),
         "reentry_set_available_fraction": float(np.mean([bool(d.get("reentry_available_in_set", False)) for d in diags])),
-        "max_option_permutation_invariance_error": float(max(float(d.get("option_permutation_invariance_error", 0.0)) for d in diags)),
-        "mean_exposed_prefix_coupling_energy": mean("exposed_prefix_coupling_energy"),
-        "mean_exposed_suffix_coupling_energy": mean("exposed_suffix_coupling_energy"),
-        "mean_full_prefix_coupling_energy": mean("full_prefix_coupling_energy"),
-        "mean_full_suffix_coupling_energy": mean("full_suffix_coupling_energy"),
-        "mean_exposed_prefix_signed_state_energy": mean("exposed_prefix_signed_state_energy"),
-        "mean_exposed_suffix_signed_state_energy": mean("exposed_suffix_signed_state_energy"),
-        "mean_full_prefix_signed_state_energy": mean("full_prefix_signed_state_energy"),
-        "mean_full_suffix_signed_state_energy": mean("full_suffix_signed_state_energy"),
+        "max_option_permutation_invariance_error": maxv("option_permutation_invariance_error"),
+        "mean_exposed_prefix_transition_energy": mean("exposed_prefix_transition_energy"),
+        "mean_exposed_suffix_transition_energy": mean("exposed_suffix_transition_energy"),
+        "mean_full_prefix_transition_energy": mean("full_prefix_transition_energy"),
+        "mean_full_suffix_transition_energy": mean("full_suffix_transition_energy"),
+        "mean_exposed_prefix_reserve_transition_energy": mean("exposed_prefix_reserve_transition_energy"),
+        "mean_exposed_suffix_reserve_transition_energy": mean("exposed_suffix_reserve_transition_energy"),
+        "mean_full_prefix_reserve_transition_energy": mean("full_prefix_reserve_transition_energy"),
+        "mean_full_suffix_reserve_transition_energy": mean("full_suffix_reserve_transition_energy"),
+        "mean_exposed_prefix_debt_repayment_energy": mean("exposed_prefix_debt_repayment_energy"),
+        "mean_exposed_suffix_debt_repayment_energy": mean("exposed_suffix_debt_repayment_energy"),
+        "mean_full_prefix_debt_repayment_energy": mean("full_prefix_debt_repayment_energy"),
+        "mean_full_suffix_debt_repayment_energy": mean("full_suffix_debt_repayment_energy"),
         "mean_exposed_prefix_nonzero_fraction": mean("exposed_prefix_nonzero_fraction"),
         "mean_exposed_suffix_nonzero_fraction": mean("exposed_suffix_nonzero_fraction"),
         "mean_full_prefix_nonzero_fraction": mean("full_prefix_nonzero_fraction"),
         "mean_full_suffix_nonzero_fraction": mean("full_suffix_nonzero_fraction"),
-        "mean_exposed_prefix_abs_nominal_state": mean("exposed_prefix_abs_nominal_state"),
-        "mean_exposed_suffix_abs_nominal_state": mean("exposed_suffix_abs_nominal_state"),
-        "mean_full_prefix_abs_nominal_state": mean("full_prefix_abs_nominal_state"),
-        "mean_full_suffix_abs_nominal_state": mean("full_suffix_abs_nominal_state"),
-        "mean_exposed_prefix_two_sided_state_fraction": mean("exposed_prefix_two_sided_state_fraction"),
-        "mean_exposed_suffix_two_sided_state_fraction": mean("exposed_suffix_two_sided_state_fraction"),
-        "mean_full_prefix_two_sided_state_fraction": mean("full_prefix_two_sided_state_fraction"),
-        "mean_full_suffix_two_sided_state_fraction": mean("full_suffix_two_sided_state_fraction"),
         "mean_exposed_prefix_zero_crossing_fraction": mean("exposed_prefix_zero_crossing_fraction"),
         "mean_exposed_suffix_zero_crossing_fraction": mean("exposed_suffix_zero_crossing_fraction"),
         "mean_full_prefix_zero_crossing_fraction": mean("full_prefix_zero_crossing_fraction"),
         "mean_full_suffix_zero_crossing_fraction": mean("full_suffix_zero_crossing_fraction"),
+        "mean_exposed_prefix_debt_to_reserve_fraction": mean("exposed_prefix_debt_to_reserve_fraction"),
+        "mean_exposed_suffix_debt_to_reserve_fraction": mean("exposed_suffix_debt_to_reserve_fraction"),
+        "mean_full_prefix_debt_to_reserve_fraction": mean("full_prefix_debt_to_reserve_fraction"),
+        "mean_full_suffix_debt_to_reserve_fraction": mean("full_suffix_debt_to_reserve_fraction"),
+        "mean_exposed_prefix_reserve_to_debt_fraction": mean("exposed_prefix_reserve_to_debt_fraction"),
+        "mean_exposed_suffix_reserve_to_debt_fraction": mean("exposed_suffix_reserve_to_debt_fraction"),
+        "mean_full_prefix_reserve_to_debt_fraction": mean("full_prefix_reserve_to_debt_fraction"),
+        "mean_full_suffix_reserve_to_debt_fraction": mean("full_suffix_reserve_to_debt_fraction"),
         "mean_exposed_prefix_rank_inversion_fraction": mean("exposed_prefix_rank_inversion_fraction"),
         "mean_exposed_suffix_rank_inversion_fraction": mean("exposed_suffix_rank_inversion_fraction"),
         "mean_full_prefix_rank_inversion_fraction": mean("full_prefix_rank_inversion_fraction"),
         "mean_full_suffix_rank_inversion_fraction": mean("full_suffix_rank_inversion_fraction"),
+        "max_exposed_prefix_displacement_decomposition_error": maxv("exposed_prefix_displacement_decomposition_error"),
+        "max_exposed_suffix_displacement_decomposition_error": maxv("exposed_suffix_displacement_decomposition_error"),
+        "max_full_prefix_displacement_decomposition_error": maxv("full_prefix_displacement_decomposition_error"),
+        "max_full_suffix_displacement_decomposition_error": maxv("full_suffix_displacement_decomposition_error"),
         "mean_full_eligible_option_count": mean("full_eligible_option_count"),
         "mean_full_prefix_coverage_fraction": mean("full_prefix_coverage_fraction"),
         "mean_full_suffix_coverage_fraction": mean("full_suffix_coverage_fraction"),
@@ -376,18 +393,18 @@ def extract_records(
     model = bundle.model.eval()
     [par.requires_grad_(False) for par in model.parameters()]
     if not isinstance(model.encoder, StructuredTokenEncoder):
-        raise RuntimeError("V48.122 requires StructuredTokenEncoder")
+        raise RuntimeError("V48.123 requires StructuredTokenEncoder")
     enc = model.encoder.eval()
     dev = bundle.device
     if len(enc.encoder.layers) != 2:
-        raise RuntimeError("V48.122 requires historical two-layer Stage-I")
+        raise RuntimeError("V48.123 requires historical two-layer Stage-I")
 
     ocfg = bundle.cfg.get("ocmero", {}) if isinstance(bundle.cfg.get("ocmero", {}), dict) else {}
     ablation = bundle.cfg.get("ablation", {}) if isinstance(bundle.cfg.get("ablation", {}), dict) else {}
     if bool(ablation.get("without_lower_tail", False)) or not bool(ocfg.get("use_lcvar", True)):
-        raise RuntimeError("V48.122 requires native lower-tail OC-MERO enabled")
+        raise RuntimeError("V48.123 requires native lower-tail OC-MERO enabled")
     if bool(ablation.get("without_observation_kernel", False)) or not bool(ocfg.get("use_obs_kernel", True)):
-        raise RuntimeError("V48.122 requires native observation-compatibility kernel enabled")
+        raise RuntimeError("V48.123 requires native observation-compatibility kernel enabled")
     alpha = float(ocfg.get("alpha", 0.2))
     beta = float(ocfg.get("beta", 0.2))
     top_m = int(ocfg.get("top_m", 8))
@@ -395,15 +412,15 @@ def extract_records(
     cfg, feature_event = feature_only_dataset_cfg(bundle.cfg, cache_dir=str(cache_dir / "tensor"), workers=8)
     ds = OCRAPSampleDataset(paths, cfg)
     if ds.absolute_truth_contract_event.get("enabled") or ds.action_response_truth_event.get("enabled"):
-        raise RuntimeError("V48.122 feature-only dataset unexpectedly attached truth sidecars")
+        raise RuntimeError("V48.123 feature-only dataset unexpectedly attached truth sidecars")
     if [str(pth.resolve()) for pth in paths] != [str(pth.resolve()) for pth in ds.paths]:
-        raise RuntimeError("V48.122 dataset path order differs from index")
+        raise RuntimeError("V48.123 dataset path order differs from index")
     idx = {str(pth.resolve()): i for i, pth in enumerate(ds.paths)}
 
     # Deterministic physical path deliberately excludes teacher m_star/root/future
     # fields.  Weak-root weights come from the *frozen model's nominal prediction*,
     # never from teacher root_probs/m_star/c_star arrays or held-out labels.
-    raw_sample = {str(pth.resolve()): load_npz_selected(pth, SVRT_SAMPLE_KEYS) for pth in paths}
+    raw_sample = {str(pth.resolve()): load_npz_selected(pth, ZBST_SAMPLE_KEYS) for pth in paths}
 
     records: list[dict[str, Any]] = []
     pair_diags: list[dict[str, Any]] = []
@@ -431,7 +448,7 @@ def extract_records(
                 option_valid=option_valid0, witness_only=True,
             )
         if "margins" not in native or "root_logits" not in native or "c_star" not in native:
-            raise RuntimeError("V48.122 frozen nominal model did not expose native OC-MERO fields")
+            raise RuntimeError("V48.123 frozen nominal model did not expose native OC-MERO fields")
 
         nominal_path = str(Path(g["nominal_path"]).resolve())
         d0 = raw_sample[nominal_path]
@@ -443,15 +460,15 @@ def extract_records(
         raw_option_features = option_features_from_sample(dict(d0))
         physical_L = int(len(f0.option_valid))
         if raw_option_features.shape[0] != physical_L:
-            raise RuntimeError("V48.122 raw option-feature/physical-library count mismatch")
+            raise RuntimeError("V48.123 raw option-feature/physical-library count mismatch")
         if model_option_features.shape[0] < physical_L:
-            raise RuntimeError("V48.122 model option geometry shrinks physical recovery library")
+            raise RuntimeError("V48.123 model option geometry shrinks physical recovery library")
         if not np.allclose(model_option_features[:physical_L], raw_option_features, rtol=0.0, atol=1.0e-7, equal_nan=True):
-            raise RuntimeError("V48.122 model/physical recovery-option semantic ordering mismatch")
+            raise RuntimeError("V48.123 model/physical recovery-option semantic ordering mismatch")
         if model_option_features.shape[0] > physical_L and not np.allclose(
             model_option_features[physical_L:], 0.0, rtol=0.0, atol=1.0e-12
         ):
-            raise RuntimeError("V48.122 padded model option features are not structural zeros")
+            raise RuntimeError("V48.123 padded model option features are not structural zeros")
 
         margins_np = native["margins"][0].detach().cpu().numpy()
         root_logits_np = native["root_logits"][0].detach().cpu().numpy()
@@ -467,7 +484,7 @@ def extract_records(
         )
         exposed_option_mask = np.asarray(physical_boundary_weights > 1.0e-12, dtype=bool)
         if not exposed_option_mask.any():
-            raise RuntimeError("V48.122 weak-root boundary support is empty")
+            raise RuntimeError("V48.123 weak-root boundary support is empty")
         bdiag = boundary_measure_diagnostics(bm)
         bdiag.update(boundary_align)
         boundary_measure_diags.append(bdiag)
@@ -477,44 +494,52 @@ def extract_records(
             dc = raw_sample[cp_path]
             validate_group_contract(d0, dc)
             fc = executable_constraint_field_from_sample(dc, bundle.cfg, num_options=len(f0.option_valid))
-            ee, eed = exposed_signed_state_geometry(fc, f0, exposed_option_mask)
-            fe, fed = full_signed_state_geometry(fc, f0)
+            ee, eed = exposed_transition_geometry(fc, f0, exposed_option_mask)
+            fe, fed = full_transition_geometry(fc, f0)
             physical_diag = set_flow_diagnostics(fc, f0)
             diag = dict(physical_diag)
             diag.update({
-                "exposed_signed_state_nonzero": bool(np.any(np.abs(ee) > 1.0e-12)),
-                "full_signed_state_nonzero": bool(np.any(np.abs(fe) > 1.0e-12)),
+                "exposed_transition_nonzero": bool(np.any(np.abs(ee) > 1.0e-12)),
+                "full_transition_nonzero": bool(np.any(np.abs(fe) > 1.0e-12)),
                 "option_permutation_invariance_error": option_permutation_invariance_error(
                     fc, f0, exposed_option_mask
                 ),
-                "exposed_prefix_coupling_energy": eed.mean_prefix_coupling_energy,
-                "exposed_suffix_coupling_energy": eed.mean_suffix_coupling_energy,
-                "full_prefix_coupling_energy": fed.mean_prefix_coupling_energy,
-                "full_suffix_coupling_energy": fed.mean_suffix_coupling_energy,
-                "exposed_prefix_signed_state_energy": eed.mean_prefix_signed_state_energy,
-                "exposed_suffix_signed_state_energy": eed.mean_suffix_signed_state_energy,
-                "full_prefix_signed_state_energy": fed.mean_prefix_signed_state_energy,
-                "full_suffix_signed_state_energy": fed.mean_suffix_signed_state_energy,
+                "exposed_prefix_transition_energy": eed.mean_prefix_transition_energy,
+                "exposed_suffix_transition_energy": eed.mean_suffix_transition_energy,
+                "full_prefix_transition_energy": fed.mean_prefix_transition_energy,
+                "full_suffix_transition_energy": fed.mean_suffix_transition_energy,
+                "exposed_prefix_reserve_transition_energy": eed.mean_prefix_reserve_transition_energy,
+                "exposed_suffix_reserve_transition_energy": eed.mean_suffix_reserve_transition_energy,
+                "full_prefix_reserve_transition_energy": fed.mean_prefix_reserve_transition_energy,
+                "full_suffix_reserve_transition_energy": fed.mean_suffix_reserve_transition_energy,
+                "exposed_prefix_debt_repayment_energy": eed.mean_prefix_debt_repayment_energy,
+                "exposed_suffix_debt_repayment_energy": eed.mean_suffix_debt_repayment_energy,
+                "full_prefix_debt_repayment_energy": fed.mean_prefix_debt_repayment_energy,
+                "full_suffix_debt_repayment_energy": fed.mean_suffix_debt_repayment_energy,
                 "exposed_prefix_nonzero_fraction": eed.prefix_nonzero_fraction,
                 "exposed_suffix_nonzero_fraction": eed.suffix_nonzero_fraction,
                 "full_prefix_nonzero_fraction": fed.prefix_nonzero_fraction,
                 "full_suffix_nonzero_fraction": fed.suffix_nonzero_fraction,
-                "exposed_prefix_abs_nominal_state": eed.mean_prefix_abs_nominal_state,
-                "exposed_suffix_abs_nominal_state": eed.mean_suffix_abs_nominal_state,
-                "full_prefix_abs_nominal_state": fed.mean_prefix_abs_nominal_state,
-                "full_suffix_abs_nominal_state": fed.mean_suffix_abs_nominal_state,
-                "exposed_prefix_two_sided_state_fraction": eed.mean_prefix_two_sided_state_fraction,
-                "exposed_suffix_two_sided_state_fraction": eed.mean_suffix_two_sided_state_fraction,
-                "full_prefix_two_sided_state_fraction": fed.mean_prefix_two_sided_state_fraction,
-                "full_suffix_two_sided_state_fraction": fed.mean_suffix_two_sided_state_fraction,
                 "exposed_prefix_zero_crossing_fraction": eed.mean_prefix_zero_crossing_fraction,
                 "exposed_suffix_zero_crossing_fraction": eed.mean_suffix_zero_crossing_fraction,
                 "full_prefix_zero_crossing_fraction": fed.mean_prefix_zero_crossing_fraction,
                 "full_suffix_zero_crossing_fraction": fed.mean_suffix_zero_crossing_fraction,
+                "exposed_prefix_debt_to_reserve_fraction": eed.mean_prefix_debt_to_reserve_fraction,
+                "exposed_suffix_debt_to_reserve_fraction": eed.mean_suffix_debt_to_reserve_fraction,
+                "full_prefix_debt_to_reserve_fraction": fed.mean_prefix_debt_to_reserve_fraction,
+                "full_suffix_debt_to_reserve_fraction": fed.mean_suffix_debt_to_reserve_fraction,
+                "exposed_prefix_reserve_to_debt_fraction": eed.mean_prefix_reserve_to_debt_fraction,
+                "exposed_suffix_reserve_to_debt_fraction": eed.mean_suffix_reserve_to_debt_fraction,
+                "full_prefix_reserve_to_debt_fraction": fed.mean_prefix_reserve_to_debt_fraction,
+                "full_suffix_reserve_to_debt_fraction": fed.mean_suffix_reserve_to_debt_fraction,
                 "exposed_prefix_rank_inversion_fraction": eed.mean_prefix_rank_inversion_fraction,
                 "exposed_suffix_rank_inversion_fraction": eed.mean_suffix_rank_inversion_fraction,
                 "full_prefix_rank_inversion_fraction": fed.mean_prefix_rank_inversion_fraction,
                 "full_suffix_rank_inversion_fraction": fed.mean_suffix_rank_inversion_fraction,
+                "exposed_prefix_displacement_decomposition_error": eed.max_prefix_displacement_decomposition_error,
+                "exposed_suffix_displacement_decomposition_error": eed.max_suffix_displacement_decomposition_error,
+                "full_prefix_displacement_decomposition_error": fed.max_prefix_displacement_decomposition_error,
+                "full_suffix_displacement_decomposition_error": fed.max_suffix_displacement_decomposition_error,
                 "full_eligible_option_count": fed.mean_eligible_option_count,
                 "full_prefix_coverage_fraction": fed.prefix_coverage_fraction,
                 "full_suffix_coverage_fraction": fed.suffix_coverage_fraction,
@@ -525,15 +550,15 @@ def extract_records(
                 "group_mode": g["group_mode"], "safe_positive": bool(c["safe_positive"]),
                 "teacher_harmful": bool(c["teacher_harmful"]), "mediation_mode": c["mediation_mode"],
                 "raw_state": stn[j], "support_u": dn[j], "reserve_u": qn[j],
-                "exposed_signed_state_geometry": ee,
-                "full_signed_state_geometry": fe,
+                "exposed_transition_geometry": ee,
+                "full_transition_geometry": fe,
             })
 
     merged = _merge_pair_diags(pair_diags)
     boundary_merged = _merge_boundary_measure_diags(boundary_measure_diags)
     event = {
         "records": len(records), "groups": len(groups), "raw_candidate_dim": RAW_CANDIDATE_DIM,
-        "state_geometry_dim": STATE_GEOMETRY_DIM, "matched_dim": MATCHED_DIM,
+        "transition_geometry_dim": TRANSITION_GEOMETRY_DIM, "matched_dim": MATCHED_DIM,
         "constraint_names": ["clearance", "stopping", "route", "reentry"],
         "constraint_semantics": {
             "clearance": "actuator_projected_recovery_cv_signed_safety_reserve",
@@ -541,14 +566,14 @@ def extract_records(
             "route": "recovery_route_corridor_signed_reserve",
             "reentry": "physical_contact_activated_persistent_suffix_signed_reserve",
         },
-        "recovery_response": "same_option_signed_nominal_rank_state_prefix_and_suffix_viability_transport",
+        "recovery_response": "same_option_zero_boundary_reserve_and_debt_repayment_prefix_and_suffix_transition",
         "primary_option_set": "all_common_valid_recovery_options",
         "control_option_set": "support_of_frozen_weak_root_zero_boundary_witness_measure",
         "boundary_support_measure_source": "v48_117_outer_ocmero_weak_anchor_exposure_zero_margin_witness_support_only",
-        "boundary_support_weights_used_in_signed_state": False,
-        "state_channels": ["joint_prefix_signed_viability_rank_state_transport", "joint_suffix_persistent_reentry_signed_rank_state_transport"],
-        "state_mode_names": [str(x) for x in STATE_MODE_NAMES],
-        "signed_state_basis": "fixed_global_rank_signed_state_and_rank_x_signed_state_modes",
+        "boundary_support_weights_used_in_transition": False,
+        "transition_channels": ["joint_prefix_zero_boundary_reserve_debt_transition", "joint_suffix_persistent_reentry_zero_boundary_transition"],
+        "transition_mode_names": [str(x) for x in TRANSITION_MODE_NAMES],
+        "transition_basis": "exact_positive_part_reserve_and_debt_repayment_x_nominal_rank",
         "rank_coordinate": "candidate_independent_nominal_same_option_viability_midranks",
         "candidate_rank_sort_used_for_coordinate": False,
         "zero_boundary_threshold": 0.0,
@@ -586,8 +611,8 @@ def _perm_indices(records: list[dict[str, Any]]) -> np.ndarray:
 
 def _arrays(records: list[dict[str, Any]], key: str):
     u = np.stack([r[key] for r in records]).astype(np.float64)
-    ee = np.stack([r["exposed_signed_state_geometry"] for r in records]).astype(np.float64)
-    fe = np.stack([r["full_signed_state_geometry"] for r in records]).astype(np.float64)
+    ee = np.stack([r["exposed_transition_geometry"] for r in records]).astype(np.float64)
+    fe = np.stack([r["full_transition_geometry"] for r in records]).astype(np.float64)
     y = np.asarray([r["label"] for r in records], dtype=np.int64)
     return u, ee, fe, y
 
@@ -598,8 +623,8 @@ def _fit_axis(records: list[dict[str, Any]], key: str) -> dict[str, Any]:
     pi = _perm_indices(records)
     feats = {
         "base": base_features(u, sc),
-        "exposed_signed_state": matched_features(u, ee, sc),
-        "full_signed_state": matched_features(u, fe, sc),
+        "exposed_transition": matched_features(u, ee, sc),
+        "full_transition": matched_features(u, fe, sc),
     }
     models: dict[str, Any] = {}
     for space, feat in feats.items():
@@ -636,7 +661,7 @@ def _metric(records: list[dict[str, Any]], scores: np.ndarray) -> dict[str, Any]
 
 
 def _eval_axis(records: list[dict[str, Any]], key: str, fit: dict[str, Any]) -> dict[str, tuple[dict[str, Any], dict[str, Any]]]:
-    spaces = ("base", "exposed_signed_state", "full_signed_state")
+    spaces = ("base", "exposed_transition", "full_transition")
     if not records:
         return {space: (_metric([], np.array([])), _metric([], np.array([]))) for space in spaces}
     u, ee, fe, _ = _arrays(records, key)
@@ -644,8 +669,8 @@ def _eval_axis(records: list[dict[str, Any]], key: str, fit: dict[str, Any]) -> 
     sc = fit["scaler"]; m = fit["models"]
     feats = {
         "base": base_features(u, sc),
-        "exposed_signed_state": matched_features(u, ee, sc),
-        "full_signed_state": matched_features(u, fe, sc),
+        "exposed_transition": matched_features(u, ee, sc),
+        "full_transition": matched_features(u, fe, sc),
     }
     out: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
     for space, f in feats.items():
@@ -658,7 +683,7 @@ def _eval_axis(records: list[dict[str, Any]], key: str, fit: dict[str, Any]) -> 
 
 
 def _eval_family(dev_records: list[dict[str, Any]], cert_records: list[dict[str, Any]], family: dict[str, Any]) -> dict[str, Any]:
-    cells = {k: {} for k in ("base", "exposed_signed_state", "full_signed_state")}
+    cells = {k: {} for k in ("base", "exposed_transition", "full_transition")}
     for role in ROLES:
         src = dev_records if role.startswith("dev_") else cert_records
         rr = split_role(src, role)
@@ -727,7 +752,7 @@ def main() -> int:
         ce += r
         events[role] = e
     if not tr or not dv or not ce:
-        raise RuntimeError("V48.122 empty audit records")
+        raise RuntimeError("V48.123 empty audit records")
 
     fam = _fit_family(tr)
     cells = _eval_family(dv, ce, fam)
@@ -737,7 +762,7 @@ def main() -> int:
         for v in fam[axis]["models"].values()
     )
     result = {
-        "schema": "ocrap-v48.122-signed-viability-rank-state-transport-audit-v1",
+        "schema": "ocrap-v48.123-zero-boundary-viability-state-transition-audit-v1",
         "engineering_version": ENGINEERING_VERSION,
         "scientific_version": SCIENTIFIC_VERSION,
         "run_instance_id": a.run_id,
@@ -748,8 +773,8 @@ def main() -> int:
         "checkpoint": str(a.checkpoint.resolve()),
         "checkpoint_sha256": sha256(a.checkpoint),
         "base_cells": cells["base"],
-        "exposed_signed_state_cells": cells["exposed_signed_state"],
-        "full_signed_state_cells": cells["full_signed_state"],
+        "exposed_transition_cells": cells["exposed_transition"],
+        "full_transition_cells": cells["full_transition"],
         "events": events,
         "train_counts": fam["counts"],
         "convex_closed_form_ridge": True,
@@ -757,31 +782,32 @@ def main() -> int:
         "iterative_optimizer_used": False,
         "ridge_lambda_rule": "1_over_axis_train_rows",
         "max_normal_equation_residual": max_resid,
-        "score_family": "linear_on_same_option_signed_nominal_rank_state_transport_features",
+        "score_family": "linear_on_same_option_zero_boundary_viability_transition_features",
         "nominal_zero_score_by_construction": True,
         "constraint_names": ["clearance", "stopping", "route", "reentry"],
-        "constraint_response": "same_option_signed_nominal_rank_state_prefix_and_suffix_viability_transport",
-        "state_channels": ["joint_prefix_signed_viability_rank_state_transport", "joint_suffix_persistent_reentry_signed_rank_state_transport"],
-        "option_aggregation": "same_option_signed_margin_displacement_projected_on_nominal_rank_x_absolute_signed_state_basis",
+        "constraint_response": "same_option_zero_boundary_reserve_and_debt_repayment_prefix_and_suffix_transition",
+        "transition_channels": ["joint_prefix_zero_boundary_reserve_debt_transition", "joint_suffix_persistent_reentry_zero_boundary_transition"],
+        "option_aggregation": "same_option_zero_boundary_reserve_and_debt_repayment_transition_projected_on_nominal_rank",
         "primary_option_set": "all_common_valid_recovery_options",
         "control_option_set": "support_of_frozen_v48_117_weak_root_zero_boundary_witnesses",
-        "boundary_support_weights_used_in_signed_state": False,
-        "state_mode_names": [str(x) for x in STATE_MODE_NAMES],
-        "signed_state_basis": "fixed_global_rank_signed_state_and_rank_x_signed_state_modes",
+        "boundary_support_weights_used_in_transition": False,
+        "transition_mode_names": [str(x) for x in TRANSITION_MODE_NAMES],
+        "transition_basis": "exact_positive_part_reserve_and_debt_repayment_x_nominal_rank",
         "rank_coordinate": "candidate_independent_nominal_same_option_viability_midranks",
         "candidate_rank_sort_used_for_coordinate": False,
         "rank_cut_sweep": False,
-        "signed_state_threshold_or_scale_sweep": False,
+        "zero_boundary_threshold_or_window_sweep": False,
         "same_option_nominal_rank_correspondence": True,
-        "absolute_signed_nominal_viability_state": True,
+        "zero_boundary_transition_decomposition": True,
+        "instantaneous_rank_transport_exactly_recoverable": True,
         "active_option_identity_exported": False,
         "option_identity_exported": False,
         "frozen_root_decoder_read_only": True,
         "frozen_margin_head_read_only": True,
         "work_bins": 8,
-        "state_geometry_dimension": STATE_GEOMETRY_DIM,
+        "transition_geometry_dimension": TRANSITION_GEOMETRY_DIM,
         "matched_family_dimension": MATCHED_DIM,
-        "capacity_matched_all_signed_state_families": True,
+        "capacity_matched_all_transition_families": True,
         "candidate_identity_shuffle": "whole_feature_row_cyclic_permutation_within_scene_time_group",
         "actuator_projection": True,
         "frozen_root_validity_mask_used": True,
@@ -807,7 +833,7 @@ def main() -> int:
     a.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     torch.save(
         {
-            "schema": "ocrap-v48.122-signed-viability-rank-state-transport-state-v1",
+            "schema": "ocrap-v48.123-zero-boundary-viability-state-transition-state-v1",
             "engineering_version": ENGINEERING_VERSION,
             "scientific_version": SCIENTIFIC_VERSION,
             "run_instance_id": a.run_id,

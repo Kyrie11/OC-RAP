@@ -86,9 +86,9 @@ from ocrap.audits.viability_rank_persistence import (
     COUPLING_MODE_NAMES,
     contract_checks as vrpc_contract_checks,
 )
-from ocrap.audits.signed_viability_rank_state import (
+from ocrap.audits.zero_boundary_viability_transition import (
     ENGINEERING_VERSION, MATCHED_DIM, SCIENTIFIC_VERSION,
-    STATE_GEOMETRY_DIM, STATE_MODE_NAMES, contract_checks,
+    TRANSITION_GEOMETRY_DIM, TRANSITION_MODE_NAMES, contract_checks,
 )
 
 
@@ -189,15 +189,15 @@ def test_historical_vrpc_contract_checks():
     assert COUPLING_MODE_NAMES == ("global_shift", "nominal_rank_tilt", "rank_persistence_defect", "rank_persistence_interaction")
 
 
-def test_current_svrt_contract_checks():
+def test_current_zbst_contract_checks():
     checks = contract_checks()
     assert checks and all(checks.values()), checks
-    assert STATE_GEOMETRY_DIM == 64
+    assert TRANSITION_GEOMETRY_DIM == 64
     assert MATCHED_DIM == 220
-    assert ENGINEERING_VERSION == "v48.122.0-OC-SVRT"
-    assert SCIENTIFIC_VERSION == "v48.122-OC-SVRT"
-    assert STATE_MODE_NAMES == (
-        "global_shift", "nominal_rank_tilt", "signed_nominal_state_coupling", "rank_signed_nominal_state_interaction"
+    assert ENGINEERING_VERSION == "v48.123.0-OC-ZBST"
+    assert SCIENTIFIC_VERSION == "v48.123-OC-ZBST"
+    assert TRANSITION_MODE_NAMES == (
+        "reserve_transition", "nominal_rank_reserve_transition", "debt_repayment_transition", "nominal_rank_debt_repayment_transition"
     )
 
 
@@ -211,18 +211,18 @@ def test_ridge_owner_is_still_unique_and_closed_form():
     assert model.normal_equation_residual <= 1e-7
 
 
-def test_current_launcher_reuses_authoritative_v121_and_keeps_command_name():
+def test_current_launcher_reuses_authoritative_v122_and_keeps_command_name():
     repo = Path(__file__).resolve().parents[1]
     launcher = (repo / "scripts/run_constraint_native_orientation_audit.sh").read_text()
-    assert "OC-RAP-v48.121-PIPELINE_COMPLETE.json" in launcher
-    assert "OC-RAP-v48.121-DCP-DRFC-BCDE-RIFA-OC-VRPC-comparison.json" in launcher
-    assert "OC-RAP-v48.121-VRPC-balanced.json" in launcher
-    assert "OC-RAP-v48.121-VRPC-precision.json" in launcher
-    assert "OC-RAP-v48.93-factor-mediation-audit.jsonl" in launcher
+    assert "OC-RAP-v48.122-PIPELINE_COMPLETE.json" in launcher
+    assert "OC-RAP-v48.122-DCP-DRFC-BCDE-RIFA-OC-SVRT-comparison.json" in launcher
     assert "OC-RAP-v48.122-SVRT-balanced.json" in launcher
-    assert "OC-RAP-v48.122-OC-SVRT-results.zip" in launcher
-    assert "signed nominal viability" in launcher.lower()
-    assert "close_nominal_rank_persistence_coupling" in launcher
+    assert "OC-RAP-v48.122-SVRT-precision.json" in launcher
+    assert "OC-RAP-v48.93-factor-mediation-audit.jsonl" in launcher
+    assert "OC-RAP-v48.123-ZBST-balanced.json" in launcher
+    assert "OC-RAP-v48.123-OC-ZBST-results.zip" in launcher
+    assert "zero-boundary" in launcher.lower()
+    assert "close_signed_viability_rank_state_transport" in launcher
     assert "--run-id" in launcher
 
 def test_unversioned_runner_keeps_v93_role_filter_semantics(tmp_path):
@@ -272,28 +272,28 @@ def test_unversioned_runner_keeps_v93_role_filter_semantics(tmp_path):
     assert [c["candidate"] for c in groups[0]["candidates"]] == [1]
 
 
-def test_current_result_packager_uses_only_canonical_v122_artifacts():
+def test_current_result_packager_uses_only_canonical_v123_artifacts():
     tool = Path(__file__).resolve().parents[1] / "tools" / "package_constraint_native_orientation_results.py"
     spec = importlib.util.spec_from_file_location("orientation_packager_test", tool)
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    assert mod.EXPECTED["balanced"] == "OC-RAP-v48.122-SVRT-balanced.json"
-    assert mod.EXPECTED["precision"] == "OC-RAP-v48.122-SVRT-precision.json"
-    assert mod.ENGINEERING_VERSION == "v48.122.0-OC-SVRT"
-    assert mod.SCIENTIFIC_VERSION == "v48.122-OC-SVRT"
+    assert mod.EXPECTED["balanced"] == "OC-RAP-v48.123-ZBST-balanced.json"
+    assert mod.EXPECTED["precision"] == "OC-RAP-v48.123-ZBST-precision.json"
+    assert mod.ENGINEERING_VERSION == "v48.123.0-OC-ZBST"
+    assert mod.SCIENTIFIC_VERSION == "v48.123-OC-ZBST"
 
 
-def test_v122_comparison_preregisters_signed_rank_state_transport():
+def test_v123_comparison_preregisters_zero_boundary_transition():
     repo = Path(__file__).resolve().parents[1]
     text = (repo / "tools/compare_constraint_native_recovery_orientation.py").read_text()
     assert '"reentry_contact_coverage_go"' in text
-    assert "full_signed_state_minus_v121_full_persistence" in text
-    assert "exposed_signed_state_minus_v121_exposed_persistence" in text
-    assert "full_set_signed_state_effect" in text
-    assert "SIGNED_VIABILITY_RANK_STATE_TRANSPORT_GO" in text
-    assert "SIGNED_VIABILITY_RANK_STATE_TRANSPORT_STOP" in text
-    assert "close_signed_viability_rank_state_transport" in text
+    assert "full_transition_minus_v122_full_signed_state" in text
+    assert "exposed_transition_minus_v122_exposed_signed_state" in text
+    assert "full_set_transition_effect" in text
+    assert "ZERO_BOUNDARY_VIABILITY_STATE_TRANSITION_GO" in text
+    assert "ZERO_BOUNDARY_VIABILITY_STATE_TRANSITION_STOP" in text
+    assert "freeze_recovery_set_mechanism_family" in text
 
 
 def _vse_field(full_values: np.ndarray):
