@@ -100,7 +100,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "nominal_slack_gap_limit": 0.50, "intervention_penalty": 0.03,
         "deviation_penalty": 0.15, "recovery_bonus": 0.02, "fallback_rec_weight": 0.10,
         "fallback_lcb_margin": 0.05, "fallback_gap_margin": 0.25,
-        "nominal_fallback_lcb_slack": 0.05,
+        "nominal_fallback_lcb_slack": 0.05, "require_absolute_admission_for_intervention": False,
         "calibrated_shortfall_penalty": 1.0,
         "calibrated_gap_penalty": 0.05,
         "calibrated_admission_bonus": 0.02,

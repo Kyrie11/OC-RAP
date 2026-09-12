@@ -94,6 +94,7 @@ def constrained_lcb_select(
     fallback_lcb_margin: float = 0.05,
     fallback_gap_margin: float = 0.25,
     nominal_fallback_lcb_slack: float = 0.05,
+    require_absolute_admission_for_intervention: bool = False,
 ) -> SelectionResult:
     """Calibrated constrained selector used by OC-RAP in closed loop.
 
@@ -131,7 +132,16 @@ def constrained_lcb_select(
     if admitted.any():
         cand = np.where(admitted)[0]
         return SelectionResult(int(cand[np.argmax(score[cand])]), "best_admitted_lcb_score", admitted)
-    # No candidate satisfies the calibrated recovery constraint.  This branch is
+    # RIFA conformance: absolute recovery admission is lexicographically prior
+    # to relative recovery preference.  A non-nominal action that failed the
+    # absolute gate must therefore never be resurrected by the fallback ranker.
+    # Keep the legacy recovery-first fallback available only for historical
+    # reproduction/debugging; publication closed-loop runs enable this guard.
+    if bool(require_absolute_admission_for_intervention) and 0 <= int(nominal_index) < n:
+        return SelectionResult(int(nominal_index), "nominal_rifa_no_absolute_admission", admitted)
+    # No candidate satisfies the calibrated recovery constraint.  This legacy
+    # branch is deliberately recovery-first and is retained only for historical
+    # reproduction when strict RIFA conformance is disabled.
     # deliberately recovery-first.  Earlier versions used a utility-dominated
     # soft fallback, which could pick high-utility prefixes with lower predicted
     # deployable recoverability and larger oracle--deployable gap.  That defeats

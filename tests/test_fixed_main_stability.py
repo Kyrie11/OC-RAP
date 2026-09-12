@@ -209,3 +209,10 @@ def test_sentinel_builder_and_paired_compare_fallback_to_scene_journal(tmp_path)
     assert comp["num_paired_scenes"] == 2
     assert comp["control_scene_source"] == "journal"
     assert comp["method_scene_source"] == "journal"
+
+
+def test_v48124_launcher_enforces_rifa_absolute_admission_before_intervention():
+    from pathlib import Path
+    repo = Path(__file__).resolve().parents[1]
+    text = (repo / "scripts/run_ocrap_closed_loop.sh").read_text(encoding="utf-8")
+    assert "selection.require_absolute_admission_for_intervention=true" in text

@@ -350,3 +350,6 @@ Expected successful terminal artifact:
 
 Upload that canonical ZIP for the reliability/scientific-attribution audit. Until it exists and closes, do not interpret the stale paired-comparison files as V48.124 scientific evidence and do not authorize external-baseline comparison from V48.124.
 
+
+
+V48.124.4 keeps the stable launcher command unchanged and enforces `selection.require_absolute_admission_for_intervention=true` inside the publication closed-loop launcher. Do not reuse V48.124.1-.3 population artifacts for the repaired Main.

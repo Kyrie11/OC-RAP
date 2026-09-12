@@ -3341,6 +3341,7 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
         "safe_force_nominal_when_feasible_by_bucket": (local.get("selection", {}) or {}).get("safe_force_nominal_when_feasible_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {},
         "safe_force_nominal_mode_by_bucket": (local.get("selection", {}) or {}).get("safe_force_nominal_mode_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {},
         "stress_preserve_nominal_min_drs_drop_by_bucket": (local.get("selection", {}) or {}).get("stress_preserve_nominal_min_drs_drop_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {},
+        "require_absolute_admission_for_intervention": (local.get("selection", {}) or {}).get("require_absolute_admission_for_intervention", None) if isinstance(local.get("selection", {}), dict) else None,
         "require_admitted_intervention": (local.get("selection", {}) or {}).get("require_admitted_intervention", None) if isinstance(local.get("selection", {}), dict) else None,
         "require_admitted_intervention_by_bucket": (local.get("selection", {}) or {}).get("require_admitted_intervention_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {},
         "require_intervention_evidence": (local.get("selection", {}) or {}).get("require_intervention_evidence", None) if isinstance(local.get("selection", {}), dict) else None,

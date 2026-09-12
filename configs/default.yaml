@@ -164,6 +164,8 @@ selection:
   fallback_lcb_margin: 0.05
   fallback_gap_margin: 0.25
   nominal_fallback_lcb_slack: 0.05
+  # RIFA deployment invariant: non-nominal actions must pass absolute admission.
+  require_absolute_admission_for_intervention: false
   # Optional selector: --set selection.ocrap_selector=calibrated_constrained
   # Keeps hard/harm feasibility, but penalizes calibrated-recovery shortfall
   # continuously instead of sending all below-gamma candidates to a hard fallback.

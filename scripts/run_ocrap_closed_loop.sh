@@ -133,6 +133,7 @@ ARGS=(
   --set "closed_loop.include_scenes_in_result=$INCLUDE_SCENES_IN_RESULT"
   --set "closed_loop.include_scenes_in_partial=$INCLUDE_SCENES_IN_PARTIAL"
   --set "selection.gamma_rec=$GAMMA_REC"
+  --set selection.require_absolute_admission_for_intervention=true
   --set "waymax.jax_compilation_cache_dir=$JAX_CACHE_DIR"
   --set waymax.dataloader_include_sdc_paths=false
   --set waymax.compute_future_metrics=false

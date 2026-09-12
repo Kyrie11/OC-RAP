@@ -72,6 +72,9 @@ def main() -> int:
             'full_population_runtime_contract.json' in launcher_text
             and '--full-run-runtime' in launcher_text
         ),
+        'rifa_absolute_admission_enforced': (
+            'selection.require_absolute_admission_for_intervention=true' in (repo/'scripts/run_ocrap_closed_loop.sh').read_text(encoding='utf-8')
+        ),
         'resume_finalize_preserves_scene_contract': (
             '--include-scenes-in-result' in (repo/'scripts/run_ocrap_three_regime_evaluation.sh').read_text(encoding='utf-8')
             and '--require-scenes' in (repo/'scripts/run_ocrap_three_regime_evaluation.sh').read_text(encoding='utf-8')
@@ -94,6 +97,7 @@ def main() -> int:
             'determinism_sentinel':'lexicographically_first_common_target_per_regime_replayed_once_per_fixed_main_variant',
             'paired_bootstrap_draws':5000,'paired_bootstrap_seed':2027,'noninterference_margin':0.0,
             'womd_source_resolution':'standard_validation_only_with_bucket_provenance_conflict_fail_closed',
+            'rifa_absolute_admission_for_intervention':True,
         },
         'synthetic_checks':synthetic,
     }

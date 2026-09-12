@@ -456,6 +456,9 @@ def select_baseline(
             fallback_lcb_margin=_cfg_float(scfg, "fallback_lcb_margin", 0.05, bucket_name),
             fallback_gap_margin=_cfg_float(scfg, "fallback_gap_margin", 0.25, bucket_name),
             nominal_fallback_lcb_slack=_cfg_float(scfg, "nominal_fallback_lcb_slack", 0.05, bucket_name),
+            require_absolute_admission_for_intervention=_cfg_bool(
+                scfg, "require_absolute_admission_for_intervention", False, bucket_name
+            ),
         )
         gap_arr = np.asarray(pred_gap if pred_gap is not None else np.zeros_like(pred_r_dep), dtype=float)
         score = pred_r_dep - beta * np.maximum(0.0, gap_arr)

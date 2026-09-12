@@ -26,8 +26,8 @@ V123_NEXT = (
 )
 
 FROZEN_FULL_RUN_CORE_SHA256 = {
-    "src/ocrap/planning/selector.py": "1fee0fe119509907bc3c1c534393fd8a7f589e1af4d081d8939edda1279ebb08",
-    "src/ocrap/simulation/closed_loop_runner.py": "8f905636fec21282bbbac3edcfc41c3f01a23aa0485f9c239e323e5e9d501d2d",
+    "src/ocrap/planning/selector.py": "a8c035b4ae3d182620755c00013cb42814c150b601893ea0ec13c9d486a6f38c",
+    "src/ocrap/simulation/closed_loop_runner.py": "a95285c176c0edec79930fa353fd9939286dfaa65310cc1309b5b791060787f9",
     "src/ocrap/simulation/waymax_rollout.py": "cb1b0b3693a883f740df838e63f811929805fdc3c2337b1de9cae3c9ecea7648",
 }
 
@@ -108,12 +108,13 @@ def main() -> int:
         if not (
             full_run_runtime.get("valid") and full_run_runtime.get("attribution_ready")
             and full_run_runtime.get("scientific_version") == SCIENTIFIC_VERSION
-            and full_run_runtime.get("engineering_version") in {"v48.124.1-OC-FMSA", "v48.124.2-OC-FMSA", ENGINEERING_VERSION}
+            and full_run_runtime.get("engineering_version") == ENGINEERING_VERSION
             and sc_full.get("fixed_main_evaluation_only") is True
             and sc_full.get("recovery_set_mechanism_family_frozen") is True
             and sc_full.get("new_recovery_mechanism_authorized") is False
             and sc_full.get("planner_parameters_trained") == 0
             and sc_full.get("womd_source_resolution") == "standard_validation_only_with_bucket_provenance_conflict_fail_closed"
+            and sc_full.get("rifa_absolute_admission_for_intervention") is True
         ):
             errors.append("full_run_runtime_contract")
         for rel, want in FROZEN_FULL_RUN_CORE_SHA256.items():
@@ -139,6 +140,10 @@ def main() -> int:
                 support_path = p.parent / "closed_loop_dataset_support.json"
                 support_docs[variant][regime] = load(support_path)
                 artifacts[f"{variant}_{regime}_support"] = artifact_record(support_path)
+                if variant != "nominal":
+                    selector_cfg = results[variant][regime].get("selector_config") or {}
+                    if selector_cfg.get("require_absolute_admission_for_intervention") is not True:
+                        errors.append(f"rifa_absolute_admission_not_enforced:{variant}:{regime}")
             for variant in ("balanced", "precision"):
                 cp = getattr(a, f"{variant}_{regime}_comparison")
                 sp = getattr(a, f"{variant}_{regime}_sentinel")

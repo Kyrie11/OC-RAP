@@ -1,6 +1,8 @@
 # OC-RAP — cleaned audit/deployment workspace
 
-This repository is the cleaned engineering workspace for the frozen OC-RAP mechanism line and the current **V48.124 OC-FMSA fixed-Main stability/non-interference adjudication**. The current engineering hotfix is **v48.124.3-OC-FMSA**; the scientific version remains `v48.124-OC-FMSA`.
+**V48.124.4 RIFA conformance repair.** Publication closed-loop runs now enforce the already-stated RIFA nesting invariant: when the absolute admission set is empty, no non-nominal recovery fallback may execute. This is a theory-to-code repair, not a new recovery mechanism or threshold sweep.
+
+This repository is the cleaned engineering workspace for the frozen OC-RAP mechanism line and the current **V48.124 OC-FMSA fixed-Main stability/non-interference adjudication**. The current engineering hotfix is **v48.124.4-OC-FMSA**; the scientific version remains `v48.124-OC-FMSA`.
 
 ## What is active
 

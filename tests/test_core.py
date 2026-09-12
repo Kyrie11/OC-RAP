@@ -159,3 +159,37 @@ def test_constrained_lcb_fallback_uses_utility_only_inside_near_best_recovery_se
     )
     assert sel.selected_index == 1
     assert sel.reason == "recovery_guarded_fallback"
+
+
+def test_constrained_lcb_strict_rifa_returns_nominal_when_absolute_admission_empty():
+    utility = np.array([1.0, 4.0, 3.0])
+    r_dep = np.array([0.00, 0.20, 0.10])
+    hard = np.zeros(3)
+    harm = np.zeros(3)
+    feasible = np.ones(3, dtype=bool)
+    sel = constrained_lcb_select(
+        utility, r_dep, hard, harm, feasible,
+        gamma_rec=0.5,
+        nominal_slack=0.0,
+        pred_gap=np.zeros(3),
+        require_absolute_admission_for_intervention=True,
+    )
+    assert not sel.admitted.any()
+    assert sel.selected_index == 0
+    assert sel.reason == "nominal_rifa_no_absolute_admission"
+
+
+def test_constrained_lcb_strict_rifa_does_not_block_absolutely_admitted_candidate():
+    utility = np.array([1.0, 2.0])
+    r_dep = np.array([0.0, 0.8])
+    hard = np.zeros(2)
+    harm = np.zeros(2)
+    feasible = np.ones(2, dtype=bool)
+    sel = constrained_lcb_select(
+        utility, r_dep, hard, harm, feasible,
+        gamma_rec=0.5, pred_gap=np.zeros(2),
+        require_absolute_admission_for_intervention=True,
+    )
+    assert sel.admitted[1]
+    assert sel.selected_index == 1
+    assert sel.reason == "best_admitted_lcb_score"

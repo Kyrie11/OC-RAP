@@ -14409,3 +14409,14 @@ Independent repair simulation on copies of the failed V48.124.2 artifacts recons
 
 Scientific attribution remains **fail-closed** until a canonical V48.124 result bundle containing the sentinel replays, adjudication, pipeline-complete document and manifest is produced. No Near/Contact GO/STOP conclusion, external-baseline authorization, V48.125 mechanism design, or paper-result upgrade is licensed by this engineering repair itself.
 
+
+
+## V48.124.4 — RIFA absolute-admission conformance repair (engineering/system semantics)
+
+- Scientific version remains `v48.124-OC-FMSA`; recovery-set mechanism search remains frozen.
+- Reliability of V48.124.3 artifacts passed, but theory-to-code scientific validity failed: the hard closed-loop selector could execute `recovery_guarded_fallback` when the absolute admission set was empty, contradicting the paper's RIFA nesting invariant and `P_R=∅ -> a_0` rule.
+- Safe exposed the bug directly: 0/7000 decisions had an absolutely admitted candidate, while 2027/7000 executed the unadmitted recovery fallback.
+- Repair: publication closed-loop runs set `selection.require_absolute_admission_for_intervention=true`. The rule is global and observation/regime independent: if absolute admission is empty, return nominal; otherwise ranking among admitted candidates is unchanged.
+- No new feature, recovery mechanism, capacity, regime router, source, horizon, threshold, or parameter sweep is introduced.
+- V48.124.4 uses a fresh work directory `ocrap_v48_124_rifa_conformance_fixed_main`; V48.124.1-.3 population results are not reused after the selector semantics change.
+- The same preregistered Coverage / Determinism / Safe / Near / Contact adjudication must be rerun before any Main freeze, external-baseline claim, or V48.124 result is incorporated into the paper.
