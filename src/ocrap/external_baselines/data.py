@@ -832,8 +832,8 @@ class ExternalGroupDataset(Dataset):
         self.max_candidates = int(bcfg.get("max_candidates", max(len(g) for g in self.groups)))
         self.use_teacher_branch_context = use_teacher_branch_context(cfg)
         self.need_history = self.arch in {"gameformer", "gameformer_lite", "gameformer_levelk", "plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter"}
-        self.need_prefix_traj = self.need_history or self.arch in {"route_bc_wayformer", "wayformer_bc", "wayformer_scene_bc"}
-        self.need_source_scene = self.arch in {"gameformer", "gameformer_lite", "gameformer_levelk", "plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter", "route_bc_wayformer", "wayformer_bc", "wayformer_scene_bc"}
+        self.need_prefix_traj = self.need_history or self.arch in {"route_bc_wayformer", "wayformer_bc", "wayformer_scene_bc", "diffusion_planner", "diffusionplanner", "flow_planner", "flowplanner", "plan_r1", "planr1", "betopnet", "betop_full"}
+        self.need_source_scene = self.arch in {"gameformer", "gameformer_lite", "gameformer_levelk", "plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter", "route_bc_wayformer", "wayformer_bc", "wayformer_scene_bc", "diffusion_planner", "diffusionplanner", "flow_planner", "flowplanner", "plan_r1", "planr1", "betopnet", "betop_full"}
         self.source_port_arch = (
             self.implementation in {"source_port", "source_port_v54", "sourceported_v54"}
             and self.arch in {"gameformer", "gameformer_lite", "gameformer_levelk", "plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter"}

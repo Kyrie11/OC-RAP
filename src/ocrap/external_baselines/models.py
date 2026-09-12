@@ -25,6 +25,9 @@ import torch.nn.functional as F
 from ocrap.external_baselines.source_ports import (
     GameFormerSourcePort, PlanTFSourcePort, PLUTOSourcePort,
 )
+from ocrap.external_baselines.generative_ports import (
+    DiffusionPlannerPort, FlowPlannerPort, PlanR1Port,
+)
 
 
 ACTOR_TOPO_FEATURE_DIM = 16
@@ -880,6 +883,77 @@ class BeTopNetLite(nn.Module):
         return out
 
 
+class BeTopNetAdapter(BeTopNetLite):
+    """Expanded BeTopNet adapter for Near-Contact planning.
+
+    It keeps the existing source-structured iterative topology decoder and adds
+    candidate-independent actor/map scene context plus an explicit trajectory
+    confidence branch over executable prefixes.  The released BeTop repository
+    contains the full WOMD prediction network but not a drop-in nuPlan planning
+    implementation; this class therefore remains an interface adapter rather than
+    an official-checkpoint reproduction.
+    """
+
+    def __init__(self, *args: Any, future_len: int = 20, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        d_model = self.d_model
+        dropout = float(kwargs.get("dropout", 0.10))
+        self.future_len = int(future_len)
+        self.source_agent = nn.Sequential(nn.Linear(9, d_model), nn.GELU(), nn.Linear(d_model, d_model))
+        self.source_map = nn.Sequential(nn.Linear(6, d_model), nn.GELU(), nn.Linear(d_model, d_model))
+        self.source_current = nn.Sequential(nn.Linear(6, d_model), nn.GELU(), nn.Linear(d_model, d_model))
+        self.prefix_point = nn.Sequential(nn.Linear(2, d_model), nn.GELU(), nn.Linear(d_model, d_model))
+        self.source_norm = nn.LayerNorm(d_model)
+        self.trajectory_confidence = nn.Sequential(
+            nn.LayerNorm(d_model), nn.Linear(d_model, d_model), nn.GELU(), nn.Dropout(dropout), nn.Linear(d_model, 1)
+        )
+
+    @staticmethod
+    def _mean_valid(x: torch.Tensor, valid: torch.Tensor, dim: int) -> torch.Tensor:
+        w = valid.to(dtype=x.dtype).unsqueeze(-1)
+        return (x * w).sum(dim=dim) / w.sum(dim=dim).clamp_min(1.0)
+
+    def forward(self, x: torch.Tensor, mask: torch.Tensor | None = None, *, prefix_traj: torch.Tensor | None = None,
+                prefix_valid: torch.Tensor | None = None, source_agent_history: torch.Tensor | None = None,
+                source_agent_valid: torch.Tensor | None = None, source_current_state: torch.Tensor | None = None,
+                source_map_points: torch.Tensor | None = None, source_map_point_valid: torch.Tensor | None = None,
+                source_map_valid: torch.Tensor | None = None, **kwargs: torch.Tensor) -> dict[str, torch.Tensor]:
+        out = super().forward(x, mask, **kwargs)
+        B, N, _ = x.shape
+        scene = x.new_zeros(B, self.d_model)
+        pieces = 0
+        if source_agent_history is not None:
+            ah = source_agent_history.float()
+            av = source_agent_valid.bool() if source_agent_valid is not None else (ah.abs().sum(-1) > 0)
+            enc = self.source_agent(ah)
+            actor = self._mean_valid(enc, av, dim=2)
+            actor_valid = av.any(dim=2)
+            scene = scene + self._mean_valid(actor, actor_valid, dim=1); pieces += 1
+        if source_map_points is not None:
+            mp = source_map_points.float()
+            pv = source_map_point_valid.bool() if source_map_point_valid is not None else (mp.abs().sum(-1) > 0)
+            poly = self._mean_valid(self.source_map(mp), pv, dim=2)
+            mv = source_map_valid.bool() if source_map_valid is not None else pv.any(dim=2)
+            scene = scene + self._mean_valid(poly, mv, dim=1); pieces += 1
+        if source_current_state is not None:
+            scene = scene + self.source_current(source_current_state[..., :6].float()); pieces += 1
+        if pieces:
+            scene = self.source_norm(scene / float(pieces))
+        if prefix_traj is not None:
+            pt = prefix_traj.float()
+            pv = prefix_valid.bool() if prefix_valid is not None else torch.ones_like(pt[..., 0], dtype=torch.bool)
+            traj = self._mean_valid(self.prefix_point(pt), pv, dim=2)
+        else:
+            traj = x.new_zeros(B, N, self.d_model)
+        correction = self.trajectory_confidence(self.source_norm(traj + scene[:, None, :])).squeeze(-1)
+        logits = out["logits"] + correction
+        if mask is not None:
+            logits = logits.masked_fill(~mask.bool(), -1.0e4)
+        out["betop_source_logits"] = correction
+        out["logits"] = logits
+        return out
+
+
 class _SceneContextEncoder(nn.Module):
     """Observation-only scene encoder shared by direct-planning adapters.
 
@@ -1112,6 +1186,30 @@ def build_model_from_cfg(input_dim: int, cfg: dict[str, Any]) -> nn.Module:
         dropout=float(mcfg.get("dropout", 0.15)),
     )
     implementation = str(mcfg.get("implementation", bcfg.get("implementation", ""))).lower()
+    if arch in {"diffusion_planner", "diffusionplanner"} or baseline in {"diffusion_planner", "diffusionplanner"}:
+        return DiffusionPlannerPort(
+            **common, future_len=int(mcfg.get("future_len", 20)),
+            scene_layers=int(mcfg.get("scene_layers", 2)),
+            energy_weight=float(mcfg.get("energy_weight", 2.0)),
+            eval_noise_scale=float(mcfg.get("eval_noise_scale", 0.15)),
+        )
+    if arch in {"flow_planner", "flowplanner"} or baseline in {"flow_planner", "flowplanner"}:
+        return FlowPlannerPort(
+            **common, future_len=int(mcfg.get("future_len", 20)),
+            scene_layers=int(mcfg.get("scene_layers", 2)),
+            token_size=int(mcfg.get("token_size", 5)),
+            token_stride=int(mcfg.get("token_stride", 3)),
+            cfg_dropout=float(mcfg.get("cfg_dropout", 0.15)),
+            energy_weight=float(mcfg.get("energy_weight", 1.5)),
+        )
+    if arch in {"plan_r1", "planr1"} or baseline in {"plan_r1", "planr1"}:
+        return PlanR1Port(
+            **common, future_len=int(mcfg.get("future_len", 20)),
+            scene_layers=int(mcfg.get("scene_layers", 2)),
+            token_interval=int(mcfg.get("token_interval", 5)),
+            num_tokens=int(mcfg.get("num_tokens", 1024)),
+            token_codebook=str(mcfg.get("token_codebook", "assets/external_baselines/planr1_tokens_1024.pt")),
+        )
     if implementation in {"source_port", "source_port_v54", "sourceported_v54"}:
         source_common = dict(
             d_model=int(mcfg.get("d_model", 256 if "gameformer" in baseline else 128)),
@@ -1174,7 +1272,18 @@ def build_model_from_cfg(input_dim: int, cfg: dict[str, Any]) -> nn.Module:
         )
     if arch in {"pdm_hybrid", "pdm_hybrid_adapter"} or baseline in {"pdm_hybrid", "pdm_hybrid_adapter"}:
         return PDMHybridAdapter(**common)
-    if arch in {"betop", "betop_lite", "betopnet", "betopnet_lite"} or "betop" in baseline:
+    if arch in {"betopnet", "betop_full"} or baseline in {"betopnet", "betop_full"}:
+        return BeTopNetAdapter(
+            **common, future_len=int(mcfg.get("future_len", 20)),
+            actor_topology_feature_dim=int(mcfg.get("actor_topology_feature_dim", mcfg.get("topology_feature_dim", ACTOR_TOPO_FEATURE_DIM))),
+            map_topology_feature_dim=int(mcfg.get("map_topology_feature_dim", MAP_TOPO_FEATURE_DIM)),
+            num_topology_agents=int(mcfg.get("num_topology_agents", cfg.get("max_agents", 16))),
+            num_topology_map=int(mcfg.get("num_topology_map", 64)),
+            num_topo=int(mcfg.get("num_topo", 16)),
+            mlp_hidden=int(mcfg.get("mlp_hidden", 128)),
+            mlp_layers=int(mcfg.get("mlp_layers", 3)),
+        )
+    if arch in {"betop", "betop_lite", "betopnet_lite"} or baseline in {"betop", "betop_lite", "betopnet_lite"}:
         return BeTopNetLite(
             **common,
             actor_topology_feature_dim=int(mcfg.get("actor_topology_feature_dim", mcfg.get("topology_feature_dim", ACTOR_TOPO_FEATURE_DIM))),

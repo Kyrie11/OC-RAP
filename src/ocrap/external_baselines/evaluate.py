@@ -98,10 +98,10 @@ def _predict_group(model: torch.nn.Module | None, samples: list[dict[str, Any]],
     mcfg = (bcfg.get("model", {}) or {})
     arch = str(mcfg.get("arch", bcfg.get("baseline", ""))).lower()
     need_history = arch in {"gameformer", "gameformer_lite", "gameformer_levelk", "plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter"}
-    need_prefix_traj = need_history or arch in {"route_bc_wayformer", "wayformer_bc", "wayformer_scene_bc"}
+    need_prefix_traj = need_history or arch in {"route_bc_wayformer", "wayformer_bc", "wayformer_scene_bc", "diffusion_planner", "diffusionplanner", "flow_planner", "flowplanner", "plan_r1", "planr1", "betopnet", "betop_full"}
     implementation = str(mcfg.get("implementation", bcfg.get("implementation", ""))).lower()
     source_port_arch = implementation in {"source_port", "source_port_v54", "sourceported_v54"} and arch in {"gameformer", "gameformer_lite", "gameformer_levelk", "plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter"}
-    need_source_scene = (arch in {"route_bc_wayformer", "wayformer_bc", "wayformer_scene_bc"}) or source_port_arch
+    need_source_scene = (arch in {"route_bc_wayformer", "wayformer_bc", "wayformer_scene_bc", "diffusion_planner", "diffusionplanner", "flow_planner", "flowplanner", "plan_r1", "planr1", "betopnet", "betop_full"}) or source_port_arch
     materialize_legacy_history = need_history and not source_port_arch
     # Source ports consume candidate-independent actor/map tensors, not the old
     # handcrafted candidate-specific PlanTF/PLUTO topology proxy.

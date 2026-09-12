@@ -489,6 +489,86 @@ def _focal_topk_loss(logits: torch.Tensor, target: torch.Tensor, valid: torch.Te
     denom = vflat.float().sum(dim=-1).clamp_min(1.0)
     return (vals.sum(dim=-1) / denom).mean()
 
+
+def _target_candidate_tensor(value: torch.Tensor, target_index: torch.Tensor) -> torch.Tensor:
+    B, N = value.shape[:2]
+    idx = target_index.long().clamp(0, N - 1)
+    return value[torch.arange(B, device=value.device), idx]
+
+
+def _diffusion_native_loss(out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor]) -> torch.Tensor:
+    pred = out.get("diffusion_pred_x0")
+    target = out.get("diffusion_target_x0")
+    valid = out.get("diffusion_valid")
+    if not (torch.is_tensor(pred) and torch.is_tensor(target) and torch.is_tensor(valid)):
+        return _zero_loss(out)
+    p = _target_candidate_tensor(pred.float(), batch["target_index"])
+    y = _target_candidate_tensor(target.float(), batch["target_index"])
+    m = _target_candidate_tensor(valid.bool(), batch["target_index"])
+    err = (p - y).square().sum(dim=-1)
+    return torch.where(m, err, torch.zeros_like(err)).sum() / m.float().sum().clamp_min(1.0)
+
+
+def _flow_native_loss(out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor]) -> torch.Tensor:
+    pred = out.get("flow_velocity_pred")
+    target = out.get("flow_velocity_target")
+    valid = out.get("flow_valid")
+    if not (torch.is_tensor(pred) and torch.is_tensor(target) and torch.is_tensor(valid)):
+        return _zero_loss(out)
+    p = _target_candidate_tensor(pred.float(), batch["target_index"])
+    y = _target_candidate_tensor(target.float(), batch["target_index"])
+    m = _target_candidate_tensor(valid.bool(), batch["target_index"])
+    err = (p - y).square().sum(dim=-1)
+    return torch.where(m, err, torch.zeros_like(err)).sum() / m.float().sum().clamp_min(1.0)
+
+
+def _planr1_native_loss(out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], cfg: dict[str, Any]) -> torch.Tensor:
+    ref_tok = out.get("planr1_reference_token_logits")
+    plan_tok = out.get("planr1_plan_token_logits")
+    target = out.get("planr1_token_target")
+    valid = out.get("planr1_token_valid")
+    ref_score = out.get("planr1_reference_logits")
+    plan_score = out.get("logits")
+    if not all(torch.is_tensor(v) for v in (ref_tok, plan_tok, target, valid, ref_score, plan_score)):
+        return _zero_loss(out)
+    idx = batch["target_index"].long()
+    rt = _target_candidate_tensor(ref_tok.float(), idx)
+    pt = _target_candidate_tensor(plan_tok.float(), idx)
+    tt = _target_candidate_tensor(target.long(), idx)
+    vm = _target_candidate_tensor(valid.bool(), idx)
+    if bool(vm.any()):
+        ref_ce = F.cross_entropy(rt[vm], tt[vm], label_smoothing=0.1)
+        plan_ce = F.cross_entropy(pt[vm], tt[vm], label_smoothing=0.1)
+    else:
+        ref_ce = _zero_loss(out); plan_ce = _zero_loss(out)
+
+    bcfg = cfg.get("external_baselines", {}) if isinstance(cfg.get("external_baselines", {}), dict) else {}
+    pcfg = bcfg.get("plan_r1", {}) if isinstance(bcfg.get("plan_r1", {}), dict) else {}
+    mask = batch["mask"].bool()
+    reward = (
+        float(pcfg.get("utility_weight", 1.0)) * batch["utility"].float()
+        - float(pcfg.get("hard_weight", 8.0)) * batch["hard"].float()
+        - float(pcfg.get("harm_weight", 2.0)) * batch["harm"].float()
+        + float(pcfg.get("feasible_bonus", 0.5)) * batch["feasible"].float()
+    )
+    w = mask.float()
+    mean = (reward * w).sum(dim=-1, keepdim=True) / w.sum(dim=-1, keepdim=True).clamp_min(1.0)
+    # Plan-R1 VD-GRPO: center by group, divide by a fixed scaling factor, and
+    # deliberately do NOT divide by the group reward standard deviation.
+    scaling = max(float(pcfg.get("scaling_factor", 0.1)), 1.0e-6)
+    advantage = ((reward - mean) / scaling).detach()
+    plan_lp = F.log_softmax(plan_score.float(), dim=-1)
+    ref_lp = F.log_softmax(ref_score.detach().float(), dim=-1)
+    # Same zero-value / non-zero-gradient ratio trick used by the uploaded code.
+    ratio = torch.exp(plan_lp - plan_lp.detach())
+    policy = -((ratio * advantage) * w).sum() / w.sum().clamp_min(1.0)
+    delta = ref_lp - plan_lp
+    kl = ((torch.exp(delta) - delta - 1.0) * w).sum() / w.sum().clamp_min(1.0)
+    beta = float(pcfg.get("beta", 0.1))
+    ce_weight = float(pcfg.get("token_ce_weight", 1.0))
+    return ce_weight * 0.5 * (ref_ce + plan_ce) + policy + beta * kl
+
+
 def _loss_dict(out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], cfg: dict[str, Any]) -> dict[str, torch.Tensor]:
     """Compute only losses whose configured weight is non-zero.
 
@@ -507,6 +587,7 @@ def _loss_dict(out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], cfg
     defaults = {
         "policy": 1.0, "levelk": 0.35, "level_response": 0.10,
         "topology": 0.0, "wayformer_native": 0.0, "gameformer_traj": 0.25, "plantf_native": 0.0, "pluto_native": 0.0, "pluto_contrastive": 0.0,
+        "diffusion_native": 0.0, "flow_native": 0.0, "planr1_native": 0.0,
         "utility": 0.10, "hard": 0.50, "harm": 0.25,
         "oracle_rec": 0.50, "deploy_rec": 0.25,
     }
@@ -547,6 +628,9 @@ def _loss_dict(out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], cfg
     losses["loss_gameformer_traj"] = _gameformer_traj_loss(out, batch) if active("gameformer_traj") else zero
     losses["loss_plantf_native"] = _plantf_native_loss(out, batch) if active("plantf_native") else zero
     losses["loss_pluto_native"] = _pluto_native_loss(out, batch, cfg) if active("pluto_native") else zero
+    losses["loss_diffusion_native"] = _diffusion_native_loss(out, batch) if active("diffusion_native") else zero
+    losses["loss_flow_native"] = _flow_native_loss(out, batch) if active("flow_native") else zero
+    losses["loss_planr1_native"] = _planr1_native_loss(out, batch, cfg) if active("planr1_native") else zero
 
     pluto_logits = out.get("pluto_contrastive_logits")
     losses["loss_pluto_contrastive"] = (
@@ -590,6 +674,7 @@ def _loss_dict(out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], cfg
         "policy": "loss_policy", "levelk": "loss_levelk", "level_response": "loss_level_response",
         "topology": "loss_topology", "wayformer_native": "loss_wayformer_native", "gameformer_traj": "loss_gameformer_traj",
         "plantf_native": "loss_plantf_native", "pluto_native": "loss_pluto_native",
+        "diffusion_native": "loss_diffusion_native", "flow_native": "loss_flow_native", "planr1_native": "loss_planr1_native",
         "pluto_contrastive": "loss_pluto_contrastive", "utility": "loss_utility",
         "hard": "loss_hard", "harm": "loss_harm", "oracle_rec": "loss_oracle_rec",
         "deploy_rec": "loss_deploy_rec",

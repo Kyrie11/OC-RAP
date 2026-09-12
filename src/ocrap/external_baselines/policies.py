@@ -1542,6 +1542,24 @@ def select_external_policy(
         admitted[idx] = True
         return ExternalSelection(idx, reason, admitted, score)
 
+    if baseline in {"diffusion_planner", "diffusionplanner", "flow_planner", "flowplanner", "plan_r1", "planr1"}:
+        admitted = np.zeros(n, dtype=bool)
+        if model_outputs is not None and "logits" in model_outputs:
+            score = np.asarray(model_outputs["logits"], dtype=float).reshape(-1)[:n]
+            idx = _best(score, feasible)
+            if baseline in {"diffusion_planner", "diffusionplanner"}:
+                reason = "diffusion_planner_conditional_denoising_energy_candidate_projection"
+            elif baseline in {"flow_planner", "flowplanner"}:
+                reason = "flow_planner_condot_flow_energy_candidate_projection"
+            else:
+                reason = "plan_r1_trajectory_token_lm_vdgrpo_candidate_projection"
+        else:
+            score = -dev
+            idx = 0 if feasible[0] else _best(score, feasible)
+            reason = f"{baseline}_checkpoint_missing_nominal_fallback"
+        admitted[idx] = True
+        return ExternalSelection(idx, reason, admitted, score)
+
     if baseline in {"gameformer", "gameformer_lite", "gameformer_levelk"}:
         admitted = np.zeros(n, dtype=bool)
         if model_outputs is not None and "logits" in model_outputs:

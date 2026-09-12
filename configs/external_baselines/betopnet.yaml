@@ -1,0 +1,73 @@
+external_baselines:
+  baseline: betopnet
+  methods: [betopnet]
+  max_candidates: 24
+  supervision_target: logged_nominal
+  allow_teacher_supervision: false
+  implementation: source_backed_topology_planning_adapter_v60
+  model:
+    arch: betopnet
+    implementation: source_backed_topology_planning_adapter_v60
+    max_candidates: 24
+    d_model: 192
+    num_layers: 4
+    num_heads: 8
+    dropout: 0.10
+    num_topology_agents: 16
+    actor_topology_feature_dim: 16
+    num_topology_map: 64
+    map_topology_feature_dim: 14
+    num_topo: 24
+    future_len: 20
+    history_len: 11
+    source_max_agents: 16
+    source_map_polygons: 64
+    source_map_points: 20
+    source_centerline_points: 120
+    topology_dt: 0.1
+    topology_far_threshold_m: 30.0
+    mlp_hidden: 128
+    mlp_layers: 3
+  training:
+    device: auto
+    distributed: false
+    batch_size: 20
+    num_workers: 4
+    epochs: 30
+    lr: 0.0001
+    weight_decay: 0.01
+    scheduler: multistep
+    milestones: [22, 24, 26, 28]
+    scheduler_gamma: 0.5
+    amp: true
+    amp_dtype: auto
+    fused_optimizer: true
+    grad_clip: 5.0
+    tqdm: true
+    pin_memory: true
+    persistent_workers: true
+    prefetch_factor: 2
+    find_unused_parameters: auto
+  loss_weights:
+    policy: 1.0
+    topology: 10.0
+    topology_topk_ratio: 0.25
+    diffusion_native: 0.0
+    flow_native: 0.0
+    planr1_native: 0.0
+    levelk: 0.0
+    level_response: 0.0
+    wayformer_native: 0.0
+    gameformer_traj: 0.0
+    plantf_native: 0.0
+    pluto_native: 0.0
+    pluto_contrastive: 0.0
+    utility: 0.0
+    hard: 0.0
+    harm: 0.0
+    oracle_rec: 0.0
+    deploy_rec: 0.0
+  policy:
+    betop_branch_steps: 3
+    betop_short_term_cost_weight: 0.5
+    betop_contingency_dt: 0.1

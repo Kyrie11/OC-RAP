@@ -119,7 +119,7 @@ Safe:
 bash scripts/run_external_baselines.sh \
   --regime safe \
   --out "$BASE_OUT/external_baselines_v48_111" \
-  --gpus 0,1 --max-scenarios 0 --womd-role validation
+  --gpus 0,1 --jobs-per-gpu 3 --max-parallel 6 --max-scenarios 0 --womd-role validation
 ```
 
 Near-Contact:
@@ -128,7 +128,7 @@ Near-Contact:
 bash scripts/run_external_baselines.sh \
   --regime near \
   --out "$BASE_OUT/external_baselines_v48_111" \
-  --gpus 0,1 --max-scenarios 0 --womd-role validation
+  --gpus 0,1 --jobs-per-gpu 3 --max-parallel 6 --max-scenarios 0 --womd-role validation
 ```
 
 Contact:
@@ -137,10 +137,12 @@ Contact:
 bash scripts/run_external_baselines.sh \
   --regime contact \
   --out "$BASE_OUT/external_baselines_v48_111" \
-  --gpus 0,1 --max-scenarios 0 --womd-role validation
+  --gpus 0,1 --jobs-per-gpu 3 --max-parallel 6 --max-scenarios 0 --womd-role validation
 ```
 
-Append `--retrain` to force retraining/re-registration; append `--recalibrate` for the Near CPSF artifact.
+Each one-regime launcher now uses six concurrent worker slots by default: three jobs on GPU 0 and three jobs on GPU 1. If a regime has more than six enabled baselines, the remaining jobs start as slots become free. Safe additionally enables Diffusion Planner; Near-Contact additionally enables Flow Planner, Plan-R1, and the expanded BeTopNet adapter. Contact keeps its six post-contact baselines.
+
+Append `--retrain` to force retraining/re-registration; append `--recalibrate` for the Near CPSF artifact. Set `RUN_SUPPLEMENTARY_SAFE=false` or `RUN_SUPPLEMENTARY_NEAR=false` only when reproducing the historical main-table-only suite.
 
 ## 5. Frozen-module ablations
 

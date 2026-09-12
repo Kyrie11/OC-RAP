@@ -50,9 +50,10 @@ fi
 : "${DO_CLOSED_LOOP:=true}"
 : "${RUN_NOMINAL_CONTROL:=true}"
 : "${RUN_LEGACY_SAFE:=false}"
+: "${RUN_SUPPLEMENTARY_SAFE:=true}"
 : "${CUDA_DEVICES:=0,1}"
-: "${JOBS_PER_GPU:=1}"                    # opt-in >1 for lightweight metric-only evaluation
-: "${MAX_PARALLEL:=}"                     # empty => all GPU slots
+: "${JOBS_PER_GPU:=3}"                    # requested 3-way per-GPU concurrency
+: "${MAX_PARALLEL:=6}"                     # empty => all GPU slots
 : "${USE_DYNAMIC_SCHEDULER:=auto}"
 : "${OCRAP_SDPA_BACKEND:=safe}"
 : "${OCRAP_AMP_DTYPE:=auto}"
@@ -104,6 +105,9 @@ SPECS=(
   "pdm_hybrid|configs/external_baselines/pdm_hybrid.yaml|nonlearning||"
   "idm|configs/external_baselines/idm.yaml|nonlearning||"
 )
+if runtime_bool_true "$RUN_SUPPLEMENTARY_SAFE"; then
+  SPECS+=("diffusion_planner|configs/external_baselines/diffusion_planner.yaml|learned|$CHECKPOINT_ROOT/diffusion_planner/best.pt|diffusion_planner_womd_lattice_port_v60")
+fi
 # Wayformer and BeTop are architecture/topology controls rather than Safe
 # main-table planners.  They are opt-in so the historical command remains
 # unchanged, while RUN_LEGACY_SAFE=true trains/evaluates them through the same

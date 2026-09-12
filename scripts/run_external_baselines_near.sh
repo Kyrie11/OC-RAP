@@ -42,6 +42,10 @@ fi
 : "${CL_ORACLE_MAX_SCENARIOS:=20}"
 : "${RUN_ORACLE_CLOSED_LOOP:=false}"
 : "${RUN_LEGACY_NEAR:=false}"
+: "${RUN_SUPPLEMENTARY_NEAR:=true}"
+: "${FORCE_RETRAIN_NEAR:=false}"
+: "${CHECKPOINT_ROOT:=$RUN/checkpoints}"
+: "${TRAIN_NUM_WORKERS_PER_JOB:=0}"
 : "${CL_MAX_STEPS:=40}"
 : "${CL_REPLAN_INTERVAL_STEPS:=1}"
 : "${CL_NUM_CANDIDATES:=24}"
@@ -82,8 +86,8 @@ else
   CALIB_WOMD="$(runtime_normalize_womd_spec "$CALIB_WOMD" "$WOMD_NUM_SHARDS")"
 fi
 : "${CUDA_DEVICES:=0,1}"
-: "${JOBS_PER_GPU:=1}"                    # metric-only evaluation can safely opt into 2-3
-: "${MAX_PARALLEL:=}"                     # empty => all GPU slots
+: "${JOBS_PER_GPU:=3}"                    # requested 3-way per-GPU concurrency
+: "${MAX_PARALLEL:=6}"                     # empty => all GPU slots
 
 IFS=',' read -r -a GPU_LIST <<< "$CUDA_DEVICES"
 ((${#GPU_LIST[@]})) || GPU_LIST=(0 1)
@@ -99,17 +103,23 @@ CPU_COUNT="$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 
 : "${THREADS_PER_JOB:=$(( CPU_COUNT / (2 * MAX_PARALLEL) ))}"
 ((THREADS_PER_JOB >= 1)) || THREADS_PER_JOB=1
 ((THREADS_PER_JOB <= 8)) || THREADS_PER_JOB=8
+if ((TRAIN_NUM_WORKERS_PER_JOB <= 0)); then
+  TRAIN_NUM_WORKERS_PER_JOB=$(( CPU_COUNT / (2 * MAX_PARALLEL) ))
+  ((TRAIN_NUM_WORKERS_PER_JOB >= 2)) || TRAIN_NUM_WORKERS_PER_JOB=2
+  ((TRAIN_NUM_WORKERS_PER_JOB <= 6)) || TRAIN_NUM_WORKERS_PER_JOB=6
+fi
 : "${JAX_CACHE_DIR:=$RUN/.jax_compilation_cache}"
 : "${XLA_PYTHON_CLIENT_PREALLOCATE:=false}"
 export RUN CL_WOMD
-mkdir -p "$RUN" "$JAX_CACHE_DIR"
+mkdir -p "$RUN" "$JAX_CACHE_DIR" "$CHECKPOINT_ROOT"
 
 if [[ "$CONFORMAL_CALIBRATION_UNIT" == "group" ]]; then
   echo "[CPSF] calibration_unit=group preserves the legacy launcher contract, but formal exchangeability is only group-level. For a stricter WOMD-scene certificate use CONFORMAL_CALIBRATION_UNIT=scene_max and ensure delta/T is supported by the number of independent calibration scenes." >&2
 fi
 
 CONFIG=configs/external_baselines/near_contact_external_baselines.yaml
-# Exactly the six deployable Near-Contact main-table methods in provenance.py.
+# Six published Near-Contact main-table controls plus source-backed supplementary
+# learned planners. The scheduler below caps concurrency at 6 (3 processes/GPU).
 METHODS=(
   marc_lite
   racp_lite
@@ -118,11 +128,20 @@ METHODS=(
   dr_cvar_safety_filter
   conformal_predictive_safety_filter
 )
-# Parseh et al. is a pre-impact unavoidable-collision planner, so its honest
-# OC-RAP home is Near-contact legacy/control rather than post-contact Contact.
-# Defaults preserve the six-method main table; opt in explicitly for supplements.
 if runtime_bool_true "$RUN_LEGACY_NEAR"; then METHODS+=(severity_minimization); fi
 METHODS_CSV="$(IFS=,; echo "${METHODS[*]}")"
+SPECS=()
+for _m in "${METHODS[@]}"; do SPECS+=("${_m}|$CONFIG|nonlearning||"); done
+if runtime_bool_true "$RUN_SUPPLEMENTARY_NEAR"; then
+  SPECS+=(
+    "flow_planner|configs/external_baselines/flow_planner.yaml|learned|$CHECKPOINT_ROOT/flow_planner/best.pt|flow_planner_womd_lattice_port_v60"
+    "plan_r1|configs/external_baselines/plan_r1.yaml|learned|$CHECKPOINT_ROOT/plan_r1/best.pt|plan_r1_womd_token_vdgrpo_port_v60"
+    "betopnet|configs/external_baselines/betopnet.yaml|learned|$CHECKPOINT_ROOT/betopnet/best.pt|source_backed_topology_planning_adapter_v60"
+  )
+fi
+ALL_METHODS=()
+for _spec in "${SPECS[@]}"; do IFS='|' read -r _m _rest <<< "$_spec"; ALL_METHODS+=("$_m"); done
+ALL_METHODS_CSV="$(IFS=,; echo "${ALL_METHODS[*]}")"
 
 common_env=(
   OMP_NUM_THREADS="$THREADS_PER_JOB"
@@ -268,21 +287,47 @@ PY
 fi
 export CONFORMAL_INTERVALS CONFORMAL_DELTA CONFORMAL_PREDICTION_HORIZON CONFORMAL_MISSION_HORIZON CONFORMAL_CALIBRATION_UNIT WOMD_VAL CALIB_WOMD
 
-eval_near_batched() {
-  # All Near methods are non-learning observation-only filters/controllers.  A
-  # multi-method evaluation is mathematically identical to six separate runs,
-  # but loads each candidate group and builds the shared observed-risk context
-  # only once.  Run it on CPU: these selectors are NumPy/closed-form code and do
-  # not benefit from occupying an A30.
-  local aggregate="$RUN/eval_near_contact__batched.json"
-  echo "[OFFLINE] near batched methods=$METHODS_CSV conformal_intervals=$CONFORMAL_INTERVALS"
-  run_env_cpu python -u -m ocrap.cli evaluate-baseline \
-    --config "$CONFIG" --dataset "$TEST_NEAR" --split test \
-    --output "$aggregate" --baselines "$METHODS_CSV" \
-    --set "external_baselines.policy.conformal_prediction_intervals_m=$CONFORMAL_INTERVALS" \
-    2>&1 | tee "$RUN/eval_near_contact__batched.log"
-  python tools/split_external_baseline_eval.py \
-    --input "$aggregate" --output-dir "$RUN" --prefix eval_near_contact_ --methods "$METHODS_CSV"
+checkpoint_valid() {
+  local ckpt="$1" expected_impl="$2" config="$3"
+  [[ -n "$ckpt" && -f "$ckpt" ]] || return 1
+  python tools/check_external_training_complete.py \
+    --checkpoint "$ckpt" --summary "$(dirname "$ckpt")/train_summary.json" --config "$config" \
+    --require-deployable-contract --require-implementation-version "$expected_impl" >/dev/null 2>&1
+}
+
+prepare_or_offline_method() {
+  local spec="$1" gpu="$2" method config kind ckpt expected_impl train_dir
+  IFS='|' read -r method config kind ckpt expected_impl <<< "$spec"
+  if [[ "$kind" == learned ]]; then
+    if runtime_bool_true "$FORCE_RETRAIN_NEAR" || ! checkpoint_valid "$ckpt" "$expected_impl" "$config"; then
+      if ! runtime_bool_true "$DO_TRAIN"; then
+        echo "Missing/invalid checkpoint and training disabled: $ckpt" >&2; return 2
+      fi
+      train_dir="$(dirname "$ckpt")"; mkdir -p "$train_dir"
+      echo "[TRAIN] near method=$method gpu=$gpu"
+      run_env_gpu "$gpu" python -u -m ocrap.cli train-baseline \
+        --config "$config" --dataset "$TRAIN_NEAR" --val-dataset "$VAL_NEAR" \
+        --baseline "$method" --output "$train_dir" \
+        --set external_baselines.training.distributed=false \
+        --set "external_baselines.training.num_workers=$TRAIN_NUM_WORKERS_PER_JOB" \
+        --set external_baselines.training.tqdm=false \
+        2>&1 | tee "$RUN/train_${method}.log"
+      checkpoint_valid "$ckpt" "$expected_impl" "$config" || { echo "Training produced invalid checkpoint: $ckpt" >&2; return 2; }
+    else
+      echo "[REUSE] validated checkpoint $ckpt"
+    fi
+  fi
+  if runtime_bool_true "$DO_OFFLINE"; then
+    local checkpoint_args=() conformal_args=()
+    [[ "$kind" == learned ]] && checkpoint_args=(--checkpoint "$ckpt")
+    [[ "$method" == conformal_predictive_safety_filter ]] && conformal_args=(--set "external_baselines.policy.conformal_prediction_intervals_m=$CONFORMAL_INTERVALS")
+    echo "[OFFLINE] near method=$method gpu=$gpu"
+    run_env_gpu "$gpu" python -u -m ocrap.cli evaluate-baseline \
+      --config "$config" --dataset "$TEST_NEAR" --split test \
+      --output "$RUN/eval_near_contact_${method}.json" --baselines "$method" \
+      "${checkpoint_args[@]}" "${conformal_args[@]}" \
+      2>&1 | tee "$RUN/eval_near_contact_${method}.log"
+  fi
 }
 
 supports_wait_pid_capture() {
@@ -322,19 +367,24 @@ run_queue() {
   if [[ "$use_dynamic" == true ]]; then run_queue_dynamic "$runner" "$@"; else run_queue_fixed "$runner" "$@"; fi
 }
 
-if runtime_bool_true "$DO_OFFLINE"; then
-  eval_near_batched
+if runtime_bool_true "$DO_TRAIN" || runtime_bool_true "$DO_OFFLINE"; then
+  run_queue prepare_or_offline_method "${SPECS[@]}"
 fi
 
 run_closed_loop_method() {
-  local method="$1" gpu="$2"
+  local spec="$1" gpu="$2" method config kind ckpt expected_impl
+  IFS='|' read -r method config kind ckpt expected_impl <<< "$spec"
   local output="$RUN/closed_loop_${method}.json"
   if runtime_bool_true "$SKIP_COMPLETE_METHODS" && python tools/check_closed_loop_artifact.py --output "$output" --quiet; then
     echo "[REUSE] near closed-loop method=$method is already complete: $output"
     return 0
   fi
   local label_mode="$CL_LABEL_MODE" max_scenes="$CL_MAX_SCENARIOS" exhaustive=false sparse=true
-  local target_args=()
+  local target_args=() checkpoint_args=()
+  if [[ "$kind" == learned ]]; then
+    checkpoint_valid "$ckpt" "$expected_impl" "$config" || { echo "Missing/invalid checkpoint: $ckpt" >&2; return 2; }
+    checkpoint_args=(--checkpoint "$ckpt")
+  fi
   if [[ "$method" == oracle_recovery_filter ]]; then
     label_mode=all; exhaustive=true; sparse=false; max_scenes="$CL_ORACLE_MAX_SCENARIOS"
   fi
@@ -343,7 +393,7 @@ run_closed_loop_method() {
   fi
   echo "[START] near method=$method gpu=$gpu label_mode=$label_mode max_scenes=$max_scenes"
   run_env_gpu "$gpu" python -u -m ocrap.cli closed-loop \
-    --config "$CONFIG" --dataset "$CL_WOMD" --output "$output" \
+    --config "$config" --dataset "$CL_WOMD" "${checkpoint_args[@]}" --output "$output" \
     --set "external_baselines.policy.conformal_prediction_intervals_m=$CONFORMAL_INTERVALS" \
     --set "closed_loop.method=$method" \
     --set "closed_loop.max_scenarios=$max_scenes" \
@@ -383,14 +433,14 @@ run_closed_loop_method() {
 }
 
 if runtime_bool_true "$DO_CLOSED_LOOP"; then
-  CLOSED_LOOP_METHODS=("${METHODS[@]}")
-  if runtime_bool_true "$RUN_ORACLE_CLOSED_LOOP"; then CLOSED_LOOP_METHODS=(oracle_recovery_filter "${CLOSED_LOOP_METHODS[@]}"); fi
-  run_queue run_closed_loop_method "${CLOSED_LOOP_METHODS[@]}"
+  CLOSED_LOOP_SPECS=("${SPECS[@]}")
+  if runtime_bool_true "$RUN_ORACLE_CLOSED_LOOP"; then CLOSED_LOOP_SPECS=("oracle_recovery_filter|$CONFIG|nonlearning||" "${CLOSED_LOOP_SPECS[@]}"); fi
+  run_queue run_closed_loop_method "${CLOSED_LOOP_SPECS[@]}"
 fi
 
 python tools/summarize_external_closed_loop.py \
   --run "$RUN" --regime near --output "$RUN/closed_loop_summary.json" \
-  --methods "$METHODS_CSV" --womd-spec "$CL_WOMD"
+  --methods "$ALL_METHODS_CSV" --womd-spec "$CL_WOMD"
 python - "$RUN/closed_loop_summary.json" <<'PY'
 import json, os, sys
 p=sys.argv[1]

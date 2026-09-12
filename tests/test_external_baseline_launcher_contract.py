@@ -43,7 +43,8 @@ def test_launchers_are_two_gpu_bounded_and_wire_train_calibration() -> None:
     ):
         text = (ROOT / rel).read_text()
         assert ': "${CUDA_DEVICES:=0,1}"' in text
-        assert ': "${JOBS_PER_GPU:=1}"' in text
+        assert ': "${JOBS_PER_GPU:=3}"' in text
+        assert ': "${MAX_PARALLEL:=6}"' in text
         assert 'GPU_SLOTS=()' in text
         assert '((MAX_PARALLEL <= ${#GPU_SLOTS[@]})) || MAX_PARALLEL="${#GPU_SLOTS[@]}"' in text
 

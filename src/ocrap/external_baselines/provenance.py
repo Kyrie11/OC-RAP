@@ -102,7 +102,7 @@ REGISTRY: tuple[BaselineProvenance, ...] = (
         "IDM projection",
     ),
     BaselineProvenance(
-        "betopnet_lite", ("betop", "betop_lite", "betopnet", "betopnet_lite"), ("safe",),
+        "betopnet_lite", ("betop", "betop_lite", "betopnet_lite"), ("safe",),
         "Reasoning Multi-Agent Behavioral Topology for Interactive Autonomous Driving", 2024,
         "https://arxiv.org/abs/2409.18031", "https://github.com/OpenDriveLab/BeTop",
         "uploaded-source-backed topology-aware candidate-lattice adaptation", "source-backed core-mechanism / unreleased-planner-interface adapted",
@@ -244,6 +244,42 @@ REGISTRY: tuple[BaselineProvenance, ...] = (
         "Advanced post-impact SMC + fault-tolerant QP (paper-core port)",
     ),
     BaselineProvenance(
+        "diffusion_planner", ("diffusion_planner", "diffusionplanner"), ("safe",),
+        "Diffusion-Based Planning for Autonomous Driving with Flexible Guidance", 2025,
+        "https://arxiv.org/abs/2501.15564", "https://github.com/ZhengYinan-AIR/Diffusion-Planner",
+        "uploaded-source-derived WOMD candidate-lattice port", "operator-faithful / interface-adapted",
+        ("VP-style diffusion corruption and timestep conditioning", "DiT-style conditional trajectory denoising", "observation-only actor/map conditioning", "x0 reconstruction objective", "vectorized conditional denoising-energy projection onto executable candidates"),
+        ("nuPlan preprocessing is replaced by the OC-RAP WOMD observation bridge", "joint ego-neighbor generation is reduced to ego executable-prefix ranking because the benchmark action interface supplies ego candidates", "DPM-Solver sampling is replaced at benchmark inference by one vectorized denoising-energy pass for three-jobs-per-GPU throughput", "not checkpoint-compatible with author weights"),
+        "Diffusion Planner (WOMD lattice port)",
+    ),
+    BaselineProvenance(
+        "flow_planner", ("flow_planner", "flowplanner"), ("near",),
+        "Flow Matching-Based Autonomous Driving Planning with Advanced Interactive Behavior Modeling", 2025,
+        None, "https://github.com/DiffusionAD/Flow-Planner",
+        "uploaded-source-derived WOMD candidate-lattice port", "operator-faithful / interface-adapted",
+        ("conditional optimal-transport flow matching", "fine-grained overlapping trajectory tokenization", "joint scene/trajectory attention", "classifier-free conditioning dropout", "flow-consistency projection onto executable candidates"),
+        ("nuPlan feature construction is replaced by the OC-RAP WOMD observation bridge", "the source ODE solver is replaced by a vectorized midpoint flow-energy pass for benchmark throughput", "the common 2 s prefix is shorter than the source planning horizon", "not checkpoint-compatible with author weights"),
+        "Flow Planner (WOMD lattice port)",
+    ),
+    BaselineProvenance(
+        "plan_r1", ("plan_r1", "planr1"), ("near",),
+        "Plan-R1: Safe and Feasible Trajectory Planning as Language Modeling", 2026,
+        None, None,
+        "uploaded-source-derived WOMD trajectory-token/VD-GRPO port", "operator-faithful / reward-interface adapted",
+        ("author 1024-token vehicle motion codebook", "autoregressive next-token trajectory modeling", "separate prediction/reference and planning token models", "group-centering with fixed scaling instead of per-group variance normalization", "GRPO-style policy objective with reference-model KL"),
+        ("nuPlan graph/map preprocessing is replaced by the common WOMD scene encoder", "rule rewards are represented by the common candidate utility/feasibility/collision-harm supervision during training while deployment remains observation-only", "the 2 s executable prefix yields fewer autoregressive token steps than the native horizon", "not checkpoint-compatible with author weights"),
+        "Plan-R1 (WOMD token + VD-GRPO port)",
+    ),
+    BaselineProvenance(
+        "betopnet", ("betopnet", "betop_full"), ("near",),
+        "Reasoning Multi-Agent Behavioral Topology for Interactive Autonomous Driving", 2024,
+        None, "https://github.com/OpenDriveLab/BeTop",
+        "expanded uploaded-source-backed topology planning adapter", "source-structured / planning-interface adapted",
+        ("iterative actor/map topology prediction", "top-k topology-guided local attention", "braid-derived observation-side topology supervision", "candidate-independent actor/map scene context", "explicit executable-prefix trajectory confidence", "published short-term contingency repulsive-cost selection"),
+        ("the uploaded public repository exposes full WOMD prediction code but not a drop-in nuPlan planning pipeline", "native multi-modal future GMM heads are projected to the common executable candidate lattice", "observation-only CV actor futures are used where the planning paper requires short-term interaction futures", "not checkpoint-compatible with author weights"),
+        "BeTopNet (expanded topology planning adapter)",
+    ),
+    BaselineProvenance(
         "severity_minimization", ("severity_minimization", "severity_minimization_planner", "unavoidable_collision_planner", "crash_mitigation_planner", "uc_severity_planner"), ("near",),
         "Motion planning for autonomous vehicles with the inclusion of post-impact motions for minimising collision risk", 2023,
         "https://doi.org/10.1080/00423114.2022.2088396", None, "paper-core collision/post-impact severity candidate port", "paper-core mathematical adapter / collision-geometry and temporal-interface adapted",
@@ -259,6 +295,13 @@ MAIN_TABLE_BY_REGIME: dict[str, tuple[str, ...]] = {
     "near": ("marc_lite", "racp_lite", "robust_scenario_mpc", "predictive_safety_filter", "dr_cvar_safety_filter", "conformal_predictive_safety_filter"),
     "contact": ("postimpact_mpc_lite", "post_crash_braking", "postimpact_motion_tvlqr", "post_collision_restoration", "compensatory_postimpact_mpc", "robust_postimpact_control"),
 }
+
+SUPPLEMENTARY_BY_REGIME: dict[str, tuple[str, ...]] = {
+    "safe": ("diffusion_planner",),
+    "near": ("flow_planner", "plan_r1", "betopnet"),
+    "contact": (),
+}
+
 
 LEGACY_OR_DIAGNOSTIC_BY_REGIME: dict[str, tuple[str, ...]] = {
     "safe": ("nominal_replay", "wayformer_bc", "betopnet_lite"),

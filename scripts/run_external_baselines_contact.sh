@@ -50,8 +50,8 @@ fi
 : "${DO_CLOSED_LOOP:=true}"
 : "${RUN_LEGACY_CONTACT:=false}"
 : "${CUDA_DEVICES:=0,1}"
-: "${JOBS_PER_GPU:=1}"                    # metric-only evaluation can safely opt into 2-3
-: "${MAX_PARALLEL:=}"                     # empty => all GPU slots
+: "${JOBS_PER_GPU:=3}"                    # requested 3-way per-GPU concurrency
+: "${MAX_PARALLEL:=6}"                     # empty => all GPU slots
 : "${USE_DYNAMIC_SCHEDULER:=auto}"
 
 IFS=',' read -r -a GPU_LIST <<< "$CUDA_DEVICES"
