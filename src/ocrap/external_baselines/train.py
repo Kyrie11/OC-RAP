@@ -519,7 +519,9 @@ def _flow_native_loss(out: dict[str, torch.Tensor], batch: dict[str, torch.Tenso
     y = _target_candidate_tensor(target.float(), batch["target_index"])
     m = _target_candidate_tensor(valid.bool(), batch["target_index"])
     err = (p - y).square().sum(dim=-1)
-    return torch.where(m, err, torch.zeros_like(err)).sum() / m.float().sum().clamp_min(1.0)
+    base = torch.where(m, err, torch.zeros_like(err)).sum() / m.float().sum().clamp_min(1.0)
+    consistency = out.get("flow_consistency_loss")
+    return base + (consistency if torch.is_tensor(consistency) else base.new_zeros(()))
 
 
 def _planr1_native_loss(out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], cfg: dict[str, Any]) -> torch.Tensor:

@@ -51,7 +51,7 @@ run_one() {
     return 0
   fi
   python tools/check_closed_loop_dataset_support.py --dataset "$bucket" --split "$BUCKET_SPLIT" \
-    --womd-pattern "$womd" --expected-source-role auto --output "$run_dir/closed_loop_dataset_support.json"
+    --womd-pattern "$womd" --expected-source-role "${WOMD_ROLE:-auto}" --output "$run_dir/closed_loop_dataset_support.json"
   export CUDA_VISIBLE_DEVICES="$gpu"
   export PYTHONUNBUFFERED=1 XLA_PYTHON_CLIENT_PREALLOCATE=false
   export JAX_COMPILATION_CACHE_DIR="$run_dir/.jax_compilation_cache"

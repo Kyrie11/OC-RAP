@@ -404,8 +404,12 @@ def evaluate_external_baselines(
         samples = [load_external_sample(p) for p in paths]
         samples = sorted(samples, key=lambda d: int(np.asarray(d.get("candidate_index", 0)).item()))
         timing["load_s"] += perf_counter() - tick
+        if model is not None and device.type == "cuda":
+            torch.cuda.synchronize(device)
         tick = perf_counter()
         model_outputs = _predict_group(model, samples, model_cfg, device)
+        if model is not None and device.type == "cuda":
+            torch.cuda.synchronize(device)
         timing["model_inference_s"] += perf_counter() - tick
         # All deployable hand-designed methods share exactly the same observation-
         # conditioned risk profiles. Compute them once per candidate group rather

@@ -225,6 +225,12 @@ def test_current_launcher_reuses_authoritative_v123_freeze_branch_and_keeps_comm
     assert "run_ocrap_three_regime_evaluation.sh" in launcher
     assert "--bootstrap 5000 --seed 2027" in launcher
     assert launcher.count("WOMD_ROLE=validation") >= 2
+    assert "closed_loop_dataset_support.json" in launcher
+    assert "support.get('womd_pattern')" in launcher
+    assert "full.get('source')" not in launcher
+    assert "EXPECTED_WOMD_ROLE=validation" in launcher
+    assert "full_population_runtime_contract.json" in launcher
+    assert "--full-run-runtime" in launcher
     assert 'local variant="$1" root=' not in launcher
     assert 'local outdir="$SENTINEL_DIR/$variant/$regime" output=' not in launcher
     assert 'local variant="$1"\n  local root="$L80_RUN/candidates/$variant"' in launcher

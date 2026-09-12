@@ -59,7 +59,6 @@ EXTERNAL_CLOSED_LOOP_METHODS = {
     "betop", "betop_lite", "betopnet", "betopnet_lite",
     "plantf", "plan_tf", "plantf_adapter",
     "pluto", "pluto_adapter", "pdm_hybrid", "pdm_hybrid_adapter",
-    "diffusion_planner", "diffusionplanner", "flow_planner", "flowplanner", "plan_r1", "planr1",
 }
 # Only the deliberately non-deployable oracle upper bound consumes OC-RAP
 # counterfactual teacher tensors during action selection.
@@ -72,7 +71,6 @@ EXTERNAL_LEARNED_METHODS = {
     "betop", "betop_lite", "betopnet", "betopnet_lite",
     "plantf", "plan_tf", "plantf_adapter",
     "pluto", "pluto_adapter",
-    "diffusion_planner", "diffusionplanner", "flow_planner", "flowplanner", "plan_r1", "planr1",
 }
 
 

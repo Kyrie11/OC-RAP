@@ -45,6 +45,7 @@ RESUME="${RESUME:-true}"
 PROFILE_TIMING="${PROFILE_TIMING:-true}"
 PREFLIGHT="${PREFLIGHT:-true}"
 PREFLIGHT_SUPPORT_JSON="${PREFLIGHT_SUPPORT_JSON:-}"
+EXPECTED_WOMD_ROLE="${EXPECTED_WOMD_ROLE:-auto}"
 PARTIAL_WRITE_EVERY_SCENES="${PARTIAL_WRITE_EVERY_SCENES:-32}"
 PROGRESS_EVERY_STEPS="${PROGRESS_EVERY_STEPS:-10}"
 # Full render traces are needed only for the selected qualitative traces.
@@ -98,7 +99,7 @@ elif [[ -n "$BUCKET_DATASET" && "$PREFLIGHT" == true ]]; then
     runtime_bool_true "$REQUIRE_TARGET_KEYS" && preflight_target_args+=(--require-target-keys)
   fi
   python tools/check_closed_loop_dataset_support.py --dataset "$BUCKET_DATASET" --split "$BUCKET_SPLIT" \
-    --womd-pattern "$DATASET_SPEC" --expected-source-role auto "${preflight_target_args[@]}" \
+    --womd-pattern "$DATASET_SPEC" --expected-source-role "$EXPECTED_WOMD_ROLE" "${preflight_target_args[@]}" \
     --output "$RUN_DIR/closed_loop_dataset_support.json"
 else
   python tools/validate_womd_spec.py --spec "$DATASET_SPEC" --output "$RUN_DIR/womd_spec_validation.json"

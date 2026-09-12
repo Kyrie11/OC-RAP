@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 import math
 
-ENGINEERING_VERSION = "v48.124.1-OC-FMSA"
+ENGINEERING_VERSION = "v48.124.2-OC-FMSA"
 SCIENTIFIC_VERSION = "v48.124-OC-FMSA"
 ALGORITHM_NAME = "Observation-Consistent Fixed-Main Stability and Non-Interference Adjudication"
 
@@ -167,7 +167,20 @@ def _is_standard_validation_source(source: Any) -> bool:
     return "/validation/" in s or "validation@" in s or "validation_tfexample" in s
 
 
-def coverage_gate(nominal: dict[str, Any], balanced: dict[str, Any], precision: dict[str, Any]) -> dict[str, Any]:
+def coverage_gate(
+    nominal: dict[str, Any],
+    balanced: dict[str, Any],
+    precision: dict[str, Any],
+    *,
+    support_docs: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Check same-target coverage and raw WOMD provenance.
+
+    ``result["source"]`` names the policy/result source (for example
+    ``model`` or ``teacher_fallback``); it is *not* the WOMD collection.
+    V48.124 therefore owns dataset provenance through the immutable
+    ``closed_loop_dataset_support.json`` artifacts produced by each full run.
+    """
     nk, bk, pk = target_keys(nominal), target_keys(balanced), target_keys(precision)
     expected = int(nominal.get("bucket_target_count") or len(nk))
     complete = all(
@@ -177,17 +190,30 @@ def coverage_gate(nominal: dict[str, Any], balanced: dict[str, Any], precision: 
     )
     same = nk == bk == pk and len(nk) == expected
     same_bucket = len({str(x.get("bucket_dataset") or "") for x in (nominal, balanced, precision)}) == 1
-    sources = [str(x.get("source") or "") for x in (nominal, balanced, precision)]
-    same_source = len(set(sources)) == 1
-    standard_validation = all(_is_standard_validation_source(x) for x in sources)
+
+    support_docs = support_docs or {}
+    supports = [support_docs.get(v) or {} for v in ("nominal", "balanced", "precision")]
+    support_valid = all(bool(x.get("schema_supports_closed_loop")) for x in supports)
+    roles = [str(x.get("raw_source_role") or "").strip().lower() for x in supports]
+    specs = [str(x.get("womd_pattern") or "") for x in supports]
+    same_source = bool(support_valid and len(set(specs)) == 1 and all(specs))
+    standard_validation = bool(support_valid and all(r == "validation" for r in roles))
+    support_buckets = [str(x.get("dataset") or "") for x in supports]
+    support_bucket_match = bool(
+        support_valid
+        and len(set(support_buckets)) == 1
+        and support_buckets[0] == str(nominal.get("bucket_dataset") or "")
+    )
     return {
-        "go": bool(complete and same and same_bucket and same_source and standard_validation),
+        "go": bool(complete and same and same_bucket and support_bucket_match and same_source and standard_validation),
         "complete": bool(complete),
         "same_target_keys": bool(same),
-        "same_bucket_dataset": bool(same_bucket),
+        "same_bucket_dataset": bool(same_bucket and support_bucket_match),
+        "support_contracts_valid": bool(support_valid),
         "same_womd_source": bool(same_source),
         "standard_validation_source": bool(standard_validation),
-        "source": nominal.get("source"),
+        "womd_source_role": roles[0] if roles and len(set(roles)) == 1 else roles,
+        "womd_pattern": specs[0] if specs and len(set(specs)) == 1 else specs,
         "bucket_dataset": nominal.get("bucket_dataset"),
         "num_target_keys": len(nk),
         "bucket_target_count": expected,
@@ -195,10 +221,16 @@ def coverage_gate(nominal: dict[str, Any], balanced: dict[str, Any], precision: 
 
 
 def _numeric_close(a: Any, b: Any, atol: float) -> bool:
-    fa, fb = _finite(a), _finite(b)
-    if fa is not None or fb is not None:
-        if fa is None or fb is None:
-            return False
+    try:
+        fa, fb = float(a), float(b)
+        a_numeric = b_numeric = True
+    except Exception:
+        a_numeric = b_numeric = False
+    if a_numeric and b_numeric:
+        if math.isnan(fa) or math.isnan(fb):
+            return math.isnan(fa) and math.isnan(fb)
+        if math.isinf(fa) or math.isinf(fb):
+            return fa == fb
         return abs(fa - fb) <= atol
     return a == b
 
@@ -251,6 +283,7 @@ def adjudicate(
     comparisons: dict[str, dict[str, dict[str, Any]]],
     results: dict[str, dict[str, dict[str, Any]]],
     sentinel_results: dict[str, dict[str, dict[str, Any]]],
+    support_docs: dict[str, dict[str, dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     variants = ("balanced", "precision")
     regimes = ("safe", "near", "contact")
@@ -258,7 +291,13 @@ def adjudicate(
     coverage: dict[str, Any] = {}
     for regime in regimes:
         coverage[regime] = coverage_gate(
-            results["nominal"][regime], results["balanced"][regime], results["precision"][regime]
+            results["nominal"][regime],
+            results["balanced"][regime],
+            results["precision"][regime],
+            support_docs={
+                v: ((support_docs or {}).get(v, {}).get(regime) or {})
+                for v in ("nominal", "balanced", "precision")
+            },
         )
     coverage_go = all(v["go"] for v in coverage.values())
 

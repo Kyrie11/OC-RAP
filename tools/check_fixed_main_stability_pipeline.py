@@ -87,6 +87,8 @@ def main() -> int:
         and ad.get("new_recovery_mechanism_authorized") is False
         and ad.get("main_modified") is False
         and ad.get("planner_parameters_trained") == 0
+        and (ad.get("artifacts") or {}).get("full_run_runtime", {}).get("sha256")
+        and (ad.get("provenance") or {}).get("full_population_runtime", {}).get("scientific_version") == SCIENTIFIC_VERSION
         and decision.get("status") in VALID_STATUSES
         and decision.get("next_branch") == (GO_NEXT_BRANCH if decision.get("status") == STATUS_GO else STOP_NEXT_BRANCH)
     ):

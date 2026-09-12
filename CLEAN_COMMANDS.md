@@ -308,3 +308,23 @@ bash scripts/analyze_dataset_properties.sh
 ```
 
 The exporter is read-only. It captures the full `resume_contract.json`/`semantic_config`, `dataset_summary.json`, manifest hashes/columns/WOMD-role counts and the standard dataset diagnostics. Standard publication test buckets should resolve to WOMD `validation`, not `validation_interactive`.
+
+## V48.124.2 fixed-Main adjudication resume after sentinel/provenance hotfix
+
+The user-facing command is unchanged:
+
+```bash
+cd /home/senzeyu2/code/OC-RAP
+GPU0=0 GPU1=1 \
+BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+bash scripts/run_constraint_native_orientation_audit.sh
+```
+
+If the completed V48.124 nominal/balanced/precision Safe/Near/Contact artifacts remain under
+`$BASE_OUT/ocrap_v48_124_fixed_main_stability`, the launcher reuses them and only recomputes paired comparisons, six one-target sentinel replays, adjudication, pipeline closure and packaging. Do not delete the completed full-population artifacts before this resume.
+
+Upload only the final canonical bundle after the launcher prints success:
+
+```text
+/home/senzeyu2/code/OC-RAP/runs/OC-RAP-v48.124-OC-FMSA-results.zip
+```

@@ -22,6 +22,8 @@ external_baselines:
     source_centerline_points: 120
     energy_weight: 2.0
     eval_noise_scale: 0.15
+    beta_min: 0.1
+    beta_max: 20.0
   training:
     device: auto
     distributed: false

@@ -1192,6 +1192,8 @@ def build_model_from_cfg(input_dim: int, cfg: dict[str, Any]) -> nn.Module:
             scene_layers=int(mcfg.get("scene_layers", 2)),
             energy_weight=float(mcfg.get("energy_weight", 2.0)),
             eval_noise_scale=float(mcfg.get("eval_noise_scale", 0.15)),
+            beta_min=float(mcfg.get("beta_min", 0.1)),
+            beta_max=float(mcfg.get("beta_max", 20.0)),
         )
     if arch in {"flow_planner", "flowplanner"} or baseline in {"flow_planner", "flowplanner"}:
         return FlowPlannerPort(
@@ -1199,7 +1201,9 @@ def build_model_from_cfg(input_dim: int, cfg: dict[str, Any]) -> nn.Module:
             scene_layers=int(mcfg.get("scene_layers", 2)),
             token_size=int(mcfg.get("token_size", 5)),
             token_stride=int(mcfg.get("token_stride", 3)),
-            cfg_dropout=float(mcfg.get("cfg_dropout", 0.15)),
+            cfg_dropout=float(mcfg.get("cfg_dropout", 0.30)),
+            cfg_weight=float(mcfg.get("cfg_weight", 1.8)),
+            consistency_weight=float(mcfg.get("consistency_weight", 0.5)),
             energy_weight=float(mcfg.get("energy_weight", 1.5)),
         )
     if arch in {"plan_r1", "planr1"} or baseline in {"plan_r1", "planr1"}:

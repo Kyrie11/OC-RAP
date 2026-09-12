@@ -22,7 +22,10 @@ external_baselines:
     source_centerline_points: 120
     token_size: 5
     token_stride: 3
-    cfg_dropout: 0.15
+    # Match the released Flow Planner defaults (cfg_prob=0.3, cfg_weight=1.8).
+    cfg_dropout: 0.30
+    cfg_weight: 1.8
+    consistency_weight: 0.5
     energy_weight: 1.5
   training:
     device: auto

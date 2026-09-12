@@ -1,6 +1,6 @@
 # OC-RAP — cleaned audit/deployment workspace
 
-This repository is the cleaned engineering workspace for the frozen OC-RAP mechanism line and the current **V48.124 OC-FMSA fixed-Main stability/non-interference adjudication**.
+This repository is the cleaned engineering workspace for the frozen OC-RAP mechanism line and the current **V48.124 OC-FMSA fixed-Main stability/non-interference adjudication**. The current engineering hotfix is **v48.124.2-OC-FMSA**; the scientific version remains `v48.124-OC-FMSA`.
 
 ## What is active
 

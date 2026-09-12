@@ -197,13 +197,16 @@ class DiffusionPlannerPort(nn.Module):
 
     def __init__(self, input_dim: int, max_candidates: int = 24, d_model: int = 160, num_layers: int = 3,
                  num_heads: int = 5, dropout: float = 0.1, future_len: int = 20,
-                 scene_layers: int = 2, energy_weight: float = 2.0, eval_noise_scale: float = 0.15) -> None:
+                 scene_layers: int = 2, energy_weight: float = 2.0, eval_noise_scale: float = 0.15,
+                 beta_min: float = 0.1, beta_max: float = 20.0) -> None:
         super().__init__()
         self.max_candidates = int(max_candidates)
         self.d_model = int(d_model)
         self.future_len = int(future_len)
         self.energy_weight = float(energy_weight)
         self.eval_noise_scale = float(eval_noise_scale)
+        self.beta_min = float(beta_min)
+        self.beta_max = float(beta_max)
         self.scene = CompactSceneEncoder(d_model, num_heads, scene_layers, dropout)
         self.state_in = nn.Linear(4, d_model)
         self.time_mlp = nn.Sequential(nn.Linear(d_model, d_model), nn.SiLU(), nn.Linear(d_model, d_model))
@@ -239,8 +242,11 @@ class DiffusionPlannerPort(nn.Module):
             t = torch.full((B, N), 0.55, device=x.device, dtype=state.dtype)
             base = torch.arange(T * 4, device=x.device, dtype=state.dtype).reshape(1, 1, T, 4)
             noise = self.eval_noise_scale * torch.sin(base * 0.731 + 0.17).expand_as(state)
-        alpha = torch.cos(0.5 * math.pi * t).clamp_min(1.0e-3)
-        sigma = torch.sin(0.5 * math.pi * t)
+        # Match the source Diffusion Planner's linear VP-SDE marginal instead
+        # of the cosine schedule used by the earlier lightweight port.
+        mean_log_coeff = -0.25 * t.square() * (self.beta_max - self.beta_min) - 0.5 * self.beta_min * t
+        alpha = torch.exp(mean_log_coeff).clamp_min(1.0e-6)
+        sigma = torch.sqrt((1.0 - torch.exp(2.0 * mean_log_coeff)).clamp_min(1.0e-8))
         noisy = alpha[..., None, None] * state + sigma[..., None, None] * noise
         h = self.state_in(noisy.reshape(B * N, T, 4))
         te = self.time_mlp(_time_embedding(t.reshape(B * N), self.d_model)).unsqueeze(1)
@@ -274,7 +280,8 @@ class FlowPlannerPort(nn.Module):
 
     def __init__(self, input_dim: int, max_candidates: int = 24, d_model: int = 160, num_layers: int = 3,
                  num_heads: int = 5, dropout: float = 0.1, future_len: int = 20, scene_layers: int = 2,
-                 token_size: int = 5, token_stride: int = 3, cfg_dropout: float = 0.15,
+                 token_size: int = 5, token_stride: int = 3, cfg_dropout: float = 0.30,
+                 cfg_weight: float = 1.8, consistency_weight: float = 0.5,
                  energy_weight: float = 1.5) -> None:
         super().__init__()
         self.max_candidates = int(max_candidates)
@@ -283,6 +290,8 @@ class FlowPlannerPort(nn.Module):
         self.token_size = max(2, int(token_size))
         self.token_stride = max(1, int(token_stride))
         self.cfg_dropout = float(cfg_dropout)
+        self.cfg_weight = float(cfg_weight)
+        self.consistency_weight = float(consistency_weight)
         self.energy_weight = float(energy_weight)
         self.scene = CompactSceneEncoder(d_model, num_heads, scene_layers, dropout)
         self.segment_in = nn.Linear(self.token_size * 4, d_model)
@@ -349,14 +358,30 @@ class FlowPlannerPort(nn.Module):
         velocity_target = target - base
         flat = xt.reshape(B * N, T, 4)
         seg, starts = self._segments(flat)
-        h = self.segment_in(seg)
+        h0 = self.segment_in(seg)
         cond = scene[:, None, :].expand(B, N, -1).reshape(B * N, -1)
-        if self.training and self.cfg_dropout > 0:
-            keep = (torch.rand(B * N, 1, device=x.device) >= self.cfg_dropout).to(cond.dtype)
-            cond = cond * keep
-        h = h + cond.unsqueeze(1) + self.time_mlp(_time_embedding(t.reshape(B * N), self.d_model)).unsqueeze(1)
-        h = self.blocks(h)
-        vel_seg = self.segment_out(h)
+        time_cond = self.time_mlp(_time_embedding(t.reshape(B * N), self.d_model)).unsqueeze(1)
+        if self.training:
+            # Source Flow Planner samples one CFG mask per scene, then applies it
+            # to that scene's trajectory tokens.  Candidate-wise dropout changes
+            # the learned conditional/unconditional mixture and is avoided here.
+            if self.cfg_dropout > 0:
+                keep_scene = (torch.rand(B, 1, device=x.device) >= self.cfg_dropout).to(cond.dtype)
+                keep = keep_scene[:, None, :].expand(B, N, 1).reshape(B * N, 1)
+                cond = cond * keep
+            h = self.blocks(h0 + cond.unsqueeze(1) + time_cond)
+            vel_seg = self.segment_out(h)
+        else:
+            # Classifier-free guidance is a defining inference mechanism in Flow
+            # Planner.  Evaluate conditional and unconditional branches in one
+            # batched transformer call so fidelity does not require two serial
+            # forwards. Source formula: (1-w) u_uncond + w u_cond.
+            h_cond = h0 + cond.unsqueeze(1) + time_cond
+            h_uncond = h0 + time_cond
+            h_pair = self.blocks(torch.cat([h_cond, h_uncond], dim=0))
+            seg_pair = self.segment_out(h_pair)
+            seg_cond, seg_uncond = torch.chunk(seg_pair, 2, dim=0)
+            vel_seg = (1.0 - self.cfg_weight) * seg_uncond + self.cfg_weight * seg_cond
         velocity_pred = self._fold(vel_seg, starts, T).reshape(B, N, T, 4)
         # Endpoint consistency of the conditional OT path at the sampled t.
         endpoint = xt + (1.0 - t[..., None, None]) * velocity_pred
@@ -364,6 +389,15 @@ class FlowPlannerPort(nn.Module):
         logits = self.prior(x) - self.energy_weight * energy
         if mask is not None:
             logits = logits.masked_fill(~mask.bool(), -1.0e4)
+        # Match the source overlap-consistency term on adjacent segment
+        # predictions.  It is computed before folding/averaging the overlaps.
+        q = vel_seg.reshape(B * N, len(starts), self.token_size, 4)
+        consistency_terms = []
+        for j in range(len(starts) - 1):
+            overlap = max(0, starts[j] + self.token_size - starts[j + 1])
+            if overlap > 0:
+                consistency_terms.append((q[:, j, -overlap:] - q[:, j + 1, :overlap]).square().sum(dim=-1).mean())
+        consistency = torch.stack(consistency_terms).mean() if consistency_terms else velocity_pred.new_zeros(())
         out: dict[str, torch.Tensor] = {
             "logits": logits,
             "flow_velocity_pred": velocity_pred,
@@ -371,6 +405,7 @@ class FlowPlannerPort(nn.Module):
             "flow_valid": valid,
             "flow_endpoint": endpoint,
             "flow_energy": energy,
+            "flow_consistency_loss": self.consistency_weight * consistency,
         }
         out.update(self.scalar_heads(x))
         return out

@@ -45,13 +45,16 @@ def main() -> int:
         "runtime": RUNTIME_NAME,
         "adjudication": ADJUDICATION_NAME,
         "sentinel_index": SENTINEL_INDEX_NAME,
+        "full_run_runtime": "OC-RAP-v48.124-full-population-runtime-code-contract.json",
     }
     for regime in ("safe", "near", "contact"):
         for variant in ("nominal", "balanced", "precision"):
             canonical[f"{variant}_{regime}"] = f"OC-RAP-v48.124-{variant}-{regime}-closed-loop.json"
+            canonical[f"{variant}_{regime}_support"] = f"OC-RAP-v48.124-{variant}-{regime}-dataset-support.json"
         for variant in ("balanced", "precision"):
             canonical[f"{variant}_{regime}_comparison"] = f"OC-RAP-v48.124-{variant}-{regime}-vs-nominal.json"
             canonical[f"{variant}_{regime}_sentinel"] = f"OC-RAP-v48.124-{variant}-{regime}-sentinel.json"
+            canonical[f"{variant}_{regime}_sentinel_support"] = f"OC-RAP-v48.124-{variant}-{regime}-sentinel-dataset-support.json"
 
     members: list[tuple[Path, str]] = []
     files: dict[str, dict[str, object]] = {}

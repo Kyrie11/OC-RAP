@@ -14361,3 +14361,28 @@ This is an **engineering/provenance patch only**; scientific version remains `v4
 - The coverage gate now requires a standard-validation source even if nominal/balanced/precision all agree on some other collection.
 - Added regression checks for both the `set -u` initialization bug and the standard-validation source contract.
 - Paper text stating that these test sets use `validation-interactive` is incorrect and must be corrected to standard `validation`; no dataset/source substitution is authorized.
+
+### V48.124.2 engineering/provenance hotfix — sentinel replay source semantics + coverage provenance closure
+
+Engineering version: `v48.124.2-OC-FMSA`  
+Scientific version: `v48.124-OC-FMSA` (unchanged)
+
+This patch is **engineering/provenance only**. It does not change the frozen Main, the V48.124 five-gate preregistration, any metric, the 5000-draw paired bootstrap (`seed=2027`), the zero non-interference margin, or the V48.123 mechanism-family freeze.
+
+The first production V48.124 attempt completed all nine full-population nominal/balanced/precision Safe/Near/Contact runs and their paired comparisons, but it did **not** reach a valid determinism/adjudication bundle. Reliability/scientific attribution therefore remains fail-closed until V48.124.2 is rerun and the canonical result bundle closes.
+
+Engineering faults found and repaired:
+
+- **Sentinel WOMD replay source bug.** `run_sentinel()` incorrectly read `closed_loop_result["source"]` as the raw WOMD collection. That field denotes the policy/result source (`model` / `teacher_fallback`), not a TFRecord spec, causing the Safe sentinel preflight to normalize `model` into invalid `model@150`. Sentinel replay now reads the immutable sibling `closed_loop_dataset_support.json`, requires `schema_supports_closed_loop=true` and `raw_source_role=validation`, and reuses its exact `womd_pattern`. Sentinel preflight additionally receives `EXPECTED_WOMD_ROLE=validation`.
+- **Coverage source-semantics bug.** `coverage_gate()` previously tested result `source` for standard-validation identity; that would incorrectly fail valid OC-RAP vs nominal comparisons because policy-source labels differ by design. Coverage now consumes the three full-run dataset-support contracts, requires valid support contracts, identical raw WOMD pattern, standard `validation` role, same bucket root and exact same-target coverage. The scientific criterion is unchanged; only its provenance owner is corrected.
+- **Dataset-support closure.** The adjudicator now records all nine full-run support contracts and six sentinel support contracts by SHA; sentinel support must prove exactly one requested/matching target. The canonical result bundle includes these 15 support artifacts so WOMD source claims are independently auditable.
+- **Runtime-source provenance restoration.** The uploaded post-run tree had later external-baseline-only edits in `src/ocrap/simulation/closed_loop_runner.py`, while the V48.124 full-population run was generated with SHA `8f905636...`. V48.124.2 restores that exact experiment-time runner for this adjudication branch. The later external-baseline runner additions are intentionally deferred until V48.124 is scientifically closed rather than retroactively attaching them to already-produced fixed-Main evidence.
+- **Source manifest repair.** `SHA256SUMS.txt` is regenerated from the repaired checkout; stale hashes and the missing `EXTERNAL_BASELINES_INTEGRATION.md` entry are removed.
+
+Resume semantics are intentional: the stable launcher reuses all already-complete nominal/balanced/precision full-population artifacts and recomputes the inexpensive paired comparisons, then runs only the six one-target sentinels, adjudication, pipeline checker and canonical packager. No long population rerun is required as long as the preserved full-run artifacts remain at the same `BASE_OUT` paths.
+
+Additional V48.124.2 closure fixes discovered during synthetic replay validation:
+
+- **Determinism NaN semantics.** Undefined regime-inapplicable metrics are legitimately serialized as `NaN`. The prior recursive comparator treated `NaN != NaN`, which could force a false `FIXED_MAIN_DETERMINISM_STOP` even when sentinel and full-run scientific scene values were identical. Determinism equality now treats `NaN` versus `NaN` and equal-signed infinities as equal, while finite numeric fields retain the preregistered `1e-9` tolerance.
+- **Resumed full-population provenance.** On restart, the launcher preserves the runtime contract that generated already-complete full-population GPU artifacts at `ocrap_v48_124_fixed_main_stability/provenance/full_population_runtime_contract.json`. The adjudicator requires that parent contract to be valid V48.124 fixed-Main evaluation evidence and verifies the frozen dynamic core SHA for selector, closed-loop runner and Waymax rollout. Fresh V48.124.2 runs snapshot their new runtime contract instead. This makes reuse explicit rather than retroactively attributing old GPU artifacts to new orchestration code.
+- **Bundle closure expanded.** The canonical V48.124 result bundle now contains 42 members: runtime/adjudication/sentinel index, the full-population parent runtime, nine full results, nine full support contracts, six paired comparisons, six sentinels, six sentinel support contracts, pipeline-complete and manifest.

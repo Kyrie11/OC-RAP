@@ -36,7 +36,7 @@ def report():
     return out
 
 
-def result(keys=("a", "b"), source="womd/validation@150", bucket="/bucket"):
+def result(keys=("a", "b"), source="model", bucket="/bucket"):
     scenes = []
     for i, k in enumerate(keys):
         scenes.append({"target_key": k, "x": float(i), "metric_summary": {"m": float(i)}})
@@ -45,6 +45,19 @@ def result(keys=("a", "b"), source="womd/validation@150", bucket="/bucket"):
         "source": source, "bucket_dataset": bucket, "scenes": scenes,
     }
 
+
+
+
+def support(bucket="/bucket", pattern="/womd/validation/validation_tfexample.tfrecord@150", role="validation"):
+    return {
+        "schema_supports_closed_loop": True,
+        "raw_source_role": role,
+        "womd_pattern": pattern,
+        "dataset": bucket,
+        "target_keys_valid": True,
+        "num_requested_target_keys": 1,
+        "num_matching_requested_target_keys": 1,
+    }
 
 def sentinel(full, key="a"):
     s = next(x for x in full["scenes"] if x["target_key"] == key)
@@ -55,24 +68,26 @@ def fixture():
     results = {v: {r: result(bucket=f"/{r}") for r in ("safe", "near", "contact")} for v in ("nominal", "balanced", "precision")}
     comparisons = {v: {r: report() for r in ("safe", "near", "contact")} for v in ("balanced", "precision")}
     sentinels = {v: {r: sentinel(results[v][r]) for r in ("safe", "near", "contact")} for v in ("balanced", "precision")}
-    return comparisons, results, sentinels
+    supports = {v: {r: support(bucket=f"/{r}") for r in ("safe", "near", "contact")} for v in ("nominal", "balanced", "precision")}
+    return comparisons, results, sentinels, supports
 
 
 def test_coverage_requires_same_targets_source_and_bucket():
     n = result(); b = result(); p = result()
-    assert coverage_gate(n, b, p)["go"]
-    p["source"] = "womd/validation_interactive/validation_interactive_tfexample.tfrecord@150"
-    assert not coverage_gate(n, b, p)["go"]
-    n = result(source="womd/validation_interactive/validation_interactive_tfexample.tfrecord@150")
-    b = result(source="womd/validation_interactive/validation_interactive_tfexample.tfrecord@150")
-    p = result(source="womd/validation_interactive/validation_interactive_tfexample.tfrecord@150")
-    gate = coverage_gate(n, b, p)
+    supports = {v: support() for v in ("nominal", "balanced", "precision")}
+    assert coverage_gate(n, b, p, support_docs=supports)["go"]
+    # result["source"] is a policy/result label, not WOMD provenance.
+    p["source"] = "anything"
+    assert coverage_gate(n, b, p, support_docs=supports)["go"]
+    supports = {v: support(pattern="/womd/validation_interactive/validation_interactive_tfexample.tfrecord@150", role="validation_interactive") for v in ("nominal", "balanced", "precision")}
+    gate = coverage_gate(n, b, p, support_docs=supports)
     assert gate["same_womd_source"] and not gate["standard_validation_source"] and not gate["go"]
 
 
 def test_sentinel_determinism_ignores_timing_but_not_science():
     full = result(keys=("a",))
     full["scenes"][0]["timing"] = {"wall_s": 9.0}
+    full["scenes"][0]["metric_summary"]["undefined"] = float("nan")
     sent = sentinel(full)
     sent["scenes"][0]["timing"] = {"wall_s": 1.0}
     assert sentinel_determinism(full, sent)["go"]
@@ -81,26 +96,26 @@ def test_sentinel_determinism_ignores_timing_but_not_science():
 
 
 def test_adjudicate_go_and_failure_order():
-    c, r, s = fixture()
-    assert adjudicate(comparisons=c, results=r, sentinel_results=s)["status"] == STATUS_GO
+    c, r, s, u = fixture()
+    assert adjudicate(comparisons=c, results=r, sentinel_results=s, support_docs=u)["status"] == STATUS_GO
 
-    c2, r2, s2 = fixture(); r2["precision"]["safe"]["source"] = "wrong"
-    assert adjudicate(comparisons=c2, results=r2, sentinel_results=s2)["status"] == STATUS_COVERAGE_STOP
+    c2, r2, s2, u2 = fixture(); u2["precision"]["safe"]["raw_source_role"] = "validation_interactive"
+    assert adjudicate(comparisons=c2, results=r2, sentinel_results=s2, support_docs=u2)["status"] == STATUS_COVERAGE_STOP
 
-    c2, r2, s2 = fixture(); s2["balanced"]["safe"]["scenes"][0]["x"] = 99.0
-    assert adjudicate(comparisons=c2, results=r2, sentinel_results=s2)["status"] == STATUS_DETERMINISM_STOP
+    c2, r2, s2, u2 = fixture(); s2["balanced"]["safe"]["scenes"][0]["x"] = 99.0
+    assert adjudicate(comparisons=c2, results=r2, sentinel_results=s2, support_docs=u2)["status"] == STATUS_DETERMINISM_STOP
 
-    c2, r2, s2 = fixture(); c2["balanced"]["safe"]["metrics"]["overlap_any"] = metric(0.1, 0.05, 0.2)
-    assert adjudicate(comparisons=c2, results=r2, sentinel_results=s2)["status"] == STATUS_SAFE_STOP
+    c2, r2, s2, u2 = fixture(); c2["balanced"]["safe"]["metrics"]["overlap_any"] = metric(0.1, 0.05, 0.2)
+    assert adjudicate(comparisons=c2, results=r2, sentinel_results=s2, support_docs=u2)["status"] == STATUS_SAFE_STOP
 
-    c2, r2, s2 = fixture();
+    c2, r2, s2, u2 = fixture();
     for v in ("balanced", "precision"):
         for n in ("critical_ttc_exposure_duration_s", "clearance_deficit_auc_m_s", "ttc_deficit_auc_s2", "min_clearance_m_min", "ttc_s_min"):
             c2[v]["near"]["metrics"][n] = metric()
-    assert adjudicate(comparisons=c2, results=r2, sentinel_results=s2)["status"] == STATUS_NEAR_STOP
+    assert adjudicate(comparisons=c2, results=r2, sentinel_results=s2, support_docs=u2)["status"] == STATUS_NEAR_STOP
 
-    c2, r2, s2 = fixture();
+    c2, r2, s2, u2 = fixture();
     for v in ("balanced", "precision"):
         for n in ("post_contact_clearance_gain_m", "post_contact_free_space_auc_normalized_m", "post_contact_escape_event", "post_contact_terminal_clearance_m", "new_stable_stop_quality_event"):
             c2[v]["contact"]["metrics"][n] = metric()
-    assert adjudicate(comparisons=c2, results=r2, sentinel_results=s2)["status"] == STATUS_CONTACT_STOP
+    assert adjudicate(comparisons=c2, results=r2, sentinel_results=s2, support_docs=u2)["status"] == STATUS_CONTACT_STOP

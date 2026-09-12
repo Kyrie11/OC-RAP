@@ -25,6 +25,12 @@ V123_NEXT = (
     "no_new_recovery_mechanism_capacity_regime_source_horizon_or_threshold_sweep"
 )
 
+FROZEN_FULL_RUN_CORE_SHA256 = {
+    "src/ocrap/planning/selector.py": "1fee0fe119509907bc3c1c534393fd8a7f589e1af4d081d8939edda1279ebb08",
+    "src/ocrap/simulation/closed_loop_runner.py": "8f905636fec21282bbbac3edcfc41c3f01a23aa0485f9c239e323e5e9d501d2d",
+    "src/ocrap/simulation/waymax_rollout.py": "cb1b0b3693a883f740df838e63f811929805fdc3c2337b1de9cae3c9ecea7648",
+}
+
 
 def sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -58,6 +64,7 @@ def main() -> int:
     ap.add_argument("--v123-comparison", type=Path, required=True)
     ap.add_argument("--v123-balanced", type=Path, required=True)
     ap.add_argument("--v123-precision", type=Path, required=True)
+    ap.add_argument("--full-run-runtime", type=Path, required=True)
     ap.add_argument("--run-id", required=True)
     ap.add_argument("--output", type=Path, required=True)
     a = ap.parse_args()
@@ -93,16 +100,45 @@ def main() -> int:
         if not p.is_file():
             errors.append(f"missing_frozen_main_artifact:{p}")
 
+    full_run_runtime: dict[str, Any] = {}
+    try:
+        full_run_runtime = load(a.full_run_runtime)
+        rows = full_run_runtime.get("runtime_files") or {}
+        sc_full = full_run_runtime.get("scientific_contract") or {}
+        if not (
+            full_run_runtime.get("valid") and full_run_runtime.get("attribution_ready")
+            and full_run_runtime.get("scientific_version") == SCIENTIFIC_VERSION
+            and full_run_runtime.get("engineering_version") in {"v48.124.1-OC-FMSA", ENGINEERING_VERSION}
+            and sc_full.get("fixed_main_evaluation_only") is True
+            and sc_full.get("recovery_set_mechanism_family_frozen") is True
+            and sc_full.get("new_recovery_mechanism_authorized") is False
+            and sc_full.get("planner_parameters_trained") == 0
+            and sc_full.get("womd_source_resolution") == "standard_validation_only_with_bucket_provenance_conflict_fail_closed"
+        ):
+            errors.append("full_run_runtime_contract")
+        for rel, want in FROZEN_FULL_RUN_CORE_SHA256.items():
+            if (rows.get(rel) or {}).get("sha256") != want:
+                errors.append(f"full_run_core_sha:{rel}")
+    except Exception as exc:
+        errors.append(f"full_run_runtime_parse:{type(exc).__name__}")
+
     results: dict[str, dict[str, dict[str, Any]]] = {v: {} for v in ("nominal", "balanced", "precision")}
     comparisons: dict[str, dict[str, dict[str, Any]]] = {v: {} for v in ("balanced", "precision")}
     sentinels: dict[str, dict[str, dict[str, Any]]] = {v: {} for v in ("balanced", "precision")}
-    artifacts: dict[str, Any] = {}
+    support_docs: dict[str, dict[str, dict[str, Any]]] = {v: {} for v in ("nominal", "balanced", "precision")}
+    sentinel_support_docs: dict[str, dict[str, dict[str, Any]]] = {v: {} for v in ("balanced", "precision")}
+    artifacts: dict[str, Any] = {
+        "full_run_runtime": artifact_record(a.full_run_runtime) if a.full_run_runtime.is_file() else {"path": str(a.full_run_runtime.resolve()), "sha256": None, "size": 0}
+    }
     try:
         for regime in ("safe", "near", "contact"):
             for variant in ("nominal", "balanced", "precision"):
                 p = getattr(a, f"{variant}_{regime}")
                 results[variant][regime] = load(p)
                 artifacts[f"{variant}_{regime}"] = artifact_record(p)
+                support_path = p.parent / "closed_loop_dataset_support.json"
+                support_docs[variant][regime] = load(support_path)
+                artifacts[f"{variant}_{regime}_support"] = artifact_record(support_path)
             for variant in ("balanced", "precision"):
                 cp = getattr(a, f"{variant}_{regime}_comparison")
                 sp = getattr(a, f"{variant}_{regime}_sentinel")
@@ -110,6 +146,9 @@ def main() -> int:
                 sentinels[variant][regime] = load(sp)
                 artifacts[f"{variant}_{regime}_comparison"] = artifact_record(cp)
                 artifacts[f"{variant}_{regime}_sentinel"] = artifact_record(sp)
+                sentinel_support_path = sp.parent / "closed_loop_dataset_support.json"
+                sentinel_support_docs[variant][regime] = load(sentinel_support_path)
+                artifacts[f"{variant}_{regime}_sentinel_support"] = artifact_record(sentinel_support_path)
     except Exception as exc:
         errors.append(f"evaluation_artifact_parse:{type(exc).__name__}:{exc}")
 
@@ -132,7 +171,28 @@ def main() -> int:
             if int(row.get("bootstrap_draws") or 0) != 5000 or int(row.get("bootstrap_seed") or -1) != 2027:
                 errors.append(f"bootstrap_contract:{variant}:{regime}")
 
-    decision = adjudicate(comparisons=comparisons, results=results, sentinel_results=sentinels) if not errors else {
+    # Dataset collection identity is owned by the support artifacts, not by
+    # result["source"] (which names the policy/result source such as model).
+    for variant in ("nominal", "balanced", "precision"):
+        for regime in ("safe", "near", "contact"):
+            support = support_docs.get(variant, {}).get(regime, {})
+            if not (support.get("schema_supports_closed_loop") and support.get("raw_source_role") == "validation"):
+                errors.append(f"full_support_provenance:{variant}:{regime}")
+    for variant in ("balanced", "precision"):
+        for regime in ("safe", "near", "contact"):
+            support = sentinel_support_docs.get(variant, {}).get(regime, {})
+            if not (
+                support.get("schema_supports_closed_loop")
+                and support.get("raw_source_role") == "validation"
+                and support.get("target_keys_valid") is True
+                and int(support.get("num_requested_target_keys") or 0) == 1
+                and int(support.get("num_matching_requested_target_keys") or 0) == 1
+            ):
+                errors.append(f"sentinel_support_provenance:{variant}:{regime}")
+
+    decision = adjudicate(
+        comparisons=comparisons, results=results, sentinel_results=sentinels, support_docs=support_docs
+    ) if not errors else {
         "status": "FIXED_MAIN_COVERAGE_STOP", "go": False,
         "next_branch": "keep_recovery_mechanism_family_frozen_and_diagnose_only_failed_stability_or_closed_loop_axis_no_new_recovery_mechanism_capacity_regime_source_horizon_or_threshold_sweep",
     }
@@ -147,9 +207,19 @@ def main() -> int:
         "precision_checkpoint": artifact_record(a.precision_checkpoint) if a.precision_checkpoint.is_file() else None,
         "balanced_calibration": artifact_record(a.balanced_calibration) if a.balanced_calibration.is_file() else None,
         "precision_calibration": artifact_record(a.precision_calibration) if a.precision_calibration.is_file() else None,
+        "full_population_runtime": {
+            "artifact": artifact_record(a.full_run_runtime) if a.full_run_runtime.is_file() else None,
+            "engineering_version": full_run_runtime.get("engineering_version"),
+            "scientific_version": full_run_runtime.get("scientific_version"),
+            "run_instance_id": full_run_runtime.get("run_instance_id"),
+            "frozen_core_sha256": FROZEN_FULL_RUN_CORE_SHA256,
+        },
         "womd_sources": {
             regime: {
-                variant: results.get(variant, {}).get(regime, {}).get("source")
+                variant: {
+                    "role": support_docs.get(variant, {}).get(regime, {}).get("raw_source_role"),
+                    "pattern": support_docs.get(variant, {}).get(regime, {}).get("womd_pattern"),
+                }
                 for variant in ("nominal", "balanced", "precision")
             }
             for regime in ("safe", "near", "contact")

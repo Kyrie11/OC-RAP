@@ -61,6 +61,16 @@ def main() -> int:
         'sentinel_rule_lexicographic_common_target': True,
         'no_regime_router': True,
         'source_role_fixed_to_standard_validation': launcher_text.count('WOMD_ROLE=validation') >= 2,
+        'sentinel_replay_uses_dataset_support_womd_pattern': (
+            "closed_loop_dataset_support.json" in launcher_text
+            and "support.get('womd_pattern')" in launcher_text
+            and "full.get('source')" not in launcher_text
+            and "EXPECTED_WOMD_ROLE=validation" in launcher_text
+        ),
+        'full_population_runtime_preserved_on_resume': (
+            'full_population_runtime_contract.json' in launcher_text
+            and '--full-run-runtime' in launcher_text
+        ),
         'set_u_local_initialization_safe': local_init_safe,
     }
     valid=not errors and all(synthetic.values())
