@@ -328,3 +328,25 @@ Upload only the final canonical bundle after the launcher prints success:
 ```text
 /home/senzeyu2/code/OC-RAP/runs/OC-RAP-v48.124-OC-FMSA-results.zip
 ```
+
+## V48.124.3 resume after journal-finalize scene-preservation hotfix
+
+Do **not** delete `runs/ocrap_v48_124_fixed_main_stability/`. The six balanced/precision population `.scenes.jsonl` journals are the authoritative completed scene evidence and are reused. V48.124.3 reconstructs the requested embedded metric scenes from those journals, preserving bucket provenance, then recomputes paired comparisons and runs only the missing deterministic one-target sentinels plus adjudication/package stages.
+
+Stable command remains unchanged:
+
+```bash
+cd /home/senzeyu2/code/OC-RAP
+GPU0=0 GPU1=1 \
+BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+bash scripts/run_constraint_native_orientation_audit.sh
+```
+
+Expected successful terminal artifact:
+
+```text
+/home/senzeyu2/code/OC-RAP/runs/OC-RAP-v48.124-OC-FMSA-results.zip
+```
+
+Upload that canonical ZIP for the reliability/scientific-attribution audit. Until it exists and closes, do not interpret the stale paired-comparison files as V48.124 scientific evidence and do not authorize external-baseline comparison from V48.124.
+

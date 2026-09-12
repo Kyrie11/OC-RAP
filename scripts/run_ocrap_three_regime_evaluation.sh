@@ -150,9 +150,15 @@ run_one_status() {
     return 0
   fi
   if runtime_bool_true "$FINALIZE_COMPLETE_JOURNALS"; then
-    python tools/finalize_closed_loop_from_journal.py --output "$artifact" >/dev/null 2>&1 || true
+    local finalize_args=(--output "$artifact" --bucket-dataset "${2:-}")
+    if runtime_bool_true "$INCLUDE_SCENES_IN_RESULT"; then
+      finalize_args+=(--include-scenes-in-result --result-scene-detail "$RESULT_SCENE_DETAIL")
+    fi
+    python tools/finalize_closed_loop_from_journal.py "${finalize_args[@]}" >/dev/null 2>&1 || true
   fi
-  if runtime_bool_true "$SKIP_COMPLETE_REGIMES" && python tools/check_closed_loop_artifact.py --output "$artifact" --quiet; then
+  local check_args=(--output "$artifact" --quiet)
+  if runtime_bool_true "$INCLUDE_SCENES_IN_RESULT"; then check_args+=(--require-scenes); fi
+  if runtime_bool_true "$SKIP_COMPLETE_REGIMES" && python tools/check_closed_loop_artifact.py "${check_args[@]}"; then
     echo "[REUSE] $regime closed-loop artifact is already complete: $artifact"
     write_phase "$regime" complete 0 "$started" "$(runtime_iso_now)"
     return 0

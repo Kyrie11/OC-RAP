@@ -14386,3 +14386,26 @@ Additional V48.124.2 closure fixes discovered during synthetic replay validation
 - **Determinism NaN semantics.** Undefined regime-inapplicable metrics are legitimately serialized as `NaN`. The prior recursive comparator treated `NaN != NaN`, which could force a false `FIXED_MAIN_DETERMINISM_STOP` even when sentinel and full-run scientific scene values were identical. Determinism equality now treats `NaN` versus `NaN` and equal-signed infinities as equal, while finite numeric fields retain the preregistered `1e-9` tolerance.
 - **Resumed full-population provenance.** On restart, the launcher preserves the runtime contract that generated already-complete full-population GPU artifacts at `ocrap_v48_124_fixed_main_stability/provenance/full_population_runtime_contract.json`. The adjudicator requires that parent contract to be valid V48.124 fixed-Main evaluation evidence and verifies the frozen dynamic core SHA for selector, closed-loop runner and Waymax rollout. Fresh V48.124.2 runs snapshot their new runtime contract instead. This makes reuse explicit rather than retroactively attributing old GPU artifacts to new orchestration code.
 - **Bundle closure expanded.** The canonical V48.124 result bundle now contains 42 members: runtime/adjudication/sentinel index, the full-population parent runtime, nine full results, nine full support contracts, six paired comparisons, six sentinels, six sentinel support contracts, pipeline-complete and manifest.
+
+### V48.124.3 engineering/provenance hotfix — journal-finalize scene preservation
+
+Engineering version: `v48.124.3-OC-FMSA`  
+Scientific version: `v48.124-OC-FMSA` (unchanged)
+
+This patch is **engineering/provenance only**. It does not change the frozen Main, the V48.124 five preregistered gates, the Safe/Near/Contact metric sets, the paired bootstrap (`5000`, seed `2027`), the zero non-interference margin, or the V48.123 mechanism-family freeze.
+
+The V48.124.2 resume attempt exposed a second resume-only artifact bug. The long-running population journals remained complete (Safe 175, Near 250, Contact 209 for both balanced and precision), but `run_ocrap_three_regime_evaluation.sh` invoked `finalize_closed_loop_from_journal.py` before checking for a complete result. The old finalizer reconstructed an aggregate-only JSON with `scenes_embedded=false` and `bucket_dataset=null`, then `SKIP_COMPLETE_REGIMES=true` reused that compact artifact. This destroyed the top-level pairing/sentinel interface without changing the authoritative scene journals. Consequently the rebuilt sentinel index observed nominal 175/250/209 targets but balanced/precision zero targets and stopped before deterministic sentinel replay.
+
+Repairs:
+
+- `finalize_closed_loop_from_journal.py` now preserves/reconstructs bucket and target metadata and can embed metric-level scenes from the authoritative journal when requested.
+- `run_ocrap_three_regime_evaluation.sh` forwards `INCLUDE_SCENES_IN_RESULT` to journal finalization and requires embedded scenes before treating a reused artifact as complete when the caller requested them.
+- `check_closed_loop_artifact.py` adds `--require-scenes`, preventing an aggregate-only reconstruction from being silently reused by V48.124.
+- `build_fixed_main_sentinel_keys.py` and `compare_paired_closed_loop.py` gain an auditable sibling-journal fallback. This is recovery plumbing only; target identity and metric values come from the already-recorded scene journal and are not recomputed or altered.
+- The V48.124 runtime contract now hashes `tools/finalize_closed_loop_from_journal.py`, because that tool can rewrite the primary scientific result and therefore belongs in provenance closure.
+- Resume provenance accepts valid pre-hotfix V48.124.1/V48.124.2 parent runtime contracts while still requiring the frozen dynamic core SHA in adjudication.
+
+Independent repair simulation on copies of the failed V48.124.2 artifacts reconstructed exact 175/250/209 embedded target sets for balanced and precision in all regimes and restored a valid same-target sentinel index. No full-population GPU rerun is required; the stable launcher should reconstruct the six compact results from their unchanged journals, recompute paired comparisons, execute the six one-target deterministic sentinels, then run the original adjudication/pipeline/package stages.
+
+Scientific attribution remains **fail-closed** until a canonical V48.124 result bundle containing the sentinel replays, adjudication, pipeline-complete document and manifest is produced. No Near/Contact GO/STOP conclusion, external-baseline authorization, V48.125 mechanism design, or paper-result upgrade is licensed by this engineering repair itself.
+

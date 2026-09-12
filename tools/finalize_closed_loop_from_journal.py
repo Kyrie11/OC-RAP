@@ -30,6 +30,17 @@ def _progress_path(output: Path) -> Path:
     return output.with_suffix(output.suffix + ".progress.json")
 
 
+def _partial_path(output: Path) -> Path:
+    return output.with_suffix(output.suffix + ".partial")
+
+
+def _first_nonempty(*values: Any) -> Any:
+    for value in values:
+        if value not in (None, ""):
+            return value
+    return None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Finalize a closed-loop summary from a complete append-only scene journal without rerunning simulation."
@@ -37,6 +48,10 @@ def main() -> int:
     ap.add_argument("--output", type=Path, required=True, help="closed_loop_*.json path")
     ap.add_argument("--expected-count", type=int, default=0)
     ap.add_argument("--source", default="")
+    ap.add_argument("--bucket-dataset", default="")
+    ap.add_argument("--target-keys-file", default="")
+    ap.add_argument("--include-scenes-in-result", action="store_true")
+    ap.add_argument("--result-scene-detail", default="metrics", choices=("metrics", "full"))
     ap.add_argument("--allow-incomplete", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
@@ -44,12 +59,21 @@ def main() -> int:
     output = args.output
     journal = _journal_path(output)
     progress_path = _progress_path(output)
+    partial_path = _partial_path(output)
     if not journal.is_file():
         print(json.dumps({"event": "closed_loop_journal_finalize", "status": "no_journal", "journal": str(journal)}))
         return 3
 
+    existing = _read_json(output) or {}
+    partial = _read_json(partial_path) or {}
     progress = _read_json(progress_path) or {}
-    expected = int(args.expected_count or progress.get("requested_rollouts") or 0)
+    expected = int(
+        args.expected_count
+        or progress.get("requested_rollouts")
+        or existing.get("bucket_target_count")
+        or partial.get("bucket_target_count")
+        or 0
+    )
     scenes: list[dict[str, Any]] = []
     seen: set[str] = set()
     fingerprints: set[str] = set()
@@ -75,8 +99,6 @@ def main() -> int:
             if not key or key in seen:
                 continue
             seen.add(key)
-            # Old v50 journals may contain every decision. Keep only the fields
-            # required by aggregation, pairing and critical-scene selection.
             scenes.append(_scene_storage_view(scene, "metrics"))
 
     if len(fingerprints) > 1:
@@ -87,7 +109,7 @@ def main() -> int:
             "status": "unknown_expected_count",
             "journal": str(journal),
             "completed": len(scenes),
-            "hint": "Pass --expected-count, or retain the original progress JSON with requested_rollouts.",
+            "hint": "Pass --expected-count, or retain the original progress/result metadata with requested rollouts.",
         }))
         return 5
     complete = len(scenes) == expected
@@ -104,13 +126,18 @@ def main() -> int:
     if not scenes:
         return 4
 
-    method = str(scenes[0].get("method") or "unknown")
-    source = str(args.source or ("model" if method == "ocrap" else "observation_only_external_policy"))
+    method = str(scenes[0].get("method") or existing.get("method") or partial.get("method") or "unknown")
+    source = str(args.source or existing.get("source") or partial.get("source") or ("model" if method == "ocrap" else "observation_only_external_policy"))
     result = _aggregate_with_buckets(scenes, method, source)
+    bucket_dataset = _first_nonempty(args.bucket_dataset, existing.get("bucket_dataset"), partial.get("bucket_dataset"))
+    target_keys_file = _first_nonempty(args.target_keys_file, existing.get("target_keys_file"), partial.get("target_keys_file"))
+    run_fingerprint = next(iter(fingerprints), str(progress.get("run_fingerprint") or existing.get("run_fingerprint") or partial.get("run_fingerprint") or ""))
     result.update({
+        "bucket_dataset": bucket_dataset,
         "bucket_target_count": expected,
         "bucket_matched_rollouts": len(scenes),
-        "run_fingerprint": next(iter(fingerprints), str(progress.get("run_fingerprint") or "")),
+        "target_keys_file": target_keys_file,
+        "run_fingerprint": run_fingerprint,
         "resume_supported": True,
         "resume": {
             "enabled": True,
@@ -123,25 +150,45 @@ def main() -> int:
         },
         "scene_storage_detail": "metrics",
         "scene_journal_detail": "metrics_or_legacy_full",
-        "scenes_embedded": False,
-        "gamma_rec": float(scenes[0].get("gamma_rec", 0.0) or 0.0),
+        "scenes_embedded": bool(args.include_scenes_in_result),
+        "gamma_rec": float(scenes[0].get("gamma_rec", existing.get("gamma_rec", partial.get("gamma_rec", 0.0))) or 0.0),
         "closed_loop_speed_config": {
+            **(existing.get("closed_loop_speed_config") or partial.get("closed_loop_speed_config") or {}),
             "journal_finalize": True,
-            "result_scene_detail": "metrics",
+            "result_scene_detail": args.result_scene_detail,
             "scene_journal_detail": "metrics_or_legacy_full",
             "memory_scene_detail": "metrics",
-            "include_scenes_in_result": False,
-            "include_scenes_in_partial": False,
+            "include_scenes_in_result": bool(args.include_scenes_in_result),
         },
         "warnings": [
-            "Final summary reconstructed from the append-only scene journal after an interrupted finalization stage."
+            "Final summary reconstructed from the append-only scene journal after an interrupted/finalization-only resume stage."
         ],
     })
+    # Preserve non-learned runtime metadata when an earlier complete/partial result
+    # exists. These fields are not recomputed by the journal aggregator but are
+    # useful for provenance and downstream contract checks.
+    for key in (
+        "gamma_rec_by_bucket", "selector_config", "target_id_matching",
+        "raw_scan_bound_source", "raw_scenarios_seen", "raw_scenarios_seen_this_run",
+    ):
+        value = _first_nonempty(existing.get(key), partial.get(key))
+        if value is not None:
+            result[key] = value
+    if args.include_scenes_in_result:
+        result["scenes"] = [_scene_storage_view(scene, args.result_scene_detail) for scene in scenes]
+
     buckets = sorted({str(s.get("bucket_name")) for s in scenes if s.get("bucket_name")})
-    result["bucket_dataset"] = None
     result["reconstructed_bucket_names"] = buckets
     if args.dry_run:
-        print(json.dumps({"event": "closed_loop_journal_finalize", "status": "would_finalize", "completed": len(scenes), "expected": expected, "output": str(output)}))
+        print(json.dumps({
+            "event": "closed_loop_journal_finalize",
+            "status": "would_finalize",
+            "completed": len(scenes),
+            "expected": expected,
+            "output": str(output),
+            "scenes_embedded": bool(args.include_scenes_in_result),
+            "bucket_dataset": bucket_dataset,
+        }))
         return 0
 
     write_json(result, output)
@@ -162,6 +209,8 @@ def main() -> int:
         "expected": expected,
         "torn_lines": torn_lines,
         "output": str(output),
+        "scenes_embedded": bool(args.include_scenes_in_result),
+        "bucket_dataset": bucket_dataset,
     }))
     return 0
 

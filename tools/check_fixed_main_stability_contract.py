@@ -22,6 +22,7 @@ RUNTIME_FILES=(
     'tools/resolve_womd_replay_source.py',
     'tools/check_closed_loop_dataset_support.py',
     'tools/check_closed_loop_artifact.py',
+    'tools/finalize_closed_loop_from_journal.py',
     'tools/build_fixed_main_sentinel_keys.py',
     'tools/compare_paired_closed_loop.py',
     'tools/adjudicate_fixed_main_stability.py',
@@ -70,6 +71,10 @@ def main() -> int:
         'full_population_runtime_preserved_on_resume': (
             'full_population_runtime_contract.json' in launcher_text
             and '--full-run-runtime' in launcher_text
+        ),
+        'resume_finalize_preserves_scene_contract': (
+            '--include-scenes-in-result' in (repo/'scripts/run_ocrap_three_regime_evaluation.sh').read_text(encoding='utf-8')
+            and '--require-scenes' in (repo/'scripts/run_ocrap_three_regime_evaluation.sh').read_text(encoding='utf-8')
         ),
         'set_u_local_initialization_safe': local_init_safe,
     }

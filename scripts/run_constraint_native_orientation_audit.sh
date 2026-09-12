@@ -66,13 +66,13 @@ except Exception:
 # complete population runs. A later hotfix runtime must never be back-filled.
 if (doc.get('valid') and doc.get('attribution_ready') and
     doc.get('scientific_version')=='v48.124-OC-FMSA' and
-    doc.get('engineering_version')=='v48.124.1-OC-FMSA'):
+    doc.get('engineering_version') in {'v48.124.1-OC-FMSA','v48.124.2-OC-FMSA'}):
     dst.parent.mkdir(parents=True,exist_ok=True)
     shutil.copy2(src,dst)
 PY
 fi
 if [[ "$FULL_RESULTS_PRESENT" == 1 && ! -f "$FULL_RUN_RUNTIME" ]]; then
-  echo "completed V48.124 population artifacts exist but their v48.124.1 runtime contract is unavailable; refuse provenance-unsafe reuse" >&2
+  echo "completed V48.124 population artifacts exist but their pre-hotfix V48.124.1/V48.124.2 runtime contract is unavailable; refuse provenance-unsafe reuse" >&2
   exit 30
 fi
 rm -f "$RUNTIME" "$SENTINEL_INDEX" "$ADJUDICATION" "$COMPLETE" "$BUNDLE_MANIFEST" "$RESULTS_ZIP"

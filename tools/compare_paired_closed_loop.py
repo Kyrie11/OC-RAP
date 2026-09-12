@@ -111,6 +111,42 @@ def _load(path: Path) -> dict[str, Any]:
         return json.load(f)
 
 
+def _load_scenes(path: Path, doc: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
+    embedded = doc.get("scenes")
+    if isinstance(embedded, list) and embedded:
+        return [x for x in embedded if isinstance(x, dict)], "embedded"
+    journal = path.with_suffix(path.suffix + ".scenes.jsonl")
+    if not journal.is_file():
+        return [], "none"
+    scenes: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    fingerprints: set[str] = set()
+    with journal.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(record, dict):
+                continue
+            scene = record.get("scene", record)
+            if not isinstance(scene, dict):
+                continue
+            fp = str(record.get("run_fingerprint") or "")
+            if fp:
+                fingerprints.add(fp)
+            key = _key(scene)
+            if key and key not in seen:
+                seen.add(key)
+                scenes.append(scene)
+    if len(fingerprints) > 1:
+        raise ValueError(f"multiple journal fingerprints for {path}: {sorted(fingerprints)}")
+    return scenes, "journal"
+
+
 def _key(scene: dict[str, Any]) -> str:
     return str(scene.get("target_key") or f"{scene.get('bucket_name','')}|{scene.get('scene_id','')}|{scene.get('target_time_index','')}")
 
@@ -149,8 +185,10 @@ def main() -> int:
 
     control = _load(args.control)
     method = _load(args.method)
-    c_scenes = {_key(s): s for s in control.get("scenes", [])}
-    m_scenes = {_key(s): s for s in method.get("scenes", [])}
+    c_rows, c_source = _load_scenes(args.control, control)
+    m_rows, m_source = _load_scenes(args.method, method)
+    c_scenes = {_key(s): s for s in c_rows}
+    m_scenes = {_key(s): s for s in m_rows}
     common = sorted(set(c_scenes) & set(m_scenes))
     if not common:
         raise SystemExit("No paired scenes/targets found. Use results built from the same target list and seed.")
@@ -162,6 +200,8 @@ def main() -> int:
         "num_control_scenes": len(c_scenes),
         "num_method_scenes": len(m_scenes),
         "num_paired_scenes": len(common),
+        "control_scene_source": c_source,
+        "method_scene_source": m_source,
         "bootstrap_draws": int(args.bootstrap),
         "bootstrap_seed": int(args.seed),
         "metrics": {},

@@ -32,6 +32,7 @@ def main() -> int:
     ap.add_argument("--checkpoint", default=None)
     ap.add_argument("--dependency", action="append", default=[])
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--require-scenes", action="store_true")
     args = ap.parse_args()
     p = args.output
     prog = read(p.with_suffix(p.suffix + ".progress.json"))
@@ -58,6 +59,12 @@ def main() -> int:
     if result and args.bucket_dataset is not None and not _same_path(result.get("bucket_dataset"), args.bucket_dataset):
         complete = False
         errors.append("bucket_dataset_mismatch")
+    if result and args.require_scenes:
+        scenes = result.get("scenes")
+        expected_scenes = int(result.get("num_scenes") or 0)
+        if not bool(result.get("scenes_embedded")) or not isinstance(scenes, list) or len(scenes) != expected_scenes:
+            complete = False
+            errors.append("embedded_scenes_required_but_missing_or_incomplete")
 
     dependencies = [Path(x) for x in args.dependency]
     if args.checkpoint:

@@ -108,7 +108,7 @@ def main() -> int:
         if not (
             full_run_runtime.get("valid") and full_run_runtime.get("attribution_ready")
             and full_run_runtime.get("scientific_version") == SCIENTIFIC_VERSION
-            and full_run_runtime.get("engineering_version") in {"v48.124.1-OC-FMSA", ENGINEERING_VERSION}
+            and full_run_runtime.get("engineering_version") in {"v48.124.1-OC-FMSA", "v48.124.2-OC-FMSA", ENGINEERING_VERSION}
             and sc_full.get("fixed_main_evaluation_only") is True
             and sc_full.get("recovery_set_mechanism_family_frozen") is True
             and sc_full.get("new_recovery_mechanism_authorized") is False
