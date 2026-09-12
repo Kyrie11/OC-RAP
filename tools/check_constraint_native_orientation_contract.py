@@ -16,7 +16,7 @@ ACTIVE = [
     "src/ocrap/audits/recovery_set_constraint_flow.py",
     "src/ocrap/audits/weak_root_recovery_set_flow.py",
     "src/ocrap/audits/tail_boundary_crossing_flow.py",
-    "src/ocrap/audits/viability_rank_transport.py",
+    "src/ocrap/audits/viability_rank_persistence.py",
     "tools/run_constraint_native_recovery_orientation_audit.py",
     "tools/compare_constraint_native_recovery_orientation.py",
     "tools/check_constraint_native_orientation_contract.py",
@@ -50,7 +50,7 @@ def main() -> int:
     import ocrap.audits.recovery_set_constraint_flow as rscf
     import ocrap.audits.weak_root_recovery_set_flow as wrcf
     import ocrap.audits.tail_boundary_crossing_flow as tbcf
-    import ocrap.audits.viability_rank_transport as vrt
+    import ocrap.audits.viability_rank_persistence as vrpc
 
     for rel in ACTIVE:
         p = (repo / rel).resolve()
@@ -72,7 +72,7 @@ def main() -> int:
         "recovery_set_constraint_flow": rscf,
         "weak_root_recovery_set_flow": wrcf,
         "tail_boundary_crossing_flow": tbcf,
-        "viability_rank_transport": vrt,
+        "viability_rank_persistence": vrpc,
     }
     imported = {k: str(Path(v.__file__).resolve()) for k, v in modules.items()}
     expected = {
@@ -84,19 +84,19 @@ def main() -> int:
         "recovery_set_constraint_flow": str((repo / "src/ocrap/audits/recovery_set_constraint_flow.py").resolve()),
         "weak_root_recovery_set_flow": str((repo / "src/ocrap/audits/weak_root_recovery_set_flow.py").resolve()),
         "tail_boundary_crossing_flow": str((repo / "src/ocrap/audits/tail_boundary_crossing_flow.py").resolve()),
-        "viability_rank_transport": str((repo / "src/ocrap/audits/viability_rank_transport.py").resolve()),
+        "viability_rank_persistence": str((repo / "src/ocrap/audits/viability_rank_persistence.py").resolve()),
     }
     for k, want in expected.items():
         if imported.get(k) != want:
             errors.append(f"import_path:{k}")
 
-    checks = vrt.contract_checks()
+    checks = vrpc.contract_checks()
     if not checks or not all(bool(v) for v in checks.values()):
         errors.append("synthetic_contract")
 
     sc = {
         "audit_only": True,
-        "viability_rank_transport": True,
+        "viability_rank_persistence_coupling": True,
         "boundary_transport": False,
         "candidate_identity_shuffle": "whole_feature_row_cyclic_permutation_within_scene_time_group",
         "capacity_matched_all_families": True,
@@ -107,15 +107,15 @@ def main() -> int:
         "rank_cut_sweep": False,
         "lr_or_epoch_sweep": False,
         "constraint_names": ["clearance", "stopping", "route", "reentry"],
-        "transport_channels": ["joint_prefix_viability_rank_transport", "joint_suffix_persistent_reentry_rank_transport"],
-        "transport_mode_degrees": [int(x) for x in vrt.TRANSPORT_MODE_DEGREES],
-        "transport_basis": "exact_shifted_legendre_degree_0_to_3_on_nominal_rank_intervals",
-        "rank_coordinate": "candidate_independent_nominal_same_option_viability_order",
+        "coupling_channels": ["joint_prefix_viability_rank_persistence", "joint_suffix_persistent_reentry_rank_persistence"],
+        "coupling_mode_names": [str(x) for x in vrpc.COUPLING_MODE_NAMES],
+        "persistence_basis": "fixed_global_rank_persistence_and_rank_x_persistence_modes",
+        "rank_coordinate": "candidate_independent_nominal_same_option_viability_midranks",
         "candidate_rank_sort_used_for_coordinate": False,
         "option_aggregation": "same_option_signed_margin_displacement_projected_on_candidate_independent_nominal_rank_basis",
         "primary_option_set": "all_common_valid_recovery_options",
         "control_option_set": "support_of_frozen_v48_117_weak_root_zero_boundary_witnesses",
-        "boundary_support_weights_used_in_transport": False,
+        "boundary_support_weights_used_in_persistence": False,
         "active_option_identity_exported": False,
         "pre_readout_candidate_option_selector": False,
         "frozen_root_decoder_read_only": True,
@@ -136,8 +136,8 @@ def main() -> int:
         "strictly_convex_unique_solution": True,
         "iterative_optimizer_used": False,
         "ridge_lambda_rule": "1_over_axis_train_rows",
-        "matched_family_dim": vrt.MATCHED_DIM,
-        "transport_geometry_dim": vrt.TRANSPORT_GEOMETRY_DIM,
+        "matched_family_dim": vrpc.MATCHED_DIM,
+        "coupling_geometry_dim": vrpc.COUPLING_GEOMETRY_DIM,
         "work_bins": 8,
         "work_bins_cover_full_horizon": True,
         "existing_recovery_horizon_only": True,
@@ -146,12 +146,15 @@ def main() -> int:
         "option_permutation_invariant": True,
         "same_option_joint_constraint_viability": True,
         "same_option_nominal_rank_correspondence": True,
+        "same_option_nominal_rank_persistence": True,
+        "rank_persistence_directionality": "prefix_history_and_suffix_future",
+        "persistence_decay_or_window_sweep": False,
         "downstream_ocmero_option_selection_unchanged": True,
     }
     out = {
-        "schema": "ocrap-v48.120-vrt-runtime-code-contract-v1",
-        "engineering_version": vrt.ENGINEERING_VERSION,
-        "scientific_version": vrt.SCIENTIFIC_VERSION,
+        "schema": "ocrap-v48.121-vrpc-runtime-code-contract-v1",
+        "engineering_version": vrpc.ENGINEERING_VERSION,
+        "scientific_version": vrpc.SCIENTIFIC_VERSION,
         "run_instance_id": a.run_id,
         "valid": not errors,
         "attribution_ready": not errors,

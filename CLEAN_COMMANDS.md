@@ -15,26 +15,42 @@ export PYTHONPATH="$PWD/src:$PWD${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONNOUSERSITE=1
 ```
 
-## 0. Current V48.120 scientific reference contract
+## 0. Current V48.121 scientific reference contract
 
-The stable unversioned orientation launcher now runs **V48.120 OC-VRT**. It treats the completed V48.119 OC-VOP STOP artifacts as immutable scientific inputs and verifies their exact SHA/status/registered rank-transport next branch before any V48.120 audit starts. Python implementation filenames remain semantic/unversioned; scientific inputs and outputs remain versioned.
+The stable unversioned orientation launcher now runs **V48.121 OC-VRPC**. It treats the completed V48.120 OC-VRT STOP artifacts as immutable scientific inputs and verifies their exact SHA/status/registered rank-persistence next branch before any V48.121 audit starts. Python implementation filenames remain semantic/unversioned; scientific inputs and outputs remain versioned.
 
-V48.119 established that fixed quartile viability order profiles are strongly active and non-collapsed, yet still fail population-stable Support/Reserve transfer. The missing information is not static recovery depth itself: V48.119 independently re-sorts the candidate and nominal option sets before comparing their order summaries, erasing which **same recovery option** moved from which nominal viability rank under a candidate perturbation. V48.120 therefore tests the preregistered **viability rank transport** hypothesis.
+V48.120 established an important structural point: the set functional can simultaneously preserve a candidate-independent **nominal recovery ordering** and **same-option candidate causal correspondence**. Production transport and rank reassignment were active in every unique role, and Contact Reserve retained strong directional signal. Nevertheless the instantaneous nominal-rank transport did not transfer across populations, especially on Support. The remaining preregistered question is whether the same option must retain its nominal rank ownership over the relevant prefix/suffix for candidate displacement to become population stable.
 
-## 1. Current orientation audit — V48.120 OC-VRT
+## 1. Current orientation audit — V48.121 OC-VRPC
 
-V48.120 is **audit-only**. The 156-D frozen candidate response, actuator-projected executable constraints, recovery horizon/library, cohorts, whole-row candidate shuffle and 220-D closed-form ridge capacity remain fixed. For each recovery option it retains the same-option joint prefix/suffix viability margin. At each time, a candidate-independent coordinate is formed from the **nominal** recovery viability order; candidate values are never sorted to define this coordinate. The same recovery option is followed under the candidate and contributes its signed margin displacement `candidate - nominal` over that nominal-rank interval.
+V48.121 is **audit-only**. The 156-D frozen candidate response, actuator-projected executable constraints, same-option joint prefix/suffix viability margins, recovery horizon/library, cohorts, whole-row candidate shuffle and 220-D closed-form ridge capacity remain fixed. Candidate values never define the rank coordinate.
 
-Exact nominal ties share one rank interval and contribute their mean same-option displacement, avoiding arbitrary within-tie identity order. The displacement field on rank `u in [0,1]` is integrated exactly against the first four fixed shifted-Legendre modes (degrees `0,1,2,3`): global shift, frontier-vs-tail tilt, curvature and higher-order rank asymmetry. These modes are fixed by the inherited 64-D budget; there are no rank cuts, temperatures, quantile masses or rank hyperparameter sweeps.
-
-The primary `full_transport` uses all common valid recovery options. The equal-capacity `exposed_transport` control uses only the support (not the weights) of V48.117's frozen weak-root zero-boundary witnesses. Same-option identity is used only internally for causal correspondence and is never exported to the linear readout.
+For each recovery option, V48.121 computes its exact candidate-independent nominal midrank at every time. Exact nominal ties share one midrank. Directional persistence is threshold-free:
 
 ```text
-8 bins x 2 temporal channels x 4 fixed transport modes = 64-D
+prefix defect(t) = mean_{s<=t} |r_l(t) - r_l(s)|
+suffix defect(t) = mean_{s>=t} |r_l(t) - r_l(s)|
+```
+
+The same option's signed viability displacement `d_l(t)=q_l^a(t)-q_l^0(t)` is coupled to four fixed modes:
+
+```text
+1                 global signed viability shift
+x = 2r - 1        nominal-rank tilt
+p                 rank-persistence defect
+x * p             rank-by-persistence interaction
+```
+
+These modes are fixed before evaluation. There is no rank cut, quantile mass, temperature, decay/window tuning, option-count sweep or learned set encoder.
+
+The primary `full_persistence` uses all common valid recovery options. The equal-capacity `exposed_persistence` control uses only the support (not weights) of V48.117 frozen weak-root zero-boundary witnesses. Option identity is used only internally to maintain same-option trajectories and is never exported to the readout.
+
+```text
+8 bins x 2 temporal channels x 4 fixed coupling modes = 64-D
 156-D frozen candidate response + 64-D = 220-D
 ```
 
-No regime label, teacher future value, learned set encoder, boundary transport, threshold, horizon, option-count, rank-cut, source, capacity, LR or epoch sweep is introduced.
+No regime label, teacher future value, boundary transport, threshold, horizon, source, capacity, LR or epoch sweep is introduced.
 
 Run exactly:
 
@@ -48,12 +64,12 @@ bash scripts/run_constraint_native_orientation_audit.sh
 Upload only:
 
 ```text
-/home/senzeyu2/code/OC-RAP/runs/OC-RAP-v48.120-OC-VRT-results.zip
+/home/senzeyu2/code/OC-RAP/runs/OC-RAP-v48.121-OC-VRPC-results.zip
 ```
 
-### About OC-RAP training in V48.120
+### About OC-RAP training in V48.121
 
-There is no registered V48.120 planner/root/source training stage. Running generic `python -m ocrap.cli train` would not reproduce this audit. Main/carrier integration is authorized only if one preregistered rank-transport family passes absolute Support+Reserve, historical improvement and exact activity/re-entry gates.
+There is no registered V48.121 planner/root/source training stage. Running generic `python -m ocrap.cli train` would not reproduce this audit. Main/carrier integration is authorized only if a preregistered persistence family passes absolute Support+Reserve, historical improvement, and exact persistence/reassignment/re-entry activity gates.
 
 ## 2. Direct OC-RAP three-regime closed-loop test
 

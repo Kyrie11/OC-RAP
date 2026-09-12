@@ -13931,3 +13931,116 @@ otherwise STOP
 ```
 
 The stable launcher filename and user command remain unchanged. Before GPU work, it verifies the exact authoritative V48.119 pipeline/comparison/balanced/precision SHAs, `VIABILITY_ORDER_PROFILE_STOP`, and the exact registered V48.120 rank-transport branch.
+
+## V48.120 completed attribution — nominal-rank same-option transport is structurally correct, but instantaneous rank transport is not a population-stable carrier
+
+Engineering and scientific attribution passed on the uploaded V48.120 OC-VRT production run. The canonical result bundle is byte-closed against the standalone artifacts, active runtime source hashes match the uploaded checkout, the probes remain unique closed-form ridge solutions at the inherited 220-D capacity, and balanced/precision are exact scientific duplicates and therefore count as four unique population roles. The preregistered decision is `VIABILITY_RANK_TRANSPORT_STOP`; V48.120 does **not** authorize Main/carrier integration.
+
+V48.120 nevertheless establishes a new structural fact that is retained: it is the first audited set functional in this chain that simultaneously preserves (i) a candidate-independent **nominal recovery ordering** and (ii) **same-option candidate causal correspondence**. The candidate never defines the rank coordinate; the same physical recovery option contributes `q_l^a(t)-q_l^0(t)` at its nominal rank. Rank reassignment is active in all four unique roles, as are nonzero higher-rank transport shape modes, so the STOP is not caused by an inactive or degenerate transport field.
+
+The strongest retained signal is Contact Reserve. The primary `full_transport` obtains AUC/shuffle-lift/Top1-lift of approximately `0.781/+0.401/+0.400` on dev-Contact and `0.625/+0.403/+0.250` on certificate-Contact. Relative to V48.119 `full_profile`, Reserve AUC also moves positively on both Contact roles (`+0.0260`, `+0.0139`). Full-set transport exceeds exposed transport on Contact Reserve (`+0.1354` dev, `+0.1111` certificate), reinforcing the earlier V48.118 conclusion that broad recovery redundancy is a real debt-clearing/re-entry primitive.
+
+Support does not transfer. `full_transport - V48.119 full_profile` has no positive unique role: dev-Near is slightly lower, dev-Contact is unchanged, certificate-Near drops sharply, and certificate-Contact is lower. Exposed transport likewise improves historically only certificate-Contact. Therefore nominal-rank causal correspondence alone does not solve Near Support or certificate transfer.
+
+The production activity diagnostics show why the next question is temporal rather than architectural. Across all four roles there are 12 common valid options, full prefix/suffix coverage is 1.0, full prefix rank-inversion fractions are roughly 0.10--0.12, full suffix inversions roughly 0.15--0.17, and higher-rank shape energy is clearly nonzero. Candidate-induced rank reassignment is therefore real. However V48.120 constructs and compresses the nominal-rank transport independently at each time before fixed-bin averaging. It does not encode whether **the same option keeps owning a nominal rank neighborhood over the relevant prefix/suffix** or whether different options exchange those ranks over time.
+
+Scientific closure after V48.120:
+
+- close **instantaneous nominal-rank viability transport with time-local rank projection plus fixed-bin averaging** as a complete population-stable carrier;
+- retain candidate-independent nominal rank as the correct causal coordinate;
+- retain same-option candidate-minus-nominal viability displacement;
+- retain same-option joint prefix/suffix viability, signed zero-boundary reserve/debt semantics, observation-exposed support evidence, full-set redundancy for Contact Reserve, and persistent-safe re-entry;
+- continue to keep hard candidate option selection, standalone uniform means, rank-1 max envelopes, fixed quartile profiles, first-order max-option cotangents, static weighted first moments, generic capacity growth, regime routers, source/root retraining, boundary transport and threshold/horizon/option-count/rank-cut sweeps closed.
+
+The dominant bottleneck is now **same-option temporal nominal-rank persistence / rank-ownership continuity coupled to candidate viability displacement**. Near needs to know whether observation-relevant recovery modes remain persistently near the relevant viability frontier over the prefix. Contact needs to know whether the same debt-clearing recovery modes remain persistently strong over the suffix/re-entry interval. This is narrower than static rank depth or instantaneous rank transport.
+
+The exact registered STOP branch is:
+
+```text
+close_nominal_rank_viability_transport
+-> preregister recovery_set_rank_persistence_coupling_audit
+-> no training/capacity/regime/source/horizon/threshold sweep
+```
+
+## V48.121 OC-VRPC — Observation-Consistent Recovery-Set Viability Rank-Persistence Coupling Audit
+
+Engineering version: `v48.121.0-OC-VRPC`  
+Scientific version: `v48.121-OC-VRPC`
+
+V48.121 is audit-only and follows the exact V48.120 STOP branch. It keeps all upstream physics, same-option joint prefix/suffix viability, candidate-independent nominal ordering, same-option candidate correspondence, cohorts, recovery library/horizon, whole-row shuffle null, and 220-D closed-form ridge capacity fixed. The only scientific change is to expose whether candidate-induced viability displacement acts on recovery options whose **nominal rank ownership is temporally persistent**.
+
+For option `l`, temporal channel `z in {prefix,suffix}` and time `t`:
+
+```text
+q_l^0,z(t) = nominal same-option joint viability margin
+q_l^a,z(t) = candidate same-option joint viability margin
+d_l^z(t)   = q_l^a,z(t) - q_l^0,z(t)
+```
+
+Nominal margins alone define an exact candidate-independent midrank `r_l^z(t) in [0,1]`; exact nominal ties share one midrank. Directional rank-persistence defect is threshold-free:
+
+```text
+p_l^pre(t) = mean_{s<=t} |r_l^pre(t) - r_l^pre(s)|
+p_l^suf(t) = mean_{s>=t} |r_l^suf(t) - r_l^suf(s)|
+```
+
+`p=0` means the same recovery option has retained its nominal rank over the entire relevant prefix/suffix. No learned kernel, decay, persistence window, threshold or rank cut is introduced.
+
+Each time step uses four fixed coupling modes:
+
+```text
+phi0 = 1                 global signed viability displacement
+phi1 = x = 2r - 1        nominal-rank tilt
+phi2 = p                 displacement on rank-unstable options
+phi3 = x * p             nominal-rank x persistence interaction
+```
+
+The option mean of `d * phi` is averaged only in the inherited eight temporal bins:
+
+```text
+8 bins x 2 temporal channels x 4 fixed coupling modes = 64-D
+156-D frozen candidate response + 64-D = 220-D
+```
+
+Two equal-capacity families are preregistered:
+
+```text
+exposed_persistence = rank-persistence coupling on the SUPPORT, not weights,
+                      of V48.117 frozen weak-root zero-boundary witnesses
+full_persistence    = rank-persistence coupling on all common valid options [PRIMARY]
+```
+
+Option identity is used internally only to maintain same-option nominal rank trajectories and candidate correspondence; it is never exported to the readout. Candidate rank sorting is never used to define the coordinate.
+
+Absolute Support/Reserve gates remain unchanged: AUC `>=0.65` and true-vs-shuffle AUC `>=+0.05` in at least 6/8 legacy cells, covering at least 3/4 unique roles with Near+Contact, plus Top1 lift `>=+0.10` in at least 4/8 cells covering at least two unique roles with Near+Contact. Historical increment gates compare `full_persistence` against authoritative V48.120 `full_transport` and `exposed_persistence` against V48.120 `exposed_transport`: positive AUC delta in at least 6/8 cells and 3/4 roles with Near+Contact, with delta `>=0.01` in at least 4/8 cells. `full_persistence - exposed_persistence` is the internal full-set attribution contrast.
+
+The activity gate requires exact permutation/padding/mass contracts, nonzero exposed/full persistence features, nonzero persistence-specific energy and nonzero nominal-rank persistence defect across at least 3/4 unique roles with Near+Contact, retained same-option rank reassignment, multiple diverse options, and Contact re-entry coverage.
+
+Promotion is fail-closed:
+
+```text
+full_persistence absolute Support+Reserve GO
++ full_persistence vs V48.120 full_transport Support+Reserve GO
++ exact persistence / reassignment / re-entry activity GO
+  -> VIABILITY_RANK_PERSISTENCE_COUPLING_GO;
+     authorize exactly one full persistence Main/carrier integration,
+     with no source/boundary/regime/capacity co-change.
+
+exposed_persistence absolute Support+Reserve GO
++ exposed_persistence vs V48.120 exposed_transport Support+Reserve GO
++ exact activity GO
+  -> EXPOSED_VIABILITY_RANK_PERSISTENCE_COUPLING_GO;
+     authorize exactly one exposed persistence Main/carrier integration.
+
+Support-only / Reserve-only / local-order-only
+  -> retain only the preregistered proven axis; do not broaden the experiment.
+
+otherwise STOP
+  -> close nominal-rank persistence coupling as a complete carrier;
+     preregister signed viability rank-state transport next,
+     with no training/capacity/regime/source/horizon/threshold sweep.
+```
+
+The STOP successor is deliberately not included in V48.121. If rank persistence is insufficient, the next missing primitive would be the **absolute signed nominal viability level relative to the zero boundary**, because rank alone cannot distinguish shallow positive reserve from deep negative debt. That hypothesis is held out to preserve one-factor causal attribution.
+
+The stable launcher filename and user command remain unchanged. Before GPU work, V48.121 verifies the exact authoritative V48.120 pipeline/comparison/balanced/precision SHAs, `VIABILITY_RANK_TRANSPORT_STOP`, and its exact registered rank-persistence branch.
