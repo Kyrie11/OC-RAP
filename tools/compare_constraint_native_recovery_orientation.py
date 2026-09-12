@@ -7,22 +7,22 @@ import json
 from pathlib import Path
 from typing import Any
 
-from ocrap.audits.viability_rank_persistence import (
+from ocrap.audits.signed_viability_rank_state import (
     ENGINEERING_VERSION,
     SCIENTIFIC_VERSION,
     MATCHED_DIM,
-    COUPLING_GEOMETRY_DIM,
-    COUPLING_MODE_NAMES,
+    STATE_GEOMETRY_DIM,
+    STATE_MODE_NAMES,
 )
 
-AUTHORITATIVE_V120_PIPELINE_SHA256 = "2839be06885f1b05cf6064b934fbe6ed55eda9ff0db6ffe46bf50e89c21cb471"
-AUTHORITATIVE_V120_COMPARISON_SHA256 = "9a7827d769b3abe4cda0802fa4aa95b879f38c0ffe8392df65c21bc017cae3c4"
-AUTHORITATIVE_V120_BALANCED_SHA256 = "a507bedd5f61cdfc6086dce7e1a1b12955fa62b1525d1e865d2fc574e993a263"
-AUTHORITATIVE_V120_PRECISION_SHA256 = "57aafc304b0ec29d04b902d6dd5cec7680a380f69350614f3546fc0c9fc7f647"
-V120_NEXT = "close_nominal_rank_viability_transport_then_preregister_recovery_set_rank_persistence_coupling_audit_no_training_capacity_regime_source_horizon_or_threshold_sweep"
+AUTHORITATIVE_V121_PIPELINE_SHA256 = "b2e08fbe1b1b1e2b676a3d9bd0e9b84082fd35844b8fa6dd0cb7fa193d22e6e6"
+AUTHORITATIVE_V121_COMPARISON_SHA256 = "7557a98d23f79d146c620c51deabe41ade063295f906fec02c07836e8af1513f"
+AUTHORITATIVE_V121_BALANCED_SHA256 = "2b5cdc822071a4e1d2258e080e8ee3413e347099a11e40e77f1cd0803c7012fe"
+AUTHORITATIVE_V121_PRECISION_SHA256 = "b51eb9bfcf353a6df6337fcfe83fd303e69716241ac274af6e0d73471e829d24"
+V121_NEXT = "close_nominal_rank_persistence_coupling_then_preregister_signed_viability_rank_state_transport_audit_no_training_capacity_regime_source_horizon_or_threshold_sweep"
 
 ROLES = ("dev_near", "dev_contact", "certificate_near", "certificate_contact")
-SPACES = ("base", "exposed_persistence", "full_persistence")
+SPACES = ("base", "exposed_signed_state", "full_signed_state")
 
 
 def _sha(path: Path) -> str:
@@ -98,8 +98,8 @@ def _historical(
             delta = None if a is None or b is None else float(a) - float(b)
             rows.append({
                 "variant": variant, "role": role,
-                f"v48_121_{treatment}_auc": a,
-                f"v48_120_{old_space}_auc": b,
+                f"v48_122_{treatment}_auc": a,
+                f"v48_121_{old_space}_auc": b,
                 label: delta,
             })
             if delta is not None and delta > 0:
@@ -119,9 +119,9 @@ def _activity(docs: dict[str, Any]) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     exposed_nonzero: set[str] = set()
     full_nonzero: set[str] = set()
-    exposed_persistence: set[str] = set()
-    full_persistence: set[str] = set()
-    persistence_defect: set[str] = set()
+    exposed_signed_state: set[str] = set()
+    full_signed_state: set[str] = set()
+    absolute_state: set[str] = set()
     reassignment: set[str] = set()
     diverse: set[str] = set()
     multi: set[str] = set()
@@ -137,8 +137,8 @@ def _activity(docs: dict[str, Any]) -> dict[str, Any]:
                 "role": role,
                 "mean_common_valid_option_count": float(p.get("mean_common_valid_option_count", 0.0)),
                 "min_common_valid_option_count": int(p.get("min_common_valid_option_count", 0)),
-                "exposed_persistence_nonzero_fraction": float(p.get("exposed_persistence_nonzero_fraction", 0.0)),
-                "full_persistence_nonzero_fraction": float(p.get("full_persistence_nonzero_fraction", 0.0)),
+                "exposed_signed_state_nonzero_fraction": float(p.get("exposed_signed_state_nonzero_fraction", 0.0)),
+                "full_signed_state_nonzero_fraction": float(p.get("full_signed_state_nonzero_fraction", 0.0)),
                 "option_flow_diverse_fraction": float(p.get("option_flow_diverse_fraction", 0.0)),
                 "reentry_set_available_fraction": float(p.get("reentry_set_available_fraction", 0.0)),
                 "max_option_permutation_invariance_error": float(p.get("max_option_permutation_invariance_error", 1.0)),
@@ -146,14 +146,14 @@ def _activity(docs: dict[str, Any]) -> dict[str, Any]:
                 "mean_exposed_suffix_coupling_energy": float(p.get("mean_exposed_suffix_coupling_energy", 0.0)),
                 "mean_full_prefix_coupling_energy": float(p.get("mean_full_prefix_coupling_energy", 0.0)),
                 "mean_full_suffix_coupling_energy": float(p.get("mean_full_suffix_coupling_energy", 0.0)),
-                "mean_exposed_prefix_persistence_energy": float(p.get("mean_exposed_prefix_persistence_energy", 0.0)),
-                "mean_exposed_suffix_persistence_energy": float(p.get("mean_exposed_suffix_persistence_energy", 0.0)),
-                "mean_full_prefix_persistence_energy": float(p.get("mean_full_prefix_persistence_energy", 0.0)),
-                "mean_full_suffix_persistence_energy": float(p.get("mean_full_suffix_persistence_energy", 0.0)),
-                "mean_exposed_prefix_rank_persistence_defect": float(p.get("mean_exposed_prefix_rank_persistence_defect", 0.0)),
-                "mean_exposed_suffix_rank_persistence_defect": float(p.get("mean_exposed_suffix_rank_persistence_defect", 0.0)),
-                "mean_full_prefix_rank_persistence_defect": float(p.get("mean_full_prefix_rank_persistence_defect", 0.0)),
-                "mean_full_suffix_rank_persistence_defect": float(p.get("mean_full_suffix_rank_persistence_defect", 0.0)),
+                "mean_exposed_prefix_signed_state_energy": float(p.get("mean_exposed_prefix_signed_state_energy", 0.0)),
+                "mean_exposed_suffix_signed_state_energy": float(p.get("mean_exposed_suffix_signed_state_energy", 0.0)),
+                "mean_full_prefix_signed_state_energy": float(p.get("mean_full_prefix_signed_state_energy", 0.0)),
+                "mean_full_suffix_signed_state_energy": float(p.get("mean_full_suffix_signed_state_energy", 0.0)),
+                "mean_exposed_prefix_abs_nominal_state": float(p.get("mean_exposed_prefix_abs_nominal_state", 0.0)),
+                "mean_exposed_suffix_abs_nominal_state": float(p.get("mean_exposed_suffix_abs_nominal_state", 0.0)),
+                "mean_full_prefix_abs_nominal_state": float(p.get("mean_full_prefix_abs_nominal_state", 0.0)),
+                "mean_full_suffix_abs_nominal_state": float(p.get("mean_full_suffix_abs_nominal_state", 0.0)),
                 "mean_exposed_prefix_rank_inversion_fraction": float(p.get("mean_exposed_prefix_rank_inversion_fraction", 0.0)),
                 "mean_exposed_suffix_rank_inversion_fraction": float(p.get("mean_exposed_suffix_rank_inversion_fraction", 0.0)),
                 "mean_full_prefix_rank_inversion_fraction": float(p.get("mean_full_prefix_rank_inversion_fraction", 0.0)),
@@ -170,11 +170,11 @@ def _activity(docs: dict[str, Any]) -> dict[str, Any]:
                 "max_physical_tail_mass_error": float(b.get("max_physical_tail_mass_error", 1.0)),
             }
             rows.append(row)
-            if row["exposed_persistence_nonzero_fraction"] > 0: exposed_nonzero.add(role)
-            if row["full_persistence_nonzero_fraction"] > 0: full_nonzero.add(role)
-            if max(row["mean_exposed_prefix_persistence_energy"], row["mean_exposed_suffix_persistence_energy"]) > 0: exposed_persistence.add(role)
-            if max(row["mean_full_prefix_persistence_energy"], row["mean_full_suffix_persistence_energy"]) > 0: full_persistence.add(role)
-            if max(row["mean_full_prefix_rank_persistence_defect"], row["mean_full_suffix_rank_persistence_defect"]) > 0: persistence_defect.add(role)
+            if row["exposed_signed_state_nonzero_fraction"] > 0: exposed_nonzero.add(role)
+            if row["full_signed_state_nonzero_fraction"] > 0: full_nonzero.add(role)
+            if max(row["mean_exposed_prefix_signed_state_energy"], row["mean_exposed_suffix_signed_state_energy"]) > 0: exposed_signed_state.add(role)
+            if max(row["mean_full_prefix_signed_state_energy"], row["mean_full_suffix_signed_state_energy"]) > 0: full_signed_state.add(role)
+            if max(row["mean_full_prefix_abs_nominal_state"], row["mean_full_suffix_abs_nominal_state"]) > 0: absolute_state.add(role)
             if max(row["mean_full_prefix_rank_inversion_fraction"], row["mean_full_suffix_rank_inversion_fraction"]) > 0: reassignment.add(role)
             if row["option_flow_diverse_fraction"] > 0: diverse.add(role)
             if row["min_common_valid_option_count"] >= 2 and row["mean_full_eligible_option_count"] >= 2: multi.add(role)
@@ -192,20 +192,20 @@ def _activity(docs: dict[str, Any]) -> dict[str, Any]:
     core = bool(
         exact
         and _cross(exposed_nonzero, 3) and _cross(full_nonzero, 3)
-        and _cross(exposed_persistence, 3) and _cross(full_persistence, 3)
-        and _cross(persistence_defect, 3) and _cross(reassignment, 3)
+        and _cross(exposed_signed_state, 3) and _cross(full_signed_state, 3)
+        and _cross(absolute_state, 3) and _cross(reassignment, 3)
         and _cross(diverse, 3) and _cross(multi, 3)
         and len(reentry) == 2
     )
     return {
         "go": core,
         "core_activity_go": core,
-        "exact_persistence_contract_go": exact,
-        "exposed_persistence_nonzero_roles": sorted(exposed_nonzero),
-        "full_persistence_nonzero_roles": sorted(full_nonzero),
-        "exposed_persistence_energy_roles": sorted(exposed_persistence),
-        "full_persistence_energy_roles": sorted(full_persistence),
-        "rank_persistence_defect_roles": sorted(persistence_defect),
+        "exact_signed_state_contract_go": exact,
+        "exposed_signed_state_nonzero_roles": sorted(exposed_nonzero),
+        "full_signed_state_nonzero_roles": sorted(full_nonzero),
+        "exposed_signed_state_energy_roles": sorted(exposed_signed_state),
+        "full_signed_state_energy_roles": sorted(full_signed_state),
+        "absolute_signed_state_roles": sorted(absolute_state),
         "rank_reassignment_roles": sorted(reassignment),
         "physical_option_flow_diverse_roles": sorted(diverse),
         "multi_option_roles": sorted(multi),
@@ -250,20 +250,20 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--balanced", type=Path, required=True)
     ap.add_argument("--precision", type=Path, required=True)
-    ap.add_argument("--v120-pipeline", type=Path, required=True)
-    ap.add_argument("--v120-comparison", type=Path, required=True)
-    ap.add_argument("--v120-balanced", type=Path, required=True)
-    ap.add_argument("--v120-precision", type=Path, required=True)
+    ap.add_argument("--v121-pipeline", type=Path, required=True)
+    ap.add_argument("--v121-comparison", type=Path, required=True)
+    ap.add_argument("--v121-balanced", type=Path, required=True)
+    ap.add_argument("--v121-precision", type=Path, required=True)
     ap.add_argument("--run-id", required=True)
     ap.add_argument("--output", type=Path, required=True)
     a = ap.parse_args()
 
     errors: list[str] = []
     want = {
-        a.v120_pipeline: AUTHORITATIVE_V120_PIPELINE_SHA256,
-        a.v120_comparison: AUTHORITATIVE_V120_COMPARISON_SHA256,
-        a.v120_balanced: AUTHORITATIVE_V120_BALANCED_SHA256,
-        a.v120_precision: AUTHORITATIVE_V120_PRECISION_SHA256,
+        a.v121_pipeline: AUTHORITATIVE_V121_PIPELINE_SHA256,
+        a.v121_comparison: AUTHORITATIVE_V121_COMPARISON_SHA256,
+        a.v121_balanced: AUTHORITATIVE_V121_BALANCED_SHA256,
+        a.v121_precision: AUTHORITATIVE_V121_PRECISION_SHA256,
     }
     for p, digest in want.items():
         if not p.is_file(): errors.append(f"missing_authoritative_input:{p.name}")
@@ -279,25 +279,25 @@ def main() -> int:
             if d.get("scientific_version") != SCIENTIFIC_VERSION: errors.append(f"scientific_version_{variant}")
             if d.get("run_instance_id") != a.run_id: errors.append(f"run_id_{variant}")
             if int(d.get("matched_family_dimension", -1)) != MATCHED_DIM: errors.append(f"matched_dim_{variant}")
-            if int(d.get("coupling_geometry_dimension", -1)) != COUPLING_GEOMETRY_DIM: errors.append(f"coupling_dim_{variant}")
+            if int(d.get("state_geometry_dimension", -1)) != STATE_GEOMETRY_DIM: errors.append(f"state_dim_{variant}")
         except Exception as exc:
             errors.append(f"read_{variant}:{exc}")
 
     hist: dict[str, Any] = {}
     if not errors:
         try:
-            hp = json.loads(a.v120_pipeline.read_text())
-            hc = json.loads(a.v120_comparison.read_text())
-            if not (hp.get("valid") and hp.get("attribution_ready") and hp.get("preregistered_status") == "VIABILITY_RANK_TRANSPORT_STOP"):
-                errors.append("v120_pipeline_stop_prerequisite")
+            hp = json.loads(a.v121_pipeline.read_text())
+            hc = json.loads(a.v121_comparison.read_text())
+            if not (hp.get("valid") and hp.get("attribution_ready") and hp.get("preregistered_status") == "VIABILITY_RANK_PERSISTENCE_COUPLING_STOP"):
+                errors.append("v121_pipeline_stop_prerequisite")
             hd = hc.get("preregistered_decision") or {}
-            if not (hc.get("valid") and hc.get("attribution_ready") and hd.get("status") == "VIABILITY_RANK_TRANSPORT_STOP"):
-                errors.append("v120_comparison_stop_prerequisite")
-            if hd.get("next_branch") != V120_NEXT:
-                errors.append("v120_next_branch_mismatch")
+            if not (hc.get("valid") and hc.get("attribution_ready") and hd.get("status") == "VIABILITY_RANK_PERSISTENCE_COUPLING_STOP"):
+                errors.append("v121_comparison_stop_prerequisite")
+            if hd.get("next_branch") != V121_NEXT:
+                errors.append("v121_next_branch_mismatch")
             hist = {
-                "balanced": json.loads(a.v120_balanced.read_text()),
-                "precision": json.loads(a.v120_precision.read_text()),
+                "balanced": json.loads(a.v121_balanced.read_text()),
+                "precision": json.loads(a.v121_precision.read_text()),
             }
         except Exception as exc:
             errors.append(f"historical_read:{exc}")
@@ -305,68 +305,68 @@ def main() -> int:
     gates: dict[str, Any] = {}
     activity: dict[str, Any] = {"go": False}
     if not errors:
-        for space in ("exposed_persistence", "full_persistence"):
+        for space in ("exposed_signed_state", "full_signed_state"):
             for axis in ("support", "reserve"):
                 gates[f"{space}_{axis}"] = _action_gate(docs, space, axis)
         for axis in ("support", "reserve"):
-            gates[f"full_persistence_vs_v120_{axis}"] = _historical(
-                docs, hist, "full_persistence", "full_transport", axis,
-                f"full_persistence_minus_v120_full_transport_{axis}",
+            gates[f"full_signed_state_vs_v121_{axis}"] = _historical(
+                docs, hist, "full_signed_state", "full_persistence", axis,
+                f"full_signed_state_minus_v121_full_persistence_{axis}",
             )
-            gates[f"exposed_persistence_vs_v120_{axis}"] = _historical(
-                docs, hist, "exposed_persistence", "exposed_transport", axis,
-                f"exposed_persistence_minus_v120_exposed_transport_{axis}",
+            gates[f"exposed_signed_state_vs_v121_{axis}"] = _historical(
+                docs, hist, "exposed_signed_state", "exposed_persistence", axis,
+                f"exposed_signed_state_minus_v121_exposed_persistence_{axis}",
             )
-            gates[f"full_set_persistence_effect_{axis}"] = _within(
-                docs, "full_persistence", "exposed_persistence", axis,
-                f"full_minus_exposed_persistence_{axis}",
+            gates[f"full_set_signed_state_effect_{axis}"] = _within(
+                docs, "full_signed_state", "exposed_signed_state", axis,
+                f"full_minus_exposed_signed_state_{axis}",
             )
         activity = _activity(docs)
 
-    status = "V48_121_ENGINEERING_STOP"
-    branch = "fix_v48_121_engineering_and_rerun_same_viability_rank_persistence_coupling_audit"
+    status = "V48_122_ENGINEERING_STOP"
+    branch = "fix_v48_122_engineering_and_rerun_same_signed_viability_rank_state_transport_audit"
     if not errors:
         full_core = bool(
-            gates["full_persistence_support"]["go"] and gates["full_persistence_reserve"]["go"]
-            and gates["full_persistence_vs_v120_support"]["go"] and gates["full_persistence_vs_v120_reserve"]["go"]
+            gates["full_signed_state_support"]["go"] and gates["full_signed_state_reserve"]["go"]
+            and gates["full_signed_state_vs_v121_support"]["go"] and gates["full_signed_state_vs_v121_reserve"]["go"]
             and activity.get("go")
         )
         exposed_core = bool(
-            gates["exposed_persistence_support"]["go"] and gates["exposed_persistence_reserve"]["go"]
-            and gates["exposed_persistence_vs_v120_support"]["go"] and gates["exposed_persistence_vs_v120_reserve"]["go"]
+            gates["exposed_signed_state_support"]["go"] and gates["exposed_signed_state_reserve"]["go"]
+            and gates["exposed_signed_state_vs_v121_support"]["go"] and gates["exposed_signed_state_vs_v121_reserve"]["go"]
             and activity.get("go")
         )
         if full_core:
-            status = "VIABILITY_RANK_PERSISTENCE_COUPLING_GO"
-            branch = "authorize_exactly_one_full_viability_rank_persistence_coupling_main_carrier_integration_no_source_boundary_regime_or_capacity_cochange"
+            status = "SIGNED_VIABILITY_RANK_STATE_TRANSPORT_GO"
+            branch = "authorize_exactly_one_full_signed_viability_rank_state_transport_main_carrier_integration_no_source_boundary_regime_or_capacity_cochange"
         elif exposed_core:
-            status = "EXPOSED_VIABILITY_RANK_PERSISTENCE_COUPLING_GO"
-            branch = "authorize_exactly_one_exposed_viability_rank_persistence_coupling_main_carrier_integration_no_source_boundary_regime_or_capacity_cochange"
-        elif gates["full_persistence_support"]["go"] and gates["full_persistence_vs_v120_support"]["go"]:
-            status = "VIABILITY_RANK_PERSISTENCE_COUPLING_SUPPORT_ONLY"
-            branch = "retain_full_rank_persistence_support_axis_then_audit_missing_reserve_signed_state_without_training_capacity_regime_source_horizon_or_threshold_sweep"
-        elif gates["full_persistence_reserve"]["go"] and gates["full_persistence_vs_v120_reserve"]["go"]:
-            status = "VIABILITY_RANK_PERSISTENCE_COUPLING_RESERVE_ONLY"
-            branch = "retain_full_rank_persistence_reserve_axis_then_audit_missing_support_signed_state_without_training_capacity_regime_source_horizon_or_threshold_sweep"
-        elif gates["full_persistence_support"].get("local_order") and gates["full_persistence_reserve"].get("local_order"):
-            status = "VIABILITY_RANK_PERSISTENCE_COUPLING_LOCAL_ORDER_ONLY"
-            branch = "preregister_one_pairwise_audit_on_exact_same_viability_rank_persistence_features"
+            status = "EXPOSED_SIGNED_VIABILITY_RANK_STATE_TRANSPORT_GO"
+            branch = "authorize_exactly_one_exposed_signed_viability_rank_state_transport_main_carrier_integration_no_source_boundary_regime_or_capacity_cochange"
+        elif gates["full_signed_state_support"]["go"] and gates["full_signed_state_vs_v121_support"]["go"]:
+            status = "SIGNED_VIABILITY_RANK_STATE_TRANSPORT_SUPPORT_ONLY"
+            branch = "retain_full_signed_rank_state_support_axis_then_audit_missing_reserve_zero_boundary_transition_without_training_capacity_regime_source_horizon_or_threshold_sweep"
+        elif gates["full_signed_state_reserve"]["go"] and gates["full_signed_state_vs_v121_reserve"]["go"]:
+            status = "SIGNED_VIABILITY_RANK_STATE_TRANSPORT_RESERVE_ONLY"
+            branch = "retain_full_signed_rank_state_reserve_axis_then_audit_missing_support_zero_boundary_transition_without_training_capacity_regime_source_horizon_or_threshold_sweep"
+        elif gates["full_signed_state_support"].get("local_order") and gates["full_signed_state_reserve"].get("local_order"):
+            status = "SIGNED_VIABILITY_RANK_STATE_TRANSPORT_LOCAL_ORDER_ONLY"
+            branch = "preregister_one_pairwise_audit_on_exact_same_signed_viability_rank_state_features"
         else:
-            status = "VIABILITY_RANK_PERSISTENCE_COUPLING_STOP"
-            branch = "close_nominal_rank_persistence_coupling_then_preregister_signed_viability_rank_state_transport_audit_no_training_capacity_regime_source_horizon_or_threshold_sweep"
+            status = "SIGNED_VIABILITY_RANK_STATE_TRANSPORT_STOP"
+            branch = "close_signed_viability_rank_state_transport_then_preregister_zero_boundary_viability_state_transition_audit_no_training_capacity_regime_source_horizon_or_threshold_sweep"
 
     ident = _variant_identity(docs) if docs else {"exact": False, "differences": ["no_docs"], "effective_unique_roles_if_exact": 4}
     full_set_attribution_go = bool(
-        not errors and gates.get("full_set_persistence_effect_support", {}).get("go")
-        and gates.get("full_set_persistence_effect_reserve", {}).get("go")
+        not errors and gates.get("full_set_signed_state_effect_support", {}).get("go")
+        and gates.get("full_set_signed_state_effect_reserve", {}).get("go")
     )
     decision = {
         "status": status,
         "next_branch": branch,
         "balanced_precision_metric_identity": ident,
         "power_diagnostics": _power(docs) if docs else [],
-        "viability_rank_persistence_coupling_activity_gate": activity,
-        "full_set_vs_exposed_persistence_attribution_go": full_set_attribution_go,
+        "signed_viability_rank_state_activity_gate": activity,
+        "full_set_vs_exposed_signed_state_attribution_go": full_set_attribution_go,
         "reentry_contact_coverage_go": bool(activity.get("reentry_contact_coverage_go")),
         "boundary_transport_authorized": False,
         "broad_encoder_training_authorized": False,
@@ -374,38 +374,39 @@ def main() -> int:
         "regime_conditioned_policy_authorized": False,
         "dataset_reconstruction_authorized": False,
         "matched_dimension": MATCHED_DIM,
-        "geometry_dimension": COUPLING_GEOMETRY_DIM,
-        "coupling_mode_names": [str(x) for x in COUPLING_MODE_NAMES],
-        "persistence_basis": "fixed_global_rank_persistence_and_rank_x_persistence_modes",
+        "geometry_dimension": STATE_GEOMETRY_DIM,
+        "state_mode_names": [str(x) for x in STATE_MODE_NAMES],
+        "signed_state_basis": "fixed_global_rank_signed_state_and_rank_x_signed_state_modes",
         "rank_coordinate": "candidate_independent_nominal_same_option_viability_midranks",
         "constraint_names": ["clearance", "stopping", "route", "reentry"],
         "scientific_note": (
-            "V48.121 retains V48.120 candidate-independent nominal-rank same-option causal correspondence, but couples "
-            "candidate-minus-nominal signed viability displacement to the temporal persistence of each same option's nominal "
-            "rank over the relevant prefix or suffix. Four fixed modes encode global shift, nominal-rank tilt, rank-persistence "
-            "defect, and rank-by-persistence interaction. This directly tests whether persistent rank ownership, rather than "
-            "instantaneous rank transport alone, is the missing population-stable carrier. No candidate rank coordinate, rank "
-            "cut, tuned decay, option identity export, learned set encoder, regime router, boundary transport, or capacity/source/"
-            "horizon/threshold change is introduced."
+            "V48.122 retains V48.120/121 candidate-independent nominal-rank same-option causal correspondence, but replaces "
+            "rank-persistence-specific modes with the preregistered missing primitive: the absolute signed nominal viability "
+            "level relative to the physical zero boundary. Four fixed modes encode global displacement, nominal-rank tilt, "
+            "signed nominal-state coupling, and rank-by-signed-state interaction. The first two modes preserve the instantaneous "
+            "rank-transport control while the latter two test whether reserve/debt depth is required for population-stable "
+            "recoverability. No state threshold, clipping, learned state scale, candidate rank coordinate, rank cut, option "
+            "identity export, learned set encoder, regime router, boundary transport, or capacity/source/horizon/threshold "
+            "change is introduced."
         ),
     }
     decision.update({k + "_gate": v for k, v in gates.items()})
 
     out = {
-        "schema": "ocrap-v48.121-vrpc-comparison-v1",
+        "schema": "ocrap-v48.122-svrt-comparison-v1",
         "engineering_version": ENGINEERING_VERSION,
         "scientific_version": SCIENTIFIC_VERSION,
         "run_instance_id": a.run_id,
         "valid": not errors,
         "attribution_ready": not errors,
         "errors": errors,
-        "experiment_type": "audit_only_recovery_set_viability_rank_persistence_coupling",
+        "experiment_type": "audit_only_signed_viability_rank_state_transport",
         "preregistered_decision": decision,
-        "authoritative_v48_120_comparison_sha256": AUTHORITATIVE_V120_COMPARISON_SHA256,
-        "v48_120_pipeline_sha256": _sha(a.v120_pipeline) if a.v120_pipeline.is_file() else None,
-        "v48_120_comparison_sha256": _sha(a.v120_comparison) if a.v120_comparison.is_file() else None,
-        "v48_120_balanced_sha256": _sha(a.v120_balanced) if a.v120_balanced.is_file() else None,
-        "v48_120_precision_sha256": _sha(a.v120_precision) if a.v120_precision.is_file() else None,
+        "authoritative_v48_121_comparison_sha256": AUTHORITATIVE_V121_COMPARISON_SHA256,
+        "v48_121_pipeline_sha256": _sha(a.v121_pipeline) if a.v121_pipeline.is_file() else None,
+        "v48_121_comparison_sha256": _sha(a.v121_comparison) if a.v121_comparison.is_file() else None,
+        "v48_121_balanced_sha256": _sha(a.v121_balanced) if a.v121_balanced.is_file() else None,
+        "v48_121_precision_sha256": _sha(a.v121_precision) if a.v121_precision.is_file() else None,
         "stage_i_parameters_trained": 0,
         "root_decoder_parameters_trained": 0,
         "source_parameters_trained": 0,

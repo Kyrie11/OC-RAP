@@ -15,42 +15,48 @@ export PYTHONPATH="$PWD/src:$PWD${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONNOUSERSITE=1
 ```
 
-## 0. Current V48.121 scientific reference contract
+## 0. Current V48.122 scientific reference contract
 
-The stable unversioned orientation launcher now runs **V48.121 OC-VRPC**. It treats the completed V48.120 OC-VRT STOP artifacts as immutable scientific inputs and verifies their exact SHA/status/registered rank-persistence next branch before any V48.121 audit starts. Python implementation filenames remain semantic/unversioned; scientific inputs and outputs remain versioned.
+The stable unversioned orientation launcher now runs **V48.122 OC-SVRT**. It treats the completed V48.121 OC-VRPC STOP artifacts as immutable scientific inputs and verifies their exact SHA/status/registered signed-rank-state next branch before any V48.122 audit starts. Python implementation filenames remain semantic/unversioned; scientific inputs and outputs remain versioned.
 
-V48.120 established an important structural point: the set functional can simultaneously preserve a candidate-independent **nominal recovery ordering** and **same-option candidate causal correspondence**. Production transport and rank reassignment were active in every unique role, and Contact Reserve retained strong directional signal. Nevertheless the instantaneous nominal-rank transport did not transfer across populations, especially on Support. The remaining preregistered question is whether the same option must retain its nominal rank ownership over the relevant prefix/suffix for candidate displacement to become population stable.
+V48.121 gave a partial positive answer to the rank-persistence hypothesis: exposed rank persistence improved Support AUC over V48.120 in all four unique roles, while full-set persistence added Reserve information in three roles. But neither exposed nor full persistence passed the absolute cross-population Support+Reserve gate. The remaining preregistered question is therefore whether relative nominal rank/persistence is missing the **absolute signed nominal viability level relative to the physical zero boundary**—the information that distinguishes shallow positive reserve from deep reserve and shallow debt from deep debt.
 
-## 1. Current orientation audit — V48.121 OC-VRPC
+## 1. Current orientation audit — V48.122 OC-SVRT
 
-V48.121 is **audit-only**. The 156-D frozen candidate response, actuator-projected executable constraints, same-option joint prefix/suffix viability margins, recovery horizon/library, cohorts, whole-row candidate shuffle and 220-D closed-form ridge capacity remain fixed. Candidate values never define the rank coordinate.
+V48.122 is **audit-only**. The 156-D frozen candidate response, actuator-projected executable constraints, same-option joint prefix/suffix viability margins, candidate-independent nominal ordering, same-option candidate correspondence, recovery horizon/library, cohorts, whole-row candidate shuffle, and 220-D closed-form ridge capacity remain fixed.
 
-For each recovery option, V48.121 computes its exact candidate-independent nominal midrank at every time. Exact nominal ties share one midrank. Directional persistence is threshold-free:
+For each recovery option and temporal channel:
 
 ```text
-prefix defect(t) = mean_{s<=t} |r_l(t) - r_l(s)|
-suffix defect(t) = mean_{s>=t} |r_l(t) - r_l(s)|
+q0_l(t) = nominal same-option joint signed viability margin
+qa_l(t) = candidate same-option joint signed viability margin
+d_l(t)  = qa_l(t) - q0_l(t)
+r_l(t)  = exact candidate-independent nominal midrank
+x_l(t)  = 2 r_l(t) - 1
+s_l(t)  = q0_l(t)    # absolute signed nominal viability state; zero is physical reserve/debt boundary
 ```
 
-The same option's signed viability displacement `d_l(t)=q_l^a(t)-q_l^0(t)` is coupled to four fixed modes:
+Exact nominal ties share one midrank. Candidate values never define the coordinate. No state centering, learned scale, clipping, temperature, threshold, rank cut, or persistence-window sweep is introduced.
+
+The candidate displacement is coupled to four fixed modes:
 
 ```text
 1                 global signed viability shift
-x = 2r - 1        nominal-rank tilt
-p                 rank-persistence defect
-x * p             rank-by-persistence interaction
+x                 nominal-rank tilt
+s = q0            signed nominal-state coupling
+x * s             rank-by-signed-state interaction
 ```
 
-These modes are fixed before evaluation. There is no rank cut, quantile mass, temperature, decay/window tuning, option-count sweep or learned set encoder.
+The first two modes retain the instantaneous global/rank control from V48.120/121. The latter two are the only new primitive, testing whether absolute reserve/debt depth resolves the remaining population instability.
 
-The primary `full_persistence` uses all common valid recovery options. The equal-capacity `exposed_persistence` control uses only the support (not weights) of V48.117 frozen weak-root zero-boundary witnesses. Option identity is used only internally to maintain same-option trajectories and is never exported to the readout.
+The primary `full_signed_state` uses all common valid recovery options. The equal-capacity `exposed_signed_state` control uses only the support (not weights) of V48.117 frozen weak-root zero-boundary witnesses. Option identity is used only internally for same-option correspondence and is never exported to the readout.
 
 ```text
-8 bins x 2 temporal channels x 4 fixed coupling modes = 64-D
+8 bins x 2 temporal channels x 4 fixed state modes = 64-D
 156-D frozen candidate response + 64-D = 220-D
 ```
 
-No regime label, teacher future value, boundary transport, threshold, horizon, source, capacity, LR or epoch sweep is introduced.
+No regime label, teacher future value, boundary transport, source/root/planner training, capacity, horizon, threshold, option-count, rank-cut, LR, or epoch sweep is introduced.
 
 Run exactly:
 
@@ -64,12 +70,12 @@ bash scripts/run_constraint_native_orientation_audit.sh
 Upload only:
 
 ```text
-/home/senzeyu2/code/OC-RAP/runs/OC-RAP-v48.121-OC-VRPC-results.zip
+/home/senzeyu2/code/OC-RAP/runs/OC-RAP-v48.122-OC-SVRT-results.zip
 ```
 
-### About OC-RAP training in V48.121
+### About OC-RAP training in V48.122
 
-There is no registered V48.121 planner/root/source training stage. Running generic `python -m ocrap.cli train` would not reproduce this audit. Main/carrier integration is authorized only if a preregistered persistence family passes absolute Support+Reserve, historical improvement, and exact persistence/reassignment/re-entry activity gates.
+There is no registered V48.122 planner/root/source training stage. Running generic `python -m ocrap.cli train` would not reproduce this audit. Main/carrier integration is authorized only if a preregistered signed-state family passes absolute Support+Reserve, historical-improvement, and exact signed-state/reassignment/re-entry activity gates.
 
 ## 2. Direct OC-RAP three-regime closed-loop test
 

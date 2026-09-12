@@ -14044,3 +14044,117 @@ otherwise STOP
 The STOP successor is deliberately not included in V48.121. If rank persistence is insufficient, the next missing primitive would be the **absolute signed nominal viability level relative to the zero boundary**, because rank alone cannot distinguish shallow positive reserve from deep negative debt. That hypothesis is held out to preserve one-factor causal attribution.
 
 The stable launcher filename and user command remain unchanged. Before GPU work, V48.121 verifies the exact authoritative V48.120 pipeline/comparison/balanced/precision SHAs, `VIABILITY_RANK_TRANSPORT_STOP`, and its exact registered rank-persistence branch.
+
+## V48.121 completed attribution — rank persistence is a real primitive, but relative rank ownership is not a complete population-stable carrier
+
+Engineering and scientific attribution passed on the uploaded V48.121 OC-VRPC production run. The canonical result bundle is byte-closed against the standalone artifacts, active runtime source hashes match the uploaded checkout, all closed-form ridge probes satisfy the registered solution contract, and balanced/precision are exact scientific duplicates and therefore count as four unique population roles. The preregistered decision is `VIABILITY_RANK_PERSISTENCE_COUPLING_STOP`; V48.121 does **not** authorize Main/carrier integration.
+
+The STOP is not an inactivity failure. Exposed/full persistence features, persistence-specific energy, nominal-rank persistence defects, rank reassignment, multiple physical options, exact permutation/padding/mass contracts, and Contact re-entry coverage are active across the required unique roles.
+
+The rank-persistence hypothesis receives a **partial positive** answer rather than a null result. Relative to V48.120 `exposed_transport`, V48.121 `exposed_persistence` improves Support AUC in all four unique roles: approximately `+0.0078` dev-Near, `+0.0455` dev-Contact, `+0.0182` certificate-Near, and `+0.0070` certificate-Contact. The preregistered exposed historical Support increment gate therefore passes. This establishes temporal nominal-rank ownership as a real Support-relevant primitive even though the absolute exposed Support gate remains population-unstable.
+
+The primary full-set result sharpens the Near/Contact split. `full_persistence - V48.120 full_transport` improves Support on both Near roles (`+0.0859` dev, `+0.0909` certificate) but slightly degrades both Contact roles. For Reserve, persistence improves certificate-Near (`+0.0952`) and certificate-Contact (`+0.0139`), is unchanged on underpowered dev-Near, and slightly lowers dev-Contact. More importantly, the internal `full_persistence - exposed_persistence` Reserve attribution gate passes across three unique roles: dev-Contact `+0.0521`, certificate-Near `+0.0952`, and certificate-Contact `+0.1250`. This independently reinforces the V48.118--V48.120 conclusion that broad executable recovery-set depth/redundancy is a real reserve/debt primitive.
+
+Absolute transfer nevertheless remains insufficient. `full_persistence` has strong dev-Contact Reserve (`AUC≈0.766`, true-vs-shuffle `≈+0.380`) and certificate-Contact Reserve (`AUC≈0.639`, true-vs-shuffle `≈+0.417`), but certificate-Near Support/Reserve and certificate-Contact Support remain far below the preregistered action gate. `exposed_persistence` keeps dev-Near Support just above the AUC threshold with positive shuffle lift, but certificate-Near does not transfer. Therefore the data do not support a Near/Contact router or a persistence-only Main carrier.
+
+Scientific closure after V48.121:
+
+- close **nominal-rank persistence coupling as a complete population-stable carrier**;
+- retain candidate-independent nominal recovery ordering and same-option candidate correspondence;
+- retain temporal nominal-rank persistence as a Support-relevant primitive because the exposed historical Support increment gate passed across all four roles;
+- retain full executable recovery-set breadth/depth as a Reserve/debt primitive because the internal full-set Reserve attribution gate passed across three roles;
+- retain signed zero-boundary reserve/debt semantics, same-option joint prefix/suffix viability, observation-exposed support, and persistent-safe re-entry;
+- continue to keep hard option selection, standalone uniform set means, rank-1 envelopes, fixed quartile profiles, generic capacity growth, regime routers, source/root retraining, boundary transport, and threshold/horizon/option-count/rank-cut sweeps closed.
+
+The V48.121 proposition was: candidate-induced same-option viability displacement may need to be conditioned on persistent ownership of the nominal recovery rank. The result says **yes as a partial mechanism, no as a sufficient carrier**. The remaining failure pattern is consistent with a missing state anchor: the same nominal rank and the same persistence defect can represent a shallow positive reserve, a deep positive reserve, a shallow debt, or a deep debt in different populations. Relative rank topology does not encode the physical distance to the zero reserve/debt boundary.
+
+The dominant bottleneck is therefore tightened to **population-stable same-option signed viability transport on a candidate-independent recovery-set coordinate jointly anchored by relative nominal rank and absolute physical zero-boundary state**. Near needs absolute headroom, not merely frontier ownership; Contact needs remaining debt depth and whether a candidate displacement is large enough to move the same recovery mode toward/cross zero into persistent safe re-entry.
+
+The exact registered STOP branch is:
+
+```text
+close_nominal_rank_persistence_coupling
+-> preregister signed_viability_rank_state_transport_audit
+-> no training/capacity/regime/source/horizon/threshold sweep
+```
+
+## V48.122 OC-SVRT — Observation-Consistent Signed Viability Rank-State Transport Audit
+
+Engineering version: `v48.122.0-OC-SVRT`  
+Scientific version: `v48.122-OC-SVRT`
+
+V48.122 follows the exact V48.121 STOP branch and is audit-only. It does not reopen persistence tuning or add a broader encoder. It keeps the same actuator-realizable constraint field, same-option joint prefix/suffix viability, candidate-independent nominal ordering, same-option candidate correspondence, recovery library/horizon, observation-exposed support control, full executable set, whole-row shuffle null, and 220-D closed-form ridge capacity fixed. The sole new primitive is the **absolute signed nominal viability state relative to the existing physical zero boundary**.
+
+For option `l`, channel `z in {prefix,suffix}` and time `t`:
+
+```text
+q_l^0,z(t) = nominal same-option joint signed viability margin
+q_l^a,z(t) = candidate same-option joint signed viability margin
+d_l^z(t)   = q_l^a,z(t) - q_l^0,z(t)
+r_l^z(t)   = exact candidate-independent nominal midrank
+x_l^z(t)   = 2 r_l^z(t) - 1
+s_l^z(t)   = q_l^0,z(t)
+```
+
+The signed state `s=q0` is not centered or learned: zero remains the physical reserve/debt boundary already defined by the constraint construction. No state threshold, clipping, learned state scale, temperature, rank cut, or new horizon is introduced. Exact nominal ties share one midrank, and candidate values never define the rank coordinate.
+
+Each time step uses four fixed modes:
+
+```text
+phi0 = 1                  global signed viability displacement
+phi1 = x                  nominal-rank tilt
+phi2 = s = q0             signed nominal-state coupling
+phi3 = x * s              nominal-rank x signed-state interaction
+```
+
+Modes 0/1 preserve the instantaneous global/rank transport control; modes 2/3 are the only scientific change. If two recovery sets have the same nominal ordering and the same candidate displacement but different absolute nominal reserve/debt levels, modes 0/1 are identical while modes 2/3 distinguish them. At the exact physical boundary `q0=0`, state-specific modes vanish by construction.
+
+The option mean of `d*phi` is averaged only in the inherited eight temporal bins:
+
+```text
+8 bins x 2 temporal channels x 4 fixed modes = 64-D
+156-D frozen candidate response + 64-D = 220-D
+```
+
+Two equal-capacity families are preregistered:
+
+```text
+exposed_signed_state = signed rank-state transport on the SUPPORT, not weights,
+                       of V48.117 frozen weak-root zero-boundary witnesses
+full_signed_state    = signed rank-state transport on all common valid options [PRIMARY]
+```
+
+Option identity is internal only for same-option correspondence and is never exported to the readout. No Near/Contact regime label enters the feature path.
+
+Absolute Support/Reserve gates remain unchanged: AUC `>=0.65` and true-vs-shuffle AUC `>=+0.05` in at least 6/8 legacy cells, covering at least 3/4 unique roles with Near+Contact, plus Top1 lift `>=+0.10` in at least 4/8 cells covering at least two unique roles with Near+Contact. Historical increment gates compare `full_signed_state` against authoritative V48.121 `full_persistence` and `exposed_signed_state` against V48.121 `exposed_persistence`: positive AUC delta in at least 6/8 cells and at least 3/4 unique roles with Near+Contact, with delta `>=0.01` in at least 4/8 cells. `full_signed_state - exposed_signed_state` is the internal full-set attribution contrast.
+
+The activity gate requires exact permutation/padding/mass contracts; nonzero exposed/full signed-state features and signed-state-specific energy in at least 3/4 unique roles with Near+Contact; nonzero absolute nominal state in at least 3/4 roles with Near+Contact; retained same-option rank reassignment, multiple diverse recovery options, and Contact re-entry coverage. Two-sided signed-state mass and strict zero-crossing fractions are recorded as diagnostics only and are not promotion thresholds.
+
+Promotion is fail-closed:
+
+```text
+full_signed_state absolute Support+Reserve GO
++ full_signed_state vs V48.121 full_persistence Support+Reserve GO
++ exact signed-state / reassignment / re-entry activity GO
+  -> SIGNED_VIABILITY_RANK_STATE_TRANSPORT_GO;
+     authorize exactly one full signed-rank-state Main/carrier integration,
+     with no source/boundary/regime/capacity co-change.
+
+exposed_signed_state absolute Support+Reserve GO
++ exposed_signed_state vs V48.121 exposed_persistence Support+Reserve GO
++ exact activity GO
+  -> EXPOSED_SIGNED_VIABILITY_RANK_STATE_TRANSPORT_GO;
+     authorize exactly one exposed signed-rank-state Main/carrier integration.
+
+Support-only / Reserve-only / local-order-only
+  -> retain only the preregistered proven axis; do not broaden the experiment.
+
+otherwise STOP
+  -> close signed viability rank-state transport as a complete carrier;
+     preregister zero-boundary viability-state transition audit,
+     with no training/capacity/regime/source/horizon/threshold sweep.
+```
+
+The STOP successor is held out deliberately. If linear signed state is still insufficient, the next distinct proposition is whether **explicit zero-boundary transition topology**—not another rank/statistics basis—is required to distinguish reserve preservation from debt repayment through zero. No such transition feature is included in V48.122.
+
+The stable launcher filename and user command remain unchanged. Before GPU work, V48.122 verifies the exact authoritative V48.121 pipeline/comparison/balanced/precision SHAs, `VIABILITY_RANK_PERSISTENCE_COUPLING_STOP`, and the exact registered signed-rank-state branch.

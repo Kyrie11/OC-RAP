@@ -79,8 +79,16 @@ from ocrap.audits.viability_rank_transport import (
     contract_checks as vrt_contract_checks,
 )
 from ocrap.audits.viability_rank_persistence import (
+    ENGINEERING_VERSION as VRPC_ENGINEERING_VERSION,
+    MATCHED_DIM as VRPC_MATCHED_DIM,
+    SCIENTIFIC_VERSION as VRPC_SCIENTIFIC_VERSION,
+    COUPLING_GEOMETRY_DIM,
+    COUPLING_MODE_NAMES,
+    contract_checks as vrpc_contract_checks,
+)
+from ocrap.audits.signed_viability_rank_state import (
     ENGINEERING_VERSION, MATCHED_DIM, SCIENTIFIC_VERSION,
-    COUPLING_GEOMETRY_DIM, COUPLING_MODE_NAMES, contract_checks,
+    STATE_GEOMETRY_DIM, STATE_MODE_NAMES, contract_checks,
 )
 
 
@@ -171,14 +179,26 @@ def test_historical_vrt_contract_checks():
     assert VRT_SCIENTIFIC_VERSION == "v48.120-OC-VRT"
     assert TRANSPORT_MODE_DEGREES == (0, 1, 2, 3)
 
-def test_current_vrpc_contract_checks():
-    checks = contract_checks()
+def test_historical_vrpc_contract_checks():
+    checks = vrpc_contract_checks()
     assert checks and all(checks.values()), checks
     assert COUPLING_GEOMETRY_DIM == 64
-    assert MATCHED_DIM == 220
-    assert ENGINEERING_VERSION == "v48.121.0-OC-VRPC"
-    assert SCIENTIFIC_VERSION == "v48.121-OC-VRPC"
+    assert VRPC_MATCHED_DIM == 220
+    assert VRPC_ENGINEERING_VERSION == "v48.121.0-OC-VRPC"
+    assert VRPC_SCIENTIFIC_VERSION == "v48.121-OC-VRPC"
     assert COUPLING_MODE_NAMES == ("global_shift", "nominal_rank_tilt", "rank_persistence_defect", "rank_persistence_interaction")
+
+
+def test_current_svrt_contract_checks():
+    checks = contract_checks()
+    assert checks and all(checks.values()), checks
+    assert STATE_GEOMETRY_DIM == 64
+    assert MATCHED_DIM == 220
+    assert ENGINEERING_VERSION == "v48.122.0-OC-SVRT"
+    assert SCIENTIFIC_VERSION == "v48.122-OC-SVRT"
+    assert STATE_MODE_NAMES == (
+        "global_shift", "nominal_rank_tilt", "signed_nominal_state_coupling", "rank_signed_nominal_state_interaction"
+    )
 
 
 def test_ridge_owner_is_still_unique_and_closed_form():
@@ -191,18 +211,18 @@ def test_ridge_owner_is_still_unique_and_closed_form():
     assert model.normal_equation_residual <= 1e-7
 
 
-def test_current_launcher_reuses_authoritative_v120_and_keeps_command_name():
+def test_current_launcher_reuses_authoritative_v121_and_keeps_command_name():
     repo = Path(__file__).resolve().parents[1]
     launcher = (repo / "scripts/run_constraint_native_orientation_audit.sh").read_text()
-    assert "OC-RAP-v48.120-PIPELINE_COMPLETE.json" in launcher
-    assert "OC-RAP-v48.120-DCP-DRFC-BCDE-RIFA-OC-VRT-comparison.json" in launcher
+    assert "OC-RAP-v48.121-PIPELINE_COMPLETE.json" in launcher
+    assert "OC-RAP-v48.121-DCP-DRFC-BCDE-RIFA-OC-VRPC-comparison.json" in launcher
     assert "OC-RAP-v48.121-VRPC-balanced.json" in launcher
-    assert "OC-RAP-v48.120-VRT-precision.json" in launcher
+    assert "OC-RAP-v48.121-VRPC-precision.json" in launcher
     assert "OC-RAP-v48.93-factor-mediation-audit.jsonl" in launcher
-    assert "OC-RAP-v48.121-VRPC-balanced.json" in launcher
-    assert "OC-RAP-v48.121-OC-VRPC-results.zip" in launcher
-    assert "rank-persistence coupling" in launcher.lower()
-    assert "close_nominal_rank_viability_transport" in launcher
+    assert "OC-RAP-v48.122-SVRT-balanced.json" in launcher
+    assert "OC-RAP-v48.122-OC-SVRT-results.zip" in launcher
+    assert "signed nominal viability" in launcher.lower()
+    assert "close_nominal_rank_persistence_coupling" in launcher
     assert "--run-id" in launcher
 
 def test_unversioned_runner_keeps_v93_role_filter_semantics(tmp_path):
@@ -252,27 +272,28 @@ def test_unversioned_runner_keeps_v93_role_filter_semantics(tmp_path):
     assert [c["candidate"] for c in groups[0]["candidates"]] == [1]
 
 
-def test_current_result_packager_uses_only_canonical_v121_artifacts():
+def test_current_result_packager_uses_only_canonical_v122_artifacts():
     tool = Path(__file__).resolve().parents[1] / "tools" / "package_constraint_native_orientation_results.py"
     spec = importlib.util.spec_from_file_location("orientation_packager_test", tool)
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    assert mod.EXPECTED["balanced"] == "OC-RAP-v48.121-VRPC-balanced.json"
-    assert mod.EXPECTED["precision"] == "OC-RAP-v48.121-VRPC-precision.json"
-    assert mod.ENGINEERING_VERSION == "v48.121.0-OC-VRPC"
-    assert mod.SCIENTIFIC_VERSION == "v48.121-OC-VRPC"
+    assert mod.EXPECTED["balanced"] == "OC-RAP-v48.122-SVRT-balanced.json"
+    assert mod.EXPECTED["precision"] == "OC-RAP-v48.122-SVRT-precision.json"
+    assert mod.ENGINEERING_VERSION == "v48.122.0-OC-SVRT"
+    assert mod.SCIENTIFIC_VERSION == "v48.122-OC-SVRT"
 
-def test_v121_comparison_preregisters_rank_persistence_coupling():
+
+def test_v122_comparison_preregisters_signed_rank_state_transport():
     repo = Path(__file__).resolve().parents[1]
     text = (repo / "tools/compare_constraint_native_recovery_orientation.py").read_text()
     assert '"reentry_contact_coverage_go"' in text
-    assert "full_persistence_minus_v120_full_transport" in text
-    assert "exposed_persistence_minus_v120_exposed_transport" in text
-    assert "full_set_persistence_effect" in text
-    assert "VIABILITY_RANK_PERSISTENCE_COUPLING_GO" in text
-    assert "VIABILITY_RANK_PERSISTENCE_COUPLING_STOP" in text
-    assert "close_nominal_rank_persistence_coupling" in text
+    assert "full_signed_state_minus_v121_full_persistence" in text
+    assert "exposed_signed_state_minus_v121_exposed_persistence" in text
+    assert "full_set_signed_state_effect" in text
+    assert "SIGNED_VIABILITY_RANK_STATE_TRANSPORT_GO" in text
+    assert "SIGNED_VIABILITY_RANK_STATE_TRANSPORT_STOP" in text
+    assert "close_signed_viability_rank_state_transport" in text
 
 
 def _vse_field(full_values: np.ndarray):
