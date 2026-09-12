@@ -1,40 +1,29 @@
 # OC-RAP — cleaned audit/deployment workspace
 
-This repository is the cleaned engineering workspace for the current V48.123 OC-ZBST audit plus the
-publication-facing evaluation utilities used by the deployed OC-RAP stack.
+This repository is the cleaned engineering workspace for the frozen OC-RAP mechanism line and the current **V48.124 OC-FMSA fixed-Main stability/non-interference adjudication**.
 
 ## What is active
 
-- `scripts/run_constraint_native_orientation_audit.sh`: the stable semantic scientific launcher. It currently runs V48.123 OC-ZBST.
-  V48.123 is the final **audit-only** equal-capacity recovery-set explanatory experiment. It keeps candidate-independent nominal ordering and same-option causal correspondence, and exactly decomposes candidate displacement at the physical zero boundary into safe-side reserve transition and unsafe-side debt repayment. Exposed-support and full-set families remain matched at 220-D. It does not train or mutate the frozen OC-RAP planner.
-- `scripts/run_ocrap_evaluation.sh`: direct Safe / Near-Contact / Contact closed-loop evaluation of
-  an existing frozen OC-RAP model run.
-- `scripts/run_external_baselines.sh`: direct external-baseline train/registration/calibration/test
-  entry. By default it reuses learned checkpoints only when their configured epoch budget is
-  complete; `--retrain` and `--recalibrate` force the optional expensive stages.
+- `scripts/run_constraint_native_orientation_audit.sh`: the stable semantic launcher. It now runs **V48.124 OC-FMSA**, not a new recovery representation. The authoritative V48.123 scientific result was `ZERO_BOUNDARY_VIABILITY_STATE_TRANSITION_STOP`, which freezes the recovery-set mechanism family and licenses only fixed-Main system adjudication.
+- V48.124 evaluates the existing frozen L80 Main (`balanced` and `precision` robustness variants) against exact same-target nominal replay on Safe / Near-Contact / Contact. It performs no planner/source/root training, no recalibration, no carrier integration, no regime router, and no capacity/source/horizon/threshold search.
+- `scripts/run_ocrap_evaluation.sh`: direct Safe / Near-Contact / Contact closed-loop evaluation of an existing frozen OC-RAP model run.
+- `scripts/run_external_baselines.sh`: external-baseline train/registration/calibration/test entry. Final submission comparison is authorized only after V48.124 GO.
 - `scripts/run_submission_ablations.sh`: frozen-module submission ablations.
-- `scripts/build_regime_visualizations.sh`: direct selected-scene trace generation and MP4 rendering.
+- `scripts/build_regime_visualizations.sh`: selected-scene trace generation and MP4 rendering.
 - `tools/select_recovery_toy_examples.py`: dataset-only toy-example selection.
 - `scripts/build_ocrap_datasets.sh`: unversioned dataset-construction dispatcher.
 
+## V48.124 freeze criterion
+
+The Main is external-baseline-ready only if exact bucket coverage/source identity, deterministic sentinel replay, Safe non-interference, Near closed-loop validity, and Contact recovery validity all pass. Balanced/precision are robustness variants, not independent population replications. A V48.124 STOP does **not** reopen recovery-set representation search; only the failed provenance/stability/closed-loop axis may be diagnosed.
+
 ## WOMD publication contract
 
-Training data use WOMD `training`. Primary validation, test, calibration, external-baseline replay,
-and visualization use standard WOMD `validation`. `validation_interactive` remains available only as
-an explicit diagnostic compatibility role; it is not the default publication path.
+Training data use WOMD `training`. Primary validation/test/calibration replay is expected to use standard WOMD `validation`, while `validation_interactive` is diagnostic-only unless a bucket's recorded provenance explicitly requires it. V48.124 resolves the replay source from bucket provenance and records the exact source used. This is intentionally audit-visible because the paper/source-role wording must be reconciled rather than silently changed in code.
 
 ## Historical compatibility versus code dependency
 
-The cleaned code has no historical `vXX` Python filenames or imports. Some strings such as
-`model_v48_trac_sr`, historical checkpoint implementation tags, and frozen result-directory names are
-kept deliberately so existing frozen model assets can be loaded and audited. They are data/checkpoint
-provenance identifiers, not imports of old code.
+The cleaned code has no historical version-named Python filenames or imports. Version strings in frozen model/result paths are provenance identifiers, not old-code imports. `ALGORITHM_CHANGELOG.md` is the scientific history and preregistration record.
 
-`ALGORITHM_CHANGELOG.md` is retained as a historical scientific record only. It may mention removed
-historical launchers; none of those names are executable dependencies of the cleaned workspace.
-
-The current launcher consumes versioned frozen scientific assets by design, including the authoritative V48.122 STOP result plus V48.80/V48.93/V48.96 checkpoint/evidence assets. These are provenance inputs, not old-code dependencies. Source/tool/test filenames remain semantic and unversioned.
-
-Use `scripts/analyze_dataset_properties.sh` for a read-only 12-bucket dataset/property/construction-provenance export.
-
-See `CLEAN_COMMANDS.md` for operator commands and `ALGORITHM_CHANGELOG.md` for the scientific audit history and preregistered branches.
+Use `scripts/analyze_dataset_properties.sh` for read-only dataset/property/construction provenance.
+See `CLEAN_COMMANDS.md` for operator commands.

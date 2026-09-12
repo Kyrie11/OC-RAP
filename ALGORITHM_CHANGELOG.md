@@ -14269,3 +14269,84 @@ The **Main algorithm becomes external-baseline-ready only after a separate fixed
 This stopping rule is intentional. It prevents the scientific narrative from degenerating into endless feature search and makes the final theory falsifiable: deployable recovery is modeled as an observation-consistent, same-option signed set-transport process whose relative ordering, physical zero boundary, exposed support, executable redundancy and temporal re-entry semantics have each been independently adjudicated.
 
 The stable launcher filename and user command remain unchanged. Before GPU work, V48.123 verifies the exact authoritative V48.122 pipeline/comparison/balanced/precision SHAs, `SIGNED_VIABILITY_RANK_STATE_TRANSPORT_STOP`, and the exact registered zero-boundary transition branch.
+
+## V48.123 production result — OC-ZBST reliability/scientific attribution PASS, formal STOP, recovery-set search frozen
+
+The production V48.123 run passed the engineering/provenance gate and the scientific-attribution gate before any algorithmic interpretation. The uploaded source matched the frozen V48.123 delivery byte-for-byte, the canonical result bundle closed exactly against standalone artifacts and manifest hashes, all registered runtime-source hashes matched active source, the full repository regression passed, balanced/precision scientific state was exact-identical apart from variant/checkpoint provenance, and the closed-form ridge contract remained exact. The production preregistered decision is:
+
+```text
+ZERO_BOUNDARY_VIABILITY_STATE_TRANSITION_STOP
+```
+
+This is not an inactivity STOP. Exact positive-part decomposition errors are zero; reserve-transition and debt-repayment energy are active in exposed/full families across all four unique roles; same-option rank reassignment, multiple physical recovery options, and Contact re-entry coverage remain active.
+
+The final explanatory audit nevertheless produces two strong preregistered positive attributions:
+
+- `exposed_transition - V48.122 exposed_signed_state` Support historical increment is GO in all four unique roles: dev-Near `+0.0703`, dev-Contact `+0.0455`, certificate-Near `+0.0182`, certificate-Contact `+0.0139` AUC. Zero-boundary reserve/debt transition semantics therefore add real Support information in the observation-exposed core.
+- `full_transition - exposed_transition` Reserve attribution is GO across dev-Contact, certificate-Near, and certificate-Contact (`+0.0313`, `+0.0476`, `+0.1250`). Broad executable recovery redundancy therefore remains a real Reserve/debt primitive.
+
+The complete carrier fails. Relative to V48.122 full signed-state transport, V48.123 full transition repairs dev-Near Support (`+0.2109`) and dev-Contact Reserve (`+0.2135`), but certificate-Near Support drops `-0.0364`, certificate-Contact Support drops `-0.1217`, and certificate-Contact Reserve drops `-0.1389`. Full-set Support is also strongly harmful relative to the exposed transition on dev-Near, certificate-Near, and certificate-Contact. Therefore zero-boundary transition semantics are physically meaningful but are not a population-stable unified readout carrier.
+
+Scientific closure after V48.123:
+
+- close **zero-boundary viability-state transition as a complete carrier**;
+- freeze the recovery-set mechanism/search family: do not add a new V48.124 recovery statistic, rank basis, learned set encoder, threshold/window, capacity, source/root retraining, or Near/Contact router;
+- retain OC-MERO observation legality, actuator-realizable heterogeneous constraints, same-option joint viability, signed reserve/debt zero boundary, first-loss and persistent-safe re-entry, observation-exposed recovery support, full executable recovery redundancy on the Reserve/debt axis, candidate-independent nominal ordering, same-option candidate correspondence, temporal persistence as a partial primitive, absolute signed state as a partial primitive, and reserve-preservation/debt-repayment transition semantics as explanatory primitives;
+- keep all previously closed complete-carrier directions closed.
+
+Near conclusion: the zero-boundary decomposition improves observation-exposed Support and gives strong dev-Near evidence, but certificate-Near remains population-unstable and the full set hurts Support. The retained Near mechanism is observation-exposed recovery support plus preservation of positive reserve; the remaining uncertainty is now deployment stability/non-interference, not an untested recovery-set statistic.
+
+Contact conclusion: debt-repayment transition semantics strongly repair dev-Contact Reserve, while certificate-Contact does not transfer. Full executable redundancy remains positively attributable on the Reserve/debt axis. The retained Contact mechanism is debt repayment through zero, persistent-safe re-entry, and broad executable redundancy; it is a semantic mechanism, not a single universal feature carrier.
+
+The final representation bottleneck is therefore **adjudicated rather than solved by one GO carrier**. V48.113--V48.123 collectively falsify the hypothesis that one of the tested selected-option/set-moment/rank/persistence/signed-state/transition readouts is a universal population-stable carrier, while independently supporting the mechanism skeleton above. The dominant bottleneck now moves from representation discovery to system-level validation of the frozen Main.
+
+The exact registered successor is:
+
+```text
+close_zero_boundary_viability_state_transition
+-> freeze_recovery_set_mechanism_family
+-> preregister fixed_main_stability_noninterference_adjudication
+-> no new recovery mechanism/capacity/regime/source/horizon/threshold sweep
+```
+
+## V48.124 OC-FMSA — Observation-Consistent Fixed-Main Stability and Non-Interference Adjudication
+
+Engineering version: `v48.124.0-OC-FMSA`  
+Scientific version: `v48.124-OC-FMSA`
+
+V48.124 is deliberately **not a new recovery algorithm or representation family**. It freezes the deployed L80 Main and the V48.123-supported theory skeleton, performs no carrier integration after the V48.123 STOP, and asks whether the fixed system is stable enough for final external-baseline comparison.
+
+The same stable launcher command now runs three exact same-target controls/robustness variants over `test_safe`, `test_near_contact`, and `test_contact`:
+
+```text
+nominal replay control
+frozen L80 Main / balanced checkpoint
+frozen L80 Main / precision checkpoint
+```
+
+The bucket WOMD source is resolved from dataset provenance and recorded in each artifact. V48.124 does not silently substitute `validation_interactive`; this makes the unresolved paper/source-role wording auditable instead of changing the source underneath the experiment. Balanced/precision are robustness variants and are not counted as independent scientific population replications.
+
+Five preregistered gates are evaluated in order:
+
+1. **Coverage/source identity.** Nominal, balanced, and precision must embed all bucket targets, expose exactly identical target keys, use the same bucket dataset, and resolve the same WOMD source in each regime.
+2. **Determinism.** For each regime, the lexicographically first common target is replayed once for balanced and precision. The scientific scene result must match the corresponding full-run scene to `1e-9` after dropping timing/render-only fields.
+3. **Safe non-interference.** Using same-target nominal replay and a fixed 5000-draw paired bootstrap (`seed=2027`, zero non-inferiority margin), both robustness variants must show a non-positive 95% upper bound for lower-is-better metrics and non-negative 95% lower bound for higher-is-better metrics on: overlap, off-road, critical-TTC exposure duration, clearance-deficit AUC, TTC-deficit AUC, bounded NUP, route progression, and intervention rate.
+4. **Near validity.** Both variants must pass hard no-harm on overlap/off-road and each must show at least one statistically supported safety benefit. At least one benefit must be common to balanced and precision among critical-TTC duration, clearance-deficit AUC, TTC-deficit AUC, minimum clearance, and minimum TTC.
+5. **Contact validity.** Both variants must pass hard no-harm on off-road, recontact, secondary overlap, and post-contact overlap duration. Each must show at least one statistically supported recovery benefit, with at least one common benefit across balanced and precision among post-contact clearance gain, normalized free-space AUC, escape event, terminal clearance, and stable-stop quality.
+
+Promotion is intentionally system-level and fail-closed:
+
+```text
+coverage + determinism + Safe + Near + Contact all GO
+  -> FIXED_MAIN_STABILITY_NONINTERFERENCE_GO
+  -> freeze Main and authorize final external-baseline comparison
+  -> no internal mechanism or threshold search
+
+otherwise
+  -> the first failed gate names the STOP axis
+  -> keep the recovery-set mechanism family frozen
+  -> diagnose/fix only that stability, closed-loop, provenance, or engineering axis
+  -> do not invent a V48.125 recovery mechanism
+```
+
+This is the Main-freeze criterion. V48.124 GO, not another internal AUC gain, is what makes the current Main **external-baseline-ready**. If V48.124 STOPs, the scientific mechanism family remains frozen: only the failed system axis may be repaired or revalidated, and reopening a recovery mechanism would require genuinely new independent evidence rather than post-hoc feature search.

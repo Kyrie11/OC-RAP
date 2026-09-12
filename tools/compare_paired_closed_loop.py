@@ -21,6 +21,9 @@ DIRECT_METRICS = (
     "macro_switch_rate",
 )
 NESTED_METRICS = (
+    "overlap_any",
+    "offroad_any",
+    "route_progression_m",
     "min_clearance_m_min",
     "min_clearance_m_p05",
     "ttc_s_min",
@@ -56,6 +59,7 @@ NESTED_METRICS = (
     "post_contact_free_space_auc_normalized_m",
     "post_contact_clearance_deficit_auc_m_s",
     "post_contact_escape_event",
+    "post_contact_overlap_duration_s",
     "time_to_post_contact_escape_s",
     "new_stable_stop_event",
     "new_stable_stop_quality_event",
@@ -65,6 +69,8 @@ NESTED_METRICS = (
 )
 
 LOWER_IS_BETTER = {
+    "overlap_any",
+    "offroad_any",
     "closed_loop_FRA_exec",
     "closed_loop_audit_paper_pcd_selector_miss_rate",
     "closed_loop_audit_paper_selected_PCD_regret",
@@ -92,6 +98,7 @@ LOWER_IS_BETTER = {
     "recontact_event",
     "recontact_episode_count",
     "post_contact_clearance_deficit_auc_m_s",
+    "post_contact_overlap_duration_s",
     "time_to_post_contact_escape_s",
     "time_to_stable_stop_steps",
     "time_to_stable_stop_s",
@@ -155,6 +162,8 @@ def main() -> int:
         "num_control_scenes": len(c_scenes),
         "num_method_scenes": len(m_scenes),
         "num_paired_scenes": len(common),
+        "bootstrap_draws": int(args.bootstrap),
+        "bootstrap_seed": int(args.seed),
         "metrics": {},
     }
     for name in DIRECT_METRICS + NESTED_METRICS:

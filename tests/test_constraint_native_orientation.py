@@ -211,18 +211,19 @@ def test_ridge_owner_is_still_unique_and_closed_form():
     assert model.normal_equation_residual <= 1e-7
 
 
-def test_current_launcher_reuses_authoritative_v122_and_keeps_command_name():
+def test_current_launcher_reuses_authoritative_v123_freeze_branch_and_keeps_command_name():
     repo = Path(__file__).resolve().parents[1]
     launcher = (repo / "scripts/run_constraint_native_orientation_audit.sh").read_text()
-    assert "OC-RAP-v48.122-PIPELINE_COMPLETE.json" in launcher
-    assert "OC-RAP-v48.122-DCP-DRFC-BCDE-RIFA-OC-SVRT-comparison.json" in launcher
-    assert "OC-RAP-v48.122-SVRT-balanced.json" in launcher
-    assert "OC-RAP-v48.122-SVRT-precision.json" in launcher
-    assert "OC-RAP-v48.93-factor-mediation-audit.jsonl" in launcher
+    assert "OC-RAP-v48.123-PIPELINE_COMPLETE.json" in launcher
+    assert "OC-RAP-v48.123-DCP-DRFC-BCDE-RIFA-OC-ZBST-comparison.json" in launcher
     assert "OC-RAP-v48.123-ZBST-balanced.json" in launcher
-    assert "OC-RAP-v48.123-OC-ZBST-results.zip" in launcher
-    assert "zero-boundary" in launcher.lower()
-    assert "close_signed_viability_rank_state_transport" in launcher
+    assert "OC-RAP-v48.123-ZBST-precision.json" in launcher
+    assert "OC-RAP-v48.124-fixed-main-adjudication.json" in launcher
+    assert "OC-RAP-v48.124-OC-FMSA-results.zip" in launcher
+    assert "freeze_recovery_set_mechanism_family" in launcher
+    assert "run_nominal_three_regime_control.sh" in launcher
+    assert "run_ocrap_three_regime_evaluation.sh" in launcher
+    assert "--bootstrap 5000 --seed 2027" in launcher
     assert "--run-id" in launcher
 
 def test_unversioned_runner_keeps_v93_role_filter_semantics(tmp_path):

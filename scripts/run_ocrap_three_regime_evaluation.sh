@@ -54,17 +54,17 @@ fi
 : "${NEAR_WOMD:=auto}"
 : "${CONTACT_WOMD:=auto}"
 if [[ "${SAFE_WOMD,,}" == auto ]]; then
-  SAFE_WOMD="$(runtime_resolve_bucket_womd_spec "$SAFE_BUCKET" "$BUCKET_SPLIT" "$WOMD_ROOT" "$WOMD_NUM_SHARDS" "${WOMD_ROLE:-validation}")"
+  SAFE_WOMD="$(runtime_resolve_bucket_womd_spec "$SAFE_BUCKET" "$BUCKET_SPLIT" "$WOMD_ROOT" "$WOMD_NUM_SHARDS" "${WOMD_ROLE:-auto}")"
 else
   SAFE_WOMD="$(runtime_normalize_womd_spec "$SAFE_WOMD" "$WOMD_NUM_SHARDS")"
 fi
 if [[ "${NEAR_WOMD,,}" == auto ]]; then
-  NEAR_WOMD="$(runtime_resolve_bucket_womd_spec "$NEAR_BUCKET" "$BUCKET_SPLIT" "$WOMD_ROOT" "$WOMD_NUM_SHARDS" "${WOMD_ROLE:-validation}")"
+  NEAR_WOMD="$(runtime_resolve_bucket_womd_spec "$NEAR_BUCKET" "$BUCKET_SPLIT" "$WOMD_ROOT" "$WOMD_NUM_SHARDS" "${WOMD_ROLE:-auto}")"
 else
   NEAR_WOMD="$(runtime_normalize_womd_spec "$NEAR_WOMD" "$WOMD_NUM_SHARDS")"
 fi
 if [[ "${CONTACT_WOMD,,}" == auto ]]; then
-  CONTACT_WOMD="$(runtime_resolve_bucket_womd_spec "$CONTACT_BUCKET" "$BUCKET_SPLIT" "$WOMD_ROOT" "$WOMD_NUM_SHARDS" "${WOMD_ROLE:-validation}")"
+  CONTACT_WOMD="$(runtime_resolve_bucket_womd_spec "$CONTACT_BUCKET" "$BUCKET_SPLIT" "$WOMD_ROOT" "$WOMD_NUM_SHARDS" "${WOMD_ROLE:-auto}")"
 else
   CONTACT_WOMD="$(runtime_normalize_womd_spec "$CONTACT_WOMD" "$WOMD_NUM_SHARDS")"
 fi
@@ -89,6 +89,9 @@ fi
 : "${RUN_CONTACT:=1}"
 : "${SKIP_COMPLETE_REGIMES:=true}"
 : "${FINALIZE_COMPLETE_JOURNALS:=true}"
+: "${INCLUDE_SCENES_IN_RESULT:=false}"
+: "${RESULT_SCENE_DETAIL:=metrics}"
+: "${SCENE_JOURNAL_DETAIL:=metrics}"
 
 IFS=',' read -r -a GPUS <<< "$CUDA_DEVICES"; ((${#GPUS[@]})) || GPUS=(0)
 mkdir -p "$OUT/safe" "$OUT/near" "$OUT/contact"
@@ -133,6 +136,8 @@ run_one() {
     NUM_CANDIDATES="$NUM_CANDIDATES" NUM_RECOVERY_OPTIONS="$NUM_RECOVERY_OPTIONS" \
     BUCKET_DATASET="$bucket" BUCKET_SPLIT="$BUCKET_SPLIT" MAX_TARGETS_PER_SCENE=1 \
     RENDER_TRACE="$render" SAVE_PARTIAL=true RESUME_FORCE="$RESUME_FORCE" \
+    INCLUDE_SCENES_IN_RESULT="$INCLUDE_SCENES_IN_RESULT" RESULT_SCENE_DETAIL="$RESULT_SCENE_DETAIL" \
+    SCENE_JOURNAL_DETAIL="$SCENE_JOURNAL_DETAIL" MEMORY_SCENE_DETAIL="$RESULT_SCENE_DETAIL" \
     "${target_env[@]}" bash scripts/run_ocrap_closed_loop.sh
 }
 

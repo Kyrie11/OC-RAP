@@ -1,6 +1,6 @@
 # OC-RAP cleaned workspace — current commands
 
-> Publication WOMD role: **standard `validation`** for validation/test/calibration replay.  `validation_interactive` is supported only when explicitly requested for a separate diagnostic dataset whose provenance says so.
+> Publication WOMD role: standard `validation` is the expected publication replay source. V48.124 resolves the exact source from bucket provenance and records it; `validation_interactive` is never silently substituted. The TeX/source-provenance mismatch must be reconciled separately before submission.
 
 ## 0. Common environment
 
@@ -15,32 +15,11 @@ export PYTHONPATH="$PWD/src:$PWD${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONNOUSERSITE=1
 ```
 
-## 0. Current V48.123 scientific reference contract
+## 1. Current scientific stage — V48.124 OC-FMSA
 
-The stable unversioned orientation launcher now runs **V48.123 OC-ZBST**. It treats the completed V48.122 OC-SVRT STOP artifacts as immutable scientific inputs and verifies their exact SHA/status/registered zero-boundary transition branch before any V48.123 audit starts. Python implementation filenames remain semantic/unversioned; scientific inputs and outputs remain versioned.
+V48.123 passed reliability/scientific attribution but formally STOPped as a complete zero-boundary transition carrier. Its exact preregistered successor freezes the recovery-set mechanism family. V48.124 therefore does **not** train, recalibrate, integrate a V48.123 carrier, or define another recovery statistic. It evaluates the existing frozen L80 Main with balanced/precision robustness variants against same-target nominal controls.
 
-V48.122 showed that absolute signed nominal viability is informative but not sufficient as a static rank-state carrier. The final preregistered representation question is whether candidate displacement must be decomposed at the existing physical zero boundary into **safe-side reserve transition** and **unsafe-side debt repayment**. This is an explanatory decomposition of the existing mechanism skeleton, not a new learned mechanism family.
-
-## 1. Current orientation audit — V48.123 OC-ZBST
-
-V48.123 is **audit-only**. For every same recovery option and temporal channel:
-
-```text
-DeltaReserve       = max(qa, 0) - max(q0, 0)
-DeltaDebtRepayment = max(-q0, 0) - max(-qa, 0)
-qa - q0            = DeltaReserve + DeltaDebtRepayment
-r                   = exact candidate-independent nominal midrank
-x                   = 2r - 1
-```
-
-The four fixed transition modes are `DeltaReserve`, `x*DeltaReserve`, `DeltaDebtRepayment`, and `x*DeltaDebtRepayment`. The first+third exactly recover V48.120 global displacement; the second+fourth exactly recover nominal-rank tilt. No threshold/window/decay, learned scale, candidate rank coordinate, option identity export, regime router or capacity change is introduced.
-
-```text
-8 bins x 2 temporal channels x 4 transition modes = 64-D
-156-D frozen candidate response + 64-D = 220-D
-```
-
-Primary `full_transition` uses all common valid recovery options. Equal-capacity `exposed_transition` uses only the support of V48.117 frozen weak-root zero-boundary witnesses.
+V48.124 preregisters five gates: exact full-bucket coverage/source identity, deterministic sentinel replay, Safe non-interference, Near closed-loop validity, and Contact recovery validity. Paired inference uses 5000 bootstrap draws with seed 2027 and zero non-interference margin. If all five GO, the Main is frozen and final external-baseline comparison is authorized. If any gate STOPs, the recovery mechanism family remains frozen and only that failed system/provenance axis may be diagnosed.
 
 Run exactly:
 
@@ -54,12 +33,20 @@ bash scripts/run_constraint_native_orientation_audit.sh
 Upload only:
 
 ```text
-/home/senzeyu2/code/OC-RAP/runs/OC-RAP-v48.123-OC-ZBST-results.zip
+/home/senzeyu2/code/OC-RAP/runs/OC-RAP-v48.124-OC-FMSA-results.zip
 ```
 
-### About OC-RAP training in V48.123
+### What the stable command does in V48.124
 
-There is no registered V48.123 planner/root/source training stage. V48.123 is the last planned explanatory recovery-set carrier audit. Whether it GOes or STOPs, the next stage is a **fixed-Main stability/non-interference adjudication with no new recovery mechanism family**. External baseline comparison becomes final evidence only after that freeze adjudication.
+1. verifies exact authoritative V48.123 STOP/freeze-branch SHA and runtime contract before long GPU work;
+2. runs full same-target nominal Safe/Near/Contact controls, resolving WOMD from bucket provenance;
+3. runs frozen L80 balanced and precision Safe/Near/Contact evaluation with scenes embedded;
+4. computes six fixed paired-bootstrap comparisons;
+5. replays one lexicographically fixed sentinel target per regime/variant and checks deterministic scientific output;
+6. applies the preregistered coverage / determinism / Safe / Near / Contact gates;
+7. packages the canonical V48.124 adjudication bundle.
+
+There is no registered V48.124 recovery-model training stage and no V48.125 recovery mechanism successor. A V48.124 STOP keeps the mechanism family frozen.
 
 ## 2. Direct OC-RAP three-regime closed-loop test
 
