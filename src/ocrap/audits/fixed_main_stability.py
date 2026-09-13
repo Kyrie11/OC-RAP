@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 import math
 
-ENGINEERING_VERSION = "v48.124.6-OC-FMSA-CONTACT-VALIDITY-ENGFIX"
+ENGINEERING_VERSION = "v48.124.7-OC-FMSA-PROVENANCE-ENGFIX"
 SCIENTIFIC_VERSION = "v48.124-OC-FMSA"
 ALGORITHM_NAME = "Observation-Consistent Fixed-Main Stability and Non-Interference Adjudication"
 

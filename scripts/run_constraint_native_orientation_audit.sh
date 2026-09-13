@@ -43,8 +43,8 @@ FULL_RUN_RUNTIME="$PROVENANCE_DIR/full_population_runtime_contract.json"
 
 mkdir -p "$BASE_OUT" "$WORK" "$SENTINEL_DIR" "$COMPARE_DIR" "$KEY_DIR" "$PROVENANCE_DIR"
 
-# V48.124.6 preserves the V48.124.5 exact-a0 control and adds a fail-closed
-# Contact construct-validity adjudication: post-contact endpoints may be used only
+# V48.124.7 preserves the V48.124.5 exact-a0 control and V48.124.6 fail-closed
+# Contact construct-validity adjudication. Post-contact endpoints may be used only
 # when every paired Contact target has the same observed simulator contact anchor
 # at rollout step 0, before either policy acts. Planner/runtime behavior is unchanged.
 # V48.124.5 already used a fresh full-population work directory for exact-a0.
@@ -56,14 +56,14 @@ for f in \
   [[ -s "$f" ]] && FULL_RESULTS_PRESENT=1 && break
 done
 if [[ "$FULL_RESULTS_PRESENT" == 1 && ! -f "$FULL_RUN_RUNTIME" ]]; then
-  echo "completed V48.124.5/6 population artifacts exist without their own full-population runtime contract; refuse provenance-unsafe reuse" >&2
+  echo "completed V48.124.5/6/7 population artifacts exist without their own full-population runtime contract; refuse provenance-unsafe reuse" >&2
   exit 30
 fi
 rm -f "$RUNTIME" "$SENTINEL_INDEX" "$ADJUDICATION" "$COMPLETE" "$BUNDLE_MANIFEST" "$RESULTS_ZIP"
 
 # Fail before long GPU work if this checkout does not satisfy the fixed-Main contract.
 python tools/check_fixed_main_stability_contract.py --repo "$REPO" --run-id "$RUN_ID" --output "$RUNTIME"
-# Fresh V48.124.6 runs use this runtime for all population evidence; resumed
+# Fresh V48.124.7 runs use this runtime for all population evidence; resumed
 # runs keep the preserved contract above. The scientific Main remains unchanged.
 [[ -f "$FULL_RUN_RUNTIME" ]] || cp -f "$RUNTIME" "$FULL_RUN_RUNTIME"
 

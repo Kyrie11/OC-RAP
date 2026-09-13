@@ -29,3 +29,7 @@ The cleaned code has no historical version-named Python filenames or imports. Ve
 
 Use `scripts/analyze_dataset_properties.sh` for read-only dataset/property/construction provenance.
 See `CLEAN_COMMANDS.md` for operator commands.
+
+## V48.124 fixed-Main adjudication note
+
+The current engineering build is `v48.124.7-OC-FMSA-PROVENANCE-ENGFIX`; the scientific algorithm remains `v48.124-OC-FMSA`. V48.124.7 changes provenance/adjudication only and preserves the frozen planner.

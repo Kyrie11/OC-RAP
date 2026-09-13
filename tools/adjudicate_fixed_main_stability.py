@@ -25,6 +25,9 @@ V123_NEXT = (
     "no_new_recovery_mechanism_capacity_regime_source_horizon_or_threshold_sweep"
 )
 
+FROZEN_FULL_RUN_ENGINEERING_VERSION = "v48.124.5-OC-FMSA"
+FROZEN_FULL_RUN_RUNTIME_SHA256 = "99f56af01d179cbe937ad68fa8bd2a862ae0efb795044ed7bc9f7ee601efb01c"
+
 FROZEN_FULL_RUN_CORE_SHA256 = {
     # Filled from the final v48.124.5 source package after the exact-a0
     # control-conformance patch; these are scientific runtime sources.
@@ -48,6 +51,36 @@ def load(path: Path) -> dict[str, Any]:
 
 def artifact_record(path: Path) -> dict[str, Any]:
     return {"path": str(path.resolve()), "sha256": sha(path), "size": path.stat().st_size}
+
+
+def full_run_runtime_contract_ok(path: Path, doc: dict[str, Any]) -> bool:
+    """Validate a full-population runtime artifact without rewriting history.
+
+    V48.124.7 may adjudicate either the exact retained V48.124.5 population
+    evidence (identified by an immutable runtime-artifact SHA) or a fresh
+    population produced by the current engineering build. Scientific execution
+    semantics are additionally pinned by the frozen core source hashes below.
+    """
+    sc_full = doc.get("scientific_contract") or {}
+    full_run_engineering = str(doc.get("engineering_version") or "")
+    retained_v481245 = (
+        full_run_engineering == FROZEN_FULL_RUN_ENGINEERING_VERSION
+        and path.is_file()
+        and sha(path) == FROZEN_FULL_RUN_RUNTIME_SHA256
+    )
+    fresh_current = full_run_engineering == ENGINEERING_VERSION
+    return bool(
+        doc.get("valid") and doc.get("attribution_ready")
+        and doc.get("scientific_version") == SCIENTIFIC_VERSION
+        and (retained_v481245 or fresh_current)
+        and sc_full.get("fixed_main_evaluation_only") is True
+        and sc_full.get("recovery_set_mechanism_family_frozen") is True
+        and sc_full.get("new_recovery_mechanism_authorized") is False
+        and sc_full.get("planner_parameters_trained") == 0
+        and sc_full.get("womd_source_resolution") == "standard_validation_only_with_bucket_provenance_conflict_fail_closed"
+        and sc_full.get("rifa_absolute_admission_for_intervention") is True
+        and sc_full.get("exact_nominal_control") == "candidate_index_zero_no_feasibility_substitution"
+    )
 
 
 def main() -> int:
@@ -107,19 +140,7 @@ def main() -> int:
     try:
         full_run_runtime = load(a.full_run_runtime)
         rows = full_run_runtime.get("runtime_files") or {}
-        sc_full = full_run_runtime.get("scientific_contract") or {}
-        if not (
-            full_run_runtime.get("valid") and full_run_runtime.get("attribution_ready")
-            and full_run_runtime.get("scientific_version") == SCIENTIFIC_VERSION
-            and full_run_runtime.get("engineering_version") == ENGINEERING_VERSION
-            and sc_full.get("fixed_main_evaluation_only") is True
-            and sc_full.get("recovery_set_mechanism_family_frozen") is True
-            and sc_full.get("new_recovery_mechanism_authorized") is False
-            and sc_full.get("planner_parameters_trained") == 0
-            and sc_full.get("womd_source_resolution") == "standard_validation_only_with_bucket_provenance_conflict_fail_closed"
-            and sc_full.get("rifa_absolute_admission_for_intervention") is True
-            and sc_full.get("exact_nominal_control") == "candidate_index_zero_no_feasibility_substitution"
-        ):
+        if not full_run_runtime_contract_ok(a.full_run_runtime, full_run_runtime):
             errors.append("full_run_runtime_contract")
         for rel, want in FROZEN_FULL_RUN_CORE_SHA256.items():
             if (rows.get(rel) or {}).get("sha256") != want:
@@ -225,8 +246,9 @@ def main() -> int:
     decision = adjudicate(
         comparisons=comparisons, results=results, sentinel_results=sentinels, support_docs=support_docs
     ) if not errors else {
-        "status": "FIXED_MAIN_COVERAGE_STOP", "go": False,
-        "next_branch": "keep_recovery_mechanism_family_frozen_and_diagnose_only_failed_stability_or_closed_loop_axis_no_new_recovery_mechanism_capacity_regime_source_horizon_or_threshold_sweep",
+        "status": "SCIENTIFIC_ATTRIBUTION_NOT_ENTERED",
+        "go": False,
+        "next_branch": "fix_engineering_or_provenance_before_scientific_adjudication",
     }
 
     # Source and frozen-Main provenance are reportable evidence, not tunable inputs.

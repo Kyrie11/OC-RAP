@@ -1,3 +1,11 @@
+# V48.124.7 — retained full-run provenance engineering fix (no algorithm change)
+
+- Scientific version remains `v48.124-OC-FMSA`; engineering version is `v48.124.7-OC-FMSA-PROVENANCE-ENGFIX`.
+- Fixes a V48.124.6 checker contradiction: V48.124.6 intentionally re-adjudicates the frozen V48.124.5 full-population evidence, but the adjudicator also required that retained runtime artifact to claim the current engineering version.
+- Retained V48.124.5 evidence is now accepted only when the full-population runtime JSON is the exact SHA-pinned authoritative artifact (`99f56a...fb01c`) and the frozen scientific runtime source hashes still match. Fresh runs may use the current engineering version.
+- Engineering/provenance failures now report `SCIENTIFIC_ATTRIBUTION_NOT_ENTERED` instead of masquerading as `FIXED_MAIN_COVERAGE_STOP`.
+- No planner, checkpoint, calibration, threshold, proposal, recovery option, RIFA rule, dataset, or closed-loop dynamics change. Contact construct-validity fail-closed semantics from V48.124.6 remain unchanged.
+
 # V48.124.6 — Contact construct-validity engineering fix (no algorithm change)
 
 - Scientific version remains `v48.124-OC-FMSA`; engineering version is `v48.124.6-OC-FMSA-CONTACT-VALIDITY-ENGFIX`.

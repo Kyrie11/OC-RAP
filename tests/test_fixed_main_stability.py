@@ -298,3 +298,39 @@ def test_nominal_launcher_requires_zero_intervention_exact_a0():
     assert "nominal_exact_a0_ok" in text
     assert "nominal_prefix_exact_a0" in text
     assert "abs(float(rate)) > 1e-12" in text
+
+
+def test_v481247_adjudicator_pins_retained_v481245_full_run_runtime():
+    import importlib.util
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[1]
+    tool = repo / "tools" / "adjudicate_fixed_main_stability.py"
+    spec = importlib.util.spec_from_file_location("v481247_adjudicator", tool)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    assert mod.FROZEN_FULL_RUN_ENGINEERING_VERSION == "v48.124.5-OC-FMSA"
+    assert mod.FROZEN_FULL_RUN_RUNTIME_SHA256 == "99f56af01d179cbe937ad68fa8bd2a862ae0efb795044ed7bc9f7ee601efb01c"
+
+    retained = Path(__file__).resolve().parents[2] / "results_bundle_v481245" / "OC-RAP-v48.124-full-population-runtime-code-contract.json"
+    if retained.is_file():
+        import json
+        doc = json.loads(retained.read_text(encoding="utf-8"))
+        assert mod.full_run_runtime_contract_ok(retained, doc)
+        tampered = dict(doc)
+        tampered["engineering_version"] = "v48.124.4-OC-FMSA"
+        assert not mod.full_run_runtime_contract_ok(retained, tampered)
+
+    source = tool.read_text(encoding="utf-8")
+    assert "retained_v481245" in source
+    assert "FROZEN_FULL_RUN_RUNTIME_SHA256" in source
+
+
+def test_engineering_failure_does_not_masquerade_as_coverage_stop():
+    from pathlib import Path
+    repo = Path(__file__).resolve().parents[1]
+    source = (repo / "tools" / "adjudicate_fixed_main_stability.py").read_text(encoding="utf-8")
+    assert '"status": "SCIENTIFIC_ATTRIBUTION_NOT_ENTERED"' in source
+    assert '"next_branch": "fix_engineering_or_provenance_before_scientific_adjudication"' in source

@@ -1,3 +1,14 @@
+## V48.124.7 provenance re-adjudication fix
+
+V48.124.7 is engineering-only. It does not authorize V48.125 mechanism search and does not change the frozen Main. It permits exact SHA-pinned reuse of the authoritative V48.124.5 full-population runtime evidence during V48.124.7 re-adjudication; arbitrary stale runtime contracts still fail closed.
+
+The stable command remains:
+
+```bash
+GPU0=0 GPU1=1 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+  bash scripts/run_constraint_native_orientation_audit.sh
+```
+
 ## V48.124.6 Contact construct-validity engineering fix
 
 V48.124.6 does not change the planner. It changes scientific adjudication only: Contact post-contact endpoints are not entered unless nominal/balanced/precision all start from the same simulator-observed contact anchor at rollout step 0, before policy action. The existing `test_contact` counterfactual-surrogate cohort therefore fails closed for post-contact causal adjudication; do not rerun the long V48.124 population command on that cohort expecting a valid Contact gate.
