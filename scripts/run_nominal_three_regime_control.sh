@@ -27,6 +27,16 @@ source scripts/lib/runtime.sh
 : "${RESULT_SCENE_DETAIL:=metrics}"
 : "${RESUME_FORCE:=false}"
 
+: "${RUN_SAFE:=1}"
+: "${RUN_NEAR:=1}"
+: "${RUN_CONTACT:=1}"
+: "${CONTACT_TARGET_KEYS_FILE:=}"
+: "${CONTACT_ANCHOR_PRELUDE_ENABLED:=false}"
+: "${CONTACT_ANCHOR_PRELUDE_MAX_STEPS:=60}"
+: "${CONTACT_ANCHOR_PRELUDE_REPLAN_INTERVAL:=1}"
+: "${CONTACT_ANCHOR_REQUIRE_FOUND:=true}"
+: "${CONTACT_ANCHOR_MANIFEST_FILE:=}"
+
 resolve_spec() {
   local value="$1" bucket="$2"
   if [[ "${value,,}" == auto ]]; then
@@ -73,16 +83,31 @@ IFS=',' read -r -a GPUS <<< "$CUDA_DEVICES"; ((${#GPUS[@]})) || GPUS=(0)
 mkdir -p "$OUT/safe" "$OUT/near" "$OUT/contact"
 
 run_one() {
-  local regime="$1" womd="$2" bucket="$3" gpu="$4"
+  local regime="$1" womd="$2" bucket="$3" gpu="$4" target_keys="${5:-}"
   local run_dir="$OUT/$regime" output="$OUT/$regime/closed_loop_nominal.json"
+  local extra=()
+  if [[ -n "$target_keys" ]]; then
+    extra+=(--set "closed_loop.target_keys_file=$target_keys" --set closed_loop.require_target_keys=true)
+  fi
+  if [[ "$regime" == contact && "${CONTACT_ANCHOR_PRELUDE_ENABLED,,}" == true ]]; then
+    extra+=(
+      --set closed_loop.contact_anchor_prelude_enabled=true
+      --set "closed_loop.contact_anchor_prelude_max_steps=$CONTACT_ANCHOR_PRELUDE_MAX_STEPS"
+      --set "closed_loop.contact_anchor_prelude_replan_interval_steps=$CONTACT_ANCHOR_PRELUDE_REPLAN_INTERVAL"
+      --set "closed_loop.contact_anchor_require_found=$CONTACT_ANCHOR_REQUIRE_FOUND"
+    )
+    [[ -n "$CONTACT_ANCHOR_MANIFEST_FILE" ]] && extra+=(--set "closed_loop.contact_anchor_manifest_file=$CONTACT_ANCHOR_MANIFEST_FILE")
+  fi
   mkdir -p "$run_dir"
   if python tools/check_closed_loop_artifact.py --output "$output" --method nominal --bucket-dataset "$bucket" --quiet \
      && nominal_exact_a0_ok "$output"; then
     echo "[REUSE] exact-a0 nominal $regime complete: $output"
     return 0
   fi
+  support_args=()
+  if [[ -n "$target_keys" ]]; then support_args=(--target-keys-file "$target_keys" --require-target-keys); fi
   python tools/check_closed_loop_dataset_support.py --dataset "$bucket" --split "$BUCKET_SPLIT" \
-    --womd-pattern "$womd" --expected-source-role "${WOMD_ROLE:-auto}" --output "$run_dir/closed_loop_dataset_support.json"
+    --womd-pattern "$womd" --expected-source-role "${WOMD_ROLE:-auto}" "${support_args[@]}" --output "$run_dir/closed_loop_dataset_support.json"
   export CUDA_VISIBLE_DEVICES="$gpu"
   export PYTHONUNBUFFERED=1 XLA_PYTHON_CLIENT_PREALLOCATE=false
   export JAX_COMPILATION_CACHE_DIR="$run_dir/.jax_compilation_cache"
@@ -113,6 +138,7 @@ run_one() {
     --set waymax.compute_future_metrics=false \
     --set waymax.teacher_metrics_stride=0 \
     --set waymax.use_jit_scan_rollouts=true \
+    "${extra[@]}" \
     2>&1 | tee -a "$run_dir/closed_loop_nominal.log"
   python tools/check_closed_loop_artifact.py --output "$output" --method nominal --bucket-dataset "$bucket"
   nominal_exact_a0_ok "$output" || { echo "nominal control violated exact-a0 semantics: $output" >&2; return 30; }
@@ -120,15 +146,15 @@ run_one() {
 
 failed=0
 if ((${#GPUS[@]} >= 2)); then
-  run_one safe "$SAFE_WOMD" "$SAFE_BUCKET" "${GPUS[0]}" & p0=$!
-  run_one near "$NEAR_WOMD" "$NEAR_BUCKET" "${GPUS[1]}" & p1=$!
-  wait "$p0" || failed=1
-  run_one contact "$CONTACT_WOMD" "$CONTACT_BUCKET" "${GPUS[0]}" & p2=$!
-  wait "$p1" || failed=1
-  wait "$p2" || failed=1
+  p0= p1=
+  if [[ "$RUN_SAFE" == 1 ]]; then run_one safe "$SAFE_WOMD" "$SAFE_BUCKET" "${GPUS[0]}" & p0=$!; fi
+  if [[ "$RUN_NEAR" == 1 ]]; then run_one near "$NEAR_WOMD" "$NEAR_BUCKET" "${GPUS[1]}" & p1=$!; fi
+  [[ -z "$p0" ]] || wait "$p0" || failed=1
+  [[ -z "$p1" ]] || wait "$p1" || failed=1
+  if [[ "$RUN_CONTACT" == 1 ]]; then run_one contact "$CONTACT_WOMD" "$CONTACT_BUCKET" "${GPUS[0]}" "$CONTACT_TARGET_KEYS_FILE" || failed=1; fi
 else
-  run_one safe "$SAFE_WOMD" "$SAFE_BUCKET" "${GPUS[0]}" || failed=1
-  run_one near "$NEAR_WOMD" "$NEAR_BUCKET" "${GPUS[0]}" || failed=1
-  run_one contact "$CONTACT_WOMD" "$CONTACT_BUCKET" "${GPUS[0]}" || failed=1
+  [[ "$RUN_SAFE" != 1 ]] || run_one safe "$SAFE_WOMD" "$SAFE_BUCKET" "${GPUS[0]}" || failed=1
+  [[ "$RUN_NEAR" != 1 ]] || run_one near "$NEAR_WOMD" "$NEAR_BUCKET" "${GPUS[0]}" || failed=1
+  [[ "$RUN_CONTACT" != 1 ]] || run_one contact "$CONTACT_WOMD" "$CONTACT_BUCKET" "${GPUS[0]}" "$CONTACT_TARGET_KEYS_FILE" || failed=1
 fi
 ((failed==0)) || exit 30

@@ -61,6 +61,12 @@ else
 fi
 INCLUDE_SCENES_IN_RESULT="${INCLUDE_SCENES_IN_RESULT:-false}"
 INCLUDE_SCENES_IN_PARTIAL="${INCLUDE_SCENES_IN_PARTIAL:-false}"
+CONTACT_ANCHOR_PRELUDE_ENABLED="${CONTACT_ANCHOR_PRELUDE_ENABLED:-false}"
+CONTACT_ANCHOR_PRELUDE_MAX_STEPS="${CONTACT_ANCHOR_PRELUDE_MAX_STEPS:-60}"
+CONTACT_ANCHOR_PRELUDE_REPLAN_INTERVAL="${CONTACT_ANCHOR_PRELUDE_REPLAN_INTERVAL:-1}"
+CONTACT_ANCHOR_REQUIRE_FOUND="${CONTACT_ANCHOR_REQUIRE_FOUND:-true}"
+CONTACT_ANCHOR_MANIFEST_FILE="${CONTACT_ANCHOR_MANIFEST_FILE:-}"
+CONTACT_ANCHOR_MINING_ONLY="${CONTACT_ANCHOR_MINING_ONLY:-false}"
 
 mkdir -p "$RUN_DIR" "$(dirname "$OUTPUT")" "$JAX_CACHE_DIR"
 
@@ -150,6 +156,16 @@ fi
 [[ -n "$RAW_MAX_SCENARIOS" ]] && ARGS+=(--set "closed_loop.raw_max_scenarios=$RAW_MAX_SCENARIOS")
 [[ -n "$NUM_CANDIDATES" ]] && ARGS+=(--set "closed_loop.num_candidate_prefixes=$NUM_CANDIDATES")
 [[ -n "$NUM_RECOVERY_OPTIONS" ]] && ARGS+=(--set "closed_loop.num_recovery_options=$NUM_RECOVERY_OPTIONS")
+if runtime_bool_true "$CONTACT_ANCHOR_PRELUDE_ENABLED"; then
+  ARGS+=(
+    --set closed_loop.contact_anchor_prelude_enabled=true
+    --set "closed_loop.contact_anchor_prelude_max_steps=$CONTACT_ANCHOR_PRELUDE_MAX_STEPS"
+    --set "closed_loop.contact_anchor_prelude_replan_interval_steps=$CONTACT_ANCHOR_PRELUDE_REPLAN_INTERVAL"
+    --set "closed_loop.contact_anchor_require_found=$CONTACT_ANCHOR_REQUIRE_FOUND"
+    --set "closed_loop.contact_anchor_mining_only=$CONTACT_ANCHOR_MINING_ONLY"
+  )
+  [[ -n "$CONTACT_ANCHOR_MANIFEST_FILE" ]] && ARGS+=(--set "closed_loop.contact_anchor_manifest_file=$CONTACT_ANCHOR_MANIFEST_FILE")
+fi
 
 printf 'Running:'; printf ' %q' "${ARGS[@]}"; printf '\n'
 "${ARGS[@]}" 2>&1 | tee -a "${OUTPUT%.json}.log"

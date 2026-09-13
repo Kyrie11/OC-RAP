@@ -47,7 +47,7 @@ V48.123 passed reliability/scientific attribution but formally STOPped as a comp
 
 V48.124 preregisters five gates: exact full-bucket coverage/source identity, deterministic sentinel replay, Safe non-interference, Near closed-loop validity, and Contact recovery validity. Paired inference uses 5000 bootstrap draws with seed 2027 and zero non-interference margin. If all five GO, the Main is frozen and final external-baseline comparison is authorized. If any gate STOPs, the recovery mechanism family remains frozen and only that failed system/provenance axis may be diagnosed.
 
-Run exactly:
+Run exactly (V48.124.8 automatically mines and freezes the causally valid Contact anchor cohort before Contact treatment):
 
 ```bash
 cd /home/senzeyu2/code/OC-RAP
@@ -55,6 +55,8 @@ GPU0=0 GPU1=1 \
 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
 bash scripts/run_constraint_native_orientation_audit.sh
 ```
+
+The stable launcher uses `scripts/build_contact_anchor_cohort.sh` internally. Do not manually select Contact scenes from treatment outcomes. The generated `contact_anchor_manifest.json` is part of the scientific evidence and fixes one pre-treatment observed-overlap state per scene.
 
 Upload only:
 

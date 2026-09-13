@@ -81,6 +81,8 @@ def fixture():
                 "first_contact_step": 0.0,
                 "contact_anchor_step": 0.0,
             })
+            scene["contact_anchor_protocol"] = "exact_a0_pretreatment_prelude_v1"
+            scene["contact_anchor_fingerprint"] = "a" * 64
     comparisons = {v: {r: report() for r in ("safe", "near", "contact")} for v in ("balanced", "precision")}
     sentinels = {v: {r: sentinel(results[v][r]) for r in ("safe", "near", "contact")} for v in ("balanced", "precision")}
     supports = {v: {r: support(bucket=f"/{r}") for r in ("safe", "near", "contact")} for v in ("nominal", "balanced", "precision")}
@@ -334,3 +336,11 @@ def test_engineering_failure_does_not_masquerade_as_coverage_stop():
     source = (repo / "tools" / "adjudicate_fixed_main_stability.py").read_text(encoding="utf-8")
     assert '"status": "SCIENTIFIC_ATTRIBUTION_NOT_ENTERED"' in source
     assert '"next_branch": "fix_engineering_or_provenance_before_scientific_adjudication"' in source
+
+def test_contact_construct_requires_identical_anchor_state_fingerprints():
+    c, r, s, u = fixture()
+    r["precision"]["contact"]["scenes"][0]["contact_anchor_fingerprint"] = "b" * 64
+    s["precision"]["contact"] = sentinel(r["precision"]["contact"])
+    decision = adjudicate(comparisons=c, results=r, sentinel_results=s, support_docs=u)
+    assert decision["status"] == STATUS_CONTACT_CONSTRUCT_FAIL
+    assert decision["contact_construct_validity_gate"]["same_pre_treatment_anchor_fingerprints"] is False

@@ -14449,3 +14449,16 @@ Scientific attribution remains **fail-closed** until a canonical V48.124 result 
 - Fresh V48.124.5 evidence uses `ocrap_v48_124_exact_nominal_fixed_main`; V48.124.4 population artifacts are not reused because an active runtime source changed.
 - Safe runtime acceleration only: balanced and precision variants run concurrently, one full variant per GPU, while each variant keeps its own sequential Safe/Near/Contact execution. This preserves per-run configuration, RNG, checkpoint, and simulator semantics.
 - Recovery-set mechanism/theory search remains frozen. A valid V48.124.5 result is still adjudicated by the unchanged Coverage → Determinism → Safe → Near → Contact gates.
+
+
+## V48.124.8 — pre-treatment observed-Contact anchor engineering fix
+
+Scientific version remains `v48.124-OC-FMSA`; recovery mechanism search remains frozen. The V48.124.7 result bundle is artifact/provenance-valid but cannot enter Contact algorithm attribution because its `test_contact` cohort is counterfactual and observed simulator contact occurs only after policy action on a treatment-dependent subset. V48.124.8 repairs evaluation construction only.
+
+- Added an exact-$a_0$ treatment-independent prelude that advances each candidate Contact target until the first **actual Waymax overlap**. No OC-RAP/model output participates in cohort formation.
+- Added a scene-disjoint anchor manifest: among valid pre-treatment anchors for a scene, selection uses only pre-treatment quantities (maximum remaining horizon, then earlier anchor time, then target key).
+- Added a SHA256 fingerprint over the treatment-boundary dynamic simulator state. Nominal, balanced, and precision must independently reproduce the exact same fingerprint before treatment begins; mismatch fails closed.
+- Contact post-contact metrics are then evaluated from rollout step 0 of that common anchor state, eliminating post-treatment conditioning on later collisions.
+- Safe/Near exact-$a_0$ controls, frozen Main checkpoints/calibration, RIFA admission, bootstrap (5000, seed 2027), and all gate definitions remain unchanged.
+- The launcher parallelizes independent work across two A30s: Contact-anchor mining and nominal Safe/Near first, then balanced/precision full variants in parallel after the anchor manifest is frozen.
+- No new feature, model parameter, recovery carrier, regime router, threshold, horizon, source, or mechanism search is authorized.

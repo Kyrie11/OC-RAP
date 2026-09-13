@@ -1,8 +1,8 @@
 # OC-RAP — cleaned audit/deployment workspace
 
-**V48.124.6 Contact construct-validity engineering fix.** V48.124.5 already repaired the exact upstream nominal anchor $a_0$. V48.124.6 leaves planner execution unchanged and adds a fail-closed scientific prerequisite for Contact: post-contact endpoints may be adjudicated only on a common pre-treatment simulator-contact anchor, never on a subset selected by collisions that occur after the compared policy has acted.
+**Current engineering build: `v48.124.8-OC-FMSA-CONTACT-ANCHOR-ENGFIX`.** The scientific algorithm remains `v48.124-OC-FMSA`; the frozen planner, checkpoints, calibration, thresholds, candidate/recovery libraries, and Waymax dynamics are unchanged. V48.124.8 repairs only the Contact evaluation protocol: it forms the post-contact cohort before treatment using an exact-$a_0$ Waymax prelude, freezes one observed-overlap anchor per scene, and requires nominal/balanced/precision to reproduce the identical simulator-state fingerprint before policy action.
 
-This repository is the cleaned engineering workspace for the frozen OC-RAP mechanism line and the current **V48.124 OC-FMSA fixed-Main stability/non-interference adjudication**. The current engineering hotfix is **v48.124.6-OC-FMSA-CONTACT-VALIDITY-ENGFIX**; the scientific version remains `v48.124-OC-FMSA`. No planner, model, calibration, threshold, recovery library, or Waymax dynamics changed relative to V48.124.5.
+The change closes the V48.124.7 construct-validity blocker without reopening mechanism search. Counterfactual Contact surrogates remain useful for offline structure, but post-contact causal endpoints are adjudicated only on the new pre-treatment anchored cohort.
 
 ## What is active
 
@@ -32,4 +32,4 @@ See `CLEAN_COMMANDS.md` for operator commands.
 
 ## V48.124 fixed-Main adjudication note
 
-The current engineering build is `v48.124.7-OC-FMSA-PROVENANCE-ENGFIX`; the scientific algorithm remains `v48.124-OC-FMSA`. V48.124.7 changes provenance/adjudication only and preserves the frozen planner.
+The current engineering build is `v48.124.8-OC-FMSA-CONTACT-ANCHOR-ENGFIX`; the scientific algorithm remains `v48.124-OC-FMSA`. V48.124.8 changes Contact cohort formation/evaluation infrastructure only and preserves the frozen planner.

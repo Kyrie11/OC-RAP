@@ -25,10 +25,13 @@ V123_COMPARE="${OCRAP_ORIENTATION_V123_COMPARE:-$BASE_OUT/OC-RAP-v48.123-DCP-DRF
 V123_BALANCED="${OCRAP_ORIENTATION_V123_BALANCED:-$BASE_OUT/OC-RAP-v48.123-ZBST-balanced.json}"
 V123_PRECISION="${OCRAP_ORIENTATION_V123_PRECISION:-$BASE_OUT/OC-RAP-v48.123-ZBST-precision.json}"
 
-WORK="$BASE_OUT/ocrap_v48_124_exact_nominal_fixed_main"
+WORK="$BASE_OUT/ocrap_v48_124_contact_anchored_fixed_main"
 NOMINAL_OUT="$WORK/nominal"
 BALANCED_OUT="$WORK/balanced"
 PRECISION_OUT="$WORK/precision"
+ANCHOR_DIR="$WORK/contact_anchor"
+ANCHOR_MANIFEST="$ANCHOR_DIR/contact_anchor_manifest.json"
+ANCHOR_KEYS="$ANCHOR_DIR/contact_anchor_target_keys.json"
 SENTINEL_DIR="$WORK/sentinels"
 COMPARE_DIR="$WORK/comparisons"
 KEY_DIR="$WORK/sentinel_keys"
@@ -41,13 +44,12 @@ RESULTS_ZIP="$BASE_OUT/OC-RAP-v48.124-OC-FMSA-results.zip"
 PROVENANCE_DIR="$WORK/provenance"
 FULL_RUN_RUNTIME="$PROVENANCE_DIR/full_population_runtime_contract.json"
 
-mkdir -p "$BASE_OUT" "$WORK" "$SENTINEL_DIR" "$COMPARE_DIR" "$KEY_DIR" "$PROVENANCE_DIR"
+mkdir -p "$BASE_OUT" "$WORK" "$SENTINEL_DIR" "$COMPARE_DIR" "$KEY_DIR" "$PROVENANCE_DIR" "$ANCHOR_DIR"
 
-# V48.124.7 preserves the V48.124.5 exact-a0 control and V48.124.6 fail-closed
-# Contact construct-validity adjudication. Post-contact endpoints may be used only
-# when every paired Contact target has the same observed simulator contact anchor
-# at rollout step 0, before either policy acts. Planner/runtime behavior is unchanged.
-# V48.124.5 already used a fresh full-population work directory for exact-a0.
+# V48.124.8 is evaluation engineering only. Safe/Near retain exact-a0 controls.
+# Contact is formed before treatment by an exact-a0 prelude that stops at the
+# first actual Waymax overlap. A scene-disjoint manifest freezes one anchor per
+# scene, and all three arms must reproduce the same dynamic-state fingerprint.
 FULL_RESULTS_PRESENT=0
 for f in \
   "$NOMINAL_OUT/safe/closed_loop_nominal.json" "$NOMINAL_OUT/near/closed_loop_nominal.json" "$NOMINAL_OUT/contact/closed_loop_nominal.json" \
@@ -56,19 +58,16 @@ for f in \
   [[ -s "$f" ]] && FULL_RESULTS_PRESENT=1 && break
 done
 if [[ "$FULL_RESULTS_PRESENT" == 1 && ! -f "$FULL_RUN_RUNTIME" ]]; then
-  echo "completed V48.124.5/6/7 population artifacts exist without their own full-population runtime contract; refuse provenance-unsafe reuse" >&2
+  echo "completed V48.124.8 artifacts exist without their runtime contract; refuse provenance-unsafe reuse" >&2
   exit 30
 fi
 rm -f "$RUNTIME" "$SENTINEL_INDEX" "$ADJUDICATION" "$COMPLETE" "$BUNDLE_MANIFEST" "$RESULTS_ZIP"
 
-# Fail before long GPU work if this checkout does not satisfy the fixed-Main contract.
 python tools/check_fixed_main_stability_contract.py --repo "$REPO" --run-id "$RUN_ID" --output "$RUNTIME"
-# Fresh V48.124.7 runs use this runtime for all population evidence; resumed
-# runs keep the preserved contract above. The scientific Main remains unchanged.
 [[ -f "$FULL_RUN_RUNTIME" ]] || cp -f "$RUNTIME" "$FULL_RUN_RUNTIME"
 
 # V48.123 STOP + exact freeze branch is the only scientific license for V48.124.
-python - "$V123_PIPELINE" "$V123_COMPARE" "$V123_BALANCED" "$V123_PRECISION" <<'PY'
+python - "$V123_PIPELINE" "$V123_COMPARE" "$V123_BALANCED" "$V123_PRECISION" <<'V123PY'
 import hashlib,json,pathlib,sys
 p,c,b,q=map(pathlib.Path,sys.argv[1:])
 want={
@@ -87,8 +86,8 @@ branch='close_zero_boundary_viability_state_transition_then_freeze_recovery_set_
 if not (pd.get('valid') and pd.get('attribution_ready') and pd.get('preregistered_status')==status):
     raise SystemExit('authoritative V48.123 STOP pipeline prerequisite missing')
 if not (cd.get('valid') and cd.get('attribution_ready') and d.get('status')==status and d.get('next_branch')==branch):
-    raise SystemExit('V48.123 did not authorize fixed-Main stability/non-interference adjudication')
-PY
+    raise SystemExit('V48.123 did not authorize fixed-Main adjudication')
+V123PY
 
 resolve_candidate_root() {
   local variant="$1"
@@ -106,21 +105,37 @@ BCAL="$BROOT/calibration/gamma_rec_by_bucket_v48.json"
 PCAL="$PROOT/calibration/gamma_rec_by_bucket_v48.json"
 for f in "$BCKPT" "$PCKPT" "$BCAL" "$PCAL"; do [[ -f "$f" ]] || { echo "missing frozen Main artifact $f" >&2; exit 30; }; done
 
-# Full same-target nominal control. All publication/test buckets are standard
-# WOMD validation. Explicit role + bucket provenance disagreement fails closed.
-env WOMD_ROLE=validation OUT="$NOMINAL_OUT" CUDA_DEVICES="$GPU0,$GPU1" MAX_SCENARIOS=0 INCLUDE_SCENES_IN_RESULT=true RESULT_SCENE_DETAIL=metrics \
-  bash scripts/run_nominal_three_regime_control.sh
+# Phase A uses both A30s concurrently: GPU0 mines treatment-free Contact anchors;
+# GPU1 runs exact-a0 Safe/Near controls.
+set +e
+env WOMD_ROLE=validation OUT="$ANCHOR_DIR" GPU="$GPU0" MIN_POST_STEPS="${CONTACT_MIN_POST_STEPS:-10}" \
+  bash scripts/build_contact_anchor_cohort.sh & p_anchor=$!
+env WOMD_ROLE=validation OUT="$NOMINAL_OUT" CUDA_DEVICES="$GPU1" MAX_SCENARIOS=0 \
+  RUN_SAFE=1 RUN_NEAR=1 RUN_CONTACT=0 INCLUDE_SCENES_IN_RESULT=true RESULT_SCENE_DETAIL=metrics \
+  bash scripts/run_nominal_three_regime_control.sh & p_nominal=$!
+wait "$p_anchor"; r_anchor=$?; wait "$p_nominal"; r_nominal=$?
+set -e
+[[ $r_anchor == 0 && $r_nominal == 0 ]] || { echo "phase-A failure anchor=$r_anchor nominal_safe_near=$r_nominal" >&2; exit 30; }
+[[ -s "$ANCHOR_MANIFEST" && -s "$ANCHOR_KEYS" ]] || { echo "missing Contact anchor manifest/keys" >&2; exit 30; }
 
-# Frozen Main, balanced then precision robustness variant. No retraining/recalibration.
+# Exact-a0 Contact control from the frozen pre-treatment anchor cohort.
+env WOMD_ROLE=validation OUT="$NOMINAL_OUT" CUDA_DEVICES="$GPU0" MAX_SCENARIOS=0 \
+  RUN_SAFE=0 RUN_NEAR=0 RUN_CONTACT=1 CONTACT_TARGET_KEYS_FILE="$ANCHOR_KEYS" \
+  CONTACT_ANCHOR_PRELUDE_ENABLED=true CONTACT_ANCHOR_MANIFEST_FILE="$ANCHOR_MANIFEST" \
+  CONTACT_ANCHOR_PRELUDE_MAX_STEPS=60 CONTACT_ANCHOR_PRELUDE_REPLAN_INTERVAL=1 CONTACT_ANCHOR_REQUIRE_FOUND=true \
+  INCLUDE_SCENES_IN_RESULT=true RESULT_SCENE_DETAIL=metrics bash scripts/run_nominal_three_regime_control.sh
+
+# Frozen Main robustness variants. Each variant gets one GPU; the Contact
+# manifest and state fingerprints are immutable and shared read-only.
 run_variant() {
   local variant="$1" out="$2" gpu="$3"
   env WOMD_ROLE=validation MODEL_RUN="$L80_RUN" MODEL_VARIANT="$variant" OUT="$out" CUDA_DEVICES="$gpu" \
     MAX_SCENARIOS=0 INCLUDE_SCENES_IN_RESULT=true RESULT_SCENE_DETAIL=metrics SCENE_JOURNAL_DETAIL=metrics \
+    CONTACT_TARGET_KEYS_FILE="$ANCHOR_KEYS" CONTACT_ANCHOR_PRELUDE_ENABLED=true \
+    CONTACT_ANCHOR_MANIFEST_FILE="$ANCHOR_MANIFEST" CONTACT_ANCHOR_PRELUDE_MAX_STEPS=60 \
+    CONTACT_ANCHOR_PRELUDE_REPLAN_INTERVAL=1 CONTACT_ANCHOR_REQUIRE_FOUND=true \
     bash scripts/run_ocrap_three_regime_evaluation.sh
 }
-# Safe acceleration: balanced and precision are independent robustness variants.
-# Run one complete variant per GPU concurrently; each variant processes its three
-# regimes sequentially on its assigned GPU, so no model/checkpoint state is shared.
 set +e
 run_variant balanced "$BALANCED_OUT" "$GPU0" & pb=$!
 run_variant precision "$PRECISION_OUT" "$GPU1" & pp=$!
@@ -180,11 +195,15 @@ PY
   [[ -n "$source" && "$source" != None && -n "$bucket" && "$bucket" != None && -n "$gamma" && "$gamma" != None ]] || { echo "missing sentinel provenance $variant/$regime" >&2; return 30; }
   [[ "$source_role" == validation && "$support_valid" == true ]] || { echo "invalid sentinel WOMD provenance $variant/$regime role=$source_role support_valid=$support_valid" >&2; return 30; }
   mkdir -p "$outdir"
+  local anchor_env=()
+  if [[ "$regime" == contact ]]; then
+    anchor_env=(CONTACT_ANCHOR_PRELUDE_ENABLED=true CONTACT_ANCHOR_MANIFEST_FILE="$ANCHOR_MANIFEST" CONTACT_ANCHOR_REQUIRE_FOUND=true CONTACT_ANCHOR_PRELUDE_MAX_STEPS=60 CONTACT_ANCHOR_PRELUDE_REPLAN_INTERVAL=1)
+  fi
   env RUN_DIR="$outdir" OUTPUT="$output" WOMD_VAL="$source" EXPECTED_WOMD_ROLE=validation CHECKPOINT="$ckpt" GAMMA_REC="$gamma" GPU="$gpu" \
     MAX_SCENARIOS=0 MAX_STEPS=40 LABEL_MODE=fast AUDIT_EVERY_N_STEPS=0 NUM_CANDIDATES=24 NUM_RECOVERY_OPTIONS=12 \
     BUCKET_DATASET="$bucket" BUCKET_SPLIT=test MAX_TARGETS_PER_SCENE=1 TARGET_KEYS_FILE="$keyfile" REQUIRE_TARGET_KEYS=true \
     RENDER_TRACE=false SAVE_PARTIAL=true RESUME_FORCE=true INCLUDE_SCENES_IN_RESULT=true RESULT_SCENE_DETAIL=metrics \
-    SCENE_JOURNAL_DETAIL=metrics MEMORY_SCENE_DETAIL=metrics bash scripts/run_ocrap_closed_loop.sh
+    SCENE_JOURNAL_DETAIL=metrics MEMORY_SCENE_DETAIL=metrics "${anchor_env[@]}" bash scripts/run_ocrap_closed_loop.sh
 }
 
 # Two GPUs: replay one robustness variant per GPU for each regime.
@@ -214,7 +233,7 @@ python tools/adjudicate_fixed_main_stability.py \
   --sentinel-index "$SENTINEL_INDEX" --balanced-checkpoint "$BCKPT" --precision-checkpoint "$PCKPT" \
   --balanced-calibration "$BCAL" --precision-calibration "$PCAL" \
   --v123-pipeline "$V123_PIPELINE" --v123-comparison "$V123_COMPARE" --v123-balanced "$V123_BALANCED" --v123-precision "$V123_PRECISION" \
-  --full-run-runtime "$FULL_RUN_RUNTIME" \
+  --full-run-runtime "$FULL_RUN_RUNTIME" --contact-anchor-manifest "$ANCHOR_MANIFEST" \
   --run-id "$RUN_ID" --output "$ADJUDICATION"
 
 python tools/check_fixed_main_stability_pipeline.py \

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 import math
 
-ENGINEERING_VERSION = "v48.124.7-OC-FMSA-PROVENANCE-ENGFIX"
+ENGINEERING_VERSION = "v48.124.8-OC-FMSA-CONTACT-ANCHOR-ENGFIX"
 SCIENTIFIC_VERSION = "v48.124-OC-FMSA"
 ALGORITHM_NAME = "Observation-Consistent Fixed-Main Stability and Non-Interference Adjudication"
 
@@ -174,8 +174,11 @@ def contact_construct_validity_gate(
     happens later under each policy creates a treatment-dependent subset and is
     therefore not a valid paired Contact cohort.
 
-    V48.124.6 requires every Contact target in nominal/balanced/precision to
+    V48.124.8 requires every Contact target in nominal/balanced/precision to
     start from the same observed simulator contact anchor at rollout step 0.
+    The canonical way to obtain that state from the counterfactual-contact bucket
+    is a treatment-independent exact-a0 prelude, followed by a state-fingerprint
+    check against a frozen anchor manifest.
     The existing counterfactual-contact bucket can still support generic
     collision/clearance diagnostics, but it cannot by itself adjudicate the
     preregistered post-contact gate.
@@ -183,6 +186,7 @@ def contact_construct_validity_gate(
     variants = ("nominal", "balanced", "precision")
     rows: dict[str, Any] = {}
     anchor_sets: dict[str, set[str]] = {}
+    fingerprint_maps: dict[str, dict[str, str]] = {}
 
     for variant in variants:
         result = results_by_variant.get(variant) or {}
@@ -193,6 +197,8 @@ def contact_construct_validity_gate(
         eligible: list[str] = []
         late_contact: list[str] = []
         missing_metrics: list[str] = []
+        protocol_mismatch: list[str] = []
+        fingerprints: dict[str, str] = {}
 
         for scene in scenes:
             key = str(scene.get("target_key") or "")
@@ -212,15 +218,25 @@ def contact_construct_validity_gate(
                 continue
             if first > atol or anchor > atol:
                 late_contact.append(key)
+            protocol = str(scene.get("contact_anchor_protocol") or "")
+            fingerprint = str(scene.get("contact_anchor_fingerprint") or "")
+            if protocol != "exact_a0_pretreatment_prelude_v1" or len(fingerprint) != 64:
+                protocol_mismatch.append(key)
             if obs > 0.5 and post > 0.5 and abs(first) <= atol and abs(anchor) <= atol:
                 anchored.append(key)
+                if len(fingerprint) == 64:
+                    fingerprints[key] = fingerprint
 
         anchor_sets[variant] = set(anchored)
+        fingerprint_maps[variant] = fingerprints
         n = len(keys)
         aggregate_eligible = _finite(result.get("post_contact_metric_eligible_scene_rate"))
         aggregate_observed = _finite(result.get("observed_contact_scene_rate"))
         aggregate_counterfactual = _finite(result.get("counterfactual_contact_target_scene_rate"))
-        full_anchor = bool(n > 0 and len(anchored) == n and not missing_metrics and not late_contact)
+        full_anchor = bool(
+            n > 0 and len(anchored) == n and not missing_metrics and not late_contact
+            and not protocol_mismatch and len(fingerprints) == n
+        )
         rows[variant] = {
             "go": full_anchor,
             "num_scenes": n,
@@ -233,19 +249,27 @@ def contact_construct_validity_gate(
             "counterfactual_contact_target_scene_rate": aggregate_counterfactual,
             "num_late_policy_dependent_contact_scenes": len(late_contact),
             "num_missing_anchor_metric_scenes": len(missing_metrics),
+            "num_anchor_protocol_mismatch_scenes": len(protocol_mismatch),
             "late_contact_examples": late_contact[:10],
             "missing_anchor_metric_examples": missing_metrics[:10],
+            "anchor_protocol_mismatch_examples": protocol_mismatch[:10],
             "required_semantics": "same_target_observed_simulator_contact_anchor_at_rollout_step_0_before_policy_action",
+            "required_protocol": "exact_a0_pretreatment_prelude_v1",
         }
 
     same_anchor_set = bool(
         anchor_sets.get("nominal")
         and anchor_sets.get("nominal") == anchor_sets.get("balanced") == anchor_sets.get("precision")
     )
-    go = bool(all(rows[v]["go"] for v in variants) and same_anchor_set)
+    same_fingerprints = bool(
+        fingerprint_maps.get("nominal")
+        and fingerprint_maps.get("nominal") == fingerprint_maps.get("balanced") == fingerprint_maps.get("precision")
+    )
+    go = bool(all(rows[v]["go"] for v in variants) and same_anchor_set and same_fingerprints)
     return {
         "go": go,
         "same_pre_treatment_anchor_target_set": same_anchor_set,
+        "same_pre_treatment_anchor_fingerprints": same_fingerprints,
         "variants": rows,
         "failure_interpretation": None if go else (
             "Contact post-contact endpoints are not causally identified on the full paired cohort. "

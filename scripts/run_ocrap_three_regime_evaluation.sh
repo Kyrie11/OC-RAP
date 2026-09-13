@@ -83,6 +83,12 @@ fi
 : "${SAFE_TARGET_KEYS_FILE:=}"
 : "${NEAR_TARGET_KEYS_FILE:=}"
 : "${CONTACT_TARGET_KEYS_FILE:=}"
+
+: "${CONTACT_ANCHOR_PRELUDE_ENABLED:=false}"
+: "${CONTACT_ANCHOR_PRELUDE_MAX_STEPS:=60}"
+: "${CONTACT_ANCHOR_PRELUDE_REPLAN_INTERVAL:=1}"
+: "${CONTACT_ANCHOR_REQUIRE_FOUND:=true}"
+: "${CONTACT_ANCHOR_MANIFEST_FILE:=}"
 : "${RESUME_FORCE:=false}"
 : "${RUN_SAFE:=1}"
 : "${RUN_NEAR:=1}"
@@ -128,8 +134,17 @@ trap 'exit 143' TERM HUP
 
 run_one() {
   local regime="$1" womd="$2" bucket="$3" label_mode="$4" render="$5" gpu="$6" gamma="$7" target_keys="${8:-}"
-  local target_env=()
+  local target_env=() contact_anchor_env=()
   [[ -n "$target_keys" ]] && target_env=(TARGET_KEYS_FILE="$target_keys" REQUIRE_TARGET_KEYS=true)
+  if [[ "$regime" == contact && "${CONTACT_ANCHOR_PRELUDE_ENABLED,,}" == true ]]; then
+    contact_anchor_env=(
+      CONTACT_ANCHOR_PRELUDE_ENABLED=true
+      CONTACT_ANCHOR_PRELUDE_MAX_STEPS="$CONTACT_ANCHOR_PRELUDE_MAX_STEPS"
+      CONTACT_ANCHOR_PRELUDE_REPLAN_INTERVAL="$CONTACT_ANCHOR_PRELUDE_REPLAN_INTERVAL"
+      CONTACT_ANCHOR_REQUIRE_FOUND="$CONTACT_ANCHOR_REQUIRE_FOUND"
+      CONTACT_ANCHOR_MANIFEST_FILE="$CONTACT_ANCHOR_MANIFEST_FILE"
+    )
+  fi
   env RUN_DIR="$OUT/$regime" OUTPUT="$OUT/$regime/closed_loop_ocrap.json" \
     WOMD_VAL="$womd" WOMD_NUM_SHARDS="$WOMD_NUM_SHARDS" EXPECTED_WOMD_ROLE="${WOMD_ROLE:-auto}" CHECKPOINT="$CHECKPOINT" GAMMA_REC="$gamma" GPU="$gpu" \
     MAX_SCENARIOS="$MAX_SCENARIOS" MAX_STEPS="$MAX_STEPS" LABEL_MODE="$label_mode" AUDIT_EVERY_N_STEPS="$AUDIT_EVERY_N_STEPS" \
@@ -138,7 +153,7 @@ run_one() {
     RENDER_TRACE="$render" SAVE_PARTIAL=true RESUME_FORCE="$RESUME_FORCE" \
     INCLUDE_SCENES_IN_RESULT="$INCLUDE_SCENES_IN_RESULT" RESULT_SCENE_DETAIL="$RESULT_SCENE_DETAIL" \
     SCENE_JOURNAL_DETAIL="$SCENE_JOURNAL_DETAIL" MEMORY_SCENE_DETAIL="$RESULT_SCENE_DETAIL" \
-    "${target_env[@]}" bash scripts/run_ocrap_closed_loop.sh
+    "${target_env[@]}" "${contact_anchor_env[@]}" bash scripts/run_ocrap_closed_loop.sh
 }
 
 run_one_status() {

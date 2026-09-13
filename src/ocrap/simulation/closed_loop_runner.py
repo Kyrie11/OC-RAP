@@ -24,6 +24,8 @@ from ocrap.external_baselines.policies import select_external_policy
 from ocrap.external_baselines.evaluate import _load_checkpoint as _load_external_checkpoint, _predict_group as _predict_external_group
 from ocrap.simulation.waymax_rollout import _as_np, _bicycle_action, _make_env, _metric_summary, _sdc_index
 from ocrap.planning.route_lattice import project_to_route
+from ocrap.planning.prefix_generation import generate_candidate_prefixes
+from ocrap.evaluation.contact_anchor import simulator_state_fingerprint, load_anchor_manifest, anchor_manifest_index
 from ocrap.utils.geometry import (
     compute_ttc,
     min_box_clearance,
@@ -1184,6 +1186,148 @@ def _validate_closed_loop_selector_config(cfg: dict, method: str) -> None:
     if bool(cl_cfg.get("require_gamma_by_bucket", False)) and not sel.get("gamma_rec_by_bucket", {}):
         raise ValueError("closed-loop requires non-empty selection.gamma_rec_by_bucket; check gamma_rec_by_bucket_file path")
 
+
+def _exact_a0_contact_prelude(
+    state: Any,
+    raw: Any,
+    wx_env: Any,
+    sdc: int,
+    cfg: dict,
+    scenario_rank: int,
+    *,
+    max_env_steps: int,
+    replan_interval: int,
+) -> tuple[Any, dict[str, Any]]:
+    """Advance a treatment-independent exact-a0 prelude until first overlap.
+
+    This is evaluation infrastructure only.  No OC-RAP/model output is used to
+    form the cohort.  The first simulator state with observed overlap becomes
+    the treatment boundary for nominal/balanced/precision arms.
+    """
+    start_t = _current_timestep(state)
+    m0 = _metric_summary(wx_env, state, sdc)
+    if _safe_float(m0.get("overlap", 0.0)) > 0.5:
+        t = _current_timestep(state)
+        total_t = int(np.asarray(state.sim_trajectory.x).shape[-1])
+        return state, {
+            "found": True,
+            "prelude_env_steps": 0,
+            "anchor_time_index": int(t),
+            "remaining_steps": max(0, total_t - 1 - int(t)),
+            "fingerprint": simulator_state_fingerprint(state),
+            "initially_in_contact": True,
+        }
+
+    pre_cfg = dict(cfg)
+    quality = dict(pre_cfg.get("dataset_quality", {}) or {})
+    quality.update({
+        "balanced_two_pass": False,
+        "max_accepted_prefixes_per_scene_time": 0,
+        "min_artifact_prefixes_per_scene_time": 0,
+        "min_nonartifact_prefixes_per_scene_time": 0,
+        "min_obs_negative_fraction_per_sample": 0.0,
+        "require_negative_deployable_sample": False,
+        "require_artifact_pairs": False,
+        "artifact_pair_mode": "tag",
+    })
+    pre_cfg["dataset_quality"] = quality
+    env_steps = 0
+    decisions = 0
+    while env_steps < max(0, int(max_env_steps)) and not _scene_done(state):
+        t = _current_timestep(state)
+        spliced_raw = raw_scenario_from_waymax_state(
+            state,
+            f"{raw.scenario_id}__anchor{scenario_rank:04d}",
+            scenario_rank,
+            cfg,
+            trajectory_mode="closed_loop_splice",
+            splice_until=t,
+            static_template=raw,
+        )
+        hist = construct_history(spliced_raw, t, cfg)
+        hist.metadata["_waymax_state"] = state
+        hist.metadata["_waymax_branch_from_current"] = True
+        hist.metadata["waymax_planning_timestep"] = int(t)
+        prefixes = generate_candidate_prefixes(hist, pre_cfg)
+        nominal = next((p for p in prefixes if int(getattr(p, "candidate_index", -1)) == 0), None)
+        if nominal is None:
+            nominal = next((p for p in prefixes if str(getattr(p, "macro_name", "")).lower() == "nominal"), None)
+        if nominal is None:
+            raise ValueError("contact anchor prelude could not construct explicit nominal a0 prefix")
+        if str(getattr(nominal, "macro_name", "")).lower() != "nominal":
+            raise ValueError("contact anchor prelude candidate 0 is not the nominal a0 prefix")
+        controls = nominal.prefix_controls if nominal.prefix_controls.size else np.zeros((1, 4), dtype=np.float32)
+        decisions += 1
+        for k in range(min(max(1, int(replan_interval)), max(1, int(controls.shape[0])))):
+            if env_steps >= int(max_env_steps) or _scene_done(state):
+                break
+            ctrl = controls[min(k, controls.shape[0] - 1)]
+            action = _bicycle_action(
+                int(state.num_objects), sdc, float(ctrl[0]), float(ctrl[1]),
+                float(cfg.get("wheelbase_m", 2.8)),
+            )
+            state = wx_env.step(state, action)
+            env_steps += 1
+            metrics = _metric_summary(wx_env, state, sdc)
+            if _safe_float(metrics.get("overlap", 0.0)) > 0.5:
+                t_anchor = _current_timestep(state)
+                total_t = int(np.asarray(state.sim_trajectory.x).shape[-1])
+                return state, {
+                    "found": True,
+                    "prelude_env_steps": int(env_steps),
+                    "prelude_decisions": int(decisions),
+                    "anchor_time_index": int(t_anchor),
+                    "remaining_steps": max(0, total_t - 1 - int(t_anchor)),
+                    "fingerprint": simulator_state_fingerprint(state),
+                    "initially_in_contact": False,
+                    "source_start_time_index": int(start_t),
+                }
+    t_end = _current_timestep(state)
+    total_t = int(np.asarray(state.sim_trajectory.x).shape[-1])
+    return state, {
+        "found": False,
+        "prelude_env_steps": int(env_steps),
+        "prelude_decisions": int(decisions),
+        "anchor_time_index": None,
+        "remaining_steps": max(0, total_t - 1 - int(t_end)),
+        "fingerprint": None,
+        "initially_in_contact": False,
+        "source_start_time_index": int(start_t),
+    }
+
+
+def _contact_anchor_mining_scene(
+    *, raw: Any, bucket_name: str | None, target_key: str | None,
+    start_time_index_override: int | None, method: str, anchor: dict[str, Any]
+) -> dict[str, Any]:
+    return {
+        "scene_id": str(raw.scenario_id),
+        "bucket_name": bucket_name,
+        "canonical_regime": canonical_regime_name(bucket_name),
+        "post_contact_target": bool(_is_post_contact_bucket_name(bucket_name)),
+        "target_key": target_key,
+        "target_time_index": int(start_time_index_override) if start_time_index_override is not None else None,
+        "method": str(method),
+        "num_decisions": 0,
+        "num_metric_steps": 0,
+        "intervention_rate": 0.0,
+        "selection_reason_counts": {},
+        "metric_summary": {
+            "counterfactual_contact_target": 1.0,
+            "observed_contact_event": float(bool(anchor.get("found"))),
+            "post_contact_metric_eligible": 0.0,
+            "first_contact_step": 0.0 if anchor.get("found") else float("nan"),
+            "contact_anchor_step": 0.0 if anchor.get("found") else float("nan"),
+        },
+        "contact_anchor_protocol": "exact_a0_pretreatment_prelude_v1",
+        "contact_anchor_found": bool(anchor.get("found")),
+        "contact_anchor_prelude_env_steps": int(anchor.get("prelude_env_steps") or 0),
+        "contact_anchor_time_index": anchor.get("anchor_time_index"),
+        "contact_anchor_remaining_steps": int(anchor.get("remaining_steps") or 0),
+        "contact_anchor_fingerprint": anchor.get("fingerprint"),
+    }
+
+
 def _rollout_one_scene(
     raw,
     scenario_rank: int,
@@ -1260,6 +1404,42 @@ def _rollout_one_scene(
     wx_env, _dyn_name = _make_env(state0, local_cfg, allow_new=bool((cfg.get("waymax", {}) or {}).get("allow_new_objects_after_warmup", True)))
     state = wx_env.reset(state0, rng=jax.random.PRNGKey(int((cfg.get("seed", 7) + scenario_rank) & 0x7FFFFFFF)))
     sdc = _sdc_index(state)
+
+    # Causal Contact evaluation starts treatment only after a common,
+    # treatment-independent exact-a0 prelude reaches an observed simulator
+    # overlap.  This changes evaluation initialization only; the submitted
+    # planner and all treatment decisions remain untouched.
+    contact_anchor_meta: dict[str, Any] | None = None
+    contact_anchor_enabled = bool(cl_cfg.get("contact_anchor_prelude_enabled", False)) and _is_post_contact_bucket_name(bucket_name)
+    if contact_anchor_enabled:
+        state, contact_anchor_meta = _exact_a0_contact_prelude(
+            state, raw, wx_env, sdc, cfg, scenario_rank,
+            max_env_steps=int(cl_cfg.get("contact_anchor_prelude_max_steps", 60) or 60),
+            replan_interval=max(1, int(cl_cfg.get("contact_anchor_prelude_replan_interval_steps", 1) or 1)),
+        )
+        if bool(cl_cfg.get("contact_anchor_mining_only", False)):
+            return _contact_anchor_mining_scene(
+                raw=raw, bucket_name=bucket_name, target_key=target_key,
+                start_time_index_override=start_time_index_override, method=method, anchor=contact_anchor_meta,
+            )
+        if bool(cl_cfg.get("contact_anchor_require_found", True)) and not bool(contact_anchor_meta.get("found")):
+            raise ValueError(f"required pre-treatment contact anchor not found for {target_key or raw.scenario_id}")
+        manifest_path = cl_cfg.get("contact_anchor_manifest_file")
+        if manifest_path:
+            manifest = load_anchor_manifest(manifest_path)
+            expected = anchor_manifest_index(manifest).get(str(target_key or ""))
+            if expected is None:
+                raise ValueError(f"target absent from contact anchor manifest: {target_key}")
+            checks = {
+                "contact_anchor_fingerprint": str(contact_anchor_meta.get("fingerprint") or ""),
+                "contact_anchor_time_index": int(contact_anchor_meta.get("anchor_time_index") or -1),
+                "contact_anchor_prelude_env_steps": int(contact_anchor_meta.get("prelude_env_steps") or -1),
+            }
+            for key, got in checks.items():
+                want = expected.get(key)
+                if str(got) != str(want):
+                    raise ValueError(f"contact anchor manifest mismatch {target_key} {key}: got={got} want={want}")
+
     decisions: list[ClosedLoopDecision] = []
     active_regime_trace: list[str] = []
     metric_trace: list[dict[str, float]] = []
@@ -2266,6 +2446,12 @@ def _rollout_one_scene(
         "mean_intervention_run_length": float(np.mean(intervention_run_lengths)) if intervention_run_lengths else 0.0,
         "max_intervention_run_length": int(max(intervention_run_lengths)) if intervention_run_lengths else 0,
         "macro_switch_rate": float(macro_switch_count / max(len(decisions) - 1, 1)),
+        "contact_anchor_protocol": ("exact_a0_pretreatment_prelude_v1" if contact_anchor_enabled else None),
+        "contact_anchor_found": bool(contact_anchor_meta.get("found")) if contact_anchor_meta is not None else bool(metric_summary.get("contact_anchor_step") == 0.0),
+        "contact_anchor_prelude_env_steps": int(contact_anchor_meta.get("prelude_env_steps") or 0) if contact_anchor_meta is not None else 0,
+        "contact_anchor_time_index": contact_anchor_meta.get("anchor_time_index") if contact_anchor_meta is not None else None,
+        "contact_anchor_remaining_steps": int(contact_anchor_meta.get("remaining_steps") or 0) if contact_anchor_meta is not None else 0,
+        "contact_anchor_fingerprint": contact_anchor_meta.get("fingerprint") if contact_anchor_meta is not None else None,
         "metric_summary": metric_summary,
         "macro_counts": {m: int(sum(d.selected_macro == m for d in decisions)) for m in sorted({d.selected_macro for d in decisions})},
         "audit_best_macro_counts": {m: int(sum(d.audit_best_macro == m for d in decisions)) for m in sorted({d.audit_best_macro for d in decisions if d.audit_best_macro is not None})},
@@ -3288,6 +3474,15 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
     result["bucket_target_count"] = len(targets)
     result["bucket_matched_rollouts"] = matched_targets
     result["target_keys_file"] = str(cl_cfg.get("target_keys_file", "") or "") or None
+    if bool(cl_cfg.get("contact_anchor_prelude_enabled", False)) and _is_post_contact_bucket_name(target_spec or ""):
+        manifest_file = str(cl_cfg.get("contact_anchor_manifest_file", "") or "")
+        result["contact_anchor_protocol"] = "exact_a0_pretreatment_prelude_v1"
+        result["contact_anchor_manifest_file"] = manifest_file or None
+        result["contact_anchor_manifest_sha256"] = (
+            hashlib.sha256(Path(manifest_file).read_bytes()).hexdigest()
+            if manifest_file and Path(manifest_file).is_file() else None
+        )
+        result["contact_anchor_state_fingerprint_required"] = bool(manifest_file)
     result["raw_scan_bound_source"] = raw_scan_bound_source
     result["raw_scenarios_seen"] = raw_seen
     result["raw_scenarios_seen_this_run"] = raw_seen_this_run

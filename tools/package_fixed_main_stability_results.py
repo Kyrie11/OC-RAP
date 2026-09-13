@@ -46,6 +46,7 @@ def main() -> int:
         "adjudication": ADJUDICATION_NAME,
         "sentinel_index": SENTINEL_INDEX_NAME,
         "full_run_runtime": "OC-RAP-v48.124-full-population-runtime-code-contract.json",
+        "contact_anchor_manifest": "OC-RAP-v48.124-contact-anchor-manifest.json",
     }
     for regime in ("safe", "near", "contact"):
         for variant in ("nominal", "balanced", "precision"):
