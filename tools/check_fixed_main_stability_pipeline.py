@@ -15,6 +15,7 @@ from ocrap.audits.fixed_main_stability import (
     STATUS_SAFE_STOP,
     STATUS_NEAR_STOP,
     STATUS_CONTACT_STOP,
+    STATUS_CONTACT_CONSTRUCT_FAIL,
     GO_NEXT_BRANCH,
     STOP_NEXT_BRANCH,
 )
@@ -27,7 +28,7 @@ V123_NEXT = (
     "and_preregister_fixed_main_stability_noninterference_adjudication_"
     "no_new_recovery_mechanism_capacity_regime_source_horizon_or_threshold_sweep"
 )
-VALID_STATUSES = {STATUS_GO, STATUS_COVERAGE_STOP, STATUS_DETERMINISM_STOP, STATUS_SAFE_STOP, STATUS_NEAR_STOP, STATUS_CONTACT_STOP}
+VALID_STATUSES = {STATUS_GO, STATUS_COVERAGE_STOP, STATUS_DETERMINISM_STOP, STATUS_SAFE_STOP, STATUS_NEAR_STOP, STATUS_CONTACT_STOP, STATUS_CONTACT_CONSTRUCT_FAIL}
 
 
 def sha(path: Path) -> str:

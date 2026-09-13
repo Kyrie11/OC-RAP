@@ -1,3 +1,12 @@
+# V48.124.6 — Contact construct-validity engineering fix (no algorithm change)
+
+- Scientific version remains `v48.124-OC-FMSA`; engineering version is `v48.124.6-OC-FMSA-CONTACT-VALIDITY-ENGFIX`.
+- No planner, checkpoint, calibration, threshold, proposal, recovery-option, RIFA, or closed-loop dynamics change.
+- Adds a fail-closed Contact construct-validity prerequisite: preregistered post-contact endpoints are adjudicable only when nominal/balanced/precision share the same observed simulator contact anchor at rollout step 0, before policy action.
+- A policy-dependent subset of scenes that happens to collide later in rollout is explicitly rejected for Contact causal adjudication; generic full-cohort collision/clearance diagnostics remain descriptive only.
+- Adds an offline fixed-Main scientific re-audit tool for retained result bundles and regression coverage for the treatment-dependent-subset failure mode.
+- Theory/mechanism search remains frozen.
+
 
 ## V48.104 engineering hotfix — nominal bit-exact centering
 

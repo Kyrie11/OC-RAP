@@ -1,3 +1,18 @@
+## V48.124.6 Contact construct-validity engineering fix
+
+V48.124.6 does not change the planner. It changes scientific adjudication only: Contact post-contact endpoints are not entered unless nominal/balanced/precision all start from the same simulator-observed contact anchor at rollout step 0, before policy action. The existing `test_contact` counterfactual-surrogate cohort therefore fails closed for post-contact causal adjudication; do not rerun the long V48.124 population command on that cohort expecting a valid Contact gate.
+
+To re-audit an existing extracted V48.124.5 result bundle without GPU work:
+
+```bash
+export PYTHONPATH="$PWD/src:$PWD${PYTHONPATH:+:$PYTHONPATH}"
+python tools/audit_fixed_main_scientific_validity.py \
+  --bundle-dir /path/to/extracted/OC-RAP-v48.124-OC-FMSA-results \
+  --output /path/to/V48.124.5-scientific-validity-reaudit.json
+```
+
+A new Contact experiment must first construct a method-independent pre-treatment contact-anchor cohort; theory/mechanism search remains frozen.
+
 # OC-RAP cleaned workspace — current commands
 
 > Publication WOMD role: all publication validation/test/calibration buckets use standard WOMD `validation`. V48.124 explicitly requests `validation` and fails closed if bucket provenance disagrees. `validation_interactive` is not a publication/test source. Any TeX text claiming otherwise is a paper error and must be corrected to `validation`; do not change the code/data source to match the typo.

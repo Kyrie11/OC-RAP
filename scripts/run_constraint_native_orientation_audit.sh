@@ -43,10 +43,11 @@ FULL_RUN_RUNTIME="$PROVENANCE_DIR/full_population_runtime_contract.json"
 
 mkdir -p "$BASE_OUT" "$WORK" "$SENTINEL_DIR" "$COMPARE_DIR" "$KEY_DIR" "$PROVENANCE_DIR"
 
-# V48.124.5 repairs the scientific control: the nominal arm is the exact upstream
-# a0 anchor and never feasibility-substitutes another candidate.  Because the
-# active baseline/runner source changes and those sources participate in the
-# paired experiment, use a fresh full-population work directory.
+# V48.124.6 preserves the V48.124.5 exact-a0 control and adds a fail-closed
+# Contact construct-validity adjudication: post-contact endpoints may be used only
+# when every paired Contact target has the same observed simulator contact anchor
+# at rollout step 0, before either policy acts. Planner/runtime behavior is unchanged.
+# V48.124.5 already used a fresh full-population work directory for exact-a0.
 FULL_RESULTS_PRESENT=0
 for f in \
   "$NOMINAL_OUT/safe/closed_loop_nominal.json" "$NOMINAL_OUT/near/closed_loop_nominal.json" "$NOMINAL_OUT/contact/closed_loop_nominal.json" \
@@ -55,15 +56,15 @@ for f in \
   [[ -s "$f" ]] && FULL_RESULTS_PRESENT=1 && break
 done
 if [[ "$FULL_RESULTS_PRESENT" == 1 && ! -f "$FULL_RUN_RUNTIME" ]]; then
-  echo "completed V48.124.5 population artifacts exist without their own full-population runtime contract; refuse provenance-unsafe reuse" >&2
+  echo "completed V48.124.5/6 population artifacts exist without their own full-population runtime contract; refuse provenance-unsafe reuse" >&2
   exit 30
 fi
 rm -f "$RUNTIME" "$SENTINEL_INDEX" "$ADJUDICATION" "$COMPLETE" "$BUNDLE_MANIFEST" "$RESULTS_ZIP"
 
 # Fail before long GPU work if this checkout does not satisfy the fixed-Main contract.
 python tools/check_fixed_main_stability_contract.py --repo "$REPO" --run-id "$RUN_ID" --output "$RUNTIME"
-# Fresh V48.124.5 runs use this runtime for all population evidence; resumed
-# V48.124.5 partial runs keep the preserved contract above.
+# Fresh V48.124.6 runs use this runtime for all population evidence; resumed
+# runs keep the preserved contract above. The scientific Main remains unchanged.
 [[ -f "$FULL_RUN_RUNTIME" ]] || cp -f "$RUNTIME" "$FULL_RUN_RUNTIME"
 
 # V48.123 STOP + exact freeze branch is the only scientific license for V48.124.

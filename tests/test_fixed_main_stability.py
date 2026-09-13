@@ -4,6 +4,7 @@ import copy
 
 from ocrap.audits.fixed_main_stability import (
     STATUS_CONTACT_STOP,
+    STATUS_CONTACT_CONSTRUCT_FAIL,
     STATUS_COVERAGE_STOP,
     STATUS_DETERMINISM_STOP,
     STATUS_GO,
@@ -66,6 +67,20 @@ def sentinel(full, key="a"):
 
 def fixture():
     results = {v: {r: result(bucket=f"/{r}") for r in ("safe", "near", "contact")} for v in ("nominal", "balanced", "precision")}
+    # A scientifically adjudicable Contact fixture starts from the same
+    # pre-treatment simulator contact anchor at rollout step 0.
+    for v in ("nominal", "balanced", "precision"):
+        contact = results[v]["contact"]
+        contact["observed_contact_scene_rate"] = 1.0
+        contact["post_contact_metric_eligible_scene_rate"] = 1.0
+        contact["counterfactual_contact_target_scene_rate"] = 0.0
+        for scene in contact["scenes"]:
+            scene["metric_summary"].update({
+                "observed_contact_event": 1.0,
+                "post_contact_metric_eligible": 1.0,
+                "first_contact_step": 0.0,
+                "contact_anchor_step": 0.0,
+            })
     comparisons = {v: {r: report() for r in ("safe", "near", "contact")} for v in ("balanced", "precision")}
     sentinels = {v: {r: sentinel(results[v][r]) for r in ("safe", "near", "contact")} for v in ("balanced", "precision")}
     supports = {v: {r: support(bucket=f"/{r}") for r in ("safe", "near", "contact")} for v in ("nominal", "balanced", "precision")}
@@ -119,6 +134,35 @@ def test_adjudicate_go_and_failure_order():
         for n in ("post_contact_clearance_gain_m", "post_contact_free_space_auc_normalized_m", "post_contact_escape_event", "post_contact_terminal_clearance_m", "new_stable_stop_quality_event"):
             c2[v]["contact"]["metrics"][n] = metric()
     assert adjudicate(comparisons=c2, results=r2, sentinel_results=s2, support_docs=u2)["status"] == STATUS_CONTACT_STOP
+
+
+def test_contact_construct_fails_closed_on_policy_dependent_late_contact_subset():
+    c, r, s, u = fixture()
+    # Reproduce the V48.124.5 failure mode: Contact targets are merely a
+    # counterfactual bucket, while observed contact happens later under the
+    # compared policy on only a treatment-dependent subset.
+    for v in ("nominal", "balanced", "precision"):
+        contact = r[v]["contact"]
+        contact["observed_contact_scene_rate"] = 0.05
+        contact["post_contact_metric_eligible_scene_rate"] = 0.04
+        contact["counterfactual_contact_target_scene_rate"] = 1.0
+        for i, scene in enumerate(contact["scenes"]):
+            scene["metric_summary"].update({
+                "observed_contact_event": 1.0 if i == 0 else 0.0,
+                "post_contact_metric_eligible": 1.0 if i == 0 else 0.0,
+                "first_contact_step": 30.0 if i == 0 else float("nan"),
+                "contact_anchor_step": 30.0 if i == 0 else float("nan"),
+            })
+    # Sentinel replays must reflect the same scientific scene tree after the
+    # synthetic mutation; determinism is not the failure under test.
+    for v in ("balanced", "precision"):
+        s[v]["contact"] = sentinel(r[v]["contact"])
+    decision = adjudicate(comparisons=c, results=r, sentinel_results=s, support_docs=u)
+    assert decision["status"] == STATUS_CONTACT_CONSTRUCT_FAIL
+    gate = decision["contact_construct_validity_gate"]
+    assert gate["go"] is False
+    assert gate["variants"]["nominal"]["num_initial_contact_anchors"] == 0
+
 
 
 def test_journal_finalizer_preserves_embedded_scene_contract(tmp_path):

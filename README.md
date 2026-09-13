@@ -1,8 +1,8 @@
 # OC-RAP — cleaned audit/deployment workspace
 
-**V48.124.5 exact-nominal control conformance repair.** The V48.124 scientific control is now the exact upstream nominal anchor $a_0$ on every decision. The nominal/log-replay arm never replaces an infeasible $a_0$ with another feasible candidate; absence of an explicit nominal anchor fails closed. This repairs the paired-control semantics only and does not add a recovery mechanism, threshold, regime router, or learned parameter.
+**V48.124.6 Contact construct-validity engineering fix.** V48.124.5 already repaired the exact upstream nominal anchor $a_0$. V48.124.6 leaves planner execution unchanged and adds a fail-closed scientific prerequisite for Contact: post-contact endpoints may be adjudicated only on a common pre-treatment simulator-contact anchor, never on a subset selected by collisions that occur after the compared policy has acted.
 
-This repository is the cleaned engineering workspace for the frozen OC-RAP mechanism line and the current **V48.124 OC-FMSA fixed-Main stability/non-interference adjudication**. The current engineering hotfix is **v48.124.5-OC-FMSA**; the scientific version remains `v48.124-OC-FMSA`. Runtime closure now includes `src/ocrap/evaluation/baselines.py`, because the baseline selector is an active source in the nominal control path.
+This repository is the cleaned engineering workspace for the frozen OC-RAP mechanism line and the current **V48.124 OC-FMSA fixed-Main stability/non-interference adjudication**. The current engineering hotfix is **v48.124.6-OC-FMSA-CONTACT-VALIDITY-ENGFIX**; the scientific version remains `v48.124-OC-FMSA`. No planner, model, calibration, threshold, recovery library, or Waymax dynamics changed relative to V48.124.5.
 
 ## What is active
 

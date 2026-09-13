@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 import math
 
-ENGINEERING_VERSION = "v48.124.5-OC-FMSA"
+ENGINEERING_VERSION = "v48.124.6-OC-FMSA-CONTACT-VALIDITY-ENGFIX"
 SCIENTIFIC_VERSION = "v48.124-OC-FMSA"
 ALGORITHM_NAME = "Observation-Consistent Fixed-Main Stability and Non-Interference Adjudication"
 
@@ -13,6 +13,7 @@ STATUS_DETERMINISM_STOP = "FIXED_MAIN_DETERMINISM_STOP"
 STATUS_SAFE_STOP = "FIXED_MAIN_SAFE_NONINTERFERENCE_STOP"
 STATUS_NEAR_STOP = "FIXED_MAIN_NEAR_VALIDITY_STOP"
 STATUS_CONTACT_STOP = "FIXED_MAIN_CONTACT_VALIDITY_STOP"
+STATUS_CONTACT_CONSTRUCT_FAIL = "FIXED_MAIN_CONTACT_CONSTRUCT_VALIDITY_FAIL_CLOSED"
 STATUS_COVERAGE_STOP = "FIXED_MAIN_COVERAGE_STOP"
 
 GO_NEXT_BRANCH = (
@@ -158,6 +159,99 @@ def target_keys(result: dict[str, Any]) -> list[str]:
         if key:
             out.append(key)
     return sorted(set(out))
+
+
+def contact_construct_validity_gate(
+    results_by_variant: dict[str, dict[str, Any]],
+    *,
+    atol: float = 1e-12,
+) -> dict[str, Any]:
+    """Fail closed unless Contact endpoints have a pre-treatment contact anchor.
+
+    Post-contact metrics such as re-contact, escape, post-contact overlap duration,
+    and free-space recovery are causal outcomes only when the contact anchor is
+    fixed *before* the compared policy acts.  Conditioning on a collision that
+    happens later under each policy creates a treatment-dependent subset and is
+    therefore not a valid paired Contact cohort.
+
+    V48.124.6 requires every Contact target in nominal/balanced/precision to
+    start from the same observed simulator contact anchor at rollout step 0.
+    The existing counterfactual-contact bucket can still support generic
+    collision/clearance diagnostics, but it cannot by itself adjudicate the
+    preregistered post-contact gate.
+    """
+    variants = ("nominal", "balanced", "precision")
+    rows: dict[str, Any] = {}
+    anchor_sets: dict[str, set[str]] = {}
+
+    for variant in variants:
+        result = results_by_variant.get(variant) or {}
+        scenes = result.get("scenes") or []
+        keys = target_keys(result)
+        anchored: list[str] = []
+        observed: list[str] = []
+        eligible: list[str] = []
+        late_contact: list[str] = []
+        missing_metrics: list[str] = []
+
+        for scene in scenes:
+            key = str(scene.get("target_key") or "")
+            m = scene.get("metric_summary") or {}
+            if not key:
+                continue
+            obs = _finite(m.get("observed_contact_event"))
+            post = _finite(m.get("post_contact_metric_eligible"))
+            first = _finite(m.get("first_contact_step"))
+            anchor = _finite(m.get("contact_anchor_step"))
+            if obs is not None and obs > 0.5:
+                observed.append(key)
+            if post is not None and post > 0.5:
+                eligible.append(key)
+            if first is None or anchor is None or obs is None or post is None:
+                missing_metrics.append(key)
+                continue
+            if first > atol or anchor > atol:
+                late_contact.append(key)
+            if obs > 0.5 and post > 0.5 and abs(first) <= atol and abs(anchor) <= atol:
+                anchored.append(key)
+
+        anchor_sets[variant] = set(anchored)
+        n = len(keys)
+        aggregate_eligible = _finite(result.get("post_contact_metric_eligible_scene_rate"))
+        aggregate_observed = _finite(result.get("observed_contact_scene_rate"))
+        aggregate_counterfactual = _finite(result.get("counterfactual_contact_target_scene_rate"))
+        full_anchor = bool(n > 0 and len(anchored) == n and not missing_metrics and not late_contact)
+        rows[variant] = {
+            "go": full_anchor,
+            "num_scenes": n,
+            "num_initial_contact_anchors": len(anchored),
+            "num_observed_contact_scenes": len(observed),
+            "num_post_contact_metric_eligible_scenes": len(eligible),
+            "initial_contact_anchor_scene_rate": (len(anchored) / n) if n else 0.0,
+            "observed_contact_scene_rate": aggregate_observed,
+            "post_contact_metric_eligible_scene_rate": aggregate_eligible,
+            "counterfactual_contact_target_scene_rate": aggregate_counterfactual,
+            "num_late_policy_dependent_contact_scenes": len(late_contact),
+            "num_missing_anchor_metric_scenes": len(missing_metrics),
+            "late_contact_examples": late_contact[:10],
+            "missing_anchor_metric_examples": missing_metrics[:10],
+            "required_semantics": "same_target_observed_simulator_contact_anchor_at_rollout_step_0_before_policy_action",
+        }
+
+    same_anchor_set = bool(
+        anchor_sets.get("nominal")
+        and anchor_sets.get("nominal") == anchor_sets.get("balanced") == anchor_sets.get("precision")
+    )
+    go = bool(all(rows[v]["go"] for v in variants) and same_anchor_set)
+    return {
+        "go": go,
+        "same_pre_treatment_anchor_target_set": same_anchor_set,
+        "variants": rows,
+        "failure_interpretation": None if go else (
+            "Contact post-contact endpoints are not causally identified on the full paired cohort. "
+            "Do not interpret a treatment-dependent observed-contact subset as a Contact algorithm STOP."
+        ),
+    }
 
 
 def _is_standard_validation_source(source: Any) -> bool:
@@ -310,6 +404,11 @@ def adjudicate(
             )
     determinism_go = all(determinism[v][r]["go"] for v in variants for r in regimes)
 
+    contact_construct = contact_construct_validity_gate(
+        {v: results[v]["contact"] for v in ("nominal", "balanced", "precision")}
+    )
+    contact_construct_go = bool(contact_construct["go"])
+
     safe: dict[str, Any] = {}
     for variant in variants:
         safe[variant] = _gate_no_harm(comparisons[variant]["safe"], SAFE_NO_HARM)
@@ -341,6 +440,8 @@ def adjudicate(
         status = STATUS_COVERAGE_STOP
     elif not determinism_go:
         status = STATUS_DETERMINISM_STOP
+    elif not contact_construct_go:
+        status = STATUS_CONTACT_CONSTRUCT_FAIL
     elif not safe_go:
         status = STATUS_SAFE_STOP
     elif not near_go:
@@ -356,6 +457,7 @@ def adjudicate(
         "next_branch": GO_NEXT_BRANCH if status == STATUS_GO else STOP_NEXT_BRANCH,
         "coverage_gate": {"go": coverage_go, "regimes": coverage},
         "determinism_gate": {"go": determinism_go, "variants": determinism},
+        "contact_construct_validity_gate": contact_construct,
         "safe_noninterference_gate": {"go": safe_go, "variants": safe},
         "near_closed_loop_validity_gate": {
             "go": near_go,

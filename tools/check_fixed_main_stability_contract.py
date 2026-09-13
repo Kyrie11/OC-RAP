@@ -72,6 +72,7 @@ def main() -> int:
         'safe_zero_margin_noninterference_gate': set(SAFE_NO_HARM)=={'overlap_any','offroad_any','critical_ttc_exposure_duration_s','clearance_deficit_auc_m_s','ttc_deficit_auc_s2','closed_loop_bounded_NUP','route_progression_m','intervention_rate'},
         'near_primary_closed_loop_metrics_fixed': bool(NEAR_HARD_NO_HARM) and bool(NEAR_BENEFIT),
         'contact_primary_closed_loop_metrics_fixed': bool(CONTACT_HARD_NO_HARM) and bool(CONTACT_BENEFIT),
+        'contact_post_treatment_conditioning_fail_closed': 'contact_construct_validity_gate' in (repo/'src/ocrap/audits/fixed_main_stability.py').read_text(encoding='utf-8'),
         'paired_bootstrap_seed_fixed': True,
         'sentinel_rule_lexicographic_common_target': True,
         'no_regime_router': True,
@@ -114,6 +115,8 @@ def main() -> int:
             'womd_source_resolution':'standard_validation_only_with_bucket_provenance_conflict_fail_closed',
             'rifa_absolute_admission_for_intervention':True,
             'exact_nominal_control':'candidate_index_zero_no_feasibility_substitution',
+            'contact_endpoint_anchor_contract':'same_target_observed_simulator_contact_anchor_at_rollout_step_0_before_policy_action',
+            'counterfactual_contact_surrogate_not_sufficient_for_post_contact_gate':True,
         },
         'synthetic_checks':synthetic,
     }
