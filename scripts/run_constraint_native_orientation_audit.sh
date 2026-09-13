@@ -25,7 +25,7 @@ V123_COMPARE="${OCRAP_ORIENTATION_V123_COMPARE:-$BASE_OUT/OC-RAP-v48.123-DCP-DRF
 V123_BALANCED="${OCRAP_ORIENTATION_V123_BALANCED:-$BASE_OUT/OC-RAP-v48.123-ZBST-balanced.json}"
 V123_PRECISION="${OCRAP_ORIENTATION_V123_PRECISION:-$BASE_OUT/OC-RAP-v48.123-ZBST-precision.json}"
 
-WORK="$BASE_OUT/ocrap_v48_124_rifa_conformance_fixed_main"
+WORK="$BASE_OUT/ocrap_v48_124_exact_nominal_fixed_main"
 NOMINAL_OUT="$WORK/nominal"
 BALANCED_OUT="$WORK/balanced"
 PRECISION_OUT="$WORK/precision"
@@ -43,10 +43,10 @@ FULL_RUN_RUNTIME="$PROVENANCE_DIR/full_population_runtime_contract.json"
 
 mkdir -p "$BASE_OUT" "$WORK" "$SENTINEL_DIR" "$COMPARE_DIR" "$KEY_DIR" "$PROVENANCE_DIR"
 
-# V48.124.4 changes the deployed selector semantics to enforce the already-stated
-# RIFA nesting invariant.  Therefore population evidence from V48.124.1-.3 is
-# scientifically ineligible for reuse.  A partial V48.124.4 run may resume only
-# when its own full-population runtime contract is present in this fresh work dir.
+# V48.124.5 repairs the scientific control: the nominal arm is the exact upstream
+# a0 anchor and never feasibility-substitutes another candidate.  Because the
+# active baseline/runner source changes and those sources participate in the
+# paired experiment, use a fresh full-population work directory.
 FULL_RESULTS_PRESENT=0
 for f in \
   "$NOMINAL_OUT/safe/closed_loop_nominal.json" "$NOMINAL_OUT/near/closed_loop_nominal.json" "$NOMINAL_OUT/contact/closed_loop_nominal.json" \
@@ -55,15 +55,15 @@ for f in \
   [[ -s "$f" ]] && FULL_RESULTS_PRESENT=1 && break
 done
 if [[ "$FULL_RESULTS_PRESENT" == 1 && ! -f "$FULL_RUN_RUNTIME" ]]; then
-  echo "completed V48.124.4 population artifacts exist without their own full-population runtime contract; refuse provenance-unsafe reuse" >&2
+  echo "completed V48.124.5 population artifacts exist without their own full-population runtime contract; refuse provenance-unsafe reuse" >&2
   exit 30
 fi
 rm -f "$RUNTIME" "$SENTINEL_INDEX" "$ADJUDICATION" "$COMPLETE" "$BUNDLE_MANIFEST" "$RESULTS_ZIP"
 
 # Fail before long GPU work if this checkout does not satisfy the fixed-Main contract.
 python tools/check_fixed_main_stability_contract.py --repo "$REPO" --run-id "$RUN_ID" --output "$RUNTIME"
-# Fresh V48.124.4 runs use this runtime for the population evidence; resumed
-# V48.124.4 partial runs keep the preserved contract above.
+# Fresh V48.124.5 runs use this runtime for all population evidence; resumed
+# V48.124.5 partial runs keep the preserved contract above.
 [[ -f "$FULL_RUN_RUNTIME" ]] || cp -f "$RUNTIME" "$FULL_RUN_RUNTIME"
 
 # V48.123 STOP + exact freeze branch is the only scientific license for V48.124.
@@ -112,13 +112,20 @@ env WOMD_ROLE=validation OUT="$NOMINAL_OUT" CUDA_DEVICES="$GPU0,$GPU1" MAX_SCENA
 
 # Frozen Main, balanced then precision robustness variant. No retraining/recalibration.
 run_variant() {
-  local variant="$1" out="$2"
-  env WOMD_ROLE=validation MODEL_RUN="$L80_RUN" MODEL_VARIANT="$variant" OUT="$out" CUDA_DEVICES="$GPU0,$GPU1" \
+  local variant="$1" out="$2" gpu="$3"
+  env WOMD_ROLE=validation MODEL_RUN="$L80_RUN" MODEL_VARIANT="$variant" OUT="$out" CUDA_DEVICES="$gpu" \
     MAX_SCENARIOS=0 INCLUDE_SCENES_IN_RESULT=true RESULT_SCENE_DETAIL=metrics SCENE_JOURNAL_DETAIL=metrics \
     bash scripts/run_ocrap_three_regime_evaluation.sh
 }
-run_variant balanced "$BALANCED_OUT"
-run_variant precision "$PRECISION_OUT"
+# Safe acceleration: balanced and precision are independent robustness variants.
+# Run one complete variant per GPU concurrently; each variant processes its three
+# regimes sequentially on its assigned GPU, so no model/checkpoint state is shared.
+set +e
+run_variant balanced "$BALANCED_OUT" "$GPU0" & pb=$!
+run_variant precision "$PRECISION_OUT" "$GPU1" & pp=$!
+wait "$pb"; rb=$?; wait "$pp"; rp=$?
+set -e
+[[ $rb == 0 && $rp == 0 ]] || { echo "full variant failure balanced=$rb precision=$rp" >&2; exit 30; }
 
 # Canonical paths to the nine full-population results.
 NS="$NOMINAL_OUT/safe/closed_loop_nominal.json"; NN="$NOMINAL_OUT/near/closed_loop_nominal.json"; NC="$NOMINAL_OUT/contact/closed_loop_nominal.json"

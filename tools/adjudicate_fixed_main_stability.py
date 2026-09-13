@@ -26,8 +26,11 @@ V123_NEXT = (
 )
 
 FROZEN_FULL_RUN_CORE_SHA256 = {
+    # Filled from the final v48.124.5 source package after the exact-a0
+    # control-conformance patch; these are scientific runtime sources.
+    "src/ocrap/evaluation/baselines.py": "1e1e634e6ac13c1774db776fca79a178b7722693192f679affc3a429f9736104",
     "src/ocrap/planning/selector.py": "a8c035b4ae3d182620755c00013cb42814c150b601893ea0ec13c9d486a6f38c",
-    "src/ocrap/simulation/closed_loop_runner.py": "a95285c176c0edec79930fa353fd9939286dfaa65310cc1309b5b791060787f9",
+    "src/ocrap/simulation/closed_loop_runner.py": "22912bd0e8a894f212675f61a20481719a246e214259e62b902e8662695c1e34",
     "src/ocrap/simulation/waymax_rollout.py": "cb1b0b3693a883f740df838e63f811929805fdc3c2337b1de9cae3c9ecea7648",
 }
 
@@ -115,6 +118,7 @@ def main() -> int:
             and sc_full.get("planner_parameters_trained") == 0
             and sc_full.get("womd_source_resolution") == "standard_validation_only_with_bucket_provenance_conflict_fail_closed"
             and sc_full.get("rifa_absolute_admission_for_intervention") is True
+            and sc_full.get("exact_nominal_control") == "candidate_index_zero_no_feasibility_substitution"
         ):
             errors.append("full_run_runtime_contract")
         for rel, want in FROZEN_FULL_RUN_CORE_SHA256.items():
@@ -156,6 +160,29 @@ def main() -> int:
                 artifacts[f"{variant}_{regime}_sentinel_support"] = artifact_record(sentinel_support_path)
     except Exception as exc:
         errors.append(f"evaluation_artifact_parse:{type(exc).__name__}:{exc}")
+
+    # Scientific control prerequisite: the nominal arm must be the exact
+    # upstream a0 anchor on every decision.  Any nonzero intervention means the
+    # control silently substituted another candidate and invalidates attribution.
+    for regime in ("safe", "near", "contact"):
+        nd = results.get("nominal", {}).get(regime, {})
+        try:
+            rate = float(nd.get("intervention_rate"))
+        except Exception:
+            rate = float("nan")
+        reasons = nd.get("selection_reason_counts") or {}
+        scenes = nd.get("scenes") or []
+        scene_bad = False
+        for scene in scenes:
+            try:
+                if abs(float(scene.get("intervention_rate", 0.0))) > 1e-12:
+                    scene_bad = True
+                    break
+            except Exception:
+                scene_bad = True
+                break
+        if not (rate == rate and abs(rate) <= 1e-12 and set(reasons) == {"nominal_prefix_exact_a0"} and not scene_bad):
+            errors.append(f"nominal_control_not_exact_a0:{regime}")
 
     sentinel_index: dict[str, Any] = {}
     try:
@@ -233,6 +260,17 @@ def main() -> int:
             regime: {
                 variant: results.get(variant, {}).get(regime, {}).get("bucket_dataset")
                 for variant in ("nominal", "balanced", "precision")
+            }
+            for regime in ("safe", "near", "contact")
+        },
+        "nominal_control": {
+            regime: {
+                "intervention_rate": results.get("nominal", {}).get(regime, {}).get("intervention_rate"),
+                "selection_reason_counts": results.get("nominal", {}).get(regime, {}).get("selection_reason_counts"),
+                "exact_a0": bool(
+                    abs(float(results.get("nominal", {}).get(regime, {}).get("intervention_rate", float("nan")))) <= 1e-12
+                    if results.get("nominal", {}).get(regime, {}).get("intervention_rate") is not None else False
+                ),
             }
             for regime in ("safe", "near", "contact")
         },

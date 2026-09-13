@@ -216,3 +216,41 @@ def test_v48124_launcher_enforces_rifa_absolute_admission_before_intervention():
     repo = Path(__file__).resolve().parents[1]
     text = (repo / "scripts/run_ocrap_closed_loop.sh").read_text(encoding="utf-8")
     assert "selection.require_absolute_admission_for_intervention=true" in text
+
+
+def test_exact_nominal_control_never_feasibility_substitutes():
+    import numpy as np
+    from ocrap.evaluation.baselines import select_baseline
+
+    sel = select_baseline(
+        "nominal",
+        np.asarray([0.0, 100.0]),
+        np.asarray([0.0, 0.0]),
+        np.asarray([0.0, 0.0]),
+        np.asarray([0.0, 0.0]),
+        np.asarray([1.0, 0.0]),
+        np.asarray([1.0, 0.0]),
+        np.asarray([False, True]),
+        0.0, 0.0, 0.0, {},
+        nominal_index=0,
+    )
+    assert sel.selected_index == 0
+    assert sel.reason == "nominal_prefix_exact_a0"
+
+
+def test_v48124_launcher_parallelizes_robustness_variants_one_gpu_each():
+    from pathlib import Path
+    repo = Path(__file__).resolve().parents[1]
+    text = (repo / "scripts/run_constraint_native_orientation_audit.sh").read_text(encoding="utf-8")
+    assert 'run_variant balanced "$BALANCED_OUT" "$GPU0" & pb=$!' in text
+    assert 'run_variant precision "$PRECISION_OUT" "$GPU1" & pp=$!' in text
+    assert 'CUDA_DEVICES="$gpu"' in text
+
+
+def test_nominal_launcher_requires_zero_intervention_exact_a0():
+    from pathlib import Path
+    repo = Path(__file__).resolve().parents[1]
+    text = (repo / "scripts/run_nominal_three_regime_control.sh").read_text(encoding="utf-8")
+    assert "nominal_exact_a0_ok" in text
+    assert "nominal_prefix_exact_a0" in text
+    assert "abs(float(rate)) > 1e-12" in text

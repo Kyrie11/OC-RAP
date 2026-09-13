@@ -1,8 +1,8 @@
 # OC-RAP — cleaned audit/deployment workspace
 
-**V48.124.4 RIFA conformance repair.** Publication closed-loop runs now enforce the already-stated RIFA nesting invariant: when the absolute admission set is empty, no non-nominal recovery fallback may execute. This is a theory-to-code repair, not a new recovery mechanism or threshold sweep.
+**V48.124.5 exact-nominal control conformance repair.** The V48.124 scientific control is now the exact upstream nominal anchor $a_0$ on every decision. The nominal/log-replay arm never replaces an infeasible $a_0$ with another feasible candidate; absence of an explicit nominal anchor fails closed. This repairs the paired-control semantics only and does not add a recovery mechanism, threshold, regime router, or learned parameter.
 
-This repository is the cleaned engineering workspace for the frozen OC-RAP mechanism line and the current **V48.124 OC-FMSA fixed-Main stability/non-interference adjudication**. The current engineering hotfix is **v48.124.4-OC-FMSA**; the scientific version remains `v48.124-OC-FMSA`.
+This repository is the cleaned engineering workspace for the frozen OC-RAP mechanism line and the current **V48.124 OC-FMSA fixed-Main stability/non-interference adjudication**. The current engineering hotfix is **v48.124.5-OC-FMSA**; the scientific version remains `v48.124-OC-FMSA`. Runtime closure now includes `src/ocrap/evaluation/baselines.py`, because the baseline selector is an active source in the nominal control path.
 
 ## What is active
 

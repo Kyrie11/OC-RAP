@@ -14420,3 +14420,15 @@ Scientific attribution remains **fail-closed** until a canonical V48.124 result 
 - No new feature, recovery mechanism, capacity, regime router, source, horizon, threshold, or parameter sweep is introduced.
 - V48.124.4 uses a fresh work directory `ocrap_v48_124_rifa_conformance_fixed_main`; V48.124.1-.3 population results are not reused after the selector semantics change.
 - The same preregistered Coverage / Determinism / Safe / Near / Contact adjudication must be rerun before any Main freeze, external-baseline claim, or V48.124 result is incorporated into the paper.
+
+
+## V48.124.5 — exact nominal-anchor control conformance (engineering/scientific-control repair)
+
+- Scientific version remains `v48.124-OC-FMSA`; no recovery mechanism, model capacity, threshold, source, regime, or horizon change is authorized.
+- V48.124.4 revealed a control-semantics bug: the nominal baseline reported `selection_reason=nominal_prefix` but could replace candidate-0 with the best feasible utility candidate when candidate-0 was marked infeasible. That made the purported `same_target_nominal_replay` arm differ from the paper's upstream nominal anchor `a0`.
+- `src/ocrap/evaluation/baselines.py` now executes the explicit `nominal_index` unconditionally for `nominal`/`log_replay` and fails closed if the nominal anchor is absent. `closed_loop_runner.py` passes the actual `is_nominal` position to the baseline selector.
+- Scientific attribution now fails closed unless all three nominal full-population results have exactly zero top-level and scene-level intervention rate and the exact-a0 selection reason.
+- `src/ocrap/evaluation/baselines.py` is added to runtime SHA closure; the prior omission is closed.
+- Fresh V48.124.5 evidence uses `ocrap_v48_124_exact_nominal_fixed_main`; V48.124.4 population artifacts are not reused because an active runtime source changed.
+- Safe runtime acceleration only: balanced and precision variants run concurrently, one full variant per GPU, while each variant keeps its own sequential Safe/Near/Contact execution. This preserves per-run configuration, RNG, checkpoint, and simulator semantics.
+- Recovery-set mechanism/theory search remains frozen. A valid V48.124.5 result is still adjudicated by the unchanged Coverage → Determinism → Safe → Near → Contact gates.

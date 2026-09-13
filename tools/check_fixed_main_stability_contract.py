@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 import argparse, hashlib, importlib.util, json, sys
+import numpy as np
 from pathlib import Path
 
 from ocrap.audits.fixed_main_stability import (
@@ -8,6 +9,7 @@ from ocrap.audits.fixed_main_stability import (
     SAFE_NO_HARM, NEAR_HARD_NO_HARM, NEAR_BENEFIT,
     CONTACT_HARD_NO_HARM, CONTACT_BENEFIT,
 )
+from ocrap.evaluation.baselines import select_baseline
 
 RUNTIME_FILES=(
     'scripts/run_constraint_native_orientation_audit.sh',
@@ -16,6 +18,7 @@ RUNTIME_FILES=(
     'scripts/run_ocrap_closed_loop.sh',
     'scripts/lib/runtime.sh',
     'src/ocrap/audits/fixed_main_stability.py',
+    'src/ocrap/evaluation/baselines.py',
     'src/ocrap/planning/selector.py',
     'src/ocrap/simulation/closed_loop_runner.py',
     'src/ocrap/simulation/waymax_rollout.py',
@@ -51,6 +54,17 @@ def main() -> int:
         and 'keyfile="$KEY_DIR/$regime.json"' not in launcher_text.split('local variant="$1" regime=',1)[-1].split('\n',1)[0]
         and 'local outdir="$SENTINEL_DIR/$variant/$regime" output=' not in launcher_text
     )
+    try:
+        _nominal_probe = select_baseline(
+            "nominal",
+            np.asarray([0.0, 1.0]), np.asarray([0.0, 0.0]), np.asarray([0.0, 0.0]), np.asarray([0.0, 0.0]),
+            np.asarray([1.0, 0.0]), np.asarray([1.0, 0.0]), np.asarray([False, True]),
+            0.0, 0.0, 0.0, {}, nominal_index=0,
+        )
+        nominal_exact_probe = bool(_nominal_probe.selected_index == 0 and _nominal_probe.reason == "nominal_prefix_exact_a0")
+    except Exception:
+        nominal_exact_probe = False
+
     synthetic={
         'mechanism_family_frozen': True,
         'no_new_recovery_mechanism': True,
@@ -72,6 +86,7 @@ def main() -> int:
             'full_population_runtime_contract.json' in launcher_text
             and '--full-run-runtime' in launcher_text
         ),
+        'exact_nominal_control_ignores_feasibility_repair': nominal_exact_probe,
         'rifa_absolute_admission_enforced': (
             'selection.require_absolute_admission_for_intervention=true' in (repo/'scripts/run_ocrap_closed_loop.sh').read_text(encoding='utf-8')
         ),
@@ -98,6 +113,7 @@ def main() -> int:
             'paired_bootstrap_draws':5000,'paired_bootstrap_seed':2027,'noninterference_margin':0.0,
             'womd_source_resolution':'standard_validation_only_with_bucket_provenance_conflict_fail_closed',
             'rifa_absolute_admission_for_intervention':True,
+            'exact_nominal_control':'candidate_index_zero_no_feasibility_substitution',
         },
         'synthetic_checks':synthetic,
     }

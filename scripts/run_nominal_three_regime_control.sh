@@ -39,6 +39,36 @@ SAFE_WOMD="$(resolve_spec "$SAFE_WOMD" "$SAFE_BUCKET")"
 NEAR_WOMD="$(resolve_spec "$NEAR_WOMD" "$NEAR_BUCKET")"
 CONTACT_WOMD="$(resolve_spec "$CONTACT_WOMD" "$CONTACT_BUCKET")"
 
+nominal_exact_a0_ok() {
+  local output="$1"
+  python - "$output" <<'PY'
+import json, math, sys
+p=sys.argv[1]
+try:
+    d=json.load(open(p,encoding='utf-8'))
+except Exception:
+    raise SystemExit(1)
+if str(d.get('method','')).lower() != 'nominal':
+    raise SystemExit(1)
+rate=d.get('intervention_rate')
+try:
+    if not math.isfinite(float(rate)) or abs(float(rate)) > 1e-12:
+        raise SystemExit(1)
+except Exception:
+    raise SystemExit(1)
+reasons=d.get('selection_reason_counts') or {}
+if set(reasons) != {'nominal_prefix_exact_a0'}:
+    raise SystemExit(1)
+for scene in d.get('scenes') or []:
+    try:
+        if abs(float(scene.get('intervention_rate',0.0))) > 1e-12:
+            raise SystemExit(1)
+    except Exception:
+        raise SystemExit(1)
+raise SystemExit(0)
+PY
+}
+
 IFS=',' read -r -a GPUS <<< "$CUDA_DEVICES"; ((${#GPUS[@]})) || GPUS=(0)
 mkdir -p "$OUT/safe" "$OUT/near" "$OUT/contact"
 
@@ -46,8 +76,9 @@ run_one() {
   local regime="$1" womd="$2" bucket="$3" gpu="$4"
   local run_dir="$OUT/$regime" output="$OUT/$regime/closed_loop_nominal.json"
   mkdir -p "$run_dir"
-  if python tools/check_closed_loop_artifact.py --output "$output" --method nominal --bucket-dataset "$bucket" --quiet; then
-    echo "[REUSE] nominal $regime complete: $output"
+  if python tools/check_closed_loop_artifact.py --output "$output" --method nominal --bucket-dataset "$bucket" --quiet \
+     && nominal_exact_a0_ok "$output"; then
+    echo "[REUSE] exact-a0 nominal $regime complete: $output"
     return 0
   fi
   python tools/check_closed_loop_dataset_support.py --dataset "$bucket" --split "$BUCKET_SPLIT" \
@@ -84,6 +115,7 @@ run_one() {
     --set waymax.use_jit_scan_rollouts=true \
     2>&1 | tee -a "$run_dir/closed_loop_nominal.log"
   python tools/check_closed_loop_artifact.py --output "$output" --method nominal --bucket-dataset "$bucket"
+  nominal_exact_a0_ok "$output" || { echo "nominal control violated exact-a0 semantics: $output" >&2; return 30; }
 }
 
 failed=0

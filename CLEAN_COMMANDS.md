@@ -353,3 +353,23 @@ Upload that canonical ZIP for the reliability/scientific-attribution audit. Unti
 
 
 V48.124.4 keeps the stable launcher command unchanged and enforces `selection.require_absolute_admission_for_intervention=true` inside the publication closed-loop launcher. Do not reuse V48.124.1-.3 population artifacts for the repaired Main.
+
+
+## V48.124.5 exact-nominal control conformance
+
+V48.124.5 keeps the scientific version `v48.124-OC-FMSA` and the stable launcher command unchanged. It repairs only the control arm: `method=nominal` and `log_replay` execute the explicit upstream nominal anchor `a0` even when that prefix is marked infeasible. They never feasibility-substitute another candidate. The adjudicator requires top-level and scene-level nominal intervention rate to be exactly zero and `selection_reason_counts={"nominal_prefix_exact_a0": ...}`.
+
+The active runtime source closure now includes `src/ocrap/evaluation/baselines.py`. Because this active source and `closed_loop_runner.py` changed, V48.124.4 population artifacts are not scientific evidence for V48.124.5. Use the fresh work directory `ocrap_v48_124_exact_nominal_fixed_main`.
+
+For a fresh two-GPU run, balanced and precision robustness variants are execution-independent and are launched concurrently, one complete variant per GPU. Each variant still runs Safe/Near/Contact sequentially on its assigned GPU; no checkpoint, RNG state, cache, or rollout state is shared across variants. This is an orchestration-only acceleration.
+
+Stable command:
+
+```bash
+cd /home/senzeyu2/code/OC-RAP
+GPU0=0 GPU1=1 \
+BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+bash scripts/run_constraint_native_orientation_audit.sh
+```
+
+Upload only `runs/OC-RAP-v48.124-OC-FMSA-results.zip` after completion.

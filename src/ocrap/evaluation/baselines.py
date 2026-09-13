@@ -170,6 +170,7 @@ def select_baseline(
     pred_direct_opportunity: np.ndarray | None = None,
     pred_direct_harm: np.ndarray | None = None,
     candidate_macro_names=None,
+    nominal_index: int = 0,
 ) -> BaselineSelection:
     """Select one candidate with a paper-baseline-style rule.
 
@@ -469,20 +470,28 @@ def select_baseline(
         return BaselineSelection(sel.selected_index, "teacher_deployable_upper_bound", sel.admitted, teacher_r_dep)
 
     if method == "nominal":
+        # Scientific control semantics: execute the exact upstream nominal anchor
+        # a0, not a feasibility-repaired substitute.  Feasibility is an outcome
+        # of the candidate construction and may be false precisely on difficult
+        # scenes; replacing a0 with another feasible prefix would change the
+        # control policy and invalidate paired non-interference comparisons.
+        idx = int(nominal_index)
+        if idx < 0 or idx >= len(feasible):
+            raise ValueError(f"exact nominal control requires a valid nominal_index, got {idx} for {len(feasible)} candidates")
         admitted = np.zeros_like(feasible, dtype=bool)
-        idx = 0 if len(feasible) and feasible[0] else _best_by_score(utility, feasible)
         admitted[idx] = True
-        return BaselineSelection(idx, "nominal_prefix", admitted, utility)
+        return BaselineSelection(idx, "nominal_prefix_exact_a0", admitted, utility)
 
     if method == "log_replay":
-        # Explicit logged/nominal rollout baseline. Candidate generation writes
-        # the nominal/log-following prefix as candidate 0 when available; if it is
-        # infeasible, fall back to the best feasible utility candidate so the
-        # closed-loop runner can continue on degenerate frames.
+        # Logged replay is likewise an exact anchor control.  Never repair an
+        # infeasible nominal prefix by selecting another candidate; fail closed
+        # if the nominal anchor is absent instead of silently changing policy.
+        idx = int(nominal_index)
+        if idx < 0 or idx >= len(feasible):
+            raise ValueError(f"exact log replay requires a valid nominal_index, got {idx} for {len(feasible)} candidates")
         admitted = np.zeros_like(feasible, dtype=bool)
-        idx = 0 if len(feasible) and feasible[0] else _best_by_score(utility, feasible)
         admitted[idx] = True
-        return BaselineSelection(idx, "log_replay_prefix", admitted, utility)
+        return BaselineSelection(idx, "log_replay_prefix_exact_a0", admitted, utility)
 
     if method == "idm_proxy":
         # Lightweight IDM-style heuristic over OC-RAP candidates. It does not

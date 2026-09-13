@@ -1045,6 +1045,8 @@ def _select_prefix(
     if external_selected is not None:
         selected = external_selected
     else:
+        if method_l in {"nominal", "log_replay"} and not nominal_ids:
+            raise ValueError(f"{method_l} control requires an explicit nominal candidate a0; none was generated")
         selected = select_baseline(
             method,
             utility,
@@ -1068,6 +1070,7 @@ def _select_prefix(
             pred_direct_opportunity=pred_direct_opportunity,
             pred_direct_harm=pred_direct_harm,
             candidate_macro_names=macro_names,
+            nominal_index=(nominal_ids[0] if nominal_ids else 0),
         )
     idx = int(selected.selected_index)
     chosen = items[idx]
