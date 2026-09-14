@@ -438,7 +438,19 @@ def evaluate_external_baselines(
         # conditioned risk profiles. Compute them once per candidate group rather
         # than once per method and once again for the selected record.
         oracle_names = {"oracle_filter", "oracle_recovery_filter", "branchwise_oracle_filter", "oracle_branchwise_recovery"}
-        learned_names = {"route_bc", "route_bc_lite", "waymax_bc", "waymax_bc_lite", "wayformer_bc", "wayformer_style_bc", "route_bc_wayformer", "gameformer", "gameformer_lite", "gameformer_levelk", "betop", "betop_lite", "betopnet", "betopnet_lite", "plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter"}
+        learned_names = {
+            "route_bc", "route_bc_lite", "waymax_bc", "waymax_bc_lite",
+            "wayformer_bc", "wayformer_style_bc", "route_bc_wayformer",
+            "gameformer", "gameformer_lite", "gameformer_levelk",
+            "betop", "betop_lite", "betopnet", "betopnet_lite",
+            "plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter",
+            "diffusion_planner", "diffusionplanner",
+            "flow_planner", "flowplanner", "plan_r1", "planr1",
+        }
+        # Learned planners select directly from checkpoint outputs.  Treating
+        # Flow Planner / Plan-R1 as hand-designed policies used to build the
+        # full observation-risk forecast even though their selector never reads
+        # it.  Keeping them in pure_learned removes that redundant CPU work.
         pure_learned = learned_names
         context_only_names = {
             "dr_cvar_safety_filter", "distributionally_robust_cvar_filter", "safaoui_dr_cvar_filter",
@@ -508,7 +520,15 @@ def evaluate_external_baselines(
             records_by_method[method].append(record)
         if gi == 1 or gi % 500 == 0:
             print({"event": "external_eval_progress", "groups_done": gi, "num_groups": len(groups)}, flush=True)
-    learned_methods = {"route_bc", "route_bc_lite", "waymax_bc", "waymax_bc_lite", "wayformer_bc", "wayformer_style_bc", "route_bc_wayformer", "gameformer", "gameformer_lite", "gameformer_levelk", "betop", "betop_lite", "betopnet", "betopnet_lite", "plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter"}
+    learned_methods = {
+        "route_bc", "route_bc_lite", "waymax_bc", "waymax_bc_lite",
+        "wayformer_bc", "wayformer_style_bc", "route_bc_wayformer",
+        "gameformer", "gameformer_lite", "gameformer_levelk",
+        "betop", "betop_lite", "betopnet", "betopnet_lite",
+        "plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter",
+        "diffusion_planner", "diffusionplanner",
+        "flow_planner", "flowplanner", "plan_r1", "planr1",
+    }
     oracle_methods = {"oracle_filter", "oracle_recovery_filter", "branchwise_oracle_filter", "oracle_branchwise_recovery"}
     summaries = {}
     for m in methods:

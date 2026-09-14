@@ -52,7 +52,7 @@ fi
 : "${CUDA_DEVICES:=0,1}"
 : "${JOBS_PER_GPU:=3}"                    # requested 3-way per-GPU concurrency
 : "${MAX_PARALLEL:=6}"                     # empty => all GPU slots
-: "${USE_DYNAMIC_SCHEDULER:=auto}"
+: "${USE_DYNAMIC_SCHEDULER:=true}"
 
 IFS=',' read -r -a GPU_LIST <<< "$CUDA_DEVICES"
 ((${#GPU_LIST[@]})) || GPU_LIST=(0 1)

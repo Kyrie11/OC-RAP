@@ -54,7 +54,7 @@ fi
 : "${CUDA_DEVICES:=0,1}"
 : "${JOBS_PER_GPU:=3}"                    # requested 3-way per-GPU concurrency
 : "${MAX_PARALLEL:=6}"                     # empty => all GPU slots
-: "${USE_DYNAMIC_SCHEDULER:=auto}"
+: "${USE_DYNAMIC_SCHEDULER:=true}"
 : "${OCRAP_SDPA_BACKEND:=safe}"
 : "${OCRAP_AMP_DTYPE:=auto}"
 : "${CHECKPOINT_ROOT:=$RUN/checkpoints}"
@@ -167,7 +167,8 @@ prepare_or_offline_method() {
   IFS='|' read -r method config kind ckpt expected_impl <<< "$spec"
   expected_impl="${expected_impl:-source_port_v54}"
   if [[ "$kind" == learned ]]; then
-    if ! runtime_bool_true "$DO_OFFLINE" && runtime_bool_true "$DO_CLOSED_LOOP" && runtime_bool_true "$SKIP_COMPLETE_METHODS" \
+    if ! runtime_bool_true "$FORCE_RETRAIN_SAFE" && ! runtime_bool_true "$DO_OFFLINE" \
+        && runtime_bool_true "$DO_CLOSED_LOOP" && runtime_bool_true "$SKIP_COMPLETE_METHODS" \
         && python tools/check_closed_loop_artifact.py --output "$RUN/closed_loop_${method}.json" --quiet; then
       echo "[REUSE] safe method=$method already has a complete closed-loop artifact; checkpoint preparation skipped"
       return 0
@@ -256,10 +257,6 @@ run_queue() {
   if [[ "$use_dynamic" == true ]]; then run_queue_dynamic "$runner" "$@"; else run_queue_fixed "$runner" "$@"; fi
 }
 
-if runtime_bool_true "$DO_TRAIN" || runtime_bool_true "$DO_OFFLINE" || runtime_bool_true "$DO_CLOSED_LOOP"; then
-  run_queue prepare_or_offline_method "${SPECS[@]}"
-fi
-
 if runtime_bool_true "$DO_OFFLINE" && runtime_bool_true "$RUN_NOMINAL_CONTROL"; then
   env CUDA_VISIBLE_DEVICES='' PYTHONUNBUFFERED=1 python -u -m ocrap.cli evaluate-baseline \
     --config configs/external_baselines/nominal_log_replay.yaml \
@@ -276,7 +273,8 @@ run_closed_loop_method() {
   runtime_method="$method"
   [[ "$method" == nominal_replay ]] && runtime_method=nominal
   local output="$RUN/closed_loop_${method}.json"
-  if runtime_bool_true "$SKIP_COMPLETE_METHODS" && python tools/check_closed_loop_artifact.py --output "$output" --quiet; then
+  if runtime_bool_true "$SKIP_COMPLETE_METHODS" && ! runtime_bool_true "$FORCE_RETRAIN_SAFE" \
+      && python tools/check_closed_loop_artifact.py --output "$output" --quiet; then
     echo "[REUSE] safe closed-loop method=$method is already complete: $output"
     return 0
   fi
@@ -325,12 +323,29 @@ run_closed_loop_method() {
   echo "[DONE] safe closed-loop method=$method gpu=$gpu"
 }
 
-if runtime_bool_true "$DO_CLOSED_LOOP"; then
-  CLOSED_LOOP_SPECS=("${SPECS[@]}")
-  if runtime_bool_true "$RUN_NOMINAL_CONTROL"; then
-    CLOSED_LOOP_SPECS+=("nominal_replay|configs/external_baselines/nominal_log_replay.yaml|nonlearning|")
+run_baseline_pipeline() {
+  local spec="$1" gpu="$2"
+  prepare_or_offline_method "$spec" "$gpu"
+  if runtime_bool_true "$DO_CLOSED_LOOP"; then
+    run_closed_loop_method "$spec" "$gpu"
   fi
-  run_queue run_closed_loop_method "${CLOSED_LOOP_SPECS[@]}"
+}
+
+# A slot belongs to one baseline for its whole train -> optional offline ->
+# closed-loop pipeline.  Learned jobs are started first so expensive training is
+# overlapped with the shorter rule/controller jobs; scientific outputs are
+# unchanged because baselines do not share mutable model state.
+PIPELINE_SPECS=()
+for spec in "${SPECS[@]}"; do IFS='|' read -r _m _c _kind _rest <<< "$spec"; [[ "$_kind" == learned ]] && PIPELINE_SPECS+=("$spec"); done
+for spec in "${SPECS[@]}"; do IFS='|' read -r _m _c _kind _rest <<< "$spec"; [[ "$_kind" == learned ]] || PIPELINE_SPECS+=("$spec"); done
+if runtime_bool_true "$DO_TRAIN" || runtime_bool_true "$DO_OFFLINE" || runtime_bool_true "$DO_CLOSED_LOOP"; then
+  run_queue run_baseline_pipeline "${PIPELINE_SPECS[@]}"
+fi
+
+# Nominal/log replay is a control, not one of the six Safe external baselines;
+# keep it outside the six-slot baseline pipeline.
+if runtime_bool_true "$DO_CLOSED_LOOP" && runtime_bool_true "$RUN_NOMINAL_CONTROL"; then
+  run_queue run_closed_loop_method "nominal_replay|configs/external_baselines/nominal_log_replay.yaml|nonlearning|"
 fi
 
 SUMMARY_METHODS=()

@@ -134,6 +134,40 @@ CONTACT = (
 )
 BY_REGIME = {"safe": SAFE, "near": NEAR, "contact": CONTACT}
 
+# The paper distinguishes primary closed-loop endpoints from mechanism/extra
+# diagnostics.  Keep the historical flat fields for compatibility, but also
+# emit these explicit groups so downstream tables cannot accidentally promote
+# OC-RAP teacher/mechanism diagnostics into the external-baseline main table.
+PRIMARY_BY_REGIME = {
+    "safe": (
+        "collision_scene_rate", "offroad_scene_rate",
+        "closed_loop_bounded_NUP", "intervention_rate",
+    ),
+    "near": (
+        "collision_scene_rate", "offroad_scene_rate",
+        "closed_loop_bounded_NUP", "intervention_rate",
+        "scene_min_clearance_m_p05", "scene_ttc_s_p05",
+        "critical_ttc_exposure_duration_s",
+    ),
+    "contact": (
+        "collision_scene_rate", "offroad_scene_rate",
+        "post_contact_terminal_clearance_m",
+        "post_contact_free_space_auc_normalized_m",
+        "post_contact_escape_scene_rate", "recontact_scene_rate",
+        "secondary_overlap_scene_rate",
+        "new_stable_stop_quality_scene_rate",
+        "post_contact_overlap_duration_s",
+    ),
+}
+MECHANISM_DIAGNOSTICS_BY_REGIME = {
+    "safe": (),
+    "near": (
+        "closed_loop_FRA_exec", "closed_loop_FRA_cand",
+        "closed_loop_DRS", "closed_loop_ODG",
+    ),
+    "contact": (),
+}
+
 
 def main() -> int:
     ap = argparse.ArgumentParser()
@@ -160,6 +194,15 @@ def main() -> int:
             row["label_modes"] = [d.get("label_mode")] if d.get("label_mode") is not None else None
         for key in keys:
             row[key] = _metric(d, key)
+        primary_keys = PRIMARY_BY_REGIME[args.regime]
+        diagnostic_keys = MECHANISM_DIAGNOSTICS_BY_REGIME[args.regime]
+        row["primary_endpoints"] = {key: _metric(d, key) for key in primary_keys}
+        row["mechanism_diagnostics"] = {key: _metric(d, key) for key in diagnostic_keys}
+        row["secondary_metrics"] = {
+            key: _metric(d, key)
+            for key in keys
+            if key not in primary_keys and key not in diagnostic_keys
+        }
         row["artifact"] = str(path)
         rows.append(row)
 
@@ -173,6 +216,8 @@ def main() -> int:
         "regime": args.regime,
         "metric_contract": contract_note,
         "main_table_methods": methods,
+        "primary_endpoint_keys": list(PRIMARY_BY_REGIME[args.regime]),
+        "mechanism_diagnostic_keys": list(MECHANISM_DIAGNOSTICS_BY_REGIME[args.regime]),
         "womd_spec": args.womd_spec or None,
         "num_methods_found": len(rows),
         "missing_methods": missing,

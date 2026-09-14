@@ -58,7 +58,7 @@ fi
 : "${CL_PARTIAL_WRITE_EVERY_SCENES:=32}"
 : "${CL_PROGRESS_EVERY_STEPS:=10}"
 : "${SKIP_COMPLETE_METHODS:=true}"
-: "${USE_DYNAMIC_SCHEDULER:=auto}"
+: "${USE_DYNAMIC_SCHEDULER:=true}"
 : "${DO_OFFLINE:=true}"
 : "${DO_CLOSED_LOOP:=true}"
 : "${DO_TRAIN:=true}"
@@ -298,6 +298,12 @@ checkpoint_valid() {
 prepare_or_offline_method() {
   local spec="$1" gpu="$2" method config kind ckpt expected_impl train_dir
   IFS='|' read -r method config kind ckpt expected_impl <<< "$spec"
+  if ! runtime_bool_true "$FORCE_RETRAIN_NEAR" && ! runtime_bool_true "$DO_OFFLINE" \
+      && runtime_bool_true "$DO_CLOSED_LOOP" && runtime_bool_true "$SKIP_COMPLETE_METHODS" \
+      && python tools/check_closed_loop_artifact.py --output "$RUN/closed_loop_${method}.json" --quiet; then
+    echo "[REUSE] near method=$method already has a complete closed-loop artifact; checkpoint preparation skipped"
+    return 0
+  fi
   if [[ "$kind" == learned ]]; then
     if runtime_bool_true "$FORCE_RETRAIN_NEAR" || ! checkpoint_valid "$ckpt" "$expected_impl" "$config"; then
       if ! runtime_bool_true "$DO_TRAIN"; then
@@ -367,15 +373,12 @@ run_queue() {
   if [[ "$use_dynamic" == true ]]; then run_queue_dynamic "$runner" "$@"; else run_queue_fixed "$runner" "$@"; fi
 }
 
-if runtime_bool_true "$DO_TRAIN" || runtime_bool_true "$DO_OFFLINE"; then
-  run_queue prepare_or_offline_method "${SPECS[@]}"
-fi
-
 run_closed_loop_method() {
   local spec="$1" gpu="$2" method config kind ckpt expected_impl
   IFS='|' read -r method config kind ckpt expected_impl <<< "$spec"
   local output="$RUN/closed_loop_${method}.json"
-  if runtime_bool_true "$SKIP_COMPLETE_METHODS" && python tools/check_closed_loop_artifact.py --output "$output" --quiet; then
+  if runtime_bool_true "$SKIP_COMPLETE_METHODS" && ! runtime_bool_true "$FORCE_RETRAIN_NEAR" \
+      && python tools/check_closed_loop_artifact.py --output "$output" --quiet; then
     echo "[REUSE] near closed-loop method=$method is already complete: $output"
     return 0
   fi
@@ -432,10 +435,28 @@ run_closed_loop_method() {
   echo "[DONE] near method=$method gpu=$gpu"
 }
 
-if runtime_bool_true "$DO_CLOSED_LOOP"; then
-  CLOSED_LOOP_SPECS=("${SPECS[@]}")
-  if runtime_bool_true "$RUN_ORACLE_CLOSED_LOOP"; then CLOSED_LOOP_SPECS=("oracle_recovery_filter|$CONFIG|nonlearning||" "${CLOSED_LOOP_SPECS[@]}"); fi
-  run_queue run_closed_loop_method "${CLOSED_LOOP_SPECS[@]}"
+run_baseline_pipeline() {
+  local spec="$1" gpu="$2"
+  prepare_or_offline_method "$spec" "$gpu"
+  if runtime_bool_true "$DO_CLOSED_LOOP"; then
+    run_closed_loop_method "$spec" "$gpu"
+  fi
+}
+
+# Keep one scheduler slot attached to a baseline until its training/checkpoint
+# preparation, optional offline evaluation and closed-loop test are all done.
+# Learned planners are launched first so their long training overlaps the main
+# non-learning controls instead of waiting behind a global train/test barrier.
+PIPELINE_SPECS=()
+for spec in "${SPECS[@]}"; do IFS='|' read -r _m _c _kind _rest <<< "$spec"; [[ "$_kind" == learned ]] && PIPELINE_SPECS+=("$spec"); done
+for spec in "${SPECS[@]}"; do IFS='|' read -r _m _c _kind _rest <<< "$spec"; [[ "$_kind" == learned ]] || PIPELINE_SPECS+=("$spec"); done
+if runtime_bool_true "$DO_TRAIN" || runtime_bool_true "$DO_OFFLINE" || runtime_bool_true "$DO_CLOSED_LOOP"; then
+  run_queue run_baseline_pipeline "${PIPELINE_SPECS[@]}"
+fi
+
+# Oracle recovery is a teacher-only audit upper bound, not an external baseline.
+if runtime_bool_true "$DO_CLOSED_LOOP" && runtime_bool_true "$RUN_ORACLE_CLOSED_LOOP"; then
+  run_queue run_closed_loop_method "oracle_recovery_filter|$CONFIG|nonlearning||"
 fi
 
 python tools/summarize_external_closed_loop.py \

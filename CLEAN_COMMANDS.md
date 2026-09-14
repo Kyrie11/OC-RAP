@@ -168,7 +168,7 @@ bash scripts/run_external_baselines.sh \
   --gpus 0,1 --jobs-per-gpu 3 --max-parallel 6 --max-scenarios 0 --womd-role validation
 ```
 
-Each one-regime launcher now uses six concurrent worker slots by default: three jobs on GPU 0 and three jobs on GPU 1. If a regime has more than six enabled baselines, the remaining jobs start as slots become free. Safe additionally enables Diffusion Planner; Near-Contact additionally enables Flow Planner, Plan-R1, and the expanded BeTopNet adapter. Contact keeps its six post-contact baselines.
+Each one-regime launcher now uses six concurrent worker slots by default: three jobs on GPU 0 and three jobs on GPU 1. A slot belongs to one baseline for its full pipeline (checkpoint preparation/training or registration reuse, optional offline evaluation, then closed-loop test); as soon as that baseline finishes, the next queued baseline is launched on the GPU whose slot became free. This removes the old global train/test phase barrier. Safe additionally enables Diffusion Planner; Near-Contact additionally enables Flow Planner, Plan-R1, and the expanded BeTopNet adapter. Contact keeps its six post-contact baselines. Dynamic refill is the default and requires Bash with `wait -n -p` support (Bash 5.1+ is recommended).
 
 **Latency exception.** The commands above are throughput-oriented and intentionally run multiple processes per GPU, so their timing must not be reported as uncontended publication latency. After the accuracy/metric run is complete, profile a regime serially on one GPU while reusing its checkpoints (and the Near CPSF calibration artifact):
 

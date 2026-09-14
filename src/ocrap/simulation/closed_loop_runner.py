@@ -1138,7 +1138,16 @@ def _select_prefix(
         )
     idx = int(selected.selected_index)
     chosen = items[idx]
-    nup = nominal_utility_preservation(utility[0] if len(utility) else 0.0, utility[idx], sigma_u=float((cfg.get("metrics", {}) or {}).get("sigma_u", 1.0)))
+    # NUP is defined relative to the explicitly marked nominal proposal a0.
+    # Canonical builders place a0 at index 0, but using the discovered nominal
+    # id makes the metric robust to candidate reordering without changing the
+    # canonical result.
+    nominal_idx = int(nominal_ids[0] if nominal_ids else 0)
+    nominal_utility = float(utility[nominal_idx]) if len(utility) else 0.0
+    nup = nominal_utility_preservation(
+        nominal_utility, utility[idx],
+        sigma_u=float((cfg.get("metrics", {}) or {}).get("sigma_u", 1.0)),
+    )
 
     if compute_teacher_labels:
         d = chosen["data"]
@@ -2170,10 +2179,19 @@ def _rollout_one_scene(
     # N+1 samples as N+1 time intervals.
     clearance_exposure_vals = [x for x in clearance_state_all[:-1] if np.isfinite(x)]
     ttc_exposure_vals = [x for x in ttc_state_all[:-1] if np.isfinite(x)]
-    near_count = int(sum(c <= 2.0 for c in clearance_exposure_vals))
-    critical_ttc_count = int(sum(t <= 3.0 for t in ttc_exposure_vals))
-    near_zero_clearance_count = int(sum(c <= 0.05 for c in clearance_exposure_vals))
+    regime_thresholds = cfg.get("regime_thresholds", {}) if isinstance(cfg.get("regime_thresholds", {}), dict) else {}
+    near_clearance_threshold_m = float(regime_thresholds.get("tau_d", 2.0))
+    critical_ttc_threshold_s = float(regime_thresholds.get("tau_ttc", 3.0))
+    near_zero_clearance_threshold_m = float(cl_cfg.get("near_zero_clearance_threshold_m", 0.05) or 0.05)
+    near_count = int(sum(c <= near_clearance_threshold_m for c in clearance_exposure_vals))
+    critical_ttc_count = int(sum(t <= critical_ttc_threshold_s for t in ttc_exposure_vals))
+    near_zero_clearance_count = int(sum(c <= near_zero_clearance_threshold_m for c in clearance_exposure_vals))
     metric_summary["num_metric_steps"] = metric_steps
+    metric_summary["near_contact_clearance_threshold_m"] = near_clearance_threshold_m
+    metric_summary["critical_ttc_threshold_s"] = critical_ttc_threshold_s
+    metric_summary["near_zero_clearance_threshold_m"] = near_zero_clearance_threshold_m
+    metric_summary["clearance_exposure_observed_count"] = float(len(clearance_exposure_vals))
+    metric_summary["ttc_exposure_observed_count"] = float(len(ttc_exposure_vals))
     metric_summary["near_contact_exposure_count"] = near_count
     metric_summary["critical_ttc_exposure_count"] = critical_ttc_count
     metric_summary["near_zero_clearance_exposure_count"] = near_zero_clearance_count
@@ -2181,8 +2199,8 @@ def _rollout_one_scene(
     metric_summary["critical_ttc_exposure_rate"] = float(critical_ttc_count / max(len(ttc_exposure_vals), 1)) if ttc_exposure_vals else 0.0
     metric_summary["near_contact_exposure_duration_s"] = float(near_count * metric_dt_s)
     metric_summary["critical_ttc_exposure_duration_s"] = float(critical_ttc_count * metric_dt_s)
-    near_flags = [bool(c <= 2.0) for c in clearance_exposure_vals]
-    critical_ttc_flags = [bool(t <= 3.0) for t in ttc_exposure_vals]
+    near_flags = [bool(c <= near_clearance_threshold_m) for c in clearance_exposure_vals]
+    critical_ttc_flags = [bool(t <= critical_ttc_threshold_s) for t in ttc_exposure_vals]
     near_episodes, near_longest = _binary_run_stats(near_flags)
     ttc_episodes, ttc_longest = _binary_run_stats(critical_ttc_flags)
     metric_summary["near_contact_exposure_episode_count"] = float(near_episodes)
@@ -2220,10 +2238,10 @@ def _rollout_one_scene(
     # Continuous margin-deficit integrals are less brittle than a single minimum
     # and distinguish a brief close pass from sustained unsafe proximity.
     metric_summary["clearance_deficit_auc_m_s"] = float(
-        sum(max(0.0, 2.0 - c) for c in clearance_exposure_vals) * metric_dt_s
+        sum(max(0.0, near_clearance_threshold_m - c) for c in clearance_exposure_vals) * metric_dt_s
     )
     metric_summary["ttc_deficit_auc_s2"] = float(
-        sum(max(0.0, 3.0 - t) for t in ttc_exposure_vals) * metric_dt_s
+        sum(max(0.0, critical_ttc_threshold_s - t) for t in ttc_exposure_vals) * metric_dt_s
     )
     # Geometric clearance <= 5 cm is still not identical to Waymax overlap.
     # Keep the legacy contact_exposure_rate alias for artifact compatibility.
@@ -2718,6 +2736,27 @@ def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, s
     )
     if post_overlap_den > 0.0:
         wm["post_contact_overlap_rate"] = float(post_overlap_num / post_overlap_den)
+
+    # Near-contact exposure rates have metric-specific observation support.
+    # Reconstruct them from explicit counts so a rare missing geometry/TTC
+    # sample cannot be misweighted by the scene's full rollout length.
+    for rate_name, count_name, observed_name in (
+        ("near_contact_exposure_rate", "near_contact_exposure_count", "clearance_exposure_observed_count"),
+        ("near_zero_clearance_exposure_rate", "near_zero_clearance_exposure_count", "clearance_exposure_observed_count"),
+        ("contact_exposure_rate", "near_zero_clearance_exposure_count", "clearance_exposure_observed_count"),
+        ("critical_ttc_exposure_rate", "critical_ttc_exposure_count", "ttc_exposure_observed_count"),
+    ):
+        numerator = sum(
+            float((sc.get("metric_summary", {}) or {}).get(count_name, 0.0) or 0.0)
+            for sc in scene_results
+        )
+        denominator = sum(
+            float((sc.get("metric_summary", {}) or {}).get(observed_name, 0.0) or 0.0)
+            for sc in scene_results
+        )
+        if denominator > 0.0:
+            wm[rate_name] = float(numerator / denominator)
+
     agg["minimum_clearance_m"] = wm.get("min_clearance_m_min")
     agg["minimum_ttc_s"] = wm.get("ttc_s_min")
     # Distribution across scenes is the publication-level unit; do not average

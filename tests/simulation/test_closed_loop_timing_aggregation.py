@@ -110,3 +110,44 @@ def test_steady_state_latency_samples_are_aggregated() -> None:
     assert steady["num_samples"] == 3
     assert abs(steady["mean"] - 0.20) < 1e-12
     assert out["timing"]["publication_latency_requires_single_job_per_gpu"] is True
+
+
+def test_near_exposure_rate_uses_metric_specific_observed_denominator() -> None:
+    scenes = [
+        {
+            "num_decisions": 10, "num_metric_steps": 10, "label_mode": "selected",
+            "timing": {"wall_s": 1.0, "totals_s": {}},
+            "metric_summary": {
+                "near_contact_exposure_rate": 1.0,
+                "near_contact_exposure_count": 1.0,
+                "near_zero_clearance_exposure_rate": 1.0,
+                "near_zero_clearance_exposure_count": 1.0,
+                "critical_ttc_exposure_rate": 1.0,
+                "critical_ttc_exposure_count": 1.0,
+                "clearance_exposure_observed_count": 1.0,
+                "ttc_exposure_observed_count": 1.0,
+            },
+            "macro_counts": {}, "selection_reason_counts": {},
+        },
+        {
+            "num_decisions": 100, "num_metric_steps": 100, "label_mode": "selected",
+            "timing": {"wall_s": 1.0, "totals_s": {}},
+            "metric_summary": {
+                "near_contact_exposure_rate": 0.0,
+                "near_contact_exposure_count": 0.0,
+                "near_zero_clearance_exposure_rate": 0.0,
+                "near_zero_clearance_exposure_count": 0.0,
+                "critical_ttc_exposure_rate": 0.0,
+                "critical_ttc_exposure_count": 0.0,
+                "clearance_exposure_observed_count": 9.0,
+                "ttc_exposure_observed_count": 4.0,
+            },
+            "macro_counts": {}, "selection_reason_counts": {},
+        },
+    ]
+    out = _aggregate_scene_results(scenes, "marc_lite", "test")
+    wm = out["waymax_metrics"]
+    assert abs(wm["near_contact_exposure_rate"] - 0.1) < 1e-12
+    assert abs(wm["near_zero_clearance_exposure_rate"] - 0.1) < 1e-12
+    assert abs(wm["contact_exposure_rate"] - 0.1) < 1e-12
+    assert abs(wm["critical_ttc_exposure_rate"] - 0.2) < 1e-12

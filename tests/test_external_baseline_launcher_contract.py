@@ -82,3 +82,30 @@ def test_nonlearning_launchers_support_registration_reuse() -> None:
         text = (ROOT / rel).read_text()
         assert "check_external_nonlearning_registration.py" in text
         assert "FORCE_REREGISTER" in text
+
+
+def test_safe_and_near_use_per_baseline_train_test_pipeline_with_dynamic_refill() -> None:
+    for rel in ("scripts/run_external_baselines_safe.sh", "scripts/run_external_baselines_near.sh"):
+        text = (ROOT / rel).read_text()
+        assert ': "${USE_DYNAMIC_SCHEDULER:=true}"' in text
+        assert "run_baseline_pipeline()" in text
+        assert 'prepare_or_offline_method "$spec" "$gpu"' in text
+        assert 'run_closed_loop_method "$spec" "$gpu"' in text
+        assert 'run_queue run_baseline_pipeline "${PIPELINE_SPECS[@]}"' in text
+        # There must not be separate all-method prepare and closed-loop queues,
+        # otherwise the train/test phase barrier returns.
+        assert 'run_queue prepare_or_offline_method "${SPECS[@]}"' not in text
+
+
+def test_near_offline_evaluator_treats_flow_and_planr1_as_pure_learned() -> None:
+    text = (ROOT / "src/ocrap/external_baselines/evaluate.py").read_text()
+    for name in ('"flow_planner"', '"flowplanner"', '"plan_r1"', '"planr1"'):
+        assert text.count(name) >= 2
+
+
+def test_all_regime_launcher_inherits_six_slot_dynamic_defaults() -> None:
+    text = (ROOT / "scripts/run_external_baselines_all.sh").read_text()
+    assert ': "${USE_DYNAMIC_SCHEDULER:=true}"' in text
+    assert ': "${JOBS_PER_GPU:=3}"' in text
+    assert ': "${MAX_PARALLEL:=6}"' in text
+    assert 'USE_DYNAMIC_SCHEDULER="$USE_DYNAMIC_SCHEDULER"' in text
