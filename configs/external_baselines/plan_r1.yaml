@@ -4,13 +4,13 @@ external_baselines:
   max_candidates: 24
   supervision_target: logged_nominal
   allow_teacher_supervision: false
-  implementation: plan_r1_womd_token_vdgrpo_port_v60
+  implementation: plan_r1_source_core_womd_adapter_v62
   model:
     arch: plan_r1
-    implementation: plan_r1_womd_token_vdgrpo_port_v60
+    implementation: plan_r1_source_core_womd_adapter_v62
     max_candidates: 24
     d_model: 128
-    num_layers: 4
+    num_layers: 6
     num_heads: 8
     dropout: 0.10
     scene_layers: 2
@@ -23,6 +23,7 @@ external_baselines:
     token_interval: 5
     num_tokens: 1024
     token_codebook: assets/external_baselines/planr1_tokens_1024.pt
+    pretrain_epochs: 32
   plan_r1:
     beta: 0.1
     scaling_factor: 0.1
@@ -36,12 +37,11 @@ external_baselines:
     distributed: false
     batch_size: 12
     num_workers: 4
-    epochs: 28
+    epochs: 37
     lr: 0.0003
+    finetune_lr: 0.000004
     weight_decay: 0.0001
-    scheduler: warmup_cosine
-    warmup_epochs: 4
-    min_lr: 0.00001
+    scheduler: none
     amp: true
     amp_dtype: auto
     fused_optimizer: true
@@ -51,7 +51,7 @@ external_baselines:
     persistent_workers: true
     prefetch_factor: 2
   loss_weights:
-    policy: 0.20
+    policy: 0.0
     planr1_native: 1.0
     diffusion_native: 0.0
     flow_native: 0.0

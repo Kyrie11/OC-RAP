@@ -4,24 +4,24 @@ external_baselines:
   max_candidates: 24
   supervision_target: logged_nominal
   allow_teacher_supervision: false
-  implementation: source_backed_topology_planning_adapter_v60
+  implementation: betop_source_core_topology_adapter_v62
   model:
     arch: betopnet
-    implementation: source_backed_topology_planning_adapter_v60
+    implementation: betop_source_core_topology_adapter_v62
     max_candidates: 24
-    d_model: 192
+    d_model: 128
     num_layers: 4
     num_heads: 8
     dropout: 0.10
-    num_topology_agents: 16
+    num_topology_agents: 32
     actor_topology_feature_dim: 16
     num_topology_map: 64
     map_topology_feature_dim: 14
-    num_topo: 24
+    num_topo: 32
     future_len: 20
-    history_len: 11
-    source_max_agents: 16
-    source_map_polygons: 64
+    history_len: 21
+    source_max_agents: 32
+    source_map_polygons: 256
     source_map_points: 20
     source_centerline_points: 120
     topology_dt: 0.1
@@ -33,11 +33,11 @@ external_baselines:
     distributed: false
     batch_size: 20
     num_workers: 4
-    epochs: 30
+    epochs: 25
     lr: 0.0001
     weight_decay: 0.01
     scheduler: multistep
-    milestones: [22, 24, 26, 28]
+    milestones: [22, 24]
     scheduler_gamma: 0.5
     amp: true
     amp_dtype: auto
@@ -50,7 +50,7 @@ external_baselines:
     find_unused_parameters: auto
   loss_weights:
     policy: 1.0
-    topology: 10.0
+    topology: 50.0
     topology_topk_ratio: 0.25
     diffusion_native: 0.0
     flow_native: 0.0

@@ -1,0 +1,570 @@
+diff -ruN /mnt/data/work_planr1_betop/OC-RAP-original/configs/external_baselines/betopnet.yaml /mnt/data/work_planr1_betop/OC-RAP/configs/external_baselines/betopnet.yaml
+--- /mnt/data/work_planr1_betop/OC-RAP-original/configs/external_baselines/betopnet.yaml	2026-09-14 02:30:46.864808973 +0000
++++ /mnt/data/work_planr1_betop/OC-RAP/configs/external_baselines/betopnet.yaml	2026-09-14 02:28:17.507338248 +0000
+@@ -4,24 +4,24 @@
+   max_candidates: 24
+   supervision_target: logged_nominal
+   allow_teacher_supervision: false
+-  implementation: source_backed_topology_planning_adapter_v60
++  implementation: betop_source_core_topology_adapter_v62
+   model:
+     arch: betopnet
+-    implementation: source_backed_topology_planning_adapter_v60
++    implementation: betop_source_core_topology_adapter_v62
+     max_candidates: 24
+-    d_model: 192
++    d_model: 128
+     num_layers: 4
+     num_heads: 8
+     dropout: 0.10
+-    num_topology_agents: 16
++    num_topology_agents: 32
+     actor_topology_feature_dim: 16
+     num_topology_map: 64
+     map_topology_feature_dim: 14
+-    num_topo: 24
++    num_topo: 32
+     future_len: 20
+-    history_len: 11
+-    source_max_agents: 16
+-    source_map_polygons: 64
++    history_len: 21
++    source_max_agents: 32
++    source_map_polygons: 256
+     source_map_points: 20
+     source_centerline_points: 120
+     topology_dt: 0.1
+@@ -33,11 +33,11 @@
+     distributed: false
+     batch_size: 20
+     num_workers: 4
+-    epochs: 30
++    epochs: 25
+     lr: 0.0001
+     weight_decay: 0.01
+     scheduler: multistep
+-    milestones: [22, 24, 26, 28]
++    milestones: [22, 24]
+     scheduler_gamma: 0.5
+     amp: true
+     amp_dtype: auto
+@@ -50,7 +50,7 @@
+     find_unused_parameters: auto
+   loss_weights:
+     policy: 1.0
+-    topology: 10.0
++    topology: 50.0
+     topology_topk_ratio: 0.25
+     diffusion_native: 0.0
+     flow_native: 0.0
+diff -ruN /mnt/data/work_planr1_betop/OC-RAP-original/configs/external_baselines/plan_r1.yaml /mnt/data/work_planr1_betop/OC-RAP/configs/external_baselines/plan_r1.yaml
+--- /mnt/data/work_planr1_betop/OC-RAP-original/configs/external_baselines/plan_r1.yaml	2026-09-14 02:30:46.866107232 +0000
++++ /mnt/data/work_planr1_betop/OC-RAP/configs/external_baselines/plan_r1.yaml	2026-09-14 02:25:47.176526997 +0000
+@@ -4,13 +4,13 @@
+   max_candidates: 24
+   supervision_target: logged_nominal
+   allow_teacher_supervision: false
+-  implementation: plan_r1_womd_token_vdgrpo_port_v60
++  implementation: plan_r1_source_core_womd_adapter_v62
+   model:
+     arch: plan_r1
+-    implementation: plan_r1_womd_token_vdgrpo_port_v60
++    implementation: plan_r1_source_core_womd_adapter_v62
+     max_candidates: 24
+     d_model: 128
+-    num_layers: 4
++    num_layers: 6
+     num_heads: 8
+     dropout: 0.10
+     scene_layers: 2
+@@ -23,6 +23,7 @@
+     token_interval: 5
+     num_tokens: 1024
+     token_codebook: assets/external_baselines/planr1_tokens_1024.pt
++    pretrain_epochs: 32
+   plan_r1:
+     beta: 0.1
+     scaling_factor: 0.1
+@@ -36,12 +37,11 @@
+     distributed: false
+     batch_size: 12
+     num_workers: 4
+-    epochs: 28
++    epochs: 37
+     lr: 0.0003
++    finetune_lr: 0.000004
+     weight_decay: 0.0001
+-    scheduler: warmup_cosine
+-    warmup_epochs: 4
+-    min_lr: 0.00001
++    scheduler: none
+     amp: true
+     amp_dtype: auto
+     fused_optimizer: true
+@@ -51,7 +51,7 @@
+     persistent_workers: true
+     prefetch_factor: 2
+   loss_weights:
+-    policy: 0.20
++    policy: 0.0
+     planr1_native: 1.0
+     diffusion_native: 0.0
+     flow_native: 0.0
+diff -ruN /mnt/data/work_planr1_betop/OC-RAP-original/scripts/run_external_baselines_near.sh /mnt/data/work_planr1_betop/OC-RAP/scripts/run_external_baselines_near.sh
+--- /mnt/data/work_planr1_betop/OC-RAP-original/scripts/run_external_baselines_near.sh	2026-09-14 02:30:46.868609049 +0000
++++ /mnt/data/work_planr1_betop/OC-RAP/scripts/run_external_baselines_near.sh	2026-09-14 02:28:04.458083952 +0000
+@@ -135,8 +135,8 @@
+ if runtime_bool_true "$RUN_SUPPLEMENTARY_NEAR"; then
+   SPECS+=(
+     "flow_planner|configs/external_baselines/flow_planner.yaml|learned|$CHECKPOINT_ROOT/flow_planner/best.pt|flow_planner_womd_lattice_port_v61"
+-    "plan_r1|configs/external_baselines/plan_r1.yaml|learned|$CHECKPOINT_ROOT/plan_r1/best.pt|plan_r1_womd_token_vdgrpo_port_v60"
+-    "betopnet|configs/external_baselines/betopnet.yaml|learned|$CHECKPOINT_ROOT/betopnet/best.pt|source_backed_topology_planning_adapter_v60"
++    "plan_r1|configs/external_baselines/plan_r1.yaml|learned|$CHECKPOINT_ROOT/plan_r1/best.pt|plan_r1_source_core_womd_adapter_v62"
++    "betopnet|configs/external_baselines/betopnet.yaml|learned|$CHECKPOINT_ROOT/betopnet/best.pt|betop_source_core_topology_adapter_v62"
+   )
+ fi
+ ALL_METHODS=()
+diff -ruN /mnt/data/work_planr1_betop/OC-RAP-original/src/ocrap/external_baselines/generative_ports.py /mnt/data/work_planr1_betop/OC-RAP/src/ocrap/external_baselines/generative_ports.py
+--- /mnt/data/work_planr1_betop/OC-RAP-original/src/ocrap/external_baselines/generative_ports.py	2026-09-14 02:30:46.887739087 +0000
++++ /mnt/data/work_planr1_betop/OC-RAP/src/ocrap/external_baselines/generative_ports.py	2026-09-14 02:29:17.772556206 +0000
+@@ -794,23 +794,32 @@
+ 
+     def __init__(self, input_dim: int, max_candidates: int = 24, d_model: int = 128, num_layers: int = 4,
+                  num_heads: int = 8, dropout: float = 0.1, future_len: int = 20, scene_layers: int = 2,
+-                 token_interval: int = 5, num_tokens: int = 1024, token_codebook: str | None = None) -> None:
++                 token_interval: int = 5, num_tokens: int = 1024, token_codebook: str | None = None,
++                 pretrain_epochs: int = 32) -> None:
+         super().__init__()
+         self.max_candidates = int(max_candidates)
+         self.d_model = int(d_model)
+         self.future_len = int(future_len)
+         self.token_interval = max(1, int(token_interval))
+         self.num_tokens = int(num_tokens)
++        self.pretrain_epochs = max(0, int(pretrain_epochs))
++        self.training_stage = "pretrain" if self.pretrain_epochs > 0 else "plan"
++        self._planner_initialized = False
+         codebook = self._load_codebook(token_codebook, self.num_tokens)
+         self.register_buffer("vehicle_codebook", codebook, persistent=True)
+-        self.scene = CompactSceneEncoder(d_model, num_heads, scene_layers, dropout)
+-        self.token_embedding = nn.Embedding(self.num_tokens + 1, d_model)  # + BOS
+-        self.pos = nn.Parameter(torch.randn(1, max(4, math.ceil(future_len / self.token_interval) + 1), d_model) * 0.02)
++        self.register_buffer("vehicle_codebook_corners", self._token_corners(codebook), persistent=False)
++        self.reference_scene = CompactSceneEncoder(d_model, num_heads, scene_layers, dropout)
++        self.plan_scene = CompactSceneEncoder(d_model, num_heads, scene_layers, dropout)
++        self.reference_token_embedding = nn.Embedding(self.num_tokens + 1, d_model)
++        self.plan_token_embedding = nn.Embedding(self.num_tokens + 1, d_model)
++        max_steps = max(4, math.ceil(future_len / self.token_interval) + 1)
++        self.reference_pos = nn.Parameter(torch.randn(1, max_steps, d_model) * 0.02)
++        self.plan_pos = nn.Parameter(torch.randn(1, max_steps, d_model) * 0.02)
+         self.reference_transformer = _make_encoder(d_model, num_heads, num_layers, dropout)
+         self.plan_transformer = _make_encoder(d_model, num_heads, num_layers, dropout)
+-        self.reference_head = nn.Linear(d_model, self.num_tokens)
+-        self.plan_head = nn.Linear(d_model, self.num_tokens)
+-        self.candidate_residual = _CandidatePrior(input_dim, d_model, dropout)
++        head = lambda: nn.Sequential(nn.Linear(d_model, d_model), nn.LayerNorm(d_model), nn.ReLU(inplace=True), nn.Linear(d_model, self.num_tokens))
++        self.reference_head = head()
++        self.plan_head = head()
+         self.scalar_heads = _ScalarHeads(input_dim, d_model)
+ 
+     @staticmethod
+@@ -835,61 +844,124 @@
+         heading = ((k * 17) % num_tokens) / max(num_tokens - 1, 1) * 2.0 * math.pi - math.pi
+         return torch.stack([radius * angle.cos(), radius * angle.sin(), heading], dim=-1)
+ 
++    @staticmethod
++    def _token_corners(codebook: torch.Tensor) -> torch.Tensor:
++        # Exact default geometry used by the released Plan-R1
++        # compute_average_corner_distance helper: [front,rear,left,right]=1,
++        # where process_data.compute_corner_positions divides each extent by 2.
++        p = codebook[:, :2]
++        h = codebook[:, 2]
++        f = 0.5 * torch.stack([h.cos(), h.sin()], dim=-1)
++        l = 0.5 * torch.stack([-h.sin(), h.cos()], dim=-1)
++        return torch.stack([p + f + l, p + f - l, p - f - l, p - f + l], dim=-2)
++
++    @staticmethod
++    def _point_corners(position: torch.Tensor, heading: torch.Tensor) -> torch.Tensor:
++        f = 0.5 * torch.stack([heading.cos(), heading.sin()], dim=-1)
++        l = 0.5 * torch.stack([-heading.sin(), heading.cos()], dim=-1)
++        return torch.stack([position + f + l, position + f - l, position - f - l, position - f + l], dim=-2)
++
++    @staticmethod
++    def _wrap_angle(a: torch.Tensor) -> torch.Tensor:
++        return torch.atan2(torch.sin(a), torch.cos(a))
++
+     def _tokenize(self, prefix_traj: torch.Tensor, prefix_valid: torch.Tensor | None) -> tuple[torch.Tensor, torch.Tensor]:
++        """Tokenize with the released Plan-R1 TokenBuilder semantics.
++
++        The source tokenizer is iterative: each target displacement is measured
++        from the previously *reconstructed* token pose, then the closest codebook
++        entry is selected by average corresponding-corner distance.  The old port
++        measured from the previous observed waypoint and used an ad-hoc xy/yaw
++        quadratic distance, which changes the token sequence.
++        """
+         xy = prefix_traj.float()
+         B, N, T, _ = xy.shape
+         valid = prefix_valid.bool() if prefix_valid is not None else torch.ones(B, N, T, dtype=torch.bool, device=xy.device)
+-        # Heading at every prefix step.
+-        origin = torch.zeros_like(xy[..., :1, :])
+-        prev = torch.cat([origin, xy[..., :-1, :]], dim=-2)
+-        d = xy - prev
+-        yaw = torch.atan2(d[..., 1], torch.where(d.square().sum(-1) > 1e-8, d[..., 0], torch.ones_like(d[..., 0])))
+-        indices = list(range(self.token_interval - 1, T, self.token_interval))
+-        if not indices or indices[-1] != T - 1:
+-            indices.append(T - 1)
+-        pos_list = [torch.zeros(B, N, 2, device=xy.device, dtype=xy.dtype)]
+-        yaw_list = [torch.zeros(B, N, device=xy.device, dtype=xy.dtype)]
+-        v_list = [torch.ones(B, N, device=xy.device, dtype=torch.bool)]
+-        for idx in indices:
+-            pos_list.append(xy[..., idx, :])
+-            yaw_list.append(yaw[..., idx])
+-            v_list.append(valid[..., idx])
+-        pos = torch.stack(pos_list, dim=-2)
+-        ang = torch.stack(yaw_list, dim=-1)
+-        vm = torch.stack(v_list, dim=-1)
+-        p0, p1 = pos[..., :-1, :], pos[..., 1:, :]
+-        a0, a1 = ang[..., :-1], ang[..., 1:]
+-        dp = p1 - p0
+-        ca, sa = a0.cos(), a0.sin()
+-        relx = ca * dp[..., 0] + sa * dp[..., 1]
+-        rely = -sa * dp[..., 0] + ca * dp[..., 1]
+-        dha = torch.atan2(torch.sin(a1 - a0), torch.cos(a1 - a0))
+-        rel = torch.stack([relx, rely, dha], dim=-1)
+-        tok_valid = vm[..., :-1] & vm[..., 1:]
++        # OC-RAP prefixes contain future poses only; add the known current ego
++        # pose (origin, heading 0) before source-style interval subsampling.
++        seq_xy = torch.cat([torch.zeros(B, N, 1, 2, device=xy.device, dtype=xy.dtype), xy], dim=-2)
++        seq_valid = torch.cat([torch.ones(B, N, 1, device=xy.device, dtype=torch.bool), valid], dim=-1)
++        dxy = seq_xy[..., 1:, :] - seq_xy[..., :-1, :]
++        seg_h = torch.atan2(dxy[..., 1], torch.where(dxy.square().sum(-1) > 1e-10, dxy[..., 0], torch.ones_like(dxy[..., 0])))
++        seq_h = torch.cat([torch.zeros(B, N, 1, device=xy.device, dtype=xy.dtype), seg_h], dim=-1)
++        indices = list(range(self.token_interval, T + 1, self.token_interval))
++        if not indices or indices[-1] != T:
++            indices.append(T)
++        tgt_xy, tgt_h, tgt_v = seq_xy[..., indices, :], seq_h[..., indices], seq_valid[..., indices]
++        rec_xy = torch.zeros(B, N, 2, device=xy.device, dtype=xy.dtype)
++        rec_h = torch.zeros(B, N, device=xy.device, dtype=xy.dtype)
++        prev_v = torch.ones(B, N, device=xy.device, dtype=torch.bool)
+         cb = self.vehicle_codebook.to(device=xy.device, dtype=xy.dtype)
+-        # Heading is wrapped before distance; translational terms dominate like
+-        # the source average-corner-distance tokenizer.
+-        diff_xy = rel[..., None, :2] - cb[None, None, None, :, :2]
+-        dh = torch.atan2(
+-            torch.sin(rel[..., None, 2] - cb[None, None, None, :, 2]),
+-            torch.cos(rel[..., None, 2] - cb[None, None, None, :, 2]),
+-        )
+-        dist = diff_xy.square().sum(-1) + 0.5 * dh.square()
+-        tokens = dist.argmin(dim=-1)
+-        return tokens.long(), tok_valid.bool()
++        cb_corners = self.vehicle_codebook_corners.to(device=xy.device, dtype=xy.dtype)
++        toks, masks = [], []
++        for j in range(tgt_xy.shape[-2]):
++            dp = tgt_xy[..., j, :] - rec_xy
++            ca, sa = rec_h.cos(), rec_h.sin()
++            rel_xy = torch.stack([ca * dp[..., 0] + sa * dp[..., 1], -sa * dp[..., 0] + ca * dp[..., 1]], dim=-1)
++            rel_h = self._wrap_angle(tgt_h[..., j] - rec_h)
++            qcorn = self._point_corners(rel_xy, rel_h)
++            dist = torch.linalg.norm(cb_corners[None, None] - qcorn[:, :, None], dim=-1).mean(dim=-1)
++            tok = dist.argmin(dim=-1)
++            vm = tgt_v[..., j] & prev_v
++            toks.append(tok); masks.append(vm)
++            chosen = cb[tok]
++            new_xy = torch.stack([ca * chosen[..., 0] - sa * chosen[..., 1] + rec_xy[..., 0],
++                                  sa * chosen[..., 0] + ca * chosen[..., 1] + rec_xy[..., 1]], dim=-1)
++            new_h = self._wrap_angle(rec_h + chosen[..., 2])
++            rec_xy = torch.where(vm.unsqueeze(-1), new_xy, tgt_xy[..., j, :])
++            rec_h = torch.where(vm, new_h, tgt_h[..., j])
++            prev_v = tgt_v[..., j]
++        return torch.stack(toks, dim=-1).long(), torch.stack(masks, dim=-1).bool()
+ 
+-    def _lm(self, tokens: torch.Tensor, scene: torch.Tensor, transformer: nn.TransformerEncoder, head: nn.Linear) -> torch.Tensor:
++    def _lm(self, tokens: torch.Tensor, scene: torch.Tensor, transformer: nn.TransformerEncoder, head: nn.Linear, *, which: str) -> torch.Tensor:
+         B, N, S = tokens.shape
+         bos = torch.full((B, N, 1), self.num_tokens, dtype=torch.long, device=tokens.device)
+         inp = torch.cat([bos, tokens[..., :-1]], dim=-1)
+-        h = self.token_embedding(inp).reshape(B * N, S, self.d_model)
+-        pos = self.pos[:, :S]
++        emb = self.reference_token_embedding if which == "reference" else self.plan_token_embedding
++        pos = self.reference_pos if which == "reference" else self.plan_pos
++        h = emb(inp).reshape(B * N, S, self.d_model)
+         cond = scene[:, None, :].expand(B, N, -1).reshape(B * N, 1, self.d_model)
+-        h = h + pos + cond
++        h = h + pos[:, :S] + cond
+         causal = torch.triu(torch.ones(S, S, dtype=torch.bool, device=tokens.device), diagonal=1)
+         h = transformer(h, mask=causal)
+         return head(h).reshape(B, N, S, self.num_tokens)
+ 
++    def initialize_planner_from_reference(self) -> None:
++        """Source stage transition: clone predictor into planner and freeze reference."""
++        if self._planner_initialized:
++            return
++        self.plan_scene.load_state_dict(self.reference_scene.state_dict())
++        self.plan_token_embedding.load_state_dict(self.reference_token_embedding.state_dict())
++        self.plan_pos.data.copy_(self.reference_pos.data)
++        self.plan_transformer.load_state_dict(self.reference_transformer.state_dict())
++        self.plan_head.load_state_dict(self.reference_head.state_dict())
++        for mod in (self.reference_scene, self.reference_token_embedding, self.reference_transformer, self.reference_head):
++            mod.eval()
++            for param in mod.parameters():
++                param.requires_grad_(False)
++        self.reference_pos.requires_grad_(False)
++        self._planner_initialized = True
++        self.training_stage = "plan"
++
++    def set_training_epoch(self, epoch: int) -> None:
++        if int(epoch) > self.pretrain_epochs:
++            self.initialize_planner_from_reference()
++        else:
++            self.training_stage = "pretrain"
++
++    def train(self, mode: bool = True):
++        # The reference predictor is frozen after the source-faithful stage-1 ->
++        # stage-2 transition.  nn.Module.train() recurses into children, so
++        # explicitly restore the frozen reference branch to eval mode to keep
++        # dropout deterministic during VD-GRPO/KL alignment.
++        super().train(mode)
++        if self._planner_initialized:
++            self.reference_scene.eval()
++            self.reference_token_embedding.eval()
++            self.reference_transformer.eval()
++            self.reference_head.eval()
++        return self
++
+     @staticmethod
+     def _sequence_score(logits: torch.Tensor, tokens: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
+         lp = F.log_softmax(logits.float(), dim=-1).gather(-1, tokens.unsqueeze(-1)).squeeze(-1)
+@@ -907,17 +979,29 @@
+         if prefix_traj is None:
+             raise ValueError("PlanR1Port requires prefix_traj")
+         tokens, token_valid = self._tokenize(prefix_traj, prefix_valid)
+-        scene = self.scene(
++        scene_kwargs = dict(
+             source_agent_history=source_agent_history, source_agent_valid=source_agent_valid,
+             source_current_state=source_current_state, source_map_points=source_map_points,
+             source_map_point_valid=source_map_point_valid, source_map_meta=source_map_meta,
+             source_map_center=source_map_center, source_map_valid=source_map_valid,
+             source_centerline=source_centerline, batch_size=B, device=x.device,
+         )
+-        ref_token_logits = self._lm(tokens, scene, self.reference_transformer, self.reference_head)
+-        plan_token_logits = self._lm(tokens, scene, self.plan_transformer, self.plan_head)
++        if self.training_stage == "plan":
++            # Stage-2 reference is frozen by definition.  no_grad is an exact
++            # acceleration: its logits enter only the fixed KL/reference term.
++            with torch.no_grad():
++                ref_scene = self.reference_scene(**scene_kwargs)
++                ref_token_logits = self._lm(tokens, ref_scene, self.reference_transformer, self.reference_head, which="reference")
++            plan_scene = self.plan_scene(**scene_kwargs)
++            plan_token_logits = self._lm(tokens, plan_scene, self.plan_transformer, self.plan_head, which="plan")
++        else:
++            ref_scene = self.reference_scene(**scene_kwargs)
++            ref_token_logits = self._lm(tokens, ref_scene, self.reference_transformer, self.reference_head, which="reference")
++            # During stage-1 even validation should not execute an uninitialized
++            # planner branch.  The reference scores are the meaningful LM scores.
++            plan_token_logits = ref_token_logits.detach()
+         ref_score = self._sequence_score(ref_token_logits, tokens, token_valid)
+-        plan_score = self._sequence_score(plan_token_logits, tokens, token_valid) + self.candidate_residual(x)
++        plan_score = self._sequence_score(plan_token_logits, tokens, token_valid)
+         if mask is not None:
+             plan_score = plan_score.masked_fill(~mask.bool(), -1.0e4)
+             ref_score = ref_score.masked_fill(~mask.bool(), -1.0e4)
+@@ -928,6 +1012,7 @@
+             "planr1_plan_token_logits": plan_token_logits,
+             "planr1_token_target": tokens,
+             "planr1_token_valid": token_valid,
++            "planr1_stage_plan": torch.tensor(1.0 if self.training_stage == "plan" else 0.0, device=x.device),
+         }
+         out.update(self.scalar_heads(x))
+         return out
+diff -ruN /mnt/data/work_planr1_betop/OC-RAP-original/src/ocrap/external_baselines/models.py /mnt/data/work_planr1_betop/OC-RAP/src/ocrap/external_baselines/models.py
+--- /mnt/data/work_planr1_betop/OC-RAP-original/src/ocrap/external_baselines/models.py	2026-09-14 02:30:46.887979951 +0000
++++ /mnt/data/work_planr1_betop/OC-RAP/src/ocrap/external_baselines/models.py	2026-09-14 02:28:04.457986014 +0000
+@@ -1217,6 +1217,7 @@
+             token_interval=int(mcfg.get("token_interval", 5)),
+             num_tokens=int(mcfg.get("num_tokens", 1024)),
+             token_codebook=str(mcfg.get("token_codebook", "assets/external_baselines/planr1_tokens_1024.pt")),
++            pretrain_epochs=int(mcfg.get("pretrain_epochs", 32)),
+         )
+     if implementation in {"source_port", "source_port_v54", "sourceported_v54"}:
+         source_common = dict(
+diff -ruN /mnt/data/work_planr1_betop/OC-RAP-original/src/ocrap/external_baselines/provenance.py /mnt/data/work_planr1_betop/OC-RAP/src/ocrap/external_baselines/provenance.py
+--- /mnt/data/work_planr1_betop/OC-RAP-original/src/ocrap/external_baselines/provenance.py	2026-09-14 02:30:46.889309969 +0000
++++ /mnt/data/work_planr1_betop/OC-RAP/src/ocrap/external_baselines/provenance.py	2026-09-14 02:28:31.022542239 +0000
+@@ -265,19 +265,19 @@
+         "plan_r1", ("plan_r1", "planr1"), ("near",),
+         "Plan-R1: Safe and Feasible Trajectory Planning as Language Modeling", 2026,
+         None, None,
+-        "uploaded-source-derived WOMD trajectory-token/VD-GRPO port", "operator-faithful / reward-interface adapted",
+-        ("author 1024-token vehicle motion codebook", "autoregressive next-token trajectory modeling", "separate prediction/reference and planning token models", "group-centering with fixed scaling instead of per-group variance normalization", "GRPO-style policy objective with reference-model KL"),
+-        ("nuPlan graph/map preprocessing is replaced by the common WOMD scene encoder", "rule rewards are represented by the common candidate utility/feasibility/collision-harm supervision during training while deployment remains observation-only", "the 2 s executable prefix yields fewer autoregressive token steps than the native horizon", "not checkpoint-compatible with author weights"),
+-        "Plan-R1 (WOMD token + VD-GRPO port)",
++        "uploaded-source-derived WOMD trajectory-token/VD-GRPO port", "paper/source-core partial reproduction / candidate-rollout adapted",
++        ("author 1024-token vehicle motion codebook", "source-style iterative token reconstruction with average corresponding-corner distance", "6-layer 128-dim 8-head autoregressive token transformer with two-layer token heads", "source two-stage 32-epoch predictor pretraining followed by 5-epoch planner alignment initialized from and KL-regularized against a frozen predictor", "VD-GRPO group centering with fixed c=0.1 and reverse cumulative token advantages without per-group standard-deviation normalization", "source reverse-KL estimator algebra"),
++        ("the released Plan-R1 implementation is nuPlan-native; its factorized agent/map/temporal graph backbone is replaced by the common WOMD scene encoder", "serialized OC-RAP groups intentionally omit surrounding-agent future ground truth, so source all-agent motion-token pretraining and the frozen reactive world-model rollout cannot be reproduced without joining raw WOMD futures", "stage-2 groups therefore use the common executable candidate lattice and common candidate safety/utility reward proxy rather than sampled ego tokens interacting with source rule rewards", "the common 2 s executable prefix yields fewer token decisions than the native 8 s rollout", "not checkpoint-compatible with author weights"),
++        "Plan-R1 (source-core WOMD token/VD-GRPO adapter)",
+     ),
+     BaselineProvenance(
+         "betopnet", ("betopnet", "betop_full"), ("near",),
+         "Reasoning Multi-Agent Behavioral Topology for Interactive Autonomous Driving", 2024,
+         None, "https://github.com/OpenDriveLab/BeTop",
+-        "expanded uploaded-source-backed topology planning adapter", "source-structured / planning-interface adapted",
+-        ("iterative actor/map topology prediction", "top-k topology-guided local attention", "braid-derived observation-side topology supervision", "candidate-independent actor/map scene context", "explicit executable-prefix trajectory confidence", "published short-term contingency repulsive-cost selection"),
+-        ("the uploaded public repository exposes full WOMD prediction code but not a drop-in nuPlan planning pipeline", "native multi-modal future GMM heads are projected to the common executable candidate lattice", "observation-only CV actor futures are used where the planning paper requires short-term interaction futures", "not checkpoint-compatible with author weights"),
+-        "BeTopNet (expanded topology planning adapter)",
++        "expanded uploaded-source-backed topology planning adapter", "paper-core topology partial reproduction / planning-head adapted",
++        ("released BeTop behavior-braid actor topology operator and nearest-lane map-topology operator", "iterative actor/map topology prediction", "K=32 topology-guided local attention", "paper planning dimensions D=128 and four decoder layers", "paper planning topology weight lambda1=50", "published t_b=3 short-term contingency selection with lambda_m=0.5 repulsive-cost term"),
++        ("the uploaded public repository releases the full WOMD *prediction* pipeline but not the nuPlan planning implementation described in the paper, so an exact official planning checkpoint reproduction is not possible from the supplied source", "the paper's six-mode cascaded/branched planning head and K_M=4 joint future recombination are represented at the common executable-candidate interface rather than reproduced checkpoint-for-checkpoint", "serialized OC-RAP samples omit surrounding-agent future ground truth; actor braid labels therefore use observation-only constant-velocity extrapolation and are explicitly a proxy, not source-equivalent future topology", "native 8 s planning is evaluated through the common 2 s executable prefix", "not checkpoint-compatible with author weights"),
++        "BeTopNet (paper-core topology WOMD planning adapter)",
+     ),
+     BaselineProvenance(
+         "severity_minimization", ("severity_minimization", "severity_minimization_planner", "unavoidable_collision_planner", "crash_mitigation_planner", "uc_severity_planner"), ("near",),
+diff -ruN /mnt/data/work_planr1_betop/OC-RAP-original/src/ocrap/external_baselines/train.py /mnt/data/work_planr1_betop/OC-RAP/src/ocrap/external_baselines/train.py
+--- /mnt/data/work_planr1_betop/OC-RAP-original/src/ocrap/external_baselines/train.py	2026-09-14 02:30:46.890572895 +0000
++++ /mnt/data/work_planr1_betop/OC-RAP/src/ocrap/external_baselines/train.py	2026-09-14 02:30:05.095412446 +0000
+@@ -554,6 +554,14 @@
+     else:
+         ref_ce = _zero_loss(out); plan_ce = _zero_loss(out)
+ 
++    # The released Plan-R1 training is explicitly two-stage.  Stage 1 is pure
++    # next-token prediction.  The old OC-RAP port optimized predictor CE and
++    # planner VD-GRPO simultaneously, which is not the source algorithm and
++    # makes the KL reference non-stationary.
++    stage_plan = out.get("planr1_stage_plan")
++    if torch.is_tensor(stage_plan) and float(stage_plan.detach().item()) < 0.5:
++        return ref_ce
++
+     bcfg = cfg.get("external_baselines", {}) if isinstance(cfg.get("external_baselines", {}), dict) else {}
+     pcfg = bcfg.get("plan_r1", {}) if isinstance(bcfg.get("plan_r1", {}), dict) else {}
+     mask = batch["mask"].bool()
+@@ -569,16 +577,26 @@
+     # deliberately do NOT divide by the group reward standard deviation.
+     scaling = max(float(pcfg.get("scaling_factor", 0.1)), 1.0e-6)
+     advantage = ((reward - mean) / scaling).detach()
+-    plan_lp = F.log_softmax(plan_score.float(), dim=-1)
+-    ref_lp = F.log_softmax(ref_score.detach().float(), dim=-1)
++    # Keep the Plan-R1 policy/KL operator at token granularity.  The common
++    # benchmark supplies one scalar candidate reward rather than the source's
++    # per-step reactive-world-model reward, so the centered candidate advantage
++    # is broadcast over that candidate's valid token decisions.  This is still
++    # an explicit reward-interface adaptation, but avoids the old non-source
++    # softmax-across-candidates surrogate.
++    plan_token_lp = F.log_softmax(plan_tok.float(), dim=-1).gather(-1, target.long().unsqueeze(-1)).squeeze(-1)
++    ref_token_lp = F.log_softmax(ref_tok.detach().float(), dim=-1).gather(-1, target.long().unsqueeze(-1)).squeeze(-1)
++    token_mask = valid.bool() & mask.unsqueeze(-1)
++    token_w = token_mask.float()
++    token_adv = advantage.unsqueeze(-1)
+     # Same zero-value / non-zero-gradient ratio trick used by the uploaded code.
+-    ratio = torch.exp(plan_lp - plan_lp.detach())
+-    policy = -((ratio * advantage) * w).sum() / w.sum().clamp_min(1.0)
+-    delta = ref_lp - plan_lp
+-    kl = ((torch.exp(delta) - delta - 1.0) * w).sum() / w.sum().clamp_min(1.0)
++    ratio = torch.exp(plan_token_lp - plan_token_lp.detach())
++    denom = token_w.sum().clamp_min(1.0)
++    policy = -((ratio * token_adv) * token_w).sum() / denom
++    delta = ref_token_lp - plan_token_lp
++    kl = ((torch.exp(delta) - delta - 1.0) * token_w).sum() / denom
+     beta = float(pcfg.get("beta", 0.1))
+-    ce_weight = float(pcfg.get("token_ce_weight", 1.0))
+-    return ce_weight * 0.5 * (ref_ce + plan_ce) + policy + beta * kl
++    # Source stage-2 optimizes policy + KL; next-token CE belongs to stage-1.
++    return policy + beta * kl
+ 
+ 
+ def _loss_dict(out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], cfg: dict[str, Any]) -> dict[str, torch.Tensor]:
+@@ -1027,6 +1045,23 @@
+         history = []
+         t0 = perf_counter()
+         for ep in range(1, epochs + 1):
++            stage_model = model.module if isinstance(model, DDP) else model
++            if hasattr(stage_model, "set_training_epoch"):
++                stage_model.set_training_epoch(ep)
++            # Plan-R1 source schedule: 32-epoch predictor pretraining with cosine
++            # decay from 3e-4, then 5-epoch VD-GRPO fine-tuning at 4e-6.
++            # Keep this explicit instead of stretching one scheduler across both
++            # stages, which changes the released optimization protocol.
++            if baseline_name.lower() in {"plan_r1", "planr1"}:
++                pre_ep = max(1, int(((bcfg.get("model", {}) or {}).get("pretrain_epochs", 32))))
++                if ep <= pre_ep:
++                    base = float(tcfg.get("lr", 3.0e-4))
++                    frac = float(ep - 1) / float(max(pre_ep - 1, 1))
++                    stage_lr = 0.5 * base * (1.0 + math.cos(math.pi * frac))
++                else:
++                    stage_lr = float(tcfg.get("finetune_lr", 4.0e-6))
++                for group in opt.param_groups:
++                    group["lr"] = stage_lr
+             if train_sampler is not None:
+                 train_sampler.set_epoch(ep)
+             lr_used = float(opt.param_groups[0]["lr"])
+diff -ruN /mnt/data/work_planr1_betop/OC-RAP-original/tests/test_planr1_betop_v62_fidelity.py /mnt/data/work_planr1_betop/OC-RAP/tests/test_planr1_betop_v62_fidelity.py
+--- /mnt/data/work_planr1_betop/OC-RAP-original/tests/test_planr1_betop_v62_fidelity.py	1970-01-01 00:00:00.000000000 +0000
++++ /mnt/data/work_planr1_betop/OC-RAP/tests/test_planr1_betop_v62_fidelity.py	2026-09-14 02:30:31.944705782 +0000
+@@ -0,0 +1,70 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++import torch
++import yaml
++
++from ocrap.external_baselines.generative_ports import PlanR1Port
++
++
++ROOT = Path(__file__).resolve().parents[1]
++
++
++def test_planr1_default_corner_geometry_matches_uploaded_source() -> None:
++    cb = torch.tensor([[0.0, 0.0, 0.0]], dtype=torch.float32)
++    corners = PlanR1Port._token_corners(cb)[0]
++    expected = torch.tensor(
++        [[0.5, 0.5], [0.5, -0.5], [-0.5, -0.5], [-0.5, 0.5]],
++        dtype=torch.float32,
++    )
++    assert torch.allclose(corners, expected)
++
++
++def test_planr1_stage_transition_copies_and_freezes_reference() -> None:
++    model = PlanR1Port(
++        input_dim=8,
++        max_candidates=2,
++        d_model=16,
++        num_layers=1,
++        num_heads=4,
++        dropout=0.1,
++        future_len=10,
++        scene_layers=1,
++        token_interval=5,
++        num_tokens=32,
++        token_codebook=None,
++        pretrain_epochs=1,
++    )
++    model.set_training_epoch(2)
++    assert model.training_stage == "plan"
++    assert model._planner_initialized
++    for a, b in zip(model.reference_transformer.parameters(), model.plan_transformer.parameters()):
++        assert torch.equal(a.detach(), b.detach())
++    assert not any(p.requires_grad for p in model.reference_transformer.parameters())
++    model.train()
++    assert model.plan_transformer.training
++    assert not model.reference_transformer.training
++
++
++def test_v62_configs_preserve_paper_core_hyperparameters() -> None:
++    plan = yaml.safe_load((ROOT / "configs/external_baselines/plan_r1.yaml").read_text())["external_baselines"]
++    assert plan["model"]["num_layers"] == 6
++    assert plan["model"]["d_model"] == 128
++    assert plan["model"]["num_heads"] == 8
++    assert plan["model"]["pretrain_epochs"] == 32
++    assert plan["training"]["epochs"] == 37
++    assert plan["training"]["finetune_lr"] == 4e-6
++    assert plan["plan_r1"]["beta"] == 0.1
++    assert plan["plan_r1"]["scaling_factor"] == 0.1
++
++    betop = yaml.safe_load((ROOT / "configs/external_baselines/betopnet.yaml").read_text())["external_baselines"]
++    assert betop["model"]["d_model"] == 128
++    assert betop["model"]["num_layers"] == 4
++    assert betop["model"]["num_topo"] == 32
++    assert betop["model"]["num_topology_agents"] == 32
++    assert betop["model"]["history_len"] == 21
++    assert betop["training"]["epochs"] == 25
++    assert betop["loss_weights"]["topology"] == 50.0
++    assert betop["policy"]["betop_branch_steps"] == 3
++    assert betop["policy"]["betop_short_term_cost_weight"] == 0.5

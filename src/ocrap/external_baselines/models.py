@@ -1217,6 +1217,7 @@ def build_model_from_cfg(input_dim: int, cfg: dict[str, Any]) -> nn.Module:
             token_interval=int(mcfg.get("token_interval", 5)),
             num_tokens=int(mcfg.get("num_tokens", 1024)),
             token_codebook=str(mcfg.get("token_codebook", "assets/external_baselines/planr1_tokens_1024.pt")),
+            pretrain_epochs=int(mcfg.get("pretrain_epochs", 32)),
         )
     if implementation in {"source_port", "source_port_v54", "sourceported_v54"}:
         source_common = dict(

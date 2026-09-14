@@ -554,6 +554,14 @@ def _planr1_native_loss(out: dict[str, torch.Tensor], batch: dict[str, torch.Ten
     else:
         ref_ce = _zero_loss(out); plan_ce = _zero_loss(out)
 
+    # The released Plan-R1 training is explicitly two-stage.  Stage 1 is pure
+    # next-token prediction.  The old OC-RAP port optimized predictor CE and
+    # planner VD-GRPO simultaneously, which is not the source algorithm and
+    # makes the KL reference non-stationary.
+    stage_plan = out.get("planr1_stage_plan")
+    if torch.is_tensor(stage_plan) and float(stage_plan.detach().item()) < 0.5:
+        return ref_ce
+
     bcfg = cfg.get("external_baselines", {}) if isinstance(cfg.get("external_baselines", {}), dict) else {}
     pcfg = bcfg.get("plan_r1", {}) if isinstance(bcfg.get("plan_r1", {}), dict) else {}
     mask = batch["mask"].bool()
@@ -569,16 +577,26 @@ def _planr1_native_loss(out: dict[str, torch.Tensor], batch: dict[str, torch.Ten
     # deliberately do NOT divide by the group reward standard deviation.
     scaling = max(float(pcfg.get("scaling_factor", 0.1)), 1.0e-6)
     advantage = ((reward - mean) / scaling).detach()
-    plan_lp = F.log_softmax(plan_score.float(), dim=-1)
-    ref_lp = F.log_softmax(ref_score.detach().float(), dim=-1)
+    # Keep the Plan-R1 policy/KL operator at token granularity.  The common
+    # benchmark supplies one scalar candidate reward rather than the source's
+    # per-step reactive-world-model reward, so the centered candidate advantage
+    # is broadcast over that candidate's valid token decisions.  This is still
+    # an explicit reward-interface adaptation, but avoids the old non-source
+    # softmax-across-candidates surrogate.
+    plan_token_lp = F.log_softmax(plan_tok.float(), dim=-1).gather(-1, target.long().unsqueeze(-1)).squeeze(-1)
+    ref_token_lp = F.log_softmax(ref_tok.detach().float(), dim=-1).gather(-1, target.long().unsqueeze(-1)).squeeze(-1)
+    token_mask = valid.bool() & mask.unsqueeze(-1)
+    token_w = token_mask.float()
+    token_adv = advantage.unsqueeze(-1)
     # Same zero-value / non-zero-gradient ratio trick used by the uploaded code.
-    ratio = torch.exp(plan_lp - plan_lp.detach())
-    policy = -((ratio * advantage) * w).sum() / w.sum().clamp_min(1.0)
-    delta = ref_lp - plan_lp
-    kl = ((torch.exp(delta) - delta - 1.0) * w).sum() / w.sum().clamp_min(1.0)
+    ratio = torch.exp(plan_token_lp - plan_token_lp.detach())
+    denom = token_w.sum().clamp_min(1.0)
+    policy = -((ratio * token_adv) * token_w).sum() / denom
+    delta = ref_token_lp - plan_token_lp
+    kl = ((torch.exp(delta) - delta - 1.0) * token_w).sum() / denom
     beta = float(pcfg.get("beta", 0.1))
-    ce_weight = float(pcfg.get("token_ce_weight", 1.0))
-    return ce_weight * 0.5 * (ref_ce + plan_ce) + policy + beta * kl
+    # Source stage-2 optimizes policy + KL; next-token CE belongs to stage-1.
+    return policy + beta * kl
 
 
 def _loss_dict(out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], cfg: dict[str, Any]) -> dict[str, torch.Tensor]:
@@ -1027,6 +1045,23 @@ def train_external_baseline(dataset: str, output: str, cfg: dict[str, Any], *, v
         history = []
         t0 = perf_counter()
         for ep in range(1, epochs + 1):
+            stage_model = model.module if isinstance(model, DDP) else model
+            if hasattr(stage_model, "set_training_epoch"):
+                stage_model.set_training_epoch(ep)
+            # Plan-R1 source schedule: 32-epoch predictor pretraining with cosine
+            # decay from 3e-4, then 5-epoch VD-GRPO fine-tuning at 4e-6.
+            # Keep this explicit instead of stretching one scheduler across both
+            # stages, which changes the released optimization protocol.
+            if baseline_name.lower() in {"plan_r1", "planr1"}:
+                pre_ep = max(1, int(((bcfg.get("model", {}) or {}).get("pretrain_epochs", 32))))
+                if ep <= pre_ep:
+                    base = float(tcfg.get("lr", 3.0e-4))
+                    frac = float(ep - 1) / float(max(pre_ep - 1, 1))
+                    stage_lr = 0.5 * base * (1.0 + math.cos(math.pi * frac))
+                else:
+                    stage_lr = float(tcfg.get("finetune_lr", 4.0e-6))
+                for group in opt.param_groups:
+                    group["lr"] = stage_lr
             if train_sampler is not None:
                 train_sampler.set_epoch(ep)
             lr_used = float(opt.param_groups[0]["lr"])

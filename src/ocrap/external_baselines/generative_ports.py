@@ -794,23 +794,32 @@ class PlanR1Port(nn.Module):
 
     def __init__(self, input_dim: int, max_candidates: int = 24, d_model: int = 128, num_layers: int = 4,
                  num_heads: int = 8, dropout: float = 0.1, future_len: int = 20, scene_layers: int = 2,
-                 token_interval: int = 5, num_tokens: int = 1024, token_codebook: str | None = None) -> None:
+                 token_interval: int = 5, num_tokens: int = 1024, token_codebook: str | None = None,
+                 pretrain_epochs: int = 32) -> None:
         super().__init__()
         self.max_candidates = int(max_candidates)
         self.d_model = int(d_model)
         self.future_len = int(future_len)
         self.token_interval = max(1, int(token_interval))
         self.num_tokens = int(num_tokens)
+        self.pretrain_epochs = max(0, int(pretrain_epochs))
+        self.training_stage = "pretrain" if self.pretrain_epochs > 0 else "plan"
+        self._planner_initialized = False
         codebook = self._load_codebook(token_codebook, self.num_tokens)
         self.register_buffer("vehicle_codebook", codebook, persistent=True)
-        self.scene = CompactSceneEncoder(d_model, num_heads, scene_layers, dropout)
-        self.token_embedding = nn.Embedding(self.num_tokens + 1, d_model)  # + BOS
-        self.pos = nn.Parameter(torch.randn(1, max(4, math.ceil(future_len / self.token_interval) + 1), d_model) * 0.02)
+        self.register_buffer("vehicle_codebook_corners", self._token_corners(codebook), persistent=False)
+        self.reference_scene = CompactSceneEncoder(d_model, num_heads, scene_layers, dropout)
+        self.plan_scene = CompactSceneEncoder(d_model, num_heads, scene_layers, dropout)
+        self.reference_token_embedding = nn.Embedding(self.num_tokens + 1, d_model)
+        self.plan_token_embedding = nn.Embedding(self.num_tokens + 1, d_model)
+        max_steps = max(4, math.ceil(future_len / self.token_interval) + 1)
+        self.reference_pos = nn.Parameter(torch.randn(1, max_steps, d_model) * 0.02)
+        self.plan_pos = nn.Parameter(torch.randn(1, max_steps, d_model) * 0.02)
         self.reference_transformer = _make_encoder(d_model, num_heads, num_layers, dropout)
         self.plan_transformer = _make_encoder(d_model, num_heads, num_layers, dropout)
-        self.reference_head = nn.Linear(d_model, self.num_tokens)
-        self.plan_head = nn.Linear(d_model, self.num_tokens)
-        self.candidate_residual = _CandidatePrior(input_dim, d_model, dropout)
+        head = lambda: nn.Sequential(nn.Linear(d_model, d_model), nn.LayerNorm(d_model), nn.ReLU(inplace=True), nn.Linear(d_model, self.num_tokens))
+        self.reference_head = head()
+        self.plan_head = head()
         self.scalar_heads = _ScalarHeads(input_dim, d_model)
 
     @staticmethod
@@ -835,60 +844,123 @@ class PlanR1Port(nn.Module):
         heading = ((k * 17) % num_tokens) / max(num_tokens - 1, 1) * 2.0 * math.pi - math.pi
         return torch.stack([radius * angle.cos(), radius * angle.sin(), heading], dim=-1)
 
+    @staticmethod
+    def _token_corners(codebook: torch.Tensor) -> torch.Tensor:
+        # Exact default geometry used by the released Plan-R1
+        # compute_average_corner_distance helper: [front,rear,left,right]=1,
+        # where process_data.compute_corner_positions divides each extent by 2.
+        p = codebook[:, :2]
+        h = codebook[:, 2]
+        f = 0.5 * torch.stack([h.cos(), h.sin()], dim=-1)
+        l = 0.5 * torch.stack([-h.sin(), h.cos()], dim=-1)
+        return torch.stack([p + f + l, p + f - l, p - f - l, p - f + l], dim=-2)
+
+    @staticmethod
+    def _point_corners(position: torch.Tensor, heading: torch.Tensor) -> torch.Tensor:
+        f = 0.5 * torch.stack([heading.cos(), heading.sin()], dim=-1)
+        l = 0.5 * torch.stack([-heading.sin(), heading.cos()], dim=-1)
+        return torch.stack([position + f + l, position + f - l, position - f - l, position - f + l], dim=-2)
+
+    @staticmethod
+    def _wrap_angle(a: torch.Tensor) -> torch.Tensor:
+        return torch.atan2(torch.sin(a), torch.cos(a))
+
     def _tokenize(self, prefix_traj: torch.Tensor, prefix_valid: torch.Tensor | None) -> tuple[torch.Tensor, torch.Tensor]:
+        """Tokenize with the released Plan-R1 TokenBuilder semantics.
+
+        The source tokenizer is iterative: each target displacement is measured
+        from the previously *reconstructed* token pose, then the closest codebook
+        entry is selected by average corresponding-corner distance.  The old port
+        measured from the previous observed waypoint and used an ad-hoc xy/yaw
+        quadratic distance, which changes the token sequence.
+        """
         xy = prefix_traj.float()
         B, N, T, _ = xy.shape
         valid = prefix_valid.bool() if prefix_valid is not None else torch.ones(B, N, T, dtype=torch.bool, device=xy.device)
-        # Heading at every prefix step.
-        origin = torch.zeros_like(xy[..., :1, :])
-        prev = torch.cat([origin, xy[..., :-1, :]], dim=-2)
-        d = xy - prev
-        yaw = torch.atan2(d[..., 1], torch.where(d.square().sum(-1) > 1e-8, d[..., 0], torch.ones_like(d[..., 0])))
-        indices = list(range(self.token_interval - 1, T, self.token_interval))
-        if not indices or indices[-1] != T - 1:
-            indices.append(T - 1)
-        pos_list = [torch.zeros(B, N, 2, device=xy.device, dtype=xy.dtype)]
-        yaw_list = [torch.zeros(B, N, device=xy.device, dtype=xy.dtype)]
-        v_list = [torch.ones(B, N, device=xy.device, dtype=torch.bool)]
-        for idx in indices:
-            pos_list.append(xy[..., idx, :])
-            yaw_list.append(yaw[..., idx])
-            v_list.append(valid[..., idx])
-        pos = torch.stack(pos_list, dim=-2)
-        ang = torch.stack(yaw_list, dim=-1)
-        vm = torch.stack(v_list, dim=-1)
-        p0, p1 = pos[..., :-1, :], pos[..., 1:, :]
-        a0, a1 = ang[..., :-1], ang[..., 1:]
-        dp = p1 - p0
-        ca, sa = a0.cos(), a0.sin()
-        relx = ca * dp[..., 0] + sa * dp[..., 1]
-        rely = -sa * dp[..., 0] + ca * dp[..., 1]
-        dha = torch.atan2(torch.sin(a1 - a0), torch.cos(a1 - a0))
-        rel = torch.stack([relx, rely, dha], dim=-1)
-        tok_valid = vm[..., :-1] & vm[..., 1:]
+        # OC-RAP prefixes contain future poses only; add the known current ego
+        # pose (origin, heading 0) before source-style interval subsampling.
+        seq_xy = torch.cat([torch.zeros(B, N, 1, 2, device=xy.device, dtype=xy.dtype), xy], dim=-2)
+        seq_valid = torch.cat([torch.ones(B, N, 1, device=xy.device, dtype=torch.bool), valid], dim=-1)
+        dxy = seq_xy[..., 1:, :] - seq_xy[..., :-1, :]
+        seg_h = torch.atan2(dxy[..., 1], torch.where(dxy.square().sum(-1) > 1e-10, dxy[..., 0], torch.ones_like(dxy[..., 0])))
+        seq_h = torch.cat([torch.zeros(B, N, 1, device=xy.device, dtype=xy.dtype), seg_h], dim=-1)
+        indices = list(range(self.token_interval, T + 1, self.token_interval))
+        if not indices or indices[-1] != T:
+            indices.append(T)
+        tgt_xy, tgt_h, tgt_v = seq_xy[..., indices, :], seq_h[..., indices], seq_valid[..., indices]
+        rec_xy = torch.zeros(B, N, 2, device=xy.device, dtype=xy.dtype)
+        rec_h = torch.zeros(B, N, device=xy.device, dtype=xy.dtype)
+        prev_v = torch.ones(B, N, device=xy.device, dtype=torch.bool)
         cb = self.vehicle_codebook.to(device=xy.device, dtype=xy.dtype)
-        # Heading is wrapped before distance; translational terms dominate like
-        # the source average-corner-distance tokenizer.
-        diff_xy = rel[..., None, :2] - cb[None, None, None, :, :2]
-        dh = torch.atan2(
-            torch.sin(rel[..., None, 2] - cb[None, None, None, :, 2]),
-            torch.cos(rel[..., None, 2] - cb[None, None, None, :, 2]),
-        )
-        dist = diff_xy.square().sum(-1) + 0.5 * dh.square()
-        tokens = dist.argmin(dim=-1)
-        return tokens.long(), tok_valid.bool()
+        cb_corners = self.vehicle_codebook_corners.to(device=xy.device, dtype=xy.dtype)
+        toks, masks = [], []
+        for j in range(tgt_xy.shape[-2]):
+            dp = tgt_xy[..., j, :] - rec_xy
+            ca, sa = rec_h.cos(), rec_h.sin()
+            rel_xy = torch.stack([ca * dp[..., 0] + sa * dp[..., 1], -sa * dp[..., 0] + ca * dp[..., 1]], dim=-1)
+            rel_h = self._wrap_angle(tgt_h[..., j] - rec_h)
+            qcorn = self._point_corners(rel_xy, rel_h)
+            dist = torch.linalg.norm(cb_corners[None, None] - qcorn[:, :, None], dim=-1).mean(dim=-1)
+            tok = dist.argmin(dim=-1)
+            vm = tgt_v[..., j] & prev_v
+            toks.append(tok); masks.append(vm)
+            chosen = cb[tok]
+            new_xy = torch.stack([ca * chosen[..., 0] - sa * chosen[..., 1] + rec_xy[..., 0],
+                                  sa * chosen[..., 0] + ca * chosen[..., 1] + rec_xy[..., 1]], dim=-1)
+            new_h = self._wrap_angle(rec_h + chosen[..., 2])
+            rec_xy = torch.where(vm.unsqueeze(-1), new_xy, tgt_xy[..., j, :])
+            rec_h = torch.where(vm, new_h, tgt_h[..., j])
+            prev_v = tgt_v[..., j]
+        return torch.stack(toks, dim=-1).long(), torch.stack(masks, dim=-1).bool()
 
-    def _lm(self, tokens: torch.Tensor, scene: torch.Tensor, transformer: nn.TransformerEncoder, head: nn.Linear) -> torch.Tensor:
+    def _lm(self, tokens: torch.Tensor, scene: torch.Tensor, transformer: nn.TransformerEncoder, head: nn.Linear, *, which: str) -> torch.Tensor:
         B, N, S = tokens.shape
         bos = torch.full((B, N, 1), self.num_tokens, dtype=torch.long, device=tokens.device)
         inp = torch.cat([bos, tokens[..., :-1]], dim=-1)
-        h = self.token_embedding(inp).reshape(B * N, S, self.d_model)
-        pos = self.pos[:, :S]
+        emb = self.reference_token_embedding if which == "reference" else self.plan_token_embedding
+        pos = self.reference_pos if which == "reference" else self.plan_pos
+        h = emb(inp).reshape(B * N, S, self.d_model)
         cond = scene[:, None, :].expand(B, N, -1).reshape(B * N, 1, self.d_model)
-        h = h + pos + cond
+        h = h + pos[:, :S] + cond
         causal = torch.triu(torch.ones(S, S, dtype=torch.bool, device=tokens.device), diagonal=1)
         h = transformer(h, mask=causal)
         return head(h).reshape(B, N, S, self.num_tokens)
+
+    def initialize_planner_from_reference(self) -> None:
+        """Source stage transition: clone predictor into planner and freeze reference."""
+        if self._planner_initialized:
+            return
+        self.plan_scene.load_state_dict(self.reference_scene.state_dict())
+        self.plan_token_embedding.load_state_dict(self.reference_token_embedding.state_dict())
+        self.plan_pos.data.copy_(self.reference_pos.data)
+        self.plan_transformer.load_state_dict(self.reference_transformer.state_dict())
+        self.plan_head.load_state_dict(self.reference_head.state_dict())
+        for mod in (self.reference_scene, self.reference_token_embedding, self.reference_transformer, self.reference_head):
+            mod.eval()
+            for param in mod.parameters():
+                param.requires_grad_(False)
+        self.reference_pos.requires_grad_(False)
+        self._planner_initialized = True
+        self.training_stage = "plan"
+
+    def set_training_epoch(self, epoch: int) -> None:
+        if int(epoch) > self.pretrain_epochs:
+            self.initialize_planner_from_reference()
+        else:
+            self.training_stage = "pretrain"
+
+    def train(self, mode: bool = True):
+        # The reference predictor is frozen after the source-faithful stage-1 ->
+        # stage-2 transition.  nn.Module.train() recurses into children, so
+        # explicitly restore the frozen reference branch to eval mode to keep
+        # dropout deterministic during VD-GRPO/KL alignment.
+        super().train(mode)
+        if self._planner_initialized:
+            self.reference_scene.eval()
+            self.reference_token_embedding.eval()
+            self.reference_transformer.eval()
+            self.reference_head.eval()
+        return self
 
     @staticmethod
     def _sequence_score(logits: torch.Tensor, tokens: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
@@ -907,17 +979,29 @@ class PlanR1Port(nn.Module):
         if prefix_traj is None:
             raise ValueError("PlanR1Port requires prefix_traj")
         tokens, token_valid = self._tokenize(prefix_traj, prefix_valid)
-        scene = self.scene(
+        scene_kwargs = dict(
             source_agent_history=source_agent_history, source_agent_valid=source_agent_valid,
             source_current_state=source_current_state, source_map_points=source_map_points,
             source_map_point_valid=source_map_point_valid, source_map_meta=source_map_meta,
             source_map_center=source_map_center, source_map_valid=source_map_valid,
             source_centerline=source_centerline, batch_size=B, device=x.device,
         )
-        ref_token_logits = self._lm(tokens, scene, self.reference_transformer, self.reference_head)
-        plan_token_logits = self._lm(tokens, scene, self.plan_transformer, self.plan_head)
+        if self.training_stage == "plan":
+            # Stage-2 reference is frozen by definition.  no_grad is an exact
+            # acceleration: its logits enter only the fixed KL/reference term.
+            with torch.no_grad():
+                ref_scene = self.reference_scene(**scene_kwargs)
+                ref_token_logits = self._lm(tokens, ref_scene, self.reference_transformer, self.reference_head, which="reference")
+            plan_scene = self.plan_scene(**scene_kwargs)
+            plan_token_logits = self._lm(tokens, plan_scene, self.plan_transformer, self.plan_head, which="plan")
+        else:
+            ref_scene = self.reference_scene(**scene_kwargs)
+            ref_token_logits = self._lm(tokens, ref_scene, self.reference_transformer, self.reference_head, which="reference")
+            # During stage-1 even validation should not execute an uninitialized
+            # planner branch.  The reference scores are the meaningful LM scores.
+            plan_token_logits = ref_token_logits.detach()
         ref_score = self._sequence_score(ref_token_logits, tokens, token_valid)
-        plan_score = self._sequence_score(plan_token_logits, tokens, token_valid) + self.candidate_residual(x)
+        plan_score = self._sequence_score(plan_token_logits, tokens, token_valid)
         if mask is not None:
             plan_score = plan_score.masked_fill(~mask.bool(), -1.0e4)
             ref_score = ref_score.masked_fill(~mask.bool(), -1.0e4)
@@ -928,6 +1012,7 @@ class PlanR1Port(nn.Module):
             "planr1_plan_token_logits": plan_token_logits,
             "planr1_token_target": tokens,
             "planr1_token_valid": token_valid,
+            "planr1_stage_plan": torch.tensor(1.0 if self.training_stage == "plan" else 0.0, device=x.device),
         }
         out.update(self.scalar_heads(x))
         return out

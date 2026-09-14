@@ -135,8 +135,8 @@ for _m in "${METHODS[@]}"; do SPECS+=("${_m}|$CONFIG|nonlearning||"); done
 if runtime_bool_true "$RUN_SUPPLEMENTARY_NEAR"; then
   SPECS+=(
     "flow_planner|configs/external_baselines/flow_planner.yaml|learned|$CHECKPOINT_ROOT/flow_planner/best.pt|flow_planner_womd_lattice_port_v61"
-    "plan_r1|configs/external_baselines/plan_r1.yaml|learned|$CHECKPOINT_ROOT/plan_r1/best.pt|plan_r1_womd_token_vdgrpo_port_v60"
-    "betopnet|configs/external_baselines/betopnet.yaml|learned|$CHECKPOINT_ROOT/betopnet/best.pt|source_backed_topology_planning_adapter_v60"
+    "plan_r1|configs/external_baselines/plan_r1.yaml|learned|$CHECKPOINT_ROOT/plan_r1/best.pt|plan_r1_source_core_womd_adapter_v62"
+    "betopnet|configs/external_baselines/betopnet.yaml|learned|$CHECKPOINT_ROOT/betopnet/best.pt|betop_source_core_topology_adapter_v62"
   )
 fi
 ALL_METHODS=()
