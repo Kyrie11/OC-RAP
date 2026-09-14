@@ -1,10 +1,8 @@
 # OC-RAP — cleaned audit/deployment workspace
 
-**Current engineering build: `v48.124.9-OC-FMSA-RUNTIME-SNAPSHOT-ENGFIX`.** The scientific algorithm remains `v48.124-OC-FMSA`; the frozen planner, checkpoints, calibration, thresholds, candidate/recovery libraries, and Waymax dynamics are unchanged. V48.124.8 repairs only the Contact evaluation protocol: it forms the post-contact cohort before treatment using an exact-$a_0$ Waymax prelude, freezes one observed-overlap anchor per scene, and requires nominal/balanced/precision to reproduce the identical simulator-state fingerprint before policy action.
+**Current engineering build: `v48.124.10-OC-FMSA-NEAR-RIFA-SYSTEM-AXIS-AUDIT`.** The scientific model/recovery mechanism remains the frozen `v48.124-OC-FMSA`. V48.124.9 closed Reliability + Scientific Attribution and left exactly one failed deployed-system gate: Near. V48.124.10 does not train or recalibrate anything; it diagnoses that Near failure by completing frozen relative role-isolation only after the historical absolute-admission selector would already intervene.
 
-The change closes the V48.124.7 construct-validity blocker without reopening mechanism search. Counterfactual Contact surrogates remain useful for offline structure, but post-contact causal endpoints are adjudicated only on the new pre-treatment anchored cohort.
-
-V48.124.9 additionally makes the long audit execution-immutable: the launcher copies the current source into a per-run snapshot under `BASE_OUT` and every scientific phase runs from that snapshot. Editing the original checkout after launch (for example while preparing external baselines) no longer changes full-population versus sentinel semantics. A source mismatch in an old work directory triggers archival and fresh reconstruction rather than mixed-code resume.
+The stable command is unchanged and now runs this licensed Near-only diagnostic by default. It replays only the 35 V48.124.9 Near scenes that actually contained an intervention, while proving the other 215 zero-intervention scenes remain action/state-identical. GPU0 owns balanced and GPU1 owns precision; each GPU runs the sign-only arm followed by the nested-evidence arm. A promoted selector must still pass a fresh full 250-scene Near confirmation before deployed-Main freeze or paper Main-table use. Set `OCRAP_CONSTRAINT_AUDIT_MODE=full` only to reproduce the historical V48.124.9 full five-gate audit.
 
 ## What is active
 
@@ -34,4 +32,4 @@ See `CLEAN_COMMANDS.md` for operator commands.
 
 ## V48.124 fixed-Main adjudication note
 
-The current engineering build is `v48.124.9-OC-FMSA-RUNTIME-SNAPSHOT-ENGFIX`; the scientific algorithm remains `v48.124-OC-FMSA`. V48.124.9 preserves the V48.124.8 Contact cohort protocol and fixes only executed-runtime provenance: completed scientific evidence is pinned to its run-time contract rather than to a later mutable worktree.
+The historical full-audit engineering build is `v48.124.9-OC-FMSA-RUNTIME-SNAPSHOT-ENGFIX`; the current diagnostic engineering layer is `v48.124.10-OC-FMSA-NEAR-RIFA-SYSTEM-AXIS-AUDIT`. The scientific model/recovery mechanism remains `v48.124-OC-FMSA`.

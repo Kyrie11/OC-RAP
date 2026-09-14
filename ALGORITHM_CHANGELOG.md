@@ -1,3 +1,20 @@
+# V48.124.10 — Near RIFA deployed-system-axis diagnostic (no training / no recovery-mechanism search)
+
+Scientific Main remains **unpromoted** pending the diagnostic and a fresh full-population confirmation. V48.124.9 is engineering-valid and scientifically attributable, but its preregistered decision is `FIXED_MAIN_NEAR_VALIDITY_STOP`. The recovery-set mechanism family remains frozen.
+
+- The V48.124.9 Near STOP is concentrated on the 35/250 scenes where the frozen Main intervenes (147/10000 decisions). The uploaded results show statistically supported worsening of clearance-deficit AUC and Near exposure, plus bounded-NUP and route-progression degradation.
+- A deployment-conformance gap remains after the earlier absolute-admission repair: the historical `lcb_constrained` path enforces absolute admission but does not consume the frozen Stage-I candidate-vs-nominal recovery value/rank/opportunity/harm evidence described by RIFA.
+- Two **diagnostic-only** selector names are added. The default `lcb_constrained` path is unchanged:
+  - `lcb_constrained_relative_delta`: after all historical nominal short-circuits, restrict already absolute-admitted non-nominal candidates to positive frozen candidate-vs-nominal recovery advantage and rerank by that advantage.
+  - `lcb_constrained_nested_evidence`: additionally applies frozen top-K=5 proposal rank and the already-defined Stage-I policy-metric evidence boundaries (`opportunity >= 0.65`, `harm <= 0.30`).
+- Neither diagnostic selector can rescue an absolute-rejected candidate, create a new learned state, change checkpoints/calibration, change candidate/recovery libraries, or tune thresholds on Near outcomes.
+- Because both diagnostics preserve every historical nominal short-circuit and only restrict/rerank the downstream intervention set, any V48.124.9 Near scene with zero intervention remains exactly nominal by induction. Internal diagnosis therefore reruns only the shared 35-scene intervention cohort and exactly reconstructs the 250-scene population. This reconstruction is explicitly forbidden as a paper main result.
+- Promotion requires the unchanged V48.124 Near primary gate in both robustness variants with a common supported safety benefit, plus zero-margin non-harm on bounded NUP, route progression, and Near exposure duration. A promoted selector must then be rerun **fresh on all 250 Near scenes** before Contact adjudication resumes.
+- If both diagnostic arms STOP, the next branch remains a 35-scene intervention/candidate-availability audit under the frozen mechanism family; no recovery carrier/source/capacity/horizon/threshold search is licensed.
+- The unchanged stable command `GPU0=0 GPU1=1 BASE_OUT=... bash scripts/run_constraint_native_orientation_audit.sh` now dispatches to this licensed Near diagnostic by default; `OCRAP_CONSTRAINT_AUDIT_MODE=full` preserves the complete historical V48.124.9 audit path in the same launcher.
+- The diagnostic itself runs from a fresh immutable execution snapshot, verifies the canonical V48.124.9 results ZIP byte-for-byte against its embedded manifest when available, and packages a new SHA-manifested Near-system-axis result ZIP.
+- Performance orchestration is execution-preserving: one shared target-aware WOMD preflight, one GPU per robustness variant, two arms sequential per GPU, a per-variant shared JAX compilation cache, reduced logging/partial-write frequency, and no candidate/horizon/metric approximation.
+
 # V48.124.9 — immutable execution-snapshot provenance fix (no algorithm change)
 
 - Scientific version remains `v48.124-OC-FMSA`; engineering version is `v48.124.9-OC-FMSA-RUNTIME-SNAPSHOT-ENGFIX`.

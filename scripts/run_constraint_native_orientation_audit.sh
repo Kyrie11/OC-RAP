@@ -6,6 +6,20 @@
 # non-interference, Near closed-loop validity, and Contact recovery validity.
 set -Eeuo pipefail
 
+# V48.124.9 is attribution-ready and its only failed deployed-system gate is
+# Near. Preserve this stable command name, but make the licensed Near-only
+# system-axis diagnostic the default successor. The complete historical fixed-
+# Main audit remains in this same file for regression/provenance compatibility
+# and can be selected explicitly with OCRAP_CONSTRAINT_AUDIT_MODE=full.
+OCRAP_CONSTRAINT_AUDIT_MODE="${OCRAP_CONSTRAINT_AUDIT_MODE:-near_axis}"
+if [[ "$OCRAP_CONSTRAINT_AUDIT_MODE" == "near_axis" || "$OCRAP_CONSTRAINT_AUDIT_MODE" == "near" || "$OCRAP_CONSTRAINT_AUDIT_MODE" == "diagnostic" ]]; then
+  REPO_DISPATCH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+  exec bash "$REPO_DISPATCH/scripts/run_near_rifa_system_axis_two_gpu.sh"
+elif [[ "$OCRAP_CONSTRAINT_AUDIT_MODE" != "full" ]]; then
+  echo "unknown OCRAP_CONSTRAINT_AUDIT_MODE=$OCRAP_CONSTRAINT_AUDIT_MODE (expected near_axis or full)" >&2
+  exit 30
+fi
+
 ORIGIN_REPO="${OCRAP_ORIGIN_REPO:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
 BASE_OUT="${BASE_OUT:-/home/senzeyu2/code/OC-RAP/runs}"
 GPU0="${GPU0:-0}"

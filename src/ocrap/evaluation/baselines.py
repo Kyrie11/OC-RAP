@@ -443,6 +443,14 @@ def select_baseline(
             gap_arr = np.asarray(pred_gap if pred_gap is not None else np.zeros_like(pred_r_dep), dtype=float)
             score = pred_r_dep - beta * np.maximum(0.0, gap_arr)
             return BaselineSelection(sel.selected_index, sel.reason, sel.admitted, score)
+        relative_mode = "off"
+        if selector_name in {"lcb_constrained_relative_delta", "lcb_relative_delta", "rifa_delta"}:
+            relative_mode = "delta_positive"
+        elif selector_name in {
+            "lcb_constrained_nested_evidence", "lcb_nested_evidence", "rifa_nested_evidence",
+            "lcb_constrained_full_rifa", "lcb_full_rifa", "rifa_full",
+        }:
+            relative_mode = "joint_sign"
         sel = constrained_lcb_select(
             utility, pred_r_dep, hard, harm, feasible,
             gamma_rec=gamma_rec, gamma_H=gamma_H, gamma_D=gamma_D,
@@ -460,6 +468,15 @@ def select_baseline(
             require_absolute_admission_for_intervention=_cfg_bool(
                 scfg, "require_absolute_admission_for_intervention", False, bucket_name
             ),
+            pred_direct_value=pred_direct_value,
+            pred_direct_rank=pred_direct_rank,
+            pred_direct_opportunity=pred_direct_opportunity,
+            pred_direct_harm=pred_direct_harm,
+            relative_policy_mode=relative_mode,
+            relative_proposal_top_k=int(_cfg_float(scfg, "rifa_relative_proposal_top_k", 5.0, bucket_name)),
+            relative_min_advantage=_cfg_float(scfg, "rifa_relative_min_advantage", 0.0, bucket_name),
+            relative_opportunity_threshold=_cfg_float(scfg, "rifa_relative_opportunity_threshold", 0.5, bucket_name),
+            relative_harm_threshold=_cfg_float(scfg, "rifa_relative_harm_threshold", 0.5, bucket_name),
         )
         gap_arr = np.asarray(pred_gap if pred_gap is not None else np.zeros_like(pred_r_dep), dtype=float)
         score = pred_r_dep - beta * np.maximum(0.0, gap_arr)

@@ -1,3 +1,25 @@
+# V48.124.10 Near deployed-system-axis diagnostic
+
+V48.124.9 is attribution-ready but Near is STOP. Recovery-mechanism / representation search remains frozen. The next command therefore runs two preregistered selector-only diagnostic arms on the exact 35-scene historical Near intervention cohort; it does not train, recalibrate, sweep thresholds, change horizon, or modify the recovery library.
+
+Run exactly the same command as before:
+
+```bash
+cd /home/senzeyu2/code/OC-RAP
+GPU0=0 GPU1=1 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+  bash scripts/run_constraint_native_orientation_audit.sh
+```
+
+Canonical output for the next analysis is:
+
+```text
+/home/senzeyu2/code/OC-RAP/runs/OC-RAP-v48.124.10-NEAR-RIFA-SYSTEM-AXIS-results.zip
+```
+
+The default run is intentionally diagnostic-scale (35 historical intervention scenes per arm/variant). If one arm is promoted, the next scientific confirmation must rerun a fresh full 250-scene Near population; reconstructed 35+215 artifacts are explicitly marked internal-diagnostic-only and are not publication Main results. To reproduce the historical V48.124.9 full audit instead, set `OCRAP_CONSTRAINT_AUDIT_MODE=full`.
+
+---
+
 ## V48.124.7 provenance re-adjudication fix
 
 V48.124.7 is engineering-only. It does not authorize V48.125 mechanism search and does not change the frozen Main. It permits exact SHA-pinned reuse of the authoritative V48.124.5 full-population runtime evidence during V48.124.7 re-adjudication; arbitrary stale runtime contracts still fail closed.

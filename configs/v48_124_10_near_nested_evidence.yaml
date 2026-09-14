@@ -1,0 +1,9 @@
+selection:
+  # Diagnostic-only nested RIFA arm. The thresholds are the frozen Stage-I
+  # policy-metric decision boundaries already used by the training/evaluation
+  # contract; they are not tuned on V48.124.9 Near outcomes.
+  ocrap_selector: lcb_constrained_nested_evidence
+  rifa_relative_proposal_top_k: 5
+  rifa_relative_min_advantage: 0.0
+  rifa_relative_opportunity_threshold: 0.65
+  rifa_relative_harm_threshold: 0.30

@@ -95,6 +95,15 @@ def constrained_lcb_select(
     fallback_gap_margin: float = 0.25,
     nominal_fallback_lcb_slack: float = 0.05,
     require_absolute_admission_for_intervention: bool = False,
+    pred_direct_value: np.ndarray | None = None,
+    pred_direct_rank: np.ndarray | None = None,
+    pred_direct_opportunity: np.ndarray | None = None,
+    pred_direct_harm: np.ndarray | None = None,
+    relative_policy_mode: str = "off",
+    relative_proposal_top_k: int = 5,
+    relative_min_advantage: float = 0.0,
+    relative_opportunity_threshold: float = 0.5,
+    relative_harm_threshold: float = 0.5,
 ) -> SelectionResult:
     """Calibrated constrained selector used by OC-RAP in closed loop.
 
@@ -120,6 +129,56 @@ def constrained_lcb_select(
     idxs = np.arange(n)
     intervention = (idxs != int(nominal_index)).astype(float)
     score = utility - float(intervention_penalty) * intervention - float(deviation_penalty) * dev + float(recovery_bonus) * (rec_lcb - float(gamma_rec))
+
+    # V48.124.10 Near-system diagnostic: complete the *already frozen* RIFA
+    # role ordering without changing recovery construction, absolute source,
+    # checkpoint, calibration, candidate library, or any learned parameter.
+    # The historical lcb_constrained path remains execution-identical when
+    # relative_policy_mode == "off" (the default).  Diagnostic modes only
+    # remove/reorder non-nominal actions that already passed the absolute gate;
+    # they can never rescue an absolute-rejected candidate.
+    rel_mode = str(relative_policy_mode or "off").strip().lower()
+    relative_survivors = admitted.copy()
+    direct_adv = np.full((n,), -np.inf, dtype=float)
+    direct_rank = _as_1d_float(pred_direct_rank, n, default=-np.inf)
+    direct_value = _as_1d_float(pred_direct_value, n, default=-np.inf)
+    direct_opp = _as_1d_float(pred_direct_opportunity, n, default=-np.inf)
+    direct_harm = _as_1d_float(pred_direct_harm, n, default=np.inf)
+    relative_active = rel_mode not in {"", "off", "none", "legacy", "historical"}
+    if relative_active:
+        if not (0 <= int(nominal_index) < n):
+            relative_survivors[:] = False
+        else:
+            ni = int(nominal_index)
+            if np.isfinite(direct_value[ni]):
+                direct_adv = direct_value - float(direct_value[ni])
+            else:
+                direct_adv[:] = -np.inf
+            sign_ok = np.isfinite(direct_adv) & (direct_adv > float(relative_min_advantage))
+            sign_ok[ni] = False
+            if rel_mode in {"delta_positive", "delta", "relative_delta", "relative_veto"}:
+                relative_survivors &= sign_ok
+            elif rel_mode in {"joint_sign", "full_rifa", "paper_rifa", "rifa"}:
+                proposal = np.zeros((n,), dtype=bool)
+                nonnom = np.arange(n) != ni
+                finite_rank = nonnom & np.isfinite(direct_rank)
+                ranked = np.where(finite_rank)[0]
+                if ranked.size:
+                    # Stable sort is part of the deterministic RIFA contract.
+                    ordered = ranked[np.argsort(-direct_rank[ranked], kind="stable")]
+                    k = min(max(1, int(relative_proposal_top_k)), int(ordered.size))
+                    proposal[ordered[:k]] = True
+                evidence_ok = (
+                    np.isfinite(direct_opp)
+                    & np.isfinite(direct_harm)
+                    & (direct_opp >= float(relative_opportunity_threshold))
+                    & (direct_harm <= float(relative_harm_threshold))
+                )
+                evidence_ok[ni] = False
+                relative_survivors &= proposal & sign_ok & evidence_ok
+            else:
+                raise ValueError(f"unknown relative_policy_mode={relative_policy_mode!r}")
+
     if 0 <= nominal_index < n and safe[nominal_index]:
         nom_margin = rec_lcb[nominal_index] - float(gamma_rec)
         nom_gap = gap[nominal_index]
@@ -130,8 +189,31 @@ def constrained_lcb_select(
             admitted[nominal_index] = True
             return SelectionResult(int(nominal_index), "nominal_slack_lcb_admitted", admitted)
     if admitted.any():
-        cand = np.where(admitted)[0]
-        return SelectionResult(int(cand[np.argmax(score[cand])]), "best_admitted_lcb_score", admitted)
+        historical_cand = np.where(admitted)[0]
+        historical_best = int(historical_cand[np.argmax(score[historical_cand])])
+        if not relative_active:
+            return SelectionResult(historical_best, "best_admitted_lcb_score", admitted)
+
+        # Diagnostic monotonicity contract: the relative layer is permitted to
+        # refine an intervention only after the historical V48.124.9 selector
+        # would already have selected a non-nominal action at this exact state.
+        # If historical lcb_constrained would select nominal here, preserve that
+        # decision exactly.  Hence a historical zero-intervention trajectory
+        # cannot acquire a first intervention under either diagnostic arm.
+        if historical_best == int(nominal_index):
+            return SelectionResult(historical_best, "best_admitted_lcb_score", admitted)
+
+        cand = np.where(relative_survivors)[0]
+        if cand.size:
+            # RIFA relative layer is a preference/reranking role only.  It is
+            # lexicographically downstream of absolute admission and the
+            # historical intervention decision, so it only filters/reorders
+            # actions inside an already-triggered intervention event.
+            best = int(cand[np.argmax(direct_adv[cand])])
+            reason = "best_rifa_delta_positive" if rel_mode in {"delta_positive", "delta", "relative_delta", "relative_veto"} else "best_rifa_joint_sign"
+            return SelectionResult(best, reason, admitted)
+        if bool(require_absolute_admission_for_intervention) and 0 <= int(nominal_index) < n:
+            return SelectionResult(int(nominal_index), "nominal_rifa_no_relative_survivor", admitted)
     # RIFA conformance: absolute recovery admission is lexicographically prior
     # to relative recovery preference.  A non-nominal action that failed the
     # absolute gate must therefore never be resurrected by the fallback ranker.
