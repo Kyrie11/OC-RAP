@@ -1,3 +1,13 @@
+# V48.124.9 — immutable execution-snapshot provenance fix (no algorithm change)
+
+- Scientific version remains `v48.124-OC-FMSA`; engineering version is `v48.124.9-OC-FMSA-RUNTIME-SNAPSHOT-ENGFIX`.
+- The uploaded V48.124.8 full-population runtime contract is the exact artifact produced by the originally delivered V48.124.8 source (`16a869...ea71a5`); its recorded `closed_loop_runner.py` SHA is byte-identical to that delivery. A later external-baseline/submission edit of the working tree must therefore not retroactively invalidate the already completed full-population evidence.
+- A second engineering defect was exposed by the determinism replays: the full-population results were produced before the later worktree edit, while the sentinel replays contain metric fields introduced by that later edit. The run therefore mixed two evaluation-code states and cannot enter scientific attribution. In particular, the later code also changes `secondary_overlap_event` semantics, so the mismatch cannot be hidden by excluding new metadata fields from determinism comparison.
+- The stable launcher now creates an immutable per-run source snapshot and executes **all** full-population, Contact-anchor, comparison, sentinel, adjudication, and packaging phases from that snapshot. The operator may continue editing the original repository for external baselines without contaminating the running audit. The snapshot is hash-checked before every major phase.
+- Existing fixed-Main work is reused only when its stored runtime-file hashes and scientific contract exactly match the current immutable execution snapshot. Otherwise the stale work directory is archived by filesystem rename and a fresh run is built.
+- The completed V48.124.8 runtime artifact remains accepted only by exact SHA pin for forensic re-adjudication; genuinely fresh V48.124.9 evidence still requires every recorded runtime source hash to match the immutable snapshot that performs adjudication.
+- No planner/model/checkpoint/calibration/gamma/RIFA/candidate/recovery/threshold/horizon/dataset/Waymax dynamics/statistical gate change. The user's external-baseline improvements are preserved.
+
 # V48.124.7 — retained full-run provenance engineering fix (no algorithm change)
 
 - Scientific version remains `v48.124-OC-FMSA`; engineering version is `v48.124.7-OC-FMSA-PROVENANCE-ENGFIX`.

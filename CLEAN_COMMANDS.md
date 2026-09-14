@@ -76,6 +76,11 @@ Upload only:
 
 There is no registered V48.124 recovery-model training stage and no V48.125 recovery mechanism successor. A V48.124 STOP keeps the mechanism family frozen.
 
+
+### V48.124.9 execution-source isolation
+
+The stable V48.124 command now snapshots the repository at launch and runs the entire fixed-Main audit from that immutable snapshot. You may edit the original checkout for external-baseline work after the command starts; those edits will not affect the running scientific audit. If an existing fixed-Main work directory was produced by different runtime hashes, it is archived automatically and rebuilt instead of being mixed with the new run.
+
 ## 2. Direct OC-RAP three-regime closed-loop test
 
 Evaluate both frozen model variants on Safe / Near-Contact / Contact, using standard WOMD validation replay and all bucket targets:

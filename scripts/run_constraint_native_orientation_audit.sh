@@ -6,18 +6,39 @@
 # non-interference, Near closed-loop validity, and Contact recovery validity.
 set -Eeuo pipefail
 
-REPO="${OCRAP_REPO:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
+ORIGIN_REPO="${OCRAP_ORIGIN_REPO:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
+BASE_OUT="${BASE_OUT:-/home/senzeyu2/code/OC-RAP/runs}"
+GPU0="${GPU0:-0}"
+GPU1="${GPU1:-1}"
+RUN_ID="${OCRAP_ORIENTATION_RUN_ID:-$(python -c 'import uuid; print(uuid.uuid4().hex)')}"
+export OCRAP_ORIENTATION_RUN_ID="$RUN_ID"
+
+# The long fixed-Main audit must not observe a mutable worktree.  Build an
+# immutable execution snapshot once, then run every full-population phase,
+# comparison, sentinel replay, and adjudicator from that same snapshot.  This
+# lets the operator continue editing the original repo (for example external
+# baselines) without contaminating a running scientific experiment.
+if [[ "${OCRAP_EXECUTION_SNAPSHOT_ACTIVE:-0}" != 1 ]]; then
+  SNAPSHOT_REPO="$BASE_OUT/ocrap_v48_124_execution_snapshots/$RUN_ID/OC-RAP"
+  python "$ORIGIN_REPO/tools/create_fixed_main_execution_snapshot.py" \
+    --repo "$ORIGIN_REPO" --output "$SNAPSHOT_REPO" --run-id "$RUN_ID"
+  exec env \
+    OCRAP_EXECUTION_SNAPSHOT_ACTIVE=1 \
+    OCRAP_ORIGIN_REPO="$ORIGIN_REPO" \
+    OCRAP_REPO="$SNAPSHOT_REPO" \
+    OCRAP_ORIENTATION_RUN_ID="$RUN_ID" \
+    BASE_OUT="$BASE_OUT" GPU0="$GPU0" GPU1="$GPU1" \
+    bash "$SNAPSHOT_REPO/scripts/run_constraint_native_orientation_audit.sh"
+fi
+
+REPO="${OCRAP_REPO:?snapshot repo missing}"
 cd "$REPO"
 export PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONNOUSERSITE=1
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
 
-BASE_OUT="${BASE_OUT:-/home/senzeyu2/code/OC-RAP/runs}"
-GPU0="${GPU0:-0}"
-GPU1="${GPU1:-1}"
-RUN_ID="${OCRAP_ORIENTATION_RUN_ID:-$(python -c 'import uuid; print(uuid.uuid4().hex)')}"
-export OCRAP_ORIENTATION_RUN_ID="$RUN_ID"
+python tools/check_fixed_main_execution_snapshot.py --repo "$REPO"
 
 L80_RUN="${OCRAP_ORIENTATION_MODEL_RUN:-$BASE_OUT/ocrap_v48_80_dcp_drfc_bcde_rifa_pistc_main}"
 V123_PIPELINE="${OCRAP_ORIENTATION_V123_PIPELINE:-$BASE_OUT/OC-RAP-v48.123-PIPELINE_COMPLETE.json}"
@@ -43,10 +64,37 @@ BUNDLE_MANIFEST="$BASE_OUT/OC-RAP-v48.124-OC-FMSA-result-bundle-manifest.json"
 RESULTS_ZIP="$BASE_OUT/OC-RAP-v48.124-OC-FMSA-results.zip"
 PROVENANCE_DIR="$WORK/provenance"
 FULL_RUN_RUNTIME="$PROVENANCE_DIR/full_population_runtime_contract.json"
+EXECUTION_SNAPSHOT_MANIFEST="$REPO/EXECUTION_SNAPSHOT.json"
 
-mkdir -p "$BASE_OUT" "$WORK" "$SENTINEL_DIR" "$COMPARE_DIR" "$KEY_DIR" "$PROVENANCE_DIR" "$ANCHOR_DIR"
+mkdir -p "$BASE_OUT"
+rm -f "$RUNTIME" "$SENTINEL_INDEX" "$ADJUDICATION" "$COMPLETE" "$BUNDLE_MANIFEST" "$RESULTS_ZIP"
+python tools/check_fixed_main_stability_contract.py --repo "$REPO" --run-id "$RUN_ID" --output "$RUNTIME"
 
-# V48.124.8 is evaluation engineering only. Safe/Near retain exact-a0 controls.
+# Reuse is legal only when the completed full-population evidence was generated
+# by exactly the same immutable scientific source snapshot.  A mismatched work
+# directory is archived by rename (cheap on the same filesystem) rather than
+# silently resumed under new code.
+if [[ -f "$FULL_RUN_RUNTIME" ]]; then
+  if ! python - "$RUNTIME" "$FULL_RUN_RUNTIME" <<'RTEQ'
+import json,sys
+new=json.load(open(sys.argv[1],encoding='utf-8')); old=json.load(open(sys.argv[2],encoding='utf-8'))
+def fp(d):
+    rows=d.get('runtime_files') or {}
+    return {k:(v or {}).get('sha256') for k,v in rows.items()}
+if not (new.get('scientific_version')==old.get('scientific_version') and new.get('scientific_contract')==old.get('scientific_contract') and fp(new)==fp(old)):
+    raise SystemExit(30)
+RTEQ
+  then
+    old_id="$(python -c 'import json,sys; print(json.load(open(sys.argv[1])).get("run_instance_id") or "unknown")' "$FULL_RUN_RUNTIME" 2>/dev/null || echo unknown)"
+    archive="${WORK}.stale-${old_id}"
+    rm -rf "$archive"
+    mv "$WORK" "$archive"
+    echo "archived stale V48.124 workdir with different execution source: $archive" >&2
+  fi
+fi
+mkdir -p "$WORK" "$SENTINEL_DIR" "$COMPARE_DIR" "$KEY_DIR" "$PROVENANCE_DIR" "$ANCHOR_DIR"
+
+# V48.124.9 is evaluation/provenance engineering only. Safe/Near retain exact-a0 controls.
 # Contact is formed before treatment by an exact-a0 prelude that stops at the
 # first actual Waymax overlap. A scene-disjoint manifest freezes one anchor per
 # scene, and all three arms must reproduce the same dynamic-state fingerprint.
@@ -58,13 +106,11 @@ for f in \
   [[ -s "$f" ]] && FULL_RESULTS_PRESENT=1 && break
 done
 if [[ "$FULL_RESULTS_PRESENT" == 1 && ! -f "$FULL_RUN_RUNTIME" ]]; then
-  echo "completed V48.124.8 artifacts exist without their runtime contract; refuse provenance-unsafe reuse" >&2
+  echo "completed V48.124 artifacts exist without their runtime contract; refuse provenance-unsafe reuse" >&2
   exit 30
 fi
-rm -f "$RUNTIME" "$SENTINEL_INDEX" "$ADJUDICATION" "$COMPLETE" "$BUNDLE_MANIFEST" "$RESULTS_ZIP"
-
-python tools/check_fixed_main_stability_contract.py --repo "$REPO" --run-id "$RUN_ID" --output "$RUNTIME"
 [[ -f "$FULL_RUN_RUNTIME" ]] || cp -f "$RUNTIME" "$FULL_RUN_RUNTIME"
+python tools/check_fixed_main_execution_snapshot.py --repo "$REPO"
 
 # V48.123 STOP + exact freeze branch is the only scientific license for V48.124.
 python - "$V123_PIPELINE" "$V123_COMPARE" "$V123_BALANCED" "$V123_PRECISION" <<'V123PY'
@@ -105,6 +151,7 @@ BCAL="$BROOT/calibration/gamma_rec_by_bucket_v48.json"
 PCAL="$PROOT/calibration/gamma_rec_by_bucket_v48.json"
 for f in "$BCKPT" "$PCKPT" "$BCAL" "$PCAL"; do [[ -f "$f" ]] || { echo "missing frozen Main artifact $f" >&2; exit 30; }; done
 
+python tools/check_fixed_main_execution_snapshot.py --repo "$REPO"
 # Phase A uses both A30s concurrently: GPU0 mines treatment-free Contact anchors;
 # GPU1 runs exact-a0 Safe/Near controls.
 set +e
@@ -118,6 +165,7 @@ set -e
 [[ $r_anchor == 0 && $r_nominal == 0 ]] || { echo "phase-A failure anchor=$r_anchor nominal_safe_near=$r_nominal" >&2; exit 30; }
 [[ -s "$ANCHOR_MANIFEST" && -s "$ANCHOR_KEYS" ]] || { echo "missing Contact anchor manifest/keys" >&2; exit 30; }
 
+python tools/check_fixed_main_execution_snapshot.py --repo "$REPO"
 # Exact-a0 Contact control from the frozen pre-treatment anchor cohort.
 env WOMD_ROLE=validation OUT="$NOMINAL_OUT" CUDA_DEVICES="$GPU0" MAX_SCENARIOS=0 \
   RUN_SAFE=0 RUN_NEAR=0 RUN_CONTACT=1 CONTACT_TARGET_KEYS_FILE="$ANCHOR_KEYS" \
@@ -125,6 +173,7 @@ env WOMD_ROLE=validation OUT="$NOMINAL_OUT" CUDA_DEVICES="$GPU0" MAX_SCENARIOS=0
   CONTACT_ANCHOR_PRELUDE_MAX_STEPS=60 CONTACT_ANCHOR_PRELUDE_REPLAN_INTERVAL=1 CONTACT_ANCHOR_REQUIRE_FOUND=true \
   INCLUDE_SCENES_IN_RESULT=true RESULT_SCENE_DETAIL=metrics bash scripts/run_nominal_three_regime_control.sh
 
+python tools/check_fixed_main_execution_snapshot.py --repo "$REPO"
 # Frozen Main robustness variants. Each variant gets one GPU; the Contact
 # manifest and state fingerprints are immutable and shared read-only.
 run_variant() {
@@ -155,6 +204,7 @@ python tools/build_fixed_main_sentinel_keys.py \
   --nominal-contact "$NC" --balanced-contact "$BC" --precision-contact "$PC" \
   --key-dir "$KEY_DIR" --output "$SENTINEL_INDEX"
 
+python tools/check_fixed_main_execution_snapshot.py --repo "$REPO"
 # Fixed paired bootstrap comparisons. Balanced/precision are robustness variants,
 # not additional independent population replications.
 for variant in balanced precision; do
@@ -164,6 +214,7 @@ for variant in balanced precision; do
   python tools/compare_paired_closed_loop.py "$NC" "$VC" --bootstrap 5000 --seed 2027 --output "$COMPARE_DIR/${variant}_contact_vs_nominal.json"
 done
 
+python tools/check_fixed_main_execution_snapshot.py --repo "$REPO"
 # Replay the lexicographically first common target per regime exactly once for
 # each frozen Main robustness variant. Source/gamma are read from the full run.
 run_sentinel() {
@@ -220,6 +271,7 @@ done
 BSS="$SENTINEL_DIR/balanced/safe/closed_loop_ocrap.json"; BNS="$SENTINEL_DIR/balanced/near/closed_loop_ocrap.json"; BCS="$SENTINEL_DIR/balanced/contact/closed_loop_ocrap.json"
 PSS="$SENTINEL_DIR/precision/safe/closed_loop_ocrap.json"; PNS="$SENTINEL_DIR/precision/near/closed_loop_ocrap.json"; PCS="$SENTINEL_DIR/precision/contact/closed_loop_ocrap.json"
 
+python tools/check_fixed_main_execution_snapshot.py --repo "$REPO"
 python tools/adjudicate_fixed_main_stability.py \
   --nominal-safe "$NS" --balanced-safe "$BS" --precision-safe "$PS" \
   --nominal-near "$NN" --balanced-near "$BN" --precision-near "$PN" \

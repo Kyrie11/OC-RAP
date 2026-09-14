@@ -34,6 +34,8 @@ RUNTIME_FILES=(
     'tools/adjudicate_fixed_main_stability.py',
     'tools/check_fixed_main_stability_pipeline.py',
     'tools/package_fixed_main_stability_results.py',
+    'tools/create_fixed_main_execution_snapshot.py',
+    'tools/check_fixed_main_execution_snapshot.py',
 )
 
 def sha(path: Path) -> str:
@@ -102,6 +104,7 @@ def main() -> int:
             and '--require-scenes' in (repo/'scripts/run_ocrap_three_regime_evaluation.sh').read_text(encoding='utf-8')
         ),
         'set_u_local_initialization_safe': local_init_safe,
+        'execution_snapshot_locked': (repo/'EXECUTION_SNAPSHOT.json').is_file() and (repo/'tools/check_fixed_main_execution_snapshot.py').is_file(),
     }
     valid=not errors and all(synthetic.values())
     doc={

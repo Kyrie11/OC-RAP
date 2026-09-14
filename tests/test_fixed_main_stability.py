@@ -344,3 +344,75 @@ def test_contact_construct_requires_identical_anchor_state_fingerprints():
     decision = adjudicate(comparisons=c, results=r, sentinel_results=s, support_docs=u)
     assert decision["status"] == STATUS_CONTACT_CONSTRUCT_FAIL
     assert decision["contact_construct_validity_gate"]["same_pre_treatment_anchor_fingerprints"] is False
+
+
+def test_v481249_adjudicator_pins_completed_v481248_execution_snapshot():
+    import importlib.util
+    from pathlib import Path
+    from unittest.mock import patch
+
+    repo = Path(__file__).resolve().parents[1]
+    tool = repo / "tools" / "adjudicate_fixed_main_stability.py"
+    spec = importlib.util.spec_from_file_location("v481249_adjudicator", tool)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    assert mod.FROZEN_V481248_FULL_RUN_ENGINEERING_VERSION == "v48.124.8-OC-FMSA-CONTACT-ANCHOR-ENGFIX"
+    assert mod.FROZEN_V481248_FULL_RUN_RUNTIME_SHA256 == "16a869c6d790f209964dd8db03337deb739fe7e75937ba0f3f04dcfb14ea71a5"
+
+    doc = {
+        "valid": True,
+        "attribution_ready": True,
+        "engineering_version": mod.FROZEN_V481248_FULL_RUN_ENGINEERING_VERSION,
+        "scientific_version": mod.SCIENTIFIC_VERSION,
+        "scientific_contract": {
+            "fixed_main_evaluation_only": True,
+            "recovery_set_mechanism_family_frozen": True,
+            "new_recovery_mechanism_authorized": False,
+            "planner_parameters_trained": 0,
+            "womd_source_resolution": "standard_validation_only_with_bucket_provenance_conflict_fail_closed",
+            "rifa_absolute_admission_for_intervention": True,
+            "exact_nominal_control": "candidate_index_zero_no_feasibility_substitution",
+            "contact_endpoint_anchor_contract": "same_target_observed_simulator_contact_anchor_at_rollout_step_0_before_policy_action",
+            "counterfactual_contact_surrogate_not_sufficient_for_post_contact_gate": True,
+            "contact_anchor_construction": "exact_a0_pretreatment_prelude_v1",
+            "contact_anchor_manifest_scene_disjoint": True,
+            "contact_anchor_state_fingerprint_required": True,
+        },
+    }
+    fake = repo / "tests" / "_nonexistent_runtime_contract.json"
+    with patch.object(mod, "sha", return_value=mod.FROZEN_V481248_FULL_RUN_RUNTIME_SHA256), \
+         patch.object(Path, "is_file", return_value=True):
+        assert mod.full_run_runtime_contract_ok(fake, doc)
+    with patch.object(mod, "sha", return_value="0" * 64), \
+         patch.object(Path, "is_file", return_value=True):
+        assert not mod.full_run_runtime_contract_ok(fake, doc)
+
+
+def test_v481249_retained_v481248_does_not_compare_against_later_worktree_bytes():
+    from pathlib import Path
+    repo = Path(__file__).resolve().parents[1]
+    source = (repo / "tools" / "adjudicate_fixed_main_stability.py").read_text(encoding="utf-8")
+    assert "later worktree may legitimately" in source
+    assert "FROZEN_V481248_FULL_RUN_RUNTIME_SHA256" in source
+    assert "elif full_engineering == FROZEN_V481248_FULL_RUN_ENGINEERING_VERSION" in source
+
+
+def test_v481249_launcher_uses_immutable_execution_snapshot():
+    from pathlib import Path
+    repo = Path(__file__).resolve().parents[1]
+    text = (repo / 'scripts' / 'run_constraint_native_orientation_audit.sh').read_text(encoding='utf-8')
+    assert 'create_fixed_main_execution_snapshot.py' in text
+    assert 'OCRAP_EXECUTION_SNAPSHOT_ACTIVE=1' in text
+    assert 'check_fixed_main_execution_snapshot.py --repo "$REPO"' in text
+    assert 'archived stale V48.124 workdir with different execution source' in text
+
+
+def test_v481249_runtime_contract_covers_snapshot_lock_tools():
+    from pathlib import Path
+    repo = Path(__file__).resolve().parents[1]
+    source = (repo / 'tools' / 'check_fixed_main_stability_contract.py').read_text(encoding='utf-8')
+    assert "'tools/create_fixed_main_execution_snapshot.py'" in source
+    assert "'tools/check_fixed_main_execution_snapshot.py'" in source
+    assert "'execution_snapshot_locked'" in source
