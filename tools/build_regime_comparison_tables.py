@@ -105,7 +105,11 @@ def _get(doc: dict[str, Any], key: str) -> float | int | None:
         timing = doc.get("timing", {}) or {}
         per = timing.get("per_decision_s", {}) or {}
         # Publication latency is observation -> deployable action selection.
-        # Never include teacher/audit labels or simulator/metric bookkeeping.
+        # Prefer synchronized steady-state samples with per-scene warmup removed;
+        # never include teacher/audit labels or simulator/metric bookkeeping.
+        steady = timing.get("steady_state_deployed_planner_s", {}) or {}
+        if steady.get("mean") is not None and math.isfinite(float(steady.get("mean"))):
+            return _finite(1000.0 * float(steady["mean"]))
         if "deployed_planner" in per:
             return _finite(1000.0 * float(per["deployed_planner"]))
         deployed = ["state_history", "candidate_features", "policy_selection"]

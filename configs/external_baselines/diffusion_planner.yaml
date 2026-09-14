@@ -4,36 +4,44 @@ external_baselines:
   max_candidates: 24
   supervision_target: logged_nominal
   allow_teacher_supervision: false
-  implementation: diffusion_planner_womd_lattice_port_v60
+  # v61 restores the source VP/x-start/DPM-Solver++ operator.  The port remains
+  # ego-only because OC-RAP's serialized groups do not contain neighbor futures.
+  implementation: diffusion_planner_womd_lattice_port_v61
   model:
     arch: diffusion_planner
-    implementation: diffusion_planner_womd_lattice_port_v60
+    implementation: diffusion_planner_womd_lattice_port_v61
     max_candidates: 24
-    d_model: 160
+    d_model: 192
     num_layers: 3
-    num_heads: 5
+    num_heads: 6
     dropout: 0.10
     scene_layers: 2
     future_len: 20
+    # WOMD exposes 10 past + current observation frames; keeping 11 is a
+    # dataset-interface adaptation to the source nuPlan history length.
     history_len: 11
-    source_max_agents: 16
-    source_map_polygons: 64
+    source_max_agents: 32
+    source_map_polygons: 70
     source_map_points: 20
     source_centerline_points: 120
     energy_weight: 2.0
-    eval_noise_scale: 0.15
+    eval_noise_scale: 0.50
     beta_min: 0.1
     beta_max: 20.0
+    # Uploaded source: 10-step order-2 multistep DPM-Solver++ with logSNR skip.
+    diffusion_steps: 10
   training:
     device: auto
     distributed: false
-    batch_size: 24
+    # v61 trains the generative core on only the logged target trajectory rather
+    # than redundantly denoising all 24 executable candidates.
+    batch_size: 64
     num_workers: 4
-    epochs: 24
+    epochs: 100
     lr: 0.0002
     weight_decay: 0.0001
     scheduler: warmup_cosine
-    warmup_epochs: 2
+    warmup_epochs: 5
     min_lr: 0.00001
     amp: true
     amp_dtype: auto
@@ -44,7 +52,9 @@ external_baselines:
     persistent_workers: true
     prefetch_factor: 2
   loss_weights:
-    policy: 0.25
+    # Native generative imitation only. Candidate CE would change the source
+    # objective; the generated path is projected to the common lattice at test.
+    policy: 0.0
     diffusion_native: 1.0
     levelk: 0.0
     level_response: 0.0

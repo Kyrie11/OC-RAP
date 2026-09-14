@@ -213,6 +213,23 @@ def _predict_group(model: torch.nn.Module | None, samples: list[dict[str, Any]],
             "map_topology_mask": torch.from_numpy(map_topology_mask).to(device, non_blocking=True),
         })
 
+    # Generative baselines are stochastic by construction.  Use a deterministic
+    # per-decision seed so repeated closed-loop evaluations and parallel job
+    # scheduling do not change the sampled trajectory.  The seed depends only
+    # on observable sample identity and the model architecture.
+    if arch in {"diffusion_planner", "diffusionplanner", "flow_planner", "flowplanner"}:
+        d0 = samples[0]
+        identity = []
+        for key in ("scenario_id", "scene_id", "time_index", "start_time_index", "treatment_time_index"):
+            value = d0.get(key, "")
+            try:
+                value = np.asarray(value).reshape(-1)[0].item()
+            except Exception:
+                pass
+            identity.append(str(value))
+        digest = hashlib.sha256((arch + "|" + "|".join(identity)).encode("utf-8")).hexdigest()
+        kwargs["sampling_seed"] = int(digest[:8], 16)
+
     training_cfg = ((cfg.get("external_baselines", {}) or {}).get("training", {}) or {})
     amp_enabled = bool(training_cfg.get("amp", True)) and device.type == "cuda"
     amp_dtype = resolve_amp_dtype(training_cfg, device)
@@ -225,9 +242,15 @@ def _predict_group(model: torch.nn.Module | None, samples: list[dict[str, Any]],
             )
     result: dict[str, np.ndarray] = {}
     for k, v in out.items():
-        if isinstance(v, list):
+        if isinstance(v, list) or not torch.is_tensor(v):
             continue
-        result[k] = v.squeeze(0).detach().float().cpu().numpy()[:n]
+        arr = v.squeeze(0).detach().float().cpu().numpy()
+        # Candidate-aligned heads have max_candidates on axis 0; scene-level
+        # generated trajectories do not and must not be accidentally truncated
+        # as if time were a candidate axis.
+        if arr.ndim >= 1 and arr.shape[0] == max_candidates:
+            arr = arr[:n]
+        result[k] = arr
     return result
 
 def _yaw_rate_violation_proxy(d: dict[str, Any], yaw_rate_max: float = 0.6) -> float:

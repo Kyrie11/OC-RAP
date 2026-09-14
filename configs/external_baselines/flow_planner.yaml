@@ -4,39 +4,47 @@ external_baselines:
   max_candidates: 24
   supervision_target: logged_nominal
   allow_teacher_supervision: false
-  implementation: flow_planner_womd_lattice_port_v60
+  implementation: flow_planner_womd_lattice_port_v61
   model:
     arch: flow_planner
-    implementation: flow_planner_womd_lattice_port_v60
+    implementation: flow_planner_womd_lattice_port_v61
     max_candidates: 24
-    d_model: 160
-    num_layers: 3
-    num_heads: 5
+    # Released decoder is 256 wide, 4 blocks, 8 heads.
+    d_model: 256
+    num_layers: 4
+    num_heads: 8
     dropout: 0.10
     scene_layers: 2
     future_len: 20
     history_len: 11
-    source_max_agents: 16
-    source_map_polygons: 64
+    source_max_agents: 32
+    source_map_polygons: 70
     source_map_points: 20
     source_centerline_points: 120
+    # Source action_len=20, overlap=10 on an 80-step horizon.  On the common
+    # 20-step executable horizon this proportional adaptation is 5/2 overlap,
+    # i.e. stride=3.
     token_size: 5
     token_stride: 3
-    # Match the released Flow Planner defaults (cfg_prob=0.3, cfg_weight=1.8).
     cfg_dropout: 0.30
     cfg_weight: 1.8
+    cfg_neighbor_num: 10
     consistency_weight: 0.5
     energy_weight: 1.5
+    sample_steps: 4
+    sample_temperature: 1.0
   training:
     device: auto
     distributed: false
-    batch_size: 20
+    # Target-only native flow regression removes the old 24-candidate duplicate
+    # decoder work; the larger batch uses that memory/compute headroom.
+    batch_size: 48
     num_workers: 4
-    epochs: 24
+    epochs: 100
     lr: 0.0002
     weight_decay: 0.0001
     scheduler: warmup_cosine
-    warmup_epochs: 2
+    warmup_epochs: 5
     min_lr: 0.00001
     amp: true
     amp_dtype: auto
@@ -47,7 +55,7 @@ external_baselines:
     persistent_workers: true
     prefetch_factor: 2
   loss_weights:
-    policy: 0.25
+    policy: 0.0
     flow_native: 1.0
     diffusion_native: 0.0
     planr1_native: 0.0

@@ -32,6 +32,7 @@ from ocrap.utils.geometry import (
     min_oriented_box_clearance,
     min_oriented_box_signed_clearance,
     min_oriented_box_ttc,
+    oriented_box_signed_distance,
     rotation_matrix,
 )
 from ocrap.utils.regimes import bucket_aliases as canonical_bucket_aliases, canonical_regime_name, is_post_contact_bucket
@@ -61,6 +62,9 @@ EXTERNAL_CLOSED_LOOP_METHODS = {
     "betop", "betop_lite", "betopnet", "betopnet_lite",
     "plantf", "plan_tf", "plantf_adapter",
     "pluto", "pluto_adapter", "pdm_hybrid", "pdm_hybrid_adapter",
+    "diffusion_planner", "diffusionplanner",
+    "flow_planner", "flowplanner",
+    "plan_r1", "planr1",
 }
 # Only the deliberately non-deployable oracle upper bound consumes OC-RAP
 # counterfactual teacher tensors during action selection.
@@ -73,6 +77,9 @@ EXTERNAL_LEARNED_METHODS = {
     "betop", "betop_lite", "betopnet", "betopnet_lite",
     "plantf", "plan_tf", "plantf_adapter",
     "pluto", "pluto_adapter",
+    "diffusion_planner", "diffusionplanner",
+    "flow_planner", "flowplanner",
+    "plan_r1", "planr1",
 }
 
 
@@ -538,6 +545,21 @@ def _apply_gamma_rec_by_bucket_file(cfg: dict) -> dict:
         local["selection"] = new_sel
         return local
     return cfg
+def _sync_external_cuda(external_model: Any | None, external_device: Any | None) -> None:
+    """Synchronize an external CUDA planner at latency measurement boundaries."""
+    if external_model is None or external_device is None:
+        return
+    try:
+        if str(getattr(external_device, "type", external_device)).lower() != "cuda":
+            return
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.synchronize(external_device)
+    except Exception:
+        # Timing instrumentation must never change planner behavior.
+        return
+
+
 def _current_timestep(state: Any) -> int:
     try:
         return int(_as_np(state.timestep).reshape(()).item())
@@ -597,6 +619,46 @@ def _state_geometry_metrics(state: Any, sdc: int, *, publication_exact: bool = T
         return out
     except Exception:
         return {}
+
+
+def _overlapping_object_indices(state: Any, sdc: int) -> set[int]:
+    """Return stable Waymax object-slot indices whose OBB overlaps the SDC.
+
+    Slot indices are stable within a Waymax scenario.  Tracking them lets the
+    post-contact metric distinguish a new collision partner from a re-contact
+    episode with the same partner; the old implementation conflated the two.
+    """
+    try:
+        tr = state.sim_trajectory
+        t = _current_timestep(state)
+        x = _as_np(tr.x)[:, t]
+        y = _as_np(tr.y)[:, t]
+        vx = _as_np(tr.vel_x)[:, t]
+        vy = _as_np(tr.vel_y)[:, t]
+        yaw = _as_np(tr.yaw)[:, t]
+        length = _as_np(tr.length)[:, t]
+        width = _as_np(tr.width)[:, t]
+        height = _as_np(tr.height)[:, t]
+        valid = _as_np(tr.valid)[:, t].astype(bool)
+        if sdc < 0 or sdc >= len(x) or not bool(valid[sdc]):
+            return set()
+        ego = np.asarray(
+            [x[sdc], y[sdc], vx[sdc], vy[sdc], yaw[sdc], length[sdc], width[sdc], height[sdc], 1.0],
+            dtype=np.float32,
+        )
+        out: set[int] = set()
+        for i in range(len(x)):
+            if i == int(sdc) or not bool(valid[i]):
+                continue
+            other = np.asarray(
+                [x[i], y[i], vx[i], vy[i], yaw[i], length[i], width[i], height[i], 1.0],
+                dtype=np.float32,
+            )
+            if float(oriented_box_signed_distance(ego, other)) <= 0.0:
+                out.add(int(i))
+        return out
+    except Exception:
+        return set()
 
 
 def _capture_render_context(
@@ -1394,6 +1456,7 @@ def _rollout_one_scene(
         "audit_labels": 0.0,
         "waymax_step_metrics": 0.0,
     }
+    deployed_latency_samples_s: list[float] = []
     scene_wall_t0 = perf_counter()
 
     state0 = raw.metadata.get("_waymax_state")
@@ -1458,6 +1521,7 @@ def _rollout_one_scene(
     # low-clearance/contact state the regime selector had chosen as t=0.
     initial_metrics = _metric_summary(wx_env, state, sdc)
     initial_metrics.update(_state_geometry_metrics(state, sdc))
+    overlap_object_trace: list[set[int]] = [_overlapping_object_indices(state, sdc)]
     try:
         initial_tr = state.sim_trajectory
         initial_tt = _current_timestep(state)
@@ -1526,6 +1590,9 @@ def _rollout_one_scene(
         t = _current_timestep(state)
         if progress and (step_idx == 0 or step_idx % progress_every == 0):
             print({"event": "closed_loop_step", "scene_rank": scenario_rank, "scene_id": str(raw.scenario_id), "step": step_idx, "time_index": int(t), "label_mode": label_mode}, flush=True)
+        step_state_history_s = 0.0
+        step_candidate_features_s = 0.0
+        step_policy_selection_s = 0.0
         timing_t0 = perf_counter()
         spliced_raw = raw_scenario_from_waymax_state(
             state,
@@ -1543,7 +1610,8 @@ def _rollout_one_scene(
         hist.metadata["_waymax_branch_from_current"] = True
         hist.metadata["waymax_planning_timestep"] = int(t)
         if profile_timing:
-            timing_totals["state_history"] += perf_counter() - timing_t0
+            step_state_history_s = perf_counter() - timing_t0
+            timing_totals["state_history"] += step_state_history_s
         if compute_teacher_labels:
             if external_sparse_labels:
                 timing_t0 = perf_counter()
@@ -1555,7 +1623,9 @@ def _rollout_one_scene(
                     num_options=feature_num_options,
                 )
                 if profile_timing:
-                    timing_totals["candidate_features"] += perf_counter() - timing_t0
+                    elapsed = perf_counter() - timing_t0
+                    step_candidate_features_s += elapsed
+                    timing_totals["candidate_features"] += elapsed
                 audit_indices = _preselect_external_label_candidate_indices(feature_samples, method, cfg)
                 sparse_label_decisions += 1
                 sparse_label_full_candidates_total += int(len(feature_samples))
@@ -1590,7 +1660,9 @@ def _rollout_one_scene(
                 num_options=feature_num_options,
             )
             if profile_timing:
-                timing_totals["candidate_features"] += perf_counter() - timing_t0
+                elapsed = perf_counter() - timing_t0
+                step_candidate_features_s += elapsed
+                timing_totals["candidate_features"] += elapsed
         if not samples:
             break
         select_cfg = cfg
@@ -1625,6 +1697,8 @@ def _rollout_one_scene(
             select_cfg["selection"] = sel_local
         if method != "ocrap":
             active_regime_trace.append(_observable_regime_name(state, sdc, cfg, fallback=bucket_name or ""))
+        if profile_timing:
+            _sync_external_cuda(external_model, external_device)
         timing_t0 = perf_counter()
         sel_idx, info = _select_prefix(
             samples,
@@ -1638,7 +1712,12 @@ def _rollout_one_scene(
             external_device=external_device,
         )
         if profile_timing:
-            timing_totals["policy_selection"] += perf_counter() - timing_t0
+            _sync_external_cuda(external_model, external_device)
+            step_policy_selection_s = perf_counter() - timing_t0
+            timing_totals["policy_selection"] += step_policy_selection_s
+            deployed_latency_samples_s.append(
+                float(step_state_history_s + step_candidate_features_s + step_policy_selection_s)
+            )
         selected_sample = samples[sel_idx]
         try:
             if int(getattr(selected_sample, "candidate_index", sel_idx)) != 0:
@@ -1852,6 +1931,7 @@ def _rollout_one_scene(
             metrics_after = _metric_summary(wx_env, state, sdc)
             metrics_after.update(_state_geometry_metrics(state, sdc))
             metric_trace.append(metrics_after)
+            overlap_object_trace.append(_overlapping_object_indices(state, sdc))
             try:
                 tr = state.sim_trajectory
                 tt = _current_timestep(state)
@@ -2150,7 +2230,7 @@ def _rollout_one_scene(
     metric_summary["near_zero_clearance_exposure_rate"] = float(near_zero_clearance_count / max(len(clearance_exposure_vals), 1)) if clearance_exposure_vals else 0.0
     metric_summary["contact_exposure_rate"] = metric_summary["near_zero_clearance_exposure_rate"]
     metric_summary["overlap_episode_count"] = overlap_episode_count
-    metric_summary["secondary_overlap_event"] = float(overlap_episode_count >= 2)
+    metric_summary["multi_overlap_episode_event"] = float(overlap_episode_count >= 2)
     overlap_interval_values = overlap_state_all[:-1]
     offroad_interval_values = offroad_state_all[:-1]
     overlap_interval_flags = [bool(np.isfinite(x) and x > 0.0) for x in overlap_interval_values]
@@ -2217,13 +2297,26 @@ def _rollout_one_scene(
         recontact_starts = [i for i in overlap_starts[1:] if i > int(observed_first_contact_idx)]
         metric_summary["recontact_episode_count"] = float(len(recontact_starts))
         metric_summary["recontact_event"] = float(bool(recontact_starts))
-        metric_summary["secondary_overlap_event"] = metric_summary["recontact_event"]
+        # A secondary collision means a *different collision partner*, not just
+        # another overlap episode with the original partner.  This distinction
+        # matters in Contact: re-contact and secondary collision are separate
+        # outcomes in the paper.  Waymax object slots are stable within scene.
+        anchor_i = int(observed_first_contact_idx)
+        first_partners = overlap_object_trace[anchor_i] if anchor_i < len(overlap_object_trace) else set()
+        identity_available = bool(first_partners)
+        metric_summary["secondary_overlap_identity_available"] = float(identity_available)
+        if identity_available:
+            secondary = any(bool(partners - first_partners) for partners in overlap_object_trace[anchor_i + 1 :])
+            metric_summary["secondary_overlap_event"] = float(secondary)
+        else:
+            metric_summary["secondary_overlap_event"] = float("nan")
     else:
         # Not an eligible post-contact rollout.  NaN keeps aggregate scene rates
         # conditional on a real observed contact instead of counting unobserved
         # contact as a successful no-recontact outcome.
         metric_summary["recontact_episode_count"] = float("nan")
         metric_summary["recontact_event"] = float("nan")
+        metric_summary["secondary_overlap_identity_available"] = float("nan")
         metric_summary["secondary_overlap_event"] = float("nan")
 
     if contact_anchor_idx is not None:
@@ -2378,6 +2471,18 @@ def _rollout_one_scene(
     if route_progression is not None:
         metric_summary["route_progression_m"] = float(route_progression)
 
+    latency_warmup = max(0, int(cl_cfg.get("latency_warmup_decisions", 3) or 0))
+    steady_samples = deployed_latency_samples_s[min(latency_warmup, len(deployed_latency_samples_s)) :]
+    if not steady_samples and deployed_latency_samples_s:
+        steady_samples = list(deployed_latency_samples_s)
+    steady_arr = np.asarray(steady_samples, dtype=float)
+    steady_stats = {
+        "warmup_decisions": int(min(latency_warmup, len(deployed_latency_samples_s))),
+        "num_samples": int(steady_arr.size),
+        "mean": float(np.mean(steady_arr)) if steady_arr.size else float("nan"),
+        "p50": float(np.quantile(steady_arr, 0.50)) if steady_arr.size else float("nan"),
+        "p95": float(np.quantile(steady_arr, 0.95)) if steady_arr.size else float("nan"),
+    }
     timing_summary = {
         "enabled": bool(profile_timing),
         "wall_s": float(wall_s),
@@ -2385,6 +2490,10 @@ def _rollout_one_scene(
         "other_overhead_s": float(max(0.0, wall_s - measured_s)),
         "totals_s": {k: float(v) for k, v in timing_totals.items()},
         "per_decision_s": {k: float(v / max(len(decisions), 1)) for k, v in timing_totals.items()},
+        "deployed_planner_samples_s": [float(x) for x in deployed_latency_samples_s],
+        "steady_state_deployed_planner_samples_s": [float(x) for x in steady_samples],
+        "steady_state_deployed_planner_s": steady_stats,
+        "measurement_note": "state_history + candidate_features + policy_selection; CUDA synchronized at external-model boundaries; run one job per GPU for publication latency",
     }
     out = {
         "scene_id": str(raw.scenario_id),
@@ -2686,12 +2795,27 @@ def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, s
     per_decision_timing["total_measured"] = float(
         sum(timing_totals.values()) / max(int(agg["num_decisions"]), 1)
     )
+    steady_samples_all = [
+        float(x)
+        for scene in scene_results
+        for x in (((scene.get("timing", {}) or {}).get("steady_state_deployed_planner_samples_s", []) or []))
+        if np.isfinite(float(x))
+    ]
+    steady_all = np.asarray(steady_samples_all, dtype=float)
+    steady_summary = {
+        "num_samples": int(steady_all.size),
+        "mean": float(np.mean(steady_all)) if steady_all.size else float("nan"),
+        "p50": float(np.quantile(steady_all, 0.50)) if steady_all.size else float("nan"),
+        "p95": float(np.quantile(steady_all, 0.95)) if steady_all.size else float("nan"),
+    }
     agg["timing"] = {
         "scene_wall_sum_s": timing_wall,
         "totals_s": timing_totals,
         "per_decision_s": per_decision_timing,
         "deployed_planner_components": list(deployed_timing_names),
         "evaluation_only_components": list(evaluation_only_timing_names),
+        "steady_state_deployed_planner_s": steady_summary,
+        "publication_latency_requires_single_job_per_gpu": True,
         "measured_fraction": float(sum(timing_totals.values()) / max(timing_wall, 1.0e-9)),
     }
     return agg

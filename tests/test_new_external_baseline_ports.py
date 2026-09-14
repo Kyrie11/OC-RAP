@@ -73,3 +73,32 @@ def test_new_learned_ports_forward_and_native_losses_are_finite() -> None:
         assert out["logits"].shape == inputs["mask"].shape
         losses = _loss_dict(out, batch, cfg)
         assert torch.isfinite(losses["loss"])
+
+
+def test_generative_ports_native_sampling_paths_are_finite() -> None:
+    inputs, _ = _scene_batch(B=1, N=4, D=24, T=20)
+    for name in ("diffusion_planner", "flow_planner"):
+        cfg = yaml.safe_load((ROOT / f"configs/external_baselines/{name}.yaml").read_text())
+        mcfg = cfg["external_baselines"]["model"]
+        mcfg.update({"max_candidates": 4, "d_model": 64, "num_heads": 4, "num_layers": 1})
+        if name == "diffusion_planner":
+            mcfg["diffusion_steps"] = 2
+        else:
+            mcfg["sample_steps"] = 2
+        model = build_model_from_cfg(24, cfg).eval()
+        kwargs = {k: v for k, v in inputs.items() if k not in {"x", "mask"}}
+        with torch.no_grad():
+            out1 = model(inputs["x"], inputs["mask"], sampling_seed=123, **kwargs)
+            out2 = model(inputs["x"], inputs["mask"], sampling_seed=123, **kwargs)
+        assert torch.isfinite(out1["logits"]).all()
+        assert torch.allclose(out1["logits"], out2["logits"], atol=1e-6, rtol=1e-6)
+        generated = out1["diffusion_generated" if name == "diffusion_planner" else "flow_generated"]
+        assert generated.shape == (1, 20, 4)
+        assert torch.isfinite(generated).all()
+
+
+def test_generative_methods_are_registered_for_external_closed_loop() -> None:
+    from ocrap.simulation.closed_loop_runner import EXTERNAL_CLOSED_LOOP_METHODS, EXTERNAL_LEARNED_METHODS
+    for name in ("diffusion_planner", "flow_planner", "plan_r1"):
+        assert name in EXTERNAL_CLOSED_LOOP_METHODS
+        assert name in EXTERNAL_LEARNED_METHODS

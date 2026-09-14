@@ -106,7 +106,7 @@ SPECS=(
   "idm|configs/external_baselines/idm.yaml|nonlearning||"
 )
 if runtime_bool_true "$RUN_SUPPLEMENTARY_SAFE"; then
-  SPECS+=("diffusion_planner|configs/external_baselines/diffusion_planner.yaml|learned|$CHECKPOINT_ROOT/diffusion_planner/best.pt|diffusion_planner_womd_lattice_port_v60")
+  SPECS+=("diffusion_planner|configs/external_baselines/diffusion_planner.yaml|learned|$CHECKPOINT_ROOT/diffusion_planner/best.pt|diffusion_planner_womd_lattice_port_v61")
 fi
 # Wayformer and BeTop are architecture/topology controls rather than Safe
 # main-table planners.  They are opt-in so the historical command remains

@@ -1194,6 +1194,7 @@ def build_model_from_cfg(input_dim: int, cfg: dict[str, Any]) -> nn.Module:
             eval_noise_scale=float(mcfg.get("eval_noise_scale", 0.15)),
             beta_min=float(mcfg.get("beta_min", 0.1)),
             beta_max=float(mcfg.get("beta_max", 20.0)),
+            diffusion_steps=int(mcfg.get("diffusion_steps", 10)),
         )
     if arch in {"flow_planner", "flowplanner"} or baseline in {"flow_planner", "flowplanner"}:
         return FlowPlannerPort(
@@ -1205,6 +1206,9 @@ def build_model_from_cfg(input_dim: int, cfg: dict[str, Any]) -> nn.Module:
             cfg_weight=float(mcfg.get("cfg_weight", 1.8)),
             consistency_weight=float(mcfg.get("consistency_weight", 0.5)),
             energy_weight=float(mcfg.get("energy_weight", 1.5)),
+            cfg_neighbor_num=int(mcfg.get("cfg_neighbor_num", 10)),
+            sample_steps=int(mcfg.get("sample_steps", 4)),
+            sample_temperature=float(mcfg.get("sample_temperature", 1.0)),
         )
     if arch in {"plan_r1", "planr1"} or baseline in {"plan_r1", "planr1"}:
         return PlanR1Port(

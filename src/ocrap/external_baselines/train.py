@@ -245,6 +245,7 @@ def _forward_model(model: torch.nn.Module, batch: dict[str, torch.Tensor], cfg: 
         source_map_center=batch.get("source_map_center", None),
         source_map_valid=batch.get("source_map_valid", None),
         source_centerline=batch.get("source_centerline", None),
+        target_index=batch.get("target_index", None),
     )
 
 
@@ -502,27 +503,36 @@ def _diffusion_native_loss(out: dict[str, torch.Tensor], batch: dict[str, torch.
     valid = out.get("diffusion_valid")
     if not (torch.is_tensor(pred) and torch.is_tensor(target) and torch.is_tensor(valid)):
         return _zero_loss(out)
-    p = _target_candidate_tensor(pred.float(), batch["target_index"])
-    y = _target_candidate_tensor(target.float(), batch["target_index"])
-    m = _target_candidate_tensor(valid.bool(), batch["target_index"])
-    err = (p - y).square().sum(dim=-1)
-    return torch.where(m, err, torch.zeros_like(err)).sum() / m.float().sum().clamp_min(1.0)
+    # v61 generative ports train only the logged expert trajectory, so the native
+    # tensors are [B,T,4]. Keep the old candidate-axis path for old checkpoints.
+    if pred.dim() >= 4 and pred.shape[1] == batch["x"].shape[1]:
+        pred = _target_candidate_tensor(pred.float(), batch["target_index"])
+        target = _target_candidate_tensor(target.float(), batch["target_index"])
+        valid = _target_candidate_tensor(valid.bool(), batch["target_index"])
+    else:
+        pred, target, valid = pred.float(), target.float(), valid.bool()
+    err = (pred - target).square().sum(dim=-1)
+    return torch.where(valid, err, torch.zeros_like(err)).sum() / valid.float().sum().clamp_min(1.0)
 
 
 def _flow_native_loss(out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor]) -> torch.Tensor:
-    pred = out.get("flow_velocity_pred")
-    target = out.get("flow_velocity_target")
+    pred = out.get("flow_pred_x1", out.get("flow_velocity_pred"))
+    target = out.get("flow_target_x1", out.get("flow_velocity_target"))
     valid = out.get("flow_valid")
     if not (torch.is_tensor(pred) and torch.is_tensor(target) and torch.is_tensor(valid)):
         return _zero_loss(out)
-    p = _target_candidate_tensor(pred.float(), batch["target_index"])
-    y = _target_candidate_tensor(target.float(), batch["target_index"])
-    m = _target_candidate_tensor(valid.bool(), batch["target_index"])
-    err = (p - y).square().sum(dim=-1)
-    base = torch.where(m, err, torch.zeros_like(err)).sum() / m.float().sum().clamp_min(1.0)
+    # Released Flow Planner uses x-start regression under CondOT.  v61 mirrors
+    # that objective and trains one logged expert target per group.
+    if pred.dim() >= 4 and pred.shape[1] == batch["x"].shape[1]:
+        pred = _target_candidate_tensor(pred.float(), batch["target_index"])
+        target = _target_candidate_tensor(target.float(), batch["target_index"])
+        valid = _target_candidate_tensor(valid.bool(), batch["target_index"])
+    else:
+        pred, target, valid = pred.float(), target.float(), valid.bool()
+    err = (pred - target).square().sum(dim=-1)
+    base = torch.where(valid, err, torch.zeros_like(err)).sum() / valid.float().sum().clamp_min(1.0)
     consistency = out.get("flow_consistency_loss")
     return base + (consistency if torch.is_tensor(consistency) else base.new_zeros(()))
-
 
 def _planr1_native_loss(out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], cfg: dict[str, Any]) -> torch.Tensor:
     ref_tok = out.get("planr1_reference_token_logits")
@@ -1010,6 +1020,10 @@ def train_external_baseline(dataset: str, output: str, cfg: dict[str, Any], *, v
         scheduler = _make_epoch_scheduler(opt, tcfg, epochs)
         best_val = float("inf")
         best_epoch = 0
+        bad_epochs = 0
+        early_patience = max(0, int(tcfg.get("early_stopping_patience", 0)))
+        early_min_epochs = max(1, int(tcfg.get("early_stopping_min_epochs", 1)))
+        early_min_delta = max(0.0, float(tcfg.get("early_stopping_min_delta", 0.0)))
         history = []
         t0 = perf_counter()
         for ep in range(1, epochs + 1):
@@ -1022,6 +1036,15 @@ def train_external_baseline(dataset: str, output: str, cfg: dict[str, Any], *, v
             row = {"epoch": ep, "lr": lr_used, "train": tr, "val": va}
             if scheduler is not None:
                 scheduler.step()
+            val_loss = float(va.get("loss", float("inf")))
+            improved = math.isfinite(val_loss) and (val_loss < best_val - early_min_delta or best_epoch == 0)
+            if improved:
+                best_val = val_loss
+                best_epoch = ep
+                bad_epochs = 0
+            else:
+                bad_epochs += 1
+            should_stop = bool(early_patience > 0 and ep >= early_min_epochs and bad_epochs >= early_patience)
             if rank == 0:
                 history.append(row)
                 ckpt = {
@@ -1057,11 +1080,13 @@ def train_external_baseline(dataset: str, output: str, cfg: dict[str, Any], *, v
                     "global_batch_size": int(global_batch_size),
                 }
                 torch.save(ckpt, out_dir / "latest.pt")
-                if va.get("loss", float("inf")) <= best_val:
-                    best_val = float(va.get("loss", float("inf")))
-                    best_epoch = ep
+                if improved:
                     torch.save(ckpt, out_dir / "best.pt")
-                print({"event": "external_baseline_epoch", "baseline": baseline_name, "epoch": ep, "world_size": world_size, "train_loss": tr.get("loss"), "val_loss": va.get("loss"), "target_acc": va.get("target_acc")}, flush=True)
+                print({"event": "external_baseline_epoch", "baseline": baseline_name, "epoch": ep, "world_size": world_size, "train_loss": tr.get("loss"), "val_loss": va.get("loss"), "target_acc": va.get("target_acc"), "early_stop_bad_epochs": bad_epochs}, flush=True)
+                if should_stop:
+                    print({"event": "external_baseline_early_stop", "baseline": baseline_name, "epoch": ep, "best_epoch": best_epoch, "best_val_loss": best_val}, flush=True)
+            if should_stop:
+                break
         summary = {
             "baseline": baseline_name,
             "train_dataset": str(dataset),
@@ -1096,6 +1121,9 @@ def train_external_baseline(dataset: str, output: str, cfg: dict[str, Any], *, v
             "fused_optimizer": bool(opt_kwargs.get("fused", False)),
             "optimizer_source_decay_split": bool(source_decay_split),
             "scheduler": str(tcfg.get("scheduler", "none")),
+            "early_stopping_patience": int(early_patience),
+            "early_stopping_min_epochs": int(early_min_epochs),
+            "early_stopping_min_delta": float(early_min_delta),
             "implementation_version": str(((bcfg.get("model", {}) or {}).get("implementation", "legacy_adapter"))),
             "torch_compile": bool(tcfg.get("compile", False)),
             "history": history,

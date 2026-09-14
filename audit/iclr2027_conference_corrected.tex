@@ -1,0 +1,560 @@
+\documentclass{article} % For LaTeX2e
+\usepackage{iclr2027_conference,times}
+
+% Optional ICLR math commands are intentionally not loaded because this
+% manuscript defines its own notation (including \eps) below.
+% \input{math_commands.tex}
+
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb,amsfonts,bm}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{url}
+\usepackage[hidelinks]{hyperref}
+
+\DeclareMathOperator*{\argmin}{arg\,min}
+\DeclareMathOperator*{\argmax}{arg\,max}
+\DeclareMathOperator{\sigmoid}{sigmoid}
+\DeclareMathOperator{\LCVaR}{LCVaR}
+\DeclareMathOperator{\TopK}{TopK}
+
+\newcommand{\cA}{\mathcal{A}}
+\newcommand{\cG}{\mathcal{G}}
+\newcommand{\cI}{\mathcal{I}}
+\newcommand{\cP}{\mathcal{P}}
+\newcommand{\cQ}{\mathcal{Q}}
+\newcommand{\cZ}{\mathcal{Z}}
+\newcommand{\Rdep}{R_{\mathrm{dep}}}
+\newcommand{\Rorc}{R_{\mathrm{orc}}}
+\newcommand{\Rphys}{R_{\mathrm{phys}}}
+\newcommand{\eps}{\varepsilon}
+\newtheorem{proposition}{Proposition}
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}{Lemma}
+
+\title{OC-RAP: Observation-Consistent Recovery Planning under Latent Future Ambiguity}
+\author{Anonymous Authors}
+
+%\iclrfinalcopy % Uncomment for camera-ready version, but NOT for submission.
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Autonomous-driving safety is not exhausted by avoiding the first collision: near the safety boundary a planner should preserve useful recovery continuations, and after contact it should actively reduce recovery debt. Under partial observability, however, branch-wise planning can overestimate this capability because different latent futures may admit different maneuvers while remaining indistinguishable to the deployed vehicle. We formalize this mismatch as an \emph{oracle-to-deployable recoverability gap} and introduce \textbf{OC-RAP}, an observation-consistent recovery-planning framework. Each candidate prefix is coupled to an actuator-realizable recovery library and evaluated by \textbf{OC-MERO}, a nested lower-tail operator that holds the recovery option fixed across roots compatible with the same post-prefix observation before any option selection. The resulting recovery state separates \emph{shared executable support} from a signed deployable margin: positive values are recovery reserve and negative values are recovery debt. Its local action geometry is governed by candidate-conditioned responses of the active physical constraints rather than by latent-branch or active-agent identity alone. An offline identifiability contract prevents unmatched root indices or option-wise scalar shifts from being interpreted as weak-tail recovery dynamics. At decision time, \textbf{RIFA} lexicographically applies absolute recovery admission before frozen relative candidate preference, so relative evidence cannot compensate for failed deployable recoverability. A single signed constraint then admits forward-invariance semantics on the positive side and finite-time debt-repayment semantics on the negative side, giving one planner for Safe, Near-Contact, and Contact without a learned regime router. We construct WOMD-derived, Waymax-executed train/validation/calibration/test strata with targeted latent futures and observation-alias conflicts for evaluating this deployable-recovery problem.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:introduction}
+
+Collision avoidance is a necessary but incomplete objective for autonomous driving. Near the safety boundary, a planner should preserve useful evasive or braking continuations rather than merely optimize short-horizon comfort. After contact, the planning problem does not disappear: stabilization, finite-time separation, re-contact avoidance, secondary-collision prevention, and safe re-entry remain safety-critical~\citep{koopman2024anatomy,wang2023integrated,parseh2023motion,wang2024post,yang2025post,ghosh2026post}. These cases motivate treating \emph{recoverability} as an action-level planning property rather than as a terminal collision label.
+
+A central difficulty is the information available at deployment. Consider several plausible latent futures that remain indistinguishable after the ego vehicle executes a candidate prefix. A branch-wise oracle can choose one recovery maneuver in one future and a different maneuver in another. The real vehicle cannot do so unless the futures have become observationally distinguishable. Consequently, ``every branch has some recovery'' does not imply that the candidate admits a \emph{deployable} recovery. This distinction is especially important close to contact, where small differences in hidden intent or interaction response can change which recovery continuation is useful.
+
+OC-RAP addresses this problem by making the recovery information pattern explicit. Each candidate prefix is evaluated together with a finite library of executable recovery continuations. Within a set of latent roots that are compatible with the same post-prefix observation, OC-RAP evaluates each recovery option \emph{before} allowing option selection. Only after this observation-consistent aggregation may distinguishable observation states prefer different options. We call the resulting nested evaluation \textbf{Observation-Consistent Multi-Environment Recovery Optimization (OC-MERO)}.
+
+Our theoretical thesis is that deployable recoverability is a signed lower-tail quantity constrained by the deployed information pattern. The information constraint determines which recovery decisions are legal; the sign distinguishes reserve from debt; and lower-tail aggregation makes the weakest observation-compatible roots---rather than an average or an oracle branch---determine the deployability boundary. This perspective also clarifies the relevant local geometry: identifying the active agent or latent branch is not enough; candidate quality depends on how the action changes the signed constraints that own the lower tail.
+
+This formulation also gives a unified interpretation of pre-contact and post-contact planning. Before a violation, the relevant quantity is positive recovery headroom: the candidate should preserve or enlarge the lower-tail reserve of the latent states that actually determine deployability. After a violation, the same signed quantity becomes recovery debt: the candidate should drive the lower tail back toward and eventually across the zero-recoverability boundary. Near-Contact and Contact therefore need not be separate learned experts. They are different states of the same signed recovery object.
+
+A second design principle concerns the role of learned scores. Relative evidence that candidate $a$ is better than nominal does not imply that $a$ is absolutely recoverable. OC-RAP therefore uses \textbf{Role-Isolated Feasibility Admission (RIFA)}: relative evidence proposes and orders candidates, while an absolute recovery source decides whether a proposal is admissible. This separation prevents a large relative score from overriding an absolute recovery failure.
+
+Our contributions are:
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Deployable recoverability under partial observation.} We distinguish branch-wise recovery from observation-measurable recovery and formalize the resulting oracle-to-deployable gap. OC-MERO evaluates each recovery option over observation-compatible roots before option selection; the hard-partition limit is exactly observation-measurable, while the implementation uses a soft compatibility relaxation.
+    \item \textbf{Executable signed recovery semantics.} Candidate prefixes are paired with actuator-projected continuations and evaluated by a non-compensatory signed constraint margin. The resulting support/reserve/debt representation treats Near-Contact as reserve preservation and Contact as debt repayment under one shared recovery model. We further characterize local action effects through the signed response of limiting constraints.
+    \item \textbf{Identifiable, role-isolated admission.} We distinguish physical recovery margins from structural admissibility in the teacher, use split/merge-compatible counterfactual transport as an offline identifiability contract, and exploit lower-tail translation equivariance to rule out response families that cannot change weak-root ownership. RIFA then enforces absolute recovery admission before frozen relative filtering and reranking.
+    \item \textbf{A WOMD-derived, Waymax-executed recovery benchmark.} We construct Safe, Near-Contact, and Contact strata with separate train, validation, calibration, and held-out test roles, targeted latent futures, observation-alias conflicts, and a shared candidate/root/recovery-option generator. The learned recovery model and option library are shared across strata.
+\end{enumerate}
+
+\section{Related Work}
+
+\subsection{Post-Impact and Collision-Mitigation Planning}
+Post-impact studies emphasize that safety continues after the first collision, including stabilization, controllability, secondary-collision avoidance, and trajectory restoration~\citep{koopman2024anatomy,wang2023integrated,parseh2023motion,wang2024post,yang2025post,ghosh2026post}. Collision-mitigation planners also optimize behavior when impact may be unavoidable~\citep{li2022vehicle,bosia2024real}. OC-RAP is complementary: it asks whether an action preserves a recovery that the deployed vehicle can actually select under partial observation, and it applies the same recoverability semantics before and after contact.
+
+\subsection{Reachability, Viability, and Safety Filters}
+Hamilton--Jacobi reachability, learned reachability, control barrier functions, and predictive or backup safety filters provide strong semantics for invariance, reach-avoid sets, and backup feasibility~\citep{bansal2017hamilton,bansal2021deepreach,lin2023generating,borquez2022parameter,ames2019control,koller2018learning,wabersich2021predictive,tearle2021predictive,kim2026backup,so2023solving}. These methods do not by themselves resolve the information-pattern issue considered here: a safe recovery may exist in every hidden branch while no single branch-dependent choice is measurable from the deployed observation. OC-RAP therefore constrains \emph{recovery choice} as well as recovery feasibility.
+
+\subsection{Risk-Aware and Contingency Planning}
+Risk-aware and distributionally robust planners use chance constraints, CVaR, ambiguity sets, or scenario trees to reason about uncertain futures~\citep{uryasev2000conditional,hakobyan2021wasserstein,safaoui2024distributionally,batkovic2020robust,nair2024predictive}. Contingency planners maintain multiple candidate policies or fallback plans~\citep{li2023marc,mustafa2024racp}, while RSS provides a structured formal safety model~\citep{shalev2017formal}. OC-RAP also uses lower-tail risk, but the key distinction is where optimization is placed: the same recovery option must be evaluated across futures that are still observationally compatible before branch-dependent option selection is allowed.
+
+\subsection{Learning-Based Planning and Closed-Loop Benchmarks}
+Large-scale motion datasets and simulators enable learning and closed-loop evaluation at realistic scale~\citep{ettinger2021large,gulino2023waymax,dosovitskiy2017carla,caesar2021nuplan,li2022metadrive,wilson2023argoverse,zhan2019interaction,althoff2017commonroad,krajewski2018highd,caesar2020nuscenes}. Recent surveys summarize learning-based planning and risk modeling~\citep{ding2025understanding,lu2025risk,hu2025survey}. Calibration and conformal prediction provide tools for selecting operating points under uncertainty~\citep{vovk2005algorithmic,angelopoulos2024conformal,lekeufack2024conformal,strawn2023conformal}. Our focus precedes calibration: we first define the deployable recovery quantity that the absolute source is intended to represent.
+
+\section{Problem Formulation}
+\label{sec:problem}
+
+At planning time $t$, let $h_t$ denote the observable history of the ego state, observed agents, map context, and other deployable signals. An upstream planner produces a nominal prefix $a_0$ and a candidate set
+\begin{equation}
+    \cA_t=\{a_0,a_1,\ldots,a_N\}.
+\end{equation}
+For each candidate $a$, the recovery model maintains $K$ latent roots $z_k\in\cZ$ with probabilities $p_k$, and a finite library of $L$ recovery options $g_\ell\in\cG$. The root $z_k$ represents a plausible continuation consistent with the current information; it is not exposed to the deployed selector as a future identity.
+
+Let $M_{k\ell}(a)$ be the signed recoverability margin obtained by executing recovery option $g_\ell$ after candidate $a$ under latent root $z_k$. Positive values indicate recovery reserve and negative values indicate recovery debt. A hidden-root oracle may choose an option map $\pi_{\rm orc}:\{1,\ldots,K\}\rightarrow\{1,\ldots,L\}$ using latent-root identity. A deployable selector is restricted to maps $\pi_{\rm dep}$ that are measurable from the post-prefix observation: if roots $i$ and $j$ remain observationally indistinguishable, then $\pi_{\rm dep}(i)=\pi_{\rm dep}(j)$. Let $\Gamma_{\rm orc}$ and $\Gamma_{\rm dep}$ denote these two policy classes.
+
+For any monotone lower-tail value functional $\varrho$, define
+\begin{align}
+ V_{\varrho}(a,\pi)
+   &=\varrho\!\left(\{M_{k,\pi(k)}(a)\}_{k=1}^K;p\right),\\
+ V^\star_{\rm dep}(a)
+   &=\max_{\pi\in\Gamma_{\rm dep}}V_{\varrho}(a,\pi), &
+ V^\star_{\rm orc}(a)
+   &=\max_{\pi\in\Gamma_{\rm orc}}V_{\varrho}(a,\pi).
+ \label{eq:policy_class_values}
+\end{align}
+\begin{proposition}[Information-pattern oracle dominance]
+\label{prop:oracle_policy_class}
+For every candidate $a$, $V^\star_{\rm dep}(a)\le V^\star_{\rm orc}(a)$. The inequality can be strict even when every latent root admits some positive recovery option.
+\end{proposition}
+The first statement follows from $\Gamma_{\rm dep}\subseteq\Gamma_{\rm orc}$; strictness occurs whenever indistinguishable roots require incompatible recovery choices. This is the oracle-to-deployable recoverability gap at the policy-class level. OC-MERO below provides a differentiable nested lower-tail construction that respects this ordering locally under a soft observation-compatibility relaxation.
+
+The objective of OC-RAP is to estimate a deployable signed recoverability $\Rdep(a)$ and use it for action selection under the observation information pattern. The same policy parameters are used in Safe, Near-Contact, and Contact. These labels identify dataset/evaluation strata rather than learned policy modes.
+
+\section{OC-RAP}
+\label{sec:method}
+
+\subsection{Method Overview}
+\label{subsec:method_overview}
+
+OC-RAP separates four roles that are often conflated in safety-oriented planning: constructing an executable recovery, evaluating that recovery under the deployed information pattern, deciding absolute recoverability, and expressing relative preference among already-admissible candidates. For candidate $a$, the runtime dependency chain is
+\begin{equation}
+ a
+ \;\longrightarrow\;
+ \{g_{\ell}^{\rm proj}\}_{\ell=1}^{L}
+ \;\longrightarrow\;
+ \{M_{k\ell}(a)\}_{k,\ell}
+ \;\xrightarrow{\ \mathrm{OC\text{-}MERO}\ }\;
+ Z_{\rm rec}(a)
+ \;\longrightarrow\;
+ A(a)
+ \;\xrightarrow{\ \mathrm{RIFA}\ }\;
+ \hat a,
+ \label{eq:method_pipeline}
+\end{equation}
+where $g_{\ell}^{\rm proj}$ is an actuator-realizable continuation, $M_{k\ell}$ is its root--option signed recovery margin, $Z_{\rm rec}$ is the observation-consistent recovery state, and $A$ is an absolute recovery source. The subsections below follow this order. Counterfactual root correspondence is used only to authorize and supervise candidate-relative response models; it is not a privileged runtime input.
+
+\subsection{Actuator-Realizable Recovery and Signed Constraint Geometry}
+\label{subsec:executable}
+
+Each candidate is paired with the same finite recovery library $\cG$. A recovery option specifies desired longitudinal and steering commands over a finite continuation. Before rollout, these commands are projected into acceleration, jerk, steering-angle, and steering-rate envelopes. The trajectory that is certified is therefore the trajectory that can actually be executed: actuator-rate constraints are enforced during recovery construction rather than used as a post-hoc veto. Appendix~\ref{app:projection} gives the exact projection.
+
+For root $z_k$ and option $g_\ell$, the projected continuation is evaluated with signed constraints covering clearance, stopping, stability, route consistency, and persistent re-entry/secondary-risk semantics. Denote the normalized active constraints by $h_q(a,z_k,g_\ell)$. The pre-structural physical margin is
+\begin{equation}
+ m^{\mathrm{phys}}_{k\ell}(a)
+ =\min_{q\in\cQ_{\mathrm{active}}} h_q(a,z_k,g_\ell).
+ \label{eq:physical_margin}
+\end{equation}
+This minimum is intentionally non-compensatory: surplus on one safety dimension cannot cancel violation of another.
+
+The action-causal object is defined relative to the nominal prefix $a_0$,
+\begin{equation}
+ \Delta h_q(a;a_0,z_k,g_\ell)
+ =h_q(a,z_k,g_\ell)-h_q(a_0,z_k,g_\ell).
+ \label{eq:constraint_response}
+\end{equation}
+It is exactly zero for $a_0$. A positive response moves the corresponding constraint toward additional reserve or away from existing debt. This candidate-minus-nominal construction removes scene-level offsets and makes the local physical meaning of an action explicit.
+
+\paragraph{Active-constraint geometry.}
+For $m(x)=\min_q h_q(x)$ and active set $\cI(x)=\{q:h_q(x)=m(x)\}$, differentiability of the active constraints gives the one-sided directional derivative
+\begin{equation}
+ Dm(x)[d]=\min_{q\in\cI(x)} \nabla h_q(x)^\top d.
+ \label{eq:min_directional_derivative}
+\end{equation}
+Thus the boundary owner is an active constraint, while the useful recovery direction is determined by how the candidate moves the signed active-constraint geometry. The physically meaningful invariant is therefore a \emph{candidate-conditioned constraint response}, not merely the identity of an active agent or latent branch. Equation~\eqref{eq:constraint_response} is the finite-action counterpart of Eq.~\eqref{eq:min_directional_derivative}; OC-RAP uses this geometry as the organizing interpretation without requiring a regime-specific response rule.
+
+The stored recovery teacher additionally contains ordered structural rules for recovery-mode validity, route blocking, secondary-risk semantics, and deliberately mined hidden branches. We keep these structural admissibility semantics distinct from the physical minimum in Eq.~\eqref{eq:physical_margin}; Section~\ref{subsec:identifiable_source} and Appendix~\ref{app:teacher_contract} make this distinction explicit.
+
+\subsection{OC-MERO: Observation-Consistent Nested Recovery}
+\label{subsec:ocmero}
+
+The key information-pattern constraint is that indistinguishable latent futures cannot choose different recovery options. Let $e_k^o$ be the predicted post-prefix observation embedding associated with root $z_k$. We form the soft compatibility kernel
+\begin{equation}
+ C_{ij}(a)=\exp\!\left[-\frac{\|e_i^o-e_j^o\|_2^2/d_o}{\tau_o}\right],
+ \qquad C_{ii}=1,
+ \label{eq:compatibility}
+\end{equation}
+and anchor-dependent compatible-root weights
+\begin{equation}
+ w_{ij}(a)=\frac{C_{ij}(a)p_j}{\sum_r C_{ir}(a)p_r+\eps}.
+ \label{eq:compat_weight}
+\end{equation}
+
+OC-MERO first evaluates each \emph{fixed} option over the compatible-root lower tail,
+\begin{equation}
+ q_{i\ell}(a)=
+ \LCVaR_{\beta}\!\left(\{M_{j\ell}(a)\}_{j=1}^{K};w_i\right),
+ \label{eq:inner_ocmero}
+\end{equation}
+and only then allows the observation anchor to choose its best valid option,
+\begin{equation}
+ r_i(a)=\max_{\ell\in\cG_{\mathrm{valid}}}q_{i\ell}(a).
+ \label{eq:anchor_recovery}
+\end{equation}
+A second lower-tail aggregation yields deployable recoverability,
+\begin{equation}
+ \Rdep(a)=\LCVaR_{\alpha}\!\left(\{r_i(a)\}_{i=1}^{K};p\right).
+ \label{eq:rdep}
+\end{equation}
+The order in Eqs.~\eqref{eq:inner_ocmero}--\eqref{eq:rdep} is essential: recovery selection occurs only after all latent roots that remain compatible with the same deployed observation have been evaluated under one common option.
+
+For an information-privileged oracle under the same compatibility and risk composition, define
+\begin{align}
+ q_i^{\rm orc}(a)
+ &=\LCVaR_{\beta}\!\left(\{\max_\ell M_{j\ell}(a)\}_{j=1}^{K};w_i\right),\\
+ \Rorc(a)
+ &=\LCVaR_{\alpha}\!\left(\{q_i^{\rm orc}(a)\}_{i=1}^{K};p\right).
+ \label{eq:nested_oracle}
+\end{align}
+\begin{theorem}[OC-MERO legality and oracle upper bound]
+\label{thm:ocmero}
+For nonnegative compatibility weights, $q_i^{\rm orc}(a)\ge r_i(a)$ for every anchor and hence $\Rorc(a)\ge\Rdep(a)$. In the hard-partition limit of the compatibility kernel, with deterministic option tie-breaking, the option selected by Eq.~\eqref{eq:anchor_recovery} is constant within each exact observation-equivalence class and is therefore measurable from the deployed post-prefix observation.
+\end{theorem}
+The proof follows from monotonicity of lower-tail CVaR and is given in Appendix~\ref{app:proofs}. We use
+\begin{equation}
+ G(a)=\Rorc(a)-\Rdep(a)\ge0
+ \label{eq:oracle_gap}
+\end{equation}
+as a diagnostic of hidden-branch optimism, never as privileged root identity supplied to the planner.
+
+\subsection{Recovery Base-State Chart: Support, Reserve, and Debt}
+\label{subsec:signed_semantics}
+
+OC-MERO exposes two complementary coordinates. For each anchor let $q_i^{\max}=\max_\ell q_{i\ell}$ and define
+\begin{align}
+ D_h(a)&=\sum_i p_i\,\mathbf{1}[q_i^{\max}(a)\ge0], &
+ D_s(a)&=\sum_i p_i\,\sigmoid(q_i^{\max}(a)/\tau_q),\\
+ P_{\rm dep}(a)&=\sigmoid(\Rdep(a)), &
+ Q_{\rm gap}(a)&=\exp(-[\Rorc(a)-\Rdep(a)]_+).
+ \label{eq:boundary_complete}
+\end{align}
+$D_h$ is the root-probability mass of observation anchors whose best fixed-option lower-tail value is nonnegative, while $D_s$ is its smooth analogue near the support boundary. $\Rdep$ is the signed outer lower-tail headroom, and $Q_{\rm gap}$ discounts oracle-only optimism.
+
+The central recovery-state chart is
+\begin{equation}
+ Z_{\rm rec}(a)=\big[D_h(a),\ \Rdep(a)\big].
+ \label{eq:recovery_state_chart}
+\end{equation}
+The two coordinates have distinct semantics. $D_h$ describes \emph{support establishment}: whether a common recovery survives the observation-consistent lower tail. Conditional on support, $\Rdep>0$ is reserve to preserve or enlarge and $\Rdep<0$ is debt to repay. Candidate-induced motion in this chart can be written exactly as
+\begin{equation}
+ \Delta Z_{\rm rec}(a;a_0)=Z_{\rm rec}(a)-Z_{\rm rec}(a_0),
+ \label{eq:recovery_state_delta}
+\end{equation}
+without assuming a learned global tangent or Jacobian. This base-state/action-effect separation is important: a representation can correctly encode the current recovery state while still failing to express how every candidate changes support or reserve on a common scale.
+
+The Stage-I relative path additionally predicts candidate-vs-nominal recovery advantage, opportunity, and harmfulness. Those quantities are used as proposal/reranking evidence and remain role-separated from the absolute recovery source introduced next.
+
+\subsection{Identifiable Absolute Recoverability}
+\label{subsec:identifiable_source}
+
+An absolute recovery source should represent the same deployable physical object across candidates, rather than absorb privileged branch labels or repair errors through unconstrained score capacity. OC-RAP therefore imposes two identifiability requirements before introducing candidate-local response capacity. These requirements are used for offline analysis and training authorization; they are not additional runtime observations.
+
+\paragraph{Physical margin versus structural admissibility.}
+The pre-structural quantity in Eq.~\eqref{eq:physical_margin} is a physical signed margin. The authoritative stored teacher is produced by an ordered structural contract that can impose recovery-mode floors, route-blocking caps, secondary-risk rules, or deliberately mined hidden-branch replacements. These operations encode deployability/admissibility rather than additional physical clearance. Consequently, structurally mixed targets constrain the underlying physical margin; they are not silently reinterpreted as exact measurements of it. Structural/future metadata used to construct truth-side audits is never supplied as a runtime model feature.
+
+\paragraph{Counterfactual correspondence before root-local response.}
+A latent root index is not an identity: candidate and nominal root sets may split, merge, or permute. In offline identifiability analysis, candidate-relative root-local response is therefore defined only after probability mass has been transported within a shared exogenous/observation-compatible realization class. The split/merge-compatible construction in Appendix~\ref{app:identifiability} conserves common class mass and fails closed when a required realization fingerprint is absent. It establishes causal correspondence before root-local response models are evaluated, without exposing latent future identity to the deployed planner.
+
+\paragraph{Weak-tail geometry before scalar capacity.}
+For any scalar $c$, lower-tail CVaR is translation equivariant,
+\begin{equation}
+ \LCVaR_\alpha(s+c\mathbf 1;w)=\LCVaR_\alpha(s;w)+c.
+ \label{eq:translation_equivariance}
+\end{equation}
+Hence an option-wise scalar shift preserves all within-option root differences, root ordering, and lower-tail membership. It may translate the tail value, but it cannot identify which observation-compatible weak roots own a deployability failure. This yields the \emph{identifiability-before-capacity} rule used throughout OC-RAP: response capacity is introduced only after the relevant candidate--root/constraint correspondence can alter or resolve the weak-tail geometry that owns the recovery boundary.
+
+\subsection{RIFA: Absolute Admission Before Relative Preference}
+\label{subsec:rifa}
+
+Relative recovery improvement and absolute deployable feasibility answer different questions. Let $\rho(a)$ be the frozen Stage-I proposal score, $(p^{\rm opp}(a),p^{\rm harm}(a),\widehat\Delta(a))$ the frozen relative filtering/reranking evidence, and $A(a)$ an absolute source derived from the observation-consistent recovery representation. RIFA keeps these roles lexicographically separated.
+
+First, a fixed-size relative proposal set is frozen,
+\begin{equation}
+ \cP_K=\TopK_{a\in\cA_t\setminus\{a_0\}}\rho(a),
+ \qquad K=5.
+ \label{eq:rifa_topk}
+\end{equation}
+Only those proposals are tested by the absolute predicate
+\begin{equation}
+ \cP_F=\left\{a\in\cP_K:
+ A(a)\ge\gamma,\ H(a)\le\gamma_H,\ D(a)\le\gamma_D\right\},
+ \label{eq:abs_admission}
+\end{equation}
+where $H$ and $D$ denote hard-violation and harm controls. The native signed reference uses $A=\Rdep$ and the zero-recovery boundary; a learned absolute source may use a held-out calibrated operating point $\gamma$ but does not alter $\rho$ or the relative evidence heads. A rejected top-$K$ proposal is not replaced by rank $K+1$.
+
+The frozen relative filter then operates only inside $\cP_F$,
+\begin{equation}
+ \cP_R=\{a\in\cP_F:p^{\rm opp}(a)\ge\tau_{\rm opp},\ p^{\rm harm}(a)\le\tau_{\rm harm}\},
+ \qquad
+ \hat a=\argmax_{a\in\cP_R}\widehat\Delta(a).
+ \label{eq:relative_filter}
+\end{equation}
+By construction,
+\begin{equation}
+ \boxed{\cP_R\subseteq\cP_F\subseteq\cP_K},
+ \label{eq:rifa_nesting}
+\end{equation}
+so no relative score can rescue a candidate that fails the absolute predicate. If no proposal survives, OC-RAP abstains and executes $a_0$. This is a deterministic design invariant rather than a statistical claim: calibration changes membership of $\cP_F$, but later relative evidence cannot bypass it.
+
+The learned recovery model, root construction, recovery library, proposal budget, and ordering rule are shared across Safe, Near-Contact, and Contact. Held-out calibration may select a different fixed $\gamma$ for each reporting stratum; thus the method shares a learned policy and decision rule across strata without claiming a universal numerical operating threshold.
+
+\subsection{Unified Signed Viability and Debt Repayment}
+\label{subsec:unified_regimes}
+
+The non-compensatory margin provides one recovery coordinate on both sides of the safety boundary. Abstracting the active rollout constraints as
+\begin{equation}
+ m_{\rm rec}(a)=\min_j m_j(a),
+ \label{eq:unified_min_margin}
+\end{equation}
+the controlling index $j$ is allowed to change with the candidate. Near the boundary, a useful action preserves or increases positive reserve; after contact, a useful action produces positive signed response that repays the controlling negative debt and eventually crosses zero. These are two sign regions of the same object, not two expert policies.
+
+Consider a differentiable signed limiting constraint $h(t)$ along an actuator-realizable recovery, with $h>0$ denoting reserve and $h<0$ debt.
+\begin{theorem}[Signed invariance and finite-time debt repayment]
+\label{thm:signed_viability}
+Let $\lambda>0$, $c>0$, and $0\le\eta<1$. If, whenever $h(t)\ge0$,
+\begin{equation}
+ \dot h(t)\ge-\lambda h(t),
+ \label{eq:near_invariance_condition}
+\end{equation}
+then $h(0)\ge0$ implies $h(t)\ge0$ for all subsequent time for which the condition holds. If $h(t)<0$ and
+\begin{equation}
+ \dot h(t)\ge c[-h(t)]^\eta,
+ \label{eq:contact_debt_condition}
+\end{equation}
+then $d(t)=[-h(t)]_+$ reaches zero in finite time bounded by
+\begin{equation}
+ T_{\rm re}\le\frac{d(0)^{1-\eta}}{c(1-\eta)}.
+ \label{eq:finite_reentry_bound}
+\end{equation}
+Applying Eq.~\eqref{eq:near_invariance_condition} after re-entry yields persistent nonnegative reserve.
+\end{theorem}
+Appendix~\ref{app:proofs} gives the comparison proof. In the finite recovery library, the signed rollout constraints, actuator projection, and persistent re-entry checks provide finite-horizon proxies consistent with these continuous-time conditions. Near-Contact therefore asks for viable-set preservation and reserve growth, while Contact asks for debt repayment followed by persistent re-entry. Safe is the non-interference region in which the same recovery machinery should leave an acceptable nominal action unchanged. No learned Safe/Near-Contact/Contact identity is required.
+
+\subsection{Receding-Horizon OC-RAP}
+\label{subsec:runtime_algorithm}
+
+\begin{algorithm}[t]
+\caption{OC-RAP with observation-consistent recovery and RIFA}
+\label{alg:ocrap}
+\begin{algorithmic}[1]
+\STATE Observe history $h_t$; generate nominal $a_0$ and candidates $\cA_t$.
+\FOR{each candidate $a\in\cA_t$}
+    \STATE Project every recovery option into the actuator-feasible command envelope and roll it out.
+    \STATE Evaluate root--option signed constraints and physical margins.
+    \STATE Compute observation compatibility, OC-MERO, and $Z_{\rm rec}(a)=[D_h(a),\Rdep(a)]$.
+    \STATE Evaluate the absolute recovery source $A(a)$ and frozen relative evidence.
+\ENDFOR
+\STATE Freeze $\cP_K$ from the relative proposal score.
+\STATE Apply absolute recovery/harm admission to obtain $\cP_F$.
+\STATE Apply the frozen relative filter and reranker only inside $\cP_F$.
+\STATE Execute $a_0$ if no proposal survives; otherwise execute the highest-ranked survivor and replan.
+\end{algorithmic}
+\end{algorithm}
+
+The ordering in Algorithm~\ref{alg:ocrap} is part of the method: executable recovery precedes certification, observation-consistent absolute recoverability precedes relative preference, and replanning repeats the same policy across all evaluation strata.
+
+\section{Experimental Protocol}
+\label{sec:experiments}
+
+\subsection{Datasets and Splits}
+We construct OC-RAP data from Waymo Open Motion Dataset (WOMD) motion TFRecords and execute counterfactual/recovery rollouts with the Waymax closed-loop backend~\citep{ettinger2021large,gulino2023waymax}. We use four data roles---train, validation, calibration, and held-out test---and three evaluation strata---Safe, Near-Contact, and Contact. The model does not consume the stratum label as a learned regime input. Appendix~\ref{app:data} gives the construction recipe and audited statistics for all twelve buckets.
+
+Safe emphasizes nominal non-interference and contains no deliberately mined oracle artifacts. Near-Contact concentrates low-headroom interactions and augments the latent-root set with targeted hidden-intent, low-friction, and control-delay futures. Contact additionally introduces contact-impulse and secondary-collision approaches. All buckets use 24 candidate prefixes, 8 latent roots, and 12 recovery options in the data constructor.
+
+\subsection{Evaluation Endpoints}
+Safe evaluates collision/off-road rate, nominal-utility preservation, and intervention frequency. Near-Contact additionally emphasizes low-tail minimum clearance, a constant-velocity swept oriented-box TTC proxy, and critical-TTC exposure computed from that proxy. Contact reports post-contact clearance, recovery/escape, re-contact, secondary overlap, stable-stop quality, and overlap duration. Mechanism diagnostics and final closed-loop metrics are kept separate: offline identifiability analyses are not inserted into the runtime planner unless they are part of the frozen submitted model.
+
+\begin{table}[t]
+\centering
+\caption{Primary closed-loop endpoint families.}
+\label{tab:regime_metrics}
+\begin{tabular}{p{0.20\linewidth}p{0.72\linewidth}}
+\toprule
+Stratum & Primary endpoints \\
+\midrule
+Safe & Collision/off-road scene rate; bounded nominal-utility preservation; intervention rate \\
+Near-Contact & Safe endpoints plus lower-tail minimum clearance/TTC and critical-TTC exposure duration \\
+Contact & Terminal/free-space clearance, escape, re-contact, secondary overlap, stable-stop quality, overlap duration, off-road rate \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Main Results}
+% TODO before submission: populate only from a frozen, method-faithful closed-loop run
+% whose selector implements Algorithm~\ref{alg:ocrap}. Do not copy mechanism-audit
+% numbers, or results from a different deployment selector, into this table.
+\begin{table}[t]
+\centering
+\caption{Three-regime closed-loop results for the frozen submitted planner.}
+\label{tab:main_results}
+\setlength{\tabcolsep}{4pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{llcccccccc}
+\toprule
+Variant & Regime & Collision$\downarrow$ & Off-road$\downarrow$ & NUP$\uparrow$ & Interv.$\downarrow$ & Clear.$\uparrow$ & TTC$\uparrow$ & Re-contact$\downarrow$ & Escape$\uparrow$ \\
+\midrule
+Balanced & Safe & -- & -- & -- & -- & -- & -- & -- & -- \\
+Balanced & Near & -- & -- & -- & -- & -- & -- & -- & -- \\
+Balanced & Contact & -- & -- & -- & -- & -- & -- & -- & -- \\
+Precision & Safe & -- & -- & -- & -- & -- & -- & -- & -- \\
+Precision & Near & -- & -- & -- & -- & -- & -- & -- & -- \\
+Precision & Contact & -- & -- & -- & -- & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+\subsection{Ablations}
+The final ablation suite should isolate the information pattern and role separation rather than reproduce the internal development chronology. The recommended minimum set is: (i) branch-wise oracle option selection versus OC-MERO; (ii) mean aggregation versus lower-tail aggregation; (iii) unprojected versus actuator-projected recovery; (iv) absolute admission removed from RIFA; and (v) shared observation-compatible recovery versus hidden-root-dependent option selection. A theory-facing offline audit may additionally contrast candidate-invariant context with the nominal-zero signed constraint response in Eq.~\eqref{eq:constraint_response}; such a probe should remain labeled as analysis unless it is part of the frozen deployed planner.
+
+\section{Limitations}
+\label{sec:limitations}
+OC-RAP relies on a finite candidate and recovery library, so it can certify only recoveries represented by that library. Its deployable guarantee is therefore relative to the modeled latent roots, observation-compatibility kernel, and active recovery constraints. The hard observation partition gives the cleanest measurability statement; the soft kernel used in practice is a differentiable relaxation whose quality depends on the observation embedding. Likewise, Theorem~\ref{thm:signed_viability} is a structural interpretation of the signed constraint; a finite rollout library only certifies the sampled continuation and modeled external futures. The current three-regime protocol also uses held-out bucket-specific operating-point calibration; although the learned recovery model is shared, this is weaker than demonstrating one universal threshold in unconstrained deployment. Finally, structural teacher rules are richer than a pure physical slack minimum. We separate physical recoverability from structural admissibility explicitly, but fully identifying a physical recovery margin from structurally transformed supervision remains a broader challenge.
+
+\section{Conclusion}
+\label{sec:conclusion}
+OC-RAP formulates recovery planning around a deployment constraint: a recovery is useful only if the vehicle can select it from information available after executing the candidate action. OC-MERO enforces this structure by evaluating a fixed recovery option over observation-compatible latent roots before option selection, while actuator projection ensures that the certified continuation is executable. The resulting signed lower-tail margin provides a common coordinate for preserving recovery reserve near the safety boundary and repaying recovery debt after contact.
+
+This formulation also clarifies what an absolute recovery score should represent. Weak-tail ownership cannot be repaired by option-wise scalar shifts or privileged branch identity; identifiability analyses must respect correspondence under the deployed information pattern, and RIFA keeps absolute recoverability admission separate from relative candidate preference. The result is a shared recovery model for Safe, Near-Contact, and Contact that focuses decision making on the latent states that remain indistinguishable at deployment time.
+
+\subsection*{AI Use Statement}
+Generative AI tools were used during the research workflow to summarize and critique experimental evidence, propose and refine hypotheses and experimental designs, assist with implementation and debugging, interpret experimental results, and restructure and edit manuscript text. The authors reviewed the resulting algorithmic decisions, code changes, analyses, references, and manuscript claims and take responsibility for the final content. Generative AI is not an input to the deployed planner and is not used as privileged future information at inference time.
+
+\subsection*{Reproducibility Statement}
+The mathematical definitions and implementation-equivalent lower-tail operator are specified in Sections~\ref{sec:method} and Appendix~\ref{app:implementation}. Appendix~\ref{app:data} documents the WOMD-derived/Waymax dataset construction, split roles, targeted latent futures, and audited bucket statistics; Appendix~\ref{app:metrics} defines the reporting endpoints. The accompanying anonymous code artifact contains the data builder, training/evaluation runners, fail-closed configuration checks, and frozen model/calibration interfaces used for the reported experiments.
+
+\bibliography{iclr2027_conference}
+\bibliographystyle{iclr2027_conference}
+
+\appendix
+
+\section{Implementation Details}
+\label{app:implementation}
+
+\subsection{Actuator Projection}
+\label{app:projection}
+A recovery option produces desired acceleration and steering $(a_s^{\mathrm{des}},\delta_s^{\mathrm{des}})$. With step $\Delta t$, acceleration bounds $[a_{\min},a_{\max}]$, jerk bound $j_{\max}$, steering-angle bound $\delta_{\max}$, and steering-rate bound $\dot\delta_{\max}$, the executable commands are
+\begin{align}
+ a_s &= \Pi_{[\max(a_{\min},a_{s-1}-j_{\max}\Delta t),\,\min(a_{\max},a_{s-1}+j_{\max}\Delta t)]}(a_s^{\mathrm{des}}),\\
+ \delta_s &= \Pi_{[\max(-\delta_{\max},\delta_{s-1}-\dot\delta_{\max}\Delta t),\,\min(\delta_{\max},\delta_{s-1}+\dot\delta_{\max}\Delta t)]}(\delta_s^{\mathrm{des}}).
+\end{align}
+The rollout and all downstream recovery constraints are computed from the projected commands.
+
+\subsection{Weighted Lower-Tail Operator}
+\label{app:lcvar}
+For scores $s_i$ and normalized nonnegative weights $w_i$, the implementation stably sorts the scores from worst to best and integrates exactly an $\alpha$ fraction of probability mass, taking a fractional final item when necessary. An equivalent variational form is
+\begin{equation}
+ \LCVaR_{\alpha}(s;w)=\max_{\nu\in\mathbb R}\left[\nu-\frac{1}{\alpha}\sum_iw_i[\nu-s_i]_+\right].
+ \label{eq:lcvar_variational}
+\end{equation}
+The implementation uses $\alpha=\beta=0.2$ and at most the eight highest-compatibility roots when compatibility sparsification is enabled.
+
+\section{Proofs and Structural Properties}
+\label{app:proofs}
+
+\paragraph{Proof of Proposition~\ref{prop:oracle_policy_class}.}
+By definition, every observation-measurable recovery map is also a root-indexed map, hence $\Gamma_{\rm dep}\subseteq\Gamma_{\rm orc}$. Maximizing the same value functional over a subset cannot exceed the maximum over the superset. Strictness is possible when two observationally equivalent roots have disjoint maximizing option sets: the oracle can choose separately, whereas any deployable map must use one common option. \hfill$\square$
+
+\paragraph{Active-constraint directional derivative.}
+For $m(x)=\min_q h_q(x)$, write $h_q(x+\epsilon d)=h_q(x)+\epsilon\nabla h_q(x)^\top d+o(\epsilon)$. Constraints outside $\cI(x)$ have a positive slack gap and cannot become minimizing for sufficiently small positive $\epsilon$. Taking the minimum over the active first-order expansions gives Eq.~\eqref{eq:min_directional_derivative}.
+
+\paragraph{Proof of Theorem~\ref{thm:ocmero}.}
+For every root $j$ and fixed option $\ell$, $M_{j\ell}\le\max_{\ell'}M_{j\ell'}$. Monotonicity of lower-tail CVaR therefore gives $q_{i\ell}\le q_i^{\rm orc}$. Maximizing the left-hand side over $\ell$ yields $r_i\le q_i^{\rm orc}$, and a second application of monotonicity to the outer lower-tail operator gives $\Rdep\le\Rorc$. In the hard-partition limit, all anchors in one exact observation class induce the same compatible-root distribution; deterministic tie-breaking therefore makes their maximizing valid option a function of the observation class rather than hidden root identity. \hfill$\square$
+
+\paragraph{RIFA nesting invariant.}
+Equation~\eqref{eq:relative_filter} constructs $\cP_R$ by filtering $\cP_F$, while Eq.~\eqref{eq:abs_admission} constructs $\cP_F$ from $\cP_K$. Hence Eq.~\eqref{eq:rifa_nesting} holds identically. If $\cP_R$ is empty, Algorithm~\ref{alg:ocrap} returns $a_0$.
+
+\paragraph{Translation equivariance and weak-tail membership.}
+Using the variational form in Eq.~\eqref{eq:lcvar_variational}, substitute $s_i+c$ and change variables $\nu'=\nu-c$ to obtain $\LCVaR_\alpha(s+c\mathbf 1;w)=c+\LCVaR_\alpha(s;w)$. Adding the same scalar preserves all pairwise differences $s_i-s_j$, hence the stable root order and fractional lower-tail membership are unchanged.
+
+\paragraph{Proof of Theorem~\ref{thm:signed_viability}.}
+When $h\ge0$, Eq.~\eqref{eq:near_invariance_condition} implies $\frac{d}{dt}(e^{\lambda t}h(t))\ge0$, hence $h(t)\ge h(0)e^{-\lambda t}\ge0$. When $h<0$, let $d=-h>0$. Equation~\eqref{eq:contact_debt_condition} gives $\dot d\le-cd^\eta$. For $0\le\eta<1$, integration yields $d(t)^{1-\eta}\le d(0)^{1-\eta}-c(1-\eta)t$, so $d$ reaches zero no later than Eq.~\eqref{eq:finite_reentry_bound}. Applying the nonnegative-side condition afterwards prevents re-entry from being immediately lost. \hfill$\square$
+
+\paragraph{Mass conservation of the split/merge transport.}
+For the equivalence-class transport in Appendix~\ref{app:identifiability},
+\begin{align}
+ \sum_j\Pi_e(k,j)&=\min(c_e,n_e)\frac{c_{ke}}{c_e}, &
+ \sum_k\Pi_e(k,j)&=\min(c_e,n_e)\frac{n_{je}}{n_e}.
+\end{align}
+Thus all common class mass is transported and the construction is invariant to permutations, splits, or merges of root slots inside the same exogenous/observation-compatible class. When $c_e=n_e$, the candidate and nominal class marginals are exactly preserved.
+
+\subsection{Physical and Structural Teacher Semantics}
+\label{app:teacher_contract}
+The physical margin before structural rules is Eq.~\eqref{eq:physical_margin}. The stored teacher target is produced by an ordered structural contract and should not be described as an unconditional pure minimum of active slacks. In the supplied implementation, non-hidden post-contact stabilization/rejoin/pull-over modes can be assigned a positive floor, a blocked route-rejoin mode can be capped negatively, a secondary-avoidance mode can receive a stronger positive floor, and deliberately mined hidden branches may use branch-specific replacement. These rules express deployability/admissibility semantics rather than additional physical clearance.
+
+For absolute-source supervision, structurally mixed targets should be treated as constraints on the underlying physical signed margin rather than silently relabeled as exact physical values. The supplied artifact includes interval-valued truth-side audits derived from the ordered structural contract; these audits are supervision/identifiability tools rather than privileged runtime inputs. The conceptual distinction does not depend on a particular truth-side parameterization. Structural/future metadata used to construct such sidecars is never fed to the deployed model.
+
+\section{Dataset Construction and Audit}
+\label{app:data}
+
+\subsection{Source Data and Runtime Backend}
+The constructor reads WOMD motion v1.3.1 TFRecords and uses the Waymax closed-loop simulation backend~\citep{ettinger2021large,gulino2023waymax}. Training buckets are sourced from WOMD training records. Validation, calibration, and the held-out Safe, Near-Contact, and Contact test buckets are deterministic scene-disjoint slices constructed from the standard WOMD validation records; the publication construction commands do not use WOMD \texttt{validation\_interactive}. The exported official WOMD testing path is also not used by these construction commands. We therefore describe the benchmark as \emph{WOMD-derived with Waymax execution}, not as an audited official WOMD test benchmark.
+
+Each scene--time group starts from a budget of 24 candidate proposals, 8 latent roots, and 12 recovery options. Dataset-quality filtering then retains at most 8 candidate prefixes for Safe and Near-Contact and at most 9 for Contact; the online closed-loop evaluator may still score the full 24-candidate runtime budget. The reports confirm Waymax runtime coverage for all audited futures. Safe buckets contain one replay future plus two reactive futures. Near-Contact uses the replay/reactive futures plus targeted hidden-yield, hidden-acceleration, low-friction-braking, and control-delay hypotheses. Contact additionally includes contact-impulse and secondary-collision-approach hypotheses. The constructor can also add visible perturbation roots where specified by the regime recipe.
+
+\subsection{Regime-Specific Construction}
+\paragraph{Safe.}
+Safe emphasizes nominal behavior and non-interference. The training and held-out test recipes disable deliberately targeted futures and oracle-artifact mining, preserve a nominal candidate at each scene-time group, and exclude Near-Contact/Post-Contact/oracle-artifact nominal samples under the paper regime definitions.
+
+\paragraph{Near-Contact.}
+Near-Contact uses interaction-biased time sampling, eight targeted futures, augmented hidden roots, visible perturbation roots, and balanced artifact/non-artifact sampling. Targeted hidden futures include vehicle yield/acceleration, low-friction braking, and control-delay noise. Artifact-pair construction is used to create cases in which branch-wise recovery can differ from deployable observation-consistent recovery.
+
+\paragraph{Contact.}
+Contact uses denser interaction-biased sampling and ten targeted futures. In addition to the Near-Contact hypotheses, it includes contact-impulse and secondary-collision-approach surrogates. The construction retains nominal candidates while emphasizing post-contact, oracle-artifact, re-contact, and secondary-risk cases.
+
+\subsection{Dataset Roles and Audited Statistics}
+The data are organized into train, validation, calibration, and test roles for each regime. Calibration is held out from training and used only to determine operating points. The supplied audit reports contain no dataset failures; their schema/finite checks pass, OC-MERO stored-versus-recomputed values agree to numerical precision, and each per-role report has an empty internal leakage list. Cross-role scene separation should be documented from the released split manifests rather than inferred from these per-role summaries. Table~\ref{tab:dataset_stats} summarizes the twelve canonical audited buckets.
+
+\begin{table}[t]
+\centering
+\caption{Audited OC-RAP dataset buckets. ``Neg. dep.'' is the fraction with negative deployable recoverability; ``Artifact'' is the oracle-artifact fraction; ``Alias conflict'' is the fraction of observation-compatible root pairs with incompatible best recovery options.}
+\label{tab:dataset_stats}
+\setlength{\tabcolsep}{4.5pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{llrrrrrrr}
+\toprule
+Role & Regime & Samples & Scenes & Groups & Neg. dep. (\%) & Artifact (\%) & Oracle rec. (\%) & Alias conflict (\%) \\
+\midrule
+Train & Safe    & 20,000 & 1,171 & 2,500 &  9.88 &  0.00 & 90.11 &  0.00 \\
+Train & Near    & 13,324 &   600 & 1,800 & 55.31 & 18.94 & 63.63 & 16.15 \\
+Train & Contact & 16,790 &   500 & 2,000 & 54.35 & 16.62 & 62.27 &  9.48 \\
+\midrule
+Val. & Safe    &  2,328 & 132 & 291 &  7.35 &  0.00 & 92.65 &  0.00 \\
+Val. & Near    &  3,445 & 176 & 433 & 50.42 & 24.59 & 74.17 & 20.39 \\
+Val. & Contact &  6,477 & 211 & 723 & 46.15 & 21.86 & 75.71 & 13.54 \\
+\midrule
+Calib. & Safe    &  2,544 & 135 & 318   &  5.35 &  0.00 & 94.65 &  0.00 \\
+Calib. & Near    &  6,039 & 316 & 765   & 44.83 & 23.99 & 79.17 & 19.57 \\
+Calib. & Contact & 16,843 & 543 & 1,896 & 41.69 & 21.21 & 79.52 & 14.23 \\
+\midrule
+Test & Safe    &  3,216 & 175 & 402 &  6.90 &  0.00 & 93.10 &  0.00 \\
+Test & Near    &  4,723 & 250 & 595 & 48.80 & 24.41 & 75.61 & 20.92 \\
+Test & Contact &  6,687 & 209 & 747 & 44.40 & 21.80 & 77.40 & 14.05 \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+The Safe buckets intentionally contain no oracle artifacts, yet they are not trivial all-positive sets: negative-deployable examples remain at approximately 5--10\%. Near-Contact and Contact contain substantially more negative deployability and oracle artifacts, creating useful separation between branch-wise recoverability and observation-consistent deployability. Across the audited buckets, the average number of valid roots is approximately two in Safe, 6.4--6.5 in Near-Contact, and eight in Contact, matching the intended increase in latent ambiguity and post-contact structure.
+
+\subsection{Reproducibility Notes}
+The supplied code package contains separate builders for train, calibration, and validation/test regimes, including source TFRecords, scenario limits, candidate budgets, root/option counts, time-sampling quotas, targeted-future types, artifact mining, and regime filters. The released artifact should preserve these builders together with the twelve canonical audit reports, split manifests, an explicit cross-role scene-ID overlap check, and fixed calibration outputs so that role partitioning and operating-point provenance remain independently auditable.
+
+\section{Offline Identifiability Protocol}
+\label{app:identifiability}
+
+The runtime planner does not consume latent future identity. Offline mechanism analysis follows the same principle. When comparing a candidate with nominal, latent roots are not matched by arbitrary root slot. Instead, future instances are grouped by observation-compatible branch/exogenous realization semantics, and probability mass is transported only within a shared equivalence class. For class $e$, let $c_{ke}$ and $n_{je}$ be candidate and nominal masses and let $c_e=\sum_k c_{ke}$, $n_e=\sum_j n_{je}$. A split/merge-compatible transport is
+\begin{equation}
+ \Pi_e(k,j)=\min(c_e,n_e)\frac{c_{ke}}{c_e}\frac{n_{je}}{n_e},\qquad \Pi=\sum_e\Pi_e.
+\end{equation}
+Missing exogenous fingerprints are treated as unresolved rather than silently matched. This transport is used for identifiability/audit analysis only; it is not a runtime input or an additional learned planner module. The purpose is methodological: establish a deployable correspondence before fitting higher-capacity response models, rather than allowing hidden future identity to leak into the learned recovery source.
+
+\section{Additional Reporting Details}
+\label{app:metrics}
+
+For Safe we report collision and off-road scene rates, bounded nominal-utility preservation, and intervention rate. Near-Contact additionally reports low-tail scene minimum clearance, low-tail constant-velocity swept oriented-box TTC proxy, and critical-TTC exposure duration computed from the same proxy. Contact reports terminal clearance, normalized post-contact free-space AUC, clearance gain, escape rate, re-contact rate, secondary-overlap rate, stable-stop quality, overlap duration, and off-road rate. We recommend scene-level paired bootstrap intervals for the primary closed-loop comparisons whenever the same held-out scenes are evaluated by multiple methods.
+
+\end{document}

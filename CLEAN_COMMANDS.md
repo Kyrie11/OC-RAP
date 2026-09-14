@@ -170,6 +170,17 @@ bash scripts/run_external_baselines.sh \
 
 Each one-regime launcher now uses six concurrent worker slots by default: three jobs on GPU 0 and three jobs on GPU 1. If a regime has more than six enabled baselines, the remaining jobs start as slots become free. Safe additionally enables Diffusion Planner; Near-Contact additionally enables Flow Planner, Plan-R1, and the expanded BeTopNet adapter. Contact keeps its six post-contact baselines.
 
+**Latency exception.** The commands above are throughput-oriented and intentionally run multiple processes per GPU, so their timing must not be reported as uncontended publication latency. After the accuracy/metric run is complete, profile a regime serially on one GPU while reusing its checkpoints (and the Near CPSF calibration artifact):
+
+```bash
+bash scripts/profile_external_baselines_latency.sh \
+  --regime safe \
+  --source-run "$BASE_OUT/external_baselines_v48_111" \
+  --gpu 0 --max-scenarios 0 --womd-role validation
+```
+
+Use `--regime near` or `--regime contact` analogously. The closed-loop summary records warm-up-excluded steady-state mean/p50/p95 deployed-planner latency; the comparison-table builder prefers that steady-state mean when present.
+
 Append `--retrain` to force retraining/re-registration; append `--recalibrate` for the Near CPSF artifact. Set `RUN_SUPPLEMENTARY_SAFE=false` or `RUN_SUPPLEMENTARY_NEAR=false` only when reproducing the historical main-table-only suite.
 
 ## 5. Frozen-module ablations
