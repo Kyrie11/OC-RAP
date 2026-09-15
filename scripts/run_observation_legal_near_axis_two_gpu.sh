@@ -47,7 +47,12 @@ PY
 )
 WOMD_VAL="${META[0]}"; BUCKET="${META[1]}"; BGAMMA="${META[2]}"; PGAMMA="${META[3]}"
 L80_RUN="${OCRAP_ORIENTATION_MODEL_RUN:-$BASE_OUT/ocrap_v48_80_dcp_drfc_bcde_rifa_pistc_main}"
-resolve_root(){ local v="$1" r="$L80_RUN/candidates/$v"; [[ -f "$r/model_v48_trac_sr/best.pt" ]] || r="$L80_RUN/dedicated_candidates/$v"; printf '%s\n' "$r"; }
+resolve_root(){
+  local v="$1"
+  local r="$L80_RUN/candidates/$v"
+  [[ -f "$r/model_v48_trac_sr/best.pt" ]] || r="$L80_RUN/dedicated_candidates/$v"
+  printf '%s\n' "$r"
+}
 BCKPT="$(resolve_root balanced)/model_v48_trac_sr/best.pt"; PCKPT="$(resolve_root precision)/model_v48_trac_sr/best.pt"
 [[ -s "$BCKPT" && -s "$PCKPT" ]] || { echo 'missing frozen checkpoints' >&2; exit 30; }
 python tools/check_frozen_checkpoint_contract.py --historical-adjudication "$HIST_ADJ" --balanced-checkpoint "$BCKPT" --precision-checkpoint "$PCKPT" --output "$OUT/provenance/frozen_checkpoint_contract.json"
