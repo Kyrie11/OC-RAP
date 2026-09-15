@@ -1,3 +1,25 @@
+# V48.124.10.4 — trigger-gated privileged PCD-oracle Near ceiling diagnostic (no deployable algorithm change)
+
+Scientific version remains `v48.124-OC-FMSA`. The attribution-ready V48.124.10.3.1 candidate-quality audit establishes a relative-evidence alignment bottleneck: teacher-PCD-better absolute-admitted candidates exist at a small number of frozen Base intervention states, but the frozen relative evidence does not support them. That localization does **not** prove that repairing relative evidence alone is sufficient to close Near.
+
+V48.124.10.4 therefore runs one privileged causal-sufficiency ceiling only on the 11 historical Base-intervention scenes:
+
+- The frozen Base selector is evaluated first at every current state and remains the sole trigger. If Base selects nominal, privileged teacher labels are not constructed and the oracle must execute nominal.
+- When Base selects non-nominal, all 24 frozen candidates are labeled after the trigger. The oracle may choose only among the Base absolute-admitted non-nominal candidates and only when the explicitly defined execution-consistent teacher PCD is strictly better than the immutable nominal anchor. Absolute-rejected candidates can never be rescued.
+- The historical **11-scene cohort** is fixed, but the historical 51 trigger times are not: once an oracle action changes the trajectory, the frozen Base trigger can fire at different subsequent states. Requiring 51 fresh triggers would be scientifically invalid.
+- The 239 historical Base-zero-intervention scenes are reused exactly by induction because the oracle cannot create a first intervention where Base selects nominal. The reconstructed 250-scene artifact is diagnostic-only and is never publication evidence.
+- GO requires the unchanged Near primary benefit + hard-no-harm gates and the secondary bounded-NUP / route-progression / Near-exposure no-harm gate in both balanced and precision variants with a common beneficial metric.
+- GO authorizes only a future deployable relative-evidence realignment study; it does not promote the privileged oracle. STOP closes relative-only repair as sufficient under the frozen candidate/action support and redirects diagnosis to candidate/action realization or trigger support.
+- No model/checkpoint/calibration/candidate library/recovery library/absolute admission/horizon/dynamics change is made.
+
+The stable command remains:
+
+```bash
+GPU0=0 GPU1=1 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs bash scripts/run_constraint_native_orientation_audit.sh
+```
+
+---
+
 # V48.124.10.3 — intervention-only exhaustive candidate-quality diagnostic (no algorithm change)
 
 Scientific version remains `v48.124-OC-FMSA`. The attribution-ready V48.124.10.2 observation-legal Near run is `OBSERVATION_LEGAL_NEAR_SYSTEM_AXIS_STOP`: frozen base, delta, and nested all fail the primary Near-benefit gate. Delta/nested remove all 51 base interventions and become exactly nominal, so downstream relative filtering is not promoted and deployed Main is not frozen.

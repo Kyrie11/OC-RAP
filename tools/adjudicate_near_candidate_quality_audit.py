@@ -229,7 +229,7 @@ def main() -> None:
             "Privileged teacher labels are used only after the frozen action has been selected.",
             "This diagnostic does not alter the deployed selector, checkpoints, candidate library, recovery library, thresholds, horizon, or Waymax dynamics.",
             "No V48.125 mechanism change is authorized by this audit itself; use the branch only to localize the failed Near system axis.",
-            "Primary relative truth is teacher PCD delta, matching the frozen direct-relative-head training target; R_dep delta is secondary signed-state evidence.",
+            "Primary diagnostic relative utility is execution-consistent teacher PCD delta; exact historical training-target identity is not assumed without the original checkpoint training configuration. R_dep delta is secondary signed-state evidence.",
             "Matching NaN diagnostic values are replay-equivalent and do not constitute an engineering mismatch.",
         ],
     }

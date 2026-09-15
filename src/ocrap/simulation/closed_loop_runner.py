@@ -1509,6 +1509,15 @@ def _rollout_one_scene(
             audit_auto_capped = True
     audit_labels_done = 0
     candidate_quality_audit_records: list[dict[str, Any]] = []
+    # Privileged closed-loop ceiling diagnostic.  This is intentionally OFF by
+    # default and is never part of the deployed policy path.  When enabled, the
+    # frozen Base selector is evaluated first.  Teacher labels are consulted
+    # only if Base would already intervene at that exact state; the diagnostic
+    # can therefore never create a first intervention on a Base-zero trajectory.
+    privileged_pcd_oracle_ceiling = bool(cl_cfg.get("privileged_pcd_oracle_ceiling", False))
+    privileged_pcd_oracle_epsilon = float(cl_cfg.get("privileged_pcd_oracle_epsilon", 1.0e-6) or 1.0e-6)
+    privileged_pcd_oracle_records: list[dict[str, Any]] = []
+    privileged_pcd_oracle_label_count = 0
     progress = bool(cl_cfg.get("progress", True))
     progress_every = max(1, int(cl_cfg.get("progress_every_steps", 5)))
     profile_timing = bool(cl_cfg.get("profile_timing", True))
@@ -1795,6 +1804,159 @@ def _rollout_one_scene(
             deployed_latency_samples_s.append(
                 float(step_state_history_s + step_candidate_features_s + step_policy_selection_s)
             )
+
+        # V48.124.10.4 privileged PCD-oracle ceiling.  The Base decision above
+        # is the immutable causal trigger.  If Base chooses nominal, this branch
+        # does not even construct privileged labels.  If Base chooses a
+        # non-nominal action, all 24 frozen candidates are labeled only for this
+        # diagnostic, then the best *absolute-admitted* candidate is compared to
+        # the nominal anchor using an execution-consistent teacher PCD score.
+        # Candidate generation, absolute admission, recovery-option selection,
+        # checkpoints, thresholds and dynamics remain frozen.
+        base_sel_idx = int(sel_idx)
+        base_selected_sample = samples[base_sel_idx]
+        privileged_selected_teacher_pcd = None
+        privileged_selected_teacher_r_dep = None
+        privileged_selected_teacher_drs = None
+        privileged_selected_teacher_oracle_gap = None
+        if privileged_pcd_oracle_ceiling and method == "ocrap" and int(getattr(base_selected_sample, "candidate_index", base_sel_idx)) != 0:
+            oracle_t0 = perf_counter()
+            oracle_candidate_ids = [int(getattr(sample, "candidate_index", i)) for i, sample in enumerate(samples)]
+            oracle_labeled = build_labeled_samples_for_candidate_indices(
+                hist,
+                "closed_loop",
+                eval_cfg,
+                oracle_candidate_ids,
+                num_roots=feature_num_roots,
+                num_options=feature_num_options,
+                prefixes=[sample.prefix for sample in samples],
+                recovery_options=samples[0].recovery_options if samples else None,
+                recovery_option_valid=samples[0].option_valid if samples else None,
+                assign_regime_labels=False,
+                compact_audit=True,
+            )
+            if profile_timing:
+                # Privileged ceiling labels are diagnostic cost, never deployed
+                # planner latency.  Account them under audit_labels explicitly.
+                timing_totals["audit_labels"] += perf_counter() - oracle_t0
+            if len(oracle_labeled) != len(samples):
+                raise ValueError(
+                    f"privileged PCD oracle expected {len(samples)} labeled candidates, got {len(oracle_labeled)}"
+                )
+            privileged_pcd_oracle_label_count += int(len(oracle_labeled))
+            labeled_by_cid = {int(sample.candidate_index): sample for sample in oracle_labeled}
+            item_by_cid = {
+                int(getattr(item["sample"], "candidate_index", i)): (i, item)
+                for i, item in enumerate(info.get("items", []))
+            }
+            admitted = np.asarray(getattr(info.get("selection", None), "admitted", []), dtype=bool).reshape(-1)
+            if admitted.size != len(samples):
+                raise ValueError(
+                    f"privileged PCD oracle absolute-admission size mismatch: {admitted.size} vs {len(samples)}"
+                )
+            nominal_positions = [i for i, sample in enumerate(samples) if int(getattr(sample, "candidate_index", i)) == 0]
+            if len(nominal_positions) != 1:
+                raise ValueError(f"privileged PCD oracle requires exactly one nominal candidate, got {nominal_positions}")
+            nominal_pos = int(nominal_positions[0])
+
+            pcd_by_pos: dict[int, float] = {}
+            pcd_detail_by_pos: dict[int, dict[str, float]] = {}
+            for pos, sample in enumerate(samples):
+                cid = int(getattr(sample, "candidate_index", pos))
+                lab = labeled_by_cid.get(cid)
+                if lab is None:
+                    raise ValueError(f"privileged PCD oracle missing teacher label for candidate {cid}")
+                ld = _sample_to_audit_dict(lab)
+                item_entry = item_by_cid.get(cid)
+                if item_entry is None:
+                    raise ValueError(f"privileged PCD oracle missing frozen prediction for candidate {cid}")
+                _, item = item_entry
+                # Freeze recovery-option selection to the deployed model for
+                # non-nominal candidates.  Nominal is the causal anchor and is
+                # evaluated by its best shared teacher option, matching the
+                # candidate-quality diagnostic's reference semantics.
+                q_eval = ld["m_star"] if cid == 0 else item["pred"].q
+                opt_gamma = 0.0 if cid == 0 else drs_gamma
+                option_idx = best_option_indices(
+                    q_eval,
+                    ld["root_probs"],
+                    gamma=opt_gamma,
+                    root_valid=ld.get("root_valid", None),
+                    option_valid=ld.get("option_valid", None),
+                    semantics=option_semantics,
+                )
+                drs_i = deployable_recovery_success(
+                    ld["m_star"], ld["root_probs"], option_idx, ld.get("root_valid", None)
+                )
+                r_dep_i = _safe_float(ld.get("r_dep_star", 0.0), 0.0)
+                odg_i = _safe_float(ld.get("oracle_gap_star", 0.0), 0.0)
+                pcd_i = post_contact_deployability_score(float(drs_i), float(r_dep_i), float(odg_i))
+                pcd_by_pos[int(pos)] = float(pcd_i)
+                pcd_detail_by_pos[int(pos)] = {
+                    "teacher_pcd": float(pcd_i),
+                    "teacher_drs": float(drs_i),
+                    "teacher_r_dep": float(r_dep_i),
+                    "teacher_oracle_gap": float(odg_i),
+                }
+
+            nominal_pcd = float(pcd_by_pos[nominal_pos])
+            eligible = [
+                pos for pos in range(len(samples))
+                if pos != nominal_pos and bool(admitted[pos]) and np.isfinite(pcd_by_pos.get(pos, float("nan")))
+            ]
+            best_pos = max(eligible, key=lambda pos: pcd_by_pos[pos]) if eligible else None
+            best_pcd = float(pcd_by_pos[best_pos]) if best_pos is not None else -float("inf")
+            if best_pos is not None and best_pcd > nominal_pcd + privileged_pcd_oracle_epsilon:
+                sel_idx = int(best_pos)
+                oracle_reason = "privileged_pcd_oracle_best_admitted"
+            else:
+                sel_idx = int(nominal_pos)
+                oracle_reason = "privileged_pcd_oracle_nominal_no_positive_admitted_gain"
+            try:
+                info["selection"].selected_index = int(sel_idx)
+                info["selection"].reason = str(oracle_reason)
+            except Exception:
+                pass
+            chosen = pcd_detail_by_pos[int(sel_idx)]
+            best_detail = pcd_detail_by_pos.get(int(best_pos)) if best_pos is not None else None
+            privileged_selected_teacher_pcd = float(chosen["teacher_pcd"])
+            privileged_selected_teacher_r_dep = float(chosen["teacher_r_dep"])
+            privileged_selected_teacher_drs = float(chosen["teacher_drs"])
+            privileged_selected_teacher_oracle_gap = float(chosen["teacher_oracle_gap"])
+            # _select_prefix computed NUP for the frozen Base action.  The
+            # ceiling may execute a different candidate, so recompute this
+            # decision-level utility-preservation diagnostic for the action
+            # that is actually sent to Waymax.  Simulator metrics are already
+            # naturally computed from the executed oracle action.
+            oracle_utility = np.asarray(info.get("utility", []), dtype=float).reshape(-1)
+            if oracle_utility.size == len(samples):
+                oracle_nup = nominal_utility_preservation(
+                    float(oracle_utility[nominal_pos]), float(oracle_utility[int(sel_idx)]),
+                    sigma_u=float((cfg.get("metrics", {}) or {}).get("sigma_u", 1.0)),
+                )
+                info["nup"] = float(oracle_nup["bounded_NUP"])
+            privileged_pcd_oracle_records.append({
+                "step_index": int(step_idx),
+                "time_index": int(t),
+                "base_selected_position": int(base_sel_idx),
+                "base_selected_candidate_index": int(getattr(base_selected_sample, "candidate_index", base_sel_idx)),
+                "oracle_selected_position": int(sel_idx),
+                "oracle_selected_candidate_index": int(getattr(samples[sel_idx], "candidate_index", sel_idx)),
+                "oracle_selection_reason": str(oracle_reason),
+                "num_candidates_labeled": int(len(oracle_labeled)),
+                "num_absolute_admitted_non_nominal": int(len(eligible)),
+                "nominal_teacher_pcd": float(nominal_pcd),
+                "best_admitted_position": None if best_pos is None else int(best_pos),
+                "best_admitted_candidate_index": None if best_pos is None else int(getattr(samples[best_pos], "candidate_index", best_pos)),
+                "best_admitted_teacher_pcd": None if best_pos is None else float(best_pcd),
+                "best_admitted_teacher_pcd_advantage": None if best_pos is None else float(best_pcd - nominal_pcd),
+                "oracle_selected_teacher_pcd": float(chosen["teacher_pcd"]),
+                "oracle_selected_teacher_pcd_advantage": float(chosen["teacher_pcd"] - nominal_pcd),
+                "best_admitted_teacher_drs": None if best_detail is None else float(best_detail["teacher_drs"]),
+                "best_admitted_teacher_r_dep": None if best_detail is None else float(best_detail["teacher_r_dep"]),
+                "best_admitted_teacher_oracle_gap": None if best_detail is None else float(best_detail["teacher_oracle_gap"]),
+            })
+
         selected_sample = samples[sel_idx]
         try:
             if int(getattr(selected_sample, "candidate_index", sel_idx)) != 0:
@@ -2147,6 +2309,11 @@ def _rollout_one_scene(
         selected_nominal_deviation = _safe_optional_float(info["nominal_deviation"][sel_idx])
         selected_odg = _safe_optional_float(selected_sample.oracle_gap_star) if compute_teacher_labels else (_safe_optional_float(selected_audit_data.get("oracle_gap_star")) if selected_audit_data is not None else None)
         selected_post_contact_deployability = selected_audit_pcds
+        if selected_post_contact_deployability is None and privileged_selected_teacher_pcd is not None:
+            selected_post_contact_deployability = float(privileged_selected_teacher_pcd)
+            selected_teacher_r_dep = float(privileged_selected_teacher_r_dep) if privileged_selected_teacher_r_dep is not None else selected_teacher_r_dep
+            selected_odg = float(privileged_selected_teacher_oracle_gap) if privileged_selected_teacher_oracle_gap is not None else selected_odg
+            selected_audit_drs = float(privileged_selected_teacher_drs) if privileged_selected_teacher_drs is not None else selected_audit_drs
         if selected_post_contact_deployability is None and compute_teacher_labels and info["drs"] is not None and selected_teacher_r_dep is not None and selected_odg is not None:
             selected_post_contact_deployability = post_contact_deployability_score(float(info["drs"]), float(selected_teacher_r_dep), float(selected_odg))
         selected_artifact = bool(selected_sample.i_art_star) if compute_teacher_labels else (bool(int(_safe_float(selected_audit_data.get("i_art_star", 0.0)))) if selected_audit_data is not None else None)
@@ -2207,7 +2374,7 @@ def _rollout_one_scene(
                 audit_paper_pcd_selector_miss=audit_paper_pcd_selector_miss,
                 fra_exec=(selected_audit_fra_exec if selected_audit_fra_exec is not None else (None if selected_teacher_r_dep is None else float(selected_teacher_r_dep < 0.0))),
                 fra_cand=info["fra_cand"],
-                drs=(None if selected_audit_drs is None else float(selected_audit_drs)) if (selected_label_audit or coverage_label_audit) else info["drs"],
+                drs=(float(selected_audit_drs) if selected_audit_drs is not None else info["drs"]),
                 nup=float(info["nup"]),
                 metrics_after_step=metrics_after,
             )
@@ -2708,6 +2875,11 @@ def _rollout_one_scene(
         "audit_candidate_scope": str(audit_candidate_scope),
         "audit_store_candidate_records": bool(audit_store_candidate_records),
         "candidate_quality_audit_records": candidate_quality_audit_records if audit_store_candidate_records else [],
+        "privileged_pcd_oracle_ceiling": bool(privileged_pcd_oracle_ceiling),
+        "privileged_pcd_oracle_epsilon": float(privileged_pcd_oracle_epsilon),
+        "privileged_pcd_oracle_trigger_count": int(len(privileged_pcd_oracle_records)),
+        "privileged_pcd_oracle_label_count": int(privileged_pcd_oracle_label_count),
+        "privileged_pcd_oracle_records": privileged_pcd_oracle_records if privileged_pcd_oracle_ceiling else [],
         "closed_loop_FRA_exec": _mean_finite([d.fra_exec for d in decisions]),
         "closed_loop_FRA_cand": _mean_finite([d.fra_cand for d in decisions]),
         "closed_loop_DRS": _mean_finite([d.drs for d in decisions]),

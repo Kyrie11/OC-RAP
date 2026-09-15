@@ -1,3 +1,5 @@
+> **Current audit stage:** V48.124.10.3.1 is attribution-ready and localizes a Near relative-evidence alignment bottleneck, but it is not a closed-loop sufficiency test. The stable command now runs V48.124.10.4: an 11-scene trigger-gated privileged PCD-oracle ceiling. It asks whether perfect relative preference is sufficient while candidate library, absolute admission, Base trigger rule, recovery mechanism, route contract, horizon, checkpoints, and dynamics remain frozen. The oracle is diagnostic-only and cannot be promoted as a deployed method.
+
 > **Current audit stage:** the observation-legal V48.124.10.2 Near run is attribution-ready but scientific STOP. The default stable audit command now runs a small intervention-only exhaustive candidate-quality diagnosis (11 scenes; teacher labels are computed only after frozen action selection). This is not a new recovery mechanism or a deployed model freeze. See `CLEAN_COMMANDS.md`.
 
 ## Current closed-loop adjudication entrypoint
@@ -50,4 +52,4 @@ The historical full-audit engineering build is `v48.124.9-OC-FMSA-RUNTIME-SNAPSH
 
 ### Candidate-quality adjudicator hotfix (V48.124.10.3.1)
 
-The candidate-quality GPU rollout remains V48.124.10.3. The offline adjudicator now (a) treats matching undefined `NaN` diagnostic fields as replay-equivalent, and (b) uses teacher PCD delta as the primary nominal-relative truth because the frozen direct relative heads are supervised on PCD delta. Existing 10.3 outputs can be re-adjudicated without rerunning GPU rollouts.
+The candidate-quality GPU rollout remains V48.124.10.3. The offline adjudicator now (a) treats matching undefined `NaN` diagnostic fields as replay-equivalent, and (b) uses execution-consistent teacher PCD delta as the primary nominal-relative diagnostic utility; exact historical training-target identity is not assumed without the original checkpoint training configuration. Existing 10.3 outputs can be re-adjudicated without rerunning GPU rollouts.

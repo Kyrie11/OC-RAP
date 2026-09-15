@@ -1,3 +1,40 @@
+# Current next step — V48.124.10.4 privileged PCD-oracle Near ceiling
+
+V48.124.10.3.1 is attribution-ready and localizes a relative-evidence alignment bottleneck, but no closed-loop oracle ceiling has yet been run. The default stable command now fresh-replays only the 11 historical Base-intervention scenes for balanced/precision in parallel. The other 239 Base-zero-intervention Near scenes are reused exactly by the trigger-gating induction proof.
+
+Prerequisites:
+
+```text
+$BASE_OUT/OC-RAP-v48.124.10.2-OBSERVATION-LEGAL-NEAR-results.zip
+$BASE_OUT/OC-RAP-v48.124.10.3-CANDIDATE-QUALITY-AUDIT-results.zip
+```
+
+Run:
+
+```bash
+cd /home/senzeyu2/code/OC-RAP
+GPU0=0 GPU1=1 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+  bash scripts/run_constraint_native_orientation_audit.sh
+```
+
+Equivalent explicit launcher:
+
+```bash
+GPU0=0 GPU1=1 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+  bash scripts/run_near_pcd_oracle_ceiling_two_gpu.sh
+```
+
+Outputs:
+
+```text
+$BASE_OUT/OC-RAP-v48.124.10.4-PCD-ORACLE-CEILING-results.zip
+$BASE_OUT/OC-RAP-v48.124.10.4-PCD-ORACLE-CEILING.json
+```
+
+The privileged oracle is a causal-sufficiency ceiling, not publication evidence and not a deployable selector. Do not start final external-baseline or three-regime Main-table evaluation until a deployable selector is subsequently frozen.
+
+---
+
 # Current next step — small Near candidate-quality audit
 
 The attribution-ready observation-legal V48.124.10.2 run is a scientific Near STOP. Do **not** rerun 250 scenes and do not start V48.125 yet. The stable command now replays only the 11 fresh intervention scenes and computes privileged teacher labels only after the frozen base action is selected.

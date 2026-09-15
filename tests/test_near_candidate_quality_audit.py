@@ -113,7 +113,7 @@ def test_candidate_quality_replay_comparison_ignores_matching_undefined_metrics(
     assert mod.compare_behavior({"scenes":[scene]}, {"scenes":[dict(scene)]}) == []
 
 
-def test_candidate_quality_primary_truth_matches_direct_value_training_target():
+def test_candidate_quality_primary_diagnostic_utility_uses_pcd_not_rdep():
     mod=_load_audit_tool()
     result={"scenes":[{
         "target_key":"k","num_decisions":1,"intervention_rate":1.0,
@@ -128,7 +128,7 @@ def test_candidate_quality_primary_truth_matches_direct_value_training_target():
     }]}
     summary,errors=mod.summarize_variant(result)
     assert not errors
-    # R_dep improved, but the direct relative head is trained on PCD delta, so
-    # this is not a positive relative-recovery opportunity.
+    # R_dep improved, but execution-consistent PCD did not; the diagnostic
+    # therefore does not count this as a positive relative-recovery opportunity.
     assert summary["teacher_r_dep_better_than_nominal_anywhere"] == 1
     assert summary["teacher_pcd_better_than_nominal_anywhere"] == 0
