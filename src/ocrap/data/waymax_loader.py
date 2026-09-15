@@ -553,9 +553,33 @@ def raw_scenario_from_waymax_state(state: Any, scenario_id: str, scenario_index:
         object_ids = static_template.object_ids
     else:
         maps, map_valid = _map_from_waymax_roadgraph(state, int(cfg.get("max_map_polylines", 256)), int(cfg.get("max_polyline_points", 64)))
-        route, route_source = _route_from_sdc_paths_with_source(
-            state, int(cfg.get("route_points", 80)), allow_logged_fallback=allow_logged_route_fallback
-        )
+        try:
+            route, route_source = _route_from_sdc_paths_with_source(
+                state, int(cfg.get("route_points", 80)), allow_logged_fallback=allow_logged_route_fallback
+            )
+        except ValueError as exc:
+            # Keep the strict observation-legal fail-close semantics, but attach
+            # enough source provenance to distinguish a genuinely unsupported
+            # target scene from an unrelated scan-through record.
+            paths = getattr(state, "sdc_paths", None)
+            path_shape = None
+            valid_rows = 0
+            valid_points = 0
+            if paths is not None:
+                try:
+                    pv = _as_np(paths.valid).astype(bool)
+                    path_shape = tuple(int(v) for v in pv.shape)
+                    if pv.ndim >= 2:
+                        flat = pv.reshape((-1, pv.shape[-1]))
+                        valid_rows = int(np.sum(np.sum(flat, axis=-1) >= 2))
+                    valid_points = int(np.sum(pv))
+                except Exception:
+                    path_shape = "unavailable"
+            raise ValueError(
+                f"{exc}; scenario_id={scenario_id!r}; source_scenario_index={int(scenario_index)}; "
+                f"sdc_paths_present={paths is not None}; path_valid_shape={path_shape}; "
+                f"rows_with_at_least_2_valid_points={valid_rows}; total_valid_path_points={valid_points}"
+            ) from exc
         dyn = np.zeros((T, int(cfg.get("max_dynamic_signals", 16)), 8), dtype=np.float32)
         sdc_idx = int(np.argmax(_as_np(meta.is_sdc).astype(bool)))
         object_ids = [str(int(v)) for v in meta_ids]

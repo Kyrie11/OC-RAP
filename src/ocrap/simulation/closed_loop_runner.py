@@ -15,7 +15,11 @@ from ocrap.data.build.builder import build_feature_only_samples_for_history, bui
 from ocrap.data.build.history import construct_history
 from ocrap.data.schema import pad_recovery_params
 from ocrap.data.serialization import write_json
-from ocrap.data.waymax_loader import iter_waymax_womd_scenarios, raw_scenario_from_waymax_state
+from ocrap.data.waymax_loader import (
+    iter_waymax_womd_scenarios,
+    iter_waymax_womd_scenarios_selected,
+    raw_scenario_from_waymax_state,
+)
 from ocrap.evaluation.baselines import select_baseline
 from ocrap.evaluation.metrics import best_option_indices, deployable_recovery_success, false_recoverability_admission, nominal_utility_preservation, option_execution_semantics, post_contact_deployability_score, predicted_option_success
 from ocrap.models.data import iter_sample_paths_many, scalar_metadata_for_path
@@ -3514,15 +3518,60 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
     if progress and targets:
         print({"event": "closed_loop_bucket_targets_loaded", "num_targets": len(targets), "num_target_scenes": len({t["scene_id"] for t in targets}), "num_legacy_source_indices": len(target_index_map), "target_source_roles": sorted(declared_target_roles), "raw_source_role": raw_source_role, "target_scene_examples": sorted(target_map)[:5], "max_rollouts": max_rollouts, "raw_max_scenarios": raw_max_scenarios, "raw_scan_bound_source": raw_scan_bound_source, "target_keys_file": cl_cfg.get("target_keys_file")}, flush=True)
     new_scenes_since_partial = 0
-    for i, raw in enumerate(iter_waymax_womd_scenarios(dataset_patterns, max_scenarios=raw_max_scenarios if targets else max_scenes, parser_cfg=local)):
-        raw_seen_this_run += 1
+
+    # Bucket-targeted evaluation should not materialize every WOMD record that
+    # happens to precede a requested target.  In observation-legal mode,
+    # RawScenario construction deliberately fails closed when a record has no
+    # usable sdc_paths route.  Applying that target-scene contract to unrelated
+    # scan-through records can abort an otherwise valid fixed-cohort evaluation
+    # before the record is even checked against target_map.
+    #
+    # The offline bucket stores the exact global Waymax source index for each
+    # target.  When all requested targets have that provenance (the canonical
+    # v48+ path), reuse the existing selected replay iterator: preprocessing and
+    # target RawScenario conversion are identical to the production iterator,
+    # but SimulatorState/route construction is deferred until the source index
+    # is actually requested.  This changes no target-scene model input, action,
+    # random seed, or metric; it only avoids validating routes for non-target
+    # records.  Legacy buckets without complete source-index provenance retain
+    # the historical identity/full-scan path below.
+    target_source_indices = [
+        -1 if t.get("source_scenario_index", -1) is None else int(t.get("source_scenario_index", -1))
+        for t in targets
+    ]
+    scenario_start_index = int(local.get("scenario_start_index", 0) or 0)
+    scenario_stride = int(local.get("scenario_stride", 1) or 1)
+    use_selected_target_replay = bool(
+        targets
+        and target_source_indices
+        and all(idx >= 0 for idx in target_source_indices)
+        and scenario_start_index == 0
+        and scenario_stride == 1
+    )
+    if use_selected_target_replay:
+        raw_iterator = iter_waymax_womd_scenarios_selected(
+            dataset_patterns, target_source_indices, parser_cfg=local
+        )
+        raw_scan_bound_source = "selected_target_source_indices"
+    else:
+        raw_iterator = iter_waymax_womd_scenarios(
+            dataset_patterns,
+            max_scenarios=raw_max_scenarios if targets else max_scenes,
+            parser_cfg=local,
+        )
+
+    for i, raw in enumerate(raw_iterator):
+        raw_index = int((getattr(raw, "metadata", {}) or {}).get("_waymax_scenario_index", i))
+        # Preserve the historical meaning of raw_scenarios_seen as the furthest
+        # source-record position reached, even when irrelevant records are not
+        # materialized into RawScenario objects.
+        raw_seen_this_run = max(raw_seen_this_run, raw_index + 1)
         raw_seen = max(raw_seen, raw_seen_this_run)
         raw_identity_keys = _raw_scene_identity_keys(raw)
         raw_targets_by_key: dict[str, dict[str, Any]] = {}
         for identity_key in raw_identity_keys:
             for target in target_map.get(identity_key, []):
                 raw_targets_by_key[str(target.get("target_key"))] = target
-        raw_index = int((getattr(raw, "metadata", {}) or {}).get("_waymax_scenario_index", i))
         if targets and not raw_targets_by_key and allow_legacy_index:
             for target in target_index_map.get(raw_index, []):
                 # Source-order matching is permitted only on the same declared
@@ -3551,7 +3600,7 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
             rank = len(scene_results)
             current_progress = {
                 "scene_rank": rank,
-                "raw_rank": i,
+                "raw_rank": raw_index,
                 "scene_id": str(raw.scenario_id),
                 "bucket": target.get("bucket_name"),
                 "start_time_index": target.get("time_index"),

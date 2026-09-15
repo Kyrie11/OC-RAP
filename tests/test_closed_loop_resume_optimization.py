@@ -151,3 +151,87 @@ def test_targeted_zero_rollout_cap_means_all_loaded_targets() -> None:
     assert clr._closed_loop_rollout_limit(target_count=175, max_rollouts=0, max_scenes=0) == 175
     assert clr._closed_loop_rollout_limit(target_count=175, max_rollouts=20, max_scenes=0) == 20
     assert clr._closed_loop_rollout_limit(target_count=0, max_rollouts=0, max_scenes=8) == 8
+
+
+def test_bucket_closed_loop_materializes_only_selected_target_source_indices(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-target WOMD records must not be subjected to route fail-close.
+
+    The selected replay iterator parses past unrelated records but only constructs
+    SimulatorState/RawScenario for source indices owned by the fixed bucket.
+    """
+    target = {
+        "bucket_name": "near_contact_test",
+        "scene_id": "official_target",
+        "scene_aliases": ["official_target"],
+        "saved_scene_id": "official_target__wx00000017",
+        "original_scenario_id": "official_target",
+        "official_scenario_id": "official_target",
+        "legacy_scenario_id": "waymax_legacy_target",
+        "source_scenario_index": 17,
+        "womd_source_role": "validation",
+        "waymax_max_num_objects": 64,
+        "time_index": 10,
+        "target_key": "near_contact_test:official_target:t10",
+    }
+    monkeypatch.setattr(clr, "_load_closed_loop_targets", lambda *_: [target])
+
+    calls = {"selected": 0, "full": 0, "indices": None}
+    raw = SimpleNamespace(
+        scenario_id="official_target__wx00000017",
+        metadata={
+            "_waymax_scenario_index": 17,
+            "official_scenario_id": "official_target",
+            "original_scenario_id": "official_target",
+            "legacy_scenario_id": "waymax_legacy_target",
+        },
+    )
+
+    def selected(_patterns, indices, parser_cfg=None):
+        calls["selected"] += 1
+        calls["indices"] = list(indices)
+        yield raw
+
+    def full(*_args, **_kwargs):
+        calls["full"] += 1
+        raise AssertionError(
+            "bucket-targeted evaluation must not materialize unrelated WOMD records"
+        )
+
+    monkeypatch.setattr(clr, "iter_waymax_womd_scenarios_selected", selected)
+    monkeypatch.setattr(clr, "iter_waymax_womd_scenarios", full)
+    monkeypatch.setattr(
+        clr,
+        "_rollout_one_scene",
+        lambda raw, rank, *args, **kwargs: {
+            **_fake_scene_result(raw.scenario_id, rank),
+            "bucket_name": kwargs.get("bucket_name"),
+            "target_key": kwargs.get("target_key"),
+            "target_time_index": kwargs.get("start_time_index_override"),
+        },
+    )
+
+    output = tmp_path / "targeted.json"
+    cfg = {
+        "closed_loop": {
+            "max_scenarios": 0,
+            "max_rollouts": 0,
+            "method": "nominal",
+            "bucket_dataset": "dummy_bucket",
+            "bucket_split": "test",
+            "require_bucket_targets": True,
+            "resume": False,
+            "save_partial": False,
+            "progress": False,
+        },
+        "selection": {"gamma_rec": 0.0},
+        "waymax": {},
+        "artifact": {},
+    }
+    result = clr.closed_loop_evaluate("/data/validation/validation.tfrecord@150", None, output, cfg)
+    assert calls == {"selected": 1, "full": 0, "indices": [17]}
+    assert result["num_scenes"] == 1
+    assert result["bucket_matched_rollouts"] == 1
+    assert result["raw_scan_bound_source"] == "selected_target_source_indices"
+    assert result["raw_scenarios_seen_this_run"] == 18
