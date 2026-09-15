@@ -91,6 +91,11 @@ export OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}"
 export MKL_NUM_THREADS="${MKL_NUM_THREADS:-4}"
 export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-4}"
 
+USE_SDC_PATHS="${USE_SDC_PATHS:-true}"
+REQUIRE_OBSERVATION_LEGAL_ROUTE="${REQUIRE_OBSERVATION_LEGAL_ROUTE:-true}"
+ALLOW_LOGGED_SDC_ROUTE_FALLBACK="${ALLOW_LOGGED_SDC_ROUTE_FALLBACK:-false}"
+ALLOW_FUTURE_ROUTE_PROXY="${ALLOW_FUTURE_ROUTE_PROXY:-false}"
+
 DATASET_SPEC="$(runtime_normalize_womd_spec "$WOMD_VAL" "$WOMD_NUM_SHARDS")"
 if [[ -n "$BUCKET_DATASET" && -n "$PREFLIGHT_SUPPORT_JSON" ]]; then
   [[ -f "$PREFLIGHT_SUPPORT_JSON" ]] || { echo "Missing PREFLIGHT_SUPPORT_JSON: $PREFLIGHT_SUPPORT_JSON" >&2; exit 2; }
@@ -141,7 +146,11 @@ ARGS=(
   --set "selection.gamma_rec=$GAMMA_REC"
   --set selection.require_absolute_admission_for_intervention=true
   --set "waymax.jax_compilation_cache_dir=$JAX_CACHE_DIR"
-  --set waymax.dataloader_include_sdc_paths=false
+  --set "closed_loop.use_sdc_paths=$USE_SDC_PATHS"
+  --set "closed_loop.require_observation_legal_route=$REQUIRE_OBSERVATION_LEGAL_ROUTE"
+  --set "closed_loop.allow_future_route_proxy=$ALLOW_FUTURE_ROUTE_PROXY"
+  --set "waymax.dataloader_include_sdc_paths=$USE_SDC_PATHS"
+  --set "waymax.allow_logged_sdc_route_fallback=$ALLOW_LOGGED_SDC_ROUTE_FALLBACK"
   --set waymax.compute_future_metrics=false
   --set waymax.teacher_metrics_stride=0
   --set waymax.use_jit_scan_rollouts=true

@@ -26,6 +26,10 @@ source scripts/lib/runtime.sh
 : "${INCLUDE_SCENES_IN_RESULT:=true}"
 : "${RESULT_SCENE_DETAIL:=metrics}"
 : "${RESUME_FORCE:=false}"
+: "${USE_SDC_PATHS:=true}"
+: "${REQUIRE_OBSERVATION_LEGAL_ROUTE:=true}"
+: "${ALLOW_LOGGED_SDC_ROUTE_FALLBACK:=false}"
+: "${ALLOW_FUTURE_ROUTE_PROXY:=false}"
 
 : "${RUN_SAFE:=1}"
 : "${RUN_NEAR:=1}"
@@ -134,7 +138,11 @@ run_one() {
     --set closed_loop.memory_scene_detail="$RESULT_SCENE_DETAIL" \
     --set "closed_loop.include_scenes_in_result=$INCLUDE_SCENES_IN_RESULT" \
     --set closed_loop.include_scenes_in_partial=false \
-    --set waymax.dataloader_include_sdc_paths=false \
+    --set "closed_loop.use_sdc_paths=$USE_SDC_PATHS" \
+    --set "closed_loop.require_observation_legal_route=$REQUIRE_OBSERVATION_LEGAL_ROUTE" \
+    --set "closed_loop.allow_future_route_proxy=$ALLOW_FUTURE_ROUTE_PROXY" \
+    --set "waymax.dataloader_include_sdc_paths=$USE_SDC_PATHS" \
+    --set "waymax.allow_logged_sdc_route_fallback=$ALLOW_LOGGED_SDC_ROUTE_FALLBACK" \
     --set waymax.compute_future_metrics=false \
     --set waymax.teacher_metrics_stride=0 \
     --set waymax.use_jit_scan_rollouts=true \

@@ -560,6 +560,24 @@ def _sync_external_cuda(external_model: Any | None, external_device: Any | None)
         return
 
 
+def _sync_ocrap_cuda(bundle: ModelBundle | None) -> None:
+    """Synchronize OC-RAP CUDA work at publication latency boundaries.
+
+    Current inference copies outputs to CPU and therefore normally synchronizes
+    implicitly, but an explicit boundary keeps the latency contract correct if
+    inference internals change and makes it symmetric with external baselines.
+    """
+    if bundle is None:
+        return
+    try:
+        import torch
+        device = getattr(bundle, "device", None)
+        if str(getattr(device, "type", device)).lower() == "cuda" and torch.cuda.is_available():
+            torch.cuda.synchronize(device)
+    except Exception:
+        return
+
+
 def _current_timestep(state: Any) -> int:
     try:
         return int(_as_np(state.timestep).reshape(()).item())
@@ -857,11 +875,9 @@ def _global_route_from_history(history: Any) -> tuple[np.ndarray | None, str | N
     length = float(np.sum(np.linalg.norm(np.diff(xy_global, axis=0), axis=1)))
     if not np.isfinite(length) or length < 1.0:
         return None, None
-    source = (
-        "history_future_route_proxy"
-        if bool(metadata.get("route_sanitized", False))
-        else "waymax_sdc_route"
-    )
+    source = str(metadata.get("route_source") or (
+        "history_future_route_proxy" if bool(metadata.get("route_sanitized", False)) else "unknown_route"
+    ))
     return xy_global.astype(np.float32), source
 
 
@@ -1708,6 +1724,7 @@ def _rollout_one_scene(
             active_regime_trace.append(_observable_regime_name(state, sdc, cfg, fallback=bucket_name or ""))
         if profile_timing:
             _sync_external_cuda(external_model, external_device)
+            _sync_ocrap_cuda(bundle)
         timing_t0 = perf_counter()
         sel_idx, info = _select_prefix(
             samples,
@@ -1722,6 +1739,7 @@ def _rollout_one_scene(
         )
         if profile_timing:
             _sync_external_cuda(external_model, external_device)
+            _sync_ocrap_cuda(bundle)
             step_policy_selection_s = perf_counter() - timing_t0
             timing_totals["policy_selection"] += step_policy_selection_s
             deployed_latency_samples_s.append(
@@ -2499,7 +2517,10 @@ def _rollout_one_scene(
         "num_samples": int(steady_arr.size),
         "mean": float(np.mean(steady_arr)) if steady_arr.size else float("nan"),
         "p50": float(np.quantile(steady_arr, 0.50)) if steady_arr.size else float("nan"),
+        "p90": float(np.quantile(steady_arr, 0.90)) if steady_arr.size else float("nan"),
         "p95": float(np.quantile(steady_arr, 0.95)) if steady_arr.size else float("nan"),
+        "p99": float(np.quantile(steady_arr, 0.99)) if steady_arr.size else float("nan"),
+        "max": float(np.max(steady_arr)) if steady_arr.size else float("nan"),
     }
     timing_summary = {
         "enabled": bool(profile_timing),
@@ -2511,7 +2532,7 @@ def _rollout_one_scene(
         "deployed_planner_samples_s": [float(x) for x in deployed_latency_samples_s],
         "steady_state_deployed_planner_samples_s": [float(x) for x in steady_samples],
         "steady_state_deployed_planner_s": steady_stats,
-        "measurement_note": "state_history + candidate_features + policy_selection; CUDA synchronized at external-model boundaries; run one job per GPU for publication latency",
+        "measurement_note": "observation/state-history + candidate-feature construction + deployable policy selection only; explicit CUDA synchronization at OC-RAP/external-model boundaries; simulator env.step/metrics and teacher/audit labels excluded; run one job per GPU for publication latency",
     }
     out = {
         "scene_id": str(raw.scenario_id),
@@ -2683,7 +2704,10 @@ def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, s
         elif mk.endswith("_count") or mk in {"overlap_episode_count", "num_metric_steps"}:
             agg["waymax_metrics"][mk] = float(sum(v for v, _ in finite))
         elif mk.endswith("_any"):
-            agg["waymax_metrics"][mk] = float(max(v for v, _ in finite))
+            # Scene-level event indicators aggregate to a scene rate.  The old
+            # max() answered only whether any scene in the whole dataset had the
+            # event and could be misread as a rate.
+            agg["waymax_metrics"][mk] = float(np.mean([v for v, _ in finite]))
         elif mk.endswith("_max") or "_max_" in mk:
             agg["waymax_metrics"][mk] = float(max(v for v, _ in finite))
         elif mk.endswith("_min") or "_min_" in mk:
@@ -3725,6 +3749,10 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
         "relative_recovery_use_recovery_pool_by_bucket": (local.get("selection", {}) or {}).get("relative_recovery_use_recovery_pool_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {},
         "recovery_cert_max_hard_by_bucket": (local.get("selection", {}) or {}).get("recovery_cert_max_hard_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {},
         "recovery_cert_max_harm_by_bucket": (local.get("selection", {}) or {}).get("recovery_cert_max_harm_by_bucket", {}) if isinstance(local.get("selection", {}), dict) else {},
+        "rifa_relative_proposal_top_k": (local.get("selection", {}) or {}).get("rifa_relative_proposal_top_k", None) if isinstance(local.get("selection", {}), dict) else None,
+        "rifa_relative_min_advantage": (local.get("selection", {}) or {}).get("rifa_relative_min_advantage", None) if isinstance(local.get("selection", {}), dict) else None,
+        "rifa_relative_opportunity_threshold": (local.get("selection", {}) or {}).get("rifa_relative_opportunity_threshold", None) if isinstance(local.get("selection", {}), dict) else None,
+        "rifa_relative_harm_threshold": (local.get("selection", {}) or {}).get("rifa_relative_harm_threshold", None) if isinstance(local.get("selection", {}), dict) else None,
     }
     result["notes"] = [
         "This is a true Waymax receding-horizon loop: reset once, select an action from current SimulatorState, step the environment, then replan from the updated SimulatorState.",

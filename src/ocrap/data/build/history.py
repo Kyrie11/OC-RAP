@@ -34,9 +34,24 @@ def _future_route_proxy(future_ego: np.ndarray, future_valid: np.ndarray, max_po
     return route
 
 
-def _sanitize_route(route: np.ndarray, future_ego: np.ndarray, future_valid: np.ndarray, cfg: dict) -> tuple[np.ndarray, dict]:
+def _sanitize_route(
+    route: np.ndarray, future_ego: np.ndarray, future_valid: np.ndarray, cfg: dict, *, route_source: str = "unknown"
+) -> tuple[np.ndarray, dict]:
     max_points = int(cfg.get("route_points", route.shape[0] if route.size else 80))
-    meta = {"route_sanitized": False, "route_projection_distance_m": 0.0}
+    cl_cfg = cfg.get("closed_loop", {}) if isinstance(cfg.get("closed_loop", {}), dict) else {}
+    require_observation_legal = bool(cl_cfg.get("require_observation_legal_route", False))
+    allow_future_proxy = bool(cl_cfg.get("allow_future_route_proxy", True)) and not require_observation_legal
+    meta = {
+        "route_sanitized": False,
+        "route_projection_distance_m": 0.0,
+        "route_source": str(route_source),
+        "route_observation_legal": str(route_source) == "womd_v1_3_1_sdc_paths_connectivity_only",
+    }
+    if require_observation_legal and not meta["route_observation_legal"]:
+        raise ValueError(
+            f"closed-loop publication route is not observation-legal: source={route_source!r}; "
+            "WOMD validation future/logged-SDC proxies are forbidden"
+        )
     if route.size and len(route) >= 2:
         try:
             proj = project_to_route(np.zeros(2, dtype=np.float32), route)
@@ -44,10 +59,24 @@ def _sanitize_route(route: np.ndarray, future_ego: np.ndarray, future_valid: np.
             length = float(np.sum(np.linalg.norm(np.diff(route[:, :2], axis=0), axis=1)))
             if proj.distance <= float(cfg.get("max_route_projection_distance_m", 8.0)) and length >= float(cfg.get("min_route_length_m", 10.0)):
                 return route.astype(np.float32), meta
+            if require_observation_legal and length >= float(cfg.get("min_route_length_m", 10.0)):
+                # A genuine navigation route remains valid even if the simulated
+                # policy deviates > max_route_projection_distance_m.  Do not
+                # replace it by the logged future simply because the vehicle is
+                # off-route.
+                meta["route_sanitize_reason"] = "observation_legal_route_retained_despite_projection_distance"
+                return route.astype(np.float32), meta
         except Exception:
-            pass
+            if require_observation_legal:
+                raise
+    if require_observation_legal or not allow_future_proxy:
+        raise ValueError(
+            "no usable observation-legal route; refusing future_agent_states route fallback in closed-loop evaluation"
+        )
     meta["route_sanitized"] = True
     meta["route_sanitize_reason"] = "route_not_near_ego_or_too_short"
+    meta["route_source"] = "logged_future_route_proxy"
+    meta["route_observation_legal"] = False
     return _future_route_proxy(future_ego, future_valid, max_points), meta
 
 def ego_from_agent_state(agent_state: np.ndarray) -> np.ndarray:
@@ -96,7 +125,9 @@ def construct_history(raw: RawScenario, t: int, cfg: dict) -> SceneHistory:
     hist_e = transform_states_to_ego(hist, ego_raw)
     fut_e = transform_states_to_ego(future, ego_raw)
     maps, map_valid, route = transform_map_and_route(raw, ego_raw)
-    route, route_meta = _sanitize_route(route, fut_e, future_valid, cfg)
+    route, route_meta = _sanitize_route(
+        route, fut_e, future_valid, cfg, route_source=str((raw.metadata or {}).get("route_source", "unknown"))
+    )
     dyn = raw.dynamic_map[max(0, t - H + 1) : t + 1]
     if dyn.shape[0] < H:
         pad = np.zeros((H - dyn.shape[0],) + dyn.shape[1:], dtype=np.float32)

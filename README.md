@@ -1,3 +1,14 @@
+## Current closed-loop adjudication entrypoint
+
+For the frozen V48.124 scientific Main, the current engineering/evaluation successor is **V48.124.10.2**. It fixes result provenance and enforces an observation-only planner-route contract without changing model weights or selector equations. Use the stable command:
+
+```bash
+GPU0=0 GPU1=1 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+  bash scripts/run_constraint_native_orientation_audit.sh
+```
+
+The default path first runs a fresh 250-scene Near base with WOMD v1.3.1 `sdc_paths` connectivity geometry, then performs reduced delta/nested diagnosis, and if an arm is promoted automatically runs one fresh 250-scene confirmation. Results are packaged even on fail-closed exits.
+
 # OC-RAP — cleaned audit/deployment workspace
 
 **Current engineering build: `v48.124.10-OC-FMSA-NEAR-RIFA-SYSTEM-AXIS-AUDIT`.** The scientific model/recovery mechanism remains the frozen `v48.124-OC-FMSA`. V48.124.9 closed Reliability + Scientific Attribution and left exactly one failed deployed-system gate: Near. V48.124.10 does not train or recalibrate anything; it diagnoses that Near failure by completing frozen relative role-isolation only after the historical absolute-admission selector would already intervene.

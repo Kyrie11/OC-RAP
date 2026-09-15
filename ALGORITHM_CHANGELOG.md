@@ -1,3 +1,46 @@
+# V48.124.10.2 — Observation-legal route + diagnostic-provenance engineering fix
+
+Scientific version remains `v48.124-OC-FMSA`; no model, checkpoint, calibration, recovery mechanism, candidate library, horizon, or selector equation changes are introduced.
+
+Engineering/evaluation fixes only:
+
+- Serialize the four V48.124.10 relative-selector parameters into `closed_loop_ocrap.json` so fail-closed adjudication can prove the executed delta/nested contract.
+- Before GPU execution, hash the actual balanced/precision `best.pt` files and require exact SHA256/size equality with the frozen V48.124.9 adjudication; store the resulting checkpoint contract in the result bundle.
+- Planner route selection uses WOMD v1.3.1 `sdc_paths` connectivity geometry but **never** reads `path_samples/on_route`; validation logged-future and future-agent route fallbacks remain forbidden. `on_route` may still be used by Waymax evaluation metrics, not by OC-RAP planner features.
+- The observation-legal pipeline starts from a fresh full 250-scene Near base before reduced diagnostic replay, because route input repair invalidates the old 35-scene closure assumption.
+- Result packaging is now executed on both success and fail-closed exits; JAX compilation caches are excluded, so an engineering failure still produces an uploadable evidence bundle and manifest.
+- Export the exact immutable runtime source tree and SHA manifest into each result bundle, eliminating ambiguity when a separately uploaded working-tree ZIP differs from the code that actually ran.
+- The stable command remains `GPU0=0 GPU1=1 BASE_OUT=... bash scripts/run_constraint_native_orientation_audit.sh`.
+
+---
+
+# V48.124.10.1 — Observation-legal WOMD v1.3.1 route evaluation engineering fix
+
+**Scientific version remains V48.124-OC-FMSA. No model/recovery-mechanism change.**
+
+A post-hoc scientific-legality audit found that the V48.124.9 closed-loop launchers forced `waymax.dataloader_include_sdc_paths=false`. The Waymax loader then used the validation `log_trajectory` SDC future as a route proxy, and `construct_history` could also use `future_agent_states` as a route fallback. Because route features enter the OC-RAP encoder, the old run is byte/provenance reliable but cannot serve as observation-only publication evidence.
+
+This engineering/protocol repair:
+
+- enables official WOMD v1.3.1 `sdc_paths` for closed-loop publication evaluation;
+- fails closed instead of reading logged/future SDC trajectory labels when no legal route is available;
+- records an explicit route-source contract;
+- reruns the full 250-scene Near baseline before constructing any intervention cohort;
+- rebuilds balanced/precision intervention cohorts independently, then evaluates the frozen delta/nested downstream selector diagnostics only on those fresh cohorts;
+- automatically performs one fresh full-250 confirmation if a diagnostic arm is promoted;
+- fixes generic dataset aggregation of scene-level `*_any` fields from global `max` to scene mean;
+- adds explicit OC-RAP CUDA synchronization and p90/p99/max to publication latency instrumentation.
+
+The stable command remains:
+
+```bash
+GPU0=0 GPU1=1 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs bash scripts/run_constraint_native_orientation_audit.sh
+```
+
+No finetuning, recalibration, candidate/recovery-library change, threshold sweep, horizon change, regime router, source change, or V48.125 mechanism search is authorized by this fix.
+
+---
+
 # V48.124.10 — Near RIFA deployed-system-axis diagnostic (no training / no recovery-mechanism search)
 
 Scientific Main remains **unpromoted** pending the diagnostic and a fresh full-population confirmation. V48.124.9 is engineering-valid and scientifically attributable, but its preregistered decision is `FIXED_MAIN_NEAR_VALIDITY_STOP`. The recovery-set mechanism family remains frozen.

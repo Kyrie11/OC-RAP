@@ -290,26 +290,90 @@ def _make_dataset_config(patterns: Any, cfg: dict):
     )
 
 
-def _route_from_sdc_paths(state: Any, max_points: int) -> np.ndarray:
+def _current_sdc_pose_for_route_selection(state: Any) -> tuple[np.ndarray | None, float | None]:
+    """Return current SDC xy/heading using simulator state only."""
+    try:
+        meta = state.object_metadata
+        sdc_idx = int(np.argmax(_as_np(meta.is_sdc).astype(bool)))
+        tr = state.sim_trajectory
+        t = int(_as_np(state.timestep).reshape(()).item())
+        xy = np.asarray([_as_np(tr.x)[sdc_idx, t], _as_np(tr.y)[sdc_idx, t]], dtype=np.float64)
+        heading = float(_as_np(tr.yaw)[sdc_idx, t])
+        if np.all(np.isfinite(xy)) and np.isfinite(heading):
+            return xy, heading
+    except Exception:
+        pass
+    return None, None
+
+
+def _wrap_abs_angle(x: float) -> float:
+    return abs(float((x + np.pi) % (2.0 * np.pi) - np.pi))
+
+
+def _connectivity_only_path_index(state: Any, x: np.ndarray, y: np.ndarray, valid: np.ndarray) -> int | None:
+    """Choose an SDC path from current pose + path geometry only.
+
+    ``path_samples/on_route`` is deliberately not consulted.  WOMD documents
+    that bit as compatibility with the SDC's observed route, while the strict
+    OC-RAP deployment contract must not let a validation-only route label enter
+    planner features.  Candidate path geometry itself is generated from
+    roadgraph connectivity from the SDC start position.
+    """
+    if x.ndim < 2 or y.ndim < 2 or valid.ndim < 2:
+        return None
+    ego_xy, ego_heading = _current_sdc_pose_for_route_selection(state)
+    rows=[]
+    for c in range(int(x.shape[-2])):
+        idx=np.where(valid[c].astype(bool))[0]
+        if idx.size < 2:
+            continue
+        pts=np.stack([x[c,idx], y[c,idx]],axis=-1).astype(np.float64)
+        finite=np.all(np.isfinite(pts),axis=1)
+        pts=pts[finite]
+        if len(pts)<2:
+            continue
+        if ego_xy is None:
+            # Deterministic geometry-only fallback: prefer the longest usable path.
+            length=float(np.sum(np.linalg.norm(np.diff(pts,axis=0),axis=1)))
+            rows.append((0.0,0.0,-length,int(c)))
+            continue
+        d2=np.sum((pts-ego_xy[None,:])**2,axis=1)
+        j=int(np.argmin(d2))
+        if j < len(pts)-1:
+            dv=pts[j+1]-pts[j]
+        else:
+            dv=pts[j]-pts[j-1]
+        tangent=float(np.arctan2(dv[1],dv[0])) if np.linalg.norm(dv)>1e-8 else float(ego_heading or 0.0)
+        herr=_wrap_abs_angle(tangent-float(ego_heading or 0.0)) if ego_heading is not None else 0.0
+        remaining=float(np.sum(np.linalg.norm(np.diff(pts[j:],axis=0),axis=1))) if j < len(pts)-1 else 0.0
+        rows.append((float(np.sqrt(max(float(d2[j]),0.0))),herr,-remaining,int(c)))
+    if not rows:
+        return None
+    rows.sort()
+    return int(rows[0][-1])
+
+
+def _route_from_sdc_paths_with_source(
+    state: Any, max_points: int, *, allow_logged_fallback: bool = True
+) -> tuple[np.ndarray, str]:
+    """Build the planner route without validation-future or route-label leakage.
+
+    WOMD v1.3.1 exposes ``sdc_paths`` candidate geometries from roadgraph
+    connectivity.  For the strict publication/deployment path, OC-RAP chooses
+    among those candidates using only current simulated SDC pose and path
+    geometry.  ``path_samples/on_route`` is evaluation metadata and is never
+    consulted by the planner-route selector.
+    """
     route = np.zeros((max_points, 6), dtype=np.float32)
     paths = getattr(state, "sdc_paths", None)
     if paths is not None:
         x = _as_np(paths.x)
         y = _as_np(paths.y)
         valid = _as_np(paths.valid).astype(bool)
-        on_route = _as_np(paths.on_route).astype(bool)
-        if x.ndim >= 2:
-            candidates = np.where(on_route.reshape(-1))[0]
-            if candidates.size == 0:
-                candidates = np.arange(x.shape[-2])
-            best = int(candidates[0])
-            best_count = -1
-            for c in candidates[: min(8, len(candidates))]:
-                cnt = int(valid[c].sum())
-                if cnt > best_count:
-                    best = int(c)
-                    best_count = cnt
+        best = _connectivity_only_path_index(state, x, y, valid)
+        if best is not None:
             pts = np.stack([x[best], y[best]], axis=-1)[valid[best]]
+            pts = pts[np.all(np.isfinite(pts), axis=1)]
             if len(pts) >= 2:
                 idx = np.linspace(0, len(pts) - 1, max_points).round().astype(int)
                 pts = pts[idx]
@@ -318,14 +382,17 @@ def _route_from_sdc_paths(state: Any, max_points: int) -> np.ndarray:
                 route[:, 2] = np.arctan2(d[:, 1], d[:, 0])
                 route[:, 3] = 13.4
                 route[:, 5] = 1.0
-                return route
-    # Fallback to logged SDC path.  This is only a route proxy; diagnose will
-    # still expose whether sdc_paths were available for true route metrics.
+                return route, "womd_v1_3_1_sdc_paths_connectivity_only"
+    if not allow_logged_fallback:
+        raise ValueError(
+            "observation-legal route required but no valid WOMD v1.3.1 connectivity path was decoded; "
+            "refusing to fall back to validation log_trajectory future labels"
+        )
     meta = state.object_metadata
     sdc_idx = int(np.argmax(_as_np(meta.is_sdc).astype(bool)))
     tr = state.log_trajectory
-    valid = _as_np(tr.valid)[sdc_idx].astype(bool)
-    xy = np.stack([_as_np(tr.x)[sdc_idx], _as_np(tr.y)[sdc_idx]], axis=-1)[valid]
+    valid_log = _as_np(tr.valid)[sdc_idx].astype(bool)
+    xy = np.stack([_as_np(tr.x)[sdc_idx], _as_np(tr.y)[sdc_idx]], axis=-1)[valid_log]
     if len(xy) < 2:
         xy = np.stack([np.arange(max_points, dtype=np.float32), np.zeros(max_points, dtype=np.float32)], axis=-1)
     idx = np.linspace(0, len(xy) - 1, max_points).round().astype(int)
@@ -334,6 +401,12 @@ def _route_from_sdc_paths(state: Any, max_points: int) -> np.ndarray:
     route[:, 2] = np.arctan2(d[:, 1], d[:, 0])
     route[:, 3] = 13.4
     route[:, 5] = 1.0
+    return route, "logged_sdc_future_proxy"
+
+def _route_from_sdc_paths(state: Any, max_points: int, *, allow_logged_fallback: bool = True) -> np.ndarray:
+    route, _ = _route_from_sdc_paths_with_source(
+        state, max_points, allow_logged_fallback=allow_logged_fallback
+    )
     return route
 
 
@@ -468,16 +541,21 @@ def raw_scenario_from_waymax_state(state: Any, scenario_id: str, scenario_index:
     # Closed-loop replanning used to rebuild/copy them from JAX on every step,
     # which is especially expensive for ~30k roadgraph points.  Reuse the raw
     # scenario produced by the loader when supplied; only trajectories change.
+    wx_cfg = cfg.get("waymax", {}) if isinstance(cfg.get("waymax", {}), dict) else {}
+    allow_logged_route_fallback = bool(wx_cfg.get("allow_logged_sdc_route_fallback", True))
     if static_template is not None:
         maps = static_template.map_polylines
         map_valid = static_template.map_valid
         route = static_template.route
+        route_source = str((static_template.metadata or {}).get("route_source", "static_template_unknown"))
         dyn = static_template.dynamic_map
         sdc_idx = int(static_template.sdc_track_index)
         object_ids = static_template.object_ids
     else:
         maps, map_valid = _map_from_waymax_roadgraph(state, int(cfg.get("max_map_polylines", 256)), int(cfg.get("max_polyline_points", 64)))
-        route = _route_from_sdc_paths(state, int(cfg.get("route_points", 80)))
+        route, route_source = _route_from_sdc_paths_with_source(
+            state, int(cfg.get("route_points", 80)), allow_logged_fallback=allow_logged_route_fallback
+        )
         dyn = np.zeros((T, int(cfg.get("max_dynamic_signals", 16)), 8), dtype=np.float32)
         sdc_idx = int(np.argmax(_as_np(meta.is_sdc).astype(bool)))
         object_ids = [str(int(v)) for v in meta_ids]
@@ -498,6 +576,8 @@ def raw_scenario_from_waymax_state(state: Any, scenario_id: str, scenario_index:
             "_waymax_state": state,
             "_waymax_scenario_index": int(scenario_index),
             "waymax_sdc_paths_available": getattr(state, "sdc_paths", None) is not None,
+            "route_source": route_source,
+            "route_observation_legal": route_source == "womd_v1_3_1_sdc_paths_connectivity_only",
             "_waymax_trajectory_mode": trajectory_mode,
             "_waymax_splice_until": -1 if splice_until is None else int(splice_until),
             "_waymax_branch_from_current": trajectory_mode in {"sim", "closed_loop_splice"},

@@ -6,17 +6,21 @@
 # non-interference, Near closed-loop validity, and Contact recovery validity.
 set -Eeuo pipefail
 
-# V48.124.9 is attribution-ready and its only failed deployed-system gate is
-# Near. Preserve this stable command name, but make the licensed Near-only
-# system-axis diagnostic the default successor. The complete historical fixed-
-# Main audit remains in this same file for regression/provenance compatibility
-# and can be selected explicitly with OCRAP_CONSTRAINT_AUDIT_MODE=full.
-OCRAP_CONSTRAINT_AUDIT_MODE="${OCRAP_CONSTRAINT_AUDIT_MODE:-near_axis}"
-if [[ "$OCRAP_CONSTRAINT_AUDIT_MODE" == "near_axis" || "$OCRAP_CONSTRAINT_AUDIT_MODE" == "near" || "$OCRAP_CONSTRAINT_AUDIT_MODE" == "diagnostic" ]]; then
+# The historical V48.124.9 artifacts are byte/provenance reliable, but a later
+# scientific-legality audit found that closed-loop validation disabled WOMD
+# v1.3.1 sdc_paths and could substitute logged SDC future as the planner route.
+# The stable command therefore defaults to an observation-legal route repair +
+# fresh Near re-adjudication. Legacy diagnostic/full paths remain explicit for
+# regression only; they are not publication evidence.
+OCRAP_CONSTRAINT_AUDIT_MODE="${OCRAP_CONSTRAINT_AUDIT_MODE:-route_legal_near_axis}"
+if [[ "$OCRAP_CONSTRAINT_AUDIT_MODE" == "route_legal_near_axis" || "$OCRAP_CONSTRAINT_AUDIT_MODE" == "near_axis" || "$OCRAP_CONSTRAINT_AUDIT_MODE" == "near" || "$OCRAP_CONSTRAINT_AUDIT_MODE" == "diagnostic" ]]; then
+  REPO_DISPATCH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+  exec bash "$REPO_DISPATCH/scripts/run_observation_legal_near_axis_two_gpu.sh"
+elif [[ "$OCRAP_CONSTRAINT_AUDIT_MODE" == "legacy_near_axis" ]]; then
   REPO_DISPATCH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
   exec bash "$REPO_DISPATCH/scripts/run_near_rifa_system_axis_two_gpu.sh"
 elif [[ "$OCRAP_CONSTRAINT_AUDIT_MODE" != "full" ]]; then
-  echo "unknown OCRAP_CONSTRAINT_AUDIT_MODE=$OCRAP_CONSTRAINT_AUDIT_MODE (expected near_axis or full)" >&2
+  echo "unknown OCRAP_CONSTRAINT_AUDIT_MODE=$OCRAP_CONSTRAINT_AUDIT_MODE (expected route_legal_near_axis, legacy_near_axis, or full)" >&2
   exit 30
 fi
 
