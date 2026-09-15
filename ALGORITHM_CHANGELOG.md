@@ -14556,3 +14556,17 @@ Scientific version remains `v48.124-OC-FMSA`; recovery mechanism search remains 
 - Safe/Near exact-$a_0$ controls, frozen Main checkpoints/calibration, RIFA admission, bootstrap (5000, seed 2027), and all gate definitions remain unchanged.
 - The launcher parallelizes independent work across two A30s: Contact-anchor mining and nominal Safe/Near first, then balanced/precision full variants in parallel after the anchor manifest is frozen.
 - No new feature, model parameter, recovery carrier, regime router, threshold, horizon, source, or mechanism search is authorized.
+
+## V48.124.10.3.1 — candidate-quality adjudicator engineering fix
+
+Engineering/adjudication version: `v48.124.10.3.1-CANDIDATE-QUALITY-ADJUDICATOR-ENGFIX`  
+Scientific experiment version: `v48.124.10.3-CANDIDATE-QUALITY-DIAGNOSTIC` (unchanged)
+
+This patch changes **only offline adjudication of the already-produced V48.124.10.3 diagnostic evidence**. It does not modify the frozen model, checkpoints, OC-MERO source, candidate/recovery library, absolute admission, relative selector, Waymax rollout, horizon, thresholds, or any action executed in the uploaded experiment.
+
+Two adjudicator defects were repaired:
+
+1. Replay equivalence now treats `NaN` versus `NaN` as equal for diagnostic fields that are undefined by construction (for example Contact-only fields in Near scenes). The former IEEE `NaN != NaN` behavior generated false engineering mismatches even when replay and reference carried the same undefined value.
+2. Relative-head attribution now uses **teacher PCD(candidate) - teacher PCD(nominal)** as the primary truth contract, matching `direct_uncertainty_recovery_value_loss`, where the direct value/opportunity/harm supervision is built from `_torch_pcd_score(...)`. Signed `R_dep` deltas remain a secondary recovery-state diagnostic rather than the primary target for the relative head.
+
+The existing V48.124.10.3 GPU outputs can therefore be re-adjudicated offline; no GPU rerun is required for this fix. The repaired diagnostic remains non-publication evidence and does not itself authorize a V48.125 mechanism change or deployed-Main freeze.

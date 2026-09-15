@@ -46,3 +46,8 @@ See `CLEAN_COMMANDS.md` for operator commands.
 ## V48.124 fixed-Main adjudication note
 
 The historical full-audit engineering build is `v48.124.9-OC-FMSA-RUNTIME-SNAPSHOT-ENGFIX`; the current diagnostic engineering layer is `v48.124.10-OC-FMSA-NEAR-RIFA-SYSTEM-AXIS-AUDIT`. The scientific model/recovery mechanism remains `v48.124-OC-FMSA`.
+
+
+### Candidate-quality adjudicator hotfix (V48.124.10.3.1)
+
+The candidate-quality GPU rollout remains V48.124.10.3. The offline adjudicator now (a) treats matching undefined `NaN` diagnostic fields as replay-equivalent, and (b) uses teacher PCD delta as the primary nominal-relative truth because the frozen direct relative heads are supervised on PCD delta. Existing 10.3 outputs can be re-adjudicated without rerunning GPU rollouts.

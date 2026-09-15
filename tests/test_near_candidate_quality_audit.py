@@ -89,6 +89,46 @@ def test_candidate_quality_summary_localizes_absolute_admission_failure():
     }]}
     summary,errors=mod.summarize_variant(result)
     assert not errors
-    assert summary["teacher_better_than_nominal_anywhere"] == 1
-    assert summary["teacher_better_than_nominal_admitted"] == 0
+    assert summary["teacher_pcd_better_than_nominal_anywhere"] == 1
+    assert summary["teacher_pcd_better_than_nominal_admitted"] == 0
     assert mod.branch_for({"balanced":summary,"precision":summary}).startswith("absolute_admission_bottleneck")
+
+
+def test_candidate_quality_finite_equal_treats_matching_nan_as_equal():
+    mod=_load_audit_tool()
+    assert mod.finite_equal(float("nan"), float("nan"))
+    assert not mod.finite_equal(float("nan"), 0.0)
+    assert mod.finite_equal(float("inf"), float("inf"))
+    assert not mod.finite_equal(float("inf"), float("-inf"))
+
+
+def test_candidate_quality_replay_comparison_ignores_matching_undefined_metrics():
+    mod=_load_audit_tool()
+    scene={
+        "target_key":"k", "num_decisions":1, "macro_counts":{"nominal":1},
+        "selection_reason_counts":{"x":1}, "intervention_rate":0.0,
+        "closed_loop_bounded_NUP":0.5, "closed_loop_direct_recovery_advantage":0.0,
+        "metric_summary":{"clearance_deficit_auc_m_s":0.1, "contact_anchor_step":float("nan")},
+    }
+    assert mod.compare_behavior({"scenes":[scene]}, {"scenes":[dict(scene)]}) == []
+
+
+def test_candidate_quality_primary_truth_matches_direct_value_training_target():
+    mod=_load_audit_tool()
+    result={"scenes":[{
+        "target_key":"k","num_decisions":1,"intervention_rate":1.0,
+        "audit_intervention_only":True,"audit_candidate_scope":"all","audit_store_candidate_records":True,
+        "candidate_quality_audit_records":[{
+            "step_index":0,"selected_candidate_index":1,"num_candidates_labeled":2,
+            "candidates":[
+                {"candidate_index":0,"selected":False,"absolute_admitted":False,"teacher_r_dep_star":0.0,"teacher_pcd":0.6,"pred_direct_advantage_vs_nominal":0.0},
+                {"candidate_index":1,"selected":True,"absolute_admitted":True,"teacher_r_dep_star":1.0,"teacher_pcd":0.5,"pred_direct_advantage_vs_nominal":-0.1},
+            ]
+        }]
+    }]}
+    summary,errors=mod.summarize_variant(result)
+    assert not errors
+    # R_dep improved, but the direct relative head is trained on PCD delta, so
+    # this is not a positive relative-recovery opportunity.
+    assert summary["teacher_r_dep_better_than_nominal_anywhere"] == 1
+    assert summary["teacher_pcd_better_than_nominal_anywhere"] == 0
