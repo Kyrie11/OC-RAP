@@ -1524,6 +1524,13 @@ def _rollout_one_scene(
     # frozen truth-contract audits established that value as a structurally
     # mixed plateau rather than point-identified physical recoverability.
     privileged_nonfloor_pcd_oracle_ceiling = bool(cl_cfg.get("privileged_nonfloor_pcd_oracle_ceiling", False))
+    # V48.124.10.7 terminal diagnostic: execute exactly the strongest preregistered
+    # non-floor seed candidate once from the untouched nominal trajectory, then
+    # force exact nominal replanning afterwards.  This isolates action realization
+    # from the repeated privileged PCD policy used by 10.6.  It is audit-only.
+    privileged_nonfloor_one_shot_seed_realization = bool(
+        cl_cfg.get("privileged_nonfloor_one_shot_seed_realization", False)
+    )
     privileged_nonfloor_pcd_oracle_epsilon = float(cl_cfg.get("privileged_nonfloor_pcd_oracle_epsilon", 1.0e-6) or 1.0e-6)
     privileged_nonfloor_rdep_floor = float(cl_cfg.get("privileged_nonfloor_rdep_floor", 0.5))
     privileged_nonfloor_rdep_tol = float(cl_cfg.get("privileged_nonfloor_rdep_tol", 1.0e-8) or 1.0e-8)
@@ -1531,7 +1538,7 @@ def _rollout_one_scene(
     privileged_nonfloor_require_nominal_before_start = bool(cl_cfg.get("privileged_nonfloor_require_nominal_before_start", True))
     privileged_nonfloor_seed_start_step = 0
     privileged_nonfloor_seed_entry: dict[str, Any] | None = None
-    if privileged_nonfloor_pcd_oracle_ceiling and privileged_nonfloor_seed_plan_file:
+    if (privileged_nonfloor_pcd_oracle_ceiling or privileged_nonfloor_one_shot_seed_realization) and privileged_nonfloor_seed_plan_file:
         seed_doc = json.loads(Path(privileged_nonfloor_seed_plan_file).read_text(encoding="utf-8"))
         seed_rows = seed_doc.get("seeds") or {}
         privileged_nonfloor_seed_entry = seed_rows.get(str(target_key or ""))
@@ -1542,6 +1549,8 @@ def _rollout_one_scene(
             raise ValueError(f"invalid privileged non-floor seed start step: {privileged_nonfloor_seed_start_step}")
     privileged_nonfloor_pcd_oracle_records: list[dict[str, Any]] = []
     privileged_nonfloor_pcd_oracle_label_count = 0
+    privileged_nonfloor_one_shot_records: list[dict[str, Any]] = []
+    privileged_nonfloor_one_shot_label_count = 0
     progress = bool(cl_cfg.get("progress", True))
     progress_every = max(1, int(cl_cfg.get("progress_every_steps", 5)))
     profile_timing = bool(cl_cfg.get("profile_timing", True))
@@ -1831,6 +1840,142 @@ def _rollout_one_scene(
 
         base_sel_idx = int(sel_idx)
         base_selected_sample = samples[base_sel_idx]
+
+        # V48.124.10.7 terminal one-shot seed realization audit.
+        # The exact nominal policy is enforced at every step except the single
+        # preregistered strongest non-floor seed.  At that step only nominal and
+        # the target candidate are teacher-labeled, solely to fail closed if the
+        # historical 10.5 witness semantics are not reproduced.  No learned
+        # admission, relative reranker, or post-seed privileged selection is used.
+        if privileged_nonfloor_one_shot_seed_realization and privileged_pcd_oracle_ceiling:
+            raise ValueError("one-shot non-floor realization and admitted-only PCD ceiling are mutually exclusive")
+        if privileged_nonfloor_one_shot_seed_realization and privileged_nonfloor_pcd_oracle_ceiling:
+            raise ValueError("one-shot non-floor realization and repeated non-floor PCD ceiling are mutually exclusive")
+        if privileged_nonfloor_one_shot_seed_realization and method == "ocrap":
+            if not isinstance(privileged_nonfloor_seed_entry, dict):
+                raise ValueError("one-shot non-floor realization requires a seed-plan entry")
+            nominal_positions = [i for i, sample in enumerate(samples) if int(getattr(sample, "candidate_index", i)) == 0]
+            if len(nominal_positions) != 1:
+                raise ValueError(f"one-shot non-floor realization requires exactly one nominal candidate, got {nominal_positions}")
+            nominal_pos = int(nominal_positions[0])
+            target_step = int(privileged_nonfloor_seed_entry.get("best_pretrigger_step", -1))
+            target_cid = int(privileged_nonfloor_seed_entry.get("best_pretrigger_candidate_index", -1))
+            if target_step < 0 or target_cid <= 0:
+                raise ValueError(f"invalid one-shot seed target: step={target_step} candidate={target_cid}")
+            if step_idx < target_step and privileged_nonfloor_require_nominal_before_start:
+                if int(getattr(base_selected_sample, "candidate_index", base_sel_idx)) != 0:
+                    raise ValueError(
+                        f"Base intervened before preregistered one-shot seed: target={target_key} "
+                        f"step={step_idx} seed_step={target_step}"
+                    )
+            # Exact nominal everywhere except the single seed decision.
+            sel_idx = int(nominal_pos)
+            one_shot_reason = "privileged_nonfloor_one_shot_exact_nominal"
+            if step_idx == target_step:
+                target_positions = [
+                    i for i, sample in enumerate(samples)
+                    if int(getattr(sample, "candidate_index", i)) == target_cid
+                ]
+                if len(target_positions) != 1:
+                    raise ValueError(
+                        f"one-shot seed candidate missing/duplicated: target={target_key} "
+                        f"step={step_idx} candidate={target_cid} positions={target_positions}"
+                    )
+                target_pos = int(target_positions[0])
+                audit_ids = [0, int(target_cid)]
+                oracle_t0 = perf_counter()
+                one_shot_labeled = build_labeled_samples_for_candidate_indices(
+                    hist, "closed_loop", eval_cfg, audit_ids,
+                    num_roots=feature_num_roots, num_options=feature_num_options,
+                    prefixes=[sample.prefix for sample in samples],
+                    recovery_options=samples[0].recovery_options if samples else None,
+                    recovery_option_valid=samples[0].option_valid if samples else None,
+                    assign_regime_labels=False, compact_audit=True,
+                )
+                if profile_timing:
+                    timing_totals["audit_labels"] += perf_counter() - oracle_t0
+                if len(one_shot_labeled) != 2:
+                    raise ValueError(f"one-shot audit expected 2 labels, got {len(one_shot_labeled)}")
+                privileged_nonfloor_one_shot_label_count += int(len(one_shot_labeled))
+                labeled_by_cid = {int(sample.candidate_index): sample for sample in one_shot_labeled}
+                item_by_cid = {
+                    int(getattr(item["sample"], "candidate_index", i)): (i, item)
+                    for i, item in enumerate(info.get("items", []))
+                }
+                details: dict[int, dict[str, float]] = {}
+                for cid, pos in ((0, nominal_pos), (target_cid, target_pos)):
+                    lab = labeled_by_cid.get(int(cid))
+                    if lab is None:
+                        raise ValueError(f"one-shot audit missing teacher label for candidate {cid}")
+                    ld = _sample_to_audit_dict(lab)
+                    item_entry = item_by_cid.get(int(cid))
+                    if item_entry is None:
+                        raise ValueError(f"one-shot audit missing frozen prediction for candidate {cid}")
+                    _, item = item_entry
+                    q_eval = ld["m_star"] if cid == 0 else item["pred"].q
+                    opt_gamma = 0.0 if cid == 0 else drs_gamma
+                    option_idx = best_option_indices(
+                        q_eval, ld["root_probs"], gamma=opt_gamma,
+                        root_valid=ld.get("root_valid", None), option_valid=ld.get("option_valid", None),
+                        semantics=option_semantics,
+                    )
+                    drs_i = deployable_recovery_success(
+                        ld["m_star"], ld["root_probs"], option_idx, ld.get("root_valid", None)
+                    )
+                    r_dep_i = _safe_float(ld.get("r_dep_star", 0.0), 0.0)
+                    odg_i = _safe_float(ld.get("oracle_gap_star", 0.0), 0.0)
+                    pcd_i = post_contact_deployability_score(float(drs_i), float(r_dep_i), float(odg_i))
+                    details[int(cid)] = {
+                        "teacher_pcd": float(pcd_i), "teacher_drs": float(drs_i),
+                        "teacher_r_dep": float(r_dep_i), "teacher_oracle_gap": float(odg_i),
+                    }
+                nom = details[0]; tgt = details[target_cid]
+                is_floor = abs(float(tgt["teacher_r_dep"]) - float(privileged_nonfloor_rdep_floor)) <= float(privileged_nonfloor_rdep_tol)
+                valid_seed = bool(
+                    (not is_floor)
+                    and float(tgt["teacher_r_dep"]) > 0.0
+                    and float(tgt["teacher_pcd"]) > float(nom["teacher_pcd"]) + float(privileged_nonfloor_pcd_oracle_epsilon)
+                )
+                if not valid_seed:
+                    raise ValueError(
+                        "one-shot seed no longer satisfies preregistered non-floor teacher-positive contract: "
+                        f"target={target_key} step={step_idx} candidate={target_cid} "
+                        f"r_dep={tgt['teacher_r_dep']} pcd={tgt['teacher_pcd']} nominal_pcd={nom['teacher_pcd']}"
+                    )
+                sel_idx = int(target_pos)
+                one_shot_reason = "privileged_nonfloor_one_shot_seed_action"
+                try:
+                    info["selection"].selected_index = int(sel_idx)
+                    info["selection"].reason = str(one_shot_reason)
+                except Exception:
+                    pass
+                oracle_utility = np.asarray(info.get("utility", []), dtype=float).reshape(-1)
+                if oracle_utility.size == len(samples):
+                    oracle_nup = nominal_utility_preservation(
+                        float(oracle_utility[nominal_pos]), float(oracle_utility[int(sel_idx)]),
+                        sigma_u=float((cfg.get("metrics", {}) or {}).get("sigma_u", 1.0)),
+                    )
+                    info["nup"] = float(oracle_nup["bounded_NUP"])
+                privileged_nonfloor_one_shot_records.append({
+                    "step_index": int(step_idx), "time_index": int(t),
+                    "target_candidate_index": int(target_cid),
+                    "base_selected_candidate_index": int(getattr(base_selected_sample, "candidate_index", base_sel_idx)),
+                    "selected_candidate_index": int(getattr(samples[sel_idx], "candidate_index", sel_idx)),
+                    "selection_reason": str(one_shot_reason),
+                    "teacher_pcd": float(tgt["teacher_pcd"]),
+                    "nominal_teacher_pcd": float(nom["teacher_pcd"]),
+                    "teacher_pcd_advantage": float(tgt["teacher_pcd"] - nom["teacher_pcd"]),
+                    "teacher_r_dep": float(tgt["teacher_r_dep"]),
+                    "teacher_drs": float(tgt["teacher_drs"]),
+                    "teacher_oracle_gap": float(tgt["teacher_oracle_gap"]),
+                    "nonfloor_contract_valid": True,
+                })
+            else:
+                try:
+                    info["selection"].selected_index = int(sel_idx)
+                    info["selection"].reason = str(one_shot_reason)
+                except Exception:
+                    pass
 
         # V48.124.10.6 non-floor privileged admission/selection ceiling.
         # This branch is mutually exclusive with the 10.4 admitted-only ceiling.
@@ -3043,6 +3188,10 @@ def _rollout_one_scene(
         "privileged_nonfloor_pcd_oracle_trigger_count": int(sum(1 for r in privileged_nonfloor_pcd_oracle_records if int(r.get("oracle_selected_candidate_index",0)) != 0)),
         "privileged_nonfloor_pcd_oracle_label_count": int(privileged_nonfloor_pcd_oracle_label_count),
         "privileged_nonfloor_pcd_oracle_records": privileged_nonfloor_pcd_oracle_records if privileged_nonfloor_pcd_oracle_ceiling else [],
+        "privileged_nonfloor_one_shot_seed_realization": bool(privileged_nonfloor_one_shot_seed_realization),
+        "privileged_nonfloor_one_shot_label_count": int(privileged_nonfloor_one_shot_label_count),
+        "privileged_nonfloor_one_shot_trigger_count": int(len(privileged_nonfloor_one_shot_records)),
+        "privileged_nonfloor_one_shot_records": privileged_nonfloor_one_shot_records if privileged_nonfloor_one_shot_seed_realization else [],
         "closed_loop_FRA_exec": _mean_finite([d.fra_exec for d in decisions]),
         "closed_loop_FRA_cand": _mean_finite([d.fra_cand for d in decisions]),
         "closed_loop_DRS": _mean_finite([d.drs for d in decisions]),

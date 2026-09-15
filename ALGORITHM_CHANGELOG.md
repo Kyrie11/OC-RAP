@@ -14635,3 +14635,13 @@ V48.124.10.3.1 established that admission is not selection; V48.124.10.4 establi
 V48.124.10.6 is therefore a diagnostic-only privileged **non-floor admission seed screen**, not V48.125. It runs only the two non-floor pre-first-trigger seed scenes. Before each seed start Base must remain nominal. From the seed onward, learned admission is bypassed only for teacher-positive non-floor candidates (`R_dep*>0`, `|R_dep*-0.5|>1e-8`, teacher PCD > exact nominal + `1e-6`). The best such candidate is executed; otherwise the diagnostic executes exact nominal. All deployed model/checkpoint/candidate/recovery machinery remains frozen.
 
 The screen is intentionally not adjudicated by a 250-scene bootstrap significance gate: with only two potentially changed scenes, bootstrap resamples have substantial probability of containing no changed scene, so failure of a population CI would confound mechanism failure with support size. The seed screen is one-sided: a harmful/no-signal result closes the current admission-repair hypothesis early; a promising local result only licenses a broader scene-disjoint support-prevalence audit before any V48.125 design.
+
+## V48.124.10.7 — ONE-SHOT-ACTION-REALIZATION-CEILING (diagnostic only)
+
+- Scientific version remains `v48.124-OC-FMSA`; deployed algorithm is unchanged.
+- This is **not V48.125**, not a mechanism promotion, and not publication evidence.
+- Motivation: V48.124.10.6 was engineering-valid but `NONFLOOR_ADMISSION_SEED_SCREEN_NOT_PROMISING`. Because its privileged policy repeatedly selected teacher-PCD-positive actions after the trajectory had already diverged from nominal, it could not isolate whether the original V48.124.10.5 strongest non-floor seed action itself carried Near physical recovery information.
+- Adds an audit-only closed-loop mode that, for each of the two preregistered seed scenes, follows exact nominal until `best_pretrigger_step`, executes exactly `best_pretrigger_candidate_index` once, then forces exact nominal thereafter.
+- At the one-shot step, only nominal and the preregistered target candidate are teacher-labelled to fail closed if the historical non-floor/positive contract is not reproduced. Learned absolute admission and relative reranking are bypassed only for this diagnostic action.
+- No changes to model weights, selector, candidate/recovery libraries, thresholds, OC-MERO, RIFA, Waymax dynamics, horizon, route contract, or training.
+- Added `scripts/run_near_nonfloor_one_shot_realization_two_gpu.sh`, a diagnostic adjudicator, and a result packager. The stable `run_constraint_native_orientation_audit.sh` is intentionally unchanged because deployed Main is not frozen.
