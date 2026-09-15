@@ -570,6 +570,11 @@ closed_loop:
   audit_max_labels: 0
   audit_top_k: 4
   audit_max_extra_candidates: 5
+  # Diagnostic-only teacher-label audit.  These flags do not change action
+  # selection and are intended for small post-hoc mechanism audits.
+  audit_intervention_only: false
+  audit_candidate_scope: ranked_topk  # ranked_topk | absolute_admitted_all | all
+  audit_store_candidate_records: false
   # Optional closed-loop-only candidate cap. Leave null to use num_candidate_prefixes.
   num_candidate_prefixes: null
   # Optional closed-loop-only recovery-option count. Set to the option count used

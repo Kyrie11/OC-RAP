@@ -1,3 +1,39 @@
+# Current next step — small Near candidate-quality audit
+
+The attribution-ready observation-legal V48.124.10.2 run is a scientific Near STOP. Do **not** rerun 250 scenes and do not start V48.125 yet. The stable command now replays only the 11 fresh intervention scenes and computes privileged teacher labels only after the frozen base action is selected.
+
+Prerequisite:
+
+```text
+$BASE_OUT/OC-RAP-v48.124.10.2-OBSERVATION-LEGAL-NEAR-results.zip
+```
+
+Run:
+
+```bash
+cd /home/senzeyu2/code/OC-RAP
+GPU0=0 GPU1=1 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+  bash scripts/run_constraint_native_orientation_audit.sh
+```
+
+Equivalent explicit launcher:
+
+```bash
+GPU0=0 GPU1=1 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+  bash scripts/run_near_candidate_quality_audit_two_gpu.sh
+```
+
+Output:
+
+```text
+$BASE_OUT/OC-RAP-v48.124.10.3-CANDIDATE-QUALITY-AUDIT-results.zip
+$BASE_OUT/OC-RAP-v48.124.10.3-CANDIDATE-QUALITY-AUDIT.json
+```
+
+This is diagnostic-only; external-baseline/final three-regime evaluation remains blocked until a deployed selector is frozen.
+
+---
+
 # V48.124.10 Near deployed-system-axis diagnostic
 
 V48.124.9 is attribution-ready but Near is STOP. Recovery-mechanism / representation search remains frozen. The next command therefore runs two preregistered selector-only diagnostic arms on the exact 35-scene historical Near intervention cohort; it does not train, recalibrate, sweep thresholds, change horizon, or modify the recovery library.
@@ -171,6 +207,7 @@ bash scripts/run_external_baselines.sh \
 Safe:
 
 ```bash
+USE_DYNAMIC_SCHEDULER=auto
 bash scripts/run_external_baselines.sh \
   --regime safe \
   --out "$BASE_OUT/external_baselines_v48_111" \
@@ -180,6 +217,7 @@ bash scripts/run_external_baselines.sh \
 Near-Contact:
 
 ```bash
+USE_DYNAMIC_SCHEDULER=auto
 bash scripts/run_external_baselines.sh \
   --regime near \
   --out "$BASE_OUT/external_baselines_v48_111" \
@@ -189,6 +227,7 @@ bash scripts/run_external_baselines.sh \
 Contact:
 
 ```bash
+USE_DYNAMIC_SCHEDULER=auto
 bash scripts/run_external_baselines.sh \
   --regime contact \
   --out "$BASE_OUT/external_baselines_v48_111" \

@@ -1,3 +1,5 @@
+> **Current audit stage:** the observation-legal V48.124.10.2 Near run is attribution-ready but scientific STOP. The default stable audit command now runs a small intervention-only exhaustive candidate-quality diagnosis (11 scenes; teacher labels are computed only after frozen action selection). This is not a new recovery mechanism or a deployed model freeze. See `CLEAN_COMMANDS.md`.
+
 ## Current closed-loop adjudication entrypoint
 
 For the frozen V48.124 scientific Main, the current engineering/evaluation successor is **V48.124.10.2**. It fixes result provenance and enforces an observation-only planner-route contract without changing model weights or selector equations. Use the stable command:

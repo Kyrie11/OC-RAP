@@ -45,9 +45,10 @@ def test_history_refuses_future_ego_route_proxy_in_publication_mode():
         _sanitize_route(np.zeros((8,6),dtype=np.float32),future,valid,cfg,route_source="logged_sdc_future_proxy")
 
 
-def test_stable_launcher_defaults_to_observation_legal_reaudit():
+def test_stable_launcher_defaults_to_small_candidate_quality_audit_after_near_stop():
     text=(Path(__file__).resolve().parents[1]/"scripts/run_constraint_native_orientation_audit.sh").read_text()
-    assert 'OCRAP_CONSTRAINT_AUDIT_MODE:-route_legal_near_axis' in text
+    assert 'OCRAP_CONSTRAINT_AUDIT_MODE:-candidate_quality' in text
+    assert 'run_near_candidate_quality_audit_two_gpu.sh' in text
     assert 'run_observation_legal_near_axis_two_gpu.sh' in text
 
 

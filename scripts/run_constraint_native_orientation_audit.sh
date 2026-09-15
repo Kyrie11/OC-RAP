@@ -12,15 +12,18 @@ set -Eeuo pipefail
 # The stable command therefore defaults to an observation-legal route repair +
 # fresh Near re-adjudication. Legacy diagnostic/full paths remain explicit for
 # regression only; they are not publication evidence.
-OCRAP_CONSTRAINT_AUDIT_MODE="${OCRAP_CONSTRAINT_AUDIT_MODE:-route_legal_near_axis}"
-if [[ "$OCRAP_CONSTRAINT_AUDIT_MODE" == "route_legal_near_axis" || "$OCRAP_CONSTRAINT_AUDIT_MODE" == "near_axis" || "$OCRAP_CONSTRAINT_AUDIT_MODE" == "near" || "$OCRAP_CONSTRAINT_AUDIT_MODE" == "diagnostic" ]]; then
+OCRAP_CONSTRAINT_AUDIT_MODE="${OCRAP_CONSTRAINT_AUDIT_MODE:-candidate_quality}"
+if [[ "$OCRAP_CONSTRAINT_AUDIT_MODE" == "candidate_quality" || "$OCRAP_CONSTRAINT_AUDIT_MODE" == "candidate_audit" ]]; then
+  REPO_DISPATCH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+  exec bash "$REPO_DISPATCH/scripts/run_near_candidate_quality_audit_two_gpu.sh"
+elif [[ "$OCRAP_CONSTRAINT_AUDIT_MODE" == "route_legal_near_axis" || "$OCRAP_CONSTRAINT_AUDIT_MODE" == "near_axis" || "$OCRAP_CONSTRAINT_AUDIT_MODE" == "near" || "$OCRAP_CONSTRAINT_AUDIT_MODE" == "diagnostic" ]]; then
   REPO_DISPATCH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
   exec bash "$REPO_DISPATCH/scripts/run_observation_legal_near_axis_two_gpu.sh"
 elif [[ "$OCRAP_CONSTRAINT_AUDIT_MODE" == "legacy_near_axis" ]]; then
   REPO_DISPATCH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
   exec bash "$REPO_DISPATCH/scripts/run_near_rifa_system_axis_two_gpu.sh"
 elif [[ "$OCRAP_CONSTRAINT_AUDIT_MODE" != "full" ]]; then
-  echo "unknown OCRAP_CONSTRAINT_AUDIT_MODE=$OCRAP_CONSTRAINT_AUDIT_MODE (expected route_legal_near_axis, legacy_near_axis, or full)" >&2
+  echo "unknown OCRAP_CONSTRAINT_AUDIT_MODE=$OCRAP_CONSTRAINT_AUDIT_MODE (expected candidate_quality, route_legal_near_axis, legacy_near_axis, or full)" >&2
   exit 30
 fi
 

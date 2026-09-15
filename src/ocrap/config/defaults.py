@@ -339,6 +339,16 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "audit_auto_max_labels": 256,
         "audit_top_k": 4,
         "audit_max_extra_candidates": 5,
+        # Diagnostic-only label audit controls.  They never participate in
+        # policy selection.  ``audit_intervention_only`` lets small follow-up
+        # studies label counterfactual candidates only at decisions where the
+        # frozen deployed selector actually intervened.  ``audit_candidate_scope``
+        # can be ``ranked_topk`` (historical default), ``absolute_admitted_all``
+        # or ``all``.  Candidate records are opt-in because exhaustive teacher
+        # labels are privileged evaluation information and can be large.
+        "audit_intervention_only": False,
+        "audit_candidate_scope": "ranked_topk",
+        "audit_store_candidate_records": False,
         "num_candidate_prefixes": None,
         "num_recovery_options": None,
         "external_sparse_labels": True,

@@ -1,3 +1,27 @@
+# V48.124.10.3 — intervention-only exhaustive candidate-quality diagnostic (no algorithm change)
+
+Scientific version remains `v48.124-OC-FMSA`. The attribution-ready V48.124.10.2 observation-legal Near run is `OBSERVATION_LEGAL_NEAR_SYSTEM_AXIS_STOP`: frozen base, delta, and nested all fail the primary Near-benefit gate. Delta/nested remove all 51 base interventions and become exactly nominal, so downstream relative filtering is not promoted and deployed Main is not frozen.
+
+This revision is diagnostic instrumentation only:
+
+- Reuses the exact V48.124.10.2 observation-legal STOP bundle as an immutable prerequisite; its embedded 89-file manifest is reverified before any GPU work.
+- Replays only the fresh 11-scene intervention cohorts (51 intervention decisions per robustness variant), not another 250-scene population.
+- The frozen base selector chooses the action first. Privileged teacher labels are computed only afterward and therefore cannot alter the deployed decision.
+- At intervention decisions only, labels all 24 candidates (at most 51×24=1224 candidate labels per robustness variant) and records absolute-admission membership, teacher deployable recovery, DRS/PCD, frozen direct value/rank/opportunity/harm, utility, and nominal deviation.
+- Separates four possible Near system bottlenecks: no better candidate in the library; better candidate exists but absolute admission rejects it; better admitted candidate exists but relative evidence rejects it; or a mixed/ranking failure.
+- The diagnostic result is not publication evidence and does not authorize V48.125 by itself. Threshold/capacity/retraining sweeps remain forbidden until the candidate-quality audit localizes the failure.
+- Balanced and precision run in parallel on GPU0/GPU1 with no same-GPU oversubscription.
+- Exact selector/baseline/config SHAs are checked against the V48.124.10.2 immutable runtime source manifest; frozen checkpoint binaries are rehashed against the V48.124.10.2 contract.
+- Success and fail-closed exits both package a SHA-manifested result bundle plus exact runtime-source snapshot.
+
+The stable command remains:
+
+```bash
+GPU0=0 GPU1=1 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs bash scripts/run_constraint_native_orientation_audit.sh
+```
+
+---
+
 # V48.124.10.2 — Observation-legal route + diagnostic-provenance engineering fix
 
 Scientific version remains `v48.124-OC-FMSA`; no model, checkpoint, calibration, recovery mechanism, candidate library, horizon, or selector equation changes are introduced.

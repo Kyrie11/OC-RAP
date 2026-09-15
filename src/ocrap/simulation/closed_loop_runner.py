@@ -400,6 +400,36 @@ def _select_audit_candidate_indices(samples: list, info: dict[str, Any], selecte
     if not samples:
         return []
     cl_cfg = cfg.get("closed_loop", {}) if isinstance(cfg.get("closed_loop", {}), dict) else {}
+    scope = str(cl_cfg.get("audit_candidate_scope", "ranked_topk") or "ranked_topk").strip().lower()
+    if scope in {"all", "all_candidates", "exhaustive"}:
+        return [int(getattr(sample, "candidate_index", i)) for i, sample in enumerate(samples)]
+    if scope in {"absolute_admitted_all", "admitted_all", "absolute_admitted"}:
+        selected_cid = int(getattr(selected_sample, "candidate_index", 0))
+        out: list[int] = []
+
+        def add(cid: int | None) -> None:
+            if cid is None:
+                return
+            try:
+                value = int(cid)
+            except Exception:
+                return
+            if value not in out:
+                out.append(value)
+
+        add(selected_cid)
+        add(0)
+        admitted = np.asarray(getattr(info.get("selection", None), "admitted", []), dtype=bool).reshape(-1)
+        for pos, is_admitted in enumerate(admitted.tolist()):
+            if not is_admitted or pos >= len(samples):
+                continue
+            add(int(getattr(samples[pos], "candidate_index", pos)))
+        return out
+    if scope not in {"ranked_topk", "topk", "coverage"}:
+        raise ValueError(
+            "closed_loop.audit_candidate_scope must be ranked_topk, absolute_admitted_all, or all; "
+            f"got {scope!r}"
+        )
     k = max(1, int(cl_cfg.get("audit_top_k", 4) or 4))
     max_extra = max(0, int(cl_cfg.get("audit_max_extra_candidates", k) or k))
     selected_cid = int(getattr(selected_sample, "candidate_index", 0))
@@ -1203,6 +1233,7 @@ def _select_prefix(
         "pred_direct_std": pred_direct_std,
         "pred_direct_opportunity": pred_direct_opportunity,
         "pred_direct_rank": pred_direct_rank,
+        "pred_direct_harm": pred_direct_harm,
         "nominal_deviation": nominal_deviation,
         "labels_available": bool(compute_teacher_labels),
         "drs": None if drs is None else float(drs),
@@ -1467,6 +1498,9 @@ def _rollout_one_scene(
     sparse_label_full_candidates_total = 0
     audit_every_n_steps = max(1, int(cl_cfg.get("audit_every_n_steps", 1) or 1))
     audit_max_labels = int(cl_cfg.get("audit_max_labels", 0) or 0)
+    audit_intervention_only = bool(cl_cfg.get("audit_intervention_only", False))
+    audit_candidate_scope = str(cl_cfg.get("audit_candidate_scope", "ranked_topk") or "ranked_topk").strip().lower()
+    audit_store_candidate_records = bool(cl_cfg.get("audit_store_candidate_records", False))
     audit_auto_capped = False
     if coverage_label_audit and audit_max_labels <= 0:
         auto_cap = int(cl_cfg.get("audit_auto_max_labels", 256) or 0)
@@ -1474,6 +1508,7 @@ def _rollout_one_scene(
             audit_max_labels = auto_cap
             audit_auto_capped = True
     audit_labels_done = 0
+    candidate_quality_audit_records: list[dict[str, Any]] = []
     progress = bool(cl_cfg.get("progress", True))
     progress_every = max(1, int(cl_cfg.get("progress_every_steps", 5)))
     profile_timing = bool(cl_cfg.get("profile_timing", True))
@@ -1799,7 +1834,8 @@ def _rollout_one_scene(
         audit_paper_best_pcd_teacher_r_dep = None
         audit_paper_selected_pcd_regret = None
         audit_paper_pcd_selector_miss = None
-        if (selected_label_audit or coverage_label_audit) and (step_idx % audit_every_n_steps == 0) and (audit_max_labels <= 0 or audit_labels_done < audit_max_labels):
+        audit_intervention_ok = (not audit_intervention_only) or int(getattr(selected_sample, "candidate_index", 0)) != 0
+        if (selected_label_audit or coverage_label_audit) and audit_intervention_ok and (step_idx % audit_every_n_steps == 0) and (audit_max_labels <= 0 or audit_labels_done < audit_max_labels):
             timing_t0 = perf_counter()
             try:
                 audit_indices = ([int(selected_sample.candidate_index)] if selected_label_audit else _select_audit_candidate_indices(samples, info, selected_sample, cfg))
@@ -1859,6 +1895,16 @@ def _rollout_one_scene(
                     item_by_cid = {int(getattr(item["sample"], "candidate_index", i)): (i, item) for i, item in enumerate(info.get("items", []))}
                     pred_q_by_cid = {cid: item["pred"].q for cid, (_, item) in item_by_cid.items()}
                     selected_pred_q = info["items"][sel_idx]["pred"].q
+                    audit_candidate_rows: list[dict[str, Any]] = []
+                    admitted_positions = np.asarray(getattr(info.get("selection", None), "admitted", []), dtype=bool).reshape(-1)
+                    direct_value_arr = np.asarray(info.get("pred_direct_value", []), dtype=float).reshape(-1)
+                    direct_rank_arr = np.asarray(info.get("pred_direct_rank", []), dtype=float).reshape(-1)
+                    direct_opp_arr = np.asarray(info.get("pred_direct_opportunity", []), dtype=float).reshape(-1)
+                    direct_harm_arr = np.asarray(info.get("pred_direct_harm", []), dtype=float).reshape(-1)
+                    pred_r_arr = np.asarray(info.get("pred_r_dep", []), dtype=float).reshape(-1)
+                    pred_gap_arr = np.asarray(info.get("pred_gap", []), dtype=float).reshape(-1)
+                    utility_arr = np.asarray(info.get("utility", []), dtype=float).reshape(-1)
+                    nominal_dev_arr = np.asarray(info.get("nominal_deviation", []), dtype=float).reshape(-1)
                     for lab in labeled:
                         cid = int(lab.candidate_index)
                         ld = audit_data_by_cid[cid]
@@ -1886,6 +1932,31 @@ def _rollout_one_scene(
                         drs_i = deployable_recovery_success(ld["m_star"], ld["root_probs"], opt_i, ld.get("root_valid", None))
                         odg_i = _safe_float(ld.get("oracle_gap_star", 0.0), 0.0)
                         pcd_i = post_contact_deployability_score(float(drs_i), float(r_star), float(odg_i))
+                        item_entry = item_by_cid.get(cid, None)
+                        pos_i = int(item_entry[0]) if item_entry is not None else -1
+                        def arr_value(arr: np.ndarray) -> float | None:
+                            if pos_i < 0 or pos_i >= arr.size or not np.isfinite(arr[pos_i]):
+                                return None
+                            return float(arr[pos_i])
+                        audit_candidate_rows.append({
+                            "candidate_index": int(cid),
+                            "macro": macro_i,
+                            "absolute_admitted": bool(pos_i >= 0 and pos_i < admitted_positions.size and admitted_positions[pos_i]),
+                            "selected": bool(cid == int(selected_sample.candidate_index)),
+                            "teacher_r_dep_star": float(r_star),
+                            "teacher_r_orc_star": _safe_optional_float(ld.get("r_orc_star", None)),
+                            "teacher_oracle_gap_star": float(odg_i),
+                            "teacher_drs": float(drs_i),
+                            "teacher_pcd": float(pcd_i),
+                            "pred_r_dep": arr_value(pred_r_arr),
+                            "pred_gap": arr_value(pred_gap_arr),
+                            "pred_direct_value": arr_value(direct_value_arr),
+                            "pred_direct_rank": arr_value(direct_rank_arr),
+                            "pred_direct_opportunity": arr_value(direct_opp_arr),
+                            "pred_direct_harm": arr_value(direct_harm_arr),
+                            "utility": arr_value(utility_arr),
+                            "nominal_deviation": arr_value(nominal_dev_arr),
+                        })
                         # v23 paper-eligible audit upper bound.  The global top-k
                         # audit can choose exploratory families such as lane_shift.
                         # This upper bound keeps nominal plus the paper's
@@ -1946,6 +2017,42 @@ def _rollout_one_scene(
                         audit_paper_selected_pcd_regret = float(best_paper_pcd - float(selected_audit_pcds))
                         pcd_eps = float(cl_cfg.get("audit_pcd_miss_epsilon", 0.02) or 0.02)
                         audit_paper_pcd_selector_miss = bool(float(selected_audit_pcds) + pcd_eps < best_paper_pcd)
+                    if audit_store_candidate_records and audit_candidate_rows:
+                        nominal_row = next((row for row in audit_candidate_rows if int(row["candidate_index"]) == 0), None)
+                        selected_row = next((row for row in audit_candidate_rows if bool(row.get("selected"))), None)
+                        admitted_rows = [row for row in audit_candidate_rows if bool(row.get("absolute_admitted"))]
+                        best_all = max(audit_candidate_rows, key=lambda row: float(row.get("teacher_r_dep_star", -float("inf"))))
+                        best_admitted = max(admitted_rows, key=lambda row: float(row.get("teacher_r_dep_star", -float("inf")))) if admitted_rows else None
+                        nominal_r = float(nominal_row["teacher_r_dep_star"]) if nominal_row is not None else None
+                        nominal_pcd = float(nominal_row["teacher_pcd"]) if nominal_row is not None else None
+                        for row in audit_candidate_rows:
+                            direct_nom = None if nominal_row is None else nominal_row.get("pred_direct_value")
+                            direct_val = row.get("pred_direct_value")
+                            row["teacher_r_dep_advantage_vs_nominal"] = None if nominal_r is None else float(row["teacher_r_dep_star"]) - nominal_r
+                            row["teacher_pcd_advantage_vs_nominal"] = None if nominal_pcd is None else float(row["teacher_pcd"]) - nominal_pcd
+                            row["pred_direct_advantage_vs_nominal"] = (
+                                None if direct_nom is None or direct_val is None else float(direct_val) - float(direct_nom)
+                            )
+                        eps = float(cl_cfg.get("audit_candidate_benefit_epsilon", 1.0e-6) or 1.0e-6)
+                        candidate_quality_audit_records.append({
+                            "step_index": int(step_idx),
+                            "time_index": int(t),
+                            "selected_candidate_index": int(selected_sample.candidate_index),
+                            "selected_macro": str(prefix.macro_name),
+                            "selection_reason": str(info["selection"].reason),
+                            "audit_candidate_scope": audit_candidate_scope,
+                            "num_candidates_labeled": int(len(audit_candidate_rows)),
+                            "num_absolute_admitted": int(len(admitted_rows)),
+                            "nominal_teacher_r_dep": nominal_r,
+                            "selected_teacher_r_dep": None if selected_row is None else float(selected_row["teacher_r_dep_star"]),
+                            "best_all_candidate_index": int(best_all["candidate_index"]),
+                            "best_all_teacher_r_dep": float(best_all["teacher_r_dep_star"]),
+                            "best_admitted_candidate_index": None if best_admitted is None else int(best_admitted["candidate_index"]),
+                            "best_admitted_teacher_r_dep": None if best_admitted is None else float(best_admitted["teacher_r_dep_star"]),
+                            "teacher_better_than_nominal_exists_all": bool(nominal_r is not None and any(float(row["teacher_r_dep_star"]) > nominal_r + eps for row in audit_candidate_rows)),
+                            "teacher_better_than_nominal_exists_admitted": bool(nominal_r is not None and any(float(row["teacher_r_dep_star"]) > nominal_r + eps for row in admitted_rows)),
+                            "candidates": audit_candidate_rows,
+                        })
                     audit_labels_done += int(len(labeled))
             except Exception as exc:
                 if progress:
@@ -2564,6 +2671,10 @@ def _rollout_one_scene(
         "audit_labels_done": int(audit_labels_done),
         "audit_max_labels": int(audit_max_labels),
         "audit_auto_capped": bool(audit_auto_capped),
+        "audit_intervention_only": bool(audit_intervention_only),
+        "audit_candidate_scope": str(audit_candidate_scope),
+        "audit_store_candidate_records": bool(audit_store_candidate_records),
+        "candidate_quality_audit_records": candidate_quality_audit_records if audit_store_candidate_records else [],
         "closed_loop_FRA_exec": _mean_finite([d.fra_exec for d in decisions]),
         "closed_loop_FRA_cand": _mean_finite([d.fra_cand for d in decisions]),
         "closed_loop_DRS": _mean_finite([d.drs for d in decisions]),
