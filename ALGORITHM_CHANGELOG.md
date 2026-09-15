@@ -14592,3 +14592,20 @@ Two adjudicator defects were repaired:
 2. Relative-head attribution now uses **teacher PCD(candidate) - teacher PCD(nominal)** as the primary truth contract, matching `direct_uncertainty_recovery_value_loss`, where the direct value/opportunity/harm supervision is built from `_torch_pcd_score(...)`. Signed `R_dep` deltas remain a secondary recovery-state diagnostic rather than the primary target for the relative head.
 
 The existing V48.124.10.3 GPU outputs can therefore be re-adjudicated offline; no GPU rerun is required for this fix. The repaired diagnostic remains non-publication evidence and does not itself authorize a V48.125 mechanism change or deployed-Main freeze.
+
+
+### V48.124.10.4 adjudication — privileged PCD oracle ceiling STOP
+
+Engineering version: `v48.124.10.4-PCD-ORACLE-CEILING-DIAGNOSTIC`  
+Scientific version: `v48.124-OC-FMSA` (unchanged)
+
+The attribution-ready 10.4 diagnostic held the frozen 24-candidate library, absolute-admission rule, Base trigger rule, recovery mechanism, route contract, checkpoints, dynamics, and horizon fixed. Teacher PCD was consulted only after Base selected a non-nominal action, and the oracle could execute only a positive teacher-PCD candidate already admitted by the absolute gate. Balanced and precision each replayed the 11 historical Base-intervention scenes and each executed only four oracle interventions. Exact trigger-gated reconstruction to the full 250-scene Near population preserved overlap/offroad no-harm but produced no statistically supported preregistered Near benefit and failed the secondary system no-harm gate. The preregistered status is therefore `PCD_ORACLE_CEILING_STOP`.
+
+Scientific consequence: **relative-evidence realignment alone is not sufficient** under the frozen trigger/action/admission support. Keep exact-nominal abstention as a non-harm guard, but do not promote delta/nested and do not authorize V48.125 relative-head/threshold sweeping. This strengthens the decomposition from “admission is not selection” to “selection is not support”: a perfect selector cannot recover an action that the current trigger/action support does not expose, and current local teacher-PCD improvements are too sparse/insufficient to close the system Near gate.
+
+### V48.124.10.5 — all-state support localization (diagnostic only)
+
+Engineering version: `v48.124.10.5-ALL-STATE-SUPPORT-LOCALIZATION-DIAGNOSTIC`  
+Scientific version: `v48.124-OC-FMSA` (unchanged)
+
+This stage changes no deployed algorithm. On the exact 11 historical Base-intervention scenes, frozen Base executes unchanged. After each Base action has already been selected, the existing coverage-audit path labels all 24 frozen candidates at **every** decision. The audit measures teacher-PCD-positive candidate support separately at Base-triggered versus Base-nominal states and records whether positive candidates were already absolute-admitted. It therefore localizes the 10.4 STOP between missed trigger support, absolute-admission false negatives, and candidate/action-or-PCD-target support scarcity without a threshold/head/capacity sweep. Absence of missed support on this 11-scene cohort is not promoted to a global theorem; the adjudicator states that limitation explicitly.

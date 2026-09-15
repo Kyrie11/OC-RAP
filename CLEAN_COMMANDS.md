@@ -1,3 +1,21 @@
+# 0. Current Near STOP localization — V48.124.10.5
+
+V48.124.10.4 established `PCD_ORACLE_CEILING_STOP`, so do **not** train/recalibrate a relative head or sweep RIFA thresholds. Keep the 10.4 result ZIP in `BASE_OUT`, then run the small all-state support scan:
+
+```bash
+cd /home/senzeyu2/code/OC-RAP
+GPU0=0 GPU1=1 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+  bash scripts/run_constraint_native_orientation_audit.sh
+```
+
+This replays only the same 11 historical Base-intervention scenes per robustness variant. Base actions remain unchanged; after each action is selected, all 24 frozen candidates are teacher-labeled for diagnostic PCD support. Expected artifact:
+
+```text
+/home/senzeyu2/code/OC-RAP/runs/OC-RAP-v48.124.10.5-ALL-STATE-SUPPORT-LOCALIZATION-results.zip
+```
+
+This diagnostic determines whether Base-nominal decisions on the frozen intervention cohort contain positive **absolute-admitted** PCD opportunities. It is not a deployed arm and is not publication evidence.
+
 # Current next step — V48.124.10.4 privileged PCD-oracle Near ceiling
 
 V48.124.10.3.1 is attribution-ready and localizes a relative-evidence alignment bottleneck, but no closed-loop oracle ceiling has yet been run. The default stable command now fresh-replays only the 11 historical Base-intervention scenes for balanced/precision in parallel. The other 239 Base-zero-intervention Near scenes are reused exactly by the trigger-gating induction proof.
