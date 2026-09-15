@@ -1518,6 +1518,30 @@ def _rollout_one_scene(
     privileged_pcd_oracle_epsilon = float(cl_cfg.get("privileged_pcd_oracle_epsilon", 1.0e-6) or 1.0e-6)
     privileged_pcd_oracle_records: list[dict[str, Any]] = []
     privileged_pcd_oracle_label_count = 0
+    # V48.124.10.6 diagnostic-only semantic ceiling.  Unlike 10.4, this
+    # bypasses learned absolute admission, but only for teacher-positive
+    # *non-floor* candidates.  Exact R_dep*=0.5 rows are excluded because the
+    # frozen truth-contract audits established that value as a structurally
+    # mixed plateau rather than point-identified physical recoverability.
+    privileged_nonfloor_pcd_oracle_ceiling = bool(cl_cfg.get("privileged_nonfloor_pcd_oracle_ceiling", False))
+    privileged_nonfloor_pcd_oracle_epsilon = float(cl_cfg.get("privileged_nonfloor_pcd_oracle_epsilon", 1.0e-6) or 1.0e-6)
+    privileged_nonfloor_rdep_floor = float(cl_cfg.get("privileged_nonfloor_rdep_floor", 0.5))
+    privileged_nonfloor_rdep_tol = float(cl_cfg.get("privileged_nonfloor_rdep_tol", 1.0e-8) or 1.0e-8)
+    privileged_nonfloor_seed_plan_file = str(cl_cfg.get("privileged_nonfloor_seed_plan_file", "") or "").strip()
+    privileged_nonfloor_require_nominal_before_start = bool(cl_cfg.get("privileged_nonfloor_require_nominal_before_start", True))
+    privileged_nonfloor_seed_start_step = 0
+    privileged_nonfloor_seed_entry: dict[str, Any] | None = None
+    if privileged_nonfloor_pcd_oracle_ceiling and privileged_nonfloor_seed_plan_file:
+        seed_doc = json.loads(Path(privileged_nonfloor_seed_plan_file).read_text(encoding="utf-8"))
+        seed_rows = seed_doc.get("seeds") or {}
+        privileged_nonfloor_seed_entry = seed_rows.get(str(target_key or ""))
+        if not isinstance(privileged_nonfloor_seed_entry, dict):
+            raise ValueError(f"target absent from privileged non-floor seed plan: {target_key}")
+        privileged_nonfloor_seed_start_step = int(privileged_nonfloor_seed_entry.get("start_step", 0) or 0)
+        if privileged_nonfloor_seed_start_step < 0:
+            raise ValueError(f"invalid privileged non-floor seed start step: {privileged_nonfloor_seed_start_step}")
+    privileged_nonfloor_pcd_oracle_records: list[dict[str, Any]] = []
+    privileged_nonfloor_pcd_oracle_label_count = 0
     progress = bool(cl_cfg.get("progress", True))
     progress_every = max(1, int(cl_cfg.get("progress_every_steps", 5)))
     profile_timing = bool(cl_cfg.get("profile_timing", True))
@@ -1805,6 +1829,137 @@ def _rollout_one_scene(
                 float(step_state_history_s + step_candidate_features_s + step_policy_selection_s)
             )
 
+        base_sel_idx = int(sel_idx)
+        base_selected_sample = samples[base_sel_idx]
+
+        # V48.124.10.6 non-floor privileged admission/selection ceiling.
+        # This branch is mutually exclusive with the 10.4 admitted-only ceiling.
+        # The deployed model is still evaluated first so candidate features and
+        # recovery-option predictions are frozen, but execution is diagnostic:
+        # choose the best non-nominal candidate only when teacher PCD improves
+        # on exact nominal, teacher signed R_dep is positive, and the target is
+        # not the known exact-0.5 structural plateau.  Otherwise execute exact
+        # nominal.  Learned absolute admission is observed but deliberately not
+        # used as a gate; this is a privileged ceiling, never a deployed arm.
+        if privileged_nonfloor_pcd_oracle_ceiling and privileged_pcd_oracle_ceiling:
+            raise ValueError("privileged non-floor and admitted-only PCD ceilings are mutually exclusive")
+        if privileged_nonfloor_pcd_oracle_ceiling and method == "ocrap" and step_idx < privileged_nonfloor_seed_start_step:
+            if privileged_nonfloor_require_nominal_before_start and int(getattr(base_selected_sample, "candidate_index", base_sel_idx)) != 0:
+                raise ValueError(
+                    f"Base intervened before preregistered non-floor seed start: target={target_key} "
+                    f"step={step_idx} start={privileged_nonfloor_seed_start_step}"
+                )
+        if privileged_nonfloor_pcd_oracle_ceiling and method == "ocrap" and step_idx >= privileged_nonfloor_seed_start_step:
+            oracle_t0 = perf_counter()
+            oracle_candidate_ids = [int(getattr(sample, "candidate_index", i)) for i, sample in enumerate(samples)]
+            oracle_labeled = build_labeled_samples_for_candidate_indices(
+                hist, "closed_loop", eval_cfg, oracle_candidate_ids,
+                num_roots=feature_num_roots, num_options=feature_num_options,
+                prefixes=[sample.prefix for sample in samples],
+                recovery_options=samples[0].recovery_options if samples else None,
+                recovery_option_valid=samples[0].option_valid if samples else None,
+                assign_regime_labels=False, compact_audit=True,
+            )
+            if profile_timing:
+                timing_totals["audit_labels"] += perf_counter() - oracle_t0
+            if len(oracle_labeled) != len(samples):
+                raise ValueError(
+                    f"privileged non-floor PCD oracle expected {len(samples)} labeled candidates, got {len(oracle_labeled)}"
+                )
+            privileged_nonfloor_pcd_oracle_label_count += int(len(oracle_labeled))
+            labeled_by_cid = {int(sample.candidate_index): sample for sample in oracle_labeled}
+            item_by_cid = {
+                int(getattr(item["sample"], "candidate_index", i)): (i, item)
+                for i, item in enumerate(info.get("items", []))
+            }
+            admitted_obs = np.asarray(getattr(info.get("selection", None), "admitted", []), dtype=bool).reshape(-1)
+            nominal_positions = [i for i, sample in enumerate(samples) if int(getattr(sample, "candidate_index", i)) == 0]
+            if len(nominal_positions) != 1:
+                raise ValueError(f"privileged non-floor PCD oracle requires exactly one nominal candidate, got {nominal_positions}")
+            nominal_pos = int(nominal_positions[0])
+            pcd_by_pos: dict[int, float] = {}
+            pcd_detail_by_pos: dict[int, dict[str, float]] = {}
+            for pos, sample in enumerate(samples):
+                cid = int(getattr(sample, "candidate_index", pos))
+                lab = labeled_by_cid.get(cid)
+                if lab is None:
+                    raise ValueError(f"privileged non-floor PCD oracle missing teacher label for candidate {cid}")
+                ld = _sample_to_audit_dict(lab)
+                item_entry = item_by_cid.get(cid)
+                if item_entry is None:
+                    raise ValueError(f"privileged non-floor PCD oracle missing frozen prediction for candidate {cid}")
+                _, item = item_entry
+                q_eval = ld["m_star"] if cid == 0 else item["pred"].q
+                opt_gamma = 0.0 if cid == 0 else drs_gamma
+                option_idx = best_option_indices(
+                    q_eval, ld["root_probs"], gamma=opt_gamma,
+                    root_valid=ld.get("root_valid", None), option_valid=ld.get("option_valid", None),
+                    semantics=option_semantics,
+                )
+                drs_i = deployable_recovery_success(ld["m_star"], ld["root_probs"], option_idx, ld.get("root_valid", None))
+                r_dep_i = _safe_float(ld.get("r_dep_star", 0.0), 0.0)
+                odg_i = _safe_float(ld.get("oracle_gap_star", 0.0), 0.0)
+                pcd_i = post_contact_deployability_score(float(drs_i), float(r_dep_i), float(odg_i))
+                pcd_by_pos[int(pos)] = float(pcd_i)
+                pcd_detail_by_pos[int(pos)] = {
+                    "teacher_pcd": float(pcd_i), "teacher_drs": float(drs_i),
+                    "teacher_r_dep": float(r_dep_i), "teacher_oracle_gap": float(odg_i),
+                }
+            nominal_pcd = float(pcd_by_pos[nominal_pos])
+            eligible = []
+            for pos in range(len(samples)):
+                if pos == nominal_pos:
+                    continue
+                detail = pcd_detail_by_pos[pos]
+                r_dep_i = float(detail["teacher_r_dep"])
+                is_floor = abs(r_dep_i - float(privileged_nonfloor_rdep_floor)) <= float(privileged_nonfloor_rdep_tol)
+                if (
+                    (not is_floor)
+                    and r_dep_i > 0.0
+                    and float(detail["teacher_pcd"]) > nominal_pcd + float(privileged_nonfloor_pcd_oracle_epsilon)
+                ):
+                    eligible.append(pos)
+            best_pos = max(eligible, key=lambda pos: pcd_by_pos[pos]) if eligible else None
+            if best_pos is not None:
+                sel_idx = int(best_pos)
+                oracle_reason = "privileged_nonfloor_pcd_oracle_best_teacher_positive"
+            else:
+                sel_idx = int(nominal_pos)
+                oracle_reason = "privileged_nonfloor_pcd_oracle_nominal_no_nonfloor_positive_gain"
+            try:
+                info["selection"].selected_index = int(sel_idx)
+                info["selection"].reason = str(oracle_reason)
+            except Exception:
+                pass
+            chosen = pcd_detail_by_pos[int(sel_idx)]
+            oracle_utility = np.asarray(info.get("utility", []), dtype=float).reshape(-1)
+            if oracle_utility.size == len(samples):
+                oracle_nup = nominal_utility_preservation(
+                    float(oracle_utility[nominal_pos]), float(oracle_utility[int(sel_idx)]),
+                    sigma_u=float((cfg.get("metrics", {}) or {}).get("sigma_u", 1.0)),
+                )
+                info["nup"] = float(oracle_nup["bounded_NUP"])
+            privileged_nonfloor_pcd_oracle_records.append({
+                "step_index": int(step_idx), "time_index": int(t),
+                "base_selected_position": int(base_sel_idx),
+                "base_selected_candidate_index": int(getattr(base_selected_sample, "candidate_index", base_sel_idx)),
+                "oracle_selected_position": int(sel_idx),
+                "oracle_selected_candidate_index": int(getattr(samples[sel_idx], "candidate_index", sel_idx)),
+                "oracle_selection_reason": str(oracle_reason),
+                "num_candidates_labeled": int(len(oracle_labeled)),
+                "num_teacher_nonfloor_positive": int(len(eligible)),
+                "num_observed_absolute_admitted": int(np.sum(admitted_obs)) if admitted_obs.size == len(samples) else None,
+                "nominal_teacher_pcd": float(nominal_pcd),
+                "oracle_selected_teacher_pcd": float(chosen["teacher_pcd"]),
+                "oracle_selected_teacher_pcd_advantage": float(chosen["teacher_pcd"] - nominal_pcd),
+                "oracle_selected_teacher_r_dep": float(chosen["teacher_r_dep"]),
+                "oracle_selected_teacher_drs": float(chosen["teacher_drs"]),
+                "oracle_selected_teacher_oracle_gap": float(chosen["teacher_oracle_gap"]),
+                "selected_was_observed_absolute_admitted": (
+                    bool(admitted_obs[int(sel_idx)]) if admitted_obs.size == len(samples) else None
+                ),
+            })
+
         # V48.124.10.4 privileged PCD-oracle ceiling.  The Base decision above
         # is the immutable causal trigger.  If Base chooses nominal, this branch
         # does not even construct privileged labels.  If Base chooses a
@@ -1813,8 +1968,6 @@ def _rollout_one_scene(
         # the nominal anchor using an execution-consistent teacher PCD score.
         # Candidate generation, absolute admission, recovery-option selection,
         # checkpoints, thresholds and dynamics remain frozen.
-        base_sel_idx = int(sel_idx)
-        base_selected_sample = samples[base_sel_idx]
         privileged_selected_teacher_pcd = None
         privileged_selected_teacher_r_dep = None
         privileged_selected_teacher_drs = None
@@ -2880,6 +3033,16 @@ def _rollout_one_scene(
         "privileged_pcd_oracle_trigger_count": int(len(privileged_pcd_oracle_records)),
         "privileged_pcd_oracle_label_count": int(privileged_pcd_oracle_label_count),
         "privileged_pcd_oracle_records": privileged_pcd_oracle_records if privileged_pcd_oracle_ceiling else [],
+        "privileged_nonfloor_pcd_oracle_ceiling": bool(privileged_nonfloor_pcd_oracle_ceiling),
+        "privileged_nonfloor_pcd_oracle_epsilon": float(privileged_nonfloor_pcd_oracle_epsilon),
+        "privileged_nonfloor_seed_start_step": int(privileged_nonfloor_seed_start_step),
+        "privileged_nonfloor_seed_plan_file": str(privileged_nonfloor_seed_plan_file),
+        "privileged_nonfloor_seed_entry": privileged_nonfloor_seed_entry,
+        "privileged_nonfloor_rdep_floor": float(privileged_nonfloor_rdep_floor),
+        "privileged_nonfloor_rdep_tol": float(privileged_nonfloor_rdep_tol),
+        "privileged_nonfloor_pcd_oracle_trigger_count": int(sum(1 for r in privileged_nonfloor_pcd_oracle_records if int(r.get("oracle_selected_candidate_index",0)) != 0)),
+        "privileged_nonfloor_pcd_oracle_label_count": int(privileged_nonfloor_pcd_oracle_label_count),
+        "privileged_nonfloor_pcd_oracle_records": privileged_nonfloor_pcd_oracle_records if privileged_nonfloor_pcd_oracle_ceiling else [],
         "closed_loop_FRA_exec": _mean_finite([d.fra_exec for d in decisions]),
         "closed_loop_FRA_cand": _mean_finite([d.fra_cand for d in decisions]),
         "closed_loop_DRS": _mean_finite([d.drs for d in decisions]),

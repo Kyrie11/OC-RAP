@@ -14609,3 +14609,29 @@ Engineering version: `v48.124.10.5-ALL-STATE-SUPPORT-LOCALIZATION-DIAGNOSTIC`
 Scientific version: `v48.124-OC-FMSA` (unchanged)
 
 This stage changes no deployed algorithm. On the exact 11 historical Base-intervention scenes, frozen Base executes unchanged. After each Base action has already been selected, the existing coverage-audit path labels all 24 frozen candidates at **every** decision. The audit measures teacher-PCD-positive candidate support separately at Base-triggered versus Base-nominal states and records whether positive candidates were already absolute-admitted. It therefore localizes the 10.4 STOP between missed trigger support, absolute-admission false negatives, and candidate/action-or-PCD-target support scarcity without a threshold/head/capacity sweep. Absence of missed support on this 11-scene cohort is not promoted to a global theorem; the adjudicator states that limitation explicitly.
+
+
+## V48.124.10.5 attribution and V48.124.10.6 preregistration — candidate existence is not identifiable admission
+
+The V48.124.10.5 all-state support localization passed engineering reliability and scientific attribution. Frozen Base behavior was replay-identical on the 11 historical Near intervention scenes for both robustness variants. Across 440 decisions per variant, 389 Base-nominal decisions contained 69 teacher-PCD-positive decision-level opportunities, and none was absolute-admitted. This rules out the narrow explanation that the Base trigger alone hides already-admitted positive actions on this cohort.
+
+The apparent admission deficit is nevertheless dominated by a previously established truth-semantic ambiguity. Of the 69 Base-nominal positive decisions, 67 have their best positive candidate exactly at the `R_dep*=0.5` structural plateau that the frozen truth contract censors from point-valued absolute-feasibility supervision. Across all positive candidate rows at Base-nominal decisions, 350/361 are exact-floor rows. These rows therefore cannot license an absolute-admission relaxation.
+
+Only 11 positive candidate rows are non-floor witnesses after removing the known exact-0.5 plateau. They occupy seven decisions in exactly two scenes, and every one occurs before that scene's first historical Base intervention. Their teacher DRS is 1, oracle gap is 0, signed `R_dep*` is positive and non-floor, while the frozen predictor assigns strongly negative `R_dep`; they are therefore the least structurally ambiguous current candidate-level evidence for admission underestimation without trajectory confounding. This does **not** promote them to fully point-identified physical truth: V48.80 established a broader structural interval contract in which non-floor rows can remain only partially identified.
+
+This sharpens the methodology chain:
+
+```text
+candidate existence
+  -> truth-semantic identifiability
+  -> absolute admission
+  -> intervention/trigger support
+  -> relative evidence/selection
+  -> exact-nominal abstention
+```
+
+V48.124.10.3.1 established that admission is not selection; V48.124.10.4 established that perfect selection inside the current admitted/trigger support is insufficient; V48.124.10.5 establishes that candidate existence is not by itself identifiable admission, because most apparent positive support lies on a structurally ambiguous teacher plateau.
+
+V48.124.10.6 is therefore a diagnostic-only privileged **non-floor admission seed screen**, not V48.125. It runs only the two non-floor pre-first-trigger seed scenes. Before each seed start Base must remain nominal. From the seed onward, learned admission is bypassed only for teacher-positive non-floor candidates (`R_dep*>0`, `|R_dep*-0.5|>1e-8`, teacher PCD > exact nominal + `1e-6`). The best such candidate is executed; otherwise the diagnostic executes exact nominal. All deployed model/checkpoint/candidate/recovery machinery remains frozen.
+
+The screen is intentionally not adjudicated by a 250-scene bootstrap significance gate: with only two potentially changed scenes, bootstrap resamples have substantial probability of containing no changed scene, so failure of a population CI would confound mechanism failure with support size. The seed screen is one-sided: a harmful/no-signal result closes the current admission-repair hypothesis early; a promising local result only licenses a broader scene-disjoint support-prevalence audit before any V48.125 design.

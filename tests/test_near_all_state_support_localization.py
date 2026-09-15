@@ -43,7 +43,7 @@ def test_support_adjudicator_has_non_overclaiming_branches():
 
 def test_stable_launcher_defaults_to_support_localization():
     text=(root()/'scripts/run_constraint_native_orientation_audit.sh').read_text()
-    assert 'OCRAP_CONSTRAINT_AUDIT_MODE:-all_state_support_localization' in text
+    assert 'OCRAP_CONSTRAINT_AUDIT_MODE:-nonfloor_admission_screen' in text
     assert 'run_near_all_state_support_localization_two_gpu.sh' in text
 
 

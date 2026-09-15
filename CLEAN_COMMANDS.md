@@ -1,3 +1,32 @@
+# 0. Current Near localization — V48.124.10.6 non-floor admission seed screen
+
+V48.124.10.5 is attribution-ready but its apparent 69 non-trigger PCD opportunities are dominated by the exact `R_dep*=0.5` structural plateau. Only seven non-floor positive decisions remain, in two scenes, all before the first historical Base intervention. Non-floor does **not** imply fully point-identified physical truth under the V48.80 structural-interval contract; this is only a cleaner falsification subset. Do **not** train/recalibrate an absolute source and do not sweep thresholds yet.
+
+Keep the V48.124.10.5 result ZIP in `BASE_OUT`, then run:
+
+```bash
+cd /home/senzeyu2/code/OC-RAP
+GPU0=0 GPU1=1 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+  bash scripts/run_constraint_native_orientation_audit.sh
+```
+
+Equivalent explicit launcher:
+
+```bash
+GPU0=0 GPU1=1 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+  bash scripts/run_near_nonfloor_admission_seed_screen_two_gpu.sh
+```
+
+Expected artifact:
+
+```text
+$BASE_OUT/OC-RAP-v48.124.10.6-NONFLOOR-ADMISSION-SEED-SCREEN-results.zip
+```
+
+The screen fresh-replays only the two non-floor seed scenes per robustness variant. Before each preregistered seed start, frozen Base must remain exact nominal. From the seed onward a privileged oracle may bypass learned absolute admission only for candidates with teacher `R_dep*>0`, `R_dep* != 0.5` within `1e-8`, and teacher PCD strictly above exact nominal. This is a **falsification screen**, not a 250-scene population GO test. `PROMISING` means only that the admission-repair hypothesis merits a broader small scene-disjoint prevalence audit; it does not authorize V48.125.
+
+---
+
 # 0. Current Near STOP localization — V48.124.10.5
 
 V48.124.10.4 established `PCD_ORACLE_CEILING_STOP`, so do **not** train/recalibrate a relative head or sweep RIFA thresholds. Keep the 10.4 result ZIP in `BASE_OUT`, then run the small all-state support scan:

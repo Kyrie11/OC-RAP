@@ -1,4 +1,4 @@
-> **Current audit stage — V48.124.10.5.** V48.124.10.4 is reliability/scientific-attribution PASS but `PCD_ORACLE_CEILING_STOP`: a privileged execution-consistent teacher-PCD selector, with the candidate library, absolute admission, and Base trigger held fixed, still does not close the preregistered Near benefit + no-harm gate. Therefore **relative-evidence realignment alone is closed as a sufficient repair**; V48.125 relative-head/threshold sweeping is not authorized. The stable command now runs an 11-scene, policy-preserving all-state support localization audit. It executes frozen Base exactly and labels all 24 frozen candidates only after action selection at every decision, to determine whether Base-nominal states contain missed positive admitted PCD opportunities. This is diagnostic-only and not publication evidence.
+> **Current audit stage — V48.124.10.6.** V48.124.10.5 passed reliability and scientific attribution and found 69 teacher-PCD-positive Base-nominal decisions on the historical 11-scene intervention cohort, but 67/69 decision-level best opportunities lie on the known exact `R_dep*=0.5` structural plateau. Only seven non-floor positive decisions remain, concentrated in two scenes and all occurring before each scene's first Base intervention. V48.80 established that non-floor is still not equivalent to fully point-identified physical truth under the structural interval contract, so these rows are used only as a conservative falsification subset. Therefore a broad absolute-admission repair is **not** authorized. The stable command now runs a two-scene privileged non-floor admission seed screen (a semantic-cleaner subset, not a claim of full physical identifiability). It can cheaply falsify this repair direction; a promising screen only licenses a broader scene-disjoint support-prevalence audit and still does not authorize V48.125 or Main freeze.
 
 ## Current closed-loop diagnostic entrypoint
 
@@ -8,7 +8,7 @@ GPU0=0 GPU1=1 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
   bash scripts/run_constraint_native_orientation_audit.sh
 ```
 
-Required predecessor: `$BASE_OUT/OC-RAP-v48.124.10.4-PCD-ORACLE-CEILING-results.zip`. Expected outputs are `$BASE_OUT/OC-RAP-v48.124.10.5-ALL-STATE-SUPPORT-LOCALIZATION-results.zip` and the sibling JSON adjudication. The scientific model remains `v48.124-OC-FMSA`; this stage changes no deployed algorithm.
+Required predecessor: `$BASE_OUT/OC-RAP-v48.124.10.5-ALL-STATE-SUPPORT-LOCALIZATION-results.zip`. Expected outputs are `$BASE_OUT/OC-RAP-v48.124.10.6-NONFLOOR-ADMISSION-SEED-SCREEN-results.zip` and the sibling JSON adjudication. The scientific model remains `v48.124-OC-FMSA`; this stage changes no deployed algorithm and the screen is diagnostic-only.
 
 # OC-RAP — cleaned audit/deployment workspace
 

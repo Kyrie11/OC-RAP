@@ -6,14 +6,17 @@
 # non-interference, Near closed-loop validity, and Contact recovery validity.
 set -Eeuo pipefail
 
-# The historical V48.124.9 artifacts are byte/provenance reliable, but a later
-# scientific-legality audit found that closed-loop validation disabled WOMD
-# v1.3.1 sdc_paths and could substitute logged SDC future as the planner route.
-# The stable command therefore defaults to an observation-legal route repair +
-# fresh Near re-adjudication. Legacy diagnostic/full paths remain explicit for
-# regression only; they are not publication evidence.
-OCRAP_CONSTRAINT_AUDIT_MODE="${OCRAP_CONSTRAINT_AUDIT_MODE:-all_state_support_localization}"
-if [[ "$OCRAP_CONSTRAINT_AUDIT_MODE" == "all_state_support_localization" || "$OCRAP_CONSTRAINT_AUDIT_MODE" == "support_localization" ]]; then
+# The observation-legal Near provenance chain is already closed. The current
+# default is the V48.124.10.6 two-scene non-floor admission seed screen derived
+# from the attribution-ready V48.124.10.5 support-localization result. It is a
+# privileged falsification diagnostic only: the deployed selector/model stay
+# frozen, and a PROMISING screen cannot by itself authorize V48.125 or Main
+# freeze. Historical diagnostic/full paths remain explicit for regression.
+OCRAP_CONSTRAINT_AUDIT_MODE="${OCRAP_CONSTRAINT_AUDIT_MODE:-nonfloor_admission_screen}"
+if [[ "$OCRAP_CONSTRAINT_AUDIT_MODE" == "nonfloor_admission_screen" || "$OCRAP_CONSTRAINT_AUDIT_MODE" == "nonfloor_screen" ]]; then
+  REPO_DISPATCH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+  exec bash "$REPO_DISPATCH/scripts/run_near_nonfloor_admission_seed_screen_two_gpu.sh"
+elif [[ "$OCRAP_CONSTRAINT_AUDIT_MODE" == "all_state_support_localization" || "$OCRAP_CONSTRAINT_AUDIT_MODE" == "support_localization" ]]; then
   REPO_DISPATCH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
   exec bash "$REPO_DISPATCH/scripts/run_near_all_state_support_localization_two_gpu.sh"
 elif [[ "$OCRAP_CONSTRAINT_AUDIT_MODE" == "pcd_oracle_ceiling" || "$OCRAP_CONSTRAINT_AUDIT_MODE" == "oracle_ceiling" ]]; then
@@ -29,7 +32,7 @@ elif [[ "$OCRAP_CONSTRAINT_AUDIT_MODE" == "legacy_near_axis" ]]; then
   REPO_DISPATCH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
   exec bash "$REPO_DISPATCH/scripts/run_near_rifa_system_axis_two_gpu.sh"
 elif [[ "$OCRAP_CONSTRAINT_AUDIT_MODE" != "full" ]]; then
-  echo "unknown OCRAP_CONSTRAINT_AUDIT_MODE=$OCRAP_CONSTRAINT_AUDIT_MODE (expected all_state_support_localization, pcd_oracle_ceiling, candidate_quality, route_legal_near_axis, legacy_near_axis, or full)" >&2
+  echo "unknown OCRAP_CONSTRAINT_AUDIT_MODE=$OCRAP_CONSTRAINT_AUDIT_MODE (expected nonfloor_admission_screen, all_state_support_localization, pcd_oracle_ceiling, candidate_quality, route_legal_near_axis, legacy_near_axis, or full)" >&2
   exit 30
 fi
 

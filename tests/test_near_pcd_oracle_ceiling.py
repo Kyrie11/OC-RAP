@@ -9,7 +9,7 @@ def test_oracle_ceiling_remains_explicit_diagnostic_and_privileged_path_is_defau
     r=root()
     launcher=(r/'scripts/run_constraint_native_orientation_audit.sh').read_text()
     runsh=(r/'scripts/run_ocrap_closed_loop.sh').read_text()
-    assert 'OCRAP_CONSTRAINT_AUDIT_MODE:-all_state_support_localization' in launcher
+    assert 'OCRAP_CONSTRAINT_AUDIT_MODE:-nonfloor_admission_screen' in launcher
     assert 'pcd_oracle_ceiling' in launcher
     assert 'run_near_pcd_oracle_ceiling_two_gpu.sh' in launcher
     assert 'PRIVILEGED_PCD_ORACLE_CEILING="${PRIVILEGED_PCD_ORACLE_CEILING:-false}"' in runsh
