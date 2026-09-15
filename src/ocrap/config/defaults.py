@@ -446,6 +446,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "cache_postprefix_rollouts": True,
         "cache_teacher_metric_rollouts": True,
         "use_jit_scan_rollouts": True,
+        # Optional exactness-validated hot paths used by closed-loop audit.
+        "scan_prefix_rollouts": False,
+        "validate_jit_prefix_rollout": True,
+        "batch_teacher_option_rollouts": False,
+        "validate_batched_teacher_metrics": True,
+        "batch_teacher_validation_atol": 1.0e-6,
         "compute_future_metrics": True,
         "detect_natural_hidden_emergence": True,
         "teacher_backend": "auto",

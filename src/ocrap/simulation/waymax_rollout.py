@@ -12,9 +12,13 @@ from ocrap.simulation.teacher.margins import TeacherDiagnostics, teacher_margin,
 from ocrap.utils.seed import stable_seed
 
 
-_JIT_CONTROL_ROLLOUT_CACHE: dict[tuple[int, int, int, int, float], Any] = {}
+_JIT_CONTROL_ROLLOUT_CACHE: dict[tuple[int, int, int, int, float, bool], Any] = {}
+_JIT_TEACHER_BATCH_CACHE: dict[tuple[int, int, int, int, float, int], Any] = {}
+_JIT_TEACHER_BATCH_VALIDATION: dict[tuple[int, int, int, int, float, int], bool] = {}
+_JIT_PREFIX_ROLLOUT_VALIDATION: dict[tuple[int, int, int, int, float, bool], bool] = {}
 _WAYMAX_ENV_CACHE: dict[tuple, tuple[Any, str]] = {}
 _JIT_CONTROL_ROLLOUT_WARNED = False
+_JIT_TEACHER_BATCH_WARNED = False
 
 
 def _require_waymax():
@@ -299,68 +303,219 @@ def _use_jit_scan_rollouts(cfg: dict) -> bool:
     return bool(wx.get("use_jit_scan_rollouts", False))
 
 
-def _rollout_bicycle_controls_loop(st: Any, waymax_env: Any, controls: np.ndarray, cfg: dict):
+def _rollout_bicycle_controls_loop(st: Any, waymax_env: Any, controls: np.ndarray, cfg: dict, *, rng: Any | None = None):
     sdc = _sdc_index(st)
     wheelbase = float(cfg.get("wheelbase_m", 2.8))
     for k in range(int(controls.shape[0])):
         ctrl = controls[k]
         action = _bicycle_action(int(st.num_objects), sdc, float(ctrl[0]), float(ctrl[1]), wheelbase)
-        st = waymax_env.step(st, action)
+        if rng is None:
+            st = waymax_env.step(st, action)
+        else:
+            st = waymax_env.step(st, action, rng=rng)
     return st
 
 
-def _rollout_bicycle_controls_scan(st: Any, waymax_env: Any, controls: np.ndarray, cfg: dict):
-    """Roll out a sequence of SDC bicycle controls with one JAX scan dispatch.
+def _rollout_bicycle_controls_scan(st: Any, waymax_env: Any, controls: np.ndarray, cfg: dict, *, rng: Any | None = None):
+    """Roll out SDC bicycle controls with one JAX scan dispatch.
 
-    The old code called ``waymax_env.step`` once from Python for every recovery
-    step and for every option/future pair.  On real WOMD snippets this dominates
-    wall time even when CUDA is visible, because thousands of tiny JAX dispatches
-    keep the GPU under-utilized.  This helper preserves the same controls and
-    final SimulatorState but moves the inner time loop into ``jax.lax.scan``.
-
-    It is intentionally optional and falls back to the original loop on any JAX
-    tracing/Waymax incompatibility so existing behavior is preserved.
+    ``rng`` is optional because Waymax prefix rollout historically supplied a
+    fixed PRNG key to every ``env.step`` while recovery/future rollout did not.
+    Keeping that distinction inside the compiled scan lets the prefix hot path
+    remove Python dispatches without changing the old step semantics.
     """
     global _JIT_CONTROL_ROLLOUT_WARNED
     if controls.size == 0:
         return st
     if not _use_jit_scan_rollouts(cfg):
-        return _rollout_bicycle_controls_loop(st, waymax_env, controls, cfg)
+        return _rollout_bicycle_controls_loop(st, waymax_env, controls, cfg, rng=rng)
     try:
         jax, jnp, _, datatypes, _, _ = _require_waymax()
         num_objects = int(st.num_objects)
         sdc = _sdc_index(st)
         steps = int(controls.shape[0])
         wheelbase = float(cfg.get("wheelbase_m", 2.8))
-        key = (id(waymax_env), num_objects, sdc, steps, wheelbase)
+        with_rng = rng is not None
+        key = (id(waymax_env), num_objects, sdc, steps, wheelbase, with_rng)
         fn = _JIT_CONTROL_ROLLOUT_CACHE.get(key)
         if fn is None:
             valid_template = jnp.zeros((num_objects, 1), dtype=jnp.bool_).at[sdc, 0].set(True)
 
-            def body(carry, ctrl):
-                accel = ctrl[0]
-                steer = ctrl[1]
-                curvature = jnp.tan(steer) / max(wheelbase, 1e-3)
-                data = jnp.zeros((num_objects, 2), dtype=jnp.float32)
-                data = data.at[sdc, 0].set(accel)
-                data = data.at[sdc, 1].set(curvature)
-                action = datatypes.Action(data=data, valid=valid_template)
-                return waymax_env.step(carry, action), None
-
-            def rollout_fn(state, controls_jnp):
-                final_state, _ = jax.lax.scan(body, state, controls_jnp, length=steps)
-                return final_state
+            if with_rng:
+                def rollout_fn(state, controls_jnp, rng_jnp):
+                    def body(carry, ctrl):
+                        accel = ctrl[0]
+                        steer = ctrl[1]
+                        curvature = jnp.tan(steer) / max(wheelbase, 1e-3)
+                        data = jnp.zeros((num_objects, 2), dtype=jnp.float32)
+                        data = data.at[sdc, 0].set(accel)
+                        data = data.at[sdc, 1].set(curvature)
+                        action = datatypes.Action(data=data, valid=valid_template)
+                        return waymax_env.step(carry, action, rng=rng_jnp), None
+                    final_state, _ = jax.lax.scan(body, state, controls_jnp, length=steps)
+                    return final_state
+            else:
+                def rollout_fn(state, controls_jnp):
+                    def body(carry, ctrl):
+                        accel = ctrl[0]
+                        steer = ctrl[1]
+                        curvature = jnp.tan(steer) / max(wheelbase, 1e-3)
+                        data = jnp.zeros((num_objects, 2), dtype=jnp.float32)
+                        data = data.at[sdc, 0].set(accel)
+                        data = data.at[sdc, 1].set(curvature)
+                        action = datatypes.Action(data=data, valid=valid_template)
+                        return waymax_env.step(carry, action), None
+                    final_state, _ = jax.lax.scan(body, state, controls_jnp, length=steps)
+                    return final_state
 
             fn = jax.jit(rollout_fn)
             _JIT_CONTROL_ROLLOUT_CACHE[key] = fn
         controls_jnp = jnp.asarray(np.asarray(controls[:, :2], dtype=np.float32))
-        return fn(st, controls_jnp)
+        if with_rng and _JIT_PREFIX_ROLLOUT_VALIDATION.get(key) is False:
+            return _rollout_bicycle_controls_loop(st, waymax_env, controls, cfg, rng=rng)
+        out = fn(st, controls_jnp, rng) if with_rng else fn(st, controls_jnp)
+        if with_rng and bool((cfg.get("waymax", {}) or {}).get("validate_jit_prefix_rollout", True)) and key not in _JIT_PREFIX_ROLLOUT_VALIDATION:
+            # Validate the first prefix kernel against the pre-optimization
+            # Python-step reference.  Require bitwise-equal pytree leaves; if a
+            # Waymax/JAX version rewrites scan arithmetic differently, the fast
+            # prefix path disables itself for this env/shape.
+            ref = _rollout_bicycle_controls_loop(st, waymax_env, controls, cfg, rng=rng)
+            try:
+                out_leaves = jax.device_get(jax.tree_util.tree_leaves(out))
+                ref_leaves = jax.device_get(jax.tree_util.tree_leaves(ref))
+                equal = len(out_leaves) == len(ref_leaves)
+                if equal:
+                    for a, b in zip(out_leaves, ref_leaves):
+                        aa, bb = np.asarray(a), np.asarray(b)
+                        if aa.shape != bb.shape or aa.dtype != bb.dtype or not np.array_equal(aa, bb, equal_nan=True):
+                            equal = False
+                            break
+            except Exception:
+                equal = False
+            _JIT_PREFIX_ROLLOUT_VALIDATION[key] = bool(equal)
+            return out if equal else ref
+        return out
     except Exception as e:  # pragma: no cover - depends on optional Waymax/JAX versions
         if not _JIT_CONTROL_ROLLOUT_WARNED:
             print(f"[ocrap-profile] jit_scan_rollout disabled after fallback: {type(e).__name__}: {e}", flush=True)
             _JIT_CONTROL_ROLLOUT_WARNED = True
-        return _rollout_bicycle_controls_loop(st, waymax_env, controls, cfg)
+        return _rollout_bicycle_controls_loop(st, waymax_env, controls, cfg, rng=rng)
 
+
+def _teacher_controls_batch(controllers: list[tuple[np.ndarray, np.ndarray, dict]], horizon_steps: int) -> np.ndarray:
+    """Materialize the exact per-option (accel, steer) sequence used by teacher rollout."""
+    out = np.zeros((len(controllers), int(horizon_steps), 2), dtype=np.float32)
+    for l, (_rec_states, rec_controls, _diag) in enumerate(controllers):
+        if rec_controls.size:
+            idx = np.minimum(np.arange(int(horizon_steps)), rec_controls.shape[0] - 1)
+            out[l, :, 0] = rec_controls[idx, 0]
+            if rec_controls.shape[1] > 1:
+                out[l, :, 1] = rec_controls[idx, 1]
+    return out
+
+
+def _rollout_teacher_options_final_metrics(
+    st: Any,
+    waymax_env: Any,
+    controls_batch: np.ndarray,
+    cfg: dict,
+) -> list[dict[str, float]] | None:
+    """Evaluate final Waymax metrics for all recovery options in one dispatch.
+
+    This is an execution optimization for the exact ``teacher_metrics_stride=0``
+    path.  It uses ``lax.map`` (not ``vmap``), so each option still executes the
+    same scan independently while Python dispatch and host/device synchronisation
+    happen once for the complete option library.  On any tracing/version issue it
+    returns ``None`` and the caller retains the scalar reference path.
+
+    The first successful kernel shape is validated against the scalar reference
+    rollouts before it is trusted.  Validation results are cached per env/shape.
+    """
+    global _JIT_TEACHER_BATCH_WARNED
+    wx = cfg.get("waymax", {}) if isinstance(cfg.get("waymax", {}), dict) else {}
+    if not bool(wx.get("batch_teacher_option_rollouts", False)):
+        return None
+    if controls_batch.ndim != 3 or controls_batch.shape[0] <= 1 or controls_batch.shape[-1] < 2:
+        return None
+    try:
+        jax, jnp, _, datatypes, _, _ = _require_waymax()
+        num_objects = int(st.num_objects)
+        sdc = _sdc_index(st)
+        nopt, steps = int(controls_batch.shape[0]), int(controls_batch.shape[1])
+        wheelbase = float(cfg.get("wheelbase_m", 2.8))
+        key = (id(waymax_env), num_objects, sdc, steps, wheelbase, nopt)
+        if _JIT_TEACHER_BATCH_VALIDATION.get(key) is False:
+            return None
+        fn = _JIT_TEACHER_BATCH_CACHE.get(key)
+        if fn is None:
+            valid_template = jnp.zeros((num_objects, 1), dtype=jnp.bool_).at[sdc, 0].set(True)
+
+            def one_option(state, controls_jnp):
+                def body(carry, ctrl):
+                    curvature = jnp.tan(ctrl[1]) / max(wheelbase, 1e-3)
+                    data = jnp.zeros((num_objects, 2), dtype=jnp.float32)
+                    data = data.at[sdc, 0].set(ctrl[0])
+                    data = data.at[sdc, 1].set(curvature)
+                    action = datatypes.Action(data=data, valid=valid_template)
+                    return waymax_env.step(carry, action), None
+
+                final_state, _ = jax.lax.scan(body, state, controls_jnp, length=steps)
+                metrics = waymax_env.metrics(final_state)
+                selected = {}
+                for name, res in metrics.items():
+                    val = getattr(res, "value", res)
+                    if val.ndim > 0 and val.shape[-1] > sdc:
+                        chosen = jnp.reshape(val, (-1, val.shape[-1]))[-1, sdc]
+                    else:
+                        chosen = jnp.reshape(val, (-1,))[-1]
+                    selected[str(name)] = chosen
+                return selected
+
+            def batch_fn(state, batch):
+                return jax.lax.map(lambda controls_jnp: one_option(state, controls_jnp), batch)
+
+            fn = jax.jit(batch_fn)
+            _JIT_TEACHER_BATCH_CACHE[key] = fn
+
+        host = jax.device_get(fn(st, jnp.asarray(np.asarray(controls_batch[..., :2], dtype=np.float32))))
+        names = tuple(host.keys())
+        batch_metrics = [
+            {name: float(np.asarray(host[name]).reshape(nopt, -1)[l, -1]) for name in names}
+            for l in range(nopt)
+        ]
+
+        if bool(wx.get("validate_batched_teacher_metrics", True)) and key not in _JIT_TEACHER_BATCH_VALIDATION:
+            scalar_metrics: list[dict[str, float]] = []
+            for l in range(nopt):
+                scalar_state = _rollout_bicycle_controls_scan(st, waymax_env, controls_batch[l], {**cfg, "waymax": {**wx, "batch_teacher_option_rollouts": False}})
+                scalar_metrics.append(_metric_summary(waymax_env, scalar_state, sdc))
+            atol = float(wx.get("batch_teacher_validation_atol", 1.0e-6))
+            ok = True
+            for batched, scalar in zip(batch_metrics, scalar_metrics):
+                common = set(batched) & set(scalar)
+                if set(batched) != set(scalar) or not common or any(
+                    not np.isclose(float(batched[n]), float(scalar[n]), rtol=0.0, atol=atol, equal_nan=True)
+                    for n in common
+                ):
+                    ok = False
+                    break
+            _JIT_TEACHER_BATCH_VALIDATION[key] = bool(ok)
+            if not ok:
+                if not _JIT_TEACHER_BATCH_WARNED:
+                    print("[ocrap-profile] batched teacher rollout validation failed; using scalar reference path", flush=True)
+                    _JIT_TEACHER_BATCH_WARNED = True
+                return scalar_metrics
+            # The reference results are the safest result for the validation call;
+            # subsequent calls use the validated one-dispatch kernel.
+            return scalar_metrics
+        if _JIT_TEACHER_BATCH_VALIDATION.get(key, True):
+            return batch_metrics
+        return None
+    except Exception as e:  # pragma: no cover - optional Waymax/JAX compatibility
+        if not _JIT_TEACHER_BATCH_WARNED:
+            print(f"[ocrap-profile] batched teacher rollout disabled after fallback: {type(e).__name__}: {e}", flush=True)
+            _JIT_TEACHER_BATCH_WARNED = True
+        return None
 
 def _rollout_prefix(state0: Any, history: SceneHistory, prefix: CandidatePrefix, cfg: dict, *, allow_new: bool, dynamics_name: str | None = None):
     jax, _, _, _, _, _ = _require_waymax()
@@ -376,14 +531,25 @@ def _rollout_prefix(state0: Any, history: SceneHistory, prefix: CandidatePrefix,
     sdc = _sdc_index(state0)
     ego_xy = np.asarray(history.metadata.get("ego_global_xy", [0.0, 0.0]), dtype=np.float32)
     ego_yaw = float(history.metadata.get("ego_global_heading", 0.0))
-    wheelbase = float(cfg.get("wheelbase_m", 2.8))
-    for k in range(prefix.prefix_states.shape[0] - 1):
-        if dyn_name in {"state", "state_dynamics", "StateDynamics"}:
+    steps = max(0, int(prefix.prefix_states.shape[0]) - 1)
+    if dyn_name in {"state", "state_dynamics", "StateDynamics"}:
+        for k in range(steps):
             action = _state_action_from_local(prefix.prefix_states[k + 1], int(state0.num_objects), sdc, ego_xy, ego_yaw)
-        else:
+            st = waymax_env.step(st, action, rng=rng)
+    elif steps > 0 and bool((cfg.get("waymax", {}) or {}).get("scan_prefix_rollouts", False)):
+        controls = np.zeros((steps, 2), dtype=np.float32)
+        if prefix.prefix_controls.size:
+            idx = np.minimum(np.arange(steps), prefix.prefix_controls.shape[0] - 1)
+            controls[:, 0] = prefix.prefix_controls[idx, 0]
+            if prefix.prefix_controls.shape[1] > 1:
+                controls[:, 1] = prefix.prefix_controls[idx, 1]
+        st = _rollout_bicycle_controls_scan(st, waymax_env, controls, cfg, rng=rng)
+    elif steps > 0:
+        wheelbase = float(cfg.get("wheelbase_m", 2.8))
+        for k in range(steps):
             ctrl = prefix.prefix_controls[min(k, prefix.prefix_controls.shape[0] - 1)] if prefix.prefix_controls.size else np.zeros(4, dtype=np.float32)
             action = _bicycle_action(int(state0.num_objects), sdc, float(ctrl[0]), float(ctrl[1]), wheelbase)
-        st = waymax_env.step(st, action, rng=rng)
+            st = waymax_env.step(st, action, rng=rng)
     return st, waymax_env, dyn_name
 
 
@@ -1373,6 +1539,35 @@ def compute_waymax_future_option_margins(history: SceneHistory, prefix: Candidat
         row: list[TeacherDiagnostics] = []
         waymax_rollouts_executed = 0
         waymax_metric_cache_hits = 0
+
+        # Exact final-metric fast path: all recovery options start from the same
+        # post-prefix state.  Compile their independent scans + final metrics into
+        # one device dispatch instead of issuing one JAX call and one host sync per
+        # option.  It is deliberately disabled for screened/augmented-skip modes,
+        # whose option subsets have different semantics.  The helper validates its
+        # first kernel shape against the scalar reference path and falls back on any
+        # mismatch or Waymax/JAX incompatibility.
+        batched_metric_results: dict[int, tuple[float, dict[str, float], dict[str, bool], dict[str, float]]] = {}
+        skip_augmented_rollout = bool(
+            hybrid_teacher
+            and bool(wx.get("skip_waymax_rollout_for_augmented_override", False))
+            and bool(fut.metadata.get("scenario_augmented", False))
+            and bool(cfg.get("artifact", {}).get("use_margin_override", True))
+        )
+        metric_cache_enabled = bool(wx.get("cache_teacher_metric_rollouts", True))
+        base_metric_keys = [
+            (id(base_state), id(waymax_env), int(l), int(metric_stride), int(horizon_steps))
+            for l in range(len(options))
+        ]
+        any_metric_cached = bool(metric_cache_enabled and any(k in metric_rollout_cache for k in base_metric_keys))
+        if metric_stride <= 0 and not screened_hybrid and not skip_augmented_rollout and not any_metric_cached and len(options) > 1:
+            controls_batch = _teacher_controls_batch(controllers, horizon_steps)
+            batch_metrics = _rollout_teacher_options_final_metrics(base_state, waymax_env, controls_batch, cfg)
+            if batch_metrics is not None and len(batch_metrics) == len(options):
+                for l, metrics_last in enumerate(batch_metrics):
+                    val_b, comps_b, active_b = _waymax_margin_from_rollout([metrics_last], cfg)
+                    batched_metric_results[int(l)] = (float(val_b), dict(comps_b), dict(active_b), dict(metrics_last))
+
         for l, opt in enumerate(options):
             rec_states, rec_controls, cdiag = controllers[l]
             if screened_hybrid and rollout_indices is not None and l not in rollout_indices:
@@ -1437,17 +1632,27 @@ def compute_waymax_future_option_margins(history: SceneHistory, prefix: Candidat
             # metrics are semantically required.
             metric_cache_hit = False
             metric_cache_key = (id(base_state), id(waymax_env), int(l), int(metric_stride), int(horizon_steps))
-            cached_metric = metric_rollout_cache.get(metric_cache_key) if bool(wx.get("cache_teacher_metric_rollouts", True)) else None
-            if cached_metric is not None:
+            batched_metric = batched_metric_results.get(int(l))
+            cached_metric = metric_rollout_cache.get(metric_cache_key) if metric_cache_enabled else None
+            if batched_metric is not None:
+                val, comps, active, metrics_last = batched_metric
+                metrics_over_time.append(dict(metrics_last))
+                waymax_rollouts_executed += 1
+                if metric_cache_enabled:
+                    metric_rollout_cache[metric_cache_key] = (float(val), dict(comps), dict(active), dict(metrics_last))
+            elif cached_metric is not None:
                 val, comps, active, metrics_last = cached_metric
                 metrics_over_time.append(dict(metrics_last))
                 metric_cache_hit = True
                 waymax_metric_cache_hits += 1
             else:
-                if metric_stride <= 0 and rec_controls.size:
+                if metric_stride <= 0:
                     controls = np.zeros((horizon_steps, 2), dtype=np.float32)
-                    controls[:, 0] = rec_controls[np.minimum(np.arange(horizon_steps), rec_controls.shape[0] - 1), 0]
-                    controls[:, 1] = rec_controls[np.minimum(np.arange(horizon_steps), rec_controls.shape[0] - 1), 1]
+                    if rec_controls.size:
+                        idx = np.minimum(np.arange(horizon_steps), rec_controls.shape[0] - 1)
+                        controls[:, 0] = rec_controls[idx, 0]
+                        if rec_controls.shape[1] > 1:
+                            controls[:, 1] = rec_controls[idx, 1]
                     st = _rollout_bicycle_controls_scan(st, waymax_env, controls, cfg)
                     metrics_over_time.append(_metric_summary(waymax_env, st, sdc))
                 else:
@@ -1459,7 +1664,7 @@ def compute_waymax_future_option_margins(history: SceneHistory, prefix: Candidat
                             metrics_over_time.append(_metric_summary(waymax_env, st, sdc))
                 waymax_rollouts_executed += 1
                 val, comps, active = _waymax_margin_from_rollout(metrics_over_time, cfg)
-                if bool(wx.get("cache_teacher_metric_rollouts", True)):
+                if metric_cache_enabled:
                     metric_rollout_cache[metric_cache_key] = (float(val), dict(comps), dict(active), metrics_over_time[-1] if metrics_over_time else {})
             if hybrid_teacher:
                 if structural_diags[l] is not None:

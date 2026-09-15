@@ -23,7 +23,12 @@ python tools/check_fixed_main_execution_snapshot.py --repo "$REPO"
 REFERENCE_ZIP="${OCRAP_V48124102_RESULTS_ZIP:-$BASE_OUT/OC-RAP-v48.124.10.2-OBSERVATION-LEGAL-NEAR-results.zip}"
 OUT_ROOT="${OCRAP_CANDIDATE_AUDIT_OUT_ROOT:-$BASE_OUT/ocrap_v48_124_10_3_candidate_quality_audit}"
 OUT="$OUT_ROOT/$RUN_ID"; REF="$OUT/reference_v48124102"
-mkdir -p "$OUT" "$REF" "$OUT/audit" "$OUT/provenance" "$OUT/jax_cache"
+# Compilation artifacts are execution caches, not scientific outputs.  Keep a
+# stable cache outside the per-run UUID so retries and the two same-architecture
+# A30 workers can reuse already compiled Waymax/XLA executables.  JAX cache keys
+# include executable/device fingerprints, so stale code does not alias silently.
+SHARED_JAX_CACHE="${OCRAP_CANDIDATE_JAX_CACHE:-$BASE_OUT/.jax_compilation_cache/ocrap_candidate_quality}"
+mkdir -p "$OUT" "$REF" "$OUT/audit" "$OUT/provenance" "$SHARED_JAX_CACHE"
 RESULTS_ZIP="$BASE_OUT/OC-RAP-v48.124.10.3-CANDIDATE-QUALITY-AUDIT-results.zip"
 RESULTS_MANIFEST="$OUT/OC-RAP-v48.124.10.3-result-bundle-manifest.json"
 package_results(){ local rc="$1"; python tools/package_candidate_quality_audit.py --root "$OUT" --output "$RESULTS_ZIP" --manifest "$RESULTS_MANIFEST" --exit-code "$rc"; }
@@ -78,14 +83,16 @@ BBASE="$REF/base/balanced/closed_loop_ocrap.json"; PBASE="$REF/base/precision/cl
 
 run_audit(){
   local variant="$1" ckpt="$2" gamma="$3" gpu="$4" keys="$5" dir="$6"
-  mkdir -p "$dir" "$OUT/jax_cache/$variant"
+  mkdir -p "$dir"
   env RUN_DIR="$dir" OUTPUT="$dir/closed_loop_ocrap.json" WOMD_VAL="$WOMD_VAL" EXPECTED_WOMD_ROLE=validation CHECKPOINT="$ckpt" GAMMA_REC="$gamma" GPU="$gpu" \
     MAX_SCENARIOS=0 MAX_STEPS=40 REPLAN_INTERVAL=1 LABEL_MODE=coverage AUDIT_EVERY_N_STEPS=1 AUDIT_MAX_LABELS=0 AUDIT_AUTO_MAX_LABELS=0 \
     AUDIT_INTERVENTION_ONLY=true AUDIT_CANDIDATE_SCOPE=all AUDIT_STORE_CANDIDATE_RECORDS=true \
     NUM_CANDIDATES=24 NUM_RECOVERY_OPTIONS=12 BUCKET_DATASET="$BUCKET" BUCKET_SPLIT=test MAX_TARGETS_PER_SCENE=1 TARGET_KEYS_FILE="$keys" REQUIRE_TARGET_KEYS=true \
     PREFLIGHT_SUPPORT_JSON="$SUPPORT" RENDER_TRACE=false SAVE_PARTIAL=true RESUME_FORCE=true INCLUDE_SCENES_IN_RESULT=true \
     RESULT_SCENE_DETAIL=full SCENE_JOURNAL_DETAIL=full MEMORY_SCENE_DETAIL=full PARTIAL_WRITE_EVERY_SCENES=11 PROGRESS_EVERY_STEPS=20 PROFILE_TIMING=true \
-    JAX_CACHE_DIR="$OUT/jax_cache/$variant" USE_SDC_PATHS=true REQUIRE_OBSERVATION_LEGAL_ROUTE=true ALLOW_LOGGED_SDC_ROUTE_FALLBACK=false ALLOW_FUTURE_ROUTE_PROXY=false \
+    JAX_CACHE_DIR="$SHARED_JAX_CACHE" SCAN_PREFIX_ROLLOUTS=true BATCH_TEACHER_OPTION_ROLLOUTS=true \
+    VALIDATE_JIT_PREFIX_ROLLOUT=true VALIDATE_BATCHED_TEACHER_METRICS=true BATCH_TEACHER_VALIDATION_ATOL=1e-6 \
+    USE_SDC_PATHS=true REQUIRE_OBSERVATION_LEGAL_ROUTE=true ALLOW_LOGGED_SDC_ROUTE_FALLBACK=false ALLOW_FUTURE_ROUTE_PROXY=false \
     bash scripts/run_ocrap_closed_loop.sh
 }
 

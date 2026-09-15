@@ -36,6 +36,11 @@ AUDIT_STORE_CANDIDATE_RECORDS="${AUDIT_STORE_CANDIDATE_RECORDS:-false}"
 NUM_CANDIDATES="${NUM_CANDIDATES:-}"
 NUM_RECOVERY_OPTIONS="${NUM_RECOVERY_OPTIONS:-}"
 JAX_CACHE_DIR="${JAX_CACHE_DIR:-${RUN_DIR}/.jax_compilation_cache}"
+SCAN_PREFIX_ROLLOUTS="${SCAN_PREFIX_ROLLOUTS:-false}"
+BATCH_TEACHER_OPTION_ROLLOUTS="${BATCH_TEACHER_OPTION_ROLLOUTS:-false}"
+VALIDATE_JIT_PREFIX_ROLLOUT="${VALIDATE_JIT_PREFIX_ROLLOUT:-true}"
+VALIDATE_BATCHED_TEACHER_METRICS="${VALIDATE_BATCHED_TEACHER_METRICS:-true}"
+BATCH_TEACHER_VALIDATION_ATOL="${BATCH_TEACHER_VALIDATION_ATOL:-1e-6}"
 CONFIG="${CONFIG:-}"
 BUCKET_DATASET="${BUCKET_DATASET:-}"
 BUCKET_SPLIT="${BUCKET_SPLIT:-test}"
@@ -164,6 +169,11 @@ ARGS=(
   --set waymax.compute_future_metrics=false
   --set waymax.teacher_metrics_stride=0
   --set waymax.use_jit_scan_rollouts=true
+  --set "waymax.scan_prefix_rollouts=$SCAN_PREFIX_ROLLOUTS"
+  --set "waymax.validate_jit_prefix_rollout=$VALIDATE_JIT_PREFIX_ROLLOUT"
+  --set "waymax.batch_teacher_option_rollouts=$BATCH_TEACHER_OPTION_ROLLOUTS"
+  --set "waymax.validate_batched_teacher_metrics=$VALIDATE_BATCHED_TEACHER_METRICS"
+  --set "waymax.batch_teacher_validation_atol=$BATCH_TEACHER_VALIDATION_ATOL"
 )
 [[ -n "$CONFIG" ]] && ARGS+=(--config "$CONFIG")
 if [[ -n "$BUCKET_DATASET" ]]; then

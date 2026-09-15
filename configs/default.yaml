@@ -647,6 +647,15 @@ waymax:
   # default because per-step Python/JAX Waymax dispatch is prohibitively slow on
   # WOMD smoke builds; set false only when debugging Waymax/JAX compatibility.
   use_jit_scan_rollouts: true
+  # Closed-loop audit hot paths. Disabled globally; publication/audit scripts
+  # enable them explicitly. Prefix scan self-validates bitwise against the
+  # legacy loop, and batched final-metric teacher rollout validates against the
+  # scalar reference before reuse.
+  scan_prefix_rollouts: false
+  validate_jit_prefix_rollout: true
+  batch_teacher_option_rollouts: false
+  validate_batched_teacher_metrics: true
+  batch_teacher_validation_atol: 1.0e-6
   # Metadata diagnostics only; disabling them speeds smoke/profiling builds
   # without changing OC-MERO labels.
   compute_future_metrics: true

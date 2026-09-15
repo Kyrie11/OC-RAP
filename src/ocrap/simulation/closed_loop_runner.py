@@ -12,7 +12,7 @@ from time import perf_counter
 import numpy as np
 
 from ocrap.data.build.builder import build_feature_only_samples_for_history, build_labeled_samples_for_candidate_indices, build_samples_for_history
-from ocrap.data.build.history import construct_history
+from ocrap.data.build.history import construct_history, construct_history_from_waymax_state
 from ocrap.data.schema import pad_recovery_params
 from ocrap.data.serialization import write_json
 from ocrap.data.waymax_loader import (
@@ -1658,16 +1658,27 @@ def _rollout_one_scene(
         step_candidate_features_s = 0.0
         step_policy_selection_s = 0.0
         timing_t0 = perf_counter()
-        spliced_raw = raw_scenario_from_waymax_state(
-            state,
-            f"{raw.scenario_id}__cl{scenario_rank:04d}",
-            scenario_rank,
-            cfg,
-            trajectory_mode="closed_loop_splice",
-            splice_until=t,
-            static_template=raw,
-        )
-        hist = construct_history(spliced_raw, t, cfg)
+        closed_loop_sid = f"{raw.scenario_id}__cl{scenario_rank:04d}"
+        if bool(cl_cfg.get("fast_waymax_history", False)):
+            hist = construct_history_from_waymax_state(
+                state,
+                raw,
+                t,
+                cfg,
+                scenario_id=closed_loop_sid,
+                scenario_index=scenario_rank,
+            )
+        else:
+            spliced_raw = raw_scenario_from_waymax_state(
+                state,
+                closed_loop_sid,
+                scenario_rank,
+                cfg,
+                trajectory_mode="closed_loop_splice",
+                splice_until=t,
+                static_template=raw,
+            )
+            hist = construct_history(spliced_raw, t, cfg)
         if route_reference_global is None:
             route_reference_global, route_reference_source = _global_route_from_history(hist)
         hist.metadata["_waymax_state"] = state
@@ -1839,6 +1850,15 @@ def _rollout_one_scene(
             timing_t0 = perf_counter()
             try:
                 audit_indices = ([int(selected_sample.candidate_index)] if selected_label_audit else _select_audit_candidate_indices(samples, info, selected_sample, cfg))
+                if progress:
+                    print({
+                        "event": "closed_loop_audit_start",
+                        "scene_rank": scenario_rank,
+                        "scene_id": str(raw.scenario_id),
+                        "step": step_idx,
+                        "num_candidates": int(len(audit_indices)),
+                        "scope": str(audit_candidate_scope),
+                    }, flush=True)
                 labeled = build_labeled_samples_for_candidate_indices(
                     hist,
                     "closed_loop",
@@ -1850,6 +1870,19 @@ def _rollout_one_scene(
                     recovery_options=samples[0].recovery_options if samples else None,
                     recovery_option_valid=samples[0].option_valid if samples else None,
                     assign_regime_labels=False,
+                    compact_audit=True,
+                    progress_callback=(
+                        (lambda done, total, cid, elapsed: print({
+                            "event": "closed_loop_audit_candidate",
+                            "scene_rank": scenario_rank,
+                            "scene_id": str(raw.scenario_id),
+                            "step": step_idx,
+                            "candidate_index": int(cid),
+                            "done": int(done),
+                            "total": int(total),
+                            "elapsed_s": round(float(elapsed), 3),
+                        }, flush=True)) if progress else None
+                    ),
                 )
                 if labeled:
                     by_cid = {int(s.candidate_index): s for s in labeled}
@@ -3866,6 +3899,12 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
         "compute_future_metrics": bool(eff_wx.get("compute_future_metrics", False)),
         "teacher_metrics_stride": int(eff_wx.get("teacher_metrics_stride", 0) or 0),
         "teacher_rollout_top_k_options": int(eff_wx.get("teacher_rollout_top_k_options", 0) or 0),
+        "fast_waymax_history": bool(eff_cl.get("fast_waymax_history", False)),
+        "scan_prefix_rollouts": bool(eff_wx.get("scan_prefix_rollouts", False)),
+        "validate_jit_prefix_rollout": bool(eff_wx.get("validate_jit_prefix_rollout", True)),
+        "batch_teacher_option_rollouts": bool(eff_wx.get("batch_teacher_option_rollouts", False)),
+        "validate_batched_teacher_metrics": bool(eff_wx.get("validate_batched_teacher_metrics", True)),
+        "compact_candidate_quality_audit": True,
         "dataloader_include_sdc_paths": bool(eff_wx.get("dataloader_include_sdc_paths", False)),
         "shared_scene_feature_extraction": True,
         "audit_lightweight_serialization": True,

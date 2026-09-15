@@ -468,7 +468,7 @@ def _compute_within_root_dispersion(root_assignments: np.ndarray, obs_by_future:
     return out
 
 
-def _materialize_sample(history, split_id: str, prefix: CandidatePrefix, a_idx: int, cfg: dict, options, option_valid, K: int) -> DatasetSample:
+def _materialize_sample(history, split_id: str, prefix: CandidatePrefix, a_idx: int, cfg: dict, options, option_valid, K: int, *, compact_audit: bool = False) -> DatasetSample:
     prof = _profiling_cfg(cfg)
     t_all = _now()
     timings: dict[str, float] = {}
@@ -486,16 +486,37 @@ def _materialize_sample(history, split_id: str, prefix: CandidatePrefix, a_idx: 
     t = _now()
     root = cluster_roots(M_future, future_probs, futures, cfg)
     M_star = aggregate_root_margins(M_future, root.assignments, future_probs, K, cfg)
-    root_future_signature = future_trajectory_signature(futures, root.assignments, future_probs, K, width=int(cfg.get("model", {}).get("d_future_signature", 32)))
+    if compact_audit:
+        # Candidate-quality adjudication consumes only root probabilities, M*,
+        # validity and the OC-MERO scalars.  Future-signature features are model
+        # inputs, not teacher-label inputs, so computing them after selection is
+        # pure audit overhead.  Preserve the DatasetSample shape contract with a
+        # zero placeholder that is never exposed to the audit selector.
+        root_future_signature = np.zeros((K, int(cfg.get("model", {}).get("d_future_signature", 32))), dtype=np.float32)
+    else:
+        root_future_signature = future_trajectory_signature(futures, root.assignments, future_probs, K, width=int(cfg.get("model", {}).get("d_future_signature", 32)))
     timings["root_clustering"] = _now() - t
 
     t = _now()
-    obs_by_future = [render_observation(history, prefix, f, cfg) for f in futures]
-    within_disp = _compute_within_root_dispersion(root.assignments, obs_by_future, K, cfg)
-    observations = []
-    for k in range(K):
-        rep = int(root.representative_indices[k]) if root.root_valid[k] and root.representative_indices[k] >= 0 else 0
-        observations.append(obs_by_future[rep])
+    if compact_audit:
+        # C* depends only on each root representative.  The legacy materializer
+        # rendered every future solely to compute within-root dispersion, a
+        # dataset diagnostic not used by closed-loop candidate-quality audit.
+        rep_cache = {}
+        observations = []
+        for k in range(K):
+            rep = int(root.representative_indices[k]) if root.root_valid[k] and root.representative_indices[k] >= 0 else 0
+            if rep not in rep_cache:
+                rep_cache[rep] = render_observation(history, prefix, futures[rep], cfg)
+            observations.append(rep_cache[rep])
+        within_disp = np.zeros(K, dtype=np.float32)
+    else:
+        obs_by_future = [render_observation(history, prefix, f, cfg) for f in futures]
+        within_disp = _compute_within_root_dispersion(root.assignments, obs_by_future, K, cfg)
+        observations = []
+        for k in range(K):
+            rep = int(root.representative_indices[k]) if root.root_valid[k] and root.representative_indices[k] >= 0 else 0
+            observations.append(obs_by_future[rep])
     Y, C, Dobs = compatibility_labels(observations, cfg)
     timings["observation"] = _now() - t
 
@@ -550,7 +571,7 @@ def _materialize_sample(history, split_id: str, prefix: CandidatePrefix, a_idx: 
         i_art_star=bool(res.r_orc >= gamma_orc and res.r_dep < gamma_dep),
         regime_label={},
         valid_masks={"root_valid": root.root_valid.astype(bool).tolist(), "option_valid": option_valid.astype(bool).tolist()},
-        teacher_diagnostics=_teacher_diag_to_jsonable(teacher_diags),
+        teacher_diagnostics=[] if compact_audit else _teacher_diag_to_jsonable(teacher_diags),
         diagnostics={
             "future_sources": [f.source for f in futures],
             "root_clustering": root.metadata,
@@ -1173,6 +1194,8 @@ def build_labeled_samples_for_candidate_indices(
     recovery_options: list | tuple | None = None,
     recovery_option_valid: np.ndarray | None = None,
     assign_regime_labels: bool = True,
+    compact_audit: bool = False,
+    progress_callback: Callable[[int, int, int, float], None] | None = None,
 ) -> list[DatasetSample]:
     """Materialize full teacher/OC-MERO labels for a small candidate subset.
 
@@ -1220,13 +1243,16 @@ def build_labeled_samples_for_candidate_indices(
     })
     audit_cfg["dataset_quality"] = quality
     selected: list[DatasetSample] = []
-    for prefix in prefixes:
+    audit_prefixes = [prefix for prefix in prefixes if int(prefix.macro_id) in wanted]
+    total_audit = len(audit_prefixes)
+    for done, prefix in enumerate(audit_prefixes, start=1):
         cid = int(prefix.macro_id)
-        if cid not in wanted:
-            continue
-        sample = _materialize_sample(history, split_id, prefix, cid, audit_cfg, options, option_valid, K)
+        t_candidate = _now()
+        sample = _materialize_sample(history, split_id, prefix, cid, audit_cfg, options, option_valid, K, compact_audit=compact_audit)
         sample.diagnostics["closed_loop_selected_label_audit"] = True
         selected.append(sample)
+        if progress_callback is not None:
+            progress_callback(done, total_audit, cid, _now() - t_candidate)
     if selected and assign_regime_labels:
         assign_regimes(selected, history, cfg)
     selected.sort(key=lambda sample: int(sample.candidate_index))
