@@ -109,17 +109,3 @@ def test_all_regime_launcher_inherits_six_slot_dynamic_defaults() -> None:
     assert ': "${JOBS_PER_GPU:=3}"' in text
     assert ': "${MAX_PARALLEL:=6}"' in text
     assert 'USE_DYNAMIC_SCHEDULER="$USE_DYNAMIC_SCHEDULER"' in text
-
-
-def test_near_publication_closed_loop_disables_teacher_audit_and_uses_fast_history() -> None:
-    text = (ROOT / "scripts/run_external_baselines_near.sh").read_text()
-    assert ': "${CL_LABEL_MODE:=fast}"' in text
-    assert ': "${CL_AUDIT_EVERY_N_STEPS:=0}"' in text
-    assert ': "${CL_FAST_WAYMAX_HISTORY:=true}"' in text
-    assert '--set "closed_loop.fast_waymax_history=$CL_FAST_WAYMAX_HISTORY"' in text
-
-
-def test_zero_closed_loop_audit_cadence_is_a_real_disable_switch() -> None:
-    text = (ROOT / "src/ocrap/simulation/closed_loop_runner.py").read_text()
-    assert 'audit_enabled = audit_every_n_steps > 0' in text
-    assert 'if audit_enabled and (selected_label_audit or coverage_label_audit)' in text

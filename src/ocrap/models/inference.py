@@ -32,6 +32,10 @@ from ocrap.models.data import (
     samples_to_feature_matrix,
 )
 from ocrap.models.ocrap import OCRAPModel
+from ocrap.models.native_recovery_certificate import (
+    native_certified_root_option_margins,
+    semantic_witness_physical_viability,
+)
 from ocrap.signed_viability import (
     SIGNED_VIABILITY_SOURCE as _SIGNED_VIABILITY_SOURCE,
     enabled as _signed_viability_enabled,
@@ -207,6 +211,53 @@ def _apply_runtime_mechanism_knockouts(model: OCRAPModel, cfg: dict[str, Any]) -
     if applied:
         model_cfg["inference_mechanism_knockouts"] = list(applied)
     return applied
+
+
+def _native_recovery_certification_enabled(cfg: dict[str, Any]) -> bool:
+    ablation = cfg.get("ablation", {}) if isinstance(cfg.get("ablation", {}), dict) else {}
+    return bool(ablation.get("native_recovery_certification", False))
+
+
+def _native_certify_model_margins(
+    model: OCRAPModel,
+    cfg: dict[str, Any],
+    learned_margins: torch.Tensor,
+    semantic_witness_features: torch.Tensor | None,
+    option_features: torch.Tensor,
+    option_valid: torch.Tensor | None,
+) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+    """Attach the paper's executable native certificate immediately before OC-MERO.
+
+    The bridge is opt-in through ``ablation.native_recovery_certification`` so
+    historical checkpoints/runs remain reproducible.  Submission ablations and
+    their fresh Full reference enable it together.  The mechanism switches are
+    read from the already validated and, if requested, knocked-out frozen model.
+    """
+    if not _native_recovery_certification_enabled(cfg):
+        return learned_margins, None, None
+    if semantic_witness_features is None:
+        raise RuntimeError(
+            "native_recovery_certification=true requires the checkpoint's observation-only "
+            "semantic recovery witness features"
+        )
+    if not bool(getattr(model, "direct_recovery_absolute_semantic_witness_correction", False)):
+        raise RuntimeError(
+            "native_recovery_certification=true requires direct_recovery_absolute_semantic_witness_correction"
+        )
+
+    viability, _limiting, _barriers = semantic_witness_physical_viability(
+        semantic_witness_features,
+        option_features,
+        path_stop_alignment=bool(getattr(model, "direct_recovery_semantic_witness_path_stop_alignment", False)),
+        active_set_alignment=bool(getattr(model, "direct_recovery_semantic_witness_active_set_alignment", False)),
+        control_projection=bool(getattr(model, "direct_recovery_semantic_witness_control_projection", False)),
+        route_alignment=bool(getattr(model, "direct_recovery_semantic_witness_route_alignment", False)),
+        reentry_alignment=bool(getattr(model, "direct_recovery_semantic_witness_reentry_alignment", False)),
+    )
+    certified, certificate_margin = native_certified_root_option_margins(
+        learned_margins, viability, option_valid=option_valid
+    )
+    return certified, viability, certificate_margin
 
 
 def _infer_d_model(ckpt: dict[str, Any], cfg: dict[str, Any]) -> int:
@@ -1594,8 +1645,15 @@ def predict_samples(
         out.get("recovery_root_logits", out["root_logits"]).masked_fill(~root_valid, -1.0e4),
         dim=-1,
     )
+    margins_for_ocmero, native_physical_viability, native_certificate_margin = _native_certify_model_margins(
+        bundle.model, bundle.cfg, out["margins"], semantic_witness_features, option_features, option_valid
+    )
+    if native_physical_viability is not None:
+        out["native_recovery_physical_viability"] = native_physical_viability
+        out["native_recovery_certificate_margin"] = native_certificate_margin
+        out["native_certified_margins"] = margins_for_ocmero
     r_dep, r_orc, gap, q = torch_oc_mero(
-        out["margins"],
+        margins_for_ocmero,
         p,
         out["c_star"],
         alpha=float((bundle.cfg.get("ocmero", {}) or {}).get("alpha", 0.2)),
@@ -1614,7 +1672,7 @@ def predict_samples(
     p_np = p.detach().cpu().numpy().astype(np.float32)
     recovery_p_np = recovery_p.detach().cpu().numpy().astype(np.float32)
     c_np = out["c_star"].detach().cpu().numpy().astype(np.float32)
-    m_np = out["margins"].detach().cpu().numpy().astype(np.float32)
+    m_np = margins_for_ocmero.detach().cpu().numpy().astype(np.float32)
     direct_mean_np = None
     direct_std_np = None
     direct_opp_np = None
@@ -1799,8 +1857,15 @@ def predict_sample(d: dict[str, Any], bundle: ModelBundle | None, cfg: dict | No
         root_valid=root_valid, option_valid=option_valid,
     )
     p = torch.softmax(out["root_logits"].masked_fill(~root_valid, -1.0e4), dim=-1)
+    margins_for_ocmero, native_physical_viability, native_certificate_margin = _native_certify_model_margins(
+        bundle.model, bundle.cfg, out["margins"], semantic_witness_features, option_features, option_valid
+    )
+    if native_physical_viability is not None:
+        out["native_recovery_physical_viability"] = native_physical_viability
+        out["native_recovery_certificate_margin"] = native_certificate_margin
+        out["native_certified_margins"] = margins_for_ocmero
     r_dep, r_orc, gap, q = torch_oc_mero(
-        out["margins"],
+        margins_for_ocmero,
         p,
         out["c_star"],
         alpha=float((bundle.cfg.get("ocmero", {}) or {}).get("alpha", 0.2)),
@@ -1818,7 +1883,7 @@ def predict_sample(d: dict[str, Any], bundle: ModelBundle | None, cfg: dict | No
         q=q.squeeze(0).detach().cpu().numpy().astype(np.float32),
         root_probs=p.squeeze(0).detach().cpu().numpy().astype(np.float32),
         c_star=out["c_star"].squeeze(0).detach().cpu().numpy().astype(np.float32),
-        margins=out["margins"].squeeze(0).detach().cpu().numpy().astype(np.float32),
+        margins=margins_for_ocmero.squeeze(0).detach().cpu().numpy().astype(np.float32),
         direct_recovery_value=(None if "direct_recovery_value_logit" not in out else float((out["direct_recovery_value_logit"] if str(getattr(bundle.model, "direct_recovery_value_output", "probability")) == "score" else torch.sigmoid(out["direct_recovery_value_logit"])).squeeze(0).detach().cpu().item())),
         direct_recovery_std=(None if "direct_recovery_value_logvar" not in out else float(torch.exp(0.5 * out["direct_recovery_value_logvar"]).squeeze(0).detach().cpu().item())),
         direct_recovery_opportunity=(None if "direct_recovery_opportunity_logit" not in out else float(torch.sigmoid(out["direct_recovery_opportunity_logit"]).squeeze(0).detach().cpu().item())),

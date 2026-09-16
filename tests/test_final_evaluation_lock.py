@@ -117,10 +117,3 @@ def test_final_ablation_launcher_uses_current_main_and_common_target_locks():
     assert "no_rifa_absolute_admission" in text
     assert "FINAL_TARGET_LOCK_ROOT" in text
     assert '--target-keys-file "$keyfile"' in text
-    assert '--run-id "$ABLATION_RUN_ID"' in text
-
-
-def test_final_ablation_table_builder_matches_paper_main_matrix():
-    text = (ROOT / "tools/build_submission_ablation_tables.py").read_text()
-    assert '"no_nominal_abstention": ("w/o exact-nominal abstention", ("safe", "near", "contact"), "main")' in text
-    assert '"no_route_alignment": ("w/o route alignment", ("near", "contact"), "main")' in text

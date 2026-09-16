@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build paper-ready V48.124 functional-ablation tables by regime and variant."""
+"""Build paper-ready frozen-module ablation tables by regime and variant."""
 from __future__ import annotations
 import argparse, csv, json, subprocess, sys
 from pathlib import Path
@@ -7,8 +7,8 @@ from pathlib import Path
 ARM_META = {
     "no_obs_consistency": ("w/o observation consistency", ("near", "contact"), "main"),
     "mean_tail": ("mean instead of lower-tail", ("near", "contact"), "main"),
-    "no_actuator_projection": ("w/o recovery-witness actuator projection", ("near", "contact"), "main"),
-    "no_persistent_reentry": ("w/o recovery-witness persistent re-entry", ("contact",), "main"),
+    "no_actuator_projection": ("w/o actuator projection", ("near", "contact"), "main"),
+    "no_persistent_reentry": ("w/o persistent re-entry", ("contact",), "main"),
     "no_rifa_absolute_admission": ("w/o RIFA absolute admission", ("safe", "near", "contact"), "main"),
     "no_nominal_abstention": ("w/o exact-nominal abstention", ("safe", "near", "contact"), "main"),
     "no_active_set_alignment": ("w/o active-set alignment", ("near", "contact"), "supplementary"),
@@ -31,7 +31,7 @@ def build_one(regime: str, out: Path, entries: list[tuple[str,Path]], allow_unpa
 
 def main() -> int:
     ap=argparse.ArgumentParser()
-    ap.add_argument("--full-run",type=Path,required=True,help="V48.124 final three-regime root")
+    ap.add_argument("--full-run",type=Path,required=True,help="native-certified Full three-regime reference root")
     ap.add_argument("--ablation-root",type=Path,required=True)
     ap.add_argument("--variants",default="balanced,precision")
     ap.add_argument("--tier",choices=("main","all"),default="main")
@@ -45,7 +45,7 @@ def main() -> int:
         w=csv.writer(f); w.writerow(["arm","reporting_name","tier","safe","near","contact"])
         for arm,(label,regimes,tier) in ARM_META.items():
             w.writerow([arm,label,tier,int("safe" in regimes),int("near" in regimes),int("contact" in regimes)])
-    lines=["# V48.124 submission ablation matrix","","> Functional knockouts use the same frozen V48.80 checkpoint and frozen per-bucket calibration. No ablation is retrained or recalibrated. Actuator-projection and re-entry knockouts modify executable recovery-witness/certification semantics; they do not replace Waymax dynamics or execute a separate low-level recovery controller.","","| Ablation | Tier | Safe | Near | Contact |","|---|---|:---:|:---:|:---:|"]
+    lines=["# Final frozen-module ablation matrix","","> Functional knockouts use the same frozen V48.80 checkpoint, frozen per-bucket calibration, immutable target lock, and native pre-OC-MERO executable-recovery certificate as the fresh Full reference. No ablation is retrained or recalibrated.","","| Ablation | Tier | Safe | Near | Contact |","|---|---|:---:|:---:|:---:|"]
     for arm,(label,regimes,tier) in ARM_META.items():
         lines.append(f"| {label} | {tier} | {'✓' if 'safe' in regimes else '—'} | {'✓' if 'near' in regimes else '—'} | {'✓' if 'contact' in regimes else '—'} |")
     (args.output_dir/"ablation_matrix.md").write_text("\n".join(lines)+"\n",encoding="utf-8")

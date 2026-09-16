@@ -1,2 +1,3 @@
 ablation:
+  native_recovery_certification: true
   disable_reentry_alignment: true

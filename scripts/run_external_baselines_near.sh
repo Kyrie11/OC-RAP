@@ -50,16 +50,8 @@ fi
 : "${CL_REPLAN_INTERVAL_STEPS:=1}"
 : "${CL_NUM_CANDIDATES:=24}"
 : "${CL_NUM_RECOVERY_OPTIONS:=12}"
-# Publication Near-Contact evaluation uses deployable physical closed-loop metrics.
-# Exact selected/top-k teacher labels are diagnostic-only and can cost ~seconds
-# per decision because they replay counterfactual futures x recovery options.
-# Keep the main path label-free; opt in explicitly with, e.g.,
-#   CL_LABEL_MODE=selected CL_AUDIT_EVERY_N_STEPS=1
-: "${CL_LABEL_MODE:=fast}"
+: "${CL_LABEL_MODE:=selected}"
 : "${CL_AUDIT_EVERY_N_STEPS:=0}"
-# Execution-equivalent hot path: construct SceneHistory directly from the current
-# Waymax SimulatorState instead of rebuilding an intermediate RawScenario.
-: "${CL_FAST_WAYMAX_HISTORY:=true}"
 : "${CL_SAVE_PARTIAL:=true}"
 : "${CL_PROFILE_TIMING:=true}"
 : "${CL_LATENCY_EXECUTION_CONTRACT:=throughput_or_unspecified}"
@@ -449,7 +441,6 @@ run_closed_loop_method() {
     --set "closed_loop.latency_execution_contract=$CL_LATENCY_EXECUTION_CONTRACT" \
     --set "closed_loop.latency_warmup_decisions=$CL_LATENCY_WARMUP_DECISIONS" \
     --set "closed_loop.audit_every_n_steps=$CL_AUDIT_EVERY_N_STEPS" \
-    --set "closed_loop.fast_waymax_history=$CL_FAST_WAYMAX_HISTORY" \
     --set closed_loop.use_sdc_paths=true \
     --set closed_loop.require_observation_legal_route=true \
     --set closed_loop.allow_future_route_proxy=false \

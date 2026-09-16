@@ -42,8 +42,8 @@ NUM_RECOVERY_OPTIONS="${NUM_RECOVERY_OPTIONS:-12}"
 ABLATION_SET="${ABLATION_SET:-main}"
 ABLATIONS="${ABLATIONS:-}"
 RUN_TAG="${RUN_TAG:-submission_ablation_metrics}"
-ABLATION_RUN_ID="${OCRAP_ABLATION_RUN_ID:-$(python -c 'import uuid; print(uuid.uuid4().hex)')}"
-export OCRAP_ABLATION_RUN_ID="$ABLATION_RUN_ID"
+NATIVE_FULL_REFERENCE_CONFIG="${NATIVE_FULL_REFERENCE_CONFIG:-configs/ablations/submission_native_certified_full.yaml}"
+NATIVE_FULL_REFERENCE_ROOT="${NATIVE_FULL_REFERENCE_ROOT:-$OUT_ROOT/_native_full_reference}"
 
 # Resume-aware execution controls. Complete artifacts are reused; --force is unnecessary for scientific ablations.
 SKIP_COMPLETE="${SKIP_COMPLETE:-true}"
@@ -62,19 +62,22 @@ runtime_bool_true "$PROFILE_TIMING" || { echo "PROFILE_TIMING must be true for p
 [[ "$AUDIT_EVERY_N_STEPS" == 0 ]] || { echo "AUDIT_EVERY_N_STEPS must be 0 for publication ablations." >&2; exit 2; }
 
 mkdir -p "$OUT_ROOT"
+ABLATION_RUN_ID="${OCRAP_ABLATION_RUN_ID:-$(python -c 'import uuid; print(uuid.uuid4().hex)')}"
+export OCRAP_ABLATION_RUN_ID="$ABLATION_RUN_ID"
 python tools/check_constraint_native_orientation_contract.py \
   --repo "$REPO" \
   --run-id "$ABLATION_RUN_ID" \
   --output "$OUT_ROOT/cnro-runtime-code-contract.ablations.json"
+[[ -f "$NATIVE_FULL_REFERENCE_CONFIG" ]] || { echo "Missing native Full reference config: $NATIVE_FULL_REFERENCE_CONFIG" >&2; exit 30; }
 
 # name|config|safe|near|contact|tier|description
-# These are inference-time/frozen-checkpoint functional knockouts.  In
-# particular, actuator projection and persistent re-entry refer to the
-# executable recovery witness/certification semantics; they do not replace
-# Waymax dynamics or execute a separate low-level recovery controller.
+# These are inference-time/frozen-checkpoint functional knockouts.  Every
+# submission arm enables the paper-faithful native recovery certificate before
+# OC-MERO; physical-semantic knockouts remove one factor from that same native
+# path. They never re-introduce the historical learned-AFE selector.
 ARMS=(
-  "no_obs_consistency|configs/ablations/without_observation_kernel.yaml|0|1|1|main|Disable observation-compatible OC-MERO grouping at inference; frozen checkpoint/heads"
-  "mean_tail|configs/ablations/without_lower_tail.yaml|0|1|1|main|Replace nested lower-tail aggregation by weighted mean at inference; frozen checkpoint/heads"
+  "no_obs_consistency|configs/ablations/submission_no_obs_consistency.yaml|0|1|1|main|Disable observation-compatible OC-MERO grouping at inference; frozen checkpoint/heads"
+  "mean_tail|configs/ablations/submission_mean_tail.yaml|0|1|1|main|Replace nested lower-tail aggregation by weighted mean at inference; frozen checkpoint/heads"
   "no_actuator_projection|configs/ablations/submission_no_actuator_projection.yaml|0|1|1|main|Disable actuator-envelope projection in executable recovery witness/certification"
   "no_persistent_reentry|configs/ablations/submission_no_persistent_reentry.yaml|0|0|1|main|Remove persistent re-entry alignment from post-contact recovery witness/certification"
   "no_rifa_absolute_admission|configs/ablations/submission_no_rifa_absolute_admission.yaml|1|1|1|main|Remove the absolute deployable-recovery admission gate while retaining hard/harm feasibility and frozen scoring"
@@ -178,6 +181,7 @@ if ((${#GPUS[@]} > 2)); then GPUS=("${GPUS[0]}" "${GPUS[1]}"); fi
 
 echo "[Ablation scheduler] GPUs=${GPUS[*]} variants=${CLEAN_VARIANTS[*]} set=$ABLATION_SET"
 echo "[Ablation contract] frozen checkpoint + frozen per-bucket gamma; LABEL_MODE=$LABEL_MODE; PROFILE_TIMING=$PROFILE_TIMING"
+echo "[Ablation causal Full] native-certified reference=$NATIVE_FULL_REFERENCE_ROOT (historical FULL_RUN_ROOT=$FULL_RUN_ROOT is not used for causal tables unless NATIVE_FULL_REFERENCE_ROOT is pointed there)"
 
 # Resolve bucket provenance once and preflight each immutable regime/WOMD pair
 # once.  Every arm/variant reuses the resulting verified JSON contract.
@@ -191,7 +195,9 @@ fi
 PREFLIGHT_ROOT="$OUT_ROOT/_shared_preflight_${RUN_TAG}"
 mkdir -p "$PREFLIGHT_ROOT"
 
-declare -A NEED_REGIME=( [safe]=0 [near]=0 [contact]=0 )
+# The fresh native-certified Full reference is part of the causal ablation
+# experiment, so all three immutable strata are always preflighted once.
+declare -A NEED_REGIME=( [safe]=1 [near]=1 [contact]=1 )
 for spec in "${SELECTED_SPECS[@]}"; do
   IFS='|' read -r _ _ rs rn rc _ _ <<< "$spec"
   [[ "$rs" == 1 ]] && NEED_REGIME[safe]=1
@@ -232,6 +238,25 @@ for variant in "${CLEAN_VARIANTS[@]}"; do
     --output "$OUT_ROOT/DEPLOYABLE-STACK-${variant}.json"
   IFS=$'\t' read -r checkpoint gamma_json < <(variant_paths "$variant")
   read -r gamma_safe gamma_near gamma_contact < <(read_gammas "$gamma_json")
+
+  # A paper-faithful ablation needs a Full reference with the same native
+  # certification path.  Existing characterization artifacts predate this
+  # bridge and are therefore not a valid counterfactual for the three repaired
+  # physical-semantic knockouts.  Build/reuse this reference inside OUT_ROOT.
+  ref_root="$NATIVE_FULL_REFERENCE_ROOT/$variant"
+  mkdir -p "$ref_root/safe" "$ref_root/near" "$ref_root/contact"
+  ROOTS_TO_FINALIZE+=("$ref_root")
+  for regime in safe near contact; do
+    case "$regime" in
+      safe) gamma="$gamma_safe"; womd="$SAFE_WOMD"; bucket="$SAFE_BUCKET" ;;
+      near) gamma="$gamma_near"; womd="$NEAR_WOMD"; bucket="$NEAR_BUCKET" ;;
+      contact) gamma="$gamma_contact"; womd="$CONTACT_WOMD"; bucket="$CONTACT_BUCKET" ;;
+    esac
+    job_id=$((job_id+1)); jf="$QUEUE_ROOT/pending/$(printf '%04d' "$job_id").job"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "_native_full_reference" "$variant" "$regime" "$NATIVE_FULL_REFERENCE_CONFIG" "$checkpoint" "$gamma" "$womd" "$bucket" "$PREFLIGHT_ROOT/$regime.closed_loop_dataset_support.json" "$FINAL_TARGET_LOCK_ROOT/$regime.json" > "$jf"
+  done
+  python tools/build_ocrap_three_regime_index.py --root "$ref_root" --launcher-exit-code 1 >/dev/null || true
 
   for spec in "${SELECTED_SPECS[@]}"; do
     IFS='|' read -r arm config run_safe run_near run_contact tier description <<< "$spec"
@@ -277,7 +302,12 @@ run_claimed_job() {
   local arm variant regime config checkpoint gamma womd bucket preflight target_keys
   IFS=$'\t' read -r arm variant regime config checkpoint gamma womd bucket preflight target_keys < "$jf"
   # Same nounset rule as preflight_one(): initialize dependent locals in order.
-  local root="$OUT_ROOT/$arm/$variant"
+  local root
+  if [[ "$arm" == "_native_full_reference" ]]; then
+    root="$NATIVE_FULL_REFERENCE_ROOT/$variant"
+  else
+    root="$OUT_ROOT/$arm/$variant"
+  fi
   local run_dir="$root/$regime"
   local artifact="$run_dir/closed_loop_ocrap.json"
   local started="$(runtime_iso_now)" rc=0
@@ -344,17 +374,20 @@ for root in "${ROOTS_TO_FINALIZE[@]}"; do
 done
 
 # Record the execution/scientific contract next to the original manifest.
-python - "$OUT_ROOT/ablation_execution_contract.json" "$RUN_TAG" "$LABEL_MODE" "$PROFILE_TIMING" "$failed_count" "$CUDA_DEVICES" "$ABLATION_RUN_ID" <<'PY'
+python - "$OUT_ROOT/ablation_execution_contract.json" "$RUN_TAG" "$LABEL_MODE" "$PROFILE_TIMING" "$failed_count" "$CUDA_DEVICES" "$ABLATION_RUN_ID" "$NATIVE_FULL_REFERENCE_ROOT" "$FULL_RUN_ROOT" <<'PY'
 import json,sys,datetime
-out,tag,label,profile,failed,gpus,run_id=sys.argv[1:]
+out,tag,label,profile,failed,gpus,run_id,native_full_root,historical_full_root=sys.argv[1:]
 doc={
-  'schema_version': 1,
+  'schema_version': 2,
   'tag': tag,
   'run_instance_id': run_id,
   'created_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
   'ablation_type': 'frozen-checkpoint inference-time functional knockout',
   'checkpoint_policy': 'same frozen V48.80 checkpoint within each variant',
-  'calibration_policy': 'same frozen per-bucket gamma_rec as the full model; no recalibration',
+  'calibration_policy': 'same frozen per-bucket gamma_rec as the Full native-certified reference; no recalibration',
+  'native_recovery_certification': 'enabled before OC-MERO for Full and every submission ablation arm',
+  'native_full_reference_root': native_full_root,
+  'historical_full_run_root_not_used_for_causal_tables': historical_full_root,
   'metric_contract': 'v55 exact publication geometry, t0 included, missing metrics not zero-filled',
   'latency_contract': 'state_history + candidate_features + policy_selection only; teacher/audit/Waymax bookkeeping excluded',
   'label_mode': label,
@@ -363,8 +396,9 @@ doc={
   'cuda_devices': gpus,
   'failed_job_count': int(failed),
   'interpretation_notes': {
-    'no_actuator_projection': 'removes actuator projection from executable recovery witness/certification; does not replace Waymax dynamics or directly execute a separate recovery controller',
-    'no_persistent_reentry': 'removes persistent re-entry alignment from the recovery witness/certification semantics',
+    'no_actuator_projection': 're-rolls executable recovery without actuator-envelope projection and restores the post-hoc control barrier before OC-MERO',
+    'no_persistent_reentry': 'removes the persistent re-entry barrier from the native root-option certificate before OC-MERO',
+    'no_route_alignment': 'removes the executable route-consistency barrier from the native root-option certificate before OC-MERO',
     'without_obs_or_tail': 'changes OC-MERO inference aggregation while retaining frozen learned heads/representation',
     'no_rifa_absolute_admission': 'removes the absolute deployable-recovery admission predicate while retaining hard/harm feasibility and frozen scoring',
     'no_nominal_abstention': 'keeps absolute admission but re-enables the legacy recovery-first fallback when no candidate is admitted',
@@ -380,14 +414,13 @@ if [[ "$failed_count" != 0 ]]; then
 fi
 rm -rf "$QUEUE_ROOT"
 
-# Paper tables are built only against a complete Full OC-RAP run and
-# remain paired by target key.  Missing Full results are a warning, not a reason
-# to invalidate successfully completed ablation trajectories.
+# Paper tables are built only against the fresh native-certified Full reference
+# produced by this launcher, paired on the same immutable target keys.
 if bool_true "$BUILD_TABLES"; then
   full_ready=1
   for variant in "${CLEAN_VARIANTS[@]}"; do
     for regime in safe near contact; do
-      if ! python tools/check_closed_loop_artifact.py --output "$FULL_RUN_ROOT/$variant/$regime/closed_loop_ocrap.json" --quiet || ! is_publication_artifact "$FULL_RUN_ROOT/$variant/$regime/closed_loop_ocrap.json"; then
+      if ! python tools/check_closed_loop_artifact.py --output "$NATIVE_FULL_REFERENCE_ROOT/$variant/$regime/closed_loop_ocrap.json" --quiet || ! is_publication_artifact "$NATIVE_FULL_REFERENCE_ROOT/$variant/$regime/closed_loop_ocrap.json"; then
         full_ready=0
       fi
     done
@@ -395,12 +428,12 @@ if bool_true "$BUILD_TABLES"; then
   if ((full_ready)); then
     tier="$ABLATION_SET"; [[ "$tier" == main || "$tier" == all ]] || tier=all
     python tools/build_submission_ablation_tables.py \
-      --full-run "$FULL_RUN_ROOT" --ablation-root "$OUT_ROOT" \
+      --full-run "$NATIVE_FULL_REFERENCE_ROOT" --ablation-root "$OUT_ROOT" \
       --variants "$VARIANTS" --tier "$tier" --output-dir "$TABLE_OUT"
   else
-    echo "[WARN] Full three-regime OC-RAP artifacts are not all complete under $FULL_RUN_ROOT; skip paired ablation tables for now." >&2
+    echo "[WARN] Full three-regime OC-RAP artifacts are not all complete under $NATIVE_FULL_REFERENCE_ROOT; skip paired ablation tables for now." >&2
   fi
 fi
 
-printf '\nAblations complete.\nRun ID: %s\nRoot: %s\nManifest: %s\nContract: %s\n' \
-  "$ABLATION_RUN_ID" "$OUT_ROOT" "$MANIFEST" "$OUT_ROOT/ablation_execution_contract.json"
+printf '\nAblations complete.\nRoot: %s\nManifest: %s\nContract: %s\n' \
+  "$OUT_ROOT" "$MANIFEST" "$OUT_ROOT/ablation_execution_contract.json"

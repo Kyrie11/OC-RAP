@@ -9,6 +9,7 @@ from ocrap.algorithms.ocmero import torch_oc_mero
 from ocrap.signed_viability import enabled as _signed_viability_enabled
 from ocrap.algorithms.lcv import torch_normalize_weights, torch_weighted_lcvar, torch_weighted_lcvar_influence
 from .encoders import FlatFeatureLayout, MLPEncoder, StructuredTokenEncoder
+from .native_recovery_certificate import semantic_witness_physical_viability
 
 
 class RecoverySetTournament(nn.Module):
@@ -3330,44 +3331,17 @@ class OCRAPModel(nn.Module):
             features[..., 21] if features.shape[-1] >= 22 else torch.zeros_like(h_min)
         )
 
-        clear_recovery = torch.minimum(h_terminal, h_gain)
-        clear_recovery_ok = (clear_recovery > 0.0) & (h_clear_floor_gain >= 0.0)
-        clearance_barrier = torch.where(clear_recovery_ok, clear_recovery, h_min)
-        stab_recovery = torch.minimum(h_stab_terminal, h_stab_gain)
-        stab_recovery_ok = (stab_recovery > 0.0) & (h_stab_floor_gain >= 0.0)
-        raw_stability_barrier = torch.where(stab_recovery_ok, stab_recovery, h_stab_min)
-
         if option_features is None:
             raise RuntimeError("OC-SARW requires recovery option semantic features")
-        of = option_features.to(device=memory.device, dtype=memory.dtype)
-        if of.ndim != 3 or of.shape[0] != x.shape[0] or of.shape[1] != self.num_options or of.shape[2] < 8:
-            raise RuntimeError(f"invalid option feature shape for OC-SARW: {tuple(of.shape)}")
-        stop_active = (of[..., 0] > 0.5) | (of[..., 1] > 0.5) | (of[..., 3] > 0.5) | (of[..., 4] > 0.5)
-        chosen_stop = h_path_stop if self.direct_recovery_semantic_witness_path_stop_alignment else h_stop_legacy
-        stop_barrier = torch.where(stop_active, chosen_stop, torch.ones_like(chosen_stop))
-        if self.direct_recovery_semantic_witness_active_set_alignment:
-            stability_barrier = torch.where(
-                stability_active_obs > 0.5, raw_stability_barrier, torch.ones_like(raw_stability_barrier)
-            )
-        else:
-            stability_barrier = raw_stability_barrier
-
-        # In the projected-control factor the actual executable recovery trace
-        # is already magnitude/rate/jerk feasible by construction.  Do not
-        # re-veto the same policy using the historical desired-command barrier;
-        # certify only the remaining environment/state-dependent constraints.
-        effective_control_barrier = (
-            torch.ones_like(h_control)
-            if self.direct_recovery_semantic_witness_control_projection
-            else h_control
+        physical_viability, limiting_constraint, barrier_stack = semantic_witness_physical_viability(
+            features,
+            option_features,
+            path_stop_alignment=bool(self.direct_recovery_semantic_witness_path_stop_alignment),
+            active_set_alignment=bool(self.direct_recovery_semantic_witness_active_set_alignment),
+            control_projection=bool(self.direct_recovery_semantic_witness_control_projection),
+            route_alignment=bool(self.direct_recovery_semantic_witness_route_alignment),
+            reentry_alignment=bool(self.direct_recovery_semantic_witness_reentry_alignment),
         )
-        barriers = [clearance_barrier, stop_barrier, effective_control_barrier, stability_barrier]
-        if self.direct_recovery_semantic_witness_route_alignment:
-            barriers.append(h_route)
-        if self.direct_recovery_semantic_witness_reentry_alignment:
-            barriers.append(h_reentry)
-        barrier_stack = torch.stack(barriers, dim=-1)
-        physical_viability, limiting_constraint = barrier_stack.min(dim=-1)
 
         # Exact frozen common-option support from v48.62/v48.63.
         logits = root_logits.float()
