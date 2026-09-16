@@ -92,7 +92,7 @@ def main()->int:
         else:
             status='ONE_SHOT_ACTION_REALIZATION_UNSUPPORTED'
             next_branch='close_current_nonfloor_admission_repair_hypothesis_keep_mechanism_frozen'
-    out={'schema':'ocrap-v48.124.10.7-one-shot-action-realization-v1','engineering_version':'v48.124.10.7-ONE-SHOT-ACTION-REALIZATION-CEILING',
+    out={'schema':'ocrap-v48.124.10.7-one-shot-action-realization-v1','engineering_version':'v48.124.10.7.1-ONE-SHOT-ENTRYPOINT-ENGFIX',
          'scientific_version':'v48.124-OC-FMSA','valid':not errors,'attribution_ready':not errors,'algorithm_modified':False,'publication_evidence':False,
          'errors':errors,'status':status,'next_branch':next_branch,'variants':variants,
          'causal_question':'From the untouched exact-nominal trajectory, does executing exactly the strongest preregistered V48.124.10.5 non-floor seed candidate once improve Near physical endpoints when all subsequent decisions are forced back to exact nominal?',

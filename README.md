@@ -1,4 +1,4 @@
-> **Current audit stage — V48.124.10.6.** V48.124.10.5 passed reliability and scientific attribution and found 69 teacher-PCD-positive Base-nominal decisions on the historical 11-scene intervention cohort, but 67/69 decision-level best opportunities lie on the known exact `R_dep*=0.5` structural plateau. Only seven non-floor positive decisions remain, concentrated in two scenes and all occurring before each scene's first Base intervention. V48.80 established that non-floor is still not equivalent to fully point-identified physical truth under the structural interval contract, so these rows are used only as a conservative falsification subset. Therefore a broad absolute-admission repair is **not** authorized. The stable command now runs a two-scene privileged non-floor admission seed screen (a semantic-cleaner subset, not a claim of full physical identifiability). It can cheaply falsify this repair direction; a promising screen only licenses a broader scene-disjoint support-prevalence audit and still does not authorize V48.125 or Main freeze.
+> **Current audit stage — V48.124.10.7.1 engineering fix.** V48.124.10.6 passed reliability/scientific attribution but the repeated privileged non-floor seed screen was `NOT_PROMISING`. The next licensed experiment is the terminal one-shot action-realization ceiling: for each of the two preregistered seed scenes, follow exact nominal to the strongest V48.124.10.5 seed, execute that candidate exactly once, then force exact nominal thereafter. This isolates candidate physical realization from the repeated privileged PCD policy. The deployed algorithm remains frozen; this is diagnostic-only and cannot by itself authorize Main freeze or V48.125. V48.124.10.7.1 changes only the stable entrypoint/provenance label so the canonical command can no longer silently rerun 10.6.
 
 ## Current closed-loop diagnostic entrypoint
 
@@ -8,7 +8,7 @@ GPU0=0 GPU1=1 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
   bash scripts/run_constraint_native_orientation_audit.sh
 ```
 
-Required predecessor: `$BASE_OUT/OC-RAP-v48.124.10.5-ALL-STATE-SUPPORT-LOCALIZATION-results.zip`. Expected outputs are `$BASE_OUT/OC-RAP-v48.124.10.6-NONFLOOR-ADMISSION-SEED-SCREEN-results.zip` and the sibling JSON adjudication. The scientific model remains `v48.124-OC-FMSA`; this stage changes no deployed algorithm and the screen is diagnostic-only.
+Required predecessor: `$BASE_OUT/OC-RAP-v48.124.10.6-NONFLOOR-ADMISSION-SEED-SCREEN-results.zip`. Expected output: `$BASE_OUT/OC-RAP-v48.124.10.7.1-ONE-SHOT-ACTION-REALIZATION-results.zip` and the sibling JSON adjudication. The scientific model remains `v48.124-OC-FMSA`; no selector/model/checkpoint/candidate/recovery/threshold mechanism is changed.
 
 # OC-RAP — cleaned audit/deployment workspace
 

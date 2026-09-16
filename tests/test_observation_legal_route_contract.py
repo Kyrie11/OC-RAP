@@ -47,7 +47,7 @@ def test_history_refuses_future_ego_route_proxy_in_publication_mode():
 
 def test_stable_launcher_defaults_to_small_candidate_quality_audit_after_near_stop():
     text=(Path(__file__).resolve().parents[1]/"scripts/run_constraint_native_orientation_audit.sh").read_text()
-    assert 'OCRAP_CONSTRAINT_AUDIT_MODE:-nonfloor_admission_screen' in text
+    assert 'OCRAP_CONSTRAINT_AUDIT_MODE:-one_shot_action_realization' in text
     assert 'run_near_all_state_support_localization_two_gpu.sh' in text
     assert 'run_near_pcd_oracle_ceiling_two_gpu.sh' in text
     assert 'run_near_candidate_quality_audit_two_gpu.sh' in text

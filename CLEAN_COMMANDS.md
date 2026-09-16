@@ -1,3 +1,32 @@
+# 0. Current terminal Near diagnostic — V48.124.10.7.1 one-shot action realization
+
+V48.124.10.6 is attribution-ready and `NONFLOOR_ADMISSION_SEED_SCREEN_NOT_PROMISING`. Do not interpret a repeated privileged PCD trajectory as the isolated effect of the original seed action. The terminal diagnostic follows exact nominal until the preregistered strongest V48.124.10.5 non-floor seed, executes that candidate once, then returns to exact nominal forever. No training, recalibration, threshold sweep, candidate/recovery change, or new mechanism is authorized.
+
+Keep the V48.124.10.6 result ZIP in `BASE_OUT`, then run the stable command:
+
+```bash
+cd /home/senzeyu2/code/OC-RAP
+GPU0=0 GPU1=1 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+  bash scripts/run_constraint_native_orientation_audit.sh
+```
+
+Equivalent explicit launcher:
+
+```bash
+GPU0=0 GPU1=1 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+  bash scripts/run_near_nonfloor_one_shot_realization_two_gpu.sh
+```
+
+Expected artifact:
+
+```text
+$BASE_OUT/OC-RAP-v48.124.10.7.1-ONE-SHOT-ACTION-REALIZATION-results.zip
+```
+
+This is a terminal diagnostic ceiling, not publication evidence and not a deployable arm. Scientific attribution is entered only if the result bundle proves exactly one seed intervention per scene, exactly two teacher labels at the seed, exact nominal elsewhere, valid observation-legal route provenance, and the authoritative 10.6 predecessor contract.
+
+---
+
 # 0. Current Near localization — V48.124.10.6 non-floor admission seed screen
 
 V48.124.10.5 is attribution-ready but its apparent 69 non-trigger PCD opportunities are dominated by the exact `R_dep*=0.5` structural plateau. Only seven non-floor positive decisions remain, in two scenes, all before the first historical Base intervention. Non-floor does **not** imply fully point-identified physical truth under the V48.80 structural-interval contract; this is only a cleaner falsification subset. Do **not** train/recalibrate an absolute source and do not sweep thresholds yet.

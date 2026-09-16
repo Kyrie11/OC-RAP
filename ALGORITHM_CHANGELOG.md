@@ -14645,3 +14645,13 @@ The screen is intentionally not adjudicated by a 250-scene bootstrap significanc
 - At the one-shot step, only nominal and the preregistered target candidate are teacher-labelled to fail closed if the historical non-floor/positive contract is not reproduced. Learned absolute admission and relative reranking are bypassed only for this diagnostic action.
 - No changes to model weights, selector, candidate/recovery libraries, thresholds, OC-MERO, RIFA, Waymax dynamics, horizon, route contract, or training.
 - Added `scripts/run_near_nonfloor_one_shot_realization_two_gpu.sh`, a diagnostic adjudicator, and a result packager. The stable `run_constraint_native_orientation_audit.sh` is intentionally unchanged because deployed Main is not frozen.
+
+
+## V48.124.10.7.1 — stable-entrypoint engineering fix (no algorithm change)
+
+- Scientific version remains `v48.124-OC-FMSA`; the V48.124.10.7 one-shot diagnostic contract is unchanged.
+- Fixed the canonical `scripts/run_constraint_native_orientation_audit.sh` default: it previously still dispatched to V48.124.10.6 `nonfloor_admission_screen`, so an operator using the long-standing stable command could silently regenerate 10.6 instead of running the intended 10.7 one-shot ceiling.
+- The stable default now dispatches to `one_shot_action_realization`; the old 10.6 screen remains available explicitly via `OCRAP_CONSTRAINT_AUDIT_MODE=nonfloor_admission_screen`.
+- Bumped engineering/result provenance to `v48.124.10.7.1-ONE-SHOT-ENTRYPOINT-ENGFIX` and distinct `10.7.1` output filenames.
+- No changes to selector, model weights, checkpoints, candidate/recovery libraries, OC-MERO, RIFA, thresholds, Waymax dynamics, horizon, route contract, one-shot seed semantics, or adjudication criteria.
+- Added regression coverage for stable dispatch and the one-shot exact-single-intervention contract.

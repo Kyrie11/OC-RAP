@@ -23,9 +23,9 @@ PREV_ZIP="${OCRAP_V48124106_RESULTS_ZIP:-$BASE_OUT/OC-RAP-v48.124.10.6-NONFLOOR-
 OUT_ROOT="${OCRAP_ONE_SHOT_OUT_ROOT:-$BASE_OUT/ocrap_v48_124_10_7_one_shot_action_realization}"; OUT="$OUT_ROOT/$RUN_ID"; REF="$OUT/reference"
 mkdir -p "$OUT" "$REF" "$OUT/one_shot/balanced" "$OUT/one_shot/precision" "$OUT/comparisons" "$OUT/provenance"
 SHARED_JAX_CACHE="${OCRAP_ONE_SHOT_JAX_CACHE:-$BASE_OUT/.jax_compilation_cache/ocrap_one_shot_action_realization}"; mkdir -p "$SHARED_JAX_CACHE"
-RESULTS_ZIP="$BASE_OUT/OC-RAP-v48.124.10.7-ONE-SHOT-ACTION-REALIZATION-results.zip"
-RESULTS_MANIFEST="$OUT/OC-RAP-v48.124.10.7-result-bundle-manifest.json"
-FINAL="$OUT/OC-RAP-v48.124.10.7-ONE-SHOT-ACTION-REALIZATION.json"
+RESULTS_ZIP="$BASE_OUT/OC-RAP-v48.124.10.7.1-ONE-SHOT-ACTION-REALIZATION-results.zip"
+RESULTS_MANIFEST="$OUT/OC-RAP-v48.124.10.7.1-result-bundle-manifest.json"
+FINAL="$OUT/OC-RAP-v48.124.10.7.1-ONE-SHOT-ACTION-REALIZATION.json"
 package_results(){ local rc="$1"; python tools/package_near_nonfloor_one_shot_results.py --root "$OUT" --output "$RESULTS_ZIP" --manifest "$RESULTS_MANIFEST" --exit-code "$rc"; }
 on_exit(){ local rc=$?; trap - EXIT; package_results "$rc" || true; exit "$rc"; }; trap on_exit EXIT
 
@@ -112,6 +112,6 @@ python tools/adjudicate_near_nonfloor_one_shot_realization.py \
  --nominal-full "$NOMINAL" --route-audit "$OUT/provenance/route_audit.json" \
  --balanced-result "$BS" --balanced-vs-nominal "$BN" --precision-result "$PS" --precision-vs-nominal "$PN" --output "$FINAL"
 python tools/check_fixed_main_execution_snapshot.py --repo "$REPO"
-cp -f "$FINAL" "$BASE_OUT/OC-RAP-v48.124.10.7-ONE-SHOT-ACTION-REALIZATION.json"
+cp -f "$FINAL" "$BASE_OUT/OC-RAP-v48.124.10.7.1-ONE-SHOT-ACTION-REALIZATION.json"
 package_results 0; trap - EXIT
-echo "V48.124.10.7 one-shot action-realization ceiling complete: $RESULTS_ZIP"
+echo "V48.124.10.7.1 one-shot action-realization ceiling complete: $RESULTS_ZIP"

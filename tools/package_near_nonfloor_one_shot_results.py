@@ -15,7 +15,7 @@ def main()->None:
     entries={}
     for rel,p in files:
         raw=p.read_bytes(); entries[rel]={'sha256':hashlib.sha256(raw).hexdigest(),'size':len(raw)}
-    doc={'schema':'ocrap-v48.124.10.7-one-shot-action-realization-result-bundle-v1','root':str(root),'pipeline_exit_code':int(a.exit_code),'complete_exit_zero':int(a.exit_code)==0,'num_files':len(entries),'files':entries}
+    doc={'schema':'ocrap-v48.124.10.7.1-one-shot-action-realization-result-bundle-v1','root':str(root),'pipeline_exit_code':int(a.exit_code),'complete_exit_zero':int(a.exit_code)==0,'num_files':len(entries),'files':entries}
     man.write_text(json.dumps(doc,indent=2,sort_keys=True)+'\n')
     tmp=out.with_suffix(out.suffix+'.tmp'); tmp.unlink(missing_ok=True)
     with zipfile.ZipFile(tmp,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=6) as z:
