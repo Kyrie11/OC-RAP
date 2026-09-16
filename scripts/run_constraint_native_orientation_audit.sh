@@ -13,7 +13,10 @@ set -Eeuo pipefail
 # offline terminal-closure adjudication; it must not silently launch another GPU
 # diagnostic. Historical branches remain explicit for reproduction only.
 OCRAP_CONSTRAINT_AUDIT_MODE="${OCRAP_CONSTRAINT_AUDIT_MODE:-terminal_internal_closure}"
-if [[ "$OCRAP_CONSTRAINT_AUDIT_MODE" == "terminal_internal_closure" || "$OCRAP_CONSTRAINT_AUDIT_MODE" == "closure" || "$OCRAP_CONSTRAINT_AUDIT_MODE" == "terminal_closure" ]]; then
+if [[ "$OCRAP_CONSTRAINT_AUDIT_MODE" == "final_characterization" || "$OCRAP_CONSTRAINT_AUDIT_MODE" == "final_evaluation" || "$OCRAP_CONSTRAINT_AUDIT_MODE" == "evaluation_lock" ]]; then
+  REPO_DISPATCH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+  exec bash "$REPO_DISPATCH/scripts/run_final_locked_three_regime_characterization.sh"
+elif [[ "$OCRAP_CONSTRAINT_AUDIT_MODE" == "terminal_internal_closure" || "$OCRAP_CONSTRAINT_AUDIT_MODE" == "closure" || "$OCRAP_CONSTRAINT_AUDIT_MODE" == "terminal_closure" ]]; then
   REPO_DISPATCH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
   exec bash "$REPO_DISPATCH/scripts/run_terminal_internal_closure.sh"
 elif [[ "$OCRAP_CONSTRAINT_AUDIT_MODE" == "one_shot_action_realization" || "$OCRAP_CONSTRAINT_AUDIT_MODE" == "one_shot" || "$OCRAP_CONSTRAINT_AUDIT_MODE" == "terminal_ceiling" ]]; then
@@ -38,7 +41,7 @@ elif [[ "$OCRAP_CONSTRAINT_AUDIT_MODE" == "legacy_near_axis" ]]; then
   REPO_DISPATCH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
   exec bash "$REPO_DISPATCH/scripts/run_near_rifa_system_axis_two_gpu.sh"
 elif [[ "$OCRAP_CONSTRAINT_AUDIT_MODE" != "full" ]]; then
-  echo "unknown OCRAP_CONSTRAINT_AUDIT_MODE=$OCRAP_CONSTRAINT_AUDIT_MODE (expected terminal_internal_closure, one_shot_action_realization, nonfloor_admission_screen, all_state_support_localization, pcd_oracle_ceiling, candidate_quality, route_legal_near_axis, legacy_near_axis, or full)" >&2
+  echo "unknown OCRAP_CONSTRAINT_AUDIT_MODE=$OCRAP_CONSTRAINT_AUDIT_MODE (expected final_characterization, terminal_internal_closure, one_shot_action_realization, nonfloor_admission_screen, all_state_support_localization, pcd_oracle_ceiling, candidate_quality, route_legal_near_axis, legacy_near_axis, or full)" >&2
   exit 30
 fi
 

@@ -1,3 +1,41 @@
+# 0. Final evaluation lock — V48.124.10.7.3 (no algorithm change)
+
+V48.124.10.7.2 closes internal mechanism search but does **not** satisfy the preregistered deployment-acceptance freeze because the frozen Main Near gate remains STOP. Do not enter V48.125 and do not retune thresholds/capacity. Instead lock the current checkpoint/calibration/runtime sources for final paper characterization. This is an immutable evaluation freeze, not a relabeling of the historical five-gate acceptance result.
+
+Run the frozen OC-RAP balanced/precision + exact-nominal three-regime characterization:
+
+```bash
+cd /home/senzeyu2/code/OC-RAP
+OCRAP_CONSTRAINT_AUDIT_MODE=final_characterization \
+GPU0=0 GPU1=1 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+  bash scripts/run_constraint_native_orientation_audit.sh
+```
+
+Expected lock/index:
+
+```text
+$BASE_OUT/OC-RAP-v48.124.10.7.3-FINAL-EVALUATION-LOCK.json
+$BASE_OUT/ocrap_v48_124_final_characterization/FINAL_CHARACTERIZATION_INDEX.json
+```
+
+Then run external baselines **one regime at a time** on the exact target-key locks emitted by the OC-RAP run. Throughput mode is allowed for accuracy, but latency must be profiled separately in serial single-GPU mode; the wrapper does both by default:
+
+```bash
+BASE_OUT=/home/senzeyu2/code/OC-RAP/runs bash scripts/run_final_external_baselines.sh safe
+BASE_OUT=/home/senzeyu2/code/OC-RAP/runs bash scripts/run_final_external_baselines.sh near
+BASE_OUT=/home/senzeyu2/code/OC-RAP/runs bash scripts/run_final_external_baselines.sh contact
+```
+
+Build paired Safe/Near/Contact tables (the default uses the isolated-latency reruns, which preserve the same target sets and provide uncontended planner timing):
+
+```bash
+BASE_OUT=/home/senzeyu2/code/OC-RAP/runs bash scripts/build_final_regime_comparison_tables.sh
+```
+
+The final external suite uses standard WOMD `validation`, exact paired target keys, max 40 closed-loop steps, observation-legal `sdc_paths`, no logged/future SDC route fallback, and the same OC-RAP metric implementation. Safe includes Diffusion Planner in addition to the six main controls; Near includes Flow Planner, Plan-R1 and BeTopNet in addition to the six main controls. Contact generic physical metrics are paired on the common `test_contact` cohort; `post_contact_*` metrics are fully paired post-impact evidence only if every method has observed-contact eligibility 1.0.
+
+---
+
 # 0. Terminal internal closure — V48.124.10.7.2 (offline only)
 
 V48.124.10.7.1 is attribution-ready and `ONE_SHOT_ACTION_REALIZATION_MIXED`. The repeated privileged-trajectory confound has been removed for the registered causal question: each seed scene follows exact nominal to the preregistered seed, executes exactly one historical strongest candidate, then returns to exact nominal forever. One scene is locally positive and one worsens Near extremal endpoints. Therefore do **not** open another recovery mechanism, admission retraining, threshold/capacity sweep, or another realization-ceiling experiment.
@@ -338,6 +376,8 @@ bash scripts/run_external_baselines.sh \
 `--test-only` fails closed if a required learned checkpoint or Near calibration artifact is missing/incompatible.
 
 ## 4. External baselines — one regime at a time
+
+**Final-paper path after V48.124.10.7.3 evaluation lock.** Prefer `scripts/run_final_external_baselines.sh safe|near|contact`: it injects the exact target-key lock produced by the final OC-RAP characterization, keeps standard WOMD `validation`, enables the current supplementary method set, and follows the throughput run with isolated one-GPU latency profiling. The lower-level commands below remain valid for direct reproduction/debugging, but a paper table should not omit the target-key lock.
 
 Safe:
 

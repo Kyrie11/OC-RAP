@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Auto-discover V48.111 submission and external baseline closed-loop results.
+"""Auto-discover final OC-RAP submission-characterization and external baseline closed-loop results.
 
 Creates one paired table for each Safe/Near/Contact regime by delegating metric
 formatting and pairing checks to build_regime_comparison_tables.py.  This wrapper
@@ -13,8 +13,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-SAFE = ["gameformer_lite", "plantf", "pluto", "pdm_closed", "pdm_hybrid", "idm"]
-NEAR = ["marc_lite", "racp_lite", "robust_scenario_mpc", "predictive_safety_filter", "dr_cvar_safety_filter", "conformal_predictive_safety_filter"]
+SAFE = ["gameformer_lite", "plantf", "pluto", "pdm_closed", "pdm_hybrid", "idm", "diffusion_planner"]
+NEAR = ["marc_lite", "racp_lite", "robust_scenario_mpc", "predictive_safety_filter", "dr_cvar_safety_filter", "conformal_predictive_safety_filter", "flow_planner", "plan_r1", "betopnet"]
 CONTACT = ["postimpact_mpc_lite", "post_crash_braking", "postimpact_motion_tvlqr", "post_collision_restoration", "compensatory_postimpact_mpc", "robust_postimpact_control"]
 
 
@@ -47,7 +47,7 @@ def _build(regime: str, output: Path, entries: list[tuple[str, Path]], allow_unp
 
 def main() -> int:
     ap=argparse.ArgumentParser(description="Build Safe/Near/Contact OC-RAP-vs-external-baseline tables from completed runs.")
-    ap.add_argument("--ocrap-run", type=Path, required=True, help="runs/ocrap_v48_111_submission_three_regime")
+    ap.add_argument("--ocrap-run", type=Path, required=True, help="final OC-RAP characterization root containing balanced/precision regime results")
     ap.add_argument("--safe-run", type=Path, required=True, help="RUN used by run_safe_regime_external_baselines.sh")
     ap.add_argument("--near-run", type=Path, required=True, help="RUN used by run_near_contact_external_baselines_2gpu_optimized.sh")
     ap.add_argument("--contact-run", type=Path, required=True, help="RUN used by run_contact_external_baselines.sh")

@@ -1,3 +1,18 @@
+# V48.124.10.7.3 — FINAL-EVALUATION-LOCK (evaluation/process only; no algorithm change)
+
+Scientific version remains `v48.124-OC-FMSA`. V48.124.10.7.2 established terminal internal convergence, closed the absolute-admission-repair hypothesis, froze recovery-mechanism/threshold/capacity search, and explicitly withheld the historical deployment-acceptance freeze because the deployed Near gate remains STOP. V48.124.10.7.3 does not change that adjudication and does not authorize V48.125.
+
+The new branch distinguishes two meanings of freeze:
+
+- **deployment-acceptance freeze:** remains **NO** under the original Coverage + Determinism + Safe + Near + Contact all-GO contract;
+- **immutable evaluation/artifact freeze:** now **YES** for final paper characterization. Balanced/precision checkpoints, bucket calibrations, critical runtime sources and the 10.7.2 closure are SHA-pinned, and no further model/threshold/mechanism tuning is allowed after the lock is created.
+
+Final characterization runs balanced, precision and exact nominal on Safe/Near/Contact under standard WOMD `validation`, exports the exact common target keys per regime, and forces all external baselines to those same targets. Publication baseline replay is made observation-legal by requiring `sdc_paths` and forbidding logged/future SDC route fallback. Throughput accuracy jobs may use the existing 3-jobs/GPU scheduler, but publication latency is rerun serially on one GPU. The final table builder now includes the supplementary Safe Diffusion Planner and Near Flow Planner / Plan-R1 / BeTopNet methods that the default baseline launchers already run.
+
+This branch is deliberately a **final characterization** path: the paper must report the unresolved Near system limitation; these results must not be described as a successful V48.124 deployment-acceptance GO.
+
+---
+
 # V48.124.10.4 — trigger-gated privileged PCD-oracle Near ceiling diagnostic (no deployable algorithm change)
 
 Scientific version remains `v48.124-OC-FMSA`. The attribution-ready V48.124.10.3.1 candidate-quality audit establishes a relative-evidence alignment bottleneck: teacher-PCD-better absolute-admitted candidates exist at a small number of frozen Base intervention states, but the frozen relative evidence does not support them. That localization does **not** prove that repairing relative evidence alone is sufficient to close Near.

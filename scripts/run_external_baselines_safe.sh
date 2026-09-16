@@ -314,7 +314,11 @@ run_closed_loop_method() {
     --set closed_loop.include_scenes_in_result=false \
     --set closed_loop.include_scenes_in_partial=false \
     --set "closed_loop.profile_timing=$CL_PROFILE_TIMING" \
-    --set waymax.dataloader_include_sdc_paths=false \
+    --set closed_loop.use_sdc_paths=true \
+    --set closed_loop.require_observation_legal_route=true \
+    --set closed_loop.allow_future_route_proxy=false \
+    --set waymax.dataloader_include_sdc_paths=true \
+    --set waymax.allow_logged_sdc_route_fallback=false \
     --set waymax.compute_future_metrics=false \
     --set waymax.teacher_metrics_stride=0 \
     --set waymax.use_jit_scan_rollouts=true \

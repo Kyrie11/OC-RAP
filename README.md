@@ -1,3 +1,16 @@
+> **Current stage — V48.124.10.7.3 final evaluation lock.** Internal mechanism search is closed by V48.124.10.7.2, while the preregistered deployment-acceptance freeze remains NO because the deployed Near gate was not repaired. V48.124.10.7.3 therefore makes no algorithm change and does not enter V48.125. It immutably locks the current balanced/precision checkpoints, calibrations, and publication runtime sources, then licenses final three-regime characterization and paired external-baseline reporting with no further tuning. This is an evaluation/artifact freeze for the paper, not a claim that Coverage+Determinism+Safe+Near+Contact all passed.
+
+## Final characterization entrypoint
+
+```bash
+cd /home/senzeyu2/code/OC-RAP
+OCRAP_CONSTRAINT_AUDIT_MODE=final_characterization \
+GPU0=0 GPU1=1 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+  bash scripts/run_constraint_native_orientation_audit.sh
+```
+
+After the OC-RAP target-key locks are produced, run `scripts/run_final_external_baselines.sh safe|near|contact` and then `scripts/build_final_regime_comparison_tables.sh`. See `CLEAN_COMMANDS.md` for the exact protocol and claim limitations.
+
 > **Current audit stage — V48.124.10.7.2 terminal internal closure (no new GPU experiment).** V48.124.10.7.1 passed reliability/scientific attribution and returned `ONE_SHOT_ACTION_REALIZATION_MIXED`: the preregistered strongest seed action is locally positive in one scene and worsens Near physical endpoints in the other even when executed exactly once from the untouched nominal trajectory. This removes the repeated-oracle trajectory confound as the explanation for the sign split, closes the current absolute-admission-repair hypothesis, and freezes further internal mechanism/threshold/capacity iteration. The deployed Main itself is unchanged and therefore **not frozen**: V48.124 still requires Coverage + Determinism + Safe + Near + Contact all GO. The stable command now performs only an offline closure adjudication over the authoritative 10.7.1 result bundle; historical GPU diagnostics remain explicit reproduction modes.
 
 ## Current terminal closure entrypoint
