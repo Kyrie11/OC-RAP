@@ -1,3 +1,30 @@
+# V48.124.10.7.5 — FINAL-BASELINE-CONTRACT (engineering/evaluation only; no OC-RAP algorithm change)
+
+Scientific version remains `v48.124-OC-FMSA`; the frozen OC-RAP Main/checkpoints/calibrations are unchanged. This revision closes the last external-evaluation correctness gaps discovered while auditing the uploaded Safe/Near/Contact baseline artifacts.
+
+- Fixes the unified external launcher so `--max-scenarios 0` is propagated to regime launchers as the full frozen target cohort instead of falling back to their historical 50-scene default.
+- Extends closed-loop artifact validation with exact target-lock equality; historical 50-scene/no-lock journals cannot be silently treated as complete or resumed into the final protocol. Final baseline outputs use a new `external_baselines_v48_124_final_v2` root.
+- Keeps GameFormer-lite FP32 after the uploaded AMP run produced non-finite LSTM gradients at epoch 22.
+- Repairs Diffusion Planner and Flow Planner validation: historical eval-mode native loss compared generated output to its detached copy and was identically zero, so old `best.pt` selection was invalid. Validation now evaluates the native supervised training objective with fixed random seeds; implementation contracts are bumped so those checkpoints are retrained.
+- Valid learned checkpoint reuse remains allowed for PlanTF, PLUTO, Plan-R1, and BeTopNet. Non-learning filters/controllers require only final closed-loop replay, not neural retraining.
+- Adds a symmetric publication-latency contract: OC-RAP and baselines are rerun one process / one GPU on the exact same frozen target keys with synchronized timing and identical warmup semantics. Final table generation rejects non-isolated timing and latency/accuracy target-set mismatches.
+- No OC-RAP selector equation, model/checkpoint, candidate/recovery library, calibration, threshold, recovery mechanism, or scientific claim is changed.
+
+---
+
+# V48.124.10.7.4 — FINAL-EVALUATION-CONTRACT-FIX (engineering/evaluation only; no algorithm change)
+
+Scientific version remains `v48.124-OC-FMSA`. The frozen planner/checkpoints/calibrations and the V48.124.10.7.2 scientific closure are unchanged. This revision repairs final characterization after a Safe target was found to contain WOMD `sdc_paths` storage with zero usable connectivity points. Strict observation-legal routing now treats that record as a method-independent evaluation-eligibility exclusion rather than aborting the whole regime; future/logged-route fallback remains forbidden.
+
+- Adds a typed `ObservationLegalRouteUnavailable` failure with scenario/source-index diagnostics and selected-replay exclusion support.
+- Final closed-loop artifacts record requested versus observation-legal eligible target counts and all exclusions. Existing scene journals remain resumable because the planner/config fingerprint is unchanged.
+- Adds `build_final_observation_legal_target_locks.sh` so Safe/Near/Contact cohorts can be frozen before OC-RAP finishes; external baselines and ablations can therefore run independently on exactly the same cohort.
+- Final external-baseline wrappers may reuse compatible learned checkpoints but always rerun closed-loop evaluation under the final target/route contract. Safe GameFormer-lite training disables AMP after the prior run produced non-finite recurrent gradients. Publication latency is still rerun in isolated single-GPU mode.
+- Repairs the `no_rifa_absolute_admission` ablation for the actual frozen `lcb_constrained` selector and adds `no_nominal_abstention`. Regime-specific ablation coverage is updated to match where each mechanism is semantically active.
+- No selector equation in the frozen Main, recovery mechanism, threshold, model capacity, checkpoint, candidate library, or recovery library is changed. V48.125 remains unauthorized.
+
+---
+
 # V48.124.10.7.3 — FINAL-EVALUATION-LOCK (evaluation/process only; no algorithm change)
 
 Scientific version remains `v48.124-OC-FMSA`. V48.124.10.7.2 established terminal internal convergence, closed the absolute-admission-repair hypothesis, froze recovery-mechanism/threshold/capacity search, and explicitly withheld the historical deployment-acceptance freeze because the deployed Near gate remains STOP. V48.124.10.7.3 does not change that adjudication and does not authorize V48.125.

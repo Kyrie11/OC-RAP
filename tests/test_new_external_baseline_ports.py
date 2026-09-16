@@ -102,3 +102,21 @@ def test_generative_methods_are_registered_for_external_closed_loop() -> None:
     for name in ("diffusion_planner", "flow_planner", "plan_r1"):
         assert name in EXTERNAL_CLOSED_LOOP_METHODS
         assert name in EXTERNAL_LEARNED_METHODS
+
+
+def test_generative_validation_native_losses_are_nonzero_and_deterministic() -> None:
+    from ocrap.external_baselines.train import _forward_model
+    inputs, batch = _scene_batch(B=1, N=4, D=24, T=20)
+    for name in ("diffusion_planner", "flow_planner"):
+        cfg = yaml.safe_load((ROOT / f"configs/external_baselines/{name}.yaml").read_text())
+        mcfg = cfg["external_baselines"]["model"]
+        mcfg.update({"max_candidates": 4, "d_model": 64, "num_heads": 4, "num_layers": 1})
+        model = build_model_from_cfg(24, cfg).eval()
+        with torch.no_grad():
+            out1 = _forward_model(model, batch, cfg, native_loss_eval=True, native_loss_seed=12345)
+            out2 = _forward_model(model, batch, cfg, native_loss_eval=True, native_loss_seed=12345)
+        loss1 = _loss_dict(out1, batch, cfg)["loss"]
+        loss2 = _loss_dict(out2, batch, cfg)["loss"]
+        assert torch.isfinite(loss1)
+        assert float(loss1) > 0.0
+        assert torch.allclose(loss1, loss2, atol=1e-7, rtol=1e-7)

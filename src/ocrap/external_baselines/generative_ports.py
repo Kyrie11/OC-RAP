@@ -479,6 +479,7 @@ class DiffusionPlannerPort(nn.Module):
                 source_map_meta: torch.Tensor | None = None, source_map_center: torch.Tensor | None = None,
                 source_map_valid: torch.Tensor | None = None, source_centerline: torch.Tensor | None = None,
                 target_index: torch.Tensor | None = None, sampling_seed: int | None = None,
+                native_loss_eval: bool = False, native_loss_seed: int | None = None,
                 **_: torch.Tensor) -> dict[str, torch.Tensor]:
         B, N, _ = x.shape
         if prefix_traj is None:
@@ -492,15 +493,21 @@ class DiffusionPlannerPort(nn.Module):
             source_centerline=source_centerline, batch_size=B, device=x.device,
         )
         scene_tok, scene_mask = _scene_tokens(scene)
-        if self.training:
+        if self.training or native_loss_eval:
             idx = torch.zeros(B, dtype=torch.long, device=x.device) if target_index is None else target_index.long().clamp(0, N - 1)
             b = torch.arange(B, device=x.device)
             target_future = candidates[b, idx]
             target_valid = candidate_valid[b, idx]
             target = self._prepend_current(target_future)
             valid = self._prepend_valid(target_valid)
-            t = (torch.rand(B, device=x.device, dtype=target.dtype) * (1.0 - 1.0e-3) + 1.0e-3)
-            noise = torch.randn_like(target)
+            if native_loss_eval:
+                gen = torch.Generator(device=x.device)
+                gen.manual_seed(int(0 if native_loss_seed is None else native_loss_seed))
+                t = (torch.rand(B, device=x.device, dtype=target.dtype, generator=gen) * (1.0 - 1.0e-3) + 1.0e-3)
+                noise = torch.randn(target.shape, device=target.device, dtype=target.dtype, generator=gen)
+            else:
+                t = (torch.rand(B, device=x.device, dtype=target.dtype) * (1.0 - 1.0e-3) + 1.0e-3)
+                noise = torch.randn_like(target)
             noise[:, 0] = 0.0
             noisy = target.clone()
             noisy[:, 1:] = self._marginal(target[:, 1:], t, noise[:, 1:])
@@ -723,6 +730,7 @@ class FlowPlannerPort(nn.Module):
                 source_map_meta: torch.Tensor | None = None, source_map_center: torch.Tensor | None = None,
                 source_map_valid: torch.Tensor | None = None, source_centerline: torch.Tensor | None = None,
                 target_index: torch.Tensor | None = None, sampling_seed: int | None = None,
+                native_loss_eval: bool = False, native_loss_seed: int | None = None,
                 **_: torch.Tensor) -> dict[str, torch.Tensor]:
         B, N, _ = x.shape
         if prefix_traj is None:
@@ -736,16 +744,26 @@ class FlowPlannerPort(nn.Module):
             source_centerline=source_centerline, batch_size=B, device=x.device,
         )
         consistency = candidates.new_zeros(())
-        if self.training:
+        if self.training or native_loss_eval:
             idx = torch.zeros(B, dtype=torch.long, device=x.device) if target_index is None else target_index.long().clamp(0, N - 1)
             b = torch.arange(B, device=x.device)
             target = candidates[b, idx]
             valid = candidate_valid[b, idx]
-            base = torch.randn_like(target)
-            t = torch.rand(B, device=x.device, dtype=target.dtype).clamp_(1.0e-3, 1.0 - 1.0e-3)
+            if native_loss_eval:
+                gen = torch.Generator(device=x.device)
+                gen.manual_seed(int(0 if native_loss_seed is None else native_loss_seed))
+                base = torch.randn(target.shape, device=target.device, dtype=target.dtype, generator=gen)
+                t = torch.rand(B, device=x.device, dtype=target.dtype, generator=gen).clamp_(1.0e-3, 1.0 - 1.0e-3)
+            else:
+                gen = None
+                base = torch.randn_like(target)
+                t = torch.rand(B, device=x.device, dtype=target.dtype).clamp_(1.0e-3, 1.0 - 1.0e-3)
             xt = (1.0 - t[:, None, None]) * base + t[:, None, None] * target
             if self.cfg_dropout > 0:
-                keep = torch.rand(B, device=x.device) >= self.cfg_dropout
+                keep = (
+                    torch.rand(B, device=x.device, generator=gen) if gen is not None
+                    else torch.rand(B, device=x.device)
+                ) >= self.cfg_dropout
                 train_scene = dict(scene)
                 # Source semantics: an unconditioned example masks nearest neighbors only.
                 dropped = _drop_nearest_neighbors(scene, self.cfg_neighbor_num)

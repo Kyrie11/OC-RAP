@@ -27,6 +27,7 @@ external_baselines:
     use_teacher_branch_context: false
   training:
     sdpa_backend: safe
+    amp: false
     amp_dtype: auto
     device: auto
     distributed: auto

@@ -34,6 +34,8 @@ source scripts/lib/runtime.sh
 : "${RUN_SAFE:=1}"
 : "${RUN_NEAR:=1}"
 : "${RUN_CONTACT:=1}"
+: "${SAFE_TARGET_KEYS_FILE:=}"
+: "${NEAR_TARGET_KEYS_FILE:=}"
 : "${CONTACT_TARGET_KEYS_FILE:=}"
 : "${CONTACT_ANCHOR_PRELUDE_ENABLED:=false}"
 : "${CONTACT_ANCHOR_PRELUDE_MAX_STEPS:=60}"
@@ -155,14 +157,14 @@ run_one() {
 failed=0
 if ((${#GPUS[@]} >= 2)); then
   p0= p1=
-  if [[ "$RUN_SAFE" == 1 ]]; then run_one safe "$SAFE_WOMD" "$SAFE_BUCKET" "${GPUS[0]}" & p0=$!; fi
-  if [[ "$RUN_NEAR" == 1 ]]; then run_one near "$NEAR_WOMD" "$NEAR_BUCKET" "${GPUS[1]}" & p1=$!; fi
+  if [[ "$RUN_SAFE" == 1 ]]; then run_one safe "$SAFE_WOMD" "$SAFE_BUCKET" "${GPUS[0]}" "$SAFE_TARGET_KEYS_FILE" & p0=$!; fi
+  if [[ "$RUN_NEAR" == 1 ]]; then run_one near "$NEAR_WOMD" "$NEAR_BUCKET" "${GPUS[1]}" "$NEAR_TARGET_KEYS_FILE" & p1=$!; fi
   [[ -z "$p0" ]] || wait "$p0" || failed=1
   [[ -z "$p1" ]] || wait "$p1" || failed=1
   if [[ "$RUN_CONTACT" == 1 ]]; then run_one contact "$CONTACT_WOMD" "$CONTACT_BUCKET" "${GPUS[0]}" "$CONTACT_TARGET_KEYS_FILE" || failed=1; fi
 else
-  [[ "$RUN_SAFE" != 1 ]] || run_one safe "$SAFE_WOMD" "$SAFE_BUCKET" "${GPUS[0]}" || failed=1
-  [[ "$RUN_NEAR" != 1 ]] || run_one near "$NEAR_WOMD" "$NEAR_BUCKET" "${GPUS[0]}" || failed=1
+  [[ "$RUN_SAFE" != 1 ]] || run_one safe "$SAFE_WOMD" "$SAFE_BUCKET" "${GPUS[0]}" "$SAFE_TARGET_KEYS_FILE" || failed=1
+  [[ "$RUN_NEAR" != 1 ]] || run_one near "$NEAR_WOMD" "$NEAR_BUCKET" "${GPUS[0]}" "$NEAR_TARGET_KEYS_FILE" || failed=1
   [[ "$RUN_CONTACT" != 1 ]] || run_one contact "$CONTACT_WOMD" "$CONTACT_BUCKET" "${GPUS[0]}" "$CONTACT_TARGET_KEYS_FILE" || failed=1
 fi
 ((failed==0)) || exit 30

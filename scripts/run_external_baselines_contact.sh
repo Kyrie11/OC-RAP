@@ -40,6 +40,8 @@ fi
 : "${CL_AUDIT_EVERY_N_STEPS:=0}"
 : "${CL_SAVE_PARTIAL:=true}"
 : "${CL_PROFILE_TIMING:=true}"
+: "${CL_LATENCY_EXECUTION_CONTRACT:=throughput_or_unspecified}"
+: "${CL_LATENCY_WARMUP_DECISIONS:=3}"
 : "${CL_RESUME_FORCE:=false}"
 : "${CL_PARTIAL_WRITE_EVERY_SCENES:=32}"
 : "${CL_PROGRESS_EVERY_STEPS:=10}"
@@ -219,10 +221,18 @@ if runtime_bool_true "$DO_OFFLINE"; then
   ((failed == 0)) || exit 1
 fi
 
+
+artifact_complete() {
+  local output="$1"
+  local args=(--output "$output" --quiet)
+  [[ -n "$CL_TARGET_KEYS_FILE" ]] && args+=(--target-keys-file "$CL_TARGET_KEYS_FILE")
+  python tools/check_closed_loop_artifact.py "${args[@]}"
+}
+
 run_closed_loop_method() {
   local method="$1" gpu="$2" target_args=()
   local output="$RUN/closed_loop_${method}.json"
-  if runtime_bool_true "$SKIP_COMPLETE_METHODS" && python tools/check_closed_loop_artifact.py --output "$output" --quiet; then
+  if runtime_bool_true "$SKIP_COMPLETE_METHODS" && artifact_complete "$output"; then
     echo "[REUSE] contact closed-loop method=$method is already complete: $output"
     return 0
   fi
@@ -256,6 +266,8 @@ run_closed_loop_method() {
     --set closed_loop.include_scenes_in_result=false \
     --set closed_loop.include_scenes_in_partial=false \
     --set "closed_loop.profile_timing=$CL_PROFILE_TIMING" \
+    --set "closed_loop.latency_execution_contract=$CL_LATENCY_EXECUTION_CONTRACT" \
+    --set "closed_loop.latency_warmup_decisions=$CL_LATENCY_WARMUP_DECISIONS" \
     --set "closed_loop.audit_every_n_steps=$CL_AUDIT_EVERY_N_STEPS" \
     --set "closed_loop.resume_force=$CL_RESUME_FORCE" \
     --set closed_loop.use_sdc_paths=true \

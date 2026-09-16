@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# V48.124.10.7.3 final immutable characterization.
+# V48.124.10.7.4 final immutable characterization (evaluation-contract fix).
 # This freezes the current Main for reporting; it does NOT convert the historical
 # V48.124 deployment-acceptance Near STOP into GO.
 set -Eeuo pipefail
@@ -28,7 +28,13 @@ python tools/create_final_evaluation_lock.py \
   --repo "$REPO" \
   --output "$LOCK_JSON"
 
-mkdir -p "$OUT/ocrap/balanced" "$OUT/ocrap/precision" "$OUT/nominal" "$OUT/target_keys"
+mkdir -p "$OUT/ocrap/balanced" "$OUT/ocrap/precision" "$OUT/nominal" "$OUT/target_keys" "$OUT/paired_target_keys"
+
+# Freeze the method-independent observation-legal cohort before launching any
+# planner. This makes external baselines runnable in parallel with OC-RAP and
+# prevents a malformed WOMD sdc_paths record from aborting the full suite.
+env BASE_OUT="$BASE_OUT" OCRAP_FINAL_CHARACTERIZATION_OUT="$OUT" WOMD_ROLE="$WOMD_ROLE" \
+  bash scripts/build_final_observation_legal_target_locks.sh
 
 run_variant() {
   local variant="$1" gpu="$2"
@@ -50,6 +56,9 @@ set -e
 
 if [[ "$RUN_NOMINAL" == 1 ]]; then
   env WOMD_ROLE="$WOMD_ROLE" OUT="$OUT/nominal" CUDA_DEVICES="$GPU0,$GPU1" \
+    SAFE_TARGET_KEYS_FILE="$OUT/target_keys/safe.json" \
+    NEAR_TARGET_KEYS_FILE="$OUT/target_keys/near.json" \
+    CONTACT_TARGET_KEYS_FILE="$OUT/target_keys/contact.json" \
     MAX_SCENARIOS="$MAX_SCENARIOS" MAX_STEPS="$MAX_STEPS" \
     INCLUDE_SCENES_IN_RESULT=false RESULT_SCENE_DETAIL=metrics \
     bash scripts/run_nominal_three_regime_control.sh
@@ -63,7 +72,10 @@ for regime in safe near contact; do
   if [[ "$RUN_NOMINAL" == 1 ]]; then
     args+=(--input "nominal=$OUT/nominal/$regime/closed_loop_nominal.json")
   fi
-  python tools/export_paired_target_keys.py "${args[@]}" --output "$OUT/target_keys/$regime.json"
+  python tools/export_paired_target_keys.py "${args[@]}" --output "$OUT/paired_target_keys/$regime.json"
+  python tools/check_target_key_lock.py \
+    --expected "$OUT/target_keys/$regime.json" \
+    --observed "$OUT/paired_target_keys/$regime.json"
 done
 
 python - "$LOCK_JSON" "$OUT" <<'PY'
@@ -82,7 +94,7 @@ for regime in ('safe','near','contact'):
     if p.is_file(): nom[regime]=rec(p)
 keys={r:rec(root/'target_keys'/f'{r}.json') for r in ('safe','near','contact')}
 out={
- 'schema':'ocrap-v48.124.10.7.3-final-characterization-index-v1',
+ 'schema':'ocrap-v48.124.10.7.4-final-characterization-index-v1',
  'status':'FINAL_LOCKED_CHARACTERIZATION_COMPLETE',
  'evaluation_lock':rec(lock),
  'ocrap':rows,'nominal':nom,'paired_target_keys':keys,

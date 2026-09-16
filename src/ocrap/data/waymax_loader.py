@@ -12,6 +12,39 @@ import numpy as np
 from ocrap.data.schema import RawScenario
 
 
+class ObservationLegalRouteUnavailable(ValueError):
+    """Requested target lacks a usable observation-legal WOMD SDC path.
+
+    Strict publication evaluation must never repair this with logged future
+    trajectory labels. A paired target cohort may exclude the target for all
+    methods and record the exclusion explicitly.
+    """
+
+    def __init__(self, message: str, *, scenario_id: str | None = None,
+                 source_scenario_index: int | None = None,
+                 sdc_paths_present: bool | None = None, path_valid_shape=None,
+                 rows_with_at_least_2_valid_points: int | None = None,
+                 total_valid_path_points: int | None = None) -> None:
+        super().__init__(message)
+        self.scenario_id = scenario_id
+        self.source_scenario_index = source_scenario_index
+        self.sdc_paths_present = sdc_paths_present
+        self.path_valid_shape = path_valid_shape
+        self.rows_with_at_least_2_valid_points = rows_with_at_least_2_valid_points
+        self.total_valid_path_points = total_valid_path_points
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "scenario_id": self.scenario_id,
+            "source_scenario_index": self.source_scenario_index,
+            "sdc_paths_present": self.sdc_paths_present,
+            "path_valid_shape": self.path_valid_shape,
+            "rows_with_at_least_2_valid_points": self.rows_with_at_least_2_valid_points,
+            "total_valid_path_points": self.total_valid_path_points,
+            "reason": str(self),
+        }
+
+
 def _configure_tensorflow_for_waymax() -> None:
     """Keep TensorFlow on CPU without hiding the GPU from JAX/PyTorch.
 
@@ -384,7 +417,7 @@ def _route_from_sdc_paths_with_source(
                 route[:, 5] = 1.0
                 return route, "womd_v1_3_1_sdc_paths_connectivity_only"
     if not allow_logged_fallback:
-        raise ValueError(
+        raise ObservationLegalRouteUnavailable(
             "observation-legal route required but no valid WOMD v1.3.1 connectivity path was decoded; "
             "refusing to fall back to validation log_trajectory future labels"
         )
@@ -557,10 +590,9 @@ def raw_scenario_from_waymax_state(state: Any, scenario_id: str, scenario_index:
             route, route_source = _route_from_sdc_paths_with_source(
                 state, int(cfg.get("route_points", 80)), allow_logged_fallback=allow_logged_route_fallback
             )
-        except ValueError as exc:
-            # Keep the strict observation-legal fail-close semantics, but attach
-            # enough source provenance to distinguish a genuinely unsupported
-            # target scene from an unrelated scan-through record.
+        except ObservationLegalRouteUnavailable as exc:
+            # Keep strict observation legality and attach enough provenance for
+            # a cohort-level eligibility exclusion shared by every method.
             paths = getattr(state, "sdc_paths", None)
             path_shape = None
             valid_rows = 0
@@ -575,10 +607,15 @@ def raw_scenario_from_waymax_state(state: Any, scenario_id: str, scenario_index:
                     valid_points = int(np.sum(pv))
                 except Exception:
                     path_shape = "unavailable"
-            raise ValueError(
+            msg = (
                 f"{exc}; scenario_id={scenario_id!r}; source_scenario_index={int(scenario_index)}; "
                 f"sdc_paths_present={paths is not None}; path_valid_shape={path_shape}; "
                 f"rows_with_at_least_2_valid_points={valid_rows}; total_valid_path_points={valid_points}"
+            )
+            raise ObservationLegalRouteUnavailable(
+                msg, scenario_id=str(scenario_id), source_scenario_index=int(scenario_index),
+                sdc_paths_present=paths is not None, path_valid_shape=path_shape,
+                rows_with_at_least_2_valid_points=valid_rows, total_valid_path_points=valid_points
             ) from exc
         dyn = np.zeros((T, int(cfg.get("max_dynamic_signals", 16)), 8), dtype=np.float32)
         sdc_idx = int(np.argmax(_as_np(meta.is_sdc).astype(bool)))
@@ -664,6 +701,9 @@ def iter_waymax_womd_scenarios_selected(
     patterns: Any,
     scenario_indices: Any,
     parser_cfg: dict | None = None,
+    *,
+    skip_observation_legal_route_unavailable: bool = False,
+    eligibility_diagnostics: dict[str, Any] | None = None,
 ) -> Iterator[RawScenario]:
     """Iterate only explicitly requested global Waymax scenario indices.
 
@@ -724,7 +764,17 @@ def iter_waymax_womd_scenarios_selected(
         )
         payload = {"state": state, "scenario_id": example.get("scenario/id")}
         saved_id, base_id, legacy_id = _scenario_identity_from_payload(payload, i, state, cfg)
-        raw = raw_scenario_from_waymax_state(state, saved_id, i, cfg)
+        try:
+            raw = raw_scenario_from_waymax_state(state, saved_id, i, cfg)
+        except ObservationLegalRouteUnavailable as exc:
+            if not skip_observation_legal_route_unavailable:
+                raise
+            if eligibility_diagnostics is not None:
+                eligibility_diagnostics.setdefault("route_ineligible", []).append(exc.as_dict())
+            seen.add(i)
+            if len(seen) == len(target_set):
+                break
+            continue
         raw.metadata.update({
             "original_scenario_id": base_id,
             "official_scenario_id": base_id if not base_id.startswith("waymax_") else None,

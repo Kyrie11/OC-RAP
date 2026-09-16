@@ -4,10 +4,10 @@ external_baselines:
   max_candidates: 24
   supervision_target: logged_nominal
   allow_teacher_supervision: false
-  implementation: flow_planner_womd_lattice_port_v61
+  implementation: flow_planner_womd_lattice_port_v63
   model:
     arch: flow_planner
-    implementation: flow_planner_womd_lattice_port_v61
+    implementation: flow_planner_womd_lattice_port_v63
     max_candidates: 24
     # Released decoder is 256 wide, 4 blocks, 8 heads.
     d_model: 256

@@ -22,6 +22,12 @@ def main()->int:
         expected=int(nested(cfg,'external_baselines','training','epochs',default=0) or 0)
         completed=int(summary.get('epochs_completed',0)); requested=int(summary.get('epochs_requested',0))
         if expected<=0 or completed<expected or requested<expected:return 1
+        expected_amp=bool(nested(cfg,'external_baselines','training','amp',default=True))
+        if 'amp' in summary and bool(summary.get('amp')) != expected_amp:return 1
+        expected_baseline=str(nested(cfg,'external_baselines','baseline',default='') or '')
+        if expected_baseline and str(summary.get('baseline','')) != expected_baseline:return 1
+        if expected_baseline in {'diffusion_planner','flow_planner'}:
+            if str(summary.get('native_validation_contract','')) != 'fixed_seed_native_training_objective_v1':return 1
     except Exception:return 1
     # Reuse the authoritative checkpoint validator rather than duplicating tensor/contract checks.
     import subprocess,sys

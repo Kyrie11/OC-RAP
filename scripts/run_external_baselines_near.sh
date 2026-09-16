@@ -54,6 +54,8 @@ fi
 : "${CL_AUDIT_EVERY_N_STEPS:=0}"
 : "${CL_SAVE_PARTIAL:=true}"
 : "${CL_PROFILE_TIMING:=true}"
+: "${CL_LATENCY_EXECUTION_CONTRACT:=throughput_or_unspecified}"
+: "${CL_LATENCY_WARMUP_DECISIONS:=3}"
 : "${CL_RESUME_FORCE:=false}"
 : "${CL_PARTIAL_WRITE_EVERY_SCENES:=32}"
 : "${CL_PROGRESS_EVERY_STEPS:=10}"
@@ -134,7 +136,7 @@ SPECS=()
 for _m in "${METHODS[@]}"; do SPECS+=("${_m}|$CONFIG|nonlearning||"); done
 if runtime_bool_true "$RUN_SUPPLEMENTARY_NEAR"; then
   SPECS+=(
-    "flow_planner|configs/external_baselines/flow_planner.yaml|learned|$CHECKPOINT_ROOT/flow_planner/best.pt|flow_planner_womd_lattice_port_v61"
+    "flow_planner|configs/external_baselines/flow_planner.yaml|learned|$CHECKPOINT_ROOT/flow_planner/best.pt|flow_planner_womd_lattice_port_v63"
     "plan_r1|configs/external_baselines/plan_r1.yaml|learned|$CHECKPOINT_ROOT/plan_r1/best.pt|plan_r1_source_core_womd_adapter_v62"
     "betopnet|configs/external_baselines/betopnet.yaml|learned|$CHECKPOINT_ROOT/betopnet/best.pt|betop_source_core_topology_adapter_v62"
   )
@@ -287,6 +289,14 @@ PY
 fi
 export CONFORMAL_INTERVALS CONFORMAL_DELTA CONFORMAL_PREDICTION_HORIZON CONFORMAL_MISSION_HORIZON CONFORMAL_CALIBRATION_UNIT WOMD_VAL CALIB_WOMD
 
+
+artifact_complete() {
+  local output="$1"
+  local args=(--output "$output" --quiet)
+  [[ -n "$CL_TARGET_KEYS_FILE" ]] && args+=(--target-keys-file "$CL_TARGET_KEYS_FILE")
+  python tools/check_closed_loop_artifact.py "${args[@]}"
+}
+
 checkpoint_valid() {
   local ckpt="$1" expected_impl="$2" config="$3"
   [[ -n "$ckpt" && -f "$ckpt" ]] || return 1
@@ -300,7 +310,7 @@ prepare_or_offline_method() {
   IFS='|' read -r method config kind ckpt expected_impl <<< "$spec"
   if ! runtime_bool_true "$FORCE_RETRAIN_NEAR" && ! runtime_bool_true "$DO_OFFLINE" \
       && runtime_bool_true "$DO_CLOSED_LOOP" && runtime_bool_true "$SKIP_COMPLETE_METHODS" \
-      && python tools/check_closed_loop_artifact.py --output "$RUN/closed_loop_${method}.json" --quiet; then
+      && artifact_complete "$RUN/closed_loop_${method}.json"; then
     echo "[REUSE] near method=$method already has a complete closed-loop artifact; checkpoint preparation skipped"
     return 0
   fi
@@ -310,6 +320,9 @@ prepare_or_offline_method() {
         echo "Missing/invalid checkpoint and training disabled: $ckpt" >&2; return 2
       fi
       train_dir="$(dirname "$ckpt")"; mkdir -p "$train_dir"
+      # Remove stale incompatible artifacts before retraining; otherwise an old
+      # best.pt could remain after an interrupted training attempt.
+      rm -f "$train_dir/best.pt" "$train_dir/latest.pt" "$train_dir/train_summary.json"
       echo "[TRAIN] near method=$method gpu=$gpu"
       run_env_gpu "$gpu" python -u -m ocrap.cli train-baseline \
         --config "$config" --dataset "$TRAIN_NEAR" --val-dataset "$VAL_NEAR" \
@@ -378,7 +391,7 @@ run_closed_loop_method() {
   IFS='|' read -r method config kind ckpt expected_impl <<< "$spec"
   local output="$RUN/closed_loop_${method}.json"
   if runtime_bool_true "$SKIP_COMPLETE_METHODS" && ! runtime_bool_true "$FORCE_RETRAIN_NEAR" \
-      && python tools/check_closed_loop_artifact.py --output "$output" --quiet; then
+      && artifact_complete "$output"; then
     echo "[REUSE] near closed-loop method=$method is already complete: $output"
     return 0
   fi
@@ -425,6 +438,8 @@ run_closed_loop_method() {
     --set closed_loop.include_scenes_in_result=false \
     --set closed_loop.include_scenes_in_partial=false \
     --set "closed_loop.profile_timing=$CL_PROFILE_TIMING" \
+    --set "closed_loop.latency_execution_contract=$CL_LATENCY_EXECUTION_CONTRACT" \
+    --set "closed_loop.latency_warmup_decisions=$CL_LATENCY_WARMUP_DECISIONS" \
     --set "closed_loop.audit_every_n_steps=$CL_AUDIT_EVERY_N_STEPS" \
     --set closed_loop.use_sdc_paths=true \
     --set closed_loop.require_observation_legal_route=true \

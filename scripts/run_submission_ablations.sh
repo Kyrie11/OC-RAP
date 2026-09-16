@@ -21,8 +21,8 @@ source scripts/lib/runtime.sh
 
 BASE_OUT="${BASE_OUT:-/home/senzeyu2/code/OC-RAP/runs}"
 MODEL_RUN="${MODEL_RUN:-$BASE_OUT/ocrap_v48_80_dcp_drfc_bcde_rifa_pistc_main}"
-OUT_ROOT="${OUT_ROOT:-$BASE_OUT/ocrap_v48_111_submission_ablations}"
-FULL_RUN_ROOT="${FULL_RUN_ROOT:-$BASE_OUT/ocrap_v48_111_submission_three_regime}"
+OUT_ROOT="${OUT_ROOT:-$BASE_OUT/ocrap_v48_124_final_ablations}"
+FULL_RUN_ROOT="${FULL_RUN_ROOT:-$BASE_OUT/ocrap_v48_124_final_characterization/ocrap}"
 VARIANTS="${VARIANTS:-balanced,precision}"
 CUDA_DEVICES="${CUDA_DEVICES:-${GPU0:-0},${GPU1:-1}}"
 OCRAP_ROOT="${OCRAP_ROOT:-/data0/senzeyu2/dataset/OCRAP}"
@@ -32,11 +32,13 @@ BUCKET_SPLIT="${BUCKET_SPLIT:-test}"
 SAFE_BUCKET="${SAFE_BUCKET:-$OCRAP_ROOT/test_safe}"
 NEAR_BUCKET="${NEAR_BUCKET:-$OCRAP_ROOT/test_near_contact}"
 CONTACT_BUCKET="${CONTACT_BUCKET:-$OCRAP_ROOT/test_contact}"
+TARGET_LOCK_CHARACTERIZATION_OUT="${TARGET_LOCK_CHARACTERIZATION_OUT:-$BASE_OUT/ocrap_v48_124_final_characterization}"
+FINAL_TARGET_LOCK_ROOT="${FINAL_TARGET_LOCK_ROOT:-$TARGET_LOCK_CHARACTERIZATION_OUT/target_keys}"
 MAX_SCENARIOS="${MAX_SCENARIOS:-0}"
 MAX_STEPS="${MAX_STEPS:-40}"
 NUM_CANDIDATES="${NUM_CANDIDATES:-24}"
 NUM_RECOVERY_OPTIONS="${NUM_RECOVERY_OPTIONS:-12}"
-# main = five paper-facing ablations; supplementary adds active-set/route knockouts.
+# main = final frozen-stack functional ablations; supplementary adds active-set alignment.
 ABLATION_SET="${ABLATION_SET:-main}"
 ABLATIONS="${ABLATIONS:-}"
 RUN_TAG="${RUN_TAG:-submission_ablation_metrics}"
@@ -72,9 +74,10 @@ ARMS=(
   "mean_tail|configs/ablations/without_lower_tail.yaml|0|1|1|main|Replace nested lower-tail aggregation by weighted mean at inference; frozen checkpoint/heads"
   "no_actuator_projection|configs/ablations/submission_no_actuator_projection.yaml|0|1|1|main|Disable actuator-envelope projection in executable recovery witness/certification"
   "no_persistent_reentry|configs/ablations/submission_no_persistent_reentry.yaml|0|0|1|main|Remove persistent re-entry alignment from post-contact recovery witness/certification"
-  "no_rifa_absolute_admission|configs/ablations/submission_no_rifa_absolute_admission.yaml|1|1|1|main|Remove only the RIFA absolute-admission set gate; preserve frozen relative/scoring path"
+  "no_rifa_absolute_admission|configs/ablations/submission_no_rifa_absolute_admission.yaml|1|1|1|main|Remove the absolute deployable-recovery admission gate while retaining hard/harm feasibility and frozen scoring"
+  "no_nominal_abstention|configs/ablations/submission_no_nominal_abstention.yaml|1|1|1|main|Keep absolute admission but allow the legacy recovery-first fallback to resurrect an unadmitted intervention"
+  "no_route_alignment|configs/ablations/submission_no_route_alignment.yaml|0|1|1|main|Remove executable route-alignment semantics from recovery witness/certification"
   "no_active_set_alignment|configs/ablations/submission_no_active_set_alignment.yaml|0|1|1|supplementary|Remove active-set alignment from executable recovery witness/certification"
-  "no_route_alignment|configs/ablations/submission_no_route_alignment.yaml|0|1|1|supplementary|Remove executable route-alignment semantics from recovery witness/certification"
 )
 
 selected() {
@@ -178,6 +181,10 @@ echo "[Ablation contract] frozen checkpoint + frozen per-bucket gamma; LABEL_MOD
 SAFE_WOMD="$(runtime_resolve_bucket_womd_spec "$SAFE_BUCKET" "$BUCKET_SPLIT" "$WOMD_ROOT" "$WOMD_NUM_SHARDS" "${WOMD_ROLE:-validation}")"
 NEAR_WOMD="$(runtime_resolve_bucket_womd_spec "$NEAR_BUCKET" "$BUCKET_SPLIT" "$WOMD_ROOT" "$WOMD_NUM_SHARDS" "${WOMD_ROLE:-validation}")"
 CONTACT_WOMD="$(runtime_resolve_bucket_womd_spec "$CONTACT_BUCKET" "$BUCKET_SPLIT" "$WOMD_ROOT" "$WOMD_NUM_SHARDS" "${WOMD_ROLE:-validation}")"
+if [[ ! -s "$FINAL_TARGET_LOCK_ROOT/safe.json" || ! -s "$FINAL_TARGET_LOCK_ROOT/near.json" || ! -s "$FINAL_TARGET_LOCK_ROOT/contact.json" ]]; then
+  env BASE_OUT="$BASE_OUT" OCRAP_FINAL_CHARACTERIZATION_OUT="$TARGET_LOCK_CHARACTERIZATION_OUT" WOMD_ROLE="${WOMD_ROLE:-validation}" \
+    bash scripts/build_final_observation_legal_target_locks.sh
+fi
 PREFLIGHT_ROOT="$OUT_ROOT/_shared_preflight_${RUN_TAG}"
 mkdir -p "$PREFLIGHT_ROOT"
 
@@ -196,12 +203,14 @@ preflight_one() {
   local regime="$1"
   local bucket="$2"
   local womd="$3"
+  local keyfile="$FINAL_TARGET_LOCK_ROOT/$regime.json"
   local out="$PREFLIGHT_ROOT/$regime.closed_loop_dataset_support.json"
   if [[ "${NEED_REGIME[$regime]}" != 1 ]]; then return 0; fi
   echo "[PREFLIGHT once] regime=$regime"
   python tools/check_closed_loop_dataset_support.py \
     --dataset "$bucket" --split "$BUCKET_SPLIT" \
     --womd-pattern "$womd" --expected-source-role "${WOMD_ROLE:-validation}" \
+    --target-keys-file "$keyfile" --require-target-keys \
     --output "$out"
 }
 preflight_one safe "$SAFE_BUCKET" "$SAFE_WOMD"
@@ -242,8 +251,8 @@ for variant in "${CLEAN_VARIANTS[@]}"; do
       esac
       [[ "$enabled" == 1 ]] || continue
       job_id=$((job_id+1)); jf="$QUEUE_ROOT/pending/$(printf '%04d' "$job_id").job"
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$arm" "$variant" "$regime" "$config" "$checkpoint" "$gamma" "$womd" "$bucket" "$PREFLIGHT_ROOT/$regime.closed_loop_dataset_support.json" > "$jf"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$arm" "$variant" "$regime" "$config" "$checkpoint" "$gamma" "$womd" "$bucket" "$PREFLIGHT_ROOT/$regime.closed_loop_dataset_support.json" "$FINAL_TARGET_LOCK_ROOT/$regime.json" > "$jf"
     done
     python tools/build_ocrap_three_regime_index.py --root "$root" --launcher-exit-code 1 >/dev/null || true
   done
@@ -262,8 +271,8 @@ claim_job() {
 
 run_claimed_job() {
   local gpu="$1" jf="$2"
-  local arm variant regime config checkpoint gamma womd bucket preflight
-  IFS=$'\t' read -r arm variant regime config checkpoint gamma womd bucket preflight < "$jf"
+  local arm variant regime config checkpoint gamma womd bucket preflight target_keys
+  IFS=$'\t' read -r arm variant regime config checkpoint gamma womd bucket preflight target_keys < "$jf"
   # Same nounset rule as preflight_one(): initialize dependent locals in order.
   local root="$OUT_ROOT/$arm/$variant"
   local run_dir="$root/$regime"
@@ -287,6 +296,7 @@ run_claimed_job() {
       LABEL_MODE="$LABEL_MODE" AUDIT_EVERY_N_STEPS="$AUDIT_EVERY_N_STEPS" \
       NUM_CANDIDATES="$NUM_CANDIDATES" NUM_RECOVERY_OPTIONS="$NUM_RECOVERY_OPTIONS" \
       BUCKET_DATASET="$bucket" BUCKET_SPLIT="$BUCKET_SPLIT" MAX_TARGETS_PER_SCENE=1 \
+      TARGET_KEYS_FILE="$target_keys" REQUIRE_TARGET_KEYS=true \
       CONFIG="$config" RENDER_TRACE=false SAVE_PARTIAL=true RESUME=true RESUME_FORCE=false \
       PROFILE_TIMING="$PROFILE_TIMING" PREFLIGHT_SUPPORT_JSON="$preflight" \
       JAX_CACHE_DIR="$OUT_ROOT/.jax_compilation_cache/gpu${gpu}" \
@@ -352,7 +362,9 @@ doc={
     'no_actuator_projection': 'removes actuator projection from executable recovery witness/certification; does not replace Waymax dynamics or directly execute a separate recovery controller',
     'no_persistent_reentry': 'removes persistent re-entry alignment from the recovery witness/certification semantics',
     'without_obs_or_tail': 'changes OC-MERO inference aggregation while retaining frozen learned heads/representation',
-    'no_rifa_absolute_admission': 'removes only the absolute-admission set gate while retaining hard/harm feasibility and frozen scoring path',
+    'no_rifa_absolute_admission': 'removes the absolute deployable-recovery admission predicate while retaining hard/harm feasibility and frozen scoring',
+    'no_nominal_abstention': 'keeps absolute admission but re-enables the legacy recovery-first fallback when no candidate is admitted',
+    'target_cohort': 'all arms use the same method-independent observation-legal target lock as the final full model',
   },
 }
 open(out,'w',encoding='utf-8').write(json.dumps(doc,ensure_ascii=False,indent=2)+'\n')

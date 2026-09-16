@@ -104,6 +104,8 @@ def constrained_lcb_select(
     relative_min_advantage: float = 0.0,
     relative_opportunity_threshold: float = 0.5,
     relative_harm_threshold: float = 0.5,
+    ablation_without_absolute_admission: bool = False,
+    ablation_without_nominal_abstention: bool = False,
 ) -> SelectionResult:
     """Calibrated constrained selector used by OC-RAP in closed loop.
 
@@ -125,7 +127,7 @@ def constrained_lcb_select(
     dev = np.maximum(0.0, _as_1d_float(nominal_deviation, n, default=0.0))
     rec_lcb = r_dep - float(lcb_beta) * gap
     safe = feasible & (hard <= float(gamma_H)) & (harm <= float(gamma_D))
-    admitted = safe & (rec_lcb >= float(gamma_rec))
+    admitted = safe.copy() if bool(ablation_without_absolute_admission) else (safe & (rec_lcb >= float(gamma_rec)))
     idxs = np.arange(n)
     intervention = (idxs != int(nominal_index)).astype(float)
     score = utility - float(intervention_penalty) * intervention - float(deviation_penalty) * dev + float(recovery_bonus) * (rec_lcb - float(gamma_rec))
@@ -212,14 +214,14 @@ def constrained_lcb_select(
             best = int(cand[np.argmax(direct_adv[cand])])
             reason = "best_rifa_delta_positive" if rel_mode in {"delta_positive", "delta", "relative_delta", "relative_veto"} else "best_rifa_joint_sign"
             return SelectionResult(best, reason, admitted)
-        if bool(require_absolute_admission_for_intervention) and 0 <= int(nominal_index) < n:
+        if bool(require_absolute_admission_for_intervention) and not bool(ablation_without_nominal_abstention) and 0 <= int(nominal_index) < n:
             return SelectionResult(int(nominal_index), "nominal_rifa_no_relative_survivor", admitted)
     # RIFA conformance: absolute recovery admission is lexicographically prior
     # to relative recovery preference.  A non-nominal action that failed the
     # absolute gate must therefore never be resurrected by the fallback ranker.
     # Keep the legacy recovery-first fallback available only for historical
     # reproduction/debugging; publication closed-loop runs enable this guard.
-    if bool(require_absolute_admission_for_intervention) and 0 <= int(nominal_index) < n:
+    if bool(require_absolute_admission_for_intervention) and not bool(ablation_without_nominal_abstention) and 0 <= int(nominal_index) < n:
         return SelectionResult(int(nominal_index), "nominal_rifa_no_absolute_admission", admitted)
     # No candidate satisfies the calibrated recovery constraint.  This legacy
     # branch is deliberately recovery-first and is retained only for historical

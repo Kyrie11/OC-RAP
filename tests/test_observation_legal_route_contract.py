@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from ocrap.data.waymax_loader import _route_from_sdc_paths_with_source
+from ocrap.data.waymax_loader import ObservationLegalRouteUnavailable, _route_from_sdc_paths_with_source
 from ocrap.data.build.history import _sanitize_route
 
 
@@ -36,6 +36,23 @@ def test_publication_route_refuses_logged_future_fallback():
     state = SimpleNamespace(sdc_paths=None)
     with pytest.raises(ValueError, match="refusing to fall back"):
         _route_from_sdc_paths_with_source(state, 8, allow_logged_fallback=False)
+
+
+def test_publication_route_types_malformed_connectivity_as_method_independent_ineligibility():
+    pts = 6
+    paths = SimpleNamespace(
+        x=np.zeros((2, pts), dtype=np.float32),
+        y=np.zeros((2, pts), dtype=np.float32),
+        valid=np.zeros((2, pts), dtype=bool),
+        on_route=np.asarray([False, False]),
+    )
+    state = SimpleNamespace(sdc_paths=paths)
+    with pytest.raises(ObservationLegalRouteUnavailable, match="no valid WOMD v1.3.1 connectivity path"):
+        _route_from_sdc_paths_with_source(state, 8, allow_logged_fallback=False)
+
+
+def test_observation_legal_route_unavailable_remains_a_value_error_for_legacy_fail_closed_callers():
+    assert issubclass(ObservationLegalRouteUnavailable, ValueError)
 
 
 def test_history_refuses_future_ego_route_proxy_in_publication_mode():

@@ -94,3 +94,26 @@ def test_submission_table_builder_includes_default_supplementary_methods() -> No
     assert '"flow_planner"' in text
     assert '"plan_r1"' in text
     assert '"betopnet"' in text
+
+
+def test_final_characterization_builds_method_independent_route_locks_before_planners():
+    text = (ROOT / "scripts/run_final_locked_three_regime_characterization.sh").read_text()
+    assert "build_final_observation_legal_target_locks.sh" in text
+    assert text.index("build_final_observation_legal_target_locks.sh") < text.index("run_variant balanced")
+    assert "paired_target_keys" in text
+    assert "check_target_key_lock.py" in text
+
+
+def test_final_baselines_can_build_target_locks_without_ocrap_results():
+    text = (ROOT / "scripts/run_final_external_baselines.sh").read_text()
+    assert "ensure_target_locks" in text
+    assert "build_final_observation_legal_target_locks.sh" in text
+    assert "PRETRAINED_BASELINE_ROOT" in text
+
+
+def test_final_ablation_launcher_uses_current_main_and_common_target_locks():
+    text = (ROOT / "scripts/run_submission_ablations.sh").read_text()
+    assert "submission_no_nominal_abstention.yaml" in text
+    assert "no_rifa_absolute_admission" in text
+    assert "FINAL_TARGET_LOCK_ROOT" in text
+    assert '--target-keys-file "$keyfile"' in text

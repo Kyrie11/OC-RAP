@@ -3141,7 +3141,8 @@ def _rollout_one_scene(
         "deployed_planner_samples_s": [float(x) for x in deployed_latency_samples_s],
         "steady_state_deployed_planner_samples_s": [float(x) for x in steady_samples],
         "steady_state_deployed_planner_s": steady_stats,
-        "measurement_note": "observation/state-history + candidate-feature construction + deployable policy selection only; explicit CUDA synchronization at OC-RAP/external-model boundaries; simulator env.step/metrics and teacher/audit labels excluded; run one job per GPU for publication latency",
+        "execution_contract": str(cl_cfg.get("latency_execution_contract", "unspecified") or "unspecified"),
+        "measurement_note": "observation/state-history + candidate-feature construction + deployable policy selection only; explicit CUDA synchronization at OC-RAP/external-model boundaries; simulator env.step/metrics and teacher/audit labels excluded; publication latency requires isolated_single_process_single_gpu",
     }
     out = {
         "scene_id": str(raw.scenario_id),
@@ -3503,6 +3504,10 @@ def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, s
         "p50": float(np.quantile(steady_all, 0.50)) if steady_all.size else float("nan"),
         "p95": float(np.quantile(steady_all, 0.95)) if steady_all.size else float("nan"),
     }
+    execution_contracts = sorted({
+        str(((scene.get("timing", {}) or {}).get("execution_contract", "unspecified") or "unspecified"))
+        for scene in scene_results
+    })
     agg["timing"] = {
         "scene_wall_sum_s": timing_wall,
         "totals_s": timing_totals,
@@ -3511,6 +3516,7 @@ def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, s
         "evaluation_only_components": list(evaluation_only_timing_names),
         "steady_state_deployed_planner_s": steady_summary,
         "publication_latency_requires_single_job_per_gpu": True,
+        "execution_contract": execution_contracts[0] if len(execution_contracts) == 1 else "mixed:" + ",".join(execution_contracts),
         "measured_fraction": float(sum(timing_totals.values()) / max(timing_wall, 1.0e-9)),
     }
     return agg
@@ -4176,9 +4182,17 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
         and scenario_start_index == 0
         and scenario_stride == 1
     )
+    route_eligibility_diagnostics: dict[str, Any] = {}
+    strict_route_target_exclusion = bool(
+        use_selected_target_replay
+        and bool(cl_cfg.get("require_observation_legal_route", False))
+        and not bool((local.get("waymax", {}) or {}).get("allow_logged_sdc_route_fallback", False))
+    )
     if use_selected_target_replay:
         raw_iterator = iter_waymax_womd_scenarios_selected(
-            dataset_patterns, target_source_indices, parser_cfg=local
+            dataset_patterns, target_source_indices, parser_cfg=local,
+            skip_observation_legal_route_unavailable=strict_route_target_exclusion,
+            eligibility_diagnostics=route_eligibility_diagnostics,
         )
         raw_scan_bound_source = "selected_target_source_indices"
     else:
@@ -4304,6 +4318,27 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
         if len(scene_results) >= total_rollouts:
             break
 
+    route_ineligible_details = list(route_eligibility_diagnostics.get("route_ineligible", []) or [])
+    route_ineligible_source_indices = {
+        int(row.get("source_scenario_index"))
+        for row in route_ineligible_details
+        if row.get("source_scenario_index") is not None and int(row.get("source_scenario_index")) >= 0
+    }
+    route_ineligible_targets = [
+        t for t in targets
+        if int(-1 if t.get("source_scenario_index", -1) is None else t.get("source_scenario_index", -1))
+        in route_ineligible_source_indices
+    ]
+    effective_target_count = max(0, len(targets) - len(route_ineligible_targets)) if targets else 0
+    effective_total_rollouts = _closed_loop_rollout_limit(
+        target_count=effective_target_count, max_rollouts=max_rollouts, max_scenes=max_scenes
+    ) if targets else total_rollouts
+    if targets and len(scene_results) > effective_total_rollouts:
+        raise RuntimeError(
+            "Route-eligibility accounting produced fewer targets than already completed rollouts; "
+            "refusing to alter an existing target cohort."
+        )
+
     if targets and matched_targets == 0 and bool(cl_cfg.get("require_bucket_targets", False)):
         raise RuntimeError(
             "No requested bucket target scene matched the raw WOMD source after "
@@ -4322,8 +4357,13 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
             "run_fingerprint": run_fingerprint,
             "resume_supported": True,
             "bucket_dataset": target_spec or None,
-            "bucket_target_count": len(targets),
+            "bucket_requested_target_count": len(targets),
+            "bucket_target_count": effective_target_count if targets else 0,
             "bucket_matched_rollouts": matched_targets,
+            "route_eligibility_policy": "strict_observation_legal_target_exclusion_v1" if strict_route_target_exclusion else "none",
+            "route_ineligible_target_count": len(route_ineligible_targets),
+            "route_ineligible_target_keys": [str(t.get("target_key")) for t in route_ineligible_targets],
+            "route_ineligible_details": route_ineligible_details,
             "raw_scenarios_seen": raw_seen,
             "raw_scenarios_seen_this_run": raw_seen_this_run,
             "target_id_matching": "official_or_legacy_alias_with_provenance_checked_source_index_fallback",
@@ -4335,8 +4375,13 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
         write_json(partial, partial_path, fsync=resume_fsync)
     result = _aggregate_with_buckets(scene_results, method, source)
     result["bucket_dataset"] = target_spec or None
-    result["bucket_target_count"] = len(targets)
+    result["bucket_requested_target_count"] = len(targets)
+    result["bucket_target_count"] = effective_target_count if targets else 0
     result["bucket_matched_rollouts"] = matched_targets
+    result["route_eligibility_policy"] = "strict_observation_legal_target_exclusion_v1" if strict_route_target_exclusion else "none"
+    result["route_ineligible_target_count"] = len(route_ineligible_targets)
+    result["route_ineligible_target_keys"] = [str(t.get("target_key")) for t in route_ineligible_targets]
+    result["route_ineligible_details"] = route_ineligible_details
     result["target_keys_file"] = str(cl_cfg.get("target_keys_file", "") or "") or None
     if bool(cl_cfg.get("contact_anchor_prelude_enabled", False)) and _is_post_contact_bucket_name(target_spec or ""):
         manifest_file = str(cl_cfg.get("contact_anchor_manifest_file", "") or "")
@@ -4448,7 +4493,7 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
         fingerprint=run_fingerprint,
         status="complete",
         completed=len(scene_results),
-        total=total_rollouts,
+        total=effective_total_rollouts if targets else total_rollouts,
         resumed=resumed_rollouts,
     )
     return result

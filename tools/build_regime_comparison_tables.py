@@ -144,7 +144,21 @@ def main() -> int:
     ap.add_argument("--input", action="append", required=True, metavar="METHOD=RESULT.json")
     ap.add_argument("--output-dir", type=Path, required=True)
     ap.add_argument("--allow-unpaired", action="store_true", help="Do not fail when scene journals exist but target sets differ.")
+    ap.add_argument("--latency-input", action="append", default=[], metavar="METHOD=RESULT.json", help="Optional isolated-latency artifact for one method; metrics still come from --input.")
     args = ap.parse_args()
+
+    latency_docs: dict[str, tuple[Path, dict[str, Any]]] = {}
+    for spec in args.latency_input:
+        if "=" not in spec:
+            raise SystemExit(f"invalid --latency-input {spec!r}; expected METHOD=PATH")
+        method, raw = spec.split("=", 1); lp = Path(raw)
+        if not lp.is_file():
+            raise SystemExit(f"missing isolated latency result: {lp}")
+        ldoc = json.loads(lp.read_text(encoding="utf-8"))
+        contract = str(((ldoc.get("timing") or {}).get("execution_contract") or ""))
+        if contract != "isolated_single_process_single_gpu":
+            raise SystemExit(f"latency artifact for {method} is not isolated: {contract!r} ({lp})")
+        latency_docs[method.strip()] = (lp, ldoc)
 
     entries: list[tuple[str, Path, dict[str, Any]]] = []
     for spec in args.input:
@@ -177,15 +191,37 @@ def main() -> int:
     rows: list[dict[str, Any]] = []
     for method, path, doc in entries:
         prov = find_provenance(method)
+        latency_source = latency_docs.get(method)
+        if latency_source is not None:
+            acc_journal = _scene_journal(path)
+            lat_journal = _scene_journal(latency_source[0])
+            if acc_journal is None or lat_journal is None:
+                raise SystemExit(
+                    f"accuracy/latency scene journals are required for isolated latency pairing: {method}"
+                )
+            acc_keys = _scene_keys(acc_journal)
+            lat_keys = _scene_keys(lat_journal)
+            if acc_keys != lat_keys:
+                mismatch = {
+                    "only_accuracy": sorted(acc_keys - lat_keys)[:10],
+                    "only_latency": sorted(lat_keys - acc_keys)[:10],
+                    "accuracy_count": len(acc_keys),
+                    "latency_count": len(lat_keys),
+                }
+                raise SystemExit(
+                    f"latency target set does not match accuracy target set for {method}: "
+                    + json.dumps(mismatch, ensure_ascii=False)
+                )
         row: dict[str, Any] = {
             "method": method,
             "reporting_name": prov.reporting_name if prov else method,
             "implementation_kind": prov.implementation_kind if prov else ("OC-RAP" if method.lower().startswith("ocrap") else "unknown"),
             "fidelity": prov.fidelity if prov else ("proposed method" if method.lower().startswith("ocrap") else "unknown"),
             "source_result": str(path),
+            "source_latency_result": str(latency_source[0]) if latency_source else None,
         }
         for key, _, _ in SCHEMA[args.regime]:
-            row[key] = _get(doc, key)
+            row[key] = _get(latency_source[1], key) if key == "decision_latency_ms" and latency_source else _get(doc, key)
         rows.append(row)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -218,7 +254,7 @@ def main() -> int:
     }
     (args.output_dir / f"{stem}.json").write_text(json.dumps(json_doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
-    fields = ["method", "reporting_name", "implementation_kind", "fidelity"] + [x[0] for x in SCHEMA[args.regime]]
+    fields = ["method", "reporting_name", "implementation_kind", "fidelity", "source_result", "source_latency_result"] + [x[0] for x in SCHEMA[args.regime]]
     with (args.output_dir / f"{stem}.csv").open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fields); w.writeheader(); w.writerows([{k: r.get(k) for k in fields} for r in rows])
 

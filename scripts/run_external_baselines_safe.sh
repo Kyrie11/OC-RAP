@@ -39,6 +39,8 @@ fi
 : "${CL_AUDIT_EVERY_N_STEPS:=0}"
 : "${CL_SAVE_PARTIAL:=true}"
 : "${CL_PROFILE_TIMING:=true}"
+: "${CL_LATENCY_EXECUTION_CONTRACT:=throughput_or_unspecified}"
+: "${CL_LATENCY_WARMUP_DECISIONS:=3}"
 : "${CL_RESUME_FORCE:=false}"
 : "${CL_PARTIAL_WRITE_EVERY_SCENES:=32}"
 : "${CL_PROGRESS_EVERY_STEPS:=10}"
@@ -106,7 +108,7 @@ SPECS=(
   "idm|configs/external_baselines/idm.yaml|nonlearning||"
 )
 if runtime_bool_true "$RUN_SUPPLEMENTARY_SAFE"; then
-  SPECS+=("diffusion_planner|configs/external_baselines/diffusion_planner.yaml|learned|$CHECKPOINT_ROOT/diffusion_planner/best.pt|diffusion_planner_womd_lattice_port_v61")
+  SPECS+=("diffusion_planner|configs/external_baselines/diffusion_planner.yaml|learned|$CHECKPOINT_ROOT/diffusion_planner/best.pt|diffusion_planner_womd_lattice_port_v63")
 fi
 # Wayformer and BeTop are architecture/topology controls rather than Safe
 # main-table planners.  They are opt-in so the historical command remains
@@ -139,6 +141,14 @@ if runtime_bool_true "$DO_CLOSED_LOOP" && runtime_bool_true "$JAX_RUNTIME_PREFLI
     --require-gpu --output "$RUN/jax_waymax_runtime_preflight.json"
 fi
 
+
+artifact_complete() {
+  local output="$1"
+  local args=(--output "$output" --quiet)
+  [[ -n "$CL_TARGET_KEYS_FILE" ]] && args+=(--target-keys-file "$CL_TARGET_KEYS_FILE")
+  python tools/check_closed_loop_artifact.py "${args[@]}"
+}
+
 checkpoint_valid() {
   local ckpt="$1" expected_impl="${2:-source_port_v54}" config="${3:-}"
   [[ -n "$ckpt" && -f "$ckpt" && -n "$config" ]] || return 1
@@ -169,7 +179,7 @@ prepare_or_offline_method() {
   if [[ "$kind" == learned ]]; then
     if ! runtime_bool_true "$FORCE_RETRAIN_SAFE" && ! runtime_bool_true "$DO_OFFLINE" \
         && runtime_bool_true "$DO_CLOSED_LOOP" && runtime_bool_true "$SKIP_COMPLETE_METHODS" \
-        && python tools/check_closed_loop_artifact.py --output "$RUN/closed_loop_${method}.json" --quiet; then
+        && artifact_complete "$RUN/closed_loop_${method}.json"; then
       echo "[REUSE] safe method=$method already has a complete closed-loop artifact; checkpoint preparation skipped"
       return 0
     fi
@@ -179,6 +189,9 @@ prepare_or_offline_method() {
         return 2
       fi
       train_dir="$(dirname "$ckpt")"; mkdir -p "$train_dir"
+      # Never let an incompatible staged checkpoint survive a failed retrain and
+      # masquerade as a fresh artifact on the next invocation.
+      rm -f "$train_dir/best.pt" "$train_dir/latest.pt" "$train_dir/train_summary.json"
       echo "[TRAIN] safe method=$method gpu=$gpu"
       run_env_gpu "$gpu" python -u -m ocrap.cli train-baseline \
         --config "$config" --dataset "$TRAIN_SAFE" --val-dataset "$VAL_SAFE" \
@@ -274,7 +287,7 @@ run_closed_loop_method() {
   [[ "$method" == nominal_replay ]] && runtime_method=nominal
   local output="$RUN/closed_loop_${method}.json"
   if runtime_bool_true "$SKIP_COMPLETE_METHODS" && ! runtime_bool_true "$FORCE_RETRAIN_SAFE" \
-      && python tools/check_closed_loop_artifact.py --output "$output" --quiet; then
+      && artifact_complete "$output"; then
     echo "[REUSE] safe closed-loop method=$method is already complete: $output"
     return 0
   fi
@@ -314,6 +327,8 @@ run_closed_loop_method() {
     --set closed_loop.include_scenes_in_result=false \
     --set closed_loop.include_scenes_in_partial=false \
     --set "closed_loop.profile_timing=$CL_PROFILE_TIMING" \
+    --set "closed_loop.latency_execution_contract=$CL_LATENCY_EXECUTION_CONTRACT" \
+    --set "closed_loop.latency_warmup_decisions=$CL_LATENCY_WARMUP_DECISIONS" \
     --set closed_loop.use_sdc_paths=true \
     --set closed_loop.require_observation_legal_route=true \
     --set closed_loop.allow_future_route_proxy=false \

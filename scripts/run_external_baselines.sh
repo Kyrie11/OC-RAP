@@ -31,6 +31,11 @@ while (($#)); do case "$1" in
 case "$WOMD_ROLE" in validation|validation_interactive) ;; *) echo "invalid --womd-role $WOMD_ROLE" >&2; exit 2;; esac
 export OCRAP_ROOT="${OCRAP_ROOT:-/data0/senzeyu2/dataset/OCRAP}" WOMD_ROOT="${WOMD_ROOT:-/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example}"
 export CUDA_DEVICES MAX_SCENARIOS JOBS_PER_GPU MAX_PARALLEL DO_OFFLINE DO_CLOSED_LOOP=true CL_WOMD_ROLE="$WOMD_ROLE" CALIB_WOMD_ROLE="$WOMD_ROLE" PRIMARY_WOMD_ROLE="$WOMD_ROLE"
+# Propagate the unified CLI cap into the one-regime launchers.  Historically
+# those launchers defaulted CL_MAX_SCENARIOS=50, so --max-scenarios 0 silently
+# remained a 50-scene exploratory run.  Zero now consistently means every
+# target in the frozen target-key lock.
+export CL_MAX_SCENARIOS="$MAX_SCENARIOS"
 # Unified publication entry always resolves replay from dataset provenance; stale shell
 # CL_WOMD/CALIB_WOMD overrides must not silently bypass the requested WOMD role.
 export CL_WOMD=auto CALIB_WOMD=auto

@@ -49,6 +49,8 @@ if [[ "$REGIME" == near ]]; then
   export CONFORMAL_CALIBRATION="${SOURCE_RUN%/}/near/conformal_calibration.json"
 fi
 export CL_PROFILE_TIMING=true
+export CL_LATENCY_EXECUTION_CONTRACT=isolated_single_process_single_gpu
+export CL_LATENCY_WARMUP_DECISIONS="${LATENCY_WARMUP_DECISIONS:-3}"
 export SKIP_COMPLETE_METHODS=false
 
 bash scripts/run_external_baselines.sh \

@@ -477,6 +477,12 @@ def select_baseline(
             relative_min_advantage=_cfg_float(scfg, "rifa_relative_min_advantage", 0.0, bucket_name),
             relative_opportunity_threshold=_cfg_float(scfg, "rifa_relative_opportunity_threshold", 0.5, bucket_name),
             relative_harm_threshold=_cfg_float(scfg, "rifa_relative_harm_threshold", 0.5, bucket_name),
+            ablation_without_absolute_admission=bool(
+                (cfg.get("ablation", {}) or {}).get("without_rifa_absolute_admission", False)
+            ),
+            ablation_without_nominal_abstention=bool(
+                (cfg.get("ablation", {}) or {}).get("without_nominal_abstention", False)
+            ),
         )
         gap_arr = np.asarray(pred_gap if pred_gap is not None else np.zeros_like(pred_r_dep), dtype=float)
         score = pred_r_dep - beta * np.maximum(0.0, gap_arr)

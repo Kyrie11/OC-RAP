@@ -6,10 +6,10 @@ external_baselines:
   allow_teacher_supervision: false
   # v61 restores the source VP/x-start/DPM-Solver++ operator.  The port remains
   # ego-only because OC-RAP's serialized groups do not contain neighbor futures.
-  implementation: diffusion_planner_womd_lattice_port_v61
+  implementation: diffusion_planner_womd_lattice_port_v63
   model:
     arch: diffusion_planner
-    implementation: diffusion_planner_womd_lattice_port_v61
+    implementation: diffusion_planner_womd_lattice_port_v63
     max_candidates: 24
     d_model: 192
     num_layers: 3

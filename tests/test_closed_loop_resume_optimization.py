@@ -188,9 +188,17 @@ def test_bucket_closed_loop_materializes_only_selected_target_source_indices(
         },
     )
 
-    def selected(_patterns, indices, parser_cfg=None):
+    def selected(
+        _patterns,
+        indices,
+        parser_cfg=None,
+        skip_observation_legal_route_unavailable=False,
+        eligibility_diagnostics=None,
+    ):
         calls["selected"] += 1
         calls["indices"] = list(indices)
+        calls["skip_route_unavailable"] = bool(skip_observation_legal_route_unavailable)
+        calls["eligibility_diagnostics"] = eligibility_diagnostics is not None
         yield raw
 
     def full(*_args, **_kwargs):
@@ -230,7 +238,13 @@ def test_bucket_closed_loop_materializes_only_selected_target_source_indices(
         "artifact": {},
     }
     result = clr.closed_loop_evaluate("/data/validation/validation.tfrecord@150", None, output, cfg)
-    assert calls == {"selected": 1, "full": 0, "indices": [17]}
+    assert calls == {
+        "selected": 1,
+        "full": 0,
+        "indices": [17],
+        "skip_route_unavailable": False,
+        "eligibility_diagnostics": True,
+    }
     assert result["num_scenes"] == 1
     assert result["bucket_matched_rollouts"] == 1
     assert result["raw_scan_bound_source"] == "selected_target_source_indices"

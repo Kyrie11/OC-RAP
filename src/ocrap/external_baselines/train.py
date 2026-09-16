@@ -212,8 +212,23 @@ def _batch_to_device(batch: dict[str, torch.Tensor], device: torch.device) -> di
     return {k: v.to(device, non_blocking=True) for k, v in batch.items()}
 
 
-def _forward_model(model: torch.nn.Module, batch: dict[str, torch.Tensor], cfg: dict[str, Any]) -> dict[str, torch.Tensor]:
+def _forward_model(
+    model: torch.nn.Module,
+    batch: dict[str, torch.Tensor],
+    cfg: dict[str, Any],
+    *,
+    native_loss_eval: bool = False,
+    native_loss_seed: int | None = None,
+) -> dict[str, torch.Tensor]:
     deployable_only = not use_teacher_branch_context(cfg)
+    bcfg = cfg.get("external_baselines", {}) if isinstance(cfg.get("external_baselines", {}), dict) else {}
+    baseline = str(bcfg.get("baseline", "") or "").lower()
+    native_loss_kwargs: dict[str, Any] = {}
+    if native_loss_eval and baseline in {"diffusion_planner", "flow_planner"}:
+        native_loss_kwargs = {
+            "native_loss_eval": True,
+            "native_loss_seed": int(0 if native_loss_seed is None else native_loss_seed),
+        }
     return model(
         batch["x"].float(),
         batch["mask"].bool(),
@@ -246,6 +261,7 @@ def _forward_model(model: torch.nn.Module, batch: dict[str, torch.Tensor], cfg: 
         source_map_valid=batch.get("source_map_valid", None),
         source_centerline=batch.get("source_centerline", None),
         target_index=batch.get("target_index", None),
+        **native_loss_kwargs,
     )
 
 
@@ -742,13 +758,17 @@ def _epoch(model, loader, opt, device, cfg: dict[str, Any], train: bool, *, rank
     show = bool(tcfg.get("tqdm", True)) and rank == 0 and tqdm is not None
     if show:
         iterator = tqdm(loader, desc=("train" if train else "val") + f" ep{epoch:03d}", leave=False, dynamic_ncols=True)
-    for batch in iterator:
+    for batch_index, batch in enumerate(iterator):
         batch = _batch_to_device(batch, device)
         amp_enabled = bool(tcfg.get("amp", True)) and device.type == "cuda"
         effective_amp_dtype = amp_dtype or resolve_amp_dtype(tcfg, device)
         with torch.set_grad_enabled(train):
             with torch.autocast(device_type=device.type, dtype=effective_amp_dtype, enabled=amp_enabled):
-                out = _forward_model(model, batch, cfg)
+                out = _forward_model(
+                    model, batch, cfg,
+                    native_loss_eval=not train,
+                    native_loss_seed=271828 + int(batch_index),
+                )
                 losses = _loss_dict(out, batch, cfg)
                 loss = losses["loss"]
 
@@ -1160,6 +1180,11 @@ def train_external_baseline(dataset: str, output: str, cfg: dict[str, Any], *, v
             "early_stopping_min_epochs": int(early_min_epochs),
             "early_stopping_min_delta": float(early_min_delta),
             "implementation_version": str(((bcfg.get("model", {}) or {}).get("implementation", "legacy_adapter"))),
+            "native_validation_contract": (
+                "fixed_seed_native_training_objective_v1"
+                if baseline_name.lower() in {"diffusion_planner", "flow_planner"}
+                else "standard_eval_loss"
+            ),
             "torch_compile": bool(tcfg.get("compile", False)),
             "history": history,
         }

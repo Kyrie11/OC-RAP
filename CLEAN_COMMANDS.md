@@ -1,38 +1,55 @@
-# 0. Final evaluation lock — V48.124.10.7.3 (no algorithm change)
+# 0. Final evaluation contract — V48.124.10.7.5 (baseline/full-cohort/latency contract; no OC-RAP algorithm change)
 
-V48.124.10.7.2 closes internal mechanism search but does **not** satisfy the preregistered deployment-acceptance freeze because the frozen Main Near gate remains STOP. Do not enter V48.125 and do not retune thresholds/capacity. Instead lock the current checkpoint/calibration/runtime sources for final paper characterization. This is an immutable evaluation freeze, not a relabeling of the historical five-gate acceptance result.
+V48.124.10.7.2 closed internal mechanism search, V48.124.10.7.3 locked the submitted Main for final reporting, and V48.124.10.7.4 repaired method-independent observation-legal target eligibility. V48.124.10.7.5 still does **not** change the OC-RAP planner. It closes three final-baseline engineering gaps: `--max-scenarios 0` now reaches the low-level regime launchers as the full frozen cohort rather than silently reverting to 50 scenes; completed artifacts are accepted only when their scene journal exactly matches the frozen target-key lock; and publication latency is measured for OC-RAP and every baseline under the same isolated single-process/single-GPU contract and exact target set. It also repairs native validation for Diffusion Planner and Flow Planner and retains the FP32 GameFormer-lite training fix.
 
-Run the frozen OC-RAP balanced/precision + exact-nominal three-regime characterization:
+Build the method-independent observation-legal target locks first. This step is cheap compared with closed-loop rollout and can be run before OC-RAP or any baseline:
 
 ```bash
 cd /home/senzeyu2/code/OC-RAP
-OCRAP_CONSTRAINT_AUDIT_MODE=final_characterization \
-GPU0=0 GPU1=1 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
-  bash scripts/run_constraint_native_orientation_audit.sh
+BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+  bash scripts/build_final_observation_legal_target_locks.sh
 ```
 
-Expected lock/index:
+The lock files are:
 
 ```text
-$BASE_OUT/OC-RAP-v48.124.10.7.3-FINAL-EVALUATION-LOCK.json
-$BASE_OUT/ocrap_v48_124_final_characterization/FINAL_CHARACTERIZATION_INDEX.json
+$BASE_OUT/ocrap_v48_124_final_characterization/target_keys/safe.json
+$BASE_OUT/ocrap_v48_124_final_characterization/target_keys/near.json
+$BASE_OUT/ocrap_v48_124_final_characterization/target_keys/contact.json
 ```
 
-Then run external baselines **one regime at a time** on the exact target-key locks emitted by the OC-RAP run. Throughput mode is allowed for accuracy, but latency must be profiled separately in serial single-GPU mode; the wrapper does both by default:
+Resume/finalize the frozen OC-RAP characterization with the same command as V48.124.10.7.3:
 
 ```bash
+GPU0=0 GPU1=1 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+  bash scripts/run_final_locked_three_regime_characterization.sh
+```
+
+The launcher reuses already-complete Near/Contact artifacts and the existing Safe scene journals. It does **not** backfill a route-ineligible Safe target from a different scene. The final paper cohort is the predeclared target cohort intersected with method-independent observation-legal route eligibility; the exclusion count and provenance are serialized in the target lock and closed-loop result.
+
+External baselines no longer depend on OC-RAP finishing. As soon as the target locks exist, the three regimes may be launched independently. To reuse compatible learned checkpoints from a previous baseline root while rerunning the final observation-legal test protocol, set `PRETRAINED_BASELINE_ROOT`:
+
+```bash
+PRETRAINED_BASELINE_ROOT=/home/senzeyu2/code/OC-RAP/runs/external_baselines_v48_111 \
 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs bash scripts/run_final_external_baselines.sh safe
+
+PRETRAINED_BASELINE_ROOT=/home/senzeyu2/code/OC-RAP/runs/external_baselines_v48_111 \
 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs bash scripts/run_final_external_baselines.sh near
+
+PRETRAINED_BASELINE_ROOT=/home/senzeyu2/code/OC-RAP/runs/external_baselines_v48_111 \
 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs bash scripts/run_final_external_baselines.sh contact
 ```
 
-Build paired Safe/Near/Contact tables (the default uses the isolated-latency reruns, which preserve the same target sets and provide uncontended planner timing):
+The final wrapper always reruns closed-loop testing on the exact target lock and follows the throughput accuracy run with an isolated one-GPU latency profile. Do **not** resume historical 50-scene/no-target-lock closed-loop journals into the final-v2 root: their information contract differs. Compatible training checkpoints may be staged, but final closed-loop results start in the clean `external_baselines_v48_124_final_v2` root. Three learned baselines must be retrained under the current contract: **GameFormer-lite** (the uploaded AMP run produced non-finite recurrent gradients; final config is FP32), **Diffusion Planner**, and **Flow Planner** (their historical eval path compared a generated prediction with its detached copy, producing identically zero validation loss and invalid `best.pt` selection). PlanTF, PLUTO, Plan-R1, and BeTopNet checkpoints may be reused when the checker validates their training/implementation contract.
+
+Build final comparison tables only from the new final roots:
 
 ```bash
-BASE_OUT=/home/senzeyu2/code/OC-RAP/runs bash scripts/build_final_regime_comparison_tables.sh
+BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+  bash scripts/build_final_regime_comparison_tables.sh
 ```
 
-The final external suite uses standard WOMD `validation`, exact paired target keys, max 40 closed-loop steps, observation-legal `sdc_paths`, no logged/future SDC route fallback, and the same OC-RAP metric implementation. Safe includes Diffusion Planner in addition to the six main controls; Near includes Flow Planner, Plan-R1 and BeTopNet in addition to the six main controls. Contact generic physical metrics are paired on the common `test_contact` cohort; `post_contact_*` metrics are fully paired post-impact evidence only if every method has observed-contact eligibility 1.0.
+The historical V48.124 deployment-acceptance freeze remains **NO**; the immutable evaluation/artifact freeze remains **YES**. No V48.125, threshold/capacity sweep, or recovery-mechanism search is authorized.
 
 ---
 
@@ -377,86 +394,69 @@ bash scripts/run_external_baselines.sh \
 
 ## 4. External baselines — one regime at a time
 
-**Final-paper path after V48.124.10.7.3 evaluation lock.** Prefer `scripts/run_final_external_baselines.sh safe|near|contact`: it injects the exact target-key lock produced by the final OC-RAP characterization, keeps standard WOMD `validation`, enables the current supplementary method set, and follows the throughput run with isolated one-GPU latency profiling. The lower-level commands below remain valid for direct reproduction/debugging, but a paper table should not omit the target-key lock.
+**Final-paper path.** First build the observation-legal target locks (Section 0). These locks depend only on the frozen bucket provenance and WOMD connectivity geometry, not on OC-RAP outputs, so baseline testing can run in parallel with the resumed OC-RAP characterization.
 
-Safe:
-
-```bash
-USE_DYNAMIC_SCHEDULER=auto
-bash scripts/run_external_baselines.sh \
-  --regime safe \
-  --out "$BASE_OUT/external_baselines_v48_111" \
-  --gpus 0,1 --jobs-per-gpu 3 --max-parallel 6 --max-scenarios 0 --womd-role validation
-```
-
-Near-Contact:
+Preferred final commands:
 
 ```bash
-USE_DYNAMIC_SCHEDULER=auto
-bash scripts/run_external_baselines.sh \
-  --regime near \
-  --out "$BASE_OUT/external_baselines_v48_111" \
-  --gpus 0,1 --jobs-per-gpu 3 --max-parallel 6 --max-scenarios 0 --womd-role validation
+# Safe
+PRETRAINED_BASELINE_ROOT="$BASE_OUT/external_baselines_v48_111" \
+  bash scripts/run_final_external_baselines.sh safe
+
+# Near-Contact
+PRETRAINED_BASELINE_ROOT="$BASE_OUT/external_baselines_v48_111" \
+  bash scripts/run_final_external_baselines.sh near
+
+# Contact
+PRETRAINED_BASELINE_ROOT="$BASE_OUT/external_baselines_v48_111" \
+  bash scripts/run_final_external_baselines.sh contact
 ```
 
-Contact:
+`PRETRAINED_BASELINE_ROOT` is optional. When supplied, checkpoint candidates are staged but are reused only after `check_external_training_complete.py` verifies epoch budget, AMP mode, method identity, model validation version, and implementation contract. **Retrain from scratch:** GameFormer-lite, Diffusion Planner, and Flow Planner. Their old checkpoints are intentionally invalid under V48.124.10.7.5. **Checkpoint reuse allowed if validated:** PlanTF, PLUTO, Plan-R1, and BeTopNet. The remaining Near/Contact filters/controllers are non-learning registrations/calibrations and have no neural checkpoint to retrain. Manual deletion of old checkpoints is not required when using the new final-v2 root; deleting only the three invalid learned checkpoint directories is optional if a clean training tree is preferred.
 
-```bash
-USE_DYNAMIC_SCHEDULER=auto
-bash scripts/run_external_baselines.sh \
-  --regime contact \
-  --out "$BASE_OUT/external_baselines_v48_111" \
-  --gpus 0,1 --jobs-per-gpu 3 --max-parallel 6 --max-scenarios 0 --womd-role validation
-```
+The wrapper enforces standard WOMD `validation`, the exact regime target lock, max 40 closed-loop steps, observation-legal `sdc_paths`, and no logged/future SDC route fallback. It runs the complete current method set: Safe includes Diffusion Planner; Near includes Flow Planner, Plan-R1, and BeTopNet; Contact includes all six post-impact baselines.
 
-Each one-regime launcher now uses six concurrent worker slots by default: three jobs on GPU 0 and three jobs on GPU 1. A slot belongs to one baseline for its full pipeline (checkpoint preparation/training or registration reuse, optional offline evaluation, then closed-loop test); as soon as that baseline finishes, the next queued baseline is launched on the GPU whose slot became free. This removes the old global train/test phase barrier. Safe additionally enables Diffusion Planner; Near-Contact additionally enables Flow Planner, Plan-R1, and the expanded BeTopNet adapter. Contact keeps its six post-contact baselines. Dynamic refill is the default and requires Bash with `wait -n -p` support (Bash 5.1+ is recommended).
+Accuracy/metric evaluation may use the throughput scheduler (three jobs per GPU by default). **Do not report latency from that throughput run.** By default the wrapper immediately reruns the same regime in isolated single-GPU test-only mode and writes the publication timing root `${FINAL_EXTERNAL_BASELINE_OUT}_latency_isolated`. Run OC-RAP latency symmetrically with `bash scripts/profile_ocrap_latency.sh all`. The table builder refuses a latency artifact unless `timing.execution_contract=isolated_single_process_single_gpu` and its scene-key journal exactly equals that method's accuracy scene-key journal.
 
-**Latency exception.** The commands above are throughput-oriented and intentionally run multiple processes per GPU, so their timing must not be reported as uncontended publication latency. After the accuracy/metric run is complete, profile a regime serially on one GPU while reusing its checkpoints (and the Near CPSF calibration artifact):
-
-```bash
-bash scripts/profile_external_baselines_latency.sh \
-  --regime safe \
-  --source-run "$BASE_OUT/external_baselines_v48_111" \
-  --gpu 0 --max-scenarios 0 --womd-role validation
-```
-
-Use `--regime near` or `--regime contact` analogously. The closed-loop summary records warm-up-excluded steady-state mean/p50/p95 deployed-planner latency; the comparison-table builder prefers that steady-state mean when present.
-
-Append `--retrain` to force retraining/re-registration; append `--recalibrate` for the Near CPSF artifact. Set `RUN_SUPPLEMENTARY_SAFE=false` or `RUN_SUPPLEMENTARY_NEAR=false` only when reproducing the historical main-table-only suite.
+The lower-level `scripts/run_external_baselines.sh` commands remain supported for debugging/reproduction, but their outputs are not final-paper evidence unless they use the same target lock and observation-legal route contract.
 
 ## 5. Frozen-module ablations
 
-The main set keeps the existing fixed-module ablations:
+The final ablation suite is tied to the **frozen submitted Main** (`lcb_constrained`) and to the same observation-legal target locks used in the main tables. It tests modules only where their semantics are active. The main set is:
 
-- no observation consistency;
-- mean instead of lower tail;
-- no actuator projection;
-- no persistent re-entry;
-- no RIFA absolute admission.
+| Ablation | Safe | Near | Contact | What is removed |
+|---|:---:|:---:|:---:|---|
+| `no_obs_consistency` | -- | ✓ | ✓ | observation-compatible common-option recovery aggregation |
+| `mean_tail` | -- | ✓ | ✓ | lower-tail aggregation, replacing it with a mean |
+| `no_actuator_projection` | -- | ✓ | ✓ | actuator-feasible recovery projection |
+| `no_persistent_reentry` | -- | -- | ✓ | post-contact persistent safe re-entry semantics |
+| `no_rifa_absolute_admission` | ✓ | ✓ | ✓ | final Main absolute recovery-admission predicate (now wired to `lcb_constrained`) |
+| `no_nominal_abstention` | ✓ | ✓ | ✓ | exact-nominal fail-closed abstention / nominal priority |
+| `no_route_alignment` | -- | ✓ | ✓ | route-alignment semantics in recovery witness/certification |
+
+The supplementary `no_active_set_alignment` ablation is evaluated in Near and Contact. Structural/physical teacher separation, split/merge counterfactual correspondence, the signed reserve/debt interpretation, and the absence of a learned regime router are **not** represented as local runtime knockouts: they are training/data/theory contracts and should be supported by offline audits or structural analysis rather than by a misleading single-flag ablation.
+
+Run the main frozen-module suite:
 
 ```bash
 GPU0=0 GPU1=1 CUDA_DEVICES=0,1 \
 BASE_OUT="$BASE_OUT" \
-OUT_ROOT="$BASE_OUT/ocrap_v48_111_submission_ablations" \
+OUT_ROOT="$BASE_OUT/ocrap_v48_124_final_ablations" \
 MODEL_RUN="$BASE_OUT/ocrap_v48_80_dcp_drfc_bcde_rifa_pistc_main" \
-FULL_RUN_ROOT="$BASE_OUT/ocrap_v48_111_submission_three_regime" \
+FULL_RUN_ROOT="$BASE_OUT/ocrap_v48_124_final_characterization/ocrap" \
 VARIANTS=balanced,precision \
-MAX_SCENARIOS=0 \
-MAX_STEPS=40 \
-NUM_CANDIDATES=24 \
-NUM_RECOVERY_OPTIONS=12 \
-WOMD_ROLE=validation \
-ABLATION_SET=main \
+MAX_SCENARIOS=0 MAX_STEPS=40 NUM_CANDIDATES=24 NUM_RECOVERY_OPTIONS=12 \
+WOMD_ROLE=validation ABLATION_SET=main \
 bash scripts/run_submission_ablations.sh
 ```
 
-For supplementary `no_active_set_alignment` and `no_route_alignment` as well:
+For the supplementary active-set knockout as well:
 
 ```bash
 ABLATION_SET=all bash scripts/run_submission_ablations.sh
 ```
 
-Keep the same environment variables from the main command when running `ABLATION_SET=all`.
+The launcher automatically builds missing final target locks, fails closed if a regime cannot match the lock, keeps checkpoint/calibration fixed, and writes one independent job per GPU. Do not compare an ablation evaluated on a different target set with the frozen Main.
 
 ## 6. Three-regime qualitative videos
 

@@ -193,3 +193,45 @@ def test_constrained_lcb_strict_rifa_does_not_block_absolutely_admitted_candidat
     assert sel.admitted[1]
     assert sel.selected_index == 1
     assert sel.reason == "best_admitted_lcb_score"
+
+
+def test_constrained_lcb_absolute_admission_ablation_removes_recovery_threshold_only():
+    utility = np.array([1.0, 4.0, 3.0])
+    r_dep = np.array([0.00, 0.20, 0.10])
+    hard = np.zeros(3)
+    harm = np.zeros(3)
+    feasible = np.ones(3, dtype=bool)
+    sel = constrained_lcb_select(
+        utility, r_dep, hard, harm, feasible,
+        gamma_rec=0.5,
+        nominal_slack=0.0,
+        pred_gap=np.zeros(3),
+        require_absolute_admission_for_intervention=True,
+        ablation_without_absolute_admission=True,
+    )
+    assert sel.admitted.tolist() == [True, True, True]
+    assert sel.selected_index == 0
+    assert sel.reason == "nominal_lcb_admitted"
+
+
+def test_constrained_lcb_nominal_abstention_ablation_reenables_legacy_recovery_fallback():
+    utility = np.array([1.0, 4.0, 3.0])
+    r_dep = np.array([0.00, 0.20, 0.10])
+    hard = np.zeros(3)
+    harm = np.zeros(3)
+    feasible = np.ones(3, dtype=bool)
+    sel = constrained_lcb_select(
+        utility, r_dep, hard, harm, feasible,
+        gamma_rec=0.5,
+        nominal_slack=0.0,
+        pred_gap=np.zeros(3),
+        intervention_penalty=0.0,
+        deviation_penalty=0.0,
+        fallback_lcb_margin=0.05,
+        fallback_gap_margin=0.0,
+        require_absolute_admission_for_intervention=True,
+        ablation_without_nominal_abstention=True,
+    )
+    assert not sel.admitted.any()
+    assert sel.selected_index == 1
+    assert sel.reason == "recovery_guarded_fallback"
