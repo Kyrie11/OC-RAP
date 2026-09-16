@@ -1,6 +1,6 @@
-> **Current audit stage — V48.124.10.7.1 engineering fix.** V48.124.10.6 passed reliability/scientific attribution but the repeated privileged non-floor seed screen was `NOT_PROMISING`. The next licensed experiment is the terminal one-shot action-realization ceiling: for each of the two preregistered seed scenes, follow exact nominal to the strongest V48.124.10.5 seed, execute that candidate exactly once, then force exact nominal thereafter. This isolates candidate physical realization from the repeated privileged PCD policy. The deployed algorithm remains frozen; this is diagnostic-only and cannot by itself authorize Main freeze or V48.125. V48.124.10.7.1 changes only the stable entrypoint/provenance label so the canonical command can no longer silently rerun 10.6.
+> **Current audit stage — V48.124.10.7.2 terminal internal closure (no new GPU experiment).** V48.124.10.7.1 passed reliability/scientific attribution and returned `ONE_SHOT_ACTION_REALIZATION_MIXED`: the preregistered strongest seed action is locally positive in one scene and worsens Near physical endpoints in the other even when executed exactly once from the untouched nominal trajectory. This removes the repeated-oracle trajectory confound as the explanation for the sign split, closes the current absolute-admission-repair hypothesis, and freezes further internal mechanism/threshold/capacity iteration. The deployed Main itself is unchanged and therefore **not frozen**: V48.124 still requires Coverage + Determinism + Safe + Near + Contact all GO. The stable command now performs only an offline closure adjudication over the authoritative 10.7.1 result bundle; historical GPU diagnostics remain explicit reproduction modes.
 
-## Current closed-loop diagnostic entrypoint
+## Current terminal closure entrypoint
 
 ```bash
 cd /home/senzeyu2/code/OC-RAP
@@ -8,7 +8,7 @@ GPU0=0 GPU1=1 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
   bash scripts/run_constraint_native_orientation_audit.sh
 ```
 
-Required predecessor: `$BASE_OUT/OC-RAP-v48.124.10.6-NONFLOOR-ADMISSION-SEED-SCREEN-results.zip`. Expected output: `$BASE_OUT/OC-RAP-v48.124.10.7.1-ONE-SHOT-ACTION-REALIZATION-results.zip` and the sibling JSON adjudication. The scientific model remains `v48.124-OC-FMSA`; no selector/model/checkpoint/candidate/recovery/threshold mechanism is changed.
+Required evidence: `$BASE_OUT/OC-RAP-v48.124.10.7.1-ONE-SHOT-ACTION-REALIZATION-results.zip`. Expected output: `$BASE_OUT/OC-RAP-v48.124.10.7.2-TERMINAL-INTERNAL-CLOSURE.json`. This stage launches no GPU job. To reproduce 10.7.1 explicitly, set `OCRAP_CONSTRAINT_AUDIT_MODE=one_shot_action_realization`. The scientific model remains `v48.124-OC-FMSA`; no selector/model/checkpoint/candidate/recovery/threshold mechanism is changed.
 
 # OC-RAP — cleaned audit/deployment workspace
 

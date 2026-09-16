@@ -14655,3 +14655,13 @@ The screen is intentionally not adjudicated by a 250-scene bootstrap significanc
 - Bumped engineering/result provenance to `v48.124.10.7.1-ONE-SHOT-ENTRYPOINT-ENGFIX` and distinct `10.7.1` output filenames.
 - No changes to selector, model weights, checkpoints, candidate/recovery libraries, OC-MERO, RIFA, thresholds, Waymax dynamics, horizon, route contract, one-shot seed semantics, or adjudication criteria.
 - Added regression coverage for stable dispatch and the one-shot exact-single-intervention contract.
+
+
+## V48.124.10.7.2 — TERMINAL-INTERNAL-CLOSURE (offline bookkeeping only)
+
+- Scientific version remains `v48.124-OC-FMSA`; deployed algorithm remains unchanged.
+- V48.124.10.7.1 passed reliability/scientific attribution and returned `ONE_SHOT_ACTION_REALIZATION_MIXED`. The exact one-shot contract proves that the original strongest V48.124.10.5 seed action is locally positive in one seed scene but worsens Near extremal endpoints in the other before any repeated privileged re-selection can occur.
+- This closes the hypothesis that the V48.124.10.6 mixed sign pattern was created only by oracle-induced trajectory compounding. Repeated privileged selection can amplify magnitudes, but it is not the root cause of the sign split.
+- Close the current absolute-admission-repair hypothesis and keep the recovery mechanism family frozen. Do not train/recalibrate admission, sweep PCD/R_dep thresholds, increase capacity, add recovery options, add regime routing, or run another realization ceiling.
+- The deployed Main is **not frozen**: V48.124 Main freeze still requires Coverage + Determinism + Safe + Near + Contact all GO, and 10.7.1 changed no deployed component. Consequently final three-regime submission testing and external-baseline submission comparison remain unauthorized.
+- Adds `tools/adjudicate_terminal_internal_closure.py` and `scripts/run_terminal_internal_closure.sh`. The stable launcher now defaults to this offline closure and must not silently rerun GPU diagnostics. Historical 10.7.1 one-shot reproduction remains explicit via `OCRAP_CONSTRAINT_AUDIT_MODE=one_shot_action_realization`.

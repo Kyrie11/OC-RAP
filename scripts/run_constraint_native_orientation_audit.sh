@@ -6,15 +6,17 @@
 # non-interference, Near closed-loop validity, and Contact recovery validity.
 set -Eeuo pipefail
 
-# The observation-legal Near provenance chain is already closed. V48.124.10.6
-# scientifically STOPped the repeated privileged non-floor seed screen. The
-# current default is therefore the terminal V48.124.10.7 one-shot action-
-# realization ceiling: exact nominal until the preregistered strongest seed,
-# execute that candidate once, then exact nominal forever. This is diagnostic
-# only and does not modify the deployed algorithm. Historical branches remain
-# explicit for regression/reproduction.
-OCRAP_CONSTRAINT_AUDIT_MODE="${OCRAP_CONSTRAINT_AUDIT_MODE:-one_shot_action_realization}"
-if [[ "$OCRAP_CONSTRAINT_AUDIT_MODE" == "one_shot_action_realization" || "$OCRAP_CONSTRAINT_AUDIT_MODE" == "one_shot" || "$OCRAP_CONSTRAINT_AUDIT_MODE" == "terminal_ceiling" ]]; then
+# V48.124.10.7.1 completed the preregistered terminal one-shot ceiling and
+# returned MIXED: the original strongest seed action is locally positive in one
+# scene and worsens Near physical endpoints in the other. Internal mechanism
+# search is therefore closed/frozen. The stable default now performs only an
+# offline terminal-closure adjudication; it must not silently launch another GPU
+# diagnostic. Historical branches remain explicit for reproduction only.
+OCRAP_CONSTRAINT_AUDIT_MODE="${OCRAP_CONSTRAINT_AUDIT_MODE:-terminal_internal_closure}"
+if [[ "$OCRAP_CONSTRAINT_AUDIT_MODE" == "terminal_internal_closure" || "$OCRAP_CONSTRAINT_AUDIT_MODE" == "closure" || "$OCRAP_CONSTRAINT_AUDIT_MODE" == "terminal_closure" ]]; then
+  REPO_DISPATCH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+  exec bash "$REPO_DISPATCH/scripts/run_terminal_internal_closure.sh"
+elif [[ "$OCRAP_CONSTRAINT_AUDIT_MODE" == "one_shot_action_realization" || "$OCRAP_CONSTRAINT_AUDIT_MODE" == "one_shot" || "$OCRAP_CONSTRAINT_AUDIT_MODE" == "terminal_ceiling" ]]; then
   REPO_DISPATCH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
   exec bash "$REPO_DISPATCH/scripts/run_near_nonfloor_one_shot_realization_two_gpu.sh"
 elif [[ "$OCRAP_CONSTRAINT_AUDIT_MODE" == "nonfloor_admission_screen" || "$OCRAP_CONSTRAINT_AUDIT_MODE" == "nonfloor_screen" ]]; then
@@ -36,7 +38,7 @@ elif [[ "$OCRAP_CONSTRAINT_AUDIT_MODE" == "legacy_near_axis" ]]; then
   REPO_DISPATCH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
   exec bash "$REPO_DISPATCH/scripts/run_near_rifa_system_axis_two_gpu.sh"
 elif [[ "$OCRAP_CONSTRAINT_AUDIT_MODE" != "full" ]]; then
-  echo "unknown OCRAP_CONSTRAINT_AUDIT_MODE=$OCRAP_CONSTRAINT_AUDIT_MODE (expected one_shot_action_realization, nonfloor_admission_screen, all_state_support_localization, pcd_oracle_ceiling, candidate_quality, route_legal_near_axis, legacy_near_axis, or full)" >&2
+  echo "unknown OCRAP_CONSTRAINT_AUDIT_MODE=$OCRAP_CONSTRAINT_AUDIT_MODE (expected terminal_internal_closure, one_shot_action_realization, nonfloor_admission_screen, all_state_support_localization, pcd_oracle_ceiling, candidate_quality, route_legal_near_axis, legacy_near_axis, or full)" >&2
   exit 30
 fi
 

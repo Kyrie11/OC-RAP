@@ -1,3 +1,25 @@
+# 0. Terminal internal closure — V48.124.10.7.2 (offline only)
+
+V48.124.10.7.1 is attribution-ready and `ONE_SHOT_ACTION_REALIZATION_MIXED`. The repeated privileged-trajectory confound has been removed for the registered causal question: each seed scene follows exact nominal to the preregistered seed, executes exactly one historical strongest candidate, then returns to exact nominal forever. One scene is locally positive and one worsens Near extremal endpoints. Therefore do **not** open another recovery mechanism, admission retraining, threshold/capacity sweep, or another realization-ceiling experiment.
+
+Keep the authoritative 10.7.1 bundle in `BASE_OUT`, then run the stable command:
+
+```bash
+cd /home/senzeyu2/code/OC-RAP
+BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+  bash scripts/run_constraint_native_orientation_audit.sh
+```
+
+Expected artifact:
+
+```text
+$BASE_OUT/OC-RAP-v48.124.10.7.2-TERMINAL-INTERNAL-CLOSURE.json
+```
+
+This is an offline bookkeeping closure, not a new experiment. It freezes internal mechanism search but explicitly withholds deployed-Main freeze and final three-regime/external-baseline authorization because the V48.124 Near system gate was not repaired and the deployed Main was not modified. Historical one-shot reproduction remains available only via `OCRAP_CONSTRAINT_AUDIT_MODE=one_shot_action_realization`.
+
+---
+
 # 0. Current terminal Near diagnostic — V48.124.10.7.1 one-shot action realization
 
 V48.124.10.6 is attribution-ready and `NONFLOOR_ADMISSION_SEED_SCREEN_NOT_PROMISING`. Do not interpret a repeated privileged PCD trajectory as the isolated effect of the original seed action. The terminal diagnostic follows exact nominal until the preregistered strongest V48.124.10.5 non-floor seed, executes that candidate once, then returns to exact nominal forever. No training, recalibration, threshold sweep, candidate/recovery change, or new mechanism is authorized.

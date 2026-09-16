@@ -6,9 +6,9 @@ def root():
     return Path(__file__).resolve().parents[1]
 
 
-def test_stable_launcher_routes_to_one_shot_by_default_and_keeps_10_6_explicit():
+def test_stable_launcher_keeps_one_shot_explicit_after_terminal_closure_default():
     text = (root() / 'scripts/run_constraint_native_orientation_audit.sh').read_text()
-    assert 'OCRAP_CONSTRAINT_AUDIT_MODE:-one_shot_action_realization' in text
+    assert 'OCRAP_CONSTRAINT_AUDIT_MODE:-terminal_internal_closure' in text
     assert 'run_near_nonfloor_one_shot_realization_two_gpu.sh' in text
     assert 'run_near_nonfloor_admission_seed_screen_two_gpu.sh' in text
 
