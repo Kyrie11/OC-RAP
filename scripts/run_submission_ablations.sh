@@ -42,6 +42,8 @@ NUM_RECOVERY_OPTIONS="${NUM_RECOVERY_OPTIONS:-12}"
 ABLATION_SET="${ABLATION_SET:-main}"
 ABLATIONS="${ABLATIONS:-}"
 RUN_TAG="${RUN_TAG:-submission_ablation_metrics}"
+ABLATION_RUN_ID="${OCRAP_ABLATION_RUN_ID:-$(python -c 'import uuid; print(uuid.uuid4().hex)')}"
+export OCRAP_ABLATION_RUN_ID="$ABLATION_RUN_ID"
 
 # Resume-aware execution controls. Complete artifacts are reused; --force is unnecessary for scientific ablations.
 SKIP_COMPLETE="${SKIP_COMPLETE:-true}"
@@ -62,6 +64,7 @@ runtime_bool_true "$PROFILE_TIMING" || { echo "PROFILE_TIMING must be true for p
 mkdir -p "$OUT_ROOT"
 python tools/check_constraint_native_orientation_contract.py \
   --repo "$REPO" \
+  --run-id "$ABLATION_RUN_ID" \
   --output "$OUT_ROOT/cnro-runtime-code-contract.ablations.json"
 
 # name|config|safe|near|contact|tier|description
@@ -341,12 +344,13 @@ for root in "${ROOTS_TO_FINALIZE[@]}"; do
 done
 
 # Record the execution/scientific contract next to the original manifest.
-python - "$OUT_ROOT/ablation_execution_contract.json" "$RUN_TAG" "$LABEL_MODE" "$PROFILE_TIMING" "$failed_count" "$CUDA_DEVICES" <<'PY'
+python - "$OUT_ROOT/ablation_execution_contract.json" "$RUN_TAG" "$LABEL_MODE" "$PROFILE_TIMING" "$failed_count" "$CUDA_DEVICES" "$ABLATION_RUN_ID" <<'PY'
 import json,sys,datetime
-out,tag,label,profile,failed,gpus=sys.argv[1:]
+out,tag,label,profile,failed,gpus,run_id=sys.argv[1:]
 doc={
   'schema_version': 1,
   'tag': tag,
+  'run_instance_id': run_id,
   'created_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
   'ablation_type': 'frozen-checkpoint inference-time functional knockout',
   'checkpoint_policy': 'same frozen V48.80 checkpoint within each variant',
@@ -398,5 +402,5 @@ if bool_true "$BUILD_TABLES"; then
   fi
 fi
 
-printf '\nAblations complete.\nRoot: %s\nManifest: %s\nContract: %s\n' \
-  "$OUT_ROOT" "$MANIFEST" "$OUT_ROOT/ablation_execution_contract.json"
+printf '\nAblations complete.\nRun ID: %s\nRoot: %s\nManifest: %s\nContract: %s\n' \
+  "$ABLATION_RUN_ID" "$OUT_ROOT" "$MANIFEST" "$OUT_ROOT/ablation_execution_contract.json"
