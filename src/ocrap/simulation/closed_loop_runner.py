@@ -1496,7 +1496,12 @@ def _rollout_one_scene(
     sparse_label_decisions = 0
     sparse_label_candidates_total = 0
     sparse_label_full_candidates_total = 0
-    audit_every_n_steps = max(1, int(cl_cfg.get("audit_every_n_steps", 1) or 1))
+    # A non-positive audit cadence means "disabled".  Previously ``0 or 1``
+    # silently converted the launchers' CL_AUDIT_EVERY_N_STEPS=0 into an
+    # every-step teacher audit, which is especially expensive for Near-Contact.
+    audit_every_n_steps = int(cl_cfg.get("audit_every_n_steps", 1) or 0)
+    audit_enabled = audit_every_n_steps > 0
+    audit_stride = max(1, audit_every_n_steps)
     audit_max_labels = int(cl_cfg.get("audit_max_labels", 0) or 0)
     audit_intervention_only = bool(cl_cfg.get("audit_intervention_only", False))
     audit_candidate_scope = str(cl_cfg.get("audit_candidate_scope", "ranked_topk") or "ranked_topk").strip().lower()
@@ -2306,7 +2311,7 @@ def _rollout_one_scene(
         audit_paper_selected_pcd_regret = None
         audit_paper_pcd_selector_miss = None
         audit_intervention_ok = (not audit_intervention_only) or int(getattr(selected_sample, "candidate_index", 0)) != 0
-        if (selected_label_audit or coverage_label_audit) and audit_intervention_ok and (step_idx % audit_every_n_steps == 0) and (audit_max_labels <= 0 or audit_labels_done < audit_max_labels):
+        if audit_enabled and (selected_label_audit or coverage_label_audit) and audit_intervention_ok and (step_idx % audit_stride == 0) and (audit_max_labels <= 0 or audit_labels_done < audit_max_labels):
             timing_t0 = perf_counter()
             try:
                 audit_indices = ([int(selected_sample.candidate_index)] if selected_label_audit else _select_audit_candidate_indices(samples, info, selected_sample, cfg))
@@ -3159,13 +3164,13 @@ def _rollout_one_scene(
         "method": method,
         "gamma_rec": float(gamma),
         "label_mode": label_mode,
-        "labels_available": bool(compute_teacher_labels or selected_label_audit or coverage_label_audit),
+        "labels_available": bool(compute_teacher_labels or (audit_enabled and (selected_label_audit or coverage_label_audit))),
         "external_sparse_labels": bool(external_sparse_labels),
         "external_sparse_label_decisions": int(sparse_label_decisions),
         "external_sparse_label_candidates_mean": (float(sparse_label_candidates_total) / max(float(sparse_label_decisions), 1.0)) if sparse_label_decisions else None,
         "external_sparse_full_candidates_mean": (float(sparse_label_full_candidates_total) / max(float(sparse_label_decisions), 1.0)) if sparse_label_decisions else None,
-        "selected_label_audit": bool(selected_label_audit or coverage_label_audit),
-        "coverage_label_audit": bool(coverage_label_audit),
+        "selected_label_audit": bool(audit_enabled and (selected_label_audit or coverage_label_audit)),
+        "coverage_label_audit": bool(audit_enabled and coverage_label_audit),
         "audit_every_n_steps": int(audit_every_n_steps),
         "audit_labels_done": int(audit_labels_done),
         "audit_max_labels": int(audit_max_labels),
