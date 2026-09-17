@@ -35,6 +35,7 @@ SCHEMA: dict[str, list[tuple[str, str, str]]] = {
         ("terminal_clearance_m", "Terminal clearance [m] ↑", "float"),
         ("terminal_ttc_s", "Terminal TTC [s] ↑", "float"),
         ("critical_ttc_exposure_duration_s", "Critical-TTC exposure [s] ↓", "float"),
+        ("ttc_deficit_auc_s2", "TTC-deficit AUC [s²] ↓", "float"),
         ("near_zero_clearance_exposure_rate", "Near-zero-clearance exposure ↓", "rate"),
         ("closed_loop_bounded_NUP", "Bounded NUP ↑", "float"),
         ("intervention_rate", "Intervention rate", "rate"),
@@ -45,13 +46,13 @@ SCHEMA: dict[str, list[tuple[str, str, str]]] = {
         ("counterfactual_contact_target_scene_rate", "Counterfactual-contact target rate", "rate"),
         ("observed_contact_scene_rate", "Observed-contact scene rate", "rate"),
         ("post_contact_metric_eligible_scene_rate", "Post-contact metric eligibility", "rate"),
-        ("collision_scene_rate", "Collision scene rate ↓", "rate"),
+        ("collision_scene_rate", "Any-overlap scene rate (anchor audit)", "rate"),
         ("scene_min_clearance_m_p05", "Scene clearance p05 [m] ↑", "float"),
         ("scene_min_clearance_noncollision_m_p05", "Non-collision scene clearance p05 [m] ↑", "float"),
         ("terminal_clearance_m", "Terminal clearance [m] ↑", "float"),
         ("clearance_recovery_gain_m", "Clearance recovery gain [m] ↑", "float"),
         ("overlap_duration_s", "Overlap duration [s] ↓", "float"),
-        ("penetration_scene_rate", "OBB penetration scene rate ↓", "rate"),
+        ("penetration_scene_rate", "Any-penetration scene rate (anchor-sensitive audit)", "rate"),
         ("penetration_duration_s", "OBB penetration duration [s] ↓", "float"),
         ("scene_max_penetration_depth_m_mean", "Mean scene max penetration [m] ↓", "float"),
         ("penetration_depth_auc_m_s", "Penetration-depth AUC [m·s] ↓", "float"),
@@ -60,8 +61,10 @@ SCHEMA: dict[str, list[tuple[str, str, str]]] = {
         ("post_contact_clearance_gain_m", "Observed-contact clearance gain [m] ↑", "float"),
         ("post_contact_escape_scene_rate", "Observed-contact escape rate ↑", "rate"),
         ("recontact_scene_rate", "Observed-contact re-contact rate ↓", "rate"),
+        ("secondary_overlap_identity_available_scene_rate", "Secondary-overlap identity eligibility", "rate"),
         ("secondary_overlap_scene_rate", "Observed-contact secondary-overlap rate ↓", "rate"),
-        ("new_stable_stop_quality_scene_rate", "Stable-stop-quality rate ↑", "rate"),
+        ("stable_stop_eligible_scene_rate", "New-stop eligibility", "rate"),
+        ("new_stable_stop_quality_conditional_scene_rate", "Conditional stable-stop-quality rate ↑", "rate"),
         ("offroad_scene_rate", "Off-road scene rate ↓", "rate"),
         ("post_contact_overlap_duration_s", "Observed-contact overlap [s] ↓", "float"),
         ("decision_latency_ms", "Decision latency [ms] ↓", "float"),
@@ -138,12 +141,34 @@ def _format(value: Any, kind: str) -> str:
     return f"{v:.4f}"
 
 
+PUBLICATION_METRIC_SEMANTICS_VERSION = "publication_v55_signed_clearance_unclipped_v1"
+PUBLICATION_CONTRACT_KEYS = (
+    "metric_semantics_version", "max_steps", "replan_interval_steps", "metric_dt_s",
+    "num_candidate_prefixes", "num_recovery_options", "use_sdc_paths",
+    "require_observation_legal_route", "allow_future_route_proxy",
+    "dataloader_include_sdc_paths", "allow_logged_sdc_route_fallback",
+    "compute_future_metrics", "publication_geometry_metric", "clearance_is_signed",
+    "duration_auc_support", "womd_source_role",
+)
+
+
+def _evaluation_contract(doc: dict[str, Any]) -> dict[str, Any]:
+    value = doc.get("evaluation_contract") or {}
+    return value if isinstance(value, dict) else {}
+
+
+def _publication_contract_signature(doc: dict[str, Any]) -> dict[str, Any]:
+    c = _evaluation_contract(doc)
+    return {k: c.get(k) for k in PUBLICATION_CONTRACT_KEYS}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Build regime-specific OC-RAP/external-baseline comparison tables.")
     ap.add_argument("--regime", choices=tuple(SCHEMA), required=True)
     ap.add_argument("--input", action="append", required=True, metavar="METHOD=RESULT.json")
     ap.add_argument("--output-dir", type=Path, required=True)
     ap.add_argument("--allow-unpaired", action="store_true", help="Do not fail when scene journals exist but target sets differ.")
+    ap.add_argument("--allow-unanchored-contact", action="store_true", help="Diagnostic compatibility only. Publication Contact comparison requires one shared pre-treatment observed-contact anchor manifest.")
     ap.add_argument("--latency-input", action="append", default=[], metavar="METHOD=RESULT.json", help="Optional isolated-latency artifact for one method; metrics still come from --input.")
     args = ap.parse_args()
 
@@ -169,6 +194,114 @@ def main() -> int:
             raise SystemExit(f"missing result: {path}")
         entries.append((method.strip(), path, json.loads(path.read_text(encoding="utf-8"))))
 
+    # When an isolated latency artifact is provided, cohort identity is a
+    # prerequisite for using its timing value.  Check this before other artifact
+    # metadata so a target mismatch is never masked by a secondary validation.
+    for method, path, _ in entries:
+        latency_source = latency_docs.get(method)
+        if latency_source is None:
+            continue
+        acc_journal = _scene_journal(path)
+        lat_journal = _scene_journal(latency_source[0])
+        if acc_journal is None or lat_journal is None:
+            raise SystemExit(
+                f"accuracy/latency scene journals are required for isolated latency pairing: {method}"
+            )
+        acc_keys = _scene_keys(acc_journal)
+        lat_keys = _scene_keys(lat_journal)
+        if acc_keys != lat_keys:
+            mismatch = {
+                "only_accuracy": sorted(acc_keys - lat_keys)[:10],
+                "only_latency": sorted(lat_keys - acc_keys)[:10],
+                "accuracy_count": len(acc_keys),
+                "latency_count": len(lat_keys),
+            }
+            raise SystemExit(
+                f"latency target set does not match accuracy target set for {method}: "
+                + json.dumps(mismatch, ensure_ascii=False)
+            )
+
+    # Fail closed if any scene lost a publication metric observation.  Missing
+    # clearance/TTC/Waymax overlap/offroad samples must never silently become a
+    # favorable zero exposure/event for one method.
+    coverage_keys = (
+        "clearance_metric_full_coverage_scene_rate",
+        "ttc_metric_full_coverage_scene_rate",
+        "overlap_metric_full_coverage_scene_rate",
+        "offroad_metric_full_coverage_scene_rate",
+    )
+    coverage_by_method = {
+        m: {k: _get(doc, k) for k in coverage_keys}
+        for m, _, doc in entries
+    }
+    bad_coverage = {
+        m: vals for m, vals in coverage_by_method.items()
+        if any(v is None or abs(float(v) - 1.0) > 1.0e-12 for v in vals.values())
+    }
+    if bad_coverage and not args.allow_unpaired:
+        raise SystemExit(
+            "publication metric coverage is incomplete; refusing to compare potentially biased endpoints: "
+            + json.dumps(bad_coverage, ensure_ascii=False)
+        )
+
+    # Fail closed on metric/rollout contract mismatches.  Equal target keys are
+    # not enough if one method used clipped clearance, a different horizon, a
+    # future-route fallback, or another WOMD source role.
+    contract_by_method = {m: _publication_contract_signature(doc) for m, _, doc in entries}
+    missing_contract = [m for m, sig in contract_by_method.items() if sig.get("metric_semantics_version") is None]
+    if missing_contract and not args.allow_unpaired:
+        raise SystemExit("missing publication evaluation_contract: " + ", ".join(missing_contract))
+    bad_semantics = {m: sig.get("metric_semantics_version") for m, sig in contract_by_method.items()
+                     if sig.get("metric_semantics_version") not in {None, PUBLICATION_METRIC_SEMANTICS_VERSION}}
+    if bad_semantics and not args.allow_unpaired:
+        raise SystemExit("non-publication metric semantics: " + json.dumps(bad_semantics, ensure_ascii=False))
+    if contract_by_method and not args.allow_unpaired:
+        ref_method = entries[0][0]
+        ref_contract = contract_by_method[ref_method]
+        mismatched_contract = {m: sig for m, sig in contract_by_method.items() if sig != ref_contract}
+        if mismatched_contract:
+            raise SystemExit(
+                "evaluation contracts differ across methods; target pairing alone is insufficient: "
+                + json.dumps({"reference": {ref_method: ref_contract}, "mismatch": mismatched_contract}, ensure_ascii=False)
+            )
+
+    if args.regime == "contact" and not args.allow_unanchored_contact:
+        anchor_rows = {
+            m: {
+                "protocol": doc.get("contact_anchor_protocol"),
+                "manifest_sha256": doc.get("contact_anchor_manifest_sha256"),
+                "fingerprint_required": doc.get("contact_anchor_state_fingerprint_required"),
+            }
+            for m, _, doc in entries
+        }
+        if any(v.get("protocol") != "exact_a0_pretreatment_prelude_v1" or not v.get("manifest_sha256")
+               or v.get("fingerprint_required") is not True for v in anchor_rows.values()):
+            raise SystemExit(
+                "publication Contact comparison requires the shared exact-a0 pre-treatment observed-contact anchor protocol: "
+                + json.dumps(anchor_rows, ensure_ascii=False)
+            )
+        manifest_shas = {str(v["manifest_sha256"]) for v in anchor_rows.values()}
+        if len(manifest_shas) != 1:
+            raise SystemExit("Contact methods do not share one frozen anchor manifest: " + json.dumps(anchor_rows, ensure_ascii=False))
+
+        # Final post-impact endpoints are only a fully paired treatment comparison
+        # when every retained scene is observed-contact eligible for every method.
+        # The exact-a0 anchor contract is designed to make this 100%; fail closed
+        # rather than silently mixing conditional denominators in a main table.
+        eligibility_rows = {
+            m: _get(doc, "post_contact_metric_eligible_scene_rate")
+            for m, _, doc in entries
+        }
+        bad_eligibility = {
+            m: v for m, v in eligibility_rows.items()
+            if v is None or abs(float(v) - 1.0) > 1.0e-12
+        }
+        if bad_eligibility:
+            raise SystemExit(
+                "publication Contact requires 100% post-contact metric eligibility on the shared anchor cohort: "
+                + json.dumps(bad_eligibility, ensure_ascii=False)
+            )
+
     journals = [(m, _scene_journal(p)) for m, p, _ in entries]
     present = [(m, j) for m, j in journals if j is not None]
     missing_journals = [m for m, j in journals if j is None]
@@ -181,8 +314,15 @@ def main() -> int:
     paired_count = None
     if len(present) == len(entries) and present:
         key_sets = {m: _scene_keys(j) for m, j in present if j is not None}
-        reference_method = entries[0][0]; reference = key_sets[reference_method]
-        mismatch = {m: {"only_reference": sorted(reference - ks)[:10], "only_method": sorted(ks - reference)[:10]} for m, ks in key_sets.items() if ks != reference}
+        reference_method = entries[0][0]
+        reference = key_sets[reference_method]
+        mismatch = {
+            m: {
+                "only_reference": sorted(reference - ks)[:10],
+                "only_method": sorted(ks - reference)[:10],
+            }
+            for m, ks in key_sets.items() if ks != reference
+        }
         if mismatch and not args.allow_unpaired:
             raise SystemExit(f"unpaired closed-loop target sets: {json.dumps(mismatch, ensure_ascii=False)}")
         paired = not mismatch
@@ -193,25 +333,16 @@ def main() -> int:
         prov = find_provenance(method)
         latency_source = latency_docs.get(method)
         if latency_source is not None:
-            acc_journal = _scene_journal(path)
-            lat_journal = _scene_journal(latency_source[0])
-            if acc_journal is None or lat_journal is None:
+            acc_contract = _publication_contract_signature(doc)
+            lat_contract = _publication_contract_signature(latency_source[1])
+            if acc_contract != lat_contract:
                 raise SystemExit(
-                    f"accuracy/latency scene journals are required for isolated latency pairing: {method}"
+                    f"latency evaluation contract does not match accuracy contract for {method}: "
+                    + json.dumps({"accuracy": acc_contract, "latency": lat_contract}, ensure_ascii=False)
                 )
-            acc_keys = _scene_keys(acc_journal)
-            lat_keys = _scene_keys(lat_journal)
-            if acc_keys != lat_keys:
-                mismatch = {
-                    "only_accuracy": sorted(acc_keys - lat_keys)[:10],
-                    "only_latency": sorted(lat_keys - acc_keys)[:10],
-                    "accuracy_count": len(acc_keys),
-                    "latency_count": len(lat_keys),
-                }
-                raise SystemExit(
-                    f"latency target set does not match accuracy target set for {method}: "
-                    + json.dumps(mismatch, ensure_ascii=False)
-                )
+            if args.regime == "contact" and not args.allow_unanchored_contact:
+                if doc.get("contact_anchor_manifest_sha256") != latency_source[1].get("contact_anchor_manifest_sha256"):
+                    raise SystemExit(f"Contact latency anchor manifest does not match accuracy artifact for {method}")
         row: dict[str, Any] = {
             "method": method,
             "reporting_name": prov.reporting_name if prov else method,
@@ -238,17 +369,20 @@ def main() -> int:
         "schema_version": 2, "regime": args.regime, "paired_scene_set": paired,
         "paired_scene_count": paired_count,
         "metric_protocol": (
-            "counterfactual-contact target cohort; generic physical metrics use all paired scenes, while post_contact_* metrics are strictly anchored only on observed Waymax overlap" if args.regime == "contact"
+            "shared exact-a0 pre-treatment observed-contact anchor cohort; all physical and post_contact_* endpoints start from the same verified treatment-boundary simulator state" if args.regime == "contact" and not args.allow_unanchored_contact
+            else "counterfactual-contact target cohort; generic physical metrics use all paired scenes, while post_contact_* metrics are strictly anchored only on observed Waymax overlap" if args.regime == "contact"
             else "deployable physical closed-loop metrics; expensive selected/all-candidate teacher certificate audits are excluded from the main table" if args.regime == "near"
             else "deployable physical closed-loop metrics"
         ),
         "contact_protocol": (
-            "test_contact is a counterfactual contact-surrogate cohort in the current dataset build; raw WOMD replay does not materialize the contact impulse. "
-            "Therefore post_contact_* values are conditional diagnostics only when an actual simulator overlap is observed and must not be described as a fully paired post-impact benchmark unless eligibility is 1.0 for every method."
+            "Publication Contact uses one scene-disjoint treatment-independent exact-a0 prelude manifest. Every compared method independently reproduces the same observed-overlap simulator-state fingerprint before its first evaluated action; the frozen anchor lock also requires the full evaluation horizon to remain."
+            if args.regime == "contact" and not args.allow_unanchored_contact
+            else "Legacy diagnostic mode: test_contact is a counterfactual contact-surrogate cohort; post_contact_* values are conditional on policy-dependent observed contact."
             if args.regime == "contact" else None
         ),
         "contact_post_metrics_fully_paired": contact_post_metrics_fully_paired,
         "post_contact_metric_eligibility_by_method": contact_eligibility,
+        "publication_metric_coverage_by_method": coverage_by_method,
         "metrics": [{"key": k, "label": label, "kind": kind} for k, label, kind in SCHEMA[args.regime]],
         "rows": rows,
     }
@@ -261,10 +395,16 @@ def main() -> int:
     headers = ["Method"] + [x[1] for x in SCHEMA[args.regime]]
     lines = ["# " + args.regime.capitalize() + " regime comparison", "", f"Paired target set: **{paired}**" + (f" ({paired_count} scenes)" if paired_count is not None else ""), ""]
     if args.regime == "contact":
-        lines += [
-            "> Current `test_contact` is a counterfactual contact-surrogate cohort. Generic physical columns use the paired cohort; `post_contact_*` columns are strict observed-overlap diagnostics and are not a fully paired post-impact comparison unless observed-contact eligibility is 100% for every method.",
-            "",
-        ]
+        if not args.allow_unanchored_contact:
+            lines += [
+                "> Publication Contact is evaluated from one shared exact-a0 pre-treatment observed-contact anchor manifest. The first evaluated action for every method sees the same verified simulator-state fingerprint, and the anchor cohort retains the full treatment horizon.",
+                "",
+            ]
+        else:
+            lines += [
+                "> Legacy diagnostic mode: `post_contact_*` columns are conditional on policy-dependent observed contact and are not a fully paired post-impact comparison unless eligibility is 100% for every method.",
+                "",
+            ]
     elif args.regime == "near":
         lines += ["> The main Near table uses deployable physical closed-loop metrics. Exact teacher-label FRA/DRS/ODG audits are optional diagnostics and are not mixed into the runtime comparison.", ""]
     lines += ["| " + " | ".join(headers) + " |", "|" + "---|" * len(headers)]

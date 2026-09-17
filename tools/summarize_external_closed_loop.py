@@ -118,9 +118,13 @@ CONTACT = (
     "time_to_post_contact_escape_s",
     "recontact_scene_rate",
     "recontact_episode_count",
+    "secondary_overlap_identity_available_scene_rate",
     "secondary_overlap_scene_rate",
+    "stable_stop_eligible_scene_rate",
     "new_stable_stop_scene_rate",
     "new_stable_stop_quality_scene_rate",
+    "new_stable_stop_conditional_scene_rate",
+    "new_stable_stop_quality_conditional_scene_rate",
     "time_to_stable_stop_s",
     "time_to_stable_stop_quality_s",
     "post_contact_overlap_duration_s",
@@ -147,15 +151,17 @@ PRIMARY_BY_REGIME = {
         "collision_scene_rate", "offroad_scene_rate",
         "closed_loop_bounded_NUP", "intervention_rate",
         "scene_min_clearance_m_p05", "scene_ttc_s_p05",
-        "critical_ttc_exposure_duration_s",
+        "critical_ttc_exposure_duration_s", "ttc_deficit_auc_s2",
     ),
     "contact": (
         "collision_scene_rate", "offroad_scene_rate",
         "post_contact_terminal_clearance_m",
         "post_contact_free_space_auc_normalized_m",
         "post_contact_escape_scene_rate", "recontact_scene_rate",
+        "secondary_overlap_identity_available_scene_rate",
         "secondary_overlap_scene_rate",
-        "new_stable_stop_quality_scene_rate",
+        "stable_stop_eligible_scene_rate",
+        "new_stable_stop_quality_conditional_scene_rate",
         "post_contact_overlap_duration_s",
     ),
 }
@@ -181,6 +187,7 @@ def main() -> int:
     methods = [x.strip() for x in args.methods.split(",") if x.strip()] or list(MAIN_TABLE_BY_REGIME[args.regime])
     rows: list[dict[str, Any]] = []
     missing: list[str] = []
+    contact_anchor_meta: list[dict[str, Any]] = []
     keys = BY_REGIME[args.regime]
     for method in methods:
         path = args.run / f"closed_loop_{method}.json"
@@ -205,16 +212,36 @@ def main() -> int:
         }
         row["artifact"] = str(path)
         rows.append(row)
+        if args.regime == "contact":
+            contact_anchor_meta.append({
+                "method": method,
+                "protocol": d.get("contact_anchor_protocol"),
+                "manifest_sha256": d.get("contact_anchor_manifest_sha256"),
+                "state_fingerprint_required": d.get("contact_anchor_state_fingerprint_required"),
+            })
+
+    contact_is_fully_anchored = bool(contact_anchor_meta) and all(
+        x.get("protocol") == "exact_a0_pretreatment_prelude_v1"
+        and bool(x.get("manifest_sha256"))
+        and x.get("state_fingerprint_required") is True
+        for x in contact_anchor_meta
+    ) and len({str(x.get("manifest_sha256")) for x in contact_anchor_meta}) == 1
 
     contract_note = {
         "safe": "Nominal closed-loop safety, comfort, preservation and unintended intervention only; no post-contact recovery metrics.",
         "near": "Closed-loop safety plus low-headroom/extreme exposure, recovery and selected-candidate OC-RAP teacher diagnostics; no post-contact metrics.",
-        "contact": "Current test_contact is a counterfactual contact-surrogate cohort. Generic physical metrics are valid on the full paired cohort; post_contact_* metrics are strict observed-overlap diagnostics only and are conditional on observed_contact_scene_rate.",
+        "contact": (
+            "Shared exact-a0 pre-treatment observed-contact anchor cohort. Every method begins its evaluated treatment from the same frozen simulator-state fingerprint; post_contact_* endpoints are fully paired when eligibility is 1.0."
+            if contact_is_fully_anchored
+            else "Legacy/unanchored Contact diagnostic: generic physical metrics use the paired target cohort, while post_contact_* metrics are conditional on policy-dependent observed contact."
+        ),
     }[args.regime]
     doc = {
         "schema_version": 1,
         "regime": args.regime,
         "metric_contract": contract_note,
+        "contact_anchor_fully_paired": contact_is_fully_anchored if args.regime == "contact" else None,
+        "contact_anchor_metadata": contact_anchor_meta if args.regime == "contact" else None,
         "main_table_methods": methods,
         "primary_endpoint_keys": list(PRIMARY_BY_REGIME[args.regime]),
         "mechanism_diagnostic_keys": list(MECHANISM_DIAGNOSTICS_BY_REGIME[args.regime]),

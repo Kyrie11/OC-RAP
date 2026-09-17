@@ -41,7 +41,9 @@ fi
 : "${CL_PROFILE_TIMING:=true}"
 : "${CL_LATENCY_EXECUTION_CONTRACT:=throughput_or_unspecified}"
 : "${CL_LATENCY_WARMUP_DECISIONS:=3}"
+: "${CL_RESUME:=true}"
 : "${CL_RESUME_FORCE:=false}"
+: "${CL_METRIC_SEMANTICS_VERSION:=publication_v55_signed_clearance_unclipped_v1}"
 : "${CL_PARTIAL_WRITE_EVERY_SCENES:=32}"
 : "${CL_PROGRESS_EVERY_STEPS:=10}"
 : "${SKIP_COMPLETE_METHODS:=true}"
@@ -318,7 +320,9 @@ run_closed_loop_method() {
     --set "closed_loop.num_candidate_prefixes=$CL_NUM_CANDIDATES" \
     --set "closed_loop.audit_every_n_steps=$CL_AUDIT_EVERY_N_STEPS" \
     --set "closed_loop.save_partial=$CL_SAVE_PARTIAL" \
+    --set "closed_loop.resume=$CL_RESUME" \
     --set "closed_loop.resume_force=$CL_RESUME_FORCE" \
+    --set "closed_loop.metric_semantics_version=$CL_METRIC_SEMANTICS_VERSION" \
     --set "closed_loop.partial_write_every_scenes=$CL_PARTIAL_WRITE_EVERY_SCENES" \
     --set "closed_loop.progress_every_steps=$CL_PROGRESS_EVERY_STEPS" \
     --set closed_loop.result_scene_detail=metrics \

@@ -652,10 +652,13 @@ def _state_geometry_metrics(state: Any, sdc: int, *, publication_exact: bool = T
         legacy_clearance = float(min_box_clearance(ego_box, boxes, other_valid))
         legacy_ttc = float(compute_ttc(ego_state, boxes, other_valid))
         exact_signed_clearance = float(min_oriented_box_signed_clearance(ego_box, boxes, other_valid))
-        exact_clearance = max(0.0, exact_signed_clearance)
         exact_ttc = float(min_oriented_box_ttc(ego_box, boxes, other_valid))
         out = {
-            "min_clearance_m": exact_clearance if publication_exact else legacy_clearance,
+            # Publication clearance is signed by definition: positive in free
+            # space, zero at contact, and negative under OBB penetration.  Do
+            # not clip it here; doing so erases penetration severity from the
+            # minimum/terminal/recovery/AUC endpoints stated in the paper.
+            "min_clearance_m": exact_signed_clearance if publication_exact else legacy_clearance,
             "ttc_s": exact_ttc if publication_exact else legacy_ttc,
             "ego_speed_mps": float(np.hypot(vx[sdc], vy[sdc])),
             "ego_yaw_rad": float(yaw[sdc]),
@@ -2777,6 +2780,8 @@ def _rollout_one_scene(
     offroad_state_all = [float(initial_metrics.get("offroad", float("nan")))] + [
         float(m.get("offroad", float("nan"))) for m in metric_trace
     ]
+    metric_summary["overlap_metric_full_coverage"] = float(len([x for x in overlap_state_all if np.isfinite(x)]) == expected_state_count)
+    metric_summary["offroad_metric_full_coverage"] = float(len([x for x in offroad_state_all if np.isfinite(x)]) == expected_state_count)
     overlap_flags = [bool(np.isfinite(x) and x > 0.0) for x in overlap_state_all[1:]]
     offroad_flags = [bool(np.isfinite(x) and x > 0.0) for x in offroad_state_all[1:]]
     initial_overlap = bool(np.isfinite(overlap_state_all[0]) and overlap_state_all[0] > 0.0)
@@ -2819,6 +2824,16 @@ def _rollout_one_scene(
     metric_summary["near_zero_clearance_threshold_m"] = near_zero_clearance_threshold_m
     metric_summary["clearance_exposure_observed_count"] = float(len(clearance_exposure_vals))
     metric_summary["ttc_exposure_observed_count"] = float(len(ttc_exposure_vals))
+    # Publication metrics must never become artificially favorable because a
+    # geometry/Waymax observation disappeared.  Record complete t0..tN state
+    # coverage (and the t0..tN-1 interval support used by durations/AUCs); the
+    # final table builder fails closed unless every compared scene is complete.
+    expected_interval_count = int(metric_steps)
+    expected_state_count = int(metric_steps + 1)
+    metric_summary["clearance_metric_interval_coverage"] = float(len(clearance_exposure_vals) / max(expected_interval_count, 1)) if expected_interval_count > 0 else float("nan")
+    metric_summary["ttc_metric_interval_coverage"] = float(len(ttc_exposure_vals) / max(expected_interval_count, 1)) if expected_interval_count > 0 else float("nan")
+    metric_summary["clearance_metric_full_coverage"] = float(expected_state_count > 0 and len([x for x in clearance_state_all if np.isfinite(x)]) == expected_state_count)
+    metric_summary["ttc_metric_full_coverage"] = float(expected_state_count > 0 and len([x for x in ttc_state_all if np.isfinite(x)]) == expected_state_count)
     metric_summary["near_contact_exposure_count"] = near_count
     metric_summary["critical_ttc_exposure_count"] = critical_ttc_count
     metric_summary["near_zero_clearance_exposure_count"] = near_zero_clearance_count
@@ -3369,12 +3384,42 @@ def _aggregate_scene_results(scene_results: list[dict[str, Any]], method: str, s
     # Event-valued contact metrics are Bernoulli scene outcomes.  Aggregate
     # them as scene rates rather than ``any scene triggered`` maxima.
     agg["secondary_overlap_scene_rate"] = _scene_mean("secondary_overlap_event")
+    # Secondary-overlap identity needs the original contact partner to be
+    # observable.  Its Bernoulli rate therefore has a stricter denominator
+    # than generic post-contact eligibility; report that denominator explicitly.
+    agg["secondary_overlap_identity_available_scene_rate"] = _scene_mean("secondary_overlap_identity_available")
     agg["recontact_scene_rate"] = _scene_mean("recontact_event")
+    # ``new_stable_stop_*`` is defined only when the vehicle is moving at the
+    # treatment boundary.  Preserve the historical full-cohort fields for
+    # compatibility, but also expose the eligibility and true conditional rates
+    # so a stopped-at-start scene is not silently counted as a failed new stop.
+    agg["stable_stop_eligible_scene_rate"] = _scene_mean("stable_stop_eligible")
     agg["new_stable_stop_scene_rate"] = _scene_mean("new_stable_stop_event")
     agg["new_stable_stop_quality_scene_rate"] = _scene_mean("new_stable_stop_quality_event")
+    stable_stop_eligible = [
+        s for s in scene_results
+        if np.isfinite(float((s.get("metric_summary", {}) or {}).get("stable_stop_eligible", float("nan"))))
+        and float((s.get("metric_summary", {}) or {}).get("stable_stop_eligible", 0.0)) > 0.5
+    ]
+    if stable_stop_eligible:
+        agg["new_stable_stop_conditional_scene_rate"] = float(np.mean([
+            float((s.get("metric_summary", {}) or {}).get("new_stable_stop_event", 0.0) or 0.0)
+            for s in stable_stop_eligible
+        ]))
+        agg["new_stable_stop_quality_conditional_scene_rate"] = float(np.mean([
+            float((s.get("metric_summary", {}) or {}).get("new_stable_stop_quality_event", 0.0) or 0.0)
+            for s in stable_stop_eligible
+        ]))
+    else:
+        agg["new_stable_stop_conditional_scene_rate"] = None
+        agg["new_stable_stop_quality_conditional_scene_rate"] = None
     agg["post_contact_escape_scene_rate"] = _scene_mean("post_contact_escape_event")
     agg["observed_contact_scene_rate"] = _scene_mean("observed_contact_event")
     agg["post_contact_metric_eligible_scene_rate"] = _scene_mean("post_contact_metric_eligible")
+    agg["clearance_metric_full_coverage_scene_rate"] = _scene_mean("clearance_metric_full_coverage")
+    agg["ttc_metric_full_coverage_scene_rate"] = _scene_mean("ttc_metric_full_coverage")
+    agg["overlap_metric_full_coverage_scene_rate"] = _scene_mean("overlap_metric_full_coverage")
+    agg["offroad_metric_full_coverage_scene_rate"] = _scene_mean("offroad_metric_full_coverage")
     agg["counterfactual_contact_target_scene_rate"] = _scene_mean("counterfactual_contact_target")
     agg["penetration_scene_rate"] = _scene_mean("penetration_any")
     agg["penetration_duration_s"] = _scene_mean("penetration_duration_s")
@@ -4383,6 +4428,31 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
     result["route_ineligible_target_keys"] = [str(t.get("target_key")) for t in route_ineligible_targets]
     result["route_ineligible_details"] = route_ineligible_details
     result["target_keys_file"] = str(cl_cfg.get("target_keys_file", "") or "") or None
+    waymax_cfg = cfg.get("waymax", {}) if isinstance(cfg.get("waymax", {}), dict) else {}
+    result["evaluation_contract"] = {
+        # Bump this string whenever a paper-facing metric changes semantics.
+        # Final launchers run with resume=false, so stale metric artifacts cannot
+        # be silently mixed with this contract.
+        "metric_semantics_version": str(
+            cl_cfg.get("metric_semantics_version", "publication_v55_signed_clearance_unclipped_v1")
+            or "publication_v55_signed_clearance_unclipped_v1"
+        ),
+        "max_steps": int(cl_cfg.get("max_steps", 40) or 40),
+        "replan_interval_steps": int(cl_cfg.get("replan_interval_steps", 1) or 1),
+        "metric_dt_s": float(cl_cfg.get("metric_dt_s", 0.1) or 0.1),
+        "num_candidate_prefixes": int(cl_cfg.get("num_candidate_prefixes", 24) or 24),
+        "num_recovery_options": int(cl_cfg.get("num_recovery_options", 12) or 12),
+        "use_sdc_paths": bool(cl_cfg.get("use_sdc_paths", True)),
+        "require_observation_legal_route": bool(cl_cfg.get("require_observation_legal_route", True)),
+        "allow_future_route_proxy": bool(cl_cfg.get("allow_future_route_proxy", False)),
+        "dataloader_include_sdc_paths": bool(waymax_cfg.get("dataloader_include_sdc_paths", True)),
+        "allow_logged_sdc_route_fallback": bool(waymax_cfg.get("allow_logged_sdc_route_fallback", False)),
+        "compute_future_metrics": bool(waymax_cfg.get("compute_future_metrics", False)),
+        "publication_geometry_metric": "exact_oriented_box_signed_clearance+penetration+swept_sat_constant_velocity_ttc_v55",
+        "clearance_is_signed": True,
+        "duration_auc_support": "left_endpoint_t0_to_tN_minus_1_no_fictitious_terminal_interval",
+        "womd_source_role": _source_role_from_pattern(dataset_patterns),
+    }
     if bool(cl_cfg.get("contact_anchor_prelude_enabled", False)) and _is_post_contact_bucket_name(target_spec or ""):
         manifest_file = str(cl_cfg.get("contact_anchor_manifest_file", "") or "")
         result["contact_anchor_protocol"] = "exact_a0_pretreatment_prelude_v1"

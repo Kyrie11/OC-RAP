@@ -87,8 +87,6 @@ LOWER_IS_BETTER = {
     "near_contact_longest_exposure_run_s",
     "critical_ttc_exposure_episode_count",
     "critical_ttc_longest_exposure_run_s",
-    "time_to_min_clearance_s",
-    "time_to_min_ttc_s",
     "clearance_deficit_auc_m_s",
     "ttc_deficit_auc_s2",
     "overlap_episode_count",
@@ -103,6 +101,11 @@ LOWER_IS_BETTER = {
     "time_to_stable_stop_steps",
     "time_to_stable_stop_s",
     "time_to_stable_stop_quality_s",
+}
+
+DESCRIPTIVE_ONLY = {
+    "time_to_min_clearance_s",
+    "time_to_min_ttc_s",
 }
 
 
@@ -181,6 +184,7 @@ def main() -> int:
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--bootstrap", type=int, default=5000)
     ap.add_argument("--seed", type=int, default=2027)
+    ap.add_argument("--allow-unpaired", action="store_true", help="Diagnostic only: compare the intersection instead of requiring identical target-key sets.")
     args = ap.parse_args()
 
     control = _load(args.control)
@@ -189,9 +193,19 @@ def main() -> int:
     m_rows, m_source = _load_scenes(args.method, method)
     c_scenes = {_key(s): s for s in c_rows}
     m_scenes = {_key(s): s for s in m_rows}
-    common = sorted(set(c_scenes) & set(m_scenes))
+    c_keys, m_keys = set(c_scenes), set(m_scenes)
+    common = sorted(c_keys & m_keys)
     if not common:
-        raise SystemExit("No paired scenes/targets found. Use results built from the same target list and seed.")
+        raise SystemExit("No paired scenes/targets found. Use results built from the same frozen target lock.")
+    if c_keys != m_keys and not args.allow_unpaired:
+        only_control = sorted(c_keys - m_keys)
+        only_method = sorted(m_keys - c_keys)
+        raise SystemExit(
+            "Target-key sets differ; publication paired comparison requires exact equality. "
+            f"control_only={len(only_control)} method_only={len(only_method)} "
+            f"examples_control_only={only_control[:5]} examples_method_only={only_method[:5]}. "
+            "Use --allow-unpaired only for diagnostics."
+        )
 
     rng = np.random.default_rng(args.seed)
     report: dict[str, Any] = {
@@ -204,6 +218,9 @@ def main() -> int:
         "method_scene_source": m_source,
         "bootstrap_draws": int(args.bootstrap),
         "bootstrap_seed": int(args.seed),
+        "pairing_contract": "exact_target_key_set" if c_keys == m_keys else "intersection_diagnostic_only",
+        "num_control_only": len(c_keys - m_keys),
+        "num_method_only": len(m_keys - c_keys),
         "metrics": {},
     }
     for name in DIRECT_METRICS + NESTED_METRICS:
@@ -218,17 +235,21 @@ def main() -> int:
         arr = np.asarray(pairs, dtype=np.float64)
         delta = arr[:, 1] - arr[:, 0]
         lo, hi = _bootstrap_ci(delta, rng, args.bootstrap)
+        descriptive_only = name in DESCRIPTIVE_ONLY
         lower_is_better = name in LOWER_IS_BETTER
-        report["metrics"][name] = {
+        direction = "descriptive_only" if descriptive_only else ("lower_is_better" if lower_is_better else "higher_is_better")
+        row = {
             "n": int(delta.size),
             "control_mean": float(np.mean(arr[:, 0])),
             "method_mean": float(np.mean(arr[:, 1])),
             "paired_delta": float(np.mean(delta)),
             "bootstrap_95ci": [lo, hi],
-            "direction": "lower_is_better" if lower_is_better else "higher_is_better",
-            "fraction_improved": float(np.mean(delta < 0.0 if lower_is_better else delta > 0.0)),
+            "direction": direction,
             "fraction_improved_raw": float(np.mean(delta > 0.0)),
         }
+        if not descriptive_only:
+            row["fraction_improved"] = float(np.mean(delta < 0.0 if lower_is_better else delta > 0.0))
+        report["metrics"][name] = row
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, ensure_ascii=False))
@@ -246,7 +267,7 @@ def main() -> int:
         lines.append(f"| {name} | {row['control_mean']:.6f} | {row['method_mean']:.6f} | {row['paired_delta']:+.6f} | [{lo:+.6f}, {hi:+.6f}] | {row['n']} |")
     lines += [
         "",
-        "Positive delta is not universally better: for FRA, miss, exposure, intervention, overlap, and time-to-stop, lower is preferable.",
+        "Positive delta is not universally better: safety violations/exposure/intervention and time-to-recovery endpoints marked lower_is_better use the opposite direction. Time-to-minimum-clearance/TTC are descriptive timing variables with no universal better direction.",
     ]
     md.write_text("\n".join(lines))
     print(json.dumps({"output": str(args.output), "markdown": str(md), "paired_scenes": len(common)}, ensure_ascii=False))

@@ -11,8 +11,11 @@ REGIME="${1:-all}"
 WOMD_ROLE="${WOMD_ROLE:-validation}"
 MAX_STEPS="${MAX_STEPS:-40}"
 LATENCY_WARMUP_DECISIONS="${LATENCY_WARMUP_DECISIONS:-3}"
+METRIC_SEMANTICS_VERSION="${METRIC_SEMANTICS_VERSION:-publication_v55_signed_clearance_unclipped_v1}"
+CONTACT_ANCHOR_MANIFEST_FILE="${CONTACT_ANCHOR_MANIFEST_FILE:-$TARGET_ROOT/contact_anchor/contact_anchor_manifest.json}"
 for r in safe near contact; do [[ -s "$TARGET_ROOT/target_keys/$r.json" ]] || { echo "missing target lock: $TARGET_ROOT/target_keys/$r.json" >&2; exit 30; }; done
 case "$REGIME" in safe|near|contact|all) ;; *) echo "usage: $0 [safe|near|contact|all]" >&2; exit 2;; esac
+if [[ "$REGIME" == contact || "$REGIME" == all ]]; then [[ -s "$CONTACT_ANCHOR_MANIFEST_FILE" ]] || { echo "missing Contact anchor manifest: $CONTACT_ANCHOR_MANIFEST_FILE" >&2; exit 30; }; fi
 for variant in balanced precision; do
   rs=0; rn=0; rc=0
   case "$REGIME" in safe) rs=1;; near) rn=1;; contact) rc=1;; all) rs=1; rn=1; rc=1;; esac
@@ -23,6 +26,10 @@ for variant in balanced precision; do
     NEAR_TARGET_KEYS_FILE="$TARGET_ROOT/target_keys/near.json" \
     CONTACT_TARGET_KEYS_FILE="$TARGET_ROOT/target_keys/contact.json" \
     PROFILE_TIMING=true LATENCY_EXECUTION_CONTRACT=isolated_single_process_single_gpu SKIP_COMPLETE_REGIMES=false \
+    RESUME=false RESUME_FORCE=false METRIC_SEMANTICS_VERSION="$METRIC_SEMANTICS_VERSION" \
+    CONTACT_ANCHOR_PRELUDE_ENABLED=true CONTACT_ANCHOR_PRELUDE_MAX_STEPS=60 \
+    CONTACT_ANCHOR_PRELUDE_REPLAN_INTERVAL=1 CONTACT_ANCHOR_REQUIRE_FOUND=true \
+    CONTACT_ANCHOR_MANIFEST_FILE="$CONTACT_ANCHOR_MANIFEST_FILE" \
     LATENCY_WARMUP_DECISIONS="$LATENCY_WARMUP_DECISIONS" \
     INCLUDE_SCENES_IN_RESULT=false RESULT_SCENE_DETAIL=metrics SCENE_JOURNAL_DETAIL=metrics \
     RENDER_SAFE=false RENDER_NEAR=false RENDER_CONTACT=false \

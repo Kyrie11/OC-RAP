@@ -28,6 +28,11 @@ else
 fi
 : "${CL_MAX_TARGETS_PER_SCENE:=1}"
 : "${CL_TARGET_KEYS_FILE:=}"
+: "${CL_CONTACT_ANCHOR_PRELUDE_ENABLED:=false}"
+: "${CL_CONTACT_ANCHOR_PRELUDE_MAX_STEPS:=60}"
+: "${CL_CONTACT_ANCHOR_PRELUDE_REPLAN_INTERVAL:=1}"
+: "${CL_CONTACT_ANCHOR_REQUIRE_FOUND:=true}"
+: "${CL_CONTACT_ANCHOR_MANIFEST_FILE:=}"
 : "${CL_RENDER_TRACE:=false}"
 : "${CL_RENDER_MAX_AGENTS:=48}"
 : "${CL_PREFLIGHT:=true}"
@@ -42,7 +47,9 @@ fi
 : "${CL_PROFILE_TIMING:=true}"
 : "${CL_LATENCY_EXECUTION_CONTRACT:=throughput_or_unspecified}"
 : "${CL_LATENCY_WARMUP_DECISIONS:=3}"
+: "${CL_RESUME:=true}"
 : "${CL_RESUME_FORCE:=false}"
+: "${CL_METRIC_SEMANTICS_VERSION:=publication_v55_signed_clearance_unclipped_v1}"
 : "${CL_PARTIAL_WRITE_EVERY_SCENES:=32}"
 : "${CL_PROGRESS_EVERY_STEPS:=10}"
 : "${SKIP_COMPLETE_METHODS:=true}"
@@ -74,6 +81,23 @@ CPU_COUNT="$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 
 : "${XLA_PYTHON_CLIENT_PREALLOCATE:=false}"
 export RUN CL_WOMD
 mkdir -p "$RUN" "$JAX_CACHE_DIR"
+
+if runtime_bool_true "$CL_CONTACT_ANCHOR_PRELUDE_ENABLED"; then
+  [[ -s "$CL_CONTACT_ANCHOR_MANIFEST_FILE" ]] || { echo "Contact anchor protocol enabled but manifest is missing: $CL_CONTACT_ANCHOR_MANIFEST_FILE" >&2; exit 30; }
+fi
+if [[ -n "$CL_TARGET_KEYS_FILE" && -s "$CL_TARGET_KEYS_FILE" ]]; then
+  lock_requires_anchor="$(python - "$CL_TARGET_KEYS_FILE" <<'PY2'
+import json,sys
+try:d=json.load(open(sys.argv[1],encoding='utf-8'))
+except Exception:print('0');raise SystemExit
+print('1' if isinstance(d,dict) and str(d.get('schema','')).startswith('ocrap-observation-legal-contact-anchor-target-lock') else '0')
+PY2
+)"
+  if [[ "$lock_requires_anchor" == 1 ]] && ! runtime_bool_true "$CL_CONTACT_ANCHOR_PRELUDE_ENABLED"; then
+    echo "Contact target lock requires exact-a0 pre-treatment anchor execution, but CL_CONTACT_ANCHOR_PRELUDE_ENABLED is false" >&2
+    exit 30
+  fi
+fi
 
 CONFIG=configs/external_baselines/contact_external_baselines.yaml
 # Exactly the six post-contact main-table methods declared in provenance.py.
@@ -230,14 +254,23 @@ artifact_complete() {
 }
 
 run_closed_loop_method() {
-  local method="$1" gpu="$2" target_args=()
+  local method="$1" gpu="$2" target_args=() anchor_args=()
   local output="$RUN/closed_loop_${method}.json"
   if runtime_bool_true "$SKIP_COMPLETE_METHODS" && artifact_complete "$output"; then
     echo "[REUSE] contact closed-loop method=$method is already complete: $output"
     return 0
   fi
   if [[ -n "$CL_TARGET_KEYS_FILE" ]]; then target_args=(--set "closed_loop.target_keys_file=$CL_TARGET_KEYS_FILE" --set closed_loop.require_target_keys=true); fi
-  echo "[START] contact method=$method gpu=$gpu"
+  if runtime_bool_true "$CL_CONTACT_ANCHOR_PRELUDE_ENABLED"; then
+    anchor_args=(
+      --set closed_loop.contact_anchor_prelude_enabled=true
+      --set "closed_loop.contact_anchor_prelude_max_steps=$CL_CONTACT_ANCHOR_PRELUDE_MAX_STEPS"
+      --set "closed_loop.contact_anchor_prelude_replan_interval_steps=$CL_CONTACT_ANCHOR_PRELUDE_REPLAN_INTERVAL"
+      --set "closed_loop.contact_anchor_require_found=$CL_CONTACT_ANCHOR_REQUIRE_FOUND"
+      --set "closed_loop.contact_anchor_manifest_file=$CL_CONTACT_ANCHOR_MANIFEST_FILE"
+    )
+  fi
+  echo "[START] contact method=$method gpu=$gpu anchor=$CL_CONTACT_ANCHOR_PRELUDE_ENABLED"
   run_env_gpu "$gpu" python -u -m ocrap.cli closed-loop \
     --config "$CONFIG" --dataset "$CL_WOMD" --output "$output" \
     --set "closed_loop.method=$method" \
@@ -269,7 +302,9 @@ run_closed_loop_method() {
     --set "closed_loop.latency_execution_contract=$CL_LATENCY_EXECUTION_CONTRACT" \
     --set "closed_loop.latency_warmup_decisions=$CL_LATENCY_WARMUP_DECISIONS" \
     --set "closed_loop.audit_every_n_steps=$CL_AUDIT_EVERY_N_STEPS" \
+    --set "closed_loop.resume=$CL_RESUME" \
     --set "closed_loop.resume_force=$CL_RESUME_FORCE" \
+    --set "closed_loop.metric_semantics_version=$CL_METRIC_SEMANTICS_VERSION" \
     --set closed_loop.use_sdc_paths=true \
     --set closed_loop.require_observation_legal_route=true \
     --set closed_loop.allow_future_route_proxy=false \
@@ -279,6 +314,7 @@ run_closed_loop_method() {
     --set waymax.teacher_metrics_stride=0 \
     --set waymax.use_jit_scan_rollouts=true \
     "${target_args[@]}" \
+    "${anchor_args[@]}" \
     2>&1 | tee "$RUN/closed_loop_${method}.log"
   echo "[DONE] contact method=$method gpu=$gpu"
 }

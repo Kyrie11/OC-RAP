@@ -55,6 +55,7 @@ def main()->int:
     ap.add_argument('--bucket-dataset',default=None); ap.add_argument('--checkpoint',default=None); ap.add_argument('--dependency',action='append',default=[])
     ap.add_argument('--quiet',action='store_true'); ap.add_argument('--require-scenes',action='store_true'); ap.add_argument('--target-keys-file',type=Path,default=None)
     ap.add_argument('--require-latency-contract',default=None)
+    ap.add_argument('--require-metric-semantics-version',default=None)
     a=ap.parse_args(); p=a.output; prog=read(p.with_suffix(p.suffix+'.progress.json')); result=read(p); journal=p.with_suffix(p.suffix+'.scenes.jsonl'); errors=[]
     complete=bool(result and prog and prog.get('status')=='complete' and journal.is_file())
     if not complete:errors.append('missing_result_progress_or_journal')
@@ -82,6 +83,9 @@ def main()->int:
     if result and a.require_latency_contract:
         got=str(((result.get('timing') or {}).get('execution_contract') or ''))
         if got != str(a.require_latency_contract): complete=False; errors.append(f'latency_contract_mismatch:{got}')
+    if result and a.require_metric_semantics_version:
+        got=str(((result.get('evaluation_contract') or {}).get('metric_semantics_version') or ''))
+        if got != str(a.require_metric_semantics_version): complete=False; errors.append(f'metric_semantics_version_mismatch:{got}')
     deps=[Path(x) for x in a.dependency]
     if a.checkpoint:deps.append(Path(a.checkpoint))
     if p.is_file():

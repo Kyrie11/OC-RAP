@@ -20,6 +20,9 @@ WOMD_ROLE="${WOMD_ROLE:-validation}"
 MAX_SCENARIOS="${MAX_SCENARIOS:-0}"
 MAX_STEPS="${MAX_STEPS:-40}"
 RUN_NOMINAL="${RUN_NOMINAL:-1}"
+PROFILE_LATENCY="${PROFILE_LATENCY:-true}"
+LATENCY_GPU="${LATENCY_GPU:-$GPU0}"
+METRIC_SEMANTICS_VERSION="${METRIC_SEMANTICS_VERSION:-publication_v55_signed_clearance_unclipped_v1}"
 
 [[ -s "$TERMINAL_CLOSURE" ]] || { echo "missing terminal closure: $TERMINAL_CLOSURE" >&2; exit 30; }
 python tools/create_final_evaluation_lock.py \
@@ -33,7 +36,7 @@ mkdir -p "$OUT/ocrap/balanced" "$OUT/ocrap/precision" "$OUT/nominal" "$OUT/targe
 # Freeze the method-independent observation-legal cohort before launching any
 # planner. This makes external baselines runnable in parallel with OC-RAP and
 # prevents a malformed WOMD sdc_paths record from aborting the full suite.
-env BASE_OUT="$BASE_OUT" OCRAP_FINAL_CHARACTERIZATION_OUT="$OUT" WOMD_ROLE="$WOMD_ROLE" \
+env BASE_OUT="$BASE_OUT" OCRAP_FINAL_CHARACTERIZATION_OUT="$OUT" WOMD_ROLE="$WOMD_ROLE" FINAL_MAX_STEPS="$MAX_STEPS" \
   bash scripts/build_final_observation_legal_target_locks.sh
 
 run_variant() {
@@ -41,6 +44,14 @@ run_variant() {
   env WOMD_ROLE="$WOMD_ROLE" MODEL_RUN="$MODEL_RUN" MODEL_VARIANT="$variant" \
     OUT="$OUT/ocrap/$variant" CUDA_DEVICES="$gpu" \
     MAX_SCENARIOS="$MAX_SCENARIOS" MAX_STEPS="$MAX_STEPS" \
+    SAFE_TARGET_KEYS_FILE="$OUT/target_keys/safe.json" \
+    NEAR_TARGET_KEYS_FILE="$OUT/target_keys/near.json" \
+    CONTACT_TARGET_KEYS_FILE="$OUT/target_keys/contact.json" \
+    CONTACT_ANCHOR_PRELUDE_ENABLED=true \
+    CONTACT_ANCHOR_PRELUDE_MAX_STEPS=60 CONTACT_ANCHOR_PRELUDE_REPLAN_INTERVAL=1 CONTACT_ANCHOR_REQUIRE_FOUND=true \
+    CONTACT_ANCHOR_MANIFEST_FILE="$OUT/contact_anchor/contact_anchor_manifest.json" \
+    RESUME=false RESUME_FORCE=false SKIP_COMPLETE_REGIMES=false \
+    METRIC_SEMANTICS_VERSION="$METRIC_SEMANTICS_VERSION" \
     INCLUDE_SCENES_IN_RESULT=false RESULT_SCENE_DETAIL=metrics SCENE_JOURNAL_DETAIL=metrics \
     RENDER_SAFE=false RENDER_NEAR=false RENDER_CONTACT=false \
     bash scripts/run_ocrap_three_regime_evaluation.sh
@@ -59,9 +70,22 @@ if [[ "$RUN_NOMINAL" == 1 ]]; then
     SAFE_TARGET_KEYS_FILE="$OUT/target_keys/safe.json" \
     NEAR_TARGET_KEYS_FILE="$OUT/target_keys/near.json" \
     CONTACT_TARGET_KEYS_FILE="$OUT/target_keys/contact.json" \
+    CONTACT_ANCHOR_PRELUDE_ENABLED=true \
+    CONTACT_ANCHOR_PRELUDE_MAX_STEPS=60 CONTACT_ANCHOR_PRELUDE_REPLAN_INTERVAL=1 CONTACT_ANCHOR_REQUIRE_FOUND=true \
+    CONTACT_ANCHOR_MANIFEST_FILE="$OUT/contact_anchor/contact_anchor_manifest.json" \
+    RESUME=false RESUME_FORCE=false FORCE_RERUN=true METRIC_SEMANTICS_VERSION="$METRIC_SEMANTICS_VERSION" \
     MAX_SCENARIOS="$MAX_SCENARIOS" MAX_STEPS="$MAX_STEPS" \
     INCLUDE_SCENES_IN_RESULT=false RESULT_SCENE_DETAIL=metrics \
     bash scripts/run_nominal_three_regime_control.sh
+fi
+
+
+if [[ "${PROFILE_LATENCY,,}" == true || "${PROFILE_LATENCY,,}" == 1 || "${PROFILE_LATENCY,,}" == yes ]]; then
+  env BASE_OUT="$BASE_OUT" MODEL_RUN="$MODEL_RUN" OCRAP_FINAL_CHARACTERIZATION_OUT="$OUT" \
+    OCRAP_LATENCY_OUT="$OUT/latency_isolated" LATENCY_GPU="$LATENCY_GPU" WOMD_ROLE="$WOMD_ROLE" \
+    MAX_STEPS="$MAX_STEPS" METRIC_SEMANTICS_VERSION="$METRIC_SEMANTICS_VERSION" \
+    CONTACT_ANCHOR_MANIFEST_FILE="$OUT/contact_anchor/contact_anchor_manifest.json" \
+    bash scripts/profile_ocrap_latency.sh all
 fi
 
 for regime in safe near contact; do
@@ -93,11 +117,15 @@ for regime in ('safe','near','contact'):
     p=root/'nominal'/regime/'closed_loop_nominal.json'
     if p.is_file(): nom[regime]=rec(p)
 keys={r:rec(root/'target_keys'/f'{r}.json') for r in ('safe','near','contact')}
+anchor_path=root/'contact_anchor'/'contact_anchor_manifest.json'
+latency_path=root/'latency_isolated'/'LATENCY_INDEX.json'
 out={
  'schema':'ocrap-v48.124.10.7.4-final-characterization-index-v1',
  'status':'FINAL_LOCKED_CHARACTERIZATION_COMPLETE',
  'evaluation_lock':rec(lock),
  'ocrap':rows,'nominal':nom,'paired_target_keys':keys,
+ 'contact_anchor_manifest':rec(anchor_path) if anchor_path.is_file() else None,
+ 'isolated_latency_index':rec(latency_path) if latency_path.is_file() else None,
  'claim_scope':'final locked characterization only; deployment-acceptance Near STOP is unchanged',
  'next':'run paired external baselines on exactly these target-key files, then build comparison tables',
 }

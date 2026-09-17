@@ -90,6 +90,8 @@ fi
 : "${CONTACT_ANCHOR_REQUIRE_FOUND:=true}"
 : "${CONTACT_ANCHOR_MANIFEST_FILE:=}"
 : "${RESUME_FORCE:=false}"
+: "${RESUME:=true}"
+: "${METRIC_SEMANTICS_VERSION:=publication_v55_signed_clearance_unclipped_v1}"
 : "${RUN_SAFE:=1}"
 : "${RUN_NEAR:=1}"
 : "${RUN_CONTACT:=1}"
@@ -150,7 +152,7 @@ run_one() {
     MAX_SCENARIOS="$MAX_SCENARIOS" MAX_STEPS="$MAX_STEPS" LABEL_MODE="$label_mode" AUDIT_EVERY_N_STEPS="$AUDIT_EVERY_N_STEPS" \
     NUM_CANDIDATES="$NUM_CANDIDATES" NUM_RECOVERY_OPTIONS="$NUM_RECOVERY_OPTIONS" \
     BUCKET_DATASET="$bucket" BUCKET_SPLIT="$BUCKET_SPLIT" MAX_TARGETS_PER_SCENE=1 \
-    RENDER_TRACE="$render" SAVE_PARTIAL=true RESUME_FORCE="$RESUME_FORCE" \
+    RENDER_TRACE="$render" SAVE_PARTIAL=true RESUME="$RESUME" RESUME_FORCE="$RESUME_FORCE" METRIC_SEMANTICS_VERSION="$METRIC_SEMANTICS_VERSION" \
     INCLUDE_SCENES_IN_RESULT="$INCLUDE_SCENES_IN_RESULT" RESULT_SCENE_DETAIL="$RESULT_SCENE_DETAIL" \
     SCENE_JOURNAL_DETAIL="$SCENE_JOURNAL_DETAIL" MEMORY_SCENE_DETAIL="$RESULT_SCENE_DETAIL" \
     "${target_env[@]}" "${contact_anchor_env[@]}" bash scripts/run_ocrap_closed_loop.sh
@@ -171,7 +173,9 @@ run_one_status() {
     fi
     python tools/finalize_closed_loop_from_journal.py "${finalize_args[@]}" >/dev/null 2>&1 || true
   fi
-  local check_args=(--output "$artifact" --quiet)
+  local check_args=(--output "$artifact" --quiet --require-metric-semantics-version "$METRIC_SEMANTICS_VERSION")
+  local target_keys="${7:-}"
+  [[ -z "$target_keys" ]] || check_args+=(--target-keys-file "$target_keys")
   if runtime_bool_true "$INCLUDE_SCENES_IN_RESULT"; then check_args+=(--require-scenes); fi
   if runtime_bool_true "$SKIP_COMPLETE_REGIMES" && python tools/check_closed_loop_artifact.py "${check_args[@]}"; then
     echo "[REUSE] $regime closed-loop artifact is already complete: $artifact"

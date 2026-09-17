@@ -26,6 +26,9 @@ source scripts/lib/runtime.sh
 : "${INCLUDE_SCENES_IN_RESULT:=true}"
 : "${RESULT_SCENE_DETAIL:=metrics}"
 : "${RESUME_FORCE:=false}"
+: "${RESUME:=true}"
+: "${FORCE_RERUN:=false}"
+: "${METRIC_SEMANTICS_VERSION:=publication_v55_signed_clearance_unclipped_v1}"
 : "${USE_SDC_PATHS:=true}"
 : "${REQUIRE_OBSERVATION_LEGAL_ROUTE:=true}"
 : "${ALLOW_LOGGED_SDC_ROUTE_FALLBACK:=false}"
@@ -105,7 +108,9 @@ run_one() {
     [[ -n "$CONTACT_ANCHOR_MANIFEST_FILE" ]] && extra+=(--set "closed_loop.contact_anchor_manifest_file=$CONTACT_ANCHOR_MANIFEST_FILE")
   fi
   mkdir -p "$run_dir"
-  if python tools/check_closed_loop_artifact.py --output "$output" --method nominal --bucket-dataset "$bucket" --quiet \
+  local reuse_args=(--output "$output" --method nominal --bucket-dataset "$bucket" --quiet --require-metric-semantics-version "$METRIC_SEMANTICS_VERSION")
+  [[ -z "$target_keys" ]] || reuse_args+=(--target-keys-file "$target_keys")
+  if ! runtime_bool_true "$FORCE_RERUN" && python tools/check_closed_loop_artifact.py "${reuse_args[@]}" \
      && nominal_exact_a0_ok "$output"; then
     echo "[REUSE] exact-a0 nominal $regime complete: $output"
     return 0
@@ -134,7 +139,8 @@ run_one() {
     --set closed_loop.render_trace=false \
     --set closed_loop.save_partial=true \
     --set "closed_loop.resume_force=$RESUME_FORCE" \
-    --set closed_loop.resume=true \
+    --set "closed_loop.resume=$RESUME" \
+    --set "closed_loop.metric_semantics_version=$METRIC_SEMANTICS_VERSION" \
     --set closed_loop.result_scene_detail="$RESULT_SCENE_DETAIL" \
     --set closed_loop.scene_journal_detail="$RESULT_SCENE_DETAIL" \
     --set closed_loop.memory_scene_detail="$RESULT_SCENE_DETAIL" \
