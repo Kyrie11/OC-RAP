@@ -44,7 +44,9 @@ def _json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _artifact_record(path: Path, *, checkpoint: Path | None = None) -> tuple[dict[str, Any], list[str]]:
+def _artifact_record(
+    path: Path, *, checkpoint: Path | None = None, target_keys_file: Path | None = None
+) -> tuple[dict[str, Any], list[str]]:
     errors: list[str] = []
     record: dict[str, Any] = {"path": str(path.resolve()), "exists": path.is_file()}
     journal = Path(str(path) + ".scenes.jsonl")
@@ -66,7 +68,12 @@ def _artifact_record(path: Path, *, checkpoint: Path | None = None) -> tuple[dic
         record["journal_sha256"] = _sha256(journal)
     checker = REPO / "tools" / "check_closed_loop_artifact.py"
     if checker.is_file():
-        proc = subprocess.run([sys.executable, str(checker), "--output", str(path), "--quiet"], cwd=REPO)
+        cmd = [sys.executable, str(checker), "--output", str(path), "--quiet"]
+        if target_keys_file is not None:
+            cmd += ["--target-keys-file", str(target_keys_file)]
+            record["target_keys_file"] = str(target_keys_file.resolve())
+            record["target_keys_exists"] = target_keys_file.is_file()
+        proc = subprocess.run(cmd, cwd=REPO)
         record["complete_artifact_check"] = proc.returncode == 0
         if proc.returncode != 0:
             errors.append(f"closed-loop artifact is incomplete/invalid: {path}")
@@ -114,6 +121,10 @@ def main() -> int:
                     help="WOMD tf_example root containing validation/ and validation_interactive/.")
     ap.add_argument("--womd-shards", type=int, default=150)
     ap.add_argument("--variant", choices=("balanced", "precision"), default="balanced")
+    ap.add_argument(
+        "--target-lock-root", type=Path, required=True,
+        help="Final observation-legal target lock root containing safe.json/near.json/contact.json.",
+    )
     ap.add_argument("--safe-external-root", type=Path, required=True)
     ap.add_argument("--near-external-root", type=Path, required=True)
     ap.add_argument("--contact-external-root", type=Path, required=True)
@@ -122,6 +133,10 @@ def main() -> int:
 
     errors: list[str] = []
     roots = {"safe": args.safe_external_root, "near": args.near_external_root, "contact": args.contact_external_root}
+    target_locks = {r: args.target_lock_root / f"{r}.json" for r in ("safe", "near", "contact")}
+    for regime, path in target_locks.items():
+        if not path.is_file():
+            errors.append(f"missing final observation-legal target lock for {regime}: {path}")
     expected_methods = {k: list(v) for k, v in MAIN_TABLE_BY_REGIME.items()}
     bucket_paths = {
         "safe": args.ocrap_root / "test_safe",
@@ -163,7 +178,7 @@ def main() -> int:
         except Exception as exc:
             errors.append(f"invalid OC-RAP calibration JSON {gamma}: {exc}")
 
-    deployable_contract_path = args.output.parent / "V48.111-DEPLOYABLE-STACK.json"
+    deployable_contract_path = args.output.parent / "DEPLOYABLE_STACK_CONTRACT.json"
     deployable_checker = REPO / "tools" / "check_deployable_stack.py"
     deployable_contract: dict[str, Any] = {"path": str(deployable_contract_path.resolve()), "valid": False}
     if deployable_checker.is_file():
@@ -183,7 +198,7 @@ def main() -> int:
                 errors.append(f"invalid deployable stack contract: {exc}")
         if proc.returncode != 0 or not deployable_contract.get("valid"):
             deployable_contract["output_tail"] = proc.stdout[-1600:]
-            errors.append("V48.111 deployable stack contract failed")
+            errors.append("deployable stack contract failed")
     else:
         errors.append(f"missing deployable stack checker: {deployable_checker}")
 
@@ -191,7 +206,7 @@ def main() -> int:
     ocrap_supports: dict[str, Any] = {}
     for regime in ("safe", "near", "contact"):
         p = args.ocrap_results_root / regime / "closed_loop_ocrap.json"
-        rec, rec_errors = _artifact_record(p, checkpoint=ocrap_ckpt if ocrap_ckpt.is_file() else None)
+        rec, rec_errors = _artifact_record(p, checkpoint=ocrap_ckpt if ocrap_ckpt.is_file() else None, target_keys_file=target_locks[regime])
         ocrap_results[regime] = rec
         errors.extend(rec_errors)
         support = args.ocrap_results_root / regime / "closed_loop_dataset_support.json"
@@ -262,7 +277,7 @@ def main() -> int:
                 ckpt_rec, e = _checkpoint_record(ckpt, SAFE_LEARNED[method])
                 errors.extend(e)
             result = root / f"closed_loop_{method}.json"
-            result_rec, e = _artifact_record(result, checkpoint=ckpt)
+            result_rec, e = _artifact_record(result, checkpoint=ckpt, target_keys_file=target_locks[regime])
             errors.extend(e)
             external[regime]["methods"][method] = {"result": result_rec, "checkpoint": ckpt_rec}
         if regime == "near":
@@ -274,11 +289,13 @@ def main() -> int:
                 external[regime]["conformal_calibration"]["sha256"] = _sha256(cal)
 
     doc = {
-        "schema": "ocrap-submission-visualization-input-contract-v53",
+        "schema": "ocrap-final-locked-visualization-input-contract-v124",
         "valid": not errors,
         "errors": errors,
         "variant": args.variant,
-        "path_contract": "separate external roots + dataset-provenance-owned WOMD replay under one tf_example root",
+        "target_lock_root": str(args.target_lock_root.resolve()),
+        "target_locks": {r: {"path": str(p.resolve()), "exists": p.is_file(), **({"sha256": _sha256(p)} if p.is_file() else {})} for r, p in target_locks.items()},
+        "path_contract": "final observation-legal target lock + separate external roots + dataset-provenance-owned WOMD replay under one tf_example root",
         "womd_root": str(args.womd_root.resolve()),
         "canonical_replay": canonical_replay,
         "external_main_table_methods": expected_methods,
@@ -297,6 +314,7 @@ def main() -> int:
             "validation versus validation_interactive is resolved from each OC-RAP bucket's stored womd_source_role; launcher defaults do not own collection identity.",
             "The WOMD physical root is the tf_example directory containing validation/ and validation_interactive/.",
             "mtime freshness is fail-closed but is not treated as cryptographic proof that an old journal was generated by a particular checkpoint; selective trace reruns explicitly load the resolved current checkpoints.",
+            "Every OC-RAP and external closed-loop artifact is checked against the same final observation-legal target-key lock before qualitative selection.",
             "Near/Contact current main-table methods are non-neural controllers/filters; only Safe GameFormer/PlanTF/PLUTO require learned checkpoints.",
         ],
     }

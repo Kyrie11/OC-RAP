@@ -469,7 +469,7 @@ bash scripts/build_regime_visualizations.sh \
   --model-run "$BASE_OUT/ocrap_v48_80_dcp_drfc_bcde_rifa_pistc_main" \
   --external-root "$BASE_OUT/external_baselines_v48_111" \
   --variant balanced \
-  --out "$BASE_OUT/regime_visualization_v48_111" \
+  --out "$BASE_OUT/regime_visualization" \
   --num-scenes 3 \
   --gpus 0,1 \
   --fps 10 \

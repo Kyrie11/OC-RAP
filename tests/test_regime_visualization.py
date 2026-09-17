@@ -118,15 +118,23 @@ def test_favorable_delta_respects_metric_direction_and_missing_values():
 def test_submission_video_uses_compact_paper_display_names():
     expected = {
         "gameformer_lite": "GameFormer",
-        "pdm_closed": "PDM-C",
+        "plantf": "PlanTF",
+        "pluto": "PLUTO",
+        "pdm_closed": "PDM-Closed",
+        "pdm_hybrid": "PDM-Hybrid",
+        "idm": "IDM",
         "marc_lite": "MARC",
-        "robust_scenario_mpc": "RobustMPC",
+        "racp_lite": "RACP",
+        "robust_scenario_mpc": "Scenario MPC",
         "predictive_safety_filter": "PSF",
+        "dr_cvar_safety_filter": "DR-CVaR",
         "conformal_predictive_safety_filter": "CPSF",
-        "postimpact_mpc_lite": "PostMPC",
-        "postimpact_motion_tvlqr": "PostTVLQR",
-        "compensatory_postimpact_mpc": "CompMPC",
-        "robust_postimpact_control": "SMC-QP",
+        "postimpact_mpc_lite": "MPC + PSO",
+        "post_crash_braking": "PIB",
+        "postimpact_motion_tvlqr": "APF + TVLQR",
+        "post_collision_restoration": "Heuristic restoration",
+        "compensatory_postimpact_mpc": "FCC-MPC",
+        "robust_postimpact_control": "SMC + QP",
     }
     for method, label in expected.items():
         assert renderer._display_name(method) == label

@@ -7,7 +7,7 @@ export PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}"
 : "${SELECTION_ROOT:?set SELECTION_ROOT}"
 : "${OUT:=$TRACE_ROOT/videos}"
 : "${FPS:=10}"; : "${FORMAT:=mp4}"; : "${CAMERA_MODE:=fixed}"; : "${VIEW_RADIUS_M:=35}"
-: "${INCLUDE_SINGLES:=false}"; : "${INCLUDE_GLOBAL_STRONGEST_PAIR:=false}"; : "${INCLUDE_WORST_PAIR:=false}"
+: "${INCLUDE_SINGLES:=false}"; : "${INCLUDE_GLOBAL_STRONGEST_PAIR:=false}"; : "${INCLUDE_WORST_PAIR:=false}"; : "${INCLUDE_ALL_METHOD_MONTAGE:=true}"
 
 mkdir -p "$OUT"
 render_one() {
@@ -19,6 +19,7 @@ render_one() {
   [[ "$INCLUDE_SINGLES" == true ]] && optional+=(--include-singles)
   [[ "$INCLUDE_GLOBAL_STRONGEST_PAIR" == true ]] && optional+=(--include-global-strongest-pair)
   [[ "$INCLUDE_WORST_PAIR" == true ]] && optional+=(--include-worst-pair)
+  [[ "$INCLUDE_ALL_METHOD_MONTAGE" == true ]] && optional+=(--include-all-method-montage)
   python tools/render_regime_visualization_videos.py \
     "${trace_args[@]}" --selection "$SELECTION_ROOT/${regime}_selection.json" --output-dir "$OUT" \
     --fps "$FPS" --format "$FORMAT" --camera-mode "$CAMERA_MODE" --view-radius-m "$VIEW_RADIUS_M" "${optional[@]}"

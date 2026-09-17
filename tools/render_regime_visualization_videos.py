@@ -23,6 +23,7 @@ import json
 import math
 import re
 import shutil
+import textwrap
 from pathlib import Path
 from typing import Any
 
@@ -112,27 +113,29 @@ def _safe_name(text: str) -> str:
 # view and metric panel stay readable at 16:9.
 PAPER_DISPLAY_NAMES: dict[str, str] = {
     "ocrap": "OC-RAP",
-    # Safe
+    # Safe: names used by the cited papers / public implementations.
     "gameformer_lite": "GameFormer",
     "plantf": "PlanTF",
     "pluto": "PLUTO",
-    "pdm_closed": "PDM-C",
-    "pdm_hybrid": "PDM-H",
+    "pdm_closed": "PDM-Closed",
+    "pdm_hybrid": "PDM-Hybrid",
     "idm": "IDM",
-    # Near-contact
+    # Near-contact: never expose repository suffixes such as *_lite.
     "marc_lite": "MARC",
     "racp_lite": "RACP",
-    "robust_scenario_mpc": "RobustMPC",
+    "robust_scenario_mpc": "Scenario MPC",
     "predictive_safety_filter": "PSF",
     "dr_cvar_safety_filter": "DR-CVaR",
     "conformal_predictive_safety_filter": "CPSF",
-    # Contact
-    "postimpact_mpc_lite": "PostMPC",
-    "post_crash_braking": "PostBrake",
-    "postimpact_motion_tvlqr": "PostTVLQR",
-    "post_collision_restoration": "PostRestore",
-    "compensatory_postimpact_mpc": "CompMPC",
-    "robust_postimpact_control": "SMC-QP",
+    # Contact: use acronyms/components actually introduced in the source papers.
+    # Ghosh et al. do not define a named acronym for the full restoration law, so
+    # do not invent one; use the paper-native short descriptor instead.
+    "postimpact_mpc_lite": "MPC + PSO",
+    "post_crash_braking": "PIB",
+    "postimpact_motion_tvlqr": "APF + TVLQR",
+    "post_collision_restoration": "Heuristic restoration",
+    "compensatory_postimpact_mpc": "FCC-MPC",
+    "robust_postimpact_control": "SMC + QP",
 }
 
 
@@ -357,7 +360,10 @@ def _yaw_rate(trace: list[dict[str, Any]], index: int, metric_dt_s: float) -> fl
     return math.atan2(math.sin(curr - prev), math.cos(curr - prev)) / metric_dt_s
 
 
-def _draw_frame(ax, trace, sim_index, title, center, radius, contact_xy, contact_label, metric_dt_s, context=None):
+def _draw_frame(
+    ax, trace, sim_index, title, center, radius, contact_xy, contact_label, metric_dt_s, context=None,
+    *, show_hud: bool = True, show_axes: bool = True, show_clearance_annotation: bool = True,
+):
     held = sim_index >= len(trace)
     row = _frame(trace, sim_index)
     cx, cy = center
@@ -365,7 +371,10 @@ def _draw_frame(ax, trace, sim_index, title, center, radius, contact_xy, contact
     ax.set_xlim(cx - radius, cx + radius); ax.set_ylim(cy - radius, cy + radius)
     _draw_roadgraph(ax, context, center, radius)
     ax.set_title(title + (" · final state held" if held else ""), fontsize=10)
-    ax.set_xlabel("x [m]"); ax.set_ylabel("y [m]"); ax.grid(alpha=0.15)
+    if show_axes:
+        ax.set_xlabel("x [m]"); ax.set_ylabel("y [m]"); ax.grid(alpha=0.15)
+    else:
+        ax.set_xticks([]); ax.set_yticks([]); ax.grid(False)
 
     trail = [_sdc(r) for r in trace[:min(sim_index, len(trace) - 1) + 1]]
     trail = [p for p in trail if p is not None]
@@ -397,35 +406,39 @@ def _draw_frame(ax, trace, sim_index, title, center, radius, contact_xy, contact
 
     reported = _metric_float(row, "min_clearance_m")
     pair = _minimum_box_pair(row)
-    if pair is not None and reported is not None:
+    if show_clearance_annotation and pair is not None and reported is not None:
         sdc, other, rendered_dist = pair
         sx, sy, ox, oy = float(sdc["x"]), float(sdc["y"]), float(other["x"]), float(other["y"])
         ax.plot([sx, ox], [sy, oy], linestyle="--", linewidth=1.0, alpha=0.65, zorder=1)
         mismatch = abs(rendered_dist - max(0.0, reported)) > 0.15
-        label = f"min box clearance={reported:.2f} m"
+        label = f"clearance={reported:.2f} m"
         if mismatch:
-            label += f" (render geom {rendered_dist:.2f})"
+            label += "*"
         ax.annotate(label, ((sx + ox) / 2.0, (sy + oy) / 2.0), xytext=(4, 4), textcoords="offset points", fontsize=7,
                     bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.70}, zorder=7)
 
-    reason = str(row.get("selection_reason", "") or "")
-    if len(reason) > 42:
-        reason = reason[:39] + "..."
-    lines = [
-        f"t={row.get('time_index')}  macro={row.get('selected_macro', '')}",
-        f"candidate={row.get('selected_candidate_index')}  reason={reason}",
-    ]
-    for key, label, unit in (("ttc_s", "TTC", "s"), ("min_clearance_m", "clearance", "m"),
-                             ("signed_clearance_m", "signed gap", "m"), ("penetration_depth_m", "penetration", "m"),
-                             ("ego_speed_mps", "speed", "m/s"), ("overlap", "overlap", ""), ("offroad", "offroad", "")):
+    # Keep the map readable. Detailed candidate/reason/provenance belongs in
+    # the side panel/index, not on top of road geometry.
+    status = [f"t={row.get('time_index')}"]
+    for key, label, unit in (("min_clearance_m", "clr", "m"), ("ttc_s", "TTC", "s"),
+                             ("ego_speed_mps", "v", "m/s")):
         value = _metric_float(row, key)
         if value is not None:
-            lines.append(f"{label}={value:.3f}{unit}")
+            status.append(f"{label}={value:.2f}{unit}")
+    flags = []
+    if overlap:
+        flags.append("OVERLAP")
+    if offroad:
+        flags.append("OFF-ROAD")
     yr = _yaw_rate(trace, min(sim_index, len(trace) - 1), metric_dt_s)
     if yr is not None:
-        lines.append(f"yaw_rate={yr:.3f} rad/s")
-    ax.text(0.01, 0.99, "\n".join(lines), transform=ax.transAxes, va="top", fontsize=7.5,
-            bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.82}, zorder=10)
+        status.append(f"yaw-rate={yr:.2f}rad/s")
+    lines = ["  ·  ".join(status[:4])]
+    if flags:
+        lines.append(" / ".join(flags))
+    if show_hud:
+        ax.text(0.012, 0.985, "\n".join(lines), transform=ax.transAxes, va="top", fontsize=7.8,
+                bbox={"boxstyle": "round,pad=0.25", "facecolor": "white", "alpha": 0.78}, zorder=10)
 
 
 def _sample_indices(frame_count: int, fps: int, metric_dt_s: float) -> list[int]:
@@ -490,7 +503,9 @@ def _draw_timeline(ax, twin, traces: dict[str, list[dict[str, Any]]], display: d
                   alpha=0.65, label=f"{display[method]} {'TTC' if regime == 'near' else 'speed'}")
     if regime == "near":
         twin.axhline(3.0, linestyle=":", linewidth=0.9, alpha=0.45, label="3 s TTC boundary")
-    twin.set_ylabel(secondary_label)
+    twin.yaxis.set_label_position("right")
+    twin.yaxis.tick_right()
+    twin.set_ylabel(secondary_label, labelpad=10)
 
     # Overlap is encoded as sparse markers rather than full-height fill, which
     # remains readable with two traces and does not obscure clearance curves.
@@ -567,7 +582,7 @@ def _draw_info_panel(ax, *, item: dict[str, Any], selection: dict[str, Any], reg
     y = 0.985
     ax.text(0.0, y, "FULL-RUN METRICS", transform=ax.transAxes, va="top", fontsize=10.0, fontweight="bold")
     y -= 0.036
-    ax.text(0.0, y, "selection journals (not the longer trace rerun)", transform=ax.transAxes, va="top", fontsize=7.2, alpha=0.72)
+    ax.text(0.0, y, "full-run endpoint metrics; trace rerun is visualization-only", transform=ax.transAxes, va="top", fontsize=7.2, alpha=0.72)
     y -= 0.052
     comparator_name = _short_display(comparator, 18)
     role_short = _short_comparator_role(comparator_role, regime)
@@ -601,8 +616,8 @@ def _draw_info_panel(ax, *, item: dict[str, Any], selection: dict[str, Any], reg
         ordered = sorted(scores, key=lambda m: (-float(scores[m]), str(m)))
         for rank, method in enumerate(ordered, 1):
             marker = "▶" if method == comparator else " "
-            ax.text(0.0, y, f"{marker} {rank}. {_short_display(method, 24)}", transform=ax.transAxes, fontsize=6.9)
-            ax.text(0.99, y, f"quality={float(scores[method]):+.2f}", transform=ax.transAxes, fontsize=6.9, ha="right")
+            ax.text(0.0, y, f"{marker} {rank}. {_short_display(method, 25)}", transform=ax.transAxes, fontsize=7.2)
+            ax.text(0.99, y, f"sel-score={float(scores[method]):+.2f}", transform=ax.transAxes, fontsize=7.2, ha="right")
             y -= 0.027
     else:
         rows = item.get("per_baseline") or {}
@@ -610,25 +625,24 @@ def _draw_info_panel(ax, *, item: dict[str, Any], selection: dict[str, Any], reg
         for rank, method in enumerate(ordered, 1):
             marker = "▶" if method == comparator else " "
             score = float(rows[method].get("relative_score", 0.0))
-            ax.text(0.0, y, f"{marker} {rank}. {_short_display(method, 24)}", transform=ax.transAxes, fontsize=6.9)
-            ax.text(0.99, y, f"OC-RAP Δ={score:+.2f}", transform=ax.transAxes, fontsize=6.9, ha="right")
+            ax.text(0.0, y, f"{marker} {rank}. {_short_display(method, 25)}", transform=ax.transAxes, fontsize=7.2)
+            ax.text(0.99, y, f"pair-score Δ={score:+.2f}", transform=ax.transAxes, fontsize=7.2, ha="right")
             y -= 0.027
 
     y -= 0.020
     tier = str(item.get("selection_tier") or "")
     profile = str(item.get("evidence_profile") or "")
     ax.text(0.0, y, "SELECTION PROVENANCE", transform=ax.transAxes, fontsize=8.8, fontweight="bold")
-    y -= 0.033
-    ax.text(0.0, y, f"target: {str(item.get('target_key') or '')[:34]}", transform=ax.transAxes, fontsize=6.9)
-    y -= 0.026
-    ax.text(0.0, y, f"tier: {tier}", transform=ax.transAxes, fontsize=6.9)
-    y -= 0.026
-    ax.text(0.0, y, f"profile: {profile}", transform=ax.transAxes, fontsize=6.9)
-    y -= 0.026
-    ax.text(0.0, y, f"all {selection.get('num_external_baselines', '?')} main-table baselines used for selection", transform=ax.transAxes, fontsize=6.9)
-    y -= 0.026
+    y -= 0.034
+    for line in (
+        f"post-hoc qualitative · tier: {tier}",
+        f"profile: {profile}",
+        f"target-locked · all {selection.get('num_external_baselines', '?')} main-table baselines checked",
+    ):
+        ax.text(0.0, y, line, transform=ax.transAxes, fontsize=7.1)
+        y -= 0.028
     if regime != "safe":
-        ax.text(0.0, y, f"non-regressive comparisons: {item.get('num_nonregressive_external_comparisons', 'n/a')}/{selection.get('num_external_baselines', '?')}", transform=ax.transAxes, fontsize=6.9)
+        ax.text(0.0, y, f"non-regressive: {item.get('num_nonregressive_external_comparisons', 'n/a')}/{selection.get('num_external_baselines', '?')}", transform=ax.transAxes, fontsize=7.1)
 
 
 def _save_animation(fig, update, frame_count, fps, output: Path, use_mp4: bool):
@@ -660,12 +674,67 @@ def _render_single(*, method, scene, trace, item, regime, display_name, context,
     _save_animation(figure, update, len(sim_indices), fps, output, use_mp4)
 
 
+def _draw_montage_info(ax, *, traces, displays, sim_idx, metric_dt_s, regime, item, selection):
+    ax.clear(); ax.axis("off")
+    row0 = next(iter(traces.values()))
+    frame = _frame(row0, sim_idx)
+    start_t = int(row0[0].get("time_index", 0)) if row0 else 0
+    current_t = int(frame.get("time_index", start_t)) if frame else start_t
+    ax.text(0.0, 0.98, "TARGET-LOCKED ALL-METHOD VIEW", va="top", fontsize=10.2, fontweight="bold")
+    ax.text(0.0, 0.91, f"rank {item.get('category_rank')} · sim t={current_t} · +{(current_t-start_t)*metric_dt_s:.1f}s", va="top", fontsize=8.2)
+    ax.text(0.0, 0.86, "Same scene · same time · shared fixed camera", va="top", fontsize=7.6, alpha=0.75)
+    y = 0.79
+    metric_name = "TTC" if regime == "near" else "clearance"
+    metric_key = "ttc_s" if regime == "near" else "min_clearance_m"
+    for method, trace in traces.items():
+        r = _frame(trace, sim_idx)
+        v = _metric_float(r, metric_key)
+        overlap = (_metric_float(r, "overlap") or 0.0) > 0.5
+        suffix = " · overlap" if overlap else ""
+        value = "n/a" if v is None else f"{v:.2f}{' s' if regime == 'near' else ' m'}"
+        ax.text(0.0, y, _short_display(method, 19), fontsize=7.5, fontweight="bold" if method == "ocrap" else "normal")
+        ax.text(0.98, y, f"{metric_name} {value}{suffix}", fontsize=7.3, ha="right")
+        y -= 0.065
+    y -= 0.02
+    ax.text(0.0, y, "Selection is qualitative/post-hoc; population claims use the locked quantitative tables.",
+            fontsize=7.0, wrap=True, va="top")
+
+
+def _render_montage(*, methods, traces, item, selection, regime, displays, context, center, radius,
+                    camera_mode, sim_indices, fps, metric_dt_s, output, use_mp4):
+    if len(methods) > 7:
+        raise SystemExit("all-method montage currently supports at most 7 methods plus one info panel")
+    contacts = {m: _contact_marker(traces[m], regime) for m in methods}
+    figure = plt.figure(figsize=(16.0, 8.8), dpi=100)
+    grid = figure.add_gridspec(2, 4, wspace=0.08, hspace=0.14)
+    axes = {}
+    for i, method in enumerate(methods):
+        axes[method] = figure.add_subplot(grid[i // 4, i % 4])
+    info_ax = figure.add_subplot(grid[1, 3])
+    regime_title = "NEAR-CONTACT" if regime == "near" else ("CONTACT-SURROGATE" if regime == "contact" else "SAFE")
+    figure.suptitle(f"{regime_title} · target-locked all-method comparison · Rank {item.get('category_rank')}",
+                    fontsize=12.0, fontweight="bold", y=0.985)
+    figure.subplots_adjust(left=0.025, right=0.985, top=0.93, bottom=0.035)
+
+    def update(frame_i):
+        sim_idx = sim_indices[frame_i]
+        view_center = _dynamic_center([traces[m] for m in methods], sim_idx) if camera_mode == "dynamic" else center
+        for method in methods:
+            xy, label = contacts[method]
+            _draw_frame(axes[method], traces[method], sim_idx, displays[method], view_center, radius, xy, label,
+                        metric_dt_s, context, show_hud=False, show_axes=False, show_clearance_annotation=False)
+        _draw_montage_info(info_ax, traces={m: traces[m] for m in methods}, displays=displays, sim_idx=sim_idx,
+                           metric_dt_s=metric_dt_s, regime=regime, item=item, selection=selection)
+
+    _save_animation(figure, update, len(sim_indices), fps, output, use_mp4)
+
+
 def _render_pair(*, methods, scenes, traces, item, selection, regime, displays, context, center, radius,
                  camera_mode, sim_indices, fps, metric_dt_s, output, use_mp4, comparator_role):
     ocrap, comparator = methods
     contact = {m: _contact_marker(traces[m], regime) for m in methods}
-    figure = plt.figure(figsize=(16.0, 9.0), dpi=100)
-    grid = figure.add_gridspec(2, 3, width_ratios=[1.0, 1.0, 0.68], height_ratios=[3.45, 1.20])
+    figure = plt.figure(figsize=(18.0, 9.6), dpi=100)
+    grid = figure.add_gridspec(2, 3, width_ratios=[1.0, 1.0, 0.82], height_ratios=[3.55, 1.10])
     axes = {ocrap: figure.add_subplot(grid[0, 0]), comparator: figure.add_subplot(grid[0, 1])}
     timeline_ax = figure.add_subplot(grid[1, 0:2]); timeline_twin = timeline_ax.twinx()
     info_ax = figure.add_subplot(grid[:, 2])
@@ -678,10 +747,10 @@ def _render_pair(*, methods, scenes, traces, item, selection, regime, displays, 
     )
     figure.text(
         0.5, 0.952,
-        f"{role_short} · Same target · Fixed world camera · Selection used all {selection.get('num_external_baselines', '?')} baselines",
+        f"{role_short} · same target · {camera_mode} world camera · target-locked cohort · all {selection.get('num_external_baselines', '?')} baselines audited",
         ha="center", va="top", fontsize=8.1, alpha=0.78,
     )
-    figure.subplots_adjust(top=0.91, bottom=0.075, left=0.05, right=0.985, hspace=0.30, wspace=0.18)
+    figure.subplots_adjust(top=0.905, bottom=0.070, left=0.045, right=0.985, hspace=0.28, wspace=0.16)
     _draw_info_panel(info_ax, item=item, selection=selection, regime=regime, comparator=comparator, comparator_role=comparator_role)
 
     def update(frame_i):
@@ -707,6 +776,7 @@ def main() -> int:
     ap.add_argument("--include-singles", action="store_true", help="Render one single-method video for every method (supplement/debug only).")
     ap.add_argument("--include-global-strongest-pair", action="store_true", help="Also compare against the regime-level strongest external baseline when it differs from the per-scene comparator.")
     ap.add_argument("--include-worst-pair", action="store_true", help="Also render OC-RAP vs the per-scene weakest external baseline (not recommended for the main paper).")
+    ap.add_argument("--include-all-method-montage", action="store_true", help="Render one synchronized OC-RAP + all-baseline montage per scene (recommended for supplemental material).")
     args = ap.parse_args()
     if args.fps <= 0 or args.view_radius_m <= 5.0:
         raise SystemExit("fps must be positive and view radius must exceed 5 m")
@@ -793,6 +863,17 @@ def main() -> int:
                          center=center, radius=radius, camera_mode=args.camera_mode, sim_indices=sim_indices, fps=args.fps,
                          metric_dt_s=metric_dt_s, output=filename, use_mp4=use_mp4, comparator_role=role_text)
             outputs.append({"type": f"pair_{role}", "method": comparator, "path": str(filename), "comparator_role": role_text})
+
+        if args.include_all_method_montage:
+            montage_methods = ["ocrap"] + expected_external
+            filename = scene_dir / f"{regime}__rank_{rank:02d}__all_methods{suffix}"
+            _render_montage(
+                methods=montage_methods, traces={m: traces[m] for m in montage_methods}, item=item, selection=selection,
+                regime=regime, displays={m: displays[m] for m in montage_methods}, context=context, center=center, radius=radius,
+                camera_mode=args.camera_mode, sim_indices=sim_indices, fps=args.fps, metric_dt_s=metric_dt_s,
+                output=filename, use_mp4=use_mp4,
+            )
+            outputs.append({"type": "all_method_montage", "methods": montage_methods, "path": str(filename)})
         records.append({
             "target_key": key,
             "rank": rank,
@@ -819,20 +900,21 @@ def main() -> int:
 
     actual_total = sum(r["num_videos"] for r in records)
     index = {
-        "event": "regime_visualization_video_index_v52",
+        "event": "regime_visualization_video_index_v124",
         "regime": regime,
         "selection": str(args.selection),
         "external_baselines": external_methods,
         "num_external_baselines": len(external_methods),
         "num_selected_scenes": len(selected),
-        "default_video_policy": "one OC-RAP-vs-per-scene-strongest pair per selected scene; optional supplementary singles/global/worst pairs",
+        "default_video_policy": "one OC-RAP-vs-primary pair per selected scene; supplemental mode can additionally render one synchronized all-method montage",
         "include_singles": bool(args.include_singles),
         "include_global_strongest_pair": bool(args.include_global_strongest_pair),
         "include_worst_pair": bool(args.include_worst_pair),
+        "include_all_method_montage": bool(args.include_all_method_montage),
         "num_videos": actual_total,
         "format": suffix.lstrip("."),
         "synchronization_contract": "same selected target, same video-time sample, same simulation dt, same scene-wide fixed camera unless camera_mode=dynamic",
-        "pair_layout": "OC-RAP left; strongest external comparator right; full-run metric card and all-baseline context panel at right",
+        "pair_layout": "OC-RAP left; primary external comparator right; compact full-run endpoint card and all-baseline audit context at right",
         "records": records,
     }
     index_path = args.output_dir / f"{regime.upper()}_VIDEO_INDEX.json"

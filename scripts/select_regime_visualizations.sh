@@ -13,6 +13,7 @@ export PYTHONNOUSERSITE=1
 : "${WOMD_ROOT:=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example}"
 : "${WOMD_NUM_SHARDS:=150}"
 : "${MODEL_VARIANT:=balanced}"
+: "${TARGET_LOCK_ROOT:?set TARGET_LOCK_ROOT to final observation-legal target_keys root}"
 : "${SAFE_EXTERNAL_ROOT:=/home/senzeyu2/code/OC-RAP/runs/external_baselines/safe}"
 : "${NEAR_EXTERNAL_ROOT:=/home/senzeyu2/code/OC-RAP/runs/external_baselines/near}"
 : "${CONTACT_EXTERNAL_ROOT:=/home/senzeyu2/code/OC-RAP/runs/external_baselines/contact}"
@@ -31,6 +32,7 @@ python tools/check_regime_visualization_inputs.py \
   --womd-root "$WOMD_ROOT" \
   --womd-shards "$WOMD_NUM_SHARDS" \
   --variant "$MODEL_VARIANT" \
+  --target-lock-root "$TARGET_LOCK_ROOT" \
   --safe-external-root "$SAFE_EXTERNAL_ROOT" \
   --near-external-root "$NEAR_EXTERNAL_ROOT" \
   --contact-external-root "$CONTACT_EXTERNAL_ROOT" \
