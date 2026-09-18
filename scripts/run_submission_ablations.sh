@@ -55,6 +55,7 @@ NATIVE_FULL_REFERENCE_ROOT="${NATIVE_FULL_REFERENCE_ROOT:-$OUT_ROOT/_native_full
 # Resume-aware execution controls. Complete artifacts are reused; --force is unnecessary for scientific ablations.
 SKIP_COMPLETE="${SKIP_COMPLETE:-true}"
 BUILD_TABLES="${BUILD_TABLES:-true}"
+BUILD_TARGET_LOCKS="${BUILD_TARGET_LOCKS:-true}"
 TABLE_OUT="${TABLE_OUT:-$OUT_ROOT/submission_tables}"
 PARTIAL_WRITE_EVERY_SCENES="${PARTIAL_WRITE_EVERY_SCENES:-64}"
 PROGRESS_EVERY_STEPS="${PROGRESS_EVERY_STEPS:-20}"
@@ -254,13 +255,18 @@ SAFE_WOMD="$(runtime_resolve_bucket_womd_spec "$SAFE_BUCKET" "$BUCKET_SPLIT" "$W
 NEAR_WOMD="$(runtime_resolve_bucket_womd_spec "$NEAR_BUCKET" "$BUCKET_SPLIT" "$WOMD_ROOT" "$WOMD_NUM_SHARDS" "${WOMD_ROLE:-validation}")"
 CONTACT_WOMD="$(runtime_resolve_bucket_womd_spec "$CONTACT_BUCKET" "$BUCKET_SPLIT" "$WOMD_ROOT" "$WOMD_NUM_SHARDS" "${WOMD_ROLE:-validation}")"
 # Re-run the same deterministic target-lock builder used by final
-# characterization. It reuses a matching Contact anchor manifest but rejects
-# stale horizon/source contracts. All ablation arms therefore consume exactly
-# the final publication cohort rather than a separately constructed cohort.
-env BASE_OUT="$BASE_OUT" OCRAP_FINAL_CHARACTERIZATION_OUT="$TARGET_LOCK_CHARACTERIZATION_OUT" \
-  WOMD_ROLE="${WOMD_ROLE:-validation}" FINAL_MAX_STEPS="$MAX_STEPS" \
-  CONTACT_ANCHOR_GPU="${CONTACT_ANCHOR_GPU:-${GPUS[0]}}" \
-  bash scripts/build_final_observation_legal_target_locks.sh
+# characterization unless a top-level orchestrator has already frozen it.
+# BUILD_TARGET_LOCKS=false is safe only when all three locks and the Contact
+# anchor manifest already exist; the fail-closed checks below still validate
+# the full contract before any ablation job is queued.
+if bool_true "$BUILD_TARGET_LOCKS"; then
+  env BASE_OUT="$BASE_OUT" OCRAP_FINAL_CHARACTERIZATION_OUT="$TARGET_LOCK_CHARACTERIZATION_OUT" \
+    WOMD_ROLE="${WOMD_ROLE:-validation}" FINAL_MAX_STEPS="$MAX_STEPS" \
+    CONTACT_ANCHOR_GPU="${CONTACT_ANCHOR_GPU:-${GPUS[0]}}" \
+    bash scripts/build_final_observation_legal_target_locks.sh
+else
+  echo "[Ablation target lock] reuse prebuilt final target locks under $FINAL_TARGET_LOCK_ROOT"
+fi
 for _r in safe near contact; do
   [[ -s "$FINAL_TARGET_LOCK_ROOT/$_r.json" ]] || { echo "Missing final target lock: $FINAL_TARGET_LOCK_ROOT/$_r.json" >&2; exit 30; }
 done

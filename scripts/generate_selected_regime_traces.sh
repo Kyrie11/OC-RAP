@@ -19,12 +19,14 @@ export PYTHONNOUSERSITE=1
 : "${OUT:=$(dirname "$SELECTION_ROOT")/selective_traces}"
 : "${CUDA_DEVICES:=0,1}"
 : "${TRACE_MAX_STEPS:=60}"
+: "${VIS_CONTACT_ANCHOR_MANIFEST_FILE:=$(dirname "$SELECTION_ROOT")/provenance/contact_anchor_${TRACE_MAX_STEPS}step_manifest.json}"
 : "${CLEAN_TRACE_OUTPUT:=true}"
 : "${ALLOW_DIAGNOSTIC_RC20:=0}"
 : "${JOBS_PER_GPU:=3}"
 : "${MAX_PARALLEL:=6}"
 
 [[ -f "$INPUT_CONTRACT" ]] || { echo "Missing visualization input contract: $INPUT_CONTRACT" >&2; exit 30; }
+[[ -s "$VIS_CONTACT_ANCHOR_MANIFEST_FILE" ]] || { echo "Missing 6 s Contact visualization anchor manifest: $VIS_CONTACT_ANCHOR_MANIFEST_FILE" >&2; exit 30; }
 python - "$INPUT_CONTRACT" <<'PY'
 import json,sys
 d=json.load(open(sys.argv[1])); assert d.get('valid') is True, d.get('errors')
@@ -57,6 +59,9 @@ SAFE_WOMD="$SAFE_WOMD" NEAR_WOMD="$NEAR_WOMD" CONTACT_WOMD="$CONTACT_WOMD" \
 SAFE_TARGET_KEYS_FILE="$SELECTION_ROOT/safe_target_keys.json" \
 NEAR_TARGET_KEYS_FILE="$SELECTION_ROOT/near_target_keys.json" \
 CONTACT_TARGET_KEYS_FILE="$SELECTION_ROOT/contact_target_keys.json" \
+CONTACT_ANCHOR_PRELUDE_ENABLED=true CONTACT_ANCHOR_PRELUDE_MAX_STEPS=60 \
+CONTACT_ANCHOR_PRELUDE_REPLAN_INTERVAL=1 CONTACT_ANCHOR_REQUIRE_FOUND=true \
+CONTACT_ANCHOR_MANIFEST_FILE="$VIS_CONTACT_ANCHOR_MANIFEST_FILE" \
 RENDER_SAFE=true RENDER_NEAR=true RENDER_CONTACT=true \
 SAFE_LABEL_MODE=fast NEAR_LABEL_MODE=fast CONTACT_LABEL_MODE=fast \
 SKIP_COMPLETE_REGIMES=false RESUME_FORCE=true FINALIZE_COMPLETE_JOURNALS=true \
@@ -87,13 +92,16 @@ RUN="$OUT/external/contact" OCRAP_ROOT="$OCRAP_ROOT" WOMD_ROOT="$WOMD_ROOT" CUDA
 DO_TRAIN=false DO_OFFLINE=false DO_CLOSED_LOOP=true RUN_LEGACY_CONTACT=false \
 CL_WOMD="$CONTACT_WOMD" CL_MAX_SCENARIOS=0 CL_MAX_STEPS="$TRACE_MAX_STEPS" \
 CL_TARGET_KEYS_FILE="$SELECTION_ROOT/contact_target_keys.json" CL_RENDER_TRACE=true \
+CL_CONTACT_ANCHOR_PRELUDE_ENABLED=true CL_CONTACT_ANCHOR_PRELUDE_MAX_STEPS=60 \
+CL_CONTACT_ANCHOR_PRELUDE_REPLAN_INTERVAL=1 CL_CONTACT_ANCHOR_REQUIRE_FOUND=true \
+CL_CONTACT_ANCHOR_MANIFEST_FILE="$VIS_CONTACT_ANCHOR_MANIFEST_FILE" \
 JOBS_PER_GPU="$JOBS_PER_GPU" MAX_PARALLEL="$MAX_PARALLEL" \
 SKIP_COMPLETE_METHODS=false CL_RESUME_FORCE=true \
 bash scripts/run_external_baselines_contact.sh
 
-python - "$OUT" "$SELECTION_ROOT" <<'PY'
+python - "$OUT" "$SELECTION_ROOT" "$TRACE_MAX_STEPS" <<'PY'
 import json,pathlib,sys
-root=pathlib.Path(sys.argv[1]); sel=pathlib.Path(sys.argv[2])
+root=pathlib.Path(sys.argv[1]); sel=pathlib.Path(sys.argv[2]); required_steps=int(sys.argv[3])
 methods={
 'safe':['gameformer_lite','plantf','pluto','pdm_closed','pdm_hybrid','idm'],
 'near':['marc_lite','racp_lite','robust_scenario_mpc','predictive_safety_filter','dr_cvar_safety_filter','conformal_predictive_safety_filter'],
@@ -106,16 +114,23 @@ for r,ms in methods.items():
     for m,p in paths.items():
         if not p.is_file(): errors.append(f'missing journal {m}: {p}'); continue
         keys=set()
+        requested_set=set(map(str,requested))
         for line in p.open():
             if not line.strip(): continue
-            x=json.loads(line); k=x.get('target_key') or f"{x.get('scene_id')}::{x.get('target_time_index')}"
-            keys.add(str(k))
-            if not x.get('render_trace'): errors.append(f'no render_trace {r}/{m}/{k}')
+            x=json.loads(line); k=str(x.get('target_key') or f"{x.get('scene_id')}::{x.get('target_time_index')}")
+            keys.add(k)
+            if k not in requested_set:
+                continue
+            trace=x.get('render_trace') or []
+            if not trace:
+                errors.append(f'no render_trace {r}/{m}/{k}')
+            elif len(trace) < required_steps + 1:
+                errors.append(f'short render_trace {r}/{m}/{k}: frames={len(trace)} required>={required_steps+1}')
         miss=sorted(set(map(str,requested))-keys)
         if miss: errors.append(f'unresolved selected targets {r}/{m}: {miss}')
         counts[m]=len(keys)
     regimes[r]={'requested':len(requested),'journal_counts':counts}
-doc={'event':'selected_regime_trace_contract','valid':not errors,'errors':errors,'regimes':regimes}
+doc={'event':'selected_regime_trace_contract','valid':not errors,'errors':errors,'required_rollout_steps':required_steps,'required_trace_frames':required_steps+1,'regimes':regimes}
 (root/'TRACE_CONTRACT.json').write_text(json.dumps(doc,indent=2)+"\n")
 print(json.dumps(doc,indent=2)); raise SystemExit(0 if not errors else 30)
 PY

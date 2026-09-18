@@ -21,6 +21,7 @@ export PYTHONNOUSERSITE=1
 : "${NUM_SCENES:=5}"
 : "${MIN_VIDEO_DURATION_S:=5.0}"
 : "${FALLBACK_MIN_VIDEO_DURATION_S:=3.0}"
+: "${CONTACT_ALLOWED_TARGET_KEYS_FILE:=}"
 : "${MAX_SELECTED_TIER_RANK:=1}"  # 0=strict hardest-baseline win only; 1 allows majority-material strong evidence.
 
 mkdir -p "$OUT/provenance" "$OUT/selection"
@@ -51,10 +52,15 @@ select_one() {
   for m in "${methods[@]}"; do
     args+=(--baseline "$m=$ext_root/closed_loop_${m}.json.scenes.jsonl")
   done
+  local -a filter_args=()
+  if [[ "$regime" == contact && -n "$CONTACT_ALLOWED_TARGET_KEYS_FILE" ]]; then
+    [[ -s "$CONTACT_ALLOWED_TARGET_KEYS_FILE" ]] || { echo "missing Contact visualization target filter: $CONTACT_ALLOWED_TARGET_KEYS_FILE" >&2; exit 30; }
+    filter_args+=(--allowed-target-keys-file "$CONTACT_ALLOWED_TARGET_KEYS_FILE")
+  fi
   python tools/select_regime_visualization_scenes.py \
     --regime "$regime" \
     --ocrap-scenes "$OCRAP_RESULTS_ROOT/$regime/closed_loop_ocrap.json.scenes.jsonl" \
-    "${args[@]}" \
+    "${args[@]}" "${filter_args[@]}" \
     --output "$OUT/selection/${regime}_selection.json" \
     --target-keys-output "$OUT/selection/${regime}_target_keys.json" \
     --num-scenes "$NUM_SCENES" \

@@ -13,7 +13,7 @@ Safe:
   low unnecessary intervention) with hard collision/off-road guards.  Relative
   external performance is disclosed but is not the primary ranking signal.
 Near-Contact / Contact:
-  rank robust relative gains against the complete external-baseline set. Contact uses generic physical recovery on the current counterfactual contact-surrogate cohort; observed-contact-only diagnostics are not required for selection.  The
+  rank robust relative gains against the complete external-baseline set. Publication Contact inputs are the shared exact-a0 observed-contact anchor cohort; selection still uses generic physical recovery/overlap/penetration/stability endpoints so qualitative ranking does not depend on method-conditional eligibility.  The
   strongest tier requires a material gain over the per-scene best external
   comparator and no unsafe regression.  Lower tiers are deterministic fallbacks
   and are explicitly labeled in the output.
@@ -623,6 +623,19 @@ def main() -> int:
     baseline_paths = _parse_baseline_specs(args.baseline)
     ocrap = _load_scenes(args.ocrap_scenes)
     baselines = {name: _load_scenes(path) for name, path in baseline_paths.items()}
+    if args.allowed_target_keys_file is not None:
+        raw = json.loads(args.allowed_target_keys_file.read_text(encoding="utf-8"))
+        keys = raw.get("target_keys") if isinstance(raw, dict) else raw
+        if not isinstance(keys, list) or not keys:
+            raise SystemExit(f"allowed target key file is empty/invalid: {args.allowed_target_keys_file}")
+        allowed = {str(x) for x in keys}
+        missing = {"ocrap": sorted(allowed - set(ocrap))[:10]}
+        missing.update({name: sorted(allowed - set(rows))[:10] for name, rows in baselines.items()})
+        missing = {name: vals for name, vals in missing.items() if vals}
+        if missing:
+            raise SystemExit(f"allowed target keys are missing from paired visualization inputs: {json.dumps(missing, ensure_ascii=False)}")
+        ocrap = {k: v for k, v in ocrap.items() if k in allowed}
+        baselines = {name: {k: v for k, v in rows.items() if k in allowed} for name, rows in baselines.items()}
     reference_keys = set(ocrap)
     mismatch = {
         name: {
@@ -685,7 +698,7 @@ def main() -> int:
         "selection_note": (
             "All main-table external baselines participate in selection. Safe is ranked by high absolute OC-RAP closed-loop quality with safety guards; "
             "Near/Contact are ranked by robust multi-baseline relative effects and the reviewer-facing comparator is the per-scene hardest baseline. "
-            "For Contact, current test_contact is a counterfactual contact-surrogate cohort, so selection uses generic physical recovery/overlap/penetration/stability metrics rather than fabricated post-contact anchors. "
+            "For Contact, publication inputs use the shared treatment-independent exact-a0 observed-contact anchor cohort; selection uses generic physical recovery/overlap/penetration/stability metrics on that paired cohort. "
             "Selection is post-hoc qualitative evidence and does not replace population-level tables."
         ),
         "max_selected_tier_rank": args.max_selected_tier_rank,
