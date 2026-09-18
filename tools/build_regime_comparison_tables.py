@@ -170,7 +170,9 @@ def main() -> int:
     ap.add_argument("--allow-unpaired", action="store_true", help="Do not fail when scene journals exist but target sets differ.")
     ap.add_argument("--allow-unanchored-contact", action="store_true", help="Diagnostic compatibility only. Publication Contact comparison requires one shared pre-treatment observed-contact anchor manifest.")
     ap.add_argument("--latency-input", action="append", default=[], metavar="METHOD=RESULT.json", help="Optional isolated-latency artifact for one method; metrics still come from --input.")
+    ap.add_argument("--omit-latency", action="store_true", help="Omit latency from the table when no isolated publication-latency rerun is available; never substitute throughput timing silently.")
     args = ap.parse_args()
+    metric_schema = [x for x in SCHEMA[args.regime] if not (args.omit_latency and x[0] == "decision_latency_ms")]
 
     latency_docs: dict[str, tuple[Path, dict[str, Any]]] = {}
     for spec in args.latency_input:
@@ -351,7 +353,7 @@ def main() -> int:
             "source_result": str(path),
             "source_latency_result": str(latency_source[0]) if latency_source else None,
         }
-        for key, _, _ in SCHEMA[args.regime]:
+        for key, _, _ in metric_schema:
             row[key] = _get(latency_source[1], key) if key == "decision_latency_ms" and latency_source else _get(doc, key)
         rows.append(row)
 
@@ -383,16 +385,16 @@ def main() -> int:
         "contact_post_metrics_fully_paired": contact_post_metrics_fully_paired,
         "post_contact_metric_eligibility_by_method": contact_eligibility,
         "publication_metric_coverage_by_method": coverage_by_method,
-        "metrics": [{"key": k, "label": label, "kind": kind} for k, label, kind in SCHEMA[args.regime]],
+        "metrics": [{"key": k, "label": label, "kind": kind} for k, label, kind in metric_schema],
         "rows": rows,
     }
     (args.output_dir / f"{stem}.json").write_text(json.dumps(json_doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
-    fields = ["method", "reporting_name", "implementation_kind", "fidelity", "source_result", "source_latency_result"] + [x[0] for x in SCHEMA[args.regime]]
+    fields = ["method", "reporting_name", "implementation_kind", "fidelity", "source_result", "source_latency_result"] + [x[0] for x in metric_schema]
     with (args.output_dir / f"{stem}.csv").open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fields); w.writeheader(); w.writerows([{k: r.get(k) for k in fields} for r in rows])
 
-    headers = ["Method"] + [x[1] for x in SCHEMA[args.regime]]
+    headers = ["Method"] + [x[1] for x in metric_schema]
     lines = ["# " + args.regime.capitalize() + " regime comparison", "", f"Paired target set: **{paired}**" + (f" ({paired_count} scenes)" if paired_count is not None else ""), ""]
     if args.regime == "contact":
         if not args.allow_unanchored_contact:
@@ -409,7 +411,7 @@ def main() -> int:
         lines += ["> The main Near table uses deployable physical closed-loop metrics. Exact teacher-label FRA/DRS/ODG audits are optional diagnostics and are not mixed into the runtime comparison.", ""]
     lines += ["| " + " | ".join(headers) + " |", "|" + "---|" * len(headers)]
     for r in rows:
-        cells = [str(r["reporting_name"])] + [_format(r.get(k), kind) for k, _, kind in SCHEMA[args.regime]]
+        cells = [str(r["reporting_name"])] + [_format(r.get(k), kind) for k, _, kind in metric_schema]
         lines.append("| " + " | ".join(cells) + " |")
     (args.output_dir / f"{stem}.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(json.dumps({"event": "regime_comparison_table", "regime": args.regime, "methods": len(rows), "paired": paired, "output_dir": str(args.output_dir)}))

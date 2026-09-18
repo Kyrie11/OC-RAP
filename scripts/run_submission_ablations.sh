@@ -29,6 +29,7 @@ OCRAP_ROOT="${OCRAP_ROOT:-/data0/senzeyu2/dataset/OCRAP}"
 WOMD_ROOT="${WOMD_ROOT:-/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example}"
 WOMD_NUM_SHARDS="${WOMD_NUM_SHARDS:-150}"
 BUCKET_SPLIT="${BUCKET_SPLIT:-test}"
+WOMD_ROLE="${WOMD_ROLE:-validation}"
 SAFE_BUCKET="${SAFE_BUCKET:-$OCRAP_ROOT/test_safe}"
 NEAR_BUCKET="${NEAR_BUCKET:-$OCRAP_ROOT/test_near_contact}"
 CONTACT_BUCKET="${CONTACT_BUCKET:-$OCRAP_ROOT/test_contact}"
@@ -38,6 +39,12 @@ MAX_SCENARIOS="${MAX_SCENARIOS:-0}"
 MAX_STEPS="${MAX_STEPS:-40}"
 NUM_CANDIDATES="${NUM_CANDIDATES:-24}"
 NUM_RECOVERY_OPTIONS="${NUM_RECOVERY_OPTIONS:-12}"
+REPLAN_INTERVAL="${REPLAN_INTERVAL:-1}"
+METRIC_SEMANTICS_VERSION="${METRIC_SEMANTICS_VERSION:-publication_v55_signed_clearance_unclipped_v1}"
+CONTACT_ANCHOR_PRELUDE_MAX_STEPS="${CONTACT_ANCHOR_PRELUDE_MAX_STEPS:-60}"
+CONTACT_ANCHOR_PRELUDE_REPLAN_INTERVAL="${CONTACT_ANCHOR_PRELUDE_REPLAN_INTERVAL:-1}"
+CONTACT_ANCHOR_REQUIRE_FOUND="${CONTACT_ANCHOR_REQUIRE_FOUND:-true}"
+CONTACT_ANCHOR_MANIFEST_FILE="${CONTACT_ANCHOR_MANIFEST_FILE:-$TARGET_LOCK_CHARACTERIZATION_OUT/contact_anchor/contact_anchor_manifest.json}"
 # main = final frozen-stack functional ablations; supplementary adds active-set alignment.
 ABLATION_SET="${ABLATION_SET:-main}"
 ABLATIONS="${ABLATIONS:-}"
@@ -52,6 +59,12 @@ TABLE_OUT="${TABLE_OUT:-$OUT_ROOT/submission_tables}"
 PARTIAL_WRITE_EVERY_SCENES="${PARTIAL_WRITE_EVERY_SCENES:-64}"
 PROGRESS_EVERY_STEPS="${PROGRESS_EVERY_STEPS:-20}"
 PROFILE_TIMING="${PROFILE_TIMING:-true}"
+# Publication latency follows the same contract as the final characterization:
+# one process on one GPU, rerun after accuracy jobs complete.  Set false only
+# for diagnostics; paper tables then omit latency rather than mixing contracts.
+PROFILE_ISOLATED_LATENCY="${PROFILE_ISOLATED_LATENCY:-true}"
+LATENCY_ROOT="${LATENCY_ROOT:-$OUT_ROOT/latency_isolated}"
+LATENCY_WARMUP_DECISIONS="${LATENCY_WARMUP_DECISIONS:-3}"
 LABEL_MODE="${LABEL_MODE:-fast}"
 AUDIT_EVERY_N_STEPS="${AUDIT_EVERY_N_STEPS:-0}"
 
@@ -101,22 +114,73 @@ selected() {
 bool_true() { runtime_bool_true "$1"; }
 
 is_publication_artifact() {
-  local artifact="$1"
+  local artifact="$1" regime="$2" target_keys="$3" latency_contract="${4:-}"
   [[ -f "$artifact" ]] || return 1
-  python - "$artifact" <<'PY2' >/dev/null 2>&1
-import json, math, sys
-d=json.load(open(sys.argv[1],encoding="utf-8"))
-rc=d.get("runtime_contract",{}) or {}
-geom=rc.get("publication_geometry_metric","")
-if geom != "exact_oriented_box_signed_clearance+penetration+swept_sat_constant_velocity_ttc_v55":
-    raise SystemExit(1)
-if rc.get("publication_metrics_include_target_state_t0") is not True:
-    raise SystemExit(1)
-per=((d.get("timing",{}) or {}).get("per_decision_s",{}) or {})
-v=per.get("deployed_planner",None)
-if v is None or not math.isfinite(float(v)):
-    raise SystemExit(1)
+  local args=(
+    --output "$artifact" --regime "$regime" --target-keys-file "$target_keys"
+    --metric-semantics-version "$METRIC_SEMANTICS_VERSION"
+    --max-steps "$MAX_STEPS" --replan-interval "$REPLAN_INTERVAL"
+    --num-candidates "$NUM_CANDIDATES" --num-recovery-options "$NUM_RECOVERY_OPTIONS"
+    --womd-role "${WOMD_ROLE:-validation}" --require-finite-timing --quiet
+  )
+  if [[ "$regime" == contact ]]; then
+    args+=(--contact-anchor-manifest "$CONTACT_ANCHOR_MANIFEST_FILE")
+  fi
+  [[ -z "$latency_contract" ]] || args+=(--require-latency-contract "$latency_contract")
+  python tools/check_publication_closed_loop_artifact.py "${args[@]}"
+}
+
+archive_incompatible_complete_artifact() {
+  local run_dir="$1" artifact="$2"
+  [[ -f "$artifact" ]] || return 0
+  local stamp archive f
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  archive="$run_dir/incompatible_pre_publication_contract_$stamp"
+  mkdir -p "$archive"
+  for f in "$artifact" "$artifact.progress.json" "$artifact.partial" "$artifact.scenes.jsonl" "${artifact%.json}.log"; do
+    [[ -e "$f" ]] && mv "$f" "$archive/"
+  done
+  echo "[ARCHIVE] incompatible completed artifact moved to $archive"
+}
+
+archive_incompatible_partial_contact_if_needed() {
+  local run_dir="$1" artifact="$2" regime="$3"
+  [[ "$regime" == contact ]] || return 0
+  [[ -f "$artifact" ]] && return 0
+  local journal="$artifact.scenes.jsonl"
+  [[ -s "$journal" ]] || return 0
+  # A current-protocol Contact partial must already carry the frozen anchor
+  # identity on every completed scene. Old counterfactual-contact partials did
+  # not, so never feed them into a new anchored RESUME run.
+  if python - "$journal" <<'PY2'
+import json,sys
+p=sys.argv[1]
+seen=0
+with open(p,encoding='utf-8') as f:
+    for line in f:
+        if not line.strip():
+            continue
+        raw=json.loads(line); scene=raw.get('scene',raw) if isinstance(raw,dict) else None
+        if not isinstance(scene,dict):
+            continue
+        seen += 1
+        if scene.get('contact_anchor_protocol') != 'exact_a0_pretreatment_prelude_v1':
+            raise SystemExit(30)
+        if not scene.get('contact_anchor_fingerprint') or scene.get('contact_anchor_found') is not True:
+            raise SystemExit(30)
+raise SystemExit(0 if seen else 30)
 PY2
+  then
+    return 0
+  fi
+  local stamp archive f
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  archive="$run_dir/incompatible_pre_publication_contract_$stamp"
+  mkdir -p "$archive"
+  for f in "$artifact.progress.json" "$artifact.partial" "$artifact.scenes.jsonl" "${artifact%.json}.log"; do
+    [[ -e "$f" ]] && mv "$f" "$archive/"
+  done
+  echo "[ARCHIVE] incompatible pre-anchor Contact partial moved to $archive"
 }
 
 write_phase() {
@@ -178,6 +242,7 @@ GPUS=()
 for raw in "${_gpu_raw[@]}"; do g="$(echo "$raw" | xargs)"; [[ -n "$g" ]] && GPUS+=("$g"); done
 ((${#GPUS[@]})) || GPUS=(0)
 if ((${#GPUS[@]} > 2)); then GPUS=("${GPUS[0]}" "${GPUS[1]}"); fi
+LATENCY_GPU="${LATENCY_GPU:-${GPUS[0]}}"
 
 echo "[Ablation scheduler] GPUs=${GPUS[*]} variants=${CLEAN_VARIANTS[*]} set=$ABLATION_SET"
 echo "[Ablation contract] frozen checkpoint + frozen per-bucket gamma; LABEL_MODE=$LABEL_MODE; PROFILE_TIMING=$PROFILE_TIMING"
@@ -188,10 +253,41 @@ echo "[Ablation causal Full] native-certified reference=$NATIVE_FULL_REFERENCE_R
 SAFE_WOMD="$(runtime_resolve_bucket_womd_spec "$SAFE_BUCKET" "$BUCKET_SPLIT" "$WOMD_ROOT" "$WOMD_NUM_SHARDS" "${WOMD_ROLE:-validation}")"
 NEAR_WOMD="$(runtime_resolve_bucket_womd_spec "$NEAR_BUCKET" "$BUCKET_SPLIT" "$WOMD_ROOT" "$WOMD_NUM_SHARDS" "${WOMD_ROLE:-validation}")"
 CONTACT_WOMD="$(runtime_resolve_bucket_womd_spec "$CONTACT_BUCKET" "$BUCKET_SPLIT" "$WOMD_ROOT" "$WOMD_NUM_SHARDS" "${WOMD_ROLE:-validation}")"
-if [[ ! -s "$FINAL_TARGET_LOCK_ROOT/safe.json" || ! -s "$FINAL_TARGET_LOCK_ROOT/near.json" || ! -s "$FINAL_TARGET_LOCK_ROOT/contact.json" ]]; then
-  env BASE_OUT="$BASE_OUT" OCRAP_FINAL_CHARACTERIZATION_OUT="$TARGET_LOCK_CHARACTERIZATION_OUT" WOMD_ROLE="${WOMD_ROLE:-validation}" \
-    bash scripts/build_final_observation_legal_target_locks.sh
-fi
+# Re-run the same deterministic target-lock builder used by final
+# characterization. It reuses a matching Contact anchor manifest but rejects
+# stale horizon/source contracts. All ablation arms therefore consume exactly
+# the final publication cohort rather than a separately constructed cohort.
+env BASE_OUT="$BASE_OUT" OCRAP_FINAL_CHARACTERIZATION_OUT="$TARGET_LOCK_CHARACTERIZATION_OUT" \
+  WOMD_ROLE="${WOMD_ROLE:-validation}" FINAL_MAX_STEPS="$MAX_STEPS" \
+  CONTACT_ANCHOR_GPU="${CONTACT_ANCHOR_GPU:-${GPUS[0]}}" \
+  bash scripts/build_final_observation_legal_target_locks.sh
+for _r in safe near contact; do
+  [[ -s "$FINAL_TARGET_LOCK_ROOT/$_r.json" ]] || { echo "Missing final target lock: $FINAL_TARGET_LOCK_ROOT/$_r.json" >&2; exit 30; }
+done
+[[ -s "$CONTACT_ANCHOR_MANIFEST_FILE" ]] || { echo "Missing final Contact anchor manifest: $CONTACT_ANCHOR_MANIFEST_FILE" >&2; exit 30; }
+# Prove that contact.json, the anchor manifest and this run's treatment horizon
+# are one coherent frozen contract before any ablation job is queued.
+python - "$FINAL_TARGET_LOCK_ROOT/contact.json" "$CONTACT_ANCHOR_MANIFEST_FILE" "$MAX_STEPS" <<'PY2'
+import hashlib,json,pathlib,sys
+lock_p=pathlib.Path(sys.argv[1]); manifest_p=pathlib.Path(sys.argv[2]); max_steps=int(sys.argv[3])
+lock=json.loads(lock_p.read_text(encoding='utf-8')); manifest=json.loads(manifest_p.read_text(encoding='utf-8'))
+keys=set(lock.get('target_keys') or []); mkeys=set(manifest.get('target_keys') or [])
+cc=lock.get('contact_anchor_contract') or {}; sha=hashlib.sha256(manifest_p.read_bytes()).hexdigest()
+checks={
+ 'lock_schema': lock.get('schema')=='ocrap-observation-legal-contact-anchor-target-lock-v1',
+ 'protocol': cc.get('protocol')=='exact_a0_pretreatment_prelude_v1',
+ 'manifest_sha': cc.get('manifest_sha256')==sha,
+ 'fingerprint_required': cc.get('state_fingerprint_required') is True,
+ 'manifest_valid': manifest.get('valid') is True,
+ 'pre_treatment_policy': manifest.get('pre_treatment_policy')=='exact_a0',
+ 'target_keys_equal': bool(keys) and keys==mkeys,
+ 'scene_disjoint': int(manifest.get('num_selected_anchors') or 0)==int(manifest.get('num_selected_scenes') or -1)==len(keys),
+ 'full_horizon': int(manifest.get('min_post_steps') or 0)>=max_steps,
+}
+bad=[k for k,v in checks.items() if not v]
+if bad: raise SystemExit('invalid final Contact target/anchor contract: '+json.dumps({'failed':bad,'lock':str(lock_p),'manifest':str(manifest_p)}))
+print(json.dumps({'event':'ablation_contact_anchor_contract_verified','targets':len(keys),'manifest_sha256':sha,'min_post_steps':manifest.get('min_post_steps')}))
+PY2
 PREFLIGHT_ROOT="$OUT_ROOT/_shared_preflight_${RUN_TAG}"
 mkdir -p "$PREFLIGHT_ROOT"
 
@@ -311,31 +407,54 @@ run_claimed_job() {
   local run_dir="$root/$regime"
   local artifact="$run_dir/closed_loop_ocrap.json"
   local started="$(runtime_iso_now)" rc=0
+  local base_check=(--output "$artifact" --quiet --target-keys-file "$target_keys" --require-metric-semantics-version "$METRIC_SEMANTICS_VERSION")
+  local contact_anchor_env=()
+  if [[ "$regime" == contact ]]; then
+    contact_anchor_env=(
+      CONTACT_ANCHOR_PRELUDE_ENABLED=true
+      CONTACT_ANCHOR_PRELUDE_MAX_STEPS="$CONTACT_ANCHOR_PRELUDE_MAX_STEPS"
+      CONTACT_ANCHOR_PRELUDE_REPLAN_INTERVAL="$CONTACT_ANCHOR_PRELUDE_REPLAN_INTERVAL"
+      CONTACT_ANCHOR_REQUIRE_FOUND="$CONTACT_ANCHOR_REQUIRE_FOUND"
+      CONTACT_ANCHOR_MANIFEST_FILE="$CONTACT_ANCHOR_MANIFEST_FILE"
+    )
+  fi
 
-  if bool_true "$SKIP_COMPLETE" && python tools/check_closed_loop_artifact.py --output "$artifact" --quiet && is_publication_artifact "$artifact"; then
+  if bool_true "$SKIP_COMPLETE" && python tools/check_closed_loop_artifact.py "${base_check[@]}" && is_publication_artifact "$artifact" "$regime" "$target_keys"; then
     echo "[REUSE] gpu=$gpu arm=$arm variant=$variant regime=$regime"
     write_phase "$root" "$regime" complete 0 "$started" "$(runtime_iso_now)"
     mv "$jf" "$QUEUE_ROOT/done/$(basename "$jf")"
     return 0
+  fi
+  # Do not resume an old counterfactual-Contact partial under the new exact-a0
+  # anchor protocol. Current-protocol partials remain resumable and the runner
+  # still verifies its full result-affecting fingerprint.
+  archive_incompatible_partial_contact_if_needed "$run_dir" "$artifact" "$regime"
+  # A completed pre-fix artifact must not be fed into resume.
+  if [[ -f "$artifact" ]] && ! is_publication_artifact "$artifact" "$regime" "$target_keys"; then
+    archive_incompatible_complete_artifact "$run_dir" "$artifact"
   fi
 
   echo "[RUN] gpu=$gpu arm=$arm variant=$variant regime=$regime -> $artifact"
   write_phase "$root" "$regime" running 0 "$started" ""
   if env \
       RUN_DIR="$run_dir" OUTPUT="$artifact" \
-      WOMD_VAL="$womd" WOMD_NUM_SHARDS="$WOMD_NUM_SHARDS" \
+      WOMD_VAL="$womd" WOMD_NUM_SHARDS="$WOMD_NUM_SHARDS" EXPECTED_WOMD_ROLE="$WOMD_ROLE" \
       CHECKPOINT="$checkpoint" GAMMA_REC="$gamma" GPU="$gpu" \
-      MAX_SCENARIOS="$MAX_SCENARIOS" MAX_STEPS="$MAX_STEPS" \
+      MAX_SCENARIOS="$MAX_SCENARIOS" MAX_STEPS="$MAX_STEPS" REPLAN_INTERVAL="$REPLAN_INTERVAL" \
+      METRIC_SEMANTICS_VERSION="$METRIC_SEMANTICS_VERSION" \
       LABEL_MODE="$LABEL_MODE" AUDIT_EVERY_N_STEPS="$AUDIT_EVERY_N_STEPS" \
       NUM_CANDIDATES="$NUM_CANDIDATES" NUM_RECOVERY_OPTIONS="$NUM_RECOVERY_OPTIONS" \
       BUCKET_DATASET="$bucket" BUCKET_SPLIT="$BUCKET_SPLIT" MAX_TARGETS_PER_SCENE=1 \
       TARGET_KEYS_FILE="$target_keys" REQUIRE_TARGET_KEYS=true \
+      USE_SDC_PATHS=true REQUIRE_OBSERVATION_LEGAL_ROUTE=true \
+      ALLOW_LOGGED_SDC_ROUTE_FALLBACK=false ALLOW_FUTURE_ROUTE_PROXY=false \
       CONFIG="$config" RENDER_TRACE=false SAVE_PARTIAL=true RESUME=true RESUME_FORCE=false \
       PROFILE_TIMING="$PROFILE_TIMING" PREFLIGHT_SUPPORT_JSON="$preflight" \
       JAX_CACHE_DIR="$OUT_ROOT/.jax_compilation_cache/gpu${gpu}" \
       PARTIAL_WRITE_EVERY_SCENES="$PARTIAL_WRITE_EVERY_SCENES" PROGRESS_EVERY_STEPS="$PROGRESS_EVERY_STEPS" \
+      "${contact_anchor_env[@]}" \
       bash scripts/run_ocrap_closed_loop.sh; then
-    if python tools/check_closed_loop_artifact.py --output "$artifact" --quiet && is_publication_artifact "$artifact"; then rc=0; else rc=91; fi
+    if python tools/check_closed_loop_artifact.py "${base_check[@]}" && is_publication_artifact "$artifact" "$regime" "$target_keys"; then rc=0; else rc=91; fi
   else
     rc=$?
   fi
@@ -374,11 +493,14 @@ for root in "${ROOTS_TO_FINALIZE[@]}"; do
 done
 
 # Record the execution/scientific contract next to the original manifest.
-python - "$OUT_ROOT/ablation_execution_contract.json" "$RUN_TAG" "$LABEL_MODE" "$PROFILE_TIMING" "$failed_count" "$CUDA_DEVICES" "$ABLATION_RUN_ID" "$NATIVE_FULL_REFERENCE_ROOT" "$FULL_RUN_ROOT" <<'PY'
-import json,sys,datetime
-out,tag,label,profile,failed,gpus,run_id,native_full_root,historical_full_root=sys.argv[1:]
+python - "$OUT_ROOT/ablation_execution_contract.json" "$RUN_TAG" "$LABEL_MODE" "$PROFILE_TIMING" "$failed_count" "$CUDA_DEVICES" "$ABLATION_RUN_ID" "$NATIVE_FULL_REFERENCE_ROOT" "$FULL_RUN_ROOT" "$METRIC_SEMANTICS_VERSION" "$FINAL_TARGET_LOCK_ROOT" "$CONTACT_ANCHOR_MANIFEST_FILE" "$PROFILE_ISOLATED_LATENCY" "$LATENCY_ROOT" <<'PY'
+import hashlib,json,sys,datetime,pathlib
+(out,tag,label,profile,failed,gpus,run_id,native_full_root,historical_full_root,
+ metric_semantics,target_lock_root,contact_manifest,isolated_latency,latency_root)=sys.argv[1:]
+mp=pathlib.Path(contact_manifest)
+manifest_sha=hashlib.sha256(mp.read_bytes()).hexdigest() if mp.is_file() else None
 doc={
-  'schema_version': 2,
+  'schema_version': 3,
   'tag': tag,
   'run_instance_id': run_id,
   'created_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -388,11 +510,20 @@ doc={
   'native_recovery_certification': 'enabled before OC-MERO for Full and every submission ablation arm',
   'native_full_reference_root': native_full_root,
   'historical_full_run_root_not_used_for_causal_tables': historical_full_root,
-  'metric_contract': 'v55 exact publication geometry, t0 included, missing metrics not zero-filled',
-  'latency_contract': 'state_history + candidate_features + policy_selection only; teacher/audit/Waymax bookkeeping excluded',
+  'metric_semantics_version': metric_semantics,
+  'metric_contract': 'v55 exact signed OBB clearance/penetration + swept-SAT CV TTC, t0 included, left-endpoint duration/AUC support, missing metrics fail closed',
+  'target_lock_root': target_lock_root,
+  'contact_anchor_protocol': 'exact_a0_pretreatment_prelude_v1',
+  'contact_anchor_manifest': contact_manifest,
+  'contact_anchor_manifest_sha256': manifest_sha,
+  'accuracy_timing_is_diagnostic_only': True,
+  'publication_latency_enabled': isolated_latency.lower() in {'1','true','yes','on'},
+  'publication_latency_root': latency_root if isolated_latency.lower() in {'1','true','yes','on'} else None,
+  'publication_latency_execution_contract': 'isolated_single_process_single_gpu' if isolated_latency.lower() in {'1','true','yes','on'} else 'omitted',
+  'latency_scope': 'state_history + candidate_features + policy_selection only; teacher/audit/Waymax bookkeeping excluded',
   'label_mode': label,
   'profile_timing': profile.lower() in {'1','true','yes','on'},
-  'scheduler': 'dynamic shared queue, one closed-loop process per GPU',
+  'scheduler': 'dynamic shared queue, one closed-loop process per GPU for accuracy; isolated serial single-GPU post-pass for publication latency',
   'cuda_devices': gpus,
   'failed_job_count': int(failed),
   'interpretation_notes': {
@@ -402,7 +533,8 @@ doc={
     'without_obs_or_tail': 'changes OC-MERO inference aggregation while retaining frozen learned heads/representation',
     'no_rifa_absolute_admission': 'removes the absolute deployable-recovery admission predicate while retaining hard/harm feasibility and frozen scoring',
     'no_nominal_abstention': 'keeps absolute admission but re-enables the legacy recovery-first fallback when no candidate is admitted',
-    'target_cohort': 'all arms use the same method-independent observation-legal target lock as the final full model',
+    'target_cohort': 'all arms use the exact final method-independent observation-legal target locks; Contact additionally reproduces the same frozen actual-contact state fingerprint per target',
+    'causal_full_reference': 'the fresh _native_full_reference has native_recovery_certification enabled; historical FULL_RUN_ROOT is provenance only and is not a one-factor causal reference for physical-semantic knockouts',
   },
 }
 open(out,'w',encoding='utf-8').write(json.dumps(doc,ensure_ascii=False,indent=2)+'\n')
@@ -414,22 +546,187 @@ if [[ "$failed_count" != 0 ]]; then
 fi
 rm -rf "$QUEUE_ROOT"
 
+# Publication latency is measured with the same execution contract as the final
+# characterization. Accuracy workers above may run concurrently on two GPUs;
+# those inline timings are useful diagnostics but are never substituted for the
+# isolated latency column in a paper table.
+run_isolated_latency_one() {
+  local arm="$1" variant="$2" regime="$3" config="$4" checkpoint="$5" gamma="$6" womd="$7" bucket="$8" preflight="$9" target_keys="${10}"
+  local run_dir="$LATENCY_ROOT/$arm/$variant/$regime"
+  local artifact="$run_dir/closed_loop_ocrap.json"
+  local contact_anchor_env=()
+  if [[ "$regime" == contact ]]; then
+    contact_anchor_env=(
+      CONTACT_ANCHOR_PRELUDE_ENABLED=true
+      CONTACT_ANCHOR_PRELUDE_MAX_STEPS="$CONTACT_ANCHOR_PRELUDE_MAX_STEPS"
+      CONTACT_ANCHOR_PRELUDE_REPLAN_INTERVAL="$CONTACT_ANCHOR_PRELUDE_REPLAN_INTERVAL"
+      CONTACT_ANCHOR_REQUIRE_FOUND="$CONTACT_ANCHOR_REQUIRE_FOUND"
+      CONTACT_ANCHOR_MANIFEST_FILE="$CONTACT_ANCHOR_MANIFEST_FILE"
+    )
+  fi
+  mkdir -p "$run_dir" "$LATENCY_ROOT/.jax_compilation_cache/gpu${LATENCY_GPU}"
+  local base_check=(--output "$artifact" --quiet --target-keys-file "$target_keys" --require-metric-semantics-version "$METRIC_SEMANTICS_VERSION" --require-latency-contract isolated_single_process_single_gpu)
+  if bool_true "$SKIP_COMPLETE" && python tools/check_closed_loop_artifact.py "${base_check[@]}" && is_publication_artifact "$artifact" "$regime" "$target_keys" isolated_single_process_single_gpu; then
+    echo "[LATENCY REUSE] gpu=$LATENCY_GPU arm=$arm variant=$variant regime=$regime"
+    return 0
+  fi
+  archive_incompatible_partial_contact_if_needed "$run_dir" "$artifact" "$regime"
+  if [[ -f "$artifact" ]] && ! is_publication_artifact "$artifact" "$regime" "$target_keys" isolated_single_process_single_gpu; then
+    archive_incompatible_complete_artifact "$run_dir" "$artifact"
+  fi
+  echo "[LATENCY RUN] gpu=$LATENCY_GPU arm=$arm variant=$variant regime=$regime -> $artifact"
+  env \
+    RUN_DIR="$run_dir" OUTPUT="$artifact" \
+    WOMD_VAL="$womd" WOMD_NUM_SHARDS="$WOMD_NUM_SHARDS" EXPECTED_WOMD_ROLE="$WOMD_ROLE" \
+    CHECKPOINT="$checkpoint" GAMMA_REC="$gamma" GPU="$LATENCY_GPU" \
+    MAX_SCENARIOS="$MAX_SCENARIOS" MAX_STEPS="$MAX_STEPS" REPLAN_INTERVAL="$REPLAN_INTERVAL" \
+    METRIC_SEMANTICS_VERSION="$METRIC_SEMANTICS_VERSION" \
+    LABEL_MODE="$LABEL_MODE" AUDIT_EVERY_N_STEPS="$AUDIT_EVERY_N_STEPS" \
+    NUM_CANDIDATES="$NUM_CANDIDATES" NUM_RECOVERY_OPTIONS="$NUM_RECOVERY_OPTIONS" \
+    BUCKET_DATASET="$bucket" BUCKET_SPLIT="$BUCKET_SPLIT" MAX_TARGETS_PER_SCENE=1 \
+    TARGET_KEYS_FILE="$target_keys" REQUIRE_TARGET_KEYS=true \
+    USE_SDC_PATHS=true REQUIRE_OBSERVATION_LEGAL_ROUTE=true \
+    ALLOW_LOGGED_SDC_ROUTE_FALLBACK=false ALLOW_FUTURE_ROUTE_PROXY=false \
+    CONFIG="$config" RENDER_TRACE=false SAVE_PARTIAL=true RESUME=true RESUME_FORCE=false \
+    PROFILE_TIMING=true LATENCY_EXECUTION_CONTRACT=isolated_single_process_single_gpu \
+    LATENCY_WARMUP_DECISIONS="$LATENCY_WARMUP_DECISIONS" PREFLIGHT_SUPPORT_JSON="$preflight" \
+    JAX_CACHE_DIR="$LATENCY_ROOT/.jax_compilation_cache/gpu${LATENCY_GPU}" \
+    PARTIAL_WRITE_EVERY_SCENES="$PARTIAL_WRITE_EVERY_SCENES" PROGRESS_EVERY_STEPS="$PROGRESS_EVERY_STEPS" \
+    "${contact_anchor_env[@]}" \
+    bash scripts/run_ocrap_closed_loop.sh
+  python tools/check_closed_loop_artifact.py "${base_check[@]}"
+  is_publication_artifact "$artifact" "$regime" "$target_keys" isolated_single_process_single_gpu
+}
+
+if bool_true "$PROFILE_ISOLATED_LATENCY"; then
+  echo "[Ablation latency] isolated single-process/single-GPU profiling on GPU $LATENCY_GPU"
+  mkdir -p "$LATENCY_ROOT"
+  for variant in "${CLEAN_VARIANTS[@]}"; do
+    IFS=$'\t' read -r checkpoint gamma_json < <(variant_paths "$variant")
+    read -r gamma_safe gamma_near gamma_contact < <(read_gammas "$gamma_json")
+    for regime in safe near contact; do
+      case "$regime" in
+        safe) gamma="$gamma_safe"; womd="$SAFE_WOMD"; bucket="$SAFE_BUCKET" ;;
+        near) gamma="$gamma_near"; womd="$NEAR_WOMD"; bucket="$NEAR_BUCKET" ;;
+        contact) gamma="$gamma_contact"; womd="$CONTACT_WOMD"; bucket="$CONTACT_BUCKET" ;;
+      esac
+      run_isolated_latency_one "_native_full_reference" "$variant" "$regime" "$NATIVE_FULL_REFERENCE_CONFIG" "$checkpoint" "$gamma" "$womd" "$bucket" "$PREFLIGHT_ROOT/$regime.closed_loop_dataset_support.json" "$FINAL_TARGET_LOCK_ROOT/$regime.json"
+    done
+    for spec in "${SELECTED_SPECS[@]}"; do
+      IFS='|' read -r arm config run_safe run_near run_contact tier description <<< "$spec"
+      for regime in safe near contact; do
+        case "$regime" in
+          safe) enabled="$run_safe"; gamma="$gamma_safe"; womd="$SAFE_WOMD"; bucket="$SAFE_BUCKET" ;;
+          near) enabled="$run_near"; gamma="$gamma_near"; womd="$NEAR_WOMD"; bucket="$NEAR_BUCKET" ;;
+          contact) enabled="$run_contact"; gamma="$gamma_contact"; womd="$CONTACT_WOMD"; bucket="$CONTACT_BUCKET" ;;
+        esac
+        [[ "$enabled" == 1 ]] || continue
+        run_isolated_latency_one "$arm" "$variant" "$regime" "$config" "$checkpoint" "$gamma" "$womd" "$bucket" "$PREFLIGHT_ROOT/$regime.closed_loop_dataset_support.json" "$FINAL_TARGET_LOCK_ROOT/$regime.json"
+      done
+    done
+  done
+fi
+
+# One final fail-closed sweep over every selected paper-facing artifact. This
+# prevents a table from silently dropping a selected arm or accepting a file
+# whose per-scene Contact anchor identity changed after the worker completed.
+publication_artifact_count=0
+verify_ablation_publication_artifact() {
+  local arm="$1" variant="$2" regime="$3"
+  local acc_root artifact target_keys latency_artifact
+  if [[ "$arm" == "_native_full_reference" ]]; then
+    acc_root="$NATIVE_FULL_REFERENCE_ROOT/$variant"
+  else
+    acc_root="$OUT_ROOT/$arm/$variant"
+  fi
+  artifact="$acc_root/$regime/closed_loop_ocrap.json"
+  target_keys="$FINAL_TARGET_LOCK_ROOT/$regime.json"
+  is_publication_artifact "$artifact" "$regime" "$target_keys" || {
+    echo "Publication ablation audit failed: arm=$arm variant=$variant regime=$regime artifact=$artifact" >&2
+    return 30
+  }
+  publication_artifact_count=$((publication_artifact_count+1))
+  if bool_true "$PROFILE_ISOLATED_LATENCY"; then
+    latency_artifact="$LATENCY_ROOT/$arm/$variant/$regime/closed_loop_ocrap.json"
+    is_publication_artifact "$latency_artifact" "$regime" "$target_keys" isolated_single_process_single_gpu || {
+      echo "Publication ablation latency audit failed: arm=$arm variant=$variant regime=$regime artifact=$latency_artifact" >&2
+      return 30
+    }
+  fi
+}
+for variant in "${CLEAN_VARIANTS[@]}"; do
+  for regime in safe near contact; do
+    verify_ablation_publication_artifact "_native_full_reference" "$variant" "$regime"
+  done
+  for spec in "${SELECTED_SPECS[@]}"; do
+    IFS='|' read -r arm config run_safe run_near run_contact tier description <<< "$spec"
+    for regime in safe near contact; do
+      case "$regime" in
+        safe) enabled="$run_safe" ;;
+        near) enabled="$run_near" ;;
+        contact) enabled="$run_contact" ;;
+      esac
+      [[ "$enabled" == 1 ]] || continue
+      verify_ablation_publication_artifact "$arm" "$variant" "$regime"
+    done
+  done
+done
+python - "$OUT_ROOT/ablation_metric_fairness_audit.json" "$publication_artifact_count" "$PROFILE_ISOLATED_LATENCY" "$METRIC_SEMANTICS_VERSION" "$CONTACT_ANCHOR_MANIFEST_FILE" <<'PY'
+import hashlib,json,pathlib,sys,datetime
+out,count,latency,metric,manifest=sys.argv[1:]
+mp=pathlib.Path(manifest)
+doc={
+  'schema_version': 1,
+  'valid': True,
+  'verified_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+  'accuracy_artifact_count': int(count),
+  'isolated_latency_artifacts_verified': latency.lower() in {'1','true','yes','on'},
+  'metric_semantics_version': metric,
+  'contact_anchor_protocol': 'exact_a0_pretreatment_prelude_v1',
+  'contact_anchor_manifest': manifest,
+  'contact_anchor_manifest_sha256': hashlib.sha256(mp.read_bytes()).hexdigest(),
+  'checks': [
+    'exact frozen target-key set',
+    'evaluation-contract equality to final publication semantics',
+    'complete clearance/TTC/overlap/offroad coverage',
+    'observation-legal route contract',
+    'Contact exact-a0 manifest and per-scene state fingerprint reproduction',
+    '100% observed-contact and post-contact eligibility for Contact',
+    'isolated single-process/single-GPU latency contract when enabled',
+  ],
+}
+pathlib.Path(out).write_text(json.dumps(doc,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+PY
+
 # Paper tables are built only against the fresh native-certified Full reference
 # produced by this launcher, paired on the same immutable target keys.
 if bool_true "$BUILD_TABLES"; then
   full_ready=1
   for variant in "${CLEAN_VARIANTS[@]}"; do
     for regime in safe near contact; do
-      if ! python tools/check_closed_loop_artifact.py --output "$NATIVE_FULL_REFERENCE_ROOT/$variant/$regime/closed_loop_ocrap.json" --quiet || ! is_publication_artifact "$NATIVE_FULL_REFERENCE_ROOT/$variant/$regime/closed_loop_ocrap.json"; then
+      artifact="$NATIVE_FULL_REFERENCE_ROOT/$variant/$regime/closed_loop_ocrap.json"
+      target_keys="$FINAL_TARGET_LOCK_ROOT/$regime.json"
+      if ! python tools/check_closed_loop_artifact.py --output "$artifact" --quiet --target-keys-file "$target_keys" --require-metric-semantics-version "$METRIC_SEMANTICS_VERSION" || ! is_publication_artifact "$artifact" "$regime" "$target_keys"; then
         full_ready=0
+      fi
+      if bool_true "$PROFILE_ISOLATED_LATENCY"; then
+        latency_artifact="$LATENCY_ROOT/_native_full_reference/$variant/$regime/closed_loop_ocrap.json"
+        if ! is_publication_artifact "$latency_artifact" "$regime" "$target_keys" isolated_single_process_single_gpu; then
+          full_ready=0
+        fi
       fi
     done
   done
   if ((full_ready)); then
     tier="$ABLATION_SET"; [[ "$tier" == main || "$tier" == all ]] || tier=all
-    python tools/build_submission_ablation_tables.py \
-      --full-run "$NATIVE_FULL_REFERENCE_ROOT" --ablation-root "$OUT_ROOT" \
+    table_args=(
+      --full-run "$NATIVE_FULL_REFERENCE_ROOT" --ablation-root "$OUT_ROOT"
       --variants "$VARIANTS" --tier "$tier" --output-dir "$TABLE_OUT"
+    )
+    if bool_true "$PROFILE_ISOLATED_LATENCY"; then
+      table_args+=(--latency-root "$LATENCY_ROOT")
+    fi
+    python tools/build_submission_ablation_tables.py "${table_args[@]}"
   else
     echo "[WARN] Full three-regime OC-RAP artifacts are not all complete under $NATIVE_FULL_REFERENCE_ROOT; skip paired ablation tables for now." >&2
   fi

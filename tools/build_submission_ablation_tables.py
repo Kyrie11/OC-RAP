@@ -21,11 +21,27 @@ def require(path: Path, what: str) -> Path:
     return path
 
 
-def build_one(regime: str, out: Path, entries: list[tuple[str,Path]], allow_unpaired: bool) -> None:
+def build_one(
+    regime: str,
+    out: Path,
+    entries: list[tuple[str, Path]],
+    allow_unpaired: bool,
+    latency_entries: list[tuple[str, Path]] | None,
+) -> None:
     script = Path(__file__).with_name("build_regime_comparison_tables.py")
     cmd=[sys.executable,str(script),"--regime",regime,"--output-dir",str(out)]
-    for name,path in entries: cmd += ["--input",f"{name}={path}"]
-    if allow_unpaired: cmd.append("--allow-unpaired")
+    for name,path in entries:
+        cmd += ["--input",f"{name}={path}"]
+    if latency_entries is None:
+        # Throughput timing from the two-GPU accuracy scheduler is not the same
+        # contract as final publication latency.  Omit it rather than mixing
+        # incomparable timing in an otherwise fair ablation table.
+        cmd.append("--omit-latency")
+    else:
+        for name,path in latency_entries:
+            cmd += ["--latency-input",f"{name}={path}"]
+    if allow_unpaired:
+        cmd.append("--allow-unpaired")
     subprocess.run(cmd,check=True)
 
 
@@ -36,10 +52,19 @@ def main() -> int:
     ap.add_argument("--variants",default="balanced,precision")
     ap.add_argument("--tier",choices=("main","all"),default="main")
     ap.add_argument("--output-dir",type=Path,required=True)
+    ap.add_argument("--latency-root",type=Path,default=None,help="Optional mirrored isolated-latency root. If absent, latency is omitted rather than read from throughput accuracy runs.")
     ap.add_argument("--allow-unpaired",action="store_true",help="diagnostic only; paper tables should be paired")
     args=ap.parse_args(); variants=[x.strip() for x in args.variants.split(',') if x.strip()]
     args.output_dir.mkdir(parents=True,exist_ok=True)
-    manifest={"schema_version":1,"full_run":str(args.full_run),"ablation_root":str(args.ablation_root),"tier":args.tier,"tables":[]}
+    manifest={
+        "schema_version":2,
+        "full_run":str(args.full_run),
+        "ablation_root":str(args.ablation_root),
+        "latency_root":str(args.latency_root) if args.latency_root is not None else None,
+        "latency_contract":"isolated_single_process_single_gpu" if args.latency_root is not None else "omitted_no_isolated_artifact",
+        "tier":args.tier,
+        "tables":[],
+    }
     # Regime-selection matrix is useful even before every long closed-loop run is done.
     with (args.output_dir/"ablation_matrix.csv").open("w",newline="",encoding="utf-8") as f:
         w=csv.writer(f); w.writerow(["arm","reporting_name","tier","safe","near","contact"])
@@ -54,15 +79,30 @@ def main() -> int:
         for regime in ("safe","near","contact"):
             full=require(args.full_run/variant/regime/"closed_loop_ocrap.json",f"Full {variant}/{regime}")
             entries=[("Full OC-RAP",full)]
+            latency_entries: list[tuple[str, Path]] | None = None
+            if args.latency_root is not None:
+                latency_entries=[(
+                    "Full OC-RAP",
+                    require(args.latency_root/"_native_full_reference"/variant/regime/"closed_loop_ocrap.json",f"Full isolated latency {variant}/{regime}"),
+                )]
             for arm,(label,regimes,tier) in ARM_META.items():
-                if regime not in regimes or (args.tier=="main" and tier!="main"): continue
+                if regime not in regimes or (args.tier=="main" and tier!="main"):
+                    continue
                 p=args.ablation_root/arm/variant/regime/"closed_loop_ocrap.json"
-                if p.is_file(): entries.append((label,p))
+                if p.is_file():
+                    entries.append((label,p))
+                    if latency_entries is not None:
+                        lp=require(args.latency_root/arm/variant/regime/"closed_loop_ocrap.json",f"isolated latency {arm} {variant}/{regime}")
+                        latency_entries.append((label,lp))
             if len(entries)==1:
                 continue
             out=args.output_dir/variant/regime
-            build_one(regime,out,entries,args.allow_unpaired)
-            manifest["tables"].append({"variant":variant,"regime":regime,"rows":[n for n,_ in entries],"markdown":str(out/f"{regime}_comparison.md")})
+            build_one(regime,out,entries,args.allow_unpaired,latency_entries)
+            manifest["tables"].append({
+                "variant":variant,"regime":regime,"rows":[n for n,_ in entries],
+                "isolated_latency":latency_entries is not None,
+                "markdown":str(out/f"{regime}_comparison.md"),
+            })
     (args.output_dir/"submission_ablation_tables.json").write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
     print(json.dumps({"event":"submission_ablation_tables","tables":len(manifest["tables"]),"output_dir":str(args.output_dir)},ensure_ascii=False))
     return 0
