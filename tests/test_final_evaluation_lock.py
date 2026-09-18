@@ -117,3 +117,19 @@ def test_final_ablation_launcher_uses_current_main_and_common_target_locks():
     assert "no_rifa_absolute_admission" in text
     assert "FINAL_TARGET_LOCK_ROOT" in text
     assert '--target-keys-file "$keyfile"' in text
+
+
+def test_one_command_ocrap_final_wrapper_preserves_legacy_output_roots_and_contracts() -> None:
+    wrapper = (ROOT / "scripts/run_final_ocrap_evaluation.sh").read_text()
+    assert 'BUILD_TARGET_LOCKS=true PROFILE_LATENCY=true' in wrapper
+    assert 'OCRAP_FINAL_CHARACTERIZATION_OUT="${OCRAP_FINAL_CHARACTERIZATION_OUT:-$BASE_OUT/ocrap_v48_124_final_characterization}"' in wrapper
+    assert 'OCRAP_LATENCY_OUT="${OCRAP_LATENCY_OUT:-$BASE_OUT/ocrap_v48_124_latency_isolated}"' in wrapper
+    assert 'run_final_locked_three_regime_characterization.sh' in wrapper
+
+
+def test_final_characterization_profiles_latency_to_legacy_standalone_root_by_default() -> None:
+    text = (ROOT / "scripts/run_final_locked_three_regime_characterization.sh").read_text()
+    assert 'BUILD_TARGET_LOCKS="${BUILD_TARGET_LOCKS:-true}"' in text
+    assert 'OCRAP_LATENCY_OUT="${OCRAP_LATENCY_OUT:-$BASE_OUT/ocrap_v48_124_latency_isolated}"' in text
+    assert 'OCRAP_LATENCY_OUT="$OCRAP_LATENCY_OUT"' in text
+    assert "latency_path=latency_root/'LATENCY_INDEX.json'" in text

@@ -21,7 +21,9 @@ MAX_SCENARIOS="${MAX_SCENARIOS:-0}"
 MAX_STEPS="${MAX_STEPS:-40}"
 RUN_NOMINAL="${RUN_NOMINAL:-1}"
 PROFILE_LATENCY="${PROFILE_LATENCY:-true}"
+BUILD_TARGET_LOCKS="${BUILD_TARGET_LOCKS:-true}"
 LATENCY_GPU="${LATENCY_GPU:-$GPU0}"
+OCRAP_LATENCY_OUT="${OCRAP_LATENCY_OUT:-$BASE_OUT/ocrap_v48_124_latency_isolated}"
 METRIC_SEMANTICS_VERSION="${METRIC_SEMANTICS_VERSION:-publication_v55_signed_clearance_unclipped_v1}"
 
 [[ -s "$TERMINAL_CLOSURE" ]] || { echo "missing terminal closure: $TERMINAL_CLOSURE" >&2; exit 30; }
@@ -36,8 +38,15 @@ mkdir -p "$OUT/ocrap/balanced" "$OUT/ocrap/precision" "$OUT/nominal" "$OUT/targe
 # Freeze the method-independent observation-legal cohort before launching any
 # planner. This makes external baselines runnable in parallel with OC-RAP and
 # prevents a malformed WOMD sdc_paths record from aborting the full suite.
-env BASE_OUT="$BASE_OUT" OCRAP_FINAL_CHARACTERIZATION_OUT="$OUT" WOMD_ROLE="$WOMD_ROLE" FINAL_MAX_STEPS="$MAX_STEPS" \
-  bash scripts/build_final_observation_legal_target_locks.sh
+if [[ "${BUILD_TARGET_LOCKS,,}" == true || "${BUILD_TARGET_LOCKS,,}" == 1 || "${BUILD_TARGET_LOCKS,,}" == yes ]]; then
+  env BASE_OUT="$BASE_OUT" OCRAP_FINAL_CHARACTERIZATION_OUT="$OUT" WOMD_ROLE="$WOMD_ROLE" FINAL_MAX_STEPS="$MAX_STEPS" \
+    bash scripts/build_final_observation_legal_target_locks.sh
+else
+  for regime in safe near contact; do
+    [[ -s "$OUT/target_keys/$regime.json" ]] || { echo "missing target lock with BUILD_TARGET_LOCKS=false: $OUT/target_keys/$regime.json" >&2; exit 30; }
+  done
+  [[ -s "$OUT/contact_anchor/contact_anchor_manifest.json" ]] || { echo "missing Contact anchor manifest with BUILD_TARGET_LOCKS=false: $OUT/contact_anchor/contact_anchor_manifest.json" >&2; exit 30; }
+fi
 
 run_variant() {
   local variant="$1" gpu="$2"
@@ -82,7 +91,7 @@ fi
 
 if [[ "${PROFILE_LATENCY,,}" == true || "${PROFILE_LATENCY,,}" == 1 || "${PROFILE_LATENCY,,}" == yes ]]; then
   env BASE_OUT="$BASE_OUT" MODEL_RUN="$MODEL_RUN" OCRAP_FINAL_CHARACTERIZATION_OUT="$OUT" \
-    OCRAP_LATENCY_OUT="$OUT/latency_isolated" LATENCY_GPU="$LATENCY_GPU" WOMD_ROLE="$WOMD_ROLE" \
+    OCRAP_LATENCY_OUT="$OCRAP_LATENCY_OUT" LATENCY_GPU="$LATENCY_GPU" WOMD_ROLE="$WOMD_ROLE" \
     MAX_STEPS="$MAX_STEPS" METRIC_SEMANTICS_VERSION="$METRIC_SEMANTICS_VERSION" \
     CONTACT_ANCHOR_MANIFEST_FILE="$OUT/contact_anchor/contact_anchor_manifest.json" \
     bash scripts/profile_ocrap_latency.sh all
@@ -102,9 +111,9 @@ for regime in safe near contact; do
     --observed "$OUT/paired_target_keys/$regime.json"
 done
 
-python - "$LOCK_JSON" "$OUT" <<'PY'
+python - "$LOCK_JSON" "$OUT" "$OCRAP_LATENCY_OUT" <<'PY'
 import hashlib,json,pathlib,sys
-lock=pathlib.Path(sys.argv[1]); root=pathlib.Path(sys.argv[2])
+lock=pathlib.Path(sys.argv[1]); root=pathlib.Path(sys.argv[2]); latency_root=pathlib.Path(sys.argv[3])
 def rec(p):
     p=pathlib.Path(p); return {'path':str(p.resolve()),'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'size':p.stat().st_size}
 rows={}
@@ -118,7 +127,7 @@ for regime in ('safe','near','contact'):
     if p.is_file(): nom[regime]=rec(p)
 keys={r:rec(root/'target_keys'/f'{r}.json') for r in ('safe','near','contact')}
 anchor_path=root/'contact_anchor'/'contact_anchor_manifest.json'
-latency_path=root/'latency_isolated'/'LATENCY_INDEX.json'
+latency_path=latency_root/'LATENCY_INDEX.json'
 out={
  'schema':'ocrap-v48.124.10.7.4-final-characterization-index-v1',
  'status':'FINAL_LOCKED_CHARACTERIZATION_COMPLETE',

@@ -2,6 +2,15 @@
 
 V48.124.10.7.2 closed internal mechanism search, V48.124.10.7.3 locked the submitted Main for final reporting, and V48.124.10.7.4 repaired method-independent observation-legal target eligibility. V48.124.10.7.5 still does **not** change the OC-RAP planner. It closes three final-baseline engineering gaps: `--max-scenarios 0` now reaches the low-level regime launchers as the full frozen cohort rather than silently reverting to 50 scenes; completed artifacts are accepted only when their scene journal exactly matches the frozen target-key lock; and publication latency is measured for OC-RAP and every baseline under the same isolated single-process/single-GPU contract and exact target set. It also repairs native validation for Diffusion Planner and Flow Planner and retains the FP32 GameFormer-lite training fix.
 
+For a clean OC-RAP rerun, the three historical OC-RAP steps can now be executed with one command. This wrapper preserves the existing final accuracy root and the existing standalone latency root used by the comparison-table builder:
+
+```bash
+GPU0=0 GPU1=1 LATENCY_GPU=0 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+  bash scripts/run_final_ocrap_evaluation.sh
+```
+
+It performs target-lock/Contact-anchor construction, final three-regime characterization, and isolated latency profiling in that order. The historical commands below remain supported individually.
+
 Build the method-independent observation-legal target locks first. This step is cheap compared with closed-loop rollout and can be run before OC-RAP or any baseline:
 
 ```bash
