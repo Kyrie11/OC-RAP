@@ -110,7 +110,9 @@ def test_submission_configs_enable_one_common_native_full_stack() -> None:
 def test_ablation_launcher_is_two_gpu_dynamic_and_builds_fresh_full_reference() -> None:
     text = (ROOT / "scripts/run_submission_ablations.sh").read_text()
     assert '--run-id "$ABLATION_RUN_ID"' in text
-    assert 'worker "$gpu" &' in text
+    assert 'worker "$gpu" "$slot" &' in text
+    assert 'WORKERS_PER_GPU="${WORKERS_PER_GPU:-2}"' in text
+    assert 'PROFILE_ISOLATED_LATENCY="${PROFILE_ISOLATED_LATENCY:-true}"' in text
     assert 'if ((${#GPUS[@]} > 2)); then' in text
     assert '_native_full_reference' in text
     assert '--full-run "$NATIVE_FULL_REFERENCE_ROOT"' in text

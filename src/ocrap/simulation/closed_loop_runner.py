@@ -619,7 +619,28 @@ def _current_timestep(state: Any) -> int:
         return 0
 
 
-def _state_geometry_metrics(state: Any, sdc: int, *, publication_exact: bool = True) -> dict[str, float]:
+def _state_trajectory_frame(state: Any) -> tuple:
+    """Read the immutable current trajectory frame once for reporting consumers.
+
+    Only a per-step, local value is shared: nothing is retained across Waymax
+    states, scenarios or worker processes.  The order, precision and shape of
+    the nine original ``_as_np`` conversions are deliberately unchanged.
+    """
+    tr = state.sim_trajectory
+    t = _current_timestep(state)
+    return (
+        t,
+        _as_np(tr.x)[:, t], _as_np(tr.y)[:, t],
+        _as_np(tr.vel_x)[:, t], _as_np(tr.vel_y)[:, t],
+        _as_np(tr.yaw)[:, t], _as_np(tr.length)[:, t],
+        _as_np(tr.width)[:, t], _as_np(tr.height)[:, t],
+        _as_np(tr.valid)[:, t].astype(bool),
+    )
+
+
+def _state_geometry_metrics(
+    state: Any, sdc: int, *, publication_exact: bool = True, _frame: tuple | None = None
+) -> dict[str, float]:
     """Current-step physical margins used to interpret near/contact behavior.
 
     The paper defines near-contact using clearance/TTC, but earlier closed-loop
@@ -627,17 +648,9 @@ def _state_geometry_metrics(state: Any, sdc: int, *, publication_exact: bool = T
     claim observable at execution time without changing the planner inputs.
     """
     try:
-        tr = state.sim_trajectory
-        t = _current_timestep(state)
-        x = _as_np(tr.x)[:, t]
-        y = _as_np(tr.y)[:, t]
-        vx = _as_np(tr.vel_x)[:, t]
-        vy = _as_np(tr.vel_y)[:, t]
-        yaw = _as_np(tr.yaw)[:, t]
-        length = _as_np(tr.length)[:, t]
-        width = _as_np(tr.width)[:, t]
-        height = _as_np(tr.height)[:, t]
-        valid = _as_np(tr.valid)[:, t].astype(bool)
+        _, x, y, vx, vy, yaw, length, width, height, valid = (
+            _state_trajectory_frame(state) if _frame is None else _frame
+        )
         if sdc < 0 or sdc >= len(x) or not bool(valid[sdc]):
             return {}
         ego_box = np.asarray([x[sdc], y[sdc], vx[sdc], vy[sdc], yaw[sdc], length[sdc], width[sdc], height[sdc], 1.0], dtype=np.float32)
@@ -676,7 +689,7 @@ def _state_geometry_metrics(state: Any, sdc: int, *, publication_exact: bool = T
         return {}
 
 
-def _overlapping_object_indices(state: Any, sdc: int) -> set[int]:
+def _overlapping_object_indices(state: Any, sdc: int, *, _frame: tuple | None = None) -> set[int]:
     """Return stable Waymax object-slot indices whose OBB overlaps the SDC.
 
     Slot indices are stable within a Waymax scenario.  Tracking them lets the
@@ -684,17 +697,9 @@ def _overlapping_object_indices(state: Any, sdc: int) -> set[int]:
     episode with the same partner; the old implementation conflated the two.
     """
     try:
-        tr = state.sim_trajectory
-        t = _current_timestep(state)
-        x = _as_np(tr.x)[:, t]
-        y = _as_np(tr.y)[:, t]
-        vx = _as_np(tr.vel_x)[:, t]
-        vy = _as_np(tr.vel_y)[:, t]
-        yaw = _as_np(tr.yaw)[:, t]
-        length = _as_np(tr.length)[:, t]
-        width = _as_np(tr.width)[:, t]
-        height = _as_np(tr.height)[:, t]
-        valid = _as_np(tr.valid)[:, t].astype(bool)
+        _, x, y, vx, vy, yaw, length, width, height, valid = (
+            _state_trajectory_frame(state) if _frame is None else _frame
+        )
         if sdc < 0 or sdc >= len(x) or not bool(valid[sdc]):
             return set()
         ego = np.asarray(
@@ -1629,8 +1634,12 @@ def _rollout_one_scene(
     # started only after the first executed control, which could miss the very
     # low-clearance/contact state the regime selector had chosen as t=0.
     initial_metrics = _metric_summary(wx_env, state, sdc)
-    initial_metrics.update(_state_geometry_metrics(state, sdc))
-    overlap_object_trace: list[set[int]] = [_overlapping_object_indices(state, sdc)]
+    try:
+        initial_frame = _state_trajectory_frame(state)
+    except Exception:
+        initial_frame = None
+    initial_metrics.update(_state_geometry_metrics(state, sdc, _frame=initial_frame))
+    overlap_object_trace: list[set[int]] = [_overlapping_object_indices(state, sdc, _frame=initial_frame)]
     try:
         initial_tr = state.sim_trajectory
         initial_tt = _current_timestep(state)
@@ -2563,13 +2572,20 @@ def _rollout_one_scene(
             action = _bicycle_action(int(state.num_objects), sdc, float(ctrl[0]), float(ctrl[1]), float(cfg.get("wheelbase_m", 2.8)))
             state = wx_env.step(state, action)
             metrics_after = _metric_summary(wx_env, state, sdc)
-            metrics_after.update(_state_geometry_metrics(state, sdc))
-            metric_trace.append(metrics_after)
-            overlap_object_trace.append(_overlapping_object_indices(state, sdc))
             try:
-                tr = state.sim_trajectory
-                tt = _current_timestep(state)
-                state_xy_trace.append([float(_as_np(tr.x)[sdc, tt]), float(_as_np(tr.y)[sdc, tt])])
+                reporting_frame = _state_trajectory_frame(state)
+            except Exception:
+                reporting_frame = None
+            metrics_after.update(_state_geometry_metrics(state, sdc, _frame=reporting_frame))
+            metric_trace.append(metrics_after)
+            overlap_object_trace.append(_overlapping_object_indices(state, sdc, _frame=reporting_frame))
+            try:
+                if reporting_frame is not None:
+                    state_xy_trace.append([float(reporting_frame[1][sdc]), float(reporting_frame[2][sdc])])
+                else:
+                    tr = state.sim_trajectory
+                    tt = _current_timestep(state)
+                    state_xy_trace.append([float(_as_np(tr.x)[sdc, tt]), float(_as_np(tr.y)[sdc, tt])])
             except Exception:
                 pass
             if render_trace_enabled:

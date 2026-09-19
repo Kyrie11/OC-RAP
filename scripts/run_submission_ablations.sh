@@ -4,7 +4,7 @@
 # Key properties:
 #   * publication metrics come from the v55 exact OBB/TTC/penetration closed-loop core;
 #   * latency is observation -> deployable action selection only (profile_timing remains on);
-#   * one independent closed-loop worker is bound to each GPU; workers dynamically claim jobs;
+#   * independently isolated accuracy workers dynamically claim jobs; adjustable workers/GPU;
 #   * immutable bucket/WOMD provenance is preflighted once per regime and reused safely;
 #   * checkpoint and per-bucket gamma calibration stay frozen for every functional knockout.
 set -Eeuo pipefail
@@ -25,6 +25,14 @@ OUT_ROOT="${OUT_ROOT:-$BASE_OUT/ocrap_v48_124_final_ablations}"
 FULL_RUN_ROOT="${FULL_RUN_ROOT:-$BASE_OUT/ocrap_v48_124_final_characterization/ocrap}"
 VARIANTS="${VARIANTS:-balanced,precision}"
 CUDA_DEVICES="${CUDA_DEVICES:-${GPU0:-0},${GPU1:-1}}"
+# Accuracy throughput only. Independent process-per-job workers may share a GPU;
+# no checkpoint, RNG, target set or result is shared between processes. Set 1
+# for legacy behavior or increase after measuring *total* jobs/hour. Isolated
+# publication latency below deliberately remains serial and uncontended.
+WORKERS_PER_GPU="${WORKERS_PER_GPU:-2}"
+[[ "$WORKERS_PER_GPU" =~ ^[1-9][0-9]*$ ]] && ((WORKERS_PER_GPU <= 64)) || {
+  echo "WORKERS_PER_GPU must be an integer in [1,64]" >&2; exit 2;
+}
 OCRAP_ROOT="${OCRAP_ROOT:-/data0/senzeyu2/dataset/OCRAP}"
 WOMD_ROOT="${WOMD_ROOT:-/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example}"
 WOMD_NUM_SHARDS="${WOMD_NUM_SHARDS:-150}"
@@ -236,8 +244,8 @@ for raw in "${variants[@]}"; do
 done
 ((${#CLEAN_VARIANTS[@]})) || { echo "No variants selected." >&2; exit 2; }
 
-# Use at most two physical workers by default, exactly matching the requested
-# two-GPU execution.  One process owns one GPU at a time: no unsafe sharing.
+# Use at most two physical devices as in the original experiment. The number
+# of independent accuracy processes per device is separately configurable.
 IFS=',' read -r -a _gpu_raw <<< "$CUDA_DEVICES"
 GPUS=()
 for raw in "${_gpu_raw[@]}"; do g="$(echo "$raw" | xargs)"; [[ -n "$g" ]] && GPUS+=("$g"); done
@@ -354,7 +362,10 @@ for variant in "${CLEAN_VARIANTS[@]}"; do
       near) gamma="$gamma_near"; womd="$NEAR_WOMD"; bucket="$NEAR_BUCKET" ;;
       contact) gamma="$gamma_contact"; womd="$CONTACT_WOMD"; bucket="$CONTACT_BUCKET" ;;
     esac
-    job_id=$((job_id+1)); jf="$QUEUE_ROOT/pending/$(printf '%04d' "$job_id").job"
+    # Long Contact jobs are claimed first to reduce the final slow-job tail.
+    # Job contents and per-scene ordering are untouched.
+    case "$regime" in contact) priority=0 ;; near) priority=1 ;; safe) priority=2 ;; esac
+    job_id=$((job_id+1)); jf="$QUEUE_ROOT/pending/${priority}.$(printf '%04d' "$job_id").job"
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
       "_native_full_reference" "$variant" "$regime" "$NATIVE_FULL_REFERENCE_CONFIG" "$checkpoint" "$gamma" "$womd" "$bucket" "$PREFLIGHT_ROOT/$regime.closed_loop_dataset_support.json" "$FINAL_TARGET_LOCK_ROOT/$regime.json" > "$jf"
   done
@@ -380,7 +391,8 @@ for variant in "${CLEAN_VARIANTS[@]}"; do
         contact) enabled="$run_contact"; gamma="$gamma_contact"; womd="$CONTACT_WOMD"; bucket="$CONTACT_BUCKET" ;;
       esac
       [[ "$enabled" == 1 ]] || continue
-      job_id=$((job_id+1)); jf="$QUEUE_ROOT/pending/$(printf '%04d' "$job_id").job"
+      case "$regime" in contact) priority=0 ;; near) priority=1 ;; safe) priority=2 ;; esac
+      job_id=$((job_id+1)); jf="$QUEUE_ROOT/pending/${priority}.$(printf '%04d' "$job_id").job"
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$arm" "$variant" "$regime" "$config" "$checkpoint" "$gamma" "$womd" "$bucket" "$PREFLIGHT_ROOT/$regime.closed_loop_dataset_support.json" "$FINAL_TARGET_LOCK_ROOT/$regime.json" > "$jf"
     done
@@ -388,19 +400,19 @@ for variant in "${CLEAN_VARIANTS[@]}"; do
   done
 done
 
-echo "[Ablation scheduler] queued regime jobs=$job_id; concurrency=${#GPUS[@]} (one job per GPU)"
+echo "[Ablation scheduler] queued regime jobs=$job_id; GPUs=${#GPUS[@]}; accuracy workers/GPU=$WORKERS_PER_GPU; total processes up to $(( ${#GPUS[@]} * WORKERS_PER_GPU ))"
 
 claim_job() {
-  local gpu="$1" lock="$QUEUE_ROOT/.claim_lock" f base claimed
+  local gpu="$1" slot="$2" lock="$QUEUE_ROOT/.claim_lock" f base claimed
   while ! mkdir "$lock" 2>/dev/null; do sleep 0.05; done
   f="$(find "$QUEUE_ROOT/pending" -maxdepth 1 -type f -name '*.job' -print | LC_ALL=C sort | head -n 1 || true)"
   if [[ -z "$f" ]]; then rmdir "$lock"; return 1; fi
-  base="$(basename "$f")"; claimed="$QUEUE_ROOT/running/${base%.job}.gpu${gpu}.job"
+  base="$(basename "$f")"; claimed="$QUEUE_ROOT/running/${base%.job}.gpu${gpu}.slot${slot}.job"
   mv "$f" "$claimed"; rmdir "$lock"; printf '%s\n' "$claimed"
 }
 
 run_claimed_job() {
-  local gpu="$1" jf="$2"
+  local gpu="$1" slot="$2" jf="$3"
   local arm variant regime config checkpoint gamma womd bucket preflight target_keys
   IFS=$'\t' read -r arm variant regime config checkpoint gamma womd bucket preflight target_keys < "$jf"
   # Same nounset rule as preflight_one(): initialize dependent locals in order.
@@ -440,7 +452,7 @@ run_claimed_job() {
     archive_incompatible_complete_artifact "$run_dir" "$artifact"
   fi
 
-  echo "[RUN] gpu=$gpu arm=$arm variant=$variant regime=$regime -> $artifact"
+  echo "[RUN] gpu=$gpu slot=$slot arm=$arm variant=$variant regime=$regime -> $artifact"
   write_phase "$root" "$regime" running 0 "$started" ""
   if env \
       RUN_DIR="$run_dir" OUTPUT="$artifact" \
@@ -456,7 +468,7 @@ run_claimed_job() {
       ALLOW_LOGGED_SDC_ROUTE_FALLBACK=false ALLOW_FUTURE_ROUTE_PROXY=false \
       CONFIG="$config" RENDER_TRACE=false SAVE_PARTIAL=true RESUME=true RESUME_FORCE=false \
       PROFILE_TIMING="$PROFILE_TIMING" PREFLIGHT_SUPPORT_JSON="$preflight" \
-      JAX_CACHE_DIR="$OUT_ROOT/.jax_compilation_cache/gpu${gpu}" \
+      JAX_CACHE_DIR="$OUT_ROOT/.jax_compilation_cache/gpu${gpu}/slot${slot}" \
       PARTIAL_WRITE_EVERY_SCENES="$PARTIAL_WRITE_EVERY_SCENES" PROGRESS_EVERY_STEPS="$PROGRESS_EVERY_STEPS" \
       "${contact_anchor_env[@]}" \
       bash scripts/run_ocrap_closed_loop.sh; then
@@ -468,25 +480,29 @@ run_claimed_job() {
   if ((rc==0)); then
     write_phase "$root" "$regime" complete 0 "$started" "$(runtime_iso_now)"
     mv "$jf" "$QUEUE_ROOT/done/$(basename "$jf")"
-    echo "[DONE] gpu=$gpu arm=$arm variant=$variant regime=$regime"
+    echo "[DONE] gpu=$gpu slot=$slot arm=$arm variant=$variant regime=$regime"
     return 0
   fi
   write_phase "$root" "$regime" failed "$rc" "$started" "$(runtime_iso_now)"
   mv "$jf" "$QUEUE_ROOT/failed/$(basename "$jf")"
-  echo "[FAILED] gpu=$gpu arm=$arm variant=$variant regime=$regime rc=$rc" >&2
+  echo "[FAILED] gpu=$gpu slot=$slot arm=$arm variant=$variant regime=$regime rc=$rc" >&2
   return 0  # keep this GPU worker alive to finish the remaining independent jobs
 }
 
 worker() {
-  local gpu="$1" jf
-  mkdir -p "$OUT_ROOT/.jax_compilation_cache/gpu${gpu}"
-  while jf="$(claim_job "$gpu")"; do
-    run_claimed_job "$gpu" "$jf"
+  local gpu="$1" slot="$2" jf
+  mkdir -p "$OUT_ROOT/.jax_compilation_cache/gpu${gpu}/slot${slot}"
+  while jf="$(claim_job "$gpu" "$slot")"; do
+    run_claimed_job "$gpu" "$slot" "$jf"
   done
 }
 
 PIDS=()
-for gpu in "${GPUS[@]}"; do worker "$gpu" & PIDS+=("$!"); done
+for gpu in "${GPUS[@]}"; do
+  for ((slot=0; slot<WORKERS_PER_GPU; slot++)); do
+    worker "$gpu" "$slot" & PIDS+=("$!")
+  done
+done
 for p in "${PIDS[@]}"; do wait "$p"; done
 
 failed_count="$(find "$QUEUE_ROOT/failed" -maxdepth 1 -type f -name '*.job' | wc -l | xargs)"
@@ -499,10 +515,10 @@ for root in "${ROOTS_TO_FINALIZE[@]}"; do
 done
 
 # Record the execution/scientific contract next to the original manifest.
-python - "$OUT_ROOT/ablation_execution_contract.json" "$RUN_TAG" "$LABEL_MODE" "$PROFILE_TIMING" "$failed_count" "$CUDA_DEVICES" "$ABLATION_RUN_ID" "$NATIVE_FULL_REFERENCE_ROOT" "$FULL_RUN_ROOT" "$METRIC_SEMANTICS_VERSION" "$FINAL_TARGET_LOCK_ROOT" "$CONTACT_ANCHOR_MANIFEST_FILE" "$PROFILE_ISOLATED_LATENCY" "$LATENCY_ROOT" <<'PY'
+python - "$OUT_ROOT/ablation_execution_contract.json" "$RUN_TAG" "$LABEL_MODE" "$PROFILE_TIMING" "$failed_count" "$CUDA_DEVICES" "$ABLATION_RUN_ID" "$NATIVE_FULL_REFERENCE_ROOT" "$FULL_RUN_ROOT" "$METRIC_SEMANTICS_VERSION" "$FINAL_TARGET_LOCK_ROOT" "$CONTACT_ANCHOR_MANIFEST_FILE" "$PROFILE_ISOLATED_LATENCY" "$LATENCY_ROOT" "$WORKERS_PER_GPU" <<'PY'
 import hashlib,json,sys,datetime,pathlib
 (out,tag,label,profile,failed,gpus,run_id,native_full_root,historical_full_root,
- metric_semantics,target_lock_root,contact_manifest,isolated_latency,latency_root)=sys.argv[1:]
+ metric_semantics,target_lock_root,contact_manifest,isolated_latency,latency_root,workers_per_gpu)=sys.argv[1:]
 mp=pathlib.Path(contact_manifest)
 manifest_sha=hashlib.sha256(mp.read_bytes()).hexdigest() if mp.is_file() else None
 doc={
@@ -529,8 +545,9 @@ doc={
   'latency_scope': 'state_history + candidate_features + policy_selection only; teacher/audit/Waymax bookkeeping excluded',
   'label_mode': label,
   'profile_timing': profile.lower() in {'1','true','yes','on'},
-  'scheduler': 'dynamic shared queue, one closed-loop process per GPU for accuracy; isolated serial single-GPU post-pass for publication latency',
+  'scheduler': 'dynamic shared queue, configurable independent closed-loop processes per GPU for accuracy; isolated serial single-GPU post-pass for publication latency',
   'cuda_devices': gpus,
+  'accuracy_workers_per_gpu': int(workers_per_gpu),
   'failed_job_count': int(failed),
   'interpretation_notes': {
     'no_actuator_projection': 're-rolls executable recovery without actuator-envelope projection and restores the post-hoc control barrier before OC-MERO',
@@ -545,6 +562,14 @@ doc={
 }
 open(out,'w',encoding='utf-8').write(json.dumps(doc,ensure_ascii=False,indent=2)+'\n')
 PY
+
+# Timing-only postprocessing: reads already committed artifacts; it never
+# changes the experiment data or blocks independent worker execution.
+python tools/analyze_ablation_bottlenecks.py --root "$OUT_ROOT" \
+  --full-root "$NATIVE_FULL_REFERENCE_ROOT" \
+  --output "$OUT_ROOT/ablation_bottlenecks.csv" || {
+    echo "[WARN] Post-hoc timing analysis unavailable (accuracy results are untouched)" >&2
+  }
 
 if [[ "$failed_count" != 0 ]]; then
   echo "Ablation workers finished with $failed_count failed regime job(s). Queue retained at: $QUEUE_ROOT" >&2
@@ -632,6 +657,18 @@ if bool_true "$PROFILE_ISOLATED_LATENCY"; then
     done
   done
 fi
+
+# Refresh read-only report now that isolated latency artifacts are available.
+# Never include stale latency files when the user disabled latency profiling.
+latency_report_args=()
+if bool_true "$PROFILE_ISOLATED_LATENCY"; then
+  latency_report_args=(--latency-root "$LATENCY_ROOT")
+fi
+python tools/analyze_ablation_bottlenecks.py --root "$OUT_ROOT" \
+  --full-root "$NATIVE_FULL_REFERENCE_ROOT" "${latency_report_args[@]}" \
+  --output "$OUT_ROOT/ablation_bottlenecks.csv" || {
+    echo "[WARN] Final timing analysis unavailable (results are untouched)" >&2
+  }
 
 # One final fail-closed sweep over every selected paper-facing artifact. This
 # prevents a table from silently dropping a selected arm or accepting a file
