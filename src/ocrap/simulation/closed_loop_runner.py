@@ -2809,6 +2809,16 @@ def _rollout_one_scene(
         yaw_rate = np.diff(yaw_unwrapped) / metric_dt_s
         metric_summary["yaw_rate_p95"] = float(np.quantile(np.abs(yaw_rate), 0.95)) if yaw_rate.size else 0.0
         metric_summary["yaw_rate_max_abs"] = float(np.max(np.abs(yaw_rate))) if yaw_rate.size else 0.0
+    # The rollout contains N executed intervals and therefore N+1 sampled
+    # states (target t=0 plus one post-step state per interval).  Define these
+    # support counts before *any* state-coverage metric uses them.  A previous
+    # refactor defined expected_state_count only below the overlap/off-road
+    # coverage block, which raised UnboundLocalError for every method reaching
+    # this common closed-loop aggregation path.
+    metric_steps = int(len(metric_trace))
+    expected_interval_count = int(metric_steps)
+    expected_state_count = int(metric_steps + 1)
+
     overlap_state_all = [float(initial_metrics.get("overlap", float("nan")))] + [
         float(m.get("overlap", float("nan"))) for m in metric_trace
     ]
@@ -2839,7 +2849,6 @@ def _rollout_one_scene(
         return episodes, longest
     overlap_flags_with_initial = [initial_overlap] + overlap_flags
     overlap_episode_count = int(sum(flag and (i == 0 or not overlap_flags_with_initial[i - 1]) for i, flag in enumerate(overlap_flags_with_initial)))
-    metric_steps = int(len(metric_trace))
     # Duration/rate metrics represent the N executed intervals [t_i,t_{i+1}).
     # Use the N left-endpoint states, i.e. include target t=0 and exclude the
     # terminal state, instead of silently dropping the target state or counting
@@ -2863,8 +2872,6 @@ def _rollout_one_scene(
     # geometry/Waymax observation disappeared.  Record complete t0..tN state
     # coverage (and the t0..tN-1 interval support used by durations/AUCs); the
     # final table builder fails closed unless every compared scene is complete.
-    expected_interval_count = int(metric_steps)
-    expected_state_count = int(metric_steps + 1)
     metric_summary["clearance_metric_interval_coverage"] = float(len(clearance_exposure_vals) / max(expected_interval_count, 1)) if expected_interval_count > 0 else float("nan")
     metric_summary["ttc_metric_interval_coverage"] = float(len(ttc_exposure_vals) / max(expected_interval_count, 1)) if expected_interval_count > 0 else float("nan")
     metric_summary["clearance_metric_full_coverage"] = float(expected_state_count > 0 and len([x for x in clearance_state_all if np.isfinite(x)]) == expected_state_count)
