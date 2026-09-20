@@ -334,6 +334,161 @@ def _prefix_compatibility_matrix(
     return compatible
 
 
+class _CandidatePrefixGeometryCache:
+    """Per-replan cache for candidate prefix geometry and non-anticipativity.
+
+    MARC, RACP and robust scenario MPC repeatedly compare the same small
+    executable candidate lattice at different branch/tie steps.  The legacy
+    implementation rebuilt/resampled all candidate states (and, for scenario
+    MPC, controls) and recomputed the full ``N x N x T`` pairwise tensor for
+    every query.  This cache performs those candidate-only operations once and
+    answers compatible-prefix queries by indexing cumulative pairwise maxima.
+
+    The fast path is deliberately conservative: it is used only when all
+    candidates have equal native horizon.  Mixed/short horizons fall back to
+    :func:`_prefix_compatibility_matrix`, preserving its resampling semantics.
+    """
+
+    def __init__(self, samples: list[dict[str, Any]]):
+        self.samples = samples
+        self.n = len(samples)
+        self._xy_native = [_candidate_xy(d) for d in samples]
+        self._u_native: list[np.ndarray] | None = None
+        self._xy_stack: np.ndarray | None = None
+        self._xy_prefix_max: np.ndarray | None = None
+        self._u_prefix_max: np.ndarray | None = None
+        self._compat_cache: dict[tuple[int, float, float | None, float | None], np.ndarray] = {}
+        self._xy_resampled: dict[int, np.ndarray] = {}
+        self._pair_resampled: dict[int, np.ndarray] = {}
+
+        lengths = {int(x.shape[0]) for x in self._xy_native}
+        if self.n and len(lengths) == 1:
+            self.native_horizon = int(next(iter(lengths)))
+            self._xy_stack = np.stack(self._xy_native, axis=0)
+        else:
+            self.native_horizon = None
+
+    def _ensure_xy_prefix_max(self) -> np.ndarray | None:
+        if self._xy_stack is None:
+            return None
+        if self._xy_prefix_max is None:
+            dxy = np.linalg.norm(
+                self._xy_stack[:, None, :, :] - self._xy_stack[None, :, :, :],
+                axis=-1,
+            )
+            self._xy_prefix_max = np.maximum.accumulate(dxy, axis=2)
+        return self._xy_prefix_max
+
+    def _ensure_u_prefix_max(self) -> np.ndarray | None:
+        if self.native_horizon is None:
+            return None
+        if self._u_prefix_max is not None:
+            return self._u_prefix_max
+        if self._u_native is None:
+            self._u_native = [_candidate_controls(d) for d in self.samples]
+        lengths = {int(u.shape[0]) for u in self._u_native}
+        if len(lengths) != 1 or int(next(iter(lengths))) != int(self.native_horizon):
+            return None
+        u = np.stack(self._u_native, axis=0)
+        du = np.abs(u[:, None, :, :] - u[None, :, :, :])
+        self._u_prefix_max = np.maximum.accumulate(du, axis=2)
+        return self._u_prefix_max
+
+    def compatibility(
+        self,
+        branch_step: int,
+        *,
+        state_threshold_m: float,
+        accel_tolerance_mps2: float | None = None,
+        steer_tolerance_rad: float | None = None,
+    ) -> np.ndarray:
+        key = (
+            int(branch_step),
+            float(state_threshold_m),
+            None if accel_tolerance_mps2 is None else float(accel_tolerance_mps2),
+            None if steer_tolerance_rad is None else float(steer_tolerance_rad),
+        )
+        cached = self._compat_cache.get(key)
+        if cached is not None:
+            return cached
+
+        step = max(int(branch_step), 0)
+        xy_prefix = self._ensure_xy_prefix_max()
+        # Legacy behavior resamples candidates when the requested prefix is
+        # longer than their native horizon; do not approximate that case.
+        if xy_prefix is None or self.native_horizon is None or step >= self.native_horizon:
+            compatible = _prefix_compatibility_matrix(
+                self.samples,
+                branch_step,
+                state_threshold_m=state_threshold_m,
+                accel_tolerance_mps2=accel_tolerance_mps2,
+                steer_tolerance_rad=steer_tolerance_rad,
+            )
+            self._compat_cache[key] = compatible
+            return compatible
+
+        compatible = xy_prefix[:, :, step] <= float(state_threshold_m)
+        if accel_tolerance_mps2 is not None or steer_tolerance_rad is not None:
+            u_prefix = self._ensure_u_prefix_max()
+            if u_prefix is None or step >= u_prefix.shape[2]:
+                compatible = _prefix_compatibility_matrix(
+                    self.samples,
+                    branch_step,
+                    state_threshold_m=state_threshold_m,
+                    accel_tolerance_mps2=accel_tolerance_mps2,
+                    steer_tolerance_rad=steer_tolerance_rad,
+                )
+                self._compat_cache[key] = compatible
+                return compatible
+            if accel_tolerance_mps2 is not None:
+                compatible &= u_prefix[:, :, step, 0] <= float(accel_tolerance_mps2)
+            if steer_tolerance_rad is not None:
+                compatible &= u_prefix[:, :, step, 1] <= float(steer_tolerance_rad)
+        compatible = np.asarray(compatible, dtype=bool)
+        np.fill_diagonal(compatible, True)
+        self._compat_cache[key] = compatible
+        return compatible
+
+    def resampled_xy(self, horizon: int) -> np.ndarray:
+        horizon = max(int(horizon), 1)
+        cached = self._xy_resampled.get(horizon)
+        if cached is not None:
+            return cached
+        if self._xy_stack is not None and self._xy_stack.shape[1] == horizon:
+            xy = self._xy_stack
+        else:
+            xy = np.stack([_candidate_xy(d, count=horizon) for d in self.samples], axis=0)
+        self._xy_resampled[horizon] = xy
+        return xy
+
+    def pairwise_xy_distance(self, horizon: int) -> np.ndarray:
+        horizon = max(int(horizon), 1)
+        cached = self._pair_resampled.get(horizon)
+        if cached is not None:
+            return cached
+        xy = self.resampled_xy(horizon)
+        pair = np.linalg.norm(xy[:, None, :, :] - xy[None, :, :, :], axis=-1)
+        self._pair_resampled[horizon] = pair
+        return pair
+
+    def latest_divergence_branch_step(
+        self,
+        candidate_ids: list[int],
+        *,
+        horizon: int,
+        threshold_m: float,
+        max_fraction: float,
+    ) -> int:
+        if horizon <= 1 or len(candidate_ids) <= 1:
+            return 0
+        ids = np.asarray(candidate_ids, dtype=int)
+        pair = self.pairwise_xy_distance(horizon)[np.ix_(ids, ids, np.arange(horizon))]
+        divergence = np.max(pair, axis=(0, 1))
+        cap = int(np.clip(round(float(max_fraction) * (horizon - 1)), 0, horizon - 1))
+        ok = np.where(divergence[: cap + 1] < float(threshold_m))[0]
+        return int(ok[-1]) if ok.size else 0
+
+
 def _latest_divergence_branch_step(
     samples: list[dict[str, Any]],
     candidate_ids: list[int],
@@ -414,6 +569,7 @@ def _robust_scenario_mpc_candidate_scores(
     state_tol = float(pcfg.get("scenario_mpc_state_tie_threshold_m", pcfg.get("branch_divergence_threshold_m", 1.0)))
     accel_tol = float(pcfg.get("scenario_mpc_control_tie_accel_tol_mps2", 0.75))
     steer_tol = float(pcfg.get("scenario_mpc_control_tie_steer_tol_rad", 0.15))
+    geometry = _CandidatePrefixGeometryCache(samples)
 
     # Eq. (7f) requires equal inputs for n < nbar_ij.  Cache a candidate
     # compatibility matrix for every distinct last-tied prefix index.  A value
@@ -421,8 +577,7 @@ def _robust_scenario_mpc_candidate_scores(
     tie_steps = sorted({int(distinguish[i, j]) - 1 for i in range(H) for j in range(i + 1, H) if int(distinguish[i, j]) > 0})
     compat_by_step: dict[int, np.ndarray] = {}
     for tie_step in tie_steps:
-        compat_by_step[tie_step] = _prefix_compatibility_matrix(
-            samples,
+        compat_by_step[tie_step] = geometry.compatibility(
             tie_step,
             state_threshold_m=state_tol,
             accel_tolerance_mps2=accel_tol,
@@ -453,37 +608,67 @@ def _robust_scenario_mpc_candidate_scores(
     mode_loss = np.full((n, H), np.inf, dtype=float)
     mode_value = np.full((n, H), -1.0e9, dtype=float)
     mode_safe = np.zeros((n, H), dtype=bool)
-    for j in range(n):
-        if not bool(feasible[j]):
-            continue
-        clr = np.asarray(profiles[j].clearance_curves, dtype=float)
-        if clr.shape != (H, T):
-            continue
-        for h in range(H):
-            loss_h = _mode_tail_loss(profiles[j], h, 0)
-            safe_h = bool(np.all(clr[h] >= clearance_gate) and loss_h <= max_mode_loss)
-            if not safe_h:
+    try:
+        clearance_stack = np.stack([np.asarray(p.clearance_curves, dtype=float) for p in profiles], axis=0)
+        loss_stack = np.stack([np.asarray(p.loss_curves, dtype=float) for p in profiles], axis=0)
+    except ValueError:
+        clearance_stack = np.zeros((0, 0, 0), dtype=float)
+        loss_stack = np.zeros((0, 0, 0), dtype=float)
+    if clearance_stack.shape == (n, H, T) and loss_stack.shape == (n, H, T):
+        # _mode_tail_loss(profile, h, 0) is max_t loss_curve[h,t].  Compute all
+        # candidate/mode values together; this is algebraically identical to
+        # the nested Python loop above.
+        candidate_mode_loss = np.max(loss_stack, axis=2)
+        candidate_mode_safe = (
+            feasible[:, None]
+            & np.all(clearance_stack >= clearance_gate, axis=2)
+            & (candidate_mode_loss <= max_mode_loss)
+        )
+        candidate_mode_value = (
+            uw * utility[:, None]
+            - rw * candidate_mode_loss
+            - sw * smooth[:, None]
+            - dw * dev[:, None]
+        )
+        mode_safe[:] = candidate_mode_safe
+        mode_loss[candidate_mode_safe] = candidate_mode_loss[candidate_mode_safe]
+        mode_value[candidate_mode_safe] = candidate_mode_value[candidate_mode_safe]
+    else:
+        # Exact mixed-shape fallback for legacy/custom callers.
+        for j in range(n):
+            if not bool(feasible[j]):
                 continue
-            mode_safe[j, h] = True
-            mode_loss[j, h] = loss_h
-            mode_value[j, h] = (
-                uw * float(utility[j])
-                - rw * loss_h
-                - sw * float(smooth[j])
-                - dw * float(dev[j])
-            )
+            clr = np.asarray(profiles[j].clearance_curves, dtype=float)
+            if clr.shape != (H, T):
+                continue
+            for h in range(H):
+                loss_h = _mode_tail_loss(profiles[j], h, 0)
+                safe_h = bool(np.all(clr[h] >= clearance_gate) and loss_h <= max_mode_loss)
+                if not safe_h:
+                    continue
+                mode_safe[j, h] = True
+                mode_loss[j, h] = loss_h
+                mode_value[j, h] = (
+                    uw * float(utility[j])
+                    - rw * loss_h
+                    - sw * float(smooth[j])
+                    - dw * float(dev[j])
+                )
 
-    options_by_mode = [np.where(mode_safe[:, h])[0].tolist() for h in range(H)]
+    options_by_mode = [np.where(mode_safe[:, h])[0].astype(int) for h in range(H)]
     if any(len(x) == 0 for x in options_by_mode):
         return score, admitted, branch_steps
 
-    def _pair_compatible(mode_a: int, cand_a: int, mode_b: int, cand_b: int) -> bool:
-        nbar = int(distinguish[mode_a, mode_b])
-        if nbar <= 0:
-            return True
-        tie_step = nbar - 1
-        mat = compat_by_step.get(tie_step)
-        return bool(mat[cand_a, cand_b]) if mat is not None else True
+    # Pair-specific non-anticipativity matrices indexed directly by mode pair.
+    # Keeping them as references avoids dictionary/branch work inside the beam.
+    pair_compat: dict[tuple[int, int], np.ndarray] = {}
+    for a in range(H):
+        for b in range(a + 1, H):
+            nbar = int(distinguish[a, b])
+            if nbar > 0:
+                mat = compat_by_step.get(nbar - 1)
+                if mat is not None:
+                    pair_compat[(a, b)] = mat
 
     # The returned OC-RAP candidate represents the single executable prefix
     # that all modes must share before *any* pair can be distinguished.  After
@@ -493,8 +678,8 @@ def _robust_scenario_mpc_candidate_scores(
     positive_offdiag = offdiag[offdiag > 0] if offdiag.size else np.zeros((0,), dtype=int)
     common_tie_step = int(np.min(positive_offdiag) - 1) if positive_offdiag.size else -1
     root_compat = (
-        _prefix_compatibility_matrix(
-            samples, common_tie_step,
+        geometry.compatibility(
+            common_tie_step,
             state_threshold_m=state_tol,
             accel_tolerance_mps2=accel_tol,
             steer_tolerance_rad=steer_tol,
@@ -505,42 +690,71 @@ def _robust_scenario_mpc_candidate_scores(
     for i in range(n):
         if not bool(feasible[i]):
             continue
-        root_clear = np.asarray(profiles[i].clearance_curves, dtype=float)
+        root_clear = (
+            clearance_stack[i]
+            if clearance_stack.shape == (n, H, T)
+            else np.asarray(profiles[i].clearance_curves, dtype=float)
+        )
         if root_clear.shape != (H, T):
             continue
         if common_tie_step >= 0 and np.any(root_clear[:, : common_tie_step + 1] < clearance_gate):
             continue
-        # beam item: (weighted objective so far, tuple(candidate id per mode),
-        #             worst mode loss so far)
-        beam: list[tuple[float, tuple[int, ...], float]] = [(0.0, tuple(), 0.0)]
+
+        # Vectorized bounded beam search.  Rows are beam states and columns are
+        # candidate continuations for the next mode.  Flattening in C order
+        # preserves the legacy nested-loop insertion order; stable argsort thus
+        # retains Python's stable-sort tie behavior.
+        beam_score = np.asarray([0.0], dtype=float)
+        beam_worst = np.asarray([0.0], dtype=float)
+        beam_assigned = np.empty((1, 0), dtype=np.int32)
         for h in range(H):
-            expanded: list[tuple[float, tuple[int, ...], float]] = []
-            for partial_score, assigned, worst_so_far in beam:
-                for j in options_by_mode[h]:
-                    if not bool(root_compat[i, j]):
-                        continue
-                    ok = True
-                    for prev_h, prev_j in enumerate(assigned):
-                        if not _pair_compatible(h, int(j), prev_h, int(prev_j)):
-                            ok = False
-                            break
-                    if not ok:
-                        continue
-                    expanded.append((
-                        partial_score + float(weights[h] * mode_value[j, h]),
-                        assigned + (int(j),),
-                        max(worst_so_far, float(mode_loss[j, h])),
-                    ))
-            if not expanded:
-                beam = []
+            opts = options_by_mode[h]
+            opts = opts[root_compat[i, opts]]
+            if opts.size == 0 or beam_score.size == 0:
+                beam_score = np.zeros((0,), dtype=float)
                 break
-            expanded.sort(key=lambda x: x[0] - ww * x[2], reverse=True)
-            beam = expanded[:beam_size]
-        if not beam:
+
+            B, J = int(beam_score.size), int(opts.size)
+            valid = np.ones((B, J), dtype=bool)
+            for prev_h in range(h):
+                key = (prev_h, h) if prev_h < h else (h, prev_h)
+                mat = pair_compat.get(key)
+                if mat is None:
+                    continue
+                prev = beam_assigned[:, prev_h]
+                # mat is symmetric because prefix compatibility is symmetric.
+                valid &= mat[prev[:, None], opts[None, :]]
+                if not valid.any():
+                    break
+            if not valid.any():
+                beam_score = np.zeros((0,), dtype=float)
+                break
+
+            expanded_score = beam_score[:, None] + float(weights[h]) * mode_value[opts, h][None, :]
+            expanded_worst = np.maximum(beam_worst[:, None], mode_loss[opts, h][None, :])
+            flat_valid = np.flatnonzero(valid.ravel(order="C"))
+            parent = flat_valid // J
+            opt_pos = flat_valid % J
+            cand = opts[opt_pos]
+            cand_score = expanded_score.ravel(order="C")[flat_valid]
+            cand_worst = expanded_worst.ravel(order="C")[flat_valid]
+            rank_value = cand_score - ww * cand_worst
+            order = np.argsort(-rank_value, kind="stable")[:beam_size]
+            parent = parent[order]
+            cand = cand[order]
+            beam_score = cand_score[order]
+            beam_worst = cand_worst[order]
+            beam_assigned = np.concatenate(
+                [beam_assigned[parent], cand[:, None].astype(np.int32, copy=False)],
+                axis=1,
+            )
+
+        if beam_score.size == 0:
             continue
-        best = max(beam, key=lambda x: x[0] - ww * x[2])
+        rank_value = beam_score - ww * beam_worst
+        best = int(np.argmax(rank_value))
         admitted[i] = True
-        score[i] = float(best[0] - ww * best[2])
+        score[i] = float(rank_value[best])
     return score, admitted, branch_steps
 
 def _marc_candidate_scores(
@@ -593,6 +807,18 @@ def _marc_candidate_scores(
         - sw * smooth[:, None]
         - dw * dev[:, None]
     )
+    geometry = _CandidatePrefixGeometryCache(samples)
+
+    # Prefix/tail reductions are queried once per semantic family at different
+    # branch steps.  Precomputing cumulative reductions makes each branch query
+    # O(NH) instead of rescanning trajectory suffixes/prefixes.
+    use_temporal_cache = bool(np.all(np.isfinite(loss_curves)) and np.all(np.isfinite(clearance_curves)))
+    if use_temporal_cache:
+        loss_prefix_max = np.maximum.accumulate(loss_curves, axis=2)
+        loss_tail_max = np.maximum.accumulate(loss_curves[:, :, ::-1], axis=2)[:, :, ::-1]
+        collision_mask = clearance_curves <= chance_clearance
+        collision_prefix_any = np.logical_or.accumulate(collision_mask, axis=2)
+        collision_tail_any = np.logical_or.accumulate(collision_mask[:, :, ::-1], axis=2)[:, :, ::-1]
 
     macro_arr = np.asarray(macros, dtype=object)
     for macro in sorted(set(macros)):
@@ -603,15 +829,19 @@ def _marc_candidate_scores(
         # this semantic family for each predicted mode.
         family_base = base_value[family_idx]  # [F,H]
         scenario_ids = [int(family_idx[int(np.argmax(family_base[:, h]))]) for h in range(H)]
-        branch = _latest_divergence_branch_step(
-            samples, scenario_ids, horizon=T, threshold_m=threshold, max_fraction=max_fraction
+        branch = geometry.latest_divergence_branch_step(
+            scenario_ids, horizon=T, threshold_m=threshold, max_fraction=max_fraction
         )
-        compat = _prefix_compatibility_matrix(samples, branch, state_threshold_m=threshold)
+        compat = geometry.compatibility(branch, state_threshold_m=threshold)
         F = int(family_idx.size)
         family_compat = compat[np.ix_(family_idx, family_idx)]  # [root,cont]
 
-        tail_loss = np.max(loss_curves[family_idx, :, branch:], axis=2)  # [cont,H]
-        tail_collision = np.any(clearance_curves[family_idx, :, branch:] <= chance_clearance, axis=2).astype(float)
+        if use_temporal_cache:
+            tail_loss = loss_tail_max[family_idx, :, branch]
+            tail_collision = collision_tail_any[family_idx, :, branch].astype(float)
+        else:
+            tail_loss = np.max(loss_curves[family_idx, :, branch:], axis=2)  # [cont,H]
+            tail_collision = np.any(clearance_curves[family_idx, :, branch:] <= chance_clearance, axis=2).astype(float)
         tail_value = (
             uw * utility[family_idx, None]
             - risk_w * tail_loss
@@ -628,8 +858,12 @@ def _marc_candidate_scores(
         selected_tail_collision = tail_collision[best_local, mode_idx]
         selected_global = family_idx[best_local]
 
-        prefix_loss = np.max(loss_curves[family_idx, :, : branch + 1], axis=2)
-        prefix_collision = np.any(clearance_curves[family_idx, :, : branch + 1] <= chance_clearance, axis=2).astype(float)
+        if use_temporal_cache:
+            prefix_loss = loss_prefix_max[family_idx, :, branch]
+            prefix_collision = collision_prefix_any[family_idx, :, branch].astype(float)
+        else:
+            prefix_loss = np.max(loss_curves[family_idx, :, : branch + 1], axis=2)
+            prefix_collision = np.any(clearance_curves[family_idx, :, : branch + 1] <= chance_clearance, axis=2).astype(float)
         mode_safety = np.maximum(prefix_loss, selected_tail_loss)
         mode_collision = np.maximum(prefix_collision, selected_tail_collision)
         mode_utility = utility[selected_global]
@@ -685,6 +919,8 @@ def _racp_candidate_scores(
     weights = weights / max(float(weights.sum()), 1e-9)
     branch_fraction = float(np.clip(pcfg.get("racp_branch_fraction", 0.40), 0.0, 1.0))
     branch = int(round(branch_fraction * max(T - 1, 0)))
+    # RACP asks for exactly one common-prefix relation per replan; building the
+    # reusable multi-query cache used by MARC/scenario-MPC would add overhead.
     compat = _prefix_compatibility_matrix(
         samples, branch,
         state_threshold_m=float(pcfg.get("racp_nonanticipative_state_threshold_m", pcfg.get("branch_divergence_threshold_m", 1.0))),
@@ -1778,7 +2014,16 @@ def select_external_policy(
         profiles = precomputed_profiles
         risk_context = precomputed_context
     else:
-        profiles, risk_context = observed_risk_profiles_and_context(samples, cfg)
+        # MARC and RACP consume the shared observation-only hypotheses, losses
+        # and mode weights, but never the HxH mode-distinguishability tensor.
+        # Avoid constructing that unused diagnostic on every closed-loop step.
+        need_mode_distinguishability = baseline not in {
+            "marc", "marc_lite", "marc_contingency",
+            "racp", "racp_lite", "risk_aware_contingency",
+        }
+        profiles, risk_context = observed_risk_profiles_and_context(
+            samples, cfg, compute_mode_distinguishability=need_mode_distinguishability
+        )
     if len(profiles) != n:
         raise ValueError(f"precomputed_profiles length {len(profiles)} does not match candidate count {n}")
     exp_risk = np.asarray([p.expected_loss for p in profiles], dtype=float)

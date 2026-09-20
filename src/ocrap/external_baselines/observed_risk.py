@@ -246,21 +246,20 @@ def _mode_distinguishability(
     steps = np.full((H, H), max(T - 1, 0), dtype=np.int32)
     if H == 0 or T == 0:
         return steps, curves
-    for i in range(H):
-        steps[i, i] = 0
-        for j in range(i + 1, H):
-            if A:
-                d = np.linalg.norm(xy[i] - xy[j], axis=-1)  # [A,T]
-                curve = np.max(d, axis=0)
-            else:
-                curve = np.zeros((T,), dtype=float)
-            curves[i, j] = curves[j, i] = curve
-            separated = curve >= float(threshold_m)
-            # Earliest t such that all subsequent predictions stay separated.
-            persistent = np.logical_and.accumulate(separated[::-1])[::-1]
-            idx = np.where(persistent)[0]
-            step = int(idx[0]) if idx.size else max(T - 1, 0)
-            steps[i, j] = steps[j, i] = step
+    if A:
+        # H is intentionally small (7 in the benchmark), so materializing the
+        # pairwise HxH actor differences is cheap and removes 21 Python/NumPy
+        # dispatches per replan.  The reduction is identical to the pair loop:
+        # max actor-wise Euclidean divergence at every time step.
+        diff = xy[:, None, :, :, :] - xy[None, :, :, :, :]
+        curves = np.max(np.linalg.norm(diff, axis=-1), axis=2)
+    separated = curves >= float(threshold_m)
+    # Earliest t such that all subsequent predictions stay separated.
+    persistent = np.logical_and.accumulate(separated[..., ::-1], axis=-1)[..., ::-1]
+    has_persistent = np.any(persistent, axis=-1)
+    first = np.argmax(persistent, axis=-1).astype(np.int32)
+    steps = np.where(has_persistent, first, max(T - 1, 0)).astype(np.int32)
+    np.fill_diagonal(steps, 0)
     return steps, curves
 
 
@@ -557,7 +556,7 @@ def observed_risk_profile(d: dict[str, Any], cfg: dict[str, Any]) -> ObservedRis
 
 
 def observed_risk_profiles_and_context(
-    samples: Sequence[dict[str, Any]], cfg: dict[str, Any]
+    samples: Sequence[dict[str, Any]], cfg: dict[str, Any], *, compute_mode_distinguishability: bool = True
 ) -> tuple[list[ObservedRiskProfile], ObservedRiskContext | None]:
     """Hot-path bundle: build the shared actor forecast once and return it.
 
@@ -572,10 +571,30 @@ def observed_risk_profiles_and_context(
         xy, _, _, _ = _ego_candidate(d)
         horizons.append(max(int(xy.shape[0]), 2))
     if len(set(horizons)) == 1:
-        context = build_observed_risk_context(samples[0], cfg, horizon=horizons[0])
+        context = build_observed_risk_context(
+            samples[0], cfg, horizon=horizons[0],
+            compute_mode_distinguishability=compute_mode_distinguishability,
+        )
         return _score_candidates_with_context(samples, cfg, context), context
     # Preserve legacy mixed-horizon scoring semantics.  Ports can still use a
     # max-horizon context and resample it to their source horizon.
-    profiles = observed_risk_profiles(samples, cfg)
-    context = build_observed_risk_context(samples[0], cfg, horizon=max(horizons))
+    if compute_mode_distinguishability:
+        profiles = observed_risk_profiles(samples, cfg)
+    else:
+        groups: dict[int, list[tuple[int, dict[str, Any]]]] = {}
+        for i, (d, T) in enumerate(zip(samples, horizons)):
+            groups.setdefault(T, []).append((i, d))
+        tmp: list[ObservedRiskProfile | None] = [None] * len(samples)
+        for T, items in groups.items():
+            group_context = build_observed_risk_context(
+                samples[0], cfg, horizon=T, compute_mode_distinguishability=False
+            )
+            batch = _score_candidates_with_context([d for _, d in items], cfg, group_context)
+            for (i, _), profile in zip(items, batch):
+                tmp[i] = profile
+        profiles = [p for p in tmp if p is not None]
+    context = build_observed_risk_context(
+        samples[0], cfg, horizon=max(horizons),
+        compute_mode_distinguishability=compute_mode_distinguishability,
+    )
     return profiles, context
