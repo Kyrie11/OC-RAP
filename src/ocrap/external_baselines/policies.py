@@ -8,6 +8,7 @@ import numpy as np
 from .observed_risk import (
     ObservedRiskContext, ObservedRiskProfile, build_observed_risk_context,
     observed_risk_profile, observed_risk_profiles, observed_risk_profiles_and_context,
+    predictive_safety_filter_margins,
 )
 from .paper_core_ports import (
     cpsf_constrained_projection_port, dr_cvar_safe_halfspace_port,
@@ -1516,6 +1517,107 @@ def select_external_policy(
         )
         return ExternalSelection(idx, reason, port.admitted, port.score)
 
+    # The three slow Near-Contact safety filters are dispatched before generic
+    # nominal-deviation/risk-profile work.  Their paper ports consume only the
+    # observation-only actor forecast (DR-CVaR/CPSF) or two PSF geometry terms.
+    # This removes quantities that were computed and immediately discarded; it
+    # does not change any candidate, threshold, admission rule or metric.
+    dr_cvar_aliases = {
+        "dr_cvar_safety_filter", "distributionally_robust_cvar_filter", "safaoui_dr_cvar_filter",
+    }
+    cpsf_aliases = {
+        "conformal_predictive_safety_filter", "conformal_safety_filter", "cpsf",
+    }
+    psf_aliases = {
+        "predictive_safety_filter", "psf", "cbf_backup_filter", "predictive_cbf_backup", "backup_cbf_filter",
+    }
+    if baseline in dr_cvar_aliases | cpsf_aliases:
+        risk_context = precomputed_context if precomputed_context is not None else build_observed_risk_context(
+            samples[0], cfg, compute_mode_distinguishability=False
+        )
+        if baseline in dr_cvar_aliases:
+            port = dr_cvar_safe_halfspace_port(samples, cfg, risk_context)
+            reason = "safaoui_summers_drcvar_safe_halfspace_plus_mpc_candidate_port"
+            prefer_nominal = False
+        else:
+            port = cpsf_constrained_projection_port(samples, cfg, risk_context)
+            reason = "strawn_ayanian_lindemann_cpsf_eq7_conformal_tube_candidate_port"
+            prefer_nominal = True
+        idx, reason = _admission_select(
+            port.score, port.admitted, feasible, fallback_score=port.fallback_score,
+            reason=reason, prefer_nominal_if_admitted=prefer_nominal,
+        )
+        return ExternalSelection(idx, reason, port.admitted, port.score)
+
+    if baseline in psf_aliases:
+        # Wabersich & Zeilinger PSF only needs stage clearance and the terminal
+        # backup-set margin.  Preserve the precomputed-profile hook verbatim for
+        # tests/adapters; the normal online path computes those two arrays using
+        # exactly the same geometry as the legacy full risk profile.
+        if precomputed_profiles is not None:
+            profiles = precomputed_profiles
+            if len(profiles) != n:
+                raise ValueError(f"precomputed_profiles length {len(profiles)} does not match candidate count {n}")
+            stage_margin = np.asarray([
+                float(np.min(p.clearance_curves)) if np.asarray(p.clearance_curves).size else p.min_clearance
+                for p in profiles
+            ], dtype=float)
+            terminal_barrier = np.asarray([
+                float(np.min(np.asarray(p.backup_margin_curves)[:, -1]))
+                if np.asarray(p.backup_margin_curves).ndim == 2 and np.asarray(p.backup_margin_curves).shape[1]
+                else p.backup_margin
+                for p in profiles
+            ], dtype=float)
+        else:
+            # All closed-loop lattice candidates have one common prefix horizon.
+            # Retain the legacy mixed-horizon behavior as a fail-safe for direct
+            # library callers by falling back to the full scorer in that case.
+            horizons = []
+            for d in samples:
+                st = np.asarray(d.get("prefix_states", np.zeros((0, 0))))
+                horizons.append(max(int(st.shape[0]) if st.ndim == 2 else 0, 2))
+            if len(set(horizons)) == 1:
+                risk_context = precomputed_context if precomputed_context is not None else build_observed_risk_context(
+                    samples[0], cfg, horizon=horizons[0], compute_mode_distinguishability=False
+                )
+                stage_margin, terminal_barrier = predictive_safety_filter_margins(samples, cfg, risk_context)
+            else:
+                profiles, _ = observed_risk_profiles_and_context(samples, cfg)
+                stage_margin = np.asarray([
+                    float(np.min(p.clearance_curves)) if np.asarray(p.clearance_curves).size else p.min_clearance
+                    for p in profiles
+                ], dtype=float)
+                terminal_barrier = np.asarray([
+                    float(np.min(np.asarray(p.backup_margin_curves)[:, -1]))
+                    if np.asarray(p.backup_margin_curves).ndim == 2 and np.asarray(p.backup_margin_curves).shape[1]
+                    else p.backup_margin
+                    for p in profiles
+                ], dtype=float)
+
+        accel = np.zeros(n, dtype=float)
+        steer = np.zeros(n, dtype=float)
+        for i, d in enumerate(samples):
+            accel[i], steer[i] = _control_proxy(d)
+        ctrl_ok = (accel <= float(pcfg.get("psf_accel_gate", 6.0))) & (steer <= float(pcfg.get("psf_steer_gate", 0.75)))
+        stage_ok = stage_margin >= float(pcfg.get("psf_stage_clearance_margin_m", 0.0))
+        terminal_ok = terminal_barrier >= float(pcfg.get("psf_terminal_backup_margin_m", pcfg.get("psf_backup_margin_m", 0.0)))
+        admitted = feasible & ctrl_ok & stage_ok & terminal_ok
+        nominal_ids = [i for i, d in enumerate(samples) if _scalar(d, "is_nominal", 0.0) > 0.5]
+        nominal_idx = int(nominal_ids[0] if nominal_ids else 0)
+        input_dev = _control_sequence_deviation(samples, nominal_idx)
+        safety_tiebreak = float(pcfg.get("psf_safety_tiebreak_weight", 1.0e-3))
+        score = -input_dev + safety_tiebreak * np.minimum(stage_margin, terminal_barrier)
+        fallback_barrier = np.minimum(stage_margin, terminal_barrier)
+        fallback_score = fallback_barrier - 1.0e-3 * input_dev
+        idx, reason = _admission_select(
+            score, admitted, feasible, fallback_score=fallback_score,
+            reason="predictive_safety_filter_finite_horizon_terminal_safe_set_minimal_input_correction",
+            prefer_nominal_if_admitted=False,
+        )
+        if admitted[nominal_idx]:
+            idx = nominal_idx
+        return ExternalSelection(idx, reason, admitted, score)
+
     dev = _nominal_deviation(samples)
     smooth = np.asarray([_control_smoothness_cost(d, dt=float(pcfg.get("dt", 0.2))) for d in samples], dtype=float)
     macros = _macro_names(samples)
@@ -1652,39 +1754,20 @@ def select_external_policy(
     # not: Wang 2023 uses constant-velocity obstacles (Eq. 15), while Wang 2022
     # uses fixed perceived obstacle coordinates in its APF (Eqs. 4-6).  Keeping
     # those Contact ports predictor-free is both source-faithful and faster.
-    context_only_paper_ports = {
-        "dr_cvar_safety_filter", "distributionally_robust_cvar_filter", "safaoui_dr_cvar_filter",
-        "conformal_predictive_safety_filter", "conformal_safety_filter", "cpsf",
-    }
     predictor_free_paper_ports = {
         "postimpact_mpc", "postimpact_mpc_lite", "post_impact_mpc_lite", "postimpact_mpc_paper", "integrated_postimpact_mpc",
         "postimpact_motion_tvlqr", "postimpact_motion_planning", "wang2022_postimpact", "postimpact_tvlqr",
     }
-    if baseline in context_only_paper_ports | predictor_free_paper_ports:
-        risk_context = None
-        if baseline in context_only_paper_ports:
-            risk_context = precomputed_context if precomputed_context is not None else build_observed_risk_context(samples[0], cfg)
-        if baseline in {"dr_cvar_safety_filter", "distributionally_robust_cvar_filter", "safaoui_dr_cvar_filter"}:
-            assert risk_context is not None
-            port = dr_cvar_safe_halfspace_port(samples, cfg, risk_context)
-            reason = "safaoui_summers_drcvar_safe_halfspace_plus_mpc_candidate_port"
-            prefer_nominal = False
-        elif baseline in {"conformal_predictive_safety_filter", "conformal_safety_filter", "cpsf"}:
-            assert risk_context is not None
-            port = cpsf_constrained_projection_port(samples, cfg, risk_context)
-            reason = "strawn_ayanian_lindemann_cpsf_eq7_conformal_tube_candidate_port"
-            prefer_nominal = True
-        elif baseline in {"postimpact_mpc", "postimpact_mpc_lite", "post_impact_mpc_lite", "postimpact_mpc_paper", "integrated_postimpact_mpc"}:
+    if baseline in predictor_free_paper_ports:
+        if baseline in {"postimpact_mpc", "postimpact_mpc_lite", "post_impact_mpc_lite", "postimpact_mpc_paper", "integrated_postimpact_mpc"}:
             port = integrated_postimpact_mpc_pso_port(samples, cfg)
             reason = "wang2023_integrated_postimpact_mpc_sbd_constraints_pso_candidate_port"
-            prefer_nominal = False
         else:
             port = postimpact_motion_tvlqr_port(samples, cfg)
             reason = "wang2022_quintic_apf_tvlqr_nonlinear_allocation_candidate_port"
-            prefer_nominal = False
         idx, reason = _admission_select(
             port.score, port.admitted, feasible, fallback_score=port.fallback_score,
-            reason=reason, prefer_nominal_if_admitted=prefer_nominal,
+            reason=reason, prefer_nominal_if_admitted=False,
         )
         return ExternalSelection(idx, reason, port.admitted, port.score)
 
@@ -1813,38 +1896,6 @@ def select_external_policy(
         idx = _best(score, admitted if admitted.any() else feasible)
         return ExternalSelection(idx, "legacy_wasserstein_inspired_dispersion_surrogate_not_main_table", admitted, score)
 
-    if baseline in {"predictive_safety_filter", "psf", "cbf_backup_filter", "predictive_cbf_backup", "backup_cbf_filter"}:
-        # Wabersich & Zeilinger: apply the proposed controller input unchanged
-        # whenever its finite-horizon prediction satisfies state/input
-        # constraints and reaches a terminal safe set. Otherwise solve a
-        # minimally-invasive safety-filter problem.  Here that optimization is
-        # projected onto the executable candidate lattice; no CBF constraint is
-        # fabricated because it is not part of the cited PSF formulation.
-        accel = np.zeros(n, dtype=float)
-        steer = np.zeros(n, dtype=float)
-        for i, d in enumerate(samples):
-            accel[i], steer[i] = _control_proxy(d)
-        ctrl_ok = (accel <= float(pcfg.get("psf_accel_gate", 6.0))) & (steer <= float(pcfg.get("psf_steer_gate", 0.75)))
-        stage_margin = np.asarray([float(np.min(p.clearance_curves)) if np.asarray(p.clearance_curves).size else p.min_clearance for p in profiles], dtype=float)
-        terminal_barrier = np.asarray([float(np.min(np.asarray(p.backup_margin_curves)[:, -1])) if np.asarray(p.backup_margin_curves).ndim == 2 and np.asarray(p.backup_margin_curves).shape[1] else p.backup_margin for p in profiles], dtype=float)
-        stage_ok = stage_margin >= float(pcfg.get("psf_stage_clearance_margin_m", 0.0))
-        terminal_ok = terminal_barrier >= float(pcfg.get("psf_terminal_backup_margin_m", pcfg.get("psf_backup_margin_m", 0.0)))
-        admitted = feasible & ctrl_ok & stage_ok & terminal_ok
-        nominal_ids = [i for i, d in enumerate(samples) if _scalar(d, "is_nominal", 0.0) > 0.5]
-        nominal_idx = int(nominal_ids[0] if nominal_ids else 0)
-        input_dev = _control_sequence_deviation(samples, nominal_idx)
-        safety_tiebreak = float(pcfg.get("psf_safety_tiebreak_weight", 1.0e-3))
-        score = -input_dev + safety_tiebreak * np.minimum(stage_margin, terminal_barrier)
-        fallback_barrier = np.minimum(stage_margin, terminal_barrier)
-        fallback_score = fallback_barrier - 1.0e-3 * input_dev
-        idx, reason = _admission_select(
-            score, admitted, feasible, fallback_score=fallback_score,
-            reason="predictive_safety_filter_finite_horizon_terminal_safe_set_minimal_input_correction",
-            prefer_nominal_if_admitted=False,
-        )
-        if admitted[nominal_idx]:
-            idx = nominal_idx
-        return ExternalSelection(idx, reason, admitted, score)
 
     # v57 legacy/dead compatibility branches below are retained only for patch/readability
     # comparison; registered aliases return through the predictor-free paper ports above.

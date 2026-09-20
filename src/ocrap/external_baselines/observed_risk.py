@@ -264,7 +264,13 @@ def _mode_distinguishability(
     return steps, curves
 
 
-def build_observed_risk_context(d: dict[str, Any], cfg: dict[str, Any], *, horizon: int | None = None) -> ObservedRiskContext:
+def build_observed_risk_context(
+    d: dict[str, Any],
+    cfg: dict[str, Any],
+    *,
+    horizon: int | None = None,
+    compute_mode_distinguishability: bool = True,
+) -> ObservedRiskContext:
     """Predict visible actors once for all candidates in one scene-time group."""
     ego_xy, _, _, _ = _ego_candidate(d)
     T = max(int(horizon or ego_xy.shape[0]), 2)
@@ -319,16 +325,82 @@ def build_observed_risk_context(d: dict[str, Any], cfg: dict[str, Any], *, horiz
             stopped = along <= 1e-8
             vel = np.where(stopped[..., None], lateral_drift * normal[:, None, :], vel)
         actor_xy[h], actor_v[h] = pred, vel
-    distinguish_step, divergence_curves = _mode_distinguishability(
-        actor_xy,
-        threshold_m=_cfg_float(cfg, "mode_distinguish_threshold_m", _cfg_float(cfg, "branch_divergence_threshold_m", 1.0)),
-    )
+    if compute_mode_distinguishability:
+        distinguish_step, divergence_curves = _mode_distinguishability(
+            actor_xy,
+            threshold_m=_cfg_float(cfg, "mode_distinguish_threshold_m", _cfg_float(cfg, "branch_divergence_threshold_m", 1.0)),
+        )
+    else:
+        # DR-CVaR/CPSF/PSF never consume mode-distinguishability.  Skipping this
+        # H^2 x A x T diagnostic is an execution-only optimization; actor forecasts,
+        # weights and every quantity used by those filters are unchanged.
+        distinguish_step = np.full((H, H), max(T - 1, 0), dtype=np.int32)
+        np.fill_diagonal(distinguish_step, 0)
+        divergence_curves = np.zeros((H, H, T), dtype=float)
     return ObservedRiskContext(
         tuple(x[0] for x in specs), weights, times, actor_xy, actor_v, radii,
         _cfg_float(cfg, "risk_clearance_buffer_m", 0.75), distinguish_step,
         divergence_curves, weight_source,
     )
 
+
+
+def predictive_safety_filter_margins(
+    samples: Sequence[dict[str, Any]],
+    cfg: dict[str, Any],
+    context: ObservedRiskContext,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return exactly the two geometry terms consumed by the PSF selector.
+
+    The legacy PSF path called :func:`_score_candidates_with_context` and then
+    discarded TTC, collision probability, severity, loss/CVaR and all temporal
+    risk diagnostics.  This helper executes the *same* ego resampling, bounding-
+    circle clearance and stopping-distance formulas, but stops after computing:
+
+    * minimum stage clearance over hypotheses/actors/time; and
+    * minimum terminal backup margin over hypotheses.
+
+    Keeping the arithmetic/order of the shared geometry block identical makes
+    this an execution optimization rather than a metric/selector change.
+    """
+    if not samples:
+        z = np.zeros((0,), dtype=float)
+        return z, z
+    T = int(context.times.size)
+    ego_xy_list: list[np.ndarray] = []
+    ego_speed_list: list[np.ndarray] = []
+    ego_radius: list[float] = []
+    for d in samples:
+        xy, speed, length, width = _ego_candidate(d)
+        ego_xy_list.append(_resample_xy(xy, T))
+        src = np.linspace(0.0, 1.0, max(speed.size, 1))
+        ego_speed_list.append(np.interp(np.linspace(0.0, 1.0, T), src, speed if speed.size else np.zeros(1)))
+        ego_radius.append(0.5 * float(np.hypot(length, width)))
+    ego_xy = np.stack(ego_xy_list, axis=0)
+    ego_speed = np.stack(ego_speed_list, axis=0)
+    ego_radius_arr = np.asarray(ego_radius, dtype=float)
+    N = int(ego_xy.shape[0])
+
+    if context.actor_xy.shape[1] == 0:
+        return np.full((N,), 50.0, dtype=float), np.full((N,), 50.0, dtype=float)
+
+    delta = context.actor_xy[None, ...] - ego_xy[:, None, None, :, :]
+    center = np.linalg.norm(delta, axis=-1)
+    clearance = (
+        center
+        - ego_radius_arr[:, None, None, None]
+        - context.actor_radius[None, None, :, None]
+        - context.clearance_buffer_m
+    )
+    mode_clearance = np.min(clearance, axis=2)
+    stage_margin = np.min(mode_clearance, axis=(1, 2))
+
+    decel = max(_cfg_float(cfg, "backup_deceleration_mps2", 5.0), 0.5)
+    reaction = max(_cfg_float(cfg, "backup_reaction_time_s", 0.25), 0.0)
+    stopping = ego_speed * reaction + ego_speed**2 / (2.0 * decel)
+    backup_curves = mode_clearance - stopping[:, None, :]
+    terminal_barrier = np.min(backup_curves[:, :, -1], axis=1)
+    return np.asarray(stage_margin, dtype=float), np.asarray(terminal_barrier, dtype=float)
 
 def _ego_velocity(xy: np.ndarray, speed: np.ndarray, dt: float) -> np.ndarray:
     tangent = np.gradient(xy, max(float(dt), 1e-3), axis=0)

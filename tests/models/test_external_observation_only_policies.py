@@ -427,3 +427,45 @@ def test_shared_mode_probabilities_are_observation_conditioned_not_fixed_priors(
     assert np.isclose(ca.weights.sum(), 1.0)
     assert np.isclose(cb.weights.sum(), 1.0)
     assert not np.allclose(ca.weights, cb.weights)
+
+
+def test_near_safety_filter_fast_paths_are_numerically_identical_to_legacy_risk_context() -> None:
+    from ocrap.external_baselines.observed_risk import (
+        build_observed_risk_context,
+        observed_risk_profiles_and_context,
+        predictive_safety_filter_margins,
+    )
+
+    samples = [_sample(detour=False, nominal=True), _sample(detour=True, nominal=False)]
+    cfg = _cfg()
+
+    # PSF fast path must reproduce the two exact geometry quantities that the
+    # legacy full risk profile used for admission/scoring.
+    profiles, full_ctx = observed_risk_profiles_and_context(samples, cfg)
+    fast_ctx = build_observed_risk_context(
+        samples[0], cfg, horizon=samples[0]["prefix_states"].shape[0],
+        compute_mode_distinguishability=False,
+    )
+    stage_fast, terminal_fast = predictive_safety_filter_margins(samples, cfg, fast_ctx)
+    stage_ref = np.asarray([np.min(p.clearance_curves) for p in profiles], dtype=float)
+    terminal_ref = np.asarray([np.min(p.backup_margin_curves[:, -1]) for p in profiles], dtype=float)
+    np.testing.assert_array_equal(stage_fast, stage_ref)
+    np.testing.assert_array_equal(terminal_fast, terminal_ref)
+
+    psf_fast = select_external_policy("predictive_safety_filter", samples, cfg)
+    psf_ref = select_external_policy(
+        "predictive_safety_filter", samples, cfg,
+        precomputed_profiles=profiles, precomputed_context=full_ctx,
+    )
+    assert psf_fast.selected_index == psf_ref.selected_index
+    np.testing.assert_array_equal(psf_fast.admitted, psf_ref.admitted)
+    np.testing.assert_array_equal(psf_fast.score, psf_ref.score)
+
+    # DR-CVaR and CPSF do not use mode-distinguishability.  Skipping that
+    # diagnostic must therefore leave their exact candidate result unchanged.
+    for method in ["dr_cvar_safety_filter", "conformal_predictive_safety_filter"]:
+        fast = select_external_policy(method, samples, cfg)
+        ref = select_external_policy(method, samples, cfg, precomputed_context=full_ctx)
+        assert fast.selected_index == ref.selected_index, method
+        np.testing.assert_array_equal(fast.admitted, ref.admitted, err_msg=method)
+        np.testing.assert_array_equal(fast.score, ref.score, err_msg=method)

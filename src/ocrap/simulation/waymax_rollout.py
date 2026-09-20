@@ -433,7 +433,17 @@ def _rollout_teacher_options_final_metrics(
     """
     global _JIT_TEACHER_BATCH_WARNED
     wx = cfg.get("waymax", {}) if isinstance(cfg.get("waymax", {}), dict) else {}
-    if not bool(wx.get("batch_teacher_option_rollouts", False)):
+    explicit_batch = bool(wx.get("batch_teacher_option_rollouts", False))
+    # Near-contact closed loop already requests the JIT scan rollout backend.
+    # Opportunistically batch teacher options only behind exact validation; this
+    # keeps the resolved config/fingerprint unchanged so interrupted runs remain
+    # resumable after this execution-only optimization.
+    auto_batch = (
+        not explicit_batch
+        and bool(wx.get("use_jit_scan_rollouts", False))
+        and bool(wx.get("validate_batched_teacher_metrics", True))
+    )
+    if not (explicit_batch or auto_batch):
         return None
     if controls_batch.ndim != 3 or controls_batch.shape[0] <= 1 or controls_batch.shape[-1] < 2:
         return None
@@ -444,7 +454,23 @@ def _rollout_teacher_options_final_metrics(
         nopt, steps = int(controls_batch.shape[0]), int(controls_batch.shape[1])
         wheelbase = float(cfg.get("wheelbase_m", 2.8))
         key = (id(waymax_env), num_objects, sdc, steps, wheelbase, nopt)
-        if _JIT_TEACHER_BATCH_VALIDATION.get(key) is False:
+        # Validation is a property of the JAX/Waymax kernel signature rather than
+        # of the Python BaseEnvironment object identity. Near-contact replanning
+        # creates/caches one environment per init_steps value, so keying validation
+        # by id(env) would force the expensive scalar cross-check again at every
+        # decision and erase the benefit of batching. Keep the compiled function
+        # cache env-specific, but reuse an *exact* validation verdict only across
+        # the same Waymax version, environment class, state/action shape, SDC slot,
+        # horizon, option count and metric suite.
+        metrics_names = tuple(wx.get(
+            "metrics_to_run",
+            ["log_divergence", "overlap", "offroad", "sdc_wrongway", "sdc_off_route", "sdc_progression", "kinematic_infeasibility"],
+        ))
+        validation_key = (
+            _waymax_version(), type(waymax_env).__module__, type(waymax_env).__qualname__,
+            num_objects, sdc, steps, wheelbase, nopt, metrics_names,
+        )
+        if _JIT_TEACHER_BATCH_VALIDATION.get(validation_key) is False:
             return None
         fn = _JIT_TEACHER_BATCH_CACHE.get(key)
         if fn is None:
@@ -484,12 +510,14 @@ def _rollout_teacher_options_final_metrics(
             for l in range(nopt)
         ]
 
-        if bool(wx.get("validate_batched_teacher_metrics", True)) and key not in _JIT_TEACHER_BATCH_VALIDATION:
+        if bool(wx.get("validate_batched_teacher_metrics", True)) and validation_key not in _JIT_TEACHER_BATCH_VALIDATION:
             scalar_metrics: list[dict[str, float]] = []
             for l in range(nopt):
                 scalar_state = _rollout_bicycle_controls_scan(st, waymax_env, controls_batch[l], {**cfg, "waymax": {**wx, "batch_teacher_option_rollouts": False}})
                 scalar_metrics.append(_metric_summary(waymax_env, scalar_state, sdc))
-            atol = float(wx.get("batch_teacher_validation_atol", 1.0e-6))
+            # Auto mode is allowed only when every metric is exactly equal to
+            # the scalar reference. Explicit opt-in retains its historical atol.
+            atol = float(wx.get("batch_teacher_validation_atol", 1.0e-6)) if explicit_batch else 0.0
             ok = True
             for batched, scalar in zip(batch_metrics, scalar_metrics):
                 common = set(batched) & set(scalar)
@@ -499,7 +527,7 @@ def _rollout_teacher_options_final_metrics(
                 ):
                     ok = False
                     break
-            _JIT_TEACHER_BATCH_VALIDATION[key] = bool(ok)
+            _JIT_TEACHER_BATCH_VALIDATION[validation_key] = bool(ok)
             if not ok:
                 if not _JIT_TEACHER_BATCH_WARNED:
                     print("[ocrap-profile] batched teacher rollout validation failed; using scalar reference path", flush=True)
@@ -508,7 +536,7 @@ def _rollout_teacher_options_final_metrics(
             # The reference results are the safest result for the validation call;
             # subsequent calls use the validated one-dispatch kernel.
             return scalar_metrics
-        if _JIT_TEACHER_BATCH_VALIDATION.get(key, True):
+        if _JIT_TEACHER_BATCH_VALIDATION.get(validation_key, True):
             return batch_metrics
         return None
     except Exception as e:  # pragma: no cover - optional Waymax/JAX compatibility
@@ -536,7 +564,17 @@ def _rollout_prefix(state0: Any, history: SceneHistory, prefix: CandidatePrefix,
         for k in range(steps):
             action = _state_action_from_local(prefix.prefix_states[k + 1], int(state0.num_objects), sdc, ego_xy, ego_yaw)
             st = waymax_env.step(st, action, rng=rng)
-    elif steps > 0 and bool((cfg.get("waymax", {}) or {}).get("scan_prefix_rollouts", False)):
+    elif steps > 0 and (
+        bool((cfg.get("waymax", {}) or {}).get("scan_prefix_rollouts", False))
+        or (
+            bool((cfg.get("waymax", {}) or {}).get("use_jit_scan_rollouts", False))
+            and bool((cfg.get("waymax", {}) or {}).get("validate_jit_prefix_rollout", True))
+        )
+    ):
+        # The auto path is safe for publication runs because the first kernel for
+        # every env/shape is compared bit-for-bit with the historical Python-step
+        # rollout in _rollout_bicycle_controls_scan; any mismatch permanently
+        # falls back to the scalar reference for that shape.
         controls = np.zeros((steps, 2), dtype=np.float32)
         if prefix.prefix_controls.size:
             idx = np.minimum(np.arange(steps), prefix.prefix_controls.shape[0] - 1)

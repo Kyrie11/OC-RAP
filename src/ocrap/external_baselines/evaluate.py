@@ -455,6 +455,10 @@ def evaluate_external_baselines(
         context_only_names = {
             "dr_cvar_safety_filter", "distributionally_robust_cvar_filter", "safaoui_dr_cvar_filter",
             "conformal_predictive_safety_filter", "conformal_safety_filter", "cpsf",
+            # PSF selection consumes only stage clearance + terminal backup
+            # margin. select_external_policy computes those exact two quantities
+            # from the shared observation context without building full profiles.
+            "predictive_safety_filter", "psf", "cbf_backup_filter", "predictive_cbf_backup", "backup_cbf_filter",
         }
         predictor_free_paper_names = {
             "postimpact_mpc", "postimpact_mpc_lite", "post_impact_mpc_lite", "postimpact_mpc_paper", "integrated_postimpact_mpc",
@@ -475,7 +479,9 @@ def evaluate_external_baselines(
         if need_profiles:
             profiles, risk_context = observed_risk_profiles_and_context(samples, model_cfg)
         elif need_context:
-            profiles, risk_context = None, build_observed_risk_context(samples[0], model_cfg)
+            profiles, risk_context = None, build_observed_risk_context(
+                samples[0], model_cfg, compute_mode_distinguishability=False
+            )
         else:
             profiles, risk_context = None, None
         timing["observed_risk_s"] += perf_counter() - tick

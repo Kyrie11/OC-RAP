@@ -20,6 +20,13 @@ METRIC_SEMANTICS_VERSION="${METRIC_SEMANTICS_VERSION:-publication_v55_signed_cle
 # checkpoints are copied into the final run so only closed-loop testing is redone.
 # Missing/invalid methods (e.g. a failed GameFormer training) are trained normally.
 PRETRAINED_BASELINE_ROOT="${PRETRAINED_BASELINE_ROOT:-}"
+# Main closed-loop runs are publication-fingerprint safe to resume: persistence
+# knobs are excluded from the fingerprint, while every result-affecting input is
+# checked.  Respect explicit user overrides but default final runs to continuation
+# instead of deleting/restarting partial 250-scene artifacts.
+FINAL_CL_RESUME="${CL_RESUME:-true}"
+FINAL_CL_RESUME_FORCE="${CL_RESUME_FORCE:-false}"
+FINAL_SKIP_COMPLETE_METHODS="${SKIP_COMPLETE_METHODS:-true}"
 
 ensure_target_locks() {
   local rebuild=false
@@ -75,8 +82,8 @@ run_one() {
     )
   fi
   echo "[FINAL BASELINE] regime=$r target_keys=$keyfile"
-  env CL_TARGET_KEYS_FILE="$keyfile" USE_DYNAMIC_SCHEDULER=auto \
-    CL_RESUME=false CL_RESUME_FORCE=false SKIP_COMPLETE_METHODS=false \
+  env CL_TARGET_KEYS_FILE="$keyfile" USE_DYNAMIC_SCHEDULER="${USE_DYNAMIC_SCHEDULER:-auto}" \
+    CL_RESUME="$FINAL_CL_RESUME" CL_RESUME_FORCE="$FINAL_CL_RESUME_FORCE" SKIP_COMPLETE_METHODS="$FINAL_SKIP_COMPLETE_METHODS" \
     CL_METRIC_SEMANTICS_VERSION="$METRIC_SEMANTICS_VERSION" \
     "${contact_env[@]}" \
     RUN_SUPPLEMENTARY_SAFE=true RUN_SUPPLEMENTARY_NEAR=true \
@@ -87,7 +94,7 @@ run_one() {
 
   if [[ "${PROFILE_LATENCY,,}" == true || "${PROFILE_LATENCY,,}" == 1 || "${PROFILE_LATENCY,,}" == yes ]]; then
     env CL_TARGET_KEYS_FILE="$keyfile" RUN_SUPPLEMENTARY_SAFE=true RUN_SUPPLEMENTARY_NEAR=true \
-      CL_RESUME=false CL_RESUME_FORCE=false SKIP_COMPLETE_METHODS=false \
+      CL_RESUME="${LATENCY_CL_RESUME:-false}" CL_RESUME_FORCE=false SKIP_COMPLETE_METHODS="${LATENCY_SKIP_COMPLETE_METHODS:-true}" \
       CL_METRIC_SEMANTICS_VERSION="$METRIC_SEMANTICS_VERSION" \
       "${contact_env[@]}" \
       bash scripts/profile_external_baselines_latency.sh \

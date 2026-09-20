@@ -109,3 +109,14 @@ def test_all_regime_launcher_inherits_six_slot_dynamic_defaults() -> None:
     assert ': "${JOBS_PER_GPU:=3}"' in text
     assert ': "${MAX_PARALLEL:=6}"' in text
     assert 'USE_DYNAMIC_SCHEDULER="$USE_DYNAMIC_SCHEDULER"' in text
+
+
+def test_near_safety_filters_default_to_immediate_three_way_parallel_start() -> None:
+    text = (ROOT / "scripts/run_external_baselines_near.sh").read_text()
+    assert ': "${NEAR_SAFETY_FILTER_START_ALL_PARALLEL:=true}"' in text
+    assert "run_queue_all_parallel_round_robin()" in text
+    assert '[PARALLEL-START] safety-filter' in text
+    assert 'gpu="${GPU_LIST[$((i % ${#GPU_LIST[@]}))]}"' in text
+    assert 'run_queue_all_parallel_round_robin run_closed_loop_method "${SLOW_FILTER_SPECS[@]}"' in text
+    # The compatibility one-per-GPU path remains opt-in only.
+    assert 'NEAR_SAFETY_FILTER_START_ALL_PARALLEL=false' in text

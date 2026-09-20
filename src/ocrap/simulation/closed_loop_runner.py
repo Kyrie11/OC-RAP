@@ -1048,13 +1048,32 @@ def _select_prefix(
         dicts = [_sample_to_dict(s) for s in samples]
     else:
         dicts = [_sample_to_inference_dict(s) for s in samples]
-    preds = predict_samples(dicts, bundle, cfg, shared_scene_features=True) if bundle is not None else [predict_sample(d, None, cfg) for d in dicts]
+    method_l = str(method).lower()
+    if bundle is not None:
+        preds = predict_samples(dicts, bundle, cfg, shared_scene_features=True)
+    elif not compute_teacher_labels and method_l in EXTERNAL_CLOSED_LOOP_METHODS and dicts:
+        # Feature-only closed-loop samples deliberately share the same dummy
+        # OC-MERO geometry. External selectors never consume this prediction, but
+        # the common diagnostic path still records it. Avoid N identical OC-MERO
+        # calls when (and only when) the exact prediction inputs are equal.
+        shared_keys = ("m_star", "root_probs", "c_star", "option_valid", "root_valid")
+        d0 = dicts[0]
+        geometry_shared = all(
+            key in d0 and all(key in d and np.array_equal(np.asarray(d[key]), np.asarray(d0[key]), equal_nan=True) for d in dicts[1:])
+            for key in shared_keys
+        )
+        if geometry_shared:
+            p0 = predict_sample(d0, None, cfg)
+            preds = [p0] * len(dicts)
+        else:
+            preds = [predict_sample(d, None, cfg) for d in dicts]
+    else:
+        preds = [predict_sample(d, None, cfg) for d in dicts]
     items = []
     for s, d, pred in zip(samples, dicts, preds):
         teacher = teacher_prediction_from_sample(d, cfg) if compute_teacher_labels else None
         items.append({"sample": s, "data": d, "pred": pred, "teacher": teacher})
 
-    method_l = str(method).lower()
     if method_l in EXTERNAL_CLOSED_LOOP_METHODS:
         # Post-impact source controllers use absolute time since the first
         # post-contact decision (e.g. Ghosh 2026 open-loop steering/force

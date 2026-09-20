@@ -63,6 +63,8 @@ fi
 : "${CL_PROGRESS_EVERY_STEPS:=10}"
 : "${SKIP_COMPLETE_METHODS:=true}"
 : "${USE_DYNAMIC_SCHEDULER:=true}"
+: "${NEAR_SAFETY_FILTER_DEDICATED_GPUS:=true}"
+: "${NEAR_SAFETY_FILTER_START_ALL_PARALLEL:=true}"
 : "${DO_OFFLINE:=true}"
 : "${DO_CLOSED_LOOP:=true}"
 : "${DO_TRAIN:=true}"
@@ -212,14 +214,29 @@ print(','.join(f"{m.strip()}={cfg}" for m in methods.split(',') if m.strip()))
 PY_SPECS
 )"
 if runtime_bool_true "$DO_TRAIN"; then
-  if ! runtime_bool_true "$FORCE_REREGISTER" && python tools/check_external_nonlearning_registration.py \
-      --root "$RUN" --dataset "$TRAIN_NEAR" --val-dataset "$VAL_NEAR" --specs "$NEAR_NONLEARNING_SPECS" >/dev/null 2>&1; then
-    echo "[REUSE] Near-Contact non-learning baseline registrations are compatible"
-  else
+  # Validate each non-learning registration independently.  If only one method
+  # is missing/stale, do not rewrite all six train summaries; the registrar still
+  # scans train/val once for the subset that actually needs registration.
+  MISSING_NONLEARNING_METHODS=()
+  for _m in "${METHODS[@]}"; do
+    if runtime_bool_true "$FORCE_REREGISTER" || ! python tools/check_external_nonlearning_registration.py \
+        --root "$RUN" --dataset "$TRAIN_NEAR" --val-dataset "$VAL_NEAR" \
+        --specs "$_m=$CONFIG" >/dev/null 2>&1; then
+      MISSING_NONLEARNING_METHODS+=("$_m")
+      echo "[STATUS] method=$_m training/registration=incomplete"
+    else
+      echo "[STATUS] method=$_m training/registration=complete"
+    fi
+  done
+  if ((${#MISSING_NONLEARNING_METHODS[@]})); then
+    MISSING_NONLEARNING_CSV="$(IFS=,; echo "${MISSING_NONLEARNING_METHODS[*]}")"
+    echo "[REGISTER] missing Near-Contact non-learning methods: $MISSING_NONLEARNING_CSV"
     run_env_cpu python -u tools/register_external_nonlearning_baselines.py \
       --config "$CONFIG" --dataset "$TRAIN_NEAR" --val-dataset "$VAL_NEAR" \
-      --baselines "$METHODS_CSV" --output-root "$RUN" \
+      --baselines "$MISSING_NONLEARNING_CSV" --output-root "$RUN" \
       2>&1 | tee "$RUN/register_nonlearning_near.log"
+  else
+    echo "[REUSE] all Near-Contact non-learning baseline registrations are compatible"
   fi
 fi
 
@@ -294,7 +311,7 @@ export CONFORMAL_INTERVALS CONFORMAL_DELTA CONFORMAL_PREDICTION_HORIZON CONFORMA
 
 artifact_complete() {
   local output="$1"
-  local args=(--output "$output" --quiet)
+  local args=(--output "$output" --quiet --require-metric-semantics-version "$CL_METRIC_SEMANTICS_VERSION")
   [[ -n "$CL_TARGET_KEYS_FILE" ]] && args+=(--target-keys-file "$CL_TARGET_KEYS_FILE")
   python tools/check_closed_loop_artifact.py "${args[@]}"
 }
@@ -307,13 +324,42 @@ checkpoint_valid() {
     --require-deployable-contract --require-implementation-version "$expected_impl" >/dev/null 2>&1
 }
 
+is_slow_near_filter() {
+  case "$1" in
+    predictive_safety_filter|dr_cvar_safety_filter|conformal_predictive_safety_filter) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+nonlearning_registration_valid() {
+  local method="$1" config="$2"
+  python tools/check_external_nonlearning_registration.py \
+    --root "$RUN" --dataset "$TRAIN_NEAR" --val-dataset "$VAL_NEAR" \
+    --specs "$method=$config" >/dev/null 2>&1
+}
+
+print_baseline_status() {
+  local spec method config kind ckpt expected_impl train_status cl_status
+  echo "[STATUS] Near-Contact baseline completion check (training/registration + closed loop)"
+  for spec in "${SPECS[@]}"; do
+    IFS='|' read -r method config kind ckpt expected_impl <<< "$spec"
+    if [[ "$kind" == learned ]]; then
+      if checkpoint_valid "$ckpt" "$expected_impl" "$config"; then train_status=complete; else train_status=incomplete; fi
+    else
+      if nonlearning_registration_valid "$method" "$config"; then train_status=complete; else train_status=incomplete; fi
+    fi
+    if artifact_complete "$RUN/closed_loop_${method}.json"; then cl_status=complete; else cl_status=incomplete; fi
+    echo "[STATUS] method=$method training=$train_status closed_loop=$cl_status"
+  done
+}
+
 prepare_or_offline_method() {
   local spec="$1" gpu="$2" method config kind ckpt expected_impl train_dir
   IFS='|' read -r method config kind ckpt expected_impl <<< "$spec"
-  if ! runtime_bool_true "$FORCE_RETRAIN_NEAR" && ! runtime_bool_true "$DO_OFFLINE" \
+  if ! runtime_bool_true "$FORCE_RETRAIN_NEAR" \
       && runtime_bool_true "$DO_CLOSED_LOOP" && runtime_bool_true "$SKIP_COMPLETE_METHODS" \
       && artifact_complete "$RUN/closed_loop_${method}.json"; then
-    echo "[REUSE] near method=$method already has a complete closed-loop artifact; checkpoint preparation skipped"
+    echo "[REUSE] near method=$method already has a complete closed-loop artifact; training/registration/offline preparation skipped"
     return 0
   fi
   if [[ "$kind" == learned ]]; then
@@ -386,6 +432,71 @@ run_queue() {
     *) echo "Invalid USE_DYNAMIC_SCHEDULER=$USE_DYNAMIC_SCHEDULER" >&2; return 2 ;;
   esac
   if [[ "$use_dynamic" == true ]]; then run_queue_dynamic "$runner" "$@"; else run_queue_fixed "$runner" "$@"; fi
+}
+
+run_queue_all_parallel_round_robin() {
+  # Start every unfinished safety-filter job immediately. GPU assignment is
+  # round-robin over the visible physical devices, so with two GPUs the three
+  # publication filters start as 0,1,0 instead of making the third filter wait.
+  # This is execution-only: configs, target locks, candidate sets, teacher
+  # labels and metric aggregation are unchanged.
+  local runner="$1"; shift; local -a items=("$@")
+  ((${#items[@]})) || return 0
+  local -a pids=() names=() gpus=()
+  local i gpu failed=0 status
+  for ((i=0;i<${#items[@]};i++)); do
+    gpu="${GPU_LIST[$((i % ${#GPU_LIST[@]}))]}"
+    echo "[PARALLEL-START] safety-filter item=${items[$i]%%|*} gpu=$gpu"
+    "$runner" "${items[$i]}" "$gpu" &
+    pids+=("$!"); names+=("${items[$i]}"); gpus+=("$gpu")
+  done
+  for i in "${!pids[@]}"; do
+    if wait "${pids[$i]}"; then status=0; else status=$?; fi
+    if ((status!=0)); then
+      echo "[ERROR] ${names[$i]} failed on GPU ${gpus[$i]} (status=$status)" >&2
+      failed=1
+    fi
+  done
+  return "$failed"
+}
+
+run_queue_one_per_gpu() {
+  # Compatibility scheduler retained for users who explicitly disable
+  # NEAR_SAFETY_FILTER_START_ALL_PARALLEL. It permits at most one safety-filter
+  # process per physical GPU.
+  local runner="$1"; shift; local -a items=("$@")
+  ((${#items[@]})) || return 0
+  local next=0 active=0 failed=0 done_pid status gpu item i
+  declare -A PID_GPU=() PID_ITEM=()
+  launch_one() {
+    local x="$1" g="$2"
+    "$runner" "$x" "$g" &
+    local p=$!
+    PID_GPU[$p]="$g"; PID_ITEM[$p]="$x"; active=$((active+1))
+  }
+  if supports_wait_pid_capture; then
+    for ((i=0;i<${#GPU_LIST[@]} && next<${#items[@]};i++)); do
+      launch_one "${items[$next]}" "${GPU_LIST[$i]}"; next=$((next+1))
+    done
+    while ((active>0)); do
+      done_pid=""; if wait -n -p done_pid; then status=0; else status=$?; fi
+      gpu="${PID_GPU[$done_pid]}"; item="${PID_ITEM[$done_pid]}"
+      unset 'PID_GPU[$done_pid]' 'PID_ITEM[$done_pid]'; active=$((active-1))
+      if ((status!=0)); then echo "[ERROR] $item failed on GPU $gpu (status=$status)" >&2; failed=1; fi
+      if ((next<${#items[@]})); then launch_one "${items[$next]}" "$gpu"; next=$((next+1)); fi
+    done
+    return "$failed"
+  fi
+  local base j idx pids=() names=()
+  for ((base=0;base<${#items[@]};base+=${#GPU_LIST[@]})); do
+    pids=(); names=()
+    for ((j=0;j<${#GPU_LIST[@]} && base+j<${#items[@]};j++)); do
+      idx=$((base+j)); "$runner" "${items[$idx]}" "${GPU_LIST[$j]}" &
+      pids+=("$!"); names+=("${items[$idx]}")
+    done
+    for j in "${!pids[@]}"; do wait "${pids[$j]}" || { echo "[ERROR] ${names[$j]} failed" >&2; failed=1; }; done
+  done
+  return "$failed"
 }
 
 run_closed_loop_method() {
@@ -466,15 +577,53 @@ run_baseline_pipeline() {
   fi
 }
 
-# Keep one scheduler slot attached to a baseline until its training/checkpoint
-# preparation, optional offline evaluation and closed-loop test are all done.
-# Learned planners are launched first so their long training overlaps the main
-# non-learning controls instead of waiting behind a global train/test barrier.
+# Check all methods before launching per-baseline work. The validators are
+# target-lock/config aware, so a complete method is not scheduled again.
+print_baseline_status
+
 PIPELINE_SPECS=()
 for spec in "${SPECS[@]}"; do IFS='|' read -r _m _c _kind _rest <<< "$spec"; [[ "$_kind" == learned ]] && PIPELINE_SPECS+=("$spec"); done
 for spec in "${SPECS[@]}"; do IFS='|' read -r _m _c _kind _rest <<< "$spec"; [[ "$_kind" == learned ]] || PIPELINE_SPECS+=("$spec"); done
-if runtime_bool_true "$DO_TRAIN" || runtime_bool_true "$DO_OFFLINE" || runtime_bool_true "$DO_CLOSED_LOOP"; then
-  run_queue run_baseline_pipeline "${PIPELINE_SPECS[@]}"
+
+if runtime_bool_true "$NEAR_SAFETY_FILTER_DEDICATED_GPUS"; then
+  # Preparation is separated from closed loop so the three expensive filters can
+  # use one Waymax/JAX process per physical GPU instead of competing 3-per-GPU.
+  # Learned planners are still prepared first; with PRETRAINED_BASELINE_ROOT this
+  # is normally a fast checkpoint validation rather than retraining.
+  if runtime_bool_true "$DO_TRAIN" || runtime_bool_true "$DO_OFFLINE"; then
+    run_queue prepare_or_offline_method "${PIPELINE_SPECS[@]}"
+  fi
+
+  if runtime_bool_true "$DO_CLOSED_LOOP"; then
+    SLOW_FILTER_SPECS=()
+    OTHER_CLOSED_LOOP_SPECS=()
+    for spec in "${PIPELINE_SPECS[@]}"; do
+      IFS='|' read -r _m _c _kind _ckpt _impl <<< "$spec"
+      if runtime_bool_true "$SKIP_COMPLETE_METHODS" && ! runtime_bool_true "$FORCE_RETRAIN_NEAR" \
+          && artifact_complete "$RUN/closed_loop_${_m}.json"; then
+        echo "[REUSE] near method=$_m excluded from scheduler: complete closed-loop artifact"
+        continue
+      fi
+      if is_slow_near_filter "$_m"; then SLOW_FILTER_SPECS+=("$spec"); else OTHER_CLOSED_LOOP_SPECS+=("$spec"); fi
+    done
+
+    # Run the slow filters first so interrupted publication runs make progress on
+    # the exact methods that previously stalled at 1/250 scenes. By default all
+    # unfinished safety filters are forked immediately; set
+    # NEAR_SAFETY_FILTER_START_ALL_PARALLEL=false to restore one-per-GPU gating.
+    if runtime_bool_true "$NEAR_SAFETY_FILTER_START_ALL_PARALLEL"; then
+      run_queue_all_parallel_round_robin run_closed_loop_method "${SLOW_FILTER_SPECS[@]}"
+    else
+      run_queue_one_per_gpu run_closed_loop_method "${SLOW_FILTER_SPECS[@]}"
+    fi
+    run_queue run_closed_loop_method "${OTHER_CLOSED_LOOP_SPECS[@]}"
+  fi
+else
+  # Compatibility path: retain the historical per-baseline pipeline and dynamic
+  # refill behavior when dedicated safety-filter GPU scheduling is disabled.
+  if runtime_bool_true "$DO_TRAIN" || runtime_bool_true "$DO_OFFLINE" || runtime_bool_true "$DO_CLOSED_LOOP"; then
+    run_queue run_baseline_pipeline "${PIPELINE_SPECS[@]}"
+  fi
 fi
 
 # Oracle recovery is a teacher-only audit upper bound, not an external baseline.
