@@ -9,6 +9,7 @@ an upper bound on scenario indices.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 from collections import Counter
@@ -135,6 +136,11 @@ def main() -> int:
     missing_time = 0
     valid_rows = 0
     requested_target_keys = _load_target_keys(args.target_keys_file)
+    target_keys_file_sha256 = None
+    if args.target_keys_file:
+        target_path = Path(args.target_keys_file)
+        if target_path.is_file():
+            target_keys_file_sha256 = hashlib.sha256(target_path.read_bytes()).hexdigest()
     available_target_keys: set[str] = set()
     unique_targets: set[tuple[str, int]] = set()
     unique_scenes: set[str] = set()
@@ -219,6 +225,7 @@ def main() -> int:
         "womd_pattern": args.womd_pattern,
         "split_filter": args.split,
         "target_keys_file": args.target_keys_file or None,
+        "target_keys_file_sha256": target_keys_file_sha256,
         "num_requested_target_keys": len(requested_target_keys),
         "num_matching_requested_target_keys": len(requested_target_keys) - len(missing_target_keys),
         "missing_requested_target_keys": missing_target_keys[:50],

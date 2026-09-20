@@ -63,9 +63,9 @@ NATIVE_FULL_REFERENCE_ROOT="${NATIVE_FULL_REFERENCE_ROOT:-$OUT_ROOT/_native_full
 # Resume-aware execution controls. Complete artifacts are reused; --force is unnecessary for scientific ablations.
 SKIP_COMPLETE="${SKIP_COMPLETE:-true}"
 BUILD_TABLES="${BUILD_TABLES:-true}"
-BUILD_TARGET_LOCKS="${BUILD_TARGET_LOCKS:-true}"
+BUILD_TARGET_LOCKS="${BUILD_TARGET_LOCKS:-auto}"
 TABLE_OUT="${TABLE_OUT:-$OUT_ROOT/submission_tables}"
-PARTIAL_WRITE_EVERY_SCENES="${PARTIAL_WRITE_EVERY_SCENES:-64}"
+PARTIAL_WRITE_EVERY_SCENES="${PARTIAL_WRITE_EVERY_SCENES:-128}"
 PROGRESS_EVERY_STEPS="${PROGRESS_EVERY_STEPS:-20}"
 PROFILE_TIMING="${PROFILE_TIMING:-true}"
 # Publication latency follows the same contract as the final characterization:
@@ -139,28 +139,30 @@ is_publication_artifact() {
   python tools/check_publication_closed_loop_artifact.py "${args[@]}"
 }
 
-archive_incompatible_complete_artifact() {
-  local run_dir="$1" artifact="$2"
+guard_incompatible_complete_artifact() {
+  local artifact="$1" regime="$2" target_keys="$3" latency_contract="${4:-}"
   [[ -f "$artifact" ]] || return 0
-  local stamp archive f
-  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-  archive="$run_dir/incompatible_pre_publication_contract_$stamp"
-  mkdir -p "$archive"
-  for f in "$artifact" "$artifact.progress.json" "$artifact.partial" "$artifact.scenes.jsonl" "${artifact%.json}.log"; do
-    [[ -e "$f" ]] && mv "$f" "$archive/"
-  done
-  echo "[ARCHIVE] incompatible completed artifact moved to $archive"
+  if artifact_is_complete "$artifact" "$regime" "$target_keys" "$latency_contract"; then
+    return 0
+  fi
+  cat >&2 <<EOF
+[REFUSE-IN-PLACE] Existing completed artifact is incompatible with the current publication contract:
+  $artifact
+It was NOT moved, renamed, overwritten or deleted. Choose a different OUT_ROOT/LATENCY_ROOT
+for an intentionally new contract, or restore the matching configuration before resuming.
+EOF
+  return 31
 }
 
-archive_incompatible_partial_contact_if_needed() {
-  local run_dir="$1" artifact="$2" regime="$3"
+guard_incompatible_partial_contact_if_needed() {
+  local artifact="$1" regime="$2"
   [[ "$regime" == contact ]] || return 0
   [[ -f "$artifact" ]] && return 0
   local journal="$artifact.scenes.jsonl"
   [[ -s "$journal" ]] || return 0
-  # A current-protocol Contact partial must already carry the frozen anchor
-  # identity on every completed scene. Old counterfactual-contact partials did
-  # not, so never feed them into a new anchored RESUME run.
+  # A current-protocol Contact partial is resumable in place.  A legacy
+  # counterfactual-contact journal is preserved verbatim and rejected instead
+  # of being silently moved aside.
   if python - "$journal" <<'PY2'
 import json,sys
 p=sys.argv[1]
@@ -182,14 +184,12 @@ PY2
   then
     return 0
   fi
-  local stamp archive f
-  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-  archive="$run_dir/incompatible_pre_publication_contract_$stamp"
-  mkdir -p "$archive"
-  for f in "$artifact.progress.json" "$artifact.partial" "$artifact.scenes.jsonl" "${artifact%.json}.log"; do
-    [[ -e "$f" ]] && mv "$f" "$archive/"
-  done
-  echo "[ARCHIVE] incompatible pre-anchor Contact partial moved to $archive"
+  cat >&2 <<EOF
+[REFUSE-IN-PLACE] Existing Contact partial uses an incompatible pre-anchor protocol:
+  $journal
+It was NOT moved, renamed, overwritten or deleted. Use a new OUT_ROOT for a new contract.
+EOF
+  return 32
 }
 
 write_phase() {
@@ -262,19 +262,42 @@ echo "[Ablation causal Full] native-certified reference=$NATIVE_FULL_REFERENCE_R
 SAFE_WOMD="$(runtime_resolve_bucket_womd_spec "$SAFE_BUCKET" "$BUCKET_SPLIT" "$WOMD_ROOT" "$WOMD_NUM_SHARDS" "${WOMD_ROLE:-validation}")"
 NEAR_WOMD="$(runtime_resolve_bucket_womd_spec "$NEAR_BUCKET" "$BUCKET_SPLIT" "$WOMD_ROOT" "$WOMD_NUM_SHARDS" "${WOMD_ROLE:-validation}")"
 CONTACT_WOMD="$(runtime_resolve_bucket_womd_spec "$CONTACT_BUCKET" "$BUCKET_SPLIT" "$WOMD_ROOT" "$WOMD_NUM_SHARDS" "${WOMD_ROLE:-validation}")"
-# Re-run the same deterministic target-lock builder used by final
-# characterization unless a top-level orchestrator has already frozen it.
-# BUILD_TARGET_LOCKS=false is safe only when all three locks and the Contact
-# anchor manifest already exist; the fail-closed checks below still validate
-# the full contract before any ablation job is queued.
-if bool_true "$BUILD_TARGET_LOCKS"; then
-  env BASE_OUT="$BASE_OUT" OCRAP_FINAL_CHARACTERIZATION_OUT="$TARGET_LOCK_CHARACTERIZATION_OUT" \
-    WOMD_ROLE="${WOMD_ROLE:-validation}" FINAL_MAX_STEPS="$MAX_STEPS" \
-    CONTACT_ANCHOR_GPU="${CONTACT_ANCHOR_GPU:-${GPUS[0]}}" \
-    bash scripts/build_final_observation_legal_target_locks.sh
-else
-  echo "[Ablation target lock] reuse prebuilt final target locks under $FINAL_TARGET_LOCK_ROOT"
-fi
+# Target locks are immutable experiment inputs.  The legacy default rebuilt
+# them on every launcher invocation, which is unnecessary for resume.  ``auto``
+# preserves the one-command workflow: build only when any lock/anchor is absent,
+# otherwise reuse the existing files and validate the full contract below.
+_target_lock_inputs_present=true
+for _r in safe near contact; do
+  [[ -s "$FINAL_TARGET_LOCK_ROOT/$_r.json" ]] || _target_lock_inputs_present=false
+done
+[[ -s "$CONTACT_ANCHOR_MANIFEST_FILE" ]] || _target_lock_inputs_present=false
+case "$(echo "$BUILD_TARGET_LOCKS" | tr '[:upper:]' '[:lower:]')" in
+  auto)
+    if [[ "$_target_lock_inputs_present" == true ]]; then
+      echo "[Ablation target lock] auto-reuse existing final target locks under $FINAL_TARGET_LOCK_ROOT"
+    else
+      echo "[Ablation target lock] auto-build: one or more frozen lock inputs are missing"
+      env BASE_OUT="$BASE_OUT" OCRAP_FINAL_CHARACTERIZATION_OUT="$TARGET_LOCK_CHARACTERIZATION_OUT" \
+        WOMD_ROLE="${WOMD_ROLE:-validation}" FINAL_MAX_STEPS="$MAX_STEPS" \
+        CONTACT_ANCHOR_GPU="${CONTACT_ANCHOR_GPU:-${GPUS[0]}}" \
+        bash scripts/build_final_observation_legal_target_locks.sh
+    fi
+    ;;
+  true|1|yes|on)
+    echo "[Ablation target lock] forced rebuild requested"
+    env BASE_OUT="$BASE_OUT" OCRAP_FINAL_CHARACTERIZATION_OUT="$TARGET_LOCK_CHARACTERIZATION_OUT" \
+      WOMD_ROLE="${WOMD_ROLE:-validation}" FINAL_MAX_STEPS="$MAX_STEPS" \
+      CONTACT_ANCHOR_GPU="${CONTACT_ANCHOR_GPU:-${GPUS[0]}}" \
+      bash scripts/build_final_observation_legal_target_locks.sh
+    ;;
+  false|0|no|off)
+    echo "[Ablation target lock] reuse explicitly requested under $FINAL_TARGET_LOCK_ROOT"
+    ;;
+  *)
+    echo "BUILD_TARGET_LOCKS must be auto|true|false, got: $BUILD_TARGET_LOCKS" >&2
+    exit 2
+    ;;
+esac
 for _r in safe near contact; do
   [[ -s "$FINAL_TARGET_LOCK_ROOT/$_r.json" ]] || { echo "Missing final target lock: $FINAL_TARGET_LOCK_ROOT/$_r.json" >&2; exit 30; }
 done
@@ -325,7 +348,36 @@ preflight_one() {
   local keyfile="$FINAL_TARGET_LOCK_ROOT/$regime.json"
   local out="$PREFLIGHT_ROOT/$regime.closed_loop_dataset_support.json"
   if [[ "${NEED_REGIME[$regime]}" != 1 ]]; then return 0; fi
-  echo "[PREFLIGHT once] regime=$regime"
+
+  # Reuse a prior expensive offline-metadata/WOMD preflight only when its exact
+  # immutable inputs and target-lock bytes match.  Reports from older code lack
+  # target_keys_file_sha256 and are intentionally rescanned once.
+  if [[ -s "$out" ]] && python - "$out" "$bucket" "$BUCKET_SPLIT" "$womd" "${WOMD_ROLE:-validation}" "$keyfile" <<'PY2'
+import hashlib,json,pathlib,sys
+report_p,bucket,split,womd,role,keyfile=sys.argv[1:]
+try:
+    d=json.loads(pathlib.Path(report_p).read_text(encoding='utf-8'))
+    sha=hashlib.sha256(pathlib.Path(keyfile).read_bytes()).hexdigest()
+except Exception:
+    raise SystemExit(1)
+checks=[
+    d.get('schema_supports_closed_loop') is True,
+    str(d.get('dataset') or '') == bucket,
+    str(d.get('split_filter') or '') == split,
+    str(d.get('womd_pattern') or '') == womd,
+    str(d.get('expected_source_role') or '') == role,
+    str(d.get('target_keys_file') or '') == keyfile,
+    str(d.get('target_keys_file_sha256') or '') == sha,
+    d.get('target_keys_valid') is True,
+    d.get('source_role_valid') is True,
+]
+raise SystemExit(0 if all(checks) else 1)
+PY2
+  then
+    echo "[PREFLIGHT REUSE] regime=$regime -> $out"
+    return 0
+  fi
+  echo "[PREFLIGHT scan] regime=$regime"
   python tools/check_closed_loop_dataset_support.py \
     --dataset "$bucket" --split "$BUCKET_SPLIT" \
     --womd-pattern "$womd" --expected-source-role "${WOMD_ROLE:-validation}" \
@@ -341,7 +393,38 @@ preflight_one contact "$CONTACT_BUCKET" "$CONTACT_WOMD"
 QUEUE_ROOT="$OUT_ROOT/.${RUN_TAG}.queue.$$"
 mkdir -p "$QUEUE_ROOT/pending" "$QUEUE_ROOT/running" "$QUEUE_ROOT/failed" "$QUEUE_ROOT/done"
 job_id=0
+attempted_job_count=0
+queue_reused_count=0
 ROOTS_TO_FINALIZE=()
+
+artifact_is_complete() {
+  local artifact="$1" regime="$2" target_keys="$3" latency_contract="${4:-}"
+  [[ -f "$artifact" ]] || return 1
+  local base_check=(
+    --output "$artifact" --quiet --target-keys-file "$target_keys"
+    --require-metric-semantics-version "$METRIC_SEMANTICS_VERSION"
+  )
+  [[ -z "$latency_contract" ]] || base_check+=(--require-latency-contract "$latency_contract")
+  python tools/check_closed_loop_artifact.py "${base_check[@]}" >/dev/null 2>&1 \
+    && is_publication_artifact "$artifact" "$regime" "$target_keys" "$latency_contract" >/dev/null 2>&1
+}
+
+queue_or_reuse_job() {
+  local priority="$1" arm="$2" variant="$3" regime="$4" config="$5" checkpoint="$6" gamma="$7" womd="$8" bucket="$9" preflight="${10}" target_keys="${11}"
+  local root artifact jf
+  attempted_job_count=$((attempted_job_count+1))
+  if [[ "$arm" == "_native_full_reference" ]]; then root="$NATIVE_FULL_REFERENCE_ROOT/$variant"; else root="$OUT_ROOT/$arm/$variant"; fi
+  artifact="$root/$regime/closed_loop_ocrap.json"
+  if bool_true "$SKIP_COMPLETE" && artifact_is_complete "$artifact" "$regime" "$target_keys"; then
+    queue_reused_count=$((queue_reused_count+1))
+    echo "[QUEUE REUSE] arm=$arm variant=$variant regime=$regime (complete; not enqueued)"
+    return 0
+  fi
+  job_id=$((job_id+1))
+  jf="$QUEUE_ROOT/pending/${priority}.$(printf '%04d' "$job_id").job"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$arm" "$variant" "$regime" "$config" "$checkpoint" "$gamma" "$womd" "$bucket" "$preflight" "$target_keys" > "$jf"
+}
 for variant in "${CLEAN_VARIANTS[@]}"; do
   python tools/check_deployable_stack.py \
     --model-run "$MODEL_RUN" --variant "$variant" \
@@ -365,9 +448,9 @@ for variant in "${CLEAN_VARIANTS[@]}"; do
     # Long Contact jobs are claimed first to reduce the final slow-job tail.
     # Job contents and per-scene ordering are untouched.
     case "$regime" in contact) priority=0 ;; near) priority=1 ;; safe) priority=2 ;; esac
-    job_id=$((job_id+1)); jf="$QUEUE_ROOT/pending/${priority}.$(printf '%04d' "$job_id").job"
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-      "_native_full_reference" "$variant" "$regime" "$NATIVE_FULL_REFERENCE_CONFIG" "$checkpoint" "$gamma" "$womd" "$bucket" "$PREFLIGHT_ROOT/$regime.closed_loop_dataset_support.json" "$FINAL_TARGET_LOCK_ROOT/$regime.json" > "$jf"
+    queue_or_reuse_job "$priority" "_native_full_reference" "$variant" "$regime" \
+      "$NATIVE_FULL_REFERENCE_CONFIG" "$checkpoint" "$gamma" "$womd" "$bucket" \
+      "$PREFLIGHT_ROOT/$regime.closed_loop_dataset_support.json" "$FINAL_TARGET_LOCK_ROOT/$regime.json"
   done
   python tools/build_ocrap_three_regime_index.py --root "$ref_root" --launcher-exit-code 1 >/dev/null || true
 
@@ -392,15 +475,15 @@ for variant in "${CLEAN_VARIANTS[@]}"; do
       esac
       [[ "$enabled" == 1 ]] || continue
       case "$regime" in contact) priority=0 ;; near) priority=1 ;; safe) priority=2 ;; esac
-      job_id=$((job_id+1)); jf="$QUEUE_ROOT/pending/${priority}.$(printf '%04d' "$job_id").job"
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$arm" "$variant" "$regime" "$config" "$checkpoint" "$gamma" "$womd" "$bucket" "$PREFLIGHT_ROOT/$regime.closed_loop_dataset_support.json" "$FINAL_TARGET_LOCK_ROOT/$regime.json" > "$jf"
+      queue_or_reuse_job "$priority" "$arm" "$variant" "$regime" \
+        "$config" "$checkpoint" "$gamma" "$womd" "$bucket" \
+        "$PREFLIGHT_ROOT/$regime.closed_loop_dataset_support.json" "$FINAL_TARGET_LOCK_ROOT/$regime.json"
     done
     python tools/build_ocrap_three_regime_index.py --root "$root" --launcher-exit-code 1 >/dev/null || true
   done
 done
 
-echo "[Ablation scheduler] queued regime jobs=$job_id; GPUs=${#GPUS[@]}; accuracy workers/GPU=$WORKERS_PER_GPU; total processes up to $(( ${#GPUS[@]} * WORKERS_PER_GPU ))"
+echo "[Ablation scheduler] requested regime jobs=$attempted_job_count; already complete=$queue_reused_count; queued=$job_id; GPUs=${#GPUS[@]}; accuracy workers/GPU=$WORKERS_PER_GPU; total processes up to $(( ${#GPUS[@]} * WORKERS_PER_GPU ))"
 
 claim_job() {
   local gpu="$1" slot="$2" lock="$QUEUE_ROOT/.claim_lock" f base claimed
@@ -443,13 +526,20 @@ run_claimed_job() {
     mv "$jf" "$QUEUE_ROOT/done/$(basename "$jf")"
     return 0
   fi
-  # Do not resume an old counterfactual-Contact partial under the new exact-a0
-  # anchor protocol. Current-protocol partials remain resumable and the runner
-  # still verifies its full result-affecting fingerprint.
-  archive_incompatible_partial_contact_if_needed "$run_dir" "$artifact" "$regime"
-  # A completed pre-fix artifact must not be fed into resume.
-  if [[ -f "$artifact" ]] && ! is_publication_artifact "$artifact" "$regime" "$target_keys"; then
-    archive_incompatible_complete_artifact "$run_dir" "$artifact"
+  # Preserve every pre-existing result in place.  Compatible partials resume
+  # scene-by-scene; incompatible legacy Contact/final artifacts fail closed and
+  # require an explicitly different OUT_ROOT rather than being moved aside.
+  if ! guard_incompatible_partial_contact_if_needed "$artifact" "$regime"; then
+    rc=32
+    write_phase "$root" "$regime" failed "$rc" "$started" "$(runtime_iso_now)"
+    mv "$jf" "$QUEUE_ROOT/failed/$(basename "$jf")"
+    return 0
+  fi
+  if [[ -f "$artifact" ]] && ! guard_incompatible_complete_artifact "$artifact" "$regime" "$target_keys"; then
+    rc=31
+    write_phase "$root" "$regime" failed "$rc" "$started" "$(runtime_iso_now)"
+    mv "$jf" "$QUEUE_ROOT/failed/$(basename "$jf")"
+    return 0
   fi
 
   echo "[RUN] gpu=$gpu slot=$slot arm=$arm variant=$variant regime=$regime -> $artifact"
@@ -601,10 +691,8 @@ run_isolated_latency_one() {
     echo "[LATENCY REUSE] gpu=$LATENCY_GPU arm=$arm variant=$variant regime=$regime"
     return 0
   fi
-  archive_incompatible_partial_contact_if_needed "$run_dir" "$artifact" "$regime"
-  if [[ -f "$artifact" ]] && ! is_publication_artifact "$artifact" "$regime" "$target_keys" isolated_single_process_single_gpu; then
-    archive_incompatible_complete_artifact "$run_dir" "$artifact"
-  fi
+  guard_incompatible_partial_contact_if_needed "$artifact" "$regime"
+  guard_incompatible_complete_artifact "$artifact" "$regime" "$target_keys" isolated_single_process_single_gpu
   echo "[LATENCY RUN] gpu=$LATENCY_GPU arm=$arm variant=$variant regime=$regime -> $artifact"
   env \
     RUN_DIR="$run_dir" OUTPUT="$artifact" \

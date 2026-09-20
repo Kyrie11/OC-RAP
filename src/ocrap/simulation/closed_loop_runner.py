@@ -3849,6 +3849,41 @@ def _expected_resume_key(scene_id: str, target: dict[str, Any]) -> str:
     return f"scene:{scene_id}"
 
 
+def _unfinished_selected_target_source_indices(
+    targets: list[dict[str, Any]], completed_keys: set[str]
+) -> list[int]:
+    """Return sparse Waymax indices that can still contribute a new target scene.
+
+    Canonical v48+ target locks carry both ``target_key`` and
+    ``source_scenario_index``.  On resume the scene journal already proves which
+    target keys were completed under the identical scientific fingerprint, so
+    rematerializing those WOMD records is pure input-side overhead.
+
+    Legacy targets without a target key are intentionally retained because their
+    resume identity may depend on the decoded scene id.  Duplicate source indices
+    are collapsed: a single RawScenario can satisfy every unfinished target that
+    belongs to that WOMD record.  This helper never changes target order, rollout
+    RNG, planner inputs, actions, metrics, or final cohort accounting.
+    """
+    out: list[int] = []
+    seen: set[int] = set()
+    for target in targets:
+        raw_idx = target.get("source_scenario_index", -1)
+        try:
+            idx = int(-1 if raw_idx is None else raw_idx)
+        except (TypeError, ValueError):
+            idx = -1
+        if idx < 0:
+            continue
+        target_key = str(target.get("target_key", "") or "").strip()
+        if target_key and f"target:{target_key}" in completed_keys:
+            continue
+        if idx not in seen:
+            seen.add(idx)
+            out.append(idx)
+    return out
+
+
 def _read_json_if_valid(path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
@@ -4276,8 +4311,23 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
         and not bool((local.get("waymax", {}) or {}).get("allow_logged_sdc_route_fallback", False))
     )
     if use_selected_target_replay:
+        # Resume-aware sparse replay: the append-only scene journal already
+        # contains completed targets under the same scientific fingerprint.
+        # Decode/materialize only unfinished target WOMD records.  All resumed
+        # scenes remain in ``scene_results`` and therefore still participate in
+        # aggregation, target coverage and publication checks.
+        replay_source_indices = _unfinished_selected_target_source_indices(targets, completed_keys)
+        if progress and resumed_rollouts:
+            print({
+                "event": "closed_loop_resume_target_replay_pruned",
+                "all_target_source_indices": len(set(target_source_indices)),
+                "unfinished_target_source_indices": len(replay_source_indices),
+                "avoided_target_materializations": max(
+                    0, len(set(target_source_indices)) - len(replay_source_indices)
+                ),
+            }, flush=True)
         raw_iterator = iter_waymax_womd_scenarios_selected(
-            dataset_patterns, target_source_indices, parser_cfg=local,
+            dataset_patterns, replay_source_indices, parser_cfg=local,
             skip_observation_legal_route_unavailable=strict_route_target_exclusion,
             eligibility_diagnostics=route_eligibility_diagnostics,
         )

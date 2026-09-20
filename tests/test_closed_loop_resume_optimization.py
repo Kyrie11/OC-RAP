@@ -249,3 +249,18 @@ def test_bucket_closed_loop_materializes_only_selected_target_source_indices(
     assert result["bucket_matched_rollouts"] == 1
     assert result["raw_scan_bound_source"] == "selected_target_source_indices"
     assert result["raw_scenarios_seen_this_run"] == 18
+
+
+def test_resume_sparse_target_replay_excludes_completed_canonical_targets() -> None:
+    targets = [
+        {"target_key": "near:s0:t10", "source_scenario_index": 3},
+        {"target_key": "near:s1:t10", "source_scenario_index": 8},
+        # Same WOMD record, different unfinished target: materialize once.
+        {"target_key": "near:s1:t20", "source_scenario_index": 8},
+        # Legacy target has no target_key, so it must stay conservative/unfinished.
+        {"target_key": "", "source_scenario_index": 11},
+    ]
+    got = clr._unfinished_selected_target_source_indices(
+        targets, {"target:near:s0:t10", "target:some-other-key"}
+    )
+    assert got == [8, 11]

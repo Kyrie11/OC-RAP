@@ -172,3 +172,44 @@ def test_concurrent_job_claims_are_unique_and_complete(tmp_path: Path) -> None:
     assert len(set(claimed)) == len(expected)
     assert sorted(name.split('.gpu')[0] for name in claimed) == sorted(expected)
     assert list((root / 'pending').glob('*.job')) == []
+
+
+def test_ablation_bottleneck_report_reads_in_progress_scene_journal(tmp_path: Path) -> None:
+    import importlib.util
+    script = Path(__file__).resolve().parents[1] / 'tools' / 'analyze_ablation_bottlenecks.py'
+    spec = importlib.util.spec_from_file_location('ablation_timing_partial', script)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    root = tmp_path / 'accuracy'
+    variant_root = root / 'no_obs_consistency' / 'balanced'
+    run_dir = variant_root / 'near'
+    run_dir.mkdir(parents=True)
+    (variant_root / 'near.phase.json').write_text(json.dumps({
+        'regime': 'near', 'status': 'running', 'exit_code': 0,
+        'started_at': '2026-09-20T10:00:00+00:00', 'ended_at': ''
+    }))
+    artifact = run_dir / 'closed_loop_ocrap.json'
+    journal = Path(str(artifact) + '.scenes.jsonl')
+    scenes = [
+        {'target_key': f'near:s{i}:t10', 'num_decisions': 4,
+         'timing': {'wall_s': 10.0, 'execution_contract': 'concurrent_accuracy',
+                    'totals_s': {'state_history': 1.0, 'candidate_features': 2.0,
+                                 'policy_selection': 4.0, 'waymax_step_metrics': 1.0}}}
+        for i in range(2)
+    ]
+    journal.write_text(''.join(json.dumps({'scene': s}) + '\n' for s in scenes))
+    Path(str(artifact) + '.progress.json').write_text(json.dumps({
+        'completed_rollouts': 2, 'total_rollouts': 10
+    }))
+
+    rows = mod.collect(root, root / '_native_full_reference')
+    assert len(rows) == 1
+    row = rows[0]
+    assert row['status'] == 'running_partial_journal'
+    assert row['scenes'] == 2
+    assert row['decisions'] == 8
+    assert row['policy_selection_s'] == 8.0
+    assert row['completion_fraction'] == 0.2
+    assert row['deployed_planner_s_per_decision'] == 14.0 / 8.0
+    assert row['artifact'].endswith('.scenes.jsonl')

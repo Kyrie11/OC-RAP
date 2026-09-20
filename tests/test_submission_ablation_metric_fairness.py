@@ -127,7 +127,9 @@ def test_submission_ablation_launcher_uses_final_metric_and_contact_contracts() 
     assert "build_final_observation_legal_target_locks.sh" in text
     assert "isolated_single_process_single_gpu" in text
     assert 'table_args+=(--latency-root "$LATENCY_ROOT")' in text
-    assert "archive_incompatible_partial_contact_if_needed" in text
+    assert "guard_incompatible_partial_contact_if_needed" in text
+    assert "incompatible_pre_publication_contract_" not in text
+    assert "[REFUSE-IN-PLACE]" in text
 
 
 def test_ablation_table_builder_never_silently_uses_accuracy_latency() -> None:
