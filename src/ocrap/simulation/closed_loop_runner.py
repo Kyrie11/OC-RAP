@@ -3792,19 +3792,39 @@ _RESUME_OPERATIONAL_KEYS = {
 }
 
 
-def _closed_loop_fingerprint(
+# Resume-repair requirement / design logic:
+# - Continue interrupted external-baseline closed-loop evaluation in the original
+#   output directory without re-simulating already journaled target scenes.
+# - Do not change candidate generation, policy selection, Waymax execution, RNG,
+#   target ordering, metric semantics, or aggregation. Only resume bookkeeping is
+#   migrated when the scientific evaluation contract is unchanged.
+
+
+def _closed_loop_fingerprint_impl(
     dataset_patterns: str,
     checkpoint: str | Path | None,
     method: str,
     target_spec: str,
     cfg: dict,
+    *,
+    exclude_resume_operational_keys: bool,
 ) -> str:
-    """Fingerprint all result-affecting inputs, excluding persistence controls."""
+    """Build a deterministic closed-loop run fingerprint.
+
+    ``exclude_resume_operational_keys=True`` is the current scientific contract:
+    persistence/serialization knobs cannot change actions or metrics and therefore
+    must not prevent continuation of an interrupted evaluation.
+
+    ``False`` reproduces the historical v1 fingerprint used before that separation.
+    Keeping this exact legacy reconstruction lets an already-running publication
+    job migrate in place without rerunning completed scenes.
+    """
     local = dict(cfg)
-    cl = dict(local.get("closed_loop", {}) or {})
-    for key in _RESUME_OPERATIONAL_KEYS:
-        cl.pop(key, None)
-    local["closed_loop"] = cl
+    if exclude_resume_operational_keys:
+        cl = dict(local.get("closed_loop", {}) or {})
+        for key in _RESUME_OPERATIONAL_KEYS:
+            cl.pop(key, None)
+        local["closed_loop"] = cl
     ckpt_info: dict[str, Any] | None = None
     if checkpoint:
         cp = Path(checkpoint)
@@ -3824,6 +3844,34 @@ def _closed_loop_fingerprint(
     }
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str, ensure_ascii=False)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _closed_loop_fingerprint(
+    dataset_patterns: str,
+    checkpoint: str | Path | None,
+    method: str,
+    target_spec: str,
+    cfg: dict,
+) -> str:
+    """Fingerprint result-affecting inputs while excluding persistence controls."""
+    return _closed_loop_fingerprint_impl(
+        dataset_patterns, checkpoint, method, target_spec, cfg,
+        exclude_resume_operational_keys=True,
+    )
+
+
+def _closed_loop_legacy_full_config_fingerprint(
+    dataset_patterns: str,
+    checkpoint: str | Path | None,
+    method: str,
+    target_spec: str,
+    cfg: dict,
+) -> str:
+    """Reproduce the pre-migration v1 fingerprint that hashed persistence knobs."""
+    return _closed_loop_fingerprint_impl(
+        dataset_patterns, checkpoint, method, target_spec, cfg,
+        exclude_resume_operational_keys=False,
+    )
 
 
 def _scene_resume_key(scene: dict[str, Any]) -> str:
@@ -3899,6 +3947,7 @@ def _resume_metadata_compatible(
     data: dict[str, Any],
     *,
     fingerprint: str,
+    compatible_fingerprints: set[str] | None,
     method: str,
     target_spec: str,
     force: bool,
@@ -3907,8 +3956,9 @@ def _resume_metadata_compatible(
 ) -> tuple[bool, bool]:
     """Return (compatible, legacy_without_fingerprint)."""
     saved_fp = str(data.get("run_fingerprint", "") or "")
+    accepted_fingerprints = {str(fingerprint)} | {str(x) for x in (compatible_fingerprints or set()) if str(x)}
     if saved_fp:
-        if saved_fp == fingerprint or force:
+        if saved_fp in accepted_fingerprints or force:
             return True, False
         raise ValueError(
             f"Refusing to resume {source_name}: run_fingerprint differs. "
@@ -3933,6 +3983,7 @@ def _load_resume_scene_results(
     partial_path: Path,
     journal_path: Path,
     fingerprint: str,
+    compatible_fingerprints: set[str] | None,
     method: str,
     target_spec: str,
     force: bool,
@@ -3941,12 +3992,26 @@ def _load_resume_scene_results(
     """Load completed scenes from final/partial snapshots and append-only journal."""
     merged: list[dict[str, Any]] = []
     seen: set[str] = set()
-    meta: dict[str, Any] = {"sources": [], "legacy_sources": [], "prior_raw_scenarios_seen": 0}
+    meta: dict[str, Any] = {
+        "sources": [],
+        "legacy_sources": [],
+        "prior_raw_scenarios_seen": 0,
+        "fingerprint_migration_sources": [],
+        "fingerprint_migrated_from": [],
+    }
 
     def add_scenes(data: dict[str, Any], source_name: str) -> None:
+        # Metric-only publication snapshots intentionally omit embedded scenes.
+        # Such a snapshot carries no resumable scene payload, so it must not be
+        # allowed to veto the authoritative scene journal merely because its
+        # bookkeeping fingerprint comes from an older persistence contract.
+        scenes = data.get("scenes", [])
+        if not isinstance(scenes, list) or not scenes:
+            return
         compatible, legacy = _resume_metadata_compatible(
             data,
             fingerprint=fingerprint,
+            compatible_fingerprints=compatible_fingerprints,
             method=method,
             target_spec=target_spec,
             force=force,
@@ -3955,9 +4020,10 @@ def _load_resume_scene_results(
         )
         if not compatible:
             return
-        scenes = data.get("scenes", [])
-        if not isinstance(scenes, list):
-            return
+        saved_fp = str(data.get("run_fingerprint", "") or "")
+        if saved_fp and saved_fp != fingerprint:
+            meta["fingerprint_migration_sources"].append(source_name)
+            meta["fingerprint_migrated_from"].append(saved_fp)
         meta["sources"].append(source_name)
         if legacy:
             meta["legacy_sources"].append(source_name)
@@ -4005,11 +4071,17 @@ def _load_resume_scene_results(
                     if not isinstance(record, dict) or not isinstance(record.get("scene"), dict):
                         continue
                     saved_fp = str(record.get("run_fingerprint", "") or "")
-                    if saved_fp and saved_fp != fingerprint and not force:
+                    accepted_fingerprints = {str(fingerprint)} | {
+                        str(x) for x in (compatible_fingerprints or set()) if str(x)
+                    }
+                    if saved_fp and saved_fp not in accepted_fingerprints and not force:
                         raise ValueError(
                             "Refusing to resume scene journal: run_fingerprint differs. "
                             "Use a new --output path or closed_loop.resume_force=true after verification."
                         )
+                    if saved_fp and saved_fp != fingerprint:
+                        meta["fingerprint_migration_sources"].append("journal")
+                        meta["fingerprint_migrated_from"].append(saved_fp)
                     if not saved_fp:
                         if not allow_legacy and not force:
                             continue
@@ -4026,7 +4098,133 @@ def _load_resume_scene_results(
             meta["sources"].append("journal")
         if legacy_journal:
             meta["legacy_sources"].append("journal")
+    meta["fingerprint_migration_sources"] = sorted(set(meta.get("fingerprint_migration_sources", [])))
+    meta["fingerprint_migrated_from"] = sorted(set(meta.get("fingerprint_migrated_from", [])))
     return merged, meta
+
+
+def _validate_resumed_scene_contract(
+    scene_results: list[dict[str, Any]],
+    *,
+    method: str,
+    targets: list[dict[str, Any]],
+    require_target_keys: bool,
+) -> None:
+    """Fail closed before adopting a forced/legacy resume artifact.
+
+    Fingerprint force is only a bookkeeping escape hatch.  It must never permit
+    scenes from another method or another frozen target lock to enter the current
+    cohort.  This check does not inspect or alter actions/metrics.
+    """
+    wrong_methods = sorted({
+        str(scene.get("method", "") or "").lower()
+        for scene in scene_results
+        if str(scene.get("method", "") or "").strip()
+        and str(scene.get("method", "") or "").lower() != str(method).lower()
+    })
+    if wrong_methods:
+        raise ValueError(
+            "Refusing to resume: saved scene journal contains method(s) "
+            f"{wrong_methods}, current method is {method}."
+        )
+
+    if not targets:
+        return
+    expected_target_keys = {
+        str(t.get("target_key", "") or "").strip() for t in targets
+        if str(t.get("target_key", "") or "").strip()
+    }
+    if not expected_target_keys:
+        return
+    resumed_target_keys = {
+        str(scene.get("target_key", "") or "").strip() for scene in scene_results
+        if str(scene.get("target_key", "") or "").strip()
+    }
+    unexpected = sorted(resumed_target_keys - expected_target_keys)
+    if unexpected:
+        sample = unexpected[:5]
+        raise ValueError(
+            "Refusing to resume: saved scene journal contains target keys outside "
+            f"the current frozen target lock (examples={sample}, total={len(unexpected)})."
+        )
+    if require_target_keys:
+        missing_key_count = sum(
+            1 for scene in scene_results
+            if not str(scene.get("target_key", "") or "").strip()
+        )
+        if missing_key_count:
+            raise ValueError(
+                "Refusing to resume: current evaluation requires canonical target keys, "
+                f"but {missing_key_count} saved scene(s) have no target_key."
+            )
+
+
+def _migrate_resume_fingerprints(
+    *,
+    output_path: Path,
+    partial_path: Path,
+    journal_path: Path,
+    progress_path: Path,
+    new_fingerprint: str,
+    old_fingerprints: list[str],
+    fsync: bool = False,
+) -> None:
+    """Atomically adopt verified resume artifacts into the current fingerprint.
+
+    This is bookkeeping-only. Scene payloads, actions and metrics are unchanged.
+    It prevents a forced/legacy-compatible continuation from appending a second
+    fingerprint to the same journal, which would otherwise make downstream paired
+    comparison/finalization tools reject the completed artifact.
+    """
+    old = {str(x) for x in old_fingerprints if str(x) and str(x) != str(new_fingerprint)}
+    if not old:
+        return
+
+    migration = {
+        "version": 1,
+        "to": str(new_fingerprint),
+        "from": sorted(old),
+        "reason": "resume_fingerprint_contract_migration",
+    }
+    for path in (partial_path, output_path, progress_path):
+        data = _read_json_if_valid(path)
+        if data is None:
+            continue
+        saved = str(data.get("run_fingerprint", "") or "")
+        if saved not in old:
+            continue
+        data["run_fingerprint"] = str(new_fingerprint)
+        data["resume_fingerprint_migration"] = migration
+        write_json(data, path, fsync=fsync)
+
+    if journal_path.exists():
+        tmp = journal_path.with_suffix(journal_path.suffix + ".fingerprint_migrate.tmp")
+        changed = False
+        with journal_path.open("r", encoding="utf-8") as src, tmp.open("w", encoding="utf-8") as dst:
+            for line in src:
+                raw_line = line.rstrip("\n")
+                if not raw_line.strip():
+                    dst.write(line)
+                    continue
+                try:
+                    record = json.loads(raw_line)
+                except json.JSONDecodeError:
+                    # Preserve a torn final record as an ignored line and make
+                    # sure future appends start on a fresh line.
+                    dst.write(raw_line + "\n")
+                    continue
+                if isinstance(record, dict) and str(record.get("run_fingerprint", "") or "") in old:
+                    record["run_fingerprint"] = str(new_fingerprint)
+                    raw_line = json.dumps(record, sort_keys=True, ensure_ascii=False, default=str)
+                    changed = True
+                dst.write(raw_line + "\n")
+            dst.flush()
+            if fsync:
+                os.fsync(dst.fileno())
+        if changed:
+            os.replace(tmp, journal_path)
+        else:
+            tmp.unlink(missing_ok=True)
 
 
 def _append_scene_journal(path: Path, fingerprint: str, scene: dict[str, Any], *, fsync: bool = False) -> None:
@@ -4224,6 +4422,14 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
         )
     allow_legacy_index = bool(cl_cfg.get("allow_legacy_source_index_targets", True))
     run_fingerprint = _closed_loop_fingerprint(dataset_patterns, checkpoint, method, target_spec, local)
+    # Compatibility alias for interrupted jobs created by the historical v1
+    # fingerprint, which incorrectly included persistence/serialization knobs.
+    # Acceptance of this alias does not relax any scientific input: it hashes the
+    # exact same resolved config, method, dataset, target spec and checkpoint.
+    legacy_full_config_fingerprint = _closed_loop_legacy_full_config_fingerprint(
+        dataset_patterns, checkpoint, method, target_spec, local
+    )
+    compatible_resume_fingerprints = {legacy_full_config_fingerprint}
     total_rollouts = _closed_loop_rollout_limit(
         target_count=len(targets), max_rollouts=max_rollouts, max_scenes=max_scenes
     )
@@ -4234,11 +4440,29 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
             partial_path=partial_path,
             journal_path=journal_path,
             fingerprint=run_fingerprint,
+            compatible_fingerprints=compatible_resume_fingerprints,
             method=method,
             target_spec=target_spec,
             force=resume_force,
             allow_legacy=resume_allow_legacy,
         )
+        _validate_resumed_scene_contract(
+            scene_results,
+            method=method,
+            targets=targets,
+            require_target_keys=bool(cl_cfg.get("require_target_keys", False)),
+        )
+        migrated_from = list(resume_meta.get("fingerprint_migrated_from", []))
+        if migrated_from:
+            _migrate_resume_fingerprints(
+                output_path=output_path,
+                partial_path=partial_path,
+                journal_path=journal_path,
+                progress_path=progress_path,
+                new_fingerprint=run_fingerprint,
+                old_fingerprints=migrated_from,
+                fsync=resume_fsync,
+            )
         # Old v50 journals may contain full decision traces. Compact them in
         # memory immediately so a resumed metric-only run does not recreate the
         # original RAM spike.
@@ -4568,6 +4792,8 @@ def closed_loop_evaluate(dataset_patterns: str, checkpoint: str | Path | None, o
         "journal_path": str(journal_path),
         "progress_path": str(progress_path),
         "granularity": "completed_scene_or_bucket_target",
+        "fingerprint_migration_sources": list(resume_meta.get("fingerprint_migration_sources", [])),
+        "fingerprint_migrated_from": list(resume_meta.get("fingerprint_migrated_from", [])),
     }
     if resume_meta.get("legacy_sources"):
         result.setdefault("warnings", []).append(

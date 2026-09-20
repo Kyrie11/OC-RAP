@@ -5,7 +5,35 @@ set -Eeuo pipefail
 REPO="${OCRAP_REPO:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"; cd "$REPO"
 
 BASE_OUT="${BASE_OUT:-/home/senzeyu2/code/OC-RAP/runs}"
-REGIME="${1:-all}"
+
+# Resume-repair requirement / design logic:
+# - Keep the frozen closed-loop protocol and output root unchanged.
+# - Make force-resume an explicit launcher option instead of accidentally treating
+#   a Python-style --set token as the regime positional argument.
+# - Environment variables remain authoritative for existing automation.
+REGIME="all"
+CLI_RESUME_FORCE=""
+usage() {
+  cat <<'EOF'
+Usage: scripts/run_final_external_baselines.sh [safe|near|contact|all] [--resume-force]
+
+  --resume-force      allow verified in-place continuation of a legacy/mismatched
+                      resume fingerprint. The runner migrates accepted journal
+                      fingerprints before appending new scenes.
+  --no-resume-force   explicitly disable force-resume.
+
+Equivalent environment override: CL_RESUME_FORCE=true
+EOF
+}
+while (($#)); do
+  case "$1" in
+    safe|near|contact|all) REGIME="$1"; shift ;;
+    --resume-force) CLI_RESUME_FORCE=true; shift ;;
+    --no-resume-force) CLI_RESUME_FORCE=false; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "unknown option/regime: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
 OCRAP_OUT="${OCRAP_FINAL_CHARACTERIZATION_OUT:-$BASE_OUT/ocrap_v48_124_final_characterization}"
 OUT="${FINAL_EXTERNAL_BASELINE_OUT:-$BASE_OUT/external_baselines_v48_124_final_v2}"
 GPU_LIST="${GPU_LIST:-0,1}"
@@ -24,9 +52,9 @@ PRETRAINED_BASELINE_ROOT="${PRETRAINED_BASELINE_ROOT:-}"
 # knobs are excluded from the fingerprint, while every result-affecting input is
 # checked.  Respect explicit user overrides but default final runs to continuation
 # instead of deleting/restarting partial 250-scene artifacts.
-FINAL_CL_RESUME="${CL_RESUME:-true}"
-FINAL_CL_RESUME_FORCE="${CL_RESUME_FORCE:-false}"
-FINAL_SKIP_COMPLETE_METHODS="${SKIP_COMPLETE_METHODS:-true}"
+FINAL_CL_RESUME="${FINAL_CL_RESUME:-${CL_RESUME:-true}}"
+FINAL_CL_RESUME_FORCE="${FINAL_CL_RESUME_FORCE:-${CLI_RESUME_FORCE:-${CL_RESUME_FORCE:-false}}}"
+FINAL_SKIP_COMPLETE_METHODS="${FINAL_SKIP_COMPLETE_METHODS:-${SKIP_COMPLETE_METHODS:-true}}"
 
 ensure_target_locks() {
   local rebuild=false
@@ -106,5 +134,5 @@ run_one() {
 case "$REGIME" in
   safe|near|contact) run_one "$REGIME" ;;
   all) run_one safe; run_one near; run_one contact ;;
-  *) echo "usage: $0 [safe|near|contact|all]" >&2; exit 2 ;;
+  *) echo "invalid regime: $REGIME" >&2; usage >&2; exit 2 ;;
 esac

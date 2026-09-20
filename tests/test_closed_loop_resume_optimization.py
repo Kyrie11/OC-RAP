@@ -264,3 +264,141 @@ def test_resume_sparse_target_replay_excludes_completed_canonical_targets() -> N
         targets, {"target:near:s0:t10", "target:some-other-key"}
     )
     assert got == [8, 11]
+
+
+def test_resume_fingerprint_ignores_persistence_knobs_but_legacy_hash_does_not() -> None:
+    """Regression for interrupted publication jobs.
+
+    Requirement: changing only resume/persistence/serialization controls must not
+    invalidate an otherwise identical closed-loop scientific run.
+    """
+    base = {
+        "closed_loop": {
+            "method": "marc_lite",
+            "max_steps": 40,
+            "resume": True,
+            "resume_force": False,
+            "save_partial": True,
+            "include_scenes_in_partial": False,
+            "partial_write_every_scenes": 32,
+        },
+        "waymax": {"use_jit_scan_rollouts": True},
+    }
+    changed = json.loads(json.dumps(base))
+    changed["closed_loop"].update({
+        "resume_force": True,
+        "save_partial": False,
+        "partial_write_every_scenes": 1,
+        "include_scenes_in_partial": True,
+    })
+
+    fp_a = clr._closed_loop_fingerprint("dummy.tfrecord", None, "marc_lite", "near", base)
+    fp_b = clr._closed_loop_fingerprint("dummy.tfrecord", None, "marc_lite", "near", changed)
+    assert fp_a == fp_b
+
+    legacy_a = clr._closed_loop_legacy_full_config_fingerprint(
+        "dummy.tfrecord", None, "marc_lite", "near", base
+    )
+    legacy_b = clr._closed_loop_legacy_full_config_fingerprint(
+        "dummy.tfrecord", None, "marc_lite", "near", changed
+    )
+    assert legacy_a != legacy_b
+
+
+def test_metric_only_partial_cannot_veto_compatible_scene_journal(tmp_path: Path) -> None:
+    """Publication partials omit scenes; the journal is the resume authority."""
+    output = tmp_path / "closed_loop_marc_lite.json"
+    partial = output.with_suffix(output.suffix + ".partial")
+    journal = output.with_suffix(output.suffix + ".scenes.jsonl")
+
+    # This deliberately has a foreign bookkeeping fingerprint but no scenes.
+    # Before the repair it raised before the compatible journal was inspected.
+    partial.write_text(json.dumps({
+        "run_fingerprint": "stale-metric-only-partial",
+        "method": "marc_lite",
+        "bucket_dataset": "near",
+        "scenes": [],
+    }))
+    scene = _fake_scene_result("s0", 0)
+    scene["method"] = "marc_lite"
+    journal.write_text(json.dumps({
+        "version": 1,
+        "run_fingerprint": "legacy-compatible",
+        "resume_key": clr._scene_resume_key(scene),
+        "scene": scene,
+    }) + "\n")
+
+    scenes, meta = clr._load_resume_scene_results(
+        output_path=output,
+        partial_path=partial,
+        journal_path=journal,
+        fingerprint="current",
+        compatible_fingerprints={"legacy-compatible"},
+        method="marc_lite",
+        target_spec="near",
+        force=False,
+        allow_legacy=True,
+    )
+    assert [s["scene_id"] for s in scenes] == ["s0"]
+    assert meta["sources"] == ["journal"]
+    assert meta["fingerprint_migrated_from"] == ["legacy-compatible"]
+
+
+def test_resume_fingerprint_migration_keeps_journal_single_fingerprint(tmp_path: Path) -> None:
+    """Forced/legacy resume must never leave a mixed-fingerprint scene journal."""
+    output = tmp_path / "closed_loop_racp_lite.json"
+    partial = output.with_suffix(output.suffix + ".partial")
+    journal = output.with_suffix(output.suffix + ".scenes.jsonl")
+    progress = output.with_suffix(output.suffix + ".progress.json")
+
+    old_fp = "old-fingerprint"
+    new_fp = "new-fingerprint"
+    partial.write_text(json.dumps({"run_fingerprint": old_fp, "scenes": []}))
+    progress.write_text(json.dumps({"run_fingerprint": old_fp, "status": "running"}))
+    rows = []
+    for i in range(2):
+        scene = _fake_scene_result(f"s{i}", i)
+        scene["method"] = "racp_lite"
+        rows.append(json.dumps({
+            "version": 1,
+            "run_fingerprint": old_fp,
+            "resume_key": clr._scene_resume_key(scene),
+            "scene": scene,
+        }))
+    journal.write_text("\n".join(rows) + "\n")
+
+    clr._migrate_resume_fingerprints(
+        output_path=output,
+        partial_path=partial,
+        journal_path=journal,
+        progress_path=progress,
+        new_fingerprint=new_fp,
+        old_fingerprints=[old_fp],
+    )
+
+    assert json.loads(partial.read_text())["run_fingerprint"] == new_fp
+    assert json.loads(progress.read_text())["run_fingerprint"] == new_fp
+    fps = {
+        json.loads(line)["run_fingerprint"]
+        for line in journal.read_text().splitlines()
+        if line.strip()
+    }
+    assert fps == {new_fp}
+
+
+def test_forced_resume_still_rejects_wrong_method_or_target_lock() -> None:
+    """Fingerprint force must not bypass the frozen scientific cohort contract."""
+    targets = [{"target_key": "near:s0:t10"}, {"target_key": "near:s1:t10"}]
+    scene = _fake_scene_result("s0", 0)
+    scene.update({"method": "racp_lite", "target_key": "near:s0:t10"})
+    with pytest.raises(ValueError, match="contains method"):
+        clr._validate_resumed_scene_contract(
+            [scene], method="marc_lite", targets=targets, require_target_keys=True
+        )
+
+    scene["method"] = "marc_lite"
+    scene["target_key"] = "near:foreign:t10"
+    with pytest.raises(ValueError, match="outside the current frozen target lock"):
+        clr._validate_resumed_scene_contract(
+            [scene], method="marc_lite", targets=targets, require_target_keys=True
+        )
