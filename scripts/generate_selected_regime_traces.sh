@@ -49,6 +49,28 @@ python tools/prepare_selected_trace_reruns.py \
   --trace-root "$OUT" --selection-root "$SELECTION_ROOT" --clean-invalid \
   --output "$OUT/TRACE_PREP.json"
 
+# TRACE_PREP is the authority for resumability.  Do not even invoke an external
+# regime launcher when all six selected-trace families are already renderable.
+# This avoids unnecessary preflights and, importantly, avoids scheduler feature
+# checks on older Bash installations when there is no work to schedule.
+trace_pending_count() {
+  local regime="$1" method_class="$2"
+  python - "$OUT/TRACE_PREP.json" "$regime" "$method_class" <<'PY_PENDING'
+import json,sys
+d=json.load(open(sys.argv[1],encoding='utf-8')); regime=sys.argv[2]; cls=sys.argv[3]
+rows=[x for x in d.get('methods',[]) if (regime=='*' or x.get('regime')==regime)]
+if cls=='ocrap': rows=[x for x in rows if x.get('method')=='ocrap']
+elif cls=='external': rows=[x for x in rows if x.get('method')!='ocrap']
+else: raise SystemExit(f'unknown method class: {cls}')
+print(sum(not bool(x.get('valid_reusable')) for x in rows))
+PY_PENDING
+}
+OCRAP_PENDING="$(trace_pending_count '*' ocrap)"
+SAFE_EXTERNAL_PENDING="$(trace_pending_count safe external)"
+NEAR_EXTERNAL_PENDING="$(trace_pending_count near external)"
+CONTACT_EXTERNAL_PENDING="$(trace_pending_count contact external)"
+echo "[VIS-TRACE] pending trace families: ocrap=$OCRAP_PENDING safe_external=$SAFE_EXTERNAL_PENDING near_external=$NEAR_EXTERNAL_PENDING contact_external=$CONTACT_EXTERNAL_PENDING"
+
 # Replay from the collection resolved from bucket provenance.
 readarray -t WOMD_SPECS < <(python - "$INPUT_CONTRACT" <<'PY'
 import json,sys
@@ -78,35 +100,44 @@ run_logged() {
 # Frozen OC-RAP model.  Explicitly request a full JSONL journal: the
 # three-regime wrapper historically pre-filled metrics-only storage even when
 # RENDER_* was true, which silently discarded render_trace.
-run_logged ocrap_selected env \
-  MODEL_RUN="$OCRAP_MODEL_RUN" MODEL_VARIANT="$MODEL_VARIANT" \
-  OCRAP_ROOT="$OCRAP_ROOT" WOMD_ROOT="$WOMD_ROOT" CUDA_DEVICES="$CUDA_DEVICES" \
-  OUT="$OUT/ocrap" MAX_SCENARIOS=0 MAX_STEPS="$TRACE_MAX_STEPS" \
-  SAFE_WOMD="$SAFE_WOMD" NEAR_WOMD="$NEAR_WOMD" CONTACT_WOMD="$CONTACT_WOMD" \
-  SAFE_TARGET_KEYS_FILE="$SELECTION_ROOT/safe_target_keys.json" \
-  NEAR_TARGET_KEYS_FILE="$SELECTION_ROOT/near_target_keys.json" \
-  CONTACT_TARGET_KEYS_FILE="$SELECTION_ROOT/contact_target_keys.json" \
-  CONTACT_ANCHOR_PRELUDE_ENABLED=true CONTACT_ANCHOR_PRELUDE_MAX_STEPS=60 \
-  CONTACT_ANCHOR_PRELUDE_REPLAN_INTERVAL=1 CONTACT_ANCHOR_REQUIRE_FOUND=true \
-  CONTACT_ANCHOR_MANIFEST_FILE="$VIS_CONTACT_ANCHOR_MANIFEST_FILE" \
-  RENDER_SAFE=true RENDER_NEAR=true RENDER_CONTACT=true \
-  SCENE_JOURNAL_DETAIL=full RESULT_SCENE_DETAIL=metrics \
-  SAFE_LABEL_MODE=fast NEAR_LABEL_MODE=fast CONTACT_LABEL_MODE=fast \
-  SKIP_COMPLETE_REGIMES=true RESUME_FORCE=false FINALIZE_COMPLETE_JOURNALS=true \
-  bash scripts/run_ocrap_three_regime_evaluation.sh
+if (( OCRAP_PENDING > 0 )); then
+  run_logged ocrap_selected env \
+    MODEL_RUN="$OCRAP_MODEL_RUN" MODEL_VARIANT="$MODEL_VARIANT" \
+    OCRAP_ROOT="$OCRAP_ROOT" WOMD_ROOT="$WOMD_ROOT" CUDA_DEVICES="$CUDA_DEVICES" \
+    OUT="$OUT/ocrap" MAX_SCENARIOS=0 MAX_STEPS="$TRACE_MAX_STEPS" \
+    SAFE_WOMD="$SAFE_WOMD" NEAR_WOMD="$NEAR_WOMD" CONTACT_WOMD="$CONTACT_WOMD" \
+    SAFE_TARGET_KEYS_FILE="$SELECTION_ROOT/safe_target_keys.json" \
+    NEAR_TARGET_KEYS_FILE="$SELECTION_ROOT/near_target_keys.json" \
+    CONTACT_TARGET_KEYS_FILE="$SELECTION_ROOT/contact_target_keys.json" \
+    CONTACT_ANCHOR_PRELUDE_ENABLED=true CONTACT_ANCHOR_PRELUDE_MAX_STEPS=60 \
+    CONTACT_ANCHOR_PRELUDE_REPLAN_INTERVAL=1 CONTACT_ANCHOR_REQUIRE_FOUND=true \
+    CONTACT_ANCHOR_MANIFEST_FILE="$VIS_CONTACT_ANCHOR_MANIFEST_FILE" \
+    RENDER_SAFE=true RENDER_NEAR=true RENDER_CONTACT=true \
+    SCENE_JOURNAL_DETAIL=full RESULT_SCENE_DETAIL=metrics \
+    SAFE_LABEL_MODE=fast NEAR_LABEL_MODE=fast CONTACT_LABEL_MODE=fast \
+    SKIP_COMPLETE_REGIMES=true RESUME_FORCE=false FINALIZE_COMPLETE_JOURNALS=true \
+    bash scripts/run_ocrap_three_regime_evaluation.sh
+else
+  echo "[VIS-TRACE][REUSE] ocrap_selected: all three regime trace families are already renderable"
+fi
 
 # Safe external baselines. Valid trace artifacts from a prior attempt are
 # skipped; only families removed by TRACE_PREP are recomputed.
-run_logged external_safe env \
+if (( SAFE_EXTERNAL_PENDING > 0 )); then
+  run_logged external_safe env \
   RUN="$OUT/external/safe" CHECKPOINT_ROOT="$SAFE_EXTERNAL_ROOT/checkpoints" \
   OCRAP_ROOT="$OCRAP_ROOT" WOMD_ROOT="$WOMD_ROOT" CUDA_DEVICES="$CUDA_DEVICES" \
   DO_TRAIN=false DO_OFFLINE=false DO_CLOSED_LOOP=true RUN_NOMINAL_CONTROL=false RUN_LEGACY_SAFE=false RUN_SUPPLEMENTARY_SAFE=false \
   CL_WOMD="$SAFE_WOMD" CL_MAX_SCENARIOS=0 CL_MAX_STEPS="$TRACE_MAX_STEPS" \
   CL_TARGET_KEYS_FILE="$SELECTION_ROOT/safe_target_keys.json" CL_RENDER_TRACE=true CL_SCENE_JOURNAL_DETAIL=full \
-  JOBS_PER_GPU="$JOBS_PER_GPU" MAX_PARALLEL="$MAX_PARALLEL" \
+  JOBS_PER_GPU="$JOBS_PER_GPU" MAX_PARALLEL="$MAX_PARALLEL" USE_DYNAMIC_SCHEDULER=auto \
   SKIP_COMPLETE_METHODS=true CL_RESUME_FORCE=false \
   bash scripts/run_external_baselines_safe.sh
+else
+  echo "[VIS-TRACE][REUSE] external_safe: all six selected-trace families are already renderable"
+fi
 
+if (( NEAR_EXTERNAL_PENDING > 0 )); then
 # Freeze the *policy calibration* from the population Near experiment.  The
 # qualitative clip horizon may be 60 steps, but CPSF's conformal mission horizon
 # was calibrated for the publication population run (40 steps by default).  Do
@@ -149,14 +180,18 @@ if [[ -n "$NEAR_CONFORMAL_INTERVALS" ]]; then
     CONFORMAL_MISSION_HORIZON="$NEAR_CONFORMAL_MISSION_HORIZON" \
     CL_WOMD="$NEAR_WOMD" CL_LABEL_MODE=fast CL_MAX_SCENARIOS=0 CL_MAX_STEPS="$TRACE_MAX_STEPS" \
     CL_TARGET_KEYS_FILE="$SELECTION_ROOT/near_target_keys.json" CL_RENDER_TRACE=true CL_SCENE_JOURNAL_DETAIL=full \
-    JOBS_PER_GPU="$JOBS_PER_GPU" MAX_PARALLEL="$MAX_PARALLEL" \
+    JOBS_PER_GPU="$JOBS_PER_GPU" MAX_PARALLEL="$MAX_PARALLEL" USE_DYNAMIC_SCHEDULER=auto \
     SKIP_COMPLETE_METHODS=true CL_RESUME_FORCE=false \
     bash scripts/run_external_baselines_near.sh
+fi
+else
+  echo "[VIS-TRACE][REUSE] external_near: all six selected-trace families are already renderable"
 fi
 
 # Contact is independent from Near.  Run it even if Near failed so a transient
 # failure cannot waste another complete rerun on the next attempt.
-run_logged external_contact env \
+if (( CONTACT_EXTERNAL_PENDING > 0 )); then
+  run_logged external_contact env \
   RUN="$OUT/external/contact" OCRAP_ROOT="$OCRAP_ROOT" WOMD_ROOT="$WOMD_ROOT" CUDA_DEVICES="$CUDA_DEVICES" \
   DO_TRAIN=false DO_OFFLINE=false DO_CLOSED_LOOP=true RUN_LEGACY_CONTACT=false \
   CL_WOMD="$CONTACT_WOMD" CL_MAX_SCENARIOS=0 CL_MAX_STEPS="$TRACE_MAX_STEPS" \
@@ -164,9 +199,12 @@ run_logged external_contact env \
   CL_CONTACT_ANCHOR_PRELUDE_ENABLED=true CL_CONTACT_ANCHOR_PRELUDE_MAX_STEPS=60 \
   CL_CONTACT_ANCHOR_PRELUDE_REPLAN_INTERVAL=1 CL_CONTACT_ANCHOR_REQUIRE_FOUND=true \
   CL_CONTACT_ANCHOR_MANIFEST_FILE="$VIS_CONTACT_ANCHOR_MANIFEST_FILE" \
-  JOBS_PER_GPU="$JOBS_PER_GPU" MAX_PARALLEL="$MAX_PARALLEL" \
+  JOBS_PER_GPU="$JOBS_PER_GPU" MAX_PARALLEL="$MAX_PARALLEL" USE_DYNAMIC_SCHEDULER=auto \
   SKIP_COMPLETE_METHODS=true CL_RESUME_FORCE=false \
   bash scripts/run_external_baselines_contact.sh
+else
+  echo "[VIS-TRACE][REUSE] external_contact: all six selected-trace families are already renderable"
+fi
 
 python - "$OUT/TRACE_RERUN_STATUS.json" "${failures[*]-}" <<'PY'
 import json,pathlib,sys
@@ -181,55 +219,8 @@ if ((${#failures[@]})); then
   exit 30
 fi
 
-# Final strict contract.  Rendering starts only after every method supplies a
+# Final strict contract. Rendering starts only after every method supplies a
 # synchronized, full-length trace for each selected target.
-python - "$OUT" "$SELECTION_ROOT" "$TRACE_MAX_STEPS" <<'PY'
-import json, math, pathlib, sys
-root=pathlib.Path(sys.argv[1]); sel=pathlib.Path(sys.argv[2]); trace_max_steps=int(sys.argv[3])
-methods={
-'safe':['gameformer_lite','plantf','pluto','pdm_closed','pdm_hybrid','idm'],
-'near':['marc_lite','racp_lite','robust_scenario_mpc','predictive_safety_filter','dr_cvar_safety_filter','conformal_predictive_safety_filter'],
-'contact':['postimpact_mpc_lite','post_crash_braking','postimpact_motion_tvlqr','post_collision_restoration','compensatory_postimpact_mpc','robust_postimpact_control']}
-errors=[]; regimes={}
-for r,ms in methods.items():
-    selection=json.loads((sel/f'{r}_selection.json').read_text())
-    requested=[str(x) for x in json.loads((sel/f'{r}_target_keys.json').read_text())['target_keys']]
-    requested_set=set(requested); dt=float(selection.get('metric_dt_s',0.1) or 0.1)
-    selected_by_key={str(x['target_key']):x for x in (selection.get('selected') or [])}; req_steps={}
-    for key in requested:
-        item=selected_by_key.get(key) or {}; clip=float(item.get('clip_duration_s',selection.get('selected_clip_duration_s',0.0)) or 0.0)
-        steps=int(math.ceil(clip/dt-1e-9)); req_steps[key]=steps
-        if steps<=0: errors.append(f'invalid selected clip duration {r}/{key}: clip={clip} dt={dt}')
-        if steps>trace_max_steps: errors.append(f'selected clip exceeds trace cap {r}/{key}: required_steps={steps} cap={trace_max_steps}')
-    paths={'ocrap':root/'ocrap'/r/'closed_loop_ocrap.json.scenes.jsonl', **{m:root/'external'/r/f'closed_loop_{m}.json.scenes.jsonl' for m in ms}}
-    counts={}; trace_starts={k:{} for k in requested}
-    for m,p in paths.items():
-        if not p.is_file(): errors.append(f'missing journal {r}/{m}: {p}'); continue
-        seen={}
-        for lineno,line in enumerate(p.open(),1):
-            if not line.strip(): continue
-            x=json.loads(line); scene=x.get('scene',x); k=str(scene.get('target_key') or x.get('resume_key') or '')
-            if k.startswith('target:'): k=k[len('target:'):]
-            if k in seen: errors.append(f'duplicate selected target {r}/{m}/{k}: lines {seen[k]},{lineno}')
-            seen[k]=lineno
-            if k not in requested_set: continue
-            trace=scene.get('render_trace') or []; required_frames=req_steps[k]+1
-            if not trace: errors.append(f'no render_trace {r}/{m}/{k}; selected journal must be full')
-            else:
-                try: trace_starts[k][m]=int(trace[0]['time_index'])
-                except Exception: errors.append(f'render_trace lacks integer start time {r}/{m}/{k}')
-                if len(trace)<required_frames: errors.append(f'short render_trace {r}/{m}/{k}: frames={len(trace)} required>={required_frames}')
-        miss=sorted(requested_set-set(seen)); extra=sorted(set(seen)-requested_set)
-        if miss: errors.append(f'unresolved selected targets {r}/{m}: {miss}')
-        if extra: errors.append(f'unexpected selected-trace targets {r}/{m}: {extra}')
-        counts[m]=len(seen)
-    for key in requested:
-        starts=trace_starts.get(key,{})
-        if starts and len(set(starts.values()))!=1: errors.append(f'model trace starts not synchronized {r}/{key}: {starts}')
-        item=selected_by_key.get(key) or {}; field='contact_anchor_time_index' if r=='contact' else 'target_time_index'; expected=item.get(field)
-        if starts and expected is not None and next(iter(starts.values()))!=int(expected):
-            errors.append(f'trace start mismatch {r}/{key}: got={next(iter(starts.values()))} expected_{field}={expected}')
-    regimes[r]={'requested':len(requested),'journal_counts':counts,'required_rollout_steps_by_target':req_steps,'max_required_rollout_steps':max(req_steps.values()) if req_steps else 0,'selected_clip_duration_s':selection.get('selected_clip_duration_s'),'duration_selection_mode':selection.get('duration_selection_mode'),'duration_source':selection.get('duration_source')}
-doc={'event':'selected_regime_trace_contract_v126','valid':not errors,'errors':errors,'trace_max_steps':trace_max_steps,'regimes':regimes}
-(root/'TRACE_CONTRACT.json').write_text(json.dumps(doc,indent=2)+'\n'); print(json.dumps(doc,indent=2)); raise SystemExit(0 if not errors else 30)
-PY
+python tools/check_selected_trace_contract.py \
+  --trace-root "$OUT" --selection-root "$SELECTION_ROOT" \
+  --trace-max-steps "$TRACE_MAX_STEPS" --output "$OUT/TRACE_CONTRACT.json"
