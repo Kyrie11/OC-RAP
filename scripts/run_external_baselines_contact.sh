@@ -35,6 +35,15 @@ fi
 : "${CL_CONTACT_ANCHOR_MANIFEST_FILE:=}"
 : "${CL_RENDER_TRACE:=false}"
 : "${CL_RENDER_MAX_AGENTS:=48}"
+# Population runs keep compact metric-only journals.  Selected qualitative
+# reruns must persist render_trace, so their journal detail defaults to full.
+: "${CL_RESULT_SCENE_DETAIL:=metrics}"
+: "${CL_MEMORY_SCENE_DETAIL:=metrics}"
+if runtime_bool_true "$CL_RENDER_TRACE"; then
+  : "${CL_SCENE_JOURNAL_DETAIL:=full}"
+else
+  : "${CL_SCENE_JOURNAL_DETAIL:=metrics}"
+fi
 : "${CL_PREFLIGHT:=true}"
 : "${JAX_RUNTIME_PREFLIGHT:=true}"
 : "${CL_MAX_STEPS:=40}"
@@ -293,9 +302,9 @@ run_closed_loop_method() {
     --set "closed_loop.save_partial=$CL_SAVE_PARTIAL" \
     --set "closed_loop.partial_write_every_scenes=$CL_PARTIAL_WRITE_EVERY_SCENES" \
     --set "closed_loop.progress_every_steps=$CL_PROGRESS_EVERY_STEPS" \
-    --set closed_loop.result_scene_detail=metrics \
-    --set closed_loop.scene_journal_detail=metrics \
-    --set closed_loop.memory_scene_detail=metrics \
+    --set "closed_loop.result_scene_detail=$CL_RESULT_SCENE_DETAIL" \
+    --set "closed_loop.scene_journal_detail=$CL_SCENE_JOURNAL_DETAIL" \
+    --set "closed_loop.memory_scene_detail=$CL_MEMORY_SCENE_DETAIL" \
     --set closed_loop.include_scenes_in_result=false \
     --set closed_loop.include_scenes_in_partial=false \
     --set "closed_loop.profile_timing=$CL_PROFILE_TIMING" \

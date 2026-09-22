@@ -18,9 +18,11 @@ Near-Contact / Contact:
   comparator and no unsafe regression.  Lower tiers are deterministic fallbacks
   and are explicitly labeled in the output.
 Duration:
-  first require enough WOMD future horizon for >=5 s clips.  If fewer than the
-  requested count are available, automatically fall back to >=3 s.  The chosen
-  threshold is stored in the selection artifact and enforced by the renderer.
+  first require the preferred clip horizon and, if fewer than the requested
+  count are available, use the configured fallback horizon. Safe/Near measure
+  horizon from the locked WOMD target. Contact measures it from the exact-a0
+  treatment boundary in the frozen anchor manifest. The chosen threshold is
+  stored in the selection artifact and enforced by the selective-trace contract.
 """
 from __future__ import annotations
 
@@ -186,8 +188,31 @@ def _duration_available_s(scene: dict[str, Any], horizon_steps: int, dt_s: float
     if t is None:
         return None
     # WOMD has horizon_steps states.  From state t there are horizon_steps-1-t
-    # 0.1 s transitions remaining.
+    # transitions remaining.  This is correct for Safe/Near, where the rollout
+    # starts at the locked target.  Contact overrides this with the exact-a0
+    # treatment-boundary remaining horizon from the frozen anchor manifest.
     return max(0.0, (float(horizon_steps - 1) - t) * dt_s)
+
+
+def _load_contact_anchor_durations(path: Path, *, dt_s: float) -> dict[str, float]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or data.get("schema") != "ocrap-contact-anchor-manifest-v1" or data.get("valid") is not True:
+        raise SystemExit(f"invalid Contact anchor manifest: {path}")
+    anchors = data.get("anchors") or []
+    if not isinstance(anchors, list) or not anchors:
+        raise SystemExit(f"Contact anchor manifest contains no anchors: {path}")
+    out: dict[str, float] = {}
+    for row in anchors:
+        if not isinstance(row, dict):
+            raise SystemExit(f"invalid Contact anchor row in {path}")
+        key = str(row.get("target_key") or "")
+        if not key or key in out:
+            raise SystemExit(f"duplicate/empty Contact anchor target key in {path}: {key!r}")
+        remaining = int(row.get("contact_anchor_remaining_steps") or 0)
+        if remaining < 0:
+            raise SystemExit(f"negative Contact remaining horizon for {key}: {remaining}")
+        out[key] = float(remaining) * float(dt_s)
+    return out
 
 
 def _safe_absolute(scene: dict[str, Any]) -> tuple[float, dict[str, float | None], list[str]]:
@@ -398,15 +423,27 @@ def _paired_rows(
         best_external = max(external_quality, key=lambda name: (external_quality[name], name))
         worst_external = min(external_quality, key=lambda name: (external_quality[name], name))
         ocrap_quality = _absolute_score(regime, method_scene)
-        duration = _duration_available_s(method_scene, args.scenario_horizon_steps, args.metric_dt_s)
+        anchor_meta = (getattr(args, "contact_anchor_metadata", None) or {}).get(key, {}) if regime == "contact" else {}
+        if regime == "contact" and getattr(args, "contact_anchor_available_s", None) is not None:
+            duration = args.contact_anchor_available_s.get(key)
+        else:
+            duration = _duration_available_s(method_scene, args.scenario_horizon_steps, args.metric_dt_s)
 
         common = {
             "target_key": key,
             "scene_id": method_scene.get("scene_id"),
             "source_scenario_index": method_scene.get("source_scenario_index"),
             "target_time_index": method_scene.get("target_time_index"),
+            "contact_anchor_time_index": anchor_meta.get("contact_anchor_time_index", method_scene.get("contact_anchor_time_index")),
+            "contact_anchor_prelude_env_steps": anchor_meta.get("contact_anchor_prelude_env_steps", method_scene.get("contact_anchor_prelude_env_steps")),
+            "contact_anchor_remaining_steps": anchor_meta.get("contact_anchor_remaining_steps", method_scene.get("contact_anchor_remaining_steps")),
             "regime": regime,
             "available_future_s": duration,
+            "available_future_source": (
+                "contact_anchor_remaining_steps"
+                if regime == "contact" and getattr(args, "contact_anchor_available_s", None) is not None
+                else "womd_target_time_index"
+            ),
             "ocrap_absolute_score": ocrap_quality,
             "external_absolute_scores": external_quality,
             "ocrap_metrics": _metric_snapshot(regime, method_scene),
@@ -609,6 +646,16 @@ def main() -> int:
             "anchors with enough post-anchor horizon for the requested clip length."
         ),
     )
+    ap.add_argument(
+        "--contact-anchor-manifest",
+        type=Path,
+        default=None,
+        help=(
+            "Frozen exact-a0 Contact anchor manifest. For Contact selection, available clip "
+            "duration is computed from contact_anchor_remaining_steps rather than from the "
+            "pre-anchor target_time_index."
+        ),
+    )
     ap.add_argument("--num-scenes", type=int, default=5)
     ap.add_argument("--min-duration-s", type=float, default=5.0)
     ap.add_argument("--fallback-min-duration-s", type=float, default=3.0)
@@ -633,6 +680,20 @@ def main() -> int:
     baseline_paths = _parse_baseline_specs(args.baseline)
     ocrap = _load_scenes(args.ocrap_scenes)
     baselines = {name: _load_scenes(path) for name, path in baseline_paths.items()}
+    args.contact_anchor_available_s = None
+    args.contact_anchor_metadata = None
+    if args.regime == "contact":
+        if args.contact_anchor_manifest is None:
+            raise SystemExit("Contact visualization requires --contact-anchor-manifest so clip horizon is measured from the exact-a0 treatment boundary")
+        args.contact_anchor_available_s = _load_contact_anchor_durations(
+            args.contact_anchor_manifest, dt_s=args.metric_dt_s
+        )
+        anchor_doc = json.loads(args.contact_anchor_manifest.read_text(encoding="utf-8"))
+        args.contact_anchor_metadata = {
+            str(row.get("target_key") or ""): row
+            for row in (anchor_doc.get("anchors") or [])
+            if isinstance(row, dict) and row.get("target_key")
+        }
     if args.allowed_target_keys_file is not None:
         raw = json.loads(args.allowed_target_keys_file.read_text(encoding="utf-8"))
         keys = raw.get("target_keys") if isinstance(raw, dict) else raw
@@ -657,6 +718,15 @@ def main() -> int:
     }
     if mismatch:
         raise SystemExit(f"unpaired target sets: {json.dumps(mismatch, ensure_ascii=False)}")
+    if args.regime == "contact":
+        anchor_keys = set(args.contact_anchor_available_s or {})
+        missing_anchor = sorted(reference_keys - anchor_keys)
+        extra_anchor = sorted(anchor_keys - reference_keys)
+        if missing_anchor or extra_anchor:
+            raise SystemExit(
+                "Contact anchor manifest does not exactly match the paired locked Contact cohort: "
+                + json.dumps({"missing": missing_anchor[:10], "extra": extra_anchor[:10]}, ensure_ascii=False)
+            )
 
     rows = _paired_rows(args.regime, ocrap, baselines, args)
     tier_rows = rows
@@ -673,10 +743,19 @@ def main() -> int:
         duration_pool = fallback_rows
         duration_mode = "fallback"
     if len(duration_pool) < args.num_scenes:
+        tier_counts: dict[int, int] = {}
+        fallback_by_tier: dict[int, int] = {}
+        for row in rows:
+            rank = int(row["selection_tier_rank"])
+            tier_counts[rank] = tier_counts.get(rank, 0) + 1
+            if row["available_future_s"] is not None and float(row["available_future_s"]) + 1e-9 >= args.fallback_min_duration_s:
+                fallback_by_tier[rank] = fallback_by_tier.get(rank, 0) + 1
         raise SystemExit(
-            f"{args.regime}: need {args.num_scenes} scenes with >= {duration_threshold:.1f}s future horizon, "
-            f"found {len(duration_pool)} (>= {args.min_duration_s:.1f}s: {len(long_rows)}, "
-            f">= {args.fallback_min_duration_s:.1f}s: {len(fallback_rows)})"
+            f"{args.regime}: need {args.num_scenes} scenes with >= {duration_threshold:.1f}s future horizon at "
+            f"max_selected_tier_rank={args.max_selected_tier_rank}, found {len(duration_pool)} "
+            f"(preferred >= {args.min_duration_s:.1f}s: {len(long_rows)}, fallback >= {args.fallback_min_duration_s:.1f}s: {len(fallback_rows)}). "
+            f"all paired tier counts={tier_counts}, fallback-duration counts by tier={fallback_by_tier}. "
+            "Do not change the quantitative cohort; for supplementary-only examples you may explicitly relax MAX_SELECTED_TIER_RANK if needed."
         )
 
     selected = _select_diverse(
@@ -726,6 +805,8 @@ def main() -> int:
         "duration_selection_mode": duration_mode,
         "scenario_horizon_steps": args.scenario_horizon_steps,
         "metric_dt_s": args.metric_dt_s,
+        "duration_source": "contact_anchor_remaining_steps" if args.regime == "contact" else "womd_target_time_index",
+        "contact_anchor_manifest": str(args.contact_anchor_manifest) if args.contact_anchor_manifest is not None else None,
         "selected": selected,
         "target_keys": [r["target_key"] for r in selected],
         "all_scene_scores": sorted(rows, key=lambda r: (int(r["selection_tier_rank"]), -float(r["score"]), str(r["target_key"]))),

@@ -20,7 +20,9 @@ export PYTHONNOUSERSITE=1
 : "${OUT:=/home/senzeyu2/code/OC-RAP/runs/regime_visualization}"
 : "${NUM_SCENES:=5}"
 : "${MIN_VIDEO_DURATION_S:=5.0}"
-: "${FALLBACK_MIN_VIDEO_DURATION_S:=3.0}"
+: "${FALLBACK_MIN_VIDEO_DURATION_S:=4.0}"
+: "${CONTACT_FALLBACK_MIN_VIDEO_DURATION_S:=4.0}"
+: "${VIS_CONTACT_ANCHOR_MANIFEST_FILE:=}"
 : "${CONTACT_ALLOWED_TARGET_KEYS_FILE:=}"
 : "${MAX_SELECTED_TIER_RANK:=1}"  # 0=strict hardest-baseline win only; 1 allows majority-material strong evidence.
 
@@ -53,9 +55,17 @@ select_one() {
     args+=(--baseline "$m=$ext_root/closed_loop_${m}.json.scenes.jsonl")
   done
   local -a filter_args=()
-  if [[ "$regime" == contact && -n "$CONTACT_ALLOWED_TARGET_KEYS_FILE" ]]; then
-    [[ -s "$CONTACT_ALLOWED_TARGET_KEYS_FILE" ]] || { echo "missing Contact visualization target filter: $CONTACT_ALLOWED_TARGET_KEYS_FILE" >&2; exit 30; }
-    filter_args+=(--allowed-target-keys-file "$CONTACT_ALLOWED_TARGET_KEYS_FILE")
+  local fallback_duration="$FALLBACK_MIN_VIDEO_DURATION_S"
+  if [[ "$regime" == contact ]]; then
+    [[ -s "$VIS_CONTACT_ANCHOR_MANIFEST_FILE" ]] || { echo "missing frozen Contact visualization anchor manifest: $VIS_CONTACT_ANCHOR_MANIFEST_FILE" >&2; exit 30; }
+    filter_args+=(--contact-anchor-manifest "$VIS_CONTACT_ANCHOR_MANIFEST_FILE")
+    fallback_duration="$CONTACT_FALLBACK_MIN_VIDEO_DURATION_S"
+    # Backward-compatible optional filter.  The final v125 path deliberately
+    # leaves this unset so Contact selection stays on the full locked cohort.
+    if [[ -n "$CONTACT_ALLOWED_TARGET_KEYS_FILE" ]]; then
+      [[ -s "$CONTACT_ALLOWED_TARGET_KEYS_FILE" ]] || { echo "missing Contact visualization target filter: $CONTACT_ALLOWED_TARGET_KEYS_FILE" >&2; exit 30; }
+      filter_args+=(--allowed-target-keys-file "$CONTACT_ALLOWED_TARGET_KEYS_FILE")
+    fi
   fi
   python tools/select_regime_visualization_scenes.py \
     --regime "$regime" \
@@ -65,7 +75,7 @@ select_one() {
     --target-keys-output "$OUT/selection/${regime}_target_keys.json" \
     --num-scenes "$NUM_SCENES" \
     --min-duration-s "$MIN_VIDEO_DURATION_S" \
-    --fallback-min-duration-s "$FALLBACK_MIN_VIDEO_DURATION_S" \
+    --fallback-min-duration-s "$fallback_duration" \
     --max-selected-tier-rank "$MAX_SELECTED_TIER_RANK"
 }
 

@@ -464,12 +464,22 @@ def _validate_trace_time_alignment(traces: dict[str, list[dict[str, Any]]], item
         lengths[method] = len(times)
     if len(set(starts.values())) != 1:
         raise SystemExit(f"{item.get('target_key')}: model traces do not start at the same simulator time: {starts}")
-    expected = item.get("target_time_index")
+    # Safe/Near treatment starts at the locked target.  Contact first executes
+    # the shared exact-a0 pre-treatment prelude, so the compared policies and
+    # render traces start at the observed-contact treatment boundary instead.
+    expected_field = "contact_anchor_time_index" if item.get("contact_anchor_time_index") is not None else "target_time_index"
+    expected = item.get(expected_field)
     if expected is not None and int(expected) != next(iter(starts.values())):
         raise SystemExit(
-            f"{item.get('target_key')}: trace start time {next(iter(starts.values()))} != selected target_time_index {expected}"
+            f"{item.get('target_key')}: trace start time {next(iter(starts.values()))} != selected {expected_field} {expected}"
         )
-    return {"start_time_index": next(iter(starts.values())), "trace_lengths": lengths, "consecutive": True}
+    return {
+        "start_time_index": next(iter(starts.values())),
+        "expected_start_field": expected_field,
+        "expected_start_time_index": int(expected) if expected is not None else None,
+        "trace_lengths": lengths,
+        "consecutive": True,
+    }
 
 
 def _series(trace: list[dict[str, Any]], key: str, sim_indices: list[int]) -> list[float]:
@@ -711,7 +721,7 @@ def _render_montage(*, methods, traces, item, selection, regime, displays, conte
     for i, method in enumerate(methods):
         axes[method] = figure.add_subplot(grid[i // 4, i % 4])
     info_ax = figure.add_subplot(grid[1, 3])
-    regime_title = "NEAR-CONTACT" if regime == "near" else ("CONTACT-SURROGATE" if regime == "contact" else "SAFE")
+    regime_title = "NEAR-CONTACT" if regime == "near" else ("CONTACT" if regime == "contact" else "SAFE")
     figure.suptitle(f"{regime_title} · target-locked all-method comparison · Rank {item.get('category_rank')}",
                     fontsize=12.0, fontweight="bold", y=0.985)
     figure.subplots_adjust(left=0.025, right=0.985, top=0.93, bottom=0.035)
@@ -738,7 +748,7 @@ def _render_pair(*, methods, scenes, traces, item, selection, regime, displays, 
     axes = {ocrap: figure.add_subplot(grid[0, 0]), comparator: figure.add_subplot(grid[0, 1])}
     timeline_ax = figure.add_subplot(grid[1, 0:2]); timeline_twin = timeline_ax.twinx()
     info_ax = figure.add_subplot(grid[:, 2])
-    regime_title = "NEAR-CONTACT" if regime == "near" else ("CONTACT-SURROGATE" if regime == "contact" else regime.upper())
+    regime_title = "NEAR-CONTACT" if regime == "near" else ("CONTACT" if regime == "contact" else regime.upper())
     comparator_name = _short_display(comparator, 20)
     role_short = _short_comparator_role(comparator_role, regime)
     figure.suptitle(

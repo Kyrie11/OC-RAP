@@ -185,3 +185,95 @@ def test_selector_cli_registers_allowed_target_keys_file(tmp_path, monkeypatch):
     ])
     assert selector.main() == 0
     assert __import__("json").loads(keys_path.read_text())["target_keys"] == [key]
+
+
+def test_contact_duration_uses_exact_anchor_remaining_horizon(tmp_path, monkeypatch):
+    import json
+
+    keys = [f"test_contact:scene{i}:t10" for i in range(3)]
+    remaining = [70, 45, 40]
+
+    def contact_scene(key, clearance, overlap):
+        return {
+            "target_key": key,
+            "scene_id": key.split(":", 1)[1].split(":", 1)[0],
+            "target_time_index": 10,
+            "min_clearance_m_p05": clearance,
+            "terminal_clearance_m": clearance + 0.5,
+            "clearance_recovery_gain_m": 0.5,
+            "overlap_duration_s": overlap,
+            "penetration_duration_s": overlap,
+            "penetration_depth_m_max": overlap,
+            "new_stable_stop_quality_event": 1.0,
+            "overlap_any": 0.0,
+            "offroad_any": 0.0,
+        }
+
+    ocrap_path = tmp_path / "ocrap.jsonl"
+    baseline_path = tmp_path / "baseline.jsonl"
+    ocrap_rows = [contact_scene(k, 2.0 + i * 0.1, 0.1) for i, k in enumerate(keys)]
+    baseline_rows = [contact_scene(k, 0.5, 1.0) for k in keys]
+    ocrap_path.write_text("".join(json.dumps({"scene": x}) + "\n" for x in ocrap_rows))
+    baseline_path.write_text("".join(json.dumps({"scene": x}) + "\n" for x in baseline_rows))
+    manifest = {
+        "schema": "ocrap-contact-anchor-manifest-v1",
+        "valid": True,
+        "anchors": [
+            {"target_key": k, "contact_anchor_remaining_steps": rem, "scene_id": f"scene{i}"}
+            for i, (k, rem) in enumerate(zip(keys, remaining))
+        ],
+    }
+    manifest_path = tmp_path / "contact_anchor_manifest.json"
+    manifest_path.write_text(json.dumps(manifest))
+    output_path = tmp_path / "selection.json"
+    keys_path = tmp_path / "keys.json"
+
+    # Make every paired Contact comparison strong so the test isolates duration.
+    monkeypatch.setattr(selector, "_evaluate_contact_surrogate", lambda *_a, **_k: {
+        "score": 1.0, "material": ["clearance"], "regressions": [], "missing": [],
+        "evidence_profile": "clearance_recovery", "terms": {},
+    })
+    monkeypatch.setattr(sys, "argv", [
+        "select_regime_visualization_scenes.py",
+        "--regime", "contact",
+        "--ocrap-scenes", str(ocrap_path),
+        "--baseline", f"dummy={baseline_path}",
+        "--contact-anchor-manifest", str(manifest_path),
+        "--output", str(output_path),
+        "--target-keys-output", str(keys_path),
+        "--num-scenes", "3",
+        "--min-duration-s", "6",
+        "--fallback-min-duration-s", "4",
+        "--max-selected-tier-rank", "1",
+    ])
+    assert selector.main() == 0
+    doc = json.loads(output_path.read_text())
+    assert doc["duration_selection_mode"] == "fallback"
+    assert doc["selected_clip_duration_s"] == 4.0
+    assert doc["duration_source"] == "contact_anchor_remaining_steps"
+    assert sorted(round(x["available_future_s"], 1) for x in doc["selected"]) == [4.0, 4.5, 7.0]
+
+
+def test_contact_trace_alignment_uses_anchor_time_not_pre_anchor_target_time():
+    traces = {
+        "ocrap": [{"time_index": 21}, {"time_index": 22}],
+        "baseline": [{"time_index": 21}, {"time_index": 22}],
+    }
+    item = {
+        "target_key": "test_contact:scene:t16",
+        "target_time_index": 16,
+        "contact_anchor_time_index": 21,
+    }
+    out = renderer._validate_trace_time_alignment(traces, item)
+    assert out["start_time_index"] == 21
+    assert out["expected_start_field"] == "contact_anchor_time_index"
+
+
+def test_safe_trace_alignment_still_uses_target_time():
+    traces = {
+        "ocrap": [{"time_index": 10}, {"time_index": 11}],
+        "baseline": [{"time_index": 10}, {"time_index": 11}],
+    }
+    item = {"target_key": "test_safe:scene:t10", "target_time_index": 10}
+    out = renderer._validate_trace_time_alignment(traces, item)
+    assert out["expected_start_field"] == "target_time_index"

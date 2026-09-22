@@ -184,7 +184,7 @@ def main() -> int:
         all_methods = ["ocrap"] + list(selection.get("external_baselines") or [])
         all_kf = _keyframes({m: traces[m] for m in all_methods}, regime, clip, dt_s, 3)
         scene_dir = args.output_dir / regime / f"rank_{rank:02d}"
-        regime_title = "NEAR-CONTACT" if regime == "near" else ("CONTACT-SURROGATE" if regime == "contact" else "SAFE")
+        regime_title = "NEAR-CONTACT" if regime == "near" else ("CONTACT" if regime == "contact" else "SAFE")
         pair_files = _render_grid(
             methods=pair_methods, traces=traces, displays=displays, regime=regime, context=context,
             keyframes=pair_kf, dt_s=dt_s, minimum_radius=args.view_radius_m,
