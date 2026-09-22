@@ -5,9 +5,36 @@ import argparse
 import json
 from pathlib import Path
 
+METHODS = {
+    "safe": ["gameformer_lite", "plantf", "pluto", "pdm_closed", "pdm_hybrid", "idm"],
+    "near": ["marc_lite", "racp_lite", "robust_scenario_mpc", "predictive_safety_filter", "dr_cvar_safety_filter", "conformal_predictive_safety_filter"],
+    "contact": ["postimpact_mpc_lite", "post_crash_braking", "postimpact_motion_tvlqr", "post_collision_restoration", "compensatory_postimpact_mpc", "robust_postimpact_control"],
+}
+
 
 def load(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def journal_trace_summary(path: Path) -> dict:
+    if not path.is_file():
+        return {"exists": False, "rows": 0, "render_trace_rows": 0}
+    rows = traces = 0
+    keys = set()
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            rows += 1
+            x = json.loads(line); scene = x.get("scene", x)
+            k = str(scene.get("target_key") or x.get("resume_key") or "")
+            if k.startswith("target:"):
+                k = k[len("target:"):]
+            if k:
+                keys.add(k)
+            if scene.get("render_trace"):
+                traces += 1
+    return {"exists": True, "rows": rows, "unique_keys": len(keys), "render_trace_rows": traces}
 
 
 def main() -> int:
@@ -31,13 +58,9 @@ def main() -> int:
     horizon = root / "provenance" / "CONTACT_VISUALIZATION_HORIZON.json"
     if horizon.is_file():
         h = load(horizon)
-        stages["contact_horizon"] = {
-            "locked_targets": h.get("locked_targets"),
-            "preferred_duration_s": h.get("preferred_duration_s"),
-            "num_preferred_eligible": h.get("num_preferred_eligible"),
-            "fallback_duration_s": h.get("fallback_duration_s"),
-            "num_fallback_eligible": h.get("num_fallback_eligible"),
-        }
+        stages["contact_horizon"] = {k: h.get(k) for k in (
+            "locked_targets", "preferred_duration_s", "num_preferred_eligible",
+            "fallback_duration_s", "num_fallback_eligible")}
 
     selections = {}
     for regime in ("safe", "near", "contact"):
@@ -45,19 +68,38 @@ def main() -> int:
         if not p.is_file():
             errors.append(f"missing {regime} selection: {p}")
             continue
-        d = load(p)
-        n = len(d.get("selected") or [])
+        d = load(p); n = len(d.get("selected") or [])
         selections[regime] = {
-            "selected": n,
-            "clip_duration_s": d.get("selected_clip_duration_s"),
-            "duration_mode": d.get("duration_selection_mode"),
-            "duration_source": d.get("duration_source"),
+            "selected": n, "clip_duration_s": d.get("selected_clip_duration_s"),
+            "duration_mode": d.get("duration_selection_mode"), "duration_source": d.get("duration_source"),
             "preferred_candidates": d.get("num_preferred_duration_candidates"),
             "fallback_candidates": d.get("num_fallback_duration_candidates"),
         }
         if n < args.expected_scenes:
             errors.append(f"{regime} selection has {n} scenes, expected {args.expected_scenes}")
     stages["selection"] = selections
+
+    prep = root / "selective_traces" / "TRACE_PREP.json"
+    if prep.is_file():
+        d = load(prep)
+        stages["trace_preparation"] = {
+            "num_reusable": d.get("num_reusable"),
+            "num_invalid_or_missing": d.get("num_invalid_or_missing"),
+        }
+
+    rerun = root / "selective_traces" / "TRACE_RERUN_STATUS.json"
+    if rerun.is_file():
+        d = load(rerun)
+        stages["trace_rerun_status"] = d
+        if d.get("valid") is not True:
+            errors.append(f"selected trace rerun stage failed: {d.get('failures')}")
+
+    trace_inventory = {}
+    for regime, ext in METHODS.items():
+        paths = {"ocrap": root / "selective_traces" / "ocrap" / regime / "closed_loop_ocrap.json.scenes.jsonl"}
+        paths.update({m: root / "selective_traces" / "external" / regime / f"closed_loop_{m}.json.scenes.jsonl" for m in ext})
+        trace_inventory[regime] = {m: journal_trace_summary(p) for m, p in paths.items()}
+    stages["trace_inventory"] = trace_inventory
 
     trace_contract = root / "selective_traces" / "TRACE_CONTRACT.json"
     if trace_contract.is_file():
@@ -67,15 +109,14 @@ def main() -> int:
             errors.append("selective trace contract is invalid")
     elif len(selections) == 3:
         errors.append(f"selection completed but trace contract is missing: {trace_contract}")
-
-    video_index = root / "videos" / "REGIME_VIDEO_INDEX.json"
-    if video_index.is_file():
-        v = load(video_index)
-        stages["videos"] = {"num_videos": v.get("num_videos")}
-        if int(v.get("num_videos") or 0) <= 0:
-            errors.append("video index exists but contains no videos")
-    elif trace_contract.is_file() and load(trace_contract).get("valid") is True:
-        errors.append(f"trace contract passed but video index is missing: {video_index}")
+        # Give actionable hints even when the producer exited before writing the contract.
+        no_trace = []
+        for r, methods in trace_inventory.items():
+            for m, x in methods.items():
+                if not x.get("exists") or int(x.get("render_trace_rows") or 0) < args.expected_scenes:
+                    no_trace.append(f"{r}/{m}")
+        if no_trace:
+            errors.append("missing/incomplete render traces: " + ", ".join(no_trace))
 
     fig_index = root / "paper_figures" / "PAPER_FIGURE_INDEX.json"
     if fig_index.is_file():
@@ -84,16 +125,18 @@ def main() -> int:
         stages["paper_figures"] = {"num_scene_records": n_records}
         if n_records <= 0:
             errors.append("paper figure index exists but contains no scene records")
-    elif video_index.is_file():
-        errors.append(f"videos exist but paper figure index is missing: {fig_index}")
+    elif trace_contract.is_file() and load(trace_contract).get("valid") is True:
+        errors.append(f"trace contract passed but paper figure index is missing: {fig_index}")
 
-    doc = {
-        "event": "regime_visualization_output_audit_v125",
-        "root": str(root),
-        "valid": not errors,
-        "errors": errors,
-        "stages": stages,
-    }
+    video_index = root / "videos" / "REGIME_VIDEO_INDEX.json"
+    if video_index.is_file():
+        v = load(video_index); stages["videos"] = {"num_videos": v.get("num_videos")}
+        if int(v.get("num_videos") or 0) <= 0:
+            errors.append("video index exists but contains no videos")
+    elif trace_contract.is_file() and load(trace_contract).get("valid") is True:
+        errors.append(f"trace contract passed but video index is missing: {video_index}")
+
+    doc = {"event": "regime_visualization_output_audit_v126", "root": str(root), "valid": not errors, "errors": errors, "stages": stages}
     print(json.dumps(doc, ensure_ascii=False, indent=2))
     return 0 if not errors else 30
 

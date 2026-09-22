@@ -99,7 +99,14 @@ fi
 : "${FINALIZE_COMPLETE_JOURNALS:=true}"
 : "${INCLUDE_SCENES_IN_RESULT:=false}"
 : "${RESULT_SCENE_DETAIL:=metrics}"
-: "${SCENE_JOURNAL_DETAIL:=metrics}"
+# Selected qualitative reruns must persist render_trace in the authoritative
+# JSONL journal.  Do not let the three-regime wrapper pre-fill "metrics" and
+# thereby defeat run_ocrap_closed_loop.sh's render-aware default.
+if runtime_bool_true "$RENDER_SAFE" || runtime_bool_true "$RENDER_NEAR" || runtime_bool_true "$RENDER_CONTACT"; then
+  : "${SCENE_JOURNAL_DETAIL:=full}"
+else
+  : "${SCENE_JOURNAL_DETAIL:=metrics}"
+fi
 
 IFS=',' read -r -a GPUS <<< "$CUDA_DEVICES"; ((${#GPUS[@]})) || GPUS=(0)
 mkdir -p "$OUT/safe" "$OUT/near" "$OUT/contact"

@@ -34,13 +34,18 @@ def test_master_suite_cleans_only_named_final_run_roots_and_requests_6s_visualiz
 def test_visualization_pipeline_enforces_continuous_full_length_trace() -> None:
     build = (ROOT / "scripts/build_regime_visualizations.sh").read_text()
     generate = (ROOT / "scripts/generate_selected_regime_traces.sh").read_text()
+    ocrap_three = (ROOT / "scripts/run_ocrap_three_regime_evaluation.sh").read_text()
     assert 'MIN_VIDEO_DURATION_S="${MIN_VIDEO_DURATION_S:-6.0}"' in build
-    assert 'VIS_CONTACT_MIN_POST_STEPS="${VIS_CONTACT_MIN_POST_STEPS:-$TRACE_MAX_STEPS}"' in build
-    assert 'build_contact_anchor_manifest.py' in build
-    assert '--min-post-steps "$VIS_CONTACT_MIN_POST_STEPS"' in build
-    assert 'CONTACT_ANCHOR_PRELUDE_ENABLED=true' in generate
-    assert 'CL_CONTACT_ANCHOR_PRELUDE_ENABLED=true' in generate
-    assert 'len(trace) < required_steps + 1' in generate
+    assert 'CONTACT_FALLBACK_MIN_VIDEO_DURATION_S="${CONTACT_FALLBACK_MIN_VIDEO_DURATION_S:-4.0}"' in build
+    assert 'CONTACT_VISUALIZATION_HORIZON.json' in build
+    assert 'render_regime_paper_figures.sh' in build
+    assert build.index('render_regime_paper_figures.sh') < build.index('render_regime_videos.sh')
+    assert 'prepare_selected_trace_reruns.py' in generate
+    assert 'SCENE_JOURNAL_DETAIL=full' in generate
+    assert 'CONFORMAL_INTERVALS="$NEAR_CONFORMAL_INTERVALS"' in generate
+    assert 'TRACE_RERUN_STATUS.json' in generate
+    assert 'len(trace)<required_frames' in generate
+    assert 'SCENE_JOURNAL_DETAIL:=full' in ocrap_three
 
 
 def _write_csv(path: Path, fields: list[str], rows: list[dict[str, str]]) -> None:

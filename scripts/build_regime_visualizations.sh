@@ -43,8 +43,8 @@ while (($#)); do case "$1" in
 [[ -n "$OCRAP_RESULTS_ROOT" && -n "$OCRAP_MODEL_RUN" ]] || { echo '--ocrap-results and --model-run are required' >&2; exit 2; }
 [[ "$TRACE_MAX_STEPS" =~ ^[0-9]+$ && "$TRACE_MAX_STEPS" -gt 0 ]] || { echo '--trace-steps must be a positive integer' >&2; exit 2; }
 if [[ "$VIDEO_FORMAT" == mp4 ]] && ! command -v ffmpeg >/dev/null 2>&1; then
-  echo "--format mp4 requires ffmpeg; install ffmpeg or set VIDEO_FORMAT=gif/auto before spending time on selective reruns" >&2
-  exit 31
+  echo "[WARN] ffmpeg not found; static paper figures will still be generated and video format falls back to auto/GIF." >&2
+  VIDEO_FORMAT=auto
 fi
 export OCRAP_ROOT="${OCRAP_ROOT:-/data0/senzeyu2/dataset/OCRAP}" WOMD_ROOT="${WOMD_ROOT:-/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example}"
 export SAFE_EXTERNAL_ROOT="$EXTERNAL_RESULTS_ROOT/safe" NEAR_EXTERNAL_ROOT="$EXTERNAL_RESULTS_ROOT/near" CONTACT_EXTERNAL_ROOT="$EXTERNAL_RESULTS_ROOT/contact"
@@ -101,9 +101,13 @@ PY
 CONTACT_ALLOWED_TARGET_KEYS_FILE=""
 export VIS_CONTACT_ANCHOR_MANIFEST_FILE CONTACT_FALLBACK_MIN_VIDEO_DURATION_S CONTACT_ALLOWED_TARGET_KEYS_FILE
 
-bash scripts/select_regime_visualizations.sh
-SELECTION_ROOT="$OUT/selection" OUT="$OUT/selective_traces" bash scripts/generate_selected_regime_traces.sh
-TRACE_ROOT="$OUT/selective_traces" SELECTION_ROOT="$OUT/selection" OUT="$OUT/videos" FORMAT="$VIDEO_FORMAT" bash scripts/render_regime_videos.sh
-TRACE_ROOT="$OUT/selective_traces" SELECTION_ROOT="$OUT/selection" OUT="$OUT/paper_figures" bash scripts/render_regime_paper_figures.sh
-printf 'Visualization complete: %s\n' "$OUT/videos/REGIME_VIDEO_INDEX.json"
+mkdir -p "$OUT/logs"
+bash scripts/select_regime_visualizations.sh 2>&1 | tee "$OUT/logs/01_selection.log"
+SELECTION_ROOT="$OUT/selection" OUT="$OUT/selective_traces" bash scripts/generate_selected_regime_traces.sh 2>&1 | tee "$OUT/logs/02_selective_traces.log"
+# Static figures are rendered before videos so an encoder-specific failure can
+# never suppress the paper-ready PNG/PDF outputs once the trace contract passes.
+TRACE_ROOT="$OUT/selective_traces" SELECTION_ROOT="$OUT/selection" OUT="$OUT/paper_figures" bash scripts/render_regime_paper_figures.sh 2>&1 | tee "$OUT/logs/03_paper_figures.log"
+TRACE_ROOT="$OUT/selective_traces" SELECTION_ROOT="$OUT/selection" OUT="$OUT/videos" FORMAT="$VIDEO_FORMAT" bash scripts/render_regime_videos.sh 2>&1 | tee "$OUT/logs/04_videos.log"
+python tools/audit_regime_visualization_outputs.py --root "$OUT" --expected-scenes "$NUM_SCENES" | tee "$OUT/logs/05_output_audit.log"
 printf 'Paper figures complete: %s\n' "$OUT/paper_figures/PAPER_FIGURE_INDEX.json"
+printf 'Visualization complete: %s\n' "$OUT/videos/REGIME_VIDEO_INDEX.json"
