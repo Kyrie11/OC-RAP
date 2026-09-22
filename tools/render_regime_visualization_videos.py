@@ -21,14 +21,20 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
 import shutil
+import subprocess
 import textwrap
+import time
 from pathlib import Path
 from typing import Any
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib import animation, patches, transforms
+from matplotlib.collections import LineCollection
 
 try:
     from ocrap.external_baselines.provenance import find_provenance
@@ -306,8 +312,15 @@ def _minimum_box_pair(frame: dict[str, Any]) -> tuple[dict[str, Any], dict[str, 
     return sdc, other, float(dist)
 
 
-def _draw_roadgraph(ax, context, center, radius):
+def _prepare_roadgraph_segments(context, center, radius):
+    """Prepare the exact visible road polylines once for a fixed camera.
+
+    Rendering previously created one Line2D artist per polyline on every frame.
+    A single LineCollection preserves the same geometry/linewidth/alpha while
+    avoiding hundreds of Python artist constructions per frame.
+    """
     cx, cy = center
+    segments = []
     for polyline in (context or {}).get("roadgraph_polylines", []):
         xy = polyline.get("xy") or []
         points = []
@@ -319,7 +332,18 @@ def _draw_roadgraph(ax, context, center, radius):
             if abs(x - cx) <= radius + 5.0 and abs(y - cy) <= radius + 5.0:
                 points.append((x, y))
         if len(points) >= 2:
-            ax.plot([p[0] for p in points], [p[1] for p in points], linewidth=0.65, alpha=0.35, zorder=0)
+            segments.append(points)
+    return segments
+
+
+def _draw_roadgraph(ax, context, center, radius, prepared_segments=None):
+    segments = prepared_segments
+    if segments is None:
+        segments = _prepare_roadgraph_segments(context, center, radius)
+    if segments:
+        cycle = plt.rcParams.get("axes.prop_cycle").by_key().get("color", ["C0"])
+        colors = [cycle[i % len(cycle)] for i in range(len(segments))]
+        ax.add_collection(LineCollection(segments, colors=colors, linewidths=0.65, alpha=0.35, zorder=0))
 
 
 def _all_model_fixed_view(traces: dict[str, list[dict[str, Any]]], minimum_radius: float):
@@ -363,13 +387,14 @@ def _yaw_rate(trace: list[dict[str, Any]], index: int, metric_dt_s: float) -> fl
 def _draw_frame(
     ax, trace, sim_index, title, center, radius, contact_xy, contact_label, metric_dt_s, context=None,
     *, show_hud: bool = True, show_axes: bool = True, show_clearance_annotation: bool = True,
+    roadgraph_segments=None,
 ):
     held = sim_index >= len(trace)
     row = _frame(trace, sim_index)
     cx, cy = center
     ax.clear(); ax.set_aspect("equal", adjustable="box")
     ax.set_xlim(cx - radius, cx + radius); ax.set_ylim(cy - radius, cy + radius)
-    _draw_roadgraph(ax, context, center, radius)
+    _draw_roadgraph(ax, context, center, radius, prepared_segments=roadgraph_segments)
     ax.set_title(title + (" · final state held" if held else ""), fontsize=10)
     if show_axes:
         ax.set_xlabel("x [m]"); ax.set_ylabel("y [m]"); ax.grid(alpha=0.15)
@@ -490,13 +515,26 @@ def _series(trace: list[dict[str, Any]], key: str, sim_indices: list[int]) -> li
     return values
 
 
+def _prepare_timeline_cache(traces: dict[str, list[dict[str, Any]]], sim_indices: list[int], regime: str):
+    secondary_key = "ttc_s" if regime == "near" else "ego_speed_mps"
+    out = {}
+    for method, trace in traces.items():
+        out[method] = {
+            "clearance": _series(trace, "min_clearance_m", sim_indices),
+            "secondary": _series(trace, secondary_key, sim_indices),
+            "overlap": [((_metric_float(_frame(trace, idx), "overlap") or 0.0) > 0.5) for idx in sim_indices],
+        }
+    return out
+
+
 def _draw_timeline(ax, twin, traces: dict[str, list[dict[str, Any]]], display: dict[str, str], frame_index: int,
-                   sim_indices: list[int], fps: int, regime: str):
+                   sim_indices: list[int], fps: int, regime: str, series_cache=None):
     ax.clear(); twin.clear()
     times = [i / fps for i in range(len(sim_indices))]
     visible = min(frame_index + 1, len(times))
-    for method, trace in traces.items():
-        ax.plot(times[:visible], _series(trace, "min_clearance_m", sim_indices)[:visible], label=f"{display[method]} clearance")
+    cache = series_cache or _prepare_timeline_cache(traces, sim_indices, regime)
+    for method in traces:
+        ax.plot(times[:visible], cache[method]["clearance"][:visible], label=f"{display[method]} clearance")
     if regime == "near":
         ax.axhline(2.0, linestyle="--", linewidth=0.9, alpha=0.6, label="2 m near-contact boundary")
     ax.set_xlim(0.0, max(times[-1] if times else 0.0, 0.1)); ax.set_xlabel("rollout video time [s]")
@@ -506,10 +544,9 @@ def _draw_timeline(ax, twin, traces: dict[str, list[dict[str, Any]]], display: d
     if visible > 0:
         ax.axvline(times[visible - 1], linewidth=0.8, alpha=0.35)
 
-    secondary_key = "ttc_s" if regime == "near" else "ego_speed_mps"
     secondary_label = "TTC [s]" if regime == "near" else "ego speed [m/s]"
-    for method, trace in traces.items():
-        twin.plot(times[:visible], _series(trace, secondary_key, sim_indices)[:visible], linestyle=":" if regime == "near" else "--",
+    for method in traces:
+        twin.plot(times[:visible], cache[method]["secondary"][:visible], linestyle=":" if regime == "near" else "--",
                   alpha=0.65, label=f"{display[method]} {'TTC' if regime == 'near' else 'speed'}")
     if regime == "near":
         twin.axhline(3.0, linestyle=":", linewidth=0.9, alpha=0.45, label="3 s TTC boundary")
@@ -517,11 +554,9 @@ def _draw_timeline(ax, twin, traces: dict[str, list[dict[str, Any]]], display: d
     twin.yaxis.tick_right()
     twin.set_ylabel(secondary_label, labelpad=10)
 
-    # Overlap is encoded as sparse markers rather than full-height fill, which
-    # remains readable with two traces and does not obscure clearance curves.
     overlap_y = ax.get_ylim()[0]
-    for method, trace in traces.items():
-        xs = [times[j] for j in range(visible) if (_metric_float(_frame(trace, sim_indices[j]), "overlap") or 0.0) > 0.5]
+    for method in traces:
+        xs = [times[j] for j in range(visible) if cache[method]["overlap"][j]]
         if xs:
             ax.scatter(xs, [overlap_y] * len(xs), marker="x", s=18, label=f"{display[method]} overlap")
     handles, labels = ax.get_legend_handles_labels(); h2, l2 = twin.get_legend_handles_labels()
@@ -655,8 +690,45 @@ def _draw_info_panel(ax, *, item: dict[str, Any], selection: dict[str, Any], reg
         ax.text(0.0, y, f"non-regressive: {item.get('num_nonregressive_external_comparisons', 'n/a')}/{selection.get('num_external_baselines', '?')}", transform=ax.transAxes, fontsize=7.1)
 
 
-def _save_animation(fig, update, frame_count, fps, output: Path, use_mp4: bool):
-    anim = animation.FuncAnimation(fig, update, frames=frame_count, interval=1000 / fps, blit=False)
+def _video_output_complete(path: Path, expected_frames: int, fps: int, use_mp4: bool) -> bool:
+    if not path.is_file() or path.stat().st_size < 4096:
+        return False
+    if use_mp4 and shutil.which("ffprobe"):
+        try:
+            raw = subprocess.check_output([
+                "ffprobe", "-v", "error", "-count_frames", "-select_streams", "v:0",
+                "-show_entries", "stream=nb_read_frames,duration", "-of", "json", str(path),
+            ], text=True, stderr=subprocess.DEVNULL, timeout=20)
+            stream = (json.loads(raw).get("streams") or [{}])[0]
+            frames = stream.get("nb_read_frames")
+            if frames not in (None, "N/A") and int(frames) >= expected_frames:
+                return True
+            duration = stream.get("duration")
+            return duration not in (None, "N/A") and float(duration) + (1.0 / max(fps, 1)) >= expected_frames / max(fps, 1)
+        except Exception:
+            return False
+    if not use_mp4:
+        try:
+            from PIL import Image
+            with Image.open(path) as im:
+                return int(getattr(im, "n_frames", 1)) >= expected_frames
+        except Exception:
+            return False
+    return False
+
+
+def _save_animation(fig, update, frame_count, fps, output: Path, use_mp4: bool, *, progress_label: str = "video"):
+    started = time.monotonic()
+    every = max(1, int(os.environ.get("VIS_RENDER_PROGRESS_EVERY", "10")))
+    last = [-1]
+    def update_with_progress(frame_i):
+        if frame_i != last[0] and (frame_i == 0 or frame_i == frame_count - 1 or frame_i - last[0] >= every):
+            last[0] = frame_i
+            elapsed = time.monotonic() - started
+            print(f"[VIDEO][FRAME] {progress_label} {frame_i + 1}/{frame_count} ({100.0*(frame_i+1)/frame_count:.0f}%) elapsed={elapsed:.1f}s", flush=True)
+        return update(frame_i)
+    print(f"[VIDEO][START] {progress_label} frames={frame_count} fps={fps} output={output}", flush=True)
+    anim = animation.FuncAnimation(fig, update_with_progress, frames=frame_count, interval=1000 / fps, blit=False)
     if use_mp4:
         writer = animation.FFMpegWriter(fps=fps, bitrate=2200, metadata={"artist": "OC-RAP submission visualization v54"})
         anim.save(output, writer=writer)
@@ -664,11 +736,16 @@ def _save_animation(fig, update, frame_count, fps, output: Path, use_mp4: bool):
         writer = animation.PillowWriter(fps=fps)
         anim.save(output, writer=writer)
     plt.close(fig)
+    elapsed = time.monotonic() - started
+    size_mb = output.stat().st_size / (1024*1024) if output.is_file() else 0.0
+    print(f"[VIDEO][DONE] {progress_label} elapsed={elapsed:.1f}s size={size_mb:.1f}MiB output={output}", flush=True)
 
 
 def _render_single(*, method, scene, trace, item, regime, display_name, context, center, radius,
                    camera_mode, sim_indices, fps, metric_dt_s, output, use_mp4):
     contact_xy, contact_label = _contact_marker(trace, regime)
+    road_segments = _prepare_roadgraph_segments(context, center, radius) if camera_mode == "fixed" else None
+    timeline_cache = _prepare_timeline_cache({method: trace}, sim_indices, regime)
     figure = plt.figure(figsize=(9.6, 7.8), dpi=100)
     grid = figure.add_gridspec(2, 1, height_ratios=[4.3, 1.35])
     map_ax = figure.add_subplot(grid[0, 0]); timeline_ax = figure.add_subplot(grid[1, 0]); timeline_twin = timeline_ax.twinx()
@@ -678,10 +755,12 @@ def _render_single(*, method, scene, trace, item, regime, display_name, context,
     def update(frame_i):
         sim_idx = sim_indices[frame_i]
         view_center = _dynamic_center([trace], sim_idx) if camera_mode == "dynamic" else center
-        _draw_frame(map_ax, trace, sim_idx, display_name, view_center, radius, contact_xy, contact_label, metric_dt_s, context)
-        _draw_timeline(timeline_ax, timeline_twin, {method: trace}, {method: display_name}, frame_i, sim_indices, fps, regime)
+        _draw_frame(map_ax, trace, sim_idx, display_name, view_center, radius, contact_xy, contact_label, metric_dt_s, context,
+                    roadgraph_segments=road_segments if camera_mode == "fixed" else None)
+        _draw_timeline(timeline_ax, timeline_twin, {method: trace}, {method: display_name}, frame_i, sim_indices, fps, regime,
+                       series_cache=timeline_cache)
 
-    _save_animation(figure, update, len(sim_indices), fps, output, use_mp4)
+    _save_animation(figure, update, len(sim_indices), fps, output, use_mp4, progress_label=f"{regime}/{output.stem}")
 
 
 def _draw_montage_info(ax, *, traces, displays, sim_idx, metric_dt_s, regime, item, selection):
@@ -715,6 +794,7 @@ def _render_montage(*, methods, traces, item, selection, regime, displays, conte
     if len(methods) > 7:
         raise SystemExit("all-method montage currently supports at most 7 methods plus one info panel")
     contacts = {m: _contact_marker(traces[m], regime) for m in methods}
+    road_segments = _prepare_roadgraph_segments(context, center, radius) if camera_mode == "fixed" else None
     figure = plt.figure(figsize=(16.0, 8.8), dpi=100)
     grid = figure.add_gridspec(2, 4, wspace=0.08, hspace=0.14)
     axes = {}
@@ -732,17 +812,20 @@ def _render_montage(*, methods, traces, item, selection, regime, displays, conte
         for method in methods:
             xy, label = contacts[method]
             _draw_frame(axes[method], traces[method], sim_idx, displays[method], view_center, radius, xy, label,
-                        metric_dt_s, context, show_hud=False, show_axes=False, show_clearance_annotation=False)
+                        metric_dt_s, context, show_hud=False, show_axes=False, show_clearance_annotation=False,
+                        roadgraph_segments=road_segments if camera_mode == "fixed" else None)
         _draw_montage_info(info_ax, traces={m: traces[m] for m in methods}, displays=displays, sim_idx=sim_idx,
                            metric_dt_s=metric_dt_s, regime=regime, item=item, selection=selection)
 
-    _save_animation(figure, update, len(sim_indices), fps, output, use_mp4)
+    _save_animation(figure, update, len(sim_indices), fps, output, use_mp4, progress_label=f"{regime}/{output.stem}")
 
 
 def _render_pair(*, methods, scenes, traces, item, selection, regime, displays, context, center, radius,
                  camera_mode, sim_indices, fps, metric_dt_s, output, use_mp4, comparator_role):
     ocrap, comparator = methods
     contact = {m: _contact_marker(traces[m], regime) for m in methods}
+    road_segments = _prepare_roadgraph_segments(context, center, radius) if camera_mode == "fixed" else None
+    timeline_cache = _prepare_timeline_cache(traces, sim_indices, regime)
     figure = plt.figure(figsize=(18.0, 9.6), dpi=100)
     grid = figure.add_gridspec(2, 3, width_ratios=[1.0, 1.0, 0.82], height_ratios=[3.55, 1.10])
     axes = {ocrap: figure.add_subplot(grid[0, 0]), comparator: figure.add_subplot(grid[0, 1])}
@@ -768,10 +851,12 @@ def _render_pair(*, methods, scenes, traces, item, selection, regime, displays, 
         view_center = _dynamic_center([traces[m] for m in methods], sim_idx) if camera_mode == "dynamic" else center
         for method in methods:
             xy, label = contact[method]
-            _draw_frame(axes[method], traces[method], sim_idx, displays[method], view_center, radius, xy, label, metric_dt_s, context)
-        _draw_timeline(timeline_ax, timeline_twin, {m: traces[m] for m in methods}, displays, frame_i, sim_indices, fps, regime)
+            _draw_frame(axes[method], traces[method], sim_idx, displays[method], view_center, radius, xy, label, metric_dt_s, context,
+                        roadgraph_segments=road_segments if camera_mode == "fixed" else None)
+        _draw_timeline(timeline_ax, timeline_twin, {m: traces[m] for m in methods}, displays, frame_i, sim_indices, fps, regime,
+                       series_cache=timeline_cache)
 
-    _save_animation(figure, update, len(sim_indices), fps, output, use_mp4)
+    _save_animation(figure, update, len(sim_indices), fps, output, use_mp4, progress_label=f"{regime}/{output.stem}")
 
 
 def main() -> int:
@@ -787,12 +872,16 @@ def main() -> int:
     ap.add_argument("--include-global-strongest-pair", action="store_true", help="Also compare against the regime-level strongest external baseline when it differs from the per-scene comparator.")
     ap.add_argument("--include-worst-pair", action="store_true", help="Also render OC-RAP vs the per-scene weakest external baseline (not recommended for the main paper).")
     ap.add_argument("--include-all-method-montage", action="store_true", help="Render one synchronized OC-RAP + all-baseline montage per scene (recommended for supplemental material).")
+    ap.add_argument("--force", action="store_true", help="Re-render outputs even when an existing file passes completeness validation.")
     args = ap.parse_args()
     if args.fps <= 0 or args.view_radius_m <= 5.0:
         raise SystemExit("fps must be positive and view radius must exceed 5 m")
 
     paths = _parse_trace_specs(args.trace)
+    print(f"[VIDEO][LOAD] loading {len(paths)} method journals", flush=True)
+    load_started = time.monotonic()
     loaded = {method: _load_scenes(path) for method, path in paths.items()}
+    print(f"[VIDEO][LOAD] done elapsed={time.monotonic()-load_started:.1f}s", flush=True)
     selection = json.loads(args.selection.read_text(encoding="utf-8"))
     regime = str(selection.get("regime") or "")
     if regime not in {"safe", "near", "contact"}:
@@ -813,8 +902,11 @@ def main() -> int:
     metric_dt_s = float(selection.get("metric_dt_s", 0.1) or 0.1)
     records = []
 
-    for item in selected:
+    total_selected = len(selected)
+    for scene_no, item in enumerate(selected, 1):
         key = str(item["target_key"])
+        scene_started = time.monotonic()
+        print(f"[VIDEO][SCENE] regime={regime} scene={scene_no}/{total_selected} target={key}", flush=True)
         resolved: dict[str, dict[str, Any]] = {}
         methods_resolution: dict[str, str] = {}
         for method in paths:
@@ -843,10 +935,13 @@ def main() -> int:
         if args.include_singles:
             for method in paths:
                 filename = scene_dir / f"{regime}__rank_{rank:02d}__{_safe_name(method)}{suffix}"
-                _render_single(method=method, scene=resolved[method], trace=traces[method], item=item, regime=regime,
-                               display_name=displays[method], context=context, center=center, radius=radius,
-                               camera_mode=args.camera_mode, sim_indices=sim_indices, fps=args.fps, metric_dt_s=metric_dt_s,
-                               output=filename, use_mp4=use_mp4)
+                if not args.force and _video_output_complete(filename, frame_count, args.fps, use_mp4):
+                    print(f"[VIDEO][REUSE] {filename}", flush=True)
+                else:
+                    _render_single(method=method, scene=resolved[method], trace=traces[method], item=item, regime=regime,
+                                   display_name=displays[method], context=context, center=center, radius=radius,
+                                   camera_mode=args.camera_mode, sim_indices=sim_indices, fps=args.fps, metric_dt_s=metric_dt_s,
+                                   output=filename, use_mp4=use_mp4)
                 outputs.append({"type": "single", "method": method, "path": str(filename)})
 
         best = str(item.get("best_external_method") or "")
@@ -868,22 +963,29 @@ def main() -> int:
         for role, comparator, role_text in pair_plan:
             filename = scene_dir / f"{regime}__rank_{rank:02d}__ocrap_vs_{role}__{_safe_name(comparator)}{suffix}"
             pair_methods = ["ocrap", comparator]
-            _render_pair(methods=pair_methods, scenes={m: resolved[m] for m in pair_methods}, traces={m: traces[m] for m in pair_methods},
-                         item=item, selection=selection, regime=regime, displays={m: displays[m] for m in pair_methods}, context=context,
-                         center=center, radius=radius, camera_mode=args.camera_mode, sim_indices=sim_indices, fps=args.fps,
-                         metric_dt_s=metric_dt_s, output=filename, use_mp4=use_mp4, comparator_role=role_text)
+            if not args.force and _video_output_complete(filename, frame_count, args.fps, use_mp4):
+                print(f"[VIDEO][REUSE] {filename}", flush=True)
+            else:
+                _render_pair(methods=pair_methods, scenes={m: resolved[m] for m in pair_methods}, traces={m: traces[m] for m in pair_methods},
+                             item=item, selection=selection, regime=regime, displays={m: displays[m] for m in pair_methods}, context=context,
+                             center=center, radius=radius, camera_mode=args.camera_mode, sim_indices=sim_indices, fps=args.fps,
+                             metric_dt_s=metric_dt_s, output=filename, use_mp4=use_mp4, comparator_role=role_text)
             outputs.append({"type": f"pair_{role}", "method": comparator, "path": str(filename), "comparator_role": role_text})
 
         if args.include_all_method_montage:
             montage_methods = ["ocrap"] + expected_external
             filename = scene_dir / f"{regime}__rank_{rank:02d}__all_methods{suffix}"
-            _render_montage(
-                methods=montage_methods, traces={m: traces[m] for m in montage_methods}, item=item, selection=selection,
-                regime=regime, displays={m: displays[m] for m in montage_methods}, context=context, center=center, radius=radius,
-                camera_mode=args.camera_mode, sim_indices=sim_indices, fps=args.fps, metric_dt_s=metric_dt_s,
-                output=filename, use_mp4=use_mp4,
-            )
+            if not args.force and _video_output_complete(filename, frame_count, args.fps, use_mp4):
+                print(f"[VIDEO][REUSE] {filename}", flush=True)
+            else:
+                _render_montage(
+                    methods=montage_methods, traces={m: traces[m] for m in montage_methods}, item=item, selection=selection,
+                    regime=regime, displays={m: displays[m] for m in montage_methods}, context=context, center=center, radius=radius,
+                    camera_mode=args.camera_mode, sim_indices=sim_indices, fps=args.fps, metric_dt_s=metric_dt_s,
+                    output=filename, use_mp4=use_mp4,
+                )
             outputs.append({"type": "all_method_montage", "methods": montage_methods, "path": str(filename)})
+        print(f"[VIDEO][SCENE-DONE] regime={regime} scene={scene_no}/{total_selected} elapsed={time.monotonic()-scene_started:.1f}s", flush=True)
         records.append({
             "target_key": key,
             "rank": rank,

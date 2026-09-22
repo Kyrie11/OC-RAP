@@ -18,9 +18,12 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import time
 from pathlib import Path
 from typing import Any
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from render_regime_visualization_videos import (
@@ -28,6 +31,7 @@ from render_regime_visualization_videos import (
     _contact_marker,
     _display_name,
     _draw_frame,
+    _prepare_roadgraph_segments,
     _load_scenes,
     _metric_float,
     _parse_trace_specs,
@@ -103,10 +107,33 @@ def _keyframes(traces: dict[str, list[dict[str, Any]]], regime: str, clip_durati
     return result[:count]
 
 
+def _figure_outputs_complete(output_stem: Path) -> bool:
+    png = output_stem.with_suffix(".png")
+    pdf = output_stem.with_suffix(".pdf")
+    if not png.is_file() or not pdf.is_file() or png.stat().st_size < 4096 or pdf.stat().st_size < 4096:
+        return False
+    try:
+        from PIL import Image
+        with Image.open(png) as im:
+            im.verify()
+        raw = pdf.read_bytes()
+        return raw.startswith(b"%PDF") and b"%%EOF" in raw[-2048:]
+    except Exception:
+        return False
+
+
 def _render_grid(*, methods: list[str], traces: dict[str, list[dict[str, Any]]], displays: dict[str, str],
                  regime: str, context: dict[str, Any], keyframes: list[int], dt_s: float,
-                 minimum_radius: float, title: str, output_stem: Path) -> list[str]:
+                 minimum_radius: float, title: str, output_stem: Path, force: bool = False) -> list[str]:
+    png = output_stem.with_suffix(".png")
+    pdf = output_stem.with_suffix(".pdf")
+    if not force and _figure_outputs_complete(output_stem):
+        print(f"[FIG][REUSE] {png} + {pdf}", flush=True)
+        return [str(png), str(pdf)]
+    started = time.monotonic()
+    print(f"[FIG][START] {regime} {output_stem.name} rows={len(methods)} cols={len(keyframes)}", flush=True)
     center, radius = _all_model_fixed_view({m: traces[m] for m in methods}, minimum_radius)
+    road_segments = _prepare_roadgraph_segments(context, center, radius)
     contacts = {m: _contact_marker(traces[m], regime) for m in methods}
     rows, cols = len(methods), len(keyframes)
     width = 3.05 * cols
@@ -119,6 +146,7 @@ def _render_grid(*, methods: list[str], traces: dict[str, list[dict[str, Any]]],
             _draw_frame(
                 axes[r][c], traces[method], idx, "", center, radius, xy, label, dt_s, context,
                 show_hud=False, show_axes=False, show_clearance_annotation=False,
+                roadgraph_segments=road_segments,
             )
             if r == 0:
                 axes[r][c].set_title(f"t = {idx * dt_s:.1f} s", fontsize=9.5, fontweight="bold")
@@ -131,11 +159,13 @@ def _render_grid(*, methods: list[str], traces: dict[str, list[dict[str, Any]]],
     fig.suptitle(title, fontsize=11.0, fontweight="bold", y=0.995)
     fig.subplots_adjust(left=0.065, right=0.995, top=0.93, bottom=0.025, wspace=0.035, hspace=0.08)
     output_stem.parent.mkdir(parents=True, exist_ok=True)
-    png = output_stem.with_suffix(".png")
-    pdf = output_stem.with_suffix(".pdf")
+    print(f"[FIG][SAVE] {png}", flush=True)
     fig.savefig(png, dpi=300, bbox_inches="tight", pad_inches=0.03)
+    print(f"[FIG][SAVE] {pdf}", flush=True)
     fig.savefig(pdf, bbox_inches="tight", pad_inches=0.03)
     plt.close(fig)
+    elapsed = time.monotonic() - started
+    print(f"[FIG][DONE] {output_stem.name} elapsed={elapsed:.1f}s png={png.stat().st_size/(1024*1024):.1f}MiB pdf={pdf.stat().st_size/(1024*1024):.1f}MiB", flush=True)
     return [str(png), str(pdf)]
 
 
@@ -145,10 +175,14 @@ def main() -> int:
     ap.add_argument("--selection", type=Path, required=True)
     ap.add_argument("--output-dir", type=Path, required=True)
     ap.add_argument("--view-radius-m", type=float, default=35.0)
+    ap.add_argument("--force", action="store_true", help="Re-render figures even when existing PNG/PDF outputs validate.")
     args = ap.parse_args()
 
     paths = _parse_trace_specs(args.trace)
+    print(f"[FIG][LOAD] loading {len(paths)} method journals", flush=True)
+    load_started = time.monotonic()
     loaded = {m: _load_scenes(p) for m, p in paths.items()}
+    print(f"[FIG][LOAD] done elapsed={time.monotonic()-load_started:.1f}s", flush=True)
     selection = json.loads(args.selection.read_text(encoding="utf-8"))
     regime = str(selection.get("regime") or "")
     if regime not in {"safe", "near", "contact"}:
@@ -159,7 +193,10 @@ def main() -> int:
     dt_s = float(selection.get("metric_dt_s", 0.1) or 0.1)
     records = []
 
-    for item in selection.get("selected") or []:
+    selected_items = selection.get("selected") or []
+    for scene_no, item in enumerate(selected_items, 1):
+        scene_started = time.monotonic()
+        print(f"[FIG][SCENE] regime={regime} scene={scene_no}/{len(selected_items)} target={item.get('target_key')}", flush=True)
         resolved = {}
         for method in paths:
             scene, how = _resolve_scene(item, loaded[method])
@@ -190,13 +227,16 @@ def main() -> int:
             keyframes=pair_kf, dt_s=dt_s, minimum_radius=args.view_radius_m,
             title=f"{regime_title}: OC-RAP vs {displays[primary]}",
             output_stem=scene_dir / f"{regime}__rank_{rank:02d}__paper_pair_2x4",
+            force=args.force,
         )
         all_files = _render_grid(
             methods=all_methods, traces=traces, displays=displays, regime=regime, context=context,
             keyframes=all_kf, dt_s=dt_s, minimum_radius=args.view_radius_m,
             title=f"{regime_title}: target-locked all-method comparison",
             output_stem=scene_dir / f"{regime}__rank_{rank:02d}__appendix_all_{len(all_methods)}x3",
+            force=args.force,
         )
+        print(f"[FIG][SCENE-DONE] regime={regime} scene={scene_no}/{len(selected_items)} elapsed={time.monotonic()-scene_started:.1f}s", flush=True)
         records.append({
             "target_key": item.get("target_key"), "rank": rank, "primary_external_method": primary,
             "pair_keyframe_indices": pair_kf, "all_method_keyframe_indices": all_kf,
