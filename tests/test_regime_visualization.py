@@ -140,3 +140,48 @@ def test_submission_video_uses_compact_paper_display_names():
         assert renderer._display_name(method) == label
     assert renderer._display_name("ocrap") == "OC-RAP"
     assert renderer._short_comparator_role("lowest paired critical-safety score across all external baselines (hardest to beat)", "near") == "Hardest paired external"
+
+
+def test_selector_cli_registers_allowed_target_keys_file(tmp_path, monkeypatch):
+    key = "test_safe:scene1:t10"
+    ocrap_scene = {
+        "target_key": key,
+        "scene_id": "scene1",
+        "target_time_index": 10,
+        "closed_loop_bounded_NUP": 0.99,
+        "intervention_rate": 0.02,
+        "min_clearance_m_p05": 2.0,
+        "ttc_s_p05": 5.0,
+        "overlap_any": 0.0,
+        "offroad_any": 0.0,
+        "route_progression_m": 12.0,
+        "jerk_p95": 1.0,
+        "yaw_rate_p95": 0.1,
+    }
+    baseline_scene = dict(ocrap_scene)
+    baseline_scene.update({"closed_loop_bounded_NUP": 0.95, "intervention_rate": 0.05})
+
+    ocrap_path = tmp_path / "ocrap.jsonl"
+    baseline_path = tmp_path / "baseline.jsonl"
+    allowed_path = tmp_path / "allowed.json"
+    output_path = tmp_path / "selection.json"
+    keys_path = tmp_path / "keys.json"
+    ocrap_path.write_text(__import__("json").dumps({"scene": ocrap_scene}) + "\n")
+    baseline_path.write_text(__import__("json").dumps({"scene": baseline_scene}) + "\n")
+    allowed_path.write_text(__import__("json").dumps([key]) + "\n")
+
+    monkeypatch.setattr(sys, "argv", [
+        "select_regime_visualization_scenes.py",
+        "--regime", "safe",
+        "--ocrap-scenes", str(ocrap_path),
+        "--baseline", f"dummy={baseline_path}",
+        "--allowed-target-keys-file", str(allowed_path),
+        "--output", str(output_path),
+        "--target-keys-output", str(keys_path),
+        "--num-scenes", "1",
+        "--min-duration-s", "5",
+        "--fallback-min-duration-s", "3",
+        "--max-selected-tier-rank", "1",
+    ])
+    assert selector.main() == 0
+    assert __import__("json").loads(keys_path.read_text())["target_keys"] == [key]

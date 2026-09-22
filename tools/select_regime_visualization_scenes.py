@@ -599,6 +599,16 @@ def main() -> int:
     ap.add_argument("--baseline", action="append", default=[], metavar="METHOD=SCENES.jsonl")
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--target-keys-output", type=Path)
+    ap.add_argument(
+        "--allowed-target-keys-file",
+        type=Path,
+        default=None,
+        help=(
+            "Optional JSON list (or object with a target_keys list) restricting the paired "
+            "selection population. Used by Contact visualization to keep only exact-a0 "
+            "anchors with enough post-anchor horizon for the requested clip length."
+        ),
+    )
     ap.add_argument("--num-scenes", type=int, default=5)
     ap.add_argument("--min-duration-s", type=float, default=5.0)
     ap.add_argument("--fallback-min-duration-s", type=float, default=3.0)
