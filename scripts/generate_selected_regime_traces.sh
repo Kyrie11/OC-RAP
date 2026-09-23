@@ -50,7 +50,7 @@ python tools/prepare_selected_trace_reruns.py \
   --output "$OUT/TRACE_PREP.json"
 
 # TRACE_PREP is the authority for resumability.  Do not even invoke an external
-# regime launcher when all six selected-trace families are already renderable.
+# regime launcher when all selected paper-table trace families are already renderable.
 # This avoids unnecessary preflights and, importantly, avoids scheduler feature
 # checks on older Bash installations when there is no work to schedule.
 trace_pending_count() {
@@ -127,14 +127,14 @@ if (( SAFE_EXTERNAL_PENDING > 0 )); then
   run_logged external_safe env \
   RUN="$OUT/external/safe" CHECKPOINT_ROOT="$SAFE_EXTERNAL_ROOT/checkpoints" \
   OCRAP_ROOT="$OCRAP_ROOT" WOMD_ROOT="$WOMD_ROOT" CUDA_DEVICES="$CUDA_DEVICES" \
-  DO_TRAIN=false DO_OFFLINE=false DO_CLOSED_LOOP=true RUN_NOMINAL_CONTROL=false RUN_LEGACY_SAFE=false RUN_SUPPLEMENTARY_SAFE=false \
+  DO_TRAIN=false DO_OFFLINE=false DO_CLOSED_LOOP=true RUN_NOMINAL_CONTROL=false RUN_LEGACY_SAFE=false RUN_SUPPLEMENTARY_SAFE=true \
   CL_WOMD="$SAFE_WOMD" CL_MAX_SCENARIOS=0 CL_MAX_STEPS="$TRACE_MAX_STEPS" \
   CL_TARGET_KEYS_FILE="$SELECTION_ROOT/safe_target_keys.json" CL_RENDER_TRACE=true CL_SCENE_JOURNAL_DETAIL=full \
   JOBS_PER_GPU="$JOBS_PER_GPU" MAX_PARALLEL="$MAX_PARALLEL" USE_DYNAMIC_SCHEDULER=auto \
   SKIP_COMPLETE_METHODS=true CL_RESUME_FORCE=false \
   bash scripts/run_external_baselines_safe.sh
 else
-  echo "[VIS-TRACE][REUSE] external_safe: all six selected-trace families are already renderable"
+  echo "[VIS-TRACE][REUSE] external_safe: all selected paper-table trace families are already renderable"
 fi
 
 if (( NEAR_EXTERNAL_PENDING > 0 )); then
@@ -175,7 +175,7 @@ fi
 if [[ -n "$NEAR_CONFORMAL_INTERVALS" ]]; then
   run_logged external_near env \
     RUN="$OUT/external/near" OCRAP_ROOT="$OCRAP_ROOT" WOMD_ROOT="$WOMD_ROOT" CUDA_DEVICES="$CUDA_DEVICES" \
-    DO_TRAIN=false DO_CALIBRATE=false DO_OFFLINE=false DO_CLOSED_LOOP=true RUN_ORACLE_CLOSED_LOOP=false RUN_LEGACY_NEAR=false RUN_SUPPLEMENTARY_NEAR=false \
+    DO_TRAIN=false DO_CALIBRATE=false DO_OFFLINE=false DO_CLOSED_LOOP=true RUN_ORACLE_CLOSED_LOOP=false RUN_LEGACY_NEAR=false RUN_SUPPLEMENTARY_NEAR=true \
     CONFORMAL_CALIBRATION="$NEAR_CALIBRATION" CONFORMAL_INTERVALS="$NEAR_CONFORMAL_INTERVALS" \
     CONFORMAL_MISSION_HORIZON="$NEAR_CONFORMAL_MISSION_HORIZON" \
     CL_WOMD="$NEAR_WOMD" CL_LABEL_MODE=fast CL_MAX_SCENARIOS=0 CL_MAX_STEPS="$TRACE_MAX_STEPS" \
@@ -185,7 +185,7 @@ if [[ -n "$NEAR_CONFORMAL_INTERVALS" ]]; then
     bash scripts/run_external_baselines_near.sh
 fi
 else
-  echo "[VIS-TRACE][REUSE] external_near: all six selected-trace families are already renderable"
+  echo "[VIS-TRACE][REUSE] external_near: all selected paper-table trace families are already renderable"
 fi
 
 # Contact is independent from Near.  Run it even if Near failed so a transient
@@ -203,7 +203,7 @@ if (( CONTACT_EXTERNAL_PENDING > 0 )); then
   SKIP_COMPLETE_METHODS=true CL_RESUME_FORCE=false \
   bash scripts/run_external_baselines_contact.sh
 else
-  echo "[VIS-TRACE][REUSE] external_contact: all six selected-trace families are already renderable"
+  echo "[VIS-TRACE][REUSE] external_contact: all selected paper-table trace families are already renderable"
 fi
 
 python - "$OUT/TRACE_RERUN_STATUS.json" "${failures[*]-}" <<'PY'

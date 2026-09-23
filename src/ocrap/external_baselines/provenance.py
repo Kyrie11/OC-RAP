@@ -302,6 +302,15 @@ SUPPLEMENTARY_BY_REGIME: dict[str, tuple[str, ...]] = {
     "contact": (),
 }
 
+# Methods that appear in the paper's final quantitative comparison tables.
+# Qualitative figures/videos should use this union rather than MAIN_TABLE_BY_REGIME
+# alone; otherwise the visual comparison silently omits supplementary methods that
+# are nevertheless reported in the paper tables.
+PAPER_TABLE_BY_REGIME: dict[str, tuple[str, ...]] = {
+    regime: tuple(MAIN_TABLE_BY_REGIME.get(regime, ())) + tuple(SUPPLEMENTARY_BY_REGIME.get(regime, ()))
+    for regime in ("safe", "near", "contact")
+}
+
 
 LEGACY_OR_DIAGNOSTIC_BY_REGIME: dict[str, tuple[str, ...]] = {
     "safe": ("nominal_replay", "wayformer_bc", "betopnet_lite"),

@@ -8,8 +8,8 @@ import math
 from pathlib import Path
 
 METHODS = {
-    "safe": ["gameformer_lite", "plantf", "pluto", "pdm_closed", "pdm_hybrid", "idm"],
-    "near": ["marc_lite", "racp_lite", "robust_scenario_mpc", "predictive_safety_filter", "dr_cvar_safety_filter", "conformal_predictive_safety_filter"],
+    "safe": ["gameformer_lite", "plantf", "pluto", "pdm_closed", "pdm_hybrid", "idm", "diffusion_planner"],
+    "near": ["marc_lite", "racp_lite", "robust_scenario_mpc", "predictive_safety_filter", "dr_cvar_safety_filter", "conformal_predictive_safety_filter", "flow_planner", "plan_r1", "betopnet"],
     "contact": ["postimpact_mpc_lite", "post_crash_braking", "postimpact_motion_tvlqr", "post_collision_restoration", "compensatory_postimpact_mpc", "robust_postimpact_control"],
 }
 
@@ -20,6 +20,7 @@ def main() -> int:
     ap.add_argument("--selection-root", type=Path, required=True)
     ap.add_argument("--trace-max-steps", type=int, default=60)
     ap.add_argument("--output", type=Path, required=True)
+    ap.add_argument("--allow-extra-targets", action="store_true", help="Allow journals to contain an over-selected candidate pool while validating only the final selected subset.")
     args = ap.parse_args()
 
     errors: list[str] = []
@@ -79,7 +80,7 @@ def main() -> int:
             extra = sorted(set(seen) - requested_set)
             if missing:
                 errors.append(f"unresolved selected targets {regime}/{method}: {missing}")
-            if extra:
+            if extra and not args.allow_extra_targets:
                 errors.append(f"unexpected selected-trace targets {regime}/{method}: {extra}")
             counts[method] = len(seen)
 
@@ -107,6 +108,7 @@ def main() -> int:
         "valid": not errors,
         "errors": errors,
         "trace_max_steps": args.trace_max_steps,
+        "allow_extra_targets": bool(args.allow_extra_targets),
         "regimes": regimes,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)

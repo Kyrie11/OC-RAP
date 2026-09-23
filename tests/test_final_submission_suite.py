@@ -44,7 +44,9 @@ def test_visualization_pipeline_enforces_continuous_full_length_trace() -> None:
     assert 'SCENE_JOURNAL_DETAIL=full' in generate
     assert 'CONFORMAL_INTERVALS="$NEAR_CONFORMAL_INTERVALS"' in generate
     assert 'TRACE_RERUN_STATUS.json' in generate
-    assert 'len(trace)<required_frames' in generate
+    assert 'check_selected_trace_contract.py' in generate
+    assert 'finalize_regime_visualization_selection.py' in build
+    assert '--allow-extra-targets' in build
     assert 'SCENE_JOURNAL_DETAIL:=full' in ocrap_three
 
 

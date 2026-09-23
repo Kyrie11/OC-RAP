@@ -40,8 +40,8 @@ launch() {
   ( render_one "$name" "$@" ) &
   PIDS+=("$!"); NAMES+=("$name")
 }
-launch safe gameformer_lite plantf pluto pdm_closed pdm_hybrid idm
-launch near marc_lite racp_lite robust_scenario_mpc predictive_safety_filter dr_cvar_safety_filter conformal_predictive_safety_filter
+launch safe gameformer_lite plantf pluto pdm_closed pdm_hybrid idm diffusion_planner
+launch near marc_lite racp_lite robust_scenario_mpc predictive_safety_filter dr_cvar_safety_filter conformal_predictive_safety_filter flow_planner plan_r1 betopnet
 launch contact postimpact_mpc_lite post_crash_braking postimpact_motion_tvlqr post_collision_restoration compensatory_postimpact_mpc robust_postimpact_control
 for i in "${!PIDS[@]}"; do
   if ! wait "${PIDS[$i]}"; then echo "[FIG][ERROR] regime=${NAMES[$i]} failed" >&2; exit 2; fi

@@ -19,14 +19,19 @@ export PYTHONNOUSERSITE=1
 : "${CONTACT_EXTERNAL_ROOT:=/home/senzeyu2/code/OC-RAP/runs/external_baselines/contact}"
 : "${OUT:=/home/senzeyu2/code/OC-RAP/runs/regime_visualization}"
 : "${NUM_SCENES:=5}"
+: "${SAFE_NUM_SCENES:=$NUM_SCENES}"
+: "${NEAR_NUM_SCENES:=$NUM_SCENES}"
+: "${CONTACT_NUM_SCENES:=$NUM_SCENES}"
+: "${SELECTION_DIR:=$OUT/selection}"
 : "${MIN_VIDEO_DURATION_S:=5.0}"
 : "${FALLBACK_MIN_VIDEO_DURATION_S:=4.0}"
 : "${CONTACT_FALLBACK_MIN_VIDEO_DURATION_S:=4.0}"
 : "${VIS_CONTACT_ANCHOR_MANIFEST_FILE:=}"
 : "${CONTACT_ALLOWED_TARGET_KEYS_FILE:=}"
 : "${MAX_SELECTED_TIER_RANK:=1}"  # 0=strict hardest-baseline win only; 1 allows majority-material strong evidence.
+: "${ALLOW_FEWER_SCENES:=false}"
 
-mkdir -p "$OUT/provenance" "$OUT/selection"
+mkdir -p "$OUT/provenance" "$SELECTION_DIR"
 
 python tools/check_regime_visualization_inputs.py \
   --ocrap-results-root "$OCRAP_RESULTS_ROOT" \
@@ -43,12 +48,12 @@ python tools/check_regime_visualization_inputs.py \
 
 # Explicit method lists are intentionally duplicated from provenance.py here so
 # a stale visualization script cannot silently substitute legacy baselines.
-safe_methods=(gameformer_lite plantf pluto pdm_closed pdm_hybrid idm)
-near_methods=(marc_lite racp_lite robust_scenario_mpc predictive_safety_filter dr_cvar_safety_filter conformal_predictive_safety_filter)
+safe_methods=(gameformer_lite plantf pluto pdm_closed pdm_hybrid idm diffusion_planner)
+near_methods=(marc_lite racp_lite robust_scenario_mpc predictive_safety_filter dr_cvar_safety_filter conformal_predictive_safety_filter flow_planner plan_r1 betopnet)
 contact_methods=(postimpact_mpc_lite post_crash_braking postimpact_motion_tvlqr post_collision_restoration compensatory_postimpact_mpc robust_postimpact_control)
 
 select_one() {
-  local regime="$1" ext_root="$2"; shift 2
+  local regime="$1" ext_root="$2" requested="$3"; shift 3
   local -a methods=("$@") args=()
   local m
   for m in "${methods[@]}"; do
@@ -67,28 +72,30 @@ select_one() {
       filter_args+=(--allowed-target-keys-file "$CONTACT_ALLOWED_TARGET_KEYS_FILE")
     fi
   fi
+  local -a count_args=()
+  [[ "$ALLOW_FEWER_SCENES" == true ]] && count_args+=(--allow-fewer-scenes)
   python tools/select_regime_visualization_scenes.py \
     --regime "$regime" \
     --ocrap-scenes "$OCRAP_RESULTS_ROOT/$regime/closed_loop_ocrap.json.scenes.jsonl" \
-    "${args[@]}" "${filter_args[@]}" \
-    --output "$OUT/selection/${regime}_selection.json" \
-    --target-keys-output "$OUT/selection/${regime}_target_keys.json" \
-    --num-scenes "$NUM_SCENES" \
+    "${args[@]}" "${filter_args[@]}" "${count_args[@]}" \
+    --output "$SELECTION_DIR/${regime}_selection.json" \
+    --target-keys-output "$SELECTION_DIR/${regime}_target_keys.json" \
+    --num-scenes "$requested" \
     --min-duration-s "$MIN_VIDEO_DURATION_S" \
     --fallback-min-duration-s "$fallback_duration" \
     --max-selected-tier-rank "$MAX_SELECTED_TIER_RANK"
 }
 
-select_one safe "$SAFE_EXTERNAL_ROOT" "${safe_methods[@]}"
-select_one near "$NEAR_EXTERNAL_ROOT" "${near_methods[@]}"
-select_one contact "$CONTACT_EXTERNAL_ROOT" "${contact_methods[@]}"
+select_one safe "$SAFE_EXTERNAL_ROOT" "$SAFE_NUM_SCENES" "${safe_methods[@]}"
+select_one near "$NEAR_EXTERNAL_ROOT" "$NEAR_NUM_SCENES" "${near_methods[@]}"
+select_one contact "$CONTACT_EXTERNAL_ROOT" "$CONTACT_NUM_SCENES" "${contact_methods[@]}"
 
-python - "$OUT" <<'PY'
+python - "$SELECTION_DIR" <<'PY'
 import json, pathlib, sys
-root=pathlib.Path(sys.argv[1])
+selection_dir=pathlib.Path(sys.argv[1])
 summary={"event":"regime_visualization_selection_index","regimes":{}}
 for regime in ("safe","near","contact"):
-    p=root/"selection"/f"{regime}_selection.json"
+    p=selection_dir/f"{regime}_selection.json"
     d=json.loads(p.read_text())
     summary["regimes"][regime]={
         "selection":str(p),
@@ -100,8 +107,8 @@ for regime in ("safe","near","contact"):
             "worst_external_method":x.get("worst_external_method"),"score":x.get("score"),
         } for x in d["selected"]],
     }
-(root/"selection"/"SELECTION_INDEX.json").write_text(json.dumps(summary,ensure_ascii=False,indent=2)+"\n")
+(selection_dir/"SELECTION_INDEX.json").write_text(json.dumps(summary,ensure_ascii=False,indent=2)+"\n")
 print(json.dumps(summary,ensure_ascii=False,indent=2))
 PY
 
-echo "Selection complete: $OUT/selection/SELECTION_INDEX.json"
+echo "Selection complete: $SELECTION_DIR/SELECTION_INDEX.json"

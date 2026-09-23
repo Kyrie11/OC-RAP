@@ -2,9 +2,9 @@
 """Render synchronized reviewer-facing OC-RAP comparison videos.
 
 The paper-facing default is deliberately conservative: every selected target is
-rerun for OC-RAP and *all* main-table external baselines, but the primary video
+rerun for OC-RAP and *all* paper-table external baselines, but the primary video
 compares OC-RAP only against the per-scene strongest/hardest external baseline.
-A compact side panel discloses the full six-baseline ranking and full-run metric
+A compact side panel discloses the full paper-table baseline ranking and full-run metric
 values, so the qualitative pair cannot hide weaker/stronger alternatives.
 
 Optional flags can additionally render single-method, global-strongest, or worst
@@ -126,6 +126,7 @@ PAPER_DISPLAY_NAMES: dict[str, str] = {
     "pdm_closed": "PDM-Closed",
     "pdm_hybrid": "PDM-Hybrid",
     "idm": "IDM",
+    "diffusion_planner": "Diffusion Planner",
     # Near-contact: never expose repository suffixes such as *_lite.
     "marc_lite": "MARC",
     "racp_lite": "RACP",
@@ -133,13 +134,16 @@ PAPER_DISPLAY_NAMES: dict[str, str] = {
     "predictive_safety_filter": "PSF",
     "dr_cvar_safety_filter": "DR-CVaR",
     "conformal_predictive_safety_filter": "CPSF",
+    "flow_planner": "Flow Planner",
+    "plan_r1": "Plan-R1",
+    "betopnet": "BeTopNet",
     # Contact: use acronyms/components actually introduced in the source papers.
     # Ghosh et al. do not define a named acronym for the full restoration law, so
     # do not invent one; use the paper-native short descriptor instead.
     "postimpact_mpc_lite": "MPC + PSO",
     "post_crash_braking": "PIB",
     "postimpact_motion_tvlqr": "APF + TVLQR",
-    "post_collision_restoration": "Heuristic restoration",
+    "post_collision_restoration": "Trajectory restoration",
     "compensatory_postimpact_mpc": "FCC-MPC",
     "robust_postimpact_control": "SMC + QP",
 }
@@ -365,13 +369,13 @@ def _dynamic_center(traces: list[list[dict[str, Any]]], sim_index: int):
 
 
 def _contact_marker(trace, regime):
-    for row in trace:
+    for idx, row in enumerate(trace):
         if (_metric_float(row, "overlap") or 0.0) > 0.5:
-            return _sdc(row), "observed overlap"
+            return _sdc(row), "observed overlap", idx
     # Contact bucket membership is a counterfactual-surrogate label in the
     # current dataset build, not proof that raw WOMD replay starts post-impact.
     # Do not draw a fabricated contact marker when no simulator overlap occurs.
-    return None, None
+    return None, None, None
 
 
 def _yaw_rate(trace: list[dict[str, Any]], index: int, metric_dt_s: float) -> float | None:
@@ -385,7 +389,7 @@ def _yaw_rate(trace: list[dict[str, Any]], index: int, metric_dt_s: float) -> fl
 
 
 def _draw_frame(
-    ax, trace, sim_index, title, center, radius, contact_xy, contact_label, metric_dt_s, context=None,
+    ax, trace, sim_index, title, center, radius, contact_xy, contact_label, metric_dt_s, context=None, contact_event_index=None,
     *, show_hud: bool = True, show_axes: bool = True, show_clearance_annotation: bool = True,
     roadgraph_segments=None,
 ):
@@ -405,10 +409,14 @@ def _draw_frame(
     trail = [p for p in trail if p is not None]
     if len(trail) >= 2:
         ax.plot([p[0] for p in trail], [p[1] for p in trail], linewidth=1.8, alpha=0.9, zorder=2)
-    if contact_xy is not None:
-        ax.scatter([contact_xy[0]], [contact_xy[1]], marker="x", s=80, linewidths=2, zorder=5)
-        ax.annotate(contact_label or "contact", contact_xy, xytext=(6, 6), textcoords="offset points", fontsize=7,
-                    bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.75}, zorder=7)
+    # Never leak a future collision into earlier frames. The marker only appears
+    # once the event has actually happened; its text label is restricted to the
+    # event neighborhood to avoid covering vehicles for the rest of the clip.
+    if contact_xy is not None and contact_event_index is not None and sim_index >= contact_event_index:
+        ax.scatter([contact_xy[0]], [contact_xy[1]], marker="x", s=70, linewidths=1.8, alpha=0.75, zorder=5)
+        if abs(sim_index - contact_event_index) <= 1:
+            ax.annotate(contact_label or "contact", contact_xy, xytext=(6, 6), textcoords="offset points", fontsize=7,
+                        bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.75}, zorder=7)
 
     overlap = (_metric_float(row, "overlap") or 0.0) > 0.5
     offroad = (_metric_float(row, "offroad") or 0.0) > 0.5
@@ -682,7 +690,7 @@ def _draw_info_panel(ax, *, item: dict[str, Any], selection: dict[str, Any], reg
     for line in (
         f"post-hoc qualitative · tier: {tier}",
         f"profile: {profile}",
-        f"target-locked · all {selection.get('num_external_baselines', '?')} main-table baselines checked",
+        f"target-locked · all {selection.get('num_external_baselines', '?')} paper-table baselines checked",
     ):
         ax.text(0.0, y, line, transform=ax.transAxes, fontsize=7.1)
         y -= 0.028
@@ -743,7 +751,7 @@ def _save_animation(fig, update, frame_count, fps, output: Path, use_mp4: bool, 
 
 def _render_single(*, method, scene, trace, item, regime, display_name, context, center, radius,
                    camera_mode, sim_indices, fps, metric_dt_s, output, use_mp4):
-    contact_xy, contact_label = _contact_marker(trace, regime)
+    contact_xy, contact_label, contact_event_index = _contact_marker(trace, regime)
     road_segments = _prepare_roadgraph_segments(context, center, radius) if camera_mode == "fixed" else None
     timeline_cache = _prepare_timeline_cache({method: trace}, sim_indices, regime)
     figure = plt.figure(figsize=(9.6, 7.8), dpi=100)
@@ -755,7 +763,7 @@ def _render_single(*, method, scene, trace, item, regime, display_name, context,
     def update(frame_i):
         sim_idx = sim_indices[frame_i]
         view_center = _dynamic_center([trace], sim_idx) if camera_mode == "dynamic" else center
-        _draw_frame(map_ax, trace, sim_idx, display_name, view_center, radius, contact_xy, contact_label, metric_dt_s, context,
+        _draw_frame(map_ax, trace, sim_idx, display_name, view_center, radius, contact_xy, contact_label, metric_dt_s, context, contact_event_index,
                     roadgraph_segments=road_segments if camera_mode == "fixed" else None)
         _draw_timeline(timeline_ax, timeline_twin, {method: trace}, {method: display_name}, frame_i, sim_indices, fps, regime,
                        series_cache=timeline_cache)
@@ -791,16 +799,23 @@ def _draw_montage_info(ax, *, traces, displays, sim_idx, metric_dt_s, regime, it
 
 def _render_montage(*, methods, traces, item, selection, regime, displays, context, center, radius,
                     camera_mode, sim_indices, fps, metric_dt_s, output, use_mp4):
-    if len(methods) > 7:
-        raise SystemExit("all-method montage currently supports at most 7 methods plus one info panel")
     contacts = {m: _contact_marker(traces[m], regime) for m in methods}
     road_segments = _prepare_roadgraph_segments(context, center, radius) if camera_mode == "fixed" else None
-    figure = plt.figure(figsize=(16.0, 8.8), dpi=100)
-    grid = figure.add_gridspec(2, 4, wspace=0.08, hspace=0.14)
+    total_panels = len(methods) + 1
+    if total_panels <= 8:
+        cols = 4
+    elif total_panels <= 9:
+        cols = 3
+    else:
+        cols = 4
+    rows = int(math.ceil(total_panels / cols))
+    figure = plt.figure(figsize=(4.0 * cols, 4.15 * rows), dpi=100)
+    grid = figure.add_gridspec(rows, cols, wspace=0.08, hspace=0.14)
     axes = {}
     for i, method in enumerate(methods):
-        axes[method] = figure.add_subplot(grid[i // 4, i % 4])
-    info_ax = figure.add_subplot(grid[1, 3])
+        axes[method] = figure.add_subplot(grid[i // cols, i % cols])
+    info_i = len(methods)
+    info_ax = figure.add_subplot(grid[info_i // cols, info_i % cols])
     regime_title = "NEAR-CONTACT" if regime == "near" else ("CONTACT" if regime == "contact" else "SAFE")
     figure.suptitle(f"{regime_title} · target-locked all-method comparison · Rank {item.get('category_rank')}",
                     fontsize=12.0, fontweight="bold", y=0.985)
@@ -810,9 +825,9 @@ def _render_montage(*, methods, traces, item, selection, regime, displays, conte
         sim_idx = sim_indices[frame_i]
         view_center = _dynamic_center([traces[m] for m in methods], sim_idx) if camera_mode == "dynamic" else center
         for method in methods:
-            xy, label = contacts[method]
+            xy, label, event_idx = contacts[method]
             _draw_frame(axes[method], traces[method], sim_idx, displays[method], view_center, radius, xy, label,
-                        metric_dt_s, context, show_hud=False, show_axes=False, show_clearance_annotation=False,
+                        metric_dt_s, context, event_idx, show_hud=False, show_axes=False, show_clearance_annotation=False,
                         roadgraph_segments=road_segments if camera_mode == "fixed" else None)
         _draw_montage_info(info_ax, traces={m: traces[m] for m in methods}, displays=displays, sim_idx=sim_idx,
                            metric_dt_s=metric_dt_s, regime=regime, item=item, selection=selection)
@@ -850,8 +865,8 @@ def _render_pair(*, methods, scenes, traces, item, selection, regime, displays, 
         sim_idx = sim_indices[frame_i]
         view_center = _dynamic_center([traces[m] for m in methods], sim_idx) if camera_mode == "dynamic" else center
         for method in methods:
-            xy, label = contact[method]
-            _draw_frame(axes[method], traces[method], sim_idx, displays[method], view_center, radius, xy, label, metric_dt_s, context,
+            xy, label, event_idx = contact[method]
+            _draw_frame(axes[method], traces[method], sim_idx, displays[method], view_center, radius, xy, label, metric_dt_s, context, event_idx,
                         roadgraph_segments=road_segments if camera_mode == "fixed" else None)
         _draw_timeline(timeline_ax, timeline_twin, {m: traces[m] for m in methods}, displays, frame_i, sim_indices, fps, regime,
                        series_cache=timeline_cache)

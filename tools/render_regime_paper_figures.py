@@ -137,32 +137,40 @@ def _render_grid(*, methods: list[str], traces: dict[str, list[dict[str, Any]]],
     contacts = {m: _contact_marker(traces[m], regime) for m in methods}
     rows, cols = len(methods), len(keyframes)
     width = 3.05 * cols
-    height = max(3.0, 1.85 * rows + 0.85)
+    # Reserve an explicit header band above the top-row time labels.  The old
+    # 2x4 layout used suptitle y=0.995 with top=0.93 and bbox_inches="tight",
+    # which visibly merged titles such as "CONTACT: OC-RAP vs APF + TVLQR"
+    # with the t=... labels.
+    is_main_pair = rows == 2 and cols == 4
+    height = max(3.0, 1.90 * rows + (1.25 if is_main_pair else 0.95))
     fig, axes = plt.subplots(rows, cols, figsize=(width, height), squeeze=False)
 
     for r, method in enumerate(methods):
         for c, idx in enumerate(keyframes):
-            xy, label = contacts[method]
+            xy, label, event_idx = contacts[method]
             _draw_frame(
-                axes[r][c], traces[method], idx, "", center, radius, xy, label, dt_s, context,
+                axes[r][c], traces[method], idx, "", center, radius, xy, label, dt_s, context, event_idx,
                 show_hud=False, show_axes=False, show_clearance_annotation=False,
                 roadgraph_segments=road_segments,
             )
             if r == 0:
-                axes[r][c].set_title(f"t = {idx * dt_s:.1f} s", fontsize=9.5, fontweight="bold")
+                axes[r][c].set_title(f"t = {idx * dt_s:.1f} s", fontsize=9.5, fontweight="bold", pad=8.0)
             if c == 0:
                 axes[r][c].text(
                     -0.045, 0.5, displays[method], transform=axes[r][c].transAxes,
                     rotation=90, ha="right", va="center", fontsize=9.2, fontweight="bold",
                 )
 
-    fig.suptitle(title, fontsize=11.0, fontweight="bold", y=0.995)
-    fig.subplots_adjust(left=0.065, right=0.995, top=0.93, bottom=0.025, wspace=0.035, hspace=0.08)
+    fig.suptitle(title, fontsize=11.0, fontweight="bold", y=0.985)
+    fig.subplots_adjust(
+        left=0.065, right=0.995, top=(0.855 if is_main_pair else 0.925),
+        bottom=0.025, wspace=0.035, hspace=0.08,
+    )
     output_stem.parent.mkdir(parents=True, exist_ok=True)
     print(f"[FIG][SAVE] {png}", flush=True)
-    fig.savefig(png, dpi=300, bbox_inches="tight", pad_inches=0.03)
+    fig.savefig(png, dpi=300, bbox_inches="tight", pad_inches=0.05)
     print(f"[FIG][SAVE] {pdf}", flush=True)
-    fig.savefig(pdf, bbox_inches="tight", pad_inches=0.03)
+    fig.savefig(pdf, bbox_inches="tight", pad_inches=0.05)
     plt.close(fig)
     elapsed = time.monotonic() - started
     print(f"[FIG][DONE] {output_stem.name} elapsed={elapsed:.1f}s png={png.stat().st_size/(1024*1024):.1f}MiB pdf={pdf.stat().st_size/(1024*1024):.1f}MiB", flush=True)

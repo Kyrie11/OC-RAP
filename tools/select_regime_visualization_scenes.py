@@ -2,7 +2,7 @@
 """Select qualitative scenes for Safe / Near-Contact / Contact visualization.
 
 The selector is intentionally metric-only.  It consumes the full closed-loop
-scene journals for OC-RAP and *all* main-table external baselines, chooses five
+scene journals for OC-RAP and *all* paper-table external baselines, chooses five
 scene-time targets per regime, and records a per-scene best/worst external
 comparator for later video rendering.
 
@@ -87,6 +87,11 @@ DEFAULT_THRESHOLDS = dict(
     max_near_terminal_clearance_regression_m=0.50,
     max_near_exposure_regression_s=0.10,
     max_near_near_zero_regression_rate=0.05,
+    # Qualitative-candidate prefilter only. These do not change population metrics
+    # or paired safety tiers; they enrich the over-selected pool with scenes that
+    # are more likely to show broad external low-margin/collision behavior.
+    near_visual_ttc_threshold_s=0.50,
+    near_visual_clearance_threshold_m=0.35,
     min_contact_terminal_clearance_gain_m=0.50,
     min_contact_auc_gain_m=0.50,
     min_contact_clearance_gain_m=0.25,
@@ -522,6 +527,39 @@ def _paired_rows(
         median_pair_score = float(statistics.median(pair_scores))
         best_pair_score = max(pair_scores)
         robust_score = 0.55 * worst_pair_score + 0.35 * median_pair_score + 0.10 * best_pair_score
+        near_visual_prefilter = None
+        if regime == "near":
+            ocrap_snap = common["ocrap_metrics"]
+            ocrap_vis_safe = _finite(ocrap_snap.get("overlap_any")) <= 0.5 and _finite(ocrap_snap.get("offroad_any")) <= 0.5
+            severe = {}
+            for name in baseline_names:
+                snap = external_metrics[name]
+                severe[name] = bool(
+                    _finite(snap.get("overlap_any")) > 0.5
+                    or (snap.get("ttc_p05_s") is not None and _finite(snap.get("ttc_p05_s"), 99.0) <= args.near_visual_ttc_threshold_s)
+                    or (snap.get("clearance_p05_m") is not None and _finite(snap.get("clearance_p05_m"), 99.0) <= args.near_visual_clearance_threshold_m)
+                )
+            overlap_count = sum(_finite(external_metrics[n].get("overlap_any")) > 0.5 for n in baseline_names)
+            severe_count = sum(severe.values())
+            n_ext = max(len(baseline_names), 1)
+            near_visual_prefilter = {
+                "ocrap_metric_safe": ocrap_vis_safe,
+                "external_overlap_count": int(overlap_count),
+                "external_severe_count": int(severe_count),
+                "external_overlap_fraction": float(overlap_count / n_ext),
+                "external_severe_fraction": float(severe_count / n_ext),
+                "per_baseline_severe": severe,
+                "ttc_threshold_s": float(args.near_visual_ttc_threshold_s),
+                "clearance_threshold_m": float(args.near_visual_clearance_threshold_m),
+            }
+            # Candidate-pool enrichment only: strong consensus hazard receives a
+            # bounded boost, while an unsafe OC-RAP metric snapshot is penalized.
+            robust_score += (
+                2.0 * near_visual_prefilter["external_severe_fraction"]
+                + 1.0 * near_visual_prefilter["external_overlap_fraction"]
+                + (0.25 if severe.get(hardest, False) else 0.0)
+                - (4.0 if not ocrap_vis_safe else 0.0)
+            )
         majority = math.ceil(len(baseline_names) / 2)
         no_unsafe_vs_primary = not pair_primary["regression_reasons"] and not pair_primary["missing_required_metrics"]
         no_unsafe_any = all(not row["regression_reasons"] and not row["missing_required_metrics"] for row in per_baseline.values())
@@ -560,6 +598,7 @@ def _paired_rows(
             "best_pair_score": float(best_pair_score),
             "num_material_external_comparisons": int(material_count),
             "num_nonregressive_external_comparisons": int(nonregressive_count),
+            "near_visual_candidate_prefilter": near_visual_prefilter,
             "per_baseline": per_baseline,
         })
     return rows
@@ -657,6 +696,10 @@ def main() -> int:
         ),
     )
     ap.add_argument("--num-scenes", type=int, default=5)
+    ap.add_argument(
+        "--allow-fewer-scenes", action="store_true",
+        help="For an over-selection candidate pass, keep all eligible scenes when fewer than --num-scenes exist instead of failing. Final trace-aware selection still enforces its requested count.",
+    )
     ap.add_argument("--min-duration-s", type=float, default=5.0)
     ap.add_argument("--fallback-min-duration-s", type=float, default=3.0)
     ap.add_argument("--scenario-horizon-steps", type=int, default=91)
@@ -742,7 +785,7 @@ def main() -> int:
         duration_threshold = float(args.fallback_min_duration_s)
         duration_pool = fallback_rows
         duration_mode = "fallback"
-    if len(duration_pool) < args.num_scenes:
+    if len(duration_pool) < args.num_scenes and not args.allow_fewer_scenes:
         tier_counts: dict[int, int] = {}
         fallback_by_tier: dict[int, int] = {}
         for row in rows:
@@ -757,14 +800,17 @@ def main() -> int:
             f"all paired tier counts={tier_counts}, fallback-duration counts by tier={fallback_by_tier}. "
             "Do not change the quantitative cohort; for supplementary-only examples you may explicitly relax MAX_SELECTED_TIER_RANK if needed."
         )
+    if not duration_pool:
+        raise SystemExit(f"{args.regime}: no eligible visualization candidates after tier/duration filters")
+    select_count = min(args.num_scenes, len(duration_pool)) if args.allow_fewer_scenes else args.num_scenes
 
     selected = _select_diverse(
         duration_pool,
-        args.num_scenes,
+        select_count,
         args.diversify_evidence_profiles and args.regime != "safe",
     )
-    if len(selected) != args.num_scenes:
-        raise SystemExit(f"{args.regime}: diversity filtering yielded only {len(selected)} scenes")
+    if len(selected) != select_count:
+        raise SystemExit(f"{args.regime}: diversity filtering yielded only {len(selected)} scenes (requested {select_count})")
     selected = [
         row | {
             "category": "visualization_example",
@@ -785,7 +831,7 @@ def main() -> int:
         "exploratory_qualitative_only": True,
         "paper_population_claim_allowed": False,
         "selection_note": (
-            "All main-table external baselines participate in selection. Safe is ranked by high absolute OC-RAP closed-loop quality with safety guards; "
+            "All paper-table external baselines participate in selection. Safe is ranked by high absolute OC-RAP closed-loop quality with safety guards; "
             "Near/Contact are ranked by robust multi-baseline relative effects and the reviewer-facing comparator is the per-scene hardest baseline. "
             "For Contact, publication inputs use the shared treatment-independent exact-a0 observed-contact anchor cohort; selection uses generic physical recovery/overlap/penetration/stability metrics on that paired cohort. "
             "Selection is post-hoc qualitative evidence and does not replace population-level tables."
