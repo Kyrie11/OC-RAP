@@ -10,7 +10,9 @@ def test_selected_trace_rerun_uses_portable_scheduler_and_skips_reusable_regimes
     assert 'SAFE_EXTERNAL_PENDING="$(trace_pending_count safe external)"' in text
     assert 'NEAR_EXTERNAL_PENDING="$(trace_pending_count near external)"' in text
     assert 'CONTACT_EXTERNAL_PENDING="$(trace_pending_count contact external)"' in text
-    assert text.count('USE_DYNAMIC_SCHEDULER=auto') >= 3
+    assert ': "${USE_DYNAMIC_SCHEDULER:=auto}"' in text
+    assert text.count('USE_DYNAMIC_SCHEDULER="$USE_DYNAMIC_SCHEDULER"') >= 3
+    assert 'CHECKPOINT_ROOT="$NEAR_EXTERNAL_ROOT/checkpoints"' in text
     assert 'if (( OCRAP_PENDING > 0 )); then' in text
     assert 'if (( SAFE_EXTERNAL_PENDING > 0 )); then' in text
     assert 'if (( NEAR_EXTERNAL_PENDING > 0 )); then' in text

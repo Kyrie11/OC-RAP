@@ -27,6 +27,9 @@ def test_master_suite_cleans_only_named_final_run_roots_and_requests_6s_visualiz
     assert 'PROFILE_LATENCY=false' in text
     assert 'PROFILE_ISOLATED_LATENCY=false' in text
     assert 'isolated single-process/single-GPU profiling' in text
+    vis = (ROOT / 'scripts/build_regime_visualizations.sh').read_text()
+    assert '.build_regime_visualizations.lock' in vis
+    assert 'flock -n 9' in vis
     assert 'package_final_submission_results.py' in text
     assert 'final_results.zip' in text
 

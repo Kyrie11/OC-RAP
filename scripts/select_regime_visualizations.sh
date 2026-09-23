@@ -29,6 +29,9 @@ export PYTHONNOUSERSITE=1
 : "${VIS_CONTACT_ANCHOR_MANIFEST_FILE:=}"
 : "${CONTACT_ALLOWED_TARGET_KEYS_FILE:=}"
 : "${MAX_SELECTED_TIER_RANK:=1}"  # 0=strict hardest-baseline win only; 1 allows majority-material strong evidence.
+: "${SAFE_MAX_SELECTED_TIER_RANK:=$MAX_SELECTED_TIER_RANK}"
+: "${NEAR_MAX_SELECTED_TIER_RANK:=$MAX_SELECTED_TIER_RANK}"
+: "${CONTACT_MAX_SELECTED_TIER_RANK:=$MAX_SELECTED_TIER_RANK}"
 : "${ALLOW_FEWER_SCENES:=false}"
 
 mkdir -p "$OUT/provenance" "$SELECTION_DIR"
@@ -53,7 +56,7 @@ near_methods=(marc_lite racp_lite robust_scenario_mpc predictive_safety_filter d
 contact_methods=(postimpact_mpc_lite post_crash_braking postimpact_motion_tvlqr post_collision_restoration compensatory_postimpact_mpc robust_postimpact_control)
 
 select_one() {
-  local regime="$1" ext_root="$2" requested="$3"; shift 3
+  local regime="$1" ext_root="$2" requested="$3" max_tier_rank="$4"; shift 4
   local -a methods=("$@") args=()
   local m
   for m in "${methods[@]}"; do
@@ -83,12 +86,12 @@ select_one() {
     --num-scenes "$requested" \
     --min-duration-s "$MIN_VIDEO_DURATION_S" \
     --fallback-min-duration-s "$fallback_duration" \
-    --max-selected-tier-rank "$MAX_SELECTED_TIER_RANK"
+    --max-selected-tier-rank "$max_tier_rank"
 }
 
-select_one safe "$SAFE_EXTERNAL_ROOT" "$SAFE_NUM_SCENES" "${safe_methods[@]}"
-select_one near "$NEAR_EXTERNAL_ROOT" "$NEAR_NUM_SCENES" "${near_methods[@]}"
-select_one contact "$CONTACT_EXTERNAL_ROOT" "$CONTACT_NUM_SCENES" "${contact_methods[@]}"
+select_one safe "$SAFE_EXTERNAL_ROOT" "$SAFE_NUM_SCENES" "$SAFE_MAX_SELECTED_TIER_RANK" "${safe_methods[@]}"
+select_one near "$NEAR_EXTERNAL_ROOT" "$NEAR_NUM_SCENES" "$NEAR_MAX_SELECTED_TIER_RANK" "${near_methods[@]}"
+select_one contact "$CONTACT_EXTERNAL_ROOT" "$CONTACT_NUM_SCENES" "$CONTACT_MAX_SELECTED_TIER_RANK" "${contact_methods[@]}"
 
 python - "$SELECTION_DIR" <<'PY'
 import json, pathlib, sys

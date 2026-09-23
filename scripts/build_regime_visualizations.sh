@@ -53,6 +53,26 @@ while (($#)); do case "$1" in
  -h|--help) usage;exit 0;; *) echo "unknown option $1" >&2;usage >&2;exit 2;; esac;done
 [[ -n "$OCRAP_RESULTS_ROOT" && -n "$OCRAP_MODEL_RUN" ]] || { echo '--ocrap-results and --model-run are required' >&2; exit 2; }
 [[ "$TRACE_MAX_STEPS" =~ ^[0-9]+$ && "$TRACE_MAX_STEPS" -gt 0 ]] || { echo '--trace-steps must be a positive integer' >&2; exit 2; }
+# Make scheduler choice configurable from the top-level command.  The default
+# remains auto; this variable affects only execution scheduling, never method
+# definitions, checkpoints, target locks, or scientific metrics.
+: "${USE_DYNAMIC_SCHEDULER:=auto}"
+
+# One visualization build owns an output root exclusively.  Two overlapping
+# builds can otherwise append the same selected target to a JSONL journal at
+# the same time, producing scientifically identical but structurally duplicate
+# rows that the strict trace contract correctly rejects.
+mkdir -p "$OUT"
+if command -v flock >/dev/null 2>&1; then
+  exec 9>"$OUT/.build_regime_visualizations.lock"
+  if ! flock -n 9; then
+    echo "[ERROR] another build_regime_visualizations.sh process is already using OUT=$OUT" >&2
+    echo "Wait for that process to finish, or choose a different --out directory." >&2
+    exit 31
+  fi
+else
+  echo "[WARN] flock is unavailable; do not run two visualization builds against the same --out directory." >&2
+fi
 if [[ "$VIDEO_FORMAT" == mp4 ]] && ! command -v ffmpeg >/dev/null 2>&1; then
   echo "[WARN] ffmpeg not found; static paper figures will still be generated and video format falls back to auto/GIF." >&2
   VIDEO_FORMAT=auto
@@ -61,7 +81,10 @@ export OCRAP_ROOT="${OCRAP_ROOT:-/data0/senzeyu2/dataset/OCRAP}" WOMD_ROOT="${WO
 export SAFE_EXTERNAL_ROOT="$EXTERNAL_RESULTS_ROOT/safe" NEAR_EXTERNAL_ROOT="$EXTERNAL_RESULTS_ROOT/near" CONTACT_EXTERNAL_ROOT="$EXTERNAL_RESULTS_ROOT/contact"
 export OCRAP_RESULTS_ROOT OCRAP_MODEL_RUN TARGET_LOCK_ROOT MODEL_VARIANT OUT NUM_SCENES CUDA_DEVICES FPS TRACE_MAX_STEPS CAMERA_MODE VIEW_RADIUS_M VIDEO_FORMAT
 export VIS_CANDIDATE_MULTIPLIER SAFE_CANDIDATE_SCENES NEAR_CANDIDATE_SCENES CONTACT_CANDIDATE_SCENES
-export MAX_SELECTED_TIER_RANK="${MAX_SELECTED_TIER_RANK:-1}" JOBS_PER_GPU="${JOBS_PER_GPU:-3}" MAX_PARALLEL="${MAX_PARALLEL:-6}"
+export MAX_SELECTED_TIER_RANK="${MAX_SELECTED_TIER_RANK:-1}" JOBS_PER_GPU="${JOBS_PER_GPU:-3}" MAX_PARALLEL="${MAX_PARALLEL:-6}" USE_DYNAMIC_SCHEDULER
+export SAFE_MAX_SELECTED_TIER_RANK="${SAFE_MAX_SELECTED_TIER_RANK:-$MAX_SELECTED_TIER_RANK}"
+export NEAR_MAX_SELECTED_TIER_RANK="${NEAR_MAX_SELECTED_TIER_RANK:-$MAX_SELECTED_TIER_RANK}"
+export CONTACT_MAX_SELECTED_TIER_RANK="${CONTACT_MAX_SELECTED_TIER_RANK:-$MAX_SELECTED_TIER_RANK}"
 export MIN_VIDEO_DURATION_S FALLBACK_MIN_VIDEO_DURATION_S CONTACT_FALLBACK_MIN_VIDEO_DURATION_S
 
 # Publication Contact is anchored at the first exact-a0 observed overlap.  Do
@@ -118,6 +141,26 @@ mkdir -p "$OUT/logs"
 SELECTION_DIR="$OUT/selection_candidates" ALLOW_FEWER_SCENES=true \
 SAFE_NUM_SCENES="$SAFE_CANDIDATE_SCENES" NEAR_NUM_SCENES="$NEAR_CANDIDATE_SCENES" CONTACT_NUM_SCENES="$CONTACT_CANDIDATE_SCENES" \
 bash scripts/select_regime_visualizations.sh 2>&1 | tee "$OUT/logs/01_candidate_selection.log"
+
+# Fail before expensive selective reruns when an explicit tier cap cannot supply
+# the requested final rank count.  In the current locked Contact cohort only
+# three scenes are tier<=1, so five Contact ranks require an explicit
+# CONTACT_MAX_SELECTED_TIER_RANK relaxation rather than silently weakening all
+# three regimes.
+python - "$OUT/selection_candidates/SELECTION_INDEX.json" "$NUM_SCENES" "$SAFE_MAX_SELECTED_TIER_RANK" "$NEAR_MAX_SELECTED_TIER_RANK" "$CONTACT_MAX_SELECTED_TIER_RANK" <<'PY'
+import json,sys
+p=sys.argv[1]; need=int(sys.argv[2]); caps=dict(zip(("safe","near","contact"), map(int,sys.argv[3:6])))
+d=json.load(open(p,encoding="utf-8"))
+short=[]
+for r in ("safe","near","contact"):
+    n=int(d["regimes"][r]["num_selected"])
+    if n < need:
+        short.append(f"{r}: selected={n} required={need} max_tier={caps[r]}")
+if short:
+    raise SystemExit("candidate selection cannot supply requested final ranks: " + "; ".join(short) + ". "
+                     "Relax only the affected regime tier cap (for example CONTACT_MAX_SELECTED_TIER_RANK=3) "
+                     "or lower --num-scenes.")
+PY
 
 # Stage 2: rerun full render traces for only that candidate pool.
 SELECTION_ROOT="$OUT/selection_candidates" OUT="$OUT/selective_traces" bash scripts/generate_selected_regime_traces.sh 2>&1 | tee "$OUT/logs/02_selective_traces.log"

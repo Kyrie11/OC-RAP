@@ -48,7 +48,19 @@ def _artifact_family(base: Path) -> list[Path]:
     ]
 
 
-def _check_journal(path: Path, selection: dict[str, Any], requested: list[str]) -> tuple[bool, list[str], dict[str, Any]]:
+def _scientific_scene_signature(scene: dict[str, Any]) -> str:
+    """Canonical scene payload excluding execution-only timing measurements."""
+    scientific = {k: v for k, v in scene.items() if k != "timing"}
+    return json.dumps(scientific, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=True)
+
+
+def _check_journal(
+    path: Path,
+    selection: dict[str, Any],
+    requested: list[str],
+    *,
+    repair_equivalent_duplicates: bool = False,
+) -> tuple[bool, list[str], dict[str, Any]]:
     errors: list[str] = []
     if not path.is_file():
         return False, [f"missing journal: {path}"], {"rows": 0, "unique_keys": 0}
@@ -56,6 +68,9 @@ def _check_journal(path: Path, selection: dict[str, Any], requested: list[str]) 
     dt = float(selection.get("metric_dt_s", 0.1) or 0.1)
     rows = 0
     scenes: dict[str, dict[str, Any]] = {}
+    envelopes: dict[str, dict[str, Any]] = {}
+    kept_raw_lines: list[str] = []
+    equivalent_duplicate_keys: set[str] = set()
     with path.open(encoding="utf-8") as f:
         for lineno, line in enumerate(f, 1):
             if not line.strip():
@@ -67,9 +82,17 @@ def _check_journal(path: Path, selection: dict[str, Any], requested: list[str]) 
                 errors.append(f"line {lineno}: scene without target key")
                 continue
             if k in scenes:
-                errors.append(f"duplicate target key {k} in selected trace journal")
+                first_env = envelopes[k]
+                same_fp = str(first_env.get("run_fingerprint") or "") == str(env.get("run_fingerprint") or "")
+                same_science = _scientific_scene_signature(scenes[k]) == _scientific_scene_signature(scene)
+                if same_fp and same_science:
+                    equivalent_duplicate_keys.add(k)
+                    continue
+                errors.append(f"conflicting duplicate target key {k} in selected trace journal")
                 continue
             scenes[k] = scene
+            envelopes[k] = env
+            kept_raw_lines.append(line.rstrip("\n"))
     req = set(requested)
     missing = sorted(req - set(scenes))
     extra = sorted(set(scenes) - req)
@@ -107,7 +130,20 @@ def _check_journal(path: Path, selection: dict[str, Any], requested: list[str]) 
             "expected_start_field": expected_field,
             "expected_start_time_index": expected_start,
         }
-    return not errors, errors, {"rows": rows, "unique_keys": len(scenes), "per_target": per_target}
+    normalized = False
+    if not errors and equivalent_duplicate_keys and repair_equivalent_duplicates:
+        tmp = path.with_suffix(path.suffix + ".dedupe.tmp")
+        tmp.write_text("\n".join(kept_raw_lines) + "\n", encoding="utf-8")
+        tmp.replace(path)
+        rows = len(kept_raw_lines)
+        normalized = True
+    return not errors, errors, {
+        "rows": rows,
+        "unique_keys": len(scenes),
+        "per_target": per_target,
+        "equivalent_duplicate_keys": sorted(equivalent_duplicate_keys),
+        "normalized_equivalent_duplicates": normalized,
+    }
 
 
 def main() -> int:
@@ -128,7 +164,9 @@ def main() -> int:
         specs += [(m, args.trace_root / "external" / regime / f"closed_loop_{m}.json") for m in METHODS[regime]]
         for method, base in specs:
             journal = Path(str(base) + ".scenes.jsonl")
-            valid, errs, detail = _check_journal(journal, selection, requested)
+            valid, errs, detail = _check_journal(
+                journal, selection, requested, repair_equivalent_duplicates=args.clean_invalid
+            )
             existed = any(p.exists() for p in _artifact_family(base))
             removed: list[str] = []
             status = "reusable" if valid else ("invalid" if existed else "missing")
