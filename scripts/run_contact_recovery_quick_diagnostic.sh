@@ -130,7 +130,7 @@ run_profile(){
   CONTACT_LABEL_MODE=fast RENDER_CONTACT=false RESUME=true RESUME_FORCE=false \
   bash scripts/run_ocrap_three_regime_evaluation.sh 2>&1 | tee "$root/run.log"
   python tools/audit_contact_recovery_execution.py --result "$root/contact/closed_loop_ocrap.json" \
-    --output "$root/contact/CONTACT_RECOVERY_AUDIT.json" | tee "$root/contact/audit.log"
+    --target-keys-file "$KEYS" --output "$root/contact/CONTACT_RECOVERY_AUDIT.json" | tee "$root/contact/audit.log"
 }
 # Strict and guarded are the only profiles needed for the cheap first-pass question:
 # does opening the existing guarded fallback actually cause safe useful interventions?
@@ -146,5 +146,5 @@ fi
 python tools/summarize_contact_recovery_quickdiag.py \
   --strict "$OUT/profiles/strict_abs/contact/CONTACT_RECOVERY_AUDIT.json" \
   --guarded "$OUT/profiles/guarded_fallback/contact/CONTACT_RECOVERY_AUDIT.json" \
-  "${CAL_ARG[@]}" --output "$OUT/QUICK_DIAGNOSTIC_SUMMARY.json" | tee "$OUT/summary.log"
+  --target-keys-file "$KEYS" "${CAL_ARG[@]}" --output "$OUT/QUICK_DIAGNOSTIC_SUMMARY.json" | tee "$OUT/summary.log"
 echo "[CONTACT-QUICKDIAG][DONE] $OUT/QUICK_DIAGNOSTIC_SUMMARY.json"

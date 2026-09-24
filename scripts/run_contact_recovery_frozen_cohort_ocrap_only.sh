@@ -11,7 +11,7 @@ export PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}"
 : "${OCRAP_MODEL_RUN:=$BASE_OUT/ocrap_v48_80_dcp_drfc_bcde_rifa_pistc_main}"
 : "${MAIN_CHARACTERIZATION_ROOT:=$BASE_OUT/ocrap_v48_124_final_characterization}"
 : "${EXTERNAL_ROOT:=$BASE_OUT/external_baselines_v48_124_final_v2/contact}"
-: "${QUICK_SUMMARY:=$BASE_OUT/contact_recovery_quickdiag_v135/QUICK_DIAGNOSTIC_SUMMARY.json}"
+: "${QUICK_SUMMARY:=$BASE_OUT/contact_recovery_quickdiag_v135/QUICK_DIAGNOSTIC_SUMMARY_v137.json}"
 : "${OUT:=$BASE_OUT/contact_recovery_frozen8_v135}"
 : "${GPU:=0}"
 : "${CONTACT_RECOVERY_PROFILE:=guarded_fallback}"
@@ -36,16 +36,22 @@ OCRAP_ROOT="$OCRAP_ROOT" WOMD_ROOT="$WOMD_ROOT" OUT="$OUT/ocrap" CUDA_DEVICES="$
 CONTACT_BUCKET="$OCRAP_ROOT/test_contact" BUCKET_SPLIT=test MAX_SCENARIOS=0 MAX_STEPS=40 \
 CONTACT_TARGET_KEYS_FILE="$KEYS" CONTACT_ANCHOR_PRELUDE_ENABLED=true CONTACT_ANCHOR_MANIFEST_FILE="$MANIFEST" \
 CONTACT_REQUIRE_ABSOLUTE_ADMISSION_FOR_INTERVENTION="$REQUIRE_ABS" CONTACT_OCRAP_SELECTOR="$SELECTOR" \
-CONTACT_LABEL_MODE=fast RENDER_CONTACT=false RESULT_SCENE_DETAIL=metrics SCENE_JOURNAL_DETAIL=metrics \
+CONTACT_LABEL_MODE=fast RENDER_CONTACT=true RESULT_SCENE_DETAIL=metrics SCENE_JOURNAL_DETAIL=full \
 RESUME=true RESUME_FORCE=false bash scripts/run_ocrap_three_regime_evaluation.sh 2>&1 | tee "$OUT/ocrap.log"
 python tools/audit_contact_recovery_execution.py --result "$OUT/ocrap/contact/closed_loop_ocrap.json" \
-  --output "$OUT/ocrap/contact/CONTACT_RECOVERY_AUDIT.json" | tee "$OUT/ocrap_audit.log"
+  --target-keys-file "$KEYS" --output "$OUT/ocrap/contact/CONTACT_RECOVERY_AUDIT.json" | tee "$OUT/ocrap_audit.log"
+python tools/audit_contact_recontact_continuous.py \
+  --trace "ocrap=$OUT/ocrap/contact/closed_loop_ocrap.json.scenes.jsonl" \
+  --target-keys-file "$KEYS" \
+  --output-json "$OUT/ocrap/contact/OCRAP_CONTACT_RECONTACT_CONTINUOUS.json" \
+  --output-csv "$OUT/ocrap/contact/OCRAP_CONTACT_RECONTACT_CONTINUOUS.csv" \
+  --per-scene-csv "$OUT/ocrap/contact/OCRAP_CONTACT_RECONTACT_PER_SCENE.csv"
 METHODS=(postimpact_mpc_lite post_crash_braking postimpact_motion_tvlqr post_collision_restoration compensatory_postimpact_mpc robust_postimpact_control)
 mkdir -p "$OUT/reused_baseline_audits"
 for m in "${METHODS[@]}"; do
   p="$EXTERNAL_ROOT/closed_loop_${m}.json"
   [[ -s "$p" ]] || { echo "missing existing baseline result: $p" >&2; exit 30; }
-  python tools/audit_contact_recovery_execution.py --result "$p" --output "$OUT/reused_baseline_audits/${m}.json" >/dev/null
+  python tools/audit_contact_recovery_execution.py --result "$p" --target-keys-file "$KEYS" --output "$OUT/reused_baseline_audits/${m}.json" >/dev/null
 done
 python - "$OUT" "$CONTACT_RECOVERY_PROFILE" "$EXTERNAL_ROOT" <<'PY'
 import json,pathlib,sys
