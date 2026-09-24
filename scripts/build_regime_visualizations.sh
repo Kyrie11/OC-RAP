@@ -289,6 +289,9 @@ python tools/check_selected_trace_contract.py \
 # PNG/PDF/MP4 content is guaranteed to match the current selection artifact.
 TRACE_ROOT="$OUT/selective_traces" SELECTION_ROOT="$OUT/selection" OUT="$OUT/paper_figures" FORCE_RENDER=true bash scripts/render_regime_paper_figures.sh 2>&1 | tee "$OUT/logs/05_paper_figures.log"
 TRACE_ROOT="$OUT/selective_traces" SELECTION_ROOT="$OUT/selection" OUT="$OUT/videos" FORMAT="$VIDEO_FORMAT" FORCE_RENDER=true bash scripts/render_regime_videos.sh 2>&1 | tee "$OUT/logs/06_videos.log"
+# Keep the filesystem synchronized with the authoritative indexes.  Only stale
+# main rank_* files are eligible; contact/supplement_* is always preserved.
+python tools/prune_stale_regime_visualization_media.py --root "$OUT" | tee "$OUT/logs/06b_prune_stale_media.log"
 python tools/audit_regime_visualization_outputs.py --root "$OUT" --expected-scenes "$NUM_SCENES" \
   --expected-safe-scenes "$SAFE_FINAL_NUM_SCENES" --expected-near-scenes "$NEAR_FINAL_NUM_SCENES" \
   --expected-contact-scenes "$CONTACT_FINAL_NUM_SCENES" | tee "$OUT/logs/07_output_audit.log"

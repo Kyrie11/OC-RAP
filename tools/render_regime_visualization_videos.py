@@ -478,11 +478,35 @@ def _draw_frame(
                 bbox={"boxstyle": "round,pad=0.25", "facecolor": "white", "alpha": 0.78}, zorder=10)
 
 
-def _sample_indices(frame_count: int, fps: int, metric_dt_s: float, playback_slowdown: float = 1.0) -> list[int]:
+def _sample_indices(
+    frame_count: int, fps: int, metric_dt_s: float, playback_slowdown: float = 1.0,
+    *, clip_duration_s: float | None = None, max_sim_index: int | None = None,
+) -> list[int]:
+    """Map encoded frames onto simulation states, including the clip endpoint.
+
+    The old time-based formula sampled frame i at i/fps and therefore a 4.0 s
+    clip encoded at 10 fps ended at 3.9 s.  For Contact supplements this could
+    omit the terminal render state while the side panel correctly reported the
+    full-run terminal metric.  When clip_duration_s is supplied, distribute the
+    encoded frames over [0, terminal_index] inclusively so the final video frame
+    and terminal metric refer to the same simulated endpoint.
+    """
     playback_slowdown = float(playback_slowdown)
     if not math.isfinite(playback_slowdown) or playback_slowdown <= 0.0:
         raise ValueError(f"invalid playback_slowdown={playback_slowdown}")
-    return [int(round((i / fps / playback_slowdown) / metric_dt_s)) for i in range(frame_count)]
+    if frame_count <= 1:
+        return [0]
+    if clip_duration_s is None:
+        indices = [int(round((i / fps / playback_slowdown) / metric_dt_s)) for i in range(frame_count)]
+    else:
+        terminal = max(0, int(round(float(clip_duration_s) / float(metric_dt_s))))
+        if max_sim_index is not None:
+            terminal = min(terminal, max(0, int(max_sim_index)))
+        indices = [int(round(i * terminal / (frame_count - 1))) for i in range(frame_count)]
+    if max_sim_index is not None:
+        cap = max(0, int(max_sim_index))
+        indices = [min(max(0, x), cap) for x in indices]
+    return indices
 
 
 def _validate_trace_time_alignment(traces: dict[str, list[dict[str, Any]]], item: dict[str, Any]) -> dict[str, Any]:
@@ -751,12 +775,27 @@ def _save_animation(fig, update, frame_count, fps, output: Path, use_mp4: bool, 
         return update(frame_i)
     print(f"[VIDEO][START] {progress_label} frames={frame_count} fps={fps} output={output}", flush=True)
     anim = animation.FuncAnimation(fig, update_with_progress, frames=frame_count, interval=1000 / fps, blit=False)
-    if use_mp4:
-        writer = animation.FFMpegWriter(fps=fps, bitrate=2200, metadata={"artist": "OC-RAP submission visualization v54"})
-        anim.save(output, writer=writer)
-    else:
-        writer = animation.PillowWriter(fps=fps)
-        anim.save(output, writer=writer)
+    # Render atomically.  If matplotlib/ffmpeg raises while drawing a frame, do
+    # not leave a tiny corrupt .mp4 at the final path (the previous supplement
+    # crash left a 321-byte all-method file).
+    tmp = output.with_name(output.stem + ".tmp" + output.suffix)
+    try:
+        if tmp.exists():
+            tmp.unlink()
+        if use_mp4:
+            writer = animation.FFMpegWriter(fps=fps, bitrate=2200, metadata={"artist": "OC-RAP submission visualization v54"})
+            anim.save(tmp, writer=writer)
+        else:
+            writer = animation.PillowWriter(fps=fps)
+            anim.save(tmp, writer=writer)
+        tmp.replace(output)
+    except Exception:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        finally:
+            plt.close(fig)
+        raise
     plt.close(fig)
     elapsed = time.monotonic() - started
     size_mb = output.stat().st_size / (1024*1024) if output.is_file() else 0.0
@@ -794,12 +833,16 @@ def _draw_montage_info(ax, *, traces, displays, sim_idx, metric_dt_s, regime, it
     ax.text(0.0, 0.98, "TARGET-LOCKED ALL-METHOD VIEW", va="top", fontsize=10.2, fontweight="bold")
     ax.text(0.0, 0.91, f"rank {item.get('category_rank')} · sim t={current_t} · +{(current_t-start_t)*metric_dt_s:.1f}s", va="top", fontsize=8.2)
     ax.text(0.0, 0.86, "Same scene · same time · shared fixed camera", va="top", fontsize=7.6, alpha=0.75)
+    # These values are required in both normal-speed and slowed playback.  A
+    # previous indentation error initialized ``metric_name`` only in the
+    # normal-speed branch and ``y`` only in the slowed branch, causing the
+    # all-method Contact supplement montage to crash on its first frame.
+    metric_name = "TTC" if regime == "near" else "clearance"
+    metric_key = "ttc_s" if regime == "near" else "min_clearance_m"
+    y = 0.79
     if abs(float(playback_slowdown) - 1.0) > 1e-9:
         ax.text(0.0, 0.82, f"Playback {1.0/float(playback_slowdown):.2f}× real-time · simulation span unchanged", va="top", fontsize=7.2, alpha=0.75)
         y = 0.75
-    else:
-        metric_name = "TTC" if regime == "near" else "clearance"
-    metric_key = "ttc_s" if regime == "near" else "min_clearance_m"
     for method, trace in traces.items():
         r = _frame(trace, sim_idx)
         v = _metric_float(r, metric_key)
@@ -973,7 +1016,11 @@ def main() -> int:
         if args.target_rendered_duration_s > 0.0 and clip_duration_s > 0.0:
             scene_slowdown = max(scene_slowdown, min(float(args.max_playback_slowdown), float(args.target_rendered_duration_s) / clip_duration_s))
         frame_count = max(1, int(round(clip_duration_s * args.fps * scene_slowdown)))
-        sim_indices = _sample_indices(frame_count, args.fps, metric_dt_s, playback_slowdown=scene_slowdown)
+        max_sim_index = min(len(t) - 1 for t in traces.values())
+        sim_indices = _sample_indices(
+            frame_count, args.fps, metric_dt_s, playback_slowdown=scene_slowdown,
+            clip_duration_s=clip_duration_s, max_sim_index=max_sim_index,
+        )
         center, radius = _all_model_fixed_view(traces, args.view_radius_m)
         context = resolved["ocrap"].get("render_context") or next((resolved[m].get("render_context") for m in paths if resolved[m].get("render_context")), {})
         rank = int(item.get("category_rank", len(records) + 1))
@@ -1059,7 +1106,7 @@ def main() -> int:
             "resolution": methods_resolution,
             "time_alignment": time_alignment,
             "raw_trace_frames": {m: len(traces[m]) for m in paths},
-            "held_final_state": {m: max(sim_indices) >= len(traces[m]) for m in paths},
+            "held_final_state": {m: max(sim_indices) >= len(traces[m]) - 1 for m in paths},
             "num_videos": len(outputs),
             "videos": outputs,
         })

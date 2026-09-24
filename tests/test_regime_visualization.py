@@ -388,3 +388,35 @@ def test_contact_short_horizon_lane_convergence_fallback_is_bounded():
         recent_recovery_delta_min_m=0.35,
     )
     assert not escaped_contract["accepted"]
+
+
+def test_video_sampling_includes_requested_terminal_endpoint():
+    idx = renderer._sample_indices(
+        35, fps=10, metric_dt_s=0.1, playback_slowdown=1.4,
+        clip_duration_s=2.5, max_sim_index=25,
+    )
+    assert idx[0] == 0
+    assert idx[-1] == 25
+    assert all(a <= b for a, b in zip(idx, idx[1:]))
+
+
+def test_slowed_contact_montage_info_initializes_metric_and_layout():
+    import matplotlib.pyplot as plt
+
+    trace = [{"time_index": 10, "metrics": {"min_clearance_m": 0.2, "overlap": 0.0}}]
+    fig, ax = plt.subplots()
+    try:
+        renderer._draw_montage_info(
+            ax,
+            traces={"ocrap": trace, "postimpact_motion_tvlqr": trace},
+            displays={"ocrap": "OC-RAP", "postimpact_motion_tvlqr": "APF + TVLQR"},
+            sim_idx=0,
+            metric_dt_s=0.1,
+            regime="contact",
+            item={"category_rank": 1},
+            selection={},
+            playback_slowdown=1.4,
+        )
+        fig.canvas.draw()
+    finally:
+        plt.close(fig)

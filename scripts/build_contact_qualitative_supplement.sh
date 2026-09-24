@@ -19,8 +19,8 @@ export PYTHONUNBUFFERED=1
 : "${CONTACT_SUPPLEMENT_MAX_CLIP_S:=4.0}"
 : "${CONTACT_SUPPLEMENT_MAX_TIER_RANK:=2}"
 : "${CONTACT_SUPPLEMENT_MIN_EXTERNAL_FAILURES:=1}"
-: "${CONTACT_SUPPLEMENT_TARGET_RENDERED_DURATION_S:=4.0}"
-: "${CONTACT_SUPPLEMENT_MAX_PLAYBACK_SLOWDOWN:=1.6}"
+: "${CONTACT_SUPPLEMENT_TARGET_RENDERED_DURATION_S:=3.5}"
+: "${CONTACT_SUPPLEMENT_MAX_PLAYBACK_SLOWDOWN:=1.4}"
 : "${CONTACT_SUPPLEMENT_TRACE_MAX_STEPS:=40}"
 : "${CONTACT_SUPPLEMENT_FPS:=10}"
 : "${CONTACT_SUPPLEMENT_VIEW_RADIUS_M:=35}"
@@ -183,6 +183,37 @@ python tools/render_regime_visualization_videos.py \
   --max-playback-slowdown "$CONTACT_SUPPLEMENT_MAX_PLAYBACK_SLOWDOWN" \
   --include-all-method-montage --force \
   2>&1 | tee "$LOG_DIR/07_videos.log"
+
+# Remove stale files inside this supplement only after both renderers succeed.
+python - "$MAIN_VIS_ROOT" "$CONTACT_SUPPLEMENT_NAME" <<'PYPRUNE'
+import json,pathlib,shutil,sys
+root=pathlib.Path(sys.argv[1]); name=sys.argv[2]
+for kind,index_name,file_keys in (
+    ("videos","VIDEO_INDEX.json",("videos",)),
+    ("paper_figures","PAPER_FIGURE_INDEX.json",("pair_files","all_method_files")),
+):
+    base=root/kind/"contact"/name; idx=base/index_name
+    if not idx.is_file():
+        continue
+    d=json.loads(idx.read_text())
+    keep=set()
+    for rec in d.get("records") or []:
+        rank=int(rec.get("rank") or 0); rd=f"rank_{rank:02d}"
+        for key in file_keys:
+            vals=rec.get(key) or []
+            if key=="videos":
+                vals=[x.get("path") for x in vals if isinstance(x,dict)]
+            elif isinstance(vals,str):
+                vals=[vals]
+            for value in vals:
+                if value: keep.add((rd,pathlib.Path(str(value)).name))
+    for rd in base.glob("rank_*"):
+        if not rd.is_dir(): continue
+        for f in rd.iterdir():
+            if f.is_file() and (rd.name,f.name) not in keep:
+                f.unlink()
+        if not any(rd.iterdir()): rd.rmdir()
+PYPRUNE
 
 python - "$WORK" "$MAIN_VIS_ROOT" "$CONTACT_SUPPLEMENT_NAME" "$ANCHOR_COUNT" "$ACCEPTED_COUNT" "$CONTACT_SUPPLEMENT_MIN_POST_STEPS" <<'PY'
 import json,pathlib,sys
