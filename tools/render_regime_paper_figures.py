@@ -192,8 +192,11 @@ def main() -> int:
     ap.add_argument("--selection", type=Path, required=True)
     ap.add_argument("--output-dir", type=Path, required=True)
     ap.add_argument("--view-radius-m", type=float, default=35.0)
+    ap.add_argument("--supplement-name", default="", help="Optional nested output name, e.g. supplement_01, under <output-dir>/<regime>/.")
     ap.add_argument("--force", action="store_true", help="Re-render figures even when existing PNG/PDF outputs validate.")
     args = ap.parse_args()
+    if args.supplement_name and (Path(args.supplement_name).name != args.supplement_name or args.supplement_name in {".", ".."}):
+        raise SystemExit("supplement name must be one simple directory name")
 
     paths = _parse_trace_specs(args.trace)
     print(f"[FIG][LOAD] loading {len(paths)} method journals", flush=True)
@@ -237,7 +240,8 @@ def main() -> int:
         pair_kf = _keyframes({m: traces[m] for m in pair_methods}, regime, clip, dt_s, 4)
         all_methods = ["ocrap"] + list(selection.get("external_baselines") or [])
         all_kf = _keyframes({m: traces[m] for m in all_methods}, regime, clip, dt_s, 3)
-        scene_dir = args.output_dir / regime / f"rank_{rank:02d}"
+        regime_output_root = args.output_dir / regime / args.supplement_name if args.supplement_name else args.output_dir / regime
+        scene_dir = regime_output_root / f"rank_{rank:02d}"
         regime_title = "NEAR-CONTACT" if regime == "near" else ("CONTACT" if regime == "contact" else "SAFE")
         pair_files = _render_grid(
             methods=pair_methods, traces=traces, displays=displays, regime=regime, context=context,
@@ -270,7 +274,12 @@ def main() -> int:
         "records": records,
     }
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    out = args.output_dir / f"{regime.upper()}_PAPER_FIGURE_INDEX.json"
+    if args.supplement_name:
+        index["supplement_name"] = args.supplement_name
+        out = args.output_dir / regime / args.supplement_name / "PAPER_FIGURE_INDEX.json"
+    else:
+        out = args.output_dir / f"{regime.upper()}_PAPER_FIGURE_INDEX.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(index, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"event": index["event"], "regime": regime, "num_scenes": len(records), "index": str(out)}))
     return 0

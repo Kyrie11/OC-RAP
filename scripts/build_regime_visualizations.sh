@@ -160,7 +160,18 @@ num_scenes=int(sys.argv[5]); preferred_steps=int(sys.argv[6]); fallback_s=float(
 m=json.loads(manifest_p.read_text(encoding='utf-8')); lock=json.loads(lock_p.read_text(encoding='utf-8'))
 if m.get('schema')!='ocrap-contact-anchor-manifest-v1' or m.get('valid') is not True:
     raise SystemExit(f'invalid frozen Contact anchor manifest: {manifest_p}')
-locked=[str(x) for x in (lock.get('target_keys') or [])]
+if isinstance(lock, list):
+    locked=[str(x) for x in lock if str(x)]
+elif isinstance(lock, dict):
+    raw=lock.get('target_keys') or lock.get('selected') or lock.get('items') or []
+    locked=[]
+    for x in raw:
+        if isinstance(x, str):
+            locked.append(x)
+        elif isinstance(x, dict) and x.get('target_key'):
+            locked.append(str(x['target_key']))
+else:
+    raise SystemExit(f'invalid Contact target lock JSON type: {type(lock).__name__}: {lock_p}')
 anchors={str(a.get('target_key') or ''):a for a in (m.get('anchors') or []) if isinstance(a,dict)}
 if not locked or set(anchors)!=set(locked):
     raise SystemExit(f'Contact anchor manifest/target-lock mismatch: anchors={len(anchors)} locked={len(locked)} missing={sorted(set(locked)-set(anchors))[:10]} extra={sorted(set(anchors)-set(locked))[:10]}')

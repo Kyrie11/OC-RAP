@@ -478,8 +478,11 @@ def _draw_frame(
                 bbox={"boxstyle": "round,pad=0.25", "facecolor": "white", "alpha": 0.78}, zorder=10)
 
 
-def _sample_indices(frame_count: int, fps: int, metric_dt_s: float) -> list[int]:
-    return [int(round((i / fps) / metric_dt_s)) for i in range(frame_count)]
+def _sample_indices(frame_count: int, fps: int, metric_dt_s: float, playback_slowdown: float = 1.0) -> list[int]:
+    playback_slowdown = float(playback_slowdown)
+    if not math.isfinite(playback_slowdown) or playback_slowdown <= 0.0:
+        raise ValueError(f"invalid playback_slowdown={playback_slowdown}")
+    return [int(round((i / fps / playback_slowdown) / metric_dt_s)) for i in range(frame_count)]
 
 
 def _validate_trace_time_alignment(traces: dict[str, list[dict[str, Any]]], item: dict[str, Any]) -> dict[str, Any]:
@@ -540,7 +543,7 @@ def _prepare_timeline_cache(traces: dict[str, list[dict[str, Any]]], sim_indices
 
 
 def _draw_timeline(ax, twin, traces: dict[str, list[dict[str, Any]]], display: dict[str, str], frame_index: int,
-                   sim_indices: list[int], fps: int, regime: str, series_cache=None):
+                   sim_indices: list[int], fps: int, regime: str, series_cache=None, playback_slowdown: float = 1.0):
     ax.clear(); twin.clear()
     times = [i / fps for i in range(len(sim_indices))]
     visible = min(frame_index + 1, len(times))
@@ -549,7 +552,11 @@ def _draw_timeline(ax, twin, traces: dict[str, list[dict[str, Any]]], display: d
         ax.plot(times[:visible], cache[method]["clearance"][:visible], label=f"{display[method]} clearance")
     if regime == "near":
         ax.axhline(2.0, linestyle="--", linewidth=0.9, alpha=0.6, label="2 m near-contact boundary")
-    ax.set_xlim(0.0, max(times[-1] if times else 0.0, 0.1)); ax.set_xlabel("rollout video time [s]")
+    ax.set_xlim(0.0, max(times[-1] if times else 0.0, 0.1))
+    xlabel = "rollout video time [s]"
+    if abs(float(playback_slowdown) - 1.0) > 1e-9:
+        xlabel += f" (playback {1.0/float(playback_slowdown):.2f}× real-time)"
+    ax.set_xlabel(xlabel)
     ax.set_ylabel("box clearance [m]"); ax.grid(alpha=0.15)
     if regime == "contact":
         ax.axhline(0.0, linestyle="--", linewidth=0.9, alpha=0.55, label="contact boundary")
@@ -634,7 +641,7 @@ def _favorable_delta(ocrap: Any, external: Any, direction: str) -> float | None:
     return (a - b) if direction == "higher" else (b - a)
 
 
-def _draw_info_panel(ax, *, item: dict[str, Any], selection: dict[str, Any], regime: str, comparator: str, comparator_role: str):
+def _draw_info_panel(ax, *, item: dict[str, Any], selection: dict[str, Any], regime: str, comparator: str, comparator_role: str, playback_slowdown: float = 1.0):
     ax.clear(); ax.axis("off")
     y = 0.985
     ax.text(0.0, y, "FULL-RUN METRICS", transform=ax.transAxes, va="top", fontsize=10.0, fontweight="bold")
@@ -691,11 +698,14 @@ def _draw_info_panel(ax, *, item: dict[str, Any], selection: dict[str, Any], reg
     profile = str(item.get("evidence_profile") or "")
     ax.text(0.0, y, "SELECTION PROVENANCE", transform=ax.transAxes, fontsize=8.8, fontweight="bold")
     y -= 0.034
-    for line in (
+    provenance_lines = [
         f"post-hoc qualitative · tier: {tier}",
         f"profile: {profile}",
         f"target-locked · all {selection.get('num_external_baselines', '?')} paper-table baselines checked",
-    ):
+    ]
+    if abs(float(playback_slowdown) - 1.0) > 1e-9:
+        provenance_lines.append(f"video playback: {1.0/float(playback_slowdown):.2f}× real-time (simulation span unchanged)")
+    for line in provenance_lines:
         ax.text(0.0, y, line, transform=ax.transAxes, fontsize=7.1)
         y -= 0.028
     if regime != "safe":
@@ -754,7 +764,7 @@ def _save_animation(fig, update, frame_count, fps, output: Path, use_mp4: bool, 
 
 
 def _render_single(*, method, scene, trace, item, regime, display_name, context, center, radius,
-                   camera_mode, sim_indices, fps, metric_dt_s, output, use_mp4):
+                   camera_mode, sim_indices, fps, metric_dt_s, output, use_mp4, playback_slowdown: float = 1.0):
     contact_xy, contact_label, contact_event_index = _contact_marker(trace, regime)
     road_segments = _prepare_roadgraph_segments(context, center, radius) if camera_mode == "fixed" else None
     timeline_cache = _prepare_timeline_cache({method: trace}, sim_indices, regime)
@@ -770,12 +780,12 @@ def _render_single(*, method, scene, trace, item, regime, display_name, context,
         _draw_frame(map_ax, trace, sim_idx, display_name, view_center, radius, contact_xy, contact_label, metric_dt_s, context, contact_event_index,
                     roadgraph_segments=road_segments if camera_mode == "fixed" else None)
         _draw_timeline(timeline_ax, timeline_twin, {method: trace}, {method: display_name}, frame_i, sim_indices, fps, regime,
-                       series_cache=timeline_cache)
+                       series_cache=timeline_cache, playback_slowdown=playback_slowdown)
 
     _save_animation(figure, update, len(sim_indices), fps, output, use_mp4, progress_label=f"{regime}/{output.stem}")
 
 
-def _draw_montage_info(ax, *, traces, displays, sim_idx, metric_dt_s, regime, item, selection):
+def _draw_montage_info(ax, *, traces, displays, sim_idx, metric_dt_s, regime, item, selection, playback_slowdown: float = 1.0):
     ax.clear(); ax.axis("off")
     row0 = next(iter(traces.values()))
     frame = _frame(row0, sim_idx)
@@ -784,8 +794,11 @@ def _draw_montage_info(ax, *, traces, displays, sim_idx, metric_dt_s, regime, it
     ax.text(0.0, 0.98, "TARGET-LOCKED ALL-METHOD VIEW", va="top", fontsize=10.2, fontweight="bold")
     ax.text(0.0, 0.91, f"rank {item.get('category_rank')} · sim t={current_t} · +{(current_t-start_t)*metric_dt_s:.1f}s", va="top", fontsize=8.2)
     ax.text(0.0, 0.86, "Same scene · same time · shared fixed camera", va="top", fontsize=7.6, alpha=0.75)
-    y = 0.79
-    metric_name = "TTC" if regime == "near" else "clearance"
+    if abs(float(playback_slowdown) - 1.0) > 1e-9:
+        ax.text(0.0, 0.82, f"Playback {1.0/float(playback_slowdown):.2f}× real-time · simulation span unchanged", va="top", fontsize=7.2, alpha=0.75)
+        y = 0.75
+    else:
+        metric_name = "TTC" if regime == "near" else "clearance"
     metric_key = "ttc_s" if regime == "near" else "min_clearance_m"
     for method, trace in traces.items():
         r = _frame(trace, sim_idx)
@@ -802,7 +815,7 @@ def _draw_montage_info(ax, *, traces, displays, sim_idx, metric_dt_s, regime, it
 
 
 def _render_montage(*, methods, traces, item, selection, regime, displays, context, center, radius,
-                    camera_mode, sim_indices, fps, metric_dt_s, output, use_mp4):
+                    camera_mode, sim_indices, fps, metric_dt_s, output, use_mp4, playback_slowdown: float = 1.0):
     contacts = {m: _contact_marker(traces[m], regime) for m in methods}
     road_segments = _prepare_roadgraph_segments(context, center, radius) if camera_mode == "fixed" else None
     total_panels = len(methods) + 1
@@ -834,13 +847,15 @@ def _render_montage(*, methods, traces, item, selection, regime, displays, conte
                         metric_dt_s, context, event_idx, show_hud=False, show_axes=False, show_clearance_annotation=False,
                         roadgraph_segments=road_segments if camera_mode == "fixed" else None)
         _draw_montage_info(info_ax, traces={m: traces[m] for m in methods}, displays=displays, sim_idx=sim_idx,
-                           metric_dt_s=metric_dt_s, regime=regime, item=item, selection=selection)
+                           metric_dt_s=metric_dt_s, regime=regime, item=item, selection=selection,
+                           playback_slowdown=playback_slowdown)
 
     _save_animation(figure, update, len(sim_indices), fps, output, use_mp4, progress_label=f"{regime}/{output.stem}")
 
 
 def _render_pair(*, methods, scenes, traces, item, selection, regime, displays, context, center, radius,
-                 camera_mode, sim_indices, fps, metric_dt_s, output, use_mp4, comparator_role):
+                 camera_mode, sim_indices, fps, metric_dt_s, output, use_mp4, comparator_role,
+                 playback_slowdown: float = 1.0):
     ocrap, comparator = methods
     contact = {m: _contact_marker(traces[m], regime) for m in methods}
     road_segments = _prepare_roadgraph_segments(context, center, radius) if camera_mode == "fixed" else None
@@ -863,7 +878,8 @@ def _render_pair(*, methods, scenes, traces, item, selection, regime, displays, 
         ha="center", va="top", fontsize=8.1, alpha=0.78,
     )
     figure.subplots_adjust(top=0.905, bottom=0.070, left=0.045, right=0.985, hspace=0.28, wspace=0.16)
-    _draw_info_panel(info_ax, item=item, selection=selection, regime=regime, comparator=comparator, comparator_role=comparator_role)
+    _draw_info_panel(info_ax, item=item, selection=selection, regime=regime, comparator=comparator,
+                     comparator_role=comparator_role, playback_slowdown=playback_slowdown)
 
     def update(frame_i):
         sim_idx = sim_indices[frame_i]
@@ -873,7 +889,7 @@ def _render_pair(*, methods, scenes, traces, item, selection, regime, displays, 
             _draw_frame(axes[method], traces[method], sim_idx, displays[method], view_center, radius, xy, label, metric_dt_s, context, event_idx,
                         roadgraph_segments=road_segments if camera_mode == "fixed" else None)
         _draw_timeline(timeline_ax, timeline_twin, {m: traces[m] for m in methods}, displays, frame_i, sim_indices, fps, regime,
-                       series_cache=timeline_cache)
+                       series_cache=timeline_cache, playback_slowdown=playback_slowdown)
 
     _save_animation(figure, update, len(sim_indices), fps, output, use_mp4, progress_label=f"{regime}/{output.stem}")
 
@@ -886,6 +902,10 @@ def main() -> int:
     ap.add_argument("--fps", type=int, default=10)
     ap.add_argument("--format", choices=("auto", "mp4", "gif"), default="auto")
     ap.add_argument("--view-radius-m", type=float, default=35.0)
+    ap.add_argument("--playback-slowdown", type=float, default=1.0, help="Minimum playback slowdown factor. 1.0 is real-time; >1 renders more slowly while preserving the simulation span.")
+    ap.add_argument("--target-rendered-duration-s", type=float, default=0.0, help="If >0, automatically slow short clips toward this viewing duration.")
+    ap.add_argument("--max-playback-slowdown", type=float, default=1.6, help="Upper bound for automatic slowdown used with --target-rendered-duration-s.")
+    ap.add_argument("--supplement-name", default="", help="Optional nested output name, e.g. supplement_01, written under <output-dir>/<regime>/ without overwriting main ranks/index.")
     ap.add_argument("--camera-mode", choices=("fixed", "dynamic"), default="fixed")
     ap.add_argument("--include-singles", action="store_true", help="Render one single-method video for every method (supplement/debug only).")
     ap.add_argument("--include-global-strongest-pair", action="store_true", help="Also compare against the regime-level strongest external baseline when it differs from the per-scene comparator.")
@@ -895,6 +915,14 @@ def main() -> int:
     args = ap.parse_args()
     if args.fps <= 0 or args.view_radius_m <= 5.0:
         raise SystemExit("fps must be positive and view radius must exceed 5 m")
+    if args.playback_slowdown <= 0 or not math.isfinite(args.playback_slowdown):
+        raise SystemExit("playback slowdown must be a positive finite number")
+    if args.max_playback_slowdown < 1.0 or not math.isfinite(args.max_playback_slowdown):
+        raise SystemExit("max playback slowdown must be finite and >= 1")
+    if args.target_rendered_duration_s < 0 or not math.isfinite(args.target_rendered_duration_s):
+        raise SystemExit("target rendered duration must be finite and >= 0")
+    if args.supplement_name and (Path(args.supplement_name).name != args.supplement_name or args.supplement_name in {".", ".."}):
+        raise SystemExit("supplement name must be one simple directory name")
 
     paths = _parse_trace_specs(args.trace)
     print(f"[VIDEO][LOAD] loading {len(paths)} method journals", flush=True)
@@ -941,12 +969,16 @@ def main() -> int:
         time_alignment = _validate_trace_time_alignment(traces, item)
 
         clip_duration_s = float(item.get("clip_duration_s", selection.get("selected_clip_duration_s", 5.0)))
-        frame_count = max(1, int(round(clip_duration_s * args.fps)))
-        sim_indices = _sample_indices(frame_count, args.fps, metric_dt_s)
+        scene_slowdown = float(args.playback_slowdown)
+        if args.target_rendered_duration_s > 0.0 and clip_duration_s > 0.0:
+            scene_slowdown = max(scene_slowdown, min(float(args.max_playback_slowdown), float(args.target_rendered_duration_s) / clip_duration_s))
+        frame_count = max(1, int(round(clip_duration_s * args.fps * scene_slowdown)))
+        sim_indices = _sample_indices(frame_count, args.fps, metric_dt_s, playback_slowdown=scene_slowdown)
         center, radius = _all_model_fixed_view(traces, args.view_radius_m)
         context = resolved["ocrap"].get("render_context") or next((resolved[m].get("render_context") for m in paths if resolved[m].get("render_context")), {})
         rank = int(item.get("category_rank", len(records) + 1))
-        scene_dir = args.output_dir / regime / f"rank_{rank:02d}"
+        regime_output_root = args.output_dir / regime / args.supplement_name if args.supplement_name else args.output_dir / regime
+        scene_dir = regime_output_root / f"rank_{rank:02d}"
         scene_dir.mkdir(parents=True, exist_ok=True)
         displays = {m: _display_name(m) for m in paths}
         outputs = []
@@ -960,7 +992,7 @@ def main() -> int:
                     _render_single(method=method, scene=resolved[method], trace=traces[method], item=item, regime=regime,
                                    display_name=displays[method], context=context, center=center, radius=radius,
                                    camera_mode=args.camera_mode, sim_indices=sim_indices, fps=args.fps, metric_dt_s=metric_dt_s,
-                                   output=filename, use_mp4=use_mp4)
+                                   output=filename, use_mp4=use_mp4, playback_slowdown=scene_slowdown)
                 outputs.append({"type": "single", "method": method, "path": str(filename)})
 
         best = str(item.get("best_external_method") or "")
@@ -988,7 +1020,8 @@ def main() -> int:
                 _render_pair(methods=pair_methods, scenes={m: resolved[m] for m in pair_methods}, traces={m: traces[m] for m in pair_methods},
                              item=item, selection=selection, regime=regime, displays={m: displays[m] for m in pair_methods}, context=context,
                              center=center, radius=radius, camera_mode=args.camera_mode, sim_indices=sim_indices, fps=args.fps,
-                             metric_dt_s=metric_dt_s, output=filename, use_mp4=use_mp4, comparator_role=role_text)
+                             metric_dt_s=metric_dt_s, output=filename, use_mp4=use_mp4, comparator_role=role_text,
+                             playback_slowdown=scene_slowdown)
             outputs.append({"type": f"pair_{role}", "method": comparator, "path": str(filename), "comparator_role": role_text})
 
         if args.include_all_method_montage:
@@ -1001,7 +1034,7 @@ def main() -> int:
                     methods=montage_methods, traces={m: traces[m] for m in montage_methods}, item=item, selection=selection,
                     regime=regime, displays={m: displays[m] for m in montage_methods}, context=context, center=center, radius=radius,
                     camera_mode=args.camera_mode, sim_indices=sim_indices, fps=args.fps, metric_dt_s=metric_dt_s,
-                    output=filename, use_mp4=use_mp4,
+                    output=filename, use_mp4=use_mp4, playback_slowdown=scene_slowdown,
                 )
             outputs.append({"type": "all_method_montage", "methods": montage_methods, "path": str(filename)})
         print(f"[VIDEO][SCENE-DONE] regime={regime} scene={scene_no}/{total_selected} elapsed={time.monotonic()-scene_started:.1f}s", flush=True)
@@ -1013,6 +1046,8 @@ def main() -> int:
             "clip_duration_s": clip_duration_s,
             "encoded_frames": frame_count,
             "fps": args.fps,
+            "playback_slowdown": scene_slowdown,
+            "rendered_duration_s": frame_count / max(args.fps, 1),
             "metric_dt_s": metric_dt_s,
             "camera_mode": args.camera_mode,
             "camera_center_xy": list(center),
@@ -1048,7 +1083,14 @@ def main() -> int:
         "pair_layout": "OC-RAP left; primary external comparator right; compact full-run endpoint card and all-baseline audit context at right",
         "records": records,
     }
-    index_path = args.output_dir / f"{regime.upper()}_VIDEO_INDEX.json"
+    if args.supplement_name:
+        index["supplement_name"] = args.supplement_name
+        index["target_rendered_duration_s"] = args.target_rendered_duration_s
+        index["max_playback_slowdown"] = args.max_playback_slowdown
+        index_path = args.output_dir / regime / args.supplement_name / "VIDEO_INDEX.json"
+    else:
+        index_path = args.output_dir / f"{regime.upper()}_VIDEO_INDEX.json"
+    index_path.parent.mkdir(parents=True, exist_ok=True)
     index_path.write_text(json.dumps(index, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"event": index["event"], "regime": regime, "num_videos": actual_total, "index": str(index_path)}))
     return 0

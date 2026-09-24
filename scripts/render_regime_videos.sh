@@ -11,11 +11,13 @@ export MPLBACKEND=Agg
 : "${FPS:=10}"; : "${FORMAT:=mp4}"; : "${CAMERA_MODE:=fixed}"; : "${VIEW_RADIUS_M:=35}"
 : "${INCLUDE_SINGLES:=false}"; : "${INCLUDE_GLOBAL_STRONGEST_PAIR:=false}"; : "${INCLUDE_WORST_PAIR:=false}"; : "${INCLUDE_ALL_METHOD_MONTAGE:=true}"
 : "${VIDEO_REGIME_JOBS:=2}"; : "${FORCE_RENDER:=false}"; : "${VIS_RENDER_PROGRESS_EVERY:=10}"
+: "${SAFE_PLAYBACK_SLOWDOWN:=1.0}"; : "${NEAR_PLAYBACK_SLOWDOWN:=1.0}"; : "${CONTACT_PLAYBACK_SLOWDOWN:=1.0}"
 export VIS_RENDER_PROGRESS_EVERY
 mkdir -p "$OUT"
 
 render_one() {
   local regime="$1"; shift
+  local slowdown="$1"; shift
   local -a methods=("$@") trace_args=() optional=()
   local m
   trace_args+=(--trace "ocrap=$TRACE_ROOT/ocrap/$regime/closed_loop_ocrap.json.scenes.jsonl")
@@ -28,7 +30,7 @@ render_one() {
   echo "[VIDEO][REGIME-START] regime=$regime pid=$$"
   python tools/render_regime_visualization_videos.py \
     "${trace_args[@]}" --selection "$SELECTION_ROOT/${regime}_selection.json" --output-dir "$OUT" \
-    --fps "$FPS" --format "$FORMAT" --camera-mode "$CAMERA_MODE" --view-radius-m "$VIEW_RADIUS_M" "${optional[@]}"
+    --fps "$FPS" --format "$FORMAT" --camera-mode "$CAMERA_MODE" --view-radius-m "$VIEW_RADIUS_M" --playback-slowdown "$slowdown" "${optional[@]}"
   echo "[VIDEO][REGIME-DONE] regime=$regime"
 }
 
@@ -43,9 +45,9 @@ launch() {
   ( render_one "$name" "$@" ) &
   PIDS+=("$!"); NAMES+=("$name")
 }
-launch safe gameformer_lite plantf pluto pdm_closed pdm_hybrid idm diffusion_planner
-launch near marc_lite racp_lite robust_scenario_mpc predictive_safety_filter dr_cvar_safety_filter conformal_predictive_safety_filter flow_planner plan_r1 betopnet
-launch contact postimpact_mpc_lite post_crash_braking postimpact_motion_tvlqr post_collision_restoration compensatory_postimpact_mpc robust_postimpact_control
+launch safe "$SAFE_PLAYBACK_SLOWDOWN" gameformer_lite plantf pluto pdm_closed pdm_hybrid idm diffusion_planner
+launch near "$NEAR_PLAYBACK_SLOWDOWN" marc_lite racp_lite robust_scenario_mpc predictive_safety_filter dr_cvar_safety_filter conformal_predictive_safety_filter flow_planner plan_r1 betopnet
+launch contact "$CONTACT_PLAYBACK_SLOWDOWN" postimpact_mpc_lite post_crash_braking postimpact_motion_tvlqr post_collision_restoration compensatory_postimpact_mpc robust_postimpact_control
 for i in "${!PIDS[@]}"; do
   if ! wait "${PIDS[$i]}"; then echo "[VIDEO][ERROR] regime=${NAMES[$i]} failed" >&2; exit 2; fi
 done
