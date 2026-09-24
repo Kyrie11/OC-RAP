@@ -1,0 +1,3 @@
+ablation:
+  native_recovery_certification: true
+  without_nominal_abstention: true

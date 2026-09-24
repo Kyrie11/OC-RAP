@@ -1,0 +1,278 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+DIRECT_METRICS = (
+    "closed_loop_FRA_exec",
+    "closed_loop_DRS",
+    "closed_loop_post_contact_deployability",
+    "closed_loop_bounded_NUP",
+    "closed_loop_audit_paper_pcd_selector_miss_rate",
+    "closed_loop_audit_paper_selected_PCD_regret",
+    "closed_loop_audit_selector_miss_rate",
+    "intervention_rate",
+    "intervention_episode_rate",
+    "macro_switch_rate",
+)
+NESTED_METRICS = (
+    "overlap_any",
+    "offroad_any",
+    "route_progression_m",
+    "min_clearance_m_min",
+    "min_clearance_m_p05",
+    "ttc_s_min",
+    "ttc_s_p05",
+    "near_contact_exposure_rate",
+    "critical_ttc_exposure_rate",
+    "near_zero_clearance_exposure_rate",
+    "near_contact_exposure_duration_s",
+    "critical_ttc_exposure_duration_s",
+    "near_contact_exposure_episode_count",
+    "near_contact_longest_exposure_run_s",
+    "critical_ttc_exposure_episode_count",
+    "critical_ttc_longest_exposure_run_s",
+    "time_to_min_clearance_s",
+    "clearance_recovery_gain_m",
+    "time_to_min_ttc_s",
+    "ttc_recovery_gain_s",
+    "terminal_clearance_m",
+    "terminal_ttc_s",
+    "clearance_deficit_auc_m_s",
+    "ttc_deficit_auc_s2",
+    "overlap_episode_count",
+    "overlap_duration_s",
+    "longest_overlap_run_s",
+    "secondary_overlap_event",
+    "recontact_event",
+    "recontact_episode_count",
+    "post_contact_clearance_m_max",
+    "post_contact_clearance_m_mean",
+    "post_contact_terminal_clearance_m",
+    "post_contact_clearance_gain_m",
+    "post_contact_free_space_auc_m_s",
+    "post_contact_free_space_auc_normalized_m",
+    "post_contact_clearance_deficit_auc_m_s",
+    "post_contact_escape_event",
+    "post_contact_overlap_duration_s",
+    "time_to_post_contact_escape_s",
+    "new_stable_stop_event",
+    "new_stable_stop_quality_event",
+    "time_to_stable_stop_steps",
+    "time_to_stable_stop_s",
+    "time_to_stable_stop_quality_s",
+)
+
+LOWER_IS_BETTER = {
+    "overlap_any",
+    "offroad_any",
+    "closed_loop_FRA_exec",
+    "closed_loop_audit_paper_pcd_selector_miss_rate",
+    "closed_loop_audit_paper_selected_PCD_regret",
+    "closed_loop_audit_selector_miss_rate",
+    "intervention_rate",
+    "intervention_episode_rate",
+    "macro_switch_rate",
+    "near_contact_exposure_rate",
+    "critical_ttc_exposure_rate",
+    "near_zero_clearance_exposure_rate",
+    "near_contact_exposure_duration_s",
+    "critical_ttc_exposure_duration_s",
+    "near_contact_exposure_episode_count",
+    "near_contact_longest_exposure_run_s",
+    "critical_ttc_exposure_episode_count",
+    "critical_ttc_longest_exposure_run_s",
+    "clearance_deficit_auc_m_s",
+    "ttc_deficit_auc_s2",
+    "overlap_episode_count",
+    "overlap_duration_s",
+    "longest_overlap_run_s",
+    "secondary_overlap_event",
+    "recontact_event",
+    "recontact_episode_count",
+    "post_contact_clearance_deficit_auc_m_s",
+    "post_contact_overlap_duration_s",
+    "time_to_post_contact_escape_s",
+    "time_to_stable_stop_steps",
+    "time_to_stable_stop_s",
+    "time_to_stable_stop_quality_s",
+}
+
+DESCRIPTIVE_ONLY = {
+    "time_to_min_clearance_s",
+    "time_to_min_ttc_s",
+}
+
+
+def _load(path: Path) -> dict[str, Any]:
+    with path.open() as f:
+        return json.load(f)
+
+
+def _load_scenes(path: Path, doc: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
+    embedded = doc.get("scenes")
+    if isinstance(embedded, list) and embedded:
+        return [x for x in embedded if isinstance(x, dict)], "embedded"
+    journal = path.with_suffix(path.suffix + ".scenes.jsonl")
+    if not journal.is_file():
+        return [], "none"
+    scenes: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    fingerprints: set[str] = set()
+    with journal.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(record, dict):
+                continue
+            scene = record.get("scene", record)
+            if not isinstance(scene, dict):
+                continue
+            fp = str(record.get("run_fingerprint") or "")
+            if fp:
+                fingerprints.add(fp)
+            key = _key(scene)
+            if key and key not in seen:
+                seen.add(key)
+                scenes.append(scene)
+    if len(fingerprints) > 1:
+        raise ValueError(f"multiple journal fingerprints for {path}: {sorted(fingerprints)}")
+    return scenes, "journal"
+
+
+def _key(scene: dict[str, Any]) -> str:
+    return str(scene.get("target_key") or f"{scene.get('bucket_name','')}|{scene.get('scene_id','')}|{scene.get('target_time_index','')}")
+
+
+def _value(scene: dict[str, Any], name: str) -> float | None:
+    if name in scene:
+        value = scene.get(name)
+    else:
+        value = (scene.get("metric_summary") or {}).get(name)
+    try:
+        out = float(value)
+        return out if np.isfinite(out) else None
+    except Exception:
+        return None
+
+
+def _bootstrap_ci(values: np.ndarray, rng: np.random.Generator, draws: int, alpha: float = 0.05) -> tuple[float, float]:
+    if values.size == 0:
+        return float("nan"), float("nan")
+    if values.size == 1:
+        return float(values[0]), float(values[0])
+    means = np.empty(draws, dtype=np.float64)
+    for i in range(draws):
+        means[i] = float(np.mean(rng.choice(values, size=values.size, replace=True)))
+    return float(np.quantile(means, alpha / 2)), float(np.quantile(means, 1 - alpha / 2))
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Scene-paired closed-loop comparison with bootstrap confidence intervals.")
+    ap.add_argument("control", type=Path)
+    ap.add_argument("method", type=Path)
+    ap.add_argument("--output", type=Path, required=True)
+    ap.add_argument("--bootstrap", type=int, default=5000)
+    ap.add_argument("--seed", type=int, default=2027)
+    ap.add_argument("--allow-unpaired", action="store_true", help="Diagnostic only: compare the intersection instead of requiring identical target-key sets.")
+    args = ap.parse_args()
+
+    control = _load(args.control)
+    method = _load(args.method)
+    c_rows, c_source = _load_scenes(args.control, control)
+    m_rows, m_source = _load_scenes(args.method, method)
+    c_scenes = {_key(s): s for s in c_rows}
+    m_scenes = {_key(s): s for s in m_rows}
+    c_keys, m_keys = set(c_scenes), set(m_scenes)
+    common = sorted(c_keys & m_keys)
+    if not common:
+        raise SystemExit("No paired scenes/targets found. Use results built from the same frozen target lock.")
+    if c_keys != m_keys and not args.allow_unpaired:
+        only_control = sorted(c_keys - m_keys)
+        only_method = sorted(m_keys - c_keys)
+        raise SystemExit(
+            "Target-key sets differ; publication paired comparison requires exact equality. "
+            f"control_only={len(only_control)} method_only={len(only_method)} "
+            f"examples_control_only={only_control[:5]} examples_method_only={only_method[:5]}. "
+            "Use --allow-unpaired only for diagnostics."
+        )
+
+    rng = np.random.default_rng(args.seed)
+    report: dict[str, Any] = {
+        "control": str(args.control),
+        "method": str(args.method),
+        "num_control_scenes": len(c_scenes),
+        "num_method_scenes": len(m_scenes),
+        "num_paired_scenes": len(common),
+        "control_scene_source": c_source,
+        "method_scene_source": m_source,
+        "bootstrap_draws": int(args.bootstrap),
+        "bootstrap_seed": int(args.seed),
+        "pairing_contract": "exact_target_key_set" if c_keys == m_keys else "intersection_diagnostic_only",
+        "num_control_only": len(c_keys - m_keys),
+        "num_method_only": len(m_keys - c_keys),
+        "metrics": {},
+    }
+    for name in DIRECT_METRICS + NESTED_METRICS:
+        pairs = []
+        for key in common:
+            c = _value(c_scenes[key], name)
+            m = _value(m_scenes[key], name)
+            if c is not None and m is not None:
+                pairs.append((c, m))
+        if not pairs:
+            continue
+        arr = np.asarray(pairs, dtype=np.float64)
+        delta = arr[:, 1] - arr[:, 0]
+        lo, hi = _bootstrap_ci(delta, rng, args.bootstrap)
+        descriptive_only = name in DESCRIPTIVE_ONLY
+        lower_is_better = name in LOWER_IS_BETTER
+        direction = "descriptive_only" if descriptive_only else ("lower_is_better" if lower_is_better else "higher_is_better")
+        row = {
+            "n": int(delta.size),
+            "control_mean": float(np.mean(arr[:, 0])),
+            "method_mean": float(np.mean(arr[:, 1])),
+            "paired_delta": float(np.mean(delta)),
+            "bootstrap_95ci": [lo, hi],
+            "direction": direction,
+            "fraction_improved_raw": float(np.mean(delta > 0.0)),
+        }
+        if not descriptive_only:
+            row["fraction_improved"] = float(np.mean(delta < 0.0 if lower_is_better else delta > 0.0))
+        report["metrics"][name] = row
+
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(report, indent=2, ensure_ascii=False))
+    md = args.output.with_suffix(".md")
+    lines = [
+        "# Paired closed-loop comparison",
+        "",
+        f"Paired scenes: **{len(common)}**",
+        "",
+        "| Metric | Control | Method | Paired delta | Bootstrap 95% CI | n |",
+        "|---|---:|---:|---:|---:|---:|",
+    ]
+    for name, row in report["metrics"].items():
+        lo, hi = row["bootstrap_95ci"]
+        lines.append(f"| {name} | {row['control_mean']:.6f} | {row['method_mean']:.6f} | {row['paired_delta']:+.6f} | [{lo:+.6f}, {hi:+.6f}] | {row['n']} |")
+    lines += [
+        "",
+        "Positive delta is not universally better: safety violations/exposure/intervention and time-to-recovery endpoints marked lower_is_better use the opposite direction. Time-to-minimum-clearance/TTC are descriptive timing variables with no universal better direction.",
+    ]
+    md.write_text("\n".join(lines))
+    print(json.dumps({"output": str(args.output), "markdown": str(md), "paired_scenes": len(common)}, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

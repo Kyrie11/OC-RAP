@@ -1,0 +1,337 @@
+#!/usr/bin/env python3
+"""Fail-closed provenance/preflight for submission qualitative visualizations.
+
+The visualization must be built from the same current paper-table baselines that
+were actually rerun for each regime and from the frozen deployed OC-RAP stack.
+This tool intentionally accepts three separate external result roots because the
+recommended user workflow runs Safe/Near/Contact launchers independently.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+REPO = Path(__file__).resolve().parents[1]
+SRC = REPO / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from ocrap.external_baselines.provenance import MAIN_TABLE_BY_REGIME, PAPER_TABLE_BY_REGIME  # noqa: E402
+from resolve_womd_replay_source import resolve_for_dataset  # noqa: E402
+
+LEARNED_IMPLEMENTATIONS = {
+    "gameformer_lite": "source_port_v54",
+    "plantf": "source_port_v54",
+    "pluto": "source_port_v54",
+    "diffusion_planner": "diffusion_planner_womd_lattice_port_v63",
+    "flow_planner": "flow_planner_womd_lattice_port_v63",
+    "plan_r1": "plan_r1_source_core_womd_adapter_v62",
+    "betopnet": "betop_source_core_topology_adapter_v62",
+}
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _json(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _artifact_record(
+    path: Path, *, checkpoint: Path | None = None, target_keys_file: Path | None = None
+) -> tuple[dict[str, Any], list[str]]:
+    errors: list[str] = []
+    record: dict[str, Any] = {"path": str(path.resolve()), "exists": path.is_file()}
+    journal = Path(str(path) + ".scenes.jsonl")
+    record["journal"] = str(journal.resolve())
+    record["journal_exists"] = journal.is_file()
+    if not path.is_file():
+        errors.append(f"missing closed-loop result: {path}")
+        return record, errors
+    try:
+        doc = _json(path)
+        record["result_event"] = doc.get("event")
+        record["num_scenes"] = doc.get("num_scenes") or doc.get("scenes_evaluated")
+        record["result_sha256"] = _sha256(path)
+    except Exception as exc:
+        errors.append(f"invalid result JSON {path}: {exc}")
+    if not journal.is_file():
+        errors.append(f"missing scene journal: {journal}")
+    else:
+        record["journal_sha256"] = _sha256(journal)
+    checker = REPO / "tools" / "check_closed_loop_artifact.py"
+    if checker.is_file():
+        cmd = [sys.executable, str(checker), "--output", str(path), "--quiet"]
+        if target_keys_file is not None:
+            cmd += ["--target-keys-file", str(target_keys_file)]
+            record["target_keys_file"] = str(target_keys_file.resolve())
+            record["target_keys_exists"] = target_keys_file.is_file()
+        proc = subprocess.run(cmd, cwd=REPO)
+        record["complete_artifact_check"] = proc.returncode == 0
+        if proc.returncode != 0:
+            errors.append(f"closed-loop artifact is incomplete/invalid: {path}")
+    if checkpoint is not None and checkpoint.is_file():
+        record["result_mtime_ns"] = path.stat().st_mtime_ns
+        record["checkpoint_mtime_ns"] = checkpoint.stat().st_mtime_ns
+        record["result_not_older_than_checkpoint"] = path.stat().st_mtime_ns >= checkpoint.stat().st_mtime_ns
+        if path.stat().st_mtime_ns < checkpoint.stat().st_mtime_ns:
+            errors.append(f"result predates checkpoint; rerun required: result={path}, checkpoint={checkpoint}")
+    return record, errors
+
+
+def _checkpoint_record(path: Path, expected_impl: str | None = None) -> tuple[dict[str, Any], list[str]]:
+    errors: list[str] = []
+    record: dict[str, Any] = {"path": str(path.resolve()), "exists": path.is_file()}
+    if not path.is_file():
+        errors.append(f"missing checkpoint: {path}")
+        return record, errors
+    record["sha256"] = _sha256(path)
+    if expected_impl:
+        validator = REPO / "tools" / "validate_external_checkpoint.py"
+        proc = subprocess.run(
+            [sys.executable, str(validator), "--checkpoint", str(path), "--require-deployable-contract",
+             "--require-implementation-version", expected_impl],
+            cwd=REPO,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        record["deployable_contract_valid"] = proc.returncode == 0
+        if proc.returncode != 0:
+            record["validator_output_tail"] = proc.stdout[-1200:]
+            errors.append(f"invalid learned external checkpoint contract: {path}")
+    return record, errors
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--ocrap-results-root", type=Path, required=True,
+                    help="Root containing safe/near/contact/closed_loop_ocrap.json from the frozen full metric run.")
+    ap.add_argument("--ocrap-model-run", type=Path, required=True)
+    ap.add_argument("--ocrap-root", type=Path, required=True,
+                    help="OC-RAP dataset root containing test_safe/test_near_contact/test_contact.")
+    ap.add_argument("--womd-root", type=Path, required=True,
+                    help="WOMD tf_example root containing validation/ and validation_interactive/.")
+    ap.add_argument("--womd-shards", type=int, default=150)
+    ap.add_argument("--variant", choices=("balanced", "precision"), default="balanced")
+    ap.add_argument(
+        "--target-lock-root", type=Path, required=True,
+        help="Final observation-legal target lock root containing safe.json/near.json/contact.json.",
+    )
+    ap.add_argument("--safe-external-root", type=Path, required=True)
+    ap.add_argument("--near-external-root", type=Path, required=True)
+    ap.add_argument("--contact-external-root", type=Path, required=True)
+    ap.add_argument("--output", type=Path, required=True)
+    args = ap.parse_args()
+
+    errors: list[str] = []
+    roots = {"safe": args.safe_external_root, "near": args.near_external_root, "contact": args.contact_external_root}
+    target_locks = {r: args.target_lock_root / f"{r}.json" for r in ("safe", "near", "contact")}
+    for regime, path in target_locks.items():
+        if not path.is_file():
+            errors.append(f"missing final observation-legal target lock for {regime}: {path}")
+    expected_methods = {k: list(v) for k, v in PAPER_TABLE_BY_REGIME.items()}
+    bucket_paths = {
+        "safe": args.ocrap_root / "test_safe",
+        "near": args.ocrap_root / "test_near_contact",
+        "contact": args.ocrap_root / "test_contact",
+    }
+    canonical_replay: dict[str, Any] = {}
+    for regime, bucket in bucket_paths.items():
+        try:
+            canonical_replay[regime] = resolve_for_dataset(
+                bucket, split="test", womd_root=args.womd_root, shards=args.womd_shards, role="validation"
+            )
+        except Exception as exc:
+            canonical_replay[regime] = {
+                "valid": False, "dataset": str(bucket.resolve()), "error": str(exc),
+            }
+            errors.append(f"cannot resolve canonical WOMD replay source for {regime}: {exc}")
+
+    candidate_root = args.ocrap_model_run / "candidates" / args.variant
+    if not (candidate_root / "model_v48_trac_sr" / "best.pt").is_file():
+        alt = args.ocrap_model_run / "dedicated_candidates" / args.variant
+        if (alt / "model_v48_trac_sr" / "best.pt").is_file():
+            candidate_root = alt
+    ocrap_ckpt = candidate_root / "model_v48_trac_sr" / "best.pt"
+    gamma = candidate_root / "calibration" / "gamma_rec_by_bucket_v48.json"
+    ocrap_checkpoint, ck_errors = _checkpoint_record(ocrap_ckpt)
+    errors.extend(ck_errors)
+    if not gamma.is_file():
+        errors.append(f"missing OC-RAP bucket calibration: {gamma}")
+        gamma_record = {"path": str(gamma.resolve()), "exists": False}
+    else:
+        gamma_record = {"path": str(gamma.resolve()), "exists": True, "sha256": _sha256(gamma)}
+        try:
+            gb = _json(gamma).get("gamma_rec_by_bucket") or {}
+            required = ("test_safe", "test_near_contact", "test_contact")
+            gamma_record["gamma_rec_by_bucket"] = {k: gb.get(k) for k in required}
+            if any(gb.get(k) is None for k in required):
+                errors.append(f"bucket calibration missing one of {required}: {gamma}")
+        except Exception as exc:
+            errors.append(f"invalid OC-RAP calibration JSON {gamma}: {exc}")
+
+    deployable_contract_path = args.output.parent / "DEPLOYABLE_STACK_CONTRACT.json"
+    deployable_checker = REPO / "tools" / "check_deployable_stack.py"
+    deployable_contract: dict[str, Any] = {"path": str(deployable_contract_path.resolve()), "valid": False}
+    if deployable_checker.is_file():
+        deployable_contract_path.parent.mkdir(parents=True, exist_ok=True)
+        proc = subprocess.run(
+            [sys.executable, str(deployable_checker), "--model-run", str(args.ocrap_model_run),
+             "--variant", args.variant, "--output", str(deployable_contract_path)], cwd=REPO,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        )
+        deployable_contract["returncode"] = proc.returncode
+        if deployable_contract_path.is_file():
+            try:
+                dd = _json(deployable_contract_path)
+                deployable_contract["valid"] = bool(dd.get("valid"))
+                deployable_contract["attribution_ready"] = dd.get("attribution_ready")
+            except Exception as exc:
+                errors.append(f"invalid deployable stack contract: {exc}")
+        if proc.returncode != 0 or not deployable_contract.get("valid"):
+            deployable_contract["output_tail"] = proc.stdout[-1600:]
+            errors.append("deployable stack contract failed")
+    else:
+        errors.append(f"missing deployable stack checker: {deployable_checker}")
+
+    ocrap_results: dict[str, Any] = {}
+    ocrap_supports: dict[str, Any] = {}
+    for regime in ("safe", "near", "contact"):
+        p = args.ocrap_results_root / regime / "closed_loop_ocrap.json"
+        rec, rec_errors = _artifact_record(p, checkpoint=ocrap_ckpt if ocrap_ckpt.is_file() else None, target_keys_file=target_locks[regime])
+        ocrap_results[regime] = rec
+        errors.extend(rec_errors)
+        support = args.ocrap_results_root / regime / "closed_loop_dataset_support.json"
+        if not support.is_file():
+            errors.append(f"missing OC-RAP closed-loop dataset support contract: {support}")
+            ocrap_supports[regime] = {"path": str(support.resolve()), "exists": False}
+        else:
+            try:
+                sd = _json(support)
+                ocrap_supports[regime] = {
+                    "path": str(support.resolve()), "exists": True, "sha256": _sha256(support),
+                    "raw_source_role": sd.get("raw_source_role"), "womd_pattern": sd.get("womd_pattern"),
+                    "source_role_valid": sd.get("source_role_valid"), "schema_supports_closed_loop": sd.get("schema_supports_closed_loop"),
+                }
+                if sd.get("schema_supports_closed_loop") is not True:
+                    errors.append(f"OC-RAP closed-loop dataset support is not valid for {regime}: {support}")
+            except Exception as exc:
+                errors.append(f"invalid OC-RAP dataset support JSON {support}: {exc}")
+
+    external: dict[str, Any] = {}
+    for regime in ("safe", "near", "contact"):
+        root = roots[regime]
+        external[regime] = {"root": str(root.resolve()), "methods": {}}
+        support = root / "closed_loop_dataset_support.json"
+        if not support.is_file():
+            errors.append(f"missing external closed-loop dataset support contract: {support}")
+            external[regime]["dataset_support"] = {"path": str(support.resolve()), "exists": False}
+        else:
+            try:
+                sd = _json(support)
+                external[regime]["dataset_support"] = {
+                    "path": str(support.resolve()), "exists": True, "sha256": _sha256(support),
+                    "raw_source_role": sd.get("raw_source_role"), "womd_pattern": sd.get("womd_pattern"),
+                    "source_role_valid": sd.get("source_role_valid"), "schema_supports_closed_loop": sd.get("schema_supports_closed_loop"),
+                }
+                if sd.get("schema_supports_closed_loop") is not True:
+                    errors.append(f"external closed-loop dataset support is not valid for {regime}: {support}")
+                od = ocrap_supports.get(regime) or {}
+                canonical = canonical_replay.get(regime) or {}
+                expected_role = canonical.get("resolved_role")
+                if expected_role:
+                    ocrap_role = od.get("raw_source_role") if od.get("exists") else None
+                    external_role = sd.get("raw_source_role")
+                    if ocrap_role and ocrap_role != expected_role:
+                        errors.append(
+                            f"stale OC-RAP raw WOMD source role for {regime}: recorded={ocrap_role}, "
+                            f"bucket_provenance={expected_role}. Rerun that OC-RAP closed-loop regime with "
+                            f"WOMD_ROOT={args.womd_root} and {regime.upper()}_WOMD=auto before selecting submission videos."
+                        )
+                    if external_role and external_role != expected_role:
+                        errors.append(
+                            f"stale external raw WOMD source role for {regime}: recorded={external_role}, "
+                            f"bucket_provenance={expected_role}. Rerun that external closed-loop regime with "
+                            f"WOMD_ROOT={args.womd_root} and CL_WOMD=auto before selecting submission videos."
+                        )
+                elif od.get("exists") and od.get("raw_source_role") != sd.get("raw_source_role"):
+                    errors.append(
+                        f"raw WOMD source-role mismatch for {regime}: OC-RAP={od.get('raw_source_role')}, "
+                        f"external={sd.get('raw_source_role')}; canonical bucket replay role could not be resolved"
+                    )
+            except Exception as exc:
+                errors.append(f"invalid external dataset support JSON {support}: {exc}")
+        for method in PAPER_TABLE_BY_REGIME[regime]:
+            ckpt = None
+            ckpt_rec = None
+            if method in LEARNED_IMPLEMENTATIONS:
+                ckpt = root / "checkpoints" / method / "best.pt"
+                ckpt_rec, e = _checkpoint_record(ckpt, LEARNED_IMPLEMENTATIONS[method])
+                errors.extend(e)
+            result = root / f"closed_loop_{method}.json"
+            result_rec, e = _artifact_record(result, checkpoint=ckpt, target_keys_file=target_locks[regime])
+            errors.extend(e)
+            external[regime]["methods"][method] = {"result": result_rec, "checkpoint": ckpt_rec}
+        if regime == "near":
+            cal = root / "conformal_calibration.json"
+            external[regime]["conformal_calibration"] = {"path": str(cal.resolve()), "exists": cal.is_file()}
+            if not cal.is_file():
+                errors.append(f"missing Near conformal calibration: {cal}")
+            else:
+                external[regime]["conformal_calibration"]["sha256"] = _sha256(cal)
+
+    doc = {
+        "schema": "ocrap-final-locked-visualization-input-contract-v124",
+        "valid": not errors,
+        "errors": errors,
+        "variant": args.variant,
+        "target_lock_root": str(args.target_lock_root.resolve()),
+        "target_locks": {r: {"path": str(p.resolve()), "exists": p.is_file(), **({"sha256": _sha256(p)} if p.is_file() else {})} for r, p in target_locks.items()},
+        "path_contract": "final observation-legal target lock + separate external roots + dataset-provenance-owned WOMD replay under one tf_example root",
+        "womd_root": str(args.womd_root.resolve()),
+        "canonical_replay": canonical_replay,
+        "external_main_table_methods": {k: list(v) for k, v in MAIN_TABLE_BY_REGIME.items()},
+        "external_paper_table_methods": expected_methods,
+        "ocrap": {
+            "model_run": str(args.ocrap_model_run.resolve()),
+            "candidate_root": str(candidate_root.resolve()),
+            "checkpoint": ocrap_checkpoint,
+            "calibration": gamma_record,
+            "deployable_stack_contract": deployable_contract,
+            "full_metric_results_root": str(args.ocrap_results_root.resolve()),
+            "results": ocrap_results,
+            "dataset_support": ocrap_supports,
+        },
+        "external": external,
+        "notes": [
+            "validation versus validation_interactive is resolved from each OC-RAP bucket's stored womd_source_role; launcher defaults do not own collection identity.",
+            "The WOMD physical root is the tf_example directory containing validation/ and validation_interactive/.",
+            "mtime freshness is fail-closed but is not treated as cryptographic proof that an old journal was generated by a particular checkpoint; selective trace reruns explicitly load the resolved current checkpoints.",
+            "Every OC-RAP and external closed-loop artifact is checked against the same final observation-legal target-key lock before qualitative selection.",
+            "Qualitative coverage matches the full paper-table method set, including Safe Diffusion Planner and Near Flow Planner/Plan-R1/BeTopNet; all learned adapters require validated checkpoints.",
+        ],
+    }
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps({"event": doc["schema"], "valid": doc["valid"], "errors": len(errors), "output": str(args.output)}))
+    if errors:
+        for err in errors:
+            print(f"[ERROR] {err}", file=sys.stderr)
+        return 30
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

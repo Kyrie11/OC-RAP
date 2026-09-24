@@ -1,0 +1,5 @@
+ablation:
+  # Paper-faithful bridge: attach the observation-legal executable recovery
+  # certificate to M_{k,l} immediately before OC-MERO.  This is inference-only,
+  # uses the frozen checkpoint, and does not recalibrate gamma_rec.
+  native_recovery_certification: true

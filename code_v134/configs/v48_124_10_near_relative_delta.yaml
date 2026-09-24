@@ -1,0 +1,7 @@
+selection:
+  # Diagnostic-only Near system-axis arm. Historical lcb_constrained semantics
+  # are preserved until the deployed selector would already intervene; then
+  # frozen candidate-vs-nominal relative recovery evidence can only veto/rerank
+  # absolute-admitted non-nominal candidates.
+  ocrap_selector: lcb_constrained_relative_delta
+  rifa_relative_min_advantage: 0.0

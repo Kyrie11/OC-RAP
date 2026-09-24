@@ -1,0 +1,74 @@
+external_baselines:
+  baseline: flow_planner
+  methods: [flow_planner]
+  max_candidates: 24
+  supervision_target: logged_nominal
+  allow_teacher_supervision: false
+  implementation: flow_planner_womd_lattice_port_v63
+  model:
+    arch: flow_planner
+    implementation: flow_planner_womd_lattice_port_v63
+    max_candidates: 24
+    # Released decoder is 256 wide, 4 blocks, 8 heads.
+    d_model: 256
+    num_layers: 4
+    num_heads: 8
+    dropout: 0.10
+    scene_layers: 2
+    future_len: 20
+    history_len: 11
+    source_max_agents: 32
+    source_map_polygons: 70
+    source_map_points: 20
+    source_centerline_points: 120
+    # Source action_len=20, overlap=10 on an 80-step horizon.  On the common
+    # 20-step executable horizon this proportional adaptation is 5/2 overlap,
+    # i.e. stride=3.
+    token_size: 5
+    token_stride: 3
+    cfg_dropout: 0.30
+    cfg_weight: 1.8
+    cfg_neighbor_num: 10
+    consistency_weight: 0.5
+    energy_weight: 1.5
+    sample_steps: 4
+    sample_temperature: 1.0
+  training:
+    device: auto
+    distributed: false
+    # Target-only native flow regression removes the old 24-candidate duplicate
+    # decoder work; the larger batch uses that memory/compute headroom.
+    batch_size: 48
+    num_workers: 4
+    epochs: 100
+    lr: 0.0002
+    weight_decay: 0.0001
+    scheduler: warmup_cosine
+    warmup_epochs: 5
+    min_lr: 0.00001
+    amp: true
+    amp_dtype: auto
+    fused_optimizer: true
+    grad_clip: 5.0
+    tqdm: true
+    pin_memory: true
+    persistent_workers: true
+    prefetch_factor: 2
+  loss_weights:
+    policy: 0.0
+    flow_native: 1.0
+    diffusion_native: 0.0
+    planr1_native: 0.0
+    levelk: 0.0
+    level_response: 0.0
+    topology: 0.0
+    wayformer_native: 0.0
+    gameformer_traj: 0.0
+    plantf_native: 0.0
+    pluto_native: 0.0
+    pluto_contrastive: 0.0
+    utility: 0.0
+    hard: 0.0
+    harm: 0.0
+    oracle_rec: 0.0
+    deploy_rec: 0.0

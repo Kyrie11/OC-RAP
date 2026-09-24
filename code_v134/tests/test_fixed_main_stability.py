@@ -1,0 +1,418 @@
+from __future__ import annotations
+
+import copy
+
+from ocrap.audits.fixed_main_stability import (
+    STATUS_CONTACT_STOP,
+    STATUS_CONTACT_CONSTRUCT_FAIL,
+    STATUS_COVERAGE_STOP,
+    STATUS_DETERMINISM_STOP,
+    STATUS_GO,
+    STATUS_NEAR_STOP,
+    STATUS_SAFE_STOP,
+    adjudicate,
+    coverage_gate,
+    sentinel_determinism,
+)
+
+
+def metric(delta=0.0, lo=0.0, hi=0.0, n=8):
+    return {"paired_delta": delta, "bootstrap_95ci": [lo, hi], "n": n}
+
+
+def report():
+    # Zero is exact non-interference. Benefits are made strict only for the
+    # preregistered Near/Contact positive-effect metrics.
+    names = [
+        "overlap_any", "offroad_any", "critical_ttc_exposure_duration_s",
+        "clearance_deficit_auc_m_s", "ttc_deficit_auc_s2", "closed_loop_bounded_NUP",
+        "route_progression_m", "intervention_rate", "min_clearance_m_min", "ttc_s_min",
+        "recontact_event", "secondary_overlap_event", "post_contact_overlap_duration_s",
+        "post_contact_clearance_gain_m", "post_contact_free_space_auc_normalized_m",
+        "post_contact_escape_event", "post_contact_terminal_clearance_m", "new_stable_stop_quality_event",
+    ]
+    out = {"metrics": {n: metric() for n in names}, "bootstrap_draws": 5000, "bootstrap_seed": 2027}
+    out["metrics"]["min_clearance_m_min"] = metric(0.2, 0.1, 0.3)
+    out["metrics"]["post_contact_clearance_gain_m"] = metric(0.3, 0.1, 0.4)
+    return out
+
+
+def result(keys=("a", "b"), source="model", bucket="/bucket"):
+    scenes = []
+    for i, k in enumerate(keys):
+        scenes.append({"target_key": k, "x": float(i), "metric_summary": {"m": float(i)}})
+    return {
+        "num_scenes": len(keys), "bucket_target_count": len(keys), "scenes_embedded": True,
+        "source": source, "bucket_dataset": bucket, "scenes": scenes,
+    }
+
+
+
+
+def support(bucket="/bucket", pattern="/womd/validation/validation_tfexample.tfrecord@150", role="validation"):
+    return {
+        "schema_supports_closed_loop": True,
+        "raw_source_role": role,
+        "womd_pattern": pattern,
+        "dataset": bucket,
+        "target_keys_valid": True,
+        "num_requested_target_keys": 1,
+        "num_matching_requested_target_keys": 1,
+    }
+
+def sentinel(full, key="a"):
+    s = next(x for x in full["scenes"] if x["target_key"] == key)
+    return {"scenes": [copy.deepcopy(s)]}
+
+
+def fixture():
+    results = {v: {r: result(bucket=f"/{r}") for r in ("safe", "near", "contact")} for v in ("nominal", "balanced", "precision")}
+    # A scientifically adjudicable Contact fixture starts from the same
+    # pre-treatment simulator contact anchor at rollout step 0.
+    for v in ("nominal", "balanced", "precision"):
+        contact = results[v]["contact"]
+        contact["observed_contact_scene_rate"] = 1.0
+        contact["post_contact_metric_eligible_scene_rate"] = 1.0
+        contact["counterfactual_contact_target_scene_rate"] = 0.0
+        for scene in contact["scenes"]:
+            scene["metric_summary"].update({
+                "observed_contact_event": 1.0,
+                "post_contact_metric_eligible": 1.0,
+                "first_contact_step": 0.0,
+                "contact_anchor_step": 0.0,
+            })
+            scene["contact_anchor_protocol"] = "exact_a0_pretreatment_prelude_v1"
+            scene["contact_anchor_fingerprint"] = "a" * 64
+    comparisons = {v: {r: report() for r in ("safe", "near", "contact")} for v in ("balanced", "precision")}
+    sentinels = {v: {r: sentinel(results[v][r]) for r in ("safe", "near", "contact")} for v in ("balanced", "precision")}
+    supports = {v: {r: support(bucket=f"/{r}") for r in ("safe", "near", "contact")} for v in ("nominal", "balanced", "precision")}
+    return comparisons, results, sentinels, supports
+
+
+def test_coverage_requires_same_targets_source_and_bucket():
+    n = result(); b = result(); p = result()
+    supports = {v: support() for v in ("nominal", "balanced", "precision")}
+    assert coverage_gate(n, b, p, support_docs=supports)["go"]
+    # result["source"] is a policy/result label, not WOMD provenance.
+    p["source"] = "anything"
+    assert coverage_gate(n, b, p, support_docs=supports)["go"]
+    supports = {v: support(pattern="/womd/validation_interactive/validation_interactive_tfexample.tfrecord@150", role="validation_interactive") for v in ("nominal", "balanced", "precision")}
+    gate = coverage_gate(n, b, p, support_docs=supports)
+    assert gate["same_womd_source"] and not gate["standard_validation_source"] and not gate["go"]
+
+
+def test_sentinel_determinism_ignores_timing_but_not_science():
+    full = result(keys=("a",))
+    full["scenes"][0]["timing"] = {"wall_s": 9.0}
+    full["scenes"][0]["metric_summary"]["undefined"] = float("nan")
+    sent = sentinel(full)
+    sent["scenes"][0]["timing"] = {"wall_s": 1.0}
+    assert sentinel_determinism(full, sent)["go"]
+    sent["scenes"][0]["metric_summary"]["m"] = 1.0
+    assert not sentinel_determinism(full, sent)["go"]
+
+
+def test_adjudicate_go_and_failure_order():
+    c, r, s, u = fixture()
+    assert adjudicate(comparisons=c, results=r, sentinel_results=s, support_docs=u)["status"] == STATUS_GO
+
+    c2, r2, s2, u2 = fixture(); u2["precision"]["safe"]["raw_source_role"] = "validation_interactive"
+    assert adjudicate(comparisons=c2, results=r2, sentinel_results=s2, support_docs=u2)["status"] == STATUS_COVERAGE_STOP
+
+    c2, r2, s2, u2 = fixture(); s2["balanced"]["safe"]["scenes"][0]["x"] = 99.0
+    assert adjudicate(comparisons=c2, results=r2, sentinel_results=s2, support_docs=u2)["status"] == STATUS_DETERMINISM_STOP
+
+    c2, r2, s2, u2 = fixture(); c2["balanced"]["safe"]["metrics"]["overlap_any"] = metric(0.1, 0.05, 0.2)
+    assert adjudicate(comparisons=c2, results=r2, sentinel_results=s2, support_docs=u2)["status"] == STATUS_SAFE_STOP
+
+    c2, r2, s2, u2 = fixture();
+    for v in ("balanced", "precision"):
+        for n in ("critical_ttc_exposure_duration_s", "clearance_deficit_auc_m_s", "ttc_deficit_auc_s2", "min_clearance_m_min", "ttc_s_min"):
+            c2[v]["near"]["metrics"][n] = metric()
+    assert adjudicate(comparisons=c2, results=r2, sentinel_results=s2, support_docs=u2)["status"] == STATUS_NEAR_STOP
+
+    c2, r2, s2, u2 = fixture();
+    for v in ("balanced", "precision"):
+        for n in ("post_contact_clearance_gain_m", "post_contact_free_space_auc_normalized_m", "post_contact_escape_event", "post_contact_terminal_clearance_m", "new_stable_stop_quality_event"):
+            c2[v]["contact"]["metrics"][n] = metric()
+    assert adjudicate(comparisons=c2, results=r2, sentinel_results=s2, support_docs=u2)["status"] == STATUS_CONTACT_STOP
+
+
+def test_contact_construct_fails_closed_on_policy_dependent_late_contact_subset():
+    c, r, s, u = fixture()
+    # Reproduce the V48.124.5 failure mode: Contact targets are merely a
+    # counterfactual bucket, while observed contact happens later under the
+    # compared policy on only a treatment-dependent subset.
+    for v in ("nominal", "balanced", "precision"):
+        contact = r[v]["contact"]
+        contact["observed_contact_scene_rate"] = 0.05
+        contact["post_contact_metric_eligible_scene_rate"] = 0.04
+        contact["counterfactual_contact_target_scene_rate"] = 1.0
+        for i, scene in enumerate(contact["scenes"]):
+            scene["metric_summary"].update({
+                "observed_contact_event": 1.0 if i == 0 else 0.0,
+                "post_contact_metric_eligible": 1.0 if i == 0 else 0.0,
+                "first_contact_step": 30.0 if i == 0 else float("nan"),
+                "contact_anchor_step": 30.0 if i == 0 else float("nan"),
+            })
+    # Sentinel replays must reflect the same scientific scene tree after the
+    # synthetic mutation; determinism is not the failure under test.
+    for v in ("balanced", "precision"):
+        s[v]["contact"] = sentinel(r[v]["contact"])
+    decision = adjudicate(comparisons=c, results=r, sentinel_results=s, support_docs=u)
+    assert decision["status"] == STATUS_CONTACT_CONSTRUCT_FAIL
+    gate = decision["contact_construct_validity_gate"]
+    assert gate["go"] is False
+    assert gate["variants"]["nominal"]["num_initial_contact_anchors"] == 0
+
+
+
+def test_journal_finalizer_preserves_embedded_scene_contract(tmp_path):
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[1]
+    output = tmp_path / "closed_loop_ocrap.json"
+    progress = output.with_suffix(output.suffix + ".progress.json")
+    journal = output.with_suffix(output.suffix + ".scenes.jsonl")
+    bucket = str(tmp_path / "test_near_contact")
+    output.write_text(json.dumps({
+        "method": "ocrap",
+        "source": "model",
+        "bucket_dataset": bucket,
+        "bucket_target_count": 2,
+        "target_keys_file": "/tmp/keys.json",
+        "gamma_rec": 0.2,
+        "run_fingerprint": "fp",
+    }))
+    progress.write_text(json.dumps({
+        "status": "complete", "requested_rollouts": 2, "run_fingerprint": "fp"
+    }))
+    scenes = [
+        {"target_key": "a", "scene_id": "s1", "method": "ocrap", "bucket_name": "test_near_contact", "gamma_rec": 0.2, "num_decisions": 1, "num_metric_steps": 1, "metric_summary": {}},
+        {"target_key": "b", "scene_id": "s2", "method": "ocrap", "bucket_name": "test_near_contact", "gamma_rec": 0.2, "num_decisions": 1, "num_metric_steps": 1, "metric_summary": {}},
+    ]
+    journal.write_text("".join(json.dumps({"version": 1, "run_fingerprint": "fp", "resume_key": s["target_key"], "scene": s}) + "\n" for s in scenes))
+    env = dict(__import__("os").environ)
+    env["PYTHONPATH"] = str(repo / "src") + (":" + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    subprocess.run([
+        sys.executable, str(repo / "tools/finalize_closed_loop_from_journal.py"),
+        "--output", str(output), "--include-scenes-in-result", "--result-scene-detail", "metrics",
+    ], cwd=repo, check=True, env=env)
+    doc = json.loads(output.read_text())
+    assert doc["bucket_dataset"] == bucket
+    assert doc["scenes_embedded"] is True
+    assert [s["target_key"] for s in doc["scenes"]] == ["a", "b"]
+    subprocess.run([
+        sys.executable, str(repo / "tools/check_closed_loop_artifact.py"),
+        "--output", str(output), "--require-scenes", "--quiet",
+    ], cwd=repo, check=True, env=env)
+
+
+def test_sentinel_builder_and_paired_compare_fallback_to_scene_journal(tmp_path):
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[1]
+    paths = {}
+    for variant in ("nominal", "balanced", "precision"):
+        for regime in ("safe", "near", "contact"):
+            p = tmp_path / variant / regime / ("closed_loop_nominal.json" if variant == "nominal" else "closed_loop_ocrap.json")
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps({"num_scenes": 2, "bucket_target_count": 2, "scenes_embedded": False}))
+            scenes = [
+                {"target_key": f"{regime}:a", "method": "nominal" if variant == "nominal" else "ocrap", "num_decisions": 1, "num_metric_steps": 1, "metric_summary": {"overlap_any": 0.0}},
+                {"target_key": f"{regime}:b", "method": "nominal" if variant == "nominal" else "ocrap", "num_decisions": 1, "num_metric_steps": 1, "metric_summary": {"overlap_any": 0.0}},
+            ]
+            p.with_suffix(p.suffix + ".scenes.jsonl").write_text("".join(json.dumps({"version":1,"run_fingerprint":"fp","resume_key":s["target_key"],"scene":s})+"\n" for s in scenes))
+            paths[(variant, regime)] = p
+    index = tmp_path / "sentinel-index.json"
+    key_dir = tmp_path / "keys"
+    cmd = [sys.executable, str(repo / "tools/build_fixed_main_sentinel_keys.py")]
+    for regime in ("safe", "near", "contact"):
+        for variant in ("nominal", "balanced", "precision"):
+            cmd += [f"--{variant}-{regime}", str(paths[(variant, regime)])]
+    cmd += ["--key-dir", str(key_dir), "--output", str(index)]
+    env = dict(__import__("os").environ)
+    env["PYTHONPATH"] = str(repo / "src") + (":" + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    subprocess.run(cmd, cwd=repo, check=True, env=env)
+    idx = json.loads(index.read_text())
+    assert idx["valid"] is True
+    assert idx["regimes"]["near"]["num_balanced"] == 2
+    assert idx["regimes"]["near"]["scene_sources"]["balanced"] == "journal"
+
+    comparison = tmp_path / "compare.json"
+    subprocess.run([
+        sys.executable, str(repo / "tools/compare_paired_closed_loop.py"),
+        str(paths[("nominal", "safe")]), str(paths[("balanced", "safe")]),
+        "--bootstrap", "20", "--seed", "2027", "--output", str(comparison),
+    ], cwd=repo, check=True, env=env)
+    comp = json.loads(comparison.read_text())
+    assert comp["num_paired_scenes"] == 2
+    assert comp["control_scene_source"] == "journal"
+    assert comp["method_scene_source"] == "journal"
+
+
+def test_v48124_launcher_enforces_rifa_absolute_admission_before_intervention():
+    from pathlib import Path
+    repo = Path(__file__).resolve().parents[1]
+    text = (repo / "scripts/run_ocrap_closed_loop.sh").read_text(encoding="utf-8")
+    assert "selection.require_absolute_admission_for_intervention=true" in text
+
+
+def test_exact_nominal_control_never_feasibility_substitutes():
+    import numpy as np
+    from ocrap.evaluation.baselines import select_baseline
+
+    sel = select_baseline(
+        "nominal",
+        np.asarray([0.0, 100.0]),
+        np.asarray([0.0, 0.0]),
+        np.asarray([0.0, 0.0]),
+        np.asarray([0.0, 0.0]),
+        np.asarray([1.0, 0.0]),
+        np.asarray([1.0, 0.0]),
+        np.asarray([False, True]),
+        0.0, 0.0, 0.0, {},
+        nominal_index=0,
+    )
+    assert sel.selected_index == 0
+    assert sel.reason == "nominal_prefix_exact_a0"
+
+
+def test_v48124_launcher_parallelizes_robustness_variants_one_gpu_each():
+    from pathlib import Path
+    repo = Path(__file__).resolve().parents[1]
+    text = (repo / "scripts/run_constraint_native_orientation_audit.sh").read_text(encoding="utf-8")
+    assert 'run_variant balanced "$BALANCED_OUT" "$GPU0" & pb=$!' in text
+    assert 'run_variant precision "$PRECISION_OUT" "$GPU1" & pp=$!' in text
+    assert 'CUDA_DEVICES="$gpu"' in text
+
+
+def test_nominal_launcher_requires_zero_intervention_exact_a0():
+    from pathlib import Path
+    repo = Path(__file__).resolve().parents[1]
+    text = (repo / "scripts/run_nominal_three_regime_control.sh").read_text(encoding="utf-8")
+    assert "nominal_exact_a0_ok" in text
+    assert "nominal_prefix_exact_a0" in text
+    assert "abs(float(rate)) > 1e-12" in text
+
+
+def test_v481247_adjudicator_pins_retained_v481245_full_run_runtime():
+    import importlib.util
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[1]
+    tool = repo / "tools" / "adjudicate_fixed_main_stability.py"
+    spec = importlib.util.spec_from_file_location("v481247_adjudicator", tool)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    assert mod.FROZEN_FULL_RUN_ENGINEERING_VERSION == "v48.124.5-OC-FMSA"
+    assert mod.FROZEN_FULL_RUN_RUNTIME_SHA256 == "99f56af01d179cbe937ad68fa8bd2a862ae0efb795044ed7bc9f7ee601efb01c"
+
+    retained = Path(__file__).resolve().parents[2] / "results_bundle_v481245" / "OC-RAP-v48.124-full-population-runtime-code-contract.json"
+    if retained.is_file():
+        import json
+        doc = json.loads(retained.read_text(encoding="utf-8"))
+        assert mod.full_run_runtime_contract_ok(retained, doc)
+        tampered = dict(doc)
+        tampered["engineering_version"] = "v48.124.4-OC-FMSA"
+        assert not mod.full_run_runtime_contract_ok(retained, tampered)
+
+    source = tool.read_text(encoding="utf-8")
+    assert "retained_v481245" in source
+    assert "FROZEN_FULL_RUN_RUNTIME_SHA256" in source
+
+
+def test_engineering_failure_does_not_masquerade_as_coverage_stop():
+    from pathlib import Path
+    repo = Path(__file__).resolve().parents[1]
+    source = (repo / "tools" / "adjudicate_fixed_main_stability.py").read_text(encoding="utf-8")
+    assert '"status": "SCIENTIFIC_ATTRIBUTION_NOT_ENTERED"' in source
+    assert '"next_branch": "fix_engineering_or_provenance_before_scientific_adjudication"' in source
+
+def test_contact_construct_requires_identical_anchor_state_fingerprints():
+    c, r, s, u = fixture()
+    r["precision"]["contact"]["scenes"][0]["contact_anchor_fingerprint"] = "b" * 64
+    s["precision"]["contact"] = sentinel(r["precision"]["contact"])
+    decision = adjudicate(comparisons=c, results=r, sentinel_results=s, support_docs=u)
+    assert decision["status"] == STATUS_CONTACT_CONSTRUCT_FAIL
+    assert decision["contact_construct_validity_gate"]["same_pre_treatment_anchor_fingerprints"] is False
+
+
+def test_v481249_adjudicator_pins_completed_v481248_execution_snapshot():
+    import importlib.util
+    from pathlib import Path
+    from unittest.mock import patch
+
+    repo = Path(__file__).resolve().parents[1]
+    tool = repo / "tools" / "adjudicate_fixed_main_stability.py"
+    spec = importlib.util.spec_from_file_location("v481249_adjudicator", tool)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    assert mod.FROZEN_V481248_FULL_RUN_ENGINEERING_VERSION == "v48.124.8-OC-FMSA-CONTACT-ANCHOR-ENGFIX"
+    assert mod.FROZEN_V481248_FULL_RUN_RUNTIME_SHA256 == "16a869c6d790f209964dd8db03337deb739fe7e75937ba0f3f04dcfb14ea71a5"
+
+    doc = {
+        "valid": True,
+        "attribution_ready": True,
+        "engineering_version": mod.FROZEN_V481248_FULL_RUN_ENGINEERING_VERSION,
+        "scientific_version": mod.SCIENTIFIC_VERSION,
+        "scientific_contract": {
+            "fixed_main_evaluation_only": True,
+            "recovery_set_mechanism_family_frozen": True,
+            "new_recovery_mechanism_authorized": False,
+            "planner_parameters_trained": 0,
+            "womd_source_resolution": "standard_validation_only_with_bucket_provenance_conflict_fail_closed",
+            "rifa_absolute_admission_for_intervention": True,
+            "exact_nominal_control": "candidate_index_zero_no_feasibility_substitution",
+            "contact_endpoint_anchor_contract": "same_target_observed_simulator_contact_anchor_at_rollout_step_0_before_policy_action",
+            "counterfactual_contact_surrogate_not_sufficient_for_post_contact_gate": True,
+            "contact_anchor_construction": "exact_a0_pretreatment_prelude_v1",
+            "contact_anchor_manifest_scene_disjoint": True,
+            "contact_anchor_state_fingerprint_required": True,
+        },
+    }
+    fake = repo / "tests" / "_nonexistent_runtime_contract.json"
+    with patch.object(mod, "sha", return_value=mod.FROZEN_V481248_FULL_RUN_RUNTIME_SHA256), \
+         patch.object(Path, "is_file", return_value=True):
+        assert mod.full_run_runtime_contract_ok(fake, doc)
+    with patch.object(mod, "sha", return_value="0" * 64), \
+         patch.object(Path, "is_file", return_value=True):
+        assert not mod.full_run_runtime_contract_ok(fake, doc)
+
+
+def test_v481249_retained_v481248_does_not_compare_against_later_worktree_bytes():
+    from pathlib import Path
+    repo = Path(__file__).resolve().parents[1]
+    source = (repo / "tools" / "adjudicate_fixed_main_stability.py").read_text(encoding="utf-8")
+    assert "later worktree may legitimately" in source
+    assert "FROZEN_V481248_FULL_RUN_RUNTIME_SHA256" in source
+    assert "elif full_engineering == FROZEN_V481248_FULL_RUN_ENGINEERING_VERSION" in source
+
+
+def test_v481249_launcher_uses_immutable_execution_snapshot():
+    from pathlib import Path
+    repo = Path(__file__).resolve().parents[1]
+    text = (repo / 'scripts' / 'run_constraint_native_orientation_audit.sh').read_text(encoding='utf-8')
+    assert 'create_fixed_main_execution_snapshot.py' in text
+    assert 'OCRAP_EXECUTION_SNAPSHOT_ACTIVE=1' in text
+    assert 'check_fixed_main_execution_snapshot.py --repo "$REPO"' in text
+    assert 'archived stale V48.124 workdir with different execution source' in text
+
+
+def test_v481249_runtime_contract_covers_snapshot_lock_tools():
+    from pathlib import Path
+    repo = Path(__file__).resolve().parents[1]
+    source = (repo / 'tools' / 'check_fixed_main_stability_contract.py').read_text(encoding='utf-8')
+    assert "'tools/create_fixed_main_execution_snapshot.py'" in source
+    assert "'tools/check_fixed_main_execution_snapshot.py'" in source
+    assert "'execution_snapshot_locked'" in source
