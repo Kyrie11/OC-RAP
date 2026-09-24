@@ -420,3 +420,70 @@ def test_slowed_contact_montage_info_initializes_metric_and_layout():
         fig.canvas.draw()
     finally:
         plt.close(fig)
+
+import finalize_contact_supplement_selection as contact_supplement
+
+
+def _trace_from_clearances(values, *, overlaps=None, offroads=None):
+    overlaps = overlaps or set()
+    offroads = offroads or set()
+    out = []
+    for i, c in enumerate(values):
+        out.append({
+            "metrics": {
+                "min_clearance_m": float(c),
+                "overlap": 1.0 if i in overlaps else 0.0,
+                "offroad": 1.0 if i in offroads else 0.0,
+                "ego_speed_mps": 2.0,
+            },
+            "agents": [{"is_sdc": True, "x": float(i), "y": 0.0, "yaw": 0.0}],
+        })
+    return out
+
+
+def test_visible_frames_includes_terminal_state_after_renderer_endpoint_fix():
+    trace = _trace_from_clearances([0.0, 0.1, 0.2, 0.3])
+    # 0.3 s at 0.1 s/step is initial + 3 simulator steps = 4 visible states.
+    assert len(finalizer._visible_frames(trace, 0.3, 0.1)) == 4
+
+
+def test_temporal_majority_allows_some_losing_frames_but_requires_majority_gain():
+    # Skip exact-a0 initial state. OC-RAP loses 2/10 post-action frames, wins 7,
+    # ties/noninferior on the remainder, and ends materially ahead.
+    oc = [0.0, 0.0, 0.1, 0.3, 0.5, 0.7, 0.9, 1.1, 1.3, 1.5, 1.8]
+    ex = [0.0, 0.2, 0.25, 0.1, 0.2, 0.35, 0.5, 0.7, 0.85, 1.0, 1.1]
+    oq = {"sustained_separation": {"first_s": 0.4}}
+    eq = {"sustained_separation": {"first_s": 0.7}}
+    ev = contact_supplement._temporal_pair_evidence(
+        {"render_trace": _trace_from_clearances(oc)},
+        {"render_trace": _trace_from_clearances(ex)},
+        clip_s=1.0, dt_s=0.1, o_quality=oq, e_quality=eq,
+        win_margin_m=0.10, noninferior_margin_m=0.15,
+        min_win_fraction=0.55, min_noninferior_fraction=0.70,
+        min_mean_clearance_gain_m=0.10, min_terminal_gain_m=0.30,
+        min_separation_lead_s=0.20, min_overlap_reduction_s=0.20,
+        min_valid_frames=8,
+    )
+    assert ev["temporal_majority_advantage"] is True
+    assert 0.55 <= ev["clearance_win_fraction"] < 1.0
+    assert ev["sustained_separation_lead_s"] == pytest.approx(0.3)
+
+
+def test_temporal_majority_rejects_terminal_only_spike():
+    # A final clearance spike is not representative if OC-RAP loses most of the trace.
+    oc = [0.0, 0.0, 0.0, 0.0, 0.0, 0.1, 0.1, 0.1, 0.1, 0.2, 2.0]
+    ex = [0.0, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 1.0]
+    oq = {"sustained_separation": {"first_s": 0.8}}
+    eq = {"sustained_separation": {"first_s": 0.5}}
+    ev = contact_supplement._temporal_pair_evidence(
+        {"render_trace": _trace_from_clearances(oc)},
+        {"render_trace": _trace_from_clearances(ex)},
+        clip_s=1.0, dt_s=0.1, o_quality=oq, e_quality=eq,
+        win_margin_m=0.10, noninferior_margin_m=0.10,
+        min_win_fraction=0.55, min_noninferior_fraction=0.75,
+        min_mean_clearance_gain_m=0.10, min_terminal_gain_m=0.30,
+        min_separation_lead_s=0.20, min_overlap_reduction_s=0.20,
+        min_valid_frames=8,
+    )
+    assert ev["terminal_clearance_gain_m"] > 0.0
+    assert ev["temporal_majority_advantage"] is False

@@ -85,10 +85,12 @@ def _flag(frame: dict[str, Any], key: str) -> bool:
 
 
 def _visible_frames(trace: list[dict[str, Any]], clip_s: float, dt_s: float) -> list[dict[str, Any]]:
-    # Renderer samples [0, clip) at video cadence. Keep the quality gate aligned
-    # with what is actually visible instead of rejecting an undisplayed endpoint.
-    n = max(1, int(math.floor(clip_s / dt_s + 1.0e-9)))
-    return trace[: min(n, len(trace))]
+    # render_trace stores the initial state plus one state after each simulator
+    # step.  The renderer now pins the final video frame to the clip terminal
+    # state, so the quality gate must include that endpoint as well.  For a
+    # 2.5 s clip at 0.1 s/step this means 26 states: t=0.0 ... 2.5 s.
+    n_steps = max(0, int(math.floor(clip_s / dt_s + 1.0e-9)))
+    return trace[: min(n_steps + 1, len(trace))]
 
 
 def _first_violation(trace: list[dict[str, Any]], clip_s: float, dt_s: float) -> tuple[int | None, str | None]:
