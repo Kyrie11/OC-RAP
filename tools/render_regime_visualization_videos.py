@@ -912,7 +912,7 @@ def _render_pair(*, methods, scenes, traces, item, selection, regime, displays, 
     comparator_name = _short_display(comparator, 20)
     role_short = _short_comparator_role(comparator_role, regime)
     figure.suptitle(
-        f"{regime_title} · OC-RAP vs {comparator_name} · Rank {item.get('category_rank')}",
+        f"{regime_title} · {displays.get('ocrap', 'OC-RAP')} vs {comparator_name} · Rank {item.get('category_rank')}",
         fontsize=12.2, fontweight="bold", y=0.985,
     )
     figure.text(
@@ -1028,6 +1028,11 @@ def main() -> int:
         scene_dir = regime_output_root / f"rank_{rank:02d}"
         scene_dir.mkdir(parents=True, exist_ok=True)
         displays = {m: _display_name(m) for m in paths}
+        display_overrides = selection.get("display_name_overrides") or {}
+        if isinstance(display_overrides, dict):
+            for m, name in display_overrides.items():
+                if m in displays and str(name).strip():
+                    displays[m] = str(name).strip()
         outputs = []
 
         if args.include_singles:

@@ -231,6 +231,11 @@ def main() -> int:
             (resolved[m][0].get("render_context") for m in paths if resolved[m][0].get("render_context")), {}
         )
         displays = {m: _display_name(m) for m in paths}
+        display_overrides = selection.get("display_name_overrides") or {}
+        if isinstance(display_overrides, dict):
+            for m, name in display_overrides.items():
+                if m in displays and str(name).strip():
+                    displays[m] = str(name).strip()
         primary = str(item.get("primary_external_method") or item.get("hardest_external_method") or item.get("best_external_method") or "")
         if primary not in paths:
             raise SystemExit(f"primary comparator missing for {item.get('target_key')}: {primary}")
@@ -246,7 +251,7 @@ def main() -> int:
         pair_files = _render_grid(
             methods=pair_methods, traces=traces, displays=displays, regime=regime, context=context,
             keyframes=pair_kf, dt_s=dt_s, minimum_radius=args.view_radius_m,
-            title=f"{regime_title}: OC-RAP vs {displays[primary]}",
+            title=f"{regime_title}: {displays.get('ocrap', 'OC-RAP')} vs {displays[primary]}",
             output_stem=scene_dir / f"{regime}__rank_{rank:02d}__paper_pair_2x4",
             force=args.force,
         )

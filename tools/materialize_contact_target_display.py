@@ -177,15 +177,26 @@ def main() -> int:
     args.output_selection.parent.mkdir(parents=True, exist_ok=True)
     args.output_selection.write_text(json.dumps(out, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
+    reference_mode = bool(sel.get("reference_visualization_only")) or any(
+        bool(clipped["ocrap"][str(x["target_key"])].get("reference_trajectory"))
+        or str(clipped["ocrap"][str(x["target_key"])].get("method") or "") == "ocrap_reference"
+        for x in items
+    )
     provenance = {
-        "event": "contact_target_display_provenance_v1",
-        "trajectory_states_modified": False,
+        "event": "contact_target_display_provenance_v2",
+        "trajectory_states_modified": bool(reference_mode),
+        "reference_visualization_only": bool(reference_mode),
+        "empirical_ocrap_relabelled": False,
         "source_trace_root": str(args.source_trace_root),
         "materialized_trace_root": str(args.output_trace_root),
         "selection_source": str(args.selection),
         "selection_materialized": str(args.output_selection),
-        "metric_support": "visible clipped real state prefix t0..tN; durations use t0..t(N-1)",
-        "note": "Separate target/template visualization artifact. Do not substitute for the reported empirical full-rollout results.",
+        "metric_support": "visible materialized state support t0..tN; durations use t0..t(N-1); box geometry metrics recomputed on displayed states",
+        "note": (
+            "Separate aspirational/reference visualization artifact; generated SDC states are not an empirical OC-RAP rollout."
+            if reference_mode else
+            "Separate target/template visualization artifact using empirical states. Do not substitute for the reported empirical full-rollout results."
+        ),
     }
     (args.output_selection.parent / "PROVENANCE.json").write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"event": out["event"], "num_scenes": len(new_items), "output": str(args.output_selection)}))

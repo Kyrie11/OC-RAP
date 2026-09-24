@@ -44,8 +44,9 @@ def _evaluate(
     lane_kwargs: dict[str, Any], lane_recovery_kwargs: dict[str, Any],
     separation_clearance_m: float, separation_hold_s: float,
     min_terminal_clearance_m: float, min_post_separation_clearance_m: float,
+    max_sustained_separation_s: float | None,
     reject_any_recontact_after_first_separation: bool,
-    min_comparative_methods: int,
+    min_comparative_methods: int, min_temporal_advantage_methods: int,
     temporal_win_margin_m: float, temporal_noninferior_margin_m: float,
     temporal_min_win_fraction: float, temporal_min_noninferior_fraction: float,
     temporal_min_mean_gain_m: float, temporal_min_terminal_gain_m: float,
@@ -54,6 +55,8 @@ def _evaluate(
 ) -> tuple[bool, dict[str, Any], list[str], list[str], list[str], list[str]]:
     row = dict(item)
     row["clip_duration_s"] = float(clip)
+    reference_scene = traces["ocrap"][str(item["target_key"])]
+    reference_quality = reference_scene.get("reference_quality") or {}
     q = base._contact_quality(
         row, traces, dt_s=dt, lane_kwargs=lane_kwargs,
         lane_recovery_kwargs=lane_recovery_kwargs,
@@ -61,6 +64,8 @@ def _evaluate(
         separation_hold_s=float(separation_hold_s),
     )
     reasons = base._gate_rejection_reasons("contact", q, near_min_external_severe_count=0)
+    if bool(reference_scene.get("reference_trajectory")) and reference_quality and not bool(reference_quality.get("clean")):
+        reasons.append("reference_reality_contract_failed")
     ocq = q.get("ocrap_trace_recovery") or {}
     # Target-display quality is stricter than the ordinary qualitative gate on
     # secondary contact: once the rollout first separates from the initial
@@ -76,7 +81,12 @@ def _evaluate(
     terminal_clearance = ocq.get("terminal_clearance_m")
     if terminal_clearance is None or float(terminal_clearance) < float(min_terminal_clearance_m):
         reasons.append("insufficient_terminal_clearance")
-    sep_idx = ((ocq.get("sustained_separation") or {}).get("first_index"))
+    sep_info = (ocq.get("sustained_separation") or {})
+    sep_time = sep_info.get("first_s")
+    if max_sustained_separation_s is not None:
+        if sep_time is None or float(sep_time) > float(max_sustained_separation_s) + 1e-9:
+            reasons.append("sustained_separation_too_late")
+    sep_idx = sep_info.get("first_index")
     if sep_idx is not None:
         vals = [base._metric(f, "min_clearance_m") for f in oframes[int(sep_idx):]]
         vals = [float(v) for v in vals if v is not None]
@@ -110,6 +120,8 @@ def _evaluate(
             evidence.append(method)
     if len(evidence) < int(min_comparative_methods):
         reasons.append("insufficient_external_comparative_evidence")
+    if len(temporal_methods) < int(min_temporal_advantage_methods):
+        reasons.append("insufficient_temporal_clearance_advantage")
     reasons = list(dict.fromkeys(reasons))
     q["external_temporal_advantage"] = temporal
     q["external_temporal_advantage_methods"] = temporal_methods
@@ -133,6 +145,8 @@ def main() -> int:
     ap.add_argument("--min-comparative-evidence-methods", type=int, default=1)
     ap.add_argument("--min-terminal-clearance-m", type=float, default=0.50)
     ap.add_argument("--min-post-separation-clearance-m", type=float, default=0.25)
+    ap.add_argument("--max-sustained-separation-s", type=float, default=None)
+    ap.add_argument("--min-temporal-advantage-methods", type=int, default=0)
     ap.add_argument("--allow-recontact-after-first-separation", action="store_true")
 
     # Slightly permissive comparative thresholds are allowed for target-display
@@ -225,8 +239,10 @@ def main() -> int:
                 separation_hold_s=float(args.separation_hold_s),
                 min_terminal_clearance_m=float(args.min_terminal_clearance_m),
                 min_post_separation_clearance_m=float(args.min_post_separation_clearance_m),
+                max_sustained_separation_s=(None if args.max_sustained_separation_s is None else float(args.max_sustained_separation_s)),
                 reject_any_recontact_after_first_separation=not bool(args.allow_recontact_after_first_separation),
                 min_comparative_methods=int(args.min_comparative_evidence_methods),
+                min_temporal_advantage_methods=int(args.min_temporal_advantage_methods),
                 temporal_win_margin_m=float(args.temporal_clearance_win_margin_m),
                 temporal_noninferior_margin_m=float(args.temporal_clearance_noninferior_margin_m),
                 temporal_min_win_fraction=float(args.temporal_min_win_fraction),
@@ -309,7 +325,9 @@ def main() -> int:
         "regime": "contact",
         "exploratory_qualitative_only": True,
         "paper_population_claim_allowed": False,
-        "target_display_real_trace_only": True,
+        "target_display_real_trace_only": not bool(candidate.get("reference_visualization_only")),
+        "reference_visualization_only": bool(candidate.get("reference_visualization_only")),
+        "display_name_overrides": candidate.get("display_name_overrides") or {},
         "requested_num_scenes": int(args.num_scenes),
         "selected": final,
         "target_keys": [str(x["target_key"]) for x in final],
@@ -324,7 +342,8 @@ def main() -> int:
         "selected_count": len(final),
         "requested_count": int(args.num_scenes),
         "hard_reality_contract_unchanged": True,
-        "trajectory_states_modified": False,
+        "trajectory_states_modified": bool(candidate.get("reference_visualization_only")),
+        "reference_visualization_only": bool(candidate.get("reference_visualization_only")),
         "candidates": audits,
     }
     args.audit_output.parent.mkdir(parents=True, exist_ok=True)
