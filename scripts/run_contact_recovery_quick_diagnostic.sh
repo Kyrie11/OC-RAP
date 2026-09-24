@@ -34,17 +34,27 @@ if [[ "${REUSE_DIAGNOSTIC_ANCHORS,,}" != true || ! -s "$MANIFEST" || ! -s "$KEYS
 else
   echo "[CONTACT-QUICKDIAG][REUSE] $MANIFEST"
 fi
-N="$(python - "$MANIFEST" <<'PY'
-import json,sys; print(int(json.load(open(sys.argv[1])).get('num_selected_anchors') or 0))
+read -r ACTUAL_TARGETS N < <(python - "$SUBSET" "$MANIFEST" <<'PY'
+import json,sys
+s=json.load(open(sys.argv[1],encoding='utf-8'))
+m=json.load(open(sys.argv[2],encoding='utf-8'))
+print(int(s.get('selected_num_targets') or len(s.get('target_keys') or [])), int(m.get('num_selected_anchors') or 0))
 PY
-)"
-echo "[CONTACT-QUICKDIAG] sampled_targets=$DIAG_NUM_TARGETS exact_a0_anchors=$N min_post_steps=$DIAG_MIN_POST_STEPS"
+)
+echo "[CONTACT-QUICKDIAG] requested_targets=$DIAG_NUM_TARGETS sampled_targets=$ACTUAL_TARGETS exact_a0_anchors=$N min_post_steps=$DIAG_MIN_POST_STEPS"
+if [[ "$ACTUAL_TARGETS" != "$DIAG_NUM_TARGETS" ]]; then
+  echo "[CONTACT-QUICKDIAG][INFO] reusing an existing deterministic subset with $ACTUAL_TARGETS targets; DIAG_NUM_TARGETS only applies when a new subset is built."
+fi
 if ((N<5)); then
   echo "[CONTACT-QUICKDIAG][ERROR] only $N exact-a0 anchors. Re-run in a NEW OUT with DIAG_NUM_TARGETS=150; do not lower Contact safety/recovery gates." >&2
   exit 30
 fi
 run_profile(){
-  local name="$1" selector="$2" require_abs="$3" gpu="$4" root="$OUT/profiles/$name"
+  local name="$1"
+  local selector="$2"
+  local require_abs="$3"
+  local gpu="$4"
+  local root="$OUT/profiles/$name"
   mkdir -p "$root"
   RUN_SAFE=0 RUN_NEAR=0 RUN_CONTACT=1 MODEL_RUN="$OCRAP_MODEL_RUN" MODEL_VARIANT="$MODEL_VARIANT" \
   OCRAP_ROOT="$OCRAP_ROOT" WOMD_ROOT="$WOMD_ROOT" OUT="$root" CUDA_DEVICES="$gpu" \
