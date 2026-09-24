@@ -11,6 +11,8 @@ Usage: scripts/build_regime_visualizations.sh [options]
   --variant NAME         default balanced
   --out DIR              default $BASE_OUT/regime_visualization_v48_124_final
   --num-scenes N         default 5 final ranks per regime
+  Per-regime overrides are also available through SAFE_FINAL_NUM_SCENES,
+  NEAR_FINAL_NUM_SCENES, and CONTACT_FINAL_NUM_SCENES environment variables.
   --gpus LIST            default 0,1
   --fps N                default 10
   --trace-steps N        default 60 (6 s at 0.1 s/step)
@@ -36,6 +38,34 @@ MIN_VIDEO_DURATION_S="${MIN_VIDEO_DURATION_S:-6.0}"
 FALLBACK_MIN_VIDEO_DURATION_S="${FALLBACK_MIN_VIDEO_DURATION_S:-4.0}"
 CONTACT_FALLBACK_MIN_VIDEO_DURATION_S="${CONTACT_FALLBACK_MIN_VIDEO_DURATION_S:-4.0}"
 
+# Reviewer-facing trace-aware gates. Safe/Near keep the strict global lane
+# contract. Contact-specific overrides default to the same values, but can be
+# relaxed independently after inspecting selection/contact_selection_audit.json.
+VIS_LANE_TERMINAL_MAX_M="${VIS_LANE_TERMINAL_MAX_M:-5.0}"
+VIS_LANE_P90_MAX_M="${VIS_LANE_P90_MAX_M:-5.5}"
+VIS_LANE_OFFCENTER_THRESHOLD_M="${VIS_LANE_OFFCENTER_THRESHOLD_M:-4.5}"
+VIS_LANE_OFFCENTER_FRACTION_MAX="${VIS_LANE_OFFCENTER_FRACTION_MAX:-0.30}"
+VIS_LANE_HEADING_TERMINAL_MAX_DEG="${VIS_LANE_HEADING_TERMINAL_MAX_DEG:-50.0}"
+VIS_LANE_HEADING_P90_MAX_DEG="${VIS_LANE_HEADING_P90_MAX_DEG:-55.0}"
+CONTACT_LANE_TERMINAL_MAX_M="${CONTACT_LANE_TERMINAL_MAX_M:-$VIS_LANE_TERMINAL_MAX_M}"
+CONTACT_LANE_P90_MAX_M="${CONTACT_LANE_P90_MAX_M:-$VIS_LANE_P90_MAX_M}"
+CONTACT_LANE_OFFCENTER_THRESHOLD_M="${CONTACT_LANE_OFFCENTER_THRESHOLD_M:-$VIS_LANE_OFFCENTER_THRESHOLD_M}"
+CONTACT_LANE_OFFCENTER_FRACTION_MAX="${CONTACT_LANE_OFFCENTER_FRACTION_MAX:-$VIS_LANE_OFFCENTER_FRACTION_MAX}"
+CONTACT_LANE_HEADING_TERMINAL_MAX_DEG="${CONTACT_LANE_HEADING_TERMINAL_MAX_DEG:-$VIS_LANE_HEADING_TERMINAL_MAX_DEG}"
+CONTACT_LANE_HEADING_P90_MAX_DEG="${CONTACT_LANE_HEADING_P90_MAX_DEG:-$VIS_LANE_HEADING_P90_MAX_DEG}"
+# Short-horizon Contact fallback: never permits off-road/re-contact/terminal
+# overlap. It only accepts a lane-distance miss when the vehicle remains under
+# explicit caps and is measurably converging back toward a vehicle lane.
+CONTACT_LANE_RECOVERY_TERMINAL_MAX_M="${CONTACT_LANE_RECOVERY_TERMINAL_MAX_M:-6.5}"
+CONTACT_LANE_RECOVERY_P90_MAX_M="${CONTACT_LANE_RECOVERY_P90_MAX_M:-7.0}"
+CONTACT_LANE_RECOVERY_OFFCENTER_FRACTION_MAX="${CONTACT_LANE_RECOVERY_OFFCENTER_FRACTION_MAX:-0.45}"
+CONTACT_LANE_PEAK_IMPROVEMENT_MIN_M="${CONTACT_LANE_PEAK_IMPROVEMENT_MIN_M:-1.0}"
+CONTACT_LANE_RECENT_RECOVERY_MIN_M="${CONTACT_LANE_RECENT_RECOVERY_MIN_M:-0.35}"
+NEAR_MIN_EXTERNAL_SEVERE_COUNT="${NEAR_MIN_EXTERNAL_SEVERE_COUNT:-2}"
+CONTACT_SEPARATION_CLEARANCE_M="${CONTACT_SEPARATION_CLEARANCE_M:-0.50}"
+CONTACT_SEPARATION_HOLD_S="${CONTACT_SEPARATION_HOLD_S:-0.30}"
+PRESERVE_ACCEPTED_EXISTING_SELECTION="${PRESERVE_ACCEPTED_EXISTING_SELECTION:-true}"
+
 # Trace-aware finalization needs a modest over-selected pool so late Safe tail
 # failures can be replaced and Near-Contact can favor consensus-failure/dense
 # scenes without changing the locked quantitative population.
@@ -43,13 +73,12 @@ VIS_CANDIDATE_MULTIPLIER="${VIS_CANDIDATE_MULTIPLIER:-2}"
 [[ "$VIS_CANDIDATE_MULTIPLIER" =~ ^[0-9]+$ && "$VIS_CANDIDATE_MULTIPLIER" -ge 1 ]] || { echo 'VIS_CANDIDATE_MULTIPLIER must be a positive integer' >&2; exit 2; }
 CONTACT_VIS_CANDIDATE_MULTIPLIER="${CONTACT_VIS_CANDIDATE_MULTIPLIER:-3}"
 [[ "$CONTACT_VIS_CANDIDATE_MULTIPLIER" =~ ^[0-9]+$ && "$CONTACT_VIS_CANDIDATE_MULTIPLIER" -ge 1 ]] || { echo 'CONTACT_VIS_CANDIDATE_MULTIPLIER must be a positive integer' >&2; exit 2; }
-SAFE_CANDIDATE_SCENES=$((NUM_SCENES * VIS_CANDIDATE_MULTIPLIER))
-NEAR_CANDIDATE_SCENES=$((NUM_SCENES * VIS_CANDIDATE_MULTIPLIER))
-# Contact has only eight locked exact-a0 anchors. Request substantially more
-# than the final rank count (ALLOW_FEWER_SCENES downstream safely returns all
-# eligible anchors) so the trace-aware realism gate can replace a metric-good
-# but visually implausible escape trajectory instead of being forced to keep it.
-CONTACT_CANDIDATE_SCENES=$((NUM_SCENES * CONTACT_VIS_CANDIDATE_MULTIPLIER))
+# Capture optional per-regime count overrides before parsing --num-scenes; if
+# unset, they inherit the *parsed* global count below rather than the initial
+# default value.
+_SAFE_FINAL_NUM_SCENES_ENV="${SAFE_FINAL_NUM_SCENES:-}"
+_NEAR_FINAL_NUM_SCENES_ENV="${NEAR_FINAL_NUM_SCENES:-}"
+_CONTACT_FINAL_NUM_SCENES_ENV="${CONTACT_FINAL_NUM_SCENES:-}"
 while (($#)); do case "$1" in
  --ocrap-results) OCRAP_RESULTS_ROOT="$2";shift 2;; --model-run) OCRAP_MODEL_RUN="$2";shift 2;; --external-root) EXTERNAL_RESULTS_ROOT="$2";shift 2;;
  --target-lock-root) TARGET_LOCK_ROOT="$2";shift 2;; --variant) MODEL_VARIANT="$2";shift 2;; --out) OUT="$2";shift 2;; --num-scenes) NUM_SCENES="$2";shift 2;; --gpus) CUDA_DEVICES="$2";shift 2;;
@@ -57,6 +86,19 @@ while (($#)); do case "$1" in
  -h|--help) usage;exit 0;; *) echo "unknown option $1" >&2;usage >&2;exit 2;; esac;done
 [[ -n "$OCRAP_RESULTS_ROOT" && -n "$OCRAP_MODEL_RUN" ]] || { echo '--ocrap-results and --model-run are required' >&2; exit 2; }
 [[ "$TRACE_MAX_STEPS" =~ ^[0-9]+$ && "$TRACE_MAX_STEPS" -gt 0 ]] || { echo '--trace-steps must be a positive integer' >&2; exit 2; }
+SAFE_FINAL_NUM_SCENES="${_SAFE_FINAL_NUM_SCENES_ENV:-$NUM_SCENES}"
+NEAR_FINAL_NUM_SCENES="${_NEAR_FINAL_NUM_SCENES_ENV:-$NUM_SCENES}"
+CONTACT_FINAL_NUM_SCENES="${_CONTACT_FINAL_NUM_SCENES_ENV:-$NUM_SCENES}"
+for _n in "$SAFE_FINAL_NUM_SCENES" "$NEAR_FINAL_NUM_SCENES" "$CONTACT_FINAL_NUM_SCENES"; do
+  [[ "$_n" =~ ^[0-9]+$ && "$_n" -ge 1 ]] || { echo 'per-regime final scene counts must be positive integers' >&2; exit 2; }
+done
+SAFE_CANDIDATE_SCENES=$((SAFE_FINAL_NUM_SCENES * VIS_CANDIDATE_MULTIPLIER))
+NEAR_CANDIDATE_SCENES=$((NEAR_FINAL_NUM_SCENES * VIS_CANDIDATE_MULTIPLIER))
+# Contact has only eight locked exact-a0 anchors. Request substantially more
+# than the final rank count (ALLOW_FEWER_SCENES downstream safely returns all
+# eligible anchors) so the trace-aware realism gate can replace a metric-good
+# but visually implausible escape trajectory instead of being forced to keep it.
+CONTACT_CANDIDATE_SCENES=$((CONTACT_FINAL_NUM_SCENES * CONTACT_VIS_CANDIDATE_MULTIPLIER))
 # Make scheduler choice configurable from the top-level command.  The default
 # remains auto; this variable affects only execution scheduling, never method
 # definitions, checkpoints, target locks, or scientific metrics.
@@ -85,11 +127,19 @@ export OCRAP_ROOT="${OCRAP_ROOT:-/data0/senzeyu2/dataset/OCRAP}" WOMD_ROOT="${WO
 export SAFE_EXTERNAL_ROOT="$EXTERNAL_RESULTS_ROOT/safe" NEAR_EXTERNAL_ROOT="$EXTERNAL_RESULTS_ROOT/near" CONTACT_EXTERNAL_ROOT="$EXTERNAL_RESULTS_ROOT/contact"
 export OCRAP_RESULTS_ROOT OCRAP_MODEL_RUN TARGET_LOCK_ROOT MODEL_VARIANT OUT NUM_SCENES CUDA_DEVICES FPS TRACE_MAX_STEPS CAMERA_MODE VIEW_RADIUS_M VIDEO_FORMAT
 export VIS_CANDIDATE_MULTIPLIER CONTACT_VIS_CANDIDATE_MULTIPLIER SAFE_CANDIDATE_SCENES NEAR_CANDIDATE_SCENES CONTACT_CANDIDATE_SCENES
+export SAFE_FINAL_NUM_SCENES NEAR_FINAL_NUM_SCENES CONTACT_FINAL_NUM_SCENES
 export MAX_SELECTED_TIER_RANK="${MAX_SELECTED_TIER_RANK:-1}" JOBS_PER_GPU="${JOBS_PER_GPU:-3}" MAX_PARALLEL="${MAX_PARALLEL:-6}" USE_DYNAMIC_SCHEDULER
 export SAFE_MAX_SELECTED_TIER_RANK="${SAFE_MAX_SELECTED_TIER_RANK:-$MAX_SELECTED_TIER_RANK}"
 export NEAR_MAX_SELECTED_TIER_RANK="${NEAR_MAX_SELECTED_TIER_RANK:-$MAX_SELECTED_TIER_RANK}"
 export CONTACT_MAX_SELECTED_TIER_RANK="${CONTACT_MAX_SELECTED_TIER_RANK:-$MAX_SELECTED_TIER_RANK}"
 export MIN_VIDEO_DURATION_S FALLBACK_MIN_VIDEO_DURATION_S CONTACT_FALLBACK_MIN_VIDEO_DURATION_S
+export VIS_LANE_TERMINAL_MAX_M VIS_LANE_P90_MAX_M VIS_LANE_OFFCENTER_THRESHOLD_M VIS_LANE_OFFCENTER_FRACTION_MAX
+export VIS_LANE_HEADING_TERMINAL_MAX_DEG VIS_LANE_HEADING_P90_MAX_DEG
+export CONTACT_LANE_TERMINAL_MAX_M CONTACT_LANE_P90_MAX_M CONTACT_LANE_OFFCENTER_THRESHOLD_M CONTACT_LANE_OFFCENTER_FRACTION_MAX
+export CONTACT_LANE_HEADING_TERMINAL_MAX_DEG CONTACT_LANE_HEADING_P90_MAX_DEG
+export CONTACT_LANE_RECOVERY_TERMINAL_MAX_M CONTACT_LANE_RECOVERY_P90_MAX_M CONTACT_LANE_RECOVERY_OFFCENTER_FRACTION_MAX
+export CONTACT_LANE_PEAK_IMPROVEMENT_MIN_M CONTACT_LANE_RECENT_RECOVERY_MIN_M
+export NEAR_MIN_EXTERNAL_SEVERE_COUNT CONTACT_SEPARATION_CLEARANCE_M CONTACT_SEPARATION_HOLD_S PRESERVE_ACCEPTED_EXISTING_SELECTION
 
 # Publication Contact is anchored at the first exact-a0 observed overlap.  Do
 # not create a new 60-step target cohort for visualization: the final metric
@@ -103,7 +153,7 @@ VIS_CONTACT_ANCHOR_MANIFEST_FILE="$OUT/provenance/contact_anchor_manifest.json"
 CONTACT_HORIZON_REPORT="$OUT/provenance/CONTACT_VISUALIZATION_HORIZON.json"
 [[ -s "$FINAL_CONTACT_ANCHOR_MANIFEST" ]] || { echo "missing frozen Contact anchor manifest: $FINAL_CONTACT_ANCHOR_MANIFEST" >&2; exit 30; }
 mkdir -p "$OUT/provenance"
-python - "$FINAL_CONTACT_ANCHOR_MANIFEST" "$TARGET_LOCK_ROOT/contact.json" "$VIS_CONTACT_ANCHOR_MANIFEST_FILE" "$CONTACT_HORIZON_REPORT" "$NUM_SCENES" "$TRACE_MAX_STEPS" "$CONTACT_FALLBACK_MIN_VIDEO_DURATION_S" <<'PY'
+python - "$FINAL_CONTACT_ANCHOR_MANIFEST" "$TARGET_LOCK_ROOT/contact.json" "$VIS_CONTACT_ANCHOR_MANIFEST_FILE" "$CONTACT_HORIZON_REPORT" "$CONTACT_FINAL_NUM_SCENES" "$TRACE_MAX_STEPS" "$CONTACT_FALLBACK_MIN_VIDEO_DURATION_S" <<'PY'
 import json, math, pathlib, shutil, sys
 manifest_p, lock_p, out_p, report_p = map(pathlib.Path, sys.argv[1:5])
 num_scenes=int(sys.argv[5]); preferred_steps=int(sys.argv[6]); fallback_s=float(sys.argv[7]); dt=0.1
@@ -151,13 +201,15 @@ bash scripts/select_regime_visualizations.sh 2>&1 | tee "$OUT/logs/01_candidate_
 # three scenes are tier<=1, so five Contact ranks require an explicit
 # CONTACT_MAX_SELECTED_TIER_RANK relaxation rather than silently weakening all
 # three regimes.
-python - "$OUT/selection_candidates/SELECTION_INDEX.json" "$NUM_SCENES" "$SAFE_MAX_SELECTED_TIER_RANK" "$NEAR_MAX_SELECTED_TIER_RANK" "$CONTACT_MAX_SELECTED_TIER_RANK" <<'PY'
+python - "$OUT/selection_candidates/SELECTION_INDEX.json" "$SAFE_FINAL_NUM_SCENES" "$NEAR_FINAL_NUM_SCENES" "$CONTACT_FINAL_NUM_SCENES" "$SAFE_MAX_SELECTED_TIER_RANK" "$NEAR_MAX_SELECTED_TIER_RANK" "$CONTACT_MAX_SELECTED_TIER_RANK" <<'PY'
 import json,sys
-p=sys.argv[1]; need=int(sys.argv[2]); caps=dict(zip(("safe","near","contact"), map(int,sys.argv[3:6])))
+p=sys.argv[1]
+needs=dict(zip(("safe","near","contact"), map(int,sys.argv[2:5])))
+caps=dict(zip(("safe","near","contact"), map(int,sys.argv[5:8])))
 d=json.load(open(p,encoding="utf-8"))
 short=[]
 for r in ("safe","near","contact"):
-    n=int(d["regimes"][r]["num_selected"])
+    n=int(d["regimes"][r]["num_selected"]); need=needs[r]
     if n < need:
         short.append(f"{r}: selected={n} required={need} max_tier={caps[r]}")
 if short:
@@ -174,12 +226,40 @@ SELECTION_ROOT="$OUT/selection_candidates" OUT="$OUT/selective_traces" bash scri
 # regimes add a roadgraph lane-realism gate when lane evidence is available.
 # Near-Contact prioritizes broad external collision/low-margin consensus; Contact
 # requires sustained separation plus a controlled lane-plausible recovery.
-python tools/finalize_regime_visualization_selection.py \
-  --candidate-selection-root "$OUT/selection_candidates" \
-  --trace-root "$OUT/selective_traces" \
-  --output-root "$OUT/selection" \
-  --num-scenes "$NUM_SCENES" \
-  --safe-min-clip-s "$FALLBACK_MIN_VIDEO_DURATION_S" \
+FINALIZE_ARGS=(
+  --candidate-selection-root "$OUT/selection_candidates"
+  --trace-root "$OUT/selective_traces"
+  --output-root "$OUT/selection"
+  --num-scenes "$NUM_SCENES"
+  --safe-num-scenes "$SAFE_FINAL_NUM_SCENES"
+  --near-num-scenes "$NEAR_FINAL_NUM_SCENES"
+  --contact-num-scenes "$CONTACT_FINAL_NUM_SCENES"
+  --safe-min-clip-s "$FALLBACK_MIN_VIDEO_DURATION_S"
+  --near-min-external-severe-count "$NEAR_MIN_EXTERNAL_SEVERE_COUNT"
+  --lane-terminal-max-m "$VIS_LANE_TERMINAL_MAX_M"
+  --lane-p90-max-m "$VIS_LANE_P90_MAX_M"
+  --lane-offcenter-threshold-m "$VIS_LANE_OFFCENTER_THRESHOLD_M"
+  --lane-offcenter-fraction-max "$VIS_LANE_OFFCENTER_FRACTION_MAX"
+  --lane-heading-terminal-max-deg "$VIS_LANE_HEADING_TERMINAL_MAX_DEG"
+  --lane-heading-p90-max-deg "$VIS_LANE_HEADING_P90_MAX_DEG"
+  --contact-lane-terminal-max-m "$CONTACT_LANE_TERMINAL_MAX_M"
+  --contact-lane-p90-max-m "$CONTACT_LANE_P90_MAX_M"
+  --contact-lane-offcenter-threshold-m "$CONTACT_LANE_OFFCENTER_THRESHOLD_M"
+  --contact-lane-offcenter-fraction-max "$CONTACT_LANE_OFFCENTER_FRACTION_MAX"
+  --contact-lane-heading-terminal-max-deg "$CONTACT_LANE_HEADING_TERMINAL_MAX_DEG"
+  --contact-lane-heading-p90-max-deg "$CONTACT_LANE_HEADING_P90_MAX_DEG"
+  --contact-lane-recovery-terminal-max-m "$CONTACT_LANE_RECOVERY_TERMINAL_MAX_M"
+  --contact-lane-recovery-p90-max-m "$CONTACT_LANE_RECOVERY_P90_MAX_M"
+  --contact-lane-recovery-offcenter-fraction-max "$CONTACT_LANE_RECOVERY_OFFCENTER_FRACTION_MAX"
+  --contact-lane-peak-improvement-min-m "$CONTACT_LANE_PEAK_IMPROVEMENT_MIN_M"
+  --contact-lane-recent-recovery-min-m "$CONTACT_LANE_RECENT_RECOVERY_MIN_M"
+  --contact-separation-clearance-m "$CONTACT_SEPARATION_CLEARANCE_M"
+  --contact-separation-hold-s "$CONTACT_SEPARATION_HOLD_S"
+)
+if [[ "${PRESERVE_ACCEPTED_EXISTING_SELECTION,,}" == "true" || "$PRESERVE_ACCEPTED_EXISTING_SELECTION" == "1" ]]; then
+  FINALIZE_ARGS+=(--prefer-existing-selection)
+fi
+python tools/finalize_regime_visualization_selection.py "${FINALIZE_ARGS[@]}" \
   | tee "$OUT/logs/03_trace_aware_selection.log"
 
 # Candidate journals intentionally contain extra targets. Validate the final
@@ -198,6 +278,8 @@ python tools/check_selected_trace_contract.py \
 # PNG/PDF/MP4 content is guaranteed to match the current selection artifact.
 TRACE_ROOT="$OUT/selective_traces" SELECTION_ROOT="$OUT/selection" OUT="$OUT/paper_figures" FORCE_RENDER=true bash scripts/render_regime_paper_figures.sh 2>&1 | tee "$OUT/logs/05_paper_figures.log"
 TRACE_ROOT="$OUT/selective_traces" SELECTION_ROOT="$OUT/selection" OUT="$OUT/videos" FORMAT="$VIDEO_FORMAT" FORCE_RENDER=true bash scripts/render_regime_videos.sh 2>&1 | tee "$OUT/logs/06_videos.log"
-python tools/audit_regime_visualization_outputs.py --root "$OUT" --expected-scenes "$NUM_SCENES" | tee "$OUT/logs/07_output_audit.log"
+python tools/audit_regime_visualization_outputs.py --root "$OUT" --expected-scenes "$NUM_SCENES" \
+  --expected-safe-scenes "$SAFE_FINAL_NUM_SCENES" --expected-near-scenes "$NEAR_FINAL_NUM_SCENES" \
+  --expected-contact-scenes "$CONTACT_FINAL_NUM_SCENES" | tee "$OUT/logs/07_output_audit.log"
 printf 'Paper figures complete: %s\n' "$OUT/paper_figures/PAPER_FIGURE_INDEX.json"
 printf 'Visualization complete: %s\n' "$OUT/videos/REGIME_VIDEO_INDEX.json"

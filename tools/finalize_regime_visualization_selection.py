@@ -28,6 +28,7 @@ import argparse
 import json
 import math
 import statistics
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -307,6 +308,23 @@ def _lane_realism(
     p90_heading = _percentile(heading_errors_deg, 0.90)
     offcenter_fraction = offcenter_count / max(evidence_frames, 1)
     misaligned_fraction = misaligned_count / max(moving_heading_frames, 1) if moving_heading_frames else 0.0
+    first_distance = distances[0] if distances else None
+    peak_distance = max(distances) if distances else None
+    peak_to_terminal_improvement = (
+        float(peak_distance - terminal_distance)
+        if peak_distance is not None and terminal_distance is not None else None
+    )
+    # A short-horizon post-contact clip can end before full recentering.  Track
+    # whether the final second is nevertheless moving back toward the lane.
+    tail_steps = max(1, int(round(1.0 / max(dt_s, 1.0e-6))))
+    tail = distances[-tail_steps:] if distances else []
+    prev = distances[-2 * tail_steps : -tail_steps] if len(distances) > tail_steps else []
+    last_1s_mean = float(statistics.mean(tail)) if tail else None
+    prev_1s_mean = float(statistics.mean(prev)) if prev else None
+    recent_recovery_delta = (
+        float(prev_1s_mean - last_1s_mean)
+        if prev_1s_mean is not None and last_1s_mean is not None else None
+    )
 
     reasons: list[str] = []
     if terminal_distance is not None and terminal_distance > terminal_max_m:
@@ -330,7 +348,12 @@ def _lane_realism(
         "lane_center_distance_median_m": float(statistics.median(distances)) if distances else None,
         "lane_center_distance_p90_m": p90_dist,
         "lane_center_distance_max_m": max(distances) if distances else None,
+        "lane_center_distance_first_m": first_distance,
         "lane_center_distance_terminal_m": terminal_distance,
+        "lane_center_distance_peak_to_terminal_improvement_m": peak_to_terminal_improvement,
+        "lane_center_distance_prev_1s_mean_m": prev_1s_mean,
+        "lane_center_distance_last_1s_mean_m": last_1s_mean,
+        "lane_center_distance_recent_recovery_delta_m": recent_recovery_delta,
         "offcenter_threshold_m": offcenter_threshold_m,
         "offcenter_fraction": offcenter_fraction,
         "lane_heading_error_p90_deg": p90_heading,
@@ -495,13 +518,68 @@ def _sustained_separation(
     }
 
 
+def _contact_lane_recovery_contract(
+    lane: dict[str, Any], *, terminal_max_m: float, p90_max_m: float,
+    offcenter_fraction_max: float, peak_to_terminal_improvement_min_m: float,
+    recent_recovery_delta_min_m: float,
+) -> dict[str, Any]:
+    """Contact-only lane gate with a convergence-aware short-horizon fallback.
+
+    Strict lane realism always passes.  Otherwise the fallback is allowed only
+    for distance-type misses: the vehicle must remain under explicit hard
+    distance/fraction caps, must not have heading-misalignment failures, and
+    must show measurable convergence back toward a vehicle lane.
+    """
+    if not lane.get("evidence_available"):
+        return {"accepted": True, "mode": "lane_evidence_unavailable", "reason": "lane_evidence_unavailable"}
+    if lane.get("accepted", True):
+        return {"accepted": True, "mode": "strict", "reason": "strict_lane_realism"}
+    raw_reason = str(lane.get("reason") or "")
+    if "lane_misalignment" in raw_reason:
+        return {"accepted": False, "mode": "reject", "reason": raw_reason}
+    terminal = lane.get("lane_center_distance_terminal_m")
+    p90 = lane.get("lane_center_distance_p90_m")
+    off_frac = lane.get("offcenter_fraction")
+    peak_gain = lane.get("lane_center_distance_peak_to_terminal_improvement_m")
+    recent_gain = lane.get("lane_center_distance_recent_recovery_delta_m")
+    within_caps = (
+        terminal is not None and float(terminal) <= float(terminal_max_m)
+        and p90 is not None and float(p90) <= float(p90_max_m)
+        and off_frac is not None and float(off_frac) <= float(offcenter_fraction_max)
+    )
+    converging = (
+        (peak_gain is not None and float(peak_gain) >= float(peak_to_terminal_improvement_min_m))
+        or (recent_gain is not None and float(recent_gain) >= float(recent_recovery_delta_min_m))
+    )
+    accepted = bool(within_caps and converging)
+    return {
+        "accepted": accepted,
+        "mode": "converging_fallback" if accepted else "reject",
+        "reason": "short_horizon_converging_to_lane" if accepted else raw_reason,
+        "terminal_max_m": float(terminal_max_m),
+        "p90_max_m": float(p90_max_m),
+        "offcenter_fraction_max": float(offcenter_fraction_max),
+        "peak_to_terminal_improvement_min_m": float(peak_to_terminal_improvement_min_m),
+        "recent_recovery_delta_min_m": float(recent_recovery_delta_min_m),
+        "within_caps": bool(within_caps),
+        "converging": bool(converging),
+    }
+
+
 def _contact_method_trace_quality(
     scene: dict[str, Any], clip: float, dt_s: float, *, lane_kwargs: dict[str, Any],
     separation_clearance_m: float, separation_hold_s: float,
+    lane_recovery_kwargs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     tr = list(scene.get("render_trace") or [])
     frames = _visible_frames(tr, clip, dt_s)
     lane = _lane_realism(scene, clip, dt_s, **lane_kwargs)
+    if lane_recovery_kwargs is None:
+        lane_recovery_kwargs = {
+            "terminal_max_m": 6.5, "p90_max_m": 7.0, "offcenter_fraction_max": 0.45,
+            "peak_to_terminal_improvement_min_m": 1.0, "recent_recovery_delta_min_m": 0.35,
+        }
+    lane_recovery = _contact_lane_recovery_contract(lane, **lane_recovery_kwargs)
     sep = _sustained_separation(
         tr, clip, dt_s, clearance_min_m=separation_clearance_m, hold_s=separation_hold_s
     )
@@ -520,7 +598,7 @@ def _contact_method_trace_quality(
         failure_reasons.append("no_sustained_separation")
     if sep["recontact_after_separation"]:
         failure_reasons.append("recontact_after_separation")
-    if lane.get("evidence_available") and not lane.get("accepted", True):
+    if not lane_recovery.get("accepted", True):
         failure_reasons.append("lane_unrealistic_recovery")
     return {
         "offroad_visible": offroad,
@@ -530,6 +608,7 @@ def _contact_method_trace_quality(
         "terminal_speed_mps": terminal_speed,
         "sustained_separation": sep,
         "lane_realism": lane,
+        "lane_recovery_contract": lane_recovery,
         "controlled_recovery": not failure_reasons,
         "recovery_failure": bool(failure_reasons),
         "recovery_failure_reasons": failure_reasons,
@@ -539,18 +618,19 @@ def _contact_method_trace_quality(
 def _contact_quality(
     item: dict[str, Any], traces: dict[str, dict[str, dict[str, Any]]], *, dt_s: float,
     lane_kwargs: dict[str, Any], separation_clearance_m: float, separation_hold_s: float,
+    lane_recovery_kwargs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     key = str(item["target_key"])
     clip = float(item.get("clip_duration_s") or 0.0)
     oc = _contact_method_trace_quality(
-        traces["ocrap"][key], clip, dt_s, lane_kwargs=lane_kwargs,
+        traces["ocrap"][key], clip, dt_s, lane_kwargs=lane_kwargs, lane_recovery_kwargs=lane_recovery_kwargs,
         separation_clearance_m=separation_clearance_m, separation_hold_s=separation_hold_s,
     )
     external: dict[str, dict[str, Any]] = {}
     failures: list[str] = []
     for method in METHODS["contact"]:
         q = _contact_method_trace_quality(
-            traces[method][key], clip, dt_s, lane_kwargs=lane_kwargs,
+            traces[method][key], clip, dt_s, lane_kwargs=lane_kwargs, lane_recovery_kwargs=lane_recovery_kwargs,
             separation_clearance_m=separation_clearance_m, separation_hold_s=separation_hold_s,
         )
         external[method] = q
@@ -584,6 +664,65 @@ def _contact_quality(
     }
 
 
+def _gate_rejection_reasons(regime: str, quality: dict[str, Any], *, near_min_external_severe_count: int) -> list[str]:
+    """Return concise, reviewer-readable reasons for excluding one candidate."""
+    reasons: list[str] = []
+    if regime == "safe":
+        if not quality.get("accepted", False):
+            gate = str(quality.get("safe_tail_gate") or "")
+            if gate.startswith("reject_"):
+                reasons.append(gate)
+            lane = quality.get("ocrap_lane_realism") or {}
+            if lane.get("evidence_available") and not lane.get("accepted", True):
+                reasons.extend(f"lane:{x}" for x in str(lane.get("reason") or "lane_unrealistic").split("+") if x)
+    elif regime == "near":
+        if quality.get("ocrap_overlap_visible"):
+            reasons.append("ocrap_visible_overlap")
+        if quality.get("ocrap_offroad_visible"):
+            reasons.append("ocrap_visible_offroad")
+        lane = quality.get("ocrap_lane_realism") or {}
+        if lane.get("evidence_available") and not lane.get("accepted", True):
+            reasons.extend(f"lane:{x}" for x in str(lane.get("reason") or "lane_unrealistic").split("+") if x)
+        if int(quality.get("external_severe_count") or 0) < int(near_min_external_severe_count):
+            reasons.append("insufficient_external_failure_consensus")
+    else:
+        recovery = quality.get("ocrap_trace_recovery") or {}
+        reasons.extend(str(x) for x in recovery.get("recovery_failure_reasons") or [])
+        lane = recovery.get("lane_realism") or {}
+        if "lane_unrealistic_recovery" in reasons and lane.get("evidence_available"):
+            reasons.extend(f"lane:{x}" for x in str(lane.get("reason") or "lane_unrealistic").split("+") if x)
+    # Preserve order while avoiding duplicate umbrella/detail labels.
+    out: list[str] = []
+    for reason in reasons:
+        if reason not in out:
+            out.append(reason)
+    return out
+
+
+def _write_selection_audit(
+    path: Path, *, regime: str, rows: list[dict[str, Any]], requested: int,
+    candidate_pool_size: int, thresholds: dict[str, Any], preferred_keys: list[str],
+) -> dict[str, Any]:
+    accepted = [r for r in rows if r.get("accepted")]
+    rejected = [r for r in rows if not r.get("accepted")]
+    counts = Counter(reason for row in rejected for reason in row.get("rejection_reasons", []))
+    doc = {
+        "event": "trace_aware_visualization_selection_audit_v2",
+        "regime": regime,
+        "requested_num_scenes": int(requested),
+        "candidate_pool_size": int(candidate_pool_size),
+        "accepted_count": len(accepted),
+        "rejected_count": len(rejected),
+        "enough_for_requested": len(accepted) >= int(requested),
+        "preferred_existing_target_keys": preferred_keys,
+        "rejection_reason_counts": dict(sorted(counts.items())),
+        "thresholds": thresholds,
+        "candidates": rows,
+    }
+    path.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return doc
+
+
 def _copy_final_doc(candidate: dict[str, Any], selected: list[dict[str, Any]], *, candidate_path: Path, regime: str) -> dict[str, Any]:
     doc = dict(candidate)
     doc["event"] = "regime_visualization_scene_selection_trace_final_v2_realism_gated"
@@ -611,6 +750,9 @@ def main() -> int:
     ap.add_argument("--trace-root", type=Path, required=True)
     ap.add_argument("--output-root", type=Path, required=True)
     ap.add_argument("--num-scenes", type=int, default=5)
+    ap.add_argument("--safe-num-scenes", type=int, default=None)
+    ap.add_argument("--near-num-scenes", type=int, default=None)
+    ap.add_argument("--contact-num-scenes", type=int, default=None)
     ap.add_argument("--safe-min-clip-s", type=float, default=4.0)
     ap.add_argument("--safe-tail-margin-s", type=float, default=0.2)
     ap.add_argument("--safe-allow-tail-truncation", action="store_true")
@@ -630,11 +772,41 @@ def main() -> int:
     ap.add_argument("--lane-heading-p90-max-deg", type=float, default=55.0)
     ap.add_argument("--lane-heading-speed-gate-mps", type=float, default=1.0)
     ap.add_argument("--lane-min-evidence-fraction", type=float, default=0.50)
+    # Post-contact recovery can legitimately use a somewhat wider drivable
+    # corridor than nominal Safe/Near driving.  Keep the publication defaults
+    # identical to the global lane gate, but expose Contact-only overrides so
+    # a reviewer-facing relaxation never silently weakens Safe/Near.
+    ap.add_argument("--contact-lane-terminal-max-m", type=float, default=None)
+    ap.add_argument("--contact-lane-p90-max-m", type=float, default=None)
+    ap.add_argument("--contact-lane-offcenter-threshold-m", type=float, default=None)
+    ap.add_argument("--contact-lane-offcenter-fraction-max", type=float, default=None)
+    ap.add_argument("--contact-lane-heading-terminal-max-deg", type=float, default=None)
+    ap.add_argument("--contact-lane-heading-p90-max-deg", type=float, default=None)
+    ap.add_argument("--contact-lane-recovery-terminal-max-m", type=float, default=6.5)
+    ap.add_argument("--contact-lane-recovery-p90-max-m", type=float, default=7.0)
+    ap.add_argument("--contact-lane-recovery-offcenter-fraction-max", type=float, default=0.45)
+    ap.add_argument("--contact-lane-peak-improvement-min-m", type=float, default=1.0)
+    ap.add_argument("--contact-lane-recent-recovery-min-m", type=float, default=0.35)
     ap.add_argument("--contact-separation-clearance-m", type=float, default=0.50)
     ap.add_argument("--contact-separation-hold-s", type=float, default=0.30)
+    ap.add_argument(
+        "--prefer-existing-selection", action="store_true",
+        help=(
+            "prefer target keys already present in output-root/<regime>_selection.json, "
+            "but only if they still pass every current trace-aware gate; rejected old "
+            "scenes are automatically replaced from the accepted candidate pool"
+        ),
+    )
     args = ap.parse_args()
     if args.num_scenes <= 0:
         raise SystemExit("--num-scenes must be positive")
+    requested_by_regime = {
+        "safe": int(args.safe_num_scenes if args.safe_num_scenes is not None else args.num_scenes),
+        "near": int(args.near_num_scenes if args.near_num_scenes is not None else args.num_scenes),
+        "contact": int(args.contact_num_scenes if args.contact_num_scenes is not None else args.num_scenes),
+    }
+    if any(v <= 0 for v in requested_by_regime.values()):
+        raise SystemExit("per-regime --*-num-scenes values must be positive")
     try:
         lane_types = tuple(int(x.strip()) for x in str(args.lane_center_types).split(",") if x.strip())
     except Exception as exc:
@@ -652,6 +824,25 @@ def main() -> int:
         "heading_speed_gate_mps": float(args.lane_heading_speed_gate_mps),
         "min_evidence_fraction": float(args.lane_min_evidence_fraction),
     }
+    contact_lane_kwargs = dict(lane_kwargs)
+    contact_overrides = {
+        "terminal_max_m": args.contact_lane_terminal_max_m,
+        "p90_max_m": args.contact_lane_p90_max_m,
+        "offcenter_threshold_m": args.contact_lane_offcenter_threshold_m,
+        "offcenter_fraction_max": args.contact_lane_offcenter_fraction_max,
+        "heading_terminal_max_deg": args.contact_lane_heading_terminal_max_deg,
+        "heading_p90_max_deg": args.contact_lane_heading_p90_max_deg,
+    }
+    for name, value in contact_overrides.items():
+        if value is not None:
+            contact_lane_kwargs[name] = float(value)
+    contact_lane_recovery_kwargs = {
+        "terminal_max_m": float(args.contact_lane_recovery_terminal_max_m),
+        "p90_max_m": float(args.contact_lane_recovery_p90_max_m),
+        "offcenter_fraction_max": float(args.contact_lane_recovery_offcenter_fraction_max),
+        "peak_to_terminal_improvement_min_m": float(args.contact_lane_peak_improvement_min_m),
+        "recent_recovery_delta_min_m": float(args.contact_lane_recent_recovery_min_m),
+    }
 
     args.output_root.mkdir(parents=True, exist_ok=True)
     summary: dict[str, Any] = {"event": "trace_aware_visualization_selection_index_v1", "regimes": {}}
@@ -660,9 +851,20 @@ def main() -> int:
         cpath = args.candidate_selection_root / f"{regime}_selection.json"
         candidate = json.loads(cpath.read_text(encoding="utf-8"))
         items = list(candidate.get("selected") or [])
+        need = int(requested_by_regime[regime])
         traces = _load_traces(args.trace_root, regime)
         dt = float(candidate.get("metric_dt_s", 0.1) or 0.1)
         annotated: list[dict[str, Any]] = []
+        audit_rows: list[dict[str, Any]] = []
+        preferred_rank: dict[str, int] = {}
+        existing_selection_path = args.output_root / f"{regime}_selection.json"
+        if args.prefer_existing_selection and existing_selection_path.is_file():
+            try:
+                previous = json.loads(existing_selection_path.read_text(encoding="utf-8"))
+                for i, row in enumerate(previous.get("selected") or [], 1):
+                    preferred_rank[str(row.get("target_key") or "")] = int(row.get("category_rank") or i)
+            except Exception:
+                preferred_rank = {}
         for original_order, item in enumerate(items):
             key = str(item["target_key"])
             missing = [m for m, rows in traces.items() if key not in rows]
@@ -680,10 +882,20 @@ def main() -> int:
                     lane_kwargs=lane_kwargs,
                 )
                 row["visualization_trace_quality"] = q
-                if q["accepted"]:
+                accepted = bool(q["accepted"])
+                if accepted:
                     row["clip_duration_s"] = float(q["effective_clip_duration_s"])
                     row["clip_duration_adjusted_after_trace"] = not bool(q["full_requested_clip_clean"])
-                    annotated.append(row | {"_original_order": original_order})
+                    annotated.append(row | {"_original_order": original_order, "_preferred_eligible": True})
+                audit_rows.append({
+                    "target_key": key, "candidate_rank": item.get("category_rank"),
+                    "accepted": accepted,
+                    "preferred_existing": key in preferred_rank,
+                    "rejection_reasons": _gate_rejection_reasons(
+                        "safe", q, near_min_external_severe_count=args.near_min_external_severe_count
+                    ),
+                    "quality": q,
+                })
             elif regime == "near":
                 q = _near_quality(
                     row,
@@ -695,7 +907,8 @@ def main() -> int:
                     lane_kwargs=lane_kwargs,
                 )
                 row["visualization_trace_quality"] = q
-                if q["ocrap_realistic_safe"] and int(q["external_severe_count"]) >= int(args.near_min_external_severe_count):
+                accepted = bool(q["ocrap_realistic_safe"]) and int(q["external_severe_count"]) >= int(args.near_min_external_severe_count)
+                if accepted:
                     trace_primary = str(q.get("trace_primary_external_method") or "")
                     if trace_primary:
                         row["primary_external_method"] = trace_primary
@@ -703,18 +916,43 @@ def main() -> int:
                             "hardest paired external among methods that become trace-severe on this scene; "
                             "scene selection remains based on all-baseline failure consensus"
                         )
-                    annotated.append(row | {"_original_order": original_order})
+                    annotated.append(row | {"_original_order": original_order, "_preferred_eligible": True})
+                audit_rows.append({
+                    "target_key": key, "candidate_rank": item.get("category_rank"),
+                    "accepted": accepted,
+                    "preferred_existing": key in preferred_rank,
+                    "rejection_reasons": _gate_rejection_reasons(
+                        "near", q, near_min_external_severe_count=args.near_min_external_severe_count
+                    ),
+                    "quality": q,
+                })
             else:
                 q = _contact_quality(
                     row,
                     traces,
                     dt_s=dt,
-                    lane_kwargs=lane_kwargs,
+                    lane_kwargs=contact_lane_kwargs,
+                    lane_recovery_kwargs=contact_lane_recovery_kwargs,
                     separation_clearance_m=args.contact_separation_clearance_m,
                     separation_hold_s=args.contact_separation_hold_s,
                 )
                 row["visualization_trace_quality"] = q
-                if q["ocrap_controlled_recovery"]:
+                accepted = bool(q["ocrap_controlled_recovery"])
+                preferred_eligible = accepted
+                # If Contact-only lane thresholds are relaxed, do not let an
+                # old scene become sticky merely because the relaxation admits
+                # it. Historical keepers must still satisfy the original strict
+                # global lane contract; relaxed-only scenes compete as fresh
+                # backfill candidates.
+                if accepted and key in preferred_rank and contact_lane_kwargs != lane_kwargs:
+                    strict_q = _contact_quality(
+                        row, traces, dt_s=dt, lane_kwargs=lane_kwargs,
+                        lane_recovery_kwargs=contact_lane_recovery_kwargs,
+                        separation_clearance_m=args.contact_separation_clearance_m,
+                        separation_hold_s=args.contact_separation_hold_s,
+                    )
+                    preferred_eligible = bool(strict_q["ocrap_controlled_recovery"])
+                if accepted:
                     trace_primary = str(q.get("trace_primary_external_method") or "")
                     if trace_primary:
                         row["primary_external_method"] = trace_primary
@@ -722,7 +960,17 @@ def main() -> int:
                             "hardest paired external among methods that fail the trace-level controlled-recovery gate; "
                             "OC-RAP must retain lane realism and sustained separation"
                         )
-                    annotated.append(row | {"_original_order": original_order})
+                    annotated.append(row | {"_original_order": original_order, "_preferred_eligible": preferred_eligible})
+                audit_rows.append({
+                    "target_key": key, "candidate_rank": item.get("category_rank"),
+                    "accepted": accepted,
+                    "preferred_existing": key in preferred_rank,
+                    "preferred_existing_strict_gate": bool(preferred_eligible) if key in preferred_rank else False,
+                    "rejection_reasons": _gate_rejection_reasons(
+                        "contact", q, near_min_external_severe_count=args.near_min_external_severe_count
+                    ),
+                    "quality": q,
+                })
 
         if regime == "safe":
             # Full-clip cleanliness is publication-facing default. Among clean
@@ -772,6 +1020,35 @@ def main() -> int:
                 str(r["target_key"]),
             ))
 
+        if preferred_rank:
+            # Preserve only previous scenes that STILL satisfy all current
+            # reviewer-facing gates. Rejected historical scenes never bypass
+            # the new realism contract; accepted newcomers fill the vacated slots.
+            accepted_by_key = {str(r["target_key"]): r for r in annotated}
+            preferred = [
+                accepted_by_key[k]
+                for k, _rank in sorted(preferred_rank.items(), key=lambda kv: kv[1])
+                if k in accepted_by_key and bool(accepted_by_key[k].get("_preferred_eligible", True))
+            ]
+            preferred_keys = {str(r["target_key"]) for r in preferred}
+            annotated = preferred + [r for r in annotated if str(r["target_key"]) not in preferred_keys]
+
+        audit_thresholds = {
+            "near_min_external_severe_count": int(args.near_min_external_severe_count),
+            "global_lane": lane_kwargs,
+            "contact_lane": contact_lane_kwargs,
+            "contact_lane_short_horizon_recovery": contact_lane_recovery_kwargs,
+            "contact_separation_clearance_m": float(args.contact_separation_clearance_m),
+            "contact_separation_hold_s": float(args.contact_separation_hold_s),
+            "safe_allow_tail_truncation": bool(args.safe_allow_tail_truncation),
+        }
+        audit_doc = _write_selection_audit(
+            args.output_root / f"{regime}_selection_audit.json",
+            regime=regime, rows=audit_rows, requested=need,
+            candidate_pool_size=len(items), thresholds=audit_thresholds,
+            preferred_keys=[k for k, _ in sorted(preferred_rank.items(), key=lambda kv: kv[1])],
+        )
+
         # Preserve scenario diversity after trace-aware re-ranking.
         chosen: list[dict[str, Any]] = []
         used_scenes: set[str] = set()
@@ -781,17 +1058,22 @@ def main() -> int:
                 continue
             chosen.append(row)
             used_scenes.add(sid)
-            if len(chosen) >= args.num_scenes:
+            if len(chosen) >= need:
                 break
-        if len(chosen) < args.num_scenes:
-            knob = "CONTACT_VIS_CANDIDATE_MULTIPLIER" if regime == "contact" else "VIS_CANDIDATE_MULTIPLIER"
+        if len(chosen) < need:
+            reason_counts = audit_doc.get("rejection_reason_counts") or {}
+            audit_path = args.output_root / f"{regime}_selection_audit.json"
             raise SystemExit(
-                f"{regime}: trace-aware gate retained only {len(chosen)} distinct scenes from {len(items)} candidates; "
-                f"increase {knob} or relax an explicit, documented visualization threshold."
+                f"{regime}: trace-aware gate retained only {len(chosen)} distinct scenes from {len(items)} candidates; requested={need}. "
+                f"Audit written to {audit_path}. Rejection counts={reason_counts}. "
+                "Increase the candidate multiplier only if Stage 1 can actually supply additional locked candidates; "
+                "otherwise relax only a documented realism threshold whose rejected margins are small, or lower the "
+                "requested final rank count. Never relax visible off-road, terminal-overlap, or re-contact gates merely "
+                "to fill a quota."
             )
         final: list[dict[str, Any]] = []
         for rank, row in enumerate(chosen, 1):
-            row = {k: v for k, v in row.items() if k != "_original_order"}
+            row = {k: v for k, v in row.items() if k not in {"_original_order", "_preferred_eligible"}}
             row["category_rank"] = rank
             final.append(row)
         doc = _copy_final_doc(candidate, final, candidate_path=cpath, regime=regime)
@@ -815,7 +1097,7 @@ def main() -> int:
 
     index = args.output_root / "SELECTION_INDEX.json"
     index.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({"event": summary["event"], "index": str(index), "num_scenes_per_regime": args.num_scenes}))
+    print(json.dumps({"event": summary["event"], "index": str(index), "num_scenes_per_regime": requested_by_regime}))
     return 0
 
 

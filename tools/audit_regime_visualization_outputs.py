@@ -41,7 +41,15 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Audit the staged regime-visualization pipeline and explain the first incomplete stage.")
     ap.add_argument("--root", type=Path, required=True, help="regime_visualization_v48_124_final directory")
     ap.add_argument("--expected-scenes", type=int, default=3)
+    ap.add_argument("--expected-safe-scenes", type=int, default=None)
+    ap.add_argument("--expected-near-scenes", type=int, default=None)
+    ap.add_argument("--expected-contact-scenes", type=int, default=None)
     args = ap.parse_args()
+    expected_by_regime = {
+        "safe": int(args.expected_safe_scenes if args.expected_safe_scenes is not None else args.expected_scenes),
+        "near": int(args.expected_near_scenes if args.expected_near_scenes is not None else args.expected_scenes),
+        "contact": int(args.expected_contact_scenes if args.expected_contact_scenes is not None else args.expected_scenes),
+    }
     root = args.root
     errors: list[str] = []
     stages: dict[str, object] = {}
@@ -88,8 +96,8 @@ def main() -> int:
             "fallback_candidates": d.get("num_fallback_duration_candidates"),
             "realism_gate_failures": realism_failures,
         }
-        if n < args.expected_scenes:
-            errors.append(f"{regime} selection has {n} scenes, expected {args.expected_scenes}")
+        if n < expected_by_regime[regime]:
+            errors.append(f"{regime} selection has {n} scenes, expected {expected_by_regime[regime]}")
         if realism_failures:
             errors.append(f"{regime} selected scenes failed realism gate: " + ", ".join(realism_failures))
     stages["selection"] = selections
@@ -128,7 +136,7 @@ def main() -> int:
         no_trace = []
         for r, methods in trace_inventory.items():
             for m, x in methods.items():
-                if not x.get("exists") or int(x.get("render_trace_rows") or 0) < args.expected_scenes:
+                if not x.get("exists") or int(x.get("render_trace_rows") or 0) < expected_by_regime[r]:
                     no_trace.append(f"{r}/{m}")
         if no_trace:
             errors.append("missing/incomplete render traces: " + ", ".join(no_trace))

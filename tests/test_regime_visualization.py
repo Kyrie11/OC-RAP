@@ -357,3 +357,34 @@ def test_trace_primary_prefers_hardest_method_that_actually_fails():
         }
     }
     assert finalizer._hardest_among(item, ["failing_hard", "failing_easy"]) == "failing_hard"
+
+
+def test_contact_short_horizon_lane_convergence_fallback_is_bounded():
+    key = "test_contact:recovering:t10"
+    # This trajectory temporarily moves farther than the strict nominal lane
+    # envelope, then clearly converges back during the short 1 s test horizon.
+    recovering = _render_scene([0.3, 1.0, 2.0, 3.0, 4.0, 5.5, 6.2, 5.4, 4.8, 4.4], clearance=1.0, overlap_first=True)
+    lane = finalizer._lane_realism(recovering, 1.0, 0.1, **_lane_kwargs())
+    assert lane["evidence_available"] and not lane["accepted"]
+    contract = finalizer._contact_lane_recovery_contract(
+        lane,
+        terminal_max_m=6.5,
+        p90_max_m=7.0,
+        offcenter_fraction_max=0.45,
+        peak_to_terminal_improvement_min_m=1.0,
+        recent_recovery_delta_min_m=0.35,
+    )
+    assert contract["accepted"]
+    assert contract["mode"] == "converging_fallback"
+
+    escaped = _render_scene([0.3, 1.0, 3.0, 6.0, 8.0, 10.0, 11.0, 12.0, 12.0, 12.0], clearance=3.0, overlap_first=True)
+    escaped_lane = finalizer._lane_realism(escaped, 1.0, 0.1, **_lane_kwargs())
+    escaped_contract = finalizer._contact_lane_recovery_contract(
+        escaped_lane,
+        terminal_max_m=6.5,
+        p90_max_m=7.0,
+        offcenter_fraction_max=0.45,
+        peak_to_terminal_improvement_min_m=1.0,
+        recent_recovery_delta_min_m=0.35,
+    )
+    assert not escaped_contract["accepted"]
