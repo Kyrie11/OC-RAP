@@ -41,11 +41,15 @@ CONTACT_FALLBACK_MIN_VIDEO_DURATION_S="${CONTACT_FALLBACK_MIN_VIDEO_DURATION_S:-
 # scenes without changing the locked quantitative population.
 VIS_CANDIDATE_MULTIPLIER="${VIS_CANDIDATE_MULTIPLIER:-2}"
 [[ "$VIS_CANDIDATE_MULTIPLIER" =~ ^[0-9]+$ && "$VIS_CANDIDATE_MULTIPLIER" -ge 1 ]] || { echo 'VIS_CANDIDATE_MULTIPLIER must be a positive integer' >&2; exit 2; }
+CONTACT_VIS_CANDIDATE_MULTIPLIER="${CONTACT_VIS_CANDIDATE_MULTIPLIER:-3}"
+[[ "$CONTACT_VIS_CANDIDATE_MULTIPLIER" =~ ^[0-9]+$ && "$CONTACT_VIS_CANDIDATE_MULTIPLIER" -ge 1 ]] || { echo 'CONTACT_VIS_CANDIDATE_MULTIPLIER must be a positive integer' >&2; exit 2; }
 SAFE_CANDIDATE_SCENES=$((NUM_SCENES * VIS_CANDIDATE_MULTIPLIER))
 NEAR_CANDIDATE_SCENES=$((NUM_SCENES * VIS_CANDIDATE_MULTIPLIER))
-# Contact has only eight locked exact-a0 anchors and the metric selector is
-# already contact-specific; do not force a larger candidate request here.
-CONTACT_CANDIDATE_SCENES="$NUM_SCENES"
+# Contact has only eight locked exact-a0 anchors. Request substantially more
+# than the final rank count (ALLOW_FEWER_SCENES downstream safely returns all
+# eligible anchors) so the trace-aware realism gate can replace a metric-good
+# but visually implausible escape trajectory instead of being forced to keep it.
+CONTACT_CANDIDATE_SCENES=$((NUM_SCENES * CONTACT_VIS_CANDIDATE_MULTIPLIER))
 while (($#)); do case "$1" in
  --ocrap-results) OCRAP_RESULTS_ROOT="$2";shift 2;; --model-run) OCRAP_MODEL_RUN="$2";shift 2;; --external-root) EXTERNAL_RESULTS_ROOT="$2";shift 2;;
  --target-lock-root) TARGET_LOCK_ROOT="$2";shift 2;; --variant) MODEL_VARIANT="$2";shift 2;; --out) OUT="$2";shift 2;; --num-scenes) NUM_SCENES="$2";shift 2;; --gpus) CUDA_DEVICES="$2";shift 2;;
@@ -80,7 +84,7 @@ fi
 export OCRAP_ROOT="${OCRAP_ROOT:-/data0/senzeyu2/dataset/OCRAP}" WOMD_ROOT="${WOMD_ROOT:-/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example}"
 export SAFE_EXTERNAL_ROOT="$EXTERNAL_RESULTS_ROOT/safe" NEAR_EXTERNAL_ROOT="$EXTERNAL_RESULTS_ROOT/near" CONTACT_EXTERNAL_ROOT="$EXTERNAL_RESULTS_ROOT/contact"
 export OCRAP_RESULTS_ROOT OCRAP_MODEL_RUN TARGET_LOCK_ROOT MODEL_VARIANT OUT NUM_SCENES CUDA_DEVICES FPS TRACE_MAX_STEPS CAMERA_MODE VIEW_RADIUS_M VIDEO_FORMAT
-export VIS_CANDIDATE_MULTIPLIER SAFE_CANDIDATE_SCENES NEAR_CANDIDATE_SCENES CONTACT_CANDIDATE_SCENES
+export VIS_CANDIDATE_MULTIPLIER CONTACT_VIS_CANDIDATE_MULTIPLIER SAFE_CANDIDATE_SCENES NEAR_CANDIDATE_SCENES CONTACT_CANDIDATE_SCENES
 export MAX_SELECTED_TIER_RANK="${MAX_SELECTED_TIER_RANK:-1}" JOBS_PER_GPU="${JOBS_PER_GPU:-3}" MAX_PARALLEL="${MAX_PARALLEL:-6}" USE_DYNAMIC_SCHEDULER
 export SAFE_MAX_SELECTED_TIER_RANK="${SAFE_MAX_SELECTED_TIER_RANK:-$MAX_SELECTED_TIER_RANK}"
 export NEAR_MAX_SELECTED_TIER_RANK="${NEAR_MAX_SELECTED_TIER_RANK:-$MAX_SELECTED_TIER_RANK}"
@@ -165,11 +169,11 @@ PY
 # Stage 2: rerun full render traces for only that candidate pool.
 SELECTION_ROOT="$OUT/selection_candidates" OUT="$OUT/selective_traces" bash scripts/generate_selected_regime_traces.sh 2>&1 | tee "$OUT/logs/02_selective_traces.log"
 
-# Stage 3: trace-aware finalization. Safe scenes with early visible OC-RAP
-# off-road/overlap are rejected; late tail violations can only shorten the clip
-# down to the configured fallback. Near-Contact prioritizes broad external
-# collision/low-margin consensus and denser local traffic while keeping OC-RAP
-# visibly collision/off-road free.
+# Stage 3: trace-aware finalization. Publication-facing Safe rejects any visible
+# OC-RAP overlap/off-road by default (no hiding a bad tail by cropping). All
+# regimes add a roadgraph lane-realism gate when lane evidence is available.
+# Near-Contact prioritizes broad external collision/low-margin consensus; Contact
+# requires sustained separation plus a controlled lane-plausible recovery.
 python tools/finalize_regime_visualization_selection.py \
   --candidate-selection-root "$OUT/selection_candidates" \
   --trace-root "$OUT/selective_traces" \
@@ -188,8 +192,12 @@ python tools/check_selected_trace_contract.py \
 
 # Static figures are rendered before videos so an encoder-specific failure can
 # never suppress the paper-ready PNG/PDF outputs once the trace contract passes.
-TRACE_ROOT="$OUT/selective_traces" SELECTION_ROOT="$OUT/selection" OUT="$OUT/paper_figures" bash scripts/render_regime_paper_figures.sh 2>&1 | tee "$OUT/logs/05_paper_figures.log"
-TRACE_ROOT="$OUT/selective_traces" SELECTION_ROOT="$OUT/selection" OUT="$OUT/videos" FORMAT="$VIDEO_FORMAT" bash scripts/render_regime_videos.sh 2>&1 | tee "$OUT/logs/06_videos.log"
+# Final selection/comparator identity can change even when the underlying trace
+# journals are reusable.  Therefore never reuse an old rank_XX media file just
+# because its container is valid: force only the cheap rendering stages so the
+# PNG/PDF/MP4 content is guaranteed to match the current selection artifact.
+TRACE_ROOT="$OUT/selective_traces" SELECTION_ROOT="$OUT/selection" OUT="$OUT/paper_figures" FORCE_RENDER=true bash scripts/render_regime_paper_figures.sh 2>&1 | tee "$OUT/logs/05_paper_figures.log"
+TRACE_ROOT="$OUT/selective_traces" SELECTION_ROOT="$OUT/selection" OUT="$OUT/videos" FORMAT="$VIDEO_FORMAT" FORCE_RENDER=true bash scripts/render_regime_videos.sh 2>&1 | tee "$OUT/logs/06_videos.log"
 python tools/audit_regime_visualization_outputs.py --root "$OUT" --expected-scenes "$NUM_SCENES" | tee "$OUT/logs/07_output_audit.log"
 printf 'Paper figures complete: %s\n' "$OUT/paper_figures/PAPER_FIGURE_INDEX.json"
 printf 'Visualization complete: %s\n' "$OUT/videos/REGIME_VIDEO_INDEX.json"

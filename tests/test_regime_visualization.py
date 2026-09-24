@@ -12,6 +12,7 @@ if str(TOOLS) not in sys.path:
 
 import render_regime_visualization_videos as renderer
 import select_regime_visualization_scenes as selector
+import finalize_regime_visualization_selection as finalizer
 
 
 def _args():
@@ -281,3 +282,78 @@ def test_safe_trace_alignment_still_uses_target_time():
     item = {"target_key": "test_safe:scene:t10", "target_time_index": 10}
     out = renderer._validate_trace_time_alignment(traces, item)
     assert out["expected_start_field"] == "target_time_index"
+
+
+def _render_scene(xs, *, lane_x=0.0, clearance=1.0, overlap_first=False):
+    trace = []
+    for i, x in enumerate(xs):
+        trace.append({
+            "metrics": {
+                "overlap": 1.0 if overlap_first and i == 0 else 0.0,
+                "offroad": 0.0,
+                "min_clearance_m": float(clearance),
+                "ego_speed_mps": 4.0,
+            },
+            "agents": [{"is_sdc": True, "x": float(x), "y": float(i), "yaw": 1.57079632679}],
+        })
+    return {
+        "render_trace": trace,
+        "render_context": {
+            "roadgraph_polylines": [
+                {"id": 1, "type": 2, "xy": [[lane_x, -10.0], [lane_x, 20.0]]},
+                # A road edge must not be accepted as a vehicle lane centerline.
+                {"id": 2, "type": 15, "xy": [[12.0, -10.0], [12.0, 20.0]]},
+            ]
+        },
+    }
+
+
+def _lane_kwargs():
+    return {
+        "lane_types": (1, 2),
+        "terminal_max_m": 5.0,
+        "p90_max_m": 5.5,
+        "offcenter_threshold_m": 4.5,
+        "offcenter_fraction_max": 0.30,
+        "heading_terminal_max_deg": 50.0,
+        "heading_p90_max_deg": 55.0,
+        "heading_speed_gate_mps": 1.0,
+        "min_evidence_fraction": 0.50,
+    }
+
+
+def test_lane_realism_rejects_clearance_by_leaving_vehicle_lane():
+    good = _render_scene([0.5] * 10)
+    escaped = _render_scene([0.5, 1.0, 3.0, 6.0, 8.0, 10.0, 11.0, 12.0, 12.0, 12.0])
+    q_good = finalizer._lane_realism(good, 1.0, 0.1, **_lane_kwargs())
+    q_bad = finalizer._lane_realism(escaped, 1.0, 0.1, **_lane_kwargs())
+    assert q_good["evidence_available"] and q_good["accepted"]
+    assert q_bad["evidence_available"] and not q_bad["accepted"]
+    assert q_bad["lane_center_distance_terminal_m"] > 5.0
+
+
+def test_contact_quality_requires_controlled_lane_plausible_recovery():
+    key = "test_contact:scene:t10"
+    good_scene = _render_scene([0.3] * 10, clearance=1.0, overlap_first=True)
+    escaped_scene = _render_scene([0.3, 1.0, 3.0, 6.0, 8.0, 10.0, 11.0, 12.0, 12.0, 12.0], clearance=3.0, overlap_first=True)
+    traces = {"ocrap": {key: escaped_scene}}
+    for method in finalizer.METHODS["contact"]:
+        traces[method] = {key: good_scene}
+    item = {"target_key": key, "clip_duration_s": 1.0, "per_baseline": {m: {"relative_score": 0.1} for m in finalizer.METHODS["contact"]}}
+    q = finalizer._contact_quality(
+        item, traces, dt_s=0.1, lane_kwargs=_lane_kwargs(),
+        separation_clearance_m=0.5, separation_hold_s=0.3,
+    )
+    assert not q["ocrap_controlled_recovery"]
+    assert "lane_unrealistic_recovery" in q["ocrap_trace_recovery"]["recovery_failure_reasons"]
+
+
+def test_trace_primary_prefers_hardest_method_that_actually_fails():
+    item = {
+        "per_baseline": {
+            "safe_hard": {"relative_score": 0.01},
+            "failing_hard": {"relative_score": 0.05},
+            "failing_easy": {"relative_score": 0.50},
+        }
+    }
+    assert finalizer._hardest_among(item, ["failing_hard", "failing_easy"]) == "failing_hard"

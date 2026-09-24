@@ -164,6 +164,10 @@ def _short_comparator_role(text: str, regime: str) -> str:
     low = str(text or "").lower()
     if regime == "safe" or "highest per-scene" in low:
         return "Strongest Safe external"
+    if "fail the trace-level" in low or "recovery gate" in low:
+        return "Hardest trace-failing external"
+    if "trace-severe" in low:
+        return "Hardest trace-severe external"
     if "lowest paired" in low or "hardest" in low:
         return "Hardest paired external"
     if "regime-level strongest" in low or "global" in low:

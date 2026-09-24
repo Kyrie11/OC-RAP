@@ -7,15 +7,20 @@ selective render traces.  It does *not* change the quantitative cohort or any
 reported population metric.
 
 Goals:
-  * Safe: never display an OC-RAP overlap/off-road tail. Prefer candidates that
-    stay clean for the complete requested clip; if necessary, a late violation
-    may be removed by shortening the displayed clip, but never below the
-    configured minimum.
+  * Safe: never display an OC-RAP overlap/off-road tail and, by default, never
+    hide one by trimming the requested clip. The selected OC-RAP trajectory
+    must also stay geometrically compatible with a vehicle lane when lane
+    centerline evidence is available in the render context.
   * Near-Contact: prioritize scenes where OC-RAP remains clean while a large
     fraction of external baselines collide or enter a low-margin state. Among
-    similarly strong consensus-failure cases, prefer denser local traffic.
-  * Contact: preserve the metric selector's ordering while attaching trace
-    quality diagnostics.
+    similarly strong consensus-failure cases, prefer denser local traffic, and
+    reject "safety by leaving the roadway/lane corridor" behavior.
+  * Contact: require a controlled post-contact recovery -- sustained
+    separation without visible off-road behavior and, when map evidence is
+    available, a return to a plausible vehicle-lane corridor. Clearance is a
+    bounded secondary ranking term rather than a license to escape arbitrarily
+    far from the road. Prefer scenes where several audited external baselines
+    fail the same trace-level recovery test.
 """
 from __future__ import annotations
 
@@ -31,6 +36,11 @@ METHODS = {
     "near": ["marc_lite", "racp_lite", "robust_scenario_mpc", "predictive_safety_filter", "dr_cvar_safety_filter", "conformal_predictive_safety_filter", "flow_planner", "plan_r1", "betopnet"],
     "contact": ["postimpact_mpc_lite", "post_crash_braking", "postimpact_motion_tvlqr", "post_collision_restoration", "compensatory_postimpact_mpc", "robust_postimpact_control"],
 }
+
+# Waymo/WOMD roadgraph point types 1 and 2 are vehicle-lane centerlines
+# (freeway and surface-street lanes). Type 3 is a bike lane and is deliberately
+# not accepted as a valid vehicle recovery corridor.
+DEFAULT_VEHICLE_LANE_TYPES = (1, 2)
 
 
 def _scene_key(scene: dict[str, Any], env: dict[str, Any]) -> str:
@@ -129,19 +139,246 @@ def _density_stats(trace: list[dict[str, Any]], clip_s: float, dt_s: float, radi
     return {"median": float(statistics.median(counts)), "p75": float(p75), "max": float(max(counts))}
 
 
+def _sdc_agent(frame: dict[str, Any]) -> dict[str, Any] | None:
+    return next((a for a in (frame.get("agents") or []) if a.get("is_sdc")), None)
+
+
+def _wrap_pi(angle: float) -> float:
+    return (float(angle) + math.pi) % (2.0 * math.pi) - math.pi
+
+
+def _axial_heading_error_rad(a: float, b: float) -> float:
+    """Smallest orientation error when polyline direction is treated as axial.
+
+    WOMD roadgraph points preserve feature ordering, but the qualitative gate
+    only needs to establish that the vehicle is aligned with a legal lane
+    corridor; it must not infer a wrong-way label from uncertain polyline
+    orientation.  Therefore 0 and pi are equivalent here.
+    """
+    d = abs(_wrap_pi(float(a) - float(b)))
+    return min(d, abs(math.pi - d))
+
+
+def _point_segment_distance_heading(
+    px: float, py: float, ax: float, ay: float, bx: float, by: float
+) -> tuple[float, float] | None:
+    vx, vy = bx - ax, by - ay
+    vv = vx * vx + vy * vy
+    if vv <= 1.0e-10:
+        return None
+    wx, wy = px - ax, py - ay
+    u = max(0.0, min(1.0, (wx * vx + wy * vy) / vv))
+    qx, qy = ax + u * vx, ay + u * vy
+    return math.hypot(px - qx, py - qy), math.atan2(vy, vx)
+
+
+def _lane_segments(scene: dict[str, Any], lane_types: tuple[int, ...]) -> list[tuple[float, float, float, float]]:
+    context = scene.get("render_context") or {}
+    allowed = set(int(x) for x in lane_types)
+    out: list[tuple[float, float, float, float]] = []
+    for polyline in context.get("roadgraph_polylines") or []:
+        try:
+            type_id = int(polyline.get("type", -1))
+        except Exception:
+            continue
+        if type_id not in allowed:
+            continue
+        pts: list[tuple[float, float]] = []
+        for p in polyline.get("xy") or []:
+            try:
+                x, y = float(p[0]), float(p[1])
+            except Exception:
+                continue
+            if math.isfinite(x) and math.isfinite(y):
+                pts.append((x, y))
+        for (ax, ay), (bx, by) in zip(pts, pts[1:]):
+            if math.hypot(bx - ax, by - ay) > 1.0e-3:
+                out.append((ax, ay, bx, by))
+    return out
+
+
+def _percentile(values: list[float], q: float) -> float | None:
+    vals = sorted(float(v) for v in values if math.isfinite(float(v)))
+    if not vals:
+        return None
+    q = max(0.0, min(1.0, float(q)))
+    idx = min(len(vals) - 1, max(0, int(math.ceil(q * len(vals))) - 1))
+    return vals[idx]
+
+
+def _lane_realism(
+    scene: dict[str, Any],
+    clip_s: float,
+    dt_s: float,
+    *,
+    lane_types: tuple[int, ...],
+    terminal_max_m: float,
+    p90_max_m: float,
+    offcenter_threshold_m: float,
+    offcenter_fraction_max: float,
+    heading_terminal_max_deg: float,
+    heading_p90_max_deg: float,
+    heading_speed_gate_mps: float,
+    min_evidence_fraction: float,
+) -> dict[str, Any]:
+    """Measure whether the displayed SDC stays in a plausible lane corridor.
+
+    This deliberately uses only the static roadgraph captured with the render
+    trace.  It does not use the logged future SDC trajectory, route oracle, or
+    any post-hoc hidden future.  The gate is consequently suitable for a
+    reviewer-facing qualitative selection contract.
+    """
+    trace = list(scene.get("render_trace") or [])
+    frames = _visible_frames(trace, clip_s, dt_s)
+    segments = _lane_segments(scene, lane_types)
+    if not frames or not segments:
+        return {
+            "evidence_available": False,
+            "accepted": True,
+            "reason": "lane_evidence_unavailable",
+            "lane_segment_count": len(segments),
+            "frame_evidence_fraction": 0.0,
+        }
+
+    distances: list[float] = []
+    heading_errors_deg: list[float] = []
+    terminal_distance: float | None = None
+    terminal_heading_error_deg: float | None = None
+    terminal_speed: float | None = None
+    evidence_frames = 0
+    offcenter_count = 0
+    moving_heading_frames = 0
+    misaligned_count = 0
+
+    for frame_index, frame in enumerate(frames):
+        sdc = _sdc_agent(frame)
+        if sdc is None:
+            continue
+        try:
+            px, py = float(sdc["x"]), float(sdc["y"])
+            yaw = float(sdc.get("yaw", 0.0))
+        except Exception:
+            continue
+        rows: list[tuple[float, float]] = []
+        for ax, ay, bx, by in segments:
+            row = _point_segment_distance_heading(px, py, ax, ay, bx, by)
+            if row is not None:
+                rows.append(row)
+        if not rows:
+            continue
+        evidence_frames += 1
+        min_dist = min(d for d, _ in rows)
+        distances.append(min_dist)
+        offcenter_count += int(min_dist > offcenter_threshold_m)
+
+        # At intersections several lane centerlines may be spatially close.
+        # Use the best aligned segment among those effectively tied in distance
+        # instead of allowing a crossing lane to create a spurious 90deg error.
+        near = [(d, h) for d, h in rows if d <= min_dist + 2.0]
+        speed = _metric(frame, "ego_speed_mps")
+        if speed is None:
+            speed = _metric(frame, "speed_mps")
+        if speed is not None and speed >= heading_speed_gate_mps:
+            err = min(_axial_heading_error_rad(yaw, h) for _, h in near)
+            err_deg = math.degrees(err)
+            heading_errors_deg.append(err_deg)
+            moving_heading_frames += 1
+            misaligned_count += int(err_deg > heading_p90_max_deg)
+        else:
+            err_deg = None
+
+        if frame_index == len(frames) - 1:
+            terminal_distance = min_dist
+            terminal_speed = speed
+            if err_deg is not None:
+                terminal_heading_error_deg = err_deg
+
+    coverage = evidence_frames / max(len(frames), 1)
+    if evidence_frames == 0 or coverage < min_evidence_fraction:
+        return {
+            "evidence_available": False,
+            "accepted": True,
+            "reason": "insufficient_lane_evidence",
+            "lane_segment_count": len(segments),
+            "frame_evidence_fraction": coverage,
+        }
+
+    p90_dist = _percentile(distances, 0.90)
+    p90_heading = _percentile(heading_errors_deg, 0.90)
+    offcenter_fraction = offcenter_count / max(evidence_frames, 1)
+    misaligned_fraction = misaligned_count / max(moving_heading_frames, 1) if moving_heading_frames else 0.0
+
+    reasons: list[str] = []
+    if terminal_distance is not None and terminal_distance > terminal_max_m:
+        reasons.append("terminal_far_from_vehicle_lane")
+    if p90_dist is not None and p90_dist > p90_max_m:
+        reasons.append("persistent_far_from_vehicle_lane")
+    if offcenter_fraction > offcenter_fraction_max:
+        reasons.append("excessive_offcenter_fraction")
+    if terminal_heading_error_deg is not None and terminal_heading_error_deg > heading_terminal_max_deg:
+        reasons.append("terminal_lane_misalignment")
+    if p90_heading is not None and p90_heading > heading_p90_max_deg:
+        reasons.append("persistent_lane_misalignment")
+
+    return {
+        "evidence_available": True,
+        "accepted": not reasons,
+        "reason": "lane_realistic" if not reasons else "+".join(reasons),
+        "lane_segment_count": len(segments),
+        "frame_evidence_fraction": coverage,
+        "vehicle_lane_types": list(lane_types),
+        "lane_center_distance_median_m": float(statistics.median(distances)) if distances else None,
+        "lane_center_distance_p90_m": p90_dist,
+        "lane_center_distance_max_m": max(distances) if distances else None,
+        "lane_center_distance_terminal_m": terminal_distance,
+        "offcenter_threshold_m": offcenter_threshold_m,
+        "offcenter_fraction": offcenter_fraction,
+        "lane_heading_error_p90_deg": p90_heading,
+        "lane_heading_error_terminal_deg": terminal_heading_error_deg,
+        "misaligned_fraction": misaligned_fraction,
+        "terminal_speed_mps": terminal_speed,
+        "thresholds": {
+            "terminal_max_m": terminal_max_m,
+            "p90_max_m": p90_max_m,
+            "offcenter_fraction_max": offcenter_fraction_max,
+            "heading_terminal_max_deg": heading_terminal_max_deg,
+            "heading_p90_max_deg": heading_p90_max_deg,
+            "heading_speed_gate_mps": heading_speed_gate_mps,
+            "min_evidence_fraction": min_evidence_fraction,
+        },
+    }
+
+
 def _load_traces(trace_root: Path, regime: str) -> dict[str, dict[str, dict[str, Any]]]:
     paths = {"ocrap": trace_root / "ocrap" / regime / "closed_loop_ocrap.json.scenes.jsonl"}
     paths.update({m: trace_root / "external" / regime / f"closed_loop_{m}.json.scenes.jsonl" for m in METHODS[regime]})
     return {m: _load_journal(p) for m, p in paths.items()}
 
 
+def _relative_score(item: dict[str, Any], method: str) -> float:
+    try:
+        x = float(((item.get("per_baseline") or {}).get(method) or {}).get("relative_score"))
+        return x if math.isfinite(x) else float("inf")
+    except Exception:
+        return float("inf")
+
+
+def _hardest_among(item: dict[str, Any], methods: list[str]) -> str | None:
+    if not methods:
+        return None
+    return min(methods, key=lambda name: (_relative_score(item, name), name))
+
+
 def _near_quality(item: dict[str, Any], traces: dict[str, dict[str, dict[str, Any]]], *, dt_s: float,
-                  ttc_threshold_s: float, clearance_threshold_m: float, density_radius_m: float) -> dict[str, Any]:
+                  ttc_threshold_s: float, clearance_threshold_m: float, density_radius_m: float,
+                  lane_kwargs: dict[str, Any]) -> dict[str, Any]:
     key = str(item["target_key"])
     clip = float(item.get("clip_duration_s") or 0.0)
-    otrace = list(traces["ocrap"][key].get("render_trace") or [])
+    oscene = traces["ocrap"][key]
+    otrace = list(oscene.get("render_trace") or [])
     oc_overlap = _any_flag(otrace, clip, dt_s, "overlap")
     oc_offroad = _any_flag(otrace, clip, dt_s, "offroad")
+    oc_lane = _lane_realism(oscene, clip, dt_s, **lane_kwargs)
     external: dict[str, dict[str, Any]] = {}
     overlap_count = severe_count = 0
     for method in METHODS["near"]:
@@ -169,17 +406,22 @@ def _near_quality(item: dict[str, Any], traces: dict[str, dict[str, dict[str, An
     else:
         evidence_rank, evidence = 3, "limited_external_hazard"
     density = _density_stats(otrace, clip, dt_s, density_radius_m)
-    primary = str(item.get("primary_external_method") or "")
-    primary_severe = bool(external.get(primary, {}).get("severe_low_margin"))
+    severe_methods = [m for m in METHODS["near"] if external[m]["severe_low_margin"]]
+    trace_primary = _hardest_among(item, severe_methods) or str(item.get("primary_external_method") or "")
+    primary_severe = bool(external.get(trace_primary, {}).get("severe_low_margin"))
+    lane_ok = bool(oc_lane.get("accepted", True))
     return {
         "ocrap_overlap_visible": oc_overlap,
         "ocrap_offroad_visible": oc_offroad,
+        "ocrap_lane_realism": oc_lane,
         "ocrap_visible_safe": not oc_overlap and not oc_offroad,
+        "ocrap_realistic_safe": not oc_overlap and not oc_offroad and lane_ok,
         "external_overlap_count": overlap_count,
         "external_severe_count": severe_count,
         "num_external_baselines": n,
         "external_overlap_fraction": overlap_frac,
         "external_severe_fraction": frac,
+        "trace_primary_external_method": trace_primary,
         "primary_external_severe": primary_severe,
         "visual_evidence_rank": evidence_rank,
         "visual_evidence_label": evidence,
@@ -190,20 +432,28 @@ def _near_quality(item: dict[str, Any], traces: dict[str, dict[str, dict[str, An
 
 
 def _safe_quality(item: dict[str, Any], traces: dict[str, dict[str, dict[str, Any]]], *, dt_s: float,
-                  min_clip_s: float, margin_s: float) -> dict[str, Any]:
+                  min_clip_s: float, margin_s: float, allow_tail_truncation: bool,
+                  lane_kwargs: dict[str, Any]) -> dict[str, Any]:
     key = str(item["target_key"])
     requested = float(item.get("clip_duration_s") or 0.0)
-    trace = list(traces["ocrap"][key].get("render_trace") or [])
+    scene = traces["ocrap"][key]
+    trace = list(scene.get("render_trace") or [])
     idx, reason = _first_violation(trace, requested, dt_s)
     if idx is None:
         effective = requested
         status = "full_clip_clean"
+    elif not allow_tail_truncation:
+        effective = requested
+        status = "reject_visible_violation"
     else:
         margin_steps = max(1, int(math.ceil(margin_s / dt_s - 1e-9)))
         last_safe_index = max(0, idx - margin_steps)
         effective = min(requested, last_safe_index * dt_s)
         effective = math.floor((effective + 1e-9) / dt_s) * dt_s
         status = "late_tail_truncated" if effective + 1e-9 >= min_clip_s else "reject_early_violation"
+    realism_clip = effective if status == "late_tail_truncated" else requested
+    lane = _lane_realism(scene, realism_clip, dt_s, **lane_kwargs)
+    accepted = status not in {"reject_early_violation", "reject_visible_violation"} and bool(lane.get("accepted", True))
     return {
         "requested_clip_duration_s": requested,
         "effective_clip_duration_s": effective,
@@ -212,25 +462,131 @@ def _safe_quality(item: dict[str, Any], traces: dict[str, dict[str, dict[str, An
         "first_visible_violation_s": None if idx is None else idx * dt_s,
         "first_visible_violation_type": reason,
         "safe_tail_gate": status,
-        "accepted": status != "reject_early_violation",
+        "allow_tail_truncation": bool(allow_tail_truncation),
+        "ocrap_lane_realism": lane,
+        "accepted": accepted,
     }
 
 
-def _contact_quality(item: dict[str, Any], traces: dict[str, dict[str, dict[str, Any]]], *, dt_s: float) -> dict[str, Any]:
+def _sustained_separation(
+    trace: list[dict[str, Any]], clip_s: float, dt_s: float, *, clearance_min_m: float, hold_s: float
+) -> dict[str, Any]:
+    frames = _visible_frames(trace, clip_s, dt_s)
+    hold_steps = max(1, int(math.ceil(hold_s / dt_s - 1.0e-9)))
+    good: list[bool] = []
+    for f in frames:
+        clr = _metric(f, "min_clearance_m")
+        good.append(not _flag(f, "overlap") and clr is not None and clr >= clearance_min_m)
+    first: int | None = None
+    for i in range(0, max(0, len(good) - hold_steps + 1)):
+        if all(good[i : i + hold_steps]):
+            first = i
+            break
+    recontact = False
+    if first is not None:
+        recontact = any(_flag(f, "overlap") for f in frames[first + hold_steps :])
+    return {
+        "achieved": first is not None,
+        "first_index": first,
+        "first_s": None if first is None else first * dt_s,
+        "hold_s": hold_s,
+        "clearance_min_m": clearance_min_m,
+        "recontact_after_separation": recontact,
+    }
+
+
+def _contact_method_trace_quality(
+    scene: dict[str, Any], clip: float, dt_s: float, *, lane_kwargs: dict[str, Any],
+    separation_clearance_m: float, separation_hold_s: float,
+) -> dict[str, Any]:
+    tr = list(scene.get("render_trace") or [])
+    frames = _visible_frames(tr, clip, dt_s)
+    lane = _lane_realism(scene, clip, dt_s, **lane_kwargs)
+    sep = _sustained_separation(
+        tr, clip, dt_s, clearance_min_m=separation_clearance_m, hold_s=separation_hold_s
+    )
+    first_overlap = next((i for i, f in enumerate(frames) if _flag(f, "overlap")), None)
+    terminal = frames[-1] if frames else None
+    terminal_clearance = _metric(terminal, "min_clearance_m") if terminal else None
+    terminal_speed = _metric(terminal, "ego_speed_mps") if terminal else None
+    terminal_overlap = bool(terminal is not None and _flag(terminal, "overlap"))
+    offroad = any(_flag(f, "offroad") for f in frames)
+    failure_reasons: list[str] = []
+    if offroad:
+        failure_reasons.append("visible_offroad")
+    if terminal_overlap:
+        failure_reasons.append("terminal_overlap")
+    if not sep["achieved"]:
+        failure_reasons.append("no_sustained_separation")
+    if sep["recontact_after_separation"]:
+        failure_reasons.append("recontact_after_separation")
+    if lane.get("evidence_available") and not lane.get("accepted", True):
+        failure_reasons.append("lane_unrealistic_recovery")
+    return {
+        "offroad_visible": offroad,
+        "first_overlap_s": None if first_overlap is None else first_overlap * dt_s,
+        "terminal_overlap": terminal_overlap,
+        "terminal_clearance_m": terminal_clearance,
+        "terminal_speed_mps": terminal_speed,
+        "sustained_separation": sep,
+        "lane_realism": lane,
+        "controlled_recovery": not failure_reasons,
+        "recovery_failure": bool(failure_reasons),
+        "recovery_failure_reasons": failure_reasons,
+    }
+
+
+def _contact_quality(
+    item: dict[str, Any], traces: dict[str, dict[str, dict[str, Any]]], *, dt_s: float,
+    lane_kwargs: dict[str, Any], separation_clearance_m: float, separation_hold_s: float,
+) -> dict[str, Any]:
     key = str(item["target_key"])
     clip = float(item.get("clip_duration_s") or 0.0)
-    tr = list(traces["ocrap"][key].get("render_trace") or [])
-    first_overlap = next((i for i, f in enumerate(_visible_frames(tr, clip, dt_s)) if _flag(f, "overlap")), None)
+    oc = _contact_method_trace_quality(
+        traces["ocrap"][key], clip, dt_s, lane_kwargs=lane_kwargs,
+        separation_clearance_m=separation_clearance_m, separation_hold_s=separation_hold_s,
+    )
+    external: dict[str, dict[str, Any]] = {}
+    failures: list[str] = []
+    for method in METHODS["contact"]:
+        q = _contact_method_trace_quality(
+            traces[method][key], clip, dt_s, lane_kwargs=lane_kwargs,
+            separation_clearance_m=separation_clearance_m, separation_hold_s=separation_hold_s,
+        )
+        external[method] = q
+        if q["recovery_failure"]:
+            failures.append(method)
+    n = len(METHODS["contact"])
+    frac = len(failures) / max(n, 1)
+    if len(failures) == n:
+        evidence_rank, evidence = 0, "all_external_recovery_failures"
+    elif frac >= 2.0 / 3.0:
+        evidence_rank, evidence = 1, "strong_consensus_external_recovery_failure"
+    elif frac >= 0.5:
+        evidence_rank, evidence = 2, "majority_external_recovery_failure"
+    else:
+        evidence_rank, evidence = 3, "limited_external_recovery_failure"
+    trace_primary = _hardest_among(item, failures) or str(item.get("primary_external_method") or "")
     return {
-        "ocrap_offroad_visible": _any_flag(tr, clip, dt_s, "offroad"),
-        "ocrap_first_overlap_s": None if first_overlap is None else first_overlap * dt_s,
-        "ocrap_terminal_clearance_m": _metric(_visible_frames(tr, clip, dt_s)[-1], "min_clearance_m") if tr else None,
+        # Backward-compatible top-level fields used by older audit scripts.
+        "ocrap_offroad_visible": oc["offroad_visible"],
+        "ocrap_first_overlap_s": oc["first_overlap_s"],
+        "ocrap_terminal_clearance_m": oc["terminal_clearance_m"],
+        "ocrap_controlled_recovery": oc["controlled_recovery"],
+        "ocrap_trace_recovery": oc,
+        "external_recovery_failure_count": len(failures),
+        "external_recovery_failure_fraction": frac,
+        "num_external_baselines": n,
+        "visual_evidence_rank": evidence_rank,
+        "visual_evidence_label": evidence,
+        "trace_primary_external_method": trace_primary,
+        "external_trace_recovery": external,
     }
 
 
 def _copy_final_doc(candidate: dict[str, Any], selected: list[dict[str, Any]], *, candidate_path: Path, regime: str) -> dict[str, Any]:
     doc = dict(candidate)
-    doc["event"] = "regime_visualization_scene_selection_trace_final_v1"
+    doc["event"] = "regime_visualization_scene_selection_trace_final_v2_realism_gated"
     doc["candidate_selection"] = str(candidate_path)
     doc["candidate_pool_size"] = len(candidate.get("selected") or [])
     doc["requested_num_scenes"] = len(selected)
@@ -238,8 +594,11 @@ def _copy_final_doc(candidate: dict[str, Any], selected: list[dict[str, Any]], *
     doc["target_keys"] = [str(x["target_key"]) for x in selected]
     doc["trace_aware_finalization"] = True
     doc["selection_note"] = str(candidate.get("selection_note") or "") + (
-        " A trace-aware qualitative-only finalization then removes visible OC-RAP safety failures; "
-        "Near-Contact additionally prioritizes consensus external low-margin/collision evidence and local traffic density."
+        " A trace-aware qualitative-only finalization removes visible OC-RAP safety failures and rejects "
+        "map-inconsistent 'safety by escape' when vehicle-lane roadgraph evidence is available. Safe requires a clean "
+        "full clip by default; Near-Contact prioritizes consensus external low-margin/collision evidence and local "
+        "traffic density; Contact requires sustained separation plus a controlled lane-plausible recovery and ranks "
+        "clearance only as a capped secondary term."
     )
     if selected:
         doc["selected_clip_duration_s"] = min(float(x.get("clip_duration_s") or 0.0) for x in selected)
@@ -254,12 +613,45 @@ def main() -> int:
     ap.add_argument("--num-scenes", type=int, default=5)
     ap.add_argument("--safe-min-clip-s", type=float, default=4.0)
     ap.add_argument("--safe-tail-margin-s", type=float, default=0.2)
+    ap.add_argument("--safe-allow-tail-truncation", action="store_true")
     ap.add_argument("--near-ttc-threshold-s", type=float, default=0.5)
     ap.add_argument("--near-clearance-threshold-m", type=float, default=0.35)
     ap.add_argument("--near-density-radius-m", type=float, default=25.0)
+    ap.add_argument(
+        "--near-min-external-severe-count", type=int, default=2,
+        help="minimum number of audited external methods that must collide or enter the trace-level low-margin region",
+    )
+    ap.add_argument("--lane-center-types", default="1,2")
+    ap.add_argument("--lane-terminal-max-m", type=float, default=5.0)
+    ap.add_argument("--lane-p90-max-m", type=float, default=5.5)
+    ap.add_argument("--lane-offcenter-threshold-m", type=float, default=4.5)
+    ap.add_argument("--lane-offcenter-fraction-max", type=float, default=0.30)
+    ap.add_argument("--lane-heading-terminal-max-deg", type=float, default=50.0)
+    ap.add_argument("--lane-heading-p90-max-deg", type=float, default=55.0)
+    ap.add_argument("--lane-heading-speed-gate-mps", type=float, default=1.0)
+    ap.add_argument("--lane-min-evidence-fraction", type=float, default=0.50)
+    ap.add_argument("--contact-separation-clearance-m", type=float, default=0.50)
+    ap.add_argument("--contact-separation-hold-s", type=float, default=0.30)
     args = ap.parse_args()
     if args.num_scenes <= 0:
         raise SystemExit("--num-scenes must be positive")
+    try:
+        lane_types = tuple(int(x.strip()) for x in str(args.lane_center_types).split(",") if x.strip())
+    except Exception as exc:
+        raise SystemExit(f"invalid --lane-center-types={args.lane_center_types!r}: {exc}") from exc
+    if not lane_types:
+        raise SystemExit("--lane-center-types must contain at least one roadgraph type")
+    lane_kwargs = {
+        "lane_types": lane_types,
+        "terminal_max_m": float(args.lane_terminal_max_m),
+        "p90_max_m": float(args.lane_p90_max_m),
+        "offcenter_threshold_m": float(args.lane_offcenter_threshold_m),
+        "offcenter_fraction_max": float(args.lane_offcenter_fraction_max),
+        "heading_terminal_max_deg": float(args.lane_heading_terminal_max_deg),
+        "heading_p90_max_deg": float(args.lane_heading_p90_max_deg),
+        "heading_speed_gate_mps": float(args.lane_heading_speed_gate_mps),
+        "min_evidence_fraction": float(args.lane_min_evidence_fraction),
+    }
 
     args.output_root.mkdir(parents=True, exist_ok=True)
     summary: dict[str, Any] = {"event": "trace_aware_visualization_selection_index_v1", "regimes": {}}
@@ -278,28 +670,68 @@ def main() -> int:
                 raise SystemExit(f"{regime}/{key}: missing candidate traces for {missing}")
             row = dict(item)
             if regime == "safe":
-                q = _safe_quality(row, traces, dt_s=dt, min_clip_s=args.safe_min_clip_s, margin_s=args.safe_tail_margin_s)
+                q = _safe_quality(
+                    row,
+                    traces,
+                    dt_s=dt,
+                    min_clip_s=args.safe_min_clip_s,
+                    margin_s=args.safe_tail_margin_s,
+                    allow_tail_truncation=bool(args.safe_allow_tail_truncation),
+                    lane_kwargs=lane_kwargs,
+                )
                 row["visualization_trace_quality"] = q
                 if q["accepted"]:
                     row["clip_duration_s"] = float(q["effective_clip_duration_s"])
                     row["clip_duration_adjusted_after_trace"] = not bool(q["full_requested_clip_clean"])
                     annotated.append(row | {"_original_order": original_order})
             elif regime == "near":
-                q = _near_quality(row, traces, dt_s=dt, ttc_threshold_s=args.near_ttc_threshold_s,
-                                  clearance_threshold_m=args.near_clearance_threshold_m, density_radius_m=args.near_density_radius_m)
+                q = _near_quality(
+                    row,
+                    traces,
+                    dt_s=dt,
+                    ttc_threshold_s=args.near_ttc_threshold_s,
+                    clearance_threshold_m=args.near_clearance_threshold_m,
+                    density_radius_m=args.near_density_radius_m,
+                    lane_kwargs=lane_kwargs,
+                )
                 row["visualization_trace_quality"] = q
-                if q["ocrap_visible_safe"]:
+                if q["ocrap_realistic_safe"] and int(q["external_severe_count"]) >= int(args.near_min_external_severe_count):
+                    trace_primary = str(q.get("trace_primary_external_method") or "")
+                    if trace_primary:
+                        row["primary_external_method"] = trace_primary
+                        row["primary_comparator_reason"] = (
+                            "hardest paired external among methods that become trace-severe on this scene; "
+                            "scene selection remains based on all-baseline failure consensus"
+                        )
                     annotated.append(row | {"_original_order": original_order})
             else:
-                q = _contact_quality(row, traces, dt_s=dt)
+                q = _contact_quality(
+                    row,
+                    traces,
+                    dt_s=dt,
+                    lane_kwargs=lane_kwargs,
+                    separation_clearance_m=args.contact_separation_clearance_m,
+                    separation_hold_s=args.contact_separation_hold_s,
+                )
                 row["visualization_trace_quality"] = q
-                annotated.append(row | {"_original_order": original_order})
+                if q["ocrap_controlled_recovery"]:
+                    trace_primary = str(q.get("trace_primary_external_method") or "")
+                    if trace_primary:
+                        row["primary_external_method"] = trace_primary
+                        row["primary_comparator_reason"] = (
+                            "hardest paired external among methods that fail the trace-level controlled-recovery gate; "
+                            "OC-RAP must retain lane realism and sustained separation"
+                        )
+                    annotated.append(row | {"_original_order": original_order})
 
         if regime == "safe":
-            # Prefer candidates requiring no truncation, then the original metric
-            # tier/score.  Late-tail truncation is a fallback rather than the norm.
+            # Full-clip cleanliness is publication-facing default. Among clean
+            # scenes, prefer those with explicit lane evidence and smaller lane
+            # center deviation before the original metric tier/score.
             annotated.sort(key=lambda r: (
                 0 if r["visualization_trace_quality"]["full_requested_clip_clean"] else 1,
+                0 if r["visualization_trace_quality"]["ocrap_lane_realism"].get("evidence_available") else 1,
+                float(r["visualization_trace_quality"]["ocrap_lane_realism"].get("lane_center_distance_p90_m") or 0.0),
                 int(r.get("selection_tier_rank", 99)),
                 -float(r.get("clip_duration_s") or 0.0),
                 -float(r.get("score") or 0.0),
@@ -310,6 +742,7 @@ def main() -> int:
             # then actual collision count, primary-comparator severity, local
             # density, and finally the original paired metric evidence.
             annotated.sort(key=lambda r: (
+                0 if r["visualization_trace_quality"]["ocrap_lane_realism"].get("evidence_available") else 1,
                 int(r["visualization_trace_quality"]["visual_evidence_rank"]),
                 -int(r["visualization_trace_quality"]["external_overlap_count"]),
                 -int(r["visualization_trace_quality"]["external_severe_count"]),
@@ -320,7 +753,24 @@ def main() -> int:
                 str(r["target_key"]),
             ))
         else:
-            annotated.sort(key=lambda r: int(r.get("_original_order", 0)))
+            # Do not let raw clearance dominate reviewer-facing Contact scenes.
+            # Controlled/lane-plausible OC-RAP recovery is already a hard gate;
+            # then prefer broad external recovery failure, faster sustained
+            # separation, and only a *capped* terminal-clearance tie-breaker.
+            annotated.sort(key=lambda r: (
+                0 if r["visualization_trace_quality"]["ocrap_trace_recovery"]["lane_realism"].get("evidence_available") else 1,
+                int(r["visualization_trace_quality"]["visual_evidence_rank"]),
+                -int(r["visualization_trace_quality"]["external_recovery_failure_count"]),
+                float(
+                    r["visualization_trace_quality"]["ocrap_trace_recovery"]["sustained_separation"].get("first_s")
+                    if r["visualization_trace_quality"]["ocrap_trace_recovery"]["sustained_separation"].get("first_s") is not None
+                    else 1.0e6
+                ),
+                -min(3.0, float(r["visualization_trace_quality"].get("ocrap_terminal_clearance_m") or 0.0)),
+                int(r.get("selection_tier_rank", 99)),
+                -float(r.get("score") or 0.0),
+                str(r["target_key"]),
+            ))
 
         # Preserve scenario diversity after trace-aware re-ranking.
         chosen: list[dict[str, Any]] = []
@@ -334,9 +784,10 @@ def main() -> int:
             if len(chosen) >= args.num_scenes:
                 break
         if len(chosen) < args.num_scenes:
+            knob = "CONTACT_VIS_CANDIDATE_MULTIPLIER" if regime == "contact" else "VIS_CANDIDATE_MULTIPLIER"
             raise SystemExit(
                 f"{regime}: trace-aware gate retained only {len(chosen)} distinct scenes from {len(items)} candidates; "
-                "increase VIS_CANDIDATE_MULTIPLIER or relax the explicit visualization thresholds."
+                f"increase {knob} or relax an explicit, documented visualization threshold."
             )
         final: list[dict[str, Any]] = []
         for rank, row in enumerate(chosen, 1):

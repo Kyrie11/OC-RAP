@@ -162,9 +162,18 @@ def _render_grid(*, methods: list[str], traces: dict[str, list[dict[str, Any]]],
                 )
 
     fig.suptitle(title, fontsize=11.0, fontweight="bold", y=0.985)
+    if regime in {"near", "contact"}:
+        # The blue X is a history marker after the first observed overlap, not
+        # a claim that the vehicles are still overlapping in the displayed
+        # frame. Make that semantics explicit in static reviewer-facing figures.
+        fig.text(
+            0.5, 0.010,
+            "× = first observed-overlap location (history marker); red SDC = overlap at the displayed frame",
+            ha="center", va="bottom", fontsize=7.2,
+        )
     fig.subplots_adjust(
         left=0.065, right=0.995, top=(0.855 if is_main_pair else 0.925),
-        bottom=0.025, wspace=0.035, hspace=0.08,
+        bottom=(0.045 if regime in {"near", "contact"} else 0.025), wspace=0.035, hspace=0.08,
     )
     output_stem.parent.mkdir(parents=True, exist_ok=True)
     print(f"[FIG][SAVE] {png}", flush=True)

@@ -63,20 +63,35 @@ def main() -> int:
             "fallback_duration_s", "num_fallback_eligible")}
 
     selections = {}
+    selection_docs = {}
     for regime in ("safe", "near", "contact"):
         p = root / "selection" / f"{regime}_selection.json"
         if not p.is_file():
             errors.append(f"missing {regime} selection: {p}")
             continue
         d = load(p); n = len(d.get("selected") or [])
+        selection_docs[regime] = d
+        realism_failures = []
+        for row in d.get("selected") or []:
+            q = row.get("visualization_trace_quality") or {}
+            key = str(row.get("target_key") or "<unknown>")
+            if regime == "safe" and q.get("accepted") is not True:
+                realism_failures.append(f"{key}:safe_trace_gate")
+            elif regime == "near" and q.get("ocrap_realistic_safe") is not True:
+                realism_failures.append(f"{key}:near_realism_gate")
+            elif regime == "contact" and q.get("ocrap_controlled_recovery") is not True:
+                realism_failures.append(f"{key}:contact_controlled_recovery_gate")
         selections[regime] = {
             "selected": n, "clip_duration_s": d.get("selected_clip_duration_s"),
             "duration_mode": d.get("duration_selection_mode"), "duration_source": d.get("duration_source"),
             "preferred_candidates": d.get("num_preferred_duration_candidates"),
             "fallback_candidates": d.get("num_fallback_duration_candidates"),
+            "realism_gate_failures": realism_failures,
         }
         if n < args.expected_scenes:
             errors.append(f"{regime} selection has {n} scenes, expected {args.expected_scenes}")
+        if realism_failures:
+            errors.append(f"{regime} selected scenes failed realism gate: " + ", ".join(realism_failures))
     stages["selection"] = selections
 
     prep = root / "selective_traces" / "TRACE_PREP.json"
@@ -125,6 +140,18 @@ def main() -> int:
         stages["paper_figures"] = {"num_scene_records": n_records}
         if n_records <= 0:
             errors.append("paper figure index exists but contains no scene records")
+        for regime, sdoc in selection_docs.items():
+            frecs = (((f.get("regimes") or {}).get(regime) or {}).get("records") or [])
+            expected = [
+                (str(x.get("target_key") or ""), int(x.get("category_rank") or 0), str(x.get("primary_external_method") or ""))
+                for x in (sdoc.get("selected") or [])
+            ]
+            actual = [
+                (str(x.get("target_key") or ""), int(x.get("rank") or 0), str(x.get("primary_external_method") or ""))
+                for x in frecs
+            ]
+            if actual != expected:
+                errors.append(f"{regime} paper figure index does not match current selection/comparator ordering")
     elif trace_contract.is_file() and load(trace_contract).get("valid") is True:
         errors.append(f"trace contract passed but paper figure index is missing: {fig_index}")
 
@@ -133,10 +160,22 @@ def main() -> int:
         v = load(video_index); stages["videos"] = {"num_videos": v.get("num_videos")}
         if int(v.get("num_videos") or 0) <= 0:
             errors.append("video index exists but contains no videos")
+        for regime, sdoc in selection_docs.items():
+            vrecs = (((v.get("regimes") or {}).get(regime) or {}).get("records") or [])
+            expected = [
+                (str(x.get("target_key") or ""), int(x.get("category_rank") or 0), str(x.get("primary_external_method") or ""))
+                for x in (sdoc.get("selected") or [])
+            ]
+            actual = [
+                (str(x.get("target_key") or ""), int(x.get("rank") or 0), str(x.get("primary_external_method") or ""))
+                for x in vrecs
+            ]
+            if actual != expected:
+                errors.append(f"{regime} video index does not match current selection/comparator ordering")
     elif trace_contract.is_file() and load(trace_contract).get("valid") is True:
         errors.append(f"trace contract passed but video index is missing: {video_index}")
 
-    doc = {"event": "regime_visualization_output_audit_v126", "root": str(root), "valid": not errors, "errors": errors, "stages": stages}
+    doc = {"event": "regime_visualization_output_audit_v128_realism", "root": str(root), "valid": not errors, "errors": errors, "stages": stages}
     print(json.dumps(doc, ensure_ascii=False, indent=2))
     return 0 if not errors else 30
 
