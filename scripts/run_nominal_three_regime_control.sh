@@ -47,16 +47,20 @@ source scripts/lib/runtime.sh
 : "${CONTACT_ANCHOR_MANIFEST_FILE:=}"
 
 resolve_spec() {
-  local value="$1" bucket="$2"
+  local enabled="$1" value="$2" bucket="$3"
+  if [[ "$enabled" != 1 ]]; then
+    printf '%s\n' "$value"
+    return 0
+  fi
   if [[ "${value,,}" == auto ]]; then
     runtime_resolve_bucket_womd_spec "$bucket" "$BUCKET_SPLIT" "$WOMD_ROOT" "$WOMD_NUM_SHARDS" "${WOMD_ROLE:-auto}"
   else
     runtime_normalize_womd_spec "$value" "$WOMD_NUM_SHARDS"
   fi
 }
-SAFE_WOMD="$(resolve_spec "$SAFE_WOMD" "$SAFE_BUCKET")"
-NEAR_WOMD="$(resolve_spec "$NEAR_WOMD" "$NEAR_BUCKET")"
-CONTACT_WOMD="$(resolve_spec "$CONTACT_WOMD" "$CONTACT_BUCKET")"
+SAFE_WOMD="$(resolve_spec "$RUN_SAFE" "$SAFE_WOMD" "$SAFE_BUCKET")"
+NEAR_WOMD="$(resolve_spec "$RUN_NEAR" "$NEAR_WOMD" "$NEAR_BUCKET")"
+CONTACT_WOMD="$(resolve_spec "$RUN_CONTACT" "$CONTACT_WOMD" "$CONTACT_BUCKET")"
 
 nominal_exact_a0_ok() {
   local output="$1"

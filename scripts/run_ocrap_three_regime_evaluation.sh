@@ -53,21 +53,28 @@ fi
 : "${SAFE_WOMD:=auto}"
 : "${NEAR_WOMD:=auto}"
 : "${CONTACT_WOMD:=auto}"
-if [[ "${SAFE_WOMD,,}" == auto ]]; then
-  SAFE_WOMD="$(runtime_resolve_bucket_womd_spec "$SAFE_BUCKET" "$BUCKET_SPLIT" "$WOMD_ROOT" "$WOMD_NUM_SHARDS" "${WOMD_ROLE:-auto}")"
-else
-  SAFE_WOMD="$(runtime_normalize_womd_spec "$SAFE_WOMD" "$WOMD_NUM_SHARDS")"
-fi
-if [[ "${NEAR_WOMD,,}" == auto ]]; then
-  NEAR_WOMD="$(runtime_resolve_bucket_womd_spec "$NEAR_BUCKET" "$BUCKET_SPLIT" "$WOMD_ROOT" "$WOMD_NUM_SHARDS" "${WOMD_ROLE:-auto}")"
-else
-  NEAR_WOMD="$(runtime_normalize_womd_spec "$NEAR_WOMD" "$WOMD_NUM_SHARDS")"
-fi
-if [[ "${CONTACT_WOMD,,}" == auto ]]; then
-  CONTACT_WOMD="$(runtime_resolve_bucket_womd_spec "$CONTACT_BUCKET" "$BUCKET_SPLIT" "$WOMD_ROOT" "$WOMD_NUM_SHARDS" "${WOMD_ROLE:-auto}")"
-else
-  CONTACT_WOMD="$(runtime_normalize_womd_spec "$CONTACT_WOMD" "$WOMD_NUM_SHARDS")"
-fi
+: "${RUN_SAFE:=1}"
+: "${RUN_NEAR:=1}"
+: "${RUN_CONTACT:=1}"
+
+resolve_regime_womd() {
+  local enabled="$1" value="$2" bucket="$3"
+  # Disabled regimes must not inspect or validate their bucket.  This matters for
+  # single-regime validation runs where BUCKET_SPLIT=val while the default
+  # Safe/Near buckets are test_* directories.
+  if [[ "$enabled" != 1 ]]; then
+    printf '%s\n' "$value"
+    return 0
+  fi
+  if [[ "${value,,}" == auto ]]; then
+    runtime_resolve_bucket_womd_spec "$bucket" "$BUCKET_SPLIT" "$WOMD_ROOT" "$WOMD_NUM_SHARDS" "${WOMD_ROLE:-auto}"
+  else
+    runtime_normalize_womd_spec "$value" "$WOMD_NUM_SHARDS"
+  fi
+}
+SAFE_WOMD="$(resolve_regime_womd "$RUN_SAFE" "$SAFE_WOMD" "$SAFE_BUCKET")"
+NEAR_WOMD="$(resolve_regime_womd "$RUN_NEAR" "$NEAR_WOMD" "$NEAR_BUCKET")"
+CONTACT_WOMD="$(resolve_regime_womd "$RUN_CONTACT" "$CONTACT_WOMD" "$CONTACT_BUCKET")"
 : "${CUDA_DEVICES:=0,1}"
 : "${MAX_SCENARIOS:=0}"
 : "${MAX_STEPS:=40}"
@@ -96,9 +103,6 @@ fi
 : "${RESUME_FORCE:=false}"
 : "${RESUME:=true}"
 : "${METRIC_SEMANTICS_VERSION:=publication_v55_signed_clearance_unclipped_v1}"
-: "${RUN_SAFE:=1}"
-: "${RUN_NEAR:=1}"
-: "${RUN_CONTACT:=1}"
 : "${SKIP_COMPLETE_REGIMES:=true}"
 : "${FINALIZE_COMPLETE_JOURNALS:=true}"
 : "${INCLUDE_SCENES_IN_RESULT:=false}"

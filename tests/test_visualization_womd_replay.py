@@ -35,6 +35,14 @@ def _make_shards(root: Path, role: str, n: int = 2) -> None:
         (d / f"{prefix}-{i:05d}-of-{n:05d}").write_bytes(b"x")
 
 
+def test_wrong_logical_split_fails_closed_even_when_samples_directory_exists(tmp_path: Path):
+    data = _make_dataset(tmp_path / "dataset", "validation")
+    womd = tmp_path / "tf_example"
+    _make_shards(womd, "validation")
+    with pytest.raises(RuntimeError, match="no dataset rows found"):
+        resolver.resolve_for_dataset(data, split="val", womd_root=womd, shards=2, role="auto")
+
+
 def test_auto_resolves_validation_under_tf_example_root(tmp_path: Path):
     data = _make_dataset(tmp_path / "dataset", "validation")
     womd = tmp_path / "tf_example"
