@@ -380,7 +380,7 @@ def _generate_profile(scene:dict[str,Any], dt:float, profile:dict[str,float]) ->
 
     new=copy.deepcopy(scene);new['render_trace']=out
     new['metric_summary']=recompute_contact_metric_summary(out,dt,original=(scene.get('metric_summary') or {}))
-    new['method']='ocrap_reference'
+    new['method']='ocrap'
     new['reference_trajectory']=True
     new['reference_planner']='constrained_kinematic_recovery_v1'
     q=_trace_reference_quality(out,ctx,dt)
