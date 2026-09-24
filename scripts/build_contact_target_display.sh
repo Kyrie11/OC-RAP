@@ -2,7 +2,7 @@
 # Contact-only target/reference display pipeline.
 #
 # Default mode (CONTACT_TARGET_REFERENCE_MODE=true) generates a physically
-# constrained *reference* recovery trajectory around the empirical OC-RAP path,
+# constrained target recovery trajectory around the empirical OC-RAP path,
 # then renders it with the unchanged paper/video renderer.  This output is an
 # aspirational engineering target, NOT an empirical OC-RAP rollout.
 #
@@ -40,8 +40,26 @@ export MPLBACKEND=Agg
 : "${CONTACT_TARGET_FORCE_RENDER:=true}"
 : "${CONTACT_TARGET_REFERENCE_MODE:=true}"
 : "${CONTACT_TARGET_REFERENCE_PRESERVE_GOOD:=true}"
+: "${CONTACT_TARGET_DISPLAY_LABEL:=OC-RAP (Target)}"
+: "${CONTACT_TARGET_MIN_DOMINANCE_METHODS:=4}"
+: "${CONTACT_TARGET_MIN_TERMINAL_ADVANTAGE_METHODS:=2}"
+: "${CONTACT_TARGET_MIN_OVERLAP_ADVANTAGE_METHODS:=2}"
+: "${CONTACT_TARGET_MIN_SEPARATION_ADVANTAGE_METHODS:=2}"
+: "${CONTACT_TARGET_TERMINAL_ADVANTAGE_MARGIN_M:=0.25}"
+: "${CONTACT_TARGET_OVERLAP_ADVANTAGE_MARGIN_S:=0.10}"
+: "${CONTACT_TARGET_SEPARATION_ADVANTAGE_MARGIN_S:=0.10}"
+: "${CONTACT_TARGET_MAX_EMPIRICAL_SOURCE_OFFROAD_FRACTION:=0.15}"
+: "${CONTACT_TARGET_LANE_TERMINAL_MAX_M:=2.5}"
+: "${CONTACT_TARGET_LANE_P90_MAX_M:=3.5}"
+: "${CONTACT_TARGET_LANE_OFFCENTER_FRACTION_MAX:=0.20}"
+: "${CONTACT_TARGET_LANE_HEADING_TERMINAL_MAX_DEG:=35}"
+: "${CONTACT_TARGET_LANE_HEADING_P90_MAX_DEG:=40}"
 
 [[ "$CONTACT_TARGET_NAME" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "invalid CONTACT_TARGET_NAME=$CONTACT_TARGET_NAME" >&2; exit 2; }
+if [[ "$CONTACT_TARGET_REFERENCE_MODE" == true && "$CONTACT_TARGET_DISPLAY_LABEL" == "OC-RAP" ]]; then
+  echo "refusing to label synthesized target states as plain empirical OC-RAP; use CONTACT_TARGET_DISPLAY_LABEL='OC-RAP (Target)'" >&2
+  exit 2
+fi
 [[ "$CONTACT_TARGET_NUM_SCENES" =~ ^[0-9]+$ && "$CONTACT_TARGET_NUM_SCENES" -gt 0 ]] || { echo "CONTACT_TARGET_NUM_SCENES must be positive" >&2; exit 2; }
 [[ -d "$SOURCE_TRACE_ROOT" ]] || { echo "missing source trace root: $SOURCE_TRACE_ROOT" >&2; exit 30; }
 [[ -s "$SOURCE_TRACE_ROOT/ocrap/contact/closed_loop_ocrap.json.scenes.jsonl" ]] || { echo "missing OC-RAP Contact full trace journal" >&2; exit 30; }
@@ -80,6 +98,11 @@ if [[ "$CONTACT_TARGET_REFERENCE_MODE" == true ]]; then
   )
   [[ -s "$SOURCE_CONTACT_ANCHOR_MANIFEST" ]] && SYNTH_ARGS+=(--target-keys-file "$SOURCE_CONTACT_ANCHOR_MANIFEST")
   [[ "$CONTACT_TARGET_REFERENCE_PRESERVE_GOOD" == true ]] && SYNTH_ARGS+=(--preserve-good)
+  for m in "${BASELINES[@]}"; do
+    src="$SOURCE_TRACE_ROOT/external/contact/closed_loop_${m}.json.scenes.jsonl"
+    [[ -s "$src" ]] || { echo "missing baseline full trace: $src" >&2; exit 30; }
+    SYNTH_ARGS+=(--baseline "$m=$src")
+  done
   python tools/synthesize_contact_reference.py "${SYNTH_ARGS[@]}" \
     2>&1 | tee "$LOG_DIR/00_reference_synthesis.log"
 
@@ -128,14 +151,14 @@ PYCOUNT
 fi
 
 if [[ "$CONTACT_TARGET_REFERENCE_MODE" == true ]]; then
-  python - "$CANDIDATE_SELECTION" <<'PYREF'
+  python - "$CANDIDATE_SELECTION" "$CONTACT_TARGET_DISPLAY_LABEL" <<'PYREF'
 import json,pathlib,sys
 p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_text())
 d['reference_visualization_only']=True
 d['target_display_real_trace_only']=False
-d['display_name_overrides']={'ocrap':'OC-RAP Reference'}
+d['display_name_overrides']={'ocrap':str(sys.argv[2])}
 d['selection_note']=str(d.get('selection_note') or '') + (
-  ' This target-display candidate pool uses a physically constrained reference recovery trajectory derived from the empirical OC-RAP path. '
+  ' This target-display candidate pool uses a physically constrained target recovery trajectory derived from the empirical OC-RAP path. '
   'It is aspirational/reference visualization only, not an empirical OC-RAP rollout.'
 )
 p.write_text(json.dumps(d,ensure_ascii=False,indent=2)+'\n')
@@ -159,6 +182,14 @@ SELECT_ARGS=(
   --clip-step-s "$CONTACT_TARGET_CLIP_STEP_S"
   --min-comparative-evidence-methods "$CONTACT_TARGET_MIN_COMPARATIVE_EVIDENCE"
   --min-temporal-advantage-methods "$CONTACT_TARGET_MIN_TEMPORAL_ADVANTAGE"
+  --min-dominance-methods "$CONTACT_TARGET_MIN_DOMINANCE_METHODS"
+  --min-terminal-advantage-methods "$CONTACT_TARGET_MIN_TERMINAL_ADVANTAGE_METHODS"
+  --min-overlap-advantage-methods "$CONTACT_TARGET_MIN_OVERLAP_ADVANTAGE_METHODS"
+  --min-separation-advantage-methods "$CONTACT_TARGET_MIN_SEPARATION_ADVANTAGE_METHODS"
+  --terminal-advantage-margin-m "$CONTACT_TARGET_TERMINAL_ADVANTAGE_MARGIN_M"
+  --overlap-advantage-margin-s "$CONTACT_TARGET_OVERLAP_ADVANTAGE_MARGIN_S"
+  --separation-advantage-margin-s "$CONTACT_TARGET_SEPARATION_ADVANTAGE_MARGIN_S"
+  --max-empirical-source-offroad-fraction "$CONTACT_TARGET_MAX_EMPIRICAL_SOURCE_OFFROAD_FRACTION"
   --max-sustained-separation-s "$CONTACT_TARGET_MAX_SEPARATION_S"
   --min-terminal-clearance-m "$CONTACT_TARGET_MIN_TERMINAL_CLEARANCE_M"
   --min-post-separation-clearance-m "$CONTACT_TARGET_MIN_POST_SEPARATION_CLEARANCE_M"
@@ -170,6 +201,14 @@ SELECT_ARGS=(
   --temporal-min-terminal-gain-m 0.20
   --temporal-min-separation-lead-s 0.10
   --temporal-min-overlap-reduction-s 0.10
+  --lane-terminal-max-m "$CONTACT_TARGET_LANE_TERMINAL_MAX_M"
+  --lane-p90-max-m "$CONTACT_TARGET_LANE_P90_MAX_M"
+  --lane-offcenter-fraction-max "$CONTACT_TARGET_LANE_OFFCENTER_FRACTION_MAX"
+  --lane-heading-terminal-max-deg "$CONTACT_TARGET_LANE_HEADING_TERMINAL_MAX_DEG"
+  --lane-heading-p90-max-deg "$CONTACT_TARGET_LANE_HEADING_P90_MAX_DEG"
+  --lane-recovery-terminal-max-m "$CONTACT_TARGET_LANE_TERMINAL_MAX_M"
+  --lane-recovery-p90-max-m "$CONTACT_TARGET_LANE_P90_MAX_M"
+  --lane-recovery-offcenter-fraction-max "$CONTACT_TARGET_LANE_OFFCENTER_FRACTION_MAX"
   --require-exact-count
 )
 # Prefer empirical main scenes only in empirical-prefix mode; in reference mode

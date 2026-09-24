@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Select five realistic Contact target-display scenes from existing real traces.
+"""Select five high-quality Contact target-display scenes from empirical/reference traces.
 
 The selector never edits trajectories.  It may shorten the visible prefix of a
 real closed-loop trace, choosing the longest prefix that satisfies the same
@@ -47,6 +47,10 @@ def _evaluate(
     max_sustained_separation_s: float | None,
     reject_any_recontact_after_first_separation: bool,
     min_comparative_methods: int, min_temporal_advantage_methods: int,
+    min_dominance_methods: int, min_terminal_advantage_methods: int,
+    min_overlap_advantage_methods: int, min_separation_advantage_methods: int,
+    terminal_advantage_margin_m: float, overlap_advantage_margin_s: float, separation_advantage_margin_s: float,
+    max_empirical_source_offroad_fraction: float | None,
     temporal_win_margin_m: float, temporal_noninferior_margin_m: float,
     temporal_min_win_fraction: float, temporal_min_noninferior_fraction: float,
     temporal_min_mean_gain_m: float, temporal_min_terminal_gain_m: float,
@@ -66,6 +70,11 @@ def _evaluate(
     reasons = base._gate_rejection_reasons("contact", q, near_min_external_severe_count=0)
     if bool(reference_scene.get("reference_trajectory")) and reference_quality and not bool(reference_quality.get("clean")):
         reasons.append("reference_reality_contract_failed")
+    empirical_quality = (reference_quality.get("empirical_quality") or {}) if isinstance(reference_quality, dict) else {}
+    if max_empirical_source_offroad_fraction is not None and empirical_quality:
+        frac = empirical_quality.get("offroad_proxy_fraction")
+        if frac is not None and float(frac) > float(max_empirical_source_offroad_fraction) + 1e-9:
+            reasons.append("empirical_source_excessive_offroad")
     ocq = q.get("ocrap_trace_recovery") or {}
     # Target-display quality is stricter than the ordinary qualitative gate on
     # secondary contact: once the rollout first separates from the initial
@@ -95,7 +104,13 @@ def _evaluate(
     failures: list[str] = []
     temporal_methods: list[str] = []
     evidence: list[str] = []
+    dominance_methods: list[str] = []
+    terminal_advantage_methods: list[str] = []
+    overlap_advantage_methods: list[str] = []
+    separation_advantage_methods: list[str] = []
+    pair_dominance: dict[str, dict[str, Any]] = {}
     temporal: dict[str, dict[str, Any]] = {}
+    o_overlap_duration = float(sum(base._flag(f, "overlap") for f in oframes[:-1]) * dt) if len(oframes) > 1 else 0.0
     for method in base.METHODS["contact"]:
         eq = (q.get("external_trace_recovery") or {}).get(method) or {}
         if eq.get("recovery_failure"):
@@ -118,15 +133,63 @@ def _evaluate(
             temporal_methods.append(method)
         if eq.get("recovery_failure") or tev.get("temporal_majority_advantage"):
             evidence.append(method)
+
+        eframes = base._visible_frames(list(traces[method][key].get("render_trace") or []), float(clip), dt)
+        e_overlap_duration = float(sum(base._flag(f, "overlap") for f in eframes[:-1]) * dt) if len(eframes) > 1 else 0.0
+        o_terminal = _finite(ocq.get("terminal_clearance_m"))
+        e_terminal = _finite(eq.get("terminal_clearance_m"))
+        terminal_gain = None if o_terminal is None or e_terminal is None else float(o_terminal - e_terminal)
+        o_sep = _finite((ocq.get("sustained_separation") or {}).get("first_s"))
+        e_sep = _finite((eq.get("sustained_separation") or {}).get("first_s"))
+        if o_sep is None:
+            separation_lead = None
+        elif e_sep is None:
+            separation_lead = max(0.0, float(clip) - o_sep)
+        else:
+            separation_lead = float(e_sep - o_sep)
+        overlap_reduction = float(e_overlap_duration - o_overlap_duration)
+        term_ok = terminal_gain is not None and terminal_gain >= float(terminal_advantage_margin_m)
+        overlap_ok = overlap_reduction >= float(overlap_advantage_margin_s)
+        sep_ok = separation_lead is not None and separation_lead >= float(separation_advantage_margin_s)
+        temporal_ok = bool(tev.get("temporal_majority_advantage"))
+        if term_ok: terminal_advantage_methods.append(method)
+        if overlap_ok: overlap_advantage_methods.append(method)
+        if sep_ok: separation_advantage_methods.append(method)
+        dominance_votes = int(term_ok) + int(overlap_ok) + int(sep_ok) + int(temporal_ok)
+        dominated = bool(eq.get("recovery_failure") and dominance_votes >= 1) or dominance_votes >= 2
+        if dominated:
+            dominance_methods.append(method)
+        pair_dominance[method] = {
+            "terminal_clearance_gain_m": terminal_gain,
+            "overlap_duration_reduction_s": overlap_reduction,
+            "sustained_separation_lead_s": separation_lead,
+            "temporal_majority_advantage": temporal_ok,
+            "dominance_votes": dominance_votes,
+            "dominated": dominated,
+        }
     if len(evidence) < int(min_comparative_methods):
         reasons.append("insufficient_external_comparative_evidence")
     if len(temporal_methods) < int(min_temporal_advantage_methods):
         reasons.append("insufficient_temporal_clearance_advantage")
+    if len(dominance_methods) < int(min_dominance_methods):
+        reasons.append("insufficient_multimetric_dominance")
+    if len(terminal_advantage_methods) < int(min_terminal_advantage_methods):
+        reasons.append("insufficient_terminal_clearance_advantage")
+    if len(overlap_advantage_methods) < int(min_overlap_advantage_methods):
+        reasons.append("insufficient_overlap_duration_advantage")
+    if len(separation_advantage_methods) < int(min_separation_advantage_methods):
+        reasons.append("insufficient_early_separation_advantage")
     reasons = list(dict.fromkeys(reasons))
     q["external_temporal_advantage"] = temporal
     q["external_temporal_advantage_methods"] = temporal_methods
     q["external_comparative_evidence_methods"] = evidence
     q["external_comparative_evidence_count"] = len(evidence)
+    q["external_dominance_methods"] = dominance_methods
+    q["external_dominance_count"] = len(dominance_methods)
+    q["external_terminal_advantage_methods"] = terminal_advantage_methods
+    q["external_overlap_advantage_methods"] = overlap_advantage_methods
+    q["external_separation_advantage_methods"] = separation_advantage_methods
+    q["external_pair_dominance"] = pair_dominance
     ok = bool(q.get("ocrap_controlled_recovery")) and not reasons
     return ok, q, reasons, evidence, failures, temporal_methods
 
@@ -147,6 +210,14 @@ def main() -> int:
     ap.add_argument("--min-post-separation-clearance-m", type=float, default=0.25)
     ap.add_argument("--max-sustained-separation-s", type=float, default=None)
     ap.add_argument("--min-temporal-advantage-methods", type=int, default=0)
+    ap.add_argument("--min-dominance-methods", type=int, default=0, help="minimum external methods beaten on at least two post-contact dimensions")
+    ap.add_argument("--min-terminal-advantage-methods", type=int, default=0)
+    ap.add_argument("--min-overlap-advantage-methods", type=int, default=0)
+    ap.add_argument("--min-separation-advantage-methods", type=int, default=0)
+    ap.add_argument("--terminal-advantage-margin-m", type=float, default=0.25)
+    ap.add_argument("--overlap-advantage-margin-s", type=float, default=0.10)
+    ap.add_argument("--separation-advantage-margin-s", type=float, default=0.10)
+    ap.add_argument("--max-empirical-source-offroad-fraction", type=float, default=None, help="reference mode only: reject source scenes whose empirical OC-RAP is already severely off-road")
     ap.add_argument("--allow-recontact-after-first-separation", action="store_true")
 
     # Slightly permissive comparative thresholds are allowed for target-display
@@ -243,6 +314,14 @@ def main() -> int:
                 reject_any_recontact_after_first_separation=not bool(args.allow_recontact_after_first_separation),
                 min_comparative_methods=int(args.min_comparative_evidence_methods),
                 min_temporal_advantage_methods=int(args.min_temporal_advantage_methods),
+                min_dominance_methods=int(args.min_dominance_methods),
+                min_terminal_advantage_methods=int(args.min_terminal_advantage_methods),
+                min_overlap_advantage_methods=int(args.min_overlap_advantage_methods),
+                min_separation_advantage_methods=int(args.min_separation_advantage_methods),
+                terminal_advantage_margin_m=float(args.terminal_advantage_margin_m),
+                overlap_advantage_margin_s=float(args.overlap_advantage_margin_s),
+                separation_advantage_margin_s=float(args.separation_advantage_margin_s),
+                max_empirical_source_offroad_fraction=(None if args.max_empirical_source_offroad_fraction is None else float(args.max_empirical_source_offroad_fraction)),
                 temporal_win_margin_m=float(args.temporal_clearance_win_margin_m),
                 temporal_noninferior_margin_m=float(args.temporal_clearance_noninferior_margin_m),
                 temporal_min_win_fraction=float(args.temporal_min_win_fraction),
@@ -297,9 +376,14 @@ def main() -> int:
         preferred_rank.get(str(r["target_key"]), 10**6),
         0 if not r.get("display_window_trimmed") else 1,
         int(r["visualization_trace_quality"].get("visual_evidence_rank") or 99),
+        -int(r["visualization_trace_quality"].get("external_dominance_count") or 0),
+        -len(r["visualization_trace_quality"].get("external_terminal_advantage_methods") or []),
+        -len(r["visualization_trace_quality"].get("external_overlap_advantage_methods") or []),
+        -len(r["visualization_trace_quality"].get("external_separation_advantage_methods") or []),
         -int(r["visualization_trace_quality"].get("external_recovery_failure_count") or 0),
         -int(r["visualization_trace_quality"].get("external_comparative_evidence_count") or 0),
         -temporal_strength(r),
+        float(((r["visualization_trace_quality"].get("ocrap_trace_recovery") or {}).get("lane_realism") or {}).get("lane_center_distance_p90_m") or 0.0),
         -float(r.get("clip_duration_s") or 0.0),
         float((r["visualization_trace_quality"].get("ocrap_trace_recovery") or {}).get("sustained_separation", {}).get("first_s") or 1e6),
         -min(3.0, float(r["visualization_trace_quality"].get("ocrap_terminal_clearance_m") or 0.0)),
