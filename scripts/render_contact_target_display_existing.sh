@@ -17,6 +17,7 @@ export MPLBACKEND=Agg
 : "${CONTACT_TARGET_VIDEO_FORMAT:=mp4}"
 : "${CONTACT_TARGET_FORCE_RENDER:=true}"
 : "${CONTACT_TARGET_MIRROR_MEDIA_IN_WORK:=true}"
+: "${CONTACT_TARGET_DISPLAY_LABEL:=OC-RAP}"
 
 WORK="$BASE_OUT/contact_target_displays/$CONTACT_TARGET_NAME"
 SELECTION="$WORK/selection/contact_selection.json"
@@ -25,6 +26,15 @@ LOG_DIR="$WORK/logs"
 mkdir -p "$LOG_DIR"
 
 [[ -s "$SELECTION" ]] || { echo "missing materialized selection: $SELECTION" >&2; exit 30; }
+python - "$SELECTION" "$CONTACT_TARGET_DISPLAY_LABEL" <<'PYSEL'
+import json,pathlib,sys
+p=pathlib.Path(sys.argv[1])
+d=json.loads(p.read_text(encoding='utf-8'))
+overrides=dict(d.get('display_name_overrides') or {})
+overrides['ocrap']=str(sys.argv[2])
+d['display_name_overrides']=overrides
+p.write_text(json.dumps(d,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+PYSEL
 [[ -s "$TRACE_ROOT/ocrap/contact/closed_loop_ocrap.json.scenes.jsonl" ]] || { echo "missing materialized OC-RAP trace" >&2; exit 30; }
 BASELINES=(postimpact_mpc_lite post_crash_braking postimpact_motion_tvlqr post_collision_restoration compensatory_postimpact_mpc robust_postimpact_control)
 TRACE_ARGS=(--trace "ocrap=$TRACE_ROOT/ocrap/contact/closed_loop_ocrap.json.scenes.jsonl")
