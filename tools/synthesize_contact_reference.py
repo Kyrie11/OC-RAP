@@ -395,6 +395,16 @@ def _trace_reference_quality(trace:list[dict[str,Any]], context:dict[str,Any], d
     post_sep_clear=[]
     if first_sep is not None:
         post_sep_clear=[float(v) for v in clear[first_sep:] if math.isfinite(v)]
+    # ``first_sep`` is merely the first non-overlap state.  For a continuous
+    # recovery its clearance is expected to be close to zero, so requiring the
+    # *entire* suffix from that instant to already exceed 0.5 m makes almost
+    # every physically smooth escape look invalid.  The display selector, by
+    # contrast, defines a stable recovery after a held >=0.5 m separation.
+    # Track both quantities explicitly and use the sustained-separation suffix
+    # for the clean/reference contract so synthesis and selection agree.
+    post_sustained_clear=[]
+    if sustained is not None:
+        post_sustained_clear=[float(v) for v in clear[sustained:] if math.isfinite(v)]
     p05=float(np.quantile([v for v in clear if math.isfinite(v)],.05)) if any(math.isfinite(v) for v in clear) else float('nan')
     diag=analyze_contact_trace(trace,dt=dt)
     return {
@@ -407,6 +417,7 @@ def _trace_reference_quality(trace:list[dict[str,Any]], context:dict[str,Any], d
         'clearance_p05_m': p05,
         'terminal_clearance_m': clear[-1] if clear else None,
         'min_post_separation_clearance_m': min(post_sep_clear) if post_sep_clear else None,
+        'min_post_sustained_separation_clearance_m': min(post_sustained_clear) if post_sustained_clear else None,
         'lane_terminal_m': lane[-1] if lane else None,
         'lane_p90_m': _quantile(lane,.90),
         'lane_max_m': max(lane) if lane else None,
@@ -432,7 +443,7 @@ def _trace_reference_quality(trace:list[dict[str,Any]], context:dict[str,Any], d
         'clean': bool(
             sustained is not None and not recontact and clear and clear[-1] >= 1.0
             and not bool(diag.get('secondary_collision_event'))
-            and (not post_sep_clear or min(post_sep_clear)>=.5)
+            and (not post_sustained_clear or min(post_sustained_clear)>=.5)
             and not any(offroad_flags)
             and (not lane or (_quantile(lane,.90)<=4.0 and lane[-1]<=3.0))
             and (not heading or (_quantile(heading,.90)<=45.0 and heading[-1]<=40.0))
@@ -598,7 +609,8 @@ def _generate_profile(scene:dict[str,Any], dt:float, profile:dict[str,float], *,
         coarse.sort(key=lambda z:z[0])
         k_exact=max(1,min(int(top_k_exact_actions),len(coarse)))
         finalists=[ac for _score,ac in coarse[:k_exact]]
-        scored=[(_simulate_cost(state,ac,k=k,trace=src,lane_segs=lane_segs,dt=dt,horizon=int(profile['horizon']),profile=profile,separated=separated,sdc_template=a0,max_speed=max_speed,exact_near_horizon=3,initial_contact_partner_ids=initial_contact_partner_ids),ac) for ac in finalists]
+        exact_h=max(3,int(profile.get('exact_near_horizon',3)))
+        scored=[(_simulate_cost(state,ac,k=k,trace=src,lane_segs=lane_segs,dt=dt,horizon=int(profile['horizon']),profile=profile,separated=separated,sdc_template=a0,max_speed=max_speed,exact_near_horizon=exact_h,initial_contact_partner_ids=initial_contact_partner_ids),ac) for ac in finalists]
         _,(a_cmd,w_cmd)=min(scored,key=lambda z:z[0])
         # one physically bounded kinematic step
         v=max(0.0,min(max_speed,v+a_cmd*dt))
@@ -639,7 +651,7 @@ def _generate_profile(scene:dict[str,Any], dt:float, profile:dict[str,float], *,
     new['metric_summary']=recompute_contact_metric_summary(out,dt,original=(scene.get('metric_summary') or {}))
     new['method']='ocrap_reference'
     new['reference_trajectory']=True
-    new['reference_planner']='constrained_kinematic_recovery_v1'
+    new['reference_planner']='constrained_kinematic_recovery_v2_contract_aligned'
     q=_trace_reference_quality(out,ctx,dt)
     q['profile_name']=profile['name']
     # deviation from empirical OC-RAP, useful for provenance and realism audit
@@ -666,7 +678,7 @@ def _profile_set(clear_target_override:float|None=None, source_diag:dict[str,Any
         target_speed=4.5,collision_w=1500.0,clear_target=ct,post_sep_floor=.80,post_sep_w=220.0,
         separation_mark_m=.50,heading_hard_rad=math.radians(55.0),
         crowd_w=18.0,crowd_clear_target=1.35,
-        secondary_collision_w=2600.0,secondary_near_w=140.0,secondary_buffer=0.85,
+        secondary_collision_w=2600.0,secondary_near_w=140.0,secondary_buffer=0.85,exact_near_horizon=3,
         post_sep_nominal_scale=.35,unsafe_nominal_scale=.20,unsafe_nominal_clearance_m=.85,
         stagnation_w=80.0,stagnation_clearance_m=1.5,
     )
@@ -684,23 +696,23 @@ def _profile_set(clear_target_override:float|None=None, source_diag:dict[str,Any
         profiles.extend([
             p('crowded_escape',target_speed=3.8,collision_w=2500.0,clear_w=70.0,crowd_w=55.0,crowd_clear_target=1.8,
               secondary_collision_w=5200.0,secondary_near_w=320.0,secondary_buffer=1.20,nominal_w=.32,
-              post_sep_nominal_scale=.18,post_sep_floor=1.15,post_sep_w=520.0,lane_w=30.0,lane_heading_w=8.0,horizon=13.0),
+              post_sep_nominal_scale=.18,post_sep_floor=1.15,post_sep_w=520.0,lane_w=30.0,lane_heading_w=8.0,horizon=13.0,exact_near_horizon=5),
             p('crowded_brake_escape',target_speed=2.7,collision_w=2800.0,clear_w=68.0,crowd_w=62.0,crowd_clear_target=1.7,
               secondary_collision_w=5600.0,secondary_near_w=360.0,secondary_buffer=1.25,nominal_w=.28,
-              post_sep_nominal_scale=.15,post_sep_floor=1.20,post_sep_w=560.0,lane_w=36.0,lane_heading_w=10.0,horizon=14.0,action_w=.12),
+              post_sep_nominal_scale=.15,post_sep_floor=1.20,post_sep_w=560.0,lane_w=36.0,lane_heading_w=10.0,horizon=14.0,action_w=.12,exact_near_horizon=5),
         ])
     if {'secondary_collision','post_separation_secondary_collision','recontact'} & tags:
         profiles.append(
             p('secondary_avoidance',target_speed=4.0,collision_w=3000.0,clear_w=76.0,crowd_w=48.0,crowd_clear_target=1.9,
               secondary_collision_w=7000.0,secondary_near_w=460.0,secondary_buffer=1.35,nominal_w=.24,
               post_sep_nominal_scale=.10,unsafe_nominal_scale=.08,post_sep_floor=1.30,post_sep_w=720.0,
-              lane_w=32.0,lane_heading_w=9.0,horizon=15.0)
+              lane_w=32.0,lane_heading_w=9.0,horizon=15.0,exact_near_horizon=6)
         )
     if 'source_offroad' in tags:
         profiles.append(
             p('lane_recovery_escape',target_speed=3.2,collision_w=2500.0,clear_w=66.0,crowd_w=38.0,
               secondary_collision_w=5200.0,nominal_w=.20,post_sep_nominal_scale=.12,lane_w=58.0,lane_heading_w=14.0,
-              lane_soft=1.25,lane_hard=3.5,dev_hard=4.5,offroad_proxy_lane_m=4.0,horizon=14.0)
+              lane_soft=1.25,lane_hard=3.5,dev_hard=4.5,offroad_proxy_lane_m=4.0,horizon=14.0,exact_near_horizon=5)
         )
     return profiles
 
@@ -727,7 +739,70 @@ def _comparative_score(q:dict[str,Any], baseline_qs:dict[str,dict[str,Any]]|None
     return float(score)
 
 
-def _quality_score(q:dict[str,Any], baseline_qs:dict[str,dict[str,Any]]|None=None) -> float:
+def _target_contract_adjustment(q:dict[str,Any], contract:dict[str,float]|None) -> tuple[float,dict[str,Any]]:
+    """Score how well a candidate matches the downstream display contract.
+
+    This is intentionally a *profile selection* term only.  The final selector
+    still recomputes the visible-window gates independently.  Keeping this
+    signal here prevents synthesis from choosing a trajectory that looks good
+    under its local objective but is predictably rejected one stage later.
+    """
+    if not contract:
+        return 0.0, {'enabled':False,'pass':None,'failures':[]}
+    failures=[]; score=0.0
+    ss=q.get('sustained_separation_s')
+    max_ss=contract.get('max_sustained_separation_s')
+    if max_ss is not None:
+        if ss is None:
+            failures.append('no_sustained_separation'); score-=280.0
+        elif float(ss) <= float(max_ss)+1e-9:
+            score+=130.0+25.0*max(0.0,float(max_ss)-float(ss))
+        else:
+            failures.append('sustained_separation_too_late'); score-=180.0*min(1.5,float(ss)-float(max_ss))
+    tc=q.get('terminal_clearance_m'); min_tc=contract.get('min_terminal_clearance_m')
+    if min_tc is not None:
+        if tc is None or not math.isfinite(float(tc)) or float(tc)<float(min_tc)-1e-9:
+            failures.append('insufficient_terminal_clearance')
+            gap=float(min_tc)-(float(tc) if tc is not None and math.isfinite(float(tc)) else -1.0)
+            score-=110.0*max(0.25,gap)
+        else:
+            score+=80.0+10.0*min(2.0,float(tc)-float(min_tc))
+    pm=q.get('min_post_sustained_separation_clearance_m')
+    min_pm=contract.get('min_post_separation_clearance_m')
+    if min_pm is not None:
+        if pm is None or not math.isfinite(float(pm)) or float(pm)<float(min_pm)-1e-9:
+            failures.append('post_separation_clearance_dip')
+            gap=float(min_pm)-(float(pm) if pm is not None and math.isfinite(float(pm)) else -0.5)
+            score-=180.0*max(0.15,gap)
+        else:
+            score+=110.0+12.0*min(1.5,float(pm)-float(min_pm))
+    checks=(
+        ('lane_terminal_m','lane_terminal_max_m','lane_terminal_far'),
+        ('lane_p90_m','lane_p90_max_m','lane_p90_far'),
+        ('heading_terminal_deg','lane_heading_terminal_max_deg','lane_heading_terminal'),
+        ('heading_p90_deg','lane_heading_p90_max_deg','lane_heading_p90'),
+    )
+    for qk,ck,label in checks:
+        limit=contract.get(ck); val=q.get(qk)
+        if limit is None or val is None or not math.isfinite(float(val)):
+            continue
+        if float(val)>float(limit)+1e-9:
+            failures.append(label)
+            scale=12.0 if 'lane_' in qk else 3.0
+            score-=scale*(float(val)-float(limit))
+        else:
+            score+=12.0
+    if q.get('secondary_collision_event'):
+        failures.append('secondary_collision')
+    if q.get('recontact') or q.get('same_partner_recontact_event'):
+        failures.append('recontact')
+    passed=not failures
+    if passed:
+        score+=220.0
+    return float(score), {'enabled':True,'pass':bool(passed),'failures':failures}
+
+
+def _quality_score(q:dict[str,Any], baseline_qs:dict[str,dict[str,Any]]|None=None, target_contract:dict[str,float]|None=None) -> float:
     score=0.0
     score += 260.0 if q.get('clean') else 0.0
     score += 120.0 if not q.get('recontact') else -350.0
@@ -738,7 +813,11 @@ def _quality_score(q:dict[str,Any], baseline_qs:dict[str,dict[str,Any]]|None=Non
     if ss is not None: score -= 35.0*float(ss)
     tc=q.get('terminal_clearance_m')
     if tc is not None: score += 10.0*min(max(float(tc),-2.0),4.0)
-    postmin=q.get('min_post_separation_clearance_m')
+    # Prefer the stable post-recovery suffix.  The first non-overlap state is
+    # intentionally near zero clearance and should not dominate profile choice.
+    postmin=q.get('min_post_sustained_separation_clearance_m')
+    if postmin is None:
+        postmin=q.get('min_post_separation_clearance_m')
     if postmin is not None: score += 18.0*min(max(float(postmin),-.5),2.0)
     lp=q.get('lane_p90_m')
     if lp is not None: score -= 12.0*max(0.0,float(lp)-2.0)
@@ -751,16 +830,19 @@ def _quality_score(q:dict[str,Any], baseline_qs:dict[str,dict[str,Any]]|None=Non
     yr=q.get('yaw_rate_p95')
     if yr is not None and math.isfinite(float(yr)): score -= 30.0*max(0.0,float(yr)-.45)
     score += _comparative_score(q,baseline_qs)
+    adj,detail=_target_contract_adjustment(q,target_contract)
+    score += adj
+    q['target_display_contract']=detail
     return float(score)
 
 
-def _synthesize(scene:dict[str,Any],dt:float,preserve_good:bool,baseline_scenes:dict[str,dict[str,Any]]|None=None, *, force_preserve:bool=False, top_k_exact_actions:int=12, profile_override:str|None=None) -> tuple[dict[str,Any],dict[str,Any]]:
+def _synthesize(scene:dict[str,Any],dt:float,preserve_good:bool,baseline_scenes:dict[str,dict[str,Any]]|None=None, *, force_preserve:bool=False, top_k_exact_actions:int=12, profile_override:str|None=None, target_contract:dict[str,float]|None=None) -> tuple[dict[str,Any],dict[str,Any]]:
     original_q=_trace_reference_quality(list(scene.get('render_trace') or []),scene.get('render_context') or {},dt)
     original_q['profile_name']='empirical_preserved';original_q['deviation_mean_m']=0.0;original_q['deviation_max_m']=0.0
     baseline_qs={m:_trace_reference_quality(list(s.get('render_trace') or []),s.get('render_context') or {},dt) for m,s in (baseline_scenes or {}).items()}
     # Preserve a genuinely strong real trajectory only when it also clears a
     # comparative quality floor.  Otherwise synthesize a local target recovery.
-    empirical_score=_quality_score(original_q,baseline_qs)
+    empirical_score=_quality_score(original_q,baseline_qs,target_contract)
     if (force_preserve and original_q.get('clean')) or (preserve_good and original_q.get('clean') and (original_q.get('sustained_separation_s') or 999)<=1.2 and empirical_score>=260.0):
         out=copy.deepcopy(scene);out['reference_trajectory']=False;out['reference_planner']='empirical_preserved'
         out['reference_quality']=copy.deepcopy(original_q)
@@ -774,7 +856,7 @@ def _synthesize(scene:dict[str,Any],dt:float,preserve_good:bool,baseline_scenes:
     original_q['source_critical_tags']=list(original_q.get('critical_tags') or [])
     for profile in _profile_set(desired_clear, source_diag=original_q):
         try:
-            s,q=_generate_profile(scene,dt,profile,top_k_exact_actions=top_k_exact_actions);candidates.append((_quality_score(q,baseline_qs),s,q))
+            s,q=_generate_profile(scene,dt,profile,top_k_exact_actions=top_k_exact_actions);candidates.append((_quality_score(q,baseline_qs,target_contract),s,q))
         except Exception as exc:
             candidates.append((-1e9,None,{'profile_name':profile['name'],'error':repr(exc)}))
     candidates=[x for x in candidates if x[1] is not None]
@@ -841,9 +923,9 @@ def _load_profile_overrides(path:Path|None)->dict[str,str]:
 
 
 def _worker_synthesize(payload:tuple[Any,...]) -> tuple[int,str,dict[str,Any],dict[str,Any],float]:
-    order,key,scene,dt,preserve_good,paired,force_preserve,top_k_exact_actions,profile_override=payload
+    order,key,scene,dt,preserve_good,paired,force_preserve,top_k_exact_actions,profile_override,target_contract=payload
     t0=time.monotonic()
-    new,q=_synthesize(scene,dt,preserve_good,paired,force_preserve=force_preserve,top_k_exact_actions=top_k_exact_actions,profile_override=profile_override)
+    new,q=_synthesize(scene,dt,preserve_good,paired,force_preserve=force_preserve,top_k_exact_actions=top_k_exact_actions,profile_override=profile_override,target_contract=target_contract)
     new['target_key']=key
     return int(order),str(key),new,q,float(time.monotonic()-t0)
 
@@ -861,12 +943,29 @@ def main()->int:
     ap.add_argument('--top-k-exact-actions',type=int,default=12,help='after conservative coarse action ranking, rescore only this many actions with exact oriented boxes')
     ap.add_argument('--baseline', action='append', default=[], help='METHOD=path/to/baseline scenes.jsonl; used only to choose the strongest physically plausible target profile')
     ap.add_argument('--scene-profile-overrides', type=Path, default=None, help='optional JSON mapping target_key -> preferred profile_name for manual template curation')
+    ap.add_argument('--target-max-sustained-separation-s',type=float,default=None)
+    ap.add_argument('--target-min-terminal-clearance-m',type=float,default=None)
+    ap.add_argument('--target-min-post-separation-clearance-m',type=float,default=None)
+    ap.add_argument('--target-lane-terminal-max-m',type=float,default=None)
+    ap.add_argument('--target-lane-p90-max-m',type=float,default=None)
+    ap.add_argument('--target-lane-heading-terminal-max-deg',type=float,default=None)
+    ap.add_argument('--target-lane-heading-p90-max-deg',type=float,default=None)
     args=ap.parse_args()
     allowed=_load_allowed(args.target_keys_file);dt=float(args.metric_dt_s)
     force_preserve=_load_allowed(args.force_preserve_keys_file) or set()
     profile_overrides=_load_profile_overrides(args.scene_profile_overrides)
     if args.jobs <= 0: raise SystemExit('--jobs must be positive')
     if args.top_k_exact_actions <= 0: raise SystemExit('--top-k-exact-actions must be positive')
+    target_contract={
+        'max_sustained_separation_s':args.target_max_sustained_separation_s,
+        'min_terminal_clearance_m':args.target_min_terminal_clearance_m,
+        'min_post_separation_clearance_m':args.target_min_post_separation_clearance_m,
+        'lane_terminal_max_m':args.target_lane_terminal_max_m,
+        'lane_p90_max_m':args.target_lane_p90_max_m,
+        'lane_heading_terminal_max_deg':args.target_lane_heading_terminal_max_deg,
+        'lane_heading_p90_max_deg':args.target_lane_heading_p90_max_deg,
+    }
+    if not any(v is not None for v in target_contract.values()): target_contract=None
     baseline_maps={}
     for spec in args.baseline:
         if '=' not in spec: raise SystemExit(f'invalid --baseline {spec!r}; expected METHOD=PATH')
@@ -890,7 +989,7 @@ def main()->int:
     print(json.dumps({'event':'contact_reference_synthesis_start','num_scenes':len(source_rows),'jobs':int(args.jobs),'top_k_exact_actions':int(args.top_k_exact_actions)}),flush=True)
 
     results={}
-    payloads=[(order,key,scene,dt,bool(args.preserve_good),paired,key in force_preserve,int(args.top_k_exact_actions),profile_overrides.get(key)) for order,key,scene,_env,paired in source_rows]
+    payloads=[(order,key,scene,dt,bool(args.preserve_good),paired,key in force_preserve,int(args.top_k_exact_actions),profile_overrides.get(key),target_contract) for order,key,scene,_env,paired in source_rows]
     if int(args.jobs)==1:
         for i,payload in enumerate(payloads,1):
             print(f'[REF][SCENE-START] {i}/{len(payloads)} target={payload[1]}',flush=True)
@@ -914,7 +1013,7 @@ def main()->int:
             dst.write(json.dumps(nenv,ensure_ascii=False,separators=(',',':'))+'\n')
             audit.append({'target_key':key,'reference_generated':bool(new.get('reference_trajectory')),'elapsed_s':elapsed,'quality':q})
     n=len(source_rows)
-    doc={'event':'contact_reference_synthesis_v2_fast','num_scenes':n,'empirical_ocrap_relabelled':False,'display_method_name':'OC-RAP','trajectory_states_modified_for_reference':True,'scientific_use':'aspirational/reference visualization only; not an empirical OC-RAP result','jobs':int(args.jobs),'top_k_exact_actions':int(args.top_k_exact_actions),'scenes':audit}
+    doc={'event':'contact_reference_synthesis_v3_contract_aligned','num_scenes':n,'empirical_ocrap_relabelled':False,'display_method_name':'OC-RAP','trajectory_states_modified_for_reference':True,'scientific_use':'aspirational/reference visualization only; not an empirical OC-RAP result','jobs':int(args.jobs),'top_k_exact_actions':int(args.top_k_exact_actions),'target_display_contract':target_contract,'scenes':audit}
     args.audit_output.parent.mkdir(parents=True,exist_ok=True);args.audit_output.write_text(json.dumps(doc,indent=2)+'\n')
     print(json.dumps({'event':doc['event'],'num_scenes':n,'output':str(args.output_trace),'audit':str(args.audit_output)}))
     return 0

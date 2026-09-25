@@ -1,6 +1,6 @@
 import copy
 
-from tools.synthesize_contact_reference import _generate_profile, _profile_set
+from tools.synthesize_contact_reference import _generate_profile, _profile_set, _trace_reference_quality
 
 
 def _agent(x, y, yaw=0.0, *, sdc=False):
@@ -68,3 +68,33 @@ def test_reference_synthesis_preserves_t0_and_other_agents_and_recomputes_metric
     terminal_frame = out["render_trace"][-1]
     assert out["metric_summary"]["terminal_clearance_m"] == terminal_frame["metrics"]["min_clearance_m"]
     assert "deviation_max_m" in quality
+
+
+def test_reference_clean_contract_starts_after_sustained_separation_not_first_nonoverlap():
+    # A physically smooth escape cannot jump from overlap to 0.5 m clearance in
+    # one 100 ms step.  The first non-overlap state is therefore allowed to be
+    # close to zero; the stable suffix after held >=0.5 m separation is what
+    # must stay clear.
+    clearances = [-0.4, -0.1, 0.08, 0.25, 0.55, 0.65, 0.85, 1.1]
+    trace = []
+    for i, clr in enumerate(clearances):
+        sdc = _agent(i * 0.2, 0.0, sdc=True)
+        # Keep the geometric contact partner close only during the first two
+        # frames so contact diagnostics agree with the metric flags.
+        other = _agent(i * 0.2 + (1.0 if i < 2 else 20.0), 0.0, sdc=False)
+        trace.append({
+            "agents": [sdc, other],
+            "metrics": {
+                "ego_speed_mps": 2.0,
+                "ego_yaw_rad": 0.0,
+                "min_clearance_m": clr,
+                "signed_clearance_m": clr,
+                "overlap": 1.0 if clr < 0.0 else 0.0,
+                "offroad": 0.0,
+            },
+        })
+    ctx = {"roadgraph_polylines": [{"id": 1, "type": 1, "xy": [[-10.0, 0.0], [30.0, 0.0]]}]}
+    q = _trace_reference_quality(trace, ctx, 0.1)
+    assert q["min_post_separation_clearance_m"] < 0.5
+    assert q["min_post_sustained_separation_clearance_m"] >= 0.5
+    assert q["clean"] is True

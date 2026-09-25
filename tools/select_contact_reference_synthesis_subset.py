@@ -48,8 +48,8 @@ def main()->int:
     ap.add_argument('--max-scenes',type=int,default=18)
     ap.add_argument('--max-source-offroad-fraction',type=float,default=.15)
     ap.add_argument('--allow-source-offroad-repair',action='store_true')
-    ap.add_argument('--max-repairable-source-offroad-fraction',type=float,default=.45)
-    ap.add_argument('--coverage-tags',default='secondary_collision,crowded,recontact,source_offroad')
+    ap.add_argument('--max-repairable-source-offroad-fraction',type=float,default=.70)
+    ap.add_argument('--coverage-tags',default='secondary_collision,crowded,multi_actor_conflict,recontact,source_offroad')
     ap.add_argument('--metric-dt-s',type=float,default=.1)
     ap.add_argument('--output-target-keys',type=Path,required=True)
     ap.add_argument('--output-anchor-manifest',type=Path,required=True)
@@ -99,9 +99,14 @@ def main()->int:
         'reference_synthesis_prefilter_only':True,'source_anchor_manifest':str(args.anchor_manifest)})
     args.output_target_keys.parent.mkdir(parents=True,exist_ok=True); args.output_target_keys.write_text(json.dumps(selected,indent=2)+'\n')
     args.output_anchor_manifest.parent.mkdir(parents=True,exist_ok=True); args.output_anchor_manifest.write_text(json.dumps(filtered,indent=2)+'\n')
-    audit={'event':'contact_reference_synthesis_subset_v2','max_scenes':args.max_scenes,'preferred_keys':preferred,
+    from collections import Counter
+    selected_rows=[r for r in rows if r['target_key'] in sset]
+    audit={'event':'contact_reference_synthesis_subset_v3','max_scenes':args.max_scenes,'preferred_keys':preferred,
            'coverage_tags':_tags(args.coverage_tags),'allow_source_offroad_repair':bool(args.allow_source_offroad_repair),
            'max_repairable_source_offroad_fraction':float(args.max_repairable_source_offroad_fraction),
+           'candidate_count':len(rows),'eligible_count':len(eligible)+len(preferred),
+           'gross_source_offroad_excluded_count':sum(bool(r['gross_source_offroad']) for r in rows),
+           'selected_tag_counts':dict(Counter(t for r in selected_rows for t in r.get('critical_tags',[]))),
            'selected_keys':selected,'rows':rows,
            'scientific_note':'Qualitative compute prefilter only; criticality is not an empirical score. Final target-display physical/comparative gates remain separate.'}
     args.output_audit.parent.mkdir(parents=True,exist_ok=True); args.output_audit.write_text(json.dumps(audit,indent=2)+'\n')

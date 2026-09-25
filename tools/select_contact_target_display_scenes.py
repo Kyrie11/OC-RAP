@@ -89,17 +89,26 @@ def _evaluate(
     material_count = int(item.get("num_material_external_comparisons") or 0)
     if material_count < int(min_material_comparisons):
         reasons.append("insufficient_material_external_comparisons")
-    if bool(reference_scene.get("reference_trajectory")) and reference_quality and not bool(reference_quality.get("clean")):
+    if bool(reference_scene.get("reference_trajectory")) and reference_quality:
+        # The final displayed window is independently re-evaluated below.  Do
+        # not reject a clean *visible prefix* merely because the longer
+        # synthesized trajectory later violates a full-trace quality flag.
+        # The only full-trace property that must survive clipping is the local
+        # deviation envelope: without that, the target ceases to be a local
+        # recovery correction around empirical OC-RAP.
         deviation_mean = _finite(reference_quality.get("deviation_mean_m"))
         deviation_max = _finite(reference_quality.get("deviation_max_m"))
         deviation_failed = bool(reference_quality.get("deviation_contract_failed"))
-        relax = bool(allow_reference_deviation_template and deviation_failed)
-        if relax and reference_max_deviation_mean_m is not None:
-            relax = relax and deviation_mean is not None and deviation_mean <= float(reference_max_deviation_mean_m) + 1e-9
-        if relax and reference_max_deviation_max_m is not None:
-            relax = relax and deviation_max is not None and deviation_max <= float(reference_max_deviation_max_m) + 1e-9
-        if not relax:
-            reasons.append("reference_reality_contract_failed")
+        if deviation_failed:
+            relax = bool(allow_reference_deviation_template)
+            if relax and reference_max_deviation_mean_m is not None:
+                relax = relax and deviation_mean is not None and deviation_mean <= float(reference_max_deviation_mean_m) + 1e-9
+            if relax and reference_max_deviation_max_m is not None:
+                relax = relax and deviation_max is not None and deviation_max <= float(reference_max_deviation_max_m) + 1e-9
+            if not relax:
+                reasons.append("reference_deviation_contract_failed")
+        q["reference_full_trace_clean"] = bool(reference_quality.get("clean"))
+        q["reference_deviation_contract_failed"] = bool(deviation_failed)
     empirical_quality = (reference_quality.get("empirical_quality") or {}) if isinstance(reference_quality, dict) else {}
     if max_empirical_source_offroad_fraction is not None and empirical_quality:
         frac = empirical_quality.get("offroad_proxy_fraction")
@@ -255,6 +264,10 @@ def main() -> int:
     ap.add_argument("--min-terminal-clearance-m", type=float, default=0.50)
     ap.add_argument("--min-post-separation-clearance-m", type=float, default=0.25)
     ap.add_argument("--max-sustained-separation-s", type=float, default=None)
+    ap.add_argument("--enable-reference-quality-fallback", action="store_true",
+                    help="reference visualization only: if a scene misses the strict target timing/clearance margins, retry with explicitly bounded fallback margins while keeping collision/recontact/offroad/lane gates unchanged")
+    ap.add_argument("--fallback-max-sustained-separation-s", type=float, default=1.5)
+    ap.add_argument("--fallback-min-post-separation-clearance-m", type=float, default=0.50)
     ap.add_argument("--min-temporal-advantage-methods", type=int, default=0)
     ap.add_argument("--min-dominance-methods", type=int, default=0, help="minimum external methods beaten on at least two post-contact dimensions")
     ap.add_argument("--min-terminal-advantage-methods", type=int, default=0)
@@ -381,8 +394,18 @@ def main() -> int:
         full_clip = min(float(args.max_clip_duration_s), float(available))
         attempts: list[dict[str, Any]] = []
         chosen: dict[str, Any] | None = None
-        clip = full_clip
-        while clip + 1e-9 >= float(args.min_clip_duration_s):
+        strict_max_sep = None if args.max_sustained_separation_s is None else float(args.max_sustained_separation_s)
+        strict_min_post = float(args.min_post_separation_clearance_m)
+        tiers=[("strict",strict_max_sep,strict_min_post)]
+        if bool(args.enable_reference_quality_fallback) and bool(candidate.get("reference_visualization_only")):
+            fb_max=float(args.fallback_max_sustained_separation_s)
+            if strict_max_sep is not None: fb_max=max(fb_max,strict_max_sep)
+            fb_post=min(float(args.fallback_min_post_separation_clearance_m),strict_min_post)
+            if fb_max!=strict_max_sep or abs(fb_post-strict_min_post)>1e-12:
+                tiers.append(("reference_fallback",fb_max,fb_post))
+        for tier_name,tier_max_sep,tier_min_post in tiers:
+          clip = full_clip
+          while clip + 1e-9 >= float(args.min_clip_duration_s):
             clip = round(clip / dt) * dt
             ok, q, reasons, evidence, failures, temporal = _evaluate(
                 item, traces, clip=clip, dt=dt,
@@ -390,8 +413,8 @@ def main() -> int:
                 separation_clearance_m=float(args.separation_clearance_m),
                 separation_hold_s=float(args.separation_hold_s),
                 min_terminal_clearance_m=float(args.min_terminal_clearance_m),
-                min_post_separation_clearance_m=float(args.min_post_separation_clearance_m),
-                max_sustained_separation_s=(None if args.max_sustained_separation_s is None else float(args.max_sustained_separation_s)),
+                min_post_separation_clearance_m=float(tier_min_post),
+                max_sustained_separation_s=tier_max_sep,
                 reject_any_recontact_after_first_separation=not bool(args.allow_recontact_after_first_separation),
                 min_comparative_methods=int(args.min_comparative_evidence_methods),
                 min_temporal_advantage_methods=int(args.min_temporal_advantage_methods),
@@ -423,6 +446,9 @@ def main() -> int:
             )
             attempts.append({
                 "clip_duration_s": float(clip), "accepted": bool(ok),
+                "quality_tier":tier_name,
+                "max_sustained_separation_s":tier_max_sep,
+                "min_post_separation_clearance_m":float(tier_min_post),
                 "rejection_reasons": reasons, "failure_methods": failures,
                 "temporal_methods": temporal, "comparative_methods": evidence,
                 "quality": q,
@@ -432,6 +458,12 @@ def main() -> int:
                 row["clip_duration_s"] = float(clip)
                 row["display_full_available_clip_s"] = float(full_clip)
                 row["display_window_trimmed"] = bool(clip + 1e-9 < full_clip)
+                row["selection_quality_tier"] = tier_name
+                row["selection_contract"] = {
+                    "max_sustained_separation_s":tier_max_sep,
+                    "min_post_separation_clearance_m":float(tier_min_post),
+                    "min_terminal_clearance_m":float(args.min_terminal_clearance_m),
+                }
                 row["visualization_trace_quality"] = q
                 trace_primary = base._hardest_among(row, evidence) or str(row.get("primary_external_method") or "")
                 if trace_primary:
@@ -442,6 +474,8 @@ def main() -> int:
                 chosen = row
                 break  # descending search => longest passing real prefix
             clip -= float(args.clip_step_s)
+          if chosen is not None:
+              break
         if chosen is not None:
             accepted.append(chosen)
         audits.append({
@@ -463,6 +497,7 @@ def main() -> int:
     accepted.sort(key=lambda r: (
         0 if (str(r["target_key"]) in preferred_rank and not r.get("display_window_trimmed")) else 1,
         preferred_rank.get(str(r["target_key"]), 10**6),
+        0 if r.get("selection_quality_tier") == "strict" else 1,
         0 if not r.get("display_window_trimmed") else 1,
         -float(r.get("source_criticality_score") or 0.0),
         int(r["visualization_trace_quality"].get("visual_evidence_rank") or 99),
@@ -526,7 +561,14 @@ def main() -> int:
         "accepted_candidate_count": len(accepted),
         "selected_count": len(final),
         "requested_count": int(args.num_scenes),
-        "hard_reality_contract_unchanged": True,
+        "hard_reality_contract_unchanged": not any(r.get("selection_quality_tier") == "reference_fallback" for r in final),
+        "collision_recontact_offroad_lane_gates_unchanged": True,
+        "reference_quality_fallback_enabled": bool(args.enable_reference_quality_fallback),
+        "reference_quality_fallback_selected_count": sum(r.get("selection_quality_tier") == "reference_fallback" for r in final),
+        "strict_max_sustained_separation_s": args.max_sustained_separation_s,
+        "strict_min_post_separation_clearance_m": float(args.min_post_separation_clearance_m),
+        "fallback_max_sustained_separation_s": float(args.fallback_max_sustained_separation_s),
+        "fallback_min_post_separation_clearance_m": float(args.fallback_min_post_separation_clearance_m),
         "trajectory_states_modified": bool(candidate.get("reference_visualization_only")),
         "reference_visualization_only": bool(candidate.get("reference_visualization_only")),
         "criticality_coverage_tags": coverage_tags,

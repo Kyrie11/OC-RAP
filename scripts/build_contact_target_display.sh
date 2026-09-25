@@ -41,9 +41,9 @@ export MPLBACKEND=Agg
 : "${CONTACT_TARGET_REFERENCE_MODE:=true}"
 : "${CONTACT_TARGET_REFERENCE_PRESERVE_GOOD:=true}"
 
-: "${CONTACT_TARGET_REFERENCE_MAX_SYNTH_SCENES:=14}"
+: "${CONTACT_TARGET_REFERENCE_MAX_SYNTH_SCENES:=24}"
 : "${CONTACT_TARGET_REFERENCE_JOBS:=4}"
-: "${CONTACT_TARGET_REFERENCE_TOP_K_EXACT_ACTIONS:=12}"
+: "${CONTACT_TARGET_REFERENCE_TOP_K_EXACT_ACTIONS:=16}"
 : "${CONTACT_TARGET_REFERENCE_REUSE:=true}"
 : "${CONTACT_TARGET_REFERENCE_ALLOW_DEVIATION_TEMPLATE:=true}"
 : "${CONTACT_TARGET_REFERENCE_MAX_DEVIATION_MEAN_M:=3.2}"
@@ -64,8 +64,11 @@ export MPLBACKEND=Agg
 : "${CONTACT_TARGET_SEPARATION_ADVANTAGE_MARGIN_S:=0.10}"
 : "${CONTACT_TARGET_MAX_EMPIRICAL_SOURCE_OFFROAD_FRACTION:=0.15}"
 : "${CONTACT_TARGET_ALLOW_SOURCE_OFFROAD_REPAIR:=true}"
-: "${CONTACT_TARGET_MAX_REPAIRABLE_SOURCE_OFFROAD_FRACTION:=0.45}"
-: "${CONTACT_TARGET_CRITICAL_COVERAGE_TAGS:=secondary_collision,crowded,recontact,source_offroad}"
+: "${CONTACT_TARGET_MAX_REPAIRABLE_SOURCE_OFFROAD_FRACTION:=0.70}"
+: "${CONTACT_TARGET_CRITICAL_COVERAGE_TAGS:=secondary_collision,crowded,multi_actor_conflict,recontact,source_offroad}"
+: "${CONTACT_TARGET_ENABLE_REFERENCE_QUALITY_FALLBACK:=true}"
+: "${CONTACT_TARGET_FALLBACK_MAX_SEPARATION_S:=1.5}"
+: "${CONTACT_TARGET_FALLBACK_MIN_POST_SEPARATION_CLEARANCE_M:=0.50}"
 : "${CONTACT_TARGET_LANE_TERMINAL_MAX_M:=2.5}"
 : "${CONTACT_TARGET_LANE_P90_MAX_M:=3.5}"
 : "${CONTACT_TARGET_LANE_OFFCENTER_FRACTION_MAX:=0.20}"
@@ -178,6 +181,13 @@ PYPREF
     --force-preserve-keys-file "$PREFERRED_PRESERVE_KEYS"
     --jobs "$CONTACT_TARGET_REFERENCE_JOBS"
     --top-k-exact-actions "$CONTACT_TARGET_REFERENCE_TOP_K_EXACT_ACTIONS"
+    --target-max-sustained-separation-s "$CONTACT_TARGET_MAX_SEPARATION_S"
+    --target-min-terminal-clearance-m "$CONTACT_TARGET_MIN_TERMINAL_CLEARANCE_M"
+    --target-min-post-separation-clearance-m "$CONTACT_TARGET_MIN_POST_SEPARATION_CLEARANCE_M"
+    --target-lane-terminal-max-m "$CONTACT_TARGET_LANE_TERMINAL_MAX_M"
+    --target-lane-p90-max-m "$CONTACT_TARGET_LANE_P90_MAX_M"
+    --target-lane-heading-terminal-max-deg "$CONTACT_TARGET_LANE_HEADING_TERMINAL_MAX_DEG"
+    --target-lane-heading-p90-max-deg "$CONTACT_TARGET_LANE_HEADING_P90_MAX_DEG"
   )
   [[ -n "$CONTACT_TARGET_MANUAL_PROFILE_OVERRIDES" ]] && SYNTH_ARGS+=(--scene-profile-overrides "$CONTACT_TARGET_MANUAL_PROFILE_OVERRIDES")
   [[ "$CONTACT_TARGET_REFERENCE_PRESERVE_GOOD" == true ]] && SYNTH_ARGS+=(--preserve-good)
@@ -187,7 +197,7 @@ PYPREF
   done
   # Safe resumable cache: key includes the selected target subset, planner and
   # prefilter source code, source-file identity, and planner search settings.
-  NEW_CACHE_KEY="$(python - "$REFERENCE_SUBSET_KEYS" "$SOURCE_TRACE_ROOT" "$CONTACT_TARGET_REFERENCE_TOP_K_EXACT_ACTIONS" "$CONTACT_TARGET_REFERENCE_PRESERVE_GOOD" "$CONTACT_TARGET_ALLOW_SOURCE_OFFROAD_REPAIR" "$CONTACT_TARGET_MAX_REPAIRABLE_SOURCE_OFFROAD_FRACTION" "$CONTACT_TARGET_CRITICAL_COVERAGE_TAGS" <<'PYCACHE'
+  NEW_CACHE_KEY="$(python - "$REFERENCE_SUBSET_KEYS" "$SOURCE_TRACE_ROOT" "$CONTACT_TARGET_REFERENCE_TOP_K_EXACT_ACTIONS" "$CONTACT_TARGET_REFERENCE_PRESERVE_GOOD" "$CONTACT_TARGET_ALLOW_SOURCE_OFFROAD_REPAIR" "$CONTACT_TARGET_MAX_REPAIRABLE_SOURCE_OFFROAD_FRACTION" "$CONTACT_TARGET_CRITICAL_COVERAGE_TAGS" "$CONTACT_TARGET_MAX_SEPARATION_S" "$CONTACT_TARGET_MIN_TERMINAL_CLEARANCE_M" "$CONTACT_TARGET_MIN_POST_SEPARATION_CLEARANCE_M" "$CONTACT_TARGET_LANE_TERMINAL_MAX_M" "$CONTACT_TARGET_LANE_P90_MAX_M" "$CONTACT_TARGET_LANE_HEADING_TERMINAL_MAX_DEG" "$CONTACT_TARGET_LANE_HEADING_P90_MAX_DEG" "$CONTACT_TARGET_MANUAL_PROFILE_OVERRIDES" <<'PYCACHE'
 import hashlib,pathlib,sys
 keys=pathlib.Path(sys.argv[1]); root=pathlib.Path(sys.argv[2]); topk=sys.argv[3]; preserve=sys.argv[4]
 extra='|'.join(sys.argv[5:])
@@ -195,6 +205,8 @@ h=hashlib.sha256(); h.update(keys.read_bytes()); h.update(topk.encode()); h.upda
 repo=pathlib.Path.cwd()
 for code in (repo/'tools/synthesize_contact_reference.py',repo/'tools/select_contact_reference_synthesis_subset.py',repo/'tools/contact_scene_diagnostics.py'):
     h.update(code.read_bytes())
+override=pathlib.Path(sys.argv[-1]) if sys.argv[-1] else None
+if override is not None and override.is_file(): h.update(override.read_bytes())
 paths=[root/'ocrap/contact/closed_loop_ocrap.json.scenes.jsonl']+sorted((root/'external/contact').glob('closed_loop_*.json.scenes.jsonl'))
 for p in paths:
     st=p.stat(); h.update(str(p.resolve()).encode()); h.update(str(st.st_size).encode()); h.update(str(st.st_mtime_ns).encode())
@@ -368,13 +380,35 @@ if [[ "$CONTACT_TARGET_REFERENCE_ALLOW_DEVIATION_TEMPLATE" == true ]]; then
                 --reference-max-deviation-mean-m "$CONTACT_TARGET_REFERENCE_MAX_DEVIATION_MEAN_M"
                 --reference-max-deviation-max-m "$CONTACT_TARGET_REFERENCE_MAX_DEVIATION_MAX_M")
 fi
+if [[ "$CONTACT_TARGET_REFERENCE_MODE" == true && "$CONTACT_TARGET_ENABLE_REFERENCE_QUALITY_FALLBACK" == true ]]; then
+  SELECT_ARGS+=(--enable-reference-quality-fallback
+                --fallback-max-sustained-separation-s "$CONTACT_TARGET_FALLBACK_MAX_SEPARATION_S"
+                --fallback-min-post-separation-clearance-m "$CONTACT_TARGET_FALLBACK_MIN_POST_SEPARATION_CLEARANCE_M")
+fi
 # Keep the already-confirmed strongest empirical scene(s) at the front when
 # they still pass every current hard gate.  Weak preferred scenes are not forced.
 if [[ -s "$PREFERRED_PRESERVE_KEYS" ]]; then
   SELECT_ARGS+=(--preferred-selection "$PREFERRED_PRESERVE_KEYS")
 fi
+set +e
 python tools/select_contact_target_display_scenes.py "${SELECT_ARGS[@]}" \
   2>&1 | tee "$LOG_DIR/02_select.log"
+SELECT_RC=${PIPESTATUS[0]}
+set -e
+if (( SELECT_RC != 0 )); then
+  python - "$RUN_STATUS" "$AUDIT" "$SELECT_RC" <<'PYFAIL'
+import json,pathlib,sys
+p=pathlib.Path(sys.argv[1]); audit=pathlib.Path(sys.argv[2]); rc=int(sys.argv[3])
+d=json.loads(p.read_text()) if p.is_file() else {}
+d.update({'stage':'selection_failed','complete':False,'selection_exit_code':rc,'selection_audit':str(audit)})
+if audit.is_file():
+    try:
+        a=json.loads(audit.read_text()); d['accepted_candidate_count']=a.get('accepted_candidate_count'); d['selected_count']=a.get('selected_count'); d['requested_count']=a.get('requested_count')
+    except Exception: pass
+p.write_text(json.dumps(d,indent=2)+'\n')
+PYFAIL
+  exit "$SELECT_RC"
+fi
 python - "$RUN_STATUS" <<'PYSTAGE'
 import json,pathlib,sys
 p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_text()); d['stage']='selection_complete'; p.write_text(json.dumps(d,indent=2)+'\n')
