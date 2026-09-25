@@ -63,6 +63,9 @@ export MPLBACKEND=Agg
 : "${CONTACT_TARGET_OVERLAP_ADVANTAGE_MARGIN_S:=0.10}"
 : "${CONTACT_TARGET_SEPARATION_ADVANTAGE_MARGIN_S:=0.10}"
 : "${CONTACT_TARGET_MAX_EMPIRICAL_SOURCE_OFFROAD_FRACTION:=0.15}"
+: "${CONTACT_TARGET_ALLOW_SOURCE_OFFROAD_REPAIR:=true}"
+: "${CONTACT_TARGET_MAX_REPAIRABLE_SOURCE_OFFROAD_FRACTION:=0.45}"
+: "${CONTACT_TARGET_CRITICAL_COVERAGE_TAGS:=secondary_collision,crowded,recontact,source_offroad}"
 : "${CONTACT_TARGET_LANE_TERMINAL_MAX_M:=2.5}"
 : "${CONTACT_TARGET_LANE_P90_MAX_M:=3.5}"
 : "${CONTACT_TARGET_LANE_OFFCENTER_FRACTION_MAX:=0.20}"
@@ -151,10 +154,13 @@ PYPREF
     --preserve-preferred-count "$CONTACT_TARGET_PRESERVE_PREFERRED_COUNT"
     --max-scenes "$CONTACT_TARGET_REFERENCE_MAX_SYNTH_SCENES"
     --max-source-offroad-fraction "$CONTACT_TARGET_MAX_EMPIRICAL_SOURCE_OFFROAD_FRACTION"
+    --max-repairable-source-offroad-fraction "$CONTACT_TARGET_MAX_REPAIRABLE_SOURCE_OFFROAD_FRACTION"
+    --coverage-tags "$CONTACT_TARGET_CRITICAL_COVERAGE_TAGS"
     --output-target-keys "$REFERENCE_SUBSET_KEYS"
     --output-anchor-manifest "$REFERENCE_SUBSET_MANIFEST"
     --output-audit "$REFERENCE_SUBSET_AUDIT"
   )
+  [[ "$CONTACT_TARGET_ALLOW_SOURCE_OFFROAD_REPAIR" == true ]] && PREFILTER_ARGS+=(--allow-source-offroad-repair)
   for m in "${BASELINES[@]}"; do
     src="$SOURCE_TRACE_ROOT/external/contact/closed_loop_${m}.json.scenes.jsonl"
     [[ -s "$src" ]] || { echo "missing baseline full trace: $src" >&2; exit 30; }
@@ -181,12 +187,13 @@ PYPREF
   done
   # Safe resumable cache: key includes the selected target subset, planner and
   # prefilter source code, source-file identity, and planner search settings.
-  NEW_CACHE_KEY="$(python - "$REFERENCE_SUBSET_KEYS" "$SOURCE_TRACE_ROOT" "$CONTACT_TARGET_REFERENCE_TOP_K_EXACT_ACTIONS" "$CONTACT_TARGET_REFERENCE_PRESERVE_GOOD" <<'PYCACHE'
+  NEW_CACHE_KEY="$(python - "$REFERENCE_SUBSET_KEYS" "$SOURCE_TRACE_ROOT" "$CONTACT_TARGET_REFERENCE_TOP_K_EXACT_ACTIONS" "$CONTACT_TARGET_REFERENCE_PRESERVE_GOOD" "$CONTACT_TARGET_ALLOW_SOURCE_OFFROAD_REPAIR" "$CONTACT_TARGET_MAX_REPAIRABLE_SOURCE_OFFROAD_FRACTION" "$CONTACT_TARGET_CRITICAL_COVERAGE_TAGS" <<'PYCACHE'
 import hashlib,pathlib,sys
 keys=pathlib.Path(sys.argv[1]); root=pathlib.Path(sys.argv[2]); topk=sys.argv[3]; preserve=sys.argv[4]
-h=hashlib.sha256(); h.update(keys.read_bytes()); h.update(topk.encode()); h.update(preserve.encode())
+extra='|'.join(sys.argv[5:])
+h=hashlib.sha256(); h.update(keys.read_bytes()); h.update(topk.encode()); h.update(preserve.encode()); h.update(extra.encode())
 repo=pathlib.Path.cwd()
-for code in (repo/'tools/synthesize_contact_reference.py',repo/'tools/select_contact_reference_synthesis_subset.py'):
+for code in (repo/'tools/synthesize_contact_reference.py',repo/'tools/select_contact_reference_synthesis_subset.py',repo/'tools/contact_scene_diagnostics.py'):
     h.update(code.read_bytes())
 paths=[root/'ocrap/contact/closed_loop_ocrap.json.scenes.jsonl']+sorted((root/'external/contact').glob('closed_loop_*.json.scenes.jsonl'))
 for p in paths:
@@ -326,6 +333,8 @@ SELECT_ARGS=(
   --overlap-advantage-margin-s "$CONTACT_TARGET_OVERLAP_ADVANTAGE_MARGIN_S"
   --separation-advantage-margin-s "$CONTACT_TARGET_SEPARATION_ADVANTAGE_MARGIN_S"
   --max-empirical-source-offroad-fraction "$CONTACT_TARGET_MAX_EMPIRICAL_SOURCE_OFFROAD_FRACTION"
+  --max-repairable-source-offroad-fraction "$CONTACT_TARGET_MAX_REPAIRABLE_SOURCE_OFFROAD_FRACTION"
+  --criticality-coverage-tags "$CONTACT_TARGET_CRITICAL_COVERAGE_TAGS"
   --max-sustained-separation-s "$CONTACT_TARGET_MAX_SEPARATION_S"
   --min-terminal-clearance-m "$CONTACT_TARGET_MIN_TERMINAL_CLEARANCE_M"
   --min-post-separation-clearance-m "$CONTACT_TARGET_MIN_POST_SEPARATION_CLEARANCE_M"
@@ -349,7 +358,11 @@ SELECT_ARGS=(
   --lane-recovery-p90-max-m "$CONTACT_TARGET_LANE_P90_MAX_M"
   --lane-recovery-offcenter-fraction-max "$CONTACT_TARGET_LANE_OFFCENTER_FRACTION_MAX"
   --require-exact-count
-)
+ )
+if [[ "$CONTACT_TARGET_REFERENCE_MODE" == true ]]; then
+  SELECT_ARGS+=(--criticality-audit "$REFERENCE_SUBSET_AUDIT")
+  [[ "$CONTACT_TARGET_ALLOW_SOURCE_OFFROAD_REPAIR" == true ]] && SELECT_ARGS+=(--allow-source-offroad-repair)
+fi
 if [[ "$CONTACT_TARGET_REFERENCE_ALLOW_DEVIATION_TEMPLATE" == true ]]; then
   SELECT_ARGS+=(--allow-reference-deviation-template
                 --reference-max-deviation-mean-m "$CONTACT_TARGET_REFERENCE_MAX_DEVIATION_MEAN_M"
@@ -376,6 +389,8 @@ python tools/materialize_contact_target_display.py \
   --source-trace-root "$CANDIDATE_TRACE_ROOT" \
   --output-trace-root "$DISPLAY_TRACE_ROOT" \
   --output-selection "$SELECTION" \
+  --metrics-output-json "$WORK/selection/contact_target_metrics.json" \
+  --metrics-output-csv "$WORK/selection/contact_target_metrics.csv" \
   2>&1 | tee "$LOG_DIR/03_materialize.log"
 python - "$RUN_STATUS" <<'PYSTAGE'
 import json,pathlib,sys
@@ -462,6 +477,8 @@ out={
   'reference_visualization_only':ref,
   'empirical_ocrap_relabelled':False,
   'metrics_recomputed_on_visible_states':True,
+  'target_metrics_json':str(work/'selection/contact_target_metrics.json'),
+  'target_metrics_csv':str(work/'selection/contact_target_metrics.csv'),
   'original_empirical_media_overwritten':False,
 }
 (work/'TARGET_DISPLAY_SUMMARY.json').write_text(json.dumps(out,indent=2)+'\n')

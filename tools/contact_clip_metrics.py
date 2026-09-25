@@ -14,6 +14,11 @@ from typing import Any
 
 import numpy as np
 
+try:
+    from .contact_scene_diagnostics import analyze_contact_trace
+except ImportError:  # direct script execution / tools on PYTHONPATH
+    from contact_scene_diagnostics import analyze_contact_trace
+
 
 def _metric(frame: dict[str, Any], key: str) -> float | None:
     try:
@@ -135,6 +140,12 @@ def recompute_contact_metric_summary(trace: list[dict[str, Any]], dt: float,
     summary["penetration_duration_s"] = float(summary["penetration_duration_steps"] * dt)
     summary["penetration_depth_m_max"] = float(max(pen_finite)) if pen_finite else 0.0
     summary["penetration_depth_m_p95"] = float(np.quantile(pen_finite, 0.95)) if pen_finite else 0.0
+    # Interval support matches the closed-loop runner: state t_N is terminal and
+    # does not contribute an additional dt interval.  Recompute this explicitly
+    # so a clipped/synthesized displayed trajectory never inherits stale AUC.
+    summary["penetration_depth_auc_m_s"] = float(
+        sum(max(0.0, x) for x in pen_all[:-1] if math.isfinite(x)) * dt
+    )
     summary["new_stable_stop_quality_event"] = _stable_stop_quality(trace, dt)
 
     # Useful stability terms for re-scoring the visible clip.
@@ -198,6 +209,26 @@ def recompute_contact_metric_summary(trace: list[dict[str, Any]], dt: float,
     summary["clearance_metric_full_coverage"] = float(len(clear_finite) == len(trace))
     summary["overlap_metric_full_coverage"] = 1.0
     summary["offroad_metric_full_coverage"] = 1.0
+
+    # Additional *diagnostic* fields for critical qualitative target mining.
+    # These are recomputed from the same displayed oriented boxes and therefore
+    # remain consistent when a target/reference trajectory is clipped.  They do
+    # not replace the historical Contact metrics used in the paper tables.
+    diag = analyze_contact_trace(trace, dt=dt)
+    summary["secondary_collision_event"] = float(bool(diag.get("secondary_collision_event")))
+    summary["post_separation_secondary_collision_event"] = float(
+        bool(diag.get("post_separation_secondary_collision_event"))
+    )
+    summary["same_partner_recontact_event"] = float(bool(diag.get("same_partner_recontact_event")))
+    summary["distinct_collision_partner_count"] = float(diag.get("distinct_collision_partner_count") or 0)
+    summary["secondary_collision_partner_count"] = float(diag.get("secondary_collision_partner_count") or 0)
+    summary["nearby_agents_peak_8m"] = float(diag.get("nearby_agents_peak_8m") or 0)
+    summary["nearby_agents_peak_12m"] = float(diag.get("nearby_agents_peak_12m") or 0)
+    summary["nearby_agents_peak_20m"] = float(diag.get("nearby_agents_peak_20m") or 0)
+    summary["crowded_fraction"] = float(diag.get("crowded_fraction") or 0.0)
+    summary["multi_actor_conflict_peak"] = float(diag.get("multi_actor_conflict_peak") or 0)
+    summary["multi_actor_conflict_fraction"] = float(diag.get("multi_actor_conflict_fraction") or 0.0)
+    summary["diagnostic_offroad_fraction"] = float(diag.get("offroad_fraction") or 0.0)
     return summary
 
 

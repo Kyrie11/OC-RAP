@@ -39,8 +39,10 @@ import numpy as np
 
 try:
     from .contact_clip_metrics import recompute_contact_metric_summary
+    from .contact_scene_diagnostics import analyze_contact_trace, agent_key, criticality_score
 except ImportError:  # direct script execution
     from contact_clip_metrics import recompute_contact_metric_summary
+    from contact_scene_diagnostics import analyze_contact_trace, agent_key, criticality_score
 
 VEHICLE_LANE_TYPES = {1, 2}
 CONTACT_METHODS = (
@@ -159,6 +161,51 @@ def _frame_clearance(sdc: dict[str,Any], agents: Iterable[dict[str,Any]]) -> flo
     return min(vals) if vals else 100.0
 
 
+def _frame_clearance_entries(sdc: dict[str, Any], agents: Iterable[dict[str, Any]]) -> list[tuple[str, float, float]]:
+    """Return ``(actor_key, exact_box_clearance, center_distance)`` sorted by risk."""
+    sx, sy = float(sdc["x"]), float(sdc["y"])
+    out: list[tuple[str, float, float]] = []
+    for i, a in enumerate(agents):
+        if a.get("is_sdc"):
+            continue
+        try:
+            clr = float(_signed_box_clearance(sdc, a))
+            center = float(math.hypot(sx - float(a["x"]), sy - float(a["y"])))
+        except Exception:
+            continue
+        out.append((agent_key(a, i), clr, center))
+    out.sort(key=lambda row: (row[1], row[2], row[0]))
+    return out
+
+
+def _repulsion_heading(x: float, y: float, agents: Iterable[dict[str, Any]], *, radius_m: float = 14.0) -> float | None:
+    """Crowd-aware escape heading from a smooth multi-actor repulsion field."""
+    vx = 0.0
+    vy = 0.0
+    used = 0
+    for a in agents:
+        if a.get("is_sdc"):
+            continue
+        try:
+            dx = x - float(a["x"])
+            dy = y - float(a["y"])
+        except Exception:
+            continue
+        d = math.hypot(dx, dy)
+        if d <= 1e-6 or d > float(radius_m):
+            continue
+        # Strong close-range repulsion, smoothly decaying for merely nearby
+        # actors.  This is a candidate-direction heuristic only; exact box
+        # geometry still determines the MPC cost and final metrics.
+        w = math.exp(-d / 5.0) / max(d, 0.75)
+        vx += w * dx / d
+        vy += w * dy / d
+        used += 1
+    if used == 0 or math.hypot(vx, vy) <= 1e-9:
+        return None
+    return math.atan2(vy, vx)
+
+
 def _approx_circle_clearance(sdc: dict[str,Any], agents: Iterable[dict[str,Any]]) -> float:
     """Fast conservative center/radius clearance used only inside MPC search.
 
@@ -175,6 +222,24 @@ def _approx_circle_clearance(sdc: dict[str,Any], agents: Iterable[dict[str,Any]]
         except Exception:
             continue
     return min(vals) if vals else 100.0
+
+
+def _approx_circle_clearance_entries(sdc: dict[str, Any], agents: Iterable[dict[str, Any]]) -> list[tuple[str, float, float]]:
+    sx, sy = float(sdc['x']), float(sdc['y'])
+    sr = .5 * math.hypot(float(sdc['length']), float(sdc['width']))
+    out: list[tuple[str, float, float]] = []
+    for i, a in enumerate(agents):
+        if a.get('is_sdc'):
+            continue
+        try:
+            dx = sx - float(a['x']); dy = sy - float(a['y'])
+            center = math.hypot(dx, dy)
+            r = .5 * math.hypot(float(a['length']), float(a['width']))
+            out.append((agent_key(a, i), float(center - sr - r), float(center)))
+        except Exception:
+            continue
+    out.sort(key=lambda row: (row[1], row[2], row[0]))
+    return out
 
 
 @dataclass(frozen=True)
@@ -331,7 +396,10 @@ def _trace_reference_quality(trace:list[dict[str,Any]], context:dict[str,Any], d
     if first_sep is not None:
         post_sep_clear=[float(v) for v in clear[first_sep:] if math.isfinite(v)]
     p05=float(np.quantile([v for v in clear if math.isfinite(v)],.05)) if any(math.isfinite(v) for v in clear) else float('nan')
+    diag=analyze_contact_trace(trace,dt=dt)
     return {
+        'usable': bool(diag.get('usable')),
+        'persistent_initial_contact': bool(diag.get('persistent_initial_contact')),
         'first_separation_s': None if first_sep is None else first_sep*dt,
         'sustained_separation_s': None if sustained is None else sustained*dt,
         'recontact': recontact,
@@ -349,8 +417,21 @@ def _trace_reference_quality(trace:list[dict[str,Any]], context:dict[str,Any], d
         'accel_p95': _quantile(acc,.95),
         'offroad_proxy_any': any(offroad_flags),
         'offroad_proxy_fraction': (sum(offroad_flags)/len(offroad_flags)) if offroad_flags else 0.0,
+        'offroad_fraction': float(diag.get('offroad_fraction') or 0.0),
+        'secondary_collision_event': bool(diag.get('secondary_collision_event')),
+        'post_separation_secondary_collision_event': bool(diag.get('post_separation_secondary_collision_event')),
+        'same_partner_recontact_event': bool(diag.get('same_partner_recontact_event')),
+        'distinct_collision_partner_count': int(diag.get('distinct_collision_partner_count') or 0),
+        'secondary_collision_partner_count': int(diag.get('secondary_collision_partner_count') or 0),
+        'nearby_agents_peak_8m': int(diag.get('nearby_agents_peak_8m') or 0),
+        'nearby_agents_peak_12m': int(diag.get('nearby_agents_peak_12m') or 0),
+        'nearby_agents_peak_20m': int(diag.get('nearby_agents_peak_20m') or 0),
+        'crowded_fraction': float(diag.get('crowded_fraction') or 0.0),
+        'multi_actor_conflict_peak': int(diag.get('multi_actor_conflict_peak') or 0),
+        'critical_tags': list(diag.get('critical_tags') or []),
         'clean': bool(
             sustained is not None and not recontact and clear and clear[-1] >= 1.0
+            and not bool(diag.get('secondary_collision_event'))
             and (not post_sep_clear or min(post_sep_clear)>=.5)
             and not any(offroad_flags)
             and (not lane or (_quantile(lane,.90)<=4.0 and lane[-1]<=3.0))
@@ -385,8 +466,21 @@ def _action_candidates(x:float,y:float,yaw:float,v:float, prev_a:float,prev_w:fl
     if nearest is not None:
         a=nearest[1]; bearing=_wrap(math.atan2(float(a['y'])-y,float(a['x'])-x)-yaw)
         away=-math.copysign(max_yaw_rate,bearing) if abs(bearing)>.05 else max_yaw_rate
+    rep_h=_repulsion_heading(x,y,other_agents)
+    w_repulse=0.0 if rep_h is None else max(-max_yaw_rate,min(max_yaw_rate,_wrap(rep_h-yaw)/0.40))
+    # Two lane-relative sidestep directions are especially useful in dense
+    # post-impact scenes where steering directly away from the closest actor can
+    # point toward a different vehicle.  They remain bounded by the same yaw-rate
+    # and lateral-acceleration constraints as every other candidate.
+    lane_left=lane_right=0.0
+    if lane_h is not None:
+        lane_left=max(-max_yaw_rate,min(max_yaw_rate,_wrap(lane_h+0.32-yaw)/0.50))
+        lane_right=max(-max_yaw_rate,min(max_yaw_rate,_wrap(lane_h-0.32-yaw)/0.50))
     avals={-4.0,-3.0,-1.5,0.0,1.5,2.0,round(a_nom,3),round(prev_a,3)}
-    wvals={-max_yaw_rate,-0.65*max_yaw_rate,-0.3*max_yaw_rate,0.0,0.3*max_yaw_rate,0.65*max_yaw_rate,max_yaw_rate,round(w_track,3),round(w_lane,3),round(away,3),round(prev_w,3)}
+    wvals={
+        -max_yaw_rate,-0.65*max_yaw_rate,-0.3*max_yaw_rate,0.0,0.3*max_yaw_rate,0.65*max_yaw_rate,max_yaw_rate,
+        round(w_track,3),round(w_lane,3),round(away,3),round(w_repulse,3),round(lane_left,3),round(lane_right,3),round(prev_w,3)
+    }
     out=[]
     for a in avals:
         if abs(a-prev_a)>3.0: continue
@@ -400,6 +494,7 @@ def _simulate_cost(
     state:tuple[float,float,float,float], action:tuple[float,float], *, k:int, trace:list[dict[str,Any]],
     lane_segs:list[LaneSegment] | LaneIndex, dt:float, horizon:int, profile:dict[str,float], separated:bool,
     sdc_template:dict[str,Any], max_speed:float, exact_near_horizon:int=3,
+    initial_contact_partner_ids:set[str]|None=None,
 ) -> float:
     x,y,yaw,v=state;a_cmd,w_cmd=action
     cost=0.0
@@ -414,7 +509,13 @@ def _simulate_cost(
         # Coarse ranking can use the conservative circumscribed-circle lower
         # bound; only top actions are re-scored with exact oriented boxes.
         # Final displayed metrics are always recomputed with exact boxes.
-        clr=_frame_clearance(ag,src.get('agents') or []) if h<=int(exact_near_horizon) else _approx_circle_clearance(ag,src.get('agents') or [])
+        exact = h<=int(exact_near_horizon)
+        entries=(
+            _frame_clearance_entries(ag,src.get('agents') or [])
+            if exact else
+            _approx_circle_clearance_entries(ag,src.get('agents') or [])
+        )
+        clr=entries[0][1] if entries else 100.0
         nom=_sdc_agent(src); dev=math.hypot(x-float(nom['x']),y-float(nom['y']))
         yaw_dev=abs(_wrap(yaw-float(nom['yaw'])))
         lane_d,lane_e=_lane_info(x,y,yaw,lane_segs)
@@ -426,6 +527,28 @@ def _simulate_cost(
             cost -= profile['clear_reward']*min(clr,4.0)
         if pred_separated and clr < profile['post_sep_floor']:
             cost += profile['post_sep_w']*(profile['post_sep_floor']-clr)**2
+        # Dense scenes require more than maximizing only the single minimum
+        # clearance. Penalize several nearby actors so an escape from the first
+        # contact does not simply steer into a second vehicle.
+        crowd_target=float(profile.get('crowd_clear_target',1.5))
+        crowd_w=float(profile.get('crowd_w',0.0))
+        if crowd_w>0.0:
+            for _aid,actor_clr,_center in entries[:4]:
+                if actor_clr < crowd_target:
+                    cost += crowd_w*(crowd_target-actor_clr)**2
+
+        initial_ids=initial_contact_partner_ids or set()
+        if exact and entries:
+            secondary_w=float(profile.get('secondary_collision_w',0.0))
+            secondary_near_w=float(profile.get('secondary_near_w',0.0))
+            secondary_buffer=float(profile.get('secondary_buffer',1.0))
+            for aid,actor_clr,_center in entries:
+                if aid in initial_ids:
+                    continue
+                if actor_clr < 0.0:
+                    cost += secondary_w*(1.0+(-actor_clr)**2)
+                elif actor_clr < secondary_buffer:
+                    cost += secondary_near_w*(secondary_buffer-actor_clr)**2
         if clr >= profile['separation_mark_m']:
             pred_separated=True
         # Road/lane realism is enforced during search, not merely post hoc.
@@ -437,10 +560,20 @@ def _simulate_cost(
                 cost += 900.0*(lane_d-profile['lane_hard'])**2
             if lane_e > profile['heading_hard_rad']:
                 cost += 500.0*(lane_e-profile['heading_hard_rad'])**2
-        cost += profile['nominal_w']*dev*dev + profile['heading_w']*yaw_dev*yaw_dev
+        # Do not let an unsafe empirical continuation pull a cleaned-up target
+        # trajectory back into a re-contact.  Once separation is achieved, and
+        # especially when the empirical frame itself has low clearance, nominal
+        # tracking becomes a soft reference rather than a dominant objective.
+        nominal_scale=float(profile.get('post_sep_nominal_scale',1.0)) if pred_separated else 1.0
+        src_clear=_finite((src.get('metrics') or {}).get('min_clearance_m'),100.0)
+        if src_clear < float(profile.get('unsafe_nominal_clearance_m',0.75)):
+            nominal_scale *= float(profile.get('unsafe_nominal_scale',0.25))
+        cost += profile['nominal_w']*nominal_scale*dev*dev + profile['heading_w']*yaw_dev*yaw_dev
         if dev > profile['dev_hard']:
             cost += 600.0*(dev-profile['dev_hard'])**2
         cost += profile['speed_w']*(v-profile['target_speed'])**2
+        if entries and entries[0][1] < float(profile.get('stagnation_clearance_m',1.5)) and v < .5:
+            cost += float(profile.get('stagnation_w',0.0))*(.5-v)**2
     cost += profile['action_w']*(a_cmd*a_cmd + 5.0*w_cmd*w_cmd)
     return float(cost)
 
@@ -450,6 +583,7 @@ def _generate_profile(scene:dict[str,Any], dt:float, profile:dict[str,float], *,
     if len(src)<2: raise ValueError('scene has no usable render trace')
     ctx=scene.get('render_context') or {}; lane_segs=LaneIndex(_lane_segments(ctx))
     a0=_sdc_agent(src[0]); x,y,yaw=float(a0['x']),float(a0['y']),float(a0['yaw']);v=_source_speed(src[0])
+    initial_contact_partner_ids={aid for aid,clr,_center in _frame_clearance_entries(a0,src[0].get('agents') or []) if clr<=0.05}
     max_speed=max(8.0,min(18.0,max(_source_speed(f) for f in src)+3.0))
     out=[copy.deepcopy(src[0])]
     prev_a=0.0;prev_w=0.0;separated=False; cumulative_progress=0.0
@@ -460,11 +594,11 @@ def _generate_profile(scene:dict[str,Any], dt:float, profile:dict[str,float], *,
         # Two-stage action evaluation: cheap conservative coarse score for all
         # actions, then the original exact near-term box score for only top-K.
         # Hard final realism gates are unchanged.
-        coarse=[(_simulate_cost(state,ac,k=k,trace=src,lane_segs=lane_segs,dt=dt,horizon=int(profile['horizon']),profile=profile,separated=separated,sdc_template=a0,max_speed=max_speed,exact_near_horizon=0),ac) for ac in actions]
+        coarse=[(_simulate_cost(state,ac,k=k,trace=src,lane_segs=lane_segs,dt=dt,horizon=int(profile['horizon']),profile=profile,separated=separated,sdc_template=a0,max_speed=max_speed,exact_near_horizon=0,initial_contact_partner_ids=initial_contact_partner_ids),ac) for ac in actions]
         coarse.sort(key=lambda z:z[0])
         k_exact=max(1,min(int(top_k_exact_actions),len(coarse)))
         finalists=[ac for _score,ac in coarse[:k_exact]]
-        scored=[(_simulate_cost(state,ac,k=k,trace=src,lane_segs=lane_segs,dt=dt,horizon=int(profile['horizon']),profile=profile,separated=separated,sdc_template=a0,max_speed=max_speed,exact_near_horizon=3),ac) for ac in finalists]
+        scored=[(_simulate_cost(state,ac,k=k,trace=src,lane_segs=lane_segs,dt=dt,horizon=int(profile['horizon']),profile=profile,separated=separated,sdc_template=a0,max_speed=max_speed,exact_near_horizon=3,initial_contact_partner_ids=initial_contact_partner_ids),ac) for ac in finalists]
         _,(a_cmd,w_cmd)=min(scored,key=lambda z:z[0])
         # one physically bounded kinematic step
         v=max(0.0,min(max_speed,v+a_cmd*dt))
@@ -497,7 +631,7 @@ def _generate_profile(scene:dict[str,Any], dt:float, profile:dict[str,float], *,
         fr['selected_macro']='reference_recovery'
         fr['selection_reason']='constrained_reference_recovery'
         out.append(fr)
-        if clr>=0.0:
+        if clr>=float(profile.get('separation_mark_m',.5)):
             separated=True
         prev_a,prev_w=a_cmd,w_cmd
 
@@ -523,7 +657,7 @@ def _generate_profile(scene:dict[str,Any], dt:float, profile:dict[str,float], *,
     return new,q
 
 
-def _profile_set(clear_target_override:float|None=None) -> list[dict[str,float]]:
+def _profile_set(clear_target_override:float|None=None, source_diag:dict[str,Any]|None=None) -> list[dict[str,float]]:
     ct=2.4 if clear_target_override is None else float(max(1.5,min(3.5,clear_target_override)))
     common=dict(
         clear_w=48.0,clear_reward=0.15,lane_w=20.0,lane_heading_w=5.0,heading_w=.55,nominal_w=.75,
@@ -531,16 +665,44 @@ def _profile_set(clear_target_override:float|None=None) -> list[dict[str,float]]
         max_yaw_rate=0.55,max_lat_acc=3.5,offroad_proxy_lane_m=4.5,horizon=9.0,
         target_speed=4.5,collision_w=1500.0,clear_target=ct,post_sep_floor=.80,post_sep_w=220.0,
         separation_mark_m=.50,heading_hard_rad=math.radians(55.0),
+        crowd_w=18.0,crowd_clear_target=1.35,
+        secondary_collision_w=2600.0,secondary_near_w=140.0,secondary_buffer=0.85,
+        post_sep_nominal_scale=.35,unsafe_nominal_scale=.20,unsafe_nominal_clearance_m=.85,
+        stagnation_w=80.0,stagnation_clearance_m=1.5,
     )
     def p(name,**kw):
         d=dict(common);d.update(name=name,**kw);return d
-    return [
+    profiles=[
         p('balanced',target_speed=4.5,nominal_w=.85,horizon=9.0),
         p('early_escape',target_speed=5.8,collision_w=1900.0,clear_w=58.0,nominal_w=.55,horizon=11.0,post_sep_w=280.0),
         p('controlled_brake',target_speed=2.5,collision_w=1800.0,clear_w=52.0,nominal_w=.65,horizon=11.0,action_w=.10),
         p('lane_stable',target_speed=4.0,lane_w=34.0,lane_heading_w=8.0,nominal_w=.55,horizon=10.0,lane_soft=1.6,lane_hard=3.8),
         p('cautious_escape',target_speed=3.5,collision_w=2200.0,clear_w=62.0,post_sep_floor=1.0,post_sep_w=360.0,nominal_w=.50,horizon=12.0),
     ]
+    tags=set((source_diag or {}).get('critical_tags') or [])
+    if {'crowded','multi_actor_conflict'} & tags or int((source_diag or {}).get('nearby_agents_peak_12m') or 0) >= 3:
+        profiles.extend([
+            p('crowded_escape',target_speed=3.8,collision_w=2500.0,clear_w=70.0,crowd_w=55.0,crowd_clear_target=1.8,
+              secondary_collision_w=5200.0,secondary_near_w=320.0,secondary_buffer=1.20,nominal_w=.32,
+              post_sep_nominal_scale=.18,post_sep_floor=1.15,post_sep_w=520.0,lane_w=30.0,lane_heading_w=8.0,horizon=13.0),
+            p('crowded_brake_escape',target_speed=2.7,collision_w=2800.0,clear_w=68.0,crowd_w=62.0,crowd_clear_target=1.7,
+              secondary_collision_w=5600.0,secondary_near_w=360.0,secondary_buffer=1.25,nominal_w=.28,
+              post_sep_nominal_scale=.15,post_sep_floor=1.20,post_sep_w=560.0,lane_w=36.0,lane_heading_w=10.0,horizon=14.0,action_w=.12),
+        ])
+    if {'secondary_collision','post_separation_secondary_collision','recontact'} & tags:
+        profiles.append(
+            p('secondary_avoidance',target_speed=4.0,collision_w=3000.0,clear_w=76.0,crowd_w=48.0,crowd_clear_target=1.9,
+              secondary_collision_w=7000.0,secondary_near_w=460.0,secondary_buffer=1.35,nominal_w=.24,
+              post_sep_nominal_scale=.10,unsafe_nominal_scale=.08,post_sep_floor=1.30,post_sep_w=720.0,
+              lane_w=32.0,lane_heading_w=9.0,horizon=15.0)
+        )
+    if 'source_offroad' in tags:
+        profiles.append(
+            p('lane_recovery_escape',target_speed=3.2,collision_w=2500.0,clear_w=66.0,crowd_w=38.0,
+              secondary_collision_w=5200.0,nominal_w=.20,post_sep_nominal_scale=.12,lane_w=58.0,lane_heading_w=14.0,
+              lane_soft=1.25,lane_hard=3.5,dev_hard=4.5,offroad_proxy_lane_m=4.0,horizon=14.0)
+        )
+    return profiles
 
 
 def _comparative_score(q:dict[str,Any], baseline_qs:dict[str,dict[str,Any]]|None) -> float:
@@ -569,6 +731,9 @@ def _quality_score(q:dict[str,Any], baseline_qs:dict[str,dict[str,Any]]|None=Non
     score=0.0
     score += 260.0 if q.get('clean') else 0.0
     score += 120.0 if not q.get('recontact') else -350.0
+    score += 160.0 if not q.get('secondary_collision_event') else -700.0
+    score += 80.0 if not q.get('post_separation_secondary_collision_event') else -500.0
+    score += 60.0 if not q.get('same_partner_recontact_event') else -300.0
     ss=q.get('sustained_separation_s');score += 90.0 if ss is not None else -150.0
     if ss is not None: score -= 35.0*float(ss)
     tc=q.get('terminal_clearance_m')
@@ -604,7 +769,10 @@ def _synthesize(scene:dict[str,Any],dt:float,preserve_good:bool,baseline_scenes:
     finite_terms=[float(q['terminal_clearance_m']) for q in baseline_qs.values() if q.get('terminal_clearance_m') is not None and math.isfinite(float(q['terminal_clearance_m']))]
     desired_clear=2.4 if not finite_terms else max(2.0,min(3.5,float(np.median(finite_terms))+.45))
     candidates=[]
-    for profile in _profile_set(desired_clear):
+    source_criticality=criticality_score(original_q,baseline_qs)
+    original_q['source_criticality_score']=float(source_criticality)
+    original_q['source_critical_tags']=list(original_q.get('critical_tags') or [])
+    for profile in _profile_set(desired_clear, source_diag=original_q):
         try:
             s,q=_generate_profile(scene,dt,profile,top_k_exact_actions=top_k_exact_actions);candidates.append((_quality_score(q,baseline_qs),s,q))
         except Exception as exc:
@@ -626,6 +794,8 @@ def _synthesize(scene:dict[str,Any],dt:float,preserve_good:bool,baseline_scenes:
     if profile_override:
         q['requested_profile_override']=str(profile_override)
         q['profile_override_applied']=bool(override_applied)
+    q['source_criticality_score']=float(source_criticality)
+    q['source_critical_tags']=list(original_q.get('critical_tags') or [])
     q['empirical_quality']=original_q
     q['baseline_quality']=baseline_qs
     best['reference_quality']=copy.deepcopy(q)

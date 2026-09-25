@@ -29,5 +29,6 @@ def test_contact_clip_metrics_use_state_and_interval_support():
     assert m["overlap_duration_s"] == 0.2
     assert m["penetration_duration_s"] == 0.2
     assert m["penetration_depth_m_max"] == 0.5
+    assert abs(m["penetration_depth_auc_m_s"] - 0.07) < 1e-9
     assert m["offroad_any"] == 0.0
     assert m["post_contact_terminal_clearance_m"] == 1.0

@@ -8,6 +8,7 @@ paired relative scores are recomputed on exactly the visible state support.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 import sys
@@ -94,6 +95,8 @@ def main() -> int:
     ap.add_argument("--source-trace-root", type=Path, required=True)
     ap.add_argument("--output-trace-root", type=Path, required=True)
     ap.add_argument("--output-selection", type=Path, required=True)
+    ap.add_argument("--metrics-output-json", type=Path, default=None)
+    ap.add_argument("--metrics-output-csv", type=Path, default=None)
     args = ap.parse_args()
 
     sel = json.loads(args.selection.read_text(encoding="utf-8"))
@@ -176,6 +179,42 @@ def main() -> int:
     out["display_metrics_recomputed_on_visible_clip"] = True
     args.output_selection.parent.mkdir(parents=True, exist_ok=True)
     args.output_selection.write_text(json.dumps(out, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    metric_rows: list[dict[str, Any]] = []
+    for item in new_items:
+        key = str(item["target_key"])
+        for method in ("ocrap", *CONTACT_METHODS):
+            scene = clipped[method][key]
+            ms = dict(scene.get("metric_summary") or {})
+            metric_rows.append({
+                "target_key": key, "method": method, "clip_duration_s": float(item["clip_duration_s"]),
+                "source_criticality_score": float(item.get("source_criticality_score") or 0.0),
+                "source_critical_tags": ",".join(item.get("source_critical_tags") or []),
+                "overlap_duration_s": ms.get("overlap_duration_s"),
+                "penetration_depth_auc_m_s": ms.get("penetration_depth_auc_m_s"),
+                "terminal_clearance_m": ms.get("terminal_clearance_m"),
+                "recontact_event": ms.get("recontact_event"),
+                "secondary_collision_event": ms.get("secondary_collision_event"),
+                "post_separation_secondary_collision_event": ms.get("post_separation_secondary_collision_event"),
+                "same_partner_recontact_event": ms.get("same_partner_recontact_event"),
+                "distinct_collision_partner_count": ms.get("distinct_collision_partner_count"),
+                "nearby_agents_peak_12m": ms.get("nearby_agents_peak_12m"),
+                "crowded_fraction": ms.get("crowded_fraction"),
+                "diagnostic_offroad_fraction": ms.get("diagnostic_offroad_fraction"),
+                "reference_trajectory": bool(scene.get("reference_trajectory")),
+            })
+    if args.metrics_output_json is not None:
+        args.metrics_output_json.parent.mkdir(parents=True, exist_ok=True)
+        args.metrics_output_json.write_text(json.dumps({
+            "event":"contact_target_display_metrics_v1",
+            "reference_visualization_only": bool(sel.get("reference_visualization_only")),
+            "note":"Metrics are recomputed on displayed materialized states. OC-RAP rows may describe an aspirational reference trajectory, not an empirical rollout.",
+            "rows": metric_rows}, ensure_ascii=False, indent=2)+"\n", encoding="utf-8")
+    if args.metrics_output_csv is not None:
+        args.metrics_output_csv.parent.mkdir(parents=True, exist_ok=True)
+        with args.metrics_output_csv.open("w", newline="", encoding="utf-8") as f:
+            w=csv.DictWriter(f, fieldnames=list(metric_rows[0].keys()) if metric_rows else ["target_key","method"])
+            w.writeheader(); w.writerows(metric_rows)
 
     reference_mode = bool(sel.get("reference_visualization_only")) or any(
         bool(clipped["ocrap"][str(x["target_key"])].get("reference_trajectory"))

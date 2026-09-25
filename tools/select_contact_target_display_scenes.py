@@ -22,6 +22,7 @@ if str(HERE) not in sys.path:
 
 import finalize_regime_visualization_selection as base  # noqa: E402
 import finalize_contact_supplement_selection as supp  # noqa: E402
+from contact_scene_diagnostics import analyze_contact_trace  # noqa: E402
 
 
 def _keys_from_selection(path: Path | None) -> list[str]:
@@ -53,6 +54,7 @@ def _evaluate(
     min_overlap_advantage_methods: int, min_separation_advantage_methods: int,
     terminal_advantage_margin_m: float, overlap_advantage_margin_s: float, separation_advantage_margin_s: float,
     max_empirical_source_offroad_fraction: float | None,
+    allow_source_offroad_repair: bool, max_repairable_source_offroad_fraction: float | None,
     temporal_win_margin_m: float, temporal_noninferior_margin_m: float,
     temporal_min_win_fraction: float, temporal_min_noninferior_fraction: float,
     temporal_min_mean_gain_m: float, temporal_min_terminal_gain_m: float,
@@ -102,13 +104,29 @@ def _evaluate(
     if max_empirical_source_offroad_fraction is not None and empirical_quality:
         frac = empirical_quality.get("offroad_proxy_fraction")
         if frac is not None and float(frac) > float(max_empirical_source_offroad_fraction) + 1e-9:
-            reasons.append("empirical_source_excessive_offroad")
+            repairable = bool(
+                allow_source_offroad_repair
+                and bool(reference_scene.get("reference_trajectory"))
+                and max_repairable_source_offroad_fraction is not None
+                and float(frac) <= float(max_repairable_source_offroad_fraction) + 1e-9
+                and float(reference_quality.get("offroad_proxy_fraction") or 0.0) <= 1e-9
+                and not bool(reference_quality.get("secondary_collision_event"))
+                and not bool(reference_quality.get("recontact"))
+            )
+            if not repairable:
+                reasons.append("empirical_source_excessive_offroad")
+            else:
+                q["empirical_source_offroad_repaired_for_target"] = True
     ocq = q.get("ocrap_trace_recovery") or {}
     # Target-display quality is stricter than the ordinary qualitative gate on
     # secondary contact: once the rollout first separates from the initial
     # contact episode, any later overlap within the visible window is rejected.
     key = str(item["target_key"])
     oframes = base._visible_frames(list(traces["ocrap"][key].get("render_trace") or []), float(clip), dt)
+    display_diag = analyze_contact_trace(oframes, dt=dt)
+    q["ocrap_display_diagnostics"] = display_diag
+    if bool(display_diag.get("secondary_collision_event")):
+        reasons.append("secondary_collision_with_new_actor")
     overlaps = [base._flag(f, "overlap") for f in oframes]
     first_contact = next((i for i, flag in enumerate(overlaps) if flag), None)
     first_sep = None if first_contact is None else next((i for i in range(first_contact + 1, len(overlaps)) if not overlaps[i]), None)
@@ -245,7 +263,11 @@ def main() -> int:
     ap.add_argument("--terminal-advantage-margin-m", type=float, default=0.25)
     ap.add_argument("--overlap-advantage-margin-s", type=float, default=0.10)
     ap.add_argument("--separation-advantage-margin-s", type=float, default=0.10)
-    ap.add_argument("--max-empirical-source-offroad-fraction", type=float, default=None, help="reference mode only: reject source scenes whose empirical OC-RAP is already severely off-road")
+    ap.add_argument("--max-empirical-source-offroad-fraction", type=float, default=None, help="reference mode only: reject source scenes whose empirical OC-RAP is already severely off-road unless explicitly repairable")
+    ap.add_argument("--allow-source-offroad-repair", action="store_true", help="reference mode only: allow a moderately off-road empirical source if the synthesized displayed trace repairs it and passes target gates")
+    ap.add_argument("--max-repairable-source-offroad-fraction", type=float, default=0.45)
+    ap.add_argument("--criticality-audit", type=Path, default=None, help="optional contact_reference_synthesis_subset_v2 audit used only to prioritize diverse critical source scenes")
+    ap.add_argument("--criticality-coverage-tags", default="secondary_collision,crowded,recontact,source_offroad")
     ap.add_argument("--allow-recontact-after-first-separation", action="store_true")
 
     # Slightly permissive comparative thresholds are allowed for target-display
@@ -305,6 +327,13 @@ def main() -> int:
     dt = float(candidate.get("metric_dt_s", 0.1) or 0.1)
     preferred = _keys_from_selection(args.preferred_selection)
     preferred_rank = {k: i for i, k in enumerate(preferred)}
+    criticality_by_key: dict[str, dict[str, Any]] = {}
+    if args.criticality_audit is not None and args.criticality_audit.is_file():
+        cd = json.loads(args.criticality_audit.read_text(encoding="utf-8"))
+        for r in (cd.get("rows") or []):
+            if isinstance(r, dict) and r.get("target_key"):
+                criticality_by_key[str(r["target_key"])] = r
+    coverage_tags = [x.strip() for x in str(args.criticality_coverage_tags).split(",") if x.strip()]
 
     lane_kwargs = {
         "lane_types": base.DEFAULT_VEHICLE_LANE_TYPES,
@@ -327,8 +356,13 @@ def main() -> int:
 
     accepted: list[dict[str, Any]] = []
     audits: list[dict[str, Any]] = []
-    for item in items:
+    for raw_item in items:
+        item = dict(raw_item)
         key = str(item["target_key"])
+        cr = criticality_by_key.get(key) or {}
+        item["source_criticality_score"] = float(cr.get("criticality_score") or 0.0)
+        item["source_critical_tags"] = list(cr.get("critical_tags") or [])
+        item["repairable_source_offroad"] = bool(cr.get("repairable_source_offroad"))
         missing = [m for m, rows in traces.items() if key not in rows]
         if missing:
             audits.append({
@@ -369,6 +403,8 @@ def main() -> int:
                 overlap_advantage_margin_s=float(args.overlap_advantage_margin_s),
                 separation_advantage_margin_s=float(args.separation_advantage_margin_s),
                 max_empirical_source_offroad_fraction=(None if args.max_empirical_source_offroad_fraction is None else float(args.max_empirical_source_offroad_fraction)),
+                allow_source_offroad_repair=bool(args.allow_source_offroad_repair),
+                max_repairable_source_offroad_fraction=(None if args.max_repairable_source_offroad_fraction is None else float(args.max_repairable_source_offroad_fraction)),
                 temporal_win_margin_m=float(args.temporal_clearance_win_margin_m),
                 temporal_noninferior_margin_m=float(args.temporal_clearance_noninferior_margin_m),
                 temporal_min_win_fraction=float(args.temporal_min_win_fraction),
@@ -428,6 +464,7 @@ def main() -> int:
         0 if (str(r["target_key"]) in preferred_rank and not r.get("display_window_trimmed")) else 1,
         preferred_rank.get(str(r["target_key"]), 10**6),
         0 if not r.get("display_window_trimmed") else 1,
+        -float(r.get("source_criticality_score") or 0.0),
         int(r["visualization_trace_quality"].get("visual_evidence_rank") or 99),
         -int(r["visualization_trace_quality"].get("external_dominance_count") or 0),
         -len(r["visualization_trace_quality"].get("external_terminal_advantage_methods") or []),
@@ -448,16 +485,24 @@ def main() -> int:
 
     final: list[dict[str, Any]] = []
     used_scenes: set[str] = set()
-    for row in accepted:
+    def _add(row: dict[str, Any]) -> bool:
         sid = str(row.get("scene_id") or row["target_key"])
-        if sid in used_scenes:
-            continue
-        used_scenes.add(sid)
-        x = dict(row)
-        x["category_rank"] = len(final) + 1
-        final.append(x)
-        if len(final) >= int(args.num_scenes):
-            break
+        if sid in used_scenes or any(str(x["target_key"]) == str(row["target_key"]) for x in final):
+            return False
+        used_scenes.add(sid); x=dict(row); x["category_rank"]=len(final)+1; final.append(x); return True
+    # Preserve explicitly preferred good example(s), then cover distinct source
+    # failure modes before filling by overall visual/criticality ordering.
+    for row in accepted:
+        if str(row["target_key"]) in preferred_rank and not row.get("display_window_trimmed"):
+            _add(row)
+            if len(final) >= int(args.num_scenes): break
+    for tag in coverage_tags:
+        if len(final) >= int(args.num_scenes): break
+        row = next((r for r in accepted if tag in (r.get("source_critical_tags") or []) and str(r["target_key"]) not in {str(x["target_key"]) for x in final}), None)
+        if row is not None: _add(row)
+    for row in accepted:
+        if len(final) >= int(args.num_scenes): break
+        _add(row)
 
     out = dict(candidate)
     out.update({
@@ -484,6 +529,8 @@ def main() -> int:
         "hard_reality_contract_unchanged": True,
         "trajectory_states_modified": bool(candidate.get("reference_visualization_only")),
         "reference_visualization_only": bool(candidate.get("reference_visualization_only")),
+        "criticality_coverage_tags": coverage_tags,
+        "allow_source_offroad_repair": bool(args.allow_source_offroad_repair),
         "candidates": audits,
     }
     args.audit_output.parent.mkdir(parents=True, exist_ok=True)
