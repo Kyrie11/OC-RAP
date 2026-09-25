@@ -94,6 +94,25 @@ PREFERRED_SELECTION_SOURCE="$PREFERRED_REAL_SELECTION"
 if [[ -s "$SELECTION" ]]; then PREFERRED_SELECTION_SOURCE="$SELECTION"; fi
 mkdir -p "$WORK/selection" "$DISPLAY_TRACE_ROOT" "$LOG_DIR"
 
+# Archive stale top-level stage logs so an older successful render cannot be
+# mistaken for evidence that the current run reached the renderer.
+RUN_STAMP="$(date +%Y%m%d_%H%M%S)"
+if compgen -G "$LOG_DIR/*.log" >/dev/null; then
+  HISTORY_DIR="$LOG_DIR/history/$RUN_STAMP"
+  mkdir -p "$HISTORY_DIR"
+  while IFS= read -r -d '' old_log; do mv "$old_log" "$HISTORY_DIR/"; done < <(find "$LOG_DIR" -maxdepth 1 -type f -name '*.log' -print0)
+fi
+RUN_STATUS="$WORK/CURRENT_RUN_STATUS.json"
+# Remove stale completion/index markers from earlier runs. Existing selection
+# and traces are intentionally retained so the dedicated re-render recovery
+# command can still use them.
+rm -f "$WORK/TARGET_DISPLAY_SUMMARY.json" "$WORK/TARGET_MEDIA_INDEX.json"
+python - "$RUN_STATUS" "$RUN_STAMP" <<'PYSTATUS'
+import json,pathlib,sys
+p=pathlib.Path(sys.argv[1])
+p.write_text(json.dumps({'event':'contact_target_display_run_status_v1','run_stamp':sys.argv[2],'stage':'initializing','complete':False},indent=2)+'\n',encoding='utf-8')
+PYSTATUS
+
 BASELINES=(
   postimpact_mpc_lite
   post_crash_braking
@@ -184,13 +203,47 @@ PYCACHE
     printf '%s\n' "$NEW_CACHE_KEY" > "$REFERENCE_CACHE_KEY"
   fi
 
-  # Baselines remain the original empirical traces.  Symlinks avoid copying
-  # large journals and make the paired provenance explicit.
+  # Baselines remain empirical, but they must be filtered to exactly the
+  # synthesized OC-RAP target subset.  Using full 26-scene baseline journals
+  # against a 17-scene reference journal violates the paired selector contract.
+  : > "$LOG_DIR/00b_pair_baseline_subset.log"
   for m in "${BASELINES[@]}"; do
     src="$SOURCE_TRACE_ROOT/external/contact/closed_loop_${m}.json.scenes.jsonl"
+    dst="$REFERENCE_TRACE_ROOT/external/contact/closed_loop_${m}.json.scenes.jsonl"
     [[ -s "$src" ]] || { echo "missing baseline full trace: $src" >&2; exit 30; }
-    ln -sfn "$(realpath "$src")" "$REFERENCE_TRACE_ROOT/external/contact/closed_loop_${m}.json.scenes.jsonl"
+    python tools/filter_scene_journal_by_keys.py \
+      --input "$src" \
+      --target-keys "$REFERENCE_SUBSET_KEYS" \
+      --output "$dst" \
+      --audit-output "$WORK/selection/reference_baseline_subset_${m}.json" \
+      2>&1 | tee -a "$LOG_DIR/00b_pair_baseline_subset.log"
   done
+
+  python - "$REFERENCE_TRACE_ROOT" "${BASELINES[@]}" <<'PYPAIR'
+import json,pathlib,sys
+root=pathlib.Path(sys.argv[1]); methods=['ocrap',*sys.argv[2:]]
+def keys(path):
+    out=[]
+    with path.open(encoding='utf-8') as f:
+        for line in f:
+            if not line.strip(): continue
+            env=json.loads(line); sc=env.get('scene',env)
+            k=str(sc.get('target_key') or env.get('resume_key') or '')
+            if k.startswith('target:'): k=k[7:]
+            out.append(k)
+    return out
+paths={'ocrap':root/'ocrap/contact/closed_loop_ocrap.json.scenes.jsonl'}
+for m in methods[1:]: paths[m]=root/f'external/contact/closed_loop_{m}.json.scenes.jsonl'
+ref=keys(paths['ocrap']); refset=set(ref)
+problems={}
+if len(ref)!=len(refset): problems['ocrap']={'duplicate_keys':True,'count':len(ref)}
+for m,p in paths.items():
+    ks=keys(p)
+    if len(ks)!=len(set(ks)) or set(ks)!=refset:
+        problems[m]={'count':len(ks),'missing':sorted(refset-set(ks)),'extra':sorted(set(ks)-refset)}
+if problems: raise SystemExit('reference paired target contract failed: '+json.dumps(problems))
+print(json.dumps({'event':'reference_paired_target_contract_v1','num_targets':len(ref),'methods':methods}))
+PYPAIR
   CANDIDATE_TRACE_ROOT="$REFERENCE_TRACE_ROOT"
   ACTIVE_CONTACT_ANCHOR_MANIFEST="$REFERENCE_SUBSET_MANIFEST"
 fi
@@ -226,6 +279,10 @@ PYCOUNT
     python tools/select_regime_visualization_scenes.py "${BROAD_ARGS[@]}" \
       2>&1 | tee "$LOG_DIR/01_broad_candidate_pool.log"
     CANDIDATE_SELECTION="$BROAD_SELECTION"
+    python - "$RUN_STATUS" <<'PYSTAGE'
+import json,pathlib,sys
+p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_text()); d['stage']='broad_candidate_pool_complete'; p.write_text(json.dumps(d,indent=2)+'\n')
+PYSTAGE
   fi
 fi
 
@@ -305,6 +362,10 @@ if [[ -s "$PREFERRED_PRESERVE_KEYS" ]]; then
 fi
 python tools/select_contact_target_display_scenes.py "${SELECT_ARGS[@]}" \
   2>&1 | tee "$LOG_DIR/02_select.log"
+python - "$RUN_STATUS" <<'PYSTAGE'
+import json,pathlib,sys
+p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_text()); d['stage']='selection_complete'; p.write_text(json.dumps(d,indent=2)+'\n')
+PYSTAGE
 
 # ---------------------------------------------------------------------------
 # Stage 3: materialize exactly the visible states and recompute every Contact
@@ -316,6 +377,10 @@ python tools/materialize_contact_target_display.py \
   --output-trace-root "$DISPLAY_TRACE_ROOT" \
   --output-selection "$SELECTION" \
   2>&1 | tee "$LOG_DIR/03_materialize.log"
+python - "$RUN_STATUS" <<'PYSTAGE'
+import json,pathlib,sys
+p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_text()); d['stage']='materialize_complete'; p.write_text(json.dumps(d,indent=2)+'\n')
+PYSTAGE
 
 TRACE_ARGS=(--trace "ocrap=$DISPLAY_TRACE_ROOT/ocrap/contact/closed_loop_ocrap.json.scenes.jsonl")
 for m in "${BASELINES[@]}"; do
@@ -332,6 +397,10 @@ python tools/render_regime_paper_figures.py \
   --view-radius-m "$CONTACT_TARGET_VIEW_RADIUS_M" \
   "${FORCE_ARG[@]}" \
   2>&1 | tee "$LOG_DIR/04_figures.log"
+python - "$RUN_STATUS" <<'PYSTAGE'
+import json,pathlib,sys
+p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_text()); d['stage']='figures_complete'; p.write_text(json.dumps(d,indent=2)+'\n')
+PYSTAGE
 
 # Unchanged pair + all-method video renderer.  No synthetic slowdown/style edits.
 python tools/render_regime_visualization_videos.py \
@@ -347,41 +416,34 @@ python tools/render_regime_visualization_videos.py \
   --include-all-method-montage \
   "${FORCE_ARG[@]}" \
   2>&1 | tee "$LOG_DIR/05_videos.log"
+python - "$RUN_STATUS" <<'PYSTAGE'
+import json,pathlib,sys
+p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_text()); d['stage']='videos_complete'; p.write_text(json.dumps(d,indent=2)+'\n')
+PYSTAGE
 
 # Verify and mirror rendered media into the work tree so packaging the
 # contact_target_displays/<name> directory always contains the actual mp4/png/pdf.
 python - "$WORK" "$MAIN_VIS_ROOT" "$CONTACT_TARGET_NAME" "$SELECTION" "$CONTACT_TARGET_MIRROR_MEDIA_IN_WORK" <<'PYMEDIA'
-import json, pathlib, shutil, sys
+import json,pathlib,shutil,sys
 work=pathlib.Path(sys.argv[1]); main=pathlib.Path(sys.argv[2]); name=sys.argv[3]; sel=pathlib.Path(sys.argv[4]); do_mirror=sys.argv[5].lower()=='true'
-d=json.loads(sel.read_text())
-count=len(d.get('selected') or [])
-video_root=main/'videos'/'contact'/name
-fig_root=main/'paper_figures'/'contact'/name
-mp4s=sorted(video_root.rglob('*.mp4'))
-pngs=sorted(fig_root.rglob('*.png'))
-pdfs=sorted(fig_root.rglob('*.pdf'))
-if len(mp4s) < count*2:
-    raise SystemExit(f'expected at least {count*2} mp4s under {video_root}, found {len(mp4s)}')
-if len(pngs) < count*2 or len(pdfs) < count*2:
-    raise SystemExit(f'expected at least {count*2} png/pdf figures under {fig_root}, found png={len(pngs)} pdf={len(pdfs)}')
+d=json.loads(sel.read_text(encoding='utf-8')); count=len(d.get('selected') or [])
+video_root=main/'videos'/'contact'/name; fig_root=main/'paper_figures'/'contact'/name
+if not video_root.is_dir(): raise SystemExit(f'missing rendered video directory: {video_root}')
+if not fig_root.is_dir(): raise SystemExit(f'missing rendered figure directory: {fig_root}')
+mp4s=sorted(video_root.rglob('*.mp4')); pngs=sorted(fig_root.rglob('*.png')); pdfs=sorted(fig_root.rglob('*.pdf'))
+expected=count*2
+if len(mp4s) < expected: raise SystemExit(f'expected at least {expected} mp4s under {video_root}, found {len(mp4s)}')
+if len(pngs) < expected or len(pdfs) < expected: raise SystemExit(f'expected at least {expected} png/pdf figures under {fig_root}, found png={len(pngs)} pdf={len(pdfs)}')
+for p in [*mp4s,*pngs,*pdfs]:
+    if p.stat().st_size <= 1024: raise SystemExit(f'rendered media is unexpectedly tiny: {p} ({p.stat().st_size} bytes)')
 if do_mirror:
     out_vid=work/'media'/'videos'; out_fig=work/'media'/'paper_figures'
     if out_vid.exists(): shutil.rmtree(out_vid)
     if out_fig.exists(): shutil.rmtree(out_fig)
-    shutil.copytree(video_root, out_vid)
-    shutil.copytree(fig_root, out_fig)
-index={
-    'event':'contact_target_display_media_index_v1',
-    'selection':str(sel),
-    'video_root':str(video_root),
-    'figure_root':str(fig_root),
-    'mirrored_video_root':str(work/'media'/'videos') if do_mirror else None,
-    'mirrored_figure_root':str(work/'media'/'paper_figures') if do_mirror else None,
-    'num_videos':len(mp4s), 'num_png_figures':len(pngs), 'num_pdf_figures':len(pdfs),
-}
-(work/'TARGET_MEDIA_INDEX.json').write_text(json.dumps(index, indent=2)+'
-')
-print(json.dumps(index, indent=2))
+    shutil.copytree(video_root,out_vid); shutil.copytree(fig_root,out_fig)
+index={'event':'contact_target_display_media_index_v2','selection':str(sel),'video_root':str(video_root),'figure_root':str(fig_root),'mirrored_video_root':str(work/'media'/'videos') if do_mirror else None,'mirrored_figure_root':str(work/'media'/'paper_figures') if do_mirror else None,'num_videos':len(mp4s),'num_png_figures':len(pngs),'num_pdf_figures':len(pdfs),'validated_nonempty':True}
+(work/'TARGET_MEDIA_INDEX.json').write_text(json.dumps(index,indent=2)+'\n',encoding='utf-8')
+print(json.dumps(index,indent=2))
 PYMEDIA
 
 python - "$WORK" "$MAIN_VIS_ROOT" "$CONTACT_TARGET_NAME" "$SELECTION" "$CONTACT_TARGET_REFERENCE_MODE" <<'PY'
@@ -405,6 +467,10 @@ out={
 (work/'TARGET_DISPLAY_SUMMARY.json').write_text(json.dumps(out,indent=2)+'\n')
 print(json.dumps(out,indent=2))
 PY
+python - "$RUN_STATUS" <<'PYSTAGE'
+import json,pathlib,sys
+p=pathlib.Path(sys.argv[1]); d=json.loads(p.read_text()); d['stage']='complete'; d['complete']=True; p.write_text(json.dumps(d,indent=2)+'\n')
+PYSTAGE
 
 echo "[CONTACT-TARGET][DONE] videos: $MAIN_VIS_ROOT/videos/contact/$CONTACT_TARGET_NAME"
 echo "[CONTACT-TARGET][DONE] figures: $MAIN_VIS_ROOT/paper_figures/contact/$CONTACT_TARGET_NAME"
