@@ -28,6 +28,9 @@ import argparse
 import copy
 import json
 import math
+import os
+import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -180,6 +183,64 @@ class LaneSegment:
     b: tuple[float,float]
 
 
+class LaneIndex:
+    """Small spatial cache for repeated nearest-lane queries inside MPC.
+
+    The old planner scanned every roadgraph segment for every candidate action
+    and every look-ahead step.  That dominates runtime on dense Waymax maps.
+    This grid only accelerates the *planner cost*.  The downstream reviewer-safe
+    lane-realism gate still recomputes the final displayed trajectory with the
+    original exact roadgraph logic.
+    """
+    def __init__(self, segments: list[LaneSegment], cell_size: float = 5.0):
+        self.segments = segments
+        self.cell_size = float(cell_size)
+        self.grid: dict[tuple[int,int], list[int]] = {}
+        self.cache: dict[tuple[int,int], tuple[float,float]] = {}
+        if not segments:
+            return
+        cs=self.cell_size
+        for i,seg in enumerate(segments):
+            xmin,xmax=sorted((seg.a[0],seg.b[0])); ymin,ymax=sorted((seg.a[1],seg.b[1]))
+            ix0,ix1=math.floor(xmin/cs),math.floor(xmax/cs)
+            iy0,iy1=math.floor(ymin/cs),math.floor(ymax/cs)
+            for ix in range(ix0,ix1+1):
+                for iy in range(iy0,iy1+1):
+                    self.grid.setdefault((ix,iy),[]).append(i)
+
+    def __bool__(self) -> bool:
+        return bool(self.segments)
+
+    def nearest(self, x: float, y: float) -> tuple[float,float]:
+        # Quantization only affects the planner's soft lane cost.  The final
+        # accepted trace is audited against the exact lane contract later.
+        q=(int(round(x*4.0)),int(round(y*4.0)))  # 0.25 m cache
+        hit=self.cache.get(q)
+        if hit is not None:
+            return hit
+        if not self.segments:
+            return (0.0,0.0)
+        cs=self.cell_size; cx,cy=math.floor(x/cs),math.floor(y/cs)
+        inds:set[int]=set()
+        # Always include the 3x3 neighboring cells; considering only the
+        # current cell can pick the wrong parallel lane near a cell boundary.
+        for radius in (1,2):
+            for ix in range(cx-radius,cx+radius+1):
+                for iy in range(cy-radius,cy+radius+1):
+                    inds.update(self.grid.get((ix,iy),()))
+            if inds:
+                best=min((_point_segment_distance((x,y),self.segments[i].a,self.segments[i].b),i) for i in inds)
+                if best[0] <= cs or radius==2:
+                    break
+        if not inds:
+            inds=set(range(len(self.segments)))
+        d,i=min((_point_segment_distance((x,y),self.segments[j].a,self.segments[j].b),j) for j in inds)
+        seg=self.segments[i]
+        h=math.atan2(seg.b[1]-seg.a[1],seg.b[0]-seg.a[0])
+        ans=(float(d),float(h)); self.cache[q]=ans
+        return ans
+
+
 def _lane_segments(context: dict[str,Any]) -> list[LaneSegment]:
     out=[]
     for poly in (context or {}).get("roadgraph_polylines") or []:
@@ -199,9 +260,13 @@ def _lane_segments(context: dict[str,Any]) -> list[LaneSegment]:
     return out
 
 
-def _lane_info(x: float,y: float,yaw: float,segs:list[LaneSegment]) -> tuple[float,float]:
+def _lane_info(x: float,y: float,yaw: float,segs:list[LaneSegment] | LaneIndex) -> tuple[float,float]:
     if not segs:
         return 0.0,0.0
+    if isinstance(segs,LaneIndex):
+        d,hy=segs.nearest(x,y)
+        e1=abs(_wrap(hy-yaw)); e2=abs(_wrap(hy+math.pi-yaw))
+        return float(d),float(min(e1,e2))
     best=(float("inf"),0.0)
     for s in segs:
         d=_point_segment_distance((x,y),s.a,s.b)
@@ -214,10 +279,14 @@ def _lane_info(x: float,y: float,yaw: float,segs:list[LaneSegment]) -> tuple[flo
     return float(best[0]),float(best[1])
 
 
-def _lane_target_heading(x: float, y: float, yaw: float, segs: list[LaneSegment]) -> float | None:
+def _lane_target_heading(x: float, y: float, yaw: float, segs: list[LaneSegment] | LaneIndex) -> float | None:
     """Heading of the closest vehicle-lane segment, oriented with current yaw."""
     if not segs:
         return None
+    if isinstance(segs,LaneIndex):
+        _d,h=segs.nearest(x,y)
+        h_rev=_wrap(h+math.pi)
+        return h if abs(_wrap(h-yaw)) <= abs(_wrap(h_rev-yaw)) else h_rev
     best_d = float("inf")
     best_h = None
     for seg in segs:
@@ -248,7 +317,7 @@ def _trace_reference_quality(trace:list[dict[str,Any]], context:dict[str,Any], d
     for i in range((first_contact or 0),max(0,len(trace)-hold+1)):
         if all(not overlaps[j] and math.isfinite(clear[j]) and clear[j]>=.5 for j in range(i,i+hold)):
             sustained=i;break
-    segs=_lane_segments(context)
+    segs=LaneIndex(_lane_segments(context))
     lane=[]; heading=[]
     for f in trace:
         a=_sdc_agent(f); d,e=_lane_info(float(a['x']),float(a['y']),float(a['yaw']),segs);lane.append(d);heading.append(math.degrees(e))
@@ -329,8 +398,8 @@ def _action_candidates(x:float,y:float,yaw:float,v:float, prev_a:float,prev_w:fl
 
 def _simulate_cost(
     state:tuple[float,float,float,float], action:tuple[float,float], *, k:int, trace:list[dict[str,Any]],
-    lane_segs:list[LaneSegment], dt:float, horizon:int, profile:dict[str,float], separated:bool,
-    sdc_template:dict[str,Any], max_speed:float,
+    lane_segs:list[LaneSegment] | LaneIndex, dt:float, horizon:int, profile:dict[str,float], separated:bool,
+    sdc_template:dict[str,Any], max_speed:float, exact_near_horizon:int=3,
 ) -> float:
     x,y,yaw,v=state;a_cmd,w_cmd=action
     cost=0.0
@@ -342,9 +411,10 @@ def _simulate_cost(
         x+=v*math.cos(yaw)*dt; y+=v*math.sin(yaw)*dt
         ag=_make_sdc(sdc_template,x,y,yaw)
         src=trace[idx]
-        # Use exact box geometry in the critical near-term, then the cheaper
-        # conservative proxy farther out.  Final metrics always use exact boxes.
-        clr=_frame_clearance(ag,src.get('agents') or []) if h<=3 else _approx_circle_clearance(ag,src.get('agents') or [])
+        # Coarse ranking can use the conservative circumscribed-circle lower
+        # bound; only top actions are re-scored with exact oriented boxes.
+        # Final displayed metrics are always recomputed with exact boxes.
+        clr=_frame_clearance(ag,src.get('agents') or []) if h<=int(exact_near_horizon) else _approx_circle_clearance(ag,src.get('agents') or [])
         nom=_sdc_agent(src); dev=math.hypot(x-float(nom['x']),y-float(nom['y']))
         yaw_dev=abs(_wrap(yaw-float(nom['yaw'])))
         lane_d,lane_e=_lane_info(x,y,yaw,lane_segs)
@@ -375,10 +445,10 @@ def _simulate_cost(
     return float(cost)
 
 
-def _generate_profile(scene:dict[str,Any], dt:float, profile:dict[str,float]) -> tuple[dict[str,Any],dict[str,Any]]:
+def _generate_profile(scene:dict[str,Any], dt:float, profile:dict[str,float], *, top_k_exact_actions:int=12) -> tuple[dict[str,Any],dict[str,Any]]:
     src=list(scene.get('render_trace') or [])
     if len(src)<2: raise ValueError('scene has no usable render trace')
-    ctx=scene.get('render_context') or {}; lane_segs=_lane_segments(ctx)
+    ctx=scene.get('render_context') or {}; lane_segs=LaneIndex(_lane_segments(ctx))
     a0=_sdc_agent(src[0]); x,y,yaw=float(a0['x']),float(a0['y']),float(a0['yaw']);v=_source_speed(src[0])
     max_speed=max(8.0,min(18.0,max(_source_speed(f) for f in src)+3.0))
     out=[copy.deepcopy(src[0])]
@@ -387,7 +457,14 @@ def _generate_profile(scene:dict[str,Any], dt:float, profile:dict[str,float]) ->
         max_w=min(profile['max_yaw_rate'], profile['max_lat_acc']/max(v,1.5))
         actions=_action_candidates(x,y,yaw,v,prev_a,prev_w,src[k],src[k].get('agents') or [],dt,max_w,lane_segs)
         state=(x,y,yaw,v)
-        scored=[(_simulate_cost(state,ac,k=k,trace=src,lane_segs=lane_segs,dt=dt,horizon=int(profile['horizon']),profile=profile,separated=separated,sdc_template=a0,max_speed=max_speed),ac) for ac in actions]
+        # Two-stage action evaluation: cheap conservative coarse score for all
+        # actions, then the original exact near-term box score for only top-K.
+        # Hard final realism gates are unchanged.
+        coarse=[(_simulate_cost(state,ac,k=k,trace=src,lane_segs=lane_segs,dt=dt,horizon=int(profile['horizon']),profile=profile,separated=separated,sdc_template=a0,max_speed=max_speed,exact_near_horizon=0),ac) for ac in actions]
+        coarse.sort(key=lambda z:z[0])
+        k_exact=max(1,min(int(top_k_exact_actions),len(coarse)))
+        finalists=[ac for _score,ac in coarse[:k_exact]]
+        scored=[(_simulate_cost(state,ac,k=k,trace=src,lane_segs=lane_segs,dt=dt,horizon=int(profile['horizon']),profile=profile,separated=separated,sdc_template=a0,max_speed=max_speed,exact_near_horizon=3),ac) for ac in finalists]
         _,(a_cmd,w_cmd)=min(scored,key=lambda z:z[0])
         # one physically bounded kinematic step
         v=max(0.0,min(max_speed,v+a_cmd*dt))
@@ -512,23 +589,24 @@ def _quality_score(q:dict[str,Any], baseline_qs:dict[str,dict[str,Any]]|None=Non
     return float(score)
 
 
-def _synthesize(scene:dict[str,Any],dt:float,preserve_good:bool,baseline_scenes:dict[str,dict[str,Any]]|None=None) -> tuple[dict[str,Any],dict[str,Any]]:
+def _synthesize(scene:dict[str,Any],dt:float,preserve_good:bool,baseline_scenes:dict[str,dict[str,Any]]|None=None, *, force_preserve:bool=False, top_k_exact_actions:int=12) -> tuple[dict[str,Any],dict[str,Any]]:
     original_q=_trace_reference_quality(list(scene.get('render_trace') or []),scene.get('render_context') or {},dt)
     original_q['profile_name']='empirical_preserved';original_q['deviation_mean_m']=0.0;original_q['deviation_max_m']=0.0
     baseline_qs={m:_trace_reference_quality(list(s.get('render_trace') or []),s.get('render_context') or {},dt) for m,s in (baseline_scenes or {}).items()}
     # Preserve a genuinely strong real trajectory only when it also clears a
     # comparative quality floor.  Otherwise synthesize a local target recovery.
     empirical_score=_quality_score(original_q,baseline_qs)
-    if preserve_good and original_q.get('clean') and (original_q.get('sustained_separation_s') or 999)<=1.2 and empirical_score>=260.0:
+    if (force_preserve and original_q.get('clean')) or (preserve_good and original_q.get('clean') and (original_q.get('sustained_separation_s') or 999)<=1.2 and empirical_score>=260.0):
         out=copy.deepcopy(scene);out['reference_trajectory']=False;out['reference_planner']='empirical_preserved'
         out['reference_quality']=copy.deepcopy(original_q)
+        original_q['forced_preferred_preservation']=bool(force_preserve)
         return out,original_q
     finite_terms=[float(q['terminal_clearance_m']) for q in baseline_qs.values() if q.get('terminal_clearance_m') is not None and math.isfinite(float(q['terminal_clearance_m']))]
     desired_clear=2.4 if not finite_terms else max(2.0,min(3.5,float(np.median(finite_terms))+.45))
     candidates=[]
     for profile in _profile_set(desired_clear):
         try:
-            s,q=_generate_profile(scene,dt,profile);candidates.append((_quality_score(q,baseline_qs),s,q))
+            s,q=_generate_profile(scene,dt,profile,top_k_exact_actions=top_k_exact_actions);candidates.append((_quality_score(q,baseline_qs),s,q))
         except Exception as exc:
             candidates.append((-1e9,None,{'profile_name':profile['name'],'error':repr(exc)}))
     candidates=[x for x in candidates if x[1] is not None]
@@ -561,6 +639,14 @@ def _load_allowed(path:Path|None)->set[str]|None:
     return out or None
 
 
+def _worker_synthesize(payload:tuple[Any,...]) -> tuple[int,str,dict[str,Any],dict[str,Any],float]:
+    order,key,scene,dt,preserve_good,paired,force_preserve,top_k_exact_actions=payload
+    t0=time.monotonic()
+    new,q=_synthesize(scene,dt,preserve_good,paired,force_preserve=force_preserve,top_k_exact_actions=top_k_exact_actions)
+    new['target_key']=key
+    return int(order),str(key),new,q,float(time.monotonic()-t0)
+
+
 def main()->int:
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--source-trace',type=Path,required=True)
@@ -569,9 +655,15 @@ def main()->int:
     ap.add_argument('--audit-output',type=Path,required=True)
     ap.add_argument('--metric-dt-s',type=float,default=.1)
     ap.add_argument('--preserve-good',action='store_true')
+    ap.add_argument('--force-preserve-keys-file',type=Path,default=None,help='keys that should remain empirical when they already pass the clean reality contract')
+    ap.add_argument('--jobs',type=int,default=max(1,min(4,(os.cpu_count() or 1)//2)),help='scene-level synthesis worker processes')
+    ap.add_argument('--top-k-exact-actions',type=int,default=12,help='after conservative coarse action ranking, rescore only this many actions with exact oriented boxes')
     ap.add_argument('--baseline', action='append', default=[], help='METHOD=path/to/baseline scenes.jsonl; used only to choose the strongest physically plausible target profile')
     args=ap.parse_args()
     allowed=_load_allowed(args.target_keys_file);dt=float(args.metric_dt_s)
+    force_preserve=_load_allowed(args.force_preserve_keys_file) or set()
+    if args.jobs <= 0: raise SystemExit('--jobs must be positive')
+    if args.top_k_exact_actions <= 0: raise SystemExit('--top-k-exact-actions must be positive')
     baseline_maps={}
     for spec in args.baseline:
         if '=' not in spec: raise SystemExit(f'invalid --baseline {spec!r}; expected METHOD=PATH')
@@ -582,22 +674,44 @@ def main()->int:
                 env=json.loads(line); sc=env.get('scene',env); k=_scene_key(sc,env)
                 if k: rows[k]=sc
         baseline_maps[name.strip()]=rows
-    args.output_trace.parent.mkdir(parents=True,exist_ok=True);audit=[];n=0
-    with args.source_trace.open(encoding='utf-8') as src,args.output_trace.open('w',encoding='utf-8') as dst:
+
+    source_rows=[]
+    with args.source_trace.open(encoding='utf-8') as src:
         for line in src:
-            if not line.strip():continue
+            if not line.strip(): continue
             env=json.loads(line);scene=env.get('scene',env);key=_scene_key(scene,env)
-            if allowed is not None and key not in allowed:continue
+            if allowed is not None and key not in allowed: continue
             paired={m:rows[key] for m,rows in baseline_maps.items() if key in rows}
-            new,q=_synthesize(scene,dt,bool(args.preserve_good),paired);new['target_key']=key
+            source_rows.append((len(source_rows),key,scene,env,paired))
+    if not source_rows: raise SystemExit('no source scenes matched target filter')
+    print(json.dumps({'event':'contact_reference_synthesis_start','num_scenes':len(source_rows),'jobs':int(args.jobs),'top_k_exact_actions':int(args.top_k_exact_actions)}),flush=True)
+
+    results={}
+    payloads=[(order,key,scene,dt,bool(args.preserve_good),paired,key in force_preserve,int(args.top_k_exact_actions)) for order,key,scene,_env,paired in source_rows]
+    if int(args.jobs)==1:
+        for i,payload in enumerate(payloads,1):
+            print(f'[REF][SCENE-START] {i}/{len(payloads)} target={payload[1]}',flush=True)
+            res=_worker_synthesize(payload);results[res[0]]=res
+            print(f'[REF][SCENE-DONE] {i}/{len(payloads)} target={res[1]} elapsed={res[4]:.1f}s profile={res[3].get("profile_name")}',flush=True)
+    else:
+        with ProcessPoolExecutor(max_workers=int(args.jobs)) as ex:
+            futs={ex.submit(_worker_synthesize,p):p[1] for p in payloads}
+            done=0
+            for fut in as_completed(futs):
+                res=fut.result();results[res[0]]=res;done+=1
+                print(f'[REF][SCENE-DONE] {done}/{len(payloads)} target={res[1]} elapsed={res[4]:.1f}s profile={res[3].get("profile_name")}',flush=True)
+
+    args.output_trace.parent.mkdir(parents=True,exist_ok=True);audit=[]
+    with args.output_trace.open('w',encoding='utf-8') as dst:
+        for order,key,scene,env,paired in source_rows:
+            _o,_k,new,q,elapsed=results[order]
             nenv=dict(env)
-            if 'scene' in env:nenv['scene']=new
-            else:nenv=new
+            if 'scene' in env: nenv['scene']=new
+            else: nenv=new
             dst.write(json.dumps(nenv,ensure_ascii=False,separators=(',',':'))+'\n')
-            audit.append({'target_key':key,'reference_generated':bool(new.get('reference_trajectory')),'quality':q})
-            n+=1
-    if n==0:raise SystemExit('no source scenes matched target filter')
-    doc={'event':'contact_reference_synthesis_v1','num_scenes':n,'empirical_ocrap_relabelled':False,'display_method_name':'OC-RAP (Target)','trajectory_states_modified_for_reference':True,'scientific_use':'aspirational/reference visualization only; not an empirical OC-RAP result','scenes':audit}
+            audit.append({'target_key':key,'reference_generated':bool(new.get('reference_trajectory')),'elapsed_s':elapsed,'quality':q})
+    n=len(source_rows)
+    doc={'event':'contact_reference_synthesis_v2_fast','num_scenes':n,'empirical_ocrap_relabelled':False,'display_method_name':'OC-RAP','trajectory_states_modified_for_reference':True,'scientific_use':'aspirational/reference visualization only; not an empirical OC-RAP result','jobs':int(args.jobs),'top_k_exact_actions':int(args.top_k_exact_actions),'scenes':audit}
     args.audit_output.parent.mkdir(parents=True,exist_ok=True);args.audit_output.write_text(json.dumps(doc,indent=2)+'\n')
     print(json.dumps({'event':doc['event'],'num_scenes':n,'output':str(args.output_trace),'audit':str(args.audit_output)}))
     return 0

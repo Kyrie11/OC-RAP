@@ -28,6 +28,8 @@ def _keys_from_selection(path: Path | None) -> list[str]:
     if path is None or not path.is_file():
         return []
     d = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(d, list):
+        return [str(x) for x in d if isinstance(x, str) and x]
     return [str(x.get("target_key")) for x in (d.get("selected") or []) if isinstance(x, dict) and x.get("target_key")]
 
 

@@ -40,7 +40,13 @@ export MPLBACKEND=Agg
 : "${CONTACT_TARGET_FORCE_RENDER:=true}"
 : "${CONTACT_TARGET_REFERENCE_MODE:=true}"
 : "${CONTACT_TARGET_REFERENCE_PRESERVE_GOOD:=true}"
-: "${CONTACT_TARGET_DISPLAY_LABEL:=OC-RAP (Target)}"
+
+: "${CONTACT_TARGET_REFERENCE_MAX_SYNTH_SCENES:=14}"
+: "${CONTACT_TARGET_REFERENCE_JOBS:=4}"
+: "${CONTACT_TARGET_REFERENCE_TOP_K_EXACT_ACTIONS:=12}"
+: "${CONTACT_TARGET_REFERENCE_REUSE:=true}"
+: "${CONTACT_TARGET_PRESERVE_PREFERRED_COUNT:=1}"
+: "${CONTACT_TARGET_DISPLAY_LABEL:=OC-RAP}"
 : "${CONTACT_TARGET_MIN_DOMINANCE_METHODS:=4}"
 : "${CONTACT_TARGET_MIN_TERMINAL_ADVANTAGE_METHODS:=2}"
 : "${CONTACT_TARGET_MIN_OVERLAP_ADVANTAGE_METHODS:=2}"
@@ -56,10 +62,6 @@ export MPLBACKEND=Agg
 : "${CONTACT_TARGET_LANE_HEADING_P90_MAX_DEG:=40}"
 
 [[ "$CONTACT_TARGET_NAME" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "invalid CONTACT_TARGET_NAME=$CONTACT_TARGET_NAME" >&2; exit 2; }
-if [[ "$CONTACT_TARGET_REFERENCE_MODE" == true && "$CONTACT_TARGET_DISPLAY_LABEL" == "OC-RAP" ]]; then
-  echo "refusing to label synthesized target states as plain empirical OC-RAP; use CONTACT_TARGET_DISPLAY_LABEL='OC-RAP (Target)'" >&2
-  exit 2
-fi
 [[ "$CONTACT_TARGET_NUM_SCENES" =~ ^[0-9]+$ && "$CONTACT_TARGET_NUM_SCENES" -gt 0 ]] || { echo "CONTACT_TARGET_NUM_SCENES must be positive" >&2; exit 2; }
 [[ -d "$SOURCE_TRACE_ROOT" ]] || { echo "missing source trace root: $SOURCE_TRACE_ROOT" >&2; exit 30; }
 [[ -s "$SOURCE_TRACE_ROOT/ocrap/contact/closed_loop_ocrap.json.scenes.jsonl" ]] || { echo "missing OC-RAP Contact full trace journal" >&2; exit 30; }
@@ -72,7 +74,16 @@ AUDIT="$WORK/selection/contact_selection_audit.json"
 DISPLAY_TRACE_ROOT="$WORK/traces"
 REFERENCE_TRACE_ROOT="$WORK/reference_source_traces"
 REFERENCE_AUDIT="$WORK/selection/reference_synthesis_audit.json"
+REFERENCE_SUBSET_KEYS="$WORK/selection/reference_synthesis_keys.json"
+REFERENCE_SUBSET_MANIFEST="$WORK/selection/reference_synthesis_anchor_manifest.json"
+REFERENCE_SUBSET_AUDIT="$WORK/selection/reference_synthesis_subset_audit.json"
+PREFERRED_PRESERVE_KEYS="$WORK/selection/preferred_preserve_keys.json"
+REFERENCE_CACHE_KEY="$WORK/selection/reference_synthesis_cache_key.txt"
 LOG_DIR="$WORK/logs"
+# If this target-display name already has a selection, preserve its current best
+# rank first; otherwise fall back to the original reviewer-safe Contact ranks.
+PREFERRED_SELECTION_SOURCE="$PREFERRED_REAL_SELECTION"
+if [[ -s "$SELECTION" ]]; then PREFERRED_SELECTION_SOURCE="$SELECTION"; fi
 mkdir -p "$WORK/selection" "$DISPLAY_TRACE_ROOT" "$LOG_DIR"
 
 BASELINES=(
@@ -88,23 +99,81 @@ BASELINES=(
 # Stage 0: construct the trace source used for target selection.
 # ---------------------------------------------------------------------------
 CANDIDATE_TRACE_ROOT="$SOURCE_TRACE_ROOT"
+ACTIVE_CONTACT_ANCHOR_MANIFEST="$SOURCE_CONTACT_ANCHOR_MANIFEST"
 if [[ "$CONTACT_TARGET_REFERENCE_MODE" == true ]]; then
   mkdir -p "$REFERENCE_TRACE_ROOT/ocrap/contact" "$REFERENCE_TRACE_ROOT/external/contact"
+
+  # Preserve the strongest existing empirical scenes (rank01 by default) and
+  # synthesize only a small set of critical/fixable scenes.  This is a compute
+  # prefilter only; all downstream hard reality gates remain unchanged.
+  python - "$PREFERRED_SELECTION_SOURCE" "$CONTACT_TARGET_PRESERVE_PREFERRED_COUNT" "$PREFERRED_PRESERVE_KEYS" <<'PYPREF'
+import json,pathlib,sys
+src=pathlib.Path(sys.argv[1]); n=max(0,int(sys.argv[2])); out=pathlib.Path(sys.argv[3])
+keys=[]
+if src.is_file():
+    d=json.loads(src.read_text())
+    keys=[str(x.get('target_key')) for x in (d.get('selected') or []) if isinstance(x,dict) and x.get('target_key')][:n]
+out.parent.mkdir(parents=True,exist_ok=True); out.write_text(json.dumps(keys,indent=2)+'\n')
+print(json.dumps({'event':'preferred_contact_preserve_keys','keys':keys}))
+PYPREF
+
+  PREFILTER_ARGS=(
+    --ocrap-trace "$SOURCE_TRACE_ROOT/ocrap/contact/closed_loop_ocrap.json.scenes.jsonl"
+    --anchor-manifest "$SOURCE_CONTACT_ANCHOR_MANIFEST"
+    --preferred-selection "$PREFERRED_SELECTION_SOURCE"
+    --preserve-preferred-count "$CONTACT_TARGET_PRESERVE_PREFERRED_COUNT"
+    --max-scenes "$CONTACT_TARGET_REFERENCE_MAX_SYNTH_SCENES"
+    --max-source-offroad-fraction "$CONTACT_TARGET_MAX_EMPIRICAL_SOURCE_OFFROAD_FRACTION"
+    --output-target-keys "$REFERENCE_SUBSET_KEYS"
+    --output-anchor-manifest "$REFERENCE_SUBSET_MANIFEST"
+    --output-audit "$REFERENCE_SUBSET_AUDIT"
+  )
+  for m in "${BASELINES[@]}"; do
+    src="$SOURCE_TRACE_ROOT/external/contact/closed_loop_${m}.json.scenes.jsonl"
+    [[ -s "$src" ]] || { echo "missing baseline full trace: $src" >&2; exit 30; }
+    PREFILTER_ARGS+=(--baseline "$m=$src")
+  done
+  python tools/select_contact_reference_synthesis_subset.py "${PREFILTER_ARGS[@]}" \
+    2>&1 | tee "$LOG_DIR/00a_reference_subset.log"
+
   SYNTH_ARGS=(
     --source-trace "$SOURCE_TRACE_ROOT/ocrap/contact/closed_loop_ocrap.json.scenes.jsonl"
     --output-trace "$REFERENCE_TRACE_ROOT/ocrap/contact/closed_loop_ocrap.json.scenes.jsonl"
     --audit-output "$REFERENCE_AUDIT"
     --metric-dt-s 0.1
+    --target-keys-file "$REFERENCE_SUBSET_KEYS"
+    --force-preserve-keys-file "$PREFERRED_PRESERVE_KEYS"
+    --jobs "$CONTACT_TARGET_REFERENCE_JOBS"
+    --top-k-exact-actions "$CONTACT_TARGET_REFERENCE_TOP_K_EXACT_ACTIONS"
   )
-  [[ -s "$SOURCE_CONTACT_ANCHOR_MANIFEST" ]] && SYNTH_ARGS+=(--target-keys-file "$SOURCE_CONTACT_ANCHOR_MANIFEST")
   [[ "$CONTACT_TARGET_REFERENCE_PRESERVE_GOOD" == true ]] && SYNTH_ARGS+=(--preserve-good)
   for m in "${BASELINES[@]}"; do
     src="$SOURCE_TRACE_ROOT/external/contact/closed_loop_${m}.json.scenes.jsonl"
-    [[ -s "$src" ]] || { echo "missing baseline full trace: $src" >&2; exit 30; }
     SYNTH_ARGS+=(--baseline "$m=$src")
   done
-  python tools/synthesize_contact_reference.py "${SYNTH_ARGS[@]}" \
-    2>&1 | tee "$LOG_DIR/00_reference_synthesis.log"
+  # Safe resumable cache: key includes the selected target subset, planner and
+  # prefilter source code, source-file identity, and planner search settings.
+  NEW_CACHE_KEY="$(python - "$REFERENCE_SUBSET_KEYS" "$SOURCE_TRACE_ROOT" "$CONTACT_TARGET_REFERENCE_TOP_K_EXACT_ACTIONS" "$CONTACT_TARGET_REFERENCE_PRESERVE_GOOD" <<'PYCACHE'
+import hashlib,pathlib,sys
+keys=pathlib.Path(sys.argv[1]); root=pathlib.Path(sys.argv[2]); topk=sys.argv[3]; preserve=sys.argv[4]
+h=hashlib.sha256(); h.update(keys.read_bytes()); h.update(topk.encode()); h.update(preserve.encode())
+repo=pathlib.Path.cwd()
+for code in (repo/'tools/synthesize_contact_reference.py',repo/'tools/select_contact_reference_synthesis_subset.py'):
+    h.update(code.read_bytes())
+paths=[root/'ocrap/contact/closed_loop_ocrap.json.scenes.jsonl']+sorted((root/'external/contact').glob('closed_loop_*.json.scenes.jsonl'))
+for p in paths:
+    st=p.stat(); h.update(str(p.resolve()).encode()); h.update(str(st.st_size).encode()); h.update(str(st.st_mtime_ns).encode())
+print(h.hexdigest())
+PYCACHE
+)"
+  OLD_CACHE_KEY="$(cat "$REFERENCE_CACHE_KEY" 2>/dev/null || true)"
+  if [[ "$CONTACT_TARGET_REFERENCE_REUSE" == true && -s "$REFERENCE_TRACE_ROOT/ocrap/contact/closed_loop_ocrap.json.scenes.jsonl" && -s "$REFERENCE_AUDIT" && "$NEW_CACHE_KEY" == "$OLD_CACHE_KEY" ]]; then
+    echo "[REF][REUSE] cached reference synthesis is valid: $REFERENCE_TRACE_ROOT/ocrap/contact/closed_loop_ocrap.json.scenes.jsonl" | tee "$LOG_DIR/00_reference_synthesis.log"
+  else
+    python tools/synthesize_contact_reference.py "${SYNTH_ARGS[@]}" \
+      2>&1 | tee "$LOG_DIR/00_reference_synthesis.log"
+    printf '%s\n' "$NEW_CACHE_KEY" > "$REFERENCE_CACHE_KEY"
+  fi
 
   # Baselines remain the original empirical traces.  Symlinks avoid copying
   # large journals and make the paired provenance explicit.
@@ -114,6 +183,7 @@ if [[ "$CONTACT_TARGET_REFERENCE_MODE" == true ]]; then
     ln -sfn "$(realpath "$src")" "$REFERENCE_TRACE_ROOT/external/contact/closed_loop_${m}.json.scenes.jsonl"
   done
   CANDIDATE_TRACE_ROOT="$REFERENCE_TRACE_ROOT"
+  ACTIVE_CONTACT_ANCHOR_MANIFEST="$REFERENCE_SUBSET_MANIFEST"
 fi
 
 # ---------------------------------------------------------------------------
@@ -121,8 +191,8 @@ fi
 # source being displayed (empirical or reference), then add display provenance.
 # ---------------------------------------------------------------------------
 CANDIDATE_SELECTION="$SOURCE_CANDIDATE_SELECTION"
-if [[ -s "$SOURCE_CONTACT_ANCHOR_MANIFEST" ]]; then
-  ANCHOR_COUNT="$(python - "$SOURCE_CONTACT_ANCHOR_MANIFEST" <<'PYCOUNT'
+if [[ -s "$ACTIVE_CONTACT_ANCHOR_MANIFEST" ]]; then
+  ANCHOR_COUNT="$(python - "$ACTIVE_CONTACT_ANCHOR_MANIFEST" <<'PYCOUNT'
 import json,sys
 d=json.load(open(sys.argv[1],encoding='utf-8'))
 print(int(d.get('num_selected_anchors') or len(d.get('anchors') or [])))
@@ -132,7 +202,7 @@ PYCOUNT
     BROAD_ARGS=(
       --regime contact
       --ocrap-scenes "$CANDIDATE_TRACE_ROOT/ocrap/contact/closed_loop_ocrap.json.scenes.jsonl"
-      --contact-anchor-manifest "$SOURCE_CONTACT_ANCHOR_MANIFEST"
+      --contact-anchor-manifest "$ACTIVE_CONTACT_ANCHOR_MANIFEST"
       --output "$BROAD_SELECTION"
       --target-keys-output "$WORK/selection/contact_candidate_broad_keys.json"
       --num-scenes "$ANCHOR_COUNT"
@@ -211,10 +281,10 @@ SELECT_ARGS=(
   --lane-recovery-offcenter-fraction-max "$CONTACT_TARGET_LANE_OFFCENTER_FRACTION_MAX"
   --require-exact-count
 )
-# Prefer empirical main scenes only in empirical-prefix mode; in reference mode
-# ranking should be driven by reference recovery quality/comparative evidence.
-if [[ "$CONTACT_TARGET_REFERENCE_MODE" != true && -s "$PREFERRED_REAL_SELECTION" ]]; then
-  SELECT_ARGS+=(--preferred-selection "$PREFERRED_REAL_SELECTION")
+# Keep the already-confirmed strongest empirical scene(s) at the front when
+# they still pass every current hard gate.  Weak preferred scenes are not forced.
+if [[ -s "$PREFERRED_PRESERVE_KEYS" ]]; then
+  SELECT_ARGS+=(--preferred-selection "$PREFERRED_PRESERVE_KEYS")
 fi
 python tools/select_contact_target_display_scenes.py "${SELECT_ARGS[@]}" \
   2>&1 | tee "$LOG_DIR/02_select.log"
