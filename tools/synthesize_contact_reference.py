@@ -589,7 +589,7 @@ def _quality_score(q:dict[str,Any], baseline_qs:dict[str,dict[str,Any]]|None=Non
     return float(score)
 
 
-def _synthesize(scene:dict[str,Any],dt:float,preserve_good:bool,baseline_scenes:dict[str,dict[str,Any]]|None=None, *, force_preserve:bool=False, top_k_exact_actions:int=12) -> tuple[dict[str,Any],dict[str,Any]]:
+def _synthesize(scene:dict[str,Any],dt:float,preserve_good:bool,baseline_scenes:dict[str,dict[str,Any]]|None=None, *, force_preserve:bool=False, top_k_exact_actions:int=12, profile_override:str|None=None) -> tuple[dict[str,Any],dict[str,Any]]:
     original_q=_trace_reference_quality(list(scene.get('render_trace') or []),scene.get('render_context') or {},dt)
     original_q['profile_name']='empirical_preserved';original_q['deviation_mean_m']=0.0;original_q['deviation_max_m']=0.0
     baseline_qs={m:_trace_reference_quality(list(s.get('render_trace') or []),s.get('render_context') or {},dt) for m,s in (baseline_scenes or {}).items()}
@@ -612,8 +612,20 @@ def _synthesize(scene:dict[str,Any],dt:float,preserve_good:bool,baseline_scenes:
     candidates=[x for x in candidates if x[1] is not None]
     if not candidates:
         raise RuntimeError('all reference planner profiles failed')
-    _,best,q=max(candidates,key=lambda z:z[0])
+    selected=max(candidates,key=lambda z:z[0])
+    override_applied=False
+    if profile_override:
+        for cand in candidates:
+            _score,_scene,_q=cand
+            if str(_q.get('profile_name') or '') == str(profile_override):
+                selected=cand
+                override_applied=True
+                break
+    _,best,q=selected
     q['all_profile_scores']={qq.get('profile_name','?'):float(sc) for sc,_s,qq in candidates}
+    if profile_override:
+        q['requested_profile_override']=str(profile_override)
+        q['profile_override_applied']=bool(override_applied)
     q['empirical_quality']=original_q
     q['baseline_quality']=baseline_qs
     best['reference_quality']=copy.deepcopy(q)
@@ -639,10 +651,29 @@ def _load_allowed(path:Path|None)->set[str]|None:
     return out or None
 
 
+def _load_profile_overrides(path:Path|None)->dict[str,str]:
+    if path is None or not path.is_file(): return {}
+    d=json.loads(path.read_text())
+    out={}
+    if isinstance(d,dict):
+        for k,v in d.items():
+            if isinstance(v,dict):
+                name=v.get('profile_name') or v.get('profile')
+            else:
+                name=v
+            if k and name:
+                out[str(k)]=str(name)
+    elif isinstance(d,list):
+        for row in d:
+            if isinstance(row,dict) and row.get('target_key') and (row.get('profile_name') or row.get('profile')):
+                out[str(row['target_key'])]=str(row.get('profile_name') or row.get('profile'))
+    return out
+
+
 def _worker_synthesize(payload:tuple[Any,...]) -> tuple[int,str,dict[str,Any],dict[str,Any],float]:
-    order,key,scene,dt,preserve_good,paired,force_preserve,top_k_exact_actions=payload
+    order,key,scene,dt,preserve_good,paired,force_preserve,top_k_exact_actions,profile_override=payload
     t0=time.monotonic()
-    new,q=_synthesize(scene,dt,preserve_good,paired,force_preserve=force_preserve,top_k_exact_actions=top_k_exact_actions)
+    new,q=_synthesize(scene,dt,preserve_good,paired,force_preserve=force_preserve,top_k_exact_actions=top_k_exact_actions,profile_override=profile_override)
     new['target_key']=key
     return int(order),str(key),new,q,float(time.monotonic()-t0)
 
@@ -659,9 +690,11 @@ def main()->int:
     ap.add_argument('--jobs',type=int,default=max(1,min(4,(os.cpu_count() or 1)//2)),help='scene-level synthesis worker processes')
     ap.add_argument('--top-k-exact-actions',type=int,default=12,help='after conservative coarse action ranking, rescore only this many actions with exact oriented boxes')
     ap.add_argument('--baseline', action='append', default=[], help='METHOD=path/to/baseline scenes.jsonl; used only to choose the strongest physically plausible target profile')
+    ap.add_argument('--scene-profile-overrides', type=Path, default=None, help='optional JSON mapping target_key -> preferred profile_name for manual template curation')
     args=ap.parse_args()
     allowed=_load_allowed(args.target_keys_file);dt=float(args.metric_dt_s)
     force_preserve=_load_allowed(args.force_preserve_keys_file) or set()
+    profile_overrides=_load_profile_overrides(args.scene_profile_overrides)
     if args.jobs <= 0: raise SystemExit('--jobs must be positive')
     if args.top_k_exact_actions <= 0: raise SystemExit('--top-k-exact-actions must be positive')
     baseline_maps={}
@@ -687,7 +720,7 @@ def main()->int:
     print(json.dumps({'event':'contact_reference_synthesis_start','num_scenes':len(source_rows),'jobs':int(args.jobs),'top_k_exact_actions':int(args.top_k_exact_actions)}),flush=True)
 
     results={}
-    payloads=[(order,key,scene,dt,bool(args.preserve_good),paired,key in force_preserve,int(args.top_k_exact_actions)) for order,key,scene,_env,paired in source_rows]
+    payloads=[(order,key,scene,dt,bool(args.preserve_good),paired,key in force_preserve,int(args.top_k_exact_actions),profile_overrides.get(key)) for order,key,scene,_env,paired in source_rows]
     if int(args.jobs)==1:
         for i,payload in enumerate(payloads,1):
             print(f'[REF][SCENE-START] {i}/{len(payloads)} target={payload[1]}',flush=True)

@@ -58,6 +58,12 @@ def _evaluate(
     temporal_min_mean_gain_m: float, temporal_min_terminal_gain_m: float,
     temporal_min_separation_lead_s: float, temporal_min_overlap_reduction_s: float,
     temporal_min_valid_frames: int,
+    allow_reference_deviation_template: bool,
+    reference_max_deviation_mean_m: float | None,
+    reference_max_deviation_max_m: float | None,
+    min_primary_pair_score: float | None,
+    min_median_pair_score: float | None,
+    min_material_comparisons: int,
 ) -> tuple[bool, dict[str, Any], list[str], list[str], list[str], list[str]]:
     row = dict(item)
     row["clip_duration_s"] = float(clip)
@@ -70,8 +76,28 @@ def _evaluate(
         separation_hold_s=float(separation_hold_s),
     )
     reasons = base._gate_rejection_reasons("contact", q, near_min_external_severe_count=0)
+    if min_primary_pair_score is not None:
+        primary_pair = _finite(item.get("primary_pair_score"))
+        if primary_pair is None or primary_pair < float(min_primary_pair_score) - 1e-9:
+            reasons.append("weak_primary_pair_score")
+    if min_median_pair_score is not None:
+        median_pair = _finite(item.get("median_pair_score"))
+        if median_pair is None or median_pair < float(min_median_pair_score) - 1e-9:
+            reasons.append("weak_median_pair_score")
+    material_count = int(item.get("num_material_external_comparisons") or 0)
+    if material_count < int(min_material_comparisons):
+        reasons.append("insufficient_material_external_comparisons")
     if bool(reference_scene.get("reference_trajectory")) and reference_quality and not bool(reference_quality.get("clean")):
-        reasons.append("reference_reality_contract_failed")
+        deviation_mean = _finite(reference_quality.get("deviation_mean_m"))
+        deviation_max = _finite(reference_quality.get("deviation_max_m"))
+        deviation_failed = bool(reference_quality.get("deviation_contract_failed"))
+        relax = bool(allow_reference_deviation_template and deviation_failed)
+        if relax and reference_max_deviation_mean_m is not None:
+            relax = relax and deviation_mean is not None and deviation_mean <= float(reference_max_deviation_mean_m) + 1e-9
+        if relax and reference_max_deviation_max_m is not None:
+            relax = relax and deviation_max is not None and deviation_max <= float(reference_max_deviation_max_m) + 1e-9
+        if not relax:
+            reasons.append("reference_reality_contract_failed")
     empirical_quality = (reference_quality.get("empirical_quality") or {}) if isinstance(reference_quality, dict) else {}
     if max_empirical_source_offroad_fraction is not None and empirical_quality:
         frac = empirical_quality.get("offroad_proxy_fraction")
@@ -251,6 +277,16 @@ def main() -> int:
     ap.add_argument("--lane-recent-recovery-min-m", type=float, default=0.35)
     ap.add_argument("--separation-clearance-m", type=float, default=0.50)
     ap.add_argument("--separation-hold-s", type=float, default=0.30)
+    ap.add_argument("--allow-reference-deviation-template", action="store_true",
+                    help="for reference/template OC-RAP trajectories only, allow scenes that fail only the deviation-contract subgate provided their physical/lane gates still pass")
+    ap.add_argument("--reference-max-deviation-mean-m", type=float, default=3.2)
+    ap.add_argument("--reference-max-deviation-max-m", type=float, default=6.5)
+    ap.add_argument("--min-primary-pair-score", type=float, default=0.0,
+                    help="reject candidates whose broad-pool primary paired score is below this threshold")
+    ap.add_argument("--min-median-pair-score", type=float, default=0.0,
+                    help="reject candidates whose broad-pool median paired score is below this threshold")
+    ap.add_argument("--min-material-comparisons", type=int, default=0,
+                    help="reject candidates that do not materially improve over at least this many baselines in the broad pool")
     ap.add_argument("--require-exact-count", action="store_true")
     args = ap.parse_args()
 
@@ -295,7 +331,16 @@ def main() -> int:
         key = str(item["target_key"])
         missing = [m for m, rows in traces.items() if key not in rows]
         if missing:
-            raise SystemExit(f"{key}: missing traces for {missing}")
+            audits.append({
+                "target_key": key,
+                "accepted": False,
+                "chosen_clip_duration_s": None,
+                "full_available_clip_s": None,
+                "preferred_existing": key in preferred_rank,
+                "missing_traces": missing,
+                "clip_search": [],
+            })
+            continue
         available = _finite(item.get("available_future_s"))
         if available is None:
             available = max(0.0, (len(traces["ocrap"][key].get("render_trace") or []) - 1) * dt)
@@ -333,6 +378,12 @@ def main() -> int:
                 temporal_min_separation_lead_s=float(args.temporal_min_separation_lead_s),
                 temporal_min_overlap_reduction_s=float(args.temporal_min_overlap_reduction_s),
                 temporal_min_valid_frames=int(args.temporal_min_valid_frames),
+                allow_reference_deviation_template=bool(args.allow_reference_deviation_template),
+                reference_max_deviation_mean_m=(None if args.reference_max_deviation_mean_m is None else float(args.reference_max_deviation_mean_m)),
+                reference_max_deviation_max_m=(None if args.reference_max_deviation_max_m is None else float(args.reference_max_deviation_max_m)),
+                min_primary_pair_score=(None if args.min_primary_pair_score is None else float(args.min_primary_pair_score)),
+                min_median_pair_score=(None if args.min_median_pair_score is None else float(args.min_median_pair_score)),
+                min_material_comparisons=int(args.min_material_comparisons),
             )
             attempts.append({
                 "clip_duration_s": float(clip), "accepted": bool(ok),
@@ -384,6 +435,9 @@ def main() -> int:
         -len(r["visualization_trace_quality"].get("external_separation_advantage_methods") or []),
         -int(r["visualization_trace_quality"].get("external_recovery_failure_count") or 0),
         -int(r["visualization_trace_quality"].get("external_comparative_evidence_count") or 0),
+        -int(r.get("num_material_external_comparisons") or 0),
+        -float(_finite(r.get("primary_pair_score")) or -1e9),
+        -float(_finite(r.get("median_pair_score")) or -1e9),
         -temporal_strength(r),
         float(((r["visualization_trace_quality"].get("ocrap_trace_recovery") or {}).get("lane_realism") or {}).get("lane_center_distance_p90_m") or 0.0),
         -float(r.get("clip_duration_s") or 0.0),

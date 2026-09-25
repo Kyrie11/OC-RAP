@@ -45,6 +45,14 @@ export MPLBACKEND=Agg
 : "${CONTACT_TARGET_REFERENCE_JOBS:=4}"
 : "${CONTACT_TARGET_REFERENCE_TOP_K_EXACT_ACTIONS:=12}"
 : "${CONTACT_TARGET_REFERENCE_REUSE:=true}"
+: "${CONTACT_TARGET_REFERENCE_ALLOW_DEVIATION_TEMPLATE:=true}"
+: "${CONTACT_TARGET_REFERENCE_MAX_DEVIATION_MEAN_M:=3.2}"
+: "${CONTACT_TARGET_REFERENCE_MAX_DEVIATION_MAX_M:=6.5}"
+: "${CONTACT_TARGET_MIN_PRIMARY_PAIR_SCORE:=0.0}"
+: "${CONTACT_TARGET_MIN_MEDIAN_PAIR_SCORE:=0.0}"
+: "${CONTACT_TARGET_MIN_MATERIAL_COMPARISONS:=0}"
+: "${CONTACT_TARGET_MANUAL_PROFILE_OVERRIDES:=}"
+: "${CONTACT_TARGET_MIRROR_MEDIA_IN_WORK:=true}"
 : "${CONTACT_TARGET_PRESERVE_PREFERRED_COUNT:=1}"
 : "${CONTACT_TARGET_DISPLAY_LABEL:=OC-RAP}"
 : "${CONTACT_TARGET_MIN_DOMINANCE_METHODS:=4}"
@@ -146,6 +154,7 @@ PYPREF
     --jobs "$CONTACT_TARGET_REFERENCE_JOBS"
     --top-k-exact-actions "$CONTACT_TARGET_REFERENCE_TOP_K_EXACT_ACTIONS"
   )
+  [[ -n "$CONTACT_TARGET_MANUAL_PROFILE_OVERRIDES" ]] && SYNTH_ARGS+=(--scene-profile-overrides "$CONTACT_TARGET_MANUAL_PROFILE_OVERRIDES")
   [[ "$CONTACT_TARGET_REFERENCE_PRESERVE_GOOD" == true ]] && SYNTH_ARGS+=(--preserve-good)
   for m in "${BASELINES[@]}"; do
     src="$SOURCE_TRACE_ROOT/external/contact/closed_loop_${m}.json.scenes.jsonl"
@@ -263,6 +272,9 @@ SELECT_ARGS=(
   --max-sustained-separation-s "$CONTACT_TARGET_MAX_SEPARATION_S"
   --min-terminal-clearance-m "$CONTACT_TARGET_MIN_TERMINAL_CLEARANCE_M"
   --min-post-separation-clearance-m "$CONTACT_TARGET_MIN_POST_SEPARATION_CLEARANCE_M"
+  --min-primary-pair-score "$CONTACT_TARGET_MIN_PRIMARY_PAIR_SCORE"
+  --min-median-pair-score "$CONTACT_TARGET_MIN_MEDIAN_PAIR_SCORE"
+  --min-material-comparisons "$CONTACT_TARGET_MIN_MATERIAL_COMPARISONS"
   --temporal-clearance-win-margin-m 0.05
   --temporal-clearance-noninferior-margin-m 0.10
   --temporal-min-win-fraction 0.55
@@ -281,6 +293,11 @@ SELECT_ARGS=(
   --lane-recovery-offcenter-fraction-max "$CONTACT_TARGET_LANE_OFFCENTER_FRACTION_MAX"
   --require-exact-count
 )
+if [[ "$CONTACT_TARGET_REFERENCE_ALLOW_DEVIATION_TEMPLATE" == true ]]; then
+  SELECT_ARGS+=(--allow-reference-deviation-template
+                --reference-max-deviation-mean-m "$CONTACT_TARGET_REFERENCE_MAX_DEVIATION_MEAN_M"
+                --reference-max-deviation-max-m "$CONTACT_TARGET_REFERENCE_MAX_DEVIATION_MAX_M")
+fi
 # Keep the already-confirmed strongest empirical scene(s) at the front when
 # they still pass every current hard gate.  Weak preferred scenes are not forced.
 if [[ -s "$PREFERRED_PRESERVE_KEYS" ]]; then
@@ -330,6 +347,42 @@ python tools/render_regime_visualization_videos.py \
   --include-all-method-montage \
   "${FORCE_ARG[@]}" \
   2>&1 | tee "$LOG_DIR/05_videos.log"
+
+# Verify and mirror rendered media into the work tree so packaging the
+# contact_target_displays/<name> directory always contains the actual mp4/png/pdf.
+python - "$WORK" "$MAIN_VIS_ROOT" "$CONTACT_TARGET_NAME" "$SELECTION" "$CONTACT_TARGET_MIRROR_MEDIA_IN_WORK" <<'PYMEDIA'
+import json, pathlib, shutil, sys
+work=pathlib.Path(sys.argv[1]); main=pathlib.Path(sys.argv[2]); name=sys.argv[3]; sel=pathlib.Path(sys.argv[4]); do_mirror=sys.argv[5].lower()=='true'
+d=json.loads(sel.read_text())
+count=len(d.get('selected') or [])
+video_root=main/'videos'/'contact'/name
+fig_root=main/'paper_figures'/'contact'/name
+mp4s=sorted(video_root.rglob('*.mp4'))
+pngs=sorted(fig_root.rglob('*.png'))
+pdfs=sorted(fig_root.rglob('*.pdf'))
+if len(mp4s) < count*2:
+    raise SystemExit(f'expected at least {count*2} mp4s under {video_root}, found {len(mp4s)}')
+if len(pngs) < count*2 or len(pdfs) < count*2:
+    raise SystemExit(f'expected at least {count*2} png/pdf figures under {fig_root}, found png={len(pngs)} pdf={len(pdfs)}')
+if do_mirror:
+    out_vid=work/'media'/'videos'; out_fig=work/'media'/'paper_figures'
+    if out_vid.exists(): shutil.rmtree(out_vid)
+    if out_fig.exists(): shutil.rmtree(out_fig)
+    shutil.copytree(video_root, out_vid)
+    shutil.copytree(fig_root, out_fig)
+index={
+    'event':'contact_target_display_media_index_v1',
+    'selection':str(sel),
+    'video_root':str(video_root),
+    'figure_root':str(fig_root),
+    'mirrored_video_root':str(work/'media'/'videos') if do_mirror else None,
+    'mirrored_figure_root':str(work/'media'/'paper_figures') if do_mirror else None,
+    'num_videos':len(mp4s), 'num_png_figures':len(pngs), 'num_pdf_figures':len(pdfs),
+}
+(work/'TARGET_MEDIA_INDEX.json').write_text(json.dumps(index, indent=2)+'
+')
+print(json.dumps(index, indent=2))
+PYMEDIA
 
 python - "$WORK" "$MAIN_VIS_ROOT" "$CONTACT_TARGET_NAME" "$SELECTION" "$CONTACT_TARGET_REFERENCE_MODE" <<'PY'
 import json,pathlib,sys
